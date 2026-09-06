@@ -20,6 +20,7 @@
 #   run-yoko      Boot Pi 3B AArch64 ELF in QEMU (btron-aarch64-baremetal.elf, raspi3b)
 #   run-yoko4     Boot Pi 4B AArch64 ELF in QEMU (btron-aarch64-baremetal.elf, raspi4b)
 #   run-sakamura  Boot Sakamura T-Kernel 2.0 Desktop (btron-sakamura.elf, display, kbd, mouse)
+#   run-foma      Boot µBTRON-FOMA Mobile Workbench (btron-foma.elf, 480x640 portrait, AArch32 profile)
 #   run-uefi      Boot x86_64 UEFI SMP in QEMU (btron-uchida.elf, aliases: run-eufi, run-uefu)
 #   run-pc98      Boot NEC PC-9801/PC-9821 VM in QEMU (btron-morris.elf)
 #   run-m68k      Boot Motorola 68040 Macintosh Quadra 800 in QEMU (btron-m68k.elf)
@@ -31,10 +32,10 @@
 CC ?= gcc
 CFLAGS ?= -O2 -Wall -Wextra -std=c99 -Iinclude -Iinclude/drivers -Isrc/kernel -Isrc/cores
 
-.PHONY: all posix qemu kernel tkernel sakamura uefi pc98 arm-elf arm64-elf m68k ps2 mips \
-        html2tad tad_bin test test-kernel test-yoko test-yoko4 test-m68k test-mips test-ps2 \
+.PHONY: all posix qemu kernel tkernel sakamura foma uefi pc98 arm-elf arm64-elf m68k ps2 mips \
+        html2tad tad_bin test test-kernel test-yoko test-yoko4 test-m68k test-mips test-ps2 test-foma foma-screens \
         test-mozc test-editor test-hmi test-tad test-chat test-wylie verify \
-        run-posix run-qemu run-kernel run-yoko run-yoko4 run-sakamura run-uefi run-eufi run-uefu run-pc98 run-m68k run-ps2 run-mips debug-virtio debug-gdb clean
+        run-posix run-qemu run-kernel run-yoko run-yoko4 run-sakamura run-foma run-uefi run-eufi run-uefu run-pc98 run-m68k run-ps2 run-mips debug-virtio debug-gdb clean
 
 QEMU_ARM     ?= qemu-system-arm
 QEMU_AARCH64 ?= qemu-system-aarch64
@@ -222,6 +223,24 @@ TKERNEL_SRCS = src/cores/core_tkernel.c \
                $(TKERNEL_SAKAMURA_SRCS)   \
                $(COMMON_SRCS)
 
+# ── µBTRON-FOMA Mobile Target (Target 10) ────────────────────────
+FOMA_STARTUP = src/cores/core_foma.c
+FOMA_SRCS = $(FOMA_STARTUP)             \
+            src/drivers/virtio/virtio.c \
+            src/cores/core_init.c       \
+            $(TKERNEL_SAKAMURA_SRCS)     \
+            src/graphics/dp_core.c      \
+            src/graphics/icons_bundle.c \
+            src/graphics/dp_sdl.c       \
+            src/font/troncode.c         \
+            src/font/jis_fonts.c        \
+            src/font/tibetan_fonts.c    \
+            src/window/event.c          \
+            $(IME_SRCS)                 \
+            src/desktop/desktop_mobile.c \
+            src/desktop/workbench_mobile.c \
+            src/desktop/main_mobile.c
+
 # Bare-metal: SDL-free subset only
 COMMON_NO_SDL_SRCS = \
     src/graphics/dp_core.c \
@@ -272,6 +291,7 @@ TKERNEL_OBJS = $(TKERNEL_SRCS:.c=.tkernel.o)
 ARM32_OBJS   = $(ARM32_BAREMETAL_SRCS:.c=.arm32.o)
 ARM64_OBJS   = $(ARM64_BAREMETAL_SRCS:.c=.arm64.o)
 SAKAMURA_OBJS  = $(TKERNEL_SRCS:.c=.sakamura.o)
+FOMA_OBJS      = $(FOMA_SRCS:.c=.foma.o)
 UEFI_OBJS      = $(UEFI_SRCS:.c=.uefi.o)
 PC98_OBJS      = $(PC98_SRCS:.c=.pc98.o)
 
@@ -280,6 +300,7 @@ POSIX_TARGET   = btron-posix
 QEMU_TARGET    = btron-qemu.elf
 TKERNEL_TARGET = btron-tkernel.elf
 SAKAMURA_TARGET = btron-sakamura.elf
+FOMA_TARGET     = btron-foma.elf
 UEFI_TARGET     = btron-uchida.elf # In honor of Kota Uchida (MikanOS UEFI pioneer)
 PC98_TARGET     = btron-morris.elf # In honor of Awe Morris (zedBSD PC-98 pioneer)
 ARM32_TARGET   = btron-arm-baremetal.elf     # Pi 2B — BCM2836, Cortex-A7, ARMv7
@@ -290,7 +311,7 @@ TKERNEL_INC = -D_RPI_BCM283x_ -DTYPE_RPI=2 \
               -Wno-int-to-pointer-cast -Wno-pointer-to-int-cast \
               -Iinclude -Iinclude/arch/bcm283x -Isrc/kernel -Isrc/cores
 
-all: posix qemu kernel sakamura uefi pc98
+all: posix qemu kernel sakamura foma uefi pc98
 
 # ═══════════════════════════════════════════════════════════════════
 # POSIX Desktop
@@ -379,6 +400,51 @@ src/drivers/bcm283x/cpu/%.sakamura.o: src/drivers/bcm283x/cpu/%.c
 
 $(SAKAMURA_TARGET): $(SAKAMURA_OBJS)
 	$(CC) $(SAKAMURA_OBJS) -o $@ $(LDFLAGS) $(SDL_LIBS)
+
+# ═══════════════════════════════════════════════════════════════════
+# µBTRON-FOMA Mobile Engine (Target 10: AArch32 UMTS Mobile Profile)
+# ═══════════════════════════════════════════════════════════════════
+foma: tad_bin $(FOMA_TARGET)
+	@echo "=========================================================="
+	@echo " µBTRON-FOMA Mobile Engine built: $(FOMA_TARGET)"
+	@echo " Handset Profile: TI OMAP2430 / ARM1136 AArch32 UMTS"
+	@echo " Display Viewport: 480x640 VGA Portrait (Vertical Screen)"
+	@echo " Run 'make run-foma' to launch."
+	@echo "=========================================================="
+
+src/cores/%.foma.o: src/cores/%.c
+	$(CC) $(CFLAGS) $(TKERNEL_INC) $(SDL_CFLAGS) -DBTRON_TARGET=10 -DBTRON_FOMA_TARGET -c $< -o $@
+
+src/kernel/%.foma.o: src/kernel/%.c
+	$(CC) $(CFLAGS) $(TKERNEL_INC) $(SDL_CFLAGS) -DBTRON_TARGET=10 -DBTRON_FOMA_TARGET -c $< -o $@
+
+src/drivers/bcm283x/cpu/%.foma.o: src/drivers/bcm283x/cpu/%.c
+	$(CC) $(CFLAGS) $(TKERNEL_INC) $(SDL_CFLAGS) -DBTRON_TARGET=10 -DBTRON_FOMA_TARGET -c $< -o $@
+
+%.foma.o: %.c
+	$(CC) $(CFLAGS) $(SDL_CFLAGS) -DBTRON_TARGET=10 -DBTRON_FOMA_TARGET -c $< -o $@
+
+$(FOMA_TARGET): $(FOMA_OBJS)
+	$(CC) $(FOMA_OBJS) -o $@ $(LDFLAGS) $(SDL_LIBS)
+
+run-foma: $(FOMA_TARGET)
+	@echo "=========================================================="
+	@echo " Launching µBTRON-FOMA Mobile Workbench"
+	@echo " Architecture : AArch32 TI OMAP2430 / ARM1136 Profile"
+	@echo " Kernel       : Sakamura T-Kernel 2.0 Engine"
+	@echo " Runner       : VirtIO MMIO Block & Framebuffer Runner"
+	@echo " Viewport     : 480x640 VGA Portrait Screen"
+	@echo " Controls     : 5-way D-pad (Arrows/Enter), Softkeys (F1/F2/F3),"
+	@echo "                Numeric (1-9), Back (Esc/Bksp), Menu (M)"
+	@echo "=========================================================="
+	./$(FOMA_TARGET)
+
+test-foma: $(FOMA_TARGET) $(TEST_FOMA_BIN)
+	@echo "=========================================================="
+	@echo " Testing µBTRON-FOMA Target Build & Symbols"
+	@echo "=========================================================="
+	@file $(FOMA_TARGET)
+	@./$(TEST_FOMA_BIN)
 
 # ── X86_64 / EMT64 UEFI SMP QEMU Kernel (Honoring Kota Uchida) ───
 UEFI_LD     = src/drivers/uefi/uefi_qemu.ld
@@ -1108,8 +1174,22 @@ CAPTURE_SCREENS_SRCS = src/tools/capture_screens.c \
 
 CAPTURE_SCREENS_OBJS = $(CAPTURE_SCREENS_SRCS:.c=.test.o)
 
-$(CAPTURE_SCREENS_BIN): $(CAPTURE_SCREENS_OBJS)
-	$(CC) $(CAPTURE_SCREENS_OBJS) -o $@ $(LDFLAGS) -lm -lz
+# ═══════════════════════════════════════════════════════════════════
+# µBTRON-FOMA Mobile UI Toolkit Test Suite
+# ═══════════════════════════════════════════════════════════════════
+TEST_FOMA_SRCS = src/desktop/test_foma_ui.c src/desktop/desktop_mobile.c \
+                 src/graphics/dp_core.c src/font/troncode.c src/font/jis_fonts.c src/font/tibetan_fonts.c
+TEST_FOMA_OBJS = $(TEST_FOMA_SRCS:.c=.test.o)
+TEST_FOMA_BIN  = test_foma_ui
+
+test-foma-ui: $(TEST_FOMA_BIN)
+	@echo "=========================================================="
+	@echo " Running µBTRON-FOMA Mobile UI Toolkit Unit Tests..."
+	@echo "=========================================================="
+	@./$(TEST_FOMA_BIN)
+
+$(TEST_FOMA_BIN): $(TEST_FOMA_OBJS)
+	$(CC) $(TEST_FOMA_OBJS) -o $@ $(LDFLAGS) -lm
 
 screenshots: $(CAPTURE_SCREENS_BIN)
 	@echo "=========================================================="
@@ -1118,3 +1198,29 @@ screenshots: $(CAPTURE_SCREENS_BIN)
 	@./$(CAPTURE_SCREENS_BIN)
 	@python3 scripts/raw_to_png.py
 	@python3 scripts/populate_doc_screens.py
+
+# ═══════════════════════════════════════════════════════════════════
+# µBTRON-FOMA Automated Screen Capture & Documentation
+# ═══════════════════════════════════════════════════════════════════
+CAPTURE_FOMA_BIN  = capture_foma
+CAPTURE_FOMA_SRCS = src/tools/capture_foma.c \
+                    src/desktop/desktop_mobile.c \
+                    src/desktop/workbench_mobile.c \
+                    src/graphics/dp_core.c \
+                    src/graphics/icons_bundle.c \
+                    src/font/troncode.c \
+                    src/font/jis_fonts.c \
+                    src/font/tibetan_fonts.c
+
+CAPTURE_FOMA_OBJS = $(CAPTURE_FOMA_SRCS:.c=.test.o)
+
+$(CAPTURE_FOMA_BIN): $(CAPTURE_FOMA_OBJS)
+	$(CC) $(CAPTURE_FOMA_OBJS) -o $@ $(LDFLAGS) -lm
+
+foma-screens: $(CAPTURE_FOMA_BIN)
+	@echo "=========================================================="
+	@echo " Generating Isolated µBTRON-FOMA Mobile Screenshots..."
+	@echo "=========================================================="
+	@./$(CAPTURE_FOMA_BIN)
+	@python3 scripts/update_foma_screens.py
+

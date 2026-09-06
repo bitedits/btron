@@ -130,8 +130,8 @@ BOOL init_sdl_backend(H width, H height, const char *title) {
         g_sdl_renderer = SDL_CreateRenderer(g_sdl_window, -1, 0);
     }
 
-#if BTRON_TARGET == 2
-    /* Target 2 (Yokobayashi Host / Bare-Metal): Correct colors (Teal & Navy) */
+#if BTRON_TARGET == 2 || BTRON_TARGET == 10
+    /* Target 2 (Yokobayashi) & Target 10 (FOMA Mobile): Authentic colors (Teal & Navy) */
     g_sdl_texture = SDL_CreateTexture(
         g_sdl_renderer,
         SDL_PIXELFORMAT_ARGB8888,

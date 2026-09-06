@@ -149,13 +149,16 @@ WND* opn_wnd(const char *title, H x, H y, H w, H h, UW attr) {
     wnd->bounds.bottom = y + h;
 
     H title_h = (attr & WND_ATTR_TITLE) ? WND_TITLE_HEIGHT : 0;
-    wnd->client.left = x + 4;
-    wnd->client.top = y + title_h + 4;
-    wnd->client.right = x + w - 4;
-    wnd->client.bottom = y + h - 4;
+    H border = (attr & WND_ATTR_BORDER) ? 4 : 0;
+    wnd->client.left = x + border;
+    wnd->client.top = y + title_h + border;
+    wnd->client.right = x + w - border;
+    wnd->client.bottom = y + h - border;
 
-    /* BTRON3 3.20 Conformance: All windows support corner resize and compact sliding tabs by default */
-    attr |= WND_ATTR_RESIZE | WND_ATTR_COMPACT_TAB | WND_ATTR_SLIDING_TAB;
+    /* BTRON3 3.20 Conformance: Windows with borders/titles support corner resize and sliding tabs */
+    if (attr & (WND_ATTR_TITLE | WND_ATTR_BORDER)) {
+        attr |= WND_ATTR_RESIZE | WND_ATTR_COMPACT_TAB | WND_ATTR_SLIDING_TAB;
+    }
     wnd->attr = attr;
     wnd->visible = TRUE;
     wnd->focused = TRUE;
@@ -168,7 +171,7 @@ WND* opn_wnd(const char *title, H x, H y, H w, H h, UW attr) {
     if (tw > w) tw = w;
     wnd->tab_width = tw;
 
-    wnd->dev = opn_dev(w - 8, h - title_h - 8);
+    wnd->dev = opn_dev(w - border * 2, h - title_h - border * 2);
 
     /* Insert at head of z-stack */
     wnd->next = g_wnd_head;
@@ -257,10 +260,11 @@ ER rsz_wnd(WND *wnd, H w, H h) {
     wnd->bounds.bottom = wnd->bounds.top + h;
 
     H title_h = (wnd->attr & WND_ATTR_TITLE) ? WND_TITLE_HEIGHT : 0;
-    wnd->client.left = wnd->bounds.left + 4;
-    wnd->client.top = wnd->bounds.top + title_h + 4;
-    wnd->client.right = wnd->bounds.left + w - 4;
-    wnd->client.bottom = wnd->bounds.top + h - 4;
+    H border = (wnd->attr & WND_ATTR_BORDER) ? 4 : 0;
+    wnd->client.left = wnd->bounds.left + border;
+    wnd->client.top = wnd->bounds.top + title_h + border;
+    wnd->client.right = wnd->bounds.left + w - border;
+    wnd->client.bottom = wnd->bounds.top + h - border;
 
     /* Re-clamp tab width and sliding offset */
     if (wnd->tab_width > w) {
@@ -268,8 +272,8 @@ ER rsz_wnd(WND *wnd, H w, H h) {
     }
     wset_tab_offset(wnd, wnd->tab_offset_x);
 
-    H new_dev_w = w - 8;
-    H new_dev_h = h - title_h - 8;
+    H new_dev_w = w - border * 2;
+    H new_dev_h = h - title_h - border * 2;
     if (new_dev_w < 10) new_dev_w = 10;
     if (new_dev_h < 10) new_dev_h = 10;
 
@@ -301,6 +305,7 @@ ER inval_wnd(WND *wnd) {
 
 static void draw_retro_window_frame(GDEV *dev, WND *wnd) {
     if (!dev || !wnd) return;
+    if (!(wnd->attr & (WND_ATTR_TITLE | WND_ATTR_BORDER))) return;
 
     H title_h = (wnd->attr & WND_ATTR_TITLE) ? WND_TITLE_HEIGHT : 0;
 
@@ -404,8 +409,9 @@ void redraw_all_windows(void) {
 
             /* Composite client pixels onto main screen */
             H title_h = (wnd->attr & WND_ATTR_TITLE) ? WND_TITLE_HEIGHT : 0;
-            H dest_x = wnd->bounds.left + 4;
-            H dest_y = wnd->bounds.top + title_h + 4;
+            H border = (wnd->attr & WND_ATTR_BORDER) ? 4 : 0;
+            H dest_x = wnd->bounds.left + border;
+            H dest_y = wnd->bounds.top + title_h + border;
 
             for (H cy = 0; cy < wnd->dev->height; cy++) {
                 for (H cx = 0; cx < wnd->dev->width; cx++) {

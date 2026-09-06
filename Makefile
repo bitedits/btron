@@ -235,8 +235,13 @@ FOMA_SRCS = $(FOMA_STARTUP)             \
             src/font/troncode.c         \
             src/font/jis_fonts.c        \
             src/font/tibetan_fonts.c    \
+            src/window/wnd.c            \
+            src/window/app_menu.c       \
             src/window/event.c          \
             $(IME_SRCS)                 \
+            src/apps/gterm.c            \
+            src/apps/t_editor.c         \
+            src/settings/terminal.c     \
             src/desktop/desktop_mobile.c \
             src/desktop/workbench_mobile.c \
             src/desktop/main_mobile.c
@@ -1206,6 +1211,15 @@ CAPTURE_FOMA_BIN  = capture_foma
 CAPTURE_FOMA_SRCS = src/tools/capture_foma.c \
                     src/desktop/desktop_mobile.c \
                     src/desktop/workbench_mobile.c \
+                    src/window/wnd.c \
+                    src/window/app_menu.c \
+                    src/apps/gterm.c \
+                    src/apps/t_editor.c \
+                    src/settings/terminal.c \
+                    src/tip/tip_ife.c \
+                    src/tip/mozc_kkc.c \
+                    src/tip/wylie.c \
+                    src/tip/tibetan_dict.c \
                     src/graphics/dp_core.c \
                     src/graphics/icons_bundle.c \
                     src/font/troncode.c \

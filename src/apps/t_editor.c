@@ -1011,7 +1011,7 @@ static void paint_t_editor(WND *wnd, GDEV *dev) {
     }
 }
 
-WND* open_t_editor_window_with_file(const char *filepath) {
+WND* open_t_editor_window_rect(const char *filepath, H x, H y, H w, H h, UW attr) {
     TEditor *ed = (TEditor*)calloc(1, sizeof(TEditor));
     if (!ed) return NULL;
 
@@ -1030,8 +1030,7 @@ WND* open_t_editor_window_with_file(const char *filepath) {
     char title[128];
     snprintf(title, sizeof(title), "編集者 (Editor) \"%s\" ", ed->filename);
 
-    WND *wnd = opn_wnd(title, 220, 50, 760, 480,
-                       WND_ATTR_TITLE | WND_ATTR_CLOSE | WND_ATTR_BORDER);
+    WND *wnd = opn_wnd(title, x, y, w, h, attr);
     if (wnd) {
         wnd->user_data = (VW)(uintptr_t)ed;
         wnd->paint = paint_t_editor;
@@ -1041,6 +1040,11 @@ WND* open_t_editor_window_with_file(const char *filepath) {
         free(ed);
     }
     return wnd;
+}
+
+WND* open_t_editor_window_with_file(const char *filepath) {
+    return open_t_editor_window_rect(filepath, 220, 50, 760, 480,
+                                     WND_ATTR_TITLE | WND_ATTR_CLOSE | WND_ATTR_BORDER);
 }
 
 WND* open_t_editor_window(void) {

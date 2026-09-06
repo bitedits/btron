@@ -18,6 +18,8 @@
 #include <btron/troncode.h>
 #include <btron/event.h>
 #include <btron/dp.h>
+#include <btron/wnd.h>
+#include <btron/apps.h>
 
 #ifndef SDLK_UP
 #define SDLK_UP        BTRON_KEY_UP
@@ -66,6 +68,7 @@ static void show_app_info_screen(const char *name, const char *desc, const char 
 static void show_settings_sub_screen(int setting_id);
 static void show_calculator_screen(void);
 static void show_terminal_screen(void);
+static void show_editor_screen(const char *filepath);
 
 /* ── Screen ID Enumeration ── */
 enum {
@@ -81,7 +84,8 @@ enum {
     SCR_APP_INFO,
     SCR_SETTINGS_SUB,
     SCR_CALCULATOR,
-    SCR_TERMINAL
+    SCR_TERMINAL,
+    SCR_EDITOR
 };
 
 /* ── Home Cabinet Actions ── */
@@ -278,19 +282,10 @@ static void show_control_panel_screen(void) {
 static void on_app_launcher_item_selected(FOMA_SCREEN *scr, int idx) {
     (void)scr;
     switch (idx) {
-        case 0: /* T-Editor */
-            show_memo_detail_screen("T-Editor — 基本エディタ", "2026-09-06",
-                "1: /* Sakamura B-TRON T-Editor */\n"
-                "2: #include <tk/tkernel.h>\n"
-                "3: int main(void) {\n"
-                "4:   btron_core_init();\n"
-                "5:   [仮身] 実身キャビネット\n"
-                "6:   [仮身] TAD仕様解説書\n"
-                "7:   return 0;\n"
-                "8: }\n"
-                "[TAD SPEC Rev 3.20 Ready]");
+        case 0: /* T-Editor (Real Tier 1 App) */
+            show_editor_screen("assets/texts/BTRON3_Report.txt");
             break;
-        case 1: /* gterm */
+        case 1: /* gterm (Real Tier 1 App) */
             show_terminal_screen();
             break;
         case 2: /* TAD Browser Stub */
@@ -760,19 +755,127 @@ static void show_calculator_screen(void) {
     foma_push_screen(&scr);
 }
 
-/* ── Terminal Console Screen ── */
+/* ── Real Tier 1 Application Viewport Integration (gterm & t_editor) ── */
+static WND *s_mobile_gterm_wnd = NULL;
+static WND *s_mobile_editor_wnd = NULL;
+
+static void render_gterm_viewport(GDEV *dev, const FOMA_SCREEN *scr) {
+    (void)scr;
+    if (s_mobile_gterm_wnd && s_mobile_gterm_wnd->paint && s_mobile_gterm_wnd->dev) {
+        s_mobile_gterm_wnd->paint(s_mobile_gterm_wnd, s_mobile_gterm_wnd->dev);
+        H h = s_mobile_gterm_wnd->dev->height;
+        if (h > 534) h = 534;
+        for (H cy = 0; cy < h; cy++) {
+            COLOR *src_row = &s_mobile_gterm_wnd->dev->pixels[cy * s_mobile_gterm_wnd->dev->width];
+            COLOR *dst_row = &dev->pixels[(68 + cy) * dev->width];
+            memcpy(dst_row, src_row, 480 * sizeof(COLOR));
+        }
+    }
+}
+
+static BOOL handle_gterm_viewport_key(FOMA_SCREEN *scr, const EVT *ev) {
+    (void)scr;
+    if (!s_mobile_gterm_wnd) return FALSE;
+
+    /* Softkey Right / F3 / Escape: Exit back to previous screen */
+    if (ev->key == SDLK_F3 || ev->key == ']' || ev->key == SDLK_ESCAPE) {
+        foma_pop_screen();
+        return TRUE;
+    }
+
+    /* Softkey Left / F1: Clear console command line */
+    if (ev->key == SDLK_F1 || ev->key == '[') {
+        EVT clr_ev;
+        memset(&clr_ev, 0, sizeof(clr_ev));
+        clr_ev.type = EV_KEY_DOWN;
+        clr_ev.key = 'c';
+        clr_ev.data = (VW)(uintptr_t)KMOD_CTRL; /* Ctrl+C */
+        if (s_mobile_gterm_wnd->event_handler) {
+            s_mobile_gterm_wnd->event_handler(s_mobile_gterm_wnd, &clr_ev);
+        }
+        return TRUE;
+    }
+
+    /* Forward all keystrokes directly to the real gterm engine */
+    if (s_mobile_gterm_wnd->event_handler) {
+        s_mobile_gterm_wnd->event_handler(s_mobile_gterm_wnd, ev);
+        return TRUE;
+    }
+    return FALSE;
+}
+
 static void show_terminal_screen(void) {
-    show_memo_detail_screen("gterm — 端末シェル", "tty0 @ 115200 8N1",
-        "B-System 3.20 (sakamura-tkernel-virtio) Ken Sakamura\n"
-        "[BOOT] Machine: NTT DoCoMo FOMA SH903i (ARM1136 AArch32)\n"
-        "[CORE] Sakamura T-Kernel 2.0 Engine Target 10: BTRON_FOMA\n"
-        "[VIRTIO] MMIO block device registered @ 0x10001000\n"
-        "[FOMA] Vertical screen 480x640 initialized\n"
-        "$ uname -a\n"
-        "BTRON3 3.20 (Cleanroom Sakamura T-Kernel 2.0)\n"
-        "$ tk_get_tid()\n"
-        "Current Task ID: 1 (workbench_mobile)\n"
-        "$ _\n");
+    if (!s_mobile_gterm_wnd) {
+        s_mobile_gterm_wnd = open_gterm_window_rect(0, 0, 480, 534, 0);
+    }
+    FOMA_SCREEN scr;
+    memset(&scr, 0, sizeof(scr));
+    scr.screen_id = SCR_TERMINAL;
+    strncpy(scr.title, "gterm — 端末シェル", sizeof(scr.title) - 1);
+    strncpy(scr.subtitle, "tty0 (480x534)", sizeof(scr.subtitle) - 1);
+    strncpy(scr.softkey_left, "[クリア]", sizeof(scr.softkey_left) - 1);
+    strncpy(scr.softkey_center, "[実行]", sizeof(scr.softkey_center) - 1);
+    strncpy(scr.softkey_right, "[戻る]", sizeof(scr.softkey_right) - 1);
+    scr.custom_render_hook = render_gterm_viewport;
+    scr.custom_key_handler = handle_gterm_viewport_key;
+    foma_push_screen(&scr);
+}
+
+static void render_editor_viewport(GDEV *dev, const FOMA_SCREEN *scr) {
+    (void)scr;
+    if (s_mobile_editor_wnd && s_mobile_editor_wnd->paint && s_mobile_editor_wnd->dev) {
+        s_mobile_editor_wnd->paint(s_mobile_editor_wnd, s_mobile_editor_wnd->dev);
+        H h = s_mobile_editor_wnd->dev->height;
+        if (h > 534) h = 534;
+        for (H cy = 0; cy < h; cy++) {
+            COLOR *src_row = &s_mobile_editor_wnd->dev->pixels[cy * s_mobile_editor_wnd->dev->width];
+            COLOR *dst_row = &dev->pixels[(68 + cy) * dev->width];
+            memcpy(dst_row, src_row, 480 * sizeof(COLOR));
+        }
+    }
+}
+
+static BOOL handle_editor_viewport_key(FOMA_SCREEN *scr, const EVT *ev) {
+    (void)scr;
+    if (!s_mobile_editor_wnd) return FALSE;
+
+    /* Softkey Right / F3 / Escape: Exit back to previous screen */
+    if (ev->key == SDLK_F3 || ev->key == ']' || ev->key == SDLK_ESCAPE) {
+        foma_pop_screen();
+        return TRUE;
+    }
+
+    /* Softkey Left / F1: Save confirmation */
+    if (ev->key == SDLK_F1 || ev->key == '[') {
+        foma_show_modal("実身保存", "文書 'BTRON3_Report.txt' を保存しました。", "確認", "閉じる", NULL, NULL);
+        return TRUE;
+    }
+
+    /* Forward all keystrokes directly to the real t_editor engine */
+    if (s_mobile_editor_wnd->event_handler) {
+        s_mobile_editor_wnd->event_handler(s_mobile_editor_wnd, ev);
+        return TRUE;
+    }
+    return FALSE;
+}
+
+static void show_editor_screen(const char *filepath) {
+    if (!s_mobile_editor_wnd) {
+        s_mobile_editor_wnd = open_t_editor_window_rect(
+            filepath ? filepath : "assets/texts/BTRON3_Report.txt",
+            0, 0, 480, 534, 0);
+    }
+    FOMA_SCREEN scr;
+    memset(&scr, 0, sizeof(scr));
+    scr.screen_id = SCR_EDITOR;
+    strncpy(scr.title, "T-Editor — 基本エディタ", sizeof(scr.title) - 1);
+    strncpy(scr.subtitle, "BTRON3_Report.txt", sizeof(scr.subtitle) - 1);
+    strncpy(scr.softkey_left, "[保存]", sizeof(scr.softkey_left) - 1);
+    strncpy(scr.softkey_center, "[仮身]", sizeof(scr.softkey_center) - 1);
+    strncpy(scr.softkey_right, "[戻る]", sizeof(scr.softkey_right) - 1);
+    scr.custom_render_hook = render_editor_viewport;
+    scr.custom_key_handler = handle_editor_viewport_key;
+    foma_push_screen(&scr);
 }
 
 /* ── Master Mobile Workbench Initializer ── */
@@ -822,6 +925,13 @@ BOOL foma_workbench_process_event(const EVT *ev) {
         if ((ev->key == 'g' || ev->key == 'G' || ev->key == SDLK_g) && ((uintptr_t)ev->data & KMOD_CTRL)) {
             sdl_toggle_mouse_grab();
             return TRUE;
+        }
+
+        /* Forward to custom screen key handler if present (e.g. gterm, t_editor) */
+        if (cur->custom_key_handler) {
+            if (cur->custom_key_handler(cur, ev)) {
+                return TRUE;
+            }
         }
 
         /* 1. 5-Way Directional Pad */
@@ -892,6 +1002,22 @@ BOOL foma_workbench_process_event(const EVT *ev) {
             return TRUE;
         }
 
+        /* Forward clicks to custom viewport if active (y = 68..602) */
+        if (cur->custom_render_hook) {
+            if (my >= 68 && my < 602) {
+                EVT sub_ev = *ev;
+                sub_ev.pos.y = my - 68;
+                if (cur->screen_id == SCR_TERMINAL && s_mobile_gterm_wnd && s_mobile_gterm_wnd->event_handler) {
+                    s_mobile_gterm_wnd->event_handler(s_mobile_gterm_wnd, &sub_ev);
+                    return TRUE;
+                } else if (cur->screen_id == SCR_EDITOR && s_mobile_editor_wnd && s_mobile_editor_wnd->event_handler) {
+                    s_mobile_editor_wnd->event_handler(s_mobile_editor_wnd, &sub_ev);
+                    return TRUE;
+                }
+            }
+            return TRUE;
+        }
+
         /* B. List Row Tap */
         if (my >= FOMA_LIST_TOP && my < FOMA_LIST_BOTTOM) {
             int row_rel = (my - FOMA_LIST_TOP) / FOMA_ROW_H;
@@ -945,16 +1071,7 @@ void foma_show_contact_detail_sample(void) {
 }
 
 void foma_show_editor_sample(void) {
-    show_memo_detail_screen("T-Editor — 基本エディタ", "2026-09-06",
-        "1: /* Sakamura B-TRON T-Editor */\n"
-        "2: #include <tk/tkernel.h>\n"
-        "3: int main(void) {\n"
-        "4:   btron_core_init();\n"
-        "5:   [仮身] 実身キャビネット\n"
-        "6:   [仮身] TAD仕様解説書\n"
-        "7:   return 0;\n"
-        "8: }\n"
-        "[TAD SPEC Rev 3.20 Ready]");
+    show_editor_screen("assets/texts/BTRON3_Report.txt");
 }
 
 void foma_show_calculator(void) {

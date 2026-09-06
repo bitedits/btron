@@ -1055,14 +1055,8 @@ static void destroy_gterm(WND *wnd) {
     }
 }
 
-WND* open_gterm_window(void) {
-    static int s_gterm_spawn_count = 0;
-    H x = 220 + (s_gterm_spawn_count % 6) * 24;
-    H y = 160 + (s_gterm_spawn_count % 6) * 24;
-    s_gterm_spawn_count++;
-
-    WND *wnd = opn_wnd("端末 (Terminal)", x, y, 560, 360,
-                       WND_ATTR_TITLE | WND_ATTR_CLOSE | WND_ATTR_BORDER | WND_ATTR_RESIZE);
+WND* open_gterm_window_rect(H x, H y, H w, H h, UW attr) {
+    WND *wnd = opn_wnd("端末 (Terminal)", x, y, w, h, attr);
     if (wnd) {
         GTermState *st = (GTermState*)calloc(1, sizeof(GTermState));
         if (st) {
@@ -1079,4 +1073,14 @@ WND* open_gterm_window(void) {
         top_wnd(wnd);
     }
     return wnd;
+}
+
+WND* open_gterm_window(void) {
+    static int s_gterm_spawn_count = 0;
+    H x = 220 + (s_gterm_spawn_count % 6) * 24;
+    H y = 160 + (s_gterm_spawn_count % 6) * 24;
+    s_gterm_spawn_count++;
+
+    return open_gterm_window_rect(x, y, 560, 360,
+                                  WND_ATTR_TITLE | WND_ATTR_CLOSE | WND_ATTR_BORDER | WND_ATTR_RESIZE);
 }

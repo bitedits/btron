@@ -15,6 +15,17 @@
 #include <btron/dp.h>
 #include <btron/mobile_ui.h>
 
+/* Minimal stubs for GTerm interactive commands in headless tool mode */
+void btron_core_print_ver(void *out_fn, void *user_data, const char *arg) { (void)out_fn; (void)user_data; (void)arg; }
+void sys_get_devconf(void *p) { (void)p; }
+void sys_get_mem_stats(void *p) { (void)p; }
+void sys_mouse_get_pos(int *x, int *y) { if (x) *x = 0; if (y) *y = 0; }
+void sys_mouse_set_pos(int x, int y) { (void)x; (void)y; }
+void sys_mouse_click(int b) { (void)b; }
+void open_audio_player_window(void) {}
+void open_tad_browser_window(void) {}
+void launch_beos_chat(void) {}
+
 static void dump_foma_screen(GDEV *dev, const char *label, const char *raw_path) {
     if (!dev) return;
 
@@ -103,6 +114,11 @@ int main(void) {
     foma_ui_init();
     foma_show_calculator();
     dump_foma_screen(dev, "Bonus: Calculator", "/tmp/foma_raw_screens/foma_calculator.raw");
+
+    /* Tier 1 App: gterm Live Terminal (端末シェル) */
+    foma_ui_init();
+    foma_show_terminal();
+    dump_foma_screen(dev, "Tier 1: gterm Console", "/tmp/foma_raw_screens/foma_terminal.raw");
 
     /* ── Opened Menus & Dialogs Showcase ── */
 

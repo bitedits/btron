@@ -13,7 +13,9 @@
 #endif
 
 __WEAK_APP WND* open_t_editor_window(void);
+__WEAK_APP WND* open_t_editor_window_rect(const char *filepath, H x, H y, H w, H h, UW attr);
 __WEAK_APP WND* open_gterm_window(void);
+__WEAK_APP WND* open_gterm_window_rect(H x, H y, H w, H h, UW attr);
 __WEAK_APP WND* open_vobj_manager_window(void);
 __WEAK_APP WND* open_vobj_about_window(void);
 __WEAK_APP WND* open_teditor_about_window(void);

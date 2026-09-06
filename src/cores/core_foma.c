@@ -219,3 +219,8 @@ ER tk_del_sem(ID semid) {
 ER tk_dly_tsk(RELTIM dlytim) {
     return _tk_dly_tsk(dlytim);
 }
+
+/* Stubs for optional desktop applications not deployed to mobile FOMA */
+__attribute__((weak)) void open_audio_player_window(void) {}
+__attribute__((weak)) void open_tad_browser_window(void) {}
+__attribute__((weak)) void launch_beos_chat(void) {}

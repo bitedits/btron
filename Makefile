@@ -173,6 +173,7 @@ UEFI_SRCS    = $(UEFI_STARTUP)          \
                src/cores/core_init.c   \
                src/kernel/libstr.c      \
                src/drivers/vesa/vesa.c  \
+               src/drivers/uefi/ps2_mouse.c \
                $(COMMON_NO_SDL_SRCS)
 
 # ── NEC PC-98 build (Target 5) ──────────────────────────────────
@@ -182,6 +183,8 @@ PC98_SRCS    = $(PC98_STARTUP)          \
                src/cores/core_init.c   \
                src/kernel/libstr.c      \
                src/drivers/vesa/vesa.c  \
+               src/drivers/pc98/input/pc98_mouse.c \
+               src/drivers/uefi/ps2_mouse.c \
                $(COMMON_NO_SDL_SRCS)
 
 # ── BCM283x (Pi 2B) bare-metal arch sources ───────────────────────
@@ -885,7 +888,7 @@ TEST_MOZC_OBJS = $(TEST_MOZC_SRCS:.c=.test.o)
 TEST_MOZC_BIN  = test_mozc
 
 %.test.o: %.c
-	$(CC) $(CFLAGS) -c $< -o $@
+	$(CC) $(CFLAGS) $(SDL_CFLAGS) -c $< -o $@
 
 test-mozc: $(TEST_MOZC_BIN)
 	@echo "=========================================================="
@@ -1086,7 +1089,25 @@ test-app-menu: $(TEST_APP_MENU_BIN)
 $(TEST_APP_MENU_BIN): $(TEST_APP_MENU_OBJS)
 	$(CC) $(TEST_APP_MENU_OBJS) -o $@ $(LDFLAGS)
 
-test: test-kernel test-tad test-editor test-chat test-mozc test-wylie test-hmi test-ski test-tracker test-settings test-global-menu test-app-menu
+# ═══════════════════════════════════════════════════════════════════
+# Mouse Drivers Test Suite (UEFI PS/2 & PC-98 Bus Mouse)
+# ═══════════════════════════════════════════════════════════════════
+TEST_MOUSE_SRCS = tests/test_mouse_drivers.c \
+                  src/drivers/uefi/ps2_mouse.c \
+                  src/drivers/pc98/input/pc98_mouse.c
+TEST_MOUSE_OBJS = $(TEST_MOUSE_SRCS:.c=.test.o)
+TEST_MOUSE_BIN  = test_mouse
+
+test-mouse: $(TEST_MOUSE_BIN)
+	@echo "=========================================================="
+	@echo " Running Mouse Drivers Unit Tests (UEFI PS/2 & PC-98)..."
+	@echo "=========================================================="
+	@./$(TEST_MOUSE_BIN)
+
+$(TEST_MOUSE_BIN): $(TEST_MOUSE_OBJS)
+	$(CC) $(TEST_MOUSE_OBJS) -o $@ $(LDFLAGS) -lm
+
+test: test-kernel test-tad test-editor test-chat test-mozc test-wylie test-hmi test-ski test-tracker test-settings test-global-menu test-app-menu test-mouse
 	@echo "=========================================================="
 	@echo " ALL B-SYSTEM TEST SUITES PASSED (100% SUCCESS)!"
 	@echo "=========================================================="

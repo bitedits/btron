@@ -12,7 +12,10 @@
 #include <btron/event.h>
 #include <btron/tip.h>
 #include <btron/smp.h>
+#include <btron/workbench.h>
 #include <drivers/vesa.h>
+#include <drivers/ps2_mouse.h>
+#include <drivers/pc98_mouse.h>
 #include <libstr.h>
 #define memcpy tkl_memcpy
 
@@ -80,7 +83,9 @@ static char uart_getc(void) {
  * ═══════════════════════════════════════════════════════════════════ */
 
 static int ps2_has_key(void) {
-    return (inb(0x64) & 0x01) ? 1 : 0;
+    /* Bit 0 = Output Buffer Full, Bit 5 = Auxiliary (Mouse) data */
+    uint8_t st = inb(0x64);
+    return ((st & 0x21) == 0x01) ? 1 : 0;
 }
 
 static uint8_t ps2_get_scancode(void) {
@@ -379,16 +384,20 @@ static void launch_vesa_desktop_session(int active_cores) {
     tip_init();
     init_evt_sys();
 
+#if defined(BTRON_PC98_TARGET)
+    pc98_mouse_init(1024, 768);
+#else
+    ps2_mouse_init(1024, 768);
+#endif
+    workbench_init(1024);
+
     /* Open authentic B-System windows */
     open_vobj_manager_window();
     open_t_editor_window();
     open_gterm_window();
 
     /* Initial paint of authentic B-System desktop to backbuffer */
-    render_desktop_background(dt->screen);
-    render_system_panel(dt->screen);
-    redraw_all_windows();
-    draw_baremetal_mouse_cursor(dt->screen, 512, 384, 1024, 768);
+    workbench_render(dt->screen, 1024, 768);
 
     /* Blit composite frame to VESA VRAM */
     if (g_vesa.framebuffer) {
@@ -402,7 +411,7 @@ static void launch_vesa_desktop_session(int active_cores) {
     uart_puts_raw("   * Icons    : Real Body Cabinet, Editor, GTerm, Audio, Chat\n");
     uart_puts_raw("   * Panel    : [BTRON] System Menu & Japanese JIS Fonts\n");
     uart_puts_raw("   * Windows  : HFDS Cabinet Explorer, Editor, GTerm Shell\n");
-    uart_puts_raw(" Controls: Type in active window or press [Esc]/[Q] to return to shell.\n");
+    uart_puts_raw(" Controls: Mouse click, type in active window, [Esc]/[Q] to return.\n");
     uart_puts_raw("==========================================================\n\n");
 
     /* Drain any pending keypresses */
@@ -410,11 +419,19 @@ static void launch_vesa_desktop_session(int active_cores) {
     while (uart_has_char()) (void)uart_getc();
 
     int shift = 0;
-    H mouse_x = 512, mouse_y = 384;
     EVT ev;
 
     for (;;) {
         int need_redraw = 0;
+
+#if defined(BTRON_PC98_TARGET)
+        pc98_mouse_poll();
+#else
+        ps2_mouse_poll();
+#endif
+
+        H mouse_x = 512, mouse_y = 384;
+        get_baremetal_mouse_pos(&mouse_x, &mouse_y);
 
         if (ps2_has_key()) {
             uint8_t sc = ps2_get_scancode();
@@ -454,18 +471,12 @@ static void launch_vesa_desktop_session(int active_cores) {
         }
 
         while (get_evt(&ev, 0) == E_OK) {
-            WND *top = get_top_wnd();
-            if (top && top->event_handler) {
-                top->event_handler(top, &ev);
-            }
+            workbench_process_event(dt->screen, &ev);
             need_redraw = 1;
         }
 
         if (need_redraw) {
-            render_desktop_background(dt->screen);
-            render_system_panel(dt->screen);
-            redraw_all_windows();
-            draw_baremetal_mouse_cursor(dt->screen, mouse_x, mouse_y, 1024, 768);
+            workbench_render(dt->screen, 1024, 768);
             if (g_vesa.framebuffer) {
                 memcpy((void *)g_vesa.framebuffer, s_desktop_backbuffer, 1024 * 768 * sizeof(COLOR));
             }

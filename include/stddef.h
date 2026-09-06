@@ -50,8 +50,9 @@ typedef __wchar_t	wchar_t;
 #undef	__wchar_t
 #endif
 
-#define offsetof(type, member)	( (size_t)(&((type *)0)->member) )
+#ifndef NULL
 #define NULL	0
+#endif
 
 
 #if 1	/* wint_tコンパイルエラーの回避の為追加 */

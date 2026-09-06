@@ -304,6 +304,115 @@ def generate_foma_screens_html():
                 </div>
 
             </div>
+
+            <div style="margin-top: 2.5rem; padding-top: 1.5rem; border-top: 1px solid #e2e8f0;">
+                <h4 style="font-size: 1.25rem; font-weight: 700; color: #003366; margin-bottom: 0.5rem;">
+                    開いたダイアログ・操作メニュー画面 (Opened Dialogs & Context Menus)
+                </h4>
+                <p style="font-size: 0.95rem; color: #475569; margin-bottom: 1.5rem;">
+                    B-TRON / 超漢字の HMI 設計指針に準拠した、モーダルダイアログ・警告ボックス・属性シート・TIP（テキスト入力プロセッサ）・電源管理・着信通知等の OS 構成要素の実動画面。
+                </p>
+            </div>
+
+            <div class="foma-gallery-grid">
+
+                <!-- 7. Opened Context Popup Menu -->
+                <div class="foma-phone-card">
+                    <div class="foma-screen-frame">
+                        <img src="b-system/img/foma/foma_menu_popup.png" alt="操作ポップアップメニュー (Floating Context Popup Menu)" class="foma-screen-img">
+                    </div>
+                    <div class="foma-card-info">
+                        <div class="foma-card-title">
+                            <span>7. 浮動操作メニュー (Menu)</span>
+                            <span class="foma-badge">Popup Overlay</span>
+                        </div>
+                        <div class="foma-card-desc">
+                            [メニュー] キー押下時に前面へ展開されるドロップシャドウ付き浮動コンテキストメニュー。数字キー 1〜6 によるダイレクト選択、アクティブ行の青色ハイライト、および ▶ カーソルを完備。
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 8. Delete Confirmation Modal -->
+                <div class="foma-phone-card">
+                    <div class="foma-screen-frame">
+                        <img src="b-system/img/foma/foma_dialog_confirm.png" alt="実身削除の確認ダイアログ (Delete Confirmation Modal)" class="foma-screen-img">
+                    </div>
+                    <div class="foma-card-info">
+                        <div class="foma-card-title">
+                            <span>8. 実身削除確認ダイアログ</span>
+                            <span class="foma-badge">Alert Modal</span>
+                        </div>
+                        <div class="foma-card-desc">
+                            実身削除時に表示される警告モーダル。[！] 警告バッジ、削除対象名、および「参照している全ての仮身リンクが無効になる」旨の注意文、二重枠線、[削除実行][取消] ボタンを配置。
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 9. Real Body Properties Sheet -->
+                <div class="foma-phone-card">
+                    <div class="foma-screen-frame">
+                        <img src="b-system/img/foma/foma_dialog_properties.png" alt="実身属性詳細シート (Real Body Properties Sheet)" class="foma-screen-img">
+                    </div>
+                    <div class="foma-card-info">
+                        <div class="foma-card-title">
+                            <span>9. 実身属性詳細シート</span>
+                            <span class="foma-badge">Properties</span>
+                        </div>
+                        <div class="foma-card-desc">
+                            B-TRON 実身のメタデータ表示ダイアログ。HFDS 実身番号(ID)、データ種別(TAD Rev 3.20)、作成・更新日時、レコード長、仮身参照数、アクセス権(RW)、VirtIO保存先を表示。
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 10. Search Dialog with TIP Virtual IME -->
+                <div class="foma-phone-card">
+                    <div class="foma-screen-frame">
+                        <img src="b-system/img/foma/foma_dialog_search.png" alt="実身・仮身検索ダイアログ (Search Dialog with TIP Virtual IME)" class="foma-screen-img">
+                    </div>
+                    <div class="foma-card-info">
+                        <div class="foma-card-title">
+                            <span>10. 実身検索・TIP入力</span>
+                            <span class="foma-badge">Input / IME</span>
+                        </div>
+                        <div class="foma-card-desc">
+                            アクティブなテキスト入力ボックスと点滅キャレット、右上に [あ/漢] TIP/Mozc かな漢字変換ステータス、検索範囲ラジオボタン (●/○)、および仮身検索オプションチェックボックスを装備。
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 11. Power Management & Sleep Dialog -->
+                <div class="foma-phone-card">
+                    <div class="foma-screen-frame">
+                        <img src="b-system/img/foma/foma_dialog_power.png" alt="電源管理・サスペンドダイアログ (Power Management Dialog)" class="foma-screen-img">
+                    </div>
+                    <div class="foma-card-info">
+                        <div class="foma-card-title">
+                            <span>11. 電源管理・待受設定</span>
+                            <span class="foma-badge">Power Modal</span>
+                        </div>
+                        <div class="foma-card-desc">
+                            モバイル端末の省電力管理シート。電池残量バーグラフ（88% / 4.12V）、スリープ待機モード、T-Kernel 2.0 リセット、電源切断、キー誤操作ロックの各項目を選択可能。
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 12. 3G Voice Call Alert Notification -->
+                <div class="foma-phone-card">
+                    <div class="foma-screen-frame">
+                        <img src="b-system/img/foma/foma_dialog_call.png" alt="3G 音声着信ダイアログ (3G Incoming Call Alert)" class="foma-screen-img">
+                    </div>
+                    <div class="foma-card-info">
+                        <div class="foma-card-title">
+                            <span>12. 3G 音声通話 着信呼出</span>
+                            <span class="foma-badge">Telephony</span>
+                        </div>
+                        <div class="foma-card-desc">
+                            3G FOMA 音声通話着信オーバーレイ。着信中インジケータ、発信者名「坂村 健」、電話番号、呼出時間タイマー、および [応答][保留][拒否] の3系統アクションボタンを備える。
+                        </div>
+                    </div>
+                </div>
+
+            </div>
         </section>
 """
 

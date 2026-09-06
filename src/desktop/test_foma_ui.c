@@ -202,6 +202,59 @@ static void test_foma_metrics(void) {
     }
 }
 
+/* ── Test Group 6: Popup / Context Menu Operations ── */
+static void test_foma_popup_menu(void) {
+    printf("\n[TEST GROUP 6] Popup / Context Menu Operations\n");
+
+    TEST_ASSERT(!foma_is_popup_menu_active(), "Popup menu starts inactive");
+
+    const char *items[] = { "開く", "詳細属性", "仮身作成", "削除", "閉じる" };
+    const char *badges[] = { "1", "2", "3", "4", "5" };
+    foma_show_popup_menu("操作メニュー (1〜5)", items, badges, 5, 1);
+
+    TEST_ASSERT(foma_is_popup_menu_active(), "Popup menu is active");
+    FOMA_POPUP_MENU *menu = foma_get_active_popup_menu();
+    TEST_ASSERT(menu != NULL, "Active popup menu is non-null");
+    TEST_ASSERT(menu->item_count == 5, "Popup menu item count is 5");
+    TEST_ASSERT(menu->focus_index == 1, "Popup menu initial focus is 1");
+    TEST_ASSERT(strcmp(menu->items[0], "開く") == 0, "Popup menu item 0 is '開く'");
+    TEST_ASSERT(strcmp(menu->badges[0], "1") == 0, "Popup menu badge 0 is '1'");
+
+    foma_close_popup_menu();
+    TEST_ASSERT(!foma_is_popup_menu_active(), "Popup menu closed successfully");
+}
+
+/* ── Test Group 7: Rich Modal Dialog Types ── */
+static void test_foma_rich_dialogs(void) {
+    printf("\n[TEST GROUP 7] Rich Modal Dialog Types\n");
+
+    /* Properties sheet */
+    foma_show_properties_dialog("連絡先：坂村 健", "0x002A-8F14-C001", "TAD Rev 3.20", 4896, 3, "2026-09-05 14:32:08");
+    TEST_ASSERT(foma_is_modal_active(), "Properties dialog is active");
+    FOMA_MODAL *mod = foma_get_active_modal();
+    TEST_ASSERT(mod->type == FOMA_MODAL_PROPERTIES, "Modal type is FOMA_MODAL_PROPERTIES");
+    TEST_ASSERT(strcmp(mod->detail1, "連絡先：坂村 健") == 0, "Detail1 matches target Real Body");
+
+    /* Search dialog with IME */
+    foma_show_search_dialog("坂村 健", "[あ/漢] TIP/Mozc");
+    TEST_ASSERT(mod->type == FOMA_MODAL_INPUT, "Modal type is FOMA_MODAL_INPUT");
+    TEST_ASSERT(strcmp(mod->detail1, "坂村 健") == 0, "Search query matches");
+
+    /* Power dialog */
+    foma_show_power_dialog(88, "4.12V");
+    TEST_ASSERT(mod->type == FOMA_MODAL_POWER, "Modal type is FOMA_MODAL_POWER");
+
+    /* 3G Voice call */
+    foma_show_call_dialog("坂村 健", "090-XXXX-XXXX", "00:06");
+    TEST_ASSERT(mod->type == FOMA_MODAL_CALL, "Modal type is FOMA_MODAL_CALL");
+    TEST_ASSERT(strcmp(mod->btn_left, "応答") == 0, "Call dialog left button is 応答");
+    TEST_ASSERT(strcmp(mod->btn_center, "保留") == 0, "Call dialog center button is 保留");
+    TEST_ASSERT(strcmp(mod->btn_right, "拒否") == 0, "Call dialog right button is 拒否");
+
+    foma_close_modal();
+    TEST_ASSERT(!foma_is_modal_active(), "Modal closed successfully");
+}
+
 int main(void) {
     printf("===============================================================\n");
     printf(" Running µBTRON-FOMA Mobile UI Toolkit Test Suite\n");
@@ -213,6 +266,8 @@ int main(void) {
     test_foma_focus_navigation();
     test_foma_modal_dialog();
     test_foma_metrics();
+    test_foma_popup_menu();
+    test_foma_rich_dialogs();
 
     printf("\n===============================================================\n");
     printf(" µBTRON-FOMA Mobile Test Results: %d / %d tests passed\n", g_tests_passed, g_tests_total);

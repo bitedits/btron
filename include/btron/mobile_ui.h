@@ -101,17 +101,45 @@ typedef struct FOMA_SCREEN_S {
     void (*custom_render_hook)(GDEV *dev, const struct FOMA_SCREEN_S *scr);
 } FOMA_SCREEN;
 
+/* ── Modal Dialog Types ── */
+typedef enum {
+    FOMA_MODAL_CONFIRM = 0,     /* Standard 2-button confirmation / alert */
+    FOMA_MODAL_PROPERTIES,      /* Real Body metadata / properties sheet */
+    FOMA_MODAL_INPUT,           /* Search & text input dialog with IME */
+    FOMA_MODAL_POWER,           /* System power & sleep menu */
+    FOMA_MODAL_CALL             /* 3G incoming call notification */
+} FOMA_MODAL_TYPE;
+
 /* ── Modal Dialog State ── */
 typedef struct {
     BOOL is_active;
+    FOMA_MODAL_TYPE type;
     char title[FOMA_STR_MAX];
     char message[256];
+    char detail1[64];
+    char detail2[64];
+    char detail3[64];
+    char detail4[64];
     char btn_left[24];
+    char btn_center[24];
     char btn_right[24];
-    int selected_btn;              /* 0 = Left, 1 = Right */
+    int selected_btn;              /* 0 = Left, 1 = Center, 2 = Right */
     void (*on_confirm)(void);
     void (*on_cancel)(void);
 } FOMA_MODAL;
+
+/* ── Popup / Context Menu Definition ── */
+typedef struct {
+    BOOL is_active;
+    char title[FOMA_STR_MAX];
+    char items[8][FOMA_STR_MAX];
+    char badges[8][32];
+    int item_count;
+    int focus_index;
+    H x, y, w, h;
+    void (*on_select)(int index);
+    void (*on_cancel)(void);
+} FOMA_POPUP_MENU;
 
 /* ── Mobile UI Coordinator APIs ── */
 void foma_ui_init(void);
@@ -134,9 +162,23 @@ void foma_trigger_softkey_right(FOMA_SCREEN *scr);
 void foma_show_modal(const char *title, const char *message,
                      const char *btn_left, const char *btn_right,
                      void (*on_confirm)(void), void (*on_cancel)(void));
+void foma_show_confirm_dialog(const char *title, const char *target_name, const char *warning_note,
+                              void (*on_confirm)(void), void (*on_cancel)(void));
+void foma_show_properties_dialog(const char *rbody_name, const char *rbody_id, const char *type_name,
+                                 int size_bytes, int fusen_cnt, const char *date_str);
+void foma_show_search_dialog(const char *query_text, const char *ime_mode);
+void foma_show_power_dialog(int battery_pct, const char *voltage_str);
+void foma_show_call_dialog(const char *caller_name, const char *phone_num, const char *duration);
 void foma_close_modal(void);
 BOOL foma_is_modal_active(void);
 FOMA_MODAL* foma_get_active_modal(void);
+
+/* Popup Menu APIs */
+void foma_show_popup_menu(const char *title, const char *items[], const char *badges[], int count, int focus_idx);
+void foma_close_popup_menu(void);
+BOOL foma_is_popup_menu_active(void);
+FOMA_POPUP_MENU* foma_get_active_popup_menu(void);
+void foma_render_popup_menu(GDEV *dev, const FOMA_POPUP_MENU *menu);
 
 /* ── Drawing & Compositing APIs (desktop_mobile.c) ── */
 void foma_render_desktop(GDEV *dev, const FOMA_SCREEN *scr);

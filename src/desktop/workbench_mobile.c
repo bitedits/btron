@@ -724,7 +724,6 @@ static void show_settings_sub_screen(int setting_id) {
 }
 
 /* ── Calculator Screen ── */
-static double s_calc_acc = 0.0;
 static char s_calc_buf[32] = "0";
 
 static void show_calculator_screen(void) {

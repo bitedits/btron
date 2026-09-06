@@ -239,9 +239,9 @@ TC utf8_to_tc(const char *utf8_str, int *bytes_consumed) {
         if (bytes_consumed) *bytes_consumed = 3;
         UW cp = ((s[0] & 0x0F) << 12) | ((s[1] & 0x3F) << 6) | (s[2] & 0x3F);
 
-        /* Tibetan block U+0F00 - U+0FFF -> TRON Code Plane 10 (0x6F00 | (cp - 0x0F00)) */
+        /* Tibetan block U+0F00 - U+0FFF -> TRON Code Plane 10 (0x9F00 | (cp - 0x0F00)) */
         if (cp >= 0x0F00 && cp <= 0x0FFF) {
-            return (TC)(0x6F00 | (cp - 0x0F00));
+            return (TC)(0x9F00 | (cp - 0x0F00));
         }
 
         /* CJK Symbols and Punctuation U+3000 - U+303F -> Plane 1 (0x21xx) */
@@ -299,7 +299,7 @@ int tc_to_utf8(TC code, char *utf8_buf, int max_len) {
     UW high = (code >> 8) & 0xFF;
     UW low  = code & 0xFF;
 
-    if (high == 0x6F) {
+    if (high == 0x9F) {
         /* Tibetan Block: U+0F00 + low */
         UW cp = 0x0F00 + low;
         utf8_buf[0] = (char)(0xE0 | ((cp >> 12) & 0x0F));
@@ -597,8 +597,8 @@ const UB* get_glyph_bitmap(TC code, H *out_width, H *out_height) {
         return font_ascii_8x16[code];
     }
 
-    /* Tibetan Block in TRON Code Plane 10 (0x6F00..0x6FFF) */
-    if ((code >> 8) == 0x6F) {
+    /* Tibetan Block in TRON Code Plane 10 (0x9F00..0x9FFF) */
+    if ((code >> 8) == 0x9F) {
         UW cp = 0x0F00 + (code & 0xFF);
         return get_tibetan_glyph_bitmap_ex(cp, out_width, out_height);
     }
@@ -655,7 +655,7 @@ const UB* get_glyph_bitmap(TC code, H *out_width, H *out_height) {
 
 
 H tc_get_char_advance(TC code, TC prev_code) {
-    if ((code >> 8) == 0x6F) {
+    if ((code >> 8) == 0x9F) {
         UW cp = 0x0F00 + (code & 0xFF);
         if ((cp >= 0x0F71 && cp <= 0x0F84) || (cp >= 0x0F90 && cp <= 0x0FBC)) {
             /* Combining Vowel / Subjoined Consonant: stacks onto previous base (0 advance) */
@@ -668,7 +668,7 @@ H tc_get_char_advance(TC code, TC prev_code) {
             return 8;
         }
     } else if (code == ' ') {
-        if (prev_code == 0x6F0B) {
+        if (prev_code == 0x9F0B) {
             /* Collapse redundant ASCII space following Tsheg */
             return 0;
         }
@@ -692,7 +692,7 @@ H tc_calc_string_width(const char *utf8_text, int max_bytes) {
         int step = (consumed > 0 ? consumed : 1);
         H adv = tc_get_char_advance(code, prev_code);
         total_w += adv;
-        if (adv > 0 || (code >> 8) != 0x6F) {
+        if (adv > 0 || (code >> 8) != 0x9F) {
             prev_code = code;
         }
         bi += step;
@@ -726,7 +726,7 @@ static ER render_tc_string(GDEV *dev, H x, H y, const char *text, COLOR fg_col, 
         p += (consumed > 0 ? consumed : 1);
 
         /* Collapse redundant ASCII space following a Tibetan Tsheg to prevent long gaps */
-        if (code == ' ' && prev_code == 0x6F0B) {
+        if (code == ' ' && prev_code == 0x9F0B) {
             continue;
         }
 
@@ -739,7 +739,7 @@ static ER render_tc_string(GDEV *dev, H x, H y, const char *text, COLOR fg_col, 
         H advance = gw;
 
         /* Tibetan Typography & Stacking Rules */
-        if ((code >> 8) == 0x6F) {
+        if ((code >> 8) == 0x9F) {
             UW cp = 0x0F00 + (code & 0xFF);
             if ((cp >= 0x0F71 && cp <= 0x0F84) || (cp >= 0x0F90 && cp <= 0x0FBC)) {
                 /* Combining Vowel Sign / Subjoined Consonant: stack onto previous base */

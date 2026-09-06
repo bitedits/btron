@@ -104,6 +104,60 @@ int main(void) {
     foma_show_calculator();
     dump_foma_screen(dev, "Bonus: Calculator", "/tmp/foma_raw_screens/foma_calculator.raw");
 
+    /* ── Opened Menus & Dialogs Showcase ── */
+
+    /* 7. Opened Floating Context Popup Menu (浮動操作メニュー) over Home Cabinet */
+    foma_ui_init();
+    foma_show_home_cabinet();
+    {
+        const char *pop_items[] = {
+            "1. 開く (Open)",
+            "2. 詳細属性 (Properties)",
+            "3. 実身検索 (Search)",
+            "4. 仮身作成 (Create Fusen)",
+            "5. 実身削除 (Delete)",
+            "6. 電源管理 (Power)"
+        };
+        const char *pop_badges[] = {
+            "選択", "属性", "TIP", "仮身", "警告", "88%"
+        };
+        foma_show_popup_menu("操作メニュー (1-6) / Actions", pop_items, pop_badges, 6, 1);
+    }
+    dump_foma_screen(dev, "7. Opened Menu: Context Popup", "/tmp/foma_raw_screens/foma_menu_popup.raw");
+
+    /* 8. Opened Delete Confirmation Dialog (実身削除確認ダイアログ) over Contacts */
+    foma_ui_init();
+    foma_show_contacts();
+    foma_show_confirm_dialog("実身削除の確認", "連絡先：坂村 健",
+                             "この実身を完全に削除しますか？\n※ 関連するすべての仮身(Fusen)リンクが\n　 参照不能（リンク切れ）になります。",
+                             NULL, NULL);
+    dump_foma_screen(dev, "8. Opened Dialog: Delete Confirm", "/tmp/foma_raw_screens/foma_dialog_confirm.raw");
+
+    /* 9. Opened Real Body Properties Sheet (実身属性詳細シート) over Memos */
+    foma_ui_init();
+    foma_show_memos();
+    foma_show_properties_dialog("メモ：BTRON FOMA設計", "0x002A-8F14-C001",
+                                "TAD Rev 3.20 (テキスト+仮身)", 4896, 3, "2026-09-05 14:32:08");
+    dump_foma_screen(dev, "9. Opened Dialog: Properties Sheet", "/tmp/foma_raw_screens/foma_dialog_properties.raw");
+
+    /* 10. Opened Search Dialog with TIP Virtual IME (実身検索・TIP入力) over Home */
+    foma_ui_init();
+    foma_show_home_cabinet();
+    foma_show_search_dialog("坂村 健", "[あ/漢] TIP/Mozc");
+    dump_foma_screen(dev, "10. Opened Dialog: Search & IME", "/tmp/foma_raw_screens/foma_dialog_search.raw");
+
+    /* 11. Opened Power Management Dialog (電源管理・サスペンド) over Control Panel */
+    foma_ui_init();
+    foma_show_control_panel();
+    foma_show_power_dialog(88, "4.12V");
+    dump_foma_screen(dev, "11. Opened Dialog: Power & Sleep", "/tmp/foma_raw_screens/foma_dialog_power.raw");
+
+    /* 12. Opened 3G Voice Call Alert Notification (3G 音声着信呼出) over Home */
+    foma_ui_init();
+    foma_show_home_cabinet();
+    foma_show_call_dialog("坂村 健 (Ken Sakamura)", "090-XXXX-XXXX", "00:06");
+    dump_foma_screen(dev, "12. Opened Dialog: 3G Incoming Call", "/tmp/foma_raw_screens/foma_dialog_call.raw");
+
     cls_dev(dev);
     printf("===============================================================\n");
     printf(" FOMA Screen captures dumped successfully to /tmp/foma_raw_screens/\n");

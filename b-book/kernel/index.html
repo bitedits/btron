@@ -69,22 +69,23 @@
       The <strong>Kernel</strong> subsystem provides the deterministic, hard real-time operating system foundation for B-System, based on the official <strong>Sakamura T-Kernel 2.0 (TRON Architecture)</strong> specification:
     </p>
 
-    <pre><code> ┌────────────────────────────────────────────────────────────────────────┐
+    <pre><code> 
+ ┌────────────────────────────────────────────────────────────────────────┐
  │                    Sakamura T-Kernel 2.0 Architecture                  │
  │                                                                        │
- │   [ Applications / Services ]    ◄── C99 System Calls (tk_*) ──┐      │
- │                                                                │      │
- │   ┌───────────────────────┐  ┌──────────────────────────────┐  │      │
- │   │ Task Management       │  │ Synchronization & IPC        │  │      │
- │   │ • 140 Priority Levels │  │ • Semaphores / Mutexes       │  │      │
- │   │ • Preemptive Dispatch │  │ • Event Flags / Mailboxes    │  │      │
- │   │ • Round-Robin Ready Q │  │ • Message Buffers/Rendezvous │  │      │
- │   └───────────────────────┘  └──────────────────────────────┘  │      │
- │   ┌───────────────────────┐  ┌──────────────────────────────┐  │      │
- │   │ Memory Pools (MPL/MPF)│  │ Time / Cyclic Handlers (CYC) │  │      │
- │   └───────────────────────┘  └──────────────────────────────┘  │      │
- │                                                                │      │
- │   [ Device Manager & Subsystems (tk_def_ssy / tk_opn_dev) ] ───┘      │
+ │   [ Applications / Services ]    ◄── C99 System Calls (tk_*) ──┐       │
+ │                                                                │       │
+ │   ┌───────────────────────┐  ┌──────────────────────────────┐  │       │
+ │   │ Task Management       │  │ Synchronization & IPC        │  │       │
+ │   │ • 140 Priority Levels │  │ • Semaphores / Mutexes       │  │       │
+ │   │ • Preemptive Dispatch │  │ • Event Flags / Mailboxes    │  │       │
+ │   │ • Round-Robin Ready Q │  │ • Message Buffers/Rendezvous │  │       │
+ │   └───────────────────────┘  └──────────────────────────────┘  │       │
+ │   ┌───────────────────────┐  ┌──────────────────────────────┐  │       │
+ │   │ Memory Pools (MPL/MPF)│  │ Time / Cyclic Handlers (CYC) │  │       │
+ │   └───────────────────────┘  └──────────────────────────────┘  │       │
+ │                                                                │       │
+ │   [ Device Manager & Subsystems (tk_def_ssy / tk_opn_dev) ] ───┘       │
  └────────────────────────────────────────────────────────────────────────┘</code></pre>
 
     <h3>1.1 Real-Time Scheduling Rules</h3>

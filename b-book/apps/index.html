@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Apps – Application Framework & Tier-1 Suite | B-Book</title>
+  <meta name="description" content="Formal developer documentation for the B-System Apps subsystem: parameterized application architectures, gterm terminal emulator, T-Editor, and TAD Browser.">
+  <link rel="stylesheet" href="../b-book.css">
+</head>
+<body>
+
+  <!-- Navigation Sidebar -->
+  <nav class="book-sidebar">
+    <div class="sidebar-brand">
+      <div class="brand-title">B-Book <span class="badge">Rev 3.20</span></div>
+      <div class="brand-sub">Apps Subsystem Reference</div>
+    </div>
+    <div class="sidebar-nav">
+      <div class="nav-heading">Overview</div>
+      <a href="../index.html" class="nav-link">Master Index</a>
+      
+      <div class="nav-heading">Core Subsystems</div>
+      <a href="../cores/index.html" class="nav-link">Cores (Kernel & SMP)</a>
+      <a href="../graphics/index.html" class="nav-link">Graphics (DP & 2D)</a>
+      <a href="../tip/index.html" class="nav-link">Tip (Input & IME)</a>
+      <a href="../vobject/index.html" class="nav-link">VObject (Hyper-Data)</a>
+      <a href="../window/index.html" class="nav-link">Window (WM & Menus)</a>
+
+      <div class="nav-heading">Extended Subsystems</div>
+      <a href="../desktop/index.html" class="nav-link">Desktop (Shell & Mobile)</a>
+      <a href="../hmi/index.html" class="nav-link">HMI (Human-Machine Interface)</a>
+      <a href="../font/index.html" class="nav-link">Font (Typography Engine)</a>
+      <a href="../settings/index.html" class="nav-link">Settings (Control Panel)</a>
+      <a href="../drivers/index.html" class="nav-link">Drivers (Hardware & VirtIO)</a>
+      <a href="./index.html" class="nav-link active">Apps (Application Suite)</a>
+      <div class="nav-sublinks">
+        <a href="#arch" class="nav-sublink">Application Lifecycle</a>
+        <a href="#tier1" class="nav-sublink">Tier-1 Applications</a>
+        <a href="#menu-api" class="nav-sublink">Menu Integration</a>
+        <a href="#api" class="nav-sublink">API Function Reference</a>
+        <a href="#examples" class="nav-sublink">Code Examples</a>
+      </div>
+    </div>
+  </nav>
+
+  <!-- Main Content Canvas -->
+  <main class="book-content">
+    <header class="book-header">
+      <div class="breadcrumb">
+        <a href="../index.html">B-Book</a> / <span>Apps</span>
+      </div>
+      <h1 class="page-title">Apps: Application Architecture & Tier-1 Suite</h1>
+      <p class="page-lead">
+        Comprehensive C99 specification for building native B-System applications: parameterized geometry constructors, the Tier-1 standard application suite (gterm, T-Editor, TAD Browser), multi-form-factor scaling without <code>#ifdef</code>, and in-window menu bar control.
+      </p>
+    </header>
+
+    <!-- Part 1: Application Lifecycle -->
+    <h2 id="arch">1. Application Architecture & Multi-Form-Factor Scaling</h2>
+    <p>
+      B-System applications follow a clean parameterized lifecycle that allows running completely identical C99 source code across desktop workstations and mobile handsets <strong>without conditional compilation (<code>#ifdef</code>)</strong>:
+    </p>
+
+    <pre><code> ┌────────────────────────────────────────────────────────────────────────┐
+ │                      Universal Application Model                       │
+ │                                                                        │
+ │   Desktop Profile (1024x768)        ◄── Same ──►  Mobile Profile (480x640)
+ │   • opn_wnd(title, x, y, w, h, ...) C99 Code      • Borderless, Titleless
+ │   • Client bounds: (x+4, y+26)                    • Client bounds: (0, 0) 
+ └────────────────────────────────────────────────────────────────────────┘</code></pre>
+
+    <!-- Part 2: Tier-1 Applications -->
+    <h2 id="tier1">2. The Tier-1 Standard Application Suite</h2>
+
+    <table class="api-table">
+      <thead>
+        <tr>
+          <th>Application</th>
+          <th>Source Module</th>
+          <th>Primary Capabilities & Specifications</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>gterm</strong></td>
+          <td><code>src/apps/gterm.c</code></td>
+          <td>Full VT100 / ANSI terminal emulator, dynamic column/row calculations, scrollback buffers, in-window menu bar with <code>Alt+T</code> shortcuts.</td>
+        </tr>
+        <tr>
+          <td><strong>T-Editor</strong></td>
+          <td><code>src/apps/t_editor.c</code></td>
+          <td>Authentic BTRON text and TAD segment editor, multi-line paragraph wrapping, TIP pre-edit integration, and <code>Alt+O</code> Fusen manipulation.</td>
+        </tr>
+        <tr>
+          <td><strong>TAD Browser</strong></td>
+          <td><code>src/apps/tad_browser.c</code></td>
+          <td>Hyper-data document viewer with immutable multi-window state isolation, embedded Fusen links, and history back/forward traversal.</td>
+        </tr>
+        <tr>
+          <td><strong>Chat</strong></td>
+          <td><code>src/apps/chat.c</code></td>
+          <td>Peer-to-peer B-System instant messenger, XML protocol serialization, and contact presence management.</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <!-- Part 3: Menu Integration -->
+    <h2 id="menu-api">3. In-Window Menu Integration & Helpers</h2>
+    <p>
+      Tier-1 applications export standardized helper functions declared in <code>include/btron/apps.h</code> to enable programmatic and mobile softkey menu control:
+    </p>
+
+    <table class="api-table">
+      <thead>
+        <tr>
+          <th>Helper Function</th>
+          <th>Target App</th>
+          <th>Description</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><code>gterm_is_menu_open</code></td>
+          <td><code>gterm</code></td>
+          <td>Returns <code>TRUE</code> if the terminal menu bar currently has an active open dropdown.</td>
+        </tr>
+        <tr>
+          <td><code>gterm_open_menu</code></td>
+          <td><code>gterm</code></td>
+          <td>Programmatically opens dropdown menu at index <code>menu_idx</code> (e.g. 0 for File, 3 for Terminal).</td>
+        </tr>
+        <tr>
+          <td><code>gterm_close_menu</code></td>
+          <td><code>gterm</code></td>
+          <td>Closes any active dropdown menu in the terminal window.</td>
+        </tr>
+        <tr>
+          <td><code>t_editor_is_menu_open</code></td>
+          <td><code>t_editor</code></td>
+          <td>Returns <code>TRUE</code> if the editor menu bar currently has an active open dropdown.</td>
+        </tr>
+        <tr>
+          <td><code>t_editor_open_menu</code></td>
+          <td><code>t_editor</code></td>
+          <td>Programmatically opens editor dropdown at index <code>menu_idx</code>.</td>
+        </tr>
+        <tr>
+          <td><code>t_editor_close_menu</code></td>
+          <td><code>t_editor</code></td>
+          <td>Closes any active dropdown menu in the editor window.</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <!-- Part 4: API Function Reference -->
+    <h2 id="api">4. Application Suite API Reference</h2>
+
+    <!-- open_gterm_window_rect -->
+    <div class="api-card">
+      <div class="api-header">
+        <span class="api-name">open_gterm_window_rect</span>
+        <span class="type-badge">WND*</span>
+      </div>
+      <p>Constructs and maps a <code>gterm</code> terminal emulator window with custom bounds and window attributes.</p>
+      <div class="api-signature">WND* open_gterm_window_rect(H x, H y, H w, H h, UW attr);</div>
+    </div>
+
+    <!-- open_t_editor_window_rect -->
+    <div class="api-card">
+      <div class="api-header">
+        <span class="api-name">open_t_editor_window_rect</span>
+        <span class="type-badge">WND*</span>
+      </div>
+      <p>Constructs a <code>T-Editor</code> window targeting the specified file path with custom geometry.</p>
+      <div class="api-signature">WND* open_t_editor_window_rect(const char *filepath, H x, H y, H w, H h, UW attr);</div>
+    </div>
+
+    <!-- open_tad_browser_window -->
+    <div class="api-card">
+      <div class="api-header">
+        <span class="api-name">open_tad_browser_window</span>
+        <span class="type-badge">WND*</span>
+      </div>
+      <p>Opens an isolated TAD Browser window displaying the specified binary TAD file.</p>
+      <div class="api-signature">WND* open_tad_browser_window(const char *tad_file);</div>
+    </div>
+
+    <!-- Part 5: Canonical Code Examples -->
+    <h2 id="examples">5. Canonical Implementation Examples</h2>
+    <p>
+      The following example demonstrates launching a terminal emulator scaled to an arbitrary viewport without <code>#ifdef</code>:
+    </p>
+
+    <pre><code>#include &lt;btron/apps.h&gt;
+
+void launch_mobile_terminal(void) {
+    /* Launch gterm in borderless mobile viewport (480x534) */
+    WND *wnd = open_gterm_window_rect(0, 0, 480, 534, 0);
+    if (!wnd) return;
+
+    /* Cycle menu programmatically via softkey */
+    if (!gterm_is_menu_open(wnd)) {
+        gterm_open_menu(wnd, 0);
+    }
+}</code></pre>
+
+    <footer class="book-footer">
+      <div><a href="../drivers/index.html">&larr; Previous: Drivers Subsystem</a></div>
+      <div><a href="../index.html">Back to Master Index &rarr;</a></div>
+    </footer>
+  </main>
+
+</body>
+</html>

@@ -19,12 +19,20 @@
       <div class="nav-heading">Overview</div>
       <a href="./index.html" class="nav-link active">Master Index</a>
       
-      <div class="nav-heading">Subsystems</div>
+      <div class="nav-heading">Core Subsystems</div>
       <a href="./cores/index.html" class="nav-link">Cores (Kernel & SMP)</a>
       <a href="./graphics/index.html" class="nav-link">Graphics (DP & 2D)</a>
       <a href="./tip/index.html" class="nav-link">Tip (Input & IME)</a>
       <a href="./vobject/index.html" class="nav-link">VObject (Hyper-Data)</a>
       <a href="./window/index.html" class="nav-link">Window (WM & Menus)</a>
+
+      <div class="nav-heading">Extended Subsystems</div>
+      <a href="./desktop/index.html" class="nav-link">Desktop (Shell & Mobile)</a>
+      <a href="./hmi/index.html" class="nav-link">HMI (Human-Machine Interface)</a>
+      <a href="./font/index.html" class="nav-link">Font (Typography Engine)</a>
+      <a href="./settings/index.html" class="nav-link">Settings (Control Panel)</a>
+      <a href="./drivers/index.html" class="nav-link">Drivers (Hardware & VirtIO)</a>
+      <a href="./apps/index.html" class="nav-link">Apps (Application Suite)</a>
 
       <div class="nav-heading">Cross Reference</div>
       <a href="../b-system.html" class="nav-link">B-System Portal</a>
@@ -49,9 +57,9 @@
       B-Book documents the core foundational libraries and system calls of B-System (BTRON 3.20 specification). All APIs follow strict C99 conformance, zero post-boot heap allocations (NASA JPL Rule 3), and clean multi-target abstractions across POSIX, Sakamura T-Kernel 2.0, NTT DoCoMo FOMA mobile, x86_64 UEFI SMP, and NEC PC-98.
     </div>
 
-    <h2>1. The Five Core Subsystems</h2>
+    <h2>1. The Eleven Subsystem Reference Manuals</h2>
     <p>
-      The B-System developer platform is partitioned into five distinct, decoupled subsystems. Each subsystem exposes public C99 headers in <code>include/btron/</code> and is documented in its dedicated chapter:
+      The B-System developer platform is partitioned into eleven decoupled, cohesive subsystems:
     </p>
 
     <table class="api-table">
@@ -94,12 +102,48 @@
           <td>Sakamura Window Manager (WND), coordinate math, event dispatch loop (EVT), universal in-window menu bar engine, and modal dialogs.</td>
           <td><a href="./window/index.html"><strong>Window Manual &rarr;</strong></a></td>
         </tr>
+        <tr>
+          <td><strong>Desktop</strong></td>
+          <td><code>btron/desktop.h</code><br><code>btron/workbench.h</code><br><code>btron/tracker.h</code><br><code>btron/mobile_ui.h</code></td>
+          <td>Desktop background compositor, Workbench coordinator, Haiku-style Tracker deskbar, Global Menu Bar, and FOMA mobile UI toolkit.</td>
+          <td><a href="./desktop/index.html"><strong>Desktop Manual &rarr;</strong></a></td>
+        </tr>
+        <tr>
+          <td><strong>HMI</strong></td>
+          <td><code>btron/hmi.h</code></td>
+          <td>TRON Human-Machine Interface controls: momentary/toggle switches, standard triad, step selectors, slide/dial volumes, and Enableware.</td>
+          <td><a href="./hmi/index.html"><strong>HMI Manual &rarr;</strong></a></td>
+        </tr>
+        <tr>
+          <td><strong>Font</strong></td>
+          <td><code>btron/font_mgr.h</code><br><code>btron/jis_fonts.h</code><br><code>btron/tibetan_fonts.h</code></td>
+          <td>16-plane TRON-Code multilingual rasterizer, JIS X 0208 / 0213 dot-matrix bitmaps, Classical Tibetan subjoined stacks, and Font Manager caching.</td>
+          <td><a href="./font/index.html"><strong>Font Manual &rarr;</strong></a></td>
+        </tr>
+        <tr>
+          <td><strong>Settings</strong></td>
+          <td><code>btron/settings.h</code><br><code>btron/sys_mgmt.h</code><br><code>btron/terminal_settings.h</code></td>
+          <td>Control Panel applet framework, real-time theme and styling propagation without reboots, dirty state synchronization, and terminal profiles.</td>
+          <td><a href="./settings/index.html"><strong>Settings Manual &rarr;</strong></a></td>
+        </tr>
+        <tr>
+          <td><strong>Drivers</strong></td>
+          <td><code>btron/device.h</code><br><code>btron/tcpip.h</code><br><code>btron/clk.h</code></td>
+          <td>Hardware Abstraction Layer (HAL), VirtIO MMIO virtualization (block, net, console), VESA Linear Framebuffer, and real-time clock.</td>
+          <td><a href="./drivers/index.html"><strong>Drivers Manual &rarr;</strong></a></td>
+        </tr>
+        <tr>
+          <td><strong>Apps</strong></td>
+          <td><code>btron/apps.h</code><br><code>btron/t_editor.h</code><br><code>btron/tad_browser.h</code><br><code>btron/chat.h</code></td>
+          <td>Application lifecycle architecture, parameterized constructors, Tier-1 suite (gterm, T-Editor, TAD Browser, Chat), and in-window menu control.</td>
+          <td><a href="./apps/index.html"><strong>Apps Manual &rarr;</strong></a></td>
+        </tr>
       </tbody>
     </table>
 
     <h2>2. TRON Standard Fundamental Data Types</h2>
     <p>
-      B-System adopts the canonical TRON architecture fundamental type definitions declared in <code>include/btron/types.h</code>. All kernel interfaces and system calls rely on these fixed-width primitives:
+      B-System adopts canonical TRON architecture fundamental type definitions declared in <code>include/btron/types.h</code>. All kernel interfaces and system calls rely on these fixed-width primitives:
     </p>
 
     <table class="api-table">
@@ -193,38 +237,9 @@
       </tbody>
     </table>
 
-    <h2>3. Geometric Primitives</h2>
-    <p>
-      2D layout and clipping across all subsystems utilize two fundamental structures:
-    </p>
-
-    <h3>Point Primitive (<code>PNT</code>)</h3>
-    <pre><code>typedef struct {
-    H x;  /* Horizontal coordinate in pixels */
-    H y;  /* Vertical coordinate in pixels */
-} PNT;</code></pre>
-
-    <h3>Rectangle Primitive (<code>RECT</code>)</h3>
-    <pre><code>typedef struct {
-    H left;    /* Left boundary coordinate (inclusive) */
-    H top;     /* Top boundary coordinate (inclusive) */
-    H right;   /* Right boundary coordinate (exclusive) */
-    H bottom;  /* Bottom boundary coordinate (exclusive) */
-} RECT;</code></pre>
-
-    <div class="callout callout-jpl">
-      <div class="callout-title">NASA JPL Rule 3 Safety Invariants</div>
-      To ensure mission-critical stability and bounded real-time predictability:
-      <ul>
-        <li><strong>Zero Post-Boot Dynamic Allocations</strong>: Applications and window structures must allocate buffers statically or during boot initialization. No dynamic <code>malloc()</code> during active rendering loops.</li>
-        <li><strong>Strict Pointer Validation</strong>: All API functions validate input pointers and return <code>ER_PAR</code> on <code>NULL</code> inputs.</li>
-        <li><strong>Bounded Loops</strong>: All search and traversal routines are bounded by compile-time capacity constants (e.g. <code>APP_MENU_MAX_HEADERS</code>, <code>TIP_MAX_CLAUSES</code>).</li>
-      </ul>
-    </div>
-
     <footer class="book-footer">
       <div>B-Book Revision 3.20 &bull; B-System Engineering Documentation</div>
-      <div><a href="./cores/index.html">Next: Cores Subsystem &rarr;</a></div>
+      <div><a href="./cores/index.html">Start: Cores Subsystem &rarr;</a></div>
     </footer>
   </main>
 

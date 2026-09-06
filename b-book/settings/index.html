@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Settings – System Configuration & Control Panel Framework | B-Book</title>
+  <meta name="description" content="Formal developer documentation for the B-System Settings subsystem: Control Panel applet architecture, dynamic theme propagation, input schemas, and terminal settings.">
+  <link rel="stylesheet" href="../b-book.css">
+</head>
+<body>
+
+  <!-- Navigation Sidebar -->
+  <nav class="book-sidebar">
+    <div class="sidebar-brand">
+      <div class="brand-title">B-Book <span class="badge">Rev 3.20</span></div>
+      <div class="brand-sub">Settings Subsystem Reference</div>
+    </div>
+    <div class="sidebar-nav">
+      <div class="nav-heading">Overview</div>
+      <a href="../index.html" class="nav-link">Master Index</a>
+      
+      <div class="nav-heading">Core Subsystems</div>
+      <a href="../cores/index.html" class="nav-link">Cores (Kernel & SMP)</a>
+      <a href="../graphics/index.html" class="nav-link">Graphics (DP & 2D)</a>
+      <a href="../tip/index.html" class="nav-link">Tip (Input & IME)</a>
+      <a href="../vobject/index.html" class="nav-link">VObject (Hyper-Data)</a>
+      <a href="../window/index.html" class="nav-link">Window (WM & Menus)</a>
+
+      <div class="nav-heading">Extended Subsystems</div>
+      <a href="../desktop/index.html" class="nav-link">Desktop (Shell & Mobile)</a>
+      <a href="../hmi/index.html" class="nav-link">HMI (Human-Machine Interface)</a>
+      <a href="../font/index.html" class="nav-link">Font (Typography Engine)</a>
+      <a href="./index.html" class="nav-link active">Settings (Control Panel)</a>
+      <div class="nav-sublinks">
+        <a href="#arch" class="nav-sublink">Applet Architecture</a>
+        <a href="#types" class="nav-sublink">Settings Categories</a>
+        <a href="#lifecycle" class="nav-sublink">State Lifecycle</a>
+        <a href="#api" class="nav-sublink">API Function Reference</a>
+        <a href="#examples" class="nav-sublink">Code Examples</a>
+      </div>
+      <a href="../drivers/index.html" class="nav-link">Drivers (Hardware & VirtIO)</a>
+      <a href="../apps/index.html" class="nav-link">Apps (Application Suite)</a>
+    </div>
+  </nav>
+
+  <!-- Main Content Canvas -->
+  <main class="book-content">
+    <header class="book-header">
+      <div class="breadcrumb">
+        <a href="../index.html">B-Book</a> / <span>Settings</span>
+      </div>
+      <h1 class="page-title">Settings: Configuration & Control Panel</h1>
+      <p class="page-lead">
+        Comprehensive C99 specification for the B-System configuration management framework: modular Control Panel applets, real-time theme propagation without reboots, dirty state synchronization, and terminal emulation profiles.
+      </p>
+    </header>
+
+    <!-- Part 1: Applet Architecture -->
+    <h2 id="arch">1. Control Panel Architecture</h2>
+    <p>
+      The <strong>Settings</strong> subsystem provides an extensible, unified framework for managing system-wide operational parameters. In alignment with BTRON principles, all settings are managed via dedicated Real Objects grouped inside the <strong>Settings Cabinet (設定キャビネット)</strong>:
+    </p>
+
+    <pre><code> [ Settings Cabinet (設定キャビネット) ]
+            │
+            ├── [ Appearance (外観設定) ]  ──► Themes, Bevel Styles, Icon Metrics
+            ├── [ Desktop (デスクトップ) ] ──► Background Colors, Grid Spacings
+            ├── [ Display (画面表示) ]    ──► Resolution, Color Depth, Refresh
+            ├── [ Input (入力環境) ]       ──► Key Repeat, Acceleration, TIP IME
+            ├── [ Language (言語環境) ]   ──► Locale, TRON Planes, Tibetan EWTS
+            ├── [ Terminal (端末設定) ]   ──► ANSI Colors, Baud Rates, Fonts
+            └── [ Sound (音響設定) ]      ──► Master Volumes, Alert Bells</code></pre>
+
+    <!-- Part 2: Settings Categories -->
+    <h2 id="types">2. Core Applet Specifications</h2>
+
+    <table class="api-table">
+      <thead>
+        <tr>
+          <th>Applet Name</th>
+          <th>Source Module</th>
+          <th>Configured Invariants & Hardware Targets</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>Appearance</strong></td>
+          <td><code>src/settings/appearance.c</code></td>
+          <td>3D Beveled Chrome (<code>APP_MENU_STYLE_CLASSIC_3D</code>) vs Modern Flat Card, 32&times;32 / 64&times;64 icon dimensions.</td>
+        </tr>
+        <tr>
+          <td><strong>Desktop</strong></td>
+          <td><code>src/settings/desktop.c</code></td>
+          <td>Teal wallpaper (<code>COLOR_TEAL</code>), Dark Navy, Amber, grid snap pitches (96&times;72px vs 110&times;104px).</td>
+        </tr>
+        <tr>
+          <td><strong>Display</strong></td>
+          <td><code>src/settings/display.c</code></td>
+          <td>VESA Linear Framebuffer resolutions, FOMA portrait mode (480&times;640), double-buffered VRAM swapping.</td>
+        </tr>
+        <tr>
+          <td><strong>Input</strong></td>
+          <td><code>src/settings/input.c</code></td>
+          <td>Key repeat delays (250ms &ndash; 1000ms), mouse cursor tracking speed, virtual keyboard mappings.</td>
+        </tr>
+        <tr>
+          <td><strong>Language</strong></td>
+          <td><code>src/settings/language.c</code></td>
+          <td>TRON Plane 1 (JIS Kanji) vs Plane 9 (Tibetan), Mozc dictionary lookups, Wylie phonetic triggers.</td>
+        </tr>
+        <tr>
+          <td><strong>Terminal</strong></td>
+          <td><code>src/settings/terminal.c</code></td>
+          <td>VT100 / ANSI escape sequence parsing, 16-color palette tables, scrollback buffer limits.</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <!-- Part 3: State Lifecycle -->
+    <h2 id="lifecycle">3. Configuration Lifecycle & Broadcast</h2>
+    <p>
+      Settings applets follow a strict non-modal, transactional state machine:
+    </p>
+    <ol>
+      <li><strong>Initial State</strong>: Reads active settings from the persistent Real Object storage record.</li>
+      <li><strong>Mutation (<code>is_dirty</code>)</strong>: Modifying UI switches or sliders sets <code>is_dirty = TRUE</code> and enables the <code>[適用 (Apply)]</code> button.</li>
+      <li><strong>Application & Broadcast</strong>: Clicking <code>Apply</code> flushes parameters to disk and broadcasts a global refresh event (<code>redraw_all_windows()</code>) across all running tasks without requiring an OS restart.</li>
+      <li><strong>Reversion</strong>: The <code>[標準 (Default)]</code> button immediately restores factory-calibrated safety values.</li>
+    </ol>
+
+    <!-- Part 4: API Function Reference -->
+    <h2 id="api">4. Settings API Function Reference</h2>
+
+    <!-- open_appearance_settings_window -->
+    <div class="api-card">
+      <div class="api-header">
+        <span class="api-name">open_appearance_settings_window</span>
+        <span class="type-badge">WND*</span>
+      </div>
+      <p>Opens the Appearance configuration panel, allowing interactive switching between Classic 3D and Modern Card menu styles.</p>
+      <div class="api-signature">WND* open_appearance_settings_window(void);</div>
+    </div>
+
+    <!-- open_desktop_settings_window -->
+    <div class="api-card">
+      <div class="api-header">
+        <span class="api-name">open_desktop_settings_window</span>
+        <span class="type-badge">WND*</span>
+      </div>
+      <p>Opens the Desktop settings panel for background color, pattern fill, and icon spacing configuration.</p>
+      <div class="api-signature">WND* open_desktop_settings_window(void);</div>
+    </div>
+
+    <!-- open_terminal_settings_window -->
+    <div class="api-card">
+      <div class="api-header">
+        <span class="api-name">open_terminal_settings_window</span>
+        <span class="type-badge">WND*</span>
+      </div>
+      <p>Opens the Terminal emulator configuration panel to tune VT100 colors, cursor shapes, and fonts.</p>
+      <div class="api-signature">WND* open_terminal_settings_window(void);</div>
+    </div>
+
+    <!-- Part 5: Canonical Code Examples -->
+    <h2 id="examples">5. Canonical Implementation Examples</h2>
+    <p>
+      The following example demonstrates opening a settings panel and wiring the apply callback to update the global menu styling:
+    </p>
+
+    <pre><code>#include &lt;btron/settings.h&gt;
+#include &lt;btron/app_menu.h&gt;
+
+void apply_custom_theme(APP_MENU_STYLE style) {
+    /* 1. Update global menu style */
+    app_menu_set_global_style(style);
+
+    /* 2. Broadcast repaint to all active windows */
+    redraw_all_windows();
+}</code></pre>
+
+    <footer class="book-footer">
+      <div><a href="../font/index.html">&larr; Previous: Font Subsystem</a></div>
+      <div><a href="../drivers/index.html">Next: Drivers Subsystem &rarr;</a></div>
+    </footer>
+  </main>
+
+</body>
+</html>

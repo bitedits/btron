@@ -1,0 +1,260 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>HMI – TRON Human-Machine Interface Component Subsystem | B-Book</title>
+  <meta name="description" content="Formal developer documentation for the B-System HMI subsystem: TRON Human-Machine Interface specification, industrial controls, switches, selectors, meters, and Enableware.">
+  <link rel="stylesheet" href="../b-book.css">
+</head>
+<body>
+
+  <!-- Navigation Sidebar -->
+  <nav class="book-sidebar">
+    <div class="sidebar-brand">
+      <div class="brand-title">B-Book <span class="badge">Rev 3.20</span></div>
+      <div class="brand-sub">HMI Subsystem Reference</div>
+    </div>
+    <div class="sidebar-nav">
+      <div class="nav-heading">Overview</div>
+      <a href="../index.html" class="nav-link">Master Index</a>
+      
+      <div class="nav-heading">Core Subsystems</div>
+      <a href="../cores/index.html" class="nav-link">Cores (Kernel & SMP)</a>
+      <a href="../graphics/index.html" class="nav-link">Graphics (DP & 2D)</a>
+      <a href="../tip/index.html" class="nav-link">Tip (Input & IME)</a>
+      <a href="../vobject/index.html" class="nav-link">VObject (Hyper-Data)</a>
+      <a href="../window/index.html" class="nav-link">Window (WM & Menus)</a>
+
+      <div class="nav-heading">Extended Subsystems</div>
+      <a href="../desktop/index.html" class="nav-link">Desktop (Shell & Mobile)</a>
+      <a href="./index.html" class="nav-link active">HMI (Human-Machine Interface)</a>
+      <div class="nav-sublinks">
+        <a href="#arch" class="nav-sublink">HMI Design Standards</a>
+        <a href="#types" class="nav-sublink">Control Primitives</a>
+        <a href="#panel" class="nav-sublink">Panel Architecture</a>
+        <a href="#api" class="nav-sublink">API Function Reference</a>
+        <a href="#examples" class="nav-sublink">Code Examples</a>
+      </div>
+      <a href="../font/index.html" class="nav-link">Font (Typography Engine)</a>
+      <a href="../settings/index.html" class="nav-link">Settings (Control Panel)</a>
+      <a href="../drivers/index.html" class="nav-link">Drivers (Hardware & VirtIO)</a>
+      <a href="../apps/index.html" class="nav-link">Apps (Application Suite)</a>
+    </div>
+  </nav>
+
+  <!-- Main Content Canvas -->
+  <main class="book-content">
+    <header class="book-header">
+      <div class="breadcrumb">
+        <a href="../index.html">B-Book</a> / <span>HMI</span>
+      </div>
+      <h1 class="page-title">HMI: Human-Machine Interface Specification</h1>
+      <p class="page-lead">
+        Comprehensive C99 developer specification for the official TRON Human-Machine Interface (HMI) standard library: physical control emulation, rotary volumes, step selectors, bar meters, Enableware tactile indicators, and industrial panel containers.
+      </p>
+    </header>
+
+    <!-- Part 1: Design Standards -->
+    <h2 id="arch">1. The TRON HMI Design Philosophy</h2>
+    <p>
+      The <strong>HMI</strong> subsystem implements the canonical <em>TRON Human-Machine Interface Specification</em> designed by Dr. Ken Sakamura. Unlike standard desktop widget toolkits that favor arbitrary rectangular buttons, TRON HMI faithfully models the physical ergonomics, tactile affordances, and safety invariants of real-world electronic instrumentation:
+    </p>
+
+    <ul>
+      <li><strong>Consistent Operating Procedures</strong>: Clear operational distinction between Touch Edge (activation on press down) and Release Edge (activation on button release).</li>
+      <li><strong>Standard Triad Group</strong>: Universal grouping of <code>Cancel</code> (left), <code>Default</code> (center), and <code>Start/Execute</code> (right) controls.</li>
+      <li><strong>Enableware Support</strong>: Built-in tactile bumps (<em>bocchi</em> / ボッチ) on key controls to assist visually impaired operators and touch typing.</li>
+      <li><strong>Three-Color Status Semantics</strong>: Unambiguous industrial state signals &mdash; Green (Normal/Safe), Yellow/Amber (Standby/Caution), and Red (Stop/Alert).</li>
+    </ul>
+
+    <!-- Part 2: Control Primitives -->
+    <h2 id="types">2. Control Primitives & Types</h2>
+
+    <h3>HMI Control Types (<code>HMI_CTRL_TYPE</code>)</h3>
+    <p>Defined in <code>include/btron/hmi.h</code>:</p>
+    <table class="api-table">
+      <thead>
+        <tr>
+          <th>Enum Constant</th>
+          <th>Physical Metaphor</th>
+          <th>Operational Behavior</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><code>HMI_TYPE_PUSH_SWITCH</code></td>
+          <td>Momentary Push Button</td>
+          <td>Activates temporarily while pressed; snaps back immediately upon release.</td>
+        </tr>
+        <tr>
+          <td><code>HMI_TYPE_TOGGLE_SWITCH</code></td>
+          <td>Push-Lock / Alternate Switch</td>
+          <td>Toggles state on each press; remains mechanically depressed until pressed again.</td>
+        </tr>
+        <tr>
+          <td><code>HMI_TYPE_STANDARD_TRIAD</code></td>
+          <td>Safety Triad Group</td>
+          <td>Standardized Cancel / Default / Execute button cluster.</td>
+        </tr>
+        <tr>
+          <td><code>HMI_TYPE_UPDOWN_SELECTOR</code></td>
+          <td>Digital Step Stepper</td>
+          <td>Dual-arrow up/down discrete value incrementor/decrementor.</td>
+        </tr>
+        <tr>
+          <td><code>HMI_TYPE_RADIO_SELECTOR</code></td>
+          <td>Exclusive Mechanical Interlock</td>
+          <td>Mutually exclusive option selection (radio button matrix).</td>
+        </tr>
+        <tr>
+          <td><code>HMI_TYPE_ROTARY_SELECTOR</code></td>
+          <td>Multi-position Rotary Switch</td>
+          <td>Rotary knob selecting discrete functional modes (e.g. Off / Low / Med / High).</td>
+        </tr>
+        <tr>
+          <td><code>HMI_TYPE_SLIDER_VOLUME</code></td>
+          <td>Linear Slide Potentiometer</td>
+          <td>Continuous vertical or horizontal fader knob for volume and brightness.</td>
+        </tr>
+        <tr>
+          <td><code>HMI_TYPE_DIAL_VOLUME</code></td>
+          <td>Rotary Analog Potentiometer</td>
+          <td>Circular continuous dial knob with angle-to-value transformation.</td>
+        </tr>
+        <tr>
+          <td><code>HMI_TYPE_BAR_METER</code></td>
+          <td>LED Bargraph VU Meter</td>
+          <td>Multi-segment visual level indicator with green/yellow/red bands.</td>
+        </tr>
+        <tr>
+          <td><code>HMI_TYPE_STATUS_LED</code></td>
+          <td>3-Color Pilot Lamp</td>
+          <td>Status indicator (Green, Yellow, Red, or Off).</td>
+        </tr>
+        <tr>
+          <td><code>HMI_TYPE_UNIVERSAL_PAD</code></td>
+          <td>TRON Universal Controller</td>
+          <td>Standardized directional keypad with center execute and auxiliary buttons.</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <h3>Control Descriptor (<code>HMI_CTRL</code>)</h3>
+    <pre><code>typedef struct HMI_CTRL {
+    ID               id;           /* Control identifier within host panel */
+    HMI_CTRL_TYPE    type;         /* Widget type category */
+    RECT             bounds;       /* Layout position relative to panel */
+    UW               flags;        /* State flags (ACTIVE, FOCUSED, PRESSED, ENABLEWARE) */
+    HMI_TRIGGER_MODE trigger;      /* TOUCH_EDGE or RELEASE_EDGE */
+    char             label[64];    /* Caption or description string */
+    char             unit[16];     /* Value measurement unit (e.g. dB, %, rpm) */
+
+    /* Values & Bounds */
+    int              val;          /* Current integer state value */
+    int              min_val;      /* Minimum permissible value */
+    int              max_val;      /* Maximum permissible value */
+    int              step;         /* Discrete step increment */
+
+    /* Options for Selectors */
+    int              num_options;  /* Count of discrete selector items */
+    const char       *options[16]; /* Array of option text labels */
+
+    /* Visual Overrides */
+    HMI_LED_COLOR    led_color;    /* LED state if applicable */
+} HMI_CTRL;</code></pre>
+
+    <!-- Part 3: Panel Architecture -->
+    <h2 id="panel">3. Panel Container Architecture</h2>
+    <p>
+      An <code>HMI_PANEL</code> acts as the composite instrument board containing multiple controls. It handles layout rendering, mouse tracking, and keyboard tab focus navigation:
+    </p>
+
+    <pre><code>typedef struct HMI_PANEL {
+    RECT             bounds;       /* Panel boundary */
+    int              ctrl_count;   /* Number of controls mounted on panel */
+    HMI_CTRL         ctrls[32];    /* Static control array (NASA JPL Rule 3) */
+    int              focused_idx;  /* Index of currently focused control */
+    HMI_CALLBACK     on_change;    /* Value mutation notification callback */
+} HMI_PANEL;</code></pre>
+
+    <!-- Part 4: API Function Reference -->
+    <h2 id="api">4. HMI API Function Reference</h2>
+
+    <!-- hmi_init_panel -->
+    <div class="api-card">
+      <div class="api-header">
+        <span class="api-name">hmi_init_panel</span>
+        <span class="ret-badge">void</span>
+      </div>
+      <p>Initializes an HMI instrument panel structure with zero post-boot heap allocations.</p>
+      <div class="api-signature">void hmi_init_panel(HMI_PANEL *panel, const RECT *bounds, HMI_CALLBACK cb);</div>
+    </div>
+
+    <!-- hmi_add_switch -->
+    <div class="api-card">
+      <div class="api-header">
+        <span class="api-name">hmi_add_switch</span>
+        <span class="type-badge">HMI_CTRL*</span>
+      </div>
+      <p>Mounts a momentary or alternate toggle switch onto the target panel.</p>
+      <div class="api-signature">HMI_CTRL* hmi_add_switch(HMI_PANEL *panel, ID id, const char *label, const RECT *r, BOOL is_toggle);</div>
+    </div>
+
+    <!-- hmi_add_volume -->
+    <div class="api-card">
+      <div class="api-header">
+        <span class="api-name">hmi_add_volume</span>
+        <span class="type-badge">HMI_CTRL*</span>
+      </div>
+      <p>Mounts a slide or rotary volume knob with min/max calibration and engineering units.</p>
+      <div class="api-signature">HMI_CTRL* hmi_add_volume(HMI_PANEL *panel, ID id, const char *label, const RECT *r, int min_val, int max_val, int init_val, const char *unit, BOOL is_dial);</div>
+    </div>
+
+    <!-- hmi_draw_panel -->
+    <div class="api-card">
+      <div class="api-header">
+        <span class="api-name">hmi_draw_panel</span>
+        <span class="ret-badge">void</span>
+      </div>
+      <p>Renders the entire instrument panel, beveled borders, control states, and Enableware tactile markers into the target graphic device.</p>
+      <div class="api-signature">void hmi_draw_panel(const HMI_PANEL *panel, GDEV *dev);</div>
+    </div>
+
+    <!-- Part 5: Canonical Code Examples -->
+    <h2 id="examples">5. Canonical Implementation Examples</h2>
+    <p>
+      The following example demonstrates setting up an industrial audio mixer instrument panel with slider volumes and level meters:
+    </p>
+
+    <pre><code>#include &lt;btron/hmi.h&gt;
+
+static void on_mixer_change(HMI_CTRL *ctrl, HMI_PANEL *panel, void *user_data) {
+    (void)panel; (void)user_data;
+    /* React to slider volume adjustments */
+    if (ctrl->id == 101) {
+        set_master_volume_gain(ctrl->val);
+    }
+}
+
+void setup_audio_panel(HMI_PANEL *panel) {
+    RECT panel_bounds = { 10, 10, 320, 240 };
+    hmi_init_panel(panel, &panel_bounds, on_mixer_change);
+
+    /* Add Master Slider Volume */
+    RECT vol_rect = { 30, 40, 70, 180 };
+    hmi_add_volume(panel, 101, "Master", &vol_rect, 0, 100, 75, "%", FALSE);
+
+    /* Add Power Toggle Switch */
+    RECT pwr_rect = { 100, 40, 200, 75 };
+    hmi_add_switch(panel, 102, "Amplifier Power", &pwr_rect, TRUE);
+}</code></pre>
+
+    <footer class="book-footer">
+      <div><a href="../desktop/index.html">&larr; Previous: Desktop Subsystem</a></div>
+      <div><a href="../font/index.html">Next: Font Subsystem &rarr;</a></div>
+    </footer>
+  </main>
+
+</body>
+</html>

@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Drivers – Hardware Abstraction & Peripheral Subsystem | B-Book</title>
+  <meta name="description" content="Formal developer documentation for the B-System Drivers subsystem: VirtIO MMIO virtualization, VESA LFB graphics, real-time clock (RTC), and TCP/IP networking.">
+  <link rel="stylesheet" href="../b-book.css">
+</head>
+<body>
+
+  <!-- Navigation Sidebar -->
+  <nav class="book-sidebar">
+    <div class="sidebar-brand">
+      <div class="brand-title">B-Book <span class="badge">Rev 3.20</span></div>
+      <div class="brand-sub">Drivers Subsystem Reference</div>
+    </div>
+    <div class="sidebar-nav">
+      <div class="nav-heading">Overview</div>
+      <a href="../index.html" class="nav-link">Master Index</a>
+      
+      <div class="nav-heading">Core Subsystems</div>
+      <a href="../cores/index.html" class="nav-link">Cores (Kernel & SMP)</a>
+      <a href="../graphics/index.html" class="nav-link">Graphics (DP & 2D)</a>
+      <a href="../tip/index.html" class="nav-link">Tip (Input & IME)</a>
+      <a href="../vobject/index.html" class="nav-link">VObject (Hyper-Data)</a>
+      <a href="../window/index.html" class="nav-link">Window (WM & Menus)</a>
+
+      <div class="nav-heading">Extended Subsystems</div>
+      <a href="../desktop/index.html" class="nav-link">Desktop (Shell & Mobile)</a>
+      <a href="../hmi/index.html" class="nav-link">HMI (Human-Machine Interface)</a>
+      <a href="../font/index.html" class="nav-link">Font (Typography Engine)</a>
+      <a href="../settings/index.html" class="nav-link">Settings (Control Panel)</a>
+      <a href="./index.html" class="nav-link active">Drivers (Hardware & VirtIO)</a>
+      <div class="nav-sublinks">
+        <a href="#arch" class="nav-sublink">Hardware Abstraction</a>
+        <a href="#virtio" class="nav-sublink">VirtIO MMIO Devices</a>
+        <a href="#types" class="nav-sublink">Device Descriptors</a>
+        <a href="#api" class="nav-sublink">API Function Reference</a>
+        <a href="#examples" class="nav-sublink">Code Examples</a>
+      </div>
+      <a href="../apps/index.html" class="nav-link">Apps (Application Suite)</a>
+    </div>
+  </nav>
+
+  <!-- Main Content Canvas -->
+  <main class="book-content">
+    <header class="book-header">
+      <div class="breadcrumb">
+        <a href="../index.html">B-Book</a> / <span>Drivers</span>
+      </div>
+      <h1 class="page-title">Drivers: Hardware Abstraction & Peripherals</h1>
+      <p class="page-lead">
+        Comprehensive C99 developer specification for the B-System hardware abstraction layer (HAL): memory-mapped I/O (MMIO), VirtIO paravirtualization (block, net, console), VESA Linear Framebuffer (LFB), and real-time clock services.
+      </p>
+    </header>
+
+    <!-- Part 1: Hardware Abstraction -->
+    <h2 id="arch">1. Hardware Abstraction Layer (HAL)</h2>
+    <p>
+      The <strong>Drivers</strong> subsystem abstracts low-level bus topologies, CPU interrupt controllers, and peripheral I/O ports behind deterministic, non-blocking C99 interfaces adhering to NASA JPL Rule 3:
+    </p>
+
+    <pre><code> ┌────────────────────────────────────────────────────────────────────────┐
+ │                    B-System Standard Device Interface                  │
+ │                                                                        │
+ │   [ File / VObject Layer ]  ◄── ID / Device Calls ──►  [ Drivers HAL ] │
+ │   • opn_dev / cls_dev                                  • VirtIO Block  │
+ │   • rea_dev / wri_dev                                  • VESA Video    │
+ │   • ctl_dev (IOCTL)                                    • UART Console  │
+ └────────────────────────────────────────────────────────────────────────┘</code></pre>
+
+    <!-- Part 2: VirtIO MMIO Devices -->
+    <h2 id="virtio">2. VirtIO Paravirtualization Subsystem</h2>
+    <p>
+      To deliver hyper-performant I/O in QEMU and cloud virtualization environments, B-System implements direct cleanroom VirtIO MMIO drivers:
+    </p>
+
+    <table class="api-table">
+      <thead>
+        <tr>
+          <th>VirtIO Device</th>
+          <th>Device ID</th>
+          <th>MMIO Base Address</th>
+          <th>Operational Function</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>VirtIO Block</strong></td>
+          <td>2 (<code>0x02</code>)</td>
+          <td><code>0x0a000000</code></td>
+          <td>Persistent HFDS backing store; DMA sector read/write transactions.</td>
+        </tr>
+        <tr>
+          <td><strong>VirtIO Net</strong></td>
+          <td>1 (<code>0x01</code>)</td>
+          <td><code>0x0a000200</code></td>
+          <td>Ethernet frame RX/TX queues for TCP/IP and Chat protocols.</td>
+        </tr>
+        <tr>
+          <td><strong>VirtIO Console</strong></td>
+          <td>3 (<code>0x03</code>)</td>
+          <td><code>0x0a000400</code></td>
+          <td>Early system log streams, debugger TTY, and serial console output.</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <!-- Part 3: Device Descriptors -->
+    <h2 id="types">3. Data Structures & Descriptors</h2>
+
+    <h3>Device Management Descriptor (<code>DEV_DESC</code>)</h3>
+    <p>Defined in <code>include/btron/device.h</code>:</p>
+    <pre><code>typedef struct {
+    ID    dev_id;       /* Unique 32-bit device identifier */
+    UW    type;         /* Device class (BLOCK, CHAR, NET, DISPLAY) */
+    char  name[32];     /* Hardware device label */
+    UW    flags;        /* Status flags (READONLY, DMA_CAPABLE, READY) */
+    UW    block_size;   /* Native transfer block granularity */
+    UD    total_blocks; /* Total sector capacity */
+} DEV_DESC;</code></pre>
+
+    <!-- Part 4: API Function Reference -->
+    <h2 id="api">4. Device Driver API Reference</h2>
+
+    <!-- opn_dev -->
+    <div class="api-card">
+      <div class="api-header">
+        <span class="api-name">opn_dev</span>
+        <span class="ret-badge">ID</span>
+      </div>
+      <p>Opens a registered hardware device driver by name, acquiring exclusive or shared access.</p>
+      <div class="api-signature">ID opn_dev(const char *dev_name, UW mode);</div>
+    </div>
+
+    <!-- rea_dev -->
+    <div class="api-card">
+      <div class="api-header">
+        <span class="api-name">rea_dev</span>
+        <span class="ret-badge">ER</span>
+      </div>
+      <p>Performs a synchronous DMA block read from the target device into a kernel-mapped buffer.</p>
+      <div class="api-signature">ER rea_dev(ID dev_id, UD start_block, void *buf, UW num_blocks);</div>
+    </div>
+
+    <!-- wri_dev -->
+    <div class="api-card">
+      <div class="api-header">
+        <span class="api-name">wri_dev</span>
+        <span class="ret-badge">ER</span>
+      </div>
+      <p>Writes blocks from memory to non-volatile device storage, flushing write-back caches.</p>
+      <div class="api-signature">ER wri_dev(ID dev_id, UD start_block, const void *buf, UW num_blocks);</div>
+    </div>
+
+    <!-- Part 5: Canonical Code Examples -->
+    <h2 id="examples">5. Canonical Implementation Examples</h2>
+    <p>
+      The following example demonstrates opening a VirtIO block storage driver and reading master partition metadata:
+    </p>
+
+    <pre><code>#include &lt;btron/device.h&gt;
+
+ER read_partition_header(void *out_header) {
+    /* 1. Open primary VirtIO storage block device */
+    ID disk = opn_dev("vda", 0);
+    if (disk &lt; 0) return disk;
+
+    /* 2. Read first 512-byte sector */
+    ER er = rea_dev(disk, 0, out_header, 1);
+    
+    /* 3. Close device handle */
+    cls_dev(disk);
+    return er;
+}</code></pre>
+
+    <footer class="book-footer">
+      <div><a href="../settings/index.html">&larr; Previous: Settings Subsystem</a></div>
+      <div><a href="../apps/index.html">Next: Apps Subsystem &rarr;</a></div>
+    </footer>
+  </main>
+
+</body>
+</html>

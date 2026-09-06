@@ -1,0 +1,219 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Font – Multi-Script Typography & Font Management | B-Book</title>
+  <meta name="description" content="Formal developer documentation for the B-System Font subsystem: 16-plane TRON-Code architecture, JIS X 0208/0213 dot-matrix bitmaps, Classical Tibetan typography, and Font Manager caching.">
+  <link rel="stylesheet" href="../b-book.css">
+</head>
+<body>
+
+  <!-- Navigation Sidebar -->
+  <nav class="book-sidebar">
+    <div class="sidebar-brand">
+      <div class="brand-title">B-Book <span class="badge">Rev 3.20</span></div>
+      <div class="brand-sub">Font Subsystem Reference</div>
+    </div>
+    <div class="sidebar-nav">
+      <div class="nav-heading">Overview</div>
+      <a href="../index.html" class="nav-link">Master Index</a>
+      
+      <div class="nav-heading">Core Subsystems</div>
+      <a href="../cores/index.html" class="nav-link">Cores (Kernel & SMP)</a>
+      <a href="../graphics/index.html" class="nav-link">Graphics (DP & 2D)</a>
+      <a href="../tip/index.html" class="nav-link">Tip (Input & IME)</a>
+      <a href="../vobject/index.html" class="nav-link">VObject (Hyper-Data)</a>
+      <a href="../window/index.html" class="nav-link">Window (WM & Menus)</a>
+
+      <div class="nav-heading">Extended Subsystems</div>
+      <a href="../desktop/index.html" class="nav-link">Desktop (Shell & Mobile)</a>
+      <a href="../hmi/index.html" class="nav-link">HMI (Human-Machine Interface)</a>
+      <a href="./index.html" class="nav-link active">Font (Typography Engine)</a>
+      <div class="nav-sublinks">
+        <a href="#arch" class="nav-sublink">16-Plane Architecture</a>
+        <a href="#types" class="nav-sublink">Glyph Formats & Types</a>
+        <a href="#tibetan" class="nav-sublink">Tibetan Complex Script</a>
+        <a href="#api" class="nav-sublink">API Function Reference</a>
+        <a href="#examples" class="nav-sublink">Code Examples</a>
+      </div>
+      <a href="../settings/index.html" class="nav-link">Settings (Control Panel)</a>
+      <a href="../drivers/index.html" class="nav-link">Drivers (Hardware & VirtIO)</a>
+      <a href="../apps/index.html" class="nav-link">Apps (Application Suite)</a>
+    </div>
+  </nav>
+
+  <!-- Main Content Canvas -->
+  <main class="book-content">
+    <header class="book-header">
+      <div class="breadcrumb">
+        <a href="../index.html">B-Book</a> / <span>Font</span>
+      </div>
+      <h1 class="page-title">Font: Multi-Script Typography & Font Engine</h1>
+      <p class="page-lead">
+        Comprehensive C99 specification for the B-System multilingual typography engine: 16-plane TRON Character Code rasterization, JIS X 0208 / JIS X 0213 dot-matrix bitmaps, Classical Tibetan subjoined stacks, and Font Manager caching.
+      </p>
+    </header>
+
+    <!-- Part 1: Architecture -->
+    <h2 id="arch">1. 16-Plane TRON-Code Architecture</h2>
+    <p>
+      The <strong>Font</strong> subsystem realizes Dr. Ken Sakamura's vision of a universal multilingual typography engine capable of encoding all historical and living human scripts without code-page collisions.
+    </p>
+
+    <pre><code> ┌────────────────────────────────────────────────────────────────────────┐
+ │                      TRON-Code 16-Plane Structure                      │
+ │                                                                        │
+ │  Plane 1: JIS X 0208 / JIS X 0213 (Kanji, Hiragana, Katakana, Latin)   │
+ │  Plane 2: Morohashi Dai Kan-Wa Jiten (Classical Chinese Characters)    │
+ │  Plane 3: Additional East Asian Character Sets (Hanja / Hanzi)         │
+ │  Plane 9: Classical Tibetan Buddhist Canon (Jomolhari Unicode Stack)  │
+ │  Plane 15: Private Use Area (PUA / Corporate & Historical Glyphs)       │
+ └────────────────────────────────────────────────────────────────────────┘</code></pre>
+
+    <p>
+      Each TRON character code (<code>TC</code>) is a 16-bit word representing a character within the currently active plane. Transition between planes is accomplished via the standard TRON Language Specification Escape Sequence (TAD <code>@ts_tfont</code> segment).
+    </p>
+
+    <!-- Part 2: Glyph Formats & Types -->
+    <h2 id="types">2. Glyph Formats & Structures</h2>
+
+    <h3>Glyph Bitmap Metrics Structure (<code>GLYPH_METRICS</code>)</h3>
+    <pre><code>typedef struct {
+    H  width;        /* Rasterized glyph bitmap width in pixels */
+    H  height;       /* Rasterized glyph bitmap height in pixels */
+    H  advance_x;    /* Horizontal advance pen displacement */
+    H  bearing_x;    /* Left side bearing offset */
+    H  bearing_y;    /* Vertical ascent bearing offset from baseline */
+} GLYPH_METRICS;</code></pre>
+
+    <h3>Standard Bitmap Sizes</h3>
+    <table class="api-table">
+      <thead>
+        <tr>
+          <th>Glyph Dimension</th>
+          <th>Memory Footprint</th>
+          <th>Target Scripts</th>
+          <th>Storage Strategy</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>8 &times; 16</strong></td>
+          <td>16 bytes / glyph</td>
+          <td>ASCII, Latin-1, Halfwidth Katakana, Cyrillic</td>
+          <td>Linear 1-bit monochrome ROM bitmap.</td>
+        </tr>
+        <tr>
+          <td><strong>16 &times; 16</strong></td>
+          <td>32 bytes / glyph</td>
+          <td>JIS Level 1 & 2 Kanji, Fullwidth Hiragana</td>
+          <td>Indexed compressed ROM dictionary.</td>
+        </tr>
+        <tr>
+          <td><strong>24 &times; 24</strong></td>
+          <td>72 bytes / glyph</td>
+          <td>Display Headlines & Large Signage</td>
+          <td>Dynamic outline rasterization cache.</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <!-- Part 3: Tibetan Complex Script -->
+    <h2 id="tibetan">3. Classical Tibetan Complex Script Rendering</h2>
+    <p>
+      B-System includes dedicated cleanroom support for Classical Tibetan typography (<code>tibetan_fonts.c</code>), implementing the Extended Wylie Transliteration Scheme (EWTS) and vertical consonant subjoining:
+    </p>
+    <ul>
+      <li><strong>Head Consonant (Mgo-can)</strong>: The root radical positioned at the top of the glyph stack.</li>
+      <li><strong>Subjoined Consonant (Vogs-can)</strong>: Dependent consonants attached directly beneath the root (e.g. <code>kya</code>, <code>kra</code>, <code>rgya</code>).</li>
+      <li><strong>Vowel Signs (Dbyangs)</strong>: Diacritics positioned either above (Gigu, Grengbu, Naro) or below (Shabkyu) the vertical stack.</li>
+    </ul>
+
+    <!-- Part 4: API Function Reference -->
+    <h2 id="api">4. Font API Function Reference</h2>
+
+    <!-- get_glyph_bitmap -->
+    <div class="api-card">
+      <div class="api-header">
+        <span class="api-name">get_glyph_bitmap</span>
+        <span class="type-badge">const UB*</span>
+      </div>
+      <p>Retrieves a 1-bit monochrome dot-matrix bitmap pointer and dimensions for the given 16-bit TRON code.</p>
+      <div class="api-signature">const UB* get_glyph_bitmap(TC code, H *out_w, H *out_h);</div>
+      <table class="api-table">
+        <thead>
+          <tr>
+            <th>Parameter</th>
+            <th>Type</th>
+            <th>Description</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>code</code></td>
+            <td><code>TC</code> (uint16_t)</td>
+            <td>16-bit TRON character code.</td>
+          </tr>
+          <tr>
+            <td><code>out_w, out_h</code></td>
+            <td><code>H*</code></td>
+            <td>Pointers receiving glyph width and height in pixels.</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <!-- drw_tc_char -->
+    <div class="api-card">
+      <div class="api-header">
+        <span class="api-name">drw_tc_char</span>
+        <span class="ret-badge">H</span>
+      </div>
+      <p>Renders a single TRON character glyph at coordinates $(x, y)$ on the target graphic device with subpixel anti-aliasing. Returns the horizontal advance width in pixels.</p>
+      <div class="api-signature">H drw_tc_char(GDEV *dev, H x, H y, TC code, COLOR fg, COLOR bg);</div>
+    </div>
+
+    <!-- utf8_to_tron / tron_to_utf8 -->
+    <div class="api-card">
+      <div class="api-header">
+        <span class="api-name">utf8_to_tron / tron_to_utf8</span>
+        <span class="ret-badge">int</span>
+      </div>
+      <p>Converts between standard multi-byte UTF-8 character sequences and 16-bit TRON character codes.</p>
+      <div class="api-signature">int utf8_to_tron(const char *utf8, TC *out_tc);<br>int tron_to_utf8(TC code, char *out_utf8, int max_len);</div>
+    </div>
+
+    <!-- Part 5: Canonical Code Examples -->
+    <h2 id="examples">5. Canonical Implementation Examples</h2>
+    <p>
+      The following example demonstrates decoding a UTF-8 string into TRON codes and rendering each glyph into an offscreen graphic device:
+    </p>
+
+    <pre><code>#include &lt;btron/troncode.h&gt;
+#include &lt;btron/dp.h&gt;
+
+void draw_multilingual_banner(GDEV *dev, H x, H y, const char *utf8_text) {
+    const char *p = utf8_text;
+    H cur_x = x;
+
+    while (*p != '\0') {
+        TC code = 0;
+        int bytes = utf8_to_tron(p, &code);
+        if (bytes &lt;= 0) break;
+
+        /* Render glyph with black foreground and transparent background */
+        H advance = drw_tc_char(dev, cur_x, y, code, COLOR_BLACK, 0x00000000);
+        cur_x += advance;
+        p += bytes;
+    }
+}</code></pre>
+
+    <footer class="book-footer">
+      <div><a href="../hmi/index.html">&larr; Previous: HMI Subsystem</a></div>
+      <div><a href="../settings/index.html">Next: Settings Subsystem &rarr;</a></div>
+    </footer>
+  </main>
+
+</body>
+</html>

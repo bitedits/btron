@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Desktop – Desktop Shell, Workbench & Mobile UI | B-Book</title>
+  <meta name="description" content="Formal developer documentation for the B-System Desktop subsystem: Desktop shell, Workbench coordinator, Deskbar/Tracker, Global Menu Bar, and NTT DoCoMo FOMA mobile UI toolkit.">
+  <link rel="stylesheet" href="../b-book.css">
+</head>
+<body>
+
+  <!-- Navigation Sidebar -->
+  <nav class="book-sidebar">
+    <div class="sidebar-brand">
+      <div class="brand-title">B-Book <span class="badge">Rev 3.20</span></div>
+      <div class="brand-sub">Desktop Subsystem Reference</div>
+    </div>
+    <div class="sidebar-nav">
+      <div class="nav-heading">Overview</div>
+      <a href="../index.html" class="nav-link">Master Index</a>
+      
+      <div class="nav-heading">Core Subsystems</div>
+      <a href="../cores/index.html" class="nav-link">Cores (Kernel & SMP)</a>
+      <a href="../graphics/index.html" class="nav-link">Graphics (DP & 2D)</a>
+      <a href="../tip/index.html" class="nav-link">Tip (Input & IME)</a>
+      <a href="../vobject/index.html" class="nav-link">VObject (Hyper-Data)</a>
+      <a href="../window/index.html" class="nav-link">Window (WM & Menus)</a>
+
+      <div class="nav-heading">Extended Subsystems</div>
+      <a href="./index.html" class="nav-link active">Desktop (Shell & Mobile)</a>
+      <div class="nav-sublinks">
+        <a href="#arch" class="nav-sublink">Architecture & Shell</a>
+        <a href="#types" class="nav-sublink">Structures & Enums</a>
+        <a href="#mobile" class="nav-sublink">FOMA Mobile Toolkit</a>
+        <a href="#api" class="nav-sublink">API Function Reference</a>
+        <a href="#examples" class="nav-sublink">Code Examples</a>
+      </div>
+      <a href="../hmi/index.html" class="nav-link">HMI (Human-Machine Interface)</a>
+      <a href="../font/index.html" class="nav-link">Font (Typography Engine)</a>
+      <a href="../settings/index.html" class="nav-link">Settings (Control Panel)</a>
+      <a href="../drivers/index.html" class="nav-link">Drivers (Hardware & VirtIO)</a>
+      <a href="../apps/index.html" class="nav-link">Apps (Application Suite)</a>
+    </div>
+  </nav>
+
+  <!-- Main Content Canvas -->
+  <main class="book-content">
+    <header class="book-header">
+      <div class="breadcrumb">
+        <a href="../index.html">B-Book</a> / <span>Desktop</span>
+      </div>
+      <h1 class="page-title">Desktop: Desktop Shell, Workbench & Mobile UI</h1>
+      <p class="page-lead">
+        Comprehensive C99 specification for the B-System desktop shell environment: root background compositor, Workbench event distribution, Haiku-style Tracker deskbar, Global Menu Bar, and the NTT DoCoMo FOMA mobile UI toolkit.
+      </p>
+    </header>
+
+    <!-- Part 1: Architecture -->
+    <h2 id="arch">1. Architecture & Shell Topology</h2>
+    <p>
+      The <strong>Desktop</strong> subsystem coordinates all visual layers lying outside individual application client viewports. It implements a unified shell architecture that adapts dynamically to both high-resolution desktop displays (1920&times;1080) and portrait mobile screens (480&times;640 VGA):
+    </p>
+
+    <pre><code> ┌────────────────────────────────────────────────────────────────────────┐
+ │ Global Menu Bar (トップメニュー)                                          │ ◄── Height: 24px
+ ├────────────────────────────────────────────────────────────────────────┤
+ │                                                                        │
+ │                      BTRON Desktop Canvas                              │ ◄── COLOR_TEAL / Custom
+ │                                                                        │
+ │   ┌──────────────────────┐             ┌───────────────────────────┐   │
+ │   │ Active Window (WND)  │             │ Tracker Deskbar (タスクトラッカー) │   │
+ │   └──────────────────────┘             └───────────────────────────┘   │
+ └────────────────────────────────────────────────────────────────────────┘</code></pre>
+
+    <ul>
+      <li><strong>Desktop Compositor (<code>desktop.c</code>)</strong>: Manages the root framebuffer, desktop background patterns (classic B-TRON Teal <code>#008080</code>), and bare-metal cursor rendering.</li>
+      <li><strong>Workbench Coordinator (<code>workbench.c</code>)</strong>: Directs mouse, keyboard, and touch events between the root shell, active window, and deskbar overlays.</li>
+      <li><strong>Tracker Deskbar (<code>tracker.c</code>)</strong>: Low-latency root application launcher and live window tracker modeled after Haiku / BeOS Deskbar.</li>
+      <li><strong>Global Menu Bar (<code>global_menu.c</code>)</strong>: System-wide menu bar providing fast access to standard cabinets, accessories, and power management.</li>
+    </ul>
+
+    <!-- Part 2: Data Structures & Types -->
+    <h2 id="types">2. Data Structures & Types</h2>
+
+    <h3>Desktop Context (<code>BTRON_DESKTOP</code>)</h3>
+    <p>Defined in <code>include/btron/desktop.h</code>:</p>
+    <pre><code>typedef struct {
+    H      width;      /* Total screen pixel width */
+    H      height;     /* Total screen pixel height */
+    GDEV   *screen;    /* Master display framebuffer device context */
+    BOOL   running;    /* Execution flag for main desktop loop */
+} BTRON_DESKTOP;</code></pre>
+
+    <h3>Tracker Command Types & Item</h3>
+    <pre><code>typedef enum {
+    TRACKER_CMD_NONE = 0,
+    TRACKER_CMD_ABOUT,
+    TRACKER_CMD_CABINET,
+    TRACKER_CMD_SETTINGS,
+    TRACKER_CMD_TEDITOR,
+    TRACKER_CMD_TERMINAL,
+    TRACKER_CMD_AUDIODECK,
+    TRACKER_CMD_ORCHESTRA,
+    TRACKER_CMD_CHAT,
+    TRACKER_CMD_WND_FOCUS,
+    TRACKER_CMD_RESTART,
+    TRACKER_CMD_SHUTDOWN,
+    TRACKER_CMD_SEPARATOR
+} TRACKER_CMD_TYPE;
+
+typedef struct {
+    TRACKER_CMD_TYPE type;
+    char             label[48];
+    WND              *target_wnd; /* Target window pointer for focus switching */
+    BOOL             enabled;
+} TRACKER_ITEM;</code></pre>
+
+    <!-- Part 3: FOMA Mobile Toolkit -->
+    <h2 id="mobile">3. &mu;BTRON-FOMA Mobile UI Toolkit</h2>
+    <p>
+      For portrait handheld devices (480&times;640 VGA), the desktop subsystem incorporates a dedicated mobile compositor (<code>desktop_mobile.c</code> / <code>workbench_mobile.c</code>) adhering strictly to NASA JPL Rule 3:
+    </p>
+
+    <table class="api-table">
+      <thead>
+        <tr>
+          <th>Geometry Constant</th>
+          <th>Pixel Value</th>
+          <th>Description</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><code>FOMA_SCREEN_W</code></td>
+          <td>480</td>
+          <td>VGA portrait screen width.</td>
+        </tr>
+        <tr>
+          <td><code>FOMA_SCREEN_H</code></td>
+          <td>640</td>
+          <td>VGA portrait screen height.</td>
+        </tr>
+        <tr>
+          <td><code>FOMA_STATUS_BAR_H</code></td>
+          <td>32</td>
+          <td>Top status bar showing signal, 3G data, battery, and clock.</td>
+        </tr>
+        <tr>
+          <td><code>FOMA_TITLE_BAR_H</code></td>
+          <td>36</td>
+          <td>Screen title header bar.</td>
+        </tr>
+        <tr>
+          <td><code>FOMA_SOFTKEY_BAR_H</code></td>
+          <td>38</td>
+          <td>Bottom softkey action bar ([Left], [Center/Menu], [Right/Back]).</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <!-- Part 4: API Function Reference -->
+    <h2 id="api">4. Desktop API Function Reference</h2>
+
+    <!-- init_desktop -->
+    <div class="api-card">
+      <div class="api-header">
+        <span class="api-name">init_desktop</span>
+        <span class="ret-badge">ER</span>
+      </div>
+      <p>Initializes the desktop compositor, window manager, and root background for the given dimensions.</p>
+      <div class="api-signature">ER init_desktop(H width, H height);</div>
+    </div>
+
+    <!-- run_desktop_loop -->
+    <div class="api-card">
+      <div class="api-header">
+        <span class="api-name">run_desktop_loop</span>
+        <span class="ret-badge">void</span>
+      </div>
+      <p>Enters the master BTRON desktop event dispatch loop until a shutdown signal is received.</p>
+      <div class="api-signature">void run_desktop_loop(void);</div>
+    </div>
+
+    <!-- tracker_init -->
+    <div class="api-card">
+      <div class="api-header">
+        <span class="api-name">tracker_init</span>
+        <span class="ret-badge">void</span>
+      </div>
+      <p>Initializes the Haiku-style Deskbar / Tracker root menu, positioning the toggle button at the top-right.</p>
+      <div class="api-signature">void tracker_init(H screen_width);</div>
+    </div>
+
+    <!-- foma_show_about_dialog -->
+    <div class="api-card">
+      <div class="api-header">
+        <span class="api-name">foma_show_about_dialog</span>
+        <span class="ret-badge">void</span>
+      </div>
+      <p>Activates the rich mobile About modal dialog displaying application branding, metadata, and 5HT attribution.</p>
+      <div class="api-signature">void foma_show_about_dialog(const char *app_name, const char *jp_title, const char *desc, const char *attribution);</div>
+    </div>
+
+    <!-- Part 5: Canonical Code Examples -->
+    <h2 id="examples">5. Canonical Implementation Examples</h2>
+    <p>
+      The following example demonstrates launching the desktop shell on a physical or virtual framebuffer:
+    </p>
+
+    <pre><code>#include &lt;btron/desktop.h&gt;
+#include &lt;btron/workbench.h&gt;
+
+int main(void) {
+    /* 1. Initialize desktop environment at 1024x768 */
+    init_desktop(1024, 768);
+
+    /* 2. Initialize Workbench menus and Deskbar tracker */
+    workbench_init(1024);
+
+    /* 3. Run master event loop */
+    run_desktop_loop();
+
+    return 0;
+}</code></pre>
+
+    <footer class="book-footer">
+      <div><a href="../window/index.html">&larr; Previous: Window Subsystem</a></div>
+      <div><a href="../hmi/index.html">Next: HMI Subsystem &rarr;</a></div>
+    </footer>
+  </main>
+
+</body>
+</html>

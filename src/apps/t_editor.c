@@ -676,8 +676,8 @@ static void handle_t_editor_event(WND *wnd, const EVT *evt) {
     TEditor *ed = (wnd->user_data) ? (TEditor*)(uintptr_t)wnd->user_data : &g_teditor;
 
     if (evt->type == EV_MOUSE_MOVE) {
-        H rel_x = evt->pos.x - (wnd->bounds.left + 4);
-        H rel_y = evt->pos.y - (wnd->bounds.top + 26);
+        H rel_x = evt->pos.x - wnd->client.left;
+        H rel_y = evt->pos.y - wnd->client.top;
         if (app_menu_handle_mouse_move(&ed->menu_bar, rel_x, rel_y)) {
             teditor_sync_menu_state(ed);
             return;
@@ -687,8 +687,8 @@ static void handle_t_editor_event(WND *wnd, const EVT *evt) {
     }
 
     if (evt->type == EV_BUT_DOWN) {
-        H rel_x = evt->pos.x - (wnd->bounds.left + 4);
-        H rel_y = evt->pos.y - (wnd->bounds.top + 26);
+        H rel_x = evt->pos.x - wnd->client.left;
+        H rel_y = evt->pos.y - wnd->client.top;
 
         int cmd = 0, sub_idx = -1;
         if (app_menu_handle_mouse_down(&ed->menu_bar, rel_x, rel_y, &cmd, &sub_idx)) {
@@ -722,10 +722,20 @@ static void handle_t_editor_event(WND *wnd, const EVT *evt) {
     }
 
     if (evt->type == EV_KEY_DOWN) {
-        char commit_buf[128] = "";
         UW key_code = evt->key;
         uint16_t mod = (uint16_t)(uintptr_t)evt->data;
 
+        /* Forward to in-window menu bar shortcuts & keyboard navigation */
+        int menu_cmd = 0;
+        if (app_menu_handle_key(&ed->menu_bar, key_code, mod, &menu_cmd)) {
+            teditor_sync_menu_state(ed);
+            if (menu_cmd != 0) {
+                teditor_execute_menu_cmd(ed, wnd, menu_cmd, -1);
+            }
+            return;
+        }
+
+        char commit_buf[128] = "";
         BOOL shift = (mod & BTRON_KMOD_SHIFT) != 0;
         BOOL ctrl = (mod & BTRON_KMOD_CTRL) != 0;
 
@@ -1150,6 +1160,29 @@ int teditor_close_file(TEditor *ed) {
     ed->is_modified = FALSE;
     strncpy(ed->filename, "Untitled.txt", sizeof(ed->filename) - 1);
     return 0;
+}
+
+BOOL t_editor_is_menu_open(WND *wnd) {
+    if (!wnd) return FALSE;
+    TEditor *ed = (TEditor*)(uintptr_t)wnd->user_data;
+    return (ed && ed->menu_bar.active_menu >= 0);
+}
+
+void t_editor_open_menu(WND *wnd, int menu_idx) {
+    if (!wnd) return;
+    TEditor *ed = (TEditor*)(uintptr_t)wnd->user_data;
+    if (ed) {
+        app_menu_open(&ed->menu_bar, menu_idx);
+        ed->menu_bar.hover_item = 0;
+    }
+}
+
+void t_editor_close_menu(WND *wnd) {
+    if (!wnd) return;
+    TEditor *ed = (TEditor*)(uintptr_t)wnd->user_data;
+    if (ed) {
+        app_menu_close(&ed->menu_bar);
+    }
 }
 
 

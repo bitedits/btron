@@ -251,6 +251,12 @@ static void test_foma_rich_dialogs(void) {
     TEST_ASSERT(strcmp(mod->btn_center, "保留") == 0, "Call dialog center button is 保留");
     TEST_ASSERT(strcmp(mod->btn_right, "拒否") == 0, "Call dialog right button is 拒否");
 
+    /* Default About Box */
+    foma_show_about_dialog("gterm", "端末エミュレータ", "VT100/ANSI 端末", "5HT / BTRON 3.20");
+    TEST_ASSERT(mod->type == FOMA_MODAL_ABOUT, "Modal type is FOMA_MODAL_ABOUT");
+    TEST_ASSERT(strcmp(mod->detail1, "端末エミュレータ (gterm)") == 0, "About dialog full app name matches");
+    TEST_ASSERT(strcmp(mod->btn_center, "確認 (OK)") == 0, "About dialog center button is 確認 (OK)");
+
     foma_close_modal();
     TEST_ASSERT(!foma_is_modal_active(), "Modal closed successfully");
 }

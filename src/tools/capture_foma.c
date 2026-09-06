@@ -120,6 +120,24 @@ int main(void) {
     foma_show_terminal();
     dump_foma_screen(dev, "Tier 1: gterm Console", "/tmp/foma_raw_screens/foma_terminal.raw");
 
+    /* Tier 1 App with Opened Menu: gterm with '端末(T)' Dropdown */
+    foma_ui_init();
+    foma_show_terminal_with_menu(3);
+    dump_foma_screen(dev, "Tier 1: gterm Opened Menu (端末)", "/tmp/foma_raw_screens/foma_terminal_menu.raw");
+
+    /* Tier 1 App with Opened Menu: T-Editor with '仮身(O)' Fusen Dropdown */
+    foma_ui_init();
+    foma_show_editor_with_menu(3);
+    dump_foma_screen(dev, "Tier 1: T-Editor Opened Menu (仮身)", "/tmp/foma_raw_screens/foma_editor_menu.raw");
+
+    /* Tier 1 Default About Box for FOMA Mobile Apps */
+    foma_ui_init();
+    foma_show_terminal();
+    foma_show_about_dialog("gterm", "ターミナル",
+                           "B-System Terminal Emulator (VT100/TRON Console)",
+                           "Brought to B-System by 5HT");
+    dump_foma_screen(dev, "Tier 1: Default About Box", "/tmp/foma_raw_screens/foma_dialog_about.raw");
+
     /* ── Opened Menus & Dialogs Showcase ── */
 
     /* 7. Opened Floating Context Popup Menu (浮動操作メニュー) over Home Cabinet */

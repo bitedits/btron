@@ -89,6 +89,11 @@ void app_menu_paint_dropdown(const APP_MENU_BAR *bar, GDEV *dev);
 void app_menu_paint_cascading_strings(const APP_MENU_BAR *bar, GDEV *dev, const char items[][64], int count);
 
 /* ── Common Nano About Box Dialog Builder ───────────────────────────────── */
+typedef WND* (*AppMenuAboutHookFn)(const char *app_title, const char *jp_title,
+                                   const char *desc, const char *attribution,
+                                   int x, int y);
+void app_menu_set_about_hook(AppMenuAboutHookFn hook);
+
 WND* app_menu_create_about_dialog(const char *app_title, const char *jp_title,
                                   const char *desc, const char *attribution,
                                   int x, int y);

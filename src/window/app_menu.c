@@ -21,6 +21,7 @@ extern void  Ifree(void *ptr);
 #define memset   tkl_memset
 #define memcpy   tkl_memcpy
 #define strlen   tkl_strlen
+#define strcmp   tkl_strcmp
 #define strncpy  tkl_strncpy
 #define strstr   tkl_strstr
 #define snprintf tkl_snprintf
@@ -323,17 +324,163 @@ BOOL app_menu_handle_mouse_down(APP_MENU_BAR *bar, H rel_x, H rel_y, int *out_cm
     return FALSE;
 }
 
+static char app_menu_get_header_mnemonic(const char *title) {
+    if (!title) return 0;
+    const char *p = title;
+    while (*p) {
+        if (*p == '(' && p[1] != '\0' && p[2] == ')') {
+            char c = p[1];
+            if (c >= 'a' && c <= 'z') c = c - 'a' + 'A';
+            return c;
+        }
+        p++;
+    }
+    return 0;
+}
+
 BOOL app_menu_handle_key(APP_MENU_BAR *bar, UW key, uint16_t mod, int *out_cmd) {
-    (void)mod;
     if (!bar) return FALSE;
     if (out_cmd) *out_cmd = 0;
 
-    if (key == BTRON_KEY_ESCAPE || key == 27) {
-        if (bar->active_menu >= 0) {
+    BOOL is_alt = ((mod & (BTRON_KMOD_LALT | BTRON_KMOD_RALT | 0x0300)) != 0);
+    BOOL is_ctrl = ((mod & (BTRON_KMOD_CTRL | 0x00C0)) != 0);
+
+    /* 1. Alt + Letter mnemonic (e.g. Alt+F -> ファイル(F), Alt+T -> 端末(T)) */
+    if (is_alt) {
+        char key_char = 0;
+        if (key >= 'a' && key <= 'z') {
+            key_char = (char)(key - 'a' + 'A');
+        } else if (key >= 'A' && key <= 'Z') {
+            key_char = (char)key;
+        }
+        if (key_char != 0) {
+            for (int h = 0; h < bar->header_count; h++) {
+                if (app_menu_get_header_mnemonic(bar->headers[h].title) == key_char) {
+                    if (bar->active_menu == h) {
+                        app_menu_close(bar);
+                    } else {
+                        app_menu_open(bar, h);
+                        bar->hover_item = 0;
+                    }
+                    return TRUE;
+                }
+            }
+        }
+    }
+
+    /* 2. F2 / Menu key: toggle or cycle menu bar */
+    if (key == BTRON_KEY_F2 || key == 0x4000003B) {
+        if (bar->active_menu < 0) {
+            app_menu_open(bar, 0);
+            bar->hover_item = 0;
+        } else {
+            bar->active_menu = (bar->active_menu + 1) % bar->header_count;
+            bar->hover_item = 0;
+        }
+        return TRUE;
+    }
+
+    /* 3. When an active dropdown menu is open */
+    if (bar->active_menu >= 0 && bar->active_menu < bar->header_count) {
+        APP_MENU_HEADER *hdr = &bar->headers[bar->active_menu];
+
+        /* Escape: dismiss menu */
+        if (key == BTRON_KEY_ESCAPE || key == 27) {
             app_menu_close(bar);
             return TRUE;
         }
+
+        /* Up Arrow: select previous enabled item */
+        if (key == BTRON_KEY_UP || key == 0x40000052) {
+            int prev = bar->hover_item;
+            for (int step = 0; step < hdr->item_count; step++) {
+                prev = (prev - 1 + hdr->item_count) % hdr->item_count;
+                if (!hdr->items[prev].is_separator && hdr->items[prev].enabled) {
+                    bar->hover_item = prev;
+                    break;
+                }
+            }
+            return TRUE;
+        }
+
+        /* Down Arrow: select next enabled item */
+        if (key == BTRON_KEY_DOWN || key == 0x40000051) {
+            int next = bar->hover_item;
+            for (int step = 0; step < hdr->item_count; step++) {
+                next = (next + 1) % hdr->item_count;
+                if (!hdr->items[next].is_separator && hdr->items[next].enabled) {
+                    bar->hover_item = next;
+                    break;
+                }
+            }
+            return TRUE;
+        }
+
+        /* Left Arrow: navigate to previous menu header */
+        if (key == BTRON_KEY_LEFT || key == 0x40000050) {
+            bar->active_menu = (bar->active_menu - 1 + bar->header_count) % bar->header_count;
+            bar->hover_item = 0;
+            return TRUE;
+        }
+
+        /* Right Arrow: navigate to next menu header */
+        if (key == BTRON_KEY_RIGHT || key == 0x4000004F) {
+            bar->active_menu = (bar->active_menu + 1) % bar->header_count;
+            bar->hover_item = 0;
+            return TRUE;
+        }
+
+        /* Return / Space: execute selected item */
+        if (key == BTRON_KEY_RETURN || key == 13 || key == '\n' || key == '\r' ||
+            key == 0x40000058 || key == ' ') {
+            if (bar->hover_item >= 0 && bar->hover_item < hdr->item_count) {
+                if (hdr->items[bar->hover_item].enabled && !hdr->items[bar->hover_item].is_separator) {
+                    if (out_cmd) *out_cmd = hdr->items[bar->hover_item].cmd_id;
+                    app_menu_close(bar);
+                    return TRUE;
+                }
+            }
+            app_menu_close(bar);
+            return TRUE;
+        }
+
+        /* 1..9 Numeric keypad direct item selection */
+        if (key >= '1' && key <= '9') {
+            int idx = key - '1';
+            if (idx >= 0 && idx < hdr->item_count) {
+                if (hdr->items[idx].enabled && !hdr->items[idx].is_separator) {
+                    if (out_cmd) *out_cmd = hdr->items[idx].cmd_id;
+                    app_menu_close(bar);
+                    return TRUE;
+                }
+            }
+        }
+
+        /* Eat any other key while dropdown is open */
+        return TRUE;
     }
+
+    /* 4. Ctrl + Accelerator execution while menu is closed */
+    if (is_ctrl) {
+        char target_key = 0;
+        if (key >= 'a' && key <= 'z') target_key = (char)(key - 'a' + 'A');
+        else if (key >= 'A' && key <= 'Z') target_key = (char)key;
+
+        if (target_key != 0) {
+            char target_accel[16];
+            snprintf(target_accel, sizeof(target_accel), "Ctrl+%c", target_key);
+            for (int h = 0; h < bar->header_count; h++) {
+                for (int i = 0; i < bar->headers[h].item_count; i++) {
+                    if (bar->headers[h].items[i].enabled &&
+                        strcmp(bar->headers[h].items[i].accel, target_accel) == 0) {
+                        if (out_cmd) *out_cmd = bar->headers[h].items[i].cmd_id;
+                        return TRUE;
+                    }
+                }
+            }
+        }
+    }
+
     return FALSE;
 }
 
@@ -491,6 +638,8 @@ typedef struct {
     char attribution[64];
 } AboutDialogData;
 
+static int decode_and_draw_about_gif(GDEV *dev, const char *filepath, int dst_x, int dst_y) {
+#if defined(__STDC_HOSTED__) && __STDC_HOSTED__ == 1
 #define ABOUT_ICON_LZW_DICT   4096
 #define ABOUT_ICON_MAX_PIXELS (64 * 64)
 
@@ -499,8 +648,6 @@ static uint8_t  s_about_gif_suffix[ABOUT_ICON_LZW_DICT];
 static uint8_t  s_about_gif_stack[ABOUT_ICON_LZW_DICT + 1];
 static uint8_t  s_about_gif_raw[ABOUT_ICON_MAX_PIXELS];
 
-static int decode_and_draw_about_gif(GDEV *dev, const char *filepath, int dst_x, int dst_y) {
-#if defined(__STDC_HOSTED__) && __STDC_HOSTED__ == 1
     if (!dev || !dev->pixels || !filepath) return -1;
     FILE *fp = fopen(filepath, "rb");
     if (!fp) return -1;
@@ -818,9 +965,19 @@ static void destroy_about_dialog(WND *wnd) {
     }
 }
 
+static AppMenuAboutHookFn s_about_dialog_hook = NULL;
+
+void app_menu_set_about_hook(AppMenuAboutHookFn hook) {
+    s_about_dialog_hook = hook;
+}
+
 WND* app_menu_create_about_dialog(const char *app_name, const char *jp_title,
                                   const char *desc, const char *attribution,
                                   int x, int y) {
+    if (s_about_dialog_hook) {
+        return s_about_dialog_hook(app_name, jp_title, desc, attribution, x, y);
+    }
+
     AboutDialogData *data = (AboutDialogData*)calloc(1, sizeof(AboutDialogData));
     if (!data) return NULL;
 

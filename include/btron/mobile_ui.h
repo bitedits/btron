@@ -107,7 +107,8 @@ typedef enum {
     FOMA_MODAL_PROPERTIES,      /* Real Body metadata / properties sheet */
     FOMA_MODAL_INPUT,           /* Search & text input dialog with IME */
     FOMA_MODAL_POWER,           /* System power & sleep menu */
-    FOMA_MODAL_CALL             /* 3G incoming call notification */
+    FOMA_MODAL_CALL,            /* 3G incoming call notification */
+    FOMA_MODAL_ABOUT            /* Authentic Mobile Application About Box */
 } FOMA_MODAL_TYPE;
 
 /* ── Modal Dialog State ── */
@@ -169,6 +170,7 @@ void foma_show_properties_dialog(const char *rbody_name, const char *rbody_id, c
 void foma_show_search_dialog(const char *query_text, const char *ime_mode);
 void foma_show_power_dialog(int battery_pct, const char *voltage_str);
 void foma_show_call_dialog(const char *caller_name, const char *phone_num, const char *duration);
+void foma_show_about_dialog(const char *app_name, const char *jp_title, const char *desc, const char *attribution);
 void foma_close_modal(void);
 BOOL foma_is_modal_active(void);
 FOMA_MODAL* foma_get_active_modal(void);
@@ -201,8 +203,10 @@ void foma_show_system_menu(void);
 void foma_show_device_info(void);
 void foma_show_contact_detail_sample(void);
 void foma_show_editor_sample(void);
+void foma_show_editor_with_menu(int menu_idx);
 void foma_show_calculator(void);
 void foma_show_terminal(void);
+void foma_show_terminal_with_menu(int menu_idx);
 
 #ifdef __cplusplus
 }

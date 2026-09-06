@@ -777,8 +777,22 @@ static BOOL handle_gterm_viewport_key(FOMA_SCREEN *scr, const EVT *ev) {
     (void)scr;
     if (!s_mobile_gterm_wnd) return FALSE;
 
-    /* Softkey Right / F3 / Escape: Exit back to previous screen */
+    /* Center Softkey / F2 / 'm' / 'w': Toggle/cycle in-window menu bar */
+    if (ev->key == SDLK_F2 || ev->key == 'm' || ev->key == 'M' || ev->key == 'w') {
+        EVT f2_ev = *ev;
+        f2_ev.key = BTRON_KEY_F2;
+        if (s_mobile_gterm_wnd->event_handler) {
+            s_mobile_gterm_wnd->event_handler(s_mobile_gterm_wnd, &f2_ev);
+        }
+        return TRUE;
+    }
+
+    /* Softkey Right / F3 / Escape: Close open menu first, otherwise exit screen */
     if (ev->key == SDLK_F3 || ev->key == ']' || ev->key == SDLK_ESCAPE) {
+        if (gterm_is_menu_open(s_mobile_gterm_wnd)) {
+            gterm_close_menu(s_mobile_gterm_wnd);
+            return TRUE;
+        }
         foma_pop_screen();
         return TRUE;
     }
@@ -814,7 +828,7 @@ static void show_terminal_screen(void) {
     strncpy(scr.title, "gterm — 端末シェル", sizeof(scr.title) - 1);
     strncpy(scr.subtitle, "tty0 (480x534)", sizeof(scr.subtitle) - 1);
     strncpy(scr.softkey_left, "[クリア]", sizeof(scr.softkey_left) - 1);
-    strncpy(scr.softkey_center, "[実行]", sizeof(scr.softkey_center) - 1);
+    strncpy(scr.softkey_center, "[メニュー]", sizeof(scr.softkey_center) - 1);
     strncpy(scr.softkey_right, "[戻る]", sizeof(scr.softkey_right) - 1);
     scr.custom_render_hook = render_gterm_viewport;
     scr.custom_key_handler = handle_gterm_viewport_key;
@@ -839,8 +853,22 @@ static BOOL handle_editor_viewport_key(FOMA_SCREEN *scr, const EVT *ev) {
     (void)scr;
     if (!s_mobile_editor_wnd) return FALSE;
 
-    /* Softkey Right / F3 / Escape: Exit back to previous screen */
+    /* Center Softkey / F2 / 'm' / 'w': Toggle/cycle in-window menu bar */
+    if (ev->key == SDLK_F2 || ev->key == 'm' || ev->key == 'M' || ev->key == 'w') {
+        EVT f2_ev = *ev;
+        f2_ev.key = BTRON_KEY_F2;
+        if (s_mobile_editor_wnd->event_handler) {
+            s_mobile_editor_wnd->event_handler(s_mobile_editor_wnd, &f2_ev);
+        }
+        return TRUE;
+    }
+
+    /* Softkey Right / F3 / Escape: Close open menu first, otherwise exit screen */
     if (ev->key == SDLK_F3 || ev->key == ']' || ev->key == SDLK_ESCAPE) {
+        if (t_editor_is_menu_open(s_mobile_editor_wnd)) {
+            t_editor_close_menu(s_mobile_editor_wnd);
+            return TRUE;
+        }
         foma_pop_screen();
         return TRUE;
     }
@@ -871,7 +899,7 @@ static void show_editor_screen(const char *filepath) {
     strncpy(scr.title, "T-Editor — 基本エディタ", sizeof(scr.title) - 1);
     strncpy(scr.subtitle, "BTRON3_Report.txt", sizeof(scr.subtitle) - 1);
     strncpy(scr.softkey_left, "[保存]", sizeof(scr.softkey_left) - 1);
-    strncpy(scr.softkey_center, "[仮身]", sizeof(scr.softkey_center) - 1);
+    strncpy(scr.softkey_center, "[メニュー]", sizeof(scr.softkey_center) - 1);
     strncpy(scr.softkey_right, "[戻る]", sizeof(scr.softkey_right) - 1);
     scr.custom_render_hook = render_editor_viewport;
     scr.custom_key_handler = handle_editor_viewport_key;
@@ -988,6 +1016,20 @@ BOOL foma_workbench_process_event(const EVT *ev) {
         /* A. Bottom Soft Key Bar Tap */
         if (my >= FOMA_SCREEN_H - FOMA_SOFTKEY_BAR_H) {
             H btn_w = FOMA_SCREEN_W / 3;
+            if (cur->custom_key_handler) {
+                EVT sk_ev;
+                memset(&sk_ev, 0, sizeof(sk_ev));
+                sk_ev.type = EV_KEY_DOWN;
+                if (mx < btn_w) {
+                    sk_ev.key = SDLK_F1;
+                } else if (mx < btn_w * 2) {
+                    sk_ev.key = SDLK_F2;
+                } else {
+                    sk_ev.key = SDLK_F3;
+                }
+                cur->custom_key_handler(cur, &sk_ev);
+                return TRUE;
+            }
             if (mx < btn_w) {
                 foma_trigger_softkey_left(cur);
             } else if (mx < btn_w * 2) {
@@ -1074,6 +1116,13 @@ void foma_show_editor_sample(void) {
     show_editor_screen("assets/texts/BTRON3_Report.txt");
 }
 
+void foma_show_editor_with_menu(int menu_idx) {
+    show_editor_screen("assets/texts/BTRON3_Report.txt");
+    if (s_mobile_editor_wnd) {
+        t_editor_open_menu(s_mobile_editor_wnd, menu_idx);
+    }
+}
+
 void foma_show_calculator(void) {
     show_calculator_screen();
 }
@@ -1081,3 +1130,11 @@ void foma_show_calculator(void) {
 void foma_show_terminal(void) {
     show_terminal_screen();
 }
+
+void foma_show_terminal_with_menu(int menu_idx) {
+    show_terminal_screen();
+    if (s_mobile_gterm_wnd) {
+        gterm_open_menu(s_mobile_gterm_wnd, menu_idx);
+    }
+}
+

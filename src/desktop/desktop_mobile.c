@@ -8,6 +8,7 @@
 #include <btron/mobile_ui.h>
 #include <btron/troncode.h>
 #include <btron/dp.h>
+#include <btron/app_menu.h>
 #if defined(__STDC_HOSTED__) && __STDC_HOSTED__ == 1
 #include <stdio.h>
 #include <string.h>
@@ -25,7 +26,28 @@ static int g_screen_depth = 0;
 static FOMA_MODAL g_modal;
 static FOMA_POPUP_MENU g_popup_menu;
 
-/* Helper to draw a horizontal line with specified color */
+#if defined(__GNUC__) || defined(__clang__)
+__attribute__((weak))
+#endif
+void app_menu_set_about_hook(AppMenuAboutHookFn hook) {
+    (void)hook;
+}
+
+static WND* foma_about_dialog_hook(const char *app_name, const char *jp_title,
+                                   const char *desc, const char *attribution,
+                                   int x, int y) {
+    (void)x; (void)y;
+    foma_show_about_dialog(app_name, jp_title, desc, attribution);
+    return NULL;
+}
+
+/* ── Navigation Stack Management ── */
+void foma_ui_init(void) {
+    g_screen_depth = 0;
+    memset(&g_modal, 0, sizeof(FOMA_MODAL));
+    memset(&g_popup_menu, 0, sizeof(FOMA_POPUP_MENU));
+    app_menu_set_about_hook(foma_about_dialog_hook);
+}
 static inline void draw_hline(GDEV *dev, H x1, H y, H x2, COLOR col) {
     if (x2 <= x1) return;
     RECT r = { x1, y, x2, y + 1 };
@@ -45,13 +67,6 @@ static inline void draw_frame(GDEV *dev, const RECT *r, COLOR col) {
     draw_hline(dev, r->left, r->bottom - 1, r->right, col);
     draw_vline(dev, r->left, r->top, r->bottom, col);
     draw_vline(dev, r->right - 1, r->top, r->bottom, col);
-}
-
-/* ── Navigation Stack Management ── */
-void foma_ui_init(void) {
-    g_screen_depth = 0;
-    memset(&g_modal, 0, sizeof(FOMA_MODAL));
-    memset(&g_popup_menu, 0, sizeof(FOMA_POPUP_MENU));
 }
 
 void foma_push_screen(const FOMA_SCREEN *scr) {
@@ -237,6 +252,24 @@ void foma_show_call_dialog(const char *caller_name, const char *phone_num, const
     strncpy(g_modal.btn_left, "応答", sizeof(g_modal.btn_left) - 1);
     strncpy(g_modal.btn_center, "保留", sizeof(g_modal.btn_center) - 1);
     strncpy(g_modal.btn_right, "拒否", sizeof(g_modal.btn_right) - 1);
+    g_modal.selected_btn = 0;
+}
+
+void foma_show_about_dialog(const char *app_name, const char *jp_title, const char *desc, const char *attribution) {
+    memset(&g_modal, 0, sizeof(g_modal));
+    g_modal.is_active = TRUE;
+    g_modal.type = FOMA_MODAL_ABOUT;
+    char title_buf[64];
+    snprintf(title_buf, sizeof(title_buf), "%s について", jp_title ? jp_title : (app_name ? app_name : "アプリ"));
+    strncpy(g_modal.title, title_buf, sizeof(g_modal.title) - 1);
+    char full_app[64];
+    snprintf(full_app, sizeof(full_app), "%s (%s)", jp_title ? jp_title : "アプリ", app_name ? app_name : "App");
+    strncpy(g_modal.detail1, full_app, sizeof(g_modal.detail1) - 1);
+    strncpy(g_modal.message, desc ? desc : "B-System 3.20 Native Application", sizeof(g_modal.message) - 1);
+    strncpy(g_modal.detail2, attribution ? attribution : "Brought to B-System by 5HT", sizeof(g_modal.detail2) - 1);
+    strncpy(g_modal.btn_center, "確認 (OK)", sizeof(g_modal.btn_center) - 1);
+    strncpy(g_modal.btn_left, "確認", sizeof(g_modal.btn_left) - 1);
+    strncpy(g_modal.btn_right, "閉じる", sizeof(g_modal.btn_right) - 1);
     g_modal.selected_btn = 0;
 }
 
@@ -818,6 +851,96 @@ void foma_render_modal(GDEV *dev, const FOMA_MODAL *modal) {
         draw_frame(dev, &b3_r, COLOR_WHITE);
         H l3_w = tc_calc_string_width(modal->btn_right, 24);
         drw_tc_string(dev, b3_x + (btn_w - l3_w) / 2, btn_y + 10, modal->btn_right, COLOR_WHITE, ARGB(0xFF, 0xDC, 0x26, 0x26));
+        return;
+    }
+
+    if (modal->type == FOMA_MODAL_ABOUT) {
+        /* FOMA Application About Box (Height 420, Width 444) */
+        H box_w = 444;
+        H box_h = 420;
+        H bx = (FOMA_SCREEN_W - box_w) / 2;
+        H by = (FOMA_SCREEN_H - box_h) / 2 - 10;
+
+        RECT shadow = { bx + 6, by + 6, bx + box_w + 6, by + box_h + 6 };
+        fill_rec(dev, &shadow, ARGB(0xFF, 0x10, 0x18, 0x20));
+
+        RECT box_r = { bx, by, bx + box_w, by + box_h };
+        fill_rec(dev, &box_r, COLOR_WHITE);
+        draw_frame(dev, &box_r, FOMA_COL_TITLE_BG);
+        RECT inner_r = { bx + 1, by + 1, bx + box_w - 1, by + box_h - 1 };
+        draw_frame(dev, &inner_r, FOMA_COL_GOLD);
+
+        /* Title Bar */
+        RECT hdr_r = { bx, by, bx + box_w, by + 32 };
+        fill_rec(dev, &hdr_r, FOMA_COL_TITLE_BG);
+        drw_tc_string(dev, bx + 12, by + 8, modal->title, COLOR_WHITE, FOMA_COL_TITLE_BG);
+        drw_tc_string(dev, bx + box_w - 60, by + 8, "[情報]", FOMA_COL_GOLD, FOMA_COL_TITLE_BG);
+
+        /* App Banner Plate (Icon + Name + Ver) */
+        RECT sub_r = { bx + 12, by + 40, bx + box_w - 12, by + 82 };
+        fill_rec(dev, &sub_r, ARGB(0xFF, 0xE2, 0xE8, 0xF0));
+        draw_frame(dev, &sub_r, FOMA_COL_TITLE_BG);
+
+        /* Decorative icon badge */
+        RECT badge = { bx + 20, by + 45, bx + 52, by + 77 };
+        fill_rec(dev, &badge, COLOR_LTGRAY);
+        draw_frame(dev, &badge, COLOR_DKGRAY);
+        char initial[2] = { (char)(modal->detail1[0] ? modal->detail1[0] : 'B'), 0 };
+        drw_tc_string(dev, bx + 31, by + 53, initial, COLOR_NAVY, COLOR_LTGRAY);
+
+        drw_tc_string(dev, bx + 62, by + 48, modal->detail1, FOMA_COL_TITLE_BG, ARGB(0xFF, 0xE2, 0xE8, 0xF0));
+        drw_tc_string(dev, bx + 62, by + 65, "B-System 3.20 (FOMA Mobile Edition)", COLOR_DKGRAY, ARGB(0xFF, 0xE2, 0xE8, 0xF0));
+        drw_tc_string(dev, bx + box_w - 68, by + 48, "[アプリ]", COLOR_WHITE, FOMA_COL_TITLE_BG);
+
+        /* Metadata rows */
+        const char *keys[] = {
+            "機能詳細",
+            "基盤OS",
+            "画面表示",
+            "文字仕様",
+            "開発提供",
+            "配布仕様"
+        };
+        const char *vals[6];
+        vals[0] = modal->message[0] ? modal->message : "BTRON3 Native Application";
+        vals[1] = "Sakamura T-Kernel 2.0 (Target 10: FOMA)";
+        vals[2] = "480x640 VGA 縦画面 (Portrait HMI)";
+        vals[3] = "TRON-Code 多国語文字 / TAD Rev 3.20";
+        vals[4] = modal->detail2[0] ? modal->detail2 : "Brought to B-System by 5HT";
+        vals[5] = "Copyright 2026 Synrc. MIT License.";
+
+        for (int i = 0; i < 6; i++) {
+            H ry = by + 90 + i * 44;
+            RECT rr = { bx + 12, ry, bx + box_w - 12, ry + 38 };
+            COLOR rbg = (i % 2 == 0) ? ARGB(0xFF, 0xF8, 0xFA, 0xFC) : ARGB(0xFF, 0xEE, 0xF2, 0xF6);
+            fill_rec(dev, &rr, rbg);
+            draw_frame(dev, &rr, ARGB(0xFF, 0xCB, 0xD5, 0xE1));
+
+            drw_tc_string(dev, bx + 18, ry + 11, keys[i], FOMA_COL_TITLE_BG, rbg);
+
+            char val_buf[128];
+            strncpy(val_buf, vals[i], sizeof(val_buf) - 1);
+            val_buf[sizeof(val_buf) - 1] = '\0';
+            int max_w = rr.right - (bx + 96) - 8;
+            while (strlen(val_buf) > 0 && tc_calc_string_width(val_buf, (int)strlen(val_buf)) > max_w) {
+                val_buf[strlen(val_buf) - 1] = '\0';
+            }
+            drw_tc_string(dev, bx + 96, ry + 11, val_buf, COLOR_BLACK, rbg);
+        }
+
+        /* Single Center OK Button */
+        H btn_w = 160;
+        H btn_h = 36;
+        H btn_y = by + box_h - 46;
+        H btn_x = bx + (box_w - btn_w) / 2;
+        RECT b_r = { btn_x, btn_y, btn_x + btn_w, btn_y + btn_h };
+        COLOR b_bg = FOMA_COL_FOCUS_BG;
+        COLOR b_fg = COLOR_WHITE;
+        fill_rec(dev, &b_r, b_bg);
+        draw_frame(dev, &b_r, COLOR_DKGRAY);
+        const char *btn_lbl = modal->btn_center[0] ? modal->btn_center : "確認 (OK)";
+        H lbl_w = tc_calc_string_width(btn_lbl, 24);
+        drw_tc_string(dev, btn_x + (btn_w - lbl_w) / 2, btn_y + 9, btn_lbl, b_fg, b_bg);
         return;
     }
 

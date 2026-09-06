@@ -239,6 +239,54 @@ def generate_foma_screens_html():
                     </div>
                 </div>
 
+                <!-- 4b. T-Editor with Opened Menu -->
+                <div class="foma-phone-card">
+                    <div class="foma-screen-frame">
+                        <img src="b-system/img/foma/foma_editor_menu.png" alt="T-Editor 開いたメニュー (仮身(O) Fusen Menu)" class="foma-screen-img">
+                    </div>
+                    <div class="foma-card-info">
+                        <div class="foma-card-title">
+                            <span>T-Editor 開いたメニュー (仮身)</span>
+                            <span class="foma-badge">Menu Overlay</span>
+                        </div>
+                        <div class="foma-card-desc">
+                            Alt+O / 中ソフトキー操作で展開された [仮身(O)] ドロップダウンメニュー。仮身リンク挿入、実身キャビネット呼び出し等、超漢字ハイパーメディア操作をキーパッドおよびタッチで直接実行可能。
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Tier 1: gterm Live Terminal -->
+                <div class="foma-phone-card">
+                    <div class="foma-screen-frame">
+                        <img src="b-system/img/foma/foma_terminal.png" alt="gterm 端末シェル (Live Terminal Engine)" class="foma-screen-img">
+                    </div>
+                    <div class="foma-card-info">
+                        <div class="foma-card-title">
+                            <span>gterm 端末シェル (Console)</span>
+                            <span class="foma-badge">Tier 1 Shell</span>
+                        </div>
+                        <div class="foma-card-desc">
+                            デスクトップと完全同一ソース（ゼロ #ifdef）で動作する対話型端末エンジン。動的フォント幅計算、コマンド履歴、TIP かな漢字変換、および live btron:/> シェルを縦画面で実行。
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Tier 1: gterm with Opened Menu -->
+                <div class="foma-phone-card">
+                    <div class="foma-screen-frame">
+                        <img src="b-system/img/foma/foma_terminal_menu.png" alt="gterm 開いたメニュー (端末(T) Menu)" class="foma-screen-img">
+                    </div>
+                    <div class="foma-card-info">
+                        <div class="foma-card-title">
+                            <span>gterm 開いたメニュー (端末)</span>
+                            <span class="foma-badge">Menu Overlay</span>
+                        </div>
+                        <div class="foma-card-desc">
+                            Alt+T / 中ソフトキー [メニュー] で展開された [端末(T)] 操作メニュー。端末リセット、ベル音テスト、文字コード設定、ログ保存等を 5 方向キーおよびタッチでダイレクト操作可能。
+                        </div>
+                    </div>
+                </div>
+
                 <!-- 5. Control Panel -->
                 <div class="foma-phone-card">
                     <div class="foma-screen-frame">
@@ -408,6 +456,22 @@ def generate_foma_screens_html():
                         </div>
                         <div class="foma-card-desc">
                             3G FOMA 音声通話着信オーバーレイ。着信中インジケータ、発信者名「坂村 健」、電話番号、呼出時間タイマー、および [応答][保留][拒否] の3系統アクションボタンを備える。
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 13. FOMA Default About Box -->
+                <div class="foma-phone-card">
+                    <div class="foma-screen-frame">
+                        <img src="b-system/img/foma/foma_dialog_about.png" alt="FOMA 標準アプリ情報ダイアログ (Default Mobile About Box)" class="foma-screen-img">
+                    </div>
+                    <div class="foma-card-info">
+                        <div class="foma-card-title">
+                            <span>13. アプリ情報 (About Box)</span>
+                            <span class="foma-badge">Default About</span>
+                        </div>
+                        <div class="foma-card-desc">
+                            OS レベルでフックされた FOMA 向け標準 About ボックス。デスクトップと同一の app_menu_create_about_dialog 呼び出しから自動生成され、アプリ名、詳細、坂村 T-Kernel 2.0 基盤、縦画面仕様、および [確認(OK)] ボタンを表示。
                         </div>
                     </div>
                 </div>

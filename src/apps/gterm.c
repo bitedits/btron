@@ -851,8 +851,8 @@ static void handle_gterm_event(WND *wnd, const EVT *evt) {
     if (!st) return;
 
     /* Compute relative coordinates (inside client, accounting for border+title) */
-    H rel_x = evt->pos.x - (wnd->bounds.left + 4);
-    H rel_y = evt->pos.y - (wnd->bounds.top  + 26);
+    H rel_x = evt->pos.x - wnd->client.left;
+    H rel_y = evt->pos.y - wnd->client.top;
 
     /* ── Mouse Move: forward to menu bar ─────────────────────────────────── */
     if (evt->type == EV_MOUSE_MOVE) {
@@ -881,10 +881,19 @@ static void handle_gterm_event(WND *wnd, const EVT *evt) {
     }
 
     if (evt->type == EV_KEY_DOWN) {
-        char commit_buf[128] = "";
         UW key_code = evt->key;
         uint16_t mod = (uint16_t)(uintptr_t)evt->data;
 
+        /* Forward to in-window menu bar shortcuts & keyboard navigation */
+        int menu_cmd = 0;
+        if (app_menu_handle_key(&st->menu_bar, key_code, mod, &menu_cmd)) {
+            if (menu_cmd != 0) {
+                gterm_dispatch_cmd(wnd, st, menu_cmd);
+            }
+            return;
+        }
+
+        char commit_buf[128] = "";
         BOOL ctrl = (mod & BTRON_KMOD_CTRL) != 0;
 
         /* Control key combinations */
@@ -1083,4 +1092,27 @@ WND* open_gterm_window(void) {
 
     return open_gterm_window_rect(x, y, 560, 360,
                                   WND_ATTR_TITLE | WND_ATTR_CLOSE | WND_ATTR_BORDER | WND_ATTR_RESIZE);
+}
+
+BOOL gterm_is_menu_open(WND *wnd) {
+    if (!wnd) return FALSE;
+    GTermState *st = (GTermState*)(uintptr_t)wnd->user_data;
+    return (st && st->menu_bar.active_menu >= 0);
+}
+
+void gterm_open_menu(WND *wnd, int menu_idx) {
+    if (!wnd) return;
+    GTermState *st = (GTermState*)(uintptr_t)wnd->user_data;
+    if (st) {
+        app_menu_open(&st->menu_bar, menu_idx);
+        st->menu_bar.hover_item = 0;
+    }
+}
+
+void gterm_close_menu(WND *wnd) {
+    if (!wnd) return;
+    GTermState *st = (GTermState*)(uintptr_t)wnd->user_data;
+    if (st) {
+        app_menu_close(&st->menu_bar);
+    }
 }

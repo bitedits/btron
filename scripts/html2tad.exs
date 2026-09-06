@@ -376,8 +376,6 @@ defmodule BtronTAD.Compiler do
     end
 
     base_name = Path.basename(html_path, ".html")
-    bin_path = Path.join(target_dir, base_name <> ".tad")
-    txt_path = Path.join(target_dir, base_name <> ".tad.txt")
 
     html_content = File.read!(html_path)
     elements = parse_html(html_content)
@@ -388,6 +386,35 @@ defmodule BtronTAD.Compiler do
         _ -> base_name
       end
 
+    # Derive human-friendly Document Title Name instead of generic index.tad
+    doc_title_name =
+      if base_name == "index" do
+        rel = if _source_root != "", do: Path.relative_to(html_path, _source_root), else: html_path
+        sub = Path.dirname(rel)
+        catalog = if _source_root != "", do: Path.basename(_source_root), else: ""
+        cond do
+          sub != "." ->
+            case String.downcase(sub) do
+              "part1" -> "Part1"
+              "part2" -> "Part2"
+              "part_book" -> "Part_Book"
+              other -> String.capitalize(other)
+            end
+          catalog == "t-kernel" -> "T-Kernel"
+          catalog == "b-system" -> "B-System"
+          catalog == "b-hmi" -> "B-HMI"
+          catalog == "b-free" -> "B-Free"
+          catalog == "doc" -> "BTRON3_Index"
+          html_path == "index.html" -> "B-System_Portal"
+          true -> "Index"
+        end
+      else
+        base_name
+      end
+
+    bin_path = Path.join(target_dir, doc_title_name <> ".tad")
+    txt_path = Path.join(target_dir, doc_title_name <> ".tad.txt")
+
     base_dir = html_dir
     binary_tad = compile_to_binary_tad(elements, title, base_dir)
     symbolic_tad = compile_to_symbolic_tad(elements, title, base_dir)
@@ -395,13 +422,21 @@ defmodule BtronTAD.Compiler do
     File.write!(bin_path, binary_tad)
     File.write!(txt_path, symbolic_tad)
 
+    # If base_name was index, also write index.tad and index.tad.txt for backwards compatibility
+    if base_name == "index" and doc_title_name != "index" do
+      idx_bin = Path.join(target_dir, "index.tad")
+      idx_txt = Path.join(target_dir, "index.tad.txt")
+      File.write!(idx_bin, binary_tad)
+      File.write!(idx_txt, symbolic_tad)
+    end
+
     %{
       html_path: html_path,
       bin_path: bin_path,
       txt_path: txt_path,
       elements_count: length(elements),
       bin_bytes: byte_size(binary_tad),
-      title: title
+      title: doc_title_name
     }
   end
 

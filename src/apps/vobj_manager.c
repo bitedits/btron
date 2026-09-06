@@ -89,6 +89,7 @@ typedef struct {
 
 static CABINET_EXPLORER g_cabinet;
 
+
 /* ── Natural String Comparison (Case-Insensitive & Numeric Aware) ───────── */
 static int natural_compare(const char *s1, const char *s2) {
     if (!s1 || !s2) return 0;
@@ -207,7 +208,22 @@ static int get_toc_order(const char *path, const char *name) {
     if (strstr(path, "t-kernel/tkernel_spec"))    return 900;
     if (strstr(path, "t-kernel/tkernel_startup")) return 910;
     if (strstr(path, "t-kernel/tkernel_qemu"))    return 920;
-    if (strstr(path, "t-kernel/index"))           return 930;
+    if (strstr(path, "t-kernel/index") || strstr(path, "t-kernel/T-Kernel")) return 930;
+
+    /* 12. [b-book] B-Book Developer's Manual (12 Subsystems) */
+    if (strstr(path, "b-book/B-Book") || strstr(path, "b-book/index")) return 940;
+    if (strstr(path, "b-book/kernel"))   return 941;
+    if (strstr(path, "b-book/cores"))    return 942;
+    if (strstr(path, "b-book/graphics")) return 943;
+    if (strstr(path, "b-book/tip"))      return 944;
+    if (strstr(path, "b-book/vobject"))  return 945;
+    if (strstr(path, "b-book/window"))   return 946;
+    if (strstr(path, "b-book/desktop"))  return 947;
+    if (strstr(path, "b-book/hmi"))      return 948;
+    if (strstr(path, "b-book/font"))     return 949;
+    if (strstr(path, "b-book/settings")) return 950;
+    if (strstr(path, "b-book/drivers"))  return 951;
+    if (strstr(path, "b-book/apps"))     return 952;
 
     return 1000;
 }
@@ -255,7 +271,7 @@ static ID deduce_robj_id(const char *path) {
     if (strstr(path, "02_tkernel_book")) return 102;
     if (strstr(path, "03_bfree_os_book")) return 103;
     if (strstr(path, "04_tron_hmi_book")) return 104;
-    if (strstr(path, "b-hmi/index.tad")) return 105;
+    if (strstr(path, "b-hmi/index.tad") || strstr(path, "b-hmi/B-HMI.tad")) return 105;
     if (strstr(path, "b-free/manifest.tad")) return 106;
     if (strstr(path, "b-system/virtio.tad")) return 107;
     if (strstr(path, "data_type.tad")) return 111;
@@ -264,7 +280,7 @@ static ID deduce_robj_id(const char *path) {
     if (strstr(path, "tad2.tad")) return 114;
     if (strstr(path, "tad3.tad")) return 115;
     if (strstr(path, "fd_format.tad")) return 116;
-    if (strstr(path, "kernel/kernel.tad")) return 121;
+    if (strstr(path, "kernel/kernel.tad") || strstr(path, "b-book/kernel")) return 121;
     if (strstr(path, "kernel/proc.tad")) return 122;
     if (strstr(path, "kernel/memory.tad")) return 123;
     if (strstr(path, "dp/dp.tad")) return 131;
@@ -284,6 +300,7 @@ static const char* deduce_toc_path(const char *path) {
         strstr(path, "03_bfree_os_book") || strstr(path, "04_tron_hmi_book")) {
         return "books/";
     }
+    if (strstr(path, "b-book/")) return "b-book/";
     if (strstr(path, "shared_data/")) return "shared_data/";
     if (strstr(path, "os_spec/kernel/")) return "os_spec/kernel/";
     if (strstr(path, "os_spec/dp/")) return "os_spec/dp/";
@@ -304,8 +321,62 @@ static const char* deduce_icon_tag(const char *path) {
     if (strstr(path, "03_bfree") || strstr(path, "b-free")) return "[b-free]";
     if (strstr(path, "b-system")) return "[b-system]";
     if (strstr(path, "02_tkernel") || strstr(path, "t-kernel")) return "[t-kernel]";
+    if (strstr(path, "b-book")) return "[doc]";
     if (strstr(path, "01_btron3") || strstr(path, "shared_data") || strstr(path, "os_spec") || strstr(path, "doc")) return "[doc]";
     return "[doc]";
+}
+
+/* Check if directory contains any non-index .tad file */
+static int dir_has_titled_tad(const char *dir_path) {
+    DIR *d = opendir(dir_path);
+    if (!d) return 0;
+    struct dirent *de;
+    int found = 0;
+    while ((de = readdir(d)) != NULL) {
+        int len = strlen(de->d_name);
+        if (len > 4 && strcmp(de->d_name + len - 4, ".tad") == 0 && strcmp(de->d_name, "index.tad") != 0) {
+            found = 1;
+            break;
+        }
+    }
+    closedir(d);
+    return found;
+}
+
+/* Deduce a human-friendly document title for Cabinet Explorer */
+static void get_friendly_title(const char *sub_path, const char *filename, char *out_name, size_t max_len) {
+    if (!sub_path || !filename || !out_name || max_len == 0) return;
+
+    if (strcmp(filename, "index.tad") != 0) {
+        strncpy(out_name, filename, max_len - 1);
+        out_name[max_len - 1] = '\0';
+        return;
+    }
+
+    if (strstr(sub_path, "b-book/kernel")) strncpy(out_name, "Kernel.tad", max_len - 1);
+    else if (strstr(sub_path, "b-book/cores")) strncpy(out_name, "Cores.tad", max_len - 1);
+    else if (strstr(sub_path, "b-book/graphics")) strncpy(out_name, "Graphics.tad", max_len - 1);
+    else if (strstr(sub_path, "b-book/tip")) strncpy(out_name, "Tip.tad", max_len - 1);
+    else if (strstr(sub_path, "b-book/vobject")) strncpy(out_name, "VObject.tad", max_len - 1);
+    else if (strstr(sub_path, "b-book/window")) strncpy(out_name, "Window.tad", max_len - 1);
+    else if (strstr(sub_path, "b-book/desktop")) strncpy(out_name, "Desktop.tad", max_len - 1);
+    else if (strstr(sub_path, "b-book/hmi")) strncpy(out_name, "HMI.tad", max_len - 1);
+    else if (strstr(sub_path, "b-book/font")) strncpy(out_name, "Font.tad", max_len - 1);
+    else if (strstr(sub_path, "b-book/settings")) strncpy(out_name, "Settings.tad", max_len - 1);
+    else if (strstr(sub_path, "b-book/drivers")) strncpy(out_name, "Drivers.tad", max_len - 1);
+    else if (strstr(sub_path, "b-book/apps")) strncpy(out_name, "Apps.tad", max_len - 1);
+    else if (strstr(sub_path, "b-book")) strncpy(out_name, "B-Book.tad", max_len - 1);
+    else if (strstr(sub_path, "b-hmi/part1")) strncpy(out_name, "Part1.tad", max_len - 1);
+    else if (strstr(sub_path, "b-hmi/part2")) strncpy(out_name, "Part2.tad", max_len - 1);
+    else if (strstr(sub_path, "b-hmi/part_book")) strncpy(out_name, "Part_Book.tad", max_len - 1);
+    else if (strstr(sub_path, "b-hmi")) strncpy(out_name, "B-HMI.tad", max_len - 1);
+    else if (strstr(sub_path, "t-kernel")) strncpy(out_name, "T-Kernel.tad", max_len - 1);
+    else if (strstr(sub_path, "b-system")) strncpy(out_name, "B-System.tad", max_len - 1);
+    else if (strstr(sub_path, "b-free")) strncpy(out_name, "B-Free.tad", max_len - 1);
+    else if (strstr(sub_path, "shared_data")) strncpy(out_name, "Shared_Data.tad", max_len - 1);
+    else if (strstr(sub_path, "os_spec")) strncpy(out_name, "OS_Spec.tad", max_len - 1);
+    else strncpy(out_name, "B-System_Portal.tad", max_len - 1);
+    out_name[max_len - 1] = '\0';
 }
 
 /* ── Dynamic Recursive Filesystem Discovery (Discovered not Hardcoded) ── */
@@ -328,11 +399,16 @@ static void cabinet_discover_dir(CABINET_EXPLORER *cab, const char *dir_path) {
         } else if (S_ISREG(st.st_mode)) {
             int len = strlen(de->d_name);
             if (len > 4 && strcmp(de->d_name + len - 4, ".tad") == 0) {
+                /* If index.tad and a titled companion exists, skip index.tad to prevent duplicates */
+                if (strcmp(de->d_name, "index.tad") == 0 && dir_has_titled_tad(dir_path)) {
+                    continue;
+                }
+
                 if (cab->item_count < MAX_CABINET_ITEMS) {
                     CABINET_ITEM *it = &cab->items[cab->item_count++];
                     it->robj_id = deduce_robj_id(sub_path);
                     it->type = VOBJ_TYPE_TEXT;
-                    strncpy(it->name, de->d_name, sizeof(it->name) - 1);
+                    get_friendly_title(sub_path, de->d_name, it->name, sizeof(it->name));
                     strncpy(it->path, sub_path, sizeof(it->path) - 1);
                     it->size_bytes = (UW)st.st_size;
                     it->icon_tag = deduce_icon_tag(sub_path);

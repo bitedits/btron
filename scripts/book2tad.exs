@@ -720,12 +720,10 @@ defmodule BtronBook.Compiler do
   end
 
   # ── File Processor ──────────────────────────────────────────────────────────
-  def process_file(html_path, target_dir) do
+  def process_file(html_path, target_dir, src_root \\ "") do
     File.mkdir_p!(target_dir)
 
     base_name = Path.basename(html_path, ".html")
-    bin_path = Path.join(target_dir, base_name <> ".tad")
-    txt_path = Path.join(target_dir, base_name <> ".tad.txt")
 
     html = File.read!(html_path)
     title =
@@ -736,6 +734,27 @@ defmodule BtronBook.Compiler do
 
     elements = parse_book_html(html)
 
+    # Derive human-friendly Document Title Name instead of generic index.tad
+    doc_title_name =
+      if base_name == "index" do
+        rel = if src_root != "", do: Path.relative_to(html_path, src_root), else: html_path
+        sub_dir = Path.dirname(rel)
+        if sub_dir == "." do
+          "B-Book"
+        else
+          case String.downcase(sub_dir) do
+            "vobject" -> "VObject"
+            "hmi" -> "HMI"
+            other -> String.capitalize(other)
+          end
+        end
+      else
+        base_name
+      end
+
+    bin_path = Path.join(target_dir, doc_title_name <> ".tad")
+    txt_path = Path.join(target_dir, doc_title_name <> ".tad.txt")
+
     # 1. Compile Binary TAD
     bin_tad = compile_to_binary_tad(elements)
     File.write!(bin_path, bin_tad)
@@ -744,12 +763,21 @@ defmodule BtronBook.Compiler do
     sym_tad = compile_to_symbolic_tad(elements, title)
     File.write!(txt_path, sym_tad)
 
+    # If base_name was index, also write index.tad and index.tad.txt for backwards URL/hyperlink compatibility
+    if base_name == "index" and doc_title_name != "index" do
+      idx_bin = Path.join(target_dir, "index.tad")
+      idx_txt = Path.join(target_dir, "index.tad.txt")
+      File.write!(idx_bin, bin_tad)
+      File.write!(idx_txt, sym_tad)
+    end
+
     %{
       html_path: html_path,
       bin_path: bin_path,
       txt_path: txt_path,
       elements_count: length(elements),
-      bin_bytes: byte_size(bin_tad)
+      bin_bytes: byte_size(bin_tad),
+      title: doc_title_name
     }
   end
 
@@ -846,7 +874,7 @@ if File.dir?(src_dir) do
       rel = Path.relative_to(file, src_dir)
       sub_dir = Path.dirname(rel)
       target_dir = if sub_dir == ".", do: out_dir, else: Path.join(out_dir, sub_dir)
-      res = BtronBook.Compiler.process_file(file, target_dir)
+      res = BtronBook.Compiler.process_file(file, target_dir, src_dir)
       in_name = String.pad_trailing(file, 30)
       out_name = String.pad_trailing(Path.relative_to(res.bin_path, "tad_bin"), 30)
       IO.puts("  [BOOK2TAD] #{in_name} -> #{out_name} (#{res.elements_count} items, #{res.bin_bytes} bytes)")

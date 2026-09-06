@@ -33,7 +33,7 @@ CC ?= gcc
 CFLAGS ?= -O2 -Wall -Wextra -std=c99 -Iinclude -Iinclude/drivers -Isrc/kernel -Isrc/cores
 
 .PHONY: all posix qemu kernel tkernel sakamura foma uefi pc98 arm-elf arm64-elf m68k ps2 mips \
-        html2tad tad_bin test test-kernel test-yoko test-yoko4 test-m68k test-mips test-ps2 test-foma foma-screens \
+        html2tad book2tad tad_bin test test-kernel test-yoko test-yoko4 test-m68k test-mips test-ps2 test-foma foma-screens \
         test-mozc test-editor test-hmi test-tad test-chat test-wylie verify \
         run-posix run-qemu run-kernel run-yoko run-yoko4 run-sakamura run-foma run-uefi run-eufi run-uefu run-pc98 run-m68k run-ps2 run-mips debug-virtio debug-gdb clean
 
@@ -938,9 +938,14 @@ $(TEST_HMI_BIN): $(TEST_HMI_OBJS)
 # ═══════════════════════════════════════════════════════════════════
 tad_bin:
 	@elixir scripts/html2tad.exs
+	@elixir scripts/book2tad.exs
 
 html2tad:
 	@elixir scripts/html2tad.exs --test
+	@elixir scripts/book2tad.exs --test
+
+book2tad:
+	@elixir scripts/book2tad.exs
 
 # ═══════════════════════════════════════════════════════════════════
 # Native TAD Document Browser & Cabinet Test Suite
@@ -954,6 +959,7 @@ TEST_TAD_BIN  = test_tad_browser
 
 test-tad: $(TEST_TAD_BIN) tad_bin
 	@if [ ! -f tad_bin/shared_data/data_type.tad ]; then elixir scripts/html2tad.exs >/dev/null 2>&1; fi
+	@if [ ! -f tad_bin/b-book/kernel/index.tad ]; then elixir scripts/book2tad.exs >/dev/null 2>&1; fi
 	@echo "=========================================================="
 	@echo " Running B-System Native TAD Browser & Cabinet Tests..."
 	@echo "=========================================================="

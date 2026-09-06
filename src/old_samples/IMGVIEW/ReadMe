@@ -1,0 +1,53 @@
+　この directory には開発サンプルである、IMGVIEW(画像閲覧) が収録されています。
+　directory の構成は以下のようになっています。
+
+IMGVIEW/ --------------------+-- doc/ : 説明
+  |                          |    |
+  +-- ReadMe : このファイル  |    +-- IMGVIEW : この application について
+                             |
+                             +-- src/ : source file
+                             |
+                             +-- pcat/ : release 用 package 作成用
+                             |
+                             +-- pcat.pcat/ : DEBUG 用
+
+　この application 全体や、その中の動作(library や API の利用の仕方や呼出し方など)については、doc/IMGVIEW を参考にしてください。
+
+　compile するには、pcat/ 内で make(gmake) を実行してください。
+　pcat.debug/ 内で compile した場合、debug message が出力されるものが生成されます。
+　link まで成功すると、imgview.bz という file が生成されていますので、これを実行環境に転送し、application 登録をしてください。
+
+　標準の状態では、static link ではありませんので、使用されている開発環境と実行環境には十分に注意してください。
+
+　なお、この application は小物ではない application ですが、原紙も持ちません。この application の付箋を実身の実行機能付箋として貼り付け、その付箋で起動させるものとなっています。
+　そのため、以下の方法でこの application の付箋を取り出し、表示したい画像の実身に付箋を貼り付けてください。
+
+	1. 原紙箱から [キャビネット] をとりだす(適当なところに作成する)
+	   (例えば、初期ウィンドウに TEST という実身名で配置する)
+	2. [1.] でキャビネットを配置したウィンドウを保存する
+	3. 小物箱から [コンソール] を起動する
+	4. IMGVIEW の実身の構成を確認する
+	   (fs /SYS/$$PROGRAM.BOX/IMGVIEW とする)
+	5. [4.] で複数個の record が表示されるが、この内、record type が 7 である record を探す(その record 番号を確認する)
+	   (大抵は 2番目 の record がそれになると思われます)
+	6. apd command により、record を複写する
+	   (例えば、apd -r2.1 /SYS/USR/TEST /SYS/$$PROGRAM.BOX/IMGVIEW とする)
+	7. [1.] で作成したキャビネットを [仮身一覧] で実行する
+	8. [画像閲覧] という付箋があるので、これを取り出す
+
+　なお、この application で対応している画像形式は libimg で取り扱える画像のみに限られています(jpeg, png, MS-Windows DIB(bmp) の 3種類 に限られます)。
+
+　application ID は test 用途の仮 ID になっています(正式に割り振られた ID ではありません)。そのため、そのまま application 登録すると ID が衝突する場合がありますので、適当な ID に書き換えるなどの対処をとってください。
+
+　この application は libimg を経由して、以下の library を使用しています。
+
+zlib version 1.1.3
+(C) 1995-1998 Jean-loup Gailly and Mark Adler
+
+libpng version 1.0.9
+libpng versions 1.0.7, July 1, 2000, through 1.0.9, January 31, 2001, are
+Copyright (c) 2000 Glenn Randers-Pehrson
+
+Independent JPEG Group's JPEG software release 6b(libjpeg)
+This software is copyright (C) 1991-1998, Thomas G. Lane.
+All Rights Reserved except as specified below.

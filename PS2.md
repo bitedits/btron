@@ -31,8 +31,6 @@ Like all B-System workstation ports, the PS2 and MIPS targets adhere strictly to
 - **Direct Hardware Access**: Privileged MMIO registers for the Graphics Synthesizer (GS), SIO0 UART, DualShock 2 SIO2 controller, and USB OHCI are driven directly.
 - **Microkernel Isolation**: `src/kernel/` remains pristine, portable, and untouched across all architectures.
 
----
-
 ## 2. Target 8: Sony PlayStation 2 (`make run-ps2`)
 
 ### Hardware Overview
@@ -62,37 +60,38 @@ Like all B-System workstation ports, the PS2 and MIPS targets adhere strictly to
 | [`src/cores/core_ps2.c`](file:///Users/tonpa/depot/bitedits/btron/src/cores/core_ps2.c) | Platform core adapter: multi-window application suite (Workbench, B-Editor, TAD Cabinet, Settings), Japanese TIP/IME status badge, interactive SIO0 shell, event queue, and RTOS heartbeat. |
 | [`scripts/test_ps2.sh`](file:///Users/tonpa/depot/bitedits/btron/scripts/test_ps2.sh) | Automated verification suite checking ELF architecture, entry point, driver symbols, R5900 opcodes, and ISO image (19/19 tests). |
 
----
-
 ### 2.1 Graphics Synthesizer (GS) Framebuffer Architecture
 
 The PlayStation 2 Graphics Synthesizer contains 4 MB of ultra-high-bandwidth embedded DRAM (eDRAM). Memory inside eDRAM is structured into **pages** (2048 32-bit words = 8192 bytes) and **blocks** (64 words = 256 bytes) with non-linear column-interleaved pixel swizzling.
 
 #### The Host-to-Local GIF DMA Blitter Architecture
+
 Rather than rendering individual primitives through the GS rasterizer (which is prone to sub-pixel rounding errors, page-boundary clipping bugs, and high DMA packet overhead), B-System uses the hardware **Host-to-Local Blitter**:
 
 1. **Uncached RDRAM Backing Store (`ps2_fb_memory`)**:
    - The CPU maintains a linear 640 x 448 x 32-bpp frame buffer in RDRAM (`71,680` quadwords = `1,146,880` bytes).
    - All drawing functions (`ps2_gs_draw_rect`, `ps2_draw_char`, `ps2_gs_putpixel`) write through an uncached KSEG1 pointer (`0xA0xxxxxx`), bypassing the EE L1 Data Cache so RDRAM is always 100% coherent before DMA transfers.
+
 2. **GS Transmission Setup Packet (`ps2_gs_flush`)**:
    - A 5-QW setup packet primes the GS:
      - `BITBLTBUF (0x50)`: `DBA = 0`, `DBW = 10` (640 / 64), `DPSM = GS_PSM_CT32 (0)`.
      - `TRXPOS (0x51)`: `DSAX = 0, DSAY = 0`.
      - `TRXREG (0x52)`: `RRW = 640, RRH = 448`.
      - `TRXDIR (0x53)`: `0` (Host $\rightarrow$ Local eDRAM).
+
 3. **Hardware Swizzling on Arrival**:
    - `ps2_fb_memory` is streamed via DMAC Channel 2 in 8 chunks of 8,960 quadwords with `GIFTAG(FLG = IMAGE)`.
    - The GS internal blitter automatically and correctly swizzles linear RDRAM pixels into eDRAM pages and blocks on arrival.
+
 4. **Verified NTSC Video Timings**:
    - `ps2_set_gs_crt(1, 2, 0)`: Interlaced, NTSC, Field mode.
    - `PMODE = 0xFF63ULL`: Circuit 1 + Circuit 2 enabled, `SLBG = 0` (Framebuffer output selected).
    - `SMODE2 = 0x01ULL`: Interlaced, Field mode.
    - `DISPFB1` & `DISPFB2 = 0x1400ULL`: Base address page 0 (`FBP = 0`), buffer width 10 blocks (`FBW = 10`), 32-bit RGBA (`PSM = 0`).
    - `DISPLAY1` & `DISPLAY2 = 0x001bf9ff0983227cULL`: $DX=636$, $DY=50$, $MAGH=3$ (4x), $MAGV=1$ (2x), $DW=2559$, $DH=447$.
+
 5. **Non-Destructive Cursor Restoration**:
    - Mouse cursor drawing backs up background pixels into `cursor_saved[16 * 16]`. Erasing the cursor restores the exact original background pixels with zero smearing or artifacts.
-
----
 
 ### 2.2 DualShock 2 Controller Driver (`ps2_pad`)
 
@@ -110,13 +109,12 @@ The PS2 gamepad input system provides direct analog pointer manipulation and tac
 | **D-Pad (Up, Down, Left, Right)** | Discrete Navigation Keys | Injects `BTRON_KEY_UP/DOWN/LEFT/RIGHT` events into the event queue. |
 
 Developers can simulate controller state via the serial shell using:
+
 ```bash
 pad <btns_hex> [lx ly]
 # Example: Click Cross button with centered sticks:
 btron-ps2> pad bfff 128 128
 ```
-
----
 
 ### 2.3 Keyboard & USB Subsystem (`ps2_usb`)
 
@@ -138,21 +136,23 @@ The cleanroom driver (`ps2_usb.c` and `ps2_usb.h`):
   - Injects `EV_MOUSE_MOVE` and `EV_BUT_DOWN` / `EV_BUT_UP` events directly into the B-System event queue.
 
 #### DualShock 2 On-Screen Software Keyboard (OSK)
+
 For setups without physical USB keyboards, the PS2 port integrates an interactive on-screen software keyboard overlay directly into B-Editor:
+
 - **Toggle**: Pressing `L2` or `R2` on the gamepad (or executing `osk` in the shell) displays a $10 \times 4$ on-screen keyboard panel inside B-Editor.
+
 - **Layout**:
   - Row 0: `1 2 3 4 5 6 7 8 9 0`
   - Row 1: `Q W E R T Y U I O P`
   - Row 2: `A S D F G H J K L RET`
   - Row 3: `Z X C V B N M SPC DEL ESC`
+
 - **Gamepad Controls**:
   - `D-Pad (Up, Down, Left, Right)`: Navigate active key cell with high-contrast accent highlight.
   - `Cross (✕)`: Type selected character into the document.
   - `Square (□)`: Quick Backspace shortcut.
   - `Circle (◯)`: Close OSK.
   - `Triangle (△)`: Cycle TIP / IME input mode.
-
----
 
 ### 2.4 Full B-System Workbench Desktop & Compositor
 
@@ -167,25 +167,28 @@ The PS2 cleanroom port integrates the **full, authentic B-System Graphical Workb
      - `音響機器` (Audio Player)
      - `会話通信` (Chat)
    - Double-clicking or clicking any icon launches its full application window.
+
 2. **Authentic Window Manager** ([`src/window/wnd.c`](file:///Users/tonpa/depot/bitedits/btron/src/window/wnd.c)):
    - Complete hit-testing and z-order elevation (`top_wnd`).
    - 16x16 diagonal hatch corner resize grip in bottom-right corner.
    - Compact sliding titlebar tab dragging and tab offset adjustment.
    - Close button (`[X]`) and client area event routing.
+
 3. **Global System Deskbar & Dropdown Menus** ([`src/desktop/global_menu.c`](file:///Users/tonpa/depot/bitedits/btron/src/desktop/global_menu.c)):
    - Top menu bar with `［BTRON］`, `システム(S)`, `実身・仮身(O)`, `ウィンドウ(W)`, `道具・文字(T)`.
    - Japanese calendar plate with authentic Kanji weekday indicators (`日/月/火/水/木/金/土`).
    - Mozc / TIP input method badge toggling (`[ ASC ]`, `[ あ ]`, `[ ア ]`, `[ བོད ]`).
+
 4. **Tracker Start Menu** ([`src/desktop/tracker.c`](file:///Users/tonpa/depot/bitedits/btron/src/desktop/tracker.c)):
    - Haiku-style root application and window tracker menu toggled via gamepad `Start` button or clicking `［BTRON］`.
+
 5. **Real BTRON Applications**:
    - VObject Manager (`src/apps/vobj_manager.c`), T-Editor (`src/apps/t_editor.c`), GTerm (`src/apps/gterm.c`), and Control Panel (`src/settings/control_panel.c`).
+
 6. **Double-Buffered GIF DMA Blitter**:
    - Renders directly to a 32-bit ARGB backbuffer (`s_desktop_backbuffer`).
    - `blit_backbuffer_to_ps2fb()` translates ARGB to native GS CT32 RGBA little-endian format.
    - `ps2_gs_flush()` streams the full 640x448 display to GS 4MB eDRAM via DMAC Channel 2.
-
----
 
 ### 2.5 SIO0 Interactive Shell Commands
 
@@ -210,10 +213,6 @@ The SIO0 UART console (`115200 8N1`) provides an interactive debugging shell wit
 | `pad <hex> [lx ly]` | Inject simulated DualShock 2 controller state. |
 | `reboot` | Halt the Emotion Engine. |
 
-
-
----
-
 ### Running with PCSX2
 
 PCSX2 supports both direct ELF execution and virtual CD/DVD disc images:
@@ -231,8 +230,6 @@ make run-ps2
 # Automated verification suite:
 make test-ps2
 ```
-
----
 
 ## 3. Target 9: Bare-Metal MIPS (`make run-mips`)
 
@@ -261,8 +258,6 @@ make run-mips
 make test-mips
 ```
 
----
-
 ## 4. Cross-Compilation Toolchain
 
 Both targets compile natively without external GCC toolchains using LLVM/Clang and GNU Binutils on macOS:
@@ -280,23 +275,90 @@ Both targets compile natively without external GCC toolchains using LLVM/Clang a
    mipsel-linux-gnu-ld -T <script.ld> <objects...> -o <target.elf>
    ```
 
----
+## 5. Environment Tuning & Running in QEMU Window (No PCSX2 .elf Association)
 
-## 5. Developer Quick Reference
+### 5.1 Decoupling PCSX2 from the macOS `.elf` File Association
+
+#### Root Cause of the Association
+
+When PCSX2 is installed on macOS (`/Applications/PCSX2.app`), its bundle `Info.plist` declares itself as the default operating-system handler for the `.elf` extension:
+
+```xml
+<key>CFBundleTypeName</key>
+<string>PS2 Homebrew Application</string>
+<key>CFBundleTypeIconFile</key>
+<string>PCSX2.icns</string>
+<key>public.filename-extension</key>
+<array>
+    <string>elf</string>
+</array>
+```
+
+Whenever macOS LaunchServices executes `open -a /Applications/PCSX2.app <file.elf>`, Finder and LaunchServices register PCSX2 as the primary handler for all `.elf` files across the entire system. This causes other native or embedded ELF files (like `btron-foma.elf`) to display the PCSX2 icon and trigger PCSX2 on double-click.
+
+#### How B-System Prevents This
+
+1. **Booting Disc ISO by Default**: `make run-ps2` boots `btron-ps2.iso` by default rather than raw `.elf`. Disc images are treated as standard CDVD media, keeping the `.elf` extension completely detached from LaunchServices.
+2. **Direct CLI Binary Execution**: The Makefile executes `/Applications/PCSX2.app/Contents/MacOS/PCSX2` directly via CLI rather than using macOS `open -a`, avoiding LaunchServices file-type registration.
+
+#### How to Reset & Clean macOS `.elf` File Associations
+
+If macOS is already showing PCSX2 icons for all `.elf` files or attempting to open them in PCSX2:
+
+```bash
+/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -r -domain local -domain system -domain user
+killall Finder
+brew install duti
+duti -s com.apple.TextEdit .elf all
+```
+
+### 5.2 Running in a QEMU Window (No PCSX2 Required)
+
+If you prefer not to use PCSX2, you can run the MIPS architecture inside a native **QEMU Cocoa graphical window**:
+
+```bash
+make run-ps2
+make run-mips
+```
+
+#### QEMU Window Controls & Features
+
+- **Native Graphical Display**: Spawns a Cocoa window running MIPS Malta Core LV (Little-Endian MIPS-III/32r2).
+- **Mouse Pointer Release (`Ctrl+Alt+G` / `^G`)**: Press **`Ctrl+Alt+G`** inside the QEMU window to release the captured mouse pointer back to macOS.
+- **Interactive Serial Console**: Terminal input/output remains connected to the UART COM1 serial console (`-serial stdio`) while the graphical display is active.
+- **Headless Mode**: Run `make run-mips GUI=0` or `make test-mips` for fast, non-graphical CI/testing.
+
+### 5.3 PCSX2 Performance & Display Tuning for B-System
+
+When running under PCSX2 (`make run-ps2`):
+
+1. **Fast Boot (`-fastboot`)**:
+   - Enabled by default in the Makefile. Skips the Sony 7-sound intro animation and boots straight into the B-System kernel.
+
+2. **Graphics Renderer Selection**:
+   - In PCSX2 menu $\rightarrow$ **Settings** $\rightarrow$ **Graphics** $\rightarrow$ **Rendering**:
+     - **Metal** (Recommended for macOS Apple Silicon): Lowest latency and native host acceleration for GIF DMA Host-to-Local transfers.
+     - **Vulkan / Software**: Useful for verifying pixel-exact GS eDRAM swizzling without host GPU filtering.
+
+3. **Display & VSync Settings**:
+   - Video timing in `ps2_gs.c` is configured for 60Hz NTSC progressive scan. If you observe frame cadence issues, ensure PCSX2 Frame Limiting is set to **Normal (100%)**.
+
+4. **Input Configuration**:
+   - **DualShock 2 Pad**: Analog stick controls pointer velocity, Cross (X) clicks, Circle/Square trigger BTRON menus.
+   - **USB Keyboard & Mouse**: Under PCSX2 **Settings** $\rightarrow$ **Controllers** $\rightarrow$ **USB Settings**, configure Port 1 as standard HID Mouse and Port 2 as standard HID Keyboard for full BTRON mouse/keyboard operation.
+
+## 6. Developer Quick Reference
 
 | Command | Action | Platform / Output |
 |:---|:---|:---|
-| `make ps2` | Build PS2 ELF & ISO | `btron-ps2.elf` and `btron-ps2.iso` |
-| `make run-ps2` | Launch in PCSX2 | Direct ELF execution on PCSX2 |
-| `make run-ps2 ISO=1` | Launch ISO in PCSX2 | Bootable CDVD execution |
-| `make test-ps2` | Run PS2 automated test | 19/19 driver and ELF assertions |
+| `make ps2` | Build PS2 ELF & Disc ISO | `btron-ps2.elf` and `btron-ps2.iso` |
+| `make run-ps2` | Launch Disc ISO in PCSX2 | Bootable CDVD execution (No `.elf` association) |
+| `make test-ps2` | Run PS2 automated test | 35/35 driver and ELF assertions |
 | `make mips` | Build MIPS ELF | `btron-mips.elf` |
-| `make run-mips` | Launch in QEMU | Interactive console on Malta (`qemu-system-mipsel`) |
+| `make run-mips` | Launch in QEMU Window | Interactive console & display on Malta |
 | `make test-mips` | Run MIPS automated test | Headless validation of all 8 kernel boot markers |
-| `make test` | Run full test suite | Validates all 12 B-System test suites (100% pass) |
+| `make test` | Run full test suite | Validates all B-System test suites (100% pass) |
 | `make clean` | Clean all outputs | Removes all `.elf`, `.iso`, `.o`, and test binaries |
-
----
 
 # Credits
 

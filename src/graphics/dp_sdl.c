@@ -76,11 +76,40 @@ static void macos_force_foreground_focus(void) {
 }
 #endif
 
+static char g_sdl_base_title[128] = "µBTRON-FOMA Mobile Workbench (480x640 VGA)";
+
+BOOL sdl_is_mouse_grabbed(void) {
+    if (!g_sdl_window) return FALSE;
+    return (SDL_GetWindowGrab(g_sdl_window) == SDL_TRUE);
+}
+
+void sdl_set_mouse_grab(BOOL grabbed) {
+    if (!g_sdl_window) return;
+    SDL_SetWindowGrab(g_sdl_window, grabbed ? SDL_TRUE : SDL_FALSE);
+    SDL_ShowCursor(SDL_ENABLE);
+
+    char title_buf[256];
+    if (grabbed) {
+        snprintf(title_buf, sizeof(title_buf), "%s  [Grabbed - Press ^G to Release]", g_sdl_base_title);
+        printf("[FOMA-SDL] Mouse pointer GRABBED. Press Ctrl+G (^G) or Ctrl+Alt to release mouse.\n");
+    } else {
+        snprintf(title_buf, sizeof(title_buf), "%s  [Released - Click or Press ^G to Grab]", g_sdl_base_title);
+        printf("[FOMA-SDL] Mouse pointer RELEASED (^G). Click window or press ^G to grab mouse.\n");
+    }
+    SDL_SetWindowTitle(g_sdl_window, title_buf);
+    fflush(stdout);
+}
+
+void sdl_toggle_mouse_grab(void) {
+    if (!g_sdl_window) return;
+    sdl_set_mouse_grab(!sdl_is_mouse_grabbed());
+}
+
 void raise_sdl_window(void) {
     if (g_sdl_window) {
         SDL_RaiseWindow(g_sdl_window);
         SDL_SetWindowInputFocus(g_sdl_window);
-        SDL_SetWindowGrab(g_sdl_window, SDL_TRUE);
+        sdl_set_mouse_grab(TRUE);
         SDL_StartTextInput();
 #ifdef __APPLE__
         macos_force_foreground_focus();
@@ -89,6 +118,9 @@ void raise_sdl_window(void) {
 }
 
 BOOL init_sdl_backend(H width, H height, const char *title) {
+    if (title) {
+        strncpy(g_sdl_base_title, title, sizeof(g_sdl_base_title) - 1);
+    }
 #ifdef SDL_HINT_MAC_BACKGROUND_APP
     SDL_SetHint(SDL_HINT_MAC_BACKGROUND_APP, "0");
 #endif

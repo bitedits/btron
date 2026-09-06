@@ -4,6 +4,7 @@
  */
 
 #include <btron/event.h>
+#include <btron/dp.h>
 #if defined(__STDC_HOSTED__) && __STDC_HOSTED__ == 1
 #include <stdio.h>
 #include <SDL.h>
@@ -60,6 +61,9 @@ static void poll_tty_stdin(void) {
                 ev.data = 0;
             } else if (c == 3) { /* Ctrl+C */
                 ev.key = SDLK_c;
+                ev.data = (VW)KMOD_CTRL;
+            } else if (c == 7) { /* Ctrl+G (^G) - QEMU style mouse release/grab */
+                ev.key = SDLK_g;
                 ev.data = (VW)KMOD_CTRL;
             } else if (c == 12) { /* Ctrl+L */
                 ev.key = SDLK_l;
@@ -144,6 +148,10 @@ ER get_evt(EVT *p_evt, W timeout_ms) {
                 snd_evt(&ev);
                 break;
             case SDL_MOUSEBUTTONDOWN:
+                if (!sdl_is_mouse_grabbed()) {
+                    /* Clicking inside window re-grabs mouse pointer (QEMU style) */
+                    sdl_set_mouse_grab(TRUE);
+                }
                 printf("[TRACE-SDL] MOUSEBUTTONDOWN pos=(%d,%d) btn=%d\n",
                        sdlev.button.x, sdlev.button.y, sdlev.button.button);
                 fflush(stdout);
@@ -170,6 +178,12 @@ ER get_evt(EVT *p_evt, W timeout_ms) {
                 /* Text input is handled directly via SDL_KEYDOWN to avoid duplicate keystroke events */
                 break;
             case SDL_KEYDOWN:
+                /* Check for ^G (Ctrl+G) or Ctrl+Alt+G release shortcut (QEMU style) */
+                if ((sdlev.key.keysym.sym == SDLK_g && (sdlev.key.keysym.mod & KMOD_CTRL)) ||
+                    ((sdlev.key.keysym.mod & (KMOD_CTRL | KMOD_ALT)) == (KMOD_CTRL | KMOD_ALT) && sdlev.key.keysym.sym == SDLK_g)) {
+                    sdl_toggle_mouse_grab();
+                    break;
+                }
                 ev.type = EV_KEY_DOWN;
                 ev.key = sdlev.key.keysym.sym;
                 ev.data = (VW)(uintptr_t)sdlev.key.keysym.mod;

@@ -7,6 +7,7 @@
 
 #include <btron/btron.h>
 #include <btron/mobile_ui.h>
+#include <btron/dp.h>
 #include <SDL.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -55,6 +56,7 @@ int main(int argc, char **argv) {
     printf(" Hardware Profile: TI OMAP2430 / ARM1136 AArch32 UMTS Keitai\n");
     printf(" Controls: 5-way D-pad (Arrows/Enter), Softkeys (F1/F2/F3),\n");
     printf("           Numeric (1-9), Back (Esc/Bksp), Menu (M)\n");
+    printf(" Mouse Release: Press Ctrl+G (^G) to release/grab mouse pointer (QEMU style)\n");
     printf("===============================================================\n");
 
 #ifndef BTRON_TARGET
@@ -87,6 +89,8 @@ int main(int argc, char **argv) {
         while (get_evt(&ev, 0) == E_OK) {
             if (ev.type == EV_WND_CLOSE) {
                 running = FALSE;
+            } else if (ev.type == EV_KEY_DOWN && (ev.key == SDLK_g || ev.key == 'g' || ev.key == 'G') && ((uintptr_t)ev.data & KMOD_CTRL)) {
+                sdl_toggle_mouse_grab();
             } else {
                 foma_workbench_process_event(&ev);
             }

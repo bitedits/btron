@@ -17,6 +17,7 @@
 #include <btron/mobile_ui.h>
 #include <btron/troncode.h>
 #include <btron/event.h>
+#include <btron/dp.h>
 
 #ifndef SDLK_UP
 #define SDLK_UP        BTRON_KEY_UP
@@ -30,6 +31,14 @@
 #define SDLK_F1        BTRON_KEY_F1
 #define SDLK_F2        BTRON_KEY_F2
 #define SDLK_F3        BTRON_KEY_F3
+#endif
+
+#ifndef SDLK_g
+#define SDLK_g         'g'
+#endif
+
+#ifndef KMOD_CTRL
+#define KMOD_CTRL      0x0040
 #endif
 #if defined(__STDC_HOSTED__) && __STDC_HOSTED__ == 1
 #include <stdio.h>
@@ -809,6 +818,12 @@ BOOL foma_workbench_process_event(const EVT *ev) {
 
     /* Process Screen Event */
     if (ev->type == EV_KEY_DOWN) {
+        /* Mouse Pointer Release / Grab: Ctrl+G (^G) or Ctrl+Alt+G (QEMU style) */
+        if ((ev->key == 'g' || ev->key == 'G' || ev->key == SDLK_g) && ((uintptr_t)ev->data & KMOD_CTRL)) {
+            sdl_toggle_mouse_grab();
+            return TRUE;
+        }
+
         /* 1. 5-Way Directional Pad */
         if (ev->key == SDLK_UP) {
             foma_nav_move_focus(cur, -1);

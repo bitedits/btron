@@ -70,6 +70,11 @@ ER    fill_rec(GDEV *dev, const RECT *r, COLOR col);
 ER    drw_ovl(GDEV *dev, const RECT *r);
 ER    fill_ovl(GDEV *dev, const RECT *r, COLOR col);
 
+/* Pointer Grab & Release Control (like ^G in QEMU) */
+void  sdl_set_mouse_grab(BOOL grabbed);
+void  sdl_toggle_mouse_grab(void);
+BOOL  sdl_is_mouse_grabbed(void);
+
 #ifdef __cplusplus
 }
 #endif

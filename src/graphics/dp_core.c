@@ -248,3 +248,9 @@ void set_pat(GDEV *dev, const PAT *pat) {
     (void)dev;
     (void)pat;
 }
+
+/* Default weak stubs for pointer grab & release */
+__attribute__((weak)) void sdl_set_mouse_grab(BOOL grabbed) { (void)grabbed; }
+__attribute__((weak)) void sdl_toggle_mouse_grab(void) {}
+__attribute__((weak)) BOOL sdl_is_mouse_grabbed(void) { return FALSE; }
+

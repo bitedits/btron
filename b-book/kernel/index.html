@@ -1,0 +1,427 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Kernel – Sakamura T-Kernel 2.0 Real-Time OS Specification | B-Book</title>
+  <meta name="description" content="Full-scope developer specification for the B-System Sakamura T-Kernel 2.0 microkernel: preemptive task scheduling, synchronization (semaphores, eventflags, mailboxes, mutexes, message buffers, rendezvous), memory pools, and device management.">
+  <link rel="stylesheet" href="../b-book.css">
+</head>
+<body>
+
+  <!-- Navigation Sidebar -->
+  <nav class="book-sidebar">
+    <div class="sidebar-brand">
+      <div class="brand-title">B-Book <span class="badge">Rev 3.20</span></div>
+      <div class="brand-sub">Kernel Subsystem Reference</div>
+    </div>
+    <div class="sidebar-nav">
+      <div class="nav-heading">Overview</div>
+      <a href="../index.html" class="nav-link">Master Index</a>
+      
+      <div class="nav-heading">Kernel & Executive</div>
+      <a href="./index.html" class="nav-link active">Kernel (T-Kernel 2.0)</a>
+      <div class="nav-sublinks">
+        <a href="#arch" class="nav-sublink">Architecture & Scheduling</a>
+        <a href="#types" class="nav-sublink">Data Structures & Packets</a>
+        <a href="#tasks" class="nav-sublink">Task Management APIs</a>
+        <a href="#sync" class="nav-sublink">Synchronization Primitives</a>
+        <a href="#memory" class="nav-sublink">Memory Pool Management</a>
+        <a href="#time" class="nav-sublink">Time & Cyclic Handlers</a>
+        <a href="#devmgr" class="nav-sublink">Device Management & Subsystems</a>
+        <a href="#examples" class="nav-sublink">Code Examples</a>
+      </div>
+      <a href="../cores/index.html" class="nav-link">Cores (Bootstrap & SMP)</a>
+
+      <div class="nav-heading">Graphics & Input</div>
+      <a href="../graphics/index.html" class="nav-link">Graphics (DP & 2D)</a>
+      <a href="../tip/index.html" class="nav-link">Tip (Input & IME)</a>
+      <a href="../font/index.html" class="nav-link">Font (Typography Engine)</a>
+
+      <div class="nav-heading">Hyper-Data & Desktop</div>
+      <a href="../vobject/index.html" class="nav-link">VObject (Hyper-Data)</a>
+      <a href="../window/index.html" class="nav-link">Window (WM & Menus)</a>
+      <a href="../desktop/index.html" class="nav-link">Desktop (Shell & Mobile)</a>
+      <a href="../hmi/index.html" class="nav-link">HMI (Human-Machine Interface)</a>
+
+      <div class="nav-heading">Configuration & Drivers</div>
+      <a href="../settings/index.html" class="nav-link">Settings (Control Panel)</a>
+      <a href="../drivers/index.html" class="nav-link">Drivers (Hardware & VirtIO)</a>
+      <a href="../apps/index.html" class="nav-link">Apps (Application Suite)</a>
+    </div>
+  </nav>
+
+  <!-- Main Content Canvas -->
+  <main class="book-content">
+    <header class="book-header">
+      <div class="breadcrumb">
+        <a href="../index.html">B-Book</a> / <span>Kernel</span>
+      </div>
+      <h1 class="page-title">Kernel: Sakamura T-Kernel 2.0 Specification</h1>
+      <p class="page-lead">
+        Comprehensive full-scope developer reference for the B-System real-time operating system kernel: preemptive priority task scheduling, inter-task synchronization (semaphores, event flags, mailboxes, mutexes, message buffers, rendezvous ports), dynamic and fixed memory pools, cyclic/alarm handlers, and device management.
+      </p>
+    </header>
+
+    <!-- Part 1: Architecture & Scheduling -->
+    <h2 id="arch">1. Kernel Architecture & Scheduling Model</h2>
+    <p>
+      The <strong>Kernel</strong> subsystem provides the deterministic, hard real-time operating system foundation for B-System, based on the official <strong>Sakamura T-Kernel 2.0 (TRON Architecture)</strong> specification:
+    </p>
+
+    <pre><code> ┌────────────────────────────────────────────────────────────────────────┐
+ │                    Sakamura T-Kernel 2.0 Architecture                  │
+ │                                                                        │
+ │   [ Applications / Services ]    ◄── C99 System Calls (tk_*) ──┐      │
+ │                                                                │      │
+ │   ┌───────────────────────┐  ┌──────────────────────────────┐  │      │
+ │   │ Task Management       │  │ Synchronization & IPC        │  │      │
+ │   │ • 140 Priority Levels │  │ • Semaphores / Mutexes       │  │      │
+ │   │ • Preemptive Dispatch │  │ • Event Flags / Mailboxes    │  │      │
+ │   │ • Round-Robin Ready Q │  │ • Message Buffers/Rendezvous │  │      │
+ │   └───────────────────────┘  └──────────────────────────────┘  │      │
+ │   ┌───────────────────────┐  ┌──────────────────────────────┐  │      │
+ │   │ Memory Pools (MPL/MPF)│  │ Time / Cyclic Handlers (CYC) │  │      │
+ │   └───────────────────────┘  └──────────────────────────────┘  │      │
+ │                                                                │      │
+ │   [ Device Manager & Subsystems (tk_def_ssy / tk_opn_dev) ] ───┘      │
+ └────────────────────────────────────────────────────────────────────────┘</code></pre>
+
+    <h3>1.1 Real-Time Scheduling Rules</h3>
+    <ul>
+      <li><strong>Preemptive Priority Scheduling</strong>: Highest-priority ready task runs immediately. Up to 140 distinct priority levels (1 = Highest, 140 = Lowest).</li>
+      <li><strong>Round-Robin Support</strong>: Ready queue rotation within the same priority level via <code>tk_rot_rdq()</code>.</li>
+      <li><strong>Priority Inversion Protection</strong>: Mutexes implement Priority Inheritance and Priority Ceiling protocols to prevent unbounded priority inversion.</li>
+      <li><strong>Deterministic Latency</strong>: Zero dynamic heap allocations in kernel paths after bootstrap (NASA JPL Rule 3 compliance).</li>
+    </ul>
+
+    <!-- Part 2: Data Structures & Packets -->
+    <h2 id="types">2. Data Structures & Creation Packets</h2>
+    <p>
+      All T-Kernel 2.0 object creation system calls take a pointer to a specialized creation packet structure:
+    </p>
+
+    <h3>Task Creation Packet (<code>T_CTSK</code>)</h3>
+    <p>Defined in <code>include/tk/syscall.h</code>:</p>
+    <pre><code>typedef struct t_ctsk {
+    VP     exinf;       /* Extended information / user context */
+    ATR    tskatr;      /* Task attributes (TA_HLNG, TA_USERSTACK, TA_DSNAME) */
+    FP     task;        /* Task execution entry point function pointer */
+    PRI    itskpri;     /* Initial task priority (1 to 140) */
+    SZ     stksz;       /* Stack size in bytes */
+    SZ     sstksz;      /* System stack size in bytes */
+    VP     stk;         /* User stack address (if TA_USERSTACK) */
+    UB     dsname[8];   /* Debugger / object name string */
+} T_CTSK;</code></pre>
+
+    <h3>Semaphore Creation Packet (<code>T_CSEM</code>)</h3>
+    <pre><code>typedef struct t_csem {
+    VP     exinf;       /* Extended information */
+    ATR    sematr;      /* Semaphore attributes (TA_TFIFO, TA_TPRI, TA_FIRST) */
+    INT    isemcnt;     /* Initial resource semaphore count */
+    INT    maxsem;      /* Maximum resource count capacity */
+    UB     dsname[8];   /* Diagnostic object name */
+} T_CSEM;</code></pre>
+
+    <h3>Event Flag Creation Packet (<code>T_CFLG</code>)</h3>
+    <pre><code>typedef struct t_cflg {
+    VP     exinf;       /* Extended information */
+    ATR    flgatr;      /* Event flag attributes (TA_TFIFO, TA_TPRI, TA_WMUL) */
+    UINT   iflgptn;     /* Initial 32-bit bitmask pattern */
+    UB     dsname[8];   /* Diagnostic object name */
+} T_CFLG;</code></pre>
+
+    <h3>Mutex Creation Packet (<code>T_CMTX</code>)</h3>
+    <pre><code>typedef struct t_cmtx {
+    VP     exinf;       /* Extended information */
+    ATR    mtxatr;      /* Mutex attributes (TA_TFIFO, TA_TPRI, TA_INHERIT, TA_CEILING) */
+    PRI    ceilpri;     /* Ceiling priority limit (if TA_CEILING) */
+    UB     dsname[8];   /* Diagnostic object name */
+} T_CMTX;</code></pre>
+
+    <!-- Part 3: Task Management APIs -->
+    <h2 id="tasks">3. Task Management System Calls</h2>
+
+    <table class="api-table">
+      <thead>
+        <tr>
+          <th>System Call</th>
+          <th>Return Type</th>
+          <th>Parameters</th>
+          <th>Description</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><code>tk_cre_tsk</code></td>
+          <td><code>ID</code></td>
+          <td><code>const T_CTSK *pk_ctsk</code></td>
+          <td>Creates a new task in DORMANT state and returns its unique task ID.</td>
+        </tr>
+        <tr>
+          <td><code>tk_del_tsk</code></td>
+          <td><code>ER</code></td>
+          <td><code>ID tskid</code></td>
+          <td>Deletes a task in DORMANT state, freeing its control block and stack.</td>
+        </tr>
+        <tr>
+          <td><code>tk_sta_tsk</code></td>
+          <td><code>ER</code></td>
+          <td><code>ID tskid, INT stacd</code></td>
+          <td>Starts a task, transitioning it from DORMANT to READY.</td>
+        </tr>
+        <tr>
+          <td><code>tk_ext_tsk</code></td>
+          <td><code>void</code></td>
+          <td><code>void</code></td>
+          <td>Terminates the invoking task, transitioning it to DORMANT.</td>
+        </tr>
+        <tr>
+          <td><code>tk_exd_tsk</code></td>
+          <td><code>void</code></td>
+          <td><code>void</code></td>
+          <td>Terminates and automatically deletes the invoking task.</td>
+        </tr>
+        <tr>
+          <td><code>tk_ter_tsk</code></td>
+          <td><code>ER</code></td>
+          <td><code>ID tskid</code></td>
+          <td>Forcibly terminates another target task into DORMANT state.</td>
+        </tr>
+        <tr>
+          <td><code>tk_chg_pri</code></td>
+          <td><code>ER</code></td>
+          <td><code>ID tskid, PRI newpri</code></td>
+          <td>Changes task priority dynamically (1 to 140, or <code>TPRI_INI</code>).</td>
+        </tr>
+        <tr>
+          <td><code>tk_rot_rdq</code></td>
+          <td><code>ER</code></td>
+          <td><code>PRI tskpri</code></td>
+          <td>Rotates the ready queue for the given priority level (round-robin step).</td>
+        </tr>
+        <tr>
+          <td><code>tk_rel_wai</code></td>
+          <td><code>ER</code></td>
+          <td><code>ID tskid</code></td>
+          <td>Forcibly releases target task from WAITING state with <code>ER_RLWAI</code>.</td>
+        </tr>
+        <tr>
+          <td><code>tk_slp_tsk</code></td>
+          <td><code>ER</code></td>
+          <td><code>TMO tmout</code></td>
+          <td>Puts invoking task to sleep until awakened via <code>tk_wup_tsk</code> or timeout.</td>
+        </tr>
+        <tr>
+          <td><code>tk_wup_tsk</code></td>
+          <td><code>ER</code></td>
+          <td><code>ID tskid</code></td>
+          <td>Wakes up a sleeping task or queues a wakeup request.</td>
+        </tr>
+        <tr>
+          <td><code>tk_ref_tsk</code></td>
+          <td><code>ER</code></td>
+          <td><code>ID tskid, T_RTSK *pk_rtsk</code></td>
+          <td>Queries current task status, execution state, priority, and wait factors.</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <!-- Part 4: Synchronization Primitives -->
+    <h2 id="sync">4. Synchronization & Communication Primitives</h2>
+
+    <h3>4.1 Semaphores</h3>
+    <div class="api-card">
+      <div class="api-header">
+        <span class="api-name">tk_cre_sem / tk_sig_sem / tk_wai_sem</span>
+        <span class="ret-badge">ID / ER</span>
+      </div>
+      <p>Counting semaphores for mutual exclusion and shared resource capacity tracking.</p>
+      <div class="api-signature">
+        ID tk_cre_sem(const T_CSEM *pk_csem);<br>
+        ER tk_sig_sem(ID semid, INT cnt);<br>
+        ER tk_wai_sem(ID semid, INT cnt, TMO tmout);<br>
+        ER tk_del_sem(ID semid);
+      </div>
+    </div>
+
+    <h3>4.2 Event Flags</h3>
+    <div class="api-card">
+      <div class="api-header">
+        <span class="api-name">tk_cre_flg / tk_set_flg / tk_clr_flg / tk_wai_flg</span>
+        <span class="ret-badge">ID / ER</span>
+      </div>
+      <p>32-bit pattern event flags supporting <code>TWF_ANDW</code> and <code>TWF_ORW</code> multi-bit condition matching.</p>
+      <div class="api-signature">
+        ID tk_cre_flg(const T_CFLG *pk_cflg);<br>
+        ER tk_set_flg(ID flgid, UINT setptn);<br>
+        ER tk_clr_flg(ID flgid, UINT clrptn);<br>
+        ER tk_wai_flg(ID flgid, UINT waiptn, UINT wfmode, UINT *p_flgptn, TMO tmout);
+      </div>
+    </div>
+
+    <h3>4.3 Mutexes</h3>
+    <div class="api-card">
+      <div class="api-header">
+        <span class="api-name">tk_cre_mtx / tk_loc_mtx / tk_unl_mtx</span>
+        <span class="ret-badge">ID / ER</span>
+      </div>
+      <p>Recursive mutual exclusion lock with Priority Inheritance (<code>TA_INHERIT</code>) and Priority Ceiling (<code>TA_CEILING</code>).</p>
+      <div class="api-signature">
+        ID tk_cre_mtx(const T_CMTX *pk_cmtx);<br>
+        ER tk_loc_mtx(ID mtxid, TMO tmout);<br>
+        ER tk_unl_mtx(ID mtxid);<br>
+        ER tk_del_mtx(ID mtxid);
+      </div>
+    </div>
+
+    <h3>4.4 Mailboxes & Message Buffers</h3>
+    <table class="api-table">
+      <thead>
+        <tr>
+          <th>System Call</th>
+          <th>Primitive</th>
+          <th>Operational Semantics</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><code>tk_snd_mbx / tk_rcv_mbx</code></td>
+          <td>Mailbox (MBX)</td>
+          <td>Asynchronous pointer-based message passing through priority/FIFO mail queues.</td>
+        </tr>
+        <tr>
+          <td><code>tk_snd_mbf / tk_rcv_mbf</code></td>
+          <td>Message Buffer (MBF)</td>
+          <td>Byte-stream variable-length message copy into a bounded ring buffer.</td>
+        </tr>
+        <tr>
+          <td><code>tk_cal_por / tk_acp_por</code></td>
+          <td>Rendezvous Port (POR)</td>
+          <td>Synchronous client-server bidirectional rendezvous handshake with reply.</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <!-- Part 5: Memory Pool Management -->
+    <h2 id="memory">5. Memory Pool Management</h2>
+    <ul>
+      <li><strong>Variable-Size Memory Pools (<code>MPL</code>)</strong>: <code>tk_cre_mpl()</code>, <code>tk_get_mpl()</code>, <code>tk_rel_mpl()</code>. Allocates arbitrary byte lengths from a designated heap with best-fit / first-fit coalescing.</li>
+      <li><strong>Fixed-Size Memory Pools (<code>MPF</code>)</strong>: <code>tk_cre_mpf()</code>, <code>tk_get_mpf()</code>, <code>tk_rel_mpf()</code>. High-speed $O(1)$ constant-time allocation of fixed-size blocks from a bitmap-tracked pool.</li>
+    </ul>
+
+    <!-- Part 6: Time & Cyclic Handlers -->
+    <h2 id="time">6. Time Management & Cyclic Handlers</h2>
+    <div class="api-card">
+      <div class="api-header">
+        <span class="api-name">tk_get_tim / tk_dly_tsk / tk_cre_cyc</span>
+        <span class="ret-badge">ER</span>
+      </div>
+      <p>Microsecond system clock time, task delay timers, and periodic cyclic execution handlers.</p>
+      <div class="api-signature">
+        ER tk_get_tim(SYSTIM *pk_tim);<br>
+        ER tk_set_tim(const SYSTIM *pk_tim);<br>
+        ER tk_dly_tsk(RELTIM dlytim);<br>
+        ID tk_cre_cyc(const T_CCYC *pk_ccyc);<br>
+        ER tk_sta_cyc(ID cycid);<br>
+        ER tk_stp_cyc(ID cycid);
+      </div>
+    </div>
+
+    <!-- Part 7: Device Management -->
+    <h2 id="devmgr">7. Device Management & Subsystem Registry</h2>
+    <table class="api-table">
+      <thead>
+        <tr>
+          <th>System Call</th>
+          <th>Function</th>
+          <th>Description</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><code>tk_opn_dev</code></td>
+          <td>Device Open</td>
+          <td>Opens registered device driver (e.g. <code>"vda"</code>, <code>"console"</code>).</td>
+        </tr>
+        <tr>
+          <td><code>tk_rea_dev / tk_wri_dev</code></td>
+          <td>Device I/O</td>
+          <td>Performs synchronous sector / byte stream transfer.</td>
+        </tr>
+        <tr>
+          <td><code>tk_def_ssy</code></td>
+          <td>Subsystem Define</td>
+          <td>Registers extended SVC handler table for custom operating system modules.</td>
+        </tr>
+        <tr>
+          <td><code>tk_set_objname</code></td>
+          <td>Object Naming</td>
+          <td>Binds an 8-byte alphanumeric mnemonic label to any kernel ID.</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <!-- Part 8: Canonical Code Examples -->
+    <h2 id="examples">8. Canonical Implementation Examples</h2>
+    <p>
+      The following example demonstrates creating a worker task, synchronizing execution via an event flag, and scheduling a periodic cyclic timer:
+    </p>
+
+    <pre><code>#include &lt;tk/tkernel.h&gt;
+
+#define FLAG_WORK_READY  (1 &lt;&lt; 0)
+#define FLAG_WORK_DONE   (1 &lt;&lt; 1)
+
+static ID s_flgid;
+
+/* Worker Task Entry Point */
+static void worker_task(INT stacd, VP exinf) {
+    (void)stacd; (void)exinf;
+    UINT flgptn = 0;
+
+    while (1) {
+        /* Wait for WORK_READY event flag */
+        tk_wai_flg(s_flgid, FLAG_WORK_READY, TWF_ANDW | TWF_CLR, &flgptn, TMO_FEVR);
+
+        /* Perform real-time processing */
+        do_work();
+
+        /* Signal completion */
+        tk_set_flg(s_flgid, FLAG_WORK_DONE);
+    }
+}
+
+void initialize_kernel_subsystem(void) {
+    /* 1. Create synchronization event flag */
+    T_CFLG cflg = {
+        .exinf = NULL,
+        .flgatr = TA_TFIFO | TA_WMUL,
+        .iflgptn = 0,
+        .dsname = "WORKFLG"
+    };
+    s_flgid = tk_cre_flg(&cflg);
+
+    /* 2. Create worker task with priority 10 */
+    T_CTSK ctsk = {
+        .exinf = NULL,
+        .tskatr = TA_HLNG | TA_DSNAME,
+        .task = (FP)worker_task,
+        .itskpri = 10,
+        .stksz = 4096,
+        .dsname = "WORKER"
+    };
+    ID tskid = tk_cre_tsk(&ctsk);
+
+    /* 3. Start task */
+    tk_sta_tsk(tskid, 0);
+}</code></pre>
+
+    <footer class="book-footer">
+      <div><a href="../index.html">&larr; Back to Master Index</a></div>
+      <div><a href="../cores/index.html">Next: Cores Subsystem &rarr;</a></div>
+    </footer>
+  </main>
+
+</body>
+</html>

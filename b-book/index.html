@@ -20,6 +20,7 @@
       <a href="./index.html" class="nav-link active">Master Index</a>
       
       <div class="nav-heading">Core Subsystems</div>
+      <a href="./kernel/index.html" class="nav-link">Kernel (T-Kernel 2.0)</a>
       <a href="./cores/index.html" class="nav-link">Cores (Kernel & SMP)</a>
       <a href="./graphics/index.html" class="nav-link">Graphics (DP & 2D)</a>
       <a href="./tip/index.html" class="nav-link">Tip (Input & IME)</a>
@@ -57,9 +58,9 @@
       B-Book documents the core foundational libraries and system calls of B-System (BTRON 3.20 specification). All APIs follow strict C99 conformance, zero post-boot heap allocations (NASA JPL Rule 3), and clean multi-target abstractions across POSIX, Sakamura T-Kernel 2.0, NTT DoCoMo FOMA mobile, x86_64 UEFI SMP, and NEC PC-98.
     </div>
 
-    <h2>1. The Eleven Subsystem Reference Manuals</h2>
+    <h2>1. The Twelve Subsystem Reference Manuals</h2>
     <p>
-      The B-System developer platform is partitioned into eleven decoupled, cohesive subsystems:
+      The B-System developer platform is partitioned into twelve decoupled, cohesive subsystems:
     </p>
 
     <table class="api-table">
@@ -72,6 +73,12 @@
         </tr>
       </thead>
       <tbody>
+        <tr>
+          <td><strong>Kernel</strong></td>
+          <td><code>tk/syscall.h</code><br><code>btron/types.h</code></td>
+          <td>Sakamura T-Kernel 2.0 real-time executive: 140 priority levels, preemptive dispatch, semaphores, eventflags, mailboxes, mutexes, message buffers, rendezvous ports, memory pools (MPL/MPF), cyclic handlers, and device management.</td>
+          <td><a href="./kernel/index.html"><strong>Kernel Manual &rarr;</strong></a></td>
+        </tr>
         <tr>
           <td><strong>Cores</strong></td>
           <td><code>btron/core.h</code><br><code>btron/types.h</code><br><code>btron/smp.h</code></td>

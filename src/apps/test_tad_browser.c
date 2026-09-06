@@ -795,6 +795,172 @@ static void test_cabinet_menu_and_about_box(void) {
     cls_wnd(wnd);
 }
 
+/* ── Test 17: Box Drawing Font Engine & Monospace Table Alignment ── */
+static void test_box_drawing_and_monospace_layout(void) {
+    printf("\n[TEST GROUP 17] Box Drawing Engine & Monospace Preformatted Tables\n");
+
+    /* 1. UTF-8 to TRON Code Mapping for Box Drawing Characters */
+    int consumed = 0;
+    TC tc_h = utf8_to_tc("─", &consumed);
+    TEST_ASSERT(tc_h == 0x2300 && consumed == 3, "Mapped '─' (U+2500) to TRON Code 0x2300");
+
+    TC tc_v = utf8_to_tc("│", &consumed);
+    TEST_ASSERT(tc_v == 0x2302 && consumed == 3, "Mapped '│' (U+2502) to TRON Code 0x2302");
+
+    TC tc_tl = utf8_to_tc("┌", &consumed);
+    TEST_ASSERT(tc_tl == 0x230C && consumed == 3, "Mapped '┌' (U+250C) to TRON Code 0x230C");
+
+    TC tc_tr = utf8_to_tc("┐", &consumed);
+    TEST_ASSERT(tc_tr == 0x2310 && consumed == 3, "Mapped '┐' (U+2510) to TRON Code 0x2310");
+
+    TC tc_bl = utf8_to_tc("└", &consumed);
+    TEST_ASSERT(tc_bl == 0x2314 && consumed == 3, "Mapped '└' (U+2514) to TRON Code 0x2314");
+
+    TC tc_br = utf8_to_tc("┘", &consumed);
+    TEST_ASSERT(tc_br == 0x2318 && consumed == 3, "Mapped '┘' (U+2518) to TRON Code 0x2318");
+
+    TC tc_cross = utf8_to_tc("┼", &consumed);
+    TEST_ASSERT(tc_cross == 0x233C && consumed == 3, "Mapped '┼' (U+253C) to TRON Code 0x233C");
+
+    TC tc_block = utf8_to_tc("█", &consumed);
+    TEST_ASSERT(tc_block == 0x2388 && consumed == 3, "Mapped '█' (U+2588) to TRON Code 0x2388");
+
+    TC tc_bullet = utf8_to_tc("•", &consumed);
+    TEST_ASSERT(tc_bullet == 0x23FA && consumed == 3, "Mapped '•' (U+2022) to TRON Code 0x23FA");
+
+    /* 2. Lossless Bidirectional Round-Trip */
+    char utf8_out[16];
+    int n = tc_to_utf8(0x2300, utf8_out, sizeof(utf8_out));
+    TEST_ASSERT(n == 3 && strcmp(utf8_out, "─") == 0, "Round-trip TRON Code 0x2300 back to UTF-8 '─'");
+
+    n = tc_to_utf8(0x2302, utf8_out, sizeof(utf8_out));
+    TEST_ASSERT(n == 3 && strcmp(utf8_out, "│") == 0, "Round-trip TRON Code 0x2302 back to UTF-8 '│'");
+
+    n = tc_to_utf8(0x2388, utf8_out, sizeof(utf8_out));
+    TEST_ASSERT(n == 3 && strcmp(utf8_out, "█") == 0, "Round-trip TRON Code 0x2388 back to UTF-8 '█'");
+
+    /* 3. Monospace Metrics: Advance MUST be exactly 8px (Matching ASCII) */
+    H adv_h = tc_get_char_advance(tc_h, 0);
+    H adv_v = tc_get_char_advance(tc_v, 0);
+    H adv_tl = tc_get_char_advance(tc_tl, 0);
+    H adv_cross = tc_get_char_advance(tc_cross, 0);
+    H adv_block = tc_get_char_advance(tc_block, 0);
+    H adv_bullet = tc_get_char_advance(tc_bullet, 0);
+    TEST_ASSERT(adv_h == 8 && adv_v == 8 && adv_tl == 8 && adv_cross == 8 && adv_block == 8 && adv_bullet == 8,
+                "All box-drawing, block, and bullet characters have exact 8px advance metrics");
+
+    /* 4. Glyph Bitmap Generation */
+    H gw = 0, gh = 0;
+    const UB *bmp_v = get_glyph_bitmap(tc_v, &gw, &gh);
+    TEST_ASSERT(bmp_v != NULL && gw == 8 && gh == 16, "Vertical line '│' glyph is 8x16 bitmap");
+    BOOL v_connected = TRUE;
+    for (int r = 0; r < 16; r++) {
+        if ((bmp_v[r] & 0x18) == 0) { v_connected = FALSE; break; }
+    }
+    TEST_ASSERT(v_connected, "Vertical line connects seamlessly across all 16 row bytes");
+
+    const UB *bmp_h = get_glyph_bitmap(tc_h, &gw, &gh);
+    TEST_ASSERT(bmp_h != NULL && gw == 8 && gh == 16, "Horizontal line '─' glyph is 8x16 bitmap");
+    TEST_ASSERT(bmp_h[7] == 0xFF || bmp_h[8] == 0xFF, "Horizontal line spans all 8 columns edge-to-edge");
+
+    /* 5. TAD Browser Preformatted Monospace Table Layout (font_id == 2) */
+    TAD_BROWSER tb;
+    memset(&tb, 0, sizeof(tb));
+    tb.span_count = 1;
+    tb.spans[0].style.font_id = 2; /* monospace / preformatted */
+    tb.spans[0].style.font_size = 10;
+    tb.spans[0].style.line_pitch = 16;
+    const char *tbl_sample =
+        "┌──────────────┬────────┐\n"
+        "│ Function     │ Return │\n"
+        "├──────────────┼────────┤\n"
+        "│ sys_call_001 │ ER_OK  │\n"
+        "└──────────────┴────────┘";
+    strncpy(tb.spans[0].text, tbl_sample, sizeof(tb.spans[0].text) - 1);
+
+    /* Layout with narrow width (200px) that would force word-wrap in regular text */
+    tad_browser_layout(&tb, 200);
+
+    /* In monospace mode, lines are separated strictly by '\n', exactly 5 lines! */
+    int span_h = tb.spans[0].bounds.bottom - tb.spans[0].bounds.top;
+    int computed_lines = span_h / tb.spans[0].style.line_pitch;
+    TEST_ASSERT(computed_lines == 5, "Monospace preformatted table preserved exact 5 lines without space wrapping");
+    TEST_ASSERT(tb.doc_height >= 5 * 16, "Doc height calculated for all preformatted lines");
+}
+
+/* ── Test 18: Address Bar Interaction & Monospace Space Alignment ── */
+static void test_address_bar_and_ascii_spacing_alignment(void) {
+    printf("\n[TEST GROUP 18] Address Bar Navigation & Monospace Space Metric Alignment\n");
+
+    /* 1. Space advance must strictly equal 8px (monospaced grid) */
+    H adv_space = tc_get_char_advance(' ', 0);
+    H adv_char = tc_get_char_advance('A', 0);
+    H adv_v = tc_get_char_advance(0x2302, 0); /* │ */
+    TEST_ASSERT(adv_space == 8, "ASCII space has exact 8px monospace advance");
+    TEST_ASSERT(adv_char == 8 && adv_v == 8, "ASCII letters and box drawing characters match 8px advance");
+
+    /* 2. Alignment invariant: line with spaces vs line with characters have identical width */
+    const char *line_spaces = "│          │"; /* 10 spaces + 2 border bars = 12 characters */
+    const char *line_digits = "│0123456789│"; /* 10 digits + 2 border bars = 12 characters */
+    H w_spaces = tc_calc_string_width(line_spaces, (int)strlen(line_spaces));
+    H w_digits = tc_calc_string_width(line_digits, (int)strlen(line_digits));
+    TEST_ASSERT(w_spaces == 12 * 8 && w_digits == 12 * 8, "Both 12-char lines are exactly 96px wide");
+    TEST_ASSERT(w_spaces == w_digits, "Columns padded with spaces align with pixel-perfect precision to character columns");
+
+    /* 3. Address Bar: Click to focus and edit */
+    WND *wnd = open_tad_browser_window("tad_bin/01_btron3_spec.tad", "Address Bar Test Window");
+    TEST_ASSERT(wnd != NULL, "Opened TAD Browser window for address bar test");
+    TAD_BROWSER *tb = (TAD_BROWSER*)(uintptr_t)wnd->user_data;
+    TEST_ASSERT(tb != NULL, "Browser context valid");
+    TEST_ASSERT(tb->addr_active == FALSE, "Address bar initially not in editing mode");
+
+    /* Click in address bar (rel_x = 300, rel_y = 30) */
+    EVT ev;
+    memset(&ev, 0, sizeof(ev));
+    ev.type = EV_BUT_DOWN;
+    ev.pos.x = wnd->bounds.left + 4 + 300;
+    ev.pos.y = wnd->bounds.top + 26 + 30;
+    wnd->event_handler(wnd, &ev);
+    TEST_ASSERT(tb->addr_active == TRUE, "Clicking location box activated address editing mode");
+
+    /* Clear existing input via backspaces */
+    ev.type = EV_KEY_DOWN;
+    ev.key = BTRON_KEY_BACKSPACE;
+    while (tb->addr_cursor > 0) {
+        wnd->event_handler(wnd, &ev);
+    }
+    TEST_ASSERT(tb->addr_cursor == 0 && tb->addr_input[0] == '\0', "Cleared address input buffer");
+
+    /* Type "b-book/hmi/HMI.tad" */
+    const char *target = "b-book/hmi/HMI.tad";
+    for (int i = 0; target[i]; i++) {
+        ev.key = (UW)target[i];
+        wnd->event_handler(wnd, &ev);
+    }
+    TEST_ASSERT(strcmp(tb->addr_input, "b-book/hmi/HMI.tad") == 0, "Address bar contains 'b-book/hmi/HMI.tad'");
+
+    /* Press Return to navigate */
+    ev.key = BTRON_KEY_RETURN;
+    wnd->event_handler(wnd, &ev);
+    TEST_ASSERT(tb->addr_active == FALSE, "Return dismissed address editing mode");
+    TEST_ASSERT(strstr(tb->file_path, "HMI.tad") != NULL, "TAD Browser navigated to HMI.tad");
+    TEST_ASSERT(tb->span_count > 10, "Successfully loaded spans from b-book/hmi/HMI.tad");
+
+    /* 4. Verify table in HMI.tad loaded with font_id == 2 */
+    BOOL found_table_box = FALSE;
+    for (int i = 0; i < tb->span_count; i++) {
+        if (strstr(tb->spans[i].text, "┌") != NULL || strstr(tb->spans[i].text, "│") != NULL) {
+            if (tb->spans[i].style.font_id == 2) {
+                found_table_box = TRUE;
+                break;
+            }
+        }
+    }
+    TEST_ASSERT(found_table_box, "HMI.tad table spans rendered in font_id = 2 (Monospace)");
+
+    cls_wnd(wnd);
+}
+
 int main(void) {
     printf("==========================================================\n");
     printf(" B-System Native TAD Document Browser & Cabinet Test Suite\n");
@@ -817,6 +983,8 @@ int main(void) {
     test_dynamic_text_wrapping_and_reflow();
     test_tad_browser_menu_and_about_box();
     test_cabinet_menu_and_about_box();
+    test_box_drawing_and_monospace_layout();
+    test_address_bar_and_ascii_spacing_alignment();
 
     printf("\n==========================================================\n");
     printf(" TEST RESULTS: %d / %d tests passed (%.1f%%)\n",

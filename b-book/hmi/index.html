@@ -69,6 +69,22 @@
       <li><strong>Three-Color Status Semantics</strong>: Unambiguous industrial state signals &mdash; Green (Normal/Safe), Yellow/Amber (Standby/Caution), and Red (Stop/Alert).</li>
     </ul>
 
+    <pre><code> ┌────────────────────────────────────────────────────────────────────────┐
+ │                   TRON HMI Standard Component Hierarchy                │
+ │                                                                        │
+ │   ┌───────────────────────┐  ┌─────────────────────────────────────┐   │
+ │   │ Physical Emulation    │  │ Industrial Controls & Meters        │   │
+ │   │ • Push/Toggle Buttons │  │ • Linear Sliders & Rotary Knobs     │   │
+ │   │ • Momentary Action    │  │ • LED Bargraph VU Meters            │   │
+ │   │ • Tactile Bumps       │  │ • 3-Color Status Indicators         │   │
+ │   └───────────────────────┘  └─────────────────────────────────────┘   │
+ │   ┌───────────────────────┐  ┌─────────────────────────────────────┐   │
+ │   │ Operational Semantics │  │ HMI Panel Container (HMI_PANEL)     │   │
+ │   │ • Touch / Release Edge│  │ • Static Bounds & Dispatch Map      │   │
+ │   │ • Safety Triad Group  │  │ • NASA JPL Rule 3 Bounded Storage   │   │
+ │   └───────────────────────┘  └─────────────────────────────────────┘   │
+ └────────────────────────────────────────────────────────────────────────┘</code></pre>
+
     <!-- Part 2: Control Primitives -->
     <h2 id="types">2. Control Primitives & Types</h2>
 

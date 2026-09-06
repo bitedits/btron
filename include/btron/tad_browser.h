@@ -93,6 +93,11 @@ typedef struct {
     BOOL wrap_text;         /* TRUE by default */
     int zoom_percent;       /* 100 default */
     APP_MENU_BAR menu_bar;
+
+    /* Interactive Address Bar */
+    BOOL addr_active;
+    char addr_input[TAD_MAX_PATH];
+    int addr_cursor;
 } TAD_BROWSER;
 
 /* Lifecycle & Window APIs */

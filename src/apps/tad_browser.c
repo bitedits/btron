@@ -118,6 +118,9 @@ void tad_browser_init(TAD_BROWSER *tb) {
 
     tb->wrap_text = TRUE;
     tb->zoom_percent = 100;
+    tb->addr_active = FALSE;
+    tb->addr_input[0] = '\0';
+    tb->addr_cursor = 0;
     tad_init_menu_bar(tb);
 }
 
@@ -236,7 +239,10 @@ static void parse_text_tad_lines(TAD_BROWSER *tb, const char *text, UW len) {
             span->style.is_hr = TRUE;
             span->style.line_pitch = 12;
             span->text[0] = '\0';
-        } else if (line[0] == '|' || strncmp(line, "```", 3) == 0 || strncmp(line, "  ", 2) == 0) {
+        } else if (line[0] == '|' || strncmp(line, "```", 3) == 0 || strncmp(line, "  ", 2) == 0 ||
+                   strstr(line, "┌") != NULL || strstr(line, "│") != NULL ||
+                   strstr(line, "├") != NULL || strstr(line, "└") != NULL ||
+                   strstr(line, "+-") != NULL) {
             span->style = cur_style;
             span->style.font_id = 2;     /* Monospace */
             span->style.font_size = 10;
@@ -287,16 +293,29 @@ ER tad_browser_load_buffer(TAD_BROWSER *tb, const void *buf, UW len, const char 
                     case 0xA0: /* TS_TPAGE */
                         break;
                     case 0xA1: /* TS_TRULER */
-                        if (seg_len >= 2) {
+                        if (seg_len >= 5 && p[offset] == 0x00) {
+                            cur_style.line_pitch = (p[offset + 1] << 8) | p[offset + 2];
+                            cur_style.indent = (p[offset + 3] << 8) | p[offset + 4];
+                        } else if (seg_len >= 2) {
                             cur_style.line_pitch = p[offset];
                             cur_style.indent = p[offset + 1];
                         }
                         break;
                     case 0xA2: /* TS_TFONT */
-                        if (seg_len >= 1) cur_style.font_id = p[offset];
+                        if (seg_len >= 4 && p[offset] == 0x00) {
+                            cur_style.font_id = (p[offset + 1] << 8) | p[offset + 2];
+                        } else if (seg_len >= 3) {
+                            cur_style.font_id = (p[offset + 1] << 8) | p[offset + 2];
+                        } else if (seg_len >= 1) {
+                            cur_style.font_id = p[offset];
+                        }
                         break;
                     case 0xA3: /* TS_TCHAR */
-                        if (seg_len >= 6) {
+                        if (seg_len >= 9 && p[offset] == 0x00) {
+                            cur_style.font_size = (p[offset + 1] << 8) | p[offset + 2];
+                            cur_style.weight = (p[offset + 3] << 8) | p[offset + 4];
+                            cur_style.color = ((COLOR)p[offset + 5] << 24) | ((COLOR)p[offset + 6] << 16) | ((COLOR)p[offset + 7] << 8) | p[offset + 8] | 0xFF000000;
+                        } else if (seg_len >= 6) {
                             cur_style.font_size = p[offset];
                             cur_style.weight = (p[offset + 1] << 8) | p[offset + 2];
                             cur_style.color = (p[offset + 3] << 16) | (p[offset + 4] << 8) | p[offset + 5] | 0xFF000000;
@@ -429,6 +448,9 @@ ER tad_browser_load_buffer(TAD_BROWSER *tb, const void *buf, UW len, const char 
                     TAD_SPAN *span = &tb->spans[tb->span_count++];
                     memset(span, 0, sizeof(TAD_SPAN));
                     span->style = cur_style;
+                    if (strstr(line, "┌") || strstr(line, "│") || strstr(line, "├") || strstr(line, "└") || strstr(line, "+-")) {
+                        span->style.font_id = 2;
+                    }
                     strncpy(span->text, line, sizeof(span->text) - 1);
                 }
             }
@@ -658,8 +680,23 @@ void tad_browser_layout(TAD_BROWSER *tb, int view_width) {
         int avail_w = tb->doc_width - indent - 24;
         if (avail_w < 80) avail_w = 80;
 
-        int num_lines = tad_browser_wrap_text(s->text, avail_w, NULL, NULL);
-        if (num_lines < 1) num_lines = 1;
+        int num_lines = 1;
+        if (s->style.font_id == 2) {
+            /* Monospace Preformatted Text (Code block / ASCII diagram / Table) */
+            /* Count non-empty explicit lines separated by \n */
+            const char *q = s->text;
+            num_lines = 0;
+            while (*q) {
+                num_lines++;
+                const char *nl = strchr(q, '\n');
+                if (!nl) break;
+                q = nl + 1;
+            }
+            if (num_lines < 1) num_lines = 1;
+        } else {
+            num_lines = tad_browser_wrap_text(s->text, avail_w, NULL, NULL);
+            if (num_lines < 1) num_lines = 1;
+        }
         int span_h = num_lines * pitch;
 
         int text_len = (int)strlen(s->text);
@@ -1666,9 +1703,27 @@ void tad_browser_paint(TAD_BROWSER *tb, GDEV *dev, const RECT *client_rect) {
                 ctx.y = vy;
                 ctx.pitch = pitch;
                 ctx.text_col = text_col;
-                tad_browser_wrap_text(s->text, avail_w, paint_wrap_line_cb, &ctx);
+                if (s->style.font_id == 2) {
+                    /* Monospace / Preformatted: render line by line split by \n */
+                    const char *lp = s->text;
+                    int l_idx = 0;
+                    while (*lp) {
+                        const char *le = strchr(lp, '\n');
+                        int llen = le ? (int)(le - lp) : (int)strlen(lp);
+                        char lbuf[512];
+                        if (llen > (int)sizeof(lbuf) - 1) llen = (int)sizeof(lbuf) - 1;
+                        memcpy(lbuf, lp, llen);
+                        lbuf[llen] = '\0';
+                        paint_wrap_line_cb(lbuf, llen, 0, l_idx++, &ctx);
+                        if (!le) break;
+                        lp = le + 1;
+                    }
+                } else {
+                    tad_browser_wrap_text(s->text, avail_w, paint_wrap_line_cb, &ctx);
+                }
             }
         }
+
     }
 
     /* Restore device clip for window chrome layer */
@@ -1714,9 +1769,15 @@ void tad_browser_paint(TAD_BROWSER *tb, GDEV *dev, const RECT *client_rect) {
     RECT loc_box = { 272, 24, dev->width - 12, 44 };
     fill_rec(dev, &loc_box, COLOR_WHITE);
     drw_rec(dev, &loc_box);
-    char loc_text[128];
-    snprintf(loc_text, sizeof(loc_text), "%s", tb->file_path[0] ? tb->file_path : "TAD Document (実身文書)");
-    drw_tc_string(dev, 278, 26, loc_text, COLOR_DKGRAY, 0x00000000);
+    if (tb->addr_active) {
+        char disp[TAD_MAX_PATH + 4];
+        snprintf(disp, sizeof(disp), "%s|", tb->addr_input);
+        drw_tc_string(dev, 278, 26, disp, COLOR_NAVY, 0x00000000);
+    } else {
+        char loc_text[128];
+        snprintf(loc_text, sizeof(loc_text), "%s", tb->file_path[0] ? tb->file_path : "TAD Document (実身文書)");
+        drw_tc_string(dev, 278, 26, loc_text, COLOR_DKGRAY, 0x00000000);
+    }
 
     /* ── 3. Scrollbar Indicator (Right Margin) ─────────────────────────────── */
     if (tb->doc_height > dev->height - 70 && dev->height > 75) {
@@ -1844,6 +1905,19 @@ void tad_browser_resolve_path(const char *current_path, const char *target, char
     /* 3. Prefix fallbacks: tad_bin/ subtrees */
     const char *prefixes[] = {
         "tad_bin/",
+        "tad_bin/b-book/",
+        "tad_bin/b-book/hmi/",
+        "tad_bin/b-book/kernel/",
+        "tad_bin/b-book/cores/",
+        "tad_bin/b-book/graphics/",
+        "tad_bin/b-book/tip/",
+        "tad_bin/b-book/vobject/",
+        "tad_bin/b-book/window/",
+        "tad_bin/b-book/desktop/",
+        "tad_bin/b-book/font/",
+        "tad_bin/b-book/settings/",
+        "tad_bin/b-book/drivers/",
+        "tad_bin/b-book/apps/",
         "tad_bin/shared_data/",
         "tad_bin/os_spec/",
         "tad_bin/os_spec/kernel/",
@@ -2093,10 +2167,19 @@ static void handle_tad_browser_event(WND *wnd, const EVT *evt) {
                 tad_browser_reload(tb);
                 return;
             }
+            /* Location Bar / Address Input (272 .. dev->width - 12) */
+            if (rel_x >= 272) {
+                tb->addr_active = TRUE;
+                strncpy(tb->addr_input, tb->file_path, sizeof(tb->addr_input) - 1);
+                tb->addr_input[sizeof(tb->addr_input) - 1] = '\0';
+                tb->addr_cursor = (int)strlen(tb->addr_input);
+                return;
+            }
             return;
         }
 
         /* D. Document Content Link Clicks (y >= 48) */
+        tb->addr_active = FALSE;
         ID clicked_robj = 0;
         char clicked_path[128] = "";
         if (tad_browser_handle_mouse(tb, rel_x, rel_y, TRUE, &clicked_robj, clicked_path)) {
@@ -2109,6 +2192,32 @@ static void handle_tad_browser_event(WND *wnd, const EVT *evt) {
 
     if (evt->type == EV_KEY_DOWN) {
         UW key = evt->key;
+
+        /* Address Bar Text Input */
+        if (tb->addr_active) {
+            if (key == BTRON_KEY_RETURN || key == '\r' || key == '\n' || key == 10 || key == 13) {
+                tb->addr_active = FALSE;
+                if (tb->addr_input[0] != '\0') {
+                    tad_browser_navigate(tb, tb->addr_input);
+                }
+                return;
+            } else if (key == BTRON_KEY_ESCAPE || key == 27) {
+                tb->addr_active = FALSE;
+                return;
+            } else if (key == BTRON_KEY_BACKSPACE || key == 8 || key == 127) {
+                if (tb->addr_cursor > 0) {
+                    tb->addr_cursor--;
+                    tb->addr_input[tb->addr_cursor] = '\0';
+                }
+                return;
+            } else if (key >= 32 && key <= 126 && tb->addr_cursor < (int)sizeof(tb->addr_input) - 2) {
+                tb->addr_input[tb->addr_cursor++] = (char)key;
+                tb->addr_input[tb->addr_cursor] = '\0';
+                return;
+            }
+            return;
+        }
+
         if (key == BTRON_KEY_ESCAPE || key == 27) {
             int cmd = 0;
             if (app_menu_handle_key(&tb->menu_bar, key, (uint16_t)(uintptr_t)evt->data, &cmd)) {

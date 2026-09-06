@@ -130,6 +130,153 @@ defmodule BtronTAD.Compiler do
     end)
   end
 
+  # ── Table Aligner for Text & TAD (Bounded Cell-Wrapped Box Tables) ────────
+  def wrap_cell_text(text, max_len) when is_binary(text) and max_len > 0 do
+    words = String.split(text, ~r/\s+/) |> Enum.reject(&(&1 == ""))
+    if words == [] do
+      [""]
+    else
+      split_words =
+        Enum.flat_map(words, fn w ->
+          if String.length(w) <= max_len do
+            [w]
+          else
+            w
+            |> to_charlist()
+            |> Enum.chunk_every(max_len)
+            |> Enum.map(&to_string/1)
+          end
+        end)
+
+      {lines, last_line} =
+        Enum.reduce(split_words, {[], ""}, fn word, {acc_lines, cur_line} ->
+          cond do
+            cur_line == "" ->
+              {acc_lines, word}
+            String.length(cur_line <> " " <> word) <= max_len ->
+              {acc_lines, cur_line <> " " <> word}
+            true ->
+              {acc_lines ++ [cur_line], word}
+          end
+        end)
+      if last_line != "", do: lines ++ [last_line], else: lines
+    end
+  end
+  def wrap_cell_text(_, _), do: [""]
+
+  def parse_markdown_table(text) when is_binary(text) do
+    lines = String.split(text, "\n") |> Enum.map(&String.trim/1) |> Enum.reject(&(&1 == ""))
+    case lines do
+      [header, sep | data_rows] when length(data_rows) >= 0 ->
+        if String.starts_with?(header, "|") and String.starts_with?(sep, "|") and String.contains?(sep, "-") do
+          parse_row = fn line ->
+            line
+            |> String.trim_leading("|")
+            |> String.trim_trailing("|")
+            |> String.split("|")
+            |> Enum.map(&String.trim/1)
+          end
+          [parse_row.(header) | Enum.map(data_rows, parse_row)]
+        else
+          nil
+        end
+      _ -> nil
+    end
+  end
+  def parse_markdown_table(_), do: nil
+
+  def format_table_ascii(rows, max_table_width \\ 76)
+  def format_table_ascii(rows, max_table_width) when is_list(rows) and length(rows) > 0 do
+    col_count = Enum.max(Enum.map(rows, &length/1))
+    if col_count == 0 do
+      ""
+    else
+      padded_rows = Enum.map(rows, fn r -> r ++ List.duplicate("", col_count - length(r)) end)
+
+      natural_widths =
+        for c <- 0..(col_count - 1) do
+          widths = Enum.map(padded_rows, fn r -> String.length(Enum.at(r, c, "")) end)
+          Enum.max([Enum.max(widths), 4])
+        end
+
+      max_word_lengths =
+        for c <- 0..(col_count - 1) do
+          words =
+            Enum.flat_map(padded_rows, fn r ->
+              String.split(Enum.at(r, c, ""), ~r/\s+/) |> Enum.reject(&(&1 == ""))
+            end)
+          if words == [], do: 4, else: Enum.max(Enum.map(words, &String.length/1))
+        end
+
+      border_overhead = 3 * col_count + 1
+      avail_content = max(max_table_width - border_overhead, col_count * 6)
+
+      total_natural = Enum.sum(natural_widths)
+      col_widths =
+        if total_natural <= avail_content do
+          natural_widths
+        else
+          if col_count > 1 do
+            first_cols =
+              Enum.slice(natural_widths, 0, col_count - 1)
+              |> Enum.zip(Enum.slice(max_word_lengths, 0, col_count - 1))
+              |> Enum.map(fn {nat, mw} -> min(max(nat, mw), 20) end)
+
+            first_sum = Enum.sum(first_cols)
+            last_max_w = Enum.at(max_word_lengths, col_count - 1, 6)
+            last_w = max(avail_content - first_sum, last_max_w)
+            first_cols ++ [last_w]
+          else
+            [avail_content]
+          end
+        end
+
+      top_border =
+        "┌─" <> Enum.map_join(col_widths, "─┬─", fn w -> String.duplicate("─", w) end) <> "─┐"
+      mid_border =
+        "├─" <> Enum.map_join(col_widths, "─┼─", fn w -> String.duplicate("─", w) end) <> "─┤"
+      bot_border =
+        "└─" <> Enum.map_join(col_widths, "─┴─", fn w -> String.duplicate("─", w) end) <> "─┘"
+
+      format_multiline_row = fn r ->
+        wrapped_cells =
+          Enum.zip(r, col_widths)
+          |> Enum.map(fn {val, w} -> wrap_cell_text(val, w) end)
+
+        row_h = Enum.max(Enum.map(wrapped_cells, &length/1))
+
+        normalized_cells =
+          Enum.map(wrapped_cells, fn lines ->
+            lines ++ List.duplicate("", row_h - length(lines))
+          end)
+
+        for line_i <- 0..(row_h - 1) do
+          row_line_items =
+            Enum.zip(normalized_cells, col_widths)
+            |> Enum.map(fn {lines, w} ->
+              String.pad_trailing(Enum.at(lines, line_i, ""), w)
+            end)
+          "│ " <> Enum.join(row_line_items, " │ ") <> " │"
+        end
+      end
+
+      case padded_rows do
+        [header | data_rows] ->
+          header_lines = format_multiline_row.(header)
+          body_lines =
+            data_rows
+            |> Enum.map(format_multiline_row)
+            |> Enum.intersperse([mid_border])
+            |> List.flatten()
+
+          all_lines = [top_border] ++ header_lines ++ [mid_border] ++ body_lines ++ [bot_border]
+          Enum.join(all_lines, "\n")
+        [] -> ""
+      end
+    end
+  end
+  def format_table_ascii(_, _), do: ""
+
   # ── Binary TAD Segment Builders ─────────────────────────────────────────────
 
   # Segment Packet: << Tag::16, Length::32, Payload::binary >>
@@ -281,16 +428,15 @@ defmodule BtronTAD.Compiler do
           |> Enum.map(fn {item, idx} -> seg_text("  #{idx}. " <> item) end)
 
         {:table, rows} ->
-          table_text =
-            Enum.map_join(rows, "\n", fn row ->
-              "| " <> Enum.join(row, " | ") <> " |"
-            end)
+          tbl_str = format_table_ascii(rows)
           [
             seg_font(2, 1),
             seg_char(10, 400, 0x000000),
-            seg_text(table_text),
+            seg_ruler(16, 10),
+            seg_text(tbl_str <> "\n"),
             seg_font(0, 1),
-            seg_char(12, 400, 0x000000)
+            seg_char(12, 400, 0x000000),
+            seg_ruler(22, 0)
           ]
 
         {:link, href, label} ->
@@ -345,7 +491,7 @@ defmodule BtronTAD.Compiler do
           Enum.with_index(items, 1)
           |> Enum.map_join("\n", fn {item, idx} -> "  #{idx}. #{item}" end)
         {:table, rows} ->
-          Enum.map_join(rows, "\n", fn row -> "| " <> Enum.join(row, " | ") <> " |" end)
+          format_table_ascii(rows)
         {:link, href, label} ->
           robj_id = :erlang.phash2(href, 100_000) + 1000
           "[仮身] ##{robj_id} : #{label} -> [#{href}]"

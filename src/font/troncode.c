@@ -262,7 +262,24 @@ TC utf8_to_tc(const char *utf8_str, int *bytes_consumed) {
         }
         /* General Punctuation U+2000 - U+206F (e.g. — U+2014, ― U+2015, … U+2026) -> Plane 1 (0x26xx) */
         if (cp >= 0x2000 && cp <= 0x206F) {
+            if (cp == 0x2022) return (TC)0x23FA; /* Bullet • */
             return (TC)(0x2600 | (cp - 0x2000));
+        }
+        /* Unicode Box Drawing U+2500 - U+257F -> Plane 1 (0x2300 - 0x237F) */
+        if (cp >= 0x2500 && cp <= 0x257F) {
+            return (TC)(0x2300 | (cp - 0x2500));
+        }
+        /* Block Elements U+2580 - U+259F -> Plane 1 (0x2380 - 0x239F) */
+        if (cp >= 0x2580 && cp <= 0x259F) {
+            return (TC)(0x2380 | (cp - 0x2580));
+        }
+        /* Geometric Shapes U+25A0 - U+25FF -> Plane 1 (0x23A0 - 0x23DF) */
+        if (cp >= 0x25A0 && cp <= 0x25FF) {
+            return (TC)(0x23A0 | (cp - 0x25A0));
+        }
+        /* Arrows U+2190 - U+2199 -> Plane 1 (0x23E0 - 0x23E9) */
+        if (cp >= 0x2190 && cp <= 0x2199) {
+            return (TC)(0x23E0 | (cp - 0x2190));
         }
         /* Ukrainian / General Symbols (e.g. № U+2116) */
         if (cp == 0x2116) return (TC)0x2116;
@@ -317,6 +334,22 @@ int tc_to_utf8(TC code, char *utf8_buf, int max_len) {
         utf8_buf[1] = (char)(0x80 | (cp & 0x3F));
         utf8_buf[2] = '\0';
         return 2;
+    } else if (high == 0x23) {
+        /* Box Drawing, Block Elements, Geometric Shapes, Arrows & Bullets */
+        UW cp = 0;
+        if (low < 0x80) cp = 0x2500 + low;
+        else if (low < 0xA0) cp = 0x2580 + (low - 0x80);
+        else if (low < 0xE0) cp = 0x25A0 + (low - 0xA0);
+        else if (low < 0xFA) cp = 0x2190 + (low - 0xE0);
+        else if (low == 0xFA) cp = 0x2022;
+
+        if (cp > 0) {
+            utf8_buf[0] = (char)(0xE0 | ((cp >> 12) & 0x0F));
+            utf8_buf[1] = (char)(0x80 | ((cp >> 6) & 0x3F));
+            utf8_buf[2] = (char)(0x80 | (cp & 0x3F));
+            utf8_buf[3] = '\0';
+            return 3;
+        }
     } else if (code == 0x2116) {
         /* № Symbol (U+2116) */
         utf8_buf[0] = (char)0xE2;
@@ -455,6 +488,224 @@ static const UB glyph_en_dash[32] = {
     0x00,0x00, 0x00,0x00, 0x00,0x00, 0x00,0x00, 0x00,0x00, 0x00,0x00, 0x00,0x00, 0x07,0xC0,
     0x00,0x00, 0x00,0x00, 0x00,0x00, 0x00,0x00, 0x00,0x00, 0x00,0x00, 0x00,0x00, 0x00,0x00
 };
+
+/* 8x16 Seamless Box-Drawing, Geometric Shapes, Arrows & Bullets Synthesizer */
+static UB s_box_buf[16];
+
+static const UB* get_box_drawing_bitmap(TC code) {
+    memset(s_box_buf, 0, sizeof(s_box_buf));
+    UB low = (UB)(code & 0xFF);
+
+    if (low < 0x80) {
+        /* U+2500 - U+257F Box Drawing */
+        int up = 0, down = 0, left = 0, right = 0;
+        int is_double = 0;
+
+        switch (low) {
+            case 0x00: left = 1; right = 1; break; /* ─ */
+            case 0x01: left = 2; right = 2; break; /* ━ */
+            case 0x02: up = 1; down = 1; break;   /* │ */
+            case 0x03: up = 2; down = 2; break;   /* ┃ */
+            case 0x0C: down = 1; right = 1; break; /* ┌ */
+            case 0x0D: down = 1; right = 2; break;
+            case 0x0E: down = 2; right = 1; break;
+            case 0x0F: down = 2; right = 2; break; /* ┏ */
+            case 0x10: down = 1; left = 1; break;  /* ┐ */
+            case 0x11: down = 1; left = 2; break;
+            case 0x12: down = 2; left = 1; break;
+            case 0x13: down = 2; left = 2; break;  /* ┓ */
+            case 0x14: up = 1; right = 1; break;   /* └ */
+            case 0x15: up = 1; right = 2; break;
+            case 0x16: up = 2; right = 1; break;
+            case 0x17: up = 2; right = 2; break;   /* ┗ */
+            case 0x18: up = 1; left = 1; break;    /* ┘ */
+            case 0x19: up = 1; left = 2; break;
+            case 0x1A: up = 2; left = 1; break;
+            case 0x1B: up = 2; left = 2; break;    /* ┛ */
+            /* T-junctions: ├ / ┣ */
+            case 0x1C: case 0x1D: case 0x1E: case 0x1F:
+            case 0x20: case 0x21: case 0x22: case 0x23:
+                up = (low >= 0x22) ? 2 : 1;
+                down = (low >= 0x22) ? 2 : 1;
+                right = (low % 2 != 0 || low == 0x23) ? 2 : 1;
+                break;
+            /* T-junctions: ┤ / ┫ */
+            case 0x24: case 0x25: case 0x26: case 0x27:
+            case 0x28: case 0x29: case 0x2A: case 0x2B:
+                up = (low >= 0x2A) ? 2 : 1;
+                down = (low >= 0x2A) ? 2 : 1;
+                left = (low % 2 != 0 || low == 0x2B) ? 2 : 1;
+                break;
+            /* T-junctions: ┬ / ┳ */
+            case 0x2C: case 0x2D: case 0x2E: case 0x2F:
+            case 0x30: case 0x31: case 0x32: case 0x33:
+                left = (low >= 0x30) ? 2 : 1;
+                right = (low >= 0x30) ? 2 : 1;
+                down = (low % 2 != 0 || low == 0x33) ? 2 : 1;
+                break;
+            /* T-junctions: ┴ / ┻ */
+            case 0x34: case 0x35: case 0x36: case 0x37:
+            case 0x38: case 0x39: case 0x3A: case 0x3B:
+                left = (low >= 0x38) ? 2 : 1;
+                right = (low >= 0x38) ? 2 : 1;
+                up = (low % 2 != 0 || low == 0x3B) ? 2 : 1;
+                break;
+            /* Crosses: ┼ / ╋ */
+            case 0x3C: case 0x3D: case 0x3E: case 0x3F:
+            case 0x40: case 0x41: case 0x42: case 0x43:
+            case 0x44: case 0x45: case 0x46: case 0x47:
+            case 0x48: case 0x49: case 0x4A: case 0x4B:
+                up = (low >= 0x48) ? 2 : 1;
+                down = (low >= 0x48) ? 2 : 1;
+                left = (low >= 0x44) ? 2 : 1;
+                right = (low >= 0x44) ? 2 : 1;
+                break;
+            /* Double lines 0x50..0x6C */
+            case 0x50: left = 1; right = 1; is_double = 1; break; /* ═ */
+            case 0x51: up = 1; down = 1; is_double = 1; break;   /* ║ */
+            case 0x54: down = 1; right = 1; is_double = 1; break; /* ╔ */
+            case 0x57: down = 1; left = 1; is_double = 1; break;  /* ╗ */
+            case 0x5A: up = 1; right = 1; is_double = 1; break;   /* ╚ */
+            case 0x5D: up = 1; left = 1; is_double = 1; break;    /* ╝ */
+            case 0x60: up = 1; down = 1; right = 1; is_double = 1; break; /* ╠ */
+            case 0x63: up = 1; down = 1; left = 1; is_double = 1; break;  /* ╣ */
+            case 0x66: left = 1; right = 1; down = 1; is_double = 1; break; /* ╦ */
+            case 0x69: left = 1; right = 1; up = 1; is_double = 1; break;   /* ╩ */
+            case 0x6C: up = 1; down = 1; left = 1; right = 1; is_double = 1; break; /* ╬ */
+            default:
+                if (low >= 0x52 && low <= 0x6F) {
+                    up = 1; down = 1; left = 1; right = 1;
+                } else {
+                    left = 1; right = 1;
+                }
+                break;
+        }
+
+        if (is_double) {
+            if (left)  { s_box_buf[6] |= 0xF0; s_box_buf[9] |= 0xF0; }
+            if (right) { s_box_buf[6] |= 0x0F; s_box_buf[9] |= 0x0F; }
+            if (up) {
+                for (int r = 0; r <= 7; r++) s_box_buf[r] |= 0x24;
+            }
+            if (down) {
+                for (int r = 8; r < 16; r++) s_box_buf[r] |= 0x24;
+            }
+        } else {
+            UB h_mask = (left && right) ? 0xFF : (left ? 0xF8 : (right ? 0x1F : 0));
+            if (h_mask) {
+                s_box_buf[7] |= h_mask;
+                s_box_buf[8] |= h_mask;
+                if (left == 2 || right == 2) {
+                    s_box_buf[6] |= h_mask;
+                    s_box_buf[9] |= h_mask;
+                }
+            }
+            UB v_mask = (up == 2 || down == 2) ? 0x3C : 0x18;
+            if (up) {
+                for (int r = 0; r <= 8; r++) s_box_buf[r] |= v_mask;
+            }
+            if (down) {
+                for (int r = 7; r < 16; r++) s_box_buf[r] |= v_mask;
+            }
+        }
+        return s_box_buf;
+    }
+
+    /* Block Elements 0x80..0x9F (U+2580 - U+259F) */
+    if (low >= 0x80 && low < 0xA0) {
+        UB b = low - 0x80;
+        if (b == 0x00) {
+            for (int r = 0; r < 8; r++) s_box_buf[r] = 0xFF; /* ▀ */
+        } else if (b == 0x04) {
+            for (int r = 8; r < 16; r++) s_box_buf[r] = 0xFF; /* ▄ */
+        } else if (b == 0x08) {
+            for (int r = 0; r < 16; r++) s_box_buf[r] = 0xFF; /* █ */
+        } else if (b == 0x0C) {
+            for (int r = 0; r < 16; r++) s_box_buf[r] = 0xF0; /* ▌ */
+        } else if (b == 0x10) {
+            for (int r = 0; r < 16; r++) s_box_buf[r] = 0x0F; /* ▐ */
+        } else {
+            for (int r = 0; r < 16; r++) s_box_buf[r] = (r % 2 == 0) ? 0xAA : 0x55;
+        }
+        return s_box_buf;
+    }
+
+    /* Geometric Shapes 0xA0..0xDF (U+25A0 - U+25DF) */
+    if (low >= 0xA0 && low < 0xE0) {
+        UB s = low - 0xA0;
+        switch (s) {
+            case 0x00: /* ■ Black Square */
+                for (int r = 4; r <= 11; r++) s_box_buf[r] = 0x7E;
+                break;
+            case 0x01: /* □ White Square */
+                s_box_buf[4] = 0x7E; s_box_buf[11] = 0x7E;
+                for (int r = 5; r <= 10; r++) s_box_buf[r] = 0x42;
+                break;
+            case 0x12: /* ▲ Black Up-Pointing Triangle */
+                s_box_buf[4] = 0x18; s_box_buf[5] = 0x18;
+                s_box_buf[6] = 0x3C; s_box_buf[7] = 0x3C;
+                s_box_buf[8] = 0x7E; s_box_buf[9] = 0x7E;
+                s_box_buf[10] = 0xFF; s_box_buf[11] = 0xFF;
+                break;
+            case 0x16: case 0x1A: /* ► / ▶ Black Right-Pointing Pointer */
+                s_box_buf[4] = 0x10; s_box_buf[5] = 0x30;
+                s_box_buf[6] = 0x70; s_box_buf[7] = 0xF0;
+                s_box_buf[8] = 0xF0; s_box_buf[9] = 0x70;
+                s_box_buf[10] = 0x30; s_box_buf[11] = 0x10;
+                break;
+            case 0x1C: /* ▼ Black Down-Pointing Triangle */
+                s_box_buf[4] = 0xFF; s_box_buf[5] = 0xFF;
+                s_box_buf[6] = 0x7E; s_box_buf[7] = 0x7E;
+                s_box_buf[8] = 0x3C; s_box_buf[9] = 0x3C;
+                s_box_buf[10] = 0x18; s_box_buf[11] = 0x18;
+                break;
+            case 0x24: /* ◄ / ◀ Black Left-Pointing Pointer */
+                s_box_buf[4] = 0x08; s_box_buf[5] = 0x0C;
+                s_box_buf[6] = 0x0E; s_box_buf[7] = 0x0F;
+                s_box_buf[8] = 0x0F; s_box_buf[9] = 0x0E;
+                s_box_buf[10] = 0x0C; s_box_buf[11] = 0x08;
+                break;
+            default:
+                for (int r = 4; r <= 11; r++) s_box_buf[r] = 0x3C;
+                break;
+        }
+        return s_box_buf;
+    }
+
+    /* Arrows 0xE0..0xFA (U+2190..U+2199) */
+    if (low >= 0xE0 && low < 0xFA) {
+        UB arr = low - 0xE0;
+        if (arr == 0x00) { /* ← */
+            s_box_buf[7] = 0xFF; s_box_buf[8] = 0xFF;
+            s_box_buf[5] |= 0x30; s_box_buf[6] |= 0x60;
+            s_box_buf[9] |= 0x60; s_box_buf[10] |= 0x30;
+        } else if (arr == 0x01) { /* ↑ */
+            for (int r = 3; r < 14; r++) s_box_buf[r] |= 0x18;
+            s_box_buf[3] = 0x18; s_box_buf[4] = 0x3C; s_box_buf[5] = 0x7E; s_box_buf[6] = 0xFF;
+        } else if (arr == 0x02) { /* → */
+            s_box_buf[7] = 0xFF; s_box_buf[8] = 0xFF;
+            s_box_buf[5] |= 0x0C; s_box_buf[6] |= 0x06;
+            s_box_buf[9] |= 0x06; s_box_buf[10] |= 0x0C;
+        } else if (arr == 0x03) { /* ↓ */
+            for (int r = 2; r < 13; r++) s_box_buf[r] |= 0x18;
+            s_box_buf[9] = 0xFF; s_box_buf[10] = 0x7E; s_box_buf[11] = 0x3C; s_box_buf[12] = 0x18;
+        } else {
+            s_box_buf[7] = 0xFF; s_box_buf[8] = 0xFF;
+        }
+        return s_box_buf;
+    }
+
+    /* Bullet 0xFA (U+2022 •) */
+    if (low == 0xFA) {
+        s_box_buf[6] = 0x18; s_box_buf[7] = 0x3C;
+        s_box_buf[8] = 0x3C; s_box_buf[9] = 0x18;
+        return s_box_buf;
+    }
+
+    for (int r = 4; r <= 11; r++) s_box_buf[r] = 0x18;
+    return s_box_buf;
+}
+
 
 /* Procedural Kanji / Japanese 16x16 Glyph Synthesizer */
 static UB g_glyph_buffer[32];
@@ -618,6 +869,13 @@ const UB* get_glyph_bitmap(TC code, H *out_width, H *out_height) {
         }
     }
 
+    /* Box Drawing, Block Elements, Geometric Shapes, Arrows & Bullets (0x2300..0x23FF) */
+    if ((code >> 8) == 0x23) {
+        if (out_width) *out_width = 8;
+        if (out_height) *out_height = 16;
+        return get_box_drawing_bitmap(code);
+    }
+
     if (out_width) *out_width = 16;
     if (out_height) *out_height = 16;
 
@@ -672,8 +930,8 @@ H tc_get_char_advance(TC code, TC prev_code) {
             /* Collapse redundant ASCII space following Tsheg */
             return 0;
         }
-        return 6;
-    } else if (code < 128 || (code >> 8) == 0x27) {
+        return 8; /* Exact 8px monospace advance matching ASCII 8x16 metrics */
+    } else if (code < 128 || (code >> 8) == 0x27 || (code >> 8) == 0x23) {
         return 8;
     } else {
         return 16;
@@ -756,8 +1014,6 @@ static ER render_tc_string(GDEV *dev, H x, H y, const char *text, COLOR fg_col, 
                 /* Base consonants: compact 8px advance */
                 advance = 8;
             }
-        } else if (code == ' ') {
-            advance = 6;
         }
 
         for (int row = 0; row < gh; row++) {

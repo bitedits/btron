@@ -1,0 +1,232 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>B-Book – Developer's Systems & API Reference | B-System</title>
+  <meta name="description" content="The definitive English developer manual and C99 API specification for the B-System operating system, inspired by the BeOS BeBook.">
+  <link rel="stylesheet" href="./b-book.css">
+</head>
+<body>
+
+  <!-- Navigation Sidebar -->
+  <nav class="book-sidebar">
+    <div class="sidebar-brand">
+      <div class="brand-title">B-Book <span class="badge">Rev 3.20</span></div>
+      <div class="brand-sub">B-System Developer Reference</div>
+    </div>
+    <div class="sidebar-nav">
+      <div class="nav-heading">Overview</div>
+      <a href="./index.html" class="nav-link active">Master Index</a>
+      
+      <div class="nav-heading">Subsystems</div>
+      <a href="./cores/index.html" class="nav-link">Cores (Kernel & SMP)</a>
+      <a href="./graphics/index.html" class="nav-link">Graphics (DP & 2D)</a>
+      <a href="./tip/index.html" class="nav-link">Tip (Input & IME)</a>
+      <a href="./vobject/index.html" class="nav-link">VObject (Hyper-Data)</a>
+      <a href="./window/index.html" class="nav-link">Window (WM & Menus)</a>
+
+      <div class="nav-heading">Cross Reference</div>
+      <a href="../b-system.html" class="nav-link">B-System Portal</a>
+      <a href="../mobile.html" class="nav-link">Mobile FOMA</a>
+    </div>
+  </nav>
+
+  <!-- Main Content Canvas -->
+  <main class="book-content">
+    <header class="book-header">
+      <div class="breadcrumb">
+        <a href="./index.html">B-Book</a> / <span>Master Index</span>
+      </div>
+      <h1 class="page-title">B-Book: Developer's Systems & API Reference</h1>
+      <p class="page-lead">
+        The official technical specification, C99 API manual, and architectural guide for B-System — inspired by the classic BeOS/Haiku BeBook.
+      </p>
+    </header>
+
+    <div class="callout callout-info">
+      <div class="callout-title">Architectural Scope</div>
+      B-Book documents the core foundational libraries and system calls of B-System (BTRON 3.20 specification). All APIs follow strict C99 conformance, zero post-boot heap allocations (NASA JPL Rule 3), and clean multi-target abstractions across POSIX, Sakamura T-Kernel 2.0, NTT DoCoMo FOMA mobile, x86_64 UEFI SMP, and NEC PC-98.
+    </div>
+
+    <h2>1. The Five Core Subsystems</h2>
+    <p>
+      The B-System developer platform is partitioned into five distinct, decoupled subsystems. Each subsystem exposes public C99 headers in <code>include/btron/</code> and is documented in its dedicated chapter:
+    </p>
+
+    <table class="api-table">
+      <thead>
+        <tr>
+          <th>Subsystem</th>
+          <th>Primary Headers</th>
+          <th>Scope & Operational Responsibilities</th>
+          <th>Reference Manual</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>Cores</strong></td>
+          <td><code>btron/core.h</code><br><code>btron/types.h</code><br><code>btron/smp.h</code></td>
+          <td>Real-time microkernel lifecycle, task dispatching, semaphore/mailbox synchronization, VirtIO hardware abstraction, and SMP core scheduling.</td>
+          <td><a href="./cores/index.html"><strong>Cores Manual &rarr;</strong></a></td>
+        </tr>
+        <tr>
+          <td><strong>Graphics</strong></td>
+          <td><code>btron/dp.h</code><br><code>btron/icons.h</code></td>
+          <td>Display Primitives (GDEV), 2D geometry rasterization, line drawing, clipping bounds, raster operations (ROP), and pointer capture.</td>
+          <td><a href="./graphics/index.html"><strong>Graphics Manual &rarr;</strong></a></td>
+        </tr>
+        <tr>
+          <td><strong>Tip</strong></td>
+          <td><code>btron/tip.h</code><br><code>btron/troncode.h</code></td>
+          <td>Text Input Primitives, Input Front-End (IFE), Kana-Kanji conversion (Mozc KKC), Tibetan Wylie phonetics, and pre-edit composition buffers.</td>
+          <td><a href="./tip/index.html"><strong>Tip Manual &rarr;</strong></a></td>
+        </tr>
+        <tr>
+          <td><strong>VObject</strong></td>
+          <td><code>btron/vobj.h</code><br><code>btron/tad_browser.h</code></td>
+          <td>Real Object (ROBJ) and Virtual Object (VOBJ_LINK / Fusen) hyper-data engine, TAD binary segment encoding, and storage persistence.</td>
+          <td><a href="./vobject/index.html"><strong>VObject Manual &rarr;</strong></a></td>
+        </tr>
+        <tr>
+          <td><strong>Window</strong></td>
+          <td><code>btron/wnd.h</code><br><code>btron/app_menu.h</code><br><code>btron/event.h</code></td>
+          <td>Sakamura Window Manager (WND), coordinate math, event dispatch loop (EVT), universal in-window menu bar engine, and modal dialogs.</td>
+          <td><a href="./window/index.html"><strong>Window Manual &rarr;</strong></a></td>
+        </tr>
+      </tbody>
+    </table>
+
+    <h2>2. TRON Standard Fundamental Data Types</h2>
+    <p>
+      B-System adopts the canonical TRON architecture fundamental type definitions declared in <code>include/btron/types.h</code>. All kernel interfaces and system calls rely on these fixed-width primitives:
+    </p>
+
+    <table class="api-table">
+      <thead>
+        <tr>
+          <th>TRON Type</th>
+          <th>Underlying C99 Type</th>
+          <th>Width</th>
+          <th>Semantic Description</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><code>B</code></td>
+          <td><code>int8_t</code></td>
+          <td>8 bits</td>
+          <td>Signed 8-bit byte integer.</td>
+        </tr>
+        <tr>
+          <td><code>H</code></td>
+          <td><code>int16_t</code></td>
+          <td>16 bits</td>
+          <td>Signed 16-bit halfword integer; fundamental coordinate scalar.</td>
+        </tr>
+        <tr>
+          <td><code>W</code></td>
+          <td><code>int32_t</code></td>
+          <td>32 bits</td>
+          <td>Signed 32-bit word integer.</td>
+        </tr>
+        <tr>
+          <td><code>D</code></td>
+          <td><code>int64_t</code></td>
+          <td>64 bits</td>
+          <td>Signed 64-bit doubleword integer; 64-bit timestamps.</td>
+        </tr>
+        <tr>
+          <td><code>UB</code></td>
+          <td><code>uint8_t</code></td>
+          <td>8 bits</td>
+          <td>Unsigned 8-bit byte; byte stream payloads.</td>
+        </tr>
+        <tr>
+          <td><code>UH</code></td>
+          <td><code>uint16_t</code></td>
+          <td>16 bits</td>
+          <td>Unsigned 16-bit halfword; character indices and flags.</td>
+        </tr>
+        <tr>
+          <td><code>UW</code></td>
+          <td><code>uint32_t</code></td>
+          <td>32 bits</td>
+          <td>Unsigned 32-bit word; bitmask attributes and memory sizes.</td>
+        </tr>
+        <tr>
+          <td><code>UD</code></td>
+          <td><code>uint64_t</code></td>
+          <td>64 bits</td>
+          <td>Unsigned 64-bit doubleword; 64-bit hardware registers.</td>
+        </tr>
+        <tr>
+          <td><code>VW</code></td>
+          <td><code>void*</code></td>
+          <td>32/64 bits</td>
+          <td>Variable word; generic opaque pointer or user context.</td>
+        </tr>
+        <tr>
+          <td><code>ID</code></td>
+          <td><code>int32_t</code></td>
+          <td>32 bits</td>
+          <td>Kernel object identifier (Task, Window, Real Object, Semaphore).</td>
+        </tr>
+        <tr>
+          <td><code>ER</code></td>
+          <td><code>int32_t</code></td>
+          <td>32 bits</td>
+          <td>TRON system call error return code (<code>ER_OK = 0</code>; negative indicates error).</td>
+        </tr>
+        <tr>
+          <td><code>COLOR</code></td>
+          <td><code>uint32_t</code></td>
+          <td>32 bits</td>
+          <td>32-bit RGBA pixel color (<code>0xAARRGGBB</code> format).</td>
+        </tr>
+        <tr>
+          <td><code>TC</code></td>
+          <td><code>uint16_t</code></td>
+          <td>16 bits</td>
+          <td>16-bit TRON character code (16 planes supporting multilingual scripts).</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <h2>3. Geometric Primitives</h2>
+    <p>
+      2D layout and clipping across all subsystems utilize two fundamental structures:
+    </p>
+
+    <h3>Point Primitive (<code>PNT</code>)</h3>
+    <pre><code>typedef struct {
+    H x;  /* Horizontal coordinate in pixels */
+    H y;  /* Vertical coordinate in pixels */
+} PNT;</code></pre>
+
+    <h3>Rectangle Primitive (<code>RECT</code>)</h3>
+    <pre><code>typedef struct {
+    H left;    /* Left boundary coordinate (inclusive) */
+    H top;     /* Top boundary coordinate (inclusive) */
+    H right;   /* Right boundary coordinate (exclusive) */
+    H bottom;  /* Bottom boundary coordinate (exclusive) */
+} RECT;</code></pre>
+
+    <div class="callout callout-jpl">
+      <div class="callout-title">NASA JPL Rule 3 Safety Invariants</div>
+      To ensure mission-critical stability and bounded real-time predictability:
+      <ul>
+        <li><strong>Zero Post-Boot Dynamic Allocations</strong>: Applications and window structures must allocate buffers statically or during boot initialization. No dynamic <code>malloc()</code> during active rendering loops.</li>
+        <li><strong>Strict Pointer Validation</strong>: All API functions validate input pointers and return <code>ER_PAR</code> on <code>NULL</code> inputs.</li>
+        <li><strong>Bounded Loops</strong>: All search and traversal routines are bounded by compile-time capacity constants (e.g. <code>APP_MENU_MAX_HEADERS</code>, <code>TIP_MAX_CLAUSES</code>).</li>
+      </ul>
+    </div>
+
+    <footer class="book-footer">
+      <div>B-Book Revision 3.20 &bull; B-System Engineering Documentation</div>
+      <div><a href="./cores/index.html">Next: Cores Subsystem &rarr;</a></div>
+    </footer>
+  </main>
+
+</body>
+</html>

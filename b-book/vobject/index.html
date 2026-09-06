@@ -1,0 +1,283 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>VObject – Real Objects & Virtual Body Fusen Links | B-Book</title>
+  <meta name="description" content="Formal developer documentation for the B-System VObject subsystem: Real Object (ROBJ), Virtual Object (VOBJ_LINK / Fusen), hyper-data network model, and binary TAD serialization.">
+  <link rel="stylesheet" href="../b-book.css">
+</head>
+<body>
+
+  <!-- Navigation Sidebar -->
+  <nav class="book-sidebar">
+    <div class="sidebar-brand">
+      <div class="brand-title">B-Book <span class="badge">Rev 3.20</span></div>
+      <div class="brand-sub">VObject Subsystem Reference</div>
+    </div>
+    <div class="sidebar-nav">
+      <div class="nav-heading">Overview</div>
+      <a href="../index.html" class="nav-link">Master Index</a>
+      
+      <div class="nav-heading">Subsystems</div>
+      <a href="../cores/index.html" class="nav-link">Cores (Kernel & SMP)</a>
+      <a href="../graphics/index.html" class="nav-link">Graphics (DP & 2D)</a>
+      <a href="../tip/index.html" class="nav-link">Tip (Input & IME)</a>
+      <a href="./index.html" class="nav-link active">VObject (Hyper-Data)</a>
+      <div class="nav-sublinks">
+        <a href="#arch" class="nav-sublink">Hyper-Data Model</a>
+        <a href="#types" class="nav-sublink">Types & Structures</a>
+        <a href="#tad" class="nav-sublink">TAD Serialization</a>
+        <a href="#api" class="nav-sublink">API Function Reference</a>
+        <a href="#examples" class="nav-sublink">Code Examples</a>
+      </div>
+      <a href="../window/index.html" class="nav-link">Window (WM & Menus)</a>
+    </div>
+  </nav>
+
+  <!-- Main Content Canvas -->
+  <main class="book-content">
+    <header class="book-header">
+      <div class="breadcrumb">
+        <a href="../index.html">B-Book</a> / <span>VObject</span>
+      </div>
+      <h1 class="page-title">VObject: Real Objects & Virtual Body Fusen</h1>
+      <p class="page-lead">
+        Formal C99 specification for the BTRON 3.20 hyper-data storage model: Real Objects (実身 / ROBJ), Virtual Objects (仮身 / VOBJ_LINK / Fusen), the TRON Application Databus (TAD) binary architecture, and non-hierarchical network graphs.
+      </p>
+    </header>
+
+    <!-- Part 1: Hyper-Data Model -->
+    <h2 id="arch">1. The BTRON Hyper-Data Model</h2>
+    <p>
+      Unlike traditional Unix or Windows file systems structured around rigid directory tree hierarchies, B-System implements the <strong>Real Object / Virtual Object (実身・仮身)</strong> hyper-data model designed by Dr. Ken Sakamura:
+    </p>
+
+    <pre><code> [ Real Object: Document A ] (実身)
+            │
+            ├── [ Virtual Object Link: Chart 1 ] (仮身 Fusen) ──► [ Real Object: Chart 1 ]
+            │                                                             ▲
+            └── [ Virtual Object Link: Memo 2 ] (仮身 Fusen)              │
+                                                                          │ Shared Link
+ [ Real Object: Cabinet B ]                                               │
+            │                                                             │
+            └── [ Virtual Object Link: Chart 1 ] (仮身 Fusen) ────────────┘</code></pre>
+
+    <ul>
+      <li><strong>Real Object (実身 / ROBJ)</strong>: The actual persistent data payload stored on disk (text, vector graphics, audio, or application code). Each Real Object has a unique 32-bit identifier (<code>robj_id</code>).</li>
+      <li><strong>Virtual Object (仮身 / VOBJ_LINK)</strong>: A lightweight interactive pointer (also known as a <em>Fusen</em>) embedded inside documents or cabinets. A single Real Object can be referenced simultaneously by multiple Virtual Objects without duplication.</li>
+      <li><strong>Zero File Paths in User Space</strong>: Users navigate the hypermedia network solely by clicking Virtual Body Fusen links, eliminating folder browsing, path strings, and file open/save modal dialogs.</li>
+    </ul>
+
+    <!-- Part 2: Data Structures & Types -->
+    <h2 id="types">2. Data Structures & Types</h2>
+
+    <h3>Virtual Object Type Enumeration (<code>VOBJ_TYPE</code>)</h3>
+    <p>Defined in <code>include/btron/vobj.h</code>:</p>
+    <pre><code>typedef enum {
+    VOBJ_TYPE_TEXT     = 1,  /* Pure text document or TAD rich text stream */
+    VOBJ_TYPE_DRAW     = 2,  /* 2D vector drawing and graphic canvas */
+    VOBJ_TYPE_EXEC     = 3,  /* Executable application binary or script */
+    VOBJ_TYPE_FOLDER   = 4,  /* Cabinet / container holding multiple Fusen links */
+    VOBJ_TYPE_TERMINAL = 5   /* Interactive shell terminal / communication session */
+} VOBJ_TYPE;</code></pre>
+
+    <h3>Real Object Descriptor (<code>ROBJ</code>)</h3>
+    <pre><code>typedef struct {
+    ID        robj_id;      /* Unique 32-bit Real Object Identifier */
+    VOBJ_TYPE type;         /* Data format payload category */
+    char      name[64];     /* Human-readable object label */
+    char      path[256];    /* Backing store physical file system path */
+    UW        size;         /* Content payload size in bytes */
+} ROBJ;</code></pre>
+
+    <table class="api-table">
+      <thead>
+        <tr>
+          <th>Field</th>
+          <th>Type</th>
+          <th>Description</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><code>robj_id</code></td>
+          <td><code>ID</code> (int32_t)</td>
+          <td>Globally unique non-zero object ID.</td>
+        </tr>
+        <tr>
+          <td><code>type</code></td>
+          <td><code>VOBJ_TYPE</code></td>
+          <td>Payload type determining default editor and viewer handler.</td>
+        </tr>
+        <tr>
+          <td><code>name</code></td>
+          <td><code>char[64]</code></td>
+          <td>UTF-8 display name shown on Fusen links.</td>
+        </tr>
+        <tr>
+          <td><code>path</code></td>
+          <td><code>char[256]</code></td>
+          <td>Physical path in backing storage directory.</td>
+        </tr>
+        <tr>
+          <td><code>size</code></td>
+          <td><code>UW</code> (uint32_t)</td>
+          <td>Current size of Real Object payload in bytes.</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <h3>Virtual Object Link (<code>VOBJ_LINK</code>)</h3>
+    <pre><code>typedef struct {
+    ID        vobj_id;      /* Virtual Body link instance ID */
+    ID        target_robj;  /* Target Real Object ID referenced by this Fusen */
+    char      label[64];    /* Custom link label (defaults to ROBJ name) */
+    PNT       pos;          /* Embedded (X, Y) pixel position inside host document */
+} VOBJ_LINK;</code></pre>
+
+    <!-- Part 3: TAD Serialization -->
+    <h2 id="tad">3. TRON Application Databus (TAD) Architecture</h2>
+    <p>
+      Real Object contents are encoded using the binary <strong>TRON Application Databus (TAD)</strong> format. A TAD file consists of a stream of 16-bit tagged segments:
+    </p>
+
+    <table class="api-table">
+      <thead>
+        <tr>
+          <th>Segment Tag</th>
+          <th>Hex ID</th>
+          <th>Payload Structure</th>
+          <th>Description</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><code>@ts_tpage</code></td>
+          <td><code>0xFFA0</code></td>
+          <td>Page geometry, margins, dimensions</td>
+          <td>Document layout bounding box.</td>
+        </tr>
+        <tr>
+          <td><code>@ts_truler</code></td>
+          <td><code>0xFFA1</code></td>
+          <td>Indents, line pitch, tab stops</td>
+          <td>Typographic paragraph layout rules.</td>
+        </tr>
+        <tr>
+          <td><code>@ts_tfont</code></td>
+          <td><code>0xFFA2</code></td>
+          <td>Font ID, TRON plane, typeface</td>
+          <td>Font binding for subsequent characters.</td>
+        </tr>
+        <tr>
+          <td><code>@ts_tchar</code></td>
+          <td><code>0xFFA3</code></td>
+          <td>Point size, font weight, color</td>
+          <td>Character level formatting overrides.</td>
+        </tr>
+        <tr>
+          <td><code>@ts_vobj</code></td>
+          <td><code>0xFFA8</code></td>
+          <td><code>target_robj</code>, label, icon type</td>
+          <td>Embedded Virtual Body Fusen hyperlink.</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <!-- Part 4: API Function Reference -->
+    <h2 id="api">4. VObject API Function Reference</h2>
+
+    <!-- init_vobj_sys -->
+    <div class="api-card">
+      <div class="api-header">
+        <span class="api-name">init_vobj_sys</span>
+        <span class="ret-badge">ER</span>
+      </div>
+      <p>Initializes the Real/Virtual Object hyper-data subsystem and binds the storage root directory.</p>
+      <div class="api-signature">ER init_vobj_sys(const char *storage_root);</div>
+    </div>
+
+    <!-- cre_robj -->
+    <div class="api-card">
+      <div class="api-header">
+        <span class="api-name">cre_robj</span>
+        <span class="type-badge">ROBJ*</span>
+      </div>
+      <p>Creates a new persistent Real Object with the given name and data type, returning its descriptor.</p>
+      <div class="api-signature">ROBJ* cre_robj(const char *name, VOBJ_TYPE type);</div>
+    </div>
+
+    <!-- opn_robj -->
+    <div class="api-card">
+      <div class="api-header">
+        <span class="api-name">opn_robj</span>
+        <span class="type-badge">ROBJ*</span>
+      </div>
+      <p>Opens an existing Real Object by its 32-bit identifier.</p>
+      <div class="api-signature">ROBJ* opn_robj(ID robj_id);</div>
+    </div>
+
+    <!-- cls_robj -->
+    <div class="api-card">
+      <div class="api-header">
+        <span class="api-name">cls_robj</span>
+        <span class="ret-badge">ER</span>
+      </div>
+      <p>Closes an active Real Object, synchronizing modified buffers to disk.</p>
+      <div class="api-signature">ER cls_robj(ROBJ *robj);</div>
+    </div>
+
+    <!-- cre_vobj_link -->
+    <div class="api-card">
+      <div class="api-header">
+        <span class="api-name">cre_vobj_link</span>
+        <span class="type-badge">VOBJ_LINK*</span>
+      </div>
+      <p>Instantiates a Virtual Body (Fusen) link pointing to the specified target Real Object at coordinates $(x, y)$.</p>
+      <div class="api-signature">VOBJ_LINK* cre_vobj_link(ID target_robj_id, const char *label, H x, H y);</div>
+    </div>
+
+    <!-- rd_vobj_data / wr_vobj_data -->
+    <div class="api-card">
+      <div class="api-header">
+        <span class="api-name">rd_vobj_data / wr_vobj_data</span>
+        <span class="ret-badge">ER</span>
+      </div>
+      <p>Reads or writes raw binary TAD payload bytes from/to an open Real Object.</p>
+      <div class="api-signature">ER rd_vobj_data(ROBJ *robj, void *buf, UW len, UW *read_bytes);<br>ER wr_vobj_data(ROBJ *robj, const void *buf, UW len);</div>
+    </div>
+
+    <!-- Part 5: Canonical Code Examples -->
+    <h2 id="examples">5. Canonical Implementation Examples</h2>
+    <p>
+      The following example demonstrates creating a Real Object and embedding a Virtual Object Fusen link:
+    </p>
+
+    <pre><code>#include &lt;btron/vobj.h&gt;
+
+void create_document_with_fusen(void) {
+    /* 1. Create target Real Object (e.g. quarterly report) */
+    ROBJ *report = cre_robj("2026年度 業績報告", VOBJ_TYPE_TEXT);
+    if (!report) return;
+
+    /* 2. Write initial TAD content */
+    const char msg[] = "B-System 3.20 Executive Briefing";
+    wr_vobj_data(report, msg, sizeof(msg));
+
+    /* 3. Create a Virtual Body Fusen link to embed into a Home Cabinet */
+    VOBJ_LINK *link = cre_vobj_link(report->robj_id, "業績報告書", 32, 64);
+    (void)link;
+
+    /* 4. Flush and close */
+    cls_robj(report);
+}</code></pre>
+
+    <footer class="book-footer">
+      <div><a href="../tip/index.html">&larr; Previous: Tip Subsystem</a></div>
+      <div><a href="../window/index.html">Next: Window Subsystem &rarr;</a></div>
+    </footer>
+  </main>
+
+</body>
+</html>

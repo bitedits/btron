@@ -1,0 +1,245 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Cores – Real-Time Kernel & Process Lifecycle | B-Book</title>
+  <meta name="description" content="Formal developer documentation for the B-System Cores subsystem: kernel lifecycle, task scheduling, memory management, and SMP concurrency.">
+  <link rel="stylesheet" href="../b-book.css">
+</head>
+<body>
+
+  <!-- Navigation Sidebar -->
+  <nav class="book-sidebar">
+    <div class="sidebar-brand">
+      <div class="brand-title">B-Book <span class="badge">Rev 3.20</span></div>
+      <div class="brand-sub">Cores Subsystem Reference</div>
+    </div>
+    <div class="sidebar-nav">
+      <div class="nav-heading">Overview</div>
+      <a href="../index.html" class="nav-link">Master Index</a>
+      
+      <div class="nav-heading">Subsystems</div>
+      <a href="./index.html" class="nav-link active">Cores (Kernel & SMP)</a>
+      <div class="nav-sublinks">
+        <a href="#arch" class="nav-sublink">Architecture & Lifecycle</a>
+        <a href="#types" class="nav-sublink">Types & Structures</a>
+        <a href="#api" class="nav-sublink">System Call Reference</a>
+        <a href="#examples" class="nav-sublink">Code Examples</a>
+      </div>
+      <a href="../graphics/index.html" class="nav-link">Graphics (DP & 2D)</a>
+      <a href="../tip/index.html" class="nav-link">Tip (Input & IME)</a>
+      <a href="../vobject/index.html" class="nav-link">VObject (Hyper-Data)</a>
+      <a href="../window/index.html" class="nav-link">Window (WM & Menus)</a>
+    </div>
+  </nav>
+
+  <!-- Main Content Canvas -->
+  <main class="book-content">
+    <header class="book-header">
+      <div class="breadcrumb">
+        <a href="../index.html">B-Book</a> / <span>Cores</span>
+      </div>
+      <h1 class="page-title">Cores: Real-Time Kernel & Process Lifecycle</h1>
+      <p class="page-lead">
+        Comprehensive C99 specification for kernel initialization, task dispatching, inter-process synchronization, VirtIO hardware abstraction, and symmetric multiprocessing (SMP).
+      </p>
+    </header>
+
+    <!-- Part 1: Architecture & Lifecycle -->
+    <h2 id="arch">1. Architecture & Conceptual Model</h2>
+    <p>
+      The <strong>Cores</strong> subsystem represents the foundational execution substrate of B-System. It implements a cleanroom Sakamura T-Kernel 2.0 / &mu;ITRON real-time executive coupled with a modular hardware abstraction layer.
+    </p>
+
+    <h3>1.1 Hardware Target Abstraction</h3>
+    <p>
+      B-System cores run unmodified application logic across five distinct deployment environments via compile-time target specialization (<code>BTRON_TARGET</code>):
+    </p>
+    <ul>
+      <li><strong>POSIX Hosted (Target 0)</strong>: Development and emulation environment on macOS / Linux using SDL2 and native pthreads.</li>
+      <li><strong>T-Kernel 2.0 Bare-Metal (Target 1)</strong>: Direct execution on ARM Cortex-A7 (Raspberry Pi 2B) and VirtIO virtual machines.</li>
+      <li><strong>NTT DoCoMo FOMA Mobile (Target 10)</strong>: Embedded keitai profile targeting TI OMAP2430 / ARM1136 with a 480&times;640 portrait viewport.</li>
+      <li><strong>x86_64 UEFI SMP (Target 4)</strong>: Modern PC architecture with 64-bit multi-core SMP scheduling and VESA graphics.</li>
+      <li><strong>NEC PC-98 (Target 5)</strong>: Retro-computing architecture support for vintage Japanese workstation platforms.</li>
+    </ul>
+
+    <h3>1.2 Kernel State Machine</h3>
+    <pre><code> [ Boot / Reset ]
+         │
+         ▼
+ ┌───────────────┐      btron_core_init()      ┌───────────────┐
+ │ UNINITIALIZED │ ───────────────────────────► │  INITIALIZING │
+ └───────────────┘                              └───────────────┘
+                                                       │  VirtIO / Drivers Init
+                                                       ▼
+ ┌───────────────┐      Kernel Shutdown        ┌───────────────┐
+ │    HALTED     │ ◄─────────────────────────── │  SYSTEM_RUN   │
+ └───────────────┘                              └───────────────┘</code></pre>
+
+    <!-- Part 2: Data Structures & Types -->
+    <h2 id="types">2. Data Structures & Types</h2>
+
+    <h3>Shell Output Function Callback (<code>ShellOutputFn</code>)</h3>
+    <pre><code>typedef void (*ShellOutputFn)(const char *line, COLOR col, void *user_data);</code></pre>
+    <table class="api-table">
+      <thead>
+        <tr>
+          <th>Parameter</th>
+          <th>Type</th>
+          <th>Description</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><code>line</code></td>
+          <td><code>const char*</code></td>
+          <td>Null-terminated ASCII/UTF-8 string buffer to render.</td>
+        </tr>
+        <tr>
+          <td><code>col</code></td>
+          <td><code>COLOR</code></td>
+          <td>32-bit ARGB color value for terminal text rendering.</td>
+        </tr>
+        <tr>
+          <td><code>user_data</code></td>
+          <td><code>void*</code></td>
+          <td>Opaque user pointer passed to the callback context.</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <h3>SMP Core Descriptor (<code>CPU_CORE_INFO</code>)</h3>
+    <pre><code>typedef struct {
+    UW  core_id;           /* Hardware APIC / CPU identifier */
+    UW  status;            /* 0=Offline, 1=Booting, 2=Active Run */
+    UW  task_count;        /* Number of tasks assigned to this core */
+    UW  ticks_total;       /* Execution accounting ticks */
+} CPU_CORE_INFO;</code></pre>
+
+    <!-- Part 3: API Reference -->
+    <h2 id="api">3. System Call & API Reference</h2>
+
+    <!-- btron_core_init -->
+    <div class="api-card">
+      <div class="api-header">
+        <span class="api-name">btron_core_init</span>
+        <span class="ret-badge">void</span>
+      </div>
+      <p>Initializes core kernel memory pools, interrupt controllers, and subsystem dispatch tables.</p>
+      <div class="api-signature">void btron_core_init(void);</div>
+      <div class="api-meta">
+        <span class="meta-label">Preconditions</span>
+        <span>Hardware VRAM and early UART console must be mapped.</span>
+        <span class="meta-label">Postconditions</span>
+        <span>Transitions kernel from <code>UNINITIALIZED</code> to <code>SYSTEM_RUN</code>.</span>
+      </div>
+    </div>
+
+    <!-- btron_core_banner -->
+    <div class="api-card">
+      <div class="api-header">
+        <span class="api-name">btron_core_banner</span>
+        <span class="ret-badge">void</span>
+      </div>
+      <p>Emits the canonical B-System version banner, copyright attribution, and CPU architectural profile to the system log.</p>
+      <div class="api-signature">void btron_core_banner(void);</div>
+    </div>
+
+    <!-- btron_core_mem_log -->
+    <div class="api-card">
+      <div class="api-header">
+        <span class="api-name">btron_core_mem_log</span>
+        <span class="ret-badge">void</span>
+      </div>
+      <p>Dumps the physical and virtual memory allocation maps, free page frame counts, and static pool boundaries to debugging consoles.</p>
+      <div class="api-signature">void btron_core_mem_log(void);</div>
+    </div>
+
+    <!-- btron_core_hfds_log -->
+    <div class="api-card">
+      <div class="api-header">
+        <span class="api-name">btron_core_hfds_log</span>
+        <span class="ret-badge">void</span>
+      </div>
+      <p>Verifies and logs the integrity of the Hierarchical File & Data System (HFDS) backing storage mount points.</p>
+      <div class="api-signature">void btron_core_hfds_log(void);</div>
+    </div>
+
+    <!-- btron_core_print_ver -->
+    <div class="api-card">
+      <div class="api-header">
+        <span class="api-name">btron_core_print_ver</span>
+        <span class="ret-badge">void</span>
+      </div>
+      <p>Formats the complete B-System kernel version, compiler build stamp, and runtime target profile into a terminal stream.</p>
+      <div class="api-signature">void btron_core_print_ver(ShellOutputFn out_fn, void *user_data, const char *arg);</div>
+      <table class="api-table">
+        <thead>
+          <tr>
+            <th>Parameter</th>
+            <th>Direction</th>
+            <th>Type</th>
+            <th>Description</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>out_fn</code></td>
+            <td><code>[in]</code></td>
+            <td><code>ShellOutputFn</code></td>
+            <td>Callback invoked for each line of version output.</td>
+          </tr>
+          <tr>
+            <td><code>user_data</code></td>
+            <td><code>[in]</code></td>
+            <td><code>void*</code></td>
+            <td>Caller context passed directly to <code>out_fn</code>.</td>
+          </tr>
+          <tr>
+            <td><code>arg</code></td>
+            <td><code>[in]</code></td>
+            <td><code>const char*</code></td>
+            <td>Optional formatting flags (e.g. <code>"-v"</code> for verbose).</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <!-- Part 4: Canonical Code Examples -->
+    <h2 id="examples">4. Canonical Implementation Examples</h2>
+    <p>
+      The following example demonstrates initializing the core kernel, querying target version information, and routing output through a custom shell callback:
+    </p>
+
+    <pre><code>#include &lt;btron/core.h&gt;
+#include &lt;stdio.h&gt;
+
+/* Custom terminal line printer callback */
+static void my_terminal_printer(const char *line, COLOR col, void *user_data) {
+    (void)user_data;
+    printf("[KERNEL 0x%08X] %s\n", col, line);
+}
+
+int main(void) {
+    /* Step 1: Bootstrap B-System core subsystem */
+    btron_core_init();
+
+    /* Step 2: Output banner and memory statistics */
+    btron_core_banner();
+    btron_core_mem_log();
+
+    /* Step 3: Print formatted version to shell */
+    btron_core_print_ver(my_terminal_printer, NULL, "-v");
+
+    return 0;
+}</code></pre>
+
+    <footer class="book-footer">
+      <div><a href="../index.html">&larr; Back to Master Index</a></div>
+      <div><a href="../graphics/index.html">Next: Graphics Subsystem &rarr;</a></div>
+    </footer>
+  </main>
+
+</body>
+</html>

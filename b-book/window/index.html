@@ -1,0 +1,290 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Window – Window Manager, Events & Application Menus | B-Book</title>
+  <meta name="description" content="Formal developer documentation for the B-System Window subsystem: Sakamura Window Manager (WND), sliding tabs, event loop (EVT), and universal application menus.">
+  <link rel="stylesheet" href="../b-book.css">
+</head>
+<body>
+
+  <!-- Navigation Sidebar -->
+  <nav class="book-sidebar">
+    <div class="sidebar-brand">
+      <div class="brand-title">B-Book <span class="badge">Rev 3.20</span></div>
+      <div class="brand-sub">Window Subsystem Reference</div>
+    </div>
+    <div class="sidebar-nav">
+      <div class="nav-heading">Overview</div>
+      <a href="../index.html" class="nav-link">Master Index</a>
+      
+      <div class="nav-heading">Subsystems</div>
+      <a href="../cores/index.html" class="nav-link">Cores (Kernel & SMP)</a>
+      <a href="../graphics/index.html" class="nav-link">Graphics (DP & 2D)</a>
+      <a href="../tip/index.html" class="nav-link">Tip (Input & IME)</a>
+      <a href="../vobject/index.html" class="nav-link">VObject (Hyper-Data)</a>
+      <a href="./index.html" class="nav-link active">Window (WM & Menus)</a>
+      <div class="nav-sublinks">
+        <a href="#arch" class="nav-sublink">Architecture & Geometry</a>
+        <a href="#types" class="nav-sublink">WND & Event Types</a>
+        <a href="#menu" class="nav-sublink">Application Menu Engine</a>
+        <a href="#api" class="nav-sublink">API Function Reference</a>
+        <a href="#examples" class="nav-sublink">Code Examples</a>
+      </div>
+    </div>
+  </nav>
+
+  <!-- Main Content Canvas -->
+  <main class="book-content">
+    <header class="book-header">
+      <div class="breadcrumb">
+        <a href="../index.html">B-Book</a> / <span>Window</span>
+      </div>
+      <h1 class="page-title">Window: Window Manager, Events & Menus</h1>
+      <p class="page-lead">
+        Formal C99 specification for the Sakamura Window Manager (WND), sliding tab geometry, event distribution loops (EVT), fluid BeOS-style application menu bars, and multi-form-factor desktop/mobile viewports.
+      </p>
+    </header>
+
+    <!-- Part 1: Architecture & Geometry -->
+    <h2 id="arch">1. Architecture & Geometry</h2>
+    <p>
+      The <strong>Window</strong> subsystem governs all graphical viewport management, z-order stacking, compact sliding tabs, and user input dispatching in B-System.
+    </p>
+
+    <h3>1.1 Frame vs. Client Coordinate Geometry</h3>
+    <pre><code> ┌────────────────────────────────────────────────────────┐
+ │ [X]  Document Title               [Tab]            [-] │  ◄── Window Frame (bounds)
+ ├────────────────────────────────────────────────────────┤
+ │ File(F)   Edit(E)   View(V)   Help(H)                  │  ◄── Application Menu Bar
+ ├────────────────────────────────────────────────────────┤
+ │                                                        │
+ │                   Client Area (client)                 │  ◄── (0, 0) relative client space
+ │                                                        │
+ └────────────────────────────────────────────────────────┘</code></pre>
+
+    <ul>
+      <li><strong>Outer Bounds (<code>bounds</code>)</strong>: Window boundary in root screen space, including 3D chrome borders, title bar, and drop shadows.</li>
+      <li><strong>Client Area (<code>client</code>)</strong>: Interior viewport dedicated to application content. In bordered desktop mode, <code>client.top = bounds.top + 26</code> and <code>client.left = bounds.left + 4</code>. In borderless mobile mode, <code>client.left = 0</code> and <code>client.top = 0</code>.</li>
+      <li><strong>Compact Sliding Tab</strong>: Authentic Cho-Kanji draggable title tab. Its horizontal position is defined by <code>tab_offset_x</code>, enabling dense overlapping window stacks.</li>
+    </ul>
+
+    <!-- Part 2: Data Structures & Types -->
+    <h2 id="types">2. Data Structures & Types</h2>
+
+    <h3>Window Descriptor Structure (<code>WND</code>)</h3>
+    <p>Defined in <code>include/btron/wnd.h</code>:</p>
+    <pre><code>typedef struct WND {
+    ID    id;                       /* Unique window object identifier */
+    char  pad0[12];                 /* 12-byte padding for 16-byte title alignment */
+    char  title[64];                /* Window title string */
+    RECT  bounds;                   /* Absolute screen frame bounding box */
+    RECT  client;                   /* Content client area rectangle */
+    UW    attr;                     /* Window attribute bitmask (WND_ATTR_*) */
+    BOOL  visible;                  /* Visibility flag */
+    BOOL  focused;                  /* Topmost active focus state */
+    H     tab_offset_x;             /* Horizontal offset of sliding tab */
+    H     tab_width;                /* Computed tab width in pixels */
+    GDEV  *dev;                     /* Graphic device context for client area */
+    void (*paint)(struct WND *wnd, GDEV *dev);           /* Repaint callback */
+    void (*event_handler)(struct WND *wnd, const EVT *evt); /* Event callback */
+    void (*destroy)(struct WND *wnd);                    /* Teardown callback */
+    VW    user_data;                /* Opaque pointer to application instance */
+    struct WND *next;               /* Z-order next lower window */
+    struct WND *prev;               /* Z-order next higher window */
+} WND;</code></pre>
+
+    <h3>Window Attribute Bitmasks</h3>
+    <table class="api-table">
+      <thead>
+        <tr>
+          <th>Macro Constant</th>
+          <th>Bit Value</th>
+          <th>Description</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><code>WND_ATTR_TITLE</code></td>
+          <td><code>1 &lt;&lt; 0</code></td>
+          <td>Renders top title bar.</td>
+        </tr>
+        <tr>
+          <td><code>WND_ATTR_CLOSE</code></td>
+          <td><code>1 &lt;&lt; 1</code></td>
+          <td>Renders top-left <code>[X]</code> close widget.</td>
+        </tr>
+        <tr>
+          <td><code>WND_ATTR_MAX</code></td>
+          <td><code>1 &lt;&lt; 2</code></td>
+          <td>Enables window maximize / zoom widget.</td>
+        </tr>
+        <tr>
+          <td><code>WND_ATTR_RESIZE</code></td>
+          <td><code>1 &lt;&lt; 3</code></td>
+          <td>Enables bottom-right corner resize widget.</td>
+        </tr>
+        <tr>
+          <td><code>WND_ATTR_BORDER</code></td>
+          <td><code>1 &lt;&lt; 4</code></td>
+          <td>Renders 3D beveled outer frame border.</td>
+        </tr>
+        <tr>
+          <td><code>WND_ATTR_SLIDING_TAB</code></td>
+          <td><code>1 &lt;&lt; 6</code></td>
+          <td>Enables draggable compact sliding tab header.</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <!-- Part 3: Application Menu Engine -->
+    <h2 id="menu">3. Application Menu Subsystem</h2>
+    <p>
+      The B-System menu engine (<code>include/btron/app_menu.h</code>) provides unified, deduplicated in-window menu bars featuring BeOS fluid hover tracking, hot header gliding, dynamic mnemonics (<code>Alt+Letter</code>), 10-key numeric accelerators (<code>1</code>..<code>9</code>), and runtime modal dialog hooks.
+    </p>
+
+    <h3>Menu Bar Structure (<code>APP_MENU_BAR</code>)</h3>
+    <pre><code>typedef struct {
+    APP_MENU_HEADER headers[8];     /* Up to 8 top-level menu headers */
+    int             header_count;   /* Number of registered headers */
+    int             active_menu;    /* -1 if closed, or active open header index */
+    int             hover_menu;     /* Currently hovered header index */
+    int             hover_item;     /* Currently hovered dropdown item index */
+    char            right_text[64]; /* Right-aligned margin status text */
+    APP_MENU_STYLE  style;          /* CLASSIC_3D (beveled) or MODERN_CARD */
+} APP_MENU_BAR;</code></pre>
+
+    <!-- Part 4: API Function Reference -->
+    <h2 id="api">4. Window Subsystem API Reference</h2>
+
+    <!-- init_wnd_mgr -->
+    <div class="api-card">
+      <div class="api-header">
+        <span class="api-name">init_wnd_mgr</span>
+        <span class="ret-badge">ER</span>
+      </div>
+      <p>Initializes the Sakamura Window Manager and binds the master display framebuffer.</p>
+      <div class="api-signature">ER init_wnd_mgr(GDEV *screen_dev);</div>
+    </div>
+
+    <!-- opn_wnd -->
+    <div class="api-card">
+      <div class="api-header">
+        <span class="api-name">opn_wnd</span>
+        <span class="type-badge">WND*</span>
+      </div>
+      <p>Instantiates, positions, and maps a new window. Places the window at the top of the z-order stack.</p>
+      <div class="api-signature">WND* opn_wnd(const char *title, H x, H y, H w, H h, UW attr);</div>
+      <table class="api-table">
+        <thead>
+          <tr>
+            <th>Parameter</th>
+            <th>Type</th>
+            <th>Description</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>title</code></td>
+            <td><code>const char*</code></td>
+            <td>Window title rendered in the sliding tab or title bar.</td>
+          </tr>
+          <tr>
+            <td><code>x, y</code></td>
+            <td><code>H</code></td>
+            <td>Initial top-left frame position in screen coordinates.</td>
+          </tr>
+          <tr>
+            <td><code>w, h</code></td>
+            <td><code>H</code></td>
+            <td>Total frame width and height in pixels.</td>
+          </tr>
+          <tr>
+            <td><code>attr</code></td>
+            <td><code>UW</code></td>
+            <td>Bitwise combination of <code>WND_ATTR_*</code> flags.</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <!-- cls_wnd -->
+    <div class="api-card">
+      <div class="api-header">
+        <span class="api-name">cls_wnd</span>
+        <span class="ret-badge">ER</span>
+      </div>
+      <p>Destroys the specified window, removes it from the z-order list, and invalidates uncovered screen regions.</p>
+      <div class="api-signature">ER cls_wnd(WND *wnd);</div>
+    </div>
+
+    <!-- inval_wnd -->
+    <div class="api-card">
+      <div class="api-header">
+        <span class="api-name">inval_wnd</span>
+        <span class="ret-badge">ER</span>
+      </div>
+      <p>Marks a window client area as dirty, scheduling an immediate call to its <code>paint</code> callback.</p>
+      <div class="api-signature">ER inval_wnd(WND *wnd);</div>
+    </div>
+
+    <!-- app_menu_set_about_hook -->
+    <div class="api-card">
+      <div class="api-header">
+        <span class="api-name">app_menu_set_about_hook / app_menu_create_about_dialog</span>
+        <span class="type-badge">WND*</span>
+      </div>
+      <p>Universal runtime hook for application About boxes. Allows mobile targets to route to modal sheets and desktop targets to floating windows with <strong>zero <code>#ifdef</code> in application code</strong>.</p>
+      <div class="api-signature">void app_menu_set_about_hook(AppMenuAboutHookFn hook);<br>WND* app_menu_create_about_dialog(const char *app_title, const char *jp_title, const char *desc, const char *attribution, int x, int y);</div>
+    </div>
+
+    <!-- Part 5: Canonical Code Examples -->
+    <h2 id="examples">5. Canonical Implementation Examples</h2>
+    <p>
+      The following example demonstrates creating a complete native B-System application window with an interactive menu bar:
+    </p>
+
+    <pre><code>#include &lt;btron/wnd.h&gt;
+#include &lt;btron/app_menu.h&gt;
+
+typedef struct {
+    APP_MENU_BAR menu_bar;
+} MyApp;
+
+static void my_app_paint(WND *wnd, GDEV *dev) {
+    MyApp *app = (MyApp*)wnd->user_data;
+    
+    /* 1. Clear client background */
+    RECT r = { 0, 0, dev->width, dev->height };
+    fill_rec(dev, &r, COLOR_WHITE);
+
+    /* 2. Paint in-window menu bar */
+    app_menu_paint_bar(&app->menu_bar, dev);
+    app_menu_paint_dropdown(&app->menu_bar, dev);
+}
+
+static void my_app_events(WND *wnd, const EVT *evt) {
+    MyApp *app = (MyApp*)wnd->user_data;
+    int cmd = 0;
+
+    if (evt->type == EV_MOUSE_MOVE) {
+        if (app_menu_handle_mouse_move(&app->menu_bar, evt->pos.x, evt->pos.y)) {
+            inval_wnd(wnd);
+        }
+    } else if (evt->type == EV_KEY_DOWN) {
+        if (app_menu_handle_key(&app->menu_bar, evt->key, evt->mod, &cmd)) {
+            inval_wnd(wnd);
+            if (cmd == 100) cls_wnd(wnd); /* Quit */
+        }
+    }
+}</code></pre>
+
+    <footer class="book-footer">
+      <div><a href="../vobject/index.html">&larr; Previous: VObject Subsystem</a></div>
+      <div><a href="../index.html">Back to Master Index &rarr;</a></div>
+    </footer>
+  </main>
+
+</body>
+</html>

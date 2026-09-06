@@ -1,0 +1,356 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Graphics – Display Primitives & 2D Graphics Engine | B-Book</title>
+  <meta name="description" content="Formal developer documentation for the B-System Graphics subsystem: GDEV device contexts, 2D rasterization, clipping, raster operations (ROP), and pointer capture.">
+  <link rel="stylesheet" href="../b-book.css">
+</head>
+<body>
+
+  <!-- Navigation Sidebar -->
+  <nav class="book-sidebar">
+    <div class="sidebar-brand">
+      <div class="brand-title">B-Book <span class="badge">Rev 3.20</span></div>
+      <div class="brand-sub">Graphics Subsystem Reference</div>
+    </div>
+    <div class="sidebar-nav">
+      <div class="nav-heading">Overview</div>
+      <a href="../index.html" class="nav-link">Master Index</a>
+      
+      <div class="nav-heading">Subsystems</div>
+      <a href="../cores/index.html" class="nav-link">Cores (Kernel & SMP)</a>
+      <a href="./index.html" class="nav-link active">Graphics (DP & 2D)</a>
+      <div class="nav-sublinks">
+        <a href="#arch" class="nav-sublink">Architecture & Pipeline</a>
+        <a href="#types" class="nav-sublink">Types & Structures</a>
+        <a href="#colors" class="nav-sublink">Colors & ROPs</a>
+        <a href="#api" class="nav-sublink">API Function Reference</a>
+        <a href="#examples" class="nav-sublink">Code Examples</a>
+      </div>
+      <a href="../tip/index.html" class="nav-link">Tip (Input & IME)</a>
+      <a href="../vobject/index.html" class="nav-link">VObject (Hyper-Data)</a>
+      <a href="../window/index.html" class="nav-link">Window (WM & Menus)</a>
+    </div>
+  </nav>
+
+  <!-- Main Content Canvas -->
+  <main class="book-content">
+    <header class="book-header">
+      <div class="breadcrumb">
+        <a href="../index.html">B-Book</a> / <span>Graphics</span>
+      </div>
+      <h1 class="page-title">Graphics: Display Primitives & 2D Engine</h1>
+      <p class="page-lead">
+        Formal C99 specification for the Display Primitives (DP) engine: <code>GDEV</code> graphic device abstraction, 2D vector primitives, hardware clipping, raster operations (ROP), and pointer capture management.
+      </p>
+    </header>
+
+    <!-- Part 1: Architecture & Pipeline -->
+    <h2 id="arch">1. Architecture & Pipeline</h2>
+    <p>
+      The <strong>Graphics</strong> subsystem provides the foundational rendering engine for B-System. Designed according to the cleanroom BTRON 3.20 specification, all drawing operations target an abstract graphic device descriptor: <code>GDEV</code>.
+    </p>
+
+    <h3>1.1 Coordinate Space & Clipping Semantics</h3>
+    <p>
+      B-System uses a top-left origin pixel coordinate space where $(0, 0)$ is the top-left pixel. Coordinate values are signed 16-bit integers (<code>H</code>):
+    </p>
+    <ul>
+      <li><strong>Horizontal Coordinate ($X$)</strong>: Increases from left to right $[0, \text{width} - 1]$.</li>
+      <li><strong>Vertical Coordinate ($Y$)</strong>: Increases from top to bottom $[0, \text{height} - 1]$.</li>
+      <li><strong>Clipping Rect (<code>clip</code>)</strong>: Inclusive of <code>left</code> and <code>top</code>, exclusive of <code>right</code> and <code>bottom</code>. Primitives automatically clip against these bounds with zero out-of-bounds writes.</li>
+    </ul>
+
+    <!-- Part 2: Data Structures & Types -->
+    <h2 id="types">2. Data Structures & Types</h2>
+
+    <h3>Graphic Device Descriptor (<code>GDEV</code>)</h3>
+    <p>Defined in <code>include/btron/dp.h</code>:</p>
+    <pre><code>typedef struct {
+    H      width;      /* Total canvas width in pixels */
+    H      height;     /* Total canvas height in pixels */
+    UW     is_vram;    /* 1 if hardware VRAM frame buffer, 0 if memory buffer */
+    COLOR  *pixels;    /* Direct pointer to 32-bit ARGB pixel buffer */
+    RECT   clip;       /* Current active clipping rectangle */
+} GDEV;</code></pre>
+
+    <table class="api-table">
+      <thead>
+        <tr>
+          <th>Field</th>
+          <th>Type</th>
+          <th>Offset</th>
+          <th>Description</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><code>width</code></td>
+          <td><code>H</code> (int16_t)</td>
+          <td>0</td>
+          <td>Canvas pixel width. Must be strictly positive.</td>
+        </tr>
+        <tr>
+          <td><code>height</code></td>
+          <td><code>H</code> (int16_t)</td>
+          <td>2</td>
+          <td>Canvas pixel height. Must be strictly positive.</td>
+        </tr>
+        <tr>
+          <td><code>is_vram</code></td>
+          <td><code>UW</code> (uint32_t)</td>
+          <td>4</td>
+          <td>Flag designating direct VRAM mapping versus allocated heap/static backing.</td>
+        </tr>
+        <tr>
+          <td><code>pixels</code></td>
+          <td><code>COLOR*</code></td>
+          <td>8</td>
+          <td>Pointer to continuous linear array of <code>width * height</code> 32-bit ARGB words.</td>
+        </tr>
+        <tr>
+          <td><code>clip</code></td>
+          <td><code>RECT</code></td>
+          <td>16</td>
+          <td>Active bounding box for clipping rasterization operations.</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <h2 id="colors">3. Standard Palette Colors & Raster Operations</h2>
+
+    <h3>TRON Standard Colors</h3>
+    <table class="api-table">
+      <thead>
+        <tr>
+          <th>Macro Constant</th>
+          <th>Hex Value</th>
+          <th>Color Swatch</th>
+          <th>Usage Context</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><code>COLOR_BLACK</code></td>
+          <td><code>0xFF000000</code></td>
+          <td><span style="display:inline-block;width:24px;height:12px;background:#000000;border:1px solid #ccc;"></span></td>
+          <td>Default text glyphs and crisp borders.</td>
+        </tr>
+        <tr>
+          <td><code>COLOR_WHITE</code></td>
+          <td><code>0xFFFFFFFF</code></td>
+          <td><span style="display:inline-block;width:24px;height:12px;background:#FFFFFF;border:1px solid #ccc;"></span></td>
+          <td>Document canvas background, 3D highlight edges.</td>
+        </tr>
+        <tr>
+          <td><code>COLOR_LTGRAY</code></td>
+          <td><code>0xFFD4D0C8</code></td>
+          <td><span style="display:inline-block;width:24px;height:12px;background:#D4D0C8;border:1px solid #ccc;"></span></td>
+          <td>Classic Retro 3D Chrome Gray window frames & button plates.</td>
+        </tr>
+        <tr>
+          <td><code>COLOR_TEAL</code></td>
+          <td><code>0xFF008080</code></td>
+          <td><span style="display:inline-block;width:24px;height:12px;background:#008080;border:1px solid #ccc;"></span></td>
+          <td>Authentic B-TRON desktop backdrop & title highlights.</td>
+        </tr>
+        <tr>
+          <td><code>COLOR_NAVY</code></td>
+          <td><code>0xFF000080</code></td>
+          <td><span style="display:inline-block;width:24px;height:12px;background:#000080;border:1px solid #ccc;"></span></td>
+          <td>Active window title bar & menu selection background.</td>
+        </tr>
+        <tr>
+          <td><code>COLOR_GOLD</code></td>
+          <td><code>0xFFFFCC00</code></td>
+          <td><span style="display:inline-block;width:24px;height:12px;background:#FFCC00;border:1px solid #ccc;"></span></td>
+          <td>Virtual Body Fusen (仮身) tab and link indicator.</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <h3>Raster Operation (ROP) Modes</h3>
+    <table class="api-table">
+      <thead>
+        <tr>
+          <th>Macro</th>
+          <th>Value</th>
+          <th>Boolean Logic</th>
+          <th>Operational Effect</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><code>ROP_COPY</code></td>
+          <td>0</td>
+          <td>$D = S$</td>
+          <td>Direct pixel overwrite (Standard transfer).</td>
+        </tr>
+        <tr>
+          <td><code>ROP_OR</code></td>
+          <td>1</td>
+          <td>$D = D \mid S$</td>
+          <td>Additive raster combination.</td>
+        </tr>
+        <tr>
+          <td><code>ROP_XOR</code></td>
+          <td>2</td>
+          <td>$D = D \oplus S$</td>
+          <td>Invertible rubber-banding and selection cursors.</td>
+        </tr>
+        <tr>
+          <td><code>ROP_AND</code></td>
+          <td>3</td>
+          <td>$D = D \ \& \ S$</td>
+          <td>Masked transparency filtering.</td>
+        </tr>
+        <tr>
+          <td><code>ROP_INVERT</code></td>
+          <td>4</td>
+          <td>$D = \sim D$</td>
+          <td>Bitwise color inversion.</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <!-- Part 3: API Reference -->
+    <h2 id="api">4. Display Primitives API Reference</h2>
+
+    <!-- opn_dev -->
+    <div class="api-card">
+      <div class="api-header">
+        <span class="api-name">opn_dev</span>
+        <span class="type-badge">GDEV*</span>
+      </div>
+      <p>Allocates and initializes an off-screen graphic device context with internal pixel memory.</p>
+      <div class="api-signature">GDEV* opn_dev(H w, H h);</div>
+      <table class="api-table">
+        <thead>
+          <tr>
+            <th>Parameter</th>
+            <th>Type</th>
+            <th>Description</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>w</code></td>
+            <td><code>H</code></td>
+            <td>Width in pixels (must be &gt; 0).</td>
+          </tr>
+          <tr>
+            <td><code>h</code></td>
+            <td><code>H</code></td>
+            <td>Height in pixels (must be &gt; 0).</td>
+          </tr>
+        </tbody>
+      </table>
+      <div class="api-meta">
+        <span class="meta-label">Returns</span>
+        <span>Pointer to initialized <code>GDEV</code>, or <code>NULL</code> on allocation failure.</span>
+      </div>
+    </div>
+
+    <!-- opn_dev_vram -->
+    <div class="api-card">
+      <div class="api-header">
+        <span class="api-name">opn_dev_vram</span>
+        <span class="type-badge">GDEV*</span>
+      </div>
+      <p>Constructs a graphic device context directly bound to an external physical or virtual VRAM frame buffer.</p>
+      <div class="api-signature">GDEV* opn_dev_vram(H w, H h, COLOR *vram_buffer);</div>
+    </div>
+
+    <!-- cls_dev -->
+    <div class="api-card">
+      <div class="api-header">
+        <span class="api-name">cls_dev</span>
+        <span class="ret-badge">void</span>
+      </div>
+      <p>Closes and frees resources associated with a <code>GDEV</code> device. If <code>is_vram == 0</code>, frees the pixel backing store.</p>
+      <div class="api-signature">void cls_dev(GDEV *dev);</div>
+    </div>
+
+    <!-- set_clip -->
+    <div class="api-card">
+      <div class="api-header">
+        <span class="api-name">set_clip</span>
+        <span class="ret-badge">void</span>
+      </div>
+      <p>Constrains subsequent rasterization routines to the intersection of the device dimensions and the specified rectangle.</p>
+      <div class="api-signature">void set_clip(GDEV *dev, const RECT *clip);</div>
+    </div>
+
+    <!-- drw_lin -->
+    <div class="api-card">
+      <div class="api-header">
+        <span class="api-name">drw_lin</span>
+        <span class="ret-badge">ER</span>
+      </div>
+      <p>Renders a 1-pixel solid vector line between two points using Bresenham's line algorithm with integer arithmetic.</p>
+      <div class="api-signature">ER drw_lin(GDEV *dev, H x1, H y1, H x2, H y2);</div>
+    </div>
+
+    <!-- fill_rec -->
+    <div class="api-card">
+      <div class="api-header">
+        <span class="api-name">fill_rec</span>
+        <span class="ret-badge">ER</span>
+      </div>
+      <p>Fills a solid axis-aligned rectangle with the specified color, clipped against <code>dev->clip</code>.</p>
+      <div class="api-signature">ER fill_rec(GDEV *dev, const RECT *r, COLOR col);</div>
+    </div>
+
+    <!-- drw_rec -->
+    <div class="api-card">
+      <div class="api-header">
+        <span class="api-name">drw_rec</span>
+        <span class="ret-badge">ER</span>
+      </div>
+      <p>Draws a 1-pixel hollow bounding frame for the specified rectangle.</p>
+      <div class="api-signature">ER drw_rec(GDEV *dev, const RECT *r);</div>
+    </div>
+
+    <!-- Pointer Grab Controls -->
+    <div class="api-card">
+      <div class="api-header">
+        <span class="api-name">sdl_set_mouse_grab / sdl_toggle_mouse_grab</span>
+        <span class="ret-badge">void</span>
+      </div>
+      <p>Controls host mouse cursor capture (QEMU-style <code>^G</code> / <code>Ctrl+G</code> grab and release).</p>
+      <div class="api-signature">void sdl_set_mouse_grab(BOOL grabbed);<br>void sdl_toggle_mouse_grab(void);<br>BOOL sdl_is_mouse_grabbed(void);</div>
+    </div>
+
+    <!-- Part 4: Canonical Code Examples -->
+    <h2 id="examples">5. Canonical Implementation Examples</h2>
+    <p>
+      The following example demonstrates creating an offscreen buffer, drawing a classic 3D beveled plate, and applying clipping:
+    </p>
+
+    <pre><code>#include &lt;btron/dp.h&gt;
+
+void render_beveled_box(GDEV *dev, H x, H y, H w, H h) {
+    RECT outer = { x, y, x + w, y + h };
+    
+    /* 1. Base button surface in classic light gray */
+    fill_rec(dev, &outer, COLOR_LTGRAY);
+
+    /* 2. Top and left edges in white (highlight) */
+    drw_lin(dev, x, y, x + w - 1, y);         /* Top edge */
+    drw_lin(dev, x, y, x, y + h - 1);         /* Left edge */
+
+    /* 3. Bottom and right edges in dark gray (shadow) */
+    drw_lin(dev, x, y + h - 1, x + w, y + h - 1); /* Bottom edge */
+    drw_lin(dev, x + w - 1, y, x + w - 1, y + h); /* Right edge */
+}</code></pre>
+
+    <footer class="book-footer">
+      <div><a href="../cores/index.html">&larr; Previous: Cores Subsystem</a></div>
+      <div><a href="../tip/index.html">Next: Tip Subsystem &rarr;</a></div>
+    </footer>
+  </main>
+
+</body>
+</html>

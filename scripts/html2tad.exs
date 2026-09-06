@@ -609,7 +609,8 @@ source_trees = [
   {"b-free", Path.join(out_dir, "b-free")},
   {"b-system", Path.join(out_dir, "b-system")},
   {"t-kernel", Path.join(out_dir, "t-kernel")}
-] ++ if File.dir?("b-hmi"), do: [{"b-hmi", Path.join(out_dir, "b-hmi")}], else: []
+] ++ (if File.dir?("b-hmi"), do: [{"b-hmi", Path.join(out_dir, "b-hmi")}], else: [])
+  ++ (if File.dir?("b-book"), do: [{"b-book", Path.join(out_dir, "b-book")}], else: [])
 
 IO.puts("======================================================================")
 IO.puts(" B-System HTML -> Binary BTRON 3.20 TAD Unified Batch Compiler (Elixir)")

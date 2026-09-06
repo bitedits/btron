@@ -1,0 +1,270 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Tip – Text Input Primitives & Multilingual IME | B-Book</title>
+  <meta name="description" content="Formal developer documentation for the B-System TIP subsystem: Text Input Primitives, Mozc Kana-Kanji conversion, Tibetan Wylie transliteration, and TRON-Code typography.">
+  <link rel="stylesheet" href="../b-book.css">
+</head>
+<body>
+
+  <!-- Navigation Sidebar -->
+  <nav class="book-sidebar">
+    <div class="sidebar-brand">
+      <div class="brand-title">B-Book <span class="badge">Rev 3.20</span></div>
+      <div class="brand-sub">Tip Subsystem Reference</div>
+    </div>
+    <div class="sidebar-nav">
+      <div class="nav-heading">Overview</div>
+      <a href="../index.html" class="nav-link">Master Index</a>
+      
+      <div class="nav-heading">Subsystems</div>
+      <a href="../cores/index.html" class="nav-link">Cores (Kernel & SMP)</a>
+      <a href="../graphics/index.html" class="nav-link">Graphics (DP & 2D)</a>
+      <a href="./index.html" class="nav-link active">Tip (Input & IME)</a>
+      <div class="nav-sublinks">
+        <a href="#arch" class="nav-sublink">Architecture & DFA</a>
+        <a href="#modes" class="nav-sublink">Input Modes</a>
+        <a href="#types" class="nav-sublink">Types & Contexts</a>
+        <a href="#troncode" class="nav-sublink">TRON-Code Engine</a>
+        <a href="#api" class="nav-sublink">API Function Reference</a>
+        <a href="#examples" class="nav-sublink">Code Examples</a>
+      </div>
+      <a href="../vobject/index.html" class="nav-link">VObject (Hyper-Data)</a>
+      <a href="../window/index.html" class="nav-link">Window (WM & Menus)</a>
+    </div>
+  </nav>
+
+  <!-- Main Content Canvas -->
+  <main class="book-content">
+    <header class="book-header">
+      <div class="breadcrumb">
+        <a href="../index.html">B-Book</a> / <span>Tip</span>
+      </div>
+      <h1 class="page-title">Tip: Text Input Primitives & Multilingual IME</h1>
+      <p class="page-lead">
+        Formal C99 specification for the B-System Text Input Primitives (TIP) subsystem: Input Front-End (IFE) engine, deterministic finite automaton (DFA) state machines, Kana-Kanji conversion (Mozc), Tibetan Wylie phonetics, and 16-plane TRON-Code multilingual typography.
+      </p>
+    </header>
+
+    <!-- Part 1: Architecture & DFA -->
+    <h2 id="arch">1. Architecture & Deterministic State Machine</h2>
+    <p>
+      The <strong>Tip</strong> subsystem (Text Input Primitives) is the universal multilingual text composition and input method engine for B-System. Following the cleanroom BTRON 3.20 specification, TIP acts as a system-level filter between low-level keyboard scan codes and application text widgets.
+    </p>
+
+    <h3>1.1 TIP DFA State Machine</h3>
+    <p>
+      Input composition is governed by a formal 4-state Deterministic Finite Automaton (DFA):
+    </p>
+    <pre><code>                     Direct ASCII / Pass-through
+                 ┌────────────────────────────────┐
+                 │                                │
+                 ▼                                │
+         ┌───────────────┐   Alphanumeric Keystroke
+         │ TIP_STATE_    │ ───────────────────────► ┌───────────────┐
+         │     IDLE      │                          │  TIP_STATE_   │
+         └───────────────┘ ◄─────────────────────── │    PRECOMP    │
+                 ▲           Backspace to Empty     └───────────────┘
+                 │                                          │
+                 │ Commit                                   │ Space / Tab (Convert)
+                 │                                          ▼
+         ┌───────────────┐   Up / Down / Tab Arrow  ┌───────────────┐
+         │  TIP_STATE_   │ ◄─────────────────────── │  TIP_STATE_   │
+         │ CANDIDATE_SEL │ ───────────────────────► │  CONVERTING   │
+         └───────────────┘   Return (Select Item)   └───────────────┘</code></pre>
+
+    <h2 id="modes">2. Supported Multilingual Input Modes</h2>
+    <table class="api-table">
+      <thead>
+        <tr>
+          <th>Mode Constant</th>
+          <th>Enum Value</th>
+          <th>Target Script & Encoding</th>
+          <th>Composition Engine</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><code>TIP_MODE_ASCII</code></td>
+          <td>0</td>
+          <td>Standard ISO 8859-1 / ASCII</td>
+          <td>Direct keystroke passthrough to active focus window.</td>
+        </tr>
+        <tr>
+          <td><code>TIP_MODE_HIRAGANA</code></td>
+          <td>1</td>
+          <td>Japanese Hiragana (TRON Plane 1 / JIS)</td>
+          <td>Romaji &rarr; Hiragana phonetics + Mozc statistical KKC dictionary.</td>
+        </tr>
+        <tr>
+          <td><code>TIP_MODE_KATAKANA</code></td>
+          <td>2</td>
+          <td>Japanese Katakana (TRON Plane 1 / JIS)</td>
+          <td>Direct Katakana transliteration + loanword dictionary.</td>
+        </tr>
+        <tr>
+          <td><code>TIP_MODE_TIBETAN</code></td>
+          <td>3</td>
+          <td>Classical Tibetan (Jomolhari Unicode)</td>
+          <td>EWTS Wylie phonetics with automatic subjoined consonant stacking.</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <!-- Part 2: Data Structures & Contexts -->
+    <h2 id="types">3. Data Structures & Contexts</h2>
+
+    <h3>Candidate Entry Structure (<code>TIP_CANDIDATE</code>)</h3>
+    <p>Defined in <code>include/btron/tip.h</code>:</p>
+    <pre><code>typedef struct {
+    char value[64];       /* Converted Kanji / Tibetan term in UTF-8/TRON-Code */
+    char annotation[64];  /* Semantic grammatical category (e.g. [名詞], [固有名詞]) */
+    int  cost;            /* Statistical n-gram transition penalty */
+} TIP_CANDIDATE;</code></pre>
+
+    <h3>Clause Structure (<code>TIP_CLAUSE</code>)</h3>
+    <pre><code>typedef struct {
+    char           reading[64];          /* Phonetic reading (Yomi) */
+    char           converted[64];        /* Active converted phrase */
+    TIP_CANDIDATE  candidates[16];       /* List of candidate translations */
+    int            num_candidates;       /* Number of valid candidates in array */
+    int            selected_candidate;   /* Current highlighted candidate index (0-based) */
+} TIP_CLAUSE;</code></pre>
+
+    <h3>Composition Context (<code>TIP_CONTEXT</code>)</h3>
+    <pre><code>typedef struct {
+    TIP_INPUT_MODE mode;                 /* Current script input mode */
+    TIP_DFA_STATE  state;                /* Active DFA machine state */
+    char           romaji_buf[256];      /* Raw ASCII keystroke buffer */
+    int            romaji_len;           /* Byte length of raw buffer */
+    char           reading_buf[256];     /* Transliterated phonetic buffer */
+    int            reading_len;          /* Byte length of reading */
+    TIP_CLAUSE     clauses[32];          /* Parsed bunsetsu clauses */
+    int            num_clauses;          /* Total clause segments */
+    int            active_clause;        /* Index of clause currently undergoing focus */
+    PNT            caret_pos;            /* Screen coordinate for candidate popup anchor */
+    BOOL           candidate_window_visible; /* Floating candidate popup visibility */
+} TIP_CONTEXT;</code></pre>
+
+    <!-- Part 3: TRON-Code Typography -->
+    <h2 id="troncode">4. TRON-Code Multilingual Typography Engine</h2>
+    <p>
+      The B-System typography engine (<code>include/btron/troncode.h</code>) provides multi-plane character rendering without code-page switching:
+    </p>
+    <ul>
+      <li><strong>16 Planes Structure</strong>: Supports up to $16 \times 65,536 = 1,048,576$ distinct character codes.</li>
+      <li><strong>Plane 1</strong>: JIS X 0208 / JIS X 0213 Japanese Kanji, Hiragana, Katakana.</li>
+      <li><strong>Plane 2</strong>: Classical Chinese / Dai Kan-Wa Jiten historic variants.</li>
+      <li><strong>Plane 9</strong>: Classical Tibetan Buddhist canon (Jomolhari font rasterizer).</li>
+    </ul>
+
+    <!-- Part 4: API Function Reference -->
+    <h2 id="api">5. TIP API Function Reference</h2>
+
+    <!-- tip_init -->
+    <div class="api-card">
+      <div class="api-header">
+        <span class="api-name">tip_init</span>
+        <span class="ret-badge">void</span>
+      </div>
+      <p>Initializes the TIP composition engine, zeroes buffers, and binds the Mozc dictionary lookup tables.</p>
+      <div class="api-signature">void tip_init(void);</div>
+    </div>
+
+    <!-- tip_process_key -->
+    <div class="api-card">
+      <div class="api-header">
+        <span class="api-name">tip_process_key</span>
+        <span class="ret-badge">BOOL</span>
+      </div>
+      <p>Feeds a raw keyboard event into the TIP DFA. Returns <code>TRUE</code> if TIP consumed the key, or <code>FALSE</code> if it should pass to the application.</p>
+      <div class="api-signature">BOOL tip_process_key(UW key, uint16_t mod, char *out_commit, int max_commit);</div>
+      <table class="api-table">
+        <thead>
+          <tr>
+            <th>Parameter</th>
+            <th>Type</th>
+            <th>Description</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>key</code></td>
+            <td><code>UW</code></td>
+            <td>Virtual key code or ASCII character.</td>
+          </tr>
+          <tr>
+            <td><code>mod</code></td>
+            <td><code>uint16_t</code></td>
+            <td>Key modifiers (Shift, Ctrl, Alt).</td>
+          </tr>
+          <tr>
+            <td><code>out_commit</code></td>
+            <td><code>char*</code></td>
+            <td>Buffer receiving finalized string if the key caused a commit.</td>
+          </tr>
+          <tr>
+            <td><code>max_commit</code></td>
+            <td><code>int</code></td>
+            <td>Capacity of the commit buffer in bytes.</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <!-- tip_get_context -->
+    <div class="api-card">
+      <div class="api-header">
+        <span class="api-name">tip_get_context</span>
+        <span class="type-badge">const TIP_CONTEXT*</span>
+      </div>
+      <p>Returns a read-only pointer to the active TIP composition state for custom rendering.</p>
+      <div class="api-signature">const TIP_CONTEXT* tip_get_context(void);</div>
+    </div>
+
+    <!-- drw_tc_string -->
+    <div class="api-card">
+      <div class="api-header">
+        <span class="api-name">drw_tc_string</span>
+        <span class="ret-badge">ER</span>
+      </div>
+      <p>Renders a multilingual UTF-8 or TRON-Code string into the target graphic device with subpixel anti-aliasing.</p>
+      <div class="api-signature">ER drw_tc_string(GDEV *dev, H x, H y, const char *str, COLOR fg, COLOR bg);</div>
+    </div>
+
+    <!-- Part 5: Canonical Code Examples -->
+    <h2 id="examples">6. Canonical Implementation Examples</h2>
+    <p>
+      The following example demonstrates routing keystrokes through the TIP engine in an application event handler:
+    </p>
+
+    <pre><code>#include &lt;btron/tip.h&gt;
+#include &lt;btron/wnd.h&gt;
+
+void my_app_key_handler(WND *wnd, const EVT *evt) {
+    char commit_buf[128] = {0};
+
+    /* 1. Feed event into TIP IME */
+    BOOL handled = tip_process_key(evt->key, evt->mod, commit_buf, sizeof(commit_buf));
+
+    /* 2. Check if a string was committed */
+    if (commit_buf[0] != '\0') {
+        insert_text_into_document(wnd, commit_buf);
+    }
+
+    /* 3. If TIP is composing, trigger window repaint for pre-edit underline */
+    if (handled) {
+        inval_wnd(wnd);
+    }
+}</code></pre>
+
+    <footer class="book-footer">
+      <div><a href="../graphics/index.html">&larr; Previous: Graphics Subsystem</a></div>
+      <div><a href="../vobject/index.html">Next: VObject Subsystem &rarr;</a></div>
+    </footer>
+  </main>
+
+</body>
+</html>

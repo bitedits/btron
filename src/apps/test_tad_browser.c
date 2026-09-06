@@ -319,7 +319,7 @@ static void test_utf8_cyrillic_font_rendering(void) {
 static void test_btron3_corner_window_resizing(void) {
     printf("\n[TEST GROUP 9] BTRON3 3.20 Default Corner Window Resizing\n");
 
-    WND *w = opn_wnd("Test Window", 100, 100, 400, 300, WND_ATTR_TITLE | WND_ATTR_CLOSE | WND_ATTR_RESIZE);
+    WND *w = opn_wnd("Test Window", 100, 100, 400, 300, WND_ATTR_TITLE | WND_ATTR_CLOSE | WND_ATTR_RESIZE | WND_ATTR_BORDER);
     TEST_ASSERT(w != NULL, "Opened test window");
     TEST_ASSERT((w->attr & WND_ATTR_RESIZE) != 0, "WND_ATTR_RESIZE is enabled by default (BTRON3 3.20 Conformance)");
     TEST_ASSERT(w->bounds.right - w->bounds.left == 400, "Initial window width = 400");

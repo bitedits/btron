@@ -152,6 +152,19 @@ static char ps2_scancode_to_ascii(uint8_t sc, int shift) {
     }
 }
 
+#if defined(BTRON_PC98_TARGET)
+#include <drivers/pc98_kbd.h>
+#define btron_kbd_init()                       pc98_kbd_init()
+#define btron_kbd_has_key()                    pc98_kbd_has_key()
+#define btron_kbd_get_scancode()               pc98_kbd_get_scancode()
+#define btron_kbd_scancode_to_ascii(sc, shift) pc98_kbd_scancode_to_ascii(sc, shift)
+#else
+#define btron_kbd_init()                       ((void)0)
+#define btron_kbd_has_key()                    ps2_has_key()
+#define btron_kbd_get_scancode()               ps2_get_scancode()
+#define btron_kbd_scancode_to_ascii(sc, shift) ps2_scancode_to_ascii(sc, shift)
+#endif
+
 /* ═══════════════════════════════════════════════════════════════════
  * VGA 80x25 Text Mode Driver (0xB8000)
  * ═══════════════════════════════════════════════════════════════════ */
@@ -415,7 +428,7 @@ static void launch_vesa_desktop_session(int active_cores) {
     uart_puts_raw("==========================================================\n\n");
 
     /* Drain any pending keypresses */
-    while (ps2_has_key()) (void)ps2_get_scancode();
+    while (btron_kbd_has_key()) (void)btron_kbd_get_scancode();
     while (uart_has_char()) (void)uart_getc();
 
     int shift = 0;
@@ -433,16 +446,16 @@ static void launch_vesa_desktop_session(int active_cores) {
         H mouse_x = 512, mouse_y = 384;
         get_baremetal_mouse_pos(&mouse_x, &mouse_y);
 
-        if (ps2_has_key()) {
-            uint8_t sc = ps2_get_scancode();
-            if (sc == 0x01 || sc == 0x10) { /* Esc or Q */
+        if (btron_kbd_has_key()) {
+            uint8_t sc = btron_kbd_get_scancode();
+            if (sc == 0x00 || sc == 0x01 || sc == 0x10) { /* Esc or Q */
                 break;
-            } else if (sc == 0x2A || sc == 0x36) {
+            } else if (sc == 0x2A || sc == 0x36 || sc == 0x70) {
                 shift = 1;
-            } else if (sc == 0xAA || sc == 0xB6) {
+            } else if (sc == 0xAA || sc == 0xB6 || sc == 0xF0) {
                 shift = 0;
             } else if (!(sc & 0x80)) {
-                char c = ps2_scancode_to_ascii(sc, shift);
+                char c = btron_kbd_scancode_to_ascii(sc, shift);
                 if (c) {
                     ev.type = EV_KEY_DOWN;
                     ev.key = (UW)c;
@@ -494,7 +507,7 @@ static void launch_vesa_desktop_session(int active_cores) {
 
 static void run_btron_shell(int active_cores) {
     /* Drain any leftover key from bootloader */
-    while (ps2_has_key()) (void)ps2_get_scancode();
+    while (btron_kbd_has_key()) (void)btron_kbd_get_scancode();
     while (uart_has_char()) (void)uart_getc();
 
     render_btron_text_desktop(active_cores);
@@ -604,6 +617,7 @@ static uint8_t s_boot_stack[32768] __attribute__((aligned(16)));
 
 void kernel_main(void) {
     uart_init();
+    btron_kbd_init();
 
     btron_core_banner();
 
@@ -638,23 +652,23 @@ void kernel_main(void) {
     while (!s_boot_triggered) {
         int state_changed = 0;
 
-        if (ps2_has_key()) {
-            uint8_t sc = ps2_get_scancode();
+        if (btron_kbd_has_key()) {
+            uint8_t sc = btron_kbd_get_scancode();
             if (sc != prev_scancode) {
                 prev_scancode = sc;
-                if (sc == 0x11 || sc == 0x48) {
+                if (sc == 0x11 || sc == 0x48 || sc == 0x3A) {
                     s_selected = (s_selected + 2) % 3;
                     state_changed = 1;
-                } else if (sc == 0x1F || sc == 0x50) {
+                } else if (sc == 0x1F || sc == 0x50 || sc == 0x3D) {
                     s_selected = (s_selected + 1) % 3;
                     state_changed = 1;
-                } else if (sc == 0x4E || sc == 0x0D) {
+                } else if (sc == 0x4E || sc == 0x0D || sc == 0x0B) {
                     if (s_targets[s_selected].cores < 16) s_targets[s_selected].cores++;
                     state_changed = 1;
                 } else if (sc == 0x4A || sc == 0x0C) {
                     if (s_targets[s_selected].cores > 1) s_targets[s_selected].cores--;
                     state_changed = 1;
-                } else if (sc == 0x1C || sc == 0x39) {
+                } else if (sc == 0x1C || sc == 0x39 || sc == 0x34) {
                     s_boot_triggered = 1;
                 }
             }

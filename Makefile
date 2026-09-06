@@ -184,6 +184,7 @@ PC98_SRCS    = $(PC98_STARTUP)          \
                src/kernel/libstr.c      \
                src/drivers/vesa/vesa.c  \
                src/drivers/pc98/input/pc98_mouse.c \
+               src/drivers/pc98/input/pc98_kbd.c \
                src/drivers/uefi/ps2_mouse.c \
                $(COMMON_NO_SDL_SRCS)
 
@@ -1094,7 +1095,8 @@ $(TEST_APP_MENU_BIN): $(TEST_APP_MENU_OBJS)
 # ═══════════════════════════════════════════════════════════════════
 TEST_MOUSE_SRCS = tests/test_mouse_drivers.c \
                   src/drivers/uefi/ps2_mouse.c \
-                  src/drivers/pc98/input/pc98_mouse.c
+                  src/drivers/pc98/input/pc98_mouse.c \
+                  src/drivers/pc98/input/pc98_kbd.c
 TEST_MOUSE_OBJS = $(TEST_MOUSE_SRCS:.c=.test.o)
 TEST_MOUSE_BIN  = test_mouse
 

@@ -16,8 +16,21 @@
 
 #include <btron/mobile_ui.h>
 #include <btron/troncode.h>
-#include <btron/dp.h>
-#include <SDL.h>
+#include <btron/event.h>
+
+#ifndef SDLK_UP
+#define SDLK_UP        BTRON_KEY_UP
+#define SDLK_DOWN      BTRON_KEY_DOWN
+#define SDLK_LEFT      BTRON_KEY_LEFT
+#define SDLK_RIGHT     BTRON_KEY_RIGHT
+#define SDLK_RETURN    BTRON_KEY_RETURN
+#define SDLK_SPACE     BTRON_KEY_SPACE
+#define SDLK_ESCAPE    BTRON_KEY_ESCAPE
+#define SDLK_BACKSPACE BTRON_KEY_BACKSPACE
+#define SDLK_F1        BTRON_KEY_F1
+#define SDLK_F2        BTRON_KEY_F2
+#define SDLK_F3        BTRON_KEY_F3
+#endif
 #if defined(__STDC_HOSTED__) && __STDC_HOSTED__ == 1
 #include <stdio.h>
 #include <string.h>

@@ -5,9 +5,13 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Kernel – Sakamura T-Kernel 2.0 Real-Time OS Specification | B-Book</title>
   <meta name="description" content="Full-scope developer specification for the B-System Sakamura T-Kernel 2.0 microkernel: preemptive task scheduling, synchronization (semaphores, eventflags, mailboxes, mutexes, message buffers, rendezvous), memory pools, and device management.">
-  <link rel="stylesheet" href="../b-book.css">
+  <link rel="stylesheet" href="b-book.css">
 </head>
 <body>
+
+  <nav class="book-global-nav" aria-label="Site navigation"><ul>
+    <li class="book-global-logo"><a href="../index.html"><img width="48" src="https://n2o.dev/img/synrc.svg" alt="Synrc Logo"></a></li><li><a href="../index.html">VirtIO</a></li><li><a href="../b-system.html">B-System</a></li><li><a href="index.html" class="active">B-Book</a></li><li><a href="../mobile.html">FOMA</a></li><li><a href="../conformance.html">Conformance Audit</a></li><li><a href="../releases.html">Releases</a></li><li><a href="https://github.com/bitedits/btron">GitHub</a></li>
+  </ul></nav>
 
   <!-- Navigation Sidebar -->
   <nav class="book-sidebar">
@@ -17,10 +21,10 @@
     </div>
     <div class="sidebar-nav">
       <div class="nav-heading">Overview</div>
-      <a href="../index.html" class="nav-link">Master Index</a>
+      <a href="index.html" class="nav-link">Master Index</a>
       
       <div class="nav-heading">Kernel & Executive</div>
-      <a href="./index.html" class="nav-link active">Kernel (T-Kernel 2.0)</a>
+      <a href="index.html" class="nav-link active">Kernel (T-Kernel 2.0)</a>
       <div class="nav-sublinks">
         <a href="#arch" class="nav-sublink">Architecture & Scheduling</a>
         <a href="#types" class="nav-sublink">Data Structures & Packets</a>
@@ -31,23 +35,23 @@
         <a href="#devmgr" class="nav-sublink">Device Management & Subsystems</a>
         <a href="#examples" class="nav-sublink">Code Examples</a>
       </div>
-      <a href="../cores/index.html" class="nav-link">Cores (Bootstrap & SMP)</a>
+      <a href="cores.html" class="nav-link">Cores (Bootstrap & SMP)</a>
 
       <div class="nav-heading">Graphics & Input</div>
-      <a href="../graphics/index.html" class="nav-link">Graphics (DP & 2D)</a>
-      <a href="../tip/index.html" class="nav-link">Tip (Input & IME)</a>
-      <a href="../font/index.html" class="nav-link">Font (Typography Engine)</a>
+      <a href="graphics.html" class="nav-link">Graphics (DP & 2D)</a>
+      <a href="tip.html" class="nav-link">Tip (Input & IME)</a>
+      <a href="font.html" class="nav-link">Font (Typography Engine)</a>
 
       <div class="nav-heading">Hyper-Data & Desktop</div>
-      <a href="../vobject/index.html" class="nav-link">VObject (Hyper-Data)</a>
-      <a href="../window/index.html" class="nav-link">Window (WM & Menus)</a>
-      <a href="../desktop/index.html" class="nav-link">Desktop (Shell & Mobile)</a>
-      <a href="../hmi/index.html" class="nav-link">HMI (Human-Machine Interface)</a>
+      <a href="vobject.html" class="nav-link">VObject (Hyper-Data)</a>
+      <a href="window.html" class="nav-link">Window (WM & Menus)</a>
+      <a href="desktop.html" class="nav-link">Desktop (Shell & Mobile)</a>
+      <a href="hmi.html" class="nav-link">HMI (Human-Machine Interface)</a>
 
       <div class="nav-heading">Configuration & Drivers</div>
-      <a href="../settings/index.html" class="nav-link">Settings (Control Panel)</a>
-      <a href="../drivers/index.html" class="nav-link">Drivers (Hardware & VirtIO)</a>
-      <a href="../apps/index.html" class="nav-link">Apps (Application Suite)</a>
+      <a href="settings.html" class="nav-link">Settings (Control Panel)</a>
+      <a href="drivers.html" class="nav-link">Drivers (Hardware & VirtIO)</a>
+      <a href="apps.html" class="nav-link">Apps (Application Suite)</a>
     </div>
   </nav>
 
@@ -55,7 +59,7 @@
   <main class="book-content">
     <header class="book-header">
       <div class="breadcrumb">
-        <a href="../index.html">B-Book</a> / <span>Kernel</span>
+        <a href="index.html">B-Book</a> / <span>Kernel</span>
       </div>
       <h1 class="page-title">Kernel: Sakamura T-Kernel 2.0 Specification</h1>
       <p class="page-lead">
@@ -419,8 +423,8 @@ void initialize_kernel_subsystem(void) {
 }</code></pre>
 
     <footer class="book-footer">
-      <div><a href="../index.html">&larr; Back to Master Index</a></div>
-      <div><a href="../cores/index.html">Next: Cores Subsystem &rarr;</a></div>
+      <div><a href="index.html">&larr; Back to Master Index</a></div>
+      <div><a href="cores.html">Next: Cores Subsystem &rarr;</a></div>
     </footer>
   </main>
 

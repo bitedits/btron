@@ -5,9 +5,27 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>B-Book – Developer's Systems & API Reference | B-System</title>
   <meta name="description" content="The definitive English developer manual and C99 API specification for the B-System operating system, inspired by the BeOS BeBook.">
-  <link rel="stylesheet" href="./b-book.css">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="b-book.css">
 </head>
 <body>
+
+  <nav class="book-global-nav" aria-label="Site navigation">
+    <div class="book-global-nav-container">
+      <a href="../index.html" class="book-global-logo"><img width="48" src="https://n2o.dev/img/synrc.svg" alt="Synrc Logo"></a>
+      <ul class="book-global-links">
+        <li><a href="../index.html">VirtIO</a></li>
+        <li><a href="../b-system.html">B-System</a></li>
+        <li><a href="index.html" class="active">B-Book</a></li>
+        <li><a href="../mobile.html">FOMA</a></li>
+        <li><a href="../conformance.html">Conformance Audit</a></li>
+        <li><a href="../releases.html">Releases</a></li>
+        <li><a href="https://github.com/bitedits/btron">GitHub</a></li>
+      </ul>
+    </div>
+  </nav>
 
   <!-- Navigation Sidebar -->
   <nav class="book-sidebar">
@@ -17,27 +35,27 @@
     </div>
     <div class="sidebar-nav">
       <div class="nav-heading">Overview</div>
-      <a href="./index.html" class="nav-link active">Master Index</a>
+      <a href=".html" class="nav-link active">Master Index</a>
       
       <div class="nav-heading">Core Subsystems</div>
-      <a href="./kernel/index.html" class="nav-link">Kernel (T-Kernel 2.0)</a>
-      <a href="./cores/index.html" class="nav-link">Cores (Kernel & SMP)</a>
-      <a href="./graphics/index.html" class="nav-link">Graphics (DP & 2D)</a>
-      <a href="./tip/index.html" class="nav-link">Tip (Input & IME)</a>
-      <a href="./vobject/index.html" class="nav-link">VObject (Hyper-Data)</a>
-      <a href="./window/index.html" class="nav-link">Window (WM & Menus)</a>
+      <a href="kernel.html" class="nav-link">Kernel (T-Kernel 2.0)</a>
+      <a href="cores.html" class="nav-link">Cores (Kernel & SMP)</a>
+      <a href="graphics.html" class="nav-link">Graphics (DP & 2D)</a>
+      <a href="tip.html" class="nav-link">Tip (Input & IME)</a>
+      <a href="vobject.html" class="nav-link">VObject (Hyper-Data)</a>
+      <a href="window.html" class="nav-link">Window (WM & Menus)</a>
 
       <div class="nav-heading">Extended Subsystems</div>
-      <a href="./desktop/index.html" class="nav-link">Desktop (Shell & Mobile)</a>
-      <a href="./hmi/index.html" class="nav-link">HMI (Human-Machine Interface)</a>
-      <a href="./font/index.html" class="nav-link">Font (Typography Engine)</a>
-      <a href="./settings/index.html" class="nav-link">Settings (Control Panel)</a>
-      <a href="./drivers/index.html" class="nav-link">Drivers (Hardware & VirtIO)</a>
-      <a href="./apps/index.html" class="nav-link">Apps (Application Suite)</a>
+      <a href="desktop.html" class="nav-link">Desktop (Shell & Mobile)</a>
+      <a href="hmi.html" class="nav-link">HMI (Human-Machine Interface)</a>
+      <a href="font.html" class="nav-link">Font (Typography Engine)</a>
+      <a href="settings.html" class="nav-link">Settings (Control Panel)</a>
+      <a href="drivers.html" class="nav-link">Drivers (Hardware & VirtIO)</a>
+      <a href="apps.html" class="nav-link">Apps (Application Suite)</a>
 
       <div class="nav-heading">Cross Reference</div>
-      <a href="../b-system.html" class="nav-link">B-System Portal</a>
-      <a href="../mobile.html" class="nav-link">Mobile FOMA</a>
+      <a href="b-system.html" class="nav-link">B-System Portal</a>
+      <a href="mobile.html" class="nav-link">Mobile FOMA</a>
     </div>
   </nav>
 
@@ -45,7 +63,7 @@
   <main class="book-content">
     <header class="book-header">
       <div class="breadcrumb">
-        <a href="./index.html">B-Book</a> / <span>Master Index</span>
+        <a href=".html">B-Book</a> / <span>Master Index</span>
       </div>
       <h1 class="page-title">B-Book: Developer's Systems & API Reference</h1>
       <p class="page-lead">
@@ -77,73 +95,73 @@
           <td><strong>Kernel</strong></td>
           <td><code>tk/syscall.h</code><br><code>btron/types.h</code></td>
           <td>Sakamura T-Kernel 2.0 real-time executive: 140 priority levels, preemptive dispatch, semaphores, eventflags, mailboxes, mutexes, message buffers, rendezvous ports, memory pools (MPL/MPF), cyclic handlers, and device management.</td>
-          <td><a href="./kernel/index.html"><strong>Kernel Manual &rarr;</strong></a></td>
+          <td><a href="kernel.html"><strong>Kernel Manual &rarr;</strong></a></td>
         </tr>
         <tr>
           <td><strong>Cores</strong></td>
           <td><code>btron/core.h</code><br><code>btron/types.h</code><br><code>btron/smp.h</code></td>
           <td>Real-time microkernel lifecycle, task dispatching, semaphore/mailbox synchronization, VirtIO hardware abstraction, and SMP core scheduling.</td>
-          <td><a href="./cores/index.html"><strong>Cores Manual &rarr;</strong></a></td>
+          <td><a href="cores.html"><strong>Cores Manual &rarr;</strong></a></td>
         </tr>
         <tr>
           <td><strong>Graphics</strong></td>
           <td><code>btron/dp.h</code><br><code>btron/icons.h</code></td>
           <td>Display Primitives (GDEV), 2D geometry rasterization, line drawing, clipping bounds, raster operations (ROP), and pointer capture.</td>
-          <td><a href="./graphics/index.html"><strong>Graphics Manual &rarr;</strong></a></td>
+          <td><a href="graphics.html"><strong>Graphics Manual &rarr;</strong></a></td>
         </tr>
         <tr>
           <td><strong>Tip</strong></td>
           <td><code>btron/tip.h</code><br><code>btron/troncode.h</code></td>
           <td>Text Input Primitives, Input Front-End (IFE), Kana-Kanji conversion (Mozc KKC), Tibetan Wylie phonetics, and pre-edit composition buffers.</td>
-          <td><a href="./tip/index.html"><strong>Tip Manual &rarr;</strong></a></td>
+          <td><a href="tip.html"><strong>Tip Manual &rarr;</strong></a></td>
         </tr>
         <tr>
           <td><strong>VObject</strong></td>
           <td><code>btron/vobj.h</code><br><code>btron/tad_browser.h</code></td>
           <td>Real Object (ROBJ) and Virtual Object (VOBJ_LINK / Fusen) hyper-data engine, TAD binary segment encoding, and storage persistence.</td>
-          <td><a href="./vobject/index.html"><strong>VObject Manual &rarr;</strong></a></td>
+          <td><a href="vobject.html"><strong>VObject Manual &rarr;</strong></a></td>
         </tr>
         <tr>
           <td><strong>Window</strong></td>
           <td><code>btron/wnd.h</code><br><code>btron/app_menu.h</code><br><code>btron/event.h</code></td>
           <td>Sakamura Window Manager (WND), coordinate math, event dispatch loop (EVT), universal in-window menu bar engine, and modal dialogs.</td>
-          <td><a href="./window/index.html"><strong>Window Manual &rarr;</strong></a></td>
+          <td><a href="window.html"><strong>Window Manual &rarr;</strong></a></td>
         </tr>
         <tr>
           <td><strong>Desktop</strong></td>
           <td><code>btron/desktop.h</code><br><code>btron/workbench.h</code><br><code>btron/tracker.h</code><br><code>btron/mobile_ui.h</code></td>
           <td>Desktop background compositor, Workbench coordinator, Haiku-style Tracker deskbar, Global Menu Bar, and FOMA mobile UI toolkit.</td>
-          <td><a href="./desktop/index.html"><strong>Desktop Manual &rarr;</strong></a></td>
+          <td><a href="desktop.html"><strong>Desktop Manual &rarr;</strong></a></td>
         </tr>
         <tr>
           <td><strong>HMI</strong></td>
           <td><code>btron/hmi.h</code></td>
           <td>TRON Human-Machine Interface controls: momentary/toggle switches, standard triad, step selectors, slide/dial volumes, and Enableware.</td>
-          <td><a href="./hmi/index.html"><strong>HMI Manual &rarr;</strong></a></td>
+          <td><a href="hmi.html"><strong>HMI Manual &rarr;</strong></a></td>
         </tr>
         <tr>
           <td><strong>Font</strong></td>
           <td><code>btron/font_mgr.h</code><br><code>btron/jis_fonts.h</code><br><code>btron/tibetan_fonts.h</code></td>
           <td>16-plane TRON-Code multilingual rasterizer, JIS X 0208 / 0213 dot-matrix bitmaps, Classical Tibetan subjoined stacks, and Font Manager caching.</td>
-          <td><a href="./font/index.html"><strong>Font Manual &rarr;</strong></a></td>
+          <td><a href="font.html"><strong>Font Manual &rarr;</strong></a></td>
         </tr>
         <tr>
           <td><strong>Settings</strong></td>
           <td><code>btron/settings.h</code><br><code>btron/sys_mgmt.h</code><br><code>btron/terminal_settings.h</code></td>
           <td>Control Panel applet framework, real-time theme and styling propagation without reboots, dirty state synchronization, and terminal profiles.</td>
-          <td><a href="./settings/index.html"><strong>Settings Manual &rarr;</strong></a></td>
+          <td><a href="settings.html"><strong>Settings Manual &rarr;</strong></a></td>
         </tr>
         <tr>
           <td><strong>Drivers</strong></td>
           <td><code>btron/device.h</code><br><code>btron/tcpip.h</code><br><code>btron/clk.h</code></td>
           <td>Hardware Abstraction Layer (HAL), VirtIO MMIO virtualization (block, net, console), VESA Linear Framebuffer, and real-time clock.</td>
-          <td><a href="./drivers/index.html"><strong>Drivers Manual &rarr;</strong></a></td>
+          <td><a href="drivers.html"><strong>Drivers Manual &rarr;</strong></a></td>
         </tr>
         <tr>
           <td><strong>Apps</strong></td>
           <td><code>btron/apps.h</code><br><code>btron/t_editor.h</code><br><code>btron/tad_browser.h</code><br><code>btron/chat.h</code></td>
           <td>Application lifecycle architecture, parameterized constructors, Tier-1 suite (gterm, T-Editor, TAD Browser, Chat), and in-window menu control.</td>
-          <td><a href="./apps/index.html"><strong>Apps Manual &rarr;</strong></a></td>
+          <td><a href="apps.html"><strong>Apps Manual &rarr;</strong></a></td>
         </tr>
       </tbody>
     </table>
@@ -246,7 +264,7 @@
 
     <footer class="book-footer">
       <div>B-Book Revision 3.20 &bull; B-System Engineering Documentation</div>
-      <div><a href="./kernel/index.html">Start: Kernel Subsystem &rarr;</a></div>
+      <div><a href="kernel.html">Start: Kernel Subsystem &rarr;</a></div>
     </footer>
   </main>
 

@@ -5,9 +5,13 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Settings – System Configuration & Control Panel Framework | B-Book</title>
   <meta name="description" content="Formal developer documentation for the B-System Settings subsystem: Control Panel applet architecture, dynamic theme propagation, input schemas, and terminal settings.">
-  <link rel="stylesheet" href="../b-book.css">
+  <link rel="stylesheet" href="b-book.css">
 </head>
 <body>
+
+  <nav class="book-global-nav" aria-label="Site navigation"><ul>
+    <li class="book-global-logo"><a href="../index.html"><img width="48" src="https://n2o.dev/img/synrc.svg" alt="Synrc Logo"></a></li><li><a href="../index.html">VirtIO</a></li><li><a href="../b-system.html">B-System</a></li><li><a href="index.html" class="active">B-Book</a></li><li><a href="../mobile.html">FOMA</a></li><li><a href="../conformance.html">Conformance Audit</a></li><li><a href="../releases.html">Releases</a></li><li><a href="https://github.com/bitedits/btron">GitHub</a></li>
+  </ul></nav>
 
   <!-- Navigation Sidebar -->
   <nav class="book-sidebar">
@@ -17,21 +21,21 @@
     </div>
     <div class="sidebar-nav">
       <div class="nav-heading">Overview</div>
-      <a href="../index.html" class="nav-link">Master Index</a>
+      <a href="index.html" class="nav-link">Master Index</a>
       
       <div class="nav-heading">Core Subsystems</div>
-      <a href="../kernel/index.html" class="nav-link">Kernel (T-Kernel 2.0)</a>
-      <a href="../cores/index.html" class="nav-link">Cores (Kernel & SMP)</a>
-      <a href="../graphics/index.html" class="nav-link">Graphics (DP & 2D)</a>
-      <a href="../tip/index.html" class="nav-link">Tip (Input & IME)</a>
-      <a href="../vobject/index.html" class="nav-link">VObject (Hyper-Data)</a>
-      <a href="../window/index.html" class="nav-link">Window (WM & Menus)</a>
+      <a href="kernel.html" class="nav-link">Kernel (T-Kernel 2.0)</a>
+      <a href="cores.html" class="nav-link">Cores (Kernel & SMP)</a>
+      <a href="graphics.html" class="nav-link">Graphics (DP & 2D)</a>
+      <a href="tip.html" class="nav-link">Tip (Input & IME)</a>
+      <a href="vobject.html" class="nav-link">VObject (Hyper-Data)</a>
+      <a href="window.html" class="nav-link">Window (WM & Menus)</a>
 
       <div class="nav-heading">Extended Subsystems</div>
-      <a href="../desktop/index.html" class="nav-link">Desktop (Shell & Mobile)</a>
-      <a href="../hmi/index.html" class="nav-link">HMI (Human-Machine Interface)</a>
-      <a href="../font/index.html" class="nav-link">Font (Typography Engine)</a>
-      <a href="./index.html" class="nav-link active">Settings (Control Panel)</a>
+      <a href="desktop.html" class="nav-link">Desktop (Shell & Mobile)</a>
+      <a href="hmi.html" class="nav-link">HMI (Human-Machine Interface)</a>
+      <a href="font.html" class="nav-link">Font (Typography Engine)</a>
+      <a href="index.html" class="nav-link active">Settings (Control Panel)</a>
       <div class="nav-sublinks">
         <a href="#arch" class="nav-sublink">Applet Architecture</a>
         <a href="#types" class="nav-sublink">Settings Categories</a>
@@ -39,8 +43,8 @@
         <a href="#api" class="nav-sublink">API Function Reference</a>
         <a href="#examples" class="nav-sublink">Code Examples</a>
       </div>
-      <a href="../drivers/index.html" class="nav-link">Drivers (Hardware & VirtIO)</a>
-      <a href="../apps/index.html" class="nav-link">Apps (Application Suite)</a>
+      <a href="drivers.html" class="nav-link">Drivers (Hardware & VirtIO)</a>
+      <a href="apps.html" class="nav-link">Apps (Application Suite)</a>
     </div>
   </nav>
 
@@ -48,7 +52,7 @@
   <main class="book-content">
     <header class="book-header">
       <div class="breadcrumb">
-        <a href="../index.html">B-Book</a> / <span>Settings</span>
+        <a href="index.html">B-Book</a> / <span>Settings</span>
       </div>
       <h1 class="page-title">Settings: Configuration & Control Panel</h1>
       <p class="page-lead">
@@ -180,8 +184,8 @@ void apply_custom_theme(APP_MENU_STYLE style) {
 }</code></pre>
 
     <footer class="book-footer">
-      <div><a href="../font/index.html">&larr; Previous: Font Subsystem</a></div>
-      <div><a href="../drivers/index.html">Next: Drivers Subsystem &rarr;</a></div>
+      <div><a href="font.html">&larr; Previous: Font Subsystem</a></div>
+      <div><a href="drivers.html">Next: Drivers Subsystem &rarr;</a></div>
     </footer>
   </main>
 

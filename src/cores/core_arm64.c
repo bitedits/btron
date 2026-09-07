@@ -1,7 +1,7 @@
 /*
- * core_arm64.c — B-System BTRON3 3.20 RTOS Kernel for Raspberry Pi 4B (BCM2711 / AArch64)
+ * core_arm64.c — B-System BTRON3 3.20 RTOS Kernel for Raspberry Pi 3B/4B (BCM2711 / AArch64)
  *
- * Dedicated Target 6: BTRON_YOKOYAMA_AARCH64 (Raspberry Pi 4B, Cortex-A72, AArch64)
+ * Dedicated Target 6: BTRON_YOKOYAMA_AARCH64 (Raspberry Pi 3B/4B, Cortex-A72, AArch64)
  * Honoring: Takanori Yokoyama (横山 孝徳) — T-Kernel Pioneer
  *
  * Architecture:

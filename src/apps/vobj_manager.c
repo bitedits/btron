@@ -53,7 +53,7 @@ __attribute__((weak)) WND* open_t_editor_window(void) {
 extern WND* open_t_editor_window(void);
 #endif
 
-#define MAX_CABINET_ITEMS 128
+#define MAX_CABINET_ITEMS 256
 
 typedef enum {
     CAB_VIEW_LIST = 0,
@@ -292,7 +292,9 @@ static ID deduce_robj_id(const char *path) {
     for (int i = 0; path[i]; i++) {
         h = ((h << 5) + h) + (UB)path[i];
     }
-    return 100 + (h % 900);
+    /* Keep dynamically assigned IDs outside the canonical 101..999 range.
+     * The old 900-slot hash space could collide with a reserved Real Body ID. */
+    return 1000 + (h % 99000);
 }
 
 static const char* deduce_toc_path(const char *path) {
@@ -898,7 +900,8 @@ BOOL cabinet_handle_click(int mouse_x, int mouse_y, BOOL is_double_click, ID *ou
         }
     }
 
-    int start_y = 60;
+    /* Keep this test-facing helper aligned with the native list viewport. */
+    int start_y = 26;
     int row = (mouse_y - start_y) / 22;
     int idx = g_cabinet.scroll_offset + row;
     if (idx >= 0 && idx < g_cabinet.item_count) {

@@ -205,21 +205,30 @@ static void test_cabinet_explorer_selection(void) {
     TEST_ASSERT(wnd != NULL, "Opened Cabinet Explorer window");
     TEST_ASSERT(wnd->event_handler != NULL, "Cabinet Explorer has active event_handler attached");
 
-    /* Test item selection click at row 0 (y = 60 + 0*22 + 5 = 65) -> [b-free] 03_bfree_os_book.tad (#103) */
+    /* Test item selection click at row 0 (y = 26 + 0*22 + 5 = 31) -> [b-free] 03_bfree_os_book.tad (#103) */
     ID robj = 0;
     char path[128] = "";
-    BOOL handled = cabinet_handle_click(50, 65, FALSE, &robj, path);
+    BOOL handled = cabinet_handle_click(50, 31, FALSE, &robj, path);
     TEST_ASSERT(handled == FALSE, "Single click updates selection without modal block");
     TEST_ASSERT(robj == 103, "Selected Real Body #103 (03_bfree_os_book.tad)");
     TEST_ASSERT(strcmp(path, "tad_bin/03_bfree_os_book.tad") == 0, "Resolved path for #103");
 
-    /* Test selection at row 1 (y = 60 + 1*22 + 5 = 87) -> [b-free] manifest.tad (#106) */
-    handled = cabinet_handle_click(50, 87, FALSE, &robj, path);
-    TEST_ASSERT(robj == 106, "Selected Real Body #106 (manifest.tad)");
+    /* Cabinet contents are discovered dynamically; locate manifest.tad through the
+     * same list hit-testing API rather than assuming directory enumeration order. */
+    int manifest_y = -1;
+    for (int row = 0; row < 256; row++) {
+        int y = 26 + row * 22 + 5;
+        cabinet_handle_click(50, y, FALSE, &robj, path);
+        if (robj == 106 && strcmp(path, "tad_bin/b-free/manifest.tad") == 0) {
+            manifest_y = y;
+            break;
+        }
+    }
+    TEST_ASSERT(manifest_y >= 0, "Selected Real Body #106 (manifest.tad)");
     TEST_ASSERT(strcmp(path, "tad_bin/b-free/manifest.tad") == 0, "Resolved path for #106");
 
-    /* Test double-click activation on Canonical Book */
-    handled = cabinet_handle_click(50, 87, TRUE, &robj, path);
+    /* Test double-click activation on the discovered Manifest real body */
+    handled = cabinet_handle_click(50, manifest_y, TRUE, &robj, path);
     TEST_ASSERT(handled == TRUE, "Double click triggers TAD Real Body launch");
 
     cls_wnd(wnd);

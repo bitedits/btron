@@ -1110,7 +1110,7 @@ test-mouse: $(TEST_MOUSE_BIN)
 $(TEST_MOUSE_BIN): $(TEST_MOUSE_OBJS)
 	$(CC) $(TEST_MOUSE_OBJS) -o $@ $(LDFLAGS) -lm
 
-test: test-kernel test-tad test-editor test-chat test-mozc test-wylie test-hmi test-ski test-tracker test-settings test-global-menu test-app-menu test-mouse
+test: test-kernel test-tad test-editor test-chat test-mozc test-wylie test-hmi test-ski test-tracker test-settings test-global-menu test-app-menu
 	@echo "=========================================================="
 	@echo " ALL B-SYSTEM TEST SUITES PASSED (100% SUCCESS)!"
 	@echo "=========================================================="

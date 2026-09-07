@@ -93,6 +93,16 @@ else ifeq ($(UNAME_S), Linux)
                     -lz -lm -lpthread
     QEMU_DISPLAY        := -display default,show-cursor=on
     KERNEL_DISPLAY      := -display default
+else ifneq (,)
+    SDL_CFLAGS   := -IC:/msys64/mingw64/include/SDL2 -Dmain=SDL_main
+    SDL_LIBS     := -LC:/msys64/mingw64/lib -lmingw32 -mwindows -lSDL2main -lSDL2 -lz -lgdi32 -lwinpthread
+    QEMU_DISPLAY        := -display default,show-cursor=on
+    KERNEL_DISPLAY      := -display default
+else ifneq (,$(findstring MINGW,$(UNAME_S)))
+    SDL_CFLAGS   := $(shell sdl2-config --cflags 2>/dev/null || echo "-IC:/msys64/mingw64/include/SDL2 -Dmain=SDL_main")
+    SDL_LIBS     := $(shell sdl2-config --libs 2>/dev/null || echo "-LC:/msys64/mingw64/lib -lmingw32 -mwindows -lSDL2main -lSDL2") -lz -lgdi32 -lwinpthread
+    QEMU_DISPLAY        := -display default,show-cursor=on
+    KERNEL_DISPLAY      := -display default
 else
     SDL_CFLAGS   := -I/usr/include/SDL2
     SDL_LIBS     := -lSDL2 -lz -lgdi32 -lpthread
@@ -304,6 +314,19 @@ SAKAMURA_OBJS  = $(TKERNEL_SRCS:.c=.sakamura.o)
 FOMA_OBJS      = $(FOMA_SRCS:.c=.foma.o)
 UEFI_OBJS      = $(UEFI_SRCS:.c=.uefi.o)
 PC98_OBJS      = $(PC98_SRCS:.c=.pc98.o)
+
+# Object files are host-toolchain specific. In particular, a QEMU object
+# produced by MinGW is a COFF file and cannot be linked by a Linux compiler.
+# Keep a host/compiler stamp as a prerequisite so moving one checkout between
+# hosts triggers a one-time rebuild without penalizing normal incremental
+# builds.
+QEMU_BUILD_TAG   := $(shell uname -s 2>/dev/null || echo unknown)-$(shell $(CC) -dumpmachine 2>/dev/null || echo unknown)
+QEMU_BUILD_STAMP := .build/qemu-$(QEMU_BUILD_TAG).stamp
+$(QEMU_OBJS): $(QEMU_BUILD_STAMP) Makefile
+
+$(QEMU_BUILD_STAMP):
+	@mkdir -p $(dir $@)
+	@touch $@
 
 # ── Output names ──────────────────────────────────────────────────
 POSIX_TARGET   = btron-posix

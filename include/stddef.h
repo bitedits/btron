@@ -21,6 +21,11 @@
 #ifndef __STDDEF_H__
 #define __STDDEF_H__
 
+#if defined(_WIN32)
+/* MinGW provides ABI-correct fundamental types on 64-bit Windows. */
+#include_next <stddef.h>
+#else
+
 #include <stdtype.h>
 
 #ifdef __cplusplus
@@ -80,6 +85,7 @@ typedef int           wint_t;
 #ifdef __cplusplus
 }
 #endif
+#endif /* _WIN32 */
 #endif /* __STDDEF_H__ */
 
 

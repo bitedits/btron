@@ -27,6 +27,7 @@ extern void raise_sdl_window(void);
 
 extern void btron_kernel_init(int target_mode);
 
+#if !defined(_WIN32)
 #include <termios.h>
 #include <unistd.h>
 
@@ -53,12 +54,15 @@ static void set_terminal_raw_tty(void) {
         }
     }
 }
+#endif /* !_WIN32 */
 
 int main(int argc, char **argv) {
     (void)argc;
     (void)argv;
 
+#if !defined(_WIN32)
     set_terminal_raw_tty();
+#endif
 
     H screen_w = 1280;
     H screen_h = 800;

@@ -29,7 +29,7 @@ ER init_evt_sys(void) {
     return E_OK;
 }
 
-#if defined(__STDC_HOSTED__) && __STDC_HOSTED__ == 1
+#if defined(__STDC_HOSTED__) && __STDC_HOSTED__ == 1 && !defined(_WIN32)
 #include <stdio.h>
 #include <unistd.h>
 #include <fcntl.h>
@@ -122,7 +122,7 @@ ER get_evt(EVT *p_evt, W timeout_ms) {
     if (!p_evt) return E_PAR;
     (void)timeout_ms;
 
-#if defined(__STDC_HOSTED__) && __STDC_HOSTED__ == 1
+#if defined(__STDC_HOSTED__) && __STDC_HOSTED__ == 1 && !defined(_WIN32)
     /* Poll TTY stdin for terminal input */
     poll_tty_stdin();
 #endif

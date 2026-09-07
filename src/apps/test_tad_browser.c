@@ -940,20 +940,20 @@ static void test_address_bar_and_ascii_spacing_alignment(void) {
     }
     TEST_ASSERT(tb->addr_cursor == 0 && tb->addr_input[0] == '\0', "Cleared address input buffer");
 
-    /* Type "b-book/hmi/HMI.tad" */
-    const char *target = "b-book/hmi/HMI.tad";
+    /* Type the flat B-Book output path. */
+    const char *target = "b-book/hmi.tad";
     for (int i = 0; target[i]; i++) {
         ev.key = (UW)target[i];
         wnd->event_handler(wnd, &ev);
     }
-    TEST_ASSERT(strcmp(tb->addr_input, "b-book/hmi/HMI.tad") == 0, "Address bar contains 'b-book/hmi/HMI.tad'");
+    TEST_ASSERT(strcmp(tb->addr_input, "b-book/hmi.tad") == 0, "Address bar contains 'b-book/hmi.tad'");
 
     /* Press Return to navigate */
     ev.key = BTRON_KEY_RETURN;
     wnd->event_handler(wnd, &ev);
     TEST_ASSERT(tb->addr_active == FALSE, "Return dismissed address editing mode");
-    TEST_ASSERT(strstr(tb->file_path, "HMI.tad") != NULL, "TAD Browser navigated to HMI.tad");
-    TEST_ASSERT(tb->span_count > 10, "Successfully loaded spans from b-book/hmi/HMI.tad");
+    TEST_ASSERT(strstr(tb->file_path, "hmi.tad") != NULL, "TAD Browser navigated to hmi.tad");
+    TEST_ASSERT(tb->span_count > 10, "Successfully loaded spans from b-book/hmi.tad");
 
     /* 4. Verify table in HMI.tad loaded with font_id == 2 */
     BOOL found_table_box = FALSE;

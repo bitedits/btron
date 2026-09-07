@@ -1904,6 +1904,7 @@ void tad_browser_resolve_path(const char *current_path, const char *target, char
     const char *prefixes[] = {
         "tad_bin/",
         "tad_bin/b-book/",
+        /* Legacy nested B-Book paths remain supported below. */
         "tad_bin/b-book/hmi/",
         "tad_bin/b-book/kernel/",
         "tad_bin/b-book/cores/",

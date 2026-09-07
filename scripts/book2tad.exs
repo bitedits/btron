@@ -1003,7 +1003,14 @@ if File.dir?(src_dir) do
   IO.puts(" Target Specifications   : BeBook-Style C99 Systems Reference / BTRON 3.20")
   IO.puts("======================================================================")
 
-  html_files = Path.wildcard(Path.join(src_dir, "**/*.html"))
+  # B-Book manuals are flat: b-book/index.html plus b-book/<subsystem>.html.
+  # Keep the root index as the sole special case and avoid resurrecting output
+  # paths for the former b-book/<subsystem>/index.html layout.
+  html_files =
+    src_dir
+    |> Path.join("*.html")
+    |> Path.wildcard()
+    |> Enum.sort()
 
   results =
     Enum.map(html_files, fn file ->

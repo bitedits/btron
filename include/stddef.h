@@ -54,6 +54,14 @@ typedef __wchar_t	wchar_t;
 #define NULL	0
 #endif
 
+#ifndef offsetof
+#if defined(__GNUC__) && __GNUC__ >= 4
+#define offsetof(type, member)  __builtin_offsetof(type, member)
+#else
+#define offsetof(type, member)  ((size_t)&((type *)0)->member)
+#endif
+#endif
+
 
 #if 1	/* wint_tコンパイルエラーの回避の為追加 */
 #ifndef _WINT_T

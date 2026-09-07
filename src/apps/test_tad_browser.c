@@ -96,7 +96,7 @@ static void test_linear_stream_layout(void) {
     const char *doc_text =
         "■ 第1章 BTRON 共通データ仕様\n"
         "BTRONアーキテクチャの基本概念とデータ型定義。\n"
-        "[仮身] #102 : Data Types Specification (doc/shared_data/data_type.html)\n"
+        "[仮身] #102 : Data Types Specification (b-spec/shared_data/data_type.html)\n"
         "────────────────────────────────────────\n"
         "End of Chapter 1\n";
 

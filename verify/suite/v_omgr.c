@@ -1,7 +1,7 @@
 /*
  * v_omgr.c — BTRON 3.20 Real/Virtual Object Manager Verification Suite
  *
- * Normative source: doc/os_spec/shell/omgr.html (#ala)
+ * Normative source: b-spec/os_spec/shell/omgr.html (#ala)
  */
 
 #include "../btron_verify.h"

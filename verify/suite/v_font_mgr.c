@@ -1,7 +1,7 @@
 /*
  * v_font_mgr.c — BTRON 3.20 Font Manager Verification Suite
  *
- * Normative source: doc/os_spec/shell/font_mgr.html
+ * Normative source: b-spec/os_spec/shell/font_mgr.html
  */
 
 #include "../btron_verify.h"

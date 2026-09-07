@@ -1,7 +1,7 @@
 #!/usr/bin/env elixir
 # ==============================================================================
 # BTRON3 SPEC 3.20 Native TAD Compiler: scripts/html2tad.exs
-# Converts HTML documentation from ./doc/ into binary TAD files (.tad)
+# Converts HTML documentation from ./b-spec/ into binary TAD files (.tad)
 # Compatible with B-right/V Cho-Kanji (超漢字) and B-System Cleanroom OS.
 # ==============================================================================
 
@@ -31,7 +31,7 @@ defmodule BtronTAD.Compiler do
     |> String.replace(~r/<script\b[^>]*>.*?<\/script>/is, "")
     |> String.replace(~r/<style\b[^>]*>.*?<\/style>/is, "")
     |> String.replace(~r/<!--.*?-->/s, "")
-    # Profile 1: ./doc/ & ./b-system/ (Ukrainian/Japanese header banner)
+    # Profile 1: ./b-spec/ & ./b-system/ (Ukrainian/Japanese header banner)
     |> String.replace(~r/<div style=['"][^'"]*(?:background:#0057b7|background:#333|background:#1b365d)[^'"]*['"]>.*?<\/div>/is, "")
     # Profile 2: ./b-hmi/ & ./b-free/ (Breadcrumbs & Navigation controls)
     |> String.replace(~r/<nav\b[^>]*>.*?<\/nav>/is, "")
@@ -642,7 +642,7 @@ defmodule BtronTAD.Compiler do
 
     btron3_elements = [
       {:h1, "BTRON3 仕様書 バージョン 3.20.00 (Sakamura BTRON Architecture)"},
-      {:image, "doc/shared_data/gif/all_struct.gif", "図 1: BTRON3 実身・仮身データ構造仕様 (Shared Data Structure)"},
+      {:image, "b-spec/shared_data/gif/all_struct.gif", "図 1: BTRON3 実身・仮身データ構造仕様 (Shared Data Structure)"},
       {:link, "shared_data/index.tad", "Part 1: 共通データ構造仕様 (Shared Data Specifications)"},
       {:link, "os_spec/index.tad", "Part 2: オペレーティングシステム機能仕様 (OS Specification)"},
       {:link, "os_spec/indexfig.tad", "Static Analysis & Bounded Heap Memory Model (NASA JPL Rule 3)"},
@@ -665,7 +665,7 @@ defmodule BtronTAD.Compiler do
 
     tkernel_elements = [
       {:h1, "T-Kernel 2.0 リアルタイムOS仕様書及び開発ガイド"},
-      {:image, "doc/os_spec/kernel/gif/processtask.gif", "図 2: μITRON リアルタイムタスク状態遷移図 (Task State Machine)"},
+      {:image, "b-spec/os_spec/kernel/gif/processtask.gif", "図 2: μITRON リアルタイムタスク状態遷移図 (Task State Machine)"},
       {:link, "t-kernel/tkernel_spec.tad", "第1章 T-Kernel 2.0 コアアーキテクチャ (Core Architecture)"},
       {:link, "t-kernel/tkernel_startup.tad", "第2章 ブート及び初期化シーケンス (Startup Sequence)"},
       {:link, "t-kernel/tkernel_qemu.tad", "第3章 QEMU仮想環境とボード展開 (QEMU & Board Deployment)"},
@@ -684,7 +684,7 @@ defmodule BtronTAD.Compiler do
 
     bfree_elements = [
       {:h1, "B-Free 自由なBTRON3オペレーティングシステム技術解説書"},
-      {:image, "doc/os_spec/kernel/gif/filesystem.gif", "図 3: BTRON ファイルシステム構造仕様 (Filesystem Structure)"},
+      {:image, "b-spec/os_spec/kernel/gif/filesystem.gif", "図 3: BTRON ファイルシステム構造仕様 (Filesystem Structure)"},
       {:link, "b-free/manifest.tad", "第1章 B-Free マニフェストと自由ソフトウェアの理念"},
       {:link, "b-free/kernel.tad", "第2章 μITRON 3.0 マイクロカーネルアーキテクチャ"},
       {:link, "b-free/posix.tad", "第3章 POSIXエミュレーション層とシステムコール"},
@@ -697,7 +697,7 @@ defmodule BtronTAD.Compiler do
 
     tron_hmi_elements = [
       {:h1, "TRON 人間・機械インタフェース (HMI) 設計仕様書及び標準カタログ"},
-      {:image, "doc/os_spec/shell/gif/title_bar.gif", "図 4: BTRON3 標準ウィンドウとタイトルバー意匠 (Window Geometry)"},
+      {:image, "b-spec/os_spec/shell/gif/title_bar.gif", "図 4: BTRON3 標準ウィンドウとタイトルバー意匠 (Window Geometry)"},
       {:link, "b-hmi/index.tad", "第1章 TRON HMI 統合仕様書・設計指針ガイド (HMI Specification)"},
       {:link, "b-hmi/part1/chap03_sui.tad", "第2章 SUI 実身操作パネル標準仕様 (Standard User Interface)"},
       {:link, "b-hmi/part1/chap04_gui.tad", "第3章 GUI ウィンドウマネージャと角枠リサイズ意匠 (GUI Blueprint)"},
@@ -780,7 +780,7 @@ BtronTAD.Compiler.compile_foundational_books(out_dir)
 
 # 2. Unified HTML -> TAD Conversion for Local Source Catalogs
 # Catalog Profiles:
-#   - doc/      : BTRON3 Standard Specification (Shared Data, μITRON Kernel, DP Graphics, Shell)
+#   - b-spec/   : BTRON3 Standard Specification (Shared Data, μITRON Kernel, DP Graphics, Shell)
 #   - b-free/   : Free Software BTRON3 Architecture Manifesto & Cleanroom Kernel
 #   - b-system/ : B-System Posix & VirtIO Core Architecture & System Specifications
 #   - t-kernel/ : T-Kernel 2.0 Real-Time OS & Board Deployment Manuals

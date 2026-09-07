@@ -151,7 +151,7 @@
                 <a href="#matrix" class="pdf-badge" style="background: var(--tron-blue); color: white; box-shadow: 0 2px 10px rgba(0, 87, 183, 0.4);">📊 Dynamic Audit Matrix (370/410)</a>
                 <a href="#subsystems" class="pdf-badge">🔍 Subsystem Commentary</a>
                 <a href="#verdict" class="pdf-badge">📋 Certification Verdict</a>
-                <a href="btron-article.pdf" class="pdf-badge" target="_blank">📄 BTRON3 Spec Paper (PDF)</a>
+                <a href="doc/pdf/btron-article.pdf" class="pdf-badge" target="_blank">📄 BTRON3 Spec Paper (PDF)</a>
             </div>
         </div>
     </header>
@@ -162,7 +162,7 @@
         <section class="audit-card">
             <h3><span>Executive Summary for Certification Bodies &amp; Evaluators</span> <span class="badge-partial">Formal Evaluation</span></h3>
             <p>
-                This document is prepared specifically for technical auditors, the <b>TRON Association</b>, the <b>TRON Forum</b>, and embedded systems evaluators who demand exact, verifiable adherence to the normative <b>BTRON 3.20 Operating System Specification</b> (documented in the canonical Japanese/Ukrainian corpus at <code class="mono">doc/os_spec/</code>).
+                This document is prepared specifically for technical auditors, the <b>TRON Association</b>, the <b>TRON Forum</b>, and embedded systems evaluators who demand exact, verifiable adherence to the normative <b>BTRON 3.20 Operating System Specification</b> (documented in the canonical Japanese/Ukrainian corpus at <code class="mono">b-spec/os_spec/</code>).
             </p>
             <div class="quote-box">
                 <b>Core Conformance Principle:</b> Our audit enforces strict transparency. Rather than mocking or faking 100% test passes for incomplete modules, missing subsystems (such as full vector Font Management, network socket pipelines, and real-object transaction brokers) are linkable as standard BTRON ABI stubs that explicitly return <code class="mono">E_NOSPT</code> (-17). The automated test suite exercises each normative requirement and honestly registers failures, ensuring evaluators see the exact boundary between operational code and pending implementation.
@@ -379,7 +379,7 @@
             <div class="audit-card">
                 <h3><span>2. Sakamura Window Manager (WND)</span> <span class="badge-pass">[IMPL] Conforming</span></h3>
                 <p>
-                    <b>Normative Reference:</b> <code class="mono">doc/os_spec/shell/window.html</code> &amp; <code class="mono">include/btron/wnd.h</code>.<br>
+                    <b>Normative Reference:</b> <code class="mono">b-spec/os_spec/shell/window.html</code> &amp; <code class="mono">include/btron/wnd.h</code>.<br>
                     <b>Evaluation:</b> Implements authentic Sakamura compact tabs (<code class="mono">WND_ATTR_COMPACT_TAB</code>) and sliding title tabs (<code class="mono">WND_ATTR_SLIDING_TAB</code>) with horizontal drag-offsets. Includes dirty region clipping, z-order re-stacking (<code class="mono">top_wnd</code>), coordinate mapping, close button hit detection, and recursive repaint pipelines without desktop flicker.
                 </p>
             </div>
@@ -388,7 +388,7 @@
             <div class="audit-card">
                 <h3><span>3. Physical Panel HMI Components (HMI)</span> <span class="badge-pass">[IMPL] Conforming</span></h3>
                 <p>
-                    <b>Normative Reference:</b> <code class="mono">doc/os_spec/shell/panel.html</code> &amp; <code class="mono">parts.html</code>.<br>
+                    <b>Normative Reference:</b> <code class="mono">b-spec/os_spec/shell/panel.html</code> &amp; <code class="mono">parts.html</code>.<br>
                     <b>Evaluation:</b> Provides cleanroom implementations for all 10 core industrial physical controls:
                 </p>
                 <ul style="margin: 0.8rem 0 0.8rem 1.8rem; line-height: 1.8;">
@@ -405,7 +405,7 @@
             <div class="audit-card">
                 <h3><span>4. Real / Virtual Object Manager (OMGR)</span> <span class="badge-fail">[STUB] 15 Clauses Pending</span></h3>
                 <p>
-                    <b>Normative Reference:</b> <code class="mono">doc/os_spec/shell/omgr.html</code> &amp; <code class="mono">include/btron/omgr.h</code>.<br>
+                    <b>Normative Reference:</b> <code class="mono">b-spec/os_spec/shell/omgr.html</code> &amp; <code class="mono">include/btron/omgr.h</code>.<br>
                     <b>Audit Comment:</b> The underlying hypermedia data model (<code class="mono">ROBJ</code> / <code class="mono">VOBJ_LINK</code>) is operational in the kernel; however, the 54 advanced GUI Shell Object Manager syscalls (§3.8.5: <code class="mono">oreg_vob</code>, <code class="mono">b_odup_vob</code>, <code class="mono">odel_vob</code>, <code class="mono">osta_prc</code>, <code class="mono">oput_dat</code>, <code class="mono">oupd_fil</code>, etc.) and application helpers (§3.8.6: <code class="mono">adsp_sel</code>, <code class="mono">adsp_slt</code>, <code class="mono">apnl_men</code>, <code class="mono">achg_bgc</code>) are currently provided as linkable stubs returning <code class="mono">E_NOSPT</code>. These stubs are fully tested in <code class="mono">v_omgr.c</code> and accurately report failure until connected to the desktop layout engine.
                 </p>
             </div>
@@ -414,7 +414,7 @@
             <div class="audit-card">
                 <h3><span>5. Multilingual Font Manager (FMGR)</span> <span class="badge-fail">[STUB] 13 Clauses Pending</span></h3>
                 <p>
-                    <b>Normative Reference:</b> <code class="mono">doc/os_spec/shell/font_mgr.html</code> &amp; <code class="mono">include/btron/font_mgr.h</code>.<br>
+                    <b>Normative Reference:</b> <code class="mono">b-spec/os_spec/shell/font_mgr.html</code> &amp; <code class="mono">include/btron/font_mgr.h</code>.<br>
                     <b>Audit Comment:</b> Bitmap font rendering for JIS X 0208 and TRON Code language planes is fully operational in <code class="mono">src/font/jis_fonts.c</code> and <code class="mono">troncode.c</code>. The formal BTRON Font Manager dynamic descriptor API (<code class="mono">fdef_fnt</code>, <code class="mono">fdel_fnt</code>, <code class="mono">fopn_fon</code>, <code class="mono">fcls_fon</code>, <code class="mono">fset_fon</code>, <code class="mono">fget_img</code>, <code class="mono">fset_ang</code>) is declared with complete normative data structures (<code class="mono">FDEF</code>, <code class="mono">FSSPEC</code>, <code class="mono">FDATA</code>) and returns <code class="mono">E_NOSPT</code> pending integration with scalable outline rasterizers.
                 </p>
             </div>
@@ -423,7 +423,7 @@
             <div class="audit-card">
                 <h3><span>6. TCP/IP Sockets Network Manager</span> <span class="badge-fail">[STUB] 12 Clauses Pending</span></h3>
                 <p>
-                    <b>Normative Reference:</b> <code class="mono">doc/os_spec/shell/tcpip.html</code> &amp; <code class="mono">include/btron/tcpip.h</code>.<br>
+                    <b>Normative Reference:</b> <code class="mono">b-spec/os_spec/shell/tcpip.html</code> &amp; <code class="mono">include/btron/tcpip.h</code>.<br>
                     <b>Audit Comment:</b> The complete BTRON socket specification (<code class="mono">so_socket</code>, <code class="mono">so_bind</code>, <code class="mono">so_listen</code>, <code class="mono">so_accept</code>, <code class="mono">so_connect</code>, <code class="mono">so_send</code>, <code class="mono">so_recv</code>, <code class="mono">so_select</code>, <code class="mono">so_gethostbyname</code>) is linkable via <code class="mono">src/kernel/tcpip.c</code> and returns <code class="mono">E_NOSPT</code>. This provides full ABI linkability while isolating the microkernel until the VirtIO network pipeline is enabled.
                 </p>
             </div>

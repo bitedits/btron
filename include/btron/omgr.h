@@ -2,7 +2,7 @@
  * BTRON 3.20 Real and Virtual Object Manager API (Менеджер Реальних та Віртуальних об'єктів)
  * include/btron/omgr.h
  *
- * Normative source: doc/os_spec/shell/omgr.html
+ * Normative source: b-spec/os_spec/shell/omgr.html
  */
 
 #ifndef __BTRON_OMGR_H__

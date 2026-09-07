@@ -2,7 +2,7 @@
  * BTRON 3.20 TCP/IP Network Manager API
  * include/btron/tcpip.h
  *
- * Normative source: doc/os_spec/shell/tcpip.html
+ * Normative source: b-spec/os_spec/shell/tcpip.html
  */
 
 #ifndef __BTRON_TCPIP_H__

@@ -1448,16 +1448,14 @@ static int resolve_and_draw_image(const TAD_BROWSER *tb, GDEV *dev, const TAD_SP
         "b-hmi",
         "tad_bin/b-system",
         "b-system",
-        "tad_bin/shared_data",
-        "doc/shared_data",
-        "tad_bin/os_spec/shell",
-        "doc/os_spec/shell",
-        "tad_bin/os_spec/kernel",
-        "doc/os_spec/kernel",
-        "tad_bin/os_spec/dp",
-        "doc/os_spec/dp",
+        "tad_bin/b-spec",
+        "b-spec",
         "tad_bin/b-free",
+        "b-free",
         "tad_bin/t-kernel",
+        "t-kernel",
+        "tad_bin/b-book",
+        "b-book",
         NULL
     };
 

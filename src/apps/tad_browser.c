@@ -105,6 +105,48 @@ extern WND* open_vobj_manager_window(void);
 static TAD_BROWSER g_active_browser;
 static void tad_init_menu_bar(TAD_BROWSER *tb);
 
+static BOOL line_has_monospace_glyphs(const char *line) {
+    if (!line) return FALSE;
+
+    if (line[0] == '|' || strncmp(line, "+-", 2) == 0 ||
+        strncmp(line, "```", 3) == 0 || strncmp(line, "  ", 2) == 0) {
+        return TRUE;
+    }
+
+    const unsigned char *p = (const unsigned char *)line;
+    while (*p) {
+        UW codepoint;
+        int step;
+
+        if (*p < 0x80) {
+            codepoint = *p;
+            step = 1;
+        } else if ((*p & 0xE0) == 0xC0 && p[1]) {
+            codepoint = ((UW)(p[0] & 0x1F) << 6) | (p[1] & 0x3F);
+            step = 2;
+        } else if ((*p & 0xF0) == 0xE0 && p[1] && p[2]) {
+            codepoint = ((UW)(p[0] & 0x0F) << 12) |
+                        ((UW)(p[1] & 0x3F) << 6) | (p[2] & 0x3F);
+            step = 3;
+        } else if ((*p & 0xF8) == 0xF0 && p[1] && p[2] && p[3]) {
+            codepoint = ((UW)(p[0] & 0x07) << 18) |
+                        ((UW)(p[1] & 0x3F) << 12) |
+                        ((UW)(p[2] & 0x3F) << 6) | (p[3] & 0x3F);
+            step = 4;
+        } else {
+            p++;
+            continue;
+        }
+
+        if ((codepoint >= 0x2500 && codepoint <= 0x25FF) ||
+            (codepoint >= 0x2580 && codepoint <= 0x259F)) {
+            return TRUE;
+        }
+        p += step;
+    }
+    return FALSE;
+}
+
 void tad_browser_init(TAD_BROWSER *tb) {
     if (!tb) return;
     memset(tb, 0, sizeof(TAD_BROWSER));
@@ -239,10 +281,7 @@ static void parse_text_tad_lines(TAD_BROWSER *tb, const char *text, UW len) {
             span->style.is_hr = TRUE;
             span->style.line_pitch = 12;
             span->text[0] = '\0';
-        } else if (line[0] == '|' || strncmp(line, "```", 3) == 0 || strncmp(line, "  ", 2) == 0 ||
-                   strstr(line, "┌") != NULL || strstr(line, "│") != NULL ||
-                   strstr(line, "├") != NULL || strstr(line, "└") != NULL ||
-                   strstr(line, "+-") != NULL) {
+        } else if (line_has_monospace_glyphs(line)) {
             span->style = cur_style;
             span->style.font_id = 2;     /* Monospace */
             span->style.font_size = 10;
@@ -448,7 +487,7 @@ ER tad_browser_load_buffer(TAD_BROWSER *tb, const void *buf, UW len, const char 
                     TAD_SPAN *span = &tb->spans[tb->span_count++];
                     memset(span, 0, sizeof(TAD_SPAN));
                     span->style = cur_style;
-                    if (strstr(line, "┌") || strstr(line, "│") || strstr(line, "├") || strstr(line, "└") || strstr(line, "+-")) {
+                    if (line_has_monospace_glyphs(line)) {
                         span->style.font_id = 2;
                     }
                     strncpy(span->text, line, sizeof(span->text) - 1);
@@ -1904,19 +1943,6 @@ void tad_browser_resolve_path(const char *current_path, const char *target, char
     const char *prefixes[] = {
         "tad_bin/",
         "tad_bin/b-book/",
-        /* Legacy nested B-Book paths remain supported below. */
-        "tad_bin/b-book/hmi/",
-        "tad_bin/b-book/kernel/",
-        "tad_bin/b-book/cores/",
-        "tad_bin/b-book/graphics/",
-        "tad_bin/b-book/tip/",
-        "tad_bin/b-book/vobject/",
-        "tad_bin/b-book/window/",
-        "tad_bin/b-book/desktop/",
-        "tad_bin/b-book/font/",
-        "tad_bin/b-book/settings/",
-        "tad_bin/b-book/drivers/",
-        "tad_bin/b-book/apps/",
         "tad_bin/shared_data/",
         "tad_bin/os_spec/",
         "tad_bin/os_spec/kernel/",

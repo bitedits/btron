@@ -1,0 +1,113 @@
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 3.2 Final//EN">
+<HTML>
+<HEAD>
+<META CHARSET="UTF-8">
+<META NAME="viewport" CONTENT="width=device-width, initial-scale=1.0">
+<LINK REL="stylesheet" HREF="../../doc.css">
+
+<TITLE>
+  Розділ 6. Графічні примітиви (Display Primitives Specification)
+</TITLE>
+<LINK REL="parent" HREF="../index.html">
+<LINK REL="previous" HREF="../kernel/system.html">
+<LINK REL="next" HREF="intro.html">
+</HEAD>
+<BODY>
+
+<!-- Sakamura BTRON / BTRON3 Specification - Ukrainian Translation -->
+<DIV STYLE='background:#0057b7; color:#ffd700; padding:8px 15px; font-weight:bold; font-family:sans-serif; margin-bottom:15px; border-radius:4px;'>
+  Специфікація BTRON3 (Український переклад) | Розділ 6: Графічні примітиви (Display Primitives)
+</DIV>
+<A href="../index.html">Повернутися до змісту частини 2 (Специфікація ОС)</A><BR>
+<A href="../../index.html">Повернутися до головного змісту всієї специфікації</A><BR>
+<A href="../kernel/system.html">Попередня сторінка: 5.10 Системне управління (Повернутися)</A><BR>
+<A href="intro.html">Наступна сторінка: 6.1 Вступ (Перейти)</A><BR>
+<HR>
+
+<H1><A name="acv">Розділ 6. Графічні примітиви (Display Primitives Specification)</A></H1>
+
+<H2>Зміст розділу 6 частини 2</H2>
+
+<DL class="toc-container">
+ <DT><H3><a href="intro.html#acw">6.1 Вступ та огляд підсистеми</a></H3></DT>
+ <DD>
+    <UL class="toc-sublist">
+      <LI><a href="intro.html#acx">6.1.1 Загальні відомості про графічні примітиви</a></LI>
+    </UL>
+ </DD>
+
+ <DT><H3><a href="basic_concept.html#acy">6.2 Базові графічні концепції</a></H3></DT>
+ <DD>
+    <UL class="toc-sublist">
+      <LI><a href="basic_concept.html#acz">6.2.1 Координатна площина / Точки / Прямокутники</a></LI>
+      <LI><a href="basic_concept.html#ada">6.2.2 Бітові карти (Bitmaps)</a></LI>
+      <LI><a href="basic_concept.html#adh">6.2.3 Представлення кольору (Color / Color Map)</a></LI>
+      <LI><a href="basic_concept.html#adj">6.2.4 Середовище малювання (Drawing Environment / GID)</a></LI>
+    </UL>
+ </DD>
+
+ <DT><H3><a href="basic_func.html#adu">6.3 Базові функції графічного порту</a></H3></DT>
+ <DD>
+    <UL class="toc-sublist">
+      <LI><a href="basic_func.html#adv">6.3.1 Створення та видалення середовища малювання</a></LI>
+      <LI><a href="basic_func.html#adw">6.3.2 Управління палітрою (Color Map)</a></LI>
+      <LI><a href="basic_func.html#adx">6.3.3 Доступ до параметрів середовища малювання</a></LI>
+      <LI><a href="basic_func.html#aea">6.3.4 Перетворення координат</a></LI>
+    </UL>
+ </DD>
+
+ <DT><H3><a href="figure_func.html#aeb">6.4 Функції малювання геометричних фігур</a></H3></DT>
+ <DD>
+    <UL class="toc-sublist">
+      <LI><a href="figure_func.html#aec">6.4.1 Малювання ліній та точок</a></LI>
+      <LI><a href="figure_func.html#aee">6.4.2 Малювання прямокутників</a></LI>
+      <LI><a href="figure_func.html#aeg">6.4.3 Малювання прямокутників із закругленими кутами</a></LI>
+      <LI><a href="figure_func.html#aeh">6.4.4 Малювання еліпсів та кіл</a></LI>
+      <LI><a href="figure_func.html#aej">6.4.5 Малювання дуг, секторів та сегментів</a></LI>
+      <LI><a href="figure_func.html#aek">6.4.6 Малювання полігонів та ламаних ліній</a></LI>
+      <LI><a href="figure_func.html#aem">6.4.7 Малювання довільних фігур</a></LI>
+      <LI><a href="figure_func.html#aen">6.4.8 Малювання кривих (Сплайни / Безьє)</a></LI>
+      <LI><a href="figure_func.html#aeo">6.4.9 Операції з бітовими картами (BitBlt, RasterOps)</a></LI>
+      <LI><a href="figure_func.html#aer">6.4.10 Обробка потрапляння (Picking)</a></LI>
+    </UL>
+ </DD>
+
+ <DT><H3><a href="character_func.html#aes">6.5 Функції виведення тексту та символів</a></H3></DT>
+ <DD>
+    <UL class="toc-sublist">
+      <LI><a href="character_func.html#aet">6.5.1 Налаштування текстового середовища малювання</a></LI>
+      <LI><a href="character_func.html#aeu">6.5.2 Функції перевірки символів та рядків</a></LI>
+      <LI><a href="character_func.html#aev">6.5.3 Функції малювання символів та тексту</a></LI>
+    </UL>
+ </DD>
+
+ <DT><H3><a href="pointer_func.html#aex">6.6 Функції керування вказівником</a></H3></DT>
+ <DD>
+    <UL class="toc-sublist">
+      <LI><a href="pointer_func.html#aey">6.6.1 Вказівник миші (Pointer)</a></LI>
+      <LI><a href="pointer_func.html#aez">6.6.2 Стан та форми вказівника</a></LI>
+      <LI><a href="pointer_func.html#afb">6.6.3 Системні виклики керування вказівником</a></LI>
+      <LI><a href="pointer_func.html#afc">6.6.4 Стандартні форми покажчиків курсора</a></LI>
+    </UL>
+ </DD>
+</DL>
+
+<HR>
+<A href="../index.html">Повернутися до змісту частини 2 (Специфікація ОС)</A><BR>
+<A href="../../index.html">Повернутися до головного змісту всієї специфікації</A><BR>
+<A href="../kernel/system.html">Попередня сторінка: 5.10 Системне управління (Повернутися)</A><BR>
+<A href="intro.html">Наступна сторінка: 6.1 Вступ (Перейти)</A><BR>
+
+<footer class="doc-footer">
+    <div class="doc-footer-container">
+        <div>Специфікація Sakamura BTRON / BTRON3 (Версія 3.20.00)</div>
+        <ul class="doc-footer-links">
+            <li><a href="../../index.html">Головний зміст</a></li>
+            <li><a href="../../shared_data/index.html">Частина 1</a></li>
+            <li><a href="../index.html">Частина 2</a></li>
+            <li><a href="../../../index.html">BTRON Home</a></li>
+        </ul>
+    </div>
+</footer>
+</BODY>
+</HTML>

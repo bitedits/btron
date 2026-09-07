@@ -550,7 +550,7 @@ defmodule BtronTAD.Compiler do
           catalog == "b-system" -> "B-System"
           catalog == "b-hmi" -> "B-HMI"
           catalog == "b-free" -> "B-Free"
-          catalog == "doc" -> "BTRON3_Index"
+          catalog == "b-spec" -> "B-Spec"
           html_path == "index.html" -> "B-System_Portal"
           true -> "Index"
         end
@@ -786,7 +786,7 @@ BtronTAD.Compiler.compile_foundational_books(out_dir)
 #   - t-kernel/ : T-Kernel 2.0 Real-Time OS & Board Deployment Manuals
 #   - b-hmi/    : TRON Human-Machine Interface Guidelines (if present locally)
 source_trees = [
-  {"doc", out_dir},
+  {"b-spec", Path.join(out_dir, "b-spec")},
   {"b-free", Path.join(out_dir, "b-free")},
   {"b-system", Path.join(out_dir, "b-system")},
   {"t-kernel", Path.join(out_dir, "t-kernel")}

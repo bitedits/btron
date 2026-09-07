@@ -1,0 +1,1909 @@
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 3.2 Final//EN">
+<HTML>
+<HEAD>
+<META CHARSET="UTF-8">
+<META NAME="viewport" CONTENT="width=device-width, initial-scale=1.0">
+<LINK REL="stylesheet" HREF="../../doc.css">
+
+<TITLE>
+  3.8 Менеджер Реальних та Віртуальних об'єктів (Real/Virtual Body Manager)
+</TITLE>
+<LINK REL="parent" HREF="../index.html">
+<LINK REL="previous" HREF="tip.html">
+<LINK REL="next" HREF="font_mgr.html">
+</HEAD>
+<BODY>
+
+<!-- Sakamura BTRON / BTRON3 Specification - Ukrainian Translation -->
+<DIV STYLE='background:#0057b7; color:#ffd700; padding:8px 15px; font-weight:bold; font-family:sans-serif; margin-bottom:15px; border-radius:4px;'>
+  Специфікація BTRON3 (Український переклад) | Специфікація ОС Sakamura BTRON / BTRON3
+</DIV>
+<A href="../index.html">Повернутися до змісту розділу Графічної оболонки</A><BR>
+<A href="tip.html">Попередня сторінка: 3.7 Примітиви вводу тексту (Повернутися)</A><BR>
+<A href="font_mgr.html">Наступна сторінка: 3.9 Менеджер шрифтів (Перейти)</A><BR>
+<HR>
+
+<H2><A name="ala">3.8 Менеджер Реальних та Віртуальних об'єктів (Real/Virtual Body Manager)</A></H2>
+
+<H3><A name="alb">3.8.1 Функції Менеджера Реальних та Віртуальних об'єктів</A></H3>
+
+<H4><A name="alc">3.8.1.1 Загальний огляд</A></H4>
+
+<P>
+  Менеджер Реальних та Віртуальних об'єктів реалізує фундаментальну концепцію BTRON:
+  модель <B>Реальний об'єкт (Реальний об'єкт, Jisshin) / Віртуальний об'єкт (Вітуальний об'єкт, Kashin)</B>.
+  Реальний об'єкт — це файл-носій даних, а Віртуальний об'єкт — графічне посилання
+  на нього, через яке користувач взаємодіє з даними.
+</P>
+<P>
+  Крім того, менеджер надає функції реєстрації та видалення прикладних програм.
+  Усі прикладні програми запускаються через нього.
+</P>
+<P>Функції менеджера:</P>
+<OL>
+ <LI>Відображення та управління Віртуальними об'єктами
+ <LI>Відображення та управління Наліпками (, Fusene)
+ <LI>Управління прикладними програмами (реєстрація / видалення / запуск)
+ <LI>Налаштування меню
+ <LI>Управління підключенням файлових систем
+ <LI>Інші прикладні функції
+</OL>
+
+<H4><A name="ald">3.8.1.2 Реальний об'єкт / Віртуальний об'єкт / Відключений об'єкт (, Kyoshin)</A></H4>
+
+<P>
+  «Реальний об'єкт» (Реальний об'єкт) — сукупність даних, що один до одного відповідає реальному
+  файлу на носії. «Віртуальний об'єкт» (Вітуальний об'єкт) — ярлик-посилання на нього; один Реальний
+  об'єкт може мати кілька Віртуальних. «Непрямий Віртуальний об'єкт» (Вітуальний об'єкт) —
+  посилається на Реальний об'єкт на іншому пристрої через файл-посилання.
+  «Відключений об'єкт» (, Kyoshin) — непрямий об'єкт, пристрій якого зараз відключений.
+</P>
+
+<A name="ale">
+  <CENTER><IMG src="gif/voroio.gif" alt="Реальний / Віртуальний / Відключений об'єкт"></CENTER>
+</A>
+<CENTER>Мал. 114 : Реальний / Віртуальний / Відключений об'єкт</CENTER>
+
+<P>
+  Існують «закритий Віртуальний об'єкт» (Вітуальний об'єкт) — відображає лише метаінформацію,
+  та «відкритий Віртуальний об'єкт» (Вітуальний об'єкт) — показує вміст Реального об'єкта.
+</P>
+
+<H4><A name="alf">3.8.1.3 Відображення Віртуального об'єкта</A></H4>
+
+<P>
+  Закритий об'єкт: горизонтальний прямокутник з піктограмою, іменем, відношенням (),
+  типом та датою зміни. Відкритий об'єкт: розширює закриту форму вниз, додаючи зону
+  відображення вмісту Реального об'єкта.
+</P>
+
+<A name="alg">
+  <CENTER><IMG src="gif/vo_disp.gif" alt="Відображення Віртуального об'єкта"></CENTER>
+</A>
+<CENTER>Мал. 115 : Відображення Віртуального об'єкта</CENTER>
+
+<A name="alh">
+  <CENTER><IMG src="gif/title_bar.gif" alt="Рядок заголовка"></CENTER>
+</A>
+<CENTER>Мал. 116 : Рядок заголовка Віртуального об'єкта</CENTER>
+
+<A name="ali">
+  <CENTER><IMG src="gif/title_bar_ex.gif" alt="Приклади рядка заголовка"></CENTER>
+</A>
+<CENTER>Мал. 117 : Приклади рядка заголовка</CENTER>
+
+<H4><A name="alm">3.8.1.4 Операції з Віртуальними об'єктами</A></H4>
+<P>Меню «Вітуальний об'єкт» (Операції з Віртуальним об'єктом):</P>
+<TABLE>
+  <TR><TD align="right">(1)</TD> <TD>Відкрити</TD>                 <TD>відкрити</TD></TR>
+  <TR><TD align="right">(2)</TD> <TD>Закрити</TD>                  <TD>закрити</TD></TR>
+  <TR><TD align="right">(3)</TD> <TD>Видалити</TD>                 <TD>видалити</TD></TR>
+  <TR><TD align="right">(4)</TD> <TD>Копіювати до лотка</TD>       <TD>трей: копіювати</TD></TR>
+  <TR><TD align="right">(5)</TD> <TD>Перемістити до лотка</TD>     <TD>трей: перемістити</TD></TR>
+  <TR><TD align="right">(6)</TD> <TD>Змінити ім'я</TD>             <TD>ім'я</TD></TR>
+  <TR><TD align="right">(7)</TD> <TD>Змінити відношення</TD>       <TD>відношення</TD></TR>
+  <TR><TD align="right">(8)</TD> <TD>Змінити текст заголовка</TD>  <TD>текст заголовка</TD></TR>
+  <TR><TD align="right">(9)</TD> <TD>Змінити розмір символів</TD>  <TD>розмір символів</TD></TR>
+  <TR><TD align="right">(10)</TD><TD>Змінити колір</TD>            <TD>колір</TD></TR>
+  <TR><TD align="right">(11)</TD><TD>Показати інформацію</TD>      <TD>інформація</TD></TR>
+  <TR><TD align="right">(12)</TD><TD>Створити нову версію</TD>     <TD>нова версія</TD></TR>
+  <TR><TD align="right">(13)</TD><TD>Відключити</TD>               <TD>відключити</TD></TR>
+  <TR><TD align="right">(14)</TD><TD>Відкрити у вікні</TD>         <TD>відкрити у вікні</TD></TR>
+  <TR><TD align="right">(15)</TD><TD>Вставити дані з лотка</TD>    <TD>записати з лотка</TD></TR>
+  <TR><TD align="right">(16)</TD><TD>Підключити</TD>               <TD>підключити</TD></TR>
+  <TR><TD align="right">(17)</TD><TD>Показати стан диска</TD>      <TD>стан</TD></TR>
+  <TR><TD align="right">(18)</TD><TD>Дефрагментація</TD>           <TD>----</TD></TR>
+  <TR><TD align="right">(19)</TD><TD>Запустити утиліту</TD>        <TD>(назва утиліти)</TD></TR>
+</TABLE>
+
+<H3><A name="alz">3.8.4 Визначення даних та констант</A></H3>
+<PRE>
+/* Константи режиму відображення */
+V_NODISP    -- Не відображати
+V_DISP      -- Відобразити (зона вмісту заповнюється кольором фону)
+V_DISPALL   -- Відобразити (зона вмісту через відповідний додаток)
+V_DISPAREA  -- Лише зона вмісту (без рамки)
+V_ERASE     -- Стерти (заповнити кольором фону вікна)
+V_NOFRAME   -- Рамка пунктиром (для внутрішніх об'єктів)
+V_ERAORG    -- Стерти вихідну позицію при переміщенні
+
+/* Константи трансформації */
+V_SIZE      -- Трансформувати до вказаного прямокутника
+V_OPEN      -- Відкрити до розміру за замовчуванням
+V_CLOSE     -- Закрити
+V_CHECK     -- Лише повернути поточний прямокутник
+
+/* Константи атрибутів (ochg_sts) */
+V_GETSTS  0x8000  -- Отримати поточний стан без змін
+V_PURGE   0xFFFF  -- Скинути збережений образ відображення
+V_CHKREF  0x8888  -- Перевірити посилання на Реальний об'єкт
+V_CHKDUP  0x9999  -- Перевірити посилання на файл
+V_NONAME  0x0001  -- Не відображати ім'я
+V_NORELN  0x0002  -- Не відображати відношення
+V_NOTYPE  0x0004  -- Не відображати тип даних
+V_NOTIME  0x0008  -- Не відображати дату зміни
+V_FIXDEF  0x0010  -- Фіксований додаток за замовчуванням
+V_NOIMG   0x0020  -- Не зберігати образ відображення
+V_NOPICT  0x0040  -- Не відображати піктограму
+V_NOFDISP 0x0080  -- Не відображати рамку
+V_NOEXPND 0x0200  -- Не розгортати під час друку
+V_AUTEXE  0x4000  -- Автоматичний запуск
+</PRE>
+
+<H3><A name="ama">3.8.5 Функції Менеджера Реальних та Віртуальних об'єктів</A></H3>
+<P>
+  Ці функції надаються як розширені системні виклики оболонки.
+  При помилці повертається від'ємний код. При успіху — «0» або «+».
+</P>
+
+<!-- oreg_vob -->
+<TABLE border=2 width="100%"><TR><TD><TABLE width="100%">
+<TR><TD><FONT size="+2">oreg_vob</FONT></TD></TR>
+<TR><TD align="right">Register Virtual Body</TD></TR>
+<TR><TD>Реєстрація Віртуального об'єкта у вікні</TD></TR>
+</TABLE></TD></TR></TABLE>
+<H4>【Синтаксис / Прототип】</H4>
+<PRE>
+VID oreg_vob(VLINK *vlnk, VP vseg, W wid, UW disp)
+</PRE>
+<H4>【Параметри】</H4>
+<PRE>
+VLINK  *vlnk    Посилання на Реальний об'єкт (NULL — реєстрація Наліпки)
+VP      vseg    Сегмент Віртуального об'єкта (VOBSEG) або Наліпки (FUSENSEG)
+W       wid     ID вікна (>= 0), або -(ID середовища малювання) при wid &lt; 0
+UW      disp    Режим: V_NODISP | V_DISP | V_DISPALL | V_DISPAREA | [V_NOFRAME] | [V_AUTEXE]
+</PRE>
+<H4>【Значення, що повертається】</H4>
+<PRE>
+&gt;= 0    ID Віртуального об'єкта (vid &gt; 0)
+ &lt; 0    Помилка (Код помилки)
+</PRE>
+<H4>【Детальний опис】</H4>
+<P>
+  Реєструє Віртуальний об'єкт <CODE>vseg</CODE> для посилання <CODE>vlnk</CODE>
+  у вікні <CODE>wid</CODE>. Повертає ID об'єкта (vid &gt; 0).
+  При <CODE>wid &lt; 0</CODE> — реєстрація у середовищі малювання (-wid).
+  При <CODE>vlnk = NULL</CODE> — реєструється Наліпка (vseg вказує на FUSENSEG).
+  Якщо файлова система відключена і немає інших-об'єктів — відображається
+  «Панель підключення пристрою».
+</P>
+<H4>【Коди помилок】</H4>
+<PRE>
+EX_ADR   : Недопустима адреса vlnk або vseg.
+EX_LIMIT : Перевищено ліміт кількості об'єктів.
+EX_NOSPC : Нестача пам'яті.
+EX_PAR   : Неприпустиме значення disp або вміст vseg.
+EX_WID   : Вікно (wid) не існує.
+</PRE>
+
+<!-- b_odup_vob -->
+<TABLE border=2 width="100%"><TR><TD><TABLE width="100%">
+<TR><TD><FONT size="+2">b_odup_vob</FONT></TD></TR>
+<TR><TD align="right">Duplicate Virtual Body</TD></TR>
+<TR><TD>Дублювання Віртуального об'єкта</TD></TR>
+</TABLE></TD></TR></TABLE>
+<H4>【Синтаксис / Прототип】</H4>
+<PRE>
+VID b_odup_vob(W org)
+</PRE>
+<H4>【Параметри】</H4>
+<PRE>
+W   org     ID Віртуального об'єкта-джерела
+</PRE>
+<H4>【Значення, що повертається】</H4>
+<PRE>
+&gt;= 0    ID нового Віртуального об'єкта
+ &lt; 0    Помилка (Код помилки)
+</PRE>
+<H4>【Детальний опис】</H4>
+<P>
+  Реєструє новий Віртуальний об'єкт з тим самим вмістом, що й <CODE>org</CODE>.
+  Використовується переважно для операції копіювання.
+</P>
+<H4>【Коди помилок】</H4>
+<PRE>
+EX_LIMIT : Перевищено ліміт.
+EX_NOSPC : Нестача пам'яті.
+EX_VID   : ID Віртуального об'єкта (org) не існує.
+</PRE>
+
+<!-- odel_vob -->
+<TABLE border=2 width="100%"><TR><TD><TABLE width="100%">
+<TR><TD><FONT size="+2">odel_vob</FONT></TD></TR>
+<TR><TD align="right">Delete Virtual Body</TD></TR>
+<TR><TD>Скасування реєстрації Віртуального об'єкта</TD></TR>
+</TABLE></TD></TR></TABLE>
+<H4>【Синтаксис / Прототип】</H4>
+<PRE>
+W   odel_vob(W vid, W clr)
+</PRE>
+<H4>【Параметри】</H4>
+<PRE>
+W   vid    &gt;= 0 : ID Віртуального об'єкта
+            &lt; 0 : -(ID вікна) — видалити всі об'єкти вікна
+W   clr     = 0 : не стирати область відображення
+           != 0 : заповнити область кольором фону вікна
+</PRE>
+<H4>【Значення, що повертається】</H4>
+<PRE>
+&gt;= 0    Кількість видалених об'єктів
+ &lt; 0    Помилка (Код помилки)
+</PRE>
+<H4>【Детальний опис】</H4>
+<P>
+  Видаляє реєстрацію Віртуального об'єкта <CODE>vid</CODE>.
+  При <CODE>vid &lt; 0</CODE> — видаляє всі об'єкти у вікні <CODE>-vid</CODE>
+  (крім зареєстрованих з <CODE>wid &lt; 0</CODE>).
+  Об'єкти, зареєстровані з <CODE>wid &lt; 0</CODE>, потрібно видаляти вручну по одному.
+</P>
+<H4>【Коди помилок】</H4>
+<PRE>
+EX_VID   : ID Віртуального об'єкта (vid) не існує.
+</PRE>
+
+<!-- ocls_wnd -->
+<TABLE border=2 width="100%"><TR><TD><TABLE width="100%">
+<TR><TD><FONT size="+2">ocls_wnd</FONT></TD></TR>
+<TR><TD align="right">Close Window (VObj cleanup)</TD></TR>
+<TR><TD>Обробка закриття вікна</TD></TR>
+</TABLE></TD></TR></TABLE>
+<H4>【Синтаксис / Прототип】</H4>
+<PRE>
+ERR ocls_wnd(W wid)
+</PRE>
+<H4>【Параметри】</H4>
+<PRE>
+W   wid     ID вікна
+</PRE>
+<H4>【Значення, що повертається】</H4>
+<PRE>
+= 0     Успішне виконання
+</PRE>
+<H4>【Детальний опис】</H4>
+<P>
+  Повідомляє менеджеру, що вікно <CODE>wid</CODE> закрито. Виконує видалення
+  реєстрацій об'єктів, скасування стану «в обробці» та оновлення даних.
+  Зазвичай викликається Менеджером вікон, а не прикладними програмами.
+</P>
+<H4>【Коди помилок】</H4>
+<P>Відсутні.</P>
+
+<!-- odsp_vob -->
+<TABLE border=2 width="100%"><TR><TD><TABLE width="100%">
+<TR><TD><FONT size="+2">odsp_vob</FONT></TD></TR>
+<TR><TD align="right">Display Virtual Body</TD></TR>
+<TR><TD>Відображення / приховання Віртуального об'єкта</TD></TR>
+</TABLE></TD></TR></TABLE>
+<H4>【Синтаксис / Прототип】</H4>
+<PRE>
+W   odsp_vob(W vid, RECT *r, UW disp)
+</PRE>
+<H4>【Параметри】</H4>
+<PRE>
+W       vid    &gt;= 0      : ID Віртуального об'єкта
+               = 0x8000  : передача списку об'єктів
+               &lt; 0       : -(ID вікна) — всі об'єкти вікна
+RECT   *r               Область відображення (або вказівник на список при vid=0x8000)
+UW      disp            V_ERASE | V_DISP | V_DISPALL | V_DISPAREA | [V_NOFRAME]
+</PRE>
+<H4>【Значення, що повертається】</H4>
+<PRE>
+&gt;= 0    Кількість оброблених об'єктів
+ &lt; 0    Помилка (Код помилки)
+</PRE>
+<H4>【Детальний опис】</H4>
+<P>
+  Відображає або стирає Віртуальний об'єкт <CODE>vid</CODE>.
+  <CODE>r</CODE> — відносні координати видимої ділянки (NULL = вся область).
+  При <CODE>vid = 0x8000</CODE> — <CODE>r</CODE> вказує на список структур:
+</P>
+<PRE>
+    W    vid  -- ID Віртуального об'єкта
+    RECT r    -- Область відображення
+      :   :
+    W    0    -- Кінець списку
+</PRE>
+<H4>【Коди помилок】</H4>
+<PRE>
+EX_ADR  : Недопустима адреса r.
+EX_PAR  : Неприпустиме значення disp.
+EX_VID  : ID Віртуального об'єкта (vid) не існує.
+EX_WID  : Вікно (wid) не існує (тільки при vid &lt; 0).
+</PRE>
+
+<!-- odsp_vor -->
+<TABLE border=2 width="100%"><TR><TD><TABLE width="100%">
+<TR><TD><FONT size="+2">odsp_vor</FONT></TD></TR>
+<TR><TD align="right">Display Virtual Body with Scale</TD></TR>
+<TR><TD>Відображення Віртуального об'єкта з масштабуванням</TD></TR>
+</TABLE></TD></TR></TABLE>
+<H4>【Синтаксис / Прототип】</H4>
+<PRE>
+W   odsp_vor(W vid, RECT *r, UW disp, PNT scal)
+</PRE>
+<H4>【Параметри】</H4>
+<PRE>
+W       vid    Аналогічно odsp_vob
+RECT   *r      Область відображення
+UW      disp   Режим (аналогічно odsp_vob)
+PNT     scal   Коефіцієнт масштабування (scal.x — горизонт., scal.y — верт.;
+               0x100 = 1:1; 0 трактується як 0x100)
+</PRE>
+<H4>【Значення, що повертається】</H4>
+<PRE>
+&gt;= 0    Кількість оброблених об'єктів
+ &lt; 0    Помилка (Код помилки)
+</PRE>
+<H4>【Детальний опис】</H4>
+<P>
+  Аналогічна <CODE>odsp_vob()</CODE>, але з масштабуванням за коефіцієнтом <CODE>scal</CODE>.
+  Впливає на координати, розмір символів, піктограму та образ зони вмісту.
+</P>
+<H4>【Коди помилок】</H4>
+<PRE>
+EX_ADR  : Недопустима адреса r.
+EX_PAR  : Неприпустиме значення disp.
+EX_VID  : ID Віртуального об'єкта (vid) не існує.
+EX_WID  : Вікно не існує (при vid &lt; 0).
+</PRE>
+
+<!-- odra_vob -->
+<TABLE border=2 width="100%"><TR><TD><TABLE width="100%">
+<TR><TD><FONT size="+2">odra_vob</FONT></TD></TR>
+<TR><TD align="right">Draw Virtual Body Temporarily</TD></TR>
+<TR><TD>Тимчасове відображення Віртуального об'єкта</TD></TR>
+</TABLE></TD></TR></TABLE>
+<H4>【Синтаксис / Прототип】</H4>
+<PRE>
+W   odra_vob(GID gid, VP vseg, VLINK *vlnk, RECT *r, UW disp)
+</PRE>
+<H4>【Параметри】</H4>
+<PRE>
+GID     gid     ID середовища малювання
+VP      vseg    Сегмент Віртуального об'єкта
+VLINK  *vlnk    Посилання на Реальний об'єкт
+RECT   *r       Область відображення
+UW      disp    Режим відображення
+</PRE>
+<H4>【Значення, що повертається】</H4>
+<PRE>
+= 0     Успішне виконання
+&lt; 0     Помилка (Код помилки)
+</PRE>
+<H4>【Детальний опис】</H4>
+<P>
+  Відображає Віртуальний об'єкт безпосередньо у середовищі малювання <CODE>gid</CODE>
+  без реєстрації. Використовується для тимчасового показу (напр. під час D&amp;D).
+</P>
+<H4>【Коди помилок】</H4>
+<PRE>
+EX_ADR  : Недопустима адреса vseg або r.
+EX_PAR  : Неприпустиме значення disp.
+EG_GID  : ID середовища малювання (gid) не існує.
+</PRE>
+
+<!-- odra_vor -->
+<TABLE border=2 width="100%"><TR><TD><TABLE width="100%">
+<TR><TD><FONT size="+2">odra_vor</FONT></TD></TR>
+<TR><TD align="right">Draw Virtual Body with Scale</TD></TR>
+<TR><TD>Тимчасове відображення Віртуального об'єкта з масштабуванням</TD></TR>
+</TABLE></TD></TR></TABLE>
+<H4>【Синтаксис / Прототип】</H4>
+<PRE>
+W   odra_vor(GID gid, VP vseg, VLINK *vlnk, RECT *r, UW disp, PNT scal)
+</PRE>
+<H4>【Параметри】</H4>
+<PRE>
+GID     gid     ID середовища малювання
+VP      vseg    Сегмент Віртуального об'єкта
+VLINK  *vlnk    Посилання на Реальний об'єкт
+RECT   *r       Область відображення
+UW      disp    Режим відображення
+PNT     scal    Коефіцієнт масштабування (0x100 = 1:1)
+</PRE>
+<H4>【Значення, що повертається】</H4>
+<PRE>
+= 0     Успішне виконання
+&lt; 0     Помилка (Код помилки)
+</PRE>
+<H4>【Детальний опис】</H4>
+<P>Аналогічна <CODE>odra_vob()</CODE>, але з масштабуванням на коефіцієнт <CODE>scal</CODE>.</P>
+<H4>【Коди помилок】</H4>
+<PRE>
+EX_ADR  : Недопустима адреса vseg або r.
+EX_PAR  : Неприпустиме значення disp.
+EG_GID  : ID середовища малювання (gid) не існує.
+</PRE>
+
+<!-- ofnd_vob -->
+<TABLE border=2 width="100%"><TR><TD><TABLE width="100%">
+<TR><TD><FONT size="+2">ofnd_vob</FONT></TD></TR>
+<TR><TD align="right">Find Virtual Body at Point</TD></TR>
+<TR><TD>Пошук Віртуального об'єкта за координатою</TD></TR>
+</TABLE></TD></TR></TABLE>
+<H4>【Синтаксис / Прототип】</H4>
+<PRE>
+VID ofnd_vob(W wid, PNT pos, UW part, RECT *r)
+</PRE>
+<H4>【Параметри】</H4>
+<PRE>
+W       wid     ID вікна
+PNT     pos     Координата пошуку (відносно вікна)
+UW      part    Частина: V_PTITLE | V_PAREA | V_PHANDLE | V_PFRAME | V_PALL
+RECT   *r       Буфер для прямокутника знайденого об'єкта (або NULL)
+</PRE>
+<H4>【Значення, що повертається】</H4>
+<PRE>
+&gt; 0     ID знайденого об'єкта
+= 0     Об'єкт не знайдено
+&lt; 0     Помилка (Код помилки)
+</PRE>
+<H4>【Детальний опис】</H4>
+<P>
+  Шукає Віртуальний об'єкт у вікні <CODE>wid</CODE>, що містить точку <CODE>pos</CODE>.
+  <CODE>part</CODE> визначає, яка частина (заголовок, зона вмісту, ручка, рамка, весь об'єкт).
+  Якщо знайдено — у <CODE>r</CODE> записується прямокутник об'єкта.
+</P>
+<H4>【Коди помилок】</H4>
+<PRE>
+EX_ADR  : Недопустима адреса r.
+EX_PAR  : Неприпустиме значення part.
+EX_WID  : Вікно (wid) не існує.
+</PRE>
+
+<!-- omov_vob -->
+<TABLE border=2 width="100%"><TR><TD><TABLE width="100%">
+<TR><TD><FONT size="+2">omov_vob</FONT></TD></TR>
+<TR><TD align="right">Move Virtual Body</TD></TR>
+<TR><TD>Переміщення Віртуального об'єкта</TD></TR>
+</TABLE></TD></TR></TABLE>
+<H4>【Синтаксис / Прототип】</H4>
+<PRE>
+ERR omov_vob(W vid, W wid, RECT *newr, UW disp)
+</PRE>
+<H4>【Параметри】</H4>
+<PRE>
+W       vid    &gt;= 0        : ID Віртуального об'єкта
+               &lt; 0         : -(ID вікна) — перемістити всі об'єкти вікна
+W       wid    ID цільового вікна (0 = без зміни вікна;
+               0xFFFF8000 = тимчасове видалення)
+RECT   *newr   Нова позиція (лівий верхній кут; виконання — фактичний прямокутник)
+UW      disp   V_NODISP | V_DISP | V_DISPALL | V_DISPAREA | [V_ERAORG]
+</PRE>
+<H4>【Значення, що повертається】</H4>
+<PRE>
+= 0     Успішне виконання
+&lt; 0     Помилка (Код помилки)
+</PRE>
+<H4>【Детальний опис】</H4>
+<P>
+  Переміщує об'єкт <CODE>vid</CODE> у позицію <CODE>newr</CODE> у вікні <CODE>wid</CODE>.
+  Розмір не змінюється; після виконання <CODE>newr</CODE> містить фактичний прямокутник.
+  При <CODE>wid = 0xFFFF8000</CODE> — тимчасове видалення (для реалізації «скасування»);
+  відновити через <CODE>omov_vob()</CODE>, остаточно видалити через <CODE>odel_vob()</CODE>.
+</P>
+<H4>【Коди помилок】</H4>
+<PRE>
+EX_ADR  : Недопустима адреса newr.
+EX_PAR  : Неприпустиме значення disp.
+EX_VID  : ID Віртуального об'єкта (vid) не існує.
+EX_WID  : Цільове вікно (wid) не існує (при wid &gt; 0).
+</PRE>
+
+<!-- orsz_vob -->
+<TABLE border=2 width="100%"><TR><TD><TABLE width="100%">
+<TR><TD><FONT size="+2">orsz_vob</FONT></TD></TR>
+<TR><TD align="right">Resize / Transform Virtual Body</TD></TR>
+<TR><TD>Трансформація Віртуального об'єкта</TD></TR>
+</TABLE></TD></TR></TABLE>
+<H4>【Синтаксис / Прототип】</H4>
+<PRE>
+ERR orsz_vob(W vid, RECT *newr, UW mode)
+</PRE>
+<H4>【Параметри】</H4>
+<PRE>
+W       vid     ID Віртуального об'єкта
+RECT   *newr    Новий прямокутник (вихід — фактичний після трансформації)
+UW      mode    ::= (V_SIZE | V_ADJUST(1~3) | V_OPEN | V_CLOSE | V_CHECK)
+                    | (V_NODISP | V_DISP | V_DISPALL | V_DISPAREA) | [V_ERAORG]
+</PRE>
+<DL>
+ <DT><CODE>V_SIZE</CODE><DD>Трансформувати до прямокутника newr.
+ <DT><CODE>V_ADJUST, V_ADJUST1..3</CODE><DD>Підлаштувати ширину: увесь / до імені / до відношення / до типу.
+ <DT><CODE>V_OPEN</CODE><DD>Відкрити до розміру за замовчуванням.
+ <DT><CODE>V_CLOSE</CODE><DD>Закрити.
+ <DT><CODE>V_CHECK</CODE><DD>Лише повернути поточний прямокутник.
+</DL>
+<H4>【Значення, що повертається】</H4>
+<PRE>
+= 0     Успішне виконання
+&lt; 0     Помилка (Код помилки)
+</PRE>
+<H4>【Коди помилок】</H4>
+<PRE>
+EX_ADR  : Недопустима адреса newr.
+EX_PAR  : Неприпустиме значення mode.
+EX_VID  : ID Віртуального об'єкта (vid) не існує.
+EX_VOBJ : Стан/атрибути не дозволяють операцію.
+</PRE>
+
+<!-- ochg_chs -->
+<TABLE border=2 width="100%"><TR><TD><TABLE width="100%">
+<TR><TD><FONT size="+2">ochg_chs</FONT></TD></TR>
+<TR><TD align="right">Change Character Size</TD></TR>
+<TR><TD>Зміна розміру символів заголовка</TD></TR>
+</TABLE></TD></TR></TABLE>
+<H4>【Синтаксис / Прототип】</H4>
+<PRE>
+W   ochg_chs(W vid, W csize)
+</PRE>
+<H4>【Параметри】</H4>
+<PRE>
+W   vid     ID Віртуального об'єкта
+W   csize    &lt; 0 : показати «Панель зміни розміру символів»
+            &gt;= 0 : новий розмір (одиниці CHSIZE)
+</PRE>
+<H4>【Значення, що повертається】</H4>
+<PRE>
+= 0     Без змін
+= 1     Розмір змінено (потрібна перерисовка)
+&lt; 0     Помилка (Код помилки)
+</PRE>
+<H4>【Коди помилок】</H4>
+<PRE>
+EX_PAR  : Неприпустиме значення csize.
+EX_VID  : ID не існує.
+EX_VOBJ : Відключений стан або Наліпка.
+</PRE>
+
+<!-- ochg_col -->
+<TABLE border=2 width="100%"><TR><TD><TABLE width="100%">
+<TR><TD><FONT size="+2">ochg_col</FONT></TD></TR>
+<TR><TD align="right">Change Color</TD></TR>
+<TR><TD>Зміна кольору Віртуального об'єкта</TD></TR>
+</TABLE></TD></TR></TABLE>
+<H4>【Синтаксис / Прототип】</H4>
+<PRE>
+W   ochg_col(W vid, COLOR fgcol, COLOR bgcol)
+</PRE>
+<H4>【Параметри】</H4>
+<PRE>
+W       vid     ID Віртуального об'єкта
+COLOR   fgcol   Колір переднього плану (&lt; 0 — показати панель вибору кольору)
+COLOR   bgcol   Колір фону
+</PRE>
+<H4>【Значення, що повертається】</H4>
+<PRE>
+= 0     Без змін або скасовано
+= 1     Колір змінено (потрібна перерисовка)
+&lt; 0     Помилка (Код помилки)
+</PRE>
+<H4>【Коди помилок】</H4>
+<PRE>
+EX_VID  : ID не існує.
+EX_VOBJ : Відключений стан (при fgcol &gt;= 0).
+</PRE>
+
+<!-- ochg_nam -->
+<TABLE border=2 width="100%"><TR><TD><TABLE width="100%">
+<TR><TD><FONT size="+2">ochg_nam</FONT></TD></TR>
+<TR><TD align="right">Change Object Name</TD></TR>
+<TR><TD>Зміна імені Реального об'єкта</TD></TR>
+</TABLE></TD></TR></TABLE>
+<H4>【Синтаксис / Прототип】</H4>
+<PRE>
+W   ochg_nam(W vid, TC *name)
+</PRE>
+<H4>【Параметри】</H4>
+<PRE>
+W   vid     ID Віртуального об'єкта
+TC *name    Нове ім'я (NULL або порожній рядок — показати панель редагування)
+</PRE>
+<H4>【Значення, що повертається】</H4>
+<PRE>
+= 0     Без змін або скасовано
+= 1     Ім'я змінено (потрібна перерисовка)
+&lt; 0     Помилка (Код помилки)
+</PRE>
+<H4>【Коди помилок】</H4>
+<PRE>
+EX_ADR  : Недопустима адреса name.
+EX_VID  : ID не існує.
+EX_VOBJ : Відключений стан або Наліпка.
+</PRE>
+
+<!-- ochg_rel -->
+<TABLE border=2 width="100%"><TR><TD><TABLE width="100%">
+<TR><TD><FONT size="+2">ochg_rel</FONT></TD></TR>
+<TR><TD align="right">Change Relation ()</TD></TR>
+<TR><TD>Зміна відношення () Віртуального об'єкта</TD></TR>
+</TABLE></TD></TR></TABLE>
+<H4>【Синтаксис / Прототип】</H4>
+<PRE>
+W   ochg_rel(W vid, W index)
+</PRE>
+<H4>【Параметри】</H4>
+<PRE>
+W   vid     ID Віртуального об'єкта
+W   index    &lt; 0 : показати «Панель зміни відношення»
+            &gt;= 0 : індекс нового відношення
+</PRE>
+<H4>【Значення, що повертається】</H4>
+<PRE>
+= 0     Без змін
+= 1     Відношення змінено (потрібна перерисовка)
+&lt; 0     Помилка (Код помилки)
+</PRE>
+<H4>【Коди помилок】</H4>
+<PRE>
+EX_PAR  : Неприпустимий index.
+EX_VID  : ID не існує.
+EX_VOBJ : Відключений стан (при index &gt;= 0) або Наліпка.
+</PRE>
+
+<!-- onew_obj -->
+<TABLE border=2 width="100%"><TR><TD><TABLE width="100%">
+<TR><TD><FONT size="+2">onew_obj</FONT></TD></TR>
+<TR><TD align="right">Create New Version</TD></TR>
+<TR><TD>Створення нової версії Реального об'єкта</TD></TR>
+</TABLE></TD></TR></TABLE>
+<H4>【Синтаксис / Прототип】</H4>
+<PRE>
+VID onew_obj(W vid, VLINK *vlnk)
+</PRE>
+<H4>【Параметри】</H4>
+<PRE>
+W       vid     ID Віртуального об'єкта
+VLINK  *vlnk    Буфер для посилання на нову версію (або NULL)
+</PRE>
+<H4>【Значення, що повертається】</H4>
+<PRE>
+&gt;= 0    ID Віртуального об'єкта нової версії / дублікату
+ &lt; 0    Помилка (Код помилки)
+</PRE>
+<H4>【Детальний опис】</H4>
+<P>
+  Створює нову версію (або дублює дискету). Відображається «Панель нової версії».
+  Новий Віртуальний об'єкт автоматично з'являється поруч з <CODE>vid</CODE>.
+</P>
+<H4>【Коди помилок】</H4>
+<PRE>
+EX_ADR  : Недопустима адреса vlnk.
+EX_LIMIT: Забагато файлів.
+EX_VID  : ID не існує.
+EX_VOBJ : Стан «в обробці» або Наліпка.
+</PRE>
+
+<!-- ocre_obj -->
+<TABLE border=2 width="100%"><TR><TD><TABLE width="100%">
+<TR><TD><FONT size="+2">ocre_obj</FONT></TD></TR>
+<TR><TD align="right">Create New Real Body</TD></TR>
+<TR><TD>Створення нового Реального об'єкта</TD></TR>
+</TABLE></TD></TR></TABLE>
+<H4>【Синтаксис / Прототип】</H4>
+<PRE>
+W   ocre_obj(W vid, TC *name, W *nvid, LINK *lnk, W copy)
+</PRE>
+<H4>【Параметри】</H4>
+<PRE>
+W       vid     ID Віртуального об'єкта (визначає цільовий пристрій)
+TC     *name    Ім'я нового об'єкта (порожній рядок — показати панель вибору)
+W      *nvid    Буфер для ID нового Віртуального об'єкта (або NULL)
+LINK   *lnk     Буфер для посилання (або NULL)
+W       copy   != 0 : скопіювати вміст vid;  = 0 : порожній об'єкт
+</PRE>
+<H4>【Значення, що повертається】</H4>
+<PRE>
+&gt;= 0    Файловий дескриптор нового Реального об'єкта
+ &lt; 0    Помилка (Код помилки)
+</PRE>
+<H4>【Коди помилок】</H4>
+<PRE>
+EX_ADR  : Недопустима адреса.
+EX_VID  : ID не існує.
+EX_NOEXS: Невідома файлова система (при vid &lt; 0).
+</PRE>
+
+<!-- odsp_inf -->
+<TABLE border=2 width="100%"><TR><TD><TABLE width="100%">
+<TR><TD><FONT size="+2">odsp_inf</FONT></TD></TR>
+<TR><TD align="right">Display Object Info Panel</TD></TR>
+<TR><TD>Відображення інформаційної панелі Реального об'єкта</TD></TR>
+</TABLE></TD></TR></TABLE>
+<H4>【Синтаксис / Прототип】</H4>
+<PRE>
+W   odsp_inf(W vid)
+</PRE>
+<H4>【Параметри】</H4>
+<PRE>
+W   vid     ID Віртуального об'єкта
+</PRE>
+<H4>【Значення, що повертається】</H4>
+<PRE>
+= 0     Успішне виконання
+&lt; 0     Помилка (Код помилки)
+</PRE>
+<H4>【Детальний опис】</H4>
+<P>Відображає «Інформаційну панель» з метаданими Реального об'єкта (власник, доступ, розмір тощо).</P>
+<H4>【Коди помилок】</H4>
+<PRE>
+EX_VID  : ID не існує.
+EX_VOBJ : Відключений стан або Наліпка.
+</PRE>
+
+<!-- odsk_inf -->
+<TABLE border=2 width="100%"><TR><TD><TABLE width="100%">
+<TR><TD><FONT size="+2">odsk_inf</FONT></TD></TR>
+<TR><TD align="right">Display Disk Info</TD></TR>
+<TR><TD>Відображення інформації про стан диска</TD></TR>
+</TABLE></TD></TR></TABLE>
+<H4>【Синтаксис / Прототип】</H4>
+<PRE>
+W   odsk_inf(W vid)
+</PRE>
+<H4>【Параметри】</H4>
+<PRE>
+W   vid     ID Об'єкта пристрою
+</PRE>
+<H4>【Значення, що повертається】</H4>
+<PRE>
+= 0     Успішне виконання
+&lt; 0     Помилка (Код помилки)
+</PRE>
+<H4>【Детальний опис】</H4>
+<P>Відображає «Панель стану диска» (вільний/зайнятий простір, стан файлової системи).</P>
+<H4>【Коди помилок】</H4>
+<PRE>
+EX_VID  : ID не існує.
+EX_VOBJ : Відключений стан, Наліпка або не є об'єктом пристрою.
+</PRE>
+
+<!-- oget_vob -->
+<TABLE border=2 width="100%"><TR><TD><TABLE width="100%">
+<TR><TD><FONT size="+2">oget_vob</FONT></TD></TR>
+<TR><TD align="right">Get Virtual Body Data</TD></TR>
+<TR><TD>Отримання даних Віртуального об'єкта</TD></TR>
+</TABLE></TD></TR></TABLE>
+<H4>【Синтаксис / Прототип】</H4>
+<PRE>
+W   oget_vob(W vid, VLINK *vlnk, VP vseg, W *rsize)
+</PRE>
+<H4>【Параметри】</H4>
+<PRE>
+W       vid     ID Віртуального об'єкта
+VLINK  *vlnk    Буфер для VLINK (або NULL)
+VP      vseg    Буфер для сегмента (або NULL)
+W      *rsize   Розмір буфера vseg / фактичний розмір (або NULL)
+</PRE>
+<H4>【Значення, що повертається】</H4>
+<PRE>
+= 0     Успішне виконання
+&lt; 0     Помилка (Код помилки)
+</PRE>
+<H4>【Коди помилок】</H4>
+<PRE>
+EX_ADR  : Недопустима адреса.
+EX_VID  : ID не існує.
+EX_NOEXS: Невідома файлова система (при vid &lt; 0).
+</PRE>
+
+<!-- ochg_sts -->
+<TABLE border=2 width="100%"><TR><TD><TABLE width="100%">
+<TR><TD><FONT size="+2">ochg_sts</FONT></TD></TR>
+<TR><TD align="right">Change Virtual Body Status</TD></TR>
+<TR><TD>Зміна стану / атрибутів Віртуального об'єкта</TD></TR>
+</TABLE></TD></TR></TABLE>
+<H4>【Синтаксис / Прототип】</H4>
+<PRE>
+W   ochg_sts(W vid, UW mode)
+</PRE>
+<H4>【Параметри】</H4>
+<PRE>
+W   vid    &gt;= 0 : ID Віртуального об'єкта
+           &lt; 0  : -(ID вікна) — всі об'єкти вікна
+UW  mode   V_GETSTS | V_PURGE | V_CHKREF | V_CHKDUP |
+           (V_NONAME | V_NORELN | V_NOTYPE | V_NOTIME | V_FIXDEF |
+            V_NOIMG | V_NOPICT | V_NOFDISP | V_NOEXPND | V_AUTEXE)
+</PRE>
+<H4>【Значення, що повертається】</H4>
+<PRE>
+&gt;= 0    Попередній стан / атрибути (або результат перевірки)
+ &lt; 0    Помилка (Код помилки)
+</PRE>
+<H4>【Детальний опис】</H4>
+<P>
+  Змінює стан/атрибути об'єкта. Повертає попередній стан. Перерисовка не відбувається.
+  При <CODE>V_CHKREF</CODE>/<CODE>V_CHKDUP</CODE>: повертає «1» якщо є інші посилання.
+</P>
+<H4>【Коди помилок】</H4>
+<PRE>
+EX_PAR  : Неприпустиме значення mode.
+EX_VID  : ID не існує.
+</PRE>
+
+<!-- osta_prc -->
+<TABLE border=2 width="100%"><TR><TD><TABLE width="100%">
+<TR><TD><FONT size="+2">osta_prc</FONT></TD></TR>
+<TR><TD align="right">Start Processing</TD></TR>
+<TR><TD>Початок обробки Віртуального об'єкта (старт додатка)</TD></TR>
+</TABLE></TD></TR></TABLE>
+<H4>【Синтаксис / Прототип】</H4>
+<PRE>
+ERR osta_prc(W vid, W wid)
+</PRE>
+<H4>【Параметри】</H4>
+<PRE>
+W   vid     ID Віртуального об'єкта (з повідомлення M_EXECREQ)
+W   wid     ID вікна, відкритого додатком (від'ємне — для малих додатків)
+</PRE>
+<H4>【Значення, що повертається】</H4>
+<PRE>
+= 0     Успішне виконання
+&lt; 0     Помилка (Код помилки)
+</PRE>
+<H4>【Детальний опис】</H4>
+<P>
+  Додаток, запущений менеджером, повинен викликати цю функцію після відкриття вікна.
+  Переводить об'єкт <CODE>vid</CODE> у стан «в обробці» та пов'язує з вікном <CODE>wid</CODE>.
+</P>
+<H4>【Коди помилок】</H4>
+<PRE>
+EX_PAR  : Неприпустимий параметр (не малий додаток і wid &lt;= 0).
+EX_VID  : ID не існує.
+EX_VOBJ : Наліпка.
+</PRE>
+
+<!-- oend_prc -->
+<TABLE border=2 width="100%"><TR><TD><TABLE width="100%">
+<TR><TD><FONT size="+2">oend_prc</FONT></TD></TR>
+<TR><TD align="right">End Processing</TD></TR>
+<TR><TD>Завершення обробки Віртуального об'єкта</TD></TR>
+</TABLE></TD></TR></TABLE>
+<H4>【Синтаксис / Прототип】</H4>
+<PRE>
+GID oend_prc(W vid, VP dat, W update)
+</PRE>
+<H4>【Параметри】</H4>
+<PRE>
+W   vid     ID Віртуального об'єкта
+VP  dat     Буфер для образу відображення (або NULL)
+W   update != 0 : оновити заголовок та зберегти образ
+            = 0 : лише скасувати стан «в обробці»
+</PRE>
+<H4>【Значення, що повертається】</H4>
+<PRE>
+&gt;= 0    ID середовища малювання для образу
+ &lt; 0    Помилка (Код помилки)
+</PRE>
+<H4>【Коди помилок】</H4>
+<PRE>
+EX_ADR  : Недопустима адреса dat.
+EX_VID  : ID не існує.
+EX_VOBJ : Об'єкт не в стані «в обробці».
+</PRE>
+
+<!-- oend_req -->
+<TABLE border=2 width="100%"><TR><TD><TABLE width="100%">
+<TR><TD><FONT size="+2">oend_req</FONT></TD></TR>
+<TR><TD align="right">Request End Processing</TD></TR>
+<TR><TD>Запит на завершення до обробного додатка</TD></TR>
+</TABLE></TD></TR></TABLE>
+<H4>【Синтаксис / Прототип】</H4>
+<PRE>
+ERR oend_req(W vid, W mode)
+</PRE>
+<H4>【Параметри】</H4>
+<PRE>
+W   vid     ID Віртуального об'єкта
+W   mode    Режим запиту завершення
+</PRE>
+<H4>【Значення, що повертається】</H4>
+<PRE>
+= 0     Успішне виконання
+&lt; 0     Помилка (Код помилки)
+</PRE>
+<H4>【Детальний опис】</H4>
+<P>Надсилає запит на завершення до додатка, що обробляє об'єкт <CODE>vid</CODE>.</P>
+<H4>【Коди помилок】</H4>
+<PRE>
+EX_VID  : ID не існує.
+EX_VOBJ : Не в стані «в обробці».
+</PRE>
+
+<!-- oreq_prc -->
+<TABLE border=2 width="100%"><TR><TD><TABLE width="100%">
+<TR><TD><FONT size="+2">oreq_prc</FONT></TD></TR>
+<TR><TD align="right">Request to Processing App</TD></TR>
+<TR><TD>Запит на операцію до обробного додатка</TD></TR>
+</TABLE></TD></TR></TABLE>
+<H4>【Синтаксис / Прототип】</H4>
+<PRE>
+ERR oreq_prc(W vid, W req, VP buf)
+</PRE>
+<H4>【Параметри】</H4>
+<PRE>
+W   vid     ID Віртуального об'єкта
+W   req     Код запиту
+VP  buf     Буфер параметрів
+</PRE>
+<H4>【Значення, що повертається】</H4>
+<PRE>
+= 0     Успішне виконання
+&lt; 0     Помилка (Код помилки)
+</PRE>
+<H4>【Детальний опис】</H4>
+<P>Надсилає запит <CODE>req</CODE> до додатка, що обробляє об'єкт. Для міждодаткової комунікації.</P>
+<H4>【Коди помилок】</H4>
+<PRE>
+EX_ADR  : Недопустима адреса buf.
+EX_VID  : ID не існує.
+EX_VOBJ : Не в стані «в обробці».
+</PRE>
+
+<!-- orsp_prc -->
+<TABLE border=2 width="100%"><TR><TD><TABLE width="100%">
+<TR><TD><FONT size="+2">orsp_prc</FONT></TD></TR>
+<TR><TD align="right">Respond to Request</TD></TR>
+<TR><TD>Відповідь на запит від менеджера</TD></TR>
+</TABLE></TD></TR></TABLE>
+<H4>【Синтаксис / Прототип】</H4>
+<PRE>
+ERR orsp_prc(W vid, W result, VP buf)
+</PRE>
+<H4>【Параметри】</H4>
+<PRE>
+W   vid     ID Віртуального об'єкта
+W   result  Код результату
+VP  buf     Буфер даних відповіді
+</PRE>
+<H4>【Значення, що повертається】</H4>
+<PRE>
+= 0     Успішне виконання
+&lt; 0     Помилка (Код помилки)
+</PRE>
+<H4>【Детальний опис】</H4>
+<P>Відповідь на запит <CODE>oreq_prc()</CODE>. Викликається після виконання потрібних дій.</P>
+<H4>【Коди помилок】</H4>
+<PRE>
+EX_ADR  : Недопустима адреса buf.
+EX_VID  : ID не існує.
+</PRE>
+
+<!-- oput_dat -->
+<TABLE border=2 width="100%"><TR><TD><TABLE width="100%">
+<TR><TD><FONT size="+2">oput_dat</FONT></TD></TR>
+<TR><TD align="right">Put Data from Tray</TD></TR>
+<TR><TD>Вставка даних у Реальний об'єкт з лотка</TD></TR>
+</TABLE></TD></TR></TABLE>
+<H4>【Синтаксис / Прототип】</H4>
+<PRE>
+W   oput_dat(W vid, W wid)
+</PRE>
+<H4>【Параметри】</H4>
+<PRE>
+W   vid     ID Віртуального об'єкта-отримувача
+W   wid     ID вікна-джерела
+</PRE>
+<H4>【Значення, що повертається】</H4>
+<PRE>
+= 0     Успішне виконання
+&lt; 0     Помилка (Код помилки)
+</PRE>
+<H4>【Коди помилок】</H4>
+<PRE>
+EX_VID  : ID не існує.
+EX_VOBJ : Відключений стан або Наліпка.
+</PRE>
+
+<!-- oupd_fil -->
+<TABLE border=2 width="100%"><TR><TD><TABLE width="100%">
+<TR><TD><FONT size="+2">oupd_fil</FONT></TD></TR>
+<TR><TD align="right">Update File Display</TD></TR>
+<TR><TD>Оновлення відображення після зміни Реального об'єкта</TD></TR>
+</TABLE></TD></TR></TABLE>
+<H4>【Синтаксис / Прототип】</H4>
+<PRE>
+W   oupd_fil(W vid)
+</PRE>
+<H4>【Параметри】</H4>
+<PRE>
+W   vid     ID Віртуального об'єкта
+</PRE>
+<H4>【Значення, що повертається】</H4>
+<PRE>
+= 0     Успішне виконання
+&lt; 0     Помилка (Код помилки)
+</PRE>
+<H4>【Детальний опис】</H4>
+<P>
+  Повідомляє менеджеру про зміну Реального об'єкта. Оновлюється заголовок (ім'я, дата)
+  та надсилаються запити до всіх інших Віртуальних об'єктів того ж Реального об'єкта.
+</P>
+<H4>【Коди помилок】</H4>
+<PRE>
+EX_VID  : ID не існує.
+</PRE>
+
+<!-- oset_tmf -->
+<TABLE border=2 width="100%"><TR><TD><TABLE width="100%">
+<TR><TD><FONT size="+2">oset_tmf</FONT></TD></TR>
+<TR><TD align="right">Set Time Format</TD></TR>
+<TR><TD>Встановлення формату відображення часу</TD></TR>
+</TABLE></TD></TR></TABLE>
+<H4>【Синтаксис / Прототип】</H4>
+<PRE>
+W   oset_tmf(W fmt)
+</PRE>
+<H4>【Параметри】</H4>
+<PRE>
+W   fmt     Формат відображення часу (0 = системний за замовчуванням)
+</PRE>
+<H4>【Значення, що повертається】</H4>
+<PRE>
+&gt;= 0    Попередній формат
+ &lt; 0    Помилка (Код помилки)
+</PRE>
+<H4>【Коди помилок】</H4>
+<PRE>
+EX_PAR  : Неприпустиме значення fmt.
+</PRE>
+
+<!-- oget_men -->
+<TABLE border=2 width="100%"><TR><TD><TABLE width="100%">
+<TR><TD><FONT size="+2">oget_men</FONT></TD></TR>
+<TR><TD align="right">Get Object Menu Data</TD></TR>
+<TR><TD>Отримання меню Реального об'єкта</TD></TR>
+</TABLE></TD></TR></TABLE>
+<H4>【Синтаксис / Прототип】</H4>
+<PRE>
+W   oget_men(W vid, W wid, VP buf, W bsz)
+</PRE>
+<H4>【Параметри】</H4>
+<PRE>
+W   vid     ID Віртуального об'єкта
+W   wid     ID вікна
+VP  buf     Буфер для меню
+W   bsz     Розмір буфера
+</PRE>
+<H4>【Значення, що повертається】</H4>
+<PRE>
+&gt;= 0    Розмір даних меню
+ &lt; 0    Помилка (Код помилки)
+</PRE>
+<H4>【Коди помилок】</H4>
+<PRE>
+EX_ADR  : Недопустима адреса buf.
+EX_VID  : ID не існує.
+</PRE>
+
+<!-- oget_vmn -->
+<TABLE border=2 width="100%"><TR><TD><TABLE width="100%">
+<TR><TD><FONT size="+2">oget_vmn</FONT></TD></TR>
+<TR><TD align="right">Get VObject Operation Menu</TD></TR>
+<TR><TD>Отримання меню операцій з Віртуальним об'єктом</TD></TR>
+</TABLE></TD></TR></TABLE>
+<H4>【Синтаксис / Прототип】</H4>
+<PRE>
+W   oget_vmn(W vid, W wid, VP buf, W bsz)
+</PRE>
+<H4>【Параметри】</H4>
+<PRE>
+W   vid    &gt;= 0 : ID Віртуального об'єкта
+           &lt; 0  : -(ID вікна) — меню для всього вікна
+W   wid    ID батьківського вікна
+VP  buf    Буфер
+W   bsz    Розмір буфера
+</PRE>
+<H4>【Значення, що повертається】</H4>
+<PRE>
+&gt;= 0    Розмір меню
+ &lt; 0    Помилка (Код помилки)
+</PRE>
+<H4>【Детальний опис】</H4>
+<P>
+  Отримує меню «Вітуальний об'єкт» для об'єкта. Недоступні пункти відображаються сірим
+  залежно від стану (відкритий/закритий, в обробці, відключений тощо).
+</P>
+<H4>【Коди помилок】</H4>
+<PRE>
+EX_ADR  : Недопустима адреса buf.
+EX_VID  : ID не існує (при vid &gt; 0).
+</PRE>
+
+<!-- oexe_vmn -->
+<TABLE border=2 width="100%"><TR><TD><TABLE width="100%">
+<TR><TD><FONT size="+2">oexe_vmn</FONT></TD></TR>
+<TR><TD align="right">Execute VObject Menu Item</TD></TR>
+<TR><TD>Виконання пункту меню Операцій з Віртуальними об'єктами</TD></TR>
+</TABLE></TD></TR></TABLE>
+<H4>【Синтаксис / Прототип】</H4>
+<PRE>
+W   oexe_vmn(W vid, W item, VP buf, EVENT *evt)
+</PRE>
+<H4>【Параметри】</H4>
+<PRE>
+W       vid    &gt;= 0 : ID Віртуального об'єкта
+               &lt;= 0 : -(ID вікна) — для всіх об'єктів вікна
+W       item   Пункт меню
+VP      buf    Буфер для результату
+EVENT  *evt    Подія, що ініціювала виклик
+</PRE>
+<H4>【Значення, що повертається】</H4>
+<PRE>
+&gt;= 0    Результат: VM_NONE, VM_OPEN, VM_CLOSE, ...
+ &lt; 0    Помилка (Код помилки)
+</PRE>
+<P>Константи результату:</P>
+<TABLE>
+  <TR><TD><CODE>VM_NONE  ( 0)</CODE></TD><TD>: Нічого не сталося</TD>           <TD>—</TD></TR>
+  <TR><TD><CODE>VM_OPEN  ( 1)</CODE></TD><TD>: Відкрито</TD>                    <TD>Нова RECT</TD></TR>
+  <TR><TD><CODE>VM_CLOSE ( 2)</CODE></TD><TD>: Закрито</TD>                     <TD>Нова RECT</TD></TR>
+  <TR><TD><CODE>VM_NAME  ( 3)</CODE></TD><TD>: Ім'я змінено</TD>                <TD>—</TD></TR>
+  <TR><TD><CODE>VM_RELN  ( 4)</CODE></TD><TD>: Відношення змінено</TD>          <TD>Новий індекс</TD></TR>
+  <TR><TD><CODE>VM_NEW   ( 5)</CODE></TD><TD>: Нова версія створена</TD>        <TD>ID нового obj</TD></TR>
+  <TR><TD><CODE>VM_DETACH( 6)</CODE></TD><TD>: Перейшов у стан</TD>          <TD>—</TD></TR>
+  <TR><TD><CODE>VM_DISP  ( 7)</CODE></TD><TD>: Атрибут відображення змінено</TD><TD>Нова RECT</TD></TR>
+  <TR><TD><CODE>VM_REFMT ( 8)</CODE></TD><TD>: Переформатовано</TD>             <TD>—</TD></TR>
+  <TR><TD><CODE>VM_PASTE ( 9)</CODE></TD><TD>: Вставлено у об'єкт</TD>          <TD>Код додатка</TD></TR>
+  <TR><TD><CODE>VM_EXREQ (10)</CODE></TD><TD>: Запит запуску Наліпки</TD>       <TD>—</TD></TR>
+  <TR><TD><CODE>VM_ATTACH(11)</CODE></TD><TD>: Підключено</TD>                  <TD>—</TD></TR>
+  <TR><TD><CODE>VM_APLREG(12)</CODE></TD><TD>: Додаток зареєстровано</TD>       <TD>—</TD></TR>
+  <TR><TD><CODE>VM_APLDEL(13)</CODE></TD><TD>: Реєстрацію видалено</TD>         <TD>—</TD></TR>
+  <TR><TD><CODE>VM_INFO  (14)</CODE></TD><TD>: Інформація відображена</TD>      <TD>—</TD></TR>
+  <TR><TD><CODE>VM_DISK  (15)</CODE></TD><TD>: Стан диска відображено</TD>      <TD>—</TD></TR>
+  <TR><TD><CODE>VM_GABAGE(16)</CODE></TD><TD>: Дефрагментацію запущено</TD>     <TD>—</TD></TR>
+</TABLE>
+<H4>【Детальний опис】</H4>
+<P>
+  Виконує пункт меню <CODE>item</CODE>. При зміні стану потрібна перерисовка.
+  При <CODE>VM_NEW</CODE> — новий об'єкт потрібно додати до вікна.
+  При <CODE>VM_EXREQ</CODE> — запуск Наліпки виконується окремо через <CODE>oexe_apg()</CODE>.
+</P>
+<H4>【Коди помилок】</H4>
+<PRE>
+EX_ADR  : Недопустима адреса buf.
+EX_PAR  : Неприпустиме значення item.
+EX_VID  : ID не існує (при vid &gt; 0).
+EX_VOBJ : Стан/атрибути не відповідають пункту.
+</PRE>
+
+<!-- ochg_env -->
+<TABLE border=2 width="100%"><TR><TD><TABLE width="100%">
+<TR><TD><FONT size="+2">ochg_env</FONT></TD></TR>
+<TR><TD align="right">Change Execution Environment File</TD></TR>
+<TR><TD>Зміна файлу середовища виконання</TD></TR>
+</TABLE></TD></TR></TABLE>
+<H4>【Синтаксис / Прототип】</H4>
+<PRE>
+W   ochg_env(LINK *lnk, W wid)
+</PRE>
+<H4>【Параметри】</H4>
+<PRE>
+LINK   *lnk     Посилання на файл середовища (NULL — відновити попередній)
+W       wid     ID вікна середовища виконання
+</PRE>
+<H4>【Значення, що повертається】</H4>
+<PRE>
+&gt;= 0    Рівень стека (0 = не визначено)
+ &lt; 0    Помилка (Код помилки)
+</PRE>
+<H4>【Детальний опис】</H4>
+<P>
+  Встановлює файл середовища виконання. Попередній зберігається у стеку.
+  При <CODE>lnk = NULL</CODE> — відновлює попередній зі стека.
+  При старті системи файл не визначений; потрібно ініціалізувати.
+</P>
+<H4>【Коди помилок】</H4>
+<PRE>
+EX_ADR  : Недопустима адреса lnk.
+EX_LIMIT: Забагато файлів середовища.
+</PRE>
+
+<!-- oget_env -->
+<TABLE border=2 width="100%"><TR><TD><TABLE width="100%">
+<TR><TD><FONT size="+2">oget_env</FONT></TD></TR>
+<TR><TD align="right">Get Execution Environment</TD></TR>
+<TR><TD>Отримання поточного файлу середовища виконання</TD></TR>
+</TABLE></TD></TR></TABLE>
+<H4>【Синтаксис / Прототип】</H4>
+<PRE>
+WID oget_env(LINK *lnk)
+</PRE>
+<H4>【Параметри】</H4>
+<PRE>
+LINK   *lnk     Буфер для посилання (або NULL)
+</PRE>
+<H4>【Значення, що повертається】</H4>
+<PRE>
+&gt;= 0    ID вікна середовища (0 = не визначено)
+ &lt; 0    Помилка (Код помилки)
+</PRE>
+<H4>【Коди помилок】</H4>
+<PRE>
+EX_ADR  : Недопустима адреса lnk.
+</PRE>
+
+<!-- oreg_apg -->
+<TABLE border=2 width="100%"><TR><TD><TABLE width="100%">
+<TR><TD><FONT size="+2">oreg_apg</FONT></TD></TR>
+<TR><TD align="right">Register Application</TD></TR>
+<TR><TD>Реєстрація прикладної програми</TD></TR>
+</TABLE></TD></TR></TABLE>
+<H4>【Синтаксис / Прототип】</H4>
+<PRE>
+W   oreg_apg(LINK *lnk, TC *name, W type, W mode)
+</PRE>
+<H4>【Параметри】</H4>
+<PRE>
+LINK   *lnk     Посилання на виконуваний файл
+TC     *name    Ім'я додатка (TRON Code)
+W       type    Тип даних (тип Реального об'єкта)
+W       mode    Режим реєстрації
+</PRE>
+<H4>【Значення, що повертається】</H4>
+<PRE>
+= 0     Успішне виконання
+&lt; 0     Помилка (Код помилки)
+</PRE>
+<H4>【Коди помилок】</H4>
+<PRE>
+EX_ADR  : Недопустима адреса lnk або name.
+EX_LIMIT: Забагато зареєстрованих програм.
+</PRE>
+
+<!-- odel_apg -->
+<TABLE border=2 width="100%"><TR><TD><TABLE width="100%">
+<TR><TD><FONT size="+2">odel_apg</FONT></TD></TR>
+<TR><TD align="right">Delete Application Registration</TD></TR>
+<TR><TD>Видалення реєстрації прикладної програми</TD></TR>
+</TABLE></TD></TR></TABLE>
+<H4>【Синтаксис / Прототип】</H4>
+<PRE>
+W   odel_apg(LINK *lnk)
+</PRE>
+<H4>【Параметри】</H4>
+<PRE>
+LINK   *lnk     Посилання на виконуваний файл
+</PRE>
+<H4>【Значення, що повертається】</H4>
+<PRE>
+= 0     Успішне виконання
+&lt; 0     Помилка (Код помилки)
+</PRE>
+<H4>【Коди помилок】</H4>
+<PRE>
+EX_ADR  : Недопустима адреса lnk.
+EX_NOEXS: Програма не зареєстрована.
+</PRE>
+
+<!-- oset_sea -->
+<TABLE border=2 width="100%"><TR><TD><TABLE width="100%">
+<TR><TD><FONT size="+2">oset_sea</FONT></TD></TR>
+<TR><TD align="right">Set Search Filesystems</TD></TR>
+<TR><TD>Встановлення списку файлових систем для пошуку</TD></TR>
+</TABLE></TD></TR></TABLE>
+<H4>【Синтаксис / Прототип】</H4>
+<PRE>
+W   oset_sea(W *fslist, W cnt)
+</PRE>
+<H4>【Параметри】</H4>
+<PRE>
+W  *fslist  Масив ID файлових систем
+W   cnt     Кількість елементів
+</PRE>
+<H4>【Значення, що повертається】</H4>
+<PRE>
+= 0     Успішне виконання
+&lt; 0     Помилка (Код помилки)
+</PRE>
+<H4>【Коди помилок】</H4>
+<PRE>
+EX_ADR  : Недопустима адреса fslist.
+EX_PAR  : Неприпустимий вміст.
+</PRE>
+
+<!-- oget_sea -->
+<TABLE border=2 width="100%"><TR><TD><TABLE width="100%">
+<TR><TD><FONT size="+2">oget_sea</FONT></TD></TR>
+<TR><TD align="right">Get Search Filesystems</TD></TR>
+<TR><TD>Отримання списку файлових систем для пошуку</TD></TR>
+</TABLE></TD></TR></TABLE>
+<H4>【Синтаксис / Прототип】</H4>
+<PRE>
+W   oget_sea(W *fslist, W bsz)
+</PRE>
+<H4>【Параметри】</H4>
+<PRE>
+W  *fslist  Буфер для списку
+W   bsz     Розмір буфера (кількість W)
+</PRE>
+<H4>【Значення, що повертається】</H4>
+<PRE>
+&gt;= 0    Кількість файлових систем
+ &lt; 0    Помилка (Код помилки)
+</PRE>
+<H4>【Коди помилок】</H4>
+<PRE>
+EX_ADR  : Недопустима адреса fslist.
+</PRE>
+
+<!-- ofnd_apg -->
+<TABLE border=2 width="100%"><TR><TD><TABLE width="100%">
+<TR><TD><FONT size="+2">ofnd_apg</FONT></TD></TR>
+<TR><TD align="right">Find Application</TD></TR>
+<TR><TD>Пошук прикладної програми для Реального об'єкта</TD></TR>
+</TABLE></TD></TR></TABLE>
+<H4>【Синтаксис / Прототип】</H4>
+<PRE>
+W   ofnd_apg(W vid, LINK *lnk, W mode)
+</PRE>
+<H4>【Параметри】</H4>
+<PRE>
+W       vid     ID Віртуального об'єкта
+LINK   *lnk     Буфер для посилання на додаток
+W       mode    0 = за замовчуванням; 1 = наступний
+</PRE>
+<H4>【Значення, що повертається】</H4>
+<PRE>
+&gt;= 0    ID додатка (0 = не знайдено)
+ &lt; 0    Помилка (Код помилки)
+</PRE>
+<H4>【Коди помилок】</H4>
+<PRE>
+EX_ADR  : Недопустима адреса lnk.
+EX_VID  : ID не існує.
+EX_VOBJ : Відключений стан або Наліпка.
+</PRE>
+
+<!-- oexe_apg -->
+<TABLE border=2 width="100%"><TR><TD><TABLE width="100%">
+<TR><TD><FONT size="+2">oexe_apg</FONT></TD></TR>
+<TR><TD align="right">Execute Application</TD></TR>
+<TR><TD>Запуск прикладної програми для Реального об'єкта</TD></TR>
+</TABLE></TD></TR></TABLE>
+<H4>【Синтаксис / Прототип】</H4>
+<PRE>
+W   oexe_apg(W vid, LINK *lnk, W mode)
+</PRE>
+<H4>【Параметри】</H4>
+<PRE>
+W       vid     ID Віртуального об'єкта
+LINK   *lnk     Конкретний додаток (NULL = за замовчуванням)
+W       mode    Режим запуску
+</PRE>
+<H4>【Значення, що повертається】</H4>
+<PRE>
+= 0     Успішне виконання
+&lt; 0     Помилка (Код помилки)
+</PRE>
+<H4>【Детальний опис】</H4>
+<P>Запускає додаток для об'єкта <CODE>vid</CODE>. Надсилається повідомлення <CODE>M_EXECREQ</CODE>.</P>
+<H4>【Коди помилок】</H4>
+<PRE>
+EX_ADR  : Недопустима адреса lnk.
+EX_VID  : ID не існує.
+EX_VOBJ : Відключений стан.
+EX_NOEXS: Додаток не знайдено.
+</PRE>
+
+<!-- odet_fls -->
+<TABLE border=2 width="100%"><TR><TD><TABLE width="100%">
+<TR><TD><FONT size="+2">odet_fls</FONT></TD></TR>
+<TR><TD align="right">Detach Filesystem</TD></TR>
+<TR><TD>Відключення файлової системи</TD></TR>
+</TABLE></TD></TR></TABLE>
+<H4>【Синтаксис / Прототип】</H4>
+<PRE>
+W   odet_fls(W fsid, W mode)
+</PRE>
+<H4>【Параметри】</H4>
+<PRE>
+W   fsid    ID файлової системи
+W   mode    Режим відключення
+</PRE>
+<H4>【Значення, що повертається】</H4>
+<PRE>
+= 0     Успішне виконання
+&lt; 0     Помилка (Код помилки)
+</PRE>
+<H4>【Детальний опис】</H4>
+<P>
+  Відключає файлову систему. Всі Реальні об'єкти стають недоступними; відповідні
+  Віртуальні об'єкти переходять у стан (Відключений).
+</P>
+<H4>【Коди помилок】</H4>
+<PRE>
+EX_PAR  : Неприпустимий fsid.
+EX_VOBJ : Є об'єкти «в обробці» на цьому пристрої.
+</PRE>
+
+<!-- ofdt_fls -->
+<TABLE border=2 width="100%"><TR><TD><TABLE width="100%">
+<TR><TD><FONT size="+2">ofdt_fls</FONT></TD></TR>
+<TR><TD align="right">Force Detach Filesystem</TD></TR>
+<TR><TD>Примусове відключення файлової системи</TD></TR>
+</TABLE></TD></TR></TABLE>
+<H4>【Синтаксис / Прототип】</H4>
+<PRE>
+W   ofdt_fls(W fsid)
+</PRE>
+<H4>【Параметри】</H4>
+<PRE>
+W   fsid    ID файлової системи
+</PRE>
+<H4>【Значення, що повертається】</H4>
+<PRE>
+= 0     Успішне виконання
+&lt; 0     Помилка (Код помилки)
+</PRE>
+<H4>【Детальний опис】</H4>
+<P>Примусово відключає файлову систему навіть при об'єктах «в обробці». При аварійних ситуаціях.</P>
+<H4>【Коди помилок】</H4>
+<PRE>
+EX_PAR  : Неприпустимий fsid.
+</PRE>
+
+<!-- oatt_fls -->
+<TABLE border=2 width="100%"><TR><TD><TABLE width="100%">
+<TR><TD><FONT size="+2">oatt_fls</FONT></TD></TR>
+<TR><TD align="right">Attach Filesystem (Disk Insert Event)</TD></TR>
+<TR><TD>Підключення файлової системи (обробка події вставки диска)</TD></TR>
+</TABLE></TD></TR></TABLE>
+<H4>【Синтаксис / Прототип】</H4>
+<PRE>
+W   oatt_fls(EVENT *evt, TC *dev)
+</PRE>
+<H4>【Параметри】</H4>
+<PRE>
+EVENT  *evt     Подія вставки пристрою (NULL = повторне підключення)
+TC     *dev     Буфер для логічного імені пристрою (мін. 9 символів; або NULL)
+</PRE>
+<H4>【Значення, що повертається】</H4>
+<PRE>
+= 0     Успішне виконання
+&lt; 0     Помилка (Код помилки)
+</PRE>
+<H4>【Детальний опис】</H4>
+<P>
+  Обробляє підключення файлової системи. Повинна викликатися при кожній події вставки диска.
+  Після підключення Відключені об'єкти () отримують запит зняття стану.
+  Файлова система автоматично додається до списку пошуку; меню малих додатків оновлюється.
+</P>
+<H4>【Коди помилок】</H4>
+<PRE>
+EX_ADR  : Недопустима адреса evt або dev.
+EX_PAR  : Неприпустимий вміст evt.
+</PRE>
+
+<!-- ofat_fls -->
+<TABLE border=2 width="100%"><TR><TD><TABLE width="100%">
+<TR><TD><FONT size="+2">ofat_fls</FONT></TD></TR>
+<TR><TD align="right">Attach Filesystem by ID</TD></TR>
+<TR><TD>Підключення файлової системи за ID</TD></TR>
+</TABLE></TD></TR></TABLE>
+<H4>【Синтаксис / Прототип】</H4>
+<PRE>
+W   ofat_fls(W fsid, TC *dev)
+</PRE>
+<H4>【Параметри】</H4>
+<PRE>
+W   fsid    ID файлової системи
+TC *dev     Буфер для імені пристрою (або NULL)
+</PRE>
+<H4>【Значення, що повертається】</H4>
+<PRE>
+= 0     Успішне виконання
+&lt; 0     Помилка (Код помилки)
+</PRE>
+<H4>【Детальний опис】</H4>
+<P>Аналог <CODE>oatt_fls()</CODE>, але приймає ID файлової системи замість події.</P>
+<H4>【Коди помилок】</H4>
+<PRE>
+EX_PAR  : Неприпустимий fsid.
+</PRE>
+
+<!-- odet_vob -->
+<TABLE border=2 width="100%"><TR><TD><TABLE width="100%">
+<TR><TD><FONT size="+2">odet_vob</FONT></TD></TR>
+<TR><TD align="right">Detach via Virtual Body</TD></TR>
+<TR><TD>Відключення пристрою через Віртуальний об'єкт</TD></TR>
+</TABLE></TD></TR></TABLE>
+<H4>【Синтаксис / Прототип】</H4>
+<PRE>
+W   odet_vob(W vid, W mode)
+</PRE>
+<H4>【Параметри】</H4>
+<PRE>
+W   vid     ID Віртуального об'єкта
+W   mode    Режим відключення
+</PRE>
+<H4>【Значення, що повертається】</H4>
+<PRE>
+= 0     Успішне виконання
+&lt; 0     Помилка (Код помилки)
+</PRE>
+<H4>【Детальний опис】</H4>
+<P>
+  Відключає пристрій (файлову систему) Реального об'єкта <CODE>vid</CODE>.
+  Усі об'єкти пристрою переходять у стан.
+</P>
+<H4>【Коди помилок】</H4>
+<PRE>
+EX_VID  : ID не існує.
+EX_VOBJ : Є об'єкти «в обробці».
+</PRE>
+
+<!-- oatt_vob -->
+<TABLE border=2 width="100%"><TR><TD><TABLE width="100%">
+<TR><TD><FONT size="+2">oatt_vob</FONT></TD></TR>
+<TR><TD align="right">Attach via Virtual Body</TD></TR>
+<TR><TD>Підключення пристрою через Відключений об'єкт</TD></TR>
+</TABLE></TD></TR></TABLE>
+<H4>【Синтаксис / Прототип】</H4>
+<PRE>
+W   oatt_vob(W vid, W mode)
+</PRE>
+<H4>【Параметри】</H4>
+<PRE>
+W   vid     ID Відключеного Віртуального об'єкта ()
+W   mode    Режим підключення
+</PRE>
+<H4>【Значення, що повертається】</H4>
+<PRE>
+= 0     Успішне виконання
+&lt; 0     Помилка (Код помилки)
+</PRE>
+<H4>【Детальний опис】</H4>
+<P>
+  Підключає пристрій Відключеного об'єкта <CODE>vid</CODE>. Відображається
+  «Панель підключення пристрою». Після підключення — надсилається запит зняття стану.
+</P>
+<H4>【Коди помилок】</H4>
+<PRE>
+EX_VID  : ID не існує.
+EX_VOBJ : Об'єкт не є Відключеним.
+</PRE>
+
+<!-- oprc_dev -->
+<TABLE border=2 width="100%"><TR><TD><TABLE width="100%">
+<TR><TD><FONT size="+2">oprc_dev</FONT></TD></TR>
+<TR><TD align="right">Process Device Event</TD></TR>
+<TR><TD>Обробка події пристрою</TD></TR>
+</TABLE></TD></TR></TABLE>
+<H4>【Синтаксис / Прототип】</H4>
+<PRE>
+W   oprc_dev(EVENT *evt, TC *dev)
+</PRE>
+<H4>【Параметри】</H4>
+<PRE>
+EVENT  *evt     Подія пристрою
+TC     *dev     Буфер для імені пристрою (або NULL)
+</PRE>
+<H4>【Значення, що повертається】</H4>
+<PRE>
+= 0     Успішне виконання
+&lt; 0     Помилка (Код помилки)
+</PRE>
+<H4>【Детальний опис】</H4>
+<P>
+  Обробляє події пристрою (вставка/вилучення диска). Для вставки = <CODE>oatt_fls()</CODE>;
+  для вилучення = <CODE>odet_fls()</CODE>.
+</P>
+<H4>【Коди помилок】</H4>
+<PRE>
+EX_ADR  : Недопустима адреса evt або dev.
+EX_PAR  : Неприпустимий вміст evt.
+</PRE>
+
+<!-- ofmt_vob -->
+<TABLE border=2 width="100%"><TR><TD><TABLE width="100%">
+<TR><TD><FONT size="+2">ofmt_vob</FONT></TD></TR>
+<TR><TD align="right">Format Device</TD></TR>
+<TR><TD>Форматування пристрою через Об'єкт пристрою</TD></TR>
+</TABLE></TD></TR></TABLE>
+<H4>【Синтаксис / Прототип】</H4>
+<PRE>
+W   ofmt_vob(W vid)
+</PRE>
+<H4>【Параметри】</H4>
+<PRE>
+W   vid     ID Об'єкта пристрою
+</PRE>
+<H4>【Значення, що повертається】</H4>
+<PRE>
+= 0     Форматовано
+= 1     Скасовано
+&lt; 0     Помилка (Код помилки)
+</PRE>
+<H4>【Детальний опис】</H4>
+<P>
+  Форматує пристрій <CODE>vid</CODE>. Після форматування пристрій підключається.
+  Всі Реальні об'єкти попереднього вмісту стають недоступними.
+</P>
+<H4>【Коди помилок】</H4>
+<PRE>
+EX_VID  : ID не існує.
+EX_VOBJ : «В обробці», відключений, не є об'єктом пристрою, або Наліпка.
+</PRE>
+
+<!-- ocnv_vob -->
+<TABLE border=2 width="100%"><TR><TD><TABLE width="100%">
+<TR><TD><FONT size="+2">ocnv_vob</FONT></TD></TR>
+<TR><TD align="right">Convert Virtual Body for Storage</TD></TR>
+<TR><TD>Конвертація Віртуального об'єкта при збереженні</TD></TR>
+</TABLE></TD></TR></TABLE>
+<H4>【Синтаксис / Прототип】</H4>
+<PRE>
+W   ocnv_vob(W org, W vid, LINK *lnk)
+</PRE>
+<H4>【Параметри】</H4>
+<PRE>
+W       org     ID контейнера (визначає цільову файлову систему)
+W       vid     ID об'єкта для конвертації
+LINK   *lnk     Буфер для посилання після конвертації (або NULL)
+</PRE>
+<H4>【Значення, що повертається】</H4>
+<PRE>
+= 0     Конвертація не потрібна (та сама ФС)
+= 1     Створено файл-посилання (різні ФС)
+&lt; 0     Помилка (Код помилки)
+</PRE>
+<H4>【Детальний опис】</H4>
+<P>
+  Конвертує <CODE>vid</CODE> для збереження у Реальному об'єкті <CODE>org</CODE>.
+  Якщо на різних ФС — створюється файл-посилання на ФС org, і <CODE>vid</CODE>
+  перетворюється на об'єкт цього файлу-посилання.
+  Використовується додатками при збереженні вбудованих об'єктів.
+</P>
+<H4>【Коди помилок】</H4>
+<PRE>
+EX_ADR  : Недопустима адреса lnk.
+EX_VID  : ID (vid або org) не існує.
+EX_VOBJ : Відключений стан або Наліпка.
+</PRE>
+
+<!-- oopn_obj -->
+<TABLE border=2 width="100%"><TR><TD><TABLE width="100%">
+<TR><TD><FONT size="+2">oopn_obj</FONT></TD></TR>
+<TR><TD align="right">Open Real Body (with Error Handling)</TD></TR>
+<TR><TD>Відкриття Реального об'єкта з обробкою помилок</TD></TR>
+</TABLE></TD></TR></TABLE>
+<H4>【Синтаксис / Прототип】</H4>
+<PRE>
+W   oopn_obj(W vid, LINK *lnk, UW omode, TC *pwd)
+</PRE>
+<H4>【Параметри】</H4>
+<PRE>
+W       vid     ID Віртуального об'єкта
+LINK   *lnk     Буфер для посилання на відкритий об'єкт (або NULL)
+UW      omode   Режим відкриття (F_READ, F_WRITE, F_UPDATE...)
+TC     *pwd     Рядок пароля (NULL = без пароля)
+</PRE>
+<H4>【Значення, що повертається】</H4>
+<PRE>
+&gt;= 0    Файловий дескриптор відкритого Реального об'єкта
+ &lt; 0    Помилка (Код помилки)
+</PRE>
+<H4>【Детальний опис】</H4>
+<P>
+  Відкриває Реальний об'єкт з автоматичною обробкою помилок: при відключеному стані —
+  показує «Панель підключення»; при помилці ФС — панель помилки; при невірному паролі —
+  запитує пароль інтерактивно.
+</P>
+<H4>【Коди помилок】</H4>
+<PRE>
+EX_ADR  : Недопустима адреса lnk або pwd.
+EX_VID  : ID не існує.
+EX_VOBJ : Відключений стан (після відмови підключення).
+EX_PWD  : Скасовано введення пароля.
+ER_xxx  : Помилка файлової системи.
+</PRE>
+
+<H3><A name="amb">3.8.6 Функції-допоміжники додатків</A></H3>
+<P>
+  Допоміжні розширені системні виклики — не пов'язані безпосередньо з операціями
+  над Реальними/Віртуальними об'єктами.
+</P>
+
+<!-- aset_sel -->
+<TABLE border=2 width="100%"><TR><TD><TABLE width="100%">
+<TR><TD><FONT size="+2">aset_sel</FONT></TD></TR>
+<TR><TD>&nbsp;</TD></TR>
+<TR><TD>Встановлення інтервалу мерехтіння рамки виділення</TD></TR>
+</TABLE></TD></TR></TABLE>
+<H4>【Синтаксис / Прототип】</H4>
+<PRE>
+W   aset_sel(W period)
+</PRE>
+<H4>【Параметри】</H4>
+<PRE>
+W   period  Інтервал мерехтіння у мс (period &lt;= 0 — лише повернути поточне)
+</PRE>
+<H4>【Значення, що повертається】</H4>
+<PRE>
+&gt;= 0    Попередній інтервал
+</PRE>
+<H4>【Коди помилок】</H4>
+<P>Відсутні.</P>
+
+<!-- adsp_sel -->
+<TABLE border=2 width="100%"><TR><TD><TABLE width="100%">
+<TR><TD><FONT size="+2">adsp_sel</FONT></TD></TR>
+<TR><TD>&nbsp;</TD></TR>
+<TR><TD>Відображення рамки виділення</TD></TR>
+</TABLE></TD></TR></TABLE>
+<H4>【Синтаксис / Прототип】</H4>
+<PRE>
+ERR adsp_sel(GID gid, SEL_RGN *selp, W mode)
+</PRE>
+<H4>【Параметри】</H4>
+<PRE>
+GID     gid     ID середовища малювання
+SEL_RGN *selp   Область рамки виділення
+W       mode    = 0 : сховати;  &gt; 0 : показати;  &lt; 0 : мерехтіти
+</PRE>
+<H4>【Значення, що повертається】</H4>
+<PRE>
+= 0     Успішне виконання
+&lt; 0     Помилка (Код помилки)
+</PRE>
+<H4>【Детальний опис】</H4>
+<P>
+  Відображає/приховує/вмикає мерехтіння рамки виділення <CODE>selp</CODE> у
+  середовищі малювання <CODE>gid</CODE>.
+</P>
+<P>Поле <CODE>selp-&gt;sts</CODE>:</P>
+<PRE>
+    xxxx xxxx xxxx xxxx IPBD WWWW TTTT TTTT
+</PRE>
+<TABLE>
+  <TR><TD><CODE>I =</CODE></TD><TD>0</TD><TD>— активний стан</TD></TR>
+  <TR><TD>                </TD><TD>1</TD><TD>— неактивний (не відображається)</TD></TR>
+  <TR><TD><CODE>P =</CODE></TD><TD>0</TD><TD>— прямокутна рамка</TD></TR>
+  <TR><TD>                </TD><TD>1</TD><TD>— многокутна (скруглення ігнорується)</TD></TR>
+  <TR><TD><CODE>B =</CODE></TD><TD>0</TD><TD>— не мерехтить</TD></TR>
+  <TR><TD>                </TD><TD>1</TD><TD>— мерехтить</TD></TR>
+  <TR><TD><CODE>D =</CODE></TD><TD>0</TD><TD>— прихована</TD></TR>
+  <TR><TD>                </TD><TD>1</TD><TD>— відображена</TD></TR>
+  <TR><TD><CODE>W  </CODE></TD><TD> </TD><TD>— ширина рамки (0 = за замовчуванням)</TD></TR>
+  <TR><TD><CODE>T  </CODE></TD><TD> </TD><TD>— лічильник інтервалу мерехтіння</TD></TR>
+  <TR><TD><CODE>x  </CODE></TD><TD> </TD><TD>— зарезервовано</TD></TR>
+</TABLE>
+<P>Поля B, D, T — внутрішні; змінювати їх не слід. Початкове значення T зазвичай 0.</P>
+<H4>【Коди помилок】</H4>
+<PRE>
+EX_ADR  : Недопустима адреса selp.
+EG_xxx  : Помилка графічних примітивів.
+</PRE>
+
+<!-- adsp_slt -->
+<TABLE border=2 width="100%"><TR><TD><TABLE width="100%">
+<TR><TD><FONT size="+2">adsp_slt</FONT></TD></TR>
+<TR><TD>&nbsp;</TD></TR>
+<TR><TD>Відображення списку рамок виділення</TD></TR>
+</TABLE></TD></TR></TABLE>
+<H4>【Синтаксис / Прототип】</H4>
+<PRE>
+ERR adsp_slt(GID gid, SEL_LIST *selp, W mode, W dh, W dv)
+</PRE>
+<H4>【Параметри】</H4>
+<PRE>
+GID      gid     ID середовища малювання
+SEL_LIST *selp   Список рамок
+W        mode    = 0 (сховати), &gt; 0 (показати), &lt; 0 (мерехтіти)
+W        dh      Горизонтальне зміщення
+W        dv      Вертикальне зміщення
+</PRE>
+<H4>【Значення, що повертається】</H4>
+<PRE>
+= 0     Успішне виконання
+&lt; 0     Помилка (Код помилки)
+</PRE>
+<H4>【Детальний опис】</H4>
+<P>
+  Відображає/приховує всі рамки зі списку <CODE>selp</CODE>.
+  <CODE>dh, dv</CODE> — зміщення координат при відображенні (для D&amp;D).
+</P>
+<H4>【Коди помилок】</H4>
+<PRE>
+EX_ADR  : Недопустима адреса selp.
+EG_xxx  : Помилка графічних примітивів.
+</PRE>
+
+<!-- apnl_men -->
+<TABLE border=2 width="100%"><TR><TD><TABLE width="100%">
+<TR><TD><FONT size="+2">apnl_men</FONT></TD></TR>
+<TR><TD>&nbsp;</TD></TR>
+<TR><TD>Обробка меню редагування панелі (з лотком)</TD></TR>
+</TABLE></TD></TR></TABLE>
+<H4>【Синтаксис / Прототип】</H4>
+<PRE>
+W   apnl_men(W pnid, W pid, EVENT *epv)
+</PRE>
+<H4>【Параметри】</H4>
+<PRE>
+W       pnid    ID панелі
+W       pid     ID елемента текстового поля
+EVENT  *epv     Подія, що ініціювала виклик
+</PRE>
+<H4>【Значення, що повертається】</H4>
+<PRE>
+= 0     Успішне виконання
+&lt; 0     Помилка (Код помилки)
+</PRE>
+<H4>【Детальний опис】</H4>
+<P>
+  Обробляє меню редагування лотка для текстового поля <CODE>pid</CODE> панелі <CODE>pnid</CODE>.
+  При <CODE>*evt = EV_KEYDWN</CODE> — клавіатурне меню; інакше відображається:
+</P>
+<PRE>
+    Редагування  Копіювати до лотка      C
+                 Вставити з лотка        Z
+                 Перемістити до лотка    V
+                 Вставити з лотка        X
+                 Видалити
+</PRE>
+<H4>【Коди помилок】</H4>
+<PRE>
+EX_ADR  : Недопустима адреса epv.
+</PRE>
+
+<!-- achg_bgc -->
+<TABLE border=2 width="100%"><TR><TD><TABLE width="100%">
+<TR><TD><FONT size="+2">achg_bgc</FONT></TD></TR>
+<TR><TD>&nbsp;</TD></TR>
+<TR><TD>Зміна кольору фону вікна</TD></TR>
+</TABLE></TD></TR></TABLE>
+<H4>【Синтаксис / Прототип】</H4>
+<PRE>
+W   achg_bgc(W *mask, COLOR *color, COLOR bgc)
+</PRE>
+<H4>【Параметри】</H4>
+<PRE>
+W      *mask    Маска паттерну (0~7; 0 = як колір фону Об'єкта)
+COLOR  *color   Поточний колір фону (вхід/вихід)
+COLOR   bgc     Колір фону Об'єкта (&lt; 0 — заборонити опцію «як фон Об'єкта»)
+</PRE>
+<H4>【Значення, що повертається】</H4>
+<PRE>
+= 0     Без змін або скасовано
+= 1     Колір змінено
+&lt; 0     Помилка (Код помилки)
+</PRE>
+<H4>【Детальний опис】</H4>
+<P>
+  Відображає «Панель зміни кольору фону вікна» для інтерактивного вибору.
+  Оновлює <CODE>mask</CODE> та <CODE>color</CODE> новими значеннями.
+</P>
+<H4>【Коди помилок】</H4>
+<PRE>
+EX_ADR  : Недопустима адреса mask або color.
+</PRE>
+
+<HR>
+<A href="../index.html">Повернутися до змісту розділу Графічної оболонки</A><BR>
+<A href="tip.html">Попередня сторінка: 3.7 Примітиви вводу тексту (Повернутися)</A><BR>
+<A href="font_mgr.html">Наступна сторінка: 3.9 Менеджер шрифтів (Перейти)</A><BR>
+
+</BODY>
+</HTML>

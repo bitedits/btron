@@ -12,6 +12,7 @@
 #   m68k          B-System/BTRON3 3.20 (m68k-q800) Motorola 68040 — Cleanroom TRON Kernel [Target 7]
 #   ps2           B-System/BTRON3 3.20 (ps2-ee) Sony PlayStation 2 — Cleanroom TRON Kernel [Target 8]
 #   mips          B-System/BTRON3 3.20 (mips-malta) Bare-Metal MIPS — Cleanroom TRON Kernel [Target 9]
+#   foma          B-System/BTRON3 3.20 (foma) Cleanroom BTRON UI for FOMA devices [Target 10]
 #
 # Run Commands:
 #   run-posix     Boot POSIX Microkernel Desktop (btron-posix)

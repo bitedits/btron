@@ -1,0 +1,348 @@
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 3.2 Final//EN">
+<HTML>
+<HEAD>
+<META CHARSET="UTF-8">
+<META NAME="viewport" CONTENT="width=device-width, initial-scale=1.0">
+<LINK REL="stylesheet" HREF="../../doc.css">
+
+<TITLE>
+  3.6 Менеджер даних (Data Manager)
+</TITLE>
+<LINK REL="parent" HREF="../index.html">
+<LINK REL="previous" HREF="tray.html">
+<LINK REL="next" HREF="font_mgr.html">
+</HEAD>
+<BODY>
+
+<!-- Sakamura BTRON / BTRON3 Specification - Ukrainian Translation -->
+<DIV STYLE='background:#0057b7; color:#ffd700; padding:8px 15px; font-weight:bold; font-family:sans-serif; margin-bottom:15px; border-radius:4px;'>
+  Специфікація BTRON3 (Український переклад) | Розділ 7: Графічна оболонка (GUI Shell)
+</DIV>
+<A href="../index.html">Повернутися до змісту розділу Графічної оболонки</A><BR>
+<A href="tray.html">Попередня сторінка: 3.5 Менеджер трею (Повернутися)</A><BR>
+<A href="font_mgr.html">Наступна сторінка: 3.7 Менеджер шрифтів (Перейти)</A><BR>
+<HR>
+
+<H2><A name="akc">3.6 Менеджер даних (Data Manager)</A></H2>
+
+<H3><A name="akd">3.6.1 Функції Менеджера даних</A></H3>
+
+<H4><A name="ake">3.6.1.1 Загальні відомості</A></H4>
+
+<P>
+  Менеджер даних (Data Manager) керує ресурсами системи та додатків — «коробками даних» (Data Box).
+  Він забезпечує спільний доступ через спільну пам'ять (Shared Memory) до графічних патернів,
+  зображень покажчиків курсора, піктограм, описів меню, панелей, шрифтових таблиць та елементів UI.
+</P>
+
+<H4><A name="akf">3.6.1.2 Типи даних та номери даних</A></H4>
+
+<P>
+  Кожен елемент ресурсу ідентифікується парою: <B>Тип даних (Data Type ID)</B> та <B>Номер даних (Data Number)</B>.
+</P>
+<UL>
+ <LI><B>Системні ресурси</B> (<CODE>dnum &lt; 1000</CODE>): стандартні курсори, системні панелі, базові патерни.
+ <LI><B>Ресурси додатків</B> (<CODE>dnum &gt;= 1000</CODE>): графічні ресурси конкретних прикладних програм.
+</UL>
+
+<H4><A name="akg">3.6.1.3 Принцип роботи Менеджера даних</A></H4>
+
+<P>
+  При пошуку ресурсу перевірка виконується у зворотному порядку відкриття файлів Data Box:
+  останній відкритий локальний Data Box перевіряється першим, а Системний Data Box — завжди останнім.
+  Це дозволяє додатку легко перевизначити будь-який системний ресурс (наприклад, курсор або стиль меню),
+  зареєструвавши свій ресурс з тим самим номером.
+</P>
+<P>
+  Ресурси завантажуються у спільну пам'ять ядра. Програмам заборонено модифікувати отримані
+  вказівники безпосередньо — для змін необхідно копіювати дані у локальний буфер.
+</P>
+
+<H4><A name="akh">3.6.1.4 Структура коробки даних (Data Box)</A></H4>
+
+<P>
+  Data Box складається з індексної секції (Index Section) та секції тіла даних (Data Section).
+</P>
+
+<H5>Заголовок коробки даних (DBOX_HDR)</H5>
+<PRE>
+typedef struct {
+    H   ntyp;       /* Кількість типів даних у коробці */
+    H   ixsize;     /* Повний розмір індексної секції у байтах (<= 32 КБ) */
+    H   resv[6];    /* Зарезервовано */
+} DBOX_HDR;
+</PRE>
+
+<H5>Індекс типу даних (DTYP_INX)</H5>
+<PRE>
+typedef struct {
+    W   npos;           /* Зсув до індексу наступного типу даних */
+    W   typ;            /* ID типу даних */
+    UW  attr;           /* Атрибути (біт 0: L=1 — preload у пам'ять) */
+    W   nd;             /* Кількість елементів цього типу */
+    DNUM_INX dix[1];    /* Масив індексів елементів (nd штук) */
+} DTYP_INX;
+</PRE>
+
+<H5>Індекс елемента даних (DNUM_INX)</H5>
+<PRE>
+typedef struct {
+    W   id;         /* Номер даних (dnum) */
+    W   pos;        /* Зсув до тіла даних у файлі */
+    W   size;       /* Розмір тіла даних у байтах */
+    W   info[2];    /* Внутрішнє службове поле */
+} DNUM_INX;
+</PRE>
+
+<H3><A name="akj">3.6.2 Структури та константи</A></H3>
+
+<H4>□ Константи типів даних (Data Type ID)</H4>
+<PRE>
+#define PTR_DATA    1   /* Зображення курсора/покажчика */
+#define PICT_DATA   2   /* Піктограма */
+#define PAT_DATA    3   /* Графічний патерн */
+#define BMAP_DATA   4   /* Бітова карта (Bitmap) */
+#define FIG_DATA    5   /* Сегмент векторної фігури TAD */
+#define TEXT_DATA   6   /* Текстовий рядок */
+#define PARTS_DATA  7   /* Визначення елемента управління (Parts) */
+#define MENU_DATA   8   /* Стандартне меню */
+#define GMENU_DATA  9   /* Узагальнене меню */
+#define PANEL_DATA  10  /* Панель діалогу */
+#define USER_DATA   64  /* Користувацькі ресурси (>= 64) */
+</PRE>
+
+<H3><A name="ako">3.6.3 Системні виклики Менеджера даних</A></H3>
+<P>
+  Усі функції повертають від'ємний код при помилці, «0» або додатне число при успіху.
+</P>
+
+<!-- dopn_dat -->
+<TABLE border=2 width="100%"><TR><TD><TABLE width="100%">
+<TR><TD><FONT size="+2">dopn_dat</FONT></TD></TR>
+<TR><TD align="right">Open Data Box</TD></TR>
+<TR><TD>Відкриття файлу коробки даних</TD></TR>
+</TABLE></TD></TR></TABLE>
+<H4>【Синтаксис / Прототип】</H4>
+<PRE>
+W   dopn_dat(TC *path, W opt)
+</PRE>
+<H4>【Параметри】</H4>
+<PRE>
+TC *path    Шлях до файлу коробки даних (NULL = системний Data Box)
+W   opt     Опції відкриття (зарезервовано, 0)
+</PRE>
+<H4>【Значення, що повертається】</H4>
+<PRE>
+&gt;= 0    ID відкритого файлу даних (fid)
+ &lt; 0    Помилка (Код помилки)
+</PRE>
+<H4>【Детальний опис】</H4>
+<P>
+  Відкриває файл Data Box за шляхом <CODE>path</CODE>, зчитує індексну секцію в пам'ять
+  і реєструє ресурси для пошуку. При <CODE>path = NULL</CODE> відкриває системний Data Box.
+</P>
+<H4>【Коди помилок】</H4>
+<PRE>
+EX_ADR  : Недопустима адреса path.
+EX_NOSPC: Нестача пам'яті для індексної секції.
+EX_NOENT: Файл не знайдено.
+EX_DFMT : Некоректний формат файлу Data Box.
+</PRE>
+
+<!-- dcls_dat -->
+<TABLE border=2 width="100%"><TR><TD><TABLE width="100%">
+<TR><TD><FONT size="+2">dcls_dat</FONT></TD></TR>
+<TR><TD align="right">Close Data Box</TD></TR>
+<TR><TD>Закриття коробки даних</TD></TR>
+</TABLE></TD></TR></TABLE>
+<H4>【Синтаксис / Прототип】</H4>
+<PRE>
+ERR dcls_dat(W fid)
+</PRE>
+<H4>【Параметри】</H4>
+<PRE>
+W   fid     ID відкритого файлу даних (0 = закрити всі, включно з системним)
+</PRE>
+<H4>【Значення, що повертається】</H4>
+<PRE>
+= 0     Успішне виконання
+&lt; 0     Помилка (Код помилки)
+</PRE>
+<H4>【Детальний опис】</H4>
+<P>
+  Закриває файл Data Box <CODE>fid</CODE> та звільняє виділену під нього пам'ять.
+  При завершенні процесу рекомендується викликати <CODE>dcls_dat(0)</CODE>.
+</P>
+<H4>【Коди помилок】</H4>
+<PRE>
+EX_FD   : Некоректний fid.
+</PRE>
+
+<!-- dget_dtp -->
+<TABLE border=2 width="100%"><TR><TD><TABLE width="100%">
+<TR><TD><FONT size="+2">dget_dtp</FONT></TD></TR>
+<TR><TD align="right">Get Data Pointer</TD></TR>
+<TR><TD>Отримання вказівника на ресурс у спільній пам'яті</TD></TR>
+</TABLE></TD></TR></TABLE>
+<H4>【Синтаксис / Прототип】</H4>
+<PRE>
+ERR dget_dtp(W type, W dnum, void **datap)
+</PRE>
+<H4>【Параметри】</H4>
+<PRE>
+W       type    Тип даних (PTR_DATA, PICT_DATA, PANEL_DATA тощо)
+W       dnum    Номер ресурсу
+void  **datap   Буфер для збереження адреси ресурсу
+</PRE>
+<H4>【Значення, що повертається】</H4>
+<PRE>
+= 0     Успішне виконання (*datap містить адресу)
+&lt; 0     Помилка (Код помилки)
+</PRE>
+<H4>【Детальний опис】</H4>
+<P>
+  Шукає ресурс за типом <CODE>type</CODE> і номером <CODE>dnum</CODE>. Завантажує його в спільну
+  пам'ять (якщо ще не завантажено) та повертає вказівник у <CODE>*datap</CODE>.
+</P>
+<H4>【Коди помилок】</H4>
+<PRE>
+EX_ADR  : Недопустима адреса datap.
+EX_DNUM : Ресурс (type, dnum) не знайдено.
+EX_DFMT : Некоректний формат даних.
+EX_NOSPC: Нестача пам'яті.
+</PRE>
+
+<!-- dget_siz -->
+<TABLE border=2 width="100%"><TR><TD><TABLE width="100%">
+<TR><TD><FONT size="+2">dget_siz</FONT></TD></TR>
+<TR><TD align="right">Get Data Size</TD></TR>
+<TR><TD>Отримання розміру ресурсу за адресою</TD></TR>
+</TABLE></TD></TR></TABLE>
+<H4>【Синтаксис / Прототип】</H4>
+<PRE>
+W   dget_siz(B *addr)
+</PRE>
+<H4>【Параметри】</H4>
+<PRE>
+B  *addr    Адреса ресурсу в спільній пам'яті (отримана через dget_dtp)
+</PRE>
+<H4>【Значення, що повертається】</H4>
+<PRE>
+&gt;= 0    Розмір ресурсу у байтах
+ &lt; 0    Помилка (Код помилки)
+</PRE>
+<H4>【Детальний опис】</H4>
+<P>
+  Повертає розмір у байтах ресурсу, розташованого за адресою <CODE>addr</CODE>.
+</P>
+<H4>【Коди помилок】</H4>
+<PRE>
+EX_AKEY : Некоректна адреса ресурсу.
+</PRE>
+
+<!-- dget_num -->
+<TABLE border=2 width="100%"><TR><TD><TABLE width="100%">
+<TR><TD><FONT size="+2">dget_num</FONT></TD></TR>
+<TR><TD align="right">Get Data Number and Type</TD></TR>
+<TR><TD>Отримання номера та типу даних за адресою</TD></TR>
+</TABLE></TD></TR></TABLE>
+<H4>【Синтаксис / Прототип】</H4>
+<PRE>
+W   dget_num(B *addr, W *type)
+</PRE>
+<H4>【Параметри】</H4>
+<PRE>
+B  *addr    Адреса ресурсу
+W  *type    Буфер для збереження типу даних (NULL = не читати)
+</PRE>
+<H4>【Значення, що повертається】</H4>
+<PRE>
+&gt;= 0    Номер даних ресурсу (dnum)
+ &lt; 0    Помилка (Код помилки)
+</PRE>
+<H4>【Детальний опис】</H4>
+<P>
+  Повертає номер <CODE>dnum</CODE> і записує тип <CODE>type</CODE> ресурсу за адресою <CODE>addr</CODE>.
+</P>
+<H4>【Коди помилок】</H4>
+<PRE>
+EX_ADR  : Недопустима адреса type.
+EX_AKEY : Некоректна адреса ресурсу.
+</PRE>
+
+<!-- ddef_dat -->
+<TABLE border=2 width="100%"><TR><TD><TABLE width="100%">
+<TR><TD><FONT size="+2">ddef_dat</FONT></TD></TR>
+<TR><TD align="right">Redefine System Data Item</TD></TR>
+<TR><TD>Тимчасове перевизначення системного ресурсу</TD></TR>
+</TABLE></TD></TR></TABLE>
+<H4>【Синтаксис / Прототип】</H4>
+<PRE>
+ERR ddef_dat(W type, W dnum, void *ptr, W size)
+</PRE>
+<H4>【Параметри】</H4>
+<PRE>
+W      type     Тип даних
+W      dnum     Номер даних
+void  *ptr      Буфер з новими даними
+W      size     Розмір буфера у байтах
+</PRE>
+<H4>【Значення, що повертається】</H4>
+<PRE>
+= 0     Успішне виконання
+&lt; 0     Помилка (Код помилки)
+</PRE>
+<H4>【Детальний опис】</H4>
+<P>
+  Тимчасово перевизначає системний ресурс <CODE>(type, dnum)</CODE> даними <CODE>ptr</CODE>.
+  Зміни діють до вивантаження або перезапуску.
+</P>
+<H4>【Коди помилок】</H4>
+<PRE>
+EX_ADR  : Недопустима адреса ptr.
+EX_DNUM : Ресурс не знайдено.
+EX_DFMT : Некоректний формат даних.
+EX_PAR  : Неприпустимий розмір.
+</PRE>
+
+<!-- ddef_ldt -->
+<TABLE border=2 width="100%"><TR><TD><TABLE width="100%">
+<TR><TD><FONT size="+2">ddef_ldt</FONT></TD></TR>
+<TR><TD align="right">Define Local Data Item</TD></TR>
+<TR><TD>Реєстрація локального динамічного ресурсу</TD></TR>
+</TABLE></TD></TR></TABLE>
+<H4>【Синтаксис / Прототип】</H4>
+<PRE>
+ERR ddef_ldt(W type, W dnum, void *ptr, W size)
+</PRE>
+<H4>【Параметри】</H4>
+<PRE>
+W      type     Тип даних
+W      dnum     Номер даних
+void  *ptr      Буфер з даними
+W      size     Розмір даних у байтах
+</PRE>
+<H4>【Значення, що повертається】</H4>
+<PRE>
+= 0     Успішне виконання
+&lt; 0     Помилка (Код помилки)
+</PRE>
+<H4>【Детальний опис】</H4>
+<P>
+  Реєструє локальний ресурс для поточного процесу. Цей ресурс має найвищий пріоритет
+  під час пошуку в поточному процесі.
+</P>
+<H4>【Коди помилок】</H4>
+<PRE>
+EX_ADR  : Недопустима адреса ptr.
+EX_DFMT : Некоректний формат даних.
+EX_PAR  : Неприпустимий розмір size.
+</PRE>
+
+<HR>
+<A href="../index.html">Повернутися до змісту розділу Графічної оболонки</A><BR>
+<A href="tray.html">Попередня сторінка: 3.5 Менеджер трею (Повернутися)</A><BR>
+<A href="font_mgr.html">Наступна сторінка: 3.7 Менеджер шрифтів (Перейти)</A><BR>
+
+</BODY>
+</HTML>

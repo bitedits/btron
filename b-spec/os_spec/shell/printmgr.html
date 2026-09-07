@@ -1,0 +1,389 @@
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 3.2 Final//EN">
+<HTML>
+<HEAD>
+<META CHARSET="UTF-8">
+<META NAME="viewport" CONTENT="width=device-width, initial-scale=1.0">
+<LINK REL="stylesheet" HREF="../../doc.css">
+
+<TITLE>
+  3.11 Менеджер друку (Print Manager)
+</TITLE>
+<LINK REL="parent" HREF="../index.html">
+<LINK REL="previous" HREF="tcpip.html">
+<LINK REL="next" HREF="../index.html">
+</HEAD>
+<BODY>
+
+<!-- Sakamura BTRON / BTRON3 Specification - Ukrainian Translation -->
+<DIV STYLE='background:#0057b7; color:#ffd700; padding:8px 15px; font-weight:bold; font-family:sans-serif; margin-bottom:15px; border-radius:4px;'>
+  Специфікація BTRON3 (Український переклад) | Розділ 7: Графічна оболонка (GUI Shell)
+</DIV>
+<A href="../index.html">Повернутися до змісту розділу Графічної оболонки</A><BR>
+<A href="tcpip.html">Попередня сторінка: 3.10 Менеджер TCP/IP (Повернутися)</A><BR>
+<HR>
+
+<H2><A name="ann">3.11 Менеджер друку (Print Manager)</A></H2>
+
+<H3><A name="ano">3.11.1 Функції Менеджера друку</A></H3>
+
+<P>
+  Менеджер друку (Print Manager) керує виведенням документів на принтер, попереднім переглядом
+  (Print Preview), чергами друку (Spooler), конфігурацією та драйверами принтерів у BTRON3.
+</P>
+
+<H3><A name="anq">3.11.2 Управління друком та параметри сторінки</A></H3>
+
+<H4>3.11.2.1 Папір макета (Layout Paper) та папір принтера (Print Paper)</H4>
+<P>
+  У BTRON3 розрізняють розміри логічного аркуша макета документа (TAD-сторінка)
+  та фізичного аркуша принтера. Якщо розміри відрізняються, виконується автоматичне
+  масштабування або розбивка на декілька фізичних сторінок (Tiling).
+</P>
+
+<H4>3.11.2.2 Параметри друку (PR_PAR)</H4>
+<PRE>
+typedef struct {
+    TC      prname[L_PRNM]; /* Назва принтера */
+    UH      unit;           /* Одиниці вимірювання (PR_MM = мм, PR_INCH = дюйми) */
+    UH      resv1;          /* Зарезервовано */
+    SIZE    size;           /* Фізичний розмір паперу принтера */
+    RECT    margin;         /* Поля аркуша принтера (Print Margin) */
+    UH      spec;           /* Специфікація друку (орієнтація, якість, колір) */
+    UH      copies;         /* Кількість копій */
+    H       start;          /* Початкова сторінка */
+    H       end;            /* Кінцева сторінка */
+    UH      prnvobj;        /* Друкувати/розгортати віртуальні об'єкти */
+    UH      vobjdepth;      /* Глибина розгортання віртуальних об'єктів */
+    SIZE    layoutsz;       /* Розмір аркуша макета документа */
+    RECT    laymargin;      /* Поля макета документа */
+} PR_PAR;
+</PRE>
+
+<H3><A name="anv">3.11.3 Управління чергою друку (Спулер)</A></H3>
+
+<H4>3.11.3.1 Стан завдання друку (PR_STAT)</H4>
+<PRE>
+typedef struct {
+    W     prid;         /* ID завдання друку */
+    W     pid;          /* ID процесу, що поставив завдання */
+    UW    time;         /* Час постановки у чергу */
+    LINK  lnk;          /* Посилання на файл документа */
+    UH    mode;         /* Режим: PR_DEL/PR_NODEL, PR_MSG/PR_NOMSG */
+    UH    stat;         /* Стан: PR_WAIT, PR_ACTIVE, PR_DELETE */
+    UH    rempage;      /* Залишок сторінок */
+    UH    remcopy;      /* Залишок копій */
+} PR_STAT;
+</PRE>
+
+<H4>3.11.3.2 Повідомлення про завершення друку (PR_MESG)</H4>
+<PRE>
+#define MS_PRINT    MS_MNG5     /* Тип повідомлення друку */
+
+typedef struct {
+    W   type;           /* = MS_PRINT */
+    W   size;           /* Розмір тіла повідомлення (= 8) */
+    W   prid;           /* ID завдання друку */
+    W   code;           /* Код завершення (0 = успіх, PR_CANCEL = скасовано) */
+} PR_MESG;
+</PRE>
+
+<H3><A name="anz">3.11.4 Конфігурація принтерів (PR_CONF)</A></H3>
+<PRE>
+#define L_DEVPAR    88      /* Довжина параметрів пристрою */
+#define L_HWPAR     160     /* Довжина специфічних параметрів заліза */
+
+typedef struct {
+    TC  prname[L_PRNM];     /* Назва принтера */
+    TC  hwname[L_PRNM];     /* Модель принтера */
+    TC  devname[L_DEVNM];   /* Назва порту/пристрою (e.g. parallel, serial, lpr) */
+    TC  drvname[L_FNM];     /* Назва файлу драйвера */
+    VB  devpar[L_DEVPAR];   /* Параметри пристрою зв'язку */
+    VB  hwpar[L_HWPAR];     /* Апаратні параметри принтера */
+} PR_CONF;
+</PRE>
+
+<H3><A name="aod">3.11.5 Системні виклики Менеджера друку</A></H3>
+
+<!-- rset_par -->
+<TABLE border=2 width="100%"><TR><TD><TABLE width="100%">
+<TR><TD><FONT size="+2">rset_par</FONT></TD></TR>
+<TR><TD align="right">Display Print Dialog / Set Parameters</TD></TR>
+<TR><TD>Відображення діалогу налаштування друку</TD></TR>
+</TABLE></TD></TR></TABLE>
+<H4>【Синтаксис / Прототип】</H4>
+<PRE>
+WERR    rset_par(PR_PAR *par, W opt)
+</PRE>
+<H4>【Параметри】</H4>
+<PRE>
+PR_PAR *par     Параметри друку [вхід / вихід]
+W       opt     Опції (PR_PAR_DEFAULT = за замовчуванням, 0 = діалог)
+</PRE>
+<H4>【Значення, що повертається】</H4>
+<PRE>
+= 0     Підтверджено (натиснуто OK)
+= 1     Скасовано користувачем (Cancel)
+&lt; 0     Помилка (Код помилки)
+</PRE>
+<H4>【Детальний опис】</H4>
+<P>
+  Відображає стандартну панель налаштувань друку для вибору принтера, діапазону сторінок,
+  кількості копій та параметрів масштабування.
+</P>
+<H4>【Коди помилок】</H4>
+<PRE>
+EX_ADR  : Недопустима адреса par.
+EX_PAR  : Неприпустимі параметри друку.
+</PRE>
+
+<!-- rprn_fil -->
+<TABLE border=2 width="100%"><TR><TD><TABLE width="100%">
+<TR><TD><FONT size="+2">rprn_fil</FONT></TD></TR>
+<TR><TD align="right">Print File to Spooler</TD></TR>
+<TR><TD>Постановка файлу документа в чергу друку</TD></TR>
+</TABLE></TD></TR></TABLE>
+<H4>【Синтаксис / Прототип】</H4>
+<PRE>
+WERR    rprn_fil(LINK *lnk, PR_PAR *par, W mode)
+</PRE>
+<H4>【Параметри】</H4>
+<PRE>
+LINK   *lnk     Посилання на файл документа для друку
+PR_PAR *par     Параметри друку
+W       mode    Режим: PR_DEL/PR_NODEL (видалити файл після друку), PR_MSG/PR_NOMSG (повідомити про завершення)
+</PRE>
+<H4>【Значення, що повертається】</H4>
+<PRE>
+&gt;= 0    ID зареєстрованого завдання друку (prid)
+ &lt; 0    Помилка (Код помилки)
+</PRE>
+<H4>【Детальний опис】</H4>
+<P>
+  Реєструє документ у спулері вибраного принтера для фонового друку.
+</P>
+<H4>【Коди помилок】</H4>
+<PRE>
+EX_ADR  : Недопустима адреса lnk або par.
+EX_NOEXS: Принтер не знайдено.
+EX_NOSPC: Нестача пам'яті для черги спулера.
+</PRE>
+
+<!-- rout_fil -->
+<TABLE border=2 width="100%"><TR><TD><TABLE width="100%">
+<TR><TD><FONT size="+2">rout_fil</FONT></TD></TR>
+<TR><TD align="right">Synchronous Print File</TD></TR>
+<TR><TD>Прямий синхронний друк файлу</TD></TR>
+</TABLE></TD></TR></TABLE>
+<H4>【Синтаксис / Прототип】</H4>
+<PRE>
+ERR rout_fil(LINK *lnk, PR_PAR *par)
+</PRE>
+<H4>【Параметри】</H4>
+<PRE>
+LINK   *lnk     Посилання на файл документа
+PR_PAR *par     Параметри друку
+</PRE>
+<H4>【Значення, що повертається】</H4>
+<PRE>
+= 0     Успішне завершення друку
+&lt; 0     Помилка (Код помилки)
+</PRE>
+<H4>【Детальний опис】</H4>
+<P>
+  Виконує прямий синхронний друк без використання черги спулера.
+</P>
+<H4>【Коди помилок】</H4>
+<PRE>
+EX_ADR  : Недопустима адреса lnk або par.
+EX_NOEXS: Принтер не знайдено.
+</PRE>
+
+<!-- rpvw_fil -->
+<TABLE border=2 width="100%"><TR><TD><TABLE width="100%">
+<TR><TD><FONT size="+2">rpvw_fil</FONT></TD></TR>
+<TR><TD align="right">Print Preview</TD></TR>
+<TR><TD>Попередній перегляд друку у вікні</TD></TR>
+</TABLE></TD></TR></TABLE>
+<H4>【Синтаксис / Прототип】</H4>
+<PRE>
+ERR rpvw_fil(W wid, LINK *lnk, PR_PAR *par, W page)
+</PRE>
+<H4>【Параметри】</H4>
+<PRE>
+W       wid     ID вікна для відображення
+LINK   *lnk     Посилання на файл документа
+PR_PAR *par     Параметри друку
+W       page    Номер сторінки для перегляду
+</PRE>
+<H4>【Значення, що повертається】</H4>
+<PRE>
+= 0     Успішне виконання
+&lt; 0     Помилка (Код помилки)
+</PRE>
+<H4>【Детальний опис】</H4>
+<P>
+  Малює сторінку документа у вказаному вікні з урахуванням розбивки сторінок та полів принтера.
+</P>
+<H4>【Коди помилок】</H4>
+<PRE>
+EX_WID  : Вікно wid не існує.
+EX_ADR  : Недопустима адреса lnk або par.
+</PRE>
+
+<!-- rcan_ent -->
+<TABLE border=2 width="100%"><TR><TD><TABLE width="100%">
+<TR><TD><FONT size="+2">rcan_ent</FONT></TD></TR>
+<TR><TD align="right">Cancel Spool Job</TD></TR>
+<TR><TD>Скасування завдання друку зі спулера</TD></TR>
+</TABLE></TD></TR></TABLE>
+<H4>【Синтаксис / Прототип】</H4>
+<PRE>
+WERR    rcan_ent(TC *prname, W prid)
+</PRE>
+<H4>【Параметри】</H4>
+<PRE>
+TC *prname  Назва принтера (NULL = всі принтери)
+W   prid    ID завдання (0 = всі завдання)
+</PRE>
+<H4>【Значення, що повертається】</H4>
+<PRE>
+&gt;= 0    Кількість скасованих завдань
+ &lt; 0    Помилка (Код помилки)
+</PRE>
+<H4>【Детальний опис】</H4>
+<P>
+  Скасовує завдання <CODE>prid</CODE> у черзі спулера принтера <CODE>prname</CODE>.
+</P>
+<H4>【Коди помилок】</H4>
+<PRE>
+EX_NOEXS: Принтер або завдання не знайдено.
+</PRE>
+
+<!-- rget_ent -->
+<TABLE border=2 width="100%"><TR><TD><TABLE width="100%">
+<TR><TD><FONT size="+2">rget_ent</FONT></TD></TR>
+<TR><TD align="right">Get Spool Queue Status</TD></TR>
+<TR><TD>Отримання списку та стану завдань у черзі друку</TD></TR>
+</TABLE></TD></TR></TABLE>
+<H4>【Синтаксис / Прототип】</H4>
+<PRE>
+WERR    rget_ent(TC *prname, W prid, PR_STAT *stat, W cnt)
+</PRE>
+<H4>【Параметри】</H4>
+<PRE>
+TC      *prname Назва принтера (NULL = всі)
+W        prid   ID завдання (0 = всі)
+PR_STAT *stat   Буфер для масиву PR_STAT
+W        cnt    Розмір буфера stat (кількість елементів)
+</PRE>
+<H4>【Значення, що повертається】</H4>
+<PRE>
+&gt;= 0    Кількість завдань у черзі
+ &lt; 0    Помилка (Код помилки)
+</PRE>
+<H4>【Детальний опис】</H4>
+<P>
+  Заповнює масив <CODE>stat</CODE> станом активних завдань у черзі спулера.
+</P>
+<H4>【Коди помилок】</H4>
+<PRE>
+EX_ADR  : Недопустима адреса stat.
+EX_NOEXS: Принтер не знайдено.
+</PRE>
+
+<!-- rlst_prn -->
+<TABLE border=2 width="100%"><TR><TD><TABLE width="100%">
+<TR><TD><FONT size="+2">rlst_prn</FONT></TD></TR>
+<TR><TD align="right">List Printers</TD></TR>
+<TR><TD>Отримання списку зареєстрованих принтерів</TD></TR>
+</TABLE></TD></TR></TABLE>
+<H4>【Синтаксис / Прототип】</H4>
+<PRE>
+WERR    rlst_prn(PR_INFO *info, W cnt)
+</PRE>
+<H4>【Параметри】</H4>
+<PRE>
+PR_INFO *info   Буфер для інформації про принтери
+W        cnt    Кількість елементів буфера
+</PRE>
+<H4>【Значення, що повертається】</H4>
+<PRE>
+&gt;= 0    Загальна кількість зареєстрованих принтерів
+ &lt; 0    Помилка (Код помилки)
+</PRE>
+<H4>【Детальний опис】</H4>
+<P>
+  Повертає перелік усіх принтерів, налаштованих у системі.
+</P>
+<H4>【Коди помилок】</H4>
+<PRE>
+EX_ADR  : Недопустима адреса info.
+</PRE>
+
+<!-- rget_cnf -->
+<TABLE border=2 width="100%"><TR><TD><TABLE width="100%">
+<TR><TD><FONT size="+2">rget_cnf</FONT></TD></TR>
+<TR><TD align="right">Get Printer Configuration</TD></TR>
+<TR><TD>Отримання конфігурації принтера</TD></TR>
+</TABLE></TD></TR></TABLE>
+<H4>【Синтаксис / Прототип】</H4>
+<PRE>
+WERR    rget_cnf(TC *prname, PR_CONF *cnf)
+</PRE>
+<H4>【Параметри】</H4>
+<PRE>
+TC      *prname Назва принтера
+PR_CONF *cnf    Буфер для збереження конфігурації PR_CONF
+</PRE>
+<H4>【Значення, що повертається】</H4>
+<PRE>
+&gt;= 0    Максимальна кількість принтерів у системі
+ &lt; 0    Помилка (Код помилки)
+</PRE>
+<H4>【Детальний опис】</H4>
+<P>
+  Зчитує конфігурацію порту, драйвера та заліза для принтера <CODE>prname</CODE>.
+</P>
+<H4>【Коди помилок】</H4>
+<PRE>
+EX_ADR  : Недопустима адреса prname або cnf.
+EX_NOEXS: Принтер не знайдено.
+</PRE>
+
+<!-- rset_cnf -->
+<TABLE border=2 width="100%"><TR><TD><TABLE width="100%">
+<TR><TD><FONT size="+2">rset_cnf</FONT></TD></TR>
+<TR><TD align="right">Set Printer Configuration</TD></TR>
+<TR><TD>Налаштування / реєстрація / видалення принтера</TD></TR>
+</TABLE></TD></TR></TABLE>
+<H4>【Синтаксис / Прототип】</H4>
+<PRE>
+ERR rset_cnf(TC *prname, PR_CONF *cnf)
+</PRE>
+<H4>【Параметри】</H4>
+<PRE>
+TC      *prname Назва принтера (NULL = додати новий)
+PR_CONF *cnf    Конфігурація (NULL = видалити принтер)
+</PRE>
+<H4>【Значення, що повертається】</H4>
+<PRE>
+= 0     Успішне виконання
+&lt; 0     Помилка (Код помилки)
+</PRE>
+<H4>【Детальний опис】</H4>
+<P>
+  Додає новий принтер (<CODE>prname = NULL</CODE>), змінює конфігурацію існуючого або видаляє принтер (<CODE>cnf = NULL</CODE>).
+</P>
+<H4>【Коди помилок】</H4>
+<PRE>
+EX_ADR  : Недопустима адреса cnf.
+EX_EXS  : Не можна видалити принтер, що має активні завдання у черзі.
+EX_LIMIT: Перевищено ліміт кількості принтерів.
+</PRE>
+
+<HR>
+<A href="../index.html">Повернутися до змісту розділу Графічної оболонки</A><BR>
+<A href="tcpip.html">Попередня сторінка: 3.10 Менеджер TCP/IP (Повернутися)</A><BR>
+
+</BODY>
+</HTML>

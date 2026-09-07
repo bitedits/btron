@@ -169,7 +169,7 @@ static void test_elixir_compiled_tad_loading(void) {
     TEST_ASSERT(er == E_OK, "Successfully loaded tad_bin/01_btron3_spec.tad");
     TEST_ASSERT(tb.span_count > 10, "Document loaded with >10 structured spans");
 
-    er = tad_browser_load_file(&tb, "tad_bin/shared_data/data_type.tad");
+    er = tad_browser_load_file(&tb, "tad_bin/b-spec/shared_data/data_type.tad");
     TEST_ASSERT(er == E_OK, "Successfully loaded compiled binary tad_bin/shared_data/data_type.tad");
     TEST_ASSERT(tb.is_binary_tad == TRUE, "Verified valid BTRON3 SPEC 3.20 binary TAD format");
 }
@@ -240,11 +240,11 @@ static void test_browser_history_and_path_resolution(void) {
 
     /* 1. Test relative path resolution */
     char resolved[256] = "";
-    tad_browser_resolve_path("tad_bin/os_spec/index.tad", "kernel/kernel.html", resolved, sizeof(resolved));
-    TEST_ASSERT(strcmp(resolved, "tad_bin/os_spec/kernel/kernel.tad") == 0, "Resolved child relative path kernel/kernel.html -> tad_bin/os_spec/kernel/kernel.tad");
+    tad_browser_resolve_path("tad_bin/b-spec/os_spec/index.tad", "b-spec/os_spec/kernel/kernel.html", resolved, sizeof(resolved));
+    TEST_ASSERT(strcmp(resolved, "tad_bin/b-spec/os_spec/kernel/kernel.tad") == 0, "Resolved child relative path b-spec/os_spec/kernel/kernel.html -> tad_bin/b-spec/os_spec/kernel/kernel.tad");
 
-    tad_browser_resolve_path("tad_bin/os_spec/kernel/kernel.tad", "../dp/dp.html", resolved, sizeof(resolved));
-    TEST_ASSERT(strcmp(resolved, "tad_bin/os_spec/dp/dp.tad") == 0, "Resolved sibling path ../dp/dp.html -> tad_bin/os_spec/dp/dp.tad");
+    tad_browser_resolve_path("tad_bin/b-spec/os_spec/dp/dp.tad", "b-spec/os_spec/dp/dp.html", resolved, sizeof(resolved));
+    TEST_ASSERT(strcmp(resolved, "tad_bin/b-spec/os_spec/dp/dp.tad") == 0, "Resolved sibling path ../dp/dp.html -> tad_bin/os_spec/dp/dp.tad");
 
     tad_browser_resolve_path("tad_bin/01_btron3_spec.tad", "02_tkernel_book.tad", resolved, sizeof(resolved));
     TEST_ASSERT(strcmp(resolved, "tad_bin/02_tkernel_book.tad") == 0, "Resolved neighbor canonical book");
@@ -379,8 +379,8 @@ static void test_btron3_picture_figure_segments(void) {
 
     /* 2. Test Ukrainian Specification TAD with Figure */
     memset(&tb, 0, sizeof(tb));
-    er = tad_browser_load_file(&tb, "tad_bin/shared_data/tad3.tad");
-    TEST_ASSERT(er == E_OK, "Loaded tad_bin/shared_data/tad3.tad");
+    er = tad_browser_load_file(&tb, "tad_bin/b-spec/shared_data/tad3.tad");
+    TEST_ASSERT(er == E_OK, "Loaded tad_bin/b-spec/shared_data/tad3.tad");
 
     BOOL found_ua_fig = FALSE;
     for (int i = 0; i < tb.span_count; i++) {

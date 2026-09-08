@@ -7,6 +7,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#ifdef BTRON_QEMU_TARGET
+#include <SDL.h>
+#endif
 
 static bool g_virtio_initialized = false;
 static uintptr_t g_virtio_base = 0x10001000; /* QEMU VirtIO MMIO base */
@@ -19,6 +22,11 @@ static uint8_t g_gpu_framebuffer_mem[1920 * 1080 * 4];
 /* VirtIO-Console Multi-port State */
 static char g_console_tx_buf[512];
 static size_t g_console_tx_pos = 0;
+
+#ifdef BTRON_QEMU_TARGET
+static SDL_AudioDeviceID g_sound_device = 0;
+static uint8_t g_sound_channels = 0;
+#endif
 
 void virtio_mmio_init(uintptr_t base_addr) {
     g_virtio_base = base_addr;
@@ -34,6 +42,12 @@ void virtio_driver_init_all(void) {
         printf("[VIRTIO-GPU] 2D display resource driver active (res_id=1, 1024x768 32-bpp)\n");
     }
     printf("[VIRTIO-CONSOLE] Multi-channel log & SDR telemetry console active\n");
+
+    if (virtio_sound_open(44100, 2) == 0) {
+        printf("[VIRTIO-SOUND] PCM output active (44.1 kHz, stereo, S16)\n");
+    } else {
+        printf("[VIRTIO-SOUND] PCM output unavailable (audio is optional)\n");
+    }
 }
 
 bool virtio_is_initialized(void) {
@@ -131,4 +145,72 @@ int virtio_console_read(char *buf, uint32_t max_len, uint32_t *out_len) {
     if (!buf || max_len == 0 || !out_len) return -1;
     *out_len = 0;
     return 0;
+}
+
+
+int virtio_sound_open(uint32_t sample_rate, uint8_t channels) {
+#ifdef BTRON_QEMU_TARGET
+    SDL_AudioSpec wanted;
+
+    if ((sample_rate == 0) || (channels == 0) || (channels > 2)) return VIO_ERR_INVAL;
+    if (g_sound_device != 0) virtio_sound_close();
+    if (SDL_InitSubSystem(SDL_INIT_AUDIO) != 0) return VIO_ERR_INVAL;
+
+    memset(&wanted, 0, sizeof(wanted));
+    wanted.freq = (int)sample_rate;
+    wanted.format = AUDIO_S16LSB;
+    wanted.channels = channels;
+    wanted.samples = 1024;
+
+    g_sound_device = SDL_OpenAudioDevice(NULL, 0, &wanted, NULL, 0);
+    if (g_sound_device == 0) {
+        SDL_QuitSubSystem(SDL_INIT_AUDIO);
+        return VIO_ERR_INVAL;
+    }
+    g_sound_channels = channels;
+    SDL_PauseAudioDevice(g_sound_device, 0);
+    return VIO_OK;
+#else
+    (void)sample_rate;
+    (void)channels;
+    return VIO_ERR_INVAL;
+#endif
+}
+
+int virtio_sound_write(const int16_t *samples, size_t frames) {
+#ifdef BTRON_QEMU_TARGET
+    size_t bytes;
+
+    if (g_sound_device == 0 || !samples || frames == 0 || g_sound_channels == 0) {
+        return VIO_ERR_INVAL;
+    }
+    bytes = frames * (size_t)g_sound_channels * sizeof(*samples);
+    if (bytes > (size_t)UINT32_MAX) return VIO_ERR_INVAL;
+    return SDL_QueueAudio(g_sound_device, samples, (uint32_t)bytes) == 0
+        ? (int)frames : VIO_ERR_INVAL;
+#else
+    (void)samples;
+    (void)frames;
+    return VIO_ERR_INVAL;
+#endif
+}
+
+void virtio_sound_close(void) {
+#ifdef BTRON_QEMU_TARGET
+    if (g_sound_device != 0) {
+        SDL_ClearQueuedAudio(g_sound_device);
+        SDL_CloseAudioDevice(g_sound_device);
+        g_sound_device = 0;
+        g_sound_channels = 0;
+        SDL_QuitSubSystem(SDL_INIT_AUDIO);
+    }
+#endif
+}
+
+bool virtio_sound_is_ready(void) {
+#ifdef BTRON_QEMU_TARGET
+    return g_sound_device != 0;
+#else
+    return false;
+#endif
 }

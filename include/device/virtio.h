@@ -27,6 +27,7 @@ extern "C" {
 #define VIRTIO_ID_BLOCK                 2
 #define VIRTIO_ID_CONSOLE               3
 #define VIRTIO_ID_GPU                   16
+#define VIRTIO_ID_SOUND                 25
 
 /* VirtIO-GPU Command Types */
 #define VIRTIO_GPU_CMD_RESOURCE_CREATE_2D   0x0101
@@ -131,6 +132,12 @@ vio_status_t vio_gpu_sdl2_blit_frame(struct vio_gpu_device *dev, const void *src
 void virtio_console_putchar(char c);
 int virtio_console_write(const char *buf, uint32_t len);
 int virtio_console_read(char *buf, uint32_t max_len, uint32_t *out_len);
+
+/* VirtIO-Sound compatible PCM output (host-backed on the QEMU build). */
+int virtio_sound_open(uint32_t sample_rate, uint8_t channels);
+int virtio_sound_write(const int16_t *samples, size_t frames);
+void virtio_sound_close(void);
+bool virtio_sound_is_ready(void);
 
 bool virtio_is_initialized(void);
 

@@ -54,6 +54,7 @@ void btron_core_init(void) {
     memset(g_tk_sems, 0, sizeof(g_tk_sems));
     printf("[CORE] B-Kernel ITRON RTOS (QEMU VirtIO Mode)  BTRON_QEMU\n");
     virtio_mmio_init(0x10001000);
+    virtio_driver_init_all();
 }
 
 void btron_core_mem_log(void) {

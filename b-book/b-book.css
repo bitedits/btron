@@ -662,3 +662,33 @@ pre code {
     display: flex;
   }
 }
+
+/* Keep the chapter index readable on narrow screens without horizontal scrolling. */
+@media (max-width: 640px) {
+  .api-table {
+    width: 100%;
+    max-width: 100%;
+    table-layout: fixed;
+    font-size: 12px;
+  }
+
+  .api-table th,
+  .api-table td {
+    min-width: 0;
+    padding: 7px 6px;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+    white-space: normal;
+    vertical-align: top;
+  }
+
+  .api-table code {
+    overflow-wrap: anywhere;
+    word-break: break-word;
+  }
+
+  .book-content > .api-table:first-of-type th:nth-child(3),
+  .book-content > .api-table:first-of-type td:nth-child(3) {
+    display: none;
+  }
+}

@@ -720,6 +720,83 @@ footer {
     }
 }
 
+/* Mobile tables: keep the clean viewport layout without horizontal scrolling. */
+@media (max-width: 640px) {
+    .tech-table-wrapper {
+        overflow: visible;
+        width: 100%;
+        margin-left: 0;
+        margin-right: 0;
+    }
+
+    .tech-table,
+    .conformance-table {
+        width: 100%;
+        max-width: 100%;
+        table-layout: fixed;
+        font-size: 0.78rem;
+    }
+
+    .tech-table th,
+    .tech-table td,
+    .conformance-table th,
+    .conformance-table td {
+        min-width: 0;
+        padding: 0.55rem 0.45rem;
+        overflow-wrap: anywhere;
+        word-break: normal;
+        white-space: normal;
+        vertical-align: top;
+    }
+
+    .tech-table code,
+    .conformance-table code {
+        overflow-wrap: anywhere;
+        word-break: break-word;
+    }
+
+    /* VirtIO register detail: keep register, value, and function. */
+    .tech-table:first-child th:nth-child(2),
+    .tech-table:first-child td:nth-child(2) {
+        display: none;
+    }
+
+    /* Platform matrix: keep host, display, and primary use; omit verbose transport/silicon. */
+    .tech-table:nth-of-type(2) th:nth-child(2),
+    .tech-table:nth-of-type(2) td:nth-child(2),
+    .tech-table:nth-of-type(2) th:nth-child(3),
+    .tech-table:nth-of-type(2) td:nth-child(3) {
+        display: none;
+    }
+
+    /* Conformance: retain subsystem, totals, rate, and implementation status. */
+    .conformance-table th:nth-child(3),
+    .conformance-table td:nth-child(3),
+    .conformance-table th:nth-child(4),
+    .conformance-table td:nth-child(4) {
+        display: none;
+    }
+
+    /* Mobile device matrix: retain model, architecture, and compatibility. */
+    .conformance-table th:nth-child(2),
+    .conformance-table td:nth-child(2) {
+        display: none;
+    }
+}
+
+@media (max-width: 380px) {
+    .tech-table,
+    .conformance-table {
+        font-size: 0.72rem;
+    }
+
+    .tech-table th,
+    .tech-table td,
+    .conformance-table th,
+    .conformance-table td {
+        padding: 0.45rem 0.3rem;
+    }
+}
 @media (max-width: 768px) {
     main { padding: 3.5rem 1.5rem 6rem; }
     h2 { font-size: 2.15rem; }

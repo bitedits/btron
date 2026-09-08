@@ -39,7 +39,27 @@ static ITRON_SEM  g_sems[MAX_SEMS];
 static pthread_mutex_t g_kernel_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 #include <btron/apps.h>
+#ifdef _WIN32
+/* MinGW supplies pthreads but not the POSIX sys/utsname.h interface. */
+struct utsname {
+    char sysname[32];
+    char nodename[32];
+    char release[32];
+    char version[32];
+    char machine[32];
+};
+static int uname(struct utsname *un) {
+    if (!un) return -1;
+    snprintf(un->sysname, sizeof(un->sysname), "Windows");
+    snprintf(un->nodename, sizeof(un->nodename), "MinGW64");
+    snprintf(un->release, sizeof(un->release), "hosted");
+    snprintf(un->version, sizeof(un->version), "MinGW64");
+    snprintf(un->machine, sizeof(un->machine), "x86_64");
+    return 0;
+}
+#else
 #include <sys/utsname.h>
+#endif
 
 void btron_core_banner(void) {
     printf("B-System/BTRON3 3.20 (posix-hosted) Hiroaki Takada — Cleanroom TRON Kernel\n");

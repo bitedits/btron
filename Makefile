@@ -80,6 +80,11 @@ ARM64_CFLAGS = -O2 -Wall -Wextra -std=c99 -mstrict-align \
 
 # Host OS / SDL2 detection
 UNAME_S := $(shell uname -s)
+EXEEXT :=
+ifneq (,$(findstring MINGW,$(UNAME_S)))
+    EXEEXT := .exe
+endif
+
 ifeq ($(UNAME_S), Darwin)
     SDL_CFLAGS   := $(shell sdl2-config --cflags 2>/dev/null || echo "-I/usr/local/include/SDL2")
     SDL_LIBS     := $(shell sdl2-config --libs 2>/dev/null || echo "-lSDL2") \
@@ -320,6 +325,14 @@ PC98_OBJS      = $(PC98_SRCS:.c=.pc98.o)
 # Keep a host/compiler stamp as a prerequisite so moving one checkout between
 # hosts triggers a one-time rebuild without penalizing normal incremental
 # builds.
+POSIX_BUILD_TAG   := $(shell uname -s 2>/dev/null || echo unknown)-$(shell $(CC) -dumpmachine 2>/dev/null || echo unknown)
+POSIX_BUILD_STAMP := .build/posix-$(POSIX_BUILD_TAG).stamp
+$(POSIX_OBJS): $(POSIX_BUILD_STAMP) Makefile
+
+$(POSIX_BUILD_STAMP):
+	@mkdir -p $(dir $@)
+	@touch $@
+
 QEMU_BUILD_TAG   := $(shell uname -s 2>/dev/null || echo unknown)-$(shell $(CC) -dumpmachine 2>/dev/null || echo unknown)
 QEMU_BUILD_STAMP := .build/qemu-$(QEMU_BUILD_TAG).stamp
 $(QEMU_OBJS): $(QEMU_BUILD_STAMP) Makefile
@@ -329,8 +342,8 @@ $(QEMU_BUILD_STAMP):
 	@touch $@
 
 # ── Output names ──────────────────────────────────────────────────
-POSIX_TARGET   = btron-posix
-QEMU_TARGET    = btron-qemu.elf
+POSIX_TARGET   = btron-posix$(EXEEXT)
+QEMU_TARGET    = btron-qemu.elf$(EXEEXT)
 TKERNEL_TARGET = btron-tkernel.elf
 SAKAMURA_TARGET = btron-sakamura.elf
 FOMA_TARGET     = btron-foma.elf

@@ -6,6 +6,8 @@
 #ifndef _BTRON_FILE_H_
 #define _BTRON_FILE_H_
 
+#include <btron/basic.h>
+#include <btron/tad.h>
 #include <btron/types.h>
 #include <btron/error.h>
 #include <btron/proc.h>

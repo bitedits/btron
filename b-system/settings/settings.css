@@ -200,3 +200,56 @@ body {
     max-width: 680px;
     line-height: 1.5;
 }
+
+
+/* Mobile layout: keep app and settings pages within the viewport. */
+@media (max-width: 640px) {
+    .app-nav,
+    .setting-nav {
+        padding: 0.7rem 1rem;
+        flex-wrap: wrap;
+        overflow-wrap: anywhere;
+    }
+
+    .app-hero,
+    .setting-hero {
+        padding: 2.5rem 1rem 2rem;
+    }
+
+    .app-content,
+    .setting-content {
+        width: 100%;
+        min-width: 0;
+        padding: 2rem 1rem 4rem;
+    }
+
+    .market-table {
+        width: 100%;
+        max-width: 100%;
+        table-layout: fixed;
+        font-size: 0.78rem;
+        overflow: hidden;
+    }
+
+    .market-table th,
+    .market-table td {
+        min-width: 0;
+        padding: 0.5rem 0.4rem;
+        overflow-wrap: anywhere;
+        word-break: break-word;
+        white-space: normal;
+        vertical-align: top;
+    }
+
+    .app-content code,
+    .setting-content code {
+        white-space: normal;
+        overflow-wrap: anywhere;
+        word-break: break-word;
+    }
+
+    .app-content .section h2,
+    .setting-content .section h2 {
+        overflow-wrap: anywhere;
+    }
+}

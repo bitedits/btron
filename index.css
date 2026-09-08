@@ -871,3 +871,12 @@ footer {
 }
 
 
+
+/* Keep the native VirtIO subsystem cards inside the mobile viewport. */
+@media (max-width: 768px) {
+    #devices > h3 { flex-wrap: wrap; gap: 0.6rem; overflow-wrap: anywhere; }
+    #devices > h3 > span:first-child { min-width: 0; overflow-wrap: anywhere; }
+    #devices .grid-2 > div > div:first-child { flex-wrap: wrap; gap: 0.5rem; }
+    #devices .grid-2 > div > div:first-child h4 { min-width: 0; overflow-wrap: anywhere; }
+    #devices pre.code-block { max-width: 100%; overflow: hidden; white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word; }
+}

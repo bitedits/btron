@@ -648,7 +648,17 @@ pre code {
   }
 
   .book-sidebar {
+    display: none;
+    width: 100%;
+    height: auto;
+    position: relative;
+    border-right: none;
+    border-bottom: 1px solid #1e293b;
     max-height: 50vh;
     overflow-y: auto;
+  }
+
+  .book-sidebar.open {
+    display: flex;
   }
 }

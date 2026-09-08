@@ -145,7 +145,6 @@ COMMON_SRCS = src/graphics/dp_core.c   \
               src/apps/gterm.c         \
               src/apps/t_editor.c      \
               src/apps/audio_player.c  \
-              src/apps/kagee.c         \
               src/apps/orchestra.c     \
               src/apps/chat.c          \
               src/apps/chat_xml.c      \
@@ -1147,10 +1146,7 @@ test-mouse: $(TEST_MOUSE_BIN)
 $(TEST_MOUSE_BIN): $(TEST_MOUSE_OBJS)
 	$(CC) $(TEST_MOUSE_OBJS) -o $@ $(LDFLAGS) -lm
 
-test-kagee:
-	python3 tests/test_kagee_assets.py
-
-test: test-kernel test-tad test-editor test-chat test-mozc test-wylie test-hmi test-ski test-tracker test-settings test-global-menu test-app-menu test-kagee
+test: test-kernel test-tad test-editor test-chat test-mozc test-wylie test-hmi test-ski test-tracker test-settings test-global-menu test-app-menu
 	@echo "=========================================================="
 	@echo " ALL B-SYSTEM TEST SUITES PASSED (100% SUCCESS)!"
 	@echo "=========================================================="
@@ -1307,4 +1303,3 @@ foma-screens: $(CAPTURE_FOMA_BIN)
 	@echo "=========================================================="
 	@./$(CAPTURE_FOMA_BIN)
 	@python3 scripts/update_foma_screens.py
-

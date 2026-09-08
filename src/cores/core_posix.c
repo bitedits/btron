@@ -11,6 +11,7 @@
 #include <pthread.h>
 #include <unistd.h>
 #include <sys/time.h>
+#include <time.h>
 
 #define MAX_TASKS 64
 #define MAX_SEMS  64
@@ -299,7 +300,10 @@ ER get_tim(SYSTIME *p_time) {
 
 void dly_tsk(W dlytim) {
     if (dlytim > 0) {
-        usleep(dlytim * 1000);
+        struct timespec ts;
+        ts.tv_sec = dlytim / 1000;
+        ts.tv_nsec = (dlytim % 1000) * 1000000L;
+        nanosleep(&ts, NULL);
     }
 }
 

@@ -336,6 +336,7 @@ void shell_execute_cmd(const char *cmd_line, ShellOutputFn out_fn, void *user_da
         out_fn("  tad, browser        - Launch new TAD Browser instance", COLOR_LTGRAY, user_data);
         out_fn("  chat                - Launch new BeOS Chat instance", COLOR_LTGRAY, user_data);
         out_fn("  audio               - Launch Audio Player instance", COLOR_LTGRAY, user_data);
+        out_fn("  kagee               - Launch Bad Apple! audiovisual player", COLOR_LTGRAY, user_data);
         out_fn("  cabinet             - Launch Cabinet Explorer instance", COLOR_LTGRAY, user_data);
         out_fn("  term, gterm         - Launch new Terminal instance", COLOR_LTGRAY, user_data);
         out_fn("  date                - Current system time & date", COLOR_LTGRAY, user_data);
@@ -599,6 +600,10 @@ void shell_execute_cmd(const char *cmd_line, ShellOutputFn out_fn, void *user_da
 #else
         out_fn("SONY Cassette Deck is supported in POSIX / Hosted mode", COLOR_YELLOW, user_data);
 #endif
+    } else if (strcmp(cmd, "kagee") == 0 || strcmp(cmd, "badapple") == 0 || strcmp(cmd, "bad-apple") == 0) {
+        printf("[KAGEE-01] shell dispatch: %s\n", cmd);
+        if (open_kagee_window()) out_fn("Started Kagee — Bad Apple! player", COLOR_GREEN, user_data);
+        else out_fn("kagee: unable to create player window", COLOR_RED, user_data);
     } else if (strcmp(cmd, "cabinet") == 0 || strcmp(cmd, "vobjmgr") == 0) {
         open_vobj_manager_window();
         out_fn("Started Cabinet Explorer instance", COLOR_GREEN, user_data);

@@ -150,11 +150,11 @@ int virtio_console_read(char *buf, uint32_t max_len, uint32_t *out_len) {
 
 int virtio_sound_open(uint32_t sample_rate, uint8_t channels) {
 #ifdef BTRON_QEMU_TARGET
-    SDL_AudioSpec wanted;
+    SDL_AudioSpec wanted, obtained;
 
     if ((sample_rate == 0) || (channels == 0) || (channels > 2)) return VIO_ERR_INVAL;
     if (g_sound_device != 0) virtio_sound_close();
-    if (SDL_InitSubSystem(SDL_INIT_AUDIO) != 0) return VIO_ERR_INVAL;
+    if (SDL_InitSubSystem(SDL_INIT_AUDIO) != 0) { printf("[VIRTIO-SOUND-01] SDL audio init failed: %s\n", SDL_GetError()); return VIO_ERR_INVAL; }
 
     memset(&wanted, 0, sizeof(wanted));
     wanted.freq = (int)sample_rate;
@@ -162,12 +162,20 @@ int virtio_sound_open(uint32_t sample_rate, uint8_t channels) {
     wanted.channels = channels;
     wanted.samples = 1024;
 
-    g_sound_device = SDL_OpenAudioDevice(NULL, 0, &wanted, NULL, 0);
+    g_sound_device = SDL_OpenAudioDevice(NULL, 0, &wanted, &obtained, 0);
     if (g_sound_device == 0) {
+        printf("[VIRTIO-SOUND-02] device open failed: %s\n", SDL_GetError());
         SDL_QuitSubSystem(SDL_INIT_AUDIO);
         return VIO_ERR_INVAL;
     }
-    g_sound_channels = channels;
+    if (obtained.format != AUDIO_S16LSB || obtained.channels != channels || obtained.freq != (int)sample_rate) {
+        printf("[VIRTIO-SOUND-03] format mismatch requested=%uHz/%uch got=%uHz/%uch fmt=0x%x\n", sample_rate, channels, (unsigned)obtained.freq, (unsigned)obtained.channels, (unsigned)obtained.format);
+        SDL_CloseAudioDevice(g_sound_device);
+        g_sound_device = 0;
+        SDL_QuitSubSystem(SDL_INIT_AUDIO);
+        return VIO_ERR_INVAL;
+    }
+    g_sound_channels = obtained.channels;
     SDL_PauseAudioDevice(g_sound_device, 0);
     return VIO_OK;
 #else

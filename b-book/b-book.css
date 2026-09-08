@@ -547,3 +547,108 @@ pre code {
     padding: 24px 20px;
   }
 }
+/* Match the root-site header geometry and navigation behavior. */
+.book-global-nav-container {
+  max-width: 1380px;
+  margin: 0 auto;
+  padding: 1rem 2rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  position: relative;
+}
+
+.book-global-links {
+  display: flex;
+  align-items: center;
+  gap: 1.8rem;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.book-nav-toggle {
+  display: none;
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  padding: 0.5rem;
+}
+
+.book-nav-toggle .hamburger,
+.book-nav-toggle .hamburger::before,
+.book-nav-toggle .hamburger::after {
+  display: block;
+  width: 24px;
+  height: 2px;
+  background: DarkMagenta;
+  transition: transform 0.3s ease, top 0.3s ease, background 0.2s;
+}
+
+.book-nav-toggle .hamburger {
+  position: relative;
+}
+
+.book-nav-toggle .hamburger::before,
+.book-nav-toggle .hamburger::after {
+  content: '';
+  position: absolute;
+  left: 0;
+}
+
+.book-nav-toggle .hamburger::before { top: -7px; }
+.book-nav-toggle .hamburger::after { top: 7px; }
+.book-nav-toggle.open .hamburger { background: transparent; }
+.book-nav-toggle.open .hamburger::before { top: 0; transform: rotate(45deg); }
+.book-nav-toggle.open .hamburger::after { top: 0; transform: rotate(-45deg); }
+
+@media (max-width: 860px) {
+  .book-global-nav-container {
+    padding: 0.85rem 1.25rem;
+    overflow: visible;
+  }
+
+  .book-nav-toggle {
+    display: block;
+  }
+
+  .book-global-nav .book-global-links {
+    position: absolute;
+    top: 100%;
+    right: 0;
+    left: 0;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0;
+    max-height: 0;
+    overflow: hidden;
+    padding: 0;
+    background: rgba(255, 240, 248, 0.98);
+    backdrop-filter: blur(24px);
+    border-bottom: 1px solid rgba(255, 93, 162, 0.2);
+    box-shadow: 0 16px 36px rgba(0, 0, 0, 0.12);
+    transition: max-height 0.35s cubic-bezier(0.23, 1, 0.32, 1), padding 0.35s ease;
+  }
+
+  .book-global-nav .book-global-links.open {
+    max-height: min(600px, calc(100vh - 76px));
+    overflow-y: auto;
+    padding: 0.75rem 0;
+  }
+
+  .book-global-links > li,
+  .book-global-links a {
+    width: 100%;
+  }
+
+  .book-global-links a {
+    justify-content: flex-start;
+    padding: 0.75rem 1.5rem;
+    font-size: 1.05rem;
+  }
+
+  .book-sidebar {
+    max-height: 50vh;
+    overflow-y: auto;
+  }
+}

@@ -745,7 +745,7 @@ footer {
         padding: 0.55rem 0.45rem;
         overflow-wrap: anywhere;
         word-break: normal;
-        white-space: normal;
+        white-space: normal !important;
         vertical-align: top;
     }
 
@@ -762,10 +762,10 @@ footer {
     }
 
     /* Platform matrix: keep host, display, and primary use; omit verbose transport/silicon. */
-    .tech-table:nth-of-type(2) th:nth-child(2),
-    .tech-table:nth-of-type(2) td:nth-child(2),
-    .tech-table:nth-of-type(2) th:nth-child(3),
-    .tech-table:nth-of-type(2) td:nth-child(3) {
+    .platform-table th:nth-child(2),
+    .platform-table td:nth-child(2),
+    .platform-table th:nth-child(3),
+    .platform-table td:nth-child(3) {
         display: none;
     }
 
@@ -778,8 +778,8 @@ footer {
     }
 
     /* Mobile device matrix: retain model, architecture, and compatibility. */
-    .conformance-table th:nth-child(2),
-    .conformance-table td:nth-child(2) {
+    .device-table th:nth-child(2),
+    .device-table td:nth-child(2) {
         display: none;
     }
 }

@@ -121,6 +121,8 @@ Screenshots are generated into `b-system/img/screens/` and populated across docu
 | [`Display.html`](file:///Ubuntu-22.04/home/maxim/depot/bitedits/btron/b-system/settings/Display.html) | 画面表示 (Display) | `Display_Settings.png` | ~7.3 KB |
 | [`Input.html`](file:///Ubuntu-22.04/home/maxim/depot/bitedits/btron/b-system/settings/Input.html) | 入力環境 (Input) | `Input_Settings.png` | ~7.4 KB |
 | [`Language.html`](file:///Ubuntu-22.04/home/maxim/depot/bitedits/btron/b-system/settings/Language.html) | 言語・文字 (Language) | `Language_Settings.png` | ~11.1 KB |
+| [`Language.html`](file:///Ubuntu-22.04/home/maxim/depot/bitedits/btron/b-system/settings/Language.html) | 言語・文字 — TIP辞書チベット語 (Tibetan Candidate Window) | `Language_TIP_Tibetan.png` | ~12–16 KB |
+| [`Language.html`](file:///Ubuntu-22.04/home/maxim/depot/bitedits/btron/b-system/settings/Language.html) | 言語・文字 — Mozc辞書日本語 (Japanese Candidate Window) | `Language_TIP_Japanese.png` | ~10–14 KB |
 | [`Media.html`](file:///Ubuntu-22.04/home/maxim/depot/bitedits/btron/b-system/settings/Media.html) | メディア (Media) | `Media_Settings.png` | ~6.2 KB |
 | [`Network.html`](file:///Ubuntu-22.04/home/maxim/depot/bitedits/btron/b-system/settings/Network.html) | 通信網 (Network) | `Network_Settings.png` | ~7.4 KB |
 | [`Preferences.html`](file:///Ubuntu-22.04/home/maxim/depot/bitedits/btron/b-system/settings/Preferences.html) | 環境設定 (Preferences) | `Preferences_Settings.png` | ~28.8 KB |
@@ -152,6 +154,38 @@ Screenshots are generated into `b-system/img/screens/` and populated across docu
 | **Desktop_MainMenu** | ［BTRON］メインメニュー展開 (Deskbar Hub) | `Desktop_MainMenu_Opened.png` | ~5.0 KB |
 | **GlobalMenu_System** | システム(S) ドロップダウン展開 | `GlobalMenu_System_Opened.png` | ~3.5 KB |
 | **GlobalMenu_Window** | ウィンドウ(W) ドロップダウン展開 | `GlobalMenu_Window_Opened.png` | ~2.8 KB |
+
+
+### 5.4 Language Settings Page Exception — TIP Dictionary Capture Protocol
+
+The Language settings page (`b-system/settings/Language.html`) is the only settings applet
+that embeds **three** screenshots rather than one. This exception is formally justified because
+the Language page serves a dual purpose: technical parameter reference and consumer-facing
+input method guide accessible to all users aged five and above.
+
+| # | Capture Purpose | Generated File | Capture Section |
+| :--- | :--- | :--- | :--- |
+| 1 | Standard settings applet window | `Language_Settings.png` | §1 (Settings loop) |
+| 2 | Tibetan EWTS candidate window — Heart Sutra background, EWTS prefix "cho" | `Language_TIP_Tibetan.png` | §6a |
+| 3 | Mozc Japanese candidate window — BTRON3 Report background, romaji "hotoke" | `Language_TIP_Japanese.png` | §6b |
+
+**Capture protocol for §6 (TIP Dictionary Candidate Window Showcase):**
+
+1. `reset_isolation_state(dev)` — clear framebuffer and window manager.
+2. `tip_init()` — initialise the TIP state machine.
+3. `tip_set_mode(TIP_MODE_TIBETAN)` or `tip_set_mode(TIP_MODE_HIRAGANA)`.
+4. `open_t_editor_window_with_file(path)` — open T-Editor with authentic asset content.
+5. Set `wnd->focused = TRUE` and position `cursor_row` inside the document body.
+6. Inject keystrokes via `tip_process_key()` to build the composition string.
+7. Inject a Tab (Tibetan) or Space (Japanese) keystroke to open the candidate window.
+8. `tip_set_caret_pos()` — anchor the popup inside the visible editor bounds.
+9. `redraw_all_windows()` — paint the editor with inline pre-edit buffer.
+10. `tip_render_candidate_window(dev, tip_get_caret_x(), tip_get_caret_y())` — overlay the popup.
+11. `dump_window_rect()` — capture the composite frame as `.raw`.
+
+This protocol produces pixel-perfect screenshots that demonstrate live dictionary interaction
+with zero mocking, making the Language page the definitive reference for multilingual input
+on B-System for users of any background.
 
 ## 6. HTML & TAD Embedding Standard (Plain Images)
 

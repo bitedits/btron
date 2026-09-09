@@ -35,7 +35,38 @@
       </span>
     </div>
 
-                                                                                                                                                                                                                                                                            <!-- 画面プレビュー -->
+                                                                                                                                                                                                                                                                            <!-- 辞書・入力デモ (Dictionary & Input Method Preview) -->
+    <div class="section">
+      <h2>辞書・入力デモ (Dictionary &amp; Input Method Preview)</h2>
+      <p>
+        ふだんの文章入力でどのように辞書候補ウィンドウが表示されるかを示す実機キャプチャです。<br>
+        <span style="font-size:0.9em; opacity:0.85;">"Live candidate-window captures from the native headless GDEV framebuffer, showing authentic dictionary lookups during active text composition."</span>
+      </p>
+      <div class="screen-preview">
+        <img src="../img/screens/Language_TIP_Tibetan.png"
+             alt="チベット語 EWTS 辞書候補ウィンドウ — EWTS「cho」入力・般若心経テキスト背景">
+        <p>
+          チベット語入力モード（<b>F8</b>）でEWTS「<code>cho</code>」と入力すると、
+          般若心経の核心語が候補一覧に展開されます：
+          <b>ཆོས</b>（chos — 法・ダルマ）、<b>ཆོས་ཉིད</b>（dharmatā — 法性）、
+          <b>ཆོས་སྐུ</b>（dharmakāya — 法身）ほか。
+          背景テキストは「<b>般若心経 (Heart Sutra)</b>」全文。<br>
+          <span style="font-size:0.9em; opacity:0.85;">"Tibetan EWTS mode: prefix 'cho' expands the full dharma compound family from the Heart Sutra lexicon in real time."</span>
+        </p>
+      </div>
+      <div class="screen-preview" style="margin-top:1.2rem;">
+        <img src="../img/screens/Language_TIP_Japanese.png"
+             alt="Mozc かな漢字変換候補ウィンドウ — 「ほとけ」入力・最大候補数">
+        <p>
+          日本語ひらがなモード（<b>F10</b>で「あ」）でローマ字「<code>hotoke</code>」と入力後、
+          スペースキーを押すとMozc形態素解析エンジンが候補一覧を展開します：
+          <b>仏</b> / <b>ほとけ</b> / <b>仏さん</b> / <b>仏様</b>。<br>
+          <span style="font-size:0.9em; opacity:0.85;">"Mozc Japanese IME: romaji 'hotoke' → ほとけ pre-edit composition → Space key opens the full candidate list."</span>
+        </p>
+      </div>
+    </div>
+
+            <!-- 画面プレビュー -->
     <div class="section">
       <h2>画面プレビュー (Screen Preview)</h2>
       <div class="screen-preview">
@@ -207,6 +238,103 @@
             <td>—</td>
             <td>ウィンドウ破棄</td>
             <td><code>cls_wnd(wnd)</code></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+
+    <!-- 入力方法ガイド (Input Method How-To Guide) -->
+    <div class="section">
+      <h2>4. 入力方法の使い方 (How to Use the Input Methods)</h2>
+      <p>
+        B-Systemの言語入力基盤は、5歳のお子さまから研究者・専門家まで、
+        日本語・チベット語・英語をワンキーで自然に切り替えながら使えるよう設計されています。<br>
+        <span style="font-size:0.9em; opacity:0.85;">"Designed for every user from age five to one hundred: seamless, instant switching between Japanese, Tibetan, and English input with a single keystroke."</span>
+      </p>
+
+      <!-- 4-1 Japanese IME -->
+      <h3 style="margin-top:1.4rem;">4-1. 日本語入力（Mozc かな漢字変換）</h3>
+      <div class="setting-desc-jp">
+        <b>基本の流れ：</b><br>
+        ① <b>F10</b> キーを押すか、ウィンドウ右下の <code>[TIP: あ (F10)]</code> バッジをクリックして
+        <b>ひらがなモード</b>（あ）にします。<br>
+        ② ローマ字でそのまま打ちます。たとえば <code>hotoke</code> と入力すると、
+        カーソル直下に下線付きで <b>「ほとけ」</b> と表示されます（未確定文字列）。<br>
+        ③ <b>スペースキー</b> を押すと辞書候補の一覧が開きます：
+        「仏」「ほとけ」「仏さん」「仏様」など。<br>
+        ④ スペースキーまたは矢印キーで目的の候補を選び、<b>Enter</b> で確定します。<br>
+        ⑤ F6〜F9 のファンクションキーで、読みをひらがな・カタカナ・英字に即座に変換できます。<br>
+        <br>
+        <b>よく使うキー操作：</b><br>
+        &emsp;<b>Space</b> → 変換候補を開く &emsp;
+        <b>Enter</b> → 確定 &emsp;
+        <b>Esc</b> → 未確定をキャンセル &emsp;
+        <b>F10</b> → 入力モード切替（JP あ ↔ EN）
+      </div>
+
+      <!-- 4-2 Tibetan EWTS -->
+      <h3 style="margin-top:1.4rem;">4-2. チベット語入力（Extended Wylie / EWTS）</h3>
+      <div class="setting-desc-jp">
+        <b>ASCIIキーボードでチベット文字を入力する：</b><br>
+        ① <b>F8</b> を押してチベット語モード <code>[TB བོད]</code> に切り替えます。<br>
+        ② Extended Wylie（EWTS）のローマ字表記でそのまま打ちます。<br>
+        &emsp;例：<code>cho</code> と打つと候補一覧が開き、以下のような単語が提示されます：<br>
+        &emsp;&emsp;• <b>ཆོས</b>（chos — 法 / ダルマ / 真実）<br>
+        &emsp;&emsp;• <b>ཆོས་ཉིད</b>（chos nyid — 法性 / dharmatā）<br>
+        &emsp;&emsp;• <b>ཆོས་སྐུ</b>（chos sku — 法身 / dharmakāya）<br>
+        &emsp;&emsp;• <b>ཆོས་ཐམས་ཅད</b>（すべての法 / sarvadharmāḥ）<br>
+        ③ Tab またはスペースで候補リストを開き、矢印キーで選んで Enter で確定します。<br>
+        ④ 重なり文字（སྟ、གྲ など複合スタック）も EWTS 表記から自動サブジョイニングされます。<br>
+        <br>
+        <b>主な EWTS 単語例（辞書収録）：</b><br>
+        &emsp;<code>oM</code> → <b>ཨོཾ</b>（オーム / OṂ）&emsp;
+        <code>sangs_rgyas</code> → <b>སངས་རྒྱས</b>（仏陀 / Buddha）&emsp;
+        <code>snying_rje</code> → <b>སྙིང་རྗེ</b>（慈悲 / karuṇā）<br>
+        &emsp;<code>stong_pa_nyid</code> → <b>སྟོང་པ་ཉིད</b>（空性 / śūnyatā）&emsp;
+        <code>shes_rab</code> → <b>ཤེས་རབ</b>（般若 / prajñā）
+      </div>
+
+      <!-- 4-3 Quick Reference -->
+      <h3 style="margin-top:1.4rem;">4-3. 言語切り替え早見表 (Function Key Quick Reference)</h3>
+      <table class="market-table">
+        <thead>
+          <tr>
+            <th>キー操作</th>
+            <th>切り替え先・動作</th>
+            <th>ステータスバー表示</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><b>F10</b>（またはバッジクリック）</td>
+            <td>ひらがな（あ）→ 英字（A）→ ひらがな … を順に切替</td>
+            <td><code>[TIP: あ (F10)]</code> ↔ <code>[TIP: A (F10)]</code></td>
+          </tr>
+          <tr>
+            <td><b>F8</b></td>
+            <td>現在のモードから <b>チベット語モード</b>（བོད）へ直接切替</td>
+            <td><code>[TIP: བོད (F10)]</code></td>
+          </tr>
+          <tr>
+            <td><b>F6</b></td>
+            <td>入力中の読みを <b>ひらがな</b> に変換して確定</td>
+            <td>—</td>
+          </tr>
+          <tr>
+            <td><b>F7</b></td>
+            <td>入力中の読みを <b>全角カタカナ</b> に変換して確定</td>
+            <td>—</td>
+          </tr>
+          <tr>
+            <td><b>F9</b></td>
+            <td>入力中の読みを <b>全角英数字</b> に変換して確定</td>
+            <td>—</td>
+          </tr>
+          <tr>
+            <td><b>Escape</b></td>
+            <td>未確定文字列をキャンセルしてアイドル状態に戻る</td>
+            <td>—</td>
           </tr>
         </tbody>
       </table>

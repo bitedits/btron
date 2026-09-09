@@ -21,6 +21,8 @@
 #include <btron/settings.h>
 #include <btron/language_settings.h>
 #include <btron/app_menu.h>
+#include <btron/tip.h>
+#include <btron/t_editor.h>
 
 /* Forward declarations for Settings applet window openers */
 extern WND* open_control_panel_window(void);
@@ -49,6 +51,9 @@ extern WND* open_tad_browser_about_window(void);
 extern WND* open_gterm_about_window(void);
 extern WND* open_orchestra_about_window(void);
 extern WND* open_cassette_about_window(void);
+extern WND* open_t_editor_window_with_file(const char *filepath);
+extern H    tip_get_caret_x(void);
+extern H    tip_get_caret_y(void);
 
 /* Forward declarations for GTerm internals */
 typedef struct GTermState GTermState;
@@ -448,6 +453,73 @@ int main(int argc, char **argv) {
             global_menu_render_overlay(dev);
         }
         dump_raw_region(dev, 0, 0, 1280, 800, "Full Desktop with Opened BTRON Menu", "/tmp/btron_raw_screens/Desktop_Full.raw");
+    }
+
+    /* 6. Language Page — TIP Dictionary Candidate Window Showcase */
+    {
+        /* 6a. Tibetan EWTS mode: T-Editor with Heart Sutra open.
+         *     Type EWTS prefix "cho" â Tab opens candidate popup showing:
+         *     à½à½¼à½¦ (chos/dharma), à½à½¼à½¦à¼à½à½²à½ (dharmata), à½à½¼à½¦à¼à½¦à½à½´ (dharmakaya), ...
+         *     Background document: assets/texts/Heart_Sutra_Tibetan.txt */
+        reset_isolation_state(dev);
+        tip_init();
+        tip_set_mode(TIP_MODE_TIBETAN);
+        WND *w_tib = open_t_editor_window_with_file(
+                         "assets/texts/Heart_Sutra_Tibetan.txt");
+        if (w_tib) {
+            w_tib->focused = TRUE;
+            TEditor *ed_tib = (TEditor*)(uintptr_t)w_tib->user_data;
+            if (ed_tib) {
+                ed_tib->cursor_row = (ed_tib->total_lines > 6) ? 6 : 0;
+                ed_tib->cursor_col = 0;
+            }
+            char dummy[64];
+            tip_process_key('c', 0, dummy, sizeof(dummy));
+            tip_process_key('h', 0, dummy, sizeof(dummy));
+            tip_process_key('o', 0, dummy, sizeof(dummy));
+            tip_process_key('\t', 0, dummy, sizeof(dummy));
+            tip_set_caret_pos(
+                w_tib->bounds.left + 46,
+                w_tib->bounds.top  + 24 + 6 * 18);
+            redraw_all_windows();
+            tip_render_candidate_window(
+                dev, tip_get_caret_x(), tip_get_caret_y());
+            dump_window_rect(dev, w_tib,
+                "/tmp/btron_raw_screens/Language_TIP_Tibetan.raw");
+        }
+
+        /* 6b. Japanese Mozc mode: T-Editor with BTRON3 Report open.
+         *     Romaji "hotoke" â Space opens candidate popup showing:
+         *     ä» / ã»ã¨ã / ä»ãã / ä»æ§  (maximum suggestion count) */
+        reset_isolation_state(dev);
+        tip_init();
+        tip_set_mode(TIP_MODE_HIRAGANA);
+        WND *w_jp = open_t_editor_window_with_file(
+                        "assets/texts/BTRON3_Report.txt");
+        if (w_jp) {
+            w_jp->focused = TRUE;
+            TEditor *ed_jp = (TEditor*)(uintptr_t)w_jp->user_data;
+            if (ed_jp) {
+                ed_jp->cursor_row = (ed_jp->total_lines > 4) ? 4 : 0;
+                ed_jp->cursor_col = 0;
+            }
+            char dummy2[64];
+            tip_process_key('h', 0, dummy2, sizeof(dummy2));
+            tip_process_key('o', 0, dummy2, sizeof(dummy2));
+            tip_process_key('t', 0, dummy2, sizeof(dummy2));
+            tip_process_key('o', 0, dummy2, sizeof(dummy2));
+            tip_process_key('k', 0, dummy2, sizeof(dummy2));
+            tip_process_key('e', 0, dummy2, sizeof(dummy2));
+            tip_process_key(' ', 0, dummy2, sizeof(dummy2));
+            tip_set_caret_pos(
+                w_jp->bounds.left + 46,
+                w_jp->bounds.top  + 24 + 4 * 18);
+            redraw_all_windows();
+            tip_render_candidate_window(
+                dev, tip_get_caret_x(), tip_get_caret_y());
+            dump_window_rect(dev, w_jp,
+                "/tmp/btron_raw_screens/Language_TIP_Japanese.raw");
+        }
     }
 
     cls_dev(dev);

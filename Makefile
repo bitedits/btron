@@ -1245,6 +1245,9 @@ CAPTURE_SCREENS_SRCS = src/tools/capture_screens.c \
 
 CAPTURE_SCREENS_OBJS = $(CAPTURE_SCREENS_SRCS:.c=.test.o)
 
+$(CAPTURE_SCREENS_BIN): $(CAPTURE_SCREENS_OBJS)
+	$(CC) $(CAPTURE_SCREENS_OBJS) -o $@ $(LDFLAGS) -lm -lz
+
 # ═══════════════════════════════════════════════════════════════════
 # µBTRON-FOMA Mobile UI Toolkit Test Suite
 # ═══════════════════════════════════════════════════════════════════

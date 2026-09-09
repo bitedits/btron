@@ -8,13 +8,14 @@ on:
   workflow_dispatch:
 
 jobs:
+  # ── Ubuntu + macOS matrix ────────────────────────────────────────────────────
   build-and-test:
     name: Build & Test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest]
+        os: [ubuntu-latest, macos-latest]
 
     steps:
       - name: Checkout Repository
@@ -42,6 +43,11 @@ jobs:
           brew install sdl2 qemu llvm elixir
           echo "/opt/homebrew/opt/llvm/bin" >> "$GITHUB_PATH"
           echo "/usr/local/opt/llvm/bin" >> "$GITHUB_PATH"
+
+      - name: Python TAD Compiler Self-Tests
+        run: |
+          python3 scripts/html2tad.py --test
+          python3 scripts/book2tad.py --test
 
       - name: Build Host Desktop & T-Kernel Engines
         run: |
@@ -84,4 +90,201 @@ jobs:
             btron-sakamura.elf
             btron-arm-baremetal.elf
             btron-aarch64-baremetal.elf
+          if-no-files-found: ignore
+
+  # ── Alpine Linux (musl libc) ─────────────────────────────────────────────────
+  build-alpine:
+    name: Build & Test (Alpine Linux)
+    runs-on: ubuntu-latest
+    container:
+      image: alpine:3.20
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Install Dependencies (Alpine)
+        run: |
+          apk add --no-cache \
+            build-base \
+            clang \
+            lld \
+            python3 \
+            sdl2-dev \
+            zlib-dev
+
+      - name: Python TAD Compiler Self-Tests
+        run: |
+          python3 scripts/html2tad.py --test
+          python3 scripts/book2tad.py --test
+
+      - name: Build POSIX Desktop
+        run: |
+          make posix
+
+      - name: Upload POSIX Binary (Alpine)
+        uses: actions/upload-artifact@v4
+        with:
+          name: btron-binaries-alpine
+          path: btron-posix
+          if-no-files-found: ignore
+
+  # ── FreeBSD ──────────────────────────────────────────────────────────────────
+  build-freebsd:
+    name: Build & Test (FreeBSD 15.1)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: cpa.sh {0}
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Start FreeBSD VM
+        uses: cross-platform-actions/action@v1.5.0
+        with:
+          operating_system: freebsd
+          version: '15.1'
+
+      - name: Install Dependencies
+        run: |
+          sudo pkg install -y \
+            sdl2 \
+            python3 \
+            pkgconf \
+            gmake \
+            llvm \
+            clang
+
+      - name: Python TAD Compiler Self-Tests
+        run: |
+          python3 scripts/html2tad.py --test
+          python3 scripts/book2tad.py --test
+
+      - name: Build POSIX Desktop
+        run: |
+          gmake posix
+
+      - name: Run Unit Tests (headless)
+        run: |
+          gmake test-tad
+          gmake test-editor
+          gmake test-mozc
+
+      - name: Run Conformance Audit
+        run: |
+          gmake verify
+
+      - name: Upload POSIX Binary (FreeBSD)
+        uses: actions/upload-artifact@v4
+        with:
+          name: btron-binaries-freebsd
+          path: btron-posix
+          if-no-files-found: ignore
+
+  # ── OpenBSD ───────────────────────────────────────────────────────────────────
+  build-openbsd:
+    name: Build & Test (OpenBSD 7.9)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: cpa.sh {0}
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Start OpenBSD VM
+        uses: cross-platform-actions/action@v1.5.0
+        with:
+          operating_system: openbsd
+          version: '7.9'
+
+      - name: Install Dependencies
+        run: |
+          sudo pkg_add \
+            sdl2 \
+            python3 \
+            pkgconf \
+            gmake \
+            llvm
+
+      - name: Python TAD Compiler Self-Tests
+        run: |
+          python3 scripts/html2tad.py --test
+          python3 scripts/book2tad.py --test
+
+      - name: Build POSIX Desktop
+        run: |
+          gmake posix
+
+      - name: Run Unit Tests (headless)
+        run: |
+          gmake test-tad
+          gmake test-editor
+          gmake test-mozc
+
+      - name: Run Conformance Audit
+        run: |
+          gmake verify
+
+      - name: Upload POSIX Binary (OpenBSD)
+        uses: actions/upload-artifact@v4
+        with:
+          name: btron-binaries-openbsd
+          path: btron-posix
+          if-no-files-found: ignore
+
+  # ── NetBSD ────────────────────────────────────────────────────────────────────
+  build-netbsd:
+    name: Build & Test (NetBSD 11.0)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: cpa.sh {0}
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Start NetBSD VM
+        uses: cross-platform-actions/action@v1.5.0
+        with:
+          operating_system: netbsd
+          version: '11.0'
+
+      - name: Install Dependencies
+        run: |
+          sudo pkgin -y install \
+            SDL2 \
+            python312 \
+            pkg-config \
+            gmake \
+            clang
+
+      - name: Python TAD Compiler Self-Tests
+        run: |
+          python3.12 scripts/html2tad.py --test
+          python3.12 scripts/book2tad.py --test
+
+      - name: Build POSIX Desktop
+        run: |
+          gmake posix
+
+      - name: Run Unit Tests (headless)
+        run: |
+          gmake test-tad
+          gmake test-editor
+          gmake test-mozc
+
+      - name: Run Conformance Audit
+        run: |
+          gmake verify
+
+      - name: Upload POSIX Binary (NetBSD)
+        uses: actions/upload-artifact@v4
+        with:
+          name: btron-binaries-netbsd
+          path: btron-posix
           if-no-files-found: ignore

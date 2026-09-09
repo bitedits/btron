@@ -92,15 +92,15 @@ ifeq ($(UNAME_S), Darwin)
     QEMU_DISPLAY        := -display cocoa,show-cursor=on,zoom-to-fit=on
     # Match M68K display flags with show-cursor=on and zoom-to-fit=on
     KERNEL_DISPLAY      := $(QEMU_DISPLAY)
-else ifeq ($(UNAME_S), Linux)
-    SDL_CFLAGS   := $(shell sdl2-config --cflags 2>/dev/null || pkg-config --cflags sdl2 2>/dev/null || echo "-I/usr/include/SDL2")
-    SDL_LIBS     := $(shell sdl2-config --libs 2>/dev/null || pkg-config --libs sdl2 2>/dev/null || echo "-lSDL2") \
+else ifneq (,$(filter $(UNAME_S),Linux FreeBSD NetBSD OpenBSD DragonFly))
+    # Linux + the three BSDs (and DragonFly) - portable POSIX path, no Windows flags
+    SDL_CFLAGS   := $(shell sdl2-config --cflags 2>/dev/null || \
+                         pkg-config --cflags sdl2 2>/dev/null || \
+                         echo "-I/usr/local/include/SDL2 -I/usr/include/SDL2")
+    SDL_LIBS     := $(shell sdl2-config --libs 2>/dev/null || \
+                         pkg-config --libs sdl2 2>/dev/null || \
+                         echo "-lSDL2") \
                     -lz -lm -lpthread
-    QEMU_DISPLAY        := -display default,show-cursor=on
-    KERNEL_DISPLAY      := -display default
-else ifneq (,)
-    SDL_CFLAGS   := -IC:/msys64/mingw64/include/SDL2 -Dmain=SDL_main
-    SDL_LIBS     := -LC:/msys64/mingw64/lib -lmingw32 -mwindows -lSDL2main -lSDL2 -lz -lgdi32 -lwinpthread
     QEMU_DISPLAY        := -display default,show-cursor=on
     KERNEL_DISPLAY      := -display default
 else ifneq (,$(findstring MINGW,$(UNAME_S)))
@@ -109,8 +109,13 @@ else ifneq (,$(findstring MINGW,$(UNAME_S)))
     QEMU_DISPLAY        := -display default,show-cursor=on
     KERNEL_DISPLAY      := -display default
 else
-    SDL_CFLAGS   := -I/usr/include/SDL2
-    SDL_LIBS     := -lSDL2 -lz -lgdi32 -lpthread
+    # Generic Unix fallback - no -lgdi32
+    SDL_CFLAGS   := $(shell sdl2-config --cflags 2>/dev/null || \
+                         pkg-config --cflags sdl2 2>/dev/null || \
+                         echo "-I/usr/local/include/SDL2 -I/usr/include/SDL2")
+    SDL_LIBS     := $(shell sdl2-config --libs 2>/dev/null || \
+                         pkg-config --libs sdl2 2>/dev/null || \
+                         echo "-lSDL2") -lz -lm -lpthread
     QEMU_DISPLAY        := -display default,show-cursor=on
     KERNEL_DISPLAY      := -display default
 endif
@@ -362,13 +367,16 @@ all: posix qemu kernel sakamura foma uefi pc98
 # ═══════════════════════════════════════════════════════════════════
 # POSIX Desktop
 # ═══════════════════════════════════════════════════════════════════
-posix: tad_bin $(POSIX_TARGET)
+posix: $(POSIX_TARGET)
 	@ln -sf $(POSIX_TARGET) $(DEFAULT_TARGET)
 	@echo "=========================================================="
 	@echo " B-System POSIX Kernel & Desktop successfully built!"
 	@echo " Startup File: $(POSIX_STARTUP)"
 	@echo " Run './btron' or 'make run-posix' to start."
 	@echo "=========================================================="
+	@if command -v python3 >/dev/null 2>&1; then $(MAKE) tad_bin; \
+	  elif command -v elixir >/dev/null 2>&1; then $(MAKE) tad_bin; \
+	  else echo "Note: tad_bin skipped (no python3 or elixir found) - desktop still runs."; fi
 
 %.posix.o: %.c
 	$(CC) $(CFLAGS) $(SDL_CFLAGS) -DBTRON_TARGET=0 -c $< -o $@
@@ -975,18 +983,26 @@ $(TEST_HMI_BIN): $(TEST_HMI_OBJS)
 	$(CC) $(TEST_HMI_OBJS) -o $@ $(LDFLAGS) -lm
 
 # ═══════════════════════════════════════════════════════════════════
-# TAD Unified Packing Pipeline & Elixir Batch Compiler
+# TAD Unified Packing Pipeline — Python primary, Elixir fallback
 # ═══════════════════════════════════════════════════════════════════
+TAD_HTML2TAD := $(shell \
+  if command -v python3 >/dev/null 2>&1; then echo "python3 scripts/html2tad.py"; \
+  elif command -v elixir >/dev/null 2>&1; then echo "elixir scripts/html2tad.exs"; fi)
+TAD_BOOK2TAD := $(shell \
+  if command -v python3 >/dev/null 2>&1; then echo "python3 scripts/book2tad.py"; \
+  elif command -v elixir >/dev/null 2>&1; then echo "elixir scripts/book2tad.exs"; fi)
+
 tad_bin:
-	@elixir scripts/html2tad.exs
-	@elixir scripts/book2tad.exs
+	@if [ -z "$(TAD_HTML2TAD)" ]; then \
+	  echo "Note: neither python3 nor elixir found - tad_bin skipped (desktop still runs)."; \
+	else $(TAD_HTML2TAD); $(TAD_BOOK2TAD); fi
 
 html2tad:
-	@elixir scripts/html2tad.exs --test
-	@elixir scripts/book2tad.exs --test
+	@$(TAD_HTML2TAD) --test
+	@$(TAD_BOOK2TAD) --test
 
 book2tad:
-	@elixir scripts/book2tad.exs
+	@$(TAD_BOOK2TAD)
 
 # ═══════════════════════════════════════════════════════════════════
 # Native TAD Document Browser & Cabinet Test Suite

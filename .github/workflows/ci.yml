@@ -214,12 +214,12 @@ jobs:
             python3 \
             pkgconf \
             gmake \
-            llvm
+            llvm-21.1.8p4
 
       - name: Python TAD Compiler Self-Tests
         run: |
-          python3 scripts/html2tad.py --test
-          python3 scripts/book2tad.py --test
+          python3.13 scripts/html2tad.py --test
+          python3.13 scripts/book2tad.py --test
 
       - name: Build POSIX Desktop
         run: |

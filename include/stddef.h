@@ -24,9 +24,6 @@
 #if defined(_WIN32)
 /* MinGW provides ABI-correct fundamental types on 64-bit Windows. */
 #include_next <stddef.h>
-#elif defined(__STDC_HOSTED__) && __STDC_HOSTED__ == 1 && \
-      (defined(__GNUC__) || defined(__clang__))
-#include_next <stddef.h>
 #else
 
 #include <stdtype.h>

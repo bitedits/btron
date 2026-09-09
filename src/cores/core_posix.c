@@ -3,6 +3,10 @@
  * Pure POSIX pthread-backed implementation of µITRON & T-Kernel specification APIs.
  */
 
+#ifndef _POSIX_C_SOURCE
+#define _POSIX_C_SOURCE 200809L
+#endif
+
 #include <btron/itron.h>
 #include <device/virtio.h>
 #include <stdio.h>

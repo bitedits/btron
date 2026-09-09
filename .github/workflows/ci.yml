@@ -154,8 +154,14 @@ jobs:
             python3 \
             pkgconf \
             gmake \
-            llvm \
-            clang
+            llvm
+
+      - name: Verify Native FreeBSD Toolchain
+        run: |
+          cc --version
+          clang --version
+          pkg-config --modversion sdl2
+          gmake --version
 
       - name: Python TAD Compiler Self-Tests
         run: |

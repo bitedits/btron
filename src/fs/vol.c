@@ -82,6 +82,7 @@ struct Volume {
 
 /* ── Globals ────────────────────────────────────────────────────── */
 Volume *g_sys_vol = (Volume *)0;
+Volume *g_anders_vol = (Volume *)0;
 char    g_cwd_path[128] = "/SYS";
 
 /* ── Internal block I/O ─────────────────────────────────────────── */

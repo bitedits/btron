@@ -48,6 +48,17 @@
 #include <btron/tad.h>
 #include <btron/dp.h>   /* COLOR_* constants */
 
+static char *fs_strrchr(const char *s, int c) {
+    if (!s) return NULL;
+    const char *last = NULL;
+    while (*s) {
+        if (*s == (char)c) last = s;
+        s++;
+    }
+    if ((char)c == '\0') return (char *)s;
+    return (char *)last;
+}
+
 /* ── Arg parsing helpers ─────────────────────────────────────────── */
 /* Skip leading whitespace */
 static const char *skip_ws(const char *p) {
@@ -137,31 +148,62 @@ void clu_cd(const char *args, ShellOutputFn out, void *ud)
         return;
     }
 
-    if (strcmp(target, "/SYS") == 0 || strcmp(target, "/") == 0 || strcmp(target, "..") == 0) {
+    if (strcmp(target, "/SYS") == 0 || strcmp(target, "/") == 0) {
         snprintf(g_cwd_path, sizeof(g_cwd_path), "/SYS");
         out("[/SYS]", COLOR_GREEN, ud);
         return;
     }
 
-    /* Verify the file exists on the volume */
+    if (strcmp(target, "/ANDERS") == 0 || strcmp(target, "ANDERS") == 0) {
+        if (!g_anders_vol) {
+            out("cd: '/ANDERS': volume not mounted", COLOR_RED, ud);
+            return;
+        }
+        snprintf(g_cwd_path, sizeof(g_cwd_path), "/ANDERS");
+        out("[/ANDERS]", COLOR_GREEN, ud);
+        return;
+    }
+
+    if (strcmp(target, "..") == 0) {
+        char *last_slash = fs_strrchr(g_cwd_path, '/');
+        if (last_slash && last_slash != g_cwd_path) {
+            *last_slash = '\0';
+        } else {
+            snprintf(g_cwd_path, sizeof(g_cwd_path), "/SYS");
+        }
+        char msg[128];
+        snprintf(msg, sizeof(msg), "[%s]", g_cwd_path);
+        out(msg, COLOR_GREEN, ud);
+        return;
+    }
+
+    /* Verify target exists on active volume */
     ID fd = opn_fil(target, 0x0001 /* F_READ */);
     if (fd < 0) {
         char err[128];
-        snprintf(err, sizeof(err), "cd: '%s': no such file", target);
+        snprintf(err, sizeof(err), "cd: '%s': no such directory", target);
         out(err, COLOR_RED, ud);
         return;
     }
     cls_fil(fd);
-    snprintf(g_cwd_path, sizeof(g_cwd_path), "/SYS/%s", target);
+
+    if (target[0] == '/') {
+        snprintf(g_cwd_path, sizeof(g_cwd_path), "%s", target);
+    } else {
+        size_t cur_len = strlen(g_cwd_path);
+        if (cur_len + strlen(target) + 2 < sizeof(g_cwd_path)) {
+            snprintf(g_cwd_path + cur_len, sizeof(g_cwd_path) - cur_len, "/%s", target);
+        }
+    }
     char msg[128];
-    snprintf(msg, sizeof(msg), "[%s]", target);
+    snprintf(msg, sizeof(msg), "[%s]", g_cwd_path);
     out(msg, COLOR_GREEN, ud);
 }
 
 /* ── clu_ls ──────────────────────────────────────────────────────── */
 void clu_ls(const char *args, ShellOutputFn out, void *ud)
 {
-    Volume *v = g_sys_vol;
+    Volume *v = (strncmp(g_cwd_path, "/ANDERS", 7) == 0 && g_anders_vol) ? g_anders_vol : g_sys_vol;
     if (!v) { out("ls: no volume mounted", COLOR_RED, ud); return; }
 
     int flag_l = has_flag(args, "-l");
@@ -173,7 +215,62 @@ void clu_ls(const char *args, ShellOutputFn out, void *ud)
         out("CTIME              ATIME              MTIME              NAME", COLOR_CYAN, ud);
     }
 
-    ID dir = opn_dir("/SYS");
+    char target[80];
+    get_target(args, target, sizeof(target));
+    const char *dir_path = target[0] ? target : g_cwd_path;
+
+    /* First attempt: inspect container file links */
+    ID fd = opn_fil(dir_path, 0x0001);
+    if (fd >= 0) {
+        OpenFile *of = &g_open_files[(int)fd];
+        Volume *ofv = of_vol(of);
+        int link_count = 0;
+        for (unsigned int i = 0; i < of->nrec; i++) {
+            RecordIndex *ri = &of->ridx[i];
+            if (ri->type == RT_LINK && ri->size >= 16) {
+                unsigned char pbuf[80] = {0};
+                ID rec = opn_rec(fd, (W)i, 0x0001);
+                if (rec >= 0) {
+                    W got = 0;
+                    rd_rec(rec, pbuf, 16, &got);
+                    FID link_fid = ((unsigned int)pbuf[0]<<24)|((unsigned int)pbuf[1]<<16)|
+                                   ((unsigned int)pbuf[2]<<8)|(unsigned int)pbuf[3];
+                    unsigned short nlen = ((unsigned short)pbuf[14]<<8)|pbuf[15];
+                    char link_name[48] = "";
+                    if (nlen > 0 && nlen < 40) {
+                        W got2 = 0;
+                        rd_rec(rec, link_name, (W)nlen, &got2);
+                        link_name[got2] = '\0';
+                    }
+                    cls_rec(rec);
+
+                    link_count++;
+                    if (flag_l) {
+                        BLK hblk = vol_fid_get_blk(ofv, link_fid);
+                        unsigned char hbuf[BTRON_BLOCK_SIZE] = {0};
+                        if (hblk != FID_INVALID && hblk != 0) vol_read_blk(ofv, hblk, hbuf);
+                        unsigned short atype = ((unsigned short)hbuf[2] << 8) | hbuf[3];
+                        unsigned int mtime = ((unsigned int)hbuf[8]<<24)|((unsigned int)hbuf[9]<<16)|
+                                             ((unsigned int)hbuf[10]<<8)|(unsigned int)hbuf[11];
+                        unsigned int tsz   = ((unsigned int)hbuf[28]<<24)|((unsigned int)hbuf[29]<<16)|
+                                             ((unsigned int)hbuf[30]<<8)|(unsigned int)hbuf[31];
+                        char mt[24]; fmt_ts(mtime, mt, sizeof(mt));
+                        char line[256];
+                        snprintf(line, sizeof(line), "%04X  ---  1    1    %-5u %s %s",
+                                 atype, tsz, mt, link_name);
+                        out(line, COLOR_LTGRAY, ud);
+                    } else {
+                        out(link_name, COLOR_LTGRAY, ud);
+                    }
+                }
+            }
+        }
+        cls_fil(fd);
+        if (link_count > 0) return;
+    }
+
+    /* Fallback: flat directory scan */
+    ID dir = opn_dir(dir_path);
     if (dir < 0) { out("ls: opn_dir failed", COLOR_RED, ud); return; }
 
     DIR_ENTRY entry;
@@ -204,7 +301,6 @@ void clu_ls(const char *args, ShellOutputFn out, void *ud)
         char line[256];
         if (flag_l) {
             char mt[24]; fmt_ts(mtime, mt, sizeof(mt));
-            /* ATR: P=delete-protect, O=write-protect, else '-' */
             char atr[4] = "---";
             if (flags & 0x0020) atr[0] = 'P';
             if (flags & 0x0010) atr[1] = 'O';
@@ -233,7 +329,7 @@ void clu_fs_cmd(const char *args, ShellOutputFn out, void *ud)
     char target[80];
     get_target(args, target, sizeof(target));
 
-    Volume *v = g_sys_vol;
+    Volume *v = (strncmp(g_cwd_path, "/ANDERS", 7) == 0 && g_anders_vol) ? g_anders_vol : g_sys_vol;
     if (!v) { out("fs: no volume mounted", COLOR_RED, ud); return; }
 
     const char *path = target[0] ? target : g_cwd_path;
@@ -241,6 +337,10 @@ void clu_fs_cmd(const char *args, ShellOutputFn out, void *ud)
     if (fd < 0 && (!target[0] || strcmp(target, "SYS") == 0 || strcmp(target, "/SYS") == 0)) {
         fd = opn_fil("SYS", 0x0001);
     }
+    if (fd < 0 && (strcmp(target, "ANDERS") == 0 || strcmp(target, "/ANDERS") == 0)) {
+        fd = opn_fil("ANDERS", 0x0001);
+    }
+
 
     if (fd < 0) {
         char err[128];
@@ -250,6 +350,7 @@ void clu_fs_cmd(const char *args, ShellOutputFn out, void *ud)
     }
 
     OpenFile *of = &g_open_files[(int)fd];
+    v = of_vol(of);
 
     if (flag_l)
         out("NO: 0 STYPE : FID [ATR1 ATR2 ATR3 ATR4 ATR5] : NAME", COLOR_CYAN, ud);

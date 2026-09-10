@@ -30,6 +30,7 @@ typedef struct {
     UW          nrec;           /* mirrors hdr.nrec                         */
     UW          data_blk;       /* first data block allocated to this file  */
     UW          data_used;      /* bytes used in data region so far         */
+    Volume     *vol;            /* backing volume instance                  */
 } OpenFile;
 
 /*
@@ -51,10 +52,11 @@ extern OpenRec  g_open_recs [MAX_OPEN_RECS ];
 
 /* Helper: return a pointer to the Volume that backs a given OpenFile */
 static inline Volume *of_vol(const OpenFile *of) {
-    (void)of;
-    /* For now all files are on g_sys_vol; multi-volume support deferred */
+    if (of && of->vol) return of->vol;
     extern Volume *g_sys_vol;
-    return g_sys_vol;
+    extern Volume *g_anders_vol;
+    return g_sys_vol ? g_sys_vol : g_anders_vol;
 }
 
 #endif /* _FS_INTERNAL_H_ */
+

@@ -1,0 +1,83 @@
+module either where
+
+def + (A B: U) : U := Σ (x : 𝟐), ind₂ (λ (_ : 𝟐), U) A B x
+
+def inl (A B : U) (a : A) : + A B := (0₂, a)
+def inr (A B : U) (b : B) : + A B := (1₂, b)
+
+def +-ind (A B : U) (C : + A B → U)
+    (f : Π (x : A), C (inl A B x))
+    (g : Π (y : B), C (inr A B y)) (w : + A B)
+  : C w
+ := ind₂ (λ (x : 𝟐), Π (u : ind₂ (λ (_ : 𝟐), U) A B x), C (x, u)) f g w.1 w.2
+
+def +-rec (A B C : U) (f : A → C) (g : B → C)
+  : (+ A B) → C
+ := +-ind A B (λ (w : + A B), C) f g
+
+def +-β₁ (A B : U) (C : + A B → U) (a: A)
+    (f : Π (x : A), C (inl A B x)) (g : Π (y : B), C (inr A B y))
+  : PathP (<_>C (inl A B a)) (f a) (+-ind A B C f g (inl A B a))
+ := <_> f a
+
+def +-β₂ (A B : U) (C : + A B → U) (b: B)
+    (f : Π (x : A), C (inl A B x)) (g : Π (y : B), C (inr A B y))
+  : PathP (<_>C (inr A B b)) (g b) (+-ind A B C f g (inr A B b))
+ := <_> g b
+
+def +-η (A B : U) (c : + A B)
+  : + (Σ (x : A), PathP (<_> + A B) c (inl A B x))
+      (Σ (y : B), PathP (<_> + A B) c (inr A B y))
+ := +-ind A B (λ (c : + A B),
+    + (Σ (x : A), PathP (<_> + A B) c (inl A B x))
+      (Σ (y : B), PathP (<_> + A B) c (inr A B y)))
+      (λ (x : A), (0₂, (x, <_> (0₂, x))))
+      (λ (y : B), (1₂, (y, <_> (1₂, y)))) c
+
+def 𝟑 : U := + 𝟏 𝟐
+def 0₃ : 𝟑 := inl 𝟏 𝟐 ★
+def 1₃ : 𝟑 := inr 𝟏 𝟐 0₂
+def 2₃ : 𝟑 := inr 𝟏 𝟐 1₂
+def ind₃ (C : 𝟑 → U) (c₀ : C 0₃) (c₁ : C 1₃) (c₂ : C 2₃) : Π (x : 𝟑), C x
+ := +-ind 𝟏 𝟐 C (ind₁ (λ (x : 𝟏), C (0₂, x)) c₀) (ind₂ (λ (x : 𝟐), C (1₂, x)) c₁ c₂)
+
+def 𝟒 : U := + 𝟐 𝟐
+def 0₄ : 𝟒 := inl 𝟐 𝟐 0₂
+def 1₄ : 𝟒 := inl 𝟐 𝟐 1₂
+def 2₄ : 𝟒 := inr 𝟐 𝟐 0₂
+def 3₄ : 𝟒 := inr 𝟐 𝟐 1₂
+def ind₄ (C : 𝟒 → U) (c₀ : C 0₄) (c₁ : C 1₄) (c₂ : C 2₄) (c₃ : C 3₄) : Π (x : 𝟒), C x
+ := +-ind 𝟐 𝟐 C (ind₂ (λ (x : 𝟐), C (0₂, x)) c₀ c₁) (ind₂ (λ (x : 𝟐), C (1₂, x)) c₂ c₃)
+
+def 𝟓 : U := + 𝟐 𝟑
+def 0₅ : 𝟓 := inl 𝟐 𝟑 0₂
+def 1₅ : 𝟓 := inl 𝟐 𝟑 1₂
+def 2₅ : 𝟓 := inr 𝟐 𝟑 0₃
+def 3₅ : 𝟓 := inr 𝟐 𝟑 1₃
+def 4₅ : 𝟓 := inr 𝟐 𝟑 2₃
+def ind₅ (C : 𝟓 → U) (c₀ : C 0₅) (c₁ : C 1₅) (c₂ : C 2₅) (c₃ : C 3₅) (c₄ : C 4₅) : Π (x : 𝟓), C x
+ := +-ind 𝟐 𝟑 C (ind₂ (λ (x : 𝟐), C (0₂, x)) c₀ c₁) (ind₃ (λ (x : 𝟑), C (1₂, x)) c₂ c₃ c₄)
+
+def 𝟔 : U := + 𝟑 𝟑
+def 0₆ : 𝟔 := inl 𝟑 𝟑 0₃
+def 1₆ : 𝟔 := inl 𝟑 𝟑 1₃
+def 2₆ : 𝟔 := inl 𝟑 𝟑 2₃
+def 3₆ : 𝟔 := inr 𝟑 𝟑 0₃
+def 4₆ : 𝟔 := inr 𝟑 𝟑 1₃
+def 5₆ : 𝟔 := inr 𝟑 𝟑 2₃
+def ind₆ (C : 𝟔 → U) (c₀ : C 0₆) (c₁ : C 1₆) (c₂ : C 2₆)
+         (c₃ : C 3₆) (c₄ : C 4₆) (c₅ : C 5₆) : Π (x : 𝟔), C x
+ := +-ind 𝟑 𝟑 C (ind₃ (λ (x : 𝟑), C (0₂, x)) c₀ c₁ c₂)
+                (ind₃ (λ (x : 𝟑), C (1₂, x)) c₃ c₄ c₅)
+
+def 𝟕 : U := + 𝟑 𝟒
+def 0₇ : 𝟕 := inl 𝟑 𝟒 0₃
+def 1₇ : 𝟕 := inl 𝟑 𝟒 1₃
+def 2₇ : 𝟕 := inl 𝟑 𝟒 2₃
+def 3₇ : 𝟕 := inr 𝟑 𝟒 0₄
+def 4₇ : 𝟕 := inr 𝟑 𝟒 1₄
+def 5₇ : 𝟕 := inr 𝟑 𝟒 2₄
+def 6₇ : 𝟕 := inr 𝟑 𝟒 3₄
+def ind₇ (C : 𝟕 → U) (c₀ : C 0₇) (c₁ : C 1₇) (c₂ : C 2₇) (c₃ : C 3₇) (c₄ : C 4₇) (c₅ : C 5₇) (c₆ : C 6₇) : Π (x : 𝟕), C x
+ := +-ind 𝟑 𝟒 C (ind₃ (λ (x : 𝟑), C (0₂, x)) c₀ c₁ c₂) (ind₄ (λ (x : 𝟒), C (1₂, x)) c₃ c₄ c₅ c₆)
+

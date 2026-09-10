@@ -92,6 +92,18 @@ void btron_core_hfds_log(void) {
             }
         }
     }
+    /* ── Mount /ANDERS volume ───────────────────────────────────────── */
+    if (!g_anders_vol) {
+        BlkDev *anders_blk = blk_file_create("btron_anders.vol", 0, 0);
+        if (!anders_blk) anders_blk = blk_file_create("../btron_anders.vol", 0, 0);
+        if (anders_blk) {
+            g_anders_vol = vol_mount(anders_blk);
+            if (g_anders_vol)
+                printf("[FS  ] Mounted btron_anders.vol as /ANDERS  [OK]\n");
+            else
+                blk_destroy(anders_blk);
+        }
+    }
 }
 
 void btron_core_print_ver(ShellOutputFn out_fn, void *user_data, const char *arg) {

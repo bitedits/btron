@@ -427,6 +427,11 @@ btron_sys.vol: mkbtronfs src/tools/manifest.txt
 	@echo "[FS] btron_sys.vol written."
 	@xxd btron_sys.vol | head -2
 
+btron_anders.vol: mkbtronfs src/tools/manifest_anders.txt
+	./mkbtronfs src/tools/manifest_anders.txt -o btron_anders.vol -l ANDERS
+	@echo "[FS] btron_anders.vol written."
+
+
 # ── FS unit tests ──────────────────────────────────────────────────────
 TEST_FS_BIN = tests/test_fs
 $(TEST_FS_BIN): tests/test_fs.c $(FS_OBJS) src/apps/clu_fs.host.o

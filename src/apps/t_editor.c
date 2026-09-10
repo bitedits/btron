@@ -99,9 +99,31 @@ static void teditor_init_default(TEditor *ed) {
     ed->cursor_col = 0;
     ed->scroll_row = 0;
     ed->scroll_col = 0;
+    ed->wrap_text = FALSE;
+    ed->sel_active = FALSE;
+    ed->sel_anchor_r = 0;
+    ed->sel_anchor_c = 0;
+    for (int i = 0; i < 4; i++) ed->tree_hover[i] = -1;
     ed->has_vobj = TRUE;
     strncpy(ed->vobj_name, "Diagram.draw", sizeof(ed->vobj_name) - 1);
     ed->show_line_nums = TRUE;
+}
+
+void teditor_get_selection_range(const TEditor *ed, int *r1, int *c1, int *r2, int *c2) {
+    if (!ed || !ed->sel_active) {
+        if (r1) *r1 = 0; if (c1) *c1 = 0;
+        if (r2) *r2 = 0; if (c2) *c2 = 0;
+        return;
+    }
+    int ar = ed->sel_anchor_r, ac = ed->sel_anchor_c;
+    int cr = ed->cursor_row, cc = ed->cursor_col;
+    if (ar < cr || (ar == cr && ac <= cc)) {
+        if (r1) *r1 = ar; if (c1) *c1 = ac;
+        if (r2) *r2 = cr; if (c2) *c2 = cc;
+    } else {
+        if (r1) *r1 = cr; if (c1) *c1 = cc;
+        if (r2) *r2 = ar; if (c2) *c2 = ac;
+    }
 }
 
 static void teditor_ensure_cursor_visible(TEditor *ed) {
@@ -123,14 +145,13 @@ static void teditor_ensure_cursor_visible(TEditor *ed) {
 }
 
 static void teditor_delete_selection(TEditor *ed) {
-    if (!ed->sel_active) return;
+    if (!ed || !ed->sel_active) return;
 
-    int r1 = ed->sel_start_r, c1 = ed->sel_start_c;
-    int r2 = ed->sel_end_r, c2 = ed->sel_end_c;
-
-    if (r1 > r2 || (r1 == r2 && c1 > c2)) {
-        int tr = r1; r1 = r2; r2 = tr;
-        int tc = c1; c1 = c2; c2 = tc;
+    int r1, c1, r2, c2;
+    teditor_get_selection_range(ed, &r1, &c1, &r2, &c2);
+    if (r1 == r2 && c1 == c2) {
+        ed->sel_active = FALSE;
+        return;
     }
 
     if (r1 == r2) {
@@ -159,22 +180,25 @@ static void teditor_delete_selection(TEditor *ed) {
     ed->cursor_row = r1;
     ed->cursor_col = c1;
     ed->sel_active = FALSE;
+    ed->sel_anchor_r = r1;
+    ed->sel_anchor_c = c1;
+    ed->sel_start_r = r1;
+    ed->sel_start_c = c1;
+    ed->sel_end_r = r1;
+    ed->sel_end_c = c1;
     ed->is_modified = TRUE;
 }
 
 static void teditor_copy_selection(TEditor *ed) {
+    if (!ed) return;
     if (!ed->sel_active) {
         /* Copy current line if no selection */
         strncpy(g_clipboard, ed->lines[ed->cursor_row], sizeof(g_clipboard) - 1);
         return;
     }
 
-    int r1 = ed->sel_start_r, c1 = ed->sel_start_c;
-    int r2 = ed->sel_end_r, c2 = ed->sel_end_c;
-    if (r1 > r2 || (r1 == r2 && c1 > c2)) {
-        int tr = r1; r1 = r2; r2 = tr;
-        int tc = c1; c1 = c2; c2 = tc;
-    }
+    int r1, c1, r2, c2;
+    teditor_get_selection_range(ed, &r1, &c1, &r2, &c2);
 
     g_clipboard[0] = '\0';
     if (r1 == r2) {
@@ -204,6 +228,7 @@ static void teditor_copy_selection(TEditor *ed) {
         }
     }
 }
+
 
 static void teditor_paste_clipboard(TEditor *ed) {
     if (strlen(g_clipboard) == 0) return;
@@ -475,6 +500,601 @@ __attribute__((weak)) WND* open_vobj_manager_window(void) {
 extern WND* open_vobj_manager_window(void);
 #endif
 
+/* Forward declarations */
+int teditor_load_file(TEditor *ed, const char *filepath);
+void teditor_close_menu(TEditor *ed);
+
+/* ── CUA Movement & Word Jump Helpers ───────────────────────────────── */
+static void teditor_move_cursor(TEditor *ed, int new_r, int new_c, BOOL shift) {
+    if (!ed) return;
+    if (new_r < 0) new_r = 0;
+    if (new_r >= ed->total_lines) new_r = ed->total_lines - 1;
+    int line_len = (int)strlen(ed->lines[new_r]);
+    if (new_c < 0) new_c = 0;
+    if (new_c > line_len) new_c = line_len;
+
+    if (shift) {
+        if (!ed->sel_active) {
+            ed->sel_anchor_r = ed->cursor_row;
+            ed->sel_anchor_c = ed->cursor_col;
+            ed->sel_active = TRUE;
+        }
+        ed->cursor_row = new_r;
+        ed->cursor_col = new_c;
+        if (ed->cursor_row == ed->sel_anchor_r && ed->cursor_col == ed->sel_anchor_c) {
+            ed->sel_active = FALSE;
+        }
+    } else {
+        ed->sel_active = FALSE;
+        ed->cursor_row = new_r;
+        ed->cursor_col = new_c;
+        ed->sel_anchor_r = new_r;
+        ed->sel_anchor_c = new_c;
+    }
+
+    int r1, c1, r2, c2;
+    teditor_get_selection_range(ed, &r1, &c1, &r2, &c2);
+    ed->sel_start_r = r1; ed->sel_start_c = c1;
+    ed->sel_end_r = r2; ed->sel_end_c = c2;
+    teditor_ensure_cursor_visible(ed);
+}
+
+static int find_word_prev(const char *line, int col) {
+    if (!line || col <= 0) return 0;
+    int c = col;
+    while (c > 0 && (line[c - 1] == ' ' || line[c - 1] == '\t')) c--;
+    while (c > 0 && line[c - 1] != ' ' && line[c - 1] != '\t') {
+        c = utf8_prev_offset(line, c);
+    }
+    return c;
+}
+
+static int find_word_next(const char *line, int col) {
+    if (!line) return 0;
+    int len = (int)strlen(line);
+    if (col >= len) return len;
+    int c = col;
+    while (c < len && line[c] != ' ' && line[c] != '\t') {
+        c = utf8_next_offset(line, c);
+    }
+    while (c < len && (line[c] == ' ' || line[c] == '\t')) c++;
+    return c;
+}
+
+/* ── Word Wrap & Japanese Kinsoku Shori ───────────────────────────────── */
+static BOOL is_cjk_no_break_before(TC code) {
+    if (code == '.' || code == ',' || code == '!' || code == '?' ||
+        code == ':' || code == ';' || code == ')' || code == ']' || code == '}') {
+        return TRUE;
+    }
+    if ((code >> 8) == 0x21) {
+        UB low = code & 0xFF;
+        if (low >= 0x22 && low <= 0x2A) return TRUE; /* 、 。 ， ． ・ ： ； ？ ！ */
+        if (low == 0x3C) return TRUE; /* ー */
+        if (low == 0x4B || low == 0x4D || low == 0x4F || low == 0x51 ||
+            low == 0x53 || low == 0x55 || low == 0x57 || low == 0x59 || low == 0x5B) {
+            return TRUE; /* ） 〕 〉 》 ］ ｝ 」 』 】 */
+        }
+    }
+    return FALSE;
+}
+
+static int teditor_wrap_line(const char *utf8_line, int max_w, char wrapped_lines[][TEDITOR_MAX_COLS], int max_wrapped) {
+    if (!utf8_line || max_wrapped <= 0) return 0;
+    if (utf8_line[0] == '\0') {
+        wrapped_lines[0][0] = '\0';
+        return 1;
+    }
+    if (max_w < 40) max_w = 40;
+
+    const char *p = utf8_line;
+    const char *line_start = p;
+    const char *last_break = NULL;
+    H cur_line_w = 0;
+    TC prev_code = 0;
+    int line_idx = 0;
+
+    while (*p && line_idx < max_wrapped) {
+        int consumed = 0;
+        TC code = utf8_to_tc(p, &consumed);
+        int step = (consumed > 0) ? consumed : 1;
+        H adv = tc_get_char_advance(code, prev_code);
+
+        if (*p == ' ') {
+            last_break = p;
+        } else if (*p == '-' || *p == '/') {
+            last_break = p + 1;
+        } else if ((code >> 8) == 0x6F && (code & 0xFF) == 0x0B) {
+            last_break = p + step;
+        } else if (adv == 16) {
+            if (prev_code != 0 && !is_cjk_no_break_before(code)) {
+                last_break = p;
+            }
+        }
+
+        if (cur_line_w + adv > max_w && cur_line_w > 0) {
+            const char *break_pt = last_break;
+            if (!break_pt || break_pt <= line_start) {
+                break_pt = p;
+            }
+            int len = (int)(break_pt - line_start);
+            if (len >= TEDITOR_MAX_COLS) len = TEDITOR_MAX_COLS - 1;
+            memcpy(wrapped_lines[line_idx], line_start, len);
+            wrapped_lines[line_idx][len] = '\0';
+            line_idx++;
+
+            if (*break_pt == ' ') break_pt++;
+            p = break_pt;
+            line_start = p;
+            last_break = NULL;
+            cur_line_w = 0;
+            prev_code = 0;
+            continue;
+        }
+
+        cur_line_w += adv;
+        if (adv > 0 || (code >> 8) != 0x6F) {
+            prev_code = code;
+        }
+        p += step;
+    }
+
+    if (line_start && line_idx < max_wrapped) {
+        int len = (int)strlen(line_start);
+        if (len >= TEDITOR_MAX_COLS) len = TEDITOR_MAX_COLS - 1;
+        memcpy(wrapped_lines[line_idx], line_start, len);
+        wrapped_lines[line_idx][len] = '\0';
+        line_idx++;
+    }
+    return line_idx;
+}
+
+void teditor_toggle_wrap(TEditor *ed) {
+    if (!ed) return;
+    ed->wrap_text = !ed->wrap_text;
+}
+
+/* ── Anders & Volumes Hierarchical Tree Menu Subsystem ────────────────── */
+typedef struct {
+    const char *label;
+    const char *path;
+    int child_start;
+    int child_count;
+    BOOL is_separator;
+} TEditorTreeNode;
+
+enum {
+    /* Level 1: Open Menu Root Items (indices 0..5) */
+    TN_ROOT_SYS = 0,
+    TN_ROOT_ANDERS,
+    TN_ROOT_SEP,
+    TN_ROOT_SUTRA,
+    TN_ROOT_REPORT,
+    TN_ROOT_FSMD,
+
+    /* Level 2: Under /SYS (indices 6..9) */
+    TN_SYS_REPORT,
+    TN_SYS_FSMD,
+    TN_SYS_SUTRA,
+    TN_SYS_HELLO,
+
+    /* Level 2: Under /ANDERS (indices 10..12) */
+    TN_ANDERS_BOOK,
+    TN_ANDERS_FOUNDATIONS,
+    TN_ANDERS_MATHEMATICS,
+
+    /* Level 3: Under foundations (indices 13..16) */
+    TN_FND_LOGIC,
+    TN_FND_MLTT,
+    TN_FND_MODAL,
+    TN_FND_UNIVALENT,
+
+    /* Level 3: Under mathematics (indices 17..21) */
+    TN_MATH_ALGEBRA,
+    TN_MATH_ANALYSIS,
+    TN_MATH_CATEGORIES,
+    TN_MATH_GEOMETRY,
+    TN_MATH_HOMOTOPY,
+
+    /* Level 4: Under foundations/logic (indices 22..28) */
+    TN_LOGIC_AWODEY,
+    TN_LOGIC_FAVONIA,
+    TN_LOGIC_HILBERT,
+    TN_LOGIC_HLYVENKO,
+    TN_LOGIC_KRAUS,
+    TN_LOGIC_MINIMALIST,
+    TN_LOGIC_MIPHAM,
+
+    /* Level 4: Under foundations/mltt (indices 29..42) */
+    TN_MLTT_BOOL,
+    TN_MLTT_EITHER,
+    TN_MLTT_FIN,
+    TN_MLTT_INDUCTIVE,
+    TN_MLTT_LAMBDA,
+    TN_MLTT_LIST,
+    TN_MLTT_MAYBE,
+    TN_MLTT_MLTT,
+    TN_MLTT_NAT,
+    TN_MLTT_NATW,
+    TN_MLTT_PI,
+    TN_MLTT_PROTO,
+    TN_MLTT_SIGMA,
+    TN_MLTT_VEC,
+
+    /* Level 4: Under foundations/modal (indices 43..48) */
+    TN_MODAL_FLAT,
+    TN_MODAL_INFINITESIMAL,
+    TN_MODAL_MODALITY,
+    TN_MODAL_SHARP,
+    TN_MODAL_STT,
+    TN_MODAL_TWISTED,
+
+    /* Level 4: Under foundations/univalent (indices 49..55) */
+    TN_UNIV_CARTESIAN,
+    TN_UNIV_EQUIV,
+    TN_UNIV_EXTENSIONALITY,
+    TN_UNIV_HEDBERG,
+    TN_UNIV_ISO,
+    TN_UNIV_PATH,
+    TN_UNIV_PROP,
+
+    /* Level 4: Under mathematics/algebra (indices 56..59) */
+    TN_ALG_ALGEBRA,
+    TN_ALG_HOMOLOGY,
+    TN_ALG_INT,
+    TN_ALG_PYTHAGOR,
+
+    /* Level 4: Under mathematics/analysis (indices 60..62) */
+    TN_ANA_BOREL,
+    TN_ANA_REAL,
+    TN_ANA_TOPOLOGY,
+
+    /* Level 4: Under mathematics/categories (indices 63..75) */
+    TN_CAT_ABELIAN,
+    TN_CAT_ADJUNCTION,
+    TN_CAT_CARTESIAN,
+    TN_CAT_CAT,
+    TN_CAT_CATEGORY,
+    TN_CAT_EQUIVALENCE,
+    TN_CAT_FUNCTOR,
+    TN_CAT_GROUPOID,
+    TN_CAT_NATURAL,
+    TN_CAT_SYMMETRIC,
+    TN_CAT_TOPOS,
+    TN_CAT_UNIVERSAL,
+    TN_CAT_YONEDA,
+
+    /* Level 4: Under mathematics/geometry (indices 76..79) */
+    TN_GEO_BUNDLE,
+    TN_GEO_ETALE,
+    TN_GEO_FORMALDISC,
+    TN_GEO_KREIN,
+
+    /* Level 4: Under mathematics/homotopy (indices 80..99) */
+    TN_HOM_KG1,
+    TN_HOM_KGN,
+    TN_HOM_S1,
+    TN_HOM_SN,
+    TN_HOM_SNW,
+    TN_HOM_COEQUALIZER,
+    TN_HOM_COLIM,
+    TN_HOM_CONSTCUBES,
+    TN_HOM_HOMOTOPY,
+    TN_HOM_HOPF,
+    TN_HOM_HS,
+    TN_HOM_HSW,
+    TN_HOM_LOOP,
+    TN_HOM_PULLBACK,
+    TN_HOM_PUSHOUT,
+    TN_HOM_QUOTIENT,
+    TN_HOM_QUOTIENT2,
+    TN_HOM_SETQUOT,
+    TN_HOM_SUSPENSION,
+    TN_HOM_TRUNCATION,
+
+    TN_TOTAL_COUNT
+};
+
+static const TEditorTreeNode s_tree_nodes[] = {
+    /* Level 1: Root */
+    [TN_ROOT_SYS]       = { "[/SYS] System Docs ▶", NULL, TN_SYS_REPORT, 4, FALSE },
+    [TN_ROOT_ANDERS]    = { "[/ANDERS] Anders Proofs ▶", NULL, TN_ANDERS_BOOK, 3, FALSE },
+    [TN_ROOT_SEP]       = { "", NULL, -1, 0, TRUE },
+    [TN_ROOT_SUTRA]     = { "Heart_Sutra_Tibetan.txt", "Heart_Sutra_Tibetan.txt", -1, 0, FALSE },
+    [TN_ROOT_REPORT]    = { "BTRON3_Report.txt", "BTRON3_Report.txt", -1, 0, FALSE },
+    [TN_ROOT_FSMD]      = { "FS.md", "FS.md", -1, 0, FALSE },
+
+    /* Level 2: /SYS */
+    [TN_SYS_REPORT]     = { "BTRON3_Report.txt", "BTRON3_Report.txt", -1, 0, FALSE },
+    [TN_SYS_FSMD]       = { "FS.md", "FS.md", -1, 0, FALSE },
+    [TN_SYS_SUTRA]      = { "Heart_Sutra_Tibetan.txt", "Heart_Sutra_Tibetan.txt", -1, 0, FALSE },
+    [TN_SYS_HELLO]      = { "hello.txt", "hello.txt", -1, 0, FALSE },
+
+    /* Level 2: /ANDERS */
+    [TN_ANDERS_BOOK]        = { "book.anders.txt", "assets/anders/book.anders.txt", -1, 0, FALSE },
+    [TN_ANDERS_FOUNDATIONS] = { "foundations ▶", NULL, TN_FND_LOGIC, 4, FALSE },
+    [TN_ANDERS_MATHEMATICS] = { "mathematics ▶", NULL, TN_MATH_ALGEBRA, 5, FALSE },
+
+    /* Level 3: foundations */
+    [TN_FND_LOGIC]      = { "logic ▶", NULL, TN_LOGIC_AWODEY, 7, FALSE },
+    [TN_FND_MLTT]       = { "mltt ▶", NULL, TN_MLTT_BOOL, 14, FALSE },
+    [TN_FND_MODAL]      = { "modal ▶", NULL, TN_MODAL_FLAT, 6, FALSE },
+    [TN_FND_UNIVALENT]  = { "univalent ▶", NULL, TN_UNIV_CARTESIAN, 7, FALSE },
+
+    /* Level 3: mathematics */
+    [TN_MATH_ALGEBRA]    = { "algebra ▶", NULL, TN_ALG_ALGEBRA, 4, FALSE },
+    [TN_MATH_ANALYSIS]   = { "analysis ▶", NULL, TN_ANA_BOREL, 3, FALSE },
+    [TN_MATH_CATEGORIES] = { "categories ▶", NULL, TN_CAT_ABELIAN, 13, FALSE },
+    [TN_MATH_GEOMETRY]   = { "geometry ▶", NULL, TN_GEO_BUNDLE, 4, FALSE },
+    [TN_MATH_HOMOTOPY]   = { "homotopy ▶", NULL, TN_HOM_KG1, 20, FALSE },
+
+    /* Level 4: logic */
+    [TN_LOGIC_AWODEY]     = { "awodey.anders.txt", "assets/anders/foundations/logic/awodey.anders.txt", -1, 0, FALSE },
+    [TN_LOGIC_FAVONIA]    = { "favonia.anders.txt", "assets/anders/foundations/logic/favonia.anders.txt", -1, 0, FALSE },
+    [TN_LOGIC_HILBERT]    = { "hilbert.anders.txt", "assets/anders/foundations/logic/hilbert.anders.txt", -1, 0, FALSE },
+    [TN_LOGIC_HLYVENKO]   = { "hlyvenko.anders.txt", "assets/anders/foundations/logic/hlyvenko.anders.txt", -1, 0, FALSE },
+    [TN_LOGIC_KRAUS]      = { "kraus.anders.txt", "assets/anders/foundations/logic/kraus.anders.txt", -1, 0, FALSE },
+    [TN_LOGIC_MINIMALIST] = { "minimalist.anders.txt", "assets/anders/foundations/logic/minimalist.anders.txt", -1, 0, FALSE },
+    [TN_LOGIC_MIPHAM]     = { "mipham.anders.txt", "assets/anders/foundations/logic/mipham.anders.txt", -1, 0, FALSE },
+
+    /* Level 4: mltt */
+    [TN_MLTT_BOOL]        = { "bool.anders.txt", "assets/anders/foundations/mltt/bool.anders.txt", -1, 0, FALSE },
+    [TN_MLTT_EITHER]      = { "either.anders.txt", "assets/anders/foundations/mltt/either.anders.txt", -1, 0, FALSE },
+    [TN_MLTT_FIN]         = { "fin.anders.txt", "assets/anders/foundations/mltt/fin.anders.txt", -1, 0, FALSE },
+    [TN_MLTT_INDUCTIVE]   = { "inductive.anders.txt", "assets/anders/foundations/mltt/inductive.anders.txt", -1, 0, FALSE },
+    [TN_MLTT_LAMBDA]      = { "lambda.anders.txt", "assets/anders/foundations/mltt/lambda.anders.txt", -1, 0, FALSE },
+    [TN_MLTT_LIST]        = { "list.anders.txt", "assets/anders/foundations/mltt/list.anders.txt", -1, 0, FALSE },
+    [TN_MLTT_MAYBE]       = { "maybe.anders.txt", "assets/anders/foundations/mltt/maybe.anders.txt", -1, 0, FALSE },
+    [TN_MLTT_MLTT]        = { "mltt.anders.txt", "assets/anders/foundations/mltt/mltt.anders.txt", -1, 0, FALSE },
+    [TN_MLTT_NAT]         = { "nat.anders.txt", "assets/anders/foundations/mltt/nat.anders.txt", -1, 0, FALSE },
+    [TN_MLTT_NATW]        = { "natw.anders.txt", "assets/anders/foundations/mltt/natw.anders.txt", -1, 0, FALSE },
+    [TN_MLTT_PI]          = { "pi.anders.txt", "assets/anders/foundations/mltt/pi.anders.txt", -1, 0, FALSE },
+    [TN_MLTT_PROTO]       = { "proto.anders.txt", "assets/anders/foundations/mltt/proto.anders.txt", -1, 0, FALSE },
+    [TN_MLTT_SIGMA]       = { "sigma.anders.txt", "assets/anders/foundations/mltt/sigma.anders.txt", -1, 0, FALSE },
+    [TN_MLTT_VEC]         = { "vec.anders.txt", "assets/anders/foundations/mltt/vec.anders.txt", -1, 0, FALSE },
+
+    /* Level 4: modal */
+    [TN_MODAL_FLAT]          = { "flat.anders.txt", "assets/anders/foundations/modal/flat.anders.txt", -1, 0, FALSE },
+    [TN_MODAL_INFINITESIMAL] = { "infinitesimal.anders.txt", "assets/anders/foundations/modal/infinitesimal.anders.txt", -1, 0, FALSE },
+    [TN_MODAL_MODALITY]      = { "modality.anders.txt", "assets/anders/foundations/modal/modality.anders.txt", -1, 0, FALSE },
+    [TN_MODAL_SHARP]         = { "sharp.anders.txt", "assets/anders/foundations/modal/sharp.anders.txt", -1, 0, FALSE },
+    [TN_MODAL_STT]           = { "stt.anders.txt", "assets/anders/foundations/modal/stt.anders.txt", -1, 0, FALSE },
+    [TN_MODAL_TWISTED]       = { "twisted.anders.txt", "assets/anders/foundations/modal/twisted.anders.txt", -1, 0, FALSE },
+
+    /* Level 4: univalent */
+    [TN_UNIV_CARTESIAN]      = { "cartesian.anders.txt", "assets/anders/foundations/univalent/cartesian.anders.txt", -1, 0, FALSE },
+    [TN_UNIV_EQUIV]          = { "equiv.anders.txt", "assets/anders/foundations/univalent/equiv.anders.txt", -1, 0, FALSE },
+    [TN_UNIV_EXTENSIONALITY] = { "extensionality.anders.txt", "assets/anders/foundations/univalent/extensionality.anders.txt", -1, 0, FALSE },
+    [TN_UNIV_HEDBERG]        = { "hedberg.anders.txt", "assets/anders/foundations/univalent/hedberg.anders.txt", -1, 0, FALSE },
+    [TN_UNIV_ISO]            = { "iso.anders.txt", "assets/anders/foundations/univalent/iso.anders.txt", -1, 0, FALSE },
+    [TN_UNIV_PATH]           = { "path.anders.txt", "assets/anders/foundations/univalent/path.anders.txt", -1, 0, FALSE },
+    [TN_UNIV_PROP]           = { "prop.anders.txt", "assets/anders/foundations/univalent/prop.anders.txt", -1, 0, FALSE },
+
+    /* Level 4: algebra */
+    [TN_ALG_ALGEBRA]   = { "algebra.anders.txt", "assets/anders/mathematics/algebra/algebra.anders.txt", -1, 0, FALSE },
+    [TN_ALG_HOMOLOGY]  = { "homology.anders.txt", "assets/anders/mathematics/algebra/homology.anders.txt", -1, 0, FALSE },
+    [TN_ALG_INT]       = { "int.anders.txt", "assets/anders/mathematics/algebra/int.anders.txt", -1, 0, FALSE },
+    [TN_ALG_PYTHAGOR]  = { "pythagor.anders.txt", "assets/anders/mathematics/algebra/pythagor.anders.txt", -1, 0, FALSE },
+
+    /* Level 4: analysis */
+    [TN_ANA_BOREL]     = { "borel.anders.txt", "assets/anders/mathematics/analysis/borel.anders.txt", -1, 0, FALSE },
+    [TN_ANA_REAL]      = { "real.anders.txt", "assets/anders/mathematics/analysis/real.anders.txt", -1, 0, FALSE },
+    [TN_ANA_TOPOLOGY]  = { "topology.anders.txt", "assets/anders/mathematics/analysis/topology.anders.txt", -1, 0, FALSE },
+
+    /* Level 4: categories */
+    [TN_CAT_ABELIAN]     = { "abelian.anders.txt", "assets/anders/mathematics/categories/abelian.anders.txt", -1, 0, FALSE },
+    [TN_CAT_ADJUNCTION]  = { "adjunction.anders.txt", "assets/anders/mathematics/categories/adjunction.anders.txt", -1, 0, FALSE },
+    [TN_CAT_CARTESIAN]   = { "cartesian.anders.txt", "assets/anders/mathematics/categories/cartesian.anders.txt", -1, 0, FALSE },
+    [TN_CAT_CAT]         = { "cat.anders.txt", "assets/anders/mathematics/categories/cat.anders.txt", -1, 0, FALSE },
+    [TN_CAT_CATEGORY]    = { "category.anders.txt", "assets/anders/mathematics/categories/category.anders.txt", -1, 0, FALSE },
+    [TN_CAT_EQUIVALENCE] = { "equivalence.anders.txt", "assets/anders/mathematics/categories/equivalence.anders.txt", -1, 0, FALSE },
+    [TN_CAT_FUNCTOR]     = { "functor.anders.txt", "assets/anders/mathematics/categories/functor.anders.txt", -1, 0, FALSE },
+    [TN_CAT_GROUPOID]    = { "groupoid.anders.txt", "assets/anders/mathematics/categories/groupoid.anders.txt", -1, 0, FALSE },
+    [TN_CAT_NATURAL]     = { "natural.anders.txt", "assets/anders/mathematics/categories/natural.anders.txt", -1, 0, FALSE },
+    [TN_CAT_SYMMETRIC]   = { "symmetric.anders.txt", "assets/anders/mathematics/categories/symmetric.anders.txt", -1, 0, FALSE },
+    [TN_CAT_TOPOS]       = { "topos.anders.txt", "assets/anders/mathematics/categories/topos.anders.txt", -1, 0, FALSE },
+    [TN_CAT_UNIVERSAL]   = { "universal.anders.txt", "assets/anders/mathematics/categories/universal.anders.txt", -1, 0, FALSE },
+    [TN_CAT_YONEDA]      = { "yoneda.anders.txt", "assets/anders/mathematics/categories/yoneda.anders.txt", -1, 0, FALSE },
+
+    /* Level 4: geometry */
+    [TN_GEO_BUNDLE]      = { "bundle.anders.txt", "assets/anders/mathematics/geometry/bundle.anders.txt", -1, 0, FALSE },
+    [TN_GEO_ETALE]       = { "etale.anders.txt", "assets/anders/mathematics/geometry/etale.anders.txt", -1, 0, FALSE },
+    [TN_GEO_FORMALDISC]  = { "formalDisc.anders.txt", "assets/anders/mathematics/geometry/formalDisc.anders.txt", -1, 0, FALSE },
+    [TN_GEO_KREIN]       = { "krein.anders.txt", "assets/anders/mathematics/geometry/krein.anders.txt", -1, 0, FALSE },
+
+    /* Level 4: homotopy */
+    [TN_HOM_KG1]         = { "KG1.anders.txt", "assets/anders/mathematics/homotopy/KG1.anders.txt", -1, 0, FALSE },
+    [TN_HOM_KGN]         = { "KGn.anders.txt", "assets/anders/mathematics/homotopy/KGn.anders.txt", -1, 0, FALSE },
+    [TN_HOM_S1]          = { "S1.anders.txt", "assets/anders/mathematics/homotopy/S1.anders.txt", -1, 0, FALSE },
+    [TN_HOM_SN]          = { "Sn.anders.txt", "assets/anders/mathematics/homotopy/Sn.anders.txt", -1, 0, FALSE },
+    [TN_HOM_SNW]         = { "Snw.anders.txt", "assets/anders/mathematics/homotopy/Snw.anders.txt", -1, 0, FALSE },
+    [TN_HOM_COEQUALIZER] = { "coequalizer.anders.txt", "assets/anders/mathematics/homotopy/coequalizer.anders.txt", -1, 0, FALSE },
+    [TN_HOM_COLIM]       = { "colim.anders.txt", "assets/anders/mathematics/homotopy/colim.anders.txt", -1, 0, FALSE },
+    [TN_HOM_CONSTCUBES]  = { "constcubes.anders.txt", "assets/anders/mathematics/homotopy/constcubes.anders.txt", -1, 0, FALSE },
+    [TN_HOM_HOMOTOPY]    = { "homotopy.anders.txt", "assets/anders/mathematics/homotopy/homotopy.anders.txt", -1, 0, FALSE },
+    [TN_HOM_HOPF]        = { "hopf.anders.txt", "assets/anders/mathematics/homotopy/hopf.anders.txt", -1, 0, FALSE },
+    [TN_HOM_HS]          = { "hs.anders.txt", "assets/anders/mathematics/homotopy/hs.anders.txt", -1, 0, FALSE },
+    [TN_HOM_HSW]         = { "hsw.anders.txt", "assets/anders/mathematics/homotopy/hsw.anders.txt", -1, 0, FALSE },
+    [TN_HOM_LOOP]        = { "loop.anders.txt", "assets/anders/mathematics/homotopy/loop.anders.txt", -1, 0, FALSE },
+    [TN_HOM_PULLBACK]    = { "pullback.anders.txt", "assets/anders/mathematics/homotopy/pullback.anders.txt", -1, 0, FALSE },
+    [TN_HOM_PUSHOUT]     = { "pushout.anders.txt", "assets/anders/mathematics/homotopy/pushout.anders.txt", -1, 0, FALSE },
+    [TN_HOM_QUOTIENT]    = { "quotient.anders.txt", "assets/anders/mathematics/homotopy/quotient.anders.txt", -1, 0, FALSE },
+    [TN_HOM_QUOTIENT2]   = { "quotient2.anders.txt", "assets/anders/mathematics/homotopy/quotient2.anders.txt", -1, 0, FALSE },
+    [TN_HOM_SETQUOT]     = { "setquot.anders.txt", "assets/anders/mathematics/homotopy/setquot.anders.txt", -1, 0, FALSE },
+    [TN_HOM_SUSPENSION]  = { "suspension.anders.txt", "assets/anders/mathematics/homotopy/suspension.anders.txt", -1, 0, FALSE },
+    [TN_HOM_TRUNCATION]  = { "truncation.anders.txt", "assets/anders/mathematics/homotopy/truncation.anders.txt", -1, 0, FALSE },
+};
+
+static void teditor_get_level_box(const TEditor *ed, GDEV *dev, int level, RECT *out_box, int *out_start, int *out_count) {
+    if (!ed || !out_box || !out_start || !out_count) return;
+    *out_start = -1;
+    *out_count = 0;
+    memset(out_box, 0, sizeof(RECT));
+
+    if (level == 0) {
+        char files[32][64];
+        int count = teditor_get_asset_files(files, 32);
+        *out_start = 0;
+        *out_count = count;
+        H x = ed->menu_bar.headers[0].rect.left + APP_MENU_DROPDOWN_WIDTH - 2;
+        H y = APP_MENU_BAR_HEIGHT + 3 + 1 * APP_MENU_ROW_HEIGHT;
+        H w = 240;
+        H h = (*out_count) * APP_MENU_ROW_HEIGHT + 6;
+        if (dev && x + w > dev->width) x = ed->menu_bar.headers[0].rect.left - w + 2;
+        out_box->left = x; out_box->top = y;
+        out_box->right = x + w; out_box->bottom = y + h;
+        return;
+    }
+
+    RECT parent_box;
+    int parent_start = -1, parent_count = 0;
+    teditor_get_level_box(ed, dev, level - 1, &parent_box, &parent_start, &parent_count);
+    int hov = ed->tree_hover[level - 1];
+    if (hov < 0 || hov >= parent_count) return;
+
+    if (level == 1) {
+        if (hov == 0) {
+            /* /SYS */
+            *out_start = TN_SYS_REPORT;
+            *out_count = 4;
+        } else if (hov == 1) {
+            /* /ANDERS */
+            *out_start = TN_ANDERS_BOOK;
+            *out_count = 3;
+        } else {
+            return;
+        }
+    } else {
+        int parent_node = parent_start + hov;
+        if (parent_node >= TN_TOTAL_COUNT) return;
+        if (s_tree_nodes[parent_node].child_start < 0 || s_tree_nodes[parent_node].child_count <= 0) return;
+
+        *out_start = s_tree_nodes[parent_node].child_start;
+        *out_count = s_tree_nodes[parent_node].child_count;
+    }
+
+    H w = (level == 1) ? 220 : ((level == 2) ? 190 : 250);
+    H h = (*out_count) * APP_MENU_ROW_HEIGHT + 6;
+    H x = parent_box.right - 2;
+    if (dev && x + w > dev->width) {
+        x = parent_box.left - w + 2;
+        if (x < 0) x = 0;
+    }
+    H y = parent_box.top + 3 + hov * APP_MENU_ROW_HEIGHT;
+    if (dev && y + h > dev->height - 20) y = dev->height - 20 - h;
+    if (y < APP_MENU_BAR_HEIGHT) y = APP_MENU_BAR_HEIGHT;
+
+    out_box->left = x; out_box->top = y;
+    out_box->right = x + w; out_box->bottom = y + h;
+}
+
+static void teditor_paint_tree_menu(const TEditor *ed, GDEV *dev) {
+    if (!ed || !dev) return;
+    char root_files[32][64];
+    int root_count = teditor_get_asset_files(root_files, 32);
+
+    for (int lvl = 0; lvl < 4; lvl++) {
+        RECT box;
+        int start = -1, count = 0;
+        teditor_get_level_box(ed, dev, lvl, &box, &start, &count);
+        if (count <= 0 || start < 0) break;
+
+        app_menu_draw_3d_bevel_box(dev, &box);
+
+        for (int i = 0; i < count; i++) {
+            const char *label = "";
+            BOOL has_sub = FALSE;
+            BOOL is_sep = FALSE;
+
+            if (lvl == 0) {
+                if (i < root_count) {
+                    label = root_files[i];
+                    if (i == 0 || i == 1) has_sub = TRUE;
+                }
+            } else {
+                int node_idx = start + i;
+                if (node_idx < TN_TOTAL_COUNT) {
+                    const TEditorTreeNode *node = &s_tree_nodes[node_idx];
+                    label = node->label;
+                    has_sub = (node->child_count > 0);
+                    is_sep = node->is_separator;
+                }
+            }
+
+            RECT row = { box.left + 3, box.top + 3 + i * APP_MENU_ROW_HEIGHT,
+                         box.right - 3, box.top + 3 + (i + 1) * APP_MENU_ROW_HEIGHT };
+
+            if (is_sep) {
+                H mid_y = (row.top + row.bottom) / 2;
+                drw_lin(dev, row.left + 2, mid_y, row.right - 2, mid_y);
+                continue;
+            }
+
+            BOOL is_hov = (ed->tree_hover[lvl] == i);
+            if (is_hov) {
+                fill_rec(dev, &row, COLOR_NAVY);
+            }
+            COLOR fg = is_hov ? COLOR_WHITE : COLOR_BLACK;
+            drw_tc_string(dev, row.left + 6, row.top + 3, label, fg, 0x00000000);
+            if (has_sub) {
+                drw_tc_string(dev, row.right - 16, row.top + 3, "▶", fg, 0x00000000);
+            }
+        }
+    }
+}
+
+static BOOL teditor_handle_tree_mouse(TEditor *ed, WND *wnd, H rel_x, H rel_y, BOOL is_click) {
+    if (!ed || ed->menu_bar.active_menu != 0 || ed->menu_bar.active_submenu != 1) return FALSE;
+
+    GDEV *dev = wnd ? wnd->dev : NULL;
+    char root_files[32][64];
+    int root_count = teditor_get_asset_files(root_files, 32);
+
+    for (int lvl = 3; lvl >= 0; lvl--) {
+        RECT box;
+        int start = -1, count = 0;
+        teditor_get_level_box(ed, dev, lvl, &box, &start, &count);
+        if (count <= 0 || start < 0) continue;
+
+        if (rel_x >= box.left && rel_x <= box.right && rel_y >= box.top && rel_y <= box.bottom) {
+            int idx = (rel_y - (box.top + 3)) / APP_MENU_ROW_HEIGHT;
+            if (idx >= 0 && idx < count) {
+                if (is_click) {
+                    const char *target_path = NULL;
+                    if (lvl == 0) {
+                        if (idx >= 2 && idx < root_count) {
+                            target_path = root_files[idx];
+                        }
+                    } else {
+                        int node_idx = start + idx;
+                        if (node_idx < TN_TOTAL_COUNT) {
+                            const TEditorTreeNode *node = &s_tree_nodes[node_idx];
+                            if (node->path && node->path[0] != '\0') {
+                                target_path = node->path;
+                            }
+                        }
+                    }
+
+                    if (target_path) {
+                        teditor_load_file(ed, target_path);
+                        if (wnd) snprintf(wnd->title, sizeof(wnd->title), "Editor - %s", ed->filename);
+                        teditor_close_menu(ed);
+                        return TRUE;
+                    }
+                } else {
+                    if (ed->tree_hover[lvl] != idx) {
+                        ed->tree_hover[lvl] = idx;
+                        for (int k = lvl + 1; k < 4; k++) ed->tree_hover[k] = -1;
+                    }
+                    return TRUE;
+                }
+            }
+            return TRUE;
+        }
+    }
+    return FALSE;
+}
+
 /* ── BTRON 3.20 & BeOS-Style Menu System ─────────────────────────────── */
 typedef enum {
     TMENU_FILE = 0,
@@ -500,6 +1120,7 @@ enum {
     TCMD_VIEW_ZOOM_IN,
     TCMD_VIEW_ZOOM_OUT,
     TCMD_VIEW_TOGGLE_LINES,
+    TCMD_VIEW_WRAP_TOGGLE,
     TCMD_VOBJ_INSERT,
     TCMD_VOBJ_CABINET,
     TCMD_HELP_ABOUT
@@ -523,7 +1144,7 @@ static void teditor_init_menu_bar(TEditor *ed) {
     app_menu_add_submenu_item(&ed->menu_bar, h0, "開く (Open) ▶", TCMD_FILE_OPEN_ASSET, 1);
     app_menu_add_separator(&ed->menu_bar, h0);
     app_menu_add_item(&ed->menu_bar, h0, "上書き保存 (Save)", "Ctrl+S", TCMD_FILE_SAVE, TRUE);
-    app_menu_add_item(&ed->menu_bar, h0, "閉じる (Close)", "Ctrl+W", TCMD_FILE_CLOSE, TRUE);
+    app_menu_add_item(&ed->menu_bar, h0, "閉じる (Close)", "Ctrl+Q", TCMD_FILE_CLOSE, TRUE);
 
     int h1 = app_menu_add_header(&ed->menu_bar, "編集(E)", 72);
     app_menu_add_item(&ed->menu_bar, h1, "元に戻す (Undo)", "Ctrl+Z", TCMD_EDIT_UNDO, FALSE);
@@ -538,6 +1159,7 @@ static void teditor_init_menu_bar(TEditor *ed) {
     app_menu_add_item(&ed->menu_bar, h2, "縮小 (Zoom Out)", "-", TCMD_VIEW_ZOOM_OUT, TRUE);
     app_menu_add_separator(&ed->menu_bar, h2);
     app_menu_add_item(&ed->menu_bar, h2, "行番号表示 (Line Nums)", "", TCMD_VIEW_TOGGLE_LINES, TRUE);
+    app_menu_add_item(&ed->menu_bar, h2, "行折り返し (Wrap Text)", "Ctrl+W", TCMD_VIEW_WRAP_TOGGLE, TRUE);
 
     int h3 = app_menu_add_header(&ed->menu_bar, "仮身(O)", 72);
     app_menu_add_item(&ed->menu_bar, h3, "仮身を挿入 (Insert Fusen)", "", TCMD_VOBJ_INSERT, TRUE);
@@ -552,6 +1174,18 @@ static void teditor_init_menu_bar(TEditor *ed) {
 int teditor_get_asset_files(char files[][64], int max_files) {
     if (!files || max_files <= 0) return 0;
     int count = 0;
+
+    /* Row 0 & 1: Top-level Volume roots */
+    if (count < max_files) {
+        strncpy(files[count], "[/SYS] System Docs ▶", 63);
+        files[count][63] = '\0';
+        count++;
+    }
+    if (count < max_files) {
+        strncpy(files[count], "[/ANDERS] Anders Proofs ▶", 63);
+        files[count][63] = '\0';
+        count++;
+    }
 
     /* 1. Discover files from BTRON volume if mounted */
     if (g_sys_vol) {
@@ -610,18 +1244,23 @@ int teditor_get_asset_files(char files[][64], int max_files) {
     }
 #endif
 
-    if (count == 0) {
-        strncpy(files[0], "FS.md", 63);
-        count++;
-        if (max_files > 1) {
-            strncpy(files[1], "BTRON3_Report.txt", 63);
-            count++;
-        }
-        if (max_files > 2) {
-            strncpy(files[2], "Heart_Sutra_Tibetan.txt", 63);
+    /* Fallback if no files discovered */
+    if (count <= 2) {
+        const char *defaults[] = {
+            "BTRON3_Report.txt",
+            "Heart_Sutra_Tibetan.txt",
+            "FS.md",
+            "README.md",
+            "CLU.md",
+            "hello.txt"
+        };
+        for (size_t i = 0; i < sizeof(defaults)/sizeof(defaults[0]) && count < max_files; i++) {
+            strncpy(files[count], defaults[i], 63);
+            files[count][63] = '\0';
             count++;
         }
     }
+
     return count;
 }
 
@@ -635,6 +1274,7 @@ void teditor_open_menu(TEditor *ed, int menu_idx) {
 void teditor_close_menu(TEditor *ed) {
     if (!ed) return;
     app_menu_close(&ed->menu_bar);
+    for (int i = 0; i < 4; i++) ed->tree_hover[i] = -1;
     teditor_sync_menu_state(ed);
 }
 
@@ -649,7 +1289,7 @@ static void teditor_execute_menu_cmd(TEditor *ed, WND *wnd, int cmd, int sub_idx
         case TCMD_FILE_OPEN_ASSET: {
             char files[32][64];
             int cnt = teditor_get_asset_files(files, 32);
-            if (sub_idx >= 0 && sub_idx < cnt) {
+            if (sub_idx >= 2 && sub_idx < cnt) {
                 teditor_load_file(ed, files[sub_idx]);
                 snprintf(wnd->title, sizeof(wnd->title), "Editor - %s", ed->filename);
             }
@@ -661,6 +1301,9 @@ static void teditor_execute_menu_cmd(TEditor *ed, WND *wnd, int cmd, int sub_idx
             break;
         case TCMD_FILE_CLOSE:
             cls_wnd(wnd);
+            break;
+        case TCMD_VIEW_WRAP_TOGGLE:
+            teditor_toggle_wrap(ed);
             break;
         case TCMD_EDIT_CUT:
             teditor_copy_selection(ed);
@@ -720,6 +1363,9 @@ static void handle_t_editor_event(WND *wnd, const EVT *evt) {
     if (evt->type == EV_MOUSE_MOVE) {
         H rel_x = evt->pos.x - wnd->client.left;
         H rel_y = evt->pos.y - wnd->client.top;
+        if (teditor_handle_tree_mouse(ed, wnd, rel_x, rel_y, FALSE)) {
+            return;
+        }
         if (app_menu_handle_mouse_move(&ed->menu_bar, rel_x, rel_y)) {
             teditor_sync_menu_state(ed);
             return;
@@ -731,6 +1377,10 @@ static void handle_t_editor_event(WND *wnd, const EVT *evt) {
     if (evt->type == EV_BUT_DOWN) {
         H rel_x = evt->pos.x - wnd->client.left;
         H rel_y = evt->pos.y - wnd->client.top;
+
+        if (teditor_handle_tree_mouse(ed, wnd, rel_x, rel_y, TRUE)) {
+            return;
+        }
 
         int cmd = 0, sub_idx = -1;
         if (app_menu_handle_mouse_down(&ed->menu_bar, rel_x, rel_y, &cmd, &sub_idx)) {
@@ -757,6 +1407,8 @@ static void handle_t_editor_event(WND *wnd, const EVT *evt) {
                 int text_x_offset = ed->show_line_nums ? 36 : 10;
                 ed->cursor_col = teditor_find_byte_offset_from_x(ed->lines[click_r], rel_x - (text_x_offset - 36));
                 ed->sel_active = FALSE;
+                ed->sel_anchor_r = ed->cursor_row;
+                ed->sel_anchor_c = ed->cursor_col;
                 teditor_ensure_cursor_visible(ed);
             }
         }
@@ -810,13 +1462,8 @@ static void handle_t_editor_event(WND *wnd, const EVT *evt) {
                 teditor_paste_clipboard(ed);
                 return;
             } else if (sym == 'a' || sym == 'A') {
-                ed->sel_active = TRUE;
-                ed->sel_start_r = 0;
-                ed->sel_start_c = 0;
-                ed->sel_end_r = ed->total_lines - 1;
-                ed->sel_end_c = (int)strlen(ed->lines[ed->total_lines - 1]);
-                ed->cursor_row = ed->sel_end_r;
-                ed->cursor_col = ed->sel_end_c;
+                teditor_move_cursor(ed, 0, 0, FALSE);
+                teditor_move_cursor(ed, ed->total_lines - 1, (int)strlen(ed->lines[ed->total_lines - 1]), TRUE);
                 return;
             } else if (sym == 's' || sym == 'S') {
                 ed->is_modified = FALSE;
@@ -833,6 +1480,9 @@ static void handle_t_editor_event(WND *wnd, const EVT *evt) {
                 ed->active_submenu = 1;
                 return;
             } else if (sym == 'w' || sym == 'W') {
+                teditor_toggle_wrap(ed);
+                return;
+            } else if (sym == 'q' || sym == 'Q') {
                 cls_wnd(wnd);
                 return;
             }
@@ -848,73 +1498,80 @@ static void handle_t_editor_event(WND *wnd, const EVT *evt) {
             teditor_delete_char_forward(ed);
             return;
         } else if (sym == BTRON_KEY_LEFT) {
-            if (shift && !ed->sel_active) {
-                ed->sel_active = TRUE;
-                ed->sel_start_r = ed->cursor_row;
-                ed->sel_start_c = ed->cursor_col;
-            }
-            if (ed->cursor_col > 0) {
-                ed->cursor_col = utf8_prev_offset(ed->lines[ed->cursor_row], ed->cursor_col);
-            } else if (ed->cursor_row > 0) {
-                ed->cursor_row--;
-                ed->cursor_col = (int)strlen(ed->lines[ed->cursor_row]);
-            }
-            if (shift) {
-                ed->sel_end_r = ed->cursor_row;
-                ed->sel_end_c = ed->cursor_col;
+            int nr = ed->cursor_row;
+            int nc = ed->cursor_col;
+            if (ctrl) {
+                if (nc > 0) {
+                    nc = find_word_prev(ed->lines[nr], nc);
+                } else if (nr > 0) {
+                    nr--;
+                    nc = (int)strlen(ed->lines[nr]);
+                }
             } else {
-                ed->sel_active = FALSE;
+                if (nc > 0) {
+                    nc = utf8_prev_offset(ed->lines[nr], nc);
+                } else if (nr > 0) {
+                    nr--;
+                    nc = (int)strlen(ed->lines[nr]);
+                }
             }
-            teditor_ensure_cursor_visible(ed);
+            teditor_move_cursor(ed, nr, nc, shift);
             return;
         } else if (sym == BTRON_KEY_RIGHT) {
-            if (shift && !ed->sel_active) {
-                ed->sel_active = TRUE;
-                ed->sel_start_r = ed->cursor_row;
-                ed->sel_start_c = ed->cursor_col;
-            }
-            int len = (int)strlen(ed->lines[ed->cursor_row]);
-            if (ed->cursor_col < len) {
-                ed->cursor_col = utf8_next_offset(ed->lines[ed->cursor_row], ed->cursor_col);
-            } else if (ed->cursor_row < ed->total_lines - 1) {
-                ed->cursor_row++;
-                ed->cursor_col = 0;
-            }
-            if (shift) {
-                ed->sel_end_r = ed->cursor_row;
-                ed->sel_end_c = ed->cursor_col;
+            int nr = ed->cursor_row;
+            int nc = ed->cursor_col;
+            int len = (int)strlen(ed->lines[nr]);
+            if (ctrl) {
+                if (nc < len) {
+                    nc = find_word_next(ed->lines[nr], nc);
+                } else if (nr < ed->total_lines - 1) {
+                    nr++;
+                    nc = 0;
+                }
             } else {
-                ed->sel_active = FALSE;
+                if (nc < len) {
+                    nc = utf8_next_offset(ed->lines[nr], nc);
+                } else if (nr < ed->total_lines - 1) {
+                    nr++;
+                    nc = 0;
+                }
             }
-            teditor_ensure_cursor_visible(ed);
+            teditor_move_cursor(ed, nr, nc, shift);
             return;
         } else if (sym == BTRON_KEY_UP) {
-            if (ed->cursor_row > 0) {
-                ed->cursor_row--;
-                int len = (int)strlen(ed->lines[ed->cursor_row]);
-                if (ed->cursor_col > len) ed->cursor_col = len;
-            }
-            ed->sel_active = FALSE;
-            teditor_ensure_cursor_visible(ed);
+            int nr = (ed->cursor_row > 0) ? ed->cursor_row - 1 : 0;
+            teditor_move_cursor(ed, nr, ed->cursor_col, shift);
             return;
         } else if (sym == BTRON_KEY_DOWN) {
-            if (ed->cursor_row < ed->total_lines - 1) {
-                ed->cursor_row++;
-                int len = (int)strlen(ed->lines[ed->cursor_row]);
-                if (ed->cursor_col > len) ed->cursor_col = len;
-            }
-            ed->sel_active = FALSE;
-            teditor_ensure_cursor_visible(ed);
+            int nr = (ed->cursor_row < ed->total_lines - 1) ? ed->cursor_row + 1 : ed->total_lines - 1;
+            teditor_move_cursor(ed, nr, ed->cursor_col, shift);
             return;
         } else if (sym == BTRON_KEY_HOME) {
-            ed->cursor_col = 0;
-            ed->sel_active = FALSE;
-            teditor_ensure_cursor_visible(ed);
+            if (ctrl) {
+                teditor_move_cursor(ed, 0, 0, shift);
+            } else {
+                teditor_move_cursor(ed, ed->cursor_row, 0, shift);
+            }
             return;
         } else if (sym == BTRON_KEY_END) {
-            ed->cursor_col = (int)strlen(ed->lines[ed->cursor_row]);
-            ed->sel_active = FALSE;
-            teditor_ensure_cursor_visible(ed);
+            if (ctrl) {
+                int last_r = ed->total_lines - 1;
+                teditor_move_cursor(ed, last_r, (int)strlen(ed->lines[last_r]), shift);
+            } else {
+                teditor_move_cursor(ed, ed->cursor_row, (int)strlen(ed->lines[ed->cursor_row]), shift);
+            }
+            return;
+        } else if (sym == BTRON_KEY_PAGE_UP || sym == 0x8052) {
+            int vrows = (wnd && wnd->dev) ? (wnd->dev->height - 60) / 18 : 14;
+            int nr = ed->cursor_row - vrows;
+            if (nr < 0) nr = 0;
+            teditor_move_cursor(ed, nr, ed->cursor_col, shift);
+            return;
+        } else if (sym == BTRON_KEY_PAGE_DOWN || sym == 0x8053) {
+            int vrows = (wnd && wnd->dev) ? (wnd->dev->height - 60) / 18 : 14;
+            int nr = ed->cursor_row + vrows;
+            if (nr >= ed->total_lines) nr = ed->total_lines - 1;
+            teditor_move_cursor(ed, nr, ed->cursor_col, shift);
             return;
         } else if (sym == BTRON_KEY_TAB || sym == '\t') {
             teditor_insert_text(ed, "    ");
@@ -953,8 +1610,13 @@ static void paint_t_editor(WND *wnd, GDEV *dev) {
     int end_r = start_r + view_rows;
     if (end_r > ed->total_lines) end_r = ed->total_lines;
 
+    int sel_r1 = 0, sel_c1 = 0, sel_r2 = 0, sel_c2 = 0;
+    if (ed->sel_active) {
+        teditor_get_selection_range(ed, &sel_r1, &sel_c1, &sel_r2, &sel_c2);
+    }
+
     int y = 24;
-    for (int r_idx = start_r; r_idx < end_r; r_idx++) {
+    for (int r_idx = start_r; r_idx < end_r && y < dev->height - 40; r_idx++) {
         /* Gutter line number */
         if (ed->show_line_nums) {
             char num_str[10];
@@ -963,9 +1625,96 @@ static void paint_t_editor(WND *wnd, GDEV *dev) {
         }
 
         int text_x_start = ed->show_line_nums ? 36 : 12;
-
-        /* Line content */
         const char *line = ed->lines[r_idx];
+
+        if (ed->wrap_text) {
+            char wrapped[16][TEDITOR_MAX_COLS];
+            int text_w = dev->width - 16 - text_x_start;
+            int nwrap = teditor_wrap_line(line, text_w, wrapped, 16);
+            int byte_base = 0;
+
+            for (int v = 0; v < nwrap && y < dev->height - 40; v++) {
+                const char *wp = wrapped[v];
+                int x = text_x_start;
+                int sub_byte_idx = 0;
+
+                while (*wp && x < dev->width - 16) {
+                    int consumed = 0;
+                    (void)utf8_to_tc(wp, &consumed);
+                    int step = (consumed > 0 ? consumed : 1);
+                    int cur_byte = byte_base + sub_byte_idx;
+
+                    BOOL in_sel = FALSE;
+                    if (ed->sel_active) {
+                        if (r_idx > sel_r1 && r_idx < sel_r2) in_sel = TRUE;
+                        else if (r_idx == sel_r1 && r_idx == sel_r2) {
+                            if (cur_byte >= sel_c1 && cur_byte < sel_c2) in_sel = TRUE;
+                        } else if (r_idx == sel_r1) {
+                            if (cur_byte >= sel_c1) in_sel = TRUE;
+                        } else if (r_idx == sel_r2) {
+                            if (cur_byte < sel_c2) in_sel = TRUE;
+                        }
+                    }
+
+                    COLOR fg = in_sel ? COLOR_WHITE : COLOR_BLACK;
+                    COLOR bg = in_sel ? COLOR_NAVY : COLOR_WHITE;
+                    char glyph[8] = "";
+                    memcpy(glyph, wp, step);
+                    glyph[step] = '\0';
+
+                    int gw = tc_calc_string_width(glyph, step);
+                    RECT gr = { x, y, x + gw, y + 16 };
+                    if (in_sel) fill_rec(dev, &gr, bg);
+                    drw_tc_string(dev, x, y, glyph, fg, bg);
+
+                    x += gw;
+                    wp += step;
+                    sub_byte_idx += step;
+                }
+
+                /* Draw cursor on matching wrapped sub-line */
+                if (r_idx == ed->cursor_row) {
+                    int wlen = (int)strlen(wrapped[v]);
+                    BOOL cursor_on_sub = FALSE;
+                    int sub_cursor_col = 0;
+
+                    if (v == nwrap - 1) {
+                        if (ed->cursor_col >= byte_base) {
+                            cursor_on_sub = TRUE;
+                            sub_cursor_col = ed->cursor_col - byte_base;
+                            if (sub_cursor_col > wlen) sub_cursor_col = wlen;
+                        }
+                    } else {
+                        if (ed->cursor_col >= byte_base && ed->cursor_col < byte_base + wlen) {
+                            cursor_on_sub = TRUE;
+                            sub_cursor_col = ed->cursor_col - byte_base;
+                        }
+                    }
+
+                    if (cursor_on_sub) {
+                        int cur_x = text_x_start + tc_calc_string_width(wrapped[v], sub_cursor_col);
+                        if (cur_x >= text_x_start && cur_x < dev->width - 10) {
+                            if (wnd->focused && tip_get_state() != TIP_STATE_IDLE) {
+                                char comp_buf[128];
+                                tip_get_converted_text(comp_buf, sizeof(comp_buf));
+                                BOOL is_dotted = (tip_get_state() == TIP_STATE_PRECOMP);
+                                drw_tc_string_underlined(dev, cur_x, y, comp_buf, COLOR_NAVY, COLOR_WHITE, is_dotted);
+                                tip_set_caret_pos(wnd->bounds.left + cur_x, wnd->bounds.top + y);
+                            } else if (wnd->focused) {
+                                RECT cursor_rect = { cur_x, y, cur_x + 2, y + 16 };
+                                fill_rec(dev, &cursor_rect, COLOR_NAVY);
+                            }
+                        }
+                    }
+                }
+
+                byte_base += (int)strlen(wrapped[v]);
+                y += 18;
+            }
+            continue;
+        }
+
+        /* Line content (unwrapped mode) */
         const char *p = line;
         int byte_idx = 0;
         int x = text_x_start;
@@ -976,13 +1725,15 @@ static void paint_t_editor(WND *wnd, GDEV *dev) {
 
             /* Selection check */
             BOOL in_sel = FALSE;
-            if (r_idx > ed->sel_start_r && r_idx < ed->sel_end_r) in_sel = TRUE;
-            else if (r_idx == ed->sel_start_r && r_idx == ed->sel_end_r) {
-                if (byte_idx >= ed->sel_start_c && byte_idx < ed->sel_end_c) in_sel = TRUE;
-            } else if (r_idx == ed->sel_start_r) {
-                if (byte_idx >= ed->sel_start_c) in_sel = TRUE;
-            } else if (r_idx == ed->sel_end_r) {
-                if (byte_idx < ed->sel_end_c) in_sel = TRUE;
+            if (ed->sel_active) {
+                if (r_idx > sel_r1 && r_idx < sel_r2) in_sel = TRUE;
+                else if (r_idx == sel_r1 && r_idx == sel_r2) {
+                    if (byte_idx >= sel_c1 && byte_idx < sel_c2) in_sel = TRUE;
+                } else if (r_idx == sel_r1) {
+                    if (byte_idx >= sel_c1) in_sel = TRUE;
+                } else if (r_idx == sel_r2) {
+                    if (byte_idx < sel_c2) in_sel = TRUE;
+                }
             }
 
             COLOR fg = in_sel ? COLOR_WHITE : COLOR_BLACK;
@@ -1003,7 +1754,6 @@ static void paint_t_editor(WND *wnd, GDEV *dev) {
 
         /* Draw Blinking/Solid Cursor and Inline TIP Composition */
         if (r_idx == ed->cursor_row) {
-            int text_x_start = ed->show_line_nums ? 36 : 12;
             int cur_x = text_x_start + tc_calc_string_width(line, ed->cursor_col);
             if (cur_x >= text_x_start && cur_x < dev->width - 10) {
                 if (wnd->focused && tip_get_state() != TIP_STATE_IDLE) {
@@ -1040,8 +1790,8 @@ static void paint_t_editor(WND *wnd, GDEV *dev) {
                            ((tip_get_mode() == TIP_MODE_KATAKANA) ? "ア" :
                             ((tip_get_mode() == TIP_MODE_TIBETAN) ? "བོད" : "A"));
     char status_buf[128];
-    snprintf(status_buf, sizeof(status_buf), " Line %d, Col %d  |  TRON-Code (Tibetan/JIS)  |  [CUA INS]",
-             ed->cursor_row + 1, ed->cursor_col + 1);
+    snprintf(status_buf, sizeof(status_buf), " Line %d, Col %d  |  TRON-Code (Tibetan/JIS)  |  %s  |  [CUA INS]",
+             ed->cursor_row + 1, ed->cursor_col + 1, ed->wrap_text ? "[WRAP]" : "[NOWRAP]");
     drw_tc_string(dev, 8, dev->height - 16, status_buf, COLOR_BLACK, COLOR_LTGRAY);
 
     /* Interactive Status Bar Mozc Mode Badge Button */
@@ -1056,9 +1806,7 @@ static void paint_t_editor(WND *wnd, GDEV *dev) {
     if (ed->menu_bar.active_menu >= 0) {
         app_menu_paint_dropdown(&ed->menu_bar, dev);
         if (ed->menu_bar.active_menu == 0 && ed->menu_bar.active_submenu == 1) {
-            char files[32][64];
-            int file_cnt = teditor_get_asset_files(files, 32);
-            app_menu_paint_cascading_strings(&ed->menu_bar, dev, (const char(*)[64])files, file_cnt);
+            teditor_paint_tree_menu(ed, dev);
         }
     }
 }
@@ -1072,6 +1820,7 @@ WND* open_t_editor_window_rect(const char *filepath, H x, H y, H w, H h, UW attr
     ed->hover_item = -1;
     ed->active_submenu = -1;
     ed->hover_subitem = -1;
+    for (int i = 0; i < 4; i++) ed->tree_hover[i] = -1;
     ed->show_line_nums = TRUE;
 
     if (!filepath || teditor_load_file(ed, filepath) != 0) {
@@ -1118,6 +1867,7 @@ int teditor_load_file(TEditor *ed, const char *filepath) {
     ed->hover_item = -1;
     ed->active_submenu = -1;
     ed->hover_subitem = -1;
+    for (int i = 0; i < 4; i++) ed->tree_hover[i] = -1;
 
     /* Extract base filename */
     const char *slash = strrchr(filepath, '/');
@@ -1128,7 +1878,7 @@ int teditor_load_file(TEditor *ed, const char *filepath) {
     const char *base = slash ? slash + 1 : filepath;
 
     /* 1. Try loading from BTRON volume if mounted */
-    if (g_sys_vol) {
+    if (g_sys_vol || g_anders_vol) {
         ID fd = opn_fil(base, 0x0001 /* F_READ */);
         if (fd < 0 && filepath[0] != '/') {
             fd = opn_fil(filepath, 0x0001);
@@ -1199,6 +1949,10 @@ int teditor_load_file(TEditor *ed, const char *filepath) {
             if (!fp) {
                 snprintf(alt_path, sizeof(alt_path), "assets/%s", base);
                 fp = fopen(alt_path, "r");
+                if (!fp) {
+                    snprintf(alt_path, sizeof(alt_path), "assets/anders/%s", base);
+                    fp = fopen(alt_path, "r");
+                }
             }
         }
     }

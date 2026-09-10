@@ -32,6 +32,7 @@ typedef struct Volume Volume;
  * All CLU builtins in clu_fs.c operate on g_sys_vol.
  */
 extern Volume *g_sys_vol;
+extern Volume *g_anders_vol;
 
 /*
  * g_cwd_path — current working path (UTF-8), updated by clu_cd.

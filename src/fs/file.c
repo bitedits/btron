@@ -190,10 +190,14 @@ static FID find_fid_by_name(Volume *v, const char *name)
 /* ── opn_fil ─────────────────────────────────────────────────────── */
 ID opn_fil(const char *path, UW mode)
 {
-    Volume *v = g_sys_vol;
-    if (!v || !path) return (ID)-1;
+    if (!path) return (ID)-1;
 
-    /* Strip leading "/" or "/SYS/" prefix for flat namespace lookup */
+    Volume *v = g_sys_vol;
+    if (strncmp(path, "/ANDERS", 7) == 0 && g_anders_vol) {
+        v = g_anders_vol;
+    }
+
+    /* Strip leading "/" or "/SYS/" or "/ANDERS/" prefix for flat namespace lookup */
     const char *name = path;
     if (name[0] == '/') {
         while (*name == '/') name++;
@@ -203,7 +207,12 @@ ID opn_fil(const char *path, UW mode)
         if (*sl == '/') name = sl + 1;
     }
 
-    FID fid = find_fid_by_name(v, name);
+    FID fid = FID_INVALID;
+    if (v) fid = find_fid_by_name(v, name);
+    if (fid == FID_INVALID && g_anders_vol && v != g_anders_vol) {
+        fid = find_fid_by_name(g_anders_vol, name);
+        if (fid != FID_INVALID) v = g_anders_vol;
+    }
     if (fid == FID_INVALID) return (ID)-1;
 
     /* Find a free slot */
@@ -211,6 +220,7 @@ ID opn_fil(const char *path, UW mode)
         if (!g_open_files[i].used) {
             OpenFile *of = &g_open_files[i];
             memset(of, 0, sizeof(*of));
+            of->vol      = v;
             of->fid      = fid;
             of->hdr_blk  = vol_fid_get_blk(v, fid);
             of->mode     = mode;
@@ -310,7 +320,7 @@ ER cls_fil(ID fd)
         of->hdr.mtime      = now_ts();
         of->hdr.total_size = of->data_used;
         of->hdr.data_blk   = of->data_blk;
-        write_header_block(g_sys_vol, of->hdr_blk, of);
+        write_header_block(of_vol(of), of->hdr_blk, of);
     }
     memset(of, 0, sizeof(*of));
     return (ER)0;
@@ -453,7 +463,7 @@ ER del_rec(ID fd, W rec_idx)
     of->hdr.nrec = of->nrec;
     of->dirty    = 1;
 
-    write_header_block(g_sys_vol, of->hdr_blk, of);
+    write_header_block(of_vol(of), of->hdr_blk, of);
     return (ER)0;
 }
 
@@ -600,17 +610,24 @@ ER trn_rec(ID rec_id, W sz)
 }
 
 /* ── opn_dir / rd_dir / cls_dir ──────────────────────────────────── */
-typedef struct { UW next_fid; } DirState;
+typedef struct {
+    UW next_fid;
+    Volume *vol;
+} DirState;
 static DirState g_dirs[16];
 static int      g_dir_used[16];
 
 ID opn_dir(const char *path)
 {
-    (void)path; /* flat namespace: always list all FIDs in g_sys_vol */
+    Volume *v = g_sys_vol;
+    if (path && strncmp(path, "/ANDERS", 7) == 0 && g_anders_vol) {
+        v = g_anders_vol;
+    }
     for (int i = 0; i < 16; i++) {
         if (!g_dir_used[i]) {
             g_dir_used[i] = 1;
             g_dirs[i].next_fid = 0;
+            g_dirs[i].vol = v;
             return (ID)(0x1000 + i);
         }
     }
@@ -621,7 +638,7 @@ ER rd_dir(ID dir_id, DIR_ENTRY *entry)
 {
     int slot = (int)(dir_id - 0x1000);
     if (slot < 0 || slot >= 16 || !g_dir_used[slot]) return (ER)-1;
-    Volume *v = g_sys_vol;
+    Volume *v = g_dirs[slot].vol ? g_dirs[slot].vol : g_sys_vol;
     if (!v) return (ER)-1;
 
     UW nfmax = vol_nfmax(v);
@@ -701,7 +718,7 @@ ER cre_lnk(const char *link_path, const FS_LINK *target)
     ER err = ins_rec(fd, 0, payload, (W)(16 + nlen));
     if (err == 0) {
         of->ridx[0].type = (UH)RT_LINK;
-        write_header_block(g_sys_vol, of->hdr_blk, of);
+        write_header_block(of_vol(of), of->hdr_blk, of);
     }
     cls_fil(fd);
     return err;

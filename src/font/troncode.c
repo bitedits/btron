@@ -356,6 +356,15 @@ TC utf8_to_tc(const char *utf8_str, int *bytes_consumed) {
         if (cp == 0x0490) return (TC)0x2790;
         if (cp == 0x0491) return (TC)0x2791;
 
+        /* Greek and Coptic U+0370 - U+03FF -> Plane 1 (0x2A00 | (cp - 0x0300)) */
+        if (cp >= 0x0370 && cp <= 0x03FF) {
+            return (TC)(0x2A00 | (cp - 0x0300));
+        }
+        /* Spacing Modifier Letters U+02B0 - U+02FF (e.g. ˢ U+02E2) -> Plane 1 (0x2800 | (cp - 0x0200)) */
+        if (cp >= 0x02B0 && cp <= 0x02FF) {
+            return (TC)(0x2800 | (cp - 0x0200));
+        }
+
         return (TC)(0x2000 | (cp & 0x0FFF));
     } else if ((s[0] & 0xF0) == 0xE0) {
         /* 3-byte UTF-8 sequence */
@@ -388,6 +397,31 @@ TC utf8_to_tc(const char *utf8_str, int *bytes_consumed) {
             if (cp == 0x2022) return (TC)0x23FA; /* Bullet • */
             return (TC)(0x2600 | (cp - 0x2000));
         }
+        /* Superscripts and Subscripts U+2070 - U+209F -> Plane 1 (0x2E00 | (cp - 0x2070)) */
+        if (cp >= 0x2070 && cp <= 0x209F) {
+            return (TC)(0x2E00 | (cp - 0x2070));
+        }
+        /* Letterlike Symbols U+2100 - U+214F (e.g. ℕ U+2115, ℙ U+2119, ℤ U+2124) -> Plane 1 (0x2F00 | (cp - 0x2100)) */
+        if (cp >= 0x2100 && cp <= 0x214F) {
+            if (cp == 0x2116) return (TC)0x2116; /* № */
+            return (TC)(0x2F00 | (cp - 0x2100));
+        }
+        /* Arrows U+2190 - U+21FF (including ↦ U+21A6) -> Plane 1 (0x2D00 | (cp - 0x2100)) */
+        if (cp >= 0x2190 && cp <= 0x21FF) {
+            return (TC)(0x2D00 | (cp - 0x2100));
+        }
+        /* Mathematical Operators U+2200 - U+22FF -> Plane 1 (0x2C00 | (cp - 0x2200)) */
+        if (cp >= 0x2200 && cp <= 0x22FF) {
+            return (TC)(0x2C00 | (cp - 0x2200));
+        }
+        /* Supplemental Arrows U+27F0 - U+27FF (e.g. ⟶ U+27F6) -> Plane 1 (0x2680 | (cp - 0x27F0)) */
+        if (cp >= 0x27F0 && cp <= 0x27FF) {
+            return (TC)(0x2680 | (cp - 0x27F0));
+        }
+        /* Phonetic Extensions U+1D00 - U+1D7F -> Plane 1 (0x2A80 | (cp - 0x1D00)) */
+        if (cp >= 0x1D00 && cp <= 0x1D7F) {
+            return (TC)(0x2A80 | (cp - 0x1D00));
+        }
         /* Unicode Box Drawing U+2500 - U+257F -> Plane 1 (0x2300 - 0x237F) */
         if (cp >= 0x2500 && cp <= 0x257F) {
             return (TC)(0x2300 | (cp - 0x2500));
@@ -400,12 +434,6 @@ TC utf8_to_tc(const char *utf8_str, int *bytes_consumed) {
         if (cp >= 0x25A0 && cp <= 0x25FF) {
             return (TC)(0x23A0 | (cp - 0x25A0));
         }
-        /* Arrows U+2190 - U+2199 -> Plane 1 (0x23E0 - 0x23E9) */
-        if (cp >= 0x2190 && cp <= 0x2199) {
-            return (TC)(0x23E0 | (cp - 0x2190));
-        }
-        /* Ukrainian / General Symbols (e.g. № U+2116) */
-        if (cp == 0x2116) return (TC)0x2116;
 
         /* Common CJK Ideographs U+4E00 - U+9FFF -> Plane 1/2 (0x3000 - 0x8200) */
         if (cp >= 0x4E00 && cp <= 0x9FFF) {
@@ -419,6 +447,14 @@ TC utf8_to_tc(const char *utf8_str, int *bytes_consumed) {
     } else if ((s[0] & 0xF8) == 0xF0) {
         /* 4-byte UTF-8 sequence */
         if (bytes_consumed) *bytes_consumed = 4;
+        UW cp = ((UW)(s[0] & 0x07) << 18) |
+                ((UW)(s[1] & 0x3F) << 12) |
+                ((UW)(s[2] & 0x3F) << 6) |
+                ((UW)(s[3] & 0x3F));
+        /* Mathematical Alphanumeric Symbols U+1D400 - U+1D7FF -> Plane 3 (0x8800 | ((cp - 0x1D400) & 0x07FF)) */
+        if (cp >= 0x1D400 && cp <= 0x1D7FF) {
+            return (TC)(0x8800 | ((cp - 0x1D400) & 0x07FF));
+        }
         return (TC)(0xFF80 | (s[3] & 0x7F));
     }
 
@@ -536,6 +572,79 @@ int tc_to_utf8(TC code, char *utf8_buf, int max_len) {
         utf8_buf[2] = (char)(0x80 | (cp & 0x3F));
         utf8_buf[3] = '\0';
         return 3;
+    } else if (high == 0x28) {
+        /* Spacing Modifier Letters U+0200 + low */
+        UW cp = 0x0200 + low;
+        utf8_buf[0] = (char)(0xC0 | ((cp >> 6) & 0x1F));
+        utf8_buf[1] = (char)(0x80 | (cp & 0x3F));
+        utf8_buf[2] = '\0';
+        return 2;
+    } else if (high == 0x2A) {
+        if (low >= 0x80) {
+            /* Phonetic Extensions U+1D00 + (low - 0x80) */
+            UW cp = 0x1D00 + (low - 0x80);
+            utf8_buf[0] = (char)(0xE0 | ((cp >> 12) & 0x0F));
+            utf8_buf[1] = (char)(0x80 | ((cp >> 6) & 0x3F));
+            utf8_buf[2] = (char)(0x80 | (cp & 0x3F));
+            utf8_buf[3] = '\0';
+            return 3;
+        } else {
+            /* Greek and Coptic U+0300 + low */
+            UW cp = 0x0300 + low;
+            utf8_buf[0] = (char)(0xC0 | ((cp >> 6) & 0x1F));
+            utf8_buf[1] = (char)(0x80 | (cp & 0x3F));
+            utf8_buf[2] = '\0';
+            return 2;
+        }
+    } else if (high == 0x2C) {
+        /* Mathematical Operators U+2200 + low */
+        UW cp = 0x2200 + low;
+        utf8_buf[0] = (char)(0xE0 | ((cp >> 12) & 0x0F));
+        utf8_buf[1] = (char)(0x80 | ((cp >> 6) & 0x3F));
+        utf8_buf[2] = (char)(0x80 | (cp & 0x3F));
+        utf8_buf[3] = '\0';
+        return 3;
+    } else if (high == 0x2D) {
+        /* Arrows U+2100 + low */
+        UW cp = 0x2100 + low;
+        utf8_buf[0] = (char)(0xE0 | ((cp >> 12) & 0x0F));
+        utf8_buf[1] = (char)(0x80 | ((cp >> 6) & 0x3F));
+        utf8_buf[2] = (char)(0x80 | (cp & 0x3F));
+        utf8_buf[3] = '\0';
+        return 3;
+    } else if (high == 0x2E) {
+        /* Superscripts and Subscripts U+2070 + low */
+        UW cp = 0x2070 + low;
+        utf8_buf[0] = (char)(0xE0 | ((cp >> 12) & 0x0F));
+        utf8_buf[1] = (char)(0x80 | ((cp >> 6) & 0x3F));
+        utf8_buf[2] = (char)(0x80 | (cp & 0x3F));
+        utf8_buf[3] = '\0';
+        return 3;
+    } else if (high == 0x2F) {
+        /* Letterlike Symbols U+2100 + low */
+        UW cp = 0x2100 + low;
+        utf8_buf[0] = (char)(0xE0 | ((cp >> 12) & 0x0F));
+        utf8_buf[1] = (char)(0x80 | ((cp >> 6) & 0x3F));
+        utf8_buf[2] = (char)(0x80 | (cp & 0x3F));
+        utf8_buf[3] = '\0';
+        return 3;
+    } else if (high == 0x26 && low >= 0x80) {
+        /* Supplemental Arrows U+27F0 + (low - 0x80) */
+        UW cp = 0x27F0 + (low - 0x80);
+        utf8_buf[0] = (char)(0xE0 | ((cp >> 12) & 0x0F));
+        utf8_buf[1] = (char)(0x80 | ((cp >> 6) & 0x3F));
+        utf8_buf[2] = (char)(0x80 | (cp & 0x3F));
+        utf8_buf[3] = '\0';
+        return 3;
+    } else if ((code >> 11) == (0x8800 >> 11)) {
+        /* Mathematical Alphanumeric Symbols U+1D400 + offset */
+        UW cp = 0x1D400 + (code & 0x07FF);
+        utf8_buf[0] = (char)(0xF0 | ((cp >> 18) & 0x07));
+        utf8_buf[1] = (char)(0x80 | ((cp >> 12) & 0x3F));
+        utf8_buf[2] = (char)(0x80 | ((cp >> 6) & 0x3F));
+        utf8_buf[3] = (char)(0x80 | (cp & 0x3F));
+        utf8_buf[4] = '\0';
+        return 4;
     } else if (high >= 0x30 && high <= 0x85) {
         /* CJK Ideographs: U+4E00 + offset */
         UW offset = ((high - 0x30) << 8) | low;
@@ -1060,6 +1169,16 @@ const UB* get_glyph_bitmap(TC code, H *out_width, H *out_height) {
         if (bmp) {
             return bmp;
         }
+    } else if (n == 4) {
+        UW cp = (((unsigned char)utf8_buf[0] & 0x07) << 18) |
+                (((unsigned char)utf8_buf[1] & 0x3F) << 12) |
+                (((unsigned char)utf8_buf[2] & 0x3F) << 6) |
+                ((unsigned char)utf8_buf[3] & 0x3F);
+
+        const UB *bmp = get_jis_glyph_bitmap(cp);
+        if (bmp) {
+            return bmp;
+        }
     }
 
     return synthesize_japanese_glyph(code);
@@ -1085,7 +1204,10 @@ H tc_get_char_advance(TC code, TC prev_code) {
             return 0;
         }
         return 8; /* Exact 8px monospace advance matching ASCII 8x16 metrics */
-    } else if (code < 256 || ((code >> 8) == 0x20 && (code & 0xFF) >= 0x80) || (code >> 8) == 0x27 || (code >> 8) == 0x23 || code == 0x2116) {
+    } else if (code < 256 || ((code >> 8) == 0x20 && (code & 0xFF) >= 0x80) ||
+               (code >> 8) == 0x27 || (code >> 8) == 0x23 || code == 0x2116 ||
+               (code >> 8) == 0x28 || (code >> 8) == 0x2E ||
+               ((code >> 8) == 0x2A && (code & 0xFF) >= 0x80)) {
         return 8;
     } else {
         return 16;

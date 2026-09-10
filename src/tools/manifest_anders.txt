@@ -1,0 +1,101 @@
+# B-System /ANDERS Volume Manifest (Hierarchical Tree)
+# Processed by: mkbtronfs manifest_anders.txt -o btron_anders.vol -l ANDERS
+# Format: DIR "dirname" [parent] | FILE "filename" TXT payload [parent]
+
+# Top-level containers in root ANDERS volume
+DIR "foundations"  -
+DIR "mathematics"  -
+
+# Sub-containers under foundations
+DIR "logic"        foundations
+DIR "mltt"         foundations
+DIR "modal"        foundations
+DIR "univalent"    foundations
+
+# Sub-containers under mathematics
+DIR "algebra"      mathematics
+DIR "analysis"     mathematics
+DIR "categories"   mathematics
+DIR "geometry"     mathematics
+DIR "homotopy"     mathematics
+
+# Files in root
+FILE "book.anders.txt"   TXT   assets/anders/book.anders.txt   -
+FILE "awodey.anders.txt"   TXT   assets/anders/foundations/logic/awodey.anders.txt   logic
+FILE "favonia.anders.txt"   TXT   assets/anders/foundations/logic/favonia.anders.txt   logic
+FILE "hilbert.anders.txt"   TXT   assets/anders/foundations/logic/hilbert.anders.txt   logic
+FILE "hlyvenko.anders.txt"   TXT   assets/anders/foundations/logic/hlyvenko.anders.txt   logic
+FILE "kraus.anders.txt"   TXT   assets/anders/foundations/logic/kraus.anders.txt   logic
+FILE "minimalist.anders.txt"   TXT   assets/anders/foundations/logic/minimalist.anders.txt   logic
+FILE "mipham.anders.txt"   TXT   assets/anders/foundations/logic/mipham.anders.txt   logic
+FILE "bool.anders.txt"   TXT   assets/anders/foundations/mltt/bool.anders.txt   mltt
+FILE "either.anders.txt"   TXT   assets/anders/foundations/mltt/either.anders.txt   mltt
+FILE "fin.anders.txt"   TXT   assets/anders/foundations/mltt/fin.anders.txt   mltt
+FILE "inductive.anders.txt"   TXT   assets/anders/foundations/mltt/inductive.anders.txt   mltt
+FILE "lambda.anders.txt"   TXT   assets/anders/foundations/mltt/lambda.anders.txt   mltt
+FILE "list.anders.txt"   TXT   assets/anders/foundations/mltt/list.anders.txt   mltt
+FILE "maybe.anders.txt"   TXT   assets/anders/foundations/mltt/maybe.anders.txt   mltt
+FILE "mltt.anders.txt"   TXT   assets/anders/foundations/mltt/mltt.anders.txt   mltt
+FILE "nat.anders.txt"   TXT   assets/anders/foundations/mltt/nat.anders.txt   mltt
+FILE "natw.anders.txt"   TXT   assets/anders/foundations/mltt/natw.anders.txt   mltt
+FILE "pi.anders.txt"   TXT   assets/anders/foundations/mltt/pi.anders.txt   mltt
+FILE "proto.anders.txt"   TXT   assets/anders/foundations/mltt/proto.anders.txt   mltt
+FILE "sigma.anders.txt"   TXT   assets/anders/foundations/mltt/sigma.anders.txt   mltt
+FILE "vec.anders.txt"   TXT   assets/anders/foundations/mltt/vec.anders.txt   mltt
+FILE "flat.anders.txt"   TXT   assets/anders/foundations/modal/flat.anders.txt   modal
+FILE "infinitesimal.anders.txt"   TXT   assets/anders/foundations/modal/infinitesimal.anders.txt   modal
+FILE "modality.anders.txt"   TXT   assets/anders/foundations/modal/modality.anders.txt   modal
+FILE "sharp.anders.txt"   TXT   assets/anders/foundations/modal/sharp.anders.txt   modal
+FILE "stt.anders.txt"   TXT   assets/anders/foundations/modal/stt.anders.txt   modal
+FILE "twisted.anders.txt"   TXT   assets/anders/foundations/modal/twisted.anders.txt   modal
+FILE "cartesian.anders.txt"   TXT   assets/anders/foundations/univalent/cartesian.anders.txt   univalent
+FILE "equiv.anders.txt"   TXT   assets/anders/foundations/univalent/equiv.anders.txt   univalent
+FILE "extensionality.anders.txt"   TXT   assets/anders/foundations/univalent/extensionality.anders.txt   univalent
+FILE "hedberg.anders.txt"   TXT   assets/anders/foundations/univalent/hedberg.anders.txt   univalent
+FILE "iso.anders.txt"   TXT   assets/anders/foundations/univalent/iso.anders.txt   univalent
+FILE "path.anders.txt"   TXT   assets/anders/foundations/univalent/path.anders.txt   univalent
+FILE "prop.anders.txt"   TXT   assets/anders/foundations/univalent/prop.anders.txt   univalent
+FILE "algebra.anders.txt"   TXT   assets/anders/mathematics/algebra/algebra.anders.txt   algebra
+FILE "homology.anders.txt"   TXT   assets/anders/mathematics/algebra/homology.anders.txt   algebra
+FILE "int.anders.txt"   TXT   assets/anders/mathematics/algebra/int.anders.txt   algebra
+FILE "pythagor.anders.txt"   TXT   assets/anders/mathematics/algebra/pythagor.anders.txt   algebra
+FILE "borel.anders.txt"   TXT   assets/anders/mathematics/analysis/borel.anders.txt   analysis
+FILE "real.anders.txt"   TXT   assets/anders/mathematics/analysis/real.anders.txt   analysis
+FILE "topology.anders.txt"   TXT   assets/anders/mathematics/analysis/topology.anders.txt   analysis
+FILE "abelian.anders.txt"   TXT   assets/anders/mathematics/categories/abelian.anders.txt   categories
+FILE "adjunction.anders.txt"   TXT   assets/anders/mathematics/categories/adjunction.anders.txt   categories
+FILE "categories_cartesian.anders.txt"   TXT   assets/anders/mathematics/categories/cartesian.anders.txt   categories
+FILE "cat.anders.txt"   TXT   assets/anders/mathematics/categories/cat.anders.txt   categories
+FILE "category.anders.txt"   TXT   assets/anders/mathematics/categories/category.anders.txt   categories
+FILE "equivalence.anders.txt"   TXT   assets/anders/mathematics/categories/equivalence.anders.txt   categories
+FILE "functor.anders.txt"   TXT   assets/anders/mathematics/categories/functor.anders.txt   categories
+FILE "groupoid.anders.txt"   TXT   assets/anders/mathematics/categories/groupoid.anders.txt   categories
+FILE "natural.anders.txt"   TXT   assets/anders/mathematics/categories/natural.anders.txt   categories
+FILE "symmetric.anders.txt"   TXT   assets/anders/mathematics/categories/symmetric.anders.txt   categories
+FILE "topos.anders.txt"   TXT   assets/anders/mathematics/categories/topos.anders.txt   categories
+FILE "universal.anders.txt"   TXT   assets/anders/mathematics/categories/universal.anders.txt   categories
+FILE "yoneda.anders.txt"   TXT   assets/anders/mathematics/categories/yoneda.anders.txt   categories
+FILE "bundle.anders.txt"   TXT   assets/anders/mathematics/geometry/bundle.anders.txt   geometry
+FILE "etale.anders.txt"   TXT   assets/anders/mathematics/geometry/etale.anders.txt   geometry
+FILE "formalDisc.anders.txt"   TXT   assets/anders/mathematics/geometry/formalDisc.anders.txt   geometry
+FILE "krein.anders.txt"   TXT   assets/anders/mathematics/geometry/krein.anders.txt   geometry
+FILE "KG1.anders.txt"   TXT   assets/anders/mathematics/homotopy/KG1.anders.txt   homotopy
+FILE "KGn.anders.txt"   TXT   assets/anders/mathematics/homotopy/KGn.anders.txt   homotopy
+FILE "S1.anders.txt"   TXT   assets/anders/mathematics/homotopy/S1.anders.txt   homotopy
+FILE "Sn.anders.txt"   TXT   assets/anders/mathematics/homotopy/Sn.anders.txt   homotopy
+FILE "Snw.anders.txt"   TXT   assets/anders/mathematics/homotopy/Snw.anders.txt   homotopy
+FILE "coequalizer.anders.txt"   TXT   assets/anders/mathematics/homotopy/coequalizer.anders.txt   homotopy
+FILE "colim.anders.txt"   TXT   assets/anders/mathematics/homotopy/colim.anders.txt   homotopy
+FILE "constcubes.anders.txt"   TXT   assets/anders/mathematics/homotopy/constcubes.anders.txt   homotopy
+FILE "homotopy.anders.txt"   TXT   assets/anders/mathematics/homotopy/homotopy.anders.txt   homotopy
+FILE "hopf.anders.txt"   TXT   assets/anders/mathematics/homotopy/hopf.anders.txt   homotopy
+FILE "hs.anders.txt"   TXT   assets/anders/mathematics/homotopy/hs.anders.txt   homotopy
+FILE "hsw.anders.txt"   TXT   assets/anders/mathematics/homotopy/hsw.anders.txt   homotopy
+FILE "loop.anders.txt"   TXT   assets/anders/mathematics/homotopy/loop.anders.txt   homotopy
+FILE "pullback.anders.txt"   TXT   assets/anders/mathematics/homotopy/pullback.anders.txt   homotopy
+FILE "pushout.anders.txt"   TXT   assets/anders/mathematics/homotopy/pushout.anders.txt   homotopy
+FILE "quotient.anders.txt"   TXT   assets/anders/mathematics/homotopy/quotient.anders.txt   homotopy
+FILE "quotient2.anders.txt"   TXT   assets/anders/mathematics/homotopy/quotient2.anders.txt   homotopy
+FILE "setquot.anders.txt"   TXT   assets/anders/mathematics/homotopy/setquot.anders.txt   homotopy
+FILE "suspension.anders.txt"   TXT   assets/anders/mathematics/homotopy/suspension.anders.txt   homotopy
+FILE "truncation.anders.txt"   TXT   assets/anders/mathematics/homotopy/truncation.anders.txt   homotopy

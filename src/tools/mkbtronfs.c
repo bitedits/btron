@@ -49,11 +49,17 @@ static unsigned char *make_tad_text(const char *text, size_t *out_len)
     return buf;
 }
 
-/* ── Insert RT_LINK record into root container (FID 0) ──────────── */
-static void add_root_link(const char *name, FID fid)
+static char g_vol_name[40] = DEFAULT_VOLNAME;
+
+/* ── Insert RT_LINK record into parent container ──────────── */
+static void add_container_link(const char *container, const char *name, FID fid)
 {
-    ID root_fd = opn_fil("SYS", 0x0002 /* F_WRITE */);
-    if (root_fd < 0) return;
+    const char *parent = (container && container[0] && strcmp(container, "-") != 0) ? container : g_vol_name;
+    ID parent_fd = opn_fil(parent, 0x0002 /* F_WRITE */);
+    if (parent_fd < 0) {
+        fprintf(stderr, "mkbtronfs: warning: parent container '%s' not found for '%s'\n", parent, name);
+        return;
+    }
 
     unsigned char payload[16 + 40];
     memset(payload, 0, sizeof(payload));
@@ -67,17 +73,30 @@ static void add_root_link(const char *name, FID fid)
     payload[15] = (unsigned char)(nlen);
     memcpy(payload + 16, name, nlen);
 
-    OpenFile *of = &g_open_files[(int)root_fd];
+    OpenFile *of = &g_open_files[(int)parent_fd];
     int rec_idx = (int)of->nrec;
-    ER err = ins_rec(root_fd, rec_idx, payload, (int)(16 + nlen));
+    ER err = ins_rec(parent_fd, rec_idx, payload, (int)(16 + nlen));
     if (err == 0) {
-        fil_set_rec_type(root_fd, rec_idx, (UH)RT_LINK);
+        fil_set_rec_type(parent_fd, rec_idx, (UH)RT_LINK);
     }
-    cls_fil(root_fd);
+    cls_fil(parent_fd);
+}
+
+static int imprint_dir(const char *dir_name, const char *parent_container)
+{
+    ID fd = cre_fil(dir_name, 0x0002 /* F_WRITE */);
+    if (fd < 0) {
+        fprintf(stderr, "mkbtronfs: cre_fil dir '%s' failed\n", dir_name);
+        return -1;
+    }
+    FID fid = g_open_files[(int)fd].fid;
+    cls_fil(fd);
+    add_container_link(parent_container, dir_name, fid);
+    return 0;
 }
 
 /* ── Imprint one TAD file ───────────────────────────────────────── */
-static int imprint_tad(const char *vol_name_entry, const char *payload_path)
+static int imprint_tad(const char *vol_name_entry, const char *payload_path, const char *parent_container)
 {
     unsigned char *payload = NULL;
     size_t payload_len = 0;
@@ -127,13 +146,13 @@ static int imprint_tad(const char *vol_name_entry, const char *payload_path)
     free(payload);
 
     if (err == 0) {
-        add_root_link(vol_name_entry, fid);
+        add_container_link(parent_container, vol_name_entry, fid);
     }
     return (err == 0) ? 0 : -1;
 }
 
 /* ── Imprint one MD / TXT file ──────────────────────────────────── */
-static int imprint_text(const char *vol_name_entry, const char *payload_path)
+static int imprint_text(const char *vol_name_entry, const char *payload_path, const char *parent_container)
 {
     unsigned char *payload = NULL;
     size_t payload_len = 0;
@@ -184,13 +203,13 @@ static int imprint_text(const char *vol_name_entry, const char *payload_path)
     free(payload);
 
     if (err == 0) {
-        add_root_link(vol_name_entry, fid);
+        add_container_link(parent_container, vol_name_entry, fid);
     }
     return (err == 0) ? 0 : -1;
 }
 
 /* ── Imprint one LINK file ──────────────────────────────────────── */
-static int imprint_link(const char *link_name, int target_fid_num)
+static int imprint_link(const char *link_name, int target_fid_num, const char *parent_container)
 {
     FS_LINK target;
     memset(&target, 0, sizeof(target));
@@ -207,7 +226,7 @@ static int imprint_link(const char *link_name, int target_fid_num)
     if (fd >= 0) {
         FID fid = g_open_files[(int)fd].fid;
         cls_fil(fd);
-        add_root_link(link_name, fid);
+        add_container_link(parent_container, link_name, fid);
     }
     return 0;
 }
@@ -242,6 +261,25 @@ static int process_manifest(const char *manifest_path)
         keyword[ki] = '\0';
         while (*p == ' ' || *p == '\t') p++;
 
+        if (strcmp(keyword, "DIR") == 0) {
+            if (*p != '"') continue;
+            p++;
+            char dname[80] = {0};
+            int di = 0;
+            while (*p && *p != '"' && di < 79) dname[di++] = *p++;
+            dname[di] = '\0';
+            if (*p == '"') p++;
+            while (*p == ' ' || *p == '\t') p++;
+            char parent[80] = {0};
+            int pi = 0;
+            while (*p && *p != ' ' && *p != '\t' && pi < 79) parent[pi++] = *p++;
+            parent[pi] = '\0';
+            printf("  [DIR ] %s (in %s)\n", dname, parent[0] && strcmp(parent, "-") != 0 ? parent : g_vol_name);
+            if (imprint_dir(dname, parent[0] ? parent : NULL) != 0)
+                errors++;
+            continue;
+        }
+
         if (strcmp(keyword, "FILE") != 0) continue;
 
         /* Parse quoted name */
@@ -261,25 +299,32 @@ static int process_manifest(const char *manifest_path)
         ftype[ti] = '\0';
         while (*p == ' ' || *p == '\t') p++;
 
-        /* Parse optional payload / target */
-        char extra[256] = {0};
-        int ei = 0;
-        while (*p && ei < 255) extra[ei++] = *p++;
-        extra[ei] = '\0';
+        /* Parse payload and optional parent container */
+        char payload_path[256] = {0};
+        char parent_container[80] = {0};
+        int pli = 0;
+        while (*p && *p != ' ' && *p != '\t' && pli < 255) payload_path[pli++] = *p++;
+        payload_path[pli] = '\0';
+        while (*p == ' ' || *p == '\t') p++;
+        int pci = 0;
+        while (*p && *p != ' ' && *p != '\t' && pci < 79) parent_container[pci++] = *p++;
+        parent_container[pci] = '\0';
+
+        const char *parent = parent_container[0] ? parent_container : NULL;
 
         if (strcmp(ftype, "TAD") == 0) {
             printf("  [TAD ] %s\n", fname);
-            if (imprint_tad(fname, extra[0] ? extra : NULL) != 0)
+            if (imprint_tad(fname, payload_path[0] ? payload_path : NULL, parent) != 0)
                 errors++;
         } else if (strcmp(ftype, "MD") == 0 || strcmp(ftype, "TXT") == 0) {
-            printf("  [%-4s] %s (%s)\n", ftype, fname, extra);
-            if (imprint_text(fname, extra[0] ? extra : NULL) != 0)
+            printf("  [%-4s] %s (%s) [in %s]\n", ftype, fname, payload_path, parent ? parent : g_vol_name);
+            if (imprint_text(fname, payload_path[0] ? payload_path : NULL, parent) != 0)
                 errors++;
         } else if (strcmp(ftype, "LINK") == 0) {
             int target_fid = 0; /* default: root */
-            if (extra[0] && extra[0] != '/') target_fid = atoi(extra);
+            if (payload_path[0] && payload_path[0] != '/') target_fid = atoi(payload_path);
             printf("  [LINK] %s -> FID%d\n", fname, target_fid);
-            if (imprint_link(fname, target_fid) != 0)
+            if (imprint_link(fname, target_fid, parent) != 0)
                 errors++;
         } else {
             fprintf(stderr, "mkbtronfs: unknown type '%s' for '%s'\n", ftype, fname);
@@ -294,6 +339,7 @@ int main(int argc, char **argv)
 {
     const char *manifest = NULL;
     const char *output   = DEFAULT_OUTPUT;
+    const char *label    = NULL;
     unsigned int nfmax   = DEFAULT_NFMAX;
     unsigned int nlb     = DEFAULT_NLB;
 
@@ -304,6 +350,8 @@ int main(int argc, char **argv)
             nfmax = (unsigned int)atoi(argv[++i]);
         } else if (strcmp(argv[i], "-b") == 0 && i + 1 < argc) {
             nlb = (unsigned int)atoi(argv[++i]);
+        } else if ((strcmp(argv[i], "-l") == 0 || strcmp(argv[i], "--label") == 0) && i + 1 < argc) {
+            label = argv[++i];
         } else if (argv[i][0] != '-') {
             manifest = argv[i];
         } else {
@@ -313,12 +361,20 @@ int main(int argc, char **argv)
     }
 
     if (!manifest) {
-        fprintf(stderr, "Usage: mkbtronfs manifest.txt [-o out.vol] [-n NFMAX] [-b NLB]\n");
+        fprintf(stderr, "Usage: mkbtronfs manifest.txt [-o out.vol] [-n NFMAX] [-b NLB] [-l VOLNAME]\n");
         return 1;
     }
 
-    printf("mkbtronfs: formatting '%s'  NFMAX=%u NLB=%u (%u KiB)\n",
-           output, nfmax, nlb, nlb);
+    if (label) {
+        strncpy(g_vol_name, label, sizeof(g_vol_name) - 1);
+    } else if (strstr(output, "anders") != NULL) {
+        strncpy(g_vol_name, "ANDERS", sizeof(g_vol_name) - 1);
+    } else {
+        strncpy(g_vol_name, DEFAULT_VOLNAME, sizeof(g_vol_name) - 1);
+    }
+
+    printf("mkbtronfs: formatting '%s' (Label: %s)  NFMAX=%u NLB=%u (%u KiB)\n",
+           output, g_vol_name, nfmax, nlb, nlb);
 
     /* Create and format the volume */
     BlkDev *dev = blk_file_create(output, 1 /* create_new */, (unsigned int)nlb);
@@ -327,7 +383,7 @@ int main(int argc, char **argv)
         return 1;
     }
 
-    if (vol_format(dev, (unsigned int)nfmax, (unsigned int)nlb, DEFAULT_VOLNAME) != 0) {
+    if (vol_format(dev, (unsigned int)nfmax, (unsigned int)nlb, g_vol_name) != 0) {
         fprintf(stderr, "mkbtronfs: vol_format failed\n");
         blk_file_close(dev);
         return 1;
@@ -356,3 +412,4 @@ int main(int argc, char **argv)
         return 1;
     }
 }
+

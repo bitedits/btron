@@ -27,6 +27,7 @@ typedef struct {
     BOOL sel_active;
     int sel_start_r, sel_start_c;
     int sel_end_r, sel_end_c;
+    int sel_anchor_r, sel_anchor_c;
 
     /* Scrolling */
     int scroll_row;
@@ -35,6 +36,9 @@ typedef struct {
     /* File State */
     char filename[128];
     BOOL is_modified;
+
+    /* Word Wrap */
+    BOOL wrap_text;
 
     /* VOBJ Embed */
     BOOL has_vobj;
@@ -46,6 +50,7 @@ typedef struct {
     int hover_item;        /* -1 = none, 0..N = hovered item in active menu */
     int active_submenu;    /* -1 = none, 0..N = item index spawning cascading submenu */
     int hover_subitem;     /* -1 = none, 0..N = hovered item in cascading submenu */
+    int tree_hover[4];     /* Cascading tree menu hover indices for Open menu levels */
     BOOL show_line_nums;   /* TRUE = display gutter line numbers */
     APP_MENU_BAR menu_bar;
 } TEditor;
@@ -62,6 +67,10 @@ int teditor_get_asset_files(char files[][64], int max_files);
 void teditor_open_menu(TEditor *ed, int menu_idx);
 void teditor_close_menu(TEditor *ed);
 WND* open_teditor_about_window(void);
+
+/* CUA Selection & Word Wrap APIs */
+void teditor_get_selection_range(const TEditor *ed, int *r1, int *c1, int *r2, int *c2);
+void teditor_toggle_wrap(TEditor *ed);
 
 #ifdef __cplusplus
 }

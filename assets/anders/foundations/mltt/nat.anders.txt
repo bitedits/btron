@@ -1,0 +1,107 @@
+{- Natural Numbers: https://anders.groupoid.space/foundations/mltt/nat/
+   - Nat.
+   Implemented using kernel primitives for judgmental beta-reduction.
+   Copyright (c) Groupoid Infinity, 2016-2026. -}
+
+module nat where
+import library/foundations/univalent/path
+import library/foundations/mltt/bool
+
+-- 1) Formation Rule
+def ℕ : U := __nat
+def nat := ℕ
+
+-- 2) Introduction Rules
+def zero : ℕ := __zero
+def succ (n : ℕ) : ℕ := __succ n
+
+-- 3) Elimination Rule
+def ind-nat (C : ℕ → U) (z : C zero) (s : Π (n : ℕ), C n → C (succ n)) (n : ℕ) : C n := __ind_nat C z s n
+def ℕ-ind (C : ℕ → U) (z : C zero) (s : Π (n : ℕ), C n → C (succ n)) (n : ℕ) : C n := ind-nat C z s n
+
+-- 5) Computation Rules (Judgmental)
+-- These are judgmental in the kernel, so idp is a valid witness.
+def ℕ-βz (C : ℕ → U) (z : C zero) (s : Π (n : ℕ), C n → C (succ n))
+  : Path (C zero) (ℕ-ind C z s zero) z
+ := <i> z
+
+def ℕ-βs (C : ℕ → U) (z : C zero) (s : Π (n : ℕ), C n → C (succ n)) (n : ℕ)
+  : Path (C (succ n)) (ℕ-ind C z s (succ n)) (s n (ℕ-ind C z s n))
+ := <i> s n (ℕ-ind C z s n)
+
+-- 6) Uniqueness / Eta Rule (Propositional)
+-- States that any function f : nat -> A is equal to induction on its values.
+def ℕ-η (f : ℕ → ℕ) : Path (ℕ → ℕ) f (λ (x : ℕ), ℕ-ind (λ (n : ℕ), ℕ) (f zero) (λ (n : ℕ) (prev : ℕ), f (succ n)) x)
+ := <i> λ (x : ℕ), ℕ-ind (λ (n : ℕ), Path ℕ (f n) (ℕ-ind (λ (k : ℕ), ℕ) (f zero) (λ (k : ℕ) (prev : ℕ), f (succ k)) n)) (<i> f zero)
+    (λ (n : ℕ) (prev : Path ℕ (f n) (ℕ-ind (λ (k : ℕ), ℕ) (f zero) (λ (k : ℕ) (prev : ℕ), f (succ k)) n)), <i> f (succ n)) x @ i
+
+-- 7) Recursion and Iteration
+def ℕ-rec  (C : U) (z : C) (s : ℕ → C → C) : ℕ → C := ℕ-ind  (λ (x : ℕ), C) z s
+def ℕ-iter (C : U) (z : C) (s : C → C)     : ℕ → C := ℕ-rec  C z (λ (x : ℕ), s)
+def ℕ-case (C : U) (z : C) (s : C)         : ℕ → C := ℕ-iter C z (λ (x : C), s)
+
+-- 8) Basic Arithmetic
+def plus (m n : ℕ) : ℕ := ℕ-iter ℕ n (λ (x : ℕ), succ x) m
+def mult (m n : ℕ) : ℕ := ℕ-rec ℕ zero (λ (x : ℕ) (prev : ℕ), plus n prev) m
+
+-- 9) Constants
+def one   : ℕ := succ zero
+def two   : ℕ := succ one
+def three : ℕ := succ two
+def four  : ℕ := succ three
+def five  : ℕ := succ four
+def six   : ℕ := succ five
+def seven : ℕ := succ six
+def eight : ℕ := succ seven
+def nine  : ℕ := succ eight
+def ten   : ℕ := succ nine
+
+def isZero (k : ℕ) : 𝟐 := ind-nat (λ (_ : ℕ), 𝟐) 1₂ (λ (_ : ℕ) (_ : 𝟐), 0₂) k
+def isSucc (k : ℕ) : 𝟐 := ind-nat (λ (_ : ℕ), 𝟐) 0₂ (λ (_ : ℕ) (_ : 𝟐), 1₂) k
+
+def znots (n : ℕ) (p : Path ℕ zero (succ n)) : 𝟎
+ := ffineqtt (<i> isZero (p @ -i))
+
+def snotz (n : ℕ) (p : Path ℕ (succ n) zero) : 𝟎
+ := ffineqtt (<i> isSucc (p @ -i))
+
+def prednat (n m : ℕ) (p : Path ℕ (succ n) (succ m)) : Path ℕ n m
+ := <i> ind-nat (λ (x : ℕ), ℕ) n (λ (x : ℕ) (_ : ℕ), x) (p @ i)
+
+--- Reality Check
+
+def trans-ℕ (u₀ : ℕ) : ℕ
+ := transp (<i> ℕ) 0 u₀
+
+def trans-ℕ′ (u₀ : ℕ) : ℕ
+ := u₀
+
+def trans-ℕ-is-correct (u₀ : ℕ)
+  : Path ℕ (trans-ℕ u₀) (trans-ℕ′ u₀)
+ := <_> trans-ℕ u₀
+
+def hcomp-ℕ-zero (r : I) : ℕ
+ := zero
+
+def hcomp-ℕ-zero-is-correct (r : I)
+  : Path ℕ (hcomp ℕ r (λ (k : I), [(r = 1) → zero]) zero) (hcomp-ℕ-zero r)
+ := <_> zero
+
+def hcomp-ℕ-succ (r : I) (u : I → Partial ℕ r) (u₀ : ℕ [r ↦ u 0]) : ℕ
+ := succ (hcomp ℕ r u (ouc u₀))
+
+def hcomp-ℕ-succ-is-correct (r : I) (u : I → Partial ℕ r) (u₀ : ℕ [r ↦ u 0])
+  : Path ℕ (hcomp ℕ r (λ (k : I), [(r = 1) → succ (u k 1=1)]) (succ (ouc u₀))) (hcomp-ℕ-succ r u u₀)
+ := <_> hcomp-ℕ-succ r u u₀
+
+definition N0 : ℕ := zero
+definition N1 : ℕ := succ N0
+definition N2 : ℕ := succ N1
+definition N3 : ℕ := succ N2
+definition N4 : ℕ := succ N3
+definition N5 : ℕ := succ N4
+definition N6 : ℕ := succ N5
+definition N7 : ℕ := succ N6
+definition N8 : ℕ := succ N7
+definition N9 : ℕ := succ N8
+definition N10 : ℕ := succ N9

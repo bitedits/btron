@@ -7046,11 +7046,25 @@ static const struct {
     { 0x2116, {0x00,0x00,0x18,0x38,0x1C,0x44,0x16,0x44,0x16,0x38,0x15,0x00,0x15,0x78,0x14,0x84,0x14,0x84,0x14,0x78,0x14,0x00,0x1C,0x78,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00} }  /* № */
 };
 
+static const struct {
+    UW cp;
+    UB bmp[32];
+} g_anders_math_glyphs[] = {
+#include "anders_math_glyphs.inc"
+};
+
 const UB* get_jis_glyph_bitmap(UW cp) {
     /* Check special Ukrainian extensions */
     for (size_t i = 0; i < sizeof(g_ukrainian_glyphs)/sizeof(g_ukrainian_glyphs[0]); i++) {
         if (g_ukrainian_glyphs[i].cp == cp) {
             return g_ukrainian_glyphs[i].bmp;
+        }
+    }
+
+    /* Check special Anders mathematical extensions */
+    for (size_t i = 0; i < sizeof(g_anders_math_glyphs)/sizeof(g_anders_math_glyphs[0]); i++) {
+        if (g_anders_math_glyphs[i].cp == cp) {
+            return g_anders_math_glyphs[i].bmp;
         }
     }
 
@@ -7070,3 +7084,4 @@ const UB* get_jis_glyph_bitmap(UW cp) {
     }
     return NULL;
 }
+

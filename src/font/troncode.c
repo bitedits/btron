@@ -418,9 +418,13 @@ TC utf8_to_tc(const char *utf8_str, int *bytes_consumed) {
         if (cp >= 0x27F0 && cp <= 0x27FF) {
             return (TC)(0x2680 | (cp - 0x27F0));
         }
-        /* Phonetic Extensions U+1D00 - U+1D7F -> Plane 1 (0x2A80 | (cp - 0x1D00)) */
+        /* Miscellaneous Symbols U+2600 - U+26FF (e.g. ★ U+2605, ♭ U+266D, ♯ U+266F) -> Plane 1 (0x2900 | (cp - 0x2600)) */
+        if (cp >= 0x2600 && cp <= 0x26FF) {
+            return (TC)(0x2900 | (cp - 0x2600));
+        }
+        /* Phonetic Extensions U+1D00 - U+1D7F -> Plane 1 (0x2B00 | (cp - 0x1D00)) */
         if (cp >= 0x1D00 && cp <= 0x1D7F) {
-            return (TC)(0x2A80 | (cp - 0x1D00));
+            return (TC)(0x2B00 | (cp - 0x1D00));
         }
         /* Unicode Box Drawing U+2500 - U+257F -> Plane 1 (0x2300 - 0x237F) */
         if (cp >= 0x2500 && cp <= 0x257F) {
@@ -580,22 +584,28 @@ int tc_to_utf8(TC code, char *utf8_buf, int max_len) {
         utf8_buf[2] = '\0';
         return 2;
     } else if (high == 0x2A) {
-        if (low >= 0x80) {
-            /* Phonetic Extensions U+1D00 + (low - 0x80) */
-            UW cp = 0x1D00 + (low - 0x80);
-            utf8_buf[0] = (char)(0xE0 | ((cp >> 12) & 0x0F));
-            utf8_buf[1] = (char)(0x80 | ((cp >> 6) & 0x3F));
-            utf8_buf[2] = (char)(0x80 | (cp & 0x3F));
-            utf8_buf[3] = '\0';
-            return 3;
-        } else {
-            /* Greek and Coptic U+0300 + low */
-            UW cp = 0x0300 + low;
-            utf8_buf[0] = (char)(0xC0 | ((cp >> 6) & 0x1F));
-            utf8_buf[1] = (char)(0x80 | (cp & 0x3F));
-            utf8_buf[2] = '\0';
-            return 2;
-        }
+        /* Greek and Coptic U+0300 + low */
+        UW cp = 0x0300 + low;
+        utf8_buf[0] = (char)(0xC0 | ((cp >> 6) & 0x1F));
+        utf8_buf[1] = (char)(0x80 | (cp & 0x3F));
+        utf8_buf[2] = '\0';
+        return 2;
+    } else if (high == 0x2B && low <= 0x7F) {
+        /* Phonetic Extensions U+1D00 + low */
+        UW cp = 0x1D00 + low;
+        utf8_buf[0] = (char)(0xE0 | ((cp >> 12) & 0x0F));
+        utf8_buf[1] = (char)(0x80 | ((cp >> 6) & 0x3F));
+        utf8_buf[2] = (char)(0x80 | (cp & 0x3F));
+        utf8_buf[3] = '\0';
+        return 3;
+    } else if (high == 0x29) {
+        /* Miscellaneous Symbols U+2600 + low */
+        UW cp = 0x2600 + low;
+        utf8_buf[0] = (char)(0xE0 | ((cp >> 12) & 0x0F));
+        utf8_buf[1] = (char)(0x80 | ((cp >> 6) & 0x3F));
+        utf8_buf[2] = (char)(0x80 | (cp & 0x3F));
+        utf8_buf[3] = '\0';
+        return 3;
     } else if (high == 0x2C) {
         /* Mathematical Operators U+2200 + low */
         UW cp = 0x2200 + low;
@@ -1207,7 +1217,7 @@ H tc_get_char_advance(TC code, TC prev_code) {
     } else if (code < 256 || ((code >> 8) == 0x20 && (code & 0xFF) >= 0x80) ||
                (code >> 8) == 0x27 || (code >> 8) == 0x23 || code == 0x2116 ||
                (code >> 8) == 0x28 || (code >> 8) == 0x2E ||
-               ((code >> 8) == 0x2A && (code & 0xFF) >= 0x80)) {
+               (code >> 8) == 0x2B) {
         return 8;
     } else {
         return 16;

@@ -125,6 +125,16 @@ void btron_core_hfds_log(void) {
             else
                 blk_destroy(anders_blk);
         }
+        if (!g_anders_vol) {
+            static unsigned char s_mem_anders_vol[1024 * 1024]; /* 1 MiB */
+            BlkDev *mem_blk = blk_mem_create(s_mem_anders_vol, sizeof(s_mem_anders_vol), 0);
+            if (mem_blk) {
+                vol_format(mem_blk, 256, 1024, "ANDERS");
+                g_anders_vol = vol_mount(mem_blk);
+                if (g_anders_vol)
+                    printf("[FS  ] /ANDERS mounted on RAM disk (1 MiB)  [OK]\n");
+            }
+        }
     }
 }
 

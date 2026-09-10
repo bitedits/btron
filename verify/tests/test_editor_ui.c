@@ -921,6 +921,37 @@ static void test_modern_menu_bar_and_asset_discovery(void) {
     TEST_ASSERT(ed->active_menu == 0 && ed->active_submenu == 1,
                 "Ctrl+O accelerator directly opens cascading document list");
 
+    /* 9. Real-time Hierarchical Open Menu Walking on Hover */
+    /* Hover over item 1 '[/ANDERS] Anders Proofs ▶' in Level 0 (x=252+30, y=46+3+22+10=81) */
+    evt_move.pos.x = wnd->bounds.left + 4 + 252 + 30;
+    evt_move.pos.y = wnd->bounds.top + 26 + 46 + 3 + 22 + 10;
+    wnd->event_handler(wnd, &evt_move);
+    TEST_ASSERT(ed->tree_hover[0] == 1, "Hovering over '[/ANDERS] Anders Proofs ▶' sets tree_hover[0] = 1");
+
+    /* Level 1 expands at parent_box.right-2 = 490. Hover over 'foundations ▶' (item 0 at y=71+3+10=84) */
+    evt_move.pos.x = wnd->bounds.left + 4 + 490 + 30;
+    evt_move.pos.y = wnd->bounds.top + 26 + 71 + 3 + 10;
+    wnd->event_handler(wnd, &evt_move);
+    TEST_ASSERT(ed->tree_hover[1] == 0, "Hovering over 'foundations ▶' sets tree_hover[1] = 0");
+
+    /* Level 2 expands at x = (490 + 220 - 2 = 708) or flips if width exceeded.
+       In test window wnd->bounds is 40..800 (w=760), dev->width = 760.
+       708 + 190 = 898 > 760 -> flips to 490 - 190 + 2 = 302. */
+    H lvl2_x = (490 + 190 > (wnd->dev ? wnd->dev->width : 800)) ? (490 - 190 + 2) : (490 + 220 - 2);
+    evt_move.pos.x = wnd->bounds.left + 4 + lvl2_x + 30;
+    evt_move.pos.y = wnd->bounds.top + 26 + 74 + 3 + 10;
+    wnd->event_handler(wnd, &evt_move);
+    TEST_ASSERT(ed->tree_hover[2] == 0, "Hovering over 'logic ▶' sets tree_hover[2] = 0");
+
+    /* Click on 'awodey.anders.txt' (item 0 in logic) */
+    H lvl3_x = (lvl2_x + 250 > (wnd->dev ? wnd->dev->width : 800)) ? (lvl2_x - 250 + 2) : (lvl2_x + 190 - 2);
+    if (lvl3_x < 0) lvl3_x = 0;
+    evt_click.pos.x = wnd->bounds.left + 4 + lvl3_x + 30;
+    evt_click.pos.y = wnd->bounds.top + 26 + 77 + 3 + 10;
+    wnd->event_handler(wnd, &evt_click);
+    TEST_ASSERT(strstr(ed->filename, "awodey") != NULL, "Loaded awodey.anders.txt directly from hierarchical open menu");
+    TEST_ASSERT(ed->active_menu == -1, "Menu closed after hierarchical file selection");
+
     /* Clean up */
     cls_wnd(wnd);
 }

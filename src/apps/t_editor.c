@@ -103,7 +103,7 @@ static void teditor_init_default(TEditor *ed) {
     ed->sel_active = FALSE;
     ed->sel_anchor_r = 0;
     ed->sel_anchor_c = 0;
-    if (ed->menu_levels) { for (int k = 0; k < TEDITOR_MENU_MAX_LEVELS; k++) { ed->menu_levels[k].count = 0; ed->menu_levels[k].hover = -1; ed->menu_levels[k].loaded = FALSE; ed->menu_levels[k].dir_path[0] = '\0'; } }
+    for (int k = 0; k < TEDITOR_TREE_MAX_LEVELS; k++) ed->tree_hover[k] = -1;
     ed->has_vobj = TRUE;
     strncpy(ed->vobj_name, "Diagram.draw", sizeof(ed->vobj_name) - 1);
     ed->show_line_nums = TRUE;
@@ -654,210 +654,227 @@ void teditor_toggle_wrap(TEditor *ed) {
     ed->wrap_text = !ed->wrap_text;
 }
 
-/* ── Live Filesystem Walker — open menu subsystem ──────────────── */
+/* ── Live Filesystem Walker — Open Menu Subsystem ──────────────── */
 
-/* Two fixed virtual roots at level 0 */
-#define TEDITOR_ROOT_SYS    0
-#define TEDITOR_ROOT_ANDERS 1
-#define TEDITOR_ROOT_COUNT  2
+typedef struct {
+    char name[TEDITOR_MENU_NAME_LEN];
+    char path[TEDITOR_MENU_PATH_LEN];
+    BOOL is_dir;
+    BOOL is_sep;
+} TMenuTreeItem;
 
-static const char *s_root_labels[TEDITOR_ROOT_COUNT] = {
-    "[/SYS] System Docs \u25ba",
-    "[/ANDERS] Anders Proofs \u25ba",
-};
-static const char *s_root_dirs[TEDITOR_ROOT_COUNT] = {
-    "doc",
-    "assets/anders",
-};
-
-/* ── Sort helpers ──────────────────────────────────────────────── */
-static int tmenu_entry_cmp(const void *a, const void *b) {
-    const TMenuEntry *ea = (const TMenuEntry *)a;
-    const TMenuEntry *eb = (const TMenuEntry *)b;
-    /* dirs before files, then alphabetical */
-    if (ea->is_dir != eb->is_dir) return ea->is_dir ? -1 : 1;
-    int r = 0;
-    const char *pa = ea->name, *pb = eb->name;
-    while (*pa && *pb) {
-        char ca = (*pa >= 'a' && *pa <= 'z') ? (char)(*pa - 32) : *pa;
-        char cb = (*pb >= 'a' && *pb <= 'z') ? (char)(*pb - 32) : *pb;
-        if (ca != cb) { r = ca - cb; break; }
-        pa++; pb++;
+static int tmenu_strcasecmp(const char *a, const char *b) {
+    while (*a && *b) {
+        char ca = (*a >= 'a' && *a <= 'z') ? (char)(*a - 32) : *a;
+        char cb = (*b >= 'a' && *b <= 'z') ? (char)(*b - 32) : *b;
+        if (ca != cb) return (int)(unsigned char)ca - (int)(unsigned char)cb;
+        a++; b++;
     }
-    if (r == 0) r = (int)(unsigned char)*pa - (int)(unsigned char)*pb;
-    return r;
+    return (int)(unsigned char)*a - (int)(unsigned char)*b;
 }
 
-/* ── Directory scanner ─────────────────────────────────────────── */
-/*
- * Fills lev->items[] from either:
- *   - POSIX opendir/readdir  (STDC_HOSTED builds)
- *   - BTRON vol opn_dir/rd_dir (embedded builds)
- * Only includes items that are directories OR readable text files
- * (.txt / .md / .anders.txt / no-extension treated as text).
- * Entries are sorted: dirs first, then files, both alphabetically.
- */
-static void teditor_scan_dir(TMenuLevel *lev, const char *dir_path) {
-    if (!lev || !dir_path || dir_path[0] == '\0') return;
+static int teditor_scan_fs_dir(const char *dir_path, TMenuTreeItem *out_items, int max_items) {
+    if (!dir_path || !out_items || max_items <= 0) return 0;
+    int count = 0;
 
-    /* Reset level */
-    lev->count  = 0;
-    lev->loaded = FALSE;
-
-    strncpy(lev->dir_path, dir_path, TEDITOR_MENU_PATH_LEN - 1);
-    lev->dir_path[TEDITOR_MENU_PATH_LEN - 1] = '\0';
+    /* If dir_path is "/SYS", enumerate system documents from volume or host */
+    if (strcmp(dir_path, "/SYS") == 0) {
+        if (g_sys_vol) {
+            ID dir = opn_dir("/SYS");
+            if (dir >= 0) {
+                DIR_ENTRY entry;
+                while (rd_dir(dir, &entry) == 0 && count < max_items) {
+                    if (entry.name[0] == '\0' || strcmp(entry.name, "SYS") == 0 || strcmp(entry.name, "TRASH") == 0)
+                        continue;
+                    size_t nlen = strlen(entry.name);
+                    BOOL is_text = FALSE;
+                    if (nlen > 3 && strcmp(entry.name + nlen - 3, ".md") == 0) is_text = TRUE;
+                    else if (nlen > 4 && strcmp(entry.name + nlen - 4, ".txt") == 0) is_text = TRUE;
+                    if (is_text) {
+                        strncpy(out_items[count].name, entry.name, sizeof(out_items[count].name) - 1);
+                        strncpy(out_items[count].path, entry.name, sizeof(out_items[count].path) - 1);
+                        out_items[count].is_dir = FALSE;
+                        out_items[count].is_sep = FALSE;
+                        count++;
+                    }
+                }
+                cls_dir(dir);
+            }
+        }
+        if (count == 0) {
+            const char *sys_docs[] = {
+                "BTRON3_Report.txt", "FS.md", "Heart_Sutra_Tibetan.txt", "hello.txt", "README.md", "CLU.md"
+            };
+            for (size_t i = 0; i < sizeof(sys_docs)/sizeof(sys_docs[0]) && count < max_items; i++) {
+                strncpy(out_items[count].name, sys_docs[i], sizeof(out_items[count].name) - 1);
+                strncpy(out_items[count].path, sys_docs[i], sizeof(out_items[count].path) - 1);
+                out_items[count].is_dir = FALSE;
+                out_items[count].is_sep = FALSE;
+                count++;
+            }
+        }
+        return count;
+    }
 
 #if defined(__STDC_HOSTED__) && __STDC_HOSTED__ == 1
     DIR *d = opendir(dir_path);
-    if (!d) {
-        lev->loaded = TRUE;
-        return;
-    }
+    if (!d) return 0;
     struct dirent *de;
-    while ((de = readdir(d)) != NULL && lev->count < TEDITOR_MENU_MAX_ITEMS) {
-        if (de->d_name[0] == '.') continue; /* skip dotfiles & . .. */
-
-        /* Build full path */
+    while ((de = readdir(d)) != NULL && count < max_items) {
+        if (de->d_name[0] == '.') continue;
         char full[TEDITOR_MENU_PATH_LEN];
-        int plen = snprintf(full, sizeof(full), "%s/%s", dir_path, de->d_name);
-        if (plen <= 0 || plen >= (int)sizeof(full)) continue;
+        snprintf(full, sizeof(full), "%s/%s", dir_path, de->d_name);
 
-        /* Determine if it's a directory or a readable text file */
         BOOL is_dir = FALSE;
 #if defined(_DIRENT_HAVE_D_TYPE) || defined(DT_DIR)
-        if (de->d_type == DT_DIR)  { is_dir = TRUE; }
-        else if (de->d_type == DT_REG) { is_dir = FALSE; }
-        else {
-            /* fall back to stat */
-            struct stat st;
-            if (stat(full, &st) == 0 && S_ISDIR(st.st_mode)) is_dir = TRUE;
-        }
-#else
+        if (de->d_type == DT_DIR) is_dir = TRUE;
+        else if (de->d_type == DT_REG) is_dir = FALSE;
+        else
+#endif
         {
             struct stat st;
             if (stat(full, &st) == 0 && S_ISDIR(st.st_mode)) is_dir = TRUE;
         }
-#endif
+
         if (!is_dir) {
-            /* Accept only recognised text extensions */
             size_t nlen = strlen(de->d_name);
             BOOL ok = FALSE;
-            if (nlen > 4  && strcmp(de->d_name + nlen - 4,  ".txt") == 0) ok = TRUE;
-            else if (nlen > 3  && strcmp(de->d_name + nlen - 3,  ".md")  == 0) ok = TRUE;
+            if (nlen > 4 && strcmp(de->d_name + nlen - 4, ".txt") == 0) ok = TRUE;
+            else if (nlen > 3 && strcmp(de->d_name + nlen - 3, ".md") == 0) ok = TRUE;
             else if (nlen > 11 && strcmp(de->d_name + nlen - 11, ".anders.txt") == 0) ok = TRUE;
             if (!ok) continue;
         }
 
-        TMenuEntry *e = &lev->items[lev->count++];
-        strncpy(e->name, de->d_name, TEDITOR_MENU_NAME_LEN - 1);
-        e->name[TEDITOR_MENU_NAME_LEN - 1] = '\0';
-        if (is_dir) {
-            e->path[0] = '\0';  /* dir — path filled in at the next level */
-            e->is_dir  = TRUE;
-        } else {
-            strncpy(e->path, full, TEDITOR_MENU_PATH_LEN - 1);
-            e->path[TEDITOR_MENU_PATH_LEN - 1] = '\0';
-            e->is_dir = FALSE;
-        }
+        TMenuTreeItem *it = &out_items[count++];
+        strncpy(it->name, de->d_name, sizeof(it->name) - 1);
+        it->name[sizeof(it->name) - 1] = '\0';
+        strncpy(it->path, full, sizeof(it->path) - 1);
+        it->path[sizeof(it->path) - 1] = '\0';
+        it->is_dir = is_dir;
+        it->is_sep = FALSE;
     }
     closedir(d);
-
-#else  /* embedded BTRON vol */
-
-    if (!g_sys_vol) { lev->loaded = TRUE; return; }
-    ID dir = opn_dir(dir_path);
-    if (dir < 0) { lev->loaded = TRUE; return; }
-    DIR_ENTRY entry;
-    while (rd_dir(dir, &entry) == 0 && lev->count < TEDITOR_MENU_MAX_ITEMS) {
-        if (entry.name[0] == '\0') continue;
-        /* Detect directories by probing: if opn_dir succeeds it's a dir */
-        char probe_path[TEDITOR_MENU_PATH_LEN];
-        snprintf(probe_path, sizeof(probe_path), "%s/%s", dir_path, entry.name);
-        ID probe = opn_dir(probe_path);
-        BOOL is_dir = (probe >= 0);
-        if (is_dir) cls_dir(probe);
-        if (!is_dir) {
-            size_t nlen = strlen(entry.name);
-            BOOL ok = FALSE;
-            if (nlen > 4  && strcmp(entry.name + nlen - 4,  ".txt") == 0) ok = TRUE;
-            else if (nlen > 3  && strcmp(entry.name + nlen - 3,  ".md")  == 0) ok = TRUE;
-            if (!ok) continue;
-        }
-        TMenuEntry *e = &lev->items[lev->count++];
-        strncpy(e->name, entry.name, TEDITOR_MENU_NAME_LEN - 1);
-        e->name[TEDITOR_MENU_NAME_LEN - 1] = '\0';
-        if (is_dir) {
-            /* Build child path as  dir_path + "/" + name */
-            snprintf(e->path, TEDITOR_MENU_PATH_LEN, "%s/%s", dir_path, entry.name);
-            e->is_dir = TRUE;
-        } else {
-            snprintf(e->path, TEDITOR_MENU_PATH_LEN, "%s/%s", dir_path, entry.name);
-            e->is_dir = FALSE;
+#else
+    Volume *v = (strncmp(dir_path, "/ANDERS", 7) == 0 && g_anders_vol) ? g_anders_vol : g_sys_vol;
+    if (v) {
+        ID dir = opn_dir(dir_path);
+        if (dir >= 0) {
+            DIR_ENTRY entry;
+            while (rd_dir(dir, &entry) == 0 && count < max_items) {
+                if (entry.name[0] == '\0') continue;
+                char probe[TEDITOR_MENU_PATH_LEN];
+                snprintf(probe, sizeof(probe), "%s/%s", dir_path, entry.name);
+                ID p = opn_dir(probe);
+                BOOL is_dir = (p >= 0);
+                if (is_dir) cls_dir(p);
+                if (!is_dir) {
+                    size_t nlen = strlen(entry.name);
+                    BOOL ok = FALSE;
+                    if (nlen > 4 && strcmp(entry.name + nlen - 4, ".txt") == 0) ok = TRUE;
+                    else if (nlen > 3 && strcmp(entry.name + nlen - 3, ".md") == 0) ok = TRUE;
+                    if (!ok) continue;
+                }
+                TMenuTreeItem *it = &out_items[count++];
+                strncpy(it->name, entry.name, sizeof(it->name) - 1);
+                it->name[sizeof(it->name) - 1] = '\0';
+                strncpy(it->path, probe, sizeof(it->path) - 1);
+                it->path[sizeof(it->path) - 1] = '\0';
+                it->is_dir = is_dir;
+                it->is_sep = FALSE;
+            }
+            cls_dir(dir);
         }
     }
-    cls_dir(dir);
 #endif
 
-    /* Sort: dirs first, then files, both alphabetically */
-    /* simple insertion sort (count is typically < 128) */
-    for (int i = 1; i < lev->count; i++) {
-        TMenuEntry tmp = lev->items[i];
+    /* Sort: directories first (alphabetically), then files (alphabetically) */
+    for (int i = 1; i < count; i++) {
+        TMenuTreeItem tmp = out_items[i];
         int j = i - 1;
-        while (j >= 0 && tmenu_entry_cmp(&lev->items[j], &tmp) > 0) {
-            lev->items[j + 1] = lev->items[j];
+        while (j >= 0) {
+            int cmp = 0;
+            if (out_items[j].is_dir != tmp.is_dir) {
+                cmp = out_items[j].is_dir ? -1 : 1;
+            } else {
+                cmp = tmenu_strcasecmp(out_items[j].name, tmp.name);
+            }
+            if (cmp <= 0) break;
+            out_items[j + 1] = out_items[j];
             j--;
         }
-        lev->items[j + 1] = tmp;
+        out_items[j + 1] = tmp;
     }
-
-    lev->loaded = TRUE;
+    return count;
 }
 
-/* Ensure level `lvl` is populated given current hover state */
+static int teditor_get_tree_items(const TEditor *ed, int lvl, TMenuTreeItem *out_items, int max_items) {
+    if (!ed || !out_items || max_items <= 0) return 0;
 
+    if (lvl == 0) {
+        char raw_files[32][64];
+        int nfiles = teditor_get_asset_files(raw_files, 32);
+        int count = 0;
+        for (int i = 0; i < nfiles && count < max_items; i++) {
+            strncpy(out_items[count].name, raw_files[i], sizeof(out_items[count].name) - 1);
+            out_items[count].name[sizeof(out_items[count].name) - 1] = '\0';
+            if (i == 0) {
+                strncpy(out_items[count].path, "/SYS", sizeof(out_items[count].path) - 1);
+                out_items[count].is_dir = TRUE;
+            } else if (i == 1) {
+                strncpy(out_items[count].path, "assets/anders", sizeof(out_items[count].path) - 1);
+                out_items[count].is_dir = TRUE;
+            } else {
+                strncpy(out_items[count].path, raw_files[i], sizeof(out_items[count].path) - 1);
+                out_items[count].is_dir = FALSE;
+            }
+            out_items[count].path[sizeof(out_items[count].path) - 1] = '\0';
+            out_items[count].is_sep = FALSE;
+            count++;
+        }
+        return count;
+    }
 
-/* ── Box geometry ──────────────────────────────────────────────── */
-static void teditor_get_level_box(const TEditor *ed, GDEV *dev, int level,
-                                   RECT *out_box, int *out_count) {
+    if (lvl < 0 || lvl >= TEDITOR_TREE_MAX_LEVELS) return 0;
+
+    /* For lvl >= 1, query parent level to find the hovered directory path */
+    TMenuTreeItem parent_items[64];
+    int parent_count = teditor_get_tree_items(ed, lvl - 1, parent_items, 64);
+    int hov = ed->tree_hover[lvl - 1];
+    if (hov < 0 || hov >= parent_count) return 0;
+    if (!parent_items[hov].is_dir) return 0;
+
+    return teditor_scan_fs_dir(parent_items[hov].path, out_items, max_items);
+}
+
+static void teditor_get_level_box(const TEditor *ed, GDEV *dev, int lvl, RECT *out_box, int *out_count) {
     if (!ed || !out_box || !out_count) return;
     *out_count = 0;
     memset(out_box, 0, sizeof(RECT));
-    if (!ed->menu_levels) return;   /* menu cache not allocated */
 
-    if (level == 0) {
-        /* Virtual root: always 2 items */
-        *out_count = TEDITOR_ROOT_COUNT;
+    TMenuTreeItem items[64];
+    int count = teditor_get_tree_items(ed, lvl, items, 64);
+    if (count <= 0) return;
+    *out_count = count;
+
+    if (lvl == 0) {
         H x = ed->menu_bar.headers[0].rect.left + APP_MENU_DROPDOWN_WIDTH - 2;
         H y = APP_MENU_BAR_HEIGHT + 3 + 1 * APP_MENU_ROW_HEIGHT;
         H w = 240;
-        H h = (*out_count) * APP_MENU_ROW_HEIGHT + 6;
+        H h = count * APP_MENU_ROW_HEIGHT + 6;
         if (dev && x + w > dev->width) x = ed->menu_bar.headers[0].rect.left - w + 2;
         out_box->left = x; out_box->top = y;
         out_box->right = x + w; out_box->bottom = y + h;
         return;
     }
 
-    if (level >= TEDITOR_MENU_MAX_LEVELS) return;
-
-    /* Parent box */
     RECT parent_box;
-    int  parent_count = 0;
-    teditor_get_level_box(ed, dev, level - 1, &parent_box, &parent_count);
-
-    /* Get hover from the previous level */
-    int hov;
-    if (level == 1) {
-        hov = ed->menu_levels[0].hover;
-    } else {
-        hov = ed->menu_levels[level - 1].hover;
-    }
+    int parent_count = 0;
+    teditor_get_level_box(ed, dev, lvl - 1, &parent_box, &parent_count);
+    int hov = ed->tree_hover[lvl - 1];
     if (hov < 0 || hov >= parent_count) return;
 
-    *out_count = ed->menu_levels[level].count;
-    if (*out_count <= 0) return;
-
-    H w = (level <= 2) ? 230 : 260;
-    H h = (*out_count) * APP_MENU_ROW_HEIGHT + 6;
+    H w = (lvl == 1) ? 220 : ((lvl == 2) ? 190 : 250);
+    H h = count * APP_MENU_ROW_HEIGHT + 6;
     H x = parent_box.right - 2;
     if (dev && x + w > dev->width) {
         x = parent_box.left - w + 2;
@@ -871,70 +888,52 @@ static void teditor_get_level_box(const TEditor *ed, GDEV *dev, int level,
     out_box->right = x + w; out_box->bottom = y + h;
 }
 
-/* ── Paint ─────────────────────────────────────────────────────── */
 static void teditor_paint_tree_menu(const TEditor *ed, GDEV *dev) {
-    if (!ed || !dev || !ed->menu_levels) return;
+    if (!ed || !dev) return;
 
-    for (int lvl = 0; lvl < TEDITOR_MENU_MAX_LEVELS; lvl++) {
+    for (int lvl = 0; lvl < TEDITOR_TREE_MAX_LEVELS; lvl++) {
         RECT box;
-        int  count = 0;
+        int count = 0;
         teditor_get_level_box(ed, dev, lvl, &box, &count);
         if (count <= 0) break;
 
         app_menu_draw_3d_bevel_box(dev, &box);
 
-        /* Hover index for this level */
-        int hov_idx = (lvl == 0) ? ed->menu_levels[0].hover
-                                  : ed->menu_levels[lvl].hover;
+        TMenuTreeItem items[64];
+        int n = teditor_get_tree_items(ed, lvl, items, 64);
+        int hov_idx = ed->tree_hover[lvl];
 
-        for (int i = 0; i < count; i++) {
-            BOOL   is_dir  = FALSE;
-            const char *label = "";
-
-            if (lvl == 0) {
-                label  = s_root_labels[i];
-                is_dir = TRUE;
-            } else {
-                const TMenuEntry *e = &ed->menu_levels[lvl].items[i];
-                label  = e->name;
-                is_dir = e->is_dir;
-            }
-
+        for (int i = 0; i < n && i < count; i++) {
             RECT row = { box.left + 3, box.top + 3 + i * APP_MENU_ROW_HEIGHT,
                          box.right - 3, box.top + 3 + (i + 1) * APP_MENU_ROW_HEIGHT };
+
+            if (items[i].is_sep) {
+                H mid_y = (row.top + row.bottom) / 2;
+                drw_lin(dev, row.left + 2, mid_y, row.right - 2, mid_y);
+                continue;
+            }
 
             BOOL is_hov = (hov_idx == i);
             if (is_hov) fill_rec(dev, &row, COLOR_NAVY);
             COLOR fg = is_hov ? COLOR_WHITE : COLOR_BLACK;
-            drw_tc_string(dev, row.left + 6, row.top + 3, label, fg, 0x00000000);
-            if (is_dir) {
-                drw_tc_string(dev, row.right - 16, row.top + 3, "\u25ba", fg, 0x00000000);
+
+            drw_tc_string(dev, row.left + 6, row.top + 3, items[i].name, fg, 0x00000000);
+            if (items[i].is_dir && lvl > 0) {
+                drw_tc_string(dev, row.right - 16, row.top + 3, "▶", fg, 0x00000000);
             }
         }
     }
 }
 
-/* ── Mouse handler ─────────────────────────────────────────────── */
 static BOOL teditor_handle_tree_mouse(TEditor *ed, WND *wnd, H rel_x, H rel_y, BOOL is_click) {
     if (!ed || ed->menu_bar.active_menu != 0 || ed->menu_bar.active_submenu != 1) return FALSE;
-    if (!ed->menu_levels) return FALSE;   /* menu cache not allocated */
 
     GDEV *dev = wnd ? wnd->dev : NULL;
 
-    /* Ensure level-1 is seeded from virtual roots */
-    if (!ed->menu_levels[1].loaded) {
-        int hov0 = ed->menu_levels[0].hover;
-        if (hov0 >= 0 && hov0 < TEDITOR_ROOT_COUNT) {
-            TMenuLevel *lev1 = &ed->menu_levels[1];
-            lev1->hover = -1;
-            teditor_scan_dir(lev1, s_root_dirs[hov0]);
-        }
-    }
-
     /* Hit-test from deepest visible level outward */
-    for (int lvl = TEDITOR_MENU_MAX_LEVELS - 1; lvl >= 0; lvl--) {
+    for (int lvl = TEDITOR_TREE_MAX_LEVELS - 1; lvl >= 0; lvl--) {
         RECT box;
-        int  count = 0;
+        int count = 0;
         teditor_get_level_box(ed, dev, lvl, &box, &count);
         if (count <= 0) continue;
 
@@ -944,46 +943,28 @@ static BOOL teditor_handle_tree_mouse(TEditor *ed, WND *wnd, H rel_x, H rel_y, B
             int idx = (rel_y - (box.top + 3)) / APP_MENU_ROW_HEIGHT;
             if (idx < 0 || idx >= count) return TRUE;
 
+            TMenuTreeItem items[64];
+            int n = teditor_get_tree_items(ed, lvl, items, 64);
+            if (idx >= n) return TRUE;
+            if (items[idx].is_sep) return TRUE;
+
             if (is_click) {
-                /* Determine if this is a file or a directory */
-                if (lvl == 0) {
-                    /* Virtual root — treat as directory; hover already set */
-                } else {
-                    const TMenuEntry *e = &ed->menu_levels[lvl].items[idx];
-                    if (!e->is_dir && e->path[0] != '\0') {
-                        teditor_load_file(ed, e->path);
-                        if (wnd) snprintf(wnd->title, sizeof(wnd->title),
-                                          "Editor - %s", ed->filename);
-                        teditor_close_menu(ed);
-                        return TRUE;
-                    }
+                if (!items[idx].is_dir && items[idx].path[0] != '\0') {
+                    teditor_load_file(ed, items[idx].path);
+                    if (wnd) snprintf(wnd->title, sizeof(wnd->title), "Editor - %s", ed->filename);
+                    teditor_close_menu(ed);
+                    return TRUE;
+                } else if (items[idx].is_dir) {
+                    ed->tree_hover[lvl] = idx;
+                    for (int k = lvl + 1; k < TEDITOR_TREE_MAX_LEVELS; k++) ed->tree_hover[k] = -1;
+                    return TRUE;
                 }
             } else {
-                /* Hover: update this level, clear all deeper levels */
-                int *hov_ptr = &ed->menu_levels[lvl].hover;
-                if (*hov_ptr != idx) {
-                    *hov_ptr = idx;
-                    /* Invalidate deeper levels */
-                    for (int k = lvl + 1; k < TEDITOR_MENU_MAX_LEVELS; k++) {
-                        ed->menu_levels[k].count  = 0;
-                        ed->menu_levels[k].hover  = -1;
-                        ed->menu_levels[k].loaded = FALSE;
-                        ed->menu_levels[k].dir_path[0] = '\0';
-                    }
-
-                    /* Level 0 hover → seed level 1 immediately */
-                    if (lvl == 0 && idx < TEDITOR_ROOT_COUNT) {
-                        teditor_scan_dir(&ed->menu_levels[1], s_root_dirs[idx]);
-                    }
-                    /* Deeper hover → scan next level if item is a dir */
-                    if (lvl >= 1) {
-                        const TMenuEntry *e = &ed->menu_levels[lvl].items[idx];
-                        if (e->is_dir && lvl + 1 < TEDITOR_MENU_MAX_LEVELS) {
-                            char child[TEDITOR_MENU_PATH_LEN];
-                            snprintf(child, sizeof(child), "%s/%s",
-                                     ed->menu_levels[lvl].dir_path, e->name);
-                            teditor_scan_dir(&ed->menu_levels[lvl + 1], child);
-                        }
+                /* Hover: set this level hover, and clear all deeper levels */
+                if (ed->tree_hover[lvl] != idx) {
+                    ed->tree_hover[lvl] = idx;
+                    for (int k = lvl + 1; k < TEDITOR_TREE_MAX_LEVELS; k++) {
+                        ed->tree_hover[k] = -1;
                     }
                 }
                 return TRUE;
@@ -1167,13 +1148,7 @@ int teditor_get_asset_files(char files[][64], int max_files) {
 void teditor_open_menu(TEditor *ed, int menu_idx) {
     if (!ed || menu_idx < 0 || menu_idx >= TMENU_COUNT) return;
     if (ed->menu_bar.header_count == 0) teditor_init_menu_bar(ed);
-    /* Allocate the live FS-walker cache on first open */
-    if (!ed->menu_levels) {
-        ed->menu_levels = (TMenuLevel *)calloc(TEDITOR_MENU_MAX_LEVELS, sizeof(TMenuLevel));
-        if (ed->menu_levels) {
-            for (int k = 0; k < TEDITOR_MENU_MAX_LEVELS; k++) ed->menu_levels[k].hover = -1;
-        }
-    }
+    for (int k = 0; k < TEDITOR_TREE_MAX_LEVELS; k++) ed->tree_hover[k] = -1;
     app_menu_open(&ed->menu_bar, menu_idx);
     teditor_sync_menu_state(ed);
 }
@@ -1181,8 +1156,7 @@ void teditor_open_menu(TEditor *ed, int menu_idx) {
 void teditor_close_menu(TEditor *ed) {
     if (!ed) return;
     app_menu_close(&ed->menu_bar);
-    free(ed->menu_levels);
-    ed->menu_levels = NULL;
+    for (int k = 0; k < TEDITOR_TREE_MAX_LEVELS; k++) ed->tree_hover[k] = -1;
     teditor_sync_menu_state(ed);
 }
 
@@ -1276,6 +1250,9 @@ static void handle_t_editor_event(WND *wnd, const EVT *evt) {
         }
         if (app_menu_handle_mouse_move(&ed->menu_bar, rel_x, rel_y)) {
             teditor_sync_menu_state(ed);
+            if (ed->menu_bar.active_submenu != 1) {
+                for (int k = 0; k < TEDITOR_TREE_MAX_LEVELS; k++) ed->tree_hover[k] = -1;
+            }
             return;
         }
         teditor_sync_menu_state(ed);
@@ -1293,12 +1270,18 @@ static void handle_t_editor_event(WND *wnd, const EVT *evt) {
         int cmd = 0, sub_idx = -1;
         if (app_menu_handle_mouse_down(&ed->menu_bar, rel_x, rel_y, &cmd, &sub_idx)) {
             teditor_sync_menu_state(ed);
+            if (ed->menu_bar.active_submenu != 1) {
+                for (int k = 0; k < TEDITOR_TREE_MAX_LEVELS; k++) ed->tree_hover[k] = -1;
+            }
             if (cmd != 0) {
                 teditor_execute_menu_cmd(ed, wnd, cmd, sub_idx);
             }
             return;
         }
         teditor_sync_menu_state(ed);
+        if (ed->menu_bar.active_submenu != 1) {
+            for (int k = 0; k < TEDITOR_TREE_MAX_LEVELS; k++) ed->tree_hover[k] = -1;
+        }
 
         /* Status Bar Footer click -> Toggle JP / EN mode */
         H client_h = wnd->dev ? wnd->dev->height : (wnd->bounds.bottom - wnd->bounds.top - 26);
@@ -1728,7 +1711,7 @@ WND* open_t_editor_window_rect(const char *filepath, H x, H y, H w, H h, UW attr
     ed->hover_item = -1;
     ed->active_submenu = -1;
     ed->hover_subitem = -1;
-    if (ed->menu_levels) { free(ed->menu_levels); ed->menu_levels = NULL; }
+    for (int k = 0; k < TEDITOR_TREE_MAX_LEVELS; k++) ed->tree_hover[k] = -1;
     ed->show_line_nums = TRUE;
 
     if (!filepath || teditor_load_file(ed, filepath) != 0) {
@@ -1775,7 +1758,7 @@ int teditor_load_file(TEditor *ed, const char *filepath) {
     ed->hover_item = -1;
     ed->active_submenu = -1;
     ed->hover_subitem = -1;
-    if (ed->menu_levels) { free(ed->menu_levels); ed->menu_levels = NULL; }
+    for (int k = 0; k < TEDITOR_TREE_MAX_LEVELS; k++) ed->tree_hover[k] = -1;
 
     /* Extract base filename */
     const char *slash = strrchr(filepath, '/');

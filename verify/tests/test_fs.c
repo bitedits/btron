@@ -981,6 +981,46 @@ static void test_packed_markdown_files(void)
 }
 
 /* ─────────────────────────────────────────────────────────────────── */
+/* TEST 19: Volume /ANDERS & /SYS display in df                        */
+/* ─────────────────────────────────────────────────────────────────── */
+static void test_df_all_volumes(void)
+{
+    BlkDev *sys_dev = blk_file_create("btron_sys.vol", 0, 1024);
+    CHECK(sys_dev != NULL, "must open btron_sys.vol");
+    g_sys_vol = vol_mount(sys_dev);
+    CHECK(g_sys_vol != NULL, "must mount btron_sys.vol");
+
+    BlkDev *anders_dev = blk_file_create("btron_anders.vol", 0, 1024);
+    CHECK(anders_dev != NULL, "must open btron_anders.vol");
+    g_anders_vol = vol_mount(anders_dev);
+    CHECK(g_anders_vol != NULL, "must mount btron_anders.vol");
+
+    CapBuf cb;
+    memset(&cb, 0, sizeof(cb));
+    clu_df("", capture_fn, &cb);
+
+    int found_sys = 0, found_anders = 0;
+    for (int i = 0; i < cb.n; i++) {
+        if (strstr(cb.lines[i], "/SYS") && strstr(cb.lines[i], "SYS"))
+            found_sys = 1;
+        if (strstr(cb.lines[i], "/ANDERS") && strstr(cb.lines[i], "ANDERS"))
+            found_anders = 1;
+    }
+    CHECK(found_sys, "clu_df must output /SYS volume stats");
+    CHECK(found_anders, "clu_df must output /ANDERS volume stats");
+
+    vol_umount(g_anders_vol);
+    g_anders_vol = NULL;
+    blk_destroy(anders_dev);
+
+    vol_umount(g_sys_vol);
+    g_sys_vol = NULL;
+    blk_destroy(sys_dev);
+
+    TEST_PASS();
+}
+
+/* ─────────────────────────────────────────────────────────────────── */
 /* Main                                                                */
 /* ─────────────────────────────────────────────────────────────────── */
 int main(void)
@@ -1005,6 +1045,7 @@ int main(void)
     test_clu_full_interactive_session();
     test_real_image_clu();
     test_packed_markdown_files();
+    test_df_all_volumes();
 
     printf("\n=== Results: %d PASS  %d FAIL ===\n", g_pass, g_fail);
     return (g_fail > 0) ? 1 : 0;

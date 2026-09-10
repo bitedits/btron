@@ -16,25 +16,10 @@ extern "C" {
 
 #include <btron/app_menu.h>
 
-/* ── Live FS-walker menu cache ─────────────────────────────────── */
-#define TEDITOR_MENU_MAX_LEVELS  6
-#define TEDITOR_MENU_MAX_ITEMS  128
+/* ── Hierarchical Tree Open Menu Subsystem ───────────────────────── */
+#define TEDITOR_TREE_MAX_LEVELS  6
 #define TEDITOR_MENU_NAME_LEN    64
 #define TEDITOR_MENU_PATH_LEN   256
-
-typedef struct {
-    char name[TEDITOR_MENU_NAME_LEN];  /* display label */
-    char path[TEDITOR_MENU_PATH_LEN];  /* full path; empty string if this is a directory */
-    BOOL is_dir;
-} TMenuEntry;
-
-typedef struct {
-    char       dir_path[TEDITOR_MENU_PATH_LEN]; /* directory being listed at this level */
-    TMenuEntry items[TEDITOR_MENU_MAX_ITEMS];
-    int        count;   /* number of valid entries */
-    int        hover;   /* hovered item index, -1 = none */
-    BOOL       loaded;  /* TRUE once scan has been done for this dir_path */
-} TMenuLevel;
 
 typedef struct {
     char lines[TEDITOR_MAX_ROWS][TEDITOR_MAX_COLS];
@@ -70,7 +55,7 @@ typedef struct {
     int hover_item;        /* -1 = none, 0..N = hovered item in active menu */
     int active_submenu;    /* -1 = none, 0..N = item index spawning cascading submenu */
     int hover_subitem;     /* -1 = none, 0..N = hovered item in cascading submenu */
-    TMenuLevel *menu_levels; /* heap-allocated live FS-walker cache; NULL when menu closed */
+    int tree_hover[TEDITOR_TREE_MAX_LEVELS]; /* Cascading tree menu hover indices for Open menu levels */
     BOOL show_line_nums;   /* TRUE = display gutter line numbers */
     APP_MENU_BAR menu_bar;
 } TEditor;

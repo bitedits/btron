@@ -382,7 +382,7 @@ all: posix qemu kernel sakamura foma uefi pc98
 # ═══════════════════════════════════════════════════════════════════
 # POSIX Desktop
 # ═══════════════════════════════════════════════════════════════════
-posix: $(POSIX_TARGET)
+posix: $(POSIX_TARGET) btron_sys.vol btron_anders.vol
 	@ln -sf $(POSIX_TARGET) $(DEFAULT_TARGET)
 	@echo "=========================================================="
 	@echo " B-System POSIX Kernel & Desktop successfully built!"
@@ -399,10 +399,10 @@ posix: $(POSIX_TARGET)
 $(POSIX_TARGET): $(POSIX_OBJS)
 	$(CC) $(POSIX_OBJS) -o $@ $(LDFLAGS) $(SDL_LIBS)
 
-run-posix: $(POSIX_TARGET)
+run-posix: $(POSIX_TARGET) btron_sys.vol btron_anders.vol
 	./$(POSIX_TARGET)
 
-run-sakamura: $(SAKAMURA_TARGET)
+run-sakamura: $(SAKAMURA_TARGET) btron_sys.vol btron_anders.vol
 	./$(SAKAMURA_TARGET)
 
 # ══════════════════════════════════════════════════════════════════════

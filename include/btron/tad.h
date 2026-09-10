@@ -115,19 +115,6 @@ typedef struct {
 } TAD_SEG_HDR;
 
 /* ================================================================
- * Minimal Record Index descriptor (16 bytes on disk)
- * (conceptual; exact bit packing depends on index level)
- * ================================================================ */
-
-typedef struct {
-    UH   kind;         /* distinguishes normal / link / continuation */
-    UH   type;         /* record type (RT_*) + subtype bits          */
-    UW   size;         /* payload size in bytes                      */
-    UW   offset;       /* byte offset into Data Blocks               */
-    /* remaining bytes of the 16-byte entry are flags / reserved     */
-} RECORD_INDEX;
-
-/* ================================================================
  * Convenience helpers (optional, implementation-defined)
  * ================================================================ */
 

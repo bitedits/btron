@@ -19,6 +19,18 @@ typedef struct {
     /* remaining bytes of the 16-byte slot are flags / reserved */
 } RecordIndex;
 
+/*
+ * Link record payload (record type RT_LINK = 0).
+ * This is the on-disk form of a Virtual Body.
+ * Size is implementation-defined; keep it compact.
+ */
+typedef struct {
+    UW   target_fid;     /* FID of the referenced Real Body */
+    UH   attr;           /* link attributes */
+    UH   name_len;
+    /* followed by name bytes (TC or UTF-8 in clean-room) */
+} LinkRecord;
+
 #ifdef __cplusplus
 }
 #endif

@@ -8,14 +8,24 @@ extern "C" {
 #endif
 
 /*
- * File Header – exactly 192 bytes on disk (big-endian classic)
- * Only the most important fields are shown; the rest is padding/reserved.
+ * File Header – 192 bytes on disk.
+ * Field order is logical; exact classic offsets can be refined later.
+ * Multi-byte fields are big-endian on classic volumes.
  */
+
 typedef struct {
     UH   flags;          /* TTTT xxxx BAPO xRWE */
     UH   atype;          /* application type */
-    /* timestamps, owner, group, link count, index level, size … */
-    UB   reserved[192 - 4];
+    UW   ctime;          /* creation  (STIME-style) */
+    UW   mtime;          /* modification */
+    UW   atime;          /* access */
+    UH   owner;
+    UH   group;
+    UH   nlnk;           /* link count */
+    UH   idxlv;          /* index level: 0=direct, 1/2=indirect */
+    UW   nrec;           /* number of records */
+    UW   total_size;     /* total payload bytes */
+    UB   reserved[192 - 32];
 } FileHeader;
 
 #ifdef __cplusplus

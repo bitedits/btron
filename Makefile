@@ -996,7 +996,7 @@ $(TEST_MOZC_BIN): $(TEST_MOZC_OBJS)
 # ═══════════════════════════════════════════════════════════════════
 TEST_EDITOR_SRCS = src/apps/test_editor_ui.c src/apps/t_editor.c src/window/app_menu.c src/tip/mozc_kkc.c src/tip/tip_ife.c src/tip/wylie.c src/tip/tibetan_dict.c \
                    src/font/troncode.c src/font/jis_fonts.c src/font/tibetan_fonts.c src/tip/tip_vobj.c src/window/wnd.c \
-                   src/graphics/dp_core.c
+                   src/graphics/dp_core.c src/fs/blk_mem.c src/fs/blk_file.c src/fs/vol.c src/fs/file.c
 TEST_EDITOR_OBJS = $(TEST_EDITOR_SRCS:.c=.test.o)
 TEST_EDITOR_BIN  = test_editor
 

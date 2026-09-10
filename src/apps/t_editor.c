@@ -9,6 +9,9 @@
 #include <btron/dp.h>
 #include <btron/event.h>
 #include <btron/tip.h>
+#include <btron/file.h>
+#include <btron/fs/vol_api.h>
+#include <btron/fs/fs_internal.h>
 
 #if defined(__STDC_HOSTED__) && __STDC_HOSTED__ == 1
 #include <stdio.h>
@@ -36,6 +39,19 @@ extern void* tkl_memmove(void *dest, const void *src, size_t n);
 #define memmove tkl_memmove
 #define strlen  tkl_strlen
 #define strstr  tkl_strstr
+#define strcmp  tkl_strcmp
+
+static inline char* local_strrchr(const char *s, int c) {
+    if (!s) return NULL;
+    const char *last = NULL;
+    while (*s) {
+        if (*s == (char)c) last = s;
+        s++;
+    }
+    if (c == 0) return (char*)s;
+    return (char*)last;
+}
+#define strrchr local_strrchr
 #endif
 
 /* TEditor struct is defined in <btron/t_editor.h> */
@@ -537,8 +553,37 @@ int teditor_get_asset_files(char files[][64], int max_files) {
     if (!files || max_files <= 0) return 0;
     int count = 0;
 
+    /* 1. Discover files from BTRON volume if mounted */
+    if (g_sys_vol) {
+        ID dir = opn_dir("/SYS");
+        if (dir >= 0) {
+            DIR_ENTRY entry;
+            while (rd_dir(dir, &entry) == 0 && count < max_files) {
+                if (entry.name[0] == '\0' || strcmp(entry.name, "SYS") == 0 || strcmp(entry.name, "TRASH") == 0)
+                    continue;
+                size_t nlen = strlen(entry.name);
+                BOOL is_text = FALSE;
+                if (nlen > 3 && strcmp(entry.name + nlen - 3, ".md") == 0) is_text = TRUE;
+                else if (nlen > 4 && strcmp(entry.name + nlen - 4, ".txt") == 0) is_text = TRUE;
+                if (is_text) {
+                    BOOL dup = FALSE;
+                    for (int i = 0; i < count; i++) {
+                        if (strcmp(files[i], entry.name) == 0) { dup = TRUE; break; }
+                    }
+                    if (!dup) {
+                        strncpy(files[count], entry.name, 63);
+                        files[count][63] = '\0';
+                        count++;
+                    }
+                }
+            }
+            cls_dir(dir);
+        }
+    }
+
 #if defined(__STDC_HOSTED__) && __STDC_HOSTED__ == 1
-    const char *dirs[] = { "assets/texts", "assets", NULL };
+    /* 2. Discover files from host directories (assets/texts, doc/md, assets) */
+    const char *dirs[] = { "assets/texts", "doc/md", "assets", NULL };
     for (int d_idx = 0; dirs[d_idx] && count < max_files; d_idx++) {
         DIR *d = opendir(dirs[d_idx]);
         if (!d) continue;
@@ -546,7 +591,10 @@ int teditor_get_asset_files(char files[][64], int max_files) {
         while ((de = readdir(d)) != NULL && count < max_files) {
             if (de->d_name[0] == '.') continue;
             size_t nlen = strlen(de->d_name);
-            if (nlen > 4 && strcmp(de->d_name + nlen - 4, ".txt") == 0) {
+            BOOL is_text = FALSE;
+            if (nlen > 3 && strcmp(de->d_name + nlen - 3, ".md") == 0) is_text = TRUE;
+            else if (nlen > 4 && strcmp(de->d_name + nlen - 4, ".txt") == 0) is_text = TRUE;
+            if (is_text) {
                 BOOL dup = FALSE;
                 for (int i = 0; i < count; i++) {
                     if (strcmp(files[i], de->d_name) == 0) { dup = TRUE; break; }
@@ -563,10 +611,14 @@ int teditor_get_asset_files(char files[][64], int max_files) {
 #endif
 
     if (count == 0) {
-        strncpy(files[0], "BTRON3_Report.txt", 63);
+        strncpy(files[0], "FS.md", 63);
         count++;
         if (max_files > 1) {
-            strncpy(files[1], "Heart_Sutra_Tibetan.txt", 63);
+            strncpy(files[1], "BTRON3_Report.txt", 63);
+            count++;
+        }
+        if (max_files > 2) {
+            strncpy(files[2], "Heart_Sutra_Tibetan.txt", 63);
             count++;
         }
     }
@@ -598,17 +650,7 @@ static void teditor_execute_menu_cmd(TEditor *ed, WND *wnd, int cmd, int sub_idx
             char files[32][64];
             int cnt = teditor_get_asset_files(files, 32);
             if (sub_idx >= 0 && sub_idx < cnt) {
-                char path[128];
-                snprintf(path, sizeof(path), "assets/texts/%s", files[sub_idx]);
-#if defined(__STDC_HOSTED__) && __STDC_HOSTED__ == 1
-                FILE *fp = fopen(path, "r");
-                if (!fp) {
-                    snprintf(path, sizeof(path), "assets/%s", files[sub_idx]);
-                } else {
-                    fclose(fp);
-                }
-#endif
-                teditor_load_file(ed, path);
+                teditor_load_file(ed, files[sub_idx]);
                 snprintf(wnd->title, sizeof(wnd->title), "Editor - %s", ed->filename);
             }
             break;
@@ -1077,11 +1119,90 @@ int teditor_load_file(TEditor *ed, const char *filepath) {
     ed->active_submenu = -1;
     ed->hover_subitem = -1;
 
+    /* Extract base filename */
+    const char *slash = strrchr(filepath, '/');
+#ifdef _WIN32
+    const char *bslash = strrchr(filepath, '\\');
+    if (bslash && (!slash || bslash > slash)) slash = bslash;
+#endif
+    const char *base = slash ? slash + 1 : filepath;
+
+    /* 1. Try loading from BTRON volume if mounted */
+    if (g_sys_vol) {
+        ID fd = opn_fil(base, 0x0001 /* F_READ */);
+        if (fd < 0 && filepath[0] != '/') {
+            fd = opn_fil(filepath, 0x0001);
+        }
+        if (fd >= 0) {
+            ID rec = opn_rec(fd, 0, 0x0001);
+            if (rec >= 0) {
+                OpenFile *of = &g_open_files[(int)fd];
+                UW rsize = (of->nrec > 0) ? of->ridx[0].size : 0;
+                char *buf = (char *)malloc(rsize + 1);
+                if (buf) {
+                    W read_sz = 0;
+                    rd_rec(rec, buf, (W)rsize, &read_sz);
+                    buf[read_sz] = '\0';
+                    cls_rec(rec);
+                    cls_fil(fd);
+
+                    const char *p = buf;
+                    if ((unsigned char)p[0] == 0xFF && (unsigned char)p[1] == 0xE1 && read_sz >= 4) {
+                        p += 4;
+                    }
+
+                    ed->total_lines = 0;
+                    ed->cursor_row = 0;
+                    ed->cursor_col = 0;
+                    ed->scroll_row = 0;
+                    ed->scroll_col = 0;
+                    ed->sel_active = FALSE;
+                    ed->is_modified = FALSE;
+
+                    while (*p && ed->total_lines < TEDITOR_MAX_ROWS) {
+                        const char *eol = p;
+                        while (*eol && *eol != '\n' && *eol != '\r') eol++;
+                        size_t llen = (size_t)(eol - p);
+                        if (llen >= TEDITOR_MAX_COLS) llen = TEDITOR_MAX_COLS - 1;
+                        memcpy(ed->lines[ed->total_lines], p, llen);
+                        ed->lines[ed->total_lines][llen] = '\0';
+                        ed->total_lines++;
+                        p = eol;
+                        if (*p == '\r') p++;
+                        if (*p == '\n') p++;
+                    }
+                    if (ed->total_lines == 0) {
+                        ed->total_lines = 1;
+                        ed->lines[0][0] = '\0';
+                    }
+                    free(buf);
+                    strncpy(ed->filename, base, sizeof(ed->filename) - 1);
+                    ed->filename[sizeof(ed->filename) - 1] = '\0';
+                    return 0;
+                }
+                cls_rec(rec);
+            }
+            cls_fil(fd);
+        }
+    }
+
 #if defined(__STDC_HOSTED__) && __STDC_HOSTED__ == 1
+    /* 2. Fall back to host filesystem */
     FILE *fp = fopen(filepath, "r");
     if (!fp) {
-        return -1;
+        char alt_path[128];
+        snprintf(alt_path, sizeof(alt_path), "doc/md/%s", base);
+        fp = fopen(alt_path, "r");
+        if (!fp) {
+            snprintf(alt_path, sizeof(alt_path), "assets/texts/%s", base);
+            fp = fopen(alt_path, "r");
+            if (!fp) {
+                snprintf(alt_path, sizeof(alt_path), "assets/%s", base);
+                fp = fopen(alt_path, "r");
+            }
+        }
     }
+    if (!fp) return -1;
 
     ed->total_lines = 0;
     ed->cursor_row = 0;
@@ -1093,7 +1214,6 @@ int teditor_load_file(TEditor *ed, const char *filepath) {
 
     char line_buf[TEDITOR_MAX_COLS * 2];
     while (fgets(line_buf, sizeof(line_buf), fp) && ed->total_lines < TEDITOR_MAX_ROWS) {
-        /* Strip trailing newline */
         size_t len = strlen(line_buf);
         while (len > 0 && (line_buf[len - 1] == '\n' || line_buf[len - 1] == '\r')) {
             line_buf[--len] = '\0';
@@ -1109,20 +1229,11 @@ int teditor_load_file(TEditor *ed, const char *filepath) {
         ed->lines[0][0] = '\0';
     }
 
-    /* Extract base filename */
-    const char *slash = strrchr(filepath, '/');
-#ifdef _WIN32
-    const char *bslash = strrchr(filepath, '\\');
-    if (bslash && (!slash || bslash > slash)) slash = bslash;
-#endif
-    const char *base = slash ? slash + 1 : filepath;
     strncpy(ed->filename, base, sizeof(ed->filename) - 1);
     ed->filename[sizeof(ed->filename) - 1] = '\0';
-
     return 0;
 #else
-    (void)filepath;
-    return 0;
+    return -1;
 #endif
 }
 
@@ -1130,21 +1241,68 @@ int teditor_save_file(TEditor *ed, const char *filepath) {
     if (!ed) return -1;
     const char *target = filepath ? filepath : ed->filename;
 
-#if defined(__STDC_HOSTED__) && __STDC_HOSTED__ == 1
-    FILE *fp = fopen(target, "w");
-    if (!fp) return -1;
-
-    for (int i = 0; i < ed->total_lines; i++) {
-        fprintf(fp, "%s\n", ed->lines[i]);
-    }
-    fclose(fp);
-    ed->is_modified = FALSE;
-    return 0;
-#else
-    (void)target;
-    ed->is_modified = FALSE;
-    return 0;
+    const char *slash = strrchr(target, '/');
+#ifdef _WIN32
+    const char *bslash = strrchr(target, '\\');
+    if (bslash && (!slash || bslash > slash)) slash = bslash;
 #endif
+    const char *base = slash ? slash + 1 : target;
+
+    /* 1. If BTRON volume is mounted, save Real Body record on volume */
+    if (g_sys_vol) {
+        ID fd = opn_fil(base, 0x0002 /* F_WRITE */);
+        if (fd < 0) {
+            fd = cre_fil(base, 0x0002 /* F_WRITE */);
+        }
+        if (fd >= 0) {
+            size_t total_sz = 0;
+            for (int i = 0; i < ed->total_lines; i++) {
+                total_sz += strlen(ed->lines[i]) + 1;
+            }
+            char *buf = (char *)malloc(total_sz + 1);
+            if (buf) {
+                size_t pos = 0;
+                for (int i = 0; i < ed->total_lines; i++) {
+                    size_t llen = strlen(ed->lines[i]);
+                    memcpy(buf + pos, ed->lines[i], llen);
+                    pos += llen;
+                    buf[pos++] = '\n';
+                }
+                OpenFile *of = &g_open_files[(int)fd];
+                if (of->nrec > 0) {
+                    del_rec(fd, 0);
+                }
+                ins_rec(fd, 0, buf, (W)total_sz);
+                fil_set_rec_type(fd, 0, (unsigned short)RT_TADDATA);
+                free(buf);
+            }
+            cls_fil(fd);
+            vol_sync(g_sys_vol);
+        }
+    }
+
+#if defined(__STDC_HOSTED__) && __STDC_HOSTED__ == 1
+    /* 2. Also save to host filesystem if hosted */
+    FILE *fp = fopen(target, "w");
+    if (!fp) {
+        char alt_path[128];
+        snprintf(alt_path, sizeof(alt_path), "doc/md/%s", base);
+        fp = fopen(alt_path, "w");
+        if (!fp) {
+            snprintf(alt_path, sizeof(alt_path), "assets/texts/%s", base);
+            fp = fopen(alt_path, "w");
+        }
+    }
+    if (fp) {
+        for (int i = 0; i < ed->total_lines; i++) {
+            fprintf(fp, "%s\n", ed->lines[i]);
+        }
+        fclose(fp);
+    }
+#endif
+
+    ed->is_modified = FALSE;
+    return 0;
 }
 
 int teditor_close_file(TEditor *ed) {

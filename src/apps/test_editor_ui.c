@@ -15,6 +15,9 @@
 #include <btron/jis_fonts.h>
 #include <btron/tip.h>
 #include <btron/apps.h>
+#include <btron/file.h>
+#include <btron/fs/block.h>
+#include <btron/fs/vol_api.h>
 
 /* Mock SDL keysyms for testing */
 #define SDLK_BACKSPACE   8
@@ -963,6 +966,109 @@ static void test_teditor_nano_about_box(void) {
     TEST_ASSERT(TRUE, "Escape key cleanly dismisses nano About Box");
 }
 
+/* ── UI Test 18: BTRON Volume & Markdown Direct Open in Editor ─── */
+static void test_volume_and_markdown_file_operations(void) {
+    printf("\n[UI TEST 18] BTRON Volume & Markdown Direct Open in Editor\n");
+
+    /* 1. Verify .md files are discovered in asset list */
+    char files[32][64];
+    int cnt = teditor_get_asset_files(files, 32);
+    TEST_ASSERT(cnt > 2, "Discovered asset files include markdown documents");
+
+    BOOL found_fs_md = FALSE, found_readme_md = FALSE;
+    for (int i = 0; i < cnt; i++) {
+        if (strcmp(files[i], "FS.md") == 0) found_fs_md = TRUE;
+        if (strcmp(files[i], "README.md") == 0) found_readme_md = TRUE;
+    }
+    TEST_ASSERT(found_fs_md, "Discovered FS.md in Open menu asset list");
+    TEST_ASSERT(found_readme_md, "Discovered README.md in Open menu asset list");
+
+    /* 2. Test opening FS.md directly into editor */
+    TEditor ed;
+    memset(&ed, 0, sizeof(ed));
+    int rc = teditor_load_file(&ed, "FS.md");
+    TEST_ASSERT(rc == 0, "teditor_load_file('FS.md') succeeded");
+    TEST_ASSERT(ed.total_lines > 10, "FS.md loaded with multiple lines");
+    TEST_ASSERT(strcmp(ed.filename, "FS.md") == 0, "Editor filename is FS.md");
+
+    /* 3. Mount real btron_sys.vol and verify volume-backed loading */
+    BlkDev *dev = blk_file_create("btron_sys.vol", 0 /* read/write existing */, 1024);
+    TEST_ASSERT(dev != NULL, "Opened btron_sys.vol for Editor UI test");
+    Volume *v = vol_mount(dev);
+    TEST_ASSERT(v != NULL, "Mounted btron_sys.vol for Editor UI test");
+    g_sys_vol = v;
+
+    /* 4. Enumerate files directly from mounted BTRON volume */
+    char vol_files[32][64];
+    int vol_cnt = teditor_get_asset_files(vol_files, 32);
+    TEST_ASSERT(vol_cnt >= 8, "Volume-backed asset discovery returned all manifest docs");
+    BOOL vol_has_fs = FALSE, vol_has_clu = FALSE;
+    int vol_fs_idx = -1;
+    for (int i = 0; i < vol_cnt; i++) {
+        if (strcmp(vol_files[i], "FS.md") == 0) {
+            vol_has_fs = TRUE;
+            vol_fs_idx = i;
+        }
+        if (strcmp(vol_files[i], "CLU.md") == 0) vol_has_clu = TRUE;
+    }
+    TEST_ASSERT(vol_has_fs, "Volume /SYS container contains FS.md");
+    TEST_ASSERT(vol_has_clu, "Volume /SYS container contains CLU.md");
+
+    /* 5. Cascading menu click simulation on volume-backed FS.md */
+    WND *wnd = open_t_editor_window();
+    TEST_ASSERT(wnd != NULL, "Created Editor window with volume active");
+    TEditor *wnd_ed = (TEditor*)(uintptr_t)wnd->user_data;
+    TEST_ASSERT(wnd_ed != NULL, "Window TEditor instance valid");
+
+    /* Open File Menu and hover over Open submenu */
+    teditor_open_menu(wnd_ed, 0);
+    EVT evt_hover;
+    memset(&evt_hover, 0, sizeof(EVT));
+    evt_hover.type = EV_MOUSE_MOVE;
+    evt_hover.pos.x = wnd->bounds.left + 4 + 30;
+    evt_hover.pos.y = wnd->bounds.top + 26 + 56;
+    wnd->event_handler(wnd, &evt_hover);
+    TEST_ASSERT(wnd_ed->active_submenu == 1, "Submenu expanded via mouse hover");
+
+    /* Simulate click on FS.md row inside submenu */
+    TEST_ASSERT(vol_fs_idx >= 0, "FS.md found in volume asset list");
+    H sub_x = 4 + 250 - 2 + 40;
+    H sub_y = 21 + 3 + (1 * 22) + 3 + vol_fs_idx * 22 + 10;
+    EVT evt_click;
+    memset(&evt_click, 0, sizeof(EVT));
+    evt_click.type = EV_BUT_DOWN;
+    evt_click.pos.x = wnd->bounds.left + 4 + sub_x;
+    evt_click.pos.y = wnd->bounds.top + 26 + sub_y;
+    wnd->event_handler(wnd, &evt_click);
+
+    TEST_ASSERT(strcmp(wnd_ed->filename, "FS.md") == 0,
+                "FS.md from BTRON volume loaded in 1 click from cascading menu");
+    TEST_ASSERT(wnd_ed->total_lines > 10, "FS.md buffer populated with document content");
+    TEST_ASSERT(wnd_ed->active_menu == -1, "Menu closed after volume file selection");
+
+    /* 6. Test saving file back to BTRON volume and verify round-trip */
+    strncpy(wnd_ed->lines[0], "# BTRON3 Custom Note", TEDITOR_MAX_COLS - 1);
+    wnd_ed->is_modified = TRUE;
+    int save_rc = teditor_save_file(wnd_ed, "NOTE.md");
+    TEST_ASSERT(save_rc == 0, "Saved NOTE.md to BTRON volume");
+
+    TEditor verify_ed;
+    memset(&verify_ed, 0, sizeof(verify_ed));
+    int load_rc = teditor_load_file(&verify_ed, "NOTE.md");
+    TEST_ASSERT(load_rc == 0, "Loaded newly saved NOTE.md back from BTRON volume");
+    TEST_ASSERT(strcmp(verify_ed.lines[0], "# BTRON3 Custom Note") == 0,
+                "NOTE.md contents match saved text");
+
+    /* Clean up newly created test file on volume */
+    del_fil("NOTE.md");
+    vol_sync(v);
+
+    cls_wnd(wnd);
+    vol_umount(v);
+    g_sys_vol = NULL;
+    blk_destroy(dev);
+}
+
 int main(int argc, char **argv) {
     (void)argc;
     (void)argv;
@@ -988,6 +1094,7 @@ int main(int argc, char **argv) {
     test_dynamic_ps_multiple_instances();
     test_modern_menu_bar_and_asset_discovery();
     test_teditor_nano_about_box();
+    test_volume_and_markdown_file_operations();
 
     printf("\n==========================================================\n");
     printf(" Editor TEST RESULTS: %d / %d tests passed (%.1f%%)\n",

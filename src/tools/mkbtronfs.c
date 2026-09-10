@@ -132,6 +132,63 @@ static int imprint_tad(const char *vol_name_entry, const char *payload_path)
     return (err == 0) ? 0 : -1;
 }
 
+/* ── Imprint one MD / TXT file ──────────────────────────────────── */
+static int imprint_text(const char *vol_name_entry, const char *payload_path)
+{
+    unsigned char *payload = NULL;
+    size_t payload_len = 0;
+
+    if (!payload_path || !payload_path[0] || strcmp(payload_path, "-") == 0) {
+        fprintf(stderr, "mkbtronfs: error: text entry '%s' requires payload file\n", vol_name_entry);
+        return -1;
+    }
+
+    FILE *pf = fopen(payload_path, "rb");
+    if (!pf) {
+        fprintf(stderr, "mkbtronfs: cannot open text payload '%s': %s\n",
+                payload_path, strerror(errno));
+        return -1;
+    }
+    fseek(pf, 0, SEEK_END);
+    long fsz = ftell(pf);
+    rewind(pf);
+    if (fsz > 0) {
+        payload = (unsigned char *)malloc((size_t)fsz);
+        if (payload) {
+            payload_len = fread(payload, 1, (size_t)fsz, pf);
+        }
+    }
+    fclose(pf);
+
+    if (!payload && fsz > 0) {
+        fprintf(stderr, "mkbtronfs: malloc failed for '%s'\n", payload_path);
+        return -1;
+    }
+
+    /* Create the Real Body */
+    ID fd = cre_fil(vol_name_entry, 0x0002 /* F_WRITE */);
+    if (fd < 0) {
+        fprintf(stderr, "mkbtronfs: cre_fil('%s') failed\n", vol_name_entry);
+        free(payload);
+        return -1;
+    }
+
+    FID fid = g_open_files[(int)fd].fid;
+
+    ER err = ins_rec(fd, 0, payload, (int)payload_len);
+    if (err == 0) {
+        fil_set_rec_type(fd, 0, (unsigned short)RT_TADDATA);
+    }
+
+    cls_fil(fd);
+    free(payload);
+
+    if (err == 0) {
+        add_root_link(vol_name_entry, fid);
+    }
+    return (err == 0) ? 0 : -1;
+}
+
 /* ── Imprint one LINK file ──────────────────────────────────────── */
 static int imprint_link(const char *link_name, int target_fid_num)
 {
@@ -213,6 +270,10 @@ static int process_manifest(const char *manifest_path)
         if (strcmp(ftype, "TAD") == 0) {
             printf("  [TAD ] %s\n", fname);
             if (imprint_tad(fname, extra[0] ? extra : NULL) != 0)
+                errors++;
+        } else if (strcmp(ftype, "MD") == 0 || strcmp(ftype, "TXT") == 0) {
+            printf("  [%-4s] %s (%s)\n", ftype, fname, extra);
+            if (imprint_text(fname, extra[0] ? extra : NULL) != 0)
                 errors++;
         } else if (strcmp(ftype, "LINK") == 0) {
             int target_fid = 0; /* default: root */

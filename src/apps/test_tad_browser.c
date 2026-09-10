@@ -322,6 +322,51 @@ static void test_utf8_cyrillic_font_rendering(void) {
     const UB *bmp_a = get_glyph_bitmap(tc_a, &gw, &gh);
     TEST_ASSERT(bmp_a != NULL, "Retrieved 8x16 dot-matrix bitmap for 'А'");
     TEST_ASSERT(gw == 8 && gh == 16, "Verified 8x16 proportional glyph dimensions for 'А'");
+
+    /* Test 5: European & Ukrainian Quotation Marks « (U+00AB) and » (U+00BB) */
+    TC tc_lq = utf8_to_tc("«", &consumed);
+    TEST_ASSERT(consumed == 2, "Consumed 2 UTF-8 bytes for '«'");
+    TEST_ASSERT(tc_lq == 0x00AB, "Mapped '«' (U+00AB) to Plane 0 (0x00AB)");
+
+    TC tc_rq = utf8_to_tc("»", &consumed);
+    TEST_ASSERT(consumed == 2, "Consumed 2 UTF-8 bytes for '»'");
+    TEST_ASSERT(tc_rq == 0x00BB, "Mapped '»' (U+00BB) to Plane 0 (0x00BB)");
+
+    len = tc_to_utf8(tc_lq, u8, sizeof(u8));
+    TEST_ASSERT(len == 2 && strcmp(u8, "«") == 0, "Round-trip preserved '«'");
+    len = tc_to_utf8(tc_rq, u8, sizeof(u8));
+    TEST_ASSERT(len == 2 && strcmp(u8, "»") == 0, "Round-trip preserved '»'");
+
+    TEST_ASSERT(tc_get_char_advance(tc_lq, 0) == 8, "Left guillemet '«' has 8px advance");
+    TEST_ASSERT(tc_get_char_advance(tc_rq, 0) == 8, "Right guillemet '»' has 8px advance");
+
+    const UB *bmp_lq = get_glyph_bitmap(tc_lq, &gw, &gh);
+    TEST_ASSERT(bmp_lq != NULL, "Retrieved 8x16 bitmap for '«'");
+    TEST_ASSERT(gw == 8 && gh == 16, "Verified 8x16 dimensions for '«'");
+    TEST_ASSERT(bmp_lq[7] == 0xD8, "Verified peak left-pointing bits (0xD8) for '«'");
+
+    const UB *bmp_rq = get_glyph_bitmap(tc_rq, &gw, &gh);
+    TEST_ASSERT(bmp_rq != NULL, "Retrieved 8x16 bitmap for '»'");
+    TEST_ASSERT(gw == 8 && gh == 16, "Verified 8x16 dimensions for '»'");
+    TEST_ASSERT(bmp_rq[7] == 0x1B, "Verified peak right-pointing bits (0x1B) for '»'");
+
+    /* Test 6: Latin-1 Range Symbols (№, °, ±, ©) */
+    TC tc_num = utf8_to_tc("№", &consumed);
+    const UB *bmp_num = get_glyph_bitmap(tc_num, &gw, &gh);
+    TEST_ASSERT(bmp_num != NULL && gw == 8 && gh == 16, "Verified 8x16 dimensions for '№'");
+    TEST_ASSERT(tc_get_char_advance(tc_num, 0) == 8, "Numero sign '№' has 8px advance");
+
+    TC tc_deg = utf8_to_tc("°", &consumed);
+    const UB *bmp_deg = get_glyph_bitmap(tc_deg, &gw, &gh);
+    TEST_ASSERT(bmp_deg != NULL && gw == 8 && gh == 16, "Verified 8x16 dimensions for '°'");
+
+    TC tc_pm = utf8_to_tc("±", &consumed);
+    const UB *bmp_pm = get_glyph_bitmap(tc_pm, &gw, &gh);
+    TEST_ASSERT(bmp_pm != NULL && gw == 8 && gh == 16, "Verified 8x16 dimensions for '±'");
+
+    TC tc_copy = utf8_to_tc("©", &consumed);
+    const UB *bmp_copy = get_glyph_bitmap(tc_copy, &gw, &gh);
+    TEST_ASSERT(bmp_copy != NULL && gw == 8 && gh == 16, "Verified 8x16 dimensions for '©'");
 }
 
 /* ── Test 9: BTRON3 3.20 Default Corner Window Resizing ── */

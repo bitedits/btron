@@ -33,7 +33,6 @@ VERIFY_SRCS = btron_verify.c \
               ../src/kernel/mem_mgr.c \
               ../src/kernel/clk_mgr.c \
               ../src/kernel/dev_mgr.c \
-              ../src/kernel/fs_record.c \
               ../src/kernel/sys_mgmt.c \
               ../src/kernel/tcpip.c \
               ../src/window/event.c \
@@ -51,7 +50,11 @@ VERIFY_SRCS = btron_verify.c \
               ../src/font/troncode.c \
               ../src/font/jis_fonts.c \
               ../src/font/tibetan_fonts.c \
-              ../src/font/font_mgr.c
+              ../src/font/font_mgr.c \
+              ../src/fs/blk_mem.c \
+              ../src/fs/blk_file.c \
+              ../src/fs/vol.c \
+              ../src/kernel/fs_record.c
 
 VERIFY_OBJS = $(VERIFY_SRCS:.c=.o)
 VERIFY_BIN = btron_verify

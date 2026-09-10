@@ -1,0 +1,11 @@
+# B-System /SYS Volume Manifest
+# Processed by: mkbtronfs manifest.txt -o btron_sys.vol
+# Format: FILE "name"  TAD|LINK  [payload_path | target_fid | -]
+# '-' means empty/placeholder payload.
+
+FILE "BTRON Spec Book 1"  TAD   -
+FILE "Cho-Kanji Guide"    TAD   -
+FILE "Kernel Internals"   TAD   -
+FILE "Graphics & Display" TAD   -
+FILE "Applications & HMI" TAD   -
+FILE "TRASH"              LINK  0

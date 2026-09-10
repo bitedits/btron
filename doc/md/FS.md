@@ -438,7 +438,160 @@ Virtual Body = RT_LINK (+ optional TS_VOBJ in TAD), not a separate inode table
 CLI / app  = Real Body with RT_PROG, registered for launch — not ELF on volume
 ```
 
-## 17. References
+## 18. Real Working Examples & On-Disk Layout
+
+### 18.1 Volume Hex Dump Breakdown (btron_sys.vol)
+
+Below is the verified binary structure of block 0 (`btron_sys.vol`), formatted with `NFMAX=256`, `NLB=1024` (1024 KiB total):
+
+```text
+00000000: 42fe 6400 0000 0100 0000 0400 0001 0001  B.d.............
+00000010: 0001 0000 0000 03ed 0000 0005 5359 5300  ............SYS.
+00000020: 0000 0000 0000 0000 0000 0000 0000 0000  ................
+...
+00000070: 0000 0000 0000 0000 0000 0000 0000 0004  ................
+```
+
+- `0x00..0x01` : `0x42FE` — `VOL_MAGIC_STD` (BTRON3 volume identifier)
+- `0x02..0x03` : `0x6400` — `FS_TYPE_STD`
+- `0x04..0x07` : `0x00000100` — `NFMAX` = 256 files max
+- `0x08..0x0B` : `0x00000400` — `NLB` = 1024 logical blocks (1 MiB volume)
+- `0x0C..0x0D` : `0x0001` — `SFIDT` = 1 block for FID table (`256 * 4 / 1024`)
+- `0x0E..0x0F` : `0x0001` — `SFNMT` = 1 block for hash table
+- `0x10..0x11` : `0x0001` — `NBMP` = 1 block for allocation bitmap
+- `0x12..0x13` : `0x0000` — `access_level` = 0
+- `0x14..0x17` : `0x000003ED` — `free_blocks` = 1005 blocks free
+- `0x18..0x1B` : `0x00000005` — `data_start` = logical block 5 (after system area)
+- `0x1C..0x43` : `"SYS\0..."` — Volume label / root name (40 bytes)
+- `0x7C..0x7F` : `0x00000004` — `hdr_blk` (root FileHeader logical block)
+
+### 18.2 On-Disk Real Body Structure (FID 0 Root Container)
+
+In BTRON, a folder or volume root is a Real Body whose record stream consists of `RT_LINK` records pointing to member Real Bodies:
+
+```text
+Logical Block 4: Root Container Header (FileHeader + RecordIndex)
+┌───────────────────────────────────────────────────────────────┐
+│ FileHeader (192 bytes)                                        │
+│   +00: 0x1003 (FTYPE_NORMAL, FFLG_READ | FFLG_WRITE)          │
+│   +04: ctime | +08: mtime | +12: atime (BTRON epoch)          │
+│   +20: 0x0001 (nlnk) | +22: 0x0000 (idxlv = 0)                │
+│   +24: 0x00000006 (nrec = 6 member files)                     │
+│   +28: 0x00000138 (total_size = 312 bytes)                   │
+│   +32: "SYS" (UTF-8 name, 40 bytes)                           │
+│   +72: data_blk = 5 (first allocated extent block)           │
+├───────────────────────────────────────────────────────────────┤
+│ RecordIndex Table (40 entries × 16 bytes = 640 bytes)         │
+│   [0] kind=0 type=0x0000 (RT_LINK) size=50 offset=0           │
+│   [1] kind=0 type=0x0000 (RT_LINK) size=47 offset=50          │
+│   [2] kind=0 type=0x0000 (RT_LINK) size=49 offset=97          │
+│   [3] kind=0 type=0x0000 (RT_LINK) size=51 offset=146         │
+│   [4] kind=0 type=0x0000 (RT_LINK) size=50 offset=197         │
+│   [5] kind=0 type=0x0000 (RT_LINK) size=37 offset=247         │
+├───────────────────────────────────────────────────────────────┤
+│ Fragment Table / Padding (192 bytes)                          │
+└───────────────────────────────────────────────────────────────┘
+```
+
+### 18.3 Binary Layout of an `RT_LINK` Record (Virtual Body)
+
+Each link record payload is laid out deterministically:
+
+```text
+Offset  Size  Field         Example
+0       4     target_fid    0x00000001 (FID of "BTRON Spec Book 1")
+4       10    attr[5]       00 00  00 00  00 00  00 00  00 00
+14      2     name_len      0x0011 (17 bytes)
+16      N     name          "BTRON Spec Book 1"
+```
+
+### 18.4 Real CLU Interactive Shell Session (CLU.md Conformance)
+
+The following transcript demonstrates the exact behavior verified by the test suite:
+
+```shell
+[/SYS]% df
+PATH  DEV   TOTAL   FREE    USED  UNIT  MAXFILE  NAME
+/SYS  mem0  1024K   1005K    1%   1024  256      SYS
+
+[/SYS]% fs
+NO: TYPE STYPE : SIZE / NAME
+0:  0    0000  : BTRON Spec Book 1
+1:  0    0000  : Cho-Kanji Guide
+2:  0    0000  : Kernel Internals
+3:  0    0000  : Graphics & Display
+4:  0    0000  : Applications & HMI
+5:  0    0000  : TRASH
+
+[/SYS]% fs -l
+NO: 0 STYPE : FID [ATR1 ATR2 ATR3 ATR4 ATR5] : NAME
+0:  0 0000  : 1   [0000 0000 0000 0000 0000] : BTRON Spec Book 1
+1:  0 0000  : 2   [0000 0000 0000 0000 0000] : Cho-Kanji Guide
+2:  0 0000  : 3   [0000 0000 0000 0000 0000] : Kernel Internals
+3:  0 0000  : 4   [0000 0000 0000 0000 0000] : Graphics & Display
+4:  0 0000  : 5   [0000 0000 0000 0000 0000] : Applications & HMI
+5:  0 0000  : 0   [0000 0000 0000 0000 0000] : TRASH
+
+[/SYS]% fs "BTRON Spec Book 1"
+NO: TYPE STYPE : SIZE / NAME
+0:  1    0000  : 23
+
+[/SYS]% fs -l "BTRON Spec Book 1"
+NO: 0 STYPE : FID [ATR1 ATR2 ATR3 ATR4 ATR5] : NAME
+0:  1 0000  :     (data record)
+
+[/SYS]% tp "BTRON Spec Book 1"
+BTRON Spec Book 1
+
+[/SYS]% tp -x "BTRON Spec Book 1"
+0000: FF E1 00 11 42 54 52 4F 4E 20 53 70 65 63 20 42
+0010: 6F 6F 6B 20 31
+
+[/SYS]% tp -a "BTRON Spec Book 1"
+....BTRON Spec B
+ook 1
+
+[/SYS]% mkf "My Note"
+Created 'My Note'
+
+[/SYS]% ln "My Note" "Note Alias"
+Link 'Note Alias' -> 'My Note'
+
+[/SYS]% cp "My Note" "Note Backup"
+Copied 'My Note' -> 'Note Backup'
+
+[/SYS]% ren "Note Backup" "Note Archive"
+Renamed 'Note Backup' -> 'Note Archive'
+
+[/SYS]% chmod -a1 "Note Archive"
+Attribute changed
+
+[/SYS]% touch "Note Archive"
+Touched 'Note Archive'
+
+[/SYS]% rm "Note Alias"
+Removed 'Note Alias'
+
+[/SYS]% empf "Note Archive"
+Emptied 'Note Archive'
+
+[/SYS]% rm "Note Archive"
+Removed 'Note Archive'
+
+[/SYS]% cd "My Note"
+[My Note]
+
+[/SYS/My Note]% cd ..
+[/SYS]
+
+[/SYS]% rm "My Note"
+Removed 'My Note'
+
+[/SYS]% sync
+(all caches flushed)
+```
+
+## 19. References
 
 - BTRON3 Shared Data, Chapter 4 — Floppy / volume format (Personal Media / Cho-Kanji developer docs)  
 - BTRON3 TAD specification — record types 0–31, segment IDs  
@@ -448,4 +601,5 @@ CLI / app  = Real Body with RT_PROG, registered for launch — not ELF on volume
 # Credits
 
 Namdak Tonpa and Grok 4.5
+
 

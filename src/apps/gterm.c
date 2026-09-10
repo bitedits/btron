@@ -7,6 +7,8 @@
 #include <btron/app_menu.h>
 #include <btron/terminal_settings.h>
 #include <btron/settings.h>
+#include <btron/fs/vol_api.h>
+#include "clu_fs.h"
 
 #if defined(__STDC_HOSTED__) && __STDC_HOSTED__ == 1
 #include <stdio.h>
@@ -247,14 +249,13 @@ static void gterm_init_menu_bar(GTermState *st) {
 
 static void gterm_init_banner(GTermState *st) {
     memset(st, 0, sizeof(GTermState));
-    strncpy(st->prompt, "btron:/> ", sizeof(st->prompt) - 1);
+    /* Cho-Kanji style prompt: [/SYS]%  (updated by clu_cd) */
+    snprintf(st->prompt, sizeof(st->prompt) - 1, "[%s]%% ", g_cwd_path);
 
     /* Load initial display settings from global TERMINAL_SETTINGS store */
     gterm_apply_settings(st);
 
-    gterm_append_line(st, "+==================================================+", COLOR_CYAN);
-    gterm_append_line(st, "| B-System 3.0 Workstation Shell (gterm)           |", COLOR_WHITE);
-    gterm_append_line(st, "+==================================================+", COLOR_CYAN);
+    gterm_append_line(st, "B-System 3.0 Cho-Kanji Shell (gterm)", COLOR_WHITE);
     gterm_append_line(st, "Type 'help' or '?' for available system commands.", COLOR_GREEN);
 }
 
@@ -317,31 +318,69 @@ void shell_execute_cmd(const char *cmd_line, ShellOutputFn out_fn, void *user_da
     arg[arg_i] = '\0';
     int n = (cmd_i > 0) ? (arg_i > 0 ? 2 : 1) : 0;
 
+    /* ── Cho-Kanji CLU Filesystem Builtins ─────────────────────────────────── */
+    if (strcmp(cmd, "ls")     == 0) { clu_ls     (arg, out_fn, user_data); return; }
+    if (strcmp(cmd, "fs")     == 0) { clu_fs_cmd (arg, out_fn, user_data); return; }
+    if (strcmp(cmd, "tp")     == 0) { clu_tp     (arg, out_fn, user_data); return; }
+    if (strcmp(cmd, "mkf")    == 0) { clu_mkf    (arg, out_fn, user_data); return; }
+    if (strcmp(cmd, "cp")     == 0) { clu_cp     (arg, out_fn, user_data); return; }
+    if (strcmp(cmd, "ln")     == 0) { clu_ln     (arg, out_fn, user_data); return; }
+    if (strcmp(cmd, "rm")     == 0) { clu_rm     (arg, out_fn, user_data); return; }
+    if (strcmp(cmd, "ren")    == 0) { clu_ren    (arg, out_fn, user_data); return; }
+    if (strcmp(cmd, "apd")    == 0) { clu_apd    (arg, out_fn, user_data); return; }
+    if (strcmp(cmd, "df")     == 0) { clu_df     (arg, out_fn, user_data); return; }
+    if (strcmp(cmd, "sync")   == 0) { clu_sync_cmd(arg, out_fn, user_data); return; }
+    if (strcmp(cmd, "empf")   == 0) { clu_empf   (arg, out_fn, user_data); return; }
+    if (strcmp(cmd, "chmod")  == 0) { clu_chmod  (arg, out_fn, user_data); return; }
+    if (strcmp(cmd, "touch")  == 0) { clu_touch  (arg, out_fn, user_data); return; }
+    if (strcmp(cmd, "chtime") == 0) { clu_chtime (arg, out_fn, user_data); return; }
+    if (strcmp(cmd, "cd")     == 0) {
+        clu_cd(arg, out_fn, user_data);
+        /* Update gterm prompt after CWD change */
+        GTermState *st_cd = (GTermState *)user_data;
+        if (st_cd) snprintf(st_cd->prompt, sizeof(st_cd->prompt) - 1, "[%s]%% ", g_cwd_path);
+        return;
+    }
+    /* ── END CLU Builtins ────────────────────────────────────────────────── */
+
     if (strcmp(cmd, "help") == 0 || strcmp(cmd, "?") == 0) {
-        out_fn("B-System Shell Commands:", COLOR_GREEN, user_data);
+        out_fn("B-System Cho-Kanji Shell Commands:", COLOR_GREEN, user_data);
+        out_fn("── Volume / Filesystem (CLU) ─────────────────────", COLOR_CYAN, user_data);
+        out_fn("  ls [-l|-t]          - List /SYS volume files", COLOR_LTGRAY, user_data);
+        out_fn("  fs [-l] <file>      - Show record index of file", COLOR_LTGRAY, user_data);
+        out_fn("  tp [-x|-a] <file>   - Type/dump file TAD content", COLOR_LTGRAY, user_data);
+        out_fn("  mkf <name>          - Create new Real Body", COLOR_LTGRAY, user_data);
+        out_fn("  cp <src> <dst>      - Copy Real Body", COLOR_LTGRAY, user_data);
+        out_fn("  ln <src> <link>     - Create RT_LINK Virtual Body", COLOR_LTGRAY, user_data);
+        out_fn("  rm <name>           - Delete Real Body", COLOR_LTGRAY, user_data);
+        out_fn("  ren <old> <new>     - Rename Real Body", COLOR_LTGRAY, user_data);
+        out_fn("  empf <name>         - Empty all records from file", COLOR_LTGRAY, user_data);
+        out_fn("  apd -d#.# <name>    - Delete records from file", COLOR_LTGRAY, user_data);
+        out_fn("  chmod -a# <name>    - Change file attributes", COLOR_LTGRAY, user_data);
+        out_fn("  touch <name>        - Update access/modify time", COLOR_LTGRAY, user_data);
+        out_fn("  chtime <opts> <n>   - Change file timestamps", COLOR_LTGRAY, user_data);
+        out_fn("  df                  - Volume free-space statistics", COLOR_LTGRAY, user_data);
+        out_fn("  sync                - Flush all volume caches to disk", COLOR_LTGRAY, user_data);
+        out_fn("  cd [/SYS|name]      - Change working volume path", COLOR_LTGRAY, user_data);
+        out_fn("── System ────────────────────────────────────────", COLOR_CYAN, user_data);
         out_fn("  help, ?             - Show command help list", COLOR_LTGRAY, user_data);
         out_fn("  ver, uname          - System version & kernel info", COLOR_LTGRAY, user_data);
-        out_fn("  devconf             - Registered hardware and device drivers", COLOR_LTGRAY, user_data);
-        out_fn("  ps                  - Dynamic process and window task table", COLOR_LTGRAY, user_data);
-        out_fn("  vobj, ls, dir       - Virtual Bodys and file listings", COLOR_LTGRAY, user_data);
-        out_fn("  cat <file>          - Display text file contents", COLOR_LTGRAY, user_data);
-        out_fn("  pwd                 - Print current working directory", COLOR_LTGRAY, user_data);
-        out_fn("  cd <dir>            - Change working directory", COLOR_LTGRAY, user_data);
+        out_fn("  devconf             - Registered hardware / device drivers", COLOR_LTGRAY, user_data);
+        out_fn("  ps                  - Process and window task table", COLOR_LTGRAY, user_data);
         out_fn("  echo <text>         - Print string", COLOR_LTGRAY, user_data);
         out_fn("  mem                 - Memory pool allocation statistics", COLOR_LTGRAY, user_data);
-        out_fn("  mouse status        - Display current mouse cursor position", COLOR_LTGRAY, user_data);
-        out_fn("  mouse move <X> <Y>  - Move mouse cursor to coordinates", COLOR_LTGRAY, user_data);
-        out_fn("  mouse click <X> <Y> - Simulate mouse click at coordinates", COLOR_LTGRAY, user_data);
-        out_fn("  edit, editor        - Launch new Editor instance", COLOR_LTGRAY, user_data);
-        out_fn("  tad, browser        - Launch new TAD Browser instance", COLOR_LTGRAY, user_data);
-        out_fn("  chat                - Launch new BeOS Chat instance", COLOR_LTGRAY, user_data);
+        out_fn("  mouse status|move|click - Cursor control", COLOR_LTGRAY, user_data);
+        out_fn("── Applications ──────────────────────────────────", COLOR_CYAN, user_data);
+        out_fn("  edit, editor        - Launch Editor instance", COLOR_LTGRAY, user_data);
+        out_fn("  tad, browser        - Launch TAD Browser instance", COLOR_LTGRAY, user_data);
+        out_fn("  chat                - Launch BeOS Chat instance", COLOR_LTGRAY, user_data);
         out_fn("  audio               - Launch Audio Player instance", COLOR_LTGRAY, user_data);
         out_fn("  cabinet             - Launch Cabinet Explorer instance", COLOR_LTGRAY, user_data);
         out_fn("  term, gterm         - Launch new Terminal instance", COLOR_LTGRAY, user_data);
         out_fn("  date                - Current system time & date", COLOR_LTGRAY, user_data);
         out_fn("  clear, cls          - Clear terminal screen", COLOR_LTGRAY, user_data);
         out_fn("  history             - Show command history", COLOR_LTGRAY, user_data);
-        out_fn("  ski, bootman        - Launch Ski Bootloader interactive manager 🎿", COLOR_LTGRAY, user_data);
+        out_fn("  ski, bootman        - Ski Bootloader interactive manager", COLOR_LTGRAY, user_data);
         out_fn("  exit, quit          - Close terminal window", COLOR_LTGRAY, user_data);
     } else if (strcmp(cmd, "ski") == 0 || strcmp(cmd, "bootman") == 0 || strcmp(cmd, "boot") == 0) {
         out_fn("🎿 Ski Bootloader (Bootman v1.0 · B-System OS.1):", COLOR_CYAN, user_data);
@@ -425,22 +464,10 @@ void shell_execute_cmd(const char *cmd_line, ShellOutputFn out_fn, void *user_da
 #else
         out_fn("/sys/btron_root", COLOR_LTGRAY, user_data);
 #endif
-    } else if (strcmp(cmd, "cd") == 0) {
-        const char *dir = (n > 1 && arg[0]) ? arg : ".";
-#if defined(__STDC_HOSTED__) && __STDC_HOSTED__ == 1
-        if (chdir(dir) == 0) {
-            char cwd[256];
-            if (getcwd(cwd, sizeof(cwd))) {
-                out_fn(cwd, COLOR_GREEN, user_data);
-            }
-        } else {
-            char err[280];
-            snprintf(err, sizeof(err), "cd: no such file or directory: %s", dir);
-            out_fn(err, COLOR_RED, user_data);
-        }
-#else
-        out_fn(dir, COLOR_GREEN, user_data);
-#endif
+    } else if (strcmp(cmd, "dir") == 0) {
+        /* 'dir' → same as clu_ls but allow legacy use */
+        clu_ls(arg, out_fn, user_data);
+        return;
     } else if (strcmp(cmd, "ls") == 0 || strcmp(cmd, "dir") == 0) {
 #if defined(__STDC_HOSTED__) && __STDC_HOSTED__ == 1
         const char *dir_path = (n > 1 && arg[0]) ? arg : ".";

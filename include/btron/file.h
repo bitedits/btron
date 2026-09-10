@@ -1,4 +1,4 @@
-﻿/*
+/*
  * B-TRON Specification Compatible Header: file.h
  * BTRON 3.20 2-Level Record-Stream File System Engine.
  */
@@ -11,6 +11,7 @@
 #include <btron/types.h>
 #include <btron/error.h>
 #include <btron/proc.h>
+#include <btron/fs/fs_types.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -57,8 +58,8 @@ ER mov_fil(const char *src_path, const char *dst_path);
 ID opn_rec(ID fd, W rec_idx, UW mode);
 ER cls_rec(ID rec_id);
 ER rd_rec(ID rec_id, VP buf, W sz, W *read_sz);
-ER wr_rec(ID rec_id, const VP buf, W sz, W *wrote_sz);
-ER ins_rec(ID fd, W rec_idx, const VP buf, W sz);
+ER wr_rec(ID rec_id, const void *buf, W sz, W *wrote_sz);
+ER ins_rec(ID fd, W rec_idx, const void *buf, W sz);
 ER del_rec(ID fd, W rec_idx);
 ER pos_rec(ID rec_id, W offset, W origin);
 ER trn_rec(ID rec_id, W sz);
@@ -67,7 +68,7 @@ ER trn_rec(ID rec_id, W sz);
 ID opn_dir(const char *path);
 ER rd_dir(ID dir_id, DIR_ENTRY *entry);
 ER cls_dir(ID dir_id);
-ER cre_lnk(const char *link_path, const LINK *target);
+ER cre_lnk(const char *link_path, const FS_LINK *target);
 ER del_lnk(const char *link_path);
 ER ref_vol(ID vol_id, VOL_INFO *info);
 

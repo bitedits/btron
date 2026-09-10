@@ -1,4 +1,4 @@
-﻿/*
+/*
  * B-TRON 2-Level Record Stream File System: fs_record.c
  * Cleanroom implementation of Sakamura BTRON File System.
  */
@@ -236,7 +236,7 @@ ER rd_rec(ID rec_id, VP buf, W sz, W *read_sz) {
     return E_OK;
 }
 
-ER wr_rec(ID rec_id, const VP buf, W sz, W *wrote_sz) {
+ER wr_rec(ID rec_id, const void *buf, W sz, W *wrote_sz) {
     if (!buf || sz < 0) return ER_PAR;
     if (rec_id <= 0 || rec_id > MAX_OPEN_RECS) return ER_ID;
 
@@ -263,7 +263,7 @@ ER wr_rec(ID rec_id, const VP buf, W sz, W *wrote_sz) {
     return E_OK;
 }
 
-ER ins_rec(ID fd, W rec_idx, const VP buf, W sz) {
+ER ins_rec(ID fd, W rec_idx, const void *buf, W sz) {
     ID rid = opn_rec(fd, rec_idx, F_WRITE);
     if (rid <= 0) return (ER)rid;
     W wrote = 0;
@@ -348,7 +348,7 @@ ER cls_dir(ID dir_id) {
     return E_OK;
 }
 
-ER cre_lnk(const char *link_path, const LINK *target) {
+ER cre_lnk(const char *link_path, const FS_LINK *target) {
     (void)link_path;
     (void)target;
     return E_OK;

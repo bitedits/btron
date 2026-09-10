@@ -35,7 +35,8 @@ CFLAGS ?= -O2 -Wall -Wextra -std=c99 -Iinclude -Iinclude/drivers -Isrc/kernel -I
 
 .PHONY: all posix qemu kernel tkernel sakamura foma uefi pc98 arm-elf arm64-elf m68k ps2 mips \
         html2tad book2tad tad_bin test test-kernel test-yoko test-yoko4 test-m68k test-mips test-ps2 test-foma foma-screens \
-        test-mozc test-editor test-hmi test-tad test-chat test-wylie verify \
+        test-mozc test-editor test-hmi test-tad test-chat test-wylie verify test-fs \
+        mkbtronfs btron_sys.vol \
         run-posix run-qemu run-kernel run-yoko run-yoko4 run-sakamura run-foma run-uefi run-eufi run-uefu run-pc98 run-m68k run-ps2 run-mips debug-virtio debug-gdb clean
 
 QEMU_ARM     ?= qemu-system-arm
@@ -172,7 +173,12 @@ COMMON_SRCS = src/graphics/dp_core.c   \
               src/hmi/hmi_meter.c      \
               src/hmi/hmi_controller.c \
               src/hmi/hmi_panel.c      \
-              $(IME_SRCS)
+              $(IME_SRCS)              \
+              src/fs/blk_mem.c         \
+              src/fs/blk_file.c        \
+              src/fs/vol.c             \
+              src/fs/file.c            \
+              src/apps/clu_fs.c
 
 # ── POSIX build (Target 0) ────────────────────────────────────────
 POSIX_STARTUP = src/cores/core_posix.c
@@ -269,7 +275,12 @@ FOMA_SRCS = $(FOMA_STARTUP)             \
             src/settings/terminal.c     \
             src/desktop/desktop_mobile.c \
             src/desktop/workbench_mobile.c \
-            src/desktop/main_mobile.c
+            src/desktop/main_mobile.c   \
+            src/fs/blk_mem.c            \
+            src/fs/blk_file.c           \
+            src/fs/vol.c                \
+            src/fs/file.c               \
+            src/apps/clu_fs.c
 
 # Bare-metal: SDL-free subset only
 COMMON_NO_SDL_SRCS = \
@@ -307,7 +318,11 @@ COMMON_NO_SDL_SRCS = \
     src/settings/security.c \
     src/settings/system.c  \
     src/settings/terminal.c \
-    $(IME_SRCS)
+    $(IME_SRCS)            \
+    src/fs/blk_mem.c       \
+    src/fs/vol.c           \
+    src/fs/file.c          \
+    src/apps/clu_fs.c
 
 BAREMETAL_STARTUP  = src/drivers/bcm283x/cpu/startup_arm.c
 BAREMETAL_LD       = src/drivers/bcm283x/cpu/link.ld
@@ -389,6 +404,37 @@ run-posix: $(POSIX_TARGET)
 
 run-sakamura: $(SAKAMURA_TARGET)
 	./$(SAKAMURA_TARGET)
+
+# ══════════════════════════════════════════════════════════════════════
+# FS Library (host/POSIX build) — blk_mem, blk_file, vol, file, clu_fs
+# ══════════════════════════════════════════════════════════════════════
+FS_SRCS  = src/fs/blk_mem.c src/fs/blk_file.c src/fs/vol.c src/fs/file.c
+FS_OBJS  = $(FS_SRCS:.c=.host.o)
+
+%.host.o: %.c
+	$(CC) $(CFLAGS) -DBTRON_TARGET=0 -c $< -o $@
+
+src/apps/clu_fs.host.o: src/apps/clu_fs.c
+	$(CC) $(CFLAGS) -DBTRON_TARGET=0 -c $< -o $@
+
+# ── mkbtronfs — host image builder ────────────────────────────────────
+mkbtronfs: src/tools/mkbtronfs.c $(FS_OBJS)
+	$(CC) $(CFLAGS) -Isrc $^ -o mkbtronfs
+	@echo "[FS] mkbtronfs built."
+
+btron_sys.vol: mkbtronfs src/tools/manifest.txt
+	./mkbtronfs src/tools/manifest.txt -o btron_sys.vol
+	@echo "[FS] btron_sys.vol written."
+	@xxd btron_sys.vol | head -2
+
+# ── FS unit tests ──────────────────────────────────────────────────────
+TEST_FS_BIN = tests/test_fs
+$(TEST_FS_BIN): tests/test_fs.c $(FS_OBJS) src/apps/clu_fs.host.o
+	$(CC) $(CFLAGS) -Isrc $^ -o $@
+
+test-fs: $(TEST_FS_BIN) btron_sys.vol
+	./$(TEST_FS_BIN)
+	@echo "[FS] All FS tests passed."
 
 # ═══════════════════════════════════════════════════════════════════
 # QEMU VirtIO Desktop
@@ -1257,7 +1303,12 @@ CAPTURE_SCREENS_SRCS = src/tools/capture_screens.c \
                        src/window/wnd.c \
                        src/window/app_menu.c \
                        src/graphics/dp_core.c \
-                       src/graphics/icons_bundle.c
+                       src/graphics/icons_bundle.c \
+                       src/fs/blk_mem.c \
+                       src/fs/blk_file.c \
+                       src/fs/vol.c \
+                       src/fs/file.c \
+                       src/apps/clu_fs.c
 
 CAPTURE_SCREENS_OBJS = $(CAPTURE_SCREENS_SRCS:.c=.test.o)
 
@@ -1309,7 +1360,12 @@ CAPTURE_FOMA_SRCS = src/tools/capture_foma.c \
                     src/graphics/icons_bundle.c \
                     src/font/troncode.c \
                     src/font/jis_fonts.c \
-                    src/font/tibetan_fonts.c
+                    src/font/tibetan_fonts.c \
+                    src/fs/blk_mem.c \
+                    src/fs/blk_file.c \
+                    src/fs/vol.c \
+                    src/fs/file.c \
+                    src/apps/clu_fs.c
 
 CAPTURE_FOMA_OBJS = $(CAPTURE_FOMA_SRCS:.c=.test.o)
 

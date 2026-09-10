@@ -92,6 +92,7 @@ void btron_core_hfds_log(void) {
     /* ── Mount /SYS volume ─────────────────────────────────────────── */
     if (!g_sys_vol) {
         BlkDev *sys_blk = blk_file_create("btron_sys.vol", 0 /*open existing*/, 0);
+        if (!sys_blk) sys_blk = blk_file_create("../btron_sys.vol", 0, 0);
         if (sys_blk) {
             g_sys_vol = vol_mount(sys_blk);
             if (g_sys_vol)

@@ -14,6 +14,7 @@
 extern "C" {
 #endif
 
+#ifndef __TYPEDEF_H__
 /* Fundamental TRON integer types */
 typedef int8_t            B;   /* 8-bit signed integer (Byte) */
 typedef int16_t           H;   /* 16-bit signed integer (Halfword) */
@@ -38,6 +39,10 @@ typedef ER                ERR; /* Alias for ER used in specification */
 typedef W                 WERR;/* Word or Error return type */
 typedef uint32_t          BOOL;/* Boolean value */
 typedef uint16_t          TC;  /* TRON Character Code (16-bit) */
+#else
+typedef ER                ERR; /* Alias for ER used in specification */
+typedef W                 WERR;/* Word or Error return type */
+#endif
 #ifndef _COLOR_DEFINED_
 #define _COLOR_DEFINED_
 typedef uint32_t          COLOR;/* TRON Color value (RGBA) */

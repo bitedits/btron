@@ -16,6 +16,8 @@
 #include "timer.h"
 #include <btron/core.h>
 #include <sys/utsname.h>
+#include <btron/fs/vol_api.h>
+#include <btron/fs/block.h>
 
 extern void tkernel_init_subsystems(int full_suite);
 
@@ -33,6 +35,31 @@ void btron_core_mem_log(void) {
 void btron_core_hfds_log(void) {
     printf("[HFDS] VirtIO-Block MMIO 0x10001000  [DETECT]\n");
     printf("[HFDS] FOMA Hierarchical File/Data Set (HFDS) Real Body Storage: INIT [OK]\n");
+    /* ── Mount /SYS volume ─────────────────────────────────────────── */
+    if (!g_sys_vol) {
+        BlkDev *sys_blk = blk_file_create("btron_sys.vol", 0 /*open existing*/, 0);
+        if (!sys_blk) sys_blk = blk_file_create("../btron_sys.vol", 0, 0);
+        if (sys_blk) {
+            g_sys_vol = vol_mount(sys_blk);
+            if (g_sys_vol)
+                printf("[FS  ] Mounted btron_sys.vol as /SYS  [OK]\n");
+            else {
+                blk_destroy(sys_blk);
+                printf("[FS  ] btron_sys.vol: invalid magic, using RAM disk\n");
+            }
+        }
+        if (!g_sys_vol) {
+            /* Fall back: fresh in-memory volume */
+            static unsigned char s_mem_vol[1024 * 1024]; /* 1 MiB */
+            BlkDev *mem_blk = blk_mem_create(s_mem_vol, sizeof(s_mem_vol), 0);
+            if (mem_blk) {
+                vol_format(mem_blk, 256, 1024, "SYS");
+                g_sys_vol = vol_mount(mem_blk);
+                if (g_sys_vol)
+                    printf("[FS  ] /SYS mounted on RAM disk (1 MiB)  [OK]\n");
+            }
+        }
+    }
 }
 
 void btron_core_init(void) {

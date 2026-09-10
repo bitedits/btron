@@ -789,30 +789,71 @@ void clu_chtime(const char *args, ShellOutputFn out, void *ud)
     out(msg, COLOR_GREEN, ud);
 }
 
-/* ── clu_df ──────────────────────────────────────────────────────── */
-void clu_df(const char *args, ShellOutputFn out, void *ud)
+static void clu_df_print_volume(Volume *v, const char *mount_path, const char *dev_name, ShellOutputFn out, void *ud)
 {
-    (void)args;
-    Volume *v = g_sys_vol;
-    if (!v) { out("df: no volume mounted", COLOR_RED, ud); return; }
-
-    out("PATH  DEV   TOTAL   FREE    USED  UNIT  MAXFILE  NAME", COLOR_CYAN, ud);
-
+    if (!v) return;
     UW total = vol_total_blocks(v);
     UW free_blks = vol_free_blocks(v);
     UW used  = total - free_blks;
     UW pct   = (total > 0) ? (used * 100 / total) : 0;
+    char tot_s[16], free_s[16], pct_s[16];
+    snprintf(tot_s, sizeof(tot_s), "%uK", total);
+    snprintf(free_s, sizeof(free_s), "%uK", free_blks);
+    snprintf(pct_s, sizeof(pct_s), "%u%%", pct);
     char line[128];
     snprintf(line, sizeof(line),
-             "%-5s %-5s %-7uK %-7uK %2u%%  %-5u %-8u %s",
-             "/SYS", "mem0",
-             total,   /* already in blocks = KiB since BLOCK_SIZE=1024 */
-             free_blks,
-             pct,
+             "%-7s %-5s %-7s %-7s %-6s %-5u %-8u %s",
+             mount_path, dev_name,
+             tot_s,
+             free_s,
+             pct_s,
              BTRON_BLOCK_SIZE,
              vol_nfmax(v),
              vol_name(v));
     out(line, COLOR_LTGRAY, ud);
+}
+
+/* ── clu_df ──────────────────────────────────────────────────────── */
+void clu_df(const char *args, ShellOutputFn out, void *ud)
+{
+    char target[80];
+    get_target(args, target, sizeof(target));
+
+    if (!g_sys_vol && !g_anders_vol) {
+        out("df: no volume mounted", COLOR_RED, ud);
+        return;
+    }
+
+    int show_sys = 1;
+    int show_anders = (g_anders_vol && g_anders_vol != g_sys_vol);
+
+    if (target[0]) {
+        if (strcmp(target, "/SYS") == 0 || strcmp(target, "SYS") == 0) {
+            show_sys = 1;
+            show_anders = 0;
+        } else if (strcmp(target, "/ANDERS") == 0 || strcmp(target, "ANDERS") == 0) {
+            show_sys = 0;
+            show_anders = (g_anders_vol && g_anders_vol != g_sys_vol);
+            if (!show_anders) {
+                out("df: '/ANDERS': volume not mounted", COLOR_RED, ud);
+                return;
+            }
+        } else {
+            char err[128];
+            snprintf(err, sizeof(err), "df: '%s': no such volume", target);
+            out(err, COLOR_RED, ud);
+            return;
+        }
+    }
+
+    out("PATH    DEV   TOTAL   FREE    USED   UNIT  MAXFILE  NAME", COLOR_CYAN, ud);
+
+    if (show_sys && g_sys_vol) {
+        clu_df_print_volume(g_sys_vol, "/SYS", "mem0", out, ud);
+    }
+    if (show_anders && g_anders_vol) {
+        clu_df_print_volume(g_anders_vol, "/ANDERS", "mem1", out, ud);
+    }
 }
 
 /* ── clu_sync_cmd ────────────────────────────────────────────────── */

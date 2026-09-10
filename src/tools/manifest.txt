@@ -36,6 +36,3 @@ FILE "USB.md"             MD    doc/md/USB.md
 FILE "BTRON3_Report.txt"         TXT   assets/texts/BTRON3_Report.txt
 FILE "Heart_Sutra_Tibetan.txt"   TXT   assets/texts/Heart_Sutra_Tibetan.txt
 
-# hello.txt — placeholder greeting
-FILE "hello.txt"                 TXT   -
-

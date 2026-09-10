@@ -25,7 +25,7 @@
 #include <btron/tad.h>
 
 /* Include CLU header for test 10 */
-#include "apps/clu_fs.h"
+#include "apps/clu.h"
 
 /* ── Test helpers ────────────────────────────────────────────────── */
 static int g_pass = 0;

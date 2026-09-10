@@ -10,12 +10,32 @@ FILE "Graphics & Display" TAD   -
 FILE "Applications & HMI" TAD   -
 FILE "TRASH"              LINK  0
 
-FILE "FS.md"              MD    doc/md/FS.md
-FILE "CLU.md"             MD    doc/md/CLU.md
-FILE "TAD.md"             MD    doc/md/TAD.md
+# doc/md — Documentation (alphabetical)
 FILE "BOOK.md"            MD    doc/md/BOOK.md
-FILE "README.md"          MD    doc/md/README.md
-FILE "HYPERMEDIA.md"      MD    doc/md/HYPERMEDIA.md
+FILE "BOPOMOFO.md"        MD    doc/md/BOPOMOFO.md
+FILE "CERTIFICATION.md"   MD    doc/md/CERTIFICATION.md
+FILE "CHAT.md"            MD    doc/md/CHAT.md
+FILE "CLU.md"             MD    doc/md/CLU.md
+FILE "DOCOPS.md"          MD    doc/md/DOCOPS.md
+FILE "EVENTING.md"        MD    doc/md/EVENTING.md
+FILE "FOMA.md"            MD    doc/md/FOMA.md
+FILE "FS.md"              MD    doc/md/FS.md
 FILE "GUI.md"             MD    doc/md/GUI.md
+FILE "HYPERMEDIA.md"      MD    doc/md/HYPERMEDIA.md
+FILE "IME.md"             MD    doc/md/IME.md
 FILE "MENU.md"            MD    doc/md/MENU.md
+FILE "PORTING.md"         MD    doc/md/PORTING.md
+FILE "PS2.md"             MD    doc/md/PS2.md
+FILE "PUBLISH.md"         MD    doc/md/PUBLISH.md
+FILE "README.md"          MD    doc/md/README.md
+FILE "SMP.md"             MD    doc/md/SMP.md
+FILE "TAD.md"             MD    doc/md/TAD.md
+FILE "USB.md"             MD    doc/md/USB.md
+
+# assets/texts — Classic texts
+FILE "BTRON3_Report.txt"         TXT   assets/texts/BTRON3_Report.txt
+FILE "Heart_Sutra_Tibetan.txt"   TXT   assets/texts/Heart_Sutra_Tibetan.txt
+
+# hello.txt — placeholder greeting
+FILE "hello.txt"                 TXT   -
 

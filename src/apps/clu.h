@@ -1,5 +1,5 @@
 /*
- * B-System BTRON3 — clu_fs.h
+ * B-System BTRON3 — clu.h
  * Cho-Kanji-compatible CLU filesystem command helpers.
  *
  * Each function is dispatched from gterm's shell_execute_cmd switch.
@@ -12,8 +12,8 @@
  * Output shapes match CLU.md exactly (see doc/md/CLU.md §Navigation).
  */
 
-#ifndef _CLU_FS_H_
-#define _CLU_FS_H_
+#ifndef _CLU_H_
+#define _CLU_H_
 
 #include <btron/types.h>
 

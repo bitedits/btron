@@ -4,7 +4,7 @@
  */
 
 #include <btron/tip.h>
-#include "wylie.h"
+#include <btron/wylie.h>
 #include <btron/tibetan_dict.h>
 #include <btron/event.h>
 #include <btron/mozc_engine.h>

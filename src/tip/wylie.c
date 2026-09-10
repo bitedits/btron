@@ -4,7 +4,7 @@
  * Authors: Namdak Tonpa (རྣམ་དག་སྟོན་པ), Longchen Nyingthig (ཀློང་ཆེན་སྙིང་ཐིག)
  */
 
-#include "wylie.h"
+#include <btron/wylie.h>
 #if defined(__STDC_HOSTED__) && __STDC_HOSTED__ == 1
 #include <stdio.h>
 #include <stdlib.h>

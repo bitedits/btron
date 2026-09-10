@@ -1,5 +1,5 @@
 /*
- * B-System BTRON3 — clu_fs.c
+ * B-System BTRON3 — clu.c
  * Cho-Kanji-compatible CLU filesystem commands, wired as gterm builtins.
  *
  * All commands operate on g_sys_vol (the /SYS mount).
@@ -39,7 +39,7 @@
 #  define isspace(c) ((c)==' '||(c)=='\t'||(c)=='\n'||(c)=='\r')
 #endif
 
-#include "clu_fs.h"
+#include "clu.h"
 #include <btron/fs/vol_api.h>
 #include <btron/fs/fs_internal.h>
 #include <btron/fs/header.h>

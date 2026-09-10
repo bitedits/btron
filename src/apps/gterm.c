@@ -8,7 +8,7 @@
 #include <btron/terminal_settings.h>
 #include <btron/settings.h>
 #include <btron/fs/vol_api.h>
-#include "clu_fs.h"
+#include "clu.h"
 
 #if defined(__STDC_HOSTED__) && __STDC_HOSTED__ == 1
 #include <stdio.h>

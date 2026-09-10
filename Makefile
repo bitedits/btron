@@ -178,7 +178,7 @@ COMMON_SRCS = src/graphics/dp_core.c   \
               src/fs/blk_file.c        \
               src/fs/vol.c             \
               src/fs/file.c            \
-              src/apps/clu_fs.c
+              src/apps/clu.c
 
 # ── POSIX build (Target 0) ────────────────────────────────────────
 POSIX_STARTUP = src/cores/core_posix.c
@@ -280,7 +280,7 @@ FOMA_SRCS = $(FOMA_STARTUP)             \
             src/fs/blk_file.c           \
             src/fs/vol.c                \
             src/fs/file.c               \
-            src/apps/clu_fs.c
+            src/apps/clu.c
 
 # Bare-metal: SDL-free subset only
 COMMON_NO_SDL_SRCS = \
@@ -322,7 +322,7 @@ COMMON_NO_SDL_SRCS = \
     src/fs/blk_mem.c       \
     src/fs/vol.c           \
     src/fs/file.c          \
-    src/apps/clu_fs.c
+    src/apps/clu.c
 
 BAREMETAL_STARTUP  = src/drivers/bcm283x/cpu/startup_arm.c
 BAREMETAL_LD       = src/drivers/bcm283x/cpu/link.ld
@@ -406,7 +406,7 @@ run-sakamura: $(SAKAMURA_TARGET)
 	./$(SAKAMURA_TARGET)
 
 # ══════════════════════════════════════════════════════════════════════
-# FS Library (host/POSIX build) — blk_mem, blk_file, vol, file, clu_fs
+# FS Library (host/POSIX build) — blk_mem, blk_file, vol, file, clu
 # ══════════════════════════════════════════════════════════════════════
 FS_SRCS  = src/fs/blk_mem.c src/fs/blk_file.c src/fs/vol.c src/fs/file.c
 FS_OBJS  = $(FS_SRCS:.c=.host.o)
@@ -414,7 +414,7 @@ FS_OBJS  = $(FS_SRCS:.c=.host.o)
 %.host.o: %.c
 	$(CC) $(CFLAGS) -DBTRON_TARGET=0 -c $< -o $@
 
-src/apps/clu_fs.host.o: src/apps/clu_fs.c
+src/apps/clu.host.o: src/apps/clu.c
 	$(CC) $(CFLAGS) -DBTRON_TARGET=0 -c $< -o $@
 
 # ── mkbtronfs — host image builder ────────────────────────────────────
@@ -433,8 +433,8 @@ btron_anders.vol: mkbtronfs src/tools/manifest_anders.txt
 
 
 # ── FS unit tests ──────────────────────────────────────────────────────
-TEST_FS_BIN = tests/test_fs
-$(TEST_FS_BIN): tests/test_fs.c $(FS_OBJS) src/apps/clu_fs.host.o
+TEST_FS_BIN = verify/tests/test_fs
+$(TEST_FS_BIN): verify/tests/test_fs.c $(FS_OBJS) src/apps/clu.host.o
 	$(CC) $(CFLAGS) -Isrc $^ -o $@
 
 test-fs: $(TEST_FS_BIN) btron_sys.vol
@@ -978,7 +978,7 @@ debug-gdb: $(ARM32_TARGET)
 # ═══════════════════════════════════════════════════════════════════
 # Mozc Kana-Kanji Conversion & TIP Unit Test Suite
 # ═══════════════════════════════════════════════════════════════════
-TEST_MOZC_SRCS = src/tip/test_mozc.c src/tip/mozc_kkc.c src/tip/tip_ife.c src/tip/wylie.c src/tip/tibetan_dict.c \
+TEST_MOZC_SRCS = verify/tests/test_mozc.c src/tip/mozc_kkc.c src/tip/tip_ife.c src/tip/wylie.c src/tip/tibetan_dict.c \
                  src/font/troncode.c src/font/jis_fonts.c src/font/tibetan_fonts.c src/tip/tip_vobj.c src/window/wnd.c \
                  src/graphics/dp_core.c
 TEST_MOZC_OBJS = $(TEST_MOZC_SRCS:.c=.test.o)
@@ -999,7 +999,7 @@ $(TEST_MOZC_BIN): $(TEST_MOZC_OBJS)
 # ═══════════════════════════════════════════════════════════════════
 # Editor UI & Internal Functions Test Suite
 # ═══════════════════════════════════════════════════════════════════
-TEST_EDITOR_SRCS = src/apps/test_editor_ui.c src/apps/t_editor.c src/window/app_menu.c src/tip/mozc_kkc.c src/tip/tip_ife.c src/tip/wylie.c src/tip/tibetan_dict.c \
+TEST_EDITOR_SRCS = verify/tests/test_editor_ui.c src/apps/t_editor.c src/window/app_menu.c src/tip/mozc_kkc.c src/tip/tip_ife.c src/tip/wylie.c src/tip/tibetan_dict.c \
                    src/font/troncode.c src/font/jis_fonts.c src/font/tibetan_fonts.c src/tip/tip_vobj.c src/window/wnd.c \
                    src/graphics/dp_core.c src/fs/blk_mem.c src/fs/blk_file.c src/fs/vol.c src/fs/file.c
 TEST_EDITOR_OBJS = $(TEST_EDITOR_SRCS:.c=.test.o)
@@ -1017,7 +1017,7 @@ $(TEST_EDITOR_BIN): $(TEST_EDITOR_OBJS)
 # ═══════════════════════════════════════════════════════════════════
 # TRON HMI Standard Library Test Suite
 # ═══════════════════════════════════════════════════════════════════
-TEST_HMI_SRCS = src/hmi/test_hmi.c src/hmi/hmi_core.c src/hmi/hmi_switch.c \
+TEST_HMI_SRCS = verify/tests/test_hmi.c src/hmi/hmi_core.c src/hmi/hmi_switch.c \
                 src/hmi/hmi_selector.c src/hmi/hmi_volume.c src/hmi/hmi_meter.c \
                 src/hmi/hmi_controller.c src/hmi/hmi_panel.c src/graphics/dp_core.c \
                 src/font/troncode.c src/font/jis_fonts.c src/font/tibetan_fonts.c src/window/wnd.c
@@ -1058,7 +1058,7 @@ book2tad:
 # ═══════════════════════════════════════════════════════════════════
 # Native TAD Document Browser & Cabinet Test Suite
 # ═══════════════════════════════════════════════════════════════════
-TEST_TAD_SRCS = src/apps/test_tad_browser.c src/apps/tad_browser.c src/apps/vobj_manager.c src/window/app_menu.c \
+TEST_TAD_SRCS = verify/tests/test_tad_browser.c src/apps/tad_browser.c src/apps/vobj_manager.c src/window/app_menu.c \
                 src/settings/appearance.c src/graphics/icons_bundle.c \
                 src/tip/mozc_kkc.c src/font/troncode.c src/font/jis_fonts.c src/font/tibetan_fonts.c src/tip/tip_vobj.c \
                 src/window/wnd.c src/graphics/dp_core.c
@@ -1079,7 +1079,7 @@ $(TEST_TAD_BIN): $(TEST_TAD_OBJS)
 # ═══════════════════════════════════════════════════════════════════
 # BeOS Chat & TRON IPC Pub/Sub Test Suite
 # ═══════════════════════════════════════════════════════════════════
-TEST_CHAT_SRCS = src/apps/test_chat.c src/apps/chat.c src/apps/chat_xml.c \
+TEST_CHAT_SRCS = verify/tests/test_chat.c src/apps/chat.c src/apps/chat_xml.c \
                  src/tip/mozc_kkc.c src/font/troncode.c src/font/jis_fonts.c src/font/tibetan_fonts.c \
                  src/window/wnd.c src/graphics/dp_core.c
 TEST_CHAT_OBJS = $(TEST_CHAT_SRCS:.c=.test.o)
@@ -1097,7 +1097,7 @@ $(TEST_CHAT_BIN): $(TEST_CHAT_OBJS)
 # ═══════════════════════════════════════════════════════════════════
 # BTRON Deskbar Tracker & Task Manager Test Suite
 # ═══════════════════════════════════════════════════════════════════
-TEST_TRACKER_SRCS = src/desktop/test_tracker.c src/desktop/tracker.c src/desktop/desktop.c src/settings/appearance.c \
+TEST_TRACKER_SRCS = verify/tests/test_tracker.c src/desktop/tracker.c src/desktop/desktop.c src/settings/appearance.c \
                     src/vobject/vobj.c src/desktop/about.c src/window/wnd.c \
                     src/window/app_menu.c \
                     src/graphics/dp_core.c src/graphics/icons_bundle.c src/font/troncode.c src/font/jis_fonts.c src/font/tibetan_fonts.c
@@ -1120,7 +1120,7 @@ verify:
 # ═══════════════════════════════════════════════════════════════════
 
 TEST_SETTINGS_BIN = test_settings
-TEST_SETTINGS_SRCS = src/settings/test_language_settings.c \
+TEST_SETTINGS_SRCS = verify/tests/test_language_settings.c \
                      src/settings/language.c \
                      src/settings/control_panel.c \
                      src/settings/appearance.c \
@@ -1160,7 +1160,7 @@ test-settings: $(TEST_SETTINGS_BIN)
 # ═══════════════════════════════════════════════════════════════════
 # BTRON Global System Menu (Chokanji & Haiku) Test Suite
 # ═══════════════════════════════════════════════════════════════════
-TEST_GMENU_SRCS = src/desktop/test_global_menu.c src/desktop/global_menu.c src/desktop/tracker.c \
+TEST_GMENU_SRCS = verify/tests/test_global_menu.c src/desktop/global_menu.c src/desktop/tracker.c \
                   src/window/app_menu.c src/graphics/icons_bundle.c \
                   src/desktop/about.c src/window/wnd.c src/graphics/dp_core.c src/font/troncode.c \
                   src/font/jis_fonts.c src/font/tibetan_fonts.c src/tip/tip_ife.c src/tip/mozc_kkc.c \
@@ -1180,7 +1180,7 @@ $(TEST_GMENU_BIN): $(TEST_GMENU_OBJS)
 # ═══════════════════════════════════════════════════════════════════
 # Common Application Menu Subsystem Test Suite
 # ═══════════════════════════════════════════════════════════════════
-TEST_APP_MENU_SRCS = src/window/test_app_menu.c src/window/app_menu.c src/window/wnd.c \
+TEST_APP_MENU_SRCS = verify/tests/test_app_menu.c src/window/app_menu.c src/window/wnd.c \
                      src/graphics/dp_core.c src/font/troncode.c src/font/jis_fonts.c src/font/tibetan_fonts.c
 TEST_APP_MENU_OBJS = $(TEST_APP_MENU_SRCS:.c=.test.o)
 TEST_APP_MENU_BIN  = test_app_menu
@@ -1197,7 +1197,7 @@ $(TEST_APP_MENU_BIN): $(TEST_APP_MENU_OBJS)
 # ═══════════════════════════════════════════════════════════════════
 # Mouse Drivers Test Suite (UEFI PS/2 & PC-98 Bus Mouse)
 # ═══════════════════════════════════════════════════════════════════
-TEST_MOUSE_SRCS = tests/test_mouse_drivers.c \
+TEST_MOUSE_SRCS = verify/tests/test_mouse_drivers.c \
                   src/drivers/uefi/ps2_mouse.c \
                   src/drivers/pc98/input/pc98_mouse.c \
                   src/drivers/pc98/input/pc98_kbd.c
@@ -1224,7 +1224,7 @@ test: test-kernel test-tad test-editor test-chat test-mozc test-wylie test-hmi t
 # ═══════════════════════════════════════════════════════════════════
 # Ski Bootloader & Multi-Arch Boot Driver Test Suite
 # ═══════════════════════════════════════════════════════════════════
-TEST_SKI_SRCS = src/apps/test_ski.c  src/cores/core_smp.c \
+TEST_SKI_SRCS = verify/tests/test_ski.c src/cores/core_smp.c \
                 src/drivers/pc98/boot/boot_pc98.c src/drivers/bcm283x/boot/boot_arm_stub.c
 TEST_SKI_OBJS = $(TEST_SKI_SRCS:.c=.test.o)
 TEST_SKI_BIN  = test_ski
@@ -1242,7 +1242,7 @@ $(TEST_SKI_BIN): $(TEST_SKI_OBJS)
 # ═══════════════════════════════════════════════════════════════════
 # Kernel TIP Extended Wylie (EWTS) Test Suite
 # ═══════════════════════════════════════════════════════════════════
-TEST_WYLIE_SRCS = src/tip/test_wylie.c src/tip/wylie.c
+TEST_WYLIE_SRCS = verify/tests/test_wylie.c src/tip/wylie.c
 TEST_WYLIE_OBJS = $(TEST_WYLIE_SRCS:.c=.test.o)
 TEST_WYLIE_BIN  = test_wylie
 
@@ -1255,6 +1255,7 @@ test-wylie: $(TEST_WYLIE_BIN)
 $(TEST_WYLIE_BIN): $(TEST_WYLIE_OBJS)
 	$(CC) $(TEST_WYLIE_OBJS) -o $@ $(LDFLAGS) -lm
 
+
 clean:
 	@$(MAKE) -C verify clean >/dev/null 2>&1 || true
 	rm -f *.toc
@@ -1264,7 +1265,7 @@ clean:
 	rm -rf tad_bin
 	rm -f $(POSIX_TARGET) $(QEMU_TARGET) $(TKERNEL_TARGET) $(SAKAMURA_TARGET) \
 	      $(ARM32_TARGET) $(ARM64_TARGET) $(DEFAULT_TARGET) $(UEFI_TARGET) btron-uefi.elf $(PC98_TARGET) btron-pc98.elf $(M68K_TARGET) $(PS2_TARGET) $(PS2_ISO) $(MIPS_TARGET) $(TEST_MOZC_BIN) $(TEST_EDITOR_BIN) $(TEST_HMI_BIN) $(TEST_TAD_BIN) $(TEST_CHAT_BIN) $(TEST_SKI_BIN) $(TEST_GMENU_BIN)
-	find src tests -type f \( -name "*.posix.o" -o -name "*.qemu.o" \
+	find src verify -type f \( -name "*.posix.o" -o -name "*.qemu.o" \
 	    -o -name "*.tkernel.o" -o -name "*.sakamura.o" -o -name "*.uefi.o" -o -name "*.pc98.o" -o -name "*.m68k.o" -o -name "*.ps2.o" -o -name "*.mips.o" -o -name "*.arm32.o" \
 	    -o -name "*.arm64.o" -o -name "*.test.o" -o -name "*.o" \) -delete 2>/dev/null || true
 
@@ -1313,7 +1314,7 @@ CAPTURE_SCREENS_SRCS = src/tools/capture_screens.c \
                        src/fs/blk_file.c \
                        src/fs/vol.c \
                        src/fs/file.c \
-                       src/apps/clu_fs.c
+                       src/apps/clu.c
 
 CAPTURE_SCREENS_OBJS = $(CAPTURE_SCREENS_SRCS:.c=.test.o)
 
@@ -1323,7 +1324,7 @@ $(CAPTURE_SCREENS_BIN): $(CAPTURE_SCREENS_OBJS)
 # ═══════════════════════════════════════════════════════════════════
 # µBTRON-FOMA Mobile UI Toolkit Test Suite
 # ═══════════════════════════════════════════════════════════════════
-TEST_FOMA_SRCS = src/desktop/test_foma_ui.c src/desktop/desktop_mobile.c \
+TEST_FOMA_SRCS = verify/tests/test_foma_ui.c src/desktop/desktop_mobile.c \
                  src/graphics/dp_core.c src/font/troncode.c src/font/jis_fonts.c src/font/tibetan_fonts.c
 TEST_FOMA_OBJS = $(TEST_FOMA_SRCS:.c=.test.o)
 TEST_FOMA_BIN  = test_foma_ui
@@ -1370,7 +1371,7 @@ CAPTURE_FOMA_SRCS = src/tools/capture_foma.c \
                     src/fs/blk_file.c \
                     src/fs/vol.c \
                     src/fs/file.c \
-                    src/apps/clu_fs.c
+                    src/apps/clu.c
 
 CAPTURE_FOMA_OBJS = $(CAPTURE_FOMA_SRCS:.c=.test.o)
 

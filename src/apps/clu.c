@@ -322,40 +322,26 @@ void clu_ls(const char *args, ShellOutputFn out, void *ud)
     cls_dir(dir);
 }
 
-/* ── clu_fs_cmd ──────────────────────────────────────────────────── */
-void clu_fs_cmd(const char *args, ShellOutputFn out, void *ud)
+/* ── clu_fs_cmd helpers ──────────────────────────────────────────── */
+typedef struct {
+    char name[48];
+    unsigned int fid;
+} CluFsPendingLink;
+
+static void clu_fs_dump_records(Volume *v, ID fd, const char *parent_name, int depth,
+                                int flag_l, int flag_r, unsigned char *visited,
+                                ShellOutputFn out, void *ud)
 {
-    int flag_l = has_flag(args, "-l");
-    char target[80];
-    get_target(args, target, sizeof(target));
-
-    Volume *v = (strncmp(g_cwd_path, "/ANDERS", 7) == 0 && g_anders_vol) ? g_anders_vol : g_sys_vol;
-    if (!v) { out("fs: no volume mounted", COLOR_RED, ud); return; }
-
-    const char *path = target[0] ? target : g_cwd_path;
-    ID fd = opn_fil(path, 0x0001);
-    if (fd < 0 && (!target[0] || strcmp(target, "SYS") == 0 || strcmp(target, "/SYS") == 0)) {
-        fd = opn_fil("SYS", 0x0001);
-    }
-    if (fd < 0 && (strcmp(target, "ANDERS") == 0 || strcmp(target, "/ANDERS") == 0)) {
-        fd = opn_fil("ANDERS", 0x0001);
-    }
-
-
-    if (fd < 0) {
-        char err[128];
-        snprintf(err, sizeof(err), "fs: '%s': not found", path);
-        out(err, COLOR_RED, ud);
-        return;
-    }
-
+    if (fd < 0) return;
     OpenFile *of = &g_open_files[(int)fd];
-    v = of_vol(of);
+    if ((unsigned int)of->fid < 256) {
+        visited[of->fid] = 1;
+    }
 
-    if (flag_l)
-        out("NO: 0 STYPE : FID [ATR1 ATR2 ATR3 ATR4 ATR5] : NAME", COLOR_CYAN, ud);
-    else
-        out("NO: TYPE STYPE : SIZE / NAME", COLOR_CYAN, ud);
+    CluFsPendingLink links[64];
+    int link_count = 0;
+    int indent = (depth > 0) ? (depth * 2) : 0;
+    if (indent > 16) indent = 16;
 
     if (of->nrec > 0) {
         for (unsigned int i = 0; i < of->nrec; i++) {
@@ -386,26 +372,48 @@ void clu_fs_cmd(const char *args, ShellOutputFn out, void *ud)
                 }
                 if (flag_l) {
                     snprintf(line, sizeof(line),
-                             "%u:  0 %04X  : %-3u [%04X %04X %04X %04X %04X] : %s",
+                             "%u:  0 %04X  : %-3u [%04X %04X %04X %04X %04X] : %*s%s",
                              i, (unsigned)ri->flags & 0xFFFF,
                              link_fid,
                              attrs[0], attrs[1], attrs[2], attrs[3], attrs[4],
-                             link_name);
+                             indent, "", link_name);
                 } else {
                     snprintf(line, sizeof(line),
-                             "%u:  0    %04X  : %s",
-                             i, (unsigned)ri->flags & 0xFFFF, link_name);
+                             "%u:  0    %04X  : %*s%s",
+                             i, (unsigned)ri->flags & 0xFFFF, indent, "", link_name);
+                }
+                if (flag_r && link_fid != 0 && link_fid != of->fid && link_count < 64) {
+                    if (link_fid >= 256 || !visited[link_fid]) {
+                        strncpy(links[link_count].name, link_name, sizeof(links[link_count].name) - 1);
+                        links[link_count].name[sizeof(links[link_count].name) - 1] = '\0';
+                        links[link_count].fid = link_fid;
+                        link_count++;
+                    }
                 }
             } else {
                 if (flag_l) {
-                    snprintf(line, sizeof(line),
-                             "%u:  %-4u %04X  :     (data record)",
-                             i, (unsigned)ri->type, (unsigned)ri->flags & 0xFFFF);
+                    if (depth > 0) {
+                        snprintf(line, sizeof(line),
+                                 "%u:  %-4u %04X  :     (data record)              : %*s[%s]",
+                                 i, (unsigned)ri->type, (unsigned)ri->flags & 0xFFFF,
+                                 indent, "", parent_name);
+                    } else {
+                        snprintf(line, sizeof(line),
+                                 "%u:  %-4u %04X  :     (data record)",
+                                 i, (unsigned)ri->type, (unsigned)ri->flags & 0xFFFF);
+                    }
                 } else {
-                    snprintf(line, sizeof(line),
-                             "%u:  %-4u %04X  : %-12u",
-                             i, (unsigned)ri->type, (unsigned)ri->flags & 0xFFFF,
-                             ri->size);
+                    if (depth > 0) {
+                        snprintf(line, sizeof(line),
+                                 "%u:  %-4u %04X  : %-12u : %*s[%s]",
+                                 i, (unsigned)ri->type, (unsigned)ri->flags & 0xFFFF,
+                                 ri->size, indent, "", parent_name);
+                    } else {
+                        snprintf(line, sizeof(line),
+                                 "%u:  %-4u %04X  : %-12u",
+                                 i, (unsigned)ri->type, (unsigned)ri->flags & 0xFFFF,
+                                 ri->size);
+                    }
                 }
             }
             out(line, COLOR_LTGRAY, ud);
@@ -423,14 +431,22 @@ void clu_fs_cmd(const char *args, ShellOutputFn out, void *ud)
                 char line[256];
                 if (flag_l) {
                     snprintf(line, sizeof(line),
-                             "%u:  0 0000  : %-3u [0000 0000 0000 0000 0000] : %s",
-                             idx++, (unsigned)efid, entry.name);
+                             "%u:  0 0000  : %-3u [0000 0000 0000 0000 0000] : %*s%s",
+                             idx++, (unsigned)efid, indent, "", entry.name);
                 } else {
                     snprintf(line, sizeof(line),
-                             "%u:  0    %04X  : %s",
-                             idx++, 0, entry.name);
+                             "%u:  0    %04X  : %*s%s",
+                             idx++, 0, indent, "", entry.name);
                 }
                 out(line, COLOR_LTGRAY, ud);
+                if (flag_r && efid != 0 && link_count < 64) {
+                    if (efid >= 256 || !visited[efid]) {
+                        strncpy(links[link_count].name, entry.name, sizeof(links[link_count].name) - 1);
+                        links[link_count].name[sizeof(links[link_count].name) - 1] = '\0';
+                        links[link_count].fid = efid;
+                        link_count++;
+                    }
+                }
             }
             cls_dir(dir);
             if (idx == 0) out("(0 records)", COLOR_LTGRAY, ud);
@@ -438,6 +454,57 @@ void clu_fs_cmd(const char *args, ShellOutputFn out, void *ud)
     } else {
         out("(0 records)", COLOR_LTGRAY, ud);
     }
+
+    /* Recurse into child Virtual Object Real Bodies if -r is requested */
+    if (flag_r && depth < 16) {
+        for (int p = 0; p < link_count; p++) {
+            if (links[p].fid < 256 && visited[links[p].fid]) continue;
+            ID child_fd = opn_fil(links[p].name, 0x0001);
+            if (child_fd >= 0) {
+                clu_fs_dump_records(v, child_fd, links[p].name, depth + 1, flag_l, flag_r, visited, out, ud);
+                cls_fil(child_fd);
+            }
+        }
+    }
+}
+
+/* ── clu_fs_cmd ──────────────────────────────────────────────────── */
+void clu_fs_cmd(const char *args, ShellOutputFn out, void *ud)
+{
+    int flag_l = has_flag(args, "-l");
+    int flag_r = has_flag(args, "-r") || has_flag(args, "-R");
+    char target[80];
+    get_target(args, target, sizeof(target));
+
+    Volume *v = (strncmp(g_cwd_path, "/ANDERS", 7) == 0 && g_anders_vol) ? g_anders_vol : g_sys_vol;
+    if (!v) { out("fs: no volume mounted", COLOR_RED, ud); return; }
+
+    const char *path = target[0] ? target : g_cwd_path;
+    ID fd = opn_fil(path, 0x0001);
+    if (fd < 0 && (!target[0] || strcmp(target, "SYS") == 0 || strcmp(target, "/SYS") == 0)) {
+        fd = opn_fil("SYS", 0x0001);
+    }
+    if (fd < 0 && (strcmp(target, "ANDERS") == 0 || strcmp(target, "/ANDERS") == 0)) {
+        fd = opn_fil("ANDERS", 0x0001);
+    }
+
+    if (fd < 0) {
+        char err[128];
+        snprintf(err, sizeof(err), "fs: '%s': not found", path);
+        out(err, COLOR_RED, ud);
+        return;
+    }
+
+    OpenFile *of = &g_open_files[(int)fd];
+    v = of_vol(of);
+
+    if (flag_l)
+        out("NO: 0 STYPE : FID [ATR1 ATR2 ATR3 ATR4 ATR5] : NAME", COLOR_CYAN, ud);
+    else
+        out("NO: TYPE STYPE : SIZE / NAME", COLOR_CYAN, ud);
+
+    unsigned char visited[256] = {0};
+    clu_fs_dump_records(v, fd, path, 0, flag_l, flag_r, visited, out, ud);
     cls_fil(fd);
 }
 

@@ -705,6 +705,26 @@ static void test_clu_fs_inspection(void)
     }
     CHECK(found_data_rec, "fs -l \"Chapter 1\" did not show (data record)");
 
+    /* 5. fs -r recursive on root: must list Chapter 1 and recurse into Chapter 1 data record */
+    memset(&cb, 0, sizeof(cb));
+    clu_fs_cmd("-r", capture_fn, &cb);
+    int found_r_chap = 0, found_r_subhdr = 0;
+    for (int i = 0; i < cb.n; i++) {
+        if (strstr(cb.lines[i], "Chapter 1")) found_r_chap = 1;
+        if (strstr(cb.lines[i], "[Chapter 1]")) found_r_subhdr = 1;
+    }
+    CHECK(found_r_chap, "fs -r did not list Chapter 1");
+    CHECK(found_r_subhdr, "fs -r did not recurse into Chapter 1");
+
+    /* 6. fs -l -r recursive with details */
+    memset(&cb, 0, sizeof(cb));
+    clu_fs_cmd("-l -r", capture_fn, &cb);
+    int found_lr_data = 0;
+    for (int i = 0; i < cb.n; i++) {
+        if (strstr(cb.lines[i], "(data record)")) found_lr_data = 1;
+    }
+    CHECK(found_lr_data, "fs -l -r did not display data record of child");
+
     vol_umount(v);
     g_sys_vol = NULL;
     blk_destroy(dev);

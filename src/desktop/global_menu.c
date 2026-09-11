@@ -171,7 +171,7 @@ static void refresh_window_menu(void) {
     while (w && whdr->item_count < GMENU_MAX_ITEMS) {
         if (w->visible) {
             GMenuItem *it = &whdr->items[whdr->item_count];
-            snprintf(it->label, sizeof(it->label), "%s%s",
+            snprintf(it->label, sizeof(it->label), "%s%.59s",
                      w->focused ? "[*] " : "[ ] ",
                      w->title[0] ? w->title : "ウィンドウ");
             it->shortcut[0] = '\0';

@@ -27,14 +27,6 @@
 #define __size_t        unsigned int
 #endif
 
-#ifdef __PTRDIFF_TYPE__
-#define __ptrdiff_t     __PTRDIFF_TYPE__
-#elif defined(__x86_64__) || defined(__aarch64__) || defined(__LP64__) || defined(_LP64)
-#define __ptrdiff_t     long int
-#else
-#define __ptrdiff_t     int
-#endif
-
 #ifndef	__cplusplus
 #define __wchar_t	int
 #endif

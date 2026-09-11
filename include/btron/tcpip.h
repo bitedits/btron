@@ -163,24 +163,34 @@ struct linger {
 };
 #endif
 
-#if !defined(_SYS_SELECT_H_) && !defined(_SYS_SELECT_H) && !defined(_SYS__TYPES__FD_DEF_H) && !defined(_FD_SET)
+#if defined(BTRON_TARGET) && BTRON_TARGET == 0
+#include <sys/types.h>
+#include <sys/select.h>
+#include <sys/time.h>
+#else
+#if !defined(_SYS_SELECT_H_) && !defined(_SYS_SELECT_H) && !defined(_SYS__TYPES__FD_DEF_H) && !defined(_FD_SET) && !defined(_SYS_FD_SET_H_) && !defined(_SYS_FD_SET_H)
 #define _SYS_SELECT_H_
 #define _SYS_SELECT_H
 #define _SYS__TYPES__FD_DEF_H
+#define _SYS_FD_SET_H_
+#define _SYS_FD_SET_H
 #define _FD_SET
+#define _FD_SET_DEFINED
 #define FD_SETSIZE      256
 typedef struct fd_set {
     int             fds_bits[FD_SETSIZE / (sizeof(int) * 8)];
 } fd_set;
 #endif
 
-#if !defined(_SYS_TIME_H_) && !defined(_SYS_TIME_H) && !defined(_STRUCT_TIMEVAL) && !defined(_SYS__TIMEVAL_H_)
+#if !defined(_SYS_TIME_H_) && !defined(_SYS_TIME_H) && !defined(_STRUCT_TIMEVAL) && !defined(_SYS__TIMEVAL_H_) && !defined(_SYS_TIMEVAL_H_)
 #define _SYS__TIMEVAL_H_
+#define _SYS_TIMEVAL_H_
 #define _STRUCT_TIMEVAL struct timeval
 struct timeval {
     long            tv_sec;
     long            tv_usec;
 };
+#endif
 #endif
 
 /* ── System Calls ─────────────────────────────────────────────── */

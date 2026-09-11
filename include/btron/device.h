@@ -1,4 +1,4 @@
-﻿/*
+/*
  * B-TRON Specification Compatible Header: device.h
  * Device Management Subsystem (BTRON 3.20 Driver Interface).
  */
@@ -45,7 +45,7 @@ typedef struct {
 ID opn_dev_mgr(const char *dev_name, UW mode);
 ER cls_dev_mgr(ID dev_id);
 ER rea_dev(ID dev_id, VP buf, W sz, W *read_sz);
-ER wri_dev(ID dev_id, const VP buf, W sz, W *wrote_sz);
+ER wri_dev(ID dev_id, const void *buf, W sz, W *wrote_sz);
 ER ctl_dev(ID dev_id, W cmd, VP arg);
 ER ref_dev(ID dev_id, DEV_STAT *stat);
 ER wai_dev(ID dev_id, DEV_REQ *req, W tmo);

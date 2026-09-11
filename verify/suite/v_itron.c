@@ -1,4 +1,4 @@
-﻿/*
+/*
  * v_itron.c — uITRON Kernel API Verification Suite
  *
  * L1 conformance: verify that uITRON task and semaphore APIs
@@ -70,5 +70,5 @@ void vfy_suite_itron(void)
     SYSTIME t = 0;
     ER er = get_tim(&t);
     VFY_ASSERT_EQ(S, "get_tim(valid)", er, E_OK);
-    VFY_ASSERT_TRUE(S, "get_tim returns value", t >= 0);
+    VFY_ASSERT_TRUE(S, "get_tim returns value", t > 0);
 }

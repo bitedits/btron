@@ -1,4 +1,4 @@
-﻿/*
+/*
  * v_fs.c — BTRON 3.20 Record Stream File System Verification Suite
  *
  * Tests opn_fil, cls_fil, cre_fil, del_fil, chg_fil, mov_fil,
@@ -94,7 +94,7 @@ void vfy_suite_fs(void)
         cls_dir(did);
     }
 
-    LINK lnk = { 1, 100, {0}, 0 };
+    FS_LINK lnk = { 1, 100, {0}, 0 };
     ER lnk_er = cre_lnk("/lnk1", &lnk);
     VFY_ASSERT_EQ(S, "cre_lnk(valid)", lnk_er, E_OK);
     del_lnk("/lnk1");

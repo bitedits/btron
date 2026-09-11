@@ -104,6 +104,17 @@ void btron_core_mem_log(void) {
     printf("[MEM ] POSIX hosted: memory managed by host OS allocator\n");
 }
 
+#if defined(__GNUC__) || defined(__clang__)
+__attribute__((weak)) BlkDev *blk_qcow2_create(const char *path, int read_only) {
+    (void)path; (void)read_only;
+    return NULL;
+}
+__attribute__((weak)) BlkDev *blk_mbr_find_btron_partition(BlkDev *dev, UW fs_block_size) {
+    (void)dev; (void)fs_block_size;
+    return NULL;
+}
+#endif
+
 void btron_core_hfds_log(void) {
     printf("[HFDS] POSIX file I/O: host filesystem passthrough  [OK]\n");
     printf("[HFDS] HFDS Hierarchical File/Data Set: INIT  [OK]\n");
@@ -182,7 +193,7 @@ void btron_core_print_ver(ShellOutputFn out_fn, void *user_data, const char *arg
     if (arg && strcmp(arg, "-a") == 0) {
         struct utsname un;
         if (uname(&un) == 0) {
-            char abuf[280];
+            char abuf[512];
             snprintf(abuf, sizeof(abuf), "%s %s %s %s %s (BTRON3 3.20 Cleanroom)",
                      un.sysname, un.nodename, un.release, un.version, un.machine);
             out_fn(abuf, COLOR_CYAN, user_data);
@@ -198,7 +209,7 @@ void btron_core_print_ver(ShellOutputFn out_fn, void *user_data, const char *arg
         out_fn("B-System 3.0 Workstation System (BTRON3 Specification 3.20)", COLOR_CYAN, user_data);
         struct utsname un;
         if (uname(&un) == 0) {
-            char kbuf[280];
+            char kbuf[512];
             snprintf(kbuf, sizeof(kbuf), "Host OS / Kernel: %s %s (%s, %s)",
                      un.sysname, un.release, un.machine, un.nodename);
             out_fn(kbuf, COLOR_WHITE, user_data);

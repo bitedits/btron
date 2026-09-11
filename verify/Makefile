@@ -53,6 +53,8 @@ VERIFY_SRCS = btron_verify.c \
               ../src/font/font_mgr.c \
               ../src/fs/blk_mem.c \
               ../src/fs/blk_file.c \
+              ../src/fs/blk_qcow2.c \
+              ../src/fs/blk_part.c \
               ../src/fs/vol.c \
               ../src/kernel/fs_record.c
 
@@ -74,4 +76,4 @@ run: $(VERIFY_BIN)
 
 clean:
 	rm -f $(VERIFY_BIN) $(VERIFY_OBJS)
-	rm -f *.o suite/*.o report/*.o ../src/font/*.o ../src/kernel/*.o ../src/vobject/*.o ../src/window/*.o ../src/graphics/*.o ../src/hmi/*.o
+	rm -f *.o suite/*.o report/*.o ../src/font/*.o ../src/kernel/*.o ../src/vobject/*.o ../src/window/*.o ../src/graphics/*.o ../src/hmi/*.o ../src/fs/*.o ../src/cores/*.o

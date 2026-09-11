@@ -1,4 +1,4 @@
-﻿/*
+/*
  * B-TRON Device Management Subsystem: dev_mgr.c
  * Cleanroom implementation of BTRON 3.20 Device Driver Interface.
  */
@@ -100,7 +100,7 @@ ER rea_dev(ID dev_id, VP buf, W sz, W *read_sz) {
     return ER_DID;
 }
 
-ER wri_dev(ID dev_id, const VP buf, W sz, W *wrote_sz) {
+ER wri_dev(ID dev_id, const void *buf, W sz, W *wrote_sz) {
     if (!buf || sz < 0) return ER_PAR;
     if (dev_id <= 0) return ER_DID;
 

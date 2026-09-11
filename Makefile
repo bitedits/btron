@@ -51,10 +51,11 @@ M68K_CC      ?= m68k-elf-gcc
 LLVM_CLANG := $(shell for p in /opt/homebrew/opt/llvm/bin/clang /usr/local/opt/llvm/bin/clang /usr/lib/llvm-*/bin/clang clang; do if command -v "$$p" >/dev/null 2>&1; then echo "$$p"; break; fi; done)
 LLD_BIN    := $(shell for p in /opt/homebrew/bin/ld.lld /usr/local/bin/ld.lld /usr/bin/ld.lld ld.lld /opt/homebrew/opt/llvm/bin/ld.lld /usr/lib/llvm-*/bin/ld.lld; do if command -v "$$p" >/dev/null 2>&1; then echo "$$p"; break; fi; done)
 
+ARM_LLD_FLAG := $(if $(LLD_BIN),-fuse-ld=$(LLD_BIN),-fuse-ld=lld)
 # ARM32: Cortex-A7 for Pi 2B (BCM2836)
-ARM32_CC ?= $(LLVM_CLANG) --target=arm-none-eabi -mcpu=cortex-a7 -marm -fuse-ld=lld -ffreestanding -nostdlib
+ARM32_CC ?= $(LLVM_CLANG) --target=arm-none-eabi -mcpu=cortex-a7 -marm $(ARM_LLD_FLAG) -ffreestanding -nostdlib
 # AArch64: Cortex-A72 for Pi 4B (BCM2711) — kept for Pi4-only development
-ARM64_CC ?= $(LLVM_CLANG) --target=aarch64-none-elf -mcpu=cortex-a72 -fuse-ld=lld -ffreestanding -nostdlib
+ARM64_CC ?= $(LLVM_CLANG) --target=aarch64-none-elf -mcpu=cortex-a72 $(ARM_LLD_FLAG) -ffreestanding -nostdlib
 # IA-32 / X86 Freestanding: UEFI / PC-98
 ifeq ($(shell uname -s), Darwin)
     X86_CC ?= $(LLVM_CLANG) --target=i686-none-elf -ffreestanding -nostdlib

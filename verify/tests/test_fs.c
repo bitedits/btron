@@ -833,6 +833,26 @@ static void test_clu_tp_variants(void)
     }
     CHECK(found_fid_hex, "tp -x #1 by hash-prefixed FID failed");
 
+    /* 6. stat by name: stat SampleDoc */
+    memset(&cb, 0, sizeof(cb));
+    clu_stat("SampleDoc", capture_fn, &cb);
+    int found_stat_name = 0;
+    for (int i = 0; i < cb.n; i++) {
+        if (strstr(cb.lines[i], "File: SampleDoc"))
+            found_stat_name = 1;
+    }
+    CHECK(found_stat_name, "stat SampleDoc failed");
+
+    /* 7. stat by FID: stat 1 */
+    memset(&cb, 0, sizeof(cb));
+    clu_stat("1", capture_fn, &cb);
+    int found_stat_fid = 0;
+    for (int i = 0; i < cb.n; i++) {
+        if (strstr(cb.lines[i], "File: SampleDoc") || strstr(cb.lines[i], "FID: 1"))
+            found_stat_fid = 1;
+    }
+    CHECK(found_stat_fid, "stat by numeric FID 1 failed");
+
     vol_umount(v);
     g_sys_vol = NULL;
     blk_destroy(dev);

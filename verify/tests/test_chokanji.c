@@ -531,6 +531,7 @@ static void test_clu_tp_chokanji_streams_and_binaries(void)
     g_chokanji_vol = v;
 
     static char out_buf[32768];
+    clu_cd("/CHOKANJI", clu_buf_out, out_buf);
 
     /* Test 1: tp C header real body by FID (FID 779: elfh) */
     memset(out_buf, 0, sizeof(out_buf));
@@ -564,6 +565,26 @@ static void test_clu_tp_chokanji_streams_and_binaries(void)
     TEST_ASSERT(strstr(out_buf, "0000: 7F 45 4C 46") != NULL,
                 "tp -x /CHOKANJI#4087 should print formatted hex dump starting with ELF magic");
 
+    /* Test 6: stat by FID (FID 781: errno.h) */
+    memset(out_buf, 0, sizeof(out_buf));
+    clu_stat("/CHOKANJI#781", clu_buf_out, out_buf);
+    TEST_ASSERT(strstr(out_buf, "File: errno.h") != NULL, "stat /CHOKANJI#781 missing File: errno.h");
+    TEST_ASSERT(strstr(out_buf, "FID: 781") != NULL, "stat /CHOKANJI#781 missing FID: 781");
+    TEST_ASSERT(strstr(out_buf, "Size: 22") != NULL, "stat /CHOKANJI#781 missing Size: 22");
+
+    /* Test 7: stat by name (DEVCONF) */
+    memset(out_buf, 0, sizeof(out_buf));
+    clu_stat("DEVCONF", clu_buf_out, out_buf);
+    TEST_ASSERT(strstr(out_buf, "File: DEVCONF") != NULL, "stat DEVCONF missing File: DEVCONF");
+    TEST_ASSERT(strstr(out_buf, "FID: 3") != NULL, "stat DEVCONF missing FID: 3");
+
+    /* Test 8: stat ELF binary by numeric FID (4087) */
+    memset(out_buf, 0, sizeof(out_buf));
+    clu_stat("4087", clu_buf_out, out_buf);
+    TEST_ASSERT(strstr(out_buf, "File: cat") != NULL, "stat 4087 missing File: cat");
+    TEST_ASSERT(strstr(out_buf, "Executable Binary") != NULL, "stat 4087 missing Executable Binary");
+
+    clu_cd("/SYS", clu_buf_out, out_buf);
     g_chokanji_vol = NULL;
     vol_umount(v);
     blk_destroy(part);

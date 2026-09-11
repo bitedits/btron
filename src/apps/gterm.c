@@ -329,6 +329,9 @@ void shell_execute_cmd(const char *cmd_line, ShellOutputFn out_fn, void *user_da
     /* ── Cho-Kanji CLU Filesystem Builtins ─────────────────────────────────── */
     if (strcmp(cmd, "ls")     == 0) { clu_ls     (arg, out_fn, user_data); return; }
     if (strcmp(cmd, "fs")     == 0) { clu_fs_cmd (arg, out_fn, user_data); return; }
+    if (strcmp(cmd, "stat")   == 0 ||
+        strcmp(cmd, "finfo")  == 0 ||
+        strcmp(cmd, "info")   == 0) { clu_stat   (arg, out_fn, user_data); return; }
     if (strcmp(cmd, "tp")     == 0) { clu_tp     (arg, out_fn, user_data); return; }
     if (strcmp(cmd, "mkf")    == 0) { clu_mkf    (arg, out_fn, user_data); return; }
     if (strcmp(cmd, "cp")     == 0) { clu_cp     (arg, out_fn, user_data); return; }
@@ -355,7 +358,8 @@ void shell_execute_cmd(const char *cmd_line, ShellOutputFn out_fn, void *user_da
         out_fn("B-System Cho-Kanji Shell Commands:", COLOR_GREEN, user_data);
         out_fn("── Volume / Filesystem (CLU) ─────────────────────", COLOR_CYAN, user_data);
         out_fn("  ls [-l|-t]          - List /SYS volume files", COLOR_LTGRAY, user_data);
-        out_fn("  fs [-l] <file>      - Show record index of file", COLOR_LTGRAY, user_data);
+        out_fn("  fs [-l] <file|FID>  - Show record index of file", COLOR_LTGRAY, user_data);
+        out_fn("  stat <file|FID>     - Retrieve file info & metadata by FID or name", COLOR_LTGRAY, user_data);
         out_fn("  tp [-x|-a] <file>   - Type/dump file TAD content", COLOR_LTGRAY, user_data);
         out_fn("  mkf <name>          - Create new Real Body", COLOR_LTGRAY, user_data);
         out_fn("  cp <src> <dst>      - Copy Real Body", COLOR_LTGRAY, user_data);

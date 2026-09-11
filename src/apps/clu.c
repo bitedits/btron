@@ -824,6 +824,94 @@ static void clu_fs_print_node_tree(CluFsNode *nodes, FID fid, int depth, int fla
     }
 }
 
+/* ── clu_open_target ─────────────────────────────────────────────── */
+static ID clu_open_target(const char *target, UW mode, Volume *default_vol)
+{
+    if (!target || !target[0]) return -1;
+
+    Volume *v = default_vol ? default_vol :
+                (strncmp(g_cwd_path, "/ANDERS", 7) == 0 && g_anders_vol) ? g_anders_vol :
+                ((strncmp(g_cwd_path, "/CHOKANJI", 9) == 0 || strncmp(g_cwd_path, "/B-right", 8) == 0) && g_chokanji_vol) ? g_chokanji_vol : g_sys_vol;
+
+    ID fd = -1;
+    int is_fid = 0;
+    FID fid_val = FID_INVALID;
+    const char *num_str = NULL;
+    Volume *target_vol = v;
+
+    int all_digits = 1;
+    for (int i = 0; target[i]; i++) {
+        if (!isdigit((unsigned char)target[i])) { all_digits = 0; break; }
+    }
+    if (strncmp(target, "/CHOKANJI#", 10) == 0) {
+        target_vol = g_chokanji_vol ? g_chokanji_vol : v;
+        num_str = target + 10;
+        is_fid = 1;
+    } else if (strncmp(target, "/ANDERS#", 8) == 0) {
+        target_vol = g_anders_vol ? g_anders_vol : v;
+        num_str = target + 8;
+        is_fid = 1;
+    } else if (strncmp(target, "/SYS#", 5) == 0) {
+        target_vol = g_sys_vol;
+        num_str = target + 5;
+        is_fid = 1;
+    } else if (target[0] == '#') {
+        num_str = target + 1;
+        is_fid = 1;
+    } else if ((target[0] == 'f' || target[0] == 'F') &&
+               (target[1] == 'i' || target[1] == 'I') &&
+               (target[2] == 'd' || target[2] == 'D') &&
+               target[3] == ':') {
+        num_str = target + 4;
+        is_fid = 1;
+    } else if (all_digits && target[0]) {
+        num_str = target;
+        is_fid = 1;
+    }
+
+    if (is_fid && num_str && *num_str) {
+        unsigned long val = 0;
+        const char *np = num_str;
+        while (*np >= '0' && *np <= '9') {
+            val = val * 10 + (unsigned long)(*np - '0');
+            np++;
+        }
+        fid_val = (FID)val;
+        if (target_vol) {
+            fd = opn_fil_fid(target_vol, fid_val, mode);
+        }
+        if (fd < 0 && target_vol != g_sys_vol && g_sys_vol) {
+            fd = opn_fil_fid(g_sys_vol, fid_val, mode);
+        }
+        if (fd < 0 && target_vol != g_chokanji_vol && g_chokanji_vol) {
+            fd = opn_fil_fid(g_chokanji_vol, fid_val, mode);
+        }
+        if (fd < 0 && target_vol != g_anders_vol && g_anders_vol) {
+            fd = opn_fil_fid(g_anders_vol, fid_val, mode);
+        }
+        return fd;
+    }
+
+    /* Try as path */
+    fd = opn_fil(target, mode);
+    if (fd < 0 && target[0] != '/') {
+        char full[128];
+        snprintf(full, sizeof(full), "%s/%s", g_cwd_path, target);
+        fd = opn_fil(full, mode);
+    }
+    if (fd < 0 && target[0] != '/' && g_chokanji_vol) {
+        char full[128];
+        snprintf(full, sizeof(full), "/CHOKANJI/%s", target);
+        fd = opn_fil(full, mode);
+    }
+    if (fd < 0 && target[0] != '/' && g_sys_vol) {
+        char full[128];
+        snprintf(full, sizeof(full), "/SYS/%s", target);
+        fd = opn_fil(full, mode);
+    }
+    return fd;
+}
+
 void clu_fs_cmd(const char *args, ShellOutputFn out, void *ud)
 {
     int flag_l = has_flag(args, "-l");
@@ -1077,12 +1165,7 @@ void clu_fs_cmd(const char *args, ShellOutputFn out, void *ud)
     }
 
     const char *path = target[0] ? target : g_cwd_path;
-    ID fd = opn_fil(path, 0x0001);
-    if (fd < 0 && target[0]) {
-        char full[128];
-        snprintf(full, sizeof(full), "%s/%s", g_cwd_path, target);
-        fd = opn_fil(full, 0x0001);
-    }
+    ID fd = clu_open_target(path, 0x0001, v);
 
     if (fd < 0) {
         char err[128];
@@ -1109,6 +1192,134 @@ void clu_fs_cmd(const char *args, ShellOutputFn out, void *ud)
     cls_fil(fd);
 }
 
+/* ── clu_stat ────────────────────────────────────────────────────── */
+void clu_stat(const char *args, ShellOutputFn out, void *ud)
+{
+    char target[80];
+    get_target(args, target, sizeof(target));
+
+    if (!target[0]) {
+        out("stat: missing file argument (usage: stat <file|FID>)", COLOR_RED, ud);
+        return;
+    }
+
+    Volume *v = (strncmp(g_cwd_path, "/ANDERS", 7) == 0 && g_anders_vol) ? g_anders_vol :
+                ((strncmp(g_cwd_path, "/CHOKANJI", 9) == 0 || strncmp(g_cwd_path, "/B-right", 8) == 0) && g_chokanji_vol) ? g_chokanji_vol : g_sys_vol;
+
+    ID fd = clu_open_target(target, 0x0001, v);
+    if (fd < 0) {
+        char err[128];
+        snprintf(err, sizeof(err), "stat: '%s': not found", target);
+        out(err, COLOR_RED, ud);
+        return;
+    }
+
+    OpenFile *of = &g_open_files[(int)fd];
+    v = of_vol(of);
+
+    char line[160];
+    const char *vol_name = (v == g_chokanji_vol) ? "CHOKANJI" :
+                           (v == g_anders_vol) ? "ANDERS" : "SYS";
+    const char *vol_desc = vol_is_brightv(v) ? "B-right/V 4.02 (Cho-Kanji)" : "Cleanroom BTRON3";
+
+    snprintf(line, sizeof(line), "  File: %s", of->hdr.name[0] ? (const char *)of->hdr.name : "(unnamed)");
+    out(line, COLOR_WHITE, ud);
+
+    snprintf(line, sizeof(line), "   FID: %-5u (0x%04X)      Volume: /%s [%s]",
+             (unsigned)of->fid, (unsigned)of->fid, vol_name, vol_desc);
+    out(line, COLOR_CYAN, ud);
+
+    snprintf(line, sizeof(line), "Blocks: Header=%u  Data=%u",
+             (unsigned)of->hdr_blk, (unsigned)of->data_blk);
+    out(line, COLOR_LTGRAY, ud);
+
+    snprintf(line, sizeof(line), "  Size: %-10u bytes     Used: %-10u   Records: %u",
+             (unsigned)of->hdr.total_size, (unsigned)of->data_used, (unsigned)of->nrec);
+    out(line, COLOR_LTGRAY, ud);
+
+    /* Format / Kind */
+    int kind = clu_probe_kind(v, (unsigned int)of->fid);
+    const char *kind_str = (kind == 2) ? "ELF 32-bit Executable (i386)" :
+                           (kind == 1 || (of->hdr.flags & 0x8000) || of->ridx[0].kind == 0x9F00) ? "Executable Binary (OBJ_EXEC / Program)" :
+                           (of->nrec > 0 && of->ridx[0].kind == 0x8000) ? "Directory Drawer / Container" :
+                           (of->nrec > 0 && of->ridx[0].type == 1) ? "TAD Document / Text" : "Data Stream";
+    snprintf(line, sizeof(line), "Format: %s", kind_str);
+    out(line, clu_kind_color(kind, 0), ud);
+
+    /* Access & Flags */
+    char flags_desc[64];
+    int fpos = 0;
+    if (of->hdr.flags & 0x8000) fpos += snprintf(flags_desc + fpos, sizeof(flags_desc) - fpos, "EXEC ");
+    if (of->hdr.flags & 0x0001) fpos += snprintf(flags_desc + fpos, sizeof(flags_desc) - fpos, "WPROTECT ");
+    if (of->hdr.flags & 0x0002) fpos += snprintf(flags_desc + fpos, sizeof(flags_desc) - fpos, "DPROTECT ");
+    if (fpos == 0) snprintf(flags_desc, sizeof(flags_desc), "NORMAL");
+
+    snprintf(line, sizeof(line), "Access: ATYPE=%04X  Flags=%04X (%s)  Nlnk=%u",
+             (unsigned)of->hdr.atype, (unsigned)of->hdr.flags, flags_desc, (unsigned)of->hdr.nlnk);
+    out(line, COLOR_LTGRAY, ud);
+
+    /* Timestamps */
+    char mt[24], ct[24], at[24];
+    fmt_ts(of->hdr.mtime, mt, sizeof(mt));
+    fmt_ts(of->hdr.ctime, ct, sizeof(ct));
+    fmt_ts(of->hdr.atime, at, sizeof(at));
+    snprintf(line, sizeof(line), "Modify: %s (0x%08X)", mt, (unsigned)of->hdr.mtime);
+    out(line, COLOR_LTGRAY, ud);
+    snprintf(line, sizeof(line), "Access: %s (0x%08X)", at, (unsigned)of->hdr.atime);
+    out(line, COLOR_LTGRAY, ud);
+    snprintf(line, sizeof(line), "Create: %s (0x%08X)", ct, (unsigned)of->hdr.ctime);
+    out(line, COLOR_LTGRAY, ud);
+
+    /* Records Header */
+    if (of->nrec > 0) {
+        out("Records:", COLOR_CYAN, ud);
+        out("  REC  KIND    TYPE    OFFSET      SIZE        FLAGS", COLOR_LTGRAY, ud);
+        out("  ---  ------  ------  ----------  ----------  -----", COLOR_LTGRAY, ud);
+        for (unsigned int i = 0; i < of->nrec; i++) {
+            snprintf(line, sizeof(line), "  [%2u] 0x%04X  0x%04X  %-10u  %-10u  %u",
+                     i, (unsigned)of->ridx[i].kind, (unsigned)of->ridx[i].type,
+                     (unsigned)of->ridx[i].offset, (unsigned)of->ridx[i].size,
+                     (unsigned)of->ridx[i].flags);
+            out(line, COLOR_WHITE, ud);
+
+            /* Inspect record content if available */
+            if (of->ridx[i].size > 0 && of->ridx[i].size <= 512) {
+                ID rec = opn_rec(fd, (W)i, 0x0001);
+                if (rec >= 0) {
+                    unsigned char pbuf[128];
+                    W got = 0;
+                    rd_rec(rec, pbuf, sizeof(pbuf), &got);
+                    cls_rec(rec);
+                    if (got >= 4) {
+                        /* Check for TRON coded link or text */
+                        if (pbuf[1] == 0x23 || pbuf[3] == 0x23) {
+                            UH tc[64];
+                            int tclen = (int)got / 2;
+                            if (tclen > 60) tclen = 60;
+                            for (int k = 0; k < tclen; k++) tc[k] = (UH)(pbuf[k*2] | (pbuf[k*2+1] << 8));
+                            tc[tclen] = 0;
+                            char utf8[128];
+                            btr_tcode_to_utf8(tc, tclen, utf8, sizeof(utf8));
+                            if (utf8[0]) {
+                                snprintf(line, sizeof(line), "       -> Link/Text: \"%s\"", utf8);
+                                out(line, COLOR_CYAN, ud);
+                            }
+                        } else if ((of->ridx[i].type == 0 || of->ridx[i].type == RT_LINK) && !vol_is_brightv(v)) {
+                            FID lfid = (FID)((pbuf[0]<<24)|(pbuf[1]<<16)|(pbuf[2]<<8)|pbuf[3]);
+                            snprintf(line, sizeof(line), "       -> Target FID: %u", (unsigned)lfid);
+                            out(line, COLOR_CYAN, ud);
+                        }
+                    }
+                }
+            }
+        }
+    } else {
+        out("Records: (0 records)", COLOR_LTGRAY, ud);
+    }
+
+    cls_fil(fd);
+}
+
 /* ── clu_tp ──────────────────────────────────────────────────────── */
 void clu_tp(const char *args, ShellOutputFn out, void *ud)
 {
@@ -1122,61 +1333,7 @@ void clu_tp(const char *args, ShellOutputFn out, void *ud)
     Volume *v = (strncmp(g_cwd_path, "/ANDERS", 7) == 0 && g_anders_vol) ? g_anders_vol :
                 ((strncmp(g_cwd_path, "/CHOKANJI", 9) == 0 || strncmp(g_cwd_path, "/B-right", 8) == 0) && g_chokanji_vol) ? g_chokanji_vol : g_sys_vol;
 
-    ID fd = -1;
-    int is_fid = 0;
-    FID fid_val = FID_INVALID;
-    const char *num_str = NULL;
-    Volume *target_vol = v;
-
-    int all_digits = 1;
-    for (int i = 0; target[i]; i++) {
-        if (!isdigit((unsigned char)target[i])) { all_digits = 0; break; }
-    }
-    if (strncmp(target, "/CHOKANJI#", 10) == 0) {
-        target_vol = g_chokanji_vol ? g_chokanji_vol : v;
-        num_str = target + 10;
-        is_fid = 1;
-    } else if (strncmp(target, "/ANDERS#", 8) == 0) {
-        target_vol = g_anders_vol ? g_anders_vol : v;
-        num_str = target + 8;
-        is_fid = 1;
-    } else if (strncmp(target, "/SYS#", 5) == 0) {
-        target_vol = g_sys_vol;
-        num_str = target + 5;
-        is_fid = 1;
-    } else if (target[0] == '#') {
-        num_str = target + 1;
-        is_fid = 1;
-    } else if ((target[0] == 'f' || target[0] == 'F') &&
-               (target[1] == 'i' || target[1] == 'I') &&
-               (target[2] == 'd' || target[2] == 'D') &&
-               target[3] == ':') {
-        num_str = target + 4;
-        is_fid = 1;
-    } else if (all_digits && target[0]) {
-        num_str = target;
-        is_fid = 1;
-    }
-
-    if (is_fid && num_str && *num_str) {
-        unsigned long val = 0;
-        const char *np = num_str;
-        while (*np >= '0' && *np <= '9') {
-            val = val * 10 + (unsigned long)(*np - '0');
-            np++;
-        }
-        fid_val = (FID)val;
-        if (target_vol) {
-            fd = opn_fil_fid(target_vol, fid_val, 0x0001);
-        }
-        if (fd < 0 && target_vol != g_sys_vol && g_sys_vol) {
-            fd = opn_fil_fid(g_sys_vol, fid_val, 0x0001);
-        }
-    }
-    if (fd < 0) {
-        fd = opn_fil(target, 0x0001);
-    }
-
+    ID fd = clu_open_target(target, 0x0001, v);
     if (fd < 0) {
         char err[128]; snprintf(err, sizeof(err), "tp: '%s': not found", target);
         out(err, COLOR_RED, ud); return;

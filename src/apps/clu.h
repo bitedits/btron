@@ -32,6 +32,7 @@ void clu_ls   (const char *args, ShellOutputFn out, void *ud);
 
 /* ── Record introspection ───────────────────────────────────────── */
 void clu_fs_cmd(const char *args, ShellOutputFn out, void *ud);
+void clu_stat  (const char *args, ShellOutputFn out, void *ud);
 
 /* ── Content display ────────────────────────────────────────────── */
 void clu_tp   (const char *args, ShellOutputFn out, void *ud);

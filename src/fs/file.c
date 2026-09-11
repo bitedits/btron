@@ -384,8 +384,16 @@ static FID find_fid_by_name(Volume *v, const char *name)
 
         char stored[64];
         if (is_bv) {
-            if (memcmp(buf, "Tron", 4) != 0 && memcmp(buf, "norT", 4) != 0)
-                continue;
+            if (memcmp(buf, "Tron", 4) != 0 && memcmp(buf, "norT", 4) != 0) {
+                int found_hdr = 0;
+                if (hblk > 0) {
+                    if (vol_read_blk(v, hblk - 1, buf) == 0 &&
+                        (memcmp(buf, "Tron", 4) == 0 || memcmp(buf, "norT", 4) == 0)) {
+                        found_hdr = 1;
+                    }
+                }
+                if (!found_hdr) continue;
+            }
             UH tc[20];
             for (int k = 0; k < 16; k++) {
                 tc[k] = rd_u16_le(buf + 0x6C + k * 2);

@@ -84,6 +84,15 @@ fs    – Show record structure of a file or subdirectory tree
 
   -l form (link records):
     NO: 0 STYPE : FID [ATR1 ATR2 ATR3 ATR4 ATR5] : NAME
+
+stat  – Retrieve detailed file metadata and record table by FID or name
+  stat <path|FID>
+  (Aliases: finfo, info)
+  Accepts either a filename ("BOOK.md", "errnoh"), a numeric FID ("781", "1"),
+  a prefixed FID ("#781", "FID:781"), or volume-prefixed FID ("/CHOKANJI#781").
+  Displays File name, FID, backing Volume, Header & Data blocks, Total Size,
+  Format/Kind, Access flags, Timestamps (Modify, Access, Create), and all
+  contained Record descriptors with decoded link/stream targets.
 ```
 
 File Records

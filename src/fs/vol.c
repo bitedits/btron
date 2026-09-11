@@ -115,7 +115,7 @@ void btr_tcode_to_utf8(const UH *tc, int max_tcs, char *utf8, int max_bytes)
             utf8[di++] = '-';
         } else if (c == 0x213F) {
             utf8[di++] = '/';
-        } else if (c == 0x212E) {
+        } else if (c == 0x212E || c == 0x2125) {
             utf8[di++] = '.';
         } else if (c == 0x2132 || c == 0x2170) {
             utf8[di++] = '_';

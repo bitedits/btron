@@ -41,6 +41,7 @@
 #  define strlen   tkl_strlen
 #  define strncpy  tkl_strncpy
 #  define isspace(c) ((c)==' '||(c)=='\t'||(c)=='\n'||(c)=='\r')
+#  define isdigit(c) ((c)>='0'&&(c)<='9')
 #endif
 
 #include "clu.h"
@@ -1127,6 +1128,10 @@ void clu_tp(const char *args, ShellOutputFn out, void *ud)
     const char *num_str = NULL;
     Volume *target_vol = v;
 
+    int all_digits = 1;
+    for (int i = 0; target[i]; i++) {
+        if (!isdigit((unsigned char)target[i])) { all_digits = 0; break; }
+    }
     if (strncmp(target, "/CHOKANJI#", 10) == 0) {
         target_vol = g_chokanji_vol ? g_chokanji_vol : v;
         num_str = target + 10;
@@ -1142,32 +1147,33 @@ void clu_tp(const char *args, ShellOutputFn out, void *ud)
     } else if (target[0] == '#') {
         num_str = target + 1;
         is_fid = 1;
-    } else if (strncasecmp(target, "FID:", 4) == 0) {
+    } else if ((target[0] == 'f' || target[0] == 'F') &&
+               (target[1] == 'i' || target[1] == 'I') &&
+               (target[2] == 'd' || target[2] == 'D') &&
+               target[3] == ':') {
         num_str = target + 4;
         is_fid = 1;
-    } else {
-        int all_digits = 1;
-        for (int i = 0; target[i]; i++) {
-            if (!isdigit((unsigned char)target[i])) { all_digits = 0; break; }
-        }
-        if (all_digits && target[0]) {
-            fd = opn_fil(target, 0x0001);
-            if (fd < 0) {
-                num_str = target;
-                is_fid = 1;
-            }
-        }
+    } else if (all_digits && target[0]) {
+        num_str = target;
+        is_fid = 1;
     }
 
     if (is_fid && num_str && *num_str) {
-        fid_val = (FID)strtoul(num_str, NULL, 10);
+        unsigned long val = 0;
+        const char *np = num_str;
+        while (*np >= '0' && *np <= '9') {
+            val = val * 10 + (unsigned long)(*np - '0');
+            np++;
+        }
+        fid_val = (FID)val;
         if (target_vol) {
             fd = opn_fil_fid(target_vol, fid_val, 0x0001);
         }
         if (fd < 0 && target_vol != g_sys_vol && g_sys_vol) {
             fd = opn_fil_fid(g_sys_vol, fid_val, 0x0001);
         }
-    } else if (fd < 0) {
+    }
+    if (fd < 0) {
         fd = opn_fil(target, 0x0001);
     }
 
@@ -1177,79 +1183,132 @@ void clu_tp(const char *args, ShellOutputFn out, void *ud)
     }
 
     OpenFile *of = &g_open_files[(int)fd];
-    /* Find first RT_TADDATA or any data record */
+    v = of_vol(of);
+
+    unsigned char payload[1024 * 4];
+    W got = 0;
+    int found_rec = 0;
+
     for (unsigned int i = 0; i < of->nrec; i++) {
-        if (of->ridx[i].type == RT_LINK) continue;
+        if (!vol_is_brightv(v) && of->ridx[i].type == RT_LINK) continue;
+        if (vol_is_brightv(v) && (of->ridx[i].kind == 0x8000 || of->ridx[i].type == 0x0080) && of->ridx[i].size == 0) continue;
         if (of->ridx[i].size == 0) continue;
 
         ID rec = opn_rec(fd, (W)i, 0x0001);
         if (rec < 0) continue;
 
-        unsigned char payload[1024 * 4];
-        W got = 0;
         UW to_read = of->ridx[i].size;
         if (to_read > sizeof(payload)) to_read = sizeof(payload);
         rd_rec(rec, payload, (W)to_read, &got);
         cls_rec(rec);
+        found_rec = 1;
+        break;
+    }
 
-        if (flag_x || flag_a) {
-            /* Hex / ASCII dump */
-            char hexline[80];
-            for (int off = 0; off < (int)got; off += 16) {
-                int chunk = ((int)got - off < 16) ? (int)got - off : 16;
-                if (flag_x) {
-                    int pos = snprintf(hexline, sizeof(hexline), "%04X:", off);
-                    for (int j = 0; j < chunk; j++)
-                        pos += snprintf(hexline + pos, sizeof(hexline) - (size_t)pos,
-                                        " %02X", payload[off + j]);
-                } else {
-                    int pos = 0;
-                    for (int j = 0; j < chunk; j++) {
-                        unsigned char c = payload[off + j];
-                        hexline[pos++] = (c >= 32 && c < 127) ? (char)c : '.';
-                    }
-                    hexline[pos] = '\0';
+    if (!found_rec) {
+        BLK dblk = of->data_blk ? of->data_blk : of->hdr_blk;
+        if (dblk > 0 && dblk != FID_INVALID) {
+            unsigned char *bbuf = (unsigned char *)malloc(vol_block_size(v));
+            if (bbuf) {
+                if (vol_read_blk(v, dblk, bbuf) == 0) {
+                    UW sz = of->hdr.total_size > 0 ? of->hdr.total_size : vol_block_size(v);
+                    if (sz > sizeof(payload)) sz = sizeof(payload);
+                    memcpy(payload, bbuf, sz);
+                    got = (W)sz;
                 }
-                out(hexline, COLOR_LTGRAY, ud);
+                free(bbuf);
             }
-        } else {
-            /* Plain text: print printable bytes, parse TAD TS_TEXT segments */
-            int off = 0;
-            char textbuf[512];
-            int tblen = 0;
-            while (off < (int)got) {
-                if (payload[off] == 0xFF && off + 3 < (int)got) {
-                    if (tblen > 0) { textbuf[tblen] = '\0'; out(textbuf, COLOR_LTGRAY, ud); tblen = 0; }
-                    unsigned char seg_id = payload[off + 1];
-                    int seg_len = ((int)payload[off+2] << 8) | payload[off+3];
-                    if (seg_id == 0xE1 /* TS_TEXT */) {
-                        int start = off + 4;
-                        int end   = start + seg_len;
-                        if (end > (int)got) end = (int)got;
-                        for (int j = start; j < end; j++) {
-                            unsigned char c = payload[j];
-                            if (c >= 32 && c < 127 && tblen < 510)
-                                textbuf[tblen++] = (char)c;
-                            else if ((c == '\n' || tblen > 200)) {
-                                textbuf[tblen] = '\0';
-                                out(textbuf, COLOR_LTGRAY, ud);
-                                tblen = 0;
-                            }
+        }
+    }
+
+    if (got == 0) {
+        out("(0 bytes)", COLOR_LTGRAY, ud);
+        cls_fil(fd);
+        return;
+    }
+
+    if (flag_x || flag_a) {
+        /* Hex / ASCII dump */
+        char hexline[80];
+        for (int off = 0; off < (int)got; off += 16) {
+            int chunk = ((int)got - off < 16) ? (int)got - off : 16;
+            if (flag_x) {
+                int pos = snprintf(hexline, sizeof(hexline), "%04X:", off);
+                for (int j = 0; j < chunk; j++)
+                    pos += snprintf(hexline + pos, sizeof(hexline) - (size_t)pos,
+                                    " %02X", payload[off + j]);
+            } else {
+                int pos = 0;
+                for (int j = 0; j < chunk; j++) {
+                    unsigned char c = payload[off + j];
+                    hexline[pos++] = (c >= 32 && c < 127) ? (char)c : '.';
+                }
+                hexline[pos] = '\0';
+            }
+            out(hexline, COLOR_LTGRAY, ud);
+        }
+    } else if (got >= 4 && memcmp(payload, "\x7f\x45\x4c\x46", 4) == 0) {
+        /* Plain view of ELF Binary: print header summary & hex preview */
+        char banner[128];
+        snprintf(banner, sizeof(banner), "[ELF 32-bit LSB Executable (i386)] (Size: %u bytes)",
+                 of->hdr.total_size > 0 ? of->hdr.total_size : (UW)got);
+        out(banner, COLOR_GREEN, ud);
+        for (int off = 0; off < 64 && off < (int)got; off += 16) {
+            char hexline[80];
+            int chunk = ((int)got - off < 16) ? (int)got - off : 16;
+            int pos = snprintf(hexline, sizeof(hexline), "%04X:", off);
+            for (int j = 0; j < chunk; j++)
+                pos += snprintf(hexline + pos, sizeof(hexline) - (size_t)pos, " %02X", payload[off + j]);
+            out(hexline, COLOR_LTGRAY, ud);
+        }
+    } else if (got >= 4 && (payload[1] == 0x23 || payload[3] == 0x23)) {
+        /* TRON-coded ASCII string (e.g. cpp include link sys/errno.h) */
+        UH tc[64];
+        int tclen = (int)got / 2;
+        if (tclen > 60) tclen = 60;
+        for (int k = 0; k < tclen; k++) tc[k] = (UH)(payload[k*2] | (payload[k*2+1] << 8));
+        tc[tclen] = 0;
+        char utf8[128];
+        btr_tcode_to_utf8(tc, tclen, utf8, sizeof(utf8));
+        if (utf8[0]) {
+            out(utf8, COLOR_CYAN, ud);
+        }
+    } else {
+        /* Plain text: print printable bytes, parse TAD TS_TEXT segments */
+        int off = 0;
+        char textbuf[512];
+        int tblen = 0;
+        while (off < (int)got) {
+            if (payload[off] == 0xFF && off + 3 < (int)got) {
+                if (tblen > 0) { textbuf[tblen] = '\0'; out(textbuf, COLOR_LTGRAY, ud); tblen = 0; }
+                unsigned char seg_id = payload[off + 1];
+                int seg_len = ((int)payload[off+2] << 8) | payload[off+3];
+                if (seg_id == 0xE1 /* TS_TEXT */) {
+                    int start = off + 4;
+                    int end   = start + seg_len;
+                    if (end > (int)got) end = (int)got;
+                    for (int j = start; j < end; j++) {
+                        unsigned char c = payload[j];
+                        if (c >= 32 && c < 127 && tblen < 510)
+                            textbuf[tblen++] = (char)c;
+                        else if ((c == '\n' || tblen > 200)) {
+                            textbuf[tblen] = '\0';
+                            out(textbuf, COLOR_LTGRAY, ud);
+                            tblen = 0;
                         }
                     }
-                    off += 4 + seg_len;
-                } else {
-                    unsigned char c = payload[off];
-                    if (c >= 32 && c < 127 && tblen < 510) textbuf[tblen++] = (char)c;
-                    else if (c == '\n' || tblen > 200) {
-                        textbuf[tblen] = '\0'; out(textbuf, COLOR_LTGRAY, ud); tblen = 0;
-                    }
-                    off++;
                 }
+                off += 4 + seg_len;
+            } else {
+                unsigned char c = payload[off];
+                if (c >= 32 && c < 127 && tblen < 510) textbuf[tblen++] = (char)c;
+                else if (c == '\n' || tblen > 200) {
+                    textbuf[tblen] = '\0'; out(textbuf, COLOR_LTGRAY, ud); tblen = 0;
+                }
+                off++;
             }
-            if (tblen > 0) { textbuf[tblen] = '\0'; out(textbuf, COLOR_LTGRAY, ud); }
         }
-        break; /* show only first data record by default */
+        if (tblen > 0) { textbuf[tblen] = '\0'; out(textbuf, COLOR_LTGRAY, ud); }
     }
     cls_fil(fd);
 }

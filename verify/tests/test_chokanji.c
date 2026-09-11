@@ -285,8 +285,9 @@ static void test_read_write_operations(void)
 
     g_chokanji_vol = v;
 
-    /* Create new file on Cho-Kanji volume */
+    /* Create new file on Cho-Kanji volume (cleanup previous if needed) */
     const char *test_path = "/CHOKANJI/BTRON_TEST.TXT";
+    del_fil(test_path);
     ID wfd = cre_fil(test_path, 0x0002 | 0x0008 /* F_WRITE | F_CREATE */);
     TEST_ASSERT(wfd >= 0, "cre_fil on Cho-Kanji volume failed");
 
@@ -513,6 +514,63 @@ static void test_clu_integration(void)
     TEST_PASS();
 }
 
+/* ── Test 9: CLU tp on Cho-Kanji Headers, Streams, and Binaries ──── */
+static void test_clu_tp_chokanji_streams_and_binaries(void)
+{
+    const char *path = find_qcow2_image();
+    TEST_ASSERT(path != NULL, "hda.qcow2 not found");
+
+    BlkDev *dev = blk_qcow2_create(path, 1);
+    TEST_ASSERT(dev != NULL, "failed to open QCOW2");
+
+    BlkDev *part = blk_mbr_find_btron_partition(dev, 8192);
+    TEST_ASSERT(part != NULL, "failed to slice partition");
+
+    Volume *v = vol_mount(part);
+    TEST_ASSERT(v != NULL, "mount failed");
+    g_chokanji_vol = v;
+
+    static char out_buf[32768];
+
+    /* Test 1: tp C header real body by FID (FID 779: elfh) */
+    memset(out_buf, 0, sizeof(out_buf));
+    clu_tp("/CHOKANJI#779", clu_buf_out, out_buf);
+    TEST_ASSERT(strstr(out_buf, "Polstra") != NULL || strstr(out_buf, "ELF") != NULL,
+                "tp /CHOKANJI#779 should print elfh header content");
+
+    /* Test 2: tp TRON-coded ASCII link header (FID 781: errnoh) */
+    memset(out_buf, 0, sizeof(out_buf));
+    clu_tp("/CHOKANJI#781", clu_buf_out, out_buf);
+    TEST_ASSERT(strstr(out_buf, "sys/errno.h") != NULL,
+                "tp /CHOKANJI#781 should decode and print sys/errno.h link destination");
+
+    /* Test 3: tp raw stream / config file (FID 3: DEVCONF) */
+    memset(out_buf, 0, sizeof(out_buf));
+    clu_tp("/CHOKANJI#3", clu_buf_out, out_buf);
+    TEST_ASSERT(strstr(out_buf, "DEVCONF") != NULL,
+                "tp /CHOKANJI#3 should print DEVCONF text stream content");
+
+    /* Test 4: tp ELF binary default mode (FID 4087: cat) */
+    memset(out_buf, 0, sizeof(out_buf));
+    clu_tp("/CHOKANJI#4087", clu_buf_out, out_buf);
+    TEST_ASSERT(strstr(out_buf, "[ELF 32-bit LSB Executable (i386)]") != NULL,
+                "tp /CHOKANJI#4087 should print ELF executable banner");
+    TEST_ASSERT(strstr(out_buf, "7F 45 4C 46") != NULL,
+                "tp /CHOKANJI#4087 preview should include ELF magic hex bytes");
+
+    /* Test 5: tp ELF binary with -x hex dump */
+    memset(out_buf, 0, sizeof(out_buf));
+    clu_tp("-x /CHOKANJI#4087", clu_buf_out, out_buf);
+    TEST_ASSERT(strstr(out_buf, "0000: 7F 45 4C 46") != NULL,
+                "tp -x /CHOKANJI#4087 should print formatted hex dump starting with ELF magic");
+
+    g_chokanji_vol = NULL;
+    vol_umount(v);
+    blk_destroy(part);
+    blk_destroy(dev);
+    TEST_PASS();
+}
+
 int main(void)
 {
     printf("=== B-System BTRON3 Cho-Kanji (B-right/V 4.02) Mount Tests ===\n\n");
@@ -525,6 +583,7 @@ int main(void)
     test_read_driver_binary();
     test_read_write_operations();
     test_clu_integration();
+    test_clu_tp_chokanji_streams_and_binaries();
 
     printf("\n=== Results: %d PASS  %d FAIL ===\n", g_pass, g_fail);
     return (g_fail == 0) ? 0 : 1;

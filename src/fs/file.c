@@ -120,9 +120,9 @@ static int read_header_block(Volume *v, BLK blk, OpenFile *of)
     }
 
     if (vol_is_brightv(v)) {
+        int found_hdr_m1 = 0;
         if (memcmp(buf, "Tron", 4) != 0 && memcmp(buf, "norT", 4) != 0) {
             /* On Cho-Kanji volumes, the Real Body Header is at blk - 1 for files with data */
-            int found_hdr_m1 = 0;
             if (blk > 0) {
                 unsigned char *hbuf = (unsigned char *)malloc(bsize);
                 if (hbuf) {
@@ -203,7 +203,6 @@ static int read_header_block(Volume *v, BLK blk, OpenFile *of)
         }
         of->nrec      = of->hdr.nrec;
         of->data_used = of->hdr.total_size;
-        of->data_blk  = blk;
 
         for (unsigned int i = 0; i < of->nrec; i++) {
             unsigned char *rp = buf + bsize - (i + 1) * 16;
@@ -213,6 +212,23 @@ static int read_header_block(Volume *v, BLK blk, OpenFile *of)
             of->ridx[i].size   = rd_u32_le(rp + 8);
             uint8_t nblocks    = rp[12];
             of->ridx[i].flags  = (UW)nblocks;
+        }
+
+        if (found_hdr_m1) {
+            of->data_blk = blk;
+        } else {
+            BLK rblk = 0;
+            if (of->nrec > 0) {
+                unsigned char *rp0 = buf + bsize - 16;
+                rblk = (BLK)(rp0[13] | (rp0[14] << 8) | (rp0[15] << 16));
+            }
+            if (rblk > 0 && rblk != blk) {
+                of->data_blk = rblk;
+            } else if (of->hdr.total_size > 0) {
+                of->data_blk = blk + 1;
+            } else {
+                of->data_blk = 0;
+            }
         }
         of->hdr.data_blk = of->data_blk;
         free(buf);

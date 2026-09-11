@@ -1,3 +1,6 @@
+﻿#ifndef _DEFAULT_SOURCE
+#define _DEFAULT_SOURCE
+#endif
 #include <btron/t_editor.h>
 /*
  * B-System (BTRON 3.20) BTRON Accessory: TRON CUA Text Editor Window (t_editor)
@@ -119,11 +122,15 @@ void teditor_get_selection_range(const TEditor *ed, int *r1, int *c1, int *r2, i
     int ar = ed->sel_anchor_r, ac = ed->sel_anchor_c;
     int cr = ed->cursor_row, cc = ed->cursor_col;
     if (ar < cr || (ar == cr && ac <= cc)) {
-        if (r1) *r1 = ar; if (c1) *c1 = ac;
-        if (r2) *r2 = cr; if (c2) *c2 = cc;
+        if (r1) *r1 = ar;
+        if (c1) *c1 = ac;
+        if (r2) *r2 = cr;
+        if (c2) *c2 = cc;
     } else {
-        if (r1) *r1 = cr; if (c1) *c1 = cc;
-        if (r2) *r2 = ar; if (c2) *c2 = ac;
+        if (r1) *r1 = cr;
+        if (c1) *c1 = cc;
+        if (r2) *r2 = ar;
+        if (c2) *c2 = ac;
     }
 }
 
@@ -1228,7 +1235,7 @@ static void teditor_execute_menu_cmd(TEditor *ed, WND *wnd, int cmd, int sub_idx
             teditor_insert_text(ed, "[仮身: #101 図形 (Diagram.draw)]\n");
             break;
         case TCMD_VOBJ_CABINET:
-            if (open_vobj_manager_window) open_vobj_manager_window();
+            open_vobj_manager_window();
             break;
         case TCMD_HELP_ABOUT:
             open_teditor_about_window();

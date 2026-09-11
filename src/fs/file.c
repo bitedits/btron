@@ -30,6 +30,7 @@
    extern void  Ifree(void *);
    extern void *tkl_memcpy(void *, const void *, size_t);
    extern void *tkl_memset(void *, int, size_t);
+   extern int   tkl_memcmp(const void *, const void *, size_t);
    extern int   tkl_strcmp(const char *, const char *);
    extern int   tkl_strncmp(const char *, const char *, size_t);
    extern size_t tkl_strlen(const char *);
@@ -39,6 +40,7 @@
 #  define free     Ifree
 #  define memcpy   tkl_memcpy
 #  define memset   tkl_memset
+#  define memcmp   tkl_memcmp
 #  define strcmp   tkl_strcmp
 #  define strncmp  tkl_strncmp
 #  define strlen   tkl_strlen
@@ -280,6 +282,20 @@ static int write_header_block(Volume *v, BLK blk, const OpenFile *of)
     return ret;
 }
 
+static int fs_strcasecmp(const char *s1, const char *s2)
+{
+    while (*s1 && *s2) {
+        char c1 = *s1;
+        char c2 = *s2;
+        if (c1 >= 'A' && c1 <= 'Z') c1 = (char)(c1 + 32);
+        if (c2 >= 'A' && c2 <= 'Z') c2 = (char)(c2 + 32);
+        if (c1 != c2) return (int)(unsigned char)c1 - (int)(unsigned char)c2;
+        s1++;
+        s2++;
+    }
+    return (int)(unsigned char)*s1 - (int)(unsigned char)*s2;
+}
+
 /* ── Lookup file by name using hash table then full compare ──────── */
 static FID find_fid_by_name(Volume *v, const char *name)
 {
@@ -315,7 +331,7 @@ static FID find_fid_by_name(Volume *v, const char *name)
             stored[40] = '\0';
         }
 
-        if (strcmp(stored, name) == 0 || strcasecmp(stored, name) == 0) {
+        if (strcmp(stored, name) == 0 || fs_strcasecmp(stored, name) == 0) {
             free(buf);
             return i;
         }

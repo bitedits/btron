@@ -20,18 +20,22 @@
 #  include <ctype.h>
 #else
    extern void *Imalloc(size_t);
+   extern void *Icalloc(size_t, size_t);
    extern void  Ifree(void *);
    extern int snprintf(char *, size_t, const char *, ...);
    extern void *tkl_memset(void *, int, size_t);
    extern void *tkl_memcpy(void *, const void *, size_t);
+   extern int   tkl_memcmp(const void *, const void *, size_t);
    extern int   tkl_strcmp(const char *, const char *);
    extern int   tkl_strncmp(const char *, const char *, size_t);
    extern size_t tkl_strlen(const char *);
    extern char  *tkl_strncpy(char *, const char *, size_t);
 #  define malloc   Imalloc
+#  define calloc   Icalloc
 #  define free     Ifree
 #  define memset   tkl_memset
 #  define memcpy   tkl_memcpy
+#  define memcmp   tkl_memcmp
 #  define strcmp   tkl_strcmp
 #  define strncmp  tkl_strncmp
 #  define strlen   tkl_strlen
@@ -450,6 +454,33 @@ void clu_ls(const char *args, ShellOutputFn out, void *ud)
 }
 
 /* ── clu_fs_cmd helpers ──────────────────────────────────────────── */
+
+/* Probe a Real Body block for ELF magic (\x7fELF). Returns 1 if ELF, 0 otherwise. */
+static int clu_fs_probe_elf(Volume *v, unsigned int fid) {
+    if (!v || fid == 0 || fid == FID_INVALID) return 0;
+    BLK blk = vol_fid_get_blk(v, (FID)fid);
+    if (blk == 0 || blk == FID_INVALID) return 0;
+    unsigned char magic[4] = {0};
+    UW bsz = vol_block_size(v);
+    unsigned char *buf = (unsigned char *)malloc(bsz);
+    if (!buf) return 0;
+    int is_elf = 0;
+    if (vol_read_blk(v, blk, buf) == 0) {
+        /* ELF magic: 0x7F 'E' 'L' 'F' */
+        if (buf[0] == 0x7F && buf[1] == 0x45 && buf[2] == 0x4C && buf[3] == 0x46)
+            is_elf = 1;
+        /* Also check past TRON file header (0xC0 = 192 bytes) for embedded ELF */
+        if (!is_elf && bsz > 196) {
+            magic[0] = buf[0xC0]; magic[1] = buf[0xC1];
+            magic[2] = buf[0xC2]; magic[3] = buf[0xC3];
+            if (magic[0] == 0x7F && magic[1] == 0x45 && magic[2] == 0x4C && magic[3] == 0x46)
+                is_elf = 1;
+        }
+    }
+    free(buf);
+    return is_elf;
+}
+
 typedef struct {
     char name[48];
     unsigned int fid;
@@ -529,21 +560,22 @@ static void clu_fs_dump_records(Volume *v, ID fd, FID parent_fid, const char *pa
                         }
                     }
                 }
+                int is_elf = clu_fs_probe_elf(v, link_fid);
                 if (flag_l) {
                     snprintf(line, sizeof(line),
-                             "%u:  0 %04X  : %-5u %-6u [%04X %04X %04X %04X %04X] : %*s%s",
+                             "%u:  0 %04X  : %-5u %-6u [%04X %04X %04X %04X %04X] : %*s%s%s",
                              i, (unsigned)ri->flags & 0xFFFF,
                              link_fid, (unsigned)of->fid,
                              attrs[0], attrs[1], attrs[2], attrs[3], attrs[4],
-                             indent, "", link_name);
+                             indent, "", link_name, is_elf ? " [ELF]" : "");
                 } else {
                     snprintf(line, sizeof(line),
-                             "%u:  0    %04X  : %-5u %-6u : %*s%s",
+                             "%u:  0    %04X  : %-5u %-6u : %*s%s%s",
                              i, (unsigned)ri->flags & 0xFFFF,
                              link_fid, (unsigned)of->fid,
-                             indent, "", link_name);
+                             indent, "", link_name, is_elf ? " [ELF]" : "");
                 }
-                out(line, COLOR_LTGRAY, ud);
+                out(line, is_elf ? COLOR_YELLOW : COLOR_LTGRAY, ud);
 
                 /* Recurse depth-first into child Virtual Object Real Body if -r is requested */
                 if (flag_r && depth < 16 && link_fid != 0 && link_fid != of->fid && link_fid < nfmax && !visited[link_fid]) {
@@ -628,16 +660,19 @@ static void clu_fs_dump_records(Volume *v, ID fd, FID parent_fid, const char *pa
                 FID efid = (FID)entry.robj_id;
                 if (efid == FID_ROOT && !is_bv_root) continue;
                 char line[256];
+                int is_elf2 = clu_fs_probe_elf(v, (unsigned int)efid);
                 if (flag_l) {
                     snprintf(line, sizeof(line),
-                             "%u:  0 0000  : %-5u %-6u [0000 0000 0000 0000 0000] : %*s%s",
-                             idx++, (unsigned)efid, (unsigned)of->fid, indent, "", entry.name);
+                             "%u:  0 0000  : %-5u %-6u [0000 0000 0000 0000 0000] : %*s%s%s",
+                             idx++, (unsigned)efid, (unsigned)of->fid, indent, "", entry.name,
+                             is_elf2 ? " [ELF]" : "");
                 } else {
                     snprintf(line, sizeof(line),
-                             "%u:  0    %04X  : %-5u %-6u : %*s%s",
-                             idx++, 0, (unsigned)efid, (unsigned)of->fid, indent, "", entry.name);
+                             "%u:  0    %04X  : %-5u %-6u : %*s%s%s",
+                             idx++, 0, (unsigned)efid, (unsigned)of->fid, indent, "", entry.name,
+                             is_elf2 ? " [ELF]" : "");
                 }
-                out(line, COLOR_LTGRAY, ud);
+                out(line, is_elf2 ? COLOR_YELLOW : COLOR_LTGRAY, ud);
 
                 /* Recurse depth-first into child Real Bodies if -r is requested */
                 if (flag_r && depth < 16 && efid != 0 && efid < nfmax && !visited[efid]) {

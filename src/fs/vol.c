@@ -691,7 +691,8 @@ Volume *vol_mount(BlkDev *dev)
         }
         btr_tcode_to_utf8(tc, 20, (char *)v->hdr.vol_name, sizeof(v->hdr.vol_name));
         if (v->hdr.vol_name[0] == '\0') {
-            strcpy((char *)v->hdr.vol_name, "B-right/V");
+            strncpy((char *)v->hdr.vol_name, "B-right/V", sizeof(v->hdr.vol_name) - 1);
+            v->hdr.vol_name[sizeof(v->hdr.vol_name) - 1] = '\0';
         }
     } else {
         v->block_size       = dev->block_size ? dev->block_size : BTRON_BLOCK_SIZE;

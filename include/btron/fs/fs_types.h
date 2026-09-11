@@ -59,6 +59,7 @@ extern "C" {
 #define OBJ_EJECT             0x1000    /* removable device                */
 
 /* ── Primitive typedefs ─────────────────────────────────────────── */
+typedef struct Volume Volume;
 typedef UW  FID;   /* File ID — index into FID table (0-based)  */
 typedef UW  BLK;   /* Logical block address (0-based)           */
 

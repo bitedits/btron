@@ -1,5 +1,5 @@
 /*
- * test_ski.c — Unit Test Suite for Ski Bootloader
+ * test_ski.c — Unit Test Suite for System Kernel Interface (SKI) Bootloader
  *
  * Validates:
  *   1. Initial menu layout and target architectures (Pi 1-5, x86_64, PC-98)

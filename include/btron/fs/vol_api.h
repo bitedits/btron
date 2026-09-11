@@ -22,8 +22,7 @@
 extern "C" {
 #endif
 
-/* Forward declaration of opaque Volume handle */
-typedef struct Volume Volume;
+/* Forward declaration of opaque Volume handle is in fs_types.h */
 
 /* ── Global /SYS volume ────────────────────────────────────────── */
 /*

@@ -48,8 +48,11 @@ typedef struct __attribute__((packed)) {
     UW   total_size;     /* +28   4 B  total payload bytes          */
     UB   name[40];       /* +32  40 B  full UTF-8 file name         */
     UW   data_blk;       /* +72   4 B  first data block (extent)    */
-    UB   _pad[116];      /* +76 116 B  reserved, zero               */
-                         /* total: 72 + 4 + 116 = 192 bytes         */
+    UB   _pad1[24];      /* +76  24 B  reserved, zero               */
+    UW   did;            /* +100  4 B  Drawer / Document ID (0x64)  */
+    UW   pdid;           /* +104  4 B  Parent Drawer ID (0x68)      */
+    UB   _pad2[84];      /* +108 84 B  reserved, zero               */
+                         /* total: 72 + 4 + 24 + 4 + 4 + 84 = 192 B */
 } FileHeader;
 
 #ifndef __cplusplus

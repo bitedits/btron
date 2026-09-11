@@ -61,6 +61,21 @@ static void add_container_link(const char *container, const char *name, FID fid)
         return;
     }
 
+    OpenFile *pof = &g_open_files[(int)parent_fd];
+    if (pof->hdr.did == 0) {
+        pof->hdr.did = (UW)pof->fid + 1;
+        pof->dirty = 1;
+    }
+    UW parent_did = pof->hdr.did;
+
+    /* Update child's pdid to parent_did */
+    ID child_fd = opn_fil_fid(pof->vol, fid, 0x0002 /* F_WRITE */);
+    if (child_fd >= 0) {
+        g_open_files[(int)child_fd].hdr.pdid = parent_did;
+        g_open_files[(int)child_fd].dirty = 1;
+        cls_fil(child_fd);
+    }
+
     unsigned char payload[16 + 40];
     memset(payload, 0, sizeof(payload));
     payload[0] = (unsigned char)(fid >> 24);
@@ -73,8 +88,7 @@ static void add_container_link(const char *container, const char *name, FID fid)
     payload[15] = (unsigned char)(nlen);
     memcpy(payload + 16, name, nlen);
 
-    OpenFile *of = &g_open_files[(int)parent_fd];
-    int rec_idx = (int)of->nrec;
+    int rec_idx = (int)pof->nrec;
     ER err = ins_rec(parent_fd, rec_idx, payload, (int)(16 + nlen));
     if (err == 0) {
         fil_set_rec_type(parent_fd, rec_idx, (UH)RT_LINK);
@@ -89,7 +103,10 @@ static int imprint_dir(const char *dir_name, const char *parent_container)
         fprintf(stderr, "mkbtronfs: cre_fil dir '%s' failed\n", dir_name);
         return -1;
     }
-    FID fid = g_open_files[(int)fd].fid;
+    OpenFile *of = &g_open_files[(int)fd];
+    FID fid = of->fid;
+    of->hdr.did = (UW)fid + 1;
+    of->dirty = 1;
     cls_fil(fd);
     add_container_link(parent_container, dir_name, fid);
     return 0;
@@ -394,6 +411,15 @@ int main(int argc, char **argv)
         fprintf(stderr, "mkbtronfs: vol_mount failed (bad magic after format)\n");
         blk_file_close(dev);
         return 1;
+    }
+
+    /* Guarantee root container has did = 1 and pdid = 0 */
+    ID rfd = opn_fil_fid(g_sys_vol, FID_ROOT, 0x0002);
+    if (rfd >= 0) {
+        g_open_files[(int)rfd].hdr.did = 1;
+        g_open_files[(int)rfd].hdr.pdid = 0;
+        g_open_files[(int)rfd].dirty = 1;
+        cls_fil(rfd);
     }
 
     printf("mkbtronfs: processing manifest '%s'\n", manifest);

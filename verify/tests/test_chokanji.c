@@ -549,6 +549,30 @@ static void test_clu_integration(void)
             TEST_ASSERT(strstr(out_buf, "logic") != NULL, "clu_fs_cmd -r on /ANDERS missing logic child record");
             TEST_ASSERT(strstr(out_buf, "SBOOT") == NULL, "clu_fs_cmd -r on /ANDERS should not leak Cho-Kanji entries");
 
+            /* Test fs -t on /ANDERS: natural folded tree structure */
+            memset(out_buf, 0, sizeof(out_buf));
+            clu_fs_cmd("-t", clu_buf_out, out_buf);
+            TEST_ASSERT(strstr(out_buf, "Tree Structure") != NULL, "fs -t on /ANDERS must have Tree Structure title");
+            TEST_ASSERT(strstr(out_buf, "ANDERS") != NULL, "fs -t on /ANDERS missing root ANDERS");
+            TEST_ASSERT(strstr(out_buf, "  foundations") != NULL, "fs -t on /ANDERS must indent foundations under root");
+            TEST_ASSERT(strstr(out_buf, "    logic") != NULL, "fs -t on /ANDERS must indent logic under foundations");
+            TEST_ASSERT(strstr(out_buf, "      awodey.anders.txt") != NULL, "fs -t on /ANDERS must indent awodey under logic");
+
+            /* Test fs -t foundations on /ANDERS */
+            memset(out_buf, 0, sizeof(out_buf));
+            clu_fs_cmd("-t foundations", clu_buf_out, out_buf);
+            TEST_ASSERT(strstr(out_buf, "foundations") != NULL, "fs -t foundations missing root node foundations");
+            TEST_ASSERT(strstr(out_buf, "  logic") != NULL, "fs -t foundations must indent logic under foundations");
+            TEST_ASSERT(strstr(out_buf, "    awodey.anders.txt") != NULL, "fs -t foundations must indent awodey under logic");
+            TEST_ASSERT(strstr(out_buf, "mathematics") == NULL, "fs -t foundations must not show sibling mathematics");
+
+            /* Test fs -g on /ANDERS: grouped by container */
+            memset(out_buf, 0, sizeof(out_buf));
+            clu_fs_cmd("-g", clu_buf_out, out_buf);
+            TEST_ASSERT(strstr(out_buf, "Grouped by [DIR]") != NULL, "fs -g on /ANDERS must have Grouped by [DIR] title");
+            TEST_ASSERT(strstr(out_buf, "foundations") != NULL, "fs -g on /ANDERS missing foundations group");
+            TEST_ASSERT(strstr(out_buf, "  logic") != NULL, "fs -g on /ANDERS must indent logic under foundations");
+
             vol_umount(g_anders_vol);
             g_anders_vol = NULL;
         }

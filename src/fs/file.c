@@ -250,6 +250,8 @@ static int read_header_block(Volume *v, BLK blk, OpenFile *of)
     of->hdr.total_size = rd_u32_be(p + 28);
     memcpy(of->hdr.name, p + 32, 40);
     of->hdr.data_blk   = rd_u32_be(p + 72);
+    of->hdr.did        = rd_u32_be(p + 100);
+    of->hdr.pdid       = rd_u32_be(p + 104);
 
     /* Cap nrec defensively (NASA Rule 5) */
     if (of->hdr.nrec > REC_IDX_LEVEL0_MAX) {
@@ -332,6 +334,8 @@ static int write_header_block(Volume *v, BLK blk, const OpenFile *of)
     wr_u32_be(p + 28, of->hdr.total_size);
     memcpy(p + 32, of->hdr.name, 40);
     wr_u32_be(p + 72, of->data_blk);
+    wr_u32_be(p + 100, of->hdr.did);
+    wr_u32_be(p + 104, of->hdr.pdid);
 
     /* Encode RecordIndex entries */
     unsigned int cnt = (of->nrec < REC_IDX_LEVEL0_MAX) ? of->nrec : REC_IDX_LEVEL0_MAX;

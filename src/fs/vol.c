@@ -606,6 +606,8 @@ int vol_format(BlkDev *dev, UW nfmax, UW nlb, const char *name)
             while (nm[i] && i < 39) { blk_buf[32 + i] = nm[i]; i++; }
         }
         wr_u32_be(blk_buf + 72, 0);     /* data_blk */
+        wr_u32_be(blk_buf + 100, 1);    /* did = 1 for root container */
+        wr_u32_be(blk_buf + 104, 0);    /* pdid = 0 */
         dev->write(dev, root_blk, blk_buf, 1);
     }
 

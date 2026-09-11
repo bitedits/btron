@@ -1134,57 +1134,65 @@ void clu_fs_cmd(const char *args, ShellOutputFn out, void *ud)
                 nodes[fid].sz = ((UW)buf[28] << 24) | ((UW)buf[29] << 16) | ((UW)buf[30] << 8) | buf[31];
                 memcpy(nodes[fid].name, buf + 32, 40);
                 nodes[fid].name[40] = '\0';
+                nodes[fid].did = ((UW)buf[100] << 24) | ((UW)buf[101] << 16) | ((UW)buf[102] << 8) | buf[103];
+                nodes[fid].pdid = ((UW)buf[104] << 24) | ((UW)buf[105] << 16) | ((UW)buf[106] << 8) | buf[107];
                 if (nodes[fid].flags & 0x0001) nodes[fid].is_elf = 1;
-                if (nodes[fid].flags & 0x1000) nodes[fid].is_dir = 1;
+                if (nodes[fid].did != 0) nodes[fid].is_dir = 1;
             }
         }
 
-        /* Pass 2: Connect parent-child linkages */
-        if (vol_is_brightv(v)) {
-            for (FID f = 0; f < nfmax; f++) {
-                if (nodes[f].blk == 0 || f == FID_ROOT) continue;
-                if (nodes[f].parent_fid == FID_INVALID && nodes[f].pdid != 0) {
-                    for (FID p = 0; p < nfmax; p++) {
-                        if (nodes[p].blk == 0 || p == f) continue;
-                        if (nodes[p].did == nodes[f].pdid) {
-                            clu_fs_node_add_child(nodes, p, f, nfmax);
-                            break;
-                        }
+        /* Pass 2: Connect parent-child linkages (unified in-memory resolution via pdid -> did) */
+        for (FID f = 0; f < nfmax; f++) {
+            if (nodes[f].blk == 0 || f == FID_ROOT) continue;
+            if (nodes[f].parent_fid == FID_INVALID && nodes[f].pdid != 0) {
+                for (FID p = 0; p < nfmax; p++) {
+                    if (nodes[p].blk == 0 || p == f) continue;
+                    if (nodes[p].did == nodes[f].pdid) {
+                        clu_fs_node_add_child(nodes, p, f, nfmax);
+                        nodes[p].is_dir = 1;
+                        break;
                     }
                 }
             }
-        } else {
-            const char *vdir = (v == g_anders_vol) ? "/ANDERS" : "/SYS";
-            ID dir = opn_dir(vdir);
-            if (dir >= 0) {
-                DIR_ENTRY entry;
-                while (rd_dir(dir, &entry) == 0) {
-                    if (!entry.name[0]) continue;
-                    FID efid = (FID)entry.robj_id;
-                    if (efid < nfmax && efid != FID_ROOT) {
-                        clu_fs_node_add_child(nodes, FID_ROOT, efid, nfmax);
-                    }
+        }
+
+        /* Cleanroom BTRON fallback: attach any unparented bodies directly to root */
+        if (!vol_is_brightv(v) && nodes[FID_ROOT].blk) {
+            for (FID f = 1; f < nfmax; f++) {
+                if (nodes[f].blk && nodes[f].parent_fid == FID_INVALID && nodes[f].pdid == 0) {
+                    clu_fs_node_add_child(nodes, FID_ROOT, f, nfmax);
                 }
-                cls_dir(dir);
             }
         }
 
         /* Check if a specific target FID or container was requested */
         FID start_fid = FID_INVALID;
         if (target[0]) {
-            int all_digits = 1;
-            const char *np = (target[0] == '#') ? target + 1 : target;
-            while (*np == ' ') np++;
-            for (int i = 0; np[i]; i++) {
-                if (!isdigit((unsigned char)np[i])) { all_digits = 0; break; }
-            }
-            if (all_digits && *np) {
-                start_fid = (FID)strtoul(np, NULL, 10);
+            const char *tname = target;
+            if (strncmp(tname, "/ANDERS/", 8) == 0) tname += 8;
+            else if (strncmp(tname, "/CHOKANJI/", 10) == 0) tname += 10;
+            else if (strncmp(tname, "/B-right/", 9) == 0) tname += 9;
+            else if (strncmp(tname, "/SYS/", 5) == 0) tname += 5;
+
+            if (strcmp(target, "/ANDERS") == 0 || strcmp(target, "/CHOKANJI") == 0 ||
+                strcmp(target, "/B-right") == 0 || strcmp(target, "/SYS") == 0 ||
+                strcmp(target, "/") == 0) {
+                start_fid = flag_g ? FID_INVALID : FID_ROOT;
             } else {
-                for (FID f = 0; f < nfmax; f++) {
-                    if (nodes[f].blk && strcmp(nodes[f].name, target) == 0) {
-                        start_fid = f;
-                        break;
+                int all_digits = 1;
+                const char *np = (tname[0] == '#') ? tname + 1 : tname;
+                while (*np == ' ') np++;
+                for (int i = 0; np[i]; i++) {
+                    if (!isdigit((unsigned char)np[i])) { all_digits = 0; break; }
+                }
+                if (all_digits && *np) {
+                    start_fid = (FID)strtoul(np, NULL, 10);
+                } else {
+                    for (FID f = 0; f < nfmax; f++) {
+                        if (nodes[f].blk && strcmp(nodes[f].name, tname) == 0) {
+                            start_fid = f;
+                            break;
+                        }
                     }
                 }
             }

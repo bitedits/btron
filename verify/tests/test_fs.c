@@ -1104,6 +1104,63 @@ static void test_df_all_volumes(void)
 }
 
 /* ─────────────────────────────────────────────────────────────────── */
+/* TEST 20: Unified tree building on cleanroom volumes (ANDERS & SYS) */
+/* ─────────────────────────────────────────────────────────────────── */
+static void test_clu_tree_cleanroom(void)
+{
+    BlkDev *anders_dev = blk_file_create("btron_anders.vol", 0, 1024);
+    CHECK(anders_dev != NULL, "must open btron_anders.vol");
+    g_anders_vol = vol_mount(anders_dev);
+    CHECK(g_anders_vol != NULL, "must mount btron_anders.vol");
+
+    CapBuf cb;
+
+    /* 1. fs -t /ANDERS: natural tree hierarchy */
+    memset(&cb, 0, sizeof(cb));
+    clu_fs_cmd("-t /ANDERS", capture_fn, &cb);
+    int found_title = 0, found_foundations = 0, found_logic = 0, found_awodey = 0;
+    for (int i = 0; i < cb.n; i++) {
+        if (strstr(cb.lines[i], "Tree Structure")) found_title = 1;
+        if (strstr(cb.lines[i], "  foundations"))   found_foundations = 1;
+        if (strstr(cb.lines[i], "    logic"))        found_logic = 1;
+        if (strstr(cb.lines[i], "      awodey"))     found_awodey = 1;
+    }
+    CHECK(found_title, "fs -t /ANDERS missing Tree Structure title");
+    CHECK(found_foundations, "fs -t /ANDERS missing indented foundations");
+    CHECK(found_logic, "fs -t /ANDERS missing indented logic under foundations");
+    CHECK(found_awodey, "fs -t /ANDERS missing indented awodey under logic");
+
+    /* 2. fs -g /ANDERS: grouped by container */
+    memset(&cb, 0, sizeof(cb));
+    clu_fs_cmd("-g /ANDERS", capture_fn, &cb);
+    int found_g_title = 0, found_g_found = 0, found_g_logic = 0;
+    for (int i = 0; i < cb.n; i++) {
+        if (strstr(cb.lines[i], "Grouped by [DIR]")) found_g_title = 1;
+        if (strstr(cb.lines[i], "foundations"))      found_g_found = 1;
+        if (strstr(cb.lines[i], "  logic"))          found_g_logic = 1;
+    }
+    CHECK(found_g_title, "fs -g /ANDERS missing Grouped title");
+    CHECK(found_g_found, "fs -g /ANDERS missing foundations container");
+    CHECK(found_g_logic, "fs -g /ANDERS missing indented child logic under foundations");
+
+    /* 3. fs -l -t /ANDERS: attributes include DID and PDID */
+    memset(&cb, 0, sizeof(cb));
+    clu_fs_cmd("-l -t /ANDERS", capture_fn, &cb);
+    int found_lt_pdid = 0;
+    for (int i = 0; i < cb.n; i++) {
+        if (strstr(cb.lines[i], "PDID") && strstr(cb.lines[i], "DID"))
+            found_lt_pdid = 1;
+    }
+    CHECK(found_lt_pdid, "fs -l -t /ANDERS missing DID/PDID headers");
+
+    vol_umount(g_anders_vol);
+    g_anders_vol = NULL;
+    blk_destroy(anders_dev);
+
+    TEST_PASS();
+}
+
+/* ─────────────────────────────────────────────────────────────────── */
 /* Main                                                                */
 /* ─────────────────────────────────────────────────────────────────── */
 int main(void)
@@ -1129,6 +1186,7 @@ int main(void)
     test_real_image_clu();
     test_packed_markdown_files();
     test_df_all_volumes();
+    test_clu_tree_cleanroom();
 
     printf("\n=== Results: %d PASS  %d FAIL ===\n", g_pass, g_fail);
     return (g_fail > 0) ? 1 : 0;

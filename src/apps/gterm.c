@@ -60,7 +60,7 @@ static inline char* gterm_strstr(const char *haystack, const char *needle) {
 
 #define GTERM_MAX_COLS     256
 #define GTERM_MAX_ROWS     32
-#define GTERM_HIST_MAX     300
+#define GTERM_HIST_MAX     2048
 #define GTERM_CMD_HIST_MAX 32
 
 /* ── Terminal Menu Command IDs ──────────────────────────────────────────── */

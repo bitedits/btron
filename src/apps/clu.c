@@ -59,6 +59,14 @@ static char *fs_strrchr(const char *s, int c) {
     return (char *)last;
 }
 
+static inline uint16_t clu_rd_u16_le(const unsigned char *p) {
+    return (uint16_t)((uint16_t)p[0] | ((uint16_t)p[1] << 8));
+}
+
+static inline uint32_t clu_rd_u32_le(const unsigned char *p) {
+    return (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
+}
+
 /* ── Arg parsing helpers ─────────────────────────────────────────── */
 /* Skip leading whitespace */
 static const char *skip_ws(const char *p) {
@@ -164,6 +172,17 @@ void clu_cd(const char *args, ShellOutputFn out, void *ud)
         return;
     }
 
+    if (strcmp(target, "/CHOKANJI") == 0 || strcmp(target, "CHOKANJI") == 0 ||
+        strcmp(target, "/B-right") == 0 || strcmp(target, "B-right") == 0) {
+        if (!g_chokanji_vol) {
+            out("cd: '/CHOKANJI': volume not mounted", COLOR_RED, ud);
+            return;
+        }
+        snprintf(g_cwd_path, sizeof(g_cwd_path), "/CHOKANJI");
+        out("[/CHOKANJI]", COLOR_GREEN, ud);
+        return;
+    }
+
     if (strcmp(target, "..") == 0) {
         char *last_slash = fs_strrchr(g_cwd_path, '/');
         if (last_slash && last_slash != g_cwd_path) {
@@ -203,7 +222,8 @@ void clu_cd(const char *args, ShellOutputFn out, void *ud)
 /* ── clu_ls ──────────────────────────────────────────────────────── */
 void clu_ls(const char *args, ShellOutputFn out, void *ud)
 {
-    Volume *v = (strncmp(g_cwd_path, "/ANDERS", 7) == 0 && g_anders_vol) ? g_anders_vol : g_sys_vol;
+    Volume *v = (strncmp(g_cwd_path, "/ANDERS", 7) == 0 && g_anders_vol) ? g_anders_vol :
+                ((strncmp(g_cwd_path, "/CHOKANJI", 9) == 0 || strncmp(g_cwd_path, "/B-right", 8) == 0) && g_chokanji_vol) ? g_chokanji_vol : g_sys_vol;
     if (!v) { out("ls: no volume mounted", COLOR_RED, ud); return; }
 
     int flag_l = has_flag(args, "-l");
@@ -224,6 +244,7 @@ void clu_ls(const char *args, ShellOutputFn out, void *ud)
     if (fd >= 0) {
         OpenFile *of = &g_open_files[(int)fd];
         Volume *ofv = of_vol(of);
+        int is_root = (of->fid == FID_ROOT);
         int link_count = 0;
         for (unsigned int i = 0; i < of->nrec; i++) {
             RecordIndex *ri = &of->ridx[i];
@@ -233,9 +254,17 @@ void clu_ls(const char *args, ShellOutputFn out, void *ud)
                 if (rec >= 0) {
                     W got = 0;
                     rd_rec(rec, pbuf, 16, &got);
-                    FID link_fid = ((unsigned int)pbuf[0]<<24)|((unsigned int)pbuf[1]<<16)|
+                    FID link_fid = 0;
+                    unsigned short nlen = 0;
+                    if (vol_is_brightv(ofv)) {
+                        link_fid = (FID)((unsigned int)pbuf[0] | ((unsigned int)pbuf[1] << 8) |
+                                         ((unsigned int)pbuf[2] << 16) | ((unsigned int)pbuf[3] << 24));
+                        nlen = (unsigned short)(pbuf[14] | (pbuf[15] << 8));
+                    } else {
+                        link_fid = ((unsigned int)pbuf[0]<<24)|((unsigned int)pbuf[1]<<16)|
                                    ((unsigned int)pbuf[2]<<8)|(unsigned int)pbuf[3];
-                    unsigned short nlen = ((unsigned short)pbuf[14]<<8)|pbuf[15];
+                        nlen = ((unsigned short)pbuf[14]<<8)|pbuf[15];
+                    }
                     char link_name[48] = "";
                     if (nlen > 0 && nlen < 40) {
                         W got2 = 0;
@@ -244,21 +273,82 @@ void clu_ls(const char *args, ShellOutputFn out, void *ud)
                     }
                     cls_rec(rec);
 
+                    if (vol_is_brightv(ofv) && link_name[0] == '\0') {
+                        BLK lb = vol_fid_get_blk(ofv, link_fid);
+                        if (lb > 0 && lb != FID_INVALID) {
+                            unsigned char *lbuf = (unsigned char *)malloc(vol_block_size(ofv));
+                            if (lbuf) {
+                                if (vol_read_blk(ofv, lb, lbuf) == 0 &&
+                                    (memcmp(lbuf, "Tron", 4) == 0 || memcmp(lbuf, "norT", 4) == 0)) {
+                                    UH tc[20];
+                                    for (int k = 0; k < 16; k++) tc[k] = clu_rd_u16_le(lbuf + 0x6C + k * 2);
+                                    tc[16] = 0;
+                                    btr_tcode_to_utf8(tc, 16, link_name, sizeof(link_name));
+                                }
+                                free(lbuf);
+                            }
+                        }
+                    }
+                    if (link_name[0] == '\0') {
+                        snprintf(link_name, sizeof(link_name), "FID%u", (unsigned)link_fid);
+                    }
+
                     link_count++;
                     if (flag_l) {
                         BLK hblk = vol_fid_get_blk(ofv, link_fid);
-                        unsigned char hbuf[BTRON_BLOCK_SIZE] = {0};
-                        if (hblk != FID_INVALID && hblk != 0) vol_read_blk(ofv, hblk, hbuf);
-                        unsigned short atype = ((unsigned short)hbuf[2] << 8) | hbuf[3];
-                        unsigned int mtime = ((unsigned int)hbuf[8]<<24)|((unsigned int)hbuf[9]<<16)|
-                                             ((unsigned int)hbuf[10]<<8)|(unsigned int)hbuf[11];
-                        unsigned int tsz   = ((unsigned int)hbuf[28]<<24)|((unsigned int)hbuf[29]<<16)|
-                                             ((unsigned int)hbuf[30]<<8)|(unsigned int)hbuf[31];
-                        char mt[24]; fmt_ts(mtime, mt, sizeof(mt));
-                        char line[256];
-                        snprintf(line, sizeof(line), "%04X  ---  1    1    %-5u %s %s",
-                                 atype, tsz, mt, link_name);
-                        out(line, COLOR_LTGRAY, ud);
+                        UW of_bsize = vol_block_size(ofv);
+                        unsigned char *lhbuf = (unsigned char *)calloc(1, of_bsize);
+                        if (lhbuf) {
+                            if (hblk != FID_INVALID && hblk != 0) vol_read_blk(ofv, hblk, lhbuf);
+                            unsigned short atype = 0, tsz = 0;
+                            unsigned int mtime = 0;
+                            if (vol_is_brightv(ofv)) {
+                                atype = 0;
+                                mtime = clu_rd_u32_le(lhbuf + 0x64);
+                                tsz   = clu_rd_u32_le(lhbuf + 0x48);
+                            } else {
+                                atype = ((unsigned short)lhbuf[2] << 8) | lhbuf[3];
+                                mtime = ((unsigned int)lhbuf[8]<<24)|((unsigned int)lhbuf[9]<<16)|
+                                        ((unsigned int)lhbuf[10]<<8)|(unsigned int)lhbuf[11];
+                                tsz   = ((unsigned int)lhbuf[28]<<24)|((unsigned int)lhbuf[29]<<16)|
+                                        ((unsigned int)lhbuf[30]<<8)|(unsigned int)lhbuf[31];
+                            }
+                            char mt[24]; fmt_ts(mtime, mt, sizeof(mt));
+                            char line[256];
+                            snprintf(line, sizeof(line), "%04X  ---  1    1    %-5u %s %s",
+                                     atype, tsz, mt, link_name);
+                            out(line, COLOR_LTGRAY, ud);
+                            free(lhbuf);
+                        }
+                    } else if (flag_t) {
+                        BLK hblk = vol_fid_get_blk(ofv, link_fid);
+                        UW of_bsize = vol_block_size(ofv);
+                        unsigned char *lhbuf = (unsigned char *)calloc(1, of_bsize);
+                        if (lhbuf) {
+                            if (hblk != FID_INVALID && hblk != 0) vol_read_blk(ofv, hblk, lhbuf);
+                            unsigned int ctime = 0, atime = 0, mtime = 0;
+                            if (vol_is_brightv(ofv)) {
+                                ctime = clu_rd_u32_le(lhbuf + 0x60);
+                                mtime = clu_rd_u32_le(lhbuf + 0x64);
+                                atime = clu_rd_u32_le(lhbuf + 0x68);
+                            } else {
+                                ctime = ((unsigned int)lhbuf[4]<<24)|((unsigned int)lhbuf[5]<<16)|
+                                        ((unsigned int)lhbuf[6]<<8)|(unsigned int)lhbuf[7];
+                                mtime = ((unsigned int)lhbuf[8]<<24)|((unsigned int)lhbuf[9]<<16)|
+                                        ((unsigned int)lhbuf[10]<<8)|(unsigned int)lhbuf[11];
+                                atime = ((unsigned int)lhbuf[12]<<24)|((unsigned int)lhbuf[13]<<16)|
+                                        ((unsigned int)lhbuf[14]<<8)|(unsigned int)lhbuf[15];
+                            }
+                            char ct[24], at[24], mt[24];
+                            fmt_ts(ctime, ct, sizeof(ct));
+                            fmt_ts(atime, at, sizeof(at));
+                            fmt_ts(mtime, mt, sizeof(mt));
+                            char line[256];
+                            snprintf(line, sizeof(line), "%-18s %-18s %-18s %s",
+                                     ct, at, mt, link_name);
+                            out(line, COLOR_LTGRAY, ud);
+                            free(lhbuf);
+                        }
                     } else {
                         out(link_name, COLOR_LTGRAY, ud);
                     }
@@ -266,37 +356,75 @@ void clu_ls(const char *args, ShellOutputFn out, void *ud)
             }
         }
         cls_fil(fd);
-        if (link_count > 0) return;
+        /* Subdirectory/drawer containers terminate here (empty directory shows 0 entries, never root!) */
+        if (!is_root || link_count > 0) return;
+    } else {
+        int is_root_path = (strcmp(dir_path, "/CHOKANJI") == 0 || strcmp(dir_path, "/CHOKANJI/") == 0 ||
+                            strcmp(dir_path, "/SYS") == 0 || strcmp(dir_path, "/SYS/") == 0 ||
+                            strcmp(dir_path, "/ANDERS") == 0 || strcmp(dir_path, "/ANDERS/") == 0 ||
+                            strcmp(dir_path, "/") == 0 || strcmp(dir_path, ".") == 0 || dir_path[0] == '\0');
+        if (!is_root_path) {
+            char err[128];
+            snprintf(err, sizeof(err), "ls: '%s': no such directory", dir_path);
+            out(err, COLOR_RED, ud);
+            return;
+        }
     }
 
-    /* Fallback: flat directory scan */
+    /* Fallback: flat directory scan for volume root containers */
     ID dir = opn_dir(dir_path);
     if (dir < 0) { out("ls: opn_dir failed", COLOR_RED, ud); return; }
+
+    UW bsize = vol_block_size(v);
+    unsigned char *hbuf = (flag_l || flag_t) ? (unsigned char *)malloc(bsize) : NULL;
+    int is_bv = vol_is_brightv(v);
 
     DIR_ENTRY entry;
     while (rd_dir(dir, &entry) == 0) {
         if (!entry.name[0]) continue;
 
+        if (!flag_l && !flag_t) {
+            out(entry.name, COLOR_LTGRAY, ud);
+            continue;
+        }
+
         /* Read full FileHeader for extra info */
         FID fid = (FID)entry.robj_id;
         BLK hblk = vol_fid_get_blk(v, fid);
-        unsigned char hbuf[BTRON_BLOCK_SIZE];
-        if (vol_read_blk(v, hblk, hbuf) != 0) continue;
+        if (hbuf && hblk != 0 && hblk != FID_INVALID) {
+            if (vol_read_blk(v, hblk, hbuf) != 0) continue;
+        } else {
+            continue;
+        }
 
-        /* Decode FileHeader fields (big-endian) */
-        unsigned short flags = ((unsigned short)hbuf[0] << 8) | hbuf[1];
-        unsigned short atype = ((unsigned short)hbuf[2] << 8) | hbuf[3];
-        unsigned int ctime = ((unsigned int)hbuf[4]<<24)|((unsigned int)hbuf[5]<<16)|
-                             ((unsigned int)hbuf[6]<<8)|(unsigned int)hbuf[7];
-        unsigned int mtime = ((unsigned int)hbuf[8]<<24)|((unsigned int)hbuf[9]<<16)|
-                             ((unsigned int)hbuf[10]<<8)|(unsigned int)hbuf[11];
-        unsigned int atime = ((unsigned int)hbuf[12]<<24)|((unsigned int)hbuf[13]<<16)|
-                             ((unsigned int)hbuf[14]<<8)|(unsigned int)hbuf[15];
-        unsigned short nlnk = ((unsigned short)hbuf[20]<<8)|hbuf[21];
-        unsigned int nrec  = ((unsigned int)hbuf[24]<<24)|((unsigned int)hbuf[25]<<16)|
-                             ((unsigned int)hbuf[26]<<8)|(unsigned int)hbuf[27];
-        unsigned int tsz   = ((unsigned int)hbuf[28]<<24)|((unsigned int)hbuf[29]<<16)|
-                             ((unsigned int)hbuf[30]<<8)|(unsigned int)hbuf[31];
+        unsigned short flags, atype, nlnk;
+        unsigned int ctime, mtime, atime, nrec, tsz;
+
+        if (is_bv) {
+            flags = clu_rd_u16_le(hbuf + 4);
+            atype = 0;
+            ctime = clu_rd_u32_le(hbuf + 0x60);
+            mtime = clu_rd_u32_le(hbuf + 0x64);
+            atime = clu_rd_u32_le(hbuf + 0x68);
+            nlnk  = 1;
+            nrec  = clu_rd_u32_le(hbuf + 0x4C);
+            tsz   = clu_rd_u32_le(hbuf + 0x48);
+        } else {
+            /* Decode FileHeader fields (big-endian) */
+            flags = ((unsigned short)hbuf[0] << 8) | hbuf[1];
+            atype = ((unsigned short)hbuf[2] << 8) | hbuf[3];
+            ctime = ((unsigned int)hbuf[4]<<24)|((unsigned int)hbuf[5]<<16)|
+                    ((unsigned int)hbuf[6]<<8)|(unsigned int)hbuf[7];
+            mtime = ((unsigned int)hbuf[8]<<24)|((unsigned int)hbuf[9]<<16)|
+                    ((unsigned int)hbuf[10]<<8)|(unsigned int)hbuf[11];
+            atime = ((unsigned int)hbuf[12]<<24)|((unsigned int)hbuf[13]<<16)|
+                    ((unsigned int)hbuf[14]<<8)|(unsigned int)hbuf[15];
+            nlnk  = ((unsigned short)hbuf[20]<<8)|hbuf[21];
+            nrec  = ((unsigned int)hbuf[24]<<24)|((unsigned int)hbuf[25]<<16)|
+                    ((unsigned int)hbuf[26]<<8)|(unsigned int)hbuf[27];
+            tsz   = ((unsigned int)hbuf[28]<<24)|((unsigned int)hbuf[29]<<16)|
+                    ((unsigned int)hbuf[30]<<8)|(unsigned int)hbuf[31];
+        }
 
         char line[256];
         if (flag_l) {
@@ -314,47 +442,38 @@ void clu_ls(const char *args, ShellOutputFn out, void *ud)
             fmt_ts(mtime, mt, sizeof(mt));
             snprintf(line, sizeof(line), "%-18s %-18s %-18s %s",
                      ct, at, mt, entry.name);
-        } else {
-            snprintf(line, sizeof(line), "%s", entry.name);
         }
         out(line, COLOR_LTGRAY, ud);
     }
+    if (hbuf) free(hbuf);
     cls_dir(dir);
 }
 
 /* ── clu_fs_cmd helpers ──────────────────────────────────────────── */
-static int clu_of_has_links(OpenFile *of)
-{
-    if (!of) return 0;
-    for (unsigned int i = 0; i < of->nrec; i++) {
-        if (of->ridx[i].type == RT_LINK) return 1;
-    }
-    return 0;
-}
-
 typedef struct {
     char name[48];
     unsigned int fid;
 } CluFsPendingLink;
 
-static void clu_fs_dump_records(Volume *v, ID fd, const char *parent_name, int depth,
-                                int flag_l, int flag_r, unsigned char *visited,
+static void clu_fs_dump_records(Volume *v, ID fd, FID parent_fid, const char *parent_name, int depth,
+                                int flag_l, int flag_r, unsigned char *visited, UW nfmax,
                                 ShellOutputFn out, void *ud)
 {
     if (fd < 0) return;
     OpenFile *of = &g_open_files[(int)fd];
-    if ((unsigned int)of->fid < 256) {
+    if (of->fid < nfmax) {
         visited[of->fid] = 1;
     }
 
-    CluFsPendingLink links[64];
-    int link_count = 0;
     int indent = (depth > 0) ? (depth * 2) : 0;
     if (indent > 16) indent = 16;
 
-    if (of->nrec > 0) {
+    int is_bv_root = (vol_is_brightv(v) && of->fid == FID_ROOT);
+
+    if (!is_bv_root && of->nrec > 0) {
         for (unsigned int i = 0; i < of->nrec; i++) {
             RecordIndex *ri = &of->ridx[i];
+            if (vol_is_brightv(v) && ri->size == 0 && ri->type == 0) continue;
             char line[256];
             if (ri->type == RT_LINK) {
                 char link_name[48] = "(link)";
@@ -366,94 +485,174 @@ static void clu_fs_dump_records(Volume *v, ID fd, const char *parent_name, int d
                     if (rec >= 0) {
                         W got = 0;
                         rd_rec(rec, pbuf, 16, &got);
-                        link_fid   = ((unsigned int)pbuf[0]<<24)|((unsigned int)pbuf[1]<<16)|
-                                     ((unsigned int)pbuf[2]<<8)|(unsigned int)pbuf[3];
-                        for (int a = 0; a < 5; a++)
-                            attrs[a] = ((unsigned short)pbuf[4+a*2]<<8)|pbuf[4+a*2+1];
-                        unsigned short nlen = ((unsigned short)pbuf[14]<<8)|pbuf[15];
-                        if (nlen > 0 && nlen < 40) {
-                            W got2 = 0;
-                            rd_rec(rec, link_name, (W)nlen, &got2);
-                            link_name[got2] = '\0';
+                        if (vol_is_brightv(v)) {
+                            link_fid = (unsigned int)pbuf[0] | ((unsigned int)pbuf[1] << 8) |
+                                       ((unsigned int)pbuf[2] << 16) | ((unsigned int)pbuf[3] << 24);
+                            for (int a = 0; a < 5; a++)
+                                attrs[a] = (unsigned short)(pbuf[4+a*2] | (pbuf[4+a*2+1] << 8));
+                            unsigned short nlen = (unsigned short)(pbuf[14] | (pbuf[15] << 8));
+                            if (nlen > 0 && nlen < 40) {
+                                W got2 = 0;
+                                rd_rec(rec, link_name, (W)nlen, &got2);
+                                link_name[got2] = '\0';
+                            }
+                        } else {
+                            link_fid   = ((unsigned int)pbuf[0]<<24)|((unsigned int)pbuf[1]<<16)|
+                                         ((unsigned int)pbuf[2]<<8)|(unsigned int)pbuf[3];
+                            for (int a = 0; a < 5; a++)
+                                attrs[a] = ((unsigned short)pbuf[4+a*2]<<8)|pbuf[4+a*2+1];
+                            unsigned short nlen = ((unsigned short)pbuf[14]<<8)|pbuf[15];
+                            if (nlen > 0 && nlen < 40) {
+                                W got2 = 0;
+                                rd_rec(rec, link_name, (W)nlen, &got2);
+                                link_name[got2] = '\0';
+                            }
                         }
                         cls_rec(rec);
                     }
                 }
+                if (vol_is_brightv(v) && (link_name[0] == '\0' || strcmp(link_name, "(link)") == 0)) {
+                    if (link_fid > 0 && link_fid != FID_INVALID && link_fid < nfmax) {
+                        BLK lb = vol_fid_get_blk(v, (FID)link_fid);
+                        if (lb > 0 && lb != FID_INVALID) {
+                            unsigned char *lbuf = (unsigned char *)malloc(vol_block_size(v));
+                            if (lbuf) {
+                                if (vol_read_blk(v, lb, lbuf) == 0 &&
+                                    (memcmp(lbuf, "Tron", 4) == 0 || memcmp(lbuf, "norT", 4) == 0)) {
+                                    UH tc[20];
+                                    for (int k = 0; k < 16; k++) tc[k] = clu_rd_u16_le(lbuf + 0x6C + k * 2);
+                                    tc[16] = 0;
+                                    btr_tcode_to_utf8(tc, 16, link_name, sizeof(link_name));
+                                }
+                                free(lbuf);
+                            }
+                        }
+                    }
+                }
                 if (flag_l) {
                     snprintf(line, sizeof(line),
-                             "%u:  0 %04X  : %-3u [%04X %04X %04X %04X %04X] : %*s%s",
+                             "%u:  0 %04X  : %-5u %-6u [%04X %04X %04X %04X %04X] : %*s%s",
                              i, (unsigned)ri->flags & 0xFFFF,
-                             link_fid,
+                             link_fid, (unsigned)of->fid,
                              attrs[0], attrs[1], attrs[2], attrs[3], attrs[4],
                              indent, "", link_name);
                 } else {
                     snprintf(line, sizeof(line),
-                             "%u:  0    %04X  : %*s%s",
-                             i, (unsigned)ri->flags & 0xFFFF, indent, "", link_name);
+                             "%u:  0    %04X  : %-5u %-6u : %*s%s",
+                             i, (unsigned)ri->flags & 0xFFFF,
+                             link_fid, (unsigned)of->fid,
+                             indent, "", link_name);
                 }
-                if (flag_r && link_fid != 0 && link_fid != of->fid && link_count < 64) {
-                    if (link_fid >= 256 || !visited[link_fid]) {
-                        strncpy(links[link_count].name, link_name, sizeof(links[link_count].name) - 1);
-                        links[link_count].name[sizeof(links[link_count].name) - 1] = '\0';
-                        links[link_count].fid = link_fid;
-                        link_count++;
+                out(line, COLOR_LTGRAY, ud);
+
+                /* Recurse depth-first into child Virtual Object Real Body if -r is requested */
+                if (flag_r && depth < 16 && link_fid != 0 && link_fid != of->fid && link_fid < nfmax && !visited[link_fid]) {
+                    ID child_fd = opn_fil_fid(v, (FID)link_fid, 0x0001);
+                    if (child_fd < 0) {
+                        char child_path[128];
+                        const char *vprefix = (v == g_chokanji_vol) ? "/CHOKANJI/" :
+                                              (v == g_anders_vol) ? "/ANDERS/" : "/SYS/";
+                        snprintf(child_path, sizeof(child_path), "%s%s", vprefix, link_name);
+                        child_fd = opn_fil(child_path, 0x0001);
+                        if (child_fd < 0) child_fd = opn_fil(link_name, 0x0001);
+                    }
+                    if (child_fd >= 0) {
+                        clu_fs_dump_records(v, child_fd, of->fid, link_name, depth + 1, flag_l, flag_r, visited, nfmax, out, ud);
+                        cls_fil(child_fd);
                     }
                 }
             } else {
                 if (flag_l) {
                     if (depth > 0) {
                         snprintf(line, sizeof(line),
-                                 "%u:  %-4u %04X  :     (data record)              : %*s[%s]",
+                                 "%u:  %-4u %04X  : -     %-6u (data record)              : %*s[%s]",
                                  i, (unsigned)ri->type, (unsigned)ri->flags & 0xFFFF,
+                                 (unsigned)parent_fid,
                                  indent, "", parent_name);
                     } else {
                         snprintf(line, sizeof(line),
-                                 "%u:  %-4u %04X  :     (data record)",
-                                 i, (unsigned)ri->type, (unsigned)ri->flags & 0xFFFF);
+                                 "%u:  %-4u %04X  : -     %-6u (data record)",
+                                 i, (unsigned)ri->type, (unsigned)ri->flags & 0xFFFF,
+                                 (unsigned)parent_fid);
                     }
                 } else {
                     if (depth > 0) {
                         snprintf(line, sizeof(line),
-                                 "%u:  %-4u %04X  : %-12u : %*s[%s]",
+                                 "%u:  %-4u %04X  : -     %-6u : %-12u : %*s[%s]",
                                  i, (unsigned)ri->type, (unsigned)ri->flags & 0xFFFF,
+                                 (unsigned)parent_fid,
                                  ri->size, indent, "", parent_name);
                     } else {
                         snprintf(line, sizeof(line),
-                                 "%u:  %-4u %04X  : %-12u",
+                                 "%u:  %-4u %04X  : -     %-6u : %-12u",
                                  i, (unsigned)ri->type, (unsigned)ri->flags & 0xFFFF,
+                                 (unsigned)parent_fid,
                                  ri->size);
                     }
                 }
+                out(line, COLOR_LTGRAY, ud);
             }
-            out(line, COLOR_LTGRAY, ud);
         }
-    } else if (of->fid == FID_ROOT) {
-        /* Fallback: directory enumeration for root container if 0 records */
-        ID dir = opn_dir("/SYS");
-        if (dir >= 0) {
-            DIR_ENTRY entry;
-            unsigned int idx = 0;
-            while (rd_dir(dir, &entry) == 0) {
-                if (!entry.name[0]) continue;
-                FID efid = (FID)entry.robj_id;
-                if (efid == FID_ROOT) continue;
+    } else if (of->fid == FID_ROOT || is_bv_root) {
+        unsigned int rec_idx = 0;
+        /* For Cho-Kanji volume root, first dump any active data records belonging to FID 0 itself */
+        if (is_bv_root && of->nrec > 0) {
+            for (unsigned int i = 0; i < of->nrec; i++) {
+                RecordIndex *ri = &of->ridx[i];
+                if (ri->size == 0 && ri->type == 0) continue;
                 char line[256];
                 if (flag_l) {
                     snprintf(line, sizeof(line),
-                             "%u:  0 0000  : %-3u [0000 0000 0000 0000 0000] : %*s%s",
-                             idx++, (unsigned)efid, indent, "", entry.name);
+                             "%u:  %-4u %04X  : -     %-6u (data record)",
+                             rec_idx++, (unsigned)ri->type, (unsigned)ri->flags & 0xFFFF,
+                             (unsigned)of->fid);
                 } else {
                     snprintf(line, sizeof(line),
-                             "%u:  0    %04X  : %*s%s",
-                             idx++, 0, indent, "", entry.name);
+                             "%u:  %-4u %04X  : -     %-6u : %-12u",
+                             rec_idx++, (unsigned)ri->type, (unsigned)ri->flags & 0xFFFF,
+                             (unsigned)of->fid, ri->size);
                 }
                 out(line, COLOR_LTGRAY, ud);
-                if (flag_r && efid != 0 && link_count < 64) {
-                    if (efid >= 256 || !visited[efid]) {
-                        strncpy(links[link_count].name, entry.name, sizeof(links[link_count].name) - 1);
-                        links[link_count].name[sizeof(links[link_count].name) - 1] = '\0';
-                        links[link_count].fid = efid;
-                        link_count++;
+            }
+        }
+
+        /* Directory enumeration for root container */
+        const char *vdir = (v == g_chokanji_vol) ? "/CHOKANJI" :
+                           (v == g_anders_vol) ? "/ANDERS" : "/SYS";
+        ID dir = opn_dir(vdir);
+        if (dir >= 0) {
+            DIR_ENTRY entry;
+            unsigned int idx = rec_idx;
+            while (rd_dir(dir, &entry) == 0) {
+                if (!entry.name[0]) continue;
+                FID efid = (FID)entry.robj_id;
+                if (efid == FID_ROOT && !is_bv_root) continue;
+                char line[256];
+                if (flag_l) {
+                    snprintf(line, sizeof(line),
+                             "%u:  0 0000  : %-5u %-6u [0000 0000 0000 0000 0000] : %*s%s",
+                             idx++, (unsigned)efid, (unsigned)of->fid, indent, "", entry.name);
+                } else {
+                    snprintf(line, sizeof(line),
+                             "%u:  0    %04X  : %-5u %-6u : %*s%s",
+                             idx++, 0, (unsigned)efid, (unsigned)of->fid, indent, "", entry.name);
+                }
+                out(line, COLOR_LTGRAY, ud);
+
+                /* Recurse depth-first into child Real Bodies if -r is requested */
+                if (flag_r && depth < 16 && efid != 0 && efid < nfmax && !visited[efid]) {
+                    ID child_fd = opn_fil_fid(v, efid, 0x0001);
+                    if (child_fd < 0) {
+                        char child_path[128];
+                        const char *vprefix = (v == g_chokanji_vol) ? "/CHOKANJI/" :
+                                              (v == g_anders_vol) ? "/ANDERS/" : "/SYS/";
+                        snprintf(child_path, sizeof(child_path), "%s%s", vprefix, entry.name);
+                        child_fd = opn_fil(child_path, 0x0001);
+                        if (child_fd < 0) child_fd = opn_fil(entry.name, 0x0001);
+                    }
+                    if (child_fd >= 0) {
+                        clu_fs_dump_records(v, child_fd, of->fid, entry.name, depth + 1, flag_l, flag_r, visited, nfmax, out, ud);
+                        cls_fil(child_fd);
                     }
                 }
             }
@@ -462,21 +661,6 @@ static void clu_fs_dump_records(Volume *v, ID fd, const char *parent_name, int d
         }
     } else {
         out("(0 records)", COLOR_LTGRAY, ud);
-    }
-
-    /* Recurse into child Virtual Object Real Bodies if -r is requested */
-    if (flag_r && depth < 16) {
-        for (int p = 0; p < link_count; p++) {
-            if (links[p].fid < 256 && visited[links[p].fid]) continue;
-            ID child_fd = opn_fil(links[p].name, 0x0001);
-            if (child_fd >= 0) {
-                OpenFile *child_of = &g_open_files[(int)child_fd];
-                if (clu_of_has_links(child_of)) {
-                    clu_fs_dump_records(v, child_fd, links[p].name, depth + 1, flag_l, flag_r, visited, out, ud);
-                }
-                cls_fil(child_fd);
-            }
-        }
     }
 }
 
@@ -488,16 +672,16 @@ void clu_fs_cmd(const char *args, ShellOutputFn out, void *ud)
     char target[80];
     get_target(args, target, sizeof(target));
 
-    Volume *v = (strncmp(g_cwd_path, "/ANDERS", 7) == 0 && g_anders_vol) ? g_anders_vol : g_sys_vol;
+    Volume *v = (strncmp(g_cwd_path, "/ANDERS", 7) == 0 && g_anders_vol) ? g_anders_vol :
+                ((strncmp(g_cwd_path, "/CHOKANJI", 9) == 0 || strncmp(g_cwd_path, "/B-right", 8) == 0) && g_chokanji_vol) ? g_chokanji_vol : g_sys_vol;
     if (!v) { out("fs: no volume mounted", COLOR_RED, ud); return; }
 
     const char *path = target[0] ? target : g_cwd_path;
     ID fd = opn_fil(path, 0x0001);
-    if (fd < 0 && (!target[0] || strcmp(target, "SYS") == 0 || strcmp(target, "/SYS") == 0)) {
-        fd = opn_fil("SYS", 0x0001);
-    }
-    if (fd < 0 && (strcmp(target, "ANDERS") == 0 || strcmp(target, "/ANDERS") == 0)) {
-        fd = opn_fil("ANDERS", 0x0001);
+    if (fd < 0 && target[0]) {
+        char full[128];
+        snprintf(full, sizeof(full), "%s/%s", g_cwd_path, target);
+        fd = opn_fil(full, 0x0001);
     }
 
     if (fd < 0) {
@@ -511,12 +695,17 @@ void clu_fs_cmd(const char *args, ShellOutputFn out, void *ud)
     v = of_vol(of);
 
     if (flag_l)
-        out("NO: 0 STYPE : FID [ATR1 ATR2 ATR3 ATR4 ATR5] : NAME", COLOR_CYAN, ud);
+        out("NO: 0 STYPE : FID   PARENT [ATR1 ATR2 ATR3 ATR4 ATR5] : NAME", COLOR_CYAN, ud);
     else
-        out("NO: TYPE STYPE : SIZE / NAME", COLOR_CYAN, ud);
+        out("NO: TYPE STYPE : FID   PARENT : SIZE / NAME", COLOR_CYAN, ud);
 
-    unsigned char visited[256] = {0};
-    clu_fs_dump_records(v, fd, path, 0, flag_l, flag_r, visited, out, ud);
+    UW nfmax = vol_nfmax(v);
+    if (nfmax < 256) nfmax = 256;
+    unsigned char *visited = (unsigned char *)calloc(nfmax, 1);
+    if (!visited) { cls_fil(fd); return; }
+
+    clu_fs_dump_records(v, fd, (FID)0, path, 0, flag_l, flag_r, visited, nfmax, out, ud);
+    free(visited);
     cls_fil(fd);
 }
 
@@ -881,12 +1070,12 @@ static void clu_df_print_volume(Volume *v, const char *mount_path, const char *d
     snprintf(pct_s, sizeof(pct_s), "%u%%", pct);
     char line[128];
     snprintf(line, sizeof(line),
-             "%-7s %-5s %-7s %-7s %-6s %-5u %-8u %s",
+             "%-9s %-5s %-7s %-7s %-6s %-5u %-8u %s",
              mount_path, dev_name,
              tot_s,
              free_s,
              pct_s,
-             BTRON_BLOCK_SIZE,
+             vol_block_size(v),
              vol_nfmax(v),
              vol_name(v));
     out(line, COLOR_LTGRAY, ud);
@@ -898,23 +1087,35 @@ void clu_df(const char *args, ShellOutputFn out, void *ud)
     char target[80];
     get_target(args, target, sizeof(target));
 
-    if (!g_sys_vol && !g_anders_vol) {
+    if (!g_sys_vol && !g_anders_vol && !g_chokanji_vol) {
         out("df: no volume mounted", COLOR_RED, ud);
         return;
     }
 
     int show_sys = 1;
     int show_anders = (g_anders_vol && g_anders_vol != g_sys_vol);
+    int show_chokanji = (g_chokanji_vol != NULL);
 
     if (target[0]) {
         if (strcmp(target, "/SYS") == 0 || strcmp(target, "SYS") == 0) {
             show_sys = 1;
             show_anders = 0;
+            show_chokanji = 0;
         } else if (strcmp(target, "/ANDERS") == 0 || strcmp(target, "ANDERS") == 0) {
             show_sys = 0;
             show_anders = (g_anders_vol && g_anders_vol != g_sys_vol);
+            show_chokanji = 0;
             if (!show_anders) {
                 out("df: '/ANDERS': volume not mounted", COLOR_RED, ud);
+                return;
+            }
+        } else if (strcmp(target, "/CHOKANJI") == 0 || strcmp(target, "CHOKANJI") == 0 ||
+                   strcmp(target, "/B-right") == 0 || strcmp(target, "B-right") == 0) {
+            show_sys = 0;
+            show_anders = 0;
+            show_chokanji = (g_chokanji_vol != NULL);
+            if (!show_chokanji) {
+                out("df: '/CHOKANJI': volume not mounted", COLOR_RED, ud);
                 return;
             }
         } else {
@@ -925,13 +1126,16 @@ void clu_df(const char *args, ShellOutputFn out, void *ud)
         }
     }
 
-    out("PATH    DEV   TOTAL   FREE    USED   UNIT  MAXFILE  NAME", COLOR_CYAN, ud);
+    out("PATH      DEV   TOTAL   FREE    USED   UNIT  MAXFILE  NAME", COLOR_CYAN, ud);
 
     if (show_sys && g_sys_vol) {
         clu_df_print_volume(g_sys_vol, "/SYS", "mem0", out, ud);
     }
     if (show_anders && g_anders_vol) {
         clu_df_print_volume(g_anders_vol, "/ANDERS", "mem1", out, ud);
+    }
+    if (show_chokanji && g_chokanji_vol) {
+        clu_df_print_volume(g_chokanji_vol, "/CHOKANJI", "hda1", out, ud);
     }
 }
 

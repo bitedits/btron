@@ -48,6 +48,7 @@ typedef struct {
 
 /* ── File Level APIs ───────────────────────────────────────────── */
 ID opn_fil(const char *path, UW mode);
+ID opn_fil_fid(Volume *v, FID fid, UW mode);
 ER cls_fil(ID fd);
 ID cre_fil(const char *path, UW mode);
 ER del_fil(const char *path);

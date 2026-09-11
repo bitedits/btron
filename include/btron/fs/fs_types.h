@@ -33,6 +33,9 @@ extern "C" {
 #define VOL_MAGIC_LE            0x52FE  /* little-endian quasi variant      */
 #define FS_TYPE_STD             0x6400  /* standard FS type                 */
 #define FS_TYPE_EXT             0x6401  /* extended FS type                 */
+#define FS_TYPE_BRIGHTV         0x6402  /* B-right/V 4.02 filesystem type   */
+
+#define TRON_FILE_MAGIC         0x54726F6EU /* "Tron" in LE ('n','o','r','T') */
 
 /* ── Special FID values ─────────────────────────────────────────── */
 #define FID_ROOT                     0  /* root file (always FID 0)        */

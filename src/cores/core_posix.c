@@ -154,6 +154,27 @@ void btron_core_hfds_log(void) {
             }
         }
     }
+    /* ── Mount /CHOKANJI volume (B-right/V 4.02 disk image) ─────────── */
+    if (!g_chokanji_vol) {
+        const char *qcow2_paths[] = { "hda.qcow2", "../hda.qcow2", "PMC/chokanji_4_qemu/hda.qcow2", "../PMC/chokanji_4_qemu/hda.qcow2", NULL };
+        BlkDev *raw_qcow2 = NULL;
+        for (int p = 0; qcow2_paths[p]; p++) {
+            raw_qcow2 = blk_qcow2_create(qcow2_paths[p], 0 /*read-write*/);
+            if (raw_qcow2) break;
+        }
+        if (raw_qcow2) {
+            BlkDev *part = blk_mbr_find_btron_partition(raw_qcow2, 8192);
+            if (part) {
+                g_chokanji_vol = vol_mount(part);
+                if (g_chokanji_vol)
+                    printf("[FS  ] Mounted B-right/V 4.02 hda.qcow2 as /CHOKANJI (8192B blocks)  [OK]\n");
+                else
+                    blk_destroy(part);
+            } else {
+                blk_destroy(raw_qcow2);
+            }
+        }
+    }
 }
 
 void btron_core_print_ver(ShellOutputFn out_fn, void *user_data, const char *arg) {

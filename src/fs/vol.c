@@ -51,7 +51,7 @@
 #include <btron/fs/vol_api.h>
 #include <btron/fs/volume.h>
 
-/* ── Endian-independent big-endian byte helpers ─────────────────── */
+/* ── Endian helpers ─────────────────────────────────────────────── */
 static inline UH rd_u16_be(const unsigned char *p) {
     return (UH)(((UH)p[0] << 8) | (UH)p[1]);
 }
@@ -69,21 +69,148 @@ static inline void wr_u32_be(unsigned char *p, UW val) {
     p[3] = (unsigned char)(val & 0xFF);
 }
 
+static inline UH rd_u16(int is_le, const unsigned char *p) {
+    if (is_le) return (UH)((UH)p[0] | ((UH)p[1] << 8));
+    return rd_u16_be(p);
+}
+static inline UW rd_u32(int is_le, const unsigned char *p) {
+    if (is_le) return (UW)p[0] | ((UW)p[1] << 8) | ((UW)p[2] << 16) | ((UW)p[3] << 24);
+    return rd_u32_be(p);
+}
+static inline void wr_u16(int is_le, unsigned char *p, UH val) {
+    if (is_le) {
+        p[0] = (unsigned char)(val & 0xFF);
+        p[1] = (unsigned char)((val >> 8) & 0xFF);
+    } else {
+        wr_u16_be(p, val);
+    }
+}
+static inline void wr_u32(int is_le, unsigned char *p, UW val) {
+    if (is_le) {
+        p[0] = (unsigned char)(val & 0xFF);
+        p[1] = (unsigned char)((val >> 8) & 0xFF);
+        p[2] = (unsigned char)((val >> 16) & 0xFF);
+        p[3] = (unsigned char)((val >> 24) & 0xFF);
+    } else {
+        wr_u32_be(p, val);
+    }
+}
+
+/* ── TRON Code <-> UTF-8 conversion helpers for B-right/V ──────── */
+void btr_tcode_to_utf8(const UH *tc, int max_tcs, char *utf8, int max_bytes)
+{
+    if (!tc || !utf8 || max_bytes <= 0) return;
+    int di = 0;
+    for (int i = 0; i < max_tcs && tc[i] != 0 && di < max_bytes - 4; i++) {
+        UH c = tc[i];
+        if (c >= 0x2341 && c <= 0x235A) {
+            utf8[di++] = (char)('A' + (c - 0x2341));
+        } else if (c >= 0x2361 && c <= 0x237A) {
+            utf8[di++] = (char)('a' + (c - 0x2361));
+        } else if (c >= 0x2330 && c <= 0x2339) {
+            utf8[di++] = (char)('0' + (c - 0x2330));
+        } else if (c == 0x2121) {
+            utf8[di++] = ' ';
+        } else if (c == 0x215D) {
+            utf8[di++] = '-';
+        } else if (c == 0x213F) {
+            utf8[di++] = '/';
+        } else if (c == 0x212E) {
+            utf8[di++] = '.';
+        } else if (c == 0x2132 || c == 0x2170) {
+            utf8[di++] = '_';
+        } else if (c >= 0x20 && c <= 0x7E) {
+            utf8[di++] = (char)c;
+        } else {
+            /* Decode Plane 1 / Multi-byte T-Code (Kana & CJK) */
+            UW high = (c >> 8) & 0xFF;
+            UW low  = c & 0xFF;
+            UW cp = 0;
+            if (high == 0x24 && low >= 0x21 && low <= 0x73) {
+                cp = 0x3040 + (low - 0x20); /* Hiragana */
+            } else if (high == 0x25 && low >= 0x21 && low <= 0x76) {
+                cp = 0x30A0 + (low - 0x20); /* Katakana */
+            } else if (high >= 0x30 && high <= 0x85) {
+                UW offset = ((high - 0x30) << 8) | low;
+                cp = 0x4E00 + offset;
+                if (cp > 0x9FFF) cp = 0;
+            }
+
+            if (cp > 0 && cp <= 0x7FF) {
+                utf8[di++] = (char)(0xC0 | ((cp >> 6) & 0x1F));
+                utf8[di++] = (char)(0x80 | (cp & 0x3F));
+            } else if (cp > 0x7FF && cp <= 0xFFFF) {
+                utf8[di++] = (char)(0xE0 | ((cp >> 12) & 0x0F));
+                utf8[di++] = (char)(0x80 | ((cp >> 6) & 0x3F));
+                utf8[di++] = (char)(0x80 | (cp & 0x3F));
+            }
+        }
+    }
+    utf8[di] = '\0';
+}
+
+void btr_utf8_to_tcode(const char *utf8, UH *tc, int max_tcs)
+{
+    if (!utf8 || !tc || max_tcs <= 0) return;
+    int ti = 0;
+    while (*utf8 && ti < max_tcs - 1) {
+        unsigned char c = (unsigned char)*utf8++;
+        if (c >= 'A' && c <= 'Z') {
+            tc[ti++] = 0x2341 + (c - 'A');
+        } else if (c >= 'a' && c <= 'z') {
+            tc[ti++] = 0x2361 + (c - 'a');
+        } else if (c >= '0' && c <= '9') {
+            tc[ti++] = 0x2330 + (c - '0');
+        } else if (c == ' ') {
+            tc[ti++] = 0x2121;
+        } else if (c == '-') {
+            tc[ti++] = 0x215D;
+        } else if (c == '/') {
+            tc[ti++] = 0x213F;
+        } else if (c == '.') {
+            tc[ti++] = 0x212E;
+        } else if (c == '_') {
+            tc[ti++] = 0x2132;
+        } else {
+            tc[ti++] = c;
+        }
+    }
+    while (ti < max_tcs) tc[ti++] = 0;
+}
+
 /* ── Volume struct ──────────────────────────────────────────────── */
 struct Volume {
-    BlkDev      *dev;
-    VolumeHeader hdr;           /* cached, host-endian shadow */
-    UW          *fid_tbl;       /* [nfmax] raw 4-byte entries (native endian) */
-    UW          *htbl;          /* [nfmax] short-name hashes (native endian)  */
-    unsigned char *ubmp;        /* used-block bitmap (1 bit per block)       */
-    UW           ubmp_bytes;    /* byte size of ubmp                          */
-    int          dirty;
+    BlkDev        *dev;
+    VolumeHeader   hdr;           /* cached, host-endian shadow */
+    UW            *fid_tbl;       /* [nfmax] raw 4-byte entries (native endian) */
+    UW            *htbl;          /* [nfmax] short-name hashes (native endian)  */
+    unsigned char *ubmp;          /* used-block bitmap (1 bit per block)       */
+    UW             ubmp_bytes;    /* byte size of ubmp                          */
+    int            dirty;
+    int            is_le;         /* 1 = little-endian, 0 = big-endian          */
+    int            is_brightv;    /* 1 = B-right/V 4.02 filesystem              */
+    UW             block_size;    /* logical block size (e.g. 1024 or 8192)     */
+    UW             bmp_start;     /* start block of bitmap                      */
+    UW             fid_start;     /* start block of FID table                   */
+    UW             htbl_start;    /* start block of short-name hash table       */
 };
 
 /* ── Globals ────────────────────────────────────────────────────── */
 Volume *g_sys_vol = (Volume *)0;
 Volume *g_anders_vol = (Volume *)0;
+Volume *g_chokanji_vol = (Volume *)0;
 char    g_cwd_path[128] = "/SYS";
+
+UW vol_block_size(const Volume *v)
+{
+    return (v && v->block_size > 0) ? v->block_size : BTRON_BLOCK_SIZE;
+}
+
+int vol_is_brightv(const Volume *v)
+{
+    return v ? v->is_brightv : 0;
+}
+
 
 /* ── Internal block I/O ─────────────────────────────────────────── */
 int vol_read_blk(Volume *v, BLK lba, void *buf)
@@ -243,72 +370,132 @@ const char *vol_name(const Volume *v)
 /* ── Flush helper: write FID table back to disk ─────────────────── */
 static void flush_fid_table(Volume *v)
 {
-    unsigned char blk_buf[BTRON_BLOCK_SIZE];
-    UW entries_per_blk = BTRON_BLOCK_SIZE / 4;
-    UW fid_blk_start   = 1; /* block 0 is the header; FID table starts at 1 */
+    UW bsize = vol_block_size(v);
+    unsigned char *blk_buf = (unsigned char *)malloc(bsize);
+    if (!blk_buf) return;
+    UW entries_per_blk = bsize / 4;
+    UW fid_blk_start   = v->fid_start;
     UW sfidt = v->hdr.sfidt;
     for (UW b = 0; b < sfidt; b++) {
         UW base = b * entries_per_blk;
-        memset(blk_buf, 0, sizeof(blk_buf));
+        memset(blk_buf, 0, bsize);
         for (UW i = 0; i < entries_per_blk && base + i < v->hdr.nfmax; i++) {
-            wr_u32_be(&blk_buf[i * 4], v->fid_tbl[base + i]);
+            if (v->is_brightv) {
+                BLK blk = (v->fid_tbl[base + i] >> 8) & 0x00FFFFFFu;
+                UB rc   = (UB)(v->fid_tbl[base + i] & 0xFF);
+                blk_buf[i * 4 + 0] = (UB)(blk & 0xFF);
+                blk_buf[i * 4 + 1] = (UB)((blk >> 8) & 0xFF);
+                blk_buf[i * 4 + 2] = (UB)((blk >> 16) & 0xFF);
+                blk_buf[i * 4 + 3] = rc;
+            } else {
+                wr_u32_be(&blk_buf[i * 4], v->fid_tbl[base + i]);
+            }
         }
         vol_write_blk(v, fid_blk_start + b, blk_buf);
     }
+    free(blk_buf);
 }
 
 static void flush_hash_table(Volume *v)
 {
-    unsigned char blk_buf[BTRON_BLOCK_SIZE];
-    UW entries_per_blk = BTRON_BLOCK_SIZE / 4;
-    UW htbl_start = 1 + v->hdr.sfidt;
+    UW bsize = vol_block_size(v);
+    unsigned char *blk_buf = (unsigned char *)malloc(bsize);
+    if (!blk_buf) return;
+    UW entries_per_blk = bsize / 4;
+    UW htbl_start = v->htbl_start;
     for (UW b = 0; b < v->hdr.sfnmt; b++) {
         UW base = b * entries_per_blk;
-        memset(blk_buf, 0, sizeof(blk_buf));
+        memset(blk_buf, 0, bsize);
         for (UW i = 0; i < entries_per_blk && base + i < v->hdr.nfmax; i++) {
-            wr_u32_be(&blk_buf[i * 4], v->htbl[base + i]);
+            wr_u32(v->is_le, &blk_buf[i * 4], v->htbl[base + i]);
         }
         vol_write_blk(v, htbl_start + b, blk_buf);
     }
+    free(blk_buf);
 }
 
 static void flush_bitmap(Volume *v)
 {
-    unsigned char blk_buf[BTRON_BLOCK_SIZE];
-    UW bmp_start = 1 + v->hdr.sfidt + v->hdr.sfnmt;
-    UW nbmp = v->hdr.nbmp;
-    for (UW b = 0; b < nbmp; b++) {
-        UW base_byte = b * BTRON_BLOCK_SIZE;
-        memset(blk_buf, 0, sizeof(blk_buf));
-        for (UW i = 0; i < BTRON_BLOCK_SIZE && base_byte + i < v->ubmp_bytes; i++)
-            blk_buf[i] = v->ubmp[base_byte + i];
-        vol_write_blk(v, bmp_start + b, blk_buf);
+    UW bsize = vol_block_size(v);
+    unsigned char *blk_buf = (unsigned char *)malloc(bsize);
+    if (!blk_buf) return;
+
+    if (v->is_brightv) {
+        /* Block 0: bytes 128..bsize-1 are bitmap */
+        vol_read_blk(v, 0, blk_buf);
+        UW b0_avail = bsize - 128;
+        UW chunk = (v->ubmp_bytes < b0_avail) ? v->ubmp_bytes : b0_avail;
+        memcpy(blk_buf + 128, v->ubmp, chunk);
+        vol_write_blk(v, 0, blk_buf);
+
+        /* Blocks 1 .. nbmp-1 */
+        for (UW b = 1; b < v->hdr.nbmp; b++) {
+            UW base_byte = b0_avail + (b - 1) * bsize;
+            memset(blk_buf, 0, bsize);
+            if (base_byte < v->ubmp_bytes) {
+                UW rem = v->ubmp_bytes - base_byte;
+                UW n = (rem < bsize) ? rem : bsize;
+                memcpy(blk_buf, v->ubmp + base_byte, n);
+            }
+            vol_write_blk(v, b, blk_buf);
+        }
+    } else {
+        UW bmp_start = v->bmp_start;
+        UW nbmp = v->hdr.nbmp;
+        for (UW b = 0; b < nbmp; b++) {
+            UW base_byte = b * bsize;
+            memset(blk_buf, 0, bsize);
+            for (UW i = 0; i < bsize && base_byte + i < v->ubmp_bytes; i++)
+                blk_buf[i] = v->ubmp[base_byte + i];
+            vol_write_blk(v, bmp_start + b, blk_buf);
+        }
+        /* Bad-block bitmap: all zeros (no bad blocks in clean volume) */
+        memset(blk_buf, 0, bsize);
+        for (UW b = 0; b < nbmp; b++)
+            vol_write_blk(v, bmp_start + nbmp + b, blk_buf);
     }
-    /* Bad-block bitmap: all zeros (no bad blocks in clean volume) */
-    memset(blk_buf, 0, sizeof(blk_buf));
-    for (UW b = 0; b < nbmp; b++)
-        vol_write_blk(v, bmp_start + nbmp + b, blk_buf);
+    free(blk_buf);
 }
 
 static void flush_header(Volume *v)
 {
-    unsigned char blk_buf[BTRON_BLOCK_SIZE];
-    memset(blk_buf, 0, sizeof(blk_buf));
+    UW bsize = vol_block_size(v);
+    unsigned char *blk_buf = (unsigned char *)malloc(bsize);
+    if (!blk_buf) return;
 
-    wr_u16_be(blk_buf +  0, v->hdr.magic);
-    wr_u16_be(blk_buf +  2, v->hdr.fs_type);
-    wr_u32_be(blk_buf +  4, v->hdr.nfmax);
-    wr_u32_be(blk_buf +  8, v->hdr.nlb);
-    wr_u16_be(blk_buf + 12, v->hdr.sfidt);
-    wr_u16_be(blk_buf + 14, v->hdr.sfnmt);
-    wr_u16_be(blk_buf + 16, v->hdr.nbmp);
-    blk_buf[18] = v->hdr.access_level;
-    blk_buf[19] = v->hdr.dirty;
-    wr_u32_be(blk_buf + 20, v->hdr.free_blocks);
-    wr_u32_be(blk_buf + 24, v->hdr.data_start);
-    memcpy(blk_buf + 28, v->hdr.vol_name, 40);
-
-    vol_write_blk(v, 0, blk_buf);
+    if (v->is_brightv) {
+        vol_read_blk(v, 0, blk_buf); /* preserve bitmap in 128..bsize */
+        wr_u16(1, blk_buf +  0, v->hdr.magic);
+        wr_u16(1, blk_buf +  2, v->hdr.fs_type);
+        wr_u16(1, blk_buf +  4, v->hdr.nbmp);
+        wr_u16(1, blk_buf +  6, v->hdr.sfidt);
+        wr_u16(1, blk_buf +  8, v->hdr.sfnmt);
+        wr_u16(1, blk_buf + 0x18, (UH)(v->block_size & 0xFFFF));
+        wr_u32(1, blk_buf + 0x20, v->hdr.nlb);
+        wr_u32(1, blk_buf + 0x24, v->hdr.free_blocks);
+        UH tc_name[20];
+        btr_utf8_to_tcode((const char *)v->hdr.vol_name, tc_name, 20);
+        for (int i = 0; i < 20; i++) {
+            wr_u16(1, blk_buf + 0x30 + i * 2, tc_name[i]);
+        }
+        vol_write_blk(v, 0, blk_buf);
+    } else {
+        memset(blk_buf, 0, bsize);
+        wr_u16_be(blk_buf +  0, v->hdr.magic);
+        wr_u16_be(blk_buf +  2, v->hdr.fs_type);
+        wr_u32_be(blk_buf +  4, v->hdr.nfmax);
+        wr_u32_be(blk_buf +  8, v->hdr.nlb);
+        wr_u16_be(blk_buf + 12, v->hdr.sfidt);
+        wr_u16_be(blk_buf + 14, v->hdr.sfnmt);
+        wr_u16_be(blk_buf + 16, v->hdr.nbmp);
+        blk_buf[18] = v->hdr.access_level;
+        blk_buf[19] = v->hdr.dirty;
+        wr_u32_be(blk_buf + 20, v->hdr.free_blocks);
+        wr_u32_be(blk_buf + 24, v->hdr.data_start);
+        memcpy(blk_buf + 28, v->hdr.vol_name, 40);
+        vol_write_blk(v, 0, blk_buf);
+    }
+    free(blk_buf);
 }
 
 /* ── vol_sync ───────────────────────────────────────────────────── */
@@ -352,6 +539,10 @@ int vol_format(BlkDev *dev, UW nfmax, UW nlb, const char *name)
     v.hdr.access_level = 0;
     v.hdr.dirty        = 0;
     v.hdr.data_start   = data_start;
+    v.bmp_start        = 1 + sfidt + sfnmt;
+    v.fid_start        = 1;
+    v.htbl_start       = 1 + sfidt;
+    v.block_size       = BTRON_BLOCK_SIZE;
     {
         const unsigned char *nm = (const unsigned char *)name;
         unsigned int i = 0;
@@ -437,32 +628,100 @@ Volume *vol_mount(BlkDev *dev)
 {
     if (!dev) return (Volume *)0;
 
-    unsigned char blk_buf[BTRON_BLOCK_SIZE];
-    if (dev->read(dev, 0, blk_buf, 1) != 0)
-        return (Volume *)0;
+    UW initial_bsize = dev->block_size ? dev->block_size : BTRON_BLOCK_SIZE;
+    if (initial_bsize < BTRON_BLOCK_SIZE) initial_bsize = BTRON_BLOCK_SIZE;
 
-    /* Read and validate header */
-    UH magic = rd_u16_be(blk_buf + 0);
-    if (magic != VOL_MAGIC_BE && magic != VOL_MAGIC_LE)
+    unsigned char *blk_buf = (unsigned char *)malloc(initial_bsize);
+    if (!blk_buf) return (Volume *)0;
+
+    if (dev->read(dev, 0, blk_buf, 1) != 0) {
+        free(blk_buf);
         return (Volume *)0;
+    }
+
+    /* Read and validate magic */
+    UH m_be = rd_u16_be(blk_buf + 0);
+    UH m_le = rd_u16(1, blk_buf + 0);
+    int is_le = 0;
+    if (m_be == VOL_MAGIC_BE) {
+        is_le = 0;
+    } else if (m_le == VOL_MAGIC_LE || m_le == VOL_MAGIC_BE) {
+        is_le = 1;
+    } else {
+        free(blk_buf);
+        return (Volume *)0;
+    }
+
+    UH magic = rd_u16(is_le, blk_buf + 0);
+    UH fs_type = rd_u16(is_le, blk_buf + 2);
+    int is_brightv = (fs_type == FS_TYPE_BRIGHTV);
 
     Volume *v = (Volume *)calloc(1, sizeof(Volume));
-    if (!v) return (Volume *)0;
+    if (!v) {
+        free(blk_buf);
+        return (Volume *)0;
+    }
 
-    v->dev = dev;
-    /* Load header into native-endian shadow */
-    v->hdr.magic        = magic;
-    v->hdr.fs_type      = rd_u16_be(blk_buf +  2);
-    v->hdr.nfmax        = rd_u32_be(blk_buf +  4);
-    v->hdr.nlb          = rd_u32_be(blk_buf +  8);
-    v->hdr.sfidt        = rd_u16_be(blk_buf + 12);
-    v->hdr.sfnmt        = rd_u16_be(blk_buf + 14);
-    v->hdr.nbmp         = rd_u16_be(blk_buf + 16);
-    v->hdr.access_level = blk_buf[18];
-    v->hdr.dirty        = 1; /* mark as mounted */
-    v->hdr.free_blocks  = rd_u32_be(blk_buf + 20);
-    v->hdr.data_start   = rd_u32_be(blk_buf + 24);
-    memcpy(v->hdr.vol_name, blk_buf + 28, 40);
+    v->dev        = dev;
+    v->is_le      = is_le;
+    v->is_brightv = is_brightv;
+
+    if (is_brightv) {
+        v->block_size       = rd_u16(1, blk_buf + 0x18);
+        if (v->block_size == 0) v->block_size = 8192;
+        v->hdr.magic        = magic;
+        v->hdr.fs_type      = fs_type;
+        v->hdr.nbmp         = rd_u16(1, blk_buf + 0x04);
+        v->hdr.sfidt        = rd_u16(1, blk_buf + 0x06);
+        v->hdr.sfnmt        = rd_u16(1, blk_buf + 0x08);
+        v->hdr.nlb          = rd_u32(1, blk_buf + 0x20);
+        v->hdr.free_blocks  = rd_u32(1, blk_buf + 0x24);
+        v->hdr.nfmax        = (UW)v->hdr.sfidt * (v->block_size / 4);
+        v->hdr.access_level = 0;
+        v->hdr.dirty        = 1;
+        v->bmp_start        = 0;
+        v->fid_start        = v->hdr.nbmp;
+        v->htbl_start       = v->fid_start + v->hdr.sfidt;
+        v->hdr.data_start   = v->htbl_start + v->hdr.sfnmt;
+
+        /* Decode fs_name at 0x30 */
+        UH tc[20];
+        for (int k = 0; k < 20; k++) {
+            tc[k] = rd_u16(1, blk_buf + 0x30 + k * 2);
+        }
+        btr_tcode_to_utf8(tc, 20, (char *)v->hdr.vol_name, sizeof(v->hdr.vol_name));
+        if (v->hdr.vol_name[0] == '\0') {
+            strcpy((char *)v->hdr.vol_name, "B-right/V");
+        }
+    } else {
+        v->block_size       = dev->block_size ? dev->block_size : BTRON_BLOCK_SIZE;
+        v->hdr.magic        = magic;
+        v->hdr.fs_type      = fs_type;
+        v->hdr.nfmax        = rd_u32(is_le, blk_buf +  4);
+        v->hdr.nlb          = rd_u32(is_le, blk_buf +  8);
+        v->hdr.sfidt        = rd_u16(is_le, blk_buf + 12);
+        v->hdr.sfnmt        = rd_u16(is_le, blk_buf + 14);
+        v->hdr.nbmp         = rd_u16(is_le, blk_buf + 16);
+        v->hdr.access_level = blk_buf[18];
+        v->hdr.dirty        = 1;
+        v->hdr.free_blocks  = rd_u32(is_le, blk_buf + 20);
+        v->hdr.data_start   = rd_u32(is_le, blk_buf + 24);
+        memcpy(v->hdr.vol_name, blk_buf + 28, 40);
+        v->bmp_start        = 1 + v->hdr.sfidt + v->hdr.sfnmt;
+        v->fid_start        = 1;
+        v->htbl_start       = 1 + v->hdr.sfidt;
+    }
+
+    /* Resize blk_buf if needed */
+    UW bsize = vol_block_size(v);
+    if (bsize != initial_bsize) {
+        free(blk_buf);
+        blk_buf = (unsigned char *)malloc(bsize);
+        if (!blk_buf) {
+            free(v);
+            return (Volume *)0;
+        }
+    }
 
     UW nfmax = v->hdr.nfmax;
     UW sfidt = v->hdr.sfidt;
@@ -470,55 +729,80 @@ Volume *vol_mount(BlkDev *dev)
     UW nbmp  = v->hdr.nbmp;
 
     /* Allocate RAM caches */
-    v->fid_tbl   = (UW *)calloc(nfmax, sizeof(UW));
-    v->htbl      = (UW *)calloc(nfmax, sizeof(UW));
+    v->fid_tbl    = (UW *)calloc(nfmax, sizeof(UW));
+    v->htbl       = (UW *)calloc(nfmax, sizeof(UW));
     v->ubmp_bytes = (v->hdr.nlb + 7) / 8;
-    v->ubmp      = (unsigned char *)calloc(v->ubmp_bytes, 1);
+    v->ubmp       = (unsigned char *)calloc(v->ubmp_bytes, 1);
     if (!v->fid_tbl || !v->htbl || !v->ubmp) {
-        free(v->fid_tbl); free(v->htbl); free(v->ubmp); free(v);
+        free(v->fid_tbl); free(v->htbl); free(v->ubmp); free(v); free(blk_buf);
         return (Volume *)0;
     }
 
     /* Load FID table */
     {
-        UW entries_per_blk = BTRON_BLOCK_SIZE / 4;
+        UW entries_per_blk = bsize / 4;
         for (UW b = 0; b < sfidt; b++) {
-            if (dev->read(dev, 1 + b, blk_buf, 1) != 0) break;
+            if (dev->read(dev, v->fid_start + b, blk_buf, 1) != 0) break;
             UW base = b * entries_per_blk;
             for (UW i = 0; i < entries_per_blk && base + i < nfmax; i++) {
-                v->fid_tbl[base + i] = rd_u32_be(&blk_buf[i * 4]);
+                if (is_brightv) {
+                    UB b0 = blk_buf[i * 4 + 0];
+                    UB b1 = blk_buf[i * 4 + 1];
+                    UB b2 = blk_buf[i * 4 + 2];
+                    UB rc = blk_buf[i * 4 + 3];
+                    BLK fblk = (BLK)(b0 | (b1 << 8) | (b2 << 16));
+                    v->fid_tbl[base + i] = ((fblk & 0x00FFFFFFu) << 8) | (UW)rc;
+                } else {
+                    v->fid_tbl[base + i] = rd_u32_be(&blk_buf[i * 4]);
+                }
             }
         }
     }
 
     /* Load hash table */
     {
-        UW entries_per_blk = BTRON_BLOCK_SIZE / 4;
-        UW htbl_start = 1 + sfidt;
+        UW entries_per_blk = bsize / 4;
         for (UW b = 0; b < sfnmt; b++) {
-            if (dev->read(dev, htbl_start + b, blk_buf, 1) != 0) break;
+            if (dev->read(dev, v->htbl_start + b, blk_buf, 1) != 0) break;
             UW base = b * entries_per_blk;
             for (UW i = 0; i < entries_per_blk && base + i < nfmax; i++) {
-                v->htbl[base + i] = rd_u32_be(&blk_buf[i * 4]);
+                v->htbl[base + i] = rd_u32(is_le, &blk_buf[i * 4]);
             }
         }
     }
 
     /* Load used-block bitmap */
     {
-        UW bmp_start = 1 + sfidt + sfnmt;
-        for (UW b = 0; b < nbmp; b++) {
-            if (dev->read(dev, bmp_start + b, blk_buf, 1) != 0) break;
-            UW base_byte = b * BTRON_BLOCK_SIZE;
-            for (UW i = 0; i < BTRON_BLOCK_SIZE && base_byte + i < v->ubmp_bytes; i++)
-                v->ubmp[base_byte + i] = blk_buf[i];
+        if (is_brightv) {
+            dev->read(dev, 0, blk_buf, 1);
+            UW b0_avail = bsize - 128;
+            UW chunk = (v->ubmp_bytes < b0_avail) ? v->ubmp_bytes : b0_avail;
+            memcpy(v->ubmp, blk_buf + 128, chunk);
+
+            for (UW b = 1; b < nbmp; b++) {
+                if (dev->read(dev, b, blk_buf, 1) != 0) break;
+                UW base_byte = b0_avail + (b - 1) * bsize;
+                if (base_byte < v->ubmp_bytes) {
+                    UW rem = v->ubmp_bytes - base_byte;
+                    UW n = (rem < bsize) ? rem : bsize;
+                    memcpy(v->ubmp + base_byte, blk_buf, n);
+                }
+            }
+        } else {
+            for (UW b = 0; b < nbmp; b++) {
+                if (dev->read(dev, v->bmp_start + b, blk_buf, 1) != 0) break;
+                UW base_byte = b * bsize;
+                for (UW i = 0; i < bsize && base_byte + i < v->ubmp_bytes; i++)
+                    v->ubmp[base_byte + i] = blk_buf[i];
+            }
         }
     }
 
     /* Mark dirty=1 in header on disk */
     flush_header(v);
 
-    v->dirty = 0; /* we just synced the dirty flag; rest is clean */
+    v->dirty = 0;
+    free(blk_buf);
     return v;
 }
 

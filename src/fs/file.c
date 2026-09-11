@@ -45,11 +45,13 @@
 #  define strncpy  tkl_strncpy
 #endif
 
+#include <btron/fs/block.h>
+#include <btron/fs/fs_types.h>
+#include <btron/fs/vol_api.h>
 #include <btron/file.h>
 #include <btron/error.h>
 #include <btron/tad.h>
 #include <btron/fs/fs_internal.h>
-#include <btron/fs/vol_api.h>
 #include <btron/fs/header.h>
 #include <btron/fs/record.h>
 
@@ -70,12 +72,18 @@ static UW now_ts(void) {
 #endif
 }
 
-/* ── Endian-independent big-endian byte helpers ─────────────────── */
+/* ── Endian-independent byte helpers ─────────────────────────────── */
 static inline UH rd_u16_be(const unsigned char *p) {
     return (UH)(((UH)p[0] << 8) | (UH)p[1]);
 }
 static inline UW rd_u32_be(const unsigned char *p) {
     return ((UW)p[0] << 24) | ((UW)p[1] << 16) | ((UW)p[2] << 8) | (UW)p[3];
+}
+static inline UH rd_u16_le(const unsigned char *p) {
+    return (UH)((UH)p[0] | ((UH)p[1] << 8));
+}
+static inline UW rd_u32_le(const unsigned char *p) {
+    return (UW)p[0] | ((UW)p[1] << 8) | ((UW)p[2] << 16) | ((UW)p[3] << 24);
 }
 static inline void wr_u16_be(unsigned char *p, UH val) {
     p[0] = (unsigned char)((val >> 8) & 0xFF);
@@ -87,13 +95,79 @@ static inline void wr_u32_be(unsigned char *p, UW val) {
     p[2] = (unsigned char)((val >> 8) & 0xFF);
     p[3] = (unsigned char)(val & 0xFF);
 }
+static inline void wr_u16_le(unsigned char *p, UH val) {
+    p[0] = (unsigned char)(val & 0xFF);
+    p[1] = (unsigned char)((val >> 8) & 0xFF);
+}
+static inline void wr_u32_le(unsigned char *p, UW val) {
+    p[0] = (unsigned char)(val & 0xFF);
+    p[1] = (unsigned char)((val >> 8) & 0xFF);
+    p[2] = (unsigned char)((val >> 16) & 0xFF);
+    p[3] = (unsigned char)((val >> 24) & 0xFF);
+}
 
 /* ── Read FileHeader + RecordIndex from a header block ──────────── */
 static int read_header_block(Volume *v, BLK blk, OpenFile *of)
 {
-    unsigned char buf[BTRON_BLOCK_SIZE];
-    if (vol_read_blk(v, blk, buf) != 0) return -1;
+    UW bsize = vol_block_size(v);
+    unsigned char *buf = (unsigned char *)malloc(bsize);
+    if (!buf) return -1;
+    if (vol_read_blk(v, blk, buf) != 0) {
+        free(buf);
+        return -1;
+    }
 
+    if (vol_is_brightv(v)) {
+        if (memcmp(buf, "Tron", 4) != 0 && memcmp(buf, "norT", 4) != 0) {
+            free(buf);
+            return -1;
+        }
+        /* B-right/V Real Body Header */
+        of->hdr.flags      = rd_u16_le(buf + 4);
+        of->hdr.atype      = 0;
+        of->hdr.ctime      = rd_u32_le(buf + 0x60);
+        of->hdr.mtime      = rd_u32_le(buf + 0x64);
+        of->hdr.atime      = rd_u32_le(buf + 0x68);
+        of->hdr.owner      = 0;
+        of->hdr.group      = 0;
+        of->hdr.nlnk       = 1;
+        of->hdr.idxlv      = 0;
+        of->hdr.total_size = rd_u32_le(buf + 0x48);
+        of->hdr.nrec       = rd_u32_le(buf + 0x4C);
+
+        UH tc[20];
+        for (int k = 0; k < 16; k++) {
+            tc[k] = rd_u16_le(buf + 0x6C + k * 2);
+        }
+        tc[16] = 0;
+        btr_tcode_to_utf8(tc, 16, (char *)of->hdr.name, sizeof(of->hdr.name));
+
+        if (of->hdr.nrec > REC_IDX_LEVEL0_MAX) {
+            of->hdr.nrec = REC_IDX_LEVEL0_MAX;
+        }
+        of->nrec      = of->hdr.nrec;
+        of->data_used = of->hdr.total_size;
+        of->data_blk  = 0;
+
+        for (unsigned int i = 0; i < of->nrec; i++) {
+            unsigned char *rp = buf + bsize - (i + 1) * 16;
+            of->ridx[i].kind   = rd_u16_le(rp + 0);
+            of->ridx[i].type   = rd_u16_le(rp + 2);
+            of->ridx[i].offset = rd_u32_le(rp + 4);
+            of->ridx[i].size   = rd_u32_le(rp + 8);
+            uint8_t nblocks    = rp[12];
+            BLK rblk           = (BLK)(rp[13] | (rp[14] << 8) | (rp[15] << 16));
+            of->ridx[i].flags  = (UW)nblocks;
+            if (of->data_blk == 0 && rblk > 0) {
+                of->data_blk = rblk;
+            }
+        }
+        of->hdr.data_blk = of->data_blk;
+        free(buf);
+        return 0;
+    }
+
+    /* Standard cleanroom volume */
     unsigned char *p = buf;
     of->hdr.flags      = rd_u16_be(p +  0);
     of->hdr.atype      = rd_u16_be(p +  2);
@@ -126,14 +200,55 @@ static int read_header_block(Volume *v, BLK blk, OpenFile *of)
         of->ridx[i].offset = rd_u32_be(rp +  8);
         of->ridx[i].flags  = rd_u32_be(rp + 12);
     }
+    free(buf);
     return 0;
 }
 
 /* ── Write FileHeader + RecordIndex back to the header block ─────── */
 static int write_header_block(Volume *v, BLK blk, const OpenFile *of)
 {
-    unsigned char buf[BTRON_BLOCK_SIZE];
-    memset(buf, 0, sizeof(buf));
+    UW bsize = vol_block_size(v);
+    unsigned char *buf = (unsigned char *)malloc(bsize);
+    if (!buf) return -1;
+
+    if (vol_is_brightv(v)) {
+        if (vol_read_blk(v, blk, buf) != 0) {
+            memset(buf, 0, bsize);
+        }
+        if (memcmp(buf, "norT", 4) != 0) {
+            memcpy(buf, "Tron", 4);
+        }
+        wr_u16_le(buf + 4, of->hdr.flags);
+        wr_u32_le(buf + 0x48, of->hdr.total_size);
+        wr_u32_le(buf + 0x4C, of->nrec);
+        wr_u32_le(buf + 0x64, of->hdr.mtime);
+
+        UH tc[20];
+        btr_utf8_to_tcode((const char *)of->hdr.name, tc, 16);
+        for (int k = 0; k < 16; k++) {
+            wr_u16_le(buf + 0x6C + k * 2, tc[k]);
+        }
+
+        unsigned int cnt = (of->nrec < REC_IDX_LEVEL0_MAX) ? of->nrec : REC_IDX_LEVEL0_MAX;
+        for (unsigned int i = 0; i < cnt; i++) {
+            unsigned char *rp = buf + bsize - (i + 1) * 16;
+            wr_u16_le(rp + 0, of->ridx[i].kind);
+            wr_u16_le(rp + 2, of->ridx[i].type);
+            wr_u32_le(rp + 4, of->ridx[i].offset);
+            wr_u32_le(rp + 8, of->ridx[i].size);
+            rp[12] = (unsigned char)(of->ridx[i].flags & 0xFF);
+            BLK rblk = of->data_blk;
+            rp[13] = (unsigned char)(rblk & 0xFF);
+            rp[14] = (unsigned char)((rblk >> 8) & 0xFF);
+            rp[15] = (unsigned char)((rblk >> 16) & 0xFF);
+        }
+        int ret = vol_write_blk(v, blk, buf);
+        free(buf);
+        return ret;
+    }
+
+    /* Standard cleanroom volume */
+    memset(buf, 0, bsize);
 
     unsigned char *p = buf;
     wr_u16_be(p +  0, of->hdr.flags);
@@ -160,7 +275,9 @@ static int write_header_block(Volume *v, BLK blk, const OpenFile *of)
         wr_u32_be(rp +  8, of->ridx[i].offset);
         wr_u32_be(rp + 12, of->ridx[i].flags);
     }
-    return vol_write_blk(v, blk, buf);
+    int ret = vol_write_blk(v, blk, buf);
+    free(buf);
+    return ret;
 }
 
 /* ── Lookup file by name using hash table then full compare ──────── */
@@ -169,21 +286,41 @@ static FID find_fid_by_name(Volume *v, const char *name)
     if (!v || !name) return FID_INVALID;
     UW target_hash = vol_name_hash(name);
     UW nfmax = vol_nfmax(v);
+    UW bsize = vol_block_size(v);
+    unsigned char *buf = (unsigned char *)malloc(bsize);
+    if (!buf) return FID_INVALID;
+
+    int is_bv = vol_is_brightv(v);
+
     for (FID i = 0; i < nfmax; i++) {
         if (vol_fid_refcount(v, i) == 0 && i != FID_ROOT) continue;
-        if (vol_hash_get(v, i) != target_hash) continue;
-        /* Hash match: do full name compare */
+        if (!is_bv && vol_hash_get(v, i) != target_hash) continue;
+        /* Hash match or B-right/V scan: do name compare */
         BLK hblk = vol_fid_get_blk(v, i);
         if (hblk == 0 || hblk == FID_INVALID) continue;
-        unsigned char buf[BTRON_BLOCK_SIZE];
         if (vol_read_blk(v, hblk, buf) != 0) continue;
-        /* Name is at offset 32 in FileHeader, 40 bytes max, UTF-8 NUL-padded */
-        char stored[41];
-        memcpy(stored, buf + 32, 40);
-        stored[40] = '\0';
-        if (strcmp(stored, name) == 0)
+
+        char stored[64];
+        if (is_bv) {
+            if (memcmp(buf, "Tron", 4) != 0 && memcmp(buf, "norT", 4) != 0)
+                continue;
+            UH tc[20];
+            for (int k = 0; k < 16; k++) {
+                tc[k] = rd_u16_le(buf + 0x6C + k * 2);
+            }
+            tc[16] = 0;
+            btr_tcode_to_utf8(tc, 16, stored, sizeof(stored));
+        } else {
+            memcpy(stored, buf + 32, 40);
+            stored[40] = '\0';
+        }
+
+        if (strcmp(stored, name) == 0 || strcasecmp(stored, name) == 0) {
+            free(buf);
             return i;
+        }
     }
+    free(buf);
     return FID_INVALID;
 }
 
@@ -192,12 +329,23 @@ ID opn_fil(const char *path, UW mode)
 {
     if (!path) return (ID)-1;
 
-    Volume *v = g_sys_vol;
-    if (strncmp(path, "/ANDERS", 7) == 0 && g_anders_vol) {
-        v = g_anders_vol;
+    Volume *v = NULL;
+    if (path[0] == '/') {
+        if (strncmp(path, "/ANDERS", 7) == 0 && (path[7] == '/' || path[7] == '\0')) v = g_anders_vol;
+        else if (((strncmp(path, "/CHOKANJI", 9) == 0 && (path[9] == '/' || path[9] == '\0')) ||
+                  (strncmp(path, "/B-right", 8) == 0 && (path[8] == '/' || path[8] == '\0'))) && g_chokanji_vol) v = g_chokanji_vol;
+        else if (strncmp(path, "/SYS", 4) == 0 && (path[4] == '/' || path[4] == '\0')) v = g_sys_vol;
+        else v = g_sys_vol;
+    } else {
+        /* Relative path: use active directory volume */
+        if (strncmp(g_cwd_path, "/ANDERS", 7) == 0 && g_anders_vol) v = g_anders_vol;
+        else if ((strncmp(g_cwd_path, "/CHOKANJI", 9) == 0 || strncmp(g_cwd_path, "/B-right", 8) == 0) && g_chokanji_vol) v = g_chokanji_vol;
+        else v = g_sys_vol;
     }
+    if (!v) v = g_sys_vol;
+    if (!v) return (ID)-1;
 
-    /* Strip leading "/" or "/SYS/" or "/ANDERS/" prefix for flat namespace lookup */
+    /* Strip leading "/" or volume prefix for flat namespace lookup */
     const char *name = path;
     if (name[0] == '/') {
         while (*name == '/') name++;
@@ -205,24 +353,38 @@ ID opn_fil(const char *path, UW mode)
         const char *sl = name;
         while (*sl && *sl != '/') sl++;
         if (*sl == '/') name = sl + 1;
+        else name = ""; /* Path was just volume name (e.g. "/CHOKANJI") -> target is root */
     }
 
     FID fid = FID_INVALID;
-    if (v) fid = find_fid_by_name(v, name);
-    if (fid == FID_INVALID && g_anders_vol && v != g_anders_vol) {
-        fid = find_fid_by_name(g_anders_vol, name);
-        if (fid != FID_INVALID) v = g_anders_vol;
+    if (name[0] == '\0' || strcmp(name, ".") == 0) {
+        fid = FID_ROOT;
+    } else {
+        fid = find_fid_by_name(v, name);
+        /* If relative search on SYS fails, check ANDERS (but never do unconstrained Cho-Kanji scan) */
+        if (fid == FID_INVALID && v == g_sys_vol && g_anders_vol && path[0] != '/') {
+            fid = find_fid_by_name(g_anders_vol, name);
+            if (fid != FID_INVALID) v = g_anders_vol;
+        }
     }
     if (fid == FID_INVALID) return (ID)-1;
+    return opn_fil_fid(v, fid, mode);
+}
 
-    /* Find a free slot */
+/* ── opn_fil_fid ─────────────────────────────────────────────────── */
+ID opn_fil_fid(Volume *v, FID fid, UW mode)
+{
+    if (!v || fid == FID_INVALID) return (ID)-1;
+    BLK hblk = vol_fid_get_blk(v, fid);
+    if (hblk == 0 || hblk == FID_INVALID) return (ID)-1;
+
     for (int i = 0; i < MAX_OPEN_FILES; i++) {
         if (!g_open_files[i].used) {
             OpenFile *of = &g_open_files[i];
             memset(of, 0, sizeof(*of));
             of->vol      = v;
             of->fid      = fid;
-            of->hdr_blk  = vol_fid_get_blk(v, fid);
+            of->hdr_blk  = hblk;
             of->mode     = mode;
             of->used     = 1;
             if (read_header_block(v, of->hdr_blk, of) != 0) {
@@ -239,6 +401,11 @@ ID opn_fil(const char *path, UW mode)
 ID cre_fil(const char *path, UW mode)
 {
     Volume *v = g_sys_vol;
+    if (path && strncmp(path, "/ANDERS", 7) == 0 && g_anders_vol) {
+        v = g_anders_vol;
+    } else if (path && (strncmp(path, "/CHOKANJI", 9) == 0 || strncmp(path, "/B-right", 8) == 0) && g_chokanji_vol) {
+        v = g_chokanji_vol;
+    }
     if (!v || !path) return (ID)-1;
 
     const char *name = path;
@@ -270,6 +437,7 @@ ID cre_fil(const char *path, UW mode)
 
     OpenFile *of = &g_open_files[slot];
     memset(of, 0, sizeof(*of));
+    of->vol      = v;
     of->fid      = fid;
     of->hdr_blk  = hblk;
     of->mode     = mode;
@@ -330,6 +498,11 @@ ER cls_fil(ID fd)
 ER del_fil(const char *path)
 {
     Volume *v = g_sys_vol;
+    if (path && strncmp(path, "/ANDERS", 7) == 0 && g_anders_vol) {
+        v = g_anders_vol;
+    } else if (path && (strncmp(path, "/CHOKANJI", 9) == 0 || strncmp(path, "/B-right", 8) == 0) && g_chokanji_vol) {
+        v = g_chokanji_vol;
+    }
     if (!v || !path) return (ER)-1;
 
     const char *name = path;
@@ -348,10 +521,11 @@ ER del_fil(const char *path)
     if (fd < 0) return (ER)-1;
 
     OpenFile *of = &g_open_files[(int)fd];
+    UW bsize = vol_block_size(v);
 
     /* Free data blocks if allocated */
     if (of->data_blk != 0 && of->data_used > 0) {
-        UW used_blks = (of->data_used + BTRON_BLOCK_SIZE - 1) / BTRON_BLOCK_SIZE;
+        UW used_blks = (of->data_used + bsize - 1) / bsize;
         for (UW b = 0; b < used_blks; b++) {
             vol_free_block(v, of->data_blk + b);
         }
@@ -381,39 +555,41 @@ ER ins_rec(ID fd, W rec_idx, const void *buf, W sz)
 
     UW payload = (sz > 0) ? (UW)sz : 0;
     UW data_offset = of->data_used;
+    UW bsize = vol_block_size(v);
 
     /* Write payload across blocks */
     if (payload > 0 && buf) {
         const unsigned char *src = (const unsigned char *)buf;
         UW remaining = payload;
         UW cur_offset = data_offset;
+        unsigned char *blk_buf = (unsigned char *)malloc(bsize);
+        if (!blk_buf) return (ER)-1;
 
         while (remaining > 0) {
-            UW blk_idx = cur_offset / BTRON_BLOCK_SIZE;
-            UW blk_off = cur_offset % BTRON_BLOCK_SIZE;
+            UW blk_idx = cur_offset / bsize;
+            UW blk_off = cur_offset % bsize;
 
             /* Ensure data_blk is allocated */
             if (of->data_blk == 0) {
                 BLK db = vol_alloc_block(v);
-                if (db == FID_INVALID) return (ER)-1;
+                if (db == FID_INVALID) { free(blk_buf); return (ER)-1; }
                 of->data_blk = db;
                 of->hdr.data_blk = db;
             } else if (blk_idx > 0 && blk_off == 0) {
                 /* Allocate next block in contiguous extent */
                 BLK nb = vol_alloc_block(v);
-                if (nb == FID_INVALID) return (ER)-1;
+                if (nb == FID_INVALID) { free(blk_buf); return (ER)-1; }
             }
 
             BLK cur_blk = of->data_blk + blk_idx;
-            unsigned char blk_buf[BTRON_BLOCK_SIZE];
-            if (blk_off > 0 || remaining < BTRON_BLOCK_SIZE) {
+            if (blk_off > 0 || remaining < bsize) {
                 if (vol_read_blk(v, cur_blk, blk_buf) != 0)
-                    memset(blk_buf, 0, sizeof(blk_buf));
+                    memset(blk_buf, 0, bsize);
             } else {
-                memset(blk_buf, 0, sizeof(blk_buf));
+                memset(blk_buf, 0, bsize);
             }
 
-            UW space = BTRON_BLOCK_SIZE - blk_off;
+            UW space = bsize - blk_off;
             UW chunk = (remaining < space) ? remaining : space;
             memcpy(blk_buf + blk_off, src, chunk);
             vol_write_blk(v, cur_blk, blk_buf);
@@ -422,6 +598,7 @@ ER ins_rec(ID fd, W rec_idx, const void *buf, W sz)
             remaining  -= chunk;
             cur_offset += chunk;
         }
+        free(blk_buf);
     }
 
     /* Insert RecordIndex entry at rec_idx (shift later entries) */
@@ -486,20 +663,24 @@ ER rd_rec(ID rec_id, VP buf, W sz, W *read_sz)
     unsigned char *dst = (unsigned char *)buf;
     UW stream_off = or_->data_offset + or_->pos;
     UW remaining = want;
+    UW bsize = vol_block_size(v);
+
+    unsigned char *blk_buf = (unsigned char *)malloc(bsize);
+    if (!blk_buf) return (ER)-1;
 
     while (remaining > 0) {
-        BLK cur_blk = of->data_blk + (stream_off / BTRON_BLOCK_SIZE);
-        UW  blk_off = stream_off % BTRON_BLOCK_SIZE;
+        BLK cur_blk = of->data_blk + (stream_off / bsize);
+        UW  blk_off = stream_off % bsize;
 
-        unsigned char blk_buf[BTRON_BLOCK_SIZE];
         if (vol_read_blk(v, cur_blk, blk_buf) != 0) break;
-        UW avail_in_blk = BTRON_BLOCK_SIZE - blk_off;
+        UW avail_in_blk = bsize - blk_off;
         UW chunk = (remaining < avail_in_blk) ? remaining : avail_in_blk;
         memcpy(dst, blk_buf + blk_off, chunk);
         dst        += chunk;
         remaining  -= chunk;
         stream_off += chunk;
     }
+    free(blk_buf);
     UW got = want - remaining;
     or_->pos += got;
     if (read_sz) *read_sz = (W)got;
@@ -523,19 +704,22 @@ ER wr_rec(ID rec_id, const void *buf, W sz, W *wrote_sz)
     const unsigned char *src = (const unsigned char *)buf;
     UW stream_off = or_->data_offset + or_->pos;
     UW remaining = want;
+    UW bsize = vol_block_size(v);
+
+    unsigned char *blk_buf = (unsigned char *)malloc(bsize);
+    if (!blk_buf) return (ER)-1;
 
     while (remaining > 0) {
-        BLK cur_blk = of->data_blk + (stream_off / BTRON_BLOCK_SIZE);
-        UW  blk_off = stream_off % BTRON_BLOCK_SIZE;
+        BLK cur_blk = of->data_blk + (stream_off / bsize);
+        UW  blk_off = stream_off % bsize;
 
-        unsigned char blk_buf[BTRON_BLOCK_SIZE];
-        if (blk_off > 0 || remaining < BTRON_BLOCK_SIZE) {
+        if (blk_off > 0 || remaining < bsize) {
             if (vol_read_blk(v, cur_blk, blk_buf) != 0)
-                memset(blk_buf, 0, sizeof(blk_buf));
+                memset(blk_buf, 0, bsize);
         } else {
-            memset(blk_buf, 0, sizeof(blk_buf));
+            memset(blk_buf, 0, bsize);
         }
-        UW avail_in_blk = BTRON_BLOCK_SIZE - blk_off;
+        UW avail_in_blk = bsize - blk_off;
         UW chunk = (remaining < avail_in_blk) ? remaining : avail_in_blk;
         memcpy(blk_buf + blk_off, src, chunk);
         vol_write_blk(v, cur_blk, blk_buf);
@@ -543,6 +727,7 @@ ER wr_rec(ID rec_id, const void *buf, W sz, W *wrote_sz)
         remaining  -= chunk;
         stream_off += chunk;
     }
+    free(blk_buf);
     UW got = want - remaining;
     or_->pos += got;
     if (or_->pos > or_->size) {
@@ -622,6 +807,8 @@ ID opn_dir(const char *path)
     Volume *v = g_sys_vol;
     if (path && strncmp(path, "/ANDERS", 7) == 0 && g_anders_vol) {
         v = g_anders_vol;
+    } else if (path && (strncmp(path, "/CHOKANJI", 9) == 0 || strncmp(path, "/B-right", 8) == 0) && g_chokanji_vol) {
+        v = g_chokanji_vol;
     }
     for (int i = 0; i < 16; i++) {
         if (!g_dir_used[i]) {
@@ -642,27 +829,51 @@ ER rd_dir(ID dir_id, DIR_ENTRY *entry)
     if (!v) return (ER)-1;
 
     UW nfmax = vol_nfmax(v);
+    UW bsize = vol_block_size(v);
+    unsigned char *buf = (unsigned char *)malloc(bsize);
+    if (!buf) return (ER)-1;
+    int is_bv = vol_is_brightv(v);
+
     while (g_dirs[slot].next_fid < nfmax) {
         FID fid = g_dirs[slot].next_fid++;
         if (vol_fid_refcount(v, fid) == 0 && fid != FID_ROOT) continue;
         BLK hblk = vol_fid_get_blk(v, fid);
         if (hblk == 0 || hblk == FID_INVALID) continue;
 
-        unsigned char buf[BTRON_BLOCK_SIZE];
         if (vol_read_blk(v, hblk, buf) != 0) continue;
 
         entry->robj_id = (ID)fid;
-        entry->attr    = ((UW)buf[0] << 8) | buf[1]; /* flags BE */
-        entry->size    = ((UW)buf[28] << 24) | ((UW)buf[29] << 16) |
-                         ((UW)buf[30] << 8)  | buf[31];
-        char nm[41];
-        memcpy(nm, buf + 32, 40);
-        nm[40] = '\0';
-        int ni = 0;
-        while (nm[ni] && ni < 63) { entry->name[ni] = nm[ni]; ni++; }
-        entry->name[ni] = '\0';
+        if (is_bv) {
+            if (memcmp(buf, "Tron", 4) != 0 && memcmp(buf, "norT", 4) != 0)
+                continue;
+            entry->attr = rd_u16_le(buf + 4);
+            entry->size = rd_u32_le(buf + 0x48);
+            UH tc[20];
+            for (int k = 0; k < 16; k++) {
+                tc[k] = rd_u16_le(buf + 0x6C + k * 2);
+            }
+            tc[16] = 0;
+            char nm[64];
+            btr_tcode_to_utf8(tc, 16, nm, sizeof(nm));
+            if (!nm[0]) continue;
+            int ni = 0;
+            while (nm[ni] && ni < 63) { entry->name[ni] = nm[ni]; ni++; }
+            entry->name[ni] = '\0';
+        } else {
+            entry->attr = ((UW)buf[0] << 8) | buf[1]; /* flags BE */
+            entry->size = ((UW)buf[28] << 24) | ((UW)buf[29] << 16) |
+                          ((UW)buf[30] << 8)  | buf[31];
+            char nm[41];
+            memcpy(nm, buf + 32, 40);
+            nm[40] = '\0';
+            int ni = 0;
+            while (nm[ni] && ni < 63) { entry->name[ni] = nm[ni]; ni++; }
+            entry->name[ni] = '\0';
+        }
+        free(buf);
         return (ER)0;
     }
+    free(buf);
     return (ER)1; /* E_EOF / end of directory */
 }
 
@@ -732,13 +943,14 @@ ER del_lnk(const char *link_path)
 /* ── ref_vol ─────────────────────────────────────────────────────── */
 ER ref_vol(ID vol_id, VOL_INFO *info)
 {
-    (void)vol_id;
     Volume *v = g_sys_vol;
+    if (vol_id == 1 && g_anders_vol) v = g_anders_vol;
+    else if (vol_id == 2 && g_chokanji_vol) v = g_chokanji_vol;
     if (!v || !info) return (ER)-1;
-    info->vol_id      = 0;
+    info->vol_id       = vol_id;
     info->total_blocks = vol_total_blocks(v);
     info->free_blocks  = vol_free_blocks(v);
-    info->block_size   = BTRON_BLOCK_SIZE;
+    info->block_size   = vol_block_size(v);
     {
         const char *nm = vol_name(v);
         unsigned int i = 0;

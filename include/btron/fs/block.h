@@ -71,6 +71,33 @@ void blk_destroy(BlkDev *dev);
  */
 void blk_file_close(BlkDev *dev);
 
+/*
+ * blk_qcow2_create — QEMU QCOW2 v3 image block backend (read-write).
+ *   path      : file path to the .qcow2 image
+ *   read_only : 1 for read-only, 0 for read-write
+ * Returns a heap-allocated BlkDev with 512-byte sectors, or NULL on error.
+ */
+BlkDev *blk_qcow2_create(const char *path, int read_only);
+void    blk_qcow2_close(BlkDev *dev);
+
+/*
+ * blk_partition_create — Partition / slice wrapper over a base BlkDev.
+ *   parent     : underlying block device (e.g. disk or qcow2 image)
+ *   start_lba  : starting sector/block on the parent device (in parent block units)
+ *   nblocks    : length of partition in new block units
+ *   block_size : block size for this partition (e.g. 1024 or 8192)
+ * Returns a heap-allocated BlkDev, or NULL on error.
+ */
+BlkDev *blk_partition_create(BlkDev *parent, UW start_lba, UW nblocks, UW block_size);
+
+/*
+ * blk_mbr_find_btron_partition — Scan MBR on dev for type 0x13 (BTRON / B-right/V).
+ * If found, creates a partition BlkDev adjusted for the 8-sector VBR offset,
+ * using the specified filesystem logical block size (e.g. 8192 or 1024).
+ * Returns the partition BlkDev, or NULL if not found / on error.
+ */
+BlkDev *blk_mbr_find_btron_partition(BlkDev *dev, UW fs_block_size);
+
 #ifdef __cplusplus
 }
 #endif

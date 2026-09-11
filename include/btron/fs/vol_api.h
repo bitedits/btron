@@ -33,6 +33,7 @@ typedef struct Volume Volume;
  */
 extern Volume *g_sys_vol;
 extern Volume *g_anders_vol;
+extern Volume *g_chokanji_vol;
 
 /*
  * g_cwd_path — current working path (UTF-8), updated by clu_cd.
@@ -96,6 +97,20 @@ UW vol_nfmax(const Volume *v);
  * vol_name — return pointer to the UTF-8 volume name (NUL-terminated).
  */
 const char *vol_name(const Volume *v);
+
+/*
+ * vol_block_size — return logical block size in bytes (e.g. 1024 or 8192).
+ */
+UW vol_block_size(const Volume *v);
+
+/*
+ * vol_is_brightv — returns 1 if volume is B-right/V format, 0 otherwise.
+ */
+int vol_is_brightv(const Volume *v);
+
+/* TRON Code <-> UTF-8 transcoding */
+void btr_tcode_to_utf8(const UH *tc, int max_tcs, char *utf8, int max_bytes);
+void btr_utf8_to_tcode(const char *utf8, UH *tc, int max_tcs);
 
 /* ── Internal helpers (used by file.c; not for application code) ── */
 BLK  vol_alloc_block(Volume *v);

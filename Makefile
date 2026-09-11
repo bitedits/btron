@@ -35,7 +35,7 @@ CFLAGS ?= -O2 -Wall -Wextra -std=c99 -Iinclude -Iinclude/drivers -Isrc/kernel -I
 
 .PHONY: all posix qemu kernel tkernel sakamura foma uefi pc98 arm-elf arm64-elf m68k ps2 mips \
         html2tad book2tad tad_bin test test-kernel test-yoko test-yoko4 test-m68k test-mips test-ps2 test-foma test-foma-ui foma-screens \
-        test-mozc test-editor test-hmi test-tad test-chat test-wylie verify test-fs \
+        test-mozc test-editor test-hmi test-tad test-chat test-wylie verify test-fs test-chokanji \
         mkbtronfs btron_sys.vol \
         run-posix run-qemu run-kernel run-yoko run-yoko4 run-sakamura run-foma run-uefi run-eufi run-uefu run-pc98 run-m68k run-ps2 run-mips debug-virtio debug-gdb clean
 
@@ -177,6 +177,8 @@ COMMON_SRCS = src/graphics/dp_core.c   \
               $(IME_SRCS)              \
               src/fs/blk_mem.c         \
               src/fs/blk_file.c        \
+              src/fs/blk_qcow2.c       \
+              src/fs/blk_part.c        \
               src/fs/vol.c             \
               src/fs/file.c            \
               src/apps/clu.c
@@ -409,7 +411,7 @@ run-sakamura: $(SAKAMURA_TARGET) btron_sys.vol btron_anders.vol
 # ══════════════════════════════════════════════════════════════════════
 # FS Library (host/POSIX build) — blk_mem, blk_file, vol, file, clu
 # ══════════════════════════════════════════════════════════════════════
-FS_SRCS  = src/fs/blk_mem.c src/fs/blk_file.c src/fs/vol.c src/fs/file.c
+FS_SRCS  = src/fs/blk_mem.c src/fs/blk_file.c src/fs/blk_qcow2.c src/fs/blk_part.c src/fs/vol.c src/fs/file.c
 FS_OBJS  = $(FS_SRCS:.c=.host.o)
 
 %.host.o: %.c
@@ -441,6 +443,15 @@ $(TEST_FS_BIN): verify/tests/test_fs.c $(FS_OBJS) src/apps/clu.host.o
 test-fs: $(TEST_FS_BIN) btron_sys.vol
 	./$(TEST_FS_BIN)
 	@echo "[FS] All FS tests passed."
+
+# ── Cho-Kanji (B-right/V 4.02) QCOW2 tests ───────────────────────────
+TEST_CHOKANJI_BIN = verify/tests/test_chokanji
+$(TEST_CHOKANJI_BIN): verify/tests/test_chokanji.c $(FS_OBJS) src/apps/clu.host.o
+	$(CC) $(CFLAGS) -Isrc $^ -o $@
+
+test-chokanji: $(TEST_CHOKANJI_BIN)
+	./$(TEST_CHOKANJI_BIN)
+	@echo "[CHOKANJI] All Cho-Kanji tests passed."
 
 # ═══════════════════════════════════════════════════════════════════
 # QEMU VirtIO Desktop

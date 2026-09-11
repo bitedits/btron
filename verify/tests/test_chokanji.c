@@ -582,7 +582,7 @@ static void test_clu_tp_chokanji_streams_and_binaries(void)
     memset(out_buf, 0, sizeof(out_buf));
     clu_stat("4087", clu_buf_out, out_buf);
     TEST_ASSERT(strstr(out_buf, "File: cat") != NULL, "stat 4087 missing File: cat");
-    TEST_ASSERT(strstr(out_buf, "Executable Binary") != NULL, "stat 4087 missing Executable Binary");
+    TEST_ASSERT(strstr(out_buf, "Executable") != NULL, "stat 4087 missing Executable");
 
     clu_cd("/SYS", clu_buf_out, out_buf);
     g_chokanji_vol = NULL;

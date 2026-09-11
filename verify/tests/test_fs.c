@@ -634,12 +634,36 @@ static void test_clu_fs_inspection(void)
     CHECK(v != NULL, "vol_mount");
     g_sys_vol = v;
 
-    /* Create Chapter 1 with 1 data record */
+    /* Create Chapter 1 with 1 data record and 1 link to Section 1.1 */
     ID f1 = cre_fil("Chapter 1", 0x0002);
     CHECK(f1 >= 0, "cre_fil Chapter 1");
     const char *chap_data = "Chapter 1 Introduction Text";
     CHECK(ins_rec(f1, 0, chap_data, (W)strlen(chap_data)) == 0, "ins_rec chap");
     fil_set_rec_type(f1, 0, RT_TADDATA);
+
+    /* Create child Section 1.1 */
+    ID f_sec = cre_fil("Section 1.1", 0x0002);
+    CHECK(f_sec >= 0, "cre_fil Section 1.1");
+    const char *sec_data = "Section 1.1 text";
+    CHECK(ins_rec(f_sec, 0, sec_data, (W)strlen(sec_data)) == 0, "ins_rec sec");
+    fil_set_rec_type(f_sec, 0, RT_TADDATA);
+    FID fid_sec = g_open_files[(int)f_sec].fid;
+    cls_fil(f_sec);
+
+    /* Link Section 1.1 into Chapter 1 */
+    unsigned char sbuf[16 + 40] = {0};
+    sbuf[0] = (unsigned char)(fid_sec >> 24);
+    sbuf[1] = (unsigned char)(fid_sec >> 16);
+    sbuf[2] = (unsigned char)(fid_sec >> 8);
+    sbuf[3] = (unsigned char)(fid_sec);
+    const char *sname = "Section 1.1";
+    unsigned int slen = (unsigned int)strlen(sname);
+    sbuf[14] = (unsigned char)(slen >> 8);
+    sbuf[15] = (unsigned char)(slen);
+    memcpy(sbuf + 16, sname, slen);
+    CHECK(ins_rec(f1, 1, sbuf, (W)(16 + slen)) == 0, "ins link to Chapter 1");
+    fil_set_rec_type(f1, 1, RT_LINK);
+
     FID fid1 = g_open_files[(int)f1].fid;
     cls_fil(f1);
 
@@ -705,25 +729,26 @@ static void test_clu_fs_inspection(void)
     }
     CHECK(found_data_rec, "fs -l \"Chapter 1\" did not show (data record)");
 
-    /* 5. fs -r recursive on root: must list Chapter 1 and recurse into Chapter 1 data record */
+    /* 5. fs -r recursive on root: must list Chapter 1 and recurse into Section 1.1 */
     memset(&cb, 0, sizeof(cb));
     clu_fs_cmd("-r", capture_fn, &cb);
-    int found_r_chap = 0, found_r_subhdr = 0;
+    int found_r_chap = 0, found_r_sec = 0;
     for (int i = 0; i < cb.n; i++) {
         if (strstr(cb.lines[i], "Chapter 1")) found_r_chap = 1;
-        if (strstr(cb.lines[i], "[Chapter 1]")) found_r_subhdr = 1;
+        if (strstr(cb.lines[i], "Section 1.1")) found_r_sec = 1;
     }
     CHECK(found_r_chap, "fs -r did not list Chapter 1");
-    CHECK(found_r_subhdr, "fs -r did not recurse into Chapter 1");
+    CHECK(found_r_sec, "fs -r did not recurse into Chapter 1 to list Section 1.1");
 
     /* 6. fs -l -r recursive with details */
     memset(&cb, 0, sizeof(cb));
     clu_fs_cmd("-l -r", capture_fn, &cb);
-    int found_lr_data = 0;
+    int found_lr_sec = 0;
     for (int i = 0; i < cb.n; i++) {
-        if (strstr(cb.lines[i], "(data record)")) found_lr_data = 1;
+        if (strstr(cb.lines[i], "Section 1.1") && strstr(cb.lines[i], "[0000 0000 0000 0000 0000]"))
+            found_lr_sec = 1;
     }
-    CHECK(found_lr_data, "fs -l -r did not display data record of child");
+    CHECK(found_lr_sec, "fs -l -r did not display Section 1.1 with attributes");
 
     vol_umount(v);
     g_sys_vol = NULL;

@@ -70,12 +70,17 @@ ls    – List files (Real Bodies)
   -F         : mark files on other/unmounted volumes with *
   -f         : (additional flag)
 
-fs    – Show record structure of a file
-  fs [-l] [<path>...]
+fs    – Show record structure of a file or subdirectory tree
+  fs [-l][-r] [<path>...]
+
+  Options:
+    -l    detailed listing with FID and attributes
+    -r    recursive listing of subdirectory tree (drawers / containers)
 
   Normal form:
     NO: TYPE STYPE : SIZE          (data record)
     NO: 0    STYPE : NAME          (link record)
+    (Columned one-liners; indentation indicates subdirectory depth)
 
   -l form (link records):
     NO: 0 STYPE : FID [ATR1 ATR2 ATR3 ATR4 ATR5] : NAME
@@ -299,6 +304,16 @@ NO: TYPE STYPE : SIZE / NAME
 NO: 0 STYPE : FID [ATR1 .. ATR5] : NAME
 0:  0 0000  : 50  [0000 0000 0000 0000 0000] : Figure 12
 1:  1 0000  :     (TAD data)
+
+[Book1]% fs -r
+NO: TYPE STYPE : SIZE / NAME
+0:  0    0000  : Chapter 1
+0:  0    0000  :   Figure 12
+1:  0    0000  : Chapter 2
+2:  0    0000  : Chapter 3
+3:  0    0000  : Figure 12
+4:  0    0000  : RootCA.der
+5:  1    0000  : 18420          (TAD main)
 ```
 
 Content display (tp)

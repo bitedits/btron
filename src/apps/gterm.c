@@ -127,6 +127,10 @@ typedef struct {
     int   cursor_style;    /* 0=underline, 1=block, 2=bar */
     int   transparency;    /* 0=opaque, 1=80%, 2=60% */
     int   scrollback_max;  /* Max scroll-back lines */
+    int   scroll_offset;   /* Number of lines scrolled up from bottom (0 = bottom) */
+    BOOL  sb_dragging;     /* True while dragging scrollbar thumb */
+    int   sb_drag_start_y; /* Initial mouse Y when dragging thumb */
+    int   sb_drag_start_offset; /* Initial scroll_offset when dragging */
 } GTermState;
 
 void gterm_append_line(GTermState *st, const char *text, COLOR col);
@@ -723,7 +727,9 @@ static void gterm_execute_cmd(WND *wnd, GTermState *st, const char *cmd_line) {
         }
     } else if (strcmp(cmd_line, "clear") == 0 || strcmp(cmd_line, "cls") == 0) {
         st->total_lines = 0;
+        st->scroll_offset = 0;
     } else {
+        st->scroll_offset = 0;
         shell_execute_cmd(cmd_line, gterm_shell_out, st, wnd);
     }
 }
@@ -881,15 +887,46 @@ static void handle_gterm_event(WND *wnd, const EVT *evt) {
     H rel_x = evt->pos.x - wnd->client.left;
     H rel_y = evt->pos.y - wnd->client.top;
 
-    /* ── Mouse Move: forward to menu bar ─────────────────────────────────── */
+    /* ── Mouse Up: release scrollbar drag ────────────────────────────────── */
+    if (evt->type == EV_BUT_UP) {
+        if (st->sb_dragging) {
+            st->sb_dragging = FALSE;
+            return;
+        }
+    }
+
+    /* ── Mouse Move: scrollbar dragging first, then menu bar ─────────────── */
     if (evt->type == EV_MOUSE_MOVE) {
+        if (st->sb_dragging) {
+            int row_h = (st->font_size >= 12 && st->font_size <= 20) ? st->font_size : 16;
+            int cli_h = wnd->client.bottom - wnd->client.top;
+            int canvas_top = APP_MENU_BAR_HEIGHT + 2;
+            int max_disp_rows = (cli_h - canvas_top - row_h - 4) / row_h;
+            if (max_disp_rows < 3) max_disp_rows = 3;
+            int max_scroll = (st->total_lines > max_disp_rows) ? (st->total_lines - max_disp_rows) : 0;
+            int sb_h = cli_h - canvas_top - 2;
+            int track_h = sb_h - 32;
+            int thumb_h = (max_scroll > 0 && st->total_lines > 0) ? ((max_disp_rows * track_h) / st->total_lines) : track_h;
+            if (thumb_h < 14) thumb_h = 14;
+            if (thumb_h > track_h) thumb_h = track_h;
+            int travel = track_h - thumb_h;
+            if (travel > 0 && max_scroll > 0) {
+                int dy = rel_y - st->sb_drag_start_y;
+                int delta_lines = (dy * max_scroll) / travel;
+                st->scroll_offset = st->sb_drag_start_offset - delta_lines;
+                if (st->scroll_offset < 0) st->scroll_offset = 0;
+                if (st->scroll_offset > max_scroll) st->scroll_offset = max_scroll;
+                inval_wnd(wnd);
+            }
+            return;
+        }
         if (st->menu_bar.header_count > 0) {
             app_menu_handle_mouse_move(&st->menu_bar, rel_x, rel_y);
         }
         return;
     }
 
-    /* ── Mouse Down: menu first, then terminal area ───────────────────────── */
+    /* ── Mouse Down: menu first, then scrollbar, then terminal canvas ─────── */
     if (evt->type == EV_BUT_DOWN) {
         if (st->menu_bar.header_count > 0) {
             int cmd = 0, sub_idx = -1;
@@ -904,6 +941,57 @@ static void handle_gterm_event(WND *wnd, const EVT *evt) {
         if (st->menu_bar.active_menu >= 0) {
             app_menu_close(&st->menu_bar);
         }
+
+        /* Check click in right-side vertical scroll bar */
+        int row_h = (st->font_size >= 12 && st->font_size <= 20) ? st->font_size : 16;
+        int cli_w = wnd->client.right - wnd->client.left;
+        int cli_h = wnd->client.bottom - wnd->client.top;
+        int canvas_top = APP_MENU_BAR_HEIGHT + 2;
+        int sb_w = 16;
+        int sb_x = cli_w - sb_w;
+        int sb_y = canvas_top;
+        int sb_h = cli_h - canvas_top - 2;
+
+        if (rel_x >= sb_x && rel_x < cli_w && rel_y >= sb_y && rel_y < sb_y + sb_h) {
+            int max_disp_rows = (cli_h - canvas_top - row_h - 4) / row_h;
+            if (max_disp_rows < 3) max_disp_rows = 3;
+            int max_scroll = (st->total_lines > max_disp_rows) ? (st->total_lines - max_disp_rows) : 0;
+
+            if (rel_y < sb_y + 16) {
+                /* Clicked Up arrow button */
+                st->scroll_offset += 3;
+            } else if (rel_y >= sb_y + sb_h - 16) {
+                /* Clicked Down arrow button */
+                st->scroll_offset -= 3;
+            } else {
+                /* Clicked on track or thumb */
+                int track_top = sb_y + 16;
+                int track_h = sb_h - 32;
+                int thumb_h = (max_scroll > 0 && st->total_lines > 0) ? ((max_disp_rows * track_h) / st->total_lines) : track_h;
+                if (thumb_h < 14) thumb_h = 14;
+                if (thumb_h > track_h) thumb_h = track_h;
+                int thumb_y = (max_scroll > 0) ? (track_top + ((max_scroll - st->scroll_offset) * (track_h - thumb_h)) / max_scroll) : track_top;
+
+                if (rel_y < thumb_y) {
+                    /* Page Up */
+                    st->scroll_offset += (max_disp_rows - 1);
+                } else if (rel_y >= thumb_y + thumb_h) {
+                    /* Page Down */
+                    st->scroll_offset -= (max_disp_rows - 1);
+                } else {
+                    /* Clicked inside thumb: begin dragging */
+                    st->sb_dragging = TRUE;
+                    st->sb_drag_start_y = rel_y;
+                    st->sb_drag_start_offset = st->scroll_offset;
+                }
+            }
+
+            if (st->scroll_offset < 0) st->scroll_offset = 0;
+            if (st->scroll_offset > max_scroll) st->scroll_offset = max_scroll;
+            inval_wnd(wnd);
+            return;
+        }
+
         return;
     }
 
@@ -958,8 +1046,60 @@ static void handle_gterm_event(WND *wnd, const EVT *evt) {
 
         UW sym = key_code;
 
+        /* Page Up / Page Down history scrolling controls */
+        if (sym == BTRON_KEY_PAGE_UP) {
+            int row_h = (st->font_size >= 12 && st->font_size <= 20) ? st->font_size : 16;
+            int cli_h = wnd->client.bottom - wnd->client.top;
+            int max_disp_rows = (cli_h - (APP_MENU_BAR_HEIGHT + 2) - row_h - 4) / row_h;
+            if (max_disp_rows < 3) max_disp_rows = 3;
+            int max_scroll = (st->total_lines > max_disp_rows) ? (st->total_lines - max_disp_rows) : 0;
+            st->scroll_offset += (max_disp_rows - 1);
+            if (st->scroll_offset > max_scroll) st->scroll_offset = max_scroll;
+            inval_wnd(wnd);
+            return;
+        } else if (sym == BTRON_KEY_PAGE_DOWN) {
+            int row_h = (st->font_size >= 12 && st->font_size <= 20) ? st->font_size : 16;
+            int cli_h = wnd->client.bottom - wnd->client.top;
+            int max_disp_rows = (cli_h - (APP_MENU_BAR_HEIGHT + 2) - row_h - 4) / row_h;
+            if (max_disp_rows < 3) max_disp_rows = 3;
+            st->scroll_offset -= (max_disp_rows - 1);
+            if (st->scroll_offset < 0) st->scroll_offset = 0;
+            inval_wnd(wnd);
+            return;
+        } else if ((mod & BTRON_KMOD_SHIFT) && sym == BTRON_KEY_UP) {
+            int row_h = (st->font_size >= 12 && st->font_size <= 20) ? st->font_size : 16;
+            int cli_h = wnd->client.bottom - wnd->client.top;
+            int max_disp_rows = (cli_h - (APP_MENU_BAR_HEIGHT + 2) - row_h - 4) / row_h;
+            if (max_disp_rows < 3) max_disp_rows = 3;
+            int max_scroll = (st->total_lines > max_disp_rows) ? (st->total_lines - max_disp_rows) : 0;
+            if (st->scroll_offset < max_scroll) {
+                st->scroll_offset++;
+                inval_wnd(wnd);
+            }
+            return;
+        } else if ((mod & BTRON_KMOD_SHIFT) && sym == BTRON_KEY_DOWN) {
+            if (st->scroll_offset > 0) {
+                st->scroll_offset--;
+                inval_wnd(wnd);
+            }
+            return;
+        } else if ((mod & BTRON_KMOD_SHIFT) && sym == BTRON_KEY_HOME) {
+            int row_h = (st->font_size >= 12 && st->font_size <= 20) ? st->font_size : 16;
+            int cli_h = wnd->client.bottom - wnd->client.top;
+            int max_disp_rows = (cli_h - (APP_MENU_BAR_HEIGHT + 2) - row_h - 4) / row_h;
+            if (max_disp_rows < 3) max_disp_rows = 3;
+            st->scroll_offset = (st->total_lines > max_disp_rows) ? (st->total_lines - max_disp_rows) : 0;
+            inval_wnd(wnd);
+            return;
+        } else if ((mod & BTRON_KMOD_SHIFT) && sym == BTRON_KEY_END) {
+            st->scroll_offset = 0;
+            inval_wnd(wnd);
+            return;
+        }
+
         /* Non-printable navigation & action keys */
         if (sym == BTRON_KEY_RETURN || sym == BTRON_KEY_KP_ENTER || sym == '\r' || sym == '\n') {
+            st->scroll_offset = 0;
             gterm_execute_cmd(wnd, st, st->input_buf);
             st->input_buf[0] = '\0';
             st->input_len = 0;
@@ -1002,6 +1142,7 @@ static void handle_gterm_event(WND *wnd, const EVT *evt) {
 
         /* Direct English / Printable ASCII Text Input */
         if (!ctrl && sym >= 32 && sym <= 126) {
+            st->scroll_offset = 0;
             char ch = get_ascii_char_with_shift((UW)sym, mod);
             if (st->input_len < GTERM_MAX_COLS - (int)strlen(st->prompt) - 2) {
                 st->input_buf[st->input_len++] = ch;
@@ -1043,13 +1184,25 @@ static void paint_gterm(WND *wnd, GDEV *dev) {
     int max_disp_rows = (dev->height - canvas_top - row_h - 4) / row_h;
     if (max_disp_rows < 3) max_disp_rows = 3;
 
+    int max_scroll = (st->total_lines > max_disp_rows) ? (st->total_lines - max_disp_rows) : 0;
+    if (st->scroll_offset > max_scroll) st->scroll_offset = max_scroll;
+    if (st->scroll_offset < 0) st->scroll_offset = 0;
+
     int start_line = 0;
     if (st->total_lines > max_disp_rows) {
-        start_line = st->total_lines - max_disp_rows;
+        start_line = (st->total_lines - max_disp_rows) - st->scroll_offset;
+        if (start_line < 0) start_line = 0;
     }
+    int end_line = start_line + max_disp_rows;
+    if (end_line > st->total_lines) end_line = st->total_lines;
+
+    int sb_w = 16;
+    int sb_x = dev->width - sb_w;
+    int sb_y = canvas_top;
+    int sb_h = dev->height - canvas_top - 2;
 
     int y = canvas_top + 2;
-    for (int i = start_line; i < st->total_lines; i++) {
+    for (int i = start_line; i < end_line; i++) {
         COLOR col = st->line_cols[i];
         if (col == 0) col = eff_fg;
         drw_tc_string(dev, 8, y, st->lines[i], col, eff_bg);
@@ -1057,23 +1210,80 @@ static void paint_gterm(WND *wnd, GDEV *dev) {
     }
 
     /* ── 4. Prompt line with TIP inline preview and cursor ─────────────── */
+    int prompt_y = canvas_top + 2 + max_disp_rows * row_h;
     char prompt_line[300];
     snprintf(prompt_line, sizeof(prompt_line), "%s%s", st->prompt, st->input_buf);
-    drw_tc_string(dev, 8, y, prompt_line, eff_fg, eff_bg);
+    drw_tc_string(dev, 8, prompt_y, prompt_line, eff_fg, eff_bg);
+
+    /* Scrolled indicator badge */
+    if (st->scroll_offset > 0) {
+        char s_ind[32];
+        snprintf(s_ind, sizeof(s_ind), "[▲ -%d PgUp/PgDn]", st->scroll_offset);
+        drw_tc_string(dev, sb_x - 140, canvas_top + 2, s_ind, COLOR_YELLOW, eff_bg);
+    }
+
+    /* ── 4b. Default Vertical Scroll Bar (Right Margin) ─────────────────── */
+    if (sb_h > 24) {
+        /* Track background */
+        RECT sb_bg = { sb_x, sb_y, sb_x + sb_w, sb_y + sb_h };
+        fill_rec(dev, &sb_bg, COLOR_LTGRAY);
+        drw_lin(dev, sb_x, sb_y, sb_x, sb_y + sb_h);
+
+        /* Up arrow button */
+        RECT up_btn = { sb_x, sb_y, sb_x + sb_w, sb_y + 16 };
+        fill_rec(dev, &up_btn, COLOR_LTGRAY);
+        drw_rec(dev, &up_btn);
+        drw_lin(dev, sb_x + 1, sb_y + 1, sb_x + sb_w - 2, sb_y + 1);
+        drw_lin(dev, sb_x + 8, sb_y + 4, sb_x + 4, sb_y + 11);
+        drw_lin(dev, sb_x + 8, sb_y + 4, sb_x + 12, sb_y + 11);
+        drw_lin(dev, sb_x + 4, sb_y + 11, sb_x + 12, sb_y + 11);
+
+        /* Down arrow button */
+        int dy_b = sb_y + sb_h - 16;
+        RECT dn_btn = { sb_x, dy_b, sb_x + sb_w, sb_y + sb_h };
+        fill_rec(dev, &dn_btn, COLOR_LTGRAY);
+        drw_rec(dev, &dn_btn);
+        drw_lin(dev, sb_x + 1, dy_b + 1, sb_x + sb_w - 2, dy_b + 1);
+        drw_lin(dev, sb_x + 4, dy_b + 5, sb_x + 12, dy_b + 5);
+        drw_lin(dev, sb_x + 4, dy_b + 5, sb_x + 8, dy_b + 12);
+        drw_lin(dev, sb_x + 12, dy_b + 5, sb_x + 8, dy_b + 12);
+
+        /* Thumb / Elevator */
+        int track_top = sb_y + 16;
+        int track_h = sb_h - 32;
+        if (track_h > 10) {
+            int thumb_h;
+            int thumb_y;
+            if (max_scroll > 0) {
+                thumb_h = (max_disp_rows * track_h) / (st->total_lines ? st->total_lines : 1);
+                if (thumb_h < 14) thumb_h = 14;
+                if (thumb_h > track_h) thumb_h = track_h;
+                thumb_y = track_top + ((max_scroll - st->scroll_offset) * (track_h - thumb_h)) / max_scroll;
+            } else {
+                thumb_h = track_h;
+                thumb_y = track_top;
+            }
+            RECT thumb_r = { sb_x + 1, thumb_y, sb_x + sb_w - 1, thumb_y + thumb_h };
+            fill_rec(dev, &thumb_r, COLOR_GRAY);
+            drw_rec(dev, &thumb_r);
+            drw_lin(dev, sb_x + 2, thumb_y + 1, sb_x + sb_w - 3, thumb_y + 1);
+            drw_lin(dev, sb_x + 2, thumb_y + 1, sb_x + 2, thumb_y + thumb_h - 2);
+        }
+    }
 
     int prompt_pixel_w = 8 + gterm_calc_text_pixel_width(prompt_line);
     if (wnd->focused && tip_get_state() != TIP_STATE_IDLE) {
         char comp_buf[128];
         tip_get_converted_text(comp_buf, sizeof(comp_buf));
         BOOL is_dotted = (tip_get_state() == TIP_STATE_PRECOMP);
-        drw_tc_string_underlined(dev, prompt_pixel_w, y, comp_buf, COLOR_CYAN, eff_bg, is_dotted);
-        tip_set_caret_pos(wnd->bounds.left + prompt_pixel_w, wnd->bounds.top + y);
+        drw_tc_string_underlined(dev, prompt_pixel_w, prompt_y, comp_buf, COLOR_CYAN, eff_bg, is_dotted);
+        tip_set_caret_pos(wnd->bounds.left + prompt_pixel_w, wnd->bounds.top + prompt_y);
     } else if (wnd->focused) {
         /* Cursor shape: underline '_', block '█', or bar '|' */
         const char *cursor_glyph = (st->cursor_style == 1) ? "\xe2\x96\x88" /* █ */
                                  : (st->cursor_style == 2) ? "|"
                                  :                            "_";
-        drw_tc_string(dev, prompt_pixel_w, y, cursor_glyph, eff_fg, eff_bg);
+        drw_tc_string(dev, prompt_pixel_w, prompt_y, cursor_glyph, eff_fg, eff_bg);
     }
 
     /* ── 5. Dropdown overlay (drawn on top of everything) ──────────────── */

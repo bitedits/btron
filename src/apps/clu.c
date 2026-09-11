@@ -323,6 +323,15 @@ void clu_ls(const char *args, ShellOutputFn out, void *ud)
 }
 
 /* ── clu_fs_cmd helpers ──────────────────────────────────────────── */
+static int clu_of_has_links(OpenFile *of)
+{
+    if (!of) return 0;
+    for (unsigned int i = 0; i < of->nrec; i++) {
+        if (of->ridx[i].type == RT_LINK) return 1;
+    }
+    return 0;
+}
+
 typedef struct {
     char name[48];
     unsigned int fid;
@@ -461,7 +470,10 @@ static void clu_fs_dump_records(Volume *v, ID fd, const char *parent_name, int d
             if (links[p].fid < 256 && visited[links[p].fid]) continue;
             ID child_fd = opn_fil(links[p].name, 0x0001);
             if (child_fd >= 0) {
-                clu_fs_dump_records(v, child_fd, links[p].name, depth + 1, flag_l, flag_r, visited, out, ud);
+                OpenFile *child_of = &g_open_files[(int)child_fd];
+                if (clu_of_has_links(child_of)) {
+                    clu_fs_dump_records(v, child_fd, links[p].name, depth + 1, flag_l, flag_r, visited, out, ud);
+                }
                 cls_fil(child_fd);
             }
         }

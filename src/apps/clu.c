@@ -223,6 +223,59 @@ void clu_cd(const char *args, ShellOutputFn out, void *ud)
     out(msg, COLOR_GREEN, ud);
 }
 
+/* ── File kind probing (for ls/fs coloring) ─────────────────────── */
+/*
+ * clu_probe_kind — inspects the first block of a Real Body by FID.
+ * Returns:
+ *   2  = ELF executable  (\x7fELF magic at start, or after 192-byte BTRON hdr)
+ *   1  = BTRON executable (OBJ_EXEC flag set in FileHeader.flags)
+ *   0  = regular file / directory container
+ */
+static int clu_probe_kind(Volume *v, unsigned int fid) {
+    if (!v || fid == FID_INVALID) return 0;
+    BLK blk = vol_fid_get_blk(v, (FID)fid);
+    if (blk == 0 || blk == FID_INVALID) return 0;
+    UW bsz = vol_block_size(v);
+    unsigned char *buf = (unsigned char *)malloc(bsz);
+    if (!buf) return 0;
+    int kind = 0;
+    if (vol_read_blk(v, blk, buf) == 0) {
+        /* ELF magic: 0x7F 'E' 'L' 'F' at offset 0 (raw ELF image) */
+        if (buf[0] == 0x7F && buf[1] == 0x45 && buf[2] == 0x4C && buf[3] == 0x46) {
+            kind = 2;
+        /* ELF embedded after 192-byte BTRON FileHeader */
+        } else if (bsz > 196 &&
+                   buf[0xC0] == 0x7F && buf[0xC1] == 0x45 &&
+                   buf[0xC2] == 0x4C && buf[0xC3] == 0x46) {
+            kind = 2;
+        } else {
+            /* OBJ_EXEC flag in FileHeader flags word */
+            unsigned short fhflags;
+            int is_bv = vol_is_brightv(v);
+            if (is_bv)
+                fhflags = (unsigned short)(buf[4] | ((unsigned short)buf[5] << 8)); /* LE */
+            else
+                fhflags = (unsigned short)(((unsigned short)buf[0] << 8) | buf[1]); /* BE */
+            if (fhflags & OBJ_EXEC)
+                kind = 1;
+        }
+    }
+    free(buf);
+    return kind;
+}
+
+/* Pick output color from probe result:
+ *   kind==2  → ELF     → bright green  (like Unix ls --color exec)
+ *   kind==1  → BTRON x → bright green
+ *   is_link  → symlink → cyan          (like Unix ls --color symlink)
+ *   else     → regular → light gray
+ */
+static UW clu_kind_color(int kind, int is_link) {
+    if (kind >= 1) return COLOR_GREEN;  /* ELF or OBJ_EXEC executable */
+    if (is_link)   return COLOR_CYAN;   /* RT_LINK virtual body        */
+    return COLOR_LTGRAY;
+}
+
 /* ── clu_ls ──────────────────────────────────────────────────────── */
 void clu_ls(const char *args, ShellOutputFn out, void *ud)
 {
@@ -298,6 +351,9 @@ void clu_ls(const char *args, ShellOutputFn out, void *ud)
                     }
 
                     link_count++;
+                    /* Probe target for color: ELF/exec=green, link=cyan */
+                    int lk = clu_probe_kind(ofv, (unsigned int)link_fid);
+                    UW lk_color = clu_kind_color(lk, 1 /* is_link */);
                     if (flag_l) {
                         BLK hblk = vol_fid_get_blk(ofv, link_fid);
                         UW of_bsize = vol_block_size(ofv);
@@ -321,7 +377,7 @@ void clu_ls(const char *args, ShellOutputFn out, void *ud)
                             char line[256];
                             snprintf(line, sizeof(line), "%04X  ---  1    1    %-5u %s %s",
                                      atype, tsz, mt, link_name);
-                            out(line, COLOR_LTGRAY, ud);
+                            out(line, lk_color, ud);
                             free(lhbuf);
                         }
                     } else if (flag_t) {
@@ -350,11 +406,11 @@ void clu_ls(const char *args, ShellOutputFn out, void *ud)
                             char line[256];
                             snprintf(line, sizeof(line), "%-18s %-18s %-18s %s",
                                      ct, at, mt, link_name);
-                            out(line, COLOR_LTGRAY, ud);
+                            out(line, lk_color, ud);
                             free(lhbuf);
                         }
                     } else {
-                        out(link_name, COLOR_LTGRAY, ud);
+                        out(link_name, lk_color, ud);
                     }
                 }
             }
@@ -387,13 +443,17 @@ void clu_ls(const char *args, ShellOutputFn out, void *ud)
     while (rd_dir(dir, &entry) == 0) {
         if (!entry.name[0]) continue;
 
+        /* Determine color from block data when available */
+        FID fid = (FID)entry.robj_id;
+
         if (!flag_l && !flag_t) {
-            out(entry.name, COLOR_LTGRAY, ud);
+            /* Simple name-only listing: probe kind for color */
+            int ek = clu_probe_kind(v, (unsigned int)fid);
+            out(entry.name, clu_kind_color(ek, 0), ud);
             continue;
         }
 
         /* Read full FileHeader for extra info */
-        FID fid = (FID)entry.robj_id;
         BLK hblk = vol_fid_get_blk(v, fid);
         if (hbuf && hblk != 0 && hblk != FID_INVALID) {
             if (vol_read_blk(v, hblk, hbuf) != 0) continue;
@@ -430,6 +490,12 @@ void clu_ls(const char *args, ShellOutputFn out, void *ud)
                     ((unsigned int)hbuf[30]<<8)|(unsigned int)hbuf[31];
         }
 
+        /* Color: ELF magic or OBJ_EXEC flag → green; otherwise gray */
+        int is_exec_flag = (flags & OBJ_EXEC) ? 1 : 0;
+        int is_elf_blk   = (hbuf[0] == 0x7F && hbuf[1] == 0x45 &&
+                            hbuf[2] == 0x4C && hbuf[3] == 0x46) ? 1 : 0;
+        UW entry_color = (is_exec_flag || is_elf_blk) ? COLOR_GREEN : COLOR_LTGRAY;
+
         char line[256];
         if (flag_l) {
             char mt[24]; fmt_ts(mtime, mt, sizeof(mt));
@@ -447,39 +513,13 @@ void clu_ls(const char *args, ShellOutputFn out, void *ud)
             snprintf(line, sizeof(line), "%-18s %-18s %-18s %s",
                      ct, at, mt, entry.name);
         }
-        out(line, COLOR_LTGRAY, ud);
+        out(line, entry_color, ud);
     }
     if (hbuf) free(hbuf);
     cls_dir(dir);
 }
 
-/* ── clu_fs_cmd helpers ──────────────────────────────────────────── */
-
-/* Probe a Real Body block for ELF magic (\x7fELF). Returns 1 if ELF, 0 otherwise. */
-static int clu_fs_probe_elf(Volume *v, unsigned int fid) {
-    if (!v || fid == 0 || fid == FID_INVALID) return 0;
-    BLK blk = vol_fid_get_blk(v, (FID)fid);
-    if (blk == 0 || blk == FID_INVALID) return 0;
-    unsigned char magic[4] = {0};
-    UW bsz = vol_block_size(v);
-    unsigned char *buf = (unsigned char *)malloc(bsz);
-    if (!buf) return 0;
-    int is_elf = 0;
-    if (vol_read_blk(v, blk, buf) == 0) {
-        /* ELF magic: 0x7F 'E' 'L' 'F' */
-        if (buf[0] == 0x7F && buf[1] == 0x45 && buf[2] == 0x4C && buf[3] == 0x46)
-            is_elf = 1;
-        /* Also check past TRON file header (0xC0 = 192 bytes) for embedded ELF */
-        if (!is_elf && bsz > 196) {
-            magic[0] = buf[0xC0]; magic[1] = buf[0xC1];
-            magic[2] = buf[0xC2]; magic[3] = buf[0xC3];
-            if (magic[0] == 0x7F && magic[1] == 0x45 && magic[2] == 0x4C && magic[3] == 0x46)
-                is_elf = 1;
-        }
-    }
-    free(buf);
-    return is_elf;
-}
+/* ── clu_fs_cmd helpers ─────────────────────────────────────────── */
 
 typedef struct {
     char name[48];
@@ -560,22 +600,24 @@ static void clu_fs_dump_records(Volume *v, ID fd, FID parent_fid, const char *pa
                         }
                     }
                 }
-                int is_elf = clu_fs_probe_elf(v, link_fid);
+                int lkind = clu_probe_kind(v, link_fid);
+                UW lcolor  = clu_kind_color(lkind, lkind < 1 /* is_link if not exec */);
+                const char *tag = (lkind >= 2) ? " [ELF]" : (lkind == 1 ? " [EXE]" : "");
                 if (flag_l) {
                     snprintf(line, sizeof(line),
                              "%u:  0 %04X  : %-5u %-6u [%04X %04X %04X %04X %04X] : %*s%s%s",
                              i, (unsigned)ri->flags & 0xFFFF,
                              link_fid, (unsigned)of->fid,
                              attrs[0], attrs[1], attrs[2], attrs[3], attrs[4],
-                             indent, "", link_name, is_elf ? " [ELF]" : "");
+                             indent, "", link_name, tag);
                 } else {
                     snprintf(line, sizeof(line),
                              "%u:  0    %04X  : %-5u %-6u : %*s%s%s",
                              i, (unsigned)ri->flags & 0xFFFF,
                              link_fid, (unsigned)of->fid,
-                             indent, "", link_name, is_elf ? " [ELF]" : "");
+                             indent, "", link_name, tag);
                 }
-                out(line, is_elf ? COLOR_YELLOW : COLOR_LTGRAY, ud);
+                out(line, lcolor, ud);
 
                 /* Recurse depth-first into child Virtual Object Real Body if -r is requested */
                 if (flag_r && depth < 16 && link_fid != 0 && link_fid != of->fid && link_fid < nfmax && !visited[link_fid]) {
@@ -660,19 +702,19 @@ static void clu_fs_dump_records(Volume *v, ID fd, FID parent_fid, const char *pa
                 FID efid = (FID)entry.robj_id;
                 if (efid == FID_ROOT && !is_bv_root) continue;
                 char line[256];
-                int is_elf2 = clu_fs_probe_elf(v, (unsigned int)efid);
+                int ekind = clu_probe_kind(v, (unsigned int)efid);
+                UW ecolor  = clu_kind_color(ekind, ekind < 1 /* is_link if not exec */);
+                const char *etag = (ekind >= 2) ? " [ELF]" : (ekind == 1 ? " [EXE]" : "");
                 if (flag_l) {
                     snprintf(line, sizeof(line),
                              "%u:  0 0000  : %-5u %-6u [0000 0000 0000 0000 0000] : %*s%s%s",
-                             idx++, (unsigned)efid, (unsigned)of->fid, indent, "", entry.name,
-                             is_elf2 ? " [ELF]" : "");
+                             idx++, (unsigned)efid, (unsigned)of->fid, indent, "", entry.name, etag);
                 } else {
                     snprintf(line, sizeof(line),
                              "%u:  0    %04X  : %-5u %-6u : %*s%s%s",
-                             idx++, 0, (unsigned)efid, (unsigned)of->fid, indent, "", entry.name,
-                             is_elf2 ? " [ELF]" : "");
+                             idx++, 0, (unsigned)efid, (unsigned)of->fid, indent, "", entry.name, etag);
                 }
-                out(line, is_elf2 ? COLOR_YELLOW : COLOR_LTGRAY, ud);
+                out(line, ecolor, ud);
 
                 /* Recurse depth-first into child Real Bodies if -r is requested */
                 if (flag_r && depth < 16 && efid != 0 && efid < nfmax && !visited[efid]) {

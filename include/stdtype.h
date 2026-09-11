@@ -21,7 +21,11 @@
 #ifndef __STDTYPE_H__
 #define __STDTYPE_H__
 
-#define __size_t	unsigned int
+#ifdef __SIZE_TYPE__
+#define __size_t        __SIZE_TYPE__
+#else
+#define __size_t        unsigned int
+#endif
 
 #ifndef	__cplusplus
 #define __wchar_t	int

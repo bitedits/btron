@@ -339,8 +339,8 @@ static void clu_buf_out(const char *msg, COLOR color, void *ud) {
     (void)color;
     char *buf = (char *)ud;
     size_t cur = strlen(buf);
-    if (cur < 260000) {
-        snprintf(buf + cur, 262144 - cur, "%s\n", msg);
+    if (cur < 500000) {
+        snprintf(buf + cur, 524288 - cur, "%s\n", msg);
     }
 }
 
@@ -409,12 +409,27 @@ static void test_clu_integration(void)
     clu_fs_cmd("-r", clu_buf_out, fs_r_buf);
     clu_fs_cmd("-l", clu_buf_out, fs_l_buf);
 
-    static char fs_a_buf[131072];
+    static char fs_a_buf[524288];
     memset(fs_a_buf, 0, sizeof(fs_a_buf));
     clu_fs_cmd("-a", clu_buf_out, fs_a_buf);
     TEST_ASSERT(strstr(fs_a_buf, "Real Bodies on") != NULL, "fs -a must have Real Bodies title");
     TEST_ASSERT(strstr(fs_a_buf, "[ELF]") != NULL, "fs -a must identify ELF executables");
     TEST_ASSERT(strstr(fs_a_buf, "real bodies total") != NULL, "fs -a must report total real bodies");
+    TEST_ASSERT(strstr(fs_a_buf, "PARENT") != NULL, "fs -a must have PARENT column");
+    TEST_ASSERT(strstr(fs_a_buf, "cat") != NULL, "fs -a must find true name cat");
+    TEST_ASSERT(strstr(fs_a_buf, "ls") != NULL, "fs -a must find true name ls");
+    TEST_ASSERT(strstr(fs_a_buf, "grep") != NULL, "fs -a must find true name grep");
+    TEST_ASSERT(strstr(fs_a_buf, "bumount") != NULL, "fs -a must find true name bumount");
+    TEST_ASSERT(strstr(fs_a_buf, "bmount") != NULL, "fs -a must find true name bmount");
+    TEST_ASSERT(strstr(fs_a_buf, "[*]") != NULL, "fs -a must mark real body streams with [*]");
+
+    /* Test fs -g (Group by directory structure) */
+    static char fs_g_buf[524288];
+    memset(fs_g_buf, 0, sizeof(fs_g_buf));
+    clu_fs_cmd("-g", clu_buf_out, fs_g_buf);
+    TEST_ASSERT(strstr(fs_g_buf, "Grouped by [DIR]") != NULL, "fs -g must have Grouped by [DIR] title");
+    TEST_ASSERT(strstr(fs_g_buf, "Template Box") != NULL, "fs -g must contain Template Box");
+    TEST_ASSERT(strstr(fs_g_buf, "  Packing Box") != NULL, "fs -g must indent child Packing Box under Template Box");
 
     /* Verify PARENT column is present in both headers */
     TEST_ASSERT(strstr(fs_buf, "PARENT") != NULL, "fs header must contain PARENT column");

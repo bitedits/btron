@@ -748,11 +748,87 @@ static void clu_fs_dump_records(Volume *v, ID fd, FID parent_fid, const char *pa
 }
 
 /* ── clu_fs_cmd ──────────────────────────────────────────────────── */
+
+typedef struct {
+    FID parent_fid;
+    FID first_child;
+    FID next_sibling;
+    FID last_child;
+    BLK blk;
+    BLK hdr_blk;
+    UW sz;
+    uint32_t did;
+    uint32_t pdid;
+    UH flags;
+    UB refc;
+    UB is_dir;
+    UB is_elf;
+    UB is_stream;
+    UB visited;
+    char name[48];
+} CluFsNode;
+
+static void clu_fs_node_add_child(CluFsNode *nodes, FID parent, FID child)
+{
+    if (parent == FID_INVALID || child == FID_INVALID || parent == child) return;
+    for (FID c = nodes[parent].first_child; c != FID_INVALID; c = nodes[c].next_sibling) {
+        if (c == child) return;
+    }
+    nodes[child].parent_fid = parent;
+    nodes[child].next_sibling = FID_INVALID;
+    if (nodes[parent].first_child == FID_INVALID) {
+        nodes[parent].first_child = child;
+        nodes[parent].last_child = child;
+    } else {
+        nodes[nodes[parent].last_child].next_sibling = child;
+        nodes[parent].last_child = child;
+    }
+}
+
+static void clu_fs_print_node_tree(CluFsNode *nodes, FID fid, int depth, int flag_l,
+                                   UW nfmax, ShellOutputFn out, void *ud)
+{
+    if (depth > 20 || fid >= nfmax || nodes[fid].blk == 0) return;
+    nodes[fid].visited = 1;
+
+    int indent = depth * 2;
+    if (indent > 40) indent = 40;
+
+    int kind = nodes[fid].is_dir ? 3 : (nodes[fid].is_elf ? 2 : (nodes[fid].is_stream ? 4 : 0));
+    const char *tag = (kind == 3) ? "[DIR]" :
+                      (kind == 2) ? "[ELF]" :
+                      (kind == 4) ? "[STR]" : "[TAD]";
+    UW color = clu_kind_color(kind, (kind == 3));
+
+    char line[256];
+    if (flag_l) {
+        snprintf(line, sizeof(line),
+                 "%-5u %-6u %-4u %-5s %04X  : %08X %08X : %-10u %*s%s",
+                 (unsigned)fid, (unsigned)nodes[fid].blk, (unsigned)nodes[fid].refc,
+                 tag, (unsigned)nodes[fid].flags,
+                 nodes[fid].did, nodes[fid].pdid,
+                 nodes[fid].sz, indent, "", nodes[fid].name);
+    } else {
+        snprintf(line, sizeof(line),
+                 "%-5u %-6u %-5s %-10u %*s%s",
+                 (unsigned)fid, (unsigned)nodes[fid].blk, tag, nodes[fid].sz,
+                 indent, "", nodes[fid].name);
+    }
+    out(line, color, ud);
+
+    for (FID c = nodes[fid].first_child; c != FID_INVALID; c = nodes[c].next_sibling) {
+        if (c < nfmax && !nodes[c].visited) {
+            clu_fs_print_node_tree(nodes, c, depth + 1, flag_l, nfmax, out, ud);
+        }
+    }
+}
+
 void clu_fs_cmd(const char *args, ShellOutputFn out, void *ud)
 {
     int flag_l = has_flag(args, "-l");
     int flag_r = has_flag(args, "-r") || has_flag(args, "-R");
     int flag_a = has_flag(args, "-a") || has_flag(args, "--all");
+    int flag_g = has_flag(args, "-g") || has_flag(args, "--group");
     char target[80];
     get_target(args, target, sizeof(target));
 
@@ -765,21 +841,28 @@ void clu_fs_cmd(const char *args, ShellOutputFn out, void *ud)
     }
     if (!v) { out("fs: no volume mounted", COLOR_RED, ud); return; }
 
-    if (flag_a) {
+    if (flag_a || flag_g) {
         UW nfmax = vol_nfmax(v);
-        char title[128];
-        snprintf(title, sizeof(title), "=== Real Bodies on %s (FID table 0..%u) ===",
-                 vol_name(v), (unsigned)nfmax - 1);
-        out(title, COLOR_CYAN, ud);
+        if (nfmax < 256) nfmax = 256;
+        CluFsNode *nodes = (CluFsNode *)calloc(nfmax, sizeof(CluFsNode));
+        if (!nodes) { out("fs: memory allocation failed", COLOR_RED, ud); return; }
 
-        if (flag_l)
-            out("FID   BLK    REF  TYPE  STYPE : DID      PDID     : SIZE     NAME / DESCRIPTION", COLOR_CYAN, ud);
-        else
-            out("FID   BLK    TYPE  SIZE       PARENT   NAME / DESCRIPTION", COLOR_CYAN, ud);
+        for (FID f = 0; f < nfmax; f++) {
+            nodes[f].parent_fid = FID_INVALID;
+            nodes[f].first_child = FID_INVALID;
+            nodes[f].last_child = FID_INVALID;
+            nodes[f].next_sibling = FID_INVALID;
+        }
 
         UW bsize = vol_block_size(v);
         unsigned char *buf = (unsigned char *)malloc(bsize);
-        if (!buf) return;
+        unsigned char *hbuf = (unsigned char *)malloc(bsize);
+        if (!buf || !hbuf) {
+            if (buf) free(buf);
+            if (hbuf) free(hbuf);
+            free(nodes);
+            return;
+        }
 
         unsigned int count = 0;
         for (FID fid = 0; fid < nfmax; fid++) {
@@ -791,100 +874,201 @@ void clu_fs_cmd(const char *args, ShellOutputFn out, void *ud)
             if (vol_read_blk(v, blk, buf) != 0) continue;
             count++;
 
-            int kind = 0;
-            const char *tag = "[DAT]";
-            char name[64] = "";
-            UW sz = 0;
-            uint32_t my_did = 0, my_pdid = 0;
+            nodes[fid].blk = blk;
+            nodes[fid].refc = refc;
 
             if (vol_is_brightv(v)) {
+                int has_hdr = 0;
                 if (memcmp(buf, "Tron", 4) == 0 || memcmp(buf, "norT", 4) == 0) {
-                    UH flags = clu_rd_u16_le(buf + 4);
-                    sz = clu_rd_u32_le(buf + 0x48);
-                    UW child_cnt = clu_rd_u32_le(buf + 0x44);
-                    my_did = clu_rd_u32_le(buf + 0x64);
-                    my_pdid = clu_rd_u32_le(buf + 0x68);
-                    UH tc[20];
-                    for (int k = 0; k < 16; k++) tc[k] = clu_rd_u16_le(buf + 0x6C + k * 2);
-                    tc[16] = 0;
-                    btr_tcode_to_utf8(tc, 16, name, sizeof(name));
+                    memcpy(hbuf, buf, bsize);
+                    nodes[fid].hdr_blk = blk;
+                    has_hdr = 1;
+                    nodes[fid].is_stream = 0;
+                } else if (blk > 0 && vol_read_blk(v, blk - 1, hbuf) == 0 &&
+                           (memcmp(hbuf, "Tron", 4) == 0 || memcmp(hbuf, "norT", 4) == 0)) {
+                    nodes[fid].hdr_blk = blk - 1;
+                    has_hdr = 1;
+                    nodes[fid].is_stream = 1;
+                }
 
-                    if (flags & 0x0001) {
-                        kind = 1; tag = "[EXE]";
-                    } else if (child_cnt > 0) {
-                        kind = 3; tag = "[DIR]";
+                if (has_hdr) {
+                    nodes[fid].flags = clu_rd_u16_le(hbuf + 4);
+                    nodes[fid].sz = clu_rd_u32_le(hbuf + 0x48);
+                    UW child_cnt = clu_rd_u32_le(hbuf + 0x44);
+                    nodes[fid].did = clu_rd_u32_le(hbuf + 0x64);
+                    nodes[fid].pdid = clu_rd_u32_le(hbuf + 0x68);
+
+                    UH tc[20];
+                    for (int k = 0; k < 16; k++) tc[k] = clu_rd_u16_le(hbuf + 0x6C + k * 2);
+                    tc[16] = 0;
+                    char raw_name[48] = "";
+                    btr_tcode_to_utf8(tc, 16, raw_name, sizeof(raw_name));
+
+                    if (nodes[fid].is_stream) {
+                        snprintf(nodes[fid].name, sizeof(nodes[fid].name), "[*] %s", raw_name[0] ? raw_name : "stream");
                     } else {
-                        kind = 0; tag = "[TAD]";
+                        snprintf(nodes[fid].name, sizeof(nodes[fid].name), "%s", raw_name[0] ? raw_name : "-");
                     }
-                } else if (memcmp(buf, "\x7f\x45\x4c\x46", 4) == 0) {
-                    kind = 2; tag = "[ELF]";
-                    sz = bsize;
-                    snprintf(name, sizeof(name), "ELF_%u", (unsigned)fid);
+
+                    if (memcmp(buf, "\x7f\x45\x4c\x46", 4) == 0 || (nodes[fid].flags & 0x0001)) {
+                        nodes[fid].is_elf = 1;
+                    }
+                    if (child_cnt > 0) {
+                        nodes[fid].is_dir = 1;
+                        for (UW k = 1; k <= child_cnt && k <= 512; k++) {
+                            int off = (int)bsize - (int)k * 16;
+                            if (off < 0) break;
+                            uint32_t cfid = clu_rd_u32_le(hbuf + off + 4);
+                            if (cfid < nfmax && cfid != fid) {
+                                clu_fs_node_add_child(nodes, fid, (FID)cfid);
+                            }
+                        }
+                    }
                 } else {
-                    kind = 0;
-                    int printable = 1, p_len = 0;
-                    for (int b = 0; b < 24 && b < (int)bsize; b++) {
-                        unsigned char c = buf[b];
-                        if (c >= 32 && c < 127) {
-                            name[p_len++] = (char)c;
-                        } else if (c == '\n' || c == '\r' || c == '\t') {
-                            name[p_len++] = ' ';
-                        } else {
-                            printable = 0;
+                    nodes[fid].is_stream = 1;
+                    nodes[fid].sz = bsize;
+                    if (memcmp(buf, "\x7f\x45\x4c\x46", 4) == 0) {
+                        nodes[fid].is_elf = 1;
+                        snprintf(nodes[fid].name, sizeof(nodes[fid].name), "[*] ELF_%u", (unsigned)fid);
+                    } else {
+                        snprintf(nodes[fid].name, sizeof(nodes[fid].name), "[*] stream_%u", (unsigned)fid);
+                    }
+                }
+            } else {
+                /* Cleanroom BTRON volume */
+                nodes[fid].hdr_blk = blk;
+                nodes[fid].flags = ((UH)buf[0] << 8) | buf[1];
+                nodes[fid].sz = ((UW)buf[28] << 24) | ((UW)buf[29] << 16) | ((UW)buf[30] << 8) | buf[31];
+                memcpy(nodes[fid].name, buf + 32, 40);
+                nodes[fid].name[40] = '\0';
+                if (nodes[fid].flags & 0x0001) nodes[fid].is_elf = 1;
+                if (nodes[fid].flags & 0x1000) nodes[fid].is_dir = 1;
+            }
+        }
+
+        /* Pass 2: Connect parent-child linkages */
+        if (vol_is_brightv(v)) {
+            for (FID f = 0; f < nfmax; f++) {
+                if (nodes[f].blk == 0 || f == FID_ROOT) continue;
+                if (nodes[f].parent_fid == FID_INVALID && nodes[f].pdid != 0) {
+                    for (FID p = 0; p < nfmax; p++) {
+                        if (nodes[p].blk == 0 || p == f) continue;
+                        if (nodes[p].did == nodes[f].pdid) {
+                            clu_fs_node_add_child(nodes, p, f);
                             break;
                         }
                     }
-                    name[p_len] = '\0';
-                    if (printable && p_len >= 3) {
-                        tag = "[TXT]";
-                    } else {
-                        tag = "[DAT]";
-                        name[0] = '\0';
-                    }
-                    sz = bsize;
                 }
-            } else {
-                UH flags = ((UH)buf[0] << 8) | buf[1];
-                sz = ((UW)buf[28] << 24) | ((UW)buf[29] << 16) | ((UW)buf[30] << 8) | buf[31];
-                memcpy(name, buf + 32, 40);
-                name[40] = '\0';
-                if (flags & 0x0001) { kind = 1; tag = "[EXE]"; }
-                else if (flags & 0x1000) { kind = 3; tag = "[DIR]"; }
-                else { kind = 0; tag = "[FIL]"; }
             }
-
-            UW color = clu_kind_color(kind, (kind == 3));
-            char line[256];
-            if (flag_l) {
-                snprintf(line, sizeof(line),
-                         "%-5u %-6u %-4u %-5s : %08X %08X : %-10u %s",
-                         (unsigned)fid, (unsigned)blk, (unsigned)refc, tag,
-                         my_did, my_pdid, sz, name[0] ? name : "-");
-            } else {
-                snprintf(line, sizeof(line),
-                         "%-5u %-6u %-5s %-10u %-8s %s",
-                         (unsigned)fid, (unsigned)blk, tag, sz,
-                         "-",
-                         name[0] ? name : "-");
-            }
-            out(line, color, ud);
-
-            if (flag_r && (kind == 3 || kind == 0)) {
-                ID cfd = opn_fil_fid(v, fid, 0x0001);
-                if (cfd >= 0) {
-                    OpenFile *cof = &g_open_files[(int)cfd];
-                    if (cof->nrec > 0 && !(cof->nrec == 1 && cof->ridx[0].size == bsize && cof->ridx[0].type == 0)) {
-                        unsigned char *vrec = (unsigned char *)calloc(nfmax, 1);
-                        if (vrec) {
-                            clu_fs_dump_records(v, cfd, fid, name[0] ? name : "body", 1, flag_l, 0, vrec, nfmax, out, ud);
-                            free(vrec);
-                        }
+        } else {
+            const char *vdir = (v == g_anders_vol) ? "/ANDERS" : "/SYS";
+            ID dir = opn_dir(vdir);
+            if (dir >= 0) {
+                DIR_ENTRY entry;
+                while (rd_dir(dir, &entry) == 0) {
+                    if (!entry.name[0]) continue;
+                    FID efid = (FID)entry.robj_id;
+                    if (efid < nfmax && efid != FID_ROOT) {
+                        clu_fs_node_add_child(nodes, FID_ROOT, efid);
                     }
-                    cls_fil(cfd);
+                }
+                cls_dir(dir);
+            }
+        }
+
+        if (flag_g) {
+            char title[128];
+            snprintf(title, sizeof(title), "=== Real Bodies on %s (Grouped by [DIR]) ===", vol_name(v));
+            out(title, COLOR_CYAN, ud);
+
+            if (flag_l)
+                out("FID   BLK    REF  TYPE  STYPE : DID      PDID     : SIZE     NAME", COLOR_CYAN, ud);
+            else
+                out("FID   BLK    TYPE  SIZE       NAME", COLOR_CYAN, ud);
+
+            if (nodes[FID_ROOT].blk) {
+                clu_fs_print_node_tree(nodes, FID_ROOT, 0, flag_l, nfmax, out, ud);
+            }
+            for (FID f = 0; f < nfmax; f++) {
+                if (nodes[f].blk && !nodes[f].visited && nodes[f].parent_fid == FID_INVALID) {
+                    clu_fs_print_node_tree(nodes, f, 0, flag_l, nfmax, out, ud);
+                }
+            }
+            for (FID f = 0; f < nfmax; f++) {
+                if (nodes[f].blk && !nodes[f].visited) {
+                    clu_fs_print_node_tree(nodes, f, 0, flag_l, nfmax, out, ud);
+                }
+            }
+        } else {
+            char title[128];
+            snprintf(title, sizeof(title), "=== Real Bodies on %s (FID table 0..%u) ===",
+                     vol_name(v), (unsigned)nfmax - 1);
+            out(title, COLOR_CYAN, ud);
+
+            if (flag_l)
+                out("FID   BLK    REF  TYPE  STYPE : DID      PDID     : SIZE     PARENT       NAME", COLOR_CYAN, ud);
+            else
+                out("FID   BLK    TYPE  SIZE       PARENT       NAME", COLOR_CYAN, ud);
+
+            for (FID fid = 0; fid < nfmax; fid++) {
+                if (nodes[fid].blk == 0) continue;
+
+                char parent_str[48];
+                if (nodes[fid].parent_fid != FID_INVALID && nodes[fid].parent_fid < nfmax) {
+                    FID pf = nodes[fid].parent_fid;
+                    const char *pname = nodes[pf].name;
+                    if (strncmp(pname, "[*] ", 4) == 0) pname += 4;
+                    if (pname[0] && strcmp(pname, "-") != 0) {
+                        snprintf(parent_str, sizeof(parent_str), "%u(%s)", (unsigned)pf, pname);
+                    } else {
+                        snprintf(parent_str, sizeof(parent_str), "%u", (unsigned)pf);
+                    }
+                } else {
+                    snprintf(parent_str, sizeof(parent_str), "-");
+                }
+
+                int kind = nodes[fid].is_dir ? 3 : (nodes[fid].is_elf ? 2 : (nodes[fid].is_stream ? 4 : 0));
+                const char *tag = (kind == 3) ? "[DIR]" :
+                                  (kind == 2) ? "[ELF]" :
+                                  (kind == 4) ? "[STR]" : "[TAD]";
+                UW color = clu_kind_color(kind, (kind == 3));
+
+                char line[256];
+                if (flag_l) {
+                    snprintf(line, sizeof(line),
+                             "%-5u %-6u %-4u %-5s %04X  : %08X %08X : %-10u %-12s %s",
+                             (unsigned)fid, (unsigned)nodes[fid].blk, (unsigned)nodes[fid].refc,
+                             tag, (unsigned)nodes[fid].flags,
+                             nodes[fid].did, nodes[fid].pdid,
+                             nodes[fid].sz, parent_str, nodes[fid].name);
+                } else {
+                    snprintf(line, sizeof(line),
+                             "%-5u %-6u %-5s %-10u %-12s %s",
+                             (unsigned)fid, (unsigned)nodes[fid].blk, tag, nodes[fid].sz,
+                             parent_str, nodes[fid].name);
+                }
+                out(line, color, ud);
+
+                if (flag_r && (kind == 3 || kind == 0)) {
+                    ID cfd = opn_fil_fid(v, fid, 0x0001);
+                    if (cfd >= 0) {
+                        OpenFile *cof = &g_open_files[(int)cfd];
+                        if (cof->nrec > 0 && !(cof->nrec == 1 && cof->ridx[0].size == bsize && cof->ridx[0].type == 0)) {
+                            unsigned char *vrec = (unsigned char *)calloc(nfmax, 1);
+                            if (vrec) {
+                                clu_fs_dump_records(v, cfd, fid, nodes[fid].name[0] ? nodes[fid].name : "body", 1, flag_l, 0, vrec, nfmax, out, ud);
+                                free(vrec);
+                            }
+                        }
+                        cls_fil(cfd);
+                    }
                 }
             }
         }
+
         free(buf);
+        free(hbuf);
+        free(nodes);
         char summary[80];
         snprintf(summary, sizeof(summary), "(%u real bodies total)", count);
         out(summary, COLOR_LTGRAY, ud);
@@ -934,7 +1118,59 @@ void clu_tp(const char *args, ShellOutputFn out, void *ud)
 
     if (!target[0]) { out("tp: missing file argument", COLOR_RED, ud); return; }
 
-    ID fd = opn_fil(target, 0x0001);
+    Volume *v = (strncmp(g_cwd_path, "/ANDERS", 7) == 0 && g_anders_vol) ? g_anders_vol :
+                ((strncmp(g_cwd_path, "/CHOKANJI", 9) == 0 || strncmp(g_cwd_path, "/B-right", 8) == 0) && g_chokanji_vol) ? g_chokanji_vol : g_sys_vol;
+
+    ID fd = -1;
+    int is_fid = 0;
+    FID fid_val = FID_INVALID;
+    const char *num_str = NULL;
+    Volume *target_vol = v;
+
+    if (strncmp(target, "/CHOKANJI#", 10) == 0) {
+        target_vol = g_chokanji_vol ? g_chokanji_vol : v;
+        num_str = target + 10;
+        is_fid = 1;
+    } else if (strncmp(target, "/ANDERS#", 8) == 0) {
+        target_vol = g_anders_vol ? g_anders_vol : v;
+        num_str = target + 8;
+        is_fid = 1;
+    } else if (strncmp(target, "/SYS#", 5) == 0) {
+        target_vol = g_sys_vol;
+        num_str = target + 5;
+        is_fid = 1;
+    } else if (target[0] == '#') {
+        num_str = target + 1;
+        is_fid = 1;
+    } else if (strncasecmp(target, "FID:", 4) == 0) {
+        num_str = target + 4;
+        is_fid = 1;
+    } else {
+        int all_digits = 1;
+        for (int i = 0; target[i]; i++) {
+            if (!isdigit((unsigned char)target[i])) { all_digits = 0; break; }
+        }
+        if (all_digits && target[0]) {
+            fd = opn_fil(target, 0x0001);
+            if (fd < 0) {
+                num_str = target;
+                is_fid = 1;
+            }
+        }
+    }
+
+    if (is_fid && num_str && *num_str) {
+        fid_val = (FID)strtoul(num_str, NULL, 10);
+        if (target_vol) {
+            fd = opn_fil_fid(target_vol, fid_val, 0x0001);
+        }
+        if (fd < 0 && target_vol != g_sys_vol && g_sys_vol) {
+            fd = opn_fil_fid(g_sys_vol, fid_val, 0x0001);
+        }
+    } else if (fd < 0) {
+        fd = opn_fil(target, 0x0001);
+    }
+
     if (fd < 0) {
         char err[128]; snprintf(err, sizeof(err), "tp: '%s': not found", target);
         out(err, COLOR_RED, ud); return;

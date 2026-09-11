@@ -815,6 +815,24 @@ static void test_clu_tp_variants(void)
     }
     CHECK(found_quoted, "tp -x \"SampleDoc\" quoted failed");
 
+    /* 5. FID targets: tp 1 and tp -x #1 */
+    memset(&cb, 0, sizeof(cb));
+    clu_tp("1", capture_fn, &cb);
+    int found_fid_plain = 0;
+    for (int i = 0; i < cb.n; i++) {
+        if (strstr(cb.lines[i], "Hello BTRON World")) found_fid_plain = 1;
+    }
+    CHECK(found_fid_plain, "tp by numeric FID 1 failed");
+
+    memset(&cb, 0, sizeof(cb));
+    clu_tp("-x #1", capture_fn, &cb);
+    int found_fid_hex = 0;
+    for (int i = 0; i < cb.n; i++) {
+        if (strstr(cb.lines[i], "0000:") && strstr(cb.lines[i], "48 65 6C"))
+            found_fid_hex = 1;
+    }
+    CHECK(found_fid_hex, "tp -x #1 by hash-prefixed FID failed");
+
     vol_umount(v);
     g_sys_vol = NULL;
     blk_destroy(dev);

@@ -167,7 +167,7 @@ static void paint_terminal_settings(WND *wnd, GDEV *dev) {
     drw_tc_string(dev, M + P - 2, s3_top - LBL_OVERLAP, " [3] 履歴・カーソル (Scrollback & Cursor) ", COLOR_NAVY, COLOR_WHITE);
 
     H col5 = (dev->width - 2 * M - 2 * P) / 5;  /* fifth-column step */
-    paint_ui_radio(dev, M + P,             s3_top + P,       "履歴 100行",           cfg->scrollback_lines == 100,   FALSE);
+    paint_ui_radio(dev, M + P,             s3_top + P,       "履歴 100K行",           cfg->scrollback_lines == 100000,   FALSE);
     paint_ui_radio(dev, M + P + col5,      s3_top + P,       "履歴 300行 (標準)",    cfg->scrollback_lines == 300,   FALSE);
     paint_ui_radio(dev, M + P + col5 * 2,  s3_top + P,       "履歴 1000行 (大)",    cfg->scrollback_lines == 1000,  FALSE);
     paint_ui_radio(dev, M + P + col5 * 3,  s3_top + P,       "履歴 4096行",          cfg->scrollback_lines == 4096,  FALSE);

@@ -91,7 +91,7 @@ typedef enum {
     TCMD_VIEW_TRANS_60  = 33,
     /* 端末(T) */
     TCMD_TERM_RESET     = 40,
-    TCMD_TERM_HIST_100  = 41,
+    TCMD_TERM_HIST_100K = 41,
     TCMD_TERM_HIST_300  = 42,
     TCMD_TERM_HIST_1000 = 43,
     TCMD_TERM_HIST_4096 = 44,
@@ -237,11 +237,11 @@ static void gterm_init_menu_bar(GTermState *st) {
     int h3 = app_menu_add_header(&st->menu_bar, "端末(T)", 72);
     app_menu_add_item(&st->menu_bar, h3, "端末リセット (Reset)",       "",       TCMD_TERM_RESET,     TRUE);
     app_menu_add_separator(&st->menu_bar, h3);
-    app_menu_add_item(&st->menu_bar, h3, "履歴 100行",                 "",       TCMD_TERM_HIST_100,  TRUE);
     app_menu_add_item(&st->menu_bar, h3, "履歴 300行 (標準)",          "",       TCMD_TERM_HIST_300,  TRUE);
     app_menu_add_item(&st->menu_bar, h3, "履歴 1000行 (大)",           "",       TCMD_TERM_HIST_1000, TRUE);
     app_menu_add_item(&st->menu_bar, h3, "履歴 4096行 (全実体)",       "",       TCMD_TERM_HIST_4096, TRUE);
     app_menu_add_item(&st->menu_bar, h3, "履歴 10000行 (10K / 最大)",  "",       TCMD_TERM_HIST_10K,  TRUE);
+    app_menu_add_item(&st->menu_bar, h3, "履歴 100000行",              "",       TCMD_TERM_HIST_100K,  TRUE);
     app_menu_add_separator(&st->menu_bar, h3);
     app_menu_add_item(&st->menu_bar, h3, "カーソル下線 (_)",           "",       TCMD_TERM_CUR_LINE,  TRUE);
     app_menu_add_item(&st->menu_bar, h3, "ブロックカーソル (█)",       "",       TCMD_TERM_CUR_BLOCK, TRUE);
@@ -853,7 +853,7 @@ static void gterm_dispatch_cmd(WND *wnd, GTermState *st, int cmd) {
             gterm_init_banner(st);
             gterm_execute_cmd(wnd, st, "ver");
             return;
-        case TCMD_TERM_HIST_100:  st->scrollback_max = 100;  cfg.scrollback_lines = 100;  terminal_set_settings(&cfg); return;
+        case TCMD_TERM_HIST_100K:  st->scrollback_max = 100000;  cfg.scrollback_lines = 100000;  terminal_set_settings(&cfg); return;
         case TCMD_TERM_HIST_300:  st->scrollback_max = 300;  cfg.scrollback_lines = 300;  terminal_set_settings(&cfg); return;
         case TCMD_TERM_HIST_1000: st->scrollback_max = 1000; cfg.scrollback_lines = 1000; terminal_set_settings(&cfg); return;
         case TCMD_TERM_HIST_4096: st->scrollback_max = 4096; cfg.scrollback_lines = 4096; terminal_set_settings(&cfg); return;

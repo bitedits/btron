@@ -121,41 +121,60 @@ static int read_header_block(Volume *v, BLK blk, OpenFile *of)
 
     if (vol_is_brightv(v)) {
         if (memcmp(buf, "Tron", 4) != 0 && memcmp(buf, "norT", 4) != 0) {
-            /* Direct ELF binary or raw file stream in Cho-Kanji */
-            int is_elf = (memcmp(buf, "\x7f\x45\x4c\x46", 4) == 0);
-            of->hdr.flags = FILE_HDR_FLAGS_NORMAL;
-            if (is_elf) of->hdr.flags |= 0x0001; /* OBJ_EXEC */
-            of->hdr.atype = 0;
-            of->hdr.ctime = 0;
-            of->hdr.mtime = 0;
-            of->hdr.atime = 0;
-            of->hdr.owner = 0;
-            of->hdr.group = 0;
-            of->hdr.nlnk  = 1;
-            of->hdr.idxlv = 0;
-            of->hdr.total_size = bsize;
-            of->hdr.nrec = 1;
-            of->hdr.data_blk = blk;
-            of->nrec = 1;
-            of->data_used = bsize;
-            of->data_blk = blk;
-            of->ridx[0].kind = is_elf ? 0x9F00 : 0x0000;
-            of->ridx[0].type = 0;
-            of->ridx[0].offset = 0;
-            of->ridx[0].size = bsize;
-            of->ridx[0].flags = 1;
-            const char *pfx = is_elf ? "ELF_" : "BODY_";
-            char *d = (char *)of->hdr.name;
-            while (*pfx) *d++ = *pfx++;
-            UW num = (UW)of->fid;
-            char tmp[16]; int ti = 0;
-            if (num == 0) tmp[ti++] = '0';
-            else { while (num > 0) { tmp[ti++] = (char)('0' + (num % 10)); num /= 10; } }
-            while (ti > 0 && d < (char *)of->hdr.name + sizeof(of->hdr.name) - 1)
-                *d++ = tmp[--ti];
-            *d = '\0';
-            free(buf);
-            return 0;
+            /* On Cho-Kanji volumes, the Real Body Header is at blk - 1 for files with data */
+            int found_hdr_m1 = 0;
+            if (blk > 0) {
+                unsigned char *hbuf = (unsigned char *)malloc(bsize);
+                if (hbuf) {
+                    if (vol_read_blk(v, blk - 1, hbuf) == 0 &&
+                        (memcmp(hbuf, "Tron", 4) == 0 || memcmp(hbuf, "norT", 4) == 0)) {
+                        free(buf);
+                        buf = hbuf;
+                        of->hdr_blk = blk - 1;
+                        of->data_blk = blk;
+                        found_hdr_m1 = 1;
+                    } else {
+                        free(hbuf);
+                    }
+                }
+            }
+            if (!found_hdr_m1) {
+                /* Direct ELF binary or raw file stream in Cho-Kanji without header */
+                int is_elf = (memcmp(buf, "\x7f\x45\x4c\x46", 4) == 0);
+                of->hdr.flags = FILE_HDR_FLAGS_NORMAL;
+                if (is_elf) of->hdr.flags |= 0x0001; /* OBJ_EXEC */
+                of->hdr.atype = 0;
+                of->hdr.ctime = 0;
+                of->hdr.mtime = 0;
+                of->hdr.atime = 0;
+                of->hdr.owner = 0;
+                of->hdr.group = 0;
+                of->hdr.nlnk  = 1;
+                of->hdr.idxlv = 0;
+                of->hdr.total_size = bsize;
+                of->hdr.nrec = 1;
+                of->hdr.data_blk = blk;
+                of->nrec = 1;
+                of->data_used = bsize;
+                of->data_blk = blk;
+                of->ridx[0].kind = is_elf ? 0x9F00 : 0x0000;
+                of->ridx[0].type = 0;
+                of->ridx[0].offset = 0;
+                of->ridx[0].size = bsize;
+                of->ridx[0].flags = 1;
+                const char *pfx = is_elf ? "ELF_" : "BODY_";
+                char *d = (char *)of->hdr.name;
+                while (*pfx) *d++ = *pfx++;
+                UW num = (UW)of->fid;
+                char tmp[16]; int ti = 0;
+                if (num == 0) tmp[ti++] = '0';
+                else { while (num > 0) { tmp[ti++] = (char)('0' + (num % 10)); num /= 10; } }
+                while (ti > 0 && d < (char *)of->hdr.name + sizeof(of->hdr.name) - 1)
+                    *d++ = tmp[--ti];
+                *d = '\0';
+                free(buf);
+                return 0;
+            }
         }
         /* B-right/V Real Body Header */
         of->hdr.flags      = rd_u16_le(buf + 4);
@@ -198,6 +217,9 @@ static int read_header_block(Volume *v, BLK blk, OpenFile *of)
             if (of->data_blk == 0 && rblk > 0) {
                 of->data_blk = rblk;
             }
+        }
+        if (of->data_blk == 0) {
+            of->data_blk = blk;
         }
         of->hdr.data_blk = of->data_blk;
         free(buf);

@@ -203,7 +203,7 @@ static int read_header_block(Volume *v, BLK blk, OpenFile *of)
         }
         of->nrec      = of->hdr.nrec;
         of->data_used = of->hdr.total_size;
-        of->data_blk  = 0;
+        of->data_blk  = blk;
 
         for (unsigned int i = 0; i < of->nrec; i++) {
             unsigned char *rp = buf + bsize - (i + 1) * 16;
@@ -212,14 +212,7 @@ static int read_header_block(Volume *v, BLK blk, OpenFile *of)
             of->ridx[i].offset = rd_u32_le(rp + 4);
             of->ridx[i].size   = rd_u32_le(rp + 8);
             uint8_t nblocks    = rp[12];
-            BLK rblk           = (BLK)(rp[13] | (rp[14] << 8) | (rp[15] << 16));
             of->ridx[i].flags  = (UW)nblocks;
-            if (of->data_blk == 0 && rblk > 0) {
-                of->data_blk = rblk;
-            }
-        }
-        if (of->data_blk == 0) {
-            of->data_blk = blk;
         }
         of->hdr.data_blk = of->data_blk;
         free(buf);

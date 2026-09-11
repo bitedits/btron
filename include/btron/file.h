@@ -73,6 +73,12 @@ ER cre_lnk(const char *link_path, const FS_LINK *target);
 ER del_lnk(const char *link_path);
 ER ref_vol(ID vol_id, VOL_INFO *info);
 
+/* ── File & Record Helpers ─────────────────────────────────────── */
+void fil_set_rec_type(ID fd, W rec_idx, UH type);
+int  fil_rec_is_link(ID fd, W rec_idx);
+ER   fil_get_rec_link_info(ID fd, W rec_idx, FID *out_fid, char *out_name, size_t name_max, UH attrs[5]);
+int  fil_is_stream(ID fd);
+
 #ifdef __cplusplus
 }
 #endif

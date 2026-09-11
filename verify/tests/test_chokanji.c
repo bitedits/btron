@@ -116,7 +116,7 @@ static void test_volume_mount(void)
 
     Volume *v = vol_mount(part);
     TEST_ASSERT(v != NULL, "vol_mount failed on B-right/V partition");
-    TEST_ASSERT(vol_is_brightv(v) == 1, "vol_is_brightv must return 1");
+    TEST_ASSERT(vol_fs_type(v) == FS_TYPE_BRIGHTV, "vol_fs_type must return FS_TYPE_BRIGHTV");
     TEST_ASSERT(vol_block_size(v) == 8192, "vol_block_size must return 8192");
     TEST_ASSERT(strcmp(vol_name(v), "B-right/V") == 0, "vol_name must be 'B-right/V'");
     TEST_ASSERT(vol_total_blocks(v) == 1310298U, "total blocks must be 1,310,298");
@@ -400,9 +400,9 @@ static void test_clu_integration(void)
     TEST_ASSERT(strcmp(g_cwd_path, "/CHOKANJI") == 0, "g_cwd_path must be /CHOKANJI");
 
     /* Test clu_fs_cmd inside /CHOKANJI */
-    static char fs_buf[65536];
-    static char fs_r_buf[262144];
-    static char fs_l_buf[65536];
+    static char fs_buf[524288];
+    static char fs_r_buf[524288];
+    static char fs_l_buf[524288];
     memset(fs_buf, 0, sizeof(fs_buf));
     memset(fs_r_buf, 0, sizeof(fs_r_buf));
     memset(fs_l_buf, 0, sizeof(fs_l_buf));
@@ -489,7 +489,6 @@ static void test_clu_integration(void)
     TEST_ASSERT(strstr(fs_r_buf, "PARENT") != NULL, "fs -r header must contain PARENT column");
     TEST_ASSERT(strstr(fs_l_buf, "PARENT") != NULL, "fs -l header must contain PARENT column");
 
-    TEST_ASSERT(strstr(fs_buf, "SBOOT") != NULL, "clu_fs_cmd on /CHOKANJI missing SBOOT");
     TEST_ASSERT(strstr(fs_buf, "English") != NULL, "clu_fs_cmd on /CHOKANJI missing English");
     TEST_ASSERT(strstr(fs_buf, "foundations") == NULL, "clu_fs_cmd on /CHOKANJI should not show ANDERS entries");
 

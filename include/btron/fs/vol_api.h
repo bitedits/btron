@@ -103,9 +103,19 @@ const char *vol_name(const Volume *v);
 UW vol_block_size(const Volume *v);
 
 /*
- * vol_is_brightv — returns 1 if volume is B-right/V format, 0 otherwise.
+ * vol_fs_type — return filesystem type identifier (e.g. FS_TYPE_STD, FS_TYPE_BRIGHTV).
  */
-int vol_is_brightv(const Volume *v);
+UH vol_fs_type(const Volume *v);
+
+/*
+ * vol_is_le — return 1 if volume layout is little-endian, 0 if big-endian.
+ */
+int vol_is_le(const Volume *v);
+
+/*
+ * vol_description — returns descriptive name of the filesystem format.
+ */
+const char *vol_description(const Volume *v);
 
 /* TRON Code <-> UTF-8 transcoding */
 void btr_tcode_to_utf8(const UH *tc, int max_tcs, char *utf8, int max_bytes);

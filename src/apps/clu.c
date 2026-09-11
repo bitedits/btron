@@ -64,13 +64,6 @@ static char *fs_strrchr(const char *s, int c) {
     return (char *)last;
 }
 
-static inline uint16_t clu_rd_u16_le(const unsigned char *p) {
-    return (uint16_t)((uint16_t)p[0] | ((uint16_t)p[1] << 8));
-}
-
-static inline uint32_t clu_rd_u32_le(const unsigned char *p) {
-    return (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
-}
 
 /* ── Arg parsing helpers ─────────────────────────────────────────── */
 /* Skip leading whitespace */
@@ -234,34 +227,27 @@ void clu_cd(const char *args, ShellOutputFn out, void *ud)
  */
 static int clu_probe_kind(Volume *v, unsigned int fid) {
     if (!v || fid == FID_INVALID) return 0;
-    BLK blk = vol_fid_get_blk(v, (FID)fid);
-    if (blk == 0 || blk == FID_INVALID) return 0;
-    UW bsz = vol_block_size(v);
-    unsigned char *buf = (unsigned char *)malloc(bsz);
-    if (!buf) return 0;
+    ID fd = opn_fil_fid(v, (FID)fid, 0x0001);
+    if (fd < 0) return 0;
+    OpenFile *of = &g_open_files[(int)fd];
     int kind = 0;
-    if (vol_read_blk(v, blk, buf) == 0) {
-        /* ELF magic: 0x7F 'E' 'L' 'F' at offset 0 (raw ELF image) */
-        if (buf[0] == 0x7F && buf[1] == 0x45 && buf[2] == 0x4C && buf[3] == 0x46) {
-            kind = 2;
-        /* ELF embedded after 192-byte BTRON FileHeader */
-        } else if (bsz > 196 &&
-                   buf[0xC0] == 0x7F && buf[0xC1] == 0x45 &&
-                   buf[0xC2] == 0x4C && buf[0xC3] == 0x46) {
-            kind = 2;
-        } else {
-            /* OBJ_EXEC flag in FileHeader flags word */
-            unsigned short fhflags;
-            int is_bv = vol_is_brightv(v);
-            if (is_bv)
-                fhflags = (unsigned short)(buf[4] | ((unsigned short)buf[5] << 8)); /* LE */
-            else
-                fhflags = (unsigned short)(((unsigned short)buf[0] << 8) | buf[1]); /* BE */
-            if (fhflags & OBJ_EXEC)
-                kind = 1;
+    if (of->hdr.flags & 0x0001) {
+        kind = 2; /* Executable / ELF */
+    } else if (of->hdr.flags & OBJ_EXEC) {
+        kind = 1; /* BTRON Executable */
+    } else {
+        ID rec = opn_rec(fd, 0, 0x0001);
+        if (rec >= 0) {
+            unsigned char m[4];
+            W got = 0;
+            rd_rec(rec, m, 4, &got);
+            cls_rec(rec);
+            if (got >= 4 && memcmp(m, "\x7f\x45\x4c\x46", 4) == 0) {
+                kind = 2;
+            }
         }
     }
-    free(buf);
+    cls_fil(fd);
     return kind;
 }
 
@@ -305,115 +291,47 @@ void clu_ls(const char *args, ShellOutputFn out, void *ud)
         int is_root = (of->fid == FID_ROOT);
         int link_count = 0;
         for (unsigned int i = 0; i < of->nrec; i++) {
-            RecordIndex *ri = &of->ridx[i];
-            if (ri->type == RT_LINK && ri->size >= 16) {
-                unsigned char pbuf[80] = {0};
-                ID rec = opn_rec(fd, (W)i, 0x0001);
-                if (rec >= 0) {
-                    W got = 0;
-                    rd_rec(rec, pbuf, 16, &got);
-                    FID link_fid = 0;
-                    unsigned short nlen = 0;
-                    if (vol_is_brightv(ofv)) {
-                        link_fid = (FID)((unsigned int)pbuf[0] | ((unsigned int)pbuf[1] << 8) |
-                                         ((unsigned int)pbuf[2] << 16) | ((unsigned int)pbuf[3] << 24));
-                        nlen = (unsigned short)(pbuf[14] | (pbuf[15] << 8));
-                    } else {
-                        link_fid = ((unsigned int)pbuf[0]<<24)|((unsigned int)pbuf[1]<<16)|
-                                   ((unsigned int)pbuf[2]<<8)|(unsigned int)pbuf[3];
-                        nlen = ((unsigned short)pbuf[14]<<8)|pbuf[15];
-                    }
-                    char link_name[48] = "";
-                    if (nlen > 0 && nlen < 40) {
-                        W got2 = 0;
-                        rd_rec(rec, link_name, (W)nlen, &got2);
-                        link_name[got2] = '\0';
-                    }
-                    cls_rec(rec);
+            if (!fil_rec_is_link(fd, (W)i)) continue;
+            FID link_fid = FID_INVALID;
+            char link_name[64] = "";
+            if (fil_get_rec_link_info(fd, (W)i, &link_fid, link_name, sizeof(link_name), NULL) != 0)
+                continue;
 
-                    if (vol_is_brightv(ofv) && link_name[0] == '\0') {
-                        BLK lb = vol_fid_get_blk(ofv, link_fid);
-                        if (lb > 0 && lb != FID_INVALID) {
-                            unsigned char *lbuf = (unsigned char *)malloc(vol_block_size(ofv));
-                            if (lbuf) {
-                                if (vol_read_blk(ofv, lb, lbuf) == 0 &&
-                                    (memcmp(lbuf, "Tron", 4) == 0 || memcmp(lbuf, "norT", 4) == 0)) {
-                                    UH tc[20];
-                                    for (int k = 0; k < 16; k++) tc[k] = clu_rd_u16_le(lbuf + 0x6C + k * 2);
-                                    tc[16] = 0;
-                                    btr_tcode_to_utf8(tc, 16, link_name, sizeof(link_name));
-                                }
-                                free(lbuf);
-                            }
-                        }
-                    }
-                    if (link_name[0] == '\0') {
-                        snprintf(link_name, sizeof(link_name), "FID%u", (unsigned)link_fid);
-                    }
+            link_count++;
+            int lk = clu_probe_kind(ofv, (unsigned int)link_fid);
+            UW lk_color = clu_kind_color(lk, 1 /* is_link */);
 
-                    link_count++;
-                    /* Probe target for color: ELF/exec=green, link=cyan */
-                    int lk = clu_probe_kind(ofv, (unsigned int)link_fid);
-                    UW lk_color = clu_kind_color(lk, 1 /* is_link */);
-                    if (flag_l) {
-                        BLK hblk = vol_fid_get_blk(ofv, link_fid);
-                        UW of_bsize = vol_block_size(ofv);
-                        unsigned char *lhbuf = (unsigned char *)calloc(1, of_bsize);
-                        if (lhbuf) {
-                            if (hblk != FID_INVALID && hblk != 0) vol_read_blk(ofv, hblk, lhbuf);
-                            unsigned short atype = 0, tsz = 0;
-                            unsigned int mtime = 0;
-                            if (vol_is_brightv(ofv)) {
-                                atype = 0;
-                                mtime = clu_rd_u32_le(lhbuf + 0x64);
-                                tsz   = clu_rd_u32_le(lhbuf + 0x48);
-                            } else {
-                                atype = ((unsigned short)lhbuf[2] << 8) | lhbuf[3];
-                                mtime = ((unsigned int)lhbuf[8]<<24)|((unsigned int)lhbuf[9]<<16)|
-                                        ((unsigned int)lhbuf[10]<<8)|(unsigned int)lhbuf[11];
-                                tsz   = ((unsigned int)lhbuf[28]<<24)|((unsigned int)lhbuf[29]<<16)|
-                                        ((unsigned int)lhbuf[30]<<8)|(unsigned int)lhbuf[31];
-                            }
-                            char mt[24]; fmt_ts(mtime, mt, sizeof(mt));
-                            char line[256];
-                            snprintf(line, sizeof(line), "%04X  ---  1    1    %-5u %s %s",
-                                     atype, tsz, mt, link_name);
-                            out(line, lk_color, ud);
-                            free(lhbuf);
-                        }
-                    } else if (flag_t) {
-                        BLK hblk = vol_fid_get_blk(ofv, link_fid);
-                        UW of_bsize = vol_block_size(ofv);
-                        unsigned char *lhbuf = (unsigned char *)calloc(1, of_bsize);
-                        if (lhbuf) {
-                            if (hblk != FID_INVALID && hblk != 0) vol_read_blk(ofv, hblk, lhbuf);
-                            unsigned int ctime = 0, atime = 0, mtime = 0;
-                            if (vol_is_brightv(ofv)) {
-                                ctime = clu_rd_u32_le(lhbuf + 0x60);
-                                mtime = clu_rd_u32_le(lhbuf + 0x64);
-                                atime = clu_rd_u32_le(lhbuf + 0x68);
-                            } else {
-                                ctime = ((unsigned int)lhbuf[4]<<24)|((unsigned int)lhbuf[5]<<16)|
-                                        ((unsigned int)lhbuf[6]<<8)|(unsigned int)lhbuf[7];
-                                mtime = ((unsigned int)lhbuf[8]<<24)|((unsigned int)lhbuf[9]<<16)|
-                                        ((unsigned int)lhbuf[10]<<8)|(unsigned int)lhbuf[11];
-                                atime = ((unsigned int)lhbuf[12]<<24)|((unsigned int)lhbuf[13]<<16)|
-                                        ((unsigned int)lhbuf[14]<<8)|(unsigned int)lhbuf[15];
-                            }
-                            char ct[24], at[24], mt[24];
-                            fmt_ts(ctime, ct, sizeof(ct));
-                            fmt_ts(atime, at, sizeof(at));
-                            fmt_ts(mtime, mt, sizeof(mt));
-                            char line[256];
-                            snprintf(line, sizeof(line), "%-18s %-18s %-18s %s",
-                                     ct, at, mt, link_name);
-                            out(line, lk_color, ud);
-                            free(lhbuf);
-                        }
-                    } else {
-                        out(link_name, lk_color, ud);
-                    }
+            if (flag_l || flag_t) {
+                ID lfd = (link_fid != FID_INVALID) ? opn_fil_fid(ofv, link_fid, 0x0001) : -1;
+                unsigned short atype = 0;
+                unsigned int ctime = 0, atime = 0, mtime = 0, tsz = 0;
+                if (lfd >= 0) {
+                    OpenFile *lof = &g_open_files[(int)lfd];
+                    atype = lof->hdr.atype;
+                    ctime = lof->hdr.ctime;
+                    mtime = lof->hdr.mtime;
+                    atime = lof->hdr.atime;
+                    tsz   = lof->hdr.total_size;
+                    cls_fil(lfd);
                 }
+                if (flag_l) {
+                    char mt[24]; fmt_ts(mtime, mt, sizeof(mt));
+                    char line[256];
+                    snprintf(line, sizeof(line), "%04X  ---  1    1    %-5u %s %s",
+                             atype, tsz, mt, link_name);
+                    out(line, lk_color, ud);
+                } else {
+                    char ct[24], at[24], mt[24];
+                    fmt_ts(ctime, ct, sizeof(ct));
+                    fmt_ts(atime, at, sizeof(at));
+                    fmt_ts(mtime, mt, sizeof(mt));
+                    char line[256];
+                    snprintf(line, sizeof(line), "%-18s %-18s %-18s %s",
+                             ct, at, mt, link_name);
+                    out(line, lk_color, ud);
+                }
+            } else {
+                out(link_name, lk_color, ud);
             }
         }
         cls_fil(fd);
@@ -436,67 +354,32 @@ void clu_ls(const char *args, ShellOutputFn out, void *ud)
     ID dir = opn_dir(dir_path);
     if (dir < 0) { out("ls: opn_dir failed", COLOR_RED, ud); return; }
 
-    UW bsize = vol_block_size(v);
-    unsigned char *hbuf = (flag_l || flag_t) ? (unsigned char *)malloc(bsize) : NULL;
-    int is_bv = vol_is_brightv(v);
-
     DIR_ENTRY entry;
     while (rd_dir(dir, &entry) == 0) {
         if (!entry.name[0]) continue;
-
-        /* Determine color from block data when available */
         FID fid = (FID)entry.robj_id;
 
         if (!flag_l && !flag_t) {
-            /* Simple name-only listing: probe kind for color */
             int ek = clu_probe_kind(v, (unsigned int)fid);
             out(entry.name, clu_kind_color(ek, 0), ud);
             continue;
         }
 
-        /* Read full FileHeader for extra info */
-        BLK hblk = vol_fid_get_blk(v, fid);
-        if (hbuf && hblk != 0 && hblk != FID_INVALID) {
-            if (vol_read_blk(v, hblk, hbuf) != 0) continue;
-        } else {
-            continue;
-        }
+        ID lfd = opn_fil_fid(v, fid, 0x0001);
+        if (lfd < 0) continue;
+        OpenFile *lof = &g_open_files[(int)lfd];
 
-        unsigned short flags, atype, nlnk;
-        unsigned int ctime, mtime, atime, nrec, tsz;
+        unsigned short flags = lof->hdr.flags;
+        unsigned short atype = lof->hdr.atype;
+        unsigned int ctime = lof->hdr.ctime;
+        unsigned int mtime = lof->hdr.mtime;
+        unsigned int atime = lof->hdr.atime;
+        unsigned int nrec  = lof->nrec;
+        unsigned int tsz   = lof->hdr.total_size;
+        int is_exec = (flags & (0x0001 | OBJ_EXEC)) ? 1 : 0;
+        cls_fil(lfd);
 
-        if (is_bv) {
-            flags = clu_rd_u16_le(hbuf + 4);
-            atype = 0;
-            ctime = clu_rd_u32_le(hbuf + 0x60);
-            mtime = clu_rd_u32_le(hbuf + 0x64);
-            atime = clu_rd_u32_le(hbuf + 0x68);
-            nlnk  = 1;
-            nrec  = clu_rd_u32_le(hbuf + 0x4C);
-            tsz   = clu_rd_u32_le(hbuf + 0x48);
-        } else {
-            /* Decode FileHeader fields (big-endian) */
-            flags = ((unsigned short)hbuf[0] << 8) | hbuf[1];
-            atype = ((unsigned short)hbuf[2] << 8) | hbuf[3];
-            ctime = ((unsigned int)hbuf[4]<<24)|((unsigned int)hbuf[5]<<16)|
-                    ((unsigned int)hbuf[6]<<8)|(unsigned int)hbuf[7];
-            mtime = ((unsigned int)hbuf[8]<<24)|((unsigned int)hbuf[9]<<16)|
-                    ((unsigned int)hbuf[10]<<8)|(unsigned int)hbuf[11];
-            atime = ((unsigned int)hbuf[12]<<24)|((unsigned int)hbuf[13]<<16)|
-                    ((unsigned int)hbuf[14]<<8)|(unsigned int)hbuf[15];
-            nlnk  = ((unsigned short)hbuf[20]<<8)|hbuf[21];
-            nrec  = ((unsigned int)hbuf[24]<<24)|((unsigned int)hbuf[25]<<16)|
-                    ((unsigned int)hbuf[26]<<8)|(unsigned int)hbuf[27];
-            tsz   = ((unsigned int)hbuf[28]<<24)|((unsigned int)hbuf[29]<<16)|
-                    ((unsigned int)hbuf[30]<<8)|(unsigned int)hbuf[31];
-        }
-
-        /* Color: ELF magic or OBJ_EXEC flag → green; otherwise gray */
-        int is_exec_flag = (flags & OBJ_EXEC) ? 1 : 0;
-        int is_elf_blk   = (hbuf[0] == 0x7F && hbuf[1] == 0x45 &&
-                            hbuf[2] == 0x4C && hbuf[3] == 0x46) ? 1 : 0;
-        UW entry_color = (is_exec_flag || is_elf_blk) ? COLOR_GREEN : COLOR_LTGRAY;
-
+        UW entry_color = is_exec ? COLOR_GREEN : COLOR_LTGRAY;
         char line[256];
         if (flag_l) {
             char mt[24]; fmt_ts(mtime, mt, sizeof(mt));
@@ -504,8 +387,9 @@ void clu_ls(const char *args, ShellOutputFn out, void *ud)
             if (flags & 0x0020) atr[0] = 'P';
             if (flags & 0x0010) atr[1] = 'O';
             snprintf(line, sizeof(line),
-                     "%04X  %s %-4u %-4u %-5u %s %s",
-                     atype, atr, nrec, nlnk, tsz, mt, entry.name);
+                     "%04X  %s %-4u 1    %-5u %s %s",
+                     atype, atr, nrec, tsz, mt, entry.name);
+            out(line, entry_color, ud);
         } else if (flag_t) {
             char ct[24], at[24], mt[24];
             fmt_ts(ctime, ct, sizeof(ct));
@@ -513,10 +397,9 @@ void clu_ls(const char *args, ShellOutputFn out, void *ud)
             fmt_ts(mtime, mt, sizeof(mt));
             snprintf(line, sizeof(line), "%-18s %-18s %-18s %s",
                      ct, at, mt, entry.name);
+            out(line, entry_color, ud);
         }
-        out(line, entry_color, ud);
     }
-    if (hbuf) free(hbuf);
     cls_dir(dir);
 }
 
@@ -539,89 +422,35 @@ static void clu_fs_dump_records(Volume *v, ID fd, FID parent_fid, const char *pa
 
     int indent = (depth > 0) ? (depth * 2) : 0;
     if (indent > 16) indent = 16;
+    int link_count = 0;
 
-    int is_bv_root = (vol_is_brightv(v) && of->fid == FID_ROOT);
-
-    if (!is_bv_root && of->nrec > 0) {
+    if (of->nrec > 0) {
         for (unsigned int i = 0; i < of->nrec; i++) {
             RecordIndex *ri = &of->ridx[i];
-            if (vol_is_brightv(v) && ri->size == 0 && ri->type == 0) continue;
+            if (ri->size == 0 && ri->type == 0 && ri->kind == 0) continue;
             char line[256];
-            if (ri->type == RT_LINK) {
+            if (fil_rec_is_link(fd, i)) {
+                link_count++;
                 char link_name[48] = "(link)";
-                unsigned int link_fid = 0;
+                FID link_fid = FID_INVALID;
                 unsigned short attrs[5] = {0,0,0,0,0};
-                if (ri->size >= 16) {
-                    unsigned char pbuf[80] = {0};
-                    ID rec = opn_rec(fd, (W)i, 0x0001);
-                    if (rec >= 0) {
-                        W got = 0;
-                        rd_rec(rec, pbuf, 16, &got);
-                        if (vol_is_brightv(v)) {
-                            link_fid = (unsigned int)pbuf[0] | ((unsigned int)pbuf[1] << 8) |
-                                       ((unsigned int)pbuf[2] << 16) | ((unsigned int)pbuf[3] << 24);
-                            for (int a = 0; a < 5; a++)
-                                attrs[a] = (unsigned short)(pbuf[4+a*2] | (pbuf[4+a*2+1] << 8));
-                            unsigned short nlen = (unsigned short)(pbuf[14] | (pbuf[15] << 8));
-                            if (nlen > 0 && nlen < 40) {
-                                W got2 = 0;
-                                rd_rec(rec, link_name, (W)nlen, &got2);
-                                link_name[got2] = '\0';
-                            }
-                        } else {
-                            link_fid   = ((unsigned int)pbuf[0]<<24)|((unsigned int)pbuf[1]<<16)|
-                                         ((unsigned int)pbuf[2]<<8)|(unsigned int)pbuf[3];
-                            for (int a = 0; a < 5; a++)
-                                attrs[a] = ((unsigned short)pbuf[4+a*2]<<8)|pbuf[4+a*2+1];
-                            unsigned short nlen = ((unsigned short)pbuf[14]<<8)|pbuf[15];
-                            if (nlen > 0 && nlen < 40) {
-                                W got2 = 0;
-                                rd_rec(rec, link_name, (W)nlen, &got2);
-                                link_name[got2] = '\0';
-                            }
-                        }
-                        cls_rec(rec);
-                    }
-                }
-                if (vol_is_brightv(v) && link_fid == 0 && ri->offset > 0) {
-                    link_fid = ri->offset;
-                }
-                if (vol_is_brightv(v) && (link_name[0] == '\0' || strcmp(link_name, "(link)") == 0)) {
-                    if (link_fid > 0 && link_fid != FID_INVALID && link_fid < nfmax) {
-                        BLK lb = vol_fid_get_blk(v, (FID)link_fid);
-                        if (lb > 0 && lb != FID_INVALID) {
-                            unsigned char *lbuf = (unsigned char *)malloc(vol_block_size(v));
-                            if (lbuf) {
-                                if (vol_read_blk(v, lb, lbuf) == 0) {
-                                    if (memcmp(lbuf, "Tron", 4) == 0 || memcmp(lbuf, "norT", 4) == 0) {
-                                        UH tc[20];
-                                        for (int k = 0; k < 16; k++) tc[k] = clu_rd_u16_le(lbuf + 0x6C + k * 2);
-                                        tc[16] = 0;
-                                        btr_tcode_to_utf8(tc, 16, link_name, sizeof(link_name));
-                                    } else if (memcmp(lbuf, "\x7f\x45\x4c\x46", 4) == 0) {
-                                        snprintf(link_name, sizeof(link_name), "ELF_%u", link_fid);
-                                    }
-                                }
-                                free(lbuf);
-                            }
-                        }
-                    }
-                }
-                int lkind = clu_probe_kind(v, link_fid);
+                fil_get_rec_link_info(fd, i, &link_fid, link_name, sizeof(link_name), attrs);
+
+                int lkind = clu_probe_kind(v, (unsigned int)link_fid);
                 UW lcolor  = clu_kind_color(lkind, lkind < 1 /* is_link if not exec */);
                 const char *tag = (lkind >= 2) ? " [ELF]" : (lkind == 1 ? " [EXE]" : "");
                 if (flag_l) {
                     snprintf(line, sizeof(line),
                              "%u:  0 %04X  : %-5u %-6u [%04X %04X %04X %04X %04X] : %*s%s%s",
                              i, (unsigned)ri->flags & 0xFFFF,
-                             link_fid, (unsigned)of->fid,
+                             (unsigned)link_fid, (unsigned)of->fid,
                              attrs[0], attrs[1], attrs[2], attrs[3], attrs[4],
                              indent, "", link_name, tag);
                 } else {
                     snprintf(line, sizeof(line),
                              "%u:  0    %04X  : %-5u %-6u : %*s%s%s",
                              i, (unsigned)ri->flags & 0xFFFF,
-                             link_fid, (unsigned)of->fid,
+                             (unsigned)link_fid, (unsigned)of->fid,
                              indent, "", link_name, tag);
                 }
                 out(line, lcolor, ud);
@@ -673,28 +502,10 @@ static void clu_fs_dump_records(Volume *v, ID fd, FID parent_fid, const char *pa
                 out(line, COLOR_LTGRAY, ud);
             }
         }
-    } else if (of->fid == FID_ROOT || is_bv_root) {
+    }
+
+    if (of->fid == FID_ROOT && link_count == 0) {
         unsigned int rec_idx = 0;
-        /* For Cho-Kanji volume root, first dump any active data records belonging to FID 0 itself */
-        if (is_bv_root && of->nrec > 0) {
-            for (unsigned int i = 0; i < of->nrec; i++) {
-                RecordIndex *ri = &of->ridx[i];
-                if (ri->size == 0 && ri->type == 0) continue;
-                char line[256];
-                if (flag_l) {
-                    snprintf(line, sizeof(line),
-                             "%u:  %-4u %04X  : -     %-6u (data record)",
-                             rec_idx++, (unsigned)ri->type, (unsigned)ri->flags & 0xFFFF,
-                             (unsigned)of->fid);
-                } else {
-                    snprintf(line, sizeof(line),
-                             "%u:  %-4u %04X  : -     %-6u : %-12u",
-                             rec_idx++, (unsigned)ri->type, (unsigned)ri->flags & 0xFFFF,
-                             (unsigned)of->fid, ri->size);
-                }
-                out(line, COLOR_LTGRAY, ud);
-            }
-        }
 
         /* Directory enumeration for root container */
         const char *vdir = (v == g_chokanji_vol) ? "/CHOKANJI" :
@@ -706,7 +517,7 @@ static void clu_fs_dump_records(Volume *v, ID fd, FID parent_fid, const char *pa
             while (rd_dir(dir, &entry) == 0) {
                 if (!entry.name[0]) continue;
                 FID efid = (FID)entry.robj_id;
-                if (efid == FID_ROOT && !is_bv_root) continue;
+                if (efid == FID_ROOT) continue;
                 char line[256];
                 int ekind = clu_probe_kind(v, (unsigned int)efid);
                 UW ecolor  = clu_kind_color(ekind, ekind < 1 /* is_link if not exec */);
@@ -741,7 +552,7 @@ static void clu_fs_dump_records(Volume *v, ID fd, FID parent_fid, const char *pa
             cls_dir(dir);
             if (idx == 0) out("(0 records)", COLOR_LTGRAY, ud);
         }
-    } else {
+    } else if (of->nrec == 0) {
         out("(0 records)", COLOR_LTGRAY, ud);
     }
 }
@@ -815,7 +626,7 @@ static void clu_fs_print_node_line(const CluFsNode *nodes, FID fid, int indent_s
                                    int flag_l, int is_tree, ShellOutputFn out, void *ud)
 {
     if (!nodes[fid].blk) return;
-    int kind = nodes[fid].is_dir ? 3 : (nodes[fid].is_elf ? 2 : (nodes[fid].is_stream ? 4 : 0));
+    int kind = nodes[fid].is_elf ? 2 : (nodes[fid].is_dir ? 3 : (nodes[fid].is_stream ? 4 : 0));
     const char *tag = (kind == 3) ? "[DIR]" :
                       (kind == 2) ? "[ELF]" :
                       (kind == 4) ? "[STR]" : "[TAD]";
@@ -1035,16 +846,6 @@ void clu_fs_cmd(const char *args, ShellOutputFn out, void *ud)
             nodes[f].next_sibling = FID_INVALID;
         }
 
-        UW bsize = vol_block_size(v);
-        unsigned char *buf = (unsigned char *)malloc(bsize);
-        unsigned char *hbuf = (unsigned char *)malloc(bsize);
-        if (!buf || !hbuf) {
-            if (buf) free(buf);
-            if (hbuf) free(hbuf);
-            free(nodes);
-            return;
-        }
-
         unsigned int count = 0;
         for (FID fid = 0; fid < nfmax; fid++) {
             UB refc = vol_fid_refcount(v, fid);
@@ -1052,93 +853,44 @@ void clu_fs_cmd(const char *args, ShellOutputFn out, void *ud)
             if (refc == 0 && fid != FID_ROOT) continue;
             if (blk == 0 || blk == FID_INVALID) continue;
 
-            if (vol_read_blk(v, blk, buf) != 0) continue;
+            ID fd = opn_fil_fid(v, fid, 0x0001);
+            if (fd < 0) continue;
+            OpenFile *of = &g_open_files[(int)fd];
             count++;
 
             nodes[fid].blk = blk;
             nodes[fid].refc = refc;
+            nodes[fid].hdr_blk = of->hdr_blk ? of->hdr_blk : blk;
+            nodes[fid].flags = of->hdr.flags;
+            nodes[fid].sz = of->hdr.total_size;
+            nodes[fid].did = of->hdr.did;
+            nodes[fid].pdid = of->hdr.pdid;
+            nodes[fid].is_stream = of->is_stream;
+            nodes[fid].is_elf = (of->hdr.flags & 0x0001) != 0;
 
-            if (vol_is_brightv(v)) {
-                int has_hdr = 0;
-                if (memcmp(buf, "Tron", 4) == 0 || memcmp(buf, "norT", 4) == 0) {
-                    memcpy(hbuf, buf, bsize);
-                    nodes[fid].hdr_blk = blk;
-                    has_hdr = 1;
-                    nodes[fid].is_stream = 0;
-                } else if (blk > 0 && vol_read_blk(v, blk - 1, hbuf) == 0 &&
-                           (memcmp(hbuf, "Tron", 4) == 0 || memcmp(hbuf, "norT", 4) == 0)) {
-                    nodes[fid].hdr_blk = blk - 1;
-                    has_hdr = 1;
-                    nodes[fid].is_stream = 1;
-                }
+            if (of->is_stream) {
+                snprintf(nodes[fid].name, sizeof(nodes[fid].name), "[*] %s",
+                         of->hdr.name[0] ? (const char *)of->hdr.name : "stream");
+            } else {
+                snprintf(nodes[fid].name, sizeof(nodes[fid].name), "%s",
+                         of->hdr.name[0] ? (const char *)of->hdr.name : "-");
+            }
 
-                if (has_hdr) {
-                    nodes[fid].flags = clu_rd_u16_le(hbuf + 4);
-                    nodes[fid].sz = clu_rd_u32_le(hbuf + 0x48);
-                    UW cnt_44 = clu_rd_u32_le(hbuf + 0x44);
-                    UW cnt_4c = clu_rd_u32_le(hbuf + 0x4c);
-                    UW cnt_50 = clu_rd_u32_le(hbuf + 0x50);
-                    nodes[fid].did = clu_rd_u32_le(hbuf + 0x64);
-                    nodes[fid].pdid = clu_rd_u32_le(hbuf + 0x68);
-
-                    UH tc[20];
-                    for (int k = 0; k < 16; k++) tc[k] = clu_rd_u16_le(hbuf + 0x6C + k * 2);
-                    tc[16] = 0;
-                    char raw_name[48] = "";
-                    btr_tcode_to_utf8(tc, 16, raw_name, sizeof(raw_name));
-
-                    if (nodes[fid].is_stream) {
-                        snprintf(nodes[fid].name, sizeof(nodes[fid].name), "[*] %s", raw_name[0] ? raw_name : "stream");
-                    } else {
-                        snprintf(nodes[fid].name, sizeof(nodes[fid].name), "%s", raw_name[0] ? raw_name : "-");
-                    }
-
-                    if (memcmp(buf, "\x7f\x45\x4c\x46", 4) == 0 || (nodes[fid].flags & 0x0001)) {
-                        nodes[fid].is_elf = 1;
-                    }
-
-                    if (!nodes[fid].is_stream) {
-                        UW max_scan = cnt_44;
-                        if (cnt_4c > max_scan) max_scan = cnt_4c;
-                        if (cnt_50 > max_scan) max_scan = cnt_50;
-                        if (max_scan > 1024) max_scan = 1024;
-
-                        for (UW k = 1; k <= max_scan; k++) {
-                            int off = (int)bsize - (int)k * 16;
-                            if (off < 0) break;
-                            uint16_t kind = clu_rd_u16_le(hbuf + off);
-                            if (kind == 0x8000) {
-                                nodes[fid].is_dir = 1;
-                                uint32_t raw_cfid = clu_rd_u32_le(hbuf + off + 4);
-                                FID cfid = (raw_cfid < nfmax) ? (FID)raw_cfid : (FID)(raw_cfid & 0xFFFF);
-                                if (cfid < nfmax && cfid != fid) {
-                                    clu_fs_node_add_child(nodes, fid, cfid, nfmax);
-                                }
+            if (!of->is_stream && of->nrec > 0) {
+                for (unsigned int i = 0; i < of->nrec; i++) {
+                    if (fil_rec_is_link(fd, i)) {
+                        nodes[fid].is_dir = 1;
+                        FID cfid = FID_INVALID;
+                        char cname[48] = "";
+                        if (fil_get_rec_link_info(fd, i, &cfid, cname, sizeof(cname), NULL) == 0) {
+                            if (cfid < nfmax && cfid != fid && cfid != FID_INVALID) {
+                                clu_fs_node_add_child(nodes, fid, cfid, nfmax);
                             }
                         }
                     }
-                } else {
-                    nodes[fid].is_stream = 1;
-                    nodes[fid].sz = bsize;
-                    if (memcmp(buf, "\x7f\x45\x4c\x46", 4) == 0) {
-                        nodes[fid].is_elf = 1;
-                        snprintf(nodes[fid].name, sizeof(nodes[fid].name), "[*] ELF_%u", (unsigned)fid);
-                    } else {
-                        snprintf(nodes[fid].name, sizeof(nodes[fid].name), "[*] stream_%u", (unsigned)fid);
-                    }
                 }
-            } else {
-                /* Cleanroom BTRON volume */
-                nodes[fid].hdr_blk = blk;
-                nodes[fid].flags = ((UH)buf[0] << 8) | buf[1];
-                nodes[fid].sz = ((UW)buf[28] << 24) | ((UW)buf[29] << 16) | ((UW)buf[30] << 8) | buf[31];
-                memcpy(nodes[fid].name, buf + 32, 40);
-                nodes[fid].name[40] = '\0';
-                nodes[fid].did = ((UW)buf[100] << 24) | ((UW)buf[101] << 16) | ((UW)buf[102] << 8) | buf[103];
-                nodes[fid].pdid = ((UW)buf[104] << 24) | ((UW)buf[105] << 16) | ((UW)buf[106] << 8) | buf[107];
-                if (nodes[fid].flags & 0x0001) nodes[fid].is_elf = 1;
-                if (nodes[fid].did != 0) nodes[fid].is_dir = 1;
             }
+            cls_fil(fd);
         }
 
         /* Pass 2: Connect parent-child linkages (unified in-memory resolution via pdid -> did) */
@@ -1156,8 +908,8 @@ void clu_fs_cmd(const char *args, ShellOutputFn out, void *ud)
             }
         }
 
-        /* Cleanroom BTRON fallback: attach any unparented bodies directly to root */
-        if (!vol_is_brightv(v) && nodes[FID_ROOT].blk) {
+        /* Fallback: attach any unparented bodies directly to root */
+        if (nodes[FID_ROOT].blk) {
             for (FID f = 1; f < nfmax; f++) {
                 if (nodes[f].blk && nodes[f].parent_fid == FID_INVALID && nodes[f].pdid == 0) {
                     clu_fs_node_add_child(nodes, FID_ROOT, f, nfmax);
@@ -1293,7 +1045,7 @@ void clu_fs_cmd(const char *args, ShellOutputFn out, void *ud)
                     snprintf(parent_str, sizeof(parent_str), "-");
                 }
 
-                int kind = nodes[fid].is_dir ? 3 : (nodes[fid].is_elf ? 2 : (nodes[fid].is_stream ? 4 : 0));
+                int kind = nodes[fid].is_elf ? 2 : (nodes[fid].is_dir ? 3 : (nodes[fid].is_stream ? 4 : 0));
                 const char *tag = (kind == 3) ? "[DIR]" :
                                   (kind == 2) ? "[ELF]" :
                                   (kind == 4) ? "[STR]" : "[TAD]";
@@ -1319,7 +1071,7 @@ void clu_fs_cmd(const char *args, ShellOutputFn out, void *ud)
                     ID cfd = opn_fil_fid(v, fid, 0x0001);
                     if (cfd >= 0) {
                         OpenFile *cof = &g_open_files[(int)cfd];
-                        if (cof->nrec > 0 && !(cof->nrec == 1 && cof->ridx[0].size == bsize && cof->ridx[0].type == 0)) {
+                        if (cof->nrec > 0 && !cof->is_stream) {
                             unsigned char *vrec = (unsigned char *)calloc(nfmax, 1);
                             if (vrec) {
                                 clu_fs_dump_records(v, cfd, fid, nodes[fid].name[0] ? nodes[fid].name : "body", 1, flag_l, 0, vrec, nfmax, out, ud);
@@ -1332,8 +1084,6 @@ void clu_fs_cmd(const char *args, ShellOutputFn out, void *ud)
             }
         }
 
-        free(buf);
-        free(hbuf);
         free(nodes);
         char summary[80];
         snprintf(summary, sizeof(summary), "(%u real bodies total)", count);
@@ -1401,7 +1151,7 @@ static void clu_stat_internal(const char *cmd_name, const char *args, ShellOutpu
     char line[160];
     const char *vol_name = (v == g_chokanji_vol) ? "CHOKANJI" :
                            (v == g_anders_vol) ? "ANDERS" : "SYS";
-    const char *vol_desc = vol_is_brightv(v) ? "B-right/V 4.02 (Cho-Kanji)" : "Cleanroom BTRON3";
+    const char *vol_desc = vol_description(v);
 
     snprintf(line, sizeof(line), "  File: %s", of->hdr.name[0] ? (const char *)of->hdr.name : "(unnamed)");
     out(line, COLOR_WHITE, ud);
@@ -1464,7 +1214,18 @@ static void clu_stat_internal(const char *cmd_name, const char *args, ShellOutpu
             out(line, COLOR_WHITE, ud);
 
             /* Inspect record content if available */
-            if (of->ridx[i].size > 0 && of->ridx[i].size <= 512) {
+            if (fil_rec_is_link(fd, i)) {
+                FID lfid = FID_INVALID;
+                char lname[48] = "";
+                if (fil_get_rec_link_info(fd, i, &lfid, lname, sizeof(lname), NULL) == 0 && lfid != FID_INVALID) {
+                    if (lname[0]) {
+                        snprintf(line, sizeof(line), "       -> Link Target: FID %u (\"%s\")", (unsigned)lfid, lname);
+                    } else {
+                        snprintf(line, sizeof(line), "       -> Link Target: FID %u", (unsigned)lfid);
+                    }
+                    out(line, COLOR_CYAN, ud);
+                }
+            } else if (of->ridx[i].size > 0 && of->ridx[i].size <= 512) {
                 ID rec = opn_rec(fd, (W)i, 0x0001);
                 if (rec >= 0) {
                     unsigned char pbuf[128];
@@ -1485,26 +1246,8 @@ static void clu_stat_internal(const char *cmd_name, const char *args, ShellOutpu
                                 snprintf(line, sizeof(line), "       -> Link/Text: \"%s\"", utf8);
                                 out(line, COLOR_CYAN, ud);
                             }
-                        } else if ((of->ridx[i].type == 0 || of->ridx[i].type == RT_LINK) && !vol_is_brightv(v)) {
-                            FID lfid = (FID)((pbuf[0]<<24)|(pbuf[1]<<16)|(pbuf[2]<<8)|pbuf[3]);
-                            snprintf(line, sizeof(line), "       -> Target FID: %u", (unsigned)lfid);
-                            out(line, COLOR_CYAN, ud);
                         }
                     }
-                }
-            } else if (vol_is_brightv(v) && of->ridx[i].kind == 0x8000) {
-                UW nfmax = vol_nfmax(v);
-                uint32_t raw_cfid = of->ridx[i].offset;
-                FID cfid = (raw_cfid < nfmax) ? (FID)raw_cfid : (FID)(raw_cfid & 0xFFFF);
-                if (cfid < nfmax) {
-                    ID cfd = opn_fil_fid(v, cfid, 0x0001);
-                    if (cfd >= 0) {
-                        snprintf(line, sizeof(line), "       -> Child FID: %u (\"%s\")", (unsigned)cfid, g_open_files[(int)cfd].hdr.name);
-                        cls_fil(cfd);
-                    } else {
-                        snprintf(line, sizeof(line), "       -> Child FID: %u", (unsigned)cfid);
-                    }
-                    out(line, COLOR_CYAN, ud);
                 }
             }
         }
@@ -1560,8 +1303,7 @@ void clu_tp(const char *args, ShellOutputFn out, void *ud)
     int found_rec = 0;
 
     for (unsigned int i = 0; i < of->nrec; i++) {
-        if (!vol_is_brightv(v) && of->ridx[i].type == RT_LINK) continue;
-        if (vol_is_brightv(v) && (of->ridx[i].kind == 0x8000 || of->ridx[i].type == 0x0080) && of->ridx[i].size == 0) continue;
+        if (fil_rec_is_link(fd, i)) continue;
         if (of->ridx[i].size == 0) continue;
 
         ID rec = opn_rec(fd, (W)i, 0x0001);

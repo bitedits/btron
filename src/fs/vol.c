@@ -188,7 +188,6 @@ struct Volume {
     UW             ubmp_bytes;    /* byte size of ubmp                          */
     int            dirty;
     int            is_le;         /* 1 = little-endian, 0 = big-endian          */
-    int            is_brightv;    /* 1 = B-right/V 4.02 filesystem              */
     UW             block_size;    /* logical block size (e.g. 1024 or 8192)     */
     UW             bmp_start;     /* start block of bitmap                      */
     UW             fid_start;     /* start block of FID table                   */
@@ -206,9 +205,20 @@ UW vol_block_size(const Volume *v)
     return (v && v->block_size > 0) ? v->block_size : BTRON_BLOCK_SIZE;
 }
 
-int vol_is_brightv(const Volume *v)
+UH vol_fs_type(const Volume *v)
 {
-    return v ? v->is_brightv : 0;
+    return v ? v->hdr.fs_type : 0;
+}
+
+int vol_is_le(const Volume *v)
+{
+    return v ? v->is_le : 0;
+}
+
+const char *vol_description(const Volume *v)
+{
+    if (!v) return "Unknown";
+    return (v->hdr.fs_type == FS_TYPE_BRIGHTV) ? "B-right/V 4.02 (Cho-Kanji)" : "Cleanroom BTRON3";
 }
 
 
@@ -380,7 +390,7 @@ static void flush_fid_table(Volume *v)
         UW base = b * entries_per_blk;
         memset(blk_buf, 0, bsize);
         for (UW i = 0; i < entries_per_blk && base + i < v->hdr.nfmax; i++) {
-            if (v->is_brightv) {
+            if (v->hdr.fs_type == FS_TYPE_BRIGHTV) {
                 BLK blk = (v->fid_tbl[base + i] >> 8) & 0x00FFFFFFu;
                 UB rc   = (UB)(v->fid_tbl[base + i] & 0xFF);
                 blk_buf[i * 4 + 0] = (UB)(blk & 0xFF);
@@ -420,7 +430,7 @@ static void flush_bitmap(Volume *v)
     unsigned char *blk_buf = (unsigned char *)malloc(bsize);
     if (!blk_buf) return;
 
-    if (v->is_brightv) {
+    if (v->hdr.fs_type == FS_TYPE_BRIGHTV) {
         /* Block 0: bytes 128..bsize-1 are bitmap */
         vol_read_blk(v, 0, blk_buf);
         UW b0_avail = bsize - 128;
@@ -463,7 +473,7 @@ static void flush_header(Volume *v)
     unsigned char *blk_buf = (unsigned char *)malloc(bsize);
     if (!blk_buf) return;
 
-    if (v->is_brightv) {
+    if (v->hdr.fs_type == FS_TYPE_BRIGHTV) {
         vol_read_blk(v, 0, blk_buf); /* preserve bitmap in 128..bsize */
         wr_u16(1, blk_buf +  0, v->hdr.magic);
         wr_u16(1, blk_buf +  2, v->hdr.fs_type);
@@ -656,8 +666,6 @@ Volume *vol_mount(BlkDev *dev)
 
     UH magic = rd_u16(is_le, blk_buf + 0);
     UH fs_type = rd_u16(is_le, blk_buf + 2);
-    int is_brightv = (fs_type == FS_TYPE_BRIGHTV);
-
     Volume *v = (Volume *)calloc(1, sizeof(Volume));
     if (!v) {
         free(blk_buf);
@@ -666,9 +674,8 @@ Volume *vol_mount(BlkDev *dev)
 
     v->dev        = dev;
     v->is_le      = is_le;
-    v->is_brightv = is_brightv;
 
-    if (is_brightv) {
+    if (fs_type == FS_TYPE_BRIGHTV) {
         v->block_size       = rd_u16(1, blk_buf + 0x18);
         if (v->block_size == 0) v->block_size = 8192;
         v->hdr.magic        = magic;
@@ -748,7 +755,7 @@ Volume *vol_mount(BlkDev *dev)
             if (dev->read(dev, v->fid_start + b, blk_buf, 1) != 0) break;
             UW base = b * entries_per_blk;
             for (UW i = 0; i < entries_per_blk && base + i < nfmax; i++) {
-                if (is_brightv) {
+                if (fs_type == FS_TYPE_BRIGHTV) {
                     UB b0 = blk_buf[i * 4 + 0];
                     UB b1 = blk_buf[i * 4 + 1];
                     UB b2 = blk_buf[i * 4 + 2];
@@ -776,7 +783,7 @@ Volume *vol_mount(BlkDev *dev)
 
     /* Load used-block bitmap */
     {
-        if (is_brightv) {
+        if (fs_type == FS_TYPE_BRIGHTV) {
             dev->read(dev, 0, blk_buf, 1);
             UW b0_avail = bsize - 128;
             UW chunk = (v->ubmp_bytes < b0_avail) ? v->ubmp_bytes : b0_avail;

@@ -25,6 +25,7 @@ typedef struct {
     BLK         hdr_blk;       /* logical block address of FileHeader block */
     UW          mode;
     BOOL        dirty;          /* FileHeader or RecordIndex modified?      */
+    UB          is_stream;      /* Real Body is a direct stream / secondary */
     FileHeader  hdr;            /* cached 192-byte FileHeader               */
     RecordIndex ridx[REC_IDX_LEVEL0_MAX]; /* level-0 index (up to 40)      */
     UW          nrec;           /* mirrors hdr.nrec                         */

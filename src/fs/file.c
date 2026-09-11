@@ -119,8 +119,9 @@ static int read_header_block(Volume *v, BLK blk, OpenFile *of)
         return -1;
     }
 
-    if (vol_is_brightv(v)) {
+    if (vol_fs_type(v) == FS_TYPE_BRIGHTV) {
         int found_hdr_m1 = 0;
+        int blk_is_elf = (memcmp(buf, "\x7f\x45\x4c\x46", 4) == 0);
         if (memcmp(buf, "Tron", 4) != 0 && memcmp(buf, "norT", 4) != 0) {
             /* On Cho-Kanji volumes, the Real Body Header is at blk - 1 for files with data */
             if (blk > 0) {
@@ -154,6 +155,9 @@ static int read_header_block(Volume *v, BLK blk, OpenFile *of)
                 of->hdr.total_size = bsize;
                 of->hdr.nrec = 1;
                 of->hdr.data_blk = blk;
+                of->hdr.did = 0;
+                of->hdr.pdid = 0;
+                of->is_stream = 1;
                 of->nrec = 1;
                 of->data_used = bsize;
                 of->data_blk = blk;
@@ -182,6 +186,9 @@ static int read_header_block(Volume *v, BLK blk, OpenFile *of)
         of->hdr.ctime      = rd_u32_le(buf + 0x60);
         of->hdr.mtime      = rd_u32_le(buf + 0x64);
         of->hdr.atime      = rd_u32_le(buf + 0x68);
+        of->hdr.did        = rd_u32_le(buf + 0x64);
+        of->hdr.pdid       = rd_u32_le(buf + 0x68);
+        of->is_stream      = found_hdr_m1 ? 1 : 0;
         of->hdr.owner      = 0;
         of->hdr.group      = 0;
         of->hdr.nlnk       = 1;
@@ -216,6 +223,16 @@ static int read_header_block(Volume *v, BLK blk, OpenFile *of)
 
         if (found_hdr_m1) {
             of->data_blk = blk;
+            if (blk_is_elf) of->hdr.flags |= 0x0001;
+            if (of->nrec == 0 && (of->hdr.total_size > 0 || of->data_blk > 0)) {
+                of->nrec = 1;
+                of->hdr.nrec = 1;
+                of->ridx[0].kind = blk_is_elf ? 0x9F00 : 0x0000;
+                of->ridx[0].type = 0;
+                of->ridx[0].offset = 0;
+                of->ridx[0].size = of->hdr.total_size ? of->hdr.total_size : bsize;
+                of->ridx[0].flags = 1;
+            }
         } else {
             BLK rblk = 0;
             if (of->nrec > 0) {
@@ -236,6 +253,7 @@ static int read_header_block(Volume *v, BLK blk, OpenFile *of)
     }
 
     /* Standard cleanroom volume */
+    of->is_stream = 0;
     unsigned char *p = buf;
     of->hdr.flags      = rd_u16_be(p +  0);
     of->hdr.atype      = rd_u16_be(p +  2);
@@ -281,7 +299,7 @@ static int write_header_block(Volume *v, BLK blk, const OpenFile *of)
     unsigned char *buf = (unsigned char *)malloc(bsize);
     if (!buf) return -1;
 
-    if (vol_is_brightv(v)) {
+    if (vol_fs_type(v) == FS_TYPE_BRIGHTV) {
         if (vol_read_blk(v, blk, buf) != 0) {
             memset(buf, 0, bsize);
         }
@@ -376,7 +394,7 @@ static FID find_fid_by_name(Volume *v, const char *name)
     unsigned char *buf = (unsigned char *)malloc(bsize);
     if (!buf) return FID_INVALID;
 
-    int is_bv = vol_is_brightv(v);
+    int is_bv = (vol_fs_type(v) == FS_TYPE_BRIGHTV);
 
     for (FID i = 0; i < nfmax; i++) {
         if (vol_fid_refcount(v, i) == 0 && i != FID_ROOT) continue;
@@ -916,7 +934,7 @@ ER rd_dir(ID dir_id, DIR_ENTRY *entry)
     UW bsize = vol_block_size(v);
     unsigned char *buf = (unsigned char *)malloc(bsize);
     if (!buf) return (ER)-1;
-    int is_bv = vol_is_brightv(v);
+    int is_bv = (vol_fs_type(v) == FS_TYPE_BRIGHTV);
 
     while (g_dirs[slot].next_fid < nfmax) {
         FID fid = g_dirs[slot].next_fid++;
@@ -1090,4 +1108,111 @@ void fil_set_rec_type(ID fd, W rec_idx, UH type)
     if (!of->used || (UW)rec_idx >= of->nrec) return;
     of->ridx[rec_idx].type = type;
     of->dirty = 1;
+}
+
+/* ── fil_is_stream ───────────────────────────────────────────────── */
+int fil_is_stream(ID fd)
+{
+    if (fd < 0 || fd >= MAX_OPEN_FILES) return 0;
+    OpenFile *of = &g_open_files[(int)fd];
+    if (!of->used) return 0;
+    return (int)of->is_stream;
+}
+
+/* ── fil_rec_is_link ─────────────────────────────────────────────── */
+int fil_rec_is_link(ID fd, W rec_idx)
+{
+    if (fd < 0 || fd >= MAX_OPEN_FILES) return 0;
+    OpenFile *of = &g_open_files[(int)fd];
+    if (!of->used || rec_idx < 0 || (UW)rec_idx >= of->nrec) return 0;
+    RecordIndex *ri = &of->ridx[rec_idx];
+    if (ri->size == 0 && ri->kind == 0 && ri->type == 0) return 0;
+    if (ri->kind == 0x8000) return 1;
+    if (ri->type == RT_LINK && ri->size >= 16) return 1;
+    if (ri->type == 0x0080 && ri->size >= 16) return 1;
+    return 0;
+}
+
+/* ── fil_get_rec_link_info ───────────────────────────────────────── */
+ER fil_get_rec_link_info(ID fd, W rec_idx, FID *out_fid, char *out_name, size_t name_max, UH attrs[5])
+{
+    if (out_fid) *out_fid = FID_INVALID;
+    if (out_name && name_max > 0) out_name[0] = '\0';
+    if (attrs) memset(attrs, 0, 5 * sizeof(UH));
+
+    if (fd < 0 || fd >= MAX_OPEN_FILES) return (ER)-1;
+    OpenFile *of = &g_open_files[(int)fd];
+    if (!of->used || rec_idx < 0 || (UW)rec_idx >= of->nrec) return (ER)-1;
+
+    Volume *v = of_vol(of);
+    if (!v) return (ER)-1;
+
+    RecordIndex *ri = &of->ridx[rec_idx];
+    if (!fil_rec_is_link(fd, rec_idx)) return (ER)-1;
+
+    FID link_fid = FID_INVALID;
+    char link_name[64] = "";
+
+    if (ri->size >= 16) {
+        ID rec = opn_rec(fd, rec_idx, 0x0001);
+        if (rec >= 0) {
+            unsigned char pbuf[16];
+            W got = 0;
+            rd_rec(rec, pbuf, 16, &got);
+            if (got >= 16) {
+                if (vol_is_le(v)) {
+                    link_fid = (FID)((unsigned int)pbuf[0] | ((unsigned int)pbuf[1] << 8) |
+                                     ((unsigned int)pbuf[2] << 16) | ((unsigned int)pbuf[3] << 24));
+                    if (attrs) {
+                        for (int a = 0; a < 5; a++)
+                            attrs[a] = (UH)(pbuf[4 + a * 2] | (pbuf[4 + a * 2 + 1] << 8));
+                    }
+                    unsigned short nlen = (unsigned short)(pbuf[14] | (pbuf[15] << 8));
+                    if (nlen > 0 && nlen < sizeof(link_name)) {
+                        W got2 = 0;
+                        rd_rec(rec, link_name, (W)nlen, &got2);
+                        link_name[got2] = '\0';
+                    }
+                } else {
+                    link_fid = ((FID)pbuf[0] << 24) | ((FID)pbuf[1] << 16) |
+                               ((FID)pbuf[2] << 8)  | (FID)pbuf[3];
+                    if (attrs) {
+                        for (int a = 0; a < 5; a++)
+                            attrs[a] = ((UH)pbuf[4 + a * 2] << 8) | pbuf[4 + a * 2 + 1];
+                    }
+                    unsigned short nlen = ((unsigned short)pbuf[14] << 8) | pbuf[15];
+                    if (nlen > 0 && nlen < sizeof(link_name)) {
+                        W got2 = 0;
+                        rd_rec(rec, link_name, (W)nlen, &got2);
+                        link_name[got2] = '\0';
+                    }
+                }
+            }
+            cls_rec(rec);
+        }
+    }
+
+    if (link_fid == FID_INVALID && (ri->kind == 0x8000 || ri->type == 0x0080) && ri->offset > 0) {
+        UW nfmax = vol_nfmax(v);
+        link_fid = (ri->offset < nfmax) ? (FID)ri->offset : (FID)(ri->offset & 0xFFFF);
+    }
+
+    if (link_fid == FID_INVALID) return (ER)-1;
+
+    /* Fallback: if link_name is empty, query target Real Body's header name */
+    if (link_name[0] == '\0' && link_fid != (FID)0) {
+        ID target_fd = opn_fil_fid(v, link_fid, 0x0001);
+        if (target_fd >= 0) {
+            strncpy(link_name, (const char *)g_open_files[(int)target_fd].hdr.name, sizeof(link_name) - 1);
+            link_name[sizeof(link_name) - 1] = '\0';
+            cls_fil(target_fd);
+        }
+    }
+
+    if (out_fid) *out_fid = link_fid;
+    if (out_name && name_max > 0) {
+        strncpy(out_name, link_name[0] ? link_name : "(link)", name_max - 1);
+        out_name[name_max - 1] = '\0';
+    }
+    return (ER)0;
 }

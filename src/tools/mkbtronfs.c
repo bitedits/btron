@@ -92,6 +92,8 @@ static void add_container_link(const char *container, const char *name, FID fid)
     ER err = ins_rec(parent_fd, rec_idx, payload, (int)(16 + nlen));
     if (err == 0) {
         fil_set_rec_type(parent_fd, rec_idx, (UH)RT_LINK);
+        pof->ridx[rec_idx].kind = 0x8000;
+        pof->dirty = 1;
     }
     cls_fil(parent_fd);
 }

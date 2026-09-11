@@ -164,6 +164,8 @@ struct linger {
 #endif
 
 #if !defined(_SYS_SELECT_H_) && !defined(_SYS_SELECT_H) && !defined(_SYS__TYPES__FD_DEF_H) && !defined(_FD_SET)
+#define _SYS_SELECT_H_
+#define _SYS_SELECT_H
 #define _SYS__TYPES__FD_DEF_H
 #define _FD_SET
 #define FD_SETSIZE      256
@@ -172,7 +174,8 @@ typedef struct fd_set {
 } fd_set;
 #endif
 
-#if !defined(_SYS_TIME_H_) && !defined(_SYS_TIME_H) && !defined(_STRUCT_TIMEVAL)
+#if !defined(_SYS_TIME_H_) && !defined(_SYS_TIME_H) && !defined(_STRUCT_TIMEVAL) && !defined(_SYS__TIMEVAL_H_)
+#define _SYS__TIMEVAL_H_
 #define _STRUCT_TIMEVAL struct timeval
 struct timeval {
     long            tv_sec;

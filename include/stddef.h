@@ -32,19 +32,58 @@
 extern "C" {
 #endif
 
+#ifndef _PTRDIFF_T
+#ifndef _PTRDIFF_T_DECLARED
+#ifndef __ptrdiff_t_defined
+#ifndef _PTRDIFF_T_
+#ifndef _BSD_PTRDIFF_T_DECLARED
+#define _PTRDIFF_T
+#define _PTRDIFF_T_DECLARED
+#define __ptrdiff_t_defined
+#define _PTRDIFF_T_
+#define _BSD_PTRDIFF_T_DECLARED
+#if defined(__PTRDIFF_TYPE__)
+typedef __PTRDIFF_TYPE__ ptrdiff_t;
+#elif defined(__ptrdiff_t)
+typedef __ptrdiff_t	ptrdiff_t;
+#elif defined(_BSD_PTRDIFF_T_)
+typedef _BSD_PTRDIFF_T_	ptrdiff_t;
+#elif defined(__x86_64__) || defined(__aarch64__) || defined(__LP64__) || defined(_LP64)
+typedef long int	ptrdiff_t;
+#else
 typedef int		ptrdiff_t;
+#endif
+#undef _BSD_PTRDIFF_T_
+#endif
+#endif
+#endif
+#endif
+#endif
 
 #ifndef _SIZE_T
 #ifndef _SIZE_T_DECLARED
 #ifndef __size_t_defined
+#ifndef _SIZE_T_
+#ifndef _BSD_SIZE_T_DECLARED
 #define __size_t_defined
 #define _SIZE_T
 #define _SIZE_T_DECLARED
+#define _SIZE_T_
+#define _BSD_SIZE_T_DECLARED
 #if defined(__SIZE_TYPE__) && !defined(__size_t)
 typedef __SIZE_TYPE__ size_t;
 #elif defined(__size_t)
 typedef __size_t	size_t;
 #undef	__size_t
+#elif defined(_BSD_SIZE_T_)
+typedef _BSD_SIZE_T_	size_t;
+#elif defined(__x86_64__) || defined(__aarch64__) || defined(__LP64__) || defined(_LP64)
+typedef unsigned long	size_t;
+#else
+typedef unsigned int	size_t;
+#endif
+#undef _BSD_SIZE_T_
+#endif
 #endif
 #endif
 #endif

@@ -390,8 +390,7 @@ posix: $(POSIX_TARGET) btron_sys.vol btron_anders.vol
 	@echo " Startup File: $(POSIX_STARTUP)"
 	@echo " Run './btron' or 'make run-posix' to start."
 	@echo "=========================================================="
-	@if command -v python3 >/dev/null 2>&1; then $(MAKE) tad_bin; \
-	  elif command -v elixir >/dev/null 2>&1; then $(MAKE) tad_bin; \
+	@if [ -n "$(PYTHON)" ] || command -v elixir >/dev/null 2>&1; then $(MAKE) tad_bin; \
 	  else echo "Note: tad_bin skipped (no python3 or elixir found) - desktop still runs."; fi
 
 %.posix.o: %.c
@@ -1037,11 +1036,13 @@ $(TEST_HMI_BIN): $(TEST_HMI_OBJS)
 # ═══════════════════════════════════════════════════════════════════
 # TAD Unified Packing Pipeline — Python primary, Elixir fallback
 # ═══════════════════════════════════════════════════════════════════
+PYTHON ?= $(shell for py in python3 python3.14 python3.13 python3.12 python3.11 python3.10; do if command -v $$py >/dev/null 2>&1; then echo "$$py"; break; fi; done)
+
 TAD_HTML2TAD := $(shell \
-  if command -v python3 >/dev/null 2>&1; then echo "python3 scripts/html2tad.py"; \
+  if [ -n "$(PYTHON)" ]; then echo "$(PYTHON) scripts/html2tad.py"; \
   elif command -v elixir >/dev/null 2>&1; then echo "elixir scripts/html2tad.exs"; fi)
 TAD_BOOK2TAD := $(shell \
-  if command -v python3 >/dev/null 2>&1; then echo "python3 scripts/book2tad.py"; \
+  if [ -n "$(PYTHON)" ]; then echo "$(PYTHON) scripts/book2tad.py"; \
   elif command -v elixir >/dev/null 2>&1; then echo "elixir scripts/book2tad.exs"; fi)
 
 tad_bin:
@@ -1067,8 +1068,6 @@ TEST_TAD_OBJS = $(TEST_TAD_SRCS:.c=.test.o)
 TEST_TAD_BIN  = test_tad_browser
 
 test-tad: $(TEST_TAD_BIN) tad_bin
-	@if [ ! -f tad_bin/shared_data/data_type.tad ]; then elixir scripts/html2tad.exs >/dev/null 2>&1; fi
-	@if [ ! -f tad_bin/b-book/kernel/index.tad ]; then elixir scripts/book2tad.exs >/dev/null 2>&1; fi
 	@echo "=========================================================="
 	@echo " Running B-System Native TAD Browser & Cabinet Tests..."
 	@echo "=========================================================="

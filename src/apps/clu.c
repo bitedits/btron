@@ -582,18 +582,24 @@ static void clu_fs_dump_records(Volume *v, ID fd, FID parent_fid, const char *pa
                         cls_rec(rec);
                     }
                 }
+                if (vol_is_brightv(v) && link_fid == 0 && ri->offset > 0) {
+                    link_fid = ri->offset;
+                }
                 if (vol_is_brightv(v) && (link_name[0] == '\0' || strcmp(link_name, "(link)") == 0)) {
                     if (link_fid > 0 && link_fid != FID_INVALID && link_fid < nfmax) {
                         BLK lb = vol_fid_get_blk(v, (FID)link_fid);
                         if (lb > 0 && lb != FID_INVALID) {
                             unsigned char *lbuf = (unsigned char *)malloc(vol_block_size(v));
                             if (lbuf) {
-                                if (vol_read_blk(v, lb, lbuf) == 0 &&
-                                    (memcmp(lbuf, "Tron", 4) == 0 || memcmp(lbuf, "norT", 4) == 0)) {
-                                    UH tc[20];
-                                    for (int k = 0; k < 16; k++) tc[k] = clu_rd_u16_le(lbuf + 0x6C + k * 2);
-                                    tc[16] = 0;
-                                    btr_tcode_to_utf8(tc, 16, link_name, sizeof(link_name));
+                                if (vol_read_blk(v, lb, lbuf) == 0) {
+                                    if (memcmp(lbuf, "Tron", 4) == 0 || memcmp(lbuf, "norT", 4) == 0) {
+                                        UH tc[20];
+                                        for (int k = 0; k < 16; k++) tc[k] = clu_rd_u16_le(lbuf + 0x6C + k * 2);
+                                        tc[16] = 0;
+                                        btr_tcode_to_utf8(tc, 16, link_name, sizeof(link_name));
+                                    } else if (memcmp(lbuf, "\x7f\x45\x4c\x46", 4) == 0) {
+                                        snprintf(link_name, sizeof(link_name), "ELF_%u", link_fid);
+                                    }
                                 }
                                 free(lbuf);
                             }
@@ -746,12 +752,129 @@ void clu_fs_cmd(const char *args, ShellOutputFn out, void *ud)
 {
     int flag_l = has_flag(args, "-l");
     int flag_r = has_flag(args, "-r") || has_flag(args, "-R");
+    int flag_a = has_flag(args, "-a") || has_flag(args, "--all");
     char target[80];
     get_target(args, target, sizeof(target));
 
     Volume *v = (strncmp(g_cwd_path, "/ANDERS", 7) == 0 && g_anders_vol) ? g_anders_vol :
                 ((strncmp(g_cwd_path, "/CHOKANJI", 9) == 0 || strncmp(g_cwd_path, "/B-right", 8) == 0) && g_chokanji_vol) ? g_chokanji_vol : g_sys_vol;
+    if (target[0]) {
+        if (strncmp(target, "/ANDERS", 7) == 0 && g_anders_vol) v = g_anders_vol;
+        else if ((strncmp(target, "/CHOKANJI", 9) == 0 || strncmp(target, "/B-right", 8) == 0) && g_chokanji_vol) v = g_chokanji_vol;
+        else if (strncmp(target, "/SYS", 4) == 0 && g_sys_vol) v = g_sys_vol;
+    }
     if (!v) { out("fs: no volume mounted", COLOR_RED, ud); return; }
+
+    if (flag_a) {
+        UW nfmax = vol_nfmax(v);
+        char title[128];
+        snprintf(title, sizeof(title), "=== Real Bodies on %s (FID table 0..%u) ===",
+                 vol_name(v), (unsigned)nfmax - 1);
+        out(title, COLOR_CYAN, ud);
+
+        if (flag_l)
+            out("FID   BLK    REF  TYPE  STYPE : DID      PDID     : SIZE     NAME / DESCRIPTION", COLOR_CYAN, ud);
+        else
+            out("FID   BLK    TYPE  SIZE       PARENT   NAME / DESCRIPTION", COLOR_CYAN, ud);
+
+        UW bsize = vol_block_size(v);
+        unsigned char *buf = (unsigned char *)malloc(bsize);
+        if (!buf) return;
+
+        unsigned int count = 0;
+        for (FID fid = 0; fid < nfmax; fid++) {
+            UB refc = vol_fid_refcount(v, fid);
+            BLK blk = vol_fid_get_blk(v, fid);
+            if (refc == 0 && fid != FID_ROOT) continue;
+            if (blk == 0 || blk == FID_INVALID) continue;
+
+            if (vol_read_blk(v, blk, buf) != 0) continue;
+            count++;
+
+            int kind = 0;
+            const char *tag = "[DAT]";
+            char name[64] = "";
+            UW sz = 0;
+            uint32_t my_did = 0, my_pdid = 0;
+
+            if (vol_is_brightv(v)) {
+                if (memcmp(buf, "Tron", 4) == 0 || memcmp(buf, "norT", 4) == 0) {
+                    UH flags = clu_rd_u16_le(buf + 4);
+                    sz = clu_rd_u32_le(buf + 0x48);
+                    UW child_cnt = clu_rd_u32_le(buf + 0x44);
+                    my_did = clu_rd_u32_le(buf + 0x64);
+                    my_pdid = clu_rd_u32_le(buf + 0x68);
+                    UH tc[20];
+                    for (int k = 0; k < 16; k++) tc[k] = clu_rd_u16_le(buf + 0x6C + k * 2);
+                    tc[16] = 0;
+                    btr_tcode_to_utf8(tc, 16, name, sizeof(name));
+
+                    if (flags & 0x0001) {
+                        kind = 1; tag = "[EXE]";
+                    } else if (child_cnt > 0) {
+                        kind = 3; tag = "[DIR]";
+                    } else {
+                        kind = 0; tag = "[TAD]";
+                    }
+                } else if (memcmp(buf, "\x7f\x45\x4c\x46", 4) == 0) {
+                    kind = 2; tag = "[ELF]";
+                    sz = bsize;
+                    snprintf(name, sizeof(name), "ELF_%u", (unsigned)fid);
+                } else {
+                    kind = 0;
+                    int printable = 1, p_len = 0;
+                    for (int b = 0; b < 24 && b < (int)bsize; b++) {
+                        unsigned char c = buf[b];
+                        if (c >= 32 && c < 127) {
+                            name[p_len++] = (char)c;
+                        } else if (c == '\n' || c == '\r' || c == '\t') {
+                            name[p_len++] = ' ';
+                        } else {
+                            printable = 0;
+                            break;
+                        }
+                    }
+                    name[p_len] = '\0';
+                    if (printable && p_len >= 3) {
+                        tag = "[TXT]";
+                    } else {
+                        tag = "[DAT]";
+                        name[0] = '\0';
+                    }
+                    sz = bsize;
+                }
+            } else {
+                UH flags = ((UH)buf[0] << 8) | buf[1];
+                sz = ((UW)buf[28] << 24) | ((UW)buf[29] << 16) | ((UW)buf[30] << 8) | buf[31];
+                memcpy(name, buf + 32, 40);
+                name[40] = '\0';
+                if (flags & 0x0001) { kind = 1; tag = "[EXE]"; }
+                else if (flags & 0x1000) { kind = 3; tag = "[DIR]"; }
+                else { kind = 0; tag = "[FIL]"; }
+            }
+
+            UW color = clu_kind_color(kind, (kind == 3));
+            char line[256];
+            if (flag_l) {
+                snprintf(line, sizeof(line),
+                         "%-5u %-6u %-4u %-5s : %08X %08X : %-10u %s",
+                         (unsigned)fid, (unsigned)blk, (unsigned)refc, tag,
+                         my_did, my_pdid, sz, name[0] ? name : "-");
+            } else {
+                snprintf(line, sizeof(line),
+                         "%-5u %-6u %-5s %-10u %-8s %s",
+                         (unsigned)fid, (unsigned)blk, tag, sz,
+                         "-",
+                         name[0] ? name : "-");
+            }
+            out(line, color, ud);
+        }
+        free(buf);
+        char summary[80];
+        snprintf(summary, sizeof(summary), "(%u real bodies total)", count);
+        out(summary, COLOR_LTGRAY, ud);
+        return;
+    }
 
     const char *path = target[0] ? target : g_cwd_path;
     ID fd = opn_fil(path, 0x0001);

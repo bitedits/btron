@@ -409,6 +409,13 @@ static void test_clu_integration(void)
     clu_fs_cmd("-r", clu_buf_out, fs_r_buf);
     clu_fs_cmd("-l", clu_buf_out, fs_l_buf);
 
+    static char fs_a_buf[131072];
+    memset(fs_a_buf, 0, sizeof(fs_a_buf));
+    clu_fs_cmd("-a", clu_buf_out, fs_a_buf);
+    TEST_ASSERT(strstr(fs_a_buf, "Real Bodies on") != NULL, "fs -a must have Real Bodies title");
+    TEST_ASSERT(strstr(fs_a_buf, "[ELF]") != NULL, "fs -a must identify ELF executables");
+    TEST_ASSERT(strstr(fs_a_buf, "real bodies total") != NULL, "fs -a must report total real bodies");
+
     /* Verify PARENT column is present in both headers */
     TEST_ASSERT(strstr(fs_buf, "PARENT") != NULL, "fs header must contain PARENT column");
     TEST_ASSERT(strstr(fs_r_buf, "PARENT") != NULL, "fs -r header must contain PARENT column");

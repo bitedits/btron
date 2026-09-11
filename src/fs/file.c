@@ -121,8 +121,41 @@ static int read_header_block(Volume *v, BLK blk, OpenFile *of)
 
     if (vol_is_brightv(v)) {
         if (memcmp(buf, "Tron", 4) != 0 && memcmp(buf, "norT", 4) != 0) {
+            /* Direct ELF binary or raw file stream in Cho-Kanji */
+            int is_elf = (memcmp(buf, "\x7f\x45\x4c\x46", 4) == 0);
+            of->hdr.flags = FILE_HDR_FLAGS_NORMAL;
+            if (is_elf) of->hdr.flags |= 0x0001; /* OBJ_EXEC */
+            of->hdr.atype = 0;
+            of->hdr.ctime = 0;
+            of->hdr.mtime = 0;
+            of->hdr.atime = 0;
+            of->hdr.owner = 0;
+            of->hdr.group = 0;
+            of->hdr.nlnk  = 1;
+            of->hdr.idxlv = 0;
+            of->hdr.total_size = bsize;
+            of->hdr.nrec = 1;
+            of->hdr.data_blk = blk;
+            of->nrec = 1;
+            of->data_used = bsize;
+            of->data_blk = blk;
+            of->ridx[0].kind = is_elf ? 0x9F00 : 0x0000;
+            of->ridx[0].type = 0;
+            of->ridx[0].offset = 0;
+            of->ridx[0].size = bsize;
+            of->ridx[0].flags = 1;
+            const char *pfx = is_elf ? "ELF_" : "BODY_";
+            char *d = (char *)of->hdr.name;
+            while (*pfx) *d++ = *pfx++;
+            UW num = (UW)of->fid;
+            char tmp[16]; int ti = 0;
+            if (num == 0) tmp[ti++] = '0';
+            else { while (num > 0) { tmp[ti++] = (char)('0' + (num % 10)); num /= 10; } }
+            while (ti > 0 && d < (char *)of->hdr.name + sizeof(of->hdr.name) - 1)
+                *d++ = tmp[--ti];
+            *d = '\0';
             free(buf);
-            return -1;
+            return 0;
         }
         /* B-right/V Real Body Header */
         of->hdr.flags      = rd_u16_le(buf + 4);
@@ -135,7 +168,9 @@ static int read_header_block(Volume *v, BLK blk, OpenFile *of)
         of->hdr.nlnk       = 1;
         of->hdr.idxlv      = 0;
         of->hdr.total_size = rd_u32_le(buf + 0x48);
-        of->hdr.nrec       = rd_u32_le(buf + 0x4C);
+        UW nrec_4c         = rd_u32_le(buf + 0x4C);
+        UW nrec_44         = rd_u32_le(buf + 0x44);
+        of->hdr.nrec       = (of->hdr.total_size == 0 && nrec_44 > nrec_4c) ? nrec_44 : nrec_4c;
 
         UH tc[20];
         for (int k = 0; k < 16; k++) {

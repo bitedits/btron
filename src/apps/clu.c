@@ -868,6 +868,21 @@ void clu_fs_cmd(const char *args, ShellOutputFn out, void *ud)
                          name[0] ? name : "-");
             }
             out(line, color, ud);
+
+            if (flag_r && (kind == 3 || kind == 0)) {
+                ID cfd = opn_fil_fid(v, fid, 0x0001);
+                if (cfd >= 0) {
+                    OpenFile *cof = &g_open_files[(int)cfd];
+                    if (cof->nrec > 0 && !(cof->nrec == 1 && cof->ridx[0].size == bsize && cof->ridx[0].type == 0)) {
+                        unsigned char *vrec = (unsigned char *)calloc(nfmax, 1);
+                        if (vrec) {
+                            clu_fs_dump_records(v, cfd, fid, name[0] ? name : "body", 1, flag_l, 0, vrec, nfmax, out, ud);
+                            free(vrec);
+                        }
+                    }
+                    cls_fil(cfd);
+                }
+            }
         }
         free(buf);
         char summary[80];

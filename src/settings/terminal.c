@@ -166,9 +166,12 @@ static void paint_terminal_settings(WND *wnd, GDEV *dev) {
     drw_rec(dev, &sec3);
     drw_tc_string(dev, M + P - 2, s3_top - LBL_OVERLAP, " [3] 履歴・カーソル (Scrollback & Cursor) ", COLOR_NAVY, COLOR_WHITE);
 
-    paint_ui_radio(dev, M + P,             s3_top + P,       "履歴 100行",           cfg->scrollback_lines == 100,  FALSE);
-    paint_ui_radio(dev, M + P + col3,      s3_top + P,       "履歴 300行 (標準)",    cfg->scrollback_lines == 300,  FALSE);
-    paint_ui_radio(dev, M + P + col3 * 2,  s3_top + P,       "履歴 1000行 (大)",    cfg->scrollback_lines == 1000, FALSE);
+    H col5 = (dev->width - 2 * M - 2 * P) / 5;  /* fifth-column step */
+    paint_ui_radio(dev, M + P,             s3_top + P,       "履歴 100行",           cfg->scrollback_lines == 100,   FALSE);
+    paint_ui_radio(dev, M + P + col5,      s3_top + P,       "履歴 300行 (標準)",    cfg->scrollback_lines == 300,   FALSE);
+    paint_ui_radio(dev, M + P + col5 * 2,  s3_top + P,       "履歴 1000行 (大)",    cfg->scrollback_lines == 1000,  FALSE);
+    paint_ui_radio(dev, M + P + col5 * 3,  s3_top + P,       "履歴 4096行",          cfg->scrollback_lines == 4096,  FALSE);
+    paint_ui_radio(dev, M + P + col5 * 4,  s3_top + P,       "履歴 10K行 (最大)",    cfg->scrollback_lines == 10000, FALSE);
     paint_ui_radio(dev, M + P,             s3_top + P + LH,  "カーソル下線 (_)",    cfg->cursor_style == TERM_CURSOR_UNDERLINE, FALSE);
     paint_ui_radio(dev, M + P + col3,      s3_top + P + LH,  "ブロックカーソル (█)",cfg->cursor_style == TERM_CURSOR_BLOCK,     FALSE);
     paint_ui_radio(dev, M + P + col3 * 2,  s3_top + P + LH,  "バーカーソル (|)",    cfg->cursor_style == TERM_CURSOR_BAR,       FALSE);
@@ -254,9 +257,12 @@ static void handle_terminal_settings_event(WND *wnd, const EVT *evt) {
 
         /* ── Section 3: Scrollback & Cursor ───────────────────────── */
         if (HIT_ROW(rel_y, s3r0)) {
-            if      (rel_x >= c0x && rel_x < c1x) { cfg->scrollback_lines = 100;  REPAINT(); }
-            else if (rel_x >= c1x && rel_x < c2x) { cfg->scrollback_lines = 300;  REPAINT(); }
-            else if (rel_x >= c2x)                 { cfg->scrollback_lines = 1000; REPAINT(); }
+            H col5 = (client_w - 2 * M - 2 * P) / 5;
+            if      (rel_x >= c0x && rel_x < c0x + col5)            { cfg->scrollback_lines = 100;   REPAINT(); }
+            else if (rel_x >= c0x + col5 && rel_x < c0x + col5 * 2)     { cfg->scrollback_lines = 300;   REPAINT(); }
+            else if (rel_x >= c0x + col5 * 2 && rel_x < c0x + col5 * 3) { cfg->scrollback_lines = 1000;  REPAINT(); }
+            else if (rel_x >= c0x + col5 * 3 && rel_x < c0x + col5 * 4) { cfg->scrollback_lines = 4096;  REPAINT(); }
+            else if (rel_x >= c0x + col5 * 4)                        { cfg->scrollback_lines = 10000; REPAINT(); }
         } else if (HIT_ROW(rel_y, s3r1)) {
             if      (rel_x >= c0x && rel_x < c1x) { cfg->cursor_style = TERM_CURSOR_UNDERLINE; REPAINT(); }
             else if (rel_x >= c1x && rel_x < c2x) { cfg->cursor_style = TERM_CURSOR_BLOCK;     REPAINT(); }

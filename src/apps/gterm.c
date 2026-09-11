@@ -60,7 +60,7 @@ static inline char* gterm_strstr(const char *haystack, const char *needle) {
 
 #define GTERM_MAX_COLS     256
 #define GTERM_MAX_ROWS     32
-#define GTERM_HIST_MAX     2048
+#define GTERM_HIST_MAX     10240
 #define GTERM_CMD_HIST_MAX 32
 
 /* ── Terminal Menu Command IDs ──────────────────────────────────────────── */
@@ -94,10 +94,12 @@ typedef enum {
     TCMD_TERM_HIST_100  = 41,
     TCMD_TERM_HIST_300  = 42,
     TCMD_TERM_HIST_1000 = 43,
-    TCMD_TERM_CUR_LINE  = 44,
-    TCMD_TERM_CUR_BLOCK = 45,
-    TCMD_TERM_CUR_BAR   = 46,
-    TCMD_TERM_SETTINGS  = 47,
+    TCMD_TERM_HIST_4096 = 44,
+    TCMD_TERM_HIST_10K  = 45,
+    TCMD_TERM_CUR_LINE  = 46,
+    TCMD_TERM_CUR_BLOCK = 47,
+    TCMD_TERM_CUR_BAR   = 48,
+    TCMD_TERM_SETTINGS  = 49,
     /* ヘルプ(H) */
     TCMD_HELP_CMDS      = 50,
     TCMD_HELP_ABOUT     = 51
@@ -238,6 +240,8 @@ static void gterm_init_menu_bar(GTermState *st) {
     app_menu_add_item(&st->menu_bar, h3, "履歴 100行",                 "",       TCMD_TERM_HIST_100,  TRUE);
     app_menu_add_item(&st->menu_bar, h3, "履歴 300行 (標準)",          "",       TCMD_TERM_HIST_300,  TRUE);
     app_menu_add_item(&st->menu_bar, h3, "履歴 1000行 (大)",           "",       TCMD_TERM_HIST_1000, TRUE);
+    app_menu_add_item(&st->menu_bar, h3, "履歴 4096行 (全実体)",       "",       TCMD_TERM_HIST_4096, TRUE);
+    app_menu_add_item(&st->menu_bar, h3, "履歴 10000行 (10K / 最大)",  "",       TCMD_TERM_HIST_10K,  TRUE);
     app_menu_add_separator(&st->menu_bar, h3);
     app_menu_add_item(&st->menu_bar, h3, "カーソル下線 (_)",           "",       TCMD_TERM_CUR_LINE,  TRUE);
     app_menu_add_item(&st->menu_bar, h3, "ブロックカーソル (█)",       "",       TCMD_TERM_CUR_BLOCK, TRUE);
@@ -852,6 +856,8 @@ static void gterm_dispatch_cmd(WND *wnd, GTermState *st, int cmd) {
         case TCMD_TERM_HIST_100:  st->scrollback_max = 100;  cfg.scrollback_lines = 100;  terminal_set_settings(&cfg); return;
         case TCMD_TERM_HIST_300:  st->scrollback_max = 300;  cfg.scrollback_lines = 300;  terminal_set_settings(&cfg); return;
         case TCMD_TERM_HIST_1000: st->scrollback_max = 1000; cfg.scrollback_lines = 1000; terminal_set_settings(&cfg); return;
+        case TCMD_TERM_HIST_4096: st->scrollback_max = 4096; cfg.scrollback_lines = 4096; terminal_set_settings(&cfg); return;
+        case TCMD_TERM_HIST_10K:  st->scrollback_max = 10000; cfg.scrollback_lines = 10000; terminal_set_settings(&cfg); return;
         case TCMD_TERM_CUR_LINE:  st->cursor_style = 0; cfg.cursor_style = TERM_CURSOR_UNDERLINE; terminal_set_settings(&cfg); return;
         case TCMD_TERM_CUR_BLOCK: st->cursor_style = 1; cfg.cursor_style = TERM_CURSOR_BLOCK;     terminal_set_settings(&cfg); return;
         case TCMD_TERM_CUR_BAR:   st->cursor_style = 2; cfg.cursor_style = TERM_CURSOR_BAR;       terminal_set_settings(&cfg); return;
@@ -1162,6 +1168,7 @@ static void paint_gterm(WND *wnd, GDEV *dev) {
     if (st->menu_bar.header_count == 0) {
         gterm_init_menu_bar(st);
     }
+    gterm_apply_settings(st);
 
     /* Determine effective colours and row height from live settings */
     COLOR eff_bg = st->bg_color ? st->bg_color : 0xCC000000;

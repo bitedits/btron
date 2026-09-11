@@ -466,16 +466,7 @@ void shell_execute_cmd(const char *cmd_line, ShellOutputFn out_fn, void *user_da
             }
         }
     } else if (strcmp(cmd, "pwd") == 0) {
-#if defined(__STDC_HOSTED__) && __STDC_HOSTED__ == 1
-        char cwd[256];
-        if (getcwd(cwd, sizeof(cwd))) {
-            out_fn(cwd, COLOR_LTGRAY, user_data);
-        } else {
-            out_fn("Error: cannot get working directory", COLOR_RED, user_data);
-        }
-#else
-        out_fn("/sys/btron_root", COLOR_LTGRAY, user_data);
-#endif
+        out_fn(g_cwd_path, COLOR_GREEN, user_data);
     } else if (strcmp(cmd, "dir") == 0) {
         /* 'dir' → same as clu_ls but allow legacy use */
         clu_ls(arg, out_fn, user_data);

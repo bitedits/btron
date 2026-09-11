@@ -767,21 +767,87 @@ typedef struct {
     char name[48];
 } CluFsNode;
 
-static void clu_fs_node_add_child(CluFsNode *nodes, FID parent, FID child)
+static void clu_fs_node_add_child(CluFsNode *nodes, FID parent, FID child, UW nfmax)
 {
     if (parent == FID_INVALID || child == FID_INVALID || parent == child) return;
-    for (FID c = nodes[parent].first_child; c != FID_INVALID; c = nodes[c].next_sibling) {
+    if (parent >= nfmax || child >= nfmax) return;
+    if (nodes[child].parent_fid != FID_INVALID) return; /* Already linked to a parent */
+
+    /* Cycle prevention: ensure parent is not a descendant of child */
+    UW hop = 0;
+    for (FID anc = parent; anc != FID_INVALID && hop < nfmax; anc = nodes[anc].parent_fid, hop++) {
+        if (anc == child) return;
+    }
+
+    /* Check if already in parent's child list */
+    hop = 0;
+    for (FID c = nodes[parent].first_child; c != FID_INVALID && hop < nfmax; c = nodes[c].next_sibling, hop++) {
         if (c == child) return;
     }
+
     nodes[child].parent_fid = parent;
     nodes[child].next_sibling = FID_INVALID;
-    if (nodes[parent].first_child == FID_INVALID) {
+
+    /* Insert in ascending FID order for a deterministic, normalized tree hierarchy */
+    if (nodes[parent].first_child == FID_INVALID || child < nodes[parent].first_child) {
+        nodes[child].next_sibling = nodes[parent].first_child;
         nodes[parent].first_child = child;
-        nodes[parent].last_child = child;
+        if (nodes[parent].last_child == FID_INVALID) {
+            nodes[parent].last_child = child;
+        }
     } else {
-        nodes[nodes[parent].last_child].next_sibling = child;
-        nodes[parent].last_child = child;
+        FID prev = nodes[parent].first_child;
+        hop = 0;
+        while (prev != FID_INVALID && nodes[prev].next_sibling != FID_INVALID &&
+               nodes[prev].next_sibling < child && hop < nfmax) {
+            prev = nodes[prev].next_sibling;
+            hop++;
+        }
+        nodes[child].next_sibling = nodes[prev].next_sibling;
+        nodes[prev].next_sibling = child;
+        if (nodes[child].next_sibling == FID_INVALID) {
+            nodes[parent].last_child = child;
+        }
     }
+}
+
+static void clu_fs_print_node_line(const CluFsNode *nodes, FID fid, int indent_spaces,
+                                   int flag_l, int is_tree, ShellOutputFn out, void *ud)
+{
+    if (!nodes[fid].blk) return;
+    int kind = nodes[fid].is_dir ? 3 : (nodes[fid].is_elf ? 2 : (nodes[fid].is_stream ? 4 : 0));
+    const char *tag = (kind == 3) ? "[DIR]" :
+                      (kind == 2) ? "[ELF]" :
+                      (kind == 4) ? "[STR]" : "[TAD]";
+    UW color = clu_kind_color(kind, (kind == 3));
+
+    char name_buf[64];
+    if (is_tree && nodes[fid].is_dir && nodes[fid].name[0]) {
+        size_t len = strlen(nodes[fid].name);
+        if (len > 0 && nodes[fid].name[len - 1] != '/') {
+            snprintf(name_buf, sizeof(name_buf), "%s/", nodes[fid].name);
+        } else {
+            snprintf(name_buf, sizeof(name_buf), "%s", nodes[fid].name);
+        }
+    } else {
+        snprintf(name_buf, sizeof(name_buf), "%s", nodes[fid].name);
+    }
+
+    char line[256];
+    if (flag_l) {
+        snprintf(line, sizeof(line),
+                 "%-5u %-6u %-4u %-5s %04X  : %08X %08X : %-10u %*s%s",
+                 (unsigned)fid, (unsigned)nodes[fid].blk, (unsigned)nodes[fid].refc,
+                 tag, (unsigned)nodes[fid].flags,
+                 nodes[fid].did, nodes[fid].pdid,
+                 nodes[fid].sz, indent_spaces, "", name_buf);
+    } else {
+        snprintf(line, sizeof(line),
+                 "%-5u %-6u %-5s %-10u %*s%s",
+                 (unsigned)fid, (unsigned)nodes[fid].blk, tag, nodes[fid].sz,
+                 indent_spaces, "", name_buf);
+    }
+    out(line, color, ud);
 }
 
 static void clu_fs_print_node_tree(CluFsNode *nodes, FID fid, int depth, int flag_l,
@@ -793,29 +859,10 @@ static void clu_fs_print_node_tree(CluFsNode *nodes, FID fid, int depth, int fla
     int indent = depth * 2;
     if (indent > 40) indent = 40;
 
-    int kind = nodes[fid].is_dir ? 3 : (nodes[fid].is_elf ? 2 : (nodes[fid].is_stream ? 4 : 0));
-    const char *tag = (kind == 3) ? "[DIR]" :
-                      (kind == 2) ? "[ELF]" :
-                      (kind == 4) ? "[STR]" : "[TAD]";
-    UW color = clu_kind_color(kind, (kind == 3));
+    clu_fs_print_node_line(nodes, fid, indent, flag_l, 1, out, ud);
 
-    char line[256];
-    if (flag_l) {
-        snprintf(line, sizeof(line),
-                 "%-5u %-6u %-4u %-5s %04X  : %08X %08X : %-10u %*s%s",
-                 (unsigned)fid, (unsigned)nodes[fid].blk, (unsigned)nodes[fid].refc,
-                 tag, (unsigned)nodes[fid].flags,
-                 nodes[fid].did, nodes[fid].pdid,
-                 nodes[fid].sz, indent, "", nodes[fid].name);
-    } else {
-        snprintf(line, sizeof(line),
-                 "%-5u %-6u %-5s %-10u %*s%s",
-                 (unsigned)fid, (unsigned)nodes[fid].blk, tag, nodes[fid].sz,
-                 indent, "", nodes[fid].name);
-    }
-    out(line, color, ud);
-
-    for (FID c = nodes[fid].first_child; c != FID_INVALID; c = nodes[c].next_sibling) {
+    UW hop = 0;
+    for (FID c = nodes[fid].first_child; c != FID_INVALID && hop < nfmax; c = nodes[c].next_sibling, hop++) {
         if (c < nfmax && !nodes[c].visited) {
             clu_fs_print_node_tree(nodes, c, depth + 1, flag_l, nfmax, out, ud);
         }
@@ -962,6 +1009,7 @@ void clu_fs_cmd(const char *args, ShellOutputFn out, void *ud)
     int flag_r = has_flag(args, "-r") || has_flag(args, "-R");
     int flag_a = has_flag(args, "-a") || has_flag(args, "--all");
     int flag_g = has_flag(args, "-g") || has_flag(args, "--group");
+    int flag_t = has_flag(args, "-t") || has_flag(args, "--tree");
     char target[80];
     get_target(args, target, sizeof(target));
 
@@ -974,7 +1022,7 @@ void clu_fs_cmd(const char *args, ShellOutputFn out, void *ud)
     }
     if (!v) { out("fs: no volume mounted", COLOR_RED, ud); return; }
 
-    if (flag_a || flag_g) {
+    if (flag_a || flag_g || flag_t) {
         UW nfmax = vol_nfmax(v);
         if (nfmax < 256) nfmax = 256;
         CluFsNode *nodes = (CluFsNode *)calloc(nfmax, sizeof(CluFsNode));
@@ -1027,7 +1075,9 @@ void clu_fs_cmd(const char *args, ShellOutputFn out, void *ud)
                 if (has_hdr) {
                     nodes[fid].flags = clu_rd_u16_le(hbuf + 4);
                     nodes[fid].sz = clu_rd_u32_le(hbuf + 0x48);
-                    UW child_cnt = clu_rd_u32_le(hbuf + 0x44);
+                    UW cnt_44 = clu_rd_u32_le(hbuf + 0x44);
+                    UW cnt_4c = clu_rd_u32_le(hbuf + 0x4c);
+                    UW cnt_50 = clu_rd_u32_le(hbuf + 0x50);
                     nodes[fid].did = clu_rd_u32_le(hbuf + 0x64);
                     nodes[fid].pdid = clu_rd_u32_le(hbuf + 0x68);
 
@@ -1046,14 +1096,24 @@ void clu_fs_cmd(const char *args, ShellOutputFn out, void *ud)
                     if (memcmp(buf, "\x7f\x45\x4c\x46", 4) == 0 || (nodes[fid].flags & 0x0001)) {
                         nodes[fid].is_elf = 1;
                     }
-                    if (child_cnt > 0) {
-                        nodes[fid].is_dir = 1;
-                        for (UW k = 1; k <= child_cnt && k <= 512; k++) {
+
+                    if (!nodes[fid].is_stream) {
+                        UW max_scan = cnt_44;
+                        if (cnt_4c > max_scan) max_scan = cnt_4c;
+                        if (cnt_50 > max_scan) max_scan = cnt_50;
+                        if (max_scan > 1024) max_scan = 1024;
+
+                        for (UW k = 1; k <= max_scan; k++) {
                             int off = (int)bsize - (int)k * 16;
                             if (off < 0) break;
-                            uint32_t cfid = clu_rd_u32_le(hbuf + off + 4);
-                            if (cfid < nfmax && cfid != fid) {
-                                clu_fs_node_add_child(nodes, fid, (FID)cfid);
+                            uint16_t kind = clu_rd_u16_le(hbuf + off);
+                            if (kind == 0x8000) {
+                                nodes[fid].is_dir = 1;
+                                uint32_t raw_cfid = clu_rd_u32_le(hbuf + off + 4);
+                                FID cfid = (raw_cfid < nfmax) ? (FID)raw_cfid : (FID)(raw_cfid & 0xFFFF);
+                                if (cfid < nfmax && cfid != fid) {
+                                    clu_fs_node_add_child(nodes, fid, cfid, nfmax);
+                                }
                             }
                         }
                     }
@@ -1087,7 +1147,7 @@ void clu_fs_cmd(const char *args, ShellOutputFn out, void *ud)
                     for (FID p = 0; p < nfmax; p++) {
                         if (nodes[p].blk == 0 || p == f) continue;
                         if (nodes[p].did == nodes[f].pdid) {
-                            clu_fs_node_add_child(nodes, p, f);
+                            clu_fs_node_add_child(nodes, p, f, nfmax);
                             break;
                         }
                     }
@@ -1102,14 +1162,62 @@ void clu_fs_cmd(const char *args, ShellOutputFn out, void *ud)
                     if (!entry.name[0]) continue;
                     FID efid = (FID)entry.robj_id;
                     if (efid < nfmax && efid != FID_ROOT) {
-                        clu_fs_node_add_child(nodes, FID_ROOT, efid);
+                        clu_fs_node_add_child(nodes, FID_ROOT, efid, nfmax);
                     }
                 }
                 cls_dir(dir);
             }
         }
 
-        if (flag_g) {
+        /* Check if a specific target FID or container was requested */
+        FID start_fid = FID_INVALID;
+        if (target[0]) {
+            int all_digits = 1;
+            const char *np = (target[0] == '#') ? target + 1 : target;
+            while (*np == ' ') np++;
+            for (int i = 0; np[i]; i++) {
+                if (!isdigit((unsigned char)np[i])) { all_digits = 0; break; }
+            }
+            if (all_digits && *np) {
+                start_fid = (FID)strtoul(np, NULL, 10);
+            } else {
+                for (FID f = 0; f < nfmax; f++) {
+                    if (nodes[f].blk && strcmp(nodes[f].name, target) == 0) {
+                        start_fid = f;
+                        break;
+                    }
+                }
+            }
+        }
+
+        if (flag_t) {
+            char title[128];
+            snprintf(title, sizeof(title), "=== Real Bodies on %s (Tree Structure) ===", vol_name(v));
+            out(title, COLOR_CYAN, ud);
+
+            if (flag_l)
+                out("FID   BLK    REF  TYPE  STYPE : DID      PDID     : SIZE     NAME", COLOR_CYAN, ud);
+            else
+                out("FID   BLK    TYPE  SIZE       NAME", COLOR_CYAN, ud);
+
+            if (start_fid != FID_INVALID && start_fid < nfmax && nodes[start_fid].blk) {
+                clu_fs_print_node_tree(nodes, start_fid, 0, flag_l, nfmax, out, ud);
+            } else {
+                if (nodes[FID_ROOT].blk) {
+                    clu_fs_print_node_tree(nodes, FID_ROOT, 0, flag_l, nfmax, out, ud);
+                }
+                for (FID f = 0; f < nfmax; f++) {
+                    if (nodes[f].blk && !nodes[f].visited && nodes[f].parent_fid == FID_INVALID) {
+                        clu_fs_print_node_tree(nodes, f, 0, flag_l, nfmax, out, ud);
+                    }
+                }
+                for (FID f = 0; f < nfmax; f++) {
+                    if (nodes[f].blk && !nodes[f].visited) {
+                        clu_fs_print_node_tree(nodes, f, 0, flag_l, nfmax, out, ud);
+                    }
+                }
+            }
+        } else if (flag_g) {
             char title[128];
             snprintf(title, sizeof(title), "=== Real Bodies on %s (Grouped by [DIR]) ===", vol_name(v));
             out(title, COLOR_CYAN, ud);
@@ -1119,17 +1227,34 @@ void clu_fs_cmd(const char *args, ShellOutputFn out, void *ud)
             else
                 out("FID   BLK    TYPE  SIZE       NAME", COLOR_CYAN, ud);
 
-            if (nodes[FID_ROOT].blk) {
-                clu_fs_print_node_tree(nodes, FID_ROOT, 0, flag_l, nfmax, out, ud);
-            }
-            for (FID f = 0; f < nfmax; f++) {
-                if (nodes[f].blk && !nodes[f].visited && nodes[f].parent_fid == FID_INVALID) {
-                    clu_fs_print_node_tree(nodes, f, 0, flag_l, nfmax, out, ud);
+            if (start_fid != FID_INVALID && start_fid < nfmax && nodes[start_fid].blk) {
+                /* Single container group */
+                clu_fs_print_node_line(nodes, start_fid, 0, flag_l, 0, out, ud);
+                UW hop = 0;
+                for (FID c = nodes[start_fid].first_child; c != FID_INVALID && hop < nfmax; c = nodes[c].next_sibling, hop++) {
+                    if (c < nfmax && nodes[c].blk) {
+                        clu_fs_print_node_line(nodes, c, 2, flag_l, 0, out, ud);
+                    }
                 }
-            }
-            for (FID f = 0; f < nfmax; f++) {
-                if (nodes[f].blk && !nodes[f].visited) {
-                    clu_fs_print_node_tree(nodes, f, 0, flag_l, nfmax, out, ud);
+            } else {
+                /* Volume-wide FID table grouped by parent container in FID order */
+                for (FID p = 0; p < nfmax; p++) {
+                    if (nodes[p].blk == 0) continue;
+                    if (nodes[p].first_child != FID_INVALID) {
+                        clu_fs_print_node_line(nodes, p, 0, flag_l, 0, out, ud);
+                        UW hop = 0;
+                        for (FID c = nodes[p].first_child; c != FID_INVALID && hop < nfmax; c = nodes[c].next_sibling, hop++) {
+                            if (c < nfmax && nodes[c].blk) {
+                                clu_fs_print_node_line(nodes, c, 2, flag_l, 0, out, ud);
+                            }
+                        }
+                    }
+                }
+                /* Unparented standalone bodies that have no parent and no children */
+                for (FID f = 0; f < nfmax; f++) {
+                    if (nodes[f].blk && nodes[f].parent_fid == FID_INVALID && nodes[f].first_child == FID_INVALID) {
+                        clu_fs_print_node_line(nodes, f, 0, flag_l, 0, out, ud);
+                    }
                 }
             }
         } else {
@@ -1358,6 +1483,20 @@ static void clu_stat_internal(const char *cmd_name, const char *args, ShellOutpu
                             out(line, COLOR_CYAN, ud);
                         }
                     }
+                }
+            } else if (vol_is_brightv(v) && of->ridx[i].kind == 0x8000) {
+                UW nfmax = vol_nfmax(v);
+                uint32_t raw_cfid = of->ridx[i].offset;
+                FID cfid = (raw_cfid < nfmax) ? (FID)raw_cfid : (FID)(raw_cfid & 0xFFFF);
+                if (cfid < nfmax) {
+                    ID cfd = opn_fil_fid(v, cfid, 0x0001);
+                    if (cfd >= 0) {
+                        snprintf(line, sizeof(line), "       -> Child FID: %u (\"%s\")", (unsigned)cfid, g_open_files[(int)cfd].hdr.name);
+                        cls_fil(cfd);
+                    } else {
+                        snprintf(line, sizeof(line), "       -> Child FID: %u", (unsigned)cfid);
+                    }
+                    out(line, COLOR_CYAN, ud);
                 }
             }
         }

@@ -432,6 +432,58 @@ static void test_clu_integration(void)
     TEST_ASSERT(strstr(fs_g_buf, "Template Box") != NULL, "fs -g must contain Template Box");
     TEST_ASSERT(strstr(fs_g_buf, "  Packing Box") != NULL, "fs -g must indent child Packing Box under Template Box");
 
+    /* Test fs -t (Normalized Tree Structure) */
+    static char fs_t_buf[524288];
+    memset(fs_t_buf, 0, sizeof(fs_t_buf));
+    clu_fs_cmd("-t", clu_buf_out, fs_t_buf);
+    TEST_ASSERT(strstr(fs_t_buf, "Tree Structure") != NULL, "fs -t must have Tree Structure title");
+    TEST_ASSERT(strstr(fs_t_buf, "Template Box") != NULL, "fs -t must contain Template Box");
+
+    /* Test fs -t 3938 (Tree rooted at container 3938 with children 3940-3944 sorted) */
+    static char fs_t_3938[16384];
+    memset(fs_t_3938, 0, sizeof(fs_t_3938));
+    clu_fs_cmd("-t 3938", clu_buf_out, fs_t_3938);
+    TEST_ASSERT(strstr(fs_t_3938, "Tree Structure") != NULL, "fs -t 3938 must have Tree Structure title");
+    TEST_ASSERT(strstr(fs_t_3938, "3938") != NULL, "fs -t 3938 missing root node 3938");
+    TEST_ASSERT(strstr(fs_t_3938, "3940") != NULL, "fs -t 3938 missing child 3940");
+    TEST_ASSERT(strstr(fs_t_3938, "3941") != NULL, "fs -t 3938 missing child 3941");
+    TEST_ASSERT(strstr(fs_t_3938, "3942") != NULL, "fs -t 3938 missing child 3942");
+    TEST_ASSERT(strstr(fs_t_3938, "3943") != NULL, "fs -t 3938 missing child 3943");
+    TEST_ASSERT(strstr(fs_t_3938, "3944") != NULL, "fs -t 3938 missing child 3944");
+    TEST_ASSERT(strstr(fs_t_3938, "Makefile") != NULL, "fs -t 3938 missing Makefile");
+    TEST_ASSERT(strstr(fs_t_3938, "rsdrv.h") != NULL, "fs -t 3938 missing rsdrv.h");
+    /* Verify sorted order: 3940 appears before 3941 before 3942 before 3943 before 3944 */
+    char *p40 = strstr(fs_t_3938, "3940");
+    char *p41 = strstr(fs_t_3938, "3941");
+    char *p42 = strstr(fs_t_3938, "3942");
+    char *p43 = strstr(fs_t_3938, "3943");
+    char *p44 = strstr(fs_t_3938, "3944");
+    TEST_ASSERT(p40 && p41 && p42 && p43 && p44 && p40 < p41 && p41 < p42 && p42 < p43 && p43 < p44,
+                "fs -t 3938 children must be sorted in ascending order (3940..3944)");
+
+    /* Test fs -g 3938 (Grouped container 3938 with 2-space indented direct children) */
+    static char fs_g_3938[16384];
+    memset(fs_g_3938, 0, sizeof(fs_g_3938));
+    clu_fs_cmd("-g 3938", clu_buf_out, fs_g_3938);
+    TEST_ASSERT(strstr(fs_g_3938, "Grouped by [DIR]") != NULL, "fs -g 3938 must have Grouped by [DIR] title");
+    TEST_ASSERT(strstr(fs_g_3938, "3938") != NULL, "fs -g 3938 missing parent 3938");
+    TEST_ASSERT(strstr(fs_g_3938, "  [*] Makefile") != NULL, "fs -g 3938 must indent direct child Makefile under 3938");
+
+    /* Test fs -l -t and fs -l -g (Attributes included) */
+    static char fs_lt_buf[16384];
+    memset(fs_lt_buf, 0, sizeof(fs_lt_buf));
+    clu_fs_cmd("-l -t 3938", clu_buf_out, fs_lt_buf);
+    TEST_ASSERT(strstr(fs_lt_buf, "Tree Structure") != NULL, "fs -l -t 3938 must have Tree Structure title");
+    TEST_ASSERT(strstr(fs_lt_buf, "STYPE") != NULL, "fs -l -t must contain STYPE header");
+    TEST_ASSERT(strstr(fs_lt_buf, "PDID") != NULL, "fs -l -t must contain PDID header");
+
+    static char fs_lg_buf[16384];
+    memset(fs_lg_buf, 0, sizeof(fs_lg_buf));
+    clu_fs_cmd("-l -g 3938", clu_buf_out, fs_lg_buf);
+    TEST_ASSERT(strstr(fs_lg_buf, "Grouped by [DIR]") != NULL, "fs -l -g 3938 must have Grouped by [DIR] title");
+    TEST_ASSERT(strstr(fs_lg_buf, "STYPE") != NULL, "fs -l -g must contain STYPE header");
+    TEST_ASSERT(strstr(fs_lg_buf, "PDID") != NULL, "fs -l -g must contain PDID header");
+
     /* Verify PARENT column is present in both headers */
     TEST_ASSERT(strstr(fs_buf, "PARENT") != NULL, "fs header must contain PARENT column");
     TEST_ASSERT(strstr(fs_r_buf, "PARENT") != NULL, "fs -r header must contain PARENT column");

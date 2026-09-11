@@ -40,6 +40,7 @@ extern void* tkl_memmove(void *dest, const void *src, size_t n);
 #define strlen  tkl_strlen
 #define strstr  tkl_strstr
 #define strcmp  tkl_strcmp
+#define strncmp tkl_strncmp
 
 static inline char* local_strrchr(const char *s, int c) {
     if (!s) return NULL;
@@ -656,13 +657,6 @@ void teditor_toggle_wrap(TEditor *ed) {
 
 /* ── Live Filesystem Walker — Open Menu Subsystem ──────────────── */
 
-typedef struct {
-    char name[TEDITOR_MENU_NAME_LEN];
-    char path[TEDITOR_MENU_PATH_LEN];
-    BOOL is_dir;
-    BOOL is_sep;
-} TMenuTreeItem;
-
 static int tmenu_strcasecmp(const char *a, const char *b) {
     while (*a && *b) {
         char ca = (*a >= 'a' && *a <= 'z') ? (char)(*a - 32) : *a;
@@ -673,11 +667,11 @@ static int tmenu_strcasecmp(const char *a, const char *b) {
     return (int)(unsigned char)*a - (int)(unsigned char)*b;
 }
 
-static int teditor_scan_fs_dir(const char *dir_path, TMenuTreeItem *out_items, int max_items) {
+int teditor_scan_fs_dir(const char *dir_path, TMenuTreeItem *out_items, int max_items) {
     if (!dir_path || !out_items || max_items <= 0) return 0;
     int count = 0;
 
-    /* If dir_path is "/SYS", enumerate system documents from volume or host */
+    /* 1. If dir_path is "/SYS", enumerate system documents from volume or host */
     if (strcmp(dir_path, "/SYS") == 0) {
         if (g_sys_vol) {
             ID dir = opn_dir("/SYS");
@@ -692,7 +686,9 @@ static int teditor_scan_fs_dir(const char *dir_path, TMenuTreeItem *out_items, i
                     else if (nlen > 4 && strcmp(entry.name + nlen - 4, ".txt") == 0) is_text = TRUE;
                     if (is_text) {
                         strncpy(out_items[count].name, entry.name, sizeof(out_items[count].name) - 1);
+                        out_items[count].name[sizeof(out_items[count].name) - 1] = '\0';
                         strncpy(out_items[count].path, entry.name, sizeof(out_items[count].path) - 1);
+                        out_items[count].path[sizeof(out_items[count].path) - 1] = '\0';
                         out_items[count].is_dir = FALSE;
                         out_items[count].is_sep = FALSE;
                         count++;
@@ -701,61 +697,57 @@ static int teditor_scan_fs_dir(const char *dir_path, TMenuTreeItem *out_items, i
                 cls_dir(dir);
             }
         }
+#if defined(__STDC_HOSTED__) && __STDC_HOSTED__ == 1
+        if (count == 0) {
+            DIR *d = opendir("doc/md");
+            if (d) {
+                struct dirent *de;
+                while ((de = readdir(d)) != NULL && count < max_items) {
+                    if (de->d_name[0] == '.') continue;
+                    size_t nlen = strlen(de->d_name);
+                    if (nlen > 3 && strcmp(de->d_name + nlen - 3, ".md") == 0) {
+                        strncpy(out_items[count].name, de->d_name, sizeof(out_items[count].name) - 1);
+                        out_items[count].name[sizeof(out_items[count].name) - 1] = '\0';
+                        strncpy(out_items[count].path, de->d_name, sizeof(out_items[count].path) - 1);
+                        out_items[count].path[sizeof(out_items[count].path) - 1] = '\0';
+                        out_items[count].is_dir = FALSE;
+                        out_items[count].is_sep = FALSE;
+                        count++;
+                    }
+                }
+                closedir(d);
+            }
+        }
+#endif
         if (count == 0) {
             const char *sys_docs[] = {
-                "BTRON3_Report.txt", "FS.md", "Heart_Sutra_Tibetan.txt", "hello.txt", "README.md", "CLU.md"
+                "BOOK.md", "CLU.md", "FS.md", "README.md", "SYS.md"
             };
             for (size_t i = 0; i < sizeof(sys_docs)/sizeof(sys_docs[0]) && count < max_items; i++) {
                 strncpy(out_items[count].name, sys_docs[i], sizeof(out_items[count].name) - 1);
+                out_items[count].name[sizeof(out_items[count].name) - 1] = '\0';
                 strncpy(out_items[count].path, sys_docs[i], sizeof(out_items[count].path) - 1);
+                out_items[count].path[sizeof(out_items[count].path) - 1] = '\0';
                 out_items[count].is_dir = FALSE;
                 out_items[count].is_sep = FALSE;
                 count++;
             }
         }
+        /* Sort files alphabetically */
+        for (int i = 1; i < count; i++) {
+            TMenuTreeItem tmp = out_items[i];
+            int j = i - 1;
+            while (j >= 0 && tmenu_strcasecmp(out_items[j].name, tmp.name) > 0) {
+                out_items[j + 1] = out_items[j];
+                j--;
+            }
+            out_items[j + 1] = tmp;
+        }
         return count;
     }
 
-#if defined(__STDC_HOSTED__) && __STDC_HOSTED__ == 1
-    DIR *d = opendir(dir_path);
-    if (!d) return 0;
-    struct dirent *de;
-    while ((de = readdir(d)) != NULL && count < max_items) {
-        if (de->d_name[0] == '.') continue;
-        char full[TEDITOR_MENU_PATH_LEN];
-        snprintf(full, sizeof(full), "%s/%s", dir_path, de->d_name);
-
-        BOOL is_dir = FALSE;
-#if defined(_DIRENT_HAVE_D_TYPE) || defined(DT_DIR)
-        if (de->d_type == DT_DIR) is_dir = TRUE;
-        else if (de->d_type == DT_REG) is_dir = FALSE;
-        else
-#endif
-        {
-            struct stat st;
-            if (stat(full, &st) == 0 && S_ISDIR(st.st_mode)) is_dir = TRUE;
-        }
-
-        if (!is_dir) {
-            size_t nlen = strlen(de->d_name);
-            BOOL ok = FALSE;
-            if (nlen > 4 && strcmp(de->d_name + nlen - 4, ".txt") == 0) ok = TRUE;
-            else if (nlen > 3 && strcmp(de->d_name + nlen - 3, ".md") == 0) ok = TRUE;
-            else if (nlen > 11 && strcmp(de->d_name + nlen - 11, ".anders.txt") == 0) ok = TRUE;
-            if (!ok) continue;
-        }
-
-        TMenuTreeItem *it = &out_items[count++];
-        strncpy(it->name, de->d_name, sizeof(it->name) - 1);
-        it->name[sizeof(it->name) - 1] = '\0';
-        strncpy(it->path, full, sizeof(it->path) - 1);
-        it->path[sizeof(it->path) - 1] = '\0';
-        it->is_dir = is_dir;
-        it->is_sep = FALSE;
-    }
-    closedir(d);
-#else
-    Volume *v = (strncmp(dir_path, "/ANDERS", 7) == 0 && g_anders_vol) ? g_anders_vol : g_sys_vol;
+    /* 2. Check if this is a volume path (/ANDERS) */
+    Volume *v = (strncmp(dir_path, "/ANDERS", 7) == 0 && g_anders_vol) ? g_anders_vol : NULL;
     if (v) {
         ID dir = opn_dir(dir_path);
         if (dir >= 0) {
@@ -783,6 +775,56 @@ static int teditor_scan_fs_dir(const char *dir_path, TMenuTreeItem *out_items, i
                 it->is_sep = FALSE;
             }
             cls_dir(dir);
+        }
+    }
+
+#if defined(__STDC_HOSTED__) && __STDC_HOSTED__ == 1
+    if (count == 0) {
+        /* Map /ANDERS to assets/anders on host */
+        const char *host_path = dir_path;
+        char mapped_path[TEDITOR_MENU_PATH_LEN];
+        if (strncmp(dir_path, "/ANDERS", 7) == 0) {
+            snprintf(mapped_path, sizeof(mapped_path), "assets/anders%s", dir_path + 7);
+            host_path = mapped_path;
+        }
+
+        DIR *d = opendir(host_path);
+        if (d) {
+            struct dirent *de;
+            while ((de = readdir(d)) != NULL && count < max_items) {
+                if (de->d_name[0] == '.') continue;
+                char full[TEDITOR_MENU_PATH_LEN];
+                snprintf(full, sizeof(full), "%s/%s", host_path, de->d_name);
+
+                BOOL is_dir = FALSE;
+#if defined(_DIRENT_HAVE_D_TYPE) || defined(DT_DIR)
+                if (de->d_type == DT_DIR) is_dir = TRUE;
+                else if (de->d_type == DT_REG) is_dir = FALSE;
+                else
+#endif
+                {
+                    struct stat st;
+                    if (stat(full, &st) == 0 && S_ISDIR(st.st_mode)) is_dir = TRUE;
+                }
+
+                if (!is_dir) {
+                    size_t nlen = strlen(de->d_name);
+                    BOOL ok = FALSE;
+                    if (nlen > 4 && strcmp(de->d_name + nlen - 4, ".txt") == 0) ok = TRUE;
+                    else if (nlen > 3 && strcmp(de->d_name + nlen - 3, ".md") == 0) ok = TRUE;
+                    else if (nlen > 11 && strcmp(de->d_name + nlen - 11, ".anders.txt") == 0) ok = TRUE;
+                    if (!ok) continue;
+                }
+
+                TMenuTreeItem *it = &out_items[count++];
+                strncpy(it->name, de->d_name, sizeof(it->name) - 1);
+                it->name[sizeof(it->name) - 1] = '\0';
+                strncpy(it->path, full, sizeof(it->path) - 1);
+                it->path[sizeof(it->path) - 1] = '\0';
+                it->is_dir = is_dir;
+                it->is_sep = FALSE;
+            }
+            closedir(d);
         }
     }
 #endif
@@ -846,7 +888,7 @@ static int teditor_get_tree_items(const TEditor *ed, int lvl, TMenuTreeItem *out
     return teditor_scan_fs_dir(parent_items[hov].path, out_items, max_items);
 }
 
-static void teditor_get_level_box(const TEditor *ed, GDEV *dev, int lvl, RECT *out_box, int *out_count) {
+void teditor_get_level_box(const TEditor *ed, GDEV *dev, int lvl, RECT *out_box, int *out_count) {
     if (!ed || !out_box || !out_count) return;
     *out_count = 0;
     memset(out_box, 0, sizeof(RECT));
@@ -1068,48 +1110,16 @@ int teditor_get_asset_files(char files[][64], int max_files) {
         count++;
     }
 
-    /* 1. Discover files from BTRON volume if mounted */
-    if (g_sys_vol) {
-        ID dir = opn_dir("/SYS");
-        if (dir >= 0) {
-            DIR_ENTRY entry;
-            while (rd_dir(dir, &entry) == 0 && count < max_files) {
-                if (entry.name[0] == '\0' || strcmp(entry.name, "SYS") == 0 || strcmp(entry.name, "TRASH") == 0)
-                    continue;
-                size_t nlen = strlen(entry.name);
-                BOOL is_text = FALSE;
-                if (nlen > 3 && strcmp(entry.name + nlen - 3, ".md") == 0) is_text = TRUE;
-                else if (nlen > 4 && strcmp(entry.name + nlen - 4, ".txt") == 0) is_text = TRUE;
-                if (is_text) {
-                    BOOL dup = FALSE;
-                    for (int i = 0; i < count; i++) {
-                        if (strcmp(files[i], entry.name) == 0) { dup = TRUE; break; }
-                    }
-                    if (!dup) {
-                        strncpy(files[count], entry.name, 63);
-                        files[count][63] = '\0';
-                        count++;
-                    }
-                }
-            }
-            cls_dir(dir);
-        }
-    }
-
 #if defined(__STDC_HOSTED__) && __STDC_HOSTED__ == 1
-    /* 2. Discover files from host directories (assets/texts, doc/md, assets) */
-    const char *dirs[] = { "assets/texts", "doc/md", "assets", NULL };
-    for (int d_idx = 0; dirs[d_idx] && count < max_files; d_idx++) {
-        DIR *d = opendir(dirs[d_idx]);
-        if (!d) continue;
+    /* Discover .txt files from host directory assets/texts ONLY.
+       MD files are mounted inside SYS System Docs, NOT duplicated in root! */
+    DIR *d = opendir("assets/texts");
+    if (d) {
         struct dirent *de;
         while ((de = readdir(d)) != NULL && count < max_files) {
             if (de->d_name[0] == '.') continue;
             size_t nlen = strlen(de->d_name);
-            BOOL is_text = FALSE;
-            if (nlen > 3 && strcmp(de->d_name + nlen - 3, ".md") == 0) is_text = TRUE;
-            else if (nlen > 4 && strcmp(de->d_name + nlen - 4, ".txt") == 0) is_text = TRUE;
-            if (is_text) {
+            if (nlen > 4 && strcmp(de->d_name + nlen - 4, ".txt") == 0) {
                 BOOL dup = FALSE;
                 for (int i = 0; i < count; i++) {
                     if (strcmp(files[i], de->d_name) == 0) { dup = TRUE; break; }
@@ -1130,9 +1140,6 @@ int teditor_get_asset_files(char files[][64], int max_files) {
         const char *defaults[] = {
             "BTRON3_Report.txt",
             "Heart_Sutra_Tibetan.txt",
-            "FS.md",
-            "README.md",
-            "CLU.md",
             "hello.txt"
         };
         for (size_t i = 0; i < sizeof(defaults)/sizeof(defaults[0]) && count < max_files; i++) {
@@ -1368,7 +1375,8 @@ static void handle_t_editor_event(WND *wnd, const EVT *evt) {
             } else if (sym == 'o' || sym == 'O') {
                 /* Ctrl+O: Open File Menu with cascading document list */
                 teditor_open_menu(ed, TMENU_FILE);
-                ed->active_submenu = 1;
+                ed->menu_bar.active_submenu = 1;
+                teditor_sync_menu_state(ed);
                 return;
             } else if (sym == 'w' || sym == 'W') {
                 teditor_toggle_wrap(ed);

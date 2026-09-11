@@ -934,20 +934,21 @@ static void test_modern_menu_bar_and_asset_discovery(void) {
     wnd->event_handler(wnd, &evt_move);
     TEST_ASSERT(ed->tree_hover[1] == 0, "Hovering over 'foundations ▶' sets tree_hover[1] = 0");
 
-    /* Level 2 expands at x = (490 + 220 - 2 = 708) or flips if width exceeded.
-       In test window wnd->bounds is 40..800 (w=760), dev->width = 760.
-       708 + 190 = 898 > 760 -> flips to 490 - 190 + 2 = 302. */
-    H lvl2_x = (490 + 190 > (wnd->dev ? wnd->dev->width : 800)) ? (490 - 190 + 2) : (490 + 220 - 2);
-    evt_move.pos.x = wnd->bounds.left + 4 + lvl2_x + 30;
-    evt_move.pos.y = wnd->bounds.top + 26 + 74 + 3 + 10;
+    /* Level 2 expands */
+    RECT lvl2_box;
+    int lvl2_cnt = 0;
+    teditor_get_level_box(ed, wnd->dev, 2, &lvl2_box, &lvl2_cnt);
+    evt_move.pos.x = wnd->bounds.left + 4 + lvl2_box.left + 30;
+    evt_move.pos.y = wnd->bounds.top + 26 + lvl2_box.top + 3 + 10;
     wnd->event_handler(wnd, &evt_move);
     TEST_ASSERT(ed->tree_hover[2] == 0, "Hovering over 'logic ▶' sets tree_hover[2] = 0");
 
     /* Click on 'awodey.anders.txt' (item 0 in logic) */
-    H lvl3_x = (lvl2_x + 250 > (wnd->dev ? wnd->dev->width : 800)) ? (lvl2_x - 250 + 2) : (lvl2_x + 190 - 2);
-    if (lvl3_x < 0) lvl3_x = 0;
-    evt_click.pos.x = wnd->bounds.left + 4 + lvl3_x + 30;
-    evt_click.pos.y = wnd->bounds.top + 26 + 77 + 3 + 10;
+    RECT lvl3_box;
+    int lvl3_cnt = 0;
+    teditor_get_level_box(ed, wnd->dev, 3, &lvl3_box, &lvl3_cnt);
+    evt_click.pos.x = wnd->bounds.left + 4 + lvl3_box.left + 30;
+    evt_click.pos.y = wnd->bounds.top + 26 + lvl3_box.top + 3 + 10;
     wnd->event_handler(wnd, &evt_click);
     TEST_ASSERT(strstr(ed->filename, "awodey") != NULL, "Loaded awodey.anders.txt directly from hierarchical open menu");
     TEST_ASSERT(ed->active_menu == -1, "Menu closed after hierarchical file selection");
@@ -1001,20 +1002,32 @@ static void test_teditor_nano_about_box(void) {
 static void test_volume_and_markdown_file_operations(void) {
     printf("\n[UI TEST 18] BTRON Volume & Markdown Direct Open in Editor\n");
 
-    /* 1. Verify .md files are discovered in asset list */
-    char files[32][64];
-    int cnt = teditor_get_asset_files(files, 32);
-    TEST_ASSERT(cnt > 2, "Discovered asset files include markdown documents");
-
-    BOOL found_fs_md = FALSE, found_readme_md = FALSE;
-    for (int i = 0; i < cnt; i++) {
-        if (strcmp(files[i], "FS.md") == 0) found_fs_md = TRUE;
-        if (strcmp(files[i], "README.md") == 0) found_readme_md = TRUE;
+    /* 1. Verify .md files are NOT duplicated in root Open menu, only inside [/SYS] */
+    char root_files[32][64];
+    int root_cnt = teditor_get_asset_files(root_files, 32);
+    TEST_ASSERT(root_cnt >= 2, "Root Open menu has volume headers and txt files");
+    BOOL found_sys_header = FALSE, dup_md_in_root = FALSE;
+    for (int i = 0; i < root_cnt; i++) {
+        if (strstr(root_files[i], "[/SYS]") != NULL) found_sys_header = TRUE;
+        size_t len = strlen(root_files[i]);
+        if (len > 3 && strcmp(root_files[i] + len - 3, ".md") == 0) dup_md_in_root = TRUE;
     }
-    TEST_ASSERT(found_fs_md, "Discovered FS.md in Open menu asset list");
-    TEST_ASSERT(found_readme_md, "Discovered README.md in Open menu asset list");
+    TEST_ASSERT(found_sys_header, "Discovered [/SYS] System Docs header in Open menu");
+    TEST_ASSERT(!dup_md_in_root, "MD files are not duplicated in root of Open Menu");
 
-    /* 2. Test opening FS.md directly into editor */
+    /* 2. Verify .md files are mounted inside SYS System Docs */
+    TMenuTreeItem sys_items[64];
+    int sys_cnt = teditor_scan_fs_dir("/SYS", sys_items, 64);
+    TEST_ASSERT(sys_cnt >= 2, "SYS System Docs contains markdown documents");
+    BOOL found_fs_md = FALSE, found_readme_md = FALSE;
+    for (int i = 0; i < sys_cnt; i++) {
+        if (strcmp(sys_items[i].name, "FS.md") == 0) found_fs_md = TRUE;
+        if (strcmp(sys_items[i].name, "README.md") == 0) found_readme_md = TRUE;
+    }
+    TEST_ASSERT(found_fs_md, "Discovered FS.md inside SYS System Docs");
+    TEST_ASSERT(found_readme_md, "Discovered README.md inside SYS System Docs");
+
+    /* 3. Test opening FS.md directly into editor */
     TEditor ed;
     memset(&ed, 0, sizeof(ed));
     int rc = teditor_load_file(&ed, "FS.md");
@@ -1022,30 +1035,30 @@ static void test_volume_and_markdown_file_operations(void) {
     TEST_ASSERT(ed.total_lines > 10, "FS.md loaded with multiple lines");
     TEST_ASSERT(strcmp(ed.filename, "FS.md") == 0, "Editor filename is FS.md");
 
-    /* 3. Mount real btron_sys.vol and verify volume-backed loading */
+    /* 4. Mount real btron_sys.vol and verify volume-backed loading */
     BlkDev *dev = blk_file_create("btron_sys.vol", 0 /* read/write existing */, 1024);
     TEST_ASSERT(dev != NULL, "Opened btron_sys.vol for Editor UI test");
     Volume *v = vol_mount(dev);
     TEST_ASSERT(v != NULL, "Mounted btron_sys.vol for Editor UI test");
     g_sys_vol = v;
 
-    /* 4. Enumerate files directly from mounted BTRON volume */
-    char vol_files[32][64];
-    int vol_cnt = teditor_get_asset_files(vol_files, 32);
+    /* Enumerate files directly from mounted BTRON volume inside /SYS */
+    TMenuTreeItem vol_sys_items[64];
+    int vol_cnt = teditor_scan_fs_dir("/SYS", vol_sys_items, 64);
     TEST_ASSERT(vol_cnt >= 8, "Volume-backed asset discovery returned all manifest docs");
     BOOL vol_has_fs = FALSE, vol_has_clu = FALSE;
     int vol_fs_idx = -1;
     for (int i = 0; i < vol_cnt; i++) {
-        if (strcmp(vol_files[i], "FS.md") == 0) {
+        if (strcmp(vol_sys_items[i].name, "FS.md") == 0) {
             vol_has_fs = TRUE;
             vol_fs_idx = i;
         }
-        if (strcmp(vol_files[i], "CLU.md") == 0) vol_has_clu = TRUE;
+        if (strcmp(vol_sys_items[i].name, "CLU.md") == 0) vol_has_clu = TRUE;
     }
     TEST_ASSERT(vol_has_fs, "Volume /SYS container contains FS.md");
     TEST_ASSERT(vol_has_clu, "Volume /SYS container contains CLU.md");
 
-    /* 5. Cascading menu click simulation on volume-backed FS.md */
+    /* 5. Cascading menu click simulation on volume-backed FS.md inside [/SYS] */
     WND *wnd = open_t_editor_window();
     TEST_ASSERT(wnd != NULL, "Created Editor window with volume active");
     TEditor *wnd_ed = (TEditor*)(uintptr_t)wnd->user_data;
@@ -1061,10 +1074,19 @@ static void test_volume_and_markdown_file_operations(void) {
     wnd->event_handler(wnd, &evt_hover);
     TEST_ASSERT(wnd_ed->active_submenu == 1, "Submenu expanded via mouse hover");
 
-    /* Simulate click on FS.md row inside submenu */
+    /* Hover over item 0 '[/SYS] System Docs ▶' in Level 0 (x=252+30, y=46+3+10=59) */
+    evt_hover.pos.x = wnd->bounds.left + 4 + 252 + 30;
+    evt_hover.pos.y = wnd->bounds.top + 26 + 46 + 3 + 10;
+    wnd->event_handler(wnd, &evt_hover);
+    TEST_ASSERT(wnd_ed->tree_hover[0] == 0, "Hovering over '[/SYS] System Docs ▶' sets tree_hover[0] = 0");
+
+    /* Level 1 expands at parent_box.right-2 = 490. Click on FS.md row inside Level 1 */
     TEST_ASSERT(vol_fs_idx >= 0, "FS.md found in volume asset list");
-    H sub_x = 4 + 250 - 2 + 40;
-    H sub_y = 21 + 3 + (1 * 22) + 3 + vol_fs_idx * 22 + 10;
+    RECT lvl1_box;
+    int lvl1_cnt = 0;
+    teditor_get_level_box(wnd_ed, wnd->dev, 1, &lvl1_box, &lvl1_cnt);
+    H sub_x = lvl1_box.left + 30;
+    H sub_y = lvl1_box.top + 3 + vol_fs_idx * APP_MENU_ROW_HEIGHT + 10;
     EVT evt_click;
     memset(&evt_click, 0, sizeof(EVT));
     evt_click.type = EV_BUT_DOWN;

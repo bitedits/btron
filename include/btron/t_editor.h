@@ -68,7 +68,17 @@ int teditor_save_file(TEditor *ed, const char *filepath);
 int teditor_close_file(TEditor *ed);
 
 /* Menu Manager APIs */
+
+typedef struct {
+    char name[TEDITOR_MENU_NAME_LEN];
+    char path[TEDITOR_MENU_PATH_LEN];
+    BOOL is_dir;
+    BOOL is_sep;
+} TMenuTreeItem;
+
 int teditor_get_asset_files(char files[][64], int max_files);
+int teditor_scan_fs_dir(const char *dir_path, TMenuTreeItem *out_items, int max_items);
+void teditor_get_level_box(const TEditor *ed, GDEV *dev, int lvl, RECT *out_box, int *out_count);
 void teditor_open_menu(TEditor *ed, int menu_idx);
 void teditor_close_menu(TEditor *ed);
 WND* open_teditor_about_window(void);

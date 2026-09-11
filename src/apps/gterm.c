@@ -329,9 +329,9 @@ void shell_execute_cmd(const char *cmd_line, ShellOutputFn out_fn, void *user_da
     /* ── Cho-Kanji CLU Filesystem Builtins ─────────────────────────────────── */
     if (strcmp(cmd, "ls")     == 0) { clu_ls     (arg, out_fn, user_data); return; }
     if (strcmp(cmd, "fs")     == 0) { clu_fs_cmd (arg, out_fn, user_data); return; }
-    if (strcmp(cmd, "stat")   == 0 ||
-        strcmp(cmd, "finfo")  == 0 ||
-        strcmp(cmd, "info")   == 0) { clu_stat   (arg, out_fn, user_data); return; }
+    if (strcmp(cmd, "stat")   == 0) { clu_stat   (arg, out_fn, user_data); return; }
+    if (strcmp(cmd, "finfo")  == 0) { clu_finfo  (arg, out_fn, user_data); return; }
+    if (strcmp(cmd, "info")   == 0) { clu_info   (arg, out_fn, user_data); return; }
     if (strcmp(cmd, "tp")     == 0) { clu_tp     (arg, out_fn, user_data); return; }
     if (strcmp(cmd, "mkf")    == 0) { clu_mkf    (arg, out_fn, user_data); return; }
     if (strcmp(cmd, "cp")     == 0) { clu_cp     (arg, out_fn, user_data); return; }

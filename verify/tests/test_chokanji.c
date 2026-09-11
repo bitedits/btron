@@ -592,6 +592,108 @@ static void test_clu_tp_chokanji_streams_and_binaries(void)
     TEST_PASS();
 }
 
+static void test_volume_isolation_security(void)
+{
+    const char *path = find_qcow2_image();
+    TEST_ASSERT(path != NULL, "hda.qcow2 not found");
+
+    BlkDev *dev = blk_qcow2_create(path, 1);
+    TEST_ASSERT(dev != NULL, "failed to open QCOW2");
+
+    BlkDev *part = blk_mbr_find_btron_partition(dev, 8192);
+    TEST_ASSERT(part != NULL, "failed to slice partition");
+
+    Volume *v = vol_mount(part);
+    TEST_ASSERT(v != NULL, "failed to mount Cho-Kanji volume");
+    g_chokanji_vol = v;
+
+    BlkDev *sys_dev = blk_file_create("btron_sys.vol", 0, 1024);
+    TEST_ASSERT(sys_dev != NULL, "failed to open btron_sys.vol");
+    Volume *sv = vol_mount(sys_dev);
+    TEST_ASSERT(sv != NULL, "failed to mount btron_sys.vol");
+    g_sys_vol = sv;
+
+    static char out_buf[16384];
+
+    /* ── Case 1: In /SYS, accessing FID 781 (exists on Cho-Kanji, NOT on /SYS) ── */
+    clu_cd("/SYS", clu_buf_out, out_buf);
+
+    memset(out_buf, 0, sizeof(out_buf));
+    clu_tp("781", clu_buf_out, out_buf);
+    TEST_ASSERT(strstr(out_buf, "tp: FID 781 not found on /SYS") != NULL, "tp 781 on /SYS must report FID 781 not found on /SYS");
+    TEST_ASSERT(strstr(out_buf, "ERRNO") == NULL, "tp 781 on /SYS must not leak Cho-Kanji errno.h content");
+
+    memset(out_buf, 0, sizeof(out_buf));
+    clu_stat("781", clu_buf_out, out_buf);
+    TEST_ASSERT(strstr(out_buf, "stat: FID 781 not found on /SYS") != NULL, "stat 781 on /SYS must report FID 781 not found on /SYS");
+    TEST_ASSERT(strstr(out_buf, "errno.h") == NULL, "stat 781 on /SYS must not leak Cho-Kanji errno.h metadata");
+
+    memset(out_buf, 0, sizeof(out_buf));
+    clu_info("781", clu_buf_out, out_buf);
+    TEST_ASSERT(strstr(out_buf, "info: FID 781 not found on /SYS") != NULL, "info 781 on /SYS must report FID 781 not found on /SYS");
+    TEST_ASSERT(strstr(out_buf, "errno.h") == NULL, "info 781 on /SYS must not leak Cho-Kanji errno.h metadata");
+
+    memset(out_buf, 0, sizeof(out_buf));
+    clu_tp("/SYS#781", clu_buf_out, out_buf);
+    TEST_ASSERT(strstr(out_buf, "tp: FID 781 not found on /SYS") != NULL, "tp /SYS#781 must report FID 781 not found on /SYS");
+
+    memset(out_buf, 0, sizeof(out_buf));
+    clu_stat("/SYS#781", clu_buf_out, out_buf);
+    TEST_ASSERT(strstr(out_buf, "stat: FID 781 not found on /SYS") != NULL, "stat /SYS#781 must report FID 781 not found on /SYS");
+
+    memset(out_buf, 0, sizeof(out_buf));
+    clu_fs_cmd("/SYS#781", clu_buf_out, out_buf);
+    TEST_ASSERT(strstr(out_buf, "fs: FID 781 not found on /SYS") != NULL, "fs /SYS#781 must report FID 781 not found on /SYS");
+
+    /* ── Case 2: In /CHOKANJI, accessing non-existent FID ── */
+    clu_cd("/CHOKANJI", clu_buf_out, out_buf);
+
+    memset(out_buf, 0, sizeof(out_buf));
+    clu_tp("99999", clu_buf_out, out_buf);
+    TEST_ASSERT(strstr(out_buf, "tp: FID 99999 not found on /CHOKANJI") != NULL, "tp 99999 on /CHOKANJI must report FID 99999 not found on /CHOKANJI");
+
+    memset(out_buf, 0, sizeof(out_buf));
+    clu_stat("99999", clu_buf_out, out_buf);
+    TEST_ASSERT(strstr(out_buf, "stat: FID 99999 not found on /CHOKANJI") != NULL, "stat 99999 on /CHOKANJI must report FID 99999 not found on /CHOKANJI");
+
+    memset(out_buf, 0, sizeof(out_buf));
+    clu_tp("/CHOKANJI#99999", clu_buf_out, out_buf);
+    TEST_ASSERT(strstr(out_buf, "tp: FID 99999 not found on /CHOKANJI") != NULL, "tp /CHOKANJI#99999 must report not found on /CHOKANJI");
+
+    /* Explicit cross-volume query for missing FID on /SYS while in /CHOKANJI */
+    memset(out_buf, 0, sizeof(out_buf));
+    clu_tp("/SYS#781", clu_buf_out, out_buf);
+    TEST_ASSERT(strstr(out_buf, "tp: FID 781 not found on /SYS") != NULL, "tp /SYS#781 from /CHOKANJI must report FID 781 not found on /SYS");
+
+    /* Legitimate access on /CHOKANJI must succeed */
+    memset(out_buf, 0, sizeof(out_buf));
+    clu_stat("/CHOKANJI#781", clu_buf_out, out_buf);
+    TEST_ASSERT(strstr(out_buf, "File: errno.h") != NULL, "stat /CHOKANJI#781 must show File: errno.h");
+
+    memset(out_buf, 0, sizeof(out_buf));
+    clu_tp("/CHOKANJI#781", clu_buf_out, out_buf);
+    TEST_ASSERT(strstr(out_buf, "sys/errno.h") != NULL, "tp /CHOKANJI#781 must show errno.h contents");
+
+    /* ── Case 3: Unmounted / unknown volume access ── */
+    memset(out_buf, 0, sizeof(out_buf));
+    clu_tp("/UNKNOWN#1", clu_buf_out, out_buf);
+    TEST_ASSERT(strstr(out_buf, "tp: volume '/UNKNOWN' is not mounted") != NULL, "tp /UNKNOWN#1 must report volume '/UNKNOWN' is not mounted");
+
+    memset(out_buf, 0, sizeof(out_buf));
+    clu_stat("/UNKNOWN#1", clu_buf_out, out_buf);
+    TEST_ASSERT(strstr(out_buf, "stat: volume '/UNKNOWN' is not mounted") != NULL, "stat /UNKNOWN#1 must report volume '/UNKNOWN' is not mounted");
+
+    clu_cd("/SYS", clu_buf_out, out_buf);
+    g_chokanji_vol = NULL;
+    vol_umount(v);
+    blk_destroy(part);
+    blk_destroy(dev);
+    g_sys_vol = NULL;
+    vol_umount(sv);
+    blk_destroy(sys_dev);
+    TEST_PASS();
+}
+
 int main(void)
 {
     printf("=== B-System BTRON3 Cho-Kanji (B-right/V 4.02) Mount Tests ===\n\n");
@@ -605,6 +707,7 @@ int main(void)
     test_read_write_operations();
     test_clu_integration();
     test_clu_tp_chokanji_streams_and_binaries();
+    test_volume_isolation_security();
 
     printf("\n=== Results: %d PASS  %d FAIL ===\n", g_pass, g_fail);
     return (g_fail == 0) ? 0 : 1;

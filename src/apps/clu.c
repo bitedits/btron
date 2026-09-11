@@ -635,7 +635,6 @@ static void clu_fs_dump_records(Volume *v, ID fd, FID parent_fid, const char *pa
                                               (v == g_anders_vol) ? "/ANDERS/" : "/SYS/";
                         snprintf(child_path, sizeof(child_path), "%s%s", vprefix, link_name);
                         child_fd = opn_fil(child_path, 0x0001);
-                        if (child_fd < 0) child_fd = opn_fil(link_name, 0x0001);
                     }
                     if (child_fd >= 0) {
                         clu_fs_dump_records(v, child_fd, of->fid, link_name, depth + 1, flag_l, flag_r, visited, nfmax, out, ud);
@@ -732,7 +731,6 @@ static void clu_fs_dump_records(Volume *v, ID fd, FID parent_fid, const char *pa
                                               (v == g_anders_vol) ? "/ANDERS/" : "/SYS/";
                         snprintf(child_path, sizeof(child_path), "%s%s", vprefix, entry.name);
                         child_fd = opn_fil(child_path, 0x0001);
-                        if (child_fd < 0) child_fd = opn_fil(entry.name, 0x0001);
                     }
                     if (child_fd >= 0) {
                         clu_fs_dump_records(v, child_fd, of->fid, entry.name, depth + 1, flag_l, flag_r, visited, nfmax, out, ud);
@@ -825,8 +823,13 @@ static void clu_fs_print_node_tree(CluFsNode *nodes, FID fid, int depth, int fla
 }
 
 /* ── clu_open_target ─────────────────────────────────────────────── */
-static ID clu_open_target(const char *target, UW mode, Volume *default_vol)
+static ID clu_open_target(const char *target, UW mode, Volume *default_vol,
+                          Volume **out_vol, FID *out_fid, int *out_is_fid)
 {
+    if (out_vol) *out_vol = NULL;
+    if (out_fid) *out_fid = FID_INVALID;
+    if (out_is_fid) *out_is_fid = 0;
+
     if (!target || !target[0]) return -1;
 
     Volume *v = default_vol ? default_vol :
@@ -839,34 +842,53 @@ static ID clu_open_target(const char *target, UW mode, Volume *default_vol)
     const char *num_str = NULL;
     Volume *target_vol = v;
 
-    int all_digits = 1;
-    for (int i = 0; target[i]; i++) {
-        if (!isdigit((unsigned char)target[i])) { all_digits = 0; break; }
-    }
     if (strncmp(target, "/CHOKANJI#", 10) == 0) {
-        target_vol = g_chokanji_vol ? g_chokanji_vol : v;
+        target_vol = g_chokanji_vol;
         num_str = target + 10;
         is_fid = 1;
     } else if (strncmp(target, "/ANDERS#", 8) == 0) {
-        target_vol = g_anders_vol ? g_anders_vol : v;
+        target_vol = g_anders_vol;
         num_str = target + 8;
         is_fid = 1;
     } else if (strncmp(target, "/SYS#", 5) == 0) {
         target_vol = g_sys_vol;
         num_str = target + 5;
         is_fid = 1;
-    } else if (target[0] == '#') {
-        num_str = target + 1;
-        is_fid = 1;
-    } else if ((target[0] == 'f' || target[0] == 'F') &&
-               (target[1] == 'i' || target[1] == 'I') &&
-               (target[2] == 'd' || target[2] == 'D') &&
-               target[3] == ':') {
-        num_str = target + 4;
-        is_fid = 1;
-    } else if (all_digits && target[0]) {
-        num_str = target;
-        is_fid = 1;
+    } else if (strncmp(target, "/CHOKANJI/", 10) == 0 || strcmp(target, "/CHOKANJI") == 0 ||
+               strncmp(target, "/B-right/", 9) == 0 || strcmp(target, "/B-right") == 0) {
+        target_vol = g_chokanji_vol;
+    } else if (strncmp(target, "/ANDERS/", 8) == 0 || strcmp(target, "/ANDERS") == 0) {
+        target_vol = g_anders_vol;
+    } else if (strncmp(target, "/SYS/", 5) == 0 || strcmp(target, "/SYS") == 0) {
+        target_vol = g_sys_vol;
+    } else if (target[0] == '/') {
+        if (target[1] == '\0') {
+            target_vol = v;
+        } else {
+            target_vol = NULL;
+        }
+    }
+
+    if (!is_fid) {
+        int all_digits = 1;
+        for (int i = 0; target[i]; i++) {
+            if (!isdigit((unsigned char)target[i])) { all_digits = 0; break; }
+        }
+        if (target[0] == '#') {
+            num_str = target + 1;
+            while (*num_str == ' ') num_str++;
+            is_fid = 1;
+        } else if ((target[0] == 'f' || target[0] == 'F') &&
+                   (target[1] == 'i' || target[1] == 'I') &&
+                   (target[2] == 'd' || target[2] == 'D') &&
+                   target[3] == ':') {
+            num_str = target + 4;
+            while (*num_str == ' ') num_str++;
+            is_fid = 1;
+        } else if (all_digits && target[0]) {
+            num_str = target;
+            is_fid = 1;
+        }
     }
 
     if (is_fid && num_str && *num_str) {
@@ -877,39 +899,61 @@ static ID clu_open_target(const char *target, UW mode, Volume *default_vol)
             np++;
         }
         fid_val = (FID)val;
-        if (target_vol) {
-            fd = opn_fil_fid(target_vol, fid_val, mode);
-        }
-        if (fd < 0 && target_vol != g_sys_vol && g_sys_vol) {
-            fd = opn_fil_fid(g_sys_vol, fid_val, mode);
-        }
-        if (fd < 0 && target_vol != g_chokanji_vol && g_chokanji_vol) {
-            fd = opn_fil_fid(g_chokanji_vol, fid_val, mode);
-        }
-        if (fd < 0 && target_vol != g_anders_vol && g_anders_vol) {
-            fd = opn_fil_fid(g_anders_vol, fid_val, mode);
-        }
-        return fd;
+        if (out_fid) *out_fid = fid_val;
+        if (out_is_fid) *out_is_fid = 1;
+        if (out_vol) *out_vol = target_vol;
+
+        if (!target_vol) return -1;
+        return opn_fil_fid(target_vol, fid_val, mode);
     }
 
-    /* Try as path */
+    if (out_vol) *out_vol = target_vol;
+    if (!target_vol) return -1;
+
+    /* Absolute / volume path */
     fd = opn_fil(target, mode);
-    if (fd < 0 && target[0] != '/') {
+    if (fd >= 0) return fd;
+
+    /* Relative path: look only in current working volume */
+    if (target[0] != '/') {
         char full[128];
         snprintf(full, sizeof(full), "%s/%s", g_cwd_path, target);
         fd = opn_fil(full, mode);
     }
-    if (fd < 0 && target[0] != '/' && g_chokanji_vol) {
-        char full[128];
-        snprintf(full, sizeof(full), "/CHOKANJI/%s", target);
-        fd = opn_fil(full, mode);
-    }
-    if (fd < 0 && target[0] != '/' && g_sys_vol) {
-        char full[128];
-        snprintf(full, sizeof(full), "/SYS/%s", target);
-        fd = opn_fil(full, mode);
-    }
     return fd;
+}
+
+static void clu_report_target_err(const char *cmd, const char *target, Volume *target_vol,
+                                  FID fid_val, int is_fid, ShellOutputFn out, void *ud)
+{
+    char err[128];
+    const char *vol_name = (target_vol == g_chokanji_vol && g_chokanji_vol) ? "/CHOKANJI" :
+                           (target_vol == g_anders_vol && g_anders_vol) ? "/ANDERS" :
+                           (target_vol == g_sys_vol && g_sys_vol) ? "/SYS" :
+                           (!target_vol) ? "unmounted volume" : g_cwd_path;
+    if (!target_vol) {
+        if (target && target[0] == '/') {
+            char vbuf[32];
+            int vi = 0;
+            const char *p = target;
+            vbuf[vi++] = *p++;
+            while (*p && *p != '/' && *p != '#' && vi < (int)sizeof(vbuf) - 1) {
+                vbuf[vi++] = *p++;
+            }
+            vbuf[vi] = '\0';
+            if (vi > 1)
+                snprintf(err, sizeof(err), "%s: volume '%s' is not mounted", cmd, vbuf);
+            else
+                snprintf(err, sizeof(err), "%s: volume is not mounted", cmd);
+        } else {
+            snprintf(err, sizeof(err), "%s: volume is not mounted", cmd);
+        }
+    } else if (is_fid) {
+        snprintf(err, sizeof(err), "%s: FID %u not found on %s", cmd, (unsigned)fid_val, vol_name);
+    } else {
+        snprintf(err, sizeof(err), "%s: '%s': not found on %s", cmd, target, vol_name);
+    }
+    out(err, COLOR_RED, ud);
 }
 
 void clu_fs_cmd(const char *args, ShellOutputFn out, void *ud)
@@ -1165,12 +1209,13 @@ void clu_fs_cmd(const char *args, ShellOutputFn out, void *ud)
     }
 
     const char *path = target[0] ? target : g_cwd_path;
-    ID fd = clu_open_target(path, 0x0001, v);
+    Volume *target_vol = NULL;
+    FID fid_val = FID_INVALID;
+    int is_fid = 0;
+    ID fd = clu_open_target(path, 0x0001, v, &target_vol, &fid_val, &is_fid);
 
     if (fd < 0) {
-        char err[128];
-        snprintf(err, sizeof(err), "fs: '%s': not found", path);
-        out(err, COLOR_RED, ud);
+        clu_report_target_err("fs", path, target_vol, fid_val, is_fid, out, ud);
         return;
     }
 
@@ -1193,24 +1238,27 @@ void clu_fs_cmd(const char *args, ShellOutputFn out, void *ud)
 }
 
 /* ── clu_stat ────────────────────────────────────────────────────── */
-void clu_stat(const char *args, ShellOutputFn out, void *ud)
+static void clu_stat_internal(const char *cmd_name, const char *args, ShellOutputFn out, void *ud)
 {
     char target[80];
     get_target(args, target, sizeof(target));
 
     if (!target[0]) {
-        out("stat: missing file argument (usage: stat <file|FID>)", COLOR_RED, ud);
+        char err[128];
+        snprintf(err, sizeof(err), "%s: missing file argument (usage: %s <file|FID>)", cmd_name, cmd_name);
+        out(err, COLOR_RED, ud);
         return;
     }
 
     Volume *v = (strncmp(g_cwd_path, "/ANDERS", 7) == 0 && g_anders_vol) ? g_anders_vol :
                 ((strncmp(g_cwd_path, "/CHOKANJI", 9) == 0 || strncmp(g_cwd_path, "/B-right", 8) == 0) && g_chokanji_vol) ? g_chokanji_vol : g_sys_vol;
 
-    ID fd = clu_open_target(target, 0x0001, v);
+    Volume *target_vol = NULL;
+    FID fid_val = FID_INVALID;
+    int is_fid = 0;
+    ID fd = clu_open_target(target, 0x0001, v, &target_vol, &fid_val, &is_fid);
     if (fd < 0) {
-        char err[128];
-        snprintf(err, sizeof(err), "stat: '%s': not found", target);
-        out(err, COLOR_RED, ud);
+        clu_report_target_err(cmd_name, target, target_vol, fid_val, is_fid, out, ud);
         return;
     }
 
@@ -1320,6 +1368,21 @@ void clu_stat(const char *args, ShellOutputFn out, void *ud)
     cls_fil(fd);
 }
 
+void clu_stat(const char *args, ShellOutputFn out, void *ud)
+{
+    clu_stat_internal("stat", args, out, ud);
+}
+
+void clu_info(const char *args, ShellOutputFn out, void *ud)
+{
+    clu_stat_internal("info", args, out, ud);
+}
+
+void clu_finfo(const char *args, ShellOutputFn out, void *ud)
+{
+    clu_stat_internal("finfo", args, out, ud);
+}
+
 /* ── clu_tp ──────────────────────────────────────────────────────── */
 void clu_tp(const char *args, ShellOutputFn out, void *ud)
 {
@@ -1333,10 +1396,13 @@ void clu_tp(const char *args, ShellOutputFn out, void *ud)
     Volume *v = (strncmp(g_cwd_path, "/ANDERS", 7) == 0 && g_anders_vol) ? g_anders_vol :
                 ((strncmp(g_cwd_path, "/CHOKANJI", 9) == 0 || strncmp(g_cwd_path, "/B-right", 8) == 0) && g_chokanji_vol) ? g_chokanji_vol : g_sys_vol;
 
-    ID fd = clu_open_target(target, 0x0001, v);
+    Volume *target_vol = NULL;
+    FID fid_val = FID_INVALID;
+    int is_fid = 0;
+    ID fd = clu_open_target(target, 0x0001, v, &target_vol, &fid_val, &is_fid);
     if (fd < 0) {
-        char err[128]; snprintf(err, sizeof(err), "tp: '%s': not found", target);
-        out(err, COLOR_RED, ud); return;
+        clu_report_target_err("tp", target, target_vol, fid_val, is_fid, out, ud);
+        return;
     }
 
     OpenFile *of = &g_open_files[(int)fd];

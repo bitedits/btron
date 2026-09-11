@@ -414,25 +414,34 @@ static FID find_fid_by_name(Volume *v, const char *name)
     return FID_INVALID;
 }
 
-/* ── opn_fil ─────────────────────────────────────────────────────── */
-ID opn_fil(const char *path, UW mode)
+static Volume *resolve_volume_from_path(const char *path)
 {
-    if (!path) return (ID)-1;
-
+    if (!path) return NULL;
     Volume *v = NULL;
     if (path[0] == '/') {
         if (strncmp(path, "/ANDERS", 7) == 0 && (path[7] == '/' || path[7] == '\0')) v = g_anders_vol;
         else if (((strncmp(path, "/CHOKANJI", 9) == 0 && (path[9] == '/' || path[9] == '\0')) ||
                   (strncmp(path, "/B-right", 8) == 0 && (path[8] == '/' || path[8] == '\0'))) && g_chokanji_vol) v = g_chokanji_vol;
         else if (strncmp(path, "/SYS", 4) == 0 && (path[4] == '/' || path[4] == '\0')) v = g_sys_vol;
-        else v = g_sys_vol;
+        else if (path[1] == '\0') {
+            if (strncmp(g_cwd_path, "/ANDERS", 7) == 0 && g_anders_vol) v = g_anders_vol;
+            else if ((strncmp(g_cwd_path, "/CHOKANJI", 9) == 0 || strncmp(g_cwd_path, "/B-right", 8) == 0) && g_chokanji_vol) v = g_chokanji_vol;
+            else v = g_sys_vol;
+        } else {
+            return NULL;
+        }
     } else {
-        /* Relative path: use active directory volume */
         if (strncmp(g_cwd_path, "/ANDERS", 7) == 0 && g_anders_vol) v = g_anders_vol;
         else if ((strncmp(g_cwd_path, "/CHOKANJI", 9) == 0 || strncmp(g_cwd_path, "/B-right", 8) == 0) && g_chokanji_vol) v = g_chokanji_vol;
         else v = g_sys_vol;
     }
-    if (!v) v = g_sys_vol;
+    return v;
+}
+
+/* ── opn_fil ─────────────────────────────────────────────────────── */
+ID opn_fil(const char *path, UW mode)
+{
+    Volume *v = resolve_volume_from_path(path);
     if (!v) return (ID)-1;
 
     /* Strip leading "/" or volume prefix for flat namespace lookup */
@@ -451,11 +460,6 @@ ID opn_fil(const char *path, UW mode)
         fid = FID_ROOT;
     } else {
         fid = find_fid_by_name(v, name);
-        /* If relative search on SYS fails, check ANDERS (but never do unconstrained Cho-Kanji scan) */
-        if (fid == FID_INVALID && v == g_sys_vol && g_anders_vol && path[0] != '/') {
-            fid = find_fid_by_name(g_anders_vol, name);
-            if (fid != FID_INVALID) v = g_anders_vol;
-        }
     }
     if (fid == FID_INVALID) return (ID)-1;
     return opn_fil_fid(v, fid, mode);
@@ -490,12 +494,7 @@ ID opn_fil_fid(Volume *v, FID fid, UW mode)
 /* ── cre_fil ─────────────────────────────────────────────────────── */
 ID cre_fil(const char *path, UW mode)
 {
-    Volume *v = g_sys_vol;
-    if (path && strncmp(path, "/ANDERS", 7) == 0 && g_anders_vol) {
-        v = g_anders_vol;
-    } else if (path && (strncmp(path, "/CHOKANJI", 9) == 0 || strncmp(path, "/B-right", 8) == 0) && g_chokanji_vol) {
-        v = g_chokanji_vol;
-    }
+    Volume *v = resolve_volume_from_path(path);
     if (!v || !path) return (ID)-1;
 
     const char *name = path;
@@ -587,12 +586,7 @@ ER cls_fil(ID fd)
 /* ── del_fil ─────────────────────────────────────────────────────── */
 ER del_fil(const char *path)
 {
-    Volume *v = g_sys_vol;
-    if (path && strncmp(path, "/ANDERS", 7) == 0 && g_anders_vol) {
-        v = g_anders_vol;
-    } else if (path && (strncmp(path, "/CHOKANJI", 9) == 0 || strncmp(path, "/B-right", 8) == 0) && g_chokanji_vol) {
-        v = g_chokanji_vol;
-    }
+    Volume *v = resolve_volume_from_path(path);
     if (!v || !path) return (ER)-1;
 
     const char *name = path;
@@ -894,12 +888,8 @@ static int      g_dir_used[16];
 
 ID opn_dir(const char *path)
 {
-    Volume *v = g_sys_vol;
-    if (path && strncmp(path, "/ANDERS", 7) == 0 && g_anders_vol) {
-        v = g_anders_vol;
-    } else if (path && (strncmp(path, "/CHOKANJI", 9) == 0 || strncmp(path, "/B-right", 8) == 0) && g_chokanji_vol) {
-        v = g_chokanji_vol;
-    }
+    Volume *v = resolve_volume_from_path(path);
+    if (!v) return (ID)-1;
     for (int i = 0; i < 16; i++) {
         if (!g_dir_used[i]) {
             g_dir_used[i] = 1;

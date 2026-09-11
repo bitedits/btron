@@ -339,3 +339,75 @@ __attribute__((weak)) int tkl_snprintf(char *str, size_t size, const char *forma
 #if !defined(__STDC_HOSTED__) || __STDC_HOSTED__ == 0
 int snprintf(char *str, size_t size, const char *format, ...) __attribute__((weak, alias("tkl_snprintf")));
 #endif
+
+/* Standard strtoul implementation */
+__attribute__((weak)) unsigned long int tkl_strtoul(const char *nptr, char **endptr, int base) {
+    unsigned long int value = 0;
+    int sign = 1;
+    int i;
+
+    if (!nptr) {
+        if (endptr) *endptr = NULL;
+        return 0;
+    }
+
+    while (*nptr == ' ' || *nptr == '\t') {
+        ++nptr;
+    }
+
+    switch (*nptr) {
+    case '-':
+        sign = -1;
+        /* fallthrough */
+    case '+':
+        ++nptr;
+        break;
+    default:
+        break;
+    }
+
+    if (base == 16) {
+        if (*nptr == '0' && (*(nptr + 1) == 'X' || *(nptr + 1) == 'x')) {
+            nptr += 2;
+        }
+    } else if (base == 0) {
+        if (*nptr == '0') {
+            ++nptr;
+            if (*nptr == 'X' || *nptr == 'x') {
+                ++nptr;
+                base = 16;
+            } else {
+                base = 8;
+            }
+        } else {
+            base = 10;
+        }
+    } else if (base < 2 || base > 36) {
+        base = 10;
+    }
+
+    while (*nptr != '\0') {
+        if (*nptr >= '0' && *nptr <= '9') {
+            i = *nptr - '0';
+        } else if (*nptr >= 'A' && *nptr <= 'Z') {
+            i = *nptr - 'A' + 10;
+        } else if (*nptr >= 'a' && *nptr <= 'z') {
+            i = *nptr - 'a' + 10;
+        } else {
+            break;
+        }
+        if (i >= base) {
+            break;
+        }
+        value = value * base + i;
+        ++nptr;
+    }
+    if (endptr != NULL) {
+        *endptr = (char *)nptr;
+    }
+    return value * sign;
+}
+
+#if !defined(__STDC_HOSTED__) || __STDC_HOSTED__ == 0
+unsigned long int strtoul(const char *nptr, char **endptr, int base) __attribute__((weak, alias("tkl_strtoul")));
+#endif

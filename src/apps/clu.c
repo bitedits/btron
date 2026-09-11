@@ -30,6 +30,7 @@
    extern int   tkl_strncmp(const char *, const char *, size_t);
    extern size_t tkl_strlen(const char *);
    extern char  *tkl_strncpy(char *, const char *, size_t);
+   extern unsigned long int tkl_strtoul(const char *, char **, int);
 #  define malloc   Imalloc
 #  define calloc   Icalloc
 #  define free     Ifree
@@ -40,6 +41,7 @@
 #  define strncmp  tkl_strncmp
 #  define strlen   tkl_strlen
 #  define strncpy  tkl_strncpy
+#  define strtoul  tkl_strtoul
 #  define isspace(c) ((c)==' '||(c)=='\t'||(c)=='\n'||(c)=='\r')
 #  define isdigit(c) ((c)>='0'&&(c)<='9')
 #endif

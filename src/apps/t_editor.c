@@ -1,4 +1,4 @@
-﻿#ifndef _DEFAULT_SOURCE
+#ifndef _DEFAULT_SOURCE
 #define _DEFAULT_SOURCE
 #endif
 #include <btron/t_editor.h>

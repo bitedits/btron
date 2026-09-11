@@ -1,6 +1,9 @@
 #ifndef _POSIX_C_SOURCE
 #define _POSIX_C_SOURCE 200809L
 #endif
+#ifndef _BSD_SOURCE
+#define _BSD_SOURCE
+#endif
 /*
  * B-TRON Real-Time Kernel: POSIX Microkernel Abstraction Engine (core_posix.c)
  * Pure POSIX pthread-backed implementation of µITRON & T-Kernel specification APIs.

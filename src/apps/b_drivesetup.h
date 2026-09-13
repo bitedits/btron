@@ -94,8 +94,9 @@ typedef struct {
     uint32_t        vector_dim;
     uint64_t        active_fids;
     uint64_t        free_blocks;
-    uint32_t        total_fids;
-    char            mount_point[16];                 /* e.g. "/SYS", "/ANDERS", "/CHOKANJI", "Unmounted" */
+    uint64_t        total_fids;
+    char            mount_point[DRIVESETUP_NAME_LEN];/* e.g. "/SYS", "/STORAGE_DEV", "Unmounted" */
+    void           *vol_handle;                      /* Attached Volume* handle */
 } DriveSetupPartition;
 
 typedef struct {
@@ -114,7 +115,6 @@ typedef enum {
     DIALOG_CREATE_SLICE,
     DIALOG_CREATE_IMAGE,
     DIALOG_FORMAT_BFS,
-    DIALOG_MOUNT_STATUS,
     DIALOG_WARN_WRITE
 } DriveSetupDialog;
 

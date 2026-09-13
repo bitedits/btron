@@ -15,7 +15,7 @@ B-FS is the next-generation, high-assurance file system for B-System (BTRON 3.20
 │         clu (shell) │ tad_browser │ t_editor │ b_drivesetup (Disk Setup)         │
 ├──────────────────────────────────────────────────────────────────────────────────┤
 │ Level 3: BTRON File System Interface (B-VFS)                                     │
-│  - opn_fil, cls_fil, rea_rec, wri_rec, fil_set_vectors, vol_vector_search         │
+│  - opn_fil, cls_fil, rea_rec, wri_rec, fil_set_vectors, vol_vector_search        │
 │  - Vnode lifecycle, Entry cache, Transaction context                             │
 ├──────────────────────────────────────────────────────────────────────────────────┤
 │ Level 2: Inode, Data Stream & B+Tree Layer                                       │
@@ -26,12 +26,12 @@ B-FS is the next-generation, high-assurance file system for B-System (BTRON 3.20
 │ Level 1: Core Volume & Storage Allocation Engine                                 │
 │  - Superblock (Dual-Anchor: 128B V2 Header + 512B Extended BFS SuperBlock)       │
 │  - Block Allocator: 64-bit Allocation Groups (AGs), Bitmaps, Buddy allocator     │
-│  - Journaling (WAL): Circular log, Transaction commit, Redo replay, Crash safety│
+│  - Journaling (WAL): Circular log, Transaction commit, Redo replay, Crash safety │
 ├──────────────────────────────────────────────────────────────────────────────────┤
-│ Level 0: BTRON Device Manager (BDM) & Block Abstraction                         │
+│ Level 0: BTRON Device Manager (BDM) & Block Abstraction                          │
 │  - BTRON Device Registry (opn_dev_mgr, rea_dev, wri_dev)                         │
 │  - Partition Slicing (MBR 0x13, GPT B-FS GUID, blk_partition_create)             │
-│  - BlkDev Abstraction (blk_mem, blk_file, blk_qcow2, physical NVMe/AHCI)        │
+│  - BlkDev Abstraction (blk_mem, blk_file, blk_qcow2, physical NVMe/AHCI)         │
 └──────────────────────────────────────────────────────────────────────────────────┘
 ```
 

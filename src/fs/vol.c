@@ -200,6 +200,94 @@ Volume *g_anders_vol = (Volume *)0;
 Volume *g_chokanji_vol = (Volume *)0;
 char    g_cwd_path[128] = "/SYS";
 
+#define MAX_MOUNTED_VOLUMES 16
+static Volume *s_mounted_vols[MAX_MOUNTED_VOLUMES];
+static int     s_mounted_vol_count = 0;
+
+static int vol_strcasecmp(const char *s1, const char *s2)
+{
+    if (!s1 || !s2) return s1 ? 1 : (s2 ? -1 : 0);
+    while (*s1 && *s2) {
+        char c1 = *s1;
+        char c2 = *s2;
+        if (c1 >= 'A' && c1 <= 'Z') c1 = (char)(c1 + 32);
+        if (c2 >= 'A' && c2 <= 'Z') c2 = (char)(c2 + 32);
+        if (c1 != c2) return (int)(unsigned char)c1 - (int)(unsigned char)c2;
+        s1++;
+        s2++;
+    }
+    return (int)(unsigned char)*s1 - (int)(unsigned char)*s2;
+}
+
+static void sync_mounted_globals(void)
+{
+    if (g_sys_vol) {
+        int found = 0;
+        for (int i = 0; i < s_mounted_vol_count; i++) {
+            if (s_mounted_vols[i] == g_sys_vol) { found = 1; break; }
+        }
+        if (!found && s_mounted_vol_count < MAX_MOUNTED_VOLUMES) {
+            s_mounted_vols[s_mounted_vol_count++] = g_sys_vol;
+        }
+    }
+    if (g_chokanji_vol) {
+        int found = 0;
+        for (int i = 0; i < s_mounted_vol_count; i++) {
+            if (s_mounted_vols[i] == g_chokanji_vol) { found = 1; break; }
+        }
+        if (!found && s_mounted_vol_count < MAX_MOUNTED_VOLUMES) {
+            s_mounted_vols[s_mounted_vol_count++] = g_chokanji_vol;
+        }
+    }
+    if (g_anders_vol) {
+        int found = 0;
+        for (int i = 0; i < s_mounted_vol_count; i++) {
+            if (s_mounted_vols[i] == g_anders_vol) { found = 1; break; }
+        }
+        if (!found && s_mounted_vol_count < MAX_MOUNTED_VOLUMES) {
+            s_mounted_vols[s_mounted_vol_count++] = g_anders_vol;
+        }
+    }
+}
+
+int vol_mounted_count(void)
+{
+    sync_mounted_globals();
+    return s_mounted_vol_count;
+}
+
+Volume *vol_get_mounted(int index)
+{
+    sync_mounted_globals();
+    if (index >= 0 && index < s_mounted_vol_count) {
+        return s_mounted_vols[index];
+    }
+    return (Volume *)0;
+}
+
+Volume *vol_find_by_name(const char *name)
+{
+    if (!name || !name[0]) return (Volume *)0;
+    sync_mounted_globals();
+
+    const char *n = (name[0] == '/') ? name + 1 : name;
+    for (int i = 0; i < s_mounted_vol_count; i++) {
+        Volume *v = s_mounted_vols[i];
+        if (v) {
+            const char *vn = vol_name(v);
+            if (vn && vn[0] && (vol_strcasecmp(vn, n) == 0 || vol_strcasecmp(vn, name) == 0)) {
+                return v;
+            }
+        }
+    }
+    /* Fallback checks for legacy aliases */
+    if (g_sys_vol && (vol_strcasecmp(n, "SYS") == 0 || vol_strcasecmp(vol_name(g_sys_vol), n) == 0)) return g_sys_vol;
+    if (g_chokanji_vol && (vol_strcasecmp(n, "CHOKANJI") == 0 || vol_strcasecmp(n, "B-right") == 0 || vol_strcasecmp(vol_name(g_chokanji_vol), n) == 0)) return g_chokanji_vol;
+    if (g_anders_vol && (vol_strcasecmp(n, "ANDERS") == 0 || vol_strcasecmp(vol_name(g_anders_vol), n) == 0)) return g_anders_vol;
+
+    return (Volume *)0;
+}
+
 UW vol_block_size(const Volume *v)
 {
     return (v && v->block_size > 0) ? v->block_size : BTRON_BLOCK_SIZE;
@@ -813,6 +901,16 @@ Volume *vol_mount(BlkDev *dev)
 
     v->dirty = 0;
     free(blk_buf);
+
+    /* Register in mounted volume table */
+    int already_present = 0;
+    for (int i = 0; i < s_mounted_vol_count; i++) {
+        if (s_mounted_vols[i] == v) { already_present = 1; break; }
+    }
+    if (!already_present && s_mounted_vol_count < MAX_MOUNTED_VOLUMES) {
+        s_mounted_vols[s_mounted_vol_count++] = v;
+    }
+
     return v;
 }
 
@@ -824,6 +922,21 @@ void vol_umount(Volume *v)
     vol_sync(v);
     v->hdr.dirty = 0;
     flush_header(v);
+
+    /* Unregister from mounted volume table */
+    for (int i = 0; i < s_mounted_vol_count; i++) {
+        if (s_mounted_vols[i] == v) {
+            for (int j = i; j < s_mounted_vol_count - 1; j++) {
+                s_mounted_vols[j] = s_mounted_vols[j + 1];
+            }
+            s_mounted_vols[--s_mounted_vol_count] = (Volume *)0;
+            break;
+        }
+    }
+    if (g_sys_vol == v) g_sys_vol = (Volume *)0;
+    if (g_anders_vol == v) g_anders_vol = (Volume *)0;
+    if (g_chokanji_vol == v) g_chokanji_vol = (Volume *)0;
+
     free(v->fid_tbl);
     free(v->htbl);
     free(v->ubmp);

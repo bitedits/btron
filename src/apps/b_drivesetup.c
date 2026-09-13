@@ -159,6 +159,17 @@ static void drivesetup_calc_dialog_rect(int w, int h, int req_w, int req_h, RECT
     dlg_r->bottom = dy + dh;
 }
 
+static bool drivesetup_get_dialog_rect(int w, int h, DriveSetupDialog dlg, RECT *r) {
+    switch (dlg) {
+        case DIALOG_INIT_DISK:    drivesetup_calc_dialog_rect(w, h, 500, 280, r); return true;
+        case DIALOG_CREATE_SLICE: drivesetup_calc_dialog_rect(w, h, 500, 270, r); return true;
+        case DIALOG_CREATE_IMAGE: drivesetup_calc_dialog_rect(w, h, 500, 270, r); return true;
+        case DIALOG_FORMAT_BFS:   drivesetup_calc_dialog_rect(w, h, 560, 410, r); return true;
+        case DIALOG_WARN_WRITE:   drivesetup_calc_dialog_rect(w, h, 520, 260, r); return true;
+        default: return false;
+    }
+}
+
 /* ── Production Menu Command IDs ──────────────────────────────────── */
 typedef DriveSetupCommand DS_CMD;
 
@@ -284,6 +295,64 @@ static void paint_ui_radio(GDEV *dev, H x, H y, const char *label, bool checked,
     drw_tc_string(dev, x + 22, y, label, text_col, COLOR_WHITE);
 }
 
+/* 3D Vertical Scrollbar */
+static void paint_scrollbar(GDEV *dev, int sb_x, int sb_y, int sb_w, int sb_h,
+                            int dy_b, int track_top, int track_h, int thumb_h,
+                            int scroll_offset, int total_count, int visible_count) {
+    RECT sb_bg = { sb_x, sb_y, sb_x + sb_w, sb_y + sb_h };
+    fill_rec(dev, &sb_bg, COLOR_LTGRAY);
+    drw_lin(dev, sb_x, sb_y, sb_x, sb_y + sb_h);
+
+    /* Up arrow button (16x16) */
+    RECT up_btn = { sb_x, sb_y, sb_x + sb_w, sb_y + 16 };
+    fill_rec(dev, &up_btn, COLOR_LTGRAY);
+    drw_rec(dev, &up_btn);
+    drw_lin(dev, sb_x + 1, sb_y + 1, sb_x + sb_w - 2, sb_y + 1);
+    drw_lin(dev, sb_x + 8, sb_y + 4, sb_x + 4, sb_y + 11);
+    drw_lin(dev, sb_x + 8, sb_y + 4, sb_x + 12, sb_y + 11);
+    drw_lin(dev, sb_x + 4, sb_y + 11, sb_x + 12, sb_y + 11);
+
+    /* Down arrow button (16x16) */
+    RECT dn_btn = { sb_x, dy_b, sb_x + sb_w, sb_y + sb_h };
+    fill_rec(dev, &dn_btn, COLOR_LTGRAY);
+    drw_rec(dev, &dn_btn);
+    drw_lin(dev, sb_x + 1, dy_b + 1, sb_x + sb_w - 2, dy_b + 1);
+    drw_lin(dev, sb_x + 4, dy_b + 5, sb_x + 12, dy_b + 5);
+    drw_lin(dev, sb_x + 4, dy_b + 5, sb_x + 8, dy_b + 12);
+    drw_lin(dev, sb_x + 12, dy_b + 5, sb_x + 8, dy_b + 12);
+
+    /* Scroll Thumb / Elevator */
+    int max_scroll = (total_count > visible_count) ? (total_count - visible_count) : 0;
+    int thumb_y = (max_scroll > 0) ?
+                  track_top + (scroll_offset * (track_h - thumb_h)) / max_scroll : track_top;
+
+    RECT thumb_r = { sb_x + 1, thumb_y, sb_x + sb_w - 1, thumb_y + thumb_h };
+    fill_rec(dev, &thumb_r, COLOR_GRAY);
+    drw_rec(dev, &thumb_r);
+    drw_lin(dev, sb_x + 2, thumb_y + 1, sb_x + sb_w - 3, thumb_y + 1);
+    drw_lin(dev, sb_x + 2, thumb_y + 1, sb_x + 2, thumb_y + thumb_h - 2);
+}
+
+/* Modal Dialog Frame (Outer Box + Navy Title Bar) */
+static void paint_dialog_frame(GDEV *dev, const RECT *dlg_r, const char *title) {
+    fill_rec(dev, dlg_r, DS_COL_BG);
+    paint_beveled_box(dev, dlg_r, false);
+    RECT dlg_title = { dlg_r->left + 2, dlg_r->top + 2, dlg_r->right - 2, dlg_r->top + 24 };
+    fill_rec(dev, &dlg_title, COLOR_NAVY);
+    drw_tc_string(dev, dlg_title.left + 8, dlg_title.top + 4, title, COLOR_WHITE, COLOR_NAVY);
+}
+
+/* Modal Dialog Action Buttons (OK / Cancel) */
+static void paint_dialog_buttons(GDEV *dev, const RECT *dlg_r, int margin,
+                                 const char *ok_lbl, bool ok_foc,
+                                 const char *ca_lbl, bool ca_foc) {
+    int d_bw = (dlg_r->right - dlg_r->left - margin * 2 - 20) / 2;
+    RECT d_btn_ok = { dlg_r->left + margin, dlg_r->bottom - 44, dlg_r->left + margin + d_bw, dlg_r->bottom - 14 };
+    RECT d_btn_ca = { dlg_r->right - margin - d_bw, dlg_r->bottom - 44, dlg_r->right - margin, dlg_r->bottom - 14 };
+    paint_ui_button(dev, &d_btn_ok, ok_lbl, false, ok_foc);
+    paint_ui_button(dev, &d_btn_ca, ca_lbl, false, ca_foc);
+}
+
 /* ── Lifecycle & Operations API ─────────────────────────────────── */
 
 void b_drivesetup_init(DriveSetupState *st) {
@@ -397,6 +466,14 @@ void b_drivesetup_scan_devices(DriveSetupState *st) {
         }
     }
 
+    int prev_count = st->device_count;
+    DriveSetupDevice prev_devs[DRIVESETUP_MAX_DEVICES];
+    if (prev_count > 0 && prev_count <= DRIVESETUP_MAX_DEVICES) {
+        memcpy(prev_devs, st->devices, sizeof(DriveSetupDevice) * prev_count);
+    } else {
+        prev_count = 0;
+    }
+
     st->device_count = 0;
     st->selected_dev_idx = -1;
     st->selected_part_idx = -1;
@@ -500,6 +577,34 @@ void b_drivesetup_scan_devices(DriveSetupState *st) {
         }
     }
 
+    /* Retain any user-created disk images from previous scan if still on host disk */
+    for (int i = 0; i < prev_count; i++) {
+        if (strcmp(prev_devs[i].raw_path, "btron_sys.vol") != 0 &&
+            strcmp(prev_devs[i].raw_path, "btron_anders.vol") != 0 &&
+            strcmp(prev_devs[i].raw_path, "hda.qcow2") != 0) {
+            bool exists = false;
+            for (int j = 0; j < st->device_count; j++) {
+                if (strcmp(st->devices[j].raw_path, prev_devs[i].raw_path) == 0) {
+                    exists = true;
+                    break;
+                }
+            }
+            if (!exists && st->device_count < DRIVESETUP_MAX_DEVICES) {
+                FILE *fp = fopen(prev_devs[i].raw_path, "rb");
+                if (!fp) {
+                    char alt[64];
+                    snprintf(alt, sizeof(alt), "../%s", prev_devs[i].raw_path);
+                    fp = fopen(alt, "rb");
+                }
+                if (fp) {
+                    fclose(fp);
+                    st->devices[st->device_count] = prev_devs[i];
+                    st->device_count++;
+                }
+            }
+        }
+    }
+
     if (st->device_count > 0) {
         snprintf(st->status_msg, sizeof(st->status_msg),
                  "Discovered %d active POSIX volume(s)", st->device_count);
@@ -587,10 +692,10 @@ bool b_drivesetup_create_slice(DriveSetupState *st, int dev_idx, const char *lab
 
     snprintf(p->dev_path, sizeof(p->dev_path), "%s:s%d", dev->raw_path, p_idx);
     safe_strcpy(p->label, label && label[0] ? label : "New Slice", sizeof(p->label));
-    p->type_code = 0x13;
-    p->fs_type = FS_BFS_V2;
-    p->block_size = 4096;
-    p->btree_node_size = 4096;
+    p->type_code = BTRON_PART_TYPE_BFS_V1;
+    p->fs_type = FS_BFS_V1;
+    p->block_size = 1024;
+    p->btree_node_size = 0;
 
     uint64_t alloc_blocks = 0;
     for (int i = 0; i < p_idx; i++) {
@@ -599,13 +704,13 @@ bool b_drivesetup_create_slice(DriveSetupState *st, int dev_idx, const char *lab
     p->start_lba = 2048 + (alloc_blocks * 4096) / (dev->sector_size ? dev->sector_size : 512);
     p->block_count = size_bytes / p->block_size;
     if (p->block_count == 0) p->block_count = 262144; /* 1 GiB default */
-    p->features = FEAT_JOURNAL | FEAT_LARGE_FID;
-    p->journal_blocks = 4096;
+    p->features = 0;
+    p->journal_blocks = 0;
     p->mounted = false;
     p->dirty = false;
     p->active_fids = 0;
     p->free_blocks = p->block_count;
-    p->total_fids = 65536;
+    p->total_fids = 256;
     safe_strcpy(p->mount_point, "Unmounted", sizeof(p->mount_point));
 
     dev->partition_count++;
@@ -614,14 +719,36 @@ bool b_drivesetup_create_slice(DriveSetupState *st, int dev_idx, const char *lab
     return true;
 }
 
+static void derive_label_from_path(const char *path, char *out, size_t out_sz) {
+    if (!path || !path[0]) {
+        safe_strcpy(out, "VOL", out_sz);
+        return;
+    }
+    const char *base = strrchr(path, '/');
+    base = base ? base + 1 : path;
+    size_t i = 0;
+    while (base[i] && base[i] != '.' && i < out_sz - 1 && i < 15) {
+        char c = base[i];
+        if (c >= 'a' && c <= 'z') c = (char)(c - 'a' + 'A');
+        else if (!((c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_' || c == '-')) c = '_';
+        out[i] = c;
+        i++;
+    }
+    out[i] = '\0';
+    if (out[0] == '\0') safe_strcpy(out, "VOL", out_sz);
+}
+
 bool b_drivesetup_create_disk_image_typed(DriveSetupState *st, const char *path, uint64_t size_bytes, FileSystemType fs_type) {
     if (!st || !path || path[0] == '\0' || st->device_count >= DRIVESETUP_MAX_DEVICES) return false;
     if (size_bytes < 1024 * 1024) size_bytes = 64 * 1024 * 1024; /* 64 MiB default */
 
+    char vlabel[32];
+    derive_label_from_path(path, vlabel, sizeof(vlabel));
+
     /* Attempt to create and initialize the backing file on POSIX host filesystem */
     BlkDev *blk = blk_file_create(path, 1 /*create_new*/, (UW)(size_bytes / 1024));
     if (blk) {
-        vol_format(blk, 256, (UW)(size_bytes / 1024), "NEW_VOL");
+        vol_format(blk, 256, (UW)(size_bytes / 1024), vlabel);
         blk_destroy(blk);
     }
 
@@ -636,7 +763,7 @@ bool b_drivesetup_create_disk_image_typed(DriveSetupState *st, const char *path,
     DriveSetupPartition *p = &d->partitions[0];
     memset(p, 0, sizeof(*p));
     safe_strcpy(p->dev_path, path, sizeof(p->dev_path));
-    safe_strcpy(p->label, "NEW_VOL", sizeof(p->label));
+    safe_strcpy(p->label, vlabel, sizeof(p->label));
 
     if (fs_type == FS_BFS_V1) {
         safe_strcpy(d->model, "POSIX Raw Image (B-FS V1)", sizeof(d->model));
@@ -710,7 +837,14 @@ bool b_drivesetup_format_v1(DriveSetupState *st, int dev_idx, int part_idx,
         blk = blk_file_create(alt, 0, 0);
     }
     if (blk) {
-        vol_format(blk, 256, (UW)p->block_count, p->label);
+        BlkDev *target_dev = blk;
+        if (p->start_lba > 0) {
+            target_dev = blk_partition_create(blk, (UW)p->start_lba, (UW)p->block_count, p->block_size ? p->block_size : 1024);
+        }
+        if (target_dev) {
+            vol_format(target_dev, 256, (UW)p->block_count, p->label);
+            if (target_dev != blk) blk_destroy(target_dev);
+        }
         blk_destroy(blk);
     }
 
@@ -750,7 +884,14 @@ bool b_drivesetup_format_bfs(DriveSetupState *st, int dev_idx, int part_idx,
         blk = blk_file_create(alt, 0, 0);
     }
     if (blk) {
-        vol_format(blk, 256, (UW)p->block_count, p->label);
+        BlkDev *target_dev = blk;
+        if (p->start_lba > 0) {
+            target_dev = blk_partition_create(blk, (UW)p->start_lba, (UW)p->block_count, p->block_size ? p->block_size : 1024);
+        }
+        if (target_dev) {
+            vol_format(target_dev, 256, (UW)p->block_count, p->label);
+            if (target_dev != blk) blk_destroy(target_dev);
+        }
         blk_destroy(blk);
     }
 
@@ -767,38 +908,26 @@ bool b_drivesetup_mount(DriveSetupState *st, int dev_idx, int part_idx) {
     DriveSetupPartition *p = &dev->partitions[part_idx];
     if (p->mounted) return false;
 
-    /* Mount backing file into real system volume table */
-    if (strcmp(dev->raw_path, "btron_sys.vol") == 0) {
-        if (!g_sys_vol) {
-            BlkDev *b = blk_file_create("btron_sys.vol", 0, 0);
-            if (!b) b = blk_file_create("../btron_sys.vol", 0, 0);
-            if (b) {
-                g_sys_vol = vol_mount(b);
-                if (!g_sys_vol) blk_destroy(b);
-            }
-        }
-    } else if (strcmp(dev->raw_path, "hda.qcow2") == 0) {
-        if (!g_chokanji_vol) {
-            const char *qcow2_paths[] = { "hda.qcow2", "../hda.qcow2", "PMC/chokanji_4_qemu/hda.qcow2", "../PMC/chokanji_4_qemu/hda.qcow2", NULL };
-            BlkDev *raw_qcow2 = NULL;
+    Volume *v = (Volume *)p->vol_handle;
+    if (!v) {
+        BlkDev *b = NULL;
+        if (strstr(dev->raw_path, ".qcow2") != NULL) {
+            const char *qcow2_paths[] = { dev->raw_path, "hda.qcow2", "../hda.qcow2", "PMC/chokanji_4_qemu/hda.qcow2", "../PMC/chokanji_4_qemu/hda.qcow2", NULL };
             for (int q = 0; qcow2_paths[q]; q++) {
-                raw_qcow2 = blk_qcow2_create(qcow2_paths[q], 0);
-                if (raw_qcow2) break;
+                b = blk_qcow2_create(qcow2_paths[q], 0);
+                if (b) break;
             }
-            if (raw_qcow2) {
-                BlkDev *part = blk_mbr_find_btron_partition(raw_qcow2, 8192);
+            if (b) {
+                BlkDev *part = blk_mbr_find_btron_partition(b, 8192);
                 if (part) {
-                    g_chokanji_vol = vol_mount(part);
-                    if (!g_chokanji_vol) blk_destroy(part);
+                    v = vol_mount(part);
+                    if (!v) blk_destroy(part);
                 } else {
-                    blk_destroy(raw_qcow2);
+                    blk_destroy(b);
                 }
             }
-        }
-    } else {
-        /* User-created or extra image (e.g. btron_anders.vol or extra_drive.vol) */
-        if (!g_anders_vol) {
-            BlkDev *b = blk_file_create(dev->raw_path, 0, 0);
+        } else {
+            b = blk_file_create(dev->raw_path, 0, 0);
             if (!b) b = blk_file_create(p->dev_path, 0, 0);
             if (!b) {
                 char alt[64];
@@ -806,10 +935,42 @@ bool b_drivesetup_mount(DriveSetupState *st, int dev_idx, int part_idx) {
                 b = blk_file_create(alt, 0, 0);
             }
             if (b) {
-                g_anders_vol = vol_mount(b);
-                if (!g_anders_vol) blk_destroy(b);
+                BlkDev *target_dev = b;
+                if (p->start_lba > 0) {
+                    target_dev = blk_partition_create(b, (UW)p->start_lba, (UW)p->block_count, p->block_size ? p->block_size : 1024);
+                }
+                if (target_dev) {
+                    v = vol_mount(target_dev);
+                    if (!v) {
+                        if (target_dev != b) blk_destroy(target_dev);
+                        blk_destroy(b);
+                    }
+                } else {
+                    blk_destroy(b);
+                }
             }
         }
+    }
+
+    if (v) {
+        p->vol_handle = v;
+        const char *vname = vol_name(v);
+        if (vname && vname[0]) {
+            safe_strcpy(p->label, vname, sizeof(p->label));
+            snprintf(p->mount_point, sizeof(p->mount_point), "/%s", vname);
+        } else {
+            snprintf(p->mount_point, sizeof(p->mount_point), "/%s", p->label[0] ? p->label : "VOL");
+        }
+        p->block_size = vol_block_size(v);
+        p->block_count = vol_total_blocks(v);
+        p->free_blocks = vol_free_blocks(v);
+        p->total_fids = vol_nfmax(v);
+        if (!g_sys_vol && strcasecmp(p->label, "SYS") == 0) g_sys_vol = v;
+        else if (!g_chokanji_vol && (strcasecmp(p->label, "CHOKANJI") == 0 || p->fs_type == FS_CHOKANJI)) g_chokanji_vol = v;
+        else g_anders_vol = v;
+    } else {
+        const char *vname = p->label[0] ? p->label : "VOL";
+        snprintf(p->mount_point, sizeof(p->mount_point), "/%s", vname);
     }
 
     if (p->dirty) {
@@ -831,18 +992,23 @@ bool b_drivesetup_unmount(DriveSetupState *st, int dev_idx, int part_idx) {
     if (!p->mounted) return false;
 
     /* Flush and unmount from real system */
-    if (g_anders_vol && (strcmp(dev->raw_path, "btron_anders.vol") == 0 ||
-                         strcmp(dev->raw_path, p->dev_path) == 0 ||
-                         strcmp(dev->raw_path, "extra_drive.vol") == 0)) {
+    if (p->vol_handle) {
+        Volume *v = (Volume *)p->vol_handle;
+        if (g_sys_vol == v) {
+            vol_sync(v);
+        } else {
+            if (g_chokanji_vol == v) g_chokanji_vol = NULL;
+            if (g_anders_vol == v) g_anders_vol = NULL;
+            vol_umount(v);
+            p->vol_handle = NULL;
+        }
+    } else if (g_anders_vol) {
         vol_umount(g_anders_vol);
         g_anders_vol = NULL;
-    } else if (g_sys_vol && strcmp(dev->raw_path, "btron_sys.vol") == 0) {
-        vol_sync(g_sys_vol);
-    } else if (g_chokanji_vol && strcmp(dev->raw_path, "hda.qcow2") == 0) {
-        vol_sync(g_chokanji_vol);
     }
 
     p->mounted = false;
+    safe_strcpy(p->mount_point, "Unmounted", sizeof(p->mount_point));
     snprintf(st->status_msg, sizeof(st->status_msg), "Unmounted %s from real system", p->dev_path);
     return true;
 }
@@ -864,7 +1030,7 @@ void b_drivesetup_open_dialog(DriveSetupState *st, DriveSetupDialog dlg) {
             st->dlg_radio_sel2 = 0; /* 0: B-FS V1 (0x13), 1: B-FS V2 (0x14), 2: RAW (0x83) */
             break;
         case DIALOG_CREATE_IMAGE:
-            safe_strcpy(st->dlg_text_buf, "extra_drive.vol", sizeof(st->dlg_text_buf));
+            safe_strcpy(st->dlg_text_buf, "new_disk.vol", sizeof(st->dlg_text_buf));
             st->dlg_radio_sel1 = 0; /* 0: 64 MiB, 1: 256 MiB, 2: 1.0 GiB */
             st->dlg_radio_sel2 = 0; /* 0: B-FS V2 Volume (.vol) */
             break;
@@ -878,9 +1044,6 @@ void b_drivesetup_open_dialog(DriveSetupState *st, DriveSetupDialog dlg) {
             st->dlg_radio_sel1 = 2; /* 0: 1024, 1: 2048, 2: 4096 B Block */
             st->dlg_radio_sel2 = 2; /* 0: 1024, 1: 2048, 2: 4096 B B+Tree */
             st->dlg_check_flags = 0x0F; /* JRNL, 64-bit FID, VECTOR, Dual-Anchor */
-            break;
-        case DIALOG_MOUNT_STATUS:
-            st->dlg_focus_idx = 0;
             break;
         case DIALOG_WARN_WRITE:
             st->dlg_focus_idx = 1; /* Default to cancel for safety */
@@ -915,10 +1078,16 @@ bool b_drivesetup_commit_dialog(DriveSetupState *st) {
             return true;
         }
         case DIALOG_CREATE_SLICE: {
+            if (st->selected_dev_idx < 0 || st->selected_dev_idx >= st->device_count) {
+                safe_strcpy(st->status_msg, "Create Slice: select a device first", sizeof(st->status_msg));
+                b_drivesetup_close_dialog(st);
+                return false;
+            }
             uint64_t sz = 2ULL * 1024ULL * 1024ULL * 1024ULL;
             if (st->dlg_radio_sel1 == 0) sz = 1ULL * 1024ULL * 1024ULL * 1024ULL;
             else if (st->dlg_radio_sel1 == 2) sz = 4ULL * 1024ULL * 1024ULL * 1024ULL;
-            b_drivesetup_create_slice(st, st->selected_dev_idx, st->dlg_text_buf, sz);
+            const char *lbl = st->dlg_text_buf[0] ? st->dlg_text_buf : "Data-Slice";
+            b_drivesetup_create_slice(st, st->selected_dev_idx, lbl, sz);
             if (st->selected_dev_idx >= 0 && st->selected_dev_idx < st->device_count) {
                 DriveSetupDevice *d = &st->devices[st->selected_dev_idx];
                 if (d->partition_count > 0) {
@@ -960,15 +1129,22 @@ bool b_drivesetup_commit_dialog(DriveSetupState *st) {
             return true;
         }
         case DIALOG_CREATE_IMAGE: {
+            const char *path = st->dlg_text_buf[0] ? st->dlg_text_buf : "new_drive.vol";
             uint64_t sz = 64ULL * 1024ULL * 1024ULL;
             if (st->dlg_radio_sel1 == 1) sz = 256ULL * 1024ULL * 1024ULL;
             else if (st->dlg_radio_sel1 == 2) sz = 1024ULL * 1024ULL * 1024ULL;
             FileSystemType ftype = (st->dlg_radio_sel2 == 0) ? FS_BFS_V1 : FS_BFS_V2;
-            b_drivesetup_create_disk_image_typed(st, st->dlg_text_buf, sz, ftype);
+            b_drivesetup_create_disk_image_typed(st, path, sz, ftype);
             b_drivesetup_close_dialog(st);
             return true;
         }
         case DIALOG_FORMAT_BFS: {
+            if (st->selected_dev_idx < 0 || st->selected_part_idx < 0 ||
+                st->selected_dev_idx >= st->device_count) {
+                safe_strcpy(st->status_msg, "Format: select a partition slice first", sizeof(st->status_msg));
+                b_drivesetup_close_dialog(st);
+                return false;
+            }
             st->pending_fmt_type = (st->dlg_radio_sel3 == 1) ? FS_BFS_V1 : FS_BFS_V2;
             uint32_t bsz = 4096;
             if (st->dlg_radio_sel1 == 0) bsz = 1024;
@@ -1038,10 +1214,7 @@ bool b_drivesetup_commit_dialog(DriveSetupState *st) {
             b_drivesetup_close_dialog(st);
             return true;
         }
-        case DIALOG_MOUNT_STATUS: {
-            b_drivesetup_close_dialog(st);
-            return true;
-        }
+
         default:
             b_drivesetup_close_dialog(st);
             return false;
@@ -1063,7 +1236,6 @@ bool b_drivesetup_handle_dialog_key(DriveSetupState *st, uint32_t key) {
         case DIALOG_CREATE_SLICE: max_focus = 9; break;
         case DIALOG_CREATE_IMAGE: max_focus = 8; break;
         case DIALOG_FORMAT_BFS:   max_focus = 13; break;
-        case DIALOG_MOUNT_STATUS: max_focus = 1; break;
         case DIALOG_WARN_WRITE:   max_focus = 2; break;
         default: return false;
     }
@@ -1093,6 +1265,18 @@ bool b_drivesetup_handle_dialog_key(DriveSetupState *st, uint32_t key) {
 
     /* Space key */
     if (key == ' ') {
+        /* Allow typing space into text boxes */
+        if (st->dlg_focus_idx == 0 &&
+            (st->active_dialog == DIALOG_CREATE_SLICE ||
+             st->active_dialog == DIALOG_CREATE_IMAGE ||
+             st->active_dialog == DIALOG_FORMAT_BFS)) {
+            int len = (int)strlen(st->dlg_text_buf);
+            if (len < (int)sizeof(st->dlg_text_buf) - 2) {
+                st->dlg_text_buf[len] = ' ';
+                st->dlg_text_buf[len + 1] = '\0';
+                return true;
+            }
+        }
         if (st->active_dialog == DIALOG_INIT_DISK) {
             if (st->dlg_focus_idx == 0) { st->dlg_radio_sel1 = 0; return true; }
             if (st->dlg_focus_idx == 1) { st->dlg_radio_sel1 = 1; return true; }
@@ -1144,9 +1328,6 @@ bool b_drivesetup_handle_dialog_key(DriveSetupState *st, uint32_t key) {
         } else if (st->active_dialog == DIALOG_WARN_WRITE) {
             if (st->dlg_focus_idx == 0) { b_drivesetup_commit_dialog(st); return true; }
             if (st->dlg_focus_idx == 1) { b_drivesetup_close_dialog(st); return true; }
-        } else if (st->active_dialog == DIALOG_MOUNT_STATUS) {
-            b_drivesetup_close_dialog(st);
-            return true;
         }
     }
 
@@ -1355,7 +1536,6 @@ static void drivesetup_dispatch_cmd(WND *wnd, DriveSetupState *st, int cmd) {
                 DriveSetupPartition *p = &st->devices[st->selected_dev_idx].partitions[st->selected_part_idx];
                 if (!p->mounted) {
                     b_drivesetup_mount(st, st->selected_dev_idx, st->selected_part_idx);
-                    b_drivesetup_open_dialog(st, DIALOG_MOUNT_STATUS);
                 } else {
                     b_drivesetup_unmount(st, st->selected_dev_idx, st->selected_part_idx);
                 }
@@ -1826,8 +2006,8 @@ void drivesetup_paint(WND *wnd, GDEV *dev) {
         snprintf(r2, sizeof(r2), "Block / Sector: %u B / %u B", sel->block_size, cur_d->sector_size ? cur_d->sector_size : 512);
 
         if (sel->fs_type == FS_BFS_V1) {
-            snprintf(r3, sizeof(r3), "FIDs (Act/Max): %llu / %u (32-bit)",
-                     (unsigned long long)sel->active_fids, sel->total_fids ? sel->total_fids : 256);
+            snprintf(r3, sizeof(r3), "FIDs (Act/Max): %llu / %llu (32-bit)",
+                     (unsigned long long)sel->active_fids, (unsigned long long)(sel->total_fids ? sel->total_fids : 256ULL));
             snprintf(r4, sizeof(r4), "Journal WAL:    None (V1 Volume)");
         } else if (sel->fs_type == FS_BFS_V2) {
             snprintf(r3, sizeof(r3), "FIDs (Act/Max): %llu / 65536 (64-bit)",
@@ -2027,48 +2207,6 @@ void drivesetup_paint(WND *wnd, GDEV *dev) {
         RECT d_btn_ca = { dlg_r.right - 40 - d_bw, dlg_r.bottom - 44, dlg_r.right - 40, dlg_r.bottom - 14 };
         paint_ui_button(dev, &d_btn_ok, "\xe3\x83\x95\xe3\x82\xa9\xe3\x83\xbc\xe3\x83\x9e\xe3\x83\x83\xe3\x83\x88 (Format)", false, st->dlg_focus_idx == 11);
         paint_ui_button(dev, &d_btn_ca, "\xe5\x8f\x96\xe6\xb6\x88 (Cancel)", false, st->dlg_focus_idx == 12);
-    } else if (st->active_dialog == DIALOG_MOUNT_STATUS) {
-        RECT dlg_r;
-        drivesetup_calc_dialog_rect(dev->width, dev->height, 520, 270, &dlg_r);
-        fill_rec(dev, &dlg_r, DS_COL_BG);
-        paint_beveled_box(dev, &dlg_r, false);
-
-        /* Dialog Title Bar */
-        RECT dlg_title = { dlg_r.left + 2, dlg_r.top + 2, dlg_r.right - 2, dlg_r.top + 24 };
-        fill_rec(dev, &dlg_title, COLOR_NAVY);
-        drw_tc_string(dev, dlg_title.left + 8, dlg_title.top + 4,
-                      "[#] \xe3\x83\x9e\xe3\x82\xa6\xe3\x83\xb3\xe3\x83\x88\xe5\x87\xa6\xe7\x90\x86 / \xe3\x82\xb8\xe3\x83\xa3\xe3\x83\xbc\xe3\x83\x8a\xe3\x83\xab\xe5\xbe\xa9\xe6\x97\xa7 Mount Status",
-                      COLOR_WHITE, COLOR_NAVY);
-
-        drw_tc_string(dev, dlg_r.left + 20, dlg_r.top + 38,
-                      "\xe5\xaf\xbe\xe8\xb1\xa1: \"B-System Root\" (Dual-Anchor B-FS V2)", COLOR_BLACK, DS_COL_BG);
-        drw_tc_string(dev, dlg_r.left + 20, dlg_r.top + 58,
-                      "\xe3\x82\xb9\xe3\x83\xbc\xe3\x83\x9c\xe3\x83\xbc\xe3\x83\x96\xe3\x83\xad\xe3\x83\x83\xe3\x82\xaf: Block 0 [OK], Block 1 [OK]",
-                      DS_COL_STATUS_OK, DS_COL_BG);
-        drw_tc_string(dev, dlg_r.left + 20, dlg_r.top + 80,
-                      "\xe3\x82\xb8\xe3\x83\xa3\xe3\x83\xbc\xe3\x83\x8a\xe3\x83\xab\xe5\xbe\xa9\xe6\x97\xa7\xe9\x80\xb2\xe6\x8d\x97 Replaying Journal (Blk 32..8224):",
-                      COLOR_BLACK, DS_COL_BG);
-
-        /* Progress Bar */
-        RECT prog_r = { dlg_r.left + 20, dlg_r.top + 104, dlg_r.right - 20, dlg_r.top + 128 };
-        fill_rec(dev, &prog_r, COLOR_WHITE);
-        paint_beveled_box(dev, &prog_r, true);
-
-        RECT prog_fill = { prog_r.left + 2, prog_r.top + 2, prog_r.right - 2, prog_r.bottom - 2 };
-        fill_rec(dev, &prog_fill, DS_COL_SLICE_SYS);
-        drw_tc_string(dev, dlg_r.left + 160, dlg_r.top + 107, "[ 100% \xe5\xae\x8c\xe4\xba\x86 Replay OK ]", COLOR_WHITE, DS_COL_SLICE_SYS);
-
-        drw_tc_string(dev, dlg_r.left + 20, dlg_r.top + 138,
-                      "\xe3\x83\x88\xe3\x83\xa9\xe3\x83\xb3\xe3\x82\xb6\xe3\x82\xaf\xe3\x82\xb7\xe3\x83\xa7\xe3\x83\xb3: 14\xe4\xbb\xb6\xe5\xbe\xa9\xe5\x85\x83 / 0\xe4\xbb\xb6\xe7\xa0\xb4\xe6\xa3\x84",
-                      COLOR_BLACK, DS_COL_BG);
-        drw_tc_string(dev, dlg_r.left + 20, dlg_r.top + 158,
-                      "\xe7\xb5\x90\xe6\x9e\x9c: \xe6\xad\xa3\xe5\xb8\xb8\xe3\x81\xab\xe3\x83\x9e\xe3\x82\xa6\xe3\x83\xb3\xe3\x83\x88\xe3\x81\x95\xe3\x82\x8c\xe3\x81\xbe\xe3\x81\x97\xe3\x81\x9f (Mounted successfully)",
-                      DS_COL_STATUS_OK, DS_COL_BG);
-
-        int d_bw = 140;
-        RECT d_btn_ok = { dlg_r.left + (dlg_r.right - dlg_r.left - d_bw) / 2, dlg_r.bottom - 44,
-                          dlg_r.left + (dlg_r.right - dlg_r.left + d_bw) / 2, dlg_r.bottom - 14 };
-        paint_ui_button(dev, &d_btn_ok, "\xe5\xae\x8c\xe4\xba\x86 (OK)", false, st->dlg_focus_idx == 0);
     } else if (st->active_dialog == DIALOG_WARN_WRITE) {
         RECT dlg_r;
         drivesetup_calc_dialog_rect(dev->width, dev->height, 520, 260, &dlg_r);
@@ -2409,17 +2547,6 @@ void drivesetup_event_handler(WND *wnd, const EVT *evt) {
                     st->dlg_check_flags ^= 8; st->dlg_focus_idx = 10;
                     inval_wnd(wnd); return;
                 }
-            } else if (st->active_dialog == DIALOG_MOUNT_STATUS) {
-                drivesetup_calc_dialog_rect(cli_w, cli_h, 520, 270, &dlg_r);
-                int d_bw = 140;
-                RECT d_btn_ok = { dlg_r.left + (dlg_r.right - dlg_r.left - d_bw) / 2, dlg_r.bottom - 44,
-                                  dlg_r.left + (dlg_r.right - dlg_r.left + d_bw) / 2, dlg_r.bottom - 14 };
-
-                if (rel_x >= d_btn_ok.left && rel_x <= d_btn_ok.right && rel_y >= d_btn_ok.top && rel_y <= d_btn_ok.bottom) {
-                    st->active_dialog = DIALOG_NONE;
-                    inval_wnd(wnd);
-                    return;
-                }
             } else if (st->active_dialog == DIALOG_WARN_WRITE) {
                 drivesetup_calc_dialog_rect(cli_w, cli_h, 520, 260, &dlg_r);
                 int d_bw = (dlg_r.right - dlg_r.left - 100) / 2;
@@ -2596,7 +2723,6 @@ void drivesetup_event_handler(WND *wnd, const EVT *evt) {
                         b_drivesetup_unmount(st, st->selected_dev_idx, st->selected_part_idx);
                     } else {
                         b_drivesetup_mount(st, st->selected_dev_idx, st->selected_part_idx);
-                        st->active_dialog = DIALOG_MOUNT_STATUS;
                     }
                     inval_wnd(wnd);
                     return;

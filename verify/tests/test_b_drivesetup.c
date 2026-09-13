@@ -21,12 +21,14 @@
 #include <stdlib.h>
 #include <assert.h>
 #include <string.h>
+#include <time.h>
 #include <btron/types.h>
 #include <btron/wnd.h>
 #include <btron/dp.h>
 #include <btron/event.h>
 #include <btron/fs/volume.h>
 #include <btron/fs/block.h>
+#include <btron/fs/vol_api.h>
 #include "../../src/apps/b_drivesetup.h"
 
 /* Mock graphics & window manager stubs for headless unit test runner */
@@ -68,40 +70,19 @@ ER cls_wnd(WND *wnd) { (void)wnd; return 0; }
 void* Icalloc(size_t nmemb, size_t sz) { return calloc(nmemb, sz); }
 void  Ifree(void *ptr) { free(ptr); }
 
-/* Volume & Block device stubs for POSIX scanning */
-Volume *g_sys_vol = NULL;
-Volume *g_anders_vol = NULL;
-Volume *g_chokanji_vol = NULL;
+#include <btron/file.h>
+#include "../../src/apps/clu.h"
 
-#define FAKE_SYS_VOL    ((Volume*)(uintptr_t)0x1000)
-#define FAKE_QCOW2_VOL  ((Volume*)(uintptr_t)0x2000)
+extern Volume *g_sys_vol;
+extern Volume *g_anders_vol;
+extern Volume *g_chokanji_vol;
 
-UW vol_block_size(const Volume *v) { (void)v; return 4096; }
-UW vol_total_blocks(const Volume *v) { (void)v; return 2097152; }
-UW vol_free_blocks(const Volume *v) { (void)v; return 1676072; }
-UW vol_nfmax(const Volume *v) { (void)v; return 65536; }
-const char* vol_name(const Volume *v) {
-    if (v == FAKE_QCOW2_VOL) return "CHOKANJI";
-    return "SYS";
+static void clu_buf_out(const char *str, UW color, void *ud) {
+    (void)color;
+    char *buf = (char *)ud;
+    strncat(buf, str, 4095 - strlen(buf));
+    strncat(buf, "\n", 4095 - strlen(buf));
 }
-Volume* vol_mount(BlkDev *dev) { (void)dev; return FAKE_SYS_VOL; }
-ER vol_format(BlkDev *dev, UW start_block, UW nblocks, const char *label) {
-    (void)dev; (void)start_block; (void)nblocks; (void)label;
-    return 0;
-}
-ER vol_sync(Volume *v) { (void)v; return 0; }
-ER vol_umount(Volume *v) { (void)v; return 0; }
-
-BlkDev* blk_file_create(const char *path, int create_new, UW nblocks) {
-    (void)path; (void)create_new; (void)nblocks; return NULL;
-}
-BlkDev* blk_qcow2_create(const char *path, int read_only) {
-    (void)path; (void)read_only; return NULL;
-}
-BlkDev* blk_mbr_find_btron_partition(BlkDev *dev, UW fs_block_size) {
-    (void)dev; (void)fs_block_size; return NULL;
-}
-void blk_destroy(BlkDev *dev) { (void)dev; }
 
 /* ── Test Cases ─────────────────────────────────────────────────── */
 
@@ -119,37 +100,55 @@ static void test_init_and_invariants(void) {
 }
 
 static void test_posix_volume_scanning(void) {
-    printf("[2/10] Testing b_drivesetup_scan_devices with live POSIX volumes...\n");
+    printf("[2/13] Testing b_drivesetup_scan_devices with live POSIX volumes...\n");
     DriveSetupState st;
     b_drivesetup_init(&st);
 
     /* When g_sys_vol and g_chokanji_vol are attached, populates live devices */
-    g_sys_vol = FAKE_SYS_VOL;
-    g_chokanji_vol = FAKE_QCOW2_VOL;
+    void *s_buf = calloc(1, 2048 * 4096);
+    BlkDev *s_dev = blk_mem_create(s_buf, 2048 * 4096, 0);
+    s_dev->block_size = 4096;
+    s_dev->nblocks = 2048;
+    vol_format(s_dev, 256, 2048, "SYS");
+    g_sys_vol = vol_mount(s_dev);
+
+    void *c_buf = calloc(1, 1024 * 4096);
+    BlkDev *c_dev = blk_mem_create(c_buf, 1024 * 4096, 0);
+    vol_format(c_dev, 256, 1024, "CHOKANJI");
+    g_chokanji_vol = vol_mount(c_dev);
 
     b_drivesetup_scan_devices(&st);
     assert(b_drivesetup_verify_invariants(&st));
     assert(st.device_count >= 2);
-    assert(strcmp(st.devices[0].raw_path, "btron_sys.vol") == 0);
-    assert(strcmp(st.devices[1].raw_path, "hda.qcow2") == 0);
-    assert(st.devices[0].partitions[0].mounted == true);
-    assert(st.devices[0].partitions[0].block_size == 4096);
-    assert(st.devices[0].partitions[0].fs_type == FS_BFS_V1);
-    assert(st.devices[0].partitions[0].type_code == BTRON_PART_TYPE_BFS_V1);
-    assert(st.devices[0].partitions[0].free_blocks == 1676072);
-    assert(st.devices[0].partitions[0].total_fids == 65536);
-    assert(strcmp(st.devices[0].partitions[0].mount_point, "/SYS") == 0);
-    assert(st.devices[0].partitions[0].features == 0);
-    assert(st.devices[0].partitions[0].btree_node_size == 0);
-    assert(strstr(st.devices[0].model, "B-FS V1") != NULL);
 
-    assert(st.devices[1].partitions[0].mounted == true);
-    assert(st.devices[1].partitions[0].fs_type == FS_CHOKANJI);
-    assert(st.devices[1].partitions[0].type_code == BTRON_PART_TYPE_CHOKANJI);
-    assert(strcmp(st.devices[1].partitions[0].mount_point, "/CHOKANJI") == 0);
-    assert(st.devices[1].partitions[0].features == 0);
-    assert(st.devices[1].partitions[0].btree_node_size == 0);
+    int sys_idx = -1, chokanji_idx = -1;
+    for (int i = 0; i < st.device_count; i++) {
+        if (strcmp(st.devices[i].raw_path, "btron_sys.vol") == 0) sys_idx = i;
+        if (strcmp(st.devices[i].raw_path, "hda.qcow2") == 0) chokanji_idx = i;
+    }
+    assert(sys_idx >= 0);
+    assert(chokanji_idx >= 0);
 
+    assert(st.devices[sys_idx].partitions[0].mounted == true);
+    assert(st.devices[sys_idx].partitions[0].block_size == 4096);
+    assert(st.devices[sys_idx].partitions[0].fs_type == FS_BFS_V1);
+    assert(st.devices[sys_idx].partitions[0].type_code == BTRON_PART_TYPE_BFS_V1);
+    assert(strcmp(st.devices[sys_idx].partitions[0].mount_point, "/SYS") == 0);
+    assert(st.devices[sys_idx].partitions[0].features == 0);
+    assert(st.devices[sys_idx].partitions[0].btree_node_size == 0);
+    assert(strstr(st.devices[sys_idx].model, "B-FS V1") != NULL);
+
+    assert(st.devices[chokanji_idx].partitions[0].mounted == true);
+    assert(st.devices[chokanji_idx].partitions[0].fs_type == FS_CHOKANJI);
+    assert(st.devices[chokanji_idx].partitions[0].type_code == BTRON_PART_TYPE_CHOKANJI);
+    assert(strcmp(st.devices[chokanji_idx].partitions[0].mount_point, "/CHOKANJI") == 0);
+    assert(st.devices[chokanji_idx].partitions[0].features == 0);
+    assert(st.devices[chokanji_idx].partitions[0].btree_node_size == 0);
+
+    vol_umount(g_sys_vol);
+    vol_umount(g_chokanji_vol);
+    free(s_buf);
+    free(c_buf);
     g_sys_vol = NULL;
     g_chokanji_vol = NULL;
     printf("  PASS: POSIX volume detection and live volume enumeration verified.\n");
@@ -273,6 +272,8 @@ static void test_create_disk_image(void) {
     assert(st.devices[1].partitions[0].block_size == 4096);
     assert(st.devices[1].partitions[0].features & FEAT_JOURNAL);
 
+    remove("btron_v1.vol");
+    remove("btron_v2.vol");
     printf("  PASS: Creation of both V1 and V2 devices with planet-scale typing verified.\n");
 }
 
@@ -735,6 +736,144 @@ static void test_warning_dialog_and_write_safety(void) {
     printf("  PASS: Warning dialog intercepted Device, Volume, and Partition write operations safely.\n");
 }
 
+static void test_e2e_full_lifecycle_and_clu_browsing(void) {
+    printf("[13/13] Testing E2E full 6-stage lifecycle and CLU command verification...\n");
+    int r_id = (int)(time(NULL) % 100000);
+    char custom_img[64];
+    char custom_slice[64];
+    char custom_vol[64];
+    char custom_mount[64];
+    char file_path[128];
+    char file_name[64];
+    char clu_cmd_g[128];
+    char clu_cmd_t[128];
+    char clu_cmd_gl[128];
+    char clu_cmd_tl[128];
+
+    snprintf(custom_img, sizeof(custom_img), "dev_img_%d.vol", r_id);
+    snprintf(custom_slice, sizeof(custom_slice), "SLICE_%d", r_id);
+    snprintf(custom_vol, sizeof(custom_vol), "VOL_%d", r_id);
+    snprintf(custom_mount, sizeof(custom_mount), "/%s", custom_vol);
+    snprintf(file_name, sizeof(file_name), "work_%d.tad", r_id);
+    snprintf(file_path, sizeof(file_path), "/%s/%s", custom_vol, file_name);
+    snprintf(clu_cmd_g, sizeof(clu_cmd_g), "-g %s", custom_mount);
+    snprintf(clu_cmd_t, sizeof(clu_cmd_t), "-t %s", custom_mount);
+    snprintf(clu_cmd_gl, sizeof(clu_cmd_gl), "-g -l %s", custom_mount);
+    snprintf(clu_cmd_tl, sizeof(clu_cmd_tl), "-t -l %s", custom_mount);
+
+    remove(custom_img);
+
+    DriveSetupState st;
+    b_drivesetup_init(&st);
+
+    /* 1. Stage 1: Creating device */
+    assert(b_drivesetup_create_disk_image_typed(&st, custom_img, 64ULL * 1024ULL * 1024ULL, FS_BFS_V1));
+    assert(b_drivesetup_verify_invariants(&st));
+    assert(st.device_count == 1);
+    assert(strcmp(st.devices[0].raw_path, custom_img) == 0);
+
+    /* 2. Stage 2: Initialize device with GPT */
+    assert(b_drivesetup_init_disk(&st, 0, PART_SCHEME_GPT));
+    assert(st.devices[0].scheme == PART_SCHEME_GPT);
+    assert(st.devices[0].partition_count == 0);
+
+    /* 3. Stage 3: Create partition slice with arbitrary name */
+    assert(b_drivesetup_create_slice(&st, 0, custom_slice, 32ULL * 1024ULL * 1024ULL));
+    assert(st.devices[0].partition_count == 1);
+    assert(strcmp(st.devices[0].partitions[0].label, custom_slice) == 0);
+
+    /* 4. Stage 4: Format partition slice with arbitrary volume label */
+    assert(b_drivesetup_format_v1(&st, 0, 0, custom_vol, 1024));
+    assert(strcmp(st.devices[0].partitions[0].label, custom_vol) == 0);
+
+    /* 5. Stage 5: Mount partition */
+    assert(b_drivesetup_mount(&st, 0, 0));
+    assert(st.devices[0].partitions[0].mounted == true);
+    assert(strcmp(st.devices[0].partitions[0].mount_point, custom_mount) == 0);
+    assert(g_anders_vol != NULL);
+    assert(strcmp(vol_name(g_anders_vol), custom_vol) == 0);
+
+    /* 6. Stage 6: Verify partition is browsable with CLU commands */
+    /* Create a file inside arbitrary volume */
+    ID test_fd = cre_fil(file_path, 0x0002);
+    assert(test_fd >= 0);
+    cls_fil(test_fd);
+
+    char out_buf[4096];
+
+    /* Test clu_cd to arbitrary mount */
+    memset(out_buf, 0, sizeof(out_buf));
+    clu_cd(custom_mount, clu_buf_out, out_buf);
+    assert(strcmp(g_cwd_path, custom_mount) == 0);
+
+    /* Test clu_ls inside arbitrary volume */
+    memset(out_buf, 0, sizeof(out_buf));
+    clu_ls("", clu_buf_out, out_buf);
+    assert(strstr(out_buf, file_name) != NULL);
+
+    /* Test clu_ls -l */
+    memset(out_buf, 0, sizeof(out_buf));
+    clu_ls("-l", clu_buf_out, out_buf);
+    assert(strstr(out_buf, "ATYPE") != NULL);
+    assert(strstr(out_buf, file_name) != NULL);
+
+    /* Test clu_ls -t */
+    memset(out_buf, 0, sizeof(out_buf));
+    clu_ls("-t", clu_buf_out, out_buf);
+    assert(strstr(out_buf, "CTIME") != NULL);
+    assert(strstr(out_buf, file_name) != NULL);
+
+    /* Test clu_ls -l -t */
+    memset(out_buf, 0, sizeof(out_buf));
+    clu_ls("-l -t", clu_buf_out, out_buf);
+    assert(strstr(out_buf, "ATYPE") != NULL);
+    assert(strstr(out_buf, "CTIME") != NULL);
+    assert(strstr(out_buf, file_name) != NULL);
+
+    /* Test clu_fs_cmd -g */
+    memset(out_buf, 0, sizeof(out_buf));
+    clu_fs_cmd(clu_cmd_g, clu_buf_out, out_buf);
+    assert(strstr(out_buf, custom_vol) != NULL);
+
+    /* Test clu_fs_cmd -t */
+    memset(out_buf, 0, sizeof(out_buf));
+    clu_fs_cmd(clu_cmd_t, clu_buf_out, out_buf);
+    assert(strstr(out_buf, "Tree Structure") != NULL);
+
+    /* Test clu_fs_cmd -g -l */
+    memset(out_buf, 0, sizeof(out_buf));
+    clu_fs_cmd(clu_cmd_gl, clu_buf_out, out_buf);
+    assert(strstr(out_buf, custom_vol) != NULL);
+
+    /* Test clu_fs_cmd -t -l */
+    memset(out_buf, 0, sizeof(out_buf));
+    clu_fs_cmd(clu_cmd_tl, clu_buf_out, out_buf);
+    assert(strstr(out_buf, "Tree Structure") != NULL);
+
+    /* Test clu_df */
+    memset(out_buf, 0, sizeof(out_buf));
+    clu_df(custom_mount, clu_buf_out, out_buf);
+    assert(strstr(out_buf, custom_mount) != NULL);
+    assert(strstr(out_buf, custom_vol) != NULL);
+
+    /* 7. Unmount & Remount verification */
+    assert(b_drivesetup_unmount(&st, 0, 0));
+    assert(!st.devices[0].partitions[0].mounted);
+    assert(g_anders_vol == NULL);
+
+    /* Remount */
+    assert(b_drivesetup_mount(&st, 0, 0));
+    assert(st.devices[0].partitions[0].mounted);
+    assert(g_anders_vol != NULL);
+    assert(strcmp(vol_name(g_anders_vol), custom_vol) == 0);
+
+    /* Cleanup */
+    assert(b_drivesetup_unmount(&st, 0, 0));
+    remove(custom_img);
+
+    printf("  PASS: Arbitrary device ('%s') and volume ('%s') lifecycle and CLU browsability verified.\n", custom_img, custom_vol);
+}
+
 int main(void) {
     printf("==========================================================\n");
     printf(" B-System Production DriveSetup (b_drivesetup) Test Suite\n");
@@ -753,9 +892,10 @@ int main(void) {
     test_dialog_keyboard_navigation();
     test_pure_gui_and_menus();
     test_warning_dialog_and_write_safety();
+    test_e2e_full_lifecycle_and_clu_browsing();
 
     printf("\n==========================================================\n");
-    printf(" ALL 12 DRIVESETUP TEST SUITES PASSED SUCCESSFULLY (100.0%%)\n");
+    printf(" ALL 13 DRIVESETUP TEST SUITES PASSED SUCCESSFULLY (100.0%%)\n");
     printf("==========================================================\n");
     return 0;
 }

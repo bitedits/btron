@@ -142,6 +142,93 @@ static void fmt_ts(UW ts, char *buf, int bufsz) {
 #endif
 }
 
+static Volume *clu_get_cwd_vol(void)
+{
+    if (g_cwd_path[0] == '/') {
+        char vname[64];
+        const char *p = g_cwd_path + 1;
+        size_t i = 0;
+        while (*p && *p != '/' && i < sizeof(vname) - 1) {
+            vname[i++] = *p++;
+        }
+        vname[i] = '\0';
+        Volume *v = vol_find_by_name(vname);
+        if (v) return v;
+    }
+    return g_sys_vol ? g_sys_vol : (vol_mounted_count() > 0 ? vol_get_mounted(0) : NULL);
+}
+
+static Volume *clu_resolve_target_vol(const char *target, Volume *default_vol)
+{
+    if (!default_vol) default_vol = clu_get_cwd_vol();
+    if (!target || !target[0]) return default_vol;
+
+    const char *t = target;
+    if (t[0] == '/') {
+        if (t[1] == '\0') return default_vol;
+        char vname[64];
+        const char *p = t + 1;
+        size_t i = 0;
+        while (*p && *p != '/' && *p != '#' && i < sizeof(vname) - 1) {
+            vname[i++] = *p++;
+        }
+        vname[i] = '\0';
+        Volume *v = vol_find_by_name(vname);
+        if (v) return v;
+    } else {
+        Volume *v = vol_find_by_name(t);
+        if (v) return v;
+    }
+    return default_vol;
+}
+
+static int clu_strcasecmp(const char *s1, const char *s2)
+{
+    if (!s1 || !s2) return s1 ? 1 : (s2 ? -1 : 0);
+    while (*s1 && *s2) {
+        char c1 = *s1;
+        char c2 = *s2;
+        if (c1 >= 'A' && c1 <= 'Z') c1 = (char)(c1 + 32);
+        if (c2 >= 'A' && c2 <= 'Z') c2 = (char)(c2 + 32);
+        if (c1 != c2) return (int)(unsigned char)c1 - (int)(unsigned char)c2;
+        s1++;
+        s2++;
+    }
+    return (int)(unsigned char)*s1 - (int)(unsigned char)*s2;
+}
+
+static int clu_is_root_path(Volume *v, const char *dir_path)
+{
+    if (!dir_path || dir_path[0] == '\0' || strcmp(dir_path, "/") == 0 || strcmp(dir_path, ".") == 0) return 1;
+    if (dir_path[0] == '/') {
+        const char *p = dir_path + 1;
+        char vname[64];
+        size_t i = 0;
+        while (*p && *p != '/' && i < sizeof(vname) - 1) {
+            vname[i++] = *p++;
+        }
+        vname[i] = '\0';
+        if (*p == '\0' || (*p == '/' && *(p + 1) == '\0')) {
+            Volume *target_v = vol_find_by_name(vname);
+            if (target_v) return 1;
+        }
+    } else {
+        Volume *target_v = vol_find_by_name(dir_path);
+        if (target_v) return 1;
+    }
+    if (v) {
+        const char *vn = vol_name(v);
+        if (vn && vn[0]) {
+            char root1[64], root2[64];
+            snprintf(root1, sizeof(root1), "/%s", vn);
+            snprintf(root2, sizeof(root2), "/%s/", vn);
+            if (clu_strcasecmp(dir_path, root1) == 0 || clu_strcasecmp(dir_path, root2) == 0 ||
+                clu_strcasecmp(dir_path, vn) == 0) return 1;
+        }
+    }
+    return 0;
+}
+
 /* ── clu_cd ──────────────────────────────────────────────────────── */
 void clu_cd(const char *args, ShellOutputFn out, void *ud)
 {
@@ -156,30 +243,24 @@ void clu_cd(const char *args, ShellOutputFn out, void *ud)
         return;
     }
 
-    if (strcmp(target, "/SYS") == 0 || strcmp(target, "/") == 0) {
-        snprintf(g_cwd_path, sizeof(g_cwd_path), "/SYS");
-        out("[/SYS]", COLOR_GREEN, ud);
+    if (strcmp(target, "/") == 0) {
+        Volume *sys = g_sys_vol ? g_sys_vol : (vol_mounted_count() > 0 ? vol_get_mounted(0) : NULL);
+        const char *vn = sys ? vol_name(sys) : "SYS";
+        snprintf(g_cwd_path, sizeof(g_cwd_path), "/%s", vn);
+        char msg[80];
+        snprintf(msg, sizeof(msg), "[/%s]", vn);
+        out(msg, COLOR_GREEN, ud);
         return;
     }
 
-    if (strcmp(target, "/ANDERS") == 0 || strcmp(target, "ANDERS") == 0) {
-        if (!g_anders_vol) {
-            out("cd: '/ANDERS': volume not mounted", COLOR_RED, ud);
-            return;
-        }
-        snprintf(g_cwd_path, sizeof(g_cwd_path), "/ANDERS");
-        out("[/ANDERS]", COLOR_GREEN, ud);
-        return;
-    }
-
-    if (strcmp(target, "/CHOKANJI") == 0 || strcmp(target, "CHOKANJI") == 0 ||
-        strcmp(target, "/B-right") == 0 || strcmp(target, "B-right") == 0) {
-        if (!g_chokanji_vol) {
-            out("cd: '/CHOKANJI': volume not mounted", COLOR_RED, ud);
-            return;
-        }
-        snprintf(g_cwd_path, sizeof(g_cwd_path), "/CHOKANJI");
-        out("[/CHOKANJI]", COLOR_GREEN, ud);
+    const char *t = (target[0] == '/') ? target + 1 : target;
+    Volume *v = vol_find_by_name(t);
+    if (v) {
+        const char *vn = vol_name(v);
+        snprintf(g_cwd_path, sizeof(g_cwd_path), "/%s", (vn && vn[0]) ? vn : t);
+        char msg[80];
+        snprintf(msg, sizeof(msg), "[/%s]", (vn && vn[0]) ? vn : t);
+        out(msg, COLOR_GREEN, ud);
         return;
     }
 
@@ -268,22 +349,23 @@ static UW clu_kind_color(int kind, int is_link) {
 /* ── clu_ls ──────────────────────────────────────────────────────── */
 void clu_ls(const char *args, ShellOutputFn out, void *ud)
 {
-    Volume *v = (strncmp(g_cwd_path, "/ANDERS", 7) == 0 && g_anders_vol) ? g_anders_vol :
-                ((strncmp(g_cwd_path, "/CHOKANJI", 9) == 0 || strncmp(g_cwd_path, "/B-right", 8) == 0) && g_chokanji_vol) ? g_chokanji_vol : g_sys_vol;
+    char target[80];
+    get_target(args, target, sizeof(target));
+    const char *dir_path = target[0] ? target : g_cwd_path;
+
+    Volume *v = clu_resolve_target_vol(dir_path, NULL);
     if (!v) { out("ls: no volume mounted", COLOR_RED, ud); return; }
 
     int flag_l = has_flag(args, "-l");
     int flag_t = has_flag(args, "-t");
 
-    if (flag_l) {
+    if (flag_l && flag_t) {
+        out("ATYPE ATR NREC NREF SIZE  CTIME              MTIME              NAME", COLOR_CYAN, ud);
+    } else if (flag_l) {
         out("ATYPE ATR NREC NREF SIZE  MTIME            NAME", COLOR_CYAN, ud);
     } else if (flag_t) {
         out("CTIME              ATIME              MTIME              NAME", COLOR_CYAN, ud);
     }
-
-    char target[80];
-    get_target(args, target, sizeof(target));
-    const char *dir_path = target[0] ? target : g_cwd_path;
 
     /* First attempt: inspect container file links */
     ID fd = opn_fil(dir_path, 0x0001);
@@ -316,7 +398,15 @@ void clu_ls(const char *args, ShellOutputFn out, void *ud)
                     tsz   = lof->hdr.total_size;
                     cls_fil(lfd);
                 }
-                if (flag_l) {
+                if (flag_l && flag_t) {
+                    char ct[24], mt[24];
+                    fmt_ts(ctime, ct, sizeof(ct));
+                    fmt_ts(mtime, mt, sizeof(mt));
+                    char line[256];
+                    snprintf(line, sizeof(line), "%04X  ---  1    1    %-5u %-18s %-18s %s",
+                             atype, tsz, ct, mt, link_name);
+                    out(line, lk_color, ud);
+                } else if (flag_l) {
                     char mt[24]; fmt_ts(mtime, mt, sizeof(mt));
                     char line[256];
                     snprintf(line, sizeof(line), "%04X  ---  1    1    %-5u %s %s",
@@ -340,10 +430,7 @@ void clu_ls(const char *args, ShellOutputFn out, void *ud)
         /* Subdirectory/drawer containers terminate here (empty directory shows 0 entries, never root!) */
         if (!is_root || link_count > 0) return;
     } else {
-        int is_root_path = (strcmp(dir_path, "/CHOKANJI") == 0 || strcmp(dir_path, "/CHOKANJI/") == 0 ||
-                            strcmp(dir_path, "/SYS") == 0 || strcmp(dir_path, "/SYS/") == 0 ||
-                            strcmp(dir_path, "/ANDERS") == 0 || strcmp(dir_path, "/ANDERS/") == 0 ||
-                            strcmp(dir_path, "/") == 0 || strcmp(dir_path, ".") == 0 || dir_path[0] == '\0');
+        int is_root_path = clu_is_root_path(v, dir_path);
         if (!is_root_path) {
             char err[128];
             snprintf(err, sizeof(err), "ls: '%s': no such directory", dir_path);
@@ -383,7 +470,18 @@ void clu_ls(const char *args, ShellOutputFn out, void *ud)
 
         UW entry_color = is_exec ? COLOR_GREEN : COLOR_LTGRAY;
         char line[256];
-        if (flag_l) {
+        if (flag_l && flag_t) {
+            char ct[24], mt[24];
+            fmt_ts(ctime, ct, sizeof(ct));
+            fmt_ts(mtime, mt, sizeof(mt));
+            char atr[4] = "---";
+            if (flags & 0x0020) atr[0] = 'P';
+            if (flags & 0x0010) atr[1] = 'O';
+            snprintf(line, sizeof(line),
+                     "%04X  %s %-4u 1    %-5u %-18s %-18s %s",
+                     atype, atr, nrec, tsz, ct, mt, entry.name);
+            out(line, entry_color, ud);
+        } else if (flag_l) {
             char mt[24]; fmt_ts(mtime, mt, sizeof(mt));
             char atr[4] = "---";
             if (flags & 0x0020) atr[0] = 'P';
@@ -462,8 +560,9 @@ static void clu_fs_dump_records(Volume *v, ID fd, FID parent_fid, const char *pa
                     ID child_fd = opn_fil_fid(v, (FID)link_fid, 0x0001);
                     if (child_fd < 0) {
                         char child_path[128];
-                        const char *vprefix = (v == g_chokanji_vol) ? "/CHOKANJI/" :
-                                              (v == g_anders_vol) ? "/ANDERS/" : "/SYS/";
+                        char vprefix[64];
+                        const char *vn = vol_name(v);
+                        snprintf(vprefix, sizeof(vprefix), "/%s/", (vn && vn[0]) ? vn : (v == g_chokanji_vol ? "CHOKANJI" : "SYS"));
                         snprintf(child_path, sizeof(child_path), "%s%s", vprefix, link_name);
                         child_fd = opn_fil(child_path, 0x0001);
                     }
@@ -510,8 +609,9 @@ static void clu_fs_dump_records(Volume *v, ID fd, FID parent_fid, const char *pa
         unsigned int rec_idx = 0;
 
         /* Directory enumeration for root container */
-        const char *vdir = (v == g_chokanji_vol) ? "/CHOKANJI" :
-                           (v == g_anders_vol) ? "/ANDERS" : "/SYS";
+        char vdir[64];
+        const char *vn = vol_name(v);
+        snprintf(vdir, sizeof(vdir), "/%s", (vn && vn[0]) ? vn : (v == g_chokanji_vol ? "CHOKANJI" : "SYS"));
         ID dir = opn_dir(vdir);
         if (dir >= 0) {
             DIR_ENTRY entry;
@@ -540,8 +640,9 @@ static void clu_fs_dump_records(Volume *v, ID fd, FID parent_fid, const char *pa
                     ID child_fd = opn_fil_fid(v, efid, 0x0001);
                     if (child_fd < 0) {
                         char child_path[128];
-                        const char *vprefix = (v == g_chokanji_vol) ? "/CHOKANJI/" :
-                                              (v == g_anders_vol) ? "/ANDERS/" : "/SYS/";
+                        char vprefix[64];
+                        const char *vn2 = vol_name(v);
+                        snprintf(vprefix, sizeof(vprefix), "/%s/", (vn2 && vn2[0]) ? vn2 : (v == g_chokanji_vol ? "CHOKANJI" : "SYS"));
                         snprintf(child_path, sizeof(child_path), "%s%s", vprefix, entry.name);
                         child_fd = opn_fil(child_path, 0x0001);
                     }
@@ -692,9 +793,7 @@ static ID clu_open_target(const char *target, UW mode, Volume *default_vol,
 
     if (!target || !target[0]) return -1;
 
-    Volume *v = default_vol ? default_vol :
-                (strncmp(g_cwd_path, "/ANDERS", 7) == 0 && g_anders_vol) ? g_anders_vol :
-                ((strncmp(g_cwd_path, "/CHOKANJI", 9) == 0 || strncmp(g_cwd_path, "/B-right", 8) == 0) && g_chokanji_vol) ? g_chokanji_vol : g_sys_vol;
+    Volume *v = default_vol ? default_vol : clu_get_cwd_vol();
 
     ID fd = -1;
     int is_fid = 0;
@@ -702,30 +801,22 @@ static ID clu_open_target(const char *target, UW mode, Volume *default_vol,
     const char *num_str = NULL;
     Volume *target_vol = v;
 
-    if (strncmp(target, "/CHOKANJI#", 10) == 0) {
-        target_vol = g_chokanji_vol;
-        num_str = target + 10;
-        is_fid = 1;
-    } else if (strncmp(target, "/ANDERS#", 8) == 0) {
-        target_vol = g_anders_vol;
-        num_str = target + 8;
-        is_fid = 1;
-    } else if (strncmp(target, "/SYS#", 5) == 0) {
-        target_vol = g_sys_vol;
-        num_str = target + 5;
-        is_fid = 1;
-    } else if (strncmp(target, "/CHOKANJI/", 10) == 0 || strcmp(target, "/CHOKANJI") == 0 ||
-               strncmp(target, "/B-right/", 9) == 0 || strcmp(target, "/B-right") == 0) {
-        target_vol = g_chokanji_vol;
-    } else if (strncmp(target, "/ANDERS/", 8) == 0 || strcmp(target, "/ANDERS") == 0) {
-        target_vol = g_anders_vol;
-    } else if (strncmp(target, "/SYS/", 5) == 0 || strcmp(target, "/SYS") == 0) {
-        target_vol = g_sys_vol;
-    } else if (target[0] == '/') {
+    if (target[0] == '/') {
         if (target[1] == '\0') {
             target_vol = v;
         } else {
-            target_vol = NULL;
+            char vname[64];
+            const char *p = target + 1;
+            size_t i = 0;
+            while (*p && *p != '/' && *p != '#' && i < sizeof(vname) - 1) {
+                vname[i++] = *p++;
+            }
+            vname[i] = '\0';
+            target_vol = vol_find_by_name(vname);
+            if (target_vol && *p == '#') {
+                num_str = p + 1;
+                is_fid = 1;
+            }
         }
     }
 
@@ -787,10 +878,14 @@ static void clu_report_target_err(const char *cmd, const char *target, Volume *t
                                   FID fid_val, int is_fid, ShellOutputFn out, void *ud)
 {
     char err[128];
-    const char *vol_name = (target_vol == g_chokanji_vol && g_chokanji_vol) ? "/CHOKANJI" :
-                           (target_vol == g_anders_vol && g_anders_vol) ? "/ANDERS" :
-                           (target_vol == g_sys_vol && g_sys_vol) ? "/SYS" :
-                           (!target_vol) ? "unmounted volume" : g_cwd_path;
+    char v_buf[64];
+    if (target_vol) {
+        const char *vn = vol_name(target_vol);
+        snprintf(v_buf, sizeof(v_buf), "/%s", (vn && vn[0]) ? vn : "VOL");
+    } else {
+        snprintf(v_buf, sizeof(v_buf), "unmounted volume");
+    }
+    const char *vol_name_str = target_vol ? v_buf : g_cwd_path;
     if (!target_vol) {
         if (target && target[0] == '/') {
             char vbuf[32];
@@ -809,9 +904,9 @@ static void clu_report_target_err(const char *cmd, const char *target, Volume *t
             snprintf(err, sizeof(err), "%s: volume is not mounted", cmd);
         }
     } else if (is_fid) {
-        snprintf(err, sizeof(err), "%s: FID %u not found on %s", cmd, (unsigned)fid_val, vol_name);
+        snprintf(err, sizeof(err), "%s: FID %u not found on %s", cmd, (unsigned)fid_val, vol_name_str);
     } else {
-        snprintf(err, sizeof(err), "%s: '%s': not found on %s", cmd, target, vol_name);
+        snprintf(err, sizeof(err), "%s: '%s': not found on %s", cmd, target, vol_name_str);
     }
     out(err, COLOR_RED, ud);
 }
@@ -826,13 +921,7 @@ void clu_fs_cmd(const char *args, ShellOutputFn out, void *ud)
     char target[80];
     get_target(args, target, sizeof(target));
 
-    Volume *v = (strncmp(g_cwd_path, "/ANDERS", 7) == 0 && g_anders_vol) ? g_anders_vol :
-                ((strncmp(g_cwd_path, "/CHOKANJI", 9) == 0 || strncmp(g_cwd_path, "/B-right", 8) == 0) && g_chokanji_vol) ? g_chokanji_vol : g_sys_vol;
-    if (target[0]) {
-        if (strncmp(target, "/ANDERS", 7) == 0 && g_anders_vol) v = g_anders_vol;
-        else if ((strncmp(target, "/CHOKANJI", 9) == 0 || strncmp(target, "/B-right", 8) == 0) && g_chokanji_vol) v = g_chokanji_vol;
-        else if (strncmp(target, "/SYS", 4) == 0 && g_sys_vol) v = g_sys_vol;
-    }
+    Volume *v = clu_resolve_target_vol(target[0] ? target : g_cwd_path, NULL);
     if (!v) { out("fs: no volume mounted", COLOR_RED, ud); return; }
 
     if (flag_a || flag_g || flag_t) {
@@ -923,14 +1012,18 @@ void clu_fs_cmd(const char *args, ShellOutputFn out, void *ud)
         FID start_fid = FID_INVALID;
         if (target[0]) {
             const char *tname = target;
-            if (strncmp(tname, "/ANDERS/", 8) == 0) tname += 8;
+            const char *aname = (g_anders_vol && vol_name(g_anders_vol)[0]) ? vol_name(g_anders_vol) : "ANDERS";
+            size_t alen = strlen(aname);
+            char a_prefix[64];
+            snprintf(a_prefix, sizeof(a_prefix), "/%s/", aname);
+
+            if (strncmp(tname, a_prefix, alen + 2) == 0) tname += (alen + 2);
+            else if (strncmp(tname, "/ANDERS/", 8) == 0) tname += 8;
             else if (strncmp(tname, "/CHOKANJI/", 10) == 0) tname += 10;
             else if (strncmp(tname, "/B-right/", 9) == 0) tname += 9;
             else if (strncmp(tname, "/SYS/", 5) == 0) tname += 5;
 
-            if (strcmp(target, "/ANDERS") == 0 || strcmp(target, "/CHOKANJI") == 0 ||
-                strcmp(target, "/B-right") == 0 || strcmp(target, "/SYS") == 0 ||
-                strcmp(target, "/") == 0) {
+            if (clu_is_root_path(v, target)) {
                 start_fid = flag_g ? FID_INVALID : FID_ROOT;
             } else {
                 int all_digits = 1;
@@ -1135,8 +1228,7 @@ static void clu_stat_internal(const char *cmd_name, const char *args, ShellOutpu
         return;
     }
 
-    Volume *v = (strncmp(g_cwd_path, "/ANDERS", 7) == 0 && g_anders_vol) ? g_anders_vol :
-                ((strncmp(g_cwd_path, "/CHOKANJI", 9) == 0 || strncmp(g_cwd_path, "/B-right", 8) == 0) && g_chokanji_vol) ? g_chokanji_vol : g_sys_vol;
+    Volume *v = clu_get_cwd_vol();
 
     Volume *target_vol = NULL;
     FID fid_val = FID_INVALID;
@@ -1151,8 +1243,9 @@ static void clu_stat_internal(const char *cmd_name, const char *args, ShellOutpu
     v = of_vol(of);
 
     char line[160];
-    const char *vol_name = (v == g_chokanji_vol) ? "CHOKANJI" :
-                           (v == g_anders_vol) ? "ANDERS" : "SYS";
+    const char *vname = vol_name(v);
+    const char *vol_name = (vname && vname[0]) ? vname :
+                           ((v == g_chokanji_vol) ? "CHOKANJI" : (v == g_anders_vol ? "ANDERS" : "SYS"));
     const char *vol_desc = vol_description(v);
 
     snprintf(line, sizeof(line), "  File: %s", of->hdr.name[0] ? (const char *)of->hdr.name : "(unnamed)");
@@ -1285,8 +1378,7 @@ void clu_tp(const char *args, ShellOutputFn out, void *ud)
 
     if (!target[0]) { out("tp: missing file argument", COLOR_RED, ud); return; }
 
-    Volume *v = (strncmp(g_cwd_path, "/ANDERS", 7) == 0 && g_anders_vol) ? g_anders_vol :
-                ((strncmp(g_cwd_path, "/CHOKANJI", 9) == 0 || strncmp(g_cwd_path, "/B-right", 8) == 0) && g_chokanji_vol) ? g_chokanji_vol : g_sys_vol;
+    Volume *v = clu_get_cwd_vol();
 
     Volume *target_vol = NULL;
     FID fid_val = FID_INVALID;
@@ -1711,55 +1803,38 @@ void clu_df(const char *args, ShellOutputFn out, void *ud)
     char target[80];
     get_target(args, target, sizeof(target));
 
-    if (!g_sys_vol && !g_anders_vol && !g_chokanji_vol) {
+    int count = vol_mounted_count();
+    if (count == 0) {
         out("df: no volume mounted", COLOR_RED, ud);
         return;
     }
 
-    int show_sys = 1;
-    int show_anders = (g_anders_vol && g_anders_vol != g_sys_vol);
-    int show_chokanji = (g_chokanji_vol != NULL);
-
     if (target[0]) {
-        if (strcmp(target, "/SYS") == 0 || strcmp(target, "SYS") == 0) {
-            show_sys = 1;
-            show_anders = 0;
-            show_chokanji = 0;
-        } else if (strcmp(target, "/ANDERS") == 0 || strcmp(target, "ANDERS") == 0) {
-            show_sys = 0;
-            show_anders = (g_anders_vol && g_anders_vol != g_sys_vol);
-            show_chokanji = 0;
-            if (!show_anders) {
-                out("df: '/ANDERS': volume not mounted", COLOR_RED, ud);
-                return;
-            }
-        } else if (strcmp(target, "/CHOKANJI") == 0 || strcmp(target, "CHOKANJI") == 0 ||
-                   strcmp(target, "/B-right") == 0 || strcmp(target, "B-right") == 0) {
-            show_sys = 0;
-            show_anders = 0;
-            show_chokanji = (g_chokanji_vol != NULL);
-            if (!show_chokanji) {
-                out("df: '/CHOKANJI': volume not mounted", COLOR_RED, ud);
-                return;
-            }
-        } else {
+        const char *t = (target[0] == '/') ? target + 1 : target;
+        Volume *v = vol_find_by_name(t);
+        if (!v) {
             char err[128];
-            snprintf(err, sizeof(err), "df: '%s': no such volume", target);
+            snprintf(err, sizeof(err), "df: '%s': volume not mounted", target);
             out(err, COLOR_RED, ud);
             return;
         }
+        char mnt[80];
+        snprintf(mnt, sizeof(mnt), "/%s", vol_name(v));
+        out("PATH      DEV   TOTAL   FREE    USED   UNIT  MAXFILE  NAME", COLOR_CYAN, ud);
+        clu_df_print_volume(v, mnt, "dev", out, ud);
+        return;
     }
 
     out("PATH      DEV   TOTAL   FREE    USED   UNIT  MAXFILE  NAME", COLOR_CYAN, ud);
-
-    if (show_sys && g_sys_vol) {
-        clu_df_print_volume(g_sys_vol, "/SYS", "mem0", out, ud);
-    }
-    if (show_anders && g_anders_vol) {
-        clu_df_print_volume(g_anders_vol, "/ANDERS", "mem1", out, ud);
-    }
-    if (show_chokanji && g_chokanji_vol) {
-        clu_df_print_volume(g_chokanji_vol, "/CHOKANJI", "hda1", out, ud);
+    for (int i = 0; i < count; i++) {
+        Volume *v = vol_get_mounted(i);
+        if (v) {
+            char mnt[80];
+            snprintf(mnt, sizeof(mnt), "/%s", vol_name(v));
+            char devname[16];
+            snprintf(devname, sizeof(devname), "dev%d", i);
+            clu_df_print_volume(v, mnt, devname, out, ud);
+        }
     }
 }
 

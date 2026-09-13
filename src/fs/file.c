@@ -438,26 +438,36 @@ static FID find_fid_by_name(Volume *v, const char *name)
 
 static Volume *resolve_volume_from_path(const char *path)
 {
-    if (!path) return NULL;
-    Volume *v = NULL;
-    if (path[0] == '/') {
-        if (strncmp(path, "/ANDERS", 7) == 0 && (path[7] == '/' || path[7] == '\0')) v = g_anders_vol;
-        else if (((strncmp(path, "/CHOKANJI", 9) == 0 && (path[9] == '/' || path[9] == '\0')) ||
-                  (strncmp(path, "/B-right", 8) == 0 && (path[8] == '/' || path[8] == '\0'))) && g_chokanji_vol) v = g_chokanji_vol;
-        else if (strncmp(path, "/SYS", 4) == 0 && (path[4] == '/' || path[4] == '\0')) v = g_sys_vol;
-        else if (path[1] == '\0') {
-            if (strncmp(g_cwd_path, "/ANDERS", 7) == 0 && g_anders_vol) v = g_anders_vol;
-            else if ((strncmp(g_cwd_path, "/CHOKANJI", 9) == 0 || strncmp(g_cwd_path, "/B-right", 8) == 0) && g_chokanji_vol) v = g_chokanji_vol;
-            else v = g_sys_vol;
-        } else {
-            return NULL;
-        }
-    } else {
-        if (strncmp(g_cwd_path, "/ANDERS", 7) == 0 && g_anders_vol) v = g_anders_vol;
-        else if ((strncmp(g_cwd_path, "/CHOKANJI", 9) == 0 || strncmp(g_cwd_path, "/B-right", 8) == 0) && g_chokanji_vol) v = g_chokanji_vol;
-        else v = g_sys_vol;
+    if (!path || !path[0]) return NULL;
+
+    /* Relative path: resolve volume of current working directory */
+    if (path[0] != '/') {
+        return resolve_volume_from_path(g_cwd_path);
     }
-    return v;
+
+    /* Path is "/" or empty: return volume of g_cwd_path, or default volume */
+    if (path[1] == '\0') {
+        Volume *cv = resolve_volume_from_path(g_cwd_path);
+        if (cv) return cv;
+        return g_sys_vol ? g_sys_vol : (vol_mounted_count() > 0 ? vol_get_mounted(0) : NULL);
+    }
+
+    /* Extract volume prefix: e.g. from "/STORAGE_DEV/file.txt", prefix is "STORAGE_DEV" */
+    char vname[64];
+    const char *p = path + 1;
+    size_t i = 0;
+    while (*p && *p != '/' && *p != '#' && i < sizeof(vname) - 1) {
+        vname[i++] = *p++;
+    }
+    vname[i] = '\0';
+
+    Volume *v = vol_find_by_name(vname);
+    if (v) return v;
+
+    /* Fallback checks for legacy aliases */
+    if (fs_strcasecmp(vname, "B-right") == 0 && g_chokanji_vol) return g_chokanji_vol;
+
+    return NULL;
 }
 
 /* ── opn_fil ─────────────────────────────────────────────────────── */

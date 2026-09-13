@@ -69,6 +69,13 @@ Volume *vol_mount(BlkDev *dev);
 void vol_umount(Volume *v);
 
 /*
+ * Dynamic mounted volume registry: query any mounted volume dynamically by index or name.
+ */
+int     vol_mounted_count(void);
+Volume *vol_get_mounted(int index);
+Volume *vol_find_by_name(const char *name);
+
+/*
  * vol_sync — flush all dirty in-RAM state to the block device.
  * Writes back: FID table blocks, bitmap blocks, header block.
  * Safe to call multiple times.

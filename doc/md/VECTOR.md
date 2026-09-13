@@ -1,13 +1,13 @@
 # B-System Clean-Room Volume V2 Format
 
-Document version: 1.0  
-Target: B-System (BTRON 3.20 clean-room)  
-Scope: New volumes only. Historic Cho-Kanji / BrightV path remains untouched.  
+Document version: 1.0
+Target: B-System (BTRON 3.20 clean-room)
+Scope: New V2 volumes only. B-right/V path (`BrightVVolumeHeader`) and V1 Volumes (`VolumeHeader`) remains untouched.
 Date: 2026-09-13
 
 # Vector Extensions for LLM Agents and BTRON Users
 
-The vector layer turns a BTRON volume into a **native semantic store** while remaining 100 % compatible with the classic Real-Body / TAD model. Documents, images, code, and even UI state keep their normal records; embeddings become additional typed records that any program (or LLM agent) can create, update, and query.
+The vector layer turns a BTRON volume into a native semantic store while remaining 100 % compatible with the classic Real-Body / TAD model. Documents, images, code, and even UI state keep their normal records; embeddings become additional typed records that any program (or LLM agent) can create, update, and query.
 
 ## 1. Core idea in BTRON terms
 
@@ -46,7 +46,7 @@ A single document can therefore carry:
 
 ## 3. Practical scenarios for LLM agents
 
-**Semantic retrieval over the whole desktop**
+### Semantic retrieval over the whole desktop
 
 ```c
 // “Find the 8 most similar documents to this paragraph”
@@ -63,7 +63,7 @@ for (int i = 0; i < 8; i++) {
 
 The agent never has to build or maintain an external vector database; the volume *is* the database.
 
-**Chunk-level RAG**
+### Chunk-level RAG
 
 When a long TAD document is saved, the editor (or a background service) automatically:
 
@@ -74,11 +74,11 @@ When a long TAD document is saved, the editor (or a background service) automati
 
 Later an agent can ask “which paragraphs are most relevant to this question?” and receive precise record offsets.
 
-**Multi-modal search**
+### Multi-modal search
 
 An image Real Body can carry its own visual embedding. A text query embedding can be compared against both text and image vectors (cross-modal search) because they live in the same index with a declared metric.
 
-**Agent memory & workspace**
+### Agent memory & workspace
 
 Each agent session can be a Real Body that accumulates:
 
@@ -89,7 +89,7 @@ Each agent session can be a Real Body that accumulates:
 
 Snapshots (CoW) give the agent free “time-travel” and the ability to branch alternative plans without duplicating data.
 
-**Personal knowledge base**
+### Personal knowledge base
 
 A user (or an agent acting for the user) can drop any document, e-mail, PDF-extracted text, or screenshot into a volume. Background embedding keeps the semantic index fresh. Later the same agent can answer “what did I write about topic X last year?” by pure similarity search.
 
@@ -142,10 +142,7 @@ typedef struct {
     float score;
 } VectorHit;
 
-ER vol_vector_search(Volume *v,
-                     const float *query, UW dim,
-                     UW k, VectorHit *out);
-
+ER vol_vector_search(Volume *v, const float *query, UW dim, UW k, VectorHit *out);
 /* Convenience: embed + search in one call (if the volume has a default model) */
 ER vol_semantic_search(Volume *v, const char *text, UW k, VectorHit *out);
 ```
@@ -354,7 +351,7 @@ tx_commit  = { magic, generation, checksum }
 
 ## 4. Implementation plan
 
-### Phase 0 — Foundation (1–2 days)
+### Phase 0 — Foundation
 
 - Add `FS_TYPE_MODERN` (0x6403) and `VOL_MAGIC_V2` (0x62FE) constants.
 - Define `VolumeHeaderV2` in `volume.h` (keep old `VolumeHeader` for classic).

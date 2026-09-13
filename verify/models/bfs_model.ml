@@ -372,12 +372,96 @@ let print_hits hits =
          h.fid h.rec_idx h.vec_id h.score)
     hits
 
+let string_of_mut = function
+  | FidAlloc (f, n) -> sprintf "FidAlloc(%d,%S)" f n
+  | FidFree f -> sprintf "FidFree(%d)" f
+  | SetRecord (f, _) -> sprintf "SetRecord(%d,…)" f
+  | DelRecord (f, i) -> sprintf "DelRecord(%d,%d)" f i
+  | IndexInsert e -> sprintf "IndexInsert(vid=%d,fid=%d)" e.vid e.fid
+  | IndexRemove vid -> sprintf "IndexRemove(%d)" vid
+  | SetDirty d -> sprintf "SetDirty(%b)" d
+  | SetGeneration g -> sprintf "SetGeneration(%d)" g
+
+let trace_state label v =
+  printf "  [%s] gen=%d dirty=%b in_tx=%b log=%d committed=%d bodies=%d index=%d\n"
+    label v.generation v.dirty v.journal.in_tx
+    (List.length v.journal.log)
+    (List.length v.journal.committed)
+    (Hashtbl.length v.bodies)
+    (Hashtbl.length v.index)
+
+(** demo_tx_runner — step-by-step journal trace (mirrors Coq demo_tx).
+    Scenario A: begin → log FidAlloc → commit → clean
+    Scenario B: begin → log → crash → replay (in-flight lost) *)
+let demo_tx_runner () =
+  printf "\n======== demo_tx_runner ========\n";
+
+  (* ── Scenario A: successful commit ── *)
+  printf "\n-- Scenario A: begin / log / commit --\n";
+  let v = vol_format "TxDemo" in
+  trace_state "format" v;
+
+  let v = begin_tx v in
+  trace_state "begin_tx" v;
+  assert v.journal.in_tx;
+  assert v.dirty;
+
+  let fid = v.next_fid in
+  let v = log_mut v (FidAlloc (fid, "note")) in
+  printf "  log_mut %s\n" (string_of_mut (FidAlloc (fid, "note")));
+  trace_state "log_mut" v;
+  assert (List.length v.journal.log = 1);
+
+  let v = commit v in
+  trace_state "commit" v;
+  assert (inv_no_inflight_after_commit v);
+  assert (v.generation = 1);
+  assert (Hashtbl.mem v.bodies fid);
+  printf "  OK Scenario A: FID %d durable, gen=1, clean\n" fid;
+
+  (* ── Scenario B: crash mid-tx ── *)
+  printf "\n-- Scenario B: begin / log / crash / replay --\n";
+  let v = begin_tx v in
+  let lost = v.next_fid in
+  let v = log_mut v (FidAlloc (lost, "should-be-lost")) in
+  printf "  log_mut FidAlloc(%d,\"should-be-lost\") (not committed)\n" lost;
+  trace_state "in-flight" v;
+
+  let v = crash v in
+  trace_state "crash" v;
+  assert (v.journal.log = []);
+  assert (not v.journal.in_tx);
+
+  let v = replay v in
+  trace_state "replay" v;
+  assert (inv_dirty_cleared_after_replay v);
+  assert (not (Hashtbl.mem v.bodies lost));
+  assert (Hashtbl.mem v.bodies fid);
+  printf "  OK Scenario B: lost FID %d absent; durable FID %d kept; gen=%d\n"
+    lost fid v.generation;
+
+  (* ── Scenario C: abort ── *)
+  printf "\n-- Scenario C: begin / log / abort --\n";
+  let v = begin_tx v in
+  let tmp = v.next_fid in
+  let v = log_mut v (FidAlloc (tmp, "aborted")) in
+  let v = abort v in
+  trace_state "abort" v;
+  assert (inv_no_inflight_after_commit v);
+  assert (not (Hashtbl.mem v.bodies tmp));
+  printf "  OK Scenario C: aborted FID %d not visible\n" tmp;
+
+  printf "\n======== demo_tx_runner done ========\n"
+
 let () =
   printf "=== B-System Volume V2 + VECTOR model (OCaml) ===\n\n";
 
+  (* 0. Explicit journal demo runner *)
+  demo_tx_runner ();
+
   (* 1. Format *)
   let v = vol_format "DemoVol" in
-  printf "Formatted volume %S generation=%d dirty=%b\n"
+  printf "\nFormatted volume %S generation=%d dirty=%b\n"
     v.name v.generation v.dirty;
 
   (* 2. Create two documents *)

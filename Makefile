@@ -152,6 +152,7 @@ COMMON_SRCS = src/graphics/dp_core.c   \
               src/apps/gterm.c         \
               src/apps/t_editor.c      \
               src/apps/audio_player.c  \
+              src/apps/b_drivesetup.c  \
               src/apps/orchestra.c     \
               src/apps/chat.c          \
               src/apps/chat_xml.c      \
@@ -1225,7 +1226,25 @@ test-mouse: $(TEST_MOUSE_BIN)
 $(TEST_MOUSE_BIN): $(TEST_MOUSE_OBJS)
 	$(CC) $(TEST_MOUSE_OBJS) -o $@ $(LDFLAGS) -lm
 
-test: test-kernel test-tad test-editor test-chat test-mozc test-wylie test-hmi test-ski test-tracker test-settings test-global-menu test-app-menu
+# ═══════════════════════════════════════════════════════════════════
+# B-System DriveSetup Test Suite
+# ═══════════════════════════════════════════════════════════════════
+TEST_DRIVESETUP_SRCS = verify/tests/test_b_drivesetup.c \
+                       src/window/app_menu.c \
+                       src/apps/b_drivesetup.c
+TEST_DRIVESETUP_OBJS = $(TEST_DRIVESETUP_SRCS:.c=.test.o)
+TEST_DRIVESETUP_BIN  = test_b_drivesetup
+
+test-drivesetup: $(TEST_DRIVESETUP_BIN)
+	@echo "=========================================================="
+	@echo " Running B-System Minimal DriveSetup (b_drivesetup) Tests..."
+	@echo "=========================================================="
+	@./$(TEST_DRIVESETUP_BIN)
+
+$(TEST_DRIVESETUP_BIN): $(TEST_DRIVESETUP_OBJS)
+	$(CC) $(TEST_DRIVESETUP_OBJS) -o $@ $(LDFLAGS) -lm
+
+test: test-kernel test-tad test-editor test-chat test-mozc test-wylie test-hmi test-ski test-tracker test-settings test-global-menu test-app-menu test-drivesetup
 	@echo "=========================================================="
 	@echo " ALL B-SYSTEM TEST SUITES PASSED (100% SUCCESS)!"
 	@echo "=========================================================="
@@ -1276,7 +1295,7 @@ clean:
 	rm -f *.out
 	rm -rf tad_bin
 	rm -f $(POSIX_TARGET) $(QEMU_TARGET) $(TKERNEL_TARGET) $(SAKAMURA_TARGET) \
-	      $(ARM32_TARGET) $(ARM64_TARGET) $(DEFAULT_TARGET) $(UEFI_TARGET) btron-uefi.elf $(PC98_TARGET) btron-pc98.elf $(M68K_TARGET) $(PS2_TARGET) $(PS2_ISO) $(MIPS_TARGET) $(TEST_MOZC_BIN) $(TEST_EDITOR_BIN) $(TEST_HMI_BIN) $(TEST_TAD_BIN) $(TEST_CHAT_BIN) $(TEST_SKI_BIN) $(TEST_GMENU_BIN)
+	      $(ARM32_TARGET) $(ARM64_TARGET) $(DEFAULT_TARGET) $(UEFI_TARGET) btron-uefi.elf $(PC98_TARGET) btron-pc98.elf $(M68K_TARGET) $(PS2_TARGET) $(PS2_ISO) $(MIPS_TARGET) $(TEST_MOZC_BIN) $(TEST_EDITOR_BIN) $(TEST_HMI_BIN) $(TEST_TAD_BIN) $(TEST_CHAT_BIN) $(TEST_SKI_BIN) $(TEST_GMENU_BIN) $(TEST_DRIVESETUP_BIN)
 	find src verify -type f \( -name "*.posix.o" -o -name "*.qemu.o" \
 	    -o -name "*.tkernel.o" -o -name "*.sakamura.o" -o -name "*.uefi.o" -o -name "*.pc98.o" -o -name "*.m68k.o" -o -name "*.ps2.o" -o -name "*.mips.o" -o -name "*.arm32.o" \
 	    -o -name "*.arm64.o" -o -name "*.test.o" -o -name "*.o" \) -delete 2>/dev/null || true

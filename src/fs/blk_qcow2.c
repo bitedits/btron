@@ -320,7 +320,81 @@ void blk_qcow2_close(BlkDev *dev)
     free(dev);
 }
 
+int blk_qcow2_create_file(const char *path, uint64_t disk_size)
+{
+    if (!path || disk_size < 512) return -1;
+
+    FILE *fp = fopen(path, "w+b");
+    if (!fp) return -1;
+
+    uint32_t cluster_bits = 16; /* 64 KB clusters */
+    uint32_t cluster_size = 1U << cluster_bits;
+    uint32_t l2_bits      = cluster_bits - 3; /* 13 */
+    uint64_t l2_coverage  = (uint64_t)cluster_size * (1ULL << l2_bits); /* 512 MB */
+    uint32_t l1_size      = (uint32_t)((disk_size + l2_coverage - 1) / l2_coverage);
+    if (l1_size == 0) l1_size = 1;
+
+    uint64_t l1_table_offset = cluster_size; /* cluster 1 (offset 64 KB) */
+    uint64_t refcount_table_offset = cluster_size * 2; /* cluster 2 (offset 128 KB) */
+
+    unsigned char hdr[104];
+    memset(hdr, 0, sizeof(hdr));
+
+    *(uint32_t *)(hdr + 0)  = be32(QCOW_MAGIC);
+    *(uint32_t *)(hdr + 4)  = be32(3);          /* version 3 */
+    *(uint32_t *)(hdr + 20) = be32(cluster_bits);
+    *(uint64_t *)(hdr + 24) = be64(disk_size);
+    *(uint32_t *)(hdr + 32) = be32(0);          /* crypt method */
+    *(uint32_t *)(hdr + 36) = be32(l1_size);
+    *(uint64_t *)(hdr + 40) = be64(l1_table_offset);
+    *(uint64_t *)(hdr + 48) = be64(refcount_table_offset);
+    *(uint32_t *)(hdr + 56) = be32(1);          /* 1 cluster for refcount table */
+    *(uint32_t *)(hdr + 60) = be32(0);          /* nb_snapshots */
+    *(uint64_t *)(hdr + 64) = be64(0);          /* snapshots_offset */
+    *(uint64_t *)(hdr + 72) = be64(0);          /* incompatible features */
+    *(uint64_t *)(hdr + 80) = be64(0);          /* compatible features */
+    *(uint64_t *)(hdr + 88) = be64(0);          /* autoclear features */
+    *(uint32_t *)(hdr + 96) = be32(4);          /* refcount_order = 4 (16-bit refcounts) */
+    *(uint32_t *)(hdr + 100) = be32(104);       /* header_length */
+
+    /* Write cluster 0 (header + zeros) */
+    void *c0 = calloc(1, cluster_size);
+    if (!c0) { fclose(fp); return -1; }
+    memcpy(c0, hdr, sizeof(hdr));
+    fwrite(c0, 1, cluster_size, fp);
+    free(c0);
+
+    /* Write cluster 1 (L1 table empty zeros) */
+    void *c1 = calloc(1, cluster_size);
+    if (!c1) { fclose(fp); return -1; }
+    fwrite(c1, 1, cluster_size, fp);
+    free(c1);
+
+    /* Write cluster 2 (refcount table: pointing to cluster 3 as refcount block) */
+    uint64_t refcount_block_offset = cluster_size * 3;
+    uint64_t *ref_tbl = (uint64_t *)calloc(1, cluster_size);
+    if (!ref_tbl) { fclose(fp); return -1; }
+    ref_tbl[0] = be64(refcount_block_offset);
+    fwrite(ref_tbl, 1, cluster_size, fp);
+    free(ref_tbl);
+
+    /* Write cluster 3 (refcount block: mark clusters 0, 1, 2, 3 as used) */
+    uint16_t *ref_blk = (uint16_t *)calloc(1, cluster_size);
+    if (!ref_blk) { fclose(fp); return -1; }
+    ref_blk[0] = (uint16_t)be32(1 << 16); /* cluster 0 refcount = 1 */
+    ref_blk[1] = (uint16_t)be32(1 << 16); /* cluster 1 refcount = 1 */
+    ref_blk[2] = (uint16_t)be32(1 << 16); /* cluster 2 refcount = 1 */
+    ref_blk[3] = (uint16_t)be32(1 << 16); /* cluster 3 refcount = 1 */
+    fwrite(ref_blk, 1, cluster_size, fp);
+    free(ref_blk);
+
+    fflush(fp);
+    fclose(fp);
+    return 0;
+}
+
 #else
 BlkDev *blk_qcow2_create(const char *path, int read_only) { (void)path; (void)read_only; return NULL; }
 void    blk_qcow2_close(BlkDev *dev) { (void)dev; }
+int     blk_qcow2_create_file(const char *path, uint64_t disk_size) { (void)path; (void)disk_size; return -1; }
 #endif /* __STDC_HOSTED__ */

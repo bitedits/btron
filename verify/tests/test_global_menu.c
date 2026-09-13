@@ -37,6 +37,7 @@ WND* open_gterm_window(void)            { return NULL; }
 WND* open_audio_player_window(void)     { return NULL; }
 WND* open_orchestra_window(void)        { return NULL; }
 WND* open_display_settings_window(void) { return NULL; }
+WND* open_drivesetup_window(void)       { return NULL; }
 WND* launch_beos_chat(void)             { return NULL; }
 
 /* ── Test Group 1: Geometry & Non-Overfull Margins ── */

@@ -34,6 +34,7 @@ __WEAK_APP WND* open_audio_player_window(void);
 __WEAK_APP WND* open_kagee_window(void);
 __WEAK_APP WND* open_cassette_about_window(void);
 __WEAK_APP WND* open_tad_browser_window(const char *filepath, const char *title);
+__WEAK_APP WND* open_drivesetup_window(void);
 __WEAK_APP WND* launch_beos_chat(void);
 
 void shell_execute_cmd(const char *cmd_line, ShellOutputFn out_fn, void *user_data, WND *wnd);

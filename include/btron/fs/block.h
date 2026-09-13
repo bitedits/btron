@@ -79,6 +79,7 @@ void blk_file_close(BlkDev *dev);
  */
 BlkDev *blk_qcow2_create(const char *path, int read_only);
 void    blk_qcow2_close(BlkDev *dev);
+int     blk_qcow2_create_file(const char *path, uint64_t disk_size);
 
 /*
  * blk_partition_create — Partition / slice wrapper over a base BlkDev.

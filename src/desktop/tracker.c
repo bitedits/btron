@@ -54,13 +54,14 @@ static void tracker_format_wnd_title(char *dst, int max_len, BOOL focused, const
 
 /* Forward declarations of BTRON application entry points with weak linkage */
 #if defined(__GNUC__) || defined(__clang__)
-__attribute__((weak)) WND* open_vobj_manager_window(void);
-__attribute__((weak)) WND* open_control_panel_window(void);
-__attribute__((weak)) WND* open_t_editor_window(void);
-__attribute__((weak)) WND* open_gterm_window(void);
-__attribute__((weak)) WND* open_audio_player_window(void);
-__attribute__((weak)) WND* open_orchestra_window(void);
-__attribute__((weak)) WND* launch_beos_chat(void);
+__attribute__((weak, weak_import)) WND* open_vobj_manager_window(void);
+__attribute__((weak, weak_import)) WND* open_control_panel_window(void);
+__attribute__((weak, weak_import)) WND* open_t_editor_window(void);
+__attribute__((weak, weak_import)) WND* open_gterm_window(void);
+__attribute__((weak, weak_import)) WND* open_audio_player_window(void);
+__attribute__((weak, weak_import)) WND* open_orchestra_window(void);
+__attribute__((weak, weak_import)) WND* open_drivesetup_window(void);
+__attribute__((weak, weak_import)) WND* launch_beos_chat(void);
 #else
 extern WND* open_vobj_manager_window(void);
 extern WND* open_control_panel_window(void);
@@ -68,6 +69,7 @@ extern WND* open_t_editor_window(void);
 extern WND* open_gterm_window(void);
 extern WND* open_audio_player_window(void);
 extern WND* open_orchestra_window(void);
+extern WND* open_drivesetup_window(void);
 extern WND* launch_beos_chat(void);
 #endif
 
@@ -126,6 +128,7 @@ void tracker_refresh_windows(void) {
     tracker_add_item(TRACKER_CMD_TERMINAL,  "Terminal (gterm 端末)", NULL);
     tracker_add_item(TRACKER_CMD_AUDIODECK, "Cassette (カセットデッキ)", NULL);
     tracker_add_item(TRACKER_CMD_ORCHESTRA, "管弦楽・MIDI (Orchestra)", NULL);
+    tracker_add_item(TRACKER_CMD_DRIVESETUP, "DriveSetup (ディスク管理)", NULL);
     tracker_add_item(TRACKER_CMD_CHAT,      "Mail & Chat (対話通信)", NULL);
     tracker_add_item(TRACKER_CMD_SEPARATOR, "------------------------", NULL);
 
@@ -277,6 +280,9 @@ static void tracker_execute_item(H index) {
             break;
         case TRACKER_CMD_ORCHESTRA:
             if (open_orchestra_window) open_orchestra_window();
+            break;
+        case TRACKER_CMD_DRIVESETUP:
+            if (open_drivesetup_window) open_drivesetup_window();
             break;
         case TRACKER_CMD_CHAT:
             if (launch_beos_chat) launch_beos_chat();

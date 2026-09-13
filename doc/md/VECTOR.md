@@ -248,9 +248,11 @@ Classic `FS_TYPE_STD` volumes continue to mount and work unchanged.
 
 ## 3. Architecture
 
-### 3.1 On-disk superblock (VolumeHeaderV2)
+### 3.1 Dual-Anchor On-Disk Superblock (Block 0 & Block 1)
 
-Still exactly 128 bytes. Classic fields stay in the same places so a V1 reader can at least recognise the volume; new fields occupy the former `_pad` region.
+For B-FS V2, we adopt a **Dual-Anchor Superblock** architecture:
+- **Block 0 (128 bytes)**: `VolumeHeaderV2`. Classic fields stay at offsets 0–67 so V1 readers and boot sectors recognise the volume; new V2 feature flags and pointers occupy offsets 68–127.
+- **Block 1 / Offset 512 (512 bytes)**: Extended `bfs_super_block_v2` storing 64-bit fields (`num_blocks`, `used_blocks`, `root_dir`, `vector_index`, `log_blocks`, `blocks_per_ag`, `ag_shift`).
 
 ```c
 typedef struct __attribute__((packed)) {
@@ -258,7 +260,7 @@ typedef struct __attribute__((packed)) {
     UH   magic;           /* 0x62FE = VOL_MAGIC_V2  (or keep 0x42FE + fs_type) */
     UH   fs_type;         /* 0x6403 = FS_TYPE_MODERN */
     UW   nfmax;           /* soft limit; real capacity may be higher */
-    UW   nlb;             /* total logical blocks (32-bit for now) */
+    UW   nlb;             /* total logical blocks (32-bit shadow) */
     UH   sfidt;
     UH   sfnmt;
     UH   nbmp;
@@ -281,7 +283,50 @@ typedef struct __attribute__((packed)) {
 } VolumeHeaderV2;
 
 _Static_assert(sizeof(VolumeHeaderV2) == 128, "must stay 128 bytes");
+
+/* Extended 512-byte Superblock at Block 1 (offset 512 / 1024) */
+typedef struct __attribute__((packed)) {
+    char        name[32];
+    int32_t     magic1;              /* 'BFS1' = 0x42465331 */
+    int32_t     fs_byte_order;       /* 'BIGE' or host endian */
+    uint32_t    block_size;          /* 1024, 2048, 4096 */
+    uint32_t    block_shift;         /* 10, 11, 12 */
+    int64_t     num_blocks;          /* true 64-bit volume blocks */
+    int64_t     used_blocks;         /* true 64-bit allocated blocks */
+    int32_t     inode_size;          /* 512 bytes */
+    int32_t     magic2;              /* 0xdd121031 */
+    int32_t     blocks_per_ag;       /* typically 65,536 (ag_shift = 16) */
+    int32_t     ag_shift;            /* 16 */
+    int32_t     num_ags;             /* up to 2^48 allocation groups */
+    int32_t     flags;               /* clean / dirty / replay status */
+    block_run_64 log_blocks;         /* circular WAL log block run */
+    int64_t     log_start;
+    int64_t     log_end;
+    int32_t     magic3;              /* 0x15b6830e */
+    block_run_64 root_dir;           /* direct 64-bit FID of root dir */
+    block_run_64 vector_index;       /* B+Tree root of RT_VECTOR index */
+    int32_t     _reserved[8];
+    int32_t     pad_to_block[87];
+} bfs_super_block_v2;
+
+_Static_assert(sizeof(bfs_super_block_v2) == 512, "must stay 512 bytes");
 ```
+
+### 3.1.1 Direct 64-bit FID Addressing
+In B-FS V2, every FID is a 64-bit direct composite block run address:
+```c
+typedef struct __attribute__((packed)) {
+    int64_t  allocation_group; /* up to 48-bit allocation group index */
+    uint16_t start;            /* 16-bit block offset in AG (0..65535) */
+    uint16_t length;           /* contiguous run length */
+} block_run_64;
+
+typedef uint64_t fid64_t;
+#define FID64_ENCODE(ag, start, ag_shift) (((uint64_t)(ag) << (ag_shift)) | (uint64_t)(start))
+#define FID64_TO_AG(fid, ag_shift)        ((int64_t)((fid) >> (ag_shift)))
+#define FID64_TO_START(fid, ag_shift)     ((uint16_t)((fid) & (((uint64_t)1 << (ag_shift)) - 1)))
+```
+This addresses up to $2^{48} \times 2^{16} = 2^{64}$ blocks ($16 \text{ ZiB}$) and guarantees $2^{64}$ directly addressable Inode FIDs without indirection bottlenecks.
 
 **Feature flags (`features`)**
 

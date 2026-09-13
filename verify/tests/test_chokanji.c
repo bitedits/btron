@@ -120,7 +120,11 @@ static void test_volume_mount(void)
     TEST_ASSERT(vol_block_size(v) == 8192, "vol_block_size must return 8192");
     TEST_ASSERT(strcmp(vol_name(v), "B-right/V") == 0, "vol_name must be 'B-right/V'");
     TEST_ASSERT(vol_total_blocks(v) == 1310298U, "total blocks must be 1,310,298");
-    TEST_ASSERT(vol_free_blocks(v) > 1200000U, "expected >1,200,000 free blocks");
+    UW act_fids = 0;
+    for (UW i = 0; i < vol_nfmax(v); i++) {
+        if (vol_fid_refcount(v, i) > 0) act_fids++;
+    }
+    TEST_ASSERT(act_fids == 4457, "expected 4457 active FIDs on B-right/V volume");
     TEST_ASSERT(vol_fid_get_blk(v, 0) != 0, "expected valid block for FID 0");
     vol_umount(v);
     blk_destroy(part);
@@ -141,8 +145,8 @@ static void test_directory_enumeration(void)
 
     g_chokanji_vol = v;
 
-    ID dir = opn_dir("/CHOKANJI");
-    TEST_ASSERT(dir >= 0, "opn_dir(/CHOKANJI) failed");
+    ID dir = opn_dir("/B-right/V");
+    TEST_ASSERT(dir >= 0, "opn_dir(/B-right/V) failed");
 
     DIR_ENTRY ent;
     int count = 0;
@@ -171,8 +175,8 @@ static void test_directory_enumeration(void)
     TEST_ASSERT(found_english, "did not find 'English'");
 
     /* Verify plugins directory entry exists and can be opened */
-    ID pfd = opn_fil("/CHOKANJI/plugins", 0x0001);
-    TEST_ASSERT(pfd >= 0, "failed to opn_fil /CHOKANJI/plugins");
+    ID pfd = opn_fil("/B-right/V/plugins", 0x0001);
+    TEST_ASSERT(pfd >= 0, "failed to opn_fil /B-right/V/plugins");
     cls_fil(pfd);
 
     g_chokanji_vol = NULL;
@@ -195,8 +199,8 @@ static void test_read_tad_document(void)
 
     g_chokanji_vol = v;
 
-    ID fd = opn_fil("/CHOKANJI/English", 0x0001 /* F_READ */);
-    TEST_ASSERT(fd >= 0, "opn_fil(/CHOKANJI/English) failed");
+    ID fd = opn_fil("/B-right/V/English", 0x0001 /* F_READ */);
+    TEST_ASSERT(fd >= 0, "opn_fil(/B-right/V/English) failed");
 
     for (int r = 0; r < 5; r++) {
         ID rec = opn_rec(fd, r, 0x0001);
@@ -213,8 +217,8 @@ static void test_read_tad_document(void)
     cls_fil(fd);
 
     /* Open Text Pad */
-    ID fd_text = opn_fil("/CHOKANJI/Text Pad", 0x0001);
-    TEST_ASSERT(fd_text >= 0, "opn_fil(/CHOKANJI/Text Pad) failed");
+    ID fd_text = opn_fil("/B-right/V/Text Pad", 0x0001);
+    TEST_ASSERT(fd_text >= 0, "opn_fil(/B-right/V/Text Pad) failed");
     ID rec_text = opn_rec(fd_text, 0, 0x0001);
     TEST_ASSERT(rec_text >= 0, "opn_rec(Text Pad, 0) failed");
     unsigned char tbuf[256];
@@ -245,8 +249,8 @@ static void test_read_driver_binary(void)
 
     g_chokanji_vol = v;
 
-    ID fd = opn_fil("/CHOKANJI/vesainf", 0x0001);
-    TEST_ASSERT(fd >= 0, "opn_fil(/CHOKANJI/vesainf) failed");
+    ID fd = opn_fil("/B-right/V/vesainf", 0x0001);
+    TEST_ASSERT(fd >= 0, "opn_fil(/B-right/V/vesainf) failed");
 
     ID rec = opn_rec(fd, 0, 0x0001);
     TEST_ASSERT(rec >= 0, "opn_rec failed");
@@ -286,7 +290,7 @@ static void test_read_write_operations(void)
     g_chokanji_vol = v;
 
     /* Create new file on Cho-Kanji volume (cleanup previous if needed) */
-    const char *test_path = "/CHOKANJI/BTRON_TEST.TXT";
+    const char *test_path = "/B-right/V/BTRON_TEST.TXT";
     del_fil(test_path);
     ID wfd = cre_fil(test_path, 0x0002 | 0x0008 /* F_WRITE | F_CREATE */);
     TEST_ASSERT(wfd >= 0, "cre_fil on Cho-Kanji volume failed");
@@ -357,47 +361,54 @@ static void test_clu_integration(void)
 
     g_chokanji_vol = v;
 
+    BlkDev *sys_dev = blk_file_create("btron_sys.vol", 0, 1024);
+    Volume *sv = NULL;
+    if (sys_dev) {
+        sv = vol_mount(sys_dev);
+        g_sys_vol = sv;
+    }
+
     static char out_buf[262144];
     memset(out_buf, 0, sizeof(out_buf));
 
-    /* Test clu_df with /CHOKANJI */
-    clu_df("/CHOKANJI", clu_buf_out, out_buf);
-    TEST_ASSERT(strstr(out_buf, "/CHOKANJI") != NULL, "clu_df output missing /CHOKANJI");
+    /* Test clu_df with /B-right/V */
+    clu_df("/B-right/V", clu_buf_out, out_buf);
+    TEST_ASSERT(strstr(out_buf, "/B-right/V") != NULL, "clu_df output missing /B-right/V");
     TEST_ASSERT(strstr(out_buf, "hda1") != NULL, "clu_df output missing device hda1");
     TEST_ASSERT(strstr(out_buf, "8192") != NULL, "clu_df output missing block size 8192");
     TEST_ASSERT(strstr(out_buf, "B-right/V") != NULL, "clu_df output missing volume name B-right/V");
 
-    /* Test clu_cd to /CHOKANJI */
+    /* Test clu_cd to /B-right/V */
     memset(out_buf, 0, sizeof(out_buf));
-    clu_cd("/CHOKANJI", clu_buf_out, out_buf);
-    TEST_ASSERT(strcmp(g_cwd_path, "/CHOKANJI") == 0, "g_cwd_path must be /CHOKANJI");
+    clu_cd("/B-right/V", clu_buf_out, out_buf);
+    TEST_ASSERT(strcmp(g_cwd_path, "/B-right/V") == 0, "g_cwd_path must be /B-right/V");
 
-    /* Test clu_ls inside /CHOKANJI (plain ls) */
+    /* Test clu_ls inside /B-right/V (plain ls) */
     memset(out_buf, 0, sizeof(out_buf));
     clu_ls("", clu_buf_out, out_buf);
     TEST_ASSERT(strstr(out_buf, "SBOOT") != NULL, "clu_ls output missing SBOOT");
     TEST_ASSERT(strstr(out_buf, "English") != NULL, "clu_ls output missing English");
 
-    /* Test clu_ls -l inside /CHOKANJI */
+    /* Test clu_ls -l inside /B-right/V */
     memset(out_buf, 0, sizeof(out_buf));
     clu_ls("-l", clu_buf_out, out_buf);
     TEST_ASSERT(strstr(out_buf, "ATYPE") != NULL, "clu_ls -l header missing");
 
-    /* Test cd /CHOKANJI/plugins and ls: empty directory must NOT show root folder */
+    /* Test cd /B-right/V/plugins and ls: empty directory must NOT show root folder */
     memset(out_buf, 0, sizeof(out_buf));
-    clu_cd("/CHOKANJI/plugins", clu_buf_out, out_buf);
-    TEST_ASSERT(strcmp(g_cwd_path, "/CHOKANJI/plugins") == 0, "g_cwd_path must be /CHOKANJI/plugins");
+    clu_cd("/B-right/V/plugins", clu_buf_out, out_buf);
+    TEST_ASSERT(strcmp(g_cwd_path, "/B-right/V/plugins") == 0, "g_cwd_path must be /B-right/V/plugins");
 
     memset(out_buf, 0, sizeof(out_buf));
     clu_ls("", clu_buf_out, out_buf);
-    TEST_ASSERT(strstr(out_buf, "SBOOT") == NULL, "ls in /CHOKANJI/plugins must NOT show root folder SBOOT");
-    TEST_ASSERT(strstr(out_buf, "Template Box") == NULL, "ls in /CHOKANJI/plugins must NOT show root folder Template Box");
-    TEST_ASSERT(strstr(out_buf, "Drawing Pad") == NULL, "ls in /CHOKANJI/plugins must NOT show root folder Drawing Pad");
+    TEST_ASSERT(strstr(out_buf, "SBOOT") == NULL, "ls in /B-right/V/plugins must NOT show root folder SBOOT");
+    TEST_ASSERT(strstr(out_buf, "Template Box") == NULL, "ls in /B-right/V/plugins must NOT show root folder Template Box");
+    TEST_ASSERT(strstr(out_buf, "Drawing Pad") == NULL, "ls in /B-right/V/plugins must NOT show root folder Drawing Pad");
 
-    /* Return to /CHOKANJI */
+    /* Return to /B-right/V */
     memset(out_buf, 0, sizeof(out_buf));
-    clu_cd("/CHOKANJI", clu_buf_out, out_buf);
-    TEST_ASSERT(strcmp(g_cwd_path, "/CHOKANJI") == 0, "g_cwd_path must be /CHOKANJI");
+    clu_cd("/B-right/V", clu_buf_out, out_buf);
+    TEST_ASSERT(strcmp(g_cwd_path, "/B-right/V") == 0, "g_cwd_path must be /B-right/V");
 
     /* Test clu_fs_cmd inside /CHOKANJI */
     static char fs_buf[524288];
@@ -489,8 +500,8 @@ static void test_clu_integration(void)
     TEST_ASSERT(strstr(fs_r_buf, "PARENT") != NULL, "fs -r header must contain PARENT column");
     TEST_ASSERT(strstr(fs_l_buf, "PARENT") != NULL, "fs -l header must contain PARENT column");
 
-    TEST_ASSERT(strstr(fs_buf, "English") != NULL, "clu_fs_cmd on /CHOKANJI missing English");
-    TEST_ASSERT(strstr(fs_buf, "foundations") == NULL, "clu_fs_cmd on /CHOKANJI should not show ANDERS entries");
+    TEST_ASSERT(strstr(fs_buf, "English") != NULL, "clu_fs_cmd on /B-right/V missing English");
+    TEST_ASSERT(strstr(fs_buf, "foundations") == NULL, "clu_fs_cmd on /B-right/V should not show ANDERS entries");
 
     if (strstr(fs_r_buf, "[Template Box]") == NULL && strstr(fs_r_buf, "[English]") == NULL) {
         char *p = fs_r_buf;
@@ -582,6 +593,12 @@ static void test_clu_integration(void)
     clu_cd("/SYS", clu_buf_out, out_buf);
     TEST_ASSERT(strcmp(g_cwd_path, "/SYS") == 0, "g_cwd_path must be restored to /SYS");
 
+    if (sv) {
+        g_sys_vol = NULL;
+        vol_umount(sv);
+        blk_destroy(sys_dev);
+    }
+
     g_chokanji_vol = NULL;
     vol_umount(v);
     blk_destroy(part);
@@ -606,46 +623,46 @@ static void test_clu_tp_chokanji_streams_and_binaries(void)
     g_chokanji_vol = v;
 
     static char out_buf[32768];
-    clu_cd("/CHOKANJI", clu_buf_out, out_buf);
+    clu_cd("/B-right/V", clu_buf_out, out_buf);
 
     /* Test 1: tp C header real body by FID (FID 779: elfh) */
     memset(out_buf, 0, sizeof(out_buf));
-    clu_tp("/CHOKANJI#779", clu_buf_out, out_buf);
+    clu_tp("/B-right/V#779", clu_buf_out, out_buf);
     TEST_ASSERT(strstr(out_buf, "Polstra") != NULL || strstr(out_buf, "ELF") != NULL,
-                "tp /CHOKANJI#779 should print elfh header content");
+                "tp /B-right/V#779 should print elfh header content");
 
     /* Test 2: tp TRON-coded ASCII link header (FID 781: errnoh) */
     memset(out_buf, 0, sizeof(out_buf));
-    clu_tp("/CHOKANJI#781", clu_buf_out, out_buf);
+    clu_tp("/B-right/V#781", clu_buf_out, out_buf);
     TEST_ASSERT(strstr(out_buf, "sys/errno.h") != NULL,
-                "tp /CHOKANJI#781 should decode and print sys/errno.h link destination");
+                "tp /B-right/V#781 should decode and print sys/errno.h link destination");
 
     /* Test 3: tp raw stream / config file (FID 3: DEVCONF) */
     memset(out_buf, 0, sizeof(out_buf));
-    clu_tp("/CHOKANJI#3", clu_buf_out, out_buf);
+    clu_tp("/B-right/V#3", clu_buf_out, out_buf);
     TEST_ASSERT(strstr(out_buf, "DEVCONF") != NULL,
-                "tp /CHOKANJI#3 should print DEVCONF text stream content");
+                "tp /B-right/V#3 should print DEVCONF text stream content");
 
     /* Test 4: tp ELF binary default mode (FID 4087: cat) */
     memset(out_buf, 0, sizeof(out_buf));
-    clu_tp("/CHOKANJI#4087", clu_buf_out, out_buf);
+    clu_tp("/B-right/V#4087", clu_buf_out, out_buf);
     TEST_ASSERT(strstr(out_buf, "[ELF 32-bit LSB Executable (i386)]") != NULL,
-                "tp /CHOKANJI#4087 should print ELF executable banner");
+                "tp /B-right/V#4087 should print ELF executable banner");
     TEST_ASSERT(strstr(out_buf, "7F 45 4C 46") != NULL,
-                "tp /CHOKANJI#4087 preview should include ELF magic hex bytes");
+                "tp /B-right/V#4087 preview should include ELF magic hex bytes");
 
     /* Test 5: tp ELF binary with -x hex dump */
     memset(out_buf, 0, sizeof(out_buf));
-    clu_tp("-x /CHOKANJI#4087", clu_buf_out, out_buf);
+    clu_tp("-x /B-right/V#4087", clu_buf_out, out_buf);
     TEST_ASSERT(strstr(out_buf, "0000: 7F 45 4C 46") != NULL,
-                "tp -x /CHOKANJI#4087 should print formatted hex dump starting with ELF magic");
+                "tp -x /B-right/V#4087 should print formatted hex dump starting with ELF magic");
 
     /* Test 6: stat by FID (FID 781: errno.h) */
     memset(out_buf, 0, sizeof(out_buf));
-    clu_stat("/CHOKANJI#781", clu_buf_out, out_buf);
-    TEST_ASSERT(strstr(out_buf, "File: errno.h") != NULL, "stat /CHOKANJI#781 missing File: errno.h");
-    TEST_ASSERT(strstr(out_buf, "FID: 781") != NULL, "stat /CHOKANJI#781 missing FID: 781");
-    TEST_ASSERT(strstr(out_buf, "Size: 22") != NULL, "stat /CHOKANJI#781 missing Size: 22");
+    clu_stat("/B-right/V#781", clu_buf_out, out_buf);
+    TEST_ASSERT(strstr(out_buf, "File: errno.h") != NULL, "stat /B-right/V#781 missing File: errno.h");
+    TEST_ASSERT(strstr(out_buf, "FID: 781") != NULL, "stat /B-right/V#781 missing FID: 781");
+    TEST_ASSERT(strstr(out_buf, "Size: 22") != NULL, "stat /B-right/V#781 missing Size: 22");
 
     /* Test 7: stat by name (DEVCONF) */
     memset(out_buf, 0, sizeof(out_buf));
@@ -720,34 +737,34 @@ static void test_volume_isolation_security(void)
     clu_fs_cmd("/SYS#781", clu_buf_out, out_buf);
     TEST_ASSERT(strstr(out_buf, "fs: FID 781 not found on /SYS") != NULL, "fs /SYS#781 must report FID 781 not found on /SYS");
 
-    /* ── Case 2: In /CHOKANJI, accessing non-existent FID ── */
-    clu_cd("/CHOKANJI", clu_buf_out, out_buf);
+    /* ── Case 2: In /B-right/V, accessing non-existent FID ── */
+    clu_cd("/B-right/V", clu_buf_out, out_buf);
 
     memset(out_buf, 0, sizeof(out_buf));
     clu_tp("99999", clu_buf_out, out_buf);
-    TEST_ASSERT(strstr(out_buf, "tp: FID 99999 not found on /CHOKANJI") != NULL, "tp 99999 on /CHOKANJI must report FID 99999 not found on /CHOKANJI");
+    TEST_ASSERT(strstr(out_buf, "tp: FID 99999 not found on /B-right/V") != NULL, "tp 99999 on /B-right/V must report FID 99999 not found on /B-right/V");
 
     memset(out_buf, 0, sizeof(out_buf));
     clu_stat("99999", clu_buf_out, out_buf);
-    TEST_ASSERT(strstr(out_buf, "stat: FID 99999 not found on /CHOKANJI") != NULL, "stat 99999 on /CHOKANJI must report FID 99999 not found on /CHOKANJI");
+    TEST_ASSERT(strstr(out_buf, "stat: FID 99999 not found on /B-right/V") != NULL, "stat 99999 on /B-right/V must report FID 99999 not found on /B-right/V");
 
     memset(out_buf, 0, sizeof(out_buf));
-    clu_tp("/CHOKANJI#99999", clu_buf_out, out_buf);
-    TEST_ASSERT(strstr(out_buf, "tp: FID 99999 not found on /CHOKANJI") != NULL, "tp /CHOKANJI#99999 must report not found on /CHOKANJI");
+    clu_tp("/B-right/V#99999", clu_buf_out, out_buf);
+    TEST_ASSERT(strstr(out_buf, "tp: FID 99999 not found on /B-right/V") != NULL, "tp /B-right/V#99999 must report not found on /B-right/V");
 
-    /* Explicit cross-volume query for missing FID on /SYS while in /CHOKANJI */
+    /* Explicit cross-volume query for missing FID on /SYS while in /B-right/V */
     memset(out_buf, 0, sizeof(out_buf));
     clu_tp("/SYS#781", clu_buf_out, out_buf);
-    TEST_ASSERT(strstr(out_buf, "tp: FID 781 not found on /SYS") != NULL, "tp /SYS#781 from /CHOKANJI must report FID 781 not found on /SYS");
+    TEST_ASSERT(strstr(out_buf, "tp: FID 781 not found on /SYS") != NULL, "tp /SYS#781 from /B-right/V must report FID 781 not found on /SYS");
 
-    /* Legitimate access on /CHOKANJI must succeed */
+    /* Legitimate access on /B-right/V must succeed */
     memset(out_buf, 0, sizeof(out_buf));
-    clu_stat("/CHOKANJI#781", clu_buf_out, out_buf);
-    TEST_ASSERT(strstr(out_buf, "File: errno.h") != NULL, "stat /CHOKANJI#781 must show File: errno.h");
+    clu_stat("/B-right/V#781", clu_buf_out, out_buf);
+    TEST_ASSERT(strstr(out_buf, "File: errno.h") != NULL, "stat /B-right/V#781 must show File: errno.h");
 
     memset(out_buf, 0, sizeof(out_buf));
-    clu_tp("/CHOKANJI#781", clu_buf_out, out_buf);
-    TEST_ASSERT(strstr(out_buf, "sys/errno.h") != NULL, "tp /CHOKANJI#781 must show errno.h contents");
+    clu_tp("/B-right/V#781", clu_buf_out, out_buf);
+    TEST_ASSERT(strstr(out_buf, "sys/errno.h") != NULL, "tp /B-right/V#781 must show errno.h contents");
 
     /* ── Case 3: Unmounted / unknown volume access ── */
     memset(out_buf, 0, sizeof(out_buf));

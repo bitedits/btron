@@ -166,6 +166,18 @@ static Volume *clu_resolve_target_vol(const char *target, Volume *default_vol)
     const char *t = target;
     if (t[0] == '/') {
         if (t[1] == '\0') return default_vol;
+        for (int idx = 0; idx < vol_mounted_count(); idx++) {
+            Volume *mv = vol_get_mounted(idx);
+            if (!mv) continue;
+            const char *mvn = vol_name(mv);
+            if (!mvn || !mvn[0]) continue;
+            size_t len = strlen(mvn);
+            if (strncasecmp(t + 1, mvn, len) == 0) {
+                if (t[1 + len] == '\0' || t[1 + len] == '/' || t[1 + len] == '#') {
+                    return mv;
+                }
+            }
+        }
         char vname[64];
         const char *p = t + 1;
         size_t i = 0;
@@ -201,6 +213,18 @@ static int clu_is_root_path(Volume *v, const char *dir_path)
 {
     if (!dir_path || dir_path[0] == '\0' || strcmp(dir_path, "/") == 0 || strcmp(dir_path, ".") == 0) return 1;
     if (dir_path[0] == '/') {
+        for (int idx = 0; idx < vol_mounted_count(); idx++) {
+            Volume *mv = vol_get_mounted(idx);
+            if (!mv) continue;
+            const char *mvn = vol_name(mv);
+            if (!mvn || !mvn[0]) continue;
+            size_t len = strlen(mvn);
+            if (strncasecmp(dir_path + 1, mvn, len) == 0) {
+                if (dir_path[1 + len] == '\0' || (dir_path[1 + len] == '/' && dir_path[2 + len] == '\0')) {
+                    return 1;
+                }
+            }
+        }
         const char *p = dir_path + 1;
         char vname[64];
         size_t i = 0;
@@ -802,18 +826,37 @@ static ID clu_open_target(const char *target, UW mode, Volume *default_vol,
     Volume *target_vol = v;
 
     if (target[0] == '/') {
+        target_vol = NULL;
         if (target[1] == '\0') {
             target_vol = v;
         } else {
-            char vname[64];
-            const char *p = target + 1;
-            size_t i = 0;
-            while (*p && *p != '/' && *p != '#' && i < sizeof(vname) - 1) {
-                vname[i++] = *p++;
+            const char *p = NULL;
+            for (int idx = 0; idx < vol_mounted_count(); idx++) {
+                Volume *mv = vol_get_mounted(idx);
+                if (!mv) continue;
+                const char *mvn = vol_name(mv);
+                if (!mvn || !mvn[0]) continue;
+                size_t len = strlen(mvn);
+                if (strncasecmp(target + 1, mvn, len) == 0) {
+                    if (target[1 + len] == '\0' || target[1 + len] == '/' || target[1 + len] == '#') {
+                        target_vol = mv;
+                        p = target + 1 + len;
+                        break;
+                    }
+                }
             }
-            vname[i] = '\0';
-            target_vol = vol_find_by_name(vname);
-            if (target_vol && *p == '#') {
+            if (!target_vol) {
+                char vname[64];
+                const char *tp = target + 1;
+                size_t i = 0;
+                while (*tp && *tp != '/' && *tp != '#' && i < sizeof(vname) - 1) {
+                    vname[i++] = *tp++;
+                }
+                vname[i] = '\0';
+                target_vol = vol_find_by_name(vname);
+                p = tp;
+            }
+            if (p && *p == '#') {
                 num_str = p + 1;
                 is_fid = 1;
             }
@@ -1840,7 +1883,8 @@ void clu_df(const char *args, ShellOutputFn out, void *ud)
         char mnt[80];
         snprintf(mnt, sizeof(mnt), "/%s", vol_name(v));
         out("PATH      DEV   TOTAL   FREE    USED   UNIT  MAXFILE  NAME", COLOR_CYAN, ud);
-        clu_df_print_volume(v, mnt, "dev", out, ud);
+        const char *dev = (v == g_chokanji_vol) ? "hda1" : ((v == g_sys_vol) ? "mem0" : ((v == g_anders_vol) ? "mem1" : "dev"));
+        clu_df_print_volume(v, mnt, dev, out, ud);
         return;
     }
 
@@ -1851,7 +1895,10 @@ void clu_df(const char *args, ShellOutputFn out, void *ud)
             char mnt[80];
             snprintf(mnt, sizeof(mnt), "/%s", vol_name(v));
             char devname[16];
-            snprintf(devname, sizeof(devname), "dev%d", i);
+            if (v == g_chokanji_vol) snprintf(devname, sizeof(devname), "hda1");
+            else if (v == g_sys_vol) snprintf(devname, sizeof(devname), "mem0");
+            else if (v == g_anders_vol) snprintf(devname, sizeof(devname), "mem1");
+            else snprintf(devname, sizeof(devname), "dev%d", i);
             clu_df_print_volume(v, mnt, devname, out, ud);
         }
     }

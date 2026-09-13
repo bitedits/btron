@@ -517,7 +517,12 @@ void b_drivesetup_scan_devices(DriveSetupState *st) {
             p->dirty = false; \
             p->free_blocks = vol_free_blocks(vol); \
             p->total_fids = vol_nfmax(vol); \
-            p->active_fids = (uint64_t)(vol_total_blocks(vol) - vol_free_blocks(vol)); \
+            uint64_t act_cnt = 0; \
+            UW max_f = vol_nfmax(vol); \
+            for (UW fi = 0; fi < max_f; fi++) { \
+                if (vol_fid_refcount(vol, fi) > 0) act_cnt++; \
+            } \
+            p->active_fids = act_cnt; \
             if (strcmp((filepath), "btron_sys.vol") == 0) safe_strcpy(p->mount_point, "/SYS", sizeof(p->mount_point)); \
             else if (strcmp((filepath), "btron_anders.vol") == 0) safe_strcpy(p->mount_point, "/ANDERS", sizeof(p->mount_point)); \
             else if (strcmp((filepath), "hda.qcow2") == 0) safe_strcpy(p->mount_point, "/CHOKANJI", sizeof(p->mount_point)); \
@@ -1925,6 +1930,8 @@ void drivesetup_paint(WND *wnd, GDEV *dev) {
         } else if (sel->fs_type == FS_BFS_V2) {
             snprintf(l4, sizeof(l4), "Alloc Scheme:   %llu Alloc Groups",
                      (unsigned long long)((sel->block_count + 65535) / 65536));
+        } else if (sel->fs_type == FS_CHOKANJI) {
+            snprintf(l4, sizeof(l4), "Alloc Scheme:   B-right/V 4.02 Bitmap");
         } else {
             snprintf(l4, sizeof(l4), "Alloc Scheme:   Raw Linear Space");
         }
@@ -1938,7 +1945,8 @@ void drivesetup_paint(WND *wnd, GDEV *dev) {
         char r1[64], r2[64], r3[64], r4[64];
         const char *fs_name = (sel->fs_type == FS_BFS_V1) ? "B-FS V1" :
                               ((sel->fs_type == FS_BFS_V2) ? "B-FS V2" :
-                              ((sel->fs_type == FS_RAW) ? "RAW" : "FAT32"));
+                              ((sel->fs_type == FS_CHOKANJI) ? "Chokanji" :
+                              ((sel->fs_type == FS_RAW) ? "RAW" : "FAT32")));
         snprintf(r1, sizeof(r1), "Format / Type:  %s (0x%02X)", fs_name, sel->type_code);
         snprintf(r2, sizeof(r2), "Block / Sector: %u B / %u B", sel->block_size, cur_d->sector_size ? cur_d->sector_size : 512);
 
@@ -1950,6 +1958,10 @@ void drivesetup_paint(WND *wnd, GDEV *dev) {
             snprintf(r3, sizeof(r3), "FIDs (Act/Max): %llu / 65536 (64-bit)",
                      (unsigned long long)sel->active_fids);
             snprintf(r4, sizeof(r4), "Journal WAL:    %s", sel->dirty ? "Dirty (Needs Replay)" : "Clean (Active WAL)");
+        } else if (sel->fs_type == FS_CHOKANJI) {
+            snprintf(r3, sizeof(r3), "FIDs (Act/Max): %llu / %llu (16-bit)",
+                     (unsigned long long)sel->active_fids, (unsigned long long)sel->total_fids);
+            snprintf(r4, sizeof(r4), "Journal WAL:    None (B-right/V 4.02)");
         } else {
             snprintf(r3, sizeof(r3), "FIDs (Act/Max): N/A (Raw Data)");
             snprintf(r4, sizeof(r4), "Journal WAL:    N/A (Raw)");

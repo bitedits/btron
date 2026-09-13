@@ -384,6 +384,22 @@ static int fs_strcasecmp(const char *s1, const char *s2)
     return (int)(unsigned char)*s1 - (int)(unsigned char)*s2;
 }
 
+static int fs_strncasecmp(const char *s1, const char *s2, size_t n)
+{
+    while (n > 0 && *s1 && *s2) {
+        char c1 = *s1;
+        char c2 = *s2;
+        if (c1 >= 'A' && c1 <= 'Z') c1 = (char)(c1 + 32);
+        if (c2 >= 'A' && c2 <= 'Z') c2 = (char)(c2 + 32);
+        if (c1 != c2) return (int)(unsigned char)c1 - (int)(unsigned char)c2;
+        s1++;
+        s2++;
+        n--;
+    }
+    if (n == 0) return 0;
+    return (int)(unsigned char)*s1 - (int)(unsigned char)*s2;
+}
+
 /* ── Lookup file by name using hash table then full compare ──────── */
 static FID find_fid_by_name(Volume *v, const char *name)
 {
@@ -436,6 +452,47 @@ static FID find_fid_by_name(Volume *v, const char *name)
     return FID_INVALID;
 }
 
+static const char *strip_volume_prefix(Volume *v, const char *path)
+{
+    if (!path) return "";
+    const char *name = path;
+    if (name[0] != '/') return name;
+    while (*name == '/') name++;
+
+    if (v) {
+        const char *vn = vol_name(v);
+        size_t vlen = (vn && vn[0]) ? strlen(vn) : 0;
+        if (vlen > 0 && fs_strncasecmp(name, vn, vlen) == 0 && (name[vlen] == '\0' || name[vlen] == '/')) {
+            name += vlen;
+            while (*name == '/') name++;
+            return name;
+        }
+        if (v == g_chokanji_vol) {
+            if (fs_strncasecmp(name, "CHOKANJI", 8) == 0 && (name[8] == '\0' || name[8] == '/')) {
+                name += 8;
+                while (*name == '/') name++;
+                return name;
+            }
+            if (fs_strncasecmp(name, "B-right", 7) == 0 && (name[7] == '\0' || name[7] == '/')) {
+                name += 7;
+                while (*name == '/') name++;
+                return name;
+            }
+        }
+    }
+
+    /* Fallback: skip volume label up to first slash */
+    const char *sl = name;
+    while (*sl && *sl != '/') sl++;
+    if (*sl == '/') {
+        name = sl + 1;
+        while (*name == '/') name++;
+    } else {
+        name = "";
+    }
+    return name;
+}
+
 static Volume *resolve_volume_from_path(const char *path)
 {
     if (!path || !path[0]) return NULL;
@@ -450,6 +507,20 @@ static Volume *resolve_volume_from_path(const char *path)
         Volume *cv = resolve_volume_from_path(g_cwd_path);
         if (cv) return cv;
         return g_sys_vol ? g_sys_vol : (vol_mounted_count() > 0 ? vol_get_mounted(0) : NULL);
+    }
+
+    /* Check mounted volumes against full name (handles names with slashes like "B-right/V") */
+    for (int idx = 0; idx < vol_mounted_count(); idx++) {
+        Volume *mv = vol_get_mounted(idx);
+        if (!mv) continue;
+        const char *mvn = vol_name(mv);
+        if (!mvn || !mvn[0]) continue;
+        size_t len = strlen(mvn);
+        if (fs_strncasecmp(path + 1, mvn, len) == 0) {
+            if (path[1 + len] == '\0' || path[1 + len] == '/' || path[1 + len] == '#') {
+                return mv;
+            }
+        }
     }
 
     /* Extract volume prefix: e.g. from "/STORAGE_DEV/file.txt", prefix is "STORAGE_DEV" */
@@ -476,16 +547,7 @@ ID opn_fil(const char *path, UW mode)
     Volume *v = resolve_volume_from_path(path);
     if (!v) return (ID)-1;
 
-    /* Strip leading "/" or volume prefix for flat namespace lookup */
-    const char *name = path;
-    if (name[0] == '/') {
-        while (*name == '/') name++;
-        /* Skip volume label if present */
-        const char *sl = name;
-        while (*sl && *sl != '/') sl++;
-        if (*sl == '/') name = sl + 1;
-        else name = ""; /* Path was just volume name (e.g. "/CHOKANJI") -> target is root */
-    }
+    const char *name = strip_volume_prefix(v, path);
 
     FID fid = FID_INVALID;
     if (name[0] == '\0' || strcmp(name, ".") == 0) {
@@ -529,13 +591,7 @@ ID cre_fil(const char *path, UW mode)
     Volume *v = resolve_volume_from_path(path);
     if (!v || !path) return (ID)-1;
 
-    const char *name = path;
-    if (name[0] == '/') {
-        while (*name == '/') name++;
-        const char *sl = name;
-        while (*sl && *sl != '/') sl++;
-        if (*sl == '/') name = sl + 1;
-    }
+    const char *name = strip_volume_prefix(v, path);
 
     if (find_fid_by_name(v, name) != FID_INVALID)
         return (ID)-1; /* already exists */
@@ -621,13 +677,7 @@ ER del_fil(const char *path)
     Volume *v = resolve_volume_from_path(path);
     if (!v || !path) return (ER)-1;
 
-    const char *name = path;
-    if (name[0] == '/') {
-        while (*name == '/') name++;
-        const char *sl = name;
-        while (*sl && *sl != '/') sl++;
-        if (*sl == '/') name = sl + 1;
-    }
+    const char *name = strip_volume_prefix(v, path);
 
     FID fid = find_fid_by_name(v, name);
     if (fid == FID_INVALID || fid == FID_ROOT) return (ER)-1;

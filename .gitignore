@@ -5,3 +5,6 @@
 *.log
 *.out
 .build/
+bfs_allocator_model
+bfs_btree_model
+bfs_model

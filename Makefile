@@ -368,15 +368,15 @@ $(QEMU_BUILD_STAMP):
 # ── Output names ──────────────────────────────────────────────────
 POSIX_TARGET   = btron-posix$(EXEEXT)
 QEMU_TARGET    = btron-qemu.elf$(EXEEXT)
-TKERNEL_TARGET = btron-tkernel.elf
-SAKAMURA_TARGET = btron-sakamura.elf
-FOMA_TARGET     = btron-foma.elf
-TEST_FOMA_BIN   = test_foma_ui
-UEFI_TARGET     = btron-uchida.elf # In honor of Kota Uchida (MikanOS UEFI pioneer)
-PC98_TARGET     = btron-morris.elf # In honor of Awe Morris (zedBSD PC-98 pioneer)
-ARM32_TARGET   = btron-arm-baremetal.elf     # Pi 2B — BCM2836, Cortex-A7, ARMv7
-ARM64_TARGET   = btron-aarch64-baremetal.elf # Pi 4B — BCM2711, Cortex-A72, AArch64
-DEFAULT_TARGET = btron
+TKERNEL_TARGET = ./.build/btron-tkernel.elf
+SAKAMURA_TARGET = ./.build/btron-sakamura.elf
+FOMA_TARGET     = ./.build/btron-foma.elf
+TEST_FOMA_BIN   = ./.build/test_foma_ui
+UEFI_TARGET     = ./.build/btron-uchida.elf
+PC98_TARGET     = ./.build/btron-morris.elf
+ARM32_TARGET   = btron-arm-baremetal.elf
+ARM64_TARGET   = btron-aarch64-baremetal.elf
+DEFAULT_TARGET = ./.build/btron
 
 TKERNEL_INC = -D_RPI_BCM283x_ -DTYPE_RPI=2 \
               -Wno-int-to-pointer-cast -Wno-pointer-to-int-cast \
@@ -437,7 +437,7 @@ btron_anders.vol: mkbtronfs src/tools/manifest_anders.txt
 
 
 # ── FS unit tests ──────────────────────────────────────────────────────
-TEST_FS_BIN = verify/tests/test_fs
+TEST_FS_BIN = ./.build/test_fs
 $(TEST_FS_BIN): verify/tests/test_fs.c $(FS_OBJS) src/apps/clu.host.o
 	$(CC) $(CFLAGS) -Isrc $^ -o $@
 
@@ -446,7 +446,7 @@ test-fs: $(TEST_FS_BIN) btron_sys.vol
 	@echo "[FS] All FS tests passed."
 
 # ── Cho-Kanji (B-right/V 4.02) QCOW2 tests ───────────────────────────
-TEST_CHOKANJI_BIN = verify/tests/test_chokanji
+TEST_CHOKANJI_BIN = ./.build/test_chokanji
 $(TEST_CHOKANJI_BIN): verify/tests/test_chokanji.c $(FS_OBJS) src/apps/clu.host.o
 	$(CC) $(CFLAGS) -Isrc $^ -o $@
 
@@ -650,7 +650,7 @@ test-pc98: $(PC98_TARGET)
 # ═══════════════════════════════════════════════════════════════════
 # Motorola 68040 Macintosh Quadra 800 Kernel (q800)
 # ═══════════════════════════════════════════════════════════════════
-M68K_TARGET     = btron-m68k.elf
+M68K_TARGET     = ./.build/btron-m68k.elf
 M68K_LD_SCRIPT  = src/drivers/m68k/m68k_q800.ld
 M68K_CFLAGS     = -O2 -Wall -Wextra -std=c99 -mcpu=68040 -ffreestanding -nostdlib -DBTRON_TARGET=7 -DBTRON_M68K_TARGET -Iinclude -Iinclude/drivers -Isrc/kernel -Isrc/cores
 M68K_STARTUP    = src/cores/core_m68k.c
@@ -790,7 +790,7 @@ test-ps2: $(PS2_TARGET) $(PS2_ISO)
 # ═══════════════════════════════════════════════════════════════════
 # Bare-Metal MIPS Malta / Magnum Kernel (mips / QEMU) [Target 9]
 # ═══════════════════════════════════════════════════════════════════
-MIPS_TARGET     = btron-mips.elf
+MIPS_TARGET     = ./.build/btron-mips.elf
 MIPS_LD_SCRIPT  = src/drivers/mips/mips_qemu.ld
 MIPS_CFLAGS     = -O2 -Wall -Wextra -std=c99 -ffreestanding -nostdlib \
                   -DBTRON_TARGET=9 -DBTRON_MIPS_TARGET \
@@ -995,7 +995,7 @@ TEST_MOZC_SRCS = verify/tests/test_mozc.c src/tip/mozc_kkc.c src/tip/tip_ife.c s
                  src/font/troncode.c src/font/jis_fonts.c src/font/tibetan_fonts.c src/tip/tip_vobj.c src/window/wnd.c \
                  src/graphics/dp_core.c
 TEST_MOZC_OBJS = $(TEST_MOZC_SRCS:.c=.test.o)
-TEST_MOZC_BIN  = test_mozc
+TEST_MOZC_BIN  = ./.build/test_mozc
 
 %.test.o: %.c
 	$(CC) $(CFLAGS) $(SDL_CFLAGS) -c $< -o $@
@@ -1016,7 +1016,7 @@ TEST_EDITOR_SRCS = verify/tests/test_editor_ui.c src/apps/t_editor.c src/window/
                    src/font/troncode.c src/font/jis_fonts.c src/font/tibetan_fonts.c src/tip/tip_vobj.c src/window/wnd.c \
                    src/graphics/dp_core.c src/fs/blk_mem.c src/fs/blk_file.c src/fs/vol.c src/fs/file.c
 TEST_EDITOR_OBJS = $(TEST_EDITOR_SRCS:.c=.test.o)
-TEST_EDITOR_BIN  = test_editor
+TEST_EDITOR_BIN  = ./.build/test_editor
 
 test-editor: $(TEST_EDITOR_BIN)
 	@echo "=========================================================="
@@ -1035,7 +1035,7 @@ TEST_HMI_SRCS = verify/tests/test_hmi.c src/hmi/hmi_core.c src/hmi/hmi_switch.c 
                 src/hmi/hmi_controller.c src/hmi/hmi_panel.c src/graphics/dp_core.c \
                 src/font/troncode.c src/font/jis_fonts.c src/font/tibetan_fonts.c src/window/wnd.c
 TEST_HMI_OBJS = $(TEST_HMI_SRCS:.c=.test.o)
-TEST_HMI_BIN  = test_hmi
+TEST_HMI_BIN  = ./.build/test_hmi
 
 test-hmi: $(TEST_HMI_BIN)
 	@echo "=========================================================="
@@ -1078,7 +1078,7 @@ TEST_TAD_SRCS = verify/tests/test_tad_browser.c src/apps/tad_browser.c src/apps/
                 src/tip/mozc_kkc.c src/font/troncode.c src/font/jis_fonts.c src/font/tibetan_fonts.c src/tip/tip_vobj.c \
                 src/window/wnd.c src/graphics/dp_core.c
 TEST_TAD_OBJS = $(TEST_TAD_SRCS:.c=.test.o)
-TEST_TAD_BIN  = test_tad_browser
+TEST_TAD_BIN  = ./.build/test_tad_browser
 
 test-tad: $(TEST_TAD_BIN) tad_bin
 	@echo "=========================================================="
@@ -1096,7 +1096,7 @@ TEST_CHAT_SRCS = verify/tests/test_chat.c src/apps/chat.c src/apps/chat_xml.c \
                  src/tip/mozc_kkc.c src/font/troncode.c src/font/jis_fonts.c src/font/tibetan_fonts.c \
                  src/window/wnd.c src/graphics/dp_core.c
 TEST_CHAT_OBJS = $(TEST_CHAT_SRCS:.c=.test.o)
-TEST_CHAT_BIN  = test_chat
+TEST_CHAT_BIN  = ./.build/test_chat
 
 test-chat: $(TEST_CHAT_BIN)
 	@echo "=========================================================="
@@ -1115,7 +1115,7 @@ TEST_TRACKER_SRCS = verify/tests/test_tracker.c src/desktop/tracker.c src/deskto
                     src/window/app_menu.c \
                     src/graphics/dp_core.c src/graphics/icons_bundle.c src/font/troncode.c src/font/jis_fonts.c src/font/tibetan_fonts.c
 TEST_TRACKER_OBJS = $(TEST_TRACKER_SRCS:.c=.test.o)
-TEST_TRACKER_BIN  = test_tracker
+TEST_TRACKER_BIN  = ./.build/test_tracker
 
 test-tracker: $(TEST_TRACKER_BIN)
 	@echo "=========================================================="
@@ -1132,7 +1132,7 @@ verify:
 # Unified Test Suite Runner
 # ═══════════════════════════════════════════════════════════════════
 
-TEST_SETTINGS_BIN = test_settings
+TEST_SETTINGS_BIN = ./.build/test_settings
 TEST_SETTINGS_SRCS = verify/tests/test_language_settings.c \
                      src/settings/language.c \
                      src/settings/control_panel.c \
@@ -1179,7 +1179,7 @@ TEST_GMENU_SRCS = verify/tests/test_global_menu.c src/desktop/global_menu.c src/
                   src/font/jis_fonts.c src/font/tibetan_fonts.c src/tip/tip_ife.c src/tip/mozc_kkc.c \
                   src/tip/wylie.c src/tip/tibetan_dict.c src/tip/tip_vobj.c
 TEST_GMENU_OBJS = $(TEST_GMENU_SRCS:.c=.test.o)
-TEST_GMENU_BIN  = test_global_menu
+TEST_GMENU_BIN  = ./.build/test_global_menu
 
 test-global-menu: $(TEST_GMENU_BIN)
 	@echo "=========================================================="
@@ -1196,7 +1196,7 @@ $(TEST_GMENU_BIN): $(TEST_GMENU_OBJS)
 TEST_APP_MENU_SRCS = verify/tests/test_app_menu.c src/window/app_menu.c src/window/wnd.c \
                      src/graphics/dp_core.c src/font/troncode.c src/font/jis_fonts.c src/font/tibetan_fonts.c
 TEST_APP_MENU_OBJS = $(TEST_APP_MENU_SRCS:.c=.test.o)
-TEST_APP_MENU_BIN  = test_app_menu
+TEST_APP_MENU_BIN  = ./.build/test_app_menu
 
 test-app-menu: $(TEST_APP_MENU_BIN)
 	@echo "=========================================================="
@@ -1215,7 +1215,7 @@ TEST_MOUSE_SRCS = verify/tests/test_mouse_drivers.c \
                   src/drivers/pc98/input/pc98_mouse.c \
                   src/drivers/pc98/input/pc98_kbd.c
 TEST_MOUSE_OBJS = $(TEST_MOUSE_SRCS:.c=.test.o)
-TEST_MOUSE_BIN  = test_mouse
+TEST_MOUSE_BIN  = ./.build/test_mouse
 
 test-mouse: $(TEST_MOUSE_BIN)
 	@echo "=========================================================="
@@ -1233,7 +1233,7 @@ TEST_DRIVESETUP_SRCS = verify/tests/test_b_drivesetup.c \
                        src/window/app_menu.c \
                        src/apps/b_drivesetup.c
 TEST_DRIVESETUP_OBJS = $(TEST_DRIVESETUP_SRCS:.c=.test.o)
-TEST_DRIVESETUP_BIN  = test_b_drivesetup
+TEST_DRIVESETUP_BIN  = ./.build/test_b_drivesetup
 
 test-drivesetup: $(TEST_DRIVESETUP_BIN)
 	@echo "=========================================================="
@@ -1258,7 +1258,7 @@ test: test-kernel test-tad test-editor test-chat test-mozc test-wylie test-hmi t
 TEST_SKI_SRCS = verify/tests/test_ski.c src/cores/core_smp.c \
                 src/drivers/pc98/boot/boot_pc98.c src/drivers/bcm283x/boot/boot_arm_stub.c
 TEST_SKI_OBJS = $(TEST_SKI_SRCS:.c=.test.o)
-TEST_SKI_BIN  = test_ski
+TEST_SKI_BIN  = ./.build/test_ski
 
 test-ski: $(TEST_SKI_BIN)
 	@echo "=========================================================="
@@ -1275,7 +1275,7 @@ $(TEST_SKI_BIN): $(TEST_SKI_OBJS)
 # ═══════════════════════════════════════════════════════════════════
 TEST_WYLIE_SRCS = verify/tests/test_wylie.c src/tip/wylie.c
 TEST_WYLIE_OBJS = $(TEST_WYLIE_SRCS:.c=.test.o)
-TEST_WYLIE_BIN  = test_wylie
+TEST_WYLIE_BIN  = ./.build/test_wylie
 
 test-wylie: $(TEST_WYLIE_BIN)
 	@echo "=========================================================="
@@ -1295,16 +1295,20 @@ clean:
 	rm -f *.out
 	rm -rf tad_bin
 	rm -f $(POSIX_TARGET) $(QEMU_TARGET) $(TKERNEL_TARGET) $(SAKAMURA_TARGET) \
-	      $(ARM32_TARGET) $(ARM64_TARGET) $(DEFAULT_TARGET) $(UEFI_TARGET) btron-uefi.elf $(PC98_TARGET) btron-pc98.elf $(M68K_TARGET) $(PS2_TARGET) $(PS2_ISO) $(MIPS_TARGET) $(TEST_MOZC_BIN) $(TEST_EDITOR_BIN) $(TEST_HMI_BIN) $(TEST_TAD_BIN) $(TEST_CHAT_BIN) $(TEST_SKI_BIN) $(TEST_GMENU_BIN) $(TEST_DRIVESETUP_BIN)
-	find src verify -type f \( -name "*.posix.o" -o -name "*.qemu.o" \
-	    -o -name "*.tkernel.o" -o -name "*.sakamura.o" -o -name "*.uefi.o" -o -name "*.pc98.o" -o -name "*.m68k.o" -o -name "*.ps2.o" -o -name "*.mips.o" -o -name "*.arm32.o" \
-	    -o -name "*.arm64.o" -o -name "*.test.o" -o -name "*.o" \) -delete 2>/dev/null || true
+	      $(ARM32_TARGET) $(ARM64_TARGET) $(DEFAULT_TARGET) $(UEFI_TARGET) $(PC98_TARGET) \
+	      $(M68K_TARGET) $(PS2_TARGET) $(PS2_ISO) $(MIPS_TARGET) $(TEST_MOZC_BIN) \
+	      $(TEST_EDITOR_BIN) $(TEST_HMI_BIN) $(TEST_TAD_BIN) $(TEST_CHAT_BIN) \
+	      $(TEST_SKI_BIN) $(TEST_GMENU_BIN) $(TEST_DRIVESETUP_BIN)
+	find src verify -type f \( -name "*.o" \) -delete 2>/dev/null || true
+	rm -f ./verify/models/bfs_allocator_model
+	rm -f ./verify/models/bfs_btree_model
+	rm -f ./verify/models/bfs_model
 
 
 # ===================================================================
 # Automated Headless Window Screenshot Capture Pipeline
 # ===================================================================
-CAPTURE_SCREENS_BIN = capture_screens
+CAPTURE_SCREENS_BIN = ./.build/capture_screens
 CAPTURE_SCREENS_SRCS = src/tools/capture_screens.c \
                        src/desktop/desktop.c \
                        src/settings/language.c \
@@ -1358,7 +1362,7 @@ $(CAPTURE_SCREENS_BIN): $(CAPTURE_SCREENS_OBJS)
 TEST_FOMA_SRCS = verify/tests/test_foma_ui.c src/desktop/desktop_mobile.c \
                  src/graphics/dp_core.c src/font/troncode.c src/font/jis_fonts.c src/font/tibetan_fonts.c
 TEST_FOMA_OBJS = $(TEST_FOMA_SRCS:.c=.test.o)
-TEST_FOMA_BIN  = test_foma_ui
+TEST_FOMA_BIN  = ./.build/test_foma_ui
 
 test-foma-ui: $(TEST_FOMA_BIN)
 	@echo "=========================================================="
@@ -1380,7 +1384,7 @@ screenshots: $(CAPTURE_SCREENS_BIN)
 # ═══════════════════════════════════════════════════════════════════
 # µBTRON-FOMA Automated Screen Capture & Documentation
 # ═══════════════════════════════════════════════════════════════════
-CAPTURE_FOMA_BIN  = capture_foma
+CAPTURE_FOMA_BIN  = ./.build/capture_foma
 CAPTURE_FOMA_SRCS = src/tools/capture_foma.c \
                     src/desktop/desktop_mobile.c \
                     src/desktop/workbench_mobile.c \

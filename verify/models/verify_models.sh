@@ -104,4 +104,12 @@ bold "==> Summary: $PASS passed, $FAIL failed"
 if [[ "$FAIL" -gt 0 ]]; then
   exit 1
 fi
+
+rm -f .lia.cache
+rm -f *.vo
+rm -f *.cmi
+rm -f *.cmo
+rm -f *.glob
+rm -f .bfs_*
+
 exit 0

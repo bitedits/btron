@@ -17,7 +17,7 @@ if [ ! -f "$ELF_PATH" ]; then
     make "$ELF_PATH" >/dev/null 2>&1 || make arm64-elf
 fi
 
-LOG_FILE=$(mktemp /tmp/qemu_arm64_XXXXXX.log)
+LOG_FILE=$(mktemp /tmp/qemu_arm64_XXXXXX)
 trap 'rm -f "$LOG_FILE"' EXIT
 
 echo "[CI-TEST] Running QEMU ($QEMU_BIN) for $ELF_PATH on raspi3b..."

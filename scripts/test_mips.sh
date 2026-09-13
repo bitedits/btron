@@ -22,7 +22,7 @@ if [ ! -f "$ELF_PATH" ]; then
     make mips >/dev/null 2>&1
 fi
 
-LOG_FILE=$(mktemp /tmp/qemu_btron_mips_XXXXXX.log)
+LOG_FILE=$(mktemp /tmp/qemu_btron_mips_XXXXXX)
 trap 'rm -f "$LOG_FILE"' EXIT
 
 echo "[CI-TEST] Running QEMU ($QEMU_BIN) for $ELF_PATH..."

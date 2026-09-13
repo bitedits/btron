@@ -21,7 +21,7 @@ if [ ! -f "$ELF_PATH" ]; then
     make "$ELF_PATH" >/dev/null 2>&1 || make arm-elf
 fi
 
-LOG_FILE=$(mktemp /tmp/qemu_btron_XXXXXX.log)
+LOG_FILE=$(mktemp /tmp/qemu_btron_XXXXXX)
 trap 'rm -f "$LOG_FILE"' EXIT
 
 echo "[CI-TEST] Running QEMU ($QEMU_BIN) for $ELF_PATH..."

@@ -166,18 +166,8 @@ static Volume *clu_resolve_target_vol(const char *target, Volume *default_vol)
     const char *t = target;
     if (t[0] == '/') {
         if (t[1] == '\0') return default_vol;
-        for (int idx = 0; idx < vol_mounted_count(); idx++) {
-            Volume *mv = vol_get_mounted(idx);
-            if (!mv) continue;
-            const char *mvn = vol_name(mv);
-            if (!mvn || !mvn[0]) continue;
-            size_t len = strlen(mvn);
-            if (strncasecmp(t + 1, mvn, len) == 0) {
-                if (t[1 + len] == '\0' || t[1 + len] == '/' || t[1 + len] == '#') {
-                    return mv;
-                }
-            }
-        }
+        Volume *mv = vol_find_by_prefix(t, NULL);
+        if (mv) return mv;
         char vname[64];
         const char *p = t + 1;
         size_t i = 0;
@@ -213,17 +203,10 @@ static int clu_is_root_path(Volume *v, const char *dir_path)
 {
     if (!dir_path || dir_path[0] == '\0' || strcmp(dir_path, "/") == 0 || strcmp(dir_path, ".") == 0) return 1;
     if (dir_path[0] == '/') {
-        for (int idx = 0; idx < vol_mounted_count(); idx++) {
-            Volume *mv = vol_get_mounted(idx);
-            if (!mv) continue;
-            const char *mvn = vol_name(mv);
-            if (!mvn || !mvn[0]) continue;
-            size_t len = strlen(mvn);
-            if (strncasecmp(dir_path + 1, mvn, len) == 0) {
-                if (dir_path[1 + len] == '\0' || (dir_path[1 + len] == '/' && dir_path[2 + len] == '\0')) {
-                    return 1;
-                }
-            }
+        const char *suffix = NULL;
+        Volume *mv = vol_find_by_prefix(dir_path, &suffix);
+        if (mv && suffix && (suffix[0] == '\0' || (suffix[0] == '/' && suffix[1] == '\0'))) {
+            return 1;
         }
         const char *p = dir_path + 1;
         char vname[64];
@@ -831,20 +814,7 @@ static ID clu_open_target(const char *target, UW mode, Volume *default_vol,
             target_vol = v;
         } else {
             const char *p = NULL;
-            for (int idx = 0; idx < vol_mounted_count(); idx++) {
-                Volume *mv = vol_get_mounted(idx);
-                if (!mv) continue;
-                const char *mvn = vol_name(mv);
-                if (!mvn || !mvn[0]) continue;
-                size_t len = strlen(mvn);
-                if (strncasecmp(target + 1, mvn, len) == 0) {
-                    if (target[1 + len] == '\0' || target[1 + len] == '/' || target[1 + len] == '#') {
-                        target_vol = mv;
-                        p = target + 1 + len;
-                        break;
-                    }
-                }
-            }
+            target_vol = vol_find_by_prefix(target, &p);
             if (!target_vol) {
                 char vname[64];
                 const char *tp = target + 1;

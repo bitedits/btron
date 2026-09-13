@@ -219,6 +219,23 @@ static int vol_strcasecmp(const char *s1, const char *s2)
     return (int)(unsigned char)*s1 - (int)(unsigned char)*s2;
 }
 
+static int vol_strncasecmp(const char *s1, const char *s2, size_t n)
+{
+    if (!s1 || !s2) return s1 ? 1 : (s2 ? -1 : 0);
+    while (n > 0 && *s1 && *s2) {
+        char c1 = *s1;
+        char c2 = *s2;
+        if (c1 >= 'A' && c1 <= 'Z') c1 = (char)(c1 + 32);
+        if (c2 >= 'A' && c2 <= 'Z') c2 = (char)(c2 + 32);
+        if (c1 != c2) return (int)(unsigned char)c1 - (int)(unsigned char)c2;
+        s1++;
+        s2++;
+        n--;
+    }
+    if (n == 0) return 0;
+    return (int)(unsigned char)*s1 - (int)(unsigned char)*s2;
+}
+
 static void sync_mounted_globals(void)
 {
     if (g_sys_vol) {
@@ -284,6 +301,68 @@ Volume *vol_find_by_name(const char *name)
     if (g_sys_vol && (vol_strcasecmp(n, "SYS") == 0 || vol_strcasecmp(vol_name(g_sys_vol), n) == 0)) return g_sys_vol;
     if (g_chokanji_vol && (vol_strcasecmp(n, "CHOKANJI") == 0 || vol_strcasecmp(n, "B-right") == 0 || vol_strcasecmp(vol_name(g_chokanji_vol), n) == 0)) return g_chokanji_vol;
     if (g_anders_vol && (vol_strcasecmp(n, "ANDERS") == 0 || vol_strcasecmp(vol_name(g_anders_vol), n) == 0)) return g_anders_vol;
+
+    return (Volume *)0;
+}
+
+Volume *vol_find_by_prefix(const char *path, const char **out_suffix)
+{
+    if (out_suffix) *out_suffix = (const char *)0;
+    if (!path || !path[0]) return (Volume *)0;
+    sync_mounted_globals();
+
+    const char *start = (path[0] == '/') ? path + 1 : path;
+
+    for (int idx = 0; idx < s_mounted_vol_count; idx++) {
+        Volume *mv = s_mounted_vols[idx];
+        if (!mv) continue;
+        const char *mvn = vol_name(mv);
+        if (!mvn || !mvn[0]) continue;
+        size_t len = strlen(mvn);
+        if (vol_strncasecmp(start, mvn, len) == 0) {
+            char sep = start[len];
+            if (sep == '\0' || sep == '/' || sep == '#') {
+                if (out_suffix) *out_suffix = start + len;
+                return mv;
+            }
+        }
+    }
+
+    /* Fallback checks for legacy aliases */
+    if (g_sys_vol) {
+        if (vol_strncasecmp(start, "SYS", 3) == 0) {
+            char sep = start[3];
+            if (sep == '\0' || sep == '/' || sep == '#') {
+                if (out_suffix) *out_suffix = start + 3;
+                return g_sys_vol;
+            }
+        }
+    }
+    if (g_chokanji_vol) {
+        if (vol_strncasecmp(start, "CHOKANJI", 8) == 0) {
+            char sep = start[8];
+            if (sep == '\0' || sep == '/' || sep == '#') {
+                if (out_suffix) *out_suffix = start + 8;
+                return g_chokanji_vol;
+            }
+        }
+        if (vol_strncasecmp(start, "B-right", 7) == 0) {
+            char sep = start[7];
+            if (sep == '\0' || sep == '/' || sep == '#') {
+                if (out_suffix) *out_suffix = start + 7;
+                return g_chokanji_vol;
+            }
+        }
+    }
+    if (g_anders_vol) {
+        if (vol_strncasecmp(start, "ANDERS", 6) == 0) {
+            char sep = start[6];
+            if (sep == '\0' || sep == '/' || sep == '#') {
+                if (out_suffix) *out_suffix = start + 6;
+                return g_anders_vol;
+            }
+        }
+    }
 
     return (Volume *)0;
 }

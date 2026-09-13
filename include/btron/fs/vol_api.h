@@ -74,6 +74,7 @@ void vol_umount(Volume *v);
 int     vol_mounted_count(void);
 Volume *vol_get_mounted(int index);
 Volume *vol_find_by_name(const char *name);
+Volume *vol_find_by_prefix(const char *path, const char **out_suffix);
 
 /*
  * vol_sync — flush all dirty in-RAM state to the block device.

@@ -384,22 +384,6 @@ static int fs_strcasecmp(const char *s1, const char *s2)
     return (int)(unsigned char)*s1 - (int)(unsigned char)*s2;
 }
 
-static int fs_strncasecmp(const char *s1, const char *s2, size_t n)
-{
-    while (n > 0 && *s1 && *s2) {
-        char c1 = *s1;
-        char c2 = *s2;
-        if (c1 >= 'A' && c1 <= 'Z') c1 = (char)(c1 + 32);
-        if (c2 >= 'A' && c2 <= 'Z') c2 = (char)(c2 + 32);
-        if (c1 != c2) return (int)(unsigned char)c1 - (int)(unsigned char)c2;
-        s1++;
-        s2++;
-        n--;
-    }
-    if (n == 0) return 0;
-    return (int)(unsigned char)*s1 - (int)(unsigned char)*s2;
-}
-
 /* ── Lookup file by name using hash table then full compare ──────── */
 static FID find_fid_by_name(Volume *v, const char *name)
 {
@@ -454,34 +438,21 @@ static FID find_fid_by_name(Volume *v, const char *name)
 
 static const char *strip_volume_prefix(Volume *v, const char *path)
 {
+    (void)v;
     if (!path) return "";
     const char *name = path;
     if (name[0] != '/') return name;
-    while (*name == '/') name++;
 
-    if (v) {
-        const char *vn = vol_name(v);
-        size_t vlen = (vn && vn[0]) ? strlen(vn) : 0;
-        if (vlen > 0 && fs_strncasecmp(name, vn, vlen) == 0 && (name[vlen] == '\0' || name[vlen] == '/')) {
-            name += vlen;
-            while (*name == '/') name++;
-            return name;
-        }
-        if (v == g_chokanji_vol) {
-            if (fs_strncasecmp(name, "CHOKANJI", 8) == 0 && (name[8] == '\0' || name[8] == '/')) {
-                name += 8;
-                while (*name == '/') name++;
-                return name;
-            }
-            if (fs_strncasecmp(name, "B-right", 7) == 0 && (name[7] == '\0' || name[7] == '/')) {
-                name += 7;
-                while (*name == '/') name++;
-                return name;
-            }
-        }
+    const char *suffix = NULL;
+    Volume *mv = vol_find_by_prefix(path, &suffix);
+    if (mv && suffix) {
+        name = suffix;
+        while (*name == '/') name++;
+        return name;
     }
 
     /* Fallback: skip volume label up to first slash */
+    name++;
     const char *sl = name;
     while (*sl && *sl != '/') sl++;
     if (*sl == '/') {
@@ -509,19 +480,8 @@ static Volume *resolve_volume_from_path(const char *path)
         return g_sys_vol ? g_sys_vol : (vol_mounted_count() > 0 ? vol_get_mounted(0) : NULL);
     }
 
-    /* Check mounted volumes against full name (handles names with slashes like "B-right/V") */
-    for (int idx = 0; idx < vol_mounted_count(); idx++) {
-        Volume *mv = vol_get_mounted(idx);
-        if (!mv) continue;
-        const char *mvn = vol_name(mv);
-        if (!mvn || !mvn[0]) continue;
-        size_t len = strlen(mvn);
-        if (fs_strncasecmp(path + 1, mvn, len) == 0) {
-            if (path[1 + len] == '\0' || path[1 + len] == '/' || path[1 + len] == '#') {
-                return mv;
-            }
-        }
-    }
+    Volume *mv = vol_find_by_prefix(path, NULL);
+    if (mv) return mv;
 
     /* Extract volume prefix: e.g. from "/STORAGE_DEV/file.txt", prefix is "STORAGE_DEV" */
     char vname[64];

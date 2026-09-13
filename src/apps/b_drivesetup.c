@@ -1658,39 +1658,9 @@ void drivesetup_paint(WND *wnd, GDEV *dev) {
     paint_beveled_box(dev, &lo.dev_box, true);
 
     /* Vertical Scrollbar (as in Terminal / gterm) */
-    RECT sb_bg = { lo.sb_x, lo.sb_y, lo.sb_x + lo.sb_w, lo.sb_y + lo.sb_h };
-    fill_rec(dev, &sb_bg, COLOR_LTGRAY);
-    drw_lin(dev, lo.sb_x, lo.sb_y, lo.sb_x, lo.sb_y + lo.sb_h);
-
-    /* Up arrow button (16x16) */
-    RECT up_btn = { lo.sb_x, lo.sb_y, lo.sb_x + lo.sb_w, lo.sb_y + 16 };
-    fill_rec(dev, &up_btn, COLOR_LTGRAY);
-    drw_rec(dev, &up_btn);
-    drw_lin(dev, lo.sb_x + 1, lo.sb_y + 1, lo.sb_x + lo.sb_w - 2, lo.sb_y + 1);
-    drw_lin(dev, lo.sb_x + 8, lo.sb_y + 4, lo.sb_x + 4, lo.sb_y + 11);
-    drw_lin(dev, lo.sb_x + 8, lo.sb_y + 4, lo.sb_x + 12, lo.sb_y + 11);
-    drw_lin(dev, lo.sb_x + 4, lo.sb_y + 11, lo.sb_x + 12, lo.sb_y + 11);
-
-    /* Down arrow button (16x16) */
-    RECT dn_btn = { lo.sb_x, lo.dy_b, lo.sb_x + lo.sb_w, lo.sb_y + lo.sb_h };
-    fill_rec(dev, &dn_btn, COLOR_LTGRAY);
-    drw_rec(dev, &dn_btn);
-    drw_lin(dev, lo.sb_x + 1, lo.dy_b + 1, lo.sb_x + lo.sb_w - 2, lo.dy_b + 1);
-    drw_lin(dev, lo.sb_x + 4, lo.dy_b + 5, lo.sb_x + 12, lo.dy_b + 5);
-    drw_lin(dev, lo.sb_x + 4, lo.dy_b + 5, lo.sb_x + 8, lo.dy_b + 12);
-    drw_lin(dev, lo.sb_x + 12, lo.dy_b + 5, lo.sb_x + 8, lo.dy_b + 12);
-
-    /* Scroll Thumb / Elevator */
-    int max_scroll = (st->device_count > DRIVESETUP_VISIBLE_DEVS) ?
-                     (st->device_count - DRIVESETUP_VISIBLE_DEVS) : 0;
-    int thumb_y = (max_scroll > 0) ?
-                  lo.track_top + (st->dev_scroll_offset * (lo.track_h - lo.thumb_h)) / max_scroll : lo.track_top;
-
-    RECT thumb_r = { lo.sb_x + 1, thumb_y, lo.sb_x + lo.sb_w - 1, thumb_y + lo.thumb_h };
-    fill_rec(dev, &thumb_r, COLOR_GRAY);
-    drw_rec(dev, &thumb_r);
-    drw_lin(dev, lo.sb_x + 2, thumb_y + 1, lo.sb_x + lo.sb_w - 3, thumb_y + 1);
-    drw_lin(dev, lo.sb_x + 2, thumb_y + 1, lo.sb_x + 2, thumb_y + lo.thumb_h - 2);
+    paint_scrollbar(dev, lo.sb_x, lo.sb_y, lo.sb_w, lo.sb_h,
+                    lo.dy_b, lo.track_top, lo.track_h, lo.thumb_h,
+                    st->dev_scroll_offset, st->device_count, DRIVESETUP_VISIBLE_DEVS);
 
     /* Render Exactly 4 Items in the list viewport */
     for (int r = 0; r < DRIVESETUP_VISIBLE_DEVS; r++) {
@@ -1738,8 +1708,7 @@ void drivesetup_paint(WND *wnd, GDEV *dev) {
         char map_title[64];
         snprintf(map_title, sizeof(map_title), "\xe5\x8c\xba\xe7\x94\xbb\xe3\x83\x9e\xe3\x83\x83\xe3\x83\x97 Visual Layout (%s):", cur_dev->raw_path);
         drw_tc_string(dev, 12, 136, map_title, DS_COL_TEXT_BLACK, DS_COL_BG);
-
-        fill_rec(dev, &lo.slice_bar, DS_COL_CARD_BG);
+        fill_rec(dev, &lo.slice_bar, DS_COL_INSET_BG);
         paint_beveled_box(dev, &lo.slice_bar, true);
 
         H bar_left = lo.slice_bar.left + 2;
@@ -1751,14 +1720,12 @@ void drivesetup_paint(WND *wnd, GDEV *dev) {
 
         for (int p = 0; p < cur_dev->partition_count; p++) {
             DriveSetupPartition *part = &cur_dev->partitions[p];
-            uint64_t part_bytes = (uint64_t)part->block_count * part->block_size;
-            uint64_t part_sec = part_bytes / sec_sz;
+            uint64_t part_sec = ((uint64_t)part->block_count * part->block_size) / sec_sz;
             alloc_sec += part_sec;
-
             H slice_w = (H)((part_sec * bar_w) / total_sec);
             if (slice_w < 55) slice_w = 55;
-            if (bar_left + slice_w > lo.slice_bar.right - 2) slice_w = (lo.slice_bar.right - 2) - bar_left;
-            if (slice_w <= 0) break;
+            if (bar_left + slice_w > lo.slice_bar.right - 2)
+                slice_w = lo.slice_bar.right - 2 - bar_left;
 
             RECT s = { bar_left, lo.slice_bar.top + 2, bar_left + slice_w, lo.slice_bar.bottom - 2 };
             COLOR scol = (p == 0) ? DS_COL_SLICE_SYS : DS_COL_SLICE_DATA;
@@ -1770,12 +1737,12 @@ void drivesetup_paint(WND *wnd, GDEV *dev) {
                 drw_rec(dev, &s);
             }
 
+            double sz_gib = (double)((uint64_t)part->block_count * part->block_size) / (1024.0 * 1024.0 * 1024.0);
             char s_hdr[48];
-            double sz_gib = (double)part_bytes / (1024.0 * 1024.0 * 1024.0);
+            char s_sub[48];
             if (slice_w >= 100) {
                 snprintf(s_hdr, sizeof(s_hdr), "[%d] %s (%.1fG)", p + 1, part->label, sz_gib);
                 drw_tc_string(dev, s.left + 6, s.top + 3, s_hdr, COLOR_WHITE, scol);
-                char s_sub[48];
                 if (part->fs_type == FS_BFS_V1) {
                     snprintf(s_sub, sizeof(s_sub), "B-FS V1 Standard");
                 } else if (part->fs_type == FS_RAW) {
@@ -1843,39 +1810,9 @@ void drivesetup_paint(WND *wnd, GDEV *dev) {
     drw_tc_string(dev, lo.col_stat + 6, lo.tbl_r.top + 4, "Active Features", COLOR_BLACK, DS_COL_PANEL_BG);
 
     /* Vertical Scrollbar for Partitions Table */
-    RECT psb_bg = { lo.part_sb_x, lo.part_sb_y, lo.part_sb_x + lo.part_sb_w, lo.part_sb_y + lo.part_sb_h };
-    fill_rec(dev, &psb_bg, COLOR_LTGRAY);
-    drw_lin(dev, lo.part_sb_x, lo.part_sb_y, lo.part_sb_x, lo.part_sb_y + lo.part_sb_h);
-
-    /* Up arrow button (16x16) */
-    RECT pup_btn = { lo.part_sb_x, lo.part_sb_y, lo.part_sb_x + lo.part_sb_w, lo.part_sb_y + 16 };
-    fill_rec(dev, &pup_btn, COLOR_LTGRAY);
-    drw_rec(dev, &pup_btn);
-    drw_lin(dev, lo.part_sb_x + 1, lo.part_sb_y + 1, lo.part_sb_x + lo.part_sb_w - 2, lo.part_sb_y + 1);
-    drw_lin(dev, lo.part_sb_x + 8, lo.part_sb_y + 4, lo.part_sb_x + 4, lo.part_sb_y + 11);
-    drw_lin(dev, lo.part_sb_x + 8, lo.part_sb_y + 4, lo.part_sb_x + 12, lo.part_sb_y + 11);
-    drw_lin(dev, lo.part_sb_x + 4, lo.part_sb_y + 11, lo.part_sb_x + 12, lo.part_sb_y + 11);
-
-    /* Down arrow button (16x16) */
-    RECT pdn_btn = { lo.part_sb_x, lo.part_dy_b, lo.part_sb_x + lo.part_sb_w, lo.part_sb_y + lo.part_sb_h };
-    fill_rec(dev, &pdn_btn, COLOR_LTGRAY);
-    drw_rec(dev, &pdn_btn);
-    drw_lin(dev, lo.part_sb_x + 1, lo.part_dy_b + 1, lo.part_sb_x + lo.part_sb_w - 2, lo.part_dy_b + 1);
-    drw_lin(dev, lo.part_sb_x + 4, lo.part_dy_b + 5, lo.part_sb_x + 12, lo.part_dy_b + 5);
-    drw_lin(dev, lo.part_sb_x + 4, lo.part_dy_b + 5, lo.part_sb_x + 8, lo.part_dy_b + 12);
-    drw_lin(dev, lo.part_sb_x + 12, lo.part_dy_b + 5, lo.part_sb_x + 8, lo.part_dy_b + 12);
-
-    /* Scroll Thumb / Elevator */
-    int max_p_scroll = (cur_pcount > DRIVESETUP_VISIBLE_PARTS) ?
-                       (cur_pcount - DRIVESETUP_VISIBLE_PARTS) : 0;
-    int p_thumb_y = (max_p_scroll > 0) ?
-                    lo.part_track_top + (st->part_scroll_offset * (lo.part_track_h - lo.part_thumb_h)) / max_p_scroll : lo.part_track_top;
-
-    RECT p_thumb_r = { lo.part_sb_x + 1, p_thumb_y, lo.part_sb_x + lo.part_sb_w - 1, p_thumb_y + lo.part_thumb_h };
-    fill_rec(dev, &p_thumb_r, COLOR_GRAY);
-    drw_rec(dev, &p_thumb_r);
-    drw_lin(dev, lo.part_sb_x + 2, p_thumb_y + 1, lo.part_sb_x + lo.part_sb_w - 3, p_thumb_y + 1);
-    drw_lin(dev, lo.part_sb_x + 2, p_thumb_y + 1, lo.part_sb_x + 2, p_thumb_y + lo.part_thumb_h - 2);
+    paint_scrollbar(dev, lo.part_sb_x, lo.part_sb_y, lo.part_sb_w, lo.part_sb_h,
+                    lo.part_dy_b, lo.part_track_top, lo.part_track_h, lo.part_thumb_h,
+                    st->part_scroll_offset, cur_pcount, DRIVESETUP_VISIBLE_PARTS);
 
     /* Partition Rows */
     if (st->selected_dev_idx >= 0 && st->selected_dev_idx < st->device_count) {
@@ -2046,15 +1983,7 @@ void drivesetup_paint(WND *wnd, GDEV *dev) {
     if (st->active_dialog == DIALOG_INIT_DISK) {
         RECT dlg_r;
         drivesetup_calc_dialog_rect(dev->width, dev->height, 500, 280, &dlg_r);
-        fill_rec(dev, &dlg_r, DS_COL_BG);
-        paint_beveled_box(dev, &dlg_r, false);
-
-        /* Dialog Title Bar */
-        RECT dlg_title = { dlg_r.left + 2, dlg_r.top + 2, dlg_r.right - 2, dlg_r.top + 24 };
-        fill_rec(dev, &dlg_title, COLOR_NAVY);
-        drw_tc_string(dev, dlg_title.left + 8, dlg_title.top + 4,
-                      "[#] \xe3\x83\x87\xe3\x82\xa3\xe3\x82\xb9\xe3\x82\xaf\xe5\x88\x9d\xe6\x9c\x9f\xe5\x8c\x96 Initialize Storage Disk",
-                      COLOR_WHITE, COLOR_NAVY);
+        paint_dialog_frame(dev, &dlg_r, "[#] \xe3\x83\x87\xe3\x82\xa3\xe3\x82\xb9\xe3\x82\xaf\xe5\x88\x9d\xe6\x9c\x9f\xe5\x8c\x96 Initialize Storage Disk");
 
         drw_tc_string(dev, dlg_r.left + 20, dlg_r.top + 38,
                       "\xe5\x8c\xba\xe7\x94\xbb\xe3\x83\x86\xe3\x83\xbc\xe3\x83\x96\xe3\x83\xab\xe5\xbd\xa2\xe5\xbc\x8f\xe3\x82\x92\xe9\x81\xb8\xe6\x8a\x9e Partition Scheme:",
@@ -2075,23 +2004,13 @@ void drivesetup_paint(WND *wnd, GDEV *dev) {
                           "1 MiB \xe5\xa2\x83\xe7\x95\x8c\xe3\x81\xab\xe5\x8c\xba\xe7\x94\xbb\xe9\x96\x8b\xe5\xa7\x8b\xe4\xbd\x8d\xe7\xbd\xae\xe3\x82\x92\xe6\x8f\x83\xe3\x81\x88\xe3\x82\x8b (2048 sectors)",
                           (st->dlg_check_flags & 2) != 0, st->dlg_focus_idx == 3);
 
-        int d_bw = (dlg_r.right - dlg_r.left - 100) / 2;
-        RECT d_btn_ok = { dlg_r.left + 30, dlg_r.bottom - 44, dlg_r.left + 30 + d_bw, dlg_r.bottom - 14 };
-        RECT d_btn_ca = { dlg_r.right - 30 - d_bw, dlg_r.bottom - 44, dlg_r.right - 30, dlg_r.bottom - 14 };
-        paint_ui_button(dev, &d_btn_ok, "\xe5\x88\x9d\xe6\x9c\x9f\xe5\x8c\x96 (Init)", false, st->dlg_focus_idx == 4);
-        paint_ui_button(dev, &d_btn_ca, "\xe5\x8f\x96\xe6\xb6\x88 (Cancel)", false, st->dlg_focus_idx == 5);
+        paint_dialog_buttons(dev, &dlg_r, 30,
+                             "\xe5\x88\x9d\xe6\x9c\x9f\xe5\x8c\x96 (Init)", st->dlg_focus_idx == 4,
+                             "\xe5\x8f\x96\xe6\xb6\x88 (Cancel)", st->dlg_focus_idx == 5);
     } else if (st->active_dialog == DIALOG_CREATE_SLICE) {
         RECT dlg_r;
         drivesetup_calc_dialog_rect(dev->width, dev->height, 500, 270, &dlg_r);
-        fill_rec(dev, &dlg_r, DS_COL_BG);
-        paint_beveled_box(dev, &dlg_r, false);
-
-        /* Dialog Title Bar */
-        RECT dlg_title = { dlg_r.left + 2, dlg_r.top + 2, dlg_r.right - 2, dlg_r.top + 24 };
-        fill_rec(dev, &dlg_title, COLOR_NAVY);
-        drw_tc_string(dev, dlg_title.left + 8, dlg_title.top + 4,
-                      "[#] \xe6\x96\xb0\xe8\xa6\x8f\xe5\x8c\xba\xe7\x94\xbb\xe4\xbd\x9c\xe6\x88\x90 Create Partition Slice",
-                      COLOR_WHITE, COLOR_NAVY);
+        paint_dialog_frame(dev, &dlg_r, "[#] \xe6\x96\xb0\xe8\xa6\x8f\xe5\x8c\xba\xe7\x94\xbb\xe4\xbd\x9c\xe6\x88\x90 Create Partition Slice");
 
         drw_tc_string(dev, dlg_r.left + 20, dlg_r.top + 40, "スライス名 (Label):", COLOR_BLACK, DS_COL_BG);
         RECT name_box = { dlg_r.left + 160, dlg_r.top + 38, dlg_r.right - 30, dlg_r.top + 58 };
@@ -2107,23 +2026,13 @@ void drivesetup_paint(WND *wnd, GDEV *dev) {
         paint_ui_radio(dev, dlg_r.left + 265, dlg_r.top + 104, "B-FS V2 (0xB2)", st->dlg_radio_sel2 == 1, st->dlg_focus_idx == 5);
         paint_ui_radio(dev, dlg_r.left + 380, dlg_r.top + 104, "RAW (0x83)", st->dlg_radio_sel2 == 2, st->dlg_focus_idx == 6);
 
-        int d_bw = (dlg_r.right - dlg_r.left - 100) / 2;
-        RECT d_btn_ok = { dlg_r.left + 30, dlg_r.bottom - 44, dlg_r.left + 30 + d_bw, dlg_r.bottom - 14 };
-        RECT d_btn_ca = { dlg_r.right - 30 - d_bw, dlg_r.bottom - 44, dlg_r.right - 30, dlg_r.bottom - 14 };
-        paint_ui_button(dev, &d_btn_ok, "\xe4\xbd\x9c\xe6\x88\x90 (Create)", false, st->dlg_focus_idx == 7);
-        paint_ui_button(dev, &d_btn_ca, "\xe5\x8f\x96\xe6\xb6\x88 (Cancel)", false, st->dlg_focus_idx == 8);
+        paint_dialog_buttons(dev, &dlg_r, 30,
+                             "\xe4\xbd\x9c\xe6\x88\x90 (Create)", st->dlg_focus_idx == 7,
+                             "\xe5\x8f\x96\xe6\xb6\x88 (Cancel)", st->dlg_focus_idx == 8);
     } else if (st->active_dialog == DIALOG_CREATE_IMAGE) {
         RECT dlg_r;
         drivesetup_calc_dialog_rect(dev->width, dev->height, 500, 270, &dlg_r);
-        fill_rec(dev, &dlg_r, DS_COL_BG);
-        paint_beveled_box(dev, &dlg_r, false);
-
-        /* Dialog Title Bar */
-        RECT dlg_title = { dlg_r.left + 2, dlg_r.top + 2, dlg_r.right - 2, dlg_r.top + 24 };
-        fill_rec(dev, &dlg_title, COLOR_NAVY);
-        drw_tc_string(dev, dlg_title.left + 8, dlg_title.top + 4,
-                      "[#] \xe6\x96\xb0\xe8\xa6\x8f\xe3\x82\xa4\xe3\x83\xa1\xe3\x83\xbc\xe3\x82\xb8\xe4\xbd\x9c\xe6\x88\x90 New Disk Image",
-                      COLOR_WHITE, COLOR_NAVY);
+        paint_dialog_frame(dev, &dlg_r, "[#] \xe6\x96\xb0\xe8\xa6\x8f\xe3\x82\xa4\xe3\x83\xa1\xe3\x83\xbc\xe3\x82\xb8\xe4\xbd\x9c\xe6\x88\x90 New Disk Image");
 
         drw_tc_string(dev, dlg_r.left + 20, dlg_r.top + 40, "ファイル名 (Path):", COLOR_BLACK, DS_COL_BG);
         RECT path_box = { dlg_r.left + 160, dlg_r.top + 38, dlg_r.right - 30, dlg_r.top + 58 };
@@ -2138,23 +2047,13 @@ void drivesetup_paint(WND *wnd, GDEV *dev) {
         paint_ui_radio(dev, dlg_r.left + 160, dlg_r.top + 104, "B-FS V1 Volume (.vol)", st->dlg_radio_sel2 == 0, st->dlg_focus_idx == 4);
         paint_ui_radio(dev, dlg_r.left + 320, dlg_r.top + 104, "B-FS V2 Volume (.vol)", st->dlg_radio_sel2 == 1, st->dlg_focus_idx == 5);
 
-        int d_bw = (dlg_r.right - dlg_r.left - 100) / 2;
-        RECT d_btn_ok = { dlg_r.left + 30, dlg_r.bottom - 44, dlg_r.left + 30 + d_bw, dlg_r.bottom - 14 };
-        RECT d_btn_ca = { dlg_r.right - 30 - d_bw, dlg_r.bottom - 44, dlg_r.right - 30, dlg_r.bottom - 14 };
-        paint_ui_button(dev, &d_btn_ok, "\xe4\xbd\x9c\xe6\x88\x90 (Create)", false, st->dlg_focus_idx == 6);
-        paint_ui_button(dev, &d_btn_ca, "\xe5\x8f\x96\xe6\xb6\x88 (Cancel)", false, st->dlg_focus_idx == 7);
+        paint_dialog_buttons(dev, &dlg_r, 30,
+                             "\xe4\xbd\x9c\xe6\x88\x90 (Create)", st->dlg_focus_idx == 6,
+                             "\xe5\x8f\x96\xe6\xb6\x88 (Cancel)", st->dlg_focus_idx == 7);
     } else if (st->active_dialog == DIALOG_FORMAT_BFS) {
         RECT dlg_r;
         drivesetup_calc_dialog_rect(dev->width, dev->height, 560, 410, &dlg_r);
-        fill_rec(dev, &dlg_r, DS_COL_BG);
-        paint_beveled_box(dev, &dlg_r, false);
-
-        /* Dialog Title Bar */
-        RECT dlg_title = { dlg_r.left + 2, dlg_r.top + 2, dlg_r.right - 2, dlg_r.top + 24 };
-        fill_rec(dev, &dlg_title, COLOR_NAVY);
-        drw_tc_string(dev, dlg_title.left + 8, dlg_title.top + 4,
-                      "[#] B-FS \xe3\x83\x9c\xe3\x83\xaa\xe3\x83\xa5\xe3\x83\xbc\xe3\x83\xa0\xe3\x83\x95\xe3\x82\xa9\xe3\x83\xbc\xe3\x83\x9e\xe3\x83\x83\xe3\x83\x88 Format B-FS",
-                      COLOR_WHITE, COLOR_NAVY);
+        paint_dialog_frame(dev, &dlg_r, "[#] B-FS \xe3\x83\x9c\xe3\x83\xaa\xe3\x83\xa5\xe3\x83\xbc\xe3\x83\xa0\xe3\x83\x95\xe3\x82\xa9\xe3\x83\xbc\xe3\x83\x9e\xe3\x83\x83\xe3\x83\x88 Format B-FS");
 
         /* Volume Name Input Field */
         drw_tc_string(dev, dlg_r.left + 20, dlg_r.top + 36, "\xe3\x83\x9c\xe3\x83\xaa\xe3\x83\xa5\xe3\x83\xbc\xe3\x83\xa0\xe5\x90\x8d Volume Name:", COLOR_BLACK, DS_COL_BG);
@@ -2202,23 +2101,13 @@ void drivesetup_paint(WND *wnd, GDEV *dev) {
         drw_tc_string(dev, sum_box.left + 10, sum_box.top + 26,
                       "\xe5\x89\xb2\xe5\xbd\x93\xe3\x82\xb0\xe3\x83\xab\xe3\x83\xbc\xe3\x83\x97: 24 AGs (65,536 blocks/AG)", COLOR_BLACK, DS_COL_CARD_BG);
 
-        int d_bw = (dlg_r.right - dlg_r.left - 120) / 2;
-        RECT d_btn_ok = { dlg_r.left + 40, dlg_r.bottom - 44, dlg_r.left + 40 + d_bw, dlg_r.bottom - 14 };
-        RECT d_btn_ca = { dlg_r.right - 40 - d_bw, dlg_r.bottom - 44, dlg_r.right - 40, dlg_r.bottom - 14 };
-        paint_ui_button(dev, &d_btn_ok, "\xe3\x83\x95\xe3\x82\xa9\xe3\x83\xbc\xe3\x83\x9e\xe3\x83\x83\xe3\x83\x88 (Format)", false, st->dlg_focus_idx == 11);
-        paint_ui_button(dev, &d_btn_ca, "\xe5\x8f\x96\xe6\xb6\x88 (Cancel)", false, st->dlg_focus_idx == 12);
+        paint_dialog_buttons(dev, &dlg_r, 40,
+                             "\xe3\x83\x95\xe3\x82\xa9\xe3\x83\xbc\xe3\x83\x9e\xe3\x83\x83\xe3\x83\x88 (Format)", st->dlg_focus_idx == 11,
+                             "\xe5\x8f\x96\xe6\xb6\x88 (Cancel)", st->dlg_focus_idx == 12);
     } else if (st->active_dialog == DIALOG_WARN_WRITE) {
         RECT dlg_r;
         drivesetup_calc_dialog_rect(dev->width, dev->height, 520, 260, &dlg_r);
-        fill_rec(dev, &dlg_r, DS_COL_BG);
-        paint_beveled_box(dev, &dlg_r, false);
-
-        /* Dialog Title Bar with Alert styling */
-        RECT dlg_title = { dlg_r.left + 2, dlg_r.top + 2, dlg_r.right - 2, dlg_r.top + 24 };
-        fill_rec(dev, &dlg_title, COLOR_NAVY);
-        drw_tc_string(dev, dlg_title.left + 8, dlg_title.top + 4,
-                      "[!] \xe8\xad\xa6\xe5\x91\x8a: \xe7\xa0\xb4\xe5\xa3\x8a\xe7\x9a\x84\xe6\x9b\xb8\xe3\x81\x8d\xe8\xbe\xbc\xe3\x81\xbf\xe3\x81\xae\xe7\xa2\xba\xe8\xaa\x8d (Confirm Write)",
-                      COLOR_WHITE, COLOR_NAVY);
+        paint_dialog_frame(dev, &dlg_r, "[!] \xe8\xad\xa6\xe5\x91\x8a: \xe7\xa0\xb4\xe5\xa3\x8a\xe7\x9a\x84\xe6\x9b\xb8\xe3\x81\x8d\xe8\xbe\xbc\xe3\x81\xbf\xe3\x81\xae\xe7\xa2\xba\xe8\xaa\x8d (Confirm Write)");
 
         /* Amber Warning Box */
         RECT warn_box = { dlg_r.left + 20, dlg_r.top + 34, dlg_r.right - 20, dlg_r.top + 72 };
@@ -2252,11 +2141,9 @@ void drivesetup_paint(WND *wnd, GDEV *dev) {
                       "\xe7\xb6\x9a\xe8\xa1\x8c\xe3\x81\x97\xe3\x81\xbe\xe3\x81\x99\xe3\x81\x8b\xef\xbc\x9f (Proceed with this write operation?)",
                       COLOR_BLACK, DS_COL_BG);
 
-        int d_bw = (dlg_r.right - dlg_r.left - 100) / 2;
-        RECT d_btn_ok = { dlg_r.left + 30, dlg_r.bottom - 44, dlg_r.left + 30 + d_bw, dlg_r.bottom - 14 };
-        RECT d_btn_ca = { dlg_r.right - 30 - d_bw, dlg_r.bottom - 44, dlg_r.right - 30, dlg_r.bottom - 14 };
-        paint_ui_button(dev, &d_btn_ok, "\xe6\x9b\xb8\xe3\x81\x8d\xe8\xbe\xbc\xe3\x81\xbf\xe5\xae\x9f\xe8\xa1\x8c (Write)", false, st->dlg_focus_idx == 0);
-        paint_ui_button(dev, &d_btn_ca, "\xe5\x8f\x96\xe6\xb6\x88 (Cancel)", false, st->dlg_focus_idx == 1);
+        paint_dialog_buttons(dev, &dlg_r, 30,
+                             "\xe6\x9b\xb8\xe3\x81\x8d\xe8\xbe\xbc\xe3\x81\xbf\xe5\xae\x9f\xe8\xa1\x8c (Write)", st->dlg_focus_idx == 0,
+                             "\xe5\x8f\x96\xe6\xb6\x88 (Cancel)", st->dlg_focus_idx == 1);
     }
 
     /* 9. Active Menu Dropdown (floats on top of all window contents) */
@@ -2421,8 +2308,8 @@ void drivesetup_event_handler(WND *wnd, const EVT *evt) {
         /* Modal Dialog handling */
         if (st->active_dialog != DIALOG_NONE) {
             RECT dlg_r;
+            if (!drivesetup_get_dialog_rect(cli_w, cli_h, st->active_dialog, &dlg_r)) return;
             if (st->active_dialog == DIALOG_INIT_DISK) {
-                drivesetup_calc_dialog_rect(cli_w, cli_h, 500, 280, &dlg_r);
                 int d_bw = (dlg_r.right - dlg_r.left - 100) / 2;
                 RECT d_btn_ok = { dlg_r.left + 30, dlg_r.bottom - 44, dlg_r.left + 30 + d_bw, dlg_r.bottom - 14 };
                 RECT d_btn_ca = { dlg_r.right - 30 - d_bw, dlg_r.bottom - 44, dlg_r.right - 30, dlg_r.bottom - 14 };
@@ -2449,7 +2336,6 @@ void drivesetup_event_handler(WND *wnd, const EVT *evt) {
                     inval_wnd(wnd); return;
                 }
             } else if (st->active_dialog == DIALOG_CREATE_SLICE) {
-                drivesetup_calc_dialog_rect(cli_w, cli_h, 500, 270, &dlg_r);
                 int d_bw = (dlg_r.right - dlg_r.left - 100) / 2;
                 RECT d_btn_ok = { dlg_r.left + 30, dlg_r.bottom - 44, dlg_r.left + 30 + d_bw, dlg_r.bottom - 14 };
                 RECT d_btn_ca = { dlg_r.right - 30 - d_bw, dlg_r.bottom - 44, dlg_r.right - 30, dlg_r.bottom - 14 };
@@ -2477,7 +2363,6 @@ void drivesetup_event_handler(WND *wnd, const EVT *evt) {
                     inval_wnd(wnd); return;
                 }
             } else if (st->active_dialog == DIALOG_CREATE_IMAGE) {
-                drivesetup_calc_dialog_rect(cli_w, cli_h, 500, 270, &dlg_r);
                 int d_bw = (dlg_r.right - dlg_r.left - 100) / 2;
                 RECT d_btn_ok = { dlg_r.left + 30, dlg_r.bottom - 44, dlg_r.left + 30 + d_bw, dlg_r.bottom - 14 };
                 RECT d_btn_ca = { dlg_r.right - 30 - d_bw, dlg_r.bottom - 44, dlg_r.right - 30, dlg_r.bottom - 14 };
@@ -2504,7 +2389,6 @@ void drivesetup_event_handler(WND *wnd, const EVT *evt) {
                     inval_wnd(wnd); return;
                 }
             } else if (st->active_dialog == DIALOG_FORMAT_BFS) {
-                drivesetup_calc_dialog_rect(cli_w, cli_h, 560, 410, &dlg_r);
                 int d_bw = (dlg_r.right - dlg_r.left - 120) / 2;
                 RECT d_btn_ok = { dlg_r.left + 40, dlg_r.bottom - 44, dlg_r.left + 40 + d_bw, dlg_r.bottom - 14 };
                 RECT d_btn_ca = { dlg_r.right - 40 - d_bw, dlg_r.bottom - 44, dlg_r.right - 30, dlg_r.bottom - 14 };
@@ -2548,7 +2432,6 @@ void drivesetup_event_handler(WND *wnd, const EVT *evt) {
                     inval_wnd(wnd); return;
                 }
             } else if (st->active_dialog == DIALOG_WARN_WRITE) {
-                drivesetup_calc_dialog_rect(cli_w, cli_h, 520, 260, &dlg_r);
                 int d_bw = (dlg_r.right - dlg_r.left - 100) / 2;
                 RECT d_btn_ok = { dlg_r.left + 30, dlg_r.bottom - 44, dlg_r.left + 30 + d_bw, dlg_r.bottom - 14 };
                 RECT d_btn_ca = { dlg_r.right - 30 - d_bw, dlg_r.bottom - 44, dlg_r.right - 30, dlg_r.bottom - 14 };
@@ -2705,15 +2588,15 @@ void drivesetup_event_handler(WND *wnd, const EVT *evt) {
         /* 4. Action Buttons Click */
         if (rel_y >= lo.btn1.top && rel_y <= lo.btn1.bottom) {
             if (rel_x >= lo.btn1.left && rel_x <= lo.btn1.right) {
-                st->active_dialog = DIALOG_INIT_DISK;
+                b_drivesetup_open_dialog(st, DIALOG_INIT_DISK);
                 inval_wnd(wnd);
                 return;
             } else if (rel_x >= lo.btn2.left && rel_x <= lo.btn2.right) {
-                st->active_dialog = DIALOG_CREATE_SLICE;
+                b_drivesetup_open_dialog(st, DIALOG_CREATE_SLICE);
                 inval_wnd(wnd);
                 return;
             } else if (rel_x >= lo.btn3.left && rel_x <= lo.btn3.right) {
-                st->active_dialog = DIALOG_FORMAT_BFS;
+                b_drivesetup_open_dialog(st, DIALOG_FORMAT_BFS);
                 inval_wnd(wnd);
                 return;
             } else if (rel_x >= lo.btn4.left && rel_x <= lo.btn4.right) {

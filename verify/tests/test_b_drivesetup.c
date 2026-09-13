@@ -856,6 +856,94 @@ static void test_e2e_full_lifecycle_and_clu_browsing(void) {
     assert(strstr(out_buf, custom_mount) != NULL);
     assert(strstr(out_buf, custom_vol) != NULL);
 
+    /* 6a. Verify saving data records directly to file on newly created volume */
+    char data_file_name[64];
+    char data_file_path[128];
+    snprintf(data_file_name, sizeof(data_file_name), "notes_%d.txt", r_id);
+    snprintf(data_file_path, sizeof(data_file_path), "/%s/%s", custom_vol, data_file_name);
+
+    ID data_fd = cre_fil(data_file_path, 0x0002);
+    assert(data_fd >= 0);
+    const char *payload_text = "BTRON3 Native Filesystem Record Payload Data - Verification OK";
+    W payload_len = (W)strlen(payload_text);
+    assert(ins_rec(data_fd, 0, payload_text, payload_len) == 0);
+    assert(cls_fil(data_fd) == 0);
+
+    /* Verify data file content can be read back accurately from the new volume */
+    ID verify_fd = opn_fil(data_file_path, 0x0001);
+    assert(verify_fd >= 0);
+    ID rec_h = opn_rec(verify_fd, 0, 0x0001);
+    assert(rec_h >= 0);
+    char readback_buf[128];
+    memset(readback_buf, 0, sizeof(readback_buf));
+    W bytes_read = 0;
+    assert(rd_rec(rec_h, readback_buf, sizeof(readback_buf) - 1, &bytes_read) == 0);
+    assert(bytes_read == payload_len);
+    assert(strcmp(readback_buf, payload_text) == 0);
+    assert(cls_rec(rec_h) == 0);
+    assert(cls_fil(verify_fd) == 0);
+
+    /* 6b. Verify copying files from /SYS to newly created volume */
+    void *sys_ram = calloc(1, 2048 * 4096);
+    BlkDev *sys_dev = blk_mem_create(sys_ram, 2048 * 4096, 0);
+    sys_dev->block_size = 4096;
+    sys_dev->nblocks = 2048;
+    vol_format(sys_dev, 256, 2048, "SYS");
+    Volume *sys_vol = vol_mount(sys_dev);
+    assert(sys_vol != NULL);
+    g_sys_vol = sys_vol;
+
+    /* Create source file on /SYS with content */
+    char sys_src_name[64];
+    char sys_src_path[128];
+    snprintf(sys_src_name, sizeof(sys_src_name), "sys_boot_%d.cfg", r_id);
+    snprintf(sys_src_path, sizeof(sys_src_path), "/SYS/%s", sys_src_name);
+
+    ID sys_src_fd = cre_fil(sys_src_path, 0x0002);
+    assert(sys_src_fd >= 0);
+    const char *sys_config_data = "KERNEL_BOOT=BTRON3\nVFS_STACK=V2_BFS\nDEBUG=ENABLED";
+    W sys_config_len = (W)strlen(sys_config_data);
+    assert(ins_rec(sys_src_fd, 0, sys_config_data, sys_config_len) == 0);
+    assert(cls_fil(sys_src_fd) == 0);
+
+    /* Destination file on newly created custom volume */
+    char copied_dst_name[64];
+    char copied_dst_path[128];
+    snprintf(copied_dst_name, sizeof(copied_dst_name), "copied_sys_%d.cfg", r_id);
+    snprintf(copied_dst_path, sizeof(copied_dst_path), "/%s/%s", custom_vol, copied_dst_name);
+
+    /* Perform copy from /SYS to new volume via CLU cp command */
+    char cp_args[256];
+    snprintf(cp_args, sizeof(cp_args), "%s %s", sys_src_path, copied_dst_path);
+    memset(out_buf, 0, sizeof(out_buf));
+    clu_cp(cp_args, clu_buf_out, out_buf);
+    assert(strstr(out_buf, "Copied") != NULL);
+
+    /* Verify the copied file exists on the new volume and has identical contents */
+    ID copied_fd = opn_fil(copied_dst_path, 0x0001);
+    assert(copied_fd >= 0);
+    ID copied_rec = opn_rec(copied_fd, 0, 0x0001);
+    assert(copied_rec >= 0);
+    char copied_read_buf[128];
+    memset(copied_read_buf, 0, sizeof(copied_read_buf));
+    W copied_bytes = 0;
+    assert(rd_rec(copied_rec, copied_read_buf, sizeof(copied_read_buf) - 1, &copied_bytes) == 0);
+    assert(copied_bytes == sys_config_len);
+    assert(strcmp(copied_read_buf, sys_config_data) == 0);
+    assert(cls_rec(copied_rec) == 0);
+    assert(cls_fil(copied_fd) == 0);
+
+    /* Verify CLU ls on new volume lists both the saved file and copied file */
+    memset(out_buf, 0, sizeof(out_buf));
+    clu_ls(custom_mount, clu_buf_out, out_buf);
+    assert(strstr(out_buf, data_file_name) != NULL);
+    assert(strstr(out_buf, copied_dst_name) != NULL);
+
+    /* Unmount and free temporary /SYS */
+    vol_umount(sys_vol);
+    g_sys_vol = NULL;
+    free(sys_ram);
+
     /* 7. Unmount & Remount verification */
     assert(b_drivesetup_unmount(&st, 0, 0));
     assert(!st.devices[0].partitions[0].mounted);

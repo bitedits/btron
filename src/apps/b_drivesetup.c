@@ -2034,8 +2034,8 @@ void drivesetup_paint(WND *wnd, GDEV *dev) {
         drivesetup_calc_dialog_rect(dev->width, dev->height, 500, 270, &dlg_r);
         paint_dialog_frame(dev, &dlg_r, "[#] \xe6\x96\xb0\xe8\xa6\x8f\xe3\x82\xa4\xe3\x83\xa1\xe3\x83\xbc\xe3\x82\xb8\xe4\xbd\x9c\xe6\x88\x90 New Disk Image");
 
-        drw_tc_string(dev, dlg_r.left + 20, dlg_r.top + 40, "ファイル名 (Path):", COLOR_BLACK, DS_COL_BG);
-        RECT path_box = { dlg_r.left + 160, dlg_r.top + 38, dlg_r.right - 30, dlg_r.top + 58 };
+        drw_tc_string(dev, dlg_r.left + 20, dlg_r.top + 40, "デバイス名 (Device Name):", COLOR_BLACK, DS_COL_BG);
+        RECT path_box = { dlg_r.left + 180, dlg_r.top + 38, dlg_r.right - 30, dlg_r.top + 58 };
         paint_ui_textbox(dev, &path_box, st->dlg_text_buf, st->dlg_focus_idx == 0);
 
         drw_tc_string(dev, dlg_r.left + 20, dlg_r.top + 70, "サイズ (Size):", COLOR_BLACK, DS_COL_BG);
@@ -2055,9 +2055,9 @@ void drivesetup_paint(WND *wnd, GDEV *dev) {
         drivesetup_calc_dialog_rect(dev->width, dev->height, 560, 410, &dlg_r);
         paint_dialog_frame(dev, &dlg_r, "[#] B-FS \xe3\x83\x9c\xe3\x83\xaa\xe3\x83\xa5\xe3\x83\xbc\xe3\x83\xa0\xe3\x83\x95\xe3\x82\xa9\xe3\x83\xbc\xe3\x83\x9e\xe3\x83\x83\xe3\x83\x88 Format B-FS");
 
-        /* Volume Name Input Field */
-        drw_tc_string(dev, dlg_r.left + 20, dlg_r.top + 36, "\xe3\x83\x9c\xe3\x83\xaa\xe3\x83\xa5\xe3\x83\xbc\xe3\x83\xa0\xe5\x90\x8d Volume Name:", COLOR_BLACK, DS_COL_BG);
-        RECT name_in = { dlg_r.left + 160, dlg_r.top + 34, dlg_r.right - 30, dlg_r.top + 54 };
+        /* Partition / Volume Name Input Field */
+        drw_tc_string(dev, dlg_r.left + 20, dlg_r.top + 36, "区画名 (Partition Name):", COLOR_BLACK, DS_COL_BG);
+        RECT name_in = { dlg_r.left + 190, dlg_r.top + 34, dlg_r.right - 30, dlg_r.top + 54 };
         paint_ui_textbox(dev, &name_in, st->dlg_text_buf, st->dlg_focus_idx == 0);
 
         /* Format Version Radios */

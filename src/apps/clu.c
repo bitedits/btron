@@ -1580,10 +1580,28 @@ void clu_cp(const char *args, ShellOutputFn out, void *ud)
     OpenFile *src_of = &g_open_files[(int)src_fd];
     unsigned int nrec = src_of->nrec;
 
-    ID dst_fd = cre_fil(targets[1], 0x0002);
+    /* If destination is a directory or volume root, append source filename */
+    char dst_path[128];
+    Volume *dst_vol = clu_resolve_target_vol(targets[1], NULL);
+    size_t dlen = strlen(targets[1]);
+    int is_dir = (dlen > 0 && targets[1][dlen - 1] == '/') || clu_is_root_path(dst_vol, targets[1]);
+
+    if (is_dir) {
+        const char *src_base = fs_strrchr(targets[0], '/');
+        src_base = (src_base && *(src_base + 1)) ? src_base + 1 : targets[0];
+        if (dlen > 0 && targets[1][dlen - 1] == '/') {
+            snprintf(dst_path, sizeof(dst_path), "%s%s", targets[1], src_base);
+        } else {
+            snprintf(dst_path, sizeof(dst_path), "%s/%s", targets[1], src_base);
+        }
+    } else {
+        snprintf(dst_path, sizeof(dst_path), "%s", targets[1]);
+    }
+
+    ID dst_fd = cre_fil(dst_path, 0x0002);
     if (dst_fd < 0) {
         cls_fil(src_fd);
-        char err[128]; snprintf(err, sizeof(err), "cp: cannot create '%s'", targets[1]);
+        char err[128]; snprintf(err, sizeof(err), "cp: cannot create '%s'", dst_path);
         out(err, COLOR_RED, ud); return;
     }
 
@@ -1604,7 +1622,8 @@ void clu_cp(const char *args, ShellOutputFn out, void *ud)
     }
     cls_fil(dst_fd);
     cls_fil(src_fd);
-    char msg[128]; snprintf(msg, sizeof(msg), "Copied '%s' -> '%s'", targets[0], targets[1]);
+    if (dst_vol) vol_sync(dst_vol);
+    char msg[128]; snprintf(msg, sizeof(msg), "Copied '%s' -> '%s'", targets[0], dst_path);
     out(msg, COLOR_GREEN, ud);
 }
 

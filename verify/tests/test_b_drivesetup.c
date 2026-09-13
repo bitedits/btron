@@ -84,6 +84,27 @@ static void clu_buf_out(const char *str, UW color, void *ud) {
     strncat(buf, "\n", 4095 - strlen(buf));
 }
 
+/* Deterministic hash calculation of a file across all its records */
+static uint32_t calc_file_hash(const char *path) {
+    ID fd = opn_fil(path, 0x0001);
+    if (fd < 0) return 0;
+    uint32_t hash = 5381;
+    for (W i = 0; i < 40; i++) {
+        ID rec = opn_rec(fd, i, 0x0001);
+        if (rec < 0) break;
+        char buf[256];
+        W got = 0;
+        while (rd_rec(rec, buf, (W)sizeof(buf), &got) == 0 && got > 0) {
+            for (W b = 0; b < got; b++) {
+                hash = ((hash << 5) + hash) + (uint8_t)buf[b];
+            }
+        }
+        cls_rec(rec);
+    }
+    cls_fil(fd);
+    return hash;
+}
+
 /* ── Test Cases ─────────────────────────────────────────────────── */
 
 static void test_init_and_invariants(void) {
@@ -582,6 +603,34 @@ static void test_dialog_keyboard_navigation(void) {
     assert(st.device_count == 2);
     assert(strcmp(st.devices[1].raw_path, "new_img.vol") == 0);
 
+    /* 3. DIALOG_FORMAT_BFS Typing & Commit (Editable Partition / Volume Name) */
+    st.selected_dev_idx = 0;
+    st.selected_part_idx = 0;
+    b_drivesetup_open_dialog(&st, DIALOG_FORMAT_BFS);
+    assert(st.active_dialog == DIALOG_FORMAT_BFS);
+    assert(st.dlg_focus_idx == 0);
+
+    /* Clear default partition name via Backspace */
+    for (int i = 0; i < 20; i++) {
+        b_drivesetup_handle_dialog_key(&st, 0x08);
+    }
+    assert(st.dlg_text_buf[0] == '\0');
+
+    /* Type custom partition name "WORK_VOL" */
+    const char *custom_part = "WORK_VOL";
+    for (int i = 0; custom_part[i]; i++) {
+        assert(b_drivesetup_handle_dialog_key(&st, (uint32_t)custom_part[i]));
+    }
+    assert(strcmp(st.dlg_text_buf, "WORK_VOL") == 0);
+
+    /* Enter commits the dialog (transitions to DIALOG_WARN_WRITE with label set) */
+    assert(b_drivesetup_handle_dialog_key(&st, 0x0D));
+    assert(strcmp(st.pending_fmt_label, "WORK_VOL") == 0);
+    assert(st.active_dialog == DIALOG_WARN_WRITE);
+    /* Close warning dialog */
+    b_drivesetup_close_dialog(&st);
+    assert(st.active_dialog == DIALOG_NONE);
+
     printf("  PASS: Tab, arrows, space, typing, backspace, Enter and Escape verified.\n");
 }
 
@@ -906,20 +955,24 @@ static void test_e2e_full_lifecycle_and_clu_browsing(void) {
     assert(ins_rec(sys_src_fd, 0, sys_config_data, sys_config_len) == 0);
     assert(cls_fil(sys_src_fd) == 0);
 
+    /* Compute hash of source file on /SYS */
+    uint32_t src_hash = calc_file_hash(sys_src_path);
+    assert(src_hash != 0);
+
     /* Destination file on newly created custom volume */
     char copied_dst_name[64];
     char copied_dst_path[128];
     snprintf(copied_dst_name, sizeof(copied_dst_name), "copied_sys_%d.cfg", r_id);
     snprintf(copied_dst_path, sizeof(copied_dst_path), "/%s/%s", custom_vol, copied_dst_name);
 
-    /* Perform copy from /SYS to new volume via CLU cp command */
+    /* Perform copy from /SYS to new volume via CLU cp command (direct dst path) */
     char cp_args[256];
     snprintf(cp_args, sizeof(cp_args), "%s %s", sys_src_path, copied_dst_path);
     memset(out_buf, 0, sizeof(out_buf));
     clu_cp(cp_args, clu_buf_out, out_buf);
     assert(strstr(out_buf, "Copied") != NULL);
 
-    /* Verify the copied file exists on the new volume and has identical contents */
+    /* Verify the copied file exists on the new volume and has identical contents & hash */
     ID copied_fd = opn_fil(copied_dst_path, 0x0001);
     assert(copied_fd >= 0);
     ID copied_rec = opn_rec(copied_fd, 0, 0x0001);
@@ -933,11 +986,37 @@ static void test_e2e_full_lifecycle_and_clu_browsing(void) {
     assert(cls_rec(copied_rec) == 0);
     assert(cls_fil(copied_fd) == 0);
 
-    /* Verify CLU ls on new volume lists both the saved file and copied file */
+    uint32_t dst_hash = calc_file_hash(copied_dst_path);
+    assert(dst_hash != 0);
+    assert(src_hash == dst_hash);
+
+    /* Also verify copying with directory destination path (e.g. 'cp /SYS/file /CUSTOM_VOL/') */
+    char dir_dst_path[128];
+    snprintf(dir_dst_path, sizeof(dir_dst_path), "/%s/", custom_vol);
+    char cp_dir_args[256];
+    snprintf(cp_dir_args, sizeof(cp_dir_args), "%s %s", sys_src_path, dir_dst_path);
+    memset(out_buf, 0, sizeof(out_buf));
+    clu_cp(cp_dir_args, clu_buf_out, out_buf);
+    assert(strstr(out_buf, "Copied") != NULL);
+
+    /* File /<custom_vol>/<sys_src_name> must now exist and have matching hash */
+    char copied_in_dir[128];
+    snprintf(copied_in_dir, sizeof(copied_in_dir), "/%s/%s", custom_vol, sys_src_name);
+    uint32_t dir_copy_hash = calc_file_hash(copied_in_dir);
+    assert(dir_copy_hash == src_hash);
+
+    /* Verify CLU fs on new volume lists non-zero records (never '(0 records)') */
+    memset(out_buf, 0, sizeof(out_buf));
+    clu_fs_cmd(custom_mount, clu_buf_out, out_buf);
+    assert(strstr(out_buf, "(0 records)") == NULL);
+    assert(strstr(out_buf, sys_src_name) != NULL);
+
+    /* Verify CLU ls on new volume lists the saved file and both copied files */
     memset(out_buf, 0, sizeof(out_buf));
     clu_ls(custom_mount, clu_buf_out, out_buf);
     assert(strstr(out_buf, data_file_name) != NULL);
     assert(strstr(out_buf, copied_dst_name) != NULL);
+    assert(strstr(out_buf, sys_src_name) != NULL);
 
     /* Unmount and free temporary /SYS */
     vol_umount(sys_vol);

@@ -40,6 +40,7 @@ B-FS is the next-generation, high-assurance file system for B-System (BTRON 3.20
 Haiku's `disk_device_manager` (`KDiskDeviceManager`, `KDiskDevice`, `KPartition`, `KFileSystem`, `KPartitioningSystem`) maps directly to the BTRON clean-room architecture:
 
 ### 2.1 Component Mapping
+
 1. **Raw Storage Devices (`KDiskDevice`)**:
    - Represented by base `BlkDev` instances (`blk_file`, `blk_qcow2`, `blk_mem`, AHCI / NVMe drivers).
    - Paths: `/dev/disk/raw/<index>` (e.g. `/dev/disk/raw/0`).
@@ -94,6 +95,7 @@ Each inode is 512 bytes:
   - Large data automatically spills over into the `data_stream` block runs.
 
 ### 4.2 Parameterized B+Tree Engine
+
 Directories, attribute indices, and vector search indices are backed by a scalable B+Tree:
 - **Node Size**: Parameterized (1024 B, 2048 B, or 4096 B).
 - **Node Structure**:

@@ -53,7 +53,7 @@ typedef struct __attribute__((packed)) {
  */
 typedef struct __attribute__((packed)) {
     UH   magic;                  /* +0x00  2 B  0x52FE (VOL_MAGIC_LE)           */
-    UH   fs_type;                /* +0x02  2 B  0x6402 (FS_TYPE_BRIGHTV)        */
+    UH   fs_type;                /* +0x02  2 B  0x6400 (FS_TYPE_BRIGHTV)        */
     UH   nbmp;                   /* +0x04  2 B  usage bitmap block count (41)   */
     UH   sfidt;                  /* +0x06  2 B  FID table block count (32)      */
     UH   sfnmt;                  /* +0x08  2 B  short-name table blocks (32)    */

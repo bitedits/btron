@@ -66,17 +66,20 @@ typedef enum {
 
 /* Planet-Scale Partition & Filesystem Unique Identification Codes */
 #define BTRON_PART_TYPE_CHOKANJI    0x13  /* Historical Personal Media BTRON / Chokanji MBR code */
-#define BTRON_PART_TYPE_BFS_V1      0xB1  /* Unique Planet-Scale B-FS V1 MBR Partition Code */
-#define BTRON_PART_TYPE_BFS_V2      0xB2  /* Unique Planet-Scale B-FS V2 MBR Partition Code */
-#define BTRON_PART_TYPE_RAW         0x83  /* Standard RAW data slice */
+#define BTRON_PART_TYPE_BFS_V1      0x61  /* Unique Planet-Scale B-FS V1 MBR Partition Code */
+#define BTRON_PART_TYPE_BFS_V2      0x62  /* Unique Planet-Scale B-FS V2 MBR Partition Code */
+#define BTRON_PART_TYPE_BFS_V1_B3   0xB3  /* Unique Planet-Scale B-FS Signed V1 MBR Partition Code */
+#define BTRON_PART_TYPE_BFS_V1_B4   0xB4  /* Unique Planet-Scale B-FS Signed V1 MBR Partition Code */
+#define BTRON_PART_TYPE_BFS_V2_B5   0xB5  /* Unique Planet-Scale B-FS Signed V2 MBR Partition Code */
+#define BTRON_PART_TYPE_BFS_V1_E1   0xE1  /* Unique Planet-Scale B-FS Encrypted V1 MBR Partition Code */
+#define BTRON_PART_TYPE_BFS_V2_E2   0xE2  /* Unique Planet-Scale B-FS Encrypted V2 MBR Partition Code */
+#define BTRON_PART_TYPE_BFS_V1_E3   0xE3  /* Unique Planet-Scale B-FS Encrypted V1 MBR Partition Code */
+#define BTRON_PART_TYPE_BFS_V2_E4   0xE4  /* Unique Planet-Scale B-FS Encrypted V2 MBR Partition Code */
+#define BTRON_PART_TYPE_RAW         0x27  /* Standard RAW data slice, MicroTik */
 
 #define BTRON_GPT_GUID_CHOKANJI     "706D636F-7270-4254-524E-000000000001"
 #define BTRON_GPT_GUID_BFS_V1       "8B684653-BTRN-3100-BEEF-000000000001"
 #define BTRON_GPT_GUID_BFS_V2       "8B684653-BTRN-3200-BEEF-000000000002"
-
-#define BTRON_FS_CODE_BFS_V1        0x6400  /* Classic BTRON FS_TYPE_STD (Magic 0x42FE) */
-#define BTRON_FS_CODE_CHOKANJI      0x6402  /* Chokanji B-right/V FS_TYPE_BRIGHTV (Magic 0x52FE) */
-#define BTRON_FS_CODE_BFS_V2        0x6403  /* Modern B-FS V2 FS_TYPE_MODERN (Magic 0x62FE) */
 
 typedef struct {
     char            dev_path[DRIVESETUP_NAME_LEN];   /* e.g. "btron_sys.vol" */
@@ -190,11 +193,8 @@ bool b_drivesetup_delete_partition(DriveSetupState *st, int dev_idx, int part_id
 bool b_drivesetup_create_slice(DriveSetupState *st, int dev_idx, const char *label, uint64_t size_bytes);
 bool b_drivesetup_create_disk_image(DriveSetupState *st, const char *path, uint64_t size_bytes);
 bool b_drivesetup_create_disk_image_typed(DriveSetupState *st, const char *path, uint64_t size_bytes, FileSystemType fs_type);
-bool b_drivesetup_format_bfs(DriveSetupState *st, int dev_idx, int part_idx,
-                             const char *name, uint32_t block_sz, uint32_t btree_sz,
-                             uint32_t journal_mb, uint32_t features, uint32_t vec_dim);
-bool b_drivesetup_format_v1(DriveSetupState *st, int dev_idx, int part_idx,
-                            const char *name, uint32_t block_sz);
+bool b_drivesetup_format_bfs(DriveSetupState *st, int dev_idx, int part_idx, const char *name, uint32_t block_sz, uint32_t btree_sz, uint32_t journal_mb, uint32_t features, uint32_t vec_dim);
+bool b_drivesetup_format_v1(DriveSetupState *st, int dev_idx, int part_idx, const char *name, uint32_t block_sz);
 bool b_drivesetup_mount(DriveSetupState *st, int dev_idx, int part_idx);
 bool b_drivesetup_unmount(DriveSetupState *st, int dev_idx, int part_idx);
 
@@ -221,27 +221,15 @@ bool drivesetup_is_menu_open(void);
 /* Responsive Dynamic Layout Geometry Engine */
 typedef struct {
     int w, h;
-
-    /* 1. Storage Devices List (fixed 4 items height) */
-    RECT dev_box;
+    RECT dev_box; /* 1. Storage Devices List (fixed 4 items height) */
     int sb_x, sb_y, sb_w, sb_h, dy_b, track_top, track_h, thumb_h;
-
-    /* 2. Visual Disk Slice Map */
-    RECT slice_bar;
-
-    /* 3. Partitions Table (fixed 4 items height + virtual scrollbar) */
-    RECT tbl_r;
+    RECT slice_bar; /* 2. Visual Disk Slice Map */
+    RECT tbl_r; /* 3. Partitions Table (fixed 4 items height + virtual scrollbar) */
     int col_dev, col_type, col_fs, col_size, col_stat;
     int part_sb_x, part_sb_y, part_sb_w, part_sb_h, part_dy_b, part_track_top, part_track_h, part_thumb_h;
-
-    /* 4. Volume Details Inspector Card */
-    RECT insp_r;
-
-    /* 5. Action Buttons (evenly distributed horizontally across width) */
-    RECT btn1, btn2, btn3, btn4;
-
-    /* 6. Status Bar */
-    RECT sb_stat;
+    RECT insp_r; /* 4. Volume Details Inspector Card */
+    RECT btn1, btn2, btn3, btn4; /* 5. Action Buttons (evenly distributed horizontally across width) */
+    RECT sb_stat; /* 6. Status Bar */
 } DS_Layout;
 
 void drivesetup_calc_layout(int w, int h, int dev_count, int part_count, DS_Layout *lo);

@@ -273,6 +273,8 @@ code {
 .app-footer-col a.active::before {
     content: "●"; font-size: 0.45rem; color: HotPink;
     vertical-align: middle; margin-right: 0.1rem;
+    padding-right: 10px;
+    margin-left: -19px;
 }
 
 /* bottom strip */

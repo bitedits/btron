@@ -175,6 +175,18 @@ APPS_MAP = {
             "alt": "環境設定コントロールパネル (Preferences Control Panel)"
         }
     ],
+    "Volumes.html": [
+        {
+            "screen": "../img/screens/DriveSetup_Menu_Opened.png",
+            "caption": "実機描画フレームバッファより自動抽出されたボリューム管理 Volumes (ディスクメニュー展開・区画操作一覧)",
+            "alt": "ボリューム管理 (Volumes / DriveSetup Application - Menu Opened)"
+        },
+        {
+            "screen": "../img/screens/DriveSetup_About.png",
+            "caption": "実機描画フレームバッファより自動抽出された透過バージョン情報ダイアログ (About Volumes)",
+            "alt": "ボリューム管理 バージョン情報 (About Volumes / DriveSetup)"
+        }
+    ],
     "Workbench.html": [
         {
             "screen": "../img/screens/Desktop_Full.png",

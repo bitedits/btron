@@ -1,0 +1,439 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Volumes – ボリューム | B-System Specification</title>
+  <meta name="description" content="ボリューム（Volumes / DriveSetup）は、POSIX生ストレージの検出、MBR/GPT区画テーブルの初期化、B-FS V1/V2フォーマット、およびボリュームのマウント・アンマウントを統合管理するB-System標準ストレージ管理ユーティリティです。">
+  <link rel="stylesheet" href="../../index.css">
+  <link rel="stylesheet" href="../settings/settings.css">
+  <link rel="stylesheet" href="./apps.css">
+</head>
+<body>
+  <nav class="setting-nav">
+    <a href="../../b-system.html">B-System</a>
+    <span class="sep">/</span>
+    <a href="../../b-system.html#apps-section">Applications</a>
+    <span class="sep">/</span>
+    <span class="current">Volumes</span>
+  </nav>
+
+  <div class="setting-hero">
+    <div class="setting-hero-icon"><img src="https://openmoji.org/data/color/svg/1F4BD.svg" alt="💽" width="64" height="64"></div>
+    <h1>ボリューム (Volumes)</h1>
+    <div class="setting-hero-badge">ストレージ管理 · B-FS V2 / V1 · MBR / GPT 区画設定 · リアルタイムインスペクタ</div>
+    <div class="subtitle">BTRON3 3.20仕様に基づく純粋C99製ストレージボリューム＆区画管理ツール<br><span style="font-size:0.9em; opacity:0.85;">"Pure C99 storage volume and partition manager adhering to BTRON3 Specification 3.20."</span></div>
+  </div>
+
+  <div class="setting-content">
+    <a href="../../b-system.html#apps-section" class="back-link">← アプリケーション一覧 (Applications Index)</a>
+
+    <div class="tagline-card">
+      <strong>ボリューム（Volumes）</strong> — ボリューム（Volumes / DriveSetup）は、POSIX生ストレージデバイスの検出、MBR/GPT区画テーブルの初期化、B-FS V1/V2フォーマット、およびボリュームのマウント・アンマウントを統合管理するB-System標準ストレージ管理ユーティリティです。<br>
+      <span style="display:block; margin-top:0.45rem; font-size:0.88rem; color:#6b4f7e;">
+        "Comprehensive storage device and partition manager for real POSIX block images, MBR/GPT partitioning, B-FS V1/V2 formatting, and non-blocking volume mount lifecycle."
+      </span>
+    </div>
+
+            <!-- 画面プレビュー -->
+    <div class="section">
+      <h2>画面プレビュー (Screen Preview)</h2>
+      <div class="screen-preview">
+        <img src="../img/screens/DriveSetup_Menu_Opened.png" alt="ボリューム管理 (Volumes / DriveSetup Application - Menu Opened)">
+        <p>実機描画フレームバッファより自動抽出されたボリューム管理 Volumes (ディスクメニュー展開・区画操作一覧)</p>
+      </div>
+      <div class="screen-preview">
+        <img src="../img/screens/DriveSetup_About.png" alt="ボリューム管理 バージョン情報 (About Volumes / DriveSetup)">
+        <p>実機描画フレームバッファより自動抽出された透過バージョン情報ダイアログ (About Volumes)</p>
+      </div>
+    </div>
+
+<div class="section">
+      <h2>概要 (Overview)</h2>
+      <p>
+        <strong>ボリューム（Volumes）</strong>（C99実装名：<code>src/apps/b_drivesetup.c</code>、ウィンドウ標題：<code>B-System DriveSetup v2.0</code>）は、B-System環境における物理・仮想ブロックストレージ、パーティションスライス、およびB-FSファイルシステムの包括的な構成・保守を司るコアシステムアプリケーションです。<br>
+        <span style="font-size:0.9em; opacity:0.85;">"Volumes (implemented as <code>b_drivesetup.c</code>) serves as the definitive workstation storage utility in B-System, orchestrating physical and virtual block devices, partition slices, and modern B-FS filesystems."</span>
+      </p>
+      <p>
+        BTRON3 3.20ヒューマンマシンインタフェース（HMI）指針に完全準拠し、伝統的な3Dベベル加飾、Classic Navy選択ハイライト、および動的リサイズ追従型レイアウトエンジン（<code>WND_ATTR_RESIZE</code>）を搭載しています。NASA/JPL Rule 3（実行時動的メモリ割り当ての完全排除）を徹底し、静的構造体 <code>DriveSetupState</code> 内で全状態を確定論的に管理します。<br>
+        <span style="font-size:0.9em; opacity:0.85;">"Fully conforming to BTRON3 3.20 HMI standards, Volumes incorporates classic 3D beveled chrome, navy selection accents, and a dynamic responsive geometry engine. Adhering strictly to NASA/JPL Rule 3, all operations run deterministically on static non-allocating buffers without runtime heap allocation."</span>
+      </p>
+    </div>
+
+    <div class="section">
+      <h2>1. メニュー構造と操作体系 (Menu Architecture &amp; Operations)</h2>
+      <p>
+        Volumes は <code>APP_MENU_BAR</code> 共通エンジンを用いた標準メニューバー（Classic 3Dスタイル）を備え、キーボードショートカットおよびマウスイベントにより迅速なディスク操作を提供します。<br>
+        <span style="font-size:0.9em; opacity:0.85;">"Standard hierarchical application menu bar (APP_MENU_BAR) providing rapid disk operations via keyboard shortcuts and mouse clicks."</span>
+      </p>
+      <table class="market-table">
+        <thead>
+          <tr>
+            <th>メニュー階層 (Menu Hierarchy)</th>
+            <th>短縮キー (Key)</th>
+            <th>機能説明 (Functional Description)</th>
+            <th>C99 実装コマンド (Command Binding)</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><b>ファイル(F) ▶ 再認識</b> (Rescan Storage)</td>
+            <td><code>Ctrl+R</code></td>
+            <td>接続中の生ストレージデバイス（<code>btron_sys.vol</code>、<code>btron_anders.vol</code>、QCOW2等）を走査して一覧を再構築</td>
+            <td><code>DSCMD_FILE_SCAN</code> / <code>b_drivesetup_scan_devices()</code></td>
+          </tr>
+          <tr>
+            <td><b>ファイル(F) ▶ 新規イメージ作成...</b> (New Image)</td>
+            <td><code>Ctrl+N</code></td>
+            <td>指定パスに新規仮想ディスクイメージファイル（.vol）を作成・フォーマット</td>
+            <td><code>DSCMD_FILE_CREATE_IMG</code> / <code>DIALOG_CREATE_IMAGE</code></td>
+          </tr>
+          <tr>
+            <td><b>ファイル(F) ▶ 閉じる</b> (Close)</td>
+            <td><code>Ctrl+W</code></td>
+            <td>ボリューム管理ウィンドウを閉じ、リソースを解放</td>
+            <td><code>DSCMD_FILE_CLOSE</code> / <code>cls_wnd()</code></td>
+          </tr>
+          <tr>
+            <td><b>ディスク(D) ▶ 初期化 MBR...</b> (Initialize MBR)</td>
+            <td>—</td>
+            <td>選択中デバイスにMBR（マスターブートレコード）形式のパーティションテーブルを構築</td>
+            <td><code>DSCMD_DISK_INIT_MBR</code> / <code>PART_SCHEME_MBR</code></td>
+          </tr>
+          <tr>
+            <td><b>ディスク(D) ▶ 初期化 GPT...</b> (Initialize GPT)</td>
+            <td>—</td>
+            <td>選択中デバイスにGUIDパーティションテーブル（GPT）を構築（B-FS標準GUID対応）</td>
+            <td><code>DSCMD_DISK_INIT_GPT</code> / <code>PART_SCHEME_GPT</code></td>
+          </tr>
+          <tr>
+            <td><b>ディスク(D) ▶ 新規区画作成...</b> (Create Slice)</td>
+            <td>—</td>
+            <td>ディスク内の未割り当て領域から新規パーティションスライスを切り出し</td>
+            <td><code>DSCMD_PART_CREATE</code> / <code>DIALOG_CREATE_SLICE</code></td>
+          </tr>
+          <tr>
+            <td><b>ディスク(D) ▶ 区画削除</b> (Delete Partition)</td>
+            <td><code>Del</code></td>
+            <td>選択中のパーティションスライスを解放（警告確認ダイアログ保護）</td>
+            <td><code>DSCMD_PART_DELETE</code> / <code>WRITE_OP_DELETE_PARTITION</code></td>
+          </tr>
+          <tr>
+            <td><b>ディスク(D) ▶ B-FS フォーマット...</b> (Format B-FS)</td>
+            <td><code>Ctrl+F</code></td>
+            <td>B-FS V2 / V1 ファイルシステムで区画を書式化（WALジャーナル、64-bit FID等設定）</td>
+            <td><code>DSCMD_PART_FMT_BFS</code> / <code>DIALOG_FORMAT_BFS</code></td>
+          </tr>
+          <tr>
+            <td><b>マウント(M) ▶ マウント</b> (Mount)</td>
+            <td><code>Ctrl+M</code></td>
+            <td>選択したファイルシステム区画をB-System名前空間（/SYS、/DATA等）へ接続</td>
+            <td><code>DSCMD_MOUNT_VOLUME</code> / <code>b_drivesetup_mount()</code></td>
+          </tr>
+          <tr>
+            <td><b>マウント(M) ▶ アンマウント</b> (Unmount)</td>
+            <td><code>Ctrl+U</code></td>
+            <td>マウント中の区画を安全に切り離し、未書き込みバッファをフラッシュ</td>
+            <td><code>DSCMD_UNMOUNT_VOLUME</code> / <code>b_drivesetup_unmount()</code></td>
+          </tr>
+          <tr>
+            <td><b>マウント(M) ▶ /SYS を開く</b> (Mount System)</td>
+            <td>—</td>
+            <td>基本システムボリューム <code>btron_sys.vol</code> (B-FS V1) を即座にマウント</td>
+            <td><code>DSCMD_MOUNT_SYS</code></td>
+          </tr>
+          <tr>
+            <td><b>マウント(M) ▶ /ANDERS を開く</b> (Mount Anders)</td>
+            <td>—</td>
+            <td>ユーザー領域ボリューム <code>btron_anders.vol</code> (B-FS V1) を即座にマウント</td>
+            <td><code>DSCMD_MOUNT_ANDERS</code></td>
+          </tr>
+          <tr>
+            <td><b>マウント(M) ▶ /CHOKANJI を開く</b> (Mount Chokanji)</td>
+            <td>—</td>
+            <td>超漢字 / B-right/V 互換ボリューム（<code>hda.qcow2</code>）をマウント</td>
+            <td><code>DSCMD_MOUNT_QCOW2</code></td>
+          </tr>
+          <tr>
+            <td><b>表示(V) ▶ 更新</b> (Refresh)</td>
+            <td><code>F5</code></td>
+            <td>区画使用率、ブロック空き領域、およびマウント状態テレメトリを即時再描画</td>
+            <td><code>DSCMD_VIEW_REFRESH</code></td>
+          </tr>
+          <tr>
+            <td><b>ヘルプ(H) ▶ ドライブ設定について</b> (About)</td>
+            <td>—</td>
+            <td>Nano About Box（透過版バージョン情報・著作権クレジット表示）をポップアップ</td>
+            <td><code>DSCMD_HELP_ABOUT</code> / <code>open_drivesetup_about_window()</code></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="section">
+      <h2>2. UI幾何学とレイアウトエンジン (UI Geometry &amp; Responsive Layout Engine)</h2>
+      <p>
+        Volumes のメインウィンドウは、初期寸法 740×512px、最小寸法 520×420px で動作し、ユーザーによるウィンドウ伸縮（<code>WND_ATTR_RESIZE</code>）に対して内部矩形を完全再計算する専用幾何学エンジン <code>drivesetup_calc_layout()</code> を内蔵しています。<br>
+        <span style="font-size:0.9em; opacity:0.85;">"The main application window operates with a default geometry of 740×512px (minimum 520×420px), driven by the dedicated <code>drivesetup_calc_layout()</code> geometry engine for fluid proportional resizing."</span>
+      </p>
+      <table class="market-table">
+        <thead>
+          <tr>
+            <th>UIコンポーネント (Component)</th>
+            <th>画面上の位置・配置規則 (Placement &amp; Geometry)</th>
+            <th>視覚意匠・動作仕様 (Visual Design &amp; Behavior)</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><b>1. 物理ストレージ一覧</b><br>(Storage Devices List)</td>
+            <td>上端 <code>top=46px</code>、高さ 84px（4項目分固定表示）。幅はウィンドウ幅に追従（左右余白 10px）。</td>
+            <td>白背景インセット枠（<code>DS_COL_INSET_BG</code>）。クラシックな縦スクロールバー（<code>paint_scrollbar</code>）を備え、4台以上のデバイス検出時に確定論的ドラッグスクロールを提供。</td>
+          </tr>
+          <tr>
+            <td><b>2. 視覚的区画マップ</b><br>(Visual Disk Slice Map)</td>
+            <td><code>top=152px</code>、高さ 40px（<code>152..192px</code>）。ウィンドウ幅全体へ水平展開。</td>
+            <td>選択中ストレージデバイスの全スライスを容量比率に応じて水平バー表示。システム区画（Deep Steel Teal <code>#2B608A</code>）、データ区画（Steel Blue <code>#4682B4</code>）、未割当（Muted Gray <code>#B8B4AA</code>）で色分け。</td>
+          </tr>
+          <tr>
+            <td><b>3. 区画・スライステーブル</b><br>(Partitions &amp; Slices Table)</td>
+            <td><code>top=212px</code>、高さ 106px（見出し 22px + 4行分データ 80px + 枠 4px）。右端に仮想スクロールバー。</td>
+            <td>5列の比率追従カラム（デバイス 20%、型コード 13%、ファイルシステム 14%、容量 12%、稼働状態 14%、機能フラグ）。マウント時は鮮やかなエメラルドグリーン点（<code>#008040</code>）を表示。</td>
+          </tr>
+          <tr>
+            <td><b>4. ボリューム詳細インスペクタ</b><br>(Inspector Details Card)</td>
+            <td>区画テーブル直下からアクションボタン上端までを柔軟に埋めるカード（<code>DS_COL_CARD_BG #F0EFEA</code>）。</td>
+            <td>上端にネイビー見出しリボン。左右2段組みでボリューム名、マウントポイント、使用/空きブロック数、割当グループ数、B+木ノード長、64-bit FID状態、WALジャーナル健全性を常時監視。</td>
+          </tr>
+          <tr>
+            <td><b>5. アクションボタン群</b><br>(Action Pushbuttons)</td>
+            <td>ステータスバー上部 8px に配置、高さ 32px。4個の押しボタンを水平均等分割配置。</td>
+            <td>［ディスク初期化...］［区画作成...］［B-FS フォーマット...］［マウント切替］。幅 680px 未満では簡略表記（［初期化...］［作成...］等）に自動フォールバック。</td>
+          </tr>
+          <tr>
+            <td><b>6. システムステータスバー</b><br>(Status Bar)</td>
+            <td>ウィンドウ最下端 <code>h-28px..h-6px</code> に常駐。左右余白 10px の立体凹型ベベル。</td>
+            <td>スキャン結果、選択中スライス、マウント完了通知、エラーメッセージ（<code>st-&gt;status_msg</code>）をリアルタイムに一行表示。</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="section">
+      <h2>3. ファイルシステムと区画形式仕様 (Filesystems &amp; Partition Formats)</h2>
+      <p>
+        Volumes は、惑星規模ストレージを見据えた最新の B-FS V2 を筆頭に、歴代 BTRON 仕様および標準区画形式をシームレスに取り扱います。<br>
+        <span style="font-size:0.9em; opacity:0.85;">"Supports cutting-edge B-FS V2 with planet-scale addressing alongside classic B-FS V1, legacy Chokanji partitions, and standard MBR/GPT partitioning schemes."</span>
+      </p>
+      <table class="market-table">
+        <thead>
+          <tr>
+            <th>フォーマット / 区画形式</th>
+            <th>識別コード / GUID (ID &amp; Magic)</th>
+            <th>主要仕様とスケーラビリティ (Architectural Limits)</th>
+            <th>ジャーナル &amp; 先進機能 (Advanced Features)</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><b>B-FS V2 Modern</b><br>(現代型 BTRON ファイルシステム)</td>
+            <td>MBR: <code>0xB2</code><br>Magic: <code>0x62FE</code> (Type <code>0x6403</code>)<br>GPT: <code>8B684653-BTRN-3200-BEEF-...</code></td>
+            <td>直接 64-bit FID（実体識別子）、最大容量 16 ZiB、65,536 ブロック単位の割当グループ（AG）、B+木ディレクトリストア。</td>
+            <td>循環 WAL Redo ジャーナル（32 MiB）、デュアルアンカースーパーブロック（Block 0 &amp; 1）、RT_VECTOR（768次元 ANN ベクトル検索統合索引）。</td>
+          </tr>
+          <tr>
+            <td><b>B-FS V1 Classic</b><br>(標準 BTRON ファイルシステム)</td>
+            <td>MBR: <code>0xB1</code><br>Magic: <code>0x42FE</code> (Type <code>0x6400</code>)<br>GPT: <code>8B684653-BTRN-3100-BEEF-...</code></td>
+            <td>32-bit FID、フラットビットマップブロック割当、単一スーパーブロック、最大容量 2 TiB。</td>
+            <td>ゼロジャーナル設計、軽量確定論的更新、組み込み・リアルタイム環境向け高速ブート特性。</td>
+          </tr>
+          <tr>
+            <td><b>Chokanji / B-right/V</b><br>(パーソナルメディア互換形式)</td>
+            <td>MBR: <code>0x13</code><br>Magic: <code>0x52FE</code> (Type <code>0x6402</code>)<br>GPT: <code>706D636F-7270-4254-524E-...</code></td>
+            <td>16-bit FID、B-right/V 4.02 / 超漢字 互換ボリューム構造。</td>
+            <td>実身・仮身ハイパーネットワークのネイティブバイナリ直列化データ保持。</td>
+          </tr>
+          <tr>
+            <td><b>MBR パーティション形式</b><br>(Master Boot Record)</td>
+            <td>先頭 LBA 0（512 バイト）<br>ブートシグネチャ: <code>0xAA55</code></td>
+            <td>最大 4 基本区画、2 TiB アドレス限界。先頭 8 セクタ（LBA 0..7）を BTRON IPL ブート領域として予約可能。</td>
+            <td>1 MiB（2048 セクタ）境界への自動アライメント補正機能。</td>
+          </tr>
+          <tr>
+            <td><b>GPT パーティション形式</b><br>(GUID Partition Table)</td>
+            <td>LBA 1（プライマリ）/ 最終 LBA（バックアップ）<br>シグネチャ: <code>EFI PART</code></td>
+            <td>64-bit LBA アドレッシング、最大 128 区画、CRC32 ヘッダ完全性保護。</td>
+            <td>B-FS V2 / V1 専用 GUID への完全ネイティブ対応。</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="section">
+      <h2>4. モーダルダイアログと安全保護機能 (Modal Dialogs &amp; Destructive Write Safety)</h2>
+      <p>
+        Volumes は、ディスク初期化やフォーマットなどの破壊的操作を誤操作から完全に隔離するため、中央モーダルダイアログシステムと2段階確認アーキテクチャを搭載しています。<br>
+        <span style="font-size:0.9em; opacity:0.85;">"Integrates centrally aligned modal dialogs and a two-stage write warning confirmation system to protect storage integrity against accidental data destruction."</span>
+      </p>
+      <table class="market-table">
+        <thead>
+          <tr>
+            <th>ダイアログ名称 (Modal Dialog)</th>
+            <th>寸法 (Size)</th>
+            <th>設定パラメータと入力項目 (Configurable Parameters)</th>
+            <th>安全確認フロー (Safety Confirmation)</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><b>ディスク初期化</b><br>(<code>DIALOG_INIT_DISK</code>)</td>
+            <td>500×280px</td>
+            <td>区画テーブル形式（MBR / GPT ラジオボタン）、8セクタ IPL 予約チェック、1 MiB 境界アライメントチェック。</td>
+            <td>［初期化］押下時に <code>DIALOG_WARN_WRITE</code> へ遷移し、対象ディスク型番と消去警告を明示提示。</td>
+          </tr>
+          <tr>
+            <td><b>新規区画作成</b><br>(<code>DIALOG_CREATE_SLICE</code>)</td>
+            <td>500×270px</td>
+            <td>区画ラベル（テキストボックス）、容量プリセット（64 MiB、256 MiB、1.0 GiB、任意指定）。</td>
+            <td>未割り当て領域（Free Space）の範囲内でのみコミット可能。境界超過は自動クランプ。</td>
+          </tr>
+          <tr>
+            <td><b>新規イメージ作成</b><br>(<code>DIALOG_CREATE_IMAGE</code>)</td>
+            <td>500×270px</td>
+            <td>出力先ファイルパス、イメージ容量（64 MiB / 256 MiB / 1.0 GiB）、形式（B-FS V1 / V2）。</td>
+            <td>新規イメージファイルを POSIX 空間へ直接生成し、直ちにスキャンリストへ自動登録。</td>
+          </tr>
+          <tr>
+            <td><b>B-FS フォーマット</b><br>(<code>DIALOG_FORMAT_BFS</code>)</td>
+            <td>560×410px</td>
+            <td>区画名、形式（V2 / V1）、ブロック長（1K/2K/4K）、B+木ノード長（1K/2K/4K）、Redo WAL（32M）、64-bit FID、RT_VECTOR、デュアルアンカー。</td>
+            <td>想定容量と割当グループ（AG）数の即時要約カードを表示。［フォーマット］押下で破壊的警告ダイアログへ移行。</td>
+          </tr>
+          <tr>
+            <td><b>破壊的書き込み警告</b><br>(<code>DIALOG_WARN_WRITE</code>)</td>
+            <td>520×260px</td>
+            <td>対象デバイス・区画名、実行操作名（初期化 / フォーマット / 削除）、不可逆データ消滅の明示。</td>
+            <td>警告アンバー枠（<code>#FFF2C0</code>）と二重確認ボタン。Enter/Spaceで確定、ESCキーで即座に中断。</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="section">
+      <h2>5. 機能仕様とアーキテクチャ (Functional &amp; Architecture Specifications)</h2>
+      <p>
+        Volumes アプリケーションの内部構造、データモデル、およびシステムコール仕様。<br>
+        <span style="font-size:0.9em; opacity:0.85;">"Internal architectural components, memory models, and system call bindings."</span>
+      </p>
+      <table class="market-table">
+        <thead>
+          <tr>
+            <th>コンポーネント・機能名</th>
+            <th>動作概要と機能仕様 (Functional Specification)</th>
+            <th>技術仕様・C99構造体 (C99 Implementation)</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><b>NASA/JPL Rule 3 静的メモリ</b></td>
+            <td>起動後の実行時ヒープ割り当て（<code>malloc</code>）を完全排除。最大16台のデバイスと各8区画を静的配列として事前確保。</td>
+            <td><code>DriveSetupState g_drivesetup_state</code></td>
+          </tr>
+          <tr>
+            <td><b>POSIX ストレージ検出エンジン</b></td>
+            <td>実際のファイルシステムイメージ（<code>btron_sys.vol</code>、<code>btron_anders.vol</code>、<code>hda.qcow2</code>）を生ブロックデバイスとして認識。</td>
+            <td><code>b_drivesetup_scan_devices()</code> / <code>vol_api.h</code></td>
+          </tr>
+          <tr>
+            <td><b>比率追従幾何学エンジン</b></td>
+            <td>ウィンドウ寸法の変更イベント（<code>EV_WND_RESIZE</code>）を受信し、スクロールバー・区画表・詳細カード・ボタン矩形を再計算。</td>
+            <td><code>drivesetup_calc_layout()</code></td>
+          </tr>
+          <tr>
+            <td><b>非同期マウント管理</b></td>
+            <td>B-FS V2 / V1 ボリュームの確定論的マウント・アンマウントおよびダーティジャーナル検出・リプレイ指示。</td>
+            <td><code>b_drivesetup_mount()</code> / <code>b_drivesetup_unmount()</code></td>
+          </tr>
+          <tr>
+            <td><b>Nano About Box</b></td>
+            <td>透過ウィンドウフレームバッファ抽出による標準システム情報表示（ディスクアイコン、バージョン2.0、著作権クレジット）。</td>
+            <td><code>open_drivesetup_about_window()</code></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="section">
+      <h2>関連コンポーネント (Related Components)</h2>
+      <div class="related-apps">
+        <a href="Workbench.html">🗄️ ワークベンチ</a>
+        <a href="Cabinet.html">📁 キャビネット</a>
+        <a href="Terminal.html">💻 端末</a>
+        <a href="Preferences.html">⚙️ 環境設定</a>
+        <a href="../settings/System.html">ℹ️ システム情報</a>
+      </div>
+    </div>
+  </div>
+
+  <footer class="app-footer">
+    <div class="app-footer-top">
+      <a href="../../b-system.html">← B-System</a>
+      <span class="site-name">Applications</span>
+    </div>
+    <div class="app-footer-grid">
+      <div class="app-footer-col">
+        <h4>System</h4>
+        <ul>
+            <li><a href="Workbench.html">Workbench</a></li>
+            <li><a href="Terminal.html">Terminal</a></li>
+            <li><a href="Volumes.html" class="active">Volumes</a></li>
+            <li><a href="Commander.html">Commander</a></li>
+            <li><a href="Calculator.html">Calculator</a></li>
+            <li><a href="Clock.html">Clock</a></li>
+            <li><a href="Mail.html">Mail</a></li>
+            <li><a href="Preferences.html">Preferences</a></li>
+            <li><a href="Boot.html">Boot</a></li>
+        </ul>
+      </div>
+      <div class="app-footer-col">
+        <h4>TAD</h4>
+        <ul>
+            <li><a href="Cabinet.html">Cabinet</a></li>
+            <li><a href="Editor.html">Editor</a></li>
+            <li><a href="Matrix.html">Matrix</a></li>
+            <li><a href="Clarity.html">Clarity</a></li>
+            <li><a href="Browser.html">Browser</a></li>
+            <li><a href="Notebook.html">Notebook</a></li>
+            <li><a href="Review.html">Review</a></li>
+            <li><a href="Chat.html">Chat</a></li>
+        </ul>
+      </div>
+      <div class="app-footer-col">
+        <h4>Media</h4>
+        <ul>
+            <li><a href="Cassette.html">Cassette</a></li>
+            <li><a href="Paint.html">Paint</a></li>
+            <li><a href="Orchestra.html">Orchestra</a></li>
+        </ul>
+      </div>
+      <div class="app-footer-col">
+        <h4>Settings</h4>
+        <ul>
+            <li><a href="../settings/Appearance.html">Appearance</a></li>
+            <li><a href="../settings/Desktop.html">Desktop</a></li>
+            <li><a href="../settings/Input.html">Input</a></li>
+            <li><a href="../settings/Language.html">Language</a></li>
+            <li><a href="../settings/Sound.html">Sound</a></li>
+            <li><a href="../settings/Network.html">Network</a></li>
+            <li><a href="../settings/Display.html">Display</a></li>
+            <li><a href="../settings/Media.html">Media</a></li>
+            <li><a href="../settings/System.html">System</a></li>
+            <li><a href="../settings/Security.html">Security</a></li>
+            <li><a href="../settings/Terminal.html">Terminal</a></li>
+        </ul>
+      </div>
+    </div>
+    <div class="app-footer-bottom">B-System &nbsp;·&nbsp; Synrc VE OS.1 &nbsp;·&nbsp; Technical Specification</div>
+  </footer>
+</body>
+</html>

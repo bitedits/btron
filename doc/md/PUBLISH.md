@@ -143,6 +143,7 @@ Screenshots are generated into `b-system/img/screens/` and populated across docu
 | [`Terminal.html`](file:///Ubuntu-22.04/home/maxim/depot/bitedits/btron/b-system/apps/Terminal.html) | 端末 (Terminal / GTerm) | `Terminal_Menu_Opened.png` (ファイルメニュー展開・シェル対話) | ~5.2 KB |
 | [`Cassette.html`](file:///Ubuntu-22.04/home/maxim/depot/bitedits/btron/b-system/apps/Cassette.html) | カセット (Cassette) | `Cassette_Application.png` (ステレオカセットデッキ) | ~10.1 KB |
 | [`Preferences.html`](file:///Ubuntu-22.04/home/maxim/depot/bitedits/btron/b-system/apps/Preferences.html) | 環境設定 (Preferences) | `Preferences_Settings.png` (コントロールパネルハブ) | ~28.8 KB |
+| [`Volumes.html`](file:///Ubuntu-22.04/home/maxim/depot/bitedits/btron/b-system/apps/Volumes.html) | ボリューム (Volumes / DriveSetup) | `DriveSetup_Menu_Opened.png` (ディスクメニュー展開・区画操作一覧), `DriveSetup_About.png` (バージョン情報ダイアログ) | ~18.3 KB |
 | [`Workbench.html`](file:///Ubuntu-22.04/home/maxim/depot/bitedits/btron/b-system/apps/Workbench.html) | ワークベンチ (Workbench) | `Desktop_Full.png` (初期起動画面 Full Desktop), `About_Application.png` (システム情報ダイアログ) | ~41.2 KB |
 | [`Preferences.html`](file:///Ubuntu-22.04/home/maxim/depot/bitedits/btron/b-system/apps/Preferences.html) | 環境設定 (Preferences) | `Preferences_Settings.png` (コントロールパネルハブ) | ~28.8 KB |
 

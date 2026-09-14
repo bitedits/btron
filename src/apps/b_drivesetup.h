@@ -211,6 +211,7 @@ bool b_drivesetup_handle_dialog_key(DriveSetupState *st, uint32_t key);
 #include <btron/event.h>
 
 WND* open_drivesetup_window(void);
+WND* open_drivesetup_about_window(void);
 void drivesetup_paint(WND *wnd, GDEV *dev);
 void drivesetup_event_handler(WND *wnd, const EVT *evt);
 

@@ -786,15 +786,26 @@ static uint8_t  s_about_gif_raw[ABOUT_ICON_MAX_PIXELS];
             }
 
             if (pixel_count > 0) {
-                for (int y = 0; y < img_h && y < 32; y++) {
-                    int out_y = dst_y + y;
+                int scale_x = (img_w > 32) ? (img_w / 32) : 1;
+                int scale_y = (img_h > 32) ? (img_h / 32) : 1;
+                int target_w = (img_w > 32) ? 32 : img_w;
+                int target_h = (img_h > 32) ? 32 : img_h;
+                int off_x = dst_x + (32 - target_w) / 2;
+                int off_y = dst_y + (32 - target_h) / 2;
+
+                for (int y = 0; y < target_h; y++) {
+                    int out_y = off_y + y;
                     if (out_y < dev->clip.top || out_y >= dev->clip.bottom) continue;
                     if (out_y < 0 || out_y >= dev->height) continue;
-                    for (int x = 0; x < img_w && x < 32; x++) {
-                        int out_x = dst_x + x;
+                    int src_y = y * scale_y;
+                    if (src_y >= img_h) src_y = img_h - 1;
+                    for (int x = 0; x < target_w; x++) {
+                        int out_x = off_x + x;
                         if (out_x < dev->clip.left || out_x >= dev->clip.right) continue;
                         if (out_x < 0 || out_x >= dev->width) continue;
-                        uint8_t p_idx = s_about_gif_raw[y * img_w + x];
+                        int src_x = x * scale_x;
+                        if (src_x >= img_w) src_x = img_w - 1;
+                        uint8_t p_idx = s_about_gif_raw[src_y * img_w + src_x];
                         if (p_idx == trans_idx) continue;
                         uint32_t col = palette[p_idx];
                         dev->pixels[out_y * dev->width + out_x] = (COLOR)(0xFF000000 | col);
@@ -836,6 +847,11 @@ static void draw_about_app_icon(GDEV *dev, const char *app_name, int dst_x, int 
         } else if (strstr(app_name, "Orchestra") || strstr(app_name, "管弦楽") ||
                    strstr(app_name, "Music") || strstr(app_name, "music")) {
             strncpy(name_lower, "music", sizeof(name_lower) - 1);
+        } else if (strstr(app_name, "drivesetup") || strstr(app_name, "DriveSetup") ||
+                   strstr(app_name, "b_drivesetup") ||
+                   strstr(app_name, "ドライブ設定") || strstr(app_name, "drive") ||
+                   strstr(app_name, "Volumes") || strstr(app_name, "media")) {
+            strncpy(name_lower, "media", sizeof(name_lower) - 1);
         } else {
             for (int i = 0; app_name[i] && nlen < 30; i++) {
                 char c = app_name[i];
@@ -877,8 +893,16 @@ static void draw_about_app_icon(GDEV *dev, const char *app_name, int dst_x, int 
         drw_rec(dev, &badge);
         drw_lin(dev, dst_x + 1, dst_y + 1, dst_x + 30, dst_y + 1);
         drw_lin(dev, dst_x + 1, dst_y + 1, dst_x + 1, dst_y + 30);
-        char initial[2] = { (char)((app_name && app_name[0]) ? app_name[0] : 'B'), 0 };
-        if (initial[0] >= 'a' && initial[0] <= 'z') initial[0] -= ('a' - 'A');
+        char initial[2] = { 'D', 0 };
+        if (app_name) {
+            for (int k = 0; app_name[k]; k++) {
+                char c = app_name[k];
+                if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')) {
+                    initial[0] = (c >= 'a') ? (char)(c - ('a' - 'A')) : c;
+                    break;
+                }
+            }
+        }
         drw_tc_string(dev, dst_x + 11, dst_y + 8, initial, COLOR_NAVY, 0x00000000);
     }
 }

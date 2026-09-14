@@ -51,6 +51,8 @@ extern WND* open_tad_browser_about_window(void);
 extern WND* open_gterm_about_window(void);
 extern WND* open_orchestra_about_window(void);
 extern WND* open_cassette_about_window(void);
+extern WND* open_drivesetup_window(void);
+extern WND* open_drivesetup_about_window(void);
 extern WND* open_t_editor_window_with_file(const char *filepath);
 extern H    tip_get_caret_x(void);
 extern H    tip_get_caret_y(void);
@@ -352,6 +354,22 @@ int main(int argc, char **argv) {
             redraw_all_windows();
             dump_window_rect(dev, w_abt_cas, "/tmp/btron_raw_screens/Cassette_About.raw");
         }
+
+        /* DriveSetup / Volumes Application Window (Isolated) */
+        reset_isolation_state(dev);
+        WND *w_ds = open_drivesetup_window();
+        if (w_ds) {
+            redraw_all_windows();
+            dump_window_rect(dev, w_ds, "/tmp/btron_raw_screens/DriveSetup_Application.raw");
+        }
+
+        /* DriveSetup About Box (Isolated) */
+        reset_isolation_state(dev);
+        WND *w_abt_ds = open_drivesetup_about_window();
+        if (w_abt_ds) {
+            redraw_all_windows();
+            dump_window_rect(dev, w_abt_ds, "/tmp/btron_raw_screens/DriveSetup_About.raw");
+        }
     }
 
     /* 3. In-App Opened Menu Screenshots (_Menu_Opened suffix) */
@@ -401,6 +419,22 @@ int main(int argc, char **argv) {
             simulate_menu_click(w_term, 0); /* File Menu (ファイル) */
             redraw_all_windows();
             dump_window_rect(dev, w_term, "/tmp/btron_raw_screens/Terminal_Menu_Opened.raw");
+        }
+
+        /* DriveSetup Disk Menu Opened with Partition Actions */
+        reset_isolation_state(dev);
+        WND *w_ds_menu = open_drivesetup_window();
+        if (w_ds_menu) {
+            redraw_all_windows();
+            /* Header 1 (ディスク(D)) starts at x=110, width=100. Center is ~160 */
+            EVT evt;
+            memset(&evt, 0, sizeof(EVT));
+            evt.type = EV_BUT_DOWN;
+            evt.pos.x = w_ds_menu->client.left + 160;
+            evt.pos.y = w_ds_menu->client.top + 12;
+            w_ds_menu->event_handler(w_ds_menu, &evt);
+            redraw_all_windows();
+            dump_window_rect(dev, w_ds_menu, "/tmp/btron_raw_screens/DriveSetup_Menu_Opened.raw");
         }
     }
 

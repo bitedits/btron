@@ -1611,11 +1611,7 @@ static void drivesetup_dispatch_cmd(WND *wnd, DriveSetupState *st, int cmd) {
             safe_strcpy(st->status_msg, "Refreshed storage devices", sizeof(st->status_msg));
             break;
         case DSCMD_HELP_ABOUT:
-            app_menu_create_about_dialog(
-                "b_drivesetup", "\xe3\x83\x89\xe3\x83\xa9\xe3\x82\xa4\xe3\x83\x96\xe8\xa8\xad\xe5\xae\x9a",
-                "B-FS V2 POSIX storage volume manager for BTRON3.",
-                "B-System / BTRON 3.20 Cleanroom",
-                200, 160);
+            open_drivesetup_about_window();
             return;
         default:
             break;
@@ -2627,6 +2623,15 @@ void drivesetup_event_handler(WND *wnd, const EVT *evt) {
     }
 }
 
+
+WND* open_drivesetup_about_window(void) {
+    return app_menu_create_about_dialog(
+        "DriveSetup", "\xe3\x83\x89\xe3\x83\xa9\xe3\x82\xa4\xe3\x83\x96\xe8\xa8\xad\xe5\xae\x9a",
+        "B-FS V2 POSIX storage volume manager for BTRON3.",
+        "B-System / BTRON 3.20 Cleanroom",
+        200, 160);
+}
+
 static void destroy_drivesetup(WND *wnd) {
     (void)wnd;
     g_drivesetup_wnd = NULL;
@@ -2634,9 +2639,14 @@ static void destroy_drivesetup(WND *wnd) {
 
 WND* open_drivesetup_window(void) {
     if (g_drivesetup_wnd) {
-        top_wnd(g_drivesetup_wnd);
-        return g_drivesetup_wnd;
+        WND *w = get_wnd_list();
+        while (w && w != g_drivesetup_wnd) w = w->next;
+        if (w == g_drivesetup_wnd) {
+            top_wnd(g_drivesetup_wnd);
+            return g_drivesetup_wnd;
+        }
     }
+    g_drivesetup_wnd = NULL;
 
     b_drivesetup_init(&g_drivesetup_state);
     b_drivesetup_scan_devices(&g_drivesetup_state);

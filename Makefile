@@ -1347,9 +1347,12 @@ CAPTURE_SCREENS_SRCS = src/tools/capture_screens.c \
                        src/graphics/icons_bundle.c \
                        src/fs/blk_mem.c \
                        src/fs/blk_file.c \
+                       src/fs/blk_qcow2.c \
+                       src/fs/blk_part.c \
                        src/fs/vol.c \
                        src/fs/file.c \
-                       src/apps/clu.c
+                       src/apps/clu.c \
+                       src/apps/b_drivesetup.c
 
 CAPTURE_SCREENS_OBJS = $(CAPTURE_SCREENS_SRCS:.c=.test.o)
 

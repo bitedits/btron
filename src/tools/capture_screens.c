@@ -54,6 +54,7 @@ extern WND* open_cassette_about_window(void);
 extern WND* open_drivesetup_window(void);
 extern WND* open_drivesetup_about_window(void);
 extern WND* open_t_editor_window_with_file(const char *filepath);
+extern WND* open_clarity_window(void);
 extern H    tip_get_caret_x(void);
 extern H    tip_get_caret_y(void);
 
@@ -87,7 +88,17 @@ void sys_mouse_get_pos(int *x, int *y) { if (x) *x = 0; if (y) *y = 0; }
 void sys_mouse_set_pos(int x, int y) { (void)x; (void)y; }
 void sys_mouse_click(int b) { (void)b; }
 ER init_evt_sys(void) { return E_OK; }
+ER get_evt(EVT *p_evt, W timeout_ms) { (void)p_evt; (void)timeout_ms; return E_TMOUT; }
 ER init_vobj_sys(const char *storage_root) { (void)storage_root; return E_OK; }
+/* Minimal VOBJ stubs for clarity_export.c in headless build */
+#include <btron/vobj.h>
+static ROBJ g_stub_robj;
+ROBJ* cre_robj(const char *name, VOBJ_TYPE type) { (void)name; (void)type; return &g_stub_robj; }
+ROBJ* opn_robj(ID robj_id) { (void)robj_id; return &g_stub_robj; }
+ER    cls_robj(ROBJ *robj) { (void)robj; return E_OK; }
+ER    wr_vobj_data(ROBJ *robj, const void *buf, UW len) { (void)robj; (void)buf; (void)len; return E_OK; }
+ER    rd_vobj_data(ROBJ *robj, void *buf, UW len, UW *rb) { (void)robj; (void)buf; (void)len; if (rb) *rb = 0; return E_OK; }
+VOBJ_LINK* cre_vobj_link(ID t, const char *l, H x, H y) { (void)t; (void)l; (void)x; (void)y; return NULL; }
 
 /* Helper to dump raw ARGB rectangle to file */
 static void dump_window_rect(GDEV *dev, WND *wnd, const char *out_filename) {
@@ -370,6 +381,14 @@ int main(int argc, char **argv) {
             redraw_all_windows();
             dump_window_rect(dev, w_abt_ds, "/tmp/btron_raw_screens/DriveSetup_About.raw");
         }
+
+        /* Clarity DTP Application Window (Isolated) */
+        reset_isolation_state(dev);
+        WND *w_clarity = open_clarity_window();
+        if (w_clarity) {
+            redraw_all_windows();
+            dump_window_rect(dev, w_clarity, "/tmp/btron_raw_screens/Clarity_Application.raw");
+        }
     }
 
     /* 3. In-App Opened Menu Screenshots (_Menu_Opened suffix) */
@@ -435,6 +454,15 @@ int main(int argc, char **argv) {
             w_ds_menu->event_handler(w_ds_menu, &evt);
             redraw_all_windows();
             dump_window_rect(dev, w_ds_menu, "/tmp/btron_raw_screens/DriveSetup_Menu_Opened.raw");
+        }
+        /* Clarity Format Menu Opened */
+        reset_isolation_state(dev);
+        WND *w_clr_m = open_clarity_window();
+        if (w_clr_m) {
+            redraw_all_windows();
+            simulate_menu_click(w_clr_m, 1); /* Format menu (index 1) */
+            redraw_all_windows();
+            dump_window_rect(dev, w_clr_m, "/tmp/btron_raw_screens/Clarity_Menu_Opened.raw");
         }
     }
 

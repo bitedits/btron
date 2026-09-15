@@ -198,6 +198,18 @@ APPS_MAP = {
             "caption": "実機描画フレームバッファより自動抽出された透過システム情報ダイアログ (About B-System Workstation)",
             "alt": "システム情報 (About B-System Workstation)"
         }
+    ],
+    "Clarity.html": [
+        {
+            "screen": "../img/screens/Clarity_Application.png",
+            "caption": "実機描画フレームバッファより自動抽出されたClarity電子帳票DTPウィンドウ (A4・四六判・Pecha三判型対応)",
+            "alt": "電子帳票 Clarity DTP Application (Native Headless GDEV Capture)"
+        },
+        {
+            "screen": "../img/screens/Clarity_Menu_Opened.png",
+            "caption": "実機描画フレームバッファより自動抽出されたClarity判型選択メニュー展開画面 (Format Menu Opened)",
+            "alt": "電子帳票 Clarity – 判型メニュー展開 (Format Menu Opened)"
+        }
     ]
 }
 

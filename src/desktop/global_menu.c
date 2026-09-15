@@ -35,6 +35,7 @@ __attribute__((weak)) WND* open_audio_player_window(void);
 __attribute__((weak)) WND* open_orchestra_window(void);
 __attribute__((weak)) WND* open_about_window(void);
 __attribute__((weak)) WND* open_display_settings_window(void);
+__attribute__((weak)) WND* open_clarity_window(void);
 #else
 extern WND* open_vobj_manager_window(void);
 extern WND* open_control_panel_window(void);
@@ -44,6 +45,7 @@ extern WND* open_audio_player_window(void);
 extern WND* open_orchestra_window(void);
 extern WND* open_about_window(void);
 extern WND* open_display_settings_window(void);
+extern WND* open_clarity_window(void);
 #endif
 
 #define GMENU_DROPDOWN_WIDTH    380
@@ -113,7 +115,7 @@ static GMenuHeader g_headers[GMENU_HEADER_COUNT] = {
     {
         .title = "道具・文字(T)",
         .rect = { 454, 2, 574, 23 },
-        .item_count = 7,
+        .item_count = 9,
         .items = {
             { "文字パレット (TRON Palette)",     "F12", GMENU_CMD_TOOL_PALETTE, FALSE, FALSE, TRUE },
             { "TRONコード検索 (TRON-Code)",     "",    GMENU_CMD_TOOL_TRONCODE, FALSE, FALSE, TRUE },
@@ -121,7 +123,9 @@ static GMenuHeader g_headers[GMENU_HEADER_COUNT] = {
             { "---", "", GMENU_CMD_NONE, TRUE, FALSE, FALSE },
             { "文書編集 (Editor)",            "",    GMENU_CMD_TOOL_TEDITOR, FALSE, FALSE, TRUE },
             { "表計算・APL (Matrix)",           "",    GMENU_CMD_TOOL_MATRIX, FALSE, FALSE, TRUE },
-            { "端末 (gterm Terminal)",          "",    GMENU_CMD_TOOL_TERMINAL, FALSE, FALSE, TRUE }
+            { "端末 (gterm Terminal)",          "",    GMENU_CMD_TOOL_TERMINAL, FALSE, FALSE, TRUE },
+            { "---", "", GMENU_CMD_NONE, TRUE, FALSE, FALSE },
+            { "電子帳票 (Clarity DTP)",         "",    GMENU_CMD_TOOL_CLARITY, FALSE, FALSE, TRUE }
         }
     }
 };
@@ -421,6 +425,9 @@ static void global_menu_execute_cmd(int cmd) {
             break;
         case GMENU_CMD_TOOL_TERMINAL:
             if (open_gterm_window) open_gterm_window();
+            break;
+        case GMENU_CMD_TOOL_CLARITY:
+            if (open_clarity_window) open_clarity_window();
             break;
 
         default:

@@ -137,6 +137,7 @@ COMMON_SRCS = src/graphics/dp_core.c   \
               src/font/troncode.c      \
               src/font/jis_fonts.c     \
               src/font/tibetan_fonts.c \
+              src/font/font_mgr.c      \
               src/window/wnd.c         \
               src/window/app_menu.c    \
               src/window/event.c       \
@@ -151,6 +152,11 @@ COMMON_SRCS = src/graphics/dp_core.c   \
               src/apps/tad_browser.c   \
               src/apps/gterm.c         \
               src/apps/t_editor.c      \
+              src/apps/clarity.c        \
+              src/apps/clarity_tex.c    \
+              src/apps/clarity_layout.c \
+              src/apps/clarity_render.c \
+              src/apps/clarity_export.c \
               src/apps/audio_player.c  \
               src/apps/b_drivesetup.c  \
               src/apps/orchestra.c     \
@@ -1352,7 +1358,13 @@ CAPTURE_SCREENS_SRCS = src/tools/capture_screens.c \
                        src/fs/vol.c \
                        src/fs/file.c \
                        src/apps/clu.c \
-                       src/apps/b_drivesetup.c
+                       src/apps/b_drivesetup.c \
+                       src/apps/clarity.c \
+                       src/apps/clarity_tex.c \
+                       src/apps/clarity_layout.c \
+                       src/apps/clarity_render.c \
+                       src/apps/clarity_export.c \
+                       src/font/font_mgr.c
 
 CAPTURE_SCREENS_OBJS = $(CAPTURE_SCREENS_SRCS:.c=.test.o)
 

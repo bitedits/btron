@@ -171,7 +171,7 @@ static void test_menu_styles_and_rendering(void) {
     static const char sample_files[3][64] = { "doc1.tad", "doc2.tad", "doc3.tad" };
     bar.active_submenu = 0;
     app_menu_paint_cascading_strings(&bar, &dev, sample_files, 3);
-    TEST_ASSERT(dev.pixels[50 * 640 + 260] != 0, "Cascading submenu pixels rendered");
+    TEST_ASSERT(dev.pixels[50 * 640 + (APP_MENU_DROPDOWN_WIDTH + 10)] != 0, "Cascading submenu pixels rendered");
 }
 
 static void test_nano_about_box(void) {

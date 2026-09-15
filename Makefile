@@ -1244,7 +1244,7 @@ test-drivesetup: $(TEST_DRIVESETUP_BIN)
 $(TEST_DRIVESETUP_BIN): $(TEST_DRIVESETUP_OBJS) $(FS_OBJS) src/apps/clu.host.o
 	$(CC) $(TEST_DRIVESETUP_OBJS) $(FS_OBJS) src/apps/clu.host.o -o $@ $(LDFLAGS) -lm
 
-test: test-kernel test-tad test-editor test-chat test-mozc test-wylie test-hmi test-ski test-tracker test-settings test-global-menu test-app-menu test-drivesetup
+test: test-tad test-editor test-chat test-mozc test-wylie test-hmi test-ski test-tracker test-settings test-global-menu test-app-menu test-drivesetup test-fs
 	@echo "=========================================================="
 	@echo " ALL B-SYSTEM TEST SUITES PASSED (100% SUCCESS)!"
 	@echo "=========================================================="

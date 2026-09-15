@@ -223,7 +223,7 @@ static void test_init_disk_and_create_slice(void) {
     b_drivesetup_open_dialog(&st, DIALOG_CREATE_SLICE);
     strcpy(st.dlg_text_buf, "BFS1_Slice");
     st.dlg_radio_sel1 = 0; /* 1.0 GiB */
-    st.dlg_radio_sel2 = 0; /* B-FS V1 (0xB1) */
+    st.dlg_radio_sel2 = 0; /* B-FS V1 (0x61) */
     b_drivesetup_commit_dialog(&st);
     assert(b_drivesetup_verify_invariants(&st));
     assert(st.devices[0].partition_count == 1);
@@ -237,7 +237,7 @@ static void test_init_disk_and_create_slice(void) {
     b_drivesetup_open_dialog(&st, DIALOG_CREATE_SLICE);
     strcpy(st.dlg_text_buf, "BFS2_Slice");
     st.dlg_radio_sel1 = 1; /* 2.0 GiB */
-    st.dlg_radio_sel2 = 1; /* B-FS V2 (0xB2) */
+    st.dlg_radio_sel2 = 1; /* B-FS V2 (0x62) */
     b_drivesetup_commit_dialog(&st);
     assert(b_drivesetup_verify_invariants(&st));
     assert(st.devices[0].partition_count == 2);
@@ -251,7 +251,7 @@ static void test_init_disk_and_create_slice(void) {
     b_drivesetup_open_dialog(&st, DIALOG_CREATE_SLICE);
     strcpy(st.dlg_text_buf, "Raw_Slice");
     st.dlg_radio_sel1 = 2; /* Max */
-    st.dlg_radio_sel2 = 2; /* RAW (0x83) */
+    st.dlg_radio_sel2 = 2; /* RAW (0x27) */
     b_drivesetup_commit_dialog(&st);
     assert(b_drivesetup_verify_invariants(&st));
     assert(st.devices[0].partition_count == 3);

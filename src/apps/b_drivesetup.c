@@ -27,10 +27,10 @@
 #include <stdio.h>
 #include <string.h>
 
-#define DRIVESETUP_DEF_W  800
-#define DRIVESETUP_DEF_H  600
-#define DRIVESETUP_MIN_W  500
-#define DRIVESETUP_MIN_H  500
+#define DRIVESETUP_DEF_W  740
+#define DRIVESETUP_DEF_H  512
+#define DRIVESETUP_MIN_W  520
+#define DRIVESETUP_MIN_H  420
 
 /* Theme Palette (Clean Authentic BTRON Workstation UI) */
 #define DS_COL_BG           COLOR_LTGRAY  /* 0xFFD4D0C8 Classic 3D Face */
@@ -1841,7 +1841,7 @@ void drivesetup_paint(WND *wnd, GDEV *dev) {
 
             /* FS cell */
             const char *fs_cell = "B-FS V2";
-                 if (part->fs_type == FS_BFS_V1 || part->type_code == BTRON_PART_TYPE_BFS_V1) fs_cell = "B-FS V1";
+            if (part->fs_type == FS_BFS_V1 || part->type_code == BTRON_PART_TYPE_BFS_V1) fs_cell = "B-FS V1";
             else if (part->fs_type == FS_BFS_V2 || part->type_code == BTRON_PART_TYPE_BFS_V2) fs_cell = "B-FS V2";
             else if (part->fs_type == FS_CHOKANJI || part->type_code == BTRON_PART_TYPE_CHOKANJI) fs_cell = "Chokanji";
             else if (part->fs_type == FS_FAT32) fs_cell = "FAT32";
@@ -2032,7 +2032,7 @@ void drivesetup_paint(WND *wnd, GDEV *dev) {
         drw_tc_string(dev, dlg_r.left + 20, dlg_r.top + 104, "種別 (Type):", COLOR_BLACK, DS_COL_BG);
         paint_ui_radio(dev, dlg_r.left + 150, dlg_r.top + 104, "B-FS V1 (0x61)", st->dlg_radio_sel2 == 0, st->dlg_focus_idx == 4);
         paint_ui_radio(dev, dlg_r.left + 265, dlg_r.top + 104, "B-FS V2 (0x62)", st->dlg_radio_sel2 == 1, st->dlg_focus_idx == 5);
-        paint_ui_radio(dev, dlg_r.left + 380, dlg_r.top + 104, "RAW (0x27)", st->dlg_radio_sel2 == 2, st->dlg_focus_idx == 6);
+        paint_ui_radio(dev, dlg_r.left + 380, dlg_r.top + 104, "RAW (0x83)", st->dlg_radio_sel2 == 2, st->dlg_focus_idx == 6);
 
         paint_dialog_buttons(dev, &dlg_r, 30,
                              "\xe4\xbd\x9c\xe6\x88\x90 (Create)", st->dlg_focus_idx == 7,
@@ -2070,8 +2070,8 @@ void drivesetup_paint(WND *wnd, GDEV *dev) {
 
         /* Format Version Radios */
         drw_tc_string(dev, dlg_r.left + 20, dlg_r.top + 60, "形式 (Format):", COLOR_BLACK, DS_COL_BG);
-        paint_ui_radio(dev, dlg_r.left + 160, dlg_r.top + 60, "B-FS V2 Modern (0x6402)", st->dlg_radio_sel3 == 0, false);
-        paint_ui_radio(dev, dlg_r.left + 350, dlg_r.top + 60, "B-FS V1 Classic (0x6401)", st->dlg_radio_sel3 == 1, false);
+        paint_ui_radio(dev, dlg_r.left + 160, dlg_r.top + 60, "B-FS V2 Modern (0x6403)", st->dlg_radio_sel3 == 0, false);
+        paint_ui_radio(dev, dlg_r.left + 350, dlg_r.top + 60, "B-FS V1 Classic (0x6400)", st->dlg_radio_sel3 == 1, false);
 
         /* Block Size Radios */
         drw_tc_string(dev, dlg_r.left + 20, dlg_r.top + 84, "\xe3\x83\x96\xe3\x83\xad\xe3\x83\x83\xe3\x82\xaf\xe9\x95\xb7 Block Size:", COLOR_BLACK, DS_COL_BG);
@@ -2231,14 +2231,7 @@ void drivesetup_event_handler(WND *wnd, const EVT *evt) {
     }
 
     if (evt->type == EV_KEY_DOWN) {
-        uint32_t key = evt->key;
-
-        if (st->active_dialog != DIALOG_NONE) {
-            if (b_drivesetup_handle_dialog_key(st, key)) {
-                inval_wnd(wnd);
-                return;
-            }
-        }
+        uint32_t key = (uint32_t)(uintptr_t)evt->data;
 
         /* If dialog is open, handle keyboard navigation first */
         if (st->active_dialog != DIALOG_NONE) {

@@ -870,7 +870,7 @@ static void test_modern_menu_bar_and_asset_discovery(void) {
     }
     TEST_ASSERT(sutra_idx >= 0, "Heart Sutra file found in asset list");
 
-    H sub_x = 4 + 250 - 2 + 40; /* inside cascading submenu (292..552) */
+    H sub_x = APP_MENU_DROPDOWN_WIDTH - 2 + 40; /* inside cascading submenu */
     H sub_y = 21 + 3 + (1 * 22) + 3 + sutra_idx * 22 + 10;
     EVT evt_click;
     memset(&evt_click, 0, sizeof(EVT));
@@ -922,15 +922,18 @@ static void test_modern_menu_bar_and_asset_discovery(void) {
                 "Ctrl+O accelerator directly opens cascading document list");
 
     /* 9. Real-time Hierarchical Open Menu Walking on Hover */
-    /* Hover over item 1 '[/ANDERS] Anders Proofs ▶' in Level 0 (x=252+30, y=46+3+22+10=81) */
-    evt_move.pos.x = wnd->bounds.left + 4 + 252 + 30;
+    /* Hover over item 1 '[/ANDERS] Anders Proofs ▶' in Level 0 */
+    evt_move.pos.x = wnd->bounds.left + 4 + APP_MENU_DROPDOWN_WIDTH - 2 + 30;
     evt_move.pos.y = wnd->bounds.top + 26 + 46 + 3 + 22 + 10;
     wnd->event_handler(wnd, &evt_move);
     TEST_ASSERT(ed->tree_hover[0] == 1, "Hovering over '[/ANDERS] Anders Proofs ▶' sets tree_hover[0] = 1");
 
-    /* Level 1 expands at parent_box.right-2 = 490. Hover over 'foundations ▶' (item 0 at y=71+3+10=84) */
-    evt_move.pos.x = wnd->bounds.left + 4 + 490 + 30;
-    evt_move.pos.y = wnd->bounds.top + 26 + 71 + 3 + 10;
+    /* Level 1 expands */
+    RECT lvl1_box;
+    int lvl1_cnt = 0;
+    teditor_get_level_box(ed, wnd->dev, 1, &lvl1_box, &lvl1_cnt);
+    evt_move.pos.x = wnd->bounds.left + 4 + lvl1_box.left + 30;
+    evt_move.pos.y = wnd->bounds.top + 26 + lvl1_box.top + 3 + 10;
     wnd->event_handler(wnd, &evt_move);
     TEST_ASSERT(ed->tree_hover[1] == 0, "Hovering over 'foundations ▶' sets tree_hover[1] = 0");
 
@@ -1074,8 +1077,8 @@ static void test_volume_and_markdown_file_operations(void) {
     wnd->event_handler(wnd, &evt_hover);
     TEST_ASSERT(wnd_ed->active_submenu == 1, "Submenu expanded via mouse hover");
 
-    /* Hover over item 0 '[/SYS] System Docs ▶' in Level 0 (x=252+30, y=46+3+10=59) */
-    evt_hover.pos.x = wnd->bounds.left + 4 + 252 + 30;
+    /* Hover over item 0 '[/SYS] System Docs ▶' in Level 0 */
+    evt_hover.pos.x = wnd->bounds.left + 4 + APP_MENU_DROPDOWN_WIDTH - 2 + 30;
     evt_hover.pos.y = wnd->bounds.top + 26 + 46 + 3 + 10;
     wnd->event_handler(wnd, &evt_hover);
     TEST_ASSERT(wnd_ed->tree_hover[0] == 0, "Hovering over '[/SYS] System Docs ▶' sets tree_hover[0] = 0");

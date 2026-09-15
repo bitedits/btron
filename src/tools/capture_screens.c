@@ -87,6 +87,8 @@ void sys_get_mem_stats(void *p) { (void)p; }
 void sys_mouse_get_pos(int *x, int *y) { if (x) *x = 0; if (y) *y = 0; }
 void sys_mouse_set_pos(int x, int y) { (void)x; (void)y; }
 void sys_mouse_click(int b) { (void)b; }
+void* SDL_CreateSystemCursor(int id) { (void)id; return NULL; }
+void  SDL_SetCursor(void *cursor) { (void)cursor; }
 ER init_evt_sys(void) { return E_OK; }
 ER get_evt(EVT *p_evt, W timeout_ms) { (void)p_evt; (void)timeout_ms; return E_TMOUT; }
 ER init_vobj_sys(const char *storage_root) { (void)storage_root; return E_OK; }

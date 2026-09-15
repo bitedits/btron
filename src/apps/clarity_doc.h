@@ -68,6 +68,7 @@ typedef struct {
     /* --- TextFrame payload ---------------------------------------- */
     UH             text[CLARITY_TEXT_BUF]; /* TRON code units (TC)    */
     UW             text_len;
+    int            cursor_pos;      /* text insertion caret index      */
 
     /* --- ImageFrame payload --------------------------------------- */
     UB            *bitmap;          /* raw RGBA pixels (malloc'd)      */
@@ -83,6 +84,9 @@ typedef struct {
     ClarityPageFmt fmt;
     int            page_w_mm;       /* derived from fmt on init        */
     int            page_h_mm;
+    int            page_count;      /* number of pages in document     */
+    int            active_page;     /* currently focused page (0-based)*/
+    int            zoom_pct;        /* view zoom percentage (25..200)  */
     ClarityFrame   frames[CLARITY_MAX_FRAMES];
     int            frame_count;
     int            selected_frame;  /* index into frames[], or -1      */
@@ -97,12 +101,29 @@ typedef struct {
 } ClarityDoc;
 
 /* ================================================================
- * Canvas layout constants (96 dpi base)
+ * Canvas layout constants (72 dpi base: PostScript publishing point)
  * ================================================================ */
 
-#define CLARITY_DPI              96
-#define CLARITY_CANVAS_MARGIN_PX 24  /* grey border around page        */
-#define CLARITY_HANDLE_RADIUS     4  /* resize handle half-size px     */
+#define CLARITY_DPI               72   /* 72 pt/in calibrated DTP scale   */
+#define CLARITY_CANVAS_MARGIN_PX  24   /* grey border around page         */
+#define CLARITY_PAGE_GAP_PX       40   /* vertical space between pages    */
+#define CLARITY_HANDLE_RADIUS      4   /* resize handle half-size px      */
+#define CLARITY_MARGIN_GUIDE_MM   15   /* inner printable margin guide mm */
+
+/* ================================================================
+ * Mouse cursor types for frame resizing and text editing
+ * ================================================================ */
+
+typedef enum {
+    CLARITY_CURSOR_ARROW = 0,
+    CLARITY_CURSOR_IBEAM = 1,
+    CLARITY_CURSOR_MOVE  = 2,
+    CLARITY_CURSOR_NWSE  = 3,
+    CLARITY_CURSOR_NESW  = 4,
+    CLARITY_CURSOR_NS    = 5,
+    CLARITY_CURSOR_WE    = 6,
+    CLARITY_CURSOR_HAND  = 7
+} ClarityCursorType;
 
 /* ================================================================
  * Serial / persistence format

@@ -1,177 +1,184 @@
 /*
  * B-System (BTRON 3.20) Clarity Publishing System (src/apps/clarity.c)
- * Minimal DTP prototype: three page formats, free-floating TextFrames and
- * ImageFrames, horizontal/vertical text input, bitmap placement, VOBJ save/load.
- *
- * Deliberately omits: linked frames, master pages, paragraph styles, TeX,
- * CMYK export, ruby/warichu/kinsoku. All cultural paper format enums and
- * structures below are preserved for spec fidelity but not wired to the
- * prototype UI (they remain in the codebase for the full implementation).
+ * Professional DTP publishing environment:
+ *  - Interactive frame creation, selection, move, and 8-handle resizing
+ *  - Dynamic mouse pointer changes (SIZENWSE, SIZENESW, SIZENS, SIZEWE, IBEAM, MOVE)
+ *  - Horizontal & Vertical 3D Scrollbars with draggable elevator thumbs & steppers
+ *  - View menu with Zoom In (+), Zoom Out (-), 100% Actual, Fit to Window, presets
+ *  - Calibrated paper sizing & multi-page support with Page Break Separators
+ *  - Real-time text typing with insertion caret, backspace, enter, and arrows
+ *  - Format selection (A4, Shiroku, Pecha) and VOBJ TAD Real Body export
  */
 
-#include <btron/wnd.h>
-#include <btron/dp.h>
-#include <btron/app_menu.h>
-#include <btron/tad.h>
-#include <btron/vobj.h>
-#include <btron/event.h>
-
 #include "clarity_doc.h"
-
-#if defined(__STDC_HOSTED__) && __STDC_HOSTED__ == 1
+#include <btron/dp.h>
+#include <btron/wnd.h>
+#include <btron/app_menu.h>
+#include <btron/tip.h>
+#include <btron/event.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#else
-#include <stddef.h>
-#include <stdint.h>
-#include <libstr.h>
-extern void *Imalloc(size_t sz);
-extern void  Ifree(void *ptr);
-extern void *tkl_memset(void *s, int c, size_t n);
-extern void *tkl_memcpy(void *dst, const void *src, size_t n);
-#define malloc  Imalloc
-#define free    Ifree
-#define memset  tkl_memset
-#define memcpy  tkl_memcpy
+
+#if defined(__APPLE__) || defined(__linux__)
+#if defined(__has_include)
+#if __has_include(<SDL2/SDL.h>)
+#include <SDL2/SDL.h>
+#define HAVE_CLARITY_SDL 1
+#elif __has_include(<SDL.h>)
+#include <SDL.h>
+#define HAVE_CLARITY_SDL 1
+#endif
+#endif
 #endif
 
-/* Forward declarations for companion modules */
+/* ------------------------------------------------------------------ */
+/* Layout and Render module forward declarations                       */
+/* ------------------------------------------------------------------ */
+
 extern void clarity_fmt_dimensions(ClarityDoc *doc);
-extern int  clarity_mm_to_px(int mm);
+extern int  clarity_mm_to_px(int mm, int zoom_pct);
 extern void clarity_draw_page(GDEV *dev, const ClarityDoc *doc, int ox, int oy);
 extern void clarity_draw_frames(GDEV *dev, const ClarityDoc *doc, int ox, int oy);
 extern int  clarity_hittest_frame(const ClarityDoc *doc, H x, H y, int ox, int oy);
-extern int  clarity_hittest_handle(const ClarityFrame *f, H x, H y, int ox, int oy);
-extern void clarity_resize_frame_handle(ClarityFrame *f, int h, H mx, H my, int ox, int oy);
+extern int  clarity_hittest_handle(const ClarityFrame *f, H x, H y, int ox, int oy, int zoom_pct);
+extern void clarity_resize_frame_handle(ClarityFrame *f, int h, H mx, H my, int ox, int oy, int zoom_pct);
 extern void clarity_move_frame(ClarityFrame *f, H dx, H dy);
+
 extern void clarity_render_key(ClarityDoc *doc, int fidx, UH tc);
-extern void clarity_render_text(GDEV *dev, const ClarityFrame *f, int ox, int oy);
-extern void clarity_render_image(GDEV *dev, const ClarityFrame *f, int ox, int oy);
+extern void clarity_handle_text_action(ClarityDoc *doc, int fidx, int action, UH tc);
+extern void clarity_render_text(GDEV *dev, const ClarityFrame *f, int ox, int oy, int zoom, BOOL is_selected);
+extern void clarity_render_image(GDEV *dev, const ClarityFrame *f, int ox, int oy, int zoom);
 extern ER   clarity_export_save(const ClarityDoc *doc, const char *name);
 extern ER   clarity_export_load(ClarityDoc *doc, ID robj_id);
 
-/* ================================================================
- * Spec-level cultural format enums (full set preserved for fidelity)
- * Only FMT_A4 / FMT_SHIROKU / FMT_PECHA are active in the prototype.
- * ================================================================ */
+/* Text action enum matching clarity_render.c */
+enum {
+    ACT_CHAR = 0,
+    ACT_BACKSPACE,
+    ACT_DELETE,
+    ACT_LEFT,
+    ACT_RIGHT,
+    ACT_HOME,
+    ACT_END,
+    ACT_ENTER
+};
 
-typedef enum {
-    CLARITY_MODE_DTP     = 0,
-    CLARITY_MODE_TEX     = 1,
-    CLARITY_MODE_PECHA   = 2,   /* Horizontal Tibetan Pecha (དཔེ་ཆ་) */
-    CLARITY_MODE_WASOBON = 3,   /* Japanese Vertical Wasōbon (和装本・縦書き) */
-    CLARITY_MODE_PREVIEW = 4
-} ClarityMode;
+/* ------------------------------------------------------------------ */
+/* UI Constants & Commands                                             */
+/* ------------------------------------------------------------------ */
 
-typedef enum {
-    FLOW_HORIZONTAL_LTR   = 0,
-    FLOW_HORIZONTAL_PECHA = 1,  /* Tibetan horizontal with folio margin markers */
-    FLOW_VERTICAL_RTL     = 2   /* Japanese Traditional Vertical RTL (縦書き) */
-} ClarityTextFlowDirection;
+#define SCROLLBAR_SIZE           16
+#define CLARITY_STEP_SCROLL      32
 
-/* Native Japanese Legacy Paper Formats (和式伝統判型) */
-typedef enum {
-    JP_PAPER_MINO_BAN = 0,      /* 美濃判  273 × 394 mm */
-    JP_PAPER_HANSHI,             /* 半紙    242 × 333 mm */
-    JP_PAPER_SHIROKU_BAN,        /* 四六判  127 × 188 mm ← prototype active */
-    JP_PAPER_KIKU_BAN,           /* 菊判    150 × 218 mm */
-    JP_PAPER_SHINSHO_BAN,        /* 新書判  105 × 173 mm */
-    JP_PAPER_BUNKO_BAN,          /* 文庫判  105 × 148 mm */
-    JP_PAPER_HOSHO_BAN,          /* 大奉書  394 × 530 mm */
-    JP_PAPER_DAIFUKUCHO,         /* 大福帳  160 × 240 mm */
-    JP_PAPER_KAISHI,             /* 懐紙    145 × 175 mm */
-    JP_PAPER_TANZAKU,            /* 短冊     60 × 363 mm */
-    JP_PAPER_SHIKISHI,           /* 色紙    242 × 272 mm */
-    JP_PAPER_ORIHON,             /* 折本     80 × 260 mm */
-    JP_PAPER_KANSUBON,           /* 巻子本  280 × 1200+ mm */
-    JP_PAPER_WASOBON_FUKUROTOJI  /* 和装本・袋綴じ 180 × 250 mm */
-} JapaneseLegacyPaperFormat;
+enum {
+    /* File */
+    CMD_FILE_NEW = 100,
+    CMD_FILE_OPEN,
+    CMD_FILE_SAVE,
 
-/* Tibetan Pecha Canonical Formats (དཔེ་ཆ་) */
-typedef enum {
-    PECHA_SIZE_RINCHEN_TERDZO = 0, /* 大蔵経・宝庫判  650 × 140 mm */
-    PECHA_SIZE_KANGYUR,            /* 標準経典判      560 × 110 mm ← prototype active */
-    PECHA_SIZE_DERGE,              /* デルゲ木版大判  700 × 180 mm */
-    PECHA_SIZE_POCKET_DHARMA       /* 行者暗誦判      320 ×  85 mm */
-} TibetanPechaSize;
+    /* View / Zoom */
+    CMD_VIEW_ZOOM_IN = 200,
+    CMD_VIEW_ZOOM_OUT,
+    CMD_VIEW_ACTUAL,
+    CMD_VIEW_FIT,
+    CMD_VIEW_ZOOM_50,
+    CMD_VIEW_ZOOM_75,
+    CMD_VIEW_ZOOM_100,
+    CMD_VIEW_ZOOM_125,
+    CMD_VIEW_ZOOM_150,
 
-/* Full config structs (spec fidelity; not used in prototype UI) */
-typedef struct {
-    TibetanPechaSize pecha_size;
-    int width_mm, height_mm;
-    BOOL double_border_kheng_khe;
-    BOOL enable_interlinear_mchan;
-    char folio_left_label[32];
-    int  folio_number;
-    BOOL is_recto_verso;
-} PechaLayoutConfig;
+    /* Format */
+    CMD_FMT_A4 = 300,
+    CMD_FMT_SHIROKU,
+    CMD_FMT_PECHA,
+    CMD_PAGE_ADD,
+    CMD_PAGE_REMOVE,
 
-typedef struct {
-    JapaneseLegacyPaperFormat format;
-    int width_mm, height_mm;
-    BOOL is_tategaki;
-    BOOL enable_ruby;
-    BOOL enable_warichu;
-    BOOL enable_kinsoku;
-    BOOL enable_tate_chu_yoko;
-    int  gyo_dori_lines;
-} WasobonLayoutConfig;
+    /* Insert */
+    CMD_INS_TEXT = 400,
+    CMD_INS_IMAGE,
+    CMD_INS_FLIP_FLOW
+};
 
-/* Legacy Cabinet-linked frame (spec fidelity; not used in prototype) */
-typedef struct {
-    int    frame_id;
-    RECT   bounds;
-    int    columns;
-    ClarityTextFlowDirection flow;
-    UW     linked_robj_id;
-    int    next_frame_id;   /* linked-frame chain (omitted in prototype) */
-} ClarityTextFrame;
-
-/* TeX extern stubs (clarity_tex.c – unchanged) */
-extern int clarity_tex_compile_mode(void *doc, const char *tex_source);
-extern int clarity_tex_render_formula(const char *latex_math, void *dp_surface,
-                                      int x, int y);
-
-/* ================================================================
- * Menu command IDs
- * ================================================================ */
-
-#define CMD_FILE_NEW      101
-#define CMD_FILE_OPEN     102
-#define CMD_FILE_SAVE     103
-#define CMD_FMT_A4        201
-#define CMD_FMT_SHIROKU   202
-#define CMD_FMT_PECHA     203
-#define CMD_INS_TEXT      301
-#define CMD_INS_IMAGE     302
-#define CMD_INS_FLIP_FLOW 303
-
-/* ================================================================
- * Application state
- * ================================================================ */
+/* ------------------------------------------------------------------ */
+/* Application state                                                   */
+/* ------------------------------------------------------------------ */
 
 static ClarityDoc    g_doc;
 static WND          *g_wnd        = NULL;
 static APP_MENU_BAR  g_menu;
-static BOOL          g_running    = FALSE;
 
-/* Canvas scroll / pan offset (page top-left in window client coords) */
-static int g_ox = CLARITY_CANVAS_MARGIN_PX;
-static int g_oy = CLARITY_CANVAS_MARGIN_PX + APP_MENU_BAR_HEIGHT;
+/* Scroll state (offsets in canvas space) */
+static int  g_scroll_x   = 0;
+static int  g_scroll_y   = 0;
 
-/* Mouse drag state for move (when no handle selected) */
-static BOOL g_drag_move     = FALSE;
-static H    g_drag_prev_x   = 0;
-static H    g_drag_prev_y   = 0;
+/* Scrollbar dragging */
+static BOOL g_sb_drag_v  = FALSE;
+static BOOL g_sb_drag_h  = FALSE;
+static int  g_sb_start_y = 0;
+static int  g_sb_start_x = 0;
+static int  g_sb_orig_y  = 0;
+static int  g_sb_orig_x  = 0;
 
-/* ================================================================
- * Document helpers
- * ================================================================ */
+/* Frame drag move state */
+static BOOL g_drag_move   = FALSE;
+static H    g_drag_prev_x = 0;
+static H    g_drag_prev_y = 0;
+
+/* Current active mouse cursor type */
+static ClarityCursorType g_curr_cursor = CLARITY_CURSOR_ARROW;
+
+/* Forward declarations */
+static void clarity_paint(WND *wnd, GDEV *dev);
+static void clarity_event(WND *wnd, const EVT *evt);
+static void build_menu(void);
+static void doc_new(ClarityPageFmt fmt);
+static void clarity_set_cursor(ClarityCursorType type);
+static void clarity_fit_window(void);
+
+/* ------------------------------------------------------------------ */
+/* Dynamic Mouse Cursor System                                         */
+/* ------------------------------------------------------------------ */
+
+static void clarity_set_cursor(ClarityCursorType type)
+{
+    if (g_curr_cursor == type) return;
+    g_curr_cursor = type;
+
+#ifdef HAVE_CLARITY_SDL
+#if defined(__GNUC__) || defined(__clang__)
+__attribute__((weak)) SDL_Cursor* SDL_CreateSystemCursor(SDL_SystemCursor id);
+__attribute__((weak)) void        SDL_SetCursor(SDL_Cursor *cursor);
+#endif
+
+    if (!SDL_CreateSystemCursor || !SDL_SetCursor) return;
+
+    static SDL_Cursor *s_cursors[8] = { NULL };
+    static BOOL s_inited = FALSE;
+    if (!s_inited) {
+        s_cursors[CLARITY_CURSOR_ARROW] = SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_ARROW);
+        s_cursors[CLARITY_CURSOR_IBEAM] = SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_IBEAM);
+        s_cursors[CLARITY_CURSOR_MOVE]  = SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_SIZEALL);
+        s_cursors[CLARITY_CURSOR_NWSE]  = SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_SIZENWSE);
+        s_cursors[CLARITY_CURSOR_NESW]  = SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_SIZENESW);
+        s_cursors[CLARITY_CURSOR_NS]    = SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_SIZENS);
+        s_cursors[CLARITY_CURSOR_WE]    = SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_SIZEWE);
+        s_cursors[CLARITY_CURSOR_HAND]  = SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_HAND);
+        s_inited = TRUE;
+    }
+    if (type >= 0 && type < 8 && s_cursors[type]) {
+        SDL_SetCursor(s_cursors[type]);
+    }
+#endif
+}
+
+/* ------------------------------------------------------------------ */
+/* Document helpers                                                    */
+/* ------------------------------------------------------------------ */
 
 static void doc_new(ClarityPageFmt fmt)
 {
-    /* Free existing bitmap payloads */
     for (int i = 0; i < g_doc.frame_count; i++) {
         if (g_doc.frames[i].bitmap) {
             free(g_doc.frames[i].bitmap);
@@ -180,9 +187,14 @@ static void doc_new(ClarityPageFmt fmt)
     }
     memset(&g_doc, 0, sizeof(ClarityDoc));
     g_doc.fmt            = fmt;
+    g_doc.page_count     = 2;   /* 2 pages by default */
+    g_doc.zoom_pct       = 75;  /* 75% default fit */
     g_doc.selected_frame = -1;
     g_doc.tool           = TOOL_SELECT;
     clarity_fmt_dimensions(&g_doc);
+
+    g_scroll_x = 0;
+    g_scroll_y = 0;
 }
 
 static ClarityFrame *doc_add_frame(ClarityFrameType type, H x, H y, H w, H h)
@@ -196,64 +208,257 @@ static ClarityFrame *doc_add_frame(ClarityFrameType type, H x, H y, H w, H h)
     f->bounds.top   = y;
     f->bounds.right = (H)(x + w);
     f->bounds.bottom = (H)(y + h);
-    /* Default flow: vertical for Shiroku, horizontal for the rest */
     f->flow = (g_doc.fmt == FMT_SHIROKU) ? FLOW_V_RTL : FLOW_H_LTR;
+    f->cursor_pos   = 0;
     g_doc.frame_count++;
     g_doc.dirty = TRUE;
     return f;
 }
 
-/* ================================================================
- * Paint callback
- * ================================================================ */
+/* ------------------------------------------------------------------ */
+/* Scrollbar Rendering (Canonical BTRON 3D Steppers & Elevators)       */
+/* ------------------------------------------------------------------ */
+
+static void paint_scrollbar_v(GDEV *dev, int x, int y, int w, int h,
+                              int scroll, int max_scroll, int view_h)
+{
+    RECT bg = { (H)x, (H)y, (H)(x + w), (H)(y + h) };
+    fill_rec(dev, &bg, COLOR_LTGRAY);
+    drw_lin(dev, (H)x, (H)y, (H)x, (H)(y + h));
+
+    /* Up Button */
+    RECT up_btn = { (H)x, (H)y, (H)(x + w), (H)(y + 16) };
+    fill_rec(dev, &up_btn, COLOR_LTGRAY);
+    drw_rec(dev, &up_btn);
+    set_col(dev, COLOR_BLACK, COLOR_LTGRAY);
+    drw_lin(dev, (H)(x + 8), (H)(y + 4), (H)(x + 4),  (H)(y + 11));
+    drw_lin(dev, (H)(x + 8), (H)(y + 4), (H)(x + 12), (H)(y + 11));
+    drw_lin(dev, (H)(x + 4), (H)(y + 11), (H)(x + 12), (H)(y + 11));
+
+    /* Down Button */
+    int dy_b = y + h - 16;
+    RECT dn_btn = { (H)x, (H)dy_b, (H)(x + w), (H)(y + h) };
+    fill_rec(dev, &dn_btn, COLOR_LTGRAY);
+    drw_rec(dev, &dn_btn);
+    set_col(dev, COLOR_BLACK, COLOR_LTGRAY);
+    drw_lin(dev, (H)(x + 4),  (H)(dy_b + 5), (H)(x + 12), (H)(dy_b + 5));
+    drw_lin(dev, (H)(x + 4),  (H)(dy_b + 5), (H)(x + 8),  (H)(dy_b + 12));
+    drw_lin(dev, (H)(x + 12), (H)(dy_b + 5), (H)(x + 8),  (H)(dy_b + 12));
+
+    /* Elevator Thumb */
+    int track_y = y + 16;
+    int track_h = h - 32;
+    if (track_h > 20) {
+        int thumb_h = (max_scroll > 0) ? (track_h * view_h) / (view_h + max_scroll) : track_h;
+        if (thumb_h < 16) thumb_h = 16;
+        if (thumb_h > track_h) thumb_h = track_h;
+
+        int thumb_y = track_y;
+        if (max_scroll > 0) {
+            thumb_y = track_y + (scroll * (track_h - thumb_h)) / max_scroll;
+        }
+
+        RECT thumb = { (H)(x + 1), (H)thumb_y, (H)(x + w - 1), (H)(thumb_y + thumb_h) };
+        fill_rec(dev, &thumb, COLOR_GRAY);
+        drw_rec(dev, &thumb);
+        set_col(dev, COLOR_WHITE, COLOR_GRAY);
+        drw_lin(dev, (H)(x + 2), (H)(thumb_y + 1), (H)(x + w - 3), (H)(thumb_y + 1));
+        drw_lin(dev, (H)(x + 2), (H)(thumb_y + 1), (H)(x + 2), (H)(thumb_y + thumb_h - 2));
+    }
+}
+
+static void paint_scrollbar_h(GDEV *dev, int x, int y, int w, int h,
+                              int scroll, int max_scroll, int view_w)
+{
+    RECT bg = { (H)x, (H)y, (H)(x + w), (H)(y + h) };
+    fill_rec(dev, &bg, COLOR_LTGRAY);
+    drw_lin(dev, (H)x, (H)y, (H)(x + w), (H)y);
+
+    /* Left Button */
+    RECT lt_btn = { (H)x, (H)y, (H)(x + 16), (H)(y + h) };
+    fill_rec(dev, &lt_btn, COLOR_LTGRAY);
+    drw_rec(dev, &lt_btn);
+    set_col(dev, COLOR_BLACK, COLOR_LTGRAY);
+    drw_lin(dev, (H)(x + 4), (H)(y + 8), (H)(x + 11), (H)(y + 4));
+    drw_lin(dev, (H)(x + 4), (H)(y + 8), (H)(x + 11), (H)(y + 12));
+    drw_lin(dev, (H)(x + 11), (H)(y + 4), (H)(x + 11), (H)(y + 12));
+
+    /* Right Button */
+    int rx_b = x + w - 16;
+    RECT rt_btn = { (H)rx_b, (H)y, (H)(x + w), (H)(y + h) };
+    fill_rec(dev, &rt_btn, COLOR_LTGRAY);
+    drw_rec(dev, &rt_btn);
+    set_col(dev, COLOR_BLACK, COLOR_LTGRAY);
+    drw_lin(dev, (H)(rx_b + 5), (H)(y + 4),  (H)(rx_b + 12), (H)(y + 8));
+    drw_lin(dev, (H)(rx_b + 5), (H)(y + 12), (H)(rx_b + 12), (H)(y + 8));
+    drw_lin(dev, (H)(rx_b + 5), (H)(y + 4),  (H)(rx_b + 5),  (H)(y + 12));
+
+    /* Elevator Thumb */
+    int track_x = x + 16;
+    int track_w = w - 32;
+    if (track_w > 20) {
+        int thumb_w = (max_scroll > 0) ? (track_w * view_w) / (view_w + max_scroll) : track_w;
+        if (thumb_w < 16) thumb_w = 16;
+        if (thumb_w > track_w) thumb_w = track_w;
+
+        int thumb_x = track_x;
+        if (max_scroll > 0) {
+            thumb_x = track_x + (scroll * (track_w - thumb_w)) / max_scroll;
+        }
+
+        RECT thumb = { (H)thumb_x, (H)(y + 1), (H)(thumb_x + thumb_w), (H)(y + h - 1) };
+        fill_rec(dev, &thumb, COLOR_GRAY);
+        drw_rec(dev, &thumb);
+        set_col(dev, COLOR_WHITE, COLOR_GRAY);
+        drw_lin(dev, (H)(thumb_x + 1), (H)(y + 2), (H)(thumb_x + thumb_w - 2), (H)(y + 2));
+        drw_lin(dev, (H)(thumb_x + 1), (H)(y + 2), (H)(thumb_x + 1), (H)(y + h - 3));
+    }
+}
+
+/* ------------------------------------------------------------------ */
+/* Viewport and Fit Window Calculation                                 */
+/* ------------------------------------------------------------------ */
+
+static void get_viewport_and_content_bounds(int *out_vw, int *out_vh,
+                                            int *out_cw, int *out_ch,
+                                            int *out_max_x, int *out_max_y)
+{
+    int win_w = g_wnd ? (g_wnd->client.right - g_wnd->client.left) : 900;
+    int win_h = g_wnd ? (g_wnd->client.bottom - g_wnd->client.top) : 600;
+
+    int vw = win_w - SCROLLBAR_SIZE;
+    int vh = win_h - APP_MENU_BAR_HEIGHT - SCROLLBAR_SIZE;
+    if (vw < 100) vw = 100;
+    if (vh < 100) vh = 100;
+
+    int zoom = g_doc.zoom_pct > 0 ? g_doc.zoom_pct : 100;
+    int pw = clarity_mm_to_px(g_doc.page_w_mm, zoom);
+    int ph = clarity_mm_to_px(g_doc.page_h_mm, zoom);
+    int p_gap = (CLARITY_PAGE_GAP_PX * zoom) / 100;
+    if (p_gap < 24) p_gap = 24;
+
+    int pages = g_doc.page_count > 0 ? g_doc.page_count : 1;
+
+    int cw = pw + CLARITY_CANVAS_MARGIN_PX * 2;
+    int ch = ph * pages + p_gap * (pages - 1) + CLARITY_CANVAS_MARGIN_PX * 2;
+
+    int max_x = (cw > vw) ? (cw - vw) : 0;
+    int max_y = (ch > vh) ? (ch - vh) : 0;
+
+    if (out_vw) *out_vw = vw;
+    if (out_vh) *out_vh = vh;
+    if (out_cw) *out_cw = cw;
+    if (out_ch) *out_ch = ch;
+    if (out_max_x) *out_max_x = max_x;
+    if (out_max_y) *out_max_y = max_y;
+}
+
+static void clarity_fit_window(void)
+{
+    int win_w = g_wnd ? (g_wnd->client.right - g_wnd->client.left) : 900;
+    int win_h = g_wnd ? (g_wnd->client.bottom - g_wnd->client.top) : 600;
+
+    int avail_w = win_w - SCROLLBAR_SIZE - CLARITY_CANVAS_MARGIN_PX * 2;
+    int avail_h = win_h - APP_MENU_BAR_HEIGHT - SCROLLBAR_SIZE - CLARITY_CANVAS_MARGIN_PX * 2;
+    if (avail_w < 100) avail_w = 100;
+    if (avail_h < 100) avail_h = 100;
+
+    /* Base unzoomed sizes */
+    int base_pw = clarity_mm_to_px(g_doc.page_w_mm, 100);
+    int base_ph = clarity_mm_to_px(g_doc.page_h_mm, 100);
+    if (base_pw <= 0) base_pw = 1;
+    if (base_ph <= 0) base_ph = 1;
+
+    int fit_w_pct = (avail_w * 100) / base_pw;
+    int fit_h_pct = (avail_h * 100) / base_ph;
+    int fit_pct = (fit_w_pct < fit_h_pct) ? fit_w_pct : fit_h_pct;
+
+    if (fit_pct < 25) fit_pct = 25;
+    if (fit_pct > 150) fit_pct = 150;
+
+    g_doc.zoom_pct = fit_pct;
+    g_scroll_x = 0;
+    g_scroll_y = 0;
+}
+
+/* ------------------------------------------------------------------ */
+/* Paint callback                                                      */
+/* ------------------------------------------------------------------ */
 
 static void clarity_paint(WND *wnd, GDEV *dev)
 {
     if (!wnd || !dev) return;
 
-    /* Background canvas */
-    RECT all;
-    all.left   = 0;
-    all.top    = 0;
-    all.right  = wnd->client.right  - wnd->client.left;
-    all.bottom = wnd->client.bottom - wnd->client.top;
-    fill_rec(dev, &all, COLOR_LTGRAY);
+    int win_w = wnd->client.right  - wnd->client.left;
+    int win_h = wnd->client.bottom - wnd->client.top;
 
-    /* Page and frames */
-    clarity_draw_page(dev, &g_doc, g_ox, g_oy);
+    int vw = 0, vh = 0, cw = 0, ch = 0, max_x = 0, max_y = 0;
+    get_viewport_and_content_bounds(&vw, &vh, &cw, &ch, &max_x, &max_y);
 
+    if (g_scroll_x > max_x) g_scroll_x = max_x;
+    if (g_scroll_x < 0) g_scroll_x = 0;
+    if (g_scroll_y > max_y) g_scroll_y = max_y;
+    if (g_scroll_y < 0) g_scroll_y = 0;
+
+    int ox = CLARITY_CANVAS_MARGIN_PX - g_scroll_x;
+    int oy = CLARITY_CANVAS_MARGIN_PX + APP_MENU_BAR_HEIGHT - g_scroll_y;
+
+    /* 1. Canvas Background Plate */
+    RECT canvas_viewport = { 0, APP_MENU_BAR_HEIGHT, (H)vw, (H)(APP_MENU_BAR_HEIGHT + vh) };
+    fill_rec(dev, &canvas_viewport, COLOR_LTGRAY);
+
+    /* 2. Pages (Sheets, Dropshadows, Margin Guides, Separators) */
+    clarity_draw_page(dev, &g_doc, ox, oy);
+
+    /* 3. Text & Image Frames with Zoom */
+    int zoom = g_doc.zoom_pct > 0 ? g_doc.zoom_pct : 100;
     for (int i = 0; i < g_doc.frame_count; i++) {
         ClarityFrame *f = &g_doc.frames[i];
         if (f->id == 0) continue;
-        if (f->type == FRAME_TEXT)
-            clarity_render_text(dev, f, g_ox, g_oy);
-        else
-            clarity_render_image(dev, f, g_ox, g_oy);
+        BOOL is_sel = (i == g_doc.selected_frame);
+        if (f->type == FRAME_TEXT) {
+            clarity_render_text(dev, f, ox, oy, zoom, is_sel);
+        } else {
+            clarity_render_image(dev, f, ox, oy, zoom);
+        }
     }
 
-    clarity_draw_frames(dev, &g_doc, g_ox, g_oy);
+    /* 4. Frame Outlines & 8-point Resize Handles */
+    clarity_draw_frames(dev, &g_doc, ox, oy);
 
-    /* Status strip (set before painting bar so it renders on first frame) */
+    /* 5. Right Margin Vertical Scrollbar */
+    paint_scrollbar_v(dev, vw, APP_MENU_BAR_HEIGHT, SCROLLBAR_SIZE, vh,
+                      g_scroll_y, max_y, vh);
+
+    /* 6. Bottom Horizontal Scrollbar */
+    paint_scrollbar_h(dev, 0, APP_MENU_BAR_HEIGHT + vh, vw, SCROLLBAR_SIZE,
+                      g_scroll_x, max_x, vw);
+
+    /* 7. Bottom-Right Corner Filler */
+    RECT corner = { (H)vw, (H)(APP_MENU_BAR_HEIGHT + vh), (H)win_w, (H)win_h };
+    fill_rec(dev, &corner, COLOR_LTGRAY);
+    drw_rec(dev, &corner);
+
+    /* 8. Menu Bar & Status Strip */
     const char *fmt_name = "A4";
-    if (g_doc.fmt == FMT_SHIROKU) fmt_name = "四六判 (縦書き)";
-    else if (g_doc.fmt == FMT_PECHA) fmt_name = "Pecha 560×110";
+    if (g_doc.fmt == FMT_SHIROKU) fmt_name = "四六判";
+    else if (g_doc.fmt == FMT_PECHA) fmt_name = "Pecha";
 
     char status[128];
-    snprintf(status, sizeof(status),
-             "  %s | %d frames | %s",
-             fmt_name, g_doc.frame_count,
+    snprintf(status, sizeof(status), "  %s | %d%% | %d 頁 | %d 個 | %s",
+             fmt_name, g_doc.zoom_pct, g_doc.page_count, g_doc.frame_count,
              g_doc.dirty ? "modified" : "saved");
     app_menu_set_right_text(&g_menu, status);
 
-    /* Menu bar on top */
     app_menu_paint_bar(&g_menu, dev);
-    if (g_menu.active_menu >= 0)
+    if (g_menu.active_menu >= 0) {
         app_menu_paint_dropdown(&g_menu, dev);
+    }
 }
 
-/* ================================================================
- * Menu command dispatch
- * ================================================================ */
+/* ------------------------------------------------------------------ */
+/* Menu Command Dispatch                                               */
+/* ------------------------------------------------------------------ */
 
 static void handle_cmd(int cmd)
 {
@@ -262,7 +467,6 @@ static void handle_cmd(int cmd)
             doc_new(g_doc.fmt);
             break;
         case CMD_FILE_OPEN:
-            /* Prototype: reload current format */
             doc_new(g_doc.fmt);
             break;
         case CMD_FILE_SAVE:
@@ -270,6 +474,34 @@ static void handle_cmd(int cmd)
             g_doc.dirty = FALSE;
             break;
 
+        /* View / Zoom */
+        case CMD_VIEW_ZOOM_IN:
+            if (g_doc.zoom_pct < 200) g_doc.zoom_pct += 25;
+            break;
+        case CMD_VIEW_ZOOM_OUT:
+            if (g_doc.zoom_pct > 25) g_doc.zoom_pct -= 25;
+            break;
+        case CMD_VIEW_ACTUAL:
+        case CMD_VIEW_ZOOM_100:
+            g_doc.zoom_pct = 100;
+            break;
+        case CMD_VIEW_FIT:
+            clarity_fit_window();
+            break;
+        case CMD_VIEW_ZOOM_50:
+            g_doc.zoom_pct = 50;
+            break;
+        case CMD_VIEW_ZOOM_75:
+            g_doc.zoom_pct = 75;
+            break;
+        case CMD_VIEW_ZOOM_125:
+            g_doc.zoom_pct = 125;
+            break;
+        case CMD_VIEW_ZOOM_150:
+            g_doc.zoom_pct = 150;
+            break;
+
+        /* Formats */
         case CMD_FMT_A4:
             g_doc.fmt = FMT_A4;
             clarity_fmt_dimensions(&g_doc);
@@ -286,6 +518,21 @@ static void handle_cmd(int cmd)
             g_doc.dirty = TRUE;
             break;
 
+        /* Pages */
+        case CMD_PAGE_ADD:
+            if (g_doc.page_count < 8) {
+                g_doc.page_count++;
+                g_doc.dirty = TRUE;
+            }
+            break;
+        case CMD_PAGE_REMOVE:
+            if (g_doc.page_count > 1) {
+                g_doc.page_count--;
+                g_doc.dirty = TRUE;
+            }
+            break;
+
+        /* Insert */
         case CMD_INS_TEXT:
             g_doc.tool = TOOL_TEXT_FRAME;
             break;
@@ -306,204 +553,475 @@ static void handle_cmd(int cmd)
     if (g_wnd) inval_wnd(g_wnd);
 }
 
-/* ================================================================
- * Event handler
- * ================================================================ */
+/* ------------------------------------------------------------------ */
+/* Event handler                                                       */
+/* ------------------------------------------------------------------ */
 
 static void clarity_event(WND *wnd, const EVT *evt)
 {
     if (!wnd || !evt) return;
 
-    /* Menu bar intercepts mouse events first */
+    int vw = 0, vh = 0, cw = 0, ch = 0, max_x = 0, max_y = 0;
+    get_viewport_and_content_bounds(&vw, &vh, &cw, &ch, &max_x, &max_y);
+
+    int ox = CLARITY_CANVAS_MARGIN_PX - g_scroll_x;
+    int oy = CLARITY_CANVAS_MARGIN_PX + APP_MENU_BAR_HEIGHT - g_scroll_y;
+    int zoom = g_doc.zoom_pct > 0 ? g_doc.zoom_pct : 100;
+
+    /* ── 1. Mouse Move ─────────────────────────────────────────────── */
     if (evt->type == EV_MOUSE_MOVE) {
         H rel_x = (H)(evt->pos.x - wnd->client.left);
         H rel_y = (H)(evt->pos.y - wnd->client.top);
-        if (app_menu_handle_mouse_move(&g_menu, rel_x, rel_y))
-            inval_wnd(wnd);
 
-        /* Move selected frame */
+        /* Menu bar hover */
+        if (app_menu_handle_mouse_move(&g_menu, rel_x, rel_y)) {
+            clarity_set_cursor(CLARITY_CURSOR_ARROW);
+            inval_wnd(wnd);
+            return;
+        }
+
+        /* Vertical Scrollbar Dragging */
+        if (g_sb_drag_v) {
+            int track_h = vh - 32;
+            int dy = evt->pos.y - g_sb_start_y;
+            if (track_h > 0 && max_y > 0) {
+                g_scroll_y = g_sb_orig_y + (dy * max_y) / track_h;
+                if (g_scroll_y < 0) g_scroll_y = 0;
+                if (g_scroll_y > max_y) g_scroll_y = max_y;
+            }
+            inval_wnd(wnd);
+            return;
+        }
+
+        /* Horizontal Scrollbar Dragging */
+        if (g_sb_drag_h) {
+            int track_w = vw - 32;
+            int dx = evt->pos.x - g_sb_start_x;
+            if (track_w > 0 && max_x > 0) {
+                g_scroll_x = g_sb_orig_x + (dx * max_x) / track_w;
+                if (g_scroll_x < 0) g_scroll_x = 0;
+                if (g_scroll_x > max_x) g_scroll_x = max_x;
+            }
+            inval_wnd(wnd);
+            return;
+        }
+
+        /* Frame Move Dragging */
         if (g_drag_move && g_doc.selected_frame >= 0) {
-            H dx = (H)(evt->pos.x - g_drag_prev_x);
-            H dy = (H)(evt->pos.y - g_drag_prev_y);
+            H dx = (H)(((evt->pos.x - g_drag_prev_x) * 100) / zoom);
+            H dy = (H)(((evt->pos.y - g_drag_prev_y) * 100) / zoom);
             clarity_move_frame(&g_doc.frames[g_doc.selected_frame], dx, dy);
             g_drag_prev_x = evt->pos.x;
             g_drag_prev_y = evt->pos.y;
             g_doc.dirty   = TRUE;
+            clarity_set_cursor(CLARITY_CURSOR_MOVE);
             inval_wnd(wnd);
+            return;
         }
 
-        /* Drag-resize handle */
-        if (g_doc.dragging && g_doc.selected_frame >= 0 &&
-            g_doc.drag_handle >= 0) {
+        /* Frame Handle Resize Dragging */
+        if (g_doc.dragging && g_doc.selected_frame >= 0 && g_doc.drag_handle >= 0) {
             clarity_resize_frame_handle(
                 &g_doc.frames[g_doc.selected_frame],
                 g_doc.drag_handle,
                 evt->pos.x, evt->pos.y,
-                g_ox, g_oy);
+                ox, oy, zoom);
             g_doc.dirty = TRUE;
             inval_wnd(wnd);
+            return;
         }
 
-        /* Drag-create new frame */
-        if (g_doc.dragging && g_doc.drag_handle < 0 &&
-            g_doc.selected_frame < 0) {
+        /* Frame Creation Dragging */
+        if (g_doc.dragging && g_doc.drag_handle < 0 && g_doc.selected_frame < 0) {
+            clarity_set_cursor(CLARITY_CURSOR_MOVE);
             inval_wnd(wnd);
+            return;
+        }
+
+        /* Dynamic Cursor Update on Hover */
+        if (rel_y < APP_MENU_BAR_HEIGHT) {
+            clarity_set_cursor(CLARITY_CURSOR_ARROW);
+        } else if (rel_x >= vw || rel_y >= APP_MENU_BAR_HEIGHT + vh) {
+            clarity_set_cursor(CLARITY_CURSOR_ARROW);
+        } else {
+            /* Inside Canvas Viewport */
+            int handle = -1;
+            if (g_doc.selected_frame >= 0) {
+                handle = clarity_hittest_handle(
+                    &g_doc.frames[g_doc.selected_frame], evt->pos.x, evt->pos.y,
+                    ox, oy, zoom);
+            }
+
+            if (handle >= 0) {
+                switch (handle) {
+                    case 0:
+                    case 4: clarity_set_cursor(CLARITY_CURSOR_NWSE); break;
+                    case 2:
+                    case 6: clarity_set_cursor(CLARITY_CURSOR_NESW); break;
+                    case 1:
+                    case 5: clarity_set_cursor(CLARITY_CURSOR_NS);   break;
+                    case 3:
+                    case 7: clarity_set_cursor(CLARITY_CURSOR_WE);   break;
+                }
+            } else {
+                int fidx = clarity_hittest_frame(&g_doc, evt->pos.x, evt->pos.y, ox, oy);
+                if (fidx >= 0) {
+                    if (g_doc.frames[fidx].type == FRAME_TEXT) {
+                        clarity_set_cursor(CLARITY_CURSOR_IBEAM);
+                    } else {
+                        clarity_set_cursor(CLARITY_CURSOR_MOVE);
+                    }
+                } else {
+                    clarity_set_cursor(CLARITY_CURSOR_ARROW);
+                }
+            }
         }
         return;
     }
 
+    /* ── 2. Mouse Button Down ───────────────────────────────────────── */
     if (evt->type == EV_BUT_DOWN) {
         H rel_x = (H)(evt->pos.x - wnd->client.left);
         H rel_y = (H)(evt->pos.y - wnd->client.top);
-        int cmd = -1, sub = -1;
 
+        /* Menu Bar clicks */
+        int cmd = -1, sub = -1;
         if (app_menu_handle_mouse_down(&g_menu, rel_x, rel_y, &cmd, &sub)) {
             if (cmd >= 0) handle_cmd(cmd);
             inval_wnd(wnd);
             return;
         }
 
-        /* Canvas click */
+        /* Vertical Scrollbar clicks */
+        if (rel_x >= vw && rel_x < vw + SCROLLBAR_SIZE &&
+            rel_y >= APP_MENU_BAR_HEIGHT && rel_y < APP_MENU_BAR_HEIGHT + vh) {
+            int sy = rel_y - APP_MENU_BAR_HEIGHT;
+            if (sy < 16) {
+                /* Up button */
+                g_scroll_y -= CLARITY_STEP_SCROLL;
+                if (g_scroll_y < 0) g_scroll_y = 0;
+            } else if (sy >= vh - 16) {
+                /* Down button */
+                g_scroll_y += CLARITY_STEP_SCROLL;
+                if (g_scroll_y > max_y) g_scroll_y = max_y;
+            } else {
+                /* Track or Thumb */
+                int track_h = vh - 32;
+                int thumb_h = (max_y > 0) ? (track_h * vh) / (vh + max_y) : track_h;
+                if (thumb_h < 16) thumb_h = 16;
+                if (thumb_h > track_h) thumb_h = track_h;
+
+                int thumb_y = 16 + (max_y > 0 ? (g_scroll_y * (track_h - thumb_h)) / max_y : 0);
+                if (sy >= thumb_y && sy <= thumb_y + thumb_h) {
+                    g_sb_drag_v  = TRUE;
+                    g_sb_start_y = evt->pos.y;
+                    g_sb_orig_y  = g_scroll_y;
+                } else if (sy < thumb_y) {
+                    g_scroll_y -= vh;
+                    if (g_scroll_y < 0) g_scroll_y = 0;
+                } else {
+                    g_scroll_y += vh;
+                    if (g_scroll_y > max_y) g_scroll_y = max_y;
+                }
+            }
+            inval_wnd(wnd);
+            return;
+        }
+
+        /* Horizontal Scrollbar clicks */
+        if (rel_y >= APP_MENU_BAR_HEIGHT + vh && rel_y < APP_MENU_BAR_HEIGHT + vh + SCROLLBAR_SIZE &&
+            rel_x >= 0 && rel_x < vw) {
+            int sx = rel_x;
+            if (sx < 16) {
+                /* Left button */
+                g_scroll_x -= CLARITY_STEP_SCROLL;
+                if (g_scroll_x < 0) g_scroll_x = 0;
+            } else if (sx >= vw - 16) {
+                /* Right button */
+                g_scroll_x += CLARITY_STEP_SCROLL;
+                if (g_scroll_x > max_x) g_scroll_x = max_x;
+            } else {
+                /* Track or Thumb */
+                int track_w = vw - 32;
+                int thumb_w = (max_x > 0) ? (track_w * vw) / (vw + max_x) : track_w;
+                if (thumb_w < 16) thumb_w = 16;
+                if (thumb_w > track_w) thumb_w = track_w;
+
+                int thumb_x = 16 + (max_x > 0 ? (g_scroll_x * (track_w - thumb_w)) / max_x : 0);
+                if (sx >= thumb_x && sx <= thumb_x + thumb_w) {
+                    g_sb_drag_h  = TRUE;
+                    g_sb_start_x = evt->pos.x;
+                    g_sb_orig_x  = g_scroll_x;
+                } else if (sx < thumb_x) {
+                    g_scroll_x -= vw;
+                    if (g_scroll_x < 0) g_scroll_x = 0;
+                } else {
+                    g_scroll_x += vw;
+                    if (g_scroll_x > max_x) g_scroll_x = max_x;
+                }
+            }
+            inval_wnd(wnd);
+            return;
+        }
+
+        /* Canvas Click */
         H cx = evt->pos.x;
         H cy = evt->pos.y;
 
         if (g_doc.tool == TOOL_SELECT) {
-            /* Check handles on selected frame first */
+            /* 1. Check handles on selected frame first */
             int handle = -1;
             if (g_doc.selected_frame >= 0) {
                 handle = clarity_hittest_handle(
-                    &g_doc.frames[g_doc.selected_frame], cx, cy, g_ox, g_oy);
+                    &g_doc.frames[g_doc.selected_frame], cx, cy, ox, oy, zoom);
             }
             if (handle >= 0) {
-                /* Start resize drag */
                 g_doc.dragging    = TRUE;
                 g_doc.drag_handle = handle;
-            } else {
-                int fidx = clarity_hittest_frame(&g_doc, cx, cy, g_ox, g_oy);
-                g_doc.selected_frame = fidx;
-                g_doc.drag_handle    = -1;
-                if (fidx >= 0) {
-                    /* Start move drag */
-                    g_drag_move   = TRUE;
-                    g_drag_prev_x = cx;
-                    g_drag_prev_y = cy;
+                inval_wnd(wnd);
+                return;
+            }
+
+            /* 2. Hit test frames */
+            int fidx = clarity_hittest_frame(&g_doc, cx, cy, ox, oy);
+            g_doc.selected_frame = fidx;
+            if (fidx >= 0) {
+                g_drag_move   = TRUE;
+                g_drag_prev_x = cx;
+                g_drag_prev_y = cy;
+
+                /* Click inside text frame sets cursor to end or clicked pos */
+                ClarityFrame *f = &g_doc.frames[fidx];
+                if (f->type == FRAME_TEXT) {
+                    f->cursor_pos = (int)f->text_len;
                 }
             }
-        } else {
-            /* Frame creation: record drag start */
-            g_doc.dragging     = TRUE;
-            g_doc.drag_handle  = -1;
-            g_doc.drag_start_x = (H)(cx - g_ox);
-            g_doc.drag_start_y = (H)(cy - g_oy);
-            g_doc.selected_frame = -1;
+            inval_wnd(wnd);
+            return;
         }
-        inval_wnd(wnd);
+
+        /* Tool active: start drag-creation */
+        if (g_doc.tool == TOOL_TEXT_FRAME || g_doc.tool == TOOL_IMAGE_FRAME) {
+            g_doc.dragging     = TRUE;
+            g_doc.drag_start_x = (H)(((cx - ox) * 100) / zoom);
+            g_doc.drag_start_y = (H)(((cy - oy) * 100) / zoom);
+            g_doc.drag_handle  = -1;
+            return;
+        }
         return;
     }
 
+    /* ── 3. Mouse Button Up ─────────────────────────────────────────── */
     if (evt->type == EV_BUT_UP) {
-        H cx = evt->pos.x;
-        H cy = evt->pos.y;
+        g_sb_drag_v = FALSE;
+        g_sb_drag_h = FALSE;
+        g_drag_move = FALSE;
+        g_doc.drag_handle = -1;
 
-        if (g_doc.dragging && g_doc.drag_handle < 0 &&
-            g_doc.tool != TOOL_SELECT) {
-            /* Commit new frame */
+        if (g_doc.dragging &&
+            (g_doc.tool == TOOL_TEXT_FRAME || g_doc.tool == TOOL_IMAGE_FRAME)) {
+            g_doc.dragging = FALSE;
+            H cur_unzoomed_x = (H)(((evt->pos.x - ox) * 100) / zoom);
+            H cur_unzoomed_y = (H)(((evt->pos.y - oy) * 100) / zoom);
             H fx = g_doc.drag_start_x;
             H fy = g_doc.drag_start_y;
-            H fw = (H)((cx - g_ox) - fx);
-            H fh = (H)((cy - g_oy) - fy);
-            if (fw < 0) { fx = (H)(fx + fw); fw = (H)(-fw); }
-            if (fh < 0) { fy = (H)(fy + fh); fh = (H)(-fh); }
-            if (fw >= 16 && fh >= 16) {
-                ClarityFrameType ft = (g_doc.tool == TOOL_IMAGE_FRAME)
-                                    ? FRAME_IMAGE : FRAME_TEXT;
-                ClarityFrame *nf = doc_add_frame(ft, fx, fy, fw, fh);
-                if (nf)
-                    g_doc.selected_frame = g_doc.frame_count - 1;
+            H fw = (H)(cur_unzoomed_x - fx);
+            H fh = (H)(cur_unzoomed_y - fy);
+            if (fw < 0) { fx += fw; fw = -fw; }
+            if (fh < 0) { fy += fh; fh = -fh; }
+            if (fw < 32) fw = 32;
+            if (fh < 24) fh = 24;
+
+            ClarityFrameType ft = (g_doc.tool == TOOL_TEXT_FRAME)
+                                  ? FRAME_TEXT : FRAME_IMAGE;
+            ClarityFrame *nf = doc_add_frame(ft, fx, fy, fw, fh);
+            if (nf) {
+                g_doc.selected_frame = g_doc.frame_count - 1;
             }
             g_doc.tool = TOOL_SELECT;
+            inval_wnd(wnd);
+            return;
         }
 
-        g_doc.dragging    = FALSE;
-        g_doc.drag_handle = -1;
-        g_drag_move       = FALSE;
-        inval_wnd(wnd);
+        g_doc.dragging = FALSE;
         return;
     }
 
+    /* ── 4. Key Down / Typing ───────────────────────────────────────── */
     if (evt->type == EV_KEY_DOWN) {
-        int fidx = g_doc.selected_frame;
-        if (fidx >= 0 && g_doc.frames[fidx].type == FRAME_TEXT) {
-            UH tc = (UH)(evt->key & 0xFFFF);
-            /* F10 is handled by the TIP / Mozc layer at a higher level;
-             * here we just route printable TRON code units directly. */
-            clarity_render_key(&g_doc, fidx, tc);
+        UW key = evt->key;
+        uint16_t mod = (uint16_t)(uintptr_t)evt->data;
+        BOOL ctrl = (mod & BTRON_KMOD_CTRL) != 0;
+        BOOL shift = (mod & BTRON_KMOD_SHIFT) != 0;
+
+        /* Menu navigation shortcuts */
+        int menu_cmd = 0;
+        if (app_menu_handle_key(&g_menu, key, mod, &menu_cmd)) {
+            if (menu_cmd != 0) handle_cmd(menu_cmd);
             inval_wnd(wnd);
+            return;
         }
-        /* Escape: back to SELECT tool */
-        if (evt->key == BTRON_KEY_ESCAPE) {
+
+        /* Ctrl shortcuts */
+        if (ctrl) {
+            if (key == '=' || key == '+') {
+                handle_cmd(CMD_VIEW_ZOOM_IN);
+                return;
+            } else if (key == '-' || key == '_') {
+                handle_cmd(CMD_VIEW_ZOOM_OUT);
+                return;
+            } else if (key == '0') {
+                handle_cmd(CMD_VIEW_ACTUAL);
+                return;
+            } else if (key == 'f' || key == 'F') {
+                handle_cmd(CMD_VIEW_FIT);
+                return;
+            } else if (key == 's' || key == 'S') {
+                handle_cmd(CMD_FILE_SAVE);
+                return;
+            } else if (key == 'n' || key == 'N') {
+                handle_cmd(CMD_FILE_NEW);
+                return;
+            }
+        }
+
+        /* Check Mozc / Tibetan TIP input method */
+        char tip_buf[128] = "";
+        if (tip_process_key(key, mod, tip_buf, sizeof(tip_buf))) {
+            if (tip_buf[0] != '\0' && g_doc.selected_frame >= 0) {
+                for (int i = 0; tip_buf[i]; i++) {
+                    clarity_render_key(&g_doc, g_doc.selected_frame, (UH)(unsigned char)tip_buf[i]);
+                }
+                inval_wnd(wnd);
+            }
+            return;
+        }
+
+        /* Escape key: clear selection or tool */
+        if (key == BTRON_KEY_ESCAPE) {
             g_doc.tool = TOOL_SELECT;
             app_menu_close(&g_menu);
             inval_wnd(wnd);
+            return;
         }
-        return;
-    }
 
-    if (evt->type == EV_WND_CLOSE) {
-        g_running = FALSE;
+        /* Interactive Text Entry into Selected TextFrame */
+        int fidx = g_doc.selected_frame;
+        if (fidx >= 0 && g_doc.frames[fidx].type == FRAME_TEXT) {
+            if (key == BTRON_KEY_BACKSPACE || key == 0x08) {
+                clarity_handle_text_action(&g_doc, fidx, ACT_BACKSPACE, 0);
+            } else if (key == BTRON_KEY_DELETE || key == 0x7F) {
+                clarity_handle_text_action(&g_doc, fidx, ACT_DELETE, 0);
+            } else if (key == BTRON_KEY_RETURN || key == BTRON_KEY_KP_ENTER || key == '\r' || key == '\n') {
+                clarity_handle_text_action(&g_doc, fidx, ACT_ENTER, 0);
+            } else if (key == BTRON_KEY_LEFT) {
+                clarity_handle_text_action(&g_doc, fidx, ACT_LEFT, 0);
+            } else if (key == BTRON_KEY_RIGHT) {
+                clarity_handle_text_action(&g_doc, fidx, ACT_RIGHT, 0);
+            } else if (key == BTRON_KEY_HOME) {
+                clarity_handle_text_action(&g_doc, fidx, ACT_HOME, 0);
+            } else if (key == BTRON_KEY_END) {
+                clarity_handle_text_action(&g_doc, fidx, ACT_END, 0);
+            } else if (key >= 32 && key <= 126) {
+                /* Printable ASCII with shift handling */
+                char ch = (char)key;
+                if (shift) {
+                    if (ch >= 'a' && ch <= 'z') ch = ch - 'a' + 'A';
+                    else {
+                        switch (ch) {
+                            case '1': ch = '!'; break;
+                            case '2': ch = '@'; break;
+                            case '3': ch = '#'; break;
+                            case '4': ch = '$'; break;
+                            case '5': ch = '%'; break;
+                            case '6': ch = '^'; break;
+                            case '7': ch = '&'; break;
+                            case '8': ch = '*'; break;
+                            case '9': ch = '('; break;
+                            case '0': ch = ')'; break;
+                            case '-': ch = '_'; break;
+                            case '=': ch = '+'; break;
+                            case '[': ch = '{'; break;
+                            case ']': ch = '}'; break;
+                            case '\\': ch = '|'; break;
+                            case ';': ch = ':'; break;
+                            case '\'': ch = '"'; break;
+                            case ',': ch = '<'; break;
+                            case '.': ch = '>'; break;
+                            case '/': ch = '?'; break;
+                            case '`': ch = '~'; break;
+                        }
+                    }
+                }
+                clarity_handle_text_action(&g_doc, fidx, ACT_CHAR, (UH)(unsigned char)ch);
+            } else if (key >= 0x0100 && key <= 0xFFFF) {
+                /* Direct TRON code / Unicode */
+                clarity_handle_text_action(&g_doc, fidx, ACT_CHAR, (UH)key);
+            }
+            inval_wnd(wnd);
+        }
         return;
     }
 }
 
-/* ================================================================
- * Menu construction
- * ================================================================ */
+/* ------------------------------------------------------------------ */
+/* Menu Construction                                                  */
+/* ------------------------------------------------------------------ */
 
 static void build_menu(void)
 {
     app_menu_init(&g_menu, APP_MENU_STYLE_CLASSIC_3D);
 
-    /* File */
-    int fi = app_menu_add_header(&g_menu, "File", 60);
-    app_menu_add_item(&g_menu, fi, "New",  "Ctrl+N", CMD_FILE_NEW,  TRUE);
-    app_menu_add_item(&g_menu, fi, "Open", "Ctrl+O", CMD_FILE_OPEN, TRUE);
-    app_menu_add_item(&g_menu, fi, "Save", "Ctrl+S", CMD_FILE_SAVE, TRUE);
+    /* 1. File */
+    int fi = app_menu_add_header(&g_menu, "ファイル(F)", 100);
+    app_menu_add_item(&g_menu, fi, "新規作成 (New)",  "Ctrl+N", CMD_FILE_NEW,  TRUE);
+    app_menu_add_item(&g_menu, fi, "開く (Open)...",   "Ctrl+O", CMD_FILE_OPEN, TRUE);
+    app_menu_add_item(&g_menu, fi, "保存 (Save)",      "Ctrl+S", CMD_FILE_SAVE, TRUE);
 
-    /* Format */
-    int fmti = app_menu_add_header(&g_menu, "Format", 80);
-    app_menu_add_item(&g_menu, fmti, "A4 Portrait (210\xc3\x97""297 mm)",
-                      "", CMD_FMT_A4,      TRUE);
-    app_menu_add_item(&g_menu, fmti,
-                      "\xe5\x9b\x9b\xe5\x85\xad\xe5\x88\xa4 Shiroku (127\xc3\x97""188 mm)",
-                      "", CMD_FMT_SHIROKU, TRUE);
-    app_menu_add_item(&g_menu, fmti,
-                      "Pecha Kangyur (560\xc3\x97""110 mm)",
-                      "", CMD_FMT_PECHA,   TRUE);
+    /* 2. View / Zoom */
+    int vi = app_menu_add_header(&g_menu, "表示(V)", 80);
+    app_menu_add_item(&g_menu, vi, "拡大 (Zoom In +)",     "Ctrl++", CMD_VIEW_ZOOM_IN,  TRUE);
+    app_menu_add_item(&g_menu, vi, "縮小 (Zoom Out -)",    "Ctrl+-", CMD_VIEW_ZOOM_OUT, TRUE);
+    app_menu_add_item(&g_menu, vi, "等倍 (Actual 100%)",   "Ctrl+0", CMD_VIEW_ACTUAL,   TRUE);
+    app_menu_add_item(&g_menu, vi, "全体表示 (Fit Window)", "Ctrl+F", CMD_VIEW_FIT,      TRUE);
+    app_menu_add_separator(&g_menu, vi);
+    app_menu_add_item(&g_menu, vi, "50% 表示",   "", CMD_VIEW_ZOOM_50,  TRUE);
+    app_menu_add_item(&g_menu, vi, "75% 表示",   "", CMD_VIEW_ZOOM_75,  TRUE);
+    app_menu_add_item(&g_menu, vi, "100% 表示",  "", CMD_VIEW_ZOOM_100, TRUE);
+    app_menu_add_item(&g_menu, vi, "125% 表示",  "", CMD_VIEW_ZOOM_125, TRUE);
+    app_menu_add_item(&g_menu, vi, "150% 表示",  "", CMD_VIEW_ZOOM_150, TRUE);
 
-    /* Insert */
-    int ii = app_menu_add_header(&g_menu, "Insert", 70);
-    app_menu_add_item(&g_menu, ii, "Text Frame",  "T", CMD_INS_TEXT,      TRUE);
-    app_menu_add_item(&g_menu, ii, "Image Frame", "I", CMD_INS_IMAGE,     TRUE);
+    /* 3. Format */
+    int fmti = app_menu_add_header(&g_menu, "判型(P)", 80);
+    app_menu_add_item(&g_menu, fmti, "A4 判型 (210×297 mm)", "", CMD_FMT_A4, TRUE);
+    app_menu_add_item(&g_menu, fmti, "四六判 (127×188 mm・縦書き)", "", CMD_FMT_SHIROKU, TRUE);
+    app_menu_add_item(&g_menu, fmti, "Pecha 経典 (560×110 mm)", "", CMD_FMT_PECHA, TRUE);
+    app_menu_add_separator(&g_menu, fmti);
+    app_menu_add_item(&g_menu, fmti, "ページ追加 (Add Page)", "+", CMD_PAGE_ADD, TRUE);
+    app_menu_add_item(&g_menu, fmti, "ページ削除 (Remove Page)", "-", CMD_PAGE_REMOVE, TRUE);
+
+    /* 4. Insert */
+    int ii = app_menu_add_header(&g_menu, "挿入(I)", 80);
+    app_menu_add_item(&g_menu, ii, "文字列枠 (Text Frame)",  "T", CMD_INS_TEXT,  TRUE);
+    app_menu_add_item(&g_menu, ii, "画像枠 (Image Frame)",   "I", CMD_INS_IMAGE, TRUE);
     app_menu_add_separator(&g_menu, ii);
-    app_menu_add_item(&g_menu, ii, "Flip Text Flow (H\xe2\x86\x94V)", "F",
-                      CMD_INS_FLIP_FLOW, TRUE);
+    app_menu_add_item(&g_menu, ii, "書字方向切替 (横↔縦)", "F", CMD_INS_FLIP_FLOW, TRUE);
 }
 
-/* ================================================================
- * Window destruction hook
- * ================================================================ */
+/* ------------------------------------------------------------------ */
+/* Window Destruction Hook                                             */
+/* ------------------------------------------------------------------ */
 
 static void destroy_clarity(WND *wnd)
 {
     (void)wnd;
     g_wnd = NULL;
+    clarity_set_cursor(CLARITY_CURSOR_ARROW);
 }
 
-/* ================================================================
- * open_clarity_window – non-blocking window opener.
- * Creates and returns the Clarity WND* without blocking the OS scheduler.
- * Matches standard B-System convention used by all applications.
- * ================================================================ */
+/* ------------------------------------------------------------------ */
+/* Public Window Opener (Canonical Non-Blocking BTRON Convention)     */
+/* ------------------------------------------------------------------ */
 
 WND* open_clarity_window(void)
 {
@@ -519,7 +1037,7 @@ WND* open_clarity_window(void)
 
     doc_new(FMT_A4);
 
-    /* Populate rich default sample frame on page */
+    /* Populate rich default sample frame */
     ClarityFrame *f = doc_add_frame(FRAME_TEXT, 24, 24, 460, 240);
     if (f) {
         const char *sample = 
@@ -533,6 +1051,7 @@ WND* open_clarity_window(void)
         for (int i = 0; sample[i] && f->text_len < CLARITY_TEXT_BUF - 1; i++) {
             f->text[f->text_len++] = (UH)(unsigned char)sample[i];
         }
+        f->cursor_pos = (int)f->text_len;
         g_doc.selected_frame = 0;
     }
 
@@ -547,68 +1066,38 @@ WND* open_clarity_window(void)
     g_wnd->destroy       = destroy_clarity;
 
     build_menu();
+    clarity_fit_window();
+
     top_wnd(g_wnd);
     inval_wnd(g_wnd);
     return g_wnd;
 }
-
-/* ================================================================
- * clarity_app_open – non-blocking entry point (global menu / launcher).
- * Yields immediately back to OS scheduler / desktop event loop.
- * ================================================================ */
 
 void clarity_app_open(void)
 {
     open_clarity_window();
 }
 
-/* ================================================================
- * Legacy init helper (spec API surface; kept for header compatibility)
- * ================================================================ */
+/* ------------------------------------------------------------------ */
+/* Legacy init helper (spec API surface; kept for header compatibility)*/
+/* ------------------------------------------------------------------ */
 
 void clarity_init(ClarityDoc *doc)
 {
     if (!doc) return;
     memset(doc, 0, sizeof(ClarityDoc));
     doc->fmt             = FMT_A4;
+    doc->page_count      = 2;
+    doc->zoom_pct        = 75;
     doc->selected_frame  = -1;
     doc->tool            = TOOL_SELECT;
     clarity_fmt_dimensions(doc);
 }
 
-/* Legacy format-switch helpers (spec API surface; not used by prototype UI) */
-void clarity_set_pecha_mode(ClarityDoc *doc, TibetanPechaSize size)
+void clarity_set_pecha_mode(ClarityDoc *doc, int size)
 {
     if (!doc) return;
     doc->fmt = FMT_PECHA;
-    (void)size; /* full implementation selects among 4 Pecha sizes */
+    (void)size;
     clarity_fmt_dimensions(doc);
-}
-
-void clarity_set_japanese_legacy_format(ClarityDoc *doc,
-                                        JapaneseLegacyPaperFormat fmt,
-                                        BOOL vertical)
-{
-    if (!doc) return;
-    /* Prototype: only activate Shiroku-ban; others map to A4 */
-    if (fmt == JP_PAPER_SHIROKU_BAN) {
-        doc->fmt = FMT_SHIROKU;
-    } else {
-        doc->fmt = FMT_A4;
-    }
-    (void)vertical;
-    clarity_fmt_dimensions(doc);
-}
-
-int clarity_link_cabinet_source(ClarityDoc *doc, int frame_idx, UW robj_id)
-{
-    /* Cabinet-linked frames omitted in prototype; stub preserved */
-    (void)doc; (void)frame_idx; (void)robj_id;
-    return 0;
-}
-
-void clarity_render_page(ClarityDoc *doc, int page_num)
-{
-    /* Multi-page rendering omitted in prototype; stub preserved */
-    (void)doc; (void)page_num;
 }

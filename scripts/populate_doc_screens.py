@@ -202,13 +202,13 @@ APPS_MAP = {
     "Clarity.html": [
         {
             "screen": "../img/screens/Clarity_Application.png",
-            "caption": "実機描画フレームバッファより自動抽出されたClarity電子帳票DTPウィンドウ (A4・四六判・Pecha三判型対応)",
+            "caption": "実機描画フレームバッファより自動抽出されたClarity電子帳票DTPウィンドウ (水平・垂直スクロールバー・頁区切り・判型組版表示)",
             "alt": "電子帳票 Clarity DTP Application (Native Headless GDEV Capture)"
         },
         {
             "screen": "../img/screens/Clarity_Menu_Opened.png",
-            "caption": "実機描画フレームバッファより自動抽出されたClarity判型選択メニュー展開画面 (Format Menu Opened)",
-            "alt": "電子帳票 Clarity – 判型メニュー展開 (Format Menu Opened)"
+            "caption": "実機描画フレームバッファより自動抽出されたClarity表示メニュー展開画面 (View/Zoom Menu Opened: 拡大・縮小・等倍・全体表示)",
+            "alt": "電子帳票 Clarity – 表示/拡大縮小メニュー展開 (View Menu Opened)"
         }
     ]
 }

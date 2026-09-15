@@ -27,10 +27,10 @@
 #include <stdio.h>
 #include <string.h>
 
-#define DRIVESETUP_DEF_W  740
-#define DRIVESETUP_DEF_H  512
-#define DRIVESETUP_MIN_W  520
-#define DRIVESETUP_MIN_H  420
+#define DRIVESETUP_DEF_W  800
+#define DRIVESETUP_DEF_H  600
+#define DRIVESETUP_MIN_W  500
+#define DRIVESETUP_MIN_H  500
 
 /* Theme Palette (Clean Authentic BTRON Workstation UI) */
 #define DS_COL_BG           COLOR_LTGRAY  /* 0xFFD4D0C8 Classic 3D Face */
@@ -2231,7 +2231,14 @@ void drivesetup_event_handler(WND *wnd, const EVT *evt) {
     }
 
     if (evt->type == EV_KEY_DOWN) {
-        uint32_t key = (uint32_t)(uintptr_t)evt->data;
+        uint32_t key = evt->key;
+
+        if (st->active_dialog != DIALOG_NONE) {
+            if (b_drivesetup_handle_dialog_key(st, key)) {
+                inval_wnd(wnd);
+                return;
+            }
+        }
 
         /* If dialog is open, handle keyboard navigation first */
         if (st->active_dialog != DIALOG_NONE) {

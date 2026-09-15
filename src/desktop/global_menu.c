@@ -46,7 +46,7 @@ extern WND* open_about_window(void);
 extern WND* open_display_settings_window(void);
 #endif
 
-#define GMENU_DROPDOWN_WIDTH    280
+#define GMENU_DROPDOWN_WIDTH    380
 #define GMENU_ROW_HEIGHT        22
 
 /* Global Menu State Singleton */

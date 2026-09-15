@@ -18,8 +18,8 @@ extern "C" {
 #define APP_MENU_MAX_ITEMS       16
 #define APP_MENU_BAR_HEIGHT      21
 #define APP_MENU_ROW_HEIGHT      22
-#define APP_MENU_DROPDOWN_WIDTH  250
-#define APP_MENU_SUBMENU_WIDTH   260
+#define APP_MENU_DROPDOWN_WIDTH  340
+#define APP_MENU_SUBMENU_WIDTH   280
 
 typedef enum {
     APP_MENU_STYLE_CLASSIC_3D = 0,  /* T-Editor authentic 3D beveled plate (default) */

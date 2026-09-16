@@ -8,6 +8,7 @@
 #define _CLARITY_DOC_H_
 
 #include <btron/types.h>
+#include <btron/dp.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -150,6 +151,55 @@ typedef struct {
     /* UB bitmap[bmp_w * bmp_h * 4]       follows in stream */
 } ClaritySerialFrame;
 #pragma pack(pop)
+
+
+/* ================================================================
+ * Hit Testing and Controls
+ * ================================================================ */
+
+#define CLARITY_PERIMETER_PX  5   /* thickness of border band for moving */
+
+typedef enum {
+    CLARITY_HIT_NONE = 0,
+    CLARITY_HIT_HANDLE,     /* target is one of 8 reper handles (0..7) */
+    CLARITY_HIT_PERIMETER,  /* target is border band (initiates frame move) */
+    CLARITY_HIT_INTERIOR    /* target is frame body (text caret / selection) */
+} ClarityHitTarget;
+
+typedef struct {
+    ClarityHitTarget target;
+    int frame_idx;
+    int handle_idx;         /* 0..7 if CLARITY_HIT_HANDLE */
+} ClarityHitInfo;
+
+/* Text action enum */
+enum {
+    CLARITY_ACT_CHAR = 0,
+    CLARITY_ACT_BACKSPACE,
+    CLARITY_ACT_DELETE,
+    CLARITY_ACT_LEFT,
+    CLARITY_ACT_RIGHT,
+    CLARITY_ACT_HOME,
+    CLARITY_ACT_END,
+    CLARITY_ACT_ENTER,
+    CLARITY_ACT_UP,
+    CLARITY_ACT_DOWN
+};
+
+/* Hit testing & Controls Function Prototypes */
+void clarity_hittest_full(const ClarityDoc *doc, H x, H y, int ox, int oy, ClarityHitInfo *info);
+int  clarity_hittest_handle(const ClarityFrame *f, H x, H y, int ox, int oy, int zoom_pct);
+int  clarity_hittest_frame(const ClarityDoc *doc, H x, H y, int ox, int oy);
+void clarity_resize_frame_handle(ClarityFrame *f, int h, H mx, H my, int ox, int oy, int zoom_pct);
+void clarity_move_frame(ClarityFrame *f, H dx, H dy);
+void clarity_draw_frames(GDEV *dev, const ClarityDoc *doc, int ox, int oy);
+
+/* Text Rendering & Editing Function Prototypes */
+void clarity_handle_text_action(ClarityDoc *doc, int fidx, int action, UH tc);
+void clarity_render_key(ClarityDoc *doc, int fidx, UH tc);
+int  clarity_text_xy_to_pos(const ClarityFrame *f, H mx, H my, int ox, int oy, int zoom_pct);
+void clarity_render_text(GDEV *dev, const ClarityFrame *f, int ox, int oy, int zoom, BOOL is_selected);
+void clarity_render_image(GDEV *dev, const ClarityFrame *f, int ox, int oy, int zoom);
 
 #ifdef __cplusplus
 }

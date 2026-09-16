@@ -459,6 +459,15 @@ test-chokanji: $(TEST_CHOKANJI_BIN)
 	./$(TEST_CHOKANJI_BIN)
 	@echo "[CHOKANJI] All Cho-Kanji tests passed."
 
+# ── Clarity DTP Frame & Control tests ────────────────────────────────
+TEST_CLARITY_BIN = ./.build/test_clarity_frames
+$(TEST_CLARITY_BIN): verify/tests/test_clarity_frames.c src/apps/clarity_layout.posix.o src/apps/clarity_render.posix.o src/graphics/dp_core.posix.o src/font/troncode.posix.o src/font/jis_fonts.posix.o src/font/tibetan_fonts.posix.o src/font/font_mgr.posix.o
+	$(CC) $(CFLAGS) -Isrc $^ -o $@ -lm
+
+test-clarity: $(TEST_CLARITY_BIN)
+	./$(TEST_CLARITY_BIN)
+	@echo "[CLARITY] All Clarity tests passed."
+
 # ═══════════════════════════════════════════════════════════════════
 # QEMU VirtIO Desktop
 # ═══════════════════════════════════════════════════════════════════

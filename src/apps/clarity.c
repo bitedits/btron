@@ -61,7 +61,9 @@ enum {
     ACT_RIGHT,
     ACT_HOME,
     ACT_END,
-    ACT_ENTER
+    ACT_ENTER,
+    ACT_UP,
+    ACT_DOWN
 };
 
 /* ------------------------------------------------------------------ */
@@ -561,6 +563,9 @@ static void clarity_event(WND *wnd, const EVT *evt)
 {
     if (!wnd || !evt) return;
 
+    H rel_x = (H)(evt->pos.x - wnd->client.left);
+    H rel_y = (H)(evt->pos.y - wnd->client.top);
+
     int vw = 0, vh = 0, cw = 0, ch = 0, max_x = 0, max_y = 0;
     get_viewport_and_content_bounds(&vw, &vh, &cw, &ch, &max_x, &max_y);
 
@@ -570,8 +575,6 @@ static void clarity_event(WND *wnd, const EVT *evt)
 
     /* ── 1. Mouse Move ─────────────────────────────────────────────── */
     if (evt->type == EV_MOUSE_MOVE) {
-        H rel_x = (H)(evt->pos.x - wnd->client.left);
-        H rel_y = (H)(evt->pos.y - wnd->client.top);
 
         /* Menu bar hover */
         if (app_menu_handle_mouse_move(&g_menu, rel_x, rel_y)) {
@@ -608,12 +611,14 @@ static void clarity_event(WND *wnd, const EVT *evt)
 
         /* Frame Move Dragging */
         if (g_drag_move && g_doc.selected_frame >= 0) {
-            H dx = (H)(((evt->pos.x - g_drag_prev_x) * 100) / zoom);
-            H dy = (H)(((evt->pos.y - g_drag_prev_y) * 100) / zoom);
-            clarity_move_frame(&g_doc.frames[g_doc.selected_frame], dx, dy);
-            g_drag_prev_x = evt->pos.x;
-            g_drag_prev_y = evt->pos.y;
-            g_doc.dirty   = TRUE;
+            H dx = (H)(((rel_x - g_drag_prev_x) * 100) / zoom);
+            H dy = (H)(((rel_y - g_drag_prev_y) * 100) / zoom);
+            if (dx != 0 || dy != 0) {
+                clarity_move_frame(&g_doc.frames[g_doc.selected_frame], dx, dy);
+                g_drag_prev_x = rel_x;
+                g_drag_prev_y = rel_y;
+                g_doc.dirty   = TRUE;
+            }
             clarity_set_cursor(CLARITY_CURSOR_MOVE);
             inval_wnd(wnd);
             return;
@@ -624,7 +629,7 @@ static void clarity_event(WND *wnd, const EVT *evt)
             clarity_resize_frame_handle(
                 &g_doc.frames[g_doc.selected_frame],
                 g_doc.drag_handle,
-                evt->pos.x, evt->pos.y,
+                rel_x, rel_y,
                 ox, oy, zoom);
             g_doc.dirty = TRUE;
             inval_wnd(wnd);
@@ -645,15 +650,11 @@ static void clarity_event(WND *wnd, const EVT *evt)
             clarity_set_cursor(CLARITY_CURSOR_ARROW);
         } else {
             /* Inside Canvas Viewport */
-            int handle = -1;
-            if (g_doc.selected_frame >= 0) {
-                handle = clarity_hittest_handle(
-                    &g_doc.frames[g_doc.selected_frame], evt->pos.x, evt->pos.y,
-                    ox, oy, zoom);
-            }
+            ClarityHitInfo hinfo;
+            clarity_hittest_full(&g_doc, rel_x, rel_y, ox, oy, &hinfo);
 
-            if (handle >= 0) {
-                switch (handle) {
+            if (hinfo.target == CLARITY_HIT_HANDLE) {
+                switch (hinfo.handle_idx) {
                     case 0:
                     case 4: clarity_set_cursor(CLARITY_CURSOR_NWSE); break;
                     case 2:
@@ -662,18 +663,18 @@ static void clarity_event(WND *wnd, const EVT *evt)
                     case 5: clarity_set_cursor(CLARITY_CURSOR_NS);   break;
                     case 3:
                     case 7: clarity_set_cursor(CLARITY_CURSOR_WE);   break;
+                    default: clarity_set_cursor(CLARITY_CURSOR_ARROW); break;
                 }
-            } else {
-                int fidx = clarity_hittest_frame(&g_doc, evt->pos.x, evt->pos.y, ox, oy);
-                if (fidx >= 0) {
-                    if (g_doc.frames[fidx].type == FRAME_TEXT) {
-                        clarity_set_cursor(CLARITY_CURSOR_IBEAM);
-                    } else {
-                        clarity_set_cursor(CLARITY_CURSOR_MOVE);
-                    }
+            } else if (hinfo.target == CLARITY_HIT_PERIMETER) {
+                clarity_set_cursor(CLARITY_CURSOR_MOVE);
+            } else if (hinfo.target == CLARITY_HIT_INTERIOR) {
+                if (g_doc.frames[hinfo.frame_idx].type == FRAME_TEXT) {
+                    clarity_set_cursor(CLARITY_CURSOR_IBEAM);
                 } else {
                     clarity_set_cursor(CLARITY_CURSOR_ARROW);
                 }
+            } else {
+                clarity_set_cursor(CLARITY_CURSOR_ARROW);
             }
         }
         return;
@@ -681,8 +682,6 @@ static void clarity_event(WND *wnd, const EVT *evt)
 
     /* ── 2. Mouse Button Down ───────────────────────────────────────── */
     if (evt->type == EV_BUT_DOWN) {
-        H rel_x = (H)(evt->pos.x - wnd->client.left);
-        H rel_y = (H)(evt->pos.y - wnd->client.top);
 
         /* Menu Bar clicks */
         int cmd = -1, sub = -1;
@@ -764,38 +763,42 @@ static void clarity_event(WND *wnd, const EVT *evt)
             return;
         }
 
-        /* Canvas Click */
-        H cx = evt->pos.x;
-        H cy = evt->pos.y;
+        /* Canvas Click (using client-relative coordinates) */
+        H cx = rel_x;
+        H cy = rel_y;
 
         if (g_doc.tool == TOOL_SELECT) {
-            /* 1. Check handles on selected frame first */
-            int handle = -1;
-            if (g_doc.selected_frame >= 0) {
-                handle = clarity_hittest_handle(
-                    &g_doc.frames[g_doc.selected_frame], cx, cy, ox, oy, zoom);
-            }
-            if (handle >= 0) {
+            ClarityHitInfo hinfo;
+            clarity_hittest_full(&g_doc, cx, cy, ox, oy, &hinfo);
+
+            if (hinfo.target == CLARITY_HIT_HANDLE) {
                 g_doc.dragging    = TRUE;
-                g_doc.drag_handle = handle;
+                g_doc.drag_handle = hinfo.handle_idx;
                 inval_wnd(wnd);
                 return;
             }
 
-            /* 2. Hit test frames */
-            int fidx = clarity_hittest_frame(&g_doc, cx, cy, ox, oy);
-            g_doc.selected_frame = fidx;
-            if (fidx >= 0) {
+            if (hinfo.target == CLARITY_HIT_PERIMETER) {
+                g_doc.selected_frame = hinfo.frame_idx;
                 g_drag_move   = TRUE;
                 g_drag_prev_x = cx;
                 g_drag_prev_y = cy;
-
-                /* Click inside text frame sets cursor to end or clicked pos */
-                ClarityFrame *f = &g_doc.frames[fidx];
-                if (f->type == FRAME_TEXT) {
-                    f->cursor_pos = (int)f->text_len;
-                }
+                inval_wnd(wnd);
+                return;
             }
+
+            if (hinfo.target == CLARITY_HIT_INTERIOR) {
+                g_doc.selected_frame = hinfo.frame_idx;
+                ClarityFrame *f = &g_doc.frames[hinfo.frame_idx];
+                if (f->type == FRAME_TEXT) {
+                    f->cursor_pos = clarity_text_xy_to_pos(f, cx, cy, ox, oy, zoom);
+                }
+                inval_wnd(wnd);
+                return;
+            }
+
+            /* Canvas background click deselects */
+            g_doc.selected_frame = -1;
             inval_wnd(wnd);
             return;
         }
@@ -821,8 +824,8 @@ static void clarity_event(WND *wnd, const EVT *evt)
         if (g_doc.dragging &&
             (g_doc.tool == TOOL_TEXT_FRAME || g_doc.tool == TOOL_IMAGE_FRAME)) {
             g_doc.dragging = FALSE;
-            H cur_unzoomed_x = (H)(((evt->pos.x - ox) * 100) / zoom);
-            H cur_unzoomed_y = (H)(((evt->pos.y - oy) * 100) / zoom);
+            H cur_unzoomed_x = (H)(((rel_x - ox) * 100) / zoom);
+            H cur_unzoomed_y = (H)(((rel_y - oy) * 100) / zoom);
             H fx = g_doc.drag_start_x;
             H fy = g_doc.drag_start_y;
             H fw = (H)(cur_unzoomed_x - fx);
@@ -918,6 +921,10 @@ static void clarity_event(WND *wnd, const EVT *evt)
                 clarity_handle_text_action(&g_doc, fidx, ACT_LEFT, 0);
             } else if (key == BTRON_KEY_RIGHT) {
                 clarity_handle_text_action(&g_doc, fidx, ACT_RIGHT, 0);
+            } else if (key == BTRON_KEY_UP) {
+                clarity_handle_text_action(&g_doc, fidx, ACT_UP, 0);
+            } else if (key == BTRON_KEY_DOWN) {
+                clarity_handle_text_action(&g_doc, fidx, ACT_DOWN, 0);
             } else if (key == BTRON_KEY_HOME) {
                 clarity_handle_text_action(&g_doc, fidx, ACT_HOME, 0);
             } else if (key == BTRON_KEY_END) {

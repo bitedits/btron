@@ -282,7 +282,7 @@ int clarity_hittest_handle(const ClarityFrame *f, H x, H y, int ox, int oy, int 
 
     int mx = (sr.left + sr.right)  / 2;
     int my = (sr.top  + sr.bottom) / 2;
-    int R  = CLARITY_HANDLE_RADIUS + 3; /* generous hit zone */
+    int R  = CLARITY_HANDLE_RADIUS + 5; /* 9px hit radius */
 
     int hx[8] = { sr.left, mx, sr.right, sr.right, sr.right, mx, sr.left, sr.left };
     int hy[8] = { sr.top,  sr.top, sr.top, my, sr.bottom, sr.bottom, sr.bottom, my };
@@ -294,6 +294,58 @@ int clarity_hittest_handle(const ClarityFrame *f, H x, H y, int ox, int oy, int 
     return -1;
 }
 
+void clarity_hittest_full(const ClarityDoc *doc, H x, H y, int ox, int oy, ClarityHitInfo *info)
+{
+    if (!info) return;
+    info->target = CLARITY_HIT_NONE;
+    info->frame_idx = -1;
+    info->handle_idx = -1;
+    if (!doc) return;
+
+    int zoom = doc->zoom_pct > 0 ? doc->zoom_pct : 100;
+
+    /* 1. If a frame is selected, check its 8 handles first */
+    if (doc->selected_frame >= 0 && doc->selected_frame < doc->frame_count) {
+        const ClarityFrame *sf = &doc->frames[doc->selected_frame];
+        if (sf->id != 0) {
+            int h = clarity_hittest_handle(sf, x, y, ox, oy, zoom);
+            if (h >= 0) {
+                info->target = CLARITY_HIT_HANDLE;
+                info->frame_idx = doc->selected_frame;
+                info->handle_idx = h;
+                return;
+            }
+        }
+    }
+
+    /* 2. Check frames from top to bottom (reverse order) */
+    for (int i = doc->frame_count - 1; i >= 0; i--) {
+        const ClarityFrame *f = &doc->frames[i];
+        if (f->id == 0) continue;
+
+        RECT sr = frame_screen_rect_zoom(f, ox, oy, zoom);
+        int pad = 6; /* 6px outside frame margin */
+        if (x < sr.left - pad || x > sr.right + pad ||
+            y < sr.top - pad  || y > sr.bottom + pad) {
+            continue;
+        }
+
+        /* Hit within frame bounds + pad.
+         * Test perimeter band: outer margin + 10px inner border */
+        int p_inner = 10;
+        if (x <= sr.left + p_inner || x >= sr.right - p_inner ||
+            y <= sr.top + p_inner  || y >= sr.bottom - p_inner) {
+            info->target = CLARITY_HIT_PERIMETER;
+            info->frame_idx = i;
+            return;
+        } else {
+            info->target = CLARITY_HIT_INTERIOR;
+            info->frame_idx = i;
+            return;
+        }
+    }
+}
+
 void clarity_resize_frame_handle(ClarityFrame *f, int h, H mx, H my, int ox, int oy, int zoom_pct)
 {
     if (!f) return;
@@ -303,39 +355,41 @@ void clarity_resize_frame_handle(ClarityFrame *f, int h, H mx, H my, int ox, int
     H cx = (H)(((mx - ox) * 100) / zoom);
     H cy = (H)(((my - oy) * 100) / zoom);
 
-#define MIN_SZ 20
+#define MIN_W 32
+#define MIN_H 24
     switch (h) {
         case 0: /* top-left */
-            if (f->bounds.right  - cx >= MIN_SZ) f->bounds.left = cx;
-            if (f->bounds.bottom - cy >= MIN_SZ) f->bounds.top  = cy;
+            if (f->bounds.right  - cx >= MIN_W) f->bounds.left = cx;
+            if (f->bounds.bottom - cy >= MIN_H) f->bounds.top  = cy;
             break;
         case 1: /* top-mid */
-            if (f->bounds.bottom - cy >= MIN_SZ) f->bounds.top = cy;
+            if (f->bounds.bottom - cy >= MIN_H) f->bounds.top = cy;
             break;
         case 2: /* top-right */
-            if (cx - f->bounds.left >= MIN_SZ)   f->bounds.right = cx;
-            if (f->bounds.bottom - cy >= MIN_SZ) f->bounds.top   = cy;
+            if (cx - f->bounds.left >= MIN_W)   f->bounds.right = cx;
+            if (f->bounds.bottom - cy >= MIN_H) f->bounds.top   = cy;
             break;
         case 3: /* right-mid */
-            if (cx - f->bounds.left >= MIN_SZ) f->bounds.right = cx;
+            if (cx - f->bounds.left >= MIN_W) f->bounds.right = cx;
             break;
         case 4: /* bot-right */
-            if (cx - f->bounds.left   >= MIN_SZ) f->bounds.right  = cx;
-            if (cy - f->bounds.top    >= MIN_SZ) f->bounds.bottom = cy;
+            if (cx - f->bounds.left   >= MIN_W) f->bounds.right  = cx;
+            if (cy - f->bounds.top    >= MIN_H) f->bounds.bottom = cy;
             break;
         case 5: /* bot-mid */
-            if (cy - f->bounds.top >= MIN_SZ) f->bounds.bottom = cy;
+            if (cy - f->bounds.top >= MIN_H) f->bounds.bottom = cy;
             break;
         case 6: /* bot-left */
-            if (f->bounds.right - cx >= MIN_SZ) f->bounds.left   = cx;
-            if (cy - f->bounds.top   >= MIN_SZ) f->bounds.bottom = cy;
+            if (f->bounds.right - cx >= MIN_W) f->bounds.left   = cx;
+            if (cy - f->bounds.top   >= MIN_H) f->bounds.bottom = cy;
             break;
         case 7: /* left-mid */
-            if (f->bounds.right - cx >= MIN_SZ) f->bounds.left = cx;
+            if (f->bounds.right - cx >= MIN_W) f->bounds.left = cx;
             break;
         default: break;
     }
-#undef MIN_SZ
+#undef MIN_W
+#undef MIN_H
 }
 
 void clarity_move_frame(ClarityFrame *f, H dx, H dy)

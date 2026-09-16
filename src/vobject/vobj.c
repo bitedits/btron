@@ -15,19 +15,28 @@
 #else
 #include <stddef.h>
 #include <stdint.h>
+#include <libstr.h>
 extern void* Imalloc(size_t sz);
 extern void Ifree(void *ptr);
 extern void* Icalloc(size_t nmemb, size_t sz);
-extern char* tkl_strncpy(char *dst, const char *src, size_t n);
-extern void* tkl_memset(void *s, int c, size_t n);
-extern void* tkl_memcpy(void *dst, const void *src, size_t n);
 #define malloc Imalloc
 #define free Ifree
 #define calloc Icalloc
 #define strncpy tkl_strncpy
 #define memset tkl_memset
 #define memcpy tkl_memcpy
-static inline size_t strlen(const char *s) { size_t n = 0; while (s && s[n]) n++; return n; }
+#define strcmp tkl_strcmp
+#define strncat tkl_strncat
+#define snprintf tkl_snprintf
+#define strlen tkl_strlen
+static inline char* local_strchr(const char *s, int c) {
+    while (s && *s) {
+        if (*s == (char)c) return (char*)s;
+        s++;
+    }
+    return (c == 0 && s) ? (char*)s : (void*)0;
+}
+#define strchr local_strchr
 static inline int rand(void) { return 42; }
 #endif
 
@@ -38,7 +47,7 @@ static ID g_next_robj_id = 100;
 static char g_storage_root[256] = "btron_store";
 
 /* Helper to deduce VOBJ_TYPE from filename / path */
-static VOBJ_TYPE deduce_type_from_name(const char *name) {
+static inline __attribute__((unused)) VOBJ_TYPE deduce_type_from_name(const char *name) {
     if (!name) return VOBJ_TYPE_TEXT;
     size_t len = strlen(name);
     if (len >= 4 && (strcmp(name + len - 4, ".png") == 0 || strcmp(name + len - 4, ".PNG") == 0 ||

@@ -303,6 +303,7 @@ COMMON_NO_SDL_SRCS = \
     src/window/wnd.c       \
     src/window/app_menu.c  \
     src/window/event.c     \
+    src/window/dnd.c       \
     src/vobject/vobj.c     \
     src/desktop/desktop.c  \
     src/desktop/workbench.c \
@@ -1099,7 +1100,7 @@ book2tad:
 # ═══════════════════════════════════════════════════════════════════
 # Native TAD Document Browser & Cabinet Test Suite
 # ═══════════════════════════════════════════════════════════════════
-TEST_TAD_SRCS = verify/tests/test_tad_browser.c src/apps/tad_browser.c src/apps/vobj_manager.c src/window/app_menu.c \
+TEST_TAD_SRCS = verify/tests/test_tad_browser.c src/apps/tad_browser.c src/apps/vobj_manager.c src/window/dnd.c src/window/app_menu.c \
                 src/settings/appearance.c src/graphics/icons_bundle.c \
                 src/tip/mozc_kkc.c src/font/troncode.c src/font/jis_fonts.c src/font/tibetan_fonts.c src/tip/tip_vobj.c \
                 src/window/wnd.c src/graphics/dp_core.c
@@ -1336,6 +1337,8 @@ clean:
 # ===================================================================
 CAPTURE_SCREENS_BIN = ./.build/capture_screens
 CAPTURE_SCREENS_SRCS = src/tools/capture_screens.c \
+                       src/window/dnd.c \
+                       src/graphics/image_decode.c \
                        src/desktop/desktop.c \
                        src/settings/language.c \
                        src/settings/control_panel.c \

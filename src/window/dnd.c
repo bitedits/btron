@@ -10,6 +10,7 @@
 #include <stdio.h>
 #else
 #include <stddef.h>
+#include <libstr.h>
 #define memset tkl_memset
 #define memcpy tkl_memcpy
 #define strlen tkl_strlen

@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Clarity – 電子帳票 | B-System Specification</title>
-  <meta name="description" content="プロフェッショナルDTP組版、日本固有伝統14判型、チベット横長Pecha経典、TeX数理組版エンジンの技術仕様。">
+  <meta name="description" content="プロフェッショナルDTP組版、日本固有伝統14判型、チベット横長Pecha経典。">
   <link rel="stylesheet" href="../../index.css">
   <link rel="stylesheet" href="../settings/settings.css">
   <link rel="stylesheet" href="./apps.css">
@@ -21,7 +21,7 @@
   <div class="setting-hero">
     <div class="setting-hero-icon"><img src="https://openmoji.org/data/color/svg/1F4D6.svg" alt="📖" width="64" height="64"></div>
     <h1>電子帳票 (Clarity)</h1>
-    <div class="setting-hero-badge">DTP組版エンジン · 伝統和紙判型 · チベットPecha · TeX数理組版 · 縦書き</div>
+    <div class="setting-hero-badge">DTP組版エンジン · 伝統和紙判型 · チベットPecha · 縦書き</div>
     <div class="subtitle">DTP出版組版環境、和式伝統14判型、チベット横長Pecha<br><span style="font-size:0.9em; opacity:0.85;">"Professional DTP publishing compositor: authentic Japanese legacy paper formats, Tibetan horizontal Pecha loose-leaf geometry."</span></div>
   </div>
 
@@ -29,7 +29,7 @@
     <a href="../../b-system.html#apps-section" class="back-link">← アプリケーション一覧 (Applications Index)</a>
 
     <div class="tagline-card">
-      <strong>電子帳票（Clarity）</strong> — B-Systemにおける高度出版・帳票組版環境。キャビネットTAD動的集約、和装本縦書き、チベット横長Pecha、TeX数式組版を統括するコンポジター仕様。<br>
+      <strong>電子帳票（Clarity）</strong> — B-Systemにおける高度出版・帳票組版環境。キャビネットTAD動的集約、和装本縦書き、チベット横長Pecha。<br>
       <span style="display:block; margin-top:0.45rem; font-size:0.88rem; color:#6b4f7e;">
         "Publishing layout engine orchestrating dynamic TAD asset aggregation, vertical East-Asian typesetting, sacred Tibetan Pecha margins, and camera-ready PDF export."
       </span>
@@ -52,7 +52,7 @@
     <div class="section">
       <h2>概要 (Overview)</h2>
       <p>
-        クラリティ（<code>src/apps/clarity.c</code>, <code>src/apps/clarity_tex.c</code>）は、QuarkXPressやInDesign水準の組版機能を純C99で実装したDTP出版環境です。キャビネット内の原稿・表計算・作図実身を紙面上へリアルタイム連動させる動的集約機構に加え、東洋文化圏の伝統出版文化を保全する「日本固有伝統14判型（縦書き和装本）」および「チベットPecha（དཔེ་ཆ་）横長経典」を第一級組版規格として標準実装しています。<br>
+        クラリティ（<code>src/apps/clarity.c</code>）は、QuarkXPressやInDesign水準の組版機能を純C99で実装したDTP出版環境です。キャビネット内の原稿・表計算・作図実身を紙面上へリアルタイム連動させる動的集約機構に加え、東洋文化圏の伝統出版文化を保全する「日本固有伝統14判型（縦書き和装本）」および「チベットPecha（དཔེ་ཆ་）横長経典」を第一級組版規格として標準実装しています。<br>
         <span style="font-size:0.9em; opacity:0.85;">"Clarity integrates professional DTP composition with cultural publishing preservation: native East-Asian vertical typography and Tibetan loose-leaf woodblock manuscripts."</span>
       </p>
 
@@ -61,15 +61,14 @@
         ・<b>[ファイル (File)]</b>：新規組版帳票作成、TAD原稿リンク、PostScript/PDF出力、トンボ付きCMYK分版。<br>
         ・<b>[判型 (Format)]</b>：近代国際規格（A/B判）および日本伝統14判型（美濃判・半紙・四六判・短冊・和装本等）の選択。<br>
         ・<b>[Pecha (དཔེ་ཆ་)]</b>：チベット横長経典モード（デルゲ版・大蔵経判・朱黒二重枠lcags-ri・余白葉番号設定）。<br>
-        ・<b>[数理 (TeX)]</b>：LaTeX数式混植、<code>\pecha</code>、<code>\tategaki</code>組版マクロのリアルタイムレンダリング。
       </div>
     </div>
 
-    <!-- 1. DTP組版エンジンとTeX数理組版 -->
+    <!-- 1. DTP組版エンジンと-->
     <div class="section">
-      <h2>1. DTP組版エンジンとTeX数理組版 (DTP Layout Engine &amp; TeX Integration)</h2>
+      <h2>1. DTP組版エンジンと(DTP Layout Engine)</h2>
       <p>
-        マルチメディアTAD実身の動的集約パイプラインおよびLaTeX数理組版エンジンの動作仕様。<br>
+        マルチメディアTAD実身の動的集約パイプラインおよび。<br>
         <span style="font-size:0.9em; opacity:0.85;">"Dynamic TAD document aggregation architecture, TeX mathematical formula composition, and camera-ready PostScript/PDF export."</span>
       </p>
       <table class="market-table">
@@ -85,11 +84,6 @@
             <td><b>TAD実身動的集約<br>(Dynamic Asset Linking)</b></td>
             <td>T-Editor文書、Matrix表計算、Clarity作図などの外部実身を紙面枠へ直接リンク。元データ更新時に紙面を自動再計算。</td>
             <td><code>src/apps/clarity.c</code><br>実身参照ポインタ: <code>TAD_FUSEN_VOBJ</code></td>
-          </tr>
-          <tr>
-            <td><b>TeX数式組版エンジン<br>(LaTeX Math Compositor)</b></td>
-            <td>インラインおよび別行立て数式（積分、分数、行列等）をピクセル完全な高品質ベクトルグリフとして混植。</td>
-            <td><code>src/apps/clarity_tex.c</code><br>TeX FSM パーサー / 数理テーブル</td>
           </tr>
           <tr>
             <td><b>高精度縦書き組版<br>(Vertical Typography)</b></td>
@@ -240,7 +234,7 @@
       <h2>4. 出版ワークフロー (Typical Publishing Workflow)</h2>
       <p>
         原稿リンクから印刷所入稿用PDF生成までの典型的な出版組版シーケンス。<br>
-        <span style="font-size:0.9em; opacity:0.85;">"Comprehensive multi-cultural publishing pipeline spanning Tibetan Pecha, Japanese vertical novels, and academic TeX documents."</span>
+        <span style="font-size:0.9em; opacity:0.85;">"Comprehensive multi-cultural publishing pipeline spanning Tibetan Pecha, Japanese vertical novels, and academic A4 documents."</span>
       </p>
       <table class="market-table">
         <thead>
@@ -262,8 +256,8 @@
             <td>四六判 / 袋綴じ PDF</td>
           </tr>
           <tr>
-            <td><b>学術TeX論文</b></td>
-            <td>論文モードでTeX数式（積分・分数・行列）を混植し、Reviewの査読注釈実身（<code>pdf_tad_anno.c</code>）を参考文献として自動連動。</td>
+            <td><b>学術PostScript論文</b></td>
+            <td>論文モードでPostScript数式（積分・分数・行列）を混植し、Reviewの査読注釈実身（<code>pdf_tad_anno.c</code>）を参考文献として自動連動。</td>
             <td>学術 PDF / PostScript</td>
           </tr>
           <tr>

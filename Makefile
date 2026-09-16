@@ -153,7 +153,6 @@ COMMON_SRCS = src/graphics/dp_core.c   \
               src/apps/gterm.c         \
               src/apps/t_editor.c      \
               src/apps/clarity.c        \
-              src/apps/clarity_tex.c    \
               src/apps/clarity_layout.c \
               src/apps/clarity_render.c \
               src/apps/clarity_export.c \
@@ -1360,7 +1359,6 @@ CAPTURE_SCREENS_SRCS = src/tools/capture_screens.c \
                        src/apps/clu.c \
                        src/apps/b_drivesetup.c \
                        src/apps/clarity.c \
-                       src/apps/clarity_tex.c \
                        src/apps/clarity_layout.c \
                        src/apps/clarity_render.c \
                        src/apps/clarity_export.c \

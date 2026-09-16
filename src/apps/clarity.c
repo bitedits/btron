@@ -1080,6 +1080,11 @@ WND* open_clarity_window(void)
     return g_wnd;
 }
 
+ClarityDoc* clarity_get_doc(void)
+{
+    return &g_doc;
+}
+
 void clarity_app_open(void)
 {
     open_clarity_window();

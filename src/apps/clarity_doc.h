@@ -200,6 +200,7 @@ void clarity_render_key(ClarityDoc *doc, int fidx, UH tc);
 int  clarity_text_xy_to_pos(const ClarityFrame *f, H mx, H my, int ox, int oy, int zoom_pct);
 void clarity_render_text(GDEV *dev, const ClarityFrame *f, int ox, int oy, int zoom, BOOL is_selected);
 void clarity_render_image(GDEV *dev, const ClarityFrame *f, int ox, int oy, int zoom);
+ClarityDoc* clarity_get_doc(void);
 
 #ifdef __cplusplus
 }

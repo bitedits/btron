@@ -1,6 +1,7 @@
 /*
  * B-System (BTRON 3.20) Clarity Frames & Controls Unit Test
- * Tests perimeter hit-testing, 8-handle resizing, word-wrapping, and caret positioning.
+ * Tests perimeter hit-testing, 8-handle resizing, word-wrapping, caret positioning,
+ * and live window mouse event handling with real window client offsets.
  */
 
 #include <stdio.h>
@@ -10,6 +11,11 @@
 
 #include "apps/clarity_doc.h"
 #include <btron/dp.h>
+#include <btron/wnd.h>
+#include <btron/event.h>
+#include <btron/app_menu.h>
+
+extern WND* open_clarity_window(void);
 
 static int g_pass = 0;
 static int g_fail = 0;
@@ -174,12 +180,87 @@ static void test_word_wrap_and_navigation(void)
     g_pass++;
 }
 
+static void test_live_window_interactions(void)
+{
+    WND *w = open_clarity_window();
+    TEST_ASSERT(w != NULL, "open_clarity_window should return a valid window");
+
+    ClarityDoc *doc = clarity_get_doc();
+    TEST_ASSERT(doc != NULL && doc->frame_count > 0, "Doc must have sample frame");
+
+    ClarityFrame *f = &doc->frames[0];
+    H orig_left = f->bounds.left;
+    H orig_top = f->bounds.top;
+    int zoom = doc->zoom_pct;
+    int ox = CLARITY_CANVAS_MARGIN_PX;
+    int oy = CLARITY_CANVAS_MARGIN_PX + APP_MENU_BAR_HEIGHT;
+
+    /* 1. Simulate click on perimeter with real window client offset */
+    int perim_unzoomed_x = orig_left + 40;
+    int perim_unzoomed_y = orig_top + 2;
+    int screen_x = w->client.left + ox + (perim_unzoomed_x * zoom) / 100;
+    int screen_y = w->client.top  + oy + (perim_unzoomed_y * zoom) / 100;
+
+    EVT evt;
+    memset(&evt, 0, sizeof(evt));
+    evt.type = EV_BUT_DOWN;
+    evt.pos.x = screen_x;
+    evt.pos.y = screen_y;
+    evt.data = (void*)(uintptr_t)1;
+    w->event_handler(w, &evt);
+
+    /* Move mouse by +30 in X, +20 in Y */
+    evt.type = EV_MOUSE_MOVE;
+    evt.pos.x = screen_x + 30;
+    evt.pos.y = screen_y + 20;
+    w->event_handler(w, &evt);
+
+    evt.type = EV_BUT_UP;
+    evt.pos.x = screen_x + 30;
+    evt.pos.y = screen_y + 20;
+    w->event_handler(w, &evt);
+
+    int moved_dx = f->bounds.left - orig_left;
+    int moved_dy = f->bounds.top - orig_top;
+    TEST_ASSERT(moved_dx > 0 && moved_dy > 0, "Perimeter drag must translate frame with window geometry");
+
+    /* 2. Simulate click on Handle 4 (SE corner) */
+    H cur_r = f->bounds.right;
+    H cur_b = f->bounds.bottom;
+    int handle_sx = w->client.left + ox + (cur_r * zoom) / 100;
+    int handle_sy = w->client.top  + oy + (cur_b * zoom) / 100;
+
+    evt.type = EV_BUT_DOWN;
+    evt.pos.x = handle_sx;
+    evt.pos.y = handle_sy;
+    w->event_handler(w, &evt);
+
+    /* Drag outward by +50 in X, +40 in Y */
+    evt.type = EV_MOUSE_MOVE;
+    evt.pos.x = handle_sx + 50;
+    evt.pos.y = handle_sy + 40;
+    w->event_handler(w, &evt);
+
+    evt.type = EV_BUT_UP;
+    evt.pos.x = handle_sx + 50;
+    evt.pos.y = handle_sy + 40;
+    w->event_handler(w, &evt);
+
+    int resize_dw = f->bounds.right - cur_r;
+    int resize_dh = f->bounds.bottom - cur_b;
+    TEST_ASSERT(resize_dw > 0 && resize_dh > 0, "Handle drag must resize frame with window geometry");
+
+    printf("PASS: test_live_window_interactions\n");
+    g_pass++;
+}
+
 int main(void)
 {
     printf("=== Clarity Frames & Controls Test Suite ===\n");
     test_hit_testing();
     test_resizing_and_clamping();
     test_word_wrap_and_navigation();
+    test_live_window_interactions();
 
     printf("Results: %d Passed, %d Failed\n", g_pass, g_fail);
     return g_fail == 0 ? 0 : 1;

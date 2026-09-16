@@ -1,3 +1,5 @@
+#define _DEFAULT_SOURCE
+#define _POSIX_C_SOURCE 200809L
 /*
  * B-System BTRON3 Filesystem — test_chokanji.c
  * Conformance & integration test suite for mounting and operating on authentic

@@ -9,12 +9,14 @@
 #include <btron/tracker.h>
 #include <btron/global_menu.h>
 #include <btron/desktop.h>
+#include <btron/dnd.h>
 #include <SDL.h>
 #include <stdio.h>
 #include <stdlib.h>
 
 /* Forward declarations for BTRON Accessories */
 extern WND* open_vobj_manager_window(void);
+extern WND* open_clarity_window(void);
 extern WND* open_t_editor_window(void);
 extern WND* open_gterm_window(void);
 extern WND* open_audio_player_window(void);
@@ -85,6 +87,7 @@ int main(int argc, char **argv) {
 
     tip_init();
     init_evt_sys();
+    btron_dnd_init();
 
     printf("[B-System] Launching Sakamura B-System Desktop & Accessories...\n");
 
@@ -111,6 +114,7 @@ int main(int argc, char **argv) {
 
     /* Open initial BTRON desktop accessories */
     open_vobj_manager_window();
+    open_clarity_window();
     open_t_editor_window();
     open_gterm_window();
 
@@ -203,14 +207,28 @@ int main(int argc, char **argv) {
                 slide_wnd = NULL;
                 resizing = FALSE;
                 resize_wnd = NULL;
-                WND *top = get_top_wnd();
-                if (top && top->focused && top->event_handler) {
-                    top->event_handler(top, &ev);
+                if (btron_dnd_is_active()) {
+                    WND *target = find_wnd_at(ev.pos.x, ev.pos.y);
+                    if (target && target->event_handler) {
+                        target->event_handler(target, &ev);
+                    }
+                    btron_dnd_end();
+                } else {
+                    WND *top = get_top_wnd();
+                    if (top && top->focused && top->event_handler) {
+                        top->event_handler(top, &ev);
+                    }
                 }
             } else if (ev.type == EV_MOUSE_MOVE) {
                 global_menu_handle_mouse_move(ev.pos.x, ev.pos.y);
                 tracker_handle_mouse_move(ev.pos.x, ev.pos.y);
-                if (sliding_tab && slide_wnd) {
+                if (btron_dnd_is_active()) {
+                    btron_dnd_update(ev.pos.x, ev.pos.y);
+                    WND *target = find_wnd_at(ev.pos.x, ev.pos.y);
+                    if (target && target->event_handler) {
+                        target->event_handler(target, &ev);
+                    }
+                } else if (sliding_tab && slide_wnd) {
                     H new_off = slide_orig_off + (ev.pos.x - slide_start_x);
                     wset_tab_offset(slide_wnd, new_off);
                 } else if (resizing && resize_wnd) {
@@ -255,6 +273,11 @@ int main(int argc, char **argv) {
         /* Render Global Menu dropdown overlay when open */
         if (global_menu_is_open()) {
             global_menu_render_overlay(screen_dev);
+        }
+
+        /* Render Direct-Manipulation Drag-and-Drop Ghost Badge */
+        if (btron_dnd_is_active()) {
+            btron_dnd_render_ghost(screen_dev);
         }
 
         /* Flush composite buffer to SDL window */

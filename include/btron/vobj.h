@@ -41,6 +41,11 @@ ROBJ* cre_robj(const char *name, VOBJ_TYPE type);
 ROBJ* opn_robj(ID robj_id);
 ER cls_robj(ROBJ *robj);
 
+ROBJ* find_robj_by_path(const char *path);
+ROBJ* get_or_create_robj_for_file(const char *path, const char *name, VOBJ_TYPE type);
+int   get_robj_count(void);
+ROBJ* get_robj_by_index(int idx);
+
 VOBJ_LINK* cre_vobj_link(ID target_robj_id, const char *label, H x, H y);
 ER rd_vobj_data(ROBJ *robj, void *buf, UW len, UW *read_bytes);
 ER wr_vobj_data(ROBJ *robj, const void *buf, UW len);

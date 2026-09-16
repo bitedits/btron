@@ -9,6 +9,9 @@
 
 #include <btron/types.h>
 #include <btron/dp.h>
+#include <btron/vobj.h>
+#include <btron/dnd.h>
+#include <btron/image_decode.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -59,6 +62,16 @@ typedef enum {
 
 #define CLARITY_TEXT_BUF   4096   /* max TRON code units per frame   */
 #define CLARITY_MAX_FRAMES   32   /* frames per document             */
+#define CLARITY_MAX_VOBJS    16   /* virtual bodies per text frame   */
+
+typedef struct {
+    UW         text_offset;     /* insertion position within text[] */
+    ID         target_robj;     /* Target Real Object ID */
+    VOBJ_TYPE  type;            /* VOBJ_TYPE_TEXT, VOBJ_TYPE_DRAW, etc. */
+    char       label[64];       /* Moniker label */
+    char       path[256];       /* Backing file path */
+    RECT       box;             /* Rendered hit-box bounds in window pixels */
+} ClarityVObjLink;
 
 typedef struct {
     UB             id;              /* 1-based; 0 = free slot          */
@@ -70,11 +83,15 @@ typedef struct {
     UH             text[CLARITY_TEXT_BUF]; /* TRON code units (TC)    */
     UW             text_len;
     int            cursor_pos;      /* text insertion caret index      */
+    ClarityVObjLink vobjs[CLARITY_MAX_VOBJS];
+    int            vobj_count;
 
     /* --- ImageFrame payload --------------------------------------- */
     UB            *bitmap;          /* raw RGBA pixels (malloc'd)      */
     H              bmp_w;
     H              bmp_h;
+    ID             robj_id;         /* Linked Real Body ID             */
+    char           img_path[256];   /* Backing image path              */
 } ClarityFrame;
 
 /* ================================================================
@@ -99,6 +116,7 @@ typedef struct {
     H              drag_start_x;
     H              drag_start_y;
     int            drag_handle;     /* resize handle id 0-7, or -1     */
+    int            hover_drop_frame;/* index of frame hovered during DND, or -1 */
 } ClarityDoc;
 
 /* ================================================================
@@ -201,6 +219,14 @@ int  clarity_text_xy_to_pos(const ClarityFrame *f, H mx, H my, int ox, int oy, i
 void clarity_render_text(GDEV *dev, const ClarityFrame *f, int ox, int oy, int zoom, BOOL is_selected);
 void clarity_render_image(GDEV *dev, const ClarityFrame *f, int ox, int oy, int zoom);
 ClarityDoc* clarity_get_doc(void);
+
+
+/* Virtual Body & DND Ingestion Function Prototypes */
+int  clarity_frame_find_vobj_at(const ClarityFrame *f, H mx, H my);
+void clarity_frame_insert_vobj(ClarityFrame *f, ID target_robj, VOBJ_TYPE type, const char *label, const char *path);
+int  clarity_frame_load_image(ClarityFrame *f, const char *path, ID robj_id);
+ClarityFrame* clarity_doc_add_frame(ClarityDoc *doc, ClarityFrameType type, H x, H y, H w, H h);
+void clarity_handle_dnd_drop(ClarityDoc *doc, const BTRON_DND *dnd, H mx, H my, int ox, int oy);
 
 #ifdef __cplusplus
 }

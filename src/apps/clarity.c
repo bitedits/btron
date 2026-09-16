@@ -11,6 +11,11 @@
  */
 
 #include "clarity_doc.h"
+#include <btron/dnd.h>
+#include <btron/wnd.h>
+
+extern WND* open_tad_browser_window(const char *path, const char *title);
+extern WND* open_t_editor_window(void);
 #include <btron/dp.h>
 #include <btron/wnd.h>
 #include <btron/app_menu.h>
@@ -51,6 +56,8 @@ extern void clarity_render_text(GDEV *dev, const ClarityFrame *f, int ox, int oy
 extern void clarity_render_image(GDEV *dev, const ClarityFrame *f, int ox, int oy, int zoom);
 extern ER   clarity_export_save(const ClarityDoc *doc, const char *name);
 extern ER   clarity_export_load(ClarityDoc *doc, ID robj_id);
+extern ER   clarity_export_save_file(const ClarityDoc *doc, const char *filepath);
+extern ER   clarity_export_load_file(ClarityDoc *doc, const char *filepath);
 
 /* Text action enum matching clarity_render.c */
 enum {
@@ -201,20 +208,7 @@ static void doc_new(ClarityPageFmt fmt)
 
 static ClarityFrame *doc_add_frame(ClarityFrameType type, H x, H y, H w, H h)
 {
-    if (g_doc.frame_count >= CLARITY_MAX_FRAMES) return NULL;
-    ClarityFrame *f = &g_doc.frames[g_doc.frame_count];
-    memset(f, 0, sizeof(ClarityFrame));
-    f->id           = (UB)(g_doc.frame_count + 1);
-    f->type         = type;
-    f->bounds.left  = x;
-    f->bounds.top   = y;
-    f->bounds.right = (H)(x + w);
-    f->bounds.bottom = (H)(y + h);
-    f->flow = (g_doc.fmt == FMT_SHIROKU) ? FLOW_V_RTL : FLOW_H_LTR;
-    f->cursor_pos   = 0;
-    g_doc.frame_count++;
-    g_doc.dirty = TRUE;
-    return f;
+    return clarity_doc_add_frame(&g_doc, type, x, y, w, h);
 }
 
 /* ------------------------------------------------------------------ */
@@ -472,7 +466,8 @@ static void handle_cmd(int cmd)
             doc_new(g_doc.fmt);
             break;
         case CMD_FILE_SAVE:
-            clarity_export_save(&g_doc, "ClarityDoc");
+            clarity_export_save(&g_doc, "Ceremony_Demo");
+            clarity_export_save_file(&g_doc, "btron_store/Ceremony_Demo.tad");
             g_doc.dirty = FALSE;
             break;
 
@@ -575,6 +570,23 @@ static void clarity_event(WND *wnd, const EVT *evt)
 
     /* ── 1. Mouse Move ─────────────────────────────────────────────── */
     if (evt->type == EV_MOUSE_MOVE) {
+        if (btron_dnd_is_active()) {
+            int hf = clarity_hittest_frame(&g_doc, rel_x, rel_y, ox, oy);
+            if (hf != g_doc.hover_drop_frame) {
+                g_doc.hover_drop_frame = hf;
+                inval_wnd(wnd);
+            }
+            clarity_set_cursor(CLARITY_CURSOR_HAND);
+            return;
+        }
+
+        if (g_doc.selected_frame >= 0 && g_doc.selected_frame < g_doc.frame_count) {
+            int vi = clarity_frame_find_vobj_at(&g_doc.frames[g_doc.selected_frame], rel_x, rel_y);
+            if (vi >= 0) {
+                clarity_set_cursor(CLARITY_CURSOR_HAND);
+                return;
+            }
+        }
 
         /* Menu bar hover */
         if (app_menu_handle_mouse_move(&g_menu, rel_x, rel_y)) {
@@ -1044,22 +1056,52 @@ WND* open_clarity_window(void)
 
     doc_new(FMT_A4);
 
-    /* Populate rich default sample frame */
-    ClarityFrame *f = doc_add_frame(FRAME_TEXT, 24, 24, 460, 240);
-    if (f) {
-        const char *sample = 
-            "BTRON Clarity DTP Engine (電子帳票)\n"
-            "Authentic Multi-Format Publishing System\n\n"
-            "Format: A4 European Portrait (210x297 mm)\n"
-            "Traditional Japanese 14 Formats (四六判・和装本)\n"
-            "Tibetan Sacred Pecha Geometry (560x110 mm)\n\n"
-            "Pure C99 Layout & VOBJ TAD Real Body Integration";
-        f->text_len = 0;
-        for (int i = 0; sample[i] && f->text_len < CLARITY_TEXT_BUF - 1; i++) {
-            f->text[f->text_len++] = (UH)(unsigned char)sample[i];
-        }
-        f->cursor_pos = (int)f->text_len;
+    /* Try loading saved Ceremony demo file */
+    if (clarity_export_load_file(&g_doc, "btron_store/Ceremony_Demo.tad") == E_OK && g_doc.frame_count > 0) {
         g_doc.selected_frame = 0;
+    } else {
+        /* Populate Starter Ceremony Hypermedia Document */
+        /* Frame 0: Image Frame with Clarity Icon */
+        ClarityFrame *f_img = doc_add_frame(FRAME_IMAGE, 24, 24, 160, 160);
+        if (f_img) {
+            clarity_frame_load_image(f_img, "assets/icons/clarity.png", 101);
+        }
+
+        /* Frame 1: Text Frame with Real/Virtual Bodies */
+        ClarityFrame *f1 = doc_add_frame(FRAME_TEXT, 200, 24, 400, 160);
+        if (f1) {
+            const char *intro = 
+                "BTRON 3.20 実身／仮身 ハイパーメディア儀式\n"
+                "Alpha 1 Hypermedia Ceremony (Sakamura Spec)\n\n"
+                "実身(Real Body)と仮身(Virtual Body)による真のハイパーメディア。\n"
+                "ダブルクリックで対象の実身を直接開きます:\n";
+            f1->text_len = 0;
+            for (int i = 0; intro[i] && f1->text_len < CLARITY_TEXT_BUF - 1; i++) {
+                f1->text[f1->text_len++] = (UH)(unsigned char)intro[i];
+            }
+            f1->cursor_pos = (int)f1->text_len;
+            clarity_frame_insert_vobj(f1, 102, VOBJ_TYPE_TEXT, "01_btron3_spec.tad", "tad_bin/01_btron3_spec.tad");
+            clarity_frame_insert_vobj(f1, 103, VOBJ_TYPE_TEXT, "HYPERMEDIA.md", "doc/md/HYPERMEDIA.md");
+        }
+
+        /* Frame 2: Instructions for Direct Manipulation */
+        ClarityFrame *f2 = doc_add_frame(FRAME_TEXT, 24, 204, 576, 176);
+        if (f2) {
+            const char *guide =
+                "【実身／仮身 直接操作ガイド / Direct Manipulation】\n"
+                "1. キャビネット(Cabinet)から画像をドラッグ → Image Frameに瞬時に配置\n"
+                "2. キャビネットから文書(MD/TXT/TAD)をドラッグ → テキスト内に仮身を挿入\n"
+                "3. 埋め込まれた仮身 [* 文書名] をダブルクリック → 実身を即座に開きます\n"
+                "4. [ファイル] → [保存] (F2) → 純粋なTAD規格フォーマットで永続保存\n";
+            f2->text_len = 0;
+            for (int i = 0; guide[i] && f2->text_len < CLARITY_TEXT_BUF - 1; i++) {
+                f2->text[f2->text_len++] = (UH)(unsigned char)guide[i];
+            }
+            f2->cursor_pos = (int)f2->text_len;
+        }
+
+        g_doc.selected_frame = 1;
+        clarity_export_save_file(&g_doc, "btron_store/Ceremony_Demo.tad");
     }
 
     g_wnd = opn_wnd("電子帳票 – Clarity",

@@ -13,6 +13,7 @@
 #include <btron/app_menu.h>
 #include <btron/settings.h>
 #include <btron/settings_icon.h>
+#include <btron/dnd.h>
 
 #if defined(__STDC_HOSTED__) && __STDC_HOSTED__ == 1
 #include <stdio.h>
@@ -88,6 +89,10 @@ typedef struct {
 } CABINET_EXPLORER;
 
 static CABINET_EXPLORER g_cabinet;
+static BOOL s_cab_mouse_down = FALSE;
+static H s_cab_down_x = 0;
+static H s_cab_down_y = 0;
+
 
 
 /* ── Natural String Comparison (Case-Insensitive & Numeric Aware) ───────── */
@@ -400,20 +405,40 @@ static void cabinet_discover_dir(CABINET_EXPLORER *cab, const char *dir_path) {
             cabinet_discover_dir(cab, sub_path);
         } else if (S_ISREG(st.st_mode)) {
             int len = strlen(de->d_name);
-            if (len > 4 && strcmp(de->d_name + len - 4, ".tad") == 0) {
-                /* If index.tad and a titled companion exists, skip index.tad to prevent duplicates */
-                if (strcmp(de->d_name, "index.tad") == 0 && dir_has_titled_tad(dir_path)) {
+            BOOL is_tad = (len > 4 && strcmp(de->d_name + len - 4, ".tad") == 0);
+            BOOL is_md  = (len > 3 && strcmp(de->d_name + len - 3, ".md") == 0);
+            BOOL is_txt = (len > 4 && strcmp(de->d_name + len - 4, ".txt") == 0);
+            BOOL is_png = (len > 4 && (strcmp(de->d_name + len - 4, ".png") == 0 || strcmp(de->d_name + len - 4, ".PNG") == 0));
+            BOOL is_gif = (len > 4 && (strcmp(de->d_name + len - 4, ".gif") == 0 || strcmp(de->d_name + len - 4, ".GIF") == 0));
+
+            if (is_tad || is_md || is_txt || is_png || is_gif) {
+                /* Skip .tad.txt companions or index.tad duplicates */
+                if (is_tad && strcmp(de->d_name, "index.tad") == 0 && dir_has_titled_tad(dir_path)) {
+                    continue;
+                }
+                if (is_txt && strstr(de->d_name, ".tad.txt")) {
                     continue;
                 }
 
                 if (cab->item_count < MAX_CABINET_ITEMS) {
                     CABINET_ITEM *it = &cab->items[cab->item_count++];
                     it->robj_id = deduce_robj_id(sub_path);
-                    it->type = VOBJ_TYPE_TEXT;
+                    if (is_png || is_gif) {
+                        it->type = VOBJ_TYPE_DRAW;
+                        it->icon_tag = "[img]";
+                    } else if (is_md) {
+                        it->type = VOBJ_TYPE_TEXT;
+                        it->icon_tag = "[md]";
+                    } else if (is_txt) {
+                        it->type = VOBJ_TYPE_TEXT;
+                        it->icon_tag = "[txt]";
+                    } else {
+                        it->type = VOBJ_TYPE_TEXT;
+                        it->icon_tag = deduce_icon_tag(sub_path);
+                    }
                     get_friendly_title(sub_path, de->d_name, it->name, sizeof(it->name));
                     strncpy(it->path, sub_path, sizeof(it->path) - 1);
                     it->size_bytes = (UW)st.st_size;
-                    it->icon_tag = deduce_icon_tag(sub_path);
                     it->category = deduce_toc_path(sub_path);
                 }
             }
@@ -441,8 +466,12 @@ static void cabinet_init_defaults(CABINET_EXPLORER *cab) {
     cab->view_mode = CAB_VIEW_LIST;
 
 #if defined(__STDC_HOSTED__) && __STDC_HOSTED__ == 1
-    /* Dynamic discovery from tad_bin/ directory tree */
+    /* Dynamic discovery from multiple Real Body storage directories */
     cabinet_discover_dir(cab, "tad_bin");
+    cabinet_discover_dir(cab, "btron_store");
+    cabinet_discover_dir(cab, "doc/md");
+    cabinet_discover_dir(cab, "assets/texts");
+    cabinet_discover_dir(cab, "assets/icons");
 #endif
 
     if (cab->item_count > 0) {
@@ -732,6 +761,20 @@ static void handle_vobj_manager_event(WND *wnd, const EVT *evt) {
             if (calc >= 0 && calc < g_cabinet.item_count) idx = calc;
         }
         g_cabinet.hovered_idx = idx;
+
+        /* Drag initiation check */
+        if (s_cab_mouse_down && !btron_dnd_is_active()) {
+            H dx = evt->pos.x - s_cab_down_x;
+            H dy = evt->pos.y - s_cab_down_y;
+            if (dx * dx + dy * dy >= 25) { /* > 5px drag threshold */
+                if (g_cabinet.selected_idx >= 0 && g_cabinet.selected_idx < g_cabinet.item_count) {
+                    CABINET_ITEM *it = &g_cabinet.items[g_cabinet.selected_idx];
+                    btron_dnd_begin(wnd->id, it->robj_id, it->type, it->name, it->path, evt->pos.x, evt->pos.y);
+                    snprintf(g_cabinet.status_msg, sizeof(g_cabinet.status_msg),
+                             "Dragging: %s (%s)", it->name, (it->type == VOBJ_TYPE_DRAW) ? "Image" : "Document");
+                }
+            }
+        }
         return;
     }
 
@@ -828,6 +871,9 @@ static void handle_vobj_manager_event(WND *wnd, const EVT *evt) {
         }
 
         if (idx >= 0 && idx < g_cabinet.item_count) {
+            s_cab_mouse_down = TRUE;
+            s_cab_down_x = evt->pos.x;
+            s_cab_down_y = evt->pos.y;
             static int s_last_click_idx = -1;
             static UW s_last_click_time = 0;
             UW cur_time = (UW)(uintptr_t)evt->data;
@@ -841,6 +887,11 @@ static void handle_vobj_manager_event(WND *wnd, const EVT *evt) {
                 open_tad_browser_window(g_cabinet.items[idx].path, g_cabinet.items[idx].name);
             }
         }
+        return;
+    }
+
+    if (evt->type == EV_BUT_UP) {
+        s_cab_mouse_down = FALSE;
         return;
     }
 

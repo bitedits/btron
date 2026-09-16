@@ -6,6 +6,9 @@
  */
 
 #include "clarity_doc.h"
+#include <btron/image_decode.h>
+#include <btron/dnd.h>
+#include <stdlib.h>
 #include <btron/dp.h>
 #include <btron/wnd.h>
 #include <btron/troncode.h>
@@ -227,6 +230,16 @@ void clarity_draw_frames(GDEV *dev, const ClarityDoc *doc, int ox, int oy)
         }
         drw_rec(dev, &sr);
 
+        /* Drop-target highlight during DND */
+        if (doc->hover_drop_frame == i) {
+            RECT hr = sr;
+            hr.left -= 2; hr.top -= 2; hr.right += 2; hr.bottom += 2;
+            set_col(dev, COLOR_CYAN, COLOR_WHITE);
+            drw_rec(dev, &hr);
+            hr.left -= 1; hr.top -= 1; hr.right += 1; hr.bottom += 1;
+            drw_rec(dev, &hr);
+        }
+
         /* Frame type badge at top right */
         if (sel) {
             const char *badge = (f->type == FRAME_TEXT) ? " [Text] " : " [Image] ";
@@ -399,4 +412,141 @@ void clarity_move_frame(ClarityFrame *f, H dx, H dy)
     f->bounds.top    = (H)(f->bounds.top    + dy);
     f->bounds.right  = (H)(f->bounds.right  + dx);
     f->bounds.bottom = (H)(f->bounds.bottom + dy);
+}
+
+/* ================================================================
+ * Virtual Body & Direct Manipulation DND Ingestion Helpers
+ * ================================================================ */
+
+ClarityFrame* clarity_doc_add_frame(ClarityDoc *doc, ClarityFrameType type, H x, H y, H w, H h)
+{
+    if (!doc || doc->frame_count >= CLARITY_MAX_FRAMES) return NULL;
+    ClarityFrame *f = &doc->frames[doc->frame_count];
+    memset(f, 0, sizeof(ClarityFrame));
+    f->id           = (UB)(doc->frame_count + 1);
+    f->type         = type;
+    f->bounds.left  = x;
+    f->bounds.top   = y;
+    f->bounds.right = (H)(x + w);
+    f->bounds.bottom = (H)(y + h);
+    f->flow         = (doc->fmt == FMT_SHIROKU) ? FLOW_V_RTL : FLOW_H_LTR;
+    f->cursor_pos   = 0;
+    doc->frame_count++;
+    doc->dirty      = TRUE;
+    return f;
+}
+
+int clarity_frame_find_vobj_at(const ClarityFrame *f, H mx, H my)
+{
+    if (!f || f->type != FRAME_TEXT) return -1;
+    for (int i = 0; i < f->vobj_count; i++) {
+        const RECT *r = &f->vobjs[i].box;
+        if (mx >= r->left && mx <= r->right && my >= r->top && my <= r->bottom) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+void clarity_frame_insert_vobj(ClarityFrame *f, ID target_robj, VOBJ_TYPE type, const char *label, const char *path)
+{
+    if (!f || f->type != FRAME_TEXT || f->vobj_count >= CLARITY_MAX_VOBJS) return;
+    ClarityVObjLink *link = &f->vobjs[f->vobj_count++];
+    link->text_offset = f->cursor_pos;
+    link->target_robj = target_robj;
+    link->type        = type;
+    strncpy(link->label, label ? label : "Object", sizeof(link->label) - 1);
+    link->label[sizeof(link->label) - 1] = '\0';
+    strncpy(link->path, path ? path : "", sizeof(link->path) - 1);
+    link->path[sizeof(link->path) - 1] = '\0';
+
+    /* Insert formatted moniker text into f->text at cursor_pos */
+    char moniker[128];
+    snprintf(moniker, sizeof(moniker), "[%s %s] ", (type == VOBJ_TYPE_DRAW) ? "#" : "*", link->label);
+    size_t mlen = strlen(moniker);
+
+    if (f->text_len + mlen < CLARITY_TEXT_BUF - 1) {
+        /* Shift right */
+        for (int i = (int)f->text_len - 1; i >= f->cursor_pos; i--) {
+            f->text[i + mlen] = f->text[i];
+        }
+        for (size_t k = 0; k < mlen; k++) {
+            f->text[f->cursor_pos + k] = (UH)(unsigned char)moniker[k];
+        }
+        f->text_len += mlen;
+        f->cursor_pos += mlen;
+        f->text[f->text_len] = 0;
+    }
+}
+
+int clarity_frame_load_image(ClarityFrame *f, const char *path, ID robj_id)
+{
+    if (!f || !path) return -1;
+    UB *pixels = NULL;
+    H w = 0, h = 0;
+    if (decode_image_rgba(path, &pixels, &w, &h) != 0 || !pixels) {
+        return -1;
+    }
+    if (f->bitmap) {
+        free(f->bitmap);
+        f->bitmap = NULL;
+    }
+    f->bitmap = pixels;
+    f->bmp_w = w;
+    f->bmp_h = h;
+    f->robj_id = robj_id;
+    strncpy(f->img_path, path, sizeof(f->img_path) - 1);
+    f->img_path[sizeof(f->img_path) - 1] = '\0';
+    return 0;
+}
+
+void clarity_handle_dnd_drop(ClarityDoc *doc, const BTRON_DND *dnd, H mx, H my, int ox, int oy)
+{
+    if (!doc || !dnd || !dnd->active) return;
+
+    /* 1. Hit test existing frames */
+    int fidx = clarity_hittest_frame(doc, mx, my, ox, oy);
+    if (fidx >= 0 && fidx < doc->frame_count) {
+        ClarityFrame *f = &doc->frames[fidx];
+        if (dnd->type == VOBJ_TYPE_DRAW) {
+            if (f->type == FRAME_IMAGE) {
+                clarity_frame_load_image(f, dnd->path, dnd->robj_id);
+                doc->dirty = TRUE;
+                return;
+            }
+            /* Dropped image onto Text Frame -> insert graphical Virtual Body */
+            clarity_frame_insert_vobj(f, dnd->robj_id, dnd->type, dnd->name, dnd->path);
+            doc->dirty = TRUE;
+            return;
+        } else {
+            /* Dropped text/document onto Text Frame -> insert Virtual Body moniker */
+            if (f->type == FRAME_TEXT) {
+                f->cursor_pos = clarity_text_xy_to_pos(f, mx, my, ox, oy, doc->zoom_pct);
+                clarity_frame_insert_vobj(f, dnd->robj_id, dnd->type, dnd->name, dnd->path);
+                doc->dirty = TRUE;
+                return;
+            }
+        }
+    }
+
+    /* 2. Dropped onto empty canvas area -> create matching frame */
+    int zoom = doc->zoom_pct ? doc->zoom_pct : 100;
+    H cx = (H)(((mx - ox) * 100) / zoom);
+    H cy = (H)(((my - oy) * 100) / zoom);
+
+    if (dnd->type == VOBJ_TYPE_DRAW) {
+        ClarityFrame *nf = clarity_doc_add_frame(doc, FRAME_IMAGE, cx, cy, 200, 160);
+        if (nf) {
+            clarity_frame_load_image(nf, dnd->path, dnd->robj_id);
+            doc->selected_frame = doc->frame_count - 1;
+            doc->dirty = TRUE;
+        }
+    } else {
+        ClarityFrame *nf = clarity_doc_add_frame(doc, FRAME_TEXT, cx, cy, 280, 140);
+        if (nf) {
+            clarity_frame_insert_vobj(nf, dnd->robj_id, dnd->type, dnd->name, dnd->path);
+            doc->selected_frame = doc->frame_count - 1;
+            doc->dirty = TRUE;
+        }
+    }
 }

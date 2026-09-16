@@ -7,6 +7,9 @@
 #include "clarity_doc.h"
 #include <btron/dp.h>
 #include <btron/font_mgr.h>
+#include <btron/troncode.h>
+#include <btron/tad_browser.h>
+#include <stdio.h>
 
 #if defined(__STDC_HOSTED__) && __STDC_HOSTED__ == 1
 #include <string.h>
@@ -402,21 +405,6 @@ static void render_text_hltr_zoom(GDEV *dev, const ClarityFrame *f,
     int x1 = ox + (f->bounds.right  * zoom) / 100 - 4;
     int y1 = oy + (f->bounds.bottom * zoom) / 100 - 4;
 
-    WERR fdesc = fopn_fon();
-    if (fdesc < 0) {
-        set_col(dev, COLOR_DKGRAY, COLOR_WHITE);
-        RECT dash = { (H)x0, (H)y0, (H)(x0 + 24), (H)(y0 + 2) };
-        fill_rec(dev, &dash, COLOR_DKGRAY);
-        return;
-    }
-
-    FSSPEC spec;
-    memset(&spec, 0, sizeof(spec));
-    spec.fclass = FTC_GOTHIC;
-    spec.size.width  = GLYPH_W;
-    spec.size.height = GLYPH_H;
-    fset_fon((W)fdesc, &spec);
-
     int inner_w = x1 - x0;
     VisualLine lines[256];
     int nlines = clarity_compute_visual_lines_hltr(f, inner_w, lines, 256);
@@ -431,30 +419,65 @@ static void render_text_hltr_zoom(GDEV *dev, const ClarityFrame *f,
         int cy = y0 + lines[l].y_rel;
         if (cy + GLYPH_H > y1) break;
 
-        for (int p = lines[l].start_pos; p < lines[l].end_pos; p++) {
+        for (int p = lines[l].start_pos; p < lines[l].end_pos; ) {
             if (p == c_pos) {
                 caret_x = cx;
                 caret_y = cy;
                 caret_found = TRUE;
             }
 
+            /* Check if this position begins a Virtual Body moniker [tag label] */
+            int matched_vb = -1;
+            for (int vi = 0; vi < f->vobj_count; vi++) {
+                if ((int)f->vobjs[vi].text_offset == p) {
+                    matched_vb = vi;
+                    break;
+                }
+            }
+
+            if (matched_vb >= 0) {
+                ClarityVObjLink *vl = (ClarityVObjLink*)&f->vobjs[matched_vb];
+                const char *tag = (vl->type == VOBJ_TYPE_DRAW) ? "[IMG]" :
+                                  (strstr(vl->path, ".tad") || strstr(vl->path, ".TAD")) ? "[TAD]" :
+                                  (strstr(vl->path, ".md") || strstr(vl->path, ".MD")) ? "[MD]" : "[TXT]";
+                char badge_str[128];
+                snprintf(badge_str, sizeof(badge_str), "%s %s", tag, vl->label);
+                int bw = tc_calc_string_width(badge_str, (int)strlen(badge_str)) + 12;
+                if (bw < 40) bw = 40;
+
+                RECT br = { (H)cx, (H)cy, (H)(cx + bw), (H)(cy + GLYPH_H) };
+                fill_rec(dev, &br, COLOR_LTGRAY);
+                set_col(dev, COLOR_NAVY, COLOR_LTGRAY);
+                drw_rec(dev, &br);
+                drw_tc_string(dev, cx + 4, cy, badge_str, COLOR_NAVY, COLOR_LTGRAY);
+
+                vl->box = br;
+
+                cx += bw + 4;
+                /* Skip characters of moniker in f->text */
+                p++;
+                while (p < lines[l].end_pos && p < (int)f->text_len && f->text[p - 1] != ']') {
+                    p++;
+                }
+                continue;
+            }
+
             UH tc = f->text[p];
             int adv = get_tc_advance(tc);
 
-            UB glyph_buf[128];
-            FDATA *fd = (FDATA *)(void *)glyph_buf;
-            WERR res = fget_img((W)fdesc, fd, (W)sizeof(glyph_buf), 0, tc, FT_IMAGE);
-            if (res >= 0 && fd->image) {
-                int gw = fd->asize.width ? fd->asize.width : ((tc < 128) ? 8 : GLYPH_W);
-                int gh = fd->asize.height ? fd->asize.height : GLYPH_H;
-                blit_glyph_1bit(dev, fd->image, cx, cy, COLOR_BLACK, gw, gh);
+            H gw = (tc < 128) ? 8 : GLYPH_W;
+            H gh = GLYPH_H;
+            const UB *bmp = get_glyph_bitmap((TC)tc, &gw, &gh);
+            if (bmp) {
+                blit_glyph_1bit(dev, bmp, cx, cy, COLOR_BLACK, gw, gh);
             } else {
-                int gw = (tc < 128) ? 8 : GLYPH_W;
-                RECT box = { (H)cx, (H)cy, (H)(cx + gw - 1), (H)(cy + GLYPH_H - 1) };
+                int w = (tc < 128) ? 8 : GLYPH_W;
+                RECT box = { (H)cx, (H)cy, (H)(cx + w - 1), (H)(cy + GLYPH_H - 1) };
                 set_col(dev, COLOR_DKGRAY, COLOR_WHITE);
                 drw_rec(dev, &box);
             }
             cx += adv;
+            p++;
         }
 
         if (!caret_found && c_pos == lines[l].end_pos && (l == nlines - 1 || f->text[c_pos - 1] == '\n' || f->text[c_pos - 1] == '\r')) {
@@ -480,13 +503,7 @@ static void render_text_hltr_zoom(GDEV *dev, const ClarityFrame *f,
         drw_lin(dev, (H)caret_x, (H)caret_y, (H)caret_x, (H)(caret_y + GLYPH_H - 1));
         drw_lin(dev, (H)(caret_x + 1), (H)caret_y, (H)(caret_x + 1), (H)(caret_y + GLYPH_H - 1));
     }
-
-    fcls_fon((W)fdesc);
 }
-
-/* ------------------------------------------------------------------ */
-/* Vertical RTL text rendering (縦書き)                                  */
-/* ------------------------------------------------------------------ */
 
 static void render_text_vrtl_zoom(GDEV *dev, const ClarityFrame *f,
                                  int ox, int oy, int zoom, BOOL is_selected)
@@ -496,21 +513,6 @@ static void render_text_vrtl_zoom(GDEV *dev, const ClarityFrame *f,
     int y0 = oy + (f->bounds.top    * zoom) / 100 + 4;
     int x1 = ox + (f->bounds.right  * zoom) / 100 - 4;
     int y1 = oy + (f->bounds.bottom * zoom) / 100 - 4;
-
-    WERR fdesc = fopn_fon();
-    if (fdesc < 0) {
-        set_col(dev, COLOR_DKGRAY, COLOR_WHITE);
-        RECT dash = { (H)(x1 - 2), (H)y0, (H)x1, (H)(y0 + 24) };
-        fill_rec(dev, &dash, COLOR_DKGRAY);
-        return;
-    }
-
-    FSSPEC spec;
-    memset(&spec, 0, sizeof(spec));
-    spec.fclass = FTC_GOTHIC;
-    spec.size.width  = GLYPH_W;
-    spec.size.height = GLYPH_H;
-    fset_fon((W)fdesc, &spec);
 
     int col_x = x1 - GLYPH_W;
     int cy    = y0;
@@ -539,15 +541,12 @@ static void render_text_vrtl_zoom(GDEV *dev, const ClarityFrame *f,
         }
         if (col_x < x0) break;
 
-        UB glyph_buf[128];
-        FDATA *fd = (FDATA *)(void *)glyph_buf;
-        WERR res = fget_img((W)fdesc, fd, (W)sizeof(glyph_buf),
-                            0, tc, FT_IMAGE);
-        if (res >= 0 && fd->image) {
-            blit_glyph_1bit(dev, fd->image, col_x, cy, COLOR_BLACK,
-                            fd->asize.width  ? fd->asize.width  : GLYPH_W,
-                            fd->asize.height ? fd->asize.height : GLYPH_H);
-            cy += (fd->asize.height ? fd->asize.height : GLYPH_H) + 2;
+        H gw = (tc < 128) ? 8 : GLYPH_W;
+        H gh = GLYPH_H;
+        const UB *bmp = get_glyph_bitmap((TC)tc, &gw, &gh);
+        if (bmp) {
+            blit_glyph_1bit(dev, bmp, col_x, cy, COLOR_BLACK, gw, gh);
+            cy += gh + 2;
         } else {
             RECT box = { (H)col_x, (H)cy, (H)(col_x + GLYPH_W - 1), (H)(cy + GLYPH_H - 1) };
             set_col(dev, COLOR_DKGRAY, COLOR_WHITE);
@@ -561,19 +560,13 @@ static void render_text_vrtl_zoom(GDEV *dev, const ClarityFrame *f,
         caret_y = cy;
     }
 
-    /* Vertical insertion caret (horizontal bar below character) */
+    /* Vertical insertion caret */
     if (is_selected && caret_x >= x0 && caret_y + 2 <= y1 + 4) {
         set_col(dev, COLOR_NAVY, COLOR_WHITE);
         drw_lin(dev, (H)caret_x, (H)caret_y, (H)(caret_x + GLYPH_W - 1), (H)caret_y);
         drw_lin(dev, (H)caret_x, (H)(caret_y + 1), (H)(caret_x + GLYPH_W - 1), (H)(caret_y + 1));
     }
-
-    fcls_fon((W)fdesc);
 }
-
-/* ------------------------------------------------------------------ */
-/* Public render dispatcher                                             */
-/* ------------------------------------------------------------------ */
 
 void clarity_render_text(GDEV *dev, const ClarityFrame *f, int ox, int oy, int zoom, BOOL is_selected)
 {
@@ -606,23 +599,76 @@ void clarity_render_image(GDEV *dev, const ClarityFrame *f, int ox, int oy, int 
     RECT bg = { (H)fx, (H)fy, (H)(fx + fw), (H)(fy + fh) };
     fill_rec(dev, &bg, COLOR_LTGRAY);
 
-    if (!f->bitmap || f->bmp_w == 0 || f->bmp_h == 0 || fw <= 0 || fh <= 0) return;
+    /* On-demand image loading if path is set but bitmap not yet loaded */
+    if (!f->bitmap && f->img_path[0] != '\0') {
+        clarity_frame_load_image((ClarityFrame*)f, f->img_path, f->robj_id);
+    }
 
-    for (int dy = 0; dy < fh; dy++) {
-        int src_y = (dy * (int)f->bmp_h) / fh;
-        for (int dx = 0; dx < fw; dx++) {
-            int src_x = (dx * (int)f->bmp_w) / fw;
-            int src_idx = (src_y * (int)f->bmp_w + src_x) * 4;
-            UB r = f->bitmap[src_idx + 0];
-            UB g = f->bitmap[src_idx + 1];
-            UB b = f->bitmap[src_idx + 2];
-            UB a = f->bitmap[src_idx + 3];
-            COLOR col = ((UW)a << 24) | ((UW)r << 16) | ((UW)g << 8) | (UW)b;
-            int sx = fx + dx;
-            int sy = fy + dy;
-            if (sx >= 0 && sx < (int)dev->width && sy >= 0 && sy < (int)dev->height) {
-                dev->pixels[sy * dev->width + sx] = col;
+    if (f->bitmap && f->bmp_w > 0 && f->bmp_h > 0 && fw > 0 && fh > 0) {
+        for (int dy = 0; dy < fh; dy++) {
+            int src_y = (dy * (int)f->bmp_h) / fh;
+            for (int dx = 0; dx < fw; dx++) {
+                int src_x = (dx * (int)f->bmp_w) / fw;
+                int src_idx = (src_y * (int)f->bmp_w + src_x) * 4;
+                UB r = f->bitmap[src_idx + 0];
+                UB g = f->bitmap[src_idx + 1];
+                UB b = f->bitmap[src_idx + 2];
+                UB a = f->bitmap[src_idx + 3];
+                if (a > 32) {
+                    COLOR col = ((UW)a << 24) | ((UW)r << 16) | ((UW)g << 8) | (UW)b;
+                    int sx = fx + dx;
+                    int sy = fy + dy;
+                    if (sx >= 0 && sx < (int)dev->width && sy >= 0 && sy < (int)dev->height) {
+                        dev->pixels[sy * dev->width + sx] = col;
+                    }
+                }
             }
         }
+        return;
+    }
+
+    /* Fallback image placeholder */
+    set_col(dev, COLOR_DKGRAY, COLOR_LTGRAY);
+    drw_rec(dev, &bg);
+    drw_tc_string(dev, fx + 8, fy + 8, "【画像枠 / Image Frame】", COLOR_NAVY, COLOR_LTGRAY);
+    if (f->img_path[0] != '\0') {
+        drw_tc_string(dev, fx + 8, fy + 26, f->img_path, COLOR_DKGRAY, COLOR_LTGRAY);
+    }
+}
+
+void clarity_render_tad(GDEV *dev, const ClarityFrame *f, int ox, int oy, int zoom)
+{
+    if (!dev || !f || f->type != FRAME_TAD) return;
+    if (zoom <= 0) zoom = 100;
+
+    int fx = ox + (f->bounds.left * zoom) / 100 + 1;
+    int fy = oy + (f->bounds.top  * zoom) / 100 + 1;
+    int fw = ((f->bounds.right - f->bounds.left) * zoom) / 100 - 2;
+    int fh = ((f->bounds.bottom - f->bounds.top) * zoom) / 100 - 2;
+
+    RECT bg = { (H)fx, (H)fy, (H)(fx + fw), (H)(fy + fh) };
+    fill_rec(dev, &bg, COLOR_WHITE);
+
+    RECT header = { (H)fx, (H)fy, (H)(fx + fw), (H)(fy + 22) };
+    fill_rec(dev, &header, COLOR_NAVY);
+    drw_tc_string(dev, fx + 6, fy + 4, "【TAD 仮想実身 / Virtual Body】", COLOR_WHITE, COLOR_NAVY);
+
+    set_col(dev, COLOR_NAVY, COLOR_WHITE);
+    drw_rec(dev, &bg);
+
+    char title_buf[128];
+    snprintf(title_buf, sizeof(title_buf), "文書: %s", f->tad_title[0] ? f->tad_title : "TAD Document");
+    drw_tc_string(dev, fx + 10, fy + 30, title_buf, COLOR_BLACK, COLOR_WHITE);
+
+    char path_buf[256];
+    snprintf(path_buf, sizeof(path_buf), "実身: %s", f->tad_path[0] ? f->tad_path : "-");
+    drw_tc_string(dev, fx + 10, fy + 48, path_buf, COLOR_DKGRAY, COLOR_WHITE);
+
+    if (fh >= 80) {
+        RECT btn = { (H)(fx + 10), (H)(fy + 68), (H)(fx + fw - 10), (H)(fy + 88) };
+        fill_rec(dev, &btn, COLOR_LTGRAY);
+        set_col(dev, COLOR_DKGRAY, COLOR_LTGRAY);
+        drw_rec(dev, &btn);
+        drw_tc_string(dev, fx + 16, fy + 72, "▶ TAD Browser で開く (Double click to open)", COLOR_NAVY, COLOR_LTGRAY);
     }
 }

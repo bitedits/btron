@@ -335,7 +335,7 @@ static int process_manifest(const char *manifest_path)
             printf("  [TAD ] %s\n", fname);
             if (imprint_tad(fname, payload_path[0] ? payload_path : NULL, parent) != 0)
                 errors++;
-        } else if (strcmp(ftype, "MD") == 0 || strcmp(ftype, "TXT") == 0) {
+        } else if (strcmp(ftype, "MD") == 0 || strcmp(ftype, "TXT") == 0 || strcmp(ftype, "PNG") == 0 || strcmp(ftype, "IMG") == 0 || strcmp(ftype, "BIN") == 0) {
             printf("  [%-4s] %s (%s) [in %s]\n", ftype, fname, payload_path, parent ? parent : g_vol_name);
             if (imprint_text(fname, payload_path[0] ? payload_path : NULL, parent) != 0)
                 errors++;

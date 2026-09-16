@@ -21,6 +21,7 @@
 #include <string.h>
 #include <dirent.h>
 #include <sys/stat.h>
+#include <sys/time.h>
 #else
 #include <stddef.h>
 #include <stdint.h>
@@ -50,11 +51,16 @@ static inline char* local_strstr(const char *haystack, const char *needle) {
 __attribute__((weak)) WND* open_t_editor_window(void) {
     return (void*)0;
 }
+__attribute__((weak)) WND* open_t_editor_window_with_file(const char *filepath) {
+    (void)filepath;
+    return (void*)0;
+}
 #else
 extern WND* open_t_editor_window(void);
+extern WND* open_t_editor_window_with_file(const char *filepath);
 #endif
 
-#define MAX_CABINET_ITEMS 256
+#define MAX_CABINET_ITEMS 512
 
 typedef enum {
     CAB_VIEW_LIST = 0,
@@ -466,12 +472,13 @@ static void cabinet_init_defaults(CABINET_EXPLORER *cab) {
     cab->view_mode = CAB_VIEW_LIST;
 
 #if defined(__STDC_HOSTED__) && __STDC_HOSTED__ == 1
-    /* Dynamic discovery from multiple Real Body storage directories */
-    cabinet_discover_dir(cab, "tad_bin");
-    cabinet_discover_dir(cab, "btron_store");
+    /* Dynamic discovery: prioritize SYS, doc/md, assets to guarantee TXT/MD visibility */
+    cabinet_discover_dir(cab, "SYS");
     cabinet_discover_dir(cab, "doc/md");
     cabinet_discover_dir(cab, "assets/texts");
     cabinet_discover_dir(cab, "assets/icons");
+    cabinet_discover_dir(cab, "btron_store");
+    cabinet_discover_dir(cab, "tad_bin");
 #endif
 
     if (cab->item_count > 0) {
@@ -766,7 +773,7 @@ static void handle_vobj_manager_event(WND *wnd, const EVT *evt) {
         if (s_cab_mouse_down && !btron_dnd_is_active()) {
             H dx = evt->pos.x - s_cab_down_x;
             H dy = evt->pos.y - s_cab_down_y;
-            if (dx * dx + dy * dy >= 25) { /* > 5px drag threshold */
+            if (dx * dx + dy * dy >= 144) { /* > 5px drag threshold */
                 if (g_cabinet.selected_idx >= 0 && g_cabinet.selected_idx < g_cabinet.item_count) {
                     CABINET_ITEM *it = &g_cabinet.items[g_cabinet.selected_idx];
                     btron_dnd_begin(wnd->id, it->robj_id, it->type, it->name, it->path, evt->pos.x, evt->pos.y);
@@ -796,8 +803,14 @@ static void handle_vobj_manager_event(WND *wnd, const EVT *evt) {
                     case CCMD_FILE_OPEN:
                     case CCMD_FILE_VIEW_TAD:
                         if (g_cabinet.selected_idx >= 0 && g_cabinet.selected_idx < g_cabinet.item_count) {
-                            open_tad_browser_window(g_cabinet.items[g_cabinet.selected_idx].path,
-                                                   g_cabinet.items[g_cabinet.selected_idx].name);
+                            CABINET_ITEM *it = &g_cabinet.items[g_cabinet.selected_idx];
+                            int path_len = strlen(it->path);
+                            if ((path_len > 3 && strcmp(it->path + path_len - 3, ".md") == 0) ||
+                                (path_len > 4 && strcmp(it->path + path_len - 4, ".txt") == 0)) {
+                                open_t_editor_window_with_file(it->path);
+                            } else {
+                                open_tad_browser_window(it->path, it->name);
+                            }
                         }
                         return;
                     case CCMD_FILE_NEW:
@@ -877,14 +890,38 @@ static void handle_vobj_manager_event(WND *wnd, const EVT *evt) {
             static int s_last_click_idx = -1;
             static UW s_last_click_time = 0;
             UW cur_time = (UW)(uintptr_t)evt->data;
-            BOOL is_double = (s_last_click_idx == idx && (cur_time - s_last_click_time < 400 || s_last_click_time == 0));
+            if (cur_time == 0) {
+#if defined(__STDC_HOSTED__) && __STDC_HOSTED__ == 1
+                struct timeval tv;
+                gettimeofday(&tv, NULL);
+                cur_time = (UW)(tv.tv_sec * 1000 + tv.tv_usec / 1000);
+#endif
+            }
+            BOOL is_double = (s_last_click_idx == idx && s_last_click_time != 0 && (cur_time - s_last_click_time < 500));
 
             g_cabinet.selected_idx = idx;
-            s_last_click_idx = idx;
-            s_last_click_time = cur_time;
 
-            if (is_double && idx >= 0 && idx < g_cabinet.item_count) {
-                open_tad_browser_window(g_cabinet.items[idx].path, g_cabinet.items[idx].name);
+            if (is_double) {
+                s_last_click_idx = -1;
+                s_last_click_time = 0;
+                CABINET_ITEM *it = &g_cabinet.items[idx];
+                int path_len = strlen(it->path);
+                if ((path_len > 4 && strcmp(it->path + path_len - 4, ".tad") == 0) ||
+                    (path_len > 4 && strcmp(it->path + path_len - 4, ".TAD") == 0)) {
+                    open_tad_browser_window(it->path, it->name);
+                } else if ((path_len > 3 && strcmp(it->path + path_len - 3, ".md") == 0) ||
+                           (path_len > 4 && strcmp(it->path + path_len - 4, ".txt") == 0)) {
+                    open_t_editor_window_with_file(it->path);
+                } else {
+                    if (it->type == VOBJ_TYPE_TEXT) {
+                        open_t_editor_window_with_file(it->path);
+                    } else {
+                        open_tad_browser_window(it->path, it->name);
+                    }
+                }
+            } else {
+                s_last_click_idx = idx;
+                s_last_click_time = cur_time;
             }
         }
         return;

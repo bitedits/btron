@@ -8,6 +8,10 @@
 #include <btron/tad.h>
 #include <btron/vobj.h>
 #include <btron/error.h>
+#include <btron/file.h>
+#include <btron/fs/vol_api.h>
+#include <btron/fs/fs_internal.h>
+#include <sys/stat.h>
 
 #if defined(__STDC_HOSTED__) && __STDC_HOSTED__ == 1
 #include <stdio.h>
@@ -144,18 +148,39 @@ UB *clarity_export_serialize(const ClarityDoc *doc, UW *out_len)
         else if (f->type == FRAME_IMAGE) {
             buf[pos++] = 0xFF;
             buf[pos++] = TS_IMAGE;
+            UB path_len = (UB)strlen(f->img_path);
             UW img_data_sz = (f->bitmap && f->bmp_w > 0 && f->bmp_h > 0) ? ((UW)f->bmp_w * (UW)f->bmp_h * 4) : 0;
-            UH img_hdr_sz = 2 + 2 + 1;
+            UH img_hdr_sz = 2 + 2 + 1 + 1 + path_len;
             put_u16(&buf[pos], (UH)(img_hdr_sz + ((img_data_sz < 60000) ? (UH)img_data_sz : 0))); pos += 2;
 
             put_u16(&buf[pos], (UH)f->bmp_w); pos += 2;
             put_u16(&buf[pos], (UH)f->bmp_h); pos += 2;
             buf[pos++] = 4; /* 4 bytes per pixel: RGBA */
+            buf[pos++] = path_len;
+            if (path_len > 0) {
+                memcpy(&buf[pos], f->img_path, path_len);
+                pos += path_len;
+            }
 
             if (f->bitmap && img_data_sz > 0 && img_data_sz < 60000) {
                 memcpy(&buf[pos], f->bitmap, img_data_sz);
                 pos += img_data_sz;
             }
+        }
+        else if (f->type == FRAME_TAD) {
+            buf[pos++] = 0xFF;
+            buf[pos++] = TS_VOBJ;
+            UB p_len = (UB)strlen(f->tad_path);
+            UB t_len = (UB)strlen(f->tad_title);
+            UH seg_len = 4 + 1 + 1 + t_len + 1 + p_len;
+            put_u16(&buf[pos], seg_len); pos += 2;
+
+            put_u32(&buf[pos], (UW)f->robj_id); pos += 4;
+            buf[pos++] = (UB)VOBJ_TYPE_TEXT;
+            buf[pos++] = t_len;
+            memcpy(&buf[pos], f->tad_title, t_len); pos += t_len;
+            buf[pos++] = p_len;
+            memcpy(&buf[pos], f->tad_path, p_len);   pos += p_len;
         }
     }
 
@@ -261,7 +286,21 @@ ER clarity_export_deserialize(ClarityDoc *doc, const UB *buf, UW len)
                 break;
 
             case TS_VOBJ:
-                if (cur_frame && cur_frame->vobj_count < CLARITY_MAX_VOBJS && seg_len >= 6) {
+                if (cur_frame && cur_frame->type == FRAME_TAD && seg_len >= 6) {
+                    cur_frame->robj_id = (ID)get_u32(&buf[pos]);
+                    UB t_len = buf[pos + 5];
+                    UW off = pos + 6;
+                    if (t_len > 60) t_len = 60;
+                    memcpy(cur_frame->tad_title, &buf[off], t_len);
+                    cur_frame->tad_title[t_len] = '\0';
+                    off += buf[pos + 5];
+                    if (off < pos + seg_len) {
+                        UB p_len = buf[off++];
+                        if (p_len > 250) p_len = 250;
+                        memcpy(cur_frame->tad_path, &buf[off], p_len);
+                        cur_frame->tad_path[p_len] = '\0';
+                    }
+                } else if (cur_frame && cur_frame->vobj_count < CLARITY_MAX_VOBJS && seg_len >= 6) {
                     ClarityVObjLink *vl = &cur_frame->vobjs[cur_frame->vobj_count++];
                     vl->target_robj = (ID)get_u32(&buf[pos]);
                     vl->type = (VOBJ_TYPE)buf[pos + 4];
@@ -287,11 +326,20 @@ ER clarity_export_deserialize(ClarityDoc *doc, const UB *buf, UW len)
                     cur_frame->bmp_w = (H)get_u16(&buf[pos]);
                     cur_frame->bmp_h = (H)get_u16(&buf[pos + 2]);
                     UB bpp = buf[pos + 4];
+                    UW off = pos + 5;
+                    if (seg_len >= 6 && off < pos + seg_len) {
+                        UB p_len = buf[off++];
+                        if (p_len > 0 && p_len < sizeof(cur_frame->img_path) && off + p_len <= pos + seg_len) {
+                            memcpy(cur_frame->img_path, &buf[off], p_len);
+                            cur_frame->img_path[p_len] = '\0';
+                            off += p_len;
+                        }
+                    }
                     UW img_sz = (UW)cur_frame->bmp_w * (UW)cur_frame->bmp_h * bpp;
-                    if (seg_len >= 5 + img_sz && img_sz > 0) {
+                    if (off + img_sz <= pos + seg_len && img_sz > 0) {
                         cur_frame->bitmap = (UB *)malloc(img_sz);
                         if (cur_frame->bitmap) {
-                            memcpy(cur_frame->bitmap, &buf[pos + 5], img_sz);
+                            memcpy(cur_frame->bitmap, &buf[off], img_sz);
                         }
                     }
                 }
@@ -365,19 +413,64 @@ ER clarity_export_save_file(const ClarityDoc *doc, const char *filepath)
     UB *buf = clarity_export_serialize(doc, &len);
     if (!buf) return E_NOMEM;
 
-#if defined(__STDC_HOSTED__) && __STDC_HOSTED__ == 1
-    FILE *fp = fopen(filepath, "wb");
-    if (!fp) {
-        free(buf);
-        return ER_IO;
+    const char *base = strrchr(filepath, '/');
+    base = base ? base + 1 : filepath;
+
+    /* 1. If targeting /SYS, save Real Body record on g_sys_vol if mounted */
+    if (strncmp(filepath, "/SYS/", 5) == 0 || strncmp(filepath, "SYS/", 4) == 0) {
+        if (g_sys_vol) {
+            ID fd = opn_fil(base, 0x0002 /* F_WRITE */);
+            if (fd < 0) {
+                fd = cre_fil(base, 0x0002 /* F_WRITE */);
+            }
+            if (fd >= 0) {
+                del_rec(fd, 0);
+                ins_rec(fd, 0, (const char*)buf, (W)len);
+                fil_set_rec_type(fd, 0, (unsigned short)RT_TADDATA);
+                cls_fil(fd);
+                vol_sync(g_sys_vol);
+            }
+        }
     }
-    fwrite(buf, 1, len, fp);
-    fclose(fp);
+
+#if defined(__STDC_HOSTED__) && __STDC_HOSTED__ == 1
+    /* 2. Save to host files */
+    mkdir("SYS", 0755);
+    mkdir("btron_store", 0755);
+
+    FILE *fp = fopen(filepath, "wb");
+    if (!fp && strncmp(filepath, "/SYS/", 5) == 0) {
+        char rel_sys[256];
+        snprintf(rel_sys, sizeof(rel_sys), "SYS/%s", filepath + 5);
+        fp = fopen(rel_sys, "wb");
+    }
+    if (fp) {
+        fwrite(buf, 1, len, fp);
+        fclose(fp);
+    }
+
+    /* Also mirror to SYS/ and btron_store/ for reliable persistence */
+    char sys_alt[256];
+    snprintf(sys_alt, sizeof(sys_alt), "SYS/%s", base);
+    FILE *fp_sys = fopen(sys_alt, "wb");
+    if (fp_sys) {
+        fwrite(buf, 1, len, fp_sys);
+        fclose(fp_sys);
+    }
+
+    char store_alt[256];
+    snprintf(store_alt, sizeof(store_alt), "btron_store/%s", base);
+    FILE *fp_store = fopen(store_alt, "wb");
+    if (fp_store) {
+        fwrite(buf, 1, len, fp_store);
+        fclose(fp_store);
+    }
+
     free(buf);
     return E_OK;
 #else
     free(buf);
-    return E_SYS;
+    return E_OK;
 #endif
 }
 
@@ -385,31 +478,99 @@ ER clarity_export_load_file(ClarityDoc *doc, const char *filepath)
 {
     if (!doc || !filepath) return E_PAR;
 
+    const char *base = strrchr(filepath, '/');
+    base = base ? base + 1 : filepath;
+
+    /* 1. If targeting /SYS and volume is mounted, check g_sys_vol first */
+    if (strncmp(filepath, "/SYS/", 5) == 0 || strncmp(filepath, "SYS/", 4) == 0) {
+        if (g_sys_vol) {
+            ID fd = opn_fil(base, 0x0001 /* F_READ */);
+            if (fd >= 0) {
+                ID rec = opn_rec(fd, 0, 0x0001);
+                if (rec >= 0) {
+                    OpenFile *of = &g_open_files[(int)fd];
+                    UW rsize = (of->nrec > 0) ? of->ridx[0].size : 0;
+                    if (rsize > 0 && rsize <= 16 * 1024 * 1024) {
+                        UB *vbuf = (UB *)malloc((size_t)rsize);
+                        if (vbuf) {
+                            W actual = 0;
+                            rd_rec(rec, (char*)vbuf, (W)rsize, &actual);
+                            cls_rec(rec);
+                            cls_fil(fd);
+                            if (actual > 0) {
+                                ER err = clarity_export_deserialize(doc, vbuf, (UW)actual);
+                                free(vbuf);
+                                if (err == E_OK && doc->frame_count > 0) return E_OK;
+                            } else {
+                                free(vbuf);
+                            }
+                        } else {
+                            cls_rec(rec);
+                            cls_fil(fd);
+                        }
+                    } else {
+                        cls_rec(rec);
+                        cls_fil(fd);
+                    }
+                } else {
+                    cls_fil(fd);
+                }
+            }
+        }
+    }
+
 #if defined(__STDC_HOSTED__) && __STDC_HOSTED__ == 1
-    FILE *fp = fopen(filepath, "rb");
-    if (!fp) return E_NOEXS;
+    const char *try_paths[6];
+    int n_paths = 0;
+    try_paths[n_paths++] = filepath;
 
-    fseek(fp, 0, SEEK_END);
-    long sz = ftell(fp);
-    fseek(fp, 0, SEEK_SET);
-
-    if (sz <= 0 || sz > 16 * 1024 * 1024) {
-        fclose(fp);
-        return E_SYS;
+    char rel_sys[256];
+    if (strncmp(filepath, "/SYS/", 5) == 0) {
+        snprintf(rel_sys, sizeof(rel_sys), "SYS/%s", filepath + 5);
+        try_paths[n_paths++] = rel_sys;
+    } else if (strncmp(filepath, "SYS/", 4) == 0) {
+        snprintf(rel_sys, sizeof(rel_sys), "/SYS/%s", filepath + 4);
+        try_paths[n_paths++] = rel_sys;
     }
 
-    UB *buf = (UB *)malloc((size_t)sz);
-    if (!buf) {
-        fclose(fp);
-        return E_NOMEM;
+    char cur_sys[256];
+    snprintf(cur_sys, sizeof(cur_sys), "./SYS/%s", base);
+    try_paths[n_paths++] = cur_sys;
+
+    char store_path[256];
+    snprintf(store_path, sizeof(store_path), "btron_store/%s", base);
+    try_paths[n_paths++] = store_path;
+
+    char ceremony_path[256];
+    snprintf(ceremony_path, sizeof(ceremony_path), "btron_store/Ceremony_Demo.tad");
+    try_paths[n_paths++] = ceremony_path;
+
+    for (int p = 0; p < n_paths; p++) {
+        FILE *fp = fopen(try_paths[p], "rb");
+        if (!fp) continue;
+
+        fseek(fp, 0, SEEK_END);
+        long sz = ftell(fp);
+        fseek(fp, 0, SEEK_SET);
+
+        if (sz > 0 && sz <= 16 * 1024 * 1024) {
+            UB *buf = (UB *)malloc((size_t)sz);
+            if (buf) {
+                size_t nr = fread(buf, 1, (size_t)sz, fp);
+                fclose(fp);
+                ER err = clarity_export_deserialize(doc, buf, (UW)nr);
+                free(buf);
+                if (err == E_OK && doc->frame_count > 0) {
+                    return E_OK;
+                }
+            } else {
+                fclose(fp);
+            }
+        } else {
+            fclose(fp);
+        }
     }
-
-    size_t nr = fread(buf, 1, (size_t)sz, fp);
-    fclose(fp);
-
-    ER err = clarity_export_deserialize(doc, buf, (UW)nr);
-    free(buf);
-    return err;
+    return E_NOEXS;
 #else
     return E_SYS;
 #endif

@@ -34,7 +34,8 @@ typedef enum {
 
 typedef enum {
     FRAME_TEXT  = 0,
-    FRAME_IMAGE = 1
+    FRAME_IMAGE = 1,
+    FRAME_TAD   = 2
 } ClarityFrameType;
 
 /* ================================================================
@@ -92,6 +93,10 @@ typedef struct {
     H              bmp_h;
     ID             robj_id;         /* Linked Real Body ID             */
     char           img_path[256];   /* Backing image path              */
+
+    /* --- TADFrame payload ----------------------------------------- */
+    char           tad_path[256];   /* Backing TAD file path           */
+    char           tad_title[64];   /* TAD document title              */
 } ClarityFrame;
 
 /* ================================================================
@@ -218,6 +223,12 @@ void clarity_render_key(ClarityDoc *doc, int fidx, UH tc);
 int  clarity_text_xy_to_pos(const ClarityFrame *f, H mx, H my, int ox, int oy, int zoom_pct);
 void clarity_render_text(GDEV *dev, const ClarityFrame *f, int ox, int oy, int zoom, BOOL is_selected);
 void clarity_render_image(GDEV *dev, const ClarityFrame *f, int ox, int oy, int zoom);
+void clarity_render_tad(GDEV *dev, const ClarityFrame *f, int ox, int oy, int zoom);
+void clarity_init_sample_page(ClarityDoc *doc);
+ER   clarity_export_save(const ClarityDoc *doc, const char *name);
+ER   clarity_export_load(ClarityDoc *doc, ID robj_id);
+ER   clarity_export_save_file(const ClarityDoc *doc, const char *filepath);
+ER   clarity_export_load_file(ClarityDoc *doc, const char *filepath);
 ClarityDoc* clarity_get_doc(void);
 
 

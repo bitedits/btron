@@ -225,6 +225,8 @@ void clarity_draw_frames(GDEV *dev, const ClarityDoc *doc, int ox, int oy)
 
         if (f->type == FRAME_TEXT) {
             set_col(dev, sel ? COLOR_BLUE : COLOR_DKGRAY, COLOR_WHITE);
+        } else if (f->type == FRAME_TAD) {
+            set_col(dev, sel ? COLOR_BLUE : COLOR_NAVY, COLOR_WHITE);
         } else {
             set_col(dev, sel ? COLOR_TEAL : COLOR_GRAY, COLOR_WHITE);
         }
@@ -242,7 +244,8 @@ void clarity_draw_frames(GDEV *dev, const ClarityDoc *doc, int ox, int oy)
 
         /* Frame type badge at top right */
         if (sel) {
-            const char *badge = (f->type == FRAME_TEXT) ? " [Text] " : " [Image] ";
+            const char *badge = (f->type == FRAME_TEXT) ? " [Text] " :
+                                (f->type == FRAME_TAD)  ? " [TAD] "  : " [Image] ";
             drw_tc_string(dev, sr.right - 48, sr.top - 14, badge, COLOR_BLUE, COLOR_WHITE);
 
             int mx = (sr.left + sr.right)  / 2;
@@ -484,7 +487,39 @@ int clarity_frame_load_image(ClarityFrame *f, const char *path, ID robj_id)
     if (!f || !path) return -1;
     UB *pixels = NULL;
     H w = 0, h = 0;
-    if (decode_image_rgba(path, &pixels, &w, &h) != 0 || !pixels) {
+
+    const char *try_paths[6];
+    int n_try = 0;
+    try_paths[n_try++] = path;
+
+    char rel_sys[256];
+    if (strncmp(path, "/SYS/", 5) == 0) {
+        snprintf(rel_sys, sizeof(rel_sys), "SYS/%s", path + 5);
+        try_paths[n_try++] = rel_sys;
+    } else if (strncmp(path, "SYS/", 4) == 0) {
+        snprintf(rel_sys, sizeof(rel_sys), "/SYS/%s", path + 4);
+        try_paths[n_try++] = rel_sys;
+    }
+
+    char cur_sys[256];
+    const char *bname = strrchr(path, '/');
+    bname = bname ? bname + 1 : path;
+    snprintf(cur_sys, sizeof(cur_sys), "./SYS/%s", bname);
+    try_paths[n_try++] = cur_sys;
+
+    char icon_fallback[256];
+    snprintf(icon_fallback, sizeof(icon_fallback), "assets/icons/%s", bname);
+    try_paths[n_try++] = icon_fallback;
+
+    int decoded = -1;
+    for (int i = 0; i < n_try; i++) {
+        if (decode_image_rgba(try_paths[i], &pixels, &w, &h) == 0 && pixels) {
+            decoded = 0;
+            break;
+        }
+    }
+
+    if (decoded != 0 || !pixels) {
         return -1;
     }
     if (f->bitmap) {
@@ -504,6 +539,10 @@ void clarity_handle_dnd_drop(ClarityDoc *doc, const BTRON_DND *dnd, H mx, H my, 
 {
     if (!doc || !dnd || !dnd->active) return;
 
+    int path_len = (int)strlen(dnd->path);
+    BOOL is_tad = (path_len > 4 && strcmp(dnd->path + path_len - 4, ".tad") == 0) ||
+                  (path_len > 4 && strcmp(dnd->path + path_len - 4, ".TAD") == 0);
+
     /* 1. Hit test existing frames */
     int fidx = clarity_hittest_frame(doc, mx, my, ox, oy);
     if (fidx >= 0 && fidx < doc->frame_count) {
@@ -514,15 +553,19 @@ void clarity_handle_dnd_drop(ClarityDoc *doc, const BTRON_DND *dnd, H mx, H my, 
                 doc->dirty = TRUE;
                 return;
             }
-            /* Dropped image onto Text Frame -> insert graphical Virtual Body */
             clarity_frame_insert_vobj(f, dnd->robj_id, dnd->type, dnd->name, dnd->path);
             doc->dirty = TRUE;
             return;
         } else {
-            /* Dropped text/document onto Text Frame -> insert Virtual Body moniker */
             if (f->type == FRAME_TEXT) {
                 f->cursor_pos = clarity_text_xy_to_pos(f, mx, my, ox, oy, doc->zoom_pct);
                 clarity_frame_insert_vobj(f, dnd->robj_id, dnd->type, dnd->name, dnd->path);
+                doc->dirty = TRUE;
+                return;
+            } else if (f->type == FRAME_TAD && is_tad) {
+                strncpy(f->tad_path, dnd->path, sizeof(f->tad_path) - 1);
+                strncpy(f->tad_title, dnd->name, sizeof(f->tad_title) - 1);
+                f->robj_id = dnd->robj_id;
                 doc->dirty = TRUE;
                 return;
             }
@@ -541,6 +584,15 @@ void clarity_handle_dnd_drop(ClarityDoc *doc, const BTRON_DND *dnd, H mx, H my, 
             doc->selected_frame = doc->frame_count - 1;
             doc->dirty = TRUE;
         }
+    } else if (is_tad) {
+        ClarityFrame *nf = clarity_doc_add_frame(doc, FRAME_TAD, cx, cy, 320, 120);
+        if (nf) {
+            strncpy(nf->tad_path, dnd->path, sizeof(nf->tad_path) - 1);
+            strncpy(nf->tad_title, dnd->name, sizeof(nf->tad_title) - 1);
+            nf->robj_id = dnd->robj_id;
+            doc->selected_frame = doc->frame_count - 1;
+            doc->dirty = TRUE;
+        }
     } else {
         ClarityFrame *nf = clarity_doc_add_frame(doc, FRAME_TEXT, cx, cy, 280, 140);
         if (nf) {
@@ -550,3 +602,73 @@ void clarity_handle_dnd_drop(ClarityDoc *doc, const BTRON_DND *dnd, H mx, H my, 
         }
     }
 }
+
+void clarity_init_sample_page(ClarityDoc *doc)
+{
+    if (!doc) return;
+    for (int i = 0; i < doc->frame_count; i++) {
+        if (doc->frames[i].bitmap) {
+            free(doc->frames[i].bitmap);
+            doc->frames[i].bitmap = NULL;
+        }
+    }
+    memset(doc, 0, sizeof(ClarityDoc));
+    doc->fmt            = FMT_A4;
+    doc->page_count     = 2;
+    doc->zoom_pct       = 75;
+    doc->selected_frame = -1;
+    doc->tool           = TOOL_SELECT;
+    clarity_fmt_dimensions(doc);
+
+    /* Frame 0: Image Frame linked with /SYS/clarity.png */
+    ClarityFrame *f_img = clarity_doc_add_frame(doc, FRAME_IMAGE, 24, 24, 160, 160);
+    if (f_img) {
+        clarity_frame_load_image(f_img, "/SYS/clarity.png", 101);
+    }
+
+    /* Frame 1: Text Frame linked with /SYS/BTRON3_Report.txt */
+    ClarityFrame *f1 = clarity_doc_add_frame(doc, FRAME_TEXT, 200, 24, 400, 200);
+    if (f1) {
+        const char *intro =
+            "BTRON 3.20 ハイパーメディア電子帳票 (Clarity)\n"
+            "実身・仮身 (Real Body / Virtual Body) 連動デモ\n\n"
+            "【リンクされた実身ファイル】\n"
+            "・テキスト実身: /SYS/BTRON3_Report.txt\n"
+            "・画像実身:     /SYS/clarity.png\n\n"
+            "ダブルクリックで対象の実身を直接開きます:\n";
+        f1->text_len = 0;
+        for (int i = 0; intro[i] && f1->text_len < CLARITY_TEXT_BUF - 1; i++) {
+            f1->text[f1->text_len++] = (UH)(unsigned char)intro[i];
+        }
+        f1->cursor_pos = (int)f1->text_len;
+        clarity_frame_insert_vobj(f1, 102, VOBJ_TYPE_TEXT, "BTRON3_Report.txt", "/SYS/BTRON3_Report.txt");
+        clarity_frame_insert_vobj(f1, 103, VOBJ_TYPE_TEXT, "HYPERMEDIA.md", "/SYS/HYPERMEDIA.md");
+    }
+
+    /* Frame 2: TAD Placeholder Frame */
+    ClarityFrame *f_tad = clarity_doc_add_frame(doc, FRAME_TAD, 24, 240, 576, 120);
+    if (f_tad) {
+        strncpy(f_tad->tad_path, "tad_bin/01_btron3_spec.tad", sizeof(f_tad->tad_path) - 1);
+        strncpy(f_tad->tad_title, "【仕様書】BTRON3 3.20 OS Specification", sizeof(f_tad->tad_title) - 1);
+        f_tad->robj_id = 104;
+    }
+
+    /* Frame 3: Guide */
+    ClarityFrame *f_guide = clarity_doc_add_frame(doc, FRAME_TEXT, 24, 380, 576, 150);
+    if (f_guide) {
+        const char *guide =
+            "【操作ガイド / Direct Manipulation Guide】\n"
+            "1. キャビネットから画像/文書をドラッグ＆ドロップして配置\n"
+            "2. TADファイルをドラッグしてTADプレースホルダー枠を作成\n"
+            "3. 仮身やTAD枠をダブルクリックしてTAD Browser / エディタを開く\n"
+            "4. [ファイル] → [保存] (Ctrl+S) で /SYS/Clarity-Sample.TAD に永続保存\n";
+        f_guide->text_len = 0;
+        for (int i = 0; guide[i] && f_guide->text_len < CLARITY_TEXT_BUF - 1; i++) {
+            f_guide->text[f_guide->text_len++] = (UH)(unsigned char)guide[i];
+        }
+        f_guide->cursor_pos = (int)f_guide->text_len;
+    }
+
+    doc->selected_frame = 1;
+}
+

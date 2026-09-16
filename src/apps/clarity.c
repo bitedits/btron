@@ -50,10 +50,17 @@ extern int  clarity_hittest_handle(const ClarityFrame *f, H x, H y, int ox, int 
 extern void clarity_resize_frame_handle(ClarityFrame *f, int h, H mx, H my, int ox, int oy, int zoom_pct);
 extern void clarity_move_frame(ClarityFrame *f, H dx, H dy);
 
+#include <sys/time.h>
+
+#define CLARITY_SAMPLE_PATH "/SYS/Clarity-Sample.TAD"
+
 extern void clarity_render_key(ClarityDoc *doc, int fidx, UH tc);
 extern void clarity_handle_text_action(ClarityDoc *doc, int fidx, int action, UH tc);
 extern void clarity_render_text(GDEV *dev, const ClarityFrame *f, int ox, int oy, int zoom, BOOL is_selected);
 extern void clarity_render_image(GDEV *dev, const ClarityFrame *f, int ox, int oy, int zoom);
+extern void clarity_render_tad(GDEV *dev, const ClarityFrame *f, int ox, int oy, int zoom);
+extern void clarity_init_sample_page(ClarityDoc *doc);
+extern WND* open_t_editor_window_with_file(const char *filepath);
 extern ER   clarity_export_save(const ClarityDoc *doc, const char *name);
 extern ER   clarity_export_load(ClarityDoc *doc, ID robj_id);
 extern ER   clarity_export_save_file(const ClarityDoc *doc, const char *filepath);
@@ -414,6 +421,8 @@ static void clarity_paint(WND *wnd, GDEV *dev)
         BOOL is_sel = (i == g_doc.selected_frame);
         if (f->type == FRAME_TEXT) {
             clarity_render_text(dev, f, ox, oy, zoom, is_sel);
+        } else if (f->type == FRAME_TAD) {
+            clarity_render_tad(dev, f, ox, oy, zoom);
         } else {
             clarity_render_image(dev, f, ox, oy, zoom);
         }
@@ -460,14 +469,19 @@ static void handle_cmd(int cmd)
 {
     switch (cmd) {
         case CMD_FILE_NEW:
-            doc_new(g_doc.fmt);
+            clarity_init_sample_page(&g_doc);
+            g_doc.dirty = FALSE;
             break;
         case CMD_FILE_OPEN:
-            doc_new(g_doc.fmt);
+            if (clarity_export_load_file(&g_doc, CLARITY_SAMPLE_PATH) != E_OK || g_doc.frame_count == 0) {
+                clarity_init_sample_page(&g_doc);
+            }
+            g_doc.selected_frame = 0;
+            g_doc.dirty = FALSE;
             break;
         case CMD_FILE_SAVE:
-            clarity_export_save(&g_doc, "Ceremony_Demo");
-            clarity_export_save_file(&g_doc, "btron_store/Ceremony_Demo.tad");
+            clarity_export_save(&g_doc, "Clarity-Sample");
+            clarity_export_save_file(&g_doc, CLARITY_SAMPLE_PATH);
             g_doc.dirty = FALSE;
             break;
 
@@ -802,9 +816,49 @@ static void clarity_event(WND *wnd, const EVT *evt)
             if (hinfo.target == CLARITY_HIT_INTERIOR) {
                 g_doc.selected_frame = hinfo.frame_idx;
                 ClarityFrame *f = &g_doc.frames[hinfo.frame_idx];
-                if (f->type == FRAME_TEXT) {
-                    f->cursor_pos = clarity_text_xy_to_pos(f, cx, cy, ox, oy, zoom);
+
+                static int s_last_clarity_fidx = -1;
+                static UW s_last_clarity_click = 0;
+                UW cur_time = (UW)(uintptr_t)evt->data;
+                if (cur_time == 0) {
+#if defined(__STDC_HOSTED__) && __STDC_HOSTED__ == 1
+                    struct timeval tv;
+                    gettimeofday(&tv, NULL);
+                    cur_time = (UW)(tv.tv_sec * 1000 + tv.tv_usec / 1000);
+#endif
                 }
+                BOOL is_double = (s_last_clarity_fidx == hinfo.frame_idx &&
+                                  s_last_clarity_click != 0 &&
+                                  (cur_time - s_last_clarity_click < 500));
+
+                if (f->type == FRAME_TEXT) {
+                    int vi = clarity_frame_find_vobj_at(f, cx, cy);
+                    if (vi >= 0) {
+                        ClarityVObjLink *vl = &f->vobjs[vi];
+                        int plen = (int)strlen(vl->path);
+                        if ((plen > 4 && strcmp(vl->path + plen - 4, ".tad") == 0) ||
+                            (plen > 4 && strcmp(vl->path + plen - 4, ".TAD") == 0)) {
+                            open_tad_browser_window(vl->path, vl->label);
+                        } else {
+                            open_t_editor_window_with_file(vl->path);
+                        }
+                    } else {
+                        f->cursor_pos = clarity_text_xy_to_pos(f, cx, cy, ox, oy, zoom);
+                    }
+                } else if (f->type == FRAME_TAD) {
+                    if (is_double || cy >= (H)(oy + (f->bounds.top * zoom) / 100 + 60)) {
+                        open_tad_browser_window(f->tad_path, f->tad_title);
+                    }
+                }
+
+                if (is_double) {
+                    s_last_clarity_fidx = -1;
+                    s_last_clarity_click = 0;
+                } else {
+                    s_last_clarity_fidx = hinfo.frame_idx;
+                    s_last_clarity_click = cur_time;
+                }
+
                 inval_wnd(wnd);
                 return;
             }
@@ -1056,52 +1110,12 @@ WND* open_clarity_window(void)
 
     doc_new(FMT_A4);
 
-    /* Try loading saved Ceremony demo file */
-    if (clarity_export_load_file(&g_doc, "btron_store/Ceremony_Demo.tad") == E_OK && g_doc.frame_count > 0) {
+    /* Try loading saved sample file from /SYS/Clarity-Sample.TAD */
+    if (clarity_export_load_file(&g_doc, CLARITY_SAMPLE_PATH) == E_OK && g_doc.frame_count > 0) {
         g_doc.selected_frame = 0;
     } else {
-        /* Populate Starter Ceremony Hypermedia Document */
-        /* Frame 0: Image Frame with Clarity Icon */
-        ClarityFrame *f_img = doc_add_frame(FRAME_IMAGE, 24, 24, 160, 160);
-        if (f_img) {
-            clarity_frame_load_image(f_img, "assets/icons/clarity.png", 101);
-        }
-
-        /* Frame 1: Text Frame with Real/Virtual Bodies */
-        ClarityFrame *f1 = doc_add_frame(FRAME_TEXT, 200, 24, 400, 160);
-        if (f1) {
-            const char *intro = 
-                "BTRON 3.20 実身／仮身 ハイパーメディア儀式\n"
-                "Alpha 1 Hypermedia Ceremony (Sakamura Spec)\n\n"
-                "実身(Real Body)と仮身(Virtual Body)による真のハイパーメディア。\n"
-                "ダブルクリックで対象の実身を直接開きます:\n";
-            f1->text_len = 0;
-            for (int i = 0; intro[i] && f1->text_len < CLARITY_TEXT_BUF - 1; i++) {
-                f1->text[f1->text_len++] = (UH)(unsigned char)intro[i];
-            }
-            f1->cursor_pos = (int)f1->text_len;
-            clarity_frame_insert_vobj(f1, 102, VOBJ_TYPE_TEXT, "01_btron3_spec.tad", "tad_bin/01_btron3_spec.tad");
-            clarity_frame_insert_vobj(f1, 103, VOBJ_TYPE_TEXT, "HYPERMEDIA.md", "doc/md/HYPERMEDIA.md");
-        }
-
-        /* Frame 2: Instructions for Direct Manipulation */
-        ClarityFrame *f2 = doc_add_frame(FRAME_TEXT, 24, 204, 576, 176);
-        if (f2) {
-            const char *guide =
-                "【実身／仮身 直接操作ガイド / Direct Manipulation】\n"
-                "1. キャビネット(Cabinet)から画像をドラッグ → Image Frameに瞬時に配置\n"
-                "2. キャビネットから文書(MD/TXT/TAD)をドラッグ → テキスト内に仮身を挿入\n"
-                "3. 埋め込まれた仮身 [* 文書名] をダブルクリック → 実身を即座に開きます\n"
-                "4. [ファイル] → [保存] (F2) → 純粋なTAD規格フォーマットで永続保存\n";
-            f2->text_len = 0;
-            for (int i = 0; guide[i] && f2->text_len < CLARITY_TEXT_BUF - 1; i++) {
-                f2->text[f2->text_len++] = (UH)(unsigned char)guide[i];
-            }
-            f2->cursor_pos = (int)f2->text_len;
-        }
-
-        g_doc.selected_frame = 1;
-        clarity_export_save_file(&g_doc, "btron_store/Ceremony_Demo.tad");
+        clarity_init_sample_page(&g_doc);
+        clarity_export_save_file(&g_doc, CLARITY_SAMPLE_PATH);
     }
 
     g_wnd = opn_wnd("電子帳票 – Clarity",

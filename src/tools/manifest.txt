@@ -36,3 +36,7 @@ FILE "USB.md"             MD    doc/md/USB.md
 FILE "BTRON3_Report.txt"         TXT   assets/texts/BTRON3_Report.txt
 FILE "Heart_Sutra_Tibetan.txt"   TXT   assets/texts/Heart_Sutra_Tibetan.txt
 
+
+# Clarity Ceremony Assets
+FILE "clarity.png"               PNG   assets/icons/clarity.png
+FILE "Clarity-Sample.TAD"        TAD   -

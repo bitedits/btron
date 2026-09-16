@@ -60,7 +60,7 @@ extern WND* open_t_editor_window(void);
 extern WND* open_t_editor_window_with_file(const char *filepath);
 #endif
 
-#define MAX_CABINET_ITEMS 512
+#define MAX_CABINET_ITEMS 2048
 
 typedef enum {
     CAB_VIEW_LIST = 0,
@@ -472,13 +472,13 @@ static void cabinet_init_defaults(CABINET_EXPLORER *cab) {
     cab->view_mode = CAB_VIEW_LIST;
 
 #if defined(__STDC_HOSTED__) && __STDC_HOSTED__ == 1
-    /* Dynamic discovery: prioritize SYS, doc/md, assets to guarantee TXT/MD visibility */
+    /* Dynamic discovery: canonical books in tad_bin, plus SYS, doc/md, assets */
+    cabinet_discover_dir(cab, "tad_bin");
     cabinet_discover_dir(cab, "SYS");
     cabinet_discover_dir(cab, "doc/md");
     cabinet_discover_dir(cab, "assets/texts");
     cabinet_discover_dir(cab, "assets/icons");
     cabinet_discover_dir(cab, "btron_store");
-    cabinet_discover_dir(cab, "tad_bin");
 #endif
 
     if (cab->item_count > 0) {

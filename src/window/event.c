@@ -181,6 +181,11 @@ ER get_evt(EVT *p_evt, W timeout_ms) {
             case SDL_TEXTINPUT:
                 /* Text input is handled directly via SDL_KEYDOWN to avoid duplicate keystroke events */
                 break;
+            case SDL_MOUSEWHEEL:
+                ev.type = EV_KEY_DOWN;
+                ev.key = (sdlev.wheel.y > 0) ? BTRON_KEY_PAGE_UP : BTRON_KEY_PAGE_DOWN;
+                snd_evt(&ev);
+                break;
             case SDL_KEYDOWN:
                 /* Check for ^G (Ctrl+G) or Ctrl+Alt+G release shortcut (QEMU style) */
                 if ((sdlev.key.keysym.sym == SDLK_g && (sdlev.key.keysym.mod & KMOD_CTRL)) ||

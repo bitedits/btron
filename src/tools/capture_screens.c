@@ -457,12 +457,12 @@ int main(int argc, char **argv) {
             redraw_all_windows();
             dump_window_rect(dev, w_ds_menu, "/tmp/btron_raw_screens/DriveSetup_Menu_Opened.raw");
         }
-        /* Clarity Format Menu Opened */
+        /* Clarity Arrange Menu Opened */
         reset_isolation_state(dev);
         WND *w_clr_m = open_clarity_window();
         if (w_clr_m) {
             redraw_all_windows();
-            simulate_menu_click(w_clr_m, 1); /* Format menu (index 1) */
+            simulate_menu_click(w_clr_m, 4); /* Arrange menu (配置(A)) */
             redraw_all_windows();
             dump_window_rect(dev, w_clr_m, "/tmp/btron_raw_screens/Clarity_Menu_Opened.raw");
         }

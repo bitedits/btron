@@ -205,7 +205,6 @@ static void test_cabinet_explorer_selection(void) {
     TEST_ASSERT(wnd != NULL, "Opened Cabinet Explorer window");
     TEST_ASSERT(wnd->event_handler != NULL, "Cabinet Explorer has active event_handler attached");
 
-    /* Test item selection click at row 0 (y = 26 + 0*22 + 5 = 31) -> [b-free] 03_bfree_os_book.tad (#103) */
     ID robj = 0;
     char path[128] = "";
     BOOL handled = cabinet_handle_click(50, 31, FALSE, &robj, path);

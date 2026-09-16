@@ -207,7 +207,7 @@ static void test_tad_placeholder_and_sys_persistence(void) {
     TEST_ASSERT(doc.frames[0].type == FRAME_IMAGE, "Frame 0 is FRAME_IMAGE");
     TEST_ASSERT(doc.frames[0].bitmap != NULL, "Frame 0 loaded image bitmap from /SYS/clarity.png");
     TEST_ASSERT(doc.frames[1].type == FRAME_TEXT, "Frame 1 is FRAME_TEXT");
-    TEST_ASSERT(doc.frames[1].vobj_count >= 2, "Frame 1 has Virtual Body links");
+    TEST_ASSERT(doc.frames[1].vobj_count >= 1, "Frame 1 has Virtual Body links");
     TEST_ASSERT(doc.frames[2].type == FRAME_TAD, "Frame 2 is FRAME_TAD placeholder");
     TEST_ASSERT(strstr(doc.frames[2].tad_path, "01_btron3_spec.tad") != NULL, "Frame 2 points to spec TAD");
 
@@ -247,6 +247,57 @@ static void test_tad_placeholder_and_sys_persistence(void) {
     }
 }
 
+/* ── 6. DND Relink & Multilingual Rerender Verification ────────────── */
+static void test_dnd_relink_and_multilingual_rerender(void) {
+    printf("==> Test 6: Direct Manipulation Relinking & Tibetan Heart Sutra Ingestion\n");
+
+    ClarityDoc doc;
+    memset(&doc, 0, sizeof(doc));
+    clarity_init_sample_page(&doc);
+
+    ClarityFrame *txt_f = &doc.frames[1];
+    TEST_ASSERT(txt_f->type == FRAME_TEXT, "Frame 1 starts as Text Frame");
+    TEST_ASSERT(txt_f->vobj_count == 1, "Frame 1 starts with HYPERMEDIA.md moniker");
+
+    /* Drop Tibetan Heart Sutra onto Frame 1 to replace existing link */
+    int ox = 24, oy = 24;
+    int zoom = doc.zoom_pct ? doc.zoom_pct : 100;
+    H drop_x = (H)(ox + (txt_f->bounds.left * zoom) / 100 + 40);
+    H drop_y = (H)(oy + (txt_f->bounds.top  * zoom) / 100 + 40);
+
+    btron_dnd_begin(1, 501, VOBJ_TYPE_TEXT, "Heart_Sutra_Tibetan.txt", "assets/texts/Heart_Sutra_Tibetan.txt", 10, 10);
+    clarity_handle_dnd_drop(&doc, btron_dnd_get(), drop_x, drop_y, ox, oy);
+    btron_dnd_end();
+
+    TEST_ASSERT(txt_f->vobj_count == 1, "Frame 1 relinked to exactly 1 Virtual Body moniker");
+    TEST_ASSERT(txt_f->vobjs[0].target_robj == 501, "Moniker target_robj updated to 501");
+    TEST_ASSERT(strstr(txt_f->vobjs[0].label, "Heart_Sutra_Tibetan.txt") != NULL, "Moniker label updated to Heart Sutra");
+    TEST_ASSERT(txt_f->text_len > 50, "Frame 1 loaded real body content (>50 characters)");
+
+    /* Verify Tibetan TRON Code units (0x9F00 plane) are present in the text frame */
+    BOOL has_tibetan = FALSE;
+    for (UW i = 0; i < txt_f->text_len; i++) {
+        if (txt_f->text[i] >= 0x9F00 && txt_f->text[i] <= 0x9FFF) {
+            has_tibetan = TRUE;
+            break;
+        }
+    }
+    TEST_ASSERT(has_tibetan == TRUE, "Frame 1 text buffer contains Tibetan TRON Code units");
+
+    /* Verify dropping TAD file onto Text Frame is rejected (no corruption) */
+    UW prev_text_len = txt_f->text_len;
+    btron_dnd_begin(1, 601, VOBJ_TYPE_TEXT, "01_btron3_spec.tad", "tad_bin/01_btron3_spec.tad", 10, 10);
+    clarity_handle_dnd_drop(&doc, btron_dnd_get(), drop_x, drop_y, ox, oy);
+    btron_dnd_end();
+
+    TEST_ASSERT(txt_f->text_len == prev_text_len, "Dropping TAD file onto Text Frame does not corrupt text");
+    TEST_ASSERT(strstr(txt_f->vobjs[0].label, "Heart_Sutra_Tibetan.txt") != NULL, "Moniker link preserved Heart Sutra");
+
+    for (int i = 0; i < doc.frame_count; i++) {
+        if (doc.frames[i].bitmap) free(doc.frames[i].bitmap);
+    }
+}
+
 int main(void) {
     setbuf(stdout, NULL);
     printf("=================================================================\n");
@@ -258,6 +309,7 @@ int main(void) {
     test_tad_serialization();
     test_dnd_workflows();
     test_tad_placeholder_and_sys_persistence();
+    test_dnd_relink_and_multilingual_rerender();
 
     printf("=================================================================\n");
     printf(" RESULTS: %d Passed, %d Failed\n", g_tests_passed, g_tests_failed);

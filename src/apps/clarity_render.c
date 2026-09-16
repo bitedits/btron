@@ -9,6 +9,7 @@
 #include <btron/font_mgr.h>
 #include <btron/troncode.h>
 #include <btron/tad_browser.h>
+#include <btron/tip.h>
 #include <stdio.h>
 
 #if defined(__STDC_HOSTED__) && __STDC_HOSTED__ == 1
@@ -20,9 +21,9 @@
 #define GLYPH_W  16
 #define GLYPH_H  16
 
-static inline int get_tc_advance(UH tc)
+static inline int get_char_adv(UH tc, UH prev_tc)
 {
-    return (tc < 128) ? 9 : 17;
+    return tc_get_char_advance((TC)tc, (TC)prev_tc);
 }
 
 /* ------------------------------------------------------------------ */
@@ -45,6 +46,7 @@ static int clarity_compute_visual_lines_hltr(const ClarityFrame *f, int inner_w,
     int last_break = -1;
     int cur_w = 0;
     int y = 0;
+    UH prev_tc = 0;
 
     int i = 0;
     while (i < (int)f->text_len && line_count < max_lines) {
@@ -58,17 +60,59 @@ static int clarity_compute_visual_lines_hltr(const ClarityFrame *f, int inner_w,
             line_start = i + 1;
             last_break = -1;
             cur_w = 0;
+            prev_tc = 0;
             i++;
             continue;
         }
 
-        int adv = get_tc_advance(tc);
+        /* Check if this position begins a Virtual Body moniker [tag label] */
+        int matched_vb = -1;
+        for (int vi = 0; vi < f->vobj_count; vi++) {
+            if ((int)f->vobjs[vi].text_offset == i) {
+                matched_vb = vi;
+                break;
+            }
+        }
+        if (matched_vb >= 0) {
+            const ClarityVObjLink *vl = &f->vobjs[matched_vb];
+            const char *tag = (vl->type == VOBJ_TYPE_DRAW) ? "[IMG]" :
+                              (strstr(vl->path, ".tad") || strstr(vl->path, ".TAD")) ? "[TAD]" :
+                              (strstr(vl->path, ".md") || strstr(vl->path, ".MD")) ? "[MD]" : "[TXT]";
+            char badge_str[128];
+            snprintf(badge_str, sizeof(badge_str), "%s %s", tag, vl->label);
+            int bw = tc_calc_string_width(badge_str, (int)strlen(badge_str)) + 12;
+            if (bw < 40) bw = 40;
+
+            if (cur_w + bw + 4 > inner_w && cur_w > 0) {
+                lines[line_count].start_pos = line_start;
+                lines[line_count].end_pos = i;
+                lines[line_count].y_rel = y;
+                line_count++;
+                y += GLYPH_H + 3;
+                line_start = i;
+                last_break = -1;
+                cur_w = 0;
+                prev_tc = 0;
+            }
+
+            cur_w += bw + 4;
+            i++;
+            while (i < (int)f->text_len && f->text[i - 1] != ']') {
+                i++;
+            }
+            last_break = i;
+            prev_tc = 0;
+            continue;
+        }
+
+        int adv = get_char_adv(tc, prev_tc);
         if (tc == ' ' || tc == '\t') {
             last_break = i;
         } else if (tc == '-' || tc == '/') {
             last_break = i + 1;
-        } else if (tc == 0x6F0B) {
-            /* Tibetan Tsheg word break */
+        } else if (((tc >> 8) == 0x9F || (tc >> 8) == 0x6F) &&
+                   ((tc & 0xFF) == 0x0B || (tc & 0xFF) == 0x0C || (tc & 0xFF) == 0x0D || (tc & 0xFF) == 0x0E)) {
+            /* Tibetan Tsheg / Shad word break */
             last_break = i + 1;
         } else if (tc >= 0x3000) {
             /* CJK Ideograph break point */
@@ -92,10 +136,14 @@ static int clarity_compute_visual_lines_hltr(const ClarityFrame *f, int inner_w,
             }
             last_break = -1;
             cur_w = 0;
+            prev_tc = 0;
             continue;
         }
 
         cur_w += adv;
+        if (adv > 0 || (tc >> 8) != 0x9F) {
+            prev_tc = tc;
+        }
         i++;
     }
 
@@ -196,15 +244,20 @@ void clarity_handle_text_action(ClarityDoc *doc, int fidx, int action, UH tc)
             if (cur_l > 0) {
                 int target_l = cur_l - 1;
                 int col_px = 0;
+                UH prev_tmp = 0;
                 for (int p = lines[cur_l].start_pos; p < f->cursor_pos; p++) {
-                    col_px += get_tc_advance(f->text[p]);
+                    int a = get_char_adv(f->text[p], prev_tmp);
+                    col_px += a;
+                    if (a > 0 || (f->text[p] >> 8) != 0x9F) prev_tmp = f->text[p];
                 }
                 int cx = 0;
                 int p = lines[target_l].start_pos;
+                prev_tmp = 0;
                 for (; p < lines[target_l].end_pos; p++) {
-                    int adv = get_tc_advance(f->text[p]);
+                    int adv = get_char_adv(f->text[p], prev_tmp);
                     if (col_px <= cx + adv / 2) break;
                     cx += adv;
+                    if (adv > 0 || (f->text[p] >> 8) != 0x9F) prev_tmp = f->text[p];
                 }
                 f->cursor_pos = p;
             } else {
@@ -233,15 +286,20 @@ void clarity_handle_text_action(ClarityDoc *doc, int fidx, int action, UH tc)
             if (cur_l < nlines - 1) {
                 int target_l = cur_l + 1;
                 int col_px = 0;
+                UH prev_tmp = 0;
                 for (int p = lines[cur_l].start_pos; p < f->cursor_pos; p++) {
-                    col_px += get_tc_advance(f->text[p]);
+                    int a = get_char_adv(f->text[p], prev_tmp);
+                    col_px += a;
+                    if (a > 0 || (f->text[p] >> 8) != 0x9F) prev_tmp = f->text[p];
                 }
                 int cx = 0;
                 int p = lines[target_l].start_pos;
+                prev_tmp = 0;
                 for (; p < lines[target_l].end_pos; p++) {
-                    int adv = get_tc_advance(f->text[p]);
+                    int adv = get_char_adv(f->text[p], prev_tmp);
                     if (col_px <= cx + adv / 2) break;
                     cx += adv;
+                    if (adv > 0 || (f->text[p] >> 8) != 0x9F) prev_tmp = f->text[p];
                 }
                 f->cursor_pos = p;
             } else {
@@ -276,8 +334,61 @@ void clarity_handle_text_action(ClarityDoc *doc, int fidx, int action, UH tc)
             break;
         }
 
+        case CLARITY_ACT_PAGEUP: {
+            int inner_h = (f->bounds.bottom - f->bounds.top) - 8;
+            f->scroll_y -= (inner_h > 0 ? inner_h / 2 : 40);
+            if (f->scroll_y < 0) f->scroll_y = 0;
+            doc->dirty = TRUE;
+            break;
+        }
+
+        case CLARITY_ACT_PAGEDOWN: {
+            int inner_w = (f->bounds.right - f->bounds.left) - 8;
+            int inner_h = (f->bounds.bottom - f->bounds.top) - 8;
+            if (inner_w < 32) inner_w = 32;
+            VisualLine lines[256];
+            int nlines = clarity_compute_visual_lines_hltr(f, inner_w, lines, 256);
+            int total_h = (nlines > 0) ? (lines[nlines - 1].y_rel + GLYPH_H + 3) : 0;
+            int max_scroll = total_h - inner_h;
+            if (max_scroll < 0) max_scroll = 0;
+
+            f->scroll_y += (inner_h > 0 ? inner_h / 2 : 40);
+            if (f->scroll_y > max_scroll) f->scroll_y = max_scroll;
+            doc->dirty = TRUE;
+            break;
+        }
+
         default:
             break;
+    }
+
+    /* Auto-scroll to keep caret in visible area on typing/arrow navigation */
+    if (f->flow != FLOW_V_RTL && action != CLARITY_ACT_PAGEUP && action != CLARITY_ACT_PAGEDOWN) {
+        int inner_w = (f->bounds.right - f->bounds.left) - 8;
+        int inner_h = (f->bounds.bottom - f->bounds.top) - 8;
+        if (inner_w < 32) inner_w = 32;
+        VisualLine lines[256];
+        int nlines = clarity_compute_visual_lines_hltr(f, inner_w, lines, 256);
+        if (nlines > 0 && inner_h > 0) {
+            int cur_l = 0;
+            for (int l = 0; l < nlines; l++) {
+                if (f->cursor_pos >= lines[l].start_pos && f->cursor_pos <= lines[l].end_pos) {
+                    cur_l = l;
+                    if (f->cursor_pos < lines[l].end_pos) break;
+                }
+            }
+            int ly = lines[cur_l].y_rel;
+            if (ly < f->scroll_y) {
+                f->scroll_y = ly;
+            } else if (ly + GLYPH_H + 3 > f->scroll_y + inner_h) {
+                f->scroll_y = ly + GLYPH_H + 3 - inner_h;
+            }
+            int total_h = lines[nlines - 1].y_rel + GLYPH_H + 3;
+            int max_scroll = total_h - inner_h;
+            if (max_scroll < 0) max_scroll = 0;
+            if (f->scroll_y > max_scroll) f->scroll_y = max_scroll;
+            if (f->scroll_y < 0) f->scroll_y = 0;
+        }
     }
 }
 
@@ -342,13 +453,14 @@ int clarity_text_xy_to_pos(const ClarityFrame *f, H mx, H my, int ox, int oy, in
     int nlines = clarity_compute_visual_lines_hltr(f, inner_w, lines, 256);
     if (nlines <= 0) return 0;
 
+    int scroll_y = (f->scroll_y * zoom) / 100;
     int target_l = 0;
-    if (my < y0 + lines[0].y_rel) {
+    if (my < y0 + lines[0].y_rel - scroll_y) {
         target_l = 0;
     } else {
         target_l = nlines - 1;
         for (int l = 0; l < nlines; l++) {
-            int ly = y0 + lines[l].y_rel;
+            int ly = y0 + lines[l].y_rel - scroll_y;
             if (my >= ly && my < ly + GLYPH_H + 3) {
                 target_l = l;
                 break;
@@ -359,11 +471,13 @@ int clarity_text_xy_to_pos(const ClarityFrame *f, H mx, H my, int ox, int oy, in
     if (mx <= x0) return lines[target_l].start_pos;
 
     int cx = x0;
+    UH prev_tmp = 0;
     int p = lines[target_l].start_pos;
     for (; p < lines[target_l].end_pos; p++) {
-        int adv = get_tc_advance(f->text[p]);
+        int adv = get_char_adv(f->text[p], prev_tmp);
         if (mx < cx + adv / 2) return p;
         cx += adv;
+        if (adv > 0 || (f->text[p] >> 8) != 0x9F) prev_tmp = f->text[p];
     }
     return lines[target_l].end_pos;
 }
@@ -379,10 +493,10 @@ static void blit_glyph_1bit(GDEV *dev, const UB *glyph, int px, int py,
     int bytes_per_row = (gw + 7) / 8;
     for (int y = 0; y < gh; y++) {
         int sy = py + y;
-        if (sy < 0 || sy >= (int)dev->height) continue;
+        if (sy < dev->clip.top || sy >= dev->clip.bottom) continue;
         for (int x = 0; x < gw; x++) {
             int sx = px + x;
-            if (sx < 0 || sx >= (int)dev->width) continue;
+            if (sx < dev->clip.left || sx >= dev->clip.right) continue;
             int byte_idx = y * bytes_per_row + (x >> 3);
             int bit_idx  = 7 - (x & 7);
             if (glyph[byte_idx] & (1 << bit_idx)) {
@@ -393,7 +507,7 @@ static void blit_glyph_1bit(GDEV *dev, const UB *glyph, int px, int py,
 }
 
 /* ------------------------------------------------------------------ */
-/* Horizontal LTR text rendering (Word-Wrapped)                        */
+/* Horizontal LTR text rendering (Word-Wrapped with Internal Scroll)    */
 /* ------------------------------------------------------------------ */
 
 static void render_text_hltr_zoom(GDEV *dev, const ClarityFrame *f,
@@ -405,10 +519,22 @@ static void render_text_hltr_zoom(GDEV *dev, const ClarityFrame *f,
     int x1 = ox + (f->bounds.right  * zoom) / 100 - 4;
     int y1 = oy + (f->bounds.bottom * zoom) / 100 - 4;
 
+    if (x1 <= x0 || y1 <= y0) return;
+
+    /* Set strict clipping to frame interior - no drawing spills outside */
+    RECT orig_clip = dev->clip;
+    RECT f_clip = { (H)x0, (H)y0, (H)x1, (H)y1 };
+    if (f_clip.left < orig_clip.left) f_clip.left = orig_clip.left;
+    if (f_clip.top < orig_clip.top) f_clip.top = orig_clip.top;
+    if (f_clip.right > orig_clip.right) f_clip.right = orig_clip.right;
+    if (f_clip.bottom > orig_clip.bottom) f_clip.bottom = orig_clip.bottom;
+    set_clip(dev, &f_clip);
+
     int inner_w = x1 - x0;
     VisualLine lines[256];
     int nlines = clarity_compute_visual_lines_hltr(f, inner_w, lines, 256);
 
+    int scroll_y = (f->scroll_y * zoom) / 100;
     int caret_x = x0, caret_y = y0;
     BOOL caret_found = FALSE;
     int c_pos = (f->cursor_pos >= 0 && f->cursor_pos <= (int)f->text_len)
@@ -416,8 +542,42 @@ static void render_text_hltr_zoom(GDEV *dev, const ClarityFrame *f,
 
     for (int l = 0; l < nlines; l++) {
         int cx = x0;
-        int cy = y0 + lines[l].y_rel;
-        if (cy + GLYPH_H > y1) break;
+        int cy = y0 + lines[l].y_rel - scroll_y;
+
+        /* Skip lines outside the frame clipping viewport */
+        if (cy + GLYPH_H + 3 < y0) {
+            if (!caret_found && c_pos >= lines[l].start_pos && c_pos <= lines[l].end_pos) {
+                UH prev_tmp = 0;
+                int temp_cx = x0;
+                for (int p = lines[l].start_pos; p < c_pos; p++) {
+                    int a = get_char_adv(f->text[p], prev_tmp);
+                    temp_cx += a;
+                    if (a > 0 || (f->text[p] >> 8) != 0x9F) prev_tmp = f->text[p];
+                }
+                caret_x = temp_cx;
+                caret_y = cy;
+                caret_found = TRUE;
+            }
+            continue;
+        }
+        if (cy > y1) {
+            if (!caret_found && c_pos >= lines[l].start_pos && c_pos <= lines[l].end_pos) {
+                UH prev_tmp = 0;
+                int temp_cx = x0;
+                for (int p = lines[l].start_pos; p < c_pos; p++) {
+                    int a = get_char_adv(f->text[p], prev_tmp);
+                    temp_cx += a;
+                    if (a > 0 || (f->text[p] >> 8) != 0x9F) prev_tmp = f->text[p];
+                }
+                caret_x = temp_cx;
+                caret_y = cy;
+                caret_found = TRUE;
+            }
+            continue;
+        }
+
+        UH prev_tc = 0;
+        int prev_adv = 8;
 
         for (int p = lines[l].start_pos; p < lines[l].end_pos; ) {
             if (p == c_pos) {
@@ -459,24 +619,47 @@ static void render_text_hltr_zoom(GDEV *dev, const ClarityFrame *f,
                 while (p < lines[l].end_pos && p < (int)f->text_len && f->text[p - 1] != ']') {
                     p++;
                 }
+                prev_tc = 0;
+                prev_adv = 8;
                 continue;
             }
 
             UH tc = f->text[p];
-            int adv = get_tc_advance(tc);
+            int adv = get_char_adv(tc, prev_tc);
 
-            H gw = (tc < 128) ? 8 : GLYPH_W;
-            H gh = GLYPH_H;
+            H gw = 8, gh = GLYPH_H;
             const UB *bmp = get_glyph_bitmap((TC)tc, &gw, &gh);
+            int render_x = cx;
+
+            /* Tibetan Typography & Stacking Rules */
+            if ((tc >> 8) == 0x9F) {
+                UW cp = 0x0F00 + (tc & 0xFF);
+                if ((cp >= 0x0F71 && cp <= 0x0F84) || (cp >= 0x0F90 && cp <= 0x0FBC)) {
+                    /* Combining Vowel / Subjoined Consonant: stack onto previous base */
+                    render_x = (prev_adv > 0) ? (cx - prev_adv) : cx;
+                    adv = 0;
+                } else if (cp == 0x0F0B || cp == 0x0F0C || cp == 0x0F0D || cp == 0x0F0E) {
+                    adv = 3;
+                } else {
+                    adv = 8;
+                }
+            } else if (tc == ' ' && prev_tc == 0x9F0B) {
+                adv = 0;
+            }
+
             if (bmp) {
-                blit_glyph_1bit(dev, bmp, cx, cy, COLOR_BLACK, gw, gh);
-            } else {
-                int w = (tc < 128) ? 8 : GLYPH_W;
-                RECT box = { (H)cx, (H)cy, (H)(cx + w - 1), (H)(cy + GLYPH_H - 1) };
+                blit_glyph_1bit(dev, bmp, render_x, cy, COLOR_BLACK, gw, gh);
+            } else if (adv > 0) {
+                RECT box = { (H)render_x, (H)cy, (H)(render_x + adv - 1), (H)(cy + GLYPH_H - 1) };
                 set_col(dev, COLOR_DKGRAY, COLOR_WHITE);
                 drw_rec(dev, &box);
             }
+
             cx += adv;
+            if (adv > 0 || (tc >> 8) != 0x9F) {
+                prev_adv = adv;
+                prev_tc = tc;
+            }
             p++;
         }
 
@@ -490,19 +673,36 @@ static void render_text_hltr_zoom(GDEV *dev, const ClarityFrame *f,
     if (!caret_found && nlines > 0) {
         int last_l = nlines - 1;
         int cx = x0;
+        UH prev_tmp = 0;
         for (int p = lines[last_l].start_pos; p < lines[last_l].end_pos; p++) {
-            cx += get_tc_advance(f->text[p]);
+            int a = get_char_adv(f->text[p], prev_tmp);
+            cx += a;
+            if (a > 0 || (f->text[p] >> 8) != 0x9F) prev_tmp = f->text[p];
         }
         caret_x = cx;
-        caret_y = y0 + lines[last_l].y_rel;
+        caret_y = y0 + lines[last_l].y_rel - scroll_y;
     }
 
-    /* Live Text Insertion Caret */
-    if (is_selected && caret_x <= x1 && caret_y + GLYPH_H <= y1 + 4) {
+    /* Live Text Insertion Caret & TIP Composition */
+    if (is_selected && caret_x <= x1 && caret_y >= y0 && caret_y + GLYPH_H <= y1 + 4) {
         set_col(dev, COLOR_NAVY, COLOR_WHITE);
         drw_lin(dev, (H)caret_x, (H)caret_y, (H)caret_x, (H)(caret_y + GLYPH_H - 1));
         drw_lin(dev, (H)(caret_x + 1), (H)caret_y, (H)(caret_x + 1), (H)(caret_y + GLYPH_H - 1));
+
+        /* TIP Inline Precomposition / Conversion */
+        if (tip_get_state() != TIP_STATE_IDLE) {
+            char comp_buf[128] = "";
+            tip_get_converted_text(comp_buf, sizeof(comp_buf));
+            if (comp_buf[0] != '\0') {
+                BOOL is_dotted = (tip_get_state() == TIP_STATE_PRECOMP);
+                drw_tc_string_underlined(dev, (H)(caret_x + 3), (H)caret_y, comp_buf, COLOR_NAVY, COLOR_WHITE, is_dotted);
+                tip_set_caret_pos((H)(caret_x + 3), (H)caret_y);
+            }
+        }
     }
+
+    /* Restore original clipping rect */
+    set_clip(dev, &orig_clip);
 }
 
 static void render_text_vrtl_zoom(GDEV *dev, const ClarityFrame *f,
@@ -560,11 +760,22 @@ static void render_text_vrtl_zoom(GDEV *dev, const ClarityFrame *f,
         caret_y = cy;
     }
 
-    /* Vertical insertion caret */
+    /* Vertical insertion caret & TIP Composition */
     if (is_selected && caret_x >= x0 && caret_y + 2 <= y1 + 4) {
         set_col(dev, COLOR_NAVY, COLOR_WHITE);
         drw_lin(dev, (H)caret_x, (H)caret_y, (H)(caret_x + GLYPH_W - 1), (H)caret_y);
         drw_lin(dev, (H)caret_x, (H)(caret_y + 1), (H)(caret_x + GLYPH_W - 1), (H)(caret_y + 1));
+
+        /* TIP Inline Precomposition / Conversion */
+        if (tip_get_state() != TIP_STATE_IDLE) {
+            char comp_buf[128] = "";
+            tip_get_converted_text(comp_buf, sizeof(comp_buf));
+            if (comp_buf[0] != '\0') {
+                BOOL is_dotted = (tip_get_state() == TIP_STATE_PRECOMP);
+                drw_tc_string_underlined(dev, (H)caret_x, (H)(caret_y + 4), comp_buf, COLOR_NAVY, COLOR_WHITE, is_dotted);
+                tip_set_caret_pos((H)caret_x, (H)(caret_y + 4));
+            }
+        }
     }
 }
 
@@ -586,6 +797,70 @@ void clarity_render_text(GDEV *dev, const ClarityFrame *f, int ox, int oy, int z
         render_text_hltr_zoom(dev, f, ox, oy, zoom, is_selected);
 }
 
+void clarity_scale_blit_rgba(GDEV *dev, const RECT *dst_rect, const UB *src, H src_w, H src_h)
+{
+    if (!dev || !dev->pixels || !dst_rect || !src || src_w <= 0 || src_h <= 0) return;
+
+    int dw = dst_rect->right - dst_rect->left;
+    int dh = dst_rect->bottom - dst_rect->top;
+    if (dw <= 0 || dh <= 0) return;
+
+    /* Calculate fitted rectangle preserving aspect ratio (letterbox / center) */
+    int fit_w = dw;
+    int fit_h = (int)((long)fit_w * (long)src_h / (long)src_w);
+    if (fit_h > dh) {
+        fit_h = dh;
+        fit_w = (int)((long)fit_h * (long)src_w / (long)src_h);
+    }
+    if (fit_w <= 0) fit_w = 1;
+    if (fit_h <= 0) fit_h = 1;
+
+    int ox = dst_rect->left + (dw - fit_w) / 2;
+    int oy = dst_rect->top  + (dh - fit_h) / 2;
+
+    for (int dy = 0; dy < fit_h; dy++) {
+        int py = oy + dy;
+        if (py < 0 || py >= dev->height) continue;
+        if (py < dev->clip.top || py >= dev->clip.bottom) continue;
+
+        int sy = (dy * (int)src_h) / fit_h;
+        if (sy >= (int)src_h) sy = (int)src_h - 1;
+
+        for (int dx = 0; dx < fit_w; dx++) {
+            int px = ox + dx;
+            if (px < 0 || px >= dev->width) continue;
+            if (px < dev->clip.left || px >= dev->clip.right) continue;
+
+            int sx = (dx * (int)src_w) / fit_w;
+            if (sx >= (int)src_w) sx = (int)src_w - 1;
+
+            int s_idx = (sy * (int)src_w + sx) * 4;
+            UB r = src[s_idx + 0];
+            UB g = src[s_idx + 1];
+            UB b = src[s_idx + 2];
+            UB a = src[s_idx + 3];
+
+            if (a == 0) continue;
+            if (a >= 250) {
+                COLOR col = 0xFF000000 | ((UW)r << 16) | ((UW)g << 8) | (UW)b;
+                dev->pixels[py * dev->width + px] = col;
+            } else {
+                /* Alpha blend with existing pixel */
+                COLOR dcol = dev->pixels[py * dev->width + px];
+                UB dr = (UB)((dcol >> 16) & 0xFF);
+                UB dg = (UB)((dcol >> 8)  & 0xFF);
+                UB db = (UB)(dcol & 0xFF);
+
+                UB out_r = (UB)((r * a + dr * (255 - a)) / 255);
+                UB out_g = (UB)((g * a + dg * (255 - a)) / 255);
+                UB out_b = (UB)((b * a + db * (255 - a)) / 255);
+                COLOR col = 0xFF000000 | ((UW)out_r << 16) | ((UW)out_g << 8) | (UW)out_b;
+                dev->pixels[py * dev->width + px] = col;
+            }
+        }
+    }
+}
+
 void clarity_render_image(GDEV *dev, const ClarityFrame *f, int ox, int oy, int zoom)
 {
     if (!dev || !f || f->type != FRAME_IMAGE) return;
@@ -605,25 +880,7 @@ void clarity_render_image(GDEV *dev, const ClarityFrame *f, int ox, int oy, int 
     }
 
     if (f->bitmap && f->bmp_w > 0 && f->bmp_h > 0 && fw > 0 && fh > 0) {
-        for (int dy = 0; dy < fh; dy++) {
-            int src_y = (dy * (int)f->bmp_h) / fh;
-            for (int dx = 0; dx < fw; dx++) {
-                int src_x = (dx * (int)f->bmp_w) / fw;
-                int src_idx = (src_y * (int)f->bmp_w + src_x) * 4;
-                UB r = f->bitmap[src_idx + 0];
-                UB g = f->bitmap[src_idx + 1];
-                UB b = f->bitmap[src_idx + 2];
-                UB a = f->bitmap[src_idx + 3];
-                if (a > 32) {
-                    COLOR col = ((UW)a << 24) | ((UW)r << 16) | ((UW)g << 8) | (UW)b;
-                    int sx = fx + dx;
-                    int sy = fy + dy;
-                    if (sx >= 0 && sx < (int)dev->width && sy >= 0 && sy < (int)dev->height) {
-                        dev->pixels[sy * dev->width + sx] = col;
-                    }
-                }
-            }
-        }
+        clarity_scale_blit_rgba(dev, &bg, f->bitmap, f->bmp_w, f->bmp_h);
         return;
     }
 

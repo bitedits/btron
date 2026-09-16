@@ -77,7 +77,9 @@ enum {
     ACT_END,
     ACT_ENTER,
     ACT_UP,
-    ACT_DOWN
+    ACT_DOWN,
+    ACT_PAGEUP,
+    ACT_PAGEDOWN
 };
 
 /* ------------------------------------------------------------------ */
@@ -114,7 +116,14 @@ enum {
     /* Insert */
     CMD_INS_TEXT = 400,
     CMD_INS_IMAGE,
-    CMD_INS_FLIP_FLOW
+    CMD_INS_FLIP_FLOW,
+
+    /* Arrange / Z-Order */
+    CMD_ARRANGE_FRONT = 500,
+    CMD_ARRANGE_BACK,
+    CMD_ARRANGE_FORWARD,
+    CMD_ARRANGE_BACKWARD,
+    CMD_ARRANGE_DUPLICATE
 };
 
 /* ------------------------------------------------------------------ */
@@ -449,10 +458,13 @@ static void clarity_paint(WND *wnd, GDEV *dev)
     if (g_doc.fmt == FMT_SHIROKU) fmt_name = "四六判";
     else if (g_doc.fmt == FMT_PECHA) fmt_name = "Pecha";
 
+    const char *mode_str = (tip_get_mode() == TIP_MODE_HIRAGANA) ? "あ" :
+                           ((tip_get_mode() == TIP_MODE_KATAKANA) ? "ア" :
+                            ((tip_get_mode() == TIP_MODE_TIBETAN) ? "བོད" : "A"));
+
     char status[128];
-    snprintf(status, sizeof(status), "  %s | %d%% | %d 頁 | %d 個 | %s",
-             fmt_name, g_doc.zoom_pct, g_doc.page_count, g_doc.frame_count,
-             g_doc.dirty ? "modified" : "saved");
+    snprintf(status, sizeof(status), "  [TIP: %s] | %s | %d%% | %d 頁 | %d 個",
+             mode_str, fmt_name, g_doc.zoom_pct, g_doc.page_count, g_doc.frame_count);
     app_menu_set_right_text(&g_menu, status);
 
     app_menu_paint_bar(&g_menu, dev);
@@ -555,6 +567,33 @@ static void handle_cmd(int cmd)
                 ClarityFrame *f = &g_doc.frames[g_doc.selected_frame];
                 f->flow = (f->flow == FLOW_H_LTR) ? FLOW_V_RTL : FLOW_H_LTR;
                 g_doc.dirty = TRUE;
+            }
+            break;
+
+        /* Arrange / Z-Order */
+        case CMD_ARRANGE_FRONT:
+            if (g_doc.selected_frame >= 0) {
+                clarity_doc_send_to_front(&g_doc, g_doc.selected_frame);
+            }
+            break;
+        case CMD_ARRANGE_BACK:
+            if (g_doc.selected_frame >= 0) {
+                clarity_doc_send_to_back(&g_doc, g_doc.selected_frame);
+            }
+            break;
+        case CMD_ARRANGE_FORWARD:
+            if (g_doc.selected_frame >= 0) {
+                clarity_doc_send_forward(&g_doc, g_doc.selected_frame);
+            }
+            break;
+        case CMD_ARRANGE_BACKWARD:
+            if (g_doc.selected_frame >= 0) {
+                clarity_doc_send_backward(&g_doc, g_doc.selected_frame);
+            }
+            break;
+        case CMD_ARRANGE_DUPLICATE:
+            if (g_doc.selected_frame >= 0) {
+                clarity_doc_duplicate_frame(&g_doc, g_doc.selected_frame);
             }
             break;
 
@@ -887,6 +926,14 @@ static void clarity_event(WND *wnd, const EVT *evt)
         g_drag_move = FALSE;
         g_doc.drag_handle = -1;
 
+        if (btron_dnd_is_active()) {
+            clarity_handle_dnd_drop(&g_doc, btron_dnd_get(), rel_x, rel_y, ox, oy);
+            g_doc.hover_drop_frame = -1;
+            g_doc.dragging = FALSE;
+            inval_wnd(wnd);
+            return;
+        }
+
         if (g_doc.dragging &&
             (g_doc.tool == TOOL_TEXT_FRAME || g_doc.tool == TOOL_IMAGE_FRAME)) {
             g_doc.dragging = FALSE;
@@ -951,6 +998,17 @@ static void clarity_event(WND *wnd, const EVT *evt)
             } else if (key == 'n' || key == 'N') {
                 handle_cmd(CMD_FILE_NEW);
                 return;
+            } else if (key == 'd' || key == 'D') {
+                handle_cmd(CMD_ARRANGE_DUPLICATE);
+                return;
+            } else if (key == ']' || key == '}') {
+                if (shift) handle_cmd(CMD_ARRANGE_FRONT);
+                else handle_cmd(CMD_ARRANGE_FORWARD);
+                return;
+            } else if (key == '[' || key == '{') {
+                if (shift) handle_cmd(CMD_ARRANGE_BACK);
+                else handle_cmd(CMD_ARRANGE_BACKWARD);
+                return;
             }
         }
 
@@ -958,11 +1016,9 @@ static void clarity_event(WND *wnd, const EVT *evt)
         char tip_buf[128] = "";
         if (tip_process_key(key, mod, tip_buf, sizeof(tip_buf))) {
             if (tip_buf[0] != '\0' && g_doc.selected_frame >= 0) {
-                for (int i = 0; tip_buf[i]; i++) {
-                    clarity_render_key(&g_doc, g_doc.selected_frame, (UH)(unsigned char)tip_buf[i]);
-                }
-                inval_wnd(wnd);
+                clarity_insert_tip_text(&g_doc, g_doc.selected_frame, tip_buf);
             }
+            inval_wnd(wnd);
             return;
         }
 
@@ -995,6 +1051,10 @@ static void clarity_event(WND *wnd, const EVT *evt)
                 clarity_handle_text_action(&g_doc, fidx, ACT_HOME, 0);
             } else if (key == BTRON_KEY_END) {
                 clarity_handle_text_action(&g_doc, fidx, ACT_END, 0);
+            } else if (key == BTRON_KEY_PAGE_UP) {
+                clarity_handle_text_action(&g_doc, fidx, ACT_PAGEUP, 0);
+            } else if (key == BTRON_KEY_PAGE_DOWN) {
+                clarity_handle_text_action(&g_doc, fidx, ACT_PAGEDOWN, 0);
             } else if (key >= 32 && key <= 126) {
                 /* Printable ASCII with shift handling */
                 char ch = (char)key;
@@ -1079,6 +1139,15 @@ static void build_menu(void)
     app_menu_add_item(&g_menu, ii, "画像枠 (Image Frame)",   "I", CMD_INS_IMAGE, TRUE);
     app_menu_add_separator(&g_menu, ii);
     app_menu_add_item(&g_menu, ii, "書字方向切替 (横↔縦)", "F", CMD_INS_FLIP_FLOW, TRUE);
+
+    /* 5. Arrange / Z-Order */
+    int ai = app_menu_add_header(&g_menu, "配置(A)", 80);
+    app_menu_add_item(&g_menu, ai, "最前面へ (Send to Front)",  "Ctrl+Shift+]", CMD_ARRANGE_FRONT,     TRUE);
+    app_menu_add_item(&g_menu, ai, "最背面へ (Send to Back)",   "Ctrl+Shift+[", CMD_ARRANGE_BACK,      TRUE);
+    app_menu_add_item(&g_menu, ai, "前面へ (Bring Forward)",    "Ctrl+]",       CMD_ARRANGE_FORWARD,   TRUE);
+    app_menu_add_item(&g_menu, ai, "背面へ (Send Backward)",    "Ctrl+[",       CMD_ARRANGE_BACKWARD,  TRUE);
+    app_menu_add_separator(&g_menu, ai);
+    app_menu_add_item(&g_menu, ai, "枠複製 (Duplicate Frame)",  "Ctrl+D",       CMD_ARRANGE_DUPLICATE, TRUE);
 }
 
 /* ------------------------------------------------------------------ */

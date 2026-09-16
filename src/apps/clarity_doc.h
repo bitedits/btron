@@ -84,8 +84,10 @@ typedef struct {
     UH             text[CLARITY_TEXT_BUF]; /* TRON code units (TC)    */
     UW             text_len;
     int            cursor_pos;      /* text insertion caret index      */
+    int            scroll_y;        /* vertical scroll offset in pixels */
     ClarityVObjLink vobjs[CLARITY_MAX_VOBJS];
     int            vobj_count;
+    char           text_path[256];  /* Backing text file path          */
 
     /* --- ImageFrame payload --------------------------------------- */
     UB            *bitmap;          /* raw RGBA pixels (malloc'd)      */
@@ -206,7 +208,9 @@ enum {
     CLARITY_ACT_END,
     CLARITY_ACT_ENTER,
     CLARITY_ACT_UP,
-    CLARITY_ACT_DOWN
+    CLARITY_ACT_DOWN,
+    CLARITY_ACT_PAGEUP,
+    CLARITY_ACT_PAGEDOWN
 };
 
 /* Hit testing & Controls Function Prototypes */
@@ -236,8 +240,20 @@ ClarityDoc* clarity_get_doc(void);
 int  clarity_frame_find_vobj_at(const ClarityFrame *f, H mx, H my);
 void clarity_frame_insert_vobj(ClarityFrame *f, ID target_robj, VOBJ_TYPE type, const char *label, const char *path);
 int  clarity_frame_load_image(ClarityFrame *f, const char *path, ID robj_id);
+int  clarity_frame_load_text(ClarityFrame *f, const char *path, ID robj_id, const char *name);
 ClarityFrame* clarity_doc_add_frame(ClarityDoc *doc, ClarityFrameType type, H x, H y, H w, H h);
 void clarity_handle_dnd_drop(ClarityDoc *doc, const BTRON_DND *dnd, H mx, H my, int ox, int oy);
+
+/* Z-Ordering and Layout Frame Manipulation */
+int  clarity_doc_send_to_back(ClarityDoc *doc, int frame_idx);
+int  clarity_doc_send_to_front(ClarityDoc *doc, int frame_idx);
+int  clarity_doc_send_backward(ClarityDoc *doc, int frame_idx);
+int  clarity_doc_send_forward(ClarityDoc *doc, int frame_idx);
+int  clarity_doc_duplicate_frame(ClarityDoc *doc, int frame_idx);
+
+/* Image Scaling and TIP Integration Prototypes */
+void clarity_scale_blit_rgba(GDEV *dev, const RECT *dst_rect, const UB *src, H src_w, H src_h);
+void clarity_insert_tip_text(ClarityDoc *doc, int fidx, const char *utf8_text);
 
 #ifdef __cplusplus
 }

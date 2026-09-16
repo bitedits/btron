@@ -22,6 +22,7 @@ static int s_term_opened = 0;
 static int s_audio_opened = 0;
 static int s_chat_opened = 0;
 static int s_drivesetup_opened = 0;
+static int s_clarity_opened = 0;
 
 WND* open_vobj_manager_window(void) { s_vobj_opened++; return NULL; }
 WND* open_control_panel_window(void) { return NULL; }
@@ -31,6 +32,7 @@ WND* open_audio_player_window(void) { s_audio_opened++; return NULL; }
 WND* open_orchestra_window(void)    { return NULL; }
 WND* open_drivesetup_window(void)   { s_drivesetup_opened++; return NULL; }
 WND* launch_beos_chat(void)         { s_chat_opened++; return NULL; }
+WND* open_clarity_window(void)      { s_clarity_opened++; return NULL; }
 void global_menu_render_bar(GDEV *dev) { (void)dev; }
 ER init_evt_sys(void) { return E_OK; }
 ER tip_init(void) { return E_OK; }

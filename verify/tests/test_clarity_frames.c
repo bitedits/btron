@@ -14,6 +14,7 @@
 #include <btron/wnd.h>
 #include <btron/event.h>
 #include <btron/app_menu.h>
+#include <btron/troncode.h>
 
 extern WND* open_clarity_window(void);
 
@@ -254,6 +255,188 @@ static void test_live_window_interactions(void)
     g_pass++;
 }
 
+static void test_z_ordering(void)
+{
+    ClarityDoc doc;
+    memset(&doc, 0, sizeof(doc));
+    doc.frame_count = 4;
+    for (int i = 0; i < 4; i++) {
+        doc.frames[i].id = (UB)(i + 1);
+        doc.frames[i].type = FRAME_TEXT;
+    }
+
+    /* Initial state: IDs 1, 2, 3, 4 */
+    /* 1. Send frame at index 3 (ID 4) to back (index 0) */
+    doc.selected_frame = 3;
+    int rc = clarity_doc_send_to_back(&doc, 3);
+    TEST_ASSERT(rc == 0, "send_to_back should return 0");
+    TEST_ASSERT(doc.frames[0].id == 4, "Frame ID 4 should now be at index 0");
+    TEST_ASSERT(doc.frames[1].id == 1, "Frame ID 1 should now be at index 1");
+    TEST_ASSERT(doc.frames[2].id == 2, "Frame ID 2 should now be at index 2");
+    TEST_ASSERT(doc.frames[3].id == 3, "Frame ID 3 should now be at index 3");
+    TEST_ASSERT(doc.selected_frame == 0, "selected_frame should update to 0");
+
+    /* 2. Send frame at index 0 (ID 4) to front (index 3) */
+    rc = clarity_doc_send_to_front(&doc, 0);
+    TEST_ASSERT(rc == 0, "send_to_front should return 0");
+    TEST_ASSERT(doc.frames[3].id == 4, "Frame ID 4 should now be at index 3");
+    TEST_ASSERT(doc.frames[0].id == 1, "Frame ID 1 should now be at index 0");
+    TEST_ASSERT(doc.selected_frame == 3, "selected_frame should update to 3");
+
+    /* 3. Send backward: swap index 2 (ID 3) with index 1 (ID 2) */
+    doc.selected_frame = 2;
+    rc = clarity_doc_send_backward(&doc, 2);
+    TEST_ASSERT(rc == 0, "send_backward should return 0");
+    TEST_ASSERT(doc.frames[1].id == 3, "Frame ID 3 should now be at index 1");
+    TEST_ASSERT(doc.frames[2].id == 2, "Frame ID 2 should now be at index 2");
+    TEST_ASSERT(doc.selected_frame == 1, "selected_frame should update to 1");
+
+    /* 4. Send forward: swap index 1 (ID 3) with index 2 (ID 2) */
+    rc = clarity_doc_send_forward(&doc, 1);
+    TEST_ASSERT(rc == 0, "send_forward should return 0");
+    TEST_ASSERT(doc.frames[2].id == 3, "Frame ID 3 should now be back at index 2");
+    TEST_ASSERT(doc.frames[1].id == 2, "Frame ID 2 should now be back at index 1");
+    TEST_ASSERT(doc.selected_frame == 2, "selected_frame should update to 2");
+
+    printf("PASS: test_z_ordering\n");
+    g_pass++;
+}
+
+static void test_frame_duplication(void)
+{
+    ClarityDoc doc;
+    memset(&doc, 0, sizeof(doc));
+    doc.frame_count = 1;
+    doc.selected_frame = 0;
+
+    ClarityFrame *f = &doc.frames[0];
+    f->id = 1;
+    f->type = FRAME_TEXT;
+    f->bounds.left = 50;
+    f->bounds.top = 60;
+    f->bounds.right = 200;
+    f->bounds.bottom = 180;
+    f->text[0] = 'H';
+    f->text[1] = 'i';
+    f->text_len = 2;
+
+    int dup_idx = clarity_doc_duplicate_frame(&doc, 0);
+    TEST_ASSERT(dup_idx == 1, "Duplicate frame index should be 1");
+    TEST_ASSERT(doc.frame_count == 2, "frame_count should now be 2");
+    TEST_ASSERT(doc.selected_frame == 1, "selected_frame should be 1");
+
+    ClarityFrame *f2 = &doc.frames[1];
+    TEST_ASSERT(f2->id == 2, "Duplicated frame should have id 2");
+    TEST_ASSERT(f2->bounds.left == 50 + 16, "Duplicated frame left should be offset by 16");
+    TEST_ASSERT(f2->bounds.top == 60 + 16, "Duplicated frame top should be offset by 16");
+    TEST_ASSERT(f2->bounds.right == 200 + 16, "Duplicated frame right should be offset by 16");
+    TEST_ASSERT(f2->bounds.bottom == 180 + 16, "Duplicated frame bottom should be offset by 16");
+    TEST_ASSERT(f2->text_len == 2 && f2->text[0] == 'H' && f2->text[1] == 'i', "Text contents should be preserved");
+
+    printf("PASS: test_frame_duplication\n");
+    g_pass++;
+}
+
+static void test_multilingual_tip_text(void)
+{
+    ClarityDoc doc;
+    memset(&doc, 0, sizeof(doc));
+    doc.frame_count = 1;
+    doc.selected_frame = 0;
+
+    ClarityFrame *f = &doc.frames[0];
+    f->id = 1;
+    f->type = FRAME_TEXT;
+    f->text_len = 0;
+    f->cursor_pos = 0;
+
+    /* Insert UTF-8 Japanese via TIP helper */
+    clarity_insert_tip_text(&doc, 0, "電子帳票");
+    TEST_ASSERT(f->text_len == 4, "Japanese string '電子帳票' should produce 4 TRON Code units");
+    TEST_ASSERT(f->cursor_pos == 4, "Caret position should advance by 4");
+
+    /* Verify first character is Kanji (Plane 1 >= 0x2100) */
+    TEST_ASSERT(f->text[0] >= 0x2100, "First character must be a valid TRON Kanji code point (Plane 1)");
+
+    printf("PASS: test_multilingual_tip_text\n");
+    g_pass++;
+}
+
+static void test_tibetan_glyph_advances_and_stacking(void)
+{
+    /* 1. Base consonant Ka (U+0F40 -> 0x9F40): 8px advance */
+    TC ka = 0x9F40;
+    TEST_ASSERT(tc_get_char_advance(ka, 0) == 8, "Tibetan base consonant Ka must have 8px advance");
+
+    /* 2. Combining Vowel I (U+0F72 -> 0x9F72): 0px advance (stacks onto base) */
+    TC vowel_i = 0x9F72;
+    TEST_ASSERT(tc_get_char_advance(vowel_i, ka) == 0, "Tibetan combining vowel I must have 0px advance");
+
+    /* 3. Subjoined Consonant Ya (U+0F9B -> 0x9F9B): 0px advance (stacks onto base) */
+    TC sub_ya = 0x9F9B;
+    TEST_ASSERT(tc_get_char_advance(sub_ya, ka) == 0, "Tibetan subjoined Ya must have 0px advance");
+
+    /* 4. Tsheg syllable delimiter (U+0F0B -> 0x9F0B): 3px compact advance */
+    TC tsheg = 0x9F0B;
+    TEST_ASSERT(tc_get_char_advance(tsheg, ka) == 3, "Tibetan Tsheg must have 3px compact advance");
+
+    /* 5. Space after Tsheg collapses to 0px */
+    TEST_ASSERT(tc_get_char_advance(' ', tsheg) == 0, "ASCII space following Tibetan Tsheg must collapse to 0px");
+
+    /* 6. Standard ASCII and Japanese advances */
+    TEST_ASSERT(tc_get_char_advance('A', 0) == 8, "ASCII 'A' must have 8px advance");
+    TEST_ASSERT(tc_get_char_advance(0x2121, 0) == 16, "Japanese fullwidth character must have 16px advance");
+
+    printf("PASS: test_tibetan_glyph_advances_and_stacking\n");
+    g_pass++;
+}
+
+static void test_text_frame_invisible_area_scrolling(void)
+{
+    ClarityDoc doc;
+    memset(&doc, 0, sizeof(doc));
+    doc.frame_count = 1;
+    doc.selected_frame = 0;
+
+    ClarityFrame *f = &doc.frames[0];
+    f->id = 1;
+    f->type = FRAME_TEXT;
+    f->bounds.left = 10;
+    f->bounds.top = 10;
+    f->bounds.right = 200;
+    f->bounds.bottom = 60; /* Small height (~50px), fits only ~2 lines */
+    f->scroll_y = 0;
+
+    /* Fill with 6 lines of text */
+    const char *text = "Line 1\nLine 2\nLine 3\nLine 4\nLine 5\nLine 6\n";
+    f->text_len = (UW)utf8_to_tc_string(text, (TC*)f->text, CLARITY_TEXT_BUF - 1);
+    f->cursor_pos = 0;
+
+    /* 1. Initial scroll_y is 0 */
+    TEST_ASSERT(f->scroll_y == 0, "Initial frame scroll_y must be 0");
+
+    /* 2. PageDown scrolls down */
+    clarity_handle_text_action(&doc, 0, CLARITY_ACT_PAGEDOWN, 0);
+    TEST_ASSERT(f->scroll_y > 0, "PageDown must scroll invisible area downwards (scroll_y > 0)");
+
+    /* 3. PageUp scrolls back up to 0 */
+    clarity_handle_text_action(&doc, 0, CLARITY_ACT_PAGEUP, 0);
+    TEST_ASSERT(f->scroll_y == 0, "PageUp must scroll back up and clamp to 0");
+
+    /* 4. Moving caret down across lines auto-scrolls */
+    for (int i = 0; i < 5; i++) {
+        clarity_handle_text_action(&doc, 0, CLARITY_ACT_DOWN, 0);
+    }
+    TEST_ASSERT(f->scroll_y > 0, "Navigating caret down past bottom must auto-scroll to keep caret visible");
+
+    /* 5. Hit testing with scroll_y accurately maps line */
+    int hit_pos = clarity_text_xy_to_pos(f, 20, 25, 0, 0, 100);
+    TEST_ASSERT(hit_pos > 0, "clarity_text_xy_to_pos must account for scroll_y when mapping mouse to position");
+
+    printf("PASS: test_text_frame_invisible_area_scrolling\n");
+    g_pass++;
+}
+
 int main(void)
 {
     printf("=== Clarity Frames & Controls Test Suite ===\n");
@@ -261,6 +444,11 @@ int main(void)
     test_resizing_and_clamping();
     test_word_wrap_and_navigation();
     test_live_window_interactions();
+    test_z_ordering();
+    test_frame_duplication();
+    test_multilingual_tip_text();
+    test_tibetan_glyph_advances_and_stacking();
+    test_text_frame_invisible_area_scrolling();
 
     printf("Results: %d Passed, %d Failed\n", g_pass, g_fail);
     return g_fail == 0 ? 0 : 1;

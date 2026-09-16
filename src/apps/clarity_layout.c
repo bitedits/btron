@@ -6,6 +6,7 @@
  */
 
 #include "clarity_doc.h"
+#include <btron/vobj.h>
 #include <btron/image_decode.h>
 #include <btron/dnd.h>
 #include <stdlib.h>
@@ -488,7 +489,7 @@ int clarity_frame_load_image(ClarityFrame *f, const char *path, ID robj_id)
     UB *pixels = NULL;
     H w = 0, h = 0;
 
-    const char *try_paths[6];
+    const char *try_paths[16];
     int n_try = 0;
     try_paths[n_try++] = path;
 
@@ -510,6 +511,23 @@ int clarity_frame_load_image(ClarityFrame *f, const char *path, ID robj_id)
     char icon_fallback[256];
     snprintf(icon_fallback, sizeof(icon_fallback), "assets/icons/%s", bname);
     try_paths[n_try++] = icon_fallback;
+
+    /* Preference-style icon names and pure extensionless fallbacks */
+    char pure_name[64];
+    strncpy(pure_name, bname, sizeof(pure_name) - 1);
+    pure_name[sizeof(pure_name) - 1] = '\0';
+    char *dot = strrchr(pure_name, '.');
+    if (dot) *dot = '\0';
+
+    char pure_png[256], pure_gif[256], asset_png[256], asset_gif[256];
+    snprintf(pure_png, sizeof(pure_png), "assets/icons/%s.png", pure_name);
+    try_paths[n_try++] = pure_png;
+    snprintf(pure_gif, sizeof(pure_gif), "assets/icons/%s.gif", pure_name);
+    try_paths[n_try++] = pure_gif;
+    snprintf(asset_png, sizeof(asset_png), "assets/%s.png", pure_name);
+    try_paths[n_try++] = asset_png;
+    snprintf(asset_gif, sizeof(asset_gif), "assets/%s.gif", pure_name);
+    try_paths[n_try++] = asset_gif;
 
     int decoded = -1;
     for (int i = 0; i < n_try; i++) {
@@ -535,6 +553,210 @@ int clarity_frame_load_image(ClarityFrame *f, const char *path, ID robj_id)
     return 0;
 }
 
+/* ================================================================
+ * Z-Ordering Frame Manipulation & Duplication
+ * ================================================================ */
+
+int clarity_doc_send_to_back(ClarityDoc *doc, int frame_idx)
+{
+    if (!doc || frame_idx <= 0 || frame_idx >= doc->frame_count) return -1;
+    ClarityFrame target = doc->frames[frame_idx];
+    memmove(&doc->frames[1], &doc->frames[0], (size_t)frame_idx * sizeof(ClarityFrame));
+    doc->frames[0] = target;
+    doc->selected_frame = 0;
+    doc->dirty = TRUE;
+    return 0;
+}
+
+int clarity_doc_send_to_front(ClarityDoc *doc, int frame_idx)
+{
+    if (!doc || frame_idx < 0 || frame_idx >= doc->frame_count - 1) return -1;
+    ClarityFrame target = doc->frames[frame_idx];
+    memmove(&doc->frames[frame_idx], &doc->frames[frame_idx + 1],
+            (size_t)(doc->frame_count - 1 - frame_idx) * sizeof(ClarityFrame));
+    doc->frames[doc->frame_count - 1] = target;
+    doc->selected_frame = doc->frame_count - 1;
+    doc->dirty = TRUE;
+    return 0;
+}
+
+int clarity_doc_send_backward(ClarityDoc *doc, int frame_idx)
+{
+    if (!doc || frame_idx <= 0 || frame_idx >= doc->frame_count) return -1;
+    ClarityFrame tmp = doc->frames[frame_idx];
+    doc->frames[frame_idx] = doc->frames[frame_idx - 1];
+    doc->frames[frame_idx - 1] = tmp;
+    doc->selected_frame = frame_idx - 1;
+    doc->dirty = TRUE;
+    return 0;
+}
+
+int clarity_doc_send_forward(ClarityDoc *doc, int frame_idx)
+{
+    if (!doc || frame_idx < 0 || frame_idx >= doc->frame_count - 1) return -1;
+    ClarityFrame tmp = doc->frames[frame_idx];
+    doc->frames[frame_idx] = doc->frames[frame_idx + 1];
+    doc->frames[frame_idx + 1] = tmp;
+    doc->selected_frame = frame_idx + 1;
+    doc->dirty = TRUE;
+    return 0;
+}
+
+int clarity_doc_duplicate_frame(ClarityDoc *doc, int frame_idx)
+{
+    if (!doc || frame_idx < 0 || frame_idx >= doc->frame_count) return -1;
+    if (doc->frame_count >= CLARITY_MAX_FRAMES) return -1;
+
+    ClarityFrame *src = &doc->frames[frame_idx];
+    int new_idx = doc->frame_count;
+    ClarityFrame *dst = &doc->frames[new_idx];
+
+    *dst = *src;
+    dst->id = (UB)(new_idx + 1);
+
+    /* Offset duplicate frame by +16px canvas offset */
+    H offset = 16;
+    dst->bounds.left   += offset;
+    dst->bounds.right  += offset;
+    dst->bounds.top    += offset;
+    dst->bounds.bottom += offset;
+
+    /* Deep-copy image pixel payload if present */
+    if (src->type == FRAME_IMAGE && src->bitmap && src->bmp_w > 0 && src->bmp_h > 0) {
+        size_t sz = (size_t)src->bmp_w * (size_t)src->bmp_h * 4;
+        dst->bitmap = (UB*)malloc(sz);
+        if (dst->bitmap) {
+            memcpy(dst->bitmap, src->bitmap, sz);
+        }
+    }
+
+    doc->frame_count++;
+    doc->selected_frame = new_idx;
+    doc->dirty = TRUE;
+    return new_idx;
+}
+
+void clarity_insert_tip_text(ClarityDoc *doc, int fidx, const char *utf8_text)
+{
+    if (!doc || !utf8_text || fidx < 0 || fidx >= doc->frame_count) return;
+    ClarityFrame *f = &doc->frames[fidx];
+    if (f->type != FRAME_TEXT) return;
+
+    TC tc_buf[128];
+    int tc_len = utf8_to_tc_string(utf8_text, tc_buf, 128);
+    for (int i = 0; i < tc_len; i++) {
+        clarity_handle_text_action(doc, fidx, CLARITY_ACT_CHAR, (UH)tc_buf[i]);
+    }
+}
+
+int clarity_frame_load_text(ClarityFrame *f, const char *path, ID robj_id, const char *name)
+{
+    if (!f || f->type != FRAME_TEXT || !path) return -1;
+
+    const char *try_paths[16];
+    char path_bufs[10][256];
+    int n_try = 0;
+    try_paths[n_try++] = path;
+
+    const char *bname = strrchr(path, '/');
+    bname = bname ? bname + 1 : path;
+
+    snprintf(path_bufs[0], 256, "./%s", path);
+    try_paths[n_try++] = path_bufs[0];
+
+    snprintf(path_bufs[1], 256, "assets/texts/%s", bname);
+    try_paths[n_try++] = path_bufs[1];
+
+    snprintf(path_bufs[2], 256, "./assets/texts/%s", bname);
+    try_paths[n_try++] = path_bufs[2];
+
+    snprintf(path_bufs[3], 256, "doc/md/%s", bname);
+    try_paths[n_try++] = path_bufs[3];
+
+    snprintf(path_bufs[4], 256, "./doc/md/%s", bname);
+    try_paths[n_try++] = path_bufs[4];
+
+    snprintf(path_bufs[5], 256, "SYS/%s", bname);
+    try_paths[n_try++] = path_bufs[5];
+
+    snprintf(path_bufs[6], 256, "./SYS/%s", bname);
+    try_paths[n_try++] = path_bufs[6];
+
+    snprintf(path_bufs[7], 256, "btron_store/%s", bname);
+    try_paths[n_try++] = path_bufs[7];
+
+    snprintf(path_bufs[8], 256, "./btron_store/%s", bname);
+    try_paths[n_try++] = path_bufs[8];
+
+    char raw_buf[16384];
+    size_t nread = 0;
+    BOOL read_ok = FALSE;
+
+    /* 1. Try reading directly from Real Body persistent storage */
+    ROBJ *r = NULL;
+    if (path) {
+        r = find_robj_by_path(path);
+    }
+    if (!r && robj_id >= 100) {
+        ROBJ *cand = opn_robj(robj_id);
+        if (cand && cand->type != VOBJ_TYPE_DRAW) {
+            r = cand;
+        }
+    }
+    if (r) {
+        UW bytes = 0;
+        if (rd_vobj_data(r, raw_buf, sizeof(raw_buf) - 1, &bytes) == E_OK && bytes > 0) {
+            raw_buf[bytes] = '\0';
+            nread = bytes;
+            read_ok = TRUE;
+        }
+        cls_robj(r);
+    }
+
+    /* 2. Fall back to reading from file system */
+    if (!read_ok) {
+        FILE *fp = NULL;
+        for (int i = 0; i < n_try; i++) {
+            fp = fopen(try_paths[i], "rb");
+            if (fp) break;
+        }
+
+        if (!fp) return -1;
+
+        nread = fread(raw_buf, 1, sizeof(raw_buf) - 1, fp);
+        fclose(fp);
+        raw_buf[nread] = '\0';
+    }
+
+    /* Build text buffer with moniker header [TXT name] followed by content */
+    char full_buf[20480];
+    const char *display_name = (name && name[0]) ? name : bname;
+    const char *tag = (strstr(path, ".md") || strstr(path, ".MD")) ? "MD" : "TXT";
+    snprintf(full_buf, sizeof(full_buf), "[%s %s]\n\n%s", tag, display_name, raw_buf);
+
+    /* Update moniker link at offset 0 */
+    f->vobj_count = 1;
+    f->vobjs[0].text_offset = 0;
+    f->vobjs[0].target_robj = robj_id;
+    f->vobjs[0].type = VOBJ_TYPE_TEXT;
+    strncpy(f->vobjs[0].label, display_name, sizeof(f->vobjs[0].label) - 1);
+    f->vobjs[0].label[sizeof(f->vobjs[0].label) - 1] = '\0';
+    strncpy(f->vobjs[0].path, path, sizeof(f->vobjs[0].path) - 1);
+    f->vobjs[0].path[sizeof(f->vobjs[0].path) - 1] = '\0';
+
+    /* Convert UTF-8 content to TRON Code */
+    int tlen = utf8_to_tc_string(full_buf, (TC*)f->text, CLARITY_TEXT_BUF - 1);
+    f->text_len = (tlen > 0) ? (UW)tlen : 0;
+    f->text[f->text_len] = 0;
+    f->cursor_pos = 0;
+    f->scroll_y = 0;
+    f->robj_id = robj_id;
+    strncpy(f->text_path, path, sizeof(f->text_path) - 1);
+    f->text_path[sizeof(f->text_path) - 1] = '\0';
+
+    return 0;
+}
+
 void clarity_handle_dnd_drop(ClarityDoc *doc, const BTRON_DND *dnd, H mx, H my, int ox, int oy)
 {
     if (!doc || !dnd || !dnd->active) return;
@@ -542,34 +764,43 @@ void clarity_handle_dnd_drop(ClarityDoc *doc, const BTRON_DND *dnd, H mx, H my, 
     int path_len = (int)strlen(dnd->path);
     BOOL is_tad = (path_len > 4 && strcmp(dnd->path + path_len - 4, ".tad") == 0) ||
                   (path_len > 4 && strcmp(dnd->path + path_len - 4, ".TAD") == 0);
+    BOOL is_text = (path_len > 4 && strcmp(dnd->path + path_len - 4, ".txt") == 0) ||
+                   (path_len > 4 && strcmp(dnd->path + path_len - 4, ".TXT") == 0) ||
+                   (path_len > 3 && strcmp(dnd->path + path_len - 3, ".md") == 0) ||
+                   (path_len > 3 && strcmp(dnd->path + path_len - 3, ".MD") == 0);
+    BOOL is_draw = (dnd->type == VOBJ_TYPE_DRAW) ||
+                   (strstr(dnd->path, ".png") || strstr(dnd->path, ".gif") || strstr(dnd->path, ".bmp") ||
+                    strstr(dnd->path, ".PNG") || strstr(dnd->path, ".GIF") || strstr(dnd->path, ".BMP"));
 
     /* 1. Hit test existing frames */
     int fidx = clarity_hittest_frame(doc, mx, my, ox, oy);
     if (fidx >= 0 && fidx < doc->frame_count) {
         ClarityFrame *f = &doc->frames[fidx];
-        if (dnd->type == VOBJ_TYPE_DRAW) {
-            if (f->type == FRAME_IMAGE) {
-                clarity_frame_load_image(f, dnd->path, dnd->robj_id);
-                doc->dirty = TRUE;
-                return;
-            }
-            clarity_frame_insert_vobj(f, dnd->robj_id, dnd->type, dnd->name, dnd->path);
+
+        if (f->type == FRAME_IMAGE && is_draw) {
+            clarity_frame_load_image(f, dnd->path, dnd->robj_id);
             doc->dirty = TRUE;
             return;
-        } else {
-            if (f->type == FRAME_TEXT) {
-                f->cursor_pos = clarity_text_xy_to_pos(f, mx, my, ox, oy, doc->zoom_pct);
-                clarity_frame_insert_vobj(f, dnd->robj_id, dnd->type, dnd->name, dnd->path);
-                doc->dirty = TRUE;
-                return;
-            } else if (f->type == FRAME_TAD && is_tad) {
-                strncpy(f->tad_path, dnd->path, sizeof(f->tad_path) - 1);
-                strncpy(f->tad_title, dnd->name, sizeof(f->tad_title) - 1);
-                f->robj_id = dnd->robj_id;
-                doc->dirty = TRUE;
-                return;
-            }
         }
+
+        if (f->type == FRAME_TAD && is_tad) {
+            strncpy(f->tad_path, dnd->path, sizeof(f->tad_path) - 1);
+            strncpy(f->tad_title, dnd->name, sizeof(f->tad_title) - 1);
+            f->robj_id = dnd->robj_id;
+            doc->dirty = TRUE;
+            return;
+        }
+
+        if (f->type == FRAME_TEXT && is_text) {
+            /* Relink and load actual Real Body data into Text Frame immediately */
+            clarity_frame_load_text(f, dnd->path, dnd->robj_id, dnd->name);
+            doc->selected_frame = fidx;
+            doc->dirty = TRUE;
+            return;
+        }
+
+        /* Incompatible frame target: do not corrupt */
+        return;
     }
 
     /* 2. Dropped onto empty canvas area -> create matching frame */
@@ -577,7 +808,7 @@ void clarity_handle_dnd_drop(ClarityDoc *doc, const BTRON_DND *dnd, H mx, H my, 
     H cx = (H)(((mx - ox) * 100) / zoom);
     H cy = (H)(((my - oy) * 100) / zoom);
 
-    if (dnd->type == VOBJ_TYPE_DRAW) {
+    if (is_draw) {
         ClarityFrame *nf = clarity_doc_add_frame(doc, FRAME_IMAGE, cx, cy, 200, 160);
         if (nf) {
             clarity_frame_load_image(nf, dnd->path, dnd->robj_id);
@@ -593,10 +824,10 @@ void clarity_handle_dnd_drop(ClarityDoc *doc, const BTRON_DND *dnd, H mx, H my, 
             doc->selected_frame = doc->frame_count - 1;
             doc->dirty = TRUE;
         }
-    } else {
-        ClarityFrame *nf = clarity_doc_add_frame(doc, FRAME_TEXT, cx, cy, 280, 140);
+    } else if (is_text) {
+        ClarityFrame *nf = clarity_doc_add_frame(doc, FRAME_TEXT, cx, cy, 320, 180);
         if (nf) {
-            clarity_frame_insert_vobj(nf, dnd->robj_id, dnd->type, dnd->name, dnd->path);
+            clarity_frame_load_text(nf, dnd->path, dnd->robj_id, dnd->name);
             doc->selected_frame = doc->frame_count - 1;
             doc->dirty = TRUE;
         }
@@ -626,23 +857,10 @@ void clarity_init_sample_page(ClarityDoc *doc)
         clarity_frame_load_image(f_img, "/SYS/clarity.png", 101);
     }
 
-    /* Frame 1: Text Frame linked with /SYS/BTRON3_Report.txt */
+    /* Frame 1: Text Frame linked with HYPERMEDIA.md Real Body */
     ClarityFrame *f1 = clarity_doc_add_frame(doc, FRAME_TEXT, 200, 24, 400, 200);
     if (f1) {
-        const char *intro =
-            "BTRON 3.20 ハイパーメディア電子帳票 (Clarity)\n"
-            "実身・仮身 (Real Body / Virtual Body) 連動デモ\n\n"
-            "【リンクされた実身ファイル】\n"
-            "・テキスト実身: /SYS/BTRON3_Report.txt\n"
-            "・画像実身:     /SYS/clarity.png\n\n"
-            "ダブルクリックで対象の実身を直接開きます:\n";
-        f1->text_len = 0;
-        for (int i = 0; intro[i] && f1->text_len < CLARITY_TEXT_BUF - 1; i++) {
-            f1->text[f1->text_len++] = (UH)(unsigned char)intro[i];
-        }
-        f1->cursor_pos = (int)f1->text_len;
-        clarity_frame_insert_vobj(f1, 102, VOBJ_TYPE_TEXT, "BTRON3_Report.txt", "/SYS/BTRON3_Report.txt");
-        clarity_frame_insert_vobj(f1, 103, VOBJ_TYPE_TEXT, "HYPERMEDIA.md", "/SYS/HYPERMEDIA.md");
+        clarity_frame_load_text(f1, "doc/md/HYPERMEDIA.md", 102, "HYPERMEDIA.md");
     }
 
     /* Frame 2: TAD Placeholder Frame */
@@ -662,10 +880,9 @@ void clarity_init_sample_page(ClarityDoc *doc)
             "2. TADファイルをドラッグしてTADプレースホルダー枠を作成\n"
             "3. 仮身やTAD枠をダブルクリックしてTAD Browser / エディタを開く\n"
             "4. [ファイル] → [保存] (Ctrl+S) で /SYS/Clarity-Sample.TAD に永続保存\n";
-        f_guide->text_len = 0;
-        for (int i = 0; guide[i] && f_guide->text_len < CLARITY_TEXT_BUF - 1; i++) {
-            f_guide->text[f_guide->text_len++] = (UH)(unsigned char)guide[i];
-        }
+        int glen = utf8_to_tc_string(guide, (TC*)f_guide->text, CLARITY_TEXT_BUF - 1);
+        f_guide->text_len = (glen > 0) ? (UW)glen : 0;
+        f_guide->text[f_guide->text_len] = 0;
         f_guide->cursor_pos = (int)f_guide->text_len;
     }
 

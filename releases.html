@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Releases &amp; Development History — B-System (BTRON3 3.20)</title>
-    <meta name="description" content="Official Alpha 1 release announcement and comprehensive 348-commit, 25-session development history log of the B-System BTRON cleanroom operating system.">
+    <meta name="description" content="Official Alpha 1 release announcement and comprehensive 528-commit, 36-session development history log of the B-System BTRON cleanroom operating system.">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&family=Noto+Sans+JP:wght@400;500;600;700;800&family=Shippori+Mincho:wght@600;700&display=swap" rel="stylesheet">
@@ -262,11 +262,11 @@
             </h1>
             <p class="hero-subtitle" style="text-align: center; margin: 0 auto; max-width: 760px; line-height: 1.75;">
                 BTRON3 3.20準拠 クリーンルームOS<strong>「B-System Alpha 1」</strong>公式アナウンス。<br>
-                初コミットから完成までの全<strong>348コミット</strong>・<strong>25セッション</strong>（約94.9時間）の開発全記録。
+                初コミットから完成までの全<strong>528コミット</strong>・<strong>36セッション</strong>（約166.1時間）の開発全記録。
             </p>
             <div style="margin-top: 1.6rem; display: flex; flex-wrap: wrap; gap: 0.8rem; justify-content: center;">
                 <a href="#alpha-1-announcement" class="pdf-badge" style="background: linear-gradient(135deg, #ff2d95, #c026d3); color:white; box-shadow: 0 4px 14px rgba(255, 45, 149, 0.35);">🌸 Alpha 1 公開アナウンス</a>
-                <a href="#development-history" class="pdf-badge" style="background: linear-gradient(135deg, #0057b7, #008080); color:white; box-shadow: 0 4px 14px rgba(0, 87, 183, 0.35);">📜 14日間の開発全記録（ログ）</a>
+                <a href="#development-history" class="pdf-badge" style="background: linear-gradient(135deg, #0057b7, #008080); color:white; box-shadow: 0 4px 14px rgba(0, 87, 183, 0.35);">📜 25日間の開発全記録（ログ）</a>
                 <a href="conformance.html" class="pdf-badge">📊 90% 適合性検証</a>
                 <a href="b-system.html" class="pdf-badge">🖥️ アプリケーション仕様</a>
             </div>
@@ -282,15 +282,15 @@
                 <div class="stat-label">初版公開<br><small style="font-size:0.72rem; font-weight:500;">Initial Release</small></div>
             </div>
             <div class="stat-card">
-                <div class="stat-num">348</div>
+                <div class="stat-num">528</div>
                 <div class="stat-label">総コミット数<br><small style="font-size:0.72rem; font-weight:500;">Git Commits</small></div>
             </div>
             <div class="stat-card">
-                <div class="stat-num">25</div>
+                <div class="stat-num">36</div>
                 <div class="stat-label">作業セッション<br><small style="font-size:0.72rem; font-weight:500;">Dev Sessions</small></div>
             </div>
             <div class="stat-card">
-                <div class="stat-num">~94.9 h</div>
+                <div class="stat-num">~166.1 h</div>
                 <div class="stat-label">実稼働開発時間<br><small style="font-size:0.72rem; font-weight:500;">Active Dev Time</small></div>
             </div>
             <div class="stat-card">
@@ -321,7 +321,7 @@
 
             <div class="feature-box">
                 <h3 style="margin-top: 0; color: #ff2d95;">Alpha 1 の主な機能と到達点（Release Highlights）</h3>
-                <p style="margin-bottom: 0.5rem; color: #4a3560;">14日間にわたる集中的なシステム開発を結実させ、単一コードベースから完全に再現可能なリリースパッケージを構築しました：</p>
+                <p style="margin-bottom: 0.5rem; color: #4a3560;">25日間にわたる集中的なシステム開発を結実させ、単一コードベースから完全に再現可能なリリースパッケージを構築しました：</p>
                 <ul>
                     <li><strong>7大ハードウェア＆ハイパーバイザー統合対応：</strong> 単一のBSD Makefileから、開発ホスト（macOS/Linux POSIX）、ARM QEMU VirtIO、Raspberry Pi 2B実機ベアメタル、坂村T-Kernel 2.0、x86_64 UEFI SMPマルチコアワークステーション、NEC PC-9801/PC-9821 VM、そして64ビットAArch64 Raspberry Pi 4Bまでを統合起動。</li>
                     <li><strong>ダイレクトMultiboot単一段階ローディング：</strong> 脆弱な2段階MBR/VBRチェーンローダーを撤廃し、Multiboot 1ヘッダー（<code>0x1BADB002</code>）によりファームウェア／QEMUから1MB空間へ直接展開。</li>
@@ -366,8 +366,8 @@ $ make verify</pre>
         <section id="development-history" style="margin-top: 4rem;">
             <h2>第2部：初コミットからの全開発記録<br><span style="font-size: 0.72em; font-weight: 600; color: #6b4f7e; font-family: var(--jp-font);">エンジニアリング・ログ (Development History Log)</span></h2>
             <p style="font-size: 1.05rem; line-height: 1.8; color: #3b2a47;">
-                B-Systemは、<strong>マキシム・ソハツキー</strong>（Maxim Sokhatsky / Namdak Tonpa / 5HT）により、2026年8月22日から9月4日までの14日間にわたる集中的な開発スプリントで設計・実装されました。
-                計<strong>348コミット</strong>、<strong>25セッション</strong>（実稼働<strong>約94.9時間</strong>）にわたり、何もない空のGitツリーから複数アーキテクチャ対応の仕様完全準拠OSへと進化を遂げました。
+                B-Systemは、<strong>マキシム・ソハツキー</strong>（Maxim Sokhatsky / Namdak Tonpa / 5HT）により、2026年8月22日から9月16日までの25日間にわたる集中的な開発スプリントで設計・実装されました。
+                計<strong>528コミット</strong>、<strong>36セッション</strong>（実稼働<strong>約166.1時間</strong>）にわたり、何もない空のGitツリーから複数アーキテクチャ対応の仕様完全準拠OSへと進化を遂げました。
             </p>
             <br>
             <!-- Seven Phases -->
@@ -491,10 +491,10 @@ $ make verify</pre>
                 </p>
             </div>
 
-            <!-- Complete 25-Session Table -->
-            <h3 style="margin-top: 3rem;">セッション詳細開発ログ（Complete 25-Session Engineering Log）</h3>
+            <!-- Complete 36-Session Table -->
+            <h3 style="margin-top: 3rem;">セッション詳細開発ログ（Complete 36-Session Engineering Log）</h3>
             <p style="color: #4a3560; line-height: 1.7;">
-                14日間の開発スプリントにおける全作業セッション、実施時間帯、実働時間、コミット範囲、および各セッションで実装された主要サブシステムの一覧：
+                25日間の開発スプリントにおける全作業セッション、実施時間帯、実働時間、コミット範囲、および各セッションで実装された主要サブシステムの一覧：
             </p>
 
             <div class="session-table-wrapper">
@@ -684,6 +684,83 @@ $ make verify</pre>
                             <td><code>9f36ada..588415b</code></td>
                             <td>Automated Headless Window Screenshot Capture Pipeline (<code>capture_screens.c</code>, <code>raw_to_png.py</code>, <code>populate_doc_screens.py</code>) generating transparent ARGB window frames; Orchestra Live Stage MIDI Server &amp; Workstation (<code>orchestra.c</code>) with zero-dependency C99 GStreamer media pipeline &amp; 32-port routing; Theorem 1 homotopical punctuation encoding fix; isolated About box captures across all applications.</td>
                         </tr>
+                        <tr>
+                            <td><strong>Session 26</strong></td>
+                            <td>2026-09-04 19:52 – 2026-09-05 22:32</td>
+                            <td>~12.0 h <small style="color: #704b75;">(43 commits)</small></td>
+                            <td><code>48d3268..9bd3018</code></td>
+                            <td>Multi-architecture expansion: Motorola 68000 (m68k) port with mouse/keyboard &amp; desktop icons; VGA framebuffer + input for Raspberry Pi 2B/3B/4B; initial MIPS workstation; PlayStation 2 two-stage shell boot &amp; font; Eventing Separation Layer; FOMA mobile UI scaffold in mobile.html.</td>
+                        </tr>
+                        <tr>
+                            <td><strong>Session 27</strong></td>
+                            <td>2026-09-06 16:16 – 2026-09-06 23:25</td>
+                            <td>~7.2 h <small style="color: #704b75;">(16 commits)</small></td>
+                            <td><code>3589755..c42da8a</code></td>
+                            <td>FOMA mobile platform completion (gterm, t_editor, About box, Ctrl+G mouse release); B-Book hypertext documentation system with TAD integration and link fixes.</td>
+                        </tr>
+                        <tr>
+                            <td><strong>Session 28</strong></td>
+                            <td>2026-09-07 00:20 – 2026-09-07 23:55</td>
+                            <td>~8.5 h <small style="color: #704b75;">(21 commits)</small></td>
+                            <td><code>d2aea36..675c0be</code></td>
+                            <td>UEFI + PC-98 mouse support; continued B-Book navigation &amp; content; Linux/WSL and early NORTIA/MSYS2 MINGW64 build support; site index pages.</td>
+                        </tr>
+                        <tr>
+                            <td><strong>Session 29</strong></td>
+                            <td>2026-09-08 00:27 – 2026-09-08 21:11</td>
+                            <td>~6.5 h <small style="color: #704b75;">(15 commits)</small></td>
+                            <td><code>fdee37e..7951903</code></td>
+                            <td>Full NORTIA (MSYS2/MINGW64) POSIX &amp; QEMU targets; B-Book header navigation; mobile CSS for apps/settings; VirtIO sound; Bad Apple demo experiment (rolled back); NORTIA integration polish.</td>
+                        </tr>
+                        <tr>
+                            <td><strong>Session 30</strong></td>
+                            <td>2026-09-09 01:15 – 2026-09-09 14:54</td>
+                            <td>~4.0 h <small style="color: #704b75;">(6 commits)</small></td>
+                            <td><code>5a1f1c1..6d4e8cc</code></td>
+                            <td>BSD Makefiles modernization; FS TAD includes; automated Language.html screenshot pipeline expansion; Linux build fixes.</td>
+                        </tr>
+                        <tr>
+                            <td><strong>Session 31</strong></td>
+                            <td>2026-09-10 14:27 – 2026-09-10 23:58</td>
+                            <td>~4.5 h <small style="color: #704b75;">(5 commits)</small></td>
+                            <td><code>5bba655..a83f82d</code></td>
+                            <td>BOPOMOFO support; CLU.md specification; initial Filesystem Architecture design and first B-FS implementation (FS.md).</td>
+                        </tr>
+                        <tr>
+                            <td><strong>Session 32</strong></td>
+                            <td>2026-09-11 00:31 – 2026-09-11 22:58</td>
+                            <td>~11.0 h <small style="color: #704b75;">(37 commits)</small></td>
+                            <td><code>54b9886..b5d62e8</code></td>
+                            <td>Deep filesystem work: /SYS and /CHOKANJI mounts; CLU volume listing in df; fs -a/-r/-l/-g options; strict volume isolation &amp; FID security; stat/pwd commands; FreeBSD/NetBSD/Alpine/macOS build fixes; CI stabilization.</td>
+                        </tr>
+                        <tr>
+                            <td><strong>Session 33</strong></td>
+                            <td>2026-09-12 01:01 – 2026-09-12 02:02</td>
+                            <td>~1.0 h <small style="color: #704b75;">(4 commits)</small></td>
+                            <td><code>00690cc..9e2aac9</code></td>
+                            <td>New fs -t/-g options; architectural moves toward unification of B-System with classic B-right/V semantics.</td>
+                        </tr>
+                        <tr>
+                            <td><strong>Session 34</strong></td>
+                            <td>2026-09-13 00:10 – 2026-09-13 21:34</td>
+                            <td>~5.0 h <small style="color: #704b75;">(5 commits)</small></td>
+                            <td><code>923d58d..47cac1e</code></td>
+                            <td>Vector-FS database layer; journaling file-system formal models &amp; verification; B-FS Formal Model foundation for DriveSetup.</td>
+                        </tr>
+                        <tr>
+                            <td><strong>Session 35</strong></td>
+                            <td>2026-09-14 00:05 – 2026-09-14 20:53</td>
+                            <td>~9.0 h <small style="color: #704b75;">(22 commits)</small></td>
+                            <td><code>a8ddde9..8fb9fbc</code></td>
+                            <td>Volumes (DriveSetup) application; planetary global partition codes; dedicated /.build/ directory; file-copy tests &amp; drivesetup hashing; Dharma License 2.0; README &amp; footer navigation; btron-history page.</td>
+                        </tr>
+                        <tr>
+                            <td><strong>Session 36</strong></td>
+                            <td>2026-09-15 13:33 – 2026-09-16 01:57</td>
+                            <td>~2.5 h <small style="color: #704b75;">(5 commits)</small></td>
+                            <td><code>2ef51a4..c1a157e</code></td>
+                            <td>CNAME for btron.pro; test fixes and documentation clarity passes.</td>
+                        </tr>
                     </tbody>
                 </table>
             </div>
@@ -696,7 +773,7 @@ $ make verify</pre>
                 <ul>
                     <li><strong>内蔵C99コンパイラ（Integrated C99 Compiler）：</strong> Fabrice BellardのTCC設計に基づく超軽量Cコンパイラを移植し、B-System上でのセルフホスティング環境を確立。</li>
                     <li><strong>完全なseL4マイクロカーネル・ペルソナ（seL4 Persona）：</strong> Synrc VE OS.1環境下でミッションクリティカル・エッジ計算を支える形式検証済みマイクロカーネル・ペルソナの拡充。</li>
-                    <li><strong>HTML 4.1 / TADハイパーメディアWebエンジン：</strong> Web TADストリームのネイティブ描画と軽量NetSurfベースのWebブラウジング機能。</li>
+                    <li><strong>HTML 4.1 / TADハイパーメディアWebエンジン：</strong> Web TADストリームのネイティブ描画と North Star Browser による軽量Webブラウジング機能。</li>
                     <li><strong>Raspberry Pi 5実機シリコン対応：</strong> BCM2712 / RP1サウスブリッジのハードウェアMMIO対応をエミュレーションから実機検証へ展開。</li>
                 </ul>
             </div>

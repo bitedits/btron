@@ -11,24 +11,36 @@
 #include <btron/file.h>
 #include <btron/fs/vol_api.h>
 #include <btron/fs/fs_internal.h>
-#include <sys/stat.h>
-
 #if defined(__STDC_HOSTED__) && __STDC_HOSTED__ == 1
+#include <sys/stat.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #else
 #include <stddef.h>
 #include <stdint.h>
+#include <libstr.h>
 extern void *Imalloc(size_t sz);
 extern void  Ifree(void *ptr);
 extern void *tkl_memset(void *s, int c, size_t n);
 extern void *tkl_memcpy(void *dst, const void *src, size_t n);
+extern int snprintf(char *str, size_t size, const char *format, ...);
 #define malloc  Imalloc
 #define free    Ifree
 #define memset  tkl_memset
 #define memcpy  tkl_memcpy
-static inline size_t strlen(const char *s) { size_t n = 0; while (s && s[n]) n++; return n; }
+#define strlen  tkl_strlen
+#define strncmp tkl_strncmp
+static inline char* strrchr(const char *s, int c) {
+    const char *last = NULL;
+    if (!s) return NULL;
+    while (*s) {
+        if (*s == (char)c) last = s;
+        s++;
+    }
+    if (c == '\0') return (char *)s;
+    return (char *)last;
+}
 #endif
 
 /* ── Little-Endian 16-bit and 32-bit helpers ────────────────────────── */

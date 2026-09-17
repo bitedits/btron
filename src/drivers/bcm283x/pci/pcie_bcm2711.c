@@ -16,6 +16,8 @@ extern uintptr_t g_mmio_base;
 extern void uart_puts(const char *s);
 extern void uart_hex32(uint32_t val);
 extern void fb_log(const char *msg);
+extern void fb_log_hex32(uint32_t val);
+extern void fb_log_dec(uint32_t val);
 
 /* MMIO helpers */
 static inline uint32_t mmio_read32(uintptr_t addr) {
@@ -47,28 +49,44 @@ static inline void pcie_rc_write(uint32_t reg, uint32_t val) {
 
 /* ─────────────────────────────────────────────────────────────────
  * PCI Configuration Space Access via BCM2711 ECAM / EXT_CFG Window
+ *
+ * For Bus 0 (Root Complex): Configuration registers are accessed
+ * directly at offset & 0x0FFC from RC base (0xFD500000).
+ *
+ * For Bus > 0 (e.g. Bus 1 Device 00.0 VIA VL805):
+ * 1. Write BDF to PCIE_EXT_CFG_INDEX (0x9000):
+ *    Bits [27:20] = Bus, [19:15] = Device, [14:12] = Function
+ * 2. Read / write data via PCIE_EXT_CFG_DATA window (0x8000 + offset)
  * ───────────────────────────────────────────────────────────────── */
 
 uint32_t pci_read_config32(uint32_t bus, uint32_t dev, uint32_t func, uint32_t offset) {
+    if (bus == 0) {
+        return pcie_rc_read(offset & 0x0FFC);
+    }
+
     uint32_t bdf_idx = ((bus & 0xFF) << 20) |
                        ((dev & 0x1F) << 15) |
-                       ((func & 0x07) << 12) |
-                       (offset & 0x0FFC);
+                       ((func & 0x07) << 12);
 
     pcie_rc_write(PCIE_EXT_CFG_INDEX, bdf_idx);
     dsb();
-    return pcie_rc_read(PCIE_EXT_CFG_DATA);
+    return pcie_rc_read(PCIE_EXT_CFG_DATA + (offset & 0x0FFC));
 }
 
 void pci_write_config32(uint32_t bus, uint32_t dev, uint32_t func, uint32_t offset, uint32_t val) {
+    if (bus == 0) {
+        pcie_rc_write(offset & 0x0FFC, val);
+        dsb();
+        return;
+    }
+
     uint32_t bdf_idx = ((bus & 0xFF) << 20) |
                        ((dev & 0x1F) << 15) |
-                       ((func & 0x07) << 12) |
-                       (offset & 0x0FFC);
+                       ((func & 0x07) << 12);
 
     pcie_rc_write(PCIE_EXT_CFG_INDEX, bdf_idx);
     dsb();
-    pcie_rc_write(PCIE_EXT_CFG_DATA, val);
+    pcie_rc_write(PCIE_EXT_CFG_DATA + (offset & 0x0FFC), val);
     dsb();
 }
 
@@ -145,59 +163,90 @@ int bcm2711_pcie_init(void) {
 
     fb_log("[PCIE] Initializing Broadcom STB PCIe Root Complex (0xFD500000)...\n");
 
-    /* 1. Configure Outbound Window 0:
-     *    CPU ARM physical 0x600000000 -> PCI address 0xC0000000 (1GB window)
+    /* 1. Controller Reset Sequence (FreeBSD bcm_pcib_reset_controller)
+     *    REG_BRIDGE_CTRL = 0x9210
+     *    bit 1 = BRIDGE_RESET_FLAG (0x2)
+     *    bit 0 = BRIDGE_DISABLE_FLAG (0x1)
      */
-    pcie_rc_write(PCIE_MISC_CPU_2_PCIE_MEM_WIN0_LO, BCM2711_PCIE_BUS_MEM_BASE);
-    pcie_rc_write(PCIE_MISC_CPU_2_PCIE_MEM_WIN0_HI, 0x00000000UL);
+    uint32_t val = pcie_rc_read(0x9210);
+    val |= (0x2 | 0x1);
+    pcie_rc_write(0x9210, val);
+    delay_us(100);
 
-    uint32_t base_pci_mb  = (BCM2711_PCIE_BUS_MEM_BASE >> 20);
-    uint32_t limit_pci_mb = ((BCM2711_PCIE_BUS_MEM_BASE + BCM2711_PCIE_MEM_SIZE - 1) >> 20);
-    pcie_rc_write(PCIE_MISC_CPU_2_PCIE_MEM_WIN0_BASE_LIMIT, (base_pci_mb & 0xFFF) | ((limit_pci_mb & 0xFFF) << 16));
+    val = pcie_rc_read(0x9210);
+    val &= ~0x2; /* Deassert reset, keep disabled */
+    pcie_rc_write(0x9210, val);
+    delay_us(100);
 
-    uint32_t cpu_base_hi  = (uint32_t)(BCM2711_PCIE_CPU_MEM_BASE >> 32);
-    uint32_t cpu_limit_hi = (uint32_t)((BCM2711_PCIE_CPU_MEM_BASE + BCM2711_PCIE_MEM_SIZE - 1) >> 32);
-    pcie_rc_write(PCIE_MISC_CPU_2_PCIE_MEM_WIN0_BASE_HI, cpu_base_hi & 0xFF);
-    pcie_rc_write(PCIE_MISC_CPU_2_PCIE_MEM_WIN0_LIMIT_HI, cpu_limit_hi & 0xFF);
+    pcie_rc_write(PCIE_MISC_HARD_PCIE_HARD_DEBUG, 0); /* 0x4204 = 0 */
+    delay_us(100);
 
-    /* 2. Configure Inbound DMA Window 2:
-     *    PCI bus 0x00000000 -> CPU System RAM 0x00000000 (4GB inbound window)
-     *    log2(4GB) = 32 -> size encoding (32 - 15) = 17 = 0x11
+    /* 2. Configure Inbound DMA Window (FreeBSD / Linux)
+     *    PCI bus 0x00000000 -> CPU RAM 0x00000000 (4GB inbound window)
      */
-    pcie_rc_write(PCIE_MISC_RC_BAR2_CONFIG_LO, 0x00000000UL | 0x11u);
-    pcie_rc_write(PCIE_MISC_RC_BAR2_CONFIG_HI, 0x00000000UL);
+    pcie_rc_write(0x4034, 0x11);                            /* REG_DMA_WINDOW_LOW: 4GB size */
+    pcie_rc_write(0x4038, 0x00);                            /* REG_DMA_WINDOW_HIGH: base = 0 */
+    /* 4GB SCB (17 << 27) + SCB_ACCESS_EN (0x1000) + CFG_READ_UR_MODE (0x2000) + RCB_MPS (0x400) + RCB_64B (0x80) */
+    pcie_rc_write(0x4008, (17u << 27) | 0x2000u | 0x1000u | 0x400u | 0x80u);
+    pcie_rc_write(0x402C, 0);                               /* REG_BRIDGE_GISB_WINDOW */
+    pcie_rc_write(0x403C, 0);                               /* REG_DMA_WINDOW_1 */
+
+    /* Set Little-Endian mode for Inbound Window BAR2 (offset 0x0188 bits [3:2] = 0) */
+    uint32_t vend_spec = pcie_rc_read(0x0188);
+    vend_spec &= ~0x0Cu;
+    pcie_rc_write(0x0188, vend_spec);
     dsb();
 
-    /* 3. Check PCIe link status (bits [5:4] = DL active & PHY link up) */
-    uint32_t status = pcie_rc_read(PCIE_MISC_PCIE_STATUS);
-    if ((status & 0x30u) != 0x30u) {
-        /* Fundamental reset cycle if link not already active */
-        uint32_t hard_dbg = pcie_rc_read(PCIE_MISC_HARD_PCIE_HARD_DEBUG);
-        hard_dbg |= (1u << 1); /* Assert reset */
-        pcie_rc_write(PCIE_MISC_HARD_PCIE_HARD_DEBUG, hard_dbg);
-        delay_us(100);
-        hard_dbg &= ~(1u << 1); /* Release reset */
-        pcie_rc_write(PCIE_MISC_HARD_PCIE_HARD_DEBUG, hard_dbg);
-        dsb();
+    /* 3. Enable Controller (deassert BRIDGE_DISABLE_FLAG) */
+    val = pcie_rc_read(0x9210);
+    val &= ~0x1;
+    pcie_rc_write(0x9210, val);
+    delay_us(100);
 
-        /* Wait up to 100ms for PCIe link to train */
-        int timeout = 1000;
-        while (timeout-- > 0) {
-            status = pcie_rc_read(PCIE_MISC_PCIE_STATUS);
-            if ((status & 0x30u) == 0x30u) break;
-            delay_us(100);
-        }
+    /* 4. Wait for controller and link training (REG_BRIDGE_STATE 0x4068) */
+    int to = 1000;
+    while (to-- > 0) {
+        if ((pcie_rc_read(0x4068) & 0x30) == 0x30) break;
+        delay_us(1000);
     }
+    uint32_t state = pcie_rc_read(0x4068);
+    uint32_t link_speed = pcie_rc_read(0x00BC) >> 16;
+    fb_log("[PCIE] Bridge State=");
+    fb_log_hex32(state);
+    fb_log(" LinkSpeed=");
+    fb_log_hex32(link_speed);
+    fb_log("\n");
 
-    if ((status & 0x30u) == 0x30u) {
-        fb_log("[PCIE] Link trained: Gen2 x1 Active [OK]\n");
-    } else {
-        fb_log("[PCIE] Link training timed out (status=");
-        uart_hex32(status);
-        fb_log(")\n");
-    }
+    /* 5. Set CPU->PCI Outbound memory window (0x600000000 -> 0xC0000000, 1GB) */
+    pcie_rc_write(0x400C, BCM2711_PCIE_BUS_MEM_BASE); /* 0xC0000000 */
+    pcie_rc_write(0x4010, 0x00000000u);
+    pcie_rc_write(0x4070, 0x3FF00000u);               /* encode_cpu_window_low */
+    pcie_rc_write(0x4080, 0x06u);                      /* encode_cpu_window_start_high */
+    pcie_rc_write(0x4084, 0x06u);                      /* encode_cpu_window_end_high */
+    dsb();
 
-    /* 4. Enumerate PCI Device 01:00.0 (VIA VL805 xHCI Controller) */
+    /* 6. Configure Root Complex Class Code to PCI-to-PCI Bridge (0x060400) */
+    pcie_rc_write(0x043C, (0x06 << 16) | (0x04 << 8)); /* PCI_ID_VAL3 */
+    dsb();
+
+    /* 7. Configure CLKREQ and L1SS in REG_PCIE_HARD_DEBUG (0x4204) */
+    uint32_t hd = pcie_rc_read(0x4204);
+    hd |= 0x2;        /* CLKREQ_ENABLE */
+    hd |= 0x00200000; /* L1SS_ENABLE */
+    pcie_rc_write(0x4204, hd);
+    delay_us(100);
+
+    /* 8. Configure Root Port Bridge Type 1 Header (Bus 0, Dev 0, Func 0) */
+    pci_write_config32(0, 0, 0, 0x18, 0x00010100u);   /* Primary=0, Secondary=1, Sub=1 */
+    pci_write_config32(0, 0, 0, 0x20, 0xFFFFC000u);   /* Memory Base=0xC000, Limit=0xFFFF */
+    pci_write_config32(0, 0, 0, 0x24, 0xFFFFC000u);   /* Prefetchable Base=0xC000, Limit=0xFFFF */
+
+    uint32_t rc_cmd = pci_read_config32(0, 0, 0, PCI_COMMAND);
+    rc_cmd |= (PCI_COMMAND_MEMORY | PCI_COMMAND_MASTER | (1u << 8));
+    pci_write_config32(0, 0, 0, PCI_COMMAND, rc_cmd);
+    dsb();
+
+    /* 9. Enumerate VL805 at 01:00.0 */
     uint32_t id_reg = pci_read_config32(VL805_PCI_BUS, VL805_PCI_DEV, VL805_PCI_FUNC, PCI_VENDOR_ID);
     uint16_t vendor = (uint16_t)(id_reg & 0xFFFF);
     uint16_t device = (uint16_t)(id_reg >> 16);
@@ -205,30 +254,52 @@ int bcm2711_pcie_init(void) {
     if (vendor == VL805_VENDOR_ID && device == VL805_DEVICE_ID) {
         fb_log("[PCIE] Found VIA VL805 USB 3.0 Host Controller (1106:3483) at 01:00.0\n");
 
-        /* Program BAR0 to PCI address 0xC0000000 */
-        pci_write_config32(VL805_PCI_BUS, VL805_PCI_DEV, VL805_PCI_FUNC, PCI_BAR0, BCM2711_PCIE_BUS_MEM_BASE);
-
-        /* Enable Bus Master + Memory Space (0x06) */
-        uint32_t cmd = pci_read_config32(VL805_PCI_BUS, VL805_PCI_DEV, VL805_PCI_FUNC, PCI_COMMAND);
-        cmd |= (PCI_COMMAND_MEMORY | PCI_COMMAND_MASTER);
-        pci_write_config32(VL805_PCI_BUS, VL805_PCI_DEV, VL805_PCI_FUNC, PCI_COMMAND, cmd);
-
-        /* Map VL805 MMIO to CPU 64-bit address 0x600000000 */
-        s_vl805_mmio_base = (uintptr_t)BCM2711_PCIE_CPU_MEM_BASE;
-
-        /* 5. Request VideoCore to bootstrap VL805 runtime firmware */
+        /* 10. Request VideoCore to bootstrap VL805 runtime firmware */
         fb_log("[PCIE] Requesting VideoCore VL805 firmware bootstrap (tag 0x00030058)...\n");
         if (bcm2711_reload_vl805_firmware() == 0) {
             fb_log("[PCIE] VL805 firmware upload: SUCCESS [OK]\n");
         } else {
             fb_log("[PCIE] VL805 firmware reload completed (pre-loaded/EEPROM)\n");
         }
-        delay_us(20000); /* 20ms settle */
+        delay_us(50000); /* 50ms settle for VL805 controller reboot */
+
+        /* 11. Program BAR0 to PCI address 0xC0000000 (after firmware reload) */
+        pci_write_config32(VL805_PCI_BUS, VL805_PCI_DEV, VL805_PCI_FUNC, PCI_BAR0, BCM2711_PCIE_BUS_MEM_BASE);
+        pci_write_config32(VL805_PCI_BUS, VL805_PCI_DEV, VL805_PCI_FUNC, PCI_BAR0 + 4, 0x00000000UL);
+
+        /* 12. Enable Bus Master + Memory Space in VL805 PCI Command Register */
+        uint32_t cmd = (PCI_COMMAND_MEMORY | PCI_COMMAND_MASTER | (1u << 8) /* SERR */);
+        pci_write_config32(VL805_PCI_BUS, VL805_PCI_DEV, VL805_PCI_FUNC, PCI_COMMAND, cmd);
+        dsb();
+
+        /* Verify configuration space readback */
+        uint32_t check_bar0 = pci_read_config32(VL805_PCI_BUS, VL805_PCI_DEV, VL805_PCI_FUNC, PCI_BAR0);
+        uint32_t check_cmd = pci_read_config32(VL805_PCI_BUS, VL805_PCI_DEV, VL805_PCI_FUNC, PCI_COMMAND);
+        fb_log("[PCIE] VL805 BAR0: ");
+        fb_log_hex32(check_bar0);
+        fb_log(" CMD: ");
+        fb_log_hex32(check_cmd);
+        fb_log("\n");
+
+        /* Ensure PCI-to-PCI Bridge Command has Master + Memory enabled */
+        uint32_t bridge_cmd = pci_read_config32(0, 0, 0, PCI_COMMAND);
+        bridge_cmd |= (PCI_COMMAND_MEMORY | PCI_COMMAND_MASTER | (1u << 8));
+        pci_write_config32(0, 0, 0, PCI_COMMAND, bridge_cmd);
+        dsb();
+
+        /* Map VL805 MMIO to CPU 64-bit address 0x600000000 */
+        s_vl805_mmio_base = (uintptr_t)BCM2711_PCIE_CPU_MEM_BASE;
+
+        /* Test MMIO Read */
+        uint32_t test_read = *(volatile uint32_t *)s_vl805_mmio_base;
+        fb_log("[PCIE] VL805 MMIO Test Read: ");
+        fb_log_hex32(test_read);
+        fb_log("\n");
 
         return 0;
     } else {
         fb_log("[PCIE] Device 01:00.0 ID: ");
-        uart_hex32(id_reg);
+        fb_log_hex32(id_reg);
         fb_log(" (not VL805)\n");
         return -1;
     }

@@ -64,6 +64,9 @@ static COLOR s_desktop_backbuffer[BTRON_SCREEN_W * BTRON_SCREEN_H] __attribute__
 static H s_mouse_x = 512;
 static H s_mouse_y = 384;
 
+/* USB host controller selection: 1 = VL805 xHCI (hardware), 0 = DWC2 (QEMU / legacy) */
+int g_use_xhci = 0;
+
 /* External driver APIs */
 extern void uart_init(void);
 extern void uart_puts(const char *s);
@@ -198,6 +201,49 @@ void fb_log(const char *msg) {
             s_fb_log_col++;
         }
     }
+}
+
+void fb_log_hex32(uint32_t val) {
+    char buf[12];
+    const char *hex = "0123456789ABCDEF";
+    buf[0] = '0';
+    buf[1] = 'x';
+    for (int i = 7; i >= 0; i--) {
+        buf[2 + (7 - i)] = hex[(val >> (i * 4)) & 0xF];
+    }
+    buf[10] = '\0';
+    fb_log(buf);
+}
+
+void fb_log_hex64(uint64_t val) {
+    char buf[20];
+    const char *hex = "0123456789ABCDEF";
+    buf[0] = '0';
+    buf[1] = 'x';
+    for (int i = 15; i >= 0; i--) {
+        buf[2 + (15 - i)] = hex[(val >> (i * 4)) & 0xF];
+    }
+    buf[18] = '\0';
+    fb_log(buf);
+}
+
+void fb_log_dec(uint32_t val) {
+    char buf[16];
+    char tmp[16];
+    if (val == 0) {
+        fb_log("0");
+        return;
+    }
+    int p = 0;
+    while (val > 0) {
+        tmp[p++] = '0' + (val % 10);
+        val /= 10;
+    }
+    for (int i = 0; i < p; i++) {
+        buf[i] = tmp[p - 1 - i];
+    }
+    buf[p] = '\0';
+    fb_log(buf);
 }
 
 /* Single-character echo to screen only (no UART double-echo). */
@@ -375,7 +421,7 @@ static int pi4_shell_poll(uint32_t *gpu_fb)
      *    On QEMU / Pi 2 / Pi 3 (mmio 0x3F000000), read packets from DWC2 channel registers. */
     usb_kbd_report_t rep;
     int kbd_ready = 0;
-    if (g_mmio_base == 0xFE000000UL) {
+    if (g_use_xhci) {
         kbd_ready = (xhci_poll_keyboard(&rep) > 0);
     } else {
         kbd_ready = (dwc2_poll_keyboard(&rep) > 0);
@@ -694,7 +740,7 @@ static int usb_poll_devices(GDEV *screen) {
     /* 1. Poll USB HID Keyboard (xHCI on Pi 400, DWC2 on Pi 2/3/QEMU) */
     usb_kbd_report_t kbd_rep;
     int kbd_got = 0;
-    if (g_mmio_base == 0xFE000000UL) {
+    if (g_use_xhci) {
         kbd_got = (xhci_poll_keyboard(&kbd_rep) > 0);
     } else {
         kbd_got = (dwc2_poll_keyboard(&kbd_rep) > 0);
@@ -736,7 +782,7 @@ static int usb_poll_devices(GDEV *screen) {
     /* 2. Poll USB HID Mouse (xHCI on Pi 400, DWC2 on Pi 2/3/QEMU) */
     usb_mouse_report_t mouse_rep;
     int mouse_got = 0;
-    if (g_mmio_base == 0xFE000000UL) {
+    if (g_use_xhci) {
         mouse_got = (xhci_poll_mouse(&mouse_rep) > 0);
     } else {
         mouse_got = (dwc2_poll_mouse(&mouse_rep) > 0);
@@ -909,26 +955,32 @@ void btron_main(void) {
     if (g_mmio_base == 0xFE000000UL) {
         extern uint32_t bcm283x_get_board_revision(void);
         uint32_t board_rev = bcm283x_get_board_revision();
-        fb_log("[BOOT] Board Revision: 0x");
-        uart_hex32(board_rev);
+        fb_log("[BOOT] Board Revision: ");
+        fb_log_hex32(board_rev);
         fb_log("\n");
 
         /* QEMU raspi4b identifies as 0xB03111 or 0xB03115 without PCIe hardware.
          * Real physical hardware (Pi 400 0xC03130/1, Pi 4B 0xC0311x) has Broadcom PCIe + VL805.
          */
-        bool is_qemu = (board_rev == 0x00B03115u || board_rev == 0x00B03111u);
+        bool is_qemu = ((board_rev & 0x00F00000u) == 0x00B00000u) ||
+                       (board_rev == 0x00B03115u) || (board_rev == 0x00B03111u);
         if (!is_qemu) {
             fb_log("[USB] Physical BCM2711 Hardware: Initializing PCIe Root Complex & VL805 xHCI...\n");
             if (bcm2711_pcie_init() == 0) {
                 uintptr_t vl805_mmio = bcm2711_pcie_get_vl805_mmio();
                 if (vl805_mmio) {
-                    xhci_init(vl805_mmio);
+                    if (xhci_init(vl805_mmio) == 0) {
+                        g_use_xhci = 1;
+                    }
                 }
             }
-        } else {
+        }
+        if (is_qemu) {
             /* QEMU raspi4b model connects virtual USB keyboard/mouse to DWC2 */
             fb_log("[USB] QEMU Virtual Machine: Initializing DWC2 USB Host Controller...\n");
             dwc2_init();
+        } else if (!g_use_xhci) {
+            fb_log("[USB] xHCI Controller failed to initialize on Pi 400.\n");
         }
         fb_log("[USB] USB Subsystem ready.\n");
     } else {

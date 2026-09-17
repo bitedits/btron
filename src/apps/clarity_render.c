@@ -10,12 +10,32 @@
 #include <btron/troncode.h>
 #include <btron/tad_browser.h>
 #include <btron/tip.h>
-#include <stdio.h>
 
 #if defined(__STDC_HOSTED__) && __STDC_HOSTED__ == 1
+#include <stdio.h>
 #include <string.h>
 #else
-#include <string.h>
+#include <stddef.h>
+#include <stdint.h>
+#include <libstr.h>
+extern int snprintf(char *str, size_t size, const char *format, ...);
+#define memset tkl_memset
+#define memcpy tkl_memcpy
+#define strlen tkl_strlen
+static inline char* strstr(const char *haystack, const char *needle) {
+    if (!haystack || !needle) return NULL;
+    if (!*needle) return (char*)haystack;
+    for (; *haystack; haystack++) {
+        const char *h = haystack;
+        const char *n = needle;
+        while (*h && *n && *h == *n) {
+            h++;
+            n++;
+        }
+        if (!*n) return (char*)haystack;
+    }
+    return NULL;
+}
 #endif
 
 #define GLYPH_W  16

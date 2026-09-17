@@ -21,9 +21,35 @@ extern WND* open_t_editor_window(void);
 #include <btron/app_menu.h>
 #include <btron/tip.h>
 #include <btron/event.h>
+
+#if defined(__STDC_HOSTED__) && __STDC_HOSTED__ == 1
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/time.h>
+#else
+#include <stddef.h>
+#include <stdint.h>
+#include <libstr.h>
+extern void* Imalloc(size_t sz);
+extern void Ifree(void *ptr);
+extern void* Icalloc(size_t nmemb, size_t sz);
+extern int snprintf(char *str, size_t size, const char *format, ...);
+extern void* tkl_memmove(void *dest, const void *src, size_t n);
+#define malloc  Imalloc
+#define free    Ifree
+#define calloc  Icalloc
+#define strncpy tkl_strncpy
+#define strncat tkl_strncat
+#define strcat  tkl_strcat
+#define strcmp  tkl_strcmp
+#define strncmp tkl_strncmp
+#define memset  tkl_memset
+#define memcpy  tkl_memcpy
+#define memmove tkl_memmove
+#define strlen  tkl_strlen
+#define strcpy  tkl_strcpy
+#endif
 
 #if defined(__APPLE__) || defined(__linux__)
 #if defined(__has_include)
@@ -49,8 +75,6 @@ extern int  clarity_hittest_frame(const ClarityDoc *doc, H x, H y, int ox, int o
 extern int  clarity_hittest_handle(const ClarityFrame *f, H x, H y, int ox, int oy, int zoom_pct);
 extern void clarity_resize_frame_handle(ClarityFrame *f, int h, H mx, H my, int ox, int oy, int zoom_pct);
 extern void clarity_move_frame(ClarityFrame *f, H dx, H dy);
-
-#include <sys/time.h>
 
 #define CLARITY_SAMPLE_PATH "/SYS/Clarity-Sample.TAD"
 

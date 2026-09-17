@@ -942,7 +942,9 @@ PI400_SDCARD ?= $(shell diskutil list | \
 PI400_START4  = $(firstword $(wildcard $(PI400_FW_DIR)/start4.elf $(PI400_FW_DIR)/START4.ELF))
 PI400_FIXUP4  = $(firstword $(wildcard $(PI400_FW_DIR)/fixup4.dat $(PI400_FW_DIR)/fixup4.dat))
 
-pi400: arm64-elf
+pi400: $(PI400_IMG)
+
+$(PI400_IMG): arm64-elf
 	@echo "=========================================================="
 	@echo " BTRON Pi 400 — SD Card Image Builder"
 	@echo " ELF     : $(ARM64_TARGET)"

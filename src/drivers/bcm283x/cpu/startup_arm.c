@@ -581,8 +581,17 @@ void arm64_vector_table(void) {
         ".balign 128\n\teret\n\t"
         ".balign 128\n\teret\n\t"
 
-        /* Current EL with SPx */
+        /* Current EL with SPx: skip faulting instruction safely */
         ".balign 128\n\t"
+        "mrs x18, CurrentEL\n\t"
+        "lsr x18, x18, #2\n\t"
+        "cmp x18, #2\n\t"
+        "b.ne 91f\n\t"
+        "mrs x18, elr_el2\n\t"
+        "add x18, x18, #4\n\t"
+        "msr elr_el2, x18\n\t"
+        "eret\n\t"
+        "91:\n\t"
         "mrs x18, elr_el1\n\t"
         "add x18, x18, #4\n\t"
         "msr elr_el1, x18\n\t"
@@ -603,6 +612,106 @@ void arm64_vector_table(void) {
         ".balign 128\n\teret\n\t"
         ".balign 128\n\teret\n\t"
     );
+}
+
+/* ─────────────────────────────────────────────────────────────────
+ * AArch64 MMU & L1/L2 Cache Identity Mapping
+ *
+ * Configures:
+ *   - Normal Inner/Outer Write-Back Cacheable RAM (0 to 3GB) -> Full CPU speed!
+ *   - Device-nGnRE for Framebuffer & MMIO (3GB to 4GB, 0xFD500000 PCIe, 0xFE000000 MMIO)
+ *   - Device-nGnRE for Outbound PCIe Window (24GB = 0x600000000ULL)
+ * ───────────────────────────────────────────────────────────────── */
+static uint64_t s_arm64_l1[512] __attribute__((aligned(4096)));
+static uint64_t s_arm64_l2[512] __attribute__((aligned(4096)));
+
+void arm64_mmu_init(void) {
+    /* Attr 0 = Device-nGnRE (0x04)
+     * Attr 1 = Normal Cacheable Inner/Outer Write-Back (0xFF)
+     * Attr 2 = Normal Non-Cacheable (0x44) for hardware DMA rings/buffers
+     */
+    uint64_t mair = (0x44ULL << 16) | (0xFFULL << 8) | (0x04ULL << 0);
+
+    /* L2 Table: 512 entries of 2MB (covers 0 to 1GB)
+     * Entry 0: 0 - 2MB -> Normal Cacheable RAM (kernel code & data)
+     * Entry 1: 2MB - 4MB (0x00200000 - 0x003FFFFF) -> Normal Non-Cacheable (Coherent DMA memory)
+     * Entries 2..479: 4MB - 960MB -> Normal Cacheable RAM
+     * Entries 480..511: 960MB - 1GB (0x3C000000 - 0x3FFFFFFF) -> GPU Framebuffer (Device-nGnRE)
+     */
+    s_arm64_l2[0] = (0 * 0x200000ULL) | (1ULL << 10) | (3ULL << 8) | (1ULL << 2) | 0x01ULL;
+    s_arm64_l2[1] = (1 * 0x200000ULL) | (1ULL << 10) | (3ULL << 8) | (2ULL << 2) | 0x01ULL; /* Non-cacheable DMA */
+    for (uint64_t i = 2; i < 480; i++) {
+        s_arm64_l2[i] = (i * 0x200000ULL) | (1ULL << 10) | (3ULL << 8) | (1ULL << 2) | 0x01ULL;
+    }
+    for (uint64_t i = 480; i < 512; i++) {
+        s_arm64_l2[i] = (i * 0x200000ULL) | (1ULL << 10) | (2ULL << 8) | (0ULL << 2) | 0x01ULL;
+    }
+
+    /* L1 Table: 512 entries of 1GB */
+    for (int i = 0; i < 512; i++) {
+        s_arm64_l1[i] = 0;
+    }
+
+    /* L1[0]: Point to L2 table (bits [1:0] = 11 for Table) */
+    s_arm64_l1[0] = ((uint64_t)(uintptr_t)s_arm64_l2) | 0x03ULL;
+
+    /* L1[1]: 1GB to 2GB RAM -> Normal Cacheable */
+    s_arm64_l1[1] = 0x40000000ULL | (1ULL << 10) | (3ULL << 8) | (1ULL << 2) | 0x01ULL;
+
+    /* L1[2]: 2GB to 3GB RAM -> Normal Cacheable */
+    s_arm64_l1[2] = 0x80000000ULL | (1ULL << 10) | (3ULL << 8) | (1ULL << 2) | 0x01ULL;
+
+    /* L1[3]: 3GB to 4GB (0xC0000000 - 0xFFFFFFFF) -> Device memory (MMIO + PCIe RC) */
+    s_arm64_l1[3] = 0xC0000000ULL | (1ULL << 10) | (2ULL << 8) | (0ULL << 2) | 0x01ULL;
+
+    /* L1[24]: 24GB (0x600000000ULL, 1GB window) -> Device memory (PCIe Outbound to VL805) */
+    s_arm64_l1[24] = 0x600000000ULL | (1ULL << 10) | (2ULL << 8) | (0ULL << 2) | 0x01ULL;
+
+    uint64_t el;
+    __asm__ volatile("mrs %0, CurrentEL" : "=r"(el));
+    el >>= 2;
+
+    if (el == 2) {
+        /* TCR_EL2: 39-bit VA (T0SZ=25), 4KB granule, Inner/Outer WB, 40-bit PA (PS=2) */
+        uint64_t tcr = (25ULL << 0) | (1ULL << 8) | (1ULL << 10) | (3ULL << 12) | (0ULL << 14) | (2ULL << 16);
+
+        __asm__ volatile(
+            "msr mair_el2, %0\n\t"
+            "msr tcr_el2, %1\n\t"
+            "msr ttbr0_el2, %2\n\t"
+            "isb\n\t"
+            "tlbi alle2\n\t"
+            "dsb sy\n\t"
+            "isb\n\t"
+            "mrs x0, sctlr_el2\n\t"
+            "orr x0, x0, #(1 << 0)\n\t"   /* M: MMU enable */
+            "orr x0, x0, #(1 << 2)\n\t"   /* C: Data Cache enable */
+            "orr x0, x0, #(1 << 12)\n\t"  /* I: Instruction Cache enable */
+            "msr sctlr_el2, x0\n\t"
+            "isb\n\t"
+            : : "r"(mair), "r"(tcr), "r"(s_arm64_l1) : "x0", "memory"
+        );
+    } else {
+        /* TCR_EL1: 39-bit VA (T0SZ=25), 4KB granule, Inner/Outer WB, 40-bit PA (IPS=2 at bit 32) */
+        uint64_t tcr = (25ULL << 0) | (1ULL << 8) | (1ULL << 10) | (3ULL << 12) | (0ULL << 14) | (2ULL << 32);
+
+        __asm__ volatile(
+            "msr mair_el1, %0\n\t"
+            "msr tcr_el1, %1\n\t"
+            "msr ttbr0_el1, %2\n\t"
+            "isb\n\t"
+            "tlbi vmalle1\n\t"
+            "dsb sy\n\t"
+            "isb\n\t"
+            "mrs x0, sctlr_el1\n\t"
+            "orr x0, x0, #(1 << 0)\n\t"   /* M: MMU enable */
+            "orr x0, x0, #(1 << 2)\n\t"   /* C: Data Cache enable */
+            "orr x0, x0, #(1 << 12)\n\t"  /* I: Instruction Cache enable */
+            "msr sctlr_el1, x0\n\t"
+            "isb\n\t"
+            : : "r"(mair), "r"(tcr), "r"(s_arm64_l1) : "x0", "memory"
+        );
+    }
 }
 #endif
 

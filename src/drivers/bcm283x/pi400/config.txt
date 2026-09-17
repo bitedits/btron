@@ -1,0 +1,24 @@
+# BTRON3 3.20 — Raspberry Pi 400 / BCM2711 Bare-Metal Boot
+# Takanori Yokoyama (横山 孝徳) — T-Kernel 2.0, AArch64
+#
+
+[all]
+arm_64bit=1
+kernel=kernel8.img
+kernel_address=0x80000
+
+# Pi 400 Device Tree
+device_tree=bcm2711-rpi-400.dtb
+
+# GPU & Framebuffer
+gpu_mem=64
+disable_overscan=1
+framebuffer_width=1024
+framebuffer_height=768
+framebuffer_depth=32
+framebuffer_swap=0
+fake_vsync_isr=1
+
+# Hardware Peripherals
+enable_uart=1
+os_check=0

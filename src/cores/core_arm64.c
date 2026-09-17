@@ -36,6 +36,8 @@
 #include <btron/workbench.h>
 #include <libstr.h>
 #include <dwc2.h>
+#include <pcie.h>
+#include <xhci.h>
 
 /* ═══════════════════════════════════════════════════════════════════
  * Dynamic Hardware Memory Map (Pi 3B: 0x3F000000, Pi 4B: 0xFE000000)
@@ -75,6 +77,459 @@ extern ER KbPdDrv(int ac, unsigned char *av[]);
 extern ER LowKbPdDrv(int ac, unsigned char *av[]);
 extern void* tkl_memset(void *s, int c, size_t n);
 extern void tkernel_init_subsystems(int full_suite);
+extern const UB* get_glyph_bitmap(TC code, H *out_width, H *out_height);
+extern WND* open_vobj_manager_window(void);
+extern WND* open_t_editor_window(void);
+extern WND* open_gterm_window(void);
+extern WND* launch_beos_chat(void);
+extern WND* open_control_panel_window(void);
+void blit_backbuffer_to_fb(volatile uint32_t *gpu_fb);
+static int usb_poll_devices(GDEV *screen);
+
+/* ═══════════════════════════════════════════════════════════════════
+ * Framebuffer Kernel Text Log Overlay
+ * Uses existing BTRON troncode.c / jis_fonts.c 8×16 ASCII bitmaps.
+ * Call fb_log_enable(gpu_fb) once the VideoCore mailbox returns a valid
+ * framebuffer pointer.  After that, fb_log(msg) renders white text
+ * on a semi-transparent black strip directly into GPU VRAM.
+ * ═══════════════════════════════════════════════════════════════════ */
+
+#define FB_LOG_W         BTRON_SCREEN_W   /* characters per row  = W/8     */
+#define FB_LOG_GLYPH_H   16              /* glyph height in pixels        */
+#define FB_LOG_ROWS      ((BTRON_SCREEN_H) / FB_LOG_GLYPH_H) /* 48 rows   */
+#define FB_LOG_BG        0xCC000000u     /* semi-transparent black strip  */
+#define FB_LOG_FG        0xFFFFFFFFu     /* white text                    */
+#define FB_LOG_SHADOW    0xFF000000u     /* 1-pixel drop shadow           */
+
+static volatile uint32_t *s_fb_log_fb   = NULL;
+static int                s_fb_log_col  = 0;   /* current cursor X (chars)  */
+static int                s_fb_log_row  = 0;   /* current cursor Y (rows)   */
+
+/* Call once after init_pi_framebuffer returns a valid pointer. */
+void fb_log_enable(volatile uint32_t *fb) {
+    s_fb_log_fb  = fb;
+    s_fb_log_col = 0;
+    s_fb_log_row = 0;
+}
+
+/* Darken one text row in GPU VRAM to ensure legibility. */
+static void fb_log_darken_row(int row) {
+    if (!s_fb_log_fb) return;
+    int y0 = row * FB_LOG_GLYPH_H;
+    for (int py = y0; py < y0 + FB_LOG_GLYPH_H; py++) {
+        uint32_t *line = (uint32_t *)s_fb_log_fb + py * BTRON_SCREEN_W;
+        for (int px = 0; px < BTRON_SCREEN_W; px++) {
+            /* Blend: out = (pixel >> 1) | (FB_LOG_BG >> 1) */
+            uint32_t p = line[px];
+            uint32_t r = ((p >> 1) & 0x7F7F7F7Fu) + 0x00101010u;
+            line[px] = r | 0xFF000000u;
+        }
+    }
+}
+
+/* Render one ASCII character into GPU VRAM at (col, row). */
+static void fb_log_putchar(char c, int col, int row) {
+    if (!s_fb_log_fb) return;
+    H gw = 8, gh = 16;
+    const UB *bmp = get_glyph_bitmap((TC)(unsigned char)c, &gw, &gh);
+    if (!bmp) return;
+    int x0 = col * 8;
+    int y0 = row * FB_LOG_GLYPH_H;
+    if (x0 + 8 > BTRON_SCREEN_W || y0 + gh > BTRON_SCREEN_H) return;
+    for (int row_i = 0; row_i < gh; row_i++) {
+        UB bits = bmp[row_i];
+        uint32_t *dst = (uint32_t *)s_fb_log_fb + (y0 + row_i) * BTRON_SCREEN_W + x0;
+        for (int bit = 7; bit >= 0; bit--) {
+            if (bits & (1u << bit)) {
+                /* 1-pixel shadow (write shadow first, then glyph pixel) */
+                if (bit > 0) *(dst + (8 - bit) - 1 + 1) = FB_LOG_SHADOW;
+                *dst = FB_LOG_FG;
+            }
+            dst++;
+        }
+    }
+    __asm__ volatile("dsb sy" : : : "memory");
+}
+
+/*
+ * fb_log(msg) — write a string to the on-screen kernel log.
+ * Wraps at screen right edge; scrolls when reaching bottom row.
+ * Call this in addition to (or instead of) uart_puts().
+ */
+void fb_log(const char *msg) {
+    if (!msg) return;
+    uart_puts(msg);          /* always mirror to serial */
+    if (!s_fb_log_fb) return;
+    for (const char *p = msg; *p; p++) {
+        if (*p == '\n' || *p == '\r') {
+            s_fb_log_col = 0;
+            if (*p == '\n') {
+                s_fb_log_row++;
+                if (s_fb_log_row >= FB_LOG_ROWS) {
+                    /* Scroll: shift all pixel rows up by one glyph row */
+                    uint32_t *base = (uint32_t *)s_fb_log_fb;
+                    int stride = BTRON_SCREEN_W;
+                    int rows_px = (FB_LOG_ROWS - 1) * FB_LOG_GLYPH_H;
+                    for (int y = 0; y < rows_px; y++)
+                        for (int x = 0; x < stride; x++)
+                            base[y * stride + x] = base[(y + FB_LOG_GLYPH_H) * stride + x];
+                    /* Darken new bottom row */
+                    s_fb_log_row = FB_LOG_ROWS - 1;
+                    fb_log_darken_row(s_fb_log_row);
+                } else {
+                    fb_log_darken_row(s_fb_log_row);
+                }
+            }
+            continue;
+        }
+        if (*p == '\t') {
+            /* Tab: advance to next 8-column stop */
+            s_fb_log_col = (s_fb_log_col + 8) & ~7;
+        } else {
+            if (s_fb_log_col == 0) fb_log_darken_row(s_fb_log_row);
+            int cols = BTRON_SCREEN_W / 8;
+            if (s_fb_log_col >= cols) {
+                s_fb_log_col = 0;
+                s_fb_log_row++;
+                if (s_fb_log_row >= FB_LOG_ROWS) s_fb_log_row = FB_LOG_ROWS - 1;
+                fb_log_darken_row(s_fb_log_row);
+            }
+            fb_log_putchar(*p, s_fb_log_col, s_fb_log_row);
+            s_fb_log_col++;
+        }
+    }
+}
+
+/* Single-character echo to screen only (no UART double-echo). */
+static void fb_log_putc(char c) {
+    if (!s_fb_log_fb) return;
+    if (c == '\n') {
+        s_fb_log_col = 0;
+        s_fb_log_row++;
+        if (s_fb_log_row >= FB_LOG_ROWS) {
+            uint32_t *base = (uint32_t *)s_fb_log_fb;
+            int stride = BTRON_SCREEN_W;
+            int rows_px = (FB_LOG_ROWS - 1) * FB_LOG_GLYPH_H;
+            for (int y = 0; y < rows_px; y++)
+                for (int x = 0; x < stride; x++)
+                    base[y * stride + x] = base[(y + FB_LOG_GLYPH_H) * stride + x];
+            s_fb_log_row = FB_LOG_ROWS - 1;
+        }
+        fb_log_darken_row(s_fb_log_row);
+    } else if (c == '\r') {
+        s_fb_log_col = 0;
+    } else {
+        if (s_fb_log_col == 0) fb_log_darken_row(s_fb_log_row);
+        int cols = BTRON_SCREEN_W / 8;
+        if (s_fb_log_col >= cols) {
+            s_fb_log_col = 0;
+            s_fb_log_row++;
+            if (s_fb_log_row >= FB_LOG_ROWS) s_fb_log_row = FB_LOG_ROWS - 1;
+            fb_log_darken_row(s_fb_log_row);
+        }
+        fb_log_putchar(c, s_fb_log_col, s_fb_log_row);
+        s_fb_log_col++;
+    }
+    __asm__ volatile("dsb sy" : : : "memory");
+}
+
+/* Erase the last typed character on-screen (backspace). */
+static void fb_log_backspace(void) {
+    if (!s_fb_log_fb || s_fb_log_col <= 0) return;
+    s_fb_log_col--;
+    int x0 = s_fb_log_col * 8;
+    int y0 = s_fb_log_row * FB_LOG_GLYPH_H;
+    for (int py = y0; py < y0 + FB_LOG_GLYPH_H; py++) {
+        uint32_t *line = (uint32_t *)s_fb_log_fb + py * BTRON_SCREEN_W;
+        for (int px = x0; px < x0 + 8; px++) {
+            line[px] = 0xFF080C14u;
+        }
+    }
+    __asm__ volatile("dsb sy" : : : "memory");
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+ * Stage 1 First-Stage Console & Stage 2 B-System Workbench Session
+ * Modelled on core_ps2.c: ps2_shell_exec / launch_ps2_desktop_session
+ * Input: DWC2 USB keyboard only. No UART required.
+ * ═══════════════════════════════════════════════════════════════════ */
+
+static int  s_gui_active  = 0;   /* 1 = workbench is running */
+static char s_cmd_buf[64];
+static int  s_cmd_pos     = 0;
+
+/* Forward declaration */
+static void launch_pi4_desktop_session(uint32_t *gpu_fb);
+
+static void pi4_shell_exec(const char *cmd, uint32_t *gpu_fb)
+{
+    if (tkl_strcmp(cmd, "help") == 0) {
+        fb_log("Commands:\n");
+        fb_log("  startx / desktop / gui  - Launch B-System Workbench\n");
+        fb_log("  exit / console          - Return to Stage 1 console\n");
+        fb_log("  open <app>              - cabinet | editor | terminal | chat | settings\n");
+        fb_log("  mem                     - Memory map\n");
+        fb_log("  ver                     - Kernel version\n");
+        fb_log("  clear                   - Clear screen\n");
+        fb_log("  reboot                  - Halt processor\n");
+
+    } else if (tkl_strcmp(cmd, "startx") == 0 ||
+               tkl_strcmp(cmd, "desktop") == 0 ||
+               tkl_strcmp(cmd, "gui") == 0) {
+        if (!s_gui_active) {
+            launch_pi4_desktop_session(gpu_fb);
+        } else {
+            fb_log("[CON] Workbench already active.\n");
+        }
+
+    } else if (tkl_strcmp(cmd, "exit") == 0 ||
+               tkl_strcmp(cmd, "console") == 0 ||
+               tkl_strcmp(cmd, "quit") == 0) {
+        if (s_gui_active) {
+            s_gui_active = 0;
+        } else {
+            fb_log("[CON] Already at Stage 1 console.\n");
+        }
+
+    } else if (tkl_strcmp(cmd, "mem") == 0) {
+        fb_log("[MEM] BCM2711 Pi 400 — 4 GB RAM\n");
+        fb_log("[MEM]   0x00000000-0xFCFFFFFF  RAM (usable)\n");
+        fb_log("[MEM]   0xFD000000-0xFFFFFFFF  MMIO / PCIe\n");
+        fb_log("[MEM]   Kernel heap: 0x01000000-0x1B000000\n");
+
+    } else if (tkl_strcmp(cmd, "ver") == 0) {
+        fb_log("B-System/BTRON3 3.20  aarch64-bcm2711\n");
+        fb_log("T-Kernel 2.0  Takanori Yokoyama  Pi 400\n");
+        fb_log("Built: " __DATE__ " " __TIME__ "\n");
+
+    } else if (tkl_strcmp(cmd, "clear") == 0) {
+        /* Blank the GPU VRAM to dark */
+        if (s_fb_log_fb) {
+            for (int i = 0; i < BTRON_SCREEN_W * BTRON_SCREEN_H; i++)
+                ((uint32_t *)s_fb_log_fb)[i] = 0xFF080C14u;
+            s_fb_log_col = 0;
+            s_fb_log_row = 0;
+        }
+
+    } else if (tkl_strncmp(cmd, "open ", 5) == 0) {
+        const char *app = cmd + 5;
+        int opened = 0;
+        if (tkl_strcmp(app, "cabinet") == 0 || tkl_strcmp(app, "vobj") == 0) {
+            open_vobj_manager_window();
+            fb_log("[CON] Opened Cabinet.\n");
+            opened = 1;
+        } else if (tkl_strcmp(app, "editor") == 0) {
+            open_t_editor_window();
+            fb_log("[CON] Opened Editor.\n");
+            opened = 1;
+        } else if (tkl_strcmp(app, "terminal") == 0 || tkl_strcmp(app, "gterm") == 0) {
+            open_gterm_window();
+            fb_log("[CON] Opened Terminal.\n");
+            opened = 1;
+        } else if (tkl_strcmp(app, "chat") == 0) {
+            launch_beos_chat();
+            fb_log("[CON] Opened Chat.\n");
+            opened = 1;
+        } else if (tkl_strcmp(app, "settings") == 0 || tkl_strcmp(app, "panel") == 0) {
+            open_control_panel_window();
+            fb_log("[CON] Opened Settings.\n");
+            opened = 1;
+        } else {
+            fb_log("[CON] Unknown app. Try: cabinet editor terminal chat settings\n");
+        }
+        if (opened && !s_gui_active) {
+            launch_pi4_desktop_session(gpu_fb);
+        }
+
+    } else if (tkl_strcmp(cmd, "reboot") == 0) {
+        fb_log("[CON] Halting processor.\n");
+        while (1) __asm__ volatile("wfe");
+
+    } else if (cmd[0] != '\0') {
+        fb_log("[CON] Unknown command: ");
+        fb_log(cmd);
+        fb_log("\n[CON] Type 'help' for commands.\n");
+    }
+}
+
+/* ─────────────────────────────────────────────────────────────────
+ * Stage 1 Interactive Terminal Console: Keystroke Polling
+ *
+ * In Stage 1, BTRON boots into an interactive bare-metal diagnostics
+ * and control console rendered directly onto the HDMI display.
+ * Keystrokes are polled directly from:
+ *   - xHCI Event Ring / Transfer Ring on physical BCM2711 (Pi 400 internal keyboard)
+ *   - DWC2 USB Host Controller on emulated QEMU raspi3b / raspi4
+ *   - PL011 UART serial line (if serial cable is attached)
+ *
+ * When the user types commands like 'startx' or 'gui', the system transitions
+ * into the Stage 2 graphical Workbench desktop session.
+ * ───────────────────────────────────────────────────────────────── */
+static int pi4_shell_poll(uint32_t *gpu_fb)
+{
+    static uint8_t s_prev_scancode = 0;
+    uint32_t k = 0;
+
+    /* 1. Poll USB Keyboard:
+     *    On Pi 400 (BCM2711, mmio 0xFE000000), read HID reports from xHCI transfer ring.
+     *    On QEMU / Pi 2 / Pi 3 (mmio 0x3F000000), read packets from DWC2 channel registers. */
+    usb_kbd_report_t rep;
+    int kbd_ready = 0;
+    if (g_mmio_base == 0xFE000000UL) {
+        kbd_ready = (xhci_poll_keyboard(&rep) > 0);
+    } else {
+        kbd_ready = (dwc2_poll_keyboard(&rep) > 0);
+    }
+
+    if (kbd_ready) {
+        uint8_t sc = rep.keys[0];
+        if (sc != s_prev_scancode) {
+            s_prev_scancode = sc;
+            if (sc != 0) {
+                /* Translate standard USB HID scancode to ASCII / B-TRON character */
+                k = dwc2_usb_to_btron_key(sc, rep.modifiers);
+            }
+        }
+    }
+
+    /* 2. Poll UART Serial Console (if connected) */
+    if (k == 0 && uart_has_char()) {
+        int c = uart_getc();
+        if (c == '\r') c = '\n';
+        k = (uint32_t)(uint8_t)c;
+    }
+
+    if (k == 0) return 0;
+
+    /* Pass keys through to workbench when GUI is active */
+    if (s_gui_active) {
+        if (k == 0x1B /* Escape */ || k == 'q' || k == 'Q') {
+            s_gui_active = 0;
+        } else {
+            EVT ev;
+            ev.type   = EV_KEY_DOWN;
+            ev.key    = k;
+            ev.pos.x  = s_mouse_x;
+            ev.pos.y  = s_mouse_y;
+            ev.button = 0;
+            ev.data   = 0;
+            snd_evt(&ev);
+        }
+        return 1;
+    }
+
+    /* Stage 1 console line editing */
+    if (k == '\n' || k == '\r') {
+        fb_log_putc('\n');
+        s_cmd_buf[s_cmd_pos] = '\0';
+        pi4_shell_exec(s_cmd_buf, gpu_fb);
+        s_cmd_pos = 0;
+        /* Re-print prompt if still in Stage 1 */
+        if (!s_gui_active) fb_log("btron-pi400# ");
+    } else if (k == 8 || k == 127) {       /* Backspace / DEL */
+        if (s_cmd_pos > 0) {
+            s_cmd_pos--;
+            fb_log_backspace();
+        }
+    } else if (k >= 0x20 && k < 0x7F &&
+               s_cmd_pos < (int)sizeof(s_cmd_buf) - 1) {
+        s_cmd_buf[s_cmd_pos++] = (char)k;
+        fb_log_putc((char)k);
+    }
+    return 1;
+}
+
+/* Stage 2: Launch full B-System Workbench desktop session. */
+static void launch_pi4_desktop_session(uint32_t *gpu_fb)
+{
+    fb_log("\n[BOOT] Launching B-System Workbench...\n");
+    s_gui_active = 1;
+
+    GDEV *screen = init_baremetal_desktop(
+        (uint32_t *)s_desktop_backbuffer, BTRON_SCREEN_W, BTRON_SCREEN_H);
+    if (!screen) {
+        fb_log("[FATAL] Desktop init failed.\n");
+        s_gui_active = 0;
+        return;
+    }
+    workbench_init(BTRON_SCREEN_W);
+    workbench_render(screen, BTRON_SCREEN_W, BTRON_SCREEN_H);
+    blit_backbuffer_to_fb(gpu_fb);
+
+    /* Disable on-screen log: workbench owns the framebuffer now */
+    fb_log_enable(NULL);
+
+    uart_puts("[WB]  Workbench live. Press [Esc] or type 'exit' to return.\n");
+
+    uint32_t last_clock = 0, last_usb = 0;
+    EVT ev;
+
+    while (s_gui_active) {
+        int redraw = 0;
+
+        uint32_t now = *(volatile uint32_t *)(TIMER_BASE + 0x04);
+
+        /* USB keyboard & mouse at 100 Hz */
+        if (now - last_usb >= 10000) {
+            last_usb = now;
+            if (usb_poll_devices(screen)) {
+                redraw = 1;
+            }
+        }
+
+        /* UART serial console */
+        if (uart_has_char()) {
+            int c = uart_getc();
+            if (c == 0x1B) {
+                s_gui_active = 0;
+            } else {
+                if (c == '\r') c = '\n';
+                ev.type   = EV_KEY_DOWN;
+                ev.key    = (UW)(uint8_t)c;
+                ev.pos.x  = s_mouse_x;
+                ev.pos.y  = s_mouse_y;
+                ev.button = 0;
+                ev.data   = 0;
+                snd_evt(&ev);
+                redraw = 1;
+            }
+        }
+
+        while (get_evt(&ev, 0) == E_OK) {
+            if (ev.type == EV_KEY_DOWN && (ev.key == 0x1B || ev.key == 'q' || ev.key == 'Q')) {
+                s_gui_active = 0;
+                break;
+            }
+            workbench_process_event(screen, &ev);
+            redraw = 1;
+        }
+
+        if (now - last_clock >= 16666) {
+            last_clock = now;
+            redraw = 1;
+        }
+
+        if (redraw) {
+            workbench_render(screen, BTRON_SCREEN_W, BTRON_SCREEN_H);
+            blit_backbuffer_to_fb(gpu_fb);
+        }
+
+        for (volatile int d = 0; d < 200; d++) __asm__ volatile("nop");
+    }
+
+    /* Return to Stage 1 console */
+    fb_log_enable((volatile uint32_t *)gpu_fb);
+    /* Blank the screen */
+    for (int i = 0; i < BTRON_SCREEN_W * BTRON_SCREEN_H; i++)
+        ((uint32_t *)gpu_fb)[i] = 0xFF0A0F18u;
+    s_fb_log_col = 0; s_fb_log_row = 0;
+    fb_log("\n===============================================================\n");
+    fb_log("  [BTRON] Exited Graphical Workbench Session\n");
+    fb_log("  [BTRON] Returned to Stage 1 Terminal Console (1024x768)\n");
+    fb_log("  Type 'startx' or 'desktop' to launch GUI session again.\n");
+    fb_log("===============================================================\n\n");
+    fb_log("btron-pi400# ");
+}
 
 /* ═══════════════════════════════════════════════════════════════════
  * Formatted Kernel Output: kprintf
@@ -236,9 +691,16 @@ static int usb_poll_devices(GDEV *screen) {
     (void)screen;
     int activity = 0;
 
-    /* 1. Poll USB HID Keyboard from DWC2 */
+    /* 1. Poll USB HID Keyboard (xHCI on Pi 400, DWC2 on Pi 2/3/QEMU) */
     usb_kbd_report_t kbd_rep;
-    if (dwc2_poll_keyboard(&kbd_rep) > 0) {
+    int kbd_got = 0;
+    if (g_mmio_base == 0xFE000000UL) {
+        kbd_got = (xhci_poll_keyboard(&kbd_rep) > 0);
+    } else {
+        kbd_got = (dwc2_poll_keyboard(&kbd_rep) > 0);
+    }
+
+    if (kbd_got) {
         uint8_t scancode = kbd_rep.keys[0];
         uint16_t bmod = usb_to_btron_modifiers(kbd_rep.modifiers);
         if (scancode != 0) {
@@ -271,9 +733,16 @@ static int usb_poll_devices(GDEV *screen) {
         g_prev_kbd_scancode = scancode;
     }
 
-    /* 2. Poll USB HID Mouse from DWC2 */
+    /* 2. Poll USB HID Mouse (xHCI on Pi 400, DWC2 on Pi 2/3/QEMU) */
     usb_mouse_report_t mouse_rep;
-    if (dwc2_poll_mouse(&mouse_rep) > 0) {
+    int mouse_got = 0;
+    if (g_mmio_base == 0xFE000000UL) {
+        mouse_got = (xhci_poll_mouse(&mouse_rep) > 0);
+    } else {
+        mouse_got = (dwc2_poll_mouse(&mouse_rep) > 0);
+    }
+
+    if (mouse_got) {
         if (mouse_rep.dx != 0 || mouse_rep.dy != 0) {
             s_mouse_x += (H)mouse_rep.dx;
             s_mouse_y += (H)mouse_rep.dy;
@@ -386,159 +855,131 @@ void btron_main(void) {
     /* 2. Initialize PL011 UART */
     uart_init();
 
+    /* 3. Initialize Video Display Framebuffer (1024x768 32-bpp) */
+    uint32_t *gpu_fb = init_pi_framebuffer(BTRON_SCREEN_W, BTRON_SCREEN_H);
+    fb_log_enable((volatile uint32_t *)gpu_fb);
+
+    /* Visual confirmation: immediately paint vivid electric blue alive bar across top */
+    if (gpu_fb) {
+        for (int i = 0; i < BTRON_SCREEN_W * 12; i++) {
+            gpu_fb[i] = 0xFF00B0FFu;
+        }
+    }
+
+    fb_log("[FB] BTRON3 Pi 400 Kernel Log — troncode 8x16 ASCII font\n");
+    fb_log(g_mmio_base == 0xFE000000UL
+           ? "[BOOT] BCM2711  Cortex-A72  AArch64  Pi 4/400  T-Kernel 2.0\n"
+           : "[BOOT] BCM2837  Cortex-A53  AArch64  Pi 3B     T-Kernel 2.0\n");
+
     btron_core_banner();
     btron_core_init();
     btron_core_mem_log();
     btron_core_hfds_log();
 
-    uart_puts("[QEMU-ARM64] Notice: Running bundled QEMU emulation. Hardware VRAM format active.\n\n");
-
-    /* 3. Initialize Video Display Framebuffer (1024x768 32-bpp) */
-    uart_puts("[QEMU-ARM64] Initializing Video Display Framebuffer (1024x768 32-bpp)...\n");
-    uint32_t *gpu_fb = init_pi_framebuffer(BTRON_SCREEN_W, BTRON_SCREEN_H);
-    uart_puts("[QEMU-ARM64] Framebuffer pointer: ");
-    uart_hex32((uint32_t)(uintptr_t)gpu_fb);
-    uart_puts("\n");
-
-    /* 4. Initialize BCM2837 Hardware Device Drivers */
-    uart_puts("[QEMU-ARM64] Initializing BCM2837 Hardware Screen Device Driver...\n");
+    /* 4. Initialize BCM2711 Hardware Device Drivers */
+    fb_log("[DRV] Initializing Screen Driver...\n");
     ER sdrv_res = ScreenDrv(0, NULL);
     if (sdrv_res >= 0) {
-        uart_puts("[DRIVER] ScreenDrv: Hardware Screen Driver Registered: SCREEN (OK)\n");
+        fb_log("[DRV] ScreenDrv: OK\n");
     } else {
-        uart_puts("[DRIVER] ScreenDrv: Screen Driver Status: ");
+        fb_log("[DRV] ScreenDrv: FAIL ");
         uart_hex32((uint32_t)sdrv_res);
-        uart_puts("\n");
+        fb_log("\n");
     }
 
-    uart_puts("[QEMU-ARM64] Initializing BCM2837 Hardware Keyboard & Pointing Device (Mouse) Drivers...\n");
+    fb_log("[DRV] Initializing Keyboard & Mouse Drivers...\n");
     ER kbpd_res = KbPdDrv(0, NULL);
     if (kbpd_res >= 0) {
-        uart_puts("[DRIVER] KbPdDrv: Hardware Keyboard & Pointing Device Manager Registered: KBPD (OK)\n");
+        fb_log("[DRV] KbPdDrv: OK\n");
     } else {
-        uart_puts("[DRIVER] KbPdDrv: Keyboard & Pointing Device Status: ");
+        fb_log("[DRV] KbPdDrv: FAIL\n");
         uart_hex32((uint32_t)kbpd_res);
-        uart_puts("\n");
     }
 
     ER lkb_res = LowKbPdDrv(0, NULL);
     if (lkb_res >= 0) {
-        uart_puts("[DRIVER] LowKbPdDrv: Real I/O Keyboard/Mouse Driver Registered: LOWKBPD (OK)\n");
+        fb_log("[DRV] LowKbPdDrv: OK\n");
     } else {
-        uart_puts("[DRIVER] LowKbPdDrv: Low-level Driver Status: ");
+        fb_log("[DRV] LowKbPdDrv: FAIL\n");
         uart_hex32((uint32_t)lkb_res);
-        uart_puts("\n");
     }
 
-    /* Initialize BCM2837 DWC2 USB 2.0 Host Controller */
-    dwc2_init();
-
-    /* 5. Initialize Real B-System Workbench Desktop & Windows */
-    uart_puts("[QEMU-ARM64] Initializing Live Multi-Window B-System Desktop with Mouse Cursor...\n");
-    GDEV *screen = init_baremetal_desktop((uint32_t*)s_desktop_backbuffer, BTRON_SCREEN_W, BTRON_SCREEN_H);
-    if (!screen) {
-        uart_puts("[FATAL] Failed to initialize B-System Workbench screen!\n");
-        while (1) __asm__ volatile("wfe");
-    }
-    workbench_init(BTRON_SCREEN_W);
-
-    /* Initial paint & blit to GPU VRAM */
-    workbench_render(screen, BTRON_SCREEN_W, BTRON_SCREEN_H);
-    blit_backbuffer_to_fb(gpu_fb);
-
-    uart_puts("[QEMU-ARM64] Live Multi-Window Desktop & Pointer initialized in Video VRAM.\n");
-    uart_puts("\n==========================================================\n");
-    uart_puts(" Sakamura B-System 3.0 Interactive Keyboard & Mouse Active\n");
+    /* Initialize USB Subsystem */
+    fb_log("[USB] Probing USB Host Controllers...\n");
     if (g_mmio_base == 0xFE000000UL) {
-        uart_puts(" B-System Workbench Live on Raspberry Pi 4B (AArch64)!\n");
-    } else {
-        uart_puts(" B-System Workbench Live on Raspberry Pi 3B (AArch64)!\n");
-    }
-    uart_puts(" * Display : VideoCore GPU Mailbox FB 1024x768 32-bpp\n");
-    uart_puts(" * Input   : USB Keyboard & Mouse + PL011 Serial Active\n");
-    uart_puts(" * Windows : Real Body Cabinet, Editor, GTerm Terminal Shell\n");
-    uart_puts(" * Controls: Mouse click/drag, or terminal arrow keys [W/A/S/D]\n");
-    uart_puts("==========================================================\n\n");
+        extern uint32_t bcm283x_get_board_revision(void);
+        uint32_t board_rev = bcm283x_get_board_revision();
+        fb_log("[BOOT] Board Revision: 0x");
+        uart_hex32(board_rev);
+        fb_log("\n");
 
-    /* 6. Real-Time Interactive Event Loop */
-    uint32_t last_clock_tick = 0;
-    uint32_t last_usb_poll = 0;
-    EVT ev;
+        /* QEMU raspi4b identifies as 0xB03111 or 0xB03115 without PCIe hardware.
+         * Real physical hardware (Pi 400 0xC03130/1, Pi 4B 0xC0311x) has Broadcom PCIe + VL805.
+         */
+        bool is_qemu = (board_rev == 0x00B03115u || board_rev == 0x00B03111u);
+        if (!is_qemu) {
+            fb_log("[USB] Physical BCM2711 Hardware: Initializing PCIe Root Complex & VL805 xHCI...\n");
+            if (bcm2711_pcie_init() == 0) {
+                uintptr_t vl805_mmio = bcm2711_pcie_get_vl805_mmio();
+                if (vl805_mmio) {
+                    xhci_init(vl805_mmio);
+                }
+            }
+        } else {
+            /* QEMU raspi4b model connects virtual USB keyboard/mouse to DWC2 */
+            fb_log("[USB] QEMU Virtual Machine: Initializing DWC2 USB Host Controller...\n");
+            dwc2_init();
+        }
+        fb_log("[USB] USB Subsystem ready.\n");
+    } else {
+        fb_log("[USB] Initializing DWC2 USB 2.0 Host Controller...\n");
+        dwc2_init();
+        fb_log("[USB] DWC2 init complete.\n");
+    }
+
+    /* 5. Stage 1 Interactive Terminal Shell on GPU Framebuffer */
+    fb_log("\n=================================================================\n");
+    fb_log("  B-System / BTRON3 3.20 (Raspberry Pi 400 / Pi 4B AArch64)\n");
+    fb_log("  Cleanroom TRON Kernel [Target: Cortex-A72 / BCM2711]\n");
+    fb_log("  Stage 1: Terminal Console Active (HDMI On-Screen Debug Trace)\n");
+    fb_log("  Input  : Built-in USB Keyboard / UART Serial\n");
+    fb_log("=================================================================\n\n");
+    fb_log(" Type 'desktop' or 'startx' to launch Graphical Workbench GUI!\n");
+    fb_log(" Commands: help, mem, ver, clear, startx, desktop, reboot\n");
+    fb_log(" Autoboot: launching Desktop in 12s (Press any key to stay in shell)\n\n");
+    fb_log("btron-pi400# ");
+
+    uart_puts("\n=================================================================\n");
+    uart_puts("  B-System / BTRON3 3.20 (Raspberry Pi 400 / Pi 4B AArch64)\n");
+    uart_puts("  Stage 1: Terminal Console Active (HDMI On-Screen Debug Trace)\n");
+    uart_puts("  Type 'startx' or 'desktop' to launch Graphical Workbench GUI!\n");
+    uart_puts("=================================================================\n\n");
+
+#if defined(BTRON_AUTO_GUI) && (BTRON_AUTO_GUI == 1)
+    fb_log("[BOOT] AUTO_GUI=1: Automatically launching B-System Desktop GUI...\n");
+    launch_pi4_desktop_session(gpu_fb);
+#endif
+
+    /* 6. Stage 1 Interactive Terminal Shell Loop */
+    uint32_t last_sec_tick = *(volatile uint32_t *)(TIMER_BASE + 0x04);
+    int autoboot_secs = 12;
 
     while (1) {
-        int need_redraw = 0;
-
-        /* Hardware time in microseconds from BCM2837/BCM2711 System Timer */
-        uint32_t now_us = *(volatile uint32_t*)(TIMER_BASE + 0x04);
-        s_system_ticks = now_us / 16666; /* 60Hz tick counter */
-
-        /* A. Poll DWC2 USB Keyboard and Mouse at 100Hz (~10ms) */
-        if (now_us - last_usb_poll >= 10000) {
-            last_usb_poll = now_us;
-            if (usb_poll_devices(screen)) {
-                need_redraw = 1;
+        if (autoboot_secs > 0 && !s_gui_active) {
+            uint32_t now = *(volatile uint32_t *)(TIMER_BASE + 0x04);
+            if ((now - last_sec_tick) >= 1000000) {
+                last_sec_tick = now;
+                autoboot_secs--;
+                if (autoboot_secs == 0) {
+                    fb_log("\n[BOOT] Autoboot timer expired -> Launching B-System Workbench GUI...\n");
+                    launch_pi4_desktop_session(gpu_fb);
+                }
             }
         }
 
-        /* B. Poll PL011 UART Serial Console for interactive keys & arrows */
-        if (uart_has_char()) {
-            int c = uart_getc();
-            if (c == 0x1B) {
-                /* ANSI escape sequence */
-                int wait_tries = 2000;
-                while (!uart_has_char() && --wait_tries > 0) {
-                    for (volatile int d = 0; d < 50; d++) __asm__ volatile("nop");
-                }
-                if (uart_has_char() && uart_getc() == '[') {
-                    wait_tries = 2000;
-                    while (!uart_has_char() && --wait_tries > 0) {
-                        for (volatile int d = 0; d < 50; d++) __asm__ volatile("nop");
-                    }
-                    if (uart_has_char()) {
-                        int dir = uart_getc();
-                        if (dir == 'A') s_mouse_y = (s_mouse_y > 16) ? s_mouse_y - 16 : 10;
-                        else if (dir == 'B') s_mouse_y = (s_mouse_y < BTRON_SCREEN_H - 20) ? s_mouse_y + 16 : BTRON_SCREEN_H - 20;
-                        else if (dir == 'C') s_mouse_x = (s_mouse_x < BTRON_SCREEN_W - 20) ? s_mouse_x + 16 : BTRON_SCREEN_W - 20;
-                        else if (dir == 'D') s_mouse_x = (s_mouse_x > 16) ? s_mouse_x - 16 : 10;
-                        EVT mev;
-                        mev.type   = EV_MOUSE_MOVE;
-                        mev.pos.x  = s_mouse_x;
-                        mev.pos.y  = s_mouse_y;
-                        mev.button = 0;
-                        mev.data   = 0;
-                        snd_evt(&mev);
-                        need_redraw = 1;
-                    }
-                }
-            } else {
-                /* Key event to active window */
-                if (c == '\r') c = '\n';
-                ev.type   = EV_KEY_DOWN;
-                ev.key    = (UW)(uint8_t)c;
-                ev.pos.x  = s_mouse_x;
-                ev.pos.y  = s_mouse_y;
-                ev.button = 0;
-                ev.data   = 0;
-                snd_evt(&ev);
-                need_redraw = 1;
-            }
-        }
-
-        /* C. Dispatch queued BTRON events through unified workbench dispatcher */
-        while (get_evt(&ev, 0) == E_OK) {
-            workbench_process_event(screen, &ev);
-            need_redraw = 1;
-        }
-
-        /* D. Redraw when state changed or periodic clock update (1 Hz) */
-        if (s_system_ticks - last_clock_tick >= 60) {
-            last_clock_tick = s_system_ticks;
-            need_redraw = 1;
-        }
-
-        if (need_redraw) {
-            workbench_render(screen, BTRON_SCREEN_W, BTRON_SCREEN_H);
-            blit_backbuffer_to_fb(gpu_fb);
+        if (pi4_shell_poll(gpu_fb)) {
+            /* Any keystroke immediately cancels autoboot timer */
+            autoboot_secs = 0;
         }
 
         for (volatile int d = 0; d < 200; d++) __asm__ volatile("nop");

@@ -291,6 +291,18 @@ static void dwc2_queue_mouse_in(void)
  * ───────────────────────────────────────────── */
 int dwc2_init(void)
 {
+#if defined(__aarch64__)
+    extern uintptr_t g_mmio_base;
+    if (g_mmio_base == 0xFE000000UL) {
+        /* BCM2711 / Pi 4 / Pi 400: DWC2 is only used for USB-C OTG and is disabled in DTB.
+         * The keyboard and USB ports are routed via PCIe to the VIA VL805 xHCI controller.
+         * Accessing 0xFE980000 while unclocked/disabled by firmware causes a bus stall.
+         */
+        uart_puts("[DWC2] Pi 4/400 (BCM2711) detected: DWC2 disabled in DTB (uses xHCI/PCIe).\n");
+        return 0;
+    }
+#endif
+
     uart_puts("[QEMU-ARM] DWC2 USB 2.0 init: base=0x");
     uart_hex32(DWC2_BASE_ADDR);
     uart_puts("\n");
@@ -299,7 +311,11 @@ int dwc2_init(void)
     uint32_t snpsid = dwc2_read(0x040);
     uart_puts("[DWC2] GSNPSID=0x");
     uart_hex32(snpsid);
-    uart_puts(snpsid ? " (OK)\n" : " [WARN: 0 — MMIO may be wrong]\n");
+    if ((snpsid & 0xFFFF0000) != 0x4F540000) {
+        uart_puts(" [DWC2 offline / not found]\n");
+        return -1;
+    }
+    uart_puts(" (OK)\n");
 
     /* ── 1. Core Soft Reset ── */
     dwc2_write(DWC2_GRSTCTL, (1u << 0));

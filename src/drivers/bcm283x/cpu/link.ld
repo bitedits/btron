@@ -2,15 +2,11 @@ ENTRY(_start)
 
 SECTIONS
 {
-    . = 0x70000;
-    .stack : {
-        . = . + 0x10000; /* 64KB dedicated stack region (0x70000 - 0x80000) */
-        __stack_top = .;
-    }
-
     . = 0x80000;
+    __stack_top = .;
+
     .text : {
-        *(.text._start)
+        KEEP(*(.text._start))
         *(.text*)
     }
     .rodata : {
@@ -20,8 +16,11 @@ SECTIONS
         *(.data*)
     }
     .bss : {
+        . = ALIGN(8);
         __bss_start = .;
         *(.bss*)
+        *(COMMON)
+        . = ALIGN(8);
         __bss_end = .;
     }
     _end = .;

@@ -8,3 +8,13 @@
 bfs_allocator_model
 bfs_btree_model
 bfs_model
+# Pi 400 SD card image & build artefacts
+btron-pi400.img
+# Proprietary GPU firmware blobs (not redistributable)
+third_party/pi400/*.elf
+third_party/pi400/*.ELF
+third_party/pi400/*.dat
+third_party/pi400/CMOS
+third_party/pi400/RISCOS.IMG
+third_party/pi400/LICENCE.broadcom
+third_party/pi400/cmdline.txt

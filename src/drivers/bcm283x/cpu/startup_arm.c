@@ -62,8 +62,10 @@ void uart_init(void) {
 #endif
     /* Disable UART */
     pl011[PL011_CR] = 0;
-    /* Wait for UART to finish transmitting */
-    while (pl011[PL011_FR] & PL011_FR_BUSY) {}
+    /* Wait for UART to finish transmitting with timeout */
+    for (volatile int to = 0; to < 10000 && (pl011[PL011_FR] & PL011_FR_BUSY); to++) {
+        __asm__ volatile("nop");
+    }
     /* Set baud rate: 3MHz UART clock / (16 * 115200) = 1.627 → IBRD=1, FBRD=40 */
     pl011[PL011_IBRD] = 1;
     pl011[PL011_FBRD] = 40;
@@ -78,8 +80,13 @@ void uart_init(void) {
 #define PL011_FR_RXFE (1u << 4) /* Receive FIFO empty */
 
 void uart_putc(char c) {
-    while (pl011[PL011_FR] & PL011_FR_TXFF) {}
-    pl011[PL011_DR] = (uint32_t)(unsigned char)c;
+    int to = 50000;
+    while ((pl011[PL011_FR] & PL011_FR_TXFF) && --to > 0) {
+        __asm__ volatile("nop");
+    }
+    if (to > 0) {
+        pl011[PL011_DR] = (uint32_t)(unsigned char)c;
+    }
 }
 
 int uart_has_char(void) {
@@ -449,17 +456,20 @@ uint32_t* init_pi_framebuffer(uint32_t w, uint32_t h) {
 
     __asm__ volatile("dsb sy" : : : "memory");
 
-    /* Send mailbox message to Channel 8 */
-    while (*status_reg & MBOX_FULL) {
+    /* Send mailbox message to Channel 8 with timeout protection */
+    int to = 2000000;
+    while ((*status_reg & MBOX_FULL) && --to > 0) {
         __asm__ volatile("nop");
     }
     *write_reg = ((mbox_addr & 0xFFFFFFF0) | MBOX_CH_PROP);
 
     /* Read mailbox response from Channel 8 */
-    while (1) {
-        while (*status_reg & MBOX_EMPTY) {
+    to = 2000000;
+    while (--to > 0) {
+        while ((*status_reg & MBOX_EMPTY) && --to > 0) {
             __asm__ volatile("nop");
         }
+        if (to <= 0) break;
         uint32_t res = *read_reg;
         if ((res & 0xF) == MBOX_CH_PROP) {
             break;
@@ -486,7 +496,115 @@ uint32_t* init_pi_framebuffer(uint32_t w, uint32_t h) {
     return g_pi_fb_ptr;
 }
 
+int bcm283x_power_usb(void) {
+    uintptr_t mbox_base = g_mmio_base + 0x0000b880UL;
+    volatile uint32_t *status_reg = (volatile uint32_t*)(mbox_base + MBOX_STATUS);
+    volatile uint32_t *write_reg  = (volatile uint32_t*)(mbox_base + MBOX_WRITE);
+    volatile uint32_t *read_reg   = (volatile uint32_t*)(mbox_base + MBOX_READ);
+
+    mbox[0] = 8 * 4;       /* buffer size in bytes */
+    mbox[1] = 0;           /* request code */
+    mbox[2] = 0x00028001;  /* tag: SET_POWER_STATE */
+    mbox[3] = 8;           /* value buffer size */
+    mbox[4] = 8;           /* req/resp size */
+    mbox[5] = 3;           /* device id: 3 = USB_HCD */
+    mbox[6] = 3;           /* state: bit 0 = ON, bit 1 = WAIT */
+    mbox[7] = 0;           /* end tag */
+
+    uint32_t mbox_addr = (uint32_t)(uintptr_t)mbox;
+    __asm__ volatile("dsb sy" : : : "memory");
+
+    int to = 2000000;
+    while ((*status_reg & MBOX_FULL) && --to > 0) {
+        __asm__ volatile("nop");
+    }
+    *write_reg = ((mbox_addr & 0xFFFFFFF0) | MBOX_CH_PROP);
+
+    to = 2000000;
+    while (--to > 0) {
+        while ((*status_reg & MBOX_EMPTY) && --to > 0) {
+            __asm__ volatile("nop");
+        }
+        if (to <= 0) break;
+        uint32_t res = *read_reg;
+        if ((res & 0xF) == MBOX_CH_PROP) break;
+    }
+    __asm__ volatile("dsb sy" : : : "memory");
+    return (mbox[1] == 0x80000000) ? 0 : -1;
+}
+
+uint32_t bcm283x_get_board_revision(void) {
+    uintptr_t mbox_base = g_mmio_base + 0x0000b880UL;
+    volatile uint32_t *status_reg = (volatile uint32_t*)(mbox_base + MBOX_STATUS);
+    volatile uint32_t *write_reg  = (volatile uint32_t*)(mbox_base + MBOX_WRITE);
+    volatile uint32_t *read_reg   = (volatile uint32_t*)(mbox_base + MBOX_READ);
+
+    mbox[0] = 7 * 4;       /* buffer size in bytes */
+    mbox[1] = 0;           /* request code */
+    mbox[2] = 0x00010002;  /* tag: GET_BOARD_REVISION */
+    mbox[3] = 4;           /* value buffer size */
+    mbox[4] = 0;           /* req size */
+    mbox[5] = 0;           /* output value */
+    mbox[6] = 0;           /* end tag */
+
+    uint32_t mbox_addr = (uint32_t)(uintptr_t)mbox;
+    __asm__ volatile("dsb sy" : : : "memory");
+
+    int to = 1000000;
+    while ((*status_reg & MBOX_FULL) && --to > 0) {
+        __asm__ volatile("nop");
+    }
+    *write_reg = ((mbox_addr & 0xFFFFFFF0) | MBOX_CH_PROP);
+
+    to = 1000000;
+    while (--to > 0) {
+        while ((*status_reg & MBOX_EMPTY) && --to > 0) {
+            __asm__ volatile("nop");
+        }
+        if (to <= 0) break;
+        uint32_t res = *read_reg;
+        if ((res & 0xF) == MBOX_CH_PROP) break;
+    }
+    __asm__ volatile("dsb sy" : : : "memory");
+    return mbox[5];
+}
+
 #define ARGB(a,r,g,b) (((uint32_t)(a)<<24)|((uint32_t)(r)<<16)|((uint32_t)(g)<<8)|(uint32_t)(b))
+
+#if defined(__aarch64__)
+__attribute__((section(".text"), aligned(2048)))
+void arm64_vector_table(void) {
+    __asm__ volatile(
+        /* Current EL with SP0 */
+        ".balign 128\n\teret\n\t"
+        ".balign 128\n\teret\n\t"
+        ".balign 128\n\teret\n\t"
+        ".balign 128\n\teret\n\t"
+
+        /* Current EL with SPx */
+        ".balign 128\n\t"
+        "mrs x18, elr_el1\n\t"
+        "add x18, x18, #4\n\t"
+        "msr elr_el1, x18\n\t"
+        "eret\n\t"
+        ".balign 128\n\teret\n\t"
+        ".balign 128\n\teret\n\t"
+        ".balign 128\n\teret\n\t"
+
+        /* Lower EL using AArch64 */
+        ".balign 128\n\teret\n\t"
+        ".balign 128\n\teret\n\t"
+        ".balign 128\n\teret\n\t"
+        ".balign 128\n\teret\n\t"
+
+        /* Lower EL using AArch32 */
+        ".balign 128\n\teret\n\t"
+        ".balign 128\n\teret\n\t"
+        ".balign 128\n\teret\n\t"
+        ".balign 128\n\teret\n\t"
+    );
+}
+#endif
 
 __attribute__((section(".text._start"), naked))
 void _start(void) {
@@ -503,6 +621,10 @@ void _start(void) {
         "b 2b\n\t"
         "1:\n\t"
 
+        /* Install exception vector table */
+        "adr x0, arm64_vector_table\n\t"
+        "msr vbar_el1, x0\n\t"
+
         /* Check CurrentEL and enable FP/SIMD (NEON) */
         "mrs x0, CurrentEL\n\t"
         "lsr x0, x0, #2\n\t"
@@ -513,14 +635,19 @@ void _start(void) {
         "6:\n\t"
         "cmp x0, #2\n\t"
         "b.ne 7f\n\t"
+        "adr x1, arm64_vector_table\n\t"
+        "msr vbar_el2, x1\n\t"
         "msr cptr_el2, xzr\n\t"
+        "mrs x1, cpacr_el1\n\t"
+        "orr x1, x1, #(3 << 20)\n\t"
+        "msr cpacr_el1, x1\n\t"
         "b 8f\n\t"
         "7:\n\t"
         "mrs x0, cpacr_el1\n\t"
         "orr x0, x0, #(3 << 20)\n\t"
         "msr cpacr_el1, x0\n\t"
-        "isb\n\t"
         "8:\n\t"
+        "isb\n\t"
 
         /* Zero .bss section */
         "ldr x0, =__bss_start\n\t"

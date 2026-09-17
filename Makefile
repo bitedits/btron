@@ -37,7 +37,8 @@ CFLAGS ?= -O2 -Wall -Wextra -std=c99 -Iinclude -Iinclude/drivers -Isrc/kernel -I
         html2tad book2tad tad_bin test test-kernel test-yoko test-yoko4 test-m68k test-mips test-ps2 test-foma test-foma-ui foma-screens \
         test-mozc test-editor test-hmi test-tad test-chat test-wylie verify test-fs test-chokanji \
         mkbtronfs btron_sys.vol \
-        run-posix run-qemu run-kernel run-yoko run-yoko4 run-sakamura run-foma run-uefi run-eufi run-uefu run-pc98 run-m68k run-ps2 run-mips debug-virtio debug-gdb clean
+        run-posix run-qemu run-kernel run-yoko run-yoko4 run-sakamura run-foma run-uefi run-eufi run-uefu run-pc98 run-m68k run-ps2 run-mips debug-virtio debug-gdb clean \
+        pi400 flash-pi400 fetch-pi400-fw
 
 QEMU_ARM     ?= qemu-system-arm
 QEMU_AARCH64 ?= qemu-system-aarch64
@@ -237,6 +238,10 @@ ARCH_BCM_SRCS = src/drivers/bcm283x/cpu/cache.c      \
                 src/drivers/bcm283x/cpu/tkdev_init.c \
                 src/drivers/bcm283x/usb/dwc2.c
 
+ARCH_BCM64_SRCS = $(ARCH_BCM_SRCS) \
+                  src/drivers/bcm283x/pci/pcie_bcm2711.c \
+                  src/drivers/bcm283x/usb/xhci.c
+
 TKERNEL_SAKAMURA_SRCS = \
     src/kernel/task.c         \
     src/kernel/task_manage.c  \
@@ -339,7 +344,7 @@ COMMON_NO_SDL_SRCS = \
 BAREMETAL_STARTUP  = src/drivers/bcm283x/cpu/startup_arm.c
 BAREMETAL_LD       = src/drivers/bcm283x/cpu/link.ld
 ARM32_BAREMETAL_SRCS = src/cores/core_init.c src/cores/core_yoko.c $(TKERNEL_SAKAMURA_SRCS) $(ARCH_BCM_SRCS) $(BAREMETAL_STARTUP) $(COMMON_NO_SDL_SRCS)
-ARM64_BAREMETAL_SRCS = src/cores/core_init.c src/cores/core_arm64.c $(TKERNEL_SAKAMURA_SRCS) $(ARCH_BCM_SRCS) $(BAREMETAL_STARTUP) $(COMMON_NO_SDL_SRCS)
+ARM64_BAREMETAL_SRCS = src/cores/core_init.c src/cores/core_arm64.c $(TKERNEL_SAKAMURA_SRCS) $(ARCH_BCM64_SRCS) $(BAREMETAL_STARTUP) $(COMMON_NO_SDL_SRCS)
 
 # ── Object lists ─────────────────────────────────────────────────
 POSIX_OBJS   = $(POSIX_SRCS:.c=.posix.o)
@@ -903,6 +908,148 @@ $(ARM64_TARGET): $(ARM64_OBJS) $(BAREMETAL_LD)
 	$(ARM64_CC) $(ARM64_CFLAGS) -Wl,-T,$(BAREMETAL_LD) $(ARM64_OBJS) -o $@
 	@echo "[ARM64-ELF] Built: $@"
 	@file $@
+
+# ═══════════════════════════════════════════════════════════════════
+# Raspberry Pi 400 — One-Shot SD Card Image & Flash
+# Target 6 (aarch64-bcm2711) Takanori Yokoyama — T-Kernel 2.0
+#
+# Usage:
+#   make pi400              — build btron-pi400.img (64 MiB FAT32)
+#   make flash-pi400        — auto-detect SD card & flash with dd
+#   make flash-pi400 PI400_SDCARD=/dev/diskN  — explicit device
+#   make fetch-pi400-fw     — download start4.elf + fixup4.dat
+# ═══════════════════════════════════════════════════════════════════
+PI400_IMG      = btron-pi400.img
+PI400_IMG_SIZE = 64
+PI400_FW_DIR   = third_party/pi400
+PI400_CFG_DIR  = src/drivers/bcm283x/pi400
+
+LLVM_OBJCOPY  ?= $(shell for p in \
+    /opt/homebrew/opt/llvm/bin/llvm-objcopy \
+    /usr/local/opt/llvm/bin/llvm-objcopy \
+    llvm-objcopy; do \
+    if command -v "$$p" >/dev/null 2>&1; then echo "$$p"; break; fi; done)
+
+# Auto-detect the SD card that has a FAT32 volume named PiBoot (or BTRON3PI4).
+# diskutil list -plist + grep is portable on any macOS version.
+# Produces e.g. /dev/disk16  (parent disk, not the partition slice).
+PI400_SDCARD ?= $(shell diskutil list | \
+    awk '/PiBoot|BTRON3PI4/{print $$NF}' | \
+    sed 's/s[0-9]*$$//' | head -1 | \
+    sed 's|^|/dev/|')
+
+# Resolve firmware paths — handle both upper and lower case (RISC OS copies uppercase)
+PI400_START4  = $(firstword $(wildcard $(PI400_FW_DIR)/start4.elf $(PI400_FW_DIR)/START4.ELF))
+PI400_FIXUP4  = $(firstword $(wildcard $(PI400_FW_DIR)/fixup4.dat $(PI400_FW_DIR)/fixup4.dat))
+
+pi400: arm64-elf
+	@echo "=========================================================="
+	@echo " BTRON Pi 400 — SD Card Image Builder"
+	@echo " ELF     : $(ARM64_TARGET)"
+	@echo " Image   : $(PI400_IMG)  ($(PI400_IMG_SIZE) MiB FAT32)"
+	@echo "=========================================================="
+	# ── 1. Verify llvm-objcopy available ──────────────────────────
+	@if [ -z "$(LLVM_OBJCOPY)" ]; then \
+	    echo "[ERROR] llvm-objcopy not found. Install: brew install llvm"; exit 1; fi
+	# ── 2. Verify firmware blobs (auto-copy from /Volumes/PiBoot) ─
+	@if [ -z "$(PI400_START4)" ] || [ -z "$(PI400_FIXUP4)" ]; then \
+	    SRC=$$(ls /Volumes/PiBoot/START4.ELF /Volumes/PiBoot/start4.elf 2>/dev/null | head -1); \
+	    if [ -n "$$SRC" ]; then \
+	        echo "[PI400] Auto-copying firmware from /Volumes/PiBoot..."; \
+	        mkdir -p $(PI400_FW_DIR); \
+	        cp /Volumes/PiBoot/START4.ELF  $(PI400_FW_DIR)/START4.ELF  2>/dev/null || \
+	        cp /Volumes/PiBoot/start4.elf  $(PI400_FW_DIR)/start4.elf; \
+	        cp /Volumes/PiBoot/fixup4.dat  $(PI400_FW_DIR)/fixup4.dat; \
+	    else \
+	        echo "[ERROR] GPU firmware not found in $(PI400_FW_DIR)/ or /Volumes/PiBoot/"; \
+	        echo "  Run: make fetch-pi400-fw   OR  copy start4.elf + fixup4.dat manually."; \
+	        exit 1; \
+	    fi; \
+	fi
+	# ── 3. ELF → raw binary (kernel8.img) ─────────────────────────
+	@mkdir -p .build/pi400
+	$(LLVM_OBJCOPY) -O binary $(ARM64_TARGET) .build/pi400/kernel8.img
+	@SZ=$$(wc -c < .build/pi400/kernel8.img | tr -d ' '); \
+	 echo "[PI400] kernel8.img: $$SZ bytes ($$(( $$SZ / 1024 )) KiB)"
+	# ── 4. Create FAT32 disk image via hdiutil (macOS native) ─────
+	@rm -f $(PI400_IMG) .build/pi400/pi400_work.dmg
+	hdiutil create -size $(PI400_IMG_SIZE)m -fs MS-DOS -volname BTRON3PI4 \
+	    -layout NONE -type UDIF .build/pi400/pi400_work >/dev/null 2>&1 || \
+	hdiutil create -size $(PI400_IMG_SIZE)m -fs MS-DOS -volname BTRON3PI4 \
+	    .build/pi400/pi400_work >/dev/null
+	@echo "[PI400] Created $(PI400_IMG_SIZE) MiB FAT32 image."
+	# ── 5. Mount, copy files, and detach ──────────────────────────
+	@MOUNT_PT=$$(mktemp -d /tmp/btron_pi400_XXXXXX); \
+	DEV=$$(hdiutil attach .build/pi400/pi400_work.dmg \
+	        -mountpoint $$MOUNT_PT -nobrowse 2>/dev/null | \
+	        grep '/dev/disk' | awk '{print $$1}' | head -1); \
+	echo "[PI400] Attached $$DEV → $$MOUNT_PT"; \
+	cp $(PI400_START4)                  $$MOUNT_PT/start4.elf; \
+	cp $(PI400_FW_DIR)/fixup4.dat       $$MOUNT_PT/fixup4.dat; \
+	cp $(PI400_FW_DIR)/bcm2711-rpi-400.dtb $$MOUNT_PT/bcm2711-rpi-400.dtb 2>/dev/null || true; \
+	cp $(PI400_FW_DIR)/bcm2711-rpi-4-b.dtb   $$MOUNT_PT/bcm2711-rpi-4-b.dtb 2>/dev/null || true; \
+	cp $(PI400_CFG_DIR)/config.txt      $$MOUNT_PT/config.txt; \
+	cp $(PI400_CFG_DIR)/cmdline.txt     $$MOUNT_PT/cmdline.txt; \
+	cp .build/pi400/kernel8.img         $$MOUNT_PT/kernel8.img; \
+	echo "[PI400] SD image contents:"; \
+	ls -lh $$MOUNT_PT/; \
+	sync; \
+	hdiutil detach $$DEV -force -quiet; \
+	rmdir $$MOUNT_PT 2>/dev/null || true
+	# ── 6. Convert UDIF .dmg → flat raw .img (dd-flashable) ───────
+	@sleep 1
+	hdiutil convert .build/pi400/pi400_work.dmg \
+	    -format UDTO -o .build/pi400/pi400_raw >/dev/null 2>&1 || \
+	hdiutil convert .build/pi400/pi400_work.dmg \
+	    -format UDTO -o .build/pi400/pi400_raw
+	@mv .build/pi400/pi400_raw.cdr $(PI400_IMG)
+	@rm -f .build/pi400/pi400_work.dmg
+	@echo "=========================================================="
+	@echo " BTRON Pi 400 image ready: $(PI400_IMG)"
+	@echo " Flash  : make flash-pi400"
+	@echo " Device : $(PI400_SDCARD)  (auto-detected via 'PiBoot' label)"
+	@echo "=========================================================="
+
+fetch-pi400-fw:
+	@echo "[PI400] Fetching GPU firmware from raspberrypi/firmware (master)..."
+	@mkdir -p $(PI400_FW_DIR)
+	curl -L --progress-bar \
+	    -o $(PI400_FW_DIR)/start4.elf \
+	    https://github.com/raspberrypi/firmware/raw/master/boot/start4.elf
+	curl -L --progress-bar \
+	    -o $(PI400_FW_DIR)/fixup4.dat \
+	    https://github.com/raspberrypi/firmware/raw/master/boot/fixup4.dat
+	@echo "[PI400] Firmware saved to $(PI400_FW_DIR)/"
+	@ls -lh $(PI400_FW_DIR)/start4.elf $(PI400_FW_DIR)/fixup4.dat
+
+flash-pi400: $(PI400_IMG)
+	@echo "=========================================================="
+	@echo " BTRON Pi 400 — Flash SD Card"
+	@echo " Image  : $(PI400_IMG)"
+	@echo " Device : $(PI400_SDCARD)"
+	@echo "=========================================================="
+	@if [ -z "$(PI400_SDCARD)" ]; then \
+	    echo "[ERROR] Could not auto-detect SD card."; \
+	    echo "  Plug in the card and run:"; \
+	    echo "    make flash-pi400 PI400_SDCARD=/dev/diskN"; \
+	    echo "  (find N with: diskutil list | grep -E 'FAT|PiBoot')"; \
+	    exit 1; \
+	fi
+	@if [ ! -b "$(PI400_SDCARD)" ] && [ ! -c "$(PI400_SDCARD)" ]; then \
+	    echo "[ERROR] Device $(PI400_SDCARD) does not exist."; \
+	    exit 1; \
+	fi
+	@echo "[PI400] Unmounting all partitions on $(PI400_SDCARD)..."
+	@diskutil unmountDisk $(PI400_SDCARD) || true
+	@echo "[PI400] Writing image (sudo dd — enter macOS password if prompted):"
+	sudo dd if=$(PI400_IMG) of=$(PI400_SDCARD) bs=4m conv=sync status=progress
+	@echo "[PI400] Sync & eject..."
+	@sync
+	@diskutil eject $(PI400_SDCARD) || true
+	@echo "=========================================================="
+	@echo " SD card flashed! Safely remove, insert into Pi 400 & power on."
+	@echo "  Serial debug (GPIO 14/15, 115200 baud) — optional USB-UART adapter."
+	@echo "=========================================================="
 
 # ═══════════════════════════════════════════════════════════════════
 # Runs B-TRON on Raspberry Pi 2B (BCM2836, Cortex-A7, ARMv7 32-bit).

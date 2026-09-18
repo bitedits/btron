@@ -929,11 +929,77 @@ static int32_t s_mouse_sub_y = 0;
 
 
 
+/* Acceleration Profile: 0 = RISC OS Conservative Stepped, 1 = Haiku Continuous Smooth */
+int g_mouse_accel_profile = 1;
+
+/*
+ * Haiku OS / BeOS Continuous Smooth Mouse Accelerator
+ * - Smooth quadratic/linear velocity curve (no discrete step cliffs)
+ * - 1:1 pixel-perfect precision at low speed (abs <= 1)
+ * - Continuous progressive multiplier without jump boundaries
+ * - Sub-pixel residual carry in 8.8 fixed-point with gentle idle decay
+ * - Safe input & output clamping against USB HID burst backlog
+ */
+static inline int32_t mouse_accelerate_subpixel_haiku(int32_t raw, int32_t *subpixel)
+{
+    if (raw == 0) {
+        /* Smooth idle decay - halves residual to eliminate phantom momentum */
+        *subpixel = (*subpixel) / 2;
+        return 0;
+    }
+
+    /* Clamp raw input against extreme USB packet bursts */
+    if (raw >  64) raw =  64;
+    if (raw < -64) raw = -64;
+
+    int32_t sign = (raw < 0) ? -1 : 1;
+    int32_t abs  = (raw < 0) ? -raw : raw;
+
+    /*
+     * Haiku continuous acceleration model:
+     * Base speed: 256 (1.0x in 8.8 fixed-point)
+     * Acceleration ramp: smooth continuous scaling without threshold cliffs
+     * Saturated max speed: 512 (2.0x) to 768 (3.0x) depending on g_mouse_step_mult
+     */
+    int32_t base_fp = 256; /* 1.0x baseline for exact 1-pixel targeting */
+    int32_t ramp_per_unit = 12 + (g_mouse_step_mult * 4); /* 16 to 28 */
+    int32_t max_fp = 384 + (g_mouse_step_mult * 96);       /* 480 to 768 */
+
+    int32_t mult_fp = base_fp + (abs * ramp_per_unit);
+    if (mult_fp > max_fp) {
+        mult_fp = max_fp;
+    }
+
+    int32_t total = *subpixel + (sign * abs * mult_fp);
+
+    /* Floor division with positive remainder [0 ... 255] */
+    int32_t pixels = total / 256;
+    *subpixel = total % 256;
+    if (*subpixel < 0) {
+        *subpixel += 256;
+        pixels--;
+    }
+
+    /* Safety clamp on residual */
+    if (*subpixel < 0 || *subpixel > 255)
+        *subpixel = 0;
+
+    /* Output displacement clamp */
+    if (pixels >  32) pixels =  32;
+    if (pixels < -32) pixels = -32;
+
+    return pixels;
+}
+
 /* Conservative accelerator – prioritises stability over “classic” feel
  * Designed to stop progressive jumping / latency on Pi 400
  */
 static inline int32_t mouse_accelerate_subpixel(int32_t raw, int32_t *subpixel)
 {
+    if (g_mouse_accel_profile == 1) {
+        return mouse_accelerate_subpixel_haiku(raw, subpixel);
+    }
+
     if (raw == 0) {
         /* Aggressive residual decay when idle */
         *subpixel = (*subpixel * 1) / 2;

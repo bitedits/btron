@@ -740,6 +740,11 @@ static void launch_pi4_desktop_session(uint32_t *gpu_fb)
             draw_baremetal_cursor_raw(gpu_fb, s_mouse_x, s_mouse_y, BTRON_SCREEN_W, BTRON_SCREEN_H);
             prev_mx = s_mouse_x;
             prev_my = s_mouse_y;
+
+            /* Drain event ring immediately after heavy render/blit to prevent ring saturation */
+            if (g_use_xhci) {
+                xhci_process_events();
+            }
         }
     }
 

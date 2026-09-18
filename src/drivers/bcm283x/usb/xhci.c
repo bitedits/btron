@@ -73,32 +73,30 @@ static inline void delay_us(uint32_t us) {
  * Driver State & Coherent DMA Structures (4KB Aligned Pages)
  * ───────────────────────────────────────────────────────────────── */
 
-#define XHCI_RING_SIZE          64
+#define XHCI_RING_SIZE          256
 #define XHCI_MAX_SLOTS          8
-#define XHCI_DMA_BASE           0x01000000ULL /* 16MB uncached DMA region (L2 Entry 8) */
-
-/* Base data structures in uncached DMA RAM (16MB region) */
 #define XHCI_DMA_BASE           0x01000000ULL /* 16MB uncached DMA region */
 
 static uint64_t * const                   s_dcbaa      = (uint64_t *)(XHCI_DMA_BASE + 0x0000); /* 1KB (32 slots * 8B) */
-static volatile xhci_trb_t * const        s_cmd_ring   = (volatile xhci_trb_t *)(XHCI_DMA_BASE + 0x0800); /* 1KB */
-static volatile xhci_trb_t * const        s_event_ring = (volatile xhci_trb_t *)(XHCI_DMA_BASE + 0x0C00); /* 1KB */
-static xhci_erst_entry_t * const          s_erst       = (xhci_erst_entry_t *)(XHCI_DMA_BASE + 0x1000); /* 64B */
-static uint32_t * const                   s_input_ctx  = (uint32_t *)(XHCI_DMA_BASE + 0x1400); /* 2KB */
+static xhci_erst_entry_t * const          s_erst       = (xhci_erst_entry_t *)(XHCI_DMA_BASE + 0x0800); /* 64B */
+static uint32_t * const                   s_input_ctx  = (uint32_t *)(XHCI_DMA_BASE + 0x1000); /* 2KB */
+static volatile xhci_trb_t * const        s_cmd_ring   = (volatile xhci_trb_t *)(XHCI_DMA_BASE + 0x2000); /* 4KB (256 TRBs) */
+static volatile xhci_trb_t * const        s_event_ring = (volatile xhci_trb_t *)(XHCI_DMA_BASE + 0x3000); /* 4KB (256 TRBs) */
 
 /* Per-slot structures (Slots 1..8):
- * Each Device Context: 2KB (32 contexts * 64B)
- * Each EP Ring: 1KB (64 TRBs * 16B)
+ * Each Device Context: 2KB (32 contexts * 64B) -> 0x4000 to 0x8000
+ * Each EP0 Ring: 4KB (256 TRBs * 16B) -> 0x8000 to 0x10000
+ * Each EP1 Ring: 4KB (256 TRBs * 16B) -> 0x10000 to 0x18000
  */
-#define DEV_CTX_BASE(slot)   ((volatile uint32_t *)(XHCI_DMA_BASE + 0x2000 + ((slot) - 1) * 0x800))
-#define EP0_RING_BASE(slot)  ((volatile xhci_trb_t *)(XHCI_DMA_BASE + 0x6000 + ((slot) - 1) * 0x400))
-#define EP1_RING_BASE(slot)  ((volatile xhci_trb_t *)(XHCI_DMA_BASE + 0x8000 + ((slot) - 1) * 0x400))
+#define DEV_CTX_BASE(slot)   ((volatile uint32_t *)(XHCI_DMA_BASE + 0x4000 + ((slot) - 1) * 0x800))
+#define EP0_RING_BASE(slot)  ((volatile xhci_trb_t *)(XHCI_DMA_BASE + 0x8000 + ((slot) - 1) * 0x1000))
+#define EP1_RING_BASE(slot)  ((volatile xhci_trb_t *)(XHCI_DMA_BASE + 0x10000 + ((slot) - 1) * 0x1000))
 
-#define DMA_SCRATCH_BUF      ((volatile uint8_t *)(XHCI_DMA_BASE + 0xB000)) /* 4KB scratch buffer */
-static volatile usb_kbd_report_t * const  s_kbd_buf    = (volatile usb_kbd_report_t *)(XHCI_DMA_BASE + 0xC000);
+#define DMA_SCRATCH_BUF      ((volatile uint8_t *)(XHCI_DMA_BASE + 0x18000)) /* 4KB scratch buffer */
+static volatile usb_kbd_report_t * const  s_kbd_buf    = (volatile usb_kbd_report_t *)(XHCI_DMA_BASE + 0x19000);
 
 /* Multi-mouse DMA buffers (up to 4 mice): each mouse gets 64 bytes */
-#define MOUSE_BUF(idx)       ((volatile uint8_t *)(XHCI_DMA_BASE + 0xC100 + (idx) * 64))
+#define MOUSE_BUF(idx)       ((volatile uint8_t *)(XHCI_DMA_BASE + 0x19100 + (idx) * 64))
 
 static uintptr_t s_cap_base = 0;
 static uintptr_t s_op_base  = 0;
@@ -720,9 +718,9 @@ int xhci_init(uintptr_t mmio_base) {
     xwrite32(s_op_base + XHCI_OP_CONFIG, XHCI_MAX_SLOTS);
     dsb();
 
-    /* 4. Zero initialize 64KB of DMA structures in uncached DMA region */
+    /* 4. Zero initialize 256KB of DMA structures in uncached DMA region */
     volatile uint32_t *dma_words = (volatile uint32_t *)XHCI_DMA_BASE;
-    for (uint32_t i = 0; i < 0x10000 / 4; i++) {
+    for (uint32_t i = 0; i < 0x40000 / 4; i++) {
         dma_words[i] = 0;
     }
 
@@ -735,8 +733,8 @@ int xhci_init(uintptr_t mmio_base) {
     fb_log("\n");
 
     if (max_scratchpad > 0) {
-        uint64_t *scratch_array = (uint64_t *)(XHCI_DMA_BASE + 0x10000);
-        uintptr_t scratch_pages = (uintptr_t)(XHCI_DMA_BASE + 0x20000);
+        uint64_t *scratch_array = (uint64_t *)(XHCI_DMA_BASE + 0x40000);
+        uintptr_t scratch_pages = (uintptr_t)(XHCI_DMA_BASE + 0x50000);
         for (uint32_t i = 0; i < max_scratchpad; i++) {
             scratch_array[i] = (uint64_t)(scratch_pages + i * 4096);
         }
@@ -1147,7 +1145,7 @@ int xhci_init(uintptr_t mmio_base) {
  * Calling it multiple times per cycle risks re-processing already-handled TRBs. */
 
 void xhci_process_events(void) {
-    for (uint32_t trb_count = 0; trb_count < XHCI_RING_SIZE; trb_count++) {
+    for (uint32_t trb_count = 0; trb_count < XHCI_RING_SIZE * 2; trb_count++) {
         uint32_t ev_idx = s_event_dequeue_idx;
         uint32_t ev_ctrl = s_event_ring[ev_idx].control;
         if ((ev_ctrl & 1) != s_event_cycle_bit) {

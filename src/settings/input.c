@@ -29,7 +29,7 @@ uint32_t g_kbd_repeat_interval_us = 25000U;  /* 40 cps (25 ms interval) */
 int      g_kbd_repeat_enabled     = 1;
 int      g_mouse_step_mult          = 4;      /* Default: Step 2 (Archimedes / Haiku natural responsive standard) */
 int      g_mouse_swap_select_adjust = 0;      /* 0: Right-handed (Select/Menu/Adjust), 1: Left-handed */
-int      g_mouse_accel_profile     = 1;
+int      g_mouse_accel_profile     = 0;
 
 typedef struct {
     WND *wnd;

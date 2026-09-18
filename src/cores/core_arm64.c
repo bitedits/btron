@@ -997,10 +997,10 @@ void mouse_accelerate_pair_haiku(int32_t raw_x, int32_t raw_y, int32_t *out_dx, 
     }
 
     /* Clamp raw input bursts */
-    if (raw_x > 64)  raw_x = 64;
-    if (raw_x < -64) raw_x = -64;
-    if (raw_y > 64)  raw_y = 64;
-    if (raw_y < -64) raw_y = -64;
+    if (raw_x > 512)  raw_x = 512;
+    if (raw_x < -512) raw_x = -512;
+    if (raw_y > 512)  raw_y = 512;
+    if (raw_y < -512) raw_y = -512;
 
     /* Base speed: mapped from g_mouse_step_mult (1..4 -> 1.6x .. 2.8x) */
     float speed_mult = 1.2f + (float)g_mouse_step_mult * 0.4f;
@@ -1026,10 +1026,10 @@ void mouse_accelerate_pair_haiku(int32_t raw_x, int32_t raw_y, int32_t *out_dx, 
     int32_t pix_y = (deltaY >= 0.0f) ? (int32_t)deltaY : -(int32_t)(-deltaY);
 
     /* Output displacement clamp */
-    if (pix_x > 64)  pix_x = 64;
-    if (pix_x < -64) pix_x = -64;
-    if (pix_y > 64)  pix_y = 64;
-    if (pix_y < -64) pix_y = -64;
+    if (pix_x > 512)  pix_x = 512;
+    if (pix_x < -512) pix_x = -512;
+    if (pix_y > 512)  pix_y = 512;
+    if (pix_y < -512) pix_y = -512;
 
     s_haiku_hist_x = deltaX - (float)pix_x;
     s_haiku_hist_y = deltaY - (float)pix_y;
@@ -1104,8 +1104,8 @@ int32_t mouse_accelerate_subpixel_riscos(int32_t raw, int32_t *subpixel)
         if (*subpixel < -255) *subpixel = -255;
     }
 
-    if (pixels >  64) pixels =  64;
-    if (pixels < -64) pixels = -64;
+    if (pixels >  512) pixels =  512;
+    if (pixels < -512) pixels = -512;
 
     return pixels;
 }
@@ -1229,10 +1229,6 @@ static int usb_poll_devices(GDEV *screen) {
         if (mouse_rep.dx != 0 || mouse_rep.dy != 0) {
             int32_t rdx = (int32_t)mouse_rep.dx;
             int32_t rdy = (int32_t)mouse_rep.dy;
-            if (rdx > 64) rdx = 64;
-            if (rdx < -64) rdx = -64;
-            if (rdy > 64) rdy = 64;
-            if (rdy < -64) rdy = -64;
 
             int32_t move_x = 0, move_y = 0;
             if (g_mouse_accel_profile == 1) {

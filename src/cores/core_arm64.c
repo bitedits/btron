@@ -929,69 +929,54 @@ static int32_t s_mouse_sub_y = 0;
 
 
 
-/* Hardened RISC OS MouseStep accelerator for Pi 400
- * - Proper signed residual normalisation
- * - Direction-change residual reset (stops long-term drift)
- * - Idle residual decay (kills accumulated error after stop)
- * - Separate residuals expected for X and Y
+/* Conservative accelerator – prioritises stability over “classic” feel
+ * Designed to stop progressive jumping / latency on Pi 400
  */
 static inline int32_t mouse_accelerate_subpixel(int32_t raw, int32_t *subpixel)
 {
     if (raw == 0) {
-        /* Gentle decay when stationary – prevents residual from
-           growing forever and then dumping a jump later */
-        if (*subpixel > 0)      *subpixel = (*subpixel * 3) / 4;
-        else if (*subpixel < 0) *subpixel = (*subpixel * 3) / 4;
+        /* Aggressive residual decay when idle */
+        *subpixel = (*subpixel * 1) / 2;
         return 0;
     }
+
+    /* Hard clamp raw input – prevents one huge report from exploding */
+    if (raw >  64) raw =  64;
+    if (raw < -64) raw = -64;
 
     int32_t sign = (raw < 0) ? -1 : 1;
     int32_t abs  = (raw < 0) ? -raw : raw;
 
-    /* Fine-count boost – keep, it helps Pi 400 sensors */
-    if (abs <= 3)
-        abs *= 2;
+    /* Mild fine boost only */
+    if (abs <= 2)
+        abs = (abs * 3) / 2;          /* 1.5× instead of 2× */
 
-    /* Classic stepped multipliers (8.8 fixed-point) */
+    /* Much gentler multipliers – reduces jump size when backlog arrives */
     int32_t mult_fp;
-    if (g_mouse_step_mult <= 1) {
-        if      (abs <= 2) mult_fp = 256;
-        else if (abs <= 6) mult_fp = 384;
-        else               mult_fp = 512;
-    } else if (g_mouse_step_mult == 2) {
-        if      (abs <= 2) mult_fp = 512;
-        else if (abs <= 6) mult_fp = 768;
-        else               mult_fp = 1024;
-    } else if (g_mouse_step_mult == 3) {
-        if      (abs <= 2) mult_fp = 768;
-        else if (abs <= 6) mult_fp = 1024;
-        else               mult_fp = 1280;
-    } else {
-        if      (abs <= 2) mult_fp = 1024;
-        else if (abs <= 6) mult_fp = 1280;
-        else               mult_fp = 1536;
+    switch (g_mouse_step_mult) {
+        case 1:  mult_fp = 256 + (abs > 4 ? 128 : 0);          break; /* ≤ 1.5× */
+        case 2:  mult_fp = 384 + (abs > 4 ? 128 : 0);          break; /* ≤ 2.0× */
+        case 3:  mult_fp = 512 + (abs > 4 ? 128 : 0);          break; /* ≤ 2.5× */
+        default: mult_fp = 640 + (abs > 4 ? 128 : 0);          break; /* ≤ 3.0× */
     }
-
-    /* Direction-change protection: clear residual when sign flips.
-       This is the single most effective fix for progressive jumping. */
-    static int32_t last_sign = 0;          /* per-axis if you have two residuals */
-    if (last_sign != 0 && last_sign != sign)
-        *subpixel = 0;
-    last_sign = sign;
 
     int32_t total = *subpixel + (sign * abs * mult_fp);
 
-    /* Floor division + residual always in [0 … 255] */
     int32_t pixels = total / 256;
     *subpixel = total % 256;
+
     if (*subpixel < 0) {
         *subpixel += 256;
         pixels--;
     }
 
-    /* Final safety clamp (should never trigger) */
+    /* Absolute safety: never let residual leave 0…255 */
     if (*subpixel < 0 || *subpixel > 255)
         *subpixel = 0;
+
+    /* Hard limit on output pixels per call – stops visible jumps */
+    if (pixels >  32) pixels =  32;
+    if (pixels < -32) pixels = -32;
 
     return pixels;
 }

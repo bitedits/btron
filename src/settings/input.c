@@ -145,7 +145,7 @@ static void set_risc_os_defaults(void) {
     g_state_input.kbd_rate_sel       = 0;     /* 40 cps Fast */
     g_state_input.kbd_layout_sel     = 0;     /* US ANSI */
 
-    g_state_input.mouse_step_sel     = 3;     /* Step 4: Ultra Velocity (Pi 400 default) */
+    g_state_input.mouse_step_sel     = 0;     /* Step 1: 1.0x Precision */
     g_state_input.mouse_accel_enable = TRUE;
     g_state_input.mouse_handedness   = 0;     /* Right-handed (Select/Menu/Adjust) */
     g_state_input.dbl_click_sel      = 1;     /* 50cs (500ms) RISC OS Default */

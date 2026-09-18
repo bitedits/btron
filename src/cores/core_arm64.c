@@ -1191,19 +1191,34 @@ static int usb_poll_devices(GDEV *screen) {
         }
     }
 
-    /* 2. Poll USB HID Mouse (xHCI on Pi 400, DWC2 on Pi 2/3/QEMU) */
+    /* 2. Drain USB HID Mouse reports (same pattern as keyboard) */
     usb_mouse_report_t mouse_rep;
-    int mouse_got = 0;
-    if (g_use_xhci) {
-        mouse_got = (xhci_poll_mouse(&mouse_rep) > 0);
-    } else {
-        mouse_got = (dwc2_poll_mouse(&mouse_rep) > 0);
+    int32_t accum_dx = 0, accum_dy = 0;
+    uint8_t latest_buttons = 0;
+    int mouse_activity = 0;
+    int got_buttons = 0;
+
+    for (int m_iter = 0; m_iter < 16; m_iter++) {
+        int mouse_got = 0;
+        if (g_use_xhci) {
+            mouse_got = (xhci_poll_mouse(&mouse_rep) > 0);
+        } else {
+            mouse_got = (dwc2_poll_mouse(&mouse_rep) > 0);
+        }
+        if (!mouse_got)
+            break;
+
+        accum_dx += (int32_t)mouse_rep.dx;
+        accum_dy += (int32_t)mouse_rep.dy;
+        latest_buttons = mouse_rep.buttons;
+        got_buttons = 1;
+        mouse_activity = 1;
     }
 
-    if (mouse_got) {
-        if (mouse_rep.dx != 0 || mouse_rep.dy != 0) {
-            int32_t rdx = (int32_t)mouse_rep.dx;
-            int32_t rdy = (int32_t)mouse_rep.dy;
+    if (mouse_activity) {
+        if (accum_dx != 0 || accum_dy != 0) {
+            int32_t rdx = accum_dx;
+            int32_t rdy = accum_dy;
 
             int32_t move_x = 0, move_y = 0;
             if (g_mouse_accel_profile == 0) {
@@ -1247,60 +1262,62 @@ static int usb_poll_devices(GDEV *screen) {
             activity = 1;
         }
 
-        uint8_t btn_left   = (mouse_rep.buttons & 1u);
-        uint8_t btn_right  = (mouse_rep.buttons & 2u) >> 1;
-        uint8_t btn_middle = (mouse_rep.buttons & 4u) >> 2;
+        if (got_buttons) {
+            uint8_t btn_left   = (latest_buttons & 1u);
+            uint8_t btn_right  = (latest_buttons & 2u) >> 1;
+            uint8_t btn_middle = (latest_buttons & 4u) >> 2;
 
-        /* RISC OS 3-Button Model:
-         * Button 1: Select (Left, or Right if swapped)
-         * Button 2: Adjust (Right, or Left if swapped)
-         * Button 3: Menu   (Middle / Wheel Click)
-         */
-        uint8_t sel_raw = g_mouse_swap_select_adjust ? btn_right : btn_left;
-        uint8_t adj_raw = g_mouse_swap_select_adjust ? btn_left  : btn_right;
+            /* RISC OS 3-Button Model:
+             * Button 1: Select (Left, or Right if swapped)
+             * Button 2: Adjust (Right, or Left if swapped)
+             * Button 3: Menu   (Middle / Wheel Click)
+             */
+            uint8_t sel_raw = g_mouse_swap_select_adjust ? btn_right : btn_left;
+            uint8_t adj_raw = g_mouse_swap_select_adjust ? btn_left  : btn_right;
 
-        uint8_t sel_prev = (g_prev_mouse_btns & 1u);
-        uint8_t adj_prev = (g_prev_mouse_btns & 2u) >> 1;
-        uint8_t mid_prev = (g_prev_mouse_btns & 4u) >> 2;
-        g_prev_mouse_btns = (sel_raw) | (adj_raw << 1) | (btn_middle << 2);
+            uint8_t sel_prev = (g_prev_mouse_btns & 1u);
+            uint8_t adj_prev = (g_prev_mouse_btns & 2u) >> 1;
+            uint8_t mid_prev = (g_prev_mouse_btns & 4u) >> 2;
+            g_prev_mouse_btns = (sel_raw) | (adj_raw << 1) | (btn_middle << 2);
 
-        /* Select Button (Button 1) */
-        if (sel_raw != sel_prev) {
-            EVT ev;
-            ev.type   = sel_raw ? EV_BUT_DOWN : EV_BUT_UP;
-            ev.button = 1; /* Select */
-            ev.pos.x  = s_mouse_x;
-            ev.pos.y  = s_mouse_y;
-            ev.key    = 0;
-            ev.data   = 0;
-            snd_evt(&ev);
-            activity = 1;
-        }
+            /* Select Button (Button 1) */
+            if (sel_raw != sel_prev) {
+                EVT ev;
+                ev.type   = sel_raw ? EV_BUT_DOWN : EV_BUT_UP;
+                ev.button = 1; /* Select */
+                ev.pos.x  = s_mouse_x;
+                ev.pos.y  = s_mouse_y;
+                ev.key    = 0;
+                ev.data   = 0;
+                snd_evt(&ev);
+                activity = 1;
+            }
 
-        /* Adjust Button (Button 2) */
-        if (adj_raw != adj_prev) {
-            EVT ev;
-            ev.type   = adj_raw ? EV_BUT_DOWN : EV_BUT_UP;
-            ev.button = 2; /* Adjust */
-            ev.pos.x  = s_mouse_x;
-            ev.pos.y  = s_mouse_y;
-            ev.key    = 0;
-            ev.data   = 0;
-            snd_evt(&ev);
-            activity = 1;
-        }
+            /* Adjust Button (Button 2) */
+            if (adj_raw != adj_prev) {
+                EVT ev;
+                ev.type   = adj_raw ? EV_BUT_DOWN : EV_BUT_UP;
+                ev.button = 2; /* Adjust */
+                ev.pos.x  = s_mouse_x;
+                ev.pos.y  = s_mouse_y;
+                ev.key    = 0;
+                ev.data   = 0;
+                snd_evt(&ev);
+                activity = 1;
+            }
 
-        /* Menu Button (Button 3) */
-        if (btn_middle != mid_prev) {
-            EVT ev;
-            ev.type   = btn_middle ? EV_BUT_DOWN : EV_BUT_UP;
-            ev.button = 3; /* Menu */
-            ev.pos.x  = s_mouse_x;
-            ev.pos.y  = s_mouse_y;
-            ev.key    = 0;
-            ev.data   = 0;
-            snd_evt(&ev);
-            activity = 1;
+            /* Menu Button (Button 3) */
+            if (btn_middle != mid_prev) {
+                EVT ev;
+                ev.type   = btn_middle ? EV_BUT_DOWN : EV_BUT_UP;
+                ev.button = 3; /* Menu */
+                ev.pos.x  = s_mouse_x;
+                ev.pos.y  = s_mouse_y;
+                ev.key    = 0;
+                ev.data   = 0;
+                snd_evt(&ev);
+                activity = 1;
+            }
         }
     }
 

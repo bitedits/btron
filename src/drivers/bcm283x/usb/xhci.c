@@ -52,7 +52,7 @@ static inline void xwrite64(uintptr_t addr, uint64_t val) {
     }
 }
 
-static inline uint64_t xread64(uintptr_t addr) {
+static inline __attribute__((unused)) uint64_t xread64(uintptr_t addr) {
     uint32_t lo = *(volatile uint32_t *)addr;
     uint32_t hi = *(volatile uint32_t *)(addr + 4);
     return ((uint64_t)hi << 32) | lo;
@@ -254,13 +254,13 @@ static inline void xhci_ring_doorbell(uint32_t slot_id, uint32_t target) {
  * Command Ring Submission & Polled Completion
  * ───────────────────────────────────────────────────────────────── */
 
-static int xhci_cmd_submit(uint64_t param, uint32_t status, uint32_t trb_type, uint32_t slot_id, uint32_t *out_slot_id) {
+static int xhci_cmd_submit_ep(uint64_t param, uint32_t status, uint32_t trb_type, uint32_t slot_id, uint32_t epid, uint32_t *out_slot_id) {
     uint32_t idx = s_cmd_enqueue_idx;
     uint32_t cycle = s_cmd_cycle_bit;
 
     s_cmd_ring[idx].param   = param;
     s_cmd_ring[idx].status  = status;
-    s_cmd_ring[idx].control = (trb_type << 10) | (slot_id << 24) | cycle;
+    s_cmd_ring[idx].control = (trb_type << 10) | ((epid & 0x1F) << 16) | (slot_id << 24) | cycle;
     dsb();
 
     s_cmd_enqueue_idx++;
@@ -318,6 +318,18 @@ static int xhci_cmd_submit(uint64_t param, uint32_t status, uint32_t trb_type, u
     return -1;
 }
 
+static int xhci_cmd_submit(uint64_t param, uint32_t status, uint32_t trb_type, uint32_t slot_id, uint32_t *out_slot_id) {
+    return xhci_cmd_submit_ep(param, status, trb_type, slot_id, 0, out_slot_id);
+}
+
+static void xhci_reset_ep0(uint32_t slot_id) {
+    /* 1. Reset Endpoint Command (TRB 14) for EP0 (epid = 1) */
+    xhci_cmd_submit_ep(0, 0, XHCI_TRB_RESET_EP, slot_id, 1, NULL);
+    /* 2. Set TR Dequeue Pointer Command (TRB 16) to current enqueue idx to clear halt */
+    uint64_t dq = (uint64_t)(uintptr_t)&EP0_RING_BASE(slot_id)[s_ep0_enqueue_idx[slot_id]] | s_ep0_cycle[slot_id];
+    xhci_cmd_submit_ep(dq, 0, XHCI_TRB_SET_TR_DQ, slot_id, 1, NULL);
+}
+
 /* ─────────────────────────────────────────────────────────────────
  * Endpoint 0 Control Transfer Engine
  * ───────────────────────────────────────────────────────────────── */
@@ -327,7 +339,7 @@ static int xhci_ep0_control_transfer(uint32_t slot_id, uint8_t bmRequestType, ui
                                      void *data_buf)
 {
     if (slot_id == 0 || slot_id > XHCI_MAX_SLOTS) return -1;
-    xhci_trb_t *ring = EP0_RING_BASE(slot_id);
+    volatile xhci_trb_t *ring = EP0_RING_BASE(slot_id);
     uint32_t idx = s_ep0_enqueue_idx[slot_id];
     uint32_t cycle = s_ep0_cycle[slot_id];
 
@@ -419,6 +431,9 @@ static int xhci_ep0_control_transfer(uint32_t slot_id, uint8_t bmRequestType, ui
                 fb_log("[XHCI] EP0 Transfer Error Code=");
                 fb_log_dec(ev_code);
                 fb_log("\n");
+                if (ev_code == 6 /* Stall Error */) {
+                    xhci_reset_ep0(slot_id);
+                }
                 return (int)ev_code;
             } else if (ev_type == XHCI_TRB_EVT_TRANSFER) {
                 uint32_t ev_code = (s_event_ring[ev_idx].status >> 24) & 0xFF;
@@ -467,7 +482,7 @@ static int xhci_address_device(uint32_t slot_id, uint32_t root_port, uint32_t sp
     }
 
     /* Zero EP0 ring */
-    xhci_trb_t *ep0_ring = EP0_RING_BASE(slot_id);
+    volatile xhci_trb_t *ep0_ring = EP0_RING_BASE(slot_id);
     for (int i = 0; i < XHCI_RING_SIZE; i++) {
         ep0_ring[i].param = 0;
         ep0_ring[i].status = 0;
@@ -477,7 +492,7 @@ static int xhci_address_device(uint32_t slot_id, uint32_t root_port, uint32_t sp
     s_ep0_cycle[slot_id] = 1;
 
     /* Zero EP1 ring */
-    xhci_trb_t *ep1_ring = EP1_RING_BASE(slot_id);
+    volatile xhci_trb_t *ep1_ring = EP1_RING_BASE(slot_id);
     for (int i = 0; i < XHCI_RING_SIZE; i++) {
         ep1_ring[i].param = 0;
         ep1_ring[i].status = 0;
@@ -577,7 +592,7 @@ static int xhci_configure_hid_endpoint(uint32_t slot_id, uint32_t speed, uint32_
     }
     s_input_ctx[8] = (s_input_ctx[8] & ~(0x1Fu << 27)) | (3u << 27 /* Context Entries = 3 */);
 
-    xhci_trb_t *ep1_ring = EP1_RING_BASE(slot_id);
+    volatile xhci_trb_t *ep1_ring = EP1_RING_BASE(slot_id);
     s_input_ctx[32] = (interval & 0xFF) << 16; /* Interval in frames/ms */
     s_input_ctx[33] = (3u << 1 /* CErr=3 */) | (7u << 3 /* EP Type = 7 Interrupt IN */) | ((max_packet_size & 0xFFFF) << 16);
     s_input_ctx[34] = (uint32_t)(uintptr_t)ep1_ring | 1u /* DCS = 1 */;
@@ -592,7 +607,7 @@ static int xhci_configure_hid_endpoint(uint32_t slot_id, uint32_t speed, uint32_
 
 static void xhci_queue_ep1_transfer(uint32_t slot_id, uintptr_t buf_addr, uint32_t len) {
     if (slot_id == 0 || slot_id > XHCI_MAX_SLOTS) return;
-    xhci_trb_t *ring = EP1_RING_BASE(slot_id);
+    volatile xhci_trb_t *ring = EP1_RING_BASE(slot_id);
     uint32_t idx = s_ep1_enqueue_idx[slot_id];
     uint32_t cycle = s_ep1_cycle[slot_id];
 
@@ -1071,12 +1086,14 @@ int xhci_init(uintptr_t mmio_base) {
                     xhci_ep0_control_transfer(dev_slot, 0x00, USB_REQ_SET_CONFIGURATION, 1, 0, 0, NULL);
                     delay_us(10000); /* 10ms settle time after SET_CONFIGURATION */
 
-                    /* Send HID class SET_PROTOCOL(0) = Boot Protocol to all interfaces 0..2.
-                     * Without this, HID keyboards/mice boot in Report Protocol mode and send
-                     * variable-length framed reports that the fixed boot parser mangles. */
-                    for (uint16_t if_idx = 0; if_idx < 3; if_idx++) {
-                        xhci_ep0_control_transfer(dev_slot, 0x21, 0x0B, 0, if_idx, 0, NULL);
-                        xhci_ep0_control_transfer(dev_slot, 0x21, 0x0A, 0x0000, if_idx, 0, NULL);
+                    /* Only send SET_PROTOCOL(0) and SET_IDLE to Boot Keyboard on Interface 0.
+                     * Keyboards require Boot Protocol to deliver standardized 8-byte reports.
+                     * Mice (especially optical/gaming mice like PixArt 0x093A:0x2510) do NOT support
+                     * SET_PROTOCOL and will STALL (Error Code 6), wedging the EP0 control endpoint.
+                     * Never send control transfers to interfaces > 0 unless verified to exist. */
+                    if (is_keyboard || proto == 1) {
+                        xhci_ep0_control_transfer(dev_slot, 0x21, 0x0B, 0, 0, 0, NULL);
+                        xhci_ep0_control_transfer(dev_slot, 0x21, 0x0A, 0x0000, 0, 0, NULL);
                     }
                     delay_us(5000);
 
@@ -1144,7 +1161,7 @@ int xhci_init(uintptr_t mmio_base) {
  * ───────────────────────────────────────────────────────────────── */
 
 static void xhci_process_events(void) {
-    while (1) {
+    for (uint32_t trb_count = 0; trb_count < XHCI_RING_SIZE; trb_count++) {
         uint32_t ev_idx = s_event_dequeue_idx;
         uint32_t ev_ctrl = s_event_ring[ev_idx].control;
         if ((ev_ctrl & 1) != s_event_cycle_bit) {

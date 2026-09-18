@@ -1,4 +1,4 @@
-﻿/*
+/*
  * B-TRON Specification Compatible Header: event.h
  * System Event Queue & Types.
  */
@@ -41,6 +41,7 @@ typedef struct {
 #define EV_MASK_BUT       (EV_MASK(EV_BUT_DOWN) | EV_MASK(EV_BUT_UP) | EV_MASK(EV_MOUSE_MOVE))
 #define EV_MASK_KEY       (EV_MASK(EV_KEY_DOWN) | EV_MASK(EV_KEY_UP))
 #define EV_MASK_WND       (EV_MASK(EV_WND_CLOSE) | EV_MASK(EV_WND_MOVE) | EV_MASK(EV_WND_FOCUS))
+#define EVENT_QUEUE_SIZE  256
 #define EV_MASK_ALL       0xFFFFFFFFU
 
 /* Standard Keyboard Modifier Bitmasks */

@@ -51,9 +51,15 @@ void workbench_process_event(GDEV *screen, const EVT *ev) {
 
     } else if (ev->type == EV_MOUSE_MOVE) {
         set_baremetal_mouse_pos(ev->pos.x, ev->pos.y);
-        global_menu_handle_mouse_move(ev->pos.x, ev->pos.y);
-        tracker_handle_mouse_move(ev->pos.x, ev->pos.y);
-        wnd_mgr_handle_event(ev);
+        if (global_menu_is_open() || ev->pos.y <= 25) {
+            global_menu_handle_mouse_move(ev->pos.x, ev->pos.y);
+        }
+        if (tracker_is_menu_open()) {
+            tracker_handle_mouse_move(ev->pos.x, ev->pos.y);
+        }
+        if (wnd_mgr_is_interacting() || ev->button != 0) {
+            wnd_mgr_handle_event(ev);
+        }
 
     } else if (ev->type == EV_KEY_DOWN) {
         if (global_menu_handle_key(ev->key, ev->data)) {

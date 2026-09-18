@@ -575,6 +575,10 @@ static H    s_wnd_resize_orig_h = 0;
 static H    s_wnd_resize_start_x = 0;
 static H    s_wnd_resize_start_y = 0;
 
+BOOL wnd_mgr_is_interacting(void) {
+    return (s_wnd_dragging || s_wnd_sliding_tab || s_wnd_resizing);
+}
+
 BOOL wnd_mgr_handle_event(const EVT *ev) {
     if (!ev) return FALSE;
 

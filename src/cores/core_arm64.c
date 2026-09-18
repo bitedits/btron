@@ -635,7 +635,6 @@ static void launch_pi4_desktop_session(uint32_t *gpu_fb)
 
     while (s_gui_active) {
         int redraw = 0;
-        int cursor_only = 0;
 
         uint32_t now = *(volatile uint32_t *)(TIMER_BASE + 0x04);
 
@@ -670,8 +669,8 @@ static void launch_pi4_desktop_session(uint32_t *gpu_fb)
             }
         }
 
-        /* Dispatch all queued events to the B-TRON window manager */
-        while (get_evt(&ev, 0) == E_OK) {
+        /* Dispatch all queued events to the B-TRON window manager (bounded to EVENT_QUEUE_SIZE) */
+        for (int ev_iter = 0; ev_iter < EVENT_QUEUE_SIZE && get_evt(&ev, 0) == E_OK; ev_iter++) {
             if (ev.type == EV_KEY_DOWN && ev.key == 0x1B /* Escape */) {
                 s_gui_active = 0;
                 break;
@@ -679,17 +678,13 @@ static void launch_pi4_desktop_session(uint32_t *gpu_fb)
             workbench_process_event(screen, &ev);
 
             if (ev.type == EV_MOUSE_MOVE) {
-                /* If menu is open or mouse button is held down, need full UI update */
-                if (global_menu_is_open() || tracker_is_menu_open() || g_prev_mouse_btns != 0) {
+                /* If menu is open, mouse button held, or window interacting, need full UI update */
+                if (global_menu_is_open() || tracker_is_menu_open() || g_prev_mouse_btns != 0 || wnd_mgr_is_interacting()) {
                     redraw = 1;
-                    cursor_only = 0;
-                } else if (!redraw) {
-                    cursor_only = 1;
                 }
             } else {
                 /* Buttons, keys, etc. need real UI update */
                 redraw = 1;
-                cursor_only = 0;
             }
         }
 
@@ -745,26 +740,6 @@ static void launch_pi4_desktop_session(uint32_t *gpu_fb)
             draw_baremetal_cursor_raw(gpu_fb, s_mouse_x, s_mouse_y, BTRON_SCREEN_W, BTRON_SCREEN_H);
             prev_mx = s_mouse_x;
             prev_my = s_mouse_y;
-
-            /* Drain USB reports accumulated during blit */
-            usb_poll_devices(screen);
-            if (s_mouse_x != prev_mx || s_mouse_y != prev_my) {
-                restore_cursor_area(gpu_fb, prev_mx, prev_my);
-                draw_baremetal_cursor_raw(gpu_fb, s_mouse_x, s_mouse_y, BTRON_SCREEN_W, BTRON_SCREEN_H);
-                __asm__ volatile("dmb sy" : : : "memory");
-                prev_mx = s_mouse_x;
-                prev_my = s_mouse_y;
-            }
-        }
-        /* Zero-latency cursor-only path: restore old 16x16 patch, draw new cursor (< 1 us) */
-        else if (cursor_only) {
-            if (s_mouse_x != prev_mx || s_mouse_y != prev_my) {
-                restore_cursor_area(gpu_fb, prev_mx, prev_my);
-                draw_baremetal_cursor_raw(gpu_fb, s_mouse_x, s_mouse_y, BTRON_SCREEN_W, BTRON_SCREEN_H);
-                __asm__ volatile("dmb sy" : : : "memory");
-                prev_mx = s_mouse_x;
-                prev_my = s_mouse_y;
-            }
         }
     }
 
@@ -1117,10 +1092,10 @@ static inline int32_t mouse_accelerate_subpixel_raw(int32_t raw, int32_t *subpix
 
 static inline __attribute__((unused)) int32_t mouse_accelerate_subpixel(int32_t raw, int32_t *subpixel)
 {
-    if (g_mouse_accel_profile == 1) {
-        return mouse_accelerate_subpixel_haiku(raw, subpixel);
-    } else if (g_mouse_accel_profile == 2) {
+    if (g_mouse_accel_profile == 0) {
         return mouse_accelerate_subpixel_riscos(raw, subpixel);
+    } else if (g_mouse_accel_profile == 1) {
+        return mouse_accelerate_subpixel_haiku(raw, subpixel);
     } else {
         return mouse_accelerate_subpixel_raw(raw, subpixel);
     }
@@ -1136,11 +1111,11 @@ static int usb_poll_devices(GDEV *screen) {
         xhci_process();
     }
 
-    /* 1. Drain pending USB HID Keyboard reports */
+    /* 1. Drain pending USB HID Keyboard reports (bounded to queue size) */
     usb_kbd_report_t kbd_rep;
     uint32_t now_us = *(volatile uint32_t *)(TIMER_BASE + 0x04);
 
-    while (1) {
+    for (int kbd_iter = 0; kbd_iter < 16; kbd_iter++) {
         int kbd_got = 0;
         if (g_use_xhci) {
             kbd_got = (xhci_poll_keyboard(&kbd_rep) > 0);
@@ -1231,14 +1206,15 @@ static int usb_poll_devices(GDEV *screen) {
             int32_t rdy = (int32_t)mouse_rep.dy;
 
             int32_t move_x = 0, move_y = 0;
-            if (g_mouse_accel_profile == 1) {
-                /* Haiku OS / BeOS 2D Velocity Vector Accelerator */
-                mouse_accelerate_pair_haiku(rdx, rdy, &move_x, &move_y);
-            } else if (g_mouse_accel_profile == 2) {
-                /* RISC OS MouseStep Stepped Accelerator */
+            if (g_mouse_accel_profile == 0) {
+                /* Profile 0: RISC OS MouseStep Stepped Accelerator (Archimedes 2.0x default) */
                 move_x = mouse_accelerate_subpixel_riscos(rdx, &s_mouse_sub_x);
                 move_y = mouse_accelerate_subpixel_riscos(rdy, &s_mouse_sub_y);
+            } else if (g_mouse_accel_profile == 1) {
+                /* Profile 1: Haiku OS / BeOS 2D Velocity Vector Accelerator */
+                mouse_accelerate_pair_haiku(rdx, rdy, &move_x, &move_y);
             } else {
+                /* Profile 2: Raw 1:1 unaccelerated */
                 move_x = mouse_accelerate_subpixel_raw(rdx, &s_mouse_sub_x);
                 move_y = mouse_accelerate_subpixel_raw(rdy, &s_mouse_sub_y);
             }
@@ -1252,6 +1228,7 @@ static int usb_poll_devices(GDEV *screen) {
 
             s_mouse_x = (H)nx;
             s_mouse_y = (H)ny;
+            set_baremetal_mouse_pos(s_mouse_x, s_mouse_y);
 
             EVT ev;
             ev.type   = EV_MOUSE_MOVE;

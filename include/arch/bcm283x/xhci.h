@@ -59,6 +59,8 @@
 #define XHCI_TRB_ADDRESS_DEV    11
 #define XHCI_TRB_CONFIG_EP      12
 #define XHCI_TRB_EVAL_CTX       13
+#define XHCI_TRB_RESET_EP       14
+#define XHCI_TRB_SET_TR_DQ      16
 #define XHCI_TRB_NOOP_CMD       23
 #define XHCI_TRB_EVT_TRANSFER   32
 #define XHCI_TRB_EVT_CMD_COMPL  33

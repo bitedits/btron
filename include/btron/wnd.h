@@ -71,6 +71,7 @@ void wnd_cycle_focus(void);
 
 /* BTRON 3.20 Window Manager Interaction & Event Dispatcher */
 BOOL wnd_mgr_handle_event(const EVT *ev);
+BOOL wnd_mgr_is_interacting(void);
 
 #ifdef __cplusplus
 }

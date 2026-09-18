@@ -15,7 +15,9 @@
 #include <stdint.h>
 #endif
 
+#ifndef EVENT_QUEUE_SIZE
 #define EVENT_QUEUE_SIZE 256
+#endif
 
 static EVT g_queue[EVENT_QUEUE_SIZE];
 static int g_q_head = 0;
@@ -237,21 +239,26 @@ ER get_evt(EVT *p_evt, W timeout_ms) {
 ER clr_evt(UW mask) {
     if (mask == 0) return E_OK;
     int new_count = 0;
-    EVT temp[EVENT_QUEUE_SIZE];
 
     for (int i = 0; i < g_q_count; i++) {
-        int idx = (g_q_head + i) % EVENT_QUEUE_SIZE;
-        if (!(mask & EV_MASK(g_queue[idx].type))) {
-            temp[new_count++] = g_queue[idx];
+        int src_idx = (g_q_head + i) % EVENT_QUEUE_SIZE;
+        if (!(mask & EV_MASK(g_queue[src_idx].type))) {
+            if (new_count != i) {
+                int dst_idx = (g_q_head + new_count) % EVENT_QUEUE_SIZE;
+                g_queue[dst_idx] = g_queue[src_idx];
+            }
+            new_count++;
         }
     }
 
-    for (int i = 0; i < new_count; i++) {
-        g_queue[i] = temp[i];
+    if (new_count == 0) {
+        g_q_head = 0;
+        g_q_tail = 0;
+        g_q_count = 0;
+    } else {
+        g_q_tail = (g_q_head + new_count) % EVENT_QUEUE_SIZE;
+        g_q_count = new_count;
     }
-    g_q_head = 0;
-    g_q_tail = new_count % EVENT_QUEUE_SIZE;
-    g_q_count = new_count;
     return E_OK;
 }
 

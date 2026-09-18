@@ -805,23 +805,23 @@ static inline uint16_t usb_to_btron_modifiers(uint8_t usb_mod) {
 static int32_t s_mouse_sub_x = 0;
 static int32_t s_mouse_sub_y = 0;
 
-/* Natural, ergonomic pointer acceleration with sub-pixel carry */
+/* Natural, responsive pointer acceleration with sub-pixel carry */
 static inline int32_t mouse_accelerate_subpixel(int32_t raw, int32_t *subpixel) {
     if (raw == 0) return 0;
     int32_t sign = (raw < 0) ? -1 : 1;
     int32_t abs  = (raw < 0) ? -raw : raw;
 
     /* Scaled by 256 (8.8 fixed-point format):
-     * - Fine precision: 1:1 pixel-perfect targeting for menus & buttons (1.0x)
-     * - Controlled navigation: 1.25x - 1.5x
-     * - Fast sweep: 2.0x - 2.5x maximum (never exceeds 2.5x so cursor never flies away)
+     * Fine precision: 1.5x
+     * Controlled navigation: 2.0x - 3.0x
+     * Fast sweep: 4.0x - 5.0x
      */
     int32_t mult_fp;
-    if      (abs <= 2)  mult_fp = 256;  /* 1.0x (pixel-perfect precision) */
-    else if (abs <= 5)  mult_fp = 320;  /* 1.25x */
-    else if (abs <= 10) mult_fp = 384;  /* 1.5x */
-    else if (abs <= 20) mult_fp = 512;  /* 2.0x */
-    else                mult_fp = 640;  /* 2.5x max fling */
+    if      (abs <= 1)  mult_fp = 384;   /* 1.5x */
+    else if (abs <= 3)  mult_fp = 512;   /* 2.0x */
+    else if (abs <= 6)  mult_fp = 768;   /* 3.0x */
+    else if (abs <= 12) mult_fp = 1024;  /* 4.0x */
+    else                mult_fp = 1280;  /* 5.0x fast sweep */
 
     int32_t total = *subpixel + (sign * abs * mult_fp);
     int32_t pixels = total / 256;
@@ -829,29 +829,17 @@ static inline int32_t mouse_accelerate_subpixel(int32_t raw, int32_t *subpixel) 
     return pixels;
 }
 
-/* Software Key Repeat engine defaults (450ms initial delay, 18cps repeat)
- * 450ms prevents accidental repeats during normal human typing (~150ms dwell). */
-#define KBD_REPEAT_INITIAL_DELAY_US  450000U
-#define KBD_REPEAT_INTERVAL_US        55000U
-
-static uint32_t s_kbd_down_time    = 0;
-static uint32_t s_kbd_last_repeat  = 0;
-static uint32_t s_kbd_repeat_key   = 0;
-static uint16_t s_kbd_repeat_mod   = 0;
-
 static int usb_poll_devices(GDEV *screen) {
     (void)screen;
     int activity = 0;
 
     /* Drain the xHCI event ring ONCE per poll cycle.
-     * This populates s_kbd_queue and s_accum_dx/dy/buttons atomically.
-     * xhci_poll_keyboard / xhci_poll_mouse then just consume the queued data
-     * without touching the event ring again — avoiding double-processing. */
+     * This populates s_kbd_queue and s_accum_dx/dy/buttons atomically. */
     if (g_use_xhci) {
         xhci_process();
     }
 
-    /* 1. Drain all pending USB HID Keyboard reports from ring/queue */
+    /* 1. Drain pending USB HID Keyboard reports */
     usb_kbd_report_t kbd_rep;
     while (1) {
         int kbd_got = 0;
@@ -868,12 +856,6 @@ static int usb_poll_devices(GDEV *screen) {
             if (scancode != g_prev_kbd_scancode) {
                 uint32_t k = dwc2_usb_to_btron_key(scancode, kbd_rep.modifiers);
                 if (k != 0) {
-                    uint32_t now = *(volatile uint32_t *)(TIMER_BASE + 0x04);
-                    s_kbd_down_time   = now;
-                    s_kbd_last_repeat = now;
-                    s_kbd_repeat_key  = k;
-                    s_kbd_repeat_mod  = bmod;
-
                     EVT ev;
                     ev.type   = EV_KEY_DOWN;
                     ev.key    = k;
@@ -886,7 +868,6 @@ static int usb_poll_devices(GDEV *screen) {
                 }
             }
         } else {
-            s_kbd_repeat_key = 0;
             if (g_prev_kbd_scancode != 0) {
                 uint32_t k = dwc2_usb_to_btron_key(g_prev_kbd_scancode, 0);
                 if (k != 0) {
@@ -903,25 +884,6 @@ static int usb_poll_devices(GDEV *screen) {
             }
         }
         g_prev_kbd_scancode = scancode;
-    }
-
-    /* Key repeat generation for held keys */
-    if (s_kbd_repeat_key != 0) {
-        uint32_t now = *(volatile uint32_t *)(TIMER_BASE + 0x04);
-        if ((now - s_kbd_down_time) >= KBD_REPEAT_INITIAL_DELAY_US) {
-            if ((now - s_kbd_last_repeat) >= KBD_REPEAT_INTERVAL_US) {
-                s_kbd_last_repeat = now;
-                EVT ev;
-                ev.type   = EV_KEY_DOWN;
-                ev.key    = s_kbd_repeat_key;
-                ev.data   = (VW)(uintptr_t)s_kbd_repeat_mod;
-                ev.pos.x  = s_mouse_x;
-                ev.pos.y  = s_mouse_y;
-                ev.button = 0;
-                snd_evt(&ev);
-                activity = 1;
-            }
-        }
     }
 
     /* 2. Poll USB HID Mouse (xHCI on Pi 400, DWC2 on Pi 2/3/QEMU) */

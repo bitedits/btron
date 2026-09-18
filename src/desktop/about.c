@@ -255,11 +255,18 @@ static void paint_tab_subsystems(GDEV *dev, const RECT *body_r) {
 static void paint_about_window(WND *wnd, GDEV *dev) {
     if (!wnd || !dev) return;
 
+    int nyan_frame = 0;
     if (g_about_state.animation_enabled) {
         g_about_state.ticks++;
+#if !defined(__STDC_HOSTED__) || __STDC_HOSTED__ != 1
+        extern uintptr_t g_mmio_base;
+        uint32_t now_us = *(volatile uint32_t *)(g_mmio_base + 0x00003004UL);
+        nyan_frame = (int)((now_us / 70000U) % NYAN_FRAME_COUNT);
+#else
+        uint32_t t = g_about_state.ticks;
+        nyan_frame = (int)((t / 2) % NYAN_FRAME_COUNT);
+#endif
     }
-    uint32_t t = g_about_state.ticks;
-    int nyan_frame = (int)((t / 2) % NYAN_FRAME_COUNT);
 
     /* 1. Main SONY Titanium Chassis Canvas */
     RECT bg_r = { 0, 0, dev->width, dev->height };

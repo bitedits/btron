@@ -66,6 +66,17 @@ static H s_mouse_y = 384;
 static uint8_t g_prev_mouse_btns = 0;
 static uint8_t g_prev_kbd_scancode = 0;
 
+/* Responsive Keyboard Auto-Repeat Parameters & State */
+#define KBD_REPEAT_INITIAL_DELAY_US 120000U  /* 120 ms initial delay */
+#define KBD_REPEAT_INTERVAL_US       18182U  /* 55 cps (approx 18.2 ms interval) */
+static uint8_t  s_held_kbd_scancode = 0;
+static uint8_t  s_held_kbd_modifiers = 0;
+static uint32_t s_key_press_time_us = 0;
+static uint32_t s_key_last_repeat_us = 0;
+
+/* Display Page-Flipping State (0: y=0, 1: y=768) */
+static int s_front_page_idx = 0;
+
 /* USB host controller selection: 1 = VL805 xHCI (hardware), 0 = DWC2 (QEMU / legacy) */
 int g_use_xhci = 0;
 
@@ -135,6 +146,16 @@ static inline void arm64_fast_blit(volatile void *dst, const void *src, size_t b
         tkl_memcpy((void *)d, (const void *)s, rem);
     }
     __asm__ volatile("dmb sy" : : : "memory");
+}
+
+/* Clean data cache range by VA to Point of Coherency (PoC) for coherent DMA */
+static inline void arm64_clean_cache_range(const void *addr, size_t size) {
+    uintptr_t start = (uintptr_t)addr & ~(64UL - 1);
+    uintptr_t end   = (uintptr_t)addr + size;
+    for (uintptr_t p = start; p < end; p += 64) {
+        __asm__ volatile("dc cvac, %0" : : "r"(p) : "memory");
+    }
+    __asm__ volatile("dsb sy" : : : "memory");
 }
 
 /* Darken one text row in GPU VRAM (write-only, zero uncached reads). */
@@ -562,6 +583,8 @@ static void launch_pi4_desktop_session(uint32_t *gpu_fb)
         s_gui_active = 0;
         return;
     }
+    s_front_page_idx = 0;
+    mailbox_set_virtual_offset(0, 0);
     workbench_init(BTRON_SCREEN_W);
     workbench_render(screen, BTRON_SCREEN_W, BTRON_SCREEN_H);
     blit_backbuffer_to_fb(gpu_fb);
@@ -572,6 +595,8 @@ static void launch_pi4_desktop_session(uint32_t *gpu_fb)
     uart_puts("[WB]  Workbench live. Press [Esc] or type 'exit' to return.\n");
 
     g_prev_kbd_scancode = 0;
+    s_held_kbd_scancode = 0;
+    s_held_kbd_modifiers = 0;
     g_prev_mouse_btns = 0;
 
     uint32_t last_clock = *(volatile uint32_t *)(TIMER_BASE + 0x04);
@@ -615,9 +640,9 @@ static void launch_pi4_desktop_session(uint32_t *gpu_fb)
             redraw = 1;
         }
 
-        /* 30 FPS animation redraw when animated window (About Nyan Cat) is active (every 33,333 µs) */
+        /* 60 FPS animation redraw when animated window (About Nyan Cat) is active (every 16,666 µs) */
         if (about_is_animating()) {
-            if ((now - last_anim_frame) >= 33333) {
+            if ((now - last_anim_frame) >= 16666) {
                 last_anim_frame = now;
                 redraw = 1;
             }
@@ -635,7 +660,8 @@ static void launch_pi4_desktop_session(uint32_t *gpu_fb)
         }
     }
 
-    /* Return to Stage 1 console */
+    /* Return to Stage 1 console (restore scanout to line 0) */
+    mailbox_set_virtual_offset(0, 0);
     fb_log_enable((volatile uint32_t *)gpu_fb);
     /* Blank the screen */
     for (int i = 0; i < BTRON_SCREEN_W * BTRON_SCREEN_H; i++)
@@ -741,12 +767,35 @@ void kprintf(const char *fmt, ...) {
 }
 
 /* ═══════════════════════════════════════════════════════════════════
- * VideoCore GPU Framebuffer & Display Blitter
+ * VideoCore GPU Framebuffer & Display Blitter (BCM2711 DMA + Page-Flip)
  * ═══════════════════════════════════════════════════════════════════ */
 
 void blit_backbuffer_to_fb(volatile uint32_t *gpu_fb) {
     if (!gpu_fb) return;
-    arm64_fast_blit((void *)gpu_fb, s_desktop_backbuffer, BTRON_SCREEN_W * BTRON_SCREEN_H * sizeof(COLOR));
+
+    /* Next page to draw into and present (hardware page-flipping) */
+    int back_page_idx = 1 - s_front_page_idx;
+    uint32_t back_y = back_page_idx * BTRON_SCREEN_H;
+    volatile uint32_t *target_vram = gpu_fb + (back_y * BTRON_SCREEN_W);
+
+    /* Clean backbuffer CPU data cache lines to Point of Coherency before DMA / GPU scanout */
+    arm64_clean_cache_range(s_desktop_backbuffer, BTRON_SCREEN_W * BTRON_SCREEN_H * sizeof(COLOR));
+
+    if (g_mmio_base == 0xFE000000UL) {
+        /* BCM2711 Hardware 2D DMA Engine (Channel 0 Linear AXI Burst) */
+        bcm2711_dma_blit_linear(0,
+                                ((uintptr_t)target_vram) & 0x3FFFFFFF,
+                                ((uintptr_t)s_desktop_backbuffer) & 0x3FFFFFFF,
+                                BTRON_SCREEN_W * BTRON_SCREEN_H * sizeof(COLOR));
+        bcm2711_dma_wait(0);
+    } else {
+        /* CPU 64-byte unrolled burst blitter fallback for QEMU / Pi 3 */
+        arm64_fast_blit((void *)target_vram, s_desktop_backbuffer, BTRON_SCREEN_W * BTRON_SCREEN_H * sizeof(COLOR));
+    }
+
+    /* VideoCore GPU Hardware Page-Flip via mailbox virtual offset */
+    mailbox_set_virtual_offset(0, back_y);
+    s_front_page_idx = back_page_idx;
 }
 
 /* ═══════════════════════════════════════════════════════════════════
@@ -841,6 +890,8 @@ static int usb_poll_devices(GDEV *screen) {
 
     /* 1. Drain pending USB HID Keyboard reports */
     usb_kbd_report_t kbd_rep;
+    uint32_t now_us = *(volatile uint32_t *)(TIMER_BASE + 0x04);
+
     while (1) {
         int kbd_got = 0;
         if (g_use_xhci) {
@@ -865,6 +916,12 @@ static int usb_poll_devices(GDEV *screen) {
                     ev.button = 0;
                     snd_evt(&ev);
                     activity = 1;
+
+                    /* Arm hardware-like responsive key repeat */
+                    s_held_kbd_scancode = scancode;
+                    s_held_kbd_modifiers = kbd_rep.modifiers;
+                    s_key_press_time_us = now_us;
+                    s_key_last_repeat_us = now_us;
                 }
             }
         } else {
@@ -881,9 +938,34 @@ static int usb_poll_devices(GDEV *screen) {
                     snd_evt(&ev);
                     activity = 1;
                 }
+                /* Disarm key repeat */
+                s_held_kbd_scancode = 0;
+                s_held_kbd_modifiers = 0;
             }
         }
         g_prev_kbd_scancode = scancode;
+    }
+
+    /* 1b. Check key auto-repeat timer for held key */
+    if (s_held_kbd_scancode != 0) {
+        if ((now_us - s_key_press_time_us) >= KBD_REPEAT_INITIAL_DELAY_US) {
+            if ((now_us - s_key_last_repeat_us) >= KBD_REPEAT_INTERVAL_US) {
+                s_key_last_repeat_us = now_us;
+                uint32_t k = dwc2_usb_to_btron_key(s_held_kbd_scancode, s_held_kbd_modifiers);
+                uint16_t bmod = usb_to_btron_modifiers(s_held_kbd_modifiers);
+                if (k != 0) {
+                    EVT ev;
+                    ev.type   = EV_KEY_DOWN;
+                    ev.key    = k;
+                    ev.data   = (VW)(uintptr_t)bmod;
+                    ev.pos.x  = s_mouse_x;
+                    ev.pos.y  = s_mouse_y;
+                    ev.button = 0;
+                    snd_evt(&ev);
+                    activity = 1;
+                }
+            }
+        }
     }
 
     /* 2. Poll USB HID Mouse (xHCI on Pi 400, DWC2 on Pi 2/3/QEMU) */

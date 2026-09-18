@@ -421,7 +421,7 @@ uint32_t* init_pi_framebuffer(uint32_t w, uint32_t h) {
     mbox[8] = 8;
     mbox[9] = 0;          /* request code */
     mbox[10] = w;
-    mbox[11] = h;          /* 1:1 1024x768 display mapping */
+    mbox[11] = h * 2;     /* Double-height virtual framebuffer for hardware page-flipping (1024x1536) */
 
     mbox[12] = 0x00048005; /* set depth */
     mbox[13] = 4;

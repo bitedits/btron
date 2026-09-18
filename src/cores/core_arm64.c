@@ -494,7 +494,7 @@ static int pi4_shell_poll(uint32_t *gpu_fb)
      * Without this call the event ring is never processed in Stage 1,
      * making the keyboard completely unresponsive. */
     if (g_use_xhci) {
-        xhci_process();
+        xhci_process_events();
     }
 
     /* 1. Poll USB Keyboard:
@@ -1108,7 +1108,7 @@ static int usb_poll_devices(GDEV *screen) {
     /* Drain the xHCI event ring ONCE per poll cycle.
      * This populates s_kbd_queue and s_accum_dx/dy/buttons atomically. */
     if (g_use_xhci) {
-        xhci_process();
+        xhci_process_events();
     }
 
     /* 1. Drain pending USB HID Keyboard reports (bounded to queue size) */

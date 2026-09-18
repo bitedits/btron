@@ -228,6 +228,12 @@ static void xhci_handle_transfer_event(uint32_t ev_slot, uint32_t ev_epid, uint3
                 usb_mouse_report_t temp_rep = {0};
                 xhci_decode_mouse_report(&s_mice[m], transferred, &temp_rep);
 
+                /* Zero out the DMA buffer after consumption so stale bytes never leak into subsequent reports */
+                for (uint32_t b = 0; b < s_mice[m].mps; b++) {
+                    s_mice[m].buf[b] = 0;
+                }
+                dsb();
+
                 s_accum_dx += temp_rep.dx;
                 s_accum_dy += temp_rep.dy;
                 s_accum_wheel += temp_rep.wheel;
@@ -476,13 +482,16 @@ static int xhci_address_device(uint32_t slot_id, uint32_t root_port, uint32_t sp
     s_ep0_enqueue_idx[slot_id] = 0;
     s_ep0_cycle[slot_id] = 1;
 
-    /* Zero EP1 ring */
+    /* Zero EP1 ring and pre-initialize static Link TRB at ring boundary */
     volatile xhci_trb_t *ep1_ring = EP1_RING_BASE(slot_id);
     for (int i = 0; i < XHCI_RING_SIZE; i++) {
         ep1_ring[i].param = 0;
         ep1_ring[i].status = 0;
         ep1_ring[i].control = 0;
     }
+    ep1_ring[XHCI_RING_SIZE - 1].param = (uint64_t)(uintptr_t)ep1_ring;
+    ep1_ring[XHCI_RING_SIZE - 1].status = 0;
+    ep1_ring[XHCI_RING_SIZE - 1].control = (XHCI_TRB_LINK << 10) | (1u << 1 /* TC */) | 1u;
     s_ep1_enqueue_idx[slot_id] = 0;
     s_ep1_cycle[slot_id] = 1;
 
@@ -606,6 +615,7 @@ static void xhci_queue_ep1_transfer(uint32_t slot_id, uintptr_t buf_addr, uint32
         ring[idx].param = (uint64_t)(uintptr_t)ring;
         ring[idx].status = 0;
         ring[idx].control = (XHCI_TRB_LINK << 10) | (1u << 1 /* TC */) | cycle;
+        dsb();
         idx = 0;
         cycle ^= 1;
     }
@@ -1092,9 +1102,15 @@ int xhci_init(uintptr_t mmio_base) {
                             s_mice[s_num_mice].slot_id = dev_slot;
                             s_mice[s_num_mice].mps = ep1_mps;
                             s_mice[s_num_mice].buf = MOUSE_BUF(s_num_mice);
-                            /* If interface declared Boot Mouse (proto 2), lock to Boot Protocol (mode 1).
-                             * Otherwise (vendor HID), start in auto-detect (mode 0). */
-                            s_mice[s_num_mice].proto_mode = (mouse_boot_proto == 1) ? 1 : 0;
+                            /* Standard mice (PixArt 0x093A, Boot Protocol proto 2) lock to mode 1 (Standard Boot Protocol).
+                             * Only Logitech gaming mice (VID 0x046D) start in mode 0 auto-detect. */
+                            if (ddesc.idVendor == 0x093A || mouse_boot_proto == 1 || proto == 2) {
+                                s_mice[s_num_mice].proto_mode = 1;
+                            } else if (ddesc.idVendor == 0x046D) {
+                                s_mice[s_num_mice].proto_mode = 0;
+                            } else {
+                                s_mice[s_num_mice].proto_mode = 1;
+                            }
                             fb_log("[XHCI] Bound Slot ");
                             fb_log_dec(dev_slot);
                             fb_log(" as Mouse ");
@@ -1134,7 +1150,11 @@ int xhci_init(uintptr_t mmio_base) {
  * Polled Keyboard & Mouse Event Processing
  * ───────────────────────────────────────────────────────────────── */
 
-static void xhci_process_events(void) {
+ /* Public entry point: drain the xHCI event ring once per polling cycle.
+ * Must be called ONCE before xhci_poll_keyboard() / xhci_poll_mouse().
+ * Calling it multiple times per cycle risks re-processing already-handled TRBs. */
+
+void xhci_process_events(void) {
     for (uint32_t trb_count = 0; trb_count < XHCI_RING_SIZE; trb_count++) {
         uint32_t ev_idx = s_event_dequeue_idx;
         uint32_t ev_ctrl = s_event_ring[ev_idx].control;
@@ -1165,17 +1185,10 @@ static void xhci_process_events(void) {
     }
 }
 
-/* Public entry point: drain the xHCI event ring once per polling cycle.
- * Must be called ONCE before xhci_poll_keyboard() / xhci_poll_mouse().
- * Calling it multiple times per cycle risks re-processing already-handled TRBs. */
-void xhci_process(void) {
-    xhci_process_events();
-}
-
 int xhci_poll_keyboard(usb_kbd_report_t *rep) {
     if (!s_kbd_slot_id || !rep) return 0;
     /* NOTE: do NOT call xhci_process_events() here.
-     * The caller (usb_poll_devices) must call xhci_process() once
+     * The caller (usb_poll_devices) must call xhci_process_events() once
      * before calling xhci_poll_keyboard / xhci_poll_mouse.
      * Calling it again here causes double-processing of the event ring. */
     if (s_kbd_q_count > 0) {
@@ -1190,7 +1203,7 @@ int xhci_poll_keyboard(usb_kbd_report_t *rep) {
 int xhci_poll_mouse(usb_mouse_report_t *rep) {
     if (s_num_mice == 0 || !rep) return 0;
     /* NOTE: do NOT call xhci_process_events() here.
-     * Caller must invoke xhci_process() once before polling. */
+     * Caller must invoke xhci_process_events() once before polling. */
     if (s_has_mouse) {
         int32_t dx = s_accum_dx;
         int32_t dy = s_accum_dy;

@@ -66,13 +66,18 @@ static H s_mouse_y = 384;
 static uint8_t g_prev_mouse_btns = 0;
 static uint8_t g_prev_kbd_scancode = 0;
 
-/* Responsive Keyboard Auto-Repeat Parameters & State */
-#define KBD_REPEAT_INITIAL_DELAY_US 120000U  /* 120 ms initial delay */
-#define KBD_REPEAT_INTERVAL_US       18182U  /* 55 cps (approx 18.2 ms interval) */
+/* RISC OS Inspired Keyboard Auto-Repeat Parameters & State */
+uint32_t g_kbd_repeat_delay_us    = 160000U; /* 16 cs = 160 ms (RISC OS Fast Delay) */
+uint32_t g_kbd_repeat_interval_us = 25000U;  /* 40 cps (25 ms interval) */
+int      g_kbd_repeat_enabled     = 1;
 static uint8_t  s_held_kbd_scancode = 0;
 static uint8_t  s_held_kbd_modifiers = 0;
 static uint32_t s_key_press_time_us = 0;
 static uint32_t s_key_last_repeat_us = 0;
+
+/* RISC OS Mouse Multiplier (MouseStep CMOS &C2) & 3-Button Layout */
+int      g_mouse_step_mult          = 2;      /* Default RISC OS MouseStep = 2 */
+int      g_mouse_swap_select_adjust = 0;      /* 0: Right-handed (Select/Menu/Adjust), 1: Left-handed */
 
 /* Display Page-Flipping State (0: y=0, 1: y=768) */
 static int s_front_page_idx = 0;
@@ -854,23 +859,36 @@ static inline uint16_t usb_to_btron_modifiers(uint8_t usb_mod) {
 static int32_t s_mouse_sub_x = 0;
 static int32_t s_mouse_sub_y = 0;
 
-/* Natural, responsive pointer acceleration with sub-pixel carry */
+/* RISC OS MouseStep Acceleration with sub-pixel residual carry */
 static inline int32_t mouse_accelerate_subpixel(int32_t raw, int32_t *subpixel) {
     if (raw == 0) return 0;
     int32_t sign = (raw < 0) ? -1 : 1;
     int32_t abs  = (raw < 0) ? -raw : raw;
 
-    /* Scaled by 256 (8.8 fixed-point format):
-     * Fine precision: 1.5x
-     * Controlled navigation: 2.0x - 3.0x
-     * Fast sweep: 4.0x - 5.0x
-     */
+    /* Scaled by 256 (8.8 fixed-point format)
+     * g_mouse_step_mult mirrors RISC OS MouseStepCMOS (1, 2, 3, 4) */
     int32_t mult_fp;
-    if      (abs <= 1)  mult_fp = 384;   /* 1.5x */
-    else if (abs <= 3)  mult_fp = 512;   /* 2.0x */
-    else if (abs <= 6)  mult_fp = 768;   /* 3.0x */
-    else if (abs <= 12) mult_fp = 1024;  /* 4.0x */
-    else                mult_fp = 1280;  /* 5.0x fast sweep */
+    if (g_mouse_step_mult <= 1) {
+        /* Step 1: Precision linear 1.0x - 2.0x */
+        if      (abs <= 2) mult_fp = 256;  /* 1.0x */
+        else if (abs <= 6) mult_fp = 384;  /* 1.5x */
+        else               mult_fp = 512;  /* 2.0x */
+    } else if (g_mouse_step_mult == 2) {
+        /* Step 2: RISC OS Standard Default (CMOS &C2 = 2) */
+        if      (abs <= 2) mult_fp = 512;  /* 2.0x */
+        else if (abs <= 6) mult_fp = 768;  /* 3.0x */
+        else               mult_fp = 1024; /* 4.0x */
+    } else if (g_mouse_step_mult == 3) {
+        /* Step 3: Fast Sweep (MouseStep = 3) */
+        if      (abs <= 2) mult_fp = 768;  /* 3.0x */
+        else if (abs <= 6) mult_fp = 1024; /* 4.0x */
+        else               mult_fp = 1280; /* 5.0x */
+    } else {
+        /* Step 4: Ultra Velocity (MouseStep = 4) */
+        if      (abs <= 2) mult_fp = 1024; /* 4.0x */
+        else if (abs <= 6) mult_fp = 1280; /* 5.0x */
+        else               mult_fp = 1536; /* 6.0x */
+    }
 
     int32_t total = *subpixel + (sign * abs * mult_fp);
     int32_t pixels = total / 256;
@@ -947,9 +965,9 @@ static int usb_poll_devices(GDEV *screen) {
     }
 
     /* 1b. Check key auto-repeat timer for held key */
-    if (s_held_kbd_scancode != 0) {
-        if ((now_us - s_key_press_time_us) >= KBD_REPEAT_INITIAL_DELAY_US) {
-            if ((now_us - s_key_last_repeat_us) >= KBD_REPEAT_INTERVAL_US) {
+    if (g_kbd_repeat_enabled && s_held_kbd_scancode != 0) {
+        if ((now_us - s_key_press_time_us) >= g_kbd_repeat_delay_us) {
+            if ((now_us - s_key_last_repeat_us) >= g_kbd_repeat_interval_us) {
                 s_key_last_repeat_us = now_us;
                 uint32_t k = dwc2_usb_to_btron_key(s_held_kbd_scancode, s_held_kbd_modifiers);
                 uint16_t bmod = usb_to_btron_modifiers(s_held_kbd_modifiers);
@@ -979,7 +997,7 @@ static int usb_poll_devices(GDEV *screen) {
 
     if (mouse_got) {
         if (mouse_rep.dx != 0 || mouse_rep.dy != 0) {
-            /* Apply macOS-style acceleration curve with sub-pixel residual carry */
+            /* Apply RISC OS MouseStep acceleration curve with sub-pixel residual carry */
             s_mouse_x += (H)mouse_accelerate_subpixel((int32_t)mouse_rep.dx, &s_mouse_sub_x);
             s_mouse_y += (H)mouse_accelerate_subpixel((int32_t)mouse_rep.dy, &s_mouse_sub_y);
             if (s_mouse_x < 0) s_mouse_x = 0;
@@ -997,14 +1015,54 @@ static int usb_poll_devices(GDEV *screen) {
             activity = 1;
         }
 
-        uint8_t btn_now  = mouse_rep.buttons & 1u;
-        uint8_t btn_prev = g_prev_mouse_btns & 1u;
-        g_prev_mouse_btns = mouse_rep.buttons;
+        uint8_t btn_left   = (mouse_rep.buttons & 1u);
+        uint8_t btn_right  = (mouse_rep.buttons & 2u) >> 1;
+        uint8_t btn_middle = (mouse_rep.buttons & 4u) >> 2;
 
-        if (btn_now != btn_prev) {
+        /* RISC OS 3-Button Model:
+         * Button 1: Select (Left, or Right if swapped)
+         * Button 2: Adjust (Right, or Left if swapped)
+         * Button 3: Menu   (Middle / Wheel Click)
+         */
+        uint8_t sel_raw = g_mouse_swap_select_adjust ? btn_right : btn_left;
+        uint8_t adj_raw = g_mouse_swap_select_adjust ? btn_left  : btn_right;
+
+        uint8_t sel_prev = (g_prev_mouse_btns & 1u);
+        uint8_t adj_prev = (g_prev_mouse_btns & 2u) >> 1;
+        uint8_t mid_prev = (g_prev_mouse_btns & 4u) >> 2;
+        g_prev_mouse_btns = (sel_raw) | (adj_raw << 1) | (btn_middle << 2);
+
+        /* Select Button (Button 1) */
+        if (sel_raw != sel_prev) {
             EVT ev;
-            ev.type   = btn_now ? EV_BUT_DOWN : EV_BUT_UP;
-            ev.button = 1;
+            ev.type   = sel_raw ? EV_BUT_DOWN : EV_BUT_UP;
+            ev.button = 1; /* Select */
+            ev.pos.x  = s_mouse_x;
+            ev.pos.y  = s_mouse_y;
+            ev.key    = 0;
+            ev.data   = 0;
+            snd_evt(&ev);
+            activity = 1;
+        }
+
+        /* Adjust Button (Button 2) */
+        if (adj_raw != adj_prev) {
+            EVT ev;
+            ev.type   = adj_raw ? EV_BUT_DOWN : EV_BUT_UP;
+            ev.button = 2; /* Adjust */
+            ev.pos.x  = s_mouse_x;
+            ev.pos.y  = s_mouse_y;
+            ev.key    = 0;
+            ev.data   = 0;
+            snd_evt(&ev);
+            activity = 1;
+        }
+
+        /* Menu Button (Button 3) */
+        if (btn_middle != mid_prev) {
+            EVT ev;
+            ev.type   = btn_middle ? EV_BUT_DOWN : EV_BUT_UP;
+            ev.button = 3; /* Menu */
             ev.pos.x  = s_mouse_x;
             ev.pos.y  = s_mouse_y;
             ev.key    = 0;

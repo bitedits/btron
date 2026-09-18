@@ -17,6 +17,7 @@ extern void uart_puts(const char *s);
 extern void uart_hex32(uint32_t val);
 extern void fb_log(const char *msg);
 extern void fb_log_hex32(uint32_t val);
+extern void fb_log_hex64(uint64_t val);
 extern void fb_log_dec(uint32_t val);
 
 /* MMIO helpers */
@@ -163,45 +164,83 @@ int bcm2711_pcie_init(void) {
 
     fb_log("[PCIE] Initializing Broadcom STB PCIe Root Complex (0xFD500000)...\n");
 
-    /* 1. Controller Reset Sequence (FreeBSD bcm_pcib_reset_controller)
-     *    REG_BRIDGE_CTRL = 0x9210
-     *    bit 1 = BRIDGE_RESET_FLAG (0x2)
-     *    bit 0 = BRIDGE_DISABLE_FLAG (0x1)
+    /* 1. Controller Reset Sequence (Linux pcie-brcmstb.c style)
+     *
+     * RGR1_SW_INIT_1 (0x9210):
+     *   bit 1 = BRIDGE_INIT (bridge software reset)   -- resets RC logic
+     *   bit 0 = PERST#      (PCIe Fundamental Reset)  -- resets VL805 endpoint
+     *
+     * Sequence:
+     *   a) Assert both BRIDGE_INIT and PERST# simultaneously
+     *   b) Enable SERDES (clear HARD_PCIE_HARD_DEBUG bit 27 = SERDES_IDDQ)
+     *   c) De-assert BRIDGE_INIT (RC logic comes out of reset)
+     *   d) Wait for SERDES PLL lock (~100us)
+     *   e) De-assert PERST# (VL805 comes out of fundamental reset)
      */
-    uint32_t val = pcie_rc_read(0x9210);
-    val |= (0x2 | 0x1);
-    pcie_rc_write(0x9210, val);
-    delay_us(100);
+    uint32_t val;
 
+    /* a) Assert BRIDGE_INIT (bit 1) + PERST# (bit 0) */
     val = pcie_rc_read(0x9210);
-    val &= ~0x2; /* Deassert reset, keep disabled */
+    val |= 0x3u;   /* bits [1:0] = 11 */
     pcie_rc_write(0x9210, val);
     delay_us(100);
 
-    pcie_rc_write(PCIE_MISC_HARD_PCIE_HARD_DEBUG, 0); /* 0x4204 = 0 */
+    /* b) Enable SERDES — clear SERDES_IDDQ (bit 27) in HARD_DEBUG */
+    val = pcie_rc_read(0x4204);
+    val &= ~(1u << 27); /* SERDES_IDDQ = 0 (powered on) */
+    pcie_rc_write(0x4204, val);
     delay_us(100);
 
-    /* 2. Configure Inbound DMA Window (FreeBSD / Linux)
-     *    PCI bus 0x00000000 -> CPU RAM 0x00000000 (4GB inbound window)
-     */
-    pcie_rc_write(0x4034, 0x11);                            /* REG_DMA_WINDOW_LOW: 4GB size */
-    pcie_rc_write(0x4038, 0x00);                            /* REG_DMA_WINDOW_HIGH: base = 0 */
-    /* 4GB SCB (17 << 27) + SCB_ACCESS_EN (0x1000) + CFG_READ_UR_MODE (0x2000) + RCB_MPS (0x400) + RCB_64B (0x80) */
-    pcie_rc_write(0x4008, (17u << 27) | 0x2000u | 0x1000u | 0x400u | 0x80u);
-    pcie_rc_write(0x402C, 0);                               /* REG_BRIDGE_GISB_WINDOW */
-    pcie_rc_write(0x403C, 0);                               /* REG_DMA_WINDOW_1 */
+    /* c) De-assert BRIDGE_INIT (bit 1), keep PERST# asserted */
+    val = pcie_rc_read(0x9210);
+    val &= ~0x2u;  /* clear BRIDGE_INIT only */
+    pcie_rc_write(0x9210, val);
+    delay_us(200); /* allow RC logic + SERDES PLL to stabilize */
 
-    /* Set Little-Endian mode for Inbound Window BAR2 (offset 0x0188 bits [3:2] = 0) */
+    /* d) De-assert PERST# (bit 0) — VL805 begins reset de-assertion sequence */
+    val = pcie_rc_read(0x9210);
+    val &= ~0x1u;  /* clear PERST# */
+    pcie_rc_write(0x9210, val);
+    delay_us(100);
+
+    fb_log("[PCIE] PERST# de-asserted, waiting for link training...\n");
+
+    /* 2. Configure Inbound DMA Window (Linux pcie-brcmstb.c brcm_pcie_setup)
+     *
+     *  RC_BAR2 = 4GB inbound window: PCI 0x00000000 -> CPU RAM 0x00000000
+     *
+     *  PCIE_MISC_RC_BAR2_CONFIG_LO  (0x4034): SIZE field = 0x11 (4GB)
+     *  PCIE_MISC_RC_BAR2_CONFIG_HI  (0x4038): base high = 0
+     *  PCIE_MISC_MISC_CTRL          (0x4008): SCB0_SIZE (17<<27) + flags
+     *  PCIE_MISC_UBUS_BAR2_CONFIG_REMAP (0x40B4): ACCESS_ENABLE = 1
+     *  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     *  THIS REGISTER ACTIVATES THE INBOUND DMA PATH ON THE UBUS FABRIC.
+     *  Without it, RC_BAR2 size is set but DMA from VL805 to ARM RAM
+     *  is DISABLED — all TRB/DCBAA reads by xHCI hardware return garbage.
+     */
+    pcie_rc_write(0x4034, 0x11);   /* RC_BAR2_CONFIG_LO: 4GB (size code 17) */
+    pcie_rc_write(0x4038, 0x00);   /* RC_BAR2_CONFIG_HI: PCI base addr = 0 */
+    /* SCB0_SIZE=17 (4GB) at bits[31:27], SCB_ACCESS_EN, CFG_READ_UR_MODE, RCB_MPS_MODE, RCB_64B_MODE */
+    pcie_rc_write(0x4008, (17u << 27) | 0x2000u | 0x1000u | 0x400u | 0x80u);
+    pcie_rc_write(0x402C, 0);      /* RC_BAR1: disable */
+    pcie_rc_write(0x403C, 0);      /* RC_BAR3: disable */
+
+    /* CRITICAL: Enable UBUS access for the inbound BAR2 window.
+     * Ref: Linux pcie-brcmstb.c PCIE_MISC_UBUS_BAR2_CONFIG_REMAP_ACCESS_ENABLE_MASK
+     * This bit connects the inbound PCIe DMA path to the UBUS interconnect
+     * so that the VL805 can DMA-read DCBAA, Command Ring, Event Ring from RAM. */
+    pcie_rc_write(0x40B4, 0x1);    /* UBUS_BAR2_CONFIG_REMAP: ACCESS_ENABLE = 1 */
+    dsb();
+
+    fb_log("[PCIE] Inbound DMA: RC_BAR2=4GB UBUS_REMAP=ENABLED\n");
+
+    /* Set Little-Endian mode for Inbound Window BAR2 (0x0188 bits[3:2] = 0) */
     uint32_t vend_spec = pcie_rc_read(0x0188);
     vend_spec &= ~0x0Cu;
     pcie_rc_write(0x0188, vend_spec);
     dsb();
 
-    /* 3. Enable Controller (deassert BRIDGE_DISABLE_FLAG) */
-    val = pcie_rc_read(0x9210);
-    val &= ~0x1;
-    pcie_rc_write(0x9210, val);
-    delay_us(100);
+    /* (Controller already enabled by PERST# de-assertion above) */
 
     /* 4. Wait for controller and link training (REG_BRIDGE_STATE 0x4068) */
     int to = 1000;

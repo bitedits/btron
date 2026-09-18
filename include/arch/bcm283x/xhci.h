@@ -96,6 +96,111 @@ typedef struct {
     uint32_t rsvd[3];
 } __attribute__((packed, aligned(32))) xhci_ep_ctx_t;
 
+/* USB Standard Request Codes */
+#define USB_REQ_GET_STATUS          0x00
+#define USB_REQ_CLEAR_FEATURE       0x01
+#define USB_REQ_SET_FEATURE         0x03
+#define USB_REQ_SET_ADDRESS         0x05
+#define USB_REQ_GET_DESCRIPTOR      0x06
+#define USB_REQ_SET_DESCRIPTOR      0x07
+#define USB_REQ_GET_CONFIGURATION   0x08
+#define USB_REQ_SET_CONFIGURATION   0x09
+#define USB_REQ_SET_INTERFACE       0x0B
+#define USB_REQ_SET_IDLE            0x0A
+#define USB_REQ_SET_PROTOCOL        0x0B
+
+/* USB Request Types */
+#define USB_REQ_TYPE_STANDARD       (0x00 << 5)
+#define USB_REQ_TYPE_CLASS          (0x01 << 5)
+#define USB_REQ_TYPE_VENDOR         (0x02 << 5)
+
+#define USB_REQ_RCPT_DEVICE         0x00
+#define USB_REQ_RCPT_INTERFACE      0x01
+#define USB_REQ_RCPT_ENDPOINT       0x02
+#define USB_REQ_RCPT_OTHER          0x03
+
+#define USB_DIR_OUT                 0x00
+#define USB_DIR_IN                  0x80
+
+/* USB Descriptor Types */
+#define USB_DT_DEVICE               0x01
+#define USB_DT_CONFIGURATION        0x02
+#define USB_DT_STRING               0x03
+#define USB_DT_INTERFACE            0x04
+#define USB_DT_ENDPOINT             0x05
+#define USB_DT_HID                  0x21
+#define USB_DT_REPORT               0x22
+#define USB_DT_HUB                  0x29
+
+/* Hub Class Port Features */
+#define HUB_FEAT_PORT_CONNECTION    0
+#define HUB_FEAT_PORT_ENABLE        1
+#define HUB_FEAT_PORT_SUSPEND       2
+#define HUB_FEAT_PORT_OVER_CURRENT  3
+#define HUB_FEAT_PORT_RESET         4
+#define HUB_FEAT_PORT_POWER         8
+#define HUB_FEAT_PORT_LOW_SPEED     9
+#define HUB_FEAT_C_PORT_CONNECTION  16
+#define HUB_FEAT_C_PORT_ENABLE      17
+#define HUB_FEAT_C_PORT_SUSPEND     18
+#define HUB_FEAT_C_PORT_OVER_CURRENT 19
+#define HUB_FEAT_C_PORT_RESET       20
+
+/* Hub Port Status Bits */
+#define HUB_PORT_STAT_CONNECTION    (1u << 0)
+#define HUB_PORT_STAT_ENABLE        (1u << 1)
+#define HUB_PORT_STAT_SUSPEND       (1u << 2)
+#define HUB_PORT_STAT_OVER_CURRENT  (1u << 3)
+#define HUB_PORT_STAT_RESET         (1u << 4)
+#define HUB_PORT_STAT_POWER         (1u << 8)
+#define HUB_PORT_STAT_LOW_SPEED     (1u << 9)
+#define HUB_PORT_STAT_HIGH_SPEED    (1u << 10)
+
+/* USB Setup Packet */
+typedef struct {
+    uint8_t  bmRequestType;
+    uint8_t  bRequest;
+    uint16_t wValue;
+    uint16_t wIndex;
+    uint16_t wLength;
+} __attribute__((packed)) usb_setup_pkt_t;
+
+/* USB Standard Device Descriptor (18 bytes) */
+typedef struct {
+    uint8_t  bLength;
+    uint8_t  bDescriptorType;
+    uint16_t bcdUSB;
+    uint8_t  bDeviceClass;
+    uint8_t  bDeviceSubClass;
+    uint8_t  bDeviceProtocol;
+    uint8_t  bMaxPacketSize0;
+    uint16_t idVendor;
+    uint16_t idProduct;
+    uint16_t bcdDevice;
+    uint8_t  iManufacturer;
+    uint8_t  iProduct;
+    uint8_t  iSerialNumber;
+    uint8_t  bNumConfigurations;
+} __attribute__((packed)) usb_device_desc_t;
+
+/* USB Hub Descriptor */
+typedef struct {
+    uint8_t  bDescLength;
+    uint8_t  bDescriptorType;
+    uint8_t  bNbrPorts;
+    uint16_t wHubCharacteristics;
+    uint8_t  bPwrOn2PwrGood;
+    uint8_t  bHubContrCurrent;
+    uint8_t  DeviceRemovable;
+    uint8_t  PortPwrCtrlMask;
+} __attribute__((packed)) usb_hub_desc_t;
+
+/* Hub Port Status Response (4 bytes) */
+typedef struct {
+    uint16_t wPortStatus;
+    uint16_t wPortChange;
+} __attribute__((packed)) usb_port_status_t;
+
 /* Driver Functions */
 int  xhci_init(uintptr_t mmio_base);
 int  xhci_poll_keyboard(usb_kbd_report_t *rep);

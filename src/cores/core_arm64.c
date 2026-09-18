@@ -438,7 +438,19 @@ static int pi4_shell_poll(uint32_t *gpu_fb)
         }
     }
 
-    /* 2. Poll UART Serial Console (if connected) */
+    /* 2. Poll USB Mouse (motion/clicks in shell cancel autoboot) */
+    usb_mouse_report_t mrep;
+    int mouse_ready = 0;
+    if (g_use_xhci) {
+        mouse_ready = (xhci_poll_mouse(&mrep) > 0);
+    } else {
+        mouse_ready = (dwc2_poll_mouse(&mrep) > 0);
+    }
+    if (mouse_ready && (mrep.dx != 0 || mrep.dy != 0 || mrep.buttons != 0)) {
+        return 1;
+    }
+
+    /* 3. Poll UART Serial Console (if connected) */
     if (k == 0 && uart_has_char()) {
         int c = uart_getc();
         if (c == '\r') c = '\n';
@@ -961,9 +973,14 @@ void btron_main(void) {
 
         /* QEMU raspi4b identifies as 0xB03111 or 0xB03115 without PCIe hardware.
          * Real physical hardware (Pi 400 0xC03130/1, Pi 4B 0xC0311x) has Broadcom PCIe + VL805.
+         *
+         * If board_rev == 0, the mailbox returned no data (possible timing issue or
+         * firmware not responding yet). Treat 0 as physical hardware — QEMU always returns
+         * a valid non-zero revision code.
          */
-        bool is_qemu = ((board_rev & 0x00F00000u) == 0x00B00000u) ||
-                       (board_rev == 0x00B03115u) || (board_rev == 0x00B03111u);
+        bool is_qemu = (board_rev != 0) && (
+            ((board_rev & 0x00F00000u) == 0x00B00000u) ||
+            (board_rev == 0x00B03115u) || (board_rev == 0x00B03111u));
         if (!is_qemu) {
             fb_log("[USB] Physical BCM2711 Hardware: Initializing PCIe Root Complex & VL805 xHCI...\n");
             if (bcm2711_pcie_init() == 0) {

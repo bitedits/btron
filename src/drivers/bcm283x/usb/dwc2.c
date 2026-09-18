@@ -92,7 +92,7 @@ static uint8_t  g_mouse_addr        = 2;
 
 /* DMA buffers — 16-byte aligned */
 static usb_kbd_report_t   g_kbd_dma_buf   __attribute__((aligned(16)));
-static usb_mouse_report_t g_mouse_dma_buf __attribute__((aligned(16)));
+static uint8_t            g_mouse_dma_buf[16] __attribute__((aligned(16)));
 
 /* PID toggles for interrupt IN channels */
 static uint32_t g_kbd_pid   = PID_DATA0;
@@ -587,7 +587,10 @@ int dwc2_poll_mouse(usb_mouse_report_t *report)
         g_mouse_chan_active = false;
         dsb();
 
-        *report = g_mouse_dma_buf;
+        report->buttons = g_mouse_dma_buf[0];
+        report->dx      = (int16_t)(int8_t)g_mouse_dma_buf[1];
+        report->dy      = (int16_t)(int8_t)g_mouse_dma_buf[2];
+        report->wheel   = (int16_t)(int8_t)g_mouse_dma_buf[3];
         g_mouse_pid = (g_mouse_pid == PID_DATA0) ? PID_DATA1 : PID_DATA0;
 
         bool changed = (report->dx != 0 || report->dy != 0 ||

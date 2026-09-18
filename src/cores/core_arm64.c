@@ -1227,25 +1227,35 @@ static int usb_poll_devices(GDEV *screen) {
 
     if (mouse_got) {
         if (mouse_rep.dx != 0 || mouse_rep.dy != 0) {
+            int32_t rdx = (int32_t)mouse_rep.dx;
+            int32_t rdy = (int32_t)mouse_rep.dy;
+            if (rdx > 64) rdx = 64;
+            if (rdx < -64) rdx = -64;
+            if (rdy > 64) rdy = 64;
+            if (rdy < -64) rdy = -64;
+
             int32_t move_x = 0, move_y = 0;
             if (g_mouse_accel_profile == 1) {
                 /* Haiku OS / BeOS 2D Velocity Vector Accelerator */
-                mouse_accelerate_pair_haiku((int32_t)mouse_rep.dx, (int32_t)mouse_rep.dy, &move_x, &move_y);
+                mouse_accelerate_pair_haiku(rdx, rdy, &move_x, &move_y);
             } else if (g_mouse_accel_profile == 2) {
                 /* RISC OS MouseStep Stepped Accelerator */
-                move_x = mouse_accelerate_subpixel_riscos((int32_t)mouse_rep.dx, &s_mouse_sub_x);
-                move_y = mouse_accelerate_subpixel_riscos((int32_t)mouse_rep.dy, &s_mouse_sub_y);
+                move_x = mouse_accelerate_subpixel_riscos(rdx, &s_mouse_sub_x);
+                move_y = mouse_accelerate_subpixel_riscos(rdy, &s_mouse_sub_y);
             } else {
-                move_x = mouse_accelerate_subpixel_raw((int32_t)mouse_rep.dx, &s_mouse_sub_x);
-                move_y = mouse_accelerate_subpixel_raw((int32_t)mouse_rep.dy, &s_mouse_sub_y);
+                move_x = mouse_accelerate_subpixel_raw(rdx, &s_mouse_sub_x);
+                move_y = mouse_accelerate_subpixel_raw(rdy, &s_mouse_sub_y);
             }
 
-            s_mouse_x += (H)move_x;
-            s_mouse_y += (H)move_y;
-            if (s_mouse_x < 0) s_mouse_x = 0;
-            if (s_mouse_x >= BTRON_SCREEN_W) s_mouse_x = BTRON_SCREEN_W - 1;
-            if (s_mouse_y < 0) s_mouse_y = 0;
-            if (s_mouse_y >= BTRON_SCREEN_H) s_mouse_y = BTRON_SCREEN_H - 1;
+            int32_t nx = (int32_t)s_mouse_x + move_x;
+            int32_t ny = (int32_t)s_mouse_y + move_y;
+            if (nx < 0) nx = 0;
+            else if (nx >= BTRON_SCREEN_W) nx = BTRON_SCREEN_W - 1;
+            if (ny < 0) ny = 0;
+            else if (ny >= BTRON_SCREEN_H) ny = BTRON_SCREEN_H - 1;
+
+            s_mouse_x = (H)nx;
+            s_mouse_y = (H)ny;
 
             EVT ev;
             ev.type   = EV_MOUSE_MOVE;

@@ -287,12 +287,15 @@ static int usb_poll_devices(GDEV *screen) {
     usb_mouse_report_t mouse_rep;
     if (dwc2_poll_mouse(&mouse_rep) > 0) {
         if (mouse_rep.dx != 0 || mouse_rep.dy != 0) {
-            s_mouse_x += (H)mouse_rep.dx;
-            s_mouse_y += (H)mouse_rep.dy;
-            if (s_mouse_x < 0) s_mouse_x = 0;
-            if (s_mouse_x >= BTRON_SCREEN_W) s_mouse_x = BTRON_SCREEN_W - 1;
-            if (s_mouse_y < 0) s_mouse_y = 0;
-            if (s_mouse_y >= BTRON_SCREEN_H) s_mouse_y = BTRON_SCREEN_H - 1;
+            int32_t nx = (int32_t)s_mouse_x + (int32_t)mouse_rep.dx;
+            int32_t ny = (int32_t)s_mouse_y + (int32_t)mouse_rep.dy;
+            if (nx < 0) nx = 0;
+            else if (nx >= BTRON_SCREEN_W) nx = BTRON_SCREEN_W - 1;
+            if (ny < 0) ny = 0;
+            else if (ny >= BTRON_SCREEN_H) ny = BTRON_SCREEN_H - 1;
+
+            s_mouse_x = (H)nx;
+            s_mouse_y = (H)ny;
 
             EVT ev;
             ev.type   = EV_MOUSE_MOVE;

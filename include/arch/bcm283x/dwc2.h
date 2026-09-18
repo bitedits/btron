@@ -154,9 +154,9 @@ typedef struct {
 
 typedef struct {
     uint8_t buttons;
-    int8_t  dx;
-    int8_t  dy;
-    int8_t  wheel;
+    int16_t dx;
+    int16_t dy;
+    int16_t wheel;
 } usb_mouse_report_t;
 #pragma pack(pop)
 

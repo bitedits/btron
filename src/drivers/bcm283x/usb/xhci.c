@@ -145,26 +145,28 @@ static volatile int s_has_mouse = 0;
 static void xhci_decode_mouse_report(const volatile uint8_t *raw, uint32_t transferred, usb_mouse_report_t *out) {
     if (!raw || !out) return;
 
-    /* Gaming / Multi-Report HID Mouse with Report ID 1 (e.g. Logitech G102/G203 LIGHTSYNC)
+    /* Gaming / Multi-Report HID Mouse with Report ID (e.g. Logitech G102/G203 LIGHTSYNC)
      * Byte 0: Report ID (0x01)
      * Byte 1: Buttons (bit 0=Left, bit 1=Right, bit 2=Middle, bit 3=Back, bit 4=Forward)
-     * To prevent misidentifying standard Boot Protocol mice with Left Button pressed (raw[0] == 0x01),
-     * verify that raw[1] only contains valid button bits and that high-byte of delta is non-trivial. */
-    if (raw[0] == 0x01 && transferred >= 6 && (raw[1] & ~0x1Fu) == 0 && (raw[3] != 0 || raw[5] != 0)) {
-        out->buttons = raw[1] & 0x07;
+     * Byte 2..3: X displacement (int16_t little-endian)
+     * Byte 4..5: Y displacement (int16_t little-endian)
+     * Byte 6: Wheel (optional)
+     * Decoded by packet length (transferred >= 6) and valid button mask without requiring non-zero high bytes. */
+    if (transferred >= 6 && (raw[1] & ~0x1Fu) == 0) {
+        out->buttons = (raw[0] == 0x01) ? (raw[1] & 0x07) : (raw[0] & 0x07);
 
         int16_t x16 = (int16_t)((uint16_t)raw[2] | ((uint16_t)raw[3] << 8));
         int16_t y16 = (int16_t)((uint16_t)raw[4] | ((uint16_t)raw[5] << 8));
 
-        /* Clamp deltas to reasonable single-report range */
-        if (x16 > 120) x16 = 120;
-        if (x16 < -120) x16 = -120;
-        if (y16 > 120) y16 = 120;
-        if (y16 < -120) y16 = -120;
+        /* Clamp deltas to ±512 */
+        if (x16 > 512) x16 = 512;
+        if (x16 < -512) x16 = -512;
+        if (y16 > 512) y16 = 512;
+        if (y16 < -512) y16 = -512;
 
-        out->dx = (int8_t)x16;
-        out->dy = (int8_t)y16;
-        out->wheel = (transferred >= 7) ? (int8_t)raw[6] : 0;
+        out->dx = x16;
+        out->dy = y16;
+        out->wheel = (transferred >= 7) ? (int16_t)(int8_t)raw[6] : 0;
     } else {
         /* Standard 3-byte / 4-byte / 8-byte USB Boot Protocol Mouse
          * Byte 0: Buttons (bit 0=Left, bit 1=Right, bit 2=Middle)
@@ -173,9 +175,9 @@ static void xhci_decode_mouse_report(const volatile uint8_t *raw, uint32_t trans
          * Byte 3: Wheel (optional)
          */
         out->buttons = raw[0] & 0x07;
-        out->dx = (int8_t)raw[1];
-        out->dy = (int8_t)raw[2];
-        out->wheel = (transferred >= 4) ? (int8_t)raw[3] : 0;
+        out->dx = (int16_t)(int8_t)raw[1];
+        out->dy = (int16_t)(int8_t)raw[2];
+        out->wheel = (transferred >= 4) ? (int16_t)(int8_t)raw[3] : 0;
     }
 }
 
@@ -1180,14 +1182,14 @@ int xhci_poll_mouse(usb_mouse_report_t *rep) {
     if (s_has_mouse) {
         int32_t dx = s_accum_dx;
         int32_t dy = s_accum_dy;
-        if (dx > 120) dx = 120;
-        if (dx < -120) dx = -120;
-        if (dy > 120) dy = 120;
-        if (dy < -120) dy = -120;
+        if (dx > 512) dx = 512;
+        if (dx < -512) dx = -512;
+        if (dy > 512) dy = 512;
+        if (dy < -512) dy = -512;
 
-        rep->dx = (int8_t)dx;
-        rep->dy = (int8_t)dy;
-        rep->wheel = (int8_t)s_accum_wheel;
+        rep->dx = (int16_t)dx;
+        rep->dy = (int16_t)dy;
+        rep->wheel = (int16_t)s_accum_wheel;
         rep->buttons = s_latest_buttons;
 
         s_accum_dx = 0;

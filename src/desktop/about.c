@@ -487,6 +487,43 @@ int about_is_animating(void) {
     return (g_about_state.wnd != NULL && g_about_state.animation_enabled);
 }
 
+WND* about_get_wnd(void) {
+    return g_about_state.wnd;
+}
+
+int about_render_anim_dirty(GDEV *screen, volatile uint32_t *gpu_fb) {
+    (void)gpu_fb;
+    if (!g_about_state.wnd || !g_about_state.animation_enabled || !screen) {
+        return 0;
+    }
+    WND *wnd = g_about_state.wnd;
+    if (!wnd->visible) return 0;
+
+    /* 1. Re-render the About client area with the latest animation frame */
+    if (wnd->paint && wnd->dev && wnd->dev->pixels) {
+        wnd->paint(wnd, wnd->dev);
+
+        /* 2. Composite client pixels onto backbuffer screen */
+        H dest_x = wnd->client.left;
+        H dest_y = wnd->client.top;
+
+        for (H cy = 0; cy < wnd->dev->height; cy++) {
+            for (H cx = 0; cx < wnd->dev->width; cx++) {
+                H px = dest_x + cx;
+                H py = dest_y + cy;
+                if (px >= 0 && px < screen->width && py >= 0 && py < screen->height) {
+                    COLOR c = wnd->dev->pixels[cy * wnd->dev->width + cx];
+                    if (c != 0x00000000) {
+                        ((volatile COLOR*)screen->pixels)[py * screen->width + px] = c;
+                    }
+                }
+            }
+        }
+    }
+
+    return 1;
+}
+
 WND* open_about_window(void) {
     g_about_state.ticks = 0;
     g_about_state.current_tab = ABOUT_TAB_SPECS;

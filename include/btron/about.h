@@ -14,6 +14,8 @@ extern "C" {
 
 WND* open_about_window(void);
 int  about_is_animating(void);
+WND* about_get_wnd(void);
+int  about_render_anim_dirty(GDEV *screen, volatile uint32_t *gpu_fb);
 
 #ifdef __cplusplus
 }

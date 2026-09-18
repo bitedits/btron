@@ -107,6 +107,8 @@ extern WND* open_control_panel_window(void);
 #include <arch/bcm283x/bcm2711_dma.h>
 extern int mailbox_set_virtual_offset(uint32_t x, uint32_t y);
 extern int about_is_animating(void);
+extern WND* about_get_wnd(void);
+extern int  about_render_anim_dirty(GDEV *screen, volatile uint32_t *gpu_fb);
 void blit_backbuffer_to_fb(volatile uint32_t *gpu_fb);
 static int usb_poll_devices(GDEV *screen);
 
@@ -645,11 +647,55 @@ static void launch_pi4_desktop_session(uint32_t *gpu_fb)
             redraw = 1;
         }
 
-        /* 60 FPS animation redraw when animated window (About Nyan Cat) is active (every 16,666 µs) */
+        /* Dedicated high-rate 60 FPS dirty path for About alone (every 16,666 µs) */
         if (about_is_animating()) {
             if ((now - last_anim_frame) >= 16666) {
                 last_anim_frame = now;
-                redraw = 1;
+                if (!redraw) {
+                    /* Fast path: refresh only About window client and composite into backbuffer */
+                    about_render_anim_dirty(screen, gpu_fb);
+
+                    /* Re-overlay mouse cursor */
+                    H mx = 0, my = 0;
+                    get_baremetal_mouse_pos(&mx, &my);
+                    draw_baremetal_mouse_cursor(screen, mx, my, BTRON_SCREEN_W, BTRON_SCREEN_H);
+
+                    /* Hardware 2D DMA dirty-rect BitBlt directly to front buffer */
+                    WND *aw = about_get_wnd();
+                    if (aw && g_mmio_base == 0xFE000000UL) {
+                        H bx0 = aw->bounds.left;
+                        H by0 = aw->bounds.top;
+                        H bw  = aw->bounds.right - aw->bounds.left;
+                        H bh  = aw->bounds.bottom - aw->bounds.top;
+                        if (bx0 < 0) bx0 = 0;
+                        if (by0 < 0) by0 = 0;
+                        if (bx0 + bw > BTRON_SCREEN_W) bw = BTRON_SCREEN_W - bx0;
+                        if (by0 + bh > BTRON_SCREEN_H) bh = BTRON_SCREEN_H - by0;
+
+                        uint32_t stride = (BTRON_SCREEN_W - bw) * sizeof(COLOR);
+                        uint32_t width_bytes = bw * sizeof(COLOR);
+
+                        /* Clean CPU cache for the dirty bounding box */
+                        for (H r = 0; r < bh; r++) {
+                            arm64_clean_cache_range(&s_desktop_backbuffer[(by0 + r) * BTRON_SCREEN_W + bx0], width_bytes);
+                        }
+
+                        uintptr_t dst_addr = (uintptr_t)(gpu_fb + (s_front_page_idx * BTRON_SCREEN_H * BTRON_SCREEN_W) + (by0 * BTRON_SCREEN_W) + bx0);
+                        uintptr_t src_addr = (uintptr_t)&s_desktop_backbuffer[by0 * BTRON_SCREEN_W + bx0];
+
+                        bcm2711_dma_blit2d(0,
+                                           dst_addr & 0x3FFFFFFF,
+                                           stride,
+                                           src_addr & 0x3FFFFFFF,
+                                           stride,
+                                           width_bytes,
+                                           bh);
+                        bcm2711_dma_wait(0);
+                    } else {
+                        /* Fallback full backbuffer blit */
+                        blit_backbuffer_to_fb(gpu_fb);
+                    }
+                }
             }
         }
 

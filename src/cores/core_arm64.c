@@ -1068,8 +1068,8 @@ int32_t mouse_accelerate_subpixel_riscos(int32_t raw, int32_t *subpixel)
     }
 
     /* Clamp raw input against packet bursts */
-    if (raw >  64) raw =  64;
-    if (raw < -64) raw = -64;
+    if (raw >  512) raw =  512;
+    if (raw < -512) raw = -512;
 
     int32_t sign = (raw < 0) ? -1 : 1;
     int32_t abs  = (raw < 0) ? -raw : raw;
@@ -1115,7 +1115,7 @@ static inline int32_t mouse_accelerate_subpixel_raw(int32_t raw, int32_t *subpix
     return raw;          // pure 1:1, no residual, no boost, no mult
 }
 
-static inline int32_t mouse_accelerate_subpixel(int32_t raw, int32_t *subpixel)
+static inline __attribute__((unused)) int32_t mouse_accelerate_subpixel(int32_t raw, int32_t *subpixel)
 {
     if (g_mouse_accel_profile == 1) {
         return mouse_accelerate_subpixel_haiku(raw, subpixel);

@@ -125,6 +125,7 @@ typedef struct {
     int               slot_id;
     uint32_t          mps;
     volatile uint8_t *buf;
+    uint8_t           proto_mode; /* 0 = auto-detect, 1 = Boot Protocol (8-bit), 2 = Report ID 1 (16-bit) */
 } xhci_mouse_t;
 
 static xhci_mouse_t s_mice[XHCI_MAX_MICE];
@@ -142,43 +143,63 @@ static volatile int32_t s_accum_wheel = 0;
 static volatile uint8_t s_latest_buttons = 0;
 static volatile int s_has_mouse = 0;
 
-static void xhci_decode_mouse_report(const volatile uint8_t *raw, uint32_t transferred, usb_mouse_report_t *out) {
-    if (!raw || !out) return;
+static void xhci_decode_mouse_report(xhci_mouse_t *mouse, uint32_t transferred, usb_mouse_report_t *out) {
+    if (!mouse || !mouse->buf || !out) return;
+    const volatile uint8_t *raw = mouse->buf;
 
-    /* Gaming / Multi-Report HID Mouse with Report ID (e.g. Logitech G102/G203 LIGHTSYNC)
-     * Byte 0: Report ID (0x01)
-     * Byte 1: Buttons (bit 0=Left, bit 1=Right, bit 2=Middle, bit 3=Back, bit 4=Forward)
-     * Byte 2..3: X displacement (int16_t little-endian)
-     * Byte 4..5: Y displacement (int16_t little-endian)
-     * Byte 6: Wheel (optional)
-     * Decoded by packet length (transferred >= 6) and valid button mask without requiring non-zero high bytes. */
-    if (transferred >= 6 && (raw[1] & ~0x1Fu) == 0) {
-        out->buttons = (raw[0] == 0x01) ? (raw[1] & 0x07) : (raw[0] & 0x07);
-
-        int16_t x16 = (int16_t)((uint16_t)raw[2] | ((uint16_t)raw[3] << 8));
-        int16_t y16 = (int16_t)((uint16_t)raw[4] | ((uint16_t)raw[5] << 8));
-
-        /* Clamp deltas to ±512 */
-        if (x16 > 512) x16 = 512;
-        if (x16 < -512) x16 = -512;
-        if (y16 > 512) y16 = 512;
-        if (y16 < -512) y16 = -512;
-
-        out->dx = x16;
-        out->dy = y16;
-        out->wheel = (transferred >= 7) ? (int16_t)(int8_t)raw[6] : 0;
-    } else {
-        /* Standard 3-byte / 4-byte / 8-byte USB Boot Protocol Mouse
-         * Byte 0: Buttons (bit 0=Left, bit 1=Right, bit 2=Middle)
-         * Byte 1: X displacement (int8_t)
-         * Byte 2: Y displacement (int8_t)
-         * Byte 3: Wheel (optional)
-         */
-        out->buttons = raw[0] & 0x07;
-        out->dx = (int16_t)(int8_t)raw[1];
-        out->dy = (int16_t)(int8_t)raw[2];
-        out->wheel = (transferred >= 4) ? (int16_t)(int8_t)raw[3] : 0;
+    /* Auto-detect protocol mode if not explicitly locked:
+     * - Standard Boot Protocol mouse reports NEVER have a Report ID. When no button
+     *   is pressed (the vast majority of cursor moves), raw[0] == 0x00.
+     *   A device sending raw[0] == 0x00 can never be a Report ID 1 device.
+     * - Gaming mice with Report ID 1 (e.g. Logitech G102/G203 LIGHTSYNC) prepend
+     *   Report ID 0x01 on EVERY packet, so raw[0] == 0x01 always. When buttons are
+     *   released, raw[1] == 0x00 and motion is in bytes 2..5 (16-bit). */
+    if (mouse->proto_mode == 0) {
+        if (raw[0] == 0x00) {
+            mouse->proto_mode = 1; /* Standard Boot Protocol */
+        } else if (raw[0] == 0x01 && transferred >= 6 && raw[1] == 0x00 &&
+                   (raw[2] != 0 || raw[3] != 0 || raw[4] != 0 || raw[5] != 0)) {
+            mouse->proto_mode = 2; /* Report ID 1 (16-bit deltas) */
+        }
     }
+
+    if (mouse->proto_mode == 2) {
+        /* Gaming / Multi-Report HID Mouse with Report ID 1 (e.g. Logitech G102/G203 LIGHTSYNC)
+         * Byte 0: Report ID (0x01)
+         * Byte 1: Buttons (bit 0=Left, bit 1=Right, bit 2=Middle, bit 3=Back, bit 4=Forward)
+         * Byte 2..3: X displacement (int16_t little-endian)
+         * Byte 4..5: Y displacement (int16_t little-endian)
+         * Byte 6: Wheel (optional)
+         */
+        if (raw[0] == 0x01 && transferred >= 6) {
+            out->buttons = raw[1] & 0x07;
+
+            int16_t x16 = (int16_t)((uint16_t)raw[2] | ((uint16_t)raw[3] << 8));
+            int16_t y16 = (int16_t)((uint16_t)raw[4] | ((uint16_t)raw[5] << 8));
+
+            /* Clamp deltas to ±512 */
+            if (x16 > 512) x16 = 512;
+            if (x16 < -512) x16 = -512;
+            if (y16 > 512) y16 = 512;
+            if (y16 < -512) y16 = -512;
+
+            out->dx = x16;
+            out->dy = y16;
+            out->wheel = (transferred >= 7) ? (int16_t)(int8_t)raw[6] : 0;
+            return;
+        }
+    }
+
+    /* Standard 3-byte / 4-byte / 8-byte USB Boot Protocol Mouse
+     * Byte 0: Buttons (bit 0=Left, bit 1=Right, bit 2=Middle)
+     * Byte 1: X displacement (int8_t)
+     * Byte 2: Y displacement (int8_t)
+     * Byte 3: Wheel (optional)
+     */
+    out->buttons = raw[0] & 0x07;
+    out->dx      = (int16_t)(int8_t)raw[1];
+    out->dy      = (int16_t)(int8_t)raw[2];
+    out->wheel   = (transferred >= 4) ? (int16_t)(int8_t)raw[3] : 0;
 }
 
 static void xhci_queue_ep1_transfer(uint32_t slot_id, uintptr_t buf_addr, uint32_t len);
@@ -205,7 +226,7 @@ static void xhci_handle_transfer_event(uint32_t ev_slot, uint32_t ev_epid, uint3
                 if (transferred == 0) transferred = s_mice[m].mps;
 
                 usb_mouse_report_t temp_rep = {0};
-                xhci_decode_mouse_report(s_mice[m].buf, transferred, &temp_rep);
+                xhci_decode_mouse_report(&s_mice[m], transferred, &temp_rep);
 
                 s_accum_dx += temp_rep.dx;
                 s_accum_dy += temp_rep.dy;
@@ -649,6 +670,12 @@ int xhci_init(uintptr_t mmio_base) {
 
     s_kbd_slot_id = 0;
     s_kbd_mps = 8;
+    for (int i = 0; i < XHCI_MAX_MICE; i++) {
+        s_mice[i].slot_id = 0;
+        s_mice[i].mps = 0;
+        s_mice[i].buf = NULL;
+        s_mice[i].proto_mode = 0;
+    }
     s_num_mice = 0;
     s_kbd_q_head = 0;
     s_kbd_q_tail = 0;
@@ -951,6 +978,7 @@ int xhci_init(uintptr_t mmio_base) {
                     ret = xhci_ep0_control_transfer(dev_slot, 0x80, USB_REQ_GET_DESCRIPTOR, (USB_DT_DEVICE << 8), 0, sizeof(ddesc), &ddesc);
 
                     uint8_t proto = 0;
+                    uint8_t mouse_boot_proto = 0;
                     uint32_t ep1_mps = 8;
                     uint32_t ep1_interval = 6; /* default 8ms */
                     bool is_keyboard = false;
@@ -989,22 +1017,11 @@ int xhci_init(uintptr_t mmio_base) {
                                 if (ep_addr & 0x80) { /* IN endpoint */
                                     uint32_t mps = cfg_buf[off + 4] | ((uint32_t)cfg_buf[off + 5] << 8);
                                     if (mps < 4 || mps > 64) mps = 8;
-                                    uint8_t bInt = cfg_buf[off + 6];
-                                    uint32_t interval = 6;
-                                    if (dev_speed == 3) {
-                                        interval = bInt ? bInt : 6;
-                                    } else {
-                                        if (bInt <= 1) interval = 3;
-                                        else if (bInt <= 2) interval = 4;
-                                        else if (bInt <= 4) interval = 5;
-                                        else if (bInt <= 8) interval = 6;
-                                        else if (bInt <= 16) interval = 7;
-                                        else interval = 8;
-                                    }
 
                                     if (cur_if_proto == 2) {
                                         is_mouse = true;
                                         proto = 2;
+                                        mouse_boot_proto = 1;
                                         ep1_mps = mps;
                                         ep1_interval = 3; /* Force 1 ms (1000 Hz) polling for instant response */
                                     } else if (cur_if_proto == 1 && !is_mouse) {
@@ -1084,6 +1101,9 @@ int xhci_init(uintptr_t mmio_base) {
                             s_mice[s_num_mice].slot_id = dev_slot;
                             s_mice[s_num_mice].mps = ep1_mps;
                             s_mice[s_num_mice].buf = MOUSE_BUF(s_num_mice);
+                            /* If interface declared Boot Mouse (proto 2), lock to Boot Protocol (mode 1).
+                             * Otherwise (vendor HID), start in auto-detect (mode 0). */
+                            s_mice[s_num_mice].proto_mode = (mouse_boot_proto == 1) ? 1 : 0;
                             fb_log("[XHCI] Bound Slot ");
                             fb_log_dec(dev_slot);
                             fb_log(" as Mouse ");

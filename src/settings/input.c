@@ -29,6 +29,7 @@ extern uint32_t g_kbd_repeat_interval_us;
 extern int      g_kbd_repeat_enabled;
 extern int      g_mouse_step_mult;
 extern int      g_mouse_swap_select_adjust;
+extern int      g_mouse_accel_profile;
 
 typedef struct {
     WND *wnd;
@@ -40,6 +41,7 @@ typedef struct {
 
     /* Mouse Settings */
     int  mouse_step_sel;    /* 0: Step 1, 1: Step 2 (RISC OS Default), 2: Step 3, 3: Step 4 */
+    int  mouse_profile_sel; /* 0: RISC OS Stepped Curve, 1: Haiku Continuous Curve */
     BOOL mouse_accel_enable;
     int  mouse_handedness;  /* 0: Right-handed (Select/Menu/Adjust), 1: Left-handed */
     int  dbl_click_sel;     /* 0: 40cs (400ms), 1: 50cs (500ms) */
@@ -136,6 +138,9 @@ static void apply_input_settings_to_kernel(void) {
     /* Select / Adjust handedness */
     g_mouse_swap_select_adjust = g_state_input.mouse_handedness;
 
+    /* Mouse Acceleration Profile (0 = RISC OS, 1 = Haiku) */
+    g_mouse_accel_profile = g_state_input.mouse_profile_sel;
+
     g_state_input.is_dirty = FALSE;
 }
 
@@ -146,6 +151,7 @@ static void set_risc_os_defaults(void) {
     g_state_input.kbd_layout_sel     = 0;     /* US ANSI */
 
     g_state_input.mouse_step_sel     = 0;     /* Step 1: 1.0x Precision */
+    g_state_input.mouse_profile_sel  = 1;     /* Haiku OS Continuous (1) or RISC OS (0) */
     g_state_input.mouse_accel_enable = TRUE;
     g_state_input.mouse_handedness   = 0;     /* Right-handed (Select/Menu/Adjust) */
     g_state_input.dbl_click_sel      = 1;     /* 50cs (500ms) RISC OS Default */
@@ -167,11 +173,11 @@ static void paint_input_settings(WND *wnd, GDEV *dev) {
     drw_lin(dev, 0, 40, dev->width, 40);
     draw_setting_gif_icon_scaled(dev, "input", 6, 4, 32, 32);
     char hdr_str[128];
-    snprintf(hdr_str, sizeof(hdr_str), "[Settings Cabinet] %s (%s) — RISC OS Style Options", "Input", "入力環境");
+    snprintf(hdr_str, sizeof(hdr_str), "[Settings Cabinet] %s (%s) — RISC OS & Haiku Input", "Input", "入力環境");
     drw_tc_string(dev, 46, 12, hdr_str, COLOR_BLACK, COLOR_LTGRAY);
 
     /* ═══════════════════════════════════════════════════════════════════
-     * Section 1: RISC OS Keyboard Configuration (Left Panel)
+     * Section 1: Keyboard Configuration (Left Panel)
      * ═══════════════════════════════════════════════════════════════════ */
     RECT s1 = { 10, 48, 314, 380 };
     fill_rec(dev, &s1, COLOR_WHITE);
@@ -197,31 +203,33 @@ static void paint_input_settings(WND *wnd, GDEV *dev) {
     paint_ui_radio(dev, 22, 320, "TRON Ergonomic Multilingual", g_state_input.kbd_layout_sel == 3, FALSE);
 
     /* ═══════════════════════════════════════════════════════════════════
-     * Section 2: RISC OS Mouse Configuration (Right Panel)
+     * Section 2: Mouse Configuration (Right Panel)
      * ═══════════════════════════════════════════════════════════════════ */
     RECT s2 = { 324, 48, 628, 380 };
     fill_rec(dev, &s2, COLOR_WHITE);
     drw_rec(dev, &s2);
-    drw_tc_string(dev, 330, 40, " [2. Mouse Configuration (RISC OS)] ", COLOR_NAVY, COLOR_WHITE);
+    drw_tc_string(dev, 330, 40, " [2. Mouse Configuration (Haiku & RISC OS)] ", COLOR_NAVY, COLOR_WHITE);
 
-    drw_tc_string(dev, 332, 64, "Tracking Speed (*Configure MouseStep):", COLOR_NAVY, COLOR_WHITE);
-    paint_ui_radio(dev, 336, 82, "Step 1: 1.0x Slow Precision", g_state_input.mouse_step_sel == 0, FALSE);
-    paint_ui_radio(dev, 336, 100, "Step 2: 2.0x Standard (RISC OS CMOS)", g_state_input.mouse_step_sel == 1, FALSE);
-    paint_ui_radio(dev, 336, 118, "Step 3: 3.0x Fast Sweep", g_state_input.mouse_step_sel == 2, FALSE);
-    paint_ui_radio(dev, 336, 136, "Step 4: 4.0x Ultra Velocity", g_state_input.mouse_step_sel == 3, FALSE);
+    drw_tc_string(dev, 332, 62, "Tracking Speed (*Configure MouseStep):", COLOR_NAVY, COLOR_WHITE);
+    paint_ui_radio(dev, 336, 78, "Step 1: 1.0x Slow Precision", g_state_input.mouse_step_sel == 0, FALSE);
+    paint_ui_radio(dev, 336, 94, "Step 2: 2.0x Standard (RISC OS CMOS)", g_state_input.mouse_step_sel == 1, FALSE);
+    paint_ui_radio(dev, 336, 110, "Step 3: 3.0x Fast Sweep", g_state_input.mouse_step_sel == 2, FALSE);
+    paint_ui_radio(dev, 336, 126, "Step 4: 4.0x Ultra Velocity", g_state_input.mouse_step_sel == 3, FALSE);
 
-    paint_ui_checkbox(dev, 332, 160, "Stepped Acceleration (Archimedes Curve)", g_state_input.mouse_accel_enable, FALSE);
+    drw_tc_string(dev, 332, 146, "Acceleration Engine Profile:", COLOR_NAVY, COLOR_WHITE);
+    paint_ui_radio(dev, 336, 162, "Haiku OS Continuous 2D (Smooth)", g_state_input.mouse_profile_sel == 1, FALSE);
+    paint_ui_radio(dev, 336, 178, "RISC OS Stepped (Archimedes)", g_state_input.mouse_profile_sel == 0, FALSE);
 
-    drw_tc_string(dev, 332, 184, "Three-Button Model (Select, Menu, Adjust):", COLOR_NAVY, COLOR_WHITE);
-    paint_ui_radio(dev, 336, 202, "Right-Hand: [Select] [Menu] [Adjust]", g_state_input.mouse_handedness == 0, FALSE);
-    paint_ui_radio(dev, 336, 220, "Left-Hand:  [Adjust] [Menu] [Select]", g_state_input.mouse_handedness == 1, FALSE);
+    drw_tc_string(dev, 332, 198, "Three-Button Model (Select, Menu, Adjust):", COLOR_NAVY, COLOR_WHITE);
+    paint_ui_radio(dev, 336, 214, "Right-Hand: [Select] [Menu] [Adjust]", g_state_input.mouse_handedness == 0, FALSE);
+    paint_ui_radio(dev, 336, 230, "Left-Hand:  [Adjust] [Menu] [Select]", g_state_input.mouse_handedness == 1, FALSE);
 
-    drw_tc_string(dev, 332, 244, "Double-Click Threshold:", COLOR_NAVY, COLOR_WHITE);
-    paint_ui_radio(dev, 336, 262, "40 cs (400ms interval)", g_state_input.dbl_click_sel == 0, FALSE);
-    paint_ui_radio(dev, 336, 280, "50 cs (500ms [RISC OS default])", g_state_input.dbl_click_sel == 1, FALSE);
+    drw_tc_string(dev, 332, 250, "Double-Click Threshold:", COLOR_NAVY, COLOR_WHITE);
+    paint_ui_radio(dev, 336, 266, "40 cs (400ms interval)", g_state_input.dbl_click_sel == 0, FALSE);
+    paint_ui_radio(dev, 336, 282, "50 cs (500ms [RISC OS default])", g_state_input.dbl_click_sel == 1, FALSE);
 
     /* Interactive Double-Click Test Area */
-    RECT test_box = { 334, 306, 618, 366 };
+    RECT test_box = { 334, 304, 618, 366 };
     COLOR test_bg = COLOR_LTGRAY;
     if (g_state_input.test_click_status == 2) {
         test_bg = COLOR_GREEN;
@@ -341,47 +349,53 @@ static void handle_input_event(WND *wnd, const EVT *evt) {
         /* 2. Right Panel (Mouse) */
         if (rel_x >= 332 && rel_x <= 620) {
             /* Tracking Speed (MouseStep) */
-            if (rel_y >= 82 && rel_y <= 98) {
+            if (rel_y >= 76 && rel_y <= 92) {
                 g_state_input.mouse_step_sel = 0;
                 g_state_input.is_dirty = TRUE;
                 redraw_all_windows();
                 return;
             }
-            if (rel_y >= 100 && rel_y <= 116) {
+            if (rel_y >= 94 && rel_y <= 108) {
                 g_state_input.mouse_step_sel = 1;
                 g_state_input.is_dirty = TRUE;
                 redraw_all_windows();
                 return;
             }
-            if (rel_y >= 118 && rel_y <= 134) {
+            if (rel_y >= 110 && rel_y <= 124) {
                 g_state_input.mouse_step_sel = 2;
                 g_state_input.is_dirty = TRUE;
                 redraw_all_windows();
                 return;
             }
-            if (rel_y >= 136 && rel_y <= 152) {
+            if (rel_y >= 126 && rel_y <= 142) {
                 g_state_input.mouse_step_sel = 3;
                 g_state_input.is_dirty = TRUE;
                 redraw_all_windows();
                 return;
             }
 
-            /* Stepped Acceleration */
-            if (rel_y >= 160 && rel_y <= 178) {
-                g_state_input.mouse_accel_enable = !g_state_input.mouse_accel_enable;
+            /* Acceleration Engine Profile */
+            if (rel_y >= 160 && rel_y <= 176) {
+                g_state_input.mouse_profile_sel = 1; /* Haiku */
+                g_state_input.is_dirty = TRUE;
+                redraw_all_windows();
+                return;
+            }
+            if (rel_y >= 177 && rel_y <= 194) {
+                g_state_input.mouse_profile_sel = 0; /* RISC OS */
                 g_state_input.is_dirty = TRUE;
                 redraw_all_windows();
                 return;
             }
 
             /* Handedness */
-            if (rel_y >= 202 && rel_y <= 218) {
+            if (rel_y >= 212 && rel_y <= 228) {
                 g_state_input.mouse_handedness = 0;
                 g_state_input.is_dirty = TRUE;
                 redraw_all_windows();
                 return;
             }
-            if (rel_y >= 220 && rel_y <= 236) {
+            if (rel_y >= 229 && rel_y <= 246) {
                 g_state_input.mouse_handedness = 1;
                 g_state_input.is_dirty = TRUE;
                 redraw_all_windows();
@@ -389,13 +403,13 @@ static void handle_input_event(WND *wnd, const EVT *evt) {
             }
 
             /* Double-Click threshold */
-            if (rel_y >= 262 && rel_y <= 278) {
+            if (rel_y >= 264 && rel_y <= 280) {
                 g_state_input.dbl_click_sel = 0;
                 g_state_input.is_dirty = TRUE;
                 redraw_all_windows();
                 return;
             }
-            if (rel_y >= 280 && rel_y <= 298) {
+            if (rel_y >= 281 && rel_y <= 298) {
                 g_state_input.dbl_click_sel = 1;
                 g_state_input.is_dirty = TRUE;
                 redraw_all_windows();
@@ -403,7 +417,7 @@ static void handle_input_event(WND *wnd, const EVT *evt) {
             }
 
             /* Interactive Double-Click Test Area */
-            if (rel_y >= 306 && rel_y <= 366) {
+            if (rel_y >= 304 && rel_y <= 366) {
                 extern uintptr_t g_mmio_base;
                 uint32_t now_us = 0;
 #if !defined(__STDC_HOSTED__) || __STDC_HOSTED__ != 1
@@ -430,7 +444,7 @@ static void handle_input_event(WND *wnd, const EVT *evt) {
         /* 3. Action Buttons */
         H btn_y = client_h - 36;
         if (rel_y >= btn_y && rel_y <= btn_y + 26) {
-            /* Default (RISC OS) */
+            /* Default (RISC OS / Haiku) */
             if (rel_x >= client_w - 340 && rel_x <= client_w - 200) {
                 set_risc_os_defaults();
                 redraw_all_windows();
@@ -452,7 +466,9 @@ static void handle_input_event(WND *wnd, const EVT *evt) {
 }
 
 WND* open_input_settings_window(void) {
-    memset(&g_state_input, 0, sizeof(AppletState_input));
+    if (g_state_input.wnd) {
+        return g_state_input.wnd;
+    }
 
     /* Sync initial state from live kernel globals */
     g_state_input.kbd_repeat_enable  = g_kbd_repeat_enabled;
@@ -463,12 +479,13 @@ WND* open_input_settings_window(void) {
     g_state_input.kbd_layout_sel     = 0;
 
     g_state_input.mouse_step_sel     = (g_mouse_step_mult >= 1 && g_mouse_step_mult <= 4) ?
-                                       (g_mouse_step_mult - 1) : 3;
+                                       (g_mouse_step_mult - 1) : 0;
+    g_state_input.mouse_profile_sel  = g_mouse_accel_profile;
     g_state_input.mouse_accel_enable = TRUE;
     g_state_input.mouse_handedness   = g_mouse_swap_select_adjust ? 1 : 0;
     g_state_input.dbl_click_sel      = 1; /* 50cs (500ms) RISC OS default */
 
-    WND *wnd = opn_wnd("Input & Pointer (入力環境) — RISC OS Style",
+    WND *wnd = opn_wnd("Input & Pointer (入力環境) — RISC OS & Haiku Options",
                        80, 45, 640, 430,
                        WND_ATTR_TITLE | WND_ATTR_CLOSE | WND_ATTR_BORDER);
     if (!wnd) return NULL;

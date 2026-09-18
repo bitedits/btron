@@ -100,6 +100,16 @@ static void poll_tty_stdin(void) {
 
 ER snd_evt(const EVT *p_evt) {
     if (!p_evt) return E_PAR;
+
+    /* Coalesce consecutive EV_MOUSE_MOVE events to prevent queue backlog and latency build-up */
+    if (p_evt->type == EV_MOUSE_MOVE && g_q_count > 0) {
+        int prev_idx = (g_q_tail - 1 + EVENT_QUEUE_SIZE) % EVENT_QUEUE_SIZE;
+        if (g_queue[prev_idx].type == EV_MOUSE_MOVE) {
+            g_queue[prev_idx].pos = p_evt->pos;
+            return E_OK;
+        }
+    }
+
     if (g_q_count >= EVENT_QUEUE_SIZE) {
         if (p_evt->type == EV_KEY_DOWN || p_evt->type == EV_BUT_DOWN) {
             /* Drop oldest event (usually a stale mouse motion) to guarantee key/click delivery */

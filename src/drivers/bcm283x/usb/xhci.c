@@ -80,25 +80,25 @@ static inline void delay_us(uint32_t us) {
 /* Base data structures in uncached DMA RAM (16MB region) */
 #define XHCI_DMA_BASE           0x01000000ULL /* 16MB uncached DMA region */
 
-static uint64_t * const          s_dcbaa      = (uint64_t *)(XHCI_DMA_BASE + 0x0000); /* 1KB (32 slots * 8B) */
-static xhci_trb_t * const        s_cmd_ring   = (xhci_trb_t *)(XHCI_DMA_BASE + 0x0800); /* 1KB */
-static xhci_trb_t * const        s_event_ring = (xhci_trb_t *)(XHCI_DMA_BASE + 0x0C00); /* 1KB */
-static xhci_erst_entry_t * const s_erst       = (xhci_erst_entry_t *)(XHCI_DMA_BASE + 0x1000); /* 64B */
-static uint32_t * const          s_input_ctx  = (uint32_t *)(XHCI_DMA_BASE + 0x1400); /* 2KB */
+static uint64_t * const                   s_dcbaa      = (uint64_t *)(XHCI_DMA_BASE + 0x0000); /* 1KB (32 slots * 8B) */
+static volatile xhci_trb_t * const        s_cmd_ring   = (volatile xhci_trb_t *)(XHCI_DMA_BASE + 0x0800); /* 1KB */
+static volatile xhci_trb_t * const        s_event_ring = (volatile xhci_trb_t *)(XHCI_DMA_BASE + 0x0C00); /* 1KB */
+static xhci_erst_entry_t * const          s_erst       = (xhci_erst_entry_t *)(XHCI_DMA_BASE + 0x1000); /* 64B */
+static uint32_t * const                   s_input_ctx  = (uint32_t *)(XHCI_DMA_BASE + 0x1400); /* 2KB */
 
 /* Per-slot structures (Slots 1..8):
  * Each Device Context: 2KB (32 contexts * 64B)
  * Each EP Ring: 1KB (64 TRBs * 16B)
  */
 #define DEV_CTX_BASE(slot)   ((volatile uint32_t *)(XHCI_DMA_BASE + 0x2000 + ((slot) - 1) * 0x800))
-#define EP0_RING_BASE(slot)  ((xhci_trb_t *)(XHCI_DMA_BASE + 0x6000 + ((slot) - 1) * 0x400))
-#define EP1_RING_BASE(slot)  ((xhci_trb_t *)(XHCI_DMA_BASE + 0x8000 + ((slot) - 1) * 0x400))
+#define EP0_RING_BASE(slot)  ((volatile xhci_trb_t *)(XHCI_DMA_BASE + 0x6000 + ((slot) - 1) * 0x400))
+#define EP1_RING_BASE(slot)  ((volatile xhci_trb_t *)(XHCI_DMA_BASE + 0x8000 + ((slot) - 1) * 0x400))
 
-#define DMA_SCRATCH_BUF      ((uint8_t *)(XHCI_DMA_BASE + 0xB000)) /* 4KB scratch buffer */
-static usb_kbd_report_t * const  s_kbd_buf    = (usb_kbd_report_t *)(XHCI_DMA_BASE + 0xC000);
+#define DMA_SCRATCH_BUF      ((volatile uint8_t *)(XHCI_DMA_BASE + 0xB000)) /* 4KB scratch buffer */
+static volatile usb_kbd_report_t * const  s_kbd_buf    = (volatile usb_kbd_report_t *)(XHCI_DMA_BASE + 0xC000);
 
 /* Multi-mouse DMA buffers (up to 4 mice): each mouse gets 64 bytes */
-#define MOUSE_BUF(idx)       ((uint8_t *)(XHCI_DMA_BASE + 0xC100 + (idx) * 64))
+#define MOUSE_BUF(idx)       ((volatile uint8_t *)(XHCI_DMA_BASE + 0xC100 + (idx) * 64))
 
 static uintptr_t s_cap_base = 0;
 static uintptr_t s_op_base  = 0;
@@ -122,9 +122,9 @@ static uint32_t s_kbd_mps   = 8;
 
 #define XHCI_MAX_MICE 4
 typedef struct {
-    int      slot_id;
-    uint32_t mps;
-    uint8_t *buf;
+    int               slot_id;
+    uint32_t          mps;
+    volatile uint8_t *buf;
 } xhci_mouse_t;
 
 static xhci_mouse_t s_mice[XHCI_MAX_MICE];
@@ -142,20 +142,15 @@ static volatile int32_t s_accum_wheel = 0;
 static volatile uint8_t s_latest_buttons = 0;
 static volatile int s_has_mouse = 0;
 
-static void xhci_decode_mouse_report(const uint8_t *raw, uint32_t transferred, usb_mouse_report_t *out) {
+static void xhci_decode_mouse_report(const volatile uint8_t *raw, uint32_t transferred, usb_mouse_report_t *out) {
     if (!raw || !out) return;
 
-    if (raw[0] == 0x01 && transferred >= 6) {
-        /* Gaming / Multi-Report HID Mouse with Report ID 1 (e.g. Logitech G102/G203 LIGHTSYNC)
-         * Byte 0: Report ID (0x01)
-         * Byte 1: Buttons (bit 0=Left, bit 1=Right, bit 2=Middle, bit 3=Back, bit 4=Forward)
-         * Byte 2: X displacement low 8 bits (X[7:0])
-         * Byte 3: X displacement high 8 bits (X[15:8])
-         * Byte 4: Y displacement low 8 bits (Y[7:0])
-         * Byte 5: Y displacement high 8 bits (Y[15:8])
-         * Byte 6: Wheel (optional, int8_t)
-         * Byte 7: AC Pan / Tilt (optional, int8_t)
-         */
+    /* Gaming / Multi-Report HID Mouse with Report ID 1 (e.g. Logitech G102/G203 LIGHTSYNC)
+     * Byte 0: Report ID (0x01)
+     * Byte 1: Buttons (bit 0=Left, bit 1=Right, bit 2=Middle, bit 3=Back, bit 4=Forward)
+     * To prevent misidentifying standard Boot Protocol mice with Left Button pressed (raw[0] == 0x01),
+     * verify that raw[1] only contains valid button bits and that high-byte of delta is non-trivial. */
+    if (raw[0] == 0x01 && transferred >= 6 && (raw[1] & ~0x1Fu) == 0 && (raw[3] != 0 || raw[5] != 0)) {
         out->buttons = raw[1] & 0x07;
 
         int16_t x16 = (int16_t)((uint16_t)raw[2] | ((uint16_t)raw[3] << 8));
@@ -170,14 +165,8 @@ static void xhci_decode_mouse_report(const uint8_t *raw, uint32_t transferred, u
         out->dx = (int8_t)x16;
         out->dy = (int8_t)y16;
         out->wheel = (transferred >= 7) ? (int8_t)raw[6] : 0;
-    } else if (raw[0] == 0x01 && transferred >= 4) {
-        /* Mouse with Report ID 1 and 8-bit coordinates */
-        out->buttons = raw[1] & 0x07;
-        out->dx = (int8_t)raw[2];
-        out->dy = (int8_t)raw[3];
-        out->wheel = (transferred >= 5) ? (int8_t)raw[4] : 0;
     } else {
-        /* Standard 3-byte / 4-byte USB Boot Protocol Mouse
+        /* Standard 3-byte / 4-byte / 8-byte USB Boot Protocol Mouse
          * Byte 0: Buttons (bit 0=Left, bit 1=Right, bit 2=Middle)
          * Byte 1: X displacement (int8_t)
          * Byte 2: Y displacement (int8_t)
@@ -1015,15 +1004,15 @@ int xhci_init(uintptr_t mmio_base) {
                                         is_mouse = true;
                                         proto = 2;
                                         ep1_mps = mps;
-                                        ep1_interval = interval;
+                                        ep1_interval = 3; /* Force 1 ms (1000 Hz) polling for instant response */
                                     } else if (cur_if_proto == 1 && !is_mouse) {
                                         is_keyboard = true;
                                         proto = 1;
                                         ep1_mps = 8;
-                                        ep1_interval = interval;
+                                        ep1_interval = 4; /* 2 ms (500 Hz) polling */
                                     } else if (!is_keyboard && !is_mouse) {
                                         ep1_mps = mps;
-                                        ep1_interval = interval;
+                                        ep1_interval = 3; /* Default to 1 ms polling */
                                     }
                                 }
                             }
@@ -1035,11 +1024,12 @@ int xhci_init(uintptr_t mmio_base) {
                                 is_keyboard = true;
                                 proto = 1;
                                 ep1_mps = 8;
-                                ep1_interval = 6;
+                                ep1_interval = 4;
                             } else {
                                 is_mouse = true;
                                 proto = 2;
                                 if (ep1_mps < 8) ep1_mps = 8;
+                                ep1_interval = 3;
                             }
                         }
                     }
@@ -1054,33 +1044,21 @@ int xhci_init(uintptr_t mmio_base) {
                     fb_log_dec(proto);
                     fb_log(" EP1_MPS=");
                     fb_log_dec(ep1_mps);
+                    fb_log(" Int=");
+                    fb_log_dec(ep1_interval);
                     fb_log("\n");
 
                     /* Set Configuration 1 */
                     xhci_ep0_control_transfer(dev_slot, 0x00, USB_REQ_SET_CONFIGURATION, 1, 0, 0, NULL);
                     delay_us(10000); /* 10ms settle time after SET_CONFIGURATION */
 
-                    /* Send HID class SET_PROTOCOL(0) = Boot Protocol to every HID interface.
+                    /* Send HID class SET_PROTOCOL(0) = Boot Protocol to all interfaces 0..2.
                      * Without this, HID keyboards/mice boot in Report Protocol mode and send
-                     * variable-length framed reports that the fixed 8-byte boot parser mangles.
-                     *   bmRequestType = 0x21  (Class | Interface | Host→Device)
-                     *   bRequest      = 0x0B  SET_PROTOCOL
-                     *   wValue        = 0     Boot Protocol
-                     *   wIndex        = 0     Interface 0
-                     */
-                    ret = xhci_ep0_control_transfer(dev_slot, 0x21, 0x0B, 0, 0, 0, NULL);
-                    fb_log("[XHCI] Slot ");
-                    fb_log_dec(dev_slot);
-                    fb_log(" SET_PROTOCOL Boot=0 ret=");
-                    fb_log_dec((uint32_t)ret);
-                    fb_log("\n");
-
-                    /* SET_IDLE(0,0): stop the device from sending repeated reports when
-                     * nothing changed — reduces event ring noise between actual keystrokes.
-                     *   bRequest = 0x0A  SET_IDLE
-                     *   wValue   = 0x0000  (idle rate=0: only report on change)
-                     */
-                    xhci_ep0_control_transfer(dev_slot, 0x21, 0x0A, 0x0000, 0, 0, NULL);
+                     * variable-length framed reports that the fixed boot parser mangles. */
+                    for (uint16_t if_idx = 0; if_idx < 3; if_idx++) {
+                        xhci_ep0_control_transfer(dev_slot, 0x21, 0x0B, 0, if_idx, 0, NULL);
+                        xhci_ep0_control_transfer(dev_slot, 0x21, 0x0A, 0x0000, if_idx, 0, NULL);
+                    }
                     delay_us(5000);
 
                     /* Configure EP1 Interrupt IN */

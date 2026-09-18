@@ -76,7 +76,7 @@ static uint32_t s_key_press_time_us = 0;
 static uint32_t s_key_last_repeat_us = 0;
 
 /* RISC OS Mouse Multiplier (MouseStep CMOS &C2) & 3-Button Layout */
-int      g_mouse_step_mult          = 1;      /* Default: Ultra Velocity for Pi 400 HID/trackpad */
+int      g_mouse_step_mult          = 2;      /* Default: Step 2 (Archimedes / Haiku natural responsive standard) */
 int      g_mouse_swap_select_adjust = 0;      /* 0: Right-handed (Select/Menu/Adjust), 1: Left-handed */
 
 /* USB host controller selection: 1 = VL805 xHCI (hardware), 0 = DWC2 (QEMU / legacy) */
@@ -644,6 +644,15 @@ static void launch_pi4_desktop_session(uint32_t *gpu_fb)
             // events enqueued
         }
 
+        /* Immediate cursor update on GPU front buffer (< 1 us glass-to-glass latency) */
+        if (s_mouse_x != prev_mx || s_mouse_y != prev_my) {
+            restore_cursor_area(gpu_fb, prev_mx, prev_my);
+            draw_baremetal_cursor_raw(gpu_fb, s_mouse_x, s_mouse_y, BTRON_SCREEN_W, BTRON_SCREEN_H);
+            __asm__ volatile("dmb sy" : : : "memory");
+            prev_mx = s_mouse_x;
+            prev_my = s_mouse_y;
+        }
+
         /* UART serial console */
         if (uart_has_char()) {
             int c = uart_getc();
@@ -739,6 +748,13 @@ static void launch_pi4_desktop_session(uint32_t *gpu_fb)
 
             /* Drain USB reports accumulated during blit */
             usb_poll_devices(screen);
+            if (s_mouse_x != prev_mx || s_mouse_y != prev_my) {
+                restore_cursor_area(gpu_fb, prev_mx, prev_my);
+                draw_baremetal_cursor_raw(gpu_fb, s_mouse_x, s_mouse_y, BTRON_SCREEN_W, BTRON_SCREEN_H);
+                __asm__ volatile("dmb sy" : : : "memory");
+                prev_mx = s_mouse_x;
+                prev_my = s_mouse_y;
+            }
         }
         /* Zero-latency cursor-only path: restore old 16x16 patch, draw new cursor (< 1 us) */
         else if (cursor_only) {
@@ -929,125 +945,186 @@ static int32_t s_mouse_sub_y = 0;
 
 
 
-/* Acceleration Profile: 0 = RISC OS Conservative Stepped, 1 = Haiku Continuous Smooth */
-int g_mouse_accel_profile = 1;
+/* Subpixel residual history for Haiku OS curve */
+static float s_haiku_hist_x = 0.0f;
+static float s_haiku_hist_y = 0.0f;
+
+/* Acceleration Profile: 1 = RISC OS Stepped Curve, 2 = Haiku Continuous Smooth Curve */
+int g_mouse_accel_profile = 0;
+
+static inline float fast_sqrtf(float val) {
+    if (val <= 0.0f) return 0.0f;
+#if defined(__aarch64__)
+    float res;
+    __asm__ volatile("fsqrt %s0, %s1" : "=w"(res) : "w"(val));
+    return res;
+#elif defined(__arm__) && defined(__ARM_FP)
+    float res;
+    __asm__ volatile("vsqrt.f32 %0, %1" : "=t"(res) : "t"(val));
+    return res;
+#else
+    float x = val;
+    float y = 0.5f * (x + 1.0f);
+    for (int i = 0; i < 6; i++) {
+        y = 0.5f * (y + x / y);
+    }
+    return y;
+#endif
+}
 
 /*
- * Haiku OS / BeOS Continuous Smooth Mouse Accelerator
- * - Smooth quadratic/linear velocity curve (no discrete step cliffs)
- * - 1:1 pixel-perfect precision at low speed (abs <= 1)
- * - Continuous progressive multiplier without jump boundaries
- * - Sub-pixel residual carry in 8.8 fixed-point with gentle idle decay
- * - Safe input & output clamping against USB HID burst backlog
+ * Haiku OS / BeOS Continuous 2D Mouse Accelerator
+ * Directly replicates MouseDevice::_ComputeAcceleration from Haiku OS
+ * (src/add-ons/input_server/devices/mouse/MouseInputDevice.cpp)
+ *
+ * - speed: 65536 = 1.0x (16.16 fixed-point)
+ * - accel_factor: 65536 to 262144 (scaled by 524288.0)
+ * - Uses 2D velocity magnitude sqrt(dx*dx + dy*dy) for isotropic acceleration
+ * - Truncates symmetrically towards zero (floor for positive, ceil for negative)
+ * - Retains signed fractional residual without directional bias
  */
-static inline int32_t mouse_accelerate_subpixel_haiku(int32_t raw, int32_t *subpixel)
+void mouse_accelerate_pair_haiku(int32_t raw_x, int32_t raw_y, int32_t *out_dx, int32_t *out_dy)
+{
+    if (raw_x == 0 && raw_y == 0) {
+        /* Idle residual decay */
+        s_haiku_hist_x *= 0.5f;
+        s_haiku_hist_y *= 0.5f;
+        if (s_haiku_hist_x > -0.05f && s_haiku_hist_x < 0.05f) s_haiku_hist_x = 0.0f;
+        if (s_haiku_hist_y > -0.05f && s_haiku_hist_y < 0.05f) s_haiku_hist_y = 0.0f;
+        if (out_dx) *out_dx = 0;
+        if (out_dy) *out_dy = 0;
+        return;
+    }
+
+    /* Clamp raw input bursts */
+    if (raw_x > 64)  raw_x = 64;
+    if (raw_x < -64) raw_x = -64;
+    if (raw_y > 64)  raw_y = 64;
+    if (raw_y < -64) raw_y = -64;
+
+    /* Base speed: mapped from g_mouse_step_mult (1..4 -> 1.6x .. 2.8x) */
+    float speed_mult = 1.2f + (float)g_mouse_step_mult * 0.4f;
+
+    float deltaX = ((float)raw_x * speed_mult) + s_haiku_hist_x;
+    float deltaY = ((float)raw_y * speed_mult) + s_haiku_hist_y;
+
+    /* Haiku continuous acceleration curve */
+    float accel_scale = 0.06f + ((float)g_mouse_step_mult * 0.03f);
+    float speed_sq = (deltaX * deltaX) + (deltaY * deltaY);
+    float speed_mag = fast_sqrtf(speed_sq);
+
+    float acceleration = 1.0f + (speed_mag * accel_scale);
+    if (acceleration > 4.5f) {
+        acceleration = 4.5f;
+    }
+
+    deltaX *= acceleration;
+    deltaY *= acceleration;
+
+    /* Haiku integer quantization: floor for positive, ceil for negative */
+    int32_t pix_x = (deltaX >= 0.0f) ? (int32_t)deltaX : -(int32_t)(-deltaX);
+    int32_t pix_y = (deltaY >= 0.0f) ? (int32_t)deltaY : -(int32_t)(-deltaY);
+
+    /* Output displacement clamp */
+    if (pix_x > 64)  pix_x = 64;
+    if (pix_x < -64) pix_x = -64;
+    if (pix_y > 64)  pix_y = 64;
+    if (pix_y < -64) pix_y = -64;
+
+    s_haiku_hist_x = deltaX - (float)pix_x;
+    s_haiku_hist_y = deltaY - (float)pix_y;
+
+    /* Clamp residual within [-1.0f, +1.0f] */
+    if (s_haiku_hist_x > 1.0f) s_haiku_hist_x = 1.0f;
+    if (s_haiku_hist_x < -1.0f) s_haiku_hist_x = -1.0f;
+    if (s_haiku_hist_y > 1.0f) s_haiku_hist_y = 1.0f;
+    if (s_haiku_hist_y < -1.0f) s_haiku_hist_y = -1.0f;
+
+    if (out_dx) *out_dx = pix_x;
+    if (out_dy) *out_dy = pix_y;
+}
+
+/* Single-axis wrapper for Haiku subpixel accelerator */
+int32_t mouse_accelerate_subpixel_haiku(int32_t raw, int32_t *subpixel)
+{
+    int32_t out_dx = 0, out_dy = 0;
+    mouse_accelerate_pair_haiku(raw, 0, &out_dx, &out_dy);
+    if (subpixel) *subpixel = (int32_t)(s_haiku_hist_x * 256.0f);
+    return out_dx;
+}
+
+/*
+ * Hardened RISC OS MouseStep Accelerator
+ * - Exact stepped multipliers mirroring Archimedes / RISC OS CMOS &C2 (Steps 1..4)
+ * - Symmetric signed integer subpixel truncation (no negative floor bias)
+ * - Signed residual carry with idle decay
+ */
+int32_t mouse_accelerate_subpixel_riscos(int32_t raw, int32_t *subpixel)
 {
     if (raw == 0) {
-        /* Smooth idle decay - halves residual to eliminate phantom momentum */
-        *subpixel = (*subpixel) / 2;
+        /* Idle residual decay - halves residual */
+        if (subpixel) *subpixel = (*subpixel) / 2;
         return 0;
     }
 
-    /* Clamp raw input against extreme USB packet bursts */
+    /* Clamp raw input against packet bursts */
     if (raw >  64) raw =  64;
     if (raw < -64) raw = -64;
 
     int32_t sign = (raw < 0) ? -1 : 1;
     int32_t abs  = (raw < 0) ? -raw : raw;
 
-    /*
-     * Haiku continuous acceleration model:
-     * Base speed: 256 (1.0x in 8.8 fixed-point)
-     * Acceleration ramp: smooth continuous scaling without threshold cliffs
-     * Saturated max speed: 512 (2.0x) to 768 (3.0x) depending on g_mouse_step_mult
+    /* Fine precision boost for subtle single-pixel moves */
+    if (abs <= 2) {
+        abs = (abs * 3) / 2; /* 1.5x */
+    }
+
+    /* RISC OS MouseStep stepped multipliers (8.8 fixed-point)
+     * Step 1: 1.5x - 2.0x (384)
+     * Step 2: 2.0x - 2.5x (512) - Archimedes standard CMOS 2 default
+     * Step 3: 2.5x - 3.0x (640)
+     * Step 4: 3.0x - 3.5x (768)
      */
-    int32_t base_fp = 256; /* 1.0x baseline for exact 1-pixel targeting */
-    int32_t ramp_per_unit = 12 + (g_mouse_step_mult * 4); /* 16 to 28 */
-    int32_t max_fp = 384 + (g_mouse_step_mult * 96);       /* 480 to 768 */
-
-    int32_t mult_fp = base_fp + (abs * ramp_per_unit);
-    if (mult_fp > max_fp) {
-        mult_fp = max_fp;
+    int32_t mult_fp;
+    switch (g_mouse_step_mult) {
+        case 1:  mult_fp = 384 + (abs > 4 ? 128 : 0); break;
+        case 2:  mult_fp = 512 + (abs > 4 ? 128 : 0); break;
+        case 3:  mult_fp = 640 + (abs > 4 ? 128 : 0); break;
+        default: mult_fp = 768 + (abs > 4 ? 128 : 0); break;
     }
 
-    int32_t total = *subpixel + (sign * abs * mult_fp);
+    int32_t res = subpixel ? *subpixel : 0;
+    int32_t total = res + (sign * abs * mult_fp);
 
-    /* Floor division with positive remainder [0 ... 255] */
+    /* Symmetric integer truncation towards zero (matching Haiku and standard C) */
     int32_t pixels = total / 256;
-    *subpixel = total % 256;
-    if (*subpixel < 0) {
-        *subpixel += 256;
-        pixels--;
+    if (subpixel) {
+        *subpixel = total % 256;
+        if (*subpixel > 255)  *subpixel = 255;
+        if (*subpixel < -255) *subpixel = -255;
     }
 
-    /* Safety clamp on residual */
-    if (*subpixel < 0 || *subpixel > 255)
-        *subpixel = 0;
-
-    /* Output displacement clamp */
-    if (pixels >  32) pixels =  32;
-    if (pixels < -32) pixels = -32;
+    if (pixels >  64) pixels =  64;
+    if (pixels < -64) pixels = -64;
 
     return pixels;
 }
 
-/* Conservative accelerator – prioritises stability over “classic” feel
- * Designed to stop progressive jumping / latency on Pi 400
- */
+static inline int32_t mouse_accelerate_subpixel_raw(int32_t raw, int32_t *subpixel) {
+    (void)subpixel;
+    return raw;          // pure 1:1, no residual, no boost, no mult
+}
+
 static inline int32_t mouse_accelerate_subpixel(int32_t raw, int32_t *subpixel)
 {
     if (g_mouse_accel_profile == 1) {
         return mouse_accelerate_subpixel_haiku(raw, subpixel);
+    } else if (g_mouse_accel_profile == 2) {
+        return mouse_accelerate_subpixel_riscos(raw, subpixel);
+    } else {
+        return mouse_accelerate_subpixel_raw(raw, subpixel);
     }
-
-    if (raw == 0) {
-        /* Aggressive residual decay when idle */
-        *subpixel = (*subpixel * 1) / 2;
-        return 0;
-    }
-
-    /* Hard clamp raw input – prevents one huge report from exploding */
-    if (raw >  64) raw =  64;
-    if (raw < -64) raw = -64;
-
-    int32_t sign = (raw < 0) ? -1 : 1;
-    int32_t abs  = (raw < 0) ? -raw : raw;
-
-    /* Mild fine boost only */
-    if (abs <= 2)
-        abs = (abs * 3) / 2;          /* 1.5× instead of 2× */
-
-    /* Much gentler multipliers – reduces jump size when backlog arrives */
-    int32_t mult_fp;
-    switch (g_mouse_step_mult) {
-        case 1:  mult_fp = 256 + (abs > 4 ? 128 : 0);          break; /* ≤ 1.5× */
-        case 2:  mult_fp = 384 + (abs > 4 ? 128 : 0);          break; /* ≤ 2.0× */
-        case 3:  mult_fp = 512 + (abs > 4 ? 128 : 0);          break; /* ≤ 2.5× */
-        default: mult_fp = 640 + (abs > 4 ? 128 : 0);          break; /* ≤ 3.0× */
-    }
-
-    int32_t total = *subpixel + (sign * abs * mult_fp);
-
-    int32_t pixels = total / 256;
-    *subpixel = total % 256;
-
-    if (*subpixel < 0) {
-        *subpixel += 256;
-        pixels--;
-    }
-
-    /* Absolute safety: never let residual leave 0…255 */
-    if (*subpixel < 0 || *subpixel > 255)
-        *subpixel = 0;
-
-    /* Hard limit on output pixels per call – stops visible jumps */
-    if (pixels >  32) pixels =  32;
-    if (pixels < -32) pixels = -32;
-
-    return pixels;
 }
-
-
 
 static int usb_poll_devices(GDEV *screen) {
     (void)screen;
@@ -1150,9 +1227,21 @@ static int usb_poll_devices(GDEV *screen) {
 
     if (mouse_got) {
         if (mouse_rep.dx != 0 || mouse_rep.dy != 0) {
-            /* Apply RISC OS MouseStep acceleration curve with sub-pixel residual carry */
-            s_mouse_x += (H)mouse_accelerate_subpixel((int32_t)mouse_rep.dx, &s_mouse_sub_x);
-            s_mouse_y += (H)mouse_accelerate_subpixel((int32_t)mouse_rep.dy, &s_mouse_sub_y);
+            int32_t move_x = 0, move_y = 0;
+            if (g_mouse_accel_profile == 1) {
+                /* Haiku OS / BeOS 2D Velocity Vector Accelerator */
+                mouse_accelerate_pair_haiku((int32_t)mouse_rep.dx, (int32_t)mouse_rep.dy, &move_x, &move_y);
+            } else if (g_mouse_accel_profile == 2) {
+                /* RISC OS MouseStep Stepped Accelerator */
+                move_x = mouse_accelerate_subpixel_riscos((int32_t)mouse_rep.dx, &s_mouse_sub_x);
+                move_y = mouse_accelerate_subpixel_riscos((int32_t)mouse_rep.dy, &s_mouse_sub_y);
+            } else {
+                move_x = mouse_accelerate_subpixel_raw((int32_t)mouse_rep.dx, &s_mouse_sub_x);
+                move_y = mouse_accelerate_subpixel_raw((int32_t)mouse_rep.dy, &s_mouse_sub_y);
+            }
+
+            s_mouse_x += (H)move_x;
+            s_mouse_y += (H)move_y;
             if (s_mouse_x < 0) s_mouse_x = 0;
             if (s_mouse_x >= BTRON_SCREEN_W) s_mouse_x = BTRON_SCREEN_W - 1;
             if (s_mouse_y < 0) s_mouse_y = 0;

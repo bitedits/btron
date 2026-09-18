@@ -53,7 +53,7 @@ void bcm2711_dma_wait(int channel) {
     if (channel < 0 || channel > 14) return;
     volatile uint32_t *chan = dma_chan_regs(channel);
 
-    int timeout = 2000;
+    int timeout = 5000000;
     while ((chan[BCM_DMA_CS / 4] & BCM_DMA_CS_ACTIVE) && --timeout > 0) {
         __asm__ volatile("nop");
     }

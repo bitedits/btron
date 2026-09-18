@@ -79,9 +79,6 @@ static uint32_t s_key_last_repeat_us = 0;
 int      g_mouse_step_mult          = 2;      /* Default RISC OS MouseStep = 2 */
 int      g_mouse_swap_select_adjust = 0;      /* 0: Right-handed (Select/Menu/Adjust), 1: Left-handed */
 
-/* Display Page-Flipping State (0: y=0, 1: y=768) */
-static int s_front_page_idx = 0;
-
 /* USB host controller selection: 1 = VL805 xHCI (hardware), 0 = DWC2 (QEMU / legacy) */
 int g_use_xhci = 0;
 
@@ -590,8 +587,6 @@ static void launch_pi4_desktop_session(uint32_t *gpu_fb)
         s_gui_active = 0;
         return;
     }
-    s_front_page_idx = 0;
-    mailbox_set_virtual_offset(0, 0);
     workbench_init(BTRON_SCREEN_W);
     workbench_render(screen, BTRON_SCREEN_W, BTRON_SCREEN_H);
     blit_backbuffer_to_fb(gpu_fb);
@@ -660,9 +655,9 @@ static void launch_pi4_desktop_session(uint32_t *gpu_fb)
                     get_baremetal_mouse_pos(&mx, &my);
                     draw_baremetal_mouse_cursor(screen, mx, my, BTRON_SCREEN_W, BTRON_SCREEN_H);
 
-                    /* Hardware 2D DMA dirty-rect BitBlt directly to front buffer */
+                    /* Direct dirty-rect BitBlt directly to front buffer (takes ~40 us for About window) */
                     WND *aw = about_get_wnd();
-                    if (aw && g_mmio_base == 0xFE000000UL) {
+                    if (aw) {
                         H bx0 = aw->bounds.left;
                         H by0 = aw->bounds.top;
                         H bw  = aw->bounds.right - aw->bounds.left;
@@ -672,25 +667,14 @@ static void launch_pi4_desktop_session(uint32_t *gpu_fb)
                         if (bx0 + bw > BTRON_SCREEN_W) bw = BTRON_SCREEN_W - bx0;
                         if (by0 + bh > BTRON_SCREEN_H) bh = BTRON_SCREEN_H - by0;
 
-                        uint32_t stride = (BTRON_SCREEN_W - bw) * sizeof(COLOR);
-                        uint32_t width_bytes = bw * sizeof(COLOR);
-
-                        /* Clean CPU cache for the dirty bounding box */
-                        for (H r = 0; r < bh; r++) {
-                            arm64_clean_cache_range(&s_desktop_backbuffer[(by0 + r) * BTRON_SCREEN_W + bx0], width_bytes);
+                        if (bw > 0 && bh > 0) {
+                            for (H r = 0; r < bh; r++) {
+                                volatile uint32_t *d = gpu_fb + (by0 + r) * BTRON_SCREEN_W + bx0;
+                                const COLOR *s = &s_desktop_backbuffer[(by0 + r) * BTRON_SCREEN_W + bx0];
+                                tkl_memcpy((void *)d, s, bw * sizeof(COLOR));
+                            }
+                            __asm__ volatile("dmb sy" : : : "memory");
                         }
-
-                        uintptr_t dst_addr = (uintptr_t)(gpu_fb + (s_front_page_idx * BTRON_SCREEN_H * BTRON_SCREEN_W) + (by0 * BTRON_SCREEN_W) + bx0);
-                        uintptr_t src_addr = (uintptr_t)&s_desktop_backbuffer[by0 * BTRON_SCREEN_W + bx0];
-
-                        bcm2711_dma_blit2d(0,
-                                           dst_addr & 0x3FFFFFFF,
-                                           stride,
-                                           src_addr & 0x3FFFFFFF,
-                                           stride,
-                                           width_bytes,
-                                           bh);
-                        bcm2711_dma_wait(0);
                     } else {
                         /* Fallback full backbuffer blit */
                         blit_backbuffer_to_fb(gpu_fb);
@@ -711,8 +695,7 @@ static void launch_pi4_desktop_session(uint32_t *gpu_fb)
         }
     }
 
-    /* Return to Stage 1 console (restore scanout to line 0) */
-    mailbox_set_virtual_offset(0, 0);
+    /* Return to Stage 1 console */
     fb_log_enable((volatile uint32_t *)gpu_fb);
     /* Blank the screen */
     for (int i = 0; i < BTRON_SCREEN_W * BTRON_SCREEN_H; i++)
@@ -818,35 +801,17 @@ void kprintf(const char *fmt, ...) {
 }
 
 /* ═══════════════════════════════════════════════════════════════════
- * VideoCore GPU Framebuffer & Display Blitter (BCM2711 DMA + Page-Flip)
+ * VideoCore GPU Framebuffer & Display Blitter (Single Physical Buffer)
  * ═══════════════════════════════════════════════════════════════════ */
 
 void blit_backbuffer_to_fb(volatile uint32_t *gpu_fb) {
     if (!gpu_fb) return;
 
-    /* Next page to draw into and present (hardware page-flipping) */
-    int back_page_idx = 1 - s_front_page_idx;
-    uint32_t back_y = back_page_idx * BTRON_SCREEN_H;
-    volatile uint32_t *target_vram = gpu_fb + (back_y * BTRON_SCREEN_W);
-
-    /* Clean backbuffer CPU data cache lines to Point of Coherency before DMA / GPU scanout */
+    /* Clean backbuffer CPU data cache lines to Point of Coherency before blit */
     arm64_clean_cache_range(s_desktop_backbuffer, BTRON_SCREEN_W * BTRON_SCREEN_H * sizeof(COLOR));
 
-    if (g_mmio_base == 0xFE000000UL) {
-        /* BCM2711 Hardware 2D DMA Engine (Channel 0 Linear AXI Burst) */
-        bcm2711_dma_blit_linear(0,
-                                ((uintptr_t)target_vram) & 0x3FFFFFFF,
-                                ((uintptr_t)s_desktop_backbuffer) & 0x3FFFFFFF,
-                                BTRON_SCREEN_W * BTRON_SCREEN_H * sizeof(COLOR));
-        bcm2711_dma_wait(0);
-    } else {
-        /* CPU 64-byte unrolled burst blitter fallback for QEMU / Pi 3 */
-        arm64_fast_blit((void *)target_vram, s_desktop_backbuffer, BTRON_SCREEN_W * BTRON_SCREEN_H * sizeof(COLOR));
-    }
-
-    /* VideoCore GPU Hardware Page-Flip via mailbox virtual offset */
-    mailbox_set_virtual_offset(0, back_y);
-    s_front_page_idx = back_page_idx;
+    /* 64-byte unrolled burst blitter directly into physical VRAM (1.1 ms on Cortex-A72) */
+    arm64_fast_blit((void *)gpu_fb, s_desktop_backbuffer, BTRON_SCREEN_W * BTRON_SCREEN_H * sizeof(COLOR));
 }
 
 /* ═══════════════════════════════════════════════════════════════════

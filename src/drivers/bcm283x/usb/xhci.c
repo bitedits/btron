@@ -823,7 +823,7 @@ int xhci_init(uintptr_t mmio_base) {
         fb_log_dec(hub_slot);
         fb_log("\n");
 
-        if (ret == 0 && hub_slot == 1) {
+        if (ret == 0 && hub_slot >= 1) {
             /* Address Hub Device (Root Port 1, High-Speed, Max Packet 64) */
             ret = xhci_address_device(1, 1, 3 /* High-Speed */, false, 0, 0, 64);
             fb_log("[XHCI] ADDRESS_DEV (Hub) ret=");
@@ -1060,6 +1060,29 @@ int xhci_init(uintptr_t mmio_base) {
                     xhci_ep0_control_transfer(dev_slot, 0x00, USB_REQ_SET_CONFIGURATION, 1, 0, 0, NULL);
                     delay_us(10000); /* 10ms settle time after SET_CONFIGURATION */
 
+                    /* Send HID class SET_PROTOCOL(0) = Boot Protocol to every HID interface.
+                     * Without this, HID keyboards/mice boot in Report Protocol mode and send
+                     * variable-length framed reports that the fixed 8-byte boot parser mangles.
+                     *   bmRequestType = 0x21  (Class | Interface | Host→Device)
+                     *   bRequest      = 0x0B  SET_PROTOCOL
+                     *   wValue        = 0     Boot Protocol
+                     *   wIndex        = 0     Interface 0
+                     */
+                    ret = xhci_ep0_control_transfer(dev_slot, 0x21, 0x0B, 0, 0, 0, NULL);
+                    fb_log("[XHCI] Slot ");
+                    fb_log_dec(dev_slot);
+                    fb_log(" SET_PROTOCOL Boot=0 ret=");
+                    fb_log_dec((uint32_t)ret);
+                    fb_log("\n");
+
+                    /* SET_IDLE(0,0): stop the device from sending repeated reports when
+                     * nothing changed — reduces event ring noise between actual keystrokes.
+                     *   bRequest = 0x0A  SET_IDLE
+                     *   wValue   = 0x0000  (idle rate=0: only report on change)
+                     */
+                    xhci_ep0_control_transfer(dev_slot, 0x21, 0x0A, 0x0000, 0, 0, NULL);
+                    delay_us(5000);
+
                     /* Configure EP1 Interrupt IN */
                     ret = xhci_configure_hid_endpoint(dev_slot, dev_speed, ep1_interval, ep1_mps);
                     if (ret != 0) {
@@ -1150,9 +1173,19 @@ static void xhci_process_events(void) {
     }
 }
 
+/* Public entry point: drain the xHCI event ring once per polling cycle.
+ * Must be called ONCE before xhci_poll_keyboard() / xhci_poll_mouse().
+ * Calling it multiple times per cycle risks re-processing already-handled TRBs. */
+void xhci_process(void) {
+    xhci_process_events();
+}
+
 int xhci_poll_keyboard(usb_kbd_report_t *rep) {
     if (!s_kbd_slot_id || !rep) return 0;
-    xhci_process_events();
+    /* NOTE: do NOT call xhci_process_events() here.
+     * The caller (usb_poll_devices) must call xhci_process() once
+     * before calling xhci_poll_keyboard / xhci_poll_mouse.
+     * Calling it again here causes double-processing of the event ring. */
     if (s_kbd_q_count > 0) {
         *rep = s_kbd_queue[s_kbd_q_head];
         s_kbd_q_head = (s_kbd_q_head + 1) % XHCI_KBD_QUEUE_SIZE;
@@ -1164,7 +1197,8 @@ int xhci_poll_keyboard(usb_kbd_report_t *rep) {
 
 int xhci_poll_mouse(usb_mouse_report_t *rep) {
     if (s_num_mice == 0 || !rep) return 0;
-    xhci_process_events();
+    /* NOTE: do NOT call xhci_process_events() here.
+     * Caller must invoke xhci_process() once before polling. */
     if (s_has_mouse) {
         int32_t dx = s_accum_dx;
         int32_t dy = s_accum_dy;

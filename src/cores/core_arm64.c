@@ -788,6 +788,14 @@ static int usb_poll_devices(GDEV *screen) {
     (void)screen;
     int activity = 0;
 
+    /* Drain the xHCI event ring ONCE per poll cycle.
+     * This populates s_kbd_queue and s_accum_dx/dy/buttons atomically.
+     * xhci_poll_keyboard / xhci_poll_mouse then just consume the queued data
+     * without touching the event ring again — avoiding double-processing. */
+    if (g_use_xhci) {
+        xhci_process();
+    }
+
     /* 1. Drain all pending USB HID Keyboard reports from ring/queue */
     usb_kbd_report_t kbd_rep;
     while (1) {

@@ -103,20 +103,38 @@ static void poll_tty_stdin(void) {
 ER snd_evt(const EVT *p_evt) {
     if (!p_evt) return E_PAR;
 
-    /* Coalesce consecutive EV_MOUSE_MOVE events to prevent queue backlog and latency build-up */
+    /* 1. Coalesce any trailing run of EV_MOUSE_MOVE (latest position wins) */
     if (p_evt->type == EV_MOUSE_MOVE && g_q_count > 0) {
-        int prev_idx = (g_q_tail - 1 + EVENT_QUEUE_SIZE) % EVENT_QUEUE_SIZE;
-        if (g_queue[prev_idx].type == EV_MOUSE_MOVE) {
-            g_queue[prev_idx].pos = p_evt->pos;
-            return E_OK;
+        int idx = (g_q_tail - 1 + EVENT_QUEUE_SIZE) % EVENT_QUEUE_SIZE;
+        int scanned = 0;
+        int updated = 0;
+
+        while (scanned < g_q_count && g_queue[idx].type == EV_MOUSE_MOVE) {
+            g_queue[idx].pos = p_evt->pos;
+            updated = 1;
+            scanned++;
+            idx = (idx - 1 + EVENT_QUEUE_SIZE) % EVENT_QUEUE_SIZE;
         }
+        if (updated)
+            return E_OK;
+        /* fall through if no trailing move found */
     }
 
+    /* 2. On full queue: prefer dropping oldest mouse-motion, never drop a button/key */
     if (g_q_count >= EVENT_QUEUE_SIZE) {
-        if (p_evt->type == EV_KEY_DOWN || p_evt->type == EV_BUT_DOWN) {
-            /* Drop oldest event (usually a stale mouse motion) to guarantee key/click delivery */
+        if (p_evt->type == EV_KEY_DOWN || p_evt->type == EV_KEY_UP ||
+            p_evt->type == EV_BUT_DOWN || p_evt->type == EV_BUT_UP) {
+            /* Drop oldest event to guarantee critical button/key delivery */
             g_q_head = (g_q_head + 1) % EVENT_QUEUE_SIZE;
             g_q_count--;
+        } else if (p_evt->type == EV_MOUSE_MOVE) {
+            /* Drop oldest if it is also a move; otherwise refuse the new move to protect button/key */
+            if (g_queue[g_q_head].type == EV_MOUSE_MOVE) {
+                g_q_head = (g_q_head + 1) % EVENT_QUEUE_SIZE;
+                g_q_count--;
+            } else {
+                return E_BUSY; /* protect non-motion events already queued */
+            }
         } else {
             return E_BUSY;
         }

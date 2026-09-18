@@ -254,13 +254,13 @@ static inline void xhci_ring_doorbell(uint32_t slot_id, uint32_t target) {
  * Command Ring Submission & Polled Completion
  * ───────────────────────────────────────────────────────────────── */
 
-static int xhci_cmd_submit_ep(uint64_t param, uint32_t status, uint32_t trb_type, uint32_t slot_id, uint32_t epid, uint32_t *out_slot_id) {
+static int xhci_cmd_submit(uint64_t param, uint32_t status, uint32_t trb_type, uint32_t slot_id, uint32_t *out_slot_id) {
     uint32_t idx = s_cmd_enqueue_idx;
     uint32_t cycle = s_cmd_cycle_bit;
 
     s_cmd_ring[idx].param   = param;
     s_cmd_ring[idx].status  = status;
-    s_cmd_ring[idx].control = (trb_type << 10) | ((epid & 0x1F) << 16) | (slot_id << 24) | cycle;
+    s_cmd_ring[idx].control = (trb_type << 10) | (slot_id << 24) | cycle;
     dsb();
 
     s_cmd_enqueue_idx++;
@@ -316,18 +316,6 @@ static int xhci_cmd_submit_ep(uint64_t param, uint32_t status, uint32_t trb_type
     fb_log_hex32(sts);
     fb_log("\n");
     return -1;
-}
-
-static int xhci_cmd_submit(uint64_t param, uint32_t status, uint32_t trb_type, uint32_t slot_id, uint32_t *out_slot_id) {
-    return xhci_cmd_submit_ep(param, status, trb_type, slot_id, 0, out_slot_id);
-}
-
-static void xhci_reset_ep0(uint32_t slot_id) {
-    /* 1. Reset Endpoint Command (TRB 14) for EP0 (epid = 1) */
-    xhci_cmd_submit_ep(0, 0, XHCI_TRB_RESET_EP, slot_id, 1, NULL);
-    /* 2. Set TR Dequeue Pointer Command (TRB 16) to current enqueue idx to clear halt */
-    uint64_t dq = (uint64_t)(uintptr_t)&EP0_RING_BASE(slot_id)[s_ep0_enqueue_idx[slot_id]] | s_ep0_cycle[slot_id];
-    xhci_cmd_submit_ep(dq, 0, XHCI_TRB_SET_TR_DQ, slot_id, 1, NULL);
 }
 
 /* ─────────────────────────────────────────────────────────────────
@@ -431,9 +419,6 @@ static int xhci_ep0_control_transfer(uint32_t slot_id, uint8_t bmRequestType, ui
                 fb_log("[XHCI] EP0 Transfer Error Code=");
                 fb_log_dec(ev_code);
                 fb_log("\n");
-                if (ev_code == 6 /* Stall Error */) {
-                    xhci_reset_ep0(slot_id);
-                }
                 return (int)ev_code;
             } else if (ev_type == XHCI_TRB_EVT_TRANSFER) {
                 uint32_t ev_code = (s_event_ring[ev_idx].status >> 24) & 0xFF;
@@ -1086,17 +1071,6 @@ int xhci_init(uintptr_t mmio_base) {
                     xhci_ep0_control_transfer(dev_slot, 0x00, USB_REQ_SET_CONFIGURATION, 1, 0, 0, NULL);
                     delay_us(10000); /* 10ms settle time after SET_CONFIGURATION */
 
-                    /* Only send SET_PROTOCOL(0) and SET_IDLE to Boot Keyboard on Interface 0.
-                     * Keyboards require Boot Protocol to deliver standardized 8-byte reports.
-                     * Mice (especially optical/gaming mice like PixArt 0x093A:0x2510) do NOT support
-                     * SET_PROTOCOL and will STALL (Error Code 6), wedging the EP0 control endpoint.
-                     * Never send control transfers to interfaces > 0 unless verified to exist. */
-                    if (is_keyboard || proto == 1) {
-                        xhci_ep0_control_transfer(dev_slot, 0x21, 0x0B, 0, 0, 0, NULL);
-                        xhci_ep0_control_transfer(dev_slot, 0x21, 0x0A, 0x0000, 0, 0, NULL);
-                    }
-                    delay_us(5000);
-
                     /* Configure EP1 Interrupt IN */
                     ret = xhci_configure_hid_endpoint(dev_slot, dev_speed, ep1_interval, ep1_mps);
                     if (ret != 0) {
@@ -1171,6 +1145,8 @@ static void xhci_process_events(void) {
         uint32_t ev_type = (ev_ctrl >> 10) & 0x3F;
         uint32_t ev_slot = (ev_ctrl >> 24) & 0xFF;
         uint32_t ev_epid = (ev_ctrl >> 16) & 0x1F;
+        uint32_t ev_status = s_event_ring[ev_idx].status;
+        uint32_t ev_code = (ev_status >> 24) & 0xFF;
 
         s_event_dequeue_idx++;
         if (s_event_dequeue_idx >= XHCI_RING_SIZE) {
@@ -1184,8 +1160,7 @@ static void xhci_process_events(void) {
         dsb();
 
         if (ev_type == XHCI_TRB_EVT_TRANSFER) {
-            uint32_t ev_code = (s_event_ring[ev_idx].status >> 24) & 0xFF;
-            xhci_handle_transfer_event(ev_slot, ev_epid, ev_code, s_event_ring[ev_idx].status);
+            xhci_handle_transfer_event(ev_slot, ev_epid, ev_code, ev_status);
         }
     }
 }

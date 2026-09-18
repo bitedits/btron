@@ -148,22 +148,16 @@ static void xhci_decode_mouse_report(xhci_mouse_t *mouse, uint32_t transferred, 
     const volatile uint8_t *raw = mouse->buf;
 
     /* Auto-detect protocol mode if not explicitly locked:
-     * - Standard Boot Protocol mouse reports NEVER have a Report ID. When no button
-     *   is pressed (the vast majority of cursor moves), raw[0] == 0x00.
-     *   A device sending raw[0] == 0x00 can never be a Report ID 1 device.
      * - Gaming mice with Report ID 1 (e.g. Logitech G102/G203 LIGHTSYNC) prepend
-     *   Report ID 0x01 on EVERY packet, so raw[0] == 0x01 always. When buttons are
-     *   released, raw[1] == 0x00 and motion is in bytes 2..5 (16-bit). */
-    if (mouse->proto_mode == 0) {
-        if (raw[0] == 0x00) {
-            mouse->proto_mode = 1; /* Standard Boot Protocol */
-        } else if (raw[0] == 0x01 && transferred >= 6 && raw[1] == 0x00 &&
-                   (raw[2] != 0 || raw[3] != 0 || raw[4] != 0 || raw[5] != 0)) {
-            mouse->proto_mode = 2; /* Report ID 1 (16-bit deltas) */
-        }
+     *   Report ID 0x01 on EVERY packet (len >= 6).
+     * - Standard Boot Protocol mouse reports NEVER have a Report ID and have 8-bit deltas.
+     * - We do NOT lock proto_mode to 1 on raw[0] == 0x00 because an idle/zeroed buffer
+     *   at boot would incorrectly lock a Report ID 1 mouse into Boot Protocol mode. */
+    if (mouse->proto_mode == 0 && raw[0] == 0x01 && transferred >= 6) {
+        mouse->proto_mode = 2; /* Report ID 1 (16-bit deltas) */
     }
 
-    if (mouse->proto_mode == 2) {
+    if (mouse->proto_mode == 2 || (mouse->proto_mode == 0 && raw[0] == 0x01 && transferred >= 6)) {
         /* Gaming / Multi-Report HID Mouse with Report ID 1 (e.g. Logitech G102/G203 LIGHTSYNC)
          * Byte 0: Report ID (0x01)
          * Byte 1: Buttons (bit 0=Left, bit 1=Right, bit 2=Middle, bit 3=Back, bit 4=Forward)
@@ -171,7 +165,7 @@ static void xhci_decode_mouse_report(xhci_mouse_t *mouse, uint32_t transferred, 
          * Byte 4..5: Y displacement (int16_t little-endian)
          * Byte 6: Wheel (optional)
          */
-        if (raw[0] == 0x01 && transferred >= 6) {
+        if (transferred >= 6) {
             out->buttons = raw[1] & 0x07;
 
             int16_t x16 = (int16_t)((uint16_t)raw[2] | ((uint16_t)raw[3] << 8));
@@ -988,7 +982,6 @@ int xhci_init(uintptr_t mmio_base) {
                     ret = xhci_ep0_control_transfer(dev_slot, 0x80, USB_REQ_GET_DESCRIPTOR, (USB_DT_DEVICE << 8), 0, sizeof(ddesc), &ddesc);
 
                     uint8_t proto = 0;
-                    uint8_t mouse_boot_proto = 0;
                     uint32_t ep1_mps = 8;
                     uint32_t ep1_interval = 6; /* default 8ms */
                     bool is_keyboard = false;
@@ -1031,7 +1024,6 @@ int xhci_init(uintptr_t mmio_base) {
                                     if (cur_if_proto == 2) {
                                         is_mouse = true;
                                         proto = 2;
-                                        mouse_boot_proto = 1;
                                         ep1_mps = mps;
                                         ep1_interval = 3; /* Force 1 ms (1000 Hz) polling for instant response */
                                     } else if (cur_if_proto == 1 && !is_mouse) {
@@ -1102,14 +1094,14 @@ int xhci_init(uintptr_t mmio_base) {
                             s_mice[s_num_mice].slot_id = dev_slot;
                             s_mice[s_num_mice].mps = ep1_mps;
                             s_mice[s_num_mice].buf = MOUSE_BUF(s_num_mice);
-                            /* Standard mice (PixArt 0x093A, Boot Protocol proto 2) lock to mode 1 (Standard Boot Protocol).
-                             * Only Logitech gaming mice (VID 0x046D) start in mode 0 auto-detect. */
-                            if (ddesc.idVendor == 0x093A || mouse_boot_proto == 1 || proto == 2) {
-                                s_mice[s_num_mice].proto_mode = 1;
-                            } else if (ddesc.idVendor == 0x046D) {
+                            /* Standard mice (PixArt 0x093A) lock to mode 1 (Standard Boot Protocol).
+                             * Logitech mice (VID 0x046D) and other HID mice start in mode 0 auto-detect. */
+                            if (ddesc.idVendor == 0x046D) {
                                 s_mice[s_num_mice].proto_mode = 0;
-                            } else {
+                            } else if (ddesc.idVendor == 0x093A) {
                                 s_mice[s_num_mice].proto_mode = 1;
+                            } else {
+                                s_mice[s_num_mice].proto_mode = 0;
                             }
                             fb_log("[XHCI] Bound Slot ");
                             fb_log_dec(dev_slot);

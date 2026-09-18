@@ -1230,13 +1230,20 @@ static int usb_poll_devices(GDEV *screen) {
             s_mouse_y = (H)ny;
             set_baremetal_mouse_pos(s_mouse_x, s_mouse_y);
 
-            EVT ev;
-            ev.type   = EV_MOUSE_MOVE;
-            ev.pos.x  = s_mouse_x;
-            ev.pos.y  = s_mouse_y;
-            ev.button = 0;
-            ev.data   = 0;
-            snd_evt(&ev);
+            /* Gate EV_MOUSE_MOVE: only enqueue to system event queue if UI needs it
+             * (menu open, button pressed/dragged, tab sliding, or top menu hover).
+             * Passive cursor movement is already rendered to GPU front buffer with zero latency. */
+            if (global_menu_is_open() || tracker_is_menu_open() ||
+                g_prev_mouse_btns != 0 || wnd_mgr_is_interacting() ||
+                s_mouse_y <= 25) {
+                EVT ev;
+                ev.type   = EV_MOUSE_MOVE;
+                ev.pos.x  = s_mouse_x;
+                ev.pos.y  = s_mouse_y;
+                ev.button = 0;
+                ev.data   = 0;
+                snd_evt(&ev);
+            }
             activity = 1;
         }
 

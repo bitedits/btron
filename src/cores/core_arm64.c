@@ -927,45 +927,51 @@ static inline uint16_t usb_to_btron_modifiers(uint8_t usb_mod) {
 static int32_t s_mouse_sub_x = 0;
 static int32_t s_mouse_sub_y = 0;
 
-/* RISC OS MouseStep Acceleration with sub-pixel residual carry */
-static inline int32_t mouse_accelerate_subpixel(int32_t raw, int32_t *subpixel) {
-    if (raw == 0) return 0;
+static inline int32_t mouse_accelerate_subpixel(int32_t raw, int32_t *subpixel)
+{
+    if (raw == 0)
+        return 0;
+
     int32_t sign = (raw < 0) ? -1 : 1;
     int32_t abs  = (raw < 0) ? -raw : raw;
 
-    /* Pi 400 trackpad / fine-count boost */
-    if (abs <= 3) {
+    /* Pi 400 / fine-count boost – enables better precision feel.
+     * Keeps slow movements usable while the stepped multipliers
+     * still give natural acceleration on faster strokes.
+     */
+    if (abs <= 3)
         abs *= 2;
-    }
 
-    /* Scaled by 256 (8.8 fixed-point format)
-     * g_mouse_step_mult mirrors RISC OS MouseStepCMOS (1, 2, 3, 4) */
+    /* 8.8 fixed-point multipliers (×256).
+     * g_mouse_step_mult mirrors RISC OS MouseStep (1–4)
+     */
     int32_t mult_fp;
     if (g_mouse_step_mult <= 1) {
-        /* Step 1: Precision linear 1.0x - 2.0x */
-        if      (abs <= 2) mult_fp = 256;  /* 1.0x */
-        else if (abs <= 6) mult_fp = 384;  /* 1.5x */
-        else               mult_fp = 512;  /* 2.0x */
+        /* Step 1 – Precision */
+        if      (abs <= 2) mult_fp = 256;   /* 1.0× */
+        else if (abs <= 6) mult_fp = 384;   /* 1.5× */
+        else               mult_fp = 512;   /* 2.0× */
     } else if (g_mouse_step_mult == 2) {
-        /* Step 2: RISC OS Standard Default (CMOS &C2 = 2) */
-        if      (abs <= 2) mult_fp = 512;  /* 2.0x */
-        else if (abs <= 6) mult_fp = 768;  /* 3.0x */
-        else               mult_fp = 1024; /* 4.0x */
+        /* Step 2 – Classic RISC OS default */
+        if      (abs <= 2) mult_fp = 512;   /* 2.0× */
+        else if (abs <= 6) mult_fp = 768;   /* 3.0× */
+        else               mult_fp = 1024;  /* 4.0× */
     } else if (g_mouse_step_mult == 3) {
-        /* Step 3: Fast Sweep (MouseStep = 3) */
-        if      (abs <= 2) mult_fp = 768;  /* 3.0x */
-        else if (abs <= 6) mult_fp = 1024; /* 4.0x */
-        else               mult_fp = 1280; /* 5.0x */
+        /* Step 3 – Fast */
+        if      (abs <= 2) mult_fp = 768;   /* 3.0× */
+        else if (abs <= 6) mult_fp = 1024;  /* 4.0× */
+        else               mult_fp = 1280;  /* 5.0× */
     } else {
-        /* Step 4: Ultra Velocity (MouseStep = 4) */
-        if      (abs <= 2) mult_fp = 1024; /* 4.0x */
-        else if (abs <= 6) mult_fp = 1280; /* 5.0x */
-        else               mult_fp = 1536; /* 6.0x */
+        /* Step 4 – Ultra */
+        if      (abs <= 2) mult_fp = 1024;  /* 4.0× */
+        else if (abs <= 6) mult_fp = 1280;  /* 5.0× */
+        else               mult_fp = 1536;  /* 6.0× */
     }
 
-    int32_t total = *subpixel + (sign * abs * mult_fp);
-    int32_t pixels = total / 256;
-    *subpixel = total % 256;
+    int32_t total   = *subpixel + (sign * abs * mult_fp);
+    int32_t pixels  = total / 256;
+    *subpixel       = total % 256;          /* residual stays in [0…255] */
+
     return pixels;
 }
 

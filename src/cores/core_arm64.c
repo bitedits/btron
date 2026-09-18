@@ -90,6 +90,7 @@ extern WND* launch_beos_chat(void);
 extern WND* open_control_panel_window(void);
 #include <arch/bcm283x/bcm2711_dma.h>
 extern int mailbox_set_virtual_offset(uint32_t x, uint32_t y);
+extern int about_is_animating(void);
 void blit_backbuffer_to_fb(volatile uint32_t *gpu_fb);
 static int usb_poll_devices(GDEV *screen);
 
@@ -574,6 +575,7 @@ static void launch_pi4_desktop_session(uint32_t *gpu_fb)
     g_prev_mouse_btns = 0;
 
     uint32_t last_clock = *(volatile uint32_t *)(TIMER_BASE + 0x04);
+    uint32_t last_anim_frame = last_clock;
     EVT ev;
 
     while (s_gui_active) {
@@ -611,6 +613,14 @@ static void launch_pi4_desktop_session(uint32_t *gpu_fb)
             }
             workbench_process_event(screen, &ev);
             redraw = 1;
+        }
+
+        /* 30 FPS animation redraw when animated window (About Nyan Cat) is active (every 33,333 µs) */
+        if (about_is_animating()) {
+            if ((now - last_anim_frame) >= 33333) {
+                last_anim_frame = now;
+                redraw = 1;
+            }
         }
 
         /* Periodic 1 Hz clock update */
@@ -791,8 +801,43 @@ static inline uint16_t usb_to_btron_modifiers(uint8_t usb_mod) {
     return bmod;
 }
 
-/* Forward declaration — defined after btron_core_banner below */
-static inline int32_t mouse_accelerate(int32_t raw);
+/* Sub-pixel residual motion accumulator in 8.8 fixed-point */
+static int32_t s_mouse_sub_x = 0;
+static int32_t s_mouse_sub_y = 0;
+
+/* Natural, ergonomic pointer acceleration with sub-pixel carry */
+static inline int32_t mouse_accelerate_subpixel(int32_t raw, int32_t *subpixel) {
+    if (raw == 0) return 0;
+    int32_t sign = (raw < 0) ? -1 : 1;
+    int32_t abs  = (raw < 0) ? -raw : raw;
+
+    /* Scaled by 256 (8.8 fixed-point format):
+     * - Fine precision: 1:1 pixel-perfect targeting for menus & buttons (1.0x)
+     * - Controlled navigation: 1.25x - 1.5x
+     * - Fast sweep: 2.0x - 2.5x maximum (never exceeds 2.5x so cursor never flies away)
+     */
+    int32_t mult_fp;
+    if      (abs <= 2)  mult_fp = 256;  /* 1.0x (pixel-perfect precision) */
+    else if (abs <= 5)  mult_fp = 320;  /* 1.25x */
+    else if (abs <= 10) mult_fp = 384;  /* 1.5x */
+    else if (abs <= 20) mult_fp = 512;  /* 2.0x */
+    else                mult_fp = 640;  /* 2.5x max fling */
+
+    int32_t total = *subpixel + (sign * abs * mult_fp);
+    int32_t pixels = total / 256;
+    *subpixel = total % 256;
+    return pixels;
+}
+
+/* Software Key Repeat engine defaults (450ms initial delay, 18cps repeat)
+ * 450ms prevents accidental repeats during normal human typing (~150ms dwell). */
+#define KBD_REPEAT_INITIAL_DELAY_US  450000U
+#define KBD_REPEAT_INTERVAL_US        55000U
+
+static uint32_t s_kbd_down_time    = 0;
+static uint32_t s_kbd_last_repeat  = 0;
+static uint32_t s_kbd_repeat_key   = 0;
+static uint16_t s_kbd_repeat_mod   = 0;
 
 static int usb_poll_devices(GDEV *screen) {
     (void)screen;
@@ -823,6 +868,12 @@ static int usb_poll_devices(GDEV *screen) {
             if (scancode != g_prev_kbd_scancode) {
                 uint32_t k = dwc2_usb_to_btron_key(scancode, kbd_rep.modifiers);
                 if (k != 0) {
+                    uint32_t now = *(volatile uint32_t *)(TIMER_BASE + 0x04);
+                    s_kbd_down_time   = now;
+                    s_kbd_last_repeat = now;
+                    s_kbd_repeat_key  = k;
+                    s_kbd_repeat_mod  = bmod;
+
                     EVT ev;
                     ev.type   = EV_KEY_DOWN;
                     ev.key    = k;
@@ -834,13 +885,36 @@ static int usb_poll_devices(GDEV *screen) {
                     activity = 1;
                 }
             }
-        } else if (g_prev_kbd_scancode != 0) {
-            uint32_t k = dwc2_usb_to_btron_key(g_prev_kbd_scancode, 0);
-            if (k != 0) {
+        } else {
+            s_kbd_repeat_key = 0;
+            if (g_prev_kbd_scancode != 0) {
+                uint32_t k = dwc2_usb_to_btron_key(g_prev_kbd_scancode, 0);
+                if (k != 0) {
+                    EVT ev;
+                    ev.type   = EV_KEY_UP;
+                    ev.key    = k;
+                    ev.data   = 0;
+                    ev.pos.x  = s_mouse_x;
+                    ev.pos.y  = s_mouse_y;
+                    ev.button = 0;
+                    snd_evt(&ev);
+                    activity = 1;
+                }
+            }
+        }
+        g_prev_kbd_scancode = scancode;
+    }
+
+    /* Key repeat generation for held keys */
+    if (s_kbd_repeat_key != 0) {
+        uint32_t now = *(volatile uint32_t *)(TIMER_BASE + 0x04);
+        if ((now - s_kbd_down_time) >= KBD_REPEAT_INITIAL_DELAY_US) {
+            if ((now - s_kbd_last_repeat) >= KBD_REPEAT_INTERVAL_US) {
+                s_kbd_last_repeat = now;
                 EVT ev;
-                ev.type   = EV_KEY_UP;
-                ev.key    = k;
-                ev.data   = 0;
+                ev.type   = EV_KEY_DOWN;
+                ev.key    = s_kbd_repeat_key;
+                ev.data   = (VW)(uintptr_t)s_kbd_repeat_mod;
                 ev.pos.x  = s_mouse_x;
                 ev.pos.y  = s_mouse_y;
                 ev.button = 0;
@@ -848,7 +922,6 @@ static int usb_poll_devices(GDEV *screen) {
                 activity = 1;
             }
         }
-        g_prev_kbd_scancode = scancode;
     }
 
     /* 2. Poll USB HID Mouse (xHCI on Pi 400, DWC2 on Pi 2/3/QEMU) */
@@ -862,9 +935,9 @@ static int usb_poll_devices(GDEV *screen) {
 
     if (mouse_got) {
         if (mouse_rep.dx != 0 || mouse_rep.dy != 0) {
-            /* Apply macOS-style non-linear acceleration curve */
-            s_mouse_x += (H)mouse_accelerate((int32_t)mouse_rep.dx);
-            s_mouse_y += (H)mouse_accelerate((int32_t)mouse_rep.dy);
+            /* Apply macOS-style acceleration curve with sub-pixel residual carry */
+            s_mouse_x += (H)mouse_accelerate_subpixel((int32_t)mouse_rep.dx, &s_mouse_sub_x);
+            s_mouse_y += (H)mouse_accelerate_subpixel((int32_t)mouse_rep.dy, &s_mouse_sub_y);
             if (s_mouse_x < 0) s_mouse_x = 0;
             if (s_mouse_x >= BTRON_SCREEN_W) s_mouse_x = BTRON_SCREEN_W - 1;
             if (s_mouse_y < 0) s_mouse_y = 0;
@@ -903,37 +976,6 @@ static int usb_poll_devices(GDEV *screen) {
 /* ═══════════════════════════════════════════════════════════════════
  * Platform Query & RTOS Services
  * ═══════════════════════════════════════════════════════════════════ */
-
-/* ═══════════════════════════════════════════════════════════════════
- * Mouse Pointer Acceleration (macOS-style non-linear curve)
- *
- * Raw USB HID Boot Protocol deltas are in device counts (1 count ≈ 1–4 µm
- * depending on the sensor DPI).  At 800 DPI one physical mm = 32 counts.
- * Without acceleration, moving the mouse 10 cm (3200 counts) only moves
- * the cursor 3200 pixels — far off screen — and 1 cm gives only 320 px.
- * macOS applies a non-linear curve: small deltas get ×1.5, medium ×3, fast ×6+.
- *
- * Our curve (tuned for 800-1200 DPI mice at 1024×768):
- *   |raw delta| ≤ 2  → ×1.0 (precision mode, sub-pixel)
- *   |raw delta| ≤ 5  → ×2.0
- *   |raw delta| ≤ 10 → ×3.5
- *   |raw delta| ≤ 20 → ×5.0
- *   |raw delta| > 20 → ×7.0 (fast fling)
- * ═══════════════════════════════════════════════════════════════════ */
-static inline int32_t mouse_accelerate(int32_t raw) {
-    int32_t sign = (raw < 0) ? -1 : 1;
-    int32_t abs  = (raw < 0) ? -raw : raw;
-
-    int32_t out;
-    if      (abs <= 2)  out = abs * 1;          /* ×1.0 fine */
-    else if (abs <= 5)  out = abs * 2;          /* ×2.0 */
-    else if (abs <= 10) out = (abs * 7) / 2;    /* ×3.5 */
-    else if (abs <= 20) out = abs * 5;          /* ×5.0 */
-    else                out = abs * 7;          /* ×7.0 fast fling */
-
-    return sign * out;
-}
-
 void btron_core_banner(void) {
     uint64_t midr = 0;
     __asm__ volatile("mrs %0, midr_el1" : "=r"(midr));

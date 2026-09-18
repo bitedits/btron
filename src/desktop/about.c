@@ -451,6 +451,7 @@ static void handle_about_event(WND *wnd, const EVT *evt) {
         if (rel_y >= client_h - 26 && rel_y <= client_h - 2) {
             /* Close / OK button */
             if (rel_x >= client_w - 80 && rel_x <= client_w - 10) {
+                g_about_state.wnd = NULL;
                 cls_wnd(wnd);
                 return;
             }
@@ -470,6 +471,15 @@ static void handle_about_event(WND *wnd, const EVT *evt) {
     }
 }
 
+static void destroy_about_window(WND *wnd) {
+    (void)wnd;
+    g_about_state.wnd = NULL;
+}
+
+int about_is_animating(void) {
+    return (g_about_state.wnd != NULL && g_about_state.animation_enabled);
+}
+
 WND* open_about_window(void) {
     g_about_state.ticks = 0;
     g_about_state.current_tab = ABOUT_TAB_SPECS;
@@ -485,5 +495,6 @@ WND* open_about_window(void) {
     wnd->user_data = (VW)(uintptr_t)&g_about_state;
     wnd->paint = paint_about_window;
     wnd->event_handler = handle_about_event;
+    wnd->destroy = destroy_about_window;
     return wnd;
 }

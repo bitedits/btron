@@ -485,12 +485,12 @@ void btron_main(void) {
                 /* ANSI escape sequence */
                 int wait_tries = 2000;
                 while (!uart_has_char() && --wait_tries > 0) {
-                    for (volatile int d = 0; d < 50; d++) __asm__ volatile("nop");
+                    __asm__ volatile("nop");
                 }
                 if (uart_has_char() && uart_getc() == '[') {
                     wait_tries = 2000;
                     while (!uart_has_char() && --wait_tries > 0) {
-                        for (volatile int d = 0; d < 50; d++) __asm__ volatile("nop");
+                        __asm__ volatile("nop");
                     }
                     if (uart_has_char()) {
                         int dir = uart_getc();
@@ -539,6 +539,7 @@ void btron_main(void) {
             blit_backbuffer_to_fb(gpu_fb);
         }
 
-        for (volatile int d = 0; d < 200; d++) __asm__ volatile("nop");
+        /* Zero artificial delay — single memory barrier */
+        __asm__ volatile("dsb sy" : : : "memory");
     }
 }

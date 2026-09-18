@@ -110,14 +110,14 @@ static void paint_input_settings(WND *wnd, GDEV *dev) {
     paint_ui_radio(dev, 18, 70, "TRON Ergonomic Multilingual Layout (TRON-KBD)", g_state_input.checks[0], FALSE);
     paint_ui_radio(dev, 18, 92, "Standard US ANSI 101/104 Keyboard Layout", g_state_input.checks[1], FALSE);
     paint_ui_radio(dev, 18, 114, "Japanese JIS 106 Keyboard with Hankaku/Zenkaku", g_state_input.checks[2], FALSE);
-    paint_ui_checkbox(dev, 18, 136, "Enable Hardware Key Repeat (Delay: 250ms, Rate: 30cps)", g_state_input.checks[3], FALSE);
+    paint_ui_checkbox(dev, 18, 136, "Enable Hardware Key Repeat (Delay: 450ms, Rate: 18cps)", g_state_input.checks[3], FALSE);
 
     /* Section 2: Mouse Pointer & Acceleration */
     RECT s2 = { 10, 186, dev->width - 10, 258 };
     fill_rec(dev, &s2, COLOR_WHITE);
     drw_rec(dev, &s2);
     drw_tc_string(dev, 16, 178, " [2. Mouse Pointer & Acceleration] ", COLOR_NAVY, COLOR_WHITE);
-    paint_ui_checkbox(dev, 18, 200, "Enable Smooth Linear 1.5x Pointer Acceleration", g_state_input.checks[4], FALSE);
+    paint_ui_checkbox(dev, 18, 200, "Enable Natural Pointer Acceleration (1.0x - 2.0x Precision)", g_state_input.checks[4], FALSE);
     paint_ui_checkbox(dev, 18, 222, "Double-Click Threshold: 400ms Interval", g_state_input.checks[5], FALSE);
 
     /* Action Buttons */

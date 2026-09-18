@@ -13,6 +13,7 @@ extern "C" {
 #endif
 
 WND* open_about_window(void);
+int  about_is_animating(void);
 
 #ifdef __cplusplus
 }

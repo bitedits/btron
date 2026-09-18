@@ -76,7 +76,7 @@ static TIP_CONTEXT g_tip;
 
 ER tip_init(void) {
     memset(&g_tip, 0, sizeof(TIP_CONTEXT));
-    g_tip.mode = TIP_MODE_HIRAGANA; /* Japanese IME active by default */
+    g_tip.mode = TIP_MODE_ASCII; /* Direct English / ASCII active by default */
     g_tip.state = TIP_STATE_IDLE;
     mozc_engine_init();
     return E_OK;

@@ -204,7 +204,11 @@ ER cls_wnd(WND *wnd) {
 }
 
 ER top_wnd(WND *wnd) {
-    if (!wnd || g_wnd_head == wnd) return E_OK;
+    if (!wnd) return E_PAR;
+    if (g_wnd_head == wnd) {
+        wnd->focused = TRUE;
+        return E_OK;
+    }
 
     /* Verify wnd is actually present in active window list */
     BOOL found = FALSE;
@@ -682,7 +686,8 @@ BOOL wnd_mgr_handle_event(const EVT *ev) {
 
     if (ev->type == EV_KEY_DOWN) {
         WND *top = get_top_wnd();
-        if (top && top->focused && top->event_handler) {
+        if (top && top->event_handler) {
+            top->focused = TRUE;
             top->event_handler(top, ev);
             return TRUE;
         }

@@ -49,7 +49,7 @@ extern uintptr_t g_mmio_base;
 #define TIMER_BASE          (g_mmio_base + 0x00003000UL)
 
 /* Kernel Heap Boundaries */
-#define HEAP_BASE           ((uintptr_t)0x01000000)  /* 16 MB */
+#define HEAP_BASE           ((uintptr_t)0x02000000)  /* 32 MB */
 #define HEAP_LIMIT          ((uintptr_t)0x1B000000)  /* 432 MB limit */
 extern uintptr_t heap_ptr;
 
@@ -63,6 +63,8 @@ static COLOR s_desktop_backbuffer[BTRON_SCREEN_W * BTRON_SCREEN_H] __attribute__
 /* Global interactive mouse coordinates */
 static H s_mouse_x = 512;
 static H s_mouse_y = 384;
+static uint8_t g_prev_mouse_btns = 0;
+static uint8_t g_prev_kbd_scancode = 0;
 
 /* USB host controller selection: 1 = VL805 xHCI (hardware), 0 = DWC2 (QEMU / legacy) */
 int g_use_xhci = 0;
@@ -86,6 +88,8 @@ extern WND* open_t_editor_window(void);
 extern WND* open_gterm_window(void);
 extern WND* launch_beos_chat(void);
 extern WND* open_control_panel_window(void);
+#include <arch/bcm283x/bcm2711_dma.h>
+extern int mailbox_set_virtual_offset(uint32_t x, uint32_t y);
 void blit_backbuffer_to_fb(volatile uint32_t *gpu_fb);
 static int usb_poll_devices(GDEV *screen);
 
@@ -108,29 +112,74 @@ static volatile uint32_t *s_fb_log_fb   = NULL;
 static int                s_fb_log_col  = 0;   /* current cursor X (chars)  */
 static int                s_fb_log_row  = 0;   /* current cursor Y (rows)   */
 
+/* 64-byte unrolled burst blitter: fallback when hardware DMA is not used */
+static inline void arm64_fast_blit(volatile void *dst, const void *src, size_t bytes) {
+    uint64_t *d = (uint64_t *)dst;
+    const uint64_t *s = (const uint64_t *)src;
+    size_t count = bytes / 64;
+    while (count--) {
+        d[0] = s[0];
+        d[1] = s[1];
+        d[2] = s[2];
+        d[3] = s[3];
+        d[4] = s[4];
+        d[5] = s[5];
+        d[6] = s[6];
+        d[7] = s[7];
+        d += 8;
+        s += 8;
+    }
+    size_t rem = bytes & 63;
+    if (rem) {
+        tkl_memcpy((void *)d, (const void *)s, rem);
+    }
+    __asm__ volatile("dmb sy" : : : "memory");
+}
+
+/* Darken one text row in GPU VRAM (write-only, zero uncached reads). */
+static void fb_log_darken_row(int row) {
+    if (!s_fb_log_fb || row < 0 || row >= FB_LOG_ROWS) return;
+    int y0 = row * FB_LOG_GLYPH_H;
+    int stride = BTRON_SCREEN_W;
+    uint32_t *gpu = (uint32_t *)s_fb_log_fb + y0 * stride;
+    int total_px = FB_LOG_GLYPH_H * stride;
+    for (int i = 0; i < total_px; i++) {
+        gpu[i] = 0xFF080C14u;
+    }
+}
+
+/* Fast SIMD Framebuffer Scroll:
+ * Uses arm64_fast_blit to shift 47 text rows in ~1 ms, then clears bottom row. */
+static void fb_log_scroll(void) {
+    if (!s_fb_log_fb) return;
+    int stride = BTRON_SCREEN_W;
+    int scroll_bytes = (FB_LOG_ROWS - 1) * FB_LOG_GLYPH_H * stride * sizeof(uint32_t);
+
+    /* Shift lines up using 64-byte burst blitter (only 1 ms!) */
+    arm64_fast_blit((void *)s_fb_log_fb,
+                    (const void *)(s_fb_log_fb + FB_LOG_GLYPH_H * stride),
+                    scroll_bytes);
+
+    /* Clear bottom row */
+    fb_log_darken_row(FB_LOG_ROWS - 1);
+}
+
 /* Call once after init_pi_framebuffer returns a valid pointer. */
 void fb_log_enable(volatile uint32_t *fb) {
     s_fb_log_fb  = fb;
     s_fb_log_col = 0;
     s_fb_log_row = 0;
-}
-
-/* Darken one text row in GPU VRAM to ensure legibility. */
-static void fb_log_darken_row(int row) {
-    if (!s_fb_log_fb) return;
-    int y0 = row * FB_LOG_GLYPH_H;
-    for (int py = y0; py < y0 + FB_LOG_GLYPH_H; py++) {
-        uint32_t *line = (uint32_t *)s_fb_log_fb + py * BTRON_SCREEN_W;
-        for (int px = 0; px < BTRON_SCREEN_W; px++) {
-            /* Blend: out = (pixel >> 1) | (FB_LOG_BG >> 1) */
-            uint32_t p = line[px];
-            uint32_t r = ((p >> 1) & 0x7F7F7F7Fu) + 0x00101010u;
-            line[px] = r | 0xFF000000u;
+    if (fb) {
+        mailbox_set_virtual_offset(0, 0);
+        /* Blank initial RAM backbuffer & VRAM cleanly */
+        for (int i = 0; i < BTRON_SCREEN_W * BTRON_SCREEN_H; i++) {
+            s_desktop_backbuffer[i] = 0xFF080C14u;
+            ((uint32_t *)fb)[i] = 0xFF080C14u;
         }
     }
 }
 
-/* Render one ASCII character into GPU VRAM at (col, row). */
+/* Render one ASCII character into GPU VRAM (write-only). */
 static void fb_log_putchar(char c, int col, int row) {
     if (!s_fb_log_fb) return;
     H gw = 8, gh = 16;
@@ -138,20 +187,20 @@ static void fb_log_putchar(char c, int col, int row) {
     if (!bmp) return;
     int x0 = col * 8;
     int y0 = row * FB_LOG_GLYPH_H;
-    if (x0 + 8 > BTRON_SCREEN_W || y0 + gh > BTRON_SCREEN_H) return;
+    if (x0 + 8 > BTRON_SCREEN_W || row >= FB_LOG_ROWS) return;
     for (int row_i = 0; row_i < gh; row_i++) {
         UB bits = bmp[row_i];
-        uint32_t *dst = (uint32_t *)s_fb_log_fb + (y0 + row_i) * BTRON_SCREEN_W + x0;
+        uint32_t *gpu_dst = (uint32_t *)s_fb_log_fb + (y0 + row_i) * BTRON_SCREEN_W + x0;
         for (int bit = 7; bit >= 0; bit--) {
             if (bits & (1u << bit)) {
-                /* 1-pixel shadow (write shadow first, then glyph pixel) */
-                if (bit > 0) *(dst + (8 - bit) - 1 + 1) = FB_LOG_SHADOW;
-                *dst = FB_LOG_FG;
+                if (bit > 0) {
+                    *(gpu_dst + (8 - bit)) = FB_LOG_SHADOW;
+                }
+                *gpu_dst = FB_LOG_FG;
             }
-            dst++;
+            gpu_dst++;
         }
     }
-    __asm__ volatile("dsb sy" : : : "memory");
 }
 
 /*
@@ -169,16 +218,8 @@ void fb_log(const char *msg) {
             if (*p == '\n') {
                 s_fb_log_row++;
                 if (s_fb_log_row >= FB_LOG_ROWS) {
-                    /* Scroll: shift all pixel rows up by one glyph row */
-                    uint32_t *base = (uint32_t *)s_fb_log_fb;
-                    int stride = BTRON_SCREEN_W;
-                    int rows_px = (FB_LOG_ROWS - 1) * FB_LOG_GLYPH_H;
-                    for (int y = 0; y < rows_px; y++)
-                        for (int x = 0; x < stride; x++)
-                            base[y * stride + x] = base[(y + FB_LOG_GLYPH_H) * stride + x];
-                    /* Darken new bottom row */
+                    fb_log_scroll();
                     s_fb_log_row = FB_LOG_ROWS - 1;
-                    fb_log_darken_row(s_fb_log_row);
                 } else {
                     fb_log_darken_row(s_fb_log_row);
                 }
@@ -189,13 +230,16 @@ void fb_log(const char *msg) {
             /* Tab: advance to next 8-column stop */
             s_fb_log_col = (s_fb_log_col + 8) & ~7;
         } else {
-            if (s_fb_log_col == 0) fb_log_darken_row(s_fb_log_row);
             int cols = BTRON_SCREEN_W / 8;
             if (s_fb_log_col >= cols) {
                 s_fb_log_col = 0;
                 s_fb_log_row++;
-                if (s_fb_log_row >= FB_LOG_ROWS) s_fb_log_row = FB_LOG_ROWS - 1;
-                fb_log_darken_row(s_fb_log_row);
+                if (s_fb_log_row >= FB_LOG_ROWS) {
+                    fb_log_scroll();
+                    s_fb_log_row = FB_LOG_ROWS - 1;
+                } else {
+                    fb_log_darken_row(s_fb_log_row);
+                }
             }
             fb_log_putchar(*p, s_fb_log_col, s_fb_log_row);
             s_fb_log_col++;
@@ -253,15 +297,11 @@ static void fb_log_putc(char c) {
         s_fb_log_col = 0;
         s_fb_log_row++;
         if (s_fb_log_row >= FB_LOG_ROWS) {
-            uint32_t *base = (uint32_t *)s_fb_log_fb;
-            int stride = BTRON_SCREEN_W;
-            int rows_px = (FB_LOG_ROWS - 1) * FB_LOG_GLYPH_H;
-            for (int y = 0; y < rows_px; y++)
-                for (int x = 0; x < stride; x++)
-                    base[y * stride + x] = base[(y + FB_LOG_GLYPH_H) * stride + x];
+            fb_log_scroll();
             s_fb_log_row = FB_LOG_ROWS - 1;
+        } else {
+            fb_log_darken_row(s_fb_log_row);
         }
-        fb_log_darken_row(s_fb_log_row);
     } else if (c == '\r') {
         s_fb_log_col = 0;
     } else {
@@ -270,8 +310,12 @@ static void fb_log_putc(char c) {
         if (s_fb_log_col >= cols) {
             s_fb_log_col = 0;
             s_fb_log_row++;
-            if (s_fb_log_row >= FB_LOG_ROWS) s_fb_log_row = FB_LOG_ROWS - 1;
-            fb_log_darken_row(s_fb_log_row);
+            if (s_fb_log_row >= FB_LOG_ROWS) {
+                fb_log_scroll();
+                s_fb_log_row = FB_LOG_ROWS - 1;
+            } else {
+                fb_log_darken_row(s_fb_log_row);
+            }
         }
         fb_log_putchar(c, s_fb_log_col, s_fb_log_row);
         s_fb_log_col++;
@@ -519,7 +563,10 @@ static void launch_pi4_desktop_session(uint32_t *gpu_fb)
 
     uart_puts("[WB]  Workbench live. Press [Esc] or type 'exit' to return.\n");
 
-    uint32_t last_clock = 0, last_usb = 0;
+    g_prev_kbd_scancode = 0;
+    g_prev_mouse_btns = 0;
+
+    uint32_t last_clock = *(volatile uint32_t *)(TIMER_BASE + 0x04);
     EVT ev;
 
     while (s_gui_active) {
@@ -527,12 +574,9 @@ static void launch_pi4_desktop_session(uint32_t *gpu_fb)
 
         uint32_t now = *(volatile uint32_t *)(TIMER_BASE + 0x04);
 
-        /* USB keyboard & mouse at 100 Hz */
-        if (now - last_usb >= 10000) {
-            last_usb = now;
-            if (usb_poll_devices(screen)) {
-                redraw = 1;
-            }
+        /* Poll USB devices once per frame to prevent starving the event dispatcher */
+        if (usb_poll_devices(screen)) {
+            // events enqueued
         }
 
         /* UART serial console */
@@ -549,12 +593,12 @@ static void launch_pi4_desktop_session(uint32_t *gpu_fb)
                 ev.button = 0;
                 ev.data   = 0;
                 snd_evt(&ev);
-                redraw = 1;
             }
         }
 
+        /* Dispatch all queued events to the B-TRON window manager */
         while (get_evt(&ev, 0) == E_OK) {
-            if (ev.type == EV_KEY_DOWN && (ev.key == 0x1B || ev.key == 'q' || ev.key == 'Q')) {
+            if (ev.type == EV_KEY_DOWN && ev.key == 0x1B /* Escape */) {
                 s_gui_active = 0;
                 break;
             }
@@ -562,7 +606,8 @@ static void launch_pi4_desktop_session(uint32_t *gpu_fb)
             redraw = 1;
         }
 
-        if (now - last_clock >= 16666) {
+        /* Periodic 1 Hz clock update */
+        if (now - last_clock >= 1000000) {
             last_clock = now;
             redraw = 1;
         }
@@ -571,8 +616,6 @@ static void launch_pi4_desktop_session(uint32_t *gpu_fb)
             workbench_render(screen, BTRON_SCREEN_W, BTRON_SCREEN_H);
             blit_backbuffer_to_fb(gpu_fb);
         }
-
-        for (volatile int d = 0; d < 200; d++) __asm__ volatile("nop");
     }
 
     /* Return to Stage 1 console */
@@ -686,8 +729,7 @@ void kprintf(const char *fmt, ...) {
 
 void blit_backbuffer_to_fb(volatile uint32_t *gpu_fb) {
     if (!gpu_fb) return;
-    tkl_memcpy((void*)gpu_fb, s_desktop_backbuffer, BTRON_SCREEN_W * BTRON_SCREEN_H * sizeof(COLOR));
-    __asm__ volatile("dsb sy" : : : "memory");
+    arm64_fast_blit((void *)gpu_fb, s_desktop_backbuffer, BTRON_SCREEN_W * BTRON_SCREEN_H * sizeof(COLOR));
 }
 
 /* ═══════════════════════════════════════════════════════════════════
@@ -742,37 +784,37 @@ static inline uint16_t usb_to_btron_modifiers(uint8_t usb_mod) {
     return bmod;
 }
 
-static uint8_t g_prev_mouse_btns = 0;
-static uint8_t g_prev_kbd_scancode = 0;
-
 static int usb_poll_devices(GDEV *screen) {
     (void)screen;
     int activity = 0;
 
-    /* 1. Poll USB HID Keyboard (xHCI on Pi 400, DWC2 on Pi 2/3/QEMU) */
+    /* 1. Drain all pending USB HID Keyboard reports from ring/queue */
     usb_kbd_report_t kbd_rep;
-    int kbd_got = 0;
-    if (g_use_xhci) {
-        kbd_got = (xhci_poll_keyboard(&kbd_rep) > 0);
-    } else {
-        kbd_got = (dwc2_poll_keyboard(&kbd_rep) > 0);
-    }
+    while (1) {
+        int kbd_got = 0;
+        if (g_use_xhci) {
+            kbd_got = (xhci_poll_keyboard(&kbd_rep) > 0);
+        } else {
+            kbd_got = (dwc2_poll_keyboard(&kbd_rep) > 0);
+        }
+        if (!kbd_got) break;
 
-    if (kbd_got) {
         uint8_t scancode = kbd_rep.keys[0];
         uint16_t bmod = usb_to_btron_modifiers(kbd_rep.modifiers);
         if (scancode != 0) {
-            uint32_t k = dwc2_usb_to_btron_key(scancode, kbd_rep.modifiers);
-            if (k != 0) {
-                EVT ev;
-                ev.type   = EV_KEY_DOWN;
-                ev.key    = k;
-                ev.data   = (VW)(uintptr_t)bmod;
-                ev.pos.x  = s_mouse_x;
-                ev.pos.y  = s_mouse_y;
-                ev.button = 0;
-                snd_evt(&ev);
-                activity = 1;
+            if (scancode != g_prev_kbd_scancode) {
+                uint32_t k = dwc2_usb_to_btron_key(scancode, kbd_rep.modifiers);
+                if (k != 0) {
+                    EVT ev;
+                    ev.type   = EV_KEY_DOWN;
+                    ev.key    = k;
+                    ev.data   = (VW)(uintptr_t)bmod;
+                    ev.pos.x  = s_mouse_x;
+                    ev.pos.y  = s_mouse_y;
+                    ev.button = 0;
+                    snd_evt(&ev);
+                    activity = 1;
+                }
             }
         } else if (g_prev_kbd_scancode != 0) {
             uint32_t k = dwc2_usb_to_btron_key(g_prev_kbd_scancode, 0);
@@ -935,6 +977,10 @@ void btron_main(void) {
     btron_core_hfds_log();
 
     /* 4. Initialize BCM2711 Hardware Device Drivers */
+    if (g_mmio_base == 0xFE000000UL) {
+        bcm2711_dma_init();
+    }
+
     fb_log("[DRV] Initializing Screen Driver...\n");
     ER sdrv_res = ScreenDrv(0, NULL);
     if (sdrv_res >= 0) {

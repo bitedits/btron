@@ -100,7 +100,15 @@ static void poll_tty_stdin(void) {
 
 ER snd_evt(const EVT *p_evt) {
     if (!p_evt) return E_PAR;
-    if (g_q_count >= EVENT_QUEUE_SIZE) return E_BUSY;
+    if (g_q_count >= EVENT_QUEUE_SIZE) {
+        if (p_evt->type == EV_KEY_DOWN || p_evt->type == EV_BUT_DOWN) {
+            /* Drop oldest event (usually a stale mouse motion) to guarantee key/click delivery */
+            g_q_head = (g_q_head + 1) % EVENT_QUEUE_SIZE;
+            g_q_count--;
+        } else {
+            return E_BUSY;
+        }
+    }
 
     g_queue[g_q_tail] = *p_evt;
     g_q_tail = (g_q_tail + 1) % EVENT_QUEUE_SIZE;

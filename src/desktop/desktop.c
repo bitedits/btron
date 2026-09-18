@@ -309,7 +309,10 @@ GDEV* init_baremetal_desktop(uint32_t *fb, uint32_t w, uint32_t h) {
     open_vobj_manager_window();
     open_t_editor_window();
     WND *w_cli = open_gterm_window();
-    if (w_cli) top_wnd(w_cli);
+    if (w_cli) {
+        top_wnd(w_cli);
+        w_cli->focused = TRUE;
+    }
 
     /* Initial paint to backbuffer (caller blits to GPU VRAM after this returns) */
     redraw_baremetal_desktop(screen, w, h);

@@ -106,7 +106,8 @@ void pci_write_config32(uint32_t bus, uint32_t dev, uint32_t func, uint32_t offs
 #define MBOX_EMPTY        0x40000000u
 
 static int bcm2711_reload_vl805_firmware(void) {
-    static uint32_t mbox_buf[8] __attribute__((aligned(16)));
+    /* Use Non-Cacheable DMA memory at 16MB (Attr 2) so VideoCore GPU sees coherent memory directly */
+    volatile uint32_t *mbox_buf = (volatile uint32_t *)(0x01000000UL + 0xF800);
     uintptr_t mbox_base = g_mmio_base + 0x0000B880UL;
     volatile uint32_t *status_reg = (volatile uint32_t *)(mbox_base + MBOX_STATUS);
     volatile uint32_t *write_reg  = (volatile uint32_t *)(mbox_base + MBOX_WRITE);
@@ -120,16 +121,16 @@ static int bcm2711_reload_vl805_firmware(void) {
     mbox_buf[5] = VL805_PCI_ADDR;                /* 0x00100000 (Bus 1, Dev 0, Func 0) */
     mbox_buf[6] = 0;                             /* end tag */
 
-    uint32_t mbox_addr = (uint32_t)(uintptr_t)mbox_buf;
+    uint32_t mbox_addr = 0x01000000U + 0xF800U;
     dsb();
 
-    int to = 2000000;
+    int to = 2000;
     while ((*status_reg & MBOX_FULL) && --to > 0) {
         __asm__ volatile("nop");
     }
     *write_reg = ((mbox_addr & 0xFFFFFFF0u) | MBOX_CH_PROP);
 
-    to = 2000000;
+    to = 2000;
     while (--to > 0) {
         while ((*status_reg & MBOX_EMPTY) && --to > 0) {
             __asm__ volatile("nop");
@@ -243,10 +244,10 @@ int bcm2711_pcie_init(void) {
     /* (Controller already enabled by PERST# de-assertion above) */
 
     /* 4. Wait for controller and link training (REG_BRIDGE_STATE 0x4068) */
-    int to = 1000;
+    int to = 100;
     while (to-- > 0) {
         if ((pcie_rc_read(0x4068) & 0x30) == 0x30) break;
-        delay_us(1000);
+        delay_us(10);
     }
     uint32_t state = pcie_rc_read(0x4068);
     uint32_t link_speed = pcie_rc_read(0x00BC) >> 16;
@@ -300,7 +301,7 @@ int bcm2711_pcie_init(void) {
         } else {
             fb_log("[PCIE] VL805 firmware reload completed (pre-loaded/EEPROM)\n");
         }
-        delay_us(50000); /* 50ms settle for VL805 controller reboot */
+        delay_us(10); /* 10ms settle for VL805 controller reboot */
 
         /* 11. Program BAR0 to PCI address 0xC0000000 (after firmware reload) */
         pci_write_config32(VL805_PCI_BUS, VL805_PCI_DEV, VL805_PCI_FUNC, PCI_BAR0, BCM2711_PCIE_BUS_MEM_BASE);

@@ -75,23 +75,30 @@ static inline void delay_us(uint32_t us) {
 
 #define XHCI_RING_SIZE          64
 #define XHCI_MAX_SLOTS          8
-#define XHCI_DMA_BASE           0x00200000ULL
+#define XHCI_DMA_BASE           0x01000000ULL /* 16MB uncached DMA region (L2 Entry 8) */
 
-/* Base data structures in uncached DMA RAM */
-static uint64_t * const          s_dcbaa      = (uint64_t *)(XHCI_DMA_BASE + 0x0000); /* 1KB */
-static xhci_trb_t * const        s_cmd_ring   = (xhci_trb_t *)(XHCI_DMA_BASE + 0x1000); /* 1KB */
-static xhci_trb_t * const        s_event_ring = (xhci_trb_t *)(XHCI_DMA_BASE + 0x2000); /* 1KB */
-static xhci_erst_entry_t * const s_erst       = (xhci_erst_entry_t *)(XHCI_DMA_BASE + 0x3000); /* 64B */
-static uint32_t * const          s_input_ctx  = (uint32_t *)(XHCI_DMA_BASE + 0x4000); /* 2KB */
+/* Base data structures in uncached DMA RAM (16MB region) */
+#define XHCI_DMA_BASE           0x01000000ULL /* 16MB uncached DMA region */
 
-/* Per-slot structures (Slot 1 = Hub, Slot 2 = Keyboard, Slot 3 = Mouse) */
-#define DEV_CTX_BASE(slot)   ((volatile uint32_t *)(XHCI_DMA_BASE + 0x5000 + ((slot) - 1) * 0x1000))
-#define EP0_RING_BASE(slot)  ((xhci_trb_t *)(XHCI_DMA_BASE + 0x8000 + ((slot) - 1) * 0x1000))
-#define EP1_RING_BASE(slot)  ((xhci_trb_t *)(XHCI_DMA_BASE + 0xB000 + ((slot) - 1) * 0x1000))
+static uint64_t * const          s_dcbaa      = (uint64_t *)(XHCI_DMA_BASE + 0x0000); /* 1KB (32 slots * 8B) */
+static xhci_trb_t * const        s_cmd_ring   = (xhci_trb_t *)(XHCI_DMA_BASE + 0x0800); /* 1KB */
+static xhci_trb_t * const        s_event_ring = (xhci_trb_t *)(XHCI_DMA_BASE + 0x0C00); /* 1KB */
+static xhci_erst_entry_t * const s_erst       = (xhci_erst_entry_t *)(XHCI_DMA_BASE + 0x1000); /* 64B */
+static uint32_t * const          s_input_ctx  = (uint32_t *)(XHCI_DMA_BASE + 0x1400); /* 2KB */
 
-#define DMA_SCRATCH_BUF      ((uint8_t *)(XHCI_DMA_BASE + 0xE000)) /* 4KB scratch buffer */
-static usb_kbd_report_t * const  s_kbd_buf    = (usb_kbd_report_t *)(XHCI_DMA_BASE + 0xF000);
-static usb_mouse_report_t * const s_mouse_buf = (usb_mouse_report_t *)(XHCI_DMA_BASE + 0xF100);
+/* Per-slot structures (Slots 1..8):
+ * Each Device Context: 2KB (32 contexts * 64B)
+ * Each EP Ring: 1KB (64 TRBs * 16B)
+ */
+#define DEV_CTX_BASE(slot)   ((volatile uint32_t *)(XHCI_DMA_BASE + 0x2000 + ((slot) - 1) * 0x800))
+#define EP0_RING_BASE(slot)  ((xhci_trb_t *)(XHCI_DMA_BASE + 0x6000 + ((slot) - 1) * 0x400))
+#define EP1_RING_BASE(slot)  ((xhci_trb_t *)(XHCI_DMA_BASE + 0x8000 + ((slot) - 1) * 0x400))
+
+#define DMA_SCRATCH_BUF      ((uint8_t *)(XHCI_DMA_BASE + 0xB000)) /* 4KB scratch buffer */
+static usb_kbd_report_t * const  s_kbd_buf    = (usb_kbd_report_t *)(XHCI_DMA_BASE + 0xC000);
+
+/* Multi-mouse DMA buffers (up to 4 mice): each mouse gets 64 bytes */
+#define MOUSE_BUF(idx)       ((uint8_t *)(XHCI_DMA_BASE + 0xC100 + (idx) * 64))
 
 static uintptr_t s_cap_base = 0;
 static uintptr_t s_op_base  = 0;
@@ -104,20 +111,122 @@ static uint32_t   s_cmd_cycle_bit     = 1;
 static uint32_t   s_event_dequeue_idx = 0;
 static uint32_t   s_event_cycle_bit   = 1;
 
-static uint32_t   s_ep0_enqueue_idx[4] = {0};
-static uint32_t   s_ep0_cycle[4]       = {1, 1, 1, 1};
-static uint32_t   s_ep1_enqueue_idx[4] = {0};
-static uint32_t   s_ep1_cycle[4]       = {1, 1, 1, 1};
+#define XHCI_MAX_SLOTS 8
+static uint32_t   s_ep0_enqueue_idx[XHCI_MAX_SLOTS + 1] = {0};
+static uint32_t   s_ep0_cycle[XHCI_MAX_SLOTS + 1]       = {1, 1, 1, 1, 1, 1, 1, 1, 1};
+static uint32_t   s_ep1_enqueue_idx[XHCI_MAX_SLOTS + 1] = {0};
+static uint32_t   s_ep1_cycle[XHCI_MAX_SLOTS + 1]       = {1, 1, 1, 1, 1, 1, 1, 1, 1};
 
 static int s_kbd_slot_id   = 0;
-static int s_mouse_slot_id = 0;
+static uint32_t s_kbd_mps   = 8;
 
-static volatile int s_has_kbd = 0;
+#define XHCI_MAX_MICE 4
+typedef struct {
+    int      slot_id;
+    uint32_t mps;
+    uint8_t *buf;
+} xhci_mouse_t;
+
+static xhci_mouse_t s_mice[XHCI_MAX_MICE];
+static int          s_num_mice = 0;
+
+#define XHCI_KBD_QUEUE_SIZE 32
+static usb_kbd_report_t s_kbd_queue[XHCI_KBD_QUEUE_SIZE];
+static volatile int s_kbd_q_head = 0;
+static volatile int s_kbd_q_tail = 0;
+static volatile int s_kbd_q_count = 0;
+
+static volatile int32_t s_accum_dx = 0;
+static volatile int32_t s_accum_dy = 0;
+static volatile int32_t s_accum_wheel = 0;
+static volatile uint8_t s_latest_buttons = 0;
 static volatile int s_has_mouse = 0;
-static usb_kbd_report_t s_latest_kbd;
-static usb_mouse_report_t s_latest_mouse;
+
+static void xhci_decode_mouse_report(const uint8_t *raw, uint32_t transferred, usb_mouse_report_t *out) {
+    if (!raw || !out) return;
+
+    if (raw[0] == 0x01 && transferred >= 6) {
+        /* Gaming / Multi-Report HID Mouse with Report ID 1 (e.g. Logitech G102/G203 LIGHTSYNC)
+         * Byte 0: Report ID (0x01)
+         * Byte 1: Buttons (bit 0=Left, bit 1=Right, bit 2=Middle, bit 3=Back, bit 4=Forward)
+         * Byte 2: X displacement low 8 bits (X[7:0])
+         * Byte 3: X displacement high 8 bits (X[15:8])
+         * Byte 4: Y displacement low 8 bits (Y[7:0])
+         * Byte 5: Y displacement high 8 bits (Y[15:8])
+         * Byte 6: Wheel (optional, int8_t)
+         * Byte 7: AC Pan / Tilt (optional, int8_t)
+         */
+        out->buttons = raw[1] & 0x07;
+
+        int16_t x16 = (int16_t)((uint16_t)raw[2] | ((uint16_t)raw[3] << 8));
+        int16_t y16 = (int16_t)((uint16_t)raw[4] | ((uint16_t)raw[5] << 8));
+
+        /* Clamp deltas to reasonable single-report range */
+        if (x16 > 120) x16 = 120;
+        if (x16 < -120) x16 = -120;
+        if (y16 > 120) y16 = 120;
+        if (y16 < -120) y16 = -120;
+
+        out->dx = (int8_t)x16;
+        out->dy = (int8_t)y16;
+        out->wheel = (transferred >= 7) ? (int8_t)raw[6] : 0;
+    } else if (raw[0] == 0x01 && transferred >= 4) {
+        /* Mouse with Report ID 1 and 8-bit coordinates */
+        out->buttons = raw[1] & 0x07;
+        out->dx = (int8_t)raw[2];
+        out->dy = (int8_t)raw[3];
+        out->wheel = (transferred >= 5) ? (int8_t)raw[4] : 0;
+    } else {
+        /* Standard 3-byte / 4-byte USB Boot Protocol Mouse
+         * Byte 0: Buttons (bit 0=Left, bit 1=Right, bit 2=Middle)
+         * Byte 1: X displacement (int8_t)
+         * Byte 2: Y displacement (int8_t)
+         * Byte 3: Wheel (optional)
+         */
+        out->buttons = raw[0] & 0x07;
+        out->dx = (int8_t)raw[1];
+        out->dy = (int8_t)raw[2];
+        out->wheel = (transferred >= 4) ? (int8_t)raw[3] : 0;
+    }
+}
 
 static void xhci_queue_ep1_transfer(uint32_t slot_id, uintptr_t buf_addr, uint32_t len);
+
+static void xhci_handle_transfer_event(uint32_t ev_slot, uint32_t ev_epid, uint32_t ev_code, uint32_t ev_status) {
+    if (ev_slot == (uint32_t)s_kbd_slot_id && ev_epid == 3) {
+        if (ev_code == 1 || ev_code == 13 /* Success or Short Packet */) {
+            if (s_kbd_q_count < XHCI_KBD_QUEUE_SIZE) {
+                s_kbd_queue[s_kbd_q_tail] = *s_kbd_buf;
+                s_kbd_q_tail = (s_kbd_q_tail + 1) % XHCI_KBD_QUEUE_SIZE;
+                s_kbd_q_count++;
+            }
+        }
+        xhci_queue_ep1_transfer(s_kbd_slot_id, (uintptr_t)s_kbd_buf, s_kbd_mps);
+        return;
+    }
+
+    /* Check all registered mice */
+    for (int m = 0; m < s_num_mice; m++) {
+        if (ev_slot == (uint32_t)s_mice[m].slot_id && ev_epid == 3) {
+            if (ev_code == 1 || ev_code == 13) {
+                uint32_t rem = ev_status & 0xFFFFFF;
+                uint32_t transferred = (rem <= s_mice[m].mps) ? (s_mice[m].mps - rem) : s_mice[m].mps;
+                if (transferred == 0) transferred = s_mice[m].mps;
+
+                usb_mouse_report_t temp_rep = {0};
+                xhci_decode_mouse_report(s_mice[m].buf, transferred, &temp_rep);
+
+                s_accum_dx += temp_rep.dx;
+                s_accum_dy += temp_rep.dy;
+                s_accum_wheel += temp_rep.wheel;
+                s_latest_buttons = temp_rep.buttons;
+                s_has_mouse = 1;
+            }
+            xhci_queue_ep1_transfer(s_mice[m].slot_id, (uintptr_t)s_mice[m].buf, s_mice[m].mps);
+            return;
+        }
+    }
+}
 
 /* ─────────────────────────────────────────────────────────────────
  * Doorbell Registers
@@ -183,19 +292,8 @@ static int xhci_cmd_submit(uint64_t param, uint32_t status, uint32_t trb_type, u
                 if (out_slot_id) *out_slot_id = ev_slot;
                 return (ev_completion_code == 1 /* Success */) ? 0 : (int)ev_completion_code;
             } else if (ev_type == XHCI_TRB_EVT_TRANSFER) {
-                if (ev_slot == (uint32_t)s_kbd_slot_id && ev_epid == 3) {
-                    if (ev_completion_code == 1 || ev_completion_code == 13) {
-                        s_latest_kbd = *s_kbd_buf;
-                        s_has_kbd = 1;
-                    }
-                    xhci_queue_ep1_transfer(s_kbd_slot_id, (uintptr_t)s_kbd_buf, 8);
-                } else if (ev_slot == (uint32_t)s_mouse_slot_id && ev_epid == 3) {
-                    if (ev_completion_code == 1 || ev_completion_code == 13) {
-                        s_latest_mouse = *s_mouse_buf;
-                        s_has_mouse = 1;
-                    }
-                    xhci_queue_ep1_transfer(s_mouse_slot_id, (uintptr_t)s_mouse_buf, 8);
-                }
+                uint32_t ev_code = (s_event_ring[ev_idx].status >> 24) & 0xFF;
+                xhci_handle_transfer_event(ev_slot, ev_epid, ev_code, s_event_ring[ev_idx].status);
             }
         }
         delay_cycles(20);
@@ -216,7 +314,7 @@ static int xhci_ep0_control_transfer(uint32_t slot_id, uint8_t bmRequestType, ui
                                      uint16_t wValue, uint16_t wIndex, uint16_t wLength,
                                      void *data_buf)
 {
-    if (slot_id == 0 || slot_id >= 4) return -1;
+    if (slot_id == 0 || slot_id > XHCI_MAX_SLOTS) return -1;
     xhci_trb_t *ring = EP0_RING_BASE(slot_id);
     uint32_t idx = s_ep0_enqueue_idx[slot_id];
     uint32_t cycle = s_ep0_cycle[slot_id];
@@ -311,19 +409,8 @@ static int xhci_ep0_control_transfer(uint32_t slot_id, uint8_t bmRequestType, ui
                 fb_log("\n");
                 return (int)ev_code;
             } else if (ev_type == XHCI_TRB_EVT_TRANSFER) {
-                if (ev_slot == (uint32_t)s_kbd_slot_id && ev_epid == 3) {
-                    if (ev_code == 1 || ev_code == 13) {
-                        s_latest_kbd = *s_kbd_buf;
-                        s_has_kbd = 1;
-                    }
-                    xhci_queue_ep1_transfer(s_kbd_slot_id, (uintptr_t)s_kbd_buf, 8);
-                } else if (ev_slot == (uint32_t)s_mouse_slot_id && ev_epid == 3) {
-                    if (ev_code == 1 || ev_code == 13) {
-                        s_latest_mouse = *s_mouse_buf;
-                        s_has_mouse = 1;
-                    }
-                    xhci_queue_ep1_transfer(s_mouse_slot_id, (uintptr_t)s_mouse_buf, 8);
-                }
+                uint32_t ev_code = (s_event_ring[ev_idx].status >> 24) & 0xFF;
+                xhci_handle_transfer_event(ev_slot, ev_epid, ev_code, s_event_ring[ev_idx].status);
             } else {
                 fb_log("[XHCI] EP0 Evt (Type=");
                 fb_log_dec(ev_type);
@@ -354,7 +441,7 @@ static int xhci_address_device(uint32_t slot_id, uint32_t root_port, uint32_t sp
                                bool is_split, uint32_t hub_slot, uint32_t hub_port,
                                uint32_t max_packet_size)
 {
-    if (slot_id == 0 || slot_id >= 4) return -1;
+    if (slot_id == 0 || slot_id > XHCI_MAX_SLOTS) return -1;
 
     /* Zero 2KB Input Context */
     for (int i = 0; i < 2048 / 4; i++) {
@@ -415,7 +502,7 @@ static int xhci_address_device(uint32_t slot_id, uint32_t root_port, uint32_t sp
 }
 
 static int xhci_evaluate_hub_context(uint32_t slot_id, uint32_t num_ports) {
-    if (slot_id == 0 || slot_id >= 4) return -1;
+    if (slot_id == 0 || slot_id > XHCI_MAX_SLOTS) return -1;
 
     for (int i = 0; i < 2048 / 4; i++) {
         s_input_ctx[i] = 0;
@@ -436,8 +523,34 @@ static int xhci_evaluate_hub_context(uint32_t slot_id, uint32_t num_ports) {
     return ret;
 }
 
+static int xhci_evaluate_ep0_max_packet(uint32_t slot_id, uint32_t max_p) {
+    if (slot_id == 0 || slot_id > XHCI_MAX_SLOTS) return -1;
+
+    for (int i = 0; i < 2048 / 4; i++) {
+        s_input_ctx[i] = 0;
+    }
+
+    s_input_ctx[0] = 0;
+    s_input_ctx[1] = (1u << 0) | (1u << 1); /* Add Slot Context (A0) + EP0 Context (A1) */
+
+    volatile uint32_t *dev_ctx = DEV_CTX_BASE(slot_id);
+    /* In Device Context, Slot context is at index 0..7 */
+    for (int i = 0; i < 8; i++) {
+        s_input_ctx[8 + i] = dev_ctx[i];
+    }
+    /* In Device Context, EP0 context is at offset 0x20 = index 8..15 */
+    for (int i = 0; i < 8; i++) {
+        s_input_ctx[16 + i] = dev_ctx[8 + i];
+    }
+    s_input_ctx[17] = (s_input_ctx[17] & ~(0xFFFFu << 16)) | ((max_p & 0xFFFF) << 16);
+    dsb();
+
+    int ret = xhci_cmd_submit((uint64_t)(uintptr_t)s_input_ctx, 0, XHCI_TRB_EVAL_CTX, slot_id, NULL);
+    return ret;
+}
+
 static int xhci_configure_hid_endpoint(uint32_t slot_id, uint32_t speed, uint32_t interval, uint32_t max_packet_size) {
-    if (slot_id == 0 || slot_id >= 4) return -1;
+    if (slot_id == 0 || slot_id > XHCI_MAX_SLOTS) return -1;
 
     for (int i = 0; i < 2048 / 4; i++) {
         s_input_ctx[i] = 0;
@@ -457,7 +570,8 @@ static int xhci_configure_hid_endpoint(uint32_t slot_id, uint32_t speed, uint32_
     s_input_ctx[33] = (3u << 1 /* CErr=3 */) | (7u << 3 /* EP Type = 7 Interrupt IN */) | ((max_packet_size & 0xFFFF) << 16);
     s_input_ctx[34] = (uint32_t)(uintptr_t)ep1_ring | 1u /* DCS = 1 */;
     s_input_ctx[35] = (uint32_t)((uint64_t)(uintptr_t)ep1_ring >> 32);
-    s_input_ctx[36] = 8 | (8u << 16); /* Average TRB Length = 8, Max ESIT Payload = 8 */
+    uint32_t payload = (max_packet_size > 0) ? max_packet_size : 8;
+    s_input_ctx[36] = (payload & 0xFFFF) | ((payload & 0xFFFF) << 16); /* Average TRB Length, Max ESIT Payload */
     dsb();
 
     int ret = xhci_cmd_submit((uint64_t)(uintptr_t)s_input_ctx, 0, XHCI_TRB_CONFIG_EP, slot_id, NULL);
@@ -465,7 +579,7 @@ static int xhci_configure_hid_endpoint(uint32_t slot_id, uint32_t speed, uint32_
 }
 
 static void xhci_queue_ep1_transfer(uint32_t slot_id, uintptr_t buf_addr, uint32_t len) {
-    if (slot_id == 0 || slot_id >= 4) return;
+    if (slot_id == 0 || slot_id > XHCI_MAX_SLOTS) return;
     xhci_trb_t *ring = EP1_RING_BASE(slot_id);
     uint32_t idx = s_ep1_enqueue_idx[slot_id];
     uint32_t cycle = s_ep1_cycle[slot_id];
@@ -542,28 +656,40 @@ int xhci_init(uintptr_t mmio_base) {
     fb_log(" (HCSPARAMS1=");    fb_log_hex32(hcsparams1);
     fb_log(")\n");
 
+    s_kbd_slot_id = 0;
+    s_kbd_mps = 8;
+    s_num_mice = 0;
+    s_kbd_q_head = 0;
+    s_kbd_q_tail = 0;
+    s_kbd_q_count = 0;
+    s_accum_dx = 0;
+    s_accum_dy = 0;
+    s_accum_wheel = 0;
+    s_latest_buttons = 0;
+    s_has_mouse = 0;
+
     /* 1. Stop Controller */
     uint32_t cmd = xread32(s_op_base + XHCI_OP_USBCMD);
     cmd &= ~XHCI_CMD_RS;
     xwrite32(s_op_base + XHCI_OP_USBCMD, cmd);
     dsb();
 
-    int to = 100000;
+    int to = 1000;
     while (!(xread32(s_op_base + XHCI_OP_USBSTS) & XHCI_STS_HCH) && --to > 0) {
-        delay_us(10);
+        delay_us(1);
     }
 
     /* 2. Reset Controller */
     xwrite32(s_op_base + XHCI_OP_USBCMD, XHCI_CMD_HCRST);
     dsb();
 
-    to = 100000;
+    to = 2000;
     while ((xread32(s_op_base + XHCI_OP_USBCMD) & XHCI_CMD_HCRST) && --to > 0) {
-        delay_us(10);
+        delay_us(1);
     }
-    to = 100000;
+    to = 2000;
     while ((xread32(s_op_base + XHCI_OP_USBSTS) & XHCI_STS_CNR) && --to > 0) {
-        delay_us(10);
+        delay_us(1);
     }
 
     fb_log("[XHCI] Host Controller Reset: OK\n");
@@ -635,9 +761,9 @@ int xhci_init(uintptr_t mmio_base) {
     xwrite32(s_op_base + XHCI_OP_USBCMD, cmd);
     dsb();
 
-    to = 100000;
+    to = 1000;
     while ((xread32(s_op_base + XHCI_OP_USBSTS) & XHCI_STS_HCH) && --to > 0) {
-        delay_us(10);
+        delay_us(1);
     }
 
     fb_log("[XHCI] Controller Running: OK (Ports: ");
@@ -655,7 +781,7 @@ int xhci_init(uintptr_t mmio_base) {
         psc |= XHCI_PORT_PP;
         xwrite32(port_reg, psc);
     }
-    delay_us(100000); /* 100ms port power settle */
+    delay_us(20000); /* root port power settle */
 
     /* 10. Check Root Port 1 (High-Speed USB 2.0 Hub on Pi 400) */
     uintptr_t port1_reg = s_op_base + XHCI_OP_PORTSC_BASE;
@@ -669,9 +795,9 @@ int xhci_init(uintptr_t mmio_base) {
 
         uint32_t reset_cmd = (psc & ~w1c_mask) | XHCI_PORT_PR | XHCI_PORT_PP;
         xwrite32(port1_reg, reset_cmd);
-        delay_us(50000);
+        delay_us(5000);
 
-        for (int r = 0; r < 1000; r++) {
+        for (int r = 0; r < 200; r++) {
             psc = xread32(port1_reg);
             if (!(psc & XHCI_PORT_PR)) break;
             delay_us(100);
@@ -739,7 +865,7 @@ int xhci_init(uintptr_t mmio_base) {
             for (uint32_t hp = 1; hp <= 4; hp++) {
                 xhci_ep0_control_transfer(1, 0x23, USB_REQ_SET_FEATURE, HUB_FEAT_PORT_POWER, hp, 0, NULL);
             }
-            delay_us(250000); /* 250ms port power settle */
+            delay_us(250000); /* 250ms USB hub port power settle */
 
             /* Scan Hub Ports 1..4 */
             for (uint32_t hp = 1; hp <= 4; hp++) {
@@ -758,13 +884,14 @@ int xhci_init(uintptr_t mmio_base) {
                     fb_log_dec(hp);
                     fb_log(" Device Attached -> Resetting...\n");
 
-                    /* Issue Hub Port Reset */
+                    /* Issue Hub Port Reset (minimum 50-60ms as per USB 2.0 spec) */
                     xhci_ep0_control_transfer(1, 0x23, USB_REQ_SET_FEATURE, HUB_FEAT_PORT_RESET, hp, 0, NULL);
                     delay_us(60000);
 
-                    /* Re-read Port Status to get negotiated speed */
-                    xhci_ep0_control_transfer(1, 0xA3, USB_REQ_GET_STATUS, 0, hp, 4, &pstat);
+                    /* Clear reset change and re-read Port Status */
                     xhci_ep0_control_transfer(1, 0x23, USB_REQ_CLEAR_FEATURE, HUB_FEAT_C_PORT_RESET, hp, 0, NULL);
+                    delay_us(10000); /* 10ms reset recovery time (T_RSTRCY) */
+                    xhci_ep0_control_transfer(1, 0xA3, USB_REQ_GET_STATUS, 0, hp, 4, &pstat);
 
                     uint32_t dev_speed = 1; /* Default Full-Speed */
                     if (pstat.wPortStatus & HUB_PORT_STAT_LOW_SPEED) {
@@ -791,30 +918,130 @@ int xhci_init(uintptr_t mmio_base) {
                     fb_log("\n");
 
                     /* Address Device (Split-Transaction via Hub Slot 1, Port hp)
-                     * Full-Speed and High-Speed devices can send up to 64-byte packets on EP0.
-                     * Using 8 bytes causes Babble Error (Code 3) if the device responds with >8 bytes.
-                     * Only Low-Speed devices (speed 2) are strictly limited to 8 bytes. */
-                    uint32_t ep0_max_p = (dev_speed == 2) ? 8 : 64;
-                    ret = xhci_address_device(dev_slot, 1, dev_speed, true, 1, hp, ep0_max_p);
+                     * For Full/Low-Speed, initialize EP0 with 8 bytes.
+                     * For High-Speed, initialize EP0 with 64 bytes. */
+                    uint32_t ep0_init_mps = (dev_speed == 3) ? 64 : 8;
+                    ret = xhci_address_device(dev_slot, 1, dev_speed, true, 1, hp, ep0_init_mps);
                     if (ret != 0) {
                         fb_log("[XHCI] AddressDevice failed for Slot ");
                         fb_log_dec(dev_slot);
+                        fb_log(" ret=");
+                        fb_log_dec((uint32_t)ret);
                         fb_log("\n");
                         continue;
                     }
                     delay_us(10000);
 
-                    /* Read Device Descriptor */
+                    /* Step 1: Read first 8 bytes of Device Descriptor to learn true bMaxPacketSize0 */
                     usb_device_desc_t ddesc = {0};
-                    xhci_ep0_control_transfer(dev_slot, 0x80, USB_REQ_GET_DESCRIPTOR, (USB_DT_DEVICE << 8), 0, sizeof(ddesc), &ddesc);
+                    ret = xhci_ep0_control_transfer(dev_slot, 0x80, USB_REQ_GET_DESCRIPTOR, (USB_DT_DEVICE << 8), 0, 8, &ddesc);
+                    if (ret != 0) {
+                        fb_log("[XHCI] Read initial 8B desc failed for Slot ");
+                        fb_log_dec(dev_slot);
+                        fb_log("\n");
+                        continue;
+                    }
 
-                    /* Read Configuration & Interface Descriptor */
-                    uint8_t cfg_buf[32] = {0};
-                    xhci_ep0_control_transfer(dev_slot, 0x80, USB_REQ_GET_DESCRIPTOR, (USB_DT_CONFIGURATION << 8), 0, sizeof(cfg_buf), cfg_buf);
+                    uint32_t real_mps = ddesc.bMaxPacketSize0;
+                    if (real_mps < 8 || real_mps > 64) real_mps = 8;
+                    if (real_mps != ep0_init_mps) {
+                        ret = xhci_evaluate_ep0_max_packet(dev_slot, real_mps);
+                        fb_log("[XHCI] Slot ");
+                        fb_log_dec(dev_slot);
+                        fb_log(" Update EP0 MPS=");
+                        fb_log_dec(real_mps);
+                        fb_log(" EVAL ret=");
+                        fb_log_dec((uint32_t)ret);
+                        fb_log("\n");
+                        delay_us(5000);
+                    }
+
+                    /* Step 2: Read full 18-byte Device Descriptor */
+                    ret = xhci_ep0_control_transfer(dev_slot, 0x80, USB_REQ_GET_DESCRIPTOR, (USB_DT_DEVICE << 8), 0, sizeof(ddesc), &ddesc);
 
                     uint8_t proto = 0;
-                    if (cfg_buf[1] == USB_DT_CONFIGURATION && cfg_buf[9] >= 9 && cfg_buf[10] == USB_DT_INTERFACE) {
-                        proto = cfg_buf[16]; /* 1 = Keyboard, 2 = Mouse */
+                    uint32_t ep1_mps = 8;
+                    uint32_t ep1_interval = 6; /* default 8ms */
+                    bool is_keyboard = false;
+                    bool is_mouse = false;
+
+                    if (ddesc.idVendor == 0x04D9 /* Holtek Pi 400 Keyboard */) {
+                        is_keyboard = true;
+                        proto = 1;
+                        ep1_mps = 8;
+                        ep1_interval = 6;
+                    } else {
+                        /* For external USB devices (e.g. Logitech mouse, Raspberry mouse):
+                         * Read 9-byte Configuration Header first to inspect true wTotalLength */
+                        uint8_t cfg_hdr[9] = {0};
+                        ret = xhci_ep0_control_transfer(dev_slot, 0x80, USB_REQ_GET_DESCRIPTOR, (USB_DT_CONFIGURATION << 8), 0, 9, cfg_hdr);
+                        uint32_t tot_len = (ret == 0 && cfg_hdr[0] >= 9) ? ((uint32_t)cfg_hdr[2] | ((uint32_t)cfg_hdr[3] << 8)) : 0;
+                        if (tot_len > 128) tot_len = 128;
+
+                        uint8_t cfg_buf[128] = {0};
+                        if (tot_len > 0) {
+                            ret = xhci_ep0_control_transfer(dev_slot, 0x80, USB_REQ_GET_DESCRIPTOR, (USB_DT_CONFIGURATION << 8), 0, tot_len, cfg_buf);
+                        }
+
+                        uint8_t cur_if_proto = 0;
+                        for (uint32_t off = 0; off + 2 <= tot_len; ) {
+                            uint8_t len = cfg_buf[off];
+                            uint8_t type = cfg_buf[off + 1];
+                            if (len < 2 || off + len > tot_len) break;
+
+                            if (type == USB_DT_INTERFACE && len >= 9) {
+                                cur_if_proto = cfg_buf[off + 7]; /* 1=Keyboard, 2=Mouse */
+                                if (cur_if_proto == 1) is_keyboard = true;
+                                if (cur_if_proto == 2) is_mouse = true;
+                            } else if (type == USB_DT_ENDPOINT && len >= 7) {
+                                uint8_t ep_addr = cfg_buf[off + 2];
+                                if (ep_addr & 0x80) { /* IN endpoint */
+                                    uint32_t mps = cfg_buf[off + 4] | ((uint32_t)cfg_buf[off + 5] << 8);
+                                    if (mps < 4 || mps > 64) mps = 8;
+                                    uint8_t bInt = cfg_buf[off + 6];
+                                    uint32_t interval = 6;
+                                    if (dev_speed == 3) {
+                                        interval = bInt ? bInt : 6;
+                                    } else {
+                                        if (bInt <= 1) interval = 3;
+                                        else if (bInt <= 2) interval = 4;
+                                        else if (bInt <= 4) interval = 5;
+                                        else if (bInt <= 8) interval = 6;
+                                        else if (bInt <= 16) interval = 7;
+                                        else interval = 8;
+                                    }
+
+                                    if (cur_if_proto == 2) {
+                                        is_mouse = true;
+                                        proto = 2;
+                                        ep1_mps = mps;
+                                        ep1_interval = interval;
+                                    } else if (cur_if_proto == 1 && !is_mouse) {
+                                        is_keyboard = true;
+                                        proto = 1;
+                                        ep1_mps = 8;
+                                        ep1_interval = interval;
+                                    } else if (!is_keyboard && !is_mouse) {
+                                        ep1_mps = mps;
+                                        ep1_interval = interval;
+                                    }
+                                }
+                            }
+                            off += len;
+                        }
+
+                        if (!is_keyboard && !is_mouse) {
+                            if (dev_speed == 2 && !s_kbd_slot_id) {
+                                is_keyboard = true;
+                                proto = 1;
+                                ep1_mps = 8;
+                                ep1_interval = 6;
+                            } else {
+                                is_mouse = true;
+                                proto = 2;
+                                if (ep1_mps < 8) ep1_mps = 8;
+                            }
+                        }
                     }
 
                     fb_log("[XHCI] Slot ");
@@ -825,18 +1052,16 @@ int xhci_init(uintptr_t mmio_base) {
                     fb_log_hex32(ddesc.idProduct);
                     fb_log(" Proto=");
                     fb_log_dec(proto);
+                    fb_log(" EP1_MPS=");
+                    fb_log_dec(ep1_mps);
                     fb_log("\n");
 
                     /* Set Configuration 1 */
                     xhci_ep0_control_transfer(dev_slot, 0x00, USB_REQ_SET_CONFIGURATION, 1, 0, 0, NULL);
-                    delay_us(10000);
+                    delay_us(10000); /* 10ms settle time after SET_CONFIGURATION */
 
-                    /* Note: Do NOT send SET_PROTOCOL or SET_IDLE here.
-                     * USB HID boot devices default to Boot Protocol upon bus reset.
-                     * Holtek HT45R0072 (Pi 400 keyboard) returns STALL (Code 6) on SET_PROTOCOL. */
-
-                    /* Configure EP1 Interrupt IN (Interval: 6 = 8ms [2^6 * 125us]) */
-                    ret = xhci_configure_hid_endpoint(dev_slot, dev_speed, 6 /* 8ms */, 8 /* 8 bytes */);
+                    /* Configure EP1 Interrupt IN */
+                    ret = xhci_configure_hid_endpoint(dev_slot, dev_speed, ep1_interval, ep1_mps);
                     if (ret != 0) {
                         fb_log("[XHCI] ConfigureEndpoint failed for Slot ");
                         fb_log_dec(dev_slot);
@@ -845,26 +1070,24 @@ int xhci_init(uintptr_t mmio_base) {
                     }
 
                     /* Bind Driver based on USB HID Interface Protocol / Device ID */
-                    if (proto == 1 || ddesc.idVendor == 0x04D9 /* Holtek Pi 400 Keyboard */) {
+                    if (is_keyboard || proto == 1) {
                         s_kbd_slot_id = dev_slot;
+                        s_kbd_mps = ep1_mps;
                         fb_log("[XHCI] Bound Slot ");
                         fb_log_dec(dev_slot);
                         fb_log(" to Pi 400 Keyboard Driver [OK]\n");
-                    } else if (proto == 2 || dev_speed == 2 /* Low-Speed USB Mouse */) {
-                        s_mouse_slot_id = dev_slot;
-                        fb_log("[XHCI] Bound Slot ");
-                        fb_log_dec(dev_slot);
-                        fb_log(" to USB Mouse Driver [OK]\n");
-                    } else if (!s_kbd_slot_id) {
-                        s_kbd_slot_id = dev_slot;
-                        fb_log("[XHCI] Fallback Bound Slot ");
-                        fb_log_dec(dev_slot);
-                        fb_log(" to Keyboard Driver [OK]\n");
-                    } else if (!s_mouse_slot_id) {
-                        s_mouse_slot_id = dev_slot;
-                        fb_log("[XHCI] Fallback Bound Slot ");
-                        fb_log_dec(dev_slot);
-                        fb_log(" to Mouse Driver [OK]\n");
+                    } else if (is_mouse || proto == 2) {
+                        if (s_num_mice < XHCI_MAX_MICE) {
+                            s_mice[s_num_mice].slot_id = dev_slot;
+                            s_mice[s_num_mice].mps = ep1_mps;
+                            s_mice[s_num_mice].buf = MOUSE_BUF(s_num_mice);
+                            fb_log("[XHCI] Bound Slot ");
+                            fb_log_dec(dev_slot);
+                            fb_log(" as Mouse ");
+                            fb_log_dec(s_num_mice + 1);
+                            fb_log(" [OK]\n");
+                            s_num_mice++;
+                        }
                     }
                 }
             }
@@ -882,12 +1105,12 @@ int xhci_init(uintptr_t mmio_base) {
         fb_log("\n");
     }
 
-    /* Arm Interrupt IN transfer rings for keyboard and mouse */
+    /* Arm Interrupt IN transfer rings for keyboard and all connected mice */
     if (s_kbd_slot_id) {
-        xhci_queue_ep1_transfer(s_kbd_slot_id, (uintptr_t)s_kbd_buf, 8);
+        xhci_queue_ep1_transfer(s_kbd_slot_id, (uintptr_t)s_kbd_buf, s_kbd_mps);
     }
-    if (s_mouse_slot_id) {
-        xhci_queue_ep1_transfer(s_mouse_slot_id, (uintptr_t)s_mouse_buf, 8);
+    for (int m = 0; m < s_num_mice; m++) {
+        xhci_queue_ep1_transfer(s_mice[m].slot_id, (uintptr_t)s_mice[m].buf, s_mice[m].mps);
     }
 
     return 0;
@@ -922,19 +1145,7 @@ static void xhci_process_events(void) {
 
         if (ev_type == XHCI_TRB_EVT_TRANSFER) {
             uint32_t ev_code = (s_event_ring[ev_idx].status >> 24) & 0xFF;
-            if (ev_slot == (uint32_t)s_kbd_slot_id && ev_epid == 3) {
-                if (ev_code == 1 || ev_code == 13 /* Success or Short Packet */) {
-                    s_latest_kbd = *s_kbd_buf;
-                    s_has_kbd = 1;
-                }
-                xhci_queue_ep1_transfer(s_kbd_slot_id, (uintptr_t)s_kbd_buf, 8);
-            } else if (ev_slot == (uint32_t)s_mouse_slot_id && ev_epid == 3) {
-                if (ev_code == 1 || ev_code == 13) {
-                    s_latest_mouse = *s_mouse_buf;
-                    s_has_mouse = 1;
-                }
-                xhci_queue_ep1_transfer(s_mouse_slot_id, (uintptr_t)s_mouse_buf, 8);
-            }
+            xhci_handle_transfer_event(ev_slot, ev_epid, ev_code, s_event_ring[ev_idx].status);
         }
     }
 }
@@ -942,19 +1153,34 @@ static void xhci_process_events(void) {
 int xhci_poll_keyboard(usb_kbd_report_t *rep) {
     if (!s_kbd_slot_id || !rep) return 0;
     xhci_process_events();
-    if (s_has_kbd) {
-        *rep = s_latest_kbd;
-        s_has_kbd = 0;
+    if (s_kbd_q_count > 0) {
+        *rep = s_kbd_queue[s_kbd_q_head];
+        s_kbd_q_head = (s_kbd_q_head + 1) % XHCI_KBD_QUEUE_SIZE;
+        s_kbd_q_count--;
         return 1;
     }
     return 0;
 }
 
 int xhci_poll_mouse(usb_mouse_report_t *rep) {
-    if (!s_mouse_slot_id || !rep) return 0;
+    if (s_num_mice == 0 || !rep) return 0;
     xhci_process_events();
     if (s_has_mouse) {
-        *rep = s_latest_mouse;
+        int32_t dx = s_accum_dx;
+        int32_t dy = s_accum_dy;
+        if (dx > 120) dx = 120;
+        if (dx < -120) dx = -120;
+        if (dy > 120) dy = 120;
+        if (dy < -120) dy = -120;
+
+        rep->dx = (int8_t)dx;
+        rep->dy = (int8_t)dy;
+        rep->wheel = (int8_t)s_accum_wheel;
+        rep->buttons = s_latest_buttons;
+
+        s_accum_dx = 0;
+        s_accum_dy = 0;
+        s_accum_wheel = 0;
         s_has_mouse = 0;
         return 1;
     }
@@ -962,7 +1188,7 @@ int xhci_poll_mouse(usb_mouse_report_t *rep) {
 }
 
 bool xhci_has_devices(void) {
-    return (s_kbd_slot_id != 0 || s_mouse_slot_id != 0);
+    return (s_kbd_slot_id != 0 || s_num_mice > 0);
 }
 
 #endif /* AArch64 */

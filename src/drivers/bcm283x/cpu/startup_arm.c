@@ -421,7 +421,7 @@ uint32_t* init_pi_framebuffer(uint32_t w, uint32_t h) {
     mbox[8] = 8;
     mbox[9] = 0;          /* request code */
     mbox[10] = w;
-    mbox[11] = h;
+    mbox[11] = h;          /* 1:1 1024x768 display mapping */
 
     mbox[12] = 0x00048005; /* set depth */
     mbox[13] = 4;
@@ -496,6 +496,46 @@ uint32_t* init_pi_framebuffer(uint32_t w, uint32_t h) {
     return g_pi_fb_ptr;
 }
 
+int mailbox_set_virtual_offset(uint32_t x, uint32_t y) {
+    uintptr_t mbox_base = g_mmio_base + 0x0000b880UL;
+    volatile uint32_t *status_reg = (volatile uint32_t*)(mbox_base + MBOX_STATUS);
+    volatile uint32_t *write_reg  = (volatile uint32_t*)(mbox_base + MBOX_WRITE);
+    volatile uint32_t *read_reg   = (volatile uint32_t*)(mbox_base + MBOX_READ);
+
+    /* Coherent non-cacheable DMA mailbox buffer */
+    volatile uint32_t *mbox_buf = (volatile uint32_t *)(0x01000000UL + 0xF600UL);
+    mbox_buf[0] = 8 * 4;       /* buffer size */
+    mbox_buf[1] = 0;           /* request code */
+    mbox_buf[2] = 0x00048009;  /* tag: SET_VIRTUAL_OFFSET */
+    mbox_buf[3] = 8;           /* value buffer size */
+    mbox_buf[4] = 0;           /* request/response size */
+    mbox_buf[5] = x;           /* x offset */
+    mbox_buf[6] = y;           /* y offset */
+    mbox_buf[7] = 0;           /* end tag */
+
+    uint32_t mbox_addr = 0x01000000U + 0xF600U;
+    __asm__ volatile("dsb sy" : : : "memory");
+
+    int to = 1000;
+    while ((*status_reg & MBOX_FULL) && --to > 0) {
+        __asm__ volatile("nop");
+    }
+    if (to <= 0) return -1;
+    *write_reg = ((mbox_addr & 0xFFFFFFF0) | MBOX_CH_PROP);
+
+    to = 1000;
+    while (--to > 0) {
+        while ((*status_reg & MBOX_EMPTY) && --to > 0) {
+            __asm__ volatile("nop");
+        }
+        if (to <= 0) break;
+        uint32_t res = *read_reg;
+        if ((res & 0xF) == MBOX_CH_PROP) break;
+    }
+    __asm__ volatile("dsb sy" : : : "memory");
+    return 0;
+}
+
 int bcm283x_power_usb(void) {
     uintptr_t mbox_base = g_mmio_base + 0x0000b880UL;
     volatile uint32_t *status_reg = (volatile uint32_t*)(mbox_base + MBOX_STATUS);
@@ -514,13 +554,13 @@ int bcm283x_power_usb(void) {
     uint32_t mbox_addr = (uint32_t)(uintptr_t)mbox;
     __asm__ volatile("dsb sy" : : : "memory");
 
-    int to = 2000000;
+    int to = 2000;
     while ((*status_reg & MBOX_FULL) && --to > 0) {
         __asm__ volatile("nop");
     }
     *write_reg = ((mbox_addr & 0xFFFFFFF0) | MBOX_CH_PROP);
 
-    to = 2000000;
+    to = 2000;
     while (--to > 0) {
         while ((*status_reg & MBOX_EMPTY) && --to > 0) {
             __asm__ volatile("nop");
@@ -550,13 +590,13 @@ uint32_t bcm283x_get_board_revision(void) {
     uint32_t mbox_addr = (uint32_t)(uintptr_t)mbox;
     __asm__ volatile("dsb sy" : : : "memory");
 
-    int to = 1000000;
+    int to = 1000;
     while ((*status_reg & MBOX_FULL) && --to > 0) {
         __asm__ volatile("nop");
     }
     *write_reg = ((mbox_addr & 0xFFFFFFF0) | MBOX_CH_PROP);
 
-    to = 1000000;
+    to = 1000;
     while (--to > 0) {
         while ((*status_reg & MBOX_EMPTY) && --to > 0) {
             __asm__ volatile("nop");
@@ -633,18 +673,20 @@ void arm64_mmu_init(void) {
     uint64_t mair = (0x44ULL << 16) | (0xFFULL << 8) | (0x04ULL << 0);
 
     /* L2 Table: 512 entries of 2MB (covers 0 to 1GB)
-     * Entry 0: 0 - 2MB -> Normal Cacheable RAM (kernel code & data)
-     * Entry 1: 2MB - 4MB (0x00200000 - 0x003FFFFF) -> Normal Non-Cacheable (Coherent DMA memory)
-     * Entries 2..479: 4MB - 960MB -> Normal Cacheable RAM
-     * Entries 480..511: 960MB - 1GB (0x3C000000 - 0x3FFFFFFF) -> GPU Framebuffer (Device-nGnRE)
+     * Entries 0..7: 0 - 16MB -> Normal Cacheable RAM (kernel code, data, BSS, desktop backbuffer)
+     * Entry 8: 16MB - 18MB (0x01000000 - 0x011FFFFF) -> Normal Non-Cacheable (Coherent DMA memory)
+     * Entries 9..479: 18MB - 960MB -> Normal Cacheable RAM
+     * Entries 480..511: 960MB - 1GB (0x3C000000 - 0x3FFFFFFF) -> GPU Framebuffer (Normal Non-Cacheable, Write-Combining)
      */
-    s_arm64_l2[0] = (0 * 0x200000ULL) | (1ULL << 10) | (3ULL << 8) | (1ULL << 2) | 0x01ULL;
-    s_arm64_l2[1] = (1 * 0x200000ULL) | (1ULL << 10) | (3ULL << 8) | (2ULL << 2) | 0x01ULL; /* Non-cacheable DMA */
-    for (uint64_t i = 2; i < 480; i++) {
-        s_arm64_l2[i] = (i * 0x200000ULL) | (1ULL << 10) | (3ULL << 8) | (1ULL << 2) | 0x01ULL;
+    for (uint64_t i = 0; i < 480; i++) {
+        if (i == 8) {
+            s_arm64_l2[i] = (i * 0x200000ULL) | (1ULL << 10) | (3ULL << 8) | (2ULL << 2) | 0x01ULL; /* Non-cacheable DMA (16MB-18MB) */
+        } else {
+            s_arm64_l2[i] = (i * 0x200000ULL) | (1ULL << 10) | (3ULL << 8) | (1ULL << 2) | 0x01ULL; /* Normal Cacheable */
+        }
     }
     for (uint64_t i = 480; i < 512; i++) {
-        s_arm64_l2[i] = (i * 0x200000ULL) | (1ULL << 10) | (2ULL << 8) | (0ULL << 2) | 0x01ULL;
+        s_arm64_l2[i] = (i * 0x200000ULL) | (1ULL << 10) | (3ULL << 8) | (2ULL << 2) | 0x01ULL; /* GPU FB: Normal Non-Cacheable (Write-Combining) */
     }
 
     /* L1 Table: 512 entries of 1GB */

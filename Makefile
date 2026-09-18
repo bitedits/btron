@@ -240,7 +240,8 @@ ARCH_BCM_SRCS = src/drivers/bcm283x/cpu/cache.c      \
 
 ARCH_BCM64_SRCS = $(ARCH_BCM_SRCS) \
                   src/drivers/bcm283x/pci/pcie_bcm2711.c \
-                  src/drivers/bcm283x/usb/xhci.c
+                  src/drivers/bcm283x/usb/xhci.c \
+                  src/drivers/bcm283x/dma/bcm2711_dma.c
 
 TKERNEL_SAKAMURA_SRCS = \
     src/kernel/task.c         \

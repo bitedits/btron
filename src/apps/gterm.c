@@ -1033,16 +1033,29 @@ static void handle_gterm_event(WND *wnd, const EVT *evt) {
             }
         }
 
+
         /* Check if TIP handles key (Japanese IME mode or F10 / Ctrl+Space toggle) */
-        if (tip_process_key(key_code, mod, commit_buf, sizeof(commit_buf))) {
-            if (commit_buf[0] != '\0') {
-                int clen = (int)strlen(commit_buf);
-                if (st->input_len + clen < GTERM_MAX_COLS - (int)strlen(st->prompt) - 2) {
-                    strcat(st->input_buf, commit_buf);
-                    st->input_len += clen;
+        if (tip_get_mode() != TIP_MODE_ASCII) {
+            if (tip_process_key(key_code, mod, commit_buf, sizeof(commit_buf))) {
+                if (commit_buf[0] != '\0') {
+                    int clen = (int)strlen(commit_buf);
+                    if (st->input_len + clen < GTERM_MAX_COLS - (int)strlen(st->prompt) - 2) {
+                        strcat(st->input_buf, commit_buf);
+                        st->input_len += clen;
+                    }
                 }
+                inval_wnd(wnd);
+                return;
             }
-            return;
+        } else {
+            /* In ASCII mode, only allow mode toggling (F10, F6, F7, Hankaku) through TIP */
+            if (key_code == BTRON_KEY_F10 || key_code == 0x100 ||
+                key_code == BTRON_KEY_F6 || key_code == BTRON_KEY_F7 ||
+                (key_code == ' ' && (mod & 0x03C3))) {
+                tip_process_key(key_code, mod, commit_buf, sizeof(commit_buf));
+                inval_wnd(wnd);
+                return;
+            }
         }
 
         UW sym = key_code;
@@ -1104,6 +1117,7 @@ static void handle_gterm_event(WND *wnd, const EVT *evt) {
             gterm_execute_cmd(wnd, st, st->input_buf);
             st->input_buf[0] = '\0';
             st->input_len = 0;
+            inval_wnd(wnd);
             return;
         } else if (sym == BTRON_KEY_BACKSPACE || sym == 0x08) {
             if (st->input_len > 0) {
@@ -1114,6 +1128,7 @@ static void handle_gterm_event(WND *wnd, const EVT *evt) {
                 st->input_buf[prev_c] = '\0';
                 st->input_len = prev_c;
             }
+            inval_wnd(wnd);
             return;
         } else if (sym == BTRON_KEY_UP) {
             if (st->cmd_hist_count > 0 && st->cmd_hist_idx > 0) {
@@ -1121,6 +1136,7 @@ static void handle_gterm_event(WND *wnd, const EVT *evt) {
                 strncpy(st->input_buf, st->cmd_history[st->cmd_hist_idx], sizeof(st->input_buf) - 1);
                 st->input_len = (int)strlen(st->input_buf);
             }
+            inval_wnd(wnd);
             return;
         } else if (sym == BTRON_KEY_DOWN) {
             if (st->cmd_hist_idx < st->cmd_hist_count - 1) {
@@ -1132,12 +1148,14 @@ static void handle_gterm_event(WND *wnd, const EVT *evt) {
                 st->input_buf[0] = '\0';
                 st->input_len = 0;
             }
+            inval_wnd(wnd);
             return;
         } else if (sym == BTRON_KEY_TAB || sym == '\t') {
             if (st->input_len + 4 < GTERM_MAX_COLS - (int)strlen(st->prompt) - 2) {
                 strcat(st->input_buf, "    ");
                 st->input_len += 4;
             }
+            inval_wnd(wnd);
             return;
         }
 
@@ -1149,6 +1167,7 @@ static void handle_gterm_event(WND *wnd, const EVT *evt) {
                 st->input_buf[st->input_len++] = ch;
                 st->input_buf[st->input_len] = '\0';
             }
+            inval_wnd(wnd);
             return;
         }
     }

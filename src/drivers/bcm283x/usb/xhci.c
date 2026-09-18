@@ -790,9 +790,12 @@ int xhci_init(uintptr_t mmio_base) {
                     fb_log_dec(hp);
                     fb_log("\n");
 
-                    /* Address Device (Split-Transaction via Hub Slot 1, Port hp) */
-                    ret = xhci_address_device(dev_slot, 1, dev_speed, true, 1, hp,
-                                              (dev_speed == 3) ? 64 : 8);
+                    /* Address Device (Split-Transaction via Hub Slot 1, Port hp)
+                     * Full-Speed and High-Speed devices can send up to 64-byte packets on EP0.
+                     * Using 8 bytes causes Babble Error (Code 3) if the device responds with >8 bytes.
+                     * Only Low-Speed devices (speed 2) are strictly limited to 8 bytes. */
+                    uint32_t ep0_max_p = (dev_speed == 2) ? 8 : 64;
+                    ret = xhci_address_device(dev_slot, 1, dev_speed, true, 1, hp, ep0_max_p);
                     if (ret != 0) {
                         fb_log("[XHCI] AddressDevice failed for Slot ");
                         fb_log_dec(dev_slot);

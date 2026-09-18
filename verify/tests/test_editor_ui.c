@@ -372,6 +372,7 @@ static void test_multibyte_atomic_deletion(void) {
 static void test_tip_ime_typing_pipeline(void) {
     printf("\n[UI TEST 6] TIP IME Input Pipeline & Candidate Window Visibility\n");
     tip_init();
+    tip_set_mode(TIP_MODE_HIRAGANA);
 
     /* Type romaji "watashi" */
     const char *keys = "watashi";

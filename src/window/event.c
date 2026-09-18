@@ -177,8 +177,8 @@ ER get_evt(EVT *p_evt, W timeout_ms) {
                 ev.pos.x = sdlev.button.x;
                 ev.pos.y = sdlev.button.y;
                 ev.button = sdlev.button.button;
-                ev.data = (VW)sdlev.button.timestamp;
-                if (ev.data == 0) ev.data = (VW)SDL_GetTicks();
+                ev.data = (VW)(uintptr_t)sdlev.button.timestamp;
+                if (ev.data == 0) ev.data = (VW)(uintptr_t)SDL_GetTicks();
                 snd_evt(&ev);
                 break;
             case SDL_MOUSEBUTTONUP:
@@ -186,8 +186,8 @@ ER get_evt(EVT *p_evt, W timeout_ms) {
                 ev.pos.x = sdlev.button.x;
                 ev.pos.y = sdlev.button.y;
                 ev.button = sdlev.button.button;
-                ev.data = (VW)sdlev.button.timestamp;
-                if (ev.data == 0) ev.data = (VW)SDL_GetTicks();
+                ev.data = (VW)(uintptr_t)sdlev.button.timestamp;
+                if (ev.data == 0) ev.data = (VW)(uintptr_t)SDL_GetTicks();
                 snd_evt(&ev);
                 break;
             case SDL_MOUSEMOTION:

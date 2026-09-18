@@ -258,7 +258,7 @@ static void paint_about_window(WND *wnd, GDEV *dev) {
     int nyan_frame = 0;
     if (g_about_state.animation_enabled) {
         g_about_state.ticks++;
-#if !defined(__STDC_HOSTED__) || __STDC_HOSTED__ != 1
+#if defined(_RPI_BCM283x_)
         extern uintptr_t g_mmio_base;
         uint32_t now_us = *(volatile uint32_t *)(g_mmio_base + 0x00003004UL);
         nyan_frame = (int)((now_us / 70000U) % NYAN_FRAME_COUNT);

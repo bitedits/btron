@@ -24,12 +24,12 @@
 #endif
 
 /* Hardware kernel globals for live input configuration */
-extern uint32_t g_kbd_repeat_delay_us;
-extern uint32_t g_kbd_repeat_interval_us;
-extern int      g_kbd_repeat_enabled;
-extern int      g_mouse_step_mult;
-extern int      g_mouse_swap_select_adjust;
-extern int      g_mouse_accel_profile;
+uint32_t g_kbd_repeat_delay_us    = 160000U; /* 16 cs = 160 ms (RISC OS Fast Delay) */
+uint32_t g_kbd_repeat_interval_us = 25000U;  /* 40 cps (25 ms interval) */
+int      g_kbd_repeat_enabled     = 1;
+int      g_mouse_step_mult          = 4;      /* Default: Step 2 (Archimedes / Haiku natural responsive standard) */
+int      g_mouse_swap_select_adjust = 0;      /* 0: Right-handed (Select/Menu/Adjust), 1: Left-handed */
+int      g_mouse_accel_profile     = 1;
 
 typedef struct {
     WND *wnd;
@@ -418,9 +418,9 @@ static void handle_input_event(WND *wnd, const EVT *evt) {
 
             /* Interactive Double-Click Test Area */
             if (rel_y >= 304 && rel_y <= 366) {
-                extern uintptr_t g_mmio_base;
                 uint32_t now_us = 0;
-#if !defined(__STDC_HOSTED__) || __STDC_HOSTED__ != 1
+#if defined(_RPI_BCM283x_)
+                extern uintptr_t g_mmio_base;
                 now_us = *(volatile uint32_t *)(g_mmio_base + 0x00003004UL);
 #else
                 static uint32_t s_mock_clock = 0;

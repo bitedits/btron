@@ -66,18 +66,18 @@ static H s_mouse_y = 384;
 static uint8_t g_prev_mouse_btns = 0;
 static uint8_t g_prev_kbd_scancode = 0;
 
-/* RISC OS Inspired Keyboard Auto-Repeat Parameters & State */
-uint32_t g_kbd_repeat_delay_us    = 160000U; /* 16 cs = 160 ms (RISC OS Fast Delay) */
-uint32_t g_kbd_repeat_interval_us = 25000U;  /* 40 cps (25 ms interval) */
-int      g_kbd_repeat_enabled     = 1;
+/* RISC OS Inspired Keyboard Auto-Repeat Parameters & State (defined in input.c) */
+extern uint32_t g_kbd_repeat_delay_us;
+extern uint32_t g_kbd_repeat_interval_us;
+extern int      g_kbd_repeat_enabled;
 static uint8_t  s_held_kbd_scancode = 0;
 static uint8_t  s_held_kbd_modifiers = 0;
 static uint32_t s_key_press_time_us = 0;
 static uint32_t s_key_last_repeat_us = 0;
 
-/* RISC OS Mouse Multiplier (MouseStep CMOS &C2) & 3-Button Layout */
-int      g_mouse_step_mult          = 4;      /* Default: Step 2 (Archimedes / Haiku natural responsive standard) */
-int      g_mouse_swap_select_adjust = 0;      /* 0: Right-handed (Select/Menu/Adjust), 1: Left-handed */
+/* RISC OS Mouse Multiplier (MouseStep CMOS &C2) & 3-Button Layout (defined in input.c) */
+extern int      g_mouse_step_mult;
+extern int      g_mouse_swap_select_adjust;
 
 /* USB host controller selection: 1 = VL805 xHCI (hardware), 0 = DWC2 (QEMU / legacy) */
 int g_use_xhci = 0;
@@ -949,8 +949,8 @@ static int32_t s_mouse_sub_y = 0;
 static float s_haiku_hist_x = 0.0f;
 static float s_haiku_hist_y = 0.0f;
 
-/* Acceleration Profile: 1 = RISC OS Stepped Curve, 2 = Haiku Continuous Smooth Curve */
-int g_mouse_accel_profile = 1;
+/* Acceleration Profile: 1 = RISC OS Stepped Curve, 2 = Haiku Continuous Smooth Curve (defined in input.c) */
+extern int g_mouse_accel_profile;
 
 static inline float fast_sqrtf(float val) {
     if (val <= 0.0f) return 0.0f;

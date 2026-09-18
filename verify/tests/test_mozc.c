@@ -144,6 +144,7 @@ static void test_dfa_and_theorem2(void) {
     printf("\n[TEST GROUP 4] DFA State Machine & Theorem 2 (O(1) Cancellation Safety)\n");
 
     tip_init();
+    tip_set_mode(TIP_MODE_HIRAGANA);
     TEST_ASSERT(tip_get_state() == TIP_STATE_IDLE, "Initial DFA state is TIP_STATE_IDLE");
 
     char commit_buf[128];
@@ -186,6 +187,7 @@ static void test_dfa_and_theorem2(void) {
 
     /* Test full typing sequence for hotokesan ending with 'n' */
     tip_init();
+    tip_set_mode(TIP_MODE_HIRAGANA);
     const char *hotoke_keys = "hotokesan";
     for (int i = 0; hotoke_keys[i]; i++) {
         tip_process_key(hotoke_keys[i], 0, commit_buf, sizeof(commit_buf));

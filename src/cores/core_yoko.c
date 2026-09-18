@@ -67,12 +67,12 @@ static COLOR s_desktop_backbuffer[BTRON_SCREEN_W * BTRON_SCREEN_H] __attribute__
 static H s_mouse_x = 512;
 static H s_mouse_y = 384;
 
-/* RISC OS Inspired Keyboard and Mouse Parameters */
-uint32_t g_kbd_repeat_delay_us    = 160000U;
-uint32_t g_kbd_repeat_interval_us = 25000U;
-int      g_kbd_repeat_enabled     = 1;
-int      g_mouse_step_mult          = 2;
-int      g_mouse_swap_select_adjust = 0;
+/* RISC OS Inspired Keyboard and Mouse Parameters (defined in input.c) */
+extern uint32_t g_kbd_repeat_delay_us;
+extern uint32_t g_kbd_repeat_interval_us;
+extern int      g_kbd_repeat_enabled;
+extern int      g_mouse_step_mult;
+extern int      g_mouse_swap_select_adjust;
 
 /* External driver and hardware entry points */
 extern void uart_init(void);

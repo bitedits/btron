@@ -31,6 +31,8 @@ BTRON_DESKTOP* get_btron_desktop(void);
 GDEV* init_baremetal_desktop(uint32_t *fb, uint32_t w, uint32_t h);
 void redraw_baremetal_desktop(GDEV *screen, H w, H h);
 void draw_baremetal_mouse_cursor(GDEV *screen, H mx, H my, H w, H h);
+void draw_baremetal_cursor_raw(volatile uint32_t *pixels, H mx, H my, H w, H h);
+extern int g_cursor_in_backbuffer;
 void set_baremetal_mouse_pos(H x, H y);
 void get_baremetal_mouse_pos(H *x, H *y);
 

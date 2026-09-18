@@ -76,7 +76,7 @@ static uint32_t s_key_press_time_us = 0;
 static uint32_t s_key_last_repeat_us = 0;
 
 /* RISC OS Mouse Multiplier (MouseStep CMOS &C2) & 3-Button Layout */
-int      g_mouse_step_mult          = 2;      /* Default RISC OS MouseStep = 2 */
+int      g_mouse_step_mult          = 1;      /* Default: Ultra Velocity for Pi 400 HID/trackpad */
 int      g_mouse_swap_select_adjust = 0;      /* 0: Right-handed (Select/Menu/Adjust), 1: Left-handed */
 
 /* USB host controller selection: 1 = VL805 xHCI (hardware), 0 = DWC2 (QEMU / legacy) */
@@ -102,10 +102,14 @@ extern WND* open_gterm_window(void);
 extern WND* launch_beos_chat(void);
 extern WND* open_control_panel_window(void);
 #include <arch/bcm283x/bcm2711_dma.h>
+#include <btron/global_menu.h>
+#include <btron/tracker.h>
 extern int mailbox_set_virtual_offset(uint32_t x, uint32_t y);
 extern int about_is_animating(void);
 extern WND* about_get_wnd(void);
 extern int  about_render_anim_dirty(GDEV *screen, volatile uint32_t *gpu_fb);
+extern int  g_cursor_in_backbuffer;
+extern void draw_baremetal_cursor_raw(volatile uint32_t *pixels, H mx, H my, H w, H h);
 void blit_backbuffer_to_fb(volatile uint32_t *gpu_fb);
 static int usb_poll_devices(GDEV *screen);
 
@@ -574,11 +578,30 @@ static int pi4_shell_poll(uint32_t *gpu_fb)
     return 1;
 }
 
+/* Restore 16x16 background under mouse cursor from pristine backbuffer */
+static inline void restore_cursor_area(volatile uint32_t *gpu_fb, H x, H y) {
+    H x0 = x, y0 = y, bw = 16, bh = 16;
+    if (x0 < 0) { bw += x0; x0 = 0; }
+    if (y0 < 0) { bh += y0; y0 = 0; }
+    if (x0 + bw > BTRON_SCREEN_W) bw = BTRON_SCREEN_W - x0;
+    if (y0 + bh > BTRON_SCREEN_H) bh = BTRON_SCREEN_H - y0;
+    if (bw <= 0 || bh <= 0) return;
+
+    for (H r = 0; r < bh; r++) {
+        volatile uint32_t *d = gpu_fb + (y0 + r) * BTRON_SCREEN_W + x0;
+        const COLOR *s = &s_desktop_backbuffer[(y0 + r) * BTRON_SCREEN_W + x0];
+        for (H c = 0; c < bw; c++) d[c] = s[c];
+    }
+}
+
 /* Stage 2: Launch full B-System Workbench desktop session. */
 static void launch_pi4_desktop_session(uint32_t *gpu_fb)
 {
     fb_log("\n[BOOT] Launching B-System Workbench...\n");
     s_gui_active = 1;
+
+    /* Keep backbuffer clean of cursor stamps for zero-latency cursor restores */
+    g_cursor_in_backbuffer = 0;
 
     GDEV *screen = init_baremetal_desktop(
         (uint32_t *)s_desktop_backbuffer, BTRON_SCREEN_W, BTRON_SCREEN_H);
@@ -590,6 +613,11 @@ static void launch_pi4_desktop_session(uint32_t *gpu_fb)
     workbench_init(BTRON_SCREEN_W);
     workbench_render(screen, BTRON_SCREEN_W, BTRON_SCREEN_H);
     blit_backbuffer_to_fb(gpu_fb);
+
+    /* Draw cursor directly to GPU front buffer */
+    draw_baremetal_cursor_raw(gpu_fb, s_mouse_x, s_mouse_y, BTRON_SCREEN_W, BTRON_SCREEN_H);
+    H prev_mx = s_mouse_x;
+    H prev_my = s_mouse_y;
 
     /* Disable on-screen log: workbench owns the framebuffer now */
     fb_log_enable(NULL);
@@ -607,10 +635,11 @@ static void launch_pi4_desktop_session(uint32_t *gpu_fb)
 
     while (s_gui_active) {
         int redraw = 0;
+        int cursor_only = 0;
 
         uint32_t now = *(volatile uint32_t *)(TIMER_BASE + 0x04);
 
-        /* Poll USB devices once per frame to prevent starving the event dispatcher */
+        /* Poll USB devices once per loop */
         if (usb_poll_devices(screen)) {
             // events enqueued
         }
@@ -639,7 +668,20 @@ static void launch_pi4_desktop_session(uint32_t *gpu_fb)
                 break;
             }
             workbench_process_event(screen, &ev);
-            redraw = 1;
+
+            if (ev.type == EV_MOUSE_MOVE) {
+                /* If menu is open or mouse button is held down, need full UI update */
+                if (global_menu_is_open() || tracker_is_menu_open() || g_prev_mouse_btns != 0) {
+                    redraw = 1;
+                    cursor_only = 0;
+                } else if (!redraw) {
+                    cursor_only = 1;
+                }
+            } else {
+                /* Buttons, keys, etc. need real UI update */
+                redraw = 1;
+                cursor_only = 0;
+            }
         }
 
         /* Dedicated high-rate 60 FPS dirty path for About alone (every 16,666 µs) */
@@ -649,11 +691,6 @@ static void launch_pi4_desktop_session(uint32_t *gpu_fb)
                 if (!redraw) {
                     /* Fast path: refresh only About window client and composite into backbuffer */
                     about_render_anim_dirty(screen, gpu_fb);
-
-                    /* Re-overlay mouse cursor */
-                    H mx = 0, my = 0;
-                    get_baremetal_mouse_pos(&mx, &my);
-                    draw_baremetal_mouse_cursor(screen, mx, my, BTRON_SCREEN_W, BTRON_SCREEN_H);
 
                     /* Direct dirty-rect BitBlt directly to front buffer (takes ~40 us for About window) */
                     WND *aw = about_get_wnd();
@@ -679,6 +716,9 @@ static void launch_pi4_desktop_session(uint32_t *gpu_fb)
                         /* Fallback full backbuffer blit */
                         blit_backbuffer_to_fb(gpu_fb);
                     }
+
+                    /* Keep cursor on top of GPU front buffer */
+                    draw_baremetal_cursor_raw(gpu_fb, prev_mx, prev_my, BTRON_SCREEN_W, BTRON_SCREEN_H);
                 }
             }
         }
@@ -689,9 +729,26 @@ static void launch_pi4_desktop_session(uint32_t *gpu_fb)
             redraw = 1;
         }
 
+        /* Full UI path: redraw windows, menus, backbuffer blit */
         if (redraw) {
             workbench_render(screen, BTRON_SCREEN_W, BTRON_SCREEN_H);
             blit_backbuffer_to_fb(gpu_fb);
+            draw_baremetal_cursor_raw(gpu_fb, s_mouse_x, s_mouse_y, BTRON_SCREEN_W, BTRON_SCREEN_H);
+            prev_mx = s_mouse_x;
+            prev_my = s_mouse_y;
+
+            /* Drain USB reports accumulated during blit */
+            usb_poll_devices(screen);
+        }
+        /* Zero-latency cursor-only path: restore old 16x16 patch, draw new cursor (< 1 us) */
+        else if (cursor_only) {
+            if (s_mouse_x != prev_mx || s_mouse_y != prev_my) {
+                restore_cursor_area(gpu_fb, prev_mx, prev_my);
+                draw_baremetal_cursor_raw(gpu_fb, s_mouse_x, s_mouse_y, BTRON_SCREEN_W, BTRON_SCREEN_H);
+                __asm__ volatile("dmb sy" : : : "memory");
+                prev_mx = s_mouse_x;
+                prev_my = s_mouse_y;
+            }
         }
     }
 
@@ -875,6 +932,11 @@ static inline int32_t mouse_accelerate_subpixel(int32_t raw, int32_t *subpixel) 
     if (raw == 0) return 0;
     int32_t sign = (raw < 0) ? -1 : 1;
     int32_t abs  = (raw < 0) ? -raw : raw;
+
+    /* Pi 400 trackpad / fine-count boost */
+    if (abs <= 3) {
+        abs *= 2;
+    }
 
     /* Scaled by 256 (8.8 fixed-point format)
      * g_mouse_step_mult mirrors RISC OS MouseStepCMOS (1, 2, 3, 4) */

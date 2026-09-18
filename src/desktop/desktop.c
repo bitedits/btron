@@ -235,8 +235,10 @@ void get_baremetal_mouse_pos(H *x, H *y) {
     if (y) *y = g_mouse_y;
 }
 
-void draw_baremetal_mouse_cursor(GDEV *screen, H mx, H my, H w, H h) {
-    if (!screen) return;
+int g_cursor_in_backbuffer = 1;
+
+void draw_baremetal_cursor_raw(volatile uint32_t *pixels, H mx, H my, H w, H h) {
+    if (!pixels) return;
     static const uint16_t cur_mask[16] = {
         0x8000, 0xC000, 0xE000, 0xF000,
         0xF800, 0xFC00, 0xFE00, 0xFF00,
@@ -256,12 +258,17 @@ void draw_baremetal_mouse_cursor(GDEV *screen, H mx, H my, H w, H h) {
             if (px < 0 || px >= w || py < 0 || py >= h) continue;
             uint16_t bit = (0x8000 >> x);
             if (cur_mask[y] & bit) {
-                screen->pixels[py * w + px] = COLOR_WHITE;
+                pixels[py * w + px] = COLOR_WHITE;
             } else if (cur_outline[y] & bit) {
-                screen->pixels[py * w + px] = COLOR_BLACK;
+                pixels[py * w + px] = COLOR_BLACK;
             }
         }
     }
+}
+
+void draw_baremetal_mouse_cursor(GDEV *screen, H mx, H my, H w, H h) {
+    if (!screen || !screen->pixels) return;
+    draw_baremetal_cursor_raw((volatile uint32_t *)screen->pixels, mx, my, w, h);
 }
 
 void redraw_baremetal_desktop(GDEV *screen, H w, H h) {
@@ -302,7 +309,9 @@ void redraw_baremetal_desktop(GDEV *screen, H w, H h) {
     }
 
     /* Dynamic Classic B-TRON Mouse Cursor Rendering */
-    draw_baremetal_mouse_cursor(screen, g_mouse_x, g_mouse_y, w, h);
+    if (g_cursor_in_backbuffer) {
+        draw_baremetal_mouse_cursor(screen, g_mouse_x, g_mouse_y, w, h);
+    }
 
     /* Data Cache Barrier */
 #if defined(__aarch64__)

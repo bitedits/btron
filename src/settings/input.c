@@ -145,7 +145,7 @@ static void set_risc_os_defaults(void) {
     g_state_input.kbd_rate_sel       = 0;     /* 40 cps Fast */
     g_state_input.kbd_layout_sel     = 0;     /* US ANSI */
 
-    g_state_input.mouse_step_sel     = 1;     /* Step 2: RISC OS Standard Default */
+    g_state_input.mouse_step_sel     = 3;     /* Step 4: Ultra Velocity (Pi 400 default) */
     g_state_input.mouse_accel_enable = TRUE;
     g_state_input.mouse_handedness   = 0;     /* Right-handed (Select/Menu/Adjust) */
     g_state_input.dbl_click_sel      = 1;     /* 50cs (500ms) RISC OS Default */
@@ -463,7 +463,7 @@ WND* open_input_settings_window(void) {
     g_state_input.kbd_layout_sel     = 0;
 
     g_state_input.mouse_step_sel     = (g_mouse_step_mult >= 1 && g_mouse_step_mult <= 4) ?
-                                       (g_mouse_step_mult - 1) : 1;
+                                       (g_mouse_step_mult - 1) : 3;
     g_state_input.mouse_accel_enable = TRUE;
     g_state_input.mouse_handedness   = g_mouse_swap_select_adjust ? 1 : 0;
     g_state_input.dbl_click_sel      = 1; /* 50cs (500ms) RISC OS default */

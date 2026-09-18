@@ -77,8 +77,10 @@ void workbench_render(GDEV *screen, H w, H h) {
         tracker_render_menu(screen);
     }
 
-    /* Overlay mouse cursor on top of active menus */
-    H mx = 0, my = 0;
-    get_baremetal_mouse_pos(&mx, &my);
-    draw_baremetal_mouse_cursor(screen, mx, my, w, h);
+    /* Overlay mouse cursor on top of active menus if enabled for backbuffer */
+    if (g_cursor_in_backbuffer) {
+        H mx = 0, my = 0;
+        get_baremetal_mouse_pos(&mx, &my);
+        draw_baremetal_mouse_cursor(screen, mx, my, w, h);
+    }
 }

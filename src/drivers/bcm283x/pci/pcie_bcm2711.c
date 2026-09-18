@@ -184,25 +184,25 @@ int bcm2711_pcie_init(void) {
     val = pcie_rc_read(0x9210);
     val |= 0x3u;   /* bits [1:0] = 11 */
     pcie_rc_write(0x9210, val);
-    delay_us(100);
+    delay_us(1);
 
     /* b) Enable SERDES — clear SERDES_IDDQ (bit 27) in HARD_DEBUG */
     val = pcie_rc_read(0x4204);
     val &= ~(1u << 27); /* SERDES_IDDQ = 0 (powered on) */
     pcie_rc_write(0x4204, val);
-    delay_us(100);
+    delay_us(1);
 
     /* c) De-assert BRIDGE_INIT (bit 1), keep PERST# asserted */
     val = pcie_rc_read(0x9210);
     val &= ~0x2u;  /* clear BRIDGE_INIT only */
     pcie_rc_write(0x9210, val);
-    delay_us(200); /* allow RC logic + SERDES PLL to stabilize */
+    delay_us(2); /* allow RC logic + SERDES PLL to stabilize */
 
     /* d) De-assert PERST# (bit 0) — VL805 begins reset de-assertion sequence */
     val = pcie_rc_read(0x9210);
     val &= ~0x1u;  /* clear PERST# */
     pcie_rc_write(0x9210, val);
-    delay_us(100);
+    delay_us(1);
 
     fb_log("[PCIE] PERST# de-asserted, waiting for link training...\n");
 

@@ -76,7 +76,7 @@ static uint32_t s_key_press_time_us = 0;
 static uint32_t s_key_last_repeat_us = 0;
 
 /* RISC OS Mouse Multiplier (MouseStep CMOS &C2) & 3-Button Layout */
-int      g_mouse_step_mult          = 2;      /* Default: Step 2 (Archimedes / Haiku natural responsive standard) */
+int      g_mouse_step_mult          = 4;      /* Default: Step 2 (Archimedes / Haiku natural responsive standard) */
 int      g_mouse_swap_select_adjust = 0;      /* 0: Right-handed (Select/Menu/Adjust), 1: Left-handed */
 
 /* USB host controller selection: 1 = VL805 xHCI (hardware), 0 = DWC2 (QEMU / legacy) */
@@ -950,7 +950,7 @@ static float s_haiku_hist_x = 0.0f;
 static float s_haiku_hist_y = 0.0f;
 
 /* Acceleration Profile: 1 = RISC OS Stepped Curve, 2 = Haiku Continuous Smooth Curve */
-int g_mouse_accel_profile = 0;
+int g_mouse_accel_profile = 1;
 
 static inline float fast_sqrtf(float val) {
     if (val <= 0.0f) return 0.0f;

@@ -9,28 +9,101 @@ Status: Design plan
 Policy: Input task and UI task share the SAME priority.
         Determinism comes from bounded work, fixed periods, and zero unbounded critical sections.
 
+0. Rooting in B-System SMP Spec (btron-smp.tex / SMP.md)
+--------------------------------------------------------
+
+B-System enforces a strict duality:
+
+- Tier 1 – Embedded MCU (640KB..1MB, unicore, e.g. Raspberry Pi 400 GUI path):
+  Single flat physical address space. MMU isolation is mathematically counterproductive
+  (TLB invalidation + page-walk penalties destroy sub-µs determinism). Scheduling remains
+  classical µITRON priority + cyclic handlers. Input and UI share the same priority;
+  determinism is pure period + budget.
+
+- Tier 2 – Workstation SMP (x86_64 UEFI, multi-core, src/kernel/core_smp.c 1MB..16MB):
+  Hardware-enforced Ring-3 isolation via per-process PML4 + PCID, combined with
+  the Erlang-inspired actor runtime:
+
+  | Theorem (Zero-Switch Actor Topology):
+  | Given an SMP machine with N symmetric cores C₁ … Cₙ, maximum message-dispatch
+  | throughput with zero kernel context switches is achieved by dedicating exactly
+  | N worker threads pinned to those cores, each draining a dedicated Lock-Free
+  | Multi-Producer Single-Consumer (MPSC) task queue in a continuous Cloop
+  | using atomic CMPXCHG8 / __atomic_exchange_n.
+
+Display Primitives (DP) remain in Ring 0 / shared higher-half (lesson of
+Windows NT 3.51 -> NT 4.0 win32k.sys). Graphics never travel through user-space IPC.
+
+Consequently the ASYNC input/UI planes are expressed as actor messages (or
+periodic cyclic workers that post to actor queues) rather than classic blocking
+threads that contend for a shared cooperative loop.
+
+0.1 InterCore Protocol (PUB / SUB / SEND / RECV / SPAWN)
+--------------------------------------------------------
+
+The concrete inter-core messaging fabric that realises the Zero-Switch Actor Topology
+on Tier 2 is the InterCore bus protocol (originating in the Tachyonic / platform.rs
+design; see https://github.com/o83/platform.rs and its InterCore taxonomy). It maps
+directly onto the lock-free MPSC queues of core_smp.c and supplies the only permitted
+cross-core primitives for ASYNC planes.
+
+InterCore bus properties (rooted in platform.rs InterCore):
+
+- Star topology of SPMC queues: each core owns exactly one publisher queue.
+- MPSC is realised as a pure computable function over the set of publisher queues (no central broker, no kernel traps).
+- poll_bus runs on every scheduler yield; any pending message addressed to the current core is handled before the next task begins.
+- Zero-copy CAS multicursor ring buffers (sectors) provide the underlying transport.
+
+Canonical API (O-language / FFI surface; identical semantics in pure C for B-System):
+
+  pub   [capacity]                 : creates a publisher CAS cursor; returns system-wide writer Id
+  sub   [publisher]                : creates a subscriber CAS cursor bound to a writer; returns reader Id
+  spawn [core; program; cursors]   : creates a Task on the named core, granting exclusive ownership of the listed cursors
+  snd   [writer; data]             : non-blocking send into the writer cursor (nil on success)
+  rcv   [reader]                   : non-blocking receive from the reader cursor; yields to scheduler if empty
+
+Mapping onto ASYNC planes (Tier 2):
+
+- ACTOR_INPUT and ACTOR_UI are ordinary Tasks created by spawn on distinct (or shared) cores.
+- The IRQ path (or a thin ISR-to-actor bridge) obtains a writer cursor via pub and posts EVENT_INPUT / pointer snapshots with snd.
+- The consumer side of each actor drains its reader cursor(s) with rcv inside its budgeted period loop.
+- Cursor ownership is transferred exclusively via the spawn argument list;
+  this eliminates any shared mutable state that would require a mutex and
+  therefore eliminates priority inversion between equal-priority planes.
+
+Thus InterCore is the normative microkernel/microcore substrate for the BTRON 3.20 Process
+API on real multi-core hardware with APIC. Classic T-Kernel mailbox and message-buffer APIs
+remain the portable programmer-facing surface; on the critical ASYNC path they resolve
+directly to InterCore primitives so that the Zero-Switch Actor Topology is preserved.
+
+Citation: platform.rs InterCore taxonomy (Publisher / Subscriber / Spawn / Send / Receive) —
+https://github.com/o83/platform.rs (intercore/index.pug / o83.github.io documentation).
+The same CAS multicursor + star-topology MPSC model underpins the Zero-Switch Actor
+Topology of btron-smp.tex §3.
+
 1. Real-time goals (NuttX-like)
 ------------------------------
 
 1.1 Hard requirements
 
-  Property                   Requirement
-  -----------------------    --------------------------------------------------
-  Bounded ISR                xHCI / timer ISR WCET <= T_isr_max (target <= 50 us)
-  No ISR -> UI               ISR must not call workbench_*, blit, heap, or unbounded snd_evt loops
-  Fixed input period         Pointer/HID integration on a periodic cadence (e.g. 1 ms), not "whenever the paint loop runs"
-  Bounded input work         Each input period processes <= N event-ring TRBs and <= M HID reports (defined drop/defer policy)
-  Bounded UI work            Each UI period has a time budget; unfinished paint is deferred to the next period
-  Equal task priority        pri(input) == pri(ui) (and present, if separate)
-  Priority inheritance       Mutexes shared by input and UI must support inheritance, or use wait-free snapshots
-  No I/O priority inversion  Full-screen CPU blit must not be a critical section that blocks HID progress
+  Property                   Requirement                                                                                        B-System
+  -----------------------    --------------------------------------------------                                                 -----------------------------------
+  Bounded ISR                xHCI / timer ISR WCET <= T_isr_max (target <= 50 us)                                               ISR only updates wait-free pointer
+  No ISR -> UI               ISR must not call workbench_*, blit, heap, or unbounded snd_evt loops                              Pure message post; no shared
+  Fixed input period         Pointer/HID integration on a periodic cadence (e.g. 1 ms), not "whenever the paint loop runs"      TASK_INPUT actor or cyclic handler
+  Bounded input work         Each input period processes <= N event-ring TRBs and <= M HID reports (defined drop/defer policy)  Budget enforced inside worker loop
+  Bounded UI work            Each UI period has a time budget; unfinished paint is deferred to the next period                  TASK_UI actor drains its MPSC queue under budget
+  Equal task priority        pri(input) == pri(ui) (and present, if separate)                                                   Same priority class; periods + budgets give determinism
+  Priority inheritance       Mutexes shared by input and UI must support inheritance, or use wait-free snapshots                Prefer wait-free seqlock / double-buffer (zero inversion)
+  No I/O priority inversion  Full-screen CPU blit must not be a critical section that blocks HID progress                       Blit lives only inside UI/PRESENT budget; IRQs stay enabled
 
 1.2 What equal priority does NOT mean
 
   Equal priority does not mean one big loop that paints for ~1 ms then
   polls USB. It means both tasks are peers under a periodic, budgeted
-  schedule, while host-controller progress is driven by interrupt or a
-  periodic tick with fixed WCET.
+  schedule, while host-controller progress is driven by: 1) interrupt or a
+  2) periodic tick with fixed WCET that posts a message into the appropriate
+  MPSC queue of the Erlang actor topology.
 
 2. Failure mode to eliminate
 ----------------------------
@@ -51,11 +124,11 @@ Root cause on Pi 400 GUI: a single cooperative loop owns
 While (4) runs, (1) stalls. Reports pile up in s_accum_* or the HC sits
 with only one EP1 TRB in flight.
 
-Invariant:
-  The path that advances the USB host controller must not share a
-  blocking critical section with full-screen memory copy or full
-  desktop composite.
-
+  | Invariant (rooted in SMP paper):
+  | The path that advances the USB host controller must never share
+  | a blocking critical section with full-screen memory copy or desktop composite.
+  | On Tier 2 this is enforced by placing input and UI on distinct
+  | actor queues (or distinct cores when N ≥ 2).
 
 3. Scheduling model
 -------------------
@@ -74,25 +147,34 @@ Invariant:
   FIFO when both ready. Periods and budgets provide determinism, not
   "input always wins."
 
+On Tier 1 MCU these are classical cyclic tasks created with identical itskpri (µITRON / T-Kernel).
+On Tier 2 SMP they are realised as:
+  * dedicated worker threads pinned to cores, or
+  * messages enqueued via btron_mpsc_enqueue into
+    the core’s private MPSC queue (see Listing in btron-smp.tex / SMP.md §3).
+
+Same priority ⇒ under fixed-priority preemptive RTOS they time-slice or run FIFO when both ready.
+Periods and budgets (not priority elevation) provide determinism.
+
 3.2 Rate structure (example; tune per board, document WCET in verify/)
 
-  Entity   Period      Budget (example)   Work
-  -------  ----------  -----------------  --------------------------------
-  IRQ      event/1ms   <= 50 us           process_events <= N TRBs; update wait-free pointer slot; signal INPUT
-  INPUT    1 ms        <= 200 us          read snapshot; edge buttons; snd_evt keys/buttons; gated move
-  UI       8.33 ms     <= 6 ms            get_evt bounded; workbench; render BACKBUFFER only
-  PRESENT  8.33 ms     <= 1.5 ms or DMA   present frame; must not block; INPUT period
+  Entity   Period      Budget (example)   Work                                                               Actor / Queue
+  -------  ----------  -----------------  --------------------------------                                   ----------------------------
+  IRQ      event/1ms   <= 50 us           process ≤ N TRBs; write wait-free pointer slot; post EVENT_INPUT   posts to INPUT MPSC
+  INPUT    1 ms        <= 200 us          read snapshot; edge buttons; snd_evt KEY/BUT (gated MOVE)          ACTOR_INPUT drains its queue
+  UI       8.33 ms     <= 6 ms            get_evt ≤ Q; workbench; render BACKBUFFER only                     ACTOR_UI drains its queue
+  PRESENT  8.33 ms     <= 1.5 ms or DMA   present frame; must not block; INPUT period                        may share UI queue or own core
 
 3.3 NuttX parallels
 
   NuttX idea                    B-System mapping
   ----------------------------  ------------------------------------------
-  High-rate periodic task       TASK_INPUT @ 1 kHz
+  High-rate periodic task       TASK_INPUT @ 1 kHz (or cyclic handler)
   Lower-rate display task       TASK_UI @ ~120 Hz
   Equal priority + RR/FIFO      pri(input) == pri(ui)
-  Deferred interrupt work       IRQ only posts semaphore / event flag
+  Deferred interrupt work       IRQ only posts semaphore / event flag / MPSC message
   wdog / timer                  system timer or cyclic handler @ 1 ms
-  Bounded critical sections     wait-free pointer seqlock or short buffer
+  Bounded critical sections     wait-free pointer seqlock or pure MPSC enqueue
 
 4. Data path (deterministic)
 ----------------------------
@@ -119,8 +201,11 @@ Invariant:
   TASK_PRESENT (pri P) or UI tail
     DMA/flip preferred; if CPU blit, budget-capped + IRQs stay enabled
 
-Rule: Long work runs only in UI/PRESENT with an explicit budget.
-When budget is exhausted, stop and continue next period.
+Rule (SMP paper §4): Long work runs only inside the UI/PRESENT actor under an explicit budget.
+When the budget is exhausted the actor yields (or simply returns to its tight drain loop) and continues next period.
+On Tier 2 the producer side of any inter-actor communication is a pure CMPXCHG8 enqueue (12–25 cycles);
+the consumer side is a non-blocking atomic pop. Zero privilege transitions, zero page-table switches,
+zero register save/restore for the message path itself.
 
 5. Rejected patterns (RT view)
 ------------------------------
@@ -135,6 +220,7 @@ When budget is exhausted, stop and continue next period.
   Equal pri but no yield during blit   Peer starvation for a full period
   Raise input permanently above UI     Conflicts with equal-priority policy
   Full mailbox IPC per HID packet      Unnecessary; wrong layer
+  Place DP/gpachics behind user-space  Classic NT 3.51 failure mode (btron-smp.tex §4)
 
 6. Implementation phases (RT-ordered)
 -------------------------------------
@@ -144,6 +230,7 @@ Phase 0 — Measure WCET / jitter - Deliverables
   - async_rt_stats + global menu HUD
   - Short note of measured maxima (screenshot or values) before Phase 1
   - Deliverable: table of observed maxima -> choose T_isr_max, Bi, Bu.
+  - Baseline under continuous dirty redraw must show gap_max ≫ Ti; after Phase 1 gap_max ≤ 2 ms.
 
 Phase 1 — Bounded IRQ + periodic INPUT (equal pri with UI) - Deliverables
   - Timer IRQ @ 1 kHz OR xHCI IRQ with deferred INPUT wake.
@@ -161,15 +248,17 @@ Phase 2 — Bounded queues and policies - Deliverables
 Phase 3 — Multi-TRB EP1 (device-side determinism) - Deliverables
   - 2-4 fixed buffers/TRBs in flight per mouse.
   - Eliminates non-deterministic host idle gap after single completion.
-  - Files: src/drivers/bcm283x/usb/xhci.c
+  - Files: src/drivers/bcm283x/usb/xhci.c (and UEFI xHCI path).
 
 Phase 4 — Present without starving periods - Deliverables
   - Prefer DMA/page-flip so CPU blit WCET leaves the analysis.
   - If CPU blit remains: only inside UI/PRESENT budget; IRQs enabled; INPUT still meets period.
   - Do NOT require in-blit xhci_process_events as the architecture.
 
-Phase 5 — Optional SMP
-  - Pin IRQ+INPUT vs UI+PRESENT if dual-core; same logical priority class; document memory ordering for pointer snapshot (see SMP.md).
+Phase 5 — Optional SMP / Actor pinning
+- Pin IRQ+INPUT vs UI+PRESENT on distinct cores when N ≥ 2.
+- Document memory ordering for the pointer snapshot (seqlock or atomics).
+- On Tier 2 the INPUT and UI planes become (or post into) the N-core / N-queue MPSC topology of core_smp.c.
 
 Phase 0 — Measure WCET / jitter (display on global top menu)
 -------------------------------------------------------------
@@ -227,9 +316,10 @@ Pointer snapshot (IRQ -> INPUT/UI):
 
   Writer: IRQ (single writer).
   Readers: INPUT and UI (retry on seq change).
-  No mutex on common path => no inversion between equal-priority tasks.
+  No mutex on common path => no inversion between equal-priority tasks/actors.
 
-EVT queue: existing snd_evt/get_evt with fixed capacity and drop policy.
+EVT queue: existing snd_evt/get_evt with fixed capacity and documented drop policy.
+On Tier 2 any cross-core signalling uses the lock-free MPSC primitives of the SMP paper.
 
 8. API sketch
 -------------
@@ -251,33 +341,42 @@ ISR rules:
 9. Configuration sketch
 -----------------------
 
-  #define ASYNC_INPUT_PERIOD_US      1000
-  #define ASYNC_UI_PERIOD_US         8333
-  #define ASYNC_ISR_TRB_BUDGET       32
-  #define ASYNC_INPUT_EVT_BUDGET     16
-  #define ASYNC_TASK_PRI_INPUT_UI    100   /* same value for both */
+/* Tier 1 MCU extras */
+#define ASYNC_INPUT_PERIOD_US      1000
+#define ASYNC_UI_PERIOD_US         8333
+#define ASYNC_ISR_TRB_BUDGET       32
+#define ASYNC_INPUT_EVT_BUDGET     16
+#define ASYNC_TASK_PRI_INPUT_UI    100   /* same value for both */
 
-T-Kernel: tk_cre_tsk with identical itskpri; cyclic/alarm for periods; event flag for IRQ -> INPUT.
+/* Tier 2 SMP extras */
+#define ASYNC_USE_MPSC_ACTORS      1     /* map planes onto core_smp MPSC queues */
+
+- T-Kernel / µITRON: tk_cre_tsk with identical itskpri;
+- cyclic/alarm for periods;
+- event flag (or MPSC post) for IRQ → INPUT.
 
 10. Success metrics (pass/fail)
 -------------------------------
 
-  Metric                                         Pass
-  ---------------------------------------------  ---------------------------
-  ISR WCET (measured max)                        <= T_isr_max
-  INPUT release jitter under UI load             <= 10% of Ti
-  Max time between pointer updates under redraw  <= 2 ms
-  EVT overflow (KEY/BUT) in stress               0
-  pri(input) == pri(ui)                          required
-  Architecture requires in-blit USB drain        forbidden
+   Metric                                         Pass
+   ---------------------------------------------  ---------------------------
+   ISR WCET (measured max)                        <= T_isr_max
+   INPUT release jitter under UI load             <= 10% of Ti
+   Max time between pointer updates under redraw  <= 2 ms
+   EVT overflow (KEY/BUT) in stress               0
+   pri(input) == pri(ui)                          required
+   Architecture requires in-blit USB drain        forbidden
+   On Tier 2: message path uses only CMPXCHG8     required (Zero-Switch Actor Topology)
 
 11. Relation to EVENTING.md
 ---------------------------
 
-  Unchanged: Workbench dispatch order, window manager, app event_handler.
-  Changed: Who calls xhci_process_events and when pointer samples become coordinates — under a periodic, budgeted input plane, not paint.
-  Passive motion largely outside snd_evt; discrete interaction remains EVT stream.
-
+- EVENTING.md remains the authoritative description of Workbench dispatch order, window manager, and application event_handler.
+- What changes is who calls xhci_process_events and when pointer samples become coordinates:
+  under a periodic, budgeted input plane (or actor), not under the paint loop.
+- Passive motion stays largely outside snd_evt; discrete interaction remains the EVT stream.
+- On Tier 2 the same EVT stream is delivered by the lock-free MPSC queues of the Erlang actor core;
+  the graphical DP engine stays in Ring 0 / shared higher-half exactly as required by the NT 4.0 lesson and the SMP paper.
 
 12. Checklist
 -------------
@@ -290,11 +389,26 @@ T-Kernel: tk_cre_tsk with identical itskpri; cyclic/alarm for periods; event fla
   [ ] Present path with IRQs enabled / DMA
   [ ] Stress: motion + continuous dirty desktop + typing
   [ ] Remove any blit-time USB polling hacks
+  [ ] Tier 2: map INPUT/UI planes onto the N-core / N-MPSC actor topology of core_smp.c
+  [ ] Document that DP remains outside any user-space microkernel IPC path
 
 13. Credits
 -----------
 
-  Namdak Tonpa and Grok 4.5
-  Problem analysis: Pi 400 GUI mouse saturation / input latency (2026-09)
-  Scheduling model: deterministic embedded practice (NuttX-style periods,
-  budgets, bounded ISR; equal priority for device and UI tasks)
+1) Namdak Tonpa and Grok 4.5
+2) Problem analysis: Pi 400 GUI mouse saturation / input latency (2026-09)
+3) Scheduling model: deterministic embedded practice (NuttX-style periods, budgets, bounded ISR; equal priority for device and UI planes)
+4) Historical grounding: Windows NT 3.51 → NT 4.0 GDI migration (Cutler / Solomon)
+5) BTRON foundation: BTRON3 SPEC 3.20, T-Kernel 2.0, Sakamura TRON architecture
+6) Concurrency model & Zero-Switch Actor Topology: Microkernels, Unikernels, and the Actor Core: Architectural Trade-Offs,
+   Real-Time Determinism, and SMP Subsystem Isolation in B-System (BTRON 3.20) (Sokhatsky, September 2026) doc/md/SMP.md
+7) InterCore Protocol (PUB / SUB / SEND / RECV / SPAWN): Tachyonic Platform / platform.rs InterCore bus (o83 / Maxim Sokhatsky lineage) —
+   https://github.com/o83/platform.rs; positioned as the microkernel/microcore primitives that implement the
+   BTRON 3.20 Process/Task/Message API on real multi-core + APIC hardware (star-topology SPMC/MPSC CAS multicursor queues,
+   exclusive cursor ownership via spawn)
+
+This reconciled ASYNC design preserves every real-time invariant of the original
+NuttX-style plan while making the input and UI planes first-class citizens of
+the Erlang-inspired lock-free actor runtime that is the canonical concurrency
+model of the B-System SMP edition. The InterCore PUB/SUB/SEND/RECV/SPAWN surface
+is the concrete inter-core fabric that realises that topology on Tier 2.

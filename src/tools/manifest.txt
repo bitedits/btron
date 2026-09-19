@@ -30,7 +30,6 @@ FILE "PUBLISH.md"         MD    doc/md/PUBLISH.md
 FILE "README.md"          MD    doc/md/README.md
 FILE "SMP.md"             MD    doc/md/SMP.md
 FILE "TAD.md"             MD    doc/md/TAD.md
-FILE "USB.md"             MD    doc/md/USB.md
 
 # assets/texts — Classic texts
 FILE "BTRON3_Report.txt"         TXT   assets/texts/BTRON3_Report.txt

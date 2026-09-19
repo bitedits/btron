@@ -690,7 +690,7 @@ static inline void restore_cursor_area(volatile uint32_t *gpu_fb, H x, H y) {
     if (bw <= 0 || bh <= 0) return;
 
     for (H r = 0; r < bh; r++) {
-        volatile uint32_t *d = gpu_fb + (y0 + r) * BTRON_SCREEN_W + x0;
+        uint32_t *d = (uint32_t *)(gpu_fb + (y0 + r) * BTRON_SCREEN_W + x0);
         const COLOR *s = &s_desktop_backbuffer[(y0 + r) * BTRON_SCREEN_W + x0];
         for (H c = 0; c < bw; c++) d[c] = s[c];
     }
@@ -731,10 +731,26 @@ static void present_backbuffer_rect(volatile uint32_t *fb, H x0, H y0, H x1, H y
     if (y1 > BTRON_SCREEN_H) y1 = BTRON_SCREEN_H;
     if (x1 <= x0 || y1 <= y0) return;
     volatile uint32_t *dst = fb + s_present_front_page * BTRON_SCREEN_W * BTRON_SCREEN_H;
+    H width = x1 - x0;
+    /* Per-pixel volatile stores defeat every optimisation and were the same
+     * defect class that produced G99 in the window composite.  The framebuffer
+     * pitch (1024*4) is 8-byte aligned, so when x0 is even the row start is
+     * too and we can copy in 64-bit words; otherwise fall back to 32-bit
+     * (still non-volatile) stores, which are always aligned.  One barrier at
+     * the end instead of one per pixel. */
+    int aligned = ((x0 & 1) == 0);
     for (H y = y0; y < y1; y++) {
         const COLOR *srow = &s_desktop_backbuffer[y * BTRON_SCREEN_W + x0];
-        volatile uint32_t *drow = dst + y * BTRON_SCREEN_W + x0;
-        for (H x = 0; x < (x1 - x0); x++) drow[x] = srow[x];
+        uint32_t *drow = (uint32_t *)(dst + y * BTRON_SCREEN_W + x0);
+        if (aligned) {
+            const uint64_t *s64 = (const uint64_t *)srow;
+            uint64_t *d64 = (uint64_t *)drow;
+            H pairs = width >> 1;
+            for (H i = 0; i < pairs; i++) d64[i] = s64[i];
+            if (width & 1) drow[width - 1] = srow[width - 1];
+        } else {
+            for (H x = 0; x < width; x++) drow[x] = srow[x];
+        }
     }
     __asm__ volatile("dmb sy" : : : "memory");
     s_present_cursor_dirty = 1;
@@ -746,8 +762,11 @@ static RECT s_prev_win_union = { 0, 0, BTRON_SCREEN_W, BTRON_SCREEN_H };
 
 /* Full composite + present only old-union ∪ new-union.  A moved or restacked
  * window's vacated area lies inside that union, so partial present stays
- * correct while skipping the unchanged pure-desktop pixels. */
-static void present_full_render(GDEV *screen, volatile uint32_t *fb) {
+ * correct while skipping the unchanged pure-desktop pixels.  `extra` (may be
+ * NULL) widens the present region — used to fold in a menu rect that was open
+ * at the start of this UI trip, so closing a menu repaints its (now-desktop)
+ * pixels instead of leaving stale overlay artefacts on the framebuffer. */
+static void present_full_render(GDEV *screen, volatile uint32_t *fb, const RECT *extra) {
     workbench_render(screen, BTRON_SCREEN_W, BTRON_SCREEN_H);
     RECT cur;
     wnd_get_union_bounds(&cur);
@@ -755,6 +774,12 @@ static void present_full_render(GDEV *screen, volatile uint32_t *fb) {
     H y0 = cur.top   < s_prev_win_union.top   ? cur.top   : s_prev_win_union.top;
     H x1 = cur.right > s_prev_win_union.right ? cur.right : s_prev_win_union.right;
     H y1 = cur.bottom> s_prev_win_union.bottom? cur.bottom: s_prev_win_union.bottom;
+    if (extra && extra->right > extra->left && extra->bottom > extra->top) {
+        if (extra->left   < x0) x0 = extra->left;
+        if (extra->top    < y0) y0 = extra->top;
+        if (extra->right  > x1) x1 = extra->right;
+        if (extra->bottom > y1) y1 = extra->bottom;
+    }
     s_prev_win_union = cur;
     present_backbuffer_rect(fb, x0, y0, x1, y1);
 }
@@ -885,6 +910,12 @@ static void launch_pi4_desktop_session(uint32_t *gpu_fb)
         int overlay_redraw = 0;
         int panel_redraw = 0;
         int menu_open_at_loop_start = global_menu_is_open() || tracker_is_menu_open();
+        /* Snapshot the rect any open menu occupies NOW.  If an event in this
+         * trip closes that menu, the full-render present below must repaint
+         * those pixels (now desktop) or stale overlay artfacts persist. */
+        RECT start_menu_rect;
+        int have_start_menu_rect = menu_open_at_loop_start &&
+                                   global_menu_get_open_rect(&start_menu_rect);
         for (uint32_t ev_iter = 0; ev_iter < ASYNC_UI_EVENT_BUDGET && get_evt(&ev, 0) == E_OK; ev_iter++) {
             if (ev.type == EV_KEY_DOWN && ev.key == 0x1B /* Escape */) {
                 s_gui_active = 0;
@@ -982,20 +1013,14 @@ static void launch_pi4_desktop_session(uint32_t *gpu_fb)
                     if (top_y < 0) top_y = 0;
                     if (bottom > BTRON_SCREEN_H) bottom = BTRON_SCREEN_H;
                     redraw_top_window();
-                    volatile uint32_t *dst =
-                        gpu_fb + s_present_front_page * BTRON_SCREEN_W * BTRON_SCREEN_H;
-                    for (H y = top_y; y < bottom; y++) {
-                        const COLOR *srow = &s_desktop_backbuffer[y * BTRON_SCREEN_W + left];
-                        volatile uint32_t *drow = dst + y * BTRON_SCREEN_W + left;
-                        for (H x = 0; x < (right - left); x++) drow[x] = srow[x];
-                    }
-                    __asm__ volatile("dmb sy" : : : "memory");
-                    s_present_cursor_dirty = 1;
+                    present_backbuffer_rect(gpu_fb, left, top_y, right, bottom);
                 } else {
-                    present_full_render(screen, gpu_fb);
+                    present_full_render(screen, gpu_fb,
+                                        have_start_menu_rect ? &start_menu_rect : NULL);
                 }
             } else {
-                present_full_render(screen, gpu_fb);
+                present_full_render(screen, gpu_fb,
+                                    have_start_menu_rect ? &start_menu_rect : NULL);
             }
             s_present_fast_key_update = 0;
             s_present_pending = 0;
@@ -1025,15 +1050,7 @@ static void launch_pi4_desktop_session(uint32_t *gpu_fb)
             /* 1 Hz clock: repaint only the top system panel (rows 0..27, incl.
              * the gold bar) and copy that band.  Bounded ~114 KB, sub-ms. */
             render_system_panel(screen);
-            volatile uint32_t *dst =
-                gpu_fb + s_present_front_page * BTRON_SCREEN_W * BTRON_SCREEN_H;
-            for (H y = 0; y < 28; y++) {
-                const COLOR *srow = &s_desktop_backbuffer[y * BTRON_SCREEN_W];
-                volatile uint32_t *drow = dst + y * BTRON_SCREEN_W;
-                for (H x = 0; x < BTRON_SCREEN_W; x++) drow[x] = srow[x];
-            }
-            __asm__ volatile("dmb sy" : : : "memory");
-            s_present_cursor_dirty = 1;
+            present_backbuffer_rect(gpu_fb, 0, 0, BTRON_SCREEN_W, 28);
         }
         uint32_t ui_cost = *(volatile uint32_t *)(TIMER_BASE + 0x04) - t_ui;
         if (ui_cost > s_ui_wcet_us) s_ui_wcet_us = ui_cost;

@@ -206,11 +206,20 @@ typedef struct {
 /* Driver Functions */
 int  xhci_init(uintptr_t mmio_base);
 /* Drain at most max_trbs event-ring entries.  The return value is the number
- * consumed, allowing callers to make deferred input work explicitly bounded. */
+ * consumed, allowing callers to make deferred input work explicitly bounded.
+ * When the 1 kHz ASYNC IRQ plane is armed this runs in interrupt context. */
 uint32_t xhci_process_events_bounded(uint32_t max_trbs);
 void xhci_process_events(void);        /* Compatibility wrapper; bounded default */
+/* SPSC consumers: pop one decoded report per call.  Callers drain with an
+ * explicit budget (ASYNC_INPUT_EVT_BUDGET). */
 int  xhci_poll_keyboard(usb_kbd_report_t *rep);
 int  xhci_poll_mouse(usb_mouse_report_t *rep);
+/* Ring-overflow telemetry: reports dropped because a consumer stalled.
+ * These must stay 0 — ASYNC.txt forbids losing KEY/BUTTON input. */
+uint32_t xhci_kbd_dropped(void);
+uint32_t xhci_mouse_dropped(void);
+uint32_t xhci_mouse_count(void);
+uint32_t xhci_kbd_bound(void);
 bool xhci_has_devices(void);
 
 #endif /* BTRON_ARCH_BCM283X_XHCI_H */

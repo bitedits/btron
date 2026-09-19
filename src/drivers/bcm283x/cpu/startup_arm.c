@@ -617,14 +617,19 @@ uint32_t bcm283x_get_board_revision(void) {
 __attribute__((section(".text"), aligned(2048)))
 void arm64_vector_table(void) {
     __asm__ volatile(
-        /* Current EL with SP0 */
-        ".balign 128\n\teret\n\t"
-        ".balign 128\n\teret\n\t"
-        ".balign 128\n\teret\n\t"
-        ".balign 128\n\teret\n\t"
+        /* Current EL with SP0.  PSTATE.SPSel resets to 0 and _start never
+         * changes it, so the kernel actually runs here: exceptions vector to
+         * the SP0 group (0x000/0x080/...), NOT the SPx group below.  Route
+         * SP0 Sync -> shared fault-skip handler (95) and SP0 IRQ -> full
+         * stub (90); the SPx entries are kept mirrored for safety. */
+        ".balign 128\n\tb 95f\n\t"   /* 0x000 SP0 Synchronous -> fault skip */
+        ".balign 128\n\tb 90f\n\t"   /* 0x080 SP0 IRQ         -> dispatch  */
+        ".balign 128\n\tb 90f\n\t"   /* 0x100 SP0 FIQ         -> dispatch  */
+        ".balign 128\n\teret\n\t"     /* 0x180 SP0 SError                   */
 
         /* Current EL with SPx: skip faulting instruction safely */
         ".balign 128\n\t"
+        "95:\n\t"
         "mrs x18, CurrentEL\n\t"
         "lsr x18, x18, #2\n\t"
         "cmp x18, #2\n\t"
@@ -638,8 +643,11 @@ void arm64_vector_table(void) {
         "add x18, x18, #4\n\t"
         "msr elr_el1, x18\n\t"
         "eret\n\t"
-        ".balign 128\n\teret\n\t"
-        ".balign 128\n\teret\n\t"
+
+        /* Current EL with SPx, IRQ (VBAR+0x280): branch to full stub below */
+        ".balign 128\n\tb 90f\n\t"
+        /* SPx FIQ (VBAR+0x300): the GIC signals the Group-0 timer as FIQ */
+        ".balign 128\n\tb 90f\n\t"
         ".balign 128\n\teret\n\t"
 
         /* Lower EL using AArch64 */
@@ -653,7 +661,365 @@ void arm64_vector_table(void) {
         ".balign 128\n\teret\n\t"
         ".balign 128\n\teret\n\t"
         ".balign 128\n\teret\n\t"
+
+        /* IRQ stub (outside the 128-byte vector slots): save the full GP
+         * register set, dispatch through the GIC-400 in C, restore, eret.
+         * Frame: 272 bytes = x0..x30 (248) + elr (248) + spsr (256). */
+        "90:\n\t"
+        "sub sp, sp, #272\n\t"
+        "stp x0, x1, [sp, #0]\n\t"
+        "stp x2, x3, [sp, #16]\n\t"
+        "stp x4, x5, [sp, #32]\n\t"
+        "stp x6, x7, [sp, #48]\n\t"
+        "stp x8, x9, [sp, #64]\n\t"
+        "stp x10, x11, [sp, #80]\n\t"
+        "stp x12, x13, [sp, #96]\n\t"
+        "stp x14, x15, [sp, #112]\n\t"
+        "stp x16, x17, [sp, #128]\n\t"
+        "stp x18, x19, [sp, #144]\n\t"
+        "stp x20, x21, [sp, #160]\n\t"
+        "stp x22, x23, [sp, #176]\n\t"
+        "stp x24, x25, [sp, #192]\n\t"
+        "stp x26, x27, [sp, #208]\n\t"
+        "stp x28, x29, [sp, #224]\n\t"
+        "str x30, [sp, #240]\n\t"
+        "mrs x0, CurrentEL\n\t"
+        "lsr x0, x0, #2\n\t"
+        "cmp x0, #2\n\t"
+        "b.ne 92f\n\t"
+        "mrs x0, elr_el2\n\t"
+        "mrs x1, spsr_el2\n\t"
+        "b 93f\n\t"
+        "92:\n\t"
+        "mrs x0, elr_el1\n\t"
+        "mrs x1, spsr_el1\n\t"
+        "93:\n\t"
+        "stp x0, x1, [sp, #248]\n\t"
+        "bl arm64_irq_dispatch\n\t"
+        "ldp x0, x1, [sp, #248]\n\t"
+        "mrs x2, CurrentEL\n\t"
+        "lsr x2, x2, #2\n\t"
+        "cmp x2, #2\n\t"
+        "b.ne 94f\n\t"
+        "msr elr_el2, x0\n\t"
+        "msr spsr_el2, x1\n\t"
+        "b 95f\n\t"
+        "94:\n\t"
+        "msr elr_el1, x0\n\t"
+        "msr spsr_el1, x1\n\t"
+        "95:\n\t"
+        "ldp x2, x3, [sp, #16]\n\t"
+        "ldp x4, x5, [sp, #32]\n\t"
+        "ldp x6, x7, [sp, #48]\n\t"
+        "ldp x8, x9, [sp, #64]\n\t"
+        "ldp x10, x11, [sp, #80]\n\t"
+        "ldp x12, x13, [sp, #96]\n\t"
+        "ldp x14, x15, [sp, #112]\n\t"
+        "ldp x16, x17, [sp, #128]\n\t"
+        "ldp x18, x19, [sp, #144]\n\t"
+        "ldp x20, x21, [sp, #160]\n\t"
+        "ldp x22, x23, [sp, #176]\n\t"
+        "ldp x24, x25, [sp, #192]\n\t"
+        "ldp x26, x27, [sp, #208]\n\t"
+        "ldp x28, x29, [sp, #224]\n\t"
+        "ldr x30, [sp, #240]\n\t"
+        "ldp x0, x1, [sp, #0]\n\t"
+        "add sp, sp, #272\n\t"
+        "eret\n\t"
     );
+}
+
+/* ─────────────────────────────────────────────────────────────────
+ * BCM2711 GIC-400 + ARM Generic Timer: real 1 kHz system IRQ
+ *
+ * ASYNC.txt requires a hardware periodic tick so the input plane is
+ * driven by an interrupt, not by elapsed-time checks inside the
+ * cooperative GUI loop.  The kernel runs at EL2, so we arm the EL2
+ * physical timer (PPI 26) and move it to GIC Group 1 so it is
+ * signaled as a plain IRQ (Group 0 would arrive as a masked FIQ).
+ * ───────────────────────────────────────────────────────────────── */
+
+#define GICD_BASE_ADDR   0xFF841000UL
+#define GICC_BASE_ADDR   0xFF842000UL
+
+#define GICD_CTLR        (*(volatile uint32_t *)(GICD_BASE_ADDR + 0x000))
+#define GICD_TYPER       (*(volatile uint32_t *)(GICD_BASE_ADDR + 0x004))
+/* GICv2 resets every PPI/SGI to Group 0, which the CPU interface signals as
+ * FIQ.  We only unmask DAIF.I, so the timer PPI must be moved to Group 1 to
+ * arrive as a plain IRQ; otherwise the tick is swallowed by the empty FIQ
+ * vector and arm64_irq_init() reports success while no tick is ever seen. */
+#define GICD_IGROUPR0    (*(volatile uint32_t *)(GICD_BASE_ADDR + 0x080))
+#define GICD_ISENABLER0  (*(volatile uint32_t *)(GICD_BASE_ADDR + 0x100))
+#define GICD_ISPENDR0    (*(volatile uint32_t *)(GICD_BASE_ADDR + 0x200))
+#define GICD_ICPENDR0    (*(volatile uint32_t *)(GICD_BASE_ADDR + 0x280))
+#define GICC_CTLR        (*(volatile uint32_t *)(GICC_BASE_ADDR + 0x000))
+#define GICC_PMR         (*(volatile uint32_t *)(GICC_BASE_ADDR + 0x004))
+#define GICC_BPR         (*(volatile uint32_t *)(GICC_BASE_ADDR + 0x008))
+#define GICC_IAR         (*(volatile uint32_t *)(GICC_BASE_ADDR + 0x00C))
+#define GICC_EOIR        (*(volatile uint32_t *)(GICC_BASE_ADDR + 0x010))
+#define GICC_HPPIR       (*(volatile uint32_t *)(GICC_BASE_ADDR + 0x018))
+#define GICC_IIDR        (*(volatile uint32_t *)(GICC_BASE_ADDR + 0x0FC))
+
+/* The kernel drops EL2 -> EL1 in _start (firmware configures the GIC for a
+ * Non-secure EL1 OS).  At EL1 the PHYSICAL timer/counter is not usable here:
+ * CNTHCTL_EL2.EL1PCEN/EL1PCTEN writes do not take effect on this firmware, so
+ * the physical counter/timer sysregs trap to EL2.  The VIRTUAL timer (CNTV,
+ * PPI 27) is owned by EL1 and needs no CNTHCTL grant (as Haiku arm64 does), so
+ * use it.  The EL2 physical timer (CNTHP, PPI 26) is kept for an EL2 boot. */
+#define ARM_TIMER_PPI_EL1 27
+#define ARM_TIMER_PPI_EL2 26
+
+/* Set by the kernel core (core_arm64.c) to rpi_timer_tick once the USB
+ * host controller is fully enumerated.  Never call heavyweight code here:
+ * the hook runs in IRQ context and must stay bounded (ASYNC.txt §4). */
+void (*g_arm64_timer_hook)(void) = 0;
+
+static uint32_t s_arm64_timer_reload = 0;
+static uint32_t s_arm64_timer_intid  = 0;
+static int      s_arm64_at_el2       = 0;
+static uint32_t s_irq_cfg_idx        = 0;
+
+/* Incremented at the top of arm64_irq_dispatch() so the boot self-test can
+ * tell "CPU never took the IRQ" apart from "timer never asserted its PPI". */
+volatile uint32_t g_arm64_irq_dispatch_hits = 0;
+/* 1 once a software-forced pending timer PPI was actually delivered. */
+static volatile uint32_t s_selftest_seen = 0;
+
+void arm64_irq_dispatch(void) {
+    extern void fb_log(const char *);
+    extern void fb_log_hex32(uint32_t);
+    fb_log("[IRQd] in\n");
+    g_arm64_irq_dispatch_hits++;
+    uint32_t iar = GICC_IAR;
+    fb_log("[IRQd] iar="); fb_log_hex32(iar); fb_log("\n");
+    uint32_t intid = iar & 0x3FFu;
+    if (intid == s_arm64_timer_intid) {
+        if (g_arm64_timer_hook) g_arm64_timer_hook();
+        /* One-shot down timer: reload for the next 1 ms tick */
+        if (s_arm64_at_el2) {
+            __asm__ volatile("msr cnthp_tval_el2, %0"
+                             : : "r"((uint64_t)s_arm64_timer_reload));
+        } else {
+            __asm__ volatile("msr cntv_tval_el0, %0"
+                             : : "r"((uint64_t)s_arm64_timer_reload));
+        }
+    }
+    GICC_EOIR = iar;
+    fb_log("[IRQd] out\n");
+}
+
+/* Snapshot of the GIC / timer state for the boot-time fallback dump. */
+typedef struct {
+    uint32_t el;
+    uint32_t timer_intid;
+    uint32_t dispatch_hits;
+    uint32_t selftest_seen;
+    uint32_t cfg_idx;
+    uint32_t gicd_typer;
+    uint32_t gicd_ctlr;
+    uint32_t gicd_igroupr0;
+    uint32_t gicd_isenabler0;
+    uint32_t gicd_ispendr0;
+    uint32_t gicc_ctlr;
+    uint32_t gicc_pmr;
+    uint32_t gicc_hppir;
+    uint32_t gicc_iidr;
+    uint32_t cnthp_ctl;
+    uint32_t cntp_ctl;
+    uint32_t cntfrq;
+} arm64_irq_diag_t;
+
+void arm64_irq_get_diag(arm64_irq_diag_t *d) {
+    if (!d) return;
+    uint64_t v;
+    __asm__ volatile("mrs %0, CurrentEL"    : "=r"(v)); d->el = (uint32_t)(v >> 2) & 3u;
+    d->timer_intid   = s_arm64_timer_intid;
+    d->dispatch_hits = g_arm64_irq_dispatch_hits;
+    d->selftest_seen = s_selftest_seen;
+    d->cfg_idx       = s_irq_cfg_idx;
+    d->gicd_typer    = GICD_TYPER;
+    d->gicd_ctlr     = GICD_CTLR;
+    d->gicd_igroupr0 = GICD_IGROUPR0;
+    d->gicd_isenabler0 = GICD_ISENABLER0;
+    d->gicd_ispendr0 = GICD_ISPENDR0;
+    d->gicc_ctlr     = GICC_CTLR;
+    d->gicc_pmr      = GICC_PMR;
+    d->gicc_hppir    = GICC_HPPIR;
+    d->gicc_iidr     = GICC_IIDR;
+    d->cnthp_ctl     = 0;   /* CNTHP is EL2-only; undefined at EL1 */
+    if (d->el == 2u) {
+        __asm__ volatile("mrs %0, cnthp_ctl_el2" : "=r"(v)); d->cnthp_ctl = (uint32_t)v;
+    }
+    /* At EL1 the physical timer sysregs trap (CNTHCTL not granted), so report
+     * the virtual timer control we actually use; field name kept for ABI. */
+    __asm__ volatile("mrs %0, cntv_ctl_el0"  : "=r"(v)); d->cntp_ctl  = (uint32_t)v;
+    __asm__ volatile("mrs %0, cntfrq_el0"    : "=r"(v)); d->cntfrq    = (uint32_t)v;
+}
+
+uint32_t arm64_irq_selftest_seen(void) { return s_selftest_seen; }
+
+int arm64_irq_init(uint32_t hz) {
+    extern void fb_log(const char *);
+    extern void fb_log_dec(uint32_t);
+    extern void fb_log_hex32(uint32_t);
+    fb_log("[IRQi] enter hz="); fb_log_dec(hz); fb_log("\n");
+    if (hz == 0 || hz > 100000u) { fb_log("[IRQi] bad hz\n"); return -1; }
+
+    uint64_t cntfrq = 0;
+    __asm__ volatile("mrs %0, cntfrq_el0" : "=r"(cntfrq));
+    fb_log("[IRQi] cntfrq="); fb_log_dec((uint32_t)cntfrq); fb_log("\n");
+    /* BCM2711 arch timer runs at 54 MHz; reject absent/bogus frequencies */
+    if (cntfrq < 1000000ULL || cntfrq > 200000000ULL) { fb_log("[IRQi] bad cntfrq\n"); return -1; }
+    s_arm64_timer_reload = (uint32_t)(cntfrq / hz);
+    if (s_arm64_timer_reload == 0) { fb_log("[IRQi] reload 0\n"); return -1; }
+
+    uint64_t el = 0;
+    __asm__ volatile("mrs %0, CurrentEL" : "=r"(el));
+    s_arm64_at_el2 = (((el >> 2) & 0x3u) == 2u);
+    s_arm64_timer_intid = s_arm64_at_el2 ? ARM_TIMER_PPI_EL2 : ARM_TIMER_PPI_EL1;
+    fb_log("[IRQi] EL="); fb_log_dec((uint32_t)(el >> 2));
+    fb_log(" intid="); fb_log_dec(s_arm64_timer_intid);
+    fb_log(" reload="); fb_log_dec(s_arm64_timer_reload); fb_log("\n");
+
+    /* KEEP IRQ/FIQ MASKED for the whole probe.  Every prior attempt unmasked
+     * here and armed the real timer, then hung silently right after "armed":
+     * the taken interrupt never reached arm64_irq_dispatch (no [IRQd] marker)
+     * and never returned to the observe loop, so the vector/entry path itself
+     * dies on this firmware.  To break that hang loop and get a decisive
+     * answer, the probe now arms the timer with DAIF MASKED and reads the GIC
+     * pending state back over MMIO instead of taking the interrupt:
+     *   GICD_ISPENDR0 bit27 set  => CNTV timer fired and latched at the GIC.
+     *   GICC_HPPIR == 27         => CPU interface sees it (delivery should
+     *                               work the moment DAIF is unmasked).
+     * This can never hang (no exception is taken) and tells us exactly whether
+     * the fault is timer->GIC, GIC->CPU, or the CPU vector entry path. */
+    fb_log("[IRQi] probe MASKED (pending readback)\n");
+    __asm__ volatile("msr daifset, #3");
+
+    /* The BCM2711 GIC's security configuration (which group the timer PPI
+     * lands in, and which GICD/GICC enable bits our access level may write)
+     * is not something we can deduce reliably from here: register writes to
+     * IGROUPR / EnableGrp1 were observed to be silently ignored on hardware.
+     * So probe a small set of known-good configurations and keep the first
+     * one whose software-forced pending PPI is actually taken by the CPU. */
+    {
+        void (*saved_hook)(void) = g_arm64_timer_hook;
+        g_arm64_timer_hook = 0;   /* forced IRQs must not fake a real tick */
+
+        static const struct { uint32_t gicd, gicc, igroup, pmr, bpr; } cfgs[] = {
+            { 0x3, 0x1, 0x00000000u, 0xFF, 0x7 },  /* Group0, EnableGrp0 (Haiku) */
+            { 0x3, 0x3, 0x00000000u, 0xFF, 0x7 },  /* Group0, both grp enables   */
+            { 0x3, 0x7, 0xFFFFFFFFu, 0xFF, 0x7 },  /* force Group1 + AckCtl      */
+            { 0x7, 0x7, 0xFFFFFFFFu, 0xFF, 0x7 },  /* all distributor enables    */
+            { 0x1, 0x1, 0x00000000u, 0xFF, 0x7 },  /* single-group enable only   */
+        };
+        int found = -1;
+        for (uint32_t c = 0; c < (sizeof(cfgs)/sizeof(cfgs[0])) && found < 0; c++) {
+            fb_log("[IRQi] probe cfg="); fb_log_dec(c); fb_log("\n");
+            GICD_CTLR = 0;
+            GICC_CTLR = 0;
+            GICD_ICPENDR0 = (1u << s_arm64_timer_intid);
+            GICD_IGROUPR0 = cfgs[c].igroup;
+            GICC_PMR      = cfgs[c].pmr;
+            GICC_BPR      = cfgs[c].bpr;
+            {
+                volatile uint32_t *ipr = (volatile uint32_t *)
+                    (GICD_BASE_ADDR + 0x400u + (s_arm64_timer_intid / 4u) * 4u);
+                uint32_t lane = (s_arm64_timer_intid % 4u) * 8u;
+                *ipr = (*ipr & ~(0xFFu << lane)) | (0x80u << lane);
+            }
+            fb_log("[IRQi] c="); fb_log_dec(c); fb_log(" mid\n");
+            GICD_ISENABLER0 = (1u << s_arm64_timer_intid);
+            GICD_CTLR = cfgs[c].gicd;
+            GICC_CTLR = cfgs[c].gicc;
+            fb_log("[IRQi] c="); fb_log_dec(c); fb_log(" ctl\n");
+            __asm__ volatile("dsb sy" : : : "memory");
+            __asm__ volatile("isb");
+            fb_log("[IRQi] c="); fb_log_dec(c); fb_log(" regs\n");
+
+            /* Arm the REAL timer for this config.  We do NOT write
+             * GICD_ISPENDR0 (force pending): on hardware that store to the
+             * timer PPI never completes and locks the BCM2711 bus at EL1. */
+            if (s_arm64_at_el2) {
+                __asm__ volatile("msr cnthp_tval_el2, %0"
+                                 : : "r"((uint64_t)s_arm64_timer_reload));
+                __asm__ volatile("msr cnthp_ctl_el2, %0" : : "r"(1ULL));
+            } else {
+                __asm__ volatile("msr cntv_tval_el0, %0"
+                                 : : "r"((uint64_t)s_arm64_timer_reload));
+                __asm__ volatile("msr cntv_ctl_el0, %0" : : "r"(1ULL));
+            }
+            __asm__ volatile("isb");
+            fb_log("[IRQi] c="); fb_log_dec(c); fb_log(" armed\n");
+            /* Wait ~10 ms via the BCM2835 system timer (1 MHz MMIO; a plain
+             * memory read that cannot trap), then read the GIC pending state
+             * back over MMIO.  DAIF is masked so no interrupt is taken and this
+             * cannot hang.  ISPENDR0 bit<intid> set => the timer fired and
+             * latched at the distributor; HPPIR == intid => the CPU interface
+             * recognizes it, so delivery should work once DAIF is unmasked. */
+            {
+                volatile uint32_t *systimer_clo =
+                    (volatile uint32_t *)(g_mmio_base + 0x00003004UL);
+                uint32_t t0 = *systimer_clo;
+                for (uint32_t spin = 0; spin < 4000000u; spin++) {
+                    if ((uint32_t)(*systimer_clo - t0) >= 10000u) break;
+                }
+            }
+            uint32_t pend  = GICD_ISPENDR0;
+            uint32_t hppir = *(volatile uint32_t *)(GICC_BASE_ADDR + 0x018);
+            fb_log("[IRQi] c="); fb_log_dec(c);
+            fb_log(" pend=");  fb_log_hex32(pend);
+            fb_log(" hppir="); fb_log_hex32(hppir); fb_log("\n");
+            /* Always disarm + clear pending before the next config / return. */
+            if (s_arm64_at_el2) {
+                __asm__ volatile("msr cnthp_ctl_el2, %0" : : "r"(0ULL));
+            } else {
+                __asm__ volatile("msr cntv_ctl_el0, %0" : : "r"(0ULL));
+            }
+            if ((pend & (1u << s_arm64_timer_intid)) &&
+                ((hppir & 0x3FFu) == s_arm64_timer_intid)) {
+                found = (int)c;
+                s_irq_cfg_idx = c;
+            }
+            GICD_ICPENDR0 = (1u << s_arm64_timer_intid);  /* drop leftover */
+        }
+        s_selftest_seen = (found >= 0) ? 1u : 0u;
+        g_arm64_timer_hook = saved_hook;
+        fb_log("[IRQi] probe done found="); fb_log_dec((uint32_t)(found + 1));
+        fb_log(" hits="); fb_log_dec(g_arm64_irq_dispatch_hits); fb_log("\n");
+    }
+
+    fb_log("[IRQi] arming timer\n");
+    if (s_arm64_at_el2) {
+        /* Arm the EL2 physical timer (dedicated to EL2, not trapped) */
+        __asm__ volatile("msr cnthp_tval_el2, %0"
+                         : : "r"((uint64_t)s_arm64_timer_reload));
+        __asm__ volatile("msr cnthp_ctl_el2, %0" : : "r"(1ULL)); /* ENABLE, !IMASK */
+    } else {
+        /* Arm the EL1 virtual timer (EL1-owned, no CNTHCTL grant needed) */
+        __asm__ volatile("msr cntv_tval_el0, %0"
+                         : : "r"((uint64_t)s_arm64_timer_reload));
+        __asm__ volatile("msr cntv_ctl_el0, %0" : : "r"(1ULL)); /* ENABLE, !IMASK */
+    }
+    __asm__ volatile("isb");
+    fb_log("[IRQi] armed, returning 0\n");
+    return 0;
+}
+
+/* Stop the timer PPI and re-mask IRQ.  Used when arm64_irq_init() reported
+ * success but no tick is ever observed, so the caller can fall back to the
+ * cooperative input path without leaving a half-armed interrupt behind. */
+void arm64_irq_disable(void) {
+    if (s_arm64_at_el2) {
+        __asm__ volatile("msr cnthp_ctl_el2, %0" : : "r"(0ULL)); /* DISABLE */
+    } else {
+        __asm__ volatile("msr cntv_ctl_el0, %0" : : "r"(0ULL)); /* DISABLE */
+    }
+    GICD_CTLR = 0;
+    GICC_CTLR = 0;
+    __asm__ volatile("msr daifset, #3");  /* mask IRQ and FIQ */
+    __asm__ volatile("dsb sy" : : : "memory");
+    __asm__ volatile("isb");
 }
 
 /* ─────────────────────────────────────────────────────────────────
@@ -773,6 +1139,41 @@ void _start(void) {
         "2: wfe\n\t"
         "b 2b\n\t"
         "1:\n\t"
+
+        /* Drop EL2 -> EL1 (AArch64).  Firmware configures the GIC-400 groups
+         * and the arch timer for a Non-secure EL1 OS (as Linux/Haiku run on
+         * the Pi 4); from EL2 the CPU-interface group/enable writes are
+         * ignored and no interrupt is ever delivered.  Land in EL1t so the
+         * kernel keeps the SP_EL0 stack set up above. */
+        "mrs x0, CurrentEL\n\t"
+        "lsr x0, x0, #2\n\t"
+        "cmp x0, #2\n\t"
+        "b.ne 47f\n\t"
+        "mov x0, #0x80000000\n\t"          /* HCR_EL2.RW = AArch64 EL1 */
+        "msr hcr_el2, x0\n\t"
+        "msr cptr_el2, xzr\n\t"            /* don't trap FP/SIMD to EL2 */
+        "msr hstr_el2, xzr\n\t"            /* don't trap CP15 to EL2 */
+        "mov x0, #3\n\t"
+        "msr cnthctl_el2, x0\n\t"          /* EL1PCTEN|EL1PCEN: EL1 counter/timer access */
+        "msr cntvoff_el2, xzr\n\t"
+        /* Safety net: if anything still traps to EL2 (counter/timer/FP), land
+         * in the real vector table instead of VBAR_EL2=0 -> address 0. */
+        "adr x0, arm64_vector_table\n\t"
+        "msr vbar_el2, x0\n\t"
+        "adr x0, 47f\n\t"
+        "msr elr_el2, x0\n\t"
+        "mov x0, #0x3C4\n\t"               /* SPSR: EL1t, DAIF masked */
+        "msr spsr_el2, x0\n\t"
+        "isb\n\t"
+        "eret\n\t"
+        "47:\n\t"
+
+        /* Re-establish SP at the current EL (EL1t uses SP_EL0; the EL2
+         * 'mov sp' above may have targeted SP_EL2). */
+        "adrp x0, __stack_top\n\t"
+        "add  x0, x0, :lo12:__stack_top\n\t"
+        "and  x0, x0, #~15\n\t"
+        "mov  sp, x0\n\t"
 
         /* Install exception vector table */
         "adr x0, arm64_vector_table\n\t"

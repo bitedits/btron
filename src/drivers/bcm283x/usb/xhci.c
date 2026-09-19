@@ -93,7 +93,11 @@ static volatile xhci_trb_t * const        s_event_ring = (volatile xhci_trb_t *)
 #define EP1_RING_BASE(slot)  ((volatile xhci_trb_t *)(XHCI_DMA_BASE + 0x10000 + ((slot) - 1) * 0x1000))
 
 #define DMA_SCRATCH_BUF      ((volatile uint8_t *)(XHCI_DMA_BASE + 0x18000)) /* 4KB scratch buffer */
-static volatile usb_kbd_report_t * const  s_kbd_buf    = (volatile usb_kbd_report_t *)(XHCI_DMA_BASE + 0x19000);
+
+/* Four in-flight interrupt transfers for the keyboard, mirroring the mouse
+ * buffering so the host never idles between reports. */
+#define XHCI_KBD_TRB_DEPTH 4
+#define KBD_BUF(k) ((volatile usb_kbd_report_t *)(XHCI_DMA_BASE + 0x19000 + ((k) * 16)))
 
 /* Four in-flight interrupt transfers per mouse.  This range remains well
  * below the controller scratch pages at +0x40000. */
@@ -132,17 +136,26 @@ typedef struct {
 static xhci_mouse_t s_mice[XHCI_MAX_MICE];
 static int          s_num_mice = 0;
 
+/* SPSC lock-free rings.  Producer: the IRQ input plane (or the cooperative
+ * legacy drainer); consumer: the 1 ms INPUT worker / Stage-1 shell.  Only
+ * head and tail indices cross contexts — no count variable, which would be
+ * racy once a real IRQ producer exists. */
 #define XHCI_KBD_QUEUE_SIZE 32
+#define XHCI_KBD_QUEUE_MASK (XHCI_KBD_QUEUE_SIZE - 1)
 static usb_kbd_report_t s_kbd_queue[XHCI_KBD_QUEUE_SIZE];
-static volatile int s_kbd_q_head = 0;
-static volatile int s_kbd_q_tail = 0;
-static volatile int s_kbd_q_count = 0;
+static volatile uint32_t s_kbd_q_head = 0;
+static volatile uint32_t s_kbd_q_tail = 0;
+static volatile uint32_t s_kbd_dropped = 0;
 
-static volatile int32_t s_accum_dx = 0;
-static volatile int32_t s_accum_dy = 0;
-static volatile int32_t s_accum_wheel = 0;
-static volatile uint8_t s_latest_buttons = 0;
-static volatile int s_has_mouse = 0;
+/* Decoded mouse reports replace the old shared s_accum_* accumulators.
+ * The wait-free seqlock pointer snapshot now lives in the core input
+ * plane (core_arm64.c), fed from this ring. */
+#define XHCI_MOUSE_QUEUE_SIZE 32
+#define XHCI_MOUSE_QUEUE_MASK (XHCI_MOUSE_QUEUE_SIZE - 1)
+static usb_mouse_report_t s_mouse_queue[XHCI_MOUSE_QUEUE_SIZE];
+static volatile uint32_t s_mouse_q_head = 0;
+static volatile uint32_t s_mouse_q_tail = 0;
+static volatile uint32_t s_mouse_dropped = 0;
 
 static void xhci_decode_mouse_report(xhci_mouse_t *mouse, const volatile uint8_t *raw,
                                      uint32_t transferred, usb_mouse_report_t *out) {
@@ -218,14 +231,19 @@ static volatile uint8_t *xhci_ep1_event_buffer(uint32_t slot_id, uint64_t event_
 static void xhci_handle_transfer_event(uint32_t ev_slot, uint32_t ev_epid, uint32_t ev_code,
                                        uint32_t ev_status, uint64_t ev_param) {
     if (ev_slot == (uint32_t)s_kbd_slot_id && ev_epid == 3) {
+        volatile uint8_t *kbuf = xhci_ep1_event_buffer(ev_slot, ev_param);
+        if (!kbuf) return; /* Never recycle an ambiguous DMA buffer. */
         if (ev_code == 1 || ev_code == 13 /* Success or Short Packet */) {
-            if (s_kbd_q_count < XHCI_KBD_QUEUE_SIZE) {
-                s_kbd_queue[s_kbd_q_tail] = *s_kbd_buf;
-                s_kbd_q_tail = (s_kbd_q_tail + 1) % XHCI_KBD_QUEUE_SIZE;
-                s_kbd_q_count++;
+            uint32_t next_tail = (s_kbd_q_tail + 1) & XHCI_KBD_QUEUE_MASK;
+            if (next_tail != s_kbd_q_head) {
+                s_kbd_queue[s_kbd_q_tail] = *(volatile usb_kbd_report_t *)kbuf;
+                dsb();
+                s_kbd_q_tail = next_tail;
+            } else {
+                s_kbd_dropped++;
             }
         }
-        xhci_queue_ep1_transfer(s_kbd_slot_id, (uintptr_t)s_kbd_buf, s_kbd_mps);
+        xhci_queue_ep1_transfer(s_kbd_slot_id, (uintptr_t)kbuf, s_kbd_mps);
         return;
     }
 
@@ -248,11 +266,14 @@ static void xhci_handle_transfer_event(uint32_t ev_slot, uint32_t ev_epid, uint3
                 }
                 dsb();
 
-                s_accum_dx += temp_rep.dx;
-                s_accum_dy += temp_rep.dy;
-                s_accum_wheel += temp_rep.wheel;
-                s_latest_buttons = temp_rep.buttons;
-                s_has_mouse = 1;
+                uint32_t next_tail = (s_mouse_q_tail + 1) & XHCI_MOUSE_QUEUE_MASK;
+                if (next_tail != s_mouse_q_head) {
+                    s_mouse_queue[s_mouse_q_tail] = temp_rep;
+                    dsb();
+                    s_mouse_q_tail = next_tail;
+                } else {
+                    s_mouse_dropped++;
+                }
             }
             /* Recycle only the completed buffer.  The other transfers remain
              * in flight, removing the old single-TRB host idle gap. */
@@ -707,12 +728,10 @@ int xhci_init(uintptr_t mmio_base) {
     s_num_mice = 0;
     s_kbd_q_head = 0;
     s_kbd_q_tail = 0;
-    s_kbd_q_count = 0;
-    s_accum_dx = 0;
-    s_accum_dy = 0;
-    s_accum_wheel = 0;
-    s_latest_buttons = 0;
-    s_has_mouse = 0;
+    s_kbd_dropped = 0;
+    s_mouse_q_head = 0;
+    s_mouse_q_tail = 0;
+    s_mouse_dropped = 0;
 
     /* 1. Stop Controller */
     uint32_t cmd = xread32(s_op_base + XHCI_OP_USBCMD);
@@ -1181,7 +1200,9 @@ int xhci_init(uintptr_t mmio_base) {
 
     /* Arm Interrupt IN transfer rings for keyboard and all connected mice */
     if (s_kbd_slot_id) {
-        xhci_queue_ep1_transfer(s_kbd_slot_id, (uintptr_t)s_kbd_buf, s_kbd_mps);
+        for (int b = 0; b < XHCI_KBD_TRB_DEPTH; b++) {
+            xhci_queue_ep1_transfer(s_kbd_slot_id, (uintptr_t)KBD_BUF(b), s_kbd_mps);
+        }
     }
     for (int m = 0; m < s_num_mice; m++) {
         for (int b = 0; b < XHCI_MOUSE_TRB_DEPTH; b++) {
@@ -1243,47 +1264,47 @@ void xhci_process_events(void) {
 int xhci_poll_keyboard(usb_kbd_report_t *rep) {
     if (!s_kbd_slot_id || !rep) return 0;
     /* NOTE: do NOT call xhci_process_events() here.
-     * The caller (usb_poll_devices) must call xhci_process_events() once
-     * before calling xhci_poll_keyboard / xhci_poll_mouse.
-     * Calling it again here causes double-processing of the event ring. */
-    if (s_kbd_q_count > 0) {
-        *rep = s_kbd_queue[s_kbd_q_head];
-        s_kbd_q_head = (s_kbd_q_head + 1) % XHCI_KBD_QUEUE_SIZE;
-        s_kbd_q_count--;
-        return 1;
-    }
-    return 0;
+     * The IRQ input plane (or the legacy cooperative drainer) produces into
+     * the SPSC ring; this consumer only pops. */
+    uint32_t head = s_kbd_q_head;
+    if (head == s_kbd_q_tail) return 0;
+    *rep = s_kbd_queue[head];
+    dsb();
+    s_kbd_q_head = (head + 1) & XHCI_KBD_QUEUE_MASK;
+    return 1;
 }
 
 int xhci_poll_mouse(usb_mouse_report_t *rep) {
     if (s_num_mice == 0 || !rep) return 0;
-    /* NOTE: do NOT call xhci_process_events() here.
-     * Caller must invoke xhci_process_events() once before polling. */
-    if (s_has_mouse) {
-        /* Do NOT clamp the accumulated sum to ±512.
-         * After a slow GUI frame many 1 ms HID reports pile up in
-         * s_accum_*; clamping throws away real motion and is the main
-         * cause of "mouse saturation". Per-packet clamps in
-         * xhci_decode_mouse_report remain. Only saturate to int16 range. */
-        int32_t dx = s_accum_dx;
-        int32_t dy = s_accum_dy;
-        if (dx >  32767) dx =  32767;
-        if (dx < -32768) dx = -32768;
-        if (dy >  32767) dy =  32767;
-        if (dy < -32768) dy = -32768;
+    /* Pop ONE decoded report.  Callers drain with an explicit budget
+     * (ASYNC_INPUT_EVT_BUDGET) and own any accumulation/acceleration.
+     * Per-packet deltas were already clamped in xhci_decode_mouse_report,
+     * so no motion is lost to whole-sum saturation. */
+    uint32_t head = s_mouse_q_head;
+    if (head == s_mouse_q_tail) return 0;
+    *rep = s_mouse_queue[head];
+    dsb();
+    s_mouse_q_head = (head + 1) & XHCI_MOUSE_QUEUE_MASK;
+    return 1;
+}
 
-        rep->dx = (int16_t)dx;
-        rep->dy = (int16_t)dy;
-        rep->wheel = (int16_t)s_accum_wheel;
-        rep->buttons = s_latest_buttons;
+uint32_t xhci_kbd_dropped(void) {
+    return s_kbd_dropped;
+}
 
-        s_accum_dx = 0;
-        s_accum_dy = 0;
-        s_accum_wheel = 0;
-        s_has_mouse = 0;
-        return 1;
-    }
-    return 0;
+uint32_t xhci_mouse_dropped(void) {
+    return s_mouse_dropped;
+}
+
+/* Boot diagnostics surfaced on the compact HUD: how many HID devices the
+ * enumerator actually bound.  M0 => no mouse slot (cursor cannot move);
+ * K0 => no keyboard slot. */
+uint32_t xhci_mouse_count(void) {
+    return (uint32_t)s_num_mice;
+}
+
+uint32_t xhci_kbd_bound(void) {
+    return (s_kbd_slot_id != 0) ? 1u : 0u;
 }
 
 bool xhci_has_devices(void) {

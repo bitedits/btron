@@ -33,9 +33,26 @@ static inline void dsb(void) {
     __asm__ volatile("dsb sy" : : : "memory");
 }
 
+/* Accurate delays driven by the BCM2835 system timer (1 MHz free-running
+ * counter at g_mmio_base + 0x3004).  The previous nop-loop was mis-calibrated
+ * (~150 iterations per "us" is closer to 1 us than the requested value and
+ * varies with CPU clock), which starved the SerDes/link-training settle times
+ * the Broadcom RC actually needs and produced intermittent link failures. */
+static inline uint32_t systimer_clo(void) {
+    return *(volatile uint32_t *)(g_mmio_base + 0x00003004UL);
+}
+
 static inline void delay_us(uint32_t us) {
-    /* Robust bounded delay: ~150 cycles per microsecond */
-    for (volatile uint32_t i = 0; i < us * 150; i++) {
+    uint32_t start = systimer_clo();
+    while ((uint32_t)(systimer_clo() - start) < us) {
+        __asm__ volatile("nop");
+    }
+}
+
+static inline void delay_ms(uint32_t ms) {
+    uint32_t start = systimer_clo();
+    uint32_t target = ms * 1000u;
+    while ((uint32_t)(systimer_clo() - start) < target) {
         __asm__ volatile("nop");
     }
 }
@@ -184,25 +201,25 @@ int bcm2711_pcie_init(void) {
     val = pcie_rc_read(0x9210);
     val |= 0x3u;   /* bits [1:0] = 11 */
     pcie_rc_write(0x9210, val);
-    delay_us(1);
+    delay_us(100);
 
     /* b) Enable SERDES — clear SERDES_IDDQ (bit 27) in HARD_DEBUG */
     val = pcie_rc_read(0x4204);
     val &= ~(1u << 27); /* SERDES_IDDQ = 0 (powered on) */
     pcie_rc_write(0x4204, val);
-    delay_us(1);
+    delay_us(100);
 
     /* c) De-assert BRIDGE_INIT (bit 1), keep PERST# asserted */
     val = pcie_rc_read(0x9210);
     val &= ~0x2u;  /* clear BRIDGE_INIT only */
     pcie_rc_write(0x9210, val);
-    delay_us(2); /* allow RC logic + SERDES PLL to stabilize */
+    delay_us(100); /* U-Boot udelay(100): let RC logic + SERDES PLL stabilize */
 
     /* d) De-assert PERST# (bit 0) — VL805 begins reset de-assertion sequence */
     val = pcie_rc_read(0x9210);
     val &= ~0x1u;  /* clear PERST# */
     pcie_rc_write(0x9210, val);
-    delay_us(1);
+    delay_us(100);
 
     fb_log("[PCIE] PERST# de-asserted, waiting for link training...\n");
 
@@ -243,11 +260,15 @@ int bcm2711_pcie_init(void) {
 
     /* (Controller already enabled by PERST# de-assertion above) */
 
-    /* 4. Wait for controller and link training (REG_BRIDGE_STATE 0x4068) */
-    int to = 100;
+    /* 4. Wait for controller and link training.
+     *    PCIE_MISC_PCIE_STATUS (0x4068): bit 4 = PHYLINKUP, bit 5 = DL_ACTIVE.
+     *    U-Boot polls this for up to ~100 ms (mdelay(5) x 20); PCIe link
+     *    training routinely takes tens of ms, so the previous 1 ms budget was
+     *    far too short and let enumeration start against a down link. */
+    int to = 20;
     while (to-- > 0) {
         if ((pcie_rc_read(0x4068) & 0x30) == 0x30) break;
-        delay_us(10);
+        delay_ms(5);
     }
     uint32_t state = pcie_rc_read(0x4068);
     uint32_t link_speed = pcie_rc_read(0x00BC) >> 16;
@@ -301,7 +322,7 @@ int bcm2711_pcie_init(void) {
         } else {
             fb_log("[PCIE] VL805 firmware reload completed (pre-loaded/EEPROM)\n");
         }
-        delay_us(10); /* 10ms settle for VL805 controller reboot */
+        delay_ms(50); /* real settle for VL805 controller reboot after fw notify */
 
         /* 11. Program BAR0 to PCI address 0xC0000000 (after firmware reload) */
         pci_write_config32(VL805_PCI_BUS, VL805_PCI_DEV, VL805_PCI_FUNC, PCI_BAR0, BCM2711_PCIE_BUS_MEM_BASE);

@@ -57,31 +57,29 @@ extern uintptr_t heap_ptr;
 #define BTRON_SCREEN_W      1024
 #define BTRON_SCREEN_H      768
 
-/* INPUT and UI are peers.  These fixed release periods and work limits—not a
- * priority boost—bound the input-to-presentation path on the Pi 400. */
-#define ASYNC_INPUT_PERIOD_US       1000u
-#define ASYNC_UI_PERIOD_US          8333u
-#define ASYNC_XHCI_TRB_BUDGET       32u
-#define ASYNC_HID_REPORT_BUDGET     16u
+/* INPUT and UI are peers.  The fixed release periods and work budgets in
+ * <btron/async_rt.h>—not a priority boost—bound the input-to-presentation
+ * path on the Pi 400 (ASYNC.txt Tier-1). */
+#include <btron/async_rt.h>
 #define ASYNC_UI_EVENT_BUDGET       16u
 #ifndef ASYNC_TELEMETRY
 #define ASYNC_TELEMETRY              1
 #endif
 
-typedef struct {
-    volatile uint32_t input_gap_us;
-    volatile uint32_t input_gap_max_us;
-    volatile uint32_t trb_per_input;
-    volatile uint32_t trb_max;
-    volatile uint32_t blit_us;
-    volatile uint32_t blit_max_us;
-    volatile uint32_t key_enqueue_us;
-    volatile uint32_t key_dispatch_us;
-} async_rt_stats_t;
-
-/* Written by INPUT/PRESENT and formatted from the UI plane; never allocate or
- * format text in the input path. */
 static async_rt_stats_t s_async_rt_stats;
+
+/* Wait-free seqlock pointer snapshot: produced by the 1 kHz timer IRQ,
+ * consumed by the 1 ms INPUT worker.  Replaces the old shared s_accum_*
+ * read-and-clear handoff in the xHCI driver. */
+static pointer_slot_t s_pointer_slot;
+static pointer_snapshot_t s_input_last;
+static uint8_t s_input_prev_buttons = 0;
+
+/* 1 = the hardware 1 kHz IRQ input plane is armed (BCM2711 + VL805 xHCI).
+ * 0 = legacy cooperative drain inside the GUI loop (QEMU / DWC2 / Pi 3). */
+static volatile int s_async_irq_active = 0;
+static uint32_t s_irq_prev_us = 0;
+
 static int s_present_dma_enabled = 0;
 static int s_present_pending = 0;
 static int s_present_cursor_dirty = 0;
@@ -90,6 +88,13 @@ static uint32_t s_present_dma_max_us = 0;
 static uint32_t s_present_front_page = 0;
 static uint32_t s_present_dma_page = 1;
 static int s_present_fast_key_update = 0;
+/* Budget-scheduler WCET telemetry for the two equal-priority planes.  Each
+ * plane's worst-case run time is compared against ASYNC_*_BUDGET_US; these
+ * are internal counters (not shown on the compact HUD) used to detect a plane
+ * monopolising the CPU. */
+static uint32_t s_input_wcet_us = 0;
+static uint32_t s_ui_wcet_us = 0;
+
 /* CPU presentation is sliced into small row bands.  A frame may take longer
  * to become fully visible, but no single copy may starve the 1 kHz input
  * plane.  DMA/page-flip is intentionally disabled until it is reliable. */
@@ -109,18 +114,31 @@ void async_rt_format_status(char *buf, size_t len) {
                  blit / 1000u, (blit / 100u) % 10u, blit_max / 1000u);
 }
 
-/* Fits in the 80-pixel gap between the final menu header and TIP badge on the
- * 1024-pixel Pi desktop: G=input gap, D=actual DMA completion, K=keyboard
- * event queue-to-UI dispatch; all values are milliseconds. */
+/* DIAGNOSTIC compact HUD (temporary): one flash reveals the input topology.
+ *   A = 1 when the 1 kHz IRQ plane is armed, 0 = cooperative fallback
+ *   M = number of mouse slots the xHCI enumerator bound (0 => cursor frozen)
+ *   K = 1 when a keyboard slot is bound
+ *   G = worst INPUT cadence gap in ms (clamped 999)
+ * Read as e.g. "A0M0K1G999": IRQ dead, no mouse enumerated, keyboard bound. */
 void async_rt_format_compact_status(char *buf, size_t len) {
-    uint32_t gap = s_async_rt_stats.input_gap_us / 1000u;
-    uint32_t dma_max = s_present_dma_max_us / 1000u;
-    uint32_t key_dispatch = s_async_rt_stats.key_dispatch_us / 1000u;
+    extern uint32_t xhci_mouse_count(void);
+    extern uint32_t xhci_kbd_bound(void);
+    extern uint32_t arm64_irq_selftest_seen(void);
+    uint32_t gap = s_async_rt_stats.input_gap_max_us / 1000u;
+    if (gap > 99u) gap = 99u;   /* 2 digits so the 9-char string fits 72px */
     if (!buf || len == 0) return;
-    if (gap > 999u) gap = 999u;
-    if (dma_max > 999u) dma_max = 999u;
-    if (key_dispatch > 999u) key_dispatch = 999u;
-    tkl_snprintf(buf, len, "G%uD%uK%u", gap, dma_max, key_dispatch);
+    /* A1 = IRQ plane live.  When the tick never confirmed, the A field
+     * carries the boot self-test verdict instead of a bare 0:
+     *   V = forced-pending IRQ was NOT taken  -> GIC->CPU delivery broken
+     *   T = forced-pending IRQ WAS taken      -> timer never asserts PPI */
+    char a0 = arm64_irq_selftest_seen() ? 'T' : 'V';
+    if (s_async_irq_active) {
+        tkl_snprintf(buf, len, "A1M%uK%uG%u",
+                     xhci_mouse_count(), xhci_kbd_bound(), gap);
+    } else {
+        tkl_snprintf(buf, len, "A%cM%uK%uG%u", a0,
+                     xhci_mouse_count(), xhci_kbd_bound(), gap);
+    }
 }
 
 /* Double-buffered 32-bpp Desktop Backbuffer */
@@ -178,6 +196,7 @@ extern int  g_cursor_in_backbuffer;
 extern void draw_baremetal_cursor_raw(volatile uint32_t *pixels, H mx, H my, H w, H h);
 void blit_backbuffer_to_fb(volatile uint32_t *gpu_fb);
 static int usb_poll_devices(GDEV *screen);
+static void input_plane_task(GDEV *screen, uint32_t now_us);
 
 /* ═══════════════════════════════════════════════════════════════════
  * Framebuffer Kernel Text Log Overlay
@@ -556,9 +575,10 @@ static int pi4_shell_poll(uint32_t *gpu_fb)
     uint32_t k = 0;
 
     /* Drain xHCI event ring FIRST (if on physical Pi 400 hardware).
-     * Without this call the event ring is never processed in Stage 1,
-     * making the keyboard completely unresponsive. */
-    if (g_use_xhci) {
+     * When the 1 kHz IRQ input plane is armed, the ISR owns event-ring
+     * draining and the shell must not touch it (ASYNC.txt §5: single
+     * producer per ring). */
+    if (g_use_xhci && !s_async_irq_active) {
         xhci_process_events();
     }
 
@@ -585,16 +605,27 @@ static int pi4_shell_poll(uint32_t *gpu_fb)
         }
     }
 
-    /* 2. Poll USB Mouse (motion/clicks in shell cancel autoboot) */
-    usb_mouse_report_t mrep;
-    int mouse_ready = 0;
-    if (g_use_xhci) {
-        mouse_ready = (xhci_poll_mouse(&mrep) > 0);
+    /* 2. Poll USB Mouse (motion/clicks in shell cancel autoboot).
+     * With the IRQ plane armed, the ISR consumes the decoded report ring,
+     * so the shell observes the seqlock snapshot instead of polling. */
+    if (s_async_irq_active) {
+        static uint16_t s_prev_motion_seq = 0;
+        uint16_t mseq = s_pointer_slot.motion_seq;
+        if (mseq != s_prev_motion_seq || s_pointer_slot.buttons != 0) {
+            s_prev_motion_seq = mseq;
+            return 1;
+        }
     } else {
-        mouse_ready = (dwc2_poll_mouse(&mrep) > 0);
-    }
-    if (mouse_ready && (mrep.dx != 0 || mrep.dy != 0 || mrep.buttons != 0)) {
-        return 1;
+        usb_mouse_report_t mrep;
+        int mouse_ready = 0;
+        if (g_use_xhci) {
+            mouse_ready = (xhci_poll_mouse(&mrep) > 0);
+        } else {
+            mouse_ready = (dwc2_poll_mouse(&mrep) > 0);
+        }
+        if (mouse_ready && (mrep.dx != 0 || mrep.dy != 0 || mrep.buttons != 0)) {
+            return 1;
+        }
     }
 
     /* 3. Poll UART Serial Console (if connected) */
@@ -715,32 +746,58 @@ static void launch_pi4_desktop_session(uint32_t *gpu_fb)
     s_held_kbd_modifiers = 0;
     g_prev_mouse_btns = 0;
 
-    uint32_t last_clock = *(volatile uint32_t *)(TIMER_BASE + 0x04);
-    uint32_t last_input_us = last_clock;
-    uint32_t last_paint_us = last_clock;
-     
+    /* Resync the seqlock consumer baseline so Stage-1 pointer motion cannot
+     * burst into the first GUI frame as one giant delta. */
+    s_input_prev_buttons = s_pointer_slot.buttons;
+    s_input_last.acc_dx = s_pointer_slot.acc_dx;
+    s_input_last.acc_dy = s_pointer_slot.acc_dy;
+    s_input_last.acc_wheel = s_pointer_slot.acc_wheel;
+    s_input_last.buttons = s_pointer_slot.buttons;
+
+    /* ASYNC.txt Tier-1 budget scheduler state.  Two equal-priority periodic
+     * planes share this CPU context; deadlines are ABSOLUTE (next += period)
+     * so a late or over-budget run never drifts the cadence, and a bounded
+     * catch-up prevents a death spiral after a long stall. */
+    uint32_t t_boot = *(volatile uint32_t *)(TIMER_BASE + 0x04);
+    uint32_t next_input_us = t_boot;
+    uint32_t next_ui_us    = t_boot;
+    uint32_t last_input_us = t_boot;
+    uint32_t last_clock    = t_boot;
+
     EVT ev;
 
     while (s_gui_active) {
-        int redraw = 0;
-
         uint32_t now = *(volatile uint32_t *)(TIMER_BASE + 0x04);
 
-        /* INPUT plane: 1 kHz cadence with bounded host-controller/HID work.
-         * It never renders or blits. */
-        if ((uint32_t)(now - last_input_us) >= ASYNC_INPUT_PERIOD_US) {
-            uint32_t input_gap = now - last_input_us;
+        /* ── INPUT plane: period 1 ms, budget ASYNC_INPUT_BUDGET_US ──────
+         * When the IRQ plane is armed the 1 kHz ISR is the sole xHCI
+         * producer, so this worker only consumes the seqlock snapshot and
+         * pops the SPSC rings.  It never renders, blits, or dispatches
+         * events (ASYNC.txt §4). */
+        if ((int32_t)(now - next_input_us) >= 0) {
+            uint32_t t_in = now;
             uint32_t trbs = 0;
-            last_input_us = now;
-            if (g_use_xhci)
+            if (!s_async_irq_active && g_use_xhci)
                 trbs = xhci_process_events_bounded(ASYNC_XHCI_TRB_BUDGET);
-            (void)usb_poll_devices(screen);
-            s_async_rt_stats.input_gap_us = input_gap;
-            if (input_gap > s_async_rt_stats.input_gap_max_us)
-                s_async_rt_stats.input_gap_max_us = input_gap;
-            s_async_rt_stats.trb_per_input = trbs;
-            if (trbs > s_async_rt_stats.trb_max)
-                s_async_rt_stats.trb_max = trbs;
+            input_plane_task(screen, now);
+            if (!s_async_irq_active) {
+                /* Cooperative path owns cadence telemetry; when the IRQ plane
+                 * is armed the ISR records it instead. */
+                uint32_t input_gap = now - last_input_us;
+                s_async_rt_stats.input_gap_us = input_gap;
+                if (input_gap > s_async_rt_stats.input_gap_max_us)
+                    s_async_rt_stats.input_gap_max_us = input_gap;
+                s_async_rt_stats.trb_per_input = trbs;
+                if (trbs > s_async_rt_stats.trb_max)
+                    s_async_rt_stats.trb_max = trbs;
+            }
+            last_input_us = now;
+            uint32_t in_cost = *(volatile uint32_t *)(TIMER_BASE + 0x04) - t_in;
+            if (in_cost > s_input_wcet_us) s_input_wcet_us = in_cost;
+            /* Advance the absolute deadline; bound catch-up to 100 periods. */
+            do { next_input_us += ASYNC_INPUT_PERIOD_US; }
+            while ((int32_t)(now - next_input_us) >= 0 &&
+                   (uint32_t)(now - next_input_us) < 100u * ASYNC_INPUT_PERIOD_US);
         }
 
         /* Present at most 8 KiB of pixels per trip around the loop. */
@@ -770,8 +827,13 @@ static void launch_pi4_desktop_session(uint32_t *gpu_fb)
             s_present_cursor_dirty = 0;
         }
 
-        /* UI/PRESENT plane: lower-rate and bounded, independent from xHCI. */
-        if ((uint32_t)(now - last_paint_us) >= ASYNC_UI_PERIOD_US) {
+        /* ── UI plane: period 8.33 ms, budget ASYNC_UI_BUDGET_US ─────────
+         * Drains a bounded number of events, then renders into the
+         * backbuffer and arms the banded presenter.  Equal priority with the
+         * INPUT plane: serviced by absolute deadline, never blocks input. */
+        if ((int32_t)(now - next_ui_us) >= 0) {
+        uint32_t t_ui = now;
+        int redraw = 0;
         for (uint32_t ev_iter = 0; ev_iter < ASYNC_UI_EVENT_BUDGET && get_evt(&ev, 0) == E_OK; ev_iter++) {
             if (ev.type == EV_KEY_DOWN && ev.key == 0x1B /* Escape */) {
                 s_gui_active = 0;
@@ -805,7 +867,6 @@ static void launch_pi4_desktop_session(uint32_t *gpu_fb)
             if (s_present_dma_enabled && bcm2711_dma_is_busy(0)) {
                 s_present_pending = 1;
             } else {
-            last_paint_us = now;
             if (s_present_fast_key_update && s_present_dma_enabled) {
                 WND *top = get_top_wnd();
                 if (top && top->visible) {
@@ -851,6 +912,12 @@ static void launch_pi4_desktop_session(uint32_t *gpu_fb)
             }
             }
         }
+        uint32_t ui_cost = *(volatile uint32_t *)(TIMER_BASE + 0x04) - t_ui;
+        if (ui_cost > s_ui_wcet_us) s_ui_wcet_us = ui_cost;
+        /* Advance the absolute UI deadline; bound catch-up to 100 periods. */
+        do { next_ui_us += ASYNC_UI_PERIOD_US; }
+        while ((int32_t)(now - next_ui_us) >= 0 &&
+               (uint32_t)(now - next_ui_us) < 100u * ASYNC_UI_PERIOD_US);
         }
 
         if ((!s_present_dma_enabled || !bcm2711_dma_is_busy(0)) &&
@@ -1018,8 +1085,69 @@ void blit_backbuffer_to_fb(volatile uint32_t *gpu_fb) {
 
 static volatile uint32_t s_system_ticks = 0;
 
+/* ═══════════════════════════════════════════════════════════════════
+ * ASYNC.txt IRQ Input Plane (input_plane_on_irq)
+ *
+ * Runs in real 1 kHz timer interrupt context (GIC-400 PPI 30, armed by
+ * arm64_irq_init after xhci_init).  Strictly bounded:
+ *   1. drain at most ASYNC_ISR_TRB_BUDGET xHCI TRBs into SPSC rings
+ *   2. fold at most ASYNC_ISR_MOUSE_BUDGET decoded mouse reports into the
+ *      wait-free seqlock pointer snapshot
+ *   3. record cadence/WCET telemetry and return
+ * No rendering, no mailbox calls, no allocation, no event dispatch.
+ * ═══════════════════════════════════════════════════════════════════ */
 void rpi_timer_tick(void) {
     s_system_ticks++;
+    if (!s_async_irq_active) return;
+
+    uint32_t t0 = *(volatile uint32_t *)(TIMER_BASE + 0x04);
+    if (s_irq_prev_us != 0) {
+        uint32_t gap = t0 - s_irq_prev_us;
+        s_async_rt_stats.input_gap_us = gap;
+        if (gap > s_async_rt_stats.input_gap_max_us)
+            s_async_rt_stats.input_gap_max_us = gap;
+    }
+    s_irq_prev_us = t0;
+
+    if (g_use_xhci) {
+        uint32_t trbs = xhci_process_events_bounded(ASYNC_ISR_TRB_BUDGET);
+        s_async_rt_stats.trb_per_input = trbs;
+        if (trbs > s_async_rt_stats.trb_max)
+            s_async_rt_stats.trb_max = trbs;
+    }
+
+    /* Fold decoded mouse reports into the monotonic seqlock accumulators.
+     * The INPUT worker diffs against its own last-consumed snapshot, so
+     * batches coalesce losslessly without a reset handshake. */
+    usb_mouse_report_t rep;
+    int32_t dx = 0, dy = 0, wheel = 0;
+    uint8_t buttons = 0;
+    int got = 0;
+    for (uint32_t i = 0; i < ASYNC_ISR_MOUSE_BUDGET && xhci_poll_mouse(&rep); i++) {
+        dx += (int32_t)rep.dx;
+        dy += (int32_t)rep.dy;
+        wheel += (int32_t)rep.wheel;
+        buttons = rep.buttons;
+        got = 1;
+    }
+    if (got) {
+        uint32_t seq = s_pointer_slot.seq;
+        s_pointer_slot.seq = seq + 1;             /* odd: update in progress */
+        __asm__ volatile("dmb sy" : : : "memory");
+        s_pointer_slot.acc_dx += dx;
+        s_pointer_slot.acc_dy += dy;
+        s_pointer_slot.acc_wheel += wheel;
+        s_pointer_slot.buttons = buttons;
+        s_pointer_slot.present = 1;
+        if (dx != 0 || dy != 0) s_pointer_slot.motion_seq++;
+        __asm__ volatile("dmb sy" : : : "memory");
+        s_pointer_slot.seq = seq + 2;             /* even: stable */
+    }
+
+    uint32_t isr_us = *(volatile uint32_t *)(TIMER_BASE + 0x04) - t0;
+    s_async_rt_stats.isr_us = isr_us;
+    if (isr_us > s_async_rt_stats.isr_max_us)
+        s_async_rt_stats.isr_max_us = isr_us;
 }
 
 extern ER _tk_slp_tsk(W tmout);
@@ -1045,7 +1173,10 @@ ER tk_dly_tsk(W dlytim) {
 
 ER get_tim(SYSTIME *p_time) {
     if (!p_time) return E_PAR;
-    *p_time = (uint64_t)((s_system_ticks * 1000) / 60);
+    /* The ASYNC IRQ plane ticks at 1 kHz, so ticks are milliseconds
+     * directly.  (Previously the 60 Hz assumption never held: no hardware
+     * timer IRQ existed and this always returned 0.) */
+    *p_time = (uint64_t)s_system_ticks;
     return E_OK;
 }
 
@@ -1251,17 +1382,195 @@ static inline __attribute__((unused)) int32_t mouse_accelerate_subpixel(int32_t 
     }
 }
 
+/* ─────────────────────────────────────────────────────────────────
+ * Shared HID integration helpers.
+ * Used by BOTH the legacy cooperative drainer (usb_poll_devices) and the
+ * ASYNC.txt 1 ms INPUT worker (input_plane_task).  These run in task
+ * context only — never in the ISR.
+ * ───────────────────────────────────────────────────────────────── */
+
+/* One decoded keyboard report -> KEY_DOWN/KEY_UP events + repeat arming. */
+static void kbd_report_to_events(const usb_kbd_report_t *rep, uint32_t now_us) {
+    uint8_t scancode = rep->keys[0];
+    if (scancode != 0) {
+        if (scancode != g_prev_kbd_scancode) {
+            uint32_t k = dwc2_usb_to_btron_key(scancode, rep->modifiers);
+            if (k != 0) {
+                uint16_t bmod = usb_to_btron_modifiers(rep->modifiers);
+                EVT ev;
+                ev.type   = EV_KEY_DOWN;
+                ev.key    = k;
+                ev.data   = (VW)(uintptr_t)bmod;
+                ev.pos.x  = s_mouse_x;
+                ev.pos.y  = s_mouse_y;
+                ev.button = 0;
+                snd_evt(&ev);
+                s_async_rt_stats.key_enqueue_us = now_us;
+
+                /* Arm hardware-like responsive key repeat */
+                s_held_kbd_scancode = scancode;
+                s_held_kbd_modifiers = rep->modifiers;
+                s_key_press_time_us = now_us;
+                s_key_last_repeat_us = now_us;
+            }
+        }
+    } else {
+        if (g_prev_kbd_scancode != 0) {
+            uint32_t k = dwc2_usb_to_btron_key(g_prev_kbd_scancode, 0);
+            if (k != 0) {
+                EVT ev;
+                ev.type   = EV_KEY_UP;
+                ev.key    = k;
+                ev.data   = 0;
+                ev.pos.x  = s_mouse_x;
+                ev.pos.y  = s_mouse_y;
+                ev.button = 0;
+                snd_evt(&ev);
+            }
+            /* Disarm key repeat */
+            s_held_kbd_scancode = 0;
+            s_held_kbd_modifiers = 0;
+        }
+    }
+    g_prev_kbd_scancode = scancode;
+}
+
+/* Key auto-repeat timer for the currently held key. */
+static void kbd_repeat_check(uint32_t now_us) {
+    if (!g_kbd_repeat_enabled || s_held_kbd_scancode == 0) return;
+    if ((now_us - s_key_press_time_us) < g_kbd_repeat_delay_us) return;
+    if ((now_us - s_key_last_repeat_us) < g_kbd_repeat_interval_us) return;
+    s_key_last_repeat_us = now_us;
+    uint32_t k = dwc2_usb_to_btron_key(s_held_kbd_scancode, s_held_kbd_modifiers);
+    uint16_t bmod = usb_to_btron_modifiers(s_held_kbd_modifiers);
+    if (k != 0) {
+        EVT ev;
+        ev.type   = EV_KEY_DOWN;
+        ev.key    = k;
+        ev.data   = (VW)(uintptr_t)bmod;
+        ev.pos.x  = s_mouse_x;
+        ev.pos.y  = s_mouse_y;
+        ev.button = 0;
+        snd_evt(&ev);
+    }
+}
+
+/* Raw HID delta batch -> accelerate -> integrate -> clamp -> gated MOVE. */
+static void mouse_motion_apply(int32_t rdx, int32_t rdy) {
+    if (rdx == 0 && rdy == 0) return;
+
+    int32_t move_x = 0, move_y = 0;
+    if (g_mouse_accel_profile == 0) {
+        /* Profile 0: RISC OS MouseStep Stepped Accelerator (Archimedes 2.0x default) */
+        move_x = mouse_accelerate_subpixel_riscos(rdx, &s_mouse_sub_x);
+        move_y = mouse_accelerate_subpixel_riscos(rdy, &s_mouse_sub_y);
+    } else if (g_mouse_accel_profile == 1) {
+        /* Profile 1: Haiku OS / BeOS 2D Velocity Vector Accelerator */
+        mouse_accelerate_pair_haiku(rdx, rdy, &move_x, &move_y);
+    } else {
+        /* Profile 2: Raw 1:1 unaccelerated */
+        move_x = mouse_accelerate_subpixel_raw(rdx, &s_mouse_sub_x);
+        move_y = mouse_accelerate_subpixel_raw(rdy, &s_mouse_sub_y);
+    }
+
+    int32_t nx = (int32_t)s_mouse_x + move_x;
+    int32_t ny = (int32_t)s_mouse_y + move_y;
+    if (nx < 0) nx = 0;
+    else if (nx >= BTRON_SCREEN_W) nx = BTRON_SCREEN_W - 1;
+    if (ny < 0) ny = 0;
+    else if (ny >= BTRON_SCREEN_H) ny = BTRON_SCREEN_H - 1;
+
+    int pos_changed = ((H)nx != s_mouse_x || (H)ny != s_mouse_y);
+    s_mouse_x = (H)nx;
+    s_mouse_y = (H)ny;
+    set_baremetal_mouse_pos(s_mouse_x, s_mouse_y);
+
+    /* Gate EV_MOUSE_MOVE: only enqueue to system event queue if UI needs it
+     * (menu open, button pressed/dragged, tab sliding, or top menu hover).
+     * Passive cursor movement is already rendered to GPU front buffer with
+     * zero latency.  MOVE is the droppable/coalescable class; KEY and
+     * BUTTON events are never gated (ASYNC.txt §3). */
+    if (pos_changed &&
+        (global_menu_is_open() || tracker_is_menu_open() ||
+         g_prev_mouse_btns != 0 || wnd_mgr_is_interacting() ||
+         s_mouse_y <= 25)) {
+        EVT ev;
+        ev.type   = EV_MOUSE_MOVE;
+        ev.pos.x  = s_mouse_x;
+        ev.pos.y  = s_mouse_y;
+        ev.button = 0;
+        ev.data   = 0;
+        snd_evt(&ev);
+    }
+}
+
+/* Latest raw HID button byte -> RISC OS Select/Adjust/Menu edge events. */
+static void mouse_buttons_apply(uint8_t raw) {
+    uint8_t btn_left   = (raw & 1u);
+    uint8_t btn_right  = (raw & 2u) >> 1;
+    uint8_t btn_middle = (raw & 4u) >> 2;
+
+    /* RISC OS 3-Button Model:
+     * Button 1: Select (Left, or Right if swapped)
+     * Button 2: Adjust (Right, or Left if swapped)
+     * Button 3: Menu   (Middle / Wheel Click)
+     */
+    uint8_t sel_raw = g_mouse_swap_select_adjust ? btn_right : btn_left;
+    uint8_t adj_raw = g_mouse_swap_select_adjust ? btn_left  : btn_right;
+
+    uint8_t sel_prev = (g_prev_mouse_btns & 1u);
+    uint8_t adj_prev = (g_prev_mouse_btns & 2u) >> 1;
+    uint8_t mid_prev = (g_prev_mouse_btns & 4u) >> 2;
+    g_prev_mouse_btns = (sel_raw) | (adj_raw << 1) | (btn_middle << 2);
+
+    /* Select Button (Button 1) */
+    if (sel_raw != sel_prev) {
+        EVT ev;
+        ev.type   = sel_raw ? EV_BUT_DOWN : EV_BUT_UP;
+        ev.button = 1; /* Select */
+        ev.pos.x  = s_mouse_x;
+        ev.pos.y  = s_mouse_y;
+        ev.key    = 0;
+        ev.data   = 0;
+        snd_evt(&ev);
+    }
+
+    /* Adjust Button (Button 2) */
+    if (adj_raw != adj_prev) {
+        EVT ev;
+        ev.type   = adj_raw ? EV_BUT_DOWN : EV_BUT_UP;
+        ev.button = 2; /* Adjust */
+        ev.pos.x  = s_mouse_x;
+        ev.pos.y  = s_mouse_y;
+        ev.key    = 0;
+        ev.data   = 0;
+        snd_evt(&ev);
+    }
+
+    /* Menu Button (Button 3) */
+    if (btn_middle != mid_prev) {
+        EVT ev;
+        ev.type   = btn_middle ? EV_BUT_DOWN : EV_BUT_UP;
+        ev.button = 3; /* Menu */
+        ev.pos.x  = s_mouse_x;
+        ev.pos.y  = s_mouse_y;
+        ev.key    = 0;
+        ev.data   = 0;
+        snd_evt(&ev);
+    }
+}
+
+/* Legacy cooperative HID drain (QEMU / DWC2 / Pi 3, or xHCI without the
+ * timer IRQ armed).  The caller has already performed the bounded
+ * host-controller drain for this period. */
 static int usb_poll_devices(GDEV *screen) {
     (void)screen;
     int activity = 0;
 
-    /* The 1 kHz INPUT plane has already performed the bounded xHCI drain.
-     * HID integration must stay independent from rendering/presentation. */
-
-    /* 1. Drain pending USB HID Keyboard reports (bounded to queue size) */
-    usb_kbd_report_t kbd_rep;
     uint32_t now_us = *(volatile uint32_t *)(TIMER_BASE + 0x04);
 
+    /* 1. Drain pending USB HID Keyboard reports (bounded) */
+    usb_kbd_report_t kbd_rep;
     for (uint32_t kbd_iter = 0; kbd_iter < ASYNC_HID_REPORT_BUDGET; kbd_iter++) {
         int kbd_got = 0;
         if (g_use_xhci) {
@@ -1270,81 +1579,18 @@ static int usb_poll_devices(GDEV *screen) {
             kbd_got = (dwc2_poll_keyboard(&kbd_rep) > 0);
         }
         if (!kbd_got) break;
-
-        uint8_t scancode = kbd_rep.keys[0];
-        uint16_t bmod = usb_to_btron_modifiers(kbd_rep.modifiers);
-        if (scancode != 0) {
-            if (scancode != g_prev_kbd_scancode) {
-                uint32_t k = dwc2_usb_to_btron_key(scancode, kbd_rep.modifiers);
-                if (k != 0) {
-                    EVT ev;
-                    ev.type   = EV_KEY_DOWN;
-                    ev.key    = k;
-                    ev.data   = (VW)(uintptr_t)bmod;
-                    ev.pos.x  = s_mouse_x;
-                    ev.pos.y  = s_mouse_y;
-                    ev.button = 0;
-                    snd_evt(&ev);
-                    s_async_rt_stats.key_enqueue_us = now_us;
-                    activity = 1;
-
-                    /* Arm hardware-like responsive key repeat */
-                    s_held_kbd_scancode = scancode;
-                    s_held_kbd_modifiers = kbd_rep.modifiers;
-                    s_key_press_time_us = now_us;
-                    s_key_last_repeat_us = now_us;
-                }
-            }
-        } else {
-            if (g_prev_kbd_scancode != 0) {
-                uint32_t k = dwc2_usb_to_btron_key(g_prev_kbd_scancode, 0);
-                if (k != 0) {
-                    EVT ev;
-                    ev.type   = EV_KEY_UP;
-                    ev.key    = k;
-                    ev.data   = 0;
-                    ev.pos.x  = s_mouse_x;
-                    ev.pos.y  = s_mouse_y;
-                    ev.button = 0;
-                    snd_evt(&ev);
-                    activity = 1;
-                }
-                /* Disarm key repeat */
-                s_held_kbd_scancode = 0;
-                s_held_kbd_modifiers = 0;
-            }
-        }
-        g_prev_kbd_scancode = scancode;
+        kbd_report_to_events(&kbd_rep, now_us);
+        activity = 1;
     }
 
-    /* 1b. Check key auto-repeat timer for held key */
-    if (g_kbd_repeat_enabled && s_held_kbd_scancode != 0) {
-        if ((now_us - s_key_press_time_us) >= g_kbd_repeat_delay_us) {
-            if ((now_us - s_key_last_repeat_us) >= g_kbd_repeat_interval_us) {
-                s_key_last_repeat_us = now_us;
-                uint32_t k = dwc2_usb_to_btron_key(s_held_kbd_scancode, s_held_kbd_modifiers);
-                uint16_t bmod = usb_to_btron_modifiers(s_held_kbd_modifiers);
-                if (k != 0) {
-                    EVT ev;
-                    ev.type   = EV_KEY_DOWN;
-                    ev.key    = k;
-                    ev.data   = (VW)(uintptr_t)bmod;
-                    ev.pos.x  = s_mouse_x;
-                    ev.pos.y  = s_mouse_y;
-                    ev.button = 0;
-                    snd_evt(&ev);
-                    activity = 1;
-                }
-            }
-        }
-    }
+    /* 1b. Key auto-repeat */
+    kbd_repeat_check(now_us);
 
-    /* 2. Drain USB HID Mouse reports (same pattern as keyboard) */
+    /* 2. Drain USB HID Mouse reports (bounded) */
     usb_mouse_report_t mouse_rep;
     int32_t accum_dx = 0, accum_dy = 0;
     uint8_t latest_buttons = 0;
     int mouse_activity = 0;
-    int got_buttons = 0;
 
     for (uint32_t m_iter = 0; m_iter < ASYNC_HID_REPORT_BUDGET; m_iter++) {
         int mouse_got = 0;
@@ -1353,127 +1599,75 @@ static int usb_poll_devices(GDEV *screen) {
         } else {
             mouse_got = (dwc2_poll_mouse(&mouse_rep) > 0);
         }
-        if (!mouse_got)
-            break;
-
+        if (!mouse_got) break;
         accum_dx += (int32_t)mouse_rep.dx;
         accum_dy += (int32_t)mouse_rep.dy;
         latest_buttons = mouse_rep.buttons;
-        got_buttons = 1;
         mouse_activity = 1;
     }
 
     if (mouse_activity) {
-        if (accum_dx != 0 || accum_dy != 0) {
-            int32_t rdx = accum_dx;
-            int32_t rdy = accum_dy;
-
-            int32_t move_x = 0, move_y = 0;
-            if (g_mouse_accel_profile == 0) {
-                /* Profile 0: RISC OS MouseStep Stepped Accelerator (Archimedes 2.0x default) */
-                move_x = mouse_accelerate_subpixel_riscos(rdx, &s_mouse_sub_x);
-                move_y = mouse_accelerate_subpixel_riscos(rdy, &s_mouse_sub_y);
-            } else if (g_mouse_accel_profile == 1) {
-                /* Profile 1: Haiku OS / BeOS 2D Velocity Vector Accelerator */
-                mouse_accelerate_pair_haiku(rdx, rdy, &move_x, &move_y);
-            } else {
-                /* Profile 2: Raw 1:1 unaccelerated */
-                move_x = mouse_accelerate_subpixel_raw(rdx, &s_mouse_sub_x);
-                move_y = mouse_accelerate_subpixel_raw(rdy, &s_mouse_sub_y);
-            }
-
-            int32_t nx = (int32_t)s_mouse_x + move_x;
-            int32_t ny = (int32_t)s_mouse_y + move_y;
-            if (nx < 0) nx = 0;
-            else if (nx >= BTRON_SCREEN_W) nx = BTRON_SCREEN_W - 1;
-            if (ny < 0) ny = 0;
-            else if (ny >= BTRON_SCREEN_H) ny = BTRON_SCREEN_H - 1;
-
-            H new_x = (H)nx;
-            H new_y = (H)ny;
-            int pos_changed = (new_x != s_mouse_x || new_y != s_mouse_y);
-            s_mouse_x = new_x;
-            s_mouse_y = new_y;
-            set_baremetal_mouse_pos(s_mouse_x, s_mouse_y);
-
-            /* Gate EV_MOUSE_MOVE: only enqueue to system event queue if UI needs it
-             * (menu open, button pressed/dragged, tab sliding, or top menu hover).
-             * Passive cursor movement is already rendered to GPU front buffer with zero latency. */
-            if (pos_changed &&
-                (global_menu_is_open() || tracker_is_menu_open() ||
-                g_prev_mouse_btns != 0 || wnd_mgr_is_interacting() ||
-                s_mouse_y <= 25)) {
-                EVT ev;
-                ev.type   = EV_MOUSE_MOVE;
-                ev.pos.x  = s_mouse_x;
-                ev.pos.y  = s_mouse_y;
-                ev.button = 0;
-                ev.data   = 0;
-                snd_evt(&ev);
-            }
-            activity = 1;
-        }
-
-        if (got_buttons) {
-            uint8_t btn_left   = (latest_buttons & 1u);
-            uint8_t btn_right  = (latest_buttons & 2u) >> 1;
-            uint8_t btn_middle = (latest_buttons & 4u) >> 2;
-
-            /* RISC OS 3-Button Model:
-             * Button 1: Select (Left, or Right if swapped)
-             * Button 2: Adjust (Right, or Left if swapped)
-             * Button 3: Menu   (Middle / Wheel Click)
-             */
-            uint8_t sel_raw = g_mouse_swap_select_adjust ? btn_right : btn_left;
-            uint8_t adj_raw = g_mouse_swap_select_adjust ? btn_left  : btn_right;
-
-            uint8_t sel_prev = (g_prev_mouse_btns & 1u);
-            uint8_t adj_prev = (g_prev_mouse_btns & 2u) >> 1;
-            uint8_t mid_prev = (g_prev_mouse_btns & 4u) >> 2;
-            g_prev_mouse_btns = (sel_raw) | (adj_raw << 1) | (btn_middle << 2);
-
-            /* Select Button (Button 1) */
-            if (sel_raw != sel_prev) {
-                EVT ev;
-                ev.type   = sel_raw ? EV_BUT_DOWN : EV_BUT_UP;
-                ev.button = 1; /* Select */
-                ev.pos.x  = s_mouse_x;
-                ev.pos.y  = s_mouse_y;
-                ev.key    = 0;
-                ev.data   = 0;
-                snd_evt(&ev);
-                activity = 1;
-            }
-
-            /* Adjust Button (Button 2) */
-            if (adj_raw != adj_prev) {
-                EVT ev;
-                ev.type   = adj_raw ? EV_BUT_DOWN : EV_BUT_UP;
-                ev.button = 2; /* Adjust */
-                ev.pos.x  = s_mouse_x;
-                ev.pos.y  = s_mouse_y;
-                ev.key    = 0;
-                ev.data   = 0;
-                snd_evt(&ev);
-                activity = 1;
-            }
-
-            /* Menu Button (Button 3) */
-            if (btn_middle != mid_prev) {
-                EVT ev;
-                ev.type   = btn_middle ? EV_BUT_DOWN : EV_BUT_UP;
-                ev.button = 3; /* Menu */
-                ev.pos.x  = s_mouse_x;
-                ev.pos.y  = s_mouse_y;
-                ev.key    = 0;
-                ev.data   = 0;
-                snd_evt(&ev);
-                activity = 1;
-            }
-        }
+        mouse_motion_apply(accum_dx, accum_dy);
+        mouse_buttons_apply(latest_buttons);
+        activity = 1;
     }
 
     return activity;
+}
+
+/* ─────────────────────────────────────────────────────────────────
+ * ASYNC.txt INPUT worker (TASK_INPUT, fixed 1 ms period).
+ *
+ * IRQ plane armed: seqlock snapshot read (wait-free, bounded retry),
+ * diff monotonic accumulators, integrate/accelerate, emit KEY/BUTTON
+ * edges and gated MOVE.  Never touches the xHCI event ring — the ISR
+ * owns it.
+ *
+ * IRQ plane inactive: legacy bounded cooperative drain.
+ * ───────────────────────────────────────────────────────────────── */
+static void input_plane_task(GDEV *screen, uint32_t now_us) {
+    if (!s_async_irq_active) {
+        (void)usb_poll_devices(screen);
+        return;
+    }
+
+    /* Wait-free seqlock read of the pointer snapshot */
+    pointer_snapshot_t snap;
+    uint32_t s1, s2;
+    do {
+        s1 = s_pointer_slot.seq;
+        __asm__ volatile("dmb sy" : : : "memory");
+        snap.acc_dx    = s_pointer_slot.acc_dx;
+        snap.acc_dy    = s_pointer_slot.acc_dy;
+        snap.acc_wheel = s_pointer_slot.acc_wheel;
+        snap.buttons   = s_pointer_slot.buttons;
+        snap.present   = s_pointer_slot.present;
+        snap.motion_seq = s_pointer_slot.motion_seq;
+        __asm__ volatile("dmb sy" : : : "memory");
+        s2 = s_pointer_slot.seq;
+    } while ((s1 & 1u) != 0 || s1 != s2);
+
+    /* Diff against last-consumed snapshot: lossless MOVE coalescing */
+    int32_t rdx = snap.acc_dx - s_input_last.acc_dx;
+    int32_t rdy = snap.acc_dy - s_input_last.acc_dy;
+    s_input_last = snap;
+
+    if (snap.present && (rdx != 0 || rdy != 0))
+        mouse_motion_apply(rdx, rdy);
+
+    /* Buttons: latest-state snapshot; edges are detected against our own
+     * previous view so no BUTTON event is ever lost. */
+    if (snap.buttons != s_input_prev_buttons) {
+        mouse_buttons_apply(snap.buttons);
+        s_input_prev_buttons = snap.buttons;
+    }
+
+    /* Keyboard: drain the SPSC ring (ISR is the sole producer) */
+    usb_kbd_report_t kbd_rep;
+    for (uint32_t i = 0; i < ASYNC_HID_REPORT_BUDGET && xhci_poll_keyboard(&kbd_rep); i++) {
+        kbd_report_to_events(&kbd_rep, now_us);
+    }
+    kbd_repeat_check(now_us);
 }
 
 /* ═══════════════════════════════════════════════════════════════════
@@ -1639,6 +1833,82 @@ void btron_main(void) {
             dwc2_init();
         } else if (!g_use_xhci) {
             fb_log("[USB] xHCI Controller failed to initialize on Pi 400.\n");
+        }
+
+        /* Arm the ASYNC.txt 1 kHz IRQ input plane — only after the xHCI
+         * host controller is fully enumerated, so the ISR never observes
+         * half-initialized rings. */
+        if (g_use_xhci) {
+            extern int arm64_irq_init(uint32_t hz);
+            extern void arm64_irq_disable(void);
+            extern void (*g_arm64_timer_hook)(void);
+            g_arm64_timer_hook = rpi_timer_tick;
+            fb_log("[IRQ] -> arm64_irq_init(1000)\n");
+            int irq_ret = arm64_irq_init(1000);
+            fb_log("[IRQ] <- arm64_irq_init ret="); fb_log_dec((uint32_t)irq_ret); fb_log("\n");
+            if (irq_ret == 0) {
+                /* Confirm ticks actually arrive before trusting the IRQ plane.
+                 * Arming s_async_irq_active gates the cooperative xHCI drain
+                 * off everywhere, so if the timer/GIC never delivers (an EL or
+                 * firmware variant we did not anticipate) input would be dead.
+                 * Poll for up to 50 ms; if s_system_ticks never advances, tear
+                 * the timer down and keep the cooperative path. */
+                uint32_t tick0 = s_system_ticks;
+                uint32_t t_start = *(volatile uint32_t *)(TIMER_BASE + 0x04);
+                int confirmed = 0;
+                for (int i = 0; i < 400000; i++) {
+                    if (s_system_ticks != tick0) { confirmed = 1; break; }
+                    if ((*(volatile uint32_t *)(TIMER_BASE + 0x04) - t_start) > 50000u) break;
+                }
+                if (confirmed) {
+                    s_async_irq_active = 1;
+                    fb_log("[IRQ] 1 kHz ASYNC input plane armed.\n");
+                } else {
+                    /* No real tick.  Dump GIC/timer state so we can tell a
+                     * broken GIC->CPU delivery path from a timer that never
+                     * asserts its PPI.  selftest_seen=1 => the forced-pending
+                     * IRQ WAS taken (delivery OK, timer at fault); =0 => the
+                     * CPU never took the IRQ (vector/mask/routing at fault). */
+                    typedef struct {
+                        uint32_t el, timer_intid, dispatch_hits, selftest_seen;
+                        uint32_t cfg_idx;
+                        uint32_t gicd_typer, gicd_ctlr, gicd_igroupr0;
+                        uint32_t gicd_isenabler0, gicd_ispendr0;
+                        uint32_t gicc_ctlr, gicc_pmr, gicc_hppir, gicc_iidr;
+                        uint32_t cnthp_ctl, cntp_ctl, cntfrq;
+                    } irqdiag_t;
+                    extern void arm64_irq_get_diag(irqdiag_t *);
+                    irqdiag_t d;
+                    arm64_irq_get_diag(&d);
+                    fb_log("[IRQ] No tick in 50ms; cooperative fallback.\n");
+                    fb_log("[IRQ] EL=");       fb_log_dec(d.el);
+                    fb_log(" intid=");         fb_log_dec(d.timer_intid);
+                    fb_log(" selftest=");      fb_log_dec(d.selftest_seen);
+                    fb_log(" cfg=");           fb_log_dec(d.cfg_idx);
+                    fb_log(" hits=");          fb_log_dec(d.dispatch_hits);
+                    fb_log("\n");
+                    fb_log("[IRQ] GICD ty=");  fb_log_hex32(d.gicd_typer);
+                    fb_log(" ctlr=");          fb_log_hex32(d.gicd_ctlr);
+                    fb_log(" igroup=");        fb_log_hex32(d.gicd_igroupr0);
+                    fb_log(" enab=");          fb_log_hex32(d.gicd_isenabler0);
+                    fb_log(" pend=");          fb_log_hex32(d.gicd_ispendr0);
+                    fb_log("\n");
+                    fb_log("[IRQ] GICC ctlr=");fb_log_hex32(d.gicc_ctlr);
+                    fb_log(" pmr=");           fb_log_hex32(d.gicc_pmr);
+                    fb_log(" hppir=");         fb_log_hex32(d.gicc_hppir);
+                    fb_log(" iidr=");          fb_log_hex32(d.gicc_iidr);
+                    fb_log("\n");
+                    fb_log("[IRQ] CNTHP=");    fb_log_hex32(d.cnthp_ctl);
+                    fb_log(" CNTP=");          fb_log_hex32(d.cntp_ctl);
+                    fb_log(" CNTFRQ=");        fb_log_dec(d.cntfrq);
+                    fb_log("\n");
+                    arm64_irq_disable();
+                    g_arm64_timer_hook = 0;
+                }
+            } else {
+                g_arm64_timer_hook = 0;
+                fb_log("[IRQ] Timer IRQ unavailable; cooperative input path.\n");
+            }
         }
         fb_log("[USB] USB Subsystem ready.\n");
     } else {

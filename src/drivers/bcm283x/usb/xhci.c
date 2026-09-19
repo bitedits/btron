@@ -95,8 +95,11 @@ static volatile xhci_trb_t * const        s_event_ring = (volatile xhci_trb_t *)
 #define DMA_SCRATCH_BUF      ((volatile uint8_t *)(XHCI_DMA_BASE + 0x18000)) /* 4KB scratch buffer */
 static volatile usb_kbd_report_t * const  s_kbd_buf    = (volatile usb_kbd_report_t *)(XHCI_DMA_BASE + 0x19000);
 
-/* Multi-mouse DMA buffers (up to 4 mice): each mouse gets 64 bytes */
-#define MOUSE_BUF(idx)       ((volatile uint8_t *)(XHCI_DMA_BASE + 0x19100 + (idx) * 64))
+/* Four in-flight interrupt transfers per mouse.  This range remains well
+ * below the controller scratch pages at +0x40000. */
+#define XHCI_MOUSE_TRB_DEPTH 4
+#define MOUSE_BUF(mouse, trb) ((volatile uint8_t *)(XHCI_DMA_BASE + 0x1A000 + \
+                              (((mouse) * XHCI_MOUSE_TRB_DEPTH + (trb)) * 64)))
 
 static uintptr_t s_cap_base = 0;
 static uintptr_t s_op_base  = 0;
@@ -122,7 +125,7 @@ static uint32_t s_kbd_mps   = 8;
 typedef struct {
     int               slot_id;
     uint32_t          mps;
-    volatile uint8_t *buf;
+    volatile uint8_t *buf[XHCI_MOUSE_TRB_DEPTH];
     uint8_t           proto_mode; /* 0 = auto-detect, 1 = Boot Protocol (8-bit), 2 = Report ID 1 (16-bit) */
 } xhci_mouse_t;
 
@@ -141,9 +144,9 @@ static volatile int32_t s_accum_wheel = 0;
 static volatile uint8_t s_latest_buttons = 0;
 static volatile int s_has_mouse = 0;
 
-static void xhci_decode_mouse_report(xhci_mouse_t *mouse, uint32_t transferred, usb_mouse_report_t *out) {
-    if (!mouse || !mouse->buf || !out) return;
-    const volatile uint8_t *raw = mouse->buf;
+static void xhci_decode_mouse_report(xhci_mouse_t *mouse, const volatile uint8_t *raw,
+                                     uint32_t transferred, usb_mouse_report_t *out) {
+    if (!mouse || !raw || !out) return;
 
     /* Auto-detect protocol mode if not explicitly locked:
      * - Gaming mice with Report ID 1 (e.g. Logitech G102/G203 LIGHTSYNC) prepend
@@ -196,7 +199,24 @@ static void xhci_decode_mouse_report(xhci_mouse_t *mouse, uint32_t transferred, 
 
 static void xhci_queue_ep1_transfer(uint32_t slot_id, uintptr_t buf_addr, uint32_t len);
 
-static void xhci_handle_transfer_event(uint32_t ev_slot, uint32_t ev_epid, uint32_t ev_code, uint32_t ev_status) {
+/* Transfer Event Parameter is the completed transfer TRB pointer when Event
+ * Data is not used.  Its Normal TRB contains the DMA buffer to recycle. */
+static volatile uint8_t *xhci_ep1_event_buffer(uint32_t slot_id, uint64_t event_param) {
+    volatile xhci_trb_t *ring;
+    uintptr_t trb_addr, ring_start, ring_end;
+
+    if (slot_id == 0 || slot_id > XHCI_MAX_SLOTS) return NULL;
+    ring = EP1_RING_BASE(slot_id);
+    trb_addr = (uintptr_t)(event_param & ~0xFULL);
+    ring_start = (uintptr_t)ring;
+    ring_end = ring_start + (XHCI_RING_SIZE - 1) * sizeof(*ring);
+    if (trb_addr < ring_start || trb_addr >= ring_end ||
+        ((trb_addr - ring_start) % sizeof(*ring)) != 0) return NULL;
+    return (volatile uint8_t *)(uintptr_t)((volatile xhci_trb_t *)trb_addr)->param;
+}
+
+static void xhci_handle_transfer_event(uint32_t ev_slot, uint32_t ev_epid, uint32_t ev_code,
+                                       uint32_t ev_status, uint64_t ev_param) {
     if (ev_slot == (uint32_t)s_kbd_slot_id && ev_epid == 3) {
         if (ev_code == 1 || ev_code == 13 /* Success or Short Packet */) {
             if (s_kbd_q_count < XHCI_KBD_QUEUE_SIZE) {
@@ -212,17 +232,19 @@ static void xhci_handle_transfer_event(uint32_t ev_slot, uint32_t ev_epid, uint3
     /* Check all registered mice */
     for (int m = 0; m < s_num_mice; m++) {
         if (ev_slot == (uint32_t)s_mice[m].slot_id && ev_epid == 3) {
+            volatile uint8_t *buf = xhci_ep1_event_buffer(ev_slot, ev_param);
+            if (!buf) return; /* Never recycle an ambiguous DMA buffer. */
             if (ev_code == 1 || ev_code == 13) {
                 uint32_t rem = ev_status & 0xFFFFFF;
                 uint32_t transferred = (rem <= s_mice[m].mps) ? (s_mice[m].mps - rem) : s_mice[m].mps;
                 if (transferred == 0) transferred = s_mice[m].mps;
 
                 usb_mouse_report_t temp_rep = {0};
-                xhci_decode_mouse_report(&s_mice[m], transferred, &temp_rep);
+                xhci_decode_mouse_report(&s_mice[m], buf, transferred, &temp_rep);
 
                 /* Zero out the DMA buffer after consumption so stale bytes never leak into subsequent reports */
                 for (uint32_t b = 0; b < s_mice[m].mps; b++) {
-                    s_mice[m].buf[b] = 0;
+                    buf[b] = 0;
                 }
                 dsb();
 
@@ -232,7 +254,9 @@ static void xhci_handle_transfer_event(uint32_t ev_slot, uint32_t ev_epid, uint3
                 s_latest_buttons = temp_rep.buttons;
                 s_has_mouse = 1;
             }
-            xhci_queue_ep1_transfer(s_mice[m].slot_id, (uintptr_t)s_mice[m].buf, s_mice[m].mps);
+            /* Recycle only the completed buffer.  The other transfers remain
+             * in flight, removing the old single-TRB host idle gap. */
+            xhci_queue_ep1_transfer(s_mice[m].slot_id, (uintptr_t)buf, s_mice[m].mps);
             return;
         }
     }
@@ -284,7 +308,9 @@ static int xhci_cmd_submit(uint64_t param, uint32_t status, uint32_t trb_type, u
             uint32_t ev_type = (ev_ctrl >> 10) & 0x3F;
             uint32_t ev_slot = (ev_ctrl >> 24) & 0xFF;
             uint32_t ev_epid = (ev_ctrl >> 16) & 0x1F;
-            uint32_t ev_completion_code = (s_event_ring[ev_idx].status >> 24) & 0xFF;
+            uint32_t ev_status = s_event_ring[ev_idx].status;
+            uint64_t ev_param = s_event_ring[ev_idx].param;
+            uint32_t ev_completion_code = (ev_status >> 24) & 0xFF;
 
             /* Advance Event Dequeue */
             s_event_dequeue_idx++;
@@ -302,8 +328,7 @@ static int xhci_cmd_submit(uint64_t param, uint32_t status, uint32_t trb_type, u
                 if (out_slot_id) *out_slot_id = ev_slot;
                 return (ev_completion_code == 1 /* Success */) ? 0 : (int)ev_completion_code;
             } else if (ev_type == XHCI_TRB_EVT_TRANSFER) {
-                uint32_t ev_code = (s_event_ring[ev_idx].status >> 24) & 0xFF;
-                xhci_handle_transfer_event(ev_slot, ev_epid, ev_code, s_event_ring[ev_idx].status);
+                xhci_handle_transfer_event(ev_slot, ev_epid, ev_completion_code, ev_status, ev_param);
             }
         }
         delay_cycles(20);
@@ -391,7 +416,9 @@ static int xhci_ep0_control_transfer(uint32_t slot_id, uint8_t bmRequestType, ui
             uint32_t ev_type = (ev_ctrl >> 10) & 0x3F;
             uint32_t ev_slot = (ev_ctrl >> 24) & 0xFF;
             uint32_t ev_epid = (ev_ctrl >> 16) & 0x1F;
-            uint32_t ev_code = (s_event_ring[ev_idx].status >> 24) & 0xFF;
+            uint32_t ev_status = s_event_ring[ev_idx].status;
+            uint64_t ev_param = s_event_ring[ev_idx].param;
+            uint32_t ev_code = (ev_status >> 24) & 0xFF;
 
             s_event_dequeue_idx++;
             if (s_event_dequeue_idx >= XHCI_RING_SIZE) {
@@ -419,8 +446,7 @@ static int xhci_ep0_control_transfer(uint32_t slot_id, uint8_t bmRequestType, ui
                 fb_log("\n");
                 return (int)ev_code;
             } else if (ev_type == XHCI_TRB_EVT_TRANSFER) {
-                uint32_t ev_code = (s_event_ring[ev_idx].status >> 24) & 0xFF;
-                xhci_handle_transfer_event(ev_slot, ev_epid, ev_code, s_event_ring[ev_idx].status);
+                xhci_handle_transfer_event(ev_slot, ev_epid, ev_code, ev_status, ev_param);
             } else {
                 fb_log("[XHCI] EP0 Evt (Type=");
                 fb_log_dec(ev_type);
@@ -675,7 +701,7 @@ int xhci_init(uintptr_t mmio_base) {
     for (int i = 0; i < XHCI_MAX_MICE; i++) {
         s_mice[i].slot_id = 0;
         s_mice[i].mps = 0;
-        s_mice[i].buf = NULL;
+        for (int b = 0; b < XHCI_MOUSE_TRB_DEPTH; b++) s_mice[i].buf[b] = NULL;
         s_mice[i].proto_mode = 0;
     }
     s_num_mice = 0;
@@ -801,7 +827,10 @@ int xhci_init(uintptr_t mmio_base) {
         psc |= XHCI_PORT_PP;
         xwrite32(port_reg, psc);
     }
-    delay_us(20000); /* root port power settle */
+    /* The VL805 reports a powered root port synchronously.  Five ms gives the
+     * internal Pi 400 hub time to observe power without adding a fixed 20 ms
+     * to every boot.  The reset below still polls until the port is ready. */
+    delay_us(5000);
 
     /* 10. Check Root Port 1 (High-Speed USB 2.0 Hub on Pi 400) */
     uintptr_t port1_reg = s_op_base + XHCI_OP_PORTSC_BASE;
@@ -850,7 +879,8 @@ int xhci_init(uintptr_t mmio_base) {
             fb_log_dec((uint32_t)ret);
             fb_log("\n");
 
-            delay_us(20000);
+            /* USB 2.0 requires at least 2 ms of recovery after SET_ADDRESS. */
+            delay_us(2000);
 
             /* Read Device Descriptor */
             usb_device_desc_t dev_desc = {0};
@@ -865,30 +895,51 @@ int xhci_init(uintptr_t mmio_base) {
             fb_log_hex32(dev_desc.idProduct);
             fb_log("\n");
 
-            delay_us(10000);
-
             /* Set Configuration 1 */
             ret = xhci_ep0_control_transfer(1, 0x00, USB_REQ_SET_CONFIGURATION, 1, 0, 0, NULL);
             fb_log("[XHCI] Hub SET_CONFIG ret=");
             fb_log_dec((uint32_t)ret);
             fb_log("\n");
 
-            delay_us(10000);
+            /* The configuration status stage has completed, but leave a short
+             * recovery interval for the hub firmware before changing its xHCI
+             * context.  The former pair of 10 ms sleeps were unnecessary. */
+            delay_us(2000);
 
-            /* Evaluate Hub Context (Hub=1, Ports=4) */
-            ret = xhci_evaluate_hub_context(1, 4);
-            fb_log("[XHCI] EVAL_CTX (Hub 4 ports) ret=");
+            /* Obtain the hub's advertised port-power-good interval instead of
+             * imposing a 250 ms worst-case delay.  The Pi 400's internal hub
+             * normally reports its four ports here. */
+            usb_hub_desc_t hub_desc = {0};
+            uint32_t hub_ports = 4;
+            uint32_t hub_power_good_us = 250000; /* safe fallback on error */
+            ret = xhci_ep0_control_transfer(1, 0xA0, USB_REQ_GET_DESCRIPTOR,
+                                            (USB_DT_HUB << 8), 0,
+                                            sizeof(hub_desc), &hub_desc);
+            if (ret == 0 && hub_desc.bDescriptorType == USB_DT_HUB &&
+                hub_desc.bNbrPorts != 0) {
+                hub_ports = hub_desc.bNbrPorts;
+                /* bPwrOn2PwrGood is expressed in 2 ms units. */
+                hub_power_good_us = (uint32_t)hub_desc.bPwrOn2PwrGood * 2000u;
+                if (hub_power_good_us < 2000u) hub_power_good_us = 2000u;
+            }
+
+            /* Evaluate Hub Context before enabling its downstream ports. */
+            ret = xhci_evaluate_hub_context(1, hub_ports);
+            fb_log("[XHCI] EVAL_CTX (Hub ");
+            fb_log_dec(hub_ports);
+            fb_log(" ports) ret=");
             fb_log_dec((uint32_t)ret);
             fb_log("\n");
 
-            /* Power on all 4 Hub ports */
-            for (uint32_t hp = 1; hp <= 4; hp++) {
+            /* Power on each downstream port and wait only as long as this hub
+             * advertises, rather than a fixed 250 ms. */
+            for (uint32_t hp = 1; hp <= hub_ports; hp++) {
                 xhci_ep0_control_transfer(1, 0x23, USB_REQ_SET_FEATURE, HUB_FEAT_PORT_POWER, hp, 0, NULL);
             }
-            delay_us(250000); /* 250ms USB hub port power settle */
+            delay_us(hub_power_good_us);
 
-            /* Scan Hub Ports 1..4 */
-            for (uint32_t hp = 1; hp <= 4; hp++) {
+            /* Scan Hub Ports */
+            for (uint32_t hp = 1; hp <= hub_ports; hp++) {
                 usb_port_status_t pstat = {0};
                 ret = xhci_ep0_control_transfer(1, 0xA3, USB_REQ_GET_STATUS, 0, hp, 4, &pstat);
                 if (ret != 0) continue;
@@ -1091,7 +1142,10 @@ int xhci_init(uintptr_t mmio_base) {
                         if (s_num_mice < XHCI_MAX_MICE) {
                             s_mice[s_num_mice].slot_id = dev_slot;
                             s_mice[s_num_mice].mps = ep1_mps;
-                            s_mice[s_num_mice].buf = MOUSE_BUF(s_num_mice);
+                            for (int b = 0; b < XHCI_MOUSE_TRB_DEPTH; b++) {
+                                s_mice[s_num_mice].buf[b] = MOUSE_BUF(s_num_mice, b);
+                                for (uint32_t j = 0; j < 64; j++) s_mice[s_num_mice].buf[b][j] = 0;
+                            }
                             /* Standard mice (PixArt 0x093A) lock to mode 1 (Standard Boot Protocol).
                              * Logitech mice (VID 0x046D) and other HID mice start in mode 0 auto-detect. */
                             if (ddesc.idVendor == 0x046D) {
@@ -1130,7 +1184,9 @@ int xhci_init(uintptr_t mmio_base) {
         xhci_queue_ep1_transfer(s_kbd_slot_id, (uintptr_t)s_kbd_buf, s_kbd_mps);
     }
     for (int m = 0; m < s_num_mice; m++) {
-        xhci_queue_ep1_transfer(s_mice[m].slot_id, (uintptr_t)s_mice[m].buf, s_mice[m].mps);
+        for (int b = 0; b < XHCI_MOUSE_TRB_DEPTH; b++) {
+            xhci_queue_ep1_transfer(s_mice[m].slot_id, (uintptr_t)s_mice[m].buf[b], s_mice[m].mps);
+        }
     }
 
     return 0;
@@ -1144,8 +1200,9 @@ int xhci_init(uintptr_t mmio_base) {
  * Must be called ONCE before xhci_poll_keyboard() / xhci_poll_mouse().
  * Calling it multiple times per cycle risks re-processing already-handled TRBs. */
 
-void xhci_process_events(void) {
-    for (uint32_t trb_count = 0; trb_count < XHCI_RING_SIZE * 2; trb_count++) {
+uint32_t xhci_process_events_bounded(uint32_t max_trbs) {
+    uint32_t trb_count = 0;
+    for (; trb_count < max_trbs; trb_count++) {
         uint32_t ev_idx = s_event_dequeue_idx;
         uint32_t ev_ctrl = s_event_ring[ev_idx].control;
         if ((ev_ctrl & 1) != s_event_cycle_bit) {
@@ -1156,6 +1213,7 @@ void xhci_process_events(void) {
         uint32_t ev_slot = (ev_ctrl >> 24) & 0xFF;
         uint32_t ev_epid = (ev_ctrl >> 16) & 0x1F;
         uint32_t ev_status = s_event_ring[ev_idx].status;
+        uint64_t ev_param = s_event_ring[ev_idx].param;
         uint32_t ev_code = (ev_status >> 24) & 0xFF;
 
         s_event_dequeue_idx++;
@@ -1170,9 +1228,16 @@ void xhci_process_events(void) {
         dsb();
 
         if (ev_type == XHCI_TRB_EVT_TRANSFER) {
-            xhci_handle_transfer_event(ev_slot, ev_epid, ev_code, ev_status);
+            xhci_handle_transfer_event(ev_slot, ev_epid, ev_code, ev_status, ev_param);
         }
     }
+    return trb_count;
+}
+
+void xhci_process_events(void) {
+    /* Keep legacy polling callers bounded as well.  The asynchronous input
+     * plane supplies its own explicit budget. */
+    (void)xhci_process_events_bounded(32);
 }
 
 int xhci_poll_keyboard(usb_kbd_report_t *rep) {
@@ -1226,4 +1291,3 @@ bool xhci_has_devices(void) {
 }
 
 #endif /* AArch64 */
-

@@ -72,18 +72,32 @@ void bcm2711_dma_wait(int channel) {
     __asm__ volatile("dsb sy" : : : "memory");
 }
 
+int bcm2711_dma_is_busy(int channel) {
+    if (channel < 0 || channel > 14) return 0;
+    return (dma_chan_regs(channel)[BCM_DMA_CS / 4] & BCM_DMA_CS_ACTIVE) != 0;
+}
+
 int bcm2711_dma_blit2d(int channel,
                         uintptr_t dst_addr, int dst_stride,
                         uintptr_t src_addr, int src_stride,
                         uint32_t width_bytes, uint32_t height_rows) {
+    /* Wait for channel to be free */
+    bcm2711_dma_wait(channel);
+    return bcm2711_dma_blit2d_async(channel, dst_addr, dst_stride, src_addr,
+                                    src_stride, width_bytes, height_rows);
+}
+
+int bcm2711_dma_blit2d_async(int channel,
+                              uintptr_t dst_addr, int dst_stride,
+                              uintptr_t src_addr, int src_stride,
+                              uint32_t width_bytes, uint32_t height_rows) {
     if (channel < 0 || channel > 14) return -1;
     if (width_bytes == 0 || height_rows == 0) return 0;
+    if (bcm2711_dma_is_busy(channel)) return 1;
+    bcm2711_dma_wait(channel);
 
     volatile uint32_t *chan = dma_chan_regs(channel);
     volatile bcm2711_dma_cb_t *cb = &s_dma_cbs[channel];
-
-    /* Wait for channel to be free */
-    bcm2711_dma_wait(channel);
 
     /* Fill 2D Stride DMA Control Block */
     cb->ti = BCM_DMA_TI_TDMODE |
@@ -117,14 +131,24 @@ int bcm2711_dma_blit_linear(int channel,
                              uintptr_t dst_addr,
                              uintptr_t src_addr,
                              uint32_t total_bytes) {
+    /* Wait for previous transfer on this channel to complete */
+    bcm2711_dma_wait(channel);
+    return bcm2711_dma_blit_linear_async(channel, dst_addr, src_addr, total_bytes);
+}
+
+int bcm2711_dma_blit_linear_async(int channel,
+                                   uintptr_t dst_addr,
+                                   uintptr_t src_addr,
+                                   uint32_t total_bytes) {
     if (channel < 0 || channel > 14) return -1;
     if (total_bytes == 0) return 0;
+    if (bcm2711_dma_is_busy(channel)) return 1;
+
+    /* Ack END/error from the prior transfer without waiting for a new one. */
+    bcm2711_dma_wait(channel);
 
     volatile uint32_t *chan = dma_chan_regs(channel);
     volatile bcm2711_dma_cb_t *cb = &s_dma_cbs[channel];
-
-    /* Wait for previous transfer on this channel to complete */
-    bcm2711_dma_wait(channel);
 
     /* Fill Linear Burst DMA Control Block */
     cb->ti = BCM_DMA_TI_SRC_INC |

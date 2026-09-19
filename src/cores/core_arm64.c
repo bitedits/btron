@@ -57,6 +57,72 @@ extern uintptr_t heap_ptr;
 #define BTRON_SCREEN_W      1024
 #define BTRON_SCREEN_H      768
 
+/* INPUT and UI are peers.  These fixed release periods and work limits—not a
+ * priority boost—bound the input-to-presentation path on the Pi 400. */
+#define ASYNC_INPUT_PERIOD_US       1000u
+#define ASYNC_UI_PERIOD_US          8333u
+#define ASYNC_XHCI_TRB_BUDGET       32u
+#define ASYNC_HID_REPORT_BUDGET     16u
+#define ASYNC_UI_EVENT_BUDGET       16u
+#ifndef ASYNC_TELEMETRY
+#define ASYNC_TELEMETRY              1
+#endif
+
+typedef struct {
+    volatile uint32_t input_gap_us;
+    volatile uint32_t input_gap_max_us;
+    volatile uint32_t trb_per_input;
+    volatile uint32_t trb_max;
+    volatile uint32_t blit_us;
+    volatile uint32_t blit_max_us;
+    volatile uint32_t key_enqueue_us;
+    volatile uint32_t key_dispatch_us;
+} async_rt_stats_t;
+
+/* Written by INPUT/PRESENT and formatted from the UI plane; never allocate or
+ * format text in the input path. */
+static async_rt_stats_t s_async_rt_stats;
+static int s_present_dma_enabled = 0;
+static int s_present_pending = 0;
+static int s_present_cursor_dirty = 0;
+static uint32_t s_present_dma_start_us = 0;
+static uint32_t s_present_dma_max_us = 0;
+static uint32_t s_present_front_page = 0;
+static uint32_t s_present_dma_page = 1;
+static int s_present_fast_key_update = 0;
+/* CPU presentation is sliced into small row bands.  A frame may take longer
+ * to become fully visible, but no single copy may starve the 1 kHz input
+ * plane.  DMA/page-flip is intentionally disabled until it is reliable. */
+#define PRESENT_COPY_ROWS_PER_STEP 2u
+static volatile uint32_t *s_present_copy_fb;
+static uint32_t s_present_copy_row;
+static int s_present_copy_active;
+
+void async_rt_format_status(char *buf, size_t len) {
+    uint32_t gap = s_async_rt_stats.input_gap_us;
+    uint32_t gap_max = s_async_rt_stats.input_gap_max_us;
+    uint32_t blit = s_async_rt_stats.blit_us;
+    uint32_t blit_max = s_async_rt_stats.blit_max_us;
+    if (!buf || len == 0) return;
+    tkl_snprintf(buf, len, "IN %u.%ums GAP %u/%ums BLIT %u.%ums",
+                 gap / 1000u, (gap / 100u) % 10u, gap_max / 1000u,
+                 blit / 1000u, (blit / 100u) % 10u, blit_max / 1000u);
+}
+
+/* Fits in the 80-pixel gap between the final menu header and TIP badge on the
+ * 1024-pixel Pi desktop: G=input gap, D=actual DMA completion, K=keyboard
+ * event queue-to-UI dispatch; all values are milliseconds. */
+void async_rt_format_compact_status(char *buf, size_t len) {
+    uint32_t gap = s_async_rt_stats.input_gap_us / 1000u;
+    uint32_t dma_max = s_present_dma_max_us / 1000u;
+    uint32_t key_dispatch = s_async_rt_stats.key_dispatch_us / 1000u;
+    if (!buf || len == 0) return;
+    if (gap > 999u) gap = 999u;
+    if (dma_max > 999u) dma_max = 999u;
+    if (key_dispatch > 999u) key_dispatch = 999u;
+    tkl_snprintf(buf, len, "G%uD%uK%u", gap, dma_max, key_dispatch);
+}
+
 /* Double-buffered 32-bpp Desktop Backbuffer */
 static COLOR s_desktop_backbuffer[BTRON_SCREEN_W * BTRON_SCREEN_H] __attribute__((aligned(64)));
 
@@ -156,13 +222,12 @@ static inline void arm64_fast_blit(volatile void *dst, const void *src, size_t b
     __asm__ volatile("dmb sy" : : : "memory");
 }
 
-/* Clean data cache range by VA to Point of Coherency (PoC) for coherent DMA */
+/* The DMA engine reads RAM outside the CPU cache hierarchy. */
 static inline void arm64_clean_cache_range(const void *addr, size_t size) {
     uintptr_t start = (uintptr_t)addr & ~(64UL - 1);
-    uintptr_t end   = (uintptr_t)addr + size;
-    for (uintptr_t p = start; p < end; p += 64) {
+    uintptr_t end = (uintptr_t)addr + size;
+    for (uintptr_t p = start; p < end; p += 64)
         __asm__ volatile("dc cvac, %0" : : "r"(p) : "memory");
-    }
     __asm__ volatile("dsb sy" : : : "memory");
 }
 
@@ -595,6 +660,26 @@ static inline void restore_cursor_area(volatile uint32_t *gpu_fb, H x, H y) {
     }
 }
 
+static void present_copy_step(void) {
+    if (!s_present_copy_active || !s_present_copy_fb) return;
+
+    uint32_t start_us = *(volatile uint32_t *)(TIMER_BASE + 0x04);
+    uint32_t rows = BTRON_SCREEN_H - s_present_copy_row;
+    if (rows > PRESENT_COPY_ROWS_PER_STEP) rows = PRESENT_COPY_ROWS_PER_STEP;
+    arm64_fast_blit((void *)(s_present_copy_fb + s_present_copy_row * BTRON_SCREEN_W),
+                    &s_desktop_backbuffer[s_present_copy_row * BTRON_SCREEN_W],
+                    (size_t)rows * BTRON_SCREEN_W * sizeof(COLOR));
+    s_present_copy_row += rows;
+    if (s_present_copy_row >= BTRON_SCREEN_H) s_present_copy_active = 0;
+
+    uint32_t elapsed = *(volatile uint32_t *)(TIMER_BASE + 0x04) - start_us;
+    s_async_rt_stats.blit_us = elapsed;
+    if (elapsed > s_async_rt_stats.blit_max_us)
+        s_async_rt_stats.blit_max_us = elapsed;
+    /* A copied band may have covered the cursor even when it did not move. */
+    s_present_cursor_dirty = 1;
+}
+
 /* Stage 2: Launch full B-System Workbench desktop session. */
 static void launch_pi4_desktop_session(uint32_t *gpu_fb)
 {
@@ -631,9 +716,8 @@ static void launch_pi4_desktop_session(uint32_t *gpu_fb)
     g_prev_mouse_btns = 0;
 
     uint32_t last_clock = *(volatile uint32_t *)(TIMER_BASE + 0x04);
-    uint32_t last_anim_frame = last_clock;
+    uint32_t last_input_us = last_clock;
     uint32_t last_paint_us = last_clock;
-    const uint32_t FRAME_INTERVAL_US = 8333;   /* ~120 Hz max; use 16666 for 60 Hz */
      
     EVT ev;
 
@@ -642,27 +726,59 @@ static void launch_pi4_desktop_session(uint32_t *gpu_fb)
 
         uint32_t now = *(volatile uint32_t *)(TIMER_BASE + 0x04);
 
-        if (g_use_xhci) {
-            xhci_process_events();
+        /* INPUT plane: 1 kHz cadence with bounded host-controller/HID work.
+         * It never renders or blits. */
+        if ((uint32_t)(now - last_input_us) >= ASYNC_INPUT_PERIOD_US) {
+            uint32_t input_gap = now - last_input_us;
+            uint32_t trbs = 0;
+            last_input_us = now;
+            if (g_use_xhci)
+                trbs = xhci_process_events_bounded(ASYNC_XHCI_TRB_BUDGET);
+            (void)usb_poll_devices(screen);
+            s_async_rt_stats.input_gap_us = input_gap;
+            if (input_gap > s_async_rt_stats.input_gap_max_us)
+                s_async_rt_stats.input_gap_max_us = input_gap;
+            s_async_rt_stats.trb_per_input = trbs;
+            if (trbs > s_async_rt_stats.trb_max)
+                s_async_rt_stats.trb_max = trbs;
         }
 
-        usb_poll_devices(screen);
+        /* Present at most 8 KiB of pixels per trip around the loop. */
+        present_copy_step();
+
+        /* DMA always fills the hidden VideoCore page.  Completion flips it
+         * atomically; this keeps the visible page available to the pointer and
+         * INPUT plane even when a full transfer spans many UI periods. */
+        if (s_present_dma_enabled && !bcm2711_dma_is_busy(0) && s_present_dma_start_us != 0) {
+            uint32_t dma_us = now - s_present_dma_start_us;
+            s_present_dma_start_us = 0;
+            if (dma_us > s_present_dma_max_us) s_present_dma_max_us = dma_us;
+            s_present_front_page = s_present_dma_page;
+            (void)mailbox_set_virtual_offset(0, s_present_front_page * BTRON_SCREEN_H);
+            s_present_cursor_dirty = 1;
+        }
 
         /* Immediate cursor update on GPU front buffer (< 1 us glass-to-glass latency) */
-        if (s_mouse_x != prev_mx || s_mouse_y != prev_my) {
-            restore_cursor_area(gpu_fb, prev_mx, prev_my);
-            draw_baremetal_cursor_raw(gpu_fb, s_mouse_x, s_mouse_y, BTRON_SCREEN_W, BTRON_SCREEN_H);
+        if ((!s_present_dma_enabled || !bcm2711_dma_is_busy(0)) &&
+            (s_mouse_x != prev_mx || s_mouse_y != prev_my || s_present_cursor_dirty)) {
+            volatile uint32_t *cursor_fb = gpu_fb + s_present_front_page * BTRON_SCREEN_W * BTRON_SCREEN_H;
+            restore_cursor_area(cursor_fb, prev_mx, prev_my);
+            draw_baremetal_cursor_raw(cursor_fb, s_mouse_x, s_mouse_y, BTRON_SCREEN_W, BTRON_SCREEN_H);
             __asm__ volatile("dmb sy" : : : "memory");
             prev_mx = s_mouse_x;
             prev_my = s_mouse_y;
+            s_present_cursor_dirty = 0;
         }
 
-        /* Dispatch all queued events to the B-TRON window manager (bounded to EVENT_QUEUE_SIZE) */
-        for (int ev_iter = 0; ev_iter < EVENT_QUEUE_SIZE && get_evt(&ev, 0) == E_OK; ev_iter++) {
+        /* UI/PRESENT plane: lower-rate and bounded, independent from xHCI. */
+        if ((uint32_t)(now - last_paint_us) >= ASYNC_UI_PERIOD_US) {
+        for (uint32_t ev_iter = 0; ev_iter < ASYNC_UI_EVENT_BUDGET && get_evt(&ev, 0) == E_OK; ev_iter++) {
             if (ev.type == EV_KEY_DOWN && ev.key == 0x1B /* Escape */) {
                 s_gui_active = 0;
                 break;
             }
+            if (ev.type == EV_KEY_DOWN && s_async_rt_stats.key_enqueue_us != 0)
+                s_async_rt_stats.key_dispatch_us = now - s_async_rt_stats.key_enqueue_us;
             workbench_process_event(screen, &ev);
 
             if (ev.type == EV_MOUSE_MOVE) {
@@ -673,6 +789,8 @@ static void launch_pi4_desktop_session(uint32_t *gpu_fb)
             } else if (ev.type != EV_MOUSE_MOVE) {
                 /* Buttons, keys, etc. need real UI update */
                 redraw = 1;
+                if (ev.type == EV_KEY_DOWN && ev.key != '\r' && ev.key != '\n')
+                    s_present_fast_key_update = 1;
             }
         }
 
@@ -683,29 +801,67 @@ static void launch_pi4_desktop_session(uint32_t *gpu_fb)
         }
 
         /* Full UI path: redraw windows, menus, backbuffer blit */
-        if (redraw && (now - last_paint_us) >= FRAME_INTERVAL_US) {
+        if (redraw || s_present_pending) {
+            if (s_present_dma_enabled && bcm2711_dma_is_busy(0)) {
+                s_present_pending = 1;
+            } else {
             last_paint_us = now;
-            workbench_render(screen, BTRON_SCREEN_W, BTRON_SCREEN_H);
-            blit_backbuffer_to_fb(gpu_fb);
-            draw_baremetal_cursor_raw(gpu_fb, s_mouse_x, s_mouse_y, BTRON_SCREEN_W, BTRON_SCREEN_H);
-            prev_mx = s_mouse_x;
-            prev_my = s_mouse_y;
+            if (s_present_fast_key_update && s_present_dma_enabled) {
+                WND *top = get_top_wnd();
+                if (top && top->visible) {
+                    /* Text entry changes the bottom prompt line.  Repaint its
+                     * owner but transfer only that 32-pixel band to the
+                     * visible page, not the entire 3 MB desktop. */
+                    H left = top->client.left;
+                    H right = top->client.right;
+                    H top_y = top->client.bottom - 32;
+                    H bottom = top->client.bottom;
+                    if (left < 0) left = 0;
+                    if (right > BTRON_SCREEN_W) right = BTRON_SCREEN_W;
+                    if (top_y < 0) top_y = 0;
+                    if (bottom > BTRON_SCREEN_H) bottom = BTRON_SCREEN_H;
+                    redraw_top_window();
+                    arm64_clean_cache_range(&s_desktop_backbuffer[top_y * BTRON_SCREEN_W + left],
+                                            (size_t)(bottom - top_y) * BTRON_SCREEN_W * sizeof(COLOR));
+                    if (bcm2711_dma_blit2d_async(0,
+                        (uintptr_t)(gpu_fb + s_present_front_page * BTRON_SCREEN_W * BTRON_SCREEN_H +
+                                    top_y * BTRON_SCREEN_W + left), BTRON_SCREEN_W * sizeof(COLOR),
+                        (uintptr_t)(&s_desktop_backbuffer[top_y * BTRON_SCREEN_W + left]),
+                        BTRON_SCREEN_W * sizeof(COLOR), (right - left) * sizeof(COLOR), bottom - top_y) == 0) {
+                        s_present_dma_start_us = now;
+                        s_present_dma_page = s_present_front_page;
+                        s_present_cursor_dirty = 1;
+                    } else {
+                        s_present_pending = 1;
+                    }
+                }
+            } else {
+                workbench_render(screen, BTRON_SCREEN_W, BTRON_SCREEN_H);
+                blit_backbuffer_to_fb(gpu_fb);
+            }
+            s_present_fast_key_update = 0;
+            if (!s_present_pending)
+                s_present_pending = 0;
+            if (s_present_dma_enabled) {
+                s_present_cursor_dirty = 1;
+            } else {
+                draw_baremetal_cursor_raw(gpu_fb, s_mouse_x, s_mouse_y, BTRON_SCREEN_W, BTRON_SCREEN_H);
+                prev_mx = s_mouse_x;
+                prev_my = s_mouse_y;
+            }
+            }
+        }
         }
 
-         /* Drain event ring immediately after heavy render/blit */
-        if (g_use_xhci) {
-            xhci_process_events();
-        }
-
-        /* Extra poll right after the long work so input never waits a full frame */
-        usb_poll_devices(screen);
-
-        if (s_mouse_x != prev_mx || s_mouse_y != prev_my) {
-            restore_cursor_area(gpu_fb, prev_mx, prev_my);
-            draw_baremetal_cursor_raw(gpu_fb, s_mouse_x, s_mouse_y, BTRON_SCREEN_W, BTRON_SCREEN_H);
+        if ((!s_present_dma_enabled || !bcm2711_dma_is_busy(0)) &&
+            (s_mouse_x != prev_mx || s_mouse_y != prev_my || s_present_cursor_dirty)) {
+            volatile uint32_t *cursor_fb = gpu_fb + s_present_front_page * BTRON_SCREEN_W * BTRON_SCREEN_H;
+            restore_cursor_area(cursor_fb, prev_mx, prev_my);
+            draw_baremetal_cursor_raw(cursor_fb, s_mouse_x, s_mouse_y, BTRON_SCREEN_W, BTRON_SCREEN_H);
             __asm__ volatile("dmb sy" : : : "memory");
             prev_mx = s_mouse_x;
             prev_my = s_mouse_y;
+            s_present_cursor_dirty = 0;
         }
 
     }
@@ -822,12 +978,38 @@ void kprintf(const char *fmt, ...) {
 
 void blit_backbuffer_to_fb(volatile uint32_t *gpu_fb) {
     if (!gpu_fb) return;
+    if (!s_present_dma_enabled) {
+        /* The source remains the same backbuffer, so a later redraw naturally
+         * updates the remaining bands without restarting an active transfer. */
+        if (!s_present_copy_active) {
+            s_present_copy_fb = gpu_fb;
+            s_present_copy_row = 0;
+            s_present_copy_active = 1;
+        }
+        return;
+    }
+    uint32_t start_us = *(volatile uint32_t *)(TIMER_BASE + 0x04);
 
-    /* Clean backbuffer CPU data cache lines to Point of Coherency before blit */
-    arm64_clean_cache_range(s_desktop_backbuffer, BTRON_SCREEN_W * BTRON_SCREEN_H * sizeof(COLOR));
-
-    /* 64-byte unrolled burst blitter directly into physical VRAM (1.1 ms on Cortex-A72) */
-    arm64_fast_blit((void *)gpu_fb, s_desktop_backbuffer, BTRON_SCREEN_W * BTRON_SCREEN_H * sizeof(COLOR));
+    if (s_present_dma_enabled) {
+        uint32_t target_page = s_present_front_page ^ 1u;
+        arm64_clean_cache_range(s_desktop_backbuffer,
+                                BTRON_SCREEN_W * BTRON_SCREEN_H * sizeof(COLOR));
+        if (bcm2711_dma_blit_linear_async(0,
+                                          (uintptr_t)gpu_fb + target_page *
+                                          BTRON_SCREEN_W * BTRON_SCREEN_H * sizeof(COLOR),
+                                          (uintptr_t)s_desktop_backbuffer,
+                                          BTRON_SCREEN_W * BTRON_SCREEN_H * sizeof(COLOR)) != 0) {
+            return; /* UI retains s_present_pending and retries next period. */
+        }
+        s_present_dma_page = target_page;
+        s_present_dma_start_us = start_us;
+    } else {
+        arm64_fast_blit((void *)gpu_fb, s_desktop_backbuffer,
+                        BTRON_SCREEN_W * BTRON_SCREEN_H * sizeof(COLOR));
+    }
+    s_async_rt_stats.blit_us = *(volatile uint32_t *)(TIMER_BASE + 0x04) - start_us;
+    if (s_async_rt_stats.blit_us > s_async_rt_stats.blit_max_us)
+        s_async_rt_stats.blit_max_us = s_async_rt_stats.blit_us;
 }
 
 /* ═══════════════════════════════════════════════════════════════════
@@ -1073,17 +1255,14 @@ static int usb_poll_devices(GDEV *screen) {
     (void)screen;
     int activity = 0;
 
-    /* Drain the xHCI event ring ONCE per poll cycle.
-     * This populates s_kbd_queue and s_accum_dx/dy/buttons atomically. */
-    if (g_use_xhci) {
-        xhci_process_events();
-    }
+    /* The 1 kHz INPUT plane has already performed the bounded xHCI drain.
+     * HID integration must stay independent from rendering/presentation. */
 
     /* 1. Drain pending USB HID Keyboard reports (bounded to queue size) */
     usb_kbd_report_t kbd_rep;
     uint32_t now_us = *(volatile uint32_t *)(TIMER_BASE + 0x04);
 
-    for (int kbd_iter = 0; kbd_iter < 16; kbd_iter++) {
+    for (uint32_t kbd_iter = 0; kbd_iter < ASYNC_HID_REPORT_BUDGET; kbd_iter++) {
         int kbd_got = 0;
         if (g_use_xhci) {
             kbd_got = (xhci_poll_keyboard(&kbd_rep) > 0);
@@ -1106,6 +1285,7 @@ static int usb_poll_devices(GDEV *screen) {
                     ev.pos.y  = s_mouse_y;
                     ev.button = 0;
                     snd_evt(&ev);
+                    s_async_rt_stats.key_enqueue_us = now_us;
                     activity = 1;
 
                     /* Arm hardware-like responsive key repeat */
@@ -1166,7 +1346,7 @@ static int usb_poll_devices(GDEV *screen) {
     int mouse_activity = 0;
     int got_buttons = 0;
 
-    for (int m_iter = 0; m_iter < 16; m_iter++) {
+    for (uint32_t m_iter = 0; m_iter < ASYNC_HID_REPORT_BUDGET; m_iter++) {
         int mouse_got = 0;
         if (g_use_xhci) {
             mouse_got = (xhci_poll_mouse(&mouse_rep) > 0);
@@ -1391,9 +1571,10 @@ void btron_main(void) {
     btron_core_hfds_log();
 
     /* 4. Initialize BCM2711 Hardware Device Drivers */
-    if (g_mmio_base == 0xFE000000UL) {
-        bcm2711_dma_init();
-    }
+    /* The Pi 400 DMA/page-flip experiment is currently disabled: hardware
+     * measurements showed up to 244 ms stalls.  The bounded CPU presenter
+     * above keeps USB input live while a frame is copied in small bands. */
+    s_present_dma_enabled = 0;
 
     fb_log("[DRV] Initializing Screen Driver...\n");
     ER sdrv_res = ScreenDrv(0, NULL);

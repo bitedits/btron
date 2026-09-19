@@ -58,6 +58,8 @@ BOOL whit_test_tab(const WND *wnd, H x, H y);
 BOOL whit_test_close_btn(const WND *wnd, H x, H y);
 
 void redraw_all_windows(void);
+/* Repaint and composite the focused top-level window only. */
+void redraw_top_window(void);
 WND* find_wnd_at(H x, H y);
 WND* get_top_wnd(void);
 WND* get_wnd_list(void);

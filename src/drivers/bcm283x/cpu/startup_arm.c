@@ -421,7 +421,9 @@ uint32_t* init_pi_framebuffer(uint32_t w, uint32_t h) {
     mbox[8] = 8;
     mbox[9] = 0;          /* request code */
     mbox[10] = w;
-    mbox[11] = h;          /* Physical height (1024x768) */
+    /* A single scanout page is deliberately used.  Full-frame page flipping
+     * via the mailbox can stall for hundreds of milliseconds on the Pi 400. */
+    mbox[11] = h;            /* Physical height (1024x768) */
 
     mbox[12] = 0x00048005; /* set depth */
     mbox[13] = 4;

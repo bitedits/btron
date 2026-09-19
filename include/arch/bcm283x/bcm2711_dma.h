@@ -62,14 +62,25 @@ typedef struct __attribute__((aligned(32))) {
 /* API Prototypes */
 int  bcm2711_dma_init(void);
 void bcm2711_dma_wait(int channel);
+int  bcm2711_dma_is_busy(int channel);
 int  bcm2711_dma_blit2d(int channel,
                         uintptr_t dst_addr, int dst_stride,
                         uintptr_t src_addr, int src_stride,
                         uint32_t width_bytes, uint32_t height_rows);
+int  bcm2711_dma_blit2d_async(int channel,
+                              uintptr_t dst_addr, int dst_stride,
+                              uintptr_t src_addr, int src_stride,
+                              uint32_t width_bytes, uint32_t height_rows);
 int  bcm2711_dma_blit(void *dst_phys, const void *src_phys, size_t bytes);
 int  bcm2711_dma_blit_linear(int channel,
                              uintptr_t dst_addr,
                              uintptr_t src_addr,
                              uint32_t total_bytes);
+/* Starts a linear copy only when the channel is idle; never waits for an
+ * earlier frame.  Returns 1 when a transfer is still in flight. */
+int  bcm2711_dma_blit_linear_async(int channel,
+                                   uintptr_t dst_addr,
+                                   uintptr_t src_addr,
+                                   uint32_t total_bytes);
 
 #endif /* _BCM2711_DMA_H_ */

@@ -205,7 +205,10 @@ typedef struct {
 
 /* Driver Functions */
 int  xhci_init(uintptr_t mmio_base);
-void xhci_process_events(void);        /* Drain event ring — call ONCE per poll cycle */
+/* Drain at most max_trbs event-ring entries.  The return value is the number
+ * consumed, allowing callers to make deferred input work explicitly bounded. */
+uint32_t xhci_process_events_bounded(uint32_t max_trbs);
+void xhci_process_events(void);        /* Compatibility wrapper; bounded default */
 int  xhci_poll_keyboard(usb_kbd_report_t *rep);
 int  xhci_poll_mouse(usb_mouse_report_t *rep);
 bool xhci_has_devices(void);

@@ -25,6 +25,13 @@
 #define strncpy  tkl_strncpy
 #endif
 
+/* Defined by the Pi bare-metal async plane.  Keep hosted and other target
+ * links independent of that implementation. */
+#if defined(BTRON_TARGET) && BTRON_TARGET == 6
+extern void async_rt_format_status(char *buf, size_t len);
+extern void async_rt_format_compact_status(char *buf, size_t len);
+#endif
+
 /* Weak linkage declarations for external app launchers */
 #if defined(__GNUC__) || defined(__clang__)
 __attribute__((weak)) WND* open_vobj_manager_window(void);
@@ -296,6 +303,29 @@ void global_menu_render_bar(GDEV *dev) {
     int tip_w = tc_calc_string_width(tip_str, (int)strlen(tip_str));
     int tip_x = tip_btn.left + (128 - tip_w) / 2;
     drw_tc_string(dev, tip_x, 4, tip_str, COLOR_BLACK, 0x00000000);
+
+    /* A fixed geometry avoids menu reflow; values are formatted at UI rate. */
+#if defined(BTRON_TARGET) && BTRON_TARGET == 6
+    if (dev->width >= 1280) {
+        char async_buf[48];
+        RECT async_r = { (H)(tip_btn.left - 286), 3, (H)(tip_btn.left - 10), 23 };
+        async_rt_format_status(async_buf, sizeof(async_buf));
+        fill_rec(dev, &async_r, COLOR_LTGRAY);
+        drw_rec(dev, &async_r);
+        drw_tc_string(dev, async_r.left + 4, 4, async_buf, COLOR_NAVY, 0x00000000);
+    } else {
+        H left = g_headers[GMENU_HEADER_COUNT - 1].rect.right + 8;
+        H right = tip_btn.left - 6;
+        if (right - left >= 72) {
+            char async_buf[16];
+            RECT async_r = { left, 3, right, 23 };
+            async_rt_format_compact_status(async_buf, sizeof(async_buf));
+            fill_rec(dev, &async_r, COLOR_LTGRAY);
+            drw_rec(dev, &async_r);
+            drw_tc_string(dev, async_r.left + 2, 4, async_buf, COLOR_NAVY, 0x00000000);
+        }
+    }
+#endif
 }
 
 void global_menu_render_overlay(GDEV *dev) {

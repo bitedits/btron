@@ -433,6 +433,30 @@ void redraw_all_windows(void) {
     }
 }
 
+void redraw_top_window(void) {
+    WND *wnd = get_top_wnd();
+    if (!g_screen_dev || !wnd || !wnd->visible) return;
+
+    draw_retro_window_frame(g_screen_dev, wnd);
+    if (wnd->paint && wnd->dev && wnd->dev->pixels) {
+        H title_h = (wnd->attr & WND_ATTR_TITLE) ? WND_TITLE_HEIGHT : 0;
+        H border = (wnd->attr & WND_ATTR_BORDER) ? 4 : 0;
+        H dest_x = wnd->bounds.left + border;
+        H dest_y = wnd->bounds.top + title_h + border;
+        wnd->paint(wnd, wnd->dev);
+        for (H cy = 0; cy < wnd->dev->height; cy++) {
+            for (H cx = 0; cx < wnd->dev->width; cx++) {
+                H px = dest_x + cx, py = dest_y + cy;
+                if (px >= 0 && px < g_screen_dev->width && py >= 0 && py < g_screen_dev->height) {
+                    COLOR c = wnd->dev->pixels[cy * wnd->dev->width + cx];
+                    if (c != 0x00000000)
+                        ((volatile COLOR *)g_screen_dev->pixels)[py * g_screen_dev->width + px] = c;
+                }
+            }
+        }
+    }
+}
+
 WND* find_wnd_at(H x, H y) {
     WND *curr = g_wnd_head;
     while (curr) {

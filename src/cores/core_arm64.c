@@ -500,6 +500,7 @@ static int pi4_shell_poll(uint32_t *gpu_fb)
     /* 1. Poll USB Keyboard:
      *    On Pi 400 (BCM2711, mmio 0xFE000000), read HID reports from xHCI transfer ring.
      *    On QEMU / Pi 2 / Pi 3 (mmio 0x3F000000), read packets from DWC2 channel registers. */
+
     usb_kbd_report_t rep;
     int kbd_ready = 0;
     if (g_use_xhci) {
@@ -631,6 +632,9 @@ static void launch_pi4_desktop_session(uint32_t *gpu_fb)
 
     uint32_t last_clock = *(volatile uint32_t *)(TIMER_BASE + 0x04);
     uint32_t last_anim_frame = last_clock;
+    uint32_t last_paint_us = last_clock;
+    const uint32_t FRAME_INTERVAL_US = 8333;   /* ~120 Hz max; use 16666 for 60 Hz */
+     
     EVT ev;
 
     while (s_gui_active) {
@@ -652,23 +656,6 @@ static void launch_pi4_desktop_session(uint32_t *gpu_fb)
             prev_my = s_mouse_y;
         }
 
-        /* UART serial console */
-        if (uart_has_char()) {
-            int c = uart_getc();
-            if (c == 0x1B) {
-                s_gui_active = 0;
-            } else {
-                if (c == '\r') c = '\n';
-                ev.type   = EV_KEY_DOWN;
-                ev.key    = (UW)(uint8_t)c;
-                ev.pos.x  = s_mouse_x;
-                ev.pos.y  = s_mouse_y;
-                ev.button = 0;
-                ev.data   = 0;
-                snd_evt(&ev);
-            }
-        }
-
         /* Dispatch all queued events to the B-TRON window manager (bounded to EVENT_QUEUE_SIZE) */
         for (int ev_iter = 0; ev_iter < EVENT_QUEUE_SIZE && get_evt(&ev, 0) == E_OK; ev_iter++) {
             if (ev.type == EV_KEY_DOWN && ev.key == 0x1B /* Escape */) {
@@ -682,48 +669,9 @@ static void launch_pi4_desktop_session(uint32_t *gpu_fb)
                 if (global_menu_is_open() || tracker_is_menu_open() || g_prev_mouse_btns != 0 || wnd_mgr_is_interacting()) {
                     redraw = 1;
                 }
-            } else {
+            } else if (ev.type != EV_MOUSE_MOVE) {
                 /* Buttons, keys, etc. need real UI update */
                 redraw = 1;
-            }
-        }
-
-        /* Dedicated high-rate 60 FPS dirty path for About alone (every 16,666 µs) */
-        if (about_is_animating()) {
-            if ((now - last_anim_frame) >= 16666) {
-                last_anim_frame = now;
-                if (!redraw) {
-                    /* Fast path: refresh only About window client and composite into backbuffer */
-                    about_render_anim_dirty(screen, gpu_fb);
-
-                    /* Direct dirty-rect BitBlt directly to front buffer (takes ~40 us for About window) */
-                    WND *aw = about_get_wnd();
-                    if (aw) {
-                        H bx0 = aw->bounds.left;
-                        H by0 = aw->bounds.top;
-                        H bw  = aw->bounds.right - aw->bounds.left;
-                        H bh  = aw->bounds.bottom - aw->bounds.top;
-                        if (bx0 < 0) bx0 = 0;
-                        if (by0 < 0) by0 = 0;
-                        if (bx0 + bw > BTRON_SCREEN_W) bw = BTRON_SCREEN_W - bx0;
-                        if (by0 + bh > BTRON_SCREEN_H) bh = BTRON_SCREEN_H - by0;
-
-                        if (bw > 0 && bh > 0) {
-                            for (H r = 0; r < bh; r++) {
-                                volatile uint32_t *d = gpu_fb + (by0 + r) * BTRON_SCREEN_W + bx0;
-                                const COLOR *s = &s_desktop_backbuffer[(by0 + r) * BTRON_SCREEN_W + bx0];
-                                tkl_memcpy((void *)d, s, bw * sizeof(COLOR));
-                            }
-                            __asm__ volatile("dmb sy" : : : "memory");
-                        }
-                    } else {
-                        /* Fallback full backbuffer blit */
-                        blit_backbuffer_to_fb(gpu_fb);
-                    }
-
-                    /* Keep cursor on top of GPU front buffer */
-                    draw_baremetal_cursor_raw(gpu_fb, prev_mx, prev_my, BTRON_SCREEN_W, BTRON_SCREEN_H);
-                }
             }
         }
 
@@ -734,18 +682,31 @@ static void launch_pi4_desktop_session(uint32_t *gpu_fb)
         }
 
         /* Full UI path: redraw windows, menus, backbuffer blit */
-        if (redraw) {
+        if (redraw && (now - last_paint_us) >= FRAME_INTERVAL_US) {
+            last_paint_us = now;
             workbench_render(screen, BTRON_SCREEN_W, BTRON_SCREEN_H);
             blit_backbuffer_to_fb(gpu_fb);
             draw_baremetal_cursor_raw(gpu_fb, s_mouse_x, s_mouse_y, BTRON_SCREEN_W, BTRON_SCREEN_H);
             prev_mx = s_mouse_x;
             prev_my = s_mouse_y;
-
-            /* Drain event ring immediately after heavy render/blit to prevent ring saturation */
-            if (g_use_xhci) {
-                xhci_process_events();
-            }
         }
+
+         /* Drain event ring immediately after heavy render/blit */
+        if (g_use_xhci) {
+            xhci_process_events();
+        }
+
+        /* Extra poll right after the long work so input never waits a full frame */
+        usb_poll_devices(screen);
+
+        if (s_mouse_x != prev_mx || s_mouse_y != prev_my) {
+            restore_cursor_area(gpu_fb, prev_mx, prev_my);
+            draw_baremetal_cursor_raw(gpu_fb, s_mouse_x, s_mouse_y, BTRON_SCREEN_W, BTRON_SCREEN_H);
+            __asm__ volatile("dmb sy" : : : "memory");
+            prev_mx = s_mouse_x;
+            prev_my = s_mouse_y;
+        }
+
     }
 
     /* Return to Stage 1 console */
@@ -754,6 +715,7 @@ static void launch_pi4_desktop_session(uint32_t *gpu_fb)
     for (int i = 0; i < BTRON_SCREEN_W * BTRON_SCREEN_H; i++)
         ((uint32_t *)gpu_fb)[i] = 0xFF0A0F18u;
     s_fb_log_col = 0; s_fb_log_row = 0;
+
     fb_log("\n===============================================================\n");
     fb_log("  [BTRON] Exited Graphical Workbench Session\n");
     fb_log("  [BTRON] Returned to Stage 1 Terminal Console (1024x768)\n");

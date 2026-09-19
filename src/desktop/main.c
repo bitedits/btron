@@ -282,7 +282,6 @@ int main(int argc, char **argv) {
 
         /* Flush composite buffer to SDL window */
         flush_gdev_to_sdl(screen_dev);
-        SDL_Delay(16);
     }
 
     printf("[B-System] Shutting down B-System Retro OS Environment.\n");

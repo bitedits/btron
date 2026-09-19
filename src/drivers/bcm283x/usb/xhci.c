@@ -274,7 +274,7 @@ static int xhci_cmd_submit(uint64_t param, uint32_t status, uint32_t trb_type, u
     xhci_ring_doorbell(0, 0);
 
     /* Poll Event Ring for Command Completion Event */
-    int timeout = 500000;
+    int timeout = 5000;
     while (timeout-- > 0) {
         uint32_t ev_idx = s_event_dequeue_idx;
         uint32_t ev_ctrl = s_event_ring[ev_idx].control;
@@ -383,7 +383,7 @@ static int xhci_ep0_control_transfer(uint32_t slot_id, uint8_t bmRequestType, ui
     xhci_ring_doorbell(slot_id, 1);
 
     /* Poll Event Ring for Transfer Completion Event */
-    int timeout = 500000;
+    int timeout = 5000;
     while (timeout-- > 0) {
         uint32_t ev_idx = s_event_dequeue_idx;
         uint32_t ev_ctrl = s_event_ring[ev_idx].control;

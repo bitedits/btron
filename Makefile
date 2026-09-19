@@ -945,7 +945,18 @@ PI400_FIXUP4  = $(firstword $(wildcard $(PI400_FW_DIR)/fixup4.dat $(PI400_FW_DIR
 
 pi400: $(PI400_IMG)
 
-$(PI400_IMG): arm64-elf
+# EL3 armstub: runs at Secure EL3 before the kernel to set SCR_EL3 (no IRQ/FIQ
+# trap) and GICD_IGROUPR (Group 1) — both impossible from Non-secure EL1.
+PI400_ARMSTUB_BIN = .build/pi400/armstub8.bin
+
+$(PI400_ARMSTUB_BIN): src/drivers/bcm283x/cpu/armstub8.S
+	@mkdir -p .build/pi400
+	$(ARM64_CC) -c $< -o .build/pi400/armstub8.o
+	$(ARM64_CC) -Wl,-Ttext=0x0 -Wl,--image-base=0x0 -Wl,--build-id=none .build/pi400/armstub8.o -o .build/pi400/armstub8.elf
+	$(LLVM_OBJCOPY) -O binary .build/pi400/armstub8.elf $@
+	@SZ=$$(wc -c < $@ | tr -d ' '); echo "[PI400] armstub8.bin: $$SZ bytes (EL3, linked @0x0)"
+
+$(PI400_IMG): arm64-elf $(PI400_ARMSTUB_BIN)
 	@echo "=========================================================="
 	@echo " BTRON Pi 400 — SD Card Image Builder"
 	@echo " ELF     : $(ARM64_TARGET)"
@@ -994,6 +1005,7 @@ $(PI400_IMG): arm64-elf
 	cp $(PI400_CFG_DIR)/config.txt      $$MOUNT_PT/config.txt; \
 	cp $(PI400_CFG_DIR)/cmdline.txt     $$MOUNT_PT/cmdline.txt; \
 	cp .build/pi400/kernel8.img         $$MOUNT_PT/kernel8.img; \
+	cp .build/pi400/armstub8.bin        $$MOUNT_PT/armstub8.bin; \
 	echo "[PI400] SD image contents:"; \
 	ls -lh $$MOUNT_PT/; \
 	sync; \

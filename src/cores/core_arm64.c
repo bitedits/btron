@@ -280,6 +280,8 @@ static void fb_log_scroll(void) {
 
 /* Call once after init_pi_framebuffer returns a valid pointer. */
 void fb_log_enable(volatile uint32_t *fb) {
+    extern volatile uint32_t *g_irq_trace_fb;
+    g_irq_trace_fb = fb;
     s_fb_log_fb  = fb;
     s_fb_log_col = 0;
     s_fb_log_row = 0;
@@ -1870,7 +1872,8 @@ void btron_main(void) {
                      * IRQ WAS taken (delivery OK, timer at fault); =0 => the
                      * CPU never took the IRQ (vector/mask/routing at fault). */
                     typedef struct {
-                        uint32_t el, timer_intid, dispatch_hits, selftest_seen;
+                        uint32_t el, timer_intid, dispatch_hits, stub_entries;
+                        uint32_t selftest_seen;
                         uint32_t cfg_idx;
                         uint32_t gicd_typer, gicd_ctlr, gicd_igroupr0;
                         uint32_t gicd_isenabler0, gicd_ispendr0;
@@ -1886,6 +1889,7 @@ void btron_main(void) {
                     fb_log(" selftest=");      fb_log_dec(d.selftest_seen);
                     fb_log(" cfg=");           fb_log_dec(d.cfg_idx);
                     fb_log(" hits=");          fb_log_dec(d.dispatch_hits);
+                    fb_log(" entries=");       fb_log_dec(d.stub_entries);
                     fb_log("\n");
                     fb_log("[IRQ] GICD ty=");  fb_log_hex32(d.gicd_typer);
                     fb_log(" ctlr=");          fb_log_hex32(d.gicd_ctlr);

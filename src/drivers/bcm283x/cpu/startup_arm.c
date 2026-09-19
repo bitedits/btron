@@ -666,6 +666,22 @@ void arm64_vector_table(void) {
          * register set, dispatch through the GIC-400 in C, restore, eret.
          * Frame: 272 bytes = x0..x30 (248) + elr (248) + spsr (256). */
         "90:\n\t"
+        /* Stack-free entry breadcrumb: bump s_stub_entries and paint a white
+         * bar at fb row0 using only scratch regs (their interrupted values are
+         * spilled to s_stub_scratch first, so resume state stays intact). */
+        "adrp x18, s_stub_scratch\n\t"
+        "add  x18, x18, :lo12:s_stub_scratch\n\t"
+        "stp  x16, x17, [x18]\n\t"
+        "str  x18, [x18, #16]\n\t"
+        "adrp x16, s_stub_entries\n\t"
+        "add  x16, x16, :lo12:s_stub_entries\n\t"
+        "ldr  x17, [x16]\n\t"
+        "add  x17, x17, #1\n\t"
+        "str  x17, [x16]\n\t"
+        "adrp x18, s_stub_scratch\n\t"
+        "add  x18, x18, :lo12:s_stub_scratch\n\t"
+        "ldp  x16, x17, [x18]\n\t"
+        "ldr  x18, [x18, #16]\n\t"
         "sub sp, sp, #272\n\t"
         "stp x0, x1, [sp, #0]\n\t"
         "stp x2, x3, [sp, #16]\n\t"
@@ -695,7 +711,9 @@ void arm64_vector_table(void) {
         "mrs x1, spsr_el1\n\t"
         "93:\n\t"
         "stp x0, x1, [sp, #248]\n\t"
+        "bl arm64_trace_pre_dispatch\n\t"
         "bl arm64_irq_dispatch\n\t"
+        "bl arm64_trace_post_dispatch\n\t"
         "ldp x0, x1, [sp, #248]\n\t"
         "mrs x2, CurrentEL\n\t"
         "lsr x2, x2, #2\n\t"
@@ -784,15 +802,48 @@ static uint32_t s_irq_cfg_idx        = 0;
 volatile uint32_t g_arm64_irq_dispatch_hits = 0;
 /* 1 once a software-forced pending timer PPI was actually delivered. */
 static volatile uint32_t s_selftest_seen = 0;
+/* 1 once the masked probe confirmed an ack-able GIC config for the timer PPI;
+ * gates the DAIF unmask at the end of arm64_irq_init(). */
+static volatile uint32_t s_irq_probe_ok = 0;
+
+/* Exception stack.  On entry to EL1 the CPU forces PSTATE.SPSel=1, so IRQ/FIQ/
+ * sync handlers run on SP_EL1 even though the kernel thread itself is EL1t on
+ * SP_EL0.  Without this the stub's frame push hits an uninitialized SP_EL1 and
+ * faults recursively (the silent post-unmask hang).  32 KiB, 64-byte aligned. */
+uint64_t s_exc_stack[4096] __attribute__((aligned(64)));
+
+/* Stack-free IRQ-entry breadcrumb (temporary diagnostic).  g_irq_trace_fb is
+ * mirrored from fb_log_enable(); the stub paints a white bar with scratch regs
+ * and NO stack at its very first instruction, a green bar before bl dispatch
+ * and a red bar after dispatch returns, so a stall can be trisected on HDMI:
+ *   none        -> exception never reaches the stub (vector/VBAR)
+ *   white only  -> dies in the register-save / elr-spsr region
+ *   white+green -> dies inside arm64_irq_dispatch
+ *   white+grn+red -> dispatch returned; stall is at eret or an IRQ storm
+ * Stride hardcoded to 1024 px (BTRON_SCREEN_W); bars sit at rows 0/1/2. */
+volatile uint32_t *g_irq_trace_fb = 0;
+uint64_t s_stub_scratch[4] __attribute__((aligned(16)));
+volatile uint64_t s_stub_entries = 0;
+
+/* Framebuffer paint diagnostics REMOVED (2026-09-20): writing the console fb
+ * from IRQ context corrupted the live console and ate log lines once the
+ * armstub made interrupts partially live.  Entry counting now relies solely on
+ * the s_stub_entries global, read out-of-band by the fallback dump. */
+void arm64_trace_pre_dispatch(void)  { }
+void arm64_trace_post_dispatch(void) { }
 
 void arm64_irq_dispatch(void) {
-    extern void fb_log(const char *);
-    extern void fb_log_hex32(uint32_t);
-    fb_log("[IRQd] in\n");
     g_arm64_irq_dispatch_hits++;
-    uint32_t iar = GICC_IAR;
-    fb_log("[IRQd] iar="); fb_log_hex32(iar); fb_log("\n");
-    uint32_t intid = iar & 0x3FFu;
+    /* GICC_IAR / GICC_EOIR are suspected of locking the BCM2711 bus at NS EL1
+     * on this firmware: every silent hang traces to the first taken interrupt,
+     * and the masked probe only ever exercised HPPIR/PMR/CTLR reads and GICD
+     * stores — never IAR/EOIR (we already know this GIC bus-locks on some
+     * accesses, e.g. the GICD_ISPENDR0 store).  So the ISR uses only
+     * proven-safe accesses: HPPIR read for the intid, the cntv reload store,
+     * and a distributor ICPENDR0 store to drop the pending PPI so the edge
+     * line deasserts instead of re-storming.  Revisit IAR/EOIR once ticking. */
+    uint32_t hppir = *(volatile uint32_t *)(GICC_BASE_ADDR + 0x018);
+    uint32_t intid = hppir & 0x3FFu;
     if (intid == s_arm64_timer_intid) {
         if (g_arm64_timer_hook) g_arm64_timer_hook();
         /* One-shot down timer: reload for the next 1 ms tick */
@@ -803,9 +854,18 @@ void arm64_irq_dispatch(void) {
             __asm__ volatile("msr cntv_tval_el0, %0"
                              : : "r"((uint64_t)s_arm64_timer_reload));
         }
+        GICD_ICPENDR0 = (1u << intid);  /* drop pending; no IAR/EOIR ack */
+    } else if (intid < 1020u) {
+        /* Stray Group-1 source: the armstub moved EVERY interrupt to Group 1,
+         * so any peripheral line the firmware left enabled now reaches EL1.
+         * We never service it, and an un-acked level source would re-assert
+         * and storm the stub (starving the cooperative loop: dead keyboard,
+         * torn console).  Disable it at the distributor and drop its pending
+         * bit so the line goes idle. */
+        uint32_t reg = intid / 32u, bit = intid % 32u;
+        *(volatile uint32_t *)(GICD_BASE_ADDR + 0x180u + reg * 4u) = (1u << bit);
+        *(volatile uint32_t *)(GICD_BASE_ADDR + 0x280u + reg * 4u) = (1u << bit);
     }
-    GICC_EOIR = iar;
-    fb_log("[IRQd] out\n");
 }
 
 /* Snapshot of the GIC / timer state for the boot-time fallback dump. */
@@ -813,6 +873,7 @@ typedef struct {
     uint32_t el;
     uint32_t timer_intid;
     uint32_t dispatch_hits;
+    uint32_t stub_entries;
     uint32_t selftest_seen;
     uint32_t cfg_idx;
     uint32_t gicd_typer;
@@ -835,6 +896,7 @@ void arm64_irq_get_diag(arm64_irq_diag_t *d) {
     __asm__ volatile("mrs %0, CurrentEL"    : "=r"(v)); d->el = (uint32_t)(v >> 2) & 3u;
     d->timer_intid   = s_arm64_timer_intid;
     d->dispatch_hits = g_arm64_irq_dispatch_hits;
+    d->stub_entries  = (uint32_t)s_stub_entries;
     d->selftest_seen = s_selftest_seen;
     d->cfg_idx       = s_irq_cfg_idx;
     d->gicd_typer    = GICD_TYPER;
@@ -906,12 +968,21 @@ int arm64_irq_init(uint32_t hz) {
         void (*saved_hook)(void) = g_arm64_timer_hook;
         g_arm64_timer_hook = 0;   /* forced IRQs must not fake a real tick */
 
+        /* Config order matters: the probe keeps the FIRST entry whose timer
+         * PPI latches (ISPENDR bit27) AND is presented by the CPU interface
+         * (HPPIR==27).  Hardware proved that chain works, so the real fault is
+         * whether the selected config can be ACKNOWLEDGED at Non-secure EL1.
+         * A Group-0 interrupt (FIQ) needs GICC_CTLR.AckCtl (bit2) to be acked
+         * via IAR at NS EL1; without it IAR returns 1022, EOI never clears the
+         * interrupt, and it re-triggers forever (the old unmasked hang).  The
+         * clean NS-EL1 path is Group 1 -> IRQ with GICC EnableGrp1, so try the
+         * Group-1 configs first and keep Group-0+AckCtl / Haiku as fallbacks. */
         static const struct { uint32_t gicd, gicc, igroup, pmr, bpr; } cfgs[] = {
-            { 0x3, 0x1, 0x00000000u, 0xFF, 0x7 },  /* Group0, EnableGrp0 (Haiku) */
-            { 0x3, 0x3, 0x00000000u, 0xFF, 0x7 },  /* Group0, both grp enables   */
-            { 0x3, 0x7, 0xFFFFFFFFu, 0xFF, 0x7 },  /* force Group1 + AckCtl      */
-            { 0x7, 0x7, 0xFFFFFFFFu, 0xFF, 0x7 },  /* all distributor enables    */
-            { 0x1, 0x1, 0x00000000u, 0xFF, 0x7 },  /* single-group enable only   */
+            { 0x3, 0x3, 0xFFFFFFFFu, 0xFF, 0x7 },  /* Group1 -> IRQ, EnableGrp0+1 */
+            { 0x3, 0x7, 0xFFFFFFFFu, 0xFF, 0x7 },  /* Group1 -> IRQ, + AckCtl     */
+            { 0x2, 0x2, 0xFFFFFFFFu, 0xFF, 0x7 },  /* Group1 only enables         */
+            { 0x3, 0x5, 0x00000000u, 0xFF, 0x7 },  /* Group0 -> FIQ + AckCtl      */
+            { 0x3, 0x1, 0x00000000u, 0xFF, 0x7 },  /* Group0, EnableGrp0 (Haiku)  */
         };
         int found = -1;
         for (uint32_t c = 0; c < (sizeof(cfgs)/sizeof(cfgs[0])) && found < 0; c++) {
@@ -984,9 +1055,24 @@ int arm64_irq_init(uint32_t hz) {
             GICD_ICPENDR0 = (1u << s_arm64_timer_intid);  /* drop leftover */
         }
         s_selftest_seen = (found >= 0) ? 1u : 0u;
+        s_irq_probe_ok  = (found >= 0) ? 1u : 0u;
         g_arm64_timer_hook = saved_hook;
         fb_log("[IRQi] probe done found="); fb_log_dec((uint32_t)(found + 1));
         fb_log(" hits="); fb_log_dec(g_arm64_irq_dispatch_hits); fb_log("\n");
+
+        /* Re-assert the chosen config's enables (the loop left GICD/GICC CTLR,
+         * IGROUPR, PMR, priority and ISENABLER at cfgs[found], but be explicit)
+         * so the unmask below delivers into a fully-programmed interface. */
+        if (found >= 0) {
+            GICD_IGROUPR0   = cfgs[found].igroup;
+            GICC_PMR        = cfgs[found].pmr;
+            GICC_BPR        = cfgs[found].bpr;
+            GICD_ISENABLER0 = (1u << s_arm64_timer_intid);
+            GICD_CTLR       = cfgs[found].gicd;
+            GICC_CTLR       = cfgs[found].gicc;
+            __asm__ volatile("dsb sy" : : : "memory");
+            __asm__ volatile("isb");
+        }
     }
 
     fb_log("[IRQi] arming timer\n");
@@ -1002,7 +1088,30 @@ int arm64_irq_init(uint32_t hz) {
         __asm__ volatile("msr cntv_ctl_el0, %0" : : "r"(1ULL)); /* ENABLE, !IMASK */
     }
     __asm__ volatile("isb");
-    fb_log("[IRQi] armed, returning 0\n");
+    /* Exception handlers run on SP_EL1 (entry to EL1 forces SPSel=1), but the
+     * EL1t thread stack is SP_EL0 and never provides SP_EL1.  Point it at the
+     * dedicated exception stack before unmasking, or the first taken interrupt
+     * faults on the stub's frame push.  Done here (not in _start) so early boot
+     * stays byte-identical to the last build that reached the console. */
+    __asm__ volatile("msr sp_el1, %0"
+                     : : "r"((uint64_t)(uintptr_t)s_exc_stack +
+                             (uint64_t)sizeof(s_exc_stack)));
+    __asm__ volatile("isb");
+    /* REVERTED 2026-09-20: the EL3 armstub route (SCR_EL3 + Group-1) made the
+     * board worse without delivering a tick — stripe-corrupted console and a
+     * dead keyboard even with every interrupt but the timer disabled, i.e.
+     * damage from the stub's non-interrupt effects, and still zero ticks.
+     * Leave the timer disarmed and DAIF masked (the known-good configuration
+     * that boots clean with working input); core_arm64's confirm loop sees
+     * zero ticks and drives the cooperative input path. */
+    if (s_arm64_at_el2) {
+        __asm__ volatile("msr cnthp_ctl_el2, %0" : : "r"(0ULL)); /* DISABLE */
+    } else {
+        __asm__ volatile("msr cntv_ctl_el0, %0" : : "r"(0ULL));  /* DISABLE */
+    }
+    __asm__ volatile("msr daifset, #3");  /* keep IRQ+FIQ masked */
+    __asm__ volatile("isb");
+    fb_log("[IRQi] left masked; cooperative input path (armstub route reverted)\n");
     return 0;
 }
 

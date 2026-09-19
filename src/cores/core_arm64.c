@@ -95,10 +95,13 @@ static int s_present_fast_key_update = 0;
 static uint32_t s_input_wcet_us = 0;
 static uint32_t s_ui_wcet_us = 0;
 
-/* CPU presentation is sliced into small row bands.  A frame may take longer
- * to become fully visible, but no single copy may starve the 1 kHz input
- * plane.  DMA/page-flip is intentionally disabled until it is reliable. */
-#define PRESENT_COPY_ROWS_PER_STEP 2u
+/* CPU presentation is sliced into row bands.  Each trip copies as many
+ * PRESENT_COPY_ROWS_PER_STEP chunks as fit inside ASYNC_PRESENT_BUDGET_US, so a
+ * full frame becomes visible within a few ms (not a slow 2-row wipe) while no
+ * single trip blocks long enough to starve the 1 kHz input plane.
+ * DMA/page-flip is intentionally disabled until it is reliable. */
+#define PRESENT_COPY_ROWS_PER_STEP 32u
+#define ASYNC_PRESENT_BUDGET_US    250u
 static volatile uint32_t *s_present_copy_fb;
 static uint32_t s_present_copy_row;
 static int s_present_copy_active;
@@ -697,13 +700,17 @@ static void present_copy_step(void) {
     if (!s_present_copy_active || !s_present_copy_fb) return;
 
     uint32_t start_us = *(volatile uint32_t *)(TIMER_BASE + 0x04);
-    uint32_t rows = BTRON_SCREEN_H - s_present_copy_row;
-    if (rows > PRESENT_COPY_ROWS_PER_STEP) rows = PRESENT_COPY_ROWS_PER_STEP;
-    arm64_fast_blit((void *)(s_present_copy_fb + s_present_copy_row * BTRON_SCREEN_W),
-                    &s_desktop_backbuffer[s_present_copy_row * BTRON_SCREEN_W],
-                    (size_t)rows * BTRON_SCREEN_W * sizeof(COLOR));
-    s_present_copy_row += rows;
-    if (s_present_copy_row >= BTRON_SCREEN_H) s_present_copy_active = 0;
+    for (;;) {
+        uint32_t rows = BTRON_SCREEN_H - s_present_copy_row;
+        if (rows > PRESENT_COPY_ROWS_PER_STEP) rows = PRESENT_COPY_ROWS_PER_STEP;
+        arm64_fast_blit((void *)(s_present_copy_fb + s_present_copy_row * BTRON_SCREEN_W),
+                        &s_desktop_backbuffer[s_present_copy_row * BTRON_SCREEN_W],
+                        (size_t)rows * BTRON_SCREEN_W * sizeof(COLOR));
+        s_present_copy_row += rows;
+        if (s_present_copy_row >= BTRON_SCREEN_H) { s_present_copy_active = 0; break; }
+        if ((*(volatile uint32_t *)(TIMER_BASE + 0x04) - start_us) >= ASYNC_PRESENT_BUDGET_US)
+            break;
+    }
 
     uint32_t elapsed = *(volatile uint32_t *)(TIMER_BASE + 0x04) - start_us;
     s_async_rt_stats.blit_us = elapsed;
@@ -836,6 +843,8 @@ static void launch_pi4_desktop_session(uint32_t *gpu_fb)
         if ((int32_t)(now - next_ui_us) >= 0) {
         uint32_t t_ui = now;
         int redraw = 0;
+        int overlay_redraw = 0;
+        int panel_redraw = 0;
         for (uint32_t ev_iter = 0; ev_iter < ASYNC_UI_EVENT_BUDGET && get_evt(&ev, 0) == E_OK; ev_iter++) {
             if (ev.type == EV_KEY_DOWN && ev.key == 0x1B /* Escape */) {
                 s_gui_active = 0;
@@ -846,11 +855,15 @@ static void launch_pi4_desktop_session(uint32_t *gpu_fb)
             workbench_process_event(screen, &ev);
 
             if (ev.type == EV_MOUSE_MOVE) {
-                /* If menu is open, mouse button held, or window interacting, need full UI update */
-                if (global_menu_is_open() || tracker_is_menu_open() || g_prev_mouse_btns != 0 || wnd_mgr_is_interacting()) {
-                    redraw = 1;
+                if (global_menu_is_open() || tracker_is_menu_open()) {
+                    /* Hovering an open menu only moves the highlight: repaint
+                     * the overlay, NOT the whole desktop.  A full composite per
+                     * mouse-move was starving the 1 ms INPUT plane (laggy menus). */
+                    overlay_redraw = 1;
+                } else if (g_prev_mouse_btns != 0 || wnd_mgr_is_interacting()) {
+                    redraw = 1;   /* drag: window contents move, full composite */
                 }
-            } else if (ev.type != EV_MOUSE_MOVE) {
+            } else {
                 /* Buttons, keys, etc. need real UI update */
                 redraw = 1;
                 if (ev.type == EV_KEY_DOWN && ev.key != '\r' && ev.key != '\n')
@@ -861,7 +874,13 @@ static void launch_pi4_desktop_session(uint32_t *gpu_fb)
         /* Periodic 1 Hz clock update */
         if (now - last_clock >= 1000000) {
             last_clock = now;
-            redraw = 1;
+            /* Only the panel clock changed: repaint the panel band, NOT the
+             * whole desktop.  A full composite here froze the mouse ~1x/sec. */
+            panel_redraw = 1;
+            /* Windowed cadence: the HUD 'G' field reports the worst INPUT gap
+             * of the LAST second, not an all-time high-water mark, so it tracks
+             * current responsiveness instead of latching a single boot stall. */
+            s_async_rt_stats.input_gap_max_us = s_async_rt_stats.input_gap_us;
         }
 
         /* Full UI path: redraw windows, menus, backbuffer blit */
@@ -898,13 +917,43 @@ static void launch_pi4_desktop_session(uint32_t *gpu_fb)
                         s_present_pending = 1;
                     }
                 }
+            } else if (s_present_fast_key_update) {
+                /* Non-DMA text entry (the live path: DMA is disabled).  Repaint
+                 * ONLY the top window and copy its band to the visible page,
+                 * instead of a full workbench_render composite per keystroke.
+                 * The full composite (background + every window + panel + test
+                 * bar) ran synchronously in the UI plane and starved the 1 ms
+                 * INPUT plane — that single blocking call is the G99 culprit. */
+                WND *top = get_top_wnd();
+                if (top && top->visible) {
+                    H left   = top->bounds.left;
+                    H right  = top->bounds.right;
+                    H top_y  = top->bounds.top;
+                    H bottom = top->bounds.bottom;
+                    if (left < 0) left = 0;
+                    if (right > BTRON_SCREEN_W) right = BTRON_SCREEN_W;
+                    if (top_y < 0) top_y = 0;
+                    if (bottom > BTRON_SCREEN_H) bottom = BTRON_SCREEN_H;
+                    redraw_top_window();
+                    volatile uint32_t *dst =
+                        gpu_fb + s_present_front_page * BTRON_SCREEN_W * BTRON_SCREEN_H;
+                    for (H y = top_y; y < bottom; y++) {
+                        const COLOR *srow = &s_desktop_backbuffer[y * BTRON_SCREEN_W + left];
+                        volatile uint32_t *drow = dst + y * BTRON_SCREEN_W + left;
+                        for (H x = 0; x < (right - left); x++) drow[x] = srow[x];
+                    }
+                    __asm__ volatile("dmb sy" : : : "memory");
+                    s_present_cursor_dirty = 1;
+                } else {
+                    workbench_render(screen, BTRON_SCREEN_W, BTRON_SCREEN_H);
+                    blit_backbuffer_to_fb(gpu_fb);
+                }
             } else {
                 workbench_render(screen, BTRON_SCREEN_W, BTRON_SCREEN_H);
                 blit_backbuffer_to_fb(gpu_fb);
             }
             s_present_fast_key_update = 0;
-            if (!s_present_pending)
-                s_present_pending = 0;
+            s_present_pending = 0;
             if (s_present_dma_enabled) {
                 s_present_cursor_dirty = 1;
             } else {
@@ -913,6 +962,28 @@ static void launch_pi4_desktop_session(uint32_t *gpu_fb)
                 prev_my = s_mouse_y;
             }
             }
+        }
+        else if (overlay_redraw) {
+            /* Menu-hover: repaint only the open menu overlay and present via
+             * the banded (non-blocking) copier.  Skips the full desktop
+             * composite that previously ran on every mouse-move. */
+            workbench_render_overlay_only(screen);
+            blit_backbuffer_to_fb(gpu_fb);
+            s_present_cursor_dirty = 1;
+        }
+        else if (panel_redraw) {
+            /* 1 Hz clock: repaint only the top system panel (rows 0..27, incl.
+             * the gold bar) and copy that band.  Bounded ~114 KB, sub-ms. */
+            render_system_panel(screen);
+            volatile uint32_t *dst =
+                gpu_fb + s_present_front_page * BTRON_SCREEN_W * BTRON_SCREEN_H;
+            for (H y = 0; y < 28; y++) {
+                const COLOR *srow = &s_desktop_backbuffer[y * BTRON_SCREEN_W];
+                volatile uint32_t *drow = dst + y * BTRON_SCREEN_W;
+                for (H x = 0; x < BTRON_SCREEN_W; x++) drow[x] = srow[x];
+            }
+            __asm__ volatile("dmb sy" : : : "memory");
+            s_present_cursor_dirty = 1;
         }
         uint32_t ui_cost = *(volatile uint32_t *)(TIMER_BASE + 0x04) - t_ui;
         if (ui_cost > s_ui_wcet_us) s_ui_wcet_us = ui_cost;

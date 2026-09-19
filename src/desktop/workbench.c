@@ -90,3 +90,25 @@ void workbench_render(GDEV *screen, H w, H h) {
         draw_baremetal_mouse_cursor(screen, mx, my, w, h);
     }
 }
+
+void workbench_render_overlay_only(GDEV *screen) {
+    if (!screen) return;
+
+    /* Same overlay logic as workbench_render() but WITHOUT the full desktop
+     * composite: the backbuffer already holds the desktop and the menu's own
+     * rect is repainted in full by the overlay renderer, so skipping
+     * redraw_baremetal_desktop() leaves no stale highlight. */
+    if (global_menu_is_open()) {
+        global_menu_render_overlay(screen);
+    }
+    if (tracker_is_menu_open()) {
+        tracker_render_menu(screen);
+    }
+
+    if (g_cursor_in_backbuffer) {
+        H mx = 0, my = 0;
+        H w = screen->width, h = screen->height;
+        get_baremetal_mouse_pos(&mx, &my);
+        draw_baremetal_mouse_cursor(screen, mx, my, w, h);
+    }
+}

@@ -23,6 +23,13 @@ void workbench_process_event(GDEV *screen, const EVT *ev);
 /* Render complete Workbench desktop with overlays and cursor */
 void workbench_render(GDEV *screen, H w, H h);
 
+/* Re-render ONLY the transient overlays (open menus) onto the existing
+ * backbuffer, skipping the full desktop composite (background + every window
+ * + panel).  An open menu's overlay repaints its whole rect each call, so this
+ * is ghost-free.  Used for menu-hover mouse moves so the full composite does
+ * not run per mouse-move and starve the 1 ms INPUT plane. */
+void workbench_render_overlay_only(GDEV *screen);
+
 #ifdef __cplusplus
 }
 #endif

@@ -424,7 +424,10 @@ void redraw_all_windows(void) {
                     if (px >= 0 && px < g_screen_dev->width && py >= 0 && py < g_screen_dev->height) {
                         COLOR c = wnd->dev->pixels[cy * wnd->dev->width + cx];
                         if (c != 0x00000000) {
-                            ((volatile COLOR*)g_screen_dev->pixels)[py * g_screen_dev->width + px] = c;
+                            /* Backbuffer is normal cached RAM: a volatile store
+                             * here defeats optimization and costs ~100 ms per
+                             * full composite (mouse-freeze culprit). */
+                            g_screen_dev->pixels[py * g_screen_dev->width + px] = c;
                         }
                     }
                 }
@@ -450,7 +453,7 @@ void redraw_top_window(void) {
                 if (px >= 0 && px < g_screen_dev->width && py >= 0 && py < g_screen_dev->height) {
                     COLOR c = wnd->dev->pixels[cy * wnd->dev->width + cx];
                     if (c != 0x00000000)
-                        ((volatile COLOR *)g_screen_dev->pixels)[py * g_screen_dev->width + px] = c;
+                        g_screen_dev->pixels[py * g_screen_dev->width + px] = c;
                 }
             }
         }

@@ -394,6 +394,22 @@ void global_menu_render_overlay(GDEV *dev) {
     }
 }
 
+BOOL global_menu_get_open_rect(RECT *out) {
+    if (!out) return FALSE;
+    /* Mirror global_menu_render_overlay()'s dispatch so the returned rect is
+     * exactly the region the overlay repaints. */
+    if (g_gmenu.active_menu == GMENU_HDR_BTRON || tracker_is_menu_open()) {
+        return tracker_get_menu_rect(out);
+    }
+    if (g_gmenu.active_menu < 1 || g_gmenu.active_menu >= GMENU_HEADER_COUNT) return FALSE;
+    const GMenuHeader *hdr = &g_headers[g_gmenu.active_menu];
+    out->left   = hdr->rect.left;
+    out->top    = 25;
+    out->right  = hdr->rect.left + GMENU_DROPDOWN_WIDTH + 3;
+    out->bottom = 25 + hdr->item_count * GMENU_ROW_HEIGHT + 6 + 3;
+    return TRUE;
+}
+
 static void global_menu_execute_cmd(int cmd) {
     global_menu_close();
 

@@ -460,6 +460,24 @@ void redraw_top_window(void) {
     }
 }
 
+void wnd_get_union_bounds(RECT *out) {
+    if (!out) return;
+    out->left = 32767; out->top = 32767; out->right = -32768; out->bottom = -32768;
+    WND *curr = g_wnd_head;
+    while (curr) {
+        if (curr->visible) {
+            if (curr->bounds.left   < out->left)   out->left   = curr->bounds.left;
+            if (curr->bounds.top    < out->top)    out->top    = curr->bounds.top;
+            if (curr->bounds.right  > out->right)  out->right  = curr->bounds.right;
+            if (curr->bounds.bottom > out->bottom) out->bottom = curr->bounds.bottom;
+        }
+        curr = curr->next;
+    }
+    if (out->right < out->left || out->bottom < out->top) {
+        out->left = out->top = out->right = out->bottom = 0;
+    }
+}
+
 WND* find_wnd_at(H x, H y) {
     WND *curr = g_wnd_head;
     while (curr) {

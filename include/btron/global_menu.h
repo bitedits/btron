@@ -79,6 +79,10 @@ BOOL global_menu_handle_mouse_down(H x, H y);
 BOOL global_menu_handle_key(UW key, VW mod);
 void global_menu_close(void);
 BOOL global_menu_is_open(void);
+
+/* Out-param rect the open dropdown/tracker menu occupies (incl. shadow),
+ * mirroring global_menu_render_overlay(); FALSE when no menu is open. */
+BOOL global_menu_get_open_rect(RECT *out);
 int  global_menu_get_active(void);
 int  global_menu_get_hover_header(void);
 void global_menu_set_screen_width(H w);

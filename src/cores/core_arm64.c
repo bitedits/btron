@@ -720,6 +720,45 @@ static void present_copy_step(void) {
     s_present_cursor_dirty = 1;
 }
 
+/* Copy one backbuffer rect to the visible page.  Bounded by the rect, so an
+ * interaction presents only the pixels that changed instead of a full 3 MB
+ * sweep (the perceived-latency culprit for drag / focus / menu-open). */
+static void present_backbuffer_rect(volatile uint32_t *fb, H x0, H y0, H x1, H y1) {
+    if (!fb) return;
+    if (x0 < 0) x0 = 0;
+    if (y0 < 0) y0 = 0;
+    if (x1 > BTRON_SCREEN_W) x1 = BTRON_SCREEN_W;
+    if (y1 > BTRON_SCREEN_H) y1 = BTRON_SCREEN_H;
+    if (x1 <= x0 || y1 <= y0) return;
+    volatile uint32_t *dst = fb + s_present_front_page * BTRON_SCREEN_W * BTRON_SCREEN_H;
+    for (H y = y0; y < y1; y++) {
+        const COLOR *srow = &s_desktop_backbuffer[y * BTRON_SCREEN_W + x0];
+        volatile uint32_t *drow = dst + y * BTRON_SCREEN_W + x0;
+        for (H x = 0; x < (x1 - x0); x++) drow[x] = srow[x];
+    }
+    __asm__ volatile("dmb sy" : : : "memory");
+    s_present_cursor_dirty = 1;
+}
+
+/* Window-union of the previous full render.  Initialised to the whole screen
+ * so the first full render presents everything (background, panel, test bar). */
+static RECT s_prev_win_union = { 0, 0, BTRON_SCREEN_W, BTRON_SCREEN_H };
+
+/* Full composite + present only old-union ∪ new-union.  A moved or restacked
+ * window's vacated area lies inside that union, so partial present stays
+ * correct while skipping the unchanged pure-desktop pixels. */
+static void present_full_render(GDEV *screen, volatile uint32_t *fb) {
+    workbench_render(screen, BTRON_SCREEN_W, BTRON_SCREEN_H);
+    RECT cur;
+    wnd_get_union_bounds(&cur);
+    H x0 = cur.left  < s_prev_win_union.left  ? cur.left  : s_prev_win_union.left;
+    H y0 = cur.top   < s_prev_win_union.top   ? cur.top   : s_prev_win_union.top;
+    H x1 = cur.right > s_prev_win_union.right ? cur.right : s_prev_win_union.right;
+    H y1 = cur.bottom> s_prev_win_union.bottom? cur.bottom: s_prev_win_union.bottom;
+    s_prev_win_union = cur;
+    present_backbuffer_rect(fb, x0, y0, x1, y1);
+}
+
 /* Stage 2: Launch full B-System Workbench desktop session. */
 static void launch_pi4_desktop_session(uint32_t *gpu_fb)
 {
@@ -845,6 +884,7 @@ static void launch_pi4_desktop_session(uint32_t *gpu_fb)
         int redraw = 0;
         int overlay_redraw = 0;
         int panel_redraw = 0;
+        int menu_open_at_loop_start = global_menu_is_open() || tracker_is_menu_open();
         for (uint32_t ev_iter = 0; ev_iter < ASYNC_UI_EVENT_BUDGET && get_evt(&ev, 0) == E_OK; ev_iter++) {
             if (ev.type == EV_KEY_DOWN && ev.key == 0x1B /* Escape */) {
                 s_gui_active = 0;
@@ -864,8 +904,15 @@ static void launch_pi4_desktop_session(uint32_t *gpu_fb)
                     redraw = 1;   /* drag: window contents move, full composite */
                 }
             } else {
-                /* Buttons, keys, etc. need real UI update */
-                redraw = 1;
+                int menu_open_now = global_menu_is_open() || tracker_is_menu_open();
+                if (ev.type == EV_BUT_DOWN && !menu_open_at_loop_start && menu_open_now) {
+                    /* Opening a menu only lays an overlay over an unchanged
+                     * desktop: repaint the overlay, skip the full composite. */
+                    overlay_redraw = 1;
+                } else {
+                    /* Buttons, keys, focus changes need a real UI update */
+                    redraw = 1;
+                }
                 if (ev.type == EV_KEY_DOWN && ev.key != '\r' && ev.key != '\n')
                     s_present_fast_key_update = 1;
             }
@@ -945,12 +992,10 @@ static void launch_pi4_desktop_session(uint32_t *gpu_fb)
                     __asm__ volatile("dmb sy" : : : "memory");
                     s_present_cursor_dirty = 1;
                 } else {
-                    workbench_render(screen, BTRON_SCREEN_W, BTRON_SCREEN_H);
-                    blit_backbuffer_to_fb(gpu_fb);
+                    present_full_render(screen, gpu_fb);
                 }
             } else {
-                workbench_render(screen, BTRON_SCREEN_W, BTRON_SCREEN_H);
-                blit_backbuffer_to_fb(gpu_fb);
+                present_full_render(screen, gpu_fb);
             }
             s_present_fast_key_update = 0;
             s_present_pending = 0;
@@ -964,11 +1009,16 @@ static void launch_pi4_desktop_session(uint32_t *gpu_fb)
             }
         }
         else if (overlay_redraw) {
-            /* Menu-hover: repaint only the open menu overlay and present via
-             * the banded (non-blocking) copier.  Skips the full desktop
-             * composite that previously ran on every mouse-move. */
+            /* Menu hover/open: repaint only the open menu overlay and present
+             * exactly that rect (not a full 3 MB sweep).  The overlay repaints
+             * its whole rect, so this is ghost-free. */
             workbench_render_overlay_only(screen);
-            blit_backbuffer_to_fb(gpu_fb);
+            RECT mr;
+            if (global_menu_get_open_rect(&mr)) {
+                present_backbuffer_rect(gpu_fb, mr.left, mr.top, mr.right, mr.bottom);
+            } else {
+                blit_backbuffer_to_fb(gpu_fb);
+            }
             s_present_cursor_dirty = 1;
         }
         else if (panel_redraw) {

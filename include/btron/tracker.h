@@ -80,6 +80,9 @@ BOOL tracker_handle_key(W key_code);
 
 /* State Inspection & Control */
 BOOL tracker_is_menu_open(void);
+
+/* Out-param rect the open tracker menu occupies (incl. shadow), else FALSE. */
+BOOL tracker_get_menu_rect(RECT *out);
 void tracker_open_menu(void);
 void tracker_close_menu(void);
 void tracker_toggle_menu(void);

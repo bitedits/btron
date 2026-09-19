@@ -62,6 +62,9 @@ void redraw_all_windows(void);
 void redraw_top_window(void);
 WND* find_wnd_at(H x, H y);
 WND* get_top_wnd(void);
+
+/* Union of all visible window bounds; empty rect (0,0,0,0) when none. */
+void wnd_get_union_bounds(RECT *out);
 WND* get_wnd_list(void);
 GDEV* wnd_mgr_get_screen(void);
 

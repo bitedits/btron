@@ -239,6 +239,15 @@ BOOL tracker_is_menu_open(void) {
     return (g_tracker.state == TRACKER_STATE_OPEN);
 }
 
+BOOL tracker_get_menu_rect(RECT *out) {
+    if (!out || g_tracker.state != TRACKER_STATE_OPEN) return FALSE;
+    *out = g_tracker.menu_rect;
+    /* Include the drop-shadow overhang so the present band covers it. */
+    out->right += 3;
+    out->bottom += 3;
+    return TRUE;
+}
+
 void tracker_open_menu(void) {
     tracker_refresh_windows();
     g_tracker.state = TRACKER_STATE_OPEN;

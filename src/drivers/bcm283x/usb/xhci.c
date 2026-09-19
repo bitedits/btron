@@ -1195,12 +1195,17 @@ int xhci_poll_mouse(usb_mouse_report_t *rep) {
     /* NOTE: do NOT call xhci_process_events() here.
      * Caller must invoke xhci_process_events() once before polling. */
     if (s_has_mouse) {
+        /* Do NOT clamp the accumulated sum to ±512.
+         * After a slow GUI frame many 1 ms HID reports pile up in
+         * s_accum_*; clamping throws away real motion and is the main
+         * cause of "mouse saturation". Per-packet clamps in
+         * xhci_decode_mouse_report remain. Only saturate to int16 range. */
         int32_t dx = s_accum_dx;
         int32_t dy = s_accum_dy;
-        if (dx > 512) dx = 512;
-        if (dx < -512) dx = -512;
-        if (dy > 512) dy = 512;
-        if (dy < -512) dy = -512;
+        if (dx >  32767) dx =  32767;
+        if (dx < -32768) dx = -32768;
+        if (dy >  32767) dy =  32767;
+        if (dy < -32768) dy = -32768;
 
         rep->dx = (int16_t)dx;
         rep->dy = (int16_t)dy;

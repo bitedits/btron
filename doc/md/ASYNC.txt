@@ -1,0 +1,300 @@
+ASYNC — Deterministic Real-Time Input & Presentation
+====================================================
+
+B-System (BTRON 3.20)
+NuttX-style scheduling constraints
+Related: EVENTING.md, USB.md, GUI.md, SMP.md
+
+Status: Design plan
+Policy: Input task and UI task share the SAME priority.
+        Determinism comes from bounded work, fixed periods, and zero unbounded critical sections.
+
+1. Real-time goals (NuttX-like)
+------------------------------
+
+1.1 Hard requirements
+
+  Property                   Requirement
+  -----------------------    --------------------------------------------------
+  Bounded ISR                xHCI / timer ISR WCET <= T_isr_max (target <= 50 us)
+  No ISR -> UI               ISR must not call workbench_*, blit, heap, or unbounded snd_evt loops
+  Fixed input period         Pointer/HID integration on a periodic cadence (e.g. 1 ms), not "whenever the paint loop runs"
+  Bounded input work         Each input period processes <= N event-ring TRBs and <= M HID reports (defined drop/defer policy)
+  Bounded UI work            Each UI period has a time budget; unfinished paint is deferred to the next period
+  Equal task priority        pri(input) == pri(ui) (and present, if separate)
+  Priority inheritance       Mutexes shared by input and UI must support inheritance, or use wait-free snapshots
+  No I/O priority inversion  Full-screen CPU blit must not be a critical section that blocks HID progress
+
+1.2 What equal priority does NOT mean
+
+  Equal priority does not mean one big loop that paints for ~1 ms then
+  polls USB. It means both tasks are peers under a periodic, budgeted
+  schedule, while host-controller progress is driven by interrupt or a
+  periodic tick with fixed WCET.
+
+2. Failure mode to eliminate
+----------------------------
+
+Non-deterministic batching: HID reports accumulate while the CPU is inside
+workbench_render / blit_backbuffer_to_fb, then apply in one lump
+-> saturated mouse latency.
+
+That violates fixed input period, bounded integration latency, and
+separation of short IRQ path from long UI work.
+
+Root cause on Pi 400 GUI: a single cooperative loop owns
+  (1) xhci_process_events
+  (2) HID decode / pointer integration
+  (3) snd_evt / get_evt
+  (4) full Workbench paint + CPU framebuffer blit (~1.1 ms)
+
+While (4) runs, (1) stalls. Reports pile up in s_accum_* or the HC sits
+with only one EP1 TRB in flight.
+
+Invariant:
+  The path that advances the USB host controller must not share a
+  blocking critical section with full-screen memory copy or full
+  desktop composite.
+
+
+3. Scheduling model
+-------------------
+
+3.1 Threads / tasks (same priority)
+
+  Priority P (shared):
+    TASK_INPUT     period Ti = 1 ms    budget Bi
+    TASK_UI        period Tu = 8 ms    budget Bu   (e.g. 120 Hz class)
+    TASK_PRESENT   period Tu           budget Bp   (optional; may merge with UI)
+
+  Interrupt level (not a task priority):
+    IRQ_XHCI or IRQ_TICK   WCET <= T_isr_max
+
+  Same P => under fixed-priority preemptive RTOS they time-slice or run
+  FIFO when both ready. Periods and budgets provide determinism, not
+  "input always wins."
+
+3.2 Rate structure (example; tune per board, document WCET in verify/)
+
+  Entity   Period      Budget (example)   Work
+  -------  ----------  -----------------  --------------------------------
+  IRQ      event/1ms   <= 50 us           process_events <= N TRBs; update wait-free pointer slot; signal INPUT
+  INPUT    1 ms        <= 200 us          read snapshot; edge buttons; snd_evt keys/buttons; gated move
+  UI       8.33 ms     <= 6 ms            get_evt bounded; workbench; render BACKBUFFER only
+  PRESENT  8.33 ms     <= 1.5 ms or DMA   present frame; must not block; INPUT period
+
+3.3 NuttX parallels
+
+  NuttX idea                    B-System mapping
+  ----------------------------  ------------------------------------------
+  High-rate periodic task       TASK_INPUT @ 1 kHz
+  Lower-rate display task       TASK_UI @ ~120 Hz
+  Equal priority + RR/FIFO      pri(input) == pri(ui)
+  Deferred interrupt work       IRQ only posts semaphore / event flag
+  wdog / timer                  system timer or cyclic handler @ 1 ms
+  Bounded critical sections     wait-free pointer seqlock or short buffer
+
+4. Data path (deterministic)
+----------------------------
+
+  IRQ (bounded)
+    xhci_process_events() /* <= N TRBs */
+    write pointer snapshot (seqlock / double buffer)
+    if key/button pending -> post EVENT_INPUT
+    return
+
+  TASK_INPUT (period 1 ms, pri P)
+    wait period or EVENT_INPUT
+    read snapshot
+    integrate / accel (bounded)
+    snd_evt for KEY/BUT only (and gated MOVE)
+    /* never full paint */
+
+  TASK_UI (period ~8 ms, pri P)
+    get_evt (<= Q events)
+    workbench_process_event
+    if dirty && budget remains -> render backbuffer
+    signal PRESENT
+
+  TASK_PRESENT (pri P) or UI tail
+    DMA/flip preferred; if CPU blit, budget-capped + IRQs stay enabled
+
+Rule: Long work runs only in UI/PRESENT with an explicit budget.
+When budget is exhausted, stop and continue next period.
+
+5. Rejected patterns (RT view)
+------------------------------
+
+  Pattern                              RT violation
+  -----------------------------------  ------------------------------------
+  USB progress only in GUI loop        Input period jitter = paint WCET
+  Drain xHCI inside blit scanlines     Present WCET includes USB; analysis harder; architectural coupling
+  Unbounded process_events in IRQ      ISR WCET unbounded under flood
+  Unbounded EV_MOUSE_MOVE storm        Queue growth non-deterministic
+  Heap alloc in IRQ or input period    Non-deterministic latency
+  Equal pri but no yield during blit   Peer starvation for a full period
+  Raise input permanently above UI     Conflicts with equal-priority policy
+  Full mailbox IPC per HID packet      Unnecessary; wrong layer
+
+6. Implementation phases (RT-ordered)
+-------------------------------------
+
+Phase 0 — Measure WCET / jitter - Deliverables
+  - Instrument: IRQ entry->exit, input period jitter, max event-ring lag, blit duration (idle and full dirty desktop).
+  - async_rt_stats + global menu HUD
+  - Short note of measured maxima (screenshot or values) before Phase 1
+  - Deliverable: table of observed maxima -> choose T_isr_max, Bi, Bu.
+
+Phase 1 — Bounded IRQ + periodic INPUT (equal pri with UI) - Deliverables
+  - Timer IRQ @ 1 kHz OR xHCI IRQ with deferred INPUT wake.
+  - ISR: drain <= N TRBs; update wait-free pointer; post flag; return.
+  - TASK_INPUT @ priority P, period 1 ms: keys/buttons -> snd_evt.
+  - GUI becomes TASK_UI @ priority P, period ~8 ms.
+  - Remove sole dependence on "poll USB only at top of GUI while".
+  - Exit: max gap between pointer snapshots <= 2*Ti under continuous paint.
+
+Phase 2 — Bounded queues and policies - Deliverables
+  - Event ring: <= N TRBs per IRQ; excess left for next tick.
+  - System EVT queue: fixed size; on full drop oldest EV_MOUSE_MOVE; prefer never dropping BUT/KEY.
+  - Mouse: no multi-frame software accum as primary path.
+
+Phase 3 — Multi-TRB EP1 (device-side determinism) - Deliverables
+  - 2-4 fixed buffers/TRBs in flight per mouse.
+  - Eliminates non-deterministic host idle gap after single completion.
+  - Files: src/drivers/bcm283x/usb/xhci.c
+
+Phase 4 — Present without starving periods - Deliverables
+  - Prefer DMA/page-flip so CPU blit WCET leaves the analysis.
+  - If CPU blit remains: only inside UI/PRESENT budget; IRQs enabled; INPUT still meets period.
+  - Do NOT require in-blit xhci_process_events as the architecture.
+
+Phase 5 — Optional SMP
+  - Pin IRQ+INPUT vs UI+PRESENT if dual-core; same logical priority class; document memory ordering for pointer snapshot (see SMP.md).
+
+Phase 0 — Measure WCET / jitter (display on global top menu)
+-------------------------------------------------------------
+
+Goal: Prove input batching vs present cost with live numbers on the
+Workbench global menu bar (Deskbar / top status strip), so tuning
+does not require a serial console.
+
+Instrumentation (collect every INPUT period or once per UI period)
+  - irq_us          : last IRQ entry->exit duration (us)
+  - irq_us_max      : max irq_us since boot or since reset key
+  - input_gap_us    : time since previous pointer snapshot / process_events
+  - input_gap_max   : max input_gap_us under load
+  - trb_per_irq     : TRBs drained in last IRQ (and max)
+  - blit_us         : last full blit or present duration (us)
+  - blit_us_max     : max blit_us
+  - accum_abs_max   : max |s_accum_dx| + |s_accum_dy| before integrate (baseline; should fall after Phase 1-2)
+
+Display (global top menu / status strip):
+  Extend global menu bar status area (right side of top rail, near
+  clock / TIP badge) with a compact, fixed-width telemetry string so
+  layout does not jitter:
+
+    Expected format (keep under ~40 columns):
+
+      IN 1.2ms  GAP 0.8/14ms  BLIT 1.1ms
+
+Rules:
+  - Update label at UI period (Tu), not every HID report.
+  - Use fixed-width fields (pad numbers) to avoid menu reflow.
+  - Colors optional: green if gap_max <= 2ms; amber <= 5ms; red above.
+  - Toggle: menu item or key (e.g. under 道具・文字 or debug build flag ASYNC_TELEMETRY=1) to show/hide and to reset maxima.
+  - Debug builds only by default; no allocation in IRQ when formatting — format in TASK_UI from atomic/snapshot counters written by IRQ and INPUT.
+
+Where to hook:
+  - Counters: xhci IRQ / timer path and blit_backbuffer_to_fb (or present)
+  - Snapshot for UI: wait-free struct async_rt_stats (seqlock or atomics)
+  - Draw: global_menu render path (same place as clock), e.g. global_menu.c status strip painter
+
+Pass criteria (Phase 0 complete when)
+  - Top menu shows live gap / max gap / blit while moving the mouse and while forcing continuous dirty redraw.
+  - Baseline documented: under full desktop redraw, gap_max is clearly larger than Ti (expected today); after Phase 1, gap_max <= 2ms remains visible on the same HUD without serial.
+
+7. Shared state (determinism)
+-----------------------------
+
+Pointer snapshot (IRQ -> INPUT/UI):
+
+  struct pointer_slot {
+    uint32_t seq;       /* seqlock */
+    int16_t  x, y;
+    uint8_t  buttons;
+    uint8_t  _pad;
+  };
+
+  Writer: IRQ (single writer).
+  Readers: INPUT and UI (retry on seq change).
+  No mutex on common path => no inversion between equal-priority tasks.
+
+EVT queue: existing snd_evt/get_evt with fixed capacity and drop policy.
+
+8. API sketch
+-------------
+
+  void input_plane_on_irq(void);     /* bounded: process_events + snapshot */
+  void input_plane_task(void);       /* period Ti: KEY/BUT snd_evt */
+  void input_plane_get_pointer(H *x, H *y, uint8_t *buttons);
+
+  typedef void (*xhci_mouse_report_fn)(int16_t dx, int16_t dy, uint8_t buttons);
+  void xhci_set_mouse_report_callback(xhci_mouse_report_fn fn);
+
+  void present_request_frame(void);
+  int  present_is_busy(void);
+
+ISR rules:
+  - No workbench_render, no full blit, no heap.
+  - snd_evt from ISR only if queue is IRQ-safe; else defer to TASK_INPUT.
+
+9. Configuration sketch
+-----------------------
+
+  #define ASYNC_INPUT_PERIOD_US      1000
+  #define ASYNC_UI_PERIOD_US         8333
+  #define ASYNC_ISR_TRB_BUDGET       32
+  #define ASYNC_INPUT_EVT_BUDGET     16
+  #define ASYNC_TASK_PRI_INPUT_UI    100   /* same value for both */
+
+T-Kernel: tk_cre_tsk with identical itskpri; cyclic/alarm for periods; event flag for IRQ -> INPUT.
+
+10. Success metrics (pass/fail)
+-------------------------------
+
+  Metric                                         Pass
+  ---------------------------------------------  ---------------------------
+  ISR WCET (measured max)                        <= T_isr_max
+  INPUT release jitter under UI load             <= 10% of Ti
+  Max time between pointer updates under redraw  <= 2 ms
+  EVT overflow (KEY/BUT) in stress               0
+  pri(input) == pri(ui)                          required
+  Architecture requires in-blit USB drain        forbidden
+
+11. Relation to EVENTING.md
+---------------------------
+
+  Unchanged: Workbench dispatch order, window manager, app event_handler.
+  Changed: Who calls xhci_process_events and when pointer samples become coordinates — under a periodic, budgeted input plane, not paint.
+  Passive motion largely outside snd_evt; discrete interaction remains EVT stream.
+
+
+12. Checklist
+-------------
+
+  [ ] Phase 0 WCET/jitter baseline + global top-menu HUD
+  [ ] Bounded IRQ + wait-free pointer slot
+  [ ] TASK_INPUT and TASK_UI at SAME priority, fixed periods
+  [ ] Drop policy for EVT / TRB budgets documented
+  [ ] Multi-TRB mouse
+  [ ] Present path with IRQs enabled / DMA
+  [ ] Stress: motion + continuous dirty desktop + typing
+  [ ] Remove any blit-time USB polling hacks
+
+13. Credits
+-----------
+
+  Namdak Tonpa and Grok 4.5
+  Problem analysis: Pi 400 GUI mouse saturation / input latency (2026-09)
+  Scheduling model: deterministic embedded practice (NuttX-style periods,
+  budgets, bounded ISR; equal priority for device and UI tasks)

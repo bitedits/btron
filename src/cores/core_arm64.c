@@ -642,10 +642,11 @@ static void launch_pi4_desktop_session(uint32_t *gpu_fb)
 
         uint32_t now = *(volatile uint32_t *)(TIMER_BASE + 0x04);
 
-        /* Poll USB devices once per loop */
-        if (usb_poll_devices(screen)) {
-            // events enqueued
+        if (g_use_xhci) {
+            xhci_process_events();
         }
+
+        usb_poll_devices(screen);
 
         /* Immediate cursor update on GPU front buffer (< 1 us glass-to-glass latency) */
         if (s_mouse_x != prev_mx || s_mouse_y != prev_my) {
@@ -1208,16 +1209,20 @@ static int usb_poll_devices(GDEV *screen) {
             if (ny < 0) ny = 0;
             else if (ny >= BTRON_SCREEN_H) ny = BTRON_SCREEN_H - 1;
 
-            s_mouse_x = (H)nx;
-            s_mouse_y = (H)ny;
+            H new_x = (H)nx;
+            H new_y = (H)ny;
+            int pos_changed = (new_x != s_mouse_x || new_y != s_mouse_y);
+            s_mouse_x = new_x;
+            s_mouse_y = new_y;
             set_baremetal_mouse_pos(s_mouse_x, s_mouse_y);
 
             /* Gate EV_MOUSE_MOVE: only enqueue to system event queue if UI needs it
              * (menu open, button pressed/dragged, tab sliding, or top menu hover).
              * Passive cursor movement is already rendered to GPU front buffer with zero latency. */
-            if (global_menu_is_open() || tracker_is_menu_open() ||
+            if (pos_changed &&
++                (global_menu_is_open() || tracker_is_menu_open() ||
                 g_prev_mouse_btns != 0 || wnd_mgr_is_interacting() ||
-                s_mouse_y <= 25) {
+                s_mouse_y <= 25)) {
                 EVT ev;
                 ev.type   = EV_MOUSE_MOVE;
                 ev.pos.x  = s_mouse_x;

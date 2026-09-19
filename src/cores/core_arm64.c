@@ -1400,7 +1400,7 @@ static int usb_poll_devices(GDEV *screen) {
              * (menu open, button pressed/dragged, tab sliding, or top menu hover).
              * Passive cursor movement is already rendered to GPU front buffer with zero latency. */
             if (pos_changed &&
-+                (global_menu_is_open() || tracker_is_menu_open() ||
+                (global_menu_is_open() || tracker_is_menu_open() ||
                 g_prev_mouse_btns != 0 || wnd_mgr_is_interacting() ||
                 s_mouse_y <= 25)) {
                 EVT ev;

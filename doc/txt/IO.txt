@@ -1,0 +1,463 @@
+IO.txt — Multi-Core I/O Architecture Requirements (SMP Cores)
+=============================================================
+
+B-System (BTRON 3.20)
+Dedicated I/O core for the ASYNC input plane and future device planes
+Related: ASYNC.txt, SMP.md, IRQ.md, EVENTING.md, GPU.md
+
+Status: Requirements (normative for the Pi 400 / BCM2711 port)
+Policy: Exactly ONE I/O core.  The minimum number of cores that preserves
+        the single-producer invariants of every shared ring.  The remaining
+        cores stay parked as reserved capacity — core count is not a
+        load-balancing decision.
+
+0. Scope and rooting
+--------------------
+
+This document fixes the requirements for the asymmetric multi-processing
+(AMP) realisation of the ASYNC.txt input plane on the Pi 400 (BCM2711,
+quad Cortex-A72).  It answers three questions:
+
+  1. How many cores does I/O need?                     -> §3  (exactly one)
+  2. Which core, and what exactly does it own?         -> §2, §6
+  3. What contracts make the split safe?               -> §5, §7, §9
+
+Rooting:
+
+- ASYNC.txt defines the input/UI plane contracts (periods, budgets,
+  wait-free snapshot, gated MOVE).  IO.txt changes WHO and WHERE the
+  producer runs, never the plane contracts themselves.
+- SMP.md §3 defines the pinned-worker / lock-free-queue actor topology.
+  The I/O core is the first Tier-2-style pinned worker realised on the
+  Tier-1 board: flat physical memory, no MMU, no privilege transitions —
+  but the same "one worker per core, one queue per worker" discipline.
+- IRQ.md §6 records that the GIC 1 kHz tick producer is blocked on this
+  firmware.  The I/O core replaces the interrupt producer with a POLLING
+  core; no working IRQ delivery is assumed or required.
+- InterCore taxonomy (ASYNC.txt §0.1) maps directly: the release word of
+  §4 is `spawn [core; program; cursors]`; the seqlock of §5 is `pub`;
+  the SPSC rings are `sub`.  No new protocol is introduced.
+
+Out of scope: MMU isolation / PML4 (SMP.md Tier-2 workstations), the DMA
+presenter (GPU.md), and the GIC root-cause work (IRQ.md §7).  None of the
+requirements below depend on them.
+
+1. Hardware baseline (BCM2711 / Pi 400)
+---------------------------------------
+
+- 4x Cortex-A72 @ 1.8 GHz, one cluster, hardware-coherent, MMU off,
+  single flat physical address space.
+- Firmware starts all four cores at the same PC.  Core 0 runs btron_main;
+  cores 1..3 park in `wfe` at _start with no stack and no release word
+  (src/drivers/bcm283x/cpu/startup_arm.c, the `mpidr_el1` / `wfe` loop).
+- No usable interrupt delivery (IRQ.md): GIC IAR/EOIR suspected bus-locks,
+  IGROUPR RAZ/WI from NS.  Therefore: the I/O core is a polling core.
+- Shared wall clock: BCM2835 system timer CLO at TIMER_BASE+0x04 (1 MHz),
+  wrap-safe 32-bit unsigned subtraction mandatory in ALL cross-core
+  deadline arithmetic (the CLO wraps every ~71.6 min).
+
+2. Core assignment (normative)
+------------------------------
+
+  Core   Plane            Cadence      WCET budget   Owns
+  ----   ---------------  -----------  ------------  ---------------------------------
+  0      UI + PRESENT     8.33 ms      4000 us       get_evt (consumer), workbench,
+                                                     composite, banded present,
+                                                     mailbox calls, uart/fb_log
+  3      INPUT (I/O)      250 us       500 us        xHCI event-ring drain (sole),
+                                                     HID decode, seqlock publish,
+                                                     snd_evt (sole producer),
+                                                     key repeat timer,
+                                                     cursor stamp (front buffer)
+  1..2   parked           n/a          n/a           reserved (see §12)
+
+  Core 3 is chosen for tidiness (max distance from core 0's boot traffic);
+  the A72 cluster is symmetric, so any non-zero core satisfies this
+  document.  The id must be a compile-time constant: ASYNC_IO_CORE_ID.
+
+Diagram:
+
+  core 0 (fat plane)                          core 3 (I/O core)
+  +------------------------------+            +------------------------------+
+  | UI plane @ 8.33 ms           |            | INPUT plane @ 250 us         |
+  |   get_evt <= 16              |   EVT      |   drain <= 32 TRBs           |
+  |   workbench_process_event    |<-----------|   seqlock publish            |
+  |   composite + banded present |  (SPSC)    |   KEY/BUT snd_evt            |
+  |                              |            |   cursor stamp (16x16)       |
+  +------------------------------+            +------------------------------+
+        ^            ^                                ^              ^
+        |            |   pointer_slot (seqlock) ------+              |
+        |            +------------------------------------------------+
+        |                                    xHCI event ring (PCIe MMIO,
+        |                                    sole consumer: core 3)
+        +-- mailbox / uart / console: core 0 ONLY (shared single-FIFO
+            peripherals; two writers are a race, not a design)
+
+3. Why exactly one I/O core (rationale, not taste)
+--------------------------------------------------
+
+R1  Utilisation.  The INPUT workload is I = 20..50 us per period
+    (bounded drain <= 32 TRBs, seqlock write, snd_evt) plus ~5 us of
+    cursor stamp.  At the 250 us period that is 10..20 % of ONE core.
+    A second I/O core is 90 %+ idle by construction.
+
+R2  Device rate floor.  A 125 Hz mouse delivers a report every 8 ms;
+    the Pi 400 keyboard at 8..16 ms.  No amount of extra drain capacity
+    beats the device.  Extra I/O cores buy zero glass latency.
+
+R3  Single-producer invariants (hard, architectural):
+      - the xHCI event ring has ONE dequeue pointer (ERDP); it has
+        exactly one consumer at all times (ASYNC.txt §5);
+      - pointer_slot_t has exactly one writer;
+      - the system EVT queue has exactly one producer once the I/O core
+        is active.  Splitting input across cores forces the EVT queue
+        to become MPSC and puts a lock (or CAS) in the hot path — a
+        regression, not a feature.
+
+R4  Memory bandwidth.  Core 0's composite and present copy are
+    DRAM-bound (3 MB/frame).  Any second busy core competes for AXI/L2
+    and makes the click-to-glass path — composite dominated — slower.
+
+R5  Verification surface.  The value of the I/O core is that it is a
+    tiny, lock-free, allocation-free, provably-bounded worker.  Each
+    additional plane multiplies the WCET proofs and the race inventory
+    that verify/ must cover.
+
+When a second I/O core MAY be added (§12): only for an INDEPENDENT
+device plane with its own device, its own SPSC queue pair and its own
+pinned core (tcpip, audio, block).  Never to share the input workload.
+
+4. Boot and release protocol (core 3 bring-up)
+----------------------------------------------
+
+The parked loop in startup_arm.c gains a release word.  Cores 1..3 poll
+it after wfe; core 3 additionally identifies itself by MPIDR affinity 0
+before jumping:
+
+  volatile uint64_t s_io_core_release;      /* 0 = stay parked            */
+
+  /* parked loop (assembly, startup_arm.c) */
+  park:  wfe
+         ldr  x1, =s_io_core_release
+         cbz  x1, park
+         mrs  x0, mpidr_el1 ; and x0, x0, #0xFF
+         cmp  x0, #ASYNC_IO_CORE_ID
+         b.ne park
+         br   x1                    /* jump; callee sets its own SP       */
+
+Requirements:
+
+BR1  Release ORDER: core 0 writes s_io_core_release only AFTER xhci_init
+     has returned and EP1 interrupt-IN rings are armed — mirroring the
+     existing s_async_irq_active arming sequence — so the I/O core never
+     observes half-initialised rings.
+
+BR2  The I/O core sets up its own stack (SP_EL2 or SP_EL1) before any C
+     code runs, and never dispatches exceptions through core 0's vector
+     table.  A minimal local vector table that parks-on-exception is
+     optional hardening; running without one is accepted for Phase C.
+
+BR3  Timer source on the I/O core is the CLO (any EL, MMU off).  Do NOT
+     depend on CNTV/CNTP ownership across the EL drop.
+
+BR4  Fallback: core 0 confirms the I/O core is alive (heartbeat, §10)
+     within 50 ms, exactly like the existing IRQ confirmation handshake.
+     On failure: s_io_core_active = 0, the cooperative core-0 input path
+     runs unchanged, and the compact HUD reports the fallback (§13).
+
+BR5  Takeover handshake (also the shutdown path), in this order and
+     never any other:
+       a. core 0: s_io_core_release = 0; dmb sy;
+       b. core 3: finishes the current period, publishes the parked
+          magic to the heartbeat, parks (wfe);
+       c. core 0: waits <= ASYNC_IO_TAKEOVER_TIMEOUT_MS for the magic,
+          then reclaims the drain as sole producer and logs the takeover.
+     Two simultaneous producers are forbidden at every instant.  A timed
+     out reclaim (no ack) is permitted only because the parked core
+     cannot be mid-drain after its period boundary + timeout; the log
+     line must record it.
+
+5. Inter-core shared state contracts (normative)
+------------------------------------------------
+
+Inventory — every structure that crosses a core boundary, with writer,
+reader and ordering primitive:
+
+  Structure                Writer      Reader      Discipline
+  -----------------------  ----------  ----------  --------------------------------
+  pointer_slot_t           core 3      core 3      seqlock; dmb sy around the
+  (async_rt.h)             (publish)   (diff)      payload on BOTH sides
+
+  xHCI SPSC HID rings      core 3      core 3      producer/consumer are now the
+  (xhci.c kbd/mouse)       (drain)     (integrate) SAME core; unchanged code
+
+  EVT queue (event.c)      core 3      core 0      MUST become SPSC-atomic (§5.1)
+  async_rt_stats_t         both        core 0      split per plane (§5.2)
+  s_desktop_backbuffer     core 0      core 3      read-only on core 3 (cursor
+                                                   restore); coherent, no barrier
+                                                   beyond the existing dmb
+  s_present_seq (new)      core 0      core 3      monotonic bump after every
+                                                   present band/rect; tells core 3
+                                                   to re-stamp the cursor rect
+
+5.1  EVT queue SPSC conversion (required before Phase C)
+
+The current event.c ring is plain ints on one core.  Once core 3 is the
+producer it must become wait-free SPSC:
+
+  typedef struct {
+      EVT               buf[EVENT_QUEUE_SIZE];   /* 256, power of two      */
+      volatile uint32_t head;   /* consumer-owned: plain store, acquire load */
+      volatile uint32_t tail;   /* producer-owned: release store, plain load */
+  } evt_spsc_t;
+
+  - indices masked (& 255), never modulo;
+  - MOVE tail-coalescing stays producer-side (core 3) — unchanged logic;
+  - the drop-oldest policy stays producer-side; KEY/BUT are never dropped;
+  - get_evt / clr_evt / pke_evt are core-0-only from Phase C onward;
+  - hosted builds (POSIX/SDL) keep the existing single-threaded behaviour:
+    the SPSC atomics must compile to no-ops where the I/O core cannot exist.
+
+5.2  Telemetry split (required)
+
+s_async_rt_stats_t gains two writers today (input-side counters from the
+producer, UI-side from core 0).  Requirement: split into io_stats (written
+by core 3 only) and ui_stats (written by core 0 only); the HUD formatter
+merges.  Relaxed ordering is acceptable for telemetry fields, but each
+field must have exactly one writer.
+
+5.3  Prohibitions on the I/O core (absolute)
+
+  - no mailbox / VideoCore property calls (single shared FIFO — a
+    cross-core mailbox call is a race, not a design);
+  - no uart_puts / fb_log / console writes;
+  - no heap, no allocation, no blocking primitive, no lock of any kind;
+  - no framebuffer writes outside the 16x16 cursor rect;
+  - no rendering, no event DISPATCH (only enqueue).
+
+6. Scheduling requirements (I/O core)
+-------------------------------------
+
+SR1  The I/O core free-runs its own absolute-deadline loop: period
+     ASYNC_IO_PERIOD_US = 250 us (configurable 250..1000).  Deadlines are
+     absolute (next += period) with bounded catch-up, same as the
+     existing planes.
+
+SR2  WCET budget ASYNC_IO_BUDGET_US = 500 us.  A period that overruns is
+     recorded (io_wcet_us) and the excess work is dropped per the move
+     budget — it must never delay the next deadline beyond one period.
+
+SR3  Spin-idle between deadlines is acceptable at 10..20 % utilisation.
+     Optional Phase E: core 0 sleeps in wfe between deadlines and is
+     woken by sev from the I/O core when a UI-relevant event is enqueued
+     or the cursor moved; core 0 must re-check all deadlines after every
+     wake (sev is a hint, not a message).
+
+SR4  Cursor stamping ownership moves to the I/O core: it restores the
+     16x16 rect from s_desktop_backbuffer and stamps the cursor into the
+     visible page when (motion changed) OR (s_present_seq changed).
+     Core 0 never stamps the cursor once the I/O core is active; the
+     s_present_cursor_dirty semantics are preserved through s_present_seq.
+     A present band may overwrite the cursor rect for at most one poll
+     period; that is the accepted (and bounded) artifact.
+
+7. Boundedness requirements
+---------------------------
+
+  - drain <= ASYNC_ISR_TRB_BUDGET (32) TRBs per period;
+  - mouse fold <= ASYNC_ISR_MOUSE_BUDGET (8) decoded reports per period;
+  - every cross-core write is wait-free or O(1) — a queue with a spin
+    retry bound (seqlock reader) is the worst construct allowed;
+  - keyboard auto-repeat runs on the I/O core's period clock (bounded,
+    no new timers).
+
+8. Performance requirements (acceptance numbers)
+------------------------------------------------
+
+The P1 latency model, with C = composite time (read composite_max_us
+from the existing [UI]C... UART telemetry on hardware) and P = present
+rect copy:
+
+  Metric (under continuous dirty redraw)   Baseline (1 core)    P1 requirement
+  ---------------------------------------  -------------------  -------------------
+  Pointer integration gap (worst)          C + P (≈3.4 ms at    <= ASYNC_IO_PERIOD_US
+                                           C = 3 ms)            (0.25 ms)
+  Pointer report -> cursor on glass        ≈1.7 ms typical      <= 0.3 ms worst,
+  (cursor on I/O core)                     / ≈3.4 ms worst      ≈0.1 ms typical
+  INPUT release jitter vs Ti               0..340 % of Ti       < 1 %
+  Button/key enqueue delay                 <= C + P             <= ASYNC_IO_PERIOD_US
+  Click -> glass, OS-added (worst,         ≈15 ms               ≈8 ms (with §SR6)
+   Tu = 4.17 ms)
+  Composite cost C                         unchanged            unchanged (P2 scope)
+
+SR6  Once core 0 no longer interleaves INPUT, the UI period MAY shrink
+     to ASYNC_UI_PERIOD_US_FAST = 4.17 ms; it MUST only shrink if the
+     worst measured UI trip (composite + present) fits with >= 20 %
+     slack, measured, not assumed.
+
+Sensitivity note: the gap gain grows with C (1 ms -> 5x, 4 ms -> 17x),
+which is why C must be measured before tuning the period.
+
+9. Memory ordering requirements
+-------------------------------
+
+MO1  seqlock: writer performs dmb sy before and after the payload store
+     block; readers retry on odd or changed seq (existing pattern,
+     unchanged).
+MO2  SPSC EVT: producer publishes tail with a release store (stlr or
+     str + dmb ish/st — MMU off, so dmb sy); consumer reads tail with
+     acquire.  Never publish data before its index.
+MO3  No torn EVT records: the EVT copy is written before the tail index
+     is released (MO2 gives this); readers never inspect a slot beyond
+     the acquired tail.
+MO4  Wrap-safe time arithmetic (uint32 subtraction) for every cross-core
+     timestamp, deadline and heartbeat (CLO wraps).
+
+10. Health monitoring and failure containment
+---------------------------------------------
+
+HM1  Heartbeat: the I/O core bumps s_io_heartbeat once per period.  Core
+     0 verifies progress inside its UI period; no progress for
+     ASYNC_IO_HEARTBEAT_MS = 100 ms triggers the takeover handshake (§4
+     BR5) and the cooperative fallback.  Recovery = re-release (Phase D).
+
+HM2  A wedged I/O core must never wedge core 0: every core-0 read of
+     I/O state is wait-free; there is no spin-forever on core 0, ever.
+
+HM3  xHCI enumeration changes (hot-plug) are core-0 work.  The I/O core
+     observes only rings that were fully armed before release (BR1);
+     re-enumeration after release goes through the takeover handshake,
+     not through concurrent access.
+
+11. Configuration sketch
+------------------------
+
+  /* IO.txt Tier-1 AMP extras (include/btron/async_rt.h) */
+  #define ASYNC_IO_CORE_ID             3
+  #define ASYNC_IO_PERIOD_US           250    /* poll cadence (250..1000) */
+  #define ASYNC_IO_BUDGET_US           500    /* WCET budget              */
+  #define ASYNC_IO_HEARTBEAT_MS        100
+  #define ASYNC_IO_TAKEOVER_TIMEOUT_MS 10
+  #define ASYNC_UI_PERIOD_US_FAST      4167   /* optional after Phase D   */
+
+Files (expected touch points):
+  src/drivers/bcm283x/cpu/startup_arm.c   park-loop release word
+  src/cores/core_arm64.c                  input_plane_task relocation,
+                                          cursor stamp, heartbeat, fallback
+  src/window/event.c                      SPSC EVT conversion
+  include/btron/async_rt.h                configuration + io_stats
+
+12. Reserved cores and future planes (cores 1..2)
+-------------------------------------------------
+
+A future plane earns a parked core only when it has its OWN device and
+its OWN SPSC pair, and never shares the EVT producer role:
+
+  Plane    Trigger                       Queue discipline        Prohibition
+  -------  ----------------------------  ----------------------  ---------------------------
+  tcpip    netdev driver + SMP.md        own SPSC pair per       never writes framebuffer
+           CR3_NET analogy (Ring 3       direction; no locks
+           later; pinned core now)
+  audio    audio device + fixed-rate     double-buffered wait-   never blocks on core 0
+           ring                          free ring
+  block    EMMC2 polling plane           SPSC completion ring    never shares xHCI rings
+  PRESENT  FORBIDDEN as a core           n/a                     cross-core present tears:
+                                                         UI writes the backbuffer the
+                                                         copier reads; the single-core
+                                                         banded presenter avoids this
+                                                         by construction.  Revisit only
+                                                         after DMA (GPU.md) works.
+
+13. Verification requirements
+-----------------------------
+
+VR1  verify/ additions:
+       - stress: motion + continuous dirty desktop + typing (ASYNC.txt §10
+         scenario) with pass/fail asserts on the table in §8;
+       - WCET asserts: io_wcet_us <= ASYNC_IO_BUDGET_US under stress;
+       - fallback injection: release failure / heartbeat timeout must
+         converge to the cooperative path and be visible on the HUD;
+       - SPSC regression: EVT queue under delayed/interleaved consumer
+         (no lost KEY/BUT, no torn records, coalescing intact).
+
+VR2  HUD: extend async_rt_format_compact_status with an IO field —
+     IO3 = I/O core plane live, IOc = cooperative fallback — so the board
+     shows the topology without serial.
+
+VR3  Baseline record: composite_max_us (C) and the §8 table measured on
+     hardware BEFORE Phase C, filed in verify/report/ (ASYNC.txt Phase 0
+     discipline).
+
+14. Rejected patterns (normative)
+---------------------------------
+
+  Pattern                                     Violation
+  ------------------------------------------  --------------------------------------
+  >1 core for the input workload              R1..R3; MPSC EVT in the hot path
+  Splitting the xHCI event ring drain         single-consumer ERDP invariant
+  Two EVT producers (core 0 + I/O core)       single-producer invariant (R3)
+  PRESENT as a separate core                  cross-core backbuffer tearing (§12)
+  Mailbox / console / heap on the I/O core    §5.3 prohibitions
+  spin-forever on core 0 waiting for I/O      HM2
+  Reclaiming the drain without the takeover   two producers for one instant
+  handshake (§4 BR5)
+  Timer-dependence on CNTV/CNTP at arbitrary  EL ownership traps (IRQ.md §5)
+  EL                                          — I/O core reads the CLO
+  GIC-dependent release                       IRQ.md §6: no working IRQ; the
+                                              release word + sev is the only
+                                              portable wake primitive
+
+15. Implementation phases (RT-ordered)
+--------------------------------------
+
+Phase A — Release protocol, no functional change
+  - park-loop release word, per-core stack, heartbeat, fallback, HUD IOc
+  - verify: board boots identical to today; cooperative path intact
+
+Phase B — SPSC EVT conversion (single-core semantics)
+  - event.c indices become atomic SPSC; behaviour byte-identical when
+    producer and consumer share a core
+  - verify: VR1 SPSC regression passes on hosted and baremetal
+
+Phase C — Move the plane
+  - input_plane_task + cursor stamp relocate to core 3; core 0 drops all
+    xHCI polling; snd_evt producer = core 3 only; s_present_seq handshake
+  - verify: §8 gap/cursor rows measured; VR1 stress passes
+
+Phase D — Shrink Tu + tune period
+  - Tu = 4.17 ms if (and only if) SR6 slack is measured; IO3 on HUD;
+    click->glass row of §8 measured
+  - verify: §10-style pass/fail table filed in verify/report/
+
+Phase E — Optional
+  - core 0 wfe/sev idle pairing (SR3); first reserved-core plane (§12)
+
+16. Checklist
+-------------
+
+  [ ] Park-loop release word + per-core stack + heartbeat (Phase A)
+  [ ] 50 ms confirmation + cooperative fallback + HUD IOc (Phase A)
+  [ ] SPSC-atomic EVT queue, coalescing and drop policy preserved (Phase B)
+  [ ] input_plane_task relocated; core 0 drops xHCI polling (Phase C)
+  [ ] Cursor stamp owned by I/O core; s_present_seq handshake (Phase C)
+  [ ] Takeover handshake documented + tested; no two-producer instant (§4)
+  [ ] WCET telemetry io_wcet_us + §8 acceptance table (Phase C/D)
+  [ ] Stress: motion + continuous dirty desktop + typing (VR1)
+  [ ] No mailbox/console/heap/lock on the I/O core (§5.3)
+  [ ] Tu shrink gated on measured slack (SR6)
+  [ ] Reserved cores untouched; PRESENT-as-core rejected (§12)
+  [ ] Document that DP never crosses cores (SMP.md §4 lesson intact)
+
+17. Credits
+-----------
+
+1) Namdak Tonpa and GLM 5.3
+2) Problem analysis: Pi 400 GUI input latency under composite load (2026-09)
+3) Plane contracts, periods and budgets: doc/txt/ASYNC.txt (NuttX-style
+   equal-priority planes, bounded ISR, wait-free snapshot)
+4) Pinned-worker / lock-free-queue topology: doc/md/SMP.md §3 (actor core)
+5) IRQ bring-up constraints and the polling decision: doc/md/IRQ.md §6-7
+6) Latency model and core-count derivation: P1 AMP analysis (2026-09-20),
+   sensitivity to composite C measured via the [UI]C... UART telemetry
+7) Historical grounding: Windows NT 3.51 -> NT 4.0 GDI migration — DP
+   never leaves core 0 / never crosses an IPC boundary

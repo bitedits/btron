@@ -23,6 +23,9 @@ void workbench_process_event(GDEV *screen, const EVT *ev);
 /* Render complete Workbench desktop with overlays and cursor */
 void workbench_render(GDEV *screen, H w, H h);
 void workbench_render_damage(GDEV *screen, const RECT *damage);
+/* Damage composite that also re-runs the paint callbacks: use when a window's
+ * client device itself changed (resize), not just its position. */
+void workbench_render_damage_paint(GDEV *screen, const RECT *damage);
 
 /* Re-render ONLY the transient overlays (open menus) onto the existing
  * backbuffer, skipping the full desktop composite (background + every window

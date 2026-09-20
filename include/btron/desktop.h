@@ -32,6 +32,9 @@ BTRON_DESKTOP* get_btron_desktop(void);
 GDEV* init_baremetal_desktop(uint32_t *fb, uint32_t w, uint32_t h);
 void redraw_baremetal_desktop(GDEV *screen, H w, H h);
 void redraw_baremetal_desktop_rect(GDEV *screen, const RECT *damage);
+/* Same, but re-runs the paint callback of every window intersecting `damage`.
+ * Needed when a window's offscreen device changed size (rsz_wnd re-opens it). */
+void redraw_baremetal_desktop_rect_paint(GDEV *screen, const RECT *damage);
 void draw_baremetal_mouse_cursor(GDEV *screen, H mx, H my, H w, H h);
 void draw_baremetal_cursor_raw(volatile uint32_t *pixels, H mx, H my, H w, H h);
 extern int g_cursor_in_backbuffer;

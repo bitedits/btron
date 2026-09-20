@@ -93,6 +93,18 @@ BOOL wnd_mgr_is_interacting(void);
 WND* wnd_mgr_get_drag_target(void);
 BOOL wnd_mgr_flush_resize(void);
 
+/* Window the held button currently mutates, and how: *kind is
+ * WND_INTERACT_DRAG / _SLIDE / _RESIZE, or _NONE when nothing is in flight
+ * (then NULL is returned).  Lets the compositor bound a held-move repaint by
+ * the geometry that actually changed. */
+enum {
+    WND_INTERACT_NONE = 0,
+    WND_INTERACT_DRAG,
+    WND_INTERACT_SLIDE,
+    WND_INTERACT_RESIZE
+};
+WND* wnd_mgr_get_interaction(int *kind);
+
 #ifdef __cplusplus
 }
 #endif

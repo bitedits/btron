@@ -755,6 +755,19 @@ WND* wnd_mgr_get_drag_target(void) {
     return s_wnd_drag_target;
 }
 
+WND* wnd_mgr_get_interaction(int *kind) {
+    if (kind) {
+        if (s_wnd_resizing && s_wnd_resize_target) *kind = WND_INTERACT_RESIZE;
+        else if (s_wnd_sliding_tab && s_wnd_slide_target) *kind = WND_INTERACT_SLIDE;
+        else if (s_wnd_dragging && s_wnd_drag_target) *kind = WND_INTERACT_DRAG;
+        else *kind = WND_INTERACT_NONE;
+    }
+    if (s_wnd_resizing) return s_wnd_resize_target;
+    if (s_wnd_sliding_tab) return s_wnd_slide_target;
+    if (s_wnd_dragging) return s_wnd_drag_target;
+    return NULL;
+}
+
 BOOL wnd_mgr_flush_resize(void) {
     WND *target = s_wnd_resize_target;
     BOOL changed = FALSE;

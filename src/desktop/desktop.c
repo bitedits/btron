@@ -356,7 +356,7 @@ void redraw_baremetal_desktop(GDEV *screen, H w, H h) {
 #endif
 }
 
-void redraw_baremetal_desktop_rect(GDEV *screen, const RECT *damage) {
+static void redraw_baremetal_desktop_mode(GDEV *screen, const RECT *damage, BOOL blit_only) {
     if (!screen || !damage) return;
 
     RECT d = *damage;
@@ -367,7 +367,7 @@ void redraw_baremetal_desktop_rect(GDEV *screen, const RECT *damage) {
     if (d.right <= d.left || d.bottom <= d.top) return;
 
     render_desktop_background_rect(screen, &d);
-    redraw_all_windows_clip(&d, TRUE);
+    redraw_all_windows_clip(&d, blit_only);
     set_clip(screen, &d);
     if (d.top < 28) {
         render_system_panel(screen);
@@ -398,6 +398,17 @@ void redraw_baremetal_desktop_rect(GDEV *screen, const RECT *damage) {
 #else
     __asm__ volatile("" : : : "memory");
 #endif
+}
+
+void redraw_baremetal_desktop_rect(GDEV *screen, const RECT *damage) {
+    redraw_baremetal_desktop_mode(screen, damage, TRUE);
+}
+
+/* Damage composite that re-runs each intersecting window's paint callback.
+ * Required whenever the client GDEV itself changed (resize re-opens it, so its
+ * contents are gone); the blit-only variant would copy stale/off-size pixels. */
+void redraw_baremetal_desktop_rect_paint(GDEV *screen, const RECT *damage) {
+    redraw_baremetal_desktop_mode(screen, damage, FALSE);
 }
 
 GDEV* init_baremetal_desktop(uint32_t *fb, uint32_t w, uint32_t h) {

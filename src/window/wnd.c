@@ -437,6 +437,75 @@ void redraw_all_windows(void) {
     }
 }
 
+static void copy_opaque_span(COLOR *dst, const COLOR *src, H width) {
+    if ((((uintptr_t)dst | (uintptr_t)src) & 7u) == 0) {
+        uint64_t *d64 = (uint64_t *)dst;
+        const uint64_t *s64 = (const uint64_t *)src;
+        H pairs = width >> 1;
+        for (H i = 0; i < pairs; i++) d64[i] = s64[i];
+        if (width & 1) dst[width - 1] = src[width - 1];
+    } else {
+        for (H x = 0; x < width; x++) dst[x] = src[x];
+    }
+}
+
+void redraw_all_windows_clip(const RECT *damage, BOOL blit_only) {
+    if (!g_screen_dev || !damage) return;
+
+    WND *stack[32];
+    int count = 0;
+    for (WND *curr = g_wnd_head; curr && count < 32; curr = curr->next)
+        stack[count++] = curr;
+
+    set_clip(g_screen_dev, damage);
+    for (int i = count - 1; i >= 0; i--) {
+        WND *wnd = stack[i];
+        if (!wnd || !wnd->visible ||
+            wnd->bounds.right <= damage->left || wnd->bounds.left >= damage->right ||
+            wnd->bounds.bottom <= damage->top || wnd->bounds.top >= damage->bottom)
+            continue;
+
+        draw_retro_window_frame(g_screen_dev, wnd);
+        if (!wnd->dev || !wnd->dev->pixels) continue;
+        if (!blit_only && wnd->paint) wnd->paint(wnd, wnd->dev);
+
+        H title_h = (wnd->attr & WND_ATTR_TITLE) ? WND_TITLE_HEIGHT : 0;
+        H border = (wnd->attr & WND_ATTR_BORDER) ? 4 : 0;
+        H dest_x = wnd->bounds.left + border;
+        H dest_y = wnd->bounds.top + title_h + border;
+        H cx0 = damage->left - dest_x;
+        H cy0 = damage->top - dest_y;
+        H cx1 = damage->right - dest_x;
+        H cy1 = damage->bottom - dest_y;
+        if (cx0 < 0) cx0 = 0;
+        if (cy0 < 0) cy0 = 0;
+        if (cx1 > wnd->dev->width) cx1 = wnd->dev->width;
+        if (cy1 > wnd->dev->height) cy1 = wnd->dev->height;
+        if (cx1 <= cx0 || cy1 <= cy0) continue;
+
+        H span = cx1 - cx0;
+        for (H cy = cy0; cy < cy1; cy++) {
+            const COLOR *src = &wnd->dev->pixels[cy * wnd->dev->width + cx0];
+            COLOR *dst = &g_screen_dev->pixels[(dest_y + cy) * g_screen_dev->width + dest_x + cx0];
+            int opaque = 1;
+            for (H cx = 0; cx < span; cx++) {
+                if (src[cx] == 0x00000000) {
+                    opaque = 0;
+                    break;
+                }
+            }
+            if (opaque) {
+                copy_opaque_span(dst, src, span);
+            } else {
+                for (H cx = 0; cx < span; cx++) {
+                    if (src[cx] != 0x00000000) dst[cx] = src[cx];
+                }
+            }
+        }
+    }
+    set_clip(g_screen_dev, NULL);
+}
+
 void redraw_top_window(void) {
     WND *wnd = get_top_wnd();
     if (!g_screen_dev || !wnd || !wnd->visible) return;

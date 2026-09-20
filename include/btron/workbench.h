@@ -22,6 +22,7 @@ void workbench_process_event(GDEV *screen, const EVT *ev);
 
 /* Render complete Workbench desktop with overlays and cursor */
 void workbench_render(GDEV *screen, H w, H h);
+void workbench_render_damage(GDEV *screen, const RECT *damage);
 
 /* Re-render ONLY the transient overlays (open menus) onto the existing
  * backbuffer, skipping the full desktop composite (background + every window

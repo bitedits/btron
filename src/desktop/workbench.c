@@ -91,6 +91,11 @@ void workbench_render(GDEV *screen, H w, H h) {
     }
 }
 
+void workbench_render_damage(GDEV *screen, const RECT *damage) {
+    if (!screen || !damage) return;
+    redraw_baremetal_desktop_rect(screen, damage);
+}
+
 void workbench_render_overlay_only(GDEV *screen) {
     if (!screen) return;
 

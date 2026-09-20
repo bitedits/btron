@@ -189,6 +189,35 @@ void render_desktop_background(GDEV *dev) {
     }
 }
 
+void render_desktop_background_rect(GDEV *dev, const RECT *damage) {
+    if (!dev || !damage) return;
+    if (!(s_bg_cached && dev->width == 1024 && dev->height == 768)) {
+        render_desktop_background(dev);
+        return;
+    }
+
+    H x0 = damage->left < 0 ? 0 : damage->left;
+    H y0 = damage->top < 0 ? 0 : damage->top;
+    H x1 = damage->right > 1024 ? 1024 : damage->right;
+    H y1 = damage->bottom > 768 ? 768 : damage->bottom;
+    if (x1 <= x0 || y1 <= y0) return;
+
+    H width = x1 - x0;
+    for (H y = y0; y < y1; y++) {
+        COLOR *dst = &dev->pixels[y * 1024 + x0];
+        const COLOR *src = &s_cached_bg[y * 1024 + x0];
+        if ((((uintptr_t)dst | (uintptr_t)src) & 7u) == 0) {
+            uint64_t *d64 = (uint64_t *)dst;
+            const uint64_t *s64 = (const uint64_t *)src;
+            H pairs = width >> 1;
+            for (H i = 0; i < pairs; i++) d64[i] = s64[i];
+            if (width & 1) dst[width - 1] = src[width - 1];
+        } else {
+            for (H x = 0; x < width; x++) dst[x] = src[x];
+        }
+    }
+}
+
 BOOL desktop_handle_click(H x, H y) {
     int icon_count = (int)(sizeof(s_desktop_icons) / sizeof(s_desktop_icons[0]));
     for (int i = 0; i < icon_count; i++) {
@@ -320,6 +349,50 @@ void redraw_baremetal_desktop(GDEV *screen, H w, H h) {
     __asm__ volatile("dsb" : : : "memory");
 #elif defined(__m68k__)
     __asm__ volatile("nop" : : : "memory");
+#elif defined(__x86_64__) || defined(__i386__)
+    __asm__ volatile("mfence" : : : "memory");
+#else
+    __asm__ volatile("" : : : "memory");
+#endif
+}
+
+void redraw_baremetal_desktop_rect(GDEV *screen, const RECT *damage) {
+    if (!screen || !damage) return;
+
+    RECT d = *damage;
+    if (d.left < 0) d.left = 0;
+    if (d.top < 0) d.top = 0;
+    if (d.right > screen->width) d.right = screen->width;
+    if (d.bottom > screen->height) d.bottom = screen->height;
+    if (d.right <= d.left || d.bottom <= d.top) return;
+
+    render_desktop_background_rect(screen, &d);
+    redraw_all_windows_clip(&d, TRUE);
+    set_clip(screen, &d);
+    if (d.top < 28) {
+        render_system_panel(screen);
+        RECT gold_bar = { 0, 26, screen->width, 28 };
+        fill_rec(screen, &gold_bar, COLOR_GOLD);
+    }
+
+    H bar_y = screen->height - 40;
+    if (d.bottom > bar_y) {
+        COLOR bars[8] = {
+            COLOR_WHITE, COLOR_YELLOW, COLOR_CYAN, COLOR_GREEN,
+            ARGB(0xFF, 0xFF, 0x00, 0xFF), COLOR_RED,
+            ARGB(0xFF, 0x00, 0x00, 0xFF), COLOR_BLACK
+        };
+        for (int i = 0; i < 8; i++) {
+            RECT bar = { (H)(i * screen->width / 8), bar_y,
+                         (H)((i + 1) * screen->width / 8), screen->height };
+            fill_rec(screen, &bar, bars[i]);
+        }
+    }
+    set_clip(screen, NULL);
+#if defined(__aarch64__)
+    __asm__ volatile("dsb sy" : : : "memory");
+#elif defined(__arm__)
+    __asm__ volatile("dsb" : : : "memory");
 #elif defined(__x86_64__) || defined(__i386__)
     __asm__ volatile("mfence" : : : "memory");
 #else

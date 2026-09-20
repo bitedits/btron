@@ -97,6 +97,10 @@ static uint32_t s_ui_wcet_us = 0;
 static uint32_t s_hud_comp_ms = 0;
 static uint32_t s_hud_pres_ms = 0;
 static uint32_t s_hud_wcet_ms = 0;
+static char s_hud_path_live = '-';
+static uint32_t s_hud_area_live = 0;
+static char s_hud_path = '-';
+static uint32_t s_hud_area = 0;
 
 /* CPU presentation is sliced into row bands.  Each trip copies as many
  * PRESENT_COPY_ROWS_PER_STEP chunks as fit inside ASYNC_PRESENT_BUDGET_US, so a
@@ -139,13 +143,15 @@ void async_rt_format_compact_status(char *buf, size_t len) {
      *   T = forced-pending IRQ WAS taken      -> timer never asserts PPI */
     char a0 = arm64_irq_selftest_seen() ? 'T' : 'V';
     if (s_async_irq_active) {
-        tkl_snprintf(buf, len, "A1M%uK%uG%u C%uP%uW%u",
+        tkl_snprintf(buf, len, "A1M%uK%uG%u C%uP%uW%u %c%u",
                      xhci_mouse_count(), xhci_kbd_bound(), gap,
-                     s_hud_comp_ms, s_hud_pres_ms, s_hud_wcet_ms);
+                     s_hud_comp_ms, s_hud_pres_ms, s_hud_wcet_ms,
+                     s_hud_path, s_hud_area);
     } else {
-        tkl_snprintf(buf, len, "A%cM%uK%uG%u C%uP%uW%u", a0,
+        tkl_snprintf(buf, len, "A%cM%uK%uG%u C%uP%uW%u %c%u", a0,
                      xhci_mouse_count(), xhci_kbd_bound(), gap,
-                     s_hud_comp_ms, s_hud_pres_ms, s_hud_wcet_ms);
+                     s_hud_comp_ms, s_hud_pres_ms, s_hud_wcet_ms,
+                     s_hud_path, s_hud_area);
     }
 }
 
@@ -794,8 +800,43 @@ static void present_full_render(GDEV *screen, volatile uint32_t *fb, const RECT 
      * window-move is composite-bound (workbench_render) not copy-bound (present).
      * Reported once per second over UART, then reset. */
     s_async_rt_stats.composite_us = t1 - t0;
-    if (s_async_rt_stats.composite_us > s_async_rt_stats.composite_max_us)
+    if (s_async_rt_stats.composite_us > s_async_rt_stats.composite_max_us) {
         s_async_rt_stats.composite_max_us = s_async_rt_stats.composite_us;
+        s_hud_path_live = 'f';
+        s_hud_area_live = ((uint32_t)(x1 - x0) * (uint32_t)(y1 - y0) * 100u) /
+                          ((uint32_t)BTRON_SCREEN_W * BTRON_SCREEN_H);
+    }
+    s_async_rt_stats.present_us = t2 - t1;
+    if (s_async_rt_stats.present_us > s_async_rt_stats.present_max_us)
+        s_async_rt_stats.present_max_us = s_async_rt_stats.present_us;
+}
+
+static void present_move_render(GDEV *screen, volatile uint32_t *fb, const RECT *damage) {
+    if (!damage) return;
+
+    H x0 = damage->left < 0 ? 0 : damage->left;
+    H y0 = damage->top < 0 ? 0 : damage->top;
+    H x1 = damage->right > BTRON_SCREEN_W ? BTRON_SCREEN_W : damage->right;
+    H y1 = damage->bottom > BTRON_SCREEN_H ? BTRON_SCREEN_H : damage->bottom;
+    if (x1 <= x0 || y1 <= y0) return;
+
+    RECT clipped = { x0, y0, x1, y1 };
+    uint32_t t0 = *(volatile uint32_t *)(TIMER_BASE + 0x04);
+    workbench_render_damage(screen, &clipped);
+    uint32_t t1 = *(volatile uint32_t *)(TIMER_BASE + 0x04);
+    RECT cur;
+    wnd_get_union_bounds(&cur);
+    s_prev_win_union = cur;
+    present_backbuffer_rect(fb, x0, y0, x1, y1);
+    uint32_t t2 = *(volatile uint32_t *)(TIMER_BASE + 0x04);
+
+    s_async_rt_stats.composite_us = t1 - t0;
+    if (s_async_rt_stats.composite_us > s_async_rt_stats.composite_max_us) {
+        s_async_rt_stats.composite_max_us = s_async_rt_stats.composite_us;
+        s_hud_path_live = 'm';
+        s_hud_area_live = ((uint32_t)(x1 - x0) * (uint32_t)(y1 - y0) * 100u) /
+                          ((uint32_t)BTRON_SCREEN_W * BTRON_SCREEN_H);
+    }
     s_async_rt_stats.present_us = t2 - t1;
     if (s_async_rt_stats.present_us > s_async_rt_stats.present_max_us)
         s_async_rt_stats.present_max_us = s_async_rt_stats.present_us;
@@ -939,6 +980,8 @@ static void launch_pi4_desktop_session(uint32_t *gpu_fb)
         int overlay_redraw = 0;
         int panel_redraw = 0;
         int appmenu_redraw = 0;
+        int move_drag = 0;
+        int non_move_event = 0;
         int menu_open_at_loop_start = global_menu_is_open() || tracker_is_menu_open();
         int appmenu_open_at_loop_start = top_window_menu_open();
         /* Snapshot the rect any open menu occupies NOW.  If an event in this
@@ -950,13 +993,42 @@ static void launch_pi4_desktop_session(uint32_t *gpu_fb)
         RECT move_damage = { 0, 0, 0, 0 };
         int have_move_damage = 0;
         for (uint32_t ev_iter = 0; ev_iter < ASYNC_UI_EVENT_BUDGET && get_evt(&ev, 0) == E_OK; ev_iter++) {
+            if (ev.type != EV_MOUSE_MOVE) non_move_event = 1;
             if (ev.type == EV_KEY_DOWN && ev.key == 0x1B /* Escape */) {
                 s_gui_active = 0;
                 break;
             }
             if (ev.type == EV_KEY_DOWN && s_async_rt_stats.key_enqueue_us != 0)
                 s_async_rt_stats.key_dispatch_us = now - s_async_rt_stats.key_enqueue_us;
+
+            WND *drag_target = NULL;
+            RECT drag_old = { 0, 0, 0, 0 };
+            if (ev.type == EV_MOUSE_MOVE) {
+                drag_target = wnd_mgr_get_drag_target();
+                if (drag_target) drag_old = drag_target->bounds;
+            }
+
             workbench_process_event(screen, &ev);
+
+            if (drag_target) {
+                RECT drag_new = drag_target->bounds;
+                if (drag_old.left != drag_new.left || drag_old.top != drag_new.top ||
+                    drag_old.right != drag_new.right || drag_old.bottom != drag_new.bottom) {
+                    move_drag = 1;
+                    if (!have_move_damage) {
+                        move_damage = drag_old;
+                        have_move_damage = 1;
+                    }
+                    if (drag_old.left < move_damage.left) move_damage.left = drag_old.left;
+                    if (drag_old.top < move_damage.top) move_damage.top = drag_old.top;
+                    if (drag_old.right > move_damage.right) move_damage.right = drag_old.right;
+                    if (drag_old.bottom > move_damage.bottom) move_damage.bottom = drag_old.bottom;
+                    if (drag_new.left < move_damage.left) move_damage.left = drag_new.left;
+                    if (drag_new.top < move_damage.top) move_damage.top = drag_new.top;
+                    if (drag_new.right > move_damage.right) move_damage.right = drag_new.right;
+                    if (drag_new.bottom > move_damage.bottom) move_damage.bottom = drag_new.bottom;
+                }
+            }
 
             if (ev.type == EV_MOUSE_MOVE) {
                 if (global_menu_is_open() || tracker_is_menu_open()) {
@@ -1014,6 +1086,10 @@ static void launch_pi4_desktop_session(uint32_t *gpu_fb)
             if (s_hud_comp_ms > 99u) s_hud_comp_ms = 99u;
             if (s_hud_pres_ms > 99u) s_hud_pres_ms = 99u;
             if (s_hud_wcet_ms > 99u) s_hud_wcet_ms = 99u;
+            s_hud_path = s_hud_path_live;
+            s_hud_area = s_hud_area_live > 99u ? 99u : s_hud_area_live;
+            s_hud_path_live = '-';
+            s_hud_area_live = 0;
             if (s_async_rt_stats.composite_max_us) {
                 uart_puts("[UI]C");
                 uart_hex32(s_async_rt_stats.composite_max_us);
@@ -1028,8 +1104,38 @@ static void launch_pi4_desktop_session(uint32_t *gpu_fb)
             s_ui_wcet_us = 0;
         }
 
+        RECT present_extra = { 0, 0, 0, 0 };
+        int have_present_extra = 0;
+        if (have_start_menu_rect) {
+            present_extra = start_menu_rect;
+            have_present_extra = 1;
+        }
+        if (have_move_damage) {
+            if (!have_present_extra) {
+                present_extra = move_damage;
+                have_present_extra = 1;
+            } else {
+                if (move_damage.left < present_extra.left) present_extra.left = move_damage.left;
+                if (move_damage.top < present_extra.top) present_extra.top = move_damage.top;
+                if (move_damage.right > present_extra.right) present_extra.right = move_damage.right;
+                if (move_damage.bottom > present_extra.bottom) present_extra.bottom = move_damage.bottom;
+            }
+        }
+
+        /* Established mouse-only window moves restore and recomposite just the
+         * old/new bounds.  All state-changing batches retain the full renderer. */
+        if (move_drag && !non_move_event && !s_present_pending &&
+            !menu_open_at_loop_start && !appmenu_open_at_loop_start &&
+            !overlay_redraw && !appmenu_redraw && have_move_damage) {
+            present_move_render(screen, gpu_fb, &move_damage);
+            if (panel_redraw) {
+                render_system_panel(screen);
+                present_backbuffer_rect(gpu_fb, 0, 0, BTRON_SCREEN_W, 28);
+            }
+            s_present_cursor_dirty = 1;
+        }
         /* Full UI path: redraw windows, menus, backbuffer blit */
-        if (redraw || s_present_pending) {
+        else if (redraw || s_present_pending) {
             if (s_present_dma_enabled && bcm2711_dma_is_busy(0)) {
                 s_present_pending = 1;
             } else {
@@ -1083,11 +1189,11 @@ static void launch_pi4_desktop_session(uint32_t *gpu_fb)
                     present_backbuffer_rect(gpu_fb, left, top_y, right, bottom);
                 } else {
                     present_full_render(screen, gpu_fb,
-                                        have_start_menu_rect ? &start_menu_rect : NULL);
+                                        have_present_extra ? &present_extra : NULL);
                 }
             } else {
                 present_full_render(screen, gpu_fb,
-                                    have_start_menu_rect ? &start_menu_rect : NULL);
+                                    have_present_extra ? &present_extra : NULL);
             }
             s_present_fast_key_update = 0;
             s_present_pending = 0;
@@ -1134,7 +1240,7 @@ static void launch_pi4_desktop_session(uint32_t *gpu_fb)
                 present_backbuffer_rect(gpu_fb, l, t, r, b);
             } else {
                 present_full_render(screen, gpu_fb,
-                                    have_start_menu_rect ? &start_menu_rect : NULL);
+                                    have_present_extra ? &present_extra : NULL);
             }
             s_present_cursor_dirty = 1;
         }

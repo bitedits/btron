@@ -71,7 +71,7 @@ In 2D Stride Mode (`TI_TDMODE = 1`), the DMA engine autonomously iterates across
 
 ### 3.3 DMA Control Block (CB) Memory Format
 
-DMA Control Blocks are 32-byte structures aligned to 256-bit boundaries in coherent non-cacheable DMA RAM (`0x01000000 + 0xF200`):
+DMA Control Blocks are 32-byte structures aligned to 256-bit boundaries in coherent non-cacheable DMA RAM (`BTRON_NOCACHE_DMA_CB`, `btron/arm64_mem.h`):
 
 ```c
 typedef struct __attribute__((aligned(32))) {

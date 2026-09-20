@@ -36,6 +36,7 @@
 #include <btron/apps.h>
 #include <btron/workbench.h>
 #include <btron/fast_blit.h>
+#include <btron/arm64_mem.h>
 #include <libstr.h>
 #include <dwc2.h>
 #include <pcie.h>
@@ -581,7 +582,8 @@ static void pi4_shell_exec(const char *cmd, uint32_t *gpu_fb)
         fb_log("[MEM] BCM2711 Pi 400 — 4 GB RAM\n");
         fb_log("[MEM]   0x00000000-0xFCFFFFFF  RAM (usable)\n");
         fb_log("[MEM]   0xFD000000-0xFFFFFFFF  MMIO / PCIe\n");
-        fb_log("[MEM]   Kernel heap: 0x01000000-0x1B000000\n");
+        fb_log("[MEM]   Kernel heap: 0x02000000-0x38000000\n");
+        fb_log("[MEM]   Non-cacheable DMA window: 0x01800000-0x01A00000\n");
 
     } else if (tkl_strcmp(cmd, "ver") == 0) {
         fb_log("B-System/BTRON3 3.20  aarch64-bcm2711\n");
@@ -809,12 +811,20 @@ static void present_backbuffer_rect(volatile uint32_t *fb, H x0, H y0, H x1, H y
     if (x1 <= x0 || y1 <= y0) return;
     volatile uint32_t *dst = fb + s_present_front_page * BTRON_SCREEN_W * BTRON_SCREEN_H;
     H width = x1 - x0;
+    uint32_t t0 = btron_render_perf_us();
     for (H y = y0; y < y1; y++) {
         const COLOR *srow = &s_desktop_backbuffer[y * BTRON_SCREEN_W + x0];
         uint32_t *drow = (uint32_t *)(dst + y * BTRON_SCREEN_W + x0);
         btron_row_blit(drow, srow, (size_t)width * sizeof(COLOR));
     }
     __asm__ volatile("dmb sy" : : : "memory");
+    /* The destination here is the GPU framebuffer, i.e. deliberately
+     * non-cacheable, so this is the one rate that is expected to be low.  It
+     * pairs with the cacheable probe below: the gap between the two is the
+     * prize for presenting less, and the gap within is a mapping bug. */
+    btron_render_stat_worst(&g_render_stats.pres_worst_us, &g_render_stats.pres_worst_px,
+                            btron_render_perf_us() - t0,
+                            (uint32_t)width * (uint32_t)(y1 - y0));
     s_present_cursor_dirty = 1;
 }
 
@@ -1251,6 +1261,99 @@ static int top_window_menu_open(void) {
     return 0;
 }
 
+/* ── Memory-path probe ────────────────────────────────────────────────────
+ * Every composite stage measured on the Pi 400 has come in near 30 MB/s,
+ * which is a non-cacheable rate, while the renderer's own buffers all sit
+ * below the 16 MB line the MMU used to mark non-cacheable.  Rather than argue
+ * from the source text, measure once at session start: a cacheable NEON row
+ * blit, a cacheable byte loop, and the MAIR index the page tables really give
+ * the desktop backbuffer.  If the cacheable pair comes back near the
+ * framebuffer's rate then the memory map is the defect and no amount of
+ * damage bounding will fix it; if it comes back an order of magnitude faster,
+ * the spikes are bytes-touched and bounding is the whole game.
+ *
+ * Every stage number so far has been timed with the SoC system timer
+ * (TIMER_BASE+0x04), which on BCM2711 is a separate clock from the ARM generic
+ * timer.  If that counter does not run at 1 MHz then all of the milliseconds
+ * in the HUD and in this probe are wrong by the same factor, so the probe is
+ * timed by both counters and reports the ratio.  The bandwidth figures use the
+ * generic timer, i.e. wall-clock truth whether or not the HUD's units are. */
+#define BTRON_PROBE_BYTES 262144u
+static uint8_t s_probe_src[BTRON_PROBE_BYTES] __attribute__((aligned(64)));
+static uint8_t s_probe_dst[BTRON_PROBE_BYTES] __attribute__((aligned(64)));
+static uint32_t s_probe_neon_mbs;
+static uint32_t s_probe_scalar_mbs;
+static uint32_t s_probe_sctlr;
+static uint32_t s_probe_el;
+static uint32_t s_probe_attr_backbuffer;
+static uint32_t s_probe_layout_ok;
+static uint32_t s_probe_frq_mhz;
+static uint32_t s_probe_st_us;      /* whole probe, SoC system timer */
+static uint32_t s_probe_ct_us;      /* whole probe, ARM generic timer */
+
+static uint32_t probe_mbs(uint64_t bytes, uint32_t us) {
+    if (!us) us = 1;
+    return (uint32_t)(bytes * 1000000ull / us / 1048576ull);
+}
+
+static uint64_t probe_ticks(void) {
+    uint64_t v;
+    __asm__ volatile("mrs %0, cntvct_el0\n\tisb" : "=r"(v) : : "memory");
+    return v;
+}
+
+static uint32_t probe_us(uint64_t ticks, uint64_t frq) {
+    if (!frq) return 0;
+    uint64_t us = ticks * 1000000ull / frq;
+    return us > 0xFFFFFFFFull ? 0xFFFFFFFFu : (uint32_t)us;
+}
+
+static void run_mem_probe(void) {
+    const uint64_t total = (uint64_t)BTRON_PROBE_BYTES * 4u;
+    uint64_t frq, ct0, ct1, ct_first;
+    uint32_t st1, st_first;
+
+    __asm__ volatile("mrs %0, cntfrq_el0" : "=r"(frq));
+    s_probe_frq_mhz = (uint32_t)(frq / 1000000ull);
+
+    st_first = btron_render_perf_us();
+    ct_first = probe_ticks();
+    for (int pass = 0; pass < 4; pass++) {
+        for (uint32_t off = 0; off + 4096u <= BTRON_PROBE_BYTES; off += 4096u)
+            btron_row_blit(&s_probe_dst[off], &s_probe_src[off], 4096u);
+    }
+    ct1 = probe_ticks();
+    s_probe_neon_mbs = probe_mbs(total, probe_us(ct1 - ct_first, frq));
+
+    /* volatile keeps this a genuine byte loop rather than a memcpy call. */
+    volatile uint8_t *vs = s_probe_src;
+    volatile uint8_t *vd = s_probe_dst;
+    ct0 = probe_ticks();
+    for (int pass = 0; pass < 4; pass++) {
+        for (uint32_t off = 0; off < BTRON_PROBE_BYTES; off++) vd[off] = vs[off];
+    }
+    ct1 = probe_ticks(); st1 = btron_render_perf_us();
+    s_probe_scalar_mbs = probe_mbs(total, probe_us(ct1 - ct0, frq));
+
+    /* Both counters over the same span.  If the system timer really runs at
+     * 1 MHz these two agree; if it does not, every millisecond the HUD has
+     * ever reported is off by the same factor. */
+    s_probe_st_us = st1 - st_first;
+    s_probe_ct_us = probe_us(ct1 - ct_first, frq);
+
+    uint64_t el;
+    __asm__ volatile("mrs %0, CurrentEL" : "=r"(el));
+    s_probe_el = (uint32_t)(el >> 2);
+    switch (s_probe_el) {
+        case 3:  __asm__ volatile("mrs %0, sctlr_el3" : "=r"(el)); break;
+        case 2:  __asm__ volatile("mrs %0, sctlr_el2" : "=r"(el)); break;
+        default: __asm__ volatile("mrs %0, sctlr_el1" : "=r"(el)); break;
+    }
+    s_probe_sctlr = (uint32_t)el;
+    s_probe_attr_backbuffer = (uint32_t)arm64_mmu_attr_of((uintptr_t)s_desktop_backbuffer);
+    s_probe_layout_ok = (uint32_t)arm64_mmu_layout_ok();
+}
+
 /* On-device composite profile (temporary diagnostic).  The compact HUD proves
  * a composite costs tens of milliseconds but not which stage does it, and the
  * source-level estimate for the same bounded blit is an order of magnitude
@@ -1258,10 +1361,17 @@ static int top_window_menu_open(void) {
  * takes the per-stage maxima of the last second and paints them over the
  * bottom colour-test band, where a photo of the screen names the stage:
  *   COMP whole damage composite   BG background restore  FW window decoration
- *   PT application paint callbacks  BL client-area blit  PN top panel band
+ *   PT application paint callbacks  BL client composite  PN top panel band
  *   BD bottom test bars   TILE tiles x worst tile (drag-preview prep)
  *   WIN windows drawn / window-list length (a leaked list re-composites all)
- *   PRES/TRIP the same figures the HUD shows. */
+ *   PRES/TRIP the same figures the HUD shows.
+ * The slowest instance of BG, BL and PRES also reports the pixel area it
+ * moved, so the pair divides into a byte rate.  Line 3 is the clock check: ST
+ * is the microseconds the stage timers above are taken in, CT is wall clock
+ * from the ARM generic timer, over the same probe span.  Line 4 is the memory
+ * probe -- NE (NEON blit), SC (byte loop) and FB (framebuffer present) are all
+ * megabytes of payload per second of wall clock.  Values on lines 1-2 are
+ * milliseconds with one decimal. */
 static void render_diag_band(GDEV *screen, volatile uint32_t *fb)
 {
     if (!screen || !fb) return;
@@ -1269,19 +1379,48 @@ static void render_diag_band(GDEV *screen, volatile uint32_t *fb)
     RENDER_STATS s;
     btron_render_stats_take(&s);
 
-    RECT band = { 0, BTRON_SCREEN_H - 40, BTRON_SCREEN_W, BTRON_SCREEN_H };
+    RECT band = { 0, BTRON_SCREEN_H - 76, BTRON_SCREEN_W, BTRON_SCREEN_H };
     set_clip(screen, NULL);
     fill_rec(screen, &band, COLOR_BLACK);
 
-    char line[80];
-    tkl_snprintf(line, sizeof(line), "COMP %u BG %u FW %u PT %u BL %u MS",
-                 s.comp_us / 1000u, s.bg_us / 1000u, s.frame_us / 1000u,
-                 s.paint_us / 1000u, s.blit_us / 1000u);
-    drw_tc_string(screen, 6, (H)(BTRON_SCREEN_H - 38), line, COLOR_WHITE, COLOR_BLACK);
-    tkl_snprintf(line, sizeof(line), "PN %u BD %u TIL %ux%u WIN %u/%u P%u W%u",
-                 s.panel_us / 1000u, s.bars_us / 1000u, s.tiles,
+    char line[96];
+    tkl_snprintf(line, sizeof(line),
+                 "CMP %u.%u BG %u.%u/%uk n%u FW %u.%u PN %u.%u",
+                 s.comp_us / 1000u, (s.comp_us / 100u) % 10u,
+                 s.bg_us / 1000u, (s.bg_us / 100u) % 10u,
+                 s.bg_worst_px / 1000u, s.bg_full_calls,
+                 s.frame_us / 1000u, (s.frame_us / 100u) % 10u,
+                 s.panel_us / 1000u, (s.panel_us / 100u) % 10u);
+    drw_tc_string(screen, 6, (H)(BTRON_SCREEN_H - 56), line, COLOR_WHITE, COLOR_BLACK);
+
+    tkl_snprintf(line, sizeof(line),
+                 "PT %u.%u BL %u.%u/%uk TIL %ux%u WIN %u/%u P%u W%u",
+                 s.paint_us / 1000u, (s.paint_us / 100u) % 10u,
+                 s.blit_us / 1000u, (s.blit_us / 100u) % 10u,
+                 s.blit_worst_px / 1000u, s.tiles,
                  s.tile_max_us / 1000u, s.wins_drawn, s.wins_walked,
                  s_hud_pres_ms, s_hud_wcet_ms);
+    drw_tc_string(screen, 6, (H)(BTRON_SCREEN_H - 38), line, COLOR_WHITE, COLOR_BLACK);
+
+    /* Rescale the system-timer stage times onto wall clock with the probe's
+     * own two readings, so FB and NE are the same unit and comparable. */
+    uint32_t fb_us = s.pres_worst_us;
+    if (s_probe_st_us)
+        fb_us = (uint32_t)(((uint64_t)s.pres_worst_us * s_probe_ct_us) / s_probe_st_us);
+    uint32_t fb_mbs = fb_us ? probe_mbs((uint64_t)s.pres_worst_px * 4u, fb_us) : 0u;
+
+    tkl_snprintf(line, sizeof(line),
+                 "CLK ST %u CT %u us FRQ %u MHz (CT==ST means HUD ms are real)",
+                 s_probe_st_us, s_probe_ct_us, s_probe_frq_mhz);
+    drw_tc_string(screen, 6, (H)(BTRON_SCREEN_H - 74), line, COLOR_CYAN, COLOR_BLACK);
+
+    tkl_snprintf(line, sizeof(line),
+                 "MEM NE %u SC %u FB %u MB/s %uk px  MMU el%u m%u c%u i%u at%u ok%u",
+                 s_probe_neon_mbs, s_probe_scalar_mbs, fb_mbs,
+                 s.pres_worst_px / 1000u, s_probe_el,
+                 s_probe_sctlr & 1u, (s_probe_sctlr >> 2) & 1u,
+                 (s_probe_sctlr >> 12) & 1u, s_probe_attr_backbuffer,
+                 s_probe_layout_ok);
     drw_tc_string(screen, 6, (H)(BTRON_SCREEN_H - 20), line, COLOR_WHITE, COLOR_BLACK);
 
     present_backbuffer_rect(fb, band.left, band.top, band.right, band.bottom);
@@ -1304,6 +1443,7 @@ static void launch_pi4_desktop_session(uint32_t *gpu_fb)
         return;
     }
     workbench_init(BTRON_SCREEN_W);
+    run_mem_probe();
     workbench_render(screen, BTRON_SCREEN_W, BTRON_SCREEN_H);
     blit_backbuffer_to_fb(gpu_fb);
 
@@ -2870,7 +3010,8 @@ void btron_core_mem_log(void) {
         uart_puts("[MEM ]   0x00000000-0x3EFFFFFF  RAM (Usable 1008 MB)\n");
         uart_puts("[MEM ]   0x3F000000-0x3FFFFFFF  Peripherals / VideoCore Mailbox / MMIO (16 MB)\n");
     }
-    uart_puts("[MEM ] Heap: 0x01000000-0x1B000000 (432 MB Kernel Heap)\n");
+    uart_puts("[MEM ] Heap: 0x02000000-0x38000000 (864 MB Kernel Heap)\n");
+    uart_puts("[MEM ] Non-cacheable DMA window: 0x01800000-0x01A00000 (XHCI rings, DMA CBs, mailboxes)\n");
 }
 
 void btron_core_hfds_log(void) {

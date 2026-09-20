@@ -87,6 +87,11 @@ void btron_render_stats_take(RENDER_STATS *out) {
     g_render_stats.comp_us = 0;
     g_render_stats.tile_max_us = 0;
     g_render_stats.tiles = 0;
+    g_render_stats.bg_worst_px = 0;
+    g_render_stats.blit_worst_px = 0;
+    g_render_stats.pres_worst_us = 0;
+    g_render_stats.pres_worst_px = 0;
+    g_render_stats.bg_full_calls = 0;
 }
 
 void set_clip(GDEV *dev, const RECT *clip) {

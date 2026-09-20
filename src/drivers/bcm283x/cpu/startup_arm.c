@@ -11,6 +11,7 @@
 #include <btron/desktop.h>
 #include <btron/troncode.h>
 #include <btron/vobj.h>
+#include <btron/arm64_mem.h>
 
 #if (TYPE_RPI == 1)
 #define PL011_BASE      0x20201000u
@@ -121,10 +122,10 @@ void uart_hex32(uint32_t v) {
 }
 
 /*
- * Bare-metal heap: use a fixed high address (16MB) so it stays clear of:
- *   - kernel text/data/BSS at 0x80000..~0x98000
- *   - GPU framebuffer at ~0x300000 (3MB)
- * 16MB gives us 1GB - 16MB = ~1008MB of headroom on the far side.
+ * Bare-metal heap: use a fixed high address (32MB) so it stays clear of:
+ *   - kernel text/data/BSS at 0x80000..__bss_end
+ *   - the non-cacheable DMA window at 24-26 MB (btron/arm64_mem.h)
+ * 32MB gives us 1GB - 32MB = ~992MB of headroom on the far side.
  */
 #define HEAP_BASE ((uintptr_t)0x02000000)  /* 32 MB — clear of all text, data, and BSS */
 #define HEAP_LIMIT ((uintptr_t)0x38000000) /* 896 MB — safely below VideoCore GPU FB (~961MB) */
@@ -505,7 +506,7 @@ int mailbox_set_virtual_offset(uint32_t x, uint32_t y) {
     volatile uint32_t *read_reg   = (volatile uint32_t*)(mbox_base + MBOX_READ);
 
     /* Coherent non-cacheable DMA mailbox buffer */
-    volatile uint32_t *mbox_buf = (volatile uint32_t *)(0x01000000UL + 0xF600UL);
+    volatile uint32_t *mbox_buf = (volatile uint32_t *)BTRON_NOCACHE_MBOX_ARM;
     mbox_buf[0] = 8 * 4;       /* buffer size */
     mbox_buf[1] = 0;           /* request code */
     mbox_buf[2] = 0x00048009;  /* tag: SET_VIRTUAL_OFFSET */
@@ -515,7 +516,7 @@ int mailbox_set_virtual_offset(uint32_t x, uint32_t y) {
     mbox_buf[6] = y;           /* y offset */
     mbox_buf[7] = 0;           /* end tag */
 
-    uint32_t mbox_addr = 0x01000000U + 0xF600U;
+    uint32_t mbox_addr = (uint32_t)BTRON_NOCACHE_MBOX_ARM;
     __asm__ volatile("dsb sy" : : : "memory");
 
     int to = 1000;
@@ -1142,6 +1143,28 @@ void arm64_irq_disable(void) {
 static uint64_t s_arm64_l1[512] __attribute__((aligned(4096)));
 static uint64_t s_arm64_l2[512] __attribute__((aligned(4096)));
 
+/* MAIR AttrIndx a virtual address resolves to, by walking the same identity
+ * tables installed above.  Diagnostic: it names the attribute a buffer really
+ * gets, which is the one thing the source text cannot show. */
+int arm64_mmu_attr_of(uintptr_t va) {
+    uint64_t l1 = s_arm64_l1[(va >> 30) & 511u];
+    if (!(l1 & 1u)) return -1;
+    if (!(l1 & 2u)) return (int)((l1 >> 2) & 7u);          /* 1 GB block */
+    uint64_t l2 = s_arm64_l2[(va >> 21) & 511u];
+    if (!(l2 & 1u)) return -1;
+    if (!(l2 & 2u)) return (int)((l2 >> 2) & 7u);          /* 2 MB block */
+    return -1;                                             /* no L3 mapped */
+}
+
+/* Non-zero while the static image and the bump heap both stay clear of the
+ * non-cacheable window.  It used to sit inside .bss, which silently ran the
+ * tail of the segment uncached; this is the invariant that must not regress. */
+int arm64_mmu_layout_ok(void) {
+    extern char __bss_end[];
+    return ((uintptr_t)__bss_end <= (uintptr_t)BTRON_NOCACHE_BASE) &&
+           (HEAP_BASE >= (uintptr_t)BTRON_NOCACHE_END);
+}
+
 void arm64_mmu_init(void) {
     /* Attr 0 = Device-nGnRE (0x04)
      * Attr 1 = Normal Cacheable Inner/Outer Write-Back (0xFF)
@@ -1150,17 +1173,17 @@ void arm64_mmu_init(void) {
     uint64_t mair = (0x44ULL << 16) | (0xFFULL << 8) | (0x04ULL << 0);
 
     /* L2 Table: 512 entries of 2MB (covers 0 to 1GB)
-     * Entries 0..7: 0 - 16MB -> Normal Cacheable RAM (kernel code, data, BSS, desktop backbuffer)
-     * Entry 8: 16MB - 18MB (0x01000000 - 0x011FFFFF) -> Normal Non-Cacheable (Coherent DMA memory)
-     * Entries 9..479: 18MB - 960MB -> Normal Cacheable RAM
+     * Code, data, .bss and the bump heap are all write-back cacheable.  The one
+     * RAM exception is the BTRON_NOCACHE_BASE window (24MB, 2MB) shared by the
+     * xHCI / DMA / mailbox drivers; it sits in the gap between __bss_end and
+     * HEAP_BASE on purpose, so no static object can ever land in it.
      * Entries 480..511: 960MB - 1GB (0x3C000000 - 0x3FFFFFFF) -> GPU Framebuffer (Normal Non-Cacheable, Write-Combining)
      */
+    const uint64_t nocache_first = (uint64_t)BTRON_NOCACHE_BASE >> 21;
+    const uint64_t nocache_last  = (uint64_t)BTRON_NOCACHE_END >> 21;
     for (uint64_t i = 0; i < 480; i++) {
-        if (i == 8) {
-            s_arm64_l2[i] = (i * 0x200000ULL) | (1ULL << 10) | (3ULL << 8) | (2ULL << 2) | 0x01ULL; /* Non-cacheable DMA (16MB-18MB) */
-        } else {
-            s_arm64_l2[i] = (i * 0x200000ULL) | (1ULL << 10) | (3ULL << 8) | (1ULL << 2) | 0x01ULL; /* Normal Cacheable */
-        }
+        uint64_t attr = (i >= nocache_first && i < nocache_last) ? 2ULL : 1ULL;
+        s_arm64_l2[i] = (i * 0x200000ULL) | (1ULL << 10) | (3ULL << 8) | (attr << 2) | 0x01ULL;
     }
     for (uint64_t i = 480; i < 512; i++) {
         s_arm64_l2[i] = (i * 0x200000ULL) | (1ULL << 10) | (3ULL << 8) | (2ULL << 2) | 0x01ULL; /* GPU FB: Normal Non-Cacheable (Write-Combining) */

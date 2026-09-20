@@ -89,6 +89,15 @@ typedef struct {
     uint32_t tiles;        /* preview tiles composited              */
     uint32_t wins_walked;  /* window list length of the last walk   */
     uint32_t wins_drawn;   /* windows composited by the last walk   */
+    /* Area attribution: a maximum in milliseconds only says one call was
+     * slow, not whether the call was slow or simply enormous.  These pair the
+     * worst instance of a stage with the pixel count it moved, which turns the
+     * pair into a byte rate. */
+    uint32_t bg_worst_px;    /* area of the worst background restore  */
+    uint32_t blit_worst_px;  /* area of the worst client-area composite */
+    uint32_t pres_worst_us;  /* worst backbuffer -> framebuffer copy  */
+    uint32_t pres_worst_px;  /* area of that copy                     */
+    uint32_t bg_full_calls;  /* background rebuilds that missed the cache */
 } RENDER_STATS;
 
 extern RENDER_STATS g_render_stats;
@@ -102,6 +111,16 @@ void btron_render_stats_take(RENDER_STATS *out);
 
 static inline void btron_render_stat_max(uint32_t *field, uint32_t value) {
     if (value > *field) *field = value;
+}
+
+/* Record a stage instance only if it beats the window's worst, keeping the
+ * area that came with it so the two can be divided into a rate. */
+static inline void btron_render_stat_worst(uint32_t *us_field, uint32_t *px_field,
+                                           uint32_t us, uint32_t px) {
+    if (us > *us_field) {
+        *us_field = us;
+        *px_field = px;
+    }
 }
 
 /* Pointer Grab & Release Control (like ^G in QEMU) */

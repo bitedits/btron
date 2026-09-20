@@ -193,8 +193,18 @@ void render_desktop_background(GDEV *dev) {
 
 void render_desktop_background_rect(GDEV *dev, const RECT *damage) {
     if (!dev || !damage) return;
+    uint32_t t0 = btron_render_perf_us();
+
     if (!(s_bg_cached && dev->width == 1024 && dev->height == 768)) {
+        /* The procedural rebuild: teal fill, dot grid and five LZW icon
+         * decodes.  Nothing in the tree invalidates the cache, so a non-zero
+         * count here means the cache is not latching and the rect path is not
+         * the one running. */
+        g_render_stats.bg_full_calls++;
         render_desktop_background(dev);
+        btron_render_stat_worst(&g_render_stats.bg_us, &g_render_stats.bg_worst_px,
+                                btron_render_perf_us() - t0,
+                                (uint32_t)dev->width * (uint32_t)dev->height);
         return;
     }
 
@@ -210,6 +220,12 @@ void render_desktop_background_rect(GDEV *dev, const RECT *damage) {
         const COLOR *src = &s_cached_bg[y * 1024 + x0];
         btron_row_blit(dst, src, (size_t)width * sizeof(COLOR));
     }
+    /* Paired with the pixel count so the band can print a byte rate: this
+     * writes cacheable RAM, so anything near the framebuffer's rate means the
+     * cache is not doing its job. */
+    btron_render_stat_worst(&g_render_stats.bg_us, &g_render_stats.bg_worst_px,
+                            btron_render_perf_us() - t0,
+                            (uint32_t)width * (uint32_t)(y1 - y0));
 }
 
 BOOL desktop_handle_click(H x, H y) {
@@ -371,9 +387,8 @@ static void redraw_baremetal_desktop_mode(GDEV *screen, const RECT *damage, BOOL
      * stages (decoration / paint / client blit) are timed inside
      * redraw_all_windows_clip(), which this drives. */
     uint32_t t_all = btron_render_perf_us();
-    uint32_t t_mark = t_all;
+    uint32_t t_mark;
     render_desktop_background_rect(screen, &d);
-    btron_render_stat_max(&g_render_stats.bg_us, btron_render_perf_us() - t_mark);
     redraw_all_windows_clip(&d, blit_only);
     set_clip(screen, &d);
     if (d.top < 28) {

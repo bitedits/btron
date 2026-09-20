@@ -7,6 +7,7 @@
  */
 
 #include <pcie.h>
+#include <btron/arm64_mem.h>
 #include <stdint.h>
 #include <stdbool.h>
 
@@ -123,8 +124,8 @@ void pci_write_config32(uint32_t bus, uint32_t dev, uint32_t func, uint32_t offs
 #define MBOX_EMPTY        0x40000000u
 
 static int bcm2711_reload_vl805_firmware(void) {
-    /* Use Non-Cacheable DMA memory at 16MB (Attr 2) so VideoCore GPU sees coherent memory directly */
-    volatile uint32_t *mbox_buf = (volatile uint32_t *)(0x01000000UL + 0xF800);
+    /* Use the Non-Cacheable DMA window (Attr 2) so the VideoCore sees coherent memory */
+    volatile uint32_t *mbox_buf = (volatile uint32_t *)BTRON_NOCACHE_MBOX_PCIE;
     uintptr_t mbox_base = g_mmio_base + 0x0000B880UL;
     volatile uint32_t *status_reg = (volatile uint32_t *)(mbox_base + MBOX_STATUS);
     volatile uint32_t *write_reg  = (volatile uint32_t *)(mbox_base + MBOX_WRITE);
@@ -138,7 +139,7 @@ static int bcm2711_reload_vl805_firmware(void) {
     mbox_buf[5] = VL805_PCI_ADDR;                /* 0x00100000 (Bus 1, Dev 0, Func 0) */
     mbox_buf[6] = 0;                             /* end tag */
 
-    uint32_t mbox_addr = 0x01000000U + 0xF800U;
+    uint32_t mbox_addr = (uint32_t)BTRON_NOCACHE_MBOX_PCIE;
     dsb();
 
     int to = 2000;

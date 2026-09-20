@@ -8,6 +8,7 @@
  */
 
 #include <xhci.h>
+#include <btron/arm64_mem.h>
 #include <stdint.h>
 #include <stdbool.h>
 #include <stddef.h>
@@ -75,7 +76,7 @@ static inline void delay_us(uint32_t us) {
 
 #define XHCI_RING_SIZE          256
 #define XHCI_MAX_SLOTS          8
-#define XHCI_DMA_BASE           0x01000000ULL /* 16MB uncached DMA region */
+#define XHCI_DMA_BASE           ((uintptr_t)BTRON_NOCACHE_BASE) /* 2MB uncached DMA window */
 
 static uint64_t * const                   s_dcbaa      = (uint64_t *)(XHCI_DMA_BASE + 0x0000); /* 1KB (32 slots * 8B) */
 static xhci_erst_entry_t * const          s_erst       = (xhci_erst_entry_t *)(XHCI_DMA_BASE + 0x0800); /* 64B */

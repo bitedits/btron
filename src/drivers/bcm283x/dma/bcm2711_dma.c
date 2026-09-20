@@ -6,6 +6,7 @@
 #include <stdint.h>
 #include <stddef.h>
 #include <arch/bcm283x/bcm2711_dma.h>
+#include <btron/arm64_mem.h>
 
 extern uintptr_t g_mmio_base;
 extern void uart_puts(const char *s);
@@ -14,8 +15,8 @@ extern void uart_hex32(uint32_t val);
 #define DMA_CHANNELS_BASE   (g_mmio_base + 0x00007000UL)
 #define DMA_ENABLE_REG      (g_mmio_base + 0x00007FF0UL)
 
-/* Place DMA Control Blocks in coherent Non-Cacheable RAM (16MB + 0xF400) */
-#define DMA_CB_PHYS_BASE    (0x01000000UL + 0xF400UL)
+/* Place DMA Control Blocks in coherent Non-Cacheable RAM */
+#define DMA_CB_PHYS_BASE    BTRON_NOCACHE_DMA_CB
 
 static volatile bcm2711_dma_cb_t * const s_dma_cbs = (volatile bcm2711_dma_cb_t *)DMA_CB_PHYS_BASE;
 

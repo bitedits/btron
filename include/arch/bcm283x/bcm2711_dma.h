@@ -62,8 +62,10 @@ typedef struct __attribute__((aligned(32))) {
 /* API Prototypes */
 int  bcm2711_dma_init(void);
 int  bcm2711_dma_wait_timeout(int channel, uint32_t loops);
+void bcm2711_dma_abort(int channel);
 void bcm2711_dma_wait(int channel);
 int  bcm2711_dma_is_busy(int channel);
+/* src_stride and dst_stride are full row pitches in bytes. */
 int  bcm2711_dma_blit2d(int channel,
                         uintptr_t dst_addr, int dst_stride,
                         uintptr_t src_addr, int src_stride,

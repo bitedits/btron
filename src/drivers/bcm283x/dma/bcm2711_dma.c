@@ -78,6 +78,15 @@ int bcm2711_dma_wait_timeout(int channel, uint32_t loops) {
     return 0;
 }
 
+void bcm2711_dma_abort(int channel) {
+    if (channel < 0 || channel > 14) return;
+    volatile uint32_t *chan = dma_chan_regs(channel);
+    chan[BCM_DMA_CS / 4] = BCM_DMA_CS_ABORT;
+    __asm__ volatile("dsb sy" : : : "memory");
+    chan[BCM_DMA_CS / 4] = BCM_DMA_CS_RESET;
+    __asm__ volatile("dsb sy" : : : "memory");
+}
+
 void bcm2711_dma_wait(int channel) {
     (void)bcm2711_dma_wait_timeout(channel, 5000000u);
 }
@@ -103,6 +112,8 @@ int bcm2711_dma_blit2d_async(int channel,
                               uint32_t width_bytes, uint32_t height_rows) {
     if (channel < 0 || channel > 14) return -1;
     if (width_bytes == 0 || height_rows == 0) return 0;
+    if (dst_stride < (int)width_bytes || src_stride < (int)width_bytes)
+        return -1;
     if (bcm2711_dma_is_busy(channel)) return 1;
     bcm2711_dma_wait(channel);
 
@@ -121,7 +132,8 @@ int bcm2711_dma_blit2d_async(int channel,
     cb->source_ad = (uint32_t)src_addr;
     cb->dest_ad   = (uint32_t)dst_addr;
     cb->txfr_len  = ((height_rows & 0xFFFF) << 16) | (width_bytes & 0xFFFF);
-    cb->stride    = ((dst_stride & 0xFFFF) << 16) | (src_stride & 0xFFFF);
+    cb->stride    = (((dst_stride - (int)width_bytes) & 0xFFFF) << 16) |
+                  ((src_stride - (int)width_bytes) & 0xFFFF);
     cb->nextconbk = 0;
 
     __asm__ volatile("dsb sy" : : : "memory");

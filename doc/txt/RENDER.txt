@@ -1,0 +1,694 @@
+RENDER.txt — Pi 400 Workbench Rendering, Composition, and Presentation
+=====================================================================
+
+B-System / BTRON 3.20
+Target: Raspberry Pi 4B / Pi 400 (BCM2711, Cortex-A72, AArch64)
+Status: current software renderer plus a staged VC4/HVS direction
+Related: ASYNC.txt, GUI.md, EVENTING.md, IRQ.md, fast_blit.h
+
+0. Purpose and vocabulary
+-------------------------
+
+The Workbench has a software-rendered desktop.  Applications draw into window
+backing stores.  The compositor combines those stores with the desktop into a
+cached RAM backbuffer.  The presenter copies completed pixels from that
+backbuffer to the VideoCore mailbox framebuffer which the display scans out.
+
+This file deliberately uses precise names because the terms are often mixed:
+
+  Renderer       Produces pixels for one visual object.  Examples: an app's
+                 wnd->paint callback, desktop background renderer, panel
+                 renderer, and retro window frame renderer.
+
+  Compositor     Determines visibility and z-order, then combines renderers'
+                 output into the desktop backbuffer.  Full and damage-based
+                 composition are both software composition.
+
+  Clipper        Restricts a renderer/compositor operation to a rectangle.
+                 It is an optimization and a correctness boundary: code outside
+                 the rectangle must remain unchanged.
+
+  Damage         A rectangle whose visible pixels may be stale.  Damage is in
+                 screen coordinates and follows RECT's half-open convention:
+                 [left,right) x [top,bottom).
+
+  Blitter        Copies pixels without deciding what is visible.  It can be a
+                 CPU/NEON row copy or a BCM2711 DMA transfer.
+
+  Presenter      Makes already composed backbuffer pixels visible by copying or
+                 scanning them to the mailbox framebuffer.  It does not redraw
+                 applications or resolve window overlap.
+
+  Scanout        The display hardware reading a framebuffer.  The current
+                 implementation receives one VideoCore mailbox framebuffer and
+                 scanout is managed by firmware, not directly by BTRON.
+
+  Plane          A hardware scanout layer.  The current renderer has no exposed
+                 VC4/HVS planes.  The planned HVS direction introduces planes
+                 only after an independently validated display-controller path.
+
+1. Current ownership and buffer topology
+----------------------------------------
+
+All coordinates are pixels at 1024 x 768.  Pixels are 32-bit ARGB values in
+little-endian RAM.  The mailbox request selects BGR byte order so the current
+ARGB representation is consistent with the framebuffer arrangement.
+
+  Application code
+       |
+       |  paint(wnd, wnd->dev)
+       v
+  Per-window GDEV backing store (wnd->dev->pixels)
+       |
+       |  frame + z-order + transparency + clip
+       v
+  s_desktop_backbuffer [1024 * 768 COLOR], normal cached ARM RAM
+       |
+       |  present only changed pixels
+       v
+  VideoCore mailbox framebuffer, direct CPU/DMA visible memory
+       |
+       v
+  firmware display scanout -> monitor
+
+Important ownership rule:
+
+  * Application and compositor code write the RAM backbuffer.
+  * The presenter writes the mailbox framebuffer.
+  * The cursor is normally stamped directly into the visible framebuffer;
+    g_cursor_in_backbuffer is false during the Pi 400 Workbench session.
+  * No renderer may write a DMA source rectangle after it has been queued until
+    the DMA completion handler has observed completion or aborted it.
+
+The principal objects are:
+
+  Object / state                  Owner / role
+  ------------------------------  --------------------------------------------
+  s_desktop_backbuffer            canonical composed desktop in RAM
+  s_cached_bg                     1024x768 saved desktop-only background
+  wnd->dev->pixels                retained application pixel backing store
+  s_drag_preview_pixels           captured opaque top-window snapshot
+  gpu_fb                          VideoCore mailbox framebuffer mapping
+  s_present_front_page            displayed-page bookkeeping (general DMA path)
+  s_drag_preview_dma_rect         RAM source / FB destination ownership record
+
+The static backbuffers in core_arm64.c are 64-byte aligned.  This matches the
+A72 cache-line size used by cache maintenance and makes the NEON copy fast path
+available for aligned full spans.
+
+2. Entry points and component map
+---------------------------------
+
+  Layer             Main code                                      Role
+  ----------------  ---------------------------------------------  -----------------------------------
+  Framebuffer       src/drivers/bcm283x/cpu/startup_arm.c          mailbox allocation and offset API
+  Scheduler         src/cores/core_arm64.c                         input/UI periods and presentation
+  Workbench         src/desktop/workbench.c                        event dispatch and render routing
+  Desktop renderer  src/desktop/desktop.c                          background, panel, test bar
+  Window compositor src/window/wnd.c                               frame, z-order, clipping, blending
+  Blitter           include/btron/fast_blit.h                      NEON/scalar row copy
+  DMA               src/drivers/bcm283x/dma/bcm2711_dma.c         linear/2D transfer controller
+  Cursor            src/desktop/desktop.c + core_arm64.c          direct visible-FB cursor
+
+Useful concrete entry points:
+
+  init_pi_framebuffer()             mailbox framebuffer setup
+  mailbox_set_virtual_offset()      firmware virtual-offset request
+  workbench_render()                complete desktop composition
+  workbench_render_damage()         clipped desktop composition
+  workbench_render_overlay_only()   menu overlay-only redraw
+  redraw_baremetal_desktop()        complete desktop renderer
+  redraw_baremetal_desktop_rect()   clipped desktop renderer
+  redraw_all_windows_clip()         clipped z-ordered window composition
+  redraw_top_window()               focused/top window redraw
+  present_backbuffer_rect()         synchronous RAM -> framebuffer rect copy
+  present_copy_step()               bounded CPU full-frame presenter work
+  present_drag_preview()            special opaque-window move fast path
+  blit_backbuffer_to_fb()           starts bounded full presentation
+  btron_row_blit()                  CPU row-copy primitive
+  bcm2711_dma_blit2d_async()        asynchronous 2D memory transfer
+
+3. Scheduler and frame lifecycle
+--------------------------------
+
+The GUI loop in core_arm64.c intentionally separates the input and UI planes.
+They are peers: determinism comes from fixed cadence and bounded work, not from
+raising the input task's priority.
+
+  Plane             Nominal cadence        Responsibilities
+  ----------------  ---------------------  -------------------------------------
+  INPUT             1 ms                   HID integration and event enqueue
+  UI                8.33 ms                bounded event dispatch and compose
+  PRESENT            UI tail / loop steps  bounded CPU copy or DMA completion
+
+The INPUT plane must never call a Workbench renderer, compositor, or blitter.
+That rule prevents a full-memory copy from becoming part of USB/HID latency.
+The UI plane drains at most ASYNC_UI_EVENT_BUDGET events in one visit and then
+chooses a render/present path.
+
+A normal full interaction follows this sequence:
+
+  1. INPUT integrates pointer or keyboard data and puts EVT records in the
+     event queue.
+  2. UI calls workbench_process_event() for a bounded number of EVT records.
+  3. UI chooses full, clipped, overlay-only, key-local, or preview composition.
+  4. A renderer/compositor writes only s_desktop_backbuffer.
+  5. A presenter copies the changed backbuffer region to gpu_fb.
+  6. The direct-framebuffer cursor is restored/redrawn after the underlying
+     pixels are coherent.
+
+The compact HUD records the worst observed values for a one-second window:
+
+  Field             Meaning
+  ----------------  -----------------------------------------------
+  C                 compositor time, milliseconds, clamped to 99
+  P                 presentation or observed preview DMA time
+  W                 UI-plane WCET, milliseconds, clamped to 99
+  G                 input-plane maximum gap / cadence diagnostic
+  fNN               full composition area as a percent of screen
+  mNN               ordinary move-damage composition area
+  vNN               drag-preview composition area
+
+A saturated C or W normally indicates that reducing only copy bandwidth cannot
+fix the interaction.  A saturated P indicates that presentation bandwidth or
+synchronization dominates.  Both must be checked against G: a faster desktop
+that delays HID is not a successful renderer.
+
+4. Renderer layer
+-----------------
+
+4.1 Desktop renderer
+
+redraw_baremetal_desktop(screen, w, h) in desktop.c produces a complete
+software desktop into the supplied GDEV:
+
+  * desktop background and icons;
+  * every visible window;
+  * TIP candidate window when active;
+  * system panel and gold separator band;
+  * bottom colour test bar;
+  * cursor only when g_cursor_in_backbuffer is enabled.
+
+render_desktop_background() also saves a 1024x768 background-only image in
+s_cached_bg.  That cache is not a second frame buffer and must not contain
+windows, menus, or cursor pixels.  It exists to restore exposed desktop pixels
+without regenerating icons and other immutable desktop art on each drag.
+
+render_system_panel() delegates to the global menu bar renderer.  The 1 Hz
+clock update uses this local renderer and presents only rows [0,28), avoiding
+a full desktop render for a small panel mutation.
+
+4.2 Window renderers
+
+Each WND owns a GDEV backing store.  A window's paint callback is responsible
+for its own content and layout; the compositor owns frame placement and
+visibility.  A transparent pixel is exactly 0x00000000.  Any other COLOR value
+is opaque in the current software compositor.
+
+The frame renderer draws title, border, controls, and decoration into the
+screen GDEV.  The content renderer paints wnd->dev.  The compositor then copies
+that backing store at:
+
+  destination x = wnd->bounds.left + border
+  destination y = wnd->bounds.top + title_height + border
+
+The window manager's retained backing stores make a blit-only damage redraw
+possible: when the contents did not change, it need not invoke wnd->paint.
+
+4.3 Overlay renderers
+
+Global menus and tracker menus are separate overlays.  workbench_render()
+performs a full desktop render then draws any open overlay.  For hover/open
+updates, workbench_render_overlay_only() redraws only the overlay because its
+entire own rectangle is repainted.  This avoids recompositing windows behind a
+highlight change.
+
+The contract is strict: overlay-only is valid only when the background beneath
+the overlay remains valid in the RAM backbuffer.  A close, command activation,
+or interaction that changes desktop state must return to a full or otherwise
+sufficient damage render.
+
+5. Compositor and z-order
+-------------------------
+
+5.1 Full compositor
+
+workbench_render() calls redraw_baremetal_desktop(), then menu overlays.  It is
+the correctness fallback: all visible output is regenerated in a known order.
+Use it for restacking, focus changes with broad visual effects, app commands,
+window close/open, resize, menu close when the underlying desktop is stale, and
+any path whose damage cannot be proven.
+
+present_full_render() records the previous and current union of visible window
+bounds.  It fully composes the desktop in RAM but presents only the union of
+those bounds plus an optional prior menu rectangle.  The present restriction is
+safe only because the compositor regenerated the entire backbuffer and the
+union covers the displaced pixels.
+
+5.2 Clipped/damage compositor
+
+A damage RECT uses half-open coordinates.  redraw_baremetal_desktop_rect():
+
+  1. clamps damage to the screen;
+  2. restores only that rectangle from s_cached_bg;
+  3. composites only windows intersecting it;
+  4. redraws the panel if the damage touches its top 28 rows;
+  5. redraws the bottom test-bar segment if the damage reaches it;
+  6. resets the GDEV clip and issues a memory barrier.
+
+workbench_render_damage() exposes this function to the scheduler.
+
+redraw_all_windows_clip(damage, blit_only) snapshots up to 32 windows, walks
+the snapshot in the established back-to-front composition order, and skips any
+window whose screen bounds do not intersect damage.  It sets the screen GDEV
+clip before drawing frames.  For each backing store, it converts the screen
+clip into client coordinates, clamps the source rectangle to wnd->dev, then
+copies one clipped row at a time.
+
+For each row, the compositor scans for transparent pixels:
+
+  * fully opaque span: copy_opaque_span() -> btron_row_blit();
+  * any transparent pixel: scalar per-pixel copy that preserves the already
+    composed destination pixel where source is 0x00000000.
+
+This is why an opaque drag-preview target is required: its backing image can be
+moved by a bulk copy, but a transparent window depends on lower layers and must
+fall back to normal composition.
+
+5.3 Damage correctness rules
+
+  * Damage must cover both the old and new positions of a moved object.
+  * The old position must first be restored from background and lower windows.
+  * Damage regions are screen-coordinate rectangles, not client rectangles.
+  * A bounding-box damage region is correct but often overdraws.  Splitting the
+    old-minus-new region removes unnecessary work during a translation.
+  * Menu and panel pixels are ordinary pixels once composited; their ownership
+    must be included when their state changes.
+  * Never use clipped composition to repair an unknown stale framebuffer.  Use
+    the full compositor after an unproven transition.
+
+6. Drag-preview compositor
+--------------------------
+
+The drag-preview path is a special compositor, not generic window movement.  It
+trades generality for lower composition cost while preserving explicit exits to
+the full renderer.
+
+Eligibility:
+
+  * the dragged target is the top visible window;
+  * the window bounds stay inside the screen;
+  * the target does not touch the top panel band (top >= 28);
+  * the target backing image is fully opaque;
+  * no global/tracker or in-window menu is involved;
+  * no resize, tab-slide, button, keyboard, or other non-move interaction is
+    active;
+  * no incompatible pending general presentation exists.
+
+Capture:
+
+  1. At the beginning of an eligible title-bar drag, drag_preview_capture()
+     copies the already-composed target rectangle from s_desktop_backbuffer to
+     s_drag_preview_pixels.
+  2. The snapshot includes the window frame and content as actually visible.
+     It is therefore not re-painted during movement.
+
+Per move:
+
+  1. drag_preview_repair_strips() computes old minus new as no more than four
+     non-overlapping strips.
+  2. workbench_render_damage() restores and recomposes just these exposed
+     strips in the RAM backbuffer.
+  3. The saved opaque snapshot is copied to the new position in the RAM
+     backbuffer.
+  4. The strip pixels are presented synchronously.
+  5. The new window rectangle is presented by CPU fallback or gated DMA.
+
+Exit:
+
+  * Button release and every non-move event call drag_preview_reset().
+  * If preview DMA is active, reset aborts channel 0 before any fallback can
+    modify the in-flight RAM source.
+  * A normal full render occurs for the released state or the incompatible
+    interaction.
+
+The one-second panel refresh does not tear down a valid preview.  It renders
+and presents only the panel band, because the preview target is prohibited from
+overlapping that band.
+
+7. Blitter layer
+----------------
+
+7.1 CPU / NEON row blitter
+
+btron_row_blit(dst, src, bytes) is the common non-overlapping row-copy helper.
+On AArch64, when both endpoints are 16-byte aligned, it moves 64-byte blocks
+with four 128-bit SIMD registers (two LDP and two STP instructions).  It then
+uses aligned 64-bit scalar copies and a byte tail.  Host and unaligned callers
+retain safe scalar behavior.
+
+The helper is used by:
+
+  * background-cache restoration;
+  * fully opaque window spans;
+  * framebuffer rectangle presentation;
+  * the drag-preview snapshot and placement;
+  * bounded CPU present bands.
+
+btron_row_blit is a copy primitive, not memmove.  Do not use it for overlapping
+source and destination ranges.  It carries no cache maintenance policy: callers
+perform memory barriers or cache operations appropriate to their device.
+
+7.2 Synchronous rectangle presenter
+
+present_backbuffer_rect(fb, x0, y0, x1, y1) clamps the requested half-open
+rectangle to the screen, selects the currently visible framebuffer page, and
+row-copies only the required pixels.  It issues a DMB after the copy and marks
+the cursor dirty because a presented rectangle may have overwritten cursor
+pixels.
+
+This is the normal present primitive for damage regions, menu overlays, local
+text updates, panel updates, preview strips, and CPU fallback.
+
+7.3 Bounded full-frame CPU presenter
+
+blit_backbuffer_to_fb() does not immediately copy the full 3 MiB desktop while
+CPU presentation is selected.  It arms s_present_copy_active.  Each
+present_copy_step() transfers a bounded number of rows and returns to the main
+loop.  This permits INPUT to keep its 1 ms cadence between presenter chunks.
+
+The price is that a full desktop appears progressively.  This is accepted as
+the safe fallback because it keeps HID responsive.  Do not replace it with an
+unbounded CPU full-frame copy inside the input or UI event-drain path.
+
+8. Mailbox framebuffer and cursor
+---------------------------------
+
+init_pi_framebuffer() requests a 1024x768, 32 bpp mailbox framebuffer from the
+VideoCore firmware.  The current request intentionally uses a single virtual
+scanout page.  Earlier full-frame virtual-offset/page-flip experiments produced
+very long Pi 400 stalls, so general page flipping remains disabled.
+
+mailbox_set_virtual_offset() exists for a future page-flip path, but its
+existence does not make page flips part of the active presenter contract.
+
+The cursor is rendered directly into the visible framebuffer.  Before drawing a
+new cursor, restore_cursor_area() repairs pixels under the old cursor from the
+backbuffer, then draw_baremetal_cursor_raw() stamps the 16x16 cursor.  A
+presenter must set s_present_cursor_dirty after writing any framebuffer region.
+While preview DMA owns its destination rectangle, direct cursor writes pause so
+the CPU cannot race the DMA writer.
+
+9. BCM2711 DMA presenter
+------------------------
+
+9.1 General DMA remains disabled
+
+s_present_dma_enabled is deliberately zero.  A general full-frame DMA/page-flip
+presenter is not enabled merely because DMA exists.  It previously exhibited
+unacceptable long stalls, and it would interfere with the front-page/cursor
+ownership model.
+
+9.2 Self-test gate
+
+At boot, dma_framebuffer_selftest() initializes BCM2711 DMA and uses channel 7
+to copy a known 128-byte pattern from aligned RAM to a bottom-right framebuffer
+location.  It checks the result, restores the original pixels, and reports:
+
+  [DMA] Framebuffer self-test: PASS
+
+A fail leaves DMA presentation disabled.  PASS proves the current board and
+mapping support this basic RAM-source -> framebuffer-destination transaction
+with cache clean/invalidate handling.  It does not by itself prove arbitrary
+2D scene updates, page flips, HVS configuration, or DMA writes into the cached
+RAM desktop backbuffer.
+
+9.3 Gated preview DMA experiment
+
+Channel-0 preview DMA is currently disabled.  The linear channel-7 self-test
+passes, but it does not validate a channel-0 strided 2D transfer into the live
+scanout page.  That experiment produced incomplete moved-window rectangles and
+high cache-maintenance cost, so the preview compositor always synchronously
+presents the current window rectangle after its CPU-presented repair strips.
+
+The retained experimental direction is:
+
+  RAM backbuffer current-window rectangle -> VideoCore framebuffer rectangle
+
+bcm2711_dma_blit2d_async() receives full row pitches; the driver programs BCM
+DMA's post-row stride as (pitch - width).  It may be re-enabled only after an
+equivalent channel-0 strided framebuffer self-test, explicit framebuffer-pitch
+validation, and a destination that is not the actively scanned page.  Until
+then, the CPU rectangle presenter is the correct preview backend.
+
+9.4 Cache and barrier rules
+
+The A72 data cache is not automatically coherent with this DMA engine path.
+Before DMA reads normal cached RAM, arm64_clean_cache_range() cleans every
+relevant 64-byte cache line and executes DSB SY.  After DMA writes memory that
+the CPU will read, invalidate that range before the read.  The framebuffer
+self-test demonstrates the latter sequence for its verification data.
+
+For ordinary CPU presenter writes, the code uses DMB/DSB barriers as needed for
+ordering.  Do not add cache maintenance indiscriminately to all CPU copies: it
+is required at the device boundary, not for normal cached-RAM composition.
+
+10. Present-path selection
+--------------------------
+
+  Situation                         Compose path                  Present path
+  -------------------------------  ----------------------------  -----------------------------
+  Boot / unknown state              full Workbench                bounded CPU full-frame copy
+  Window move, normal               clipped damage compositor     old/new damage CPU rectangles
+  Eligible title drag               preview strips + snapshot     CPU strips + current-window rect
+  Preview DMA experiment            disabled pending 2D proof     CPU current-window rectangle
+  Menu hover/open                   overlay-only                  menu rectangle CPU copy
+  In-app menu update                redraw top window             top-window CPU rectangle
+  Local keyboard prompt update      redraw top window             top-window CPU rectangle
+  Clock tick                        render panel                  panel [0,28) CPU rectangle
+  Release/resize/tab/key/click      full Workbench fallback       union/damage CPU rectangle
+
+Correctness outranks path selection.  If no row in this table establishes that
+the affected pixels are fully repaired, select a full Workbench composition.
+
+11. Diagnostics and hardware validation
+----------------------------------------
+
+For every change to this pipeline:
+
+  1. Clean all *.arm64.o objects.  ARM64 build rules do not reliably express
+     header dependencies, so stale objects can mimic input or renderer bugs.
+  2. Build arm64-elf and pi400.
+  3. Confirm boot reports the expected DMA self-test result.
+  4. Exercise keyboard and mouse before judging graphics performance.
+  5. Hold-drag gterm for more than one second and record HUD C/P/W/G plus
+     f/m/v token.
+  6. Check no stale strips, holes, cursor ghosts, menu corruption, or panel
+     damage appears; release the drag and test a normal full redraw.
+  7. Test menu hover, in-app menus, resize, tab interactions, click-to-focus,
+     text input, and ESC.  These must retain their full-render fallbacks.
+
+Required safety observations for preview DMA:
+
+  * vNN appears during an eligible drag;
+  * no source corruption while rapidly changing direction;
+  * no cursor corruption while DMA is active;
+  * release always returns to a coherent full desktop;
+  * keyboard/mouse remain live;
+  * no transfer error log and no need to reset the board.
+
+12. Future plan: DRM/KMS-style VC4 HVS presentation
+----------------------------------------------------
+
+12.1 Goal
+
+The desired end state is not a Linux port inside the BTRON kernel.  It is a
+small, bare-metal display subsystem with DRM/KMS-like concepts:
+
+  * connector/display discovery;
+  * CRTC timing and vblank synchronization;
+  * framebuffer objects with explicit pitch/format/location;
+  * atomic state validation and commit;
+  * HVS display-list composition of hardware planes;
+  * an event/completion path that preserves the ASYNC input/UI guarantees.
+
+Linux VC4 DRM/KMS is a behavioral and register-programming reference, not a
+source-level dependency.  The vendored Haiku tree is reference-only as well.
+Neither should be copied into the production BSP without an independently
+understood BCM2711 hardware contract.
+
+12.2 Why HVS changes the cost model
+
+The current compositor writes a final flattened desktop image, then transfers
+it again to the scanout framebuffer.  HVS can read several source buffers at
+scanout time and compose them into one pixel stream.  For an opaque moving
+window, the ideal move becomes a display-list/plane position update rather than
+a CPU copy of every window pixel.
+
+That does NOT eliminate software composition universally:
+
+  * alpha/translucency, arbitrary overlap, clipping, menus, and cursors still
+    need explicit plane capability and ordering decisions;
+  * a plane cannot be reused while its framebuffer is mutated by the CPU;
+  * hardware plane limits force a correct flattening fallback;
+  * scanout ownership and vblank synchronization replace the simpler mailbox
+    framebuffer ownership model.
+
+12.3 Staged roadmap
+
+Phase H0 — Preserve and measure the baseline
+  Deliverables:
+    - Keep the current software renderer as the always-correct fallback.
+    - Record C/P/W/G and vNN for full, damage, preview CPU, and preview DMA.
+    - Define acceptance targets for input gap, frame cadence, and artifact-free
+      release behavior.
+  Exit:
+    - Hardware baseline is repeatable and diagnostic HUD is trusted.
+
+Phase H1 — Display-controller reconnaissance
+  Deliverables:
+    - Identify BCM2711 display blocks, MMIO ownership, clocks/resets, HDMI
+      connector path, and firmware interactions on this boot configuration.
+    - Establish authoritative register documentation and compare it with Linux
+      VC4 DRM behavior without importing Linux driver code.
+    - Confirm the ARM's address aliases/bus addresses for scanout buffers.
+  Exit:
+    - A written register map and a no-side-effect read/probe routine run safely
+      on the Pi 400.
+  Do not:
+    - write guessed HVS/HDMI registers or assume mailbox addresses are valid
+      HVS bus addresses.
+
+Phase H2 — Vblank and a standalone scanout buffer
+  Deliverables:
+    - Add a minimal display timing/vblank source or a verified firmware-facing
+      vblank mechanism.
+    - Allocate one scanout-safe framebuffer with explicit physical/bus address,
+      pitch, ARGB format, alignment, and lifetime.
+    - Display a static test pattern through the new path.
+  Exit:
+    - Stable image across reboot and mode changes; vblank timestamp telemetry;
+      mailbox fallback remains selectable at build time.
+
+Phase H3 — Minimal KMS object model
+  Deliverables:
+    - Define internal objects: framebuffer, plane state, CRTC state, connector,
+      mode, fence/completion, and atomic commit.
+    - Implement validate-then-commit with no partial state visible to scanout.
+    - Support one primary plane with explicit source/destination rectangles.
+  Exit:
+    - A CPU-rendered backbuffer scans out through the new primary plane and
+      commits only at vblank.
+  API rule:
+    - Keep this as a small BTRON display API, not a user-visible Linux ioctl
+      emulation layer.
+
+Phase H4 — HVS display-list primary composition
+  Deliverables:
+    - Build and cache aligned HVS display-list entries in memory owned by the
+      display subsystem.
+    - Program one primary plane and update only its buffer address at vblank.
+    - Instrument commit-to-latch latency, missed vblanks, underflow/error state,
+      and complete fence signaling.
+  Exit:
+    - Tear-free primary-plane flips under continuous input with no input-gap
+      regression.
+
+Phase H5 — Overlay plane proof of concept
+  Deliverables:
+    - Add exactly one opaque overlay plane for the drag-preview target.
+    - Keep background/panel in the primary plane; position the overlay at
+      vblank without modifying its pixels during scanout.
+    - Retain normal software composition whenever overlay eligibility fails.
+  Exit:
+    - gterm title-bar drag is a plane-position commit, with no CPU copy of the
+      window body and no visible trails.
+  Plane eligibility mirrors preview eligibility:
+    - topmost, opaque, on-screen, format/pitch supported, no incompatible menu
+      or cursor overlap, and no plane-budget conflict.
+
+Phase H6 — General plane allocator and cursor plane
+  Deliverables:
+    - Add a deterministic plane allocator with a fixed priority order:
+      primary desktop, cursor, then one/few high-value opaque overlays.
+    - Add hardware cursor plane only after its format/hotspot/vblank behavior is
+      proven; otherwise retain the direct cursor path.
+    - Define flattening when windows exceed HVS plane count or require unsupported
+      blending/scaling.
+  Exit:
+    - Plane assignment is predictable, observable in the HUD/log, and always
+      falls back to a correct software composite.
+
+Phase H7 — Atomic damage/commit scheduler integration
+  Deliverables:
+    - UI produces immutable pending display state; PRESENT commits at vblank.
+    - No display commit may block INPUT or hold a mutex across UI composition.
+    - Add completion fences/sequence numbers so CPU writers do not reuse an
+      in-flight framebuffer.
+  Exit:
+    - Under stress, input meets its cadence, commits are bounded, and every
+      framebuffer lifetime is mechanically tracked.
+
+Phase H8 — Mode setting, recovery, and validation
+  Deliverables:
+    - Explicit mode selection, connector hotplug policy if supported, reset and
+      recovery from underflow/hang, and mailbox/software fallback.
+    - Repeatable automated image tests plus manual Pi 400 visual checks.
+  Exit:
+    - A failed display commit never requires blind writes or loses keyboard/mouse
+      control; a known-good primary software path can be restored.
+
+12.4 Proposed HVS-era composition policy
+
+At first, retain the current render model and add planes as an optimization:
+
+  primary plane:  flattened desktop background + non-promoted windows + panel
+  overlay plane:  eligible opaque topmost dragged window
+  cursor plane:   optional later; otherwise current direct cursor mechanism
+
+When a drag starts, capture or retain the window surface, remove its old region
+from the primary composition, and issue only an overlay position commit at
+vblank.  On release, fold it back into the primary plane or keep it promoted
+only if the normal stacking/alpha rules still hold.  This makes plane promotion
+an optional compositor backend, not a new window-system semantic.
+
+12.5 Non-negotiable HVS/KMS invariants
+
+  * No guessed register write on live hardware.
+  * Every scanout buffer has an explicit address domain: CPU virtual, physical,
+    and device/bus address are never assumed interchangeable.
+  * CPU must not modify a framebuffer until its prior scanout fence completes.
+  * Atomic validation happens before hardware state is changed.
+  * Vblank is the only normal latch point for visible plane-state changes.
+  * Plane exhaustion, unsupported alpha, clipping, scaling, or z-order always
+    fall back to the existing software compositor.
+  * Input ISR and INPUT plane remain independent of vblank wait, display-list
+    creation, composition, and framebuffer copy.
+  * Hardware error/underflow recovery has a bounded path back to a known-good
+    software primary framebuffer.
+
+13. Code navigation
+-------------------
+
+  src/cores/core_arm64.c
+    Scheduler, CPU/DMA presenter, preview state, cache maintenance, HUD,
+    framebuffer self-test, and GUI launch loop.
+
+  src/desktop/workbench.c
+    Full, damage, and overlay-only Workbench render entry points.
+
+  src/desktop/desktop.c
+    Background cache, panel, cursor primitives, full and clipped desktop render.
+
+  src/window/wnd.c
+    Window z-order, clipping, frame draw, opaque fast spans, transparent blend.
+
+  include/btron/fast_blit.h
+    AArch64 NEON row-copy implementation and scalar fallback.
+
+  src/drivers/bcm283x/dma/bcm2711_dma.c
+    BCM2711 DMA control blocks, asynchronous linear/2D copies, completion,
+    abort, and 2D post-row stride programming.
+
+  src/drivers/bcm283x/cpu/startup_arm.c
+    VideoCore mailbox framebuffer allocation and virtual-offset helper.

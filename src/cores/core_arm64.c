@@ -169,6 +169,10 @@ typedef struct {
 
 static COLOR s_drag_preview_pixels[BTRON_SCREEN_W * BTRON_SCREEN_H] __attribute__((aligned(64)));
 static drag_preview_t s_drag_preview;
+static int s_drag_preview_dma_enabled = 0;
+static int s_drag_preview_dma_active;
+static RECT s_drag_preview_dma_rect;
+static uint32_t s_drag_preview_dma_start_us;
 
 #define DMA_FB_SELFTEST_WORDS 32u
 static uint32_t s_dma_fb_selftest_src[DMA_FB_SELFTEST_WORDS] __attribute__((aligned(64)));
@@ -759,8 +763,35 @@ static void present_backbuffer_rect(volatile uint32_t *fb, H x0, H y0, H x1, H y
 }
 
 static void drag_preview_reset(void) {
+    if (s_drag_preview_dma_active) bcm2711_dma_abort(0);
+    s_drag_preview_dma_active = 0;
+    s_drag_preview_dma_start_us = 0;
     s_drag_preview.target = NULL;
     s_drag_preview.active = FALSE;
+}
+
+static void drag_preview_dma_complete(volatile uint32_t *fb, uint32_t now) {
+    if (!s_drag_preview_dma_active || bcm2711_dma_is_busy(0)) return;
+
+    int status = bcm2711_dma_wait_timeout(0, 1u);
+    volatile uint32_t *dst = fb + s_present_front_page * BTRON_SCREEN_W * BTRON_SCREEN_H +
+                             (size_t)s_drag_preview_dma_rect.top * BTRON_SCREEN_W +
+                             s_drag_preview_dma_rect.left;
+    size_t span = (size_t)(s_drag_preview_dma_rect.bottom - s_drag_preview_dma_rect.top) *
+                  BTRON_SCREEN_W * sizeof(COLOR);
+    arm64_invalidate_cache_range((const void *)dst, span);
+    if (status != 0)
+        present_backbuffer_rect(fb, s_drag_preview_dma_rect.left,
+                                s_drag_preview_dma_rect.top,
+                                s_drag_preview_dma_rect.right,
+                                s_drag_preview_dma_rect.bottom);
+
+    uint32_t elapsed = now - s_drag_preview_dma_start_us;
+    if (elapsed > s_async_rt_stats.present_max_us)
+        s_async_rt_stats.present_max_us = elapsed;
+    s_drag_preview_dma_active = 0;
+    s_drag_preview_dma_start_us = 0;
+    s_present_cursor_dirty = 1;
 }
 
 static int drag_preview_bounds_valid(const RECT *bounds) {
@@ -845,11 +876,11 @@ static void drag_preview_present_strips(volatile uint32_t *fb, const RECT *old, 
 
     for (int i = 0; i < count; i++)
         present_backbuffer_rect(fb, strips[i].left, strips[i].top, strips[i].right, strips[i].bottom);
-    present_backbuffer_rect(fb, current->left, current->top, current->right, current->bottom);
 }
 
 static int present_drag_preview(GDEV *screen, volatile uint32_t *fb, WND *target,
                                 const RECT *old, const RECT *current) {
+    if (s_drag_preview_dma_active) return 1;
     if (!s_drag_preview.active || s_drag_preview.target != target ||
         !drag_preview_bounds_valid(old) || !drag_preview_bounds_valid(current) ||
         old->top < 28 || current->top < 28 ||
@@ -869,6 +900,28 @@ static int present_drag_preview(GDEV *screen, volatile uint32_t *fb, WND *target
     area += (uint32_t)s_drag_preview.width * s_drag_preview.height;
     uint32_t t1 = *(volatile uint32_t *)(TIMER_BASE + 0x04);
     drag_preview_present_strips(fb, old, current);
+
+    int dma_started = 0;
+    if (s_drag_preview_dma_enabled && s_dma_fb_selftest_passed) {
+        COLOR *src = &s_desktop_backbuffer[(size_t)current->top * BTRON_SCREEN_W + current->left];
+        volatile uint32_t *dst = fb + s_present_front_page * BTRON_SCREEN_W * BTRON_SCREEN_H +
+                                 (size_t)current->top * BTRON_SCREEN_W + current->left;
+        size_t span = (size_t)(current->bottom - current->top) *
+                      BTRON_SCREEN_W * sizeof(COLOR);
+        arm64_clean_cache_range(src, span);
+        arm64_clean_cache_range((const void *)dst, span);
+        if (bcm2711_dma_blit2d_async(0, (uintptr_t)dst, BTRON_SCREEN_W * sizeof(COLOR),
+                                     (uintptr_t)src, BTRON_SCREEN_W * sizeof(COLOR),
+                                     (current->right - current->left) * sizeof(COLOR),
+                                     current->bottom - current->top) == 0) {
+            s_drag_preview_dma_rect = *current;
+            s_drag_preview_dma_start_us = t1;
+            s_drag_preview_dma_active = 1;
+            dma_started = 1;
+        }
+    }
+    if (!dma_started)
+        present_backbuffer_rect(fb, current->left, current->top, current->right, current->bottom);
     uint32_t t2 = *(volatile uint32_t *)(TIMER_BASE + 0x04);
 
     s_drag_preview.bounds = *current;
@@ -878,9 +931,11 @@ static int present_drag_preview(GDEV *screen, volatile uint32_t *fb, WND *target
         s_hud_path_live = 'v';
         s_hud_area_live = (area * 100u) / ((uint32_t)BTRON_SCREEN_W * BTRON_SCREEN_H);
     }
-    s_async_rt_stats.present_us = t2 - t1;
-    if (s_async_rt_stats.present_us > s_async_rt_stats.present_max_us)
-        s_async_rt_stats.present_max_us = s_async_rt_stats.present_us;
+    if (!dma_started) {
+        s_async_rt_stats.present_us = t2 - t1;
+        if (s_async_rt_stats.present_us > s_async_rt_stats.present_max_us)
+            s_async_rt_stats.present_max_us = s_async_rt_stats.present_us;
+    }
     return 1;
 }
 
@@ -1081,6 +1136,8 @@ static void launch_pi4_desktop_session(uint32_t *gpu_fb)
         /* Present at most 8 KiB of pixels per trip around the loop. */
         present_copy_step();
 
+        drag_preview_dma_complete(gpu_fb, now);
+
         /* DMA always fills the hidden VideoCore page.  Completion flips it
          * atomically; this keeps the visible page available to the pointer and
          * INPUT plane even when a full transfer spans many UI periods. */
@@ -1094,7 +1151,8 @@ static void launch_pi4_desktop_session(uint32_t *gpu_fb)
         }
 
         /* Immediate cursor update on GPU front buffer (< 1 us glass-to-glass latency) */
-        if ((!s_present_dma_enabled || !bcm2711_dma_is_busy(0)) &&
+        if (!s_drag_preview_dma_active &&
+            (!s_present_dma_enabled || !bcm2711_dma_is_busy(0)) &&
             (s_mouse_x != prev_mx || s_mouse_y != prev_my || s_present_cursor_dirty)) {
             volatile uint32_t *cursor_fb = gpu_fb + s_present_front_page * BTRON_SCREEN_W * BTRON_SCREEN_H;
             restore_cursor_area(cursor_fb, prev_mx, prev_my);
@@ -1115,6 +1173,8 @@ static void launch_pi4_desktop_session(uint32_t *gpu_fb)
         int overlay_redraw = 0;
         int panel_redraw = 0;
         int appmenu_redraw = 0;
+        int local_button_redraw = 0;
+        WND *local_button_target = NULL;
         int move_drag = 0;
         int non_move_event = 0;
         int menu_open_at_loop_start = global_menu_is_open() || tracker_is_menu_open();
@@ -1151,6 +1211,13 @@ static void launch_pi4_desktop_session(uint32_t *gpu_fb)
                         !menu_open_at_loop_start && !appmenu_open_at_loop_start)
                         (void)drag_preview_capture(drag_target, &drag_old);
                 }
+            }
+
+            WND *button_top_before = NULL;
+            RECT button_top_bounds = { 0, 0, 0, 0 };
+            if (ev.type == EV_BUT_DOWN || ev.type == EV_BUT_UP) {
+                button_top_before = get_top_wnd();
+                if (button_top_before) button_top_bounds = button_top_before->bounds;
             }
 
             workbench_process_event(screen, &ev);
@@ -1208,12 +1275,38 @@ static void launch_pi4_desktop_session(uint32_t *gpu_fb)
                     /* In-app menu open (click opened it, or a click/hover within
                      * it): repaint just the top window that owns the dropdown. */
                     appmenu_redraw = 1;
+                } else if ((ev.type == EV_BUT_DOWN || ev.type == EV_BUT_UP) &&
+                           button_top_before && get_top_wnd() == button_top_before &&
+                           button_top_before->visible &&
+                           button_top_before->bounds.left == button_top_bounds.left &&
+                           button_top_before->bounds.top == button_top_bounds.top &&
+                           button_top_before->bounds.right == button_top_bounds.right &&
+                           button_top_before->bounds.bottom == button_top_bounds.bottom) {
+                    local_button_redraw = 1;
+                    local_button_target = button_top_before;
                 } else {
-                    /* Buttons, keys, focus changes need a real UI update */
                     redraw = 1;
                 }
                 if (ev.type == EV_KEY_DOWN && ev.key != '\r' && ev.key != '\n')
                     s_present_fast_key_update = 1;
+            }
+        }
+
+        if (!non_move_event && !s_drag_preview_dma_active && s_drag_preview.active &&
+            wnd_mgr_get_drag_target() == s_drag_preview.target) {
+            RECT current = s_drag_preview.target->bounds;
+            if (current.left != s_drag_preview.bounds.left ||
+                current.top != s_drag_preview.bounds.top ||
+                current.right != s_drag_preview.bounds.right ||
+                current.bottom != s_drag_preview.bounds.bottom) {
+                move_drag = 1;
+                move_first = s_drag_preview.bounds;
+                move_last = current;
+                move_damage.left = move_first.left < move_last.left ? move_first.left : move_last.left;
+                move_damage.top = move_first.top < move_last.top ? move_first.top : move_last.top;
+                move_damage.right = move_first.right > move_last.right ? move_first.right : move_last.right;
+                move_damage.bottom = move_first.bottom > move_last.bottom ? move_first.bottom : move_last.bottom;
+                have_move_damage = 1;
             }
         }
 
@@ -1359,15 +1452,40 @@ static void launch_pi4_desktop_session(uint32_t *gpu_fb)
             }
             }
         }
+        else if (local_button_redraw && local_button_target == get_top_wnd() &&
+                 local_button_target->visible) {
+            if (panel_redraw) {
+                render_system_panel(screen);
+                present_backbuffer_rect(gpu_fb, 0, 0, BTRON_SCREEN_W, 28);
+            }
+            redraw_top_window();
+            H left = local_button_target->bounds.left;
+            H top = local_button_target->bounds.top;
+            H right = local_button_target->bounds.right;
+            H bottom = local_button_target->bounds.bottom;
+            if (left < 0) left = 0;
+            if (top < 0) top = 0;
+            if (right > BTRON_SCREEN_W) right = BTRON_SCREEN_W;
+            if (bottom > BTRON_SCREEN_H) bottom = BTRON_SCREEN_H;
+            present_backbuffer_rect(gpu_fb, left, top, right, bottom);
+            s_present_cursor_dirty = 1;
+        }
         else if (overlay_redraw) {
-            /* Menu hover/open: repaint only the open menu overlay and present
-             * exactly that rect (not a full 3 MB sweep).  The overlay repaints
-             * its whole rect, so this is ghost-free. */
-            workbench_render_overlay_only(screen);
             RECT mr;
-            if (global_menu_get_open_rect(&mr)) {
+            int have_current_menu_rect = global_menu_get_open_rect(&mr);
+            int menu_rect_changed = have_start_menu_rect &&
+                (!have_current_menu_rect || start_menu_rect.left != mr.left ||
+                 start_menu_rect.top != mr.top || start_menu_rect.right != mr.right ||
+                 start_menu_rect.bottom != mr.bottom);
+            if (menu_rect_changed) {
+                workbench_render_damage(screen, &start_menu_rect);
+                present_backbuffer_rect(gpu_fb, start_menu_rect.left, start_menu_rect.top,
+                                        start_menu_rect.right, start_menu_rect.bottom);
+            }
+            if (have_current_menu_rect) {
+                workbench_render_overlay_only(screen);
                 present_backbuffer_rect(gpu_fb, mr.left, mr.top, mr.right, mr.bottom);
-            } else {
+            } else if (!menu_rect_changed) {
                 blit_backbuffer_to_fb(gpu_fb);
             }
             s_present_cursor_dirty = 1;
@@ -1411,7 +1529,8 @@ static void launch_pi4_desktop_session(uint32_t *gpu_fb)
                (uint32_t)(now - next_ui_us) < 100u * ASYNC_UI_PERIOD_US);
         }
 
-        if ((!s_present_dma_enabled || !bcm2711_dma_is_busy(0)) &&
+        if (!s_drag_preview_dma_active &&
+            (!s_present_dma_enabled || !bcm2711_dma_is_busy(0)) &&
             (s_mouse_x != prev_mx || s_mouse_y != prev_my || s_present_cursor_dirty)) {
             volatile uint32_t *cursor_fb = gpu_fb + s_present_front_page * BTRON_SCREEN_W * BTRON_SCREEN_H;
             restore_cursor_area(cursor_fb, prev_mx, prev_my);

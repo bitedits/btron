@@ -1,5 +1,5 @@
 GPU.txt — Pi 400 Graphics Hardware, BTRON BitBlt Schema, and Register-Level Detail
-================================================================================
+==================================================================================
 
 B-System / BTRON 3.20
 Target: Raspberry Pi 4B / Pi 400 (BCM2711, Cortex-A72, AArch64)
@@ -13,57 +13,50 @@ Read this file if you care about what the silicon is, which registers are
 involved, why the current path is CPU/NEON, and how the whole scheme maps onto
 the 8-bit, Amiga, and PC/Windows graphics models.
 
-
 0. Scope, naming hygiene, and vocabulary
 ----------------------------------------
 
 0.1 What this document covers
 
   * the BCM2711 display and DMA hardware as a systems developer has to touch it;
-  * BTRON's actual BitBlt data path, with its real copy primitives and real
-    measured bandwidth;
-  * the cacheability boundary, which is the single most consequential hardware
-    fact in this build after the MMU came up;
+  * BTRON's actual BitBlt data path, with its real copy primitives and real measured bandwidth;
+  * the cacheability boundary, which is the single most consequential hardware fact in this build after the MMU came up;
   * the hardware roadmap (HVS planes, 2D stride DMA) with verified constants;
-  * a cross-platform mapping for readers whose mental model is MSX V9958,
-    Amiga blitter/Copper, or VGA/VESA/Windows 3.11 GDI.
+  * a cross-platform mapping for readers whose mental model is MSX V9958, Amiga blitter/Copper, or VGA/VESA/Windows 3.11 GDI.
 
 0.2 Naming hygiene — this matters, because "VC4" is used for three things
 
-  *VideoCore IV*  The small DSP in BCM2835 that runs firmware (GPU child, VCHIQ,
-                 display bring-up). Not a 3D engine.
-  *VC4*          Broadcom's marketing name for the *3D geometry engine*
-                 (V3D = the shader/tiler part of it) in BCM2835. The Linux DRM
-                 driver is named "vc4" but the driver is really "V3D + HVS +
-                 PixelView + encoders".
-  *V3D*          The actual OpenGL ES 2.0-capable 3D pipeline: binning control,
-                 QPV, shader cores. Irrelevant to BTRON today.
-  *HVS*          Hardware Video Scaler. The historically interesting block: a
-                 *single global* compositor with multiple output FIFOs that
-                 reads framebuffers out of SDRAM, composites up to
-                 SCALER_CHANNELS_COUNT (3) display channels, each channel
-                 executing a *display list* of up to 7 planes, and does
-                 translation, scaling (polyphase or 5-tap Mitchell–Netravali),
-                 colourspace conversion, gamma, and alpha blending in hardware.
-  *PixelView (PV)* A timing generator. It emits HSYNC/VSYNC/DE and pulls words
-                 from an HVS FIFO. It is *not* a CRTC in the DRM sense of doing
-                 composition. BCM2835 has 3, BCM2711 has 5.
-  *HDMI/VEC/DPI/DSI* Encoders/pads downstream of a PixelView.
+  *VideoCore IV*       The small DSP in BCM2835 that runs firmware (GPU child, VCHIQ,
+                       display bring-up). Not a 3D engine.
+  *VC4*                Broadcom's marketing name for the *3D geometry engine*
+                       (V3D = the shader/tiler part of it) in BCM2835. The Linux DRM
+                       driver is named "vc4" but the driver is really "V3D + HVS +
+                       PixelView + encoders".
+  *V3D*                The actual OpenGL ES 2.0-capable 3D pipeline: binning control,
+                       QPV, shader cores. Irrelevant to BTRON today.
+  *HVS*                Hardware Video Scaler. The historically interesting block: a
+                       *single global* compositor with multiple output FIFOs that
+                       reads framebuffers out of SDRAM, composites up to
+                       SCALER_CHANNELS_COUNT (3) display channels, each channel
+                       executing a *display list* of up to 7 planes, and does
+                       translation, scaling (polyphase or 5-tap Mitchell–Netravali),
+                       colourspace conversion, gamma, and alpha blending in hardware.
+  *PixelView (PV)*     A timing generator. It emits HSYNC/VSYNC/DE and pulls words
+                       from an HVS FIFO. It is *not* a CRTC in the DRM sense of doing
+                       composition. BCM2835 has 3, BCM2711 has 5.
+  *HDMI/VEC/DPI/DSI*   Encoders/pads downstream of a PixelView.
 
-  Consequence: when this document says "hardware composition", it means HVS,
-  never V3D and never DMA.
+  Consequence: when this document says "hardware composition", it means HVS, never V3D and never DMA.
 
 0.3 BTRON vocabulary (identical to RENDER.txt)
 
-  Renderer    produces pixels for one object (wnd->paint, background, panel,
-              frame).
+  Renderer    produces pixels for one object (wnd->paint, background, panel, frame).
   Compositor  resolves z-order and visibility into s_desktop_backbuffer.
   Clipper     rectangle boundary that a renderer/compositor must not cross.
   Damage      half-open [left,right) x [top,bottom) screen rectangle.
   Blitter     moves pixels without deciding visibility (btron_row_blit, DMA).
   Presenter   publishes backbuffer pixels into the scanout framebuffer.
-  Scanout     the display reading the framebuffer; owned by VideoCore firmware
-              in the current mailbox path.
+  Scanout     the display reading the framebuffer; owned by VideoCore firmware in the current mailbox path.
   Plane       one HVS source layer. BTRON exposes none today.
 
 0.4 The one-sentence summary of the current design
@@ -82,18 +75,18 @@ the 8-bit, Amiga, and PC/Windows graphics models.
 The arm64 bring-up (arm64_mmu_init(), core_arm64.c) installs 4 KB granule,
 T0SZ=25 (39-bit VA), EPD1 (no 1:1 upper range), with MAIR:
 
-  attr0  0x00  Device-nGnRE     — MMIO. Not gatherable, not reordering-allowed,
-                                  Reaction to Early Write Acknowledgement. Every
-                                  store is a bus transaction. Never cache it,
-                                  never speculative-read it.
-  attr1  0xFF  Normal WB        — cacheable, R/W allocate, full shareability.
-                                  s_desktop_backbuffer and all kernel RAM live
-                                  here. This is what made NEON blits fast.
+  attr0  0x00  Device-nGnRE         — MMIO. Not gatherable, not reordering-allowed,
+                                      Reaction to Early Write Acknowledgement. Every
+                                      store is a bus transaction. Never cache it,
+                                      never speculative-read it.
+  attr1  0xFF  Normal WB            — cacheable, R/W allocate, full shareability.
+                                      s_desktop_backbuffer and all kernel RAM live
+                                      here. This is what made NEON blits fast.
   attr2  0x44  Normal Non-Cacheable — the gpu_fb window and the .btron.nocache
-                                  DMA/mailbox region. Write-allocate and
-                                  read-allocate both OFF (bits 3:2 and 7:6 are
-                                  zero), so stores go to the bus immediately and
-                                  no line-fill traffic is generated.
+                                      DMA/mailbox region. Write-allocate and
+                                      read-allocate both OFF (bits 3:2 and 7:6 are
+                                      zero), so stores go to the bus immediately and
+                                      no line-fill traffic is generated.
 
 Descriptor field positions that have already cost one debugging session:
 
@@ -105,8 +98,7 @@ Descriptor field positions that have already cost one debugging session:
                          Shareable.  Getting this backwards is silent: the
                          Cortex-A72 treats the region as read-only-clean and
                          stores vanish (ESR 0x9600004e class faults).
-  bit 10       AF. TCR_EL1.HA is 0 in this build, so AF must be preset by hand
-                         or every access is a translation fault.
+  bit 10       AF. TCR_EL1.HA is 0 in this build, so AF must be preset by hand or every access is a translation fault.
   bits [47:12] Output address.
 
 Layout: L1[0] points at an L2 table giving 2 MB sections for 0–1 GB; L1[1] and
@@ -225,13 +217,12 @@ branch, i.e. HVS4) the emitted order per plane is:
   2  POS0     fixed alpha <<24 | crtc_y <<12 | crtc_x
   3  POS1     scaled (destination) height<<16 | width   — omitted when unity
   4  POS2     source width/height and alpha-mode bits
-  5  POS3     "context" word, written back by the HVS (the driver parks
-              0xc0c0c0c0 there)
+  5  POS3     "context" word, written back by the HVS (the driver parks 0xc0c0c0c0 there)
   6  PTR0     framebuffer base address (HVS4: 16-bit-split, which is where the
               historic "plane must be in the low 16 MB" constraint comes from)
-  ...        per-plane address/pitch words, PPF or TPZ coefficient tables,
+  ...         per-plane address/pitch words, PPF or TPZ coefficient tables,
               CSC words when the format is YCbCr
-  last       the driver patches CTL0's SCALER_CTL0_SIZE field
+  last        the driver patches CTL0's SCALER_CTL0_SIZE field
               (VC4_MASK(29,24)) with the total word count.
 
   CTL0 fields, verbatim from vc4_regs.h:
@@ -299,11 +290,9 @@ branch, i.e. HVS4) the emitted order per plane is:
       PV_CONTROL_TRIGGER_UNDERFLOW BIT(13)
       PV_CONTROL_CLR_AT_START      BIT(14)
       PV_CONTROL_FIFO_LEVEL_MASK   VC4_MASK(20,15)
-      PV_CONTROL_FORMAT_MASK       VC4_MASK(23,21): 0 24, 1 DSIV_16, 2 DSIC_16,
-                                   3 DSIV_18, 4 DSIV_24
-      PV5_CONTROL_FIFO_LEVEL_HIGH_MASK VC4_MASK(26,25)  (HVS5 extends the
-                                   threshold — BCM2711 needs this)
-  PV_V_CONTROL ...... +0x04   PV_VIDEN BIT(0), CONTINUOUS BIT(1), COMMAND BIT(2),
+      PV_CONTROL_FORMAT_MASK       VC4_MASK(23,21): 0 24, 1 DSIV_16, 2 DSIC_16, 3 DSIV_18, 4 DSIV_24
+      PV5_CONTROL_FIFO_LEVEL_HIGH_MASK VC4_MASK(26,25)  (HVS5 extends the threshold — BCM2711 needs this)
+  PV_V_CONTROL ...... +0x04        PV_VIDEN BIT(0), CONTINUOUS BIT(1), COMMAND BIT(2),
                                    DSI BIT(3), INTERLACE BIT(4), ODD_FIRST BIT(5),
                                    ODD_DELAY VC4_MASK(22,6), ODD_TIMING BIT(29)
   PV_VSYNCD_EVEN .... +0x08
@@ -843,16 +832,18 @@ pre-bakes the result in the renderer.
 The V9958 screen 5..8 block-transfer command is the closest conceptual cousin,
 because it is chunky, rectangular, and asynchronous with a busy indication.
 
-  Register numbers are written to R# via the index/data port pair
-  (#0xBE index, #0xBF data), and the command engine's arguments live in R44/R45
-  plus the geometry registers:
+  Registers are addressed by writing the register number, then the value, to
+  the two VDP control ports (MSX-BASIC's OUT #2 / OUT #3). The command
+  engine's arguments live in R44/R45 plus the geometry registers:
 
-    R44  command number. Bit pattern: A (bit 0) selects the read/write
-         argument form, D (bit 1) byte-vs-line mode, and bits 3-4 select the
-         mixer and direction (MIX/ADM3 give XOR, AND, OR for logical BLT).
-         BLT is the command whose A/D/R encoding resolves to the two-argument
-         form; MSX BASIC calls it BLT(sx,sy,dx,dy,mx,by,bw,bh,op).
-    R45  arguments (bit 7 = MIX for BLT's logical mode)
+    R44  command number, written last, and what actually starts the blit. The
+         command field selects BLT; the A and D argument bits select which
+         coordinate set is taken from the argument registers; and two further
+         bits (MIX and ADM3) choose the logical mixer applied during the
+         transfer — XOR, AND, or OR against the MXR mask colour. The precise
+         bit weights of MIX/ADM3/A/D differ between the V9938 and V9958
+         datasheets, so take them from the datasheet rather than from here.
+    R45  command arguments (the read/write coordinate pair for the first form)
     R46  SXR   source X
     R47  SYR   source Y
     R48  DXR   destination X
@@ -877,21 +868,21 @@ because it is chunky, rectangular, and asynchronous with a busy indication.
 
   Mapping:
 
-    concept                BTRON                        V9958
-    --------------------   --------------------------   ---------------------
-    pixel format           32-bit ARGB chunky           8/16 bpp chunky
-    blit unit              one 4-byte-aligned row       1 byte per x step
-    source addressing      virtual address + pitch      SXR,SYR in VDP space
-    destination            dst + pitch                  DXR,DYR
-    geometry               RECT (half-open)             BWR x BHR bytes/lines
-    logical mixing         none (key test in caller)    MXR + MIX/ADM3
-                         (XOR / AND / OR)
-    async + busy flag      s_present_* / DMA CS.ACTIVE  CM interrupt bit, or
-                         (8.1)                          CPU stalled in sc.0-4
-    who addresses screen   CPU VA, single flat 4 MiB    the VDP owns VRAM and
-                         memory                         the CPU cannot address
-                         memory                         it directly: ports
-    --------------------   --------------------------   ---------------------
+    concept            BTRON                     V9958
+    pixel format       32-bit ARGB chunky         8/16 bpp chunky
+    blit unit          one 4-byte aligned row     one byte per x step
+    source address     virtual addr + pitch       SXR, SYR in VDP space
+    destination        dst + pitch                DXR, DYR
+    geometry           RECT, half-open            BWR x BHR, in bytes/lines
+    logical mixing     none; the key test is      MXR plus the MIX/ADM3
+                       done by the caller         selector (XOR/AND/OR)
+    async + busy       s_present_* flags, or      the CM command-complete
+                       DMA CS.ACTIVE (8.1)        interrupt bit; or the CPU
+                                                   is stalled outright in
+                                                   screens 0-4
+    who can address    CPU virtual address into   the VDP owns VRAM; the CPU
+    the screen         ordinary SDRAM, shared     reaches it only through
+                      with the scan engine        the port/index protocol
 
   The difference that will feel strangest to an MSX reader: there is no
   separate VRAM. Tier C is ordinary SDRAM that both the CPU and the display
@@ -907,10 +898,14 @@ The Amiga blitter is the most sophisticated 2D engine of its generation *and*
 the least like BTRON, because it is planar. Comparing them is still the fastest
 way to understand both.
 
-  Registers, at offset from $DFF000:
+  Registers, at offset from $DFF000. Custom-chip addressing is Oddstripe: many
+  of these are 32-bit quantities or 16-bit registers paired with an "L" twin,
+  and a long is written at the *odd* address. Only the offsets below that are
+  marked stable are quoted with confidence; treat the *names* as the
+  authoritative part and re-check an exact offset in the Big Edition appendix
+  before driving one.
 
-    $007E/$00F8  BLTCON0 / BLTCON0L  (Oddstripe: even write to BLTCON0L $00F8,
-                                      odd write to BLTCON0 $007E)
+    $007E / $00F8  BLTCON0 / BLTCON0L   (stable)
         bits 15:8  GM0..GM7  minterm (8-bit function of A,B,C)
         bit  7     FASEB     source B first-word enable
         bit  6     FAENC     source C first-word enable
@@ -919,56 +914,59 @@ way to understand both.
         bit  3     LINE_MODE 0 = square, 1 = line mode
         bit  2     FILL      1 = draw lines as a 16-bit wide fill
         bits 1:0   FIFO priority: 00 normal, 01 B, 10 C, 11 A
-    $0080/$00FA  BLTCON1 / BLTCON1L
-        bit 15 BFRZ (B line hold), bit 14 CFRZ, bit 13 ASCFE
-        bit 12 DESC (descending: use negative modulo, for bottom-up blits)
-        bit 11 IFEN, bit 10 IFIRST (AGA/ECS: 1 = full 32-bit path, 0 =
-              first/last-word masking), bit 9 IFNONE (skip B)
-        bit  8 IFEN? (see note), bits 7:6 SKHB / SKHI? (ECS/AGA skip B/A),
-        bit  5 BGE (AGN?) — see note
-        bits 4:3? and 2:0 — SV, the A barrel shifter amount (0..15)
-        ECS/AGA: bit 10 BLOTHOLD (freeze destination during a BGX/BUSY scan)
-    $0082/$0084/$0086/$0088  BLTAFETCH, BLTBFETCH, BLTCFETCH, BLTDFETCH
-        the initial 16-bit fetch registers, one per source/destination
-    $008A..  BLTAPT (long at $008C), BLTBPT ($0090), BLTCPT ($0094),
-        BLTDPT ($0098) — 24-bit CHIP-RAM pointers, written as two 16-bit
-        halves (even = high, odd = low: the "we must write both halves" rule)
-    $00A6/$00A8  BLTAMOD, $00AA/$00AC BLTBMOD, $00AE/$00B0 BLTCMOD,
-        $00B2/$00B4 BLTDMOD — the *residual* per-row adjustment, in bytes:
-        modulo = row_bytes - 2 (for a 16-bit-wide step)
-    $009F/$00A0  BLTSIZE long: bits 15:6 = number of 16-bit columns (minterm
-        "width in words"), bits 5:0 = number of rows. Writing it *starts* the
-        blit and decrements to 0 while busy — BLTSIZE read back nonzero means
-        busy. (AGA/ECS extend this with BLTCON2 $007C: 32-bit size, up to
-        0x7FFFFFFF pixels.)
-    $00A2/$00A4  BLTCODBAR / BLTCODADR — destination for line-mode drawing
-    $00B6/$00B4  BLTUDAT (user data, for B=constant)
-    $00B6 $00B8 $00BA  BGO, BPU, BED — the statistics counters: one
-        per-bitcount of (A&B&C&D), popcount of the minterm output, and the
-        "different" count, for a free 32x32 collision/overlap test.
-    $00F2/$00F4  BGEODAT (AGA/ECS)
-    $0096/$0098  BLYSCAN / BLYCNT — raster line and its reload value
-    $0006/$001E $1F3?  DMACON: DMABLF (bit 4) enables the blitter, and
-        BLTPRI (bit 5, ECS/AGA) gives it priority over the disk port.
-
-  Note on BLTCON1 bit positions: the OCS/ECS/AGA bit map for bits 5..11 has
-  shifted between revisions (IFIRST/IFEN/SKHB/SKHI/BLOTHOLD), so treat the
-  names above as authoritative and re-check a specific bit against the Big
-  Edition appendix before writing one blind. The *addresses* and the
-  modulo/BLTSIZE semantics are stable across revisions.
+    $0080 / $00FA  BLTCON1 / BLTCON1L   (stable)
+        BFRZ  (B line hold)      CFRZ (C line hold)      ASCFE (A carry feed)
+        DESC  (descending: modulo sign flips, for bottom-up blits)
+        SV    (A barrel shifter, 0..15 — rotates the A fetch so unaligned
+               bit-offset blits need no source copy)
+        IFIRST/IFEN  first/last-word masking enable vs full-width path
+        SKHB / SKHI  ECS/AGA B/A skip counters (skip whole 16-bit words of B
+               or A when their bits are zero — free transparent-pixel skip)
+        BLOTHOLD (AGA)  freeze the destination while scanning; used for the
+               hardware sprite-collision and "find the first set bit" tricks
+        (the exact bit numbers of the last four groups moved between OCS, ECS
+         and AGA; the *names* are stable across revisions.)
+    BLTAFETCH, BLTBFETCH, BLTCFETCH, BLTDFETCH
+        the initial 16-bit fetch registers, one per source/destination. The
+        B fetch is a *bit mask* (line mode) or a *pattern* (square mode); the
+        C fetch is the penetrate/hold plane.
+    BLTAPT, BLTBPT, BLTCPT, BLTDPT
+        24-bit CHIP-RAM pointers, written as two 16-bit halves (even = high,
+        odd = low; the "you must write both halves or nothing happens" rule
+        that caught every OCS programmer once).
+    BLTAMOD, BLTBMOD, BLTCMOD, BLTDMOD
+        the *residual* per-row adjustment, in bytes: modulo = row_bytes - 2
+        for a 16-bit-wide step. Same "residual, not pitch" convention as the
+        BCM2711 DMA STRIDE register (8.1).
+    $009F  BLTSIZE (long)   (stable)
+        bits 15:6 = number of 16-bit columns (minterms), bits 5:0 = rows.
+        Writing it *starts* the blit, and it decrements while busy: read back
+        nonzero means busy. ECS/AGA add BLTCON2, whose long form widens the
+        size field for large blits.
+    BLTCODBAR / BLTCODADR   destination address for line-mode drawing
+    BLTUDAT / BLTODAT       user data (lets B be a constant) and the last
+        destination word written
+    BGO / BPU / BED         the statistics counters: per-plane bit counts of
+        the minterm output, popcount of the result, and "different". Used for
+        a free 32x32 sprite-collision test. No chunky machine has an
+        equivalent.
+    $0026 / $0028  BLYSCAN / BLYCNT      (stable) raster line and its reload
+        value — what you set from a Copper wait to start a blit mid-frame.
+    $0096  DMACON           (stable) bit 4 DMABLF enables the blitter; bit 5
+        BLTPRI (ECS/AGA) gives it priority over the floppy port.
 
   Execution model:
     * Planar: one blit moves one bitplane. An 8-bitplane screen copy costs a
       BLTSIZE-per-plane loop (hence "blit 6 planes, then wait").
-    * CHIP RAM only (OCS/ECS; AGA blits can reach FAST with ECS's later
-      revisions? no — the Amiga blitter is a CHIP-RAM bus master; AGA's BLTHDP
-      / extended addressing let it use "shadow" 32-bit addressing but the
-      engine still arbitrates against the display). Every blit steals cycles
-      from the beam. That is why Copper-list and blit budgets are one problem,
+    * CHIP RAM only. The blitter is a bus master on the custom-chip side of the
+      16-bit color-RAM bus; AGA widened the addressable range to 4 MB through
+      the same pointer registers but did not make FAST RAM (CPU-side 32-bit
+      RAM) blit-able. Every blit therefore steals cycles from the display
+      generator. That is why a Copper list and a blit budget are one problem,
       not two.
     * The minterm is a real 3-input, 1-output truth table written as a byte:
       bit index = (A<<2)|(B<<1)|C. So $F0 = A (a copy), $A0 = A AND B,
-      $C0 = A OR B, $30 = A XOR B, $0F = NOT A, $CA = (NOT A) OR B, $96? etc.
+      $C0 = A OR B, $30 = A XOR B, $0F = NOT A, $CA = (NOT A) OR B
       Source C is the usual mask/penetrate plane; with SKWH/SKEL skipping and
       the barrel shifter, one engine does copy, mask, scroll, sprite-draw and
       line-fill.
@@ -980,37 +978,30 @@ way to understand both.
       source stays "wide" instead of diagonal — i.e. the difference between a
       blit and a shear. DESC does the same for the row pointer sign.
 
-  Copper: $008A/$0088? — COP1LC/COP2LC, COPJMP1/2 ($0088/$008A), COPINS ($00A0?
-  no: COPINF $0012), and the instruction list format (two words: move address
-  in the low word's high byte, value in the second word), with the special
-  $FFFE/$FFFF wait opcodes and the vertical-position field. Copper is a
-  *sequence-with-deadline* engine, not a blitter.
+  Copper: a separate 16-bit sequencer over a list in CHIP RAM. COP1LC/COPJMP1
+  start and restart list 1, the list pointer is updated by two 16-bit halves,
+  and each instruction is a (target-address, value) pair with the special
+  $FFFE/$FFFF wait opcodes carrying a vertical+horizontal position in the high
+  bits. Copper is a *sequence-with-deadline* engine, not a blitter: it is how a
+  game changes BLYCNT mid-frame so a blit lands between two displayed fields.
 
   Mapping:
 
-    concept              BTRON              Amiga             what is lost
-    ------------------   ----------------   ---------------   --------------
-    raster op            none (caller-      8-bit minterm     BTRON cannot AND
-                       decided key)         GM0..GM7          or XOR on the
-                                                              fly
-    unit of transfer     32-bit pixel       16-bit plane      8 blits per 8-bit
-                       word                 word              pixel
-    row stepping         pitch - X, by      BLT?MOD,          modulo is in
-                       code                 in bytes          *hardware*
-    arbitrary x-offset   peel loop         FASEB/FAENC/       free in a chunky
-                       (software)          FADEN+IFIRST      machine
-    collision/overlap    read pixels,       BGO/BPU/BED        BTRON has no
-    query                compare in C       hardware popcount  hardware counter
-    start + busy         function call,     write BLTSIZE,    the Amiga's
-                       CS.ACTIVE poll       read it back
-    sync to beam         none today         Copper wait /
-                                            BLYSCAN
+    concept            BTRON                Amiga
+    raster op          none; caller decides 8-bit minterm GM0..GM7 of A,B,C
+    unit of transfer   32-bit pixel word    16-bit plane word
+    row stepping       pitch minus X, in    BLT?MOD, in bytes, applied by
+                       software             hardware
+    arbitrary offset   the peel loop        FASEB/FAENC/FADEN plus IFIRST
+    collision query    read and compare     BGO/BPU/BED hardware popcount
+    start / busy       function call, then  one write to BLTSIZE, which
+                       CS.ACTIVE poll       decrements; read back to test
+    sync to the beam   nothing today        Copper wait plus BLYSCAN
 
-  Where the Amiga is strictly better and BTRON is aiming at it: the raster
-  op. The entire "shadow / mask / translucent glass" family of effects costs
-  BTRON a per-pixel C loop in the *renderer* and then a free copy; on the
-  Amiga the copy itself carries the logic. Where BTRON wins: 32-bit colour
-  and no bus contention with the display.
+    The Amiga's advantage is the first row: its copy carries logic, so a
+    shadow or a masked sprite is one operation. The same effect costs BTRON a
+    per-pixel pass in the renderer followed by a free copy. BTRON's advantage
+    is everywhere else: 32-bit colour, and no arbitration against the beam.
 
 10.3 IBM PC -> VGA -> VESA -> Windows 3.11 -> WinG/DCI
 
@@ -1027,27 +1018,33 @@ addressing rules at the bottom.
     Sequencer, ports 0x3C4 (index) / 0x3C5 (data)
       0 Reset (bit 0 = software reset)
       1 Clock Mode (bit 0 = shift clocking, bit 2 = video memory map enabled)
-      2 Map Mask        bits 3:0 = which of the 4 planes a CPU *write* hits.
+      2 Map Mask         bits 3:0 = which of the 4 planes a CPU *write* hits.
+                         This is the plane-select for writes; there is no
+                         per-write equivalent for reads (see GC 4).
       3 Character Map
-      4 Memory Mode     bit 2 = Chain4 (0x04); bit 3 = Odd/Even address (0x08)
-                        (bit 0/1 select the 256K/off packing modes)
+      4 Memory Mode      bit 2 = Chain4 (0x04); bit 3 = Odd/Even addressing
+                         (0x08); bit 0 = "off 256K pack", bit 1 = "chain init"
 
     Graphics Controller, ports 0x3CE (index) / 0x3CF (data)
       0 Set/Reset        SR0..SR5 — the latch fill value
       1 Enable Set/Reset bits 5:0 — which of those bits are *enabled*, i.e.
-                        how latches combine with CPU data
-      2 Color Compare / CR? — index 2 is "Color Compare" (bits 3:0)
-      3 Data Rotate      bits 4:0 = ROR amount; bit 7 = "rotate by 0, i.e. no
-                        rotation"
+                         how the latches combine with CPU data
+      2 Color Compare    bits 3:0 — the compare value used by write mode 2
+      3 Data Rotate      bits 4:0 = ROR amount; bit 7 = "do not rotate"
       4 Read Map Select  bits 1:0 = which plane the CPU *reads*
-      5 Graphics Mode    bit 3:2 = memory access mode (00 odd/even, 01
-                        256-colour chained, 10/11 planar variants); bit 0
-                        odd/even; bit 1 shift
+      5 Graphics Mode    bits 3:2 = memory access path; bit 0 = odd/even
+                         register/select, bit 1 = shift/64K addressing,
+                         bit 4 = chaine4 reset
       6 Miscellaneous    bits 5:4 memory-map select: 00 = A0000 (128K, two
-                        pages), 01 = A0000 64K, 10 = B0000 32K (text),
-                        11 = B8000 32K; bit 1 = O/E page; bit 2 = "enable"
-      7 Color Don't Care bits 3:0 — planes excluded from compare
+                         pages), 01 = A0000 64K, 10 = B0000 32K (text),
+                         11 = B8000 32K; bit 1 = odd/even page; bit 2 = enable
+      7 Color Don't Care bits 3:0 — planes excluded from the compare
       8 Bit Mask         the pen/foreground mask
+
+    Note on the two hedges above: GC 5 bits 3:2 and Seq 4 bits 3:2 interact,
+    and the usual Mode-13h recipe is Seq4 bit2 (Chain4) set together with
+    GC5 bits 3:2 = 01. Do not derive a new mode from this document; derive it
+    from the Finstad/Bradley-Laird register descriptions.
 
     The write path in write mode 0 is:
       CPU byte -> Data Rotate -> XOR with the latches (or AND/OR via
@@ -1092,7 +1089,7 @@ addressing rules at the bottom.
     mode session — a DOS box means rebooting or exiting Windows. No virtual
     memory, no pre-emptive multitasking, and, critically, the display driver
     owns the screen with nothing beneath it virtualising: setup.EXE asks
-    for the *display driver* (VGА/HERCULES/CIRRUS/8514A...) and installs it
+    for the *display driver* (VGA/HERCULES/CIRRUS/8514A...) and installs it
     directly. On an 80286, a banked SVGA card was often *not* usable at high
     resolution for this reason.
     Windows 3.11 standard mode added nothing to the graphics model over 3.1;
@@ -1103,7 +1100,7 @@ addressing rules at the bottom.
     the virtual machine manager (VMM), which is what makes multiple DOS
     sessions possible. It is also what changes the graphics story: DOS boxes
     must be able to touch the screen, so the display driver is split — the
-    Windows half (VGА.3GR / SVGA.3GR for 256-colour, and the "*#*"-style
+    Windows half (VGA.3GR / SVGA.3GR for 256-colour, and the "*#*"-style
     *.DRV for the real modes) plus a virtual display driver (VDD.*), declared
     in [386Enh] entries such as `Display=*` and `*.3GR`, that traps the DOS
     box's video writes, saves and restores the *entire* video register state
@@ -1124,20 +1121,35 @@ addressing rules at the bottom.
     int  SetROP2(hdc,rop2)        — 16 binary raster ops
     SetBkMode / SetBkColor, SetStretchBltMode
 
-    The ternary ROP2 codes the whole Win16/Win32 GDI used, and the ones worth
-    memorising:
+    The ternary ROP codes Win16/Win32 GDI used. Each 32-bit value carries an
+    8-bit index into the 256-row (P,A,D) truth table in bits 16..23 plus a
+    tail byte GDI used as a device hint. Operands: P = pen/source,
+    A = alternating (background brush), D = destination (screen).
 
-      BLACKNESS    0x00000042   NOTSRCCOPY 0x00330008  SRCERASE   0x00440328
-      SRCINVERT    0x00660046   SRCPAINT? (see MERGEPAINT)
-      WHITENESS    0x00FF0062   DSTINVERT  0x00550009  MERGEPENNT?
-      SRCAND       0x008800C6   SRCNOT? (NOTSRCERASE 0x001100A6)
-      SRCCOPY      0x00CC0020   MERGEPAINNT? MERGEPAINT 0x00BB0226
-      PATCOPY      0x00F00021   PATINVERT  0x005A0049  MERGECOPY  0x00C000CA
-      PATPAINT     0x00FB0A09   NOTSRCERASE 0x001100A6
+      BLACKNESS     0x00000042   0
+      NOTSRCERASE   0x001100A6   NOT(P OR A)
+      NOTSRCCOPY    0x00330008   NOT(P)
+      SRCERASE      0x00440328   P AND NOT(A)
+      DSTINVERT     0x00550009   NOT(D)
+      PATINVERT     0x005A0049   D XOR P
+      SRCINVERT     0x00660046   D XOR P
+      SRCAND        0x008800C6   D AND P
+      SRCCOPY       0x00CC0020   P                 <-- the BTRON case
+      MERGEPEN      0x00EA0289   NOT(P) OR A       (a ROP3 stage)
+      SRCPAINT      0x00EE0086   P OR D
+      MERGEPAINT    0x00BB0226   (NOT(P) OR A) OR D
+      MERGECOPY     0x00C000CA   P AND A
+      PATPAINT      0x00FB0A09   (NOT(P) OR A) OR D
+      WHITENESS     0x00FF0062   1
+      PATCOPY       0x00F00021   P
 
-    Encoded as an 8-bit lookup of (P,A,D) -> result, so 0xCC = "A" (SRCCOPY)
-    and 0xF0 = "P" (PATCOPY) in the *source* nibble with the 0x00..0x00
-    byte-count tail that GDI appended for hardware hints.
+    The nibble arithmetic is worth knowing once: 0xCC in SRCCOPY is the row
+    index whose output equals the source column, and 0xF0 in PATCOPY is the
+    row index whose output equals the pattern column.
+
+    The Amiga's 8-bit minterm (10.2) is the same construction over (A,B,C);
+    GDI's ROP is over (P,A,D). BTRON has neither: its only operation is
+    "copy unless the key matched", decided by the caller before the copy.
 
     In practice, on Windows 3.x with the standard VGA driver, BitBlt of a
     *screen* DC to a *memory* DC or vice versa resolved to a planar
@@ -1202,28 +1214,31 @@ addressing rules at the bottom.
       and on some hardware the read is posted after the write. This is the
       same law as 3.2's "never read-modify-write Tier C".
 
-  (h) The one-line comparison table
+  (h) Comparison at a glance
 
-    system        pixel model    blitter          where screen lives
-    ------------  -------------  ---------------  -------------------------------
-    BTRON/Pi400   32-bit chunky  CPU NEON only    ordinary SDRAM; HVS can read
-                                                   it; DMA exists but is off
-    MSX V9958     8/16 bpp       VDP BLT command  VDP VRAM, port-mediated
-                     chunky      (async, XOR/
-                                  AND/OR)
-    Amiga         1-8 bitplanes  Blitter, 3-in   CHIP RAM, arbitrated against
-                                 minterm +        the beam; Copper sequences
-                                 shifter + mask   the writes
-    DOS/VGA       4 bitplanes    CPU + latches    A0000 window; Sequencer/GC
-                                 + 256 ROPs       decide which 64 KB
-    SVGA/VESA     chunky         card BIOS /      banked window, 0x4F05
-                                 none
-    Win 3.1 SM    device driver  GDI BitBlt in    the 286 has no V86, so the
-    Win 3.11 EM   model           software or      driver owns the screen with
-                                  vendor hook      no virtualisation
-    WinG / DCI    DIB in video   driver blit +    video memory, flip vs blit
-                                 surface API
-    modern x86    32-bit chunky  GPU 2D/3D        WC BAR or GTT; movntdq rules
+    BTRON / Pi 400  32-bit chunky    CPU NEON only    SDRAM both the CPU and
+                                                      HVS can read; DMA exists
+                                                      but is off
+    MSX V9958       8/16 bpp chunky  VDP BLT command  VDP VRAM, reached only
+                                     async, XOR/AND/  through the port/index
+                                     OR               protocol
+    Amiga           1-8 bitplanes    Blitter: 3-in    CHIP RAM, arbitrated
+                                     minterm + A      against the beam; the
+                                     shifter + masks  Copper sequences writes
+    DOS / VGA       4 bitplanes      CPU + latches    A0000 window; Sequencer
+                                     + 256 ROPs       and GC choose the 64 KB
+    SVGA / VESA     chunky           card BIOS or     banked window; 0x4F05
+                                     nothing
+    Win 3.1/3.11    driver's model   GDI BitBlt in    the screen DC writes
+    standard mode                    software, or a   video memory directly
+                                     vendor .DRV hook
+    Win 3.11 386    same             same, plus a     VDD traps and saves the
+    enhanced mode                    VMM/VDD layer    video state per DOS box
+    WinG / DCI      DIB in video     driver blit +    video memory; flip or
+                                     surface API      blit is the developer's
+                                                      choice
+    modern x86      32-bit chunky    GPU 2D/3D        WC BAR or GTT; the
+                                                      movntdq rules apply
 
 10.4 What BTRON deliberately does *not* have, and where that hurts
 
@@ -1279,3 +1294,52 @@ here:
     depends on memory ordering or timing must be measured on the Pi 400.
   * The user flashes the board. Instrument, print, ask for a console photo.
     Do not ship a guess.
+
+TOC
+---
+
+  0. Scope, naming hygiene, vocabulary                     (l.  17)
+     0.2  VideoCore IV vs VC4 vs V3D vs HVS vs PixelView   — the "VC4" name
+     0.4  one-sentence summary of the whole design
+  1. BCM2711 hardware as the systems developer must see it  (l.  77)
+     1.1  MMU: MAIR attr0/1/2, AP[7:6], SH[9:8], AF bit10   (the bugs already paid for)
+     1.2  core → L1/L2 → AXI fabric → SDRAM / MMIO / PCIe→VL805
+     1.3  HVS register file: DISPCTRL/DISPSTAT/DISPLIST0-2/ (verified from vc4_regs.h)
+          DISPLACT/DISPCTRLX/DISPBKGND/DISPBASE/DLIST_START
+          + EUFLOW/COBLOW underflow bits, dlist/LBM/UBM pools
+     1.4  display-list word stream: CTL0 fields, POS0/1/2/3, (l. 216)
+          alpha modes, pixel formats, byte orders, KEY_MODE
+     1.5  PixelView: PV_CONTROL … PV_PIPE_INIT_CTRL,        (l. 291)
+          PV_INT_* — the only legal vsync source
+     1.6  encoders (HSM/VEC/DPI/DSI, 5 BCM2711 PVs)
+     1.7  V3D — recorded as out of scope, with the reason
+  2. Mailbox property interface                             (l. 354)
+     +0x00 RD / +0x10 STATUS / +0x18 1_POLLO / +0x1C WRITE, ch8,
+     the 0x4000/0x8000/0xC000 VC bus aliases, why the property block must be attr2
+  3. Buffer topology and the cacheability boundary          (l. 401)
+  4. btron_row_blit(): the code and why each line exists    (l. 449)
+     (a) phase test not alignment test (b) the peel — the expensive bug
+     (c) 2×LDP+2×STP = 64 B/iter       (d) scalar then byte tail
+  5. Composition, presentation, measured numbers            (l. 524)
+     5.3  NE 99→1416  SC 3→454  FB 97→904 MB/s  CMP 66-99→5.6 ms, read honestly
+     5.4  why one virtual page; mailbox round trip is why no page flip
+  6. Zero-copy console scroll (SET_VIRTUAL_OFFSET 0x00048009) (l. 605)
+  7. Drag preview: save-under and the four strips            (l. 634)
+  8. BCM2711 2D stride DMA: registers + why it stays off     (l. 664)
+     8.1  CS/TI bit lists, CB layout, STRIDE-is-residual,    (l. 667)
+          VA-vs-bus addresses, why only channels 0-7
+     8.2  three independent reasons it is disabled           (l. 730)
+     8.3  the four conditions for re-enabling it
+  9. Roadmap: what an HVS port would actually change         (l. 776)
+     9.1  explicit list of things this doc does NOT assert
+ 10. Cross-platform mapping                                  (l. 823)
+     10.1 MSX V9938/V9958  R44/45, R46-R54 geometry, async vs CPU-stall
+     10.2 Amiga  BLTCON0/1, minterm, modulo, BLTSIZE, BGO/BPU/BED, Copper
+     10.3 PC: VGA Seq/GC register files, write modes, latches,  (l. 1017)
+          VESA 0x4F05, **Windows 3.11 standard mode (286, no V86, no VMM)
+          vs 386 enhanced mode (WIN386/VMM/VDD state save-restore)**,
+          GDI ROP table, WinG, DCI flip-vs-blit, WC/movntdq rules
+     10.4 what BTRON lacks and where it hurts
+ 11. Instrumentation: HUD tokens, ST-vs-CT timer check, the  (l. 1273)
+     four rules from the USB HID regression
+

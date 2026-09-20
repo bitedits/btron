@@ -1300,6 +1300,7 @@ static void launch_pi4_desktop_session(uint32_t *gpu_fb)
         uint32_t t_ui = now;
         int redraw = 0;
         int overlay_redraw = 0;
+        int menu_leave_redraw = 0;
         int panel_redraw = 0;
         int appmenu_redraw = 0;
         int local_button_redraw = 0;
@@ -1325,6 +1326,8 @@ static void launch_pi4_desktop_session(uint32_t *gpu_fb)
         int have_move_damage = 0;
         RECT close_damage = { 0, 0, 0, 0 };
         int have_close_damage = 0;
+        RECT close_focus_tab = { 0, 0, 0, 0 };
+        int have_close_focus_tab = 0;
         for (uint32_t ev_iter = 0; ev_iter < ASYNC_UI_EVENT_BUDGET && get_evt(&ev, 0) == E_OK; ev_iter++) {
             int preview_release = 0;
             if (ev.type == EV_BUT_UP && s_drag_preview.active &&
@@ -1391,10 +1394,14 @@ static void launch_pi4_desktop_session(uint32_t *gpu_fb)
 
             WND *button_top_after = get_top_wnd();
             if (close_button_down) {
-                redraw = 1;
                 have_focus_damage = 0;
+                if (button_top_after && button_top_after->visible &&
+                    (button_top_after->attr & WND_ATTR_TITLE)) {
+                    wget_tab_rect(button_top_after, &close_focus_tab);
+                    have_close_focus_tab = 1;
+                }
             }
-            if (ev.type == EV_BUT_DOWN && button_top_before && button_top_after &&
+            if (!close_button_down && ev.type == EV_BUT_DOWN && button_top_before && button_top_after &&
                 button_top_after != button_top_before && button_top_after->visible) {
                 focus_damage = drag_preview_union(&button_top_bounds, &button_top_after->bounds);
                 have_focus_damage = 1;
@@ -1425,7 +1432,7 @@ static void launch_pi4_desktop_session(uint32_t *gpu_fb)
             if (ev.type == EV_MOUSE_MOVE) {
                 int menu_open_now = global_menu_is_open() || tracker_is_menu_open();
                 if (menu_open_at_loop_start && !menu_open_now) {
-                    redraw = 1;
+                    menu_leave_redraw = 1;
                 } else if (menu_open_now) {
                     /* Hovering an open menu only moves the highlight: repaint
                      * the overlay, NOT the whole desktop.  A full composite per
@@ -1439,8 +1446,11 @@ static void launch_pi4_desktop_session(uint32_t *gpu_fb)
                     appmenu_redraw = 1;
                 } else if (ev.pos.y >= 0 && ev.pos.y <= 25) {
                     panel_redraw = 1;
-                } else if (g_prev_mouse_btns != 0 || wnd_mgr_is_interacting()) {
-                    redraw = 1;   /* drag: window contents move, full composite */
+                } else if (wnd_mgr_is_interacting()) {
+                    redraw = 1;
+                } else if (g_prev_mouse_btns != 0) {
+                    local_button_target = get_top_wnd();
+                    local_button_redraw = local_button_target != NULL;
                 }
             } else {
                 int menu_open_now = global_menu_is_open() || tracker_is_menu_open();
@@ -1605,10 +1615,27 @@ static void launch_pi4_desktop_session(uint32_t *gpu_fb)
             }
             s_present_cursor_dirty = 1;
         }
+        else if (have_close_damage) {
+            workbench_render_damage(screen, &close_damage);
+            present_backbuffer_rect(gpu_fb, close_damage.left, close_damage.top,
+                                    close_damage.right, close_damage.bottom);
+            if (have_close_focus_tab) {
+                workbench_render_damage(screen, &close_focus_tab);
+                present_backbuffer_rect(gpu_fb, close_focus_tab.left, close_focus_tab.top,
+                                        close_focus_tab.right, close_focus_tab.bottom);
+            }
+            s_present_cursor_dirty = 1;
+        }
         else if (have_focus_damage) {
             workbench_render_damage(screen, &focus_damage);
             present_backbuffer_rect(gpu_fb, focus_damage.left, focus_damage.top,
                                     focus_damage.right, focus_damage.bottom);
+            s_present_cursor_dirty = 1;
+        }
+        else if (menu_leave_redraw && have_start_menu_rect) {
+            workbench_render_damage(screen, &start_menu_rect);
+            present_backbuffer_rect(gpu_fb, start_menu_rect.left, start_menu_rect.top,
+                                    start_menu_rect.right, start_menu_rect.bottom);
             s_present_cursor_dirty = 1;
         }
         /* Full UI path: redraw windows, menus, backbuffer blit */

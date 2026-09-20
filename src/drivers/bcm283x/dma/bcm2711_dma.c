@@ -49,13 +49,17 @@ int bcm2711_dma_init(void) {
     return 0;
 }
 
-void bcm2711_dma_wait(int channel) {
-    if (channel < 0 || channel > 14) return;
+int bcm2711_dma_wait_timeout(int channel, uint32_t loops) {
+    if (channel < 0 || channel > 14 || loops == 0) return -1;
     volatile uint32_t *chan = dma_chan_regs(channel);
 
-    int timeout = 5000000;
-    while ((chan[BCM_DMA_CS / 4] & BCM_DMA_CS_ACTIVE) && --timeout > 0) {
+    while ((chan[BCM_DMA_CS / 4] & BCM_DMA_CS_ACTIVE) && loops--) {
         __asm__ volatile("nop");
+    }
+    if (chan[BCM_DMA_CS / 4] & BCM_DMA_CS_ACTIVE) {
+        chan[BCM_DMA_CS / 4] = BCM_DMA_CS_RESET;
+        __asm__ volatile("dsb sy" : : : "memory");
+        return -2;
     }
 
     if (chan[BCM_DMA_CS / 4] & BCM_DMA_CS_ERROR) {
@@ -65,11 +69,17 @@ void bcm2711_dma_wait(int channel) {
         uart_hex32(chan[BCM_DMA_DEBUG / 4]);
         uart_puts("\n");
         chan[BCM_DMA_CS / 4] = BCM_DMA_CS_RESET;
+        __asm__ volatile("dsb sy" : : : "memory");
+        return -3;
     }
 
-    /* Acknowledge END */
     chan[BCM_DMA_CS / 4] = BCM_DMA_CS_END;
     __asm__ volatile("dsb sy" : : : "memory");
+    return 0;
+}
+
+void bcm2711_dma_wait(int channel) {
+    (void)bcm2711_dma_wait_timeout(channel, 5000000u);
 }
 
 int bcm2711_dma_is_busy(int channel) {

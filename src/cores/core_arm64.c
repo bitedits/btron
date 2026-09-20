@@ -170,6 +170,11 @@ typedef struct {
 static COLOR s_drag_preview_pixels[BTRON_SCREEN_W * BTRON_SCREEN_H] __attribute__((aligned(64)));
 static drag_preview_t s_drag_preview;
 
+#define DMA_FB_SELFTEST_WORDS 32u
+static uint32_t s_dma_fb_selftest_src[DMA_FB_SELFTEST_WORDS] __attribute__((aligned(64)));
+static uint32_t s_dma_fb_selftest_saved[DMA_FB_SELFTEST_WORDS] __attribute__((aligned(64)));
+static int s_dma_fb_selftest_passed;
+
 /* Global interactive mouse coordinates */
 static H s_mouse_x = 512;
 static H s_mouse_y = 384;
@@ -254,6 +259,14 @@ static inline void arm64_clean_cache_range(const void *addr, size_t size) {
     uintptr_t end = (uintptr_t)addr + size;
     for (uintptr_t p = start; p < end; p += 64)
         __asm__ volatile("dc cvac, %0" : : "r"(p) : "memory");
+    __asm__ volatile("dsb sy" : : : "memory");
+}
+
+static inline void arm64_invalidate_cache_range(const void *addr, size_t size) {
+    uintptr_t start = (uintptr_t)addr & ~(64UL - 1);
+    uintptr_t end = (uintptr_t)addr + size;
+    for (uintptr_t p = start; p < end; p += 64)
+        __asm__ volatile("dc ivac, %0" : : "r"(p) : "memory");
     __asm__ volatile("dsb sy" : : : "memory");
 }
 
@@ -2213,6 +2226,41 @@ void btron_core_print_ver(ShellOutputFn out_fn, void *user_data, const char *arg
  * Kernel Main Entry Point
  * ═══════════════════════════════════════════════════════════════════ */
 
+static int dma_framebuffer_selftest(volatile uint32_t *gpu_fb) {
+    if (!gpu_fb || g_mmio_base != 0xFE000000UL) return 0;
+
+    volatile uint32_t *dst = gpu_fb +
+        (BTRON_SCREEN_H - 1) * BTRON_SCREEN_W + (BTRON_SCREEN_W - DMA_FB_SELFTEST_WORDS);
+    for (uint32_t i = 0; i < DMA_FB_SELFTEST_WORDS; i++) {
+        s_dma_fb_selftest_saved[i] = dst[i];
+        s_dma_fb_selftest_src[i] = 0xD04A0000u ^ (i * 0x01010101u);
+    }
+
+    arm64_clean_cache_range(s_dma_fb_selftest_src, sizeof(s_dma_fb_selftest_src));
+    arm64_clean_cache_range((const void *)dst, sizeof(s_dma_fb_selftest_saved));
+    if (bcm2711_dma_init() != 0) return 0;
+    if (bcm2711_dma_blit_linear_async(7, (uintptr_t)dst,
+                                      (uintptr_t)s_dma_fb_selftest_src,
+                                      sizeof(s_dma_fb_selftest_src)) != 0)
+        return 0;
+
+    int pass = bcm2711_dma_wait_timeout(7, 1000000u) == 0;
+    arm64_invalidate_cache_range((const void *)dst, sizeof(s_dma_fb_selftest_saved));
+    if (pass) {
+        for (uint32_t i = 0; i < DMA_FB_SELFTEST_WORDS; i++) {
+            if (dst[i] != s_dma_fb_selftest_src[i]) {
+                pass = 0;
+                break;
+            }
+        }
+    }
+
+    for (uint32_t i = 0; i < DMA_FB_SELFTEST_WORDS; i++)
+        dst[i] = s_dma_fb_selftest_saved[i];
+    arm64_clean_cache_range((const void *)dst, sizeof(s_dma_fb_selftest_saved));
+    return pass;
+}
+
 void btron_main(void) {
     /* 1. Reset heap pointer */
     heap_ptr = HEAP_BASE;
@@ -2224,6 +2272,7 @@ void btron_main(void) {
     /* 3. Initialize Video Display Framebuffer (1024x768 32-bpp) */
     uint32_t *gpu_fb = init_pi_framebuffer(BTRON_SCREEN_W, BTRON_SCREEN_H);
     fb_log_enable((volatile uint32_t *)gpu_fb);
+    s_dma_fb_selftest_passed = dma_framebuffer_selftest((volatile uint32_t *)gpu_fb);
 
     /* Visual confirmation: immediately paint vivid electric blue alive bar across top */
     if (gpu_fb) {
@@ -2231,6 +2280,9 @@ void btron_main(void) {
             gpu_fb[i] = 0xFF00B0FFu;
         }
     }
+
+    fb_log(s_dma_fb_selftest_passed ? "[DMA] Framebuffer self-test: PASS\n"
+                                    : "[DMA] Framebuffer self-test: FAIL (DMA stays disabled)\n");
 
     fb_log("[FB] BTRON3 Pi 400 Kernel Log — troncode 8x16 ASCII font\n");
     fb_log(g_mmio_base == 0xFE000000UL

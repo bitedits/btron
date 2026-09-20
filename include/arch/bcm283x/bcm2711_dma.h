@@ -61,6 +61,7 @@ typedef struct __attribute__((aligned(32))) {
 
 /* API Prototypes */
 int  bcm2711_dma_init(void);
+int  bcm2711_dma_wait_timeout(int channel, uint32_t loops);
 void bcm2711_dma_wait(int channel);
 int  bcm2711_dma_is_busy(int channel);
 int  bcm2711_dma_blit2d(int channel,

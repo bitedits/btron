@@ -168,6 +168,7 @@ typedef struct {
 } drag_preview_t;
 
 static COLOR s_drag_preview_pixels[BTRON_SCREEN_W * BTRON_SCREEN_H] __attribute__((aligned(64)));
+static COLOR s_drag_preview_underlay[BTRON_SCREEN_W * BTRON_SCREEN_H] __attribute__((aligned(64)));
 static drag_preview_t s_drag_preview;
 static int s_drag_preview_dma_enabled = 0;
 static int s_drag_preview_dma_active;
@@ -809,8 +810,8 @@ static int drag_preview_window_opaque(const WND *wnd) {
     return 1;
 }
 
-static int drag_preview_capture(WND *target, const RECT *bounds) {
-    if (!target || target != get_top_wnd() || !target->visible ||
+static int drag_preview_capture(GDEV *screen, WND *target, const RECT *bounds) {
+    if (!screen || !target || target != get_top_wnd() || !target->visible ||
         !drag_preview_bounds_valid(bounds) || !drag_preview_window_opaque(target))
         return 0;
 
@@ -823,6 +824,14 @@ static int drag_preview_capture(WND *target, const RECT *bounds) {
                        &s_desktop_backbuffer[(size_t)(bounds->top + y) * BTRON_SCREEN_W + bounds->left],
                        (size_t)width * sizeof(COLOR));
     }
+    btron_row_blit(s_drag_preview_underlay, s_desktop_backbuffer,
+                   BTRON_SCREEN_W * BTRON_SCREEN_H * sizeof(COLOR));
+    COLOR *pixels = screen->pixels;
+    target->visible = FALSE;
+    screen->pixels = s_drag_preview_underlay;
+    workbench_render_damage(screen, bounds);
+    screen->pixels = pixels;
+    target->visible = TRUE;
     s_drag_preview.target = target;
     s_drag_preview.bounds = *bounds;
     s_drag_preview.width = width;
@@ -831,7 +840,7 @@ static int drag_preview_capture(WND *target, const RECT *bounds) {
     return 1;
 }
 
-static uint32_t drag_preview_repair_strips(GDEV *screen, const RECT *old, const RECT *current) {
+static uint32_t drag_preview_repair_strips(const RECT *old, const RECT *current) {
     RECT strips[4];
     int count = 0;
     H il = old->left > current->left ? old->left : current->left;
@@ -850,9 +859,13 @@ static uint32_t drag_preview_repair_strips(GDEV *screen, const RECT *old, const 
 
     uint32_t area = 0;
     for (int i = 0; i < count; i++) {
-        workbench_render_damage(screen, &strips[i]);
-        area += (uint32_t)(strips[i].right - strips[i].left) *
-                (uint32_t)(strips[i].bottom - strips[i].top);
+        H width = strips[i].right - strips[i].left;
+        for (H y = strips[i].top; y < strips[i].bottom; y++) {
+            btron_row_blit(&s_desktop_backbuffer[(size_t)y * BTRON_SCREEN_W + strips[i].left],
+                           &s_drag_preview_underlay[(size_t)y * BTRON_SCREEN_W + strips[i].left],
+                           (size_t)width * sizeof(COLOR));
+        }
+        area += (uint32_t)width * (uint32_t)(strips[i].bottom - strips[i].top);
     }
     return area;
 }
@@ -891,7 +904,7 @@ static int present_drag_preview(GDEV *screen, volatile uint32_t *fb, WND *target
         return 0;
 
     uint32_t t0 = *(volatile uint32_t *)(TIMER_BASE + 0x04);
-    uint32_t area = drag_preview_repair_strips(screen, old, current);
+    uint32_t area = drag_preview_repair_strips(old, current);
     for (H y = 0; y < s_drag_preview.height; y++) {
         btron_row_blit(&s_desktop_backbuffer[(size_t)(current->top + y) * BTRON_SCREEN_W + current->left],
                        &s_drag_preview_pixels[(size_t)y * s_drag_preview.width],
@@ -1209,7 +1222,7 @@ static void launch_pi4_desktop_session(uint32_t *gpu_fb)
                     drag_old = drag_target->bounds;
                     if (!s_drag_preview.active && !non_move_event && !s_present_pending &&
                         !menu_open_at_loop_start && !appmenu_open_at_loop_start)
-                        (void)drag_preview_capture(drag_target, &drag_old);
+                        (void)drag_preview_capture(screen, drag_target, &drag_old);
                 }
             }
 

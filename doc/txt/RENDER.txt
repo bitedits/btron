@@ -310,19 +310,23 @@ Capture:
   1. At the beginning of an eligible title-bar drag, drag_preview_capture()
      copies the already-composed target rectangle from s_desktop_backbuffer to
      s_drag_preview_pixels.
-  2. The snapshot includes the window frame and content as actually visible.
+  2. It copies the stable desktop into s_drag_preview_underlay, then composes
+     the target-excluded old rectangle into that underlay.  The underlay is the
+     immutable scene below the opaque topmost drag target.
+  3. The snapshot includes the window frame and content as actually visible.
      It is therefore not re-painted during movement.
 
 Per move:
 
   1. drag_preview_repair_strips() computes old minus new as no more than four
      non-overlapping strips.
-  2. workbench_render_damage() restores and recomposes just these exposed
-     strips in the RAM backbuffer.
+  2. It restores those strips from s_drag_preview_underlay with row blits;
+     lower-window clipping, frame drawing, and transparency scans do not run
+     again during a valid preview.
   3. The saved opaque snapshot is copied to the new position in the RAM
      backbuffer.
   4. The strip pixels are presented synchronously.
-  5. The new window rectangle is presented by CPU fallback or gated DMA.
+  5. The new window rectangle is presented synchronously by the CPU.
 
 Exit:
 

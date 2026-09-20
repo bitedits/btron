@@ -73,6 +73,10 @@ typedef struct {
     volatile uint32_t trb_max;          /* worst TRB count per IRQ           */
     volatile uint32_t blit_us;          /* latest present band copy time     */
     volatile uint32_t blit_max_us;      /* worst band copy time              */
+    volatile uint32_t composite_us;     /* latest workbench_render time      */
+    volatile uint32_t composite_max_us; /* worst workbench_render since reset*/
+    volatile uint32_t present_us;       /* latest present_backbuffer_rect    */
+    volatile uint32_t present_max_us;   /* worst present rect since reset    */
     volatile uint32_t isr_us;           /* latest ISR wall time              */
     volatile uint32_t isr_max_us;       /* ISR WCET                          */
     volatile uint32_t key_enqueue_us;   /* timestamp of latest key enqueue   */

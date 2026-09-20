@@ -917,6 +917,11 @@ static void destroy_orchestra(WND *wnd) {
     g_orchestra_wnd = NULL;
 }
 
+static BOOL orchestra_menu_open(WND *wnd) {
+    (void)wnd;
+    return (g_orchestra.menu_bar.active_menu >= 0) ? TRUE : FALSE;
+}
+
 /* Open Full Orchestra Live MIDI Server & DAW Workstation Window */
 WND* open_orchestra_window(void) {
     if (g_orchestra_wnd) {
@@ -939,6 +944,7 @@ WND* open_orchestra_window(void) {
     g_orchestra_wnd->paint = paint_orchestra_window;
     g_orchestra_wnd->event_handler = orchestra_event_handler;
     g_orchestra_wnd->destroy = destroy_orchestra;
+    g_orchestra_wnd->menu_open = orchestra_menu_open;
 
     return g_orchestra_wnd;
 }

@@ -16,6 +16,10 @@
 #include <btron/fs/vol_api.h>
 #include <btron/fs/fs_internal.h>
 
+/* Defined later in this file; declared here so the window constructor can wire
+ * it as the WND menu_open hook. */
+BOOL t_editor_is_menu_open(WND *wnd);
+
 #if defined(__STDC_HOSTED__) && __STDC_HOSTED__ == 1
 #include <stdio.h>
 #include <stdlib.h>
@@ -1743,6 +1747,7 @@ WND* open_t_editor_window_rect(const char *filepath, H x, H y, H w, H h, UW attr
         wnd->paint = paint_t_editor;
         wnd->event_handler = handle_t_editor_event;
         wnd->destroy = destroy_t_editor;
+        wnd->menu_open = t_editor_is_menu_open;
     } else {
         free(ed);
     }

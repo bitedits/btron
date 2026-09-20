@@ -1335,6 +1335,7 @@ WND* open_gterm_window_rect(H x, H y, H w, H h, UW attr) {
         wnd->paint = paint_gterm;
         wnd->event_handler = handle_gterm_event;
         wnd->destroy = destroy_gterm;
+        wnd->menu_open = gterm_is_menu_open;
         tip_cancel();
         tip_set_mode(TIP_MODE_ASCII); /* Terminal strictly starts in EN mode */
         top_wnd(wnd);

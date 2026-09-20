@@ -6,7 +6,11 @@ CC ?= gcc
 SDL_CFLAGS ?= $(shell sdl2-config --cflags 2>/dev/null || echo "-I/usr/include/SDL2")
 SDL_LIBS ?= $(shell sdl2-config --libs 2>/dev/null || echo "-lSDL2")
 CFLAGS ?= -O2 -Wall -Wextra -std=c99 -I../include -I../include/drivers -I../src/kernel -D_GNU_SOURCE $(SDL_CFLAGS)
-LDFLAGS ?= -lpthread -lm $(SDL_LIBS)
+# Required libs live in VERIFY_LIBS (:=), NOT in the overridable LDFLAGS: an
+# inherited environment LDFLAGS (e.g. Homebrew's keg-only curl hint) otherwise
+# replaces the `?=` default and silently drops -lSDL2, breaking the link.
+LDFLAGS ?=
+VERIFY_LIBS := -lpthread -lm $(SDL_LIBS)
 
 VERIFY_SRCS = btron_verify.c \
               report/results.c \
@@ -66,7 +70,7 @@ VERIFY_BIN = btron_verify
 all: $(VERIFY_BIN)
 
 $(VERIFY_BIN): $(VERIFY_OBJS)
-	$(CC) $(VERIFY_OBJS) -o $@ $(LDFLAGS)
+	$(CC) $(VERIFY_OBJS) -o $@ $(LDFLAGS) $(VERIFY_LIBS)
 
 %.o: %.c btron_verify.h ../include/btron/*.h
 	$(CC) $(CFLAGS) -c $< -o $@

@@ -125,6 +125,7 @@ WND* opn_wnd(const char *title, H x, H y, H w, H h, UW attr) {
     wnd->id = g_next_wnd_id++;
     wnd->paint = NULL;
     wnd->event_handler = NULL;
+    wnd->menu_open = NULL;
     wnd->user_data = 0;
 
     const char *src_t = title ? title : "BTRON Window";

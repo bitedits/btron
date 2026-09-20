@@ -1189,6 +1189,11 @@ static void destroy_clarity(WND *wnd)
 /* Public Window Opener (Canonical Non-Blocking BTRON Convention)     */
 /* ------------------------------------------------------------------ */
 
+static BOOL clarity_menu_open(WND *wnd) {
+    (void)wnd;
+    return (g_menu.active_menu >= 0) ? TRUE : FALSE;
+}
+
 WND* open_clarity_window(void)
 {
     if (g_wnd) {
@@ -1220,6 +1225,7 @@ WND* open_clarity_window(void)
     g_wnd->paint         = clarity_paint;
     g_wnd->event_handler = clarity_event;
     g_wnd->destroy       = destroy_clarity;
+    g_wnd->menu_open     = clarity_menu_open;
 
     build_menu();
     clarity_fit_window();

@@ -2287,6 +2287,12 @@ static void paint_browser_wnd(WND *wnd, GDEV *dev) {
     tad_browser_paint(tb, dev, &cr);
 }
 
+static BOOL tad_menu_open(WND *wnd) {
+    if (!wnd) return FALSE;
+    TAD_BROWSER *tb = (wnd->user_data) ? (TAD_BROWSER*)(uintptr_t)wnd->user_data : &g_active_browser;
+    return (tb && tb->menu_bar.active_menu >= 0) ? TRUE : FALSE;
+}
+
 WND* open_tad_browser_window(const char *filepath, const char *title) {
     TAD_BROWSER *tb = (TAD_BROWSER*)calloc(1, sizeof(TAD_BROWSER));
     if (!tb) return NULL;
@@ -2302,6 +2308,7 @@ WND* open_tad_browser_window(const char *filepath, const char *title) {
         wnd->paint = paint_browser_wnd;
         wnd->event_handler = handle_tad_browser_event;
         wnd->destroy = destroy_browser_wnd;
+        wnd->menu_open = tad_menu_open;
     } else {
         free(tb);
     }

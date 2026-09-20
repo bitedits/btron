@@ -767,7 +767,9 @@ static RECT s_prev_win_union = { 0, 0, BTRON_SCREEN_W, BTRON_SCREEN_H };
  * at the start of this UI trip, so closing a menu repaints its (now-desktop)
  * pixels instead of leaving stale overlay artefacts on the framebuffer. */
 static void present_full_render(GDEV *screen, volatile uint32_t *fb, const RECT *extra) {
+    uint32_t t0 = *(volatile uint32_t *)(TIMER_BASE + 0x04);
     workbench_render(screen, BTRON_SCREEN_W, BTRON_SCREEN_H);
+    uint32_t t1 = *(volatile uint32_t *)(TIMER_BASE + 0x04);
     RECT cur;
     wnd_get_union_bounds(&cur);
     H x0 = cur.left  < s_prev_win_union.left  ? cur.left  : s_prev_win_union.left;
@@ -782,6 +784,28 @@ static void present_full_render(GDEV *screen, volatile uint32_t *fb, const RECT 
     }
     s_prev_win_union = cur;
     present_backbuffer_rect(fb, x0, y0, x1, y1);
+    uint32_t t2 = *(volatile uint32_t *)(TIMER_BASE + 0x04);
+    /* DIAGNOSTIC: split the full-render cost so we can confirm on hardware that
+     * window-move is composite-bound (workbench_render) not copy-bound (present).
+     * Reported once per second over UART, then reset. */
+    s_async_rt_stats.composite_us = t1 - t0;
+    if (s_async_rt_stats.composite_us > s_async_rt_stats.composite_max_us)
+        s_async_rt_stats.composite_max_us = s_async_rt_stats.composite_us;
+    s_async_rt_stats.present_us = t2 - t1;
+    if (s_async_rt_stats.present_us > s_async_rt_stats.present_max_us)
+        s_async_rt_stats.present_max_us = s_async_rt_stats.present_us;
+}
+
+/* TRUE when the focused top window owns an open in-app menu (its private
+ * APP_MENU_BAR dropdown).  Each app registers a `menu_open` callback; the
+ * dropdown is painted inside that window's own paint callback, so hovering or
+ * clicking it only needs a top-window repaint + that window's rect presented —
+ * not a full desktop composite.  Returns FALSE when no window, no callback, or
+ * the menu is closed, so callers safely fall back to the full-render path. */
+static int top_window_menu_open(void) {
+    WND *top = get_top_wnd();
+    if (top && top->menu_open) return top->menu_open(top) ? 1 : 0;
+    return 0;
 }
 
 /* Stage 2: Launch full B-System Workbench desktop session. */
@@ -909,7 +933,9 @@ static void launch_pi4_desktop_session(uint32_t *gpu_fb)
         int redraw = 0;
         int overlay_redraw = 0;
         int panel_redraw = 0;
+        int appmenu_redraw = 0;
         int menu_open_at_loop_start = global_menu_is_open() || tracker_is_menu_open();
+        int appmenu_open_at_loop_start = top_window_menu_open();
         /* Snapshot the rect any open menu occupies NOW.  If an event in this
          * trip closes that menu, the full-render present below must repaint
          * those pixels (now desktop) or stale overlay artfacts persist. */
@@ -931,6 +957,12 @@ static void launch_pi4_desktop_session(uint32_t *gpu_fb)
                      * the overlay, NOT the whole desktop.  A full composite per
                      * mouse-move was starving the 1 ms INPUT plane (laggy menus). */
                     overlay_redraw = 1;
+                } else if (top_window_menu_open()) {
+                    /* Hovering an open IN-APP menu moves its highlight inside the
+                     * top window.  Repaint just that window (its paint callback
+                     * redraws the dropdown), not a full desktop composite.  Without
+                     * this the highlight froze: no branch matched a menu hover. */
+                    appmenu_redraw = 1;
                 } else if (g_prev_mouse_btns != 0 || wnd_mgr_is_interacting()) {
                     redraw = 1;   /* drag: window contents move, full composite */
                 }
@@ -940,6 +972,16 @@ static void launch_pi4_desktop_session(uint32_t *gpu_fb)
                     /* Opening a menu only lays an overlay over an unchanged
                      * desktop: repaint the overlay, skip the full composite. */
                     overlay_redraw = 1;
+                } else if (ev.type == EV_BUT_DOWN &&
+                           appmenu_open_at_loop_start && !top_window_menu_open()) {
+                    /* An in-app menu just CLOSED on this click: the selected
+                     * command may have altered the window or the desktop (e.g.
+                     * Close Window), so take the artifact-free full-render path. */
+                    redraw = 1;
+                } else if (top_window_menu_open()) {
+                    /* In-app menu open (click opened it, or a click/hover within
+                     * it): repaint just the top window that owns the dropdown. */
+                    appmenu_redraw = 1;
                 } else {
                     /* Buttons, keys, focus changes need a real UI update */
                     redraw = 1;
@@ -959,6 +1001,22 @@ static void launch_pi4_desktop_session(uint32_t *gpu_fb)
              * of the LAST second, not an all-time high-water mark, so it tracks
              * current responsiveness instead of latching a single boot stall. */
             s_async_rt_stats.input_gap_max_us = s_async_rt_stats.input_gap_us;
+            /* DIAGNOSTIC: report the worst full-render split since the last
+             * second, but ONLY when a full render actually ran (drag / click /
+             * focus).  Idle seconds stay silent so the once-per-second UART
+             * write never perturbs hover or the input cadence we measure. */
+            if (s_async_rt_stats.composite_max_us) {
+                uart_puts("[UI]C");
+                uart_hex32(s_async_rt_stats.composite_max_us);
+                uart_puts("P");
+                uart_hex32(s_async_rt_stats.present_max_us);
+                uart_puts("W");
+                uart_hex32(s_ui_wcet_us);
+                uart_puts("\n");
+                s_async_rt_stats.composite_max_us = 0;
+                s_async_rt_stats.present_max_us = 0;
+                s_ui_wcet_us = 0;
+            }
         }
 
         /* Full UI path: redraw windows, menus, backbuffer blit */
@@ -1043,6 +1101,31 @@ static void launch_pi4_desktop_session(uint32_t *gpu_fb)
                 present_backbuffer_rect(gpu_fb, mr.left, mr.top, mr.right, mr.bottom);
             } else {
                 blit_backbuffer_to_fb(gpu_fb);
+            }
+            s_present_cursor_dirty = 1;
+        }
+        else if (appmenu_redraw) {
+            /* In-app menu hover/click: the dropdown lives inside the top window,
+             * so repaint ONLY that window (its paint callback redraws the menu)
+             * and present its rect — not a full desktop composite.  If the 1 Hz
+             * panel tick coincided, fold its band in so the clock never lags. */
+            if (panel_redraw) {
+                render_system_panel(screen);
+                present_backbuffer_rect(gpu_fb, 0, 0, BTRON_SCREEN_W, 28);
+            }
+            WND *top = get_top_wnd();
+            if (top && top->visible) {
+                H l = top->bounds.left,  r = top->bounds.right;
+                H t = top->bounds.top,   b = top->bounds.bottom;
+                if (l < 0) l = 0;
+                if (r > BTRON_SCREEN_W) r = BTRON_SCREEN_W;
+                if (t < 0) t = 0;
+                if (b > BTRON_SCREEN_H) b = BTRON_SCREEN_H;
+                redraw_top_window();
+                present_backbuffer_rect(gpu_fb, l, t, r, b);
+            } else {
+                present_full_render(screen, gpu_fb,
+                                    have_start_menu_rect ? &start_menu_rect : NULL);
             }
             s_present_cursor_dirty = 1;
         }

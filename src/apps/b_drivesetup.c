@@ -1623,6 +1623,11 @@ bool drivesetup_is_menu_open(void) {
     return g_drivesetup_state.menu_bar.active_menu >= 0;
 }
 
+static BOOL drivesetup_menu_open(WND *wnd) {
+    (void)wnd;
+    return drivesetup_is_menu_open() ? TRUE : FALSE;
+}
+
 void b_drivesetup_handle_cmd(DriveSetupState *st, int cmd) {
     drivesetup_dispatch_cmd(g_drivesetup_wnd, st, cmd);
 }
@@ -2664,6 +2669,7 @@ WND* open_drivesetup_window(void) {
     g_drivesetup_wnd->paint = drivesetup_paint;
     g_drivesetup_wnd->event_handler = drivesetup_event_handler;
     g_drivesetup_wnd->destroy = destroy_drivesetup;
+    g_drivesetup_wnd->menu_open = drivesetup_menu_open;
 
     return g_drivesetup_wnd;
 }

@@ -38,6 +38,11 @@ typedef struct WND {
     void (*paint)(struct WND *wnd, GDEV *dev);
     void (*event_handler)(struct WND *wnd, const EVT *evt);
     void (*destroy)(struct WND *wnd);
+    /* Returns TRUE when this window's in-app menu bar dropdown is open.  Lets
+     * the workbench loop repaint only the top window (and present just its
+     * bounds) on menu hover/open/close instead of a full desktop composite.
+     * NULL for windows without an in-app menu. */
+    BOOL (*menu_open)(struct WND *wnd);
     VW    user_data;
     struct WND *next;
     struct WND *prev;

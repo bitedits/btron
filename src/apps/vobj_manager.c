@@ -1005,6 +1005,11 @@ BOOL cabinet_handle_click(int mouse_x, int mouse_y, BOOL is_double_click, ID *ou
     return FALSE;
 }
 
+static BOOL vobj_menu_open(WND *wnd) {
+    (void)wnd;
+    return (g_cabinet.menu_bar.active_menu >= 0) ? TRUE : FALSE;
+}
+
 WND* open_vobj_manager_window(void) {
     if (g_cabinet.item_count == 0) {
         cabinet_init_defaults(&g_cabinet);
@@ -1014,6 +1019,7 @@ WND* open_vobj_manager_window(void) {
     if (wnd) {
         wnd->paint = paint_vobj_manager;
         wnd->event_handler = handle_vobj_manager_event;
+        wnd->menu_open = vobj_menu_open;
     }
     return wnd;
 }

@@ -1307,6 +1307,8 @@ static void launch_pi4_desktop_session(uint32_t *gpu_fb)
         WND *local_button_target = NULL;
         RECT focus_damage = { 0, 0, 0, 0 };
         int have_focus_damage = 0;
+        RECT focus_old_tab = { 0, 0, 0, 0 };
+        int have_focus_old_tab = 0;
         int title_drag_release = 0;
         RECT title_drag_old = { 0, 0, 0, 0 };
         RECT title_drag_new = { 0, 0, 0, 0 };
@@ -1403,8 +1405,17 @@ static void launch_pi4_desktop_session(uint32_t *gpu_fb)
             }
             if (!close_button_down && ev.type == EV_BUT_DOWN && button_top_before && button_top_after &&
                 button_top_after != button_top_before && button_top_after->visible) {
-                focus_damage = drag_preview_union(&button_top_bounds, &button_top_after->bounds);
+                /* A pure z-order flip needs: the new top's full rect (anything it
+                 * previously hid must now show it) plus the old top's TAB only
+                 * (its decoration flips to unfocused; its body pixels elsewhere
+                 * are unchanged).  Painting the old-window/new-window bounding
+                 * union repainted both whole windows per focus click. */
+                focus_damage = button_top_after->bounds;
                 have_focus_damage = 1;
+                if (button_top_before->visible && (button_top_before->attr & WND_ATTR_TITLE)) {
+                    wget_tab_rect(button_top_before, &focus_old_tab);
+                    have_focus_old_tab = 1;
+                }
             }
 
             if (drag_target && wnd_mgr_contains(drag_target)) {
@@ -1630,6 +1641,11 @@ static void launch_pi4_desktop_session(uint32_t *gpu_fb)
             workbench_render_damage(screen, &focus_damage);
             present_backbuffer_rect(gpu_fb, focus_damage.left, focus_damage.top,
                                     focus_damage.right, focus_damage.bottom);
+            if (have_focus_old_tab) {
+                workbench_render_damage(screen, &focus_old_tab);
+                present_backbuffer_rect(gpu_fb, focus_old_tab.left, focus_old_tab.top,
+                                        focus_old_tab.right, focus_old_tab.bottom);
+            }
             s_present_cursor_dirty = 1;
         }
         else if (menu_leave_redraw && have_start_menu_rect) {

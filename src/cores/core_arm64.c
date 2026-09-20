@@ -170,6 +170,9 @@ typedef struct {
 static COLOR s_drag_preview_pixels[BTRON_SCREEN_W * BTRON_SCREEN_H] __attribute__((aligned(64)));
 static COLOR s_drag_preview_underlay[BTRON_SCREEN_W * BTRON_SCREEN_H] __attribute__((aligned(64)));
 static drag_preview_t s_drag_preview;
+static RECT s_drag_preview_cpu_rect;
+static H s_drag_preview_cpu_row;
+static int s_drag_preview_cpu_active;
 static int s_drag_preview_dma_enabled = 0;
 static int s_drag_preview_dma_active;
 static RECT s_drag_preview_dma_rect;
@@ -763,9 +766,36 @@ static void present_backbuffer_rect(volatile uint32_t *fb, H x0, H y0, H x1, H y
     s_present_cursor_dirty = 1;
 }
 
+static void drag_preview_cpu_step(volatile uint32_t *fb) {
+    if (!s_drag_preview_cpu_active || !fb) return;
+
+    uint32_t start_us = *(volatile uint32_t *)(TIMER_BASE + 0x04);
+    H width = s_drag_preview_cpu_rect.right - s_drag_preview_cpu_rect.left;
+    H height = s_drag_preview_cpu_rect.bottom - s_drag_preview_cpu_rect.top;
+    volatile uint32_t *dst = fb + s_present_front_page * BTRON_SCREEN_W * BTRON_SCREEN_H;
+    while (s_drag_preview_cpu_row < height) {
+        H y = s_drag_preview_cpu_rect.top + s_drag_preview_cpu_row;
+        arm64_fast_blit((void *)(dst + (size_t)y * BTRON_SCREEN_W + s_drag_preview_cpu_rect.left),
+                        &s_desktop_backbuffer[(size_t)y * BTRON_SCREEN_W + s_drag_preview_cpu_rect.left],
+                        (size_t)width * sizeof(COLOR));
+        s_drag_preview_cpu_row++;
+        if ((*(volatile uint32_t *)(TIMER_BASE + 0x04) - start_us) >= ASYNC_PRESENT_BUDGET_US)
+            break;
+    }
+
+    uint32_t elapsed = *(volatile uint32_t *)(TIMER_BASE + 0x04) - start_us;
+    s_async_rt_stats.present_us = elapsed;
+    if (elapsed > s_async_rt_stats.present_max_us)
+        s_async_rt_stats.present_max_us = elapsed;
+    if (s_drag_preview_cpu_row >= height)
+        s_drag_preview_cpu_active = 0;
+    s_present_cursor_dirty = 1;
+}
+
 static void drag_preview_reset(void) {
     if (s_drag_preview_dma_active) bcm2711_dma_abort(0);
     s_drag_preview_dma_active = 0;
+    s_drag_preview_cpu_active = 0;
     s_drag_preview_dma_start_us = 0;
     s_drag_preview.target = NULL;
     s_drag_preview.active = FALSE;
@@ -893,7 +923,7 @@ static void drag_preview_present_strips(volatile uint32_t *fb, const RECT *old, 
 
 static int present_drag_preview(GDEV *screen, volatile uint32_t *fb, WND *target,
                                 const RECT *old, const RECT *current) {
-    if (s_drag_preview_dma_active) return 1;
+    if (s_drag_preview_dma_active || s_drag_preview_cpu_active) return 1;
     if (!s_drag_preview.active || s_drag_preview.target != target ||
         !drag_preview_bounds_valid(old) || !drag_preview_bounds_valid(current) ||
         old->top < 28 || current->top < 28 ||
@@ -933,8 +963,11 @@ static int present_drag_preview(GDEV *screen, volatile uint32_t *fb, WND *target
             dma_started = 1;
         }
     }
-    if (!dma_started)
-        present_backbuffer_rect(fb, current->left, current->top, current->right, current->bottom);
+    if (!dma_started) {
+        s_drag_preview_cpu_rect = *current;
+        s_drag_preview_cpu_row = 0;
+        s_drag_preview_cpu_active = 1;
+    }
     uint32_t t2 = *(volatile uint32_t *)(TIMER_BASE + 0x04);
 
     s_drag_preview.bounds = *current;
@@ -1148,6 +1181,7 @@ static void launch_pi4_desktop_session(uint32_t *gpu_fb)
 
         /* Present at most 8 KiB of pixels per trip around the loop. */
         present_copy_step();
+        drag_preview_cpu_step(gpu_fb);
 
         drag_preview_dma_complete(gpu_fb, now);
 
@@ -1164,7 +1198,7 @@ static void launch_pi4_desktop_session(uint32_t *gpu_fb)
         }
 
         /* Immediate cursor update on GPU front buffer (< 1 us glass-to-glass latency) */
-        if (!s_drag_preview_dma_active &&
+        if (!s_drag_preview_dma_active && !s_drag_preview_cpu_active &&
             (!s_present_dma_enabled || !bcm2711_dma_is_busy(0)) &&
             (s_mouse_x != prev_mx || s_mouse_y != prev_my || s_present_cursor_dirty)) {
             volatile uint32_t *cursor_fb = gpu_fb + s_present_front_page * BTRON_SCREEN_W * BTRON_SCREEN_H;
@@ -1542,7 +1576,7 @@ static void launch_pi4_desktop_session(uint32_t *gpu_fb)
                (uint32_t)(now - next_ui_us) < 100u * ASYNC_UI_PERIOD_US);
         }
 
-        if (!s_drag_preview_dma_active &&
+        if (!s_drag_preview_dma_active && !s_drag_preview_cpu_active &&
             (!s_present_dma_enabled || !bcm2711_dma_is_busy(0)) &&
             (s_mouse_x != prev_mx || s_mouse_y != prev_my || s_present_cursor_dirty)) {
             volatile uint32_t *cursor_fb = gpu_fb + s_present_front_page * BTRON_SCREEN_W * BTRON_SCREEN_H;

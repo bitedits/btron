@@ -326,7 +326,9 @@ Per move:
   3. The saved opaque snapshot is copied to the new position in the RAM
      backbuffer.
   4. The strip pixels are presented synchronously.
-  5. The new window rectangle is presented synchronously by the CPU.
+  5. The new window rectangle is presented by bounded CPU row bands.  New
+     pointer positions are deferred until that rectangle has completed, so the
+     presenter never rewrites an in-flight preview source.
 
 Exit:
 
@@ -464,8 +466,8 @@ is required at the device boundary, not for normal cached-RAM composition.
   -------------------------------  ----------------------------  -----------------------------
   Boot / unknown state              full Workbench                bounded CPU full-frame copy
   Window move, normal               clipped damage compositor     old/new damage CPU rectangles
-  Eligible title drag               preview strips + snapshot     CPU strips + current-window rect
-  Preview DMA experiment            disabled pending 2D proof     CPU current-window rectangle
+  Eligible title drag               preview strips + snapshot     CPU strips + banded window rect
+  Preview DMA experiment            disabled pending 2D proof     CPU banded window rect
   Menu hover/open                   overlay-only                  menu rectangle CPU copy
   In-app menu update                redraw top window             top-window CPU rectangle
   Local keyboard prompt update      redraw top window             top-window CPU rectangle

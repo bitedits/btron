@@ -399,9 +399,13 @@ void __aeabi_idivmod(void) {
 }
 #endif
 
-/* Mailbox message buffer aligned to 16 bytes */
-static volatile uint32_t mbox[36] __attribute__((aligned(16)));
+/* VideoCore property buffer.  It lives in the non-cacheable window rather than
+ * .bss because the property channel writes its response back into this RAM,
+ * which a cached read would miss once the MMU is on.  16-byte alignment is the
+ * mailbox interface's requirement, satisfied by the window offset. */
+static volatile uint32_t * const mbox = (volatile uint32_t *)BTRON_NOCACHE_MBOX_BOOT;
 uint32_t *g_pi_fb_ptr = NULL;
+uint32_t  g_pi_fb_size = 0;   /* bytes the VideoCore actually allocated */
 
 uint32_t* init_pi_framebuffer(uint32_t w, uint32_t h) {
     uintptr_t mbox_base = g_mmio_base + 0x0000b880UL;
@@ -491,11 +495,13 @@ uint32_t* init_pi_framebuffer(uint32_t w, uint32_t h) {
         uart_hex32(fb_sz);
         uart_puts("\n");
         g_pi_fb_ptr = (uint32_t*)(uintptr_t)fb_phys;
+        g_pi_fb_size = fb_sz ? fb_sz : (uint32_t)w * h * 4u;
         return g_pi_fb_ptr;
     }
 
     uart_puts("[QEMU-ARM] Framebuffer allocation fallback.\n");
     g_pi_fb_ptr = (uint32_t*)0x3c000000;
+    g_pi_fb_size = (uint32_t)w * h * 4u;
     return g_pi_fb_ptr;
 }
 
@@ -1156,16 +1162,32 @@ int arm64_mmu_attr_of(uintptr_t va) {
     return -1;                                             /* no L3 mapped */
 }
 
-/* Non-zero while the static image and the bump heap both stay clear of the
- * non-cacheable window.  It used to sit inside .bss, which silently ran the
- * tail of the segment uncached; this is the invariant that must not regress. */
+/* Non-zero while the static image, the bump heap and the .nocache output
+ * section all stay inside/outside the non-cacheable window as intended.  It
+ * used to sit inside .bss, which silently ran the tail of the segment uncached;
+ * this is the invariant that must not regress.  The .nocache half guards the
+ * other direction: objects there are shared with a caching-less bus master, so
+ * drifting past the window end would put them back into write-back RAM. */
 int arm64_mmu_layout_ok(void) {
     extern char __bss_end[];
+    extern char __nocache_start[];
+    extern char __nocache_end[];
     return ((uintptr_t)__bss_end <= (uintptr_t)BTRON_NOCACHE_BASE) &&
-           (HEAP_BASE >= (uintptr_t)BTRON_NOCACHE_END);
+           (HEAP_BASE >= (uintptr_t)BTRON_NOCACHE_END) &&
+           ((uintptr_t)__nocache_start >= (uintptr_t)BTRON_NOCACHE_BASE) &&
+           ((uintptr_t)__nocache_end <= (uintptr_t)BTRON_NOCACHE_END);
 }
 
-void arm64_mmu_init(void) {
+void arm64_mmu_init(uintptr_t fb_base, uint32_t fb_bytes) {
+    /* Invalidate the I-cache before M/C/I go to 1.  There is no all-lines
+     * D-cache invalidation available here (AArch64 has DC ISW by set/way only,
+     * and a hand-rolled CCSIDR walk is a worse failure mode than the hazard),
+     * so btron_main() stamps .bss/stack/heap words and reads them back after
+     * this call to prove no stale D-cache line survived. */
+    __asm__ volatile("ic iallu\n\t"
+                     "dsb sy\n\t"
+                     "isb\n\t" ::: "memory");
+
     /* Attr 0 = Device-nGnRE (0x04)
      * Attr 1 = Normal Cacheable Inner/Outer Write-Back (0xFF)
      * Attr 2 = Normal Non-Cacheable (0x44) for hardware DMA rings/buffers
@@ -1173,20 +1195,52 @@ void arm64_mmu_init(void) {
     uint64_t mair = (0x44ULL << 16) | (0xFFULL << 8) | (0x04ULL << 0);
 
     /* L2 Table: 512 entries of 2MB (covers 0 to 1GB)
-     * Code, data, .bss and the bump heap are all write-back cacheable.  The one
-     * RAM exception is the BTRON_NOCACHE_BASE window (24MB, 2MB) shared by the
-     * xHCI / DMA / mailbox drivers; it sits in the gap between __bss_end and
-     * HEAP_BASE on purpose, so no static object can ever land in it.
-     * Entries 480..511: 960MB - 1GB (0x3C000000 - 0x3FFFFFFF) -> GPU Framebuffer (Normal Non-Cacheable, Write-Combining)
+     * Code, data, .bss and the bump heap are all write-back cacheable.  The two
+     * RAM exceptions are the BTRON_NOCACHE_BASE window (24MB, 2MB) shared by
+     * the xHCI / DMA / mailbox drivers, which sits in the gap between
+     * __bss_end and HEAP_BASE on purpose so no static object can land in it,
+     * and the scanout framebuffer itself: the VideoCore picks that address and
+     * reports it through the mailbox, so it is passed in rather than assumed.
+     * With the framebuffer cacheable the CPU's writes would never reach the
+     * display, so its whole 2MB-aligned span gets attr2.  Both addresses seen
+     * in practice -- 0x3C000000 on the Pi and 0x3C100000 in QEMU -- are 960MB,
+     * i.e. inside the 1GB this table covers; the guard below is only for a
+     * firmware that hands back an address above 1GB, where L1[3]'s 1GB Device
+     * block wins and an L2 entry would be dead weight that makes
+     * arm64_mmu_attr_of() lie.
      */
     const uint64_t nocache_first = (uint64_t)BTRON_NOCACHE_BASE >> 21;
     const uint64_t nocache_last  = (uint64_t)BTRON_NOCACHE_END >> 21;
-    for (uint64_t i = 0; i < 480; i++) {
-        uint64_t attr = (i >= nocache_first && i < nocache_last) ? 2ULL : 1ULL;
-        s_arm64_l2[i] = (i * 0x200000ULL) | (1ULL << 10) | (3ULL << 8) | (attr << 2) | 0x01ULL;
+    uint64_t fb_first = 0, fb_last = 0;   /* L2 covers 0-1GB only */
+    if (fb_base && fb_base < 0x40000000ULL) {
+        /* The 1GB Device block at L1[3] shadows L2 for anything at or above
+         * 0x40000000, so an attr2 entry written there would never be reached
+         * and would only make the attribute readback disagree with the walk. */
+        fb_first = (uint64_t)fb_base >> 21;
+        fb_last  = ((uint64_t)fb_base + fb_bytes + 0x1FFFFFull) >> 21;
     }
-    for (uint64_t i = 480; i < 512; i++) {
-        s_arm64_l2[i] = (i * 0x200000ULL) | (1ULL << 10) | (3ULL << 8) | (2ULL << 2) | 0x01ULL; /* GPU FB: Normal Non-Cacheable (Write-Combining) */
+    /* Block/section descriptor encoding (ARMv8-A, same field positions at every
+     * level; cross-checked against Linux's PMD_SECT_* / PTE_* macros):
+     *   bits[1:0] = 0b01        block
+     *   bits[4:2]   AttrIndx
+     *   bit[5]      RES0
+     *   bits[7:6]   AP[2:1]     0b00 = EL1 read/write, EL0 no access
+     *   bits[9:8]   SH          0b11 = Outer Shareable; 0b00 for Device
+     *   bit[10]     AF          must be preset: the CPU is not allowed to
+     *                           hardware-update it because TCR_EL1.HA is 0
+     *   bit[11]     nG          (RES0 in 1GB blocks)
+     *   bits[53]/[54] PXN/UXN   0 = executable, which the kernel needs
+     * Getting SH wrong here is not a benign mis-annotation: the previous
+     * (3 << 6) landed in AP[1:2] and made every RAM block read-only, so loads
+     * worked while stores took a level-2 permission fault (ESR 0x9600004e).
+     */
+    const uint64_t sh_outer = (3ULL << 8);      /* SH=11, Outer Shareable */
+    const uint64_t af       = (1ULL << 10);
+
+    for (uint64_t i = 0; i < 512; i++) {
+        const uint64_t uncached =
+            (i >= nocache_first && i < nocache_last) || (i >= fb_first && i < fb_last);
+        s_arm64_l2[i] = (i * 0x200000ULL) | af | sh_outer | ((uncached ? 2ULL : 1ULL) << 2) | 0x01ULL;
     }
 
     /* L1 Table: 512 entries of 1GB */
@@ -1198,62 +1252,47 @@ void arm64_mmu_init(void) {
     s_arm64_l1[0] = ((uint64_t)(uintptr_t)s_arm64_l2) | 0x03ULL;
 
     /* L1[1]: 1GB to 2GB RAM -> Normal Cacheable */
-    s_arm64_l1[1] = 0x40000000ULL | (1ULL << 10) | (3ULL << 8) | (1ULL << 2) | 0x01ULL;
+    s_arm64_l1[1] = 0x40000000ULL | af | sh_outer | (1ULL << 2) | 0x01ULL;
 
     /* L1[2]: 2GB to 3GB RAM -> Normal Cacheable */
-    s_arm64_l1[2] = 0x80000000ULL | (1ULL << 10) | (3ULL << 8) | (1ULL << 2) | 0x01ULL;
+    s_arm64_l1[2] = 0x80000000ULL | af | sh_outer | (1ULL << 2) | 0x01ULL;
 
-    /* L1[3]: 3GB to 4GB (0xC0000000 - 0xFFFFFFFF) -> Device memory (MMIO + PCIe RC) */
-    s_arm64_l1[3] = 0xC0000000ULL | (1ULL << 10) | (2ULL << 8) | (0ULL << 2) | 0x01ULL;
+    /* L1[3]: 3GB to 4GB (0xC0000000 - 0xFFFFFFFF) -> Device memory (MMIO + PCIe RC).
+     * Device blocks take SH=00 (0b11 is reserved for Device), AttrIndx=0. */
+    s_arm64_l1[3] = 0xC0000000ULL | af | 0x01ULL;
 
     /* L1[24]: 24GB (0x600000000ULL, 1GB window) -> Device memory (PCIe Outbound to VL805) */
-    s_arm64_l1[24] = 0x600000000ULL | (1ULL << 10) | (2ULL << 8) | (0ULL << 2) | 0x01ULL;
+    s_arm64_l1[24] = 0x600000000ULL | af | 0x01ULL;
 
-    uint64_t el;
-    __asm__ volatile("mrs %0, CurrentEL" : "=r"(el));
-    el >>= 2;
+    /* _start normalises the boot state to EL1t whichever EL the loader entered
+     * at (EL2 on the Pi, EL3 under QEMU), so the EL1 regime is the only one
+     * this ever programs.  Writing the EL1 registers from a higher EL looks
+     * successful while SCTLR at the executing EL stays M=0, which is why the
+     * band reads back CurrentEL and SCTLR M/C/I instead of trusting this call.
+     *
+     * TCR_EL1: 39-bit VA (T0SZ=25) so the walk starts at level 1, 4KB granule
+     * (TG0=0), Inner/Outer Write-Back, Inner+Outer Shareable (SH0=11), 40-bit
+     * PA (IPS=2 at bits[34:32]), and EPD1 (bit 22) to park the never-initialised
+     * TTBR1 half of the address space. */
+    const uint64_t tcr = (25ULL << 0) | (1ULL << 8) | (1ULL << 10) | (3ULL << 12) |
+                         (0ULL << 14) | (1ULL << 22) | (2ULL << 32);
 
-    if (el == 2) {
-        /* TCR_EL2: 39-bit VA (T0SZ=25), 4KB granule, Inner/Outer WB, 40-bit PA (PS=2) */
-        uint64_t tcr = (25ULL << 0) | (1ULL << 8) | (1ULL << 10) | (3ULL << 12) | (0ULL << 14) | (2ULL << 16);
-
-        __asm__ volatile(
-            "msr mair_el2, %0\n\t"
-            "msr tcr_el2, %1\n\t"
-            "msr ttbr0_el2, %2\n\t"
-            "isb\n\t"
-            "tlbi alle2\n\t"
-            "dsb sy\n\t"
-            "isb\n\t"
-            "mrs x0, sctlr_el2\n\t"
-            "orr x0, x0, #(1 << 0)\n\t"   /* M: MMU enable */
-            "orr x0, x0, #(1 << 2)\n\t"   /* C: Data Cache enable */
-            "orr x0, x0, #(1 << 12)\n\t"  /* I: Instruction Cache enable */
-            "msr sctlr_el2, x0\n\t"
-            "isb\n\t"
-            : : "r"(mair), "r"(tcr), "r"(s_arm64_l1) : "x0", "memory"
-        );
-    } else {
-        /* TCR_EL1: 39-bit VA (T0SZ=25), 4KB granule, Inner/Outer WB, 40-bit PA (IPS=2 at bit 32) */
-        uint64_t tcr = (25ULL << 0) | (1ULL << 8) | (1ULL << 10) | (3ULL << 12) | (0ULL << 14) | (2ULL << 32);
-
-        __asm__ volatile(
-            "msr mair_el1, %0\n\t"
-            "msr tcr_el1, %1\n\t"
-            "msr ttbr0_el1, %2\n\t"
-            "isb\n\t"
-            "tlbi vmalle1\n\t"
-            "dsb sy\n\t"
-            "isb\n\t"
-            "mrs x0, sctlr_el1\n\t"
-            "orr x0, x0, #(1 << 0)\n\t"   /* M: MMU enable */
-            "orr x0, x0, #(1 << 2)\n\t"   /* C: Data Cache enable */
-            "orr x0, x0, #(1 << 12)\n\t"  /* I: Instruction Cache enable */
-            "msr sctlr_el1, x0\n\t"
-            "isb\n\t"
-            : : "r"(mair), "r"(tcr), "r"(s_arm64_l1) : "x0", "memory"
-        );
-    }
+    __asm__ volatile(
+        "msr mair_el1, %0\n\t"
+        "msr tcr_el1, %1\n\t"
+        "msr ttbr0_el1, %2\n\t"
+        "isb\n\t"
+        "tlbi vmalle1\n\t"
+        "dsb sy\n\t"
+        "isb\n\t"
+        "mrs x0, sctlr_el1\n\t"
+        "orr x0, x0, #(1 << 0)\n\t"   /* M: MMU enable */
+        "orr x0, x0, #(1 << 2)\n\t"   /* C: Data Cache enable */
+        "orr x0, x0, #(1 << 12)\n\t"  /* I: Instruction Cache enable */
+        "msr sctlr_el1, x0\n\t"
+        "isb\n\t"
+        : : "r"(mair), "r"(tcr), "r"(s_arm64_l1) : "x0", "memory"
+    );
 }
 #endif
 
@@ -1271,6 +1310,36 @@ void _start(void) {
         "2: wfe\n\t"
         "b 2b\n\t"
         "1:\n\t"
+
+        /* Drop EL3 -> Non-secure EL2h.  The Pi firmware hands kernel8.img to
+         * EL2, but QEMU's raspi4b machine enters at EL3, and skipping the
+         * drop there left the whole kernel running at a different EL than the
+         * one it ships on -- the EL3 MMU regime is not the hardware path, and
+         * exceptions there vector through VBAR_EL3=0.  Landing at EL2h makes
+         * both loaders run the identical, hardware-proven EL2 -> EL1t
+         * sequence below. */
+        "mrs x0, CurrentEL\n\t"
+        "lsr x0, x0, #2\n\t"
+        "cmp x0, #3\n\t"
+        "b.ne 46f\n\t"
+        "mov x0, #0x3C9\n\t"                   /* SPSR: EL2h, DAIF masked */
+        "msr spsr_el3, x0\n\t"
+        "adr x0, 48f\n\t"
+        "msr elr_el3, x0\n\t"
+        "mov x0, #1\n\t"
+        "orr x0, x0, #(1 << 8)\n\t"            /* HCE: EL2 enabled */
+        "orr x0, x0, #(1 << 10)\n\t"           /* RW:  AArch64 at EL2/EL1 */
+        "msr scr_el3, x0\n\t"
+        "isb\n\t"
+        "eret\n\t"
+        "48:\n\t"
+        /* Now at Non-secure EL2h with an undefined SP_EL2; restore it before
+         * anything can take an exception here. */
+        "adrp x0, __stack_top\n\t"
+        "add  x0, x0, :lo12:__stack_top\n\t"
+        "and  x0, x0, #~15\n\t"
+        "mov  sp, x0\n\t"
+        "46:\n\t"
 
         /* Drop EL2 -> EL1 (AArch64).  Firmware configures the GIC-400 groups
          * and the arch timer for a Non-secure EL1 OS (as Linux/Haiku run on
@@ -1343,6 +1412,18 @@ void _start(void) {
         "str xzr, [x0], #8\n\t"
         "b 4b\n\t"
         "5:\n\t"
+
+        /* Zero .nocache too.  Its VMA is 25MB into the address space, so it is
+         * an image-less NOLOAD section that neither the ELF loader nor the .bss
+         * clear above reaches; without this a DWC2 setup packet starts life as
+         * whatever the previous boot left at that address. */
+        "ldr x0, =__nocache_start\n\t"
+        "ldr x1, =__nocache_end\n\t"
+        "9: cmp x0, x1\n\t"
+        "b.ge 10f\n\t"
+        "str xzr, [x0], #8\n\t"
+        "b 9b\n\t"
+        "10:\n\t"
 
         "bl btron_main\n\t"
         "3: wfe\n\t"

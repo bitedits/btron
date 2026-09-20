@@ -260,6 +260,7 @@ extern int  uart_has_char(void);
 extern int  uart_getc(void);
 extern void uart_hex32(uint32_t val);
 extern uint32_t *init_pi_framebuffer(uint32_t w, uint32_t h);
+extern uint32_t  g_pi_fb_size;   /* bytes the VideoCore allocated at g_pi_fb_ptr */
 extern ER ScreenDrv(int ac, unsigned char *av[]);
 extern ER KbPdDrv(int ac, unsigned char *av[]);
 extern ER LowKbPdDrv(int ac, unsigned char *av[]);
@@ -3107,6 +3108,85 @@ void btron_main(void) {
     fb_log(g_mmio_base == 0xFE000000UL
            ? "[BOOT] BCM2711  Cortex-A72  AArch64  Pi 4/400  T-Kernel 2.0\n"
            : "[BOOT] BCM2837  Cortex-A53  AArch64  Pi 3B     T-Kernel 2.0\n");
+
+    /* Turn on the MMU and both caches.  Until this point the kernel has run
+     * with SCTLR M=C=I=0, i.e. every RAM access went to DRAM at ~100 MB/s and
+     * every byte loop ran ~30x below the core's rate.  Two regions must not be
+     * cached once that changes: the attr2 window that holds the xHCI rings,
+     * DMA control blocks and every mailbox buffer, and the scanout framebuffer
+     * the VideoCore just allocated at an address it chose (see
+     * arm64_mem.h), which is passed in here rather than assumed.  Placed after
+     * the framebuffer and DMA self-test have finished their mailbox
+     * transactions, before PCIe/USB bring-up.  The markers bracket the call so
+     * a console photo localises a hang either way.
+     *
+     * arm64_mmu_init() invalidates the I-cache but not the D-cache by set/way
+     * (the AArch64 encoding has no all-lines D invalidation the assembler
+     * accepts, and a hand-rolled CCSIDR walk is a worse failure mode than the
+     * hazard it avoids).  So stamp one word in each of .bss, the stack and the
+     * bump heap while caches are off and read them back afterwards: a surviving
+     * stale line shows up as a mismatch here, on the console, in this boot. */
+    static volatile uint32_t s_bss_stamp;
+    volatile uint32_t stack_stamp = 0x57A7F00Du;
+    s_bss_stamp = 0xB05F11D5u;
+    const uint32_t heap_stamp = *(volatile uint32_t *)HEAP_BASE;
+
+    /* The console font is drawn into the framebuffer with fb_log() below, so
+     * map a span wide enough for the double scanout page that
+     * mailbox_set_virtual_offset() can select. */
+    uint32_t fb_span = (uint32_t)BTRON_SCREEN_W * BTRON_SCREEN_H * 4u * 2u;
+    if (g_pi_fb_size > fb_span) fb_span = g_pi_fb_size;
+
+    fb_log("[MMU] enabling (identity map, WB RAM + attr2 DMA window)...\n");
+    arm64_mmu_init((uintptr_t)gpu_fb, fb_span);
+
+    /* Read the pre-enable stamps back before overwriting them: a D-cache line
+     * that survived M=1 shows up as a mismatch here. */
+    const int mmu_read_ok = (s_bss_stamp == 0xB05F11D5u) &&
+                            (stack_stamp == 0x57A7F00Du) &&
+                            (*(volatile uint32_t *)HEAP_BASE == heap_stamp);
+
+    /* Then prove a store lands.  QEMU is what caught the need for this: a
+     * descriptor whose shareability field overlaps AP[2:1] makes every RAM
+     * block read-only, so every load still works, the next push faults, the
+     * vector table's fault-skip handler steps over the store, and a check that
+     * only reads reports success.  The heap word is 1MB into the bump heap --
+     * past anything allocated so far, and in a different 2MB block than .bss
+     * and the stack, which both sit in the first. */
+    volatile uint32_t * const heap_probe = (volatile uint32_t *)(HEAP_BASE + 0x100000UL);
+    s_bss_stamp = 0x67E11E71u;
+    *heap_probe = 0x67E11E71u;
+
+    const int mmu_store_ok = (s_bss_stamp == 0x67E11E71u) && (*heap_probe == 0x67E11E71u);
+    const int mmu_integrity_ok = mmu_read_ok && mmu_store_ok;
+    fb_log(mmu_integrity_ok ? "[MMU] on, integrity ok.\n"
+                            : "[MMU] on, INTEGRITY FAIL\n");
+    if (!mmu_integrity_ok) {
+        fb_log("[MMU] rd="); fb_log_dec((uint32_t)mmu_read_ok);
+        fb_log(" st=");     fb_log_dec((uint32_t)mmu_store_ok);
+        fb_log("\n");
+    }
+
+    /* Read the installed tables back and print the attribute each region
+     * actually got, so the descriptor encoding is verified on the device
+     * instead of on the screen of the person who wrote it.  Expected:
+     * bss=1 heap=1 dma=2 mmio=0 fb=2 layout=1 -- fb=2 because the firmware puts
+     * the scanout at 0x3C000000 (960MB), inside the 1GB the L2 table covers, so
+     * its attr2 span is what the walk reaches.  (An unmapped address walks back
+     * as -1 and prints as 4294967295.) */
+    fb_log("[MMU] attr bss=");
+    fb_log_dec((uint32_t)arm64_mmu_attr_of((uintptr_t)&s_bss_stamp));
+    fb_log(" heap=");
+    fb_log_dec((uint32_t)arm64_mmu_attr_of(HEAP_BASE));
+    fb_log(" dma=");
+    fb_log_dec((uint32_t)arm64_mmu_attr_of(BTRON_NOCACHE_BASE + 0x80000UL));
+    fb_log(" mmio=");
+    fb_log_dec((uint32_t)arm64_mmu_attr_of(g_mmio_base));
+    fb_log(" fb=");
+    fb_log_dec((uint32_t)arm64_mmu_attr_of((uintptr_t)gpu_fb));
+    fb_log(" layout=");
+    fb_log_dec((uint32_t)arm64_mmu_layout_ok());
+    fb_log("\n");
 
     btron_core_banner();
     btron_core_init();

@@ -54,6 +54,30 @@ static inline void delay_cycles(volatile int n) {
     while (n-- > 0) { __asm__ volatile("nop"); }
 }
 
+/* Wall-clock settle waits.
+ *
+ * These were delay_cycles() loops whose sizes were chosen as "about 2 ms" at
+ * the speed the kernel actually ran at back then -- with the MMU off, so every
+ * iteration of the volatile counter reloaded from uncached RAM.  Once the
+ * caches were enabled the same loop became several times shorter, and the USB
+ * reset, power-on and SET_ADDRESS recovery windows expired before the device
+ * had finished what the previous request told it to do.
+ * The BCM283x system timer counts at a true 1 MHz independently of CPU clock
+ * and cache state, so express the settles against it and leave delay_cycles()
+ * to the register-poll loops, where only a lower bound on cycles matters. */
+#ifdef __aarch64__
+extern uintptr_t g_mmio_base;
+static inline uint32_t systimer_clo(void) {
+    return *(volatile uint32_t *)(g_mmio_base + 0x00003004UL);
+}
+static inline void delay_us(uint32_t us) {
+    uint32_t start = systimer_clo();
+    while ((uint32_t)(systimer_clo() - start) < us) { __asm__ volatile("nop"); }
+}
+#else
+static inline void delay_us(uint32_t us) { delay_cycles((int)(us * 10u)); }
+#endif
+
 /* ─────────────────────────────────────────────
  * DWC2 channel interrupt bits
  * ───────────────────────────────────────────── */
@@ -90,9 +114,26 @@ static uint8_t  g_last_mouse_btns   = 0;
 static uint8_t  g_kbd_addr          = 1;
 static uint8_t  g_mouse_addr        = 2;
 
-/* DMA buffers — 16-byte aligned */
-static usb_kbd_report_t   g_kbd_dma_buf   __attribute__((aligned(16)));
-static uint8_t            g_mouse_dma_buf[16] __attribute__((aligned(16)));
+/* DMA buffers — 16-byte aligned.
+ *
+ * These four are the only objects in the tree a bus master writes directly:
+ * their addresses go into DWC2_HCDMA with GAHBCFG.DMAEn=1, so the controller
+ * reads and writes them without touching the CPU caches.  On AArch64 they are
+ * therefore placed in the non-cacheable MAIR attr2 window by the .nocache
+ * output section of link.ld (see btron/arm64_mem.h); as ordinary .bss objects
+ * they are write-back, which made the setup packet never reach the device and
+ * the interrupt-IN reports never reach the driver once the MMU was enabled --
+ * keyboard and mouse went dead while everything else kept working.  QEMU shows
+ * nothing here: TCG has no caches, so cacheable and non-cacheable are the same
+ * RAM.  volatile because hardware, not the compiler, owns their contents. */
+#if defined(__aarch64__)
+#define DWC2_DMA_BUF __attribute__((section(".btron.nocache"), aligned(16)))
+#else
+#define DWC2_DMA_BUF __attribute__((aligned(16)))
+#endif
+
+static volatile usb_kbd_report_t   g_kbd_dma_buf   DWC2_DMA_BUF;
+static volatile uint8_t            g_mouse_dma_buf[16] DWC2_DMA_BUF;
 
 /* PID toggles for interrupt IN channels */
 static uint32_t g_kbd_pid   = PID_DATA0;
@@ -101,9 +142,10 @@ static uint32_t g_mouse_pid = PID_DATA0;
 static bool g_kbd_chan_active   = false;
 static bool g_mouse_chan_active = false;
 
-/* Setup packet + scratch buffer for control transfers */
-static usb_setup_packet_t g_setup_buf  __attribute__((aligned(16)));
-static uint8_t            g_ctrl_data[64] __attribute__((aligned(16)));
+/* Setup packet + scratch buffer for control transfers — same rule as above:
+ * both are read by the controller out of RAM. */
+static volatile usb_setup_packet_t g_setup_buf  DWC2_DMA_BUF;
+static volatile uint8_t            g_ctrl_data[64] DWC2_DMA_BUF;
 
 /* ─────────────────────────────────────────────
  * dwc2_chan_halt — safely disable a channel
@@ -233,23 +275,23 @@ static int dwc2_enumerate_hid(uint8_t dev_addr, uint8_t iface)
         uart_puts("[DWC2] SET_ADDRESS failed\n");
         return -1;
     }
-    delay_cycles(20000); /* 2ms: device applies new address */
+    delay_us(2000); /* 2ms: device applies new address */
 
     uart_puts("[DWC2] SET_CONFIGURATION(1)\n");
     r = dwc2_ctrl_out(dev_addr, 0x00, USB_REQ_SET_CONFIGURATION, 1, 0, 0);
     if (r < 0) uart_puts("[DWC2] SET_CONFIGURATION failed (non-fatal)\n");
-    delay_cycles(5000);
+    delay_us(500);
 
     /* SET_PROTOCOL(0) = Boot Protocol: class request (0x21), iface */
     uart_puts("[DWC2] SET_PROTOCOL → Boot\n");
     r = dwc2_ctrl_out(dev_addr, 0x21, 0x0B, 0, iface, 0);
     if (r < 0) uart_puts("[DWC2] SET_PROTOCOL failed (non-fatal)\n");
-    delay_cycles(5000);
+    delay_us(500);
 
     /* SET_IDLE(0): suppress redundant reports */
     r = dwc2_ctrl_out(dev_addr, 0x21, 0x0A, 0, iface, 0);
     (void)r; /* STALL on SET_IDLE is acceptable */
-    delay_cycles(5000);
+    delay_us(500);
 
     uart_puts("[DWC2] Enumeration complete for addr=");
     uart_hex32(dev_addr);
@@ -331,7 +373,7 @@ int dwc2_init(void)
     usbcfg |=  (1u << 29);  /* ForceHstMode */
     usbcfg |=  (1u << 6);   /* PHYSel FS */
     dwc2_write(DWC2_GUSBCFG, usbcfg);
-    delay_cycles(5000);      /* wait for mode switch */
+    delay_us(2000);      /* wait for mode switch */
 
     /* ── 3. Configure RX/TX FIFOs (required before any DMA transfer) ──
      *  GRXFSIZ:    256 DWORDs = 1024 bytes  (receive FIFO)
@@ -365,24 +407,24 @@ int dwc2_init(void)
     uint32_t hprt = dwc2_read(DWC2_HPRT0) & ~(7u << 1); /* mask W1C bits */
     hprt |= (1u << 12); /* PrtPwr */
     dwc2_write(DWC2_HPRT0, hprt);
-    delay_cycles(50000);
+    delay_us(100000); /* USB 2.0 7.1.7.3: power-on to resettable is up to 100 ms */
 
     /* ── 9. USB bus reset (≥10ms per USB 2.0 spec) ── */
     hprt  = dwc2_read(DWC2_HPRT0) & ~(7u << 1);
     hprt |= (1u << 8); /* PrtRst */
     dwc2_write(DWC2_HPRT0, hprt);
-    delay_cycles(500000);
+    delay_us(20000);
 
     hprt  = dwc2_read(DWC2_HPRT0) & ~((7u << 1) | (1u << 8));
     dwc2_write(DWC2_HPRT0, hprt);
-    delay_cycles(50000); /* post-reset settle */
+    delay_us(20000); /* post-reset settle, then T_RSTRCY recovery */
 
     /* ── 10. Wait for port enable (PrtEna bit 2 must be 1) ── */
     bool port_enabled = false;
-    for (int i = 0; i < 50000; i++) {
+    for (int i = 0; i < 5000; i++) {          /* up to 500 ms */
         uint32_t p = dwc2_read(DWC2_HPRT0);
         if (p & (1u << 2)) { port_enabled = true; break; }
-        delay_cycles(10);
+        delay_us(100);
     }
     uart_puts(port_enabled
         ? "[DWC2] Port enabled (FS device connected)\n"
@@ -394,9 +436,9 @@ int dwc2_init(void)
     /* ── 11. Enumerate root device & downstream devices ── */
     uart_puts("[DWC2] Setting root device addr=1...\n");
     if (dwc2_ctrl_out(0, 0x00, USB_REQ_SET_ADDRESS, 1, 0, 0) == 0) {
-        delay_cycles(20000);
+        delay_us(2000);
         dwc2_ctrl_out(1, 0x00, USB_REQ_SET_CONFIGURATION, 1, 0, 0);
-        delay_cycles(5000);
+        delay_us(500);
 
         /* Test if device 1 is a USB Hub by sending SET_FEATURE(PORT_POWER, port=1) */
         /* bmRequestType=0x23 (Class, Other/Port), bRequest=3 (SET_FEATURE), wValue=8 (PORT_POWER), wIndex=1 */
@@ -406,12 +448,12 @@ int dwc2_init(void)
             uart_puts("[DWC2] USB Hub detected! Powering ports & enumerating devices...\n");
             /* Power port 2 */
             dwc2_ctrl_out(1, 0x23, 3, 8, 2, 0);
-            delay_cycles(50000);
+            delay_us(100000); /* PwrOn2PwrGood worst case */
 
             /* Reset Hub Port 1 (Keyboard) */
             uart_puts("[DWC2] Resetting Hub Port 1 (Keyboard)...\n");
             dwc2_ctrl_out(1, 0x23, 3, 4 /* PORT_RESET */, 1, 0);
-            delay_cycles(200000);
+            delay_us(60000); /* reset signalling + recovery */
 
             /* Enumerate Keyboard at address 2 */
             uart_puts("[DWC2] Enumerating keyboard (addr=2, Boot Protocol)...\n");
@@ -426,7 +468,7 @@ int dwc2_init(void)
             /* Reset Hub Port 2 (Mouse) */
             uart_puts("[DWC2] Resetting Hub Port 2 (Mouse)...\n");
             dwc2_ctrl_out(1, 0x23, 3, 4 /* PORT_RESET */, 2, 0);
-            delay_cycles(200000);
+            delay_us(60000);
 
             /* Enumerate Mouse at address 3 */
             uart_puts("[DWC2] Enumerating mouse (addr=3, Boot Protocol)...\n");

@@ -63,11 +63,24 @@ static inline void delay_cycles(int n) {
     while (n-- > 0) __asm__ volatile("nop");
 }
 
+/* The BCM2711 system timer is a real 1 MHz counter living in the Device-mapped
+ * MMIO window, so a wait expressed against it is a wall-clock wait.  The
+ * previous version of this function was a counted loop calibrated to the
+ * *uncached* execution speed the kernel had before the MMU came on; with the
+ * I/D caches enabled it shrank by more than an order of magnitude, every
+ * settle and recovery window here expired before the VL805 or the hub behind
+ * it answered, and both HID devices went dead.  Same reasoning pcie_bcm2711.c
+ * already documents for the link-training delays.
+ * delay_cycles() stays counted: it only separates two back-to-back register
+ * writes, where a minimum of some cycles is wanted and its exact length is
+ * irrelevant. */
+static inline uint32_t systimer_clo(void) {
+    return *(volatile uint32_t *)(g_mmio_base + 0x00003004UL);
+}
+
 static inline void delay_us(uint32_t us) {
-    /* Robust bounded delay: ~150 cycles per microsecond */
-    for (volatile uint32_t i = 0; i < us * 150; i++) {
-        __asm__ volatile("nop");
-    }
+    uint32_t start = systimer_clo();
+    while ((uint32_t)(systimer_clo() - start) < us) { __asm__ volatile("nop"); }
 }
 
 /* ─────────────────────────────────────────────────────────────────
@@ -319,9 +332,13 @@ static int xhci_cmd_submit(uint64_t param, uint32_t status, uint32_t trb_type, u
     /* Ring Host Controller Command Doorbell (Slot 0, Target 0) */
     xhci_ring_doorbell(0, 0);
 
-    /* Poll Event Ring for Command Completion Event */
-    int timeout = 5000;
-    while (timeout-- > 0) {
+    /* Poll Event Ring for Command Completion Event.
+     * xHCI 4.9.2 lets the controller take up to 5 ms (microframe+interrupter
+     * throttle) before it posts a command completion, and a VL805 that is
+     * still settling after its own reset can take longer, so the budget is a
+     * wall-clock one rather than an iteration count. */
+    const uint32_t cmd_deadline = systimer_clo() + 50000u;
+    for (;;) {
         uint32_t ev_idx = s_event_dequeue_idx;
         uint32_t ev_ctrl = s_event_ring[ev_idx].control;
         uint32_t ev_cycle = ev_ctrl & 1;
@@ -354,6 +371,7 @@ static int xhci_cmd_submit(uint64_t param, uint32_t status, uint32_t trb_type, u
             }
         }
         delay_cycles(20);
+        if ((int32_t)(cmd_deadline - systimer_clo()) <= 0) break;
     }
 
     uint32_t sts = xread32(s_op_base + XHCI_OP_USBSTS);
@@ -430,8 +448,8 @@ static int xhci_ep0_control_transfer(uint32_t slot_id, uint8_t bmRequestType, ui
     xhci_ring_doorbell(slot_id, 1);
 
     /* Poll Event Ring for Transfer Completion Event */
-    int timeout = 5000;
-    while (timeout-- > 0) {
+    const uint32_t ep0_deadline = systimer_clo() + 100000u;
+    for (;;) {
         uint32_t ev_idx = s_event_dequeue_idx;
         uint32_t ev_ctrl = s_event_ring[ev_idx].control;
         if ((ev_ctrl & 1) == s_event_cycle_bit) {
@@ -482,6 +500,7 @@ static int xhci_ep0_control_transfer(uint32_t slot_id, uint8_t bmRequestType, ui
             }
         }
         delay_cycles(20);
+        if ((int32_t)(ep0_deadline - systimer_clo()) <= 0) break;
     }
 
     uint32_t sts = xread32(s_op_base + XHCI_OP_USBSTS);
@@ -740,8 +759,15 @@ int xhci_init(uintptr_t mmio_base) {
     xwrite32(s_op_base + XHCI_OP_USBCMD, cmd);
     dsb();
 
-    int to = 1000;
-    while (!(xread32(s_op_base + XHCI_OP_USBSTS) & XHCI_STS_HCH) && --to > 0) {
+    /* xHCI 4.9.1 allows the controller up to 100 ms to halt after Run/Stop is
+     * cleared and another 100 ms to finish HCRST and drop CNR; Linux uses a
+     * whole second for both.  These loops used to be iteration counts against
+     * a delay_us() that was really tens of microseconds, and stopped being
+     * long enough once delay_us() became honest.  On responsive hardware they
+     * still exit in a few microseconds, so the larger budget costs nothing. */
+    for (uint32_t dl = systimer_clo() + 100000u;
+         !(xread32(s_op_base + XHCI_OP_USBSTS) & XHCI_STS_HCH);) {
+        if ((int32_t)(dl - systimer_clo()) <= 0) break;
         delay_us(1);
     }
 
@@ -749,12 +775,14 @@ int xhci_init(uintptr_t mmio_base) {
     xwrite32(s_op_base + XHCI_OP_USBCMD, XHCI_CMD_HCRST);
     dsb();
 
-    to = 2000;
-    while ((xread32(s_op_base + XHCI_OP_USBCMD) & XHCI_CMD_HCRST) && --to > 0) {
+    for (uint32_t dl = systimer_clo() + 100000u;
+         xread32(s_op_base + XHCI_OP_USBCMD) & XHCI_CMD_HCRST;) {
+        if ((int32_t)(dl - systimer_clo()) <= 0) break;
         delay_us(1);
     }
-    to = 2000;
-    while ((xread32(s_op_base + XHCI_OP_USBSTS) & XHCI_STS_CNR) && --to > 0) {
+    for (uint32_t dl = systimer_clo() + 100000u;
+         xread32(s_op_base + XHCI_OP_USBSTS) & XHCI_STS_CNR;) {
+        if ((int32_t)(dl - systimer_clo()) <= 0) break;
         delay_us(1);
     }
 
@@ -827,8 +855,10 @@ int xhci_init(uintptr_t mmio_base) {
     xwrite32(s_op_base + XHCI_OP_USBCMD, cmd);
     dsb();
 
-    to = 1000;
-    while ((xread32(s_op_base + XHCI_OP_USBSTS) & XHCI_STS_HCH) && --to > 0) {
+    /* xHCI 4.9.1.1: the controller clears HCH within 16 ms of Run/Stop. */
+    for (uint32_t dl = systimer_clo() + 100000u;
+         xread32(s_op_base + XHCI_OP_USBSTS) & XHCI_STS_HCH;) {
+        if ((int32_t)(dl - systimer_clo()) <= 0) break;
         delay_us(1);
     }
 
@@ -847,14 +877,29 @@ int xhci_init(uintptr_t mmio_base) {
         psc |= XHCI_PORT_PP;
         xwrite32(port_reg, psc);
     }
-    /* The VL805 reports a powered root port synchronously.  Five ms gives the
-     * internal Pi 400 hub time to observe power without adding a fixed 20 ms
-     * to every boot.  The reset below still polls until the port is ready. */
-    delay_us(5000);
+    uintptr_t port1_reg = s_op_base + XHCI_OP_PORTSC_BASE;
+    uint32_t psc;
+    /* PORT_POWER to a stable connection status is not synchronous: the hub
+     * behind the port has to come up on the new supply first, and USB only
+     * requires a device to be able to be reset within 100 ms of VBUS.  Before
+     * delay_us() was calibrated against real time this five ms was tens of ms
+     * of wall clock and covered that anyway; the connection check below then
+     * sampled PORTSC once, so a shortened delay turned "looked too early" into
+     * "no device at all".  Poll for CCS instead: it returns as soon as the
+     * port is genuinely ready and so costs less boot time than the fixed wait
+     * did, while tolerating a slow hub. */
+    {
+        const uint32_t ccs_deadline = systimer_clo() + 250000u;
+        for (;;) {
+            psc = xread32(port1_reg);
+            if (psc & (XHCI_PORT_CCS | XHCI_PORT_CSC)) break;
+            if ((int32_t)(ccs_deadline - systimer_clo()) <= 0) break;
+            delay_us(100);
+        }
+    }
 
     /* 10. Check Root Port 1 (High-Speed USB 2.0 Hub on Pi 400) */
-    uintptr_t port1_reg = s_op_base + XHCI_OP_PORTSC_BASE;
-    uint32_t psc = xread32(port1_reg);
+    psc = xread32(port1_reg);
     fb_log("[XHCI] Port 1 PORTSC=");
     fb_log_hex32(psc);
     fb_log("\n");
@@ -866,9 +911,13 @@ int xhci_init(uintptr_t mmio_base) {
         xwrite32(port1_reg, reset_cmd);
         delay_us(5000);
 
-        for (int r = 0; r < 200; r++) {
+        /* The controller holds PR for at least the 10 ms USB reset signalling,
+         * and a hub that is still negotiating may hold it longer. */
+        const uint32_t pr_deadline = systimer_clo() + 250000u;
+        for (;;) {
             psc = xread32(port1_reg);
             if (!(psc & XHCI_PORT_PR)) break;
+            if ((int32_t)(pr_deadline - systimer_clo()) <= 0) break;
             delay_us(100);
         }
 
@@ -957,6 +1006,25 @@ int xhci_init(uintptr_t mmio_base) {
                 xhci_ep0_control_transfer(1, 0x23, USB_REQ_SET_FEATURE, HUB_FEAT_PORT_POWER, hp, 0, NULL);
             }
             delay_us(hub_power_good_us);
+
+            /* bPwrOn2PwrGood covers VBUS ramping; USB 2.0 7.1.7.5 then lets the
+             * hub debounce a connection for up to 100 ms before it reports it.
+             * The scan below reads each port exactly once, so waiting here for
+             * any port to show CONNECTION is the difference between a slow hub
+             * and no hub at all. */
+            {
+                const uint32_t deb_deadline = systimer_clo() + 200000u;
+                uint32_t connected = 0;
+                while (!connected && (int32_t)(deb_deadline - systimer_clo()) > 0) {
+                    for (uint32_t hp = 1; hp <= hub_ports && !connected; hp++) {
+                        usb_port_status_t st = {0};
+                        if (xhci_ep0_control_transfer(1, 0xA3, USB_REQ_GET_STATUS, 0, hp, 4, &st) == 0)
+                            connected = st.wPortStatus & HUB_PORT_STAT_CONNECTION;
+                    }
+                    if (connected) break;
+                    delay_us(2000);
+                }
+            }
 
             /* Scan Hub Ports */
             for (uint32_t hp = 1; hp <= hub_ports; hp++) {

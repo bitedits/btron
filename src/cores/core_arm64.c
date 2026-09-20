@@ -1031,11 +1031,24 @@ static void drag_preview_cpu_step(GDEV *screen, volatile uint32_t *fb) {
                 if ((s_drag_preview.target->attr & WND_ATTR_COMPACT_TAB) && y < 28) {
                     RECT tab;
                     wget_tab_rect(s_drag_preview.target, &tab);
+                    /* The tab rect follows the window's live geometry while the
+                     * stamp follows the preview's, which lags it, so the two can
+                     * disagree.  Unclamped, tab_left indexes the snapshot before
+                     * its own row and a negative tab_width becomes a huge size_t
+                     * length. */
                     H tab_left = tab.left - s_drag_preview.stamp.left;
                     H tab_width = tab.right - tab.left;
-                    btron_row_blit(&s_desktop_backbuffer[(size_t)(s_drag_preview.stamp.top + y) * BTRON_SCREEN_W + s_drag_preview.stamp.left + tab_left],
-                                   &s_drag_preview_pixels[(size_t)y * s_drag_preview.width + tab_left],
-                                   (size_t)tab_width * sizeof(COLOR));
+                    if (tab_left < 0) {
+                        tab_width += tab_left;
+                        tab_left = 0;
+                    }
+                    if (tab_width > s_drag_preview.width - tab_left)
+                        tab_width = s_drag_preview.width - tab_left;
+                    if (tab_width > 0) {
+                        btron_row_blit(&s_desktop_backbuffer[(size_t)(s_drag_preview.stamp.top + y) * BTRON_SCREEN_W + s_drag_preview.stamp.left + tab_left],
+                                       &s_drag_preview_pixels[(size_t)y * s_drag_preview.width + tab_left],
+                                       (size_t)tab_width * sizeof(COLOR));
+                    }
                 } else {
                     btron_row_blit(&s_desktop_backbuffer[(size_t)(s_drag_preview.stamp.top + y) * BTRON_SCREEN_W + s_drag_preview.stamp.left],
                                    &s_drag_preview_pixels[(size_t)y * s_drag_preview.width],
@@ -2136,6 +2149,12 @@ static void launch_pi4_desktop_session(uint32_t *gpu_fb)
         }
         else if (overlay_redraw) {
             trip_branch = 'O';
+            if (have_move_damage) {
+                /* Same geometry-damage rule as 'A': this fast path outranks 'M'
+                 * while the global menu is open, so it must heal the rect the
+                 * dragged window vacated before the overlay is stamped. */
+                present_damage_render(screen, gpu_fb, &move_damage);
+            }
             RECT mr;
             int have_current_menu_rect = global_menu_get_open_rect(&mr);
             int menu_rect_changed = have_start_menu_rect &&
@@ -2165,14 +2184,22 @@ static void launch_pi4_desktop_session(uint32_t *gpu_fb)
             }
             WND *top = get_top_wnd();
             if (top && top->visible) {
-                H l = top->bounds.left,  r = top->bounds.right;
-                H t = top->bounds.top,   b = top->bounds.bottom;
-                if (l < 0) l = 0;
-                if (r > BTRON_SCREEN_W) r = BTRON_SCREEN_W;
-                if (t < 0) t = 0;
-                if (b > BTRON_SCREEN_H) b = BTRON_SCREEN_H;
-                redraw_top_window();
-                present_backbuffer_rect(gpu_fb, l, t, r, b);
+                /* A move is geometry damage, and this branch outranks 'M'
+                 * whenever an in-app menu is open, so it owns the rect the
+                 * window just vacated.  redraw_top_window() only draws windows
+                 * over the existing backbuffer, and presenting top->bounds
+                 * covers only the new rect: a dragged window left a permanent
+                 * copy of itself at every position it passed through. */
+                RECT need = top->bounds;
+                if (have_move_damage) need = drag_preview_union(&need, &move_damage);
+                if (need.left < 0) need.left = 0;
+                if (need.right > BTRON_SCREEN_W) need.right = BTRON_SCREEN_W;
+                if (need.top < 0) need.top = 0;
+                if (need.bottom > BTRON_SCREEN_H) need.bottom = BTRON_SCREEN_H;
+                if (need.right > need.left && need.bottom > need.top) {
+                    workbench_render_damage_paint(screen, &need);
+                    present_backbuffer_rect(gpu_fb, need.left, need.top, need.right, need.bottom);
+                }
             } else {
                 present_full_render(screen, gpu_fb,
                                     have_present_extra ? &present_extra : NULL);

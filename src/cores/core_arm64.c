@@ -1336,14 +1336,23 @@ static void launch_pi4_desktop_session(uint32_t *gpu_fb)
 
             WND *button_top_before = NULL;
             RECT button_top_bounds = { 0, 0, 0, 0 };
+            int close_button_down = 0;
             if (ev.type == EV_BUT_DOWN || ev.type == EV_BUT_UP) {
                 button_top_before = get_top_wnd();
                 if (button_top_before) button_top_bounds = button_top_before->bounds;
+            }
+            if (ev.type == EV_BUT_DOWN) {
+                WND *hit = find_wnd_at(ev.pos.x, ev.pos.y);
+                close_button_down = hit && whit_test_close_btn(hit, ev.pos.x, ev.pos.y);
             }
 
             workbench_process_event(screen, &ev);
 
             WND *button_top_after = get_top_wnd();
+            if (close_button_down) {
+                redraw = 1;
+                have_focus_damage = 0;
+            }
             if (ev.type == EV_BUT_DOWN && button_top_before && button_top_after &&
                 button_top_after != button_top_before && button_top_after->visible) {
                 focus_damage = drag_preview_union(&button_top_bounds, &button_top_after->bounds);
@@ -1373,7 +1382,10 @@ static void launch_pi4_desktop_session(uint32_t *gpu_fb)
             }
 
             if (ev.type == EV_MOUSE_MOVE) {
-                if (global_menu_is_open() || tracker_is_menu_open()) {
+                int menu_open_now = global_menu_is_open() || tracker_is_menu_open();
+                if (menu_open_at_loop_start && !menu_open_now) {
+                    redraw = 1;
+                } else if (menu_open_now) {
                     /* Hovering an open menu only moves the highlight: repaint
                      * the overlay, NOT the whole desktop.  A full composite per
                      * mouse-move was starving the 1 ms INPUT plane (laggy menus). */

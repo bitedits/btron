@@ -533,10 +533,19 @@ BOOL global_menu_handle_mouse_move(H x, H y) {
 
         /* Tracker menu hover tracking */
         if (g_gmenu.active_menu == GMENU_HDR_BTRON && tracker_is_menu_open()) {
-            return tracker_handle_mouse_move(x, y);
+            RECT tracker_rect;
+            if (tracker_get_menu_rect(&tracker_rect) &&
+                x >= tracker_rect.left && x <= tracker_rect.right &&
+                y >= tracker_rect.top && y <= tracker_rect.bottom) {
+                return tracker_handle_mouse_move(x, y);
+            }
         }
 
-        return FALSE;
+        if (y < 0 || y > 25) {
+            global_menu_close();
+            return TRUE;
+        }
+        return TRUE;
     }
 
     /* 2. When no menu is open: track top-level header hover highlighting */

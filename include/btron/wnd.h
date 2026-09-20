@@ -57,6 +57,12 @@ ER   rsz_wnd(WND *wnd, H w, H h);
 ER   wrsz_wnd(WND *wnd, const RECT *r);
 ER   inval_wnd(WND *wnd);
 
+/* App/shell-driven damage accumulator.  inval_wnd() and desktop code add rects
+ * they repaint; wnd_take_inval_damage() removes and returns their union so the
+ * composite loop presents exactly what changed instead of guessing. */
+void wnd_inval_damage_rect(const RECT *r);
+BOOL wnd_take_inval_damage(RECT *out);
+
 ER   wset_tab_offset(WND *wnd, H offset_x);
 ER   wget_tab_rect(const WND *wnd, RECT *tab_rect);
 BOOL whit_test_tab(const WND *wnd, H x, H y);

@@ -27,7 +27,15 @@ static WND *g_wnd_head = NULL;
 static ID g_next_wnd_id = 1;
 static GDEV *g_screen_dev = NULL;
 
+/* Accumulated app invalidation damage for the pending composite.  Apps render
+ * into their offscreen GDEV and call inval_wnd(); without this the UI plane had
+ * no way to learn what a click changed and repainted the whole top window (or
+ * the whole desktop) on every button edge. */
+static RECT s_wnd_inval_damage = { 0, 0, 0, 0 };
+static BOOL s_wnd_inval_valid = FALSE;
+
 static void wnd_mgr_window_destroyed(WND *wnd);
+static void wnd_inval_rect(const RECT *r);
 
 ER init_wnd_mgr(GDEV *screen_dev) { if (!screen_dev) return E_PAR;
     g_screen_dev = screen_dev;
@@ -203,6 +211,9 @@ ER cls_wnd(WND *wnd) {
 
     if (g_wnd_head) g_wnd_head->focused = TRUE;
 
+    /* The vacated rect is desktop (and possibly lower windows) from now on. */
+    wnd_inval_rect(&wnd->bounds);
+
     if (wnd->dev) cls_dev(wnd->dev);
     free(wnd);
     return E_OK;
@@ -306,9 +317,35 @@ ER wrsz_wnd(WND *wnd, const RECT *r) {
     return rsz_wnd(wnd, w, h);
 }
 
+static void wnd_inval_rect(const RECT *r) {
+    if (!r || r->right <= r->left || r->bottom <= r->top) return;
+    if (!s_wnd_inval_valid) {
+        s_wnd_inval_damage = *r;
+        s_wnd_inval_valid = TRUE;
+        return;
+    }
+    if (r->left < s_wnd_inval_damage.left)   s_wnd_inval_damage.left = r->left;
+    if (r->top < s_wnd_inval_damage.top)     s_wnd_inval_damage.top = r->top;
+    if (r->right > s_wnd_inval_damage.right) s_wnd_inval_damage.right = r->right;
+    if (r->bottom > s_wnd_inval_damage.bottom) s_wnd_inval_damage.bottom = r->bottom;
+}
+
+void wnd_inval_damage_rect(const RECT *r) {
+    wnd_inval_rect(r);
+}
+
+BOOL wnd_take_inval_damage(RECT *out) {
+    if (!s_wnd_inval_valid) return FALSE;
+    *out = s_wnd_inval_damage;
+    s_wnd_inval_damage.left = s_wnd_inval_damage.top = 0;
+    s_wnd_inval_damage.right = s_wnd_inval_damage.bottom = 0;
+    s_wnd_inval_valid = FALSE;
+    return TRUE;
+}
+
 ER inval_wnd(WND *wnd) {
     if (!wnd) return E_PAR;
-    /* In immediate composite architecture, dirty window is redrawn on next frame */
+    wnd_inval_rect(&wnd->bounds);
     return E_OK;
 }
 

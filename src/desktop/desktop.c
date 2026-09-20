@@ -218,6 +218,13 @@ BOOL desktop_handle_click(H x, H y) {
         get_desktop_icon_layout(i, NULL, NULL, NULL, NULL, NULL, NULL, &hit);
         if (x >= hit.left && x <= hit.right && y >= hit.top && y <= hit.bottom) {
             if (s_desktop_icons[i].action) {
+                /* The icon plate sits under whatever the action opens, and the
+                 * action may create a window without invalidating it itself. */
+                RECT plate;
+                get_desktop_icon_layout(i, NULL, &plate, NULL, NULL, NULL, NULL, NULL);
+                wnd_inval_damage_rect(&plate);
+                RECT whole = { 0, 0, 1024, 768 };
+                wnd_inval_damage_rect(&whole);
                 s_desktop_icons[i].action();
             }
             return TRUE;

@@ -1111,6 +1111,23 @@ static void present_full_render(GDEV *screen, volatile uint32_t *fb, const RECT 
         s_async_rt_stats.present_max_us = s_async_rt_stats.present_us;
 }
 
+/* Damage-driven present for shell interactions (focus click, close, button
+ * edges): repaint and transfer exactly the invalidated rects.  Reported to the
+ * HUD as 'd' so a bounded click repaint is distinguishable from 'f' full render. */
+static void present_damage_render(GDEV *screen, volatile uint32_t *fb, const RECT *r) {
+    uint32_t t0 = *(volatile uint32_t *)(TIMER_BASE + 0x04);
+    workbench_render_damage(screen, r);
+    present_backbuffer_rect(fb, r->left, r->top, r->right, r->bottom);
+    uint32_t t1 = *(volatile uint32_t *)(TIMER_BASE + 0x04);
+    wnd_get_union_bounds(&s_prev_win_union);
+    if ((t1 - t0) > s_async_rt_stats.composite_max_us) {
+        s_async_rt_stats.composite_max_us = t1 - t0;
+        s_hud_path_live = 'd';
+        s_hud_area_live = ((uint32_t)(r->right - r->left) * (uint32_t)(r->bottom - r->top) * 100u) /
+                          ((uint32_t)BTRON_SCREEN_W * BTRON_SCREEN_H);
+    }
+}
+
 static void present_move_render(GDEV *screen, volatile uint32_t *fb,
                                 const RECT *old_damage, const RECT *new_damage) {
     if (!old_damage || !new_damage) return;
@@ -1309,6 +1326,10 @@ static void launch_pi4_desktop_session(uint32_t *gpu_fb)
         int have_focus_damage = 0;
         RECT focus_old_tab = { 0, 0, 0, 0 };
         int have_focus_old_tab = 0;
+        RECT trip_damage = { 0, 0, 0, 0 };
+        int have_trip_damage = 0;
+        RECT button_damage = { 0, 0, 0, 0 };
+        int have_button_damage = 0;
         int title_drag_release = 0;
         RECT title_drag_old = { 0, 0, 0, 0 };
         RECT title_drag_new = { 0, 0, 0, 0 };
@@ -1330,6 +1351,16 @@ static void launch_pi4_desktop_session(uint32_t *gpu_fb)
         int have_close_damage = 0;
         RECT close_focus_tab = { 0, 0, 0, 0 };
         int have_close_focus_tab = 0;
+        /* Damage produced between UI trips (async window output, timers) must
+         * reach the screen on this one. */
+        RECT pending_damage;
+        if (wnd_take_inval_damage(&pending_damage)) {
+            if (have_trip_damage)
+                trip_damage = drag_preview_union(&trip_damage, &pending_damage);
+            else
+                trip_damage = pending_damage;
+            have_trip_damage = 1;
+        }
         for (uint32_t ev_iter = 0; ev_iter < ASYNC_UI_EVENT_BUDGET && get_evt(&ev, 0) == E_OK; ev_iter++) {
             int preview_release = 0;
             if (ev.type == EV_BUT_UP && s_drag_preview.active &&
@@ -1365,14 +1396,16 @@ static void launch_pi4_desktop_session(uint32_t *gpu_fb)
 
             WND *button_top_before = NULL;
             RECT button_top_bounds = { 0, 0, 0, 0 };
+            WND *button_hit = NULL;
             int close_button_down = 0;
             int title_drag_start = 0;
             if (ev.type == EV_BUT_DOWN || ev.type == EV_BUT_UP) {
                 button_top_before = get_top_wnd();
                 if (button_top_before) button_top_bounds = button_top_before->bounds;
+                button_hit = find_wnd_at(ev.pos.x, ev.pos.y);
             }
             if (ev.type == EV_BUT_DOWN) {
-                WND *hit = find_wnd_at(ev.pos.x, ev.pos.y);
+                WND *hit = button_hit;
                 close_button_down = hit && whit_test_close_btn(hit, ev.pos.x, ev.pos.y);
                 if (close_button_down) {
                     if (!have_close_damage) {
@@ -1393,6 +1426,17 @@ static void launch_pi4_desktop_session(uint32_t *gpu_fb)
             }
 
             workbench_process_event(screen, &ev);
+
+            /* Whatever the dispatch invalidated (app inval_wnd, desktop icon
+             * action, window destruction) is real pixel damage; the union of
+             * the trip's events is the smallest honest present rect. */
+            if (wnd_take_inval_damage(&pending_damage)) {
+                if (have_trip_damage)
+                    trip_damage = drag_preview_union(&trip_damage, &pending_damage);
+                else
+                    trip_damage = pending_damage;
+                have_trip_damage = 1;
+            }
 
             WND *button_top_after = get_top_wnd();
             if (close_button_down) {
@@ -1482,6 +1526,16 @@ static void launch_pi4_desktop_session(uint32_t *gpu_fb)
                     /* In-app menu open (click opened it, or a click/hover within
                      * it): repaint just the top window that owns the dropdown. */
                     appmenu_redraw = 1;
+                } else if (have_trip_damage &&
+                           (ev.type == EV_BUT_DOWN || ev.type == EV_BUT_UP ||
+                            ev.type == EV_KEY_DOWN)) {
+                    /* The dispatch told us exactly what its pixels changed. */
+                    button_damage = trip_damage;
+                    have_button_damage = 1;
+                } else if (ev.type == EV_BUT_UP) {
+                    /* A release that invalidated nothing and raised/closed
+                     * nothing changed no pixels: the old path still ran a
+                     * full-size top-window repaint per release. */
                 } else if (have_focus_damage) {
                 } else if (title_drag_start) {
                 } else if ((ev.type == EV_BUT_DOWN || ev.type == EV_BUT_UP) &&
@@ -1493,7 +1547,17 @@ static void launch_pi4_desktop_session(uint32_t *gpu_fb)
                            button_top_before->bounds.bottom == button_top_bounds.bottom) {
                     local_button_redraw = 1;
                     local_button_target = button_top_before;
-                } else {
+                } else if (ev.type == EV_BUT_DOWN && button_hit) {
+                    /* Unknown delta, but it can only live inside the window
+                     * that received the click. */
+                    button_damage = button_hit->bounds;
+                    have_button_damage = 1;
+                } else if (ev.type == EV_BUT_DOWN && button_top_before) {
+                    local_button_redraw = 1;
+                    local_button_target = button_top_before;
+                } else if (ev.type == EV_BUT_DOWN || ev.type == EV_BUT_UP) {
+                    /* Desktop icons are painted by the background pass, and no
+                     * window exists to bound the delta. */
                     redraw = 1;
                 }
                 if (ev.type == EV_KEY_DOWN && ev.key != '\r' && ev.key != '\n')
@@ -1601,6 +1665,19 @@ static void launch_pi4_desktop_session(uint32_t *gpu_fb)
             }
         }
 
+        /* Any full render in this trip must cover app invalidations too. */
+        if (have_trip_damage && have_button_damage) {
+            if (!have_present_extra) {
+                present_extra = trip_damage;
+                have_present_extra = 1;
+            } else {
+                if (trip_damage.left < present_extra.left) present_extra.left = trip_damage.left;
+                if (trip_damage.top < present_extra.top) present_extra.top = trip_damage.top;
+                if (trip_damage.right > present_extra.right) present_extra.right = trip_damage.right;
+                if (trip_damage.bottom > present_extra.bottom) present_extra.bottom = trip_damage.bottom;
+            }
+        }
+
         if ((non_move_event && !move_drag) || menu_open_at_loop_start || appmenu_open_at_loop_start ||
             overlay_redraw || appmenu_redraw) {
             if (drag_preview_reset())
@@ -1627,25 +1704,15 @@ static void launch_pi4_desktop_session(uint32_t *gpu_fb)
             s_present_cursor_dirty = 1;
         }
         else if (have_close_damage) {
-            workbench_render_damage(screen, &close_damage);
-            present_backbuffer_rect(gpu_fb, close_damage.left, close_damage.top,
-                                    close_damage.right, close_damage.bottom);
-            if (have_close_focus_tab) {
-                workbench_render_damage(screen, &close_focus_tab);
-                present_backbuffer_rect(gpu_fb, close_focus_tab.left, close_focus_tab.top,
-                                        close_focus_tab.right, close_focus_tab.bottom);
-            }
+            present_damage_render(screen, gpu_fb, &close_damage);
+            if (have_close_focus_tab)
+                present_damage_render(screen, gpu_fb, &close_focus_tab);
             s_present_cursor_dirty = 1;
         }
         else if (have_focus_damage) {
-            workbench_render_damage(screen, &focus_damage);
-            present_backbuffer_rect(gpu_fb, focus_damage.left, focus_damage.top,
-                                    focus_damage.right, focus_damage.bottom);
-            if (have_focus_old_tab) {
-                workbench_render_damage(screen, &focus_old_tab);
-                present_backbuffer_rect(gpu_fb, focus_old_tab.left, focus_old_tab.top,
-                                        focus_old_tab.right, focus_old_tab.bottom);
-            }
+            present_damage_render(screen, gpu_fb, &focus_damage);
+            if (have_focus_old_tab)
+                present_damage_render(screen, gpu_fb, &focus_old_tab);
             s_present_cursor_dirty = 1;
         }
         else if (menu_leave_redraw && have_start_menu_rect) {
@@ -1742,6 +1809,14 @@ static void launch_pi4_desktop_session(uint32_t *gpu_fb)
             if (right > BTRON_SCREEN_W) right = BTRON_SCREEN_W;
             if (bottom > BTRON_SCREEN_H) bottom = BTRON_SCREEN_H;
             present_backbuffer_rect(gpu_fb, left, top, right, bottom);
+            s_present_cursor_dirty = 1;
+        }
+        else if (have_button_damage) {
+            if (panel_redraw) {
+                render_system_panel(screen);
+                present_backbuffer_rect(gpu_fb, 0, 0, BTRON_SCREEN_W, 28);
+            }
+            present_damage_render(screen, gpu_fb, &button_damage);
             s_present_cursor_dirty = 1;
         }
         else if (overlay_redraw) {

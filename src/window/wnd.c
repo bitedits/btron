@@ -625,6 +625,10 @@ BOOL wnd_mgr_is_interacting(void) {
     return (s_wnd_dragging || s_wnd_sliding_tab || s_wnd_resizing);
 }
 
+WND* wnd_mgr_get_drag_target(void) {
+    return s_wnd_drag_target;
+}
+
 BOOL wnd_mgr_handle_event(const EVT *ev) {
     if (!ev) return FALSE;
 

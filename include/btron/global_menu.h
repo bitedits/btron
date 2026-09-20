@@ -9,14 +9,13 @@ extern "C" {
 #endif
 
 #define GMENU_MAX_ITEMS     20
-#define GMENU_HEADER_COUNT  5
+#define GMENU_HEADER_COUNT  4
 
 /* Global Menu Header Indices */
 #define GMENU_HDR_BTRON     0   /* ［BTRON］ Deskbar Start */
 #define GMENU_HDR_SYSTEM    1   /* システム(S) */
 #define GMENU_HDR_OBJECTS   2   /* 実身・仮身(O) */
 #define GMENU_HDR_WINDOWS   3   /* ウィンドウ(W) */
-#define GMENU_HDR_TOOLS     4   /* 道具・文字(T) */
 
 /* Global Menu Command IDs */
 enum {

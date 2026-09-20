@@ -50,7 +50,7 @@ static void test_global_menu_geometry(void) {
 
     /* Verify non-overfull metrics for headers */
     const char *h_titles[GMENU_HEADER_COUNT] = {
-        "［BTRON］", "システム(S)", "実身・仮身(O)", "ウィンドウ(W)", "道具・文字(T)"
+        "［BTRON］", "システム(S)", "実身・仮身(O)", "ウィンドウ(W)"
     };
 
     for (int h = 0; h < GMENU_HEADER_COUNT; h++) {
@@ -85,11 +85,6 @@ static void test_header_hit_and_hover(void) {
     TEST_ASSERT(hit && global_menu_get_hover_header() == GMENU_HDR_WINDOWS,
                 "Hovering over 'ウィンドウ(W)' sets hover_header to 3");
 
-    /* Hover over Header 4: 道具・文字(T) (x = 500, y = 10) */
-    hit = global_menu_handle_mouse_move(500, 10);
-    TEST_ASSERT(hit && global_menu_get_hover_header() == GMENU_HDR_TOOLS,
-                "Hovering over '道具・文字(T)' sets hover_header to 4");
-
     /* Hover outside the bar (y = 60) */
     hit = global_menu_handle_mouse_move(300, 60);
     TEST_ASSERT(!hit && global_menu_get_hover_header() == -1,
@@ -118,13 +113,8 @@ static void test_dropdown_activation_and_fluid_tracking(void) {
     TEST_ASSERT(global_menu_get_active() == GMENU_HDR_WINDOWS,
                 "Fluid tracking: Gliding over 'ウィンドウ(W)' switches active menu to 3");
 
-    /* Fluid hot tracking: Move pointer to 道具・文字(T) (x = 500, y = 10) */
-    global_menu_handle_mouse_move(500, 10);
-    TEST_ASSERT(global_menu_get_active() == GMENU_HDR_TOOLS,
-                "Fluid tracking: Gliding over '道具・文字(T)' switches active menu to 4");
-
     /* Click header again to toggle close */
-    global_menu_handle_mouse_down(500, 10);
+    global_menu_handle_mouse_down(380, 10);
     TEST_ASSERT(!global_menu_is_open() && global_menu_get_active() == -1,
                 "Clicking active header toggles menu closed");
 }

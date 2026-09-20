@@ -118,22 +118,6 @@ static GMenuHeader g_headers[GMENU_HEADER_COUNT] = {
             { "次のウィンドウ (Cycle Focus)",    "Alt+Tab",  GMENU_CMD_WND_CYCLE, FALSE, FALSE, TRUE },
             { "---", "", GMENU_CMD_NONE, TRUE, FALSE, FALSE }
         }
-    },
-    {
-        .title = "道具・文字(T)",
-        .rect = { 454, 2, 574, 23 },
-        .item_count = 9,
-        .items = {
-            { "文字パレット (TRON Palette)",     "F12", GMENU_CMD_TOOL_PALETTE, FALSE, FALSE, TRUE },
-            { "TRONコード検索 (TRON-Code)",     "",    GMENU_CMD_TOOL_TRONCODE, FALSE, FALSE, TRUE },
-            { "Mozc 日本語辞書 (IME Tool)",     "",    GMENU_CMD_TOOL_MOZC_DICT, FALSE, FALSE, TRUE },
-            { "---", "", GMENU_CMD_NONE, TRUE, FALSE, FALSE },
-            { "文書編集 (Editor)",            "",    GMENU_CMD_TOOL_TEDITOR, FALSE, FALSE, TRUE },
-            { "表計算・APL (Matrix)",           "",    GMENU_CMD_TOOL_MATRIX, FALSE, FALSE, TRUE },
-            { "端末 (gterm Terminal)",          "",    GMENU_CMD_TOOL_TERMINAL, FALSE, FALSE, TRUE },
-            { "---", "", GMENU_CMD_NONE, TRUE, FALSE, FALSE },
-            { "電子帳票 (Clarity DTP)",         "",    GMENU_CMD_TOOL_CLARITY, FALSE, FALSE, TRUE }
-        }
     }
 };
 
@@ -317,7 +301,7 @@ void global_menu_render_bar(GDEV *dev) {
         H left = g_headers[GMENU_HEADER_COUNT - 1].rect.right + 8;
         H right = tip_btn.left - 6;
         if (right - left >= 72) {
-            char async_buf[16];
+            char async_buf[28];
             RECT async_r = { left, 3, right, 23 };
             async_rt_format_compact_status(async_buf, sizeof(async_buf));
             fill_rec(dev, &async_r, COLOR_LTGRAY);

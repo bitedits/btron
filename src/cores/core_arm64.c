@@ -94,6 +94,9 @@ static int s_present_fast_key_update = 0;
  * monopolising the CPU. */
 static uint32_t s_input_wcet_us = 0;
 static uint32_t s_ui_wcet_us = 0;
+static uint32_t s_hud_comp_ms = 0;
+static uint32_t s_hud_pres_ms = 0;
+static uint32_t s_hud_wcet_ms = 0;
 
 /* CPU presentation is sliced into row bands.  Each trip copies as many
  * PRESENT_COPY_ROWS_PER_STEP chunks as fit inside ASYNC_PRESENT_BUDGET_US, so a
@@ -128,7 +131,7 @@ void async_rt_format_compact_status(char *buf, size_t len) {
     extern uint32_t xhci_kbd_bound(void);
     extern uint32_t arm64_irq_selftest_seen(void);
     uint32_t gap = s_async_rt_stats.input_gap_max_us / 1000u;
-    if (gap > 99u) gap = 99u;   /* 2 digits so the 9-char string fits 72px */
+    if (gap > 99u) gap = 99u;
     if (!buf || len == 0) return;
     /* A1 = IRQ plane live.  When the tick never confirmed, the A field
      * carries the boot self-test verdict instead of a bare 0:
@@ -136,11 +139,13 @@ void async_rt_format_compact_status(char *buf, size_t len) {
      *   T = forced-pending IRQ WAS taken      -> timer never asserts PPI */
     char a0 = arm64_irq_selftest_seen() ? 'T' : 'V';
     if (s_async_irq_active) {
-        tkl_snprintf(buf, len, "A1M%uK%uG%u",
-                     xhci_mouse_count(), xhci_kbd_bound(), gap);
+        tkl_snprintf(buf, len, "A1M%uK%uG%u C%uP%uW%u",
+                     xhci_mouse_count(), xhci_kbd_bound(), gap,
+                     s_hud_comp_ms, s_hud_pres_ms, s_hud_wcet_ms);
     } else {
-        tkl_snprintf(buf, len, "A%cM%uK%uG%u", a0,
-                     xhci_mouse_count(), xhci_kbd_bound(), gap);
+        tkl_snprintf(buf, len, "A%cM%uK%uG%u C%uP%uW%u", a0,
+                     xhci_mouse_count(), xhci_kbd_bound(), gap,
+                     s_hud_comp_ms, s_hud_pres_ms, s_hud_wcet_ms);
     }
 }
 
@@ -942,6 +947,8 @@ static void launch_pi4_desktop_session(uint32_t *gpu_fb)
         RECT start_menu_rect;
         int have_start_menu_rect = menu_open_at_loop_start &&
                                    global_menu_get_open_rect(&start_menu_rect);
+        RECT move_damage = { 0, 0, 0, 0 };
+        int have_move_damage = 0;
         for (uint32_t ev_iter = 0; ev_iter < ASYNC_UI_EVENT_BUDGET && get_evt(&ev, 0) == E_OK; ev_iter++) {
             if (ev.type == EV_KEY_DOWN && ev.key == 0x1B /* Escape */) {
                 s_gui_active = 0;
@@ -1001,10 +1008,12 @@ static void launch_pi4_desktop_session(uint32_t *gpu_fb)
              * of the LAST second, not an all-time high-water mark, so it tracks
              * current responsiveness instead of latching a single boot stall. */
             s_async_rt_stats.input_gap_max_us = s_async_rt_stats.input_gap_us;
-            /* DIAGNOSTIC: report the worst full-render split since the last
-             * second, but ONLY when a full render actually ran (drag / click /
-             * focus).  Idle seconds stay silent so the once-per-second UART
-             * write never perturbs hover or the input cadence we measure. */
+            s_hud_comp_ms = s_async_rt_stats.composite_max_us / 1000u;
+            s_hud_pres_ms = s_async_rt_stats.present_max_us / 1000u;
+            s_hud_wcet_ms = s_ui_wcet_us / 1000u;
+            if (s_hud_comp_ms > 99u) s_hud_comp_ms = 99u;
+            if (s_hud_pres_ms > 99u) s_hud_pres_ms = 99u;
+            if (s_hud_wcet_ms > 99u) s_hud_wcet_ms = 99u;
             if (s_async_rt_stats.composite_max_us) {
                 uart_puts("[UI]C");
                 uart_hex32(s_async_rt_stats.composite_max_us);
@@ -1013,10 +1022,10 @@ static void launch_pi4_desktop_session(uint32_t *gpu_fb)
                 uart_puts("W");
                 uart_hex32(s_ui_wcet_us);
                 uart_puts("\n");
-                s_async_rt_stats.composite_max_us = 0;
-                s_async_rt_stats.present_max_us = 0;
-                s_ui_wcet_us = 0;
             }
+            s_async_rt_stats.composite_max_us = 0;
+            s_async_rt_stats.present_max_us = 0;
+            s_ui_wcet_us = 0;
         }
 
         /* Full UI path: redraw windows, menus, backbuffer blit */

@@ -188,7 +188,6 @@ typedef struct {
     BOOL target_hidden;
     BOOL opacity_known;
     BOOL opacity_opaque;
-    BOOL finish_requested;
     BOOL active;
 } drag_preview_t;
 
@@ -854,7 +853,6 @@ static BOOL drag_preview_reset(void) {
     s_drag_preview.target = NULL;
     s_drag_preview.active = FALSE;
     s_drag_preview.target_hidden = FALSE;
-    s_drag_preview.finish_requested = FALSE;
     s_drag_preview.phase = DRAG_PREVIEW_IDLE;
     return redraw_needed;
 }
@@ -882,7 +880,6 @@ static int drag_preview_capture(GDEV *screen, WND *target, const RECT *bounds) {
     s_drag_preview.compose_row = 0;
     s_drag_preview.present_row = 0;
     s_drag_preview.target_hidden = FALSE;
-    s_drag_preview.finish_requested = FALSE;
     s_drag_preview.opacity_known = s_drag_preview_opacity_valid &&
                                      s_drag_preview_opacity_target == target &&
                                      s_drag_preview_opacity_dev == target->dev;
@@ -988,13 +985,6 @@ static void drag_preview_cpu_step(GDEV *screen, volatile uint32_t *fb) {
                 s_drag_preview.wanted.right != s_drag_preview.bounds.right ||
                 s_drag_preview.wanted.bottom != s_drag_preview.bounds.bottom) {
                 s_drag_preview.phase = DRAG_PREVIEW_PREPARE;
-            } else if (s_drag_preview.finish_requested) {
-                s_drag_preview.target->visible = TRUE;
-                s_drag_preview.target_hidden = FALSE;
-                s_drag_preview.finish_requested = FALSE;
-                s_drag_preview.active = FALSE;
-                s_drag_preview.phase = DRAG_PREVIEW_IDLE;
-                s_drag_preview_cpu_active = 0;
             } else {
                 s_drag_preview.phase = DRAG_PREVIEW_IDLE;
                 s_drag_preview_cpu_active = 0;
@@ -1026,21 +1016,6 @@ static int present_drag_preview(GDEV *screen, volatile uint32_t *fb, WND *target
         current->bottom - current->top != s_drag_preview.height)
         return 0;
     s_drag_preview.wanted = *current;
-    if (s_drag_preview.phase == DRAG_PREVIEW_IDLE) {
-        s_drag_preview.phase = DRAG_PREVIEW_PREPARE;
-        s_drag_preview_cpu_active = 1;
-    }
-    return 1;
-}
-
-static int finish_drag_preview(WND *target, const RECT *bounds) {
-    if (!s_drag_preview.active || s_drag_preview.target != target ||
-        !drag_preview_bounds_valid(bounds) ||
-        bounds->right - bounds->left != s_drag_preview.width ||
-        bounds->bottom - bounds->top != s_drag_preview.height)
-        return 0;
-    s_drag_preview.wanted = *bounds;
-    s_drag_preview.finish_requested = TRUE;
     if (s_drag_preview.phase == DRAG_PREVIEW_IDLE) {
         s_drag_preview.phase = DRAG_PREVIEW_PREPARE;
         s_drag_preview_cpu_active = 1;
@@ -1303,15 +1278,13 @@ static void launch_pi4_desktop_session(uint32_t *gpu_fb)
         RECT move_last = { 0, 0, 0, 0 };
         int have_move_damage = 0;
         for (uint32_t ev_iter = 0; ev_iter < ASYNC_UI_EVENT_BUDGET && get_evt(&ev, 0) == E_OK; ev_iter++) {
-            int preview_release = 0;
             if (ev.type == EV_BUT_UP && s_drag_preview.active &&
                 wnd_mgr_get_drag_target() == s_drag_preview.target) {
                 title_drag_release = 1;
-                preview_release = 1;
                 title_drag_old = s_drag_preview.bounds;
                 title_drag_new = s_drag_preview.target->bounds;
             }
-            if (ev.type != EV_MOUSE_MOVE && !preview_release) {
+            if (ev.type != EV_MOUSE_MOVE) {
                 non_move_event = 1;
                 if (drag_preview_reset())
                     redraw = 1;
@@ -1520,10 +1493,7 @@ static void launch_pi4_desktop_session(uint32_t *gpu_fb)
             !menu_open_at_loop_start && !appmenu_open_at_loop_start &&
             !overlay_redraw && !appmenu_redraw && have_move_damage) {
             if (title_drag_release) {
-                if (!finish_drag_preview(s_drag_preview.target, &move_last)) {
-                    drag_preview_reset();
-                    present_move_render(screen, gpu_fb, &move_first, &move_last);
-                }
+                present_move_render(screen, gpu_fb, &move_first, &move_last);
             } else if (!present_drag_preview(screen, gpu_fb, s_drag_preview.target,
                                              &move_first, &move_last)) {
                 drag_preview_reset();

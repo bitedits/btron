@@ -68,6 +68,7 @@ void redraw_all_windows_clip(const RECT *damage, BOOL blit_only);
 void redraw_top_window(void);
 WND* find_wnd_at(H x, H y);
 WND* get_top_wnd(void);
+BOOL wnd_mgr_contains(const WND *wnd);
 
 /* Union of all visible window bounds; empty rect (0,0,0,0) when none. */
 void wnd_get_union_bounds(RECT *out);

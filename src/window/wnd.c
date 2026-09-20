@@ -27,6 +27,8 @@ static WND *g_wnd_head = NULL;
 static ID g_next_wnd_id = 1;
 static GDEV *g_screen_dev = NULL;
 
+static void wnd_mgr_window_destroyed(WND *wnd);
+
 ER init_wnd_mgr(GDEV *screen_dev) { if (!screen_dev) return E_PAR;
     g_screen_dev = screen_dev;
     g_wnd_head = NULL;
@@ -190,6 +192,7 @@ WND* opn_wnd(const char *title, H x, H y, H w, H h, UW attr) {
 ER cls_wnd(WND *wnd) {
     if (!wnd) return E_PAR;
 
+    wnd_mgr_window_destroyed(wnd);
     if (wnd->destroy) {
         wnd->destroy(wnd);
     }
@@ -565,6 +568,13 @@ WND* get_top_wnd(void) {
     return g_wnd_head;
 }
 
+BOOL wnd_mgr_contains(const WND *wnd) {
+    for (WND *curr = g_wnd_head; curr; curr = curr->next) {
+        if (curr == wnd) return TRUE;
+    }
+    return FALSE;
+}
+
 WND* get_wnd_list(void) {
     return g_wnd_head;
 }
@@ -684,6 +694,21 @@ static H    s_wnd_resize_start_x = 0;
 static H    s_wnd_resize_start_y = 0;
 static H    s_wnd_resize_pending_w = 0;
 static H    s_wnd_resize_pending_h = 0;
+
+static void wnd_mgr_window_destroyed(WND *wnd) {
+    if (s_wnd_drag_target == wnd) {
+        s_wnd_dragging = FALSE;
+        s_wnd_drag_target = NULL;
+    }
+    if (s_wnd_slide_target == wnd) {
+        s_wnd_sliding_tab = FALSE;
+        s_wnd_slide_target = NULL;
+    }
+    if (s_wnd_resize_target == wnd) {
+        s_wnd_resizing = FALSE;
+        s_wnd_resize_target = NULL;
+    }
+}
 
 BOOL wnd_mgr_is_interacting(void) {
     return (s_wnd_dragging || s_wnd_sliding_tab || s_wnd_resizing);

@@ -75,6 +75,10 @@ static async_rt_stats_t s_async_rt_stats;
 static pointer_slot_t s_pointer_slot;
 static pointer_snapshot_t s_input_last;
 static uint8_t s_input_prev_buttons = 0;
+#define BUTTON_EDGE_RING_SIZE 256u
+static volatile uint8_t s_button_edge_ring[BUTTON_EDGE_RING_SIZE];
+static volatile uint16_t s_button_edge_head = 0;
+static volatile uint16_t s_button_edge_tail = 0;
 
 /* 1 = the hardware 1 kHz IRQ input plane is armed (BCM2711 + VL805 xHCI).
  * 0 = legacy cooperative drain inside the GUI loop (QEMU / DWC2 / Pi 3). */
@@ -102,6 +106,7 @@ static char s_hud_path_live = '-';
 static uint32_t s_hud_area_live = 0;
 static char s_hud_path = '-';
 static uint32_t s_hud_area = 0;
+static int s_ui_mouse_urgent = 0;
 
 /* CPU presentation is sliced into row bands.  Each trip copies as many
  * PRESENT_COPY_ROWS_PER_STEP chunks as fit inside ASYNC_PRESENT_BUDGET_US, so a
@@ -847,7 +852,8 @@ static int drag_preview_prepare_one_tile(GDEV *screen) {
 static BOOL drag_preview_reset(void) {
     BOOL redraw_needed = FALSE;
     if (s_drag_preview_dma_active) bcm2711_dma_abort(0);
-    if (s_drag_preview.target && s_drag_preview.target_hidden) {
+    if (s_drag_preview.target && s_drag_preview.target_hidden &&
+        wnd_mgr_contains(s_drag_preview.target)) {
         s_drag_preview.target->visible = TRUE;
         redraw_needed = TRUE;
     }
@@ -900,6 +906,10 @@ static int drag_preview_capture(GDEV *screen, WND *target, const RECT *bounds) {
 
 static void drag_preview_cpu_step(GDEV *screen, volatile uint32_t *fb) {
     if (!screen || !fb || !s_drag_preview_cpu_active || !s_drag_preview.active) return;
+    if (!wnd_mgr_contains(s_drag_preview.target)) {
+        drag_preview_reset();
+        return;
+    }
 
     uint32_t start_us = *(volatile uint32_t *)(TIMER_BASE + 0x04);
     volatile uint32_t *dst = fb + s_present_front_page * BTRON_SCREEN_W * BTRON_SCREEN_H;
@@ -959,9 +969,19 @@ static void drag_preview_cpu_step(GDEV *screen, volatile uint32_t *fb) {
         if (s_drag_preview.phase == DRAG_PREVIEW_STAMP) {
             if (s_drag_preview.compose_row < s_drag_preview.height) {
                 H y = s_drag_preview.compose_row++;
-                btron_row_blit(&s_desktop_backbuffer[(size_t)(s_drag_preview.stamp.top + y) * BTRON_SCREEN_W + s_drag_preview.stamp.left],
-                               &s_drag_preview_pixels[(size_t)y * s_drag_preview.width],
-                               (size_t)s_drag_preview.width * sizeof(COLOR));
+                if ((s_drag_preview.target->attr & WND_ATTR_COMPACT_TAB) && y < 28) {
+                    RECT tab;
+                    wget_tab_rect(s_drag_preview.target, &tab);
+                    H tab_left = tab.left - s_drag_preview.stamp.left;
+                    H tab_width = tab.right - tab.left;
+                    btron_row_blit(&s_desktop_backbuffer[(size_t)(s_drag_preview.stamp.top + y) * BTRON_SCREEN_W + s_drag_preview.stamp.left + tab_left],
+                                   &s_drag_preview_pixels[(size_t)y * s_drag_preview.width + tab_left],
+                                   (size_t)tab_width * sizeof(COLOR));
+                } else {
+                    btron_row_blit(&s_desktop_backbuffer[(size_t)(s_drag_preview.stamp.top + y) * BTRON_SCREEN_W + s_drag_preview.stamp.left],
+                                   &s_drag_preview_pixels[(size_t)y * s_drag_preview.width],
+                                   (size_t)s_drag_preview.width * sizeof(COLOR));
+                }
                 continue;
             }
             s_drag_preview.compose = drag_preview_union(&s_drag_preview.bounds, &s_drag_preview.compose);
@@ -1190,6 +1210,7 @@ static void launch_pi4_desktop_session(uint32_t *gpu_fb)
     /* Resync the seqlock consumer baseline so Stage-1 pointer motion cannot
      * burst into the first GUI frame as one giant delta. */
     s_input_prev_buttons = s_pointer_slot.buttons;
+    s_button_edge_tail = s_button_edge_head;
     s_input_last.acc_dx = s_pointer_slot.acc_dx;
     s_input_last.acc_dy = s_pointer_slot.acc_dy;
     s_input_last.acc_wheel = s_pointer_slot.acc_wheel;
@@ -1274,7 +1295,8 @@ static void launch_pi4_desktop_session(uint32_t *gpu_fb)
          * Drains a bounded number of events, then renders into the
          * backbuffer and arms the banded presenter.  Equal priority with the
          * INPUT plane: serviced by absolute deadline, never blocks input. */
-        if ((int32_t)(now - next_ui_us) >= 0) {
+        if ((int32_t)(now - next_ui_us) >= 0 || s_ui_mouse_urgent) {
+        s_ui_mouse_urgent = 0;
         uint32_t t_ui = now;
         int redraw = 0;
         int overlay_redraw = 0;
@@ -1301,6 +1323,8 @@ static void launch_pi4_desktop_session(uint32_t *gpu_fb)
         RECT move_first = { 0, 0, 0, 0 };
         RECT move_last = { 0, 0, 0, 0 };
         int have_move_damage = 0;
+        RECT close_damage = { 0, 0, 0, 0 };
+        int have_close_damage = 0;
         for (uint32_t ev_iter = 0; ev_iter < ASYNC_UI_EVENT_BUDGET && get_evt(&ev, 0) == E_OK; ev_iter++) {
             int preview_release = 0;
             if (ev.type == EV_BUT_UP && s_drag_preview.active &&
@@ -1337,6 +1361,7 @@ static void launch_pi4_desktop_session(uint32_t *gpu_fb)
             WND *button_top_before = NULL;
             RECT button_top_bounds = { 0, 0, 0, 0 };
             int close_button_down = 0;
+            int title_drag_start = 0;
             if (ev.type == EV_BUT_DOWN || ev.type == EV_BUT_UP) {
                 button_top_before = get_top_wnd();
                 if (button_top_before) button_top_bounds = button_top_before->bounds;
@@ -1344,6 +1369,22 @@ static void launch_pi4_desktop_session(uint32_t *gpu_fb)
             if (ev.type == EV_BUT_DOWN) {
                 WND *hit = find_wnd_at(ev.pos.x, ev.pos.y);
                 close_button_down = hit && whit_test_close_btn(hit, ev.pos.x, ev.pos.y);
+                if (close_button_down) {
+                    if (!have_close_damage) {
+                        close_damage = hit->bounds;
+                        have_close_damage = 1;
+                    } else {
+                        if (hit->bounds.left < close_damage.left) close_damage.left = hit->bounds.left;
+                        if (hit->bounds.top < close_damage.top) close_damage.top = hit->bounds.top;
+                        if (hit->bounds.right > close_damage.right) close_damage.right = hit->bounds.right;
+                        if (hit->bounds.bottom > close_damage.bottom) close_damage.bottom = hit->bounds.bottom;
+                    }
+                }
+                if (hit && !close_button_down && (hit->attr & WND_ATTR_TITLE)) {
+                    RECT tab;
+                    wget_tab_rect(hit, &tab);
+                    title_drag_start = ev.pos.y >= hit->bounds.top && ev.pos.y < tab.bottom;
+                }
             }
 
             workbench_process_event(screen, &ev);
@@ -1359,7 +1400,7 @@ static void launch_pi4_desktop_session(uint32_t *gpu_fb)
                 have_focus_damage = 1;
             }
 
-            if (drag_target) {
+            if (drag_target && wnd_mgr_contains(drag_target)) {
                 RECT drag_new = drag_target->bounds;
                 if (drag_old.left != drag_new.left || drag_old.top != drag_new.top ||
                     drag_old.right != drag_new.right || drag_old.bottom != drag_new.bottom) {
@@ -1396,12 +1437,17 @@ static void launch_pi4_desktop_session(uint32_t *gpu_fb)
                      * redraws the dropdown), not a full desktop composite.  Without
                      * this the highlight froze: no branch matched a menu hover. */
                     appmenu_redraw = 1;
+                } else if (ev.pos.y >= 0 && ev.pos.y <= 25) {
+                    panel_redraw = 1;
                 } else if (g_prev_mouse_btns != 0 || wnd_mgr_is_interacting()) {
                     redraw = 1;   /* drag: window contents move, full composite */
                 }
             } else {
                 int menu_open_now = global_menu_is_open() || tracker_is_menu_open();
-                if (ev.type == EV_BUT_DOWN && !menu_open_at_loop_start && menu_open_now) {
+                if (menu_open_at_loop_start && !menu_open_now) {
+                    redraw = 1;
+                    have_focus_damage = 0;
+                } else if (ev.type == EV_BUT_DOWN && !menu_open_at_loop_start && menu_open_now) {
                     /* Opening a menu only lays an overlay over an unchanged
                      * desktop: repaint the overlay, skip the full composite. */
                     overlay_redraw = 1;
@@ -1416,6 +1462,7 @@ static void launch_pi4_desktop_session(uint32_t *gpu_fb)
                      * it): repaint just the top window that owns the dropdown. */
                     appmenu_redraw = 1;
                 } else if (have_focus_damage) {
+                } else if (title_drag_start) {
                 } else if ((ev.type == EV_BUT_DOWN || ev.type == EV_BUT_UP) &&
                            button_top_before && get_top_wnd() == button_top_before &&
                            button_top_before->visible &&
@@ -1518,6 +1565,18 @@ static void launch_pi4_desktop_session(uint32_t *gpu_fb)
                 if (move_damage.top < present_extra.top) present_extra.top = move_damage.top;
                 if (move_damage.right > present_extra.right) present_extra.right = move_damage.right;
                 if (move_damage.bottom > present_extra.bottom) present_extra.bottom = move_damage.bottom;
+            }
+        }
+
+        if (have_close_damage) {
+            if (!have_present_extra) {
+                present_extra = close_damage;
+                have_present_extra = 1;
+            } else {
+                if (close_damage.left < present_extra.left) present_extra.left = close_damage.left;
+                if (close_damage.top < present_extra.top) present_extra.top = close_damage.top;
+                if (close_damage.right > present_extra.right) present_extra.right = close_damage.right;
+                if (close_damage.bottom > present_extra.bottom) present_extra.bottom = close_damage.bottom;
             }
         }
 
@@ -1909,6 +1968,15 @@ void rpi_timer_tick(void) {
         dx += (int32_t)rep.dx;
         dy += (int32_t)rep.dy;
         wheel += (int32_t)rep.wheel;
+        if (rep.buttons != buttons) {
+            uint16_t next = (uint16_t)((s_button_edge_head + 1u) &
+                                       (BUTTON_EDGE_RING_SIZE - 1u));
+            if (next != s_button_edge_tail) {
+                s_button_edge_ring[s_button_edge_head] = rep.buttons;
+                __asm__ volatile("dmb sy" : : : "memory");
+                s_button_edge_head = next;
+            }
+        }
         buttons = rep.buttons;
         got = 1;
     }
@@ -2276,6 +2344,8 @@ static void mouse_motion_apply(int32_t rdx, int32_t rdy) {
         (global_menu_is_open() || tracker_is_menu_open() ||
          g_prev_mouse_btns != 0 || wnd_mgr_is_interacting() ||
          s_mouse_y <= 25)) {
+        if (global_menu_is_open() || tracker_is_menu_open() || s_mouse_y <= 25)
+            s_ui_mouse_urgent = 1;
         EVT ev;
         ev.type   = EV_MOUSE_MOVE;
         ev.pos.x  = s_mouse_x;
@@ -2437,12 +2507,17 @@ static void input_plane_task(GDEV *screen, uint32_t now_us) {
     if (snap.present && (rdx != 0 || rdy != 0))
         mouse_motion_apply(rdx, rdy);
 
-    /* Buttons: latest-state snapshot; edges are detected against our own
-     * previous view so no BUTTON event is ever lost. */
-    if (snap.buttons != s_input_prev_buttons) {
-        mouse_buttons_apply(snap.buttons);
-        s_input_prev_buttons = snap.buttons;
+    int button_edge_seen = 0;
+    while (s_button_edge_tail != s_button_edge_head) {
+        __asm__ volatile("dmb sy" : : : "memory");
+        mouse_buttons_apply(s_button_edge_ring[s_button_edge_tail]);
+        s_button_edge_tail = (uint16_t)((s_button_edge_tail + 1u) &
+                                        (BUTTON_EDGE_RING_SIZE - 1u));
+        button_edge_seen = 1;
     }
+    if (!button_edge_seen && snap.buttons != s_input_prev_buttons)
+        mouse_buttons_apply(snap.buttons);
+    s_input_prev_buttons = snap.buttons;
 
     /* Keyboard: drain the SPSC ring (ISR is the sole producer) */
     usb_kbd_report_t kbd_rep;

@@ -930,29 +930,30 @@ uint32_t arm64_irq_selftest_seen(void) { return s_selftest_seen; }
 int arm64_irq_init(uint32_t hz) {
     extern void fb_log(const char *);
     extern void fb_log_dec(uint32_t);
-    extern void fb_log_hex32(uint32_t);
-    fb_log("[IRQi] enter hz="); fb_log_dec(hz); fb_log("\n");
-    if (hz == 0 || hz > 100000u) { fb_log("[IRQi] bad hz\n"); return -1; }
+    /* One row: everything the caller could need to interpret a later failure. */
+    fb_log("[IRQ ] init hz="); fb_log_dec(hz);
+    if (hz == 0 || hz > 100000u) { fb_log(" -> bad hz\n"); return -1; }
 
     uint64_t cntfrq = 0;
     __asm__ volatile("mrs %0, cntfrq_el0" : "=r"(cntfrq));
-    fb_log("[IRQi] cntfrq="); fb_log_dec((uint32_t)cntfrq); fb_log("\n");
+    fb_log(" cntfrq="); fb_log_dec((uint32_t)cntfrq);
     /* BCM2711 arch timer runs at 54 MHz; reject absent/bogus frequencies */
-    if (cntfrq < 1000000ULL || cntfrq > 200000000ULL) { fb_log("[IRQi] bad cntfrq\n"); return -1; }
+    if (cntfrq < 1000000ULL || cntfrq > 200000000ULL) { fb_log(" -> bad cntfrq\n"); return -1; }
     s_arm64_timer_reload = (uint32_t)(cntfrq / hz);
-    if (s_arm64_timer_reload == 0) { fb_log("[IRQi] reload 0\n"); return -1; }
+    if (s_arm64_timer_reload == 0) { fb_log(" -> reload 0\n"); return -1; }
 
     uint64_t el = 0;
     __asm__ volatile("mrs %0, CurrentEL" : "=r"(el));
     s_arm64_at_el2 = (((el >> 2) & 0x3u) == 2u);
     s_arm64_timer_intid = s_arm64_at_el2 ? ARM_TIMER_PPI_EL2 : ARM_TIMER_PPI_EL1;
-    fb_log("[IRQi] EL="); fb_log_dec((uint32_t)(el >> 2));
-    fb_log(" intid="); fb_log_dec(s_arm64_timer_intid);
-    fb_log(" reload="); fb_log_dec(s_arm64_timer_reload); fb_log("\n");
+    fb_log(" reload="); fb_log_dec(s_arm64_timer_reload);
+    fb_log(" EL=");     fb_log_dec((uint32_t)(el >> 2));
+    fb_log(" intid=");  fb_log_dec(s_arm64_timer_intid);
+    fb_log("\n");
 
     /* KEEP IRQ/FIQ MASKED for the whole probe.  Every prior attempt unmasked
      * here and armed the real timer, then hung silently right after "armed":
-     * the taken interrupt never reached arm64_irq_dispatch (no [IRQd] marker)
+     * the taken interrupt never reached arm64_irq_dispatch (no dispatch marker)
      * and never returned to the observe loop, so the vector/entry path itself
      * dies on this firmware.  To break that hang loop and get a decisive
      * answer, the probe now arms the timer with DAIF MASKED and reads the GIC
@@ -962,7 +963,6 @@ int arm64_irq_init(uint32_t hz) {
      *                               work the moment DAIF is unmasked).
      * This can never hang (no exception is taken) and tells us exactly whether
      * the fault is timer->GIC, GIC->CPU, or the CPU vector entry path. */
-    fb_log("[IRQi] probe MASKED (pending readback)\n");
     __asm__ volatile("msr daifset, #3");
 
     /* The BCM2711 GIC's security configuration (which group the timer PPI
@@ -992,8 +992,13 @@ int arm64_irq_init(uint32_t hz) {
             { 0x3, 0x1, 0x00000000u, 0xFF, 0x7 },  /* Group0, EnableGrp0 (Haiku)  */
         };
         int found = -1;
+        fb_log("[IRQ ] gic probe");
         for (uint32_t c = 0; c < (sizeof(cfgs)/sizeof(cfgs[0])) && found < 0; c++) {
-            fb_log("[IRQi] probe cfg="); fb_log_dec(c); fb_log("\n");
+            /* Printed before anything is touched: a hang inside this
+             * iteration leaves "cfg=N" on the console with no result
+             * appended, which localises it for free.  One row, not one
+             * per breadcrumb. */
+            fb_log(" cfg="); fb_log_dec(c); fb_log("=");
             GICD_CTLR = 0;
             GICC_CTLR = 0;
             GICD_ICPENDR0 = (1u << s_arm64_timer_intid);
@@ -1006,14 +1011,11 @@ int arm64_irq_init(uint32_t hz) {
                 uint32_t lane = (s_arm64_timer_intid % 4u) * 8u;
                 *ipr = (*ipr & ~(0xFFu << lane)) | (0x80u << lane);
             }
-            fb_log("[IRQi] c="); fb_log_dec(c); fb_log(" mid\n");
             GICD_ISENABLER0 = (1u << s_arm64_timer_intid);
             GICD_CTLR = cfgs[c].gicd;
             GICC_CTLR = cfgs[c].gicc;
-            fb_log("[IRQi] c="); fb_log_dec(c); fb_log(" ctl\n");
             __asm__ volatile("dsb sy" : : : "memory");
             __asm__ volatile("isb");
-            fb_log("[IRQi] c="); fb_log_dec(c); fb_log(" regs\n");
 
             /* Arm the REAL timer for this config.  We do NOT write
              * GICD_ISPENDR0 (force pending): on hardware that store to the
@@ -1028,7 +1030,6 @@ int arm64_irq_init(uint32_t hz) {
                 __asm__ volatile("msr cntv_ctl_el0, %0" : : "r"(1ULL));
             }
             __asm__ volatile("isb");
-            fb_log("[IRQi] c="); fb_log_dec(c); fb_log(" armed\n");
             /* Wait ~10 ms via the BCM2835 system timer (1 MHz MMIO; a plain
              * memory read that cannot trap), then read the GIC pending state
              * back over MMIO.  DAIF is masked so no interrupt is taken and this
@@ -1045,17 +1046,21 @@ int arm64_irq_init(uint32_t hz) {
             }
             uint32_t pend  = GICD_ISPENDR0;
             uint32_t hppir = *(volatile uint32_t *)(GICC_BASE_ADDR + 0x018);
-            fb_log("[IRQi] c="); fb_log_dec(c);
-            fb_log(" pend=");  fb_log_hex32(pend);
-            fb_log(" hppir="); fb_log_hex32(hppir); fb_log("\n");
+            /* Three outcomes, and they mean different faults: the PPI never
+             * reached the distributor (timer->GIC wiring/config), it latched
+             * but the CPU interface does not present it (GIC->CPU, group or
+             * enable), or the whole chain is live. */
+            const int latched = (pend & (1u << s_arm64_timer_intid)) != 0;
+            fb_log(latched ? (((hppir & 0x3FFu) == s_arm64_timer_intid)
+                                  ? "live" : "held")
+                           : "cold");
             /* Always disarm + clear pending before the next config / return. */
             if (s_arm64_at_el2) {
                 __asm__ volatile("msr cnthp_ctl_el2, %0" : : "r"(0ULL));
             } else {
                 __asm__ volatile("msr cntv_ctl_el0, %0" : : "r"(0ULL));
             }
-            if ((pend & (1u << s_arm64_timer_intid)) &&
-                ((hppir & 0x3FFu) == s_arm64_timer_intid)) {
+            if (latched && ((hppir & 0x3FFu) == s_arm64_timer_intid)) {
                 found = (int)c;
                 s_irq_cfg_idx = c;
             }
@@ -1064,8 +1069,7 @@ int arm64_irq_init(uint32_t hz) {
         s_selftest_seen = (found >= 0) ? 1u : 0u;
         s_irq_probe_ok  = (found >= 0) ? 1u : 0u;
         g_arm64_timer_hook = saved_hook;
-        fb_log("[IRQi] probe done found="); fb_log_dec((uint32_t)(found + 1));
-        fb_log(" hits="); fb_log_dec(g_arm64_irq_dispatch_hits); fb_log("\n");
+        fb_log(found >= 0 ? " -> chain live\n" : " -> no config delivers\n");
 
         /* Re-assert the chosen config's enables (the loop left GICD/GICC CTLR,
          * IGROUPR, PMR, priority and ISENABLER at cfgs[found], but be explicit)
@@ -1082,7 +1086,6 @@ int arm64_irq_init(uint32_t hz) {
         }
     }
 
-    fb_log("[IRQi] arming timer\n");
     if (s_arm64_at_el2) {
         /* Arm the EL2 physical timer (dedicated to EL2, not trapped) */
         __asm__ volatile("msr cnthp_tval_el2, %0"
@@ -1118,7 +1121,7 @@ int arm64_irq_init(uint32_t hz) {
     }
     __asm__ volatile("msr daifset, #3");  /* keep IRQ+FIQ masked */
     __asm__ volatile("isb");
-    fb_log("[IRQi] left masked; cooperative input path (armstub route reverted)\n");
+    fb_log("[IRQ ] timer disarmed, DAIF masked -> cooperative input\n");
     return 0;
 }
 

@@ -3128,13 +3128,17 @@ void btron_main(void) {
         }
     }
 
-    fb_log(s_dma_fb_selftest_passed ? "[DMA] Framebuffer self-test: PASS\n"
-                                    : "[DMA] Framebuffer self-test: FAIL (DMA stays disabled)\n");
-
-    fb_log("[FB] BTRON3 Pi 400 Kernel Log — troncode 8x16 ASCII font\n");
+    /* Boot console budget: 768px / 16px glyphs = 48 rows, 1024px / 8px = 128
+     * columns.  Everything above the shell prompt has to fit there, so each
+     * subsystem gets one row and a line stays open (no newline) while its
+     * bring-up runs -- a hang then leaves a half-row on the screen, which
+     * localises it for free. */
     fb_log(g_mmio_base == 0xFE000000UL
-           ? "[BOOT] BCM2711  Cortex-A72  AArch64  Pi 4/400  T-Kernel 2.0\n"
-           : "[BOOT] BCM2837  Cortex-A53  AArch64  Pi 3B     T-Kernel 2.0\n");
+           ? "[BOOT] BTRON3 Pi 400  T-Kernel 2.0  BCM2711 Cortex-A72 AArch64\n"
+           : "[BOOT] BTRON3 Pi 3B   T-Kernel 2.0  BCM2837 Cortex-A53 AArch64\n");
+
+    fb_log(s_dma_fb_selftest_passed ? "[DMA ] framebuffer coherency: PASS\n"
+                                    : "[DMA ] framebuffer coherency: FAIL (DMA stays disabled)\n");
 
     /* Turn on the MMU and both caches.  Until this point the kernel has run
      * with SCTLR M=C=I=0, i.e. every RAM access went to DRAM at ~100 MB/s and
@@ -3164,7 +3168,7 @@ void btron_main(void) {
     uint32_t fb_span = (uint32_t)BTRON_SCREEN_W * BTRON_SCREEN_H * 4u * 2u;
     if (g_pi_fb_size > fb_span) fb_span = g_pi_fb_size;
 
-    fb_log("[MMU] enabling (identity map, WB RAM + attr2 DMA window)...\n");
+    fb_log("[MMU ] enabling");
     arm64_mmu_init((uintptr_t)gpu_fb, fb_span);
 
     /* Read the pre-enable stamps back before overwriting them: a D-cache line
@@ -3186,22 +3190,19 @@ void btron_main(void) {
 
     const int mmu_store_ok = (s_bss_stamp == 0x67E11E71u) && (*heap_probe == 0x67E11E71u);
     const int mmu_integrity_ok = mmu_read_ok && mmu_store_ok;
-    fb_log(mmu_integrity_ok ? "[MMU] on, integrity ok.\n"
-                            : "[MMU] on, INTEGRITY FAIL\n");
+    /* Completes the row "[MMU ] enabling" opened.  Read the installed tables
+     * back and print the attribute each region actually got, so the descriptor
+     * encoding is verified on the device instead of on the screen of the person
+     * who wrote it.  Expected: bss=1 heap=1 dma=2 mmio=0 fb=2 layout=1 -- fb=2
+     * because the firmware puts the scanout at 0x3C000000 (960MB), inside the
+     * 1GB the L2 table covers, so its attr2 span is what the walk reaches.  (An
+     * unmapped address walks back as -1 and prints as 4294967295.) */
+    fb_log(mmu_integrity_ok ? " on" : " INTEGRITY FAIL");
     if (!mmu_integrity_ok) {
-        fb_log("[MMU] rd="); fb_log_dec((uint32_t)mmu_read_ok);
-        fb_log(" st=");     fb_log_dec((uint32_t)mmu_store_ok);
-        fb_log("\n");
+        fb_log(" rd="); fb_log_dec((uint32_t)mmu_read_ok);
+        fb_log(" st="); fb_log_dec((uint32_t)mmu_store_ok);
     }
-
-    /* Read the installed tables back and print the attribute each region
-     * actually got, so the descriptor encoding is verified on the device
-     * instead of on the screen of the person who wrote it.  Expected:
-     * bss=1 heap=1 dma=2 mmio=0 fb=2 layout=1 -- fb=2 because the firmware puts
-     * the scanout at 0x3C000000 (960MB), inside the 1GB the L2 table covers, so
-     * its attr2 span is what the walk reaches.  (An unmapped address walks back
-     * as -1 and prints as 4294967295.) */
-    fb_log("[MMU] attr bss=");
+    fb_log(" attr bss=");
     fb_log_dec((uint32_t)arm64_mmu_attr_of((uintptr_t)&s_bss_stamp));
     fb_log(" heap=");
     fb_log_dec((uint32_t)arm64_mmu_attr_of(HEAP_BASE));
@@ -3226,41 +3227,36 @@ void btron_main(void) {
      * above keeps USB input live while a frame is copied in small bands. */
     s_present_dma_enabled = 0;
 
-    fb_log("[DRV] Initializing Screen Driver...\n");
+    /* One row for all three: the open "[DRV ]" prefix is the hang marker, and
+     * each driver appends its own verdict.  Failures print their code, which
+     * uart_hex32() used to send to a serial port nobody is watching. */
+    fb_log("[DRV ] ");
     ER sdrv_res = ScreenDrv(0, NULL);
-    if (sdrv_res >= 0) {
-        fb_log("[DRV] ScreenDrv: OK\n");
-    } else {
-        fb_log("[DRV] ScreenDrv: FAIL ");
-        uart_hex32((uint32_t)sdrv_res);
-        fb_log("\n");
-    }
+    fb_log("ScreenDrv=");
+    fb_log(sdrv_res >= 0 ? "OK" : "FAIL");
+    fb_log_dec((uint32_t)sdrv_res);
 
-    fb_log("[DRV] Initializing Keyboard & Mouse Drivers...\n");
     ER kbpd_res = KbPdDrv(0, NULL);
-    if (kbpd_res >= 0) {
-        fb_log("[DRV] KbPdDrv: OK\n");
-    } else {
-        fb_log("[DRV] KbPdDrv: FAIL\n");
-        uart_hex32((uint32_t)kbpd_res);
-    }
+    fb_log(" KbPdDrv=");
+    fb_log(kbpd_res >= 0 ? "OK" : "FAIL");
+    fb_log_dec((uint32_t)kbpd_res);
 
     ER lkb_res = LowKbPdDrv(0, NULL);
-    if (lkb_res >= 0) {
-        fb_log("[DRV] LowKbPdDrv: OK\n");
-    } else {
-        fb_log("[DRV] LowKbPdDrv: FAIL\n");
-        uart_hex32((uint32_t)lkb_res);
-    }
+    fb_log(" LowKbPdDrv=");
+    fb_log(lkb_res >= 0 ? "OK" : "FAIL");
+    fb_log_dec((uint32_t)lkb_res);
+    fb_log("\n");
 
     /* Initialize USB Subsystem */
-    fb_log("[USB] Probing USB Host Controllers...\n");
+    /* The board revision is what picks the host controller, so print it on the
+     * same row that says which one was chosen.  The row is written before the
+     * mailbox call and completed after it, so a firmware that never answers
+     * leaves this open as the hang marker. */
+    fb_log("[USB ] probing host controllers, board rev=");
     if (g_mmio_base == 0xFE000000UL) {
         extern uint32_t bcm283x_get_board_revision(void);
         uint32_t board_rev = bcm283x_get_board_revision();
-        fb_log("[BOOT] Board Revision: ");
         fb_log_hex32(board_rev);
-        fb_log("\n");
 
         /* QEMU raspi4b identifies as 0xB03111 or 0xB03115 without PCIe hardware.
          * Real physical hardware (Pi 400 0xC03130/1, Pi 4B 0xC0311x) has Broadcom PCIe + VL805.
@@ -3273,7 +3269,9 @@ void btron_main(void) {
             ((board_rev & 0x00F00000u) == 0x00B00000u) ||
             (board_rev == 0x00B03115u) || (board_rev == 0x00B03111u));
         if (!is_qemu) {
-            fb_log("[USB] Physical BCM2711 Hardware: Initializing PCIe Root Complex & VL805 xHCI...\n");
+            /* No row narrates this: the [PCIE] and [XHCI] rows it triggers say
+             * the same thing with the timings, and each of their failure paths
+             * already prints its own verdict. */
             if (bcm2711_pcie_init() == 0) {
                 uintptr_t vl805_mmio = bcm2711_pcie_get_vl805_mmio();
                 if (vl805_mmio) {
@@ -3282,13 +3280,13 @@ void btron_main(void) {
                     }
                 }
             }
-        }
-        if (is_qemu) {
+            if (!g_use_xhci) {
+                fb_log("[USB ] no usable xHCI host controller\n");
+            }
+        } else {
             /* QEMU raspi4b model connects virtual USB keyboard/mouse to DWC2 */
-            fb_log("[USB] QEMU Virtual Machine: Initializing DWC2 USB Host Controller...\n");
+            fb_log("[USB ] QEMU virtual machine: DWC2 host controller\n");
             dwc2_init();
-        } else if (!g_use_xhci) {
-            fb_log("[USB] xHCI Controller failed to initialize on Pi 400.\n");
         }
 
         /* Arm the ASYNC.txt 1 kHz IRQ input plane — only after the xHCI
@@ -3299,9 +3297,7 @@ void btron_main(void) {
             extern void arm64_irq_disable(void);
             extern void (*g_arm64_timer_hook)(void);
             g_arm64_timer_hook = rpi_timer_tick;
-            fb_log("[IRQ] -> arm64_irq_init(1000)\n");
             int irq_ret = arm64_irq_init(1000);
-            fb_log("[IRQ] <- arm64_irq_init ret="); fb_log_dec((uint32_t)irq_ret); fb_log("\n");
             if (irq_ret == 0) {
                 /* Confirm ticks actually arrive before trusting the IRQ plane.
                  * Arming s_async_irq_active gates the cooperative xHCI drain
@@ -3318,13 +3314,14 @@ void btron_main(void) {
                 }
                 if (confirmed) {
                     s_async_irq_active = 1;
-                    fb_log("[IRQ] 1 kHz ASYNC input plane armed.\n");
+                    fb_log("[IRQ ] tick confirmed -> 1 kHz ASYNC input plane armed\n");
                 } else {
-                    /* No real tick.  Dump GIC/timer state so we can tell a
-                     * broken GIC->CPU delivery path from a timer that never
-                     * asserts its PPI.  selftest_seen=1 => the forced-pending
-                     * IRQ WAS taken (delivery OK, timer at fault); =0 => the
-                     * CPU never took the IRQ (vector/mask/routing at fault). */
+                    /* No real tick: say whether the CPU ever took an interrupt
+                     * (entries/hits) rather than re-dumping the GIC, whose
+                     * per-config pending and HPPIR readings arm64_irq_init()
+                     * already printed on its probe rows.  hits=0 with
+                     * selftest=1 is a timer fault; entries=0 is the vector
+                     * path. */
                     typedef struct {
                         uint32_t el, timer_intid, dispatch_hits, stub_entries;
                         uint32_t selftest_seen;
@@ -3337,54 +3334,35 @@ void btron_main(void) {
                     extern void arm64_irq_get_diag(irqdiag_t *);
                     irqdiag_t d;
                     arm64_irq_get_diag(&d);
-                    fb_log("[IRQ] No tick in 50ms; cooperative fallback.\n");
-                    fb_log("[IRQ] EL=");       fb_log_dec(d.el);
-                    fb_log(" intid=");         fb_log_dec(d.timer_intid);
-                    fb_log(" selftest=");      fb_log_dec(d.selftest_seen);
-                    fb_log(" cfg=");           fb_log_dec(d.cfg_idx);
-                    fb_log(" hits=");          fb_log_dec(d.dispatch_hits);
-                    fb_log(" entries=");       fb_log_dec(d.stub_entries);
-                    fb_log("\n");
-                    fb_log("[IRQ] GICD ty=");  fb_log_hex32(d.gicd_typer);
-                    fb_log(" ctlr=");          fb_log_hex32(d.gicd_ctlr);
-                    fb_log(" igroup=");        fb_log_hex32(d.gicd_igroupr0);
-                    fb_log(" enab=");          fb_log_hex32(d.gicd_isenabler0);
-                    fb_log(" pend=");          fb_log_hex32(d.gicd_ispendr0);
-                    fb_log("\n");
-                    fb_log("[IRQ] GICC ctlr=");fb_log_hex32(d.gicc_ctlr);
-                    fb_log(" pmr=");           fb_log_hex32(d.gicc_pmr);
-                    fb_log(" hppir=");         fb_log_hex32(d.gicc_hppir);
-                    fb_log(" iidr=");          fb_log_hex32(d.gicc_iidr);
-                    fb_log("\n");
-                    fb_log("[IRQ] CNTHP=");    fb_log_hex32(d.cnthp_ctl);
-                    fb_log(" CNTP=");          fb_log_hex32(d.cntp_ctl);
-                    fb_log(" CNTFRQ=");        fb_log_dec(d.cntfrq);
+                    fb_log("[IRQ ] no tick in 50ms -> cooperative path  cfg=");
+                    fb_log_dec(d.cfg_idx);
+                    fb_log(" selftest=");  fb_log_dec(d.selftest_seen);
+                    fb_log(" hits=");      fb_log_dec(d.dispatch_hits);
+                    fb_log(" entries=");   fb_log_dec(d.stub_entries);
                     fb_log("\n");
                     arm64_irq_disable();
                     g_arm64_timer_hook = 0;
                 }
             } else {
                 g_arm64_timer_hook = 0;
-                fb_log("[IRQ] Timer IRQ unavailable; cooperative input path.\n");
+                fb_log("[IRQ ] init ret=");
+                fb_log_dec((uint32_t)irq_ret);
+                fb_log(" -> cooperative input path\n");
             }
         }
-        fb_log("[USB] USB Subsystem ready.\n");
     } else {
-        fb_log("[USB] Initializing DWC2 USB 2.0 Host Controller...\n");
+        fb_log("[USB ] legacy MMIO map: DWC2 USB 2.0 host controller\n");
         dwc2_init();
-        fb_log("[USB] DWC2 init complete.\n");
     }
 
     /* 5. Stage 1 Interactive Terminal Shell on GPU Framebuffer */
-    fb_log("\n=================================================================\n");
-    fb_log("  B-System / BTRON3 3.20 (Raspberry Pi 400 / Pi 4B AArch64)\n");
-    fb_log("  Cleanroom TRON Kernel [Target: Cortex-A72 / BCM2711]\n");
-    fb_log("  Stage 1: Terminal Console Active (HDMI On-Screen Debug Trace)\n");
-    fb_log("  Input  : Built-in USB Keyboard / UART Serial\n");
-    fb_log("=================================================================\n\n");
-    fb_log(" Type 'desktop' or 'startx' to launch Graphical Workbench GUI!\n");
-    fb_log(" Commands: help, mem, ver, clear, startx, desktop, reboot\n");
-    fb_log(" Autoboot: launching Desktop in 12s (Press any key to stay in shell)\n\n");
+    /* This is the part of the log that stays on screen under the prompt, so it
+     * is the one place decoration costs visible rows: four instead of the
+     * boxed ten. */
+    fb_log("B-System / BTRON3 3.20  Raspberry Pi 400 / Pi 4B  [BCM2711 Cortex-A72 AArch64]\n");
+    fb_log("Cleanroom TRON kernel, Stage 1 terminal console.  Input: built-in USB keyboard / UART\n");
+    fb_log("Commands: help, mem, ver, clear, gui, startx, desktop, reboot\n");
+    fb_log("Autoboot: launching Desktop in 12s (Press any key to stay in shell)\n");
     fb_log("btron-pi400# ");
 
     uart_puts("\n=================================================================\n");
@@ -3394,7 +3372,7 @@ void btron_main(void) {
     uart_puts("=================================================================\n\n");
 
 #if defined(BTRON_AUTO_GUI) && (BTRON_AUTO_GUI == 1)
-    fb_log("[BOOT] AUTO_GUI=1: Automatically launching B-System Desktop GUI...\n");
+    fb_log("[BOOT] AUTO_GUI=1 -> launching B-System Desktop\n");
     launch_pi4_desktop_session(gpu_fb);
 #endif
 

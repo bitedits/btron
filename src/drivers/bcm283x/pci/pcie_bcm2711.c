@@ -193,7 +193,9 @@ int bcm2711_pcie_init(void) {
         return -1;
     }
 
-    fb_log("[PCIE] Initializing Broadcom STB PCIe Root Complex (0xFD500000)...\n");
+    /* The row stays open until the link poll below completes it, so a hang
+     * anywhere in the reset sequence leaves a half-line on the console. */
+    fb_log("[PCIE] RC 0xFD500000 PERST# sequence, link ");
 
     /* Every wait below is now a poll with a deadline, so the only way to know
      * what the bring-up actually costs is to print what it took. */
@@ -238,8 +240,6 @@ int bcm2711_pcie_init(void) {
     pcie_rc_write(0x9210, val);
     delay_us(100);
 
-    fb_log("[PCIE] PERST# de-asserted, waiting for link training...\n");
-
     /* 2. Configure Inbound DMA Window (Linux pcie-brcmstb.c brcm_pcie_setup)
      *
      *  RC_BAR2 = 4GB inbound window: PCI 0x00000000 -> CPU RAM 0x00000000
@@ -267,8 +267,6 @@ int bcm2711_pcie_init(void) {
     pcie_rc_write(0x40B4, 0x1);    /* UBUS_BAR2_CONFIG_REMAP: ACCESS_ENABLE = 1 */
     dsb();
 
-    fb_log("[PCIE] Inbound DMA: RC_BAR2=4GB UBUS_REMAP=ENABLED\n");
-
     /* Set Little-Endian mode for Inbound Window BAR2 (0x0188 bits[3:2] = 0) */
     uint32_t vend_spec = pcie_rc_read(0x0188);
     vend_spec &= ~0x0Cu;
@@ -293,13 +291,13 @@ int bcm2711_pcie_init(void) {
     uint32_t link_us = (uint32_t)(systimer_clo() - t_link);
     uint32_t state = pcie_rc_read(0x4068);
     uint32_t link_speed = pcie_rc_read(0x00BC) >> 16;
-    fb_log("[PCIE] Bridge State=");
+    fb_log(((state & 0x30) == 0x30) ? "up st=" : "TIMEOUT st=");
     fb_log_hex32(state);
-    fb_log(" LinkSpeed=");
-    fb_log_hex32(link_speed);
-    fb_log(" trained_us=");
+    fb_log(" gen=");
+    fb_log_dec(link_speed);
+    fb_log(" in ");
     fb_log_dec(link_us);
-    fb_log("\n");
+    fb_log("us\n");
 
     /* 5. Set CPU->PCI Outbound memory window (0x600000000 -> 0xC0000000, 1GB) */
     pcie_rc_write(0x400C, BCM2711_PCIE_BUS_MEM_BASE); /* 0xC0000000 */
@@ -338,8 +336,6 @@ int bcm2711_pcie_init(void) {
     uint16_t device = (uint16_t)(id_reg >> 16);
 
     if (vendor == VL805_VENDOR_ID && device == VL805_DEVICE_ID) {
-        fb_log("[PCIE] Found VIA VL805 USB 3.0 Host Controller (1106:3483) at 01:00.0\n");
-
         /* 10. Tell the VideoCore that we fundamental-reset the xHCI device.
          *
          * This is RPI_FIRMWARE_NOTIFY_XHCI_RESET, not a firmware upload: the
@@ -347,33 +343,28 @@ int bcm2711_pcie_init(void) {
          * VL805.bin.  Step 1 asserted PERST# (RGR1_SW_INIT_1 bit 0), which
          * drops the chip's runtime firmware, and this notification is how the
          * VideoCore knows to reload it.  Whether a Pi 400 needs that reload --
-         * an SPI EEPROM would self-load on reset -- is what the honest verdict
-         * below measures; the old else-branch printed "completed
-         * (pre-loaded/EEPROM)" for a genuine rejection and for our own poll
-         * timing out alike, so it proved nothing either way. */
+         * an SPI EEPROM would self-load on reset -- is what the ready= figure
+         * below measures: a real reload restarts the endpoint and costs a
+         * visible settle, a chip that never lost its firmware answers as
+         * itself on the very first read. */
         uint32_t notify_us = 0;
         int notify = VL805_SKIP_FW_NOTIFY ? VL805_NOTIFY_SKIPPED
                                          : bcm2711_reload_vl805_firmware(&notify_us);
-        fb_log("[PCIE] VL805 xHCI-reset notify: ");
+        fb_log("[PCIE] VL805 1106:3483 @01:00.0 notify=");
         switch (notify) {
-            case VL805_NOTIFY_OK:       fb_log("ACK");      break;
-            case VL805_NOTIFY_REJECTED: fb_log("REJECTED"); break;
-            case VL805_NOTIFY_TIMEOUT:  fb_log("TIMEOUT");  break;
-            default:                    fb_log("SKIPPED");  break;
+            case VL805_NOTIFY_OK:       fb_log("ACK ");      break;
+            case VL805_NOTIFY_REJECTED: fb_log("REJECTED "); break;
+            case VL805_NOTIFY_TIMEOUT:  fb_log("TIMEOUT ");  break;
+            default:                    fb_log("SKIPPED ");  break;
         }
-        fb_log(" elapsed_us=");
-        fb_log_hex32(notify_us);
-        fb_log("\n");
+        fb_log_dec(notify_us);
+        fb_log("us");
         if (notify != VL805_NOTIFY_SKIPPED) {
             /* Wait for the condition the 50 ms sleep was standing in for: the
-             * endpoint answering as itself again.  If the VideoCore re-ran the
-             * RPIBOOT load, the chip restarts and stops answering config
-             * requests until it is back; 1106:3483 reappearing is the real
-             * readiness signal.  A dropped read returns all-ones rather than
-             * hanging (CFG_READ_UR_MODE was set at step 2), and a completion
-             * timeout paces the loop by itself, so no sleep is needed.  500 ms
-             * is a ceiling, not a wait: if the firmware was already resident
-             * the first read succeeds and this prints 0us. */
+             * endpoint answering as itself again.  A dropped config read
+             * returns all-ones rather than hanging (CFG_READ_UR_MODE was set
+             * at step 2), and a completion timeout paces the loop by itself,
+             * so no sleep is needed.  500 ms is a ceiling, not a wait. */
             uint32_t t_ready = systimer_clo();
             const uint32_t ready_deadline = t_ready + 500000u;
             const uint32_t vl805_id = ((uint32_t)VL805_DEVICE_ID << 16) |
@@ -384,10 +375,11 @@ int bcm2711_pcie_init(void) {
                 if (id == vl805_id) break;
                 if ((int32_t)(ready_deadline - systimer_clo()) <= 0) break;
             }
-            fb_log("[PCIE] VL805 ready after ");
+            fb_log(" ready=");
             fb_log_dec((uint32_t)(systimer_clo() - t_ready));
-            fb_log("us\n");
+            fb_log("us");
         }
+        fb_log("\n");
 
         /* 11. Program BAR0 to PCI address 0xC0000000 (after firmware reload) */
         pci_write_config32(VL805_PCI_BUS, VL805_PCI_DEV, VL805_PCI_FUNC, PCI_BAR0, BCM2711_PCIE_BUS_MEM_BASE);
@@ -401,11 +393,6 @@ int bcm2711_pcie_init(void) {
         /* Verify configuration space readback */
         uint32_t check_bar0 = pci_read_config32(VL805_PCI_BUS, VL805_PCI_DEV, VL805_PCI_FUNC, PCI_BAR0);
         uint32_t check_cmd = pci_read_config32(VL805_PCI_BUS, VL805_PCI_DEV, VL805_PCI_FUNC, PCI_COMMAND);
-        fb_log("[PCIE] VL805 BAR0: ");
-        fb_log_hex32(check_bar0);
-        fb_log(" CMD: ");
-        fb_log_hex32(check_cmd);
-        fb_log("\n");
 
         /* Ensure PCI-to-PCI Bridge Command has Master + Memory enabled */
         uint32_t bridge_cmd = pci_read_config32(0, 0, 0, PCI_COMMAND);
@@ -416,20 +403,24 @@ int bcm2711_pcie_init(void) {
         /* Map VL805 MMIO to CPU 64-bit address 0x600000000 */
         s_vl805_mmio_base = (uintptr_t)BCM2711_PCIE_CPU_MEM_BASE;
 
-        /* Test MMIO Read */
+        /* One row proves the whole path: the BAR took the value, the endpoint
+         * answers through the outbound window, and what it answers with is the
+         * xHCI CAPLENGTH/revision word the controller brings up with. */
         uint32_t test_read = *(volatile uint32_t *)s_vl805_mmio_base;
-        fb_log("[PCIE] VL805 MMIO Test Read: ");
+        fb_log("[PCIE] BAR0=");
+        fb_log_hex32(check_bar0);
+        fb_log(" CMD=");
+        fb_log_hex32(check_cmd);
+        fb_log(" cap=");
         fb_log_hex32(test_read);
-        fb_log("\n");
-
-        fb_log("[PCIE] RC bring-up total_us=");
+        fb_log(" total_us=");
         fb_log_dec((uint32_t)(systimer_clo() - t_init));
         fb_log("\n");
         return 0;
     } else {
-        fb_log("[PCIE] Device 01:00.0 ID: ");
+        fb_log("[PCIE] 01:00.0 ID=");
         fb_log_hex32(id_reg);
-        fb_log(" (not VL805) total_us=");
+        fb_log(" is not VL805, total_us=");
         fb_log_dec((uint32_t)(systimer_clo() - t_init));
         fb_log("\n");
         return -1;

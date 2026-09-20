@@ -689,12 +689,22 @@ static void xhci_queue_ep1_transfer(uint32_t slot_id, uintptr_t buf_addr, uint32
  * xHCI Controller Reset & Initialization
  * ───────────────────────────────────────────────────────────────── */
 
+/* The hub's own enumeration steps are reported as one summary row, so a step
+ * that succeeded must print nothing.  This is the mirror of that: a failure
+ * still names itself, because that is the only log worth the console space. */
+static void xhci_hub_fail(const char *step, int ret) {
+    if (ret == 0) return;
+    fb_log("[XHCI] hub ");
+    fb_log(step);
+    fb_log(" ret=");
+    fb_log_dec((uint32_t)ret);
+    fb_log("\n");
+}
+
 int xhci_init(uintptr_t mmio_base) {
     if (!mmio_base) {
         return -1;
     }
-
-    fb_log("[XHCI] Initializing VIA VL805 USB 3.0 Host Controller...\n");
 
     /* Each fixed sleep on this path is now a poll with a deadline, so the
      * bring-up cost has to be printed rather than added up from sleeps. */
@@ -704,24 +714,18 @@ int xhci_init(uintptr_t mmio_base) {
     s_cap_base = mmio_base;
     uint32_t cap_reg0 = xread32(s_cap_base);
 
-    fb_log("[XHCI] CAP Base=");
-    fb_log_hex64((uint64_t)s_cap_base);
-    fb_log(" REG0=");
-    fb_log_hex32(cap_reg0);
-    fb_log("\n");
-
     if (cap_reg0 == 0xFFFFFFFF || cap_reg0 == 0xDEADDEAD) {
-        fb_log("[XHCI] Outbound PCIe Window not responding (0xDEADDEAD / 0xFFFFFFFF)!\n");
+        fb_log("[XHCI] VL805 at base 0x600000000 is not responding (reg0=");
+        fb_log_hex32(cap_reg0);
+        fb_log("): outbound PCIe window dead\n");
         return -1;
     }
 
     uint32_t caplen = cap_reg0 & 0xFF;
-    fb_log("[XHCI] CAPLEN=");
-    fb_log_hex32(caplen);
-    fb_log("\n");
-
     if (caplen < 0x20 || caplen >= 0xFF) {
-        fb_log("[XHCI] Outbound PCIe Window invalid CAPLEN!\n");
+        fb_log("[XHCI] Invalid CAPLEN=");
+        fb_log_dec(caplen);
+        fb_log("\n");
         return -1;
     }
 
@@ -735,12 +739,13 @@ int xhci_init(uintptr_t mmio_base) {
     uint32_t hcsparams1 = xread32(s_cap_base + 0x04);
     s_max_ports = (hcsparams1 >> 24) & 0xFF;
 
-    fb_log("[XHCI] DBOFF="); fb_log_hex32(dboff);
-    fb_log(" RTSOFF=");     fb_log_hex32(rtsoff);
+    fb_log("[XHCI] VL805 host: reg0=");
+    fb_log_hex32(cap_reg0);
+    fb_log(" caplen=");
+    fb_log_dec(caplen);
+    fb_log(" ports=");
+    fb_log_dec(s_max_ports);
     fb_log("\n");
-    fb_log("[XHCI] Max Ports="); fb_log_dec(s_max_ports);
-    fb_log(" (HCSPARAMS1=");    fb_log_hex32(hcsparams1);
-    fb_log(")\n");
 
     s_kbd_slot_id = 0;
     s_kbd_mps = 8;
@@ -791,8 +796,6 @@ int xhci_init(uintptr_t mmio_base) {
         delay_us(1);
     }
 
-    fb_log("[XHCI] Host Controller Reset: OK\n");
-
     /* 3. Program Maximum Device Slots */
     xwrite32(s_op_base + XHCI_OP_CONFIG, XHCI_MAX_SLOTS);
     dsb();
@@ -811,9 +814,6 @@ int xhci_init(uintptr_t mmio_base) {
     uint32_t hcsparams2 = xread32(s_cap_base + 0x08);
     uint32_t max_scratchpad = (hcsparams2 >> 27) & 0x1F;
     if (max_scratchpad > 32) max_scratchpad = 32;
-    fb_log("[XHCI] HCSPARAMS2="); fb_log_hex32(hcsparams2);
-    fb_log(" Scratchpads="); fb_log_dec(max_scratchpad);
-    fb_log("\n");
 
     if (max_scratchpad > 0) {
         uint64_t *scratch_array = (uint64_t *)(XHCI_DMA_BASE + 0x40000);
@@ -850,13 +850,6 @@ int xhci_init(uintptr_t mmio_base) {
 
     uint32_t chk_crcr = xread32(s_op_base + XHCI_OP_CRCR);
     uint32_t chk_dcbaap = xread32(s_op_base + XHCI_OP_DCBAAP);
-    fb_log("[XHCI] Init CRCR=");
-    fb_log_hex32(chk_crcr);
-    fb_log(" (ring=");
-    fb_log_hex32((uint32_t)(uintptr_t)s_cmd_ring);
-    fb_log(") DCBAAP=");
-    fb_log_hex32(chk_dcbaap);
-    fb_log("\n");
 
     /* 8. Start Controller */
     cmd = xread32(s_op_base + XHCI_OP_USBCMD);
@@ -871,9 +864,22 @@ int xhci_init(uintptr_t mmio_base) {
         delay_us(1);
     }
 
-    fb_log("[XHCI] Controller Running: OK (Ports: ");
-    fb_log_dec(s_max_ports);
-    fb_log(")\n");
+    /* One row for "the controller is up and its rings are installed", with the
+     * non-cacheable 256 KB zeroing timed separately because no hardware event
+     * can shorten it.  HCH still being set means the run-stopped poll below
+     * timed out, which is the one thing on this row that breaks enumeration. */
+    fb_log("[XHCI] running scratch=");
+    fb_log_dec(max_scratchpad);
+    fb_log(" crcr=");
+    fb_log_hex32(chk_crcr);
+    fb_log(" dcbaap=");
+    fb_log_hex32(chk_dcbaap);
+    fb_log(" dma_zero=");
+    fb_log_dec(zero_us);
+    if (xread32(s_op_base + XHCI_OP_USBSTS) & XHCI_STS_HCH)
+        fb_log("us -- HALTED, Run/Stop never took\n");
+    else
+        fb_log("us\n");
 
     /* 9. Power on Root Hub Ports */
     uint32_t total_ports = (s_max_ports > 0 && s_max_ports <= 8) ? s_max_ports : 8;
@@ -907,14 +913,14 @@ int xhci_init(uintptr_t mmio_base) {
         }
     }
 
-    /* 10. Check Root Port 1 (High-Speed USB 2.0 Hub on Pi 400) */
+    /* 10. Check Root Port 1 (High-Speed USB 2.0 Hub on Pi 400).  The row opens
+     * here and closes once the port has reported its enumerated speed. */
     psc = xread32(port1_reg);
-    fb_log("[XHCI] Port 1 PORTSC=");
+    fb_log("[XHCI] rt port1 sc=");
     fb_log_hex32(psc);
-    fb_log("\n");
 
     if (psc & (XHCI_PORT_CCS | XHCI_PORT_CSC)) {
-        fb_log("[XHCI] Port 1 Connected -> Resetting Port...\n");
+        fb_log(", reset ");
 
         uint32_t reset_cmd = (psc & ~w1c_mask) | XHCI_PORT_PR | XHCI_PORT_PP;
         xwrite32(port1_reg, reset_cmd);
@@ -931,32 +937,21 @@ int xhci_init(uintptr_t mmio_base) {
             delay_us(100);
         }
 
-        fb_log("[XHCI] Port 1 Post-Reset: PORTSC=");
-        fb_log_hex32(psc);
-        fb_log("\n");
-
         uint32_t port_speed = (psc >> 10) & 0x0F;
-        fb_log("[XHCI] Speed=");
+        fb_log("done sc=");
+        fb_log_hex32(psc);
+        fb_log(" spd=");
         fb_log_dec(port_speed);
-        fb_log(" PED=");
-        fb_log_dec((psc & XHCI_PORT_PED) ? 1 : 0);
-        fb_log("\n");
+        fb_log((psc & XHCI_PORT_PED) ? " PED\n" : " !PED\n");
 
         /* Enable Slot 1 for the Internal USB 2.0 Hub */
         uint32_t hub_slot = 0;
         int ret = xhci_cmd_submit(0, 0, XHCI_TRB_ENABLE_SLOT, 0, &hub_slot);
-        fb_log("[XHCI] ENABLE_SLOT (Hub) ret=");
-        fb_log_dec((uint32_t)ret);
-        fb_log(" slot_id=");
-        fb_log_dec(hub_slot);
-        fb_log("\n");
 
         if (ret == 0 && hub_slot >= 1) {
             /* Address Hub Device (Root Port 1, High-Speed, Max Packet 64) */
             ret = xhci_address_device(1, 1, 3 /* High-Speed */, false, 0, 0, 64);
-            fb_log("[XHCI] ADDRESS_DEV (Hub) ret=");
-            fb_log_dec((uint32_t)ret);
-            fb_log("\n");
+            xhci_hub_fail("ADDRESS_DEV", ret);
 
             /* USB 2.0 requires at least 2 ms of recovery after SET_ADDRESS. */
             delay_us(2000);
@@ -964,21 +959,11 @@ int xhci_init(uintptr_t mmio_base) {
             /* Read Device Descriptor */
             usb_device_desc_t dev_desc = {0};
             ret = xhci_ep0_control_transfer(1, 0x80, USB_REQ_GET_DESCRIPTOR, (USB_DT_DEVICE << 8), 0, sizeof(dev_desc), &dev_desc);
-            fb_log("[XHCI] Hub GET_DESC ret=");
-            fb_log_dec((uint32_t)ret);
-            fb_log(" Class=");
-            fb_log_hex32(dev_desc.bDeviceClass);
-            fb_log(" VID=");
-            fb_log_hex32(dev_desc.idVendor);
-            fb_log(" PID=");
-            fb_log_hex32(dev_desc.idProduct);
-            fb_log("\n");
+            xhci_hub_fail("GET_DESC", ret);
 
             /* Set Configuration 1 */
             ret = xhci_ep0_control_transfer(1, 0x00, USB_REQ_SET_CONFIGURATION, 1, 0, 0, NULL);
-            fb_log("[XHCI] Hub SET_CONFIG ret=");
-            fb_log_dec((uint32_t)ret);
-            fb_log("\n");
+            xhci_hub_fail("SET_CONFIG", ret);
 
             /* The configuration status stage has completed, but leave a short
              * recovery interval for the hub firmware before changing its xHCI
@@ -1005,11 +990,7 @@ int xhci_init(uintptr_t mmio_base) {
 
             /* Evaluate Hub Context before enabling its downstream ports. */
             ret = xhci_evaluate_hub_context(1, hub_ports);
-            fb_log("[XHCI] EVAL_CTX (Hub ");
-            fb_log_dec(hub_ports);
-            fb_log(" ports) ret=");
-            fb_log_dec((uint32_t)ret);
-            fb_log("\n");
+            xhci_hub_fail("EVAL_CTX", ret);
 
             /* Power on each downstream port, then wait for the hub's port
              * states to settle instead of sleeping its advertised worst case.
@@ -1045,29 +1026,38 @@ int xhci_init(uintptr_t mmio_base) {
                     delay_us(2000);
                 }
                 hub_wait_us = (uint32_t)(systimer_clo() - t_hub);
-                fb_log("[XHCI] Hub ports settled after ");
-                fb_log_dec(hub_wait_us);
-                fb_log("us (hub claims it may need ");
+                /* The hub's entire enumeration in one row: address, descriptor,
+                 * configuration and context-evaluate either passed silently or
+                 * printed themselves above.  "ramp" is what the hub advertises
+                 * as its worst case, "settled" what it actually took. */
+                fb_log("[XHCI] hub slot=");
+                fb_log_dec(hub_slot);
+                fb_log(" ports=");
+                fb_log_dec(hub_ports);
+                fb_log(" ramp=");
                 fb_log_dec(hub_power_good_us);
-                fb_log("us)\n");
+                fb_log("us settled=");
+                fb_log_dec(hub_wait_us);
+                fb_log("us\n");
             }
 
             /* Scan Hub Ports */
             for (uint32_t hp = 1; hp <= hub_ports; hp++) {
                 usb_port_status_t pstat = {0};
                 ret = xhci_ep0_control_transfer(1, 0xA3, USB_REQ_GET_STATUS, 0, hp, 4, &pstat);
-                if (ret != 0) continue;
-
-                fb_log("[XHCI] Hub Port ");
-                fb_log_dec(hp);
-                fb_log(" Status=");
-                fb_log_hex32(pstat.wPortStatus);
-                fb_log("\n");
+                if (ret != 0) {
+                    fb_log("[XHCI] hub port ");
+                    fb_log_dec(hp);
+                    fb_log(" GET_STATUS ret=");
+                    fb_log_dec((uint32_t)ret);
+                    fb_log("\n");
+                    continue;
+                }
 
                 if (pstat.wPortStatus & HUB_PORT_STAT_CONNECTION) {
-                    fb_log("[XHCI] Hub Port ");
+                    fb_log("[XHCI] hub port ");
                     fb_log_dec(hp);
-                    fb_log(" Device Attached -> Resetting...\n");
+                    fb_log(" attached, reset ");
 
                     /* Issue Hub Port Reset, then wait for the hub to drop
                      * PORT_RESET instead of sleeping a fixed 60 ms.  The bit
@@ -1104,22 +1094,21 @@ int xhci_init(uintptr_t mmio_base) {
                         dev_speed = 3; /* High-Speed (480 Mbps) */
                     }
 
-                    fb_log("[XHCI] Hub Port ");
-                    fb_log_dec(hp);
-                    fb_log(" Speed=");
+                    fb_log("spd=");
                     fb_log_dec(dev_speed);
-                    fb_log("\n");
+                    fb_log(" slot=");
 
                     /* Enable Slot for downstream device */
                     uint32_t dev_slot = 0;
                     ret = xhci_cmd_submit(0, 0, XHCI_TRB_ENABLE_SLOT, 0, &dev_slot);
-                    if (ret != 0 || dev_slot == 0) continue;
-
-                    fb_log("[XHCI] Allocated Slot ");
+                    if (ret != 0 || dev_slot == 0) {
+                        fb_log("ENABLE_SLOT ret=");
+                        fb_log_dec((uint32_t)ret);
+                        fb_log("\n");
+                        continue;
+                    }
                     fb_log_dec(dev_slot);
-                    fb_log(" for Hub Port ");
-                    fb_log_dec(hp);
-                    fb_log("\n");
+                    fb_log(" ");
 
                     /* Address Device (Split-Transaction via Hub Slot 1, Port hp)
                      * For Full/Low-Speed, initialize EP0 with 8 bytes.
@@ -1127,9 +1116,7 @@ int xhci_init(uintptr_t mmio_base) {
                     uint32_t ep0_init_mps = (dev_speed == 3) ? 64 : 8;
                     ret = xhci_address_device(dev_slot, 1, dev_speed, true, 1, hp, ep0_init_mps);
                     if (ret != 0) {
-                        fb_log("[XHCI] AddressDevice failed for Slot ");
-                        fb_log_dec(dev_slot);
-                        fb_log(" ret=");
+                        fb_log("ADDRESS_DEV ret=");
                         fb_log_dec((uint32_t)ret);
                         fb_log("\n");
                         continue;
@@ -1145,8 +1132,8 @@ int xhci_init(uintptr_t mmio_base) {
                     usb_device_desc_t ddesc = {0};
                     ret = xhci_ep0_control_transfer(dev_slot, 0x80, USB_REQ_GET_DESCRIPTOR, (USB_DT_DEVICE << 8), 0, 8, &ddesc);
                     if (ret != 0) {
-                        fb_log("[XHCI] Read initial 8B desc failed for Slot ");
-                        fb_log_dec(dev_slot);
+                        fb_log(" - GET_DESC8 ret=");
+                        fb_log_dec((uint32_t)ret);
                         fb_log("\n");
                         continue;
                     }
@@ -1159,13 +1146,14 @@ int xhci_init(uintptr_t mmio_base) {
                          * the new EP0 max packet is in effect.  It used to be
                          * followed by 5 ms per device. */
                         ret = xhci_evaluate_ep0_max_packet(dev_slot, real_mps);
-                        fb_log("[XHCI] Slot ");
-                        fb_log_dec(dev_slot);
-                        fb_log(" Update EP0 MPS=");
-                        fb_log_dec(real_mps);
-                        fb_log(" EVAL ret=");
-                        fb_log_dec((uint32_t)ret);
-                        fb_log("\n");
+                        /* Appended, not printed on its own row: enumeration
+                         * continues either way, so the failure belongs on the
+                         * same row as the device it happened to. */
+                        if (ret != 0) {
+                            fb_log("EVAL_CTX ret=");
+                            fb_log_dec((uint32_t)ret);
+                            fb_log(" ");
+                        }
                     }
 
                     /* Step 2: Read full 18-byte Device Descriptor */
@@ -1245,19 +1233,17 @@ int xhci_init(uintptr_t mmio_base) {
                         }
                     }
 
-                    fb_log("[XHCI] Slot ");
-                    fb_log_dec(dev_slot);
-                    fb_log(" VID=");
+                    /* Completes the row this device opened at "attached". */
+                    fb_log("desc ");
                     fb_log_hex32(ddesc.idVendor);
-                    fb_log(" PID=");
+                    fb_log(":");
                     fb_log_hex32(ddesc.idProduct);
-                    fb_log(" Proto=");
+                    fb_log(" proto=");
                     fb_log_dec(proto);
-                    fb_log(" EP1_MPS=");
+                    fb_log(" mps=");
                     fb_log_dec(ep1_mps);
-                    fb_log(" Int=");
+                    fb_log(" int=");
                     fb_log_dec(ep1_interval);
-                    fb_log("\n");
 
                     /* Set Configuration 1 */
                     xhci_ep0_control_transfer(dev_slot, 0x00, USB_REQ_SET_CONFIGURATION, 1, 0, 0, NULL);
@@ -1266,8 +1252,8 @@ int xhci_init(uintptr_t mmio_base) {
                     /* Configure EP1 Interrupt IN */
                     ret = xhci_configure_hid_endpoint(dev_slot, dev_speed, ep1_interval, ep1_mps);
                     if (ret != 0) {
-                        fb_log("[XHCI] ConfigureEndpoint failed for Slot ");
-                        fb_log_dec(dev_slot);
+                        fb_log(" CONFIG_EP ret=");
+                        fb_log_dec((uint32_t)ret);
                         fb_log("\n");
                         continue;
                     }
@@ -1276,9 +1262,7 @@ int xhci_init(uintptr_t mmio_base) {
                     if (is_keyboard || proto == 1) {
                         s_kbd_slot_id = dev_slot;
                         s_kbd_mps = ep1_mps;
-                        fb_log("[XHCI] Bound Slot ");
-                        fb_log_dec(dev_slot);
-                        fb_log(" to Pi 400 Keyboard Driver [OK]\n");
+                        fb_log(" -> keyboard\n");
                     } else if (is_mouse || proto == 2) {
                         if (s_num_mice < XHCI_MAX_MICE) {
                             s_mice[s_num_mice].slot_id = dev_slot;
@@ -1296,29 +1280,33 @@ int xhci_init(uintptr_t mmio_base) {
                             } else {
                                 s_mice[s_num_mice].proto_mode = 0;
                             }
-                            fb_log("[XHCI] Bound Slot ");
-                            fb_log_dec(dev_slot);
-                            fb_log(" as Mouse ");
+                            fb_log(" -> mouse ");
                             fb_log_dec(s_num_mice + 1);
-                            fb_log(" [OK]\n");
+                            fb_log("\n");
                             s_num_mice++;
+                        } else {
+                            fb_log(" -> mouse, table full\n");
                         }
+                    } else {
+                        fb_log(" -> not bound\n");
                     }
                 }
             }
+        } else {
+            fb_log("[XHCI] hub ENABLE_SLOT ret=");
+            fb_log_dec((uint32_t)ret);
+            fb_log(" slot=");
+            fb_log_dec(hub_slot);
+            fb_log("\n");
         }
+    } else {
+        fb_log(" empty\n");
     }
 
-    /* Log Ports 2..5 (SuperSpeed root ports) */
-    for (uint32_t p = 2; p <= total_ports; p++) {
-        uintptr_t port_reg = s_op_base + XHCI_OP_PORTSC_BASE + (p - 1) * 0x10;
-        uint32_t psc_ext = xread32(port_reg);
-        fb_log("[XHCI] Port ");
-        fb_log_dec(p);
-        fb_log(" PORTSC=");
-        fb_log_hex32(psc_ext);
-        fb_log("\n");
-    }
+    /* Root ports 2..5 are the SuperSpeed lanes.  Nothing here enumerates a
+     * device behind them -- the Pi 400's keyboard and mouse both arrive
+     * through the USB 2.0 hub on port 1 -- so their PORTSC values had no
+     * reader and only cost four rows of the boot console. */
 
     /* Arm Interrupt IN transfer rings for keyboard and all connected mice */
     if (s_kbd_slot_id) {
@@ -1332,12 +1320,8 @@ int xhci_init(uintptr_t mmio_base) {
         }
     }
 
-    fb_log("[XHCI] Bring-up total_us=");
+    fb_log("[XHCI] bring-up total_us=");
     fb_log_dec((uint32_t)(systimer_clo() - t_xhci));
-    fb_log(" dma_zero_us=");
-    fb_log_dec(zero_us);
-    fb_log(" hub_us=");
-    fb_log_dec(hub_wait_us);
     fb_log("\n");
 
     return 0;

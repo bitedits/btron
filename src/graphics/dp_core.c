@@ -69,6 +69,26 @@ void cls_dev(GDEV *dev) {
     }
 }
 
+RENDER_STATS g_render_stats;
+
+/* The shared build has no counter of its own; the platform core supplies a
+ * strong definition (see core_arm64.c) so its stage timings are real there. */
+__attribute__((weak)) uint32_t btron_render_perf_us(void) { return 0; }
+
+void btron_render_stats_take(RENDER_STATS *out) {
+    if (!out) return;
+    *out = g_render_stats;
+    g_render_stats.bg_us = 0;
+    g_render_stats.frame_us = 0;
+    g_render_stats.paint_us = 0;
+    g_render_stats.blit_us = 0;
+    g_render_stats.panel_us = 0;
+    g_render_stats.bars_us = 0;
+    g_render_stats.comp_us = 0;
+    g_render_stats.tile_max_us = 0;
+    g_render_stats.tiles = 0;
+}
+
 void set_clip(GDEV *dev, const RECT *clip) {
     if (!dev) return;
     if (clip) {

@@ -4,6 +4,7 @@
  */
 
 #include <btron/desktop.h>
+#include <btron/dp.h>
 #include <btron/troncode.h>
 #include <btron/vobj.h>
 #include <btron/wnd.h>
@@ -366,17 +367,26 @@ static void redraw_baremetal_desktop_mode(GDEV *screen, const RECT *damage, BOOL
     if (d.bottom > screen->height) d.bottom = screen->height;
     if (d.right <= d.left || d.bottom <= d.top) return;
 
+    /* The composite's own stage split for the on-device profile; the window
+     * stages (decoration / paint / client blit) are timed inside
+     * redraw_all_windows_clip(), which this drives. */
+    uint32_t t_all = btron_render_perf_us();
+    uint32_t t_mark = t_all;
     render_desktop_background_rect(screen, &d);
+    btron_render_stat_max(&g_render_stats.bg_us, btron_render_perf_us() - t_mark);
     redraw_all_windows_clip(&d, blit_only);
     set_clip(screen, &d);
     if (d.top < 28) {
+        t_mark = btron_render_perf_us();
         render_system_panel(screen);
         RECT gold_bar = { 0, 26, screen->width, 28 };
         fill_rec(screen, &gold_bar, COLOR_GOLD);
+        btron_render_stat_max(&g_render_stats.panel_us, btron_render_perf_us() - t_mark);
     }
 
     H bar_y = screen->height - 40;
     if (d.bottom > bar_y) {
+        t_mark = btron_render_perf_us();
         COLOR bars[8] = {
             COLOR_WHITE, COLOR_YELLOW, COLOR_CYAN, COLOR_GREEN,
             ARGB(0xFF, 0xFF, 0x00, 0xFF), COLOR_RED,
@@ -387,8 +397,10 @@ static void redraw_baremetal_desktop_mode(GDEV *screen, const RECT *damage, BOOL
                          (H)((i + 1) * screen->width / 8), screen->height };
             fill_rec(screen, &bar, bars[i]);
         }
+        btron_render_stat_max(&g_render_stats.bars_us, btron_render_perf_us() - t_mark);
     }
     set_clip(screen, NULL);
+    btron_render_stat_max(&g_render_stats.comp_us, btron_render_perf_us() - t_all);
 #if defined(__aarch64__)
     __asm__ volatile("dsb sy" : : : "memory");
 #elif defined(__arm__)

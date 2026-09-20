@@ -70,6 +70,40 @@ ER    fill_rec(GDEV *dev, const RECT *r, COLOR col);
 ER    drw_ovl(GDEV *dev, const RECT *r);
 ER    fill_ovl(GDEV *dev, const RECT *r, COLOR col);
 
+/* ── On-device composite stage telemetry ────────────────────────────────────
+ * The compact HUD reports one worst-case number per plane: it says a composite
+ * cost tens of milliseconds, but not which stage of it did.  Each stage of the
+ * damage composite times itself into these maxima so the cost can be attributed
+ * on real hardware instead of estimated from the source.  Every field is a
+ * microsecond maximum, taken over one second by btron_render_stats_take().
+ */
+typedef struct {
+    uint32_t bg_us;        /* desktop background restore            */
+    uint32_t frame_us;     /* window decoration (fills/border/title)*/
+    uint32_t paint_us;     /* application paint callbacks           */
+    uint32_t blit_us;      /* client-area scan + composite          */
+    uint32_t panel_us;     /* top panel + gold bar                  */
+    uint32_t bars_us;      /* bottom colour test bars               */
+    uint32_t comp_us;      /* whole damage composite                */
+    uint32_t tile_max_us;  /* worst single preview tile composite   */
+    uint32_t tiles;        /* preview tiles composited              */
+    uint32_t wins_walked;  /* window list length of the last walk   */
+    uint32_t wins_drawn;   /* windows composited by the last walk   */
+} RENDER_STATS;
+
+extern RENDER_STATS g_render_stats;
+
+/* Monotonic counter in microseconds; 0 where the platform supplies none, which
+ * leaves every stage reading 0 instead of disturbing the shared build. */
+uint32_t btron_render_perf_us(void);
+
+/* Snapshot the maxima into `out` and clear them (one profiling window). */
+void btron_render_stats_take(RENDER_STATS *out);
+
+static inline void btron_render_stat_max(uint32_t *field, uint32_t value) {
+    if (value > *field) *field = value;
+}
+
 /* Pointer Grab & Release Control (like ^G in QEMU) */
 void  sdl_set_mouse_grab(BOOL grabbed);
 void  sdl_toggle_mouse_grab(void);

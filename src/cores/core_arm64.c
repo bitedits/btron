@@ -28,6 +28,7 @@
 #include <btron/error.h>
 #include <btron/itron.h>
 #include <btron/dp.h>
+#include <btron/troncode.h>
 #include <btron/wnd.h>
 #include <btron/desktop.h>
 #include <btron/event.h>
@@ -321,6 +322,12 @@ static inline void arm64_invalidate_cache_range(const void *addr, size_t size) {
     for (uintptr_t p = start; p < end; p += 64)
         __asm__ volatile("dc ivac, %0" : : "r"(p) : "memory");
     __asm__ volatile("dsb sy" : : : "memory");
+}
+
+/* Strong counterpart of the weak stage timer in dp_core.c: the shared renderer
+ * times its own composite stages with it (see g_render_stats). */
+uint32_t btron_render_perf_us(void) {
+    return *(volatile uint32_t *)(TIMER_BASE + 0x04);
 }
 
 /* Darken one text row in GPU VRAM (write-only, zero uncached reads). */
@@ -857,8 +864,15 @@ static void drag_preview_cache_tile(GDEV *screen, int tx, int ty) {
     if (tile.bottom > BTRON_SCREEN_H) tile.bottom = BTRON_SCREEN_H;
     BOOL visible = s_drag_preview.target->visible;
     s_drag_preview.target->visible = FALSE;
+    /* The tile cache is wiped on every capture (drag_preview_capture), so a
+     * drag start pays one composite per 32x32 tile: that work, not the drag
+     * itself, is what the HUD shows "before saturation". */
+    uint32_t t_tile = btron_render_perf_us();
     workbench_render_damage(screen, &tile);
+    uint32_t tile_us = btron_render_perf_us() - t_tile;
     s_drag_preview.target->visible = visible;
+    g_render_stats.tiles++;
+    btron_render_stat_max(&g_render_stats.tile_max_us, tile_us);
     for (H y = tile.top; y < tile.bottom; y++)
         btron_row_blit(&s_drag_preview_underlay[(size_t)y * BTRON_SCREEN_W + tile.left],
                        &s_desktop_backbuffer[(size_t)y * BTRON_SCREEN_W + tile.left],
@@ -1237,6 +1251,42 @@ static int top_window_menu_open(void) {
     return 0;
 }
 
+/* On-device composite profile (temporary diagnostic).  The compact HUD proves
+ * a composite costs tens of milliseconds but not which stage does it, and the
+ * source-level estimate for the same bounded blit is an order of magnitude
+ * lower -- so the split has to be measured on the hardware.  The 1 Hz tick
+ * takes the per-stage maxima of the last second and paints them over the
+ * bottom colour-test band, where a photo of the screen names the stage:
+ *   COMP whole damage composite   BG background restore  FW window decoration
+ *   PT application paint callbacks  BL client-area blit  PN top panel band
+ *   BD bottom test bars   TILE tiles x worst tile (drag-preview prep)
+ *   WIN windows drawn / window-list length (a leaked list re-composites all)
+ *   PRES/TRIP the same figures the HUD shows. */
+static void render_diag_band(GDEV *screen, volatile uint32_t *fb)
+{
+    if (!screen || !fb) return;
+
+    RENDER_STATS s;
+    btron_render_stats_take(&s);
+
+    RECT band = { 0, BTRON_SCREEN_H - 40, BTRON_SCREEN_W, BTRON_SCREEN_H };
+    set_clip(screen, NULL);
+    fill_rec(screen, &band, COLOR_BLACK);
+
+    char line[80];
+    tkl_snprintf(line, sizeof(line), "COMP %u BG %u FW %u PT %u BL %u MS",
+                 s.comp_us / 1000u, s.bg_us / 1000u, s.frame_us / 1000u,
+                 s.paint_us / 1000u, s.blit_us / 1000u);
+    drw_tc_string(screen, 6, (H)(BTRON_SCREEN_H - 38), line, COLOR_WHITE, COLOR_BLACK);
+    tkl_snprintf(line, sizeof(line), "PN %u BD %u TIL %ux%u WIN %u/%u P%u W%u",
+                 s.panel_us / 1000u, s.bars_us / 1000u, s.tiles,
+                 s.tile_max_us / 1000u, s.wins_drawn, s.wins_walked,
+                 s_hud_pres_ms, s_hud_wcet_ms);
+    drw_tc_string(screen, 6, (H)(BTRON_SCREEN_H - 20), line, COLOR_WHITE, COLOR_BLACK);
+
+    present_backbuffer_rect(fb, band.left, band.top, band.right, band.bottom);
+}
+
 /* Stage 2: Launch full B-System Workbench desktop session. */
 static void launch_pi4_desktop_session(uint32_t *gpu_fb)
 {
@@ -1605,30 +1655,41 @@ static void launch_pi4_desktop_session(uint32_t *gpu_fb)
                 } else if (have_focus_damage) {
                 } else if (title_drag_start) {
                 } else if (ev.type == EV_BUT_DOWN) {
-                    /* A press captures the window: its repaint is deferred to the
-                     * release, so press + drag + release costs ONE paint instead
-                     * of one per event.  Raises, closes and menu opens are the
-                     * branches above; a press with no window at all is the
-                     * deskbar/icon path. */
-                    WND *cap = button_hit ? button_hit : button_top_before;
-                    if (!cap || !cap->visible) {
-                        redraw = 1;
+                    if (close_button_down) {
+                        /* The 'K' branch presents this window's damage on the
+                         * press; deferring the same rect as capture damage made
+                         * a close composite it twice. */
                     } else {
-                        if (have_trip_damage)
-                            move_bound_add(&s_capture_dirty, &trip_damage);
-                        move_bound_add(&s_capture_dirty, &cap->bounds);
+                        WND *cap = button_hit ? button_hit : button_top_before;
+                        if (!cap || !cap->visible) {
+                            /* A press on the desktop captures nothing, so there
+                             * is nothing to defer and nothing to repaint beyond
+                             * what the dispatch invalidated (icon plate,
+                             * deskbar).  The full render this used to force
+                             * re-ran every window's paint callback -- the f99
+                             * press spike, independent of where the pointer was. */
+                            if (have_trip_damage) {
+                                button_damage = trip_damage;
+                                have_button_damage = 1;
+                            }
+                        } else {
+                            /* A press captures the window: its repaint is
+                             * deferred to the release, so press + drag + release
+                             * costs ONE paint instead of one per event. */
+                            if (have_trip_damage)
+                                move_bound_add(&s_capture_dirty, &trip_damage);
+                            move_bound_add(&s_capture_dirty, &cap->bounds);
+                        }
                     }
                 } else if (ev.type == EV_BUT_UP) {
-                    /* Release: flush everything the capture deferred, plus this
-                     * event's own delta.  A release with nothing pending and
-                     * nothing invalidated still presents nothing. */
-                    WND *rel = button_top_before ? button_top_before : get_top_wnd();
+                    /* Release flushes exactly what the capture held plus this
+                     * event's own delta.  Adding the release window's whole
+                     * bounds here used to repaint a window the capture never
+                     * touched (a close's second composite, a desktop click's
+                     * phantom one); an appearance change that is real arrives
+                     * through trip_damage or the focus branch instead. */
                     if (have_trip_damage)
                         move_bound_add(&s_capture_dirty, &trip_damage);
-                    if (rel && rel->visible &&
-                        ev.pos.x >= rel->bounds.left && ev.pos.x < rel->bounds.right &&
-                        ev.pos.y >= rel->bounds.top && ev.pos.y < rel->bounds.bottom)
-                        move_bound_add(&s_capture_dirty, &rel->bounds);
                     if (s_capture_dirty.valid) {
                         button_damage = s_capture_dirty.r;
                         have_button_damage = 1;
@@ -1755,6 +1816,7 @@ static void launch_pi4_desktop_session(uint32_t *gpu_fb)
             s_async_rt_stats.composite_max_us = 0;
             s_async_rt_stats.present_max_us = 0;
             s_ui_wcet_us = 0;
+            render_diag_band(screen, gpu_fb);
         }
 
         RECT present_extra = { 0, 0, 0, 0 };

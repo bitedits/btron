@@ -4,6 +4,7 @@
  */
 
 #include <btron/wnd.h>
+#include <btron/dp.h>
 #include <btron/troncode.h>
 #include <btron/fast_blit.h>
 #if defined(__STDC_HOSTED__) && __STDC_HOSTED__ == 1
@@ -499,8 +500,17 @@ void redraw_all_windows_clip(const RECT *damage, BOOL blit_only) {
 
     WND *stack[32];
     int count = 0;
-    for (WND *curr = g_wnd_head; curr && count < 32; curr = curr->next)
-        stack[count++] = curr;
+    int walked = 0;
+    for (WND *curr = g_wnd_head; curr; curr = curr->next) {
+        walked++;
+        if (count < 32) stack[count++] = curr;
+    }
+
+    /* Stage split for the on-device profile: the HUD only says that a
+     * composite cost N ms, so the walk reports the decoration, the application
+     * paint callbacks and the client composite separately. */
+    uint32_t t_frame = 0, t_paint = 0, t_blit = 0, t_mark;
+    int drawn = 0;
 
     set_clip(g_screen_dev, damage);
     for (int i = count - 1; i >= 0; i--) {
@@ -510,10 +520,15 @@ void redraw_all_windows_clip(const RECT *damage, BOOL blit_only) {
             wnd->bounds.bottom <= damage->top || wnd->bounds.top >= damage->bottom)
             continue;
 
+        drawn++;
+        t_mark = btron_render_perf_us();
         draw_retro_window_frame(g_screen_dev, wnd);
+        t_frame += btron_render_perf_us() - t_mark;
         if (!wnd->dev || !wnd->dev->pixels) continue;
         if (!blit_only && wnd->paint) {
+            t_mark = btron_render_perf_us();
             wnd->paint(wnd, wnd->dev);
+            t_paint += btron_render_perf_us() - t_mark;
             wnd->img_valid = TRUE;
         }
 
@@ -532,6 +547,7 @@ void redraw_all_windows_clip(const RECT *damage, BOOL blit_only) {
         if (cx1 <= cx0 || cy1 <= cy0) continue;
 
         H span = cx1 - cx0;
+        t_mark = btron_render_perf_us();
         for (H cy = cy0; cy < cy1; cy++) {
             const COLOR *src = &wnd->dev->pixels[cy * wnd->dev->width + cx0];
             COLOR *dst = &g_screen_dev->pixels[(dest_y + cy) * g_screen_dev->width + dest_x + cx0];
@@ -550,8 +566,14 @@ void redraw_all_windows_clip(const RECT *damage, BOOL blit_only) {
                 }
             }
         }
+        t_blit += btron_render_perf_us() - t_mark;
     }
     set_clip(g_screen_dev, NULL);
+    btron_render_stat_max(&g_render_stats.frame_us, t_frame);
+    btron_render_stat_max(&g_render_stats.paint_us, t_paint);
+    btron_render_stat_max(&g_render_stats.blit_us, t_blit);
+    g_render_stats.wins_walked = (uint32_t)walked;
+    g_render_stats.wins_drawn = (uint32_t)drawn;
 }
 
 void redraw_top_window(void) {

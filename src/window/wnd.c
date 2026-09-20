@@ -301,9 +301,11 @@ ER rsz_wnd(WND *wnd, H w, H h) {
         if (wnd->dev->width != new_dev_w || wnd->dev->height != new_dev_h) {
             cls_dev(wnd->dev);
             wnd->dev = opn_dev(new_dev_w, new_dev_h);
+            wnd->img_valid = FALSE;
         }
     } else {
         wnd->dev = opn_dev(new_dev_w, new_dev_h);
+        wnd->img_valid = FALSE;
     }
 
     return E_OK;
@@ -345,8 +347,44 @@ BOOL wnd_take_inval_damage(RECT *out) {
 
 ER inval_wnd(WND *wnd) {
     if (!wnd) return E_PAR;
+    /* BTRON semantics: the app declares its client image stale, so the next
+     * composite over this window must re-run its paint callback. */
+    wnd->img_valid = FALSE;
     wnd_inval_rect(&wnd->bounds);
     return E_OK;
+}
+
+/* TRUE when a composite over `damage` cannot be a pure pixmap blit. */
+BOOL wnd_damage_needs_paint(const RECT *damage) {
+    if (!damage) return FALSE;
+    for (WND *curr = g_wnd_head; curr; curr = curr->next) {
+        if (!curr->visible || !curr->paint || curr->img_valid) continue;
+        if (curr->bounds.right <= damage->left || curr->bounds.left >= damage->right ||
+            curr->bounds.bottom <= damage->top || curr->bounds.top >= damage->bottom)
+            continue;
+        return TRUE;
+    }
+    return FALSE;
+}
+
+BOOL wnd_any_image_invalid(void) {
+    for (WND *curr = g_wnd_head; curr; curr = curr->next)
+        if (curr->visible && curr->paint && !curr->img_valid) return TRUE;
+    return FALSE;
+}
+
+void wnd_get_invalid_image_bounds(RECT *out) {
+    if (!out) return;
+    RECT u = { 0, 0, 0, 0 };
+    for (WND *curr = g_wnd_head; curr; curr = curr->next) {
+        if (!curr->visible || !curr->paint || curr->img_valid) continue;
+        if (u.right <= u.left || u.bottom <= u.top) { u = curr->bounds; continue; }
+        if (curr->bounds.left < u.left)   u.left = curr->bounds.left;
+        if (curr->bounds.top < u.top)     u.top = curr->bounds.top;
+        if (curr->bounds.right > u.right) u.right = curr->bounds.right;
+        if (curr->bounds.bottom > u.bottom) u.bottom = curr->bounds.bottom;
+    }
+    *out = u;
 }
 
 static void draw_retro_window_frame(GDEV *dev, WND *wnd) {
@@ -433,49 +471,12 @@ static void draw_retro_window_frame(GDEV *dev, WND *wnd) {
 void redraw_all_windows(void) {
     if (!g_screen_dev) return;
 
-    /* Draw windows back to front */
-    WND *stack[32];
-    int count = 0;
-    WND *curr = g_wnd_head;
-    while (curr && count < 32) {
-        stack[count++] = curr;
-        curr = curr->next;
-    }
-
-    for (int i = count - 1; i >= 0; i--) {
-        WND *wnd = stack[i];
-        if (!wnd || !wnd->visible) continue;
-
-        /* Draw window decoration frame */
-        draw_retro_window_frame(g_screen_dev, wnd);
-
-        /* Render application client area */
-        if (wnd->paint && wnd->dev && wnd->dev->pixels) {
-            wnd->paint(wnd, wnd->dev);
-
-            /* Composite client pixels onto main screen */
-            H title_h = (wnd->attr & WND_ATTR_TITLE) ? WND_TITLE_HEIGHT : 0;
-            H border = (wnd->attr & WND_ATTR_BORDER) ? 4 : 0;
-            H dest_x = wnd->bounds.left + border;
-            H dest_y = wnd->bounds.top + title_h + border;
-
-            for (H cy = 0; cy < wnd->dev->height; cy++) {
-                for (H cx = 0; cx < wnd->dev->width; cx++) {
-                    H px = dest_x + cx;
-                    H py = dest_y + cy;
-                    if (px >= 0 && px < g_screen_dev->width && py >= 0 && py < g_screen_dev->height) {
-                        COLOR c = wnd->dev->pixels[cy * wnd->dev->width + cx];
-                        if (c != 0x00000000) {
-                            /* Backbuffer is normal cached RAM: a volatile store
-                             * here defeats optimization and costs ~100 ms per
-                             * full composite (mouse-freeze culprit). */
-                            g_screen_dev->pixels[py * g_screen_dev->width + px] = c;
-                        }
-                    }
-                }
-            }
-        }
-    }
+    /* The scalar client-area composite this used to do cost ~100 ms per full
+     * desktop (the documented mouse-freeze culprit, and the 'f' 99 ms the HUD
+     * reports for a click or a drag start).  The clipped walk is the same
+     * painter's order with the same transparency rule, but row-at-a-time. */
+    RECT full = { 0, 0, g_screen_dev->width, g_screen_dev->height };
+    redraw_all_windows_clip(&full, FALSE);
 }
 
 static void copy_opaque_span(COLOR *dst, const COLOR *src, H width) {
@@ -484,6 +485,17 @@ static void copy_opaque_span(COLOR *dst, const COLOR *src, H width) {
 
 void redraw_all_windows_clip(const RECT *damage, BOOL blit_only) {
     if (!g_screen_dev || !damage) return;
+
+    /* The row copies below are raw memory writes, so the span must already be
+     * on-device: mov_wnd() does not clamp, and a window dragged past a screen
+     * edge would otherwise write outside the backbuffer. */
+    RECT vis = *damage;
+    if (vis.left < 0) vis.left = 0;
+    if (vis.top < 0) vis.top = 0;
+    if (vis.right > g_screen_dev->width) vis.right = g_screen_dev->width;
+    if (vis.bottom > g_screen_dev->height) vis.bottom = g_screen_dev->height;
+    if (vis.right <= vis.left || vis.bottom <= vis.top) return;
+    damage = &vis;
 
     WND *stack[32];
     int count = 0;
@@ -500,7 +512,10 @@ void redraw_all_windows_clip(const RECT *damage, BOOL blit_only) {
 
         draw_retro_window_frame(g_screen_dev, wnd);
         if (!wnd->dev || !wnd->dev->pixels) continue;
-        if (!blit_only && wnd->paint) wnd->paint(wnd, wnd->dev);
+        if (!blit_only && wnd->paint) {
+            wnd->paint(wnd, wnd->dev);
+            wnd->img_valid = TRUE;
+        }
 
         H title_h = (wnd->attr & WND_ATTR_TITLE) ? WND_TITLE_HEIGHT : 0;
         H border = (wnd->attr & WND_ATTR_BORDER) ? 4 : 0;
@@ -543,24 +558,10 @@ void redraw_top_window(void) {
     WND *wnd = get_top_wnd();
     if (!g_screen_dev || !wnd || !wnd->visible) return;
 
-    draw_retro_window_frame(g_screen_dev, wnd);
-    if (wnd->paint && wnd->dev && wnd->dev->pixels) {
-        H title_h = (wnd->attr & WND_ATTR_TITLE) ? WND_TITLE_HEIGHT : 0;
-        H border = (wnd->attr & WND_ATTR_BORDER) ? 4 : 0;
-        H dest_x = wnd->bounds.left + border;
-        H dest_y = wnd->bounds.top + title_h + border;
-        wnd->paint(wnd, wnd->dev);
-        for (H cy = 0; cy < wnd->dev->height; cy++) {
-            for (H cx = 0; cx < wnd->dev->width; cx++) {
-                H px = dest_x + cx, py = dest_y + cy;
-                if (px >= 0 && px < g_screen_dev->width && py >= 0 && py < g_screen_dev->height) {
-                    COLOR c = wnd->dev->pixels[cy * wnd->dev->width + cx];
-                    if (c != 0x00000000)
-                        g_screen_dev->pixels[py * g_screen_dev->width + px] = c;
-                }
-            }
-        }
-    }
+    /* Bounded to the top window's rect; NEON rows instead of the scalar loop
+     * that cost ~100 ms per call.  Windows under it that overlap the rect are
+     * re-composited first, which is the correct painter's order. */
+    redraw_all_windows_clip(&wnd->bounds, FALSE);
 }
 
 void wnd_get_union_bounds(RECT *out) {

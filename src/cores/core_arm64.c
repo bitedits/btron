@@ -109,7 +109,13 @@ static uint32_t s_hud_area = 0;
 /* Which presenter ran on the worst-WCET UI trip of the current second.  The
  * composite letter above only names the renderer that cost the most; this one
  * names the trip that blocked the plane, so a W spike with no expensive
- * composite is attributable (a 'n' trip is pure event dispatch). */
+ * composite is attributable (a 'n' trip is pure event dispatch).
+ *   M preview/drag  K close  Z focus  L menu leave  F full render
+ *   B bounded damage  O overlay  A in-app menu  P panel band
+ *   T stale client-image repaint (a deferred capture flush or inval catch-up)
+ * The lowercase composite letter is now chosen by the client-image cache:
+ * 'd' blit-only (image still current), 'r' repaint required, 'f' full,
+ * 'm' bounded move, 'v' preview, '-' nothing timed ran. */
 static char s_hud_wbranch_live = 'n';
 static char s_hud_wbranch = 'n';
 static int s_ui_mouse_urgent = 0;
@@ -820,20 +826,27 @@ static RECT drag_preview_union(const RECT *a, const RECT *b) {
     return out;
 }
 
-/* Trip accumulator for the rect a held-move present must cover: window
- * geometry the pointer mutates, plus whatever the dispatch invalidated. */
+/* Trip accumulator for the rect a present must cover: window geometry the
+ * pointer mutates, plus whatever the dispatch invalidated. */
 typedef struct {
     RECT r;
     int valid;
-    int needs_paint;
 } MOVE_BOUND;
 
-static void move_bound_add(MOVE_BOUND *mb, const RECT *r, BOOL needs_paint) {
+static void move_bound_add(MOVE_BOUND *mb, const RECT *r) {
     if (!r || r->right <= r->left || r->bottom <= r->top) return;
     if (mb->valid) mb->r = drag_preview_union(&mb->r, r);
     else { mb->r = *r; mb->valid = 1; }
-    if (needs_paint) mb->needs_paint = 1;
 }
+
+/* Damage a held button accumulates ACROSS trips.  While a mouse button is
+ * captured the pointer gets no repaint: a window whose art lives in its paint
+ * callback otherwise re-runs that callback on every move, and on this CPU one
+ * client repaint costs tens of milliseconds -- which is the spike, whatever
+ * rectangle it is bounded to.  The deferred rect is repainted once on release.
+ * (Windows on a 286 drove the pointer and dragged a proxy, and validated the
+ * real image when the button came up; the input plane must never wait on art.) */
+static MOVE_BOUND s_capture_dirty;
 
 static void drag_preview_cache_tile(GDEV *screen, int tx, int ty) {
     int index = ty * DRAG_PREVIEW_TILES_X + tx;
@@ -1136,36 +1149,31 @@ static void present_full_render(GDEV *screen, volatile uint32_t *fb, const RECT 
  * edges): repaint and transfer exactly the invalidated rects.  Reported to the
  * HUD as 'd' so a bounded click repaint is distinguishable from 'f' full render. */
 static void present_damage_render(GDEV *screen, volatile uint32_t *fb, const RECT *r) {
+    /* Whether the windows inside the rect must re-run their paint callback is
+     * a property of their client image cache, not of the event that triggered
+     * the present: a window whose pixmap still holds its current art only needs
+     * a blit (sub-millisecond), while one that was just opened, resized or
+     * inval_wnd()ed must be repainted or the blit stamps an empty client area
+     * over real pixels. */
+    BOOL need_paint = wnd_damage_needs_paint(r);
     uint32_t t0 = *(volatile uint32_t *)(TIMER_BASE + 0x04);
-    workbench_render_damage(screen, r);
+    if (need_paint) workbench_render_damage_paint(screen, r);
+    else            workbench_render_damage(screen, r);
+    uint32_t tm = *(volatile uint32_t *)(TIMER_BASE + 0x04);
     present_backbuffer_rect(fb, r->left, r->top, r->right, r->bottom);
     uint32_t t1 = *(volatile uint32_t *)(TIMER_BASE + 0x04);
     wnd_get_union_bounds(&s_prev_win_union);
-    if ((t1 - t0) > s_async_rt_stats.composite_max_us) {
-        s_async_rt_stats.composite_max_us = t1 - t0;
-        s_hud_path_live = 'd';
+    /* Composite and transfer are scored separately, exactly as the 'f' and 'm'
+     * paths do, so a HUD P-value is always attributable to a real present.
+     * 'd' = blit-only damage, 'r' = damage that required a repaint. */
+    if ((tm - t0) > s_async_rt_stats.composite_max_us) {
+        s_async_rt_stats.composite_max_us = tm - t0;
+        s_hud_path_live = need_paint ? 'r' : 'd';
         s_hud_area_live = ((uint32_t)(r->right - r->left) * (uint32_t)(r->bottom - r->top) * 100u) /
                           ((uint32_t)BTRON_SCREEN_W * BTRON_SCREEN_H);
     }
-}
-
-/* As present_damage_render, but the windows inside the rect also re-run their
- * paint callback: required after a resize, where rsz_wnd re-opens the client
- * device and the blit-only composite would copy wrong-sized pixels.  Still
- * bounded by the damaged rect, unlike the full composite it replaces.
- * Reported to the HUD as 'r'. */
-static void present_damage_render_paint(GDEV *screen, volatile uint32_t *fb, const RECT *r) {
-    uint32_t t0 = *(volatile uint32_t *)(TIMER_BASE + 0x04);
-    workbench_render_damage_paint(screen, r);
-    present_backbuffer_rect(fb, r->left, r->top, r->right, r->bottom);
-    uint32_t t1 = *(volatile uint32_t *)(TIMER_BASE + 0x04);
-    wnd_get_union_bounds(&s_prev_win_union);
-    if ((t1 - t0) > s_async_rt_stats.composite_max_us) {
-        s_async_rt_stats.composite_max_us = t1 - t0;
-        s_hud_path_live = 'r';
-        s_hud_area_live = ((uint32_t)(r->right - r->left) * (uint32_t)(r->bottom - r->top) * 100u) /
-                          ((uint32_t)BTRON_SCREEN_W * BTRON_SCREEN_H);
-    }
+    if ((t1 - tm) > s_async_rt_stats.present_max_us)
+        s_async_rt_stats.present_max_us = t1 - tm;
 }
 
 static void present_move_render(GDEV *screen, volatile uint32_t *fb,
@@ -1360,8 +1368,6 @@ static void launch_pi4_desktop_session(uint32_t *gpu_fb)
         int menu_leave_redraw = 0;
         int panel_redraw = 0;
         int appmenu_redraw = 0;
-        int local_button_redraw = 0;
-        WND *local_button_target = NULL;
         RECT focus_damage = { 0, 0, 0, 0 };
         int have_focus_damage = 0;
         RECT focus_old_tab = { 0, 0, 0, 0 };
@@ -1370,7 +1376,6 @@ static void launch_pi4_desktop_session(uint32_t *gpu_fb)
         int have_trip_damage = 0;
         RECT button_damage = { 0, 0, 0, 0 };
         int have_button_damage = 0;
-        int button_damage_paint = 0;
         int title_drag_release = 0;
         RECT title_drag_old = { 0, 0, 0, 0 };
         RECT title_drag_new = { 0, 0, 0, 0 };
@@ -1403,7 +1408,7 @@ static void launch_pi4_desktop_session(uint32_t *gpu_fb)
         int geom_kind = 0;
         RECT geom_first = { 0, 0, 0, 0 };
         RECT slide_first = { 0, 0, 0, 0 };
-        MOVE_BOUND move_bound = { { 0, 0, 0, 0 }, 0, 0 };
+        MOVE_BOUND move_bound = { { 0, 0, 0, 0 }, 0 };
         /* Damage produced between UI trips (async window output, timers) must
          * reach the screen on this one. */
         RECT pending_damage;
@@ -1458,13 +1463,11 @@ static void launch_pi4_desktop_session(uint32_t *gpu_fb)
             }
 
             WND *button_top_before = NULL;
-            RECT button_top_bounds = { 0, 0, 0, 0 };
             WND *button_hit = NULL;
             int close_button_down = 0;
             int title_drag_start = 0;
             if (ev.type == EV_BUT_DOWN || ev.type == EV_BUT_UP) {
                 button_top_before = get_top_wnd();
-                if (button_top_before) button_top_bounds = button_top_before->bounds;
                 button_hit = find_wnd_at(ev.pos.x, ev.pos.y);
             }
             if (ev.type == EV_BUT_DOWN) {
@@ -1570,16 +1573,15 @@ static void launch_pi4_desktop_session(uint32_t *gpu_fb)
                      * snapshots taken above.  A full composite here cost ~99 ms
                      * on every held-move trip and froze the pointer. */
                 } else if (g_prev_mouse_btns != 0) {
-                    /* A held move can only change pixels inside the window that
-                     * receives it, and an app may repaint on mouse-move without
-                     * invalidating, so bound it to the top window and re-run its
-                     * paint: far smaller than the scalar whole-client composite
-                     * redraw_top_window() used to do per trip. */
+                    /* A held button captures the window under the pointer.  Do
+                     * not repaint it per move: accumulate the damage and let the
+                     * release trip present it once.  The pointer itself is drawn
+                     * straight into the visible page, so it stays live. */
                     WND *top = get_top_wnd();
                     if (top && top->visible &&
                         ev.pos.x >= top->bounds.left && ev.pos.x < top->bounds.right &&
                         ev.pos.y >= top->bounds.top && ev.pos.y < top->bounds.bottom)
-                        move_bound_add(&move_bound, &top->bounds, TRUE);
+                        move_bound_add(&s_capture_dirty, &top->bounds);
                 }
             } else {
                 int menu_open_now = global_menu_is_open() || tracker_is_menu_open();
@@ -1600,39 +1602,44 @@ static void launch_pi4_desktop_session(uint32_t *gpu_fb)
                     /* In-app menu open (click opened it, or a click/hover within
                      * it): repaint just the top window that owns the dropdown. */
                     appmenu_redraw = 1;
-                } else if (have_trip_damage &&
-                           (ev.type == EV_BUT_DOWN || ev.type == EV_BUT_UP ||
-                            ev.type == EV_KEY_DOWN)) {
+                } else if (have_focus_damage) {
+                } else if (title_drag_start) {
+                } else if (ev.type == EV_BUT_DOWN) {
+                    /* A press captures the window: its repaint is deferred to the
+                     * release, so press + drag + release costs ONE paint instead
+                     * of one per event.  Raises, closes and menu opens are the
+                     * branches above; a press with no window at all is the
+                     * deskbar/icon path. */
+                    WND *cap = button_hit ? button_hit : button_top_before;
+                    if (!cap || !cap->visible) {
+                        redraw = 1;
+                    } else {
+                        if (have_trip_damage)
+                            move_bound_add(&s_capture_dirty, &trip_damage);
+                        move_bound_add(&s_capture_dirty, &cap->bounds);
+                    }
+                } else if (ev.type == EV_BUT_UP) {
+                    /* Release: flush everything the capture deferred, plus this
+                     * event's own delta.  A release with nothing pending and
+                     * nothing invalidated still presents nothing. */
+                    WND *rel = button_top_before ? button_top_before : get_top_wnd();
+                    if (have_trip_damage)
+                        move_bound_add(&s_capture_dirty, &trip_damage);
+                    if (rel && rel->visible &&
+                        ev.pos.x >= rel->bounds.left && ev.pos.x < rel->bounds.right &&
+                        ev.pos.y >= rel->bounds.top && ev.pos.y < rel->bounds.bottom)
+                        move_bound_add(&s_capture_dirty, &rel->bounds);
+                    if (s_capture_dirty.valid) {
+                        button_damage = s_capture_dirty.r;
+                        have_button_damage = 1;
+                        s_capture_dirty.valid = 0;
+                        s_capture_dirty.r.left = s_capture_dirty.r.top = 0;
+                        s_capture_dirty.r.right = s_capture_dirty.r.bottom = 0;
+                    }
+                } else if (have_trip_damage && ev.type == EV_KEY_DOWN) {
                     /* The dispatch told us exactly what its pixels changed. */
                     button_damage = trip_damage;
                     have_button_damage = 1;
-                } else if (ev.type == EV_BUT_UP) {
-                    /* A release that invalidated nothing and raised/closed
-                     * nothing changed no pixels: the old path still ran a
-                     * full-size top-window repaint per release. */
-                } else if (have_focus_damage) {
-                } else if (title_drag_start) {
-                } else if ((ev.type == EV_BUT_DOWN || ev.type == EV_BUT_UP) &&
-                           button_top_before && get_top_wnd() == button_top_before &&
-                           button_top_before->visible &&
-                           button_top_before->bounds.left == button_top_bounds.left &&
-                           button_top_before->bounds.top == button_top_bounds.top &&
-                           button_top_before->bounds.right == button_top_bounds.right &&
-                           button_top_before->bounds.bottom == button_top_bounds.bottom) {
-                    local_button_redraw = 1;
-                    local_button_target = button_top_before;
-                } else if (ev.type == EV_BUT_DOWN && button_hit) {
-                    /* Unknown delta, but it can only live inside the window
-                     * that received the click. */
-                    button_damage = button_hit->bounds;
-                    have_button_damage = 1;
-                } else if (ev.type == EV_BUT_DOWN && button_top_before) {
-                    local_button_redraw = 1;
-                    local_button_target = button_top_before;
-                } else if (ev.type == EV_BUT_DOWN || ev.type == EV_BUT_UP) {
-                    /* Desktop icons are painted by the background pass, and no
-                     * window exists to bound the delta. */
-                    redraw = 1;
                 }
                 if (ev.type == EV_KEY_DOWN && ev.key != '\r' && ev.key != '\n')
                     s_present_fast_key_update = 1;
@@ -1651,7 +1658,7 @@ static void launch_pi4_desktop_session(uint32_t *gpu_fb)
                     (after.left != geom_first.left || after.top != geom_first.top ||
                      after.right != geom_first.right || after.bottom != geom_first.bottom)) {
                     RECT u = drag_preview_union(&geom_first, &after);
-                    move_bound_add(&move_bound, &u, TRUE);
+                    move_bound_add(&move_bound, &u);
                     bounded = TRUE;
                 }
             }
@@ -1665,21 +1672,20 @@ static void launch_pi4_desktop_session(uint32_t *gpu_fb)
             if (slide_first.left != after.left || slide_first.top != after.top ||
                 slide_first.right != after.right || slide_first.bottom != after.bottom) {
                 RECT u = drag_preview_union(&slide_first, &after);
-                move_bound_add(&move_bound, &u, FALSE);
+                move_bound_add(&move_bound, &u);
             }
         }
 
-        /* A present for this trip's held moves must also cover whatever the
-         * dispatch invalidated.  Folding it into the click-damage rect reuses
-         * the one bounded presenter that already sits ahead of the panel and
-         * menu branches. */
+        /* A present for this trip's window-manager geometry must also cover
+         * whatever the dispatch invalidated.  Folding it into the click-damage
+         * rect reuses the one bounded presenter that already sits ahead of the
+         * panel and menu branches. */
         if (move_bound.valid) {
             RECT bd = move_bound.r;
             if (have_trip_damage) bd = drag_preview_union(&bd, &trip_damage);
             if (have_button_damage) bd = drag_preview_union(&bd, &button_damage);
             button_damage = bd;
             have_button_damage = 1;
-            if (move_bound.needs_paint) button_damage_paint = 1;
         }
 
         if (title_drag_release && !have_move_damage &&
@@ -1837,14 +1843,15 @@ static void launch_pi4_desktop_session(uint32_t *gpu_fb)
         }
         else if (menu_leave_redraw && have_start_menu_rect) {
             trip_branch = 'L';
-            workbench_render_damage(screen, &start_menu_rect);
-            present_backbuffer_rect(gpu_fb, start_menu_rect.left, start_menu_rect.top,
-                                    start_menu_rect.right, start_menu_rect.bottom);
+            present_damage_render(screen, gpu_fb, &start_menu_rect);
             s_present_cursor_dirty = 1;
         }
         /* Full UI path: redraw windows, menus, backbuffer blit */
         else if (redraw || s_present_pending) {
             trip_branch = 'F';
+            /* The full composite repaints every window from its paint callback,
+             * so anything the capture was holding is now on screen. */
+            s_capture_dirty.valid = 0;
             if (s_present_dma_enabled && bcm2711_dma_is_busy(0)) {
                 s_present_pending = 1;
             } else {
@@ -1915,35 +1922,13 @@ static void launch_pi4_desktop_session(uint32_t *gpu_fb)
             }
             }
         }
-        else if (local_button_redraw && local_button_target == get_top_wnd() &&
-                 local_button_target->visible) {
-            trip_branch = 'T';
-            if (panel_redraw) {
-                render_system_panel(screen);
-                present_backbuffer_rect(gpu_fb, 0, 0, BTRON_SCREEN_W, 28);
-            }
-            redraw_top_window();
-            H left = local_button_target->bounds.left;
-            H top = local_button_target->bounds.top;
-            H right = local_button_target->bounds.right;
-            H bottom = local_button_target->bounds.bottom;
-            if (left < 0) left = 0;
-            if (top < 0) top = 0;
-            if (right > BTRON_SCREEN_W) right = BTRON_SCREEN_W;
-            if (bottom > BTRON_SCREEN_H) bottom = BTRON_SCREEN_H;
-            present_backbuffer_rect(gpu_fb, left, top, right, bottom);
-            s_present_cursor_dirty = 1;
-        }
         else if (have_button_damage) {
             trip_branch = 'B';
             if (panel_redraw) {
                 render_system_panel(screen);
                 present_backbuffer_rect(gpu_fb, 0, 0, BTRON_SCREEN_W, 28);
             }
-            if (button_damage_paint)
-                present_damage_render_paint(screen, gpu_fb, &button_damage);
-            else
-                present_damage_render(screen, gpu_fb, &button_damage);
+            present_damage_render(screen, gpu_fb, &button_damage);
             s_present_cursor_dirty = 1;
         }
         else if (overlay_redraw) {
@@ -1955,9 +1940,7 @@ static void launch_pi4_desktop_session(uint32_t *gpu_fb)
                  start_menu_rect.top != mr.top || start_menu_rect.right != mr.right ||
                  start_menu_rect.bottom != mr.bottom);
             if (menu_rect_changed) {
-                workbench_render_damage(screen, &start_menu_rect);
-                present_backbuffer_rect(gpu_fb, start_menu_rect.left, start_menu_rect.top,
-                                        start_menu_rect.right, start_menu_rect.bottom);
+                present_damage_render(screen, gpu_fb, &start_menu_rect);
             }
             if (have_current_menu_rect) {
                 workbench_render_overlay_only(screen);
@@ -1999,6 +1982,22 @@ static void launch_pi4_desktop_session(uint32_t *gpu_fb)
             trip_branch = 'P';
             render_system_panel(screen);
             present_backbuffer_rect(gpu_fb, 0, 0, BTRON_SCREEN_W, 28);
+        }
+        else if (g_prev_mouse_btns == 0 && !wnd_mgr_is_interacting() &&
+                 !s_drag_preview.active && wnd_any_image_invalid()) {
+            /* Convergence: a capture defers a window's repaint until its button
+             * releases, and an async inval can land on a trip that otherwise
+             * presents nothing.  Either way a stale client image must not
+             * survive past the trip after it was made.  Never runs while a
+             * button is held -- that is the entire point of the deferral.
+             * Reported as 'T' (repaint), not 'B' (bounded click damage). */
+            RECT stale;
+            wnd_get_invalid_image_bounds(&stale);
+            if (stale.right > stale.left && stale.bottom > stale.top) {
+                trip_branch = 'T';
+                present_damage_render(screen, gpu_fb, &stale);
+                s_present_cursor_dirty = 1;
+            }
         }
         uint32_t ui_cost = *(volatile uint32_t *)(TIMER_BASE + 0x04) - t_ui;
         if (ui_cost > s_ui_wcet_us) {

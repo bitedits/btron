@@ -46,6 +46,12 @@ typedef struct WND {
     VW    user_data;
     struct WND *next;
     struct WND *prev;
+    /* FALSE while the client pixmap (dev) does not hold the window's current
+     * art: never painted since it was opened, resized (rsz_wnd re-opens dev),
+     * or invalidated by the app through inval_wnd().  A composite may only skip
+     * the paint callback and blit dev when this is TRUE; blitting an invalid
+     * image stamps an empty client area over real pixels. */
+    BOOL  img_valid;
 } WND;
 
 ER   init_wnd_mgr(GDEV *screen_dev);
@@ -72,6 +78,17 @@ void redraw_all_windows(void);
 void redraw_all_windows_clip(const RECT *damage, BOOL blit_only);
 /* Repaint and composite the focused top-level window only. */
 void redraw_top_window(void);
+
+/* TRUE when a composite over `damage` must re-run paint callbacks: some
+ * visible window intersecting it has an invalid client image (freshly opened,
+ * resized or inval_wnd()ed), so blitting its cached pixmap alone would show
+ * stale or empty pixels. */
+BOOL wnd_damage_needs_paint(const RECT *damage);
+/* TRUE when any visible window still needs a paint pass. */
+BOOL wnd_any_image_invalid(void);
+/* Union of the bounds of every visible window whose client image is invalid;
+ * empty rect (0,0,0,0) when none. */
+void wnd_get_invalid_image_bounds(RECT *out);
 WND* find_wnd_at(H x, H y);
 WND* get_top_wnd(void);
 BOOL wnd_mgr_contains(const WND *wnd);

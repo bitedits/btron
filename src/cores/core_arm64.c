@@ -1222,6 +1222,11 @@ static void launch_pi4_desktop_session(uint32_t *gpu_fb)
         int appmenu_redraw = 0;
         int local_button_redraw = 0;
         WND *local_button_target = NULL;
+        RECT focus_damage[2];
+        int focus_damage_count = 0;
+        int title_drag_release = 0;
+        RECT title_drag_old = { 0, 0, 0, 0 };
+        RECT title_drag_new = { 0, 0, 0, 0 };
         int move_drag = 0;
         int non_move_event = 0;
         int menu_open_at_loop_start = global_menu_is_open() || tracker_is_menu_open();
@@ -1237,6 +1242,12 @@ static void launch_pi4_desktop_session(uint32_t *gpu_fb)
         RECT move_last = { 0, 0, 0, 0 };
         int have_move_damage = 0;
         for (uint32_t ev_iter = 0; ev_iter < ASYNC_UI_EVENT_BUDGET && get_evt(&ev, 0) == E_OK; ev_iter++) {
+            if (ev.type == EV_BUT_UP && s_drag_preview.active &&
+                wnd_mgr_get_drag_target() == s_drag_preview.target) {
+                title_drag_release = 1;
+                title_drag_old = s_drag_preview.bounds;
+                title_drag_new = s_drag_preview.target->bounds;
+            }
             if (ev.type != EV_MOUSE_MOVE) {
                 non_move_event = 1;
                 drag_preview_reset();
@@ -1268,6 +1279,16 @@ static void launch_pi4_desktop_session(uint32_t *gpu_fb)
             }
 
             workbench_process_event(screen, &ev);
+
+            WND *button_top_after = get_top_wnd();
+            if (ev.type == EV_BUT_DOWN && button_top_before && button_top_after &&
+                button_top_after != button_top_before && button_top_after->visible &&
+                ev.pos.y >= button_top_after->bounds.top &&
+                ev.pos.y < button_top_after->bounds.top + 28) {
+                focus_damage[0] = button_top_bounds;
+                focus_damage[1] = button_top_after->bounds;
+                focus_damage_count = 2;
+            }
 
             if (drag_target) {
                 RECT drag_new = drag_target->bounds;
@@ -1322,6 +1343,7 @@ static void launch_pi4_desktop_session(uint32_t *gpu_fb)
                     /* In-app menu open (click opened it, or a click/hover within
                      * it): repaint just the top window that owns the dropdown. */
                     appmenu_redraw = 1;
+                } else if (focus_damage_count) {
                 } else if ((ev.type == EV_BUT_DOWN || ev.type == EV_BUT_UP) &&
                            button_top_before && get_top_wnd() == button_top_before &&
                            button_top_before->visible &&
@@ -1337,6 +1359,24 @@ static void launch_pi4_desktop_session(uint32_t *gpu_fb)
                 if (ev.type == EV_KEY_DOWN && ev.key != '\r' && ev.key != '\n')
                     s_present_fast_key_update = 1;
             }
+        }
+
+        if (wnd_mgr_flush_resize())
+            redraw = 1;
+
+        if (title_drag_release && !have_move_damage &&
+            (title_drag_old.left != title_drag_new.left ||
+             title_drag_old.top != title_drag_new.top ||
+             title_drag_old.right != title_drag_new.right ||
+             title_drag_old.bottom != title_drag_new.bottom)) {
+            move_drag = 1;
+            move_first = title_drag_old;
+            move_last = title_drag_new;
+            move_damage.left = move_first.left < move_last.left ? move_first.left : move_last.left;
+            move_damage.top = move_first.top < move_last.top ? move_first.top : move_last.top;
+            move_damage.right = move_first.right > move_last.right ? move_first.right : move_last.right;
+            move_damage.bottom = move_first.bottom > move_last.bottom ? move_first.bottom : move_last.bottom;
+            have_move_damage = 1;
         }
 
         if (!non_move_event && !s_drag_preview_dma_active && s_drag_preview.active &&
@@ -1413,17 +1453,27 @@ static void launch_pi4_desktop_session(uint32_t *gpu_fb)
             overlay_redraw || appmenu_redraw)
             drag_preview_reset();
 
-        if (move_drag && !non_move_event && !s_present_pending &&
+        if (move_drag && (!non_move_event || title_drag_release) && !s_present_pending &&
             !menu_open_at_loop_start && !appmenu_open_at_loop_start &&
             !overlay_redraw && !appmenu_redraw && have_move_damage) {
-            if (!present_drag_preview(screen, gpu_fb, s_drag_preview.target,
-                                      &move_first, &move_last)) {
+            if (title_drag_release) {
+                present_move_render(screen, gpu_fb, &move_first, &move_last);
+            } else if (!present_drag_preview(screen, gpu_fb, s_drag_preview.target,
+                                             &move_first, &move_last)) {
                 drag_preview_reset();
                 present_move_render(screen, gpu_fb, &move_first, &move_last);
             }
             if (panel_redraw) {
                 render_system_panel(screen);
                 present_backbuffer_rect(gpu_fb, 0, 0, BTRON_SCREEN_W, 28);
+            }
+            s_present_cursor_dirty = 1;
+        }
+        else if (focus_damage_count) {
+            for (int i = 0; i < focus_damage_count; i++) {
+                workbench_render_damage(screen, &focus_damage[i]);
+                present_backbuffer_rect(gpu_fb, focus_damage[i].left, focus_damage[i].top,
+                                        focus_damage[i].right, focus_damage[i].bottom);
             }
             s_present_cursor_dirty = 1;
         }

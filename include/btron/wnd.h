@@ -84,6 +84,7 @@ void wnd_cycle_focus(void);
 BOOL wnd_mgr_handle_event(const EVT *ev);
 BOOL wnd_mgr_is_interacting(void);
 WND* wnd_mgr_get_drag_target(void);
+BOOL wnd_mgr_flush_resize(void);
 
 #ifdef __cplusplus
 }

@@ -417,7 +417,6 @@ static void handle_about_event(WND *wnd, const EVT *evt) {
         H nyan_box_x = client_w - (NYAN_FRAME_W + 6) - 10;
         if (rel_x >= nyan_box_x && rel_x <= client_w - 10 && rel_y >= 6 && rel_y <= 76) {
             g_about_state.animation_enabled = !g_about_state.animation_enabled;
-            redraw_all_windows();
             return;
         }
 
@@ -425,15 +424,12 @@ static void handle_about_event(WND *wnd, const EVT *evt) {
         if (rel_y >= 86 && rel_y <= 110) {
             if (rel_x >= 12 && rel_x <= 172) {
                 g_about_state.current_tab = ABOUT_TAB_SPECS;
-                redraw_all_windows();
                 return;
             } else if (rel_x >= 178 && rel_x <= 373) {
                 g_about_state.current_tab = ABOUT_TAB_PEOPLE;
-                redraw_all_windows();
                 return;
             } else if (rel_x >= 379 && rel_x <= 529) {
                 g_about_state.current_tab = ABOUT_TAB_SUBSYSTEMS;
-                redraw_all_windows();
                 return;
             }
         }
@@ -444,11 +440,9 @@ static void handle_about_event(WND *wnd, const EVT *evt) {
             if (rel_y >= nav_y && rel_y <= nav_y + 18) {
                 if (rel_x >= client_w - 190 && rel_x <= client_w - 95) {
                     g_about_state.people_page = 0;
-                    redraw_all_windows();
                     return;
                 } else if (rel_x >= client_w - 92 && rel_x <= client_w - 8) {
                     g_about_state.people_page = 1;
-                    redraw_all_windows();
                     return;
                 }
             }
@@ -465,13 +459,11 @@ static void handle_about_event(WND *wnd, const EVT *evt) {
             /* Pause / Play button */
             if (rel_x >= client_w - 158 && rel_x <= client_w - 88) {
                 g_about_state.animation_enabled = !g_about_state.animation_enabled;
-                redraw_all_windows();
                 return;
             }
             /* Next Tab button */
             if (rel_x >= client_w - 240 && rel_x <= client_w - 166) {
                 g_about_state.current_tab = (g_about_state.current_tab + 1) % ABOUT_TAB_MAX;
-                redraw_all_windows();
                 return;
             }
         }

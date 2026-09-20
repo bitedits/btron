@@ -123,7 +123,21 @@ void pci_write_config32(uint32_t bus, uint32_t dev, uint32_t func, uint32_t offs
 #define MBOX_FULL         0x80000000u
 #define MBOX_EMPTY        0x40000000u
 
-static int bcm2711_reload_vl805_firmware(void) {
+/* Outcomes are distinct on purpose.  The caller used to print one benign
+ * sentence for "the VideoCore said no" and "we stopped listening" alike,
+ * which made it impossible to tell from the boot log whether step 10 does
+ * anything at all. */
+#define VL805_NOTIFY_OK        0   /* VideoCore replied 0x80000000 */
+#define VL805_NOTIFY_REJECTED  1   /* VideoCore replied with an error code */
+#define VL805_NOTIFY_TIMEOUT   2   /* no channel-8 reply was consumed */
+#define VL805_NOTIFY_SKIPPED   3
+
+/* Flip to 1 for the A/B that decides whether the notification is load-bearing
+ * on this board: if xHCI still enumerates and HID still works with it skipped,
+ * step 10 and its settle are dead weight and can go. */
+#define VL805_SKIP_FW_NOTIFY   0
+
+static int bcm2711_reload_vl805_firmware(uint32_t *elapsed_us) {
     /* Use the Non-Cacheable DMA window (Attr 2) so the VideoCore sees coherent memory */
     volatile uint32_t *mbox_buf = (volatile uint32_t *)BTRON_NOCACHE_MBOX_PCIE;
     uintptr_t mbox_base = g_mmio_base + 0x0000B880UL;
@@ -142,27 +156,33 @@ static int bcm2711_reload_vl805_firmware(void) {
     uint32_t mbox_addr = (uint32_t)BTRON_NOCACHE_MBOX_PCIE;
     dsb();
 
-    int to = 2000;
-    while ((*status_reg & MBOX_FULL) && --to > 0) {
+    /* One deadline for the whole round-trip, in microseconds.  The previous
+     * code shared a single iteration counter between the outer wait and the
+     * inner EMPTY poll, so the effective timeout was neither value and moved
+     * with the cache state -- the same bug class that killed USB HID when the
+     * caches came on. */
+    uint32_t t0 = systimer_clo();
+    const uint32_t budget_us = 1000000u;
+
+    while ((uint32_t)(systimer_clo() - t0) < budget_us && (*status_reg & MBOX_FULL)) {
         __asm__ volatile("nop");
     }
     *write_reg = ((mbox_addr & 0xFFFFFFF0u) | MBOX_CH_PROP);
 
-    to = 2000;
-    while (--to > 0) {
-        while ((*status_reg & MBOX_EMPTY) && --to > 0) {
-            __asm__ volatile("nop");
-        }
-        if (to <= 0) break;
+    int replied = 0;
+    while ((uint32_t)(systimer_clo() - t0) < budget_us) {
+        if (*status_reg & MBOX_EMPTY) continue;
         uint32_t res = *read_reg;
-        if ((res & 0xF) == MBOX_CH_PROP) break;
+        if ((res & 0xF) == MBOX_CH_PROP) {
+            replied = 1;
+            break;
+        }
     }
     dsb();
 
-    if (mbox_buf[1] == 0x80000000u) {
-        return 0; /* success */
-    }
-    return -1;
+    if (elapsed_us) *elapsed_us = (uint32_t)(systimer_clo() - t0);
+    if (!replied) return VL805_NOTIFY_TIMEOUT;
+    return mbox_buf[1] == 0x80000000u ? VL805_NOTIFY_OK : VL805_NOTIFY_REJECTED;
 }
 
 /* ─────────────────────────────────────────────────────────────────
@@ -316,14 +336,33 @@ int bcm2711_pcie_init(void) {
     if (vendor == VL805_VENDOR_ID && device == VL805_DEVICE_ID) {
         fb_log("[PCIE] Found VIA VL805 USB 3.0 Host Controller (1106:3483) at 01:00.0\n");
 
-        /* 10. Request VideoCore to bootstrap VL805 runtime firmware */
-        fb_log("[PCIE] Requesting VideoCore VL805 firmware bootstrap (tag 0x00030058)...\n");
-        if (bcm2711_reload_vl805_firmware() == 0) {
-            fb_log("[PCIE] VL805 firmware upload: SUCCESS [OK]\n");
-        } else {
-            fb_log("[PCIE] VL805 firmware reload completed (pre-loaded/EEPROM)\n");
+        /* 10. Tell the VideoCore that we fundamental-reset the xHCI device.
+         *
+         * This is RPI_FIRMWARE_NOTIFY_XHCI_RESET, not a firmware upload: the
+         * kernel never sends VL805 bytes, start4.elf owns the RPIBOOT load of
+         * VL805.bin.  Step 1 asserted PERST# (RGR1_SW_INIT_1 bit 0), which
+         * drops the chip's runtime firmware, and this notification is how the
+         * VideoCore knows to reload it.  Whether a Pi 400 needs that reload --
+         * an SPI EEPROM would self-load on reset -- is what the honest verdict
+         * below measures; the old else-branch printed "completed
+         * (pre-loaded/EEPROM)" for a genuine rejection and for our own poll
+         * timing out alike, so it proved nothing either way. */
+        uint32_t notify_us = 0;
+        int notify = VL805_SKIP_FW_NOTIFY ? VL805_NOTIFY_SKIPPED
+                                         : bcm2711_reload_vl805_firmware(&notify_us);
+        fb_log("[PCIE] VL805 xHCI-reset notify: ");
+        switch (notify) {
+            case VL805_NOTIFY_OK:       fb_log("ACK");      break;
+            case VL805_NOTIFY_REJECTED: fb_log("REJECTED"); break;
+            case VL805_NOTIFY_TIMEOUT:  fb_log("TIMEOUT");  break;
+            default:                    fb_log("SKIPPED");  break;
         }
-        delay_ms(50); /* real settle for VL805 controller reboot after fw notify */
+        fb_log(" elapsed_us=");
+        fb_log_hex32(notify_us);
+        fb_log("\n");
+        if (notify != VL805_NOTIFY_SKIPPED) {
+            delay_ms(50); /* real settle for VL805 controller reboot after fw notify */
+        }
 
         /* 11. Program BAR0 to PCI address 0xC0000000 (after firmware reload) */
         pci_write_config32(VL805_PCI_BUS, VL805_PCI_DEV, VL805_PCI_FUNC, PCI_BAR0, BCM2711_PCIE_BUS_MEM_BASE);

@@ -931,7 +931,7 @@ int arm64_irq_init(uint32_t hz) {
     extern void fb_log(const char *);
     extern void fb_log_dec(uint32_t);
     /* One row: everything the caller could need to interpret a later failure. */
-    fb_log("[IRQ ] init hz="); fb_log_dec(hz);
+    fb_log("[IRQ] init hz="); fb_log_dec(hz);
     if (hz == 0 || hz > 100000u) { fb_log(" -> bad hz\n"); return -1; }
 
     uint64_t cntfrq = 0;
@@ -992,7 +992,7 @@ int arm64_irq_init(uint32_t hz) {
             { 0x3, 0x1, 0x00000000u, 0xFF, 0x7 },  /* Group0, EnableGrp0 (Haiku)  */
         };
         int found = -1;
-        fb_log("[IRQ ] gic probe");
+        fb_log("[IRQ] gic probe");
         for (uint32_t c = 0; c < (sizeof(cfgs)/sizeof(cfgs[0])) && found < 0; c++) {
             /* Printed before anything is touched: a hang inside this
              * iteration leaves "cfg=N" on the console with no result
@@ -1121,7 +1121,7 @@ int arm64_irq_init(uint32_t hz) {
     }
     __asm__ volatile("msr daifset, #3");  /* keep IRQ+FIQ masked */
     __asm__ volatile("isb");
-    fb_log("[IRQ ] timer disarmed, DAIF masked -> cooperative input\n");
+    fb_log("[IRQ] timer disarmed, DAIF masked -> cooperative input\n");
     return 0;
 }
 

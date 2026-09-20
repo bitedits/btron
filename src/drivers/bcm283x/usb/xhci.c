@@ -696,6 +696,11 @@ int xhci_init(uintptr_t mmio_base) {
 
     fb_log("[XHCI] Initializing VIA VL805 USB 3.0 Host Controller...\n");
 
+    /* Each fixed sleep on this path is now a poll with a deadline, so the
+     * bring-up cost has to be printed rather than added up from sleeps. */
+    uint32_t t_xhci = systimer_clo();
+    uint32_t hub_wait_us = 0;
+
     s_cap_base = mmio_base;
     uint32_t cap_reg0 = xread32(s_cap_base);
 
@@ -792,11 +797,15 @@ int xhci_init(uintptr_t mmio_base) {
     xwrite32(s_op_base + XHCI_OP_CONFIG, XHCI_MAX_SLOTS);
     dsb();
 
-    /* 4. Zero initialize 256KB of DMA structures in uncached DMA region */
+    /* 4. Zero initialize 256KB of DMA structures in uncached DMA region.
+     *    64K stores into non-cacheable memory is a fixed cost no hardware
+     *    event can shorten, so it is timed on its own. */
+    uint32_t t_zero = systimer_clo();
     volatile uint32_t *dma_words = (volatile uint32_t *)XHCI_DMA_BASE;
     for (uint32_t i = 0; i < 0x40000 / 4; i++) {
         dma_words[i] = 0;
     }
+    uint32_t zero_us = (uint32_t)(systimer_clo() - t_zero);
 
     /* 4a. Configure Scratchpad Buffers (required if HCSPARAMS2 Max Scratchpad > 0) */
     uint32_t hcsparams2 = xread32(s_cap_base + 0x08);
@@ -909,10 +918,11 @@ int xhci_init(uintptr_t mmio_base) {
 
         uint32_t reset_cmd = (psc & ~w1c_mask) | XHCI_PORT_PR | XHCI_PORT_PP;
         xwrite32(port1_reg, reset_cmd);
-        delay_us(5000);
 
         /* The controller holds PR for at least the 10 ms USB reset signalling,
-         * and a hub that is still negotiating may hold it longer. */
+         * and a hub that is still negotiating may hold it longer, so the poll
+         * below is what defines this wait.  The 5 ms that used to precede it
+         * sat entirely inside the interval the hardware enforces anyway. */
         const uint32_t pr_deadline = systimer_clo() + 250000u;
         for (;;) {
             psc = xread32(port1_reg);
@@ -987,6 +997,7 @@ int xhci_init(uintptr_t mmio_base) {
             if (ret == 0 && hub_desc.bDescriptorType == USB_DT_HUB &&
                 hub_desc.bNbrPorts != 0) {
                 hub_ports = hub_desc.bNbrPorts;
+                if (hub_ports > 31) hub_ports = 31; /* device-supplied; the settle mask is one bit per port */
                 /* bPwrOn2PwrGood is expressed in 2 ms units. */
                 hub_power_good_us = (uint32_t)hub_desc.bPwrOn2PwrGood * 2000u;
                 if (hub_power_good_us < 2000u) hub_power_good_us = 2000u;
@@ -1000,30 +1011,45 @@ int xhci_init(uintptr_t mmio_base) {
             fb_log_dec((uint32_t)ret);
             fb_log("\n");
 
-            /* Power on each downstream port and wait only as long as this hub
-             * advertises, rather than a fixed 250 ms. */
+            /* Power on each downstream port, then wait for the hub's port
+             * states to settle instead of sleeping its advertised worst case.
+             * bPwrOn2PwrGood is how long a COLD rail may take, but this hub is
+             * already live -- we just read its descriptors -- so the devices
+             * attached before boot show CONNECTION immediately and the wait
+             * collapses to a few milliseconds.
+             * Two consecutive identical full passes are the condition, not the
+             * first connection seen: the scan below reads each port exactly
+             * once, so returning while another port is still ramping would
+             * silently miss that device.  The deadline keeps the old combined
+             * budget (advertised ramp + the 100 ms connect debounce of USB 2.0
+             * 7.1.7.5) as the worst case.  Port GET_STATUS is answered by the
+             * hub's own MCU, so it is valid while ports are still ramping. */
             for (uint32_t hp = 1; hp <= hub_ports; hp++) {
                 xhci_ep0_control_transfer(1, 0x23, USB_REQ_SET_FEATURE, HUB_FEAT_PORT_POWER, hp, 0, NULL);
             }
-            delay_us(hub_power_good_us);
-
-            /* bPwrOn2PwrGood covers VBUS ramping; USB 2.0 7.1.7.5 then lets the
-             * hub debounce a connection for up to 100 ms before it reports it.
-             * The scan below reads each port exactly once, so waiting here for
-             * any port to show CONNECTION is the difference between a slow hub
-             * and no hub at all. */
             {
-                const uint32_t deb_deadline = systimer_clo() + 200000u;
-                uint32_t connected = 0;
-                while (!connected && (int32_t)(deb_deadline - systimer_clo()) > 0) {
-                    for (uint32_t hp = 1; hp <= hub_ports && !connected; hp++) {
+                uint32_t t_hub = systimer_clo();
+                const uint32_t conn_deadline = t_hub + hub_power_good_us + 200000u;
+                uint32_t settled = 0xFFFFFFFFu;  /* no prior pass yet */
+                for (;;) {
+                    uint32_t mask = 0;
+                    for (uint32_t hp = 1; hp <= hub_ports; hp++) {
                         usb_port_status_t st = {0};
-                        if (xhci_ep0_control_transfer(1, 0xA3, USB_REQ_GET_STATUS, 0, hp, 4, &st) == 0)
-                            connected = st.wPortStatus & HUB_PORT_STAT_CONNECTION;
+                        if (xhci_ep0_control_transfer(1, 0xA3, USB_REQ_GET_STATUS, 0, hp, 4, &st) == 0 &&
+                            (st.wPortStatus & HUB_PORT_STAT_CONNECTION))
+                            mask |= 1u << hp;
                     }
-                    if (connected) break;
+                    if (mask && mask == settled) break;
+                    settled = mask;
+                    if ((int32_t)(conn_deadline - systimer_clo()) <= 0) break;
                     delay_us(2000);
                 }
+                hub_wait_us = (uint32_t)(systimer_clo() - t_hub);
+                fb_log("[XHCI] Hub ports settled after ");
+                fb_log_dec(hub_wait_us);
+                fb_log("us (hub claims it may need ");
+                fb_log_dec(hub_power_good_us);
+                fb_log("us)\n");
             }
 
             /* Scan Hub Ports */
@@ -1043,13 +1069,32 @@ int xhci_init(uintptr_t mmio_base) {
                     fb_log_dec(hp);
                     fb_log(" Device Attached -> Resetting...\n");
 
-                    /* Issue Hub Port Reset (minimum 50-60ms as per USB 2.0 spec) */
+                    /* Issue Hub Port Reset, then wait for the hub to drop
+                     * PORT_RESET instead of sleeping a fixed 60 ms.  The bit
+                     * stays set while the hub drives reset signalling (at
+                     * least the 10 ms of USB 2.0 7.1.7.5) and the hub clears it
+                     * on completion, so its falling edge is the readiness
+                     * signal -- and port GET_STATUS is answered by the hub
+                     * itself, so polling is valid during the reset.  200 ms is
+                     * a ceiling well above what a working device needs while
+                     * still short of the interval a hub may take to report a
+                     * failed port. */
                     xhci_ep0_control_transfer(1, 0x23, USB_REQ_SET_FEATURE, HUB_FEAT_PORT_RESET, hp, 0, NULL);
-                    delay_us(60000);
+                    {
+                        const uint32_t rst_deadline = systimer_clo() + 200000u;
+                        for (;;) {
+                            usb_port_status_t rs = {0};
+                            if (xhci_ep0_control_transfer(1, 0xA3, USB_REQ_GET_STATUS,
+                                                          0, hp, 4, &rs) != 0) break;
+                            if (!(rs.wPortStatus & HUB_PORT_STAT_RESET)) break;
+                            if ((int32_t)(rst_deadline - systimer_clo()) <= 0) break;
+                            delay_us(1000);
+                        }
+                    }
 
                     /* Clear reset change and re-read Port Status */
                     xhci_ep0_control_transfer(1, 0x23, USB_REQ_CLEAR_FEATURE, HUB_FEAT_C_PORT_RESET, hp, 0, NULL);
-                    delay_us(10000); /* 10ms reset recovery time (T_RSTRCY) */
+                    delay_us(10000); /* T_RSTRCY: a device may take 10 ms after reset to answer */
                     xhci_ep0_control_transfer(1, 0xA3, USB_REQ_GET_STATUS, 0, hp, 4, &pstat);
 
                     uint32_t dev_speed = 1; /* Default Full-Speed */
@@ -1089,7 +1134,12 @@ int xhci_init(uintptr_t mmio_base) {
                         fb_log("\n");
                         continue;
                     }
-                    delay_us(10000);
+                    /* Address Device has already run the SET_ADDRESS phase in
+                     * hardware and returned, so what remains is the 2 ms a
+                     * device is allowed to start answering on its new address.
+                     * The 10 ms above already paid reset recovery; repeating it
+                     * here charged the same interval twice per device. */
+                    delay_us(2000);
 
                     /* Step 1: Read first 8 bytes of Device Descriptor to learn true bMaxPacketSize0 */
                     usb_device_desc_t ddesc = {0};
@@ -1104,6 +1154,10 @@ int xhci_init(uintptr_t mmio_base) {
                     uint32_t real_mps = ddesc.bMaxPacketSize0;
                     if (real_mps < 8 || real_mps > 64) real_mps = 8;
                     if (real_mps != ep0_init_mps) {
+                        /* No settle after this: Evaluate Context completing on
+                         * the command ring is the controller's own ack that
+                         * the new EP0 max packet is in effect.  It used to be
+                         * followed by 5 ms per device. */
                         ret = xhci_evaluate_ep0_max_packet(dev_slot, real_mps);
                         fb_log("[XHCI] Slot ");
                         fb_log_dec(dev_slot);
@@ -1112,7 +1166,6 @@ int xhci_init(uintptr_t mmio_base) {
                         fb_log(" EVAL ret=");
                         fb_log_dec((uint32_t)ret);
                         fb_log("\n");
-                        delay_us(5000);
                     }
 
                     /* Step 2: Read full 18-byte Device Descriptor */
@@ -1278,6 +1331,14 @@ int xhci_init(uintptr_t mmio_base) {
             xhci_queue_ep1_transfer(s_mice[m].slot_id, (uintptr_t)s_mice[m].buf[b], s_mice[m].mps);
         }
     }
+
+    fb_log("[XHCI] Bring-up total_us=");
+    fb_log_dec((uint32_t)(systimer_clo() - t_xhci));
+    fb_log(" dma_zero_us=");
+    fb_log_dec(zero_us);
+    fb_log(" hub_us=");
+    fb_log_dec(hub_wait_us);
+    fb_log("\n");
 
     return 0;
 }

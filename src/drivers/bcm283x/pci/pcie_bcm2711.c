@@ -50,14 +50,6 @@ static inline void delay_us(uint32_t us) {
     }
 }
 
-static inline void delay_ms(uint32_t ms) {
-    uint32_t start = systimer_clo();
-    uint32_t target = ms * 1000u;
-    while ((uint32_t)(systimer_clo() - start) < target) {
-        __asm__ volatile("nop");
-    }
-}
-
 static inline uint32_t pcie_rc_read(uint32_t reg) {
     return mmio_read32(BCM2711_PCIE_REG_BASE + reg);
 }
@@ -203,6 +195,10 @@ int bcm2711_pcie_init(void) {
 
     fb_log("[PCIE] Initializing Broadcom STB PCIe Root Complex (0xFD500000)...\n");
 
+    /* Every wait below is now a poll with a deadline, so the only way to know
+     * what the bring-up actually costs is to print what it took. */
+    uint32_t t_init = systimer_clo();
+
     /* 1. Controller Reset Sequence (Linux pcie-brcmstb.c style)
      *
      * RGR1_SW_INIT_1 (0x9210):
@@ -283,20 +279,26 @@ int bcm2711_pcie_init(void) {
 
     /* 4. Wait for controller and link training.
      *    PCIE_MISC_PCIE_STATUS (0x4068): bit 4 = PHYLINKUP, bit 5 = DL_ACTIVE.
-     *    U-Boot polls this for up to ~100 ms (mdelay(5) x 20); PCIe link
-     *    training routinely takes tens of ms, so the previous 1 ms budget was
-     *    far too short and let enumeration start against a down link. */
-    int to = 20;
-    while (to-- > 0) {
+     *    PCIe tolerates the link reaching L0 up to ~100 ms after PERST#
+     *    de-assertion, so 100 ms is a ceiling we refuse to exceed, not a wait.
+     *    The previous loop slept 5 ms per attempt, so a link that locked in
+     *    1 ms still cost 5 ms.  This register is root-complex local -- polling
+     *    it puts no traffic on the link, so there is nothing to space out. */
+    uint32_t t_link = systimer_clo();
+    const uint32_t link_deadline = t_link + 100000u;
+    for (;;) {
         if ((pcie_rc_read(0x4068) & 0x30) == 0x30) break;
-        delay_ms(5);
+        if ((int32_t)(link_deadline - systimer_clo()) <= 0) break;
     }
+    uint32_t link_us = (uint32_t)(systimer_clo() - t_link);
     uint32_t state = pcie_rc_read(0x4068);
     uint32_t link_speed = pcie_rc_read(0x00BC) >> 16;
     fb_log("[PCIE] Bridge State=");
     fb_log_hex32(state);
     fb_log(" LinkSpeed=");
     fb_log_hex32(link_speed);
+    fb_log(" trained_us=");
+    fb_log_dec(link_us);
     fb_log("\n");
 
     /* 5. Set CPU->PCI Outbound memory window (0x600000000 -> 0xC0000000, 1GB) */
@@ -311,12 +313,14 @@ int bcm2711_pcie_init(void) {
     pcie_rc_write(0x043C, (0x06 << 16) | (0x04 << 8)); /* PCI_ID_VAL3 */
     dsb();
 
-    /* 7. Configure CLKREQ and L1SS in REG_PCIE_HARD_DEBUG (0x4204) */
+    /* 7. Configure CLKREQ and L1SS in REG_PCIE_HARD_DEBUG (0x4204).
+     *    Root-complex local control bits with no settle semantics, so the
+     *    100 us that used to follow this write was pure boot cost. */
     uint32_t hd = pcie_rc_read(0x4204);
     hd |= 0x2;        /* CLKREQ_ENABLE */
     hd |= 0x00200000; /* L1SS_ENABLE */
     pcie_rc_write(0x4204, hd);
-    delay_us(100);
+    dsb();
 
     /* 8. Configure Root Port Bridge Type 1 Header (Bus 0, Dev 0, Func 0) */
     pci_write_config32(0, 0, 0, 0x18, 0x00010100u);   /* Primary=0, Secondary=1, Sub=1 */
@@ -361,7 +365,28 @@ int bcm2711_pcie_init(void) {
         fb_log_hex32(notify_us);
         fb_log("\n");
         if (notify != VL805_NOTIFY_SKIPPED) {
-            delay_ms(50); /* real settle for VL805 controller reboot after fw notify */
+            /* Wait for the condition the 50 ms sleep was standing in for: the
+             * endpoint answering as itself again.  If the VideoCore re-ran the
+             * RPIBOOT load, the chip restarts and stops answering config
+             * requests until it is back; 1106:3483 reappearing is the real
+             * readiness signal.  A dropped read returns all-ones rather than
+             * hanging (CFG_READ_UR_MODE was set at step 2), and a completion
+             * timeout paces the loop by itself, so no sleep is needed.  500 ms
+             * is a ceiling, not a wait: if the firmware was already resident
+             * the first read succeeds and this prints 0us. */
+            uint32_t t_ready = systimer_clo();
+            const uint32_t ready_deadline = t_ready + 500000u;
+            const uint32_t vl805_id = ((uint32_t)VL805_DEVICE_ID << 16) |
+                                      (uint32_t)VL805_VENDOR_ID;
+            for (;;) {
+                uint32_t id = pci_read_config32(VL805_PCI_BUS, VL805_PCI_DEV,
+                                                VL805_PCI_FUNC, PCI_VENDOR_ID);
+                if (id == vl805_id) break;
+                if ((int32_t)(ready_deadline - systimer_clo()) <= 0) break;
+            }
+            fb_log("[PCIE] VL805 ready after ");
+            fb_log_dec((uint32_t)(systimer_clo() - t_ready));
+            fb_log("us\n");
         }
 
         /* 11. Program BAR0 to PCI address 0xC0000000 (after firmware reload) */
@@ -397,11 +422,16 @@ int bcm2711_pcie_init(void) {
         fb_log_hex32(test_read);
         fb_log("\n");
 
+        fb_log("[PCIE] RC bring-up total_us=");
+        fb_log_dec((uint32_t)(systimer_clo() - t_init));
+        fb_log("\n");
         return 0;
     } else {
         fb_log("[PCIE] Device 01:00.0 ID: ");
         fb_log_hex32(id_reg);
-        fb_log(" (not VL805)\n");
+        fb_log(" (not VL805) total_us=");
+        fb_log_dec((uint32_t)(systimer_clo() - t_init));
+        fb_log("\n");
         return -1;
     }
 }

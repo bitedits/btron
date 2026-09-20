@@ -159,20 +159,47 @@ void async_rt_format_compact_status(char *buf, size_t len) {
 /* Double-buffered 32-bpp Desktop Backbuffer */
 static COLOR s_desktop_backbuffer[BTRON_SCREEN_W * BTRON_SCREEN_H] __attribute__((aligned(64)));
 
+enum {
+    DRAG_PREVIEW_CAPTURE,
+    DRAG_PREVIEW_PREPARE,
+    DRAG_PREVIEW_RESTORE,
+    DRAG_PREVIEW_STAMP,
+    DRAG_PREVIEW_PRESENT,
+    DRAG_PREVIEW_IDLE
+};
+
+#define DRAG_PREVIEW_TILE_SIZE 32
+#define DRAG_PREVIEW_TILES_X ((BTRON_SCREEN_W + DRAG_PREVIEW_TILE_SIZE - 1) / DRAG_PREVIEW_TILE_SIZE)
+#define DRAG_PREVIEW_TILES_Y ((BTRON_SCREEN_H + DRAG_PREVIEW_TILE_SIZE - 1) / DRAG_PREVIEW_TILE_SIZE)
+
 typedef struct {
     WND *target;
     RECT bounds;
+    RECT wanted;
+    RECT stamp;
+    RECT compose;
     H width;
     H height;
+    H capture_row;
+    H opacity_row;
+    H compose_row;
+    H present_row;
+    int phase;
+    BOOL target_hidden;
+    BOOL opacity_known;
+    BOOL opacity_opaque;
     BOOL active;
 } drag_preview_t;
 
 static COLOR s_drag_preview_pixels[BTRON_SCREEN_W * BTRON_SCREEN_H] __attribute__((aligned(64)));
 static COLOR s_drag_preview_underlay[BTRON_SCREEN_W * BTRON_SCREEN_H] __attribute__((aligned(64)));
+static uint8_t s_drag_preview_tiles[DRAG_PREVIEW_TILES_X * DRAG_PREVIEW_TILES_Y];
 static drag_preview_t s_drag_preview;
-static RECT s_drag_preview_cpu_rect;
-static H s_drag_preview_cpu_row;
 static int s_drag_preview_cpu_active;
+static WND *s_drag_preview_opacity_target;
+static GDEV *s_drag_preview_opacity_dev;
+static int s_drag_preview_opacity_valid;
+static int s_drag_preview_opacity_value;
 static int s_drag_preview_dma_enabled = 0;
 static int s_drag_preview_dma_active;
 static RECT s_drag_preview_dma_rect;
@@ -766,164 +793,216 @@ static void present_backbuffer_rect(volatile uint32_t *fb, H x0, H y0, H x1, H y
     s_present_cursor_dirty = 1;
 }
 
-static void drag_preview_cpu_step(volatile uint32_t *fb) {
-    if (!s_drag_preview_cpu_active || !fb) return;
-
-    uint32_t start_us = *(volatile uint32_t *)(TIMER_BASE + 0x04);
-    H width = s_drag_preview_cpu_rect.right - s_drag_preview_cpu_rect.left;
-    H height = s_drag_preview_cpu_rect.bottom - s_drag_preview_cpu_rect.top;
-    volatile uint32_t *dst = fb + s_present_front_page * BTRON_SCREEN_W * BTRON_SCREEN_H;
-    while (s_drag_preview_cpu_row < height) {
-        H y = s_drag_preview_cpu_rect.top + s_drag_preview_cpu_row;
-        arm64_fast_blit((void *)(dst + (size_t)y * BTRON_SCREEN_W + s_drag_preview_cpu_rect.left),
-                        &s_desktop_backbuffer[(size_t)y * BTRON_SCREEN_W + s_drag_preview_cpu_rect.left],
-                        (size_t)width * sizeof(COLOR));
-        s_drag_preview_cpu_row++;
-        if ((*(volatile uint32_t *)(TIMER_BASE + 0x04) - start_us) >= ASYNC_PRESENT_BUDGET_US)
-            break;
-    }
-
-    uint32_t elapsed = *(volatile uint32_t *)(TIMER_BASE + 0x04) - start_us;
-    s_async_rt_stats.present_us = elapsed;
-    if (elapsed > s_async_rt_stats.present_max_us)
-        s_async_rt_stats.present_max_us = elapsed;
-    if (s_drag_preview_cpu_row >= height)
-        s_drag_preview_cpu_active = 0;
-    s_present_cursor_dirty = 1;
-}
-
-static void drag_preview_reset(void) {
-    if (s_drag_preview_dma_active) bcm2711_dma_abort(0);
-    s_drag_preview_dma_active = 0;
-    s_drag_preview_cpu_active = 0;
-    s_drag_preview_dma_start_us = 0;
-    s_drag_preview.target = NULL;
-    s_drag_preview.active = FALSE;
-}
-
-static void drag_preview_dma_complete(volatile uint32_t *fb, uint32_t now) {
-    if (!s_drag_preview_dma_active || bcm2711_dma_is_busy(0)) return;
-
-    int status = bcm2711_dma_wait_timeout(0, 1u);
-    volatile uint32_t *dst = fb + s_present_front_page * BTRON_SCREEN_W * BTRON_SCREEN_H +
-                             (size_t)s_drag_preview_dma_rect.top * BTRON_SCREEN_W +
-                             s_drag_preview_dma_rect.left;
-    size_t span = (size_t)(s_drag_preview_dma_rect.bottom - s_drag_preview_dma_rect.top) *
-                  BTRON_SCREEN_W * sizeof(COLOR);
-    arm64_invalidate_cache_range((const void *)dst, span);
-    if (status != 0)
-        present_backbuffer_rect(fb, s_drag_preview_dma_rect.left,
-                                s_drag_preview_dma_rect.top,
-                                s_drag_preview_dma_rect.right,
-                                s_drag_preview_dma_rect.bottom);
-
-    uint32_t elapsed = now - s_drag_preview_dma_start_us;
-    if (elapsed > s_async_rt_stats.present_max_us)
-        s_async_rt_stats.present_max_us = elapsed;
-    s_drag_preview_dma_active = 0;
-    s_drag_preview_dma_start_us = 0;
-    s_present_cursor_dirty = 1;
-}
-
 static int drag_preview_bounds_valid(const RECT *bounds) {
     return bounds && bounds->left >= 0 && bounds->top >= 0 &&
            bounds->right <= BTRON_SCREEN_W && bounds->bottom <= BTRON_SCREEN_H &&
            bounds->right > bounds->left && bounds->bottom > bounds->top;
 }
 
-static int drag_preview_window_opaque(const WND *wnd) {
-    if (!wnd || !wnd->dev || !wnd->dev->pixels) return 0;
-    size_t pixels = (size_t)wnd->dev->width * wnd->dev->height;
-    for (size_t i = 0; i < pixels; i++) {
-        if (wnd->dev->pixels[i] == 0x00000000) return 0;
+static RECT drag_preview_union(const RECT *a, const RECT *b) {
+    RECT out = *a;
+    if (b->left < out.left) out.left = b->left;
+    if (b->top < out.top) out.top = b->top;
+    if (b->right > out.right) out.right = b->right;
+    if (b->bottom > out.bottom) out.bottom = b->bottom;
+    return out;
+}
+
+static void drag_preview_cache_tile(GDEV *screen, int tx, int ty) {
+    int index = ty * DRAG_PREVIEW_TILES_X + tx;
+    if (s_drag_preview_tiles[index]) return;
+    RECT tile = { tx * DRAG_PREVIEW_TILE_SIZE, ty * DRAG_PREVIEW_TILE_SIZE,
+                  (tx + 1) * DRAG_PREVIEW_TILE_SIZE, (ty + 1) * DRAG_PREVIEW_TILE_SIZE };
+    if (tile.right > BTRON_SCREEN_W) tile.right = BTRON_SCREEN_W;
+    if (tile.bottom > BTRON_SCREEN_H) tile.bottom = BTRON_SCREEN_H;
+    workbench_render_damage(screen, &tile);
+    for (H y = tile.top; y < tile.bottom; y++)
+        btron_row_blit(&s_drag_preview_underlay[(size_t)y * BTRON_SCREEN_W + tile.left],
+                       &s_desktop_backbuffer[(size_t)y * BTRON_SCREEN_W + tile.left],
+                       (size_t)(tile.right - tile.left) * sizeof(COLOR));
+    s_drag_preview_tiles[index] = 1;
+}
+
+static int drag_preview_prepare_one_tile(GDEV *screen) {
+    RECT need = drag_preview_union(&s_drag_preview.bounds, &s_drag_preview.wanted);
+    int x0 = need.left / DRAG_PREVIEW_TILE_SIZE;
+    int y0 = need.top / DRAG_PREVIEW_TILE_SIZE;
+    int x1 = (need.right - 1) / DRAG_PREVIEW_TILE_SIZE;
+    int y1 = (need.bottom - 1) / DRAG_PREVIEW_TILE_SIZE;
+    for (int y = y0; y <= y1; y++) {
+        for (int x = x0; x <= x1; x++) {
+            if (!s_drag_preview_tiles[y * DRAG_PREVIEW_TILES_X + x]) {
+                drag_preview_cache_tile(screen, x, y);
+                return 1;
+            }
+        }
     }
-    return 1;
+    return 0;
+}
+
+static void drag_preview_reset(void) {
+    if (s_drag_preview_dma_active) bcm2711_dma_abort(0);
+    if (s_drag_preview.target && s_drag_preview.target_hidden)
+        s_drag_preview.target->visible = TRUE;
+    s_drag_preview_dma_active = 0;
+    s_drag_preview_cpu_active = 0;
+    s_drag_preview_dma_start_us = 0;
+    s_drag_preview.target = NULL;
+    s_drag_preview.active = FALSE;
+    s_drag_preview.target_hidden = FALSE;
+    s_drag_preview.phase = DRAG_PREVIEW_IDLE;
 }
 
 static int drag_preview_capture(GDEV *screen, WND *target, const RECT *bounds) {
-    if (!screen || !target || target != get_top_wnd() || !target->visible ||
-        !drag_preview_bounds_valid(bounds) || !drag_preview_window_opaque(target))
+    (void)screen;
+    if (!target || target != get_top_wnd() || !target->visible ||
+        !drag_preview_bounds_valid(bounds))
+        return 0;
+    if (s_drag_preview_opacity_valid && s_drag_preview_opacity_target == target &&
+        s_drag_preview_opacity_dev == target->dev && !s_drag_preview_opacity_value)
         return 0;
 
     H width = bounds->right - bounds->left;
     H height = bounds->bottom - bounds->top;
     if ((size_t)width * height > BTRON_SCREEN_W * BTRON_SCREEN_H) return 0;
 
-    for (H y = 0; y < height; y++) {
-        btron_row_blit(&s_drag_preview_pixels[(size_t)y * width],
-                       &s_desktop_backbuffer[(size_t)(bounds->top + y) * BTRON_SCREEN_W + bounds->left],
-                       (size_t)width * sizeof(COLOR));
-    }
-    btron_row_blit(s_drag_preview_underlay, s_desktop_backbuffer,
-                   BTRON_SCREEN_W * BTRON_SCREEN_H * sizeof(COLOR));
-    COLOR *pixels = screen->pixels;
-    target->visible = FALSE;
-    screen->pixels = s_drag_preview_underlay;
-    workbench_render_damage(screen, bounds);
-    screen->pixels = pixels;
-    target->visible = TRUE;
     s_drag_preview.target = target;
     s_drag_preview.bounds = *bounds;
+    s_drag_preview.wanted = *bounds;
     s_drag_preview.width = width;
     s_drag_preview.height = height;
+    s_drag_preview.capture_row = 0;
+    s_drag_preview.opacity_row = 0;
+    s_drag_preview.compose_row = 0;
+    s_drag_preview.present_row = 0;
+    s_drag_preview.target_hidden = FALSE;
+    s_drag_preview.opacity_known = s_drag_preview_opacity_valid &&
+                                     s_drag_preview_opacity_target == target &&
+                                     s_drag_preview_opacity_dev == target->dev;
+    s_drag_preview.opacity_opaque = s_drag_preview_opacity_value;
+    s_drag_preview.phase = DRAG_PREVIEW_CAPTURE;
     s_drag_preview.active = TRUE;
+    s_drag_preview_cpu_active = 1;
+    for (size_t i = 0; i < sizeof(s_drag_preview_tiles); i++)
+        s_drag_preview_tiles[i] = 0;
     return 1;
 }
 
-static uint32_t drag_preview_repair_strips(const RECT *old, const RECT *current) {
-    RECT strips[4];
-    int count = 0;
-    H il = old->left > current->left ? old->left : current->left;
-    H it = old->top > current->top ? old->top : current->top;
-    H ir = old->right < current->right ? old->right : current->right;
-    H ib = old->bottom < current->bottom ? old->bottom : current->bottom;
+static void drag_preview_cpu_step(GDEV *screen, volatile uint32_t *fb) {
+    if (!screen || !fb || !s_drag_preview_cpu_active || !s_drag_preview.active) return;
 
-    if (ir <= il || ib <= it) {
-        strips[count++] = *old;
-    } else {
-        if (old->top < it) strips[count++] = (RECT){ old->left, old->top, old->right, it };
-        if (ib < old->bottom) strips[count++] = (RECT){ old->left, ib, old->right, old->bottom };
-        if (old->left < il) strips[count++] = (RECT){ old->left, it, il, ib };
-        if (ir < old->right) strips[count++] = (RECT){ ir, it, old->right, ib };
-    }
-
-    uint32_t area = 0;
-    for (int i = 0; i < count; i++) {
-        H width = strips[i].right - strips[i].left;
-        for (H y = strips[i].top; y < strips[i].bottom; y++) {
-            btron_row_blit(&s_desktop_backbuffer[(size_t)y * BTRON_SCREEN_W + strips[i].left],
-                           &s_drag_preview_underlay[(size_t)y * BTRON_SCREEN_W + strips[i].left],
-                           (size_t)width * sizeof(COLOR));
+    uint32_t start_us = *(volatile uint32_t *)(TIMER_BASE + 0x04);
+    volatile uint32_t *dst = fb + s_present_front_page * BTRON_SCREEN_W * BTRON_SCREEN_H;
+    while ((*(volatile uint32_t *)(TIMER_BASE + 0x04) - start_us) < ASYNC_PRESENT_BUDGET_US) {
+        if (s_drag_preview.phase == DRAG_PREVIEW_CAPTURE) {
+            if (s_drag_preview.capture_row < s_drag_preview.height) {
+                H y = s_drag_preview.capture_row++;
+                btron_row_blit(&s_drag_preview_pixels[(size_t)y * s_drag_preview.width],
+                               &s_desktop_backbuffer[(size_t)(s_drag_preview.bounds.top + y) * BTRON_SCREEN_W + s_drag_preview.bounds.left],
+                               (size_t)s_drag_preview.width * sizeof(COLOR));
+            }
+            if (!s_drag_preview.opacity_known && s_drag_preview.target->dev &&
+                s_drag_preview.opacity_row < s_drag_preview.target->dev->height) {
+                COLOR *row = &s_drag_preview.target->dev->pixels[(size_t)s_drag_preview.opacity_row++ * s_drag_preview.target->dev->width];
+                for (H x = 0; x < s_drag_preview.target->dev->width; x++) {
+                    if (row[x] == 0x00000000) {
+                        s_drag_preview_opacity_target = s_drag_preview.target;
+                        s_drag_preview_opacity_dev = s_drag_preview.target->dev;
+                        s_drag_preview_opacity_valid = 1;
+                        s_drag_preview_opacity_value = 0;
+                        drag_preview_reset();
+                        return;
+                    }
+                }
+            }
+            if (s_drag_preview.capture_row < s_drag_preview.height ||
+                (!s_drag_preview.opacity_known && s_drag_preview.target->dev &&
+                 s_drag_preview.opacity_row < s_drag_preview.target->dev->height))
+                continue;
+            s_drag_preview_opacity_target = s_drag_preview.target;
+            s_drag_preview_opacity_dev = s_drag_preview.target->dev;
+            s_drag_preview_opacity_valid = 1;
+            s_drag_preview_opacity_value = 1;
+            s_drag_preview.target->visible = FALSE;
+            s_drag_preview.target_hidden = TRUE;
+            s_drag_preview.phase = DRAG_PREVIEW_PREPARE;
+            continue;
         }
-        area += (uint32_t)width * (uint32_t)(strips[i].bottom - strips[i].top);
+        if (s_drag_preview.phase == DRAG_PREVIEW_PREPARE) {
+            if (drag_preview_prepare_one_tile(screen)) continue;
+            s_drag_preview.stamp = s_drag_preview.wanted;
+            s_drag_preview.compose = s_drag_preview.stamp;
+            s_drag_preview.compose_row = 0;
+            s_drag_preview.phase = DRAG_PREVIEW_RESTORE;
+            continue;
+        }
+        if (s_drag_preview.phase == DRAG_PREVIEW_RESTORE) {
+            if (s_drag_preview.compose_row < s_drag_preview.height) {
+                H y = s_drag_preview.bounds.top + s_drag_preview.compose_row++;
+                btron_row_blit(&s_desktop_backbuffer[(size_t)y * BTRON_SCREEN_W + s_drag_preview.bounds.left],
+                               &s_drag_preview_underlay[(size_t)y * BTRON_SCREEN_W + s_drag_preview.bounds.left],
+                               (size_t)s_drag_preview.width * sizeof(COLOR));
+                continue;
+            }
+            s_drag_preview.compose_row = 0;
+            s_drag_preview.phase = DRAG_PREVIEW_STAMP;
+            continue;
+        }
+        if (s_drag_preview.phase == DRAG_PREVIEW_STAMP) {
+            if (s_drag_preview.compose_row < s_drag_preview.height) {
+                H y = s_drag_preview.compose_row++;
+                btron_row_blit(&s_desktop_backbuffer[(size_t)(s_drag_preview.stamp.top + y) * BTRON_SCREEN_W + s_drag_preview.stamp.left],
+                               &s_drag_preview_pixels[(size_t)y * s_drag_preview.width],
+                               (size_t)s_drag_preview.width * sizeof(COLOR));
+                continue;
+            }
+            s_drag_preview.compose = drag_preview_union(&s_drag_preview.bounds, &s_drag_preview.compose);
+            s_drag_preview.present_row = 0;
+            s_drag_preview.phase = DRAG_PREVIEW_PRESENT;
+            continue;
+        }
+        if (s_drag_preview.phase == DRAG_PREVIEW_PRESENT) {
+            H height = s_drag_preview.compose.bottom - s_drag_preview.compose.top;
+            H width = s_drag_preview.compose.right - s_drag_preview.compose.left;
+            if (s_drag_preview.present_row < height) {
+                H y = s_drag_preview.compose.top + s_drag_preview.present_row++;
+                arm64_fast_blit((void *)(dst + (size_t)y * BTRON_SCREEN_W + s_drag_preview.compose.left),
+                                &s_desktop_backbuffer[(size_t)y * BTRON_SCREEN_W + s_drag_preview.compose.left],
+                                (size_t)width * sizeof(COLOR));
+                continue;
+            }
+            s_drag_preview.bounds = s_drag_preview.stamp;
+            s_drag_preview.target_hidden = TRUE;
+            s_present_cursor_dirty = 1;
+            s_hud_path_live = 'v';
+            s_hud_area_live = ((uint32_t)width * height * 100u) / ((uint32_t)BTRON_SCREEN_W * BTRON_SCREEN_H);
+            if (s_drag_preview.wanted.left != s_drag_preview.bounds.left ||
+                s_drag_preview.wanted.top != s_drag_preview.bounds.top ||
+                s_drag_preview.wanted.right != s_drag_preview.bounds.right ||
+                s_drag_preview.wanted.bottom != s_drag_preview.bounds.bottom) {
+                s_drag_preview.phase = DRAG_PREVIEW_PREPARE;
+            } else {
+                s_drag_preview.phase = DRAG_PREVIEW_IDLE;
+                s_drag_preview_cpu_active = 0;
+            }
+            break;
+        }
+        break;
     }
-    return area;
-}
 
-static void drag_preview_present_strips(volatile uint32_t *fb, const RECT *old, const RECT *current) {
-    RECT strips[4];
-    int count = 0;
-    H il = old->left > current->left ? old->left : current->left;
-    H it = old->top > current->top ? old->top : current->top;
-    H ir = old->right < current->right ? old->right : current->right;
-    H ib = old->bottom < current->bottom ? old->bottom : current->bottom;
-
-    if (ir <= il || ib <= it) {
-        strips[count++] = *old;
-    } else {
-        if (old->top < it) strips[count++] = (RECT){ old->left, old->top, old->right, it };
-        if (ib < old->bottom) strips[count++] = (RECT){ old->left, ib, old->right, old->bottom };
-        if (old->left < il) strips[count++] = (RECT){ old->left, it, il, ib };
-        if (ir < old->right) strips[count++] = (RECT){ ir, it, old->right, ib };
-    }
-
-    for (int i = 0; i < count; i++)
-        present_backbuffer_rect(fb, strips[i].left, strips[i].top, strips[i].right, strips[i].bottom);
+    uint32_t elapsed = *(volatile uint32_t *)(TIMER_BASE + 0x04) - start_us;
+    s_async_rt_stats.composite_us = elapsed;
+    if (elapsed > s_async_rt_stats.composite_max_us)
+        s_async_rt_stats.composite_max_us = elapsed;
+    s_async_rt_stats.present_us = elapsed;
+    if (elapsed > s_async_rt_stats.present_max_us)
+        s_async_rt_stats.present_max_us = elapsed;
 }
 
 static int present_drag_preview(GDEV *screen, volatile uint32_t *fb, WND *target,
                                 const RECT *old, const RECT *current) {
-    if (s_drag_preview_dma_active || s_drag_preview_cpu_active) return 1;
+    (void)screen;
+    (void)fb;
     if (!s_drag_preview.active || s_drag_preview.target != target ||
         !drag_preview_bounds_valid(old) || !drag_preview_bounds_valid(current) ||
         old->top < 28 || current->top < 28 ||
@@ -932,55 +1011,10 @@ static int present_drag_preview(GDEV *screen, volatile uint32_t *fb, WND *target
         current->right - current->left != s_drag_preview.width ||
         current->bottom - current->top != s_drag_preview.height)
         return 0;
-
-    uint32_t t0 = *(volatile uint32_t *)(TIMER_BASE + 0x04);
-    uint32_t area = drag_preview_repair_strips(old, current);
-    for (H y = 0; y < s_drag_preview.height; y++) {
-        btron_row_blit(&s_desktop_backbuffer[(size_t)(current->top + y) * BTRON_SCREEN_W + current->left],
-                       &s_drag_preview_pixels[(size_t)y * s_drag_preview.width],
-                       (size_t)s_drag_preview.width * sizeof(COLOR));
-    }
-    area += (uint32_t)s_drag_preview.width * s_drag_preview.height;
-    uint32_t t1 = *(volatile uint32_t *)(TIMER_BASE + 0x04);
-    drag_preview_present_strips(fb, old, current);
-
-    int dma_started = 0;
-    if (s_drag_preview_dma_enabled && s_dma_fb_selftest_passed) {
-        COLOR *src = &s_desktop_backbuffer[(size_t)current->top * BTRON_SCREEN_W + current->left];
-        volatile uint32_t *dst = fb + s_present_front_page * BTRON_SCREEN_W * BTRON_SCREEN_H +
-                                 (size_t)current->top * BTRON_SCREEN_W + current->left;
-        size_t span = (size_t)(current->bottom - current->top) *
-                      BTRON_SCREEN_W * sizeof(COLOR);
-        arm64_clean_cache_range(src, span);
-        arm64_clean_cache_range((const void *)dst, span);
-        if (bcm2711_dma_blit2d_async(0, (uintptr_t)dst, BTRON_SCREEN_W * sizeof(COLOR),
-                                     (uintptr_t)src, BTRON_SCREEN_W * sizeof(COLOR),
-                                     (current->right - current->left) * sizeof(COLOR),
-                                     current->bottom - current->top) == 0) {
-            s_drag_preview_dma_rect = *current;
-            s_drag_preview_dma_start_us = t1;
-            s_drag_preview_dma_active = 1;
-            dma_started = 1;
-        }
-    }
-    if (!dma_started) {
-        s_drag_preview_cpu_rect = *current;
-        s_drag_preview_cpu_row = 0;
+    s_drag_preview.wanted = *current;
+    if (s_drag_preview.phase == DRAG_PREVIEW_IDLE) {
+        s_drag_preview.phase = DRAG_PREVIEW_PREPARE;
         s_drag_preview_cpu_active = 1;
-    }
-    uint32_t t2 = *(volatile uint32_t *)(TIMER_BASE + 0x04);
-
-    s_drag_preview.bounds = *current;
-    s_async_rt_stats.composite_us = t1 - t0;
-    if (s_async_rt_stats.composite_us > s_async_rt_stats.composite_max_us) {
-        s_async_rt_stats.composite_max_us = s_async_rt_stats.composite_us;
-        s_hud_path_live = 'v';
-        s_hud_area_live = (area * 100u) / ((uint32_t)BTRON_SCREEN_W * BTRON_SCREEN_H);
-    }
-    if (!dma_started) {
-        s_async_rt_stats.present_us = t2 - t1;
-        if (s_async_rt_stats.present_us > s_async_rt_stats.present_max_us)
-            s_async_rt_stats.present_max_us = s_async_rt_stats.present_us;
     }
     return 1;
 }
@@ -1181,9 +1215,7 @@ static void launch_pi4_desktop_session(uint32_t *gpu_fb)
 
         /* Present at most 8 KiB of pixels per trip around the loop. */
         present_copy_step();
-        drag_preview_cpu_step(gpu_fb);
-
-        drag_preview_dma_complete(gpu_fb, now);
+        drag_preview_cpu_step(screen, gpu_fb);
 
         /* DMA always fills the hidden VideoCore page.  Completion flips it
          * atomically; this keeps the visible page available to the pointer and
@@ -1222,8 +1254,8 @@ static void launch_pi4_desktop_session(uint32_t *gpu_fb)
         int appmenu_redraw = 0;
         int local_button_redraw = 0;
         WND *local_button_target = NULL;
-        RECT focus_damage[2];
-        int focus_damage_count = 0;
+        RECT focus_damage = { 0, 0, 0, 0 };
+        int have_focus_damage = 0;
         int title_drag_release = 0;
         RECT title_drag_old = { 0, 0, 0, 0 };
         RECT title_drag_new = { 0, 0, 0, 0 };
@@ -1282,12 +1314,9 @@ static void launch_pi4_desktop_session(uint32_t *gpu_fb)
 
             WND *button_top_after = get_top_wnd();
             if (ev.type == EV_BUT_DOWN && button_top_before && button_top_after &&
-                button_top_after != button_top_before && button_top_after->visible &&
-                ev.pos.y >= button_top_after->bounds.top &&
-                ev.pos.y < button_top_after->bounds.top + 28) {
-                focus_damage[0] = button_top_bounds;
-                focus_damage[1] = button_top_after->bounds;
-                focus_damage_count = 2;
+                button_top_after != button_top_before && button_top_after->visible) {
+                focus_damage = drag_preview_union(&button_top_bounds, &button_top_after->bounds);
+                have_focus_damage = 1;
             }
 
             if (drag_target) {
@@ -1343,7 +1372,7 @@ static void launch_pi4_desktop_session(uint32_t *gpu_fb)
                     /* In-app menu open (click opened it, or a click/hover within
                      * it): repaint just the top window that owns the dropdown. */
                     appmenu_redraw = 1;
-                } else if (focus_damage_count) {
+                } else if (have_focus_damage) {
                 } else if ((ev.type == EV_BUT_DOWN || ev.type == EV_BUT_UP) &&
                            button_top_before && get_top_wnd() == button_top_before &&
                            button_top_before->visible &&
@@ -1469,12 +1498,10 @@ static void launch_pi4_desktop_session(uint32_t *gpu_fb)
             }
             s_present_cursor_dirty = 1;
         }
-        else if (focus_damage_count) {
-            for (int i = 0; i < focus_damage_count; i++) {
-                workbench_render_damage(screen, &focus_damage[i]);
-                present_backbuffer_rect(gpu_fb, focus_damage[i].left, focus_damage[i].top,
-                                        focus_damage[i].right, focus_damage[i].bottom);
-            }
+        else if (have_focus_damage) {
+            workbench_render_damage(screen, &focus_damage);
+            present_backbuffer_rect(gpu_fb, focus_damage.left, focus_damage.top,
+                                    focus_damage.right, focus_damage.bottom);
             s_present_cursor_dirty = 1;
         }
         /* Full UI path: redraw windows, menus, backbuffer blit */

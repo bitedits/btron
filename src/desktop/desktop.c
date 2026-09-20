@@ -11,6 +11,7 @@
 #include <btron/settings.h>
 #include <btron/settings_icon.h>
 #include <btron/apps.h>
+#include <btron/fast_blit.h>
 #if defined(__STDC_HOSTED__) && __STDC_HOSTED__ == 1
 #include <stdio.h>
 #include <time.h>
@@ -206,15 +207,7 @@ void render_desktop_background_rect(GDEV *dev, const RECT *damage) {
     for (H y = y0; y < y1; y++) {
         COLOR *dst = &dev->pixels[y * 1024 + x0];
         const COLOR *src = &s_cached_bg[y * 1024 + x0];
-        if ((((uintptr_t)dst | (uintptr_t)src) & 7u) == 0) {
-            uint64_t *d64 = (uint64_t *)dst;
-            const uint64_t *s64 = (const uint64_t *)src;
-            H pairs = width >> 1;
-            for (H i = 0; i < pairs; i++) d64[i] = s64[i];
-            if (width & 1) dst[width - 1] = src[width - 1];
-        } else {
-            for (H x = 0; x < width; x++) dst[x] = src[x];
-        }
+        btron_row_blit(dst, src, (size_t)width * sizeof(COLOR));
     }
 }
 

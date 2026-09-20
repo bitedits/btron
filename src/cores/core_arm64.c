@@ -34,6 +34,7 @@
 #include <btron/tip.h>
 #include <btron/apps.h>
 #include <btron/workbench.h>
+#include <btron/fast_blit.h>
 #include <libstr.h>
 #include <dwc2.h>
 #include <pcie.h>
@@ -231,27 +232,8 @@ static volatile uint32_t *s_fb_log_fb   = NULL;
 static int                s_fb_log_col  = 0;   /* current cursor X (chars)  */
 static int                s_fb_log_row  = 0;   /* current cursor Y (rows)   */
 
-/* 64-byte unrolled burst blitter: fallback when hardware DMA is not used */
 static inline void arm64_fast_blit(volatile void *dst, const void *src, size_t bytes) {
-    uint64_t *d = (uint64_t *)dst;
-    const uint64_t *s = (const uint64_t *)src;
-    size_t count = bytes / 64;
-    while (count--) {
-        d[0] = s[0];
-        d[1] = s[1];
-        d[2] = s[2];
-        d[3] = s[3];
-        d[4] = s[4];
-        d[5] = s[5];
-        d[6] = s[6];
-        d[7] = s[7];
-        d += 8;
-        s += 8;
-    }
-    size_t rem = bytes & 63;
-    if (rem) {
-        tkl_memcpy((void *)d, (const void *)s, rem);
-    }
+    btron_row_blit((void *)dst, src, bytes);
     __asm__ volatile("dmb sy" : : : "memory");
 }
 
@@ -743,25 +725,10 @@ static void present_backbuffer_rect(volatile uint32_t *fb, H x0, H y0, H x1, H y
     if (x1 <= x0 || y1 <= y0) return;
     volatile uint32_t *dst = fb + s_present_front_page * BTRON_SCREEN_W * BTRON_SCREEN_H;
     H width = x1 - x0;
-    /* Per-pixel volatile stores defeat every optimisation and were the same
-     * defect class that produced G99 in the window composite.  The framebuffer
-     * pitch (1024*4) is 8-byte aligned, so when x0 is even the row start is
-     * too and we can copy in 64-bit words; otherwise fall back to 32-bit
-     * (still non-volatile) stores, which are always aligned.  One barrier at
-     * the end instead of one per pixel. */
-    int aligned = ((x0 & 1) == 0);
     for (H y = y0; y < y1; y++) {
         const COLOR *srow = &s_desktop_backbuffer[y * BTRON_SCREEN_W + x0];
         uint32_t *drow = (uint32_t *)(dst + y * BTRON_SCREEN_W + x0);
-        if (aligned) {
-            const uint64_t *s64 = (const uint64_t *)srow;
-            uint64_t *d64 = (uint64_t *)drow;
-            H pairs = width >> 1;
-            for (H i = 0; i < pairs; i++) d64[i] = s64[i];
-            if (width & 1) drow[width - 1] = srow[width - 1];
-        } else {
-            for (H x = 0; x < width; x++) drow[x] = srow[x];
-        }
+        btron_row_blit(drow, srow, (size_t)width * sizeof(COLOR));
     }
     __asm__ volatile("dmb sy" : : : "memory");
     s_present_cursor_dirty = 1;

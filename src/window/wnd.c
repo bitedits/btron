@@ -5,6 +5,7 @@
 
 #include <btron/wnd.h>
 #include <btron/troncode.h>
+#include <btron/fast_blit.h>
 #if defined(__STDC_HOSTED__) && __STDC_HOSTED__ == 1
 #include <stdlib.h>
 #include <string.h>
@@ -438,15 +439,7 @@ void redraw_all_windows(void) {
 }
 
 static void copy_opaque_span(COLOR *dst, const COLOR *src, H width) {
-    if ((((uintptr_t)dst | (uintptr_t)src) & 7u) == 0) {
-        uint64_t *d64 = (uint64_t *)dst;
-        const uint64_t *s64 = (const uint64_t *)src;
-        H pairs = width >> 1;
-        for (H i = 0; i < pairs; i++) d64[i] = s64[i];
-        if (width & 1) dst[width - 1] = src[width - 1];
-    } else {
-        for (H x = 0; x < width; x++) dst[x] = src[x];
-    }
+    btron_row_blit(dst, src, (size_t)width * sizeof(COLOR));
 }
 
 void redraw_all_windows_clip(const RECT *damage, BOOL blit_only) {

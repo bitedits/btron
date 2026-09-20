@@ -2261,11 +2261,11 @@ static void launch_pi4_desktop_session(uint32_t *gpu_fb)
         ((uint32_t *)gpu_fb)[i] = 0xFF0A0F18u;
     s_fb_log_col = 0; s_fb_log_row = 0;
 
-    fb_log("\n===============================================================\n");
-    fb_log("  [BTRON] Exited Graphical Workbench Session\n");
-    fb_log("  [BTRON] Returned to Stage 1 Terminal Console (1024x768)\n");
-    fb_log("  Type 'startx' or 'desktop' to launch GUI session again.\n");
-    fb_log("===============================================================\n\n");
+    fb_log("+===============================================================+\n");
+    fb_log("|  [BTRON] Exited Graphical Workbench Session                   |\n");
+    fb_log("|  [BTRON] Returned to Stage 1 Terminal Console (1024x768)      |\n");
+    fb_log("|  Type 'startx' or 'gui' to launch GUI session again.          |\n");
+    fb_log("+===============================================================+\n\n");
     fb_log("btron-pi400# ");
 }
 
@@ -3015,12 +3015,12 @@ void btron_core_banner(void) {
     __asm__ volatile("mrs %0, midr_el1" : "=r"(midr));
     uint32_t part = (midr >> 4) & 0xFFF;
     if (part == 0xD08) {
-        uart_puts("B-System/BTRON3 3.20 (aarch64-bcm2711) Takanori Yokoyama — T-Kernel 2.0\n");
-        uart_puts("Copyright 2026 Synrc Research Center. MIT License.\n");
+        uart_puts("[CORE] B-System/BTRON3 3.20 (aarch64-bcm2711) Takanori Yokoyama — T-Kernel 2.0\n");
+        uart_puts("[CORE] Copyright 2026 Synrc Research Center. MIT License.\n");
         uart_puts("[BOOT] Machine: Raspberry Pi 4B / BCM2711  AArch64 Cortex-A72  T-Kernel 2.0\n\n");
     } else {
-        uart_puts("B-System/BTRON3 3.20 (aarch64-bcm2837) Takanori Yokoyama — T-Kernel 2.0\n");
-        uart_puts("Copyright 2026 Synrc Research Center. MIT License.\n");
+        uart_puts("[CORE] B-System/BTRON3 3.20 (aarch64-bcm2837) Takanori Yokoyama — T-Kernel 2.0\n");
+        uart_puts("[CORE] Copyright 2026 Synrc Research Center. MIT License.\n");
         uart_puts("[BOOT] Machine: Raspberry Pi 3B / BCM2837  AArch64 Cortex-A53  T-Kernel 2.0\n\n");
     }
 }
@@ -3030,16 +3030,16 @@ void btron_core_mem_log(void) {
     __asm__ volatile("mrs %0, midr_el1" : "=r"(midr));
     uint32_t part = (midr >> 4) & 0xFFF;
     if (part == 0xD08) {
-        uart_puts("[MEM ] BCM2711 Physical Memory Map (Pi 4B, 2 GB / 4 GB RAM):\n");
-        uart_puts("[MEM ]   0x00000000-0xFCFFFFFF  RAM (Usable 4048 MB)\n");
-        uart_puts("[MEM ]   0xFD000000-0xFFFFFFFF  Peripherals / PCIe / MMIO (48 MB)\n");
+        uart_puts("[MEM] BCM2711 Physical Memory Map (Pi 4B, 2 GB / 4 GB RAM):\n");
+        uart_puts("[MEM]   0x00000000-0xFCFFFFFF  RAM (Usable 4048 MB)\n");
+        uart_puts("[MEM]   0xFD000000-0xFFFFFFFF  Peripherals / PCIe / MMIO (48 MB)\n");
     } else {
-        uart_puts("[MEM ] BCM2837 Physical Memory Map (Pi 3B, 1 GB RAM):\n");
-        uart_puts("[MEM ]   0x00000000-0x3EFFFFFF  RAM (Usable 1008 MB)\n");
-        uart_puts("[MEM ]   0x3F000000-0x3FFFFFFF  Peripherals / VideoCore Mailbox / MMIO (16 MB)\n");
+        uart_puts("[MEM] BCM2837 Physical Memory Map (Pi 3B, 1 GB RAM):\n");
+        uart_puts("[MEM]   0x00000000-0x3EFFFFFF  RAM (Usable 1008 MB)\n");
+        uart_puts("[MEM]   0x3F000000-0x3FFFFFFF  Peripherals / VideoCore Mailbox / MMIO (16 MB)\n");
     }
-    uart_puts("[MEM ] Heap: 0x02000000-0x38000000 (864 MB Kernel Heap)\n");
-    uart_puts("[MEM ] Non-cacheable DMA window: 0x01800000-0x01A00000 (XHCI rings, DMA CBs, mailboxes)\n");
+    uart_puts("[MEM] Heap: 0x02000000-0x38000000 (864 MB Kernel Heap)\n");
+    uart_puts("[MEM] Non-cacheable DMA window: 0x01800000-0x01A00000 (XHCI rings, DMA CBs, mailboxes)\n");
 }
 
 void btron_core_hfds_log(void) {
@@ -3056,13 +3056,13 @@ void btron_core_init(void) {
 void btron_core_print_ver(ShellOutputFn out_fn, void *user_data, const char *arg) {
     if (!out_fn) return;
     if (arg && tkl_strcmp(arg, "-a") == 0) {
-        out_fn("BTRON3 btron-rpi3 2.0 T-Kernel-BCM2837 aarch64 GNU/B-System", COLOR_CYAN, user_data);
+        out_fn("BTRON3 btron-pi400 2.0 T-Kernel-BCM2711 aarch64 B-System", COLOR_CYAN, user_data);
     } else if (arg && (tkl_strcmp(arg, "-r") == 0 || tkl_strcmp(arg, "-v") == 0)) {
         out_fn("2.0.0-tkernel-aarch64", COLOR_CYAN, user_data);
     } else {
         out_fn("B-System 3.0 Workstation System (BTRON3 Specification 3.20)", COLOR_CYAN, user_data);
-        out_fn("Kernel: Sakamura T-Kernel 2.0 Real-Time Executive (AArch64 / BCM2837)", COLOR_GREEN, user_data);
-        out_fn("Hardware Target: Raspberry Pi 3B Bare-Metal AArch64 Kernel (Cortex-A53)", COLOR_LTGRAY, user_data);
+        out_fn("Kernel: Sakamura T-Kernel 2.0 Real-Time Executive (AArch64 / BCM2711)", COLOR_GREEN, user_data);
+        out_fn("Hardware Target: Raspberry Pi 400 Bare-Metal AArch64 Kernel (Cortex-A72)", COLOR_LTGRAY, user_data);
         out_fn("Build Timestamp: " __DATE__ " " __TIME__, COLOR_LTGRAY, user_data);
         out_fn("Display Compositor: VideoCore GPU Framebuffer Engine (1024x768 32-bpp Double-Buffered)", COLOR_LTGRAY, user_data);
         out_fn("Japanese IME: B-System Mozc / TIP Kana-Kanji Conversion Subsystem", COLOR_LTGRAY, user_data);
@@ -3137,8 +3137,8 @@ void btron_main(void) {
            ? "[BOOT] BTRON3 Pi 400  T-Kernel 2.0  BCM2711 Cortex-A72 AArch64\n"
            : "[BOOT] BTRON3 Pi 3B   T-Kernel 2.0  BCM2837 Cortex-A53 AArch64\n");
 
-    fb_log(s_dma_fb_selftest_passed ? "[DMA ] framebuffer coherency: PASS\n"
-                                    : "[DMA ] framebuffer coherency: FAIL (DMA stays disabled)\n");
+    fb_log(s_dma_fb_selftest_passed ? "[DMA] framebuffer coherency: PASS\n"
+                                    : "[DMA] framebuffer coherency: FAIL (DMA stays disabled)\n");
 
     /* Turn on the MMU and both caches.  Until this point the kernel has run
      * with SCTLR M=C=I=0, i.e. every RAM access went to DRAM at ~100 MB/s and
@@ -3168,7 +3168,7 @@ void btron_main(void) {
     uint32_t fb_span = (uint32_t)BTRON_SCREEN_W * BTRON_SCREEN_H * 4u * 2u;
     if (g_pi_fb_size > fb_span) fb_span = g_pi_fb_size;
 
-    fb_log("[MMU ] enabling");
+    fb_log("[MMU] enabling");
     arm64_mmu_init((uintptr_t)gpu_fb, fb_span);
 
     /* Read the pre-enable stamps back before overwriting them: a D-cache line
@@ -3190,7 +3190,7 @@ void btron_main(void) {
 
     const int mmu_store_ok = (s_bss_stamp == 0x67E11E71u) && (*heap_probe == 0x67E11E71u);
     const int mmu_integrity_ok = mmu_read_ok && mmu_store_ok;
-    /* Completes the row "[MMU ] enabling" opened.  Read the installed tables
+    /* Completes the row "[MMU] enabling" opened.  Read the installed tables
      * back and print the attribute each region actually got, so the descriptor
      * encoding is verified on the device instead of on the screen of the person
      * who wrote it.  Expected: bss=1 heap=1 dma=2 mmio=0 fb=2 layout=1 -- fb=2
@@ -3227,10 +3227,10 @@ void btron_main(void) {
      * above keeps USB input live while a frame is copied in small bands. */
     s_present_dma_enabled = 0;
 
-    /* One row for all three: the open "[DRV ]" prefix is the hang marker, and
+    /* One row for all three: the open "[DRV]" prefix is the hang marker, and
      * each driver appends its own verdict.  Failures print their code, which
      * uart_hex32() used to send to a serial port nobody is watching. */
-    fb_log("[DRV ] ");
+    fb_log("[DRV] ");
     ER sdrv_res = ScreenDrv(0, NULL);
     fb_log("ScreenDrv=");
     fb_log(sdrv_res >= 0 ? "OK" : "FAIL");
@@ -3252,11 +3252,12 @@ void btron_main(void) {
      * same row that says which one was chosen.  The row is written before the
      * mailbox call and completed after it, so a firmware that never answers
      * leaves this open as the hang marker. */
-    fb_log("[USB ] probing host controllers, board rev=");
+    fb_log("[USB] probing host controllers, board rev=");
     if (g_mmio_base == 0xFE000000UL) {
         extern uint32_t bcm283x_get_board_revision(void);
         uint32_t board_rev = bcm283x_get_board_revision();
         fb_log_hex32(board_rev);
+        fb_log("\n");
 
         /* QEMU raspi4b identifies as 0xB03111 or 0xB03115 without PCIe hardware.
          * Real physical hardware (Pi 400 0xC03130/1, Pi 4B 0xC0311x) has Broadcom PCIe + VL805.
@@ -3281,11 +3282,11 @@ void btron_main(void) {
                 }
             }
             if (!g_use_xhci) {
-                fb_log("[USB ] no usable xHCI host controller\n");
+                fb_log("[USB] no usable xHCI host controller\n");
             }
         } else {
             /* QEMU raspi4b model connects virtual USB keyboard/mouse to DWC2 */
-            fb_log("[USB ] QEMU virtual machine: DWC2 host controller\n");
+            fb_log("[USB] QEMU virtual machine: DWC2 host controller\n");
             dwc2_init();
         }
 
@@ -3314,7 +3315,7 @@ void btron_main(void) {
                 }
                 if (confirmed) {
                     s_async_irq_active = 1;
-                    fb_log("[IRQ ] tick confirmed -> 1 kHz ASYNC input plane armed\n");
+                    fb_log("[IRQ] tick confirmed -> 1 kHz ASYNC input plane armed\n");
                 } else {
                     /* No real tick: say whether the CPU ever took an interrupt
                      * (entries/hits) rather than re-dumping the GIC, whose
@@ -3334,7 +3335,7 @@ void btron_main(void) {
                     extern void arm64_irq_get_diag(irqdiag_t *);
                     irqdiag_t d;
                     arm64_irq_get_diag(&d);
-                    fb_log("[IRQ ] no tick in 50ms -> cooperative path  cfg=");
+                    fb_log("[IRQ] no tick in 50ms -> cooperative path  cfg=");
                     fb_log_dec(d.cfg_idx);
                     fb_log(" selftest=");  fb_log_dec(d.selftest_seen);
                     fb_log(" hits=");      fb_log_dec(d.dispatch_hits);
@@ -3345,13 +3346,13 @@ void btron_main(void) {
                 }
             } else {
                 g_arm64_timer_hook = 0;
-                fb_log("[IRQ ] init ret=");
+                fb_log("[IRQ] init ret=");
                 fb_log_dec((uint32_t)irq_ret);
                 fb_log(" -> cooperative input path\n");
             }
         }
     } else {
-        fb_log("[USB ] legacy MMIO map: DWC2 USB 2.0 host controller\n");
+        fb_log("[USB] legacy MMIO map: DWC2 USB 2.0 host controller\n");
         dwc2_init();
     }
 
@@ -3359,17 +3360,17 @@ void btron_main(void) {
     /* This is the part of the log that stays on screen under the prompt, so it
      * is the one place decoration costs visible rows: four instead of the
      * boxed ten. */
-    fb_log("B-System / BTRON3 3.20  Raspberry Pi 400 / Pi 4B  [BCM2711 Cortex-A72 AArch64]\n");
-    fb_log("Cleanroom TRON kernel, Stage 1 terminal console.  Input: built-in USB keyboard / UART\n");
-    fb_log("Commands: help, mem, ver, clear, gui, startx, desktop, reboot\n");
-    fb_log("Autoboot: launching Desktop in 12s (Press any key to stay in shell)\n");
+    fb_log("[CORE] B-System / BTRON3 3.20  Raspberry Pi 400 / Pi 4B  [BCM2711 Cortex-A72 AArch64]\n");
+    fb_log("[CORE] Cleanroom TRON kernel, Stage 1 terminal console.  Input: built-in USB keyboard / UART\n");
+    fb_log("[CORE] Commands: help, mem, ver, clear, gui, startx, desktop, reboot\n");
+    fb_log("[CORE] Autoboot: launching Desktop in 12s (Press any key to stay in shell)\n\n");
     fb_log("btron-pi400# ");
 
-    uart_puts("\n=================================================================\n");
-    uart_puts("  B-System / BTRON3 3.20 (Raspberry Pi 400 / Pi 4B AArch64)\n");
-    uart_puts("  Stage 1: Terminal Console Active (HDMI On-Screen Debug Trace)\n");
-    uart_puts("  Type 'startx' or 'desktop' to launch Graphical Workbench GUI!\n");
-    uart_puts("=================================================================\n\n");
+    uart_puts("+=================================================================+\n");
+    uart_puts("|  B-System / BTRON3 3.20 (Raspberry Pi 400 / Pi 4B AArch64)      |\n");
+    uart_puts("|  Stage 1: Terminal Console Active (HDMI On-Screen Debug Trace)  |\n");
+    uart_puts("|  Type 'startx' or 'gui' to launch Graphical Workbench GUI!      |\n");
+    uart_puts("+=================================================================+\n\n");
 
 #if defined(BTRON_AUTO_GUI) && (BTRON_AUTO_GUI == 1)
     fb_log("[BOOT] AUTO_GUI=1 -> launching B-System Desktop\n");

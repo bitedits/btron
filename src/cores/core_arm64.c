@@ -159,6 +159,17 @@ void async_rt_format_compact_status(char *buf, size_t len) {
 /* Double-buffered 32-bpp Desktop Backbuffer */
 static COLOR s_desktop_backbuffer[BTRON_SCREEN_W * BTRON_SCREEN_H] __attribute__((aligned(64)));
 
+typedef struct {
+    WND *target;
+    RECT bounds;
+    H width;
+    H height;
+    BOOL active;
+} drag_preview_t;
+
+static COLOR s_drag_preview_pixels[BTRON_SCREEN_W * BTRON_SCREEN_H] __attribute__((aligned(64)));
+static drag_preview_t s_drag_preview;
+
 /* Global interactive mouse coordinates */
 static H s_mouse_x = 512;
 static H s_mouse_y = 384;
@@ -734,6 +745,132 @@ static void present_backbuffer_rect(volatile uint32_t *fb, H x0, H y0, H x1, H y
     s_present_cursor_dirty = 1;
 }
 
+static void drag_preview_reset(void) {
+    s_drag_preview.target = NULL;
+    s_drag_preview.active = FALSE;
+}
+
+static int drag_preview_bounds_valid(const RECT *bounds) {
+    return bounds && bounds->left >= 0 && bounds->top >= 0 &&
+           bounds->right <= BTRON_SCREEN_W && bounds->bottom <= BTRON_SCREEN_H &&
+           bounds->right > bounds->left && bounds->bottom > bounds->top;
+}
+
+static int drag_preview_window_opaque(const WND *wnd) {
+    if (!wnd || !wnd->dev || !wnd->dev->pixels) return 0;
+    size_t pixels = (size_t)wnd->dev->width * wnd->dev->height;
+    for (size_t i = 0; i < pixels; i++) {
+        if (wnd->dev->pixels[i] == 0x00000000) return 0;
+    }
+    return 1;
+}
+
+static int drag_preview_capture(WND *target, const RECT *bounds) {
+    if (!target || target != get_top_wnd() || !target->visible ||
+        !drag_preview_bounds_valid(bounds) || !drag_preview_window_opaque(target))
+        return 0;
+
+    H width = bounds->right - bounds->left;
+    H height = bounds->bottom - bounds->top;
+    if ((size_t)width * height > BTRON_SCREEN_W * BTRON_SCREEN_H) return 0;
+
+    for (H y = 0; y < height; y++) {
+        btron_row_blit(&s_drag_preview_pixels[(size_t)y * width],
+                       &s_desktop_backbuffer[(size_t)(bounds->top + y) * BTRON_SCREEN_W + bounds->left],
+                       (size_t)width * sizeof(COLOR));
+    }
+    s_drag_preview.target = target;
+    s_drag_preview.bounds = *bounds;
+    s_drag_preview.width = width;
+    s_drag_preview.height = height;
+    s_drag_preview.active = TRUE;
+    return 1;
+}
+
+static uint32_t drag_preview_repair_strips(GDEV *screen, const RECT *old, const RECT *current) {
+    RECT strips[4];
+    int count = 0;
+    H il = old->left > current->left ? old->left : current->left;
+    H it = old->top > current->top ? old->top : current->top;
+    H ir = old->right < current->right ? old->right : current->right;
+    H ib = old->bottom < current->bottom ? old->bottom : current->bottom;
+
+    if (ir <= il || ib <= it) {
+        strips[count++] = *old;
+    } else {
+        if (old->top < it) strips[count++] = (RECT){ old->left, old->top, old->right, it };
+        if (ib < old->bottom) strips[count++] = (RECT){ old->left, ib, old->right, old->bottom };
+        if (old->left < il) strips[count++] = (RECT){ old->left, it, il, ib };
+        if (ir < old->right) strips[count++] = (RECT){ ir, it, old->right, ib };
+    }
+
+    uint32_t area = 0;
+    for (int i = 0; i < count; i++) {
+        workbench_render_damage(screen, &strips[i]);
+        area += (uint32_t)(strips[i].right - strips[i].left) *
+                (uint32_t)(strips[i].bottom - strips[i].top);
+    }
+    return area;
+}
+
+static void drag_preview_present_strips(volatile uint32_t *fb, const RECT *old, const RECT *current) {
+    RECT strips[4];
+    int count = 0;
+    H il = old->left > current->left ? old->left : current->left;
+    H it = old->top > current->top ? old->top : current->top;
+    H ir = old->right < current->right ? old->right : current->right;
+    H ib = old->bottom < current->bottom ? old->bottom : current->bottom;
+
+    if (ir <= il || ib <= it) {
+        strips[count++] = *old;
+    } else {
+        if (old->top < it) strips[count++] = (RECT){ old->left, old->top, old->right, it };
+        if (ib < old->bottom) strips[count++] = (RECT){ old->left, ib, old->right, old->bottom };
+        if (old->left < il) strips[count++] = (RECT){ old->left, it, il, ib };
+        if (ir < old->right) strips[count++] = (RECT){ ir, it, old->right, ib };
+    }
+
+    for (int i = 0; i < count; i++)
+        present_backbuffer_rect(fb, strips[i].left, strips[i].top, strips[i].right, strips[i].bottom);
+    present_backbuffer_rect(fb, current->left, current->top, current->right, current->bottom);
+}
+
+static int present_drag_preview(GDEV *screen, volatile uint32_t *fb, WND *target,
+                                const RECT *old, const RECT *current) {
+    if (!s_drag_preview.active || s_drag_preview.target != target ||
+        !drag_preview_bounds_valid(old) || !drag_preview_bounds_valid(current) ||
+        old->top < 28 || current->top < 28 ||
+        old->right - old->left != s_drag_preview.width ||
+        old->bottom - old->top != s_drag_preview.height ||
+        current->right - current->left != s_drag_preview.width ||
+        current->bottom - current->top != s_drag_preview.height)
+        return 0;
+
+    uint32_t t0 = *(volatile uint32_t *)(TIMER_BASE + 0x04);
+    uint32_t area = drag_preview_repair_strips(screen, old, current);
+    for (H y = 0; y < s_drag_preview.height; y++) {
+        btron_row_blit(&s_desktop_backbuffer[(size_t)(current->top + y) * BTRON_SCREEN_W + current->left],
+                       &s_drag_preview_pixels[(size_t)y * s_drag_preview.width],
+                       (size_t)s_drag_preview.width * sizeof(COLOR));
+    }
+    area += (uint32_t)s_drag_preview.width * s_drag_preview.height;
+    uint32_t t1 = *(volatile uint32_t *)(TIMER_BASE + 0x04);
+    drag_preview_present_strips(fb, old, current);
+    uint32_t t2 = *(volatile uint32_t *)(TIMER_BASE + 0x04);
+
+    s_drag_preview.bounds = *current;
+    s_async_rt_stats.composite_us = t1 - t0;
+    if (s_async_rt_stats.composite_us > s_async_rt_stats.composite_max_us) {
+        s_async_rt_stats.composite_max_us = s_async_rt_stats.composite_us;
+        s_hud_path_live = 'v';
+        s_hud_area_live = (area * 100u) / ((uint32_t)BTRON_SCREEN_W * BTRON_SCREEN_H);
+    }
+    s_async_rt_stats.present_us = t2 - t1;
+    if (s_async_rt_stats.present_us > s_async_rt_stats.present_max_us)
+        s_async_rt_stats.present_max_us = s_async_rt_stats.present_us;
+    return 1;
+}
+
 /* Window-union of the previous full render.  Initialised to the whole screen
  * so the first full render presents everything (background, panel, test bar). */
 static RECT s_prev_win_union = { 0, 0, BTRON_SCREEN_W, BTRON_SCREEN_H };
@@ -980,7 +1117,10 @@ static void launch_pi4_desktop_session(uint32_t *gpu_fb)
         RECT move_last = { 0, 0, 0, 0 };
         int have_move_damage = 0;
         for (uint32_t ev_iter = 0; ev_iter < ASYNC_UI_EVENT_BUDGET && get_evt(&ev, 0) == E_OK; ev_iter++) {
-            if (ev.type != EV_MOUSE_MOVE) non_move_event = 1;
+            if (ev.type != EV_MOUSE_MOVE) {
+                non_move_event = 1;
+                drag_preview_reset();
+            }
             if (ev.type == EV_KEY_DOWN && ev.key == 0x1B /* Escape */) {
                 s_gui_active = 0;
                 break;
@@ -992,7 +1132,12 @@ static void launch_pi4_desktop_session(uint32_t *gpu_fb)
             RECT drag_old = { 0, 0, 0, 0 };
             if (ev.type == EV_MOUSE_MOVE) {
                 drag_target = wnd_mgr_get_drag_target();
-                if (drag_target) drag_old = drag_target->bounds;
+                if (drag_target) {
+                    drag_old = drag_target->bounds;
+                    if (!s_drag_preview.active && !non_move_event && !s_present_pending &&
+                        !menu_open_at_loop_start && !appmenu_open_at_loop_start)
+                        (void)drag_preview_capture(drag_target, &drag_old);
+                }
             }
 
             workbench_process_event(screen, &ev);
@@ -1111,12 +1256,18 @@ static void launch_pi4_desktop_session(uint32_t *gpu_fb)
             }
         }
 
-        /* Established mouse-only window moves restore and recomposite just the
-         * old/new bounds.  All state-changing batches retain the full renderer. */
+        if (non_move_event || menu_open_at_loop_start || appmenu_open_at_loop_start ||
+            overlay_redraw || appmenu_redraw)
+            drag_preview_reset();
+
         if (move_drag && !non_move_event && !s_present_pending &&
             !menu_open_at_loop_start && !appmenu_open_at_loop_start &&
             !overlay_redraw && !appmenu_redraw && have_move_damage) {
-            present_move_render(screen, gpu_fb, &move_first, &move_last);
+            if (!present_drag_preview(screen, gpu_fb, s_drag_preview.target,
+                                      &move_first, &move_last)) {
+                drag_preview_reset();
+                present_move_render(screen, gpu_fb, &move_first, &move_last);
+            }
             if (panel_redraw) {
                 render_system_panel(screen);
                 present_backbuffer_rect(gpu_fb, 0, 0, BTRON_SCREEN_W, 28);

@@ -811,31 +811,49 @@ static void present_full_render(GDEV *screen, volatile uint32_t *fb, const RECT 
         s_async_rt_stats.present_max_us = s_async_rt_stats.present_us;
 }
 
-static void present_move_render(GDEV *screen, volatile uint32_t *fb, const RECT *damage) {
-    if (!damage) return;
+static void present_move_render(GDEV *screen, volatile uint32_t *fb,
+                                const RECT *old_damage, const RECT *new_damage) {
+    if (!old_damage || !new_damage) return;
 
-    H x0 = damage->left < 0 ? 0 : damage->left;
-    H y0 = damage->top < 0 ? 0 : damage->top;
-    H x1 = damage->right > BTRON_SCREEN_W ? BTRON_SCREEN_W : damage->right;
-    H y1 = damage->bottom > BTRON_SCREEN_H ? BTRON_SCREEN_H : damage->bottom;
-    if (x1 <= x0 || y1 <= y0) return;
+    RECT old = *old_damage;
+    RECT current = *new_damage;
+    if (old.left < 0) old.left = 0;
+    if (old.top < 0) old.top = 0;
+    if (old.right > BTRON_SCREEN_W) old.right = BTRON_SCREEN_W;
+    if (old.bottom > BTRON_SCREEN_H) old.bottom = BTRON_SCREEN_H;
+    if (current.left < 0) current.left = 0;
+    if (current.top < 0) current.top = 0;
+    if (current.right > BTRON_SCREEN_W) current.right = BTRON_SCREEN_W;
+    if (current.bottom > BTRON_SCREEN_H) current.bottom = BTRON_SCREEN_H;
+    if (old.right <= old.left || old.bottom <= old.top ||
+        current.right <= current.left || current.bottom <= current.top)
+        return;
 
-    RECT clipped = { x0, y0, x1, y1 };
     uint32_t t0 = *(volatile uint32_t *)(TIMER_BASE + 0x04);
-    workbench_render_damage(screen, &clipped);
+    workbench_render_damage(screen, &old);
+    workbench_render_damage(screen, &current);
     uint32_t t1 = *(volatile uint32_t *)(TIMER_BASE + 0x04);
     RECT cur;
     wnd_get_union_bounds(&cur);
     s_prev_win_union = cur;
-    present_backbuffer_rect(fb, x0, y0, x1, y1);
+    present_backbuffer_rect(fb, old.left, old.top, old.right, old.bottom);
+    present_backbuffer_rect(fb, current.left, current.top, current.right, current.bottom);
     uint32_t t2 = *(volatile uint32_t *)(TIMER_BASE + 0x04);
+
+    H overlap_left = old.left > current.left ? old.left : current.left;
+    H overlap_top = old.top > current.top ? old.top : current.top;
+    H overlap_right = old.right < current.right ? old.right : current.right;
+    H overlap_bottom = old.bottom < current.bottom ? old.bottom : current.bottom;
+    uint32_t area = (uint32_t)(old.right - old.left) * (uint32_t)(old.bottom - old.top) +
+                    (uint32_t)(current.right - current.left) * (uint32_t)(current.bottom - current.top);
+    if (overlap_right > overlap_left && overlap_bottom > overlap_top)
+        area -= (uint32_t)(overlap_right - overlap_left) * (uint32_t)(overlap_bottom - overlap_top);
 
     s_async_rt_stats.composite_us = t1 - t0;
     if (s_async_rt_stats.composite_us > s_async_rt_stats.composite_max_us) {
         s_async_rt_stats.composite_max_us = s_async_rt_stats.composite_us;
         s_hud_path_live = 'm';
-        s_hud_area_live = ((uint32_t)(x1 - x0) * (uint32_t)(y1 - y0) * 100u) /
-                          ((uint32_t)BTRON_SCREEN_W * BTRON_SCREEN_H);
+        s_hud_area_live = (area * 100u) / ((uint32_t)BTRON_SCREEN_W * BTRON_SCREEN_H);
     }
     s_async_rt_stats.present_us = t2 - t1;
     if (s_async_rt_stats.present_us > s_async_rt_stats.present_max_us)
@@ -991,6 +1009,8 @@ static void launch_pi4_desktop_session(uint32_t *gpu_fb)
         int have_start_menu_rect = menu_open_at_loop_start &&
                                    global_menu_get_open_rect(&start_menu_rect);
         RECT move_damage = { 0, 0, 0, 0 };
+        RECT move_first = { 0, 0, 0, 0 };
+        RECT move_last = { 0, 0, 0, 0 };
         int have_move_damage = 0;
         for (uint32_t ev_iter = 0; ev_iter < ASYNC_UI_EVENT_BUDGET && get_evt(&ev, 0) == E_OK; ev_iter++) {
             if (ev.type != EV_MOUSE_MOVE) non_move_event = 1;
@@ -1017,8 +1037,10 @@ static void launch_pi4_desktop_session(uint32_t *gpu_fb)
                     move_drag = 1;
                     if (!have_move_damage) {
                         move_damage = drag_old;
+                        move_first = drag_old;
                         have_move_damage = 1;
                     }
+                    move_last = drag_new;
                     if (drag_old.left < move_damage.left) move_damage.left = drag_old.left;
                     if (drag_old.top < move_damage.top) move_damage.top = drag_old.top;
                     if (drag_old.right > move_damage.right) move_damage.right = drag_old.right;
@@ -1127,7 +1149,7 @@ static void launch_pi4_desktop_session(uint32_t *gpu_fb)
         if (move_drag && !non_move_event && !s_present_pending &&
             !menu_open_at_loop_start && !appmenu_open_at_loop_start &&
             !overlay_redraw && !appmenu_redraw && have_move_damage) {
-            present_move_render(screen, gpu_fb, &move_damage);
+            present_move_render(screen, gpu_fb, &move_first, &move_last);
             if (panel_redraw) {
                 render_system_panel(screen);
                 present_backbuffer_rect(gpu_fb, 0, 0, BTRON_SCREEN_W, 28);

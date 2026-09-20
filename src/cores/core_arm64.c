@@ -197,6 +197,15 @@ static COLOR s_drag_preview_underlay[BTRON_SCREEN_W * BTRON_SCREEN_H] __attribut
 static uint8_t s_drag_preview_tiles[DRAG_PREVIEW_TILES_X * DRAG_PREVIEW_TILES_Y];
 static drag_preview_t s_drag_preview;
 static int s_drag_preview_cpu_active;
+
+typedef struct {
+    RECT rect;
+    int tile_x;
+    int tile_y;
+    BOOL active;
+} focus_damage_t;
+
+static focus_damage_t s_focus_damage;
 static WND *s_drag_preview_opacity_target;
 static GDEV *s_drag_preview_opacity_dev;
 static int s_drag_preview_opacity_valid;
@@ -794,6 +803,45 @@ static void present_backbuffer_rect(volatile uint32_t *fb, H x0, H y0, H x1, H y
     s_present_cursor_dirty = 1;
 }
 
+static RECT drag_preview_union(const RECT *a, const RECT *b);
+
+static void queue_focus_damage(const RECT *damage) {
+    if (!damage || damage->right <= damage->left || damage->bottom <= damage->top) return;
+    if (s_focus_damage.active)
+        s_focus_damage.rect = drag_preview_union(&s_focus_damage.rect, damage);
+    else
+        s_focus_damage.rect = *damage;
+    s_focus_damage.tile_x = s_focus_damage.rect.left / DRAG_PREVIEW_TILE_SIZE;
+    s_focus_damage.tile_y = s_focus_damage.rect.top / DRAG_PREVIEW_TILE_SIZE;
+    s_focus_damage.active = TRUE;
+}
+
+static void focus_damage_step(GDEV *screen, volatile uint32_t *fb) {
+    if (!screen || !fb || !s_focus_damage.active) return;
+    uint32_t start_us = *(volatile uint32_t *)(TIMER_BASE + 0x04);
+    int x_last = (s_focus_damage.rect.right - 1) / DRAG_PREVIEW_TILE_SIZE;
+    int y_last = (s_focus_damage.rect.bottom - 1) / DRAG_PREVIEW_TILE_SIZE;
+    while (s_focus_damage.tile_y <= y_last &&
+           (*(volatile uint32_t *)(TIMER_BASE + 0x04) - start_us) < ASYNC_PRESENT_BUDGET_US) {
+        RECT tile = { s_focus_damage.tile_x * DRAG_PREVIEW_TILE_SIZE,
+                      s_focus_damage.tile_y * DRAG_PREVIEW_TILE_SIZE,
+                      (s_focus_damage.tile_x + 1) * DRAG_PREVIEW_TILE_SIZE,
+                      (s_focus_damage.tile_y + 1) * DRAG_PREVIEW_TILE_SIZE };
+        if (tile.left < s_focus_damage.rect.left) tile.left = s_focus_damage.rect.left;
+        if (tile.top < s_focus_damage.rect.top) tile.top = s_focus_damage.rect.top;
+        if (tile.right > s_focus_damage.rect.right) tile.right = s_focus_damage.rect.right;
+        if (tile.bottom > s_focus_damage.rect.bottom) tile.bottom = s_focus_damage.rect.bottom;
+        workbench_render_damage(screen, &tile);
+        present_backbuffer_rect(fb, tile.left, tile.top, tile.right, tile.bottom);
+        if (++s_focus_damage.tile_x > x_last) {
+            s_focus_damage.tile_x = s_focus_damage.rect.left / DRAG_PREVIEW_TILE_SIZE;
+            s_focus_damage.tile_y++;
+        }
+    }
+    if (s_focus_damage.tile_y > y_last)
+        s_focus_damage.active = FALSE;
+}
+
 static int drag_preview_bounds_valid(const RECT *bounds) {
     return bounds && bounds->left >= 0 && bounds->top >= 0 &&
            bounds->right <= BTRON_SCREEN_W && bounds->bottom <= BTRON_SCREEN_H &&
@@ -1243,6 +1291,7 @@ static void launch_pi4_desktop_session(uint32_t *gpu_fb)
 
         /* Present at most 8 KiB of pixels per trip around the loop. */
         present_copy_step();
+        focus_damage_step(screen, gpu_fb);
         drag_preview_cpu_step(screen, gpu_fb);
 
         /* DMA always fills the hidden VideoCore page.  Completion flips it
@@ -1328,7 +1377,7 @@ static void launch_pi4_desktop_session(uint32_t *gpu_fb)
                 drag_target = wnd_mgr_get_drag_target();
                 if (drag_target) {
                     drag_old = drag_target->bounds;
-                    if (!s_drag_preview.active && !non_move_event && !s_present_pending &&
+                    if (!s_drag_preview.active && !s_present_pending &&
                         !menu_open_at_loop_start && !appmenu_open_at_loop_start)
                         (void)drag_preview_capture(screen, drag_target, &drag_old);
                 }
@@ -1423,6 +1472,8 @@ static void launch_pi4_desktop_session(uint32_t *gpu_fb)
 
         if (wnd_mgr_flush_resize())
             redraw = 1;
+        if (have_focus_damage)
+            queue_focus_damage(&focus_damage);
 
         if (title_drag_release && !have_move_damage &&
             (title_drag_old.left != title_drag_new.left ||
@@ -1509,13 +1560,13 @@ static void launch_pi4_desktop_session(uint32_t *gpu_fb)
             }
         }
 
-        if (non_move_event || menu_open_at_loop_start || appmenu_open_at_loop_start ||
+        if ((non_move_event && !move_drag) || menu_open_at_loop_start || appmenu_open_at_loop_start ||
             overlay_redraw || appmenu_redraw) {
             if (drag_preview_reset())
                 redraw = 1;
         }
 
-        if (move_drag && (!non_move_event || title_drag_release) && !s_present_pending &&
+        if (move_drag && (s_drag_preview.active || !non_move_event || title_drag_release) && !s_present_pending &&
             !menu_open_at_loop_start && !appmenu_open_at_loop_start &&
             !overlay_redraw && !appmenu_redraw && have_move_damage) {
             if (title_drag_release) {
@@ -1535,10 +1586,6 @@ static void launch_pi4_desktop_session(uint32_t *gpu_fb)
             s_present_cursor_dirty = 1;
         }
         else if (have_focus_damage) {
-            workbench_render_damage(screen, &focus_damage);
-            present_backbuffer_rect(gpu_fb, focus_damage.left, focus_damage.top,
-                                    focus_damage.right, focus_damage.bottom);
-            s_present_cursor_dirty = 1;
         }
         /* Full UI path: redraw windows, menus, backbuffer blit */
         else if (redraw || s_present_pending) {

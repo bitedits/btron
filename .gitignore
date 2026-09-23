@@ -4,6 +4,7 @@
 *.aux
 *.log
 *.out
+*.d
 .build/
 bfs_allocator_model
 bfs_btree_model
@@ -18,3 +19,11 @@ third_party/pi400/CMOS
 third_party/pi400/RISCOS.IMG
 third_party/pi400/LICENCE.broadcom
 third_party/pi400/cmdline.txt
+
+# PCSX2 run data.  pcsx2/PCSX2/inis/PCSX2.ini is the configuration a run loads and
+# stays tracked; everything else under pcsx2/ is created by running it, BIOS links
+# included.
+pcsx2/PCSX2/*
+!pcsx2/PCSX2/inis/
+pcsx2/PCSX2/inis/*
+!pcsx2/PCSX2/inis/PCSX2.ini

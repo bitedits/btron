@@ -28,6 +28,8 @@
 #include <btron/error.h>
 #include <btron/itron.h>
 #include <btron/dp.h>
+#include <btron/dp_accel.h>
+#include <btron/dp_cal.h>
 #include <btron/troncode.h>
 #include <btron/wnd.h>
 #include <btron/desktop.h>
@@ -549,6 +551,10 @@ static int  s_cmd_pos     = 0;
 /* Forward declaration */
 static void launch_pi4_desktop_session(uint32_t *gpu_fb);
 
+/* Defined beside the pointer path it measures, which is further down this file
+ * than the console that calls it. */
+static int pi4_ptr_cal(void);
+
 static void pi4_shell_exec(const char *cmd, uint32_t *gpu_fb)
 {
     if (tkl_strcmp(cmd, "help") == 0) {
@@ -557,6 +563,7 @@ static void pi4_shell_exec(const char *cmd, uint32_t *gpu_fb)
         fb_log("  exit / console          - Return to Stage 1 console\n");
         fb_log("  open <app>              - cabinet | editor | terminal | chat | settings\n");
         fb_log("  mem                     - Memory map\n");
+        fb_log("  ptrcal                  - Loopback-calibrate the pointer path (no mouse needed)\n");
         fb_log("  ver                     - Kernel version\n");
         fb_log("  clear                   - Clear screen\n");
         fb_log("  reboot                  - Halt processor\n");
@@ -578,6 +585,9 @@ static void pi4_shell_exec(const char *cmd, uint32_t *gpu_fb)
         } else {
             fb_log("[CON] Already at Stage 1 console.\n");
         }
+
+    } else if (tkl_strcmp(cmd, "ptrcal") == 0) {
+        (void)pi4_ptr_cal();
 
     } else if (tkl_strcmp(cmd, "mem") == 0) {
         fb_log("[MEM] BCM2711 Pi 400 — 4 GB RAM\n");
@@ -2630,86 +2640,9 @@ void mouse_accelerate_pair_haiku(int32_t raw_x, int32_t raw_y, int32_t *out_dx, 
     if (out_dy) *out_dy = pix_y;
 }
 
-/* Single-axis wrapper for Haiku subpixel accelerator */
-int32_t mouse_accelerate_subpixel_haiku(int32_t raw, int32_t *subpixel)
-{
-    int32_t out_dx = 0, out_dy = 0;
-    mouse_accelerate_pair_haiku(raw, 0, &out_dx, &out_dy);
-    if (subpixel) *subpixel = (int32_t)(s_haiku_hist_x * 256.0f);
-    return out_dx;
-}
-
-/*
- * Hardened RISC OS MouseStep Accelerator
- * - Exact stepped multipliers mirroring Archimedes / RISC OS CMOS &C2 (Steps 1..4)
- * - Symmetric signed integer subpixel truncation (no negative floor bias)
- * - Signed residual carry with idle decay
- */
-int32_t mouse_accelerate_subpixel_riscos(int32_t raw, int32_t *subpixel)
-{
-    if (raw == 0) {
-        /* Idle residual decay - halves residual */
-        if (subpixel) *subpixel = (*subpixel) / 2;
-        return 0;
-    }
-
-    /* Clamp raw input against packet bursts */
-    if (raw >  512) raw =  512;
-    if (raw < -512) raw = -512;
-
-    int32_t sign = (raw < 0) ? -1 : 1;
-    int32_t abs  = (raw < 0) ? -raw : raw;
-
-    /* Fine precision boost for subtle single-pixel moves */
-    if (abs <= 2) {
-        abs = (abs * 3) / 2; /* 1.5x */
-    }
-
-    /* RISC OS MouseStep stepped multipliers (8.8 fixed-point)
-     * Step 1: 1.5x - 2.0x (384)
-     * Step 2: 2.0x - 2.5x (512) - Archimedes standard CMOS 2 default
-     * Step 3: 2.5x - 3.0x (640)
-     * Step 4: 3.0x - 3.5x (768)
-     */
-    int32_t mult_fp;
-    switch (g_mouse_step_mult) {
-        case 1:  mult_fp = 384 + (abs > 4 ? 128 : 0); break;
-        case 2:  mult_fp = 512 + (abs > 4 ? 128 : 0); break;
-        case 3:  mult_fp = 640 + (abs > 4 ? 128 : 0); break;
-        default: mult_fp = 768 + (abs > 4 ? 128 : 0); break;
-    }
-
-    int32_t res = subpixel ? *subpixel : 0;
-    int32_t total = res + (sign * abs * mult_fp);
-
-    /* Symmetric integer truncation towards zero (matching Haiku and standard C) */
-    int32_t pixels = total / 256;
-    if (subpixel) {
-        *subpixel = total % 256;
-        if (*subpixel > 255)  *subpixel = 255;
-        if (*subpixel < -255) *subpixel = -255;
-    }
-
-    if (pixels >  512) pixels =  512;
-    if (pixels < -512) pixels = -512;
-
-    return pixels;
-}
-
 static inline int32_t mouse_accelerate_subpixel_raw(int32_t raw, int32_t *subpixel) {
     (void)subpixel;
     return raw;          // pure 1:1, no residual, no boost, no mult
-}
-
-static inline __attribute__((unused)) int32_t mouse_accelerate_subpixel(int32_t raw, int32_t *subpixel)
-{
-    if (g_mouse_accel_profile == 0) {
-        return mouse_accelerate_subpixel_riscos(raw, subpixel);
-    } else if (g_mouse_accel_profile == 1) {
-        return mouse_accelerate_subpixel_haiku(raw, subpixel);
-    } else {
-        return mouse_accelerate_subpixel_raw(raw, subpixel);
-    }
 }
 
 /* ─────────────────────────────────────────────────────────────────
@@ -2792,8 +2725,8 @@ static void mouse_motion_apply(int32_t rdx, int32_t rdy) {
     int32_t move_x = 0, move_y = 0;
     if (g_mouse_accel_profile == 0) {
         /* Profile 0: RISC OS MouseStep Stepped Accelerator (Archimedes 2.0x default) */
-        move_x = mouse_accelerate_subpixel_riscos(rdx, &s_mouse_sub_x);
-        move_y = mouse_accelerate_subpixel_riscos(rdy, &s_mouse_sub_y);
+        move_x = dp_ptr_riscos(rdx, g_mouse_step_mult, &s_mouse_sub_x);
+        move_y = dp_ptr_riscos(rdy, g_mouse_step_mult, &s_mouse_sub_y);
     } else if (g_mouse_accel_profile == 1) {
         /* Profile 1: Haiku OS / BeOS 2D Velocity Vector Accelerator */
         mouse_accelerate_pair_haiku(rdx, rdy, &move_x, &move_y);
@@ -2834,6 +2767,58 @@ static void mouse_motion_apply(int32_t rdx, int32_t rdy) {
         ev.data   = 0;
         snd_evt(&ev);
     }
+}
+
+/* ── Pointer Loopback Calibration ───────────────────────────────── */
+
+/* The same four hooks the PS2 port hands the shared measurement in
+ * src/graphics/dp_cal.c, which is the point of that contract being so small.
+ * The seam here is mouse_motion_apply -- the function every real HID report
+ * already falls through -- so what gets measured is the path in use rather than
+ * a second copy of it that could pass while the first one fails. */
+static void pi4_ptr_cal_send(int dx, int dy) { mouse_motion_apply(dx, dy); }
+static void pi4_ptr_cal_get(int *x, int *y)  { *x = s_mouse_x; *y = s_mouse_y; }
+static void pi4_ptr_cal_set(int x, int y)    { mouse_motion_apply(x - s_mouse_x, y - s_mouse_y); }
+
+static void pi4_ptr_cal_num(long v)
+{
+    if (v < 0) { fb_log("-"); v = -v; }   /* fb_log_dec is unsigned */
+    fb_log_dec((uint32_t)v);
+}
+
+static void pi4_ptr_cal_row(const char *tag, long v0, long v1, long v2, long v3)
+{
+    char head[16];
+    int  n = 0;
+    for (const char *s = "[CAL] "; *s && n < 14; s++) head[n++] = *s;
+    for (; *tag && n < 14; tag++) head[n++] = *tag;
+    head[n] = '\0';
+
+    fb_log(head);
+    fb_log(" "); pi4_ptr_cal_num(v0);
+    fb_log(" "); pi4_ptr_cal_num(v1);
+    fb_log(" "); pi4_ptr_cal_num(v2);
+    fb_log(" "); pi4_ptr_cal_num(v3);
+    fb_log("\n");
+}
+
+static const dp_cal_port_t s_pi4_ptr_cal_port = {
+    pi4_ptr_cal_send, pi4_ptr_cal_get, pi4_ptr_cal_set,
+    BTRON_SCREEN_W, BTRON_SCREEN_H,
+    pi4_ptr_cal_row,
+};
+
+static int pi4_ptr_cal(void)
+{
+    fb_log("[CAL] Pointer loopback: counts in, pixels out, no hand involved.\n");
+    fb_log("[CAL] GAINX/Y amp px stray counts | EDGEX/Y wall counts back short\n");
+    fb_log("[CAL] DRIFT dx dy | DIAG dx dy diff | CAL failures counts w h\n");
+    const int fails = dp_cal_run(&s_pi4_ptr_cal_port);
+    fb_log("[CAL] profile="); pi4_ptr_cal_num(g_mouse_accel_profile);
+    fb_log(" step=");         pi4_ptr_cal_num(g_mouse_step_mult);
+    fb_log(" -> failures=");  pi4_ptr_cal_num(fails);
+    fb_log("\n");
+    return fails;
 }
 
 /* Latest raw HID button byte -> RISC OS Select/Adjust/Menu edge events. */

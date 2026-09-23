@@ -38,6 +38,7 @@ CFLAGS ?= -O2 -Wall -Wextra -std=c99 -Iinclude -Iinclude/drivers -Isrc/kernel -I
         test-mozc test-editor test-hmi test-tad test-chat test-wylie verify test-fs test-chokanji \
         mkbtronfs btron_sys.vol \
         run-posix run-qemu run-kernel run-yoko run-yoko4 run-sakamura run-foma run-uefi run-eufi run-uefu run-pc98 run-m68k run-ps2 run-mips debug-virtio debug-gdb clean \
+        ps2-cfg \
         pi400 flash-pi400 fetch-pi400-fw
 
 QEMU_ARM     ?= qemu-system-arm
@@ -47,6 +48,14 @@ QEMU_M68K    ?= qemu-system-m68k
 QEMU_MIPS    ?= qemu-system-mipsel
 QEMU_MIPS64  ?= qemu-system-mips64el
 PCSX2_BIN    ?= /Applications/PCSX2.app/Contents/MacOS/PCSX2
+# PCSX2 keeps every setting it has in one data directory, and -datapath names the
+# parent of it: the emulator appends its own program name, so passing pcsx2/ puts
+# the configuration at pcsx2/PCSX2/inis/PCSX2.ini.  That file is tracked here, so
+# a run gets these settings rather than whatever the user-level config has drifted
+# to.  BIOS images are the one thing kept outside the repo, symlinked file by file.
+PCSX2_DATADIR ?= $(CURDIR)/pcsx2
+PCSX2_DATA    := $(PCSX2_DATADIR)/PCSX2
+PCSX2_BIOS    ?= $(HOME)/Library/Application Support/PCSX2/bios
 M68K_CC      ?= m68k-elf-gcc
 
 LLVM_CLANG := $(shell for p in /opt/homebrew/opt/llvm/bin/clang /usr/local/opt/llvm/bin/clang /usr/lib/llvm-*/bin/clang clang; do if command -v "$$p" >/dev/null 2>&1; then echo "$$p"; break; fi; done)
@@ -302,6 +311,8 @@ FOMA_SRCS = $(FOMA_STARTUP)             \
 # Bare-metal: SDL-free subset only
 COMMON_NO_SDL_SRCS = \
     src/graphics/dp_core.c \
+    src/graphics/dp_accel.c \
+    src/graphics/dp_cal.c \
     src/graphics/icons_bundle.c \
     src/font/troncode.c    \
     src/font/jis_fonts.c   \
@@ -732,11 +743,16 @@ test-m68k: $(M68K_TARGET)
 # Sony PlayStation 2 Emotion Engine Kernel (ps2 / PCSX2) [Target 8]
 # ═══════════════════════════════════════════════════════════════════
 AUTO_GUI       ?= 1
+# HIDTRACE=1 make ps2  -- per-keypress and per-control-transfer rows.  Off by
+# default because a [KBD] row costs the console a line for every keystroke, which
+# is what scrolls the prompt away while it is being typed into.
+HIDTRACE       ?= 0
 PS2_TARGET     = btron-ps2.elf
 PS2_ISO        = btron-ps2.iso
 PS2_LD_SCRIPT  = src/drivers/ps2/ps2.ld
 PS2_CFLAGS     = -O2 -Wall -Wextra -std=c99 -ffreestanding -nostdlib \
                  -DBTRON_TARGET=8 -DBTRON_PS2_TARGET -DBTRON_AUTO_GUI=$(AUTO_GUI) \
+                 -DBTRON_HID_TRACE=$(HIDTRACE) \
                  -Iinclude -Iinclude/drivers -Isrc/kernel -Isrc/cores -Isrc/drivers/ps2
 PS2_STARTUP    = src/cores/core_ps2.c
 PS2_SRCS       = $(PS2_STARTUP)           \
@@ -744,16 +760,33 @@ PS2_SRCS       = $(PS2_STARTUP)           \
                  src/drivers/ps2/ps2_gs.c \
                  src/drivers/ps2/ps2_sio.c \
                  src/drivers/ps2/ps2_pad.c \
+                 src/drivers/ps2/ps2_iopram.c \
                  src/drivers/ps2/ps2_usb.c \
                  src/kernel/libstr.c      \
                  $(COMMON_NO_SDL_SRCS)
 PS2_OBJS       = src/drivers/ps2/boot_ps2.ps2.o $(PS2_SRCS:.c=.ps2.o)
 
+# clang lays a 64-bit-GPR MIPS's O32 vararg save area out as one 8-byte slot per
+# register argument, but va_arg still walks it four bytes at a time, so every %s
+# in a format string swallows two slots and every later field on the line shifts
+# by a word.  Only the function that reads the save area has to agree with itself
+# -- passing a1..a3 and the 4-byte-spaced stack arguments is identical under both
+# ISAs -- so the two translation units that own a va_list here are built for a
+# 32-bit-GPR MIPS.  Everything else keeps -march=mips3, because the GS needs one
+# 64-bit (sd) write per privileged register and a mips2 build splits it in two.
+PS2_VARARG_OBJS = src/cores/core_ps2.ps2.o src/kernel/libstr.ps2.o
+$(PS2_VARARG_OBJS): PS2_CC := $(patsubst -march=mips3,-march=mips2,$(PS2_CC))
+
 %.ps2.o: %.s
 	$(PS2_CC) -c $< -o $@
 
 %.ps2.o: %.c
-	$(PS2_CC) $(PS2_CFLAGS) -c $< -o $@
+	$(PS2_CC) $(PS2_CFLAGS) -MMD -MP -c $< -o $@
+
+# ps2_usb.h changes the layout of ps2_ohci_probe_t, which core_ps2.c reads by
+# offset.  Without generated header dependencies the two objects are built from
+# different generations of that struct and the boot log prints shifted fields.
+-include $(PS2_OBJS:.ps2.o=.ps2.d)
 
 ps2: $(PS2_TARGET) $(PS2_ISO)
 
@@ -789,7 +822,22 @@ $(PS2_ISO): $(PS2_TARGET)
 
 run-ps: run-ps2
 
-run-ps2: $(PS2_TARGET)
+# Prepare the run's data directory.  PCSX2 writes the config file back on exit, so
+# a run can dirty pcsx2/PCSX2/inis/PCSX2.ini in git -- revert it rather than
+# delete it.  The [USB2] keyboard binding and the [Hotkeys] entries trimmed for it
+# are what let a host keypress reach the emulated device at all, and the BIOS
+# images are linked rather than copied because they are Sony's, not ours.
+ps2-cfg:
+	@if [ ! -f "$(PCSX2_DATA)/inis/PCSX2.ini" ]; then \
+	    echo "[ERROR] $(PCSX2_DATA)/inis/PCSX2.ini is missing"; exit 1; fi
+	@if [ ! -d "$(PCSX2_BIOS)" ]; then \
+	    echo "[ERROR] No PS2 BIOS at $(PCSX2_BIOS) -- pass PCSX2_BIOS=<dir>"; exit 1; fi
+	@for d in bios logs memcards sstates snaps cache; do mkdir -p "$(PCSX2_DATA)/$$d"; done
+	@for f in "$(PCSX2_BIOS)"/*.bin; do n=$$(basename "$$f"); \
+	    if [ ! -e "$(PCSX2_DATA)/bios/$$n" ] && [ ! -L "$(PCSX2_DATA)/bios/$$n" ]; then \
+	        ln -s "$$f" "$(PCSX2_DATA)/bios/$$n"; fi; done
+
+run-ps2: $(PS2_TARGET) ps2-cfg
 	@echo "=========================================================="
 	@echo " Launching B-System PS2 on PCSX2 Emulator"
 	@echo " Machine  : Sony PlayStation 2 (Emotion Engine R5900)"
@@ -799,18 +847,19 @@ run-ps2: $(PS2_TARGET)
 	@echo " GUI Mode : $(if $(filter 1,$(AUTO_GUI)),Automatic Direct GUI,Two-Stage Console -> startx)"
 	@echo " Target   : $(if $(filter 1,$(ISO)),Disc ISO: $(PS2_ISO),Direct ELF: $(PS2_TARGET))"
 	@echo " Emulator : $(PCSX2_BIN)"
+	@echo " Config   : $(PCSX2_DATA)/inis/PCSX2.ini"
 	@echo "=========================================================="
 	@if [ -x "$(PCSX2_BIN)" ]; then \
 	    if [ "$(ISO)" = "1" ]; then \
-	        "$(PCSX2_BIN)" -fastboot $(CURDIR)/$(PS2_ISO); \
+	        "$(PCSX2_BIN)" -datapath "$(PCSX2_DATADIR)" -fastboot $(CURDIR)/$(PS2_ISO); \
 	    else \
-	        "$(PCSX2_BIN)" -fastboot $(CURDIR)/$(PS2_TARGET); \
+	        "$(PCSX2_BIN)" -datapath "$(PCSX2_DATADIR)" -fastboot $(CURDIR)/$(PS2_TARGET); \
 	    fi; \
 	elif [ -d "/Applications/PCSX2.app" ]; then \
 	    if [ "$(ISO)" = "1" ]; then \
-	        open -a /Applications/PCSX2.app --args -fastboot $(CURDIR)/$(PS2_ISO); \
+	        open -a /Applications/PCSX2.app --args -datapath "$(PCSX2_DATADIR)" -fastboot $(CURDIR)/$(PS2_ISO); \
 	    else \
-	        open -a /Applications/PCSX2.app --args -fastboot $(CURDIR)/$(PS2_TARGET); \
+	        open -a /Applications/PCSX2.app --args -datapath "$(PCSX2_DATADIR)" -fastboot $(CURDIR)/$(PS2_TARGET); \
 	    fi; \
 	else \
 	    echo "[ERROR] PCSX2 not found at $(PCSX2_BIN)"; \

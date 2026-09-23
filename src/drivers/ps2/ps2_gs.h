@@ -38,8 +38,9 @@
 #define PS2_SCREEN_BPP          32
 #define PS2_SCREEN_PITCH        (PS2_SCREEN_WIDTH * (PS2_SCREEN_BPP / 8))
 
-/* Video Modes */
-#define PS2_MODE_VESA_800X600   0       /* VESA 800x600 @ 60Hz Non-Interlaced Progressive (Default) */
+/* Video Modes.  The name is the canvas we draw into; the CRT timing each one
+ * programs is a separate choice, documented at the register writes. */
+#define PS2_MODE_800X600        0       /* 800x600 canvas, 720p progressive timing (Default) */
 #define PS2_MODE_DTV_480P       1       /* DTV 480p 640x480 Progressive Scan */
 #define PS2_MODE_NTSC_448I      2       /* NTSC 640x448 Frame Mode Interlaced */
 
@@ -59,6 +60,9 @@ void ps2_gs_vsync(void);
 void ps2_gs_wait_vsync(void);
 void ps2_gs_swap_buffers(void);
 void ps2_gs_flush(void);
+/* Copies a rectangle of the RDRAM canvas into the displayed VRAM page with one Host->Local blit.
+   (x, y) is the top-left in canvas pixels; w is rounded up to a quadword (4 px) because the upload stream has no row pitch. */
+void ps2_gs_upload(int x, int y, int w, int h);
 uint32_t *ps2_gs_get_framebuffer(void);
 void ps2_gs_flip(void);
 void ps2_gs_putpixel(int x, int y, uint32_t color);

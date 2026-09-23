@@ -4,9 +4,9 @@
  * Implements hardware display controller initialization, privileged PCRTC registers,
  * and high-performance Host-to-Local GIF DMA VRAM blitting for PCSX2 and real PS2 hardware.
  *
- * Cleanroom implementation referencing open specifications in third_party/ps2sdk
- * and ps2tek (https://ps2.5ht.co/ps2-hacking.htm).
- * Zero proprietary Sony SDK dependencies.
+ * Cleanroom implementation from the published standards: the OHCI 1.0, GIF and
+ * EE DMAC register layouts were re-derived from the manuals and then confirmed
+ * against what the running machine decodes.  Zero proprietary Sony SDK code.
  *
  * Copyright 2026 Synrc Research Center. MIT License.
  */
@@ -16,7 +16,9 @@
 /* Static main memory framebuffer (800 x 600 @ 32-bpp RGBA = 1,920,000 bytes) */
 static uint32_t ps2_fb_memory[PS2_SCREEN_WIDTH * PS2_SCREEN_HEIGHT] __attribute__((aligned(128)));
 
-/* EE DMAC Hardware Registers */
+/* EE DMAC Hardware Registers.  Each channel block is CHCR at +0x00, MADR at
+ * +0x10 and QWC at +0x20, and the GIF sits in channel 2; the global control and
+ * status block is at 0x1000E000. */
 #define D_CTRL      (*(volatile uint32_t *)0x1000E000)
 #define D_STAT      (*(volatile uint32_t *)0x1000E010)
 #define D2_CHCR     (*(volatile uint32_t *)0x1000A000)
@@ -40,7 +42,7 @@ static inline uint32_t *ps2_fb(void)
      ((uint64_t)((dw) & 0xFFF) << 32)  | \
      ((uint64_t)((dh) & 0x7FF) << 44))
 
-static int s_current_mode = PS2_MODE_VESA_800X600;
+static int s_current_mode = PS2_MODE_800X600;
 
 int ps2_gs_get_width(void)  { return PS2_SCREEN_WIDTH; }
 int ps2_gs_get_height(void) { return PS2_SCREEN_HEIGHT; }
@@ -73,10 +75,9 @@ static void ps2_dma_gif_send(const void *packet, uint32_t qwc)
     __asm__ volatile("" : : : "memory");
 }
 
-/* Stream entire 800x600 RDRAM framebuffer to GS VRAM via Host->Local GIF DMA */
-void ps2_gs_flush(void)
+/* One Host->Local blit setup packet (5 QWs): where in VRAM, how big, which way */
+static void send_trx_setup(int dx, int dy, int w, int h)
 {
-    /* 1. Send BITBLTBUF Host->Local Blit Setup Packet (5 QWs) */
     static uint64_t setup_pkt[5 * 2] __attribute__((aligned(16)));
     uint64_t *p = (uint64_t *)UNCACHED(setup_pkt);
 
@@ -91,12 +92,12 @@ void ps2_gs_flush(void)
     p[2] = ((uint64_t)fbw << 48) | ((uint64_t)GS_PSM_CT32 << 56);
     p[3] = 0x50ULL;
 
-    /* QW2: TRXPOS (0x51) - DSAX=0, DSAY=0 */
-    p[4] = 0ULL;
+    /* QW2: TRXPOS (0x51) - DSTXPOS=dx, DSTYPOS=dy (SRC is the incoming stream) */
+    p[4] = ((uint64_t)(uint32_t)dx << 32) | ((uint64_t)(uint32_t)dy << 48);
     p[5] = 0x51ULL;
 
-    /* QW3: TRXREG (0x52) - RRW=800, RRH=600 */
-    p[6] = ((uint64_t)PS2_SCREEN_WIDTH << 0) | ((uint64_t)PS2_SCREEN_HEIGHT << 32);
+    /* QW3: TRXREG (0x52) - RRW=w, RRH=h */
+    p[6] = ((uint64_t)(uint32_t)w << 0) | ((uint64_t)(uint32_t)h << 32);
     p[7] = 0x52ULL;
 
     /* QW4: TRXDIR (0x53) - Host -> Local (0) */
@@ -104,33 +105,87 @@ void ps2_gs_flush(void)
     p[9] = 0x53ULL;
 
     ps2_dma_gif_send(setup_pkt, 5);
+}
 
-    /* 2. Stream entire 800x600 image (120,000 QWs) in 15 chunks of 8,000 QWs */
-    /* 800 * 600 * 4 / 16 = 120,000 QWs = 15 chunks * 8,000 QWs */
+/* Stream pixel data as IMAGE-format packets.  QWC counts quadwords, so a row of
+ * w pixels is w/4 of them, and the quadword stream restarts at each chunk. */
+static void send_image_stream(const void *src, uint32_t qwc)
+{
     #define CHUNK_QWC 8000
-    #define NUM_CHUNKS 15
 
     static uint64_t img_tag[2] __attribute__((aligned(16)));
     uint64_t *tag = (uint64_t *)UNCACHED(img_tag);
-    tag[0] = ((uint64_t)CHUNK_QWC << 0) | (1ULL << 15) | (2ULL << 58); /* IMAGE mode, EOP=1 */
-    tag[1] = 0ULL;
+    const uint8_t *p = (const uint8_t *)UNCACHED(src);
 
-    const uint8_t *src = (const uint8_t *)UNCACHED(ps2_fb_memory);
-    for (int i = 0; i < NUM_CHUNKS; i++) {
+    while (qwc > 0) {
+        uint32_t n = (qwc > CHUNK_QWC) ? CHUNK_QWC : qwc;
+        tag[0] = ((uint64_t)n << 0) | (1ULL << 15) | (2ULL << 58); /* IMAGE mode, EOP=1 */
+        tag[1] = 0ULL;
         ps2_dma_gif_send(img_tag, 1);
-        ps2_dma_gif_send(src + i * (CHUNK_QWC * 16), CHUNK_QWC);
+        ps2_dma_gif_send(p, n);
+        p += (uint32_t)n * 16u;
+        qwc -= n;
     }
+}
+
+void ps2_gs_upload(int x, int y, int w, int h)
+{
+    if (w <= 0 || h <= 0) return;
+    if (x < 0 || y < 0) return;
+    if (x >= PS2_SCREEN_WIDTH || y >= PS2_SCREEN_HEIGHT) return;
+    if (x + w > PS2_SCREEN_WIDTH)  w = PS2_SCREEN_WIDTH - x;
+    if (y + h > PS2_SCREEN_HEIGHT) h = PS2_SCREEN_HEIGHT - y;
+
+    /* CT32 needs an even RRW and the stream is whole quadwords (4 px) wide;
+     * widen to both, which stays inside the 832-pixel VRAM page. */
+    x &= ~3;
+    w = (w + 3) & ~3;
+    if (w > PS2_SCREEN_WIDTH) w = PS2_SCREEN_WIDTH;
+
+    const uint8_t *canvas = (const uint8_t *)ps2_fb_memory;
+
+    if (x == 0 && w == PS2_SCREEN_WIDTH) {
+        /* Full rows: the canvas rows are contiguous, so one rectangle and one
+         * IMAGE stream cover the whole band. */
+        send_trx_setup(0, y, w, h);
+        send_image_stream(canvas + (size_t)y * PS2_SCREEN_PITCH,
+                          (uint32_t)((size_t)w * (size_t)h / 4u));
+    } else {
+        /* Host->Local IMAGE data carries no row pitch, so a narrow rectangle
+         * has to be uploaded a row at a time. */
+        const uint8_t *src = canvas + (size_t)y * PS2_SCREEN_PITCH + (size_t)x * 4u;
+        uint32_t qwc = (uint32_t)(w / 4);
+        for (int row = 0; row < h; row++, src += PS2_SCREEN_PITCH) {
+            send_trx_setup(x, y + row, w, 1);
+            send_image_stream(src, qwc);
+        }
+    }
+}
+
+/* Stream entire 800x600 RDRAM framebuffer to GS VRAM via Host->Local GIF DMA */
+void ps2_gs_flush(void)
+{
+    ps2_gs_upload(0, 0, PS2_SCREEN_WIDTH, PS2_SCREEN_HEIGHT);
 }
 
 void ps2_gs_set_mode(int mode)
 {
     s_current_mode = mode;
 
-    if (mode == PS2_MODE_VESA_800X600) {
-        /* VESA 800x600 @ 60Hz Non-Interlaced Progressive:
-         *   interlace = 0, pal_ntsc = 0x2B (VESA 800x600@60), field = 0
-         */
-        ps2_set_gs_crt(0, 0x2B, 0);
+    if (mode == PS2_MODE_800X600) {
+        /* 720p progressive (SMODE1 CMOD=0, LC=22) carrying an unscaled
+         * 800x600 window, instead of the VESA 800x600@60 mode word 0x2B.
+         *
+         * PCSX2 keys its entire CRT geometry off CMOD and LC, and gives every
+         * VESA mode the one 640x480 table entry (GSState.cpp
+         * VideoModeOffsets[2]), which GetResolution() then clamps the output
+         * to.  So a hardware-correct VGA timing can only ever show 640 of our
+         * 800 columns and 480 of our 600 rows there, and its DY=25 is read as
+         * a -9 line offset because the VESA entry expects baseDY=34.  The
+         * 720p entry is 1280x720 with baseDY=24, so the same canvas comes out
+         * unclipped and unshifted.  On a real PS2 this paints the 800x600
+         * image into the top-left of a 720p frame. */
+        ps2_set_gs_crt(0, 0x52, 0);
 
         /* PMODE: Circuit 1 + 2 enabled, SLBG = 0 (Display Framebuffer) */
         GS_REG(GS_PMODE_OFFSET) = 0xFF63ULL;
@@ -144,10 +199,12 @@ void ps2_gs_set_mode(int mode)
         GS_REG(GS_DISPFB1_OFFSET) = dispfb;
         GS_REG(GS_DISPFB2_OFFSET) = dispfb;
 
-        /* DISPLAY1 & DISPLAY2: VESA 800x600
-         *   DX=465, DY=25, MAGH=1 (2x -> 1600), MAGV=0 (1x -> 600), DW=1599, DH=599
+        /* DISPLAY1 & DISPLAY2: the 720p raster's active-area origin, then
+         * MAGH=MAGV=0 so the read is one VRAM pixel per output dot and
+         * DW/DH stop at the 800x600 canvas rather than the full 1280x720.
+         * The rest of the frame is filled with BGCOLOR.
          */
-        uint64_t display = GS_SET_DISPLAY(465, 25, 1, 0, 1599, 599);
+        uint64_t display = GS_SET_DISPLAY(420, 40, 0, 0, PS2_SCREEN_WIDTH - 1, PS2_SCREEN_HEIGHT - 1);
         GS_REG(GS_DISPLAY1_OFFSET) = display;
         GS_REG(GS_DISPLAY2_OFFSET) = display;
 
@@ -199,8 +256,8 @@ void ps2_gs_init(uint32_t width, uint32_t height)
     /* 2. Unmask GS interrupts via BIOS syscall */
     ps2_gs_put_imr(0xFF00);
 
-    /* 3. Configure PCRTC video mode (VESA 800x600 @ 60Hz Progressive) */
-    ps2_gs_set_mode(PS2_MODE_VESA_800X600);
+    /* 3. Configure PCRTC video mode (800x600 canvas on a 720p progressive timing) */
+    ps2_gs_set_mode(PS2_MODE_800X600);
 
     /* 4. Enable EE DMAC Controller */
     D_CTRL |= 1; /* DMAE = 1 */
@@ -231,6 +288,18 @@ void ps2_gs_set_bgcolor(uint8_t r, uint8_t g, uint8_t b)
 static int s_text_cursor_x = 0;
 static int s_text_cursor_y = 0;
 
+/* Rows of the canvas that no longer match VRAM.  Without this the console paid
+ * a full 1,920,000-byte upload for every printed line, including the one that
+ * echoes each keystroke. */
+static int s_dirty_top = PS2_SCREEN_HEIGHT;
+static int s_dirty_end = 0;
+
+static void text_mark_dirty(int y, int nrows)
+{
+    if (y < s_dirty_top) s_dirty_top = y;
+    if (y + nrows > s_dirty_end) s_dirty_end = y + nrows;
+}
+
 void ps2_gs_text_init(void)
 {
     ps2_gs_text_clear();
@@ -244,6 +313,7 @@ void ps2_gs_text_clear(void)
     }
     s_text_cursor_x = 0;
     s_text_cursor_y = 0;
+    text_mark_dirty(0, PS2_SCREEN_HEIGHT);
 }
 
 void ps2_gs_text_draw_char(int col, int row, char c, uint32_t fg, uint32_t bg)
@@ -266,6 +336,7 @@ void ps2_gs_text_draw_char(int col, int row, char c, uint32_t fg, uint32_t bg)
             fb[py * PS2_SCREEN_WIDTH + px] = (bits & (0x80 >> x)) ? fg : bg;
         }
     }
+    text_mark_dirty(base_y, 16);
 }
 
 static void ps2_gs_text_scroll(void)
@@ -277,6 +348,7 @@ static void ps2_gs_text_scroll(void)
     for (int i = (PS2_SCREEN_HEIGHT - 16) * PS2_SCREEN_WIDTH; i < PS2_SCREEN_WIDTH * PS2_SCREEN_HEIGHT; i++) {
         fb[i] = 0xFF121B29;
     }
+    text_mark_dirty(0, PS2_SCREEN_HEIGHT);
 }
 
 void ps2_gs_text_putc(char c, uint32_t fg, uint32_t bg)
@@ -336,7 +408,13 @@ void ps2_gs_text_puts(const char *str, uint32_t fg)
 
 void ps2_gs_text_flush(void)
 {
-    ps2_gs_flush();
+    if (s_dirty_end <= s_dirty_top) return;
+    int top = s_dirty_top;
+    int h = s_dirty_end - top;
+    if (h > PS2_SCREEN_HEIGHT) h = PS2_SCREEN_HEIGHT;
+    ps2_gs_upload(0, top, PS2_SCREEN_WIDTH, h);
+    s_dirty_top = PS2_SCREEN_HEIGHT;
+    s_dirty_end = 0;
 }
 
 

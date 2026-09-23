@@ -3,16 +3,15 @@
  *
  * Full Authentic B-System Workbench Desktop Integration:
  *   • Target: PlayStation 2 Emotion Engine (R5900 MIPS-III Little-Endian)
- *   • Display: Graphics Synthesizer (GS) 640x448 @ 32-bpp RGBA via GIF DMA
+ *   • Display: Graphics Synthesizer (GS) 800x600 @ 32-bpp RGBA via GIF DMA
  *   • Compositor: Real B-System Desktop (src/desktop/desktop.c, workbench.c, wnd.c)
  *   • Event Distribution: Full EVENTING.md Workbench Coordinator
  *   • Multi-Window Apps: Real Body Cabinet, T-Editor, GTerm Shell, Control Panel
  *   • Desktop Icons: Cabinet, Editor, Terminal, Sound, Chat Pictograms
- *   • Input: DualShock 2 (Pad), USB OHCI HID (Keyboard/Mouse), SIO0 Terminal
+ *   • Input: USB HID (OHCI probe), DualShock 2 decoder, SIO0 terminal
  *
- * Cleanroom implementation referencing open specifications in third_party/ps2sdk
- * and ps2tek (https://ps2.5ht.co/ps2-hacking.htm).
- * Zero proprietary Sony SDK dependencies.
+ * Specification-derived cleanroom port: the OHCI, GIF and SIO0 register layouts
+ * come from the published standards.  No vendor SDK code is imported.
  *
  * Copyright 2026 Synrc Research Center. MIT License.
  */
@@ -25,6 +24,8 @@
 #include <btron/error.h>
 #include <btron/itron.h>
 #include <btron/dp.h>
+#include <btron/dp_accel.h>
+#include <btron/dp_cal.h>
 #include <btron/wnd.h>
 #include <btron/desktop.h>
 #include <btron/workbench.h>
@@ -41,9 +42,11 @@
 #include "ps2_sio.h"
 #include "ps2_pad.h"
 #include "ps2_usb.h"
+#include "ps2_iopram.h"
 
 extern void ps2_delay_cycles(uint32_t count);
 extern void ps2_halt(void);
+extern uint32_t ps2_count_read(void);
 
 /* External B-System Desktop Hooks from src/desktop/desktop.c */
 extern GDEV* init_baremetal_desktop(uint32_t *fb, uint32_t w, uint32_t h);
@@ -90,8 +93,6 @@ void  free(void *p) { Ifree(p); }
 
 /* ── Framebuffer & Color Conversion ─────────────────────────────── */
 
-/* ── Framebuffer & Color Conversion ─────────────────────────────── */
-
 /* 32-bit BTRON Desktop Backbuffer (800x600 @ 32-bit ARGB COLOR) */
 static COLOR s_desktop_backbuffer[PS2_SCREEN_WIDTH * PS2_SCREEN_HEIGHT] __attribute__((aligned(128)));
 
@@ -100,8 +101,48 @@ static int s_mouse_x = 400;
 static int s_mouse_y = 300;
 static int s_gui_active = 0;
 
+/* A pointer report on this port is not a mouse on a desk.  It is the host
+ * cursor's own movement, relayed by something that has already accelerated and
+ * coalesced it before we see a byte of it, so the counts are not proportional to
+ * the hand and no fixed factor here can be right -- applying one makes the
+ * pointer inconsistent rather than merely wrong in one direction.  So the report
+ * is taken verbatim, and any calibration of feel belongs to the host that
+ * invented the numbers.  8.8 fixed point, where 256 is verbatim; 'sens' at the
+ * prompt still overrides it within a run, which is how that claim gets tested. */
+#define PS2_MOUSE_MULT_FP 256
+static int32_t s_ptr_mult_fp = PS2_MOUSE_MULT_FP;
+static int32_t s_ptr_carry_x, s_ptr_carry_y;
+
+/* How far the cursor may travel between two paints, in pixels.
+ *
+ * Verbatim counts are correct arithmetic and still unusable: the host has
+ * already put its own acceleration into the numbers, so a comfortable movement on
+ * a desk crosses this canvas several times over.  What a person judges is how far
+ * the pointer jumped since they last saw it, and that is a distance per *frame*,
+ * not per report -- the interrupt ring now holds eight of them and one pump pass
+ * can spend all eight at once, so a cap applied to each report would bound
+ * nothing the eye could see.  So reports accumulate and ps2_ptr_service() pays
+ * them out at most PS2_PTR_MAX_STEP pixels per pass, which is what turns a flick
+ * into a glide a person can stop on top of a target.
+ *
+ * Not a smaller multiplier: that would slow the millimetre movements used to
+ * aim at a menu item as much as it slows the sweep across the screen, and the
+ * aiming is the part that has to stay exact. */
+#define PS2_PTR_MAX_STEP 8
+static int32_t s_ptr_max_step = PS2_PTR_MAX_STEP;
+static int32_t s_ptr_want_x, s_ptr_want_y;     /* counts that arrived since the last pass */
+static int32_t s_ptr_defer_x, s_ptr_defer_y;   /* pixels the cap has not spent yet */
+
+/* Measured GIF upload costs, printed once on the boot log */
+static uint32_t s_full_upload_us;
+static uint32_t s_band_upload_us;
+static uint32_t s_ohci_probe_us;
+static uint32_t s_gs_init_us;
+
 /* Forward declaration */
 void launch_ps2_desktop_session(void);
+static void ps2_log_ohci_probe(const ps2_ohci_probe_t *p);
+static int ps2_log_host(void);
 
 /* Translates BTRON ARGB (0xAARRGGBB) to PS2 GS CT32 RGBA (Byte 0=R, 1=G, 2=B, 3=A) */
 static void blit_backbuffer_to_ps2fb(void)
@@ -125,6 +166,39 @@ static void ps2_console_putc(char c)
 
 /* ── Kernel Printf via SIO0 and GS Console ──────────────────────── */
 
+/* CP0 Count ticks at half the 294.912 MHz core clock */
+#define EE_TICKS_PER_US 147u
+static int s_timebase_ok = 0;
+
+static uint32_t ps2_us_since(uint32_t start)
+{
+    return (uint32_t)(ps2_count_read() - start) / EE_TICKS_PER_US;
+}
+
+static void ps2_console_flush(void)
+{
+    if (!s_gui_active) ps2_gs_text_flush();
+}
+
+static void ps2_emit_num(uint32_t val, unsigned base, unsigned width,
+                         int zero_pad, int upper, int negative)
+{
+    char buf[12];
+    const char *digits = upper ? "0123456789ABCDEF" : "0123456789abcdef";
+    int n = 0;
+
+    if (val == 0) buf[n++] = '0';
+    while (val != 0 && n < (int)sizeof(buf)) {
+        buf[n++] = digits[val % base];
+        val /= base;
+    }
+
+    unsigned filled = (unsigned)n + (negative ? 1u : 0u);
+    for (unsigned i = filled; i < width; i++) ps2_console_putc(zero_pad ? '0' : ' ');
+    if (negative) ps2_console_putc('-');
+    while (n > 0) ps2_console_putc(buf[--n]);
+}
+
 static void ps2_kprintf(const char *fmt, ...)
 {
     va_list ap;
@@ -137,64 +211,61 @@ static void ps2_kprintf(const char *fmt, ...)
         fmt++;
         if (*fmt == '\0') break;
 
-        if (*fmt == 's') {
-            const char *s = va_arg(ap, const char *);
-            if (!s) s = "(null)";
-            while (*s) ps2_console_putc(*s++);
-        } else if (*fmt == 'd' || *fmt == 'i') {
-            int val = va_arg(ap, int);
-            if (val < 0) {
-                ps2_console_putc('-');
-                val = -val;
-            }
-            char buf[16];
-            int idx = 0;
-            if (val == 0) buf[idx++] = '0';
-            else {
-                while (val > 0) {
-                    buf[idx++] = (char)('0' + (val % 10));
-                    val /= 10;
-                }
-            }
-            while (idx > 0) ps2_console_putc(buf[--idx]);
-        } else if (*fmt == 'u') {
-            unsigned int val = va_arg(ap, unsigned int);
-            char buf[16];
-            int idx = 0;
-            if (val == 0) buf[idx++] = '0';
-            else {
-                while (val > 0) {
-                    buf[idx++] = (char)('0' + (val % 10));
-                    val /= 10;
-                }
-            }
-            while (idx > 0) ps2_console_putc(buf[--idx]);
-        } else if (*fmt == 'x' || *fmt == 'X') {
-            uint32_t val = va_arg(ap, uint32_t);
-            char buf[16];
-            int idx = 0;
-            const char *hex = (*fmt == 'x') ? "0123456789abcdef" : "0123456789ABCDEF";
-            if (val == 0) buf[idx++] = '0';
-            else {
-                while (val > 0) {
-                    buf[idx++] = hex[val & 0xF];
-                    val >>= 4;
-                }
-            }
-            while (idx > 0) ps2_console_putc(buf[--idx]);
-        } else if (*fmt == 'c') {
-            char ch = (char)va_arg(ap, int);
-            ps2_console_putc(ch);
-        } else if (*fmt == '%') {
+        if (*fmt == '%') {
             ps2_console_putc('%');
+            fmt++;
+            continue;
+        }
+
+        int zero_pad = 0;
+        int left = 0;
+        unsigned width = 0;
+        /* A flag the formatter does not implement has to be consumed here, or
+         * its characters reach the console as text and every argument after it
+         * is read one slot out of place. */
+        if (*fmt == '-') { left = 1; fmt++; }
+        if (*fmt == '0') { zero_pad = 1; fmt++; }
+        while (*fmt >= '0' && *fmt <= '9') {
+            width = width * 10u + (unsigned)(*fmt - '0');
+            fmt++;
+        }
+
+        switch (*fmt) {
+        case 's': {
+            const char *s = va_arg(ap, const char *);
+            unsigned n = 0;
+            if (!s) s = "(null)";
+            while (*s) { ps2_console_putc(*s++); n++; }
+            while (left && n++ < width) ps2_console_putc(' ');
+            break;
+        }
+        case 'c':
+            ps2_console_putc((char)va_arg(ap, int));
+            break;
+        case 'd':
+        case 'i': {
+            int v = va_arg(ap, int);
+            uint32_t mag = (v < 0) ? (uint32_t)0 - (uint32_t)v : (uint32_t)v;
+            ps2_emit_num(mag, 10, width, zero_pad, 0, v < 0);
+            break;
+        }
+        case 'u':
+            ps2_emit_num(va_arg(ap, unsigned int), 10, width, zero_pad, 0, 0);
+            break;
+        case 'x':
+            ps2_emit_num(va_arg(ap, unsigned int), 16, width, zero_pad, 0, 0);
+            break;
+        case 'X':
+            ps2_emit_num(va_arg(ap, unsigned int), 16, width, zero_pad, 1, 0);
+            break;
+        default:
+            break;
         }
         fmt++;
     }
     va_end(ap);
 
-    if (!s_gui_active) {
-        ps2_gs_text_flush();
-    }
+    ps2_console_flush();
 }
 
 
@@ -230,7 +301,7 @@ static void ps2_click_mouse(int button, int down)
     snd_evt(&ev);
 }
 
-static void ps2_inject_key(UW keycode, int down)
+static ER ps2_inject_key(UW keycode, int down)
 {
     EVT ev;
     tkl_memset(&ev, 0, sizeof(EVT));
@@ -238,7 +309,13 @@ static void ps2_inject_key(UW keycode, int down)
     ev.pos.x = (H)s_mouse_x;
     ev.pos.y = (H)s_mouse_y;
     ev.key = keycode;
-    snd_evt(&ev);
+    ER r = snd_evt(&ev);
+#if BTRON_HID_TRACE
+    /* r=0 is the queue taking it; anything else and the key died here rather
+     * than at the window that was supposed to read it. */
+    if (down) ps2_kprintf("[EVT] k=%x r=%d xy=%d,%d\n", keycode, (int)r, s_mouse_x, s_mouse_y);
+#endif
+    return r;
 }
 
 /* ── Pad & USB Driver Hooks ─────────────────────────────────────── */
@@ -307,23 +384,59 @@ void ps2_pad_on_button(uint16_t newly_pressed, uint16_t newly_released)
     }
 }
 
+/* One keystroke into the prompt, from either source.  Defined below with the
+ * shell's line editor and forward-declared because the USB hook above it needs
+ * it: the decoder runs wherever the poll loop happens to notice a report, not
+ * inside the SIO read. */
+static void ps2_shell_char(int c);
+
 void ps2_usb_on_key(uint32_t btron_key, int down)
 {
+#if BTRON_HID_TRACE
+    /* The decoder already ran, so this row says the router heard the key and
+     * which of its three exits it took: quit the GUI, queue an event, or feed
+     * the prompt.  A [KBD] row with no [KEY] row after it is a build whose
+     * decoder is not this one. */
+    ps2_kprintf("[KEY] k=%x d=%d gui=%d\n", btron_key, down, s_gui_active);
+#endif
     if (s_gui_active && down) {
         if (btron_key == BTRON_KEY_ESCAPE || btron_key == 'q' || btron_key == 'Q') {
             s_gui_active = 0;
             return;
         }
     }
-    ps2_inject_key((UW)btron_key, down);
+    if (s_gui_active) {
+        ps2_inject_key((UW)btron_key, down);
+        return;
+    }
+    /* Stage 1 has no event consumer: the prompt builds its line from characters,
+     * so a decoded key that only becomes an event is heard and then thrown away.
+     * Codes from 0x100 up are the BTRON function and navigation keys, which the
+     * console has no binding for yet and which must not be mistaken for a byte. */
+    if (down && btron_key < 0x100u) ps2_shell_char((int)btron_key);
 }
 
 void ps2_usb_on_mouse(int dx, int dy, uint8_t buttons)
 {
     static uint8_t s_prev_btn = 0;
-    if (dx != 0 || dy != 0) {
-        ps2_move_mouse(dx, dy);
-    }
+#if BTRON_HID_TRACE
+    /* Report counters alone cannot tell "nothing arrived" from "something
+     * arrived and moved the pointer nowhere".  This row answers the second, with
+     * the bytes as the device sent them and the distance they added to the queue. */
+    static uint32_t s_reports;
+    const uint32_t report_no = ++s_reports;
+#endif
+    /* Accumulate, do not move.  A report is one 1 ms slice of the host's cursor,
+     * and how many of them land in one of our passes is set by how long the last
+     * paint took -- so the distance a report is worth has to be spent by the
+     * pass that renders it, or the cap would be a cap on nothing. */
+    s_ptr_want_x += dp_ptr_scale(dx, s_ptr_mult_fp, &s_ptr_carry_x);
+    s_ptr_want_y += dp_ptr_scale(dy, s_ptr_mult_fp, &s_ptr_carry_y);
+
+    /* Buttons are not deferred.  A press that waits for the next pass is a press
+     * whose click event carries a position one frame old, and the edge itself can
+     * be gone by then; a click landing one frame late is invisible, a click
+     * dropped is a lost window. */
     if ((buttons & 1) && !(s_prev_btn & 1)) ps2_click_mouse(1, 1);
     if (!(buttons & 1) && (s_prev_btn & 1)) ps2_click_mouse(1, 0);
 
@@ -331,7 +444,188 @@ void ps2_usb_on_mouse(int dx, int dy, uint8_t buttons)
     if (!(buttons & 2) && (s_prev_btn & 2)) ps2_click_mouse(2, 0);
 
     s_prev_btn = buttons;
+
+#if BTRON_HID_TRACE
+    /* What the report asked for and what is now waiting to be spent.  The spent
+     * distance is the pass's row, below. */
+    if (report_no <= 12u || (report_no & 63u) == 0) {
+        ps2_kprintf("[PTR] #%u %d,%d>%d,%d queued=%d,%d btn=%x at %d,%d f=%u\n", (unsigned int)report_no,
+                    dx, dy, (int)s_ptr_want_x, (int)s_ptr_want_y,
+                    (int)s_ptr_defer_x, (int)s_ptr_defer_y,
+                    (unsigned int)buttons, s_mouse_x, s_mouse_y,
+                    (unsigned int)ps2_usb_frame_number());
+    }
+#endif
 }
+
+/* Spend the accumulated pointer distance, at most a frame's worth of it.  Called
+ * once per pass of each event loop, before the events are dispatched and the
+ * screen is painted, so the movement and the paint agree on one position. */
+static void ps2_ptr_service(void)
+{
+    const int32_t ask_x = s_ptr_want_x, ask_y = s_ptr_want_y;
+#if BTRON_HID_TRACE
+    static uint32_t s_moves;
+#endif
+    int32_t px, py;
+
+    s_ptr_want_x = s_ptr_want_y = 0;
+    px = dp_ptr_limit(ask_x, s_ptr_max_step, &s_ptr_defer_x);
+    py = dp_ptr_limit(ask_y, s_ptr_max_step, &s_ptr_defer_y);
+    if (!px && !py) return;
+    ps2_move_mouse((int)px, (int)py);
+
+#if BTRON_HID_TRACE
+    /* The pass's own row, because this is the pair the hand judges: everything
+     * that arrived since the last paint, and how far the cursor actually
+     * travelled.  `left` non-zero across consecutive rows is the limiter still
+     * paying a stroke out -- expected during a sweep, and the defect if it is
+     * still nonzero after the mouse has stopped, because that is the pointer
+     * walking off on its own. */
+    if (s_moves < 12u || (s_moves & 63u) == 0) {
+        ps2_kprintf("[MOVE] ask=%d,%d px=%d,%d left=%d,%d at %d,%d f=%u\n",
+                    (int)ask_x, (int)ask_y, (int)px, (int)py,
+                    (int)s_ptr_defer_x, (int)s_ptr_defer_y,
+                    s_mouse_x, s_mouse_y, (unsigned int)ps2_usb_frame_number());
+    }
+    s_moves++;
+#endif
+}
+
+/* ── Pointer Loopback Calibration ───────────────────────────────── */
+
+/* Four hooks and a canvas size are the whole contract between the shared
+ * measurement in src/graphics/dp_cal.c and this port.  The seam for feeding a
+ * report is the driver's own entry rather than the position setter, so a
+ * synthetic count travels the same road a count off the bus travels: decoded,
+ * scaled, bordered, and posted as an event.  Which is the point -- the thing
+ * being measured is this port, and anything the shortcut would skip is a place a
+ * bug could be hiding.  */
+static void ptr_cal_send(int dx, int dy)
+{
+    uint8_t report[4];
+    report[0] = 0;
+    report[1] = (uint8_t)(int8_t)dx;
+    report[2] = (uint8_t)(int8_t)dy;
+    report[3] = 0;
+    ps2_usb_process_mouse_report(report);
+    /* And spend it.  The measurement waits for the position the report produced,
+     * and since the cap the two are no longer the same instant -- without this
+     * row the calibrator would read the cursor where it was before the report. */
+    ps2_ptr_service();
+}
+
+static void ptr_cal_get(int *x, int *y)
+{
+    *x = s_mouse_x;
+    *y = s_mouse_y;
+}
+
+static void ptr_cal_set(int x, int y)
+{
+    ps2_move_mouse(x - s_mouse_x, y - s_mouse_y);
+}
+
+static void ptr_cal_row(const char *tag, long v0, long v1, long v2, long v3)
+{
+    /* Four conversions and five arguments, no %ld: the row is a fixed shape so
+     * the columns line up across ports, and the numbers are small enough by
+     * construction that the width buys nothing. */
+    ps2_kprintf("[CAL] %-5s %4d %6d %6d %6d\n", tag,
+                (int)v0, (int)v1, (int)v2, (int)v3);
+}
+
+static const dp_cal_port_t s_ptr_cal_port = {
+    ptr_cal_send, ptr_cal_get, ptr_cal_set,
+    PS2_SCREEN_WIDTH, PS2_SCREEN_HEIGHT,
+    ptr_cal_row,
+};
+
+#if BTRON_HID_TRACE
+/* The state of the input source, printed on a count of poll-loop iterations
+ * rather than on a clock, so that the two silences which look the same from the
+ * outside come apart: rows stopping entirely is the loop stopping, and rows
+ * whose f= field stops moving is the controller's frame engine stopping while we
+ * keep asking it.
+ *
+ * The [SCH0] and [SCH1] halves are each device's interrupt endpoint as the
+ * controller's own memory says it looks.  A queued and walkable descriptor has h= equal to td= apart from
+ * the two low bits (h bit0 is the halt the controller sets on the endpoint, bit1
+ * its data toggle); h= == t= means the queue is empty, which is a poll that will
+ * never be answered; and a cc= or an nx= pointing at a descriptor we never
+ * queued says it was walked and refused rather than never walked at all. */
+static void ps2_log_usb_state(int stage)
+{
+    static uint32_t last_fm;
+    static uint32_t since_calls;   /* rows counted while the controller stayed put */
+    static int last_stage;
+    uint32_t fm = ps2_usb_frame_number();
+    int due;
+
+    /* One row per second of the controller's own clock, not per N loop
+     * iterations: the shell and the desktop iterate a thousand times apart in
+     * speed, and a heartbeat tied to iterations floods the console in one and
+     * goes silent in the other.  When that clock stops, count calls instead --
+     * a controller that stopped producing frames is exactly the row worth
+     * having.  And always print the first row of a stage, because the moment
+     * input dies at 'startx' is the transition, not what came before it. */
+    if (fm != last_fm) {
+        due = ((uint32_t)(fm - last_fm) >= 1000u);
+    } else {
+        due = (++since_calls >= 50000u);
+    }
+    if (!due && stage == last_stage) return;
+    last_fm = fm;
+    last_stage = stage;
+    since_calls = 0;
+    const ps2_usb_dev_t *d0 = ps2_usb_dev(0);
+    const ps2_usb_dev_t *d1 = ps2_usb_dev(1);
+
+    ps2_kprintf("[DEV] %c up=%d sh=%d r=%u f=%x ic=%x ctl=%x dn=%x l=%d,%d e=%u,%u p=%u,%u\n",
+                stage, ps2_usb_host_up(), ps2_usb_shadow_lost(),
+                (unsigned int)ps2_usb_kbd_reports(),
+                (unsigned int)ps2_usb_frame_number(),
+                (unsigned int)ps2_usb_reg(OHCI_REG_INTSTATUS),
+                (unsigned int)ps2_usb_reg(OHCI_REG_CONTROL),
+                (unsigned int)ps2_usb_reg(OHCI_REG_DONE_HEAD),
+                d0 ? d0->live : -1, d1 ? d1->live : -1,
+                (unsigned int)(d0 ? d0->errors : 0u),
+                (unsigned int)(d1 ? d1->errors : 0u),
+                (unsigned int)(d0 ? d0->polls : 0u),
+                (unsigned int)(d1 ? d1->polls : 0u));
+    /* The two trailing counters are the cures this driver has already applied:
+     * the frame engine restarted, and a held packet cancelled.  Both belong to a
+     * control transfer, so neither should move once enumeration is over. */
+    ps2_kprintf("[SCH0] id=%x h=%x t=%x td=%x nx=%x cc=%x cbp=%x pd=%u sl=%u ra=%x rl=%x\n",
+                (unsigned int)(d0 ? d0->desc_id : 0u),
+                (unsigned int)ps2_usb_intr_word(0, INTR_W_ED_HEAD),
+                (unsigned int)ps2_usb_intr_word(0, INTR_W_ED_TAIL),
+                (unsigned int)ps2_usb_intr_word(0, INTR_W_TD_IOP),
+                (unsigned int)ps2_usb_intr_word(0, INTR_W_TD_NEXT),
+                (unsigned int)ps2_usb_intr_word(0, INTR_W_TD_CC),
+                (unsigned int)ps2_usb_intr_word(0, INTR_W_TD_CBP),
+                (unsigned int)ps2_usb_intr_word(0, INTR_W_PENDING),
+                (unsigned int)ps2_usb_intr_word(0, INTR_W_SLOT),
+                (unsigned int)ps2_usb_engine_rearms(),
+                (unsigned int)ps2_usb_async_releases());
+    /* The second device gets the same row because it is the one the pointer
+     * rides on, and its p= above says only that nothing retired: a queue the
+     * controller walks and a device that NAKs every visit look the same from
+     * that column.  With the queue here, h= != t= and a nonzero cc= that never
+     * moves is a refusal, and h= == t= is a ring this driver never armed. */
+    ps2_kprintf("[SCH1] id=%x h=%x t=%x td=%x nx=%x cc=%x cbp=%x pd=%u sl=%u mps=%u\n",
+                (unsigned int)(d1 ? d1->desc_id : 0u),
+                (unsigned int)ps2_usb_intr_word(1, INTR_W_ED_HEAD),
+                (unsigned int)ps2_usb_intr_word(1, INTR_W_ED_TAIL),
+                (unsigned int)ps2_usb_intr_word(1, INTR_W_TD_IOP),
+                (unsigned int)ps2_usb_intr_word(1, INTR_W_TD_NEXT),
+                (unsigned int)ps2_usb_intr_word(1, INTR_W_TD_CC),
+                (unsigned int)ps2_usb_intr_word(1, INTR_W_TD_CBP),
+                (unsigned int)ps2_usb_intr_word(1, INTR_W_PENDING),
+                (unsigned int)ps2_usb_intr_word(1, INTR_W_SLOT),
+                (unsigned int)(d1 ? d1->mps : 0u));
+}
+#endif
 
 /* ── Interactive Shell (Stage 1 Console & Stage 2 GUI Shell) ────── */
 
@@ -347,6 +641,7 @@ static void ps2_shell_exec(const char *cmd)
         ps2_kprintf("  desktop / startx - Launch authentic B-System 800x600 GUI session\n");
         ps2_kprintf("  exit / console   - Exit GUI session and return to Stage 1 shell\n");
         ps2_kprintf("  res              - Display active resolution and GS PCRTC mode\n");
+        ps2_kprintf("  usb [probe]      - Show OHCI + HID host state (probe = re-measure and re-enumerate)\n");
         ps2_kprintf("  help             - Display this command list\n");
         ps2_kprintf("  info             - Display PS2 system and hardware specifications\n");
         ps2_kprintf("  apps             - List all desktop applications\n");
@@ -357,6 +652,9 @@ static void ps2_shell_exec(const char *cmd)
         ps2_kprintf("  status           - Show mouse position, TIP mode, and system status\n");
         ps2_kprintf("  mouse <x> <y>    - Move cursor to absolute position (0..800, 0..600)\n");
         ps2_kprintf("  move <dx> <dy>   - Move cursor relative by (dx, dy)\n");
+        ps2_kprintf("  sens [pct]       - Show or set the USB pointer scale (1..400%%, 100 = as reported)\n");
+        ps2_kprintf("  maxstep [px]     - Show or set the pointer's max px per paint (0 = no cap)\n");
+        ps2_kprintf("  ptrcal           - Loopback-calibrate the pointer path (no mouse needed)\n");
         ps2_kprintf("  click [1|2]      - Click Left (1) or Right (2) mouse button\n");
         ps2_kprintf("  key <char>       - Inject key event into active window\n");
         ps2_kprintf("  type <text>      - Type string into active window\n");
@@ -383,6 +681,17 @@ static void ps2_shell_exec(const char *cmd)
         ps2_kprintf("  PCRTC Mode : VESA 800x600 (omode 0x2B, field 0)\n");
         ps2_kprintf("  eDRAM Alloc: 1,920,000 bytes (FBW=13 / 832 px stride)\n");
         ps2_kprintf("  GIF DMA Bus: 1.2 GB/s Host->Local (15 chunks x 8000 QWs)\n");
+    } else if (tkl_strcmp(cmd, "usb") == 0) {
+        ps2_log_ohci_probe(ps2_usb_last_probe());
+        (void)ps2_log_host();
+    } else if (tkl_strcmp(cmd, "usb probe") == 0) {
+        /* Re-measuring means putting the controller back through a reset, which
+         * also tears down whatever host engine was running on it -- so the one
+         * has to be followed by the other or the prompt comes back deaf. */
+        int verdict = ps2_usb_probe(NULL);
+        ps2_log_ohci_probe(ps2_usb_last_probe());
+        if (verdict == PS2_OHCI_IOP_DMA) ps2_usb_host_start();
+        (void)ps2_log_host();
     } else if (tkl_strcmp(cmd, "clear") == 0) {
         if (!s_gui_active) {
             ps2_gs_text_clear();
@@ -469,6 +778,61 @@ static void ps2_shell_exec(const char *cmd)
         while (*p >= '0' && *p <= '9') { dy = dy * 10 + (*p - '0'); p++; }
         ps2_move_mouse(dx * sign_x, dy * sign_y);
         ps2_kprintf("[PS2] Cursor moved by (%d, %d) -> now at (%d, %d)\n", dx * sign_x, dy * sign_y, s_mouse_x, s_mouse_y);
+    } else if (tkl_strncmp(cmd, "sens", 4) == 0) {
+        const char *p = cmd + 4;
+        while (*p == ' ') p++;
+        if (*p >= '0' && *p <= '9') {
+            int pct = 0;
+            while (*p >= '0' && *p <= '9') { pct = pct * 10 + (*p - '0'); p++; }
+            if (pct < 1) pct = 1;
+            if (pct > 400) pct = 400;
+            s_ptr_mult_fp = (int32_t)pct * 256 / 100;
+            /* The leftover belongs to the scale that made it. */
+            s_ptr_carry_x = s_ptr_carry_y = 0;
+        }
+        ps2_kprintf("[PS2] Pointer scale %d%% = %d/256 px per count\n",
+                    (int)(s_ptr_mult_fp * 100 / 256), (int)s_ptr_mult_fp);
+    } else if (tkl_strncmp(cmd, "maxstep", 7) == 0) {
+        const char *p = cmd + 7;
+        while (*p == ' ') p++;
+        if (*p >= '0' && *p <= '9') {
+            int px = 0;
+            while (*p >= '0' && *p <= '9') { px = px * 10 + (*p - '0'); p++; }
+            /* Nothing bounds this from below except 0 itself, and 0 is the word
+             * for "no cap" rather than for "frozen": dp_ptr_limit takes a
+             * non-positive step as pass-through, which is how the limiter gets
+             * tested off rather than guessed at. */
+            if (px > 512) px = 512;
+            s_ptr_max_step = (int32_t)px;
+            /* A cap being lifted or lowered leaves no reason to keep the old
+             * shape's distance waiting: that distance is why the cursor keeps
+             * going after the hand has stopped. */
+            s_ptr_want_x = s_ptr_want_y = 0;
+            s_ptr_defer_x = s_ptr_defer_y = 0;
+        }
+        ps2_kprintf("[PS2] Pointer cap %d px per paint%s\n",
+                    (int)s_ptr_max_step, s_ptr_max_step > 0 ? "" : " (off)");
+    } else if (tkl_strcmp(cmd, "ptrcal") == 0) {
+        int32_t saved_step = s_ptr_max_step;
+        ps2_kprintf("[CAL] Pointer loopback: counts in, pixels out, no hand involved.\n");
+        ps2_kprintf("[CAL] tag     amp     px  stray counts    EDGEx: wall counts back short\n");
+        /* The cap is a policy about how fast a person may be moved, and dp_cal is
+         * a measurement of how a count becomes a pixel.  Left in place it would
+         * hold back the high-amplitude gain rows and the EDGE strokes, so the run
+         * would report the limiter as a broken mapping.  Off for the measurement,
+         * back on afterwards. */
+        s_ptr_max_step = 0;
+        s_ptr_want_x = s_ptr_want_y = 0;
+        s_ptr_defer_x = s_ptr_defer_y = 0;
+        (void)dp_cal_run(&s_ptr_cal_port);
+        s_ptr_max_step = saved_step;
+        /* The gain rows are this port's own transfer function, so they read the
+         * same however the mouse was moving; a stray on the axis nobody asked
+         * for is an axis bug rather than a setting to turn. */
+        ps2_kprintf("[CAL] scale=%d%% px per count, cap=%d px per paint. DRIFT is where the\n"
+                    "[CAL] pointer ended after equal and opposite counts; DIAG asks both axes\n"
+                    "[CAL] the same question.\n",
+                    (int)(s_ptr_mult_fp * 100 / 256), (int)s_ptr_max_step);
     } else if (tkl_strcmp(cmd, "click") == 0 || tkl_strcmp(cmd, "click 1") == 0) {
         ps2_click_mouse(1, 1);
         ps2_click_mouse(1, 0);
@@ -529,112 +893,122 @@ static void ps2_shell_poll(void)
     while (ps2_sio_has_char()) {
         int c = ps2_sio_getc();
         if (c < 0) break;
+        ps2_shell_char(c);
+    }
+}
 
-        /* ANSI Escape Sequence State Machine for Navigation Keys */
-        if (esc_state == 0) {
-            if (c == 0x1B) { /* ESC */
-                esc_state = 1;
-                continue;
-            }
-        } else if (esc_state == 1) {
-            if (c == '[') {
-                esc_state = 2;
-                continue;
-            } else {
-                esc_state = 0;
-            }
-        } else if (esc_state == 2) {
-            if (c == 'A') {      /* Up Arrow */
-                esc_state = 0;
-                ps2_move_mouse(0, -16);
-                ps2_inject_key(BTRON_KEY_UP, 1);
-                ps2_inject_key(BTRON_KEY_UP, 0);
-                continue;
-            } else if (c == 'B') { /* Down Arrow */
-                esc_state = 0;
-                ps2_move_mouse(0, 16);
-                ps2_inject_key(BTRON_KEY_DOWN, 1);
-                ps2_inject_key(BTRON_KEY_DOWN, 0);
-                continue;
-            } else if (c == 'C') { /* Right Arrow */
-                esc_state = 0;
-                ps2_move_mouse(16, 0);
-                ps2_inject_key(BTRON_KEY_RIGHT, 1);
-                ps2_inject_key(BTRON_KEY_RIGHT, 0);
-                continue;
-            } else if (c == 'D') { /* Left Arrow */
-                esc_state = 0;
-                ps2_move_mouse(-16, 0);
-                ps2_inject_key(BTRON_KEY_LEFT, 1);
-                ps2_inject_key(BTRON_KEY_LEFT, 0);
-                continue;
-            } else if (c == 'H') { /* Home */
-                esc_state = 0;
+/* One character of console input, whichever device it came from: the SIO ring
+ * hands over host-terminal bytes, the USB HID decoder hands over keys it has
+ * already resolved to a character.  The escape state machine is deliberately
+ * left out here rather than in the SIO loop, because a terminal's arrow key
+ * arrives as three separate bytes and needs the same memory between them
+ * whoever is reading. */
+static void ps2_shell_char(int c)
+{
+    /* ANSI Escape Sequence State Machine for Navigation Keys */
+    if (esc_state == 0) {
+        if (c == 0x1B) { /* ESC */
+            esc_state = 1;
+            return;
+        }
+    } else if (esc_state == 1) {
+        if (c == '[') {
+            esc_state = 2;
+            return;
+        } else {
+            esc_state = 0;
+        }
+    } else if (esc_state == 2) {
+        if (c == 'A') {      /* Up Arrow */
+            esc_state = 0;
+            ps2_move_mouse(0, -16);
+            ps2_inject_key(BTRON_KEY_UP, 1);
+            ps2_inject_key(BTRON_KEY_UP, 0);
+            return;
+        } else if (c == 'B') { /* Down Arrow */
+            esc_state = 0;
+            ps2_move_mouse(0, 16);
+            ps2_inject_key(BTRON_KEY_DOWN, 1);
+            ps2_inject_key(BTRON_KEY_DOWN, 0);
+            return;
+        } else if (c == 'C') { /* Right Arrow */
+            esc_state = 0;
+            ps2_move_mouse(16, 0);
+            ps2_inject_key(BTRON_KEY_RIGHT, 1);
+            ps2_inject_key(BTRON_KEY_RIGHT, 0);
+            return;
+        } else if (c == 'D') { /* Left Arrow */
+            esc_state = 0;
+            ps2_move_mouse(-16, 0);
+            ps2_inject_key(BTRON_KEY_LEFT, 1);
+            ps2_inject_key(BTRON_KEY_LEFT, 0);
+            return;
+        } else if (c == 'H') { /* Home */
+            esc_state = 0;
+            ps2_inject_key(BTRON_KEY_HOME, 1);
+            ps2_inject_key(BTRON_KEY_HOME, 0);
+            return;
+        } else if (c == 'F') { /* End */
+            esc_state = 0;
+            ps2_inject_key(BTRON_KEY_END, 1);
+            ps2_inject_key(BTRON_KEY_END, 0);
+            return;
+        } else if (c >= '0' && c <= '9') {
+            esc_num = c - '0';
+            esc_state = 3;
+            return;
+        } else {
+            esc_state = 0;
+        }
+    } else if (esc_state == 3) {
+        esc_state = 0;
+        if (c == '~') {
+            if (esc_num == 1) {
                 ps2_inject_key(BTRON_KEY_HOME, 1);
                 ps2_inject_key(BTRON_KEY_HOME, 0);
-                continue;
-            } else if (c == 'F') { /* End */
-                esc_state = 0;
+            } else if (esc_num == 3) {
+                ps2_inject_key(BTRON_KEY_DELETE, 1);
+                ps2_inject_key(BTRON_KEY_DELETE, 0);
+            } else if (esc_num == 4) {
                 ps2_inject_key(BTRON_KEY_END, 1);
                 ps2_inject_key(BTRON_KEY_END, 0);
-                continue;
-            } else if (c >= '0' && c <= '9') {
-                esc_num = c - '0';
-                esc_state = 3;
-                continue;
-            } else {
-                esc_state = 0;
+            } else if (esc_num == 5) {
+                ps2_inject_key(BTRON_KEY_PAGE_UP, 1);
+                ps2_inject_key(BTRON_KEY_PAGE_UP, 0);
+            } else if (esc_num == 6) {
+                ps2_inject_key(BTRON_KEY_PAGE_DOWN, 1);
+                ps2_inject_key(BTRON_KEY_PAGE_DOWN, 0);
             }
-        } else if (esc_state == 3) {
-            esc_state = 0;
-            if (c == '~') {
-                if (esc_num == 1) {
-                    ps2_inject_key(BTRON_KEY_HOME, 1);
-                    ps2_inject_key(BTRON_KEY_HOME, 0);
-                } else if (esc_num == 3) {
-                    ps2_inject_key(BTRON_KEY_DELETE, 1);
-                    ps2_inject_key(BTRON_KEY_DELETE, 0);
-                } else if (esc_num == 4) {
-                    ps2_inject_key(BTRON_KEY_END, 1);
-                    ps2_inject_key(BTRON_KEY_END, 0);
-                } else if (esc_num == 5) {
-                    ps2_inject_key(BTRON_KEY_PAGE_UP, 1);
-                    ps2_inject_key(BTRON_KEY_PAGE_UP, 0);
-                } else if (esc_num == 6) {
-                    ps2_inject_key(BTRON_KEY_PAGE_DOWN, 1);
-                    ps2_inject_key(BTRON_KEY_PAGE_DOWN, 0);
-                }
-            }
-            continue;
         }
+        return;
+    }
 
-        /* Standard character and line editing */
-        if (c == '\r' || c == '\n') {
-            ps2_console_putc('\n');
+    /* Standard character and line editing */
+    if (c == '\r' || c == '\n') {
+        ps2_console_putc('\n');
+        if (!s_gui_active) ps2_gs_text_flush();
+        cmd_buf[cmd_pos] = '\0';
+        ps2_shell_exec(cmd_buf);
+        cmd_pos = 0;
+    } else if (c == 0x08 || c == 0x7F) {
+        if (cmd_pos > 0) {
+            cmd_pos--;
+            ps2_console_putc('\b');
             if (!s_gui_active) ps2_gs_text_flush();
-            cmd_buf[cmd_pos] = '\0';
-            ps2_shell_exec(cmd_buf);
-            cmd_pos = 0;
-        } else if (c == 0x08 || c == 0x7F) {
-            if (cmd_pos > 0) {
-                cmd_pos--;
-                ps2_console_putc('\b');
-                if (!s_gui_active) ps2_gs_text_flush();
-            }
-            if (s_gui_active) {
-                ps2_inject_key(BTRON_KEY_BACKSPACE, 1);
-                ps2_inject_key(BTRON_KEY_BACKSPACE, 0);
-            }
-        } else if (c >= 0x20 && c <= 0x7E) {
-            if (s_gui_active) {
-                ps2_inject_key((UW)(uint8_t)c, 1);
-                ps2_inject_key((UW)(uint8_t)c, 0);
-            }
-            if (cmd_pos < (int)sizeof(cmd_buf) - 1) {
-                cmd_buf[cmd_pos++] = (char)c;
-                ps2_console_putc((char)c);
-                if (!s_gui_active) ps2_gs_text_flush();
-            }
+        }
+        if (s_gui_active) {
+            ps2_inject_key(BTRON_KEY_BACKSPACE, 1);
+            ps2_inject_key(BTRON_KEY_BACKSPACE, 0);
+        }
+    } else if (c >= 0x20 && c <= 0x7E) {
+        if (s_gui_active) {
+            ps2_inject_key((UW)(uint8_t)c, 1);
+            ps2_inject_key((UW)(uint8_t)c, 0);
+        }
+        if (cmd_pos < (int)sizeof(cmd_buf) - 1) {
+            cmd_buf[cmd_pos++] = (char)c;
+            ps2_console_putc((char)c);
+            if (!s_gui_active) ps2_gs_text_flush();
         }
     }
 }
@@ -642,28 +1016,22 @@ static void ps2_shell_poll(void)
 /* ── Platform Query & RTOS Services ─────────────────────────────── */
 
 void btron_core_banner(void) {
-    ps2_kprintf("==============================================================\n");
-    ps2_kprintf("  B-System / BTRON3 3.20 (Sony PlayStation 2 Emotion Engine)  \n");
-    ps2_kprintf("  Cleanroom TRON Kernel [Target 8: ps2 / PCSX2]               \n");
-    ps2_kprintf("  CPU: Emotion Engine MIPS R5900 Little-Endian               \n");
-    ps2_kprintf("  RAM: 32 MB RDRAM (8 MB Kernel Heap Pool Allocated)          \n");
-    ps2_kprintf("  Display: 800x600 @ 32-bpp RGBA VESA Progressive Scan       \n");
-    ps2_kprintf("  Stage 1: Terminal Console Active (Type 'desktop' or 'startx')\n");
-    ps2_kprintf("  Stage 2: Full B-System Workbench GUI on demand              \n");
-    ps2_kprintf("  Input: DualShock 2 (Pad), USB OHCI HID, SIO0 Terminal       \n");
-    ps2_kprintf("==============================================================\n");
+    ps2_kprintf("[CORE] B-System / BTRON3 3.20  Sony PlayStation 2  [Emotion Engine R5900, 32 MB RDRAM]\n");
+    ps2_kprintf("[CORE] Cleanroom TRON kernel, Stage 1 terminal console.  Display: GS 800x600 CT32\n");
+    ps2_kprintf("[CORE] Commands: help, usb, info, res, mem, status, tip, apps, type, pad, clear\n");
+    ps2_kprintf("[CORE] Workbench GUI is not autobooted: type 'startx' for the 800x600 desktop.\n");
 }
 
 void btron_core_mem_log(void) {
-    ps2_kprintf("[MEM ] PS2 Physical Memory Map (32 MB RDRAM):\n");
-    ps2_kprintf("[MEM ]   0x00000000-0x01FFFFFF  RDRAM (32 MB Usable)\n");
-    ps2_kprintf("[MEM ]   0x12000000-0x12001FFF  GS Privileged Registers (eDRAM 4MB)\n");
-    ps2_kprintf("[MEM ]   0x1F801600-0x1F8016FF  OHCI USB Host Controller\n");
+    ps2_kprintf("[MEM] 32 MB RDRAM: 0x00000000-0x01ffffff  GS regs 0x12000000  ohci 0x1f801600\n");
+    ps2_kprintf("[MEM] 8 MB kernel heap pool, %u bytes used  canvas 0x%08x (uncached alias 0x%08x)\n",
+                (unsigned int)s_ps2_heap_offset,
+                (unsigned)(uintptr_t)s_desktop_backbuffer,
+                (unsigned)(((uintptr_t)s_desktop_backbuffer) | 0x20000000u));
 }
 
 void btron_core_hfds_log(void) {
-    ps2_kprintf("[HFDS] Real Body Virtual Object Storage: INIT [OK]\n");
-    ps2_kprintf("[HFDS] Root Cabinet: BTRON3_SPEC.TAD  Readme.tad  Cabinet.vobj\n");
+    ps2_kprintf("[HFDS] Real Body storage init [OK]  BTRON3_SPEC.TAD  Readme.tad  Cabinet.vobj\n");
 }
 
 void btron_core_init(void) {
@@ -735,13 +1103,34 @@ void launch_ps2_desktop_session(void)
 
         ps2_pad_poll();
         ps2_usb_poll();
+        /* After the poll and before the dispatch: the reports the drain just
+         * turned into queued distance become one frame's movement here, and the
+         * move event this raises is what sets need_redraw below, so a pass that
+         * spends pointer distance is also a pass that repaints it.  That is what
+         * makes "px per pass" the speed the hand sees. */
+        ps2_ptr_service();
         ps2_shell_poll();
 
         /* Dispatch queued BTRON events through unified workbench dispatcher */
         while (get_evt(&ev, 0) == E_OK) {
+#if BTRON_HID_TRACE
+            if (ev.type == EV_KEY_DOWN) {
+                /* top=0 is a desktop with no window to take the key; a nonzero
+                 * top whose handler is the gterm one means the key arrived and
+                 * the app itself declined it. */
+                WND *tk = get_top_wnd();
+                ps2_kprintf("[WM] k=%x top=%x h=%x\n", ev.key,
+                            (unsigned)(uintptr_t)tk,
+                            tk ? (unsigned)(uintptr_t)tk->event_handler : 0u);
+            }
+#endif
             workbench_process_event(screen, &ev);
             need_redraw = 1;
         }
+
+#if BTRON_HID_TRACE
+        ps2_log_usb_state('G');
+#endif
 
         ticks++;
         if ((ticks % 60) == 0) {
@@ -759,46 +1148,336 @@ void launch_ps2_desktop_session(void)
 
     /* Clean return to Stage 1 text console */
     ps2_gs_text_clear();
-    ps2_kprintf("\n==============================================================\n");
-    ps2_kprintf("  [BTRON] Exited Graphical Desktop Session\n");
-    ps2_kprintf("  [BTRON] Returned to Stage 1 Terminal Console (800x600)\n");
-    ps2_kprintf("  Type 'desktop' or 'startx' to launch GUI session again.\n");
-    ps2_kprintf("==============================================================\n\n");
+    ps2_kprintf("[DESK] Exited 800x600 workbench, back to the Stage 1 console. 'startx' again anytime.\n");
     ps2_kprintf("btron-ps2# ");
+}
+
+/* ── Hardware Bring-up Log (one row per subsystem, Stage 1) ─────── */
+
+/* The controller only ever touches the bytes it is told to master, so these
+ * rows say which IOP-RAM patch we borrowed and whether the borrow held.  The
+ * decode column is one word written through the window and read straight back,
+ * because nothing about what the IOP keeps at an address can prove the EE is
+ * reaching it: a granule that reads all-zero looks free whether the window is
+ * live or dead, which is exactly the trap that rejected this borrow before. */
+static void ps2_log_iopram(const ps2_iopram_t *r)
+{
+    ps2_kprintf("[SBUS] iop-ram@0x%08x decode=%u vector@0x80=0x%08x granules=%u\n",
+                (unsigned int)PS2_IOP_KSEG1, (unsigned int)r->readable,
+                r->first_read, (unsigned int)r->granules);
+#if BTRON_HID_TRACE
+    ps2_kprintf("[SBUS] shadow %u B @0x%06x: canary 0x%08x->0x%08x write=%u settle=%u\n",
+                (unsigned int)PS2_IOP_SHADOW_SIZE, r->off, r->canary, r->after_settle,
+                (unsigned int)r->write_ok, (unsigned int)r->survived);
+#endif
+}
+
+static void ps2_log_ohci_probe(const ps2_ohci_probe_t *p)
+{
+    ps2_kprintf("[USB] ohci@0x%08x rev=0x%02x ports=%u fmInt=0x%08x\n",
+                (unsigned int)OHCI_BASE_ADDR, p->rev & 0xFF,
+                (unsigned int)(p->rh_a & 0x1Fu), p->fminterval);
+#if BTRON_HID_TRACE
+    /* The rest of this is the controller's own register file before and after the
+     * probe touched it -- the rows that answered "can this thing master memory
+     * the EE can read", which the verdict line below now carries as its answer.
+     * They are one-off at boot, so they cost nothing but console rows, and those
+     * are the thing this log has to fit on a screen. */
+    ps2_kprintf("[USB] after reset+enable: rev 0x%02x->0x%02x  frames 0x%08x->0x%08x  int 0x%08x/0x%08x\n",
+                p->rev & 0xFF, p->rev_enabled & 0xFF, p->fm_before, p->fm_after,
+                p->intstatus, p->intenable);
+    /* Port status as the probe found it and as it left it.  The connect bit is
+     * one no driver write can set, so a controller reset is something this port
+     * cannot afford to do once a device is on the bus; this pair is the check
+     * that the probe really does leave the ports alone. */
+    ps2_kprintf("[USB] rh=0x%x  p1 0x%x>0x%x  p2 0x%x>0x%x\n",
+                p->rh_status, p->port1, p->port1_after,
+                p->port2, p->port2_after);
+    if (p->hcca_iop) {
+        /* frame 0xa5a5 means the controller never wrote the HCCA we pointed it
+         * at; anything else is its frame counter, stamped by its own bus master. */
+        ps2_kprintf("[USB] hcca@0x%06x: frame 0x%04x done 0x%08x intAfter 0x%08x\n",
+                    p->hcca_iop, p->hcca_frame, p->hcca_done, p->int_after);
+    }
+#endif
+    ps2_kprintf("[USB] verdict: %s\n", ps2_usb_verdict_name(ps2_usb_verdict()));
+}
+
+/* The USB driver's per-transfer row.  The record arrives as one pointer rather
+ * than as arguments because the driver is one of the -march=mips3 objects and
+ * this file is -march=mips2: those two disagree about the stack slots a call of
+ * more than four arguments uses, and the first rows off this printed the fifth
+ * argument as 0xffffff80.
+ *
+ * `t` names which call of enumeration this was (0 ordinary, 1 SET_ADDRESS,
+ * 2 the device descriptor read at address zero, 3 the same read at the assigned
+ * address).  `sv` is a bitmask, one bit per descriptor, of the host having moved
+ * a descriptor's buffer pointer to the end -- the only per-descriptor evidence
+ * that survives a host that retires a descriptor without delivering it.  `d0` is
+ * the first four bytes of the data payload, which starts at zero every transfer
+ * and so is non-zero only when bytes arrived.  `q` is how many frames the host
+ * took to stop looking at the control list before this ring was published. */
+void ps2_usb_log_tx(const ps2_usb_tx_t *t)
+{
+#if BTRON_HID_TRACE
+    ps2_kprintf("[TX] p%u t%u %04x n%u r=%d hd=%x dn=%x st=%u cc=%u sv=%x d0=%x q%d\n",
+                t->port, t->tag, t->req, t->ntd, (int)t->result, t->head, t->done,
+                t->stuck, t->cc, t->svc, t->data0, (int)t->quiet);
+#else
+    (void)t;
+#endif
+}
+
+/* The one row that proves the periodic list moves: everything else about
+ * polling is a register read, and a NAK'd interrupt descriptor leaves no memory
+ * trace at all, so a headless run cannot tell a live ring from a dead one until
+ * a report actually arrives. */
+void ps2_usb_report_landed(uint32_t kbd, uint32_t mouse)
+{
+    ps2_kprintf("[HID] first report landed, frame 0x%04x kbd=%u mouse=%u\n",
+                (unsigned int)ps2_usb_frame_number(), kbd, mouse);
+}
+
+/* One row per key the decoder produced, whatever became of it afterwards.
+ * `c` is the HID usage code and `k` the BTRON key it decodes to, so a key that
+ * arrives but maps to nothing reads differently from one the emulator never
+ * delivered: the first has a row here and no echo, the second has no row at all.
+ * `n` is this device's total accepted reports, which is what says whether the
+ * polling ring kept answering after this one.
+ *
+ * These two dumpers are HIDTRACE=1 only: a keypress row costs the console a line
+ * and a scroll, so left compiled in it is the thing that makes the prompt
+ * unreadable while it is being typed into.  The hid= field of the [LOG] row says
+ * which build produced a screen, so missing rows read as a flag rather than as a
+ * dead bus. */
+void ps2_usb_log_kbd(uint32_t mod, uint32_t code, uint32_t key, uint32_t reports)
+{
+#if BTRON_HID_TRACE
+    ps2_kprintf("[KBD] mod=%02x c=%02x k=%x n=%u\n", mod, code, key, reports);
+#else
+    (void)mod; (void)code; (void)key; (void)reports;
+#endif
+}
+
+/* The four bytes of a pointer report in the order they sat in memory, printed
+ * before anything is read out of them, so that [RAW] and the [PTR] row sharing a
+ * # number is the pair that says where a wrong-way move came from: same bytes and
+ * a wrong axis is this port's parse, and bytes that already put the horizontal
+ * travel in the third slot is the device's.  Moves on one axis only differ from
+ * the other by which of the middle two bytes changes, so a run that sweeps one
+ * axis at a time reads the report layout outright. */
+void ps2_usb_log_mouse_raw(uint32_t reports, uint32_t b3b0)
+{
+#if BTRON_HID_TRACE
+    if (reports <= 12u || (reports & 63u) == 0) {
+        ps2_kprintf("[RAW] #%u %02x %02x %02x %02x\n", (unsigned int)reports,
+                    (unsigned int)(b3b0 & 0xffu),
+                    (unsigned int)((b3b0 >> 8) & 0xffu),
+                    (unsigned int)((b3b0 >> 16) & 0xffu),
+                    (unsigned int)((b3b0 >> 24) & 0xffu));
+    }
+#else
+    (void)reports; (void)b3b0;
+#endif
+}
+
+/* What one pump pass of the pointer's interrupt ring drained.  The row is the
+ * difference between two stories that otherwise look identical on screen: a
+ * cursor that moves too far too late because reports were queued faster than this
+ * port collected them, and one that moves exactly as far as a wrong scale factor
+ * says it should.  `max` is the high-water mark, so a single row near the ring's
+ * capacity is enough to establish which story this run is. */
+void ps2_usb_log_ring(uint32_t dev, uint32_t got, uint32_t burst, uint32_t frame)
+{
+#if BTRON_HID_TRACE
+    const ps2_usb_dev_t *d = ps2_usb_dev((int)dev);
+    static uint32_t s_ring_rows;
+
+    if (!d || d->is_keyboard || d->mps >= 8u) return;   /* the keyboard's ring has its own rows */
+    /* Gated on its own count rather than on the report counter the other rows
+     * use: a pass that drains several reports moves that counter past the every-
+     * sixty-fourth value, and a diagnostic that goes quiet exactly when the pump
+     * is behind is worse than no diagnostic at all. */
+    if (s_ring_rows < 12u || (s_ring_rows & 63u) == 0u) {
+        ps2_kprintf("[RING] n=%u max=%u f=%u\n", (unsigned int)got,
+                    (unsigned int)burst, (unsigned int)frame);
+    }
+    s_ring_rows++;
+#else
+    (void)dev; (void)got; (void)burst; (void)frame;
+#endif
+}
+
+/* One row per root-hub port the host engine addressed, plus what came of it.
+ * The step column is the point of the whole row: it separates the ways
+ * enumeration fails -- nothing attached, the port never came out of reset, the
+ * device answered at address zero but not at its own, the endpoint it advertises
+ * is not the one we asked for, a second device sharing the first one's address
+ * -- and none of them look like the others here. */
+static int ps2_log_host(void)
+{
+    static const char *const steps[] = {
+        "none", "reset", "desc0", "addr", "cfg", "setcfg", "poll", "dupadd"
+    };
+    int live = 0;
+
+    /* The numbers that read a failed enumeration apart: `st` is the first
+     * descriptor of the last control transfer the controller never wrote back (1
+     * setup, 2 data, 3 status, 0 all of them came back) and `w` what the drain
+     * wait returned (-1 the controller called itself dead, -2 it ran out of
+     * frames).  `ad` is the function address this device is queued at, and no
+     * two polled rows share one: this host leaves every device answering zero,
+     * which is why the second of them reads as step dupadd instead of polling.
+     * `id` is the descriptor's vendor and product words, which name the device:
+     * this host's pointer answers 10627 and its keyboard binding 20510, while
+     * every HID device opens a descriptor with the same first eight bytes and so
+     * cannot be told apart there.  `pl`/`er` are the descriptors this device's
+     * interrupt ring retired, clean and with a condition code: pl climbing with
+     * reports at zero is a host that answers our polls with something we reject,
+     * and pl stuck at zero after step poll is a periodic list nobody walks. */
+    for (int i = 0; i < 2; i++) {
+        const ps2_usb_dev_t *d = ps2_usb_dev(i);
+        if (!d) continue;
+        if (d->live) live++;
+        ps2_kprintf("[HID] p%u %-6s ep=%u mps=%u cc=%u st=%u w=%d ad=%u id=%x pl=%u er=%u\n",
+                    d->port, steps[d->step <= 7u ? d->step : 0u], d->ep, d->mps,
+                    d->cc, d->stuck_td, d->wait_ret, d->addr, d->desc_id,
+                    d->polls, d->errors);
+    }
+    /* `rel` counts the transfers that started by cancelling a descriptor the
+     * controller was still holding from the transfer before it, which is this
+     * host's one way to lose a completed transfer; `rearm` counts the transfers
+     * that started by restarting a frame engine that had stopped taking
+     * boundaries.  Neither should climb once enumeration is moving.  `done` is
+     * the host's own done-queue head, so a value inside the descriptor block is
+     * the host saying outright that it retired a descriptor -- the one piece of
+     * evidence about progress that is not read out of memory we share with it. */
+#if BTRON_HID_TRACE
+    ps2_kprintf("[USB] after host: ctl=0x%x cmd=0x%x int=0x%x frm=0x%x done=0x%x rel=%u rearm=%u\n",
+                ps2_usb_reg(OHCI_REG_CONTROL), ps2_usb_reg(OHCI_REG_CMDSTATUS),
+                ps2_usb_reg(OHCI_REG_INTSTATUS), ps2_usb_reg(OHCI_REG_FMNUMBER),
+                ps2_usb_reg(OHCI_REG_DONE_HEAD),
+                ps2_usb_async_releases(), ps2_usb_engine_rearms());
+#endif
+    ps2_kprintf("[HID] %s, %d us, frame 0x%04x  reports kbd=%u mouse=%u\n",
+                live ? "host engine up" : "no device left polling",
+                (int)ps2_usb_host_us(), (unsigned int)ps2_usb_frame_number(),
+                (unsigned int)ps2_usb_kbd_reports(), (unsigned int)ps2_usb_mouse_reports());
+    return live;
+}
+
+/* The rows before the probe are printed as work completes, so the last one on
+ * screen names whatever step did not finish.  The upload timings matter because
+ * without a dirty row band the console paid a full-screen GIF transfer per
+ * keystroke. */
+static void ps2_log_boot_head(void)
+{
+    /* Which artifact produced this log: a build stamp is the only way a symptom
+     * quoted from a screen can be tied to the source that made it.  The fmt
+     * columns beside it are the vararg self-test -- this formatter's own proof
+     * that it reads its arguments in order, which a -march mismatch between the
+     * driver and the console once broke silently, and which only the diagnostic
+     * build has any reason to print. */
+    ps2_kprintf("[LOG] build %s %s\n", __DATE__, __TIME__);
+#if BTRON_HID_TRACE
+    ps2_kprintf("[LOG] fmt %02x %u %06x   want cd 164 000800   hid=%u\n",
+                0xCDu, 164u, (unsigned int)PS2_IOP_SHADOW_SIZE,
+                (unsigned int)BTRON_HID_TRACE);
+#endif
+    ps2_kprintf("[BOOT] B-System / BTRON3 3.20  Emotion Engine R5900 (MIPS-III LE)  32 MB RDRAM  no MMU\n");
+    ps2_kprintf("[GS] SetGsCrt omode=0x52 720p  DISPLAY 800x600 mag1x  CT32  VRAM page 0 pitch 832 px (1.90 MB)\n");
+    ps2_kprintf("[GS] init %u us   full canvas upload 120000 QW %u us   one console row-band %u us\n",
+                (unsigned int)s_gs_init_us, (unsigned int)s_full_upload_us, (unsigned int)s_band_upload_us);
+    ps2_kprintf("[CPU] CP0 Count %s  (%u ticks/us)\n",
+                s_timebase_ok ? "running" : "STOPPED, counted delays",
+                (unsigned int)EE_TICKS_PER_US);
+}
+
+static void ps2_log_boot_tail(int hid_devs)
+{
+    ps2_kprintf("[USB] probe pass took %u us\n", (unsigned int)s_ohci_probe_us);
+    ps2_kprintf("[SIO] SIO0 console is write-only here: PCSX2 wires no host terminal to it\n");
+    ps2_kprintf("[PAD] DualShock decoder ready, no SIF/IOP pad client yet  input: %d USB HID\n",
+                hid_devs);
 }
 
 /* ── Kernel Entry & Stage 1 Dispatch ────────────────────────────── */
 
 void ps2_kernel_main(void)
 {
-    /* 1. Initialize Serial Console (SIO0) */
+    /* 1. SIO0 first: every row below is mirrored to it, and it is also the only
+     *    way to see a hang that happens before the GS console exists. */
     ps2_sio_init();
 
-    /* 2. Initialize Controllers & USB Subsystem */
-    ps2_pad_init();
-    ps2_usb_init();
+    /* 2. Establish the timebase before anything is timed. */
+    uint32_t c0 = ps2_count_read();
+    for (volatile int i = 0; i < 20000; i++) { }
+    s_timebase_ok = (ps2_count_read() != c0);
 
-    /* 3. Initialize Hardware Graphics Synthesizer and GIF DMA (800x600 VESA) */
+    /* 3. Graphics Synthesizer + GIF DMA, so the boot log lands on screen. */
+    uint32_t gs0 = ps2_count_read();
     ps2_gs_init(PS2_SCREEN_WIDTH, PS2_SCREEN_HEIGHT);
+    uint32_t gs1 = ps2_count_read();
+    ps2_gs_flush();
+    s_full_upload_us = ps2_us_since(gs1);
+    uint32_t band0 = ps2_count_read();
+    ps2_gs_upload(0, 0, PS2_SCREEN_WIDTH, 16);
+    s_band_upload_us = ps2_us_since(band0);
+    s_gs_init_us = ps2_us_since(gs0);
 
-    /* 4. Display System Banner on GS Screen & SIO0 */
+    ps2_log_boot_head();
+
+    /* 4. Input.  The OHCI probe is a measurement, not an initialisation step:
+     *    it decides whether a keyboard and mouse are reachable from this core
+     *    at all, and the pad driver stays a decoder until it says so.  The
+     *    controller is a bus master of IOP RAM and nothing else, so the first
+     *    thing it needs is a patch of IOP RAM the EE can reach and see. */
+    ps2_pad_init();
+    ps2_iopram_claim(NULL);
+    ps2_log_iopram(ps2_iopram_last());
+    uint32_t probe0 = ps2_count_read();
+    int verdict = ps2_usb_probe(NULL);
+    s_ohci_probe_us = ps2_us_since(probe0);
+    ps2_log_ohci_probe(ps2_usb_last_probe());
+
+    /* The probe only says the controller can master the block we handed it.
+     * Turning that into a keyboard means descriptors it reads for itself, the
+     * enumeration requests, and an interrupt endpoint left queued -- so the
+     * engine runs here and says per-port how far it got. */
+    if (verdict == PS2_OHCI_IOP_DMA) ps2_usb_host_start();
+    ps2_log_boot_tail(ps2_log_host());
+
+    /* 5. Banner last, so the prompt is the bottom row and nothing interesting
+     *    scrolls away underneath it. */
     btron_core_banner();
     ps2_kprintf("\n");
 
 #if defined(BTRON_AUTO_GUI) && (BTRON_AUTO_GUI == 1)
-    ps2_kprintf("[BOOT] AUTO_GUI=1: Automatically launching B-System Desktop GUI...\n");
+    ps2_kprintf("[BOOT] AUTO_GUI=1: launching the B-System Desktop workbench\n");
     launch_ps2_desktop_session();
 #else
-    ps2_kprintf(" Type 'desktop' or 'startx' to launch VESA 800x600 GUI!\n");
-    ps2_kprintf(" Commands: help, info, res, apps, tasks, mem, desktop, startx, clear\n\n");
     ps2_kprintf("btron-ps2# ");
 #endif
 
-    /* 5. Stage 1 Interactive Terminal Shell Loop */
+    /* 6. Stage 1 Interactive Terminal Shell Loop */
+    int shadow_warned = 0;
+#if BTRON_HID_TRACE
+    ps2_log_usb_state('1');      /* the queue as enumeration left it */
+#endif
     while (1) {
         ps2_pad_poll();
         ps2_usb_poll();
+        ps2_ptr_service();      /* stage 1 has no pointer to draw, but the same
+                                 * queue has to be spent or it is one big stale
+                                 * jump the first time the GUI opens */
+        if (ps2_usb_shadow_lost() && !shadow_warned) {
+            shadow_warned = 1;
+            ps2_kprintf("[USB] IOP took the shadow block back; HID input stopped\n");
+        }
         ps2_shell_poll();
+#if BTRON_HID_TRACE
+        ps2_log_usb_state('1');
+#endif
         ps2_delay_cycles(2000);
     }
 }

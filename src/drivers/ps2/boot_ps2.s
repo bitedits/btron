@@ -67,6 +67,18 @@ ps2_delay_cycles:
     nop
 
 
+/* uint32_t ps2_count_read(void)
+ * CP0 Count: increments at half the core clock, so on a 294.912 MHz Emotion
+ * Engine one tick is ~6.78 ns and 147 ticks is ~1 us.  This is the only wall
+ * clock the port has before the IOP alarm handler exists, so every timed wait
+ * and every cost measurement goes through it. */
+.global ps2_count_read
+ps2_count_read:
+    mfc0    $v0, $9, 0
+    jr      $ra
+    nop
+
+
 /* ps2_set_gs_crt(int16_t interlace, int16_t pal_ntsc, int16_t field) */
 .global ps2_set_gs_crt
 ps2_set_gs_crt:

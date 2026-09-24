@@ -431,6 +431,47 @@ desktop, gain 96/256):
   byte-swapping `blit_backbuffer_to_ps2fb()`, which is the rect-limited-upload work
   in `doc/md/STABILIZATION.md`, and not a pointer constant at all.
 
+### Why the cursor lags, and which row says so
+
+A relative pointer's screen position is only ever updated when the screen is
+repainted, so **the cursor's frame rate is the paint pass's frame rate** -- 7.4 Hz
+at the 135 ms spacing above, and no gain, scale or accelerator changes it. That is
+the whole of "too much latency", and it lives in the compositor rather than in the
+USB port.
+
+Two facts already bound it without any hand protocol:
+
+- The full-canvas GIF upload costs **1638 us** (`[GS] ... full canvas upload 120000
+  QW 1638 us`, with a 16-row console band at 45 us -- linear, ~2.7 us per row).
+- Each pass that moves the cursor makes **three whole-canvas sweeps**: the render
+  itself, which repaints every window for a change the size of a cursor; the
+  byte-swap in `blit_backbuffer_to_ps2fb()`, which touches 480000 words for the same
+  reason; and that 1.6 ms upload. So ~133 ms of the pass is CPU work in the first
+  two, and nothing in this tree ever writes CP0 `Config`, which means the EE's
+  caches are off and every one of those words is an uncached bus access.
+
+`ptrstat` now prints the split, and `startx` prints the cold one on its own:
+
+```
+[PS2] paint cost: render=... us  swap=... us  upload=... us  total=....ms/pass
+[PSTAT] paint: n=... us/pass  render max/avg  swap max/avg  upload max/avg
+[PSTAT] lat: mouse->on screen avg=.. ms max=.. ms over N moves
+```
+
+`lat` is stamped on the report that opens an empty queue and read after the flush, so
+it is queueing *plus* the paint -- the latency the eye actually gets, not the one the
+`loop:` row only implies. A large average with a small maximum is a uniformly slow
+repaint; a large maximum on a small average is one stall somewhere else in the loop.
+
+**Read the ratio between the columns, not the milliseconds.** PCSX2 does not model EE
+cycle counts, so absolute timings are the emulator's; the proportion between render,
+swap and upload is instruction counts, and that is what picks the fix: `swap`
+dominating means the byte-order pass should not exist per frame (render in
+GS-native order, or swap only the damaged rectangle) and the caches are the other
+order of magnitude; `render` dominating means the damage rectangle is the fix, and
+`ps2_gs_upload(x, y, w, h)` already takes one -- the text console has used that path
+for row-bands all along.
+
 Note what a gain cannot fix: the emulator truncates its float delta toward zero
 and clamps each event at `|127|`, so distance is lost at both ends of the speed
 range before the byte is on the wire. `ptrstat`'s `sat=` and the zero bucket of

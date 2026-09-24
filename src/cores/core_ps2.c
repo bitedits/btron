@@ -313,6 +313,30 @@ static uint32_t ps2_us_since(uint32_t start)
     return (uint32_t)(ps2_count_read() - start) / EE_TICKS_PER_US;
 }
 
+/* One whole-canvas repaint, timed by stage.  The three have different cures, so
+ * they are never folded into one number: the render walks every window on the
+ * desktop for a change the size of a cursor, the swap touches 480000 words for the
+ * same reason, and only the upload has ever been measured here (1638 us at boot).
+ * Both callers use it -- the loop, and the cold paint that 'startx' performs on its
+ * own, which is the attribution that needs no hand protocol at all. */
+static void ps2_paint_screen(GDEV *screen, uint32_t *r_us, uint32_t *s_us, uint32_t *u_us)
+{
+    const uint32_t t0 = ps2_count_read();
+    uint32_t t1, t2, t3;
+
+    workbench_render(screen, PS2_SCREEN_WIDTH, PS2_SCREEN_HEIGHT);
+    t1 = ps2_count_read();
+    blit_backbuffer_to_ps2fb();
+    t2 = ps2_count_read();
+    ps2_gs_flush();
+    t3 = ps2_count_read();
+
+    if (!s_timebase_ok) { *r_us = *s_us = *u_us = 0u; return; }
+    *r_us = (t1 - t0) / EE_TICKS_PER_US;
+    *s_us = (t2 - t1) / EE_TICKS_PER_US;
+    *u_us = (t3 - t2) / EE_TICKS_PER_US;
+}
+
 static void ps2_console_flush(void)
 {
     if (!s_gui_active) ps2_gs_text_flush();
@@ -746,6 +770,74 @@ static void ps2_ptrst_print(const char *label)
     s_ptrst = (ps2_ptrst_t){ 0 };
 }
 
+/* ── What One Paint Pass Costs, And How Old The Pointer Was ──────── */
+
+/* "Too much latency" is two different complaints and they need different fixes,
+ * so both are measured here rather than inferred: how long a pass takes, split
+ * across the three whole-canvas sweeps it makes (ps2_paint_screen() times them),
+ * and how long a hand movement waits between arriving on the bus and being on the
+ * screen.
+ *
+ * The age is stamped at the report and read after the flush, so it is the latency
+ * the eye gets -- queueing plus the paint -- and not the queueing alone that the
+ * `loop:` row implies.  It is the row that tells the two complaints apart: a large
+ * average with a small maximum is the paint being uniformly slow, and a large
+ * maximum on a small average is one stall in the loop. */
+typedef struct {
+    uint32_t n;                              /* passes timed */
+    uint32_t render_sum, render_max;
+    uint32_t swap_sum,   swap_max;
+    uint32_t upload_sum, upload_max;
+    uint32_t lat_n;                          /* painted moves, a subset of n */
+    uint32_t lat_sum, lat_max;               /* ms, OHCI frames */
+} ps2_paint_t;
+
+static ps2_paint_t s_paint;
+/* Set by ps2_ptr_service() when the pass spent pointer distance, and consumed by
+ * the paint that renders it, so the age spans from the oldest report the pass
+ * spent to the flush that made it visible. */
+static uint32_t s_paint_age_f0;
+static int s_paint_owed;
+
+static void ps2_paint_note(uint32_t render_us, uint32_t swap_us, uint32_t upload_us,
+                           uint32_t lat_ms, int lat_valid)
+{
+    s_paint.n++;
+    s_paint.render_sum += render_us;  if (render_us > s_paint.render_max) s_paint.render_max = render_us;
+    s_paint.swap_sum   += swap_us;    if (swap_us   > s_paint.swap_max)   s_paint.swap_max   = swap_us;
+    s_paint.upload_sum += upload_us;  if (upload_us > s_paint.upload_max) s_paint.upload_max = upload_us;
+    if (!lat_valid) return;
+    s_paint.lat_n++;
+    s_paint.lat_sum += lat_ms;
+    if (lat_ms > s_paint.lat_max) s_paint.lat_max = lat_ms;
+}
+
+/* Averaged over the window's passes, with the worst pass beside it: an average
+ * alone cannot tell a uniformly slow repaint from an occasional 40 ms stall, and
+ * those are different bugs. */
+static void ps2_paint_print(void)
+{
+    const ps2_paint_t *p = &s_paint;
+
+    if (!p->n) {
+        ps2_kprintf("[PSTAT] paint: no pass timed -- 'startx' first, then move the mouse\n");
+        return;
+    }
+    ps2_kprintf("[PSTAT] paint: n=%u us/pass  render %u/%u  swap %u/%u  upload %u/%u  (max/avg)\n",
+                (unsigned int)p->n,
+                (unsigned int)p->render_max, (unsigned int)(p->render_sum / p->n),
+                (unsigned int)p->swap_max,   (unsigned int)(p->swap_sum / p->n),
+                (unsigned int)p->upload_max, (unsigned int)(p->upload_sum / p->n));
+    if (p->lat_n) {
+        ps2_kprintf("[PSTAT] lat: mouse->on screen avg=%u ms max=%u ms over %u moves\n",
+                    (unsigned int)(p->lat_sum / p->lat_n), (unsigned int)p->lat_max,
+                    (unsigned int)p->lat_n);
+    } else {
+        ps2_kprintf("[PSTAT] lat: no move was painted in this window\n");
+    }
+    s_paint = (ps2_paint_t){ 0 };
+}
+
 /* ── Calibration Against A Known Host Movement ───────────────────── */
 
 /* Every other number here counts what the wire carried; this one asks what the
@@ -896,7 +988,14 @@ void ps2_usb_on_mouse(int dx, int dy, uint8_t buttons)
      * border would have eaten it. */
     {
         int32_t px, py;
+        const int queue_was_empty = (s_ptr_want_x == 0 && s_ptr_want_y == 0);
         ps2_ptr_shape(dx, dy, &px, &py);
+        /* Stamp the age on the report that opens a queue, not on every report:
+         * what the hand waits for is the first of the batch, and the ones behind
+         * it are painted by the same pass.  A queue that sums to zero from
+         * equal-and-opposite counts re-stamps, which is the right answer -- that
+         * batch paints nothing. */
+        if (queue_was_empty && (px || py)) s_paint_age_f0 = ps2_usb_frame_number();
         s_ptr_want_x += px;
         s_ptr_want_y += py;
     }
@@ -949,6 +1048,12 @@ static void ps2_ptr_service(void)
      * taken by the border. */
     ps2_ptrst_pass(ask_x, ask_y, s_mouse_x - x0, s_mouse_y - y0);
     if (!px && !py) return;
+    /* This pass owes a paint, and the age of the movement is only finished when
+     * that paint reaches the GS.  Only the desktop loop reads and clears it; a
+     * pass that never paints leaves the stamp alone, so the age then spans the
+     * wait it really was rather than being shortened by a paint that did not
+     * happen. */
+    if (s_paint_age_f0) s_paint_owed = 1;
 
 #if BTRON_HID_TRACE
     /* The pass's own row, because this is the pair the hand judges: everything
@@ -1130,7 +1235,7 @@ static void ps2_shell_exec(const char *cmd)
         ps2_kprintf("  sens [pct]       - Show or set the USB pointer scale (1..400%%, 100 = as reported)\n");
         ps2_kprintf("  maxstep [px]     - Show or set the pointer's max px per paint (0 = no cap)\n");
         ps2_kprintf("  ptrsrc [emu|hw|auto] - Pointer policy: emulator device, real mouse, or re-detect\n");
-        ps2_kprintf("  ptrstat <tag>    - Print+reset the pointer counts seen since the last call\n");
+        ps2_kprintf("  ptrstat <tag>    - Print+reset pointer counts, paint cost, and mouse->screen ms\n");
         ps2_kprintf("  ptrcal           - Loopback-calibrate the pointer path (no mouse needed)\n");
         ps2_kprintf("  ptgain [w] [pct] - Gain from a host sweep of width w (pct = px/host px x100)\n");
         ps2_kprintf("  click [1|2]      - Click Left (1) or Right (2) mouse button\n");
@@ -1334,6 +1439,9 @@ static void ps2_shell_exec(const char *cmd)
          * inside a measurement window; each ptrstat resets, so one keystroke
          * recovers from forgetting. */
         ps2_ptrst_print(*p ? p : "run");
+        /* Same window, one question the count rows cannot answer: the counts say
+         * what the hand sent, these say when the screen got it. */
+        ps2_paint_print();
     } else if (tkl_strncmp(cmd, "ptgain", 6) == 0) {
         const char *p = cmd + 6;
         int hostpx = -1, pct = -1;   /* -1 = not given, 0 = the explicit reset */
@@ -1631,10 +1739,18 @@ void launch_ps2_desktop_session(void)
     }
     workbench_init(PS2_SCREEN_WIDTH);
 
-    /* Initial paint & blit to GS eDRAM */
-    workbench_render(screen, PS2_SCREEN_WIDTH, PS2_SCREEN_HEIGHT);
-    blit_backbuffer_to_ps2fb();
-    ps2_gs_flush();
+    /* Initial paint & blit to GS eDRAM.  Timed and printed, because this is the
+     * cost every later pass pays and it needs no protocol to observe: whatever the
+     * cursor's latency turns out to be, this row says how much of it the paint
+     * already owns before a single mouse report is considered. */
+    {
+        uint32_t r_us, s_us, u_us;
+        ps2_paint_screen(screen, &r_us, &s_us, &u_us);
+        ps2_kprintf("[PS2] paint cost: render=%u us  swap=%u us  upload=%u us  total=%u.%03u ms/pass\n",
+                    (unsigned int)r_us, (unsigned int)s_us, (unsigned int)u_us,
+                    (unsigned int)((r_us + s_us + u_us) / 1000u),
+                    (unsigned int)((r_us + s_us + u_us) % 1000u));
+    }
 
     ps2_kprintf("[PS2] Real B-System Workbench rendered via Host->Local GIF DMA (800x600).\n");
     ps2_kprintf("[PS2] Controls: Mouse/Pad/Kbd. Type 'exit' in shell or press [Esc]/[Q] to return.\n");
@@ -1684,9 +1800,23 @@ void launch_ps2_desktop_session(void)
         }
 
         if (need_redraw) {
-            workbench_render(screen, PS2_SCREEN_WIDTH, PS2_SCREEN_HEIGHT);
-            blit_backbuffer_to_ps2fb();
-            ps2_gs_flush();
+            uint32_t r_us, s_us, u_us;
+            uint32_t lat = 0;
+            int lat_ok = 0;
+
+            ps2_paint_screen(screen, &r_us, &s_us, &u_us);
+
+            if (s_paint_owed && s_paint_age_f0) {
+                /* Frames, not cycles: an OHCI frame is a millisecond and it is the
+                 * same clock the reports are stamped with, so this row and the
+                 * `loop:` row cannot drift apart.  Read after the flush, so the
+                 * age is the one the eye gets: queueing plus this paint. */
+                lat = (ps2_usb_frame_number() - s_paint_age_f0) & 0xFFFFu;
+                lat_ok = 1;
+                s_paint_age_f0 = 0;
+                s_paint_owed = 0;
+            }
+            ps2_paint_note(r_us, s_us, u_us, lat, lat_ok);
         }
 
         ps2_delay_cycles(1000);

@@ -211,9 +211,149 @@ The SIO0 UART console (`115200 8N1`) provides an interactive debugging shell wit
 | `key <char>` | Inject a single keystroke into the active window. |
 | `type <text>` | Inject an entire text string sequentially into the active window. |
 | `pad <hex> [lx ly]` | Inject simulated DualShock 2 controller state. |
+| `sens [pct]` | Show or set the pointer's px-per-count scale (1..400%, 100 = verbatim). |
+| `maxstep [px]` | Show or set the pointer's cap in px per paint (0 = no cap). |
+| `ptrsrc [emu\|hw\|auto]` | Show, force, or re-detect which pointer source profile is live. |
+| `ptrstat <tag>` | Print and reset the counts the bus delivered since the last call. |
+| `ptrcal` | Loopback-calibrate the pointer path with synthetic reports; no mouse, no hand. |
 | `reboot` | Halt the Emotion Engine. |
 
+#### Pointer instruments
+
+Three commands, three different questions. Running them in the wrong order
+measures the wrong thing, so each is stated with what it excludes:
+
+- **`ptrcal`** — *is the mapping correct?* It feeds synthetic reports through the
+  driver's own report entry, so a count travels the same road as a count off the
+  bus (decoded, scaled, bordered, posted as an event) with the hand out of the
+  loop. It turns the cap off for the run and restores it afterwards, because the
+  cap is a policy about how fast a person may be moved while `ptrcal` measures how
+  a count becomes a pixel; left in place it would report the limiter as a broken
+  mapping. Its header prints the live `source=` and `curve=`, because under the
+  `hw` profile the gain rows are meant to be non-linear -- that is the accelerator,
+  not a fault -- and a `[CAL]` log read without its header says the opposite.
+- **`ptrstat`** — *what is actually on the wire?* It counts **every** report, not
+  the one-in-sixty-four the `[RAW]` rows print, and sorts them by magnitude.
+- **`ptrsrc`** — *which of the two stubs below is answering, and why?* See
+  "Pointer source profiles".
+- **`sens` / `maxstep`** — this port's own policy, applied only once the first two
+  agree the path is sound.
+
+`ptrstat` closes the window since its last call, so the first call of a session
+reports whatever accumulated during boot: type `ptrstat boot` to discard that
+window, then perform a slide, then label the window that contains it. The decisive
+protocol is four windows:
+
+| Window | Hand | Decides |
+|:---|:---|:---|
+| `ptrstat boot` | nothing | clears the warm-up; prints no ratio row |
+| `ptrstat slow` | one deliberate slide, desk-middle to desk-edge | distance at low speed |
+| `ptrstat fast` | **the same physical slide**, done quickly | ...and at high speed |
+| `ptrstat h` | sideways only, either speed | whether the other axis stays at zero |
+
+Read the `vs previous window` row:
+
+- **`x=1.0x`** — the wire carries *distance*. A single guest gain is then correct
+  and sufficient, and `sens` is where the feel gets set.
+- **`x` appreciably above `1.0x`** — the numbers are already cursor pixels,
+  multiplied by speed by something outside this port. No constant can be right for
+  both rows. The answer is **not** a cap: `dp_ptr_limit()` spends a bounded distance
+  per paint and abandons debt past `DP_PTR_LIMIT_DEBT` steps, which makes where the
+  cursor lands a function of hand *speed* rather than hand *distance* -- the same
+  non-proportionality, moved. What this port does instead is take the ratio as
+  evidence that the wrong source profile is live, and the gain belongs to the layer
+  above (`macOS` acceleration, then `PointerXScale`).
+- **`still`** — a real mouse that is not moving answers IN tokens with NAKs, not
+  with `00 00 00` reports, so a large `still` count says a synthetic source is
+  producing reports whether or not anything moved. Cross-check the `e0/e1` error
+  column of the `[SCH]` row, which is where NAKs do show up.
+- **`x max=`** — a genuine device saturates at `|127|` on a fast slide, that being
+  the 8-bit byte's ceiling; a source whose maximum never approaches it across a
+  slide as fast as a hand can manage is coalescing motion into something other
+  than device counts.
+- **`reports -> N/s`** — the bus's effective polling rate, set by the device's
+  `bInterval`, *not* by this controller's 1 ms frame. A low-speed device cannot be
+  polled faster than every 10 ms (USB 1.1 gives low-speed interrupt pipes a 10 ms
+  floor and full-speed HID 1-8 ms), so **100-125/s is what a real PS2 mouse also
+  reads at** and is not by itself evidence of an emulator. The 1 kHz figure is the
+  frame rate; it bounds the frame engine, not the device.
+- **`net` far below `total`** on the `h` window — counts are leaking into the axis
+  nobody asked for, which no per-axis synthetic test can see because the synthetic
+  sweep never moves both axes the way a hand does.
+
+`ptrcal` drives the same report handler that `ptrstat` counts, so it must not run
+inside a measurement window. Every `ptrstat` call resets, so forgetting costs one
+keystroke to recover from.
+
+#### Pointer source profiles
+
+A count off this bus is worth a different number of pixels depending on what
+produced it, and no single guest constant can be right for both cases -- that is
+why one value tuned the pointer for a session and never made it usable. The port
+therefore ships **two stubs**, picked from the enumerated device's own USB
+identity at boot rather than from where the code happened to be built:
+
+| Profile | Selected when | Gain applied | Curve | Cap |
+|:---|:---|:---|:---|:---|
+| `emu` | the pointer on the bus answers as PCSX2's HID Mouse, device `0627:0001` (`desc_id == 0x00010627`) | `256 / 8 = 32` per count, i.e. it divides the emulator's `PointerXScale` back out so 1 host cursor px lands as 1 guest px | none | off |
+| `hw` | anything else answers -- a mouse somebody sells | verbatim `256`, modified by `sens` | `dp_ptr_riscos()` at `g_mouse_step_mult`, the same curve the arm64 / Pi 400 port uses | off |
+
+Detection runs once at boot after the host engine has enumerated, and again after
+`usb probe`; the boot log says which one it picked and why:
+
+```
+[PS2] Pointer source emu (detected): 32/256 px per count, no curve, cap off
+```
+
+`ptrsrc hw` / `ptrsrc emu` override that for a session, which is the only way to
+run the emulator's stub against a hardware-shaped count stream or the reverse
+without changing what is plugged in. `ptrsrc auto` hands the decision back to
+detection. Switching profiles clears the carried subpixel remainder and any
+distance the previous one had not spent, so a change mid-session cannot leave the
+old source's half-pixel tail to be paid out by the new one.
+
+The one number the `emu` profile depends on is the emulator's `PointerXScale`.
+It is compiled here as `PS2_EMU_POINTER_SCALE` and it is a mirror of a setting
+outside this repository: change it there and this constant has to agree, or the
+pointer is off by exactly that factor. `sens` is the fast way to test the
+agreement in a live session -- `sens 100` makes counts verbatim, so a pointer that
+then moves 8 times too far says `PointerXScale` is 8 and this constant is right.
+
+#### Which layer owns the pointer
+
+A count means something different at each stage of this chain, and each stage has
+its own setting. Measuring one layer's output and correcting it at another is how
+this pointer was tuned in circles for a session, so the table below is the thing
+`ptrstat` reads against. **Proven** = measured on our own run or read out of the
+spec; **inferred** = believed from a secondary source or from a default we have not
+confirmed, and therefore still a candidate.
+
+| Layer | Timing / behaviour | The setting that belongs to it | Status |
+|:---|:---|:---|:---|
+| macOS | pointer acceleration and inertia applied to the host cursor before any byte exists | `defaults write -g com.apple.mouse.scaling -1` disables it | inferred (no raw mode exists in PCSX2 to bypass it) |
+| PCSX2 `hidmouse` | one HID event per IN token; publishes byte 0 = 3 buttons + pad, then X, Y, wheel as three 8-bit signed fields; reports **the Mac cursor's own deltas**, not device counts | `PointerXScale` / `PointerYScale` in the **[repo-local ini](#running-with-pcsx2)**, both present and **= 8** | **proven** accelerated-cursor source; **proven** gain of 8 in the config this repo runs |
+| OHCI frame | `HcFmInterval = 0x27782EDF` -> 11999 bit times at 12 Mbit/s = **1 ms**, and the periodic list is walked once per frame, so a device polls at 1/2/4/8/16/32 ms | `bInterval` at enumerate time | **proven**: the same word real PS2 firmware programs |
+| Real PS2 hardware | one OHCI interface shared with the IOP at IOP physical `0x1F801600`, **Full Speed + Low Speed only**, IOP interrupt 22, DMA structures confined to the IOP's reachable 2 MB; the host stack is an IOP-side module and the EE is a client of it over SIF | nothing in this port | spec-derived (secondary but well-corroborated); note that our probe reading that base only proves PCSX2 decodes it, and "the EE cannot poll it on retail hardware" is the open architectural risk |
+| This port | the live **source profile** (above) sets the starting gain and whether a curve runs at all; then `dp_ptr_scale()`'s 8.8 gain (`sens`), then `dp_ptr_limit()` px-per-paint (`maxstep`, off), then the screen borders | `ptrsrc`, `sens`, `maxstep` | **proven** by `ptrcal` |
+
+Two rows in that table are worth dwelling on because they cut opposite ways. The
+frame interval is a **match** with real hardware -- the value our boot log measures
+is the value Sony's own `usbd` writes -- so the bus row of the table will not
+change on a retail console and there is no point tuning for it. The device rate
+row is the opposite: 100-125 reports/s is normal there too, so the emulator cannot
+be blamed for it, and the only real-hardware divergence that matters for pointer
+*feel* is the macOS row above the wire.
+
 ### Running with PCSX2
+
+**`make run-ps2` does not use the emulator's own user-level configuration.** It
+passes `-datapath <repo>/pcsx2`, so every setting that changes a run -- the
+attached `[USBn]` devices, their bindings, `PointerXScale`, the BIOS path -- is
+read from **`pcsx2/PCSX2/inis/PCSX2.ini` inside this repository**, and that file
+is tracked here deliberately so a run gets these settings rather than whatever the
+user-level config has drifted to. Edit that file, not
+`~/Library/Application Support/PCSX2/inis/PCSX2.ini`, and edit it with PCSX2
+closed: the running process rewrites the file on exit.
 
 PCSX2 supports both direct ELF execution and virtual CD/DVD disc images:
 

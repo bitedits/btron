@@ -96,42 +96,144 @@ void  free(void *p) { Ifree(p); }
 /* 32-bit BTRON Desktop Backbuffer (800x600 @ 32-bit ARGB COLOR) */
 static COLOR s_desktop_backbuffer[PS2_SCREEN_WIDTH * PS2_SCREEN_HEIGHT] __attribute__((aligned(128)));
 
+/* Defined below with the console driver, and the source profiles announce
+ * themselves before anything reaches it. */
+static void ps2_kprintf(const char *fmt, ...);
+
 /* Global Mouse Coordinates */
 static int s_mouse_x = 400;
 static int s_mouse_y = 300;
 static int s_gui_active = 0;
 
-/* A pointer report on this port is not a mouse on a desk.  It is the host
- * cursor's own movement, relayed by something that has already accelerated and
- * coalesced it before we see a byte of it, so the counts are not proportional to
- * the hand and no fixed factor here can be right -- applying one makes the
- * pointer inconsistent rather than merely wrong in one direction.  So the report
- * is taken verbatim, and any calibration of feel belongs to the host that
- * invented the numbers.  8.8 fixed point, where 256 is verbatim; 'sens' at the
- * prompt still overrides it within a run, which is how that claim gets tested. */
+/* The guest's own px-per-count gain, 8.8 fixed point where 256 is verbatim.  Each
+ * source profile installs a default for it and `sens` at the prompt overrides it
+ * within a run, which is how any of these claims gets tested.
+ *
+ * What it is *not* is a fix for a source that is not proportional to the hand --
+ * a multiplier can only be right for one speed, and a report whose counts already
+ * contain somebody else's acceleration has more than one speed in it.  That case
+ * belongs to the profile chosen below, not to a constant. */
 #define PS2_MOUSE_MULT_FP 256
 static int32_t s_ptr_mult_fp = PS2_MOUSE_MULT_FP;
 static int32_t s_ptr_carry_x, s_ptr_carry_y;
+static int32_t s_ptr_post_carry_x, s_ptr_post_carry_y;   /* the hw curve's second stage */
 
 /* How far the cursor may travel between two paints, in pixels.
  *
- * Verbatim counts are correct arithmetic and still unusable: the host has
- * already put its own acceleration into the numbers, so a comfortable movement on
- * a desk crosses this canvas several times over.  What a person judges is how far
- * the pointer jumped since they last saw it, and that is a distance per *frame*,
- * not per report -- the interrupt ring now holds eight of them and one pump pass
- * can spend all eight at once, so a cap applied to each report would bound
- * nothing the eye could see.  So reports accumulate and ps2_ptr_service() pays
- * them out at most PS2_PTR_MAX_STEP pixels per pass, which is what turns a flick
- * into a glide a person can stop on top of a target.
+ * Off by default, and that default is the whole lesson of a long tuning session:
+ * a cap spends at most PS2_PTR_MAX_STEP px per pass and gives up anything past
+ * DP_PTR_LIMIT_DEBT steps of it, so guest travel becomes a function of how fast
+ * the hand moved rather than how far.  That is precisely non-proportional, and no
+ * constant downstream can put the distance back.  The limiter stays compiled in
+ * because it is the only way to measure the difference (`maxstep 8` at the
+ * prompt), not because the shipped pointer uses it.
  *
- * Not a smaller multiplier: that would slow the millimetre movements used to
- * aim at a menu item as much as it slows the sweep across the screen, and the
- * aiming is the part that has to stay exact. */
-#define PS2_PTR_MAX_STEP 8
+ * The reason a cap was reaching for at all -- the pointer being too fast -- is
+ * answered instead by the source profiles below, which is a per-source gain
+ * rather than a speed-dependent one. */
+#define PS2_PTR_MAX_STEP 0
 static int32_t s_ptr_max_step = PS2_PTR_MAX_STEP;
 static int32_t s_ptr_want_x, s_ptr_want_y;     /* counts that arrived since the last pass */
 static int32_t s_ptr_defer_x, s_ptr_defer_y;   /* pixels the cap has not spent yet */
+
+/* ── Pointer Source Profiles ─────────────────────── */
+
+/* Two stubs, because a count off this bus means something different depending on
+ * what is on the other end, and no single guest constant can be right for both.
+ * Selected by what actually enumerated, so the shipped binary needs no knowledge
+ * of where it is running, and overridable at the prompt for measurement.
+ *
+ * EMU -- PCSX2's `hidmouse`.  Its X/Y are the host cursor's own movement, which
+ * macOS has already accelerated and PCSX2 has already multiplied by [Pad]
+ * PointerXScale (8 in the ini this repo runs with, so ~8 counts per host pixel),
+ * clamped to +/-127 per event and truncated from a float.  Distance-proportional
+ * only if the host's acceleration is off, and never in need of a second curve
+ * here -- so this stub divides the emulator's gain back out and stops.
+ *
+ * HW -- a real mouse on a real console: counts proportional to how far the hand
+ * moved, at the device's own 10-16 ms interval.  This is the case an accelerator
+ * belongs to, and it gets the same RISC OS step curve the arm64/Pi 400 port
+ * uses, so the same mouse feels the same on both real machines. */
+#define PS2_PTRSRC_EMU 0
+#define PS2_PTRSRC_HW  1
+
+/* ps2_usb_dev_t.desc_id is idVendor | idProduct << 16, and the emulator's HID
+ * Mouse is device 0627:0001, which is what this compares against. */
+#define PS2_DEVID_PCSX2_MOUSE 0x00010627u
+
+/* The emulator's own per-axis pointer gain, as set in its ini.  The default guest
+ * multiplier divides it back out, so 1 host cursor px becomes 1 guest px. */
+#define PS2_EMU_POINTER_SCALE 8
+
+static int s_ptr_src = PS2_PTRSRC_EMU;
+static int s_ptr_src_forced;      /* a `ptrsrc` word outranks detection */
+
+/* Same knob the arm64 port feeds dp_ptr_riscos(), and the Settings > Input panel
+ * already writes, so the two real machines share one pointer feel. */
+extern int g_mouse_step_mult;
+
+static const char *ps2_ptr_src_name(int src)
+{
+    return src == PS2_PTRSRC_HW ? "hw" : "emu";
+}
+
+/* Install a profile's policy.  Kept separate from the choice so detection can run
+ * before the first report and a prompt command can run after it with the same
+ * effect, and so a switch mid-session cannot leave the previous source's
+ * half-spent distance or subpixel remainder behind to be spent as the new one. */
+static void ps2_ptr_src_apply(const char *why)
+{
+    s_ptr_mult_fp = (s_ptr_src == PS2_PTRSRC_HW)
+                        ? PS2_MOUSE_MULT_FP
+                        : PS2_MOUSE_MULT_FP / PS2_EMU_POINTER_SCALE;
+    s_ptr_max_step = PS2_PTR_MAX_STEP;
+    s_ptr_carry_x = s_ptr_carry_y = 0;
+    s_ptr_post_carry_x = s_ptr_post_carry_y = 0;
+    s_ptr_want_x = s_ptr_want_y = 0;
+    s_ptr_defer_x = s_ptr_defer_y = 0;
+    ps2_kprintf("[PS2] Pointer source %s (%s): %d/256 px per count, %s curve, cap %s\n",
+                ps2_ptr_src_name(s_ptr_src), why, (int)s_ptr_mult_fp,
+                s_ptr_src == PS2_PTRSRC_HW ? "RISC OS step" : "no",
+                s_ptr_max_step > 0 ? "on" : "off");
+}
+
+/* Which stub is live is a fact about the device, not about where the code was
+ * built: the emulator answers with its own USB identity, and anything else on the
+ * bus is a mouse made by somebody who sells mice. */
+static void ps2_ptr_src_detect(void)
+{
+    int src = PS2_PTRSRC_EMU;
+    int found = 0;
+
+    if (s_ptr_src_forced) return;
+    for (int i = 0; i < 2; i++) {
+        const ps2_usb_dev_t *d = ps2_usb_dev(i);
+        if (!d || d->is_keyboard || !d->desc_id) continue;
+        found = 1;
+        if (d->desc_id != PS2_DEVID_PCSX2_MOUSE) src = PS2_PTRSRC_HW;
+    }
+    s_ptr_src = src;
+    ps2_ptr_src_apply(found ? "detected" : "no mouse yet, defaulting");
+}
+
+/* One report's pair of counts through the live source's shaping, in pixels.
+ *
+ * Two stages on the hardware side -- the step curve, then `sens` -- because the
+ * curve is the feel and `sens` is the speed, and folding the second into the first
+ * would take away the only way to set speed without also changing the curve.  At
+ * the default 256 the second stage passes whole pixels through untouched. */
+static void ps2_ptr_shape(int dx, int dy, int32_t *px, int32_t *py)
+{
+    if (s_ptr_src == PS2_PTRSRC_HW) {
+        const int32_t cx = dp_ptr_riscos(dx, g_mouse_step_mult, &s_ptr_carry_x);
+        const int32_t cy = dp_ptr_riscos(dy, g_mouse_step_mult, &s_ptr_carry_y);
+        *px = dp_ptr_scale(cx, s_ptr_mult_fp, &s_ptr_post_carry_x);
+        *py = dp_ptr_scale(cy, s_ptr_mult_fp, &s_ptr_post_carry_y);
+    } else {
+        *px = dp_ptr_scale(dx, s_ptr_mult_fp, &s_ptr_carry_x);
+        *py = dp_ptr_scale(dy, s_ptr_mult_fp, &s_ptr_carry_y);
+    }
+}
 
 /* Measured GIF upload costs, printed once on the boot log */
 static uint32_t s_full_upload_us;
@@ -416,6 +518,120 @@ void ps2_usb_on_key(uint32_t btron_key, int down)
     if (down && btron_key < 0x100u) ps2_shell_char((int)btron_key);
 }
 
+/* ── Pointer Source Statistics ─────────────────────── */
+
+/* Which layer owns the motion is decided by one comparison, not by a guess: slide
+ * the mouse the same physical distance slowly and then fast, and compare the
+ * totals.  Equal means the wire carries distance -- raw device counts, or an
+ * accelerator that is switched off -- and a single guest gain is the right tool.
+ * Bigger for the fast run means the numbers are cursor pixels that a third party
+ * has already multiplied by speed, and then no constant can be correct, because
+ * the constant would have to change with how hard the hand is moving.
+ *
+ * So this collects what a printed log cannot: the [RAW] rows are throttled to one
+ * in sixty-four to keep the console readable, and the whole point of the question
+ * is what happens between those samples. */
+#define PS2_PTRST_NB 7        /* |counts|: 0, 1, 2-3, 4-7, 8-15, 16-63, 64+ */
+typedef struct {
+    uint32_t reports;
+    uint32_t still;                                /* both axes zero */
+    uint32_t hx[PS2_PTRST_NB], hy[PS2_PTRST_NB];
+    int32_t  sum_x, sum_y;                         /* signed: where it ended up */
+    uint32_t sum_ax, sum_ay;                       /* unsigned: how far it went */
+    uint32_t sat_x, sat_y;                          /* |count| == 127: byte ceiling */
+    uint32_t ax_max, ay_max;
+    uint32_t f_first, f_last;
+} ps2_ptrst_t;
+
+static ps2_ptrst_t s_ptrst;
+
+static int ps2_ptrst_bucket(uint32_t a)
+{
+    if (a == 0u) return 0;
+    if (a == 1u) return 1;
+    if (a <= 3u) return 2;
+    if (a <= 7u) return 3;
+    if (a <= 15u) return 4;
+    if (a <= 63u) return 5;
+    return 6;
+}
+
+static void ps2_ptrst_add(int dx, int dy)
+{
+    const uint32_t ax = (uint32_t)(dx < 0 ? -dx : dx);
+    const uint32_t ay = (uint32_t)(dy < 0 ? -dy : dy);
+    const uint32_t f = ps2_usb_frame_number();
+
+    if (!s_ptrst.reports) s_ptrst.f_first = f;
+    s_ptrst.f_last = f;
+    s_ptrst.reports++;
+    if (!ax && !ay) s_ptrst.still++;
+    s_ptrst.hx[ps2_ptrst_bucket(ax)]++;
+    s_ptrst.hy[ps2_ptrst_bucket(ay)]++;
+    if (ax == 127u) s_ptrst.sat_x++;
+    if (ay == 127u) s_ptrst.sat_y++;
+    if (ax > s_ptrst.ax_max) s_ptrst.ax_max = ax;
+    if (ay > s_ptrst.ay_max) s_ptrst.ay_max = ay;
+    s_ptrst.sum_x += dx;   s_ptrst.sum_y += dy;
+    s_ptrst.sum_ax += ax;  s_ptrst.sum_ay += ay;
+}
+
+/* Straightness is the second question the same table answers, and it is the one
+ * that settles an axis complaint with evidence rather than opinion: move only
+ * sideways and the other axis's total should be nothing.  macOS pointer inertia
+ * is not axis-independent -- it curves and it snaps -- so a live sideways drag
+ * that leaks counts into Y says something the synthetic per-axis sweep in ptrcal
+ * structurally cannot see, because the synthetic sweep never moves both axes the
+ * way a hand does.
+ *
+ * The window before this one is kept so that the comparison which decides the
+ * layer question is printed rather than transcribed: the human moves the mouse
+ * slowly, calls this, moves the same slide quickly, calls it again, and reads one
+ * number.  1.0x means distance is what the wire carries.  Anything appreciably
+ * above it means the counts were already multiplied by speed by something this
+ * port does not control, and no guest constant can be right for both runs. */
+static uint32_t s_prev_sum_ax, s_prev_sum_ay;
+
+static void ps2_ptrst_print(const char *label)
+{
+    const ps2_ptrst_t *s = &s_ptrst;
+    /* HcFmNumber is a 16-bit counter, so a window that happens to cross its
+     * wrap would otherwise read as 65 seconds and report a rate a hundred times
+     * too low.  Masking keeps the row trustworthy for any window a person can
+     * hold a mouse still or slide in one go. */
+    const uint32_t frames = (s->f_last - s->f_first) & 0xFFFFu;
+    int b;
+
+    ps2_kprintf("[PSTAT] %s: reports=%u still=%u over=%u frames -> %u/s\n",
+                label, (unsigned int)s->reports, (unsigned int)s->still,
+                (unsigned int)frames,
+                frames ? (unsigned int)(s->reports * 1000u / frames) : 0u);
+    for (b = 0; b < PS2_PTRST_NB; b++)
+        ps2_kprintf("%u ", (unsigned int)s->hx[b]);
+    ps2_kprintf("| x max=%u sat=%u\n", (unsigned int)s->ax_max, (unsigned int)s->sat_x);
+    for (b = 0; b < PS2_PTRST_NB; b++)
+        ps2_kprintf("%u ", (unsigned int)s->hy[b]);
+    ps2_kprintf("| y max=%u sat=%u\n", (unsigned int)s->ay_max, (unsigned int)s->sat_y);
+    /* Both totals, because the comparison that decides the layer question is
+     * sum|x| of the slow run against sum|x| of the fast run for the same slide. */
+    ps2_kprintf("[PSTAT] total |x|=%u |y|=%u  net x=%d y=%d\n",
+                (unsigned int)s->sum_ax, (unsigned int)s->sum_ay,
+                (int)s->sum_x, (int)s->sum_y);
+    /* Tenths, because this formatter has no fractional conversion of its own.  A
+     * window with nothing in it is not a comparison, so `ptrstat boot` closes
+     * silently and the first real slide is the first row here. */
+    if (s_prev_sum_ax || s_prev_sum_ay) {
+        const uint32_t rx = s_prev_sum_ax ? s->sum_ax * 10u / s_prev_sum_ax : 0u;
+        const uint32_t ry = s_prev_sum_ay ? s->sum_ay * 10u / s_prev_sum_ay : 0u;
+        ps2_kprintf("[PSTAT] vs previous window: x=%u.%ux  y=%u.%ux\n",
+                    (unsigned int)(rx / 10u), (unsigned int)(rx % 10u),
+                    (unsigned int)(ry / 10u), (unsigned int)(ry % 10u));
+    }
+    s_prev_sum_ax = s->sum_ax;
+    s_prev_sum_ay = s->sum_ay;
+    s_ptrst = (ps2_ptrst_t){ 0 };
+}
+
 void ps2_usb_on_mouse(int dx, int dy, uint8_t buttons)
 {
     static uint8_t s_prev_btn = 0;
@@ -426,12 +642,24 @@ void ps2_usb_on_mouse(int dx, int dy, uint8_t buttons)
     static uint32_t s_reports;
     const uint32_t report_no = ++s_reports;
 #endif
-    /* Accumulate, do not move.  A report is one 1 ms slice of the host's cursor,
-     * and how many of them land in one of our passes is set by how long the last
-     * paint took -- so the distance a report is worth has to be spent by the
-     * pass that renders it, or the cap would be a cap on nothing. */
-    s_ptr_want_x += dp_ptr_scale(dx, s_ptr_mult_fp, &s_ptr_carry_x);
-    s_ptr_want_y += dp_ptr_scale(dy, s_ptr_mult_fp, &s_ptr_carry_y);
+    /* Tallied before anything else touches them: these are the bytes as the bus
+     * delivered them, which is the layer being asked about.  Statistics run on
+     * every report, not on a one-in-sixty-four print, so the buckets see the
+     * reports the log skips. */
+    ps2_ptrst_add(dx, dy);
+    /* Accumulate, do not move.  A report is one slice of the source's motion, and
+     * how many of them land in one of our passes is set by how long the last paint
+     * took -- so the distance a report is worth has to be spent by the pass that
+     * renders it.  With the cap off by default this is now the whole policy, but
+     * the pair still belongs here rather than in ps2_move_mouse() because a
+     * profile's subpixel remainder has to survive between reports, and a screen
+     * border would have eaten it. */
+    {
+        int32_t px, py;
+        ps2_ptr_shape(dx, dy, &px, &py);
+        s_ptr_want_x += px;
+        s_ptr_want_y += py;
+    }
 
     /* Buttons are not deferred.  A press that waits for the next pass is a press
      * whose click event carries a position one frame old, and the edge itself can
@@ -654,6 +882,8 @@ static void ps2_shell_exec(const char *cmd)
         ps2_kprintf("  move <dx> <dy>   - Move cursor relative by (dx, dy)\n");
         ps2_kprintf("  sens [pct]       - Show or set the USB pointer scale (1..400%%, 100 = as reported)\n");
         ps2_kprintf("  maxstep [px]     - Show or set the pointer's max px per paint (0 = no cap)\n");
+        ps2_kprintf("  ptrsrc [emu|hw|auto] - Pointer policy: emulator device, real mouse, or re-detect\n");
+        ps2_kprintf("  ptrstat <tag>    - Print+reset the pointer counts seen since the last call\n");
         ps2_kprintf("  ptrcal           - Loopback-calibrate the pointer path (no mouse needed)\n");
         ps2_kprintf("  click [1|2]      - Click Left (1) or Right (2) mouse button\n");
         ps2_kprintf("  key <char>       - Inject key event into active window\n");
@@ -692,6 +922,10 @@ static void ps2_shell_exec(const char *cmd)
         ps2_log_ohci_probe(ps2_usb_last_probe());
         if (verdict == PS2_OHCI_IOP_DMA) ps2_usb_host_start();
         (void)ps2_log_host();
+        /* Enumeration is what tells the two stubs apart, so it is re-read here for
+         * the same reason the host is restarted: a device that appeared after boot
+         * changes what a count means. */
+        ps2_ptr_src_detect();
     } else if (tkl_strcmp(cmd, "clear") == 0) {
         if (!s_gui_active) {
             ps2_gs_text_clear();
@@ -789,9 +1023,12 @@ static void ps2_shell_exec(const char *cmd)
             s_ptr_mult_fp = (int32_t)pct * 256 / 100;
             /* The leftover belongs to the scale that made it. */
             s_ptr_carry_x = s_ptr_carry_y = 0;
+            s_ptr_post_carry_x = s_ptr_post_carry_y = 0;
         }
-        ps2_kprintf("[PS2] Pointer scale %d%% = %d/256 px per count\n",
-                    (int)(s_ptr_mult_fp * 100 / 256), (int)s_ptr_mult_fp);
+        ps2_kprintf("[PS2] Pointer scale %d%% = %d/256 px per count (%s source%s)\n",
+                    (int)(s_ptr_mult_fp * 100 / 256), (int)s_ptr_mult_fp,
+                    ps2_ptr_src_name(s_ptr_src),
+                    s_ptr_src_forced ? "" : ", default for this source");
     } else if (tkl_strncmp(cmd, "maxstep", 7) == 0) {
         const char *p = cmd + 7;
         while (*p == ' ') p++;
@@ -812,9 +1049,50 @@ static void ps2_shell_exec(const char *cmd)
         }
         ps2_kprintf("[PS2] Pointer cap %d px per paint%s\n",
                     (int)s_ptr_max_step, s_ptr_max_step > 0 ? "" : " (off)");
+    } else if (tkl_strncmp(cmd, "ptrsrc", 6) == 0) {
+        const char *p = cmd + 6;
+        while (*p == ' ') p++;
+        /* The choice is normally made from the device's own USB identity, so this
+         * exists to overrule it in one direction that cannot be observed any
+         * other way: running the emulator's stub against a hardware-shaped count
+         * stream, or the other way round, in a single session. */
+        if (tkl_strncmp(p, "hw", 2) == 0) {
+            s_ptr_src_forced = 1;
+            s_ptr_src = PS2_PTRSRC_HW;
+            ps2_ptr_src_apply("forced");
+        } else if (tkl_strncmp(p, "emu", 3) == 0) {
+            s_ptr_src_forced = 1;
+            s_ptr_src = PS2_PTRSRC_EMU;
+            ps2_ptr_src_apply("forced");
+        } else if (tkl_strncmp(p, "auto", 4) == 0) {
+            s_ptr_src_forced = 0;
+            ps2_ptr_src_detect();
+        } else {
+            ps2_kprintf("[PS2] Pointer source %s (%s)\n",
+                        ps2_ptr_src_name(s_ptr_src),
+                        s_ptr_src_forced ? "forced" : "detected");
+        }
+    } else if (tkl_strncmp(cmd, "ptrstat", 7) == 0) {
+        const char *p = cmd + 7;
+        while (*p == ' ') p++;
+        /* Print the window that just closed, then start a new one.  So the first
+         * call of a session reports the warm-up rather than the slide: close a
+         * throwaway window first (`ptrstat boot`), move the mouse, then label the
+         * window that contains the move.
+         *
+         * ptrcal drives the same seam with synthetic reports, so it must not run
+         * inside a measurement window; each ptrstat resets, so one keystroke
+         * recovers from forgetting. */
+        ps2_ptrst_print(*p ? p : "run");
     } else if (tkl_strcmp(cmd, "ptrcal") == 0) {
         int32_t saved_step = s_ptr_max_step;
+        /* The transfer function belongs to the live source stub, and the two give
+         * different answers to the same synthetic counts by design, so a [CAL]
+         * log copied out of a session is incomplete without the name on it. */
         ps2_kprintf("[CAL] Pointer loopback: counts in, pixels out, no hand involved.\n");
+        ps2_kprintf("[CAL] source=%s curve=%s step=%d\n", ps2_ptr_src_name(s_ptr_src),
+                    s_ptr_src == PS2_PTRSRC_HW ? "riscos" : "none",
+                    g_mouse_step_mult);
         ps2_kprintf("[CAL] tag     amp     px  stray counts    EDGEx: wall counts back short\n");
         /* The cap is a policy about how fast a person may be moved, and dp_cal is
          * a measurement of how a count becomes a pixel.  Left in place it would
@@ -1446,6 +1724,11 @@ void ps2_kernel_main(void)
      * engine runs here and says per-port how far it got. */
     if (verdict == PS2_OHCI_IOP_DMA) ps2_usb_host_start();
     ps2_log_boot_tail(ps2_log_host());
+
+    /* Now that the bus has said who answered, the pointer can be told what a
+     * count from them is worth.  Before this row the desktop is reachable but
+     * deaf, so the profile can never be applied to a stream it did not measure. */
+    ps2_ptr_src_detect();
 
     /* 5. Banner last, so the prompt is the bottom row and nothing interesting
      *    scrolls away underneath it. */

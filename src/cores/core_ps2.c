@@ -148,7 +148,8 @@ static int32_t s_ptr_defer_x, s_ptr_defer_y;   /* pixels the cap has not spent y
  * PointerXScale (8 in the ini this repo runs with, so ~8 counts per host pixel),
  * clamped to +/-127 per event and truncated from a float.  Distance-proportional
  * only if the host's acceleration is off, and never in need of a second curve
- * here -- so this stub divides the emulator's gain back out and stops.
+ * here -- so this stub takes the emulator's gain back out and then applies a
+ * guest-side one, sized below.
  *
  * HW -- a real mouse on a real console: counts proportional to how far the hand
  * moved, at the device's own 10-16 ms interval.  This is the case an accelerator
@@ -161,9 +162,27 @@ static int32_t s_ptr_defer_x, s_ptr_defer_y;   /* pixels the cap has not spent y
  * Mouse is device 0627:0001, which is what this compares against. */
 #define PS2_DEVID_PCSX2_MOUSE 0x00010627u
 
-/* The emulator's own per-axis pointer gain, as set in its ini.  The default guest
- * multiplier divides it back out, so 1 host cursor px becomes 1 guest px. */
+/* The emulator's own per-axis pointer gain, as set in its ini.  The guest
+ * multiplier divides it out before applying the one below, so the two numbers
+ * below are what a count is worth, not this one alone. */
 #define PS2_EMU_POINTER_SCALE 8
+
+/* Guest pixels per pixel the host cursor travelled.
+ *
+ * The one pointer number here that is a judgement rather than a fact, and both of
+ * its bounds came from a hand on the mouse: at 1 a stroke could not walk the
+ * cursor across the 800 px canvas, and at 8 -- what a verbatim count gives, since
+ * the emulator spends 8 counts per host pixel -- it sat pinned against a wall.
+ * 3 is the geometric middle of that range, which is the right mean for a scale a
+ * person judges by feel, and it bisects the search rather than extending it.
+ *
+ * Above 1 on purpose, because this source is bounded where a real mouse is not:
+ * the host cursor stops at the edge of the Mac's display, so an emulated pointer
+ * can never travel further than the desktop it sits on, while a mouse on a desk
+ * has infinite travel and only ever needs slowing.  Still one constant, so where
+ * the cursor lands depends only on how far the hand moved.  `sens` finishes the
+ * search at the prompt without a rebuild. */
+#define PS2_EMU_GUEST_PX_PER_HOST_PX 3
 
 static int s_ptr_src = PS2_PTRSRC_EMU;
 static int s_ptr_src_forced;      /* a `ptrsrc` word outranks detection */
@@ -177,6 +196,24 @@ static const char *ps2_ptr_src_name(int src)
     return src == PS2_PTRSRC_HW ? "hw" : "emu";
 }
 
+/* The live gain, in both units that mean something: a count is what this code
+ * multiplies, a host cursor pixel is what a hand is measured against.  Only the
+ * emulator's source has a host cursor in its chain, so the hardware row states
+ * what its own curve costs instead of a conversion that does not exist.  Ends in
+ * a newline so callers can put their own lead-in on it. */
+static void ps2_ptr_gain_row(void)
+{
+    if (s_ptr_src == PS2_PTRSRC_HW)
+        ps2_kprintf("%d/256 px per count, RISC OS step %d curve, cap %s\n",
+                    (int)s_ptr_mult_fp, g_mouse_step_mult,
+                    s_ptr_max_step > 0 ? "on" : "off");
+    else
+        ps2_kprintf("%d/256 px per count = %d px per host cursor px, no curve, cap %s\n",
+                    (int)s_ptr_mult_fp,
+                    (int)(s_ptr_mult_fp * PS2_EMU_POINTER_SCALE / PS2_MOUSE_MULT_FP),
+                    s_ptr_max_step > 0 ? "on" : "off");
+}
+
 /* Install a profile's policy.  Kept separate from the choice so detection can run
  * before the first report and a prompt command can run after it with the same
  * effect, and so a switch mid-session cannot leave the previous source's
@@ -185,16 +222,15 @@ static void ps2_ptr_src_apply(const char *why)
 {
     s_ptr_mult_fp = (s_ptr_src == PS2_PTRSRC_HW)
                         ? PS2_MOUSE_MULT_FP
-                        : PS2_MOUSE_MULT_FP / PS2_EMU_POINTER_SCALE;
+                        : PS2_MOUSE_MULT_FP * PS2_EMU_GUEST_PX_PER_HOST_PX /
+                              PS2_EMU_POINTER_SCALE;
     s_ptr_max_step = PS2_PTR_MAX_STEP;
     s_ptr_carry_x = s_ptr_carry_y = 0;
     s_ptr_post_carry_x = s_ptr_post_carry_y = 0;
     s_ptr_want_x = s_ptr_want_y = 0;
     s_ptr_defer_x = s_ptr_defer_y = 0;
-    ps2_kprintf("[PS2] Pointer source %s (%s): %d/256 px per count, %s curve, cap %s\n",
-                ps2_ptr_src_name(s_ptr_src), why, (int)s_ptr_mult_fp,
-                s_ptr_src == PS2_PTRSRC_HW ? "RISC OS step" : "no",
-                s_ptr_max_step > 0 ? "on" : "off");
+    ps2_kprintf("[PS2] Pointer source %s (%s): ", ps2_ptr_src_name(s_ptr_src), why);
+    ps2_ptr_gain_row();
 }
 
 /* Which stub is live is a fact about the device, not about where the code was
@@ -541,9 +577,20 @@ typedef struct {
     uint32_t sat_x, sat_y;                          /* |count| == 127: byte ceiling */
     uint32_t ax_max, ay_max;
     uint32_t f_first, f_last;
+    /* What the screen border did, in guest pixels and per paint pass.  See
+     * ps2_ptrst_pass(). */
+    uint32_t passes, spent_x, spent_y, lost_x, lost_y, wall_x, wall_y;
 } ps2_ptrst_t;
 
 static ps2_ptrst_t s_ptrst;
+
+/* Counts since the last `ptgain`, kept outside the ptrstat window on purpose: the
+ * one slide that is worth measuring is the slide across the whole display, and it
+ * should survive being labelled with a `ptrstat` in the same session rather than
+ * have to be performed twice.  Same caveat as that window, though: `ptrcal` feeds
+ * reports through the handler below, so it must not run between the sweep and the
+ * call that reads it. */
+static uint32_t s_ptg_cx, s_ptg_cy;
 
 static int ps2_ptrst_bucket(uint32_t a)
 {
@@ -574,6 +621,36 @@ static void ps2_ptrst_add(int dx, int dy)
     if (ay > s_ptrst.ay_max) s_ptrst.ay_max = ay;
     s_ptrst.sum_x += dx;   s_ptrst.sum_y += dy;
     s_ptrst.sum_ax += ax;  s_ptrst.sum_ay += ay;
+    s_ptg_cx += ax;        s_ptg_cy += ay;
+}
+
+/* One paint pass as the screen border saw it: what the hand's distance was worth
+ * in pixels, what the cursor was allowed to spend, and whether it ended up
+ * resting on a wall.
+ *
+ * This is the row that answers "why does the cursor stick to the edges", and the
+ * count rows above cannot.  A relative pointer's position is the *integral* of
+ * its counts, so pixels the border discards are gone for good, while pushing
+ * further into the wall costs nothing and produces nothing.  An edge is therefore
+ * a one-way sink: getting out of it takes exactly as much host travel as going
+ * into it gave for free.  Whether that is what the hand is fighting is a ratio,
+ * not a feel -- `lost` near zero says the walls are just where the cursor happens
+ * to rest, and `lost` comparable to `spent` says the gain is spending the canvas
+ * faster than the hand can cross the desktop it sits on. */
+static void ps2_ptrst_pass(int32_t ask_x, int32_t ask_y, int32_t spent_x, int32_t spent_y)
+{
+    const uint32_t lax = (uint32_t)(ask_x < 0 ? -ask_x : ask_x);
+    const uint32_t lay = (uint32_t)(ask_y < 0 ? -ask_y : ask_y);
+    const uint32_t lsx = (uint32_t)(spent_x < 0 ? -spent_x : spent_x);
+    const uint32_t lsy = (uint32_t)(spent_y < 0 ? -spent_y : spent_y);
+
+    s_ptrst.passes++;
+    s_ptrst.spent_x += lsx;
+    s_ptrst.spent_y += lsy;
+    if (lax > lsx) s_ptrst.lost_x += lax - lsx;
+    if (lay > lsy) s_ptrst.lost_y += lay - lsy;
+    if (s_mouse_x == 0 || s_mouse_x == PS2_SCREEN_WIDTH - 1) s_ptrst.wall_x++;
+    if (s_mouse_y == 0 || s_mouse_y == PS2_SCREEN_HEIGHT - 1) s_ptrst.wall_y++;
 }
 
 /* Straightness is the second question the same table answers, and it is the one
@@ -600,6 +677,8 @@ static void ps2_ptrst_print(const char *label)
      * too low.  Masking keeps the row trustworthy for any window a person can
      * hold a mouse still or slide in one go. */
     const uint32_t frames = (s->f_last - s->f_first) & 0xFFFFu;
+    const uint32_t c = s->sum_ax;         /* the chain row's denominator */
+    const uint32_t hostv = s->spent_x * PS2_EMU_POINTER_SCALE;
     int b;
 
     ps2_kprintf("[PSTAT] %s: reports=%u still=%u over=%u frames -> %u/s\n",
@@ -617,6 +696,41 @@ static void ps2_ptrst_print(const char *label)
     ps2_kprintf("[PSTAT] total |x|=%u |y|=%u  net x=%d y=%d\n",
                 (unsigned int)s->sum_ax, (unsigned int)s->sum_ay,
                 (int)s->sum_x, (int)s->sum_y);
+    /* The border's own arithmetic, as percentages of what the pass asked for:
+     * `discarded` is the share of the hand's distance the wall ate, and `onwall`
+     * is the share of passes the cursor spent touching one.  See ps2_ptrst_pass().
+     * `loop` is the same window's pass rate read against the frame counter, which
+     * is what turns "the pointer is steppy" from an opinion into a number: the
+     * cursor can only ever be moved once per pass, so this is its frame rate. */
+    ps2_kprintf("[PSTAT] border: spent=%u,%u lost=%u,%u discarded x=%u%% y=%u%% onwall x=%u%% y=%u%%\n",
+                (unsigned int)s->spent_x, (unsigned int)s->spent_y,
+                (unsigned int)s->lost_x, (unsigned int)s->lost_y,
+                (unsigned int)(s->spent_x + s->lost_x
+                                   ? s->lost_x * 100u / (s->spent_x + s->lost_x) : 0u),
+                (unsigned int)(s->spent_y + s->lost_y
+                                   ? s->lost_y * 100u / (s->spent_y + s->lost_y) : 0u),
+                (unsigned int)(s->passes ? s->wall_x * 100u / s->passes : 0u),
+                (unsigned int)(s->passes ? s->wall_y * 100u / s->passes : 0u));
+    ps2_kprintf("[PSTAT] loop: %u passes over %u frames -> %u.%u Hz\n",
+                (unsigned int)s->passes, (unsigned int)frames,
+                (unsigned int)(frames ? s->passes * 1000u / frames : 0u),
+                (unsigned int)(frames ? s->passes * 10000u / frames % 10u : 0u));
+    /* The calibration itself, in the one unit a hand can supply on purpose: total
+     * counts against total pixels, so a slide of known host cursor travel divides
+     * to the gain without any of the intermediate constants being trusted.  The
+     * `@scale` figure is what the gain is *if* the emulator really spends
+     * PS2_EMU_POINTER_SCALE counts per host pixel -- the row exists so that
+     * assumption can be checked rather than carried.  Whole-and-remainder rather
+     * than a pre-multiplied numerator because this formatter has no fractional
+     * conversion of its own and the multiply would have had to be trusted not to
+     * overflow on a long window. */
+    ps2_kprintf("[PSTAT] chain x: counts=%u spent=%u -> %u.%02u px/count = %u.%02u px/host px @scale%d\n",
+                (unsigned int)c, (unsigned int)s->spent_x,
+                c ? (unsigned int)(s->spent_x / c) : 0u,
+                c ? (unsigned int)((s->spent_x % c) * 100u / c) : 0u,
+                c ? (unsigned int)(hostv / c) : 0u,
+                c ? (unsigned int)((hostv % c) * 100u / c) : 0u,
+                PS2_EMU_POINTER_SCALE);
     /* Tenths, because this formatter has no fractional conversion of its own.  A
      * window with nothing in it is not a comparison, so `ptrstat boot` closes
      * silently and the first real slide is the first row here. */
@@ -630,6 +744,132 @@ static void ps2_ptrst_print(const char *label)
     s_prev_sum_ax = s->sum_ax;
     s_prev_sum_ay = s->sum_ay;
     s_ptrst = (ps2_ptrst_t){ 0 };
+}
+
+/* ── Calibration Against A Known Host Movement ───────────────────── */
+
+/* Every other number here counts what the wire carried; this one asks what the
+ * *hand* did, which is the only quantity a person can supply on purpose and the
+ * only denominator the shipped gain actually needs.
+ *
+ * The chain is px = counts x mult/256, and host px = counts / cpg, so
+ *
+ *     px per host px = (mult/256) x cpg        and therefore        mult = target_fp x host px / counts
+ *
+ * with target_fp = target x 256.  One multiplication of two bounded numbers and
+ * one division, so no 64-bit intermediate is needed: the arguments are clamped
+ * below and the gain above, and the widest product here is 2048 x 65535.
+ *
+ * What this retires is the assumption the whole `emu` profile rests on.  The gain
+ * is currently PS2_EMU_GUEST_PX_PER_HOST_PX divided by PS2_EMU_POINTER_SCALE, and
+ * the denominator was read out of the emulator's ini -- a file whose value has to
+ * survive macOS's own cursor scaling, Rosetta, and whatever else sits between a
+ * hand and a count before it means anything.  Measuring cpg once replaces all of
+ * that with a number this port watched arrive, and the row below prints the
+ * assumption and the measurement side by side so a wrong constant becomes visible
+ * rather than load-bearing.
+ *
+ * Only x is calibrated, because a display's width is the one host distance that is
+ * written on the box; y counts print alongside so a slide that was not straight is
+ * visible instead of silently absorbed into the gain. */
+static void ps2_ptg_cal(int hostpx, int pct)
+{
+    uint32_t cx = s_ptg_cx, cy = s_ptg_cy;
+
+    if (hostpx == 0) {
+        /* The escape hatch, because these counters run from boot: a window that
+         * contains yesterday's mouse is not a measurement of one sweep. */
+        s_ptg_cx = s_ptg_cy = 0;
+        ps2_kprintf("[PTG] Counts cleared.  Sweep the host cursor, then `ptgain <host px>`.\n");
+        return;
+    }
+    if (!cx) {
+        ps2_kprintf("[PTG] No counts since the last call.  Sweep the host cursor straight\n");
+        ps2_kprintf("[PTG] across the display, then ask again with its width.\n");
+        return;
+    }
+    ps2_kprintf("[PTG] counts x=%u y=%u%s\n", (unsigned int)cx, (unsigned int)cy,
+                cy > cx / 8u ? "  <-- sweep was not straight; re-do it" : "");
+    if (s_ptr_src == PS2_PTRSRC_HW) {
+        ps2_kprintf("[PTG] Note: the hw source puts the RISC OS curve in front of the gain,\n");
+        ps2_kprintf("[PTG] so this sets a scale after a speed-dependent step, not the gain itself.\n");
+    }
+    if (cx > 4000000u) {
+        ps2_kprintf("[PTG] That is far too many counts for one sweep.  `ptgain 0`, then re-sweep.\n");
+        return;
+    }
+    if (hostpx < 0) {
+        ps2_kprintf("[PTG] Now say how far that was on the Mac: `ptgain <host px> 300`,\n");
+        ps2_kprintf("[PTG] where <host px> is the display's logical width for a left-to-right\n");
+        ps2_kprintf("[PTG] sweep, and 300 is the px-per-host-px target x 100.\n");
+        return;
+    }
+    if (hostpx > 65535) hostpx = 65535;
+    if (pct > 800) pct = 800;
+
+    /* Whole-and-remainder rather than a pre-multiplied numerator: two divisions
+     * keep this exact at hundredth resolution without ever holding counts*100,
+     * which is the one product here a long session could push out of 32 bits.
+     * Capped, because 655 counts per host pixel is a mistyped width rather than a
+     * measurement, and this figure is the multiplicand of every number below. */
+    const uint32_t h = (uint32_t)hostpx;
+    uint32_t cpg100 = (cx / h) * 100u + (cx % h) * 100u / h;
+    if (cpg100 > 65535u) cpg100 = 65535u;
+
+    ps2_kprintf("[PTG] measured %u.%02u counts per host px  (emu profile assumes %d)\n",
+                (unsigned int)(cpg100 / 100u), (unsigned int)(cpg100 % 100u),
+                PS2_EMU_POINTER_SCALE);
+
+    /* px per host px = (px per count) x (counts per host px), so the hundredths
+     * come from the two figures this command already has and from nothing else --
+     * not from the ini, not from the compile-time scale. */
+    {
+        const uint32_t pxph100 = (uint32_t)s_ptr_mult_fp * cpg100 / 256u;
+        if (pct <= 0) {
+            ps2_kprintf("[PTG] gain %d/256 px per count = %u.%02u px per host px now\n",
+                        (int)s_ptr_mult_fp, (unsigned int)(pxph100 / 100u),
+                        (unsigned int)(pxph100 % 100u));
+            ps2_kprintf("[PTG] Set it with `ptgain %d <percent>`, percent = px per host px x 100\n",
+                        hostpx);
+            return;
+        }
+    }
+
+    {
+        int32_t target_fp = (int32_t)pct * PS2_MOUSE_MULT_FP / 100;
+        int32_t mult;
+        uint32_t got100;
+        const char *note = "";
+
+        if (target_fp < 1) target_fp = 1;
+        /* Rounded to nearest rather than truncated: the whole point of this
+         * command is a gain that comes out of a measurement, and a measurement
+         * whose counts happen to be small would otherwise lose a fifth of itself
+         * to the floor at every call. */
+        mult = (int32_t)((target_fp * (int32_t)h + (int32_t)(cx / 2u)) / (int32_t)cx);
+        if (mult < 1) { mult = 1; note = " (clamped: below one pixel per count)"; }
+        /* dp_ptr_scale() caps a report at DP_PTR_MAX_PIXELS, and the largest
+         * count the wire can carry is 127, so above ~1030 the top of a fast
+         * stroke would be quietly eaten by a clamp inside the shaper instead of
+         * being set here where it is visible. */
+        if (mult > 1024) { mult = 1024; note = " (clamped at 4 px per count)"; }
+        got100 = (uint32_t)mult * cpg100 / 256u;
+        s_ptr_mult_fp = mult;
+        /* A new gain makes the old gain's subpixel remainder the wrong shape;
+         * leaving it would put a fraction of a pixel of somebody else's stroke
+         * onto the next report. */
+        s_ptr_carry_x = s_ptr_carry_y = 0;
+        s_ptr_post_carry_x = s_ptr_post_carry_y = 0;
+        /* The window is spent: it was one deliberate sweep, and repeating it by
+         * accident would double the gain. */
+        s_ptg_cx = s_ptg_cy = 0;
+        ps2_kprintf("[PTG] gain set to %d/256 px per count = %u.%02u px per host px, asked for %u.%02u%s\n",
+                    (int)s_ptr_mult_fp, (unsigned int)(got100 / 100u),
+                    (unsigned int)(got100 % 100u),
+                    (unsigned int)(pct / 100u), (unsigned int)(pct % 100u), note);
+        ps2_kprintf("[PTG] To ship this, set PS2_EMU_POINTER_SCALE to the measured counts-per-host-px\n");
+        ps2_kprintf("[PTG] above and PS2_EMU_GUEST_PX_PER_HOST_PX to the target; `sens` only lasts a run.\n");
+    }
 }
 
 void ps2_usb_on_mouse(int dx, int dy, uint8_t buttons)
@@ -695,13 +935,20 @@ static void ps2_ptr_service(void)
 #if BTRON_HID_TRACE
     static uint32_t s_moves;
 #endif
+    const int x0 = s_mouse_x, y0 = s_mouse_y;
     int32_t px, py;
 
     s_ptr_want_x = s_ptr_want_y = 0;
     px = dp_ptr_limit(ask_x, s_ptr_max_step, &s_ptr_defer_x);
     py = dp_ptr_limit(ask_y, s_ptr_max_step, &s_ptr_defer_y);
+    if (px || py) ps2_move_mouse((int)px, (int)py);
+    /* Every pass, including a pass that moved nothing: a cursor parked on a wall
+     * while the hand pushes into it is the case being measured, and it is exactly
+     * the one that spends no pixels.  With the cap off -- the shipped default --
+     * dp_ptr_limit() is the identity, so anything here that was not spent was
+     * taken by the border. */
+    ps2_ptrst_pass(ask_x, ask_y, s_mouse_x - x0, s_mouse_y - y0);
     if (!px && !py) return;
-    ps2_move_mouse((int)px, (int)py);
 
 #if BTRON_HID_TRACE
     /* The pass's own row, because this is the pair the hand judges: everything
@@ -885,6 +1132,7 @@ static void ps2_shell_exec(const char *cmd)
         ps2_kprintf("  ptrsrc [emu|hw|auto] - Pointer policy: emulator device, real mouse, or re-detect\n");
         ps2_kprintf("  ptrstat <tag>    - Print+reset the pointer counts seen since the last call\n");
         ps2_kprintf("  ptrcal           - Loopback-calibrate the pointer path (no mouse needed)\n");
+        ps2_kprintf("  ptgain [w] [pct] - Gain from a host sweep of width w (pct = px/host px x100)\n");
         ps2_kprintf("  click [1|2]      - Click Left (1) or Right (2) mouse button\n");
         ps2_kprintf("  key <char>       - Inject key event into active window\n");
         ps2_kprintf("  type <text>      - Type string into active window\n");
@@ -1025,10 +1273,10 @@ static void ps2_shell_exec(const char *cmd)
             s_ptr_carry_x = s_ptr_carry_y = 0;
             s_ptr_post_carry_x = s_ptr_post_carry_y = 0;
         }
-        ps2_kprintf("[PS2] Pointer scale %d%% = %d/256 px per count (%s source%s)\n",
-                    (int)(s_ptr_mult_fp * 100 / 256), (int)s_ptr_mult_fp,
-                    ps2_ptr_src_name(s_ptr_src),
-                    s_ptr_src_forced ? "" : ", default for this source");
+        ps2_kprintf("[PS2] Pointer scale %d%%, %s source%s: ",
+                    (int)(s_ptr_mult_fp * 100 / 256), ps2_ptr_src_name(s_ptr_src),
+                    s_ptr_src_forced ? "" : " default");
+        ps2_ptr_gain_row();
     } else if (tkl_strncmp(cmd, "maxstep", 7) == 0) {
         const char *p = cmd + 7;
         while (*p == ' ') p++;
@@ -1068,9 +1316,11 @@ static void ps2_shell_exec(const char *cmd)
             s_ptr_src_forced = 0;
             ps2_ptr_src_detect();
         } else {
-            ps2_kprintf("[PS2] Pointer source %s (%s)\n",
-                        ps2_ptr_src_name(s_ptr_src),
+            /* Asking the question also answers it in the unit the hand is using,
+             * because this is the row to read while moving the mouse. */
+            ps2_kprintf("[PS2] Pointer source %s (%s): ", ps2_ptr_src_name(s_ptr_src),
                         s_ptr_src_forced ? "forced" : "detected");
+            ps2_ptr_gain_row();
         }
     } else if (tkl_strncmp(cmd, "ptrstat", 7) == 0) {
         const char *p = cmd + 7;
@@ -1084,6 +1334,24 @@ static void ps2_shell_exec(const char *cmd)
          * inside a measurement window; each ptrstat resets, so one keystroke
          * recovers from forgetting. */
         ps2_ptrst_print(*p ? p : "run");
+    } else if (tkl_strncmp(cmd, "ptgain", 6) == 0) {
+        const char *p = cmd + 6;
+        int hostpx = -1, pct = -1;   /* -1 = not given, 0 = the explicit reset */
+
+        /* Two optional numbers because the measurement and the decision are two
+         * different acts: the first call reads out what the sweep was worth, the
+         * second says what the pointer should feel like. */
+        while (*p == ' ') p++;
+        if (*p >= '0' && *p <= '9') {
+            hostpx = 0;
+            while (*p >= '0' && *p <= '9') { hostpx = hostpx * 10 + (*p - '0'); p++; }
+        }
+        while (*p == ' ') p++;
+        if (*p >= '0' && *p <= '9') {
+            pct = 0;
+            while (*p >= '0' && *p <= '9') { pct = pct * 10 + (*p - '0'); p++; }
+        }
+        ps2_ptg_cal(hostpx, pct);
     } else if (tkl_strcmp(cmd, "ptrcal") == 0) {
         int32_t saved_step = s_ptr_max_step;
         /* The transfer function belongs to the live source stub, and the two give

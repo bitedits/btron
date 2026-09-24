@@ -27,8 +27,11 @@ extern "C" {
  * movement needs to be slowed down and every accelerator here only speeds up.
  *
  * carry is the subpixel remainder left over from the last report, in 1/256ths of
- * a pixel; pass NULL to integrate without memory.  It halves when a report
- * brings zero, so a slow creep cannot bank up into a jump.
+ * a pixel; pass NULL to integrate without memory.  It is bounded at +/-255, so a
+ * report that brings zero on this axis leaves it alone rather than halving it: a
+ * paused axis cannot bank up into a jump it was not owed, but a hand that moves
+ * one axis at a time is forever reporting zero on the other, and decaying there
+ * is how a scale below 256 ends up never paying out a pixel at all.
  *
  * Returns whole pixels, truncated symmetrically towards zero and clamped to
  * +/-512, with the leftover written back through carry. */

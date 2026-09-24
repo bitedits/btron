@@ -220,7 +220,7 @@ The SIO0 UART console (`115200 8N1`) provides an interactive debugging shell wit
 
 #### Pointer instruments
 
-Three commands, three different questions. Running them in the wrong order
+Four commands, four different questions. Running them in the wrong order
 measures the wrong thing, so each is stated with what it excludes:
 
 - **`ptrcal`** — *is the mapping correct?* It feeds synthetic reports through the
@@ -234,6 +234,10 @@ measures the wrong thing, so each is stated with what it excludes:
   not a fault -- and a `[CAL]` log read without its header says the opposite.
 - **`ptrstat`** — *what is actually on the wire?* It counts **every** report, not
   the one-in-sixty-four the `[RAW]` rows print, and sorts them by magnitude.
+- **`ptgain`** — *what is a count worth to the hand that sent it?* The only
+  instrument here whose denominator is a human movement of known length rather
+  than a constant, and therefore the only one that can check `PS2_EMU_POINTER_SCALE`
+  instead of assuming it. See "Calibrating against a host movement you already know".
 - **`ptrsrc`** — *which of the two stubs below is answering, and why?* See
   "Pointer source profiles".
 - **`sens` / `maxstep`** — this port's own policy, applied only once the first two
@@ -242,7 +246,7 @@ measures the wrong thing, so each is stated with what it excludes:
 `ptrstat` closes the window since its last call, so the first call of a session
 reports whatever accumulated during boot: type `ptrstat boot` to discard that
 window, then perform a slide, then label the window that contains it. The decisive
-protocol is four windows:
+protocol is five windows:
 
 | Window | Hand | Decides |
 |:---|:---|:---|
@@ -250,6 +254,7 @@ protocol is four windows:
 | `ptrstat slow` | one deliberate slide, desk-middle to desk-edge | distance at low speed |
 | `ptrstat fast` | **the same physical slide**, done quickly | ...and at high speed |
 | `ptrstat h` | sideways only, either speed | whether the other axis stays at zero |
+| `ptrstat w` | Mac cursor, display's left edge to its right edge | the gain against a host distance that needs no measuring -- see "Calibrating against a host movement you already know" |
 
 Read the `vs previous window` row:
 
@@ -280,6 +285,18 @@ Read the `vs previous window` row:
 - **`net` far below `total`** on the `h` window — counts are leaking into the axis
   nobody asked for, which no per-axis synthetic test can see because the synthetic
   sweep never moves both axes the way a hand does.
+- **`border:` `discarded` and `onwall`** — what the screen edge did to the same
+  window, in guest pixels and per paint pass. This is the row that answers "why is
+  the cursor sticky at the edges", and no count row can, because the answer is
+  about *position* rather than about the wire. A relative pointer's position is the
+  integral of its counts, so pixels the border discards are gone for good while
+  pushing further into the wall is free and produces nothing: **an edge is a
+  one-way sink**, and leaving it costs exactly as much host travel as entering it
+  gave away. Read `discarded` as the share of the hand's distance the wall ate:
+  near zero means the cursor merely *rests* at the edge and the stickiness is
+  somewhere else; a third or more means the gain is spending the whole 800 px
+  canvas faster than the hand can cross the desktop it sits on, which is a
+  saturation limit and is lowered with `sens`, not raised.
 
 `ptrcal` drives the same report handler that `ptrstat` counts, so it must not run
 inside a measurement window. Every `ptrstat` call resets, so forgetting costs one
@@ -295,14 +312,23 @@ identity at boot rather than from where the code happened to be built:
 
 | Profile | Selected when | Gain applied | Curve | Cap |
 |:---|:---|:---|:---|:---|
-| `emu` | the pointer on the bus answers as PCSX2's HID Mouse, device `0627:0001` (`desc_id == 0x00010627`) | `256 / 8 = 32` per count, i.e. it divides the emulator's `PointerXScale` back out so 1 host cursor px lands as 1 guest px | none | off |
+| `emu` | the pointer on the bus answers as PCSX2's HID Mouse, device `0627:0001` (`desc_id == 0x00010627`) | `256 * 3 / 8 = 96` per count: the emulator's own `PointerXScale` divided out, then **3 guest px per host cursor px** | none | off |
 | `hw` | anything else answers -- a mouse somebody sells | verbatim `256`, modified by `sens` | `dp_ptr_riscos()` at `g_mouse_step_mult`, the same curve the arm64 / Pi 400 port uses | off |
 
+Why the emulator stub sits *above* 1:1, when the temptation with an already-
+accelerated source is to slow it down: this source is bounded in a way a mouse on a
+desk is not. The host cursor stops at the edge of the Mac's display, so a 1:1
+mapping can never carry the guest cursor further than the desktop it sits on, and
+one stroke cannot cross an 800 px canvas. A real mouse has unlimited travel and
+only ever needs slowing. Both stay a single constant, so where the cursor lands
+still depends only on how far the hand moved -- which is what separates this from
+the velocity cap, whose per-paint bound made the destination depend on *speed*.
+
 Detection runs once at boot after the host engine has enumerated, and again after
-`usb probe`; the boot log says which one it picked and why:
+`usb probe`; the boot log says which one it picked, in both units:
 
 ```
-[PS2] Pointer source emu (detected): 32/256 px per count, no curve, cap off
+[PS2] Pointer source emu (detected): 96/256 px per count = 3 px per host cursor px, no curve, cap off
 ```
 
 `ptrsrc hw` / `ptrsrc emu` override that for a session, which is the only way to
@@ -312,12 +338,118 @@ detection. Switching profiles clears the carried subpixel remainder and any
 distance the previous one had not spent, so a change mid-session cannot leave the
 old source's half-pixel tail to be paid out by the new one.
 
-The one number the `emu` profile depends on is the emulator's `PointerXScale`.
-It is compiled here as `PS2_EMU_POINTER_SCALE` and it is a mirror of a setting
-outside this repository: change it there and this constant has to agree, or the
-pointer is off by exactly that factor. `sens` is the fast way to test the
-agreement in a live session -- `sens 100` makes counts verbatim, so a pointer that
-then moves 8 times too far says `PointerXScale` is 8 and this constant is right.
+### Dialing the emulator's gain without a rebuild
+
+`PS2_EMU_POINTER_SCALE` (8) and `PointerXScale` in the emulator's ini are two
+copies of one number, and the second is outside this repository -- so before
+tuning anything, check they agree. The gain has two human reports bounding it:
+**1 px per host px could not cross the canvas**, **8 px per host px (= a verbatim
+count) sat pinned against a wall**. Everything between them is a keystroke:
+
+| `sens` | px per count | guest px per host cursor px |
+|:---|:---|:---|
+| 25 | 64/256 | 2.0 |
+| **38** | **97/256** | **3.0 -- the shipped default** |
+| 51 | 130/256 | 4.0 |
+| 64 | 163/256 | 5.0 |
+| 77 | 197/256 | 6.1 |
+| 89 | 227/256 | 7.1 |
+| 100 | 256/256 | 8.0 -- the too-fast bound, counts verbatim |
+
+Roughly **13 `sens` per guest px per host px**. `sens` with no argument prints the
+current value in both units, and `ptrsrc` on its own does the same for the live
+profile's default, so either can be read while the hand is still moving. A dial
+settled this way belongs in `PS2_EMU_GUEST_PX_PER_HOST_PX` afterwards -- the prompt
+value does not survive a reboot, and the two units are printed on every row so a
+session is never ambiguous about which one was set.
+
+### Calibrating against a host movement you already know
+
+Everything above assumes `PS2_EMU_POINTER_SCALE == 8`. That assumption is load
+bearing -- it is the difference between a pointer that is 3 times too slow and one
+that is right -- and the 2026-09-24 run says it may be false: across 460 reports the
+largest count seen on any axis was **27** and the median was **2**, against a byte
+ceiling of 127. Eight counts per host pixel would make that a cursor crawling at
+under 10 px/s, which no hand does. So check it rather than carry it, with a movement
+whose length is not in doubt. **`ptgain`** is that check, and it is the only
+instrument here whose denominator comes from a hand rather than from a file.
+
+1. `ptgain 0` -- clear the counters, which have been running since boot.
+2. Park the **Mac** cursor hard against the left edge of the Mac's display, then slide
+   it in one unbroken stroke to the right edge. The travel is now exactly the display's
+   logical width, which System Settings > Displays states, and it is the one host
+   distance that needs no measuring.
+3. `ptgain <width>` -- e.g. `ptgain 1440`. Reads out the measured counts-per-host-px
+   next to the constant it is checking, and the current gain in that unit.
+4. `ptgain <width> <percent>` -- the same sweep again, now setting the gain so the
+   cursor moves `percent`/100 guest px per host px. `300` is the shipped target.
+
+| measured counts per host px | what it means | what changes |
+|:---|:---|:---|
+| ~8.00 | `PointerXScale` is applied to this device, as assumed | nothing; `sens` is the whole dial |
+| ~1.00 | the scale does **not** reach the `hidmouse` binding | `PS2_EMU_POINTER_SCALE` to 1; the gain `ptgain` just installed is the same 3 px per host px, so the shipped default becomes 768/256 |
+| anything else | the scale is applied in a unit this port has not identified | that number *is* the constant; put it in `PS2_EMU_POINTER_SCALE` |
+
+`ptgain` takes its counts from the same report handler `ptrstat` tallies, so a
+`ptrcal` run between the sweep and the call is in the window and invalidates it --
+`ptgain 0` recovers in one keystroke. It warns when the y totals say the sweep was
+not straight, and it caps the gain at 1024/256 because `dp_ptr_scale()` truncates a
+report at `DP_PTR_MAX_PIXELS`, so above that the top of a fast stroke would be eaten
+inside the shaper instead of here where the row says so.
+
+The same window answers the two other open questions without another keystroke.
+**`loop:`** is the pass rate, and the pass rate is the pointer's frame rate -- the
+cursor can only be moved once per pass, so a low number here is steppiness and no
+gain constant will smooth it. **`chain x: ... px/count`** is the mapping measured
+end to end, which should read `0.37` at the shipped default; if `counts` came out
+8 times smaller than expected, this column goes up 8 times with no change to the
+code, and that is the whole of "not close enough".
+
+### What the 2026-09-24 run already settled
+
+Read out of `pcsx2/PCSX2/logs/emulog.txt` (24 s, 460 mouse reports, `startx`
+desktop, gain 96/256):
+
+- **The emulator's `|127|` clamp is not biting.** Max count seen on any axis: 27.
+  So the "distance lost at speed on the wire" hypothesis is dead for a normal slide,
+  and lowering `PointerXScale` to buy headroom buys nothing. Do not re-open it
+  without a `sat=` column that is non-zero.
+- **Nothing is being dropped between the bus and the handler.** `[DEV] p=` retired
+  reports and the `[RAW]` sequence numbers agree (460 vs `#448` at 1-in-64
+  sampling), and `[RING] n=1 max=1` says the ring never even queued up. The ~20-50
+  reports/s is what PCSX2 produces, not what this port loses.
+- **The counts are small enough that the guest's own step is 3 counts.** At 96/256 a
+  1-count report pays out 0 px and holds the remainder in the carry, so with a
+  median of 2 the pointer moves in whole pixels only once every couple of reports.
+  Distance is not lost -- the carry keeps it -- but it is why slow motion reads as
+  reluctance.
+- **`[MOVE]` rows are 135 ms apart, and 265 ms later in the run.** That is the
+  interval between passes that *moved* the cursor, which is a bound on the loop
+  rate and not the rate itself; the `loop:` row above is what settles it. If it
+  comes back near 7 Hz the binding constraint is the repaint, not the pointer: a
+  pass that moves the cursor calls `workbench_render()` plus a full 800x600
+  byte-swapping `blit_backbuffer_to_ps2fb()`, which is the rect-limited-upload work
+  in `doc/md/STABILIZATION.md`, and not a pointer constant at all.
+
+Note what a gain cannot fix: the emulator truncates its float delta toward zero
+and clamps each event at `|127|`, so distance is lost at both ends of the speed
+range before the byte is on the wire. `ptrstat`'s `sat=` and the zero bucket of
+its histogram are what those two look like from the guest.
+
+The two ceilings sit at numbers worth writing down, because they are the reason
+`PointerXScale` is not free to leave at 8. With that scale, one event can only
+carry `127 / 8` = **15.9 host cursor px** before it saturates, so any brisk drag
+loses distance on the wire no guest constant can get back; the same scale makes
+the dead zone anything under `1/8` of a host px, which is harmless. Lowering the
+ini's scale and raising `PS2_EMU_GUEST_PX_PER_HOST_PX` by the same factor keeps
+the travel identical while moving both ceilings -- `sat=` at scale 1 does not
+bite until 127 px in one event. **The two numbers are one knob split across a
+boundary**, which is also why editing the ini is *not* a shortcut around `sens`.
+The emulator's other pointer sliders (`PointerXSpeed`, `PointerYSpeed`,
+`PointerInertia`, `PointerXDeadZone`, `PointerYDeadZone`) are all `0` in this
+machine's Mouse Mapping Settings panel, i.e. no curve, no smoothing and no dead
+zone in the chain; what each one means numerically is still **unverified**, and
+they are deliberately left at zero rather than reasoned about.
 
 #### Which layer owns the pointer
 

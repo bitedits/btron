@@ -31,9 +31,19 @@
 int32_t dp_ptr_scale(int32_t raw, int32_t mult_fp, int32_t *carry)
 {
     if (raw == 0) {
-        /* Halving rather than clearing: a remainder that survives one idle
-         * report is still owed, but a long pause should not bank it up. */
-        if (carry) *carry = *carry / 2;
+        /* Keep the remainder, do not decay it.  |carry| is bounded at 255 by the
+         * clamp below, so a pause cannot bank up more than a pixel's fraction and
+         * pay it out afterwards -- the walking this decay was written against is
+         * the limiter's debt, which is a different quantity and lives elsewhere.
+         *
+         * What the decay does cost is distance, and it costs it asymmetrically in
+         * the one place a person notices.  A scale below 1.0 needs three 1-count
+         * reports to cross a pixel, and an axis that reads zero on any report
+         * between them -- which is ordinary, since a hand rarely moves both axes
+         * at once -- loses half of what it had saved, repeatedly, so the pixel is
+         * never reached.  A pointer parked on a screen border and then nudged is
+         * exactly that case: it is not the border holding it, it is the remainder
+         * being thrown away faster than the hand can save it. */
         return 0;
     }
 

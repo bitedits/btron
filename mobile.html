@@ -823,6 +823,289 @@
             </div>
         </section>
 
+        <!-- µBTRON-SEGUI Toolkit UI Showcase -->
+        <section class="audit-card" id="segui-screens">
+            <h3><span>µBTRON-SEGUI セグメンテーション UI ギャラリー (Segmentation UI Showcase)</span></h3>
+            <p>
+                以下の画面は、新規 UI ツールキット <b>µBTRON-SEGUI (SegUI / Segmentation UI)</b> を、実機と同一の描画経路でヘッドレスレンダリングした成果物である。解像度は 480×272 の横長 TFT パネル。埋め込み機器・家電・キオスク・レトロ機を想定した軽量モジュール UI ツールキットで、起動後にヒープを確保しない。
+            </p>
+            <p>
+                SegUI の前提は「画面とは名前付きの水平帯（セグメント）の予算である」。STATUS・TABBAR・TITLE・BODY・SOFTKEY の各帯が幅と高さを決め、このパネルでは TABBAR 24px・BODY 218px・SOFTKEY 30px、つまり chrome は 272px 中 54px（19%）を消費する。帯のうち <b>伸長を許されるのは 1 つだけ</b>で、それは BODY である。フォームファクタの違いはすべてこのテーブルの値の違いで表現され、<code class="mono">#ifdef</code> による分岐は存在しない。
+            </p>
+            <p style="font-size:0.9em; opacity:0.85; margin-top:0.6rem;">
+                The screens below are produced by µBTRON-SEGUI, a lightweight, modular and scalable UI toolkit for embedded systems, home appliances, kiosks and retro machines, driven through the exact same drawing path the target uses. A SegUI screen is a budget of named horizontal bands; on this panel the chrome costs 54 of 272 pixels (TABBAR 24 + SOFTKEY 30) and leaves BODY 218. Exactly one band may stretch, and form factors differ by table values rather than by conditional compilation. This is the smallest budget SegUI ships on, and therefore the only frame that can prove a segment table is honest - the 480×640 portrait handset above is µBTRON-FOMA's territory.
+            </p>
+
+            <style>
+                .segui-band-list {
+                    display: flex;
+                    flex-wrap: wrap;
+                    gap: 0.6rem;
+                    list-style: none;
+                    margin: 1.4rem 0 0 0;
+                    padding: 0;
+                }
+                .segui-band-list li {
+                    display: flex;
+                    align-items: baseline;
+                    gap: 0.5rem;
+                    background: #f1f5f9;
+                    border: 1px solid #cbd5e1;
+                    border-left: 4px solid #0057b7;
+                    border-radius: 8px;
+                    padding: 0.45rem 0.7rem;
+                    font-size: 0.82rem;
+                    color: #475569;
+                }
+                .segui-band-list li b {
+                    color: #003366;
+                    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+                    letter-spacing: 0.04em;
+                }
+                .segui-band-list li span {
+                    color: #0284c7;
+                    font-weight: 700;
+                    font-variant-numeric: tabular-nums;
+                }
+                .segui-gallery-grid {
+                    display: grid;
+                    grid-template-columns: repeat(auto-fit, minmax(420px, 1fr));
+                    gap: 1.8rem;
+                    margin-top: 1.8rem;
+                }
+                .segui-card {
+                    background: #f8fafc;
+                    border: 1px solid #cbd5e1;
+                    border-radius: 16px;
+                    padding: 1.2rem;
+                    display: flex;
+                    flex-direction: column;
+                    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.04);
+                    transition: transform 0.2s ease, box-shadow 0.2s ease;
+                }
+                .segui-card:hover {
+                    transform: translateY(-3px);
+                    box-shadow: 0 8px 24px rgba(0, 87, 183, 0.12);
+                    border-color: #0057b7;
+                }
+                .segui-frame {
+                    background: #000;
+                    border: 4px solid #1e293b;
+                    border-radius: 12px;
+                    overflow: hidden;
+                    box-shadow: inset 0 0 10px rgba(0,0,0,0.5), 0 4px 12px rgba(0,0,0,0.15);
+                    display: flex;
+                    justify-content: center;
+                }
+                .segui-img {
+                    width: 100%;
+                    max-width: 480px;
+                    height: auto;
+                    display: block;
+                    image-rendering: pixelated;
+                }
+                .segui-card-info {
+                    width: 100%;
+                    margin-top: 1rem;
+                    text-align: left;
+                }
+                .segui-card-title {
+                    font-size: 1.05rem;
+                    font-weight: 700;
+                    color: #003366;
+                    margin-bottom: 0.2rem;
+                    display: flex;
+                    align-items: center;
+                    justify-content: space-between;
+                    gap: 0.6rem;
+                }
+                .segui-card-sub {
+                    font-size: 0.78rem;
+                    color: #64748b;
+                    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+                    margin-bottom: 0.45rem;
+                }
+                .segui-badge {
+                    font-size: 0.75rem;
+                    background: #e0f2fe;
+                    color: #0284c7;
+                    border: 1px solid #bae6fd;
+                    padding: 0.15rem 0.5rem;
+                    border-radius: 999px;
+                    font-weight: 600;
+                    white-space: nowrap;
+                }
+                .segui-card-desc {
+                    font-size: 0.88rem;
+                    color: #475569;
+                    line-height: 1.6;
+                }
+            </style>
+
+            <ul class="segui-band-list">
+                    <li><b>TABBAR</b><span>24 px</span><em>5 tabs, one line each</em></li>
+                    <li><b>BODY</b><span>218 px</span><em>the only stretchable band</em></li>
+                    <li><b>SOFTKEY</b><span>30 px</span><em>3 caption buttons</em></li>
+            </ul>
+
+            <div class="segui-gallery-grid">
+
+                <!-- 1. デメ / SegUI -->
+                <div class="segui-card">
+                    <div class="segui-frame">
+                        <img src="b-system/img/segui/segui_demo_home.png"
+                             alt="1. セグUI デメ・ウンドウ (デメ / SegUI)"
+                             class="segui-img" width="480" height="272">
+                    </div>
+                    <div class="segui-card-info">
+                        <div class="segui-card-title">
+                            <span>1. セグUI デメ・ウンドウ</span>
+                            <span class="segui-badge">4 Buttons + Label</span>
+                        </div>
+                        <div class="segui-card-sub">デメ / SegUI</div>
+                        <div class="segui-card-desc">構成はラベル1行とアイコン付きボタン4つだけ。選択中の 「Fast」 は面を沈ませた反転表示。ボタンは本幅から自動に4列グリッドへ並ぶ。</div>
+                    </div>
+                </div>
+
+                <!-- 2. デメ / Widgets -->
+                <div class="segui-card">
+                    <div class="segui-frame">
+                        <img src="b-system/img/segui/segui_demo_widgets.png"
+                             alt="2. セグUI ウィジェット群 (デメ / Widgets)"
+                             class="segui-img" width="480" height="272">
+                    </div>
+                    <div class="segui-card-info">
+                        <div class="segui-card-title">
+                            <span>2. セグUI ウィジェット群</span>
+                            <span class="segui-badge">Widgets</span>
+                        </div>
+                        <div class="segui-card-sub">デメ / Widgets</div>
+                        <div class="segui-card-desc">ボタン4、チェックボックス2、トグルスイッチ1。チェックのチェックマークもトグルのノブもジョメトリで描いており、フォントの文字カバレッジに依存しない。</div>
+                    </div>
+                </div>
+
+                <!-- 3. デメ / Theme -->
+                <div class="segui-card">
+                    <div class="segui-frame">
+                        <img src="b-system/img/segui/segui_demo_theme.png"
+                             alt="3. テーマ切り替え (デメ / Theme)"
+                             class="segui-img" width="480" height="272">
+                    </div>
+                    <div class="segui-card-info">
+                        <div class="segui-card-title">
+                            <span>3. テーマ切り替え</span>
+                            <span class="segui-badge">Theme Table</span>
+                        </div>
+                        <div class="segui-card-sub">デメ / Theme</div>
+                        <div class="segui-card-desc">3つのラッチボタンで色のテーブルだけを差し替える。レイアウト・セグメント数・コードは一切変わない。</div>
+                    </div>
+                </div>
+
+                <!-- 4. デメ / Info -->
+                <div class="segui-card">
+                    <div class="segui-frame">
+                        <img src="b-system/img/segui/segui_demo_info.png"
+                             alt="4. リストセグメント (デメ / Info)"
+                             class="segui-img" width="480" height="272">
+                    </div>
+                    <div class="segui-card-info">
+                        <div class="segui-card-title">
+                            <span>4. リストセグメント</span>
+                            <span class="segui-badge">List Widget</span>
+                        </div>
+                        <div class="segui-card-sub">デメ / Info</div>
+                        <div class="segui-card-desc">見出し行と値行を持つリスト。右端のつまは行数に対して比例した表示範囲を示す。</div>
+                    </div>
+                </div>
+
+                <!-- 5. デメ / Apps -->
+                <div class="segui-card">
+                    <div class="segui-frame">
+                        <img src="b-system/img/segui/segui_demo_apps.png"
+                             alt="5. アプリタイル (デメ / Apps)"
+                             class="segui-img" width="480" height="272">
+                    </div>
+                    <div class="segui-card-info">
+                        <div class="segui-card-title">
+                            <span>5. アプリタイル</span>
+                            <span class="segui-badge">Tiles</span>
+                        </div>
+                        <div class="segui-card-sub">デメ / Apps</div>
+                        <div class="segui-card-desc">同じセグメント表から生まれるアプリタイル。ボタン数が変わるだけでレイアウトは自動に再比触する。</div>
+                    </div>
+                </div>
+
+                <!-- 6. 電話 / Contacts -->
+                <div class="segui-card">
+                    <div class="segui-frame">
+                        <img src="b-system/img/segui/segui_phone_contacts.png"
+                             alt="6. 給活冊 ― 連給先 (電話 / Contacts)"
+                             class="segui-img" width="480" height="272">
+                    </div>
+                    <div class="segui-card-info">
+                        <div class="segui-card-title">
+                            <span>6. 給活冊 ― 連給先</span>
+                            <span class="segui-badge">Phone</span>
+                        </div>
+                        <div class="segui-card-sub">電話 / Contacts</div>
+                        <div class="segui-card-desc">頭文字ディスク、セクション見出し、現在項目の強調。選択はそのままチャットへ抜ける。</div>
+                    </div>
+                </div>
+
+                <!-- 7. 電話 / Chat -->
+                <div class="segui-card">
+                    <div class="segui-frame">
+                        <img src="b-system/img/segui/segui_phone_chat.png"
+                             alt="7. チャットセグメント (電話 / Chat)"
+                             class="segui-img" width="480" height="272">
+                    </div>
+                    <div class="segui-card-info">
+                        <div class="segui-card-title">
+                            <span>7. チャットセグメント</span>
+                            <span class="segui-badge">LoRa Chat</span>
+                        </div>
+                        <div class="segui-card-sub">電話 / Chat</div>
+                        <div class="segui-card-desc">気のつまりは下、古いものは上から消える。相手名はセグメント内の固定ヘッダー。</div>
+                    </div>
+                </div>
+
+                <!-- 8. 電話 / People -->
+                <div class="segui-card">
+                    <div class="segui-frame">
+                        <img src="b-system/img/segui/segui_phone_people.png"
+                             alt="8. 人々 ― 円と最近 (電話 / People)"
+                             class="segui-img" width="480" height="272">
+                    </div>
+                    <div class="segui-card-info">
+                        <div class="segui-card-title">
+                            <span>8. 人々 ― 円と最近</span>
+                            <span class="segui-badge">Circles</span>
+                        </div>
+                        <div class="segui-card-sub">電話 / People</div>
+                        <div class="segui-card-desc">人数バッジ付きのロールアウェイ行。リストセグメントの行種別を利用したみの画面。</div>
+                    </div>
+                </div>
+
+                <!-- 9. 電話 / Settings -->
+                <div class="segui-card">
+                    <div class="segui-frame">
+                        <img src="b-system/img/segui/segui_phone_settings.png"
+                             alt="9. 設定 ― LoRa 無錬 (電話 / Settings)"
+                             class="segui-img" width="480" height="272">
+                    </div>
+                    <div class="segui-card-info">
+                        <div class="segui-card-title">
+                            <span>9. 設定 ― LoRa 無錬</span>
+                            <span class="segui-badge">Radio</span>
+                        </div>
+                        <div class="segui-card-sub">電話 / Settings</div>
+                        <div class="segui-card-desc">トグル行と値行のみで構成。下段のセクションはスクロールで見える状態。</div>
+                    </div>
+                </div>
+
+            </div>
+        </section>
+
         <!-- Relation to B-System -->
         <section class="audit-card">
             <h3><span>B-System マルチアーキテクチャ検証との関係</span></h3>

@@ -35,6 +35,7 @@ CFLAGS ?= -O2 -Wall -Wextra -std=c99 -Iinclude -Iinclude/drivers -Isrc/kernel -I
 
 .PHONY: all posix qemu kernel tkernel sakamura foma uefi pc98 arm-elf arm64-elf m68k ps2 mips \
         html2tad book2tad tad_bin test test-kernel test-yoko test-yoko4 test-m68k test-mips test-ps2 test-foma test-foma-ui foma-screens \
+        segui-screens \
         test-mozc test-editor test-hmi test-tad test-chat test-wylie verify test-fs test-chokanji \
         mkbtronfs btron_sys.vol \
         run-posix run-qemu run-kernel run-yoko run-yoko4 run-sakamura run-foma run-uefi run-eufi run-uefu run-pc98 run-m68k run-ps2 run-mips debug-virtio debug-gdb clean \
@@ -1667,3 +1668,28 @@ foma-screens: $(CAPTURE_FOMA_BIN)
 	@echo "=========================================================="
 	@./$(CAPTURE_FOMA_BIN)
 	@python3 scripts/update_foma_screens.py
+
+# ═══════════════════════════════════════════════════════════════════
+# SegUI (Segmentation UI) Automated Screen Capture - 480x272 panel
+# ═══════════════════════════════════════════════════════════════════
+CAPTURE_SEGUI_BIN  = ./.build/capture_segui
+CAPTURE_SEGUI_SRCS = src/tools/capture_segui.c \
+                     src/segui/segui.c \
+                     src/segui/segui_demo.c \
+                     src/segui/segui_phone.c \
+                     src/graphics/dp_core.c \
+                     src/font/troncode.c \
+                     src/font/jis_fonts.c \
+                     src/font/tibetan_fonts.c
+
+CAPTURE_SEGUI_OBJS = $(CAPTURE_SEGUI_SRCS:.c=.test.o)
+
+$(CAPTURE_SEGUI_BIN): $(CAPTURE_SEGUI_OBJS)
+	$(CC) $(CAPTURE_SEGUI_OBJS) -o $@ $(LDFLAGS) -lm
+
+segui-screens: $(CAPTURE_SEGUI_BIN)
+	@echo "=========================================================="
+	@echo " Generating SegUI 480x272 Screen Set..."
+	@echo "=========================================================="
+	@./$(CAPTURE_SEGUI_BIN)
+	@python3 scripts/update_segui_screens.py

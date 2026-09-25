@@ -26,6 +26,10 @@ RAW_DIR = "/tmp/foma_raw_screens"
 IMG_OUT_DIR = os.path.join(BASE_DIR, "b-system", "img", "foma")
 MOBILE_HTML = os.path.join(BASE_DIR, "mobile.html")
 
+# Written by scripts/update_segui_screens.py, which owns the section that
+# follows this one in mobile.html.
+SEGUI_MARKER = "<!-- \u00b5BTRON-SEGUI Toolkit UI Showcase -->"
+
 def raw_to_png(raw_path, png_path):
     with open(raw_path, "rb") as f:
         data = f.read()
@@ -490,18 +494,23 @@ def update_mobile_html():
 
     new_section = generate_foma_screens_html().strip()
 
-    # If section already exists, replace it
-    pattern = r"<!-- µBTRON-FOMA Mobile UI Showcase -->.*?<!-- Relation to B-System -->"
-    if re.search(pattern, content, flags=re.DOTALL):
-        updated = re.sub(pattern, new_section + "\n\n        <!-- Relation to B-System -->", content, flags=re.DOTALL)
+    target_marker = "<!-- Relation to B-System -->"
+    # The µBTRON-SEGUI gallery is injected straight after this one, so stop at
+    # it when present - otherwise re-running here would swallow that section.
+    stop = rf"(?:{re.escape(SEGUI_MARKER)}|{re.escape(target_marker)})"
+
+    pattern = re.compile(
+        r"<!-- µBTRON-FOMA Mobile UI Showcase -->.*?" + stop, flags=re.DOTALL
+    )
+    m = pattern.search(content)
+    if m:
+        tail = re.search(stop, m.group(0)).group(0)
+        updated = content[:m.start()] + new_section + "\n\n        " + tail + content[m.end():]
+    elif target_marker in content:
+        updated = content.replace(target_marker, new_section + "\n\n        " + target_marker, 1)
     else:
-        # Insert before "<!-- Relation to B-System -->"
-        target_marker = "<!-- Relation to B-System -->"
-        if target_marker in content:
-            updated = content.replace(target_marker, new_section + "\n\n        " + target_marker)
-        else:
-            # Fallback: insert before </main>
-            updated = content.replace("</main>", new_section + "\n    </main>")
+        # Fallback: insert before </main>
+        updated = content.replace("</main>", new_section + "\n    </main>")
 
     with open(MOBILE_HTML, "w", encoding="utf-8") as f:
         f.write(updated)

@@ -3,8 +3,11 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Drivers – Hardware Abstraction & Peripheral Subsystem | B-Book</title>
-  <meta name="description" content="Formal developer documentation for the B-System Drivers subsystem: VirtIO MMIO virtualization, VESA LFB graphics, real-time clock (RTC), and TCP/IP networking.">
+  <title>Drivers – Hardware Abstraction, PCIe Device Tree & Console Preservation | B-Book</title>
+  <meta name="description" content="Technical specification and C99 API manual for the B-System Drivers subsystem: PCIe device tree, VirtIO MMIO, Console Preservation ports (PlayStation 2, MIPS, Raspberry Pi 2/3/4/5, PC-98), GPU backends (GS, VC4, VESA), gamepads, and Null COM ports.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="b-book.css">
 </head>
 <body>
@@ -16,7 +19,13 @@
         <span class="hamburger"></span>
       </button>
       <ul class="book-global-links">
-    <li><a href="../index.html">VirtIO</a></li><li><a href="../b-system.html">B-System</a></li><li><a href="index.html" class="active">B-Book</a></li><li><a href="../conformance.html">B-Spec</a></li><li><a href="../mobile.html">FOMA</a></li><li><a href="../releases.html">Releases</a></li><li><a href="https://github.com/bitedits/btron">GitHub</a></li>
+        <li><a href="../index.html">VirtIO</a></li>
+        <li><a href="../b-system.html">B-System</a></li>
+        <li><a href="index.html" class="active">B-Book</a></li>
+        <li><a href="../conformance.html">B-Spec</a></li>
+        <li><a href="../mobile.html">FOMA</a></li>
+        <li><a href="../releases.html">Releases</a></li>
+        <li><a href="https://github.com/bitedits/btron">GitHub</a></li>
       </ul>
     </div>
   </nav>
@@ -44,14 +53,20 @@
       <a href="hmi.html" class="nav-link">HMI (Human-Machine Interface)</a>
       <a href="font.html" class="nav-link">Font (Typography Engine)</a>
       <a href="settings.html" class="nav-link">Settings (Control Panel)</a>
-      <a href="index.html" class="nav-link active">Drivers (Hardware & VirtIO)</a>
+      <a href="drivers.html" class="nav-link active">Drivers (Hardware & VirtIO)</a>
       <div class="nav-sublinks">
         <a href="#arch" class="nav-sublink">Hardware Abstraction</a>
-        <a href="#virtio" class="nav-sublink">VirtIO MMIO Devices</a>
-        <a href="#types" class="nav-sublink">Device Descriptors</a>
-        <a href="#api" class="nav-sublink">API Function Reference</a>
-        <a href="#examples" class="nav-sublink">Code Examples</a>
+        <a href="#pcie-tree" class="nav-sublink">PCIe & Device Tree</a>
+        <a href="#virtio" class="nav-sublink">VirtIO Paravirtualization</a>
+        <a href="#console" class="nav-sublink">Console Preservation Ports</a>
+        <a href="#input" class="nav-sublink">Mice, Keyboards & Pads</a>
+        <a href="#gpus" class="nav-sublink">Display & GPU Engines</a>
+        <a href="#serial-null" class="nav-sublink">Serial & Null COM Ports</a>
+        <a href="#types" class="nav-sublink">Data Structures</a>
+        <a href="#api" class="nav-sublink">Driver API Reference</a>
+        <a href="#examples" class="nav-sublink">Implementation Examples</a>
       </div>
+      <a href="fs.html" class="nav-link">File System (B-FS & Volumes)</a>
       <a href="apps.html" class="nav-link">Apps (Application Suite)</a>
     </div>
   </nav>
@@ -62,31 +77,61 @@
       <div class="breadcrumb">
         <a href="index.html">B-Book</a> / <span>Drivers</span>
       </div>
-      <h1 class="page-title">Drivers: Hardware Abstraction & Peripherals</h1>
+      <h1 class="page-title">Drivers: Hardware Abstraction, PCIe Device Tree & Console Preservation</h1>
       <p class="page-lead">
-        Comprehensive C99 developer specification for the B-System hardware abstraction layer (HAL): memory-mapped I/O (MMIO), VirtIO paravirtualization (block, net, console), VESA Linear Framebuffer (LFB), and real-time clock services.
+        Comprehensive C99 developer manual for the B-System hardware drivers subsystem: modern PCIe bus enumeration and Flattened Device Tree (FDT) discovery, paravirtualized VirtIO MMIO engines, retro and vintage console preservation targets (Sony PlayStation 2, Bare-Metal MIPS, Raspberry Pi 2/3/4/5, NEC PC-98), GPU display backends (Sony GS, Broadcom VC4/VC6, VESA LFB), and UNIX-spirited Null COM stream conduits.
       </p>
     </header>
 
-    <!-- Part 1: Hardware Abstraction -->
+    <div class="callout callout-info">
+      <div class="callout-title">NASA JPL Rule 3 & Zero-Mock Architecture</div>
+      All driver implementations adhere strictly to <strong>NASA JPL Rule 3</strong> (zero dynamic heap allocation post-initialization) and <strong>Zero-Mock Discovery</strong>. Device probe routines directly interrogate CPU Model Specific Registers (MSRs), PCIe Enhanced Configuration Access Mechanisms (ECAM), Flattened Device Tree nodes, and physical MMIO controllers.
+    </div>
+
+    <!-- Section 1: Hardware Abstraction Layer -->
     <h2 id="arch">1. Hardware Abstraction Layer (HAL)</h2>
     <p>
-      The <strong>Drivers</strong> subsystem abstracts low-level bus topologies, CPU interrupt controllers, and peripheral I/O ports behind deterministic, non-blocking C99 interfaces adhering to NASA JPL Rule 3:
+      The B-System Driver subsystem decouples high-level Real-Body file operations, graphics rendering primitives, and text input front-ends from physical bus fabrics. Drivers expose uniform, non-blocking synchronous interfaces accessed via 32-bit device handles (<code>ID</code>):
     </p>
 
     <pre><code> ┌────────────────────────────────────────────────────────────────────────┐
- │                    B-System Standard Device Interface                  │
- │                                                                        │
- │   [ File / VObject Layer ]  ◄── ID / Device Calls ──►  [ Drivers HAL ] │
- │   • opn_dev / cls_dev                                  • VirtIO Block  │
- │   • rea_dev / wri_dev                                  • VESA Video    │
- │   • ctl_dev (IOCTL)                                    • UART Console  │
- └────────────────────────────────────────────────────────────────────────┘</code></pre>
+│                    B-System Standard Device Framework                  │
+│                                                                        │
+│   [ File / Window / Core ]  ◄── ID / Device Calls ──►  [ Drivers HAL ] │
+│   • opn_dev / cls_dev                                  • PCIe DeviceTree│
+│   • rea_dev / wri_dev                                  • VirtIO MMIO    │
+│   • ctl_dev (IOCTL)                                    • Console Ports  │
+│   • dev_tree_find / dev_irq_attach                     • Null COM Ports │
+└────────────────────────────────────────────────────────────────────────┘</code></pre>
 
-    <!-- Part 2: VirtIO MMIO Devices -->
-    <h2 id="virtio">2. VirtIO Paravirtualization Subsystem</h2>
+    <!-- Section 2: PCIe & Device Tree -->
+    <h2 id="pcie-tree">2. PCIe Bus Architecture & Unified Device Tree (FDT)</h2>
     <p>
-      To deliver hyper-performant I/O in QEMU and cloud virtualization environments, B-System implements direct cleanroom VirtIO MMIO drivers:
+      To support modern multi-socket x86_64 servers, ARM64 workstations, and embedded system-on-chips (SoCs), B-System features a cleanroom <strong>PCIe Bus Enumeration</strong> pipeline and <strong>Flattened Device Tree (FDT)</strong> engine:
+    </p>
+
+    <h3>PCIe Host Configuration & Topology</h3>
+    <ul>
+      <li><strong>Enhanced Configuration Access Mechanism (ECAM)</strong>: Memory-mapped PCI configuration space mapped at standard physical aperture <code>0xE0000000</code> (or defined via ACPI MCFG table).</li>
+      <li><strong>Bus-Device-Function (BDF) Scanning</strong>: Scans Buses 0..255, Devices 0..31, Functions 0..7. Identifies Vendor ID, Device ID, Subsystem ID, Class, and Subclass codes.</li>
+      <li><strong>Base Address Registers (BARs)</strong>: Automatically configures 32-bit and 64-bit non-prefetchable memory BARs and prefetchable memory apertures, mapping them into the kernel's virtual page tables.</li>
+      <li><strong>MSI and MSI-X Vector Routing</strong>: Allocates dedicated message-signaled interrupt vectors, directly routing peripheral interrupts to specific target CPU cores without legacy PIC or IO-APIC line sharing.</li>
+    </ul>
+
+    <h3>Flattened Device Tree (FDT / DTB) Traversal</h3>
+    <p>
+      On ARM, RISC-V, and MIPS architectures where ACPI is absent, B-System parses the bootloader-provided Device Tree Blob (DTB):
+    </p>
+    <ul>
+      <li>Tokenizes <code>FDT_BEGIN_NODE</code>, <code>FDT_PROP</code>, and <code>FDT_END_NODE</code> structures in single-pass linear time with zero heap allocations.</li>
+      <li>Resolves <code>compatible</code> strings to match registered hardware drivers (e.g. <code>"brcm,bcm2835-uart"</code>, <code>"virtio,mmio"</code>, <code>"raspberrypi,rp1"</code>).</li>
+      <li>Extracts <code>reg</code> properties to establish device base physical MMIO addresses and <code>interrupts</code> properties to attach T-Kernel 2.0 interrupt service routines.</li>
+    </ul>
+
+    <!-- Section 3: VirtIO Paravirtualization -->
+    <h2 id="virtio">3. VirtIO Paravirtualization Subsystem</h2>
+    <p>
+      For QEMU, cloud hypervisors, and automated test environments, B-System provides direct cleanroom VirtIO MMIO 1.4 drivers:
     </p>
 
     <table class="api-table">
@@ -95,7 +140,7 @@
           <th>VirtIO Device</th>
           <th>Device ID</th>
           <th>MMIO Base Address</th>
-          <th>Operational Function</th>
+          <th>Operational Function & Description</th>
         </tr>
       </thead>
       <tbody>
@@ -103,39 +148,173 @@
           <td><strong>VirtIO Block</strong></td>
           <td>2 (<code>0x02</code>)</td>
           <td><code>0x0a000000</code></td>
-          <td>Persistent HFDS backing store; DMA sector read/write transactions.</td>
+          <td>Persistent B-FS disk store; non-blocking scatter-gather DMA sector I/O.</td>
         </tr>
         <tr>
           <td><strong>VirtIO Net</strong></td>
           <td>1 (<code>0x01</code>)</td>
           <td><code>0x0a000200</code></td>
-          <td>Ethernet frame RX/TX queues for TCP/IP and Chat protocols.</td>
+          <td>Ethernet MAC frame RX/TX queues for TCP/IP, raw socket streams, and Chat.</td>
         </tr>
         <tr>
           <td><strong>VirtIO Console</strong></td>
           <td>3 (<code>0x03</code>)</td>
           <td><code>0x0a000400</code></td>
-          <td>Early system log streams, debugger TTY, and serial console output.</td>
+          <td>Early boot logging stream, emergency TTY, and serial shell channel.</td>
+        </tr>
+        <tr>
+          <td><strong>VirtIO GPU</strong></td>
+          <td>16 (<code>0x10</code>)</td>
+          <td><code>0x0a000600</code></td>
+          <td>2D hardware scanout, zero-copy resource allocation, and display flushing.</td>
         </tr>
       </tbody>
     </table>
 
-    <!-- Part 3: Device Descriptors -->
-    <h2 id="types">3. Data Structures & Descriptors</h2>
+    <!-- Section 4: Console Preservation Ports -->
+    <h2 id="console">4. Console Preservation Ports & Retro Hardware Drivers</h2>
+    <p>
+      B-System takes console and workstation preservation seriously. The system includes full bare-metal silicon drivers for iconic historical machines, providing authentic BTRON 3.20 desktop experiences on bare silicon:
+    </p>
+
+    <h3>4.1 Sony PlayStation 2 (Emotion Engine R5900)</h3>
+    <p>
+      Ported to the Sony PlayStation 2 (Emotion Engine MIPS-III R5900 64-bit CPU @ 294.912 MHz with 32 MB RDRAM):
+    </p>
+    <ul>
+      <li><strong>Graphics Synthesizer (GS)</strong>: Directly controls 4 MB of ultra-high-bandwidth embedded DRAM (eDRAM). Utilizes the Host-to-Local GIF DMA blitter (Channel 2) to transfer linear 32-bpp framebuffers from uncached KSEG1 RDRAM into GS pages, providing verified NTSC 640x448 and VESA 800x600 32-bpp progressive scan.</li>
+      <li><strong>Cursor Preservation</strong>: Employs a non-destructive cursor backing buffer (<code>cursor_saved[16 * 16]</code>), restoring underlying pixels with zero trailing artifacts or screen smearing.</li>
+      <li><strong>SIO0 Serial Console</strong>: Direct MMIO driver for the EE internal UART (<code>0x1000F180</code>), providing an interactive debug shell and logging channel.</li>
+      <li><strong>DualShock 2 Pad</strong>: Full analog thumbstick and button integration over SIO2 (see §5).</li>
+      <li><strong>USB Host (OHCI)</strong>: Direct driver for the integrated Open Host Controller Interface at <code>0xBF801600</code>, powering standard USB keyboards and mice.</li>
+    </ul>
+
+    <h3>4.2 Bare-Metal MIPS (QEMU Malta & Magnum)</h3>
+    <p>
+      Targeted at classic MIPS-III and MIPS64 workstation platforms:
+    </p>
+    <ul>
+      <li><strong>NS16550 Serial Console</strong>: Standard COM1 UART driver at physical address <code>0x180003F8</code> (115200 baud, 8 data bits, no parity, 1 stop bit).</li>
+      <li><strong>CP0 Timer & Interrupts</strong>: Direct programming of MIPS Coprocessor 0 <code>Count</code> and <code>Compare</code> registers to drive T-Kernel 2.0 system ticks and preemptive task scheduling.</li>
+    </ul>
+
+    <h3>4.3 Raspberry Pi Family (Pi 2B, 3B, 4B & 5)</h3>
+    <p>
+      Broadcom and RP1 bare-metal drivers spanning ARMv7 32-bit and ARMv8 AArch64:
+    </p>
+    <ul>
+      <li><strong>Raspberry Pi 2B (BCM2836) & 3B (BCM2837)</strong>: PL011 UART console, ARM local timer, VideoCore Mailbox Channel 8 framebuffer configuration, and SMSC9118 Ethernet.</li>
+      <li><strong>Raspberry Pi 4B (BCM2711)</strong>: VideoCore VI GPU, GIC-400 interrupt controller, Gigabit Ethernet (GENET), and DWC2 USB.</li>
+      <li><strong>Raspberry Pi 5 (BCM2712 / RP1)</strong>: Southbridge PCIe bridge enumeration, RP1 I/O controller, modern xHCI USB host, and VideoCore VII display scanout.</li>
+    </ul>
+
+    <h3>4.4 NEC PC-9801 / PC-9821</h3>
+    <p>
+      Supports legendary Japanese personal computers via cleanroom i386 real-mode bootstrap and 32-bit protected mode execution:
+    </p>
+    <ul>
+      <li><strong>Planar VRAM Display</strong>: Drives 4-plane 16-color interleaved graphics memory (<code>0xA8000..0xB8000</code>) with hardware plane masking.</li>
+      <li><strong>A20 Gate Control</strong>: Directly drives PC-98 system port <code>0xF2</code> for high-memory access.</li>
+      <li><strong>Peripherals</strong>: 8251 USART serial communications, INT 1Ah real-time clock, and PC-98 keyboard matrix decoding.</li>
+    </ul>
+
+    <!-- Section 5: Mice, Keyboards & Pads -->
+    <h2 id="input">5. Mice, Keyboards & Game Controller Pads</h2>
+    <p>
+      B-System translates raw physical scan codes, USB HID reports, and analog game controller inputs into standard BTRON Input Front-End (IFE) events (<code>EV_KEY_DOWN</code>, <code>EV_MOUSE_MOVE</code>, <code>EV_MOUSE_DOWN</code>):
+    </p>
+
+    <table class="api-table">
+      <thead>
+        <tr>
+          <th>Input Hardware</th>
+          <th>Driver Module</th>
+          <th>Physical Interface</th>
+          <th>Event Translation & Capabilities</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>DualShock 2 Pad</strong></td>
+          <td><code>src/drivers/ps2/ps2_pad.c</code></td>
+          <td>PlayStation 2 SIO2 SPI Bus</td>
+          <td>Left analog stick integrates mouse pointer velocity with deadband filtering; D-pad navigates window focus; Cross/Square trigger Primary/Secondary mouse clicks.</td>
+        </tr>
+        <tr>
+          <td><strong>USB Keyboards & Mice</strong></td>
+          <td><code>src/drivers/ps2/ps2_usb.c</code></td>
+          <td>USB 1.1 OHCI / xHCI Boot Protocol</td>
+          <td>Zero-allocation 8-byte keyboard boot reports mapped to TRON keycodes; 3-byte optical mouse packets with relative X/Y coordinate delta integration.</td>
+        </tr>
+        <tr>
+          <td><strong>Raspberry Pi USB Pads</strong></td>
+          <td><code>src/drivers/bcm283x/usb/</code></td>
+          <td>DWC2 OTG / xHCI Multi-axis HID</td>
+          <td>Universal multi-axis analog pads and digital buttons mapped to BTRON window manager gestures and slider volumes.</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <!-- Section 6: Display & GPU Engines -->
+    <h2 id="gpus">6. Display Architecture & GPU Acceleration Engines</h2>
+    <p>
+      The display driver pipeline abstracts varied graphics hardware into a unified <code>GDEV</code> rendering surface for Display Primitives (DP):
+    </p>
+    <ul>
+      <li><strong>Sony Graphics Synthesizer (GS)</strong>: 4 MB ultra-fast eDRAM. Bypasses sub-pixel rasterizer limitations using the hardware <em>Host-to-Local Blitter</em> to stream linear RDRAM into swizzled eDRAM pages with zero CPU overhead.</li>
+      <li><strong>Broadcom VideoCore IV / VI (VC4 / VC6)</strong>: Interrogates the VideoCore GPU via Mailbox Channel 8 property tags to establish pixel format (ARGB8888), double-buffered scanout pitch, and hardware cursor overlays.</li>
+      <li><strong>VESA Linear Framebuffer (LFB)</strong>: Universal 32-bpp linear memory buffer established by UEFI GOP or BIOS INT 10h VBE extensions on modern x86_64 PCs.</li>
+      <li><strong>VirtIO GPU</strong>: Paravirtualized 2D host-accelerated scanout with resource transfers and display flushes.</li>
+    </ul>
+
+    <!-- Section 7: Serial & Null COM Ports -->
+    <h2 id="serial-null">7. Serial Communications & Null COM Conduits</h2>
+    <p>
+      B-System unifies traditional physical serial communication with the classic UNIX spirit of virtual conduits, reimagined with authentic BTRON non-blocking event semantics:
+    </p>
+
+    <h3>Physical Serial Drivers</h3>
+    <p>
+      Supports National Semiconductor <strong>NS16550</strong>, ARM <strong>PL011</strong>, PlayStation 2 <strong>SIO0</strong>, and NEC <strong>8251 USART</strong> under standard naming (<code>com1</code>, <code>com2</code>, <code>sio0</code>, <code>uart0</code>).
+    </p>
+
+    <h3>Virtual Null COM Ports (The BTRON Pipeline)</h3>
+    <p>
+      Registered as <code>null0</code>, <code>null1</code>, <code>vcom0</code>, and <code>vcom1</code>, these virtual drivers provide high-speed, non-blocking inter-process and testing conduits:
+    </p>
+    <ul>
+      <li><strong>Sink Mode (<code>/dev/null</code> Semantics)</strong>: When opened independently, writes to <code>null0</code> discard bytes immediately and return success (<code>E_OK</code>), while reads return 0 bytes (end-of-stream).</li>
+      <li><strong>Paired Loopback Conduit (Cross-Talk PTY)</strong>: When both ends of a pair are opened (e.g. <code>null0</code> $\leftrightarrow$ <code>null1</code>), data written to one side is immediately enqueued into a bounded static circular ringbuffer and wakes the reader on the opposite side via T-Kernel 2.0 message buffers (<code>tk_snd_mbf</code>) and delivers an <code>EV_DEV_READY</code> event.</li>
+      <li><strong>Deterministic Testing</strong>: Allows the B-System shell (<code>clu</code>) and terminal emulator (<code>gterm</code>) to be driven programmatically in automated continuous integration tests without physical serial cabling or pseudo-terminal kernel leaks.</li>
+    </ul>
+
+    <!-- Section 8: Data Structures -->
+    <h2 id="types">8. Data Structures & Descriptors</h2>
 
     <h3>Device Management Descriptor (<code>DEV_DESC</code>)</h3>
-    <p>Defined in <code>include/btron/device.h</code>:</p>
     <pre><code>typedef struct {
     ID    dev_id;       /* Unique 32-bit device identifier */
-    UW    type;         /* Device class (BLOCK, CHAR, NET, DISPLAY) */
-    char  name[32];     /* Hardware device label */
-    UW    flags;        /* Status flags (READONLY, DMA_CAPABLE, READY) */
-    UW    block_size;   /* Native transfer block granularity */
-    UD    total_blocks; /* Total sector capacity */
+    UW    type;         /* Device class: DEV_BLOCK, DEV_CHAR, DEV_NET, DEV_GPU */
+    char  name[32];     /* Hardware device label (e.g. "vda", "com1", "gs0") */
+    UW    flags;        /* DEV_READONLY, DEV_DMA_CAPABLE, DEV_ACTIVE */
+    UW    block_size;   /* Native block transfer granularity (512, 1024, 4096) */
+    UD    total_blocks; /* Total sector or byte capacity */
 } DEV_DESC;</code></pre>
 
-    <!-- Part 4: API Function Reference -->
-    <h2 id="api">4. Device Driver API Reference</h2>
+    <h3>PCIe Device Address Descriptor (<code>DEV_PCI_ADDR</code>)</h3>
+    <pre><code>typedef struct {
+    UB    bus;          /* PCI Bus (0..255) */
+    UB    device;       /* PCI Device (0..31) */
+    UB    function;     /* PCI Function (0..7) */
+    UH    vendor_id;    /* PCI Vendor ID (e.g. 0x1AF4 for VirtIO) */
+    UH    device_id;    /* PCI Device ID */
+    UW    bar_phys[6];  /* Physical base addresses of BAR0..BAR5 */
+    UW    bar_size[6];  /* Memory mapped sizes of BAR0..BAR5 */
+    UB    irq_line;     /* Allocated interrupt vector or MSI index */
+} DEV_PCI_ADDR;</code></pre>
+
+    <!-- Section 9: API Function Reference -->
+    <h2 id="api">9. Device Driver C99 API Reference</h2>
 
     <!-- opn_dev -->
     <div class="api-card">
@@ -143,7 +322,7 @@
         <span class="api-name">opn_dev</span>
         <span class="ret-badge">ID</span>
       </div>
-      <p>Opens a registered hardware device driver by name, acquiring exclusive or shared access.</p>
+      <p>Opens a registered hardware device, virtual conduit, or paravirtualized bus interface by name.</p>
       <div class="api-signature">ID opn_dev(const char *dev_name, UW mode);</div>
     </div>
 
@@ -153,8 +332,8 @@
         <span class="api-name">rea_dev</span>
         <span class="ret-badge">ER</span>
       </div>
-      <p>Performs a synchronous DMA block read from the target device into a kernel-mapped buffer.</p>
-      <div class="api-signature">ER rea_dev(ID dev_id, UD start_block, void *buf, UW num_blocks);</div>
+      <p>Reads sectors, raw byte streams, or input event packets from the target device into a kernel or user buffer.</p>
+      <div class="api-signature">ER rea_dev(ID dev_id, UD start_block, void *buf, UW count);</div>
     </div>
 
     <!-- wri_dev -->
@@ -163,34 +342,66 @@
         <span class="api-name">wri_dev</span>
         <span class="ret-badge">ER</span>
       </div>
-      <p>Writes blocks from memory to non-volatile device storage, flushing write-back caches.</p>
-      <div class="api-signature">ER wri_dev(ID dev_id, UD start_block, const void *buf, UW num_blocks);</div>
+      <p>Writes data blocks or character streams to the device, flushing write-back caches and signaling receiver tasks.</p>
+      <div class="api-signature">ER wri_dev(ID dev_id, UD start_block, const void *buf, UW count);</div>
     </div>
 
-    <!-- Part 5: Canonical Code Examples -->
-    <h2 id="examples">5. Canonical Implementation Examples</h2>
+    <!-- ctl_dev -->
+    <div class="api-card">
+      <div class="api-header">
+        <span class="api-name">ctl_dev</span>
+        <span class="ret-badge">ER</span>
+      </div>
+      <p>Executes an architecture-specific control command (IOCTL), such as changing UART baud rate, setting GPU resolution, or querying PCIe BAR addresses.</p>
+      <div class="api-signature">ER ctl_dev(ID dev_id, UW cmd, void *arg, UW arg_sz);</div>
+    </div>
+
+    <!-- dev_tree_find -->
+    <div class="api-card">
+      <div class="api-header">
+        <span class="api-name">dev_tree_find</span>
+        <span class="ret-badge">ER</span>
+      </div>
+      <p>Queries the active Flattened Device Tree (FDT) or PCIe topology for a node matching a given compatibility string or hardware path.</p>
+      <div class="api-signature">ER dev_tree_find(const char *compatible, DEV_DESC *out_desc);</div>
+    </div>
+
+    <!-- Section 10: Canonical Implementation Examples -->
+    <h2 id="examples">10. Canonical Implementation Examples</h2>
+
+    <h3>Inter-Task Communication via Null COM Conduits</h3>
     <p>
-      The following example demonstrates opening a VirtIO block storage driver and reading master partition metadata:
+      The following example demonstrates opening a paired virtual Null COM port conduit (<code>null0</code> and <code>null1</code>) to stream diagnostic commands between tasks:
     </p>
 
     <pre><code>#include &lt;btron/device.h&gt;
+#include &lt;btron/error.h&gt;
 
-ER read_partition_header(void *out_header) {
-    /* 1. Open primary VirtIO storage block device */
-    ID disk = opn_dev("vda", 0);
-    if (disk &lt; 0) return disk;
+void test_null_com_conduit(void) {
+    /* 1. Open primary and secondary ends of the virtual conduit */
+    ID tx_port = opn_dev("null0", 0);
+    ID rx_port = opn_dev("null1", 0);
+    if (tx_port &lt; 0 || rx_port &lt; 0) return;
 
-    /* 2. Read first 512-byte sector */
-    ER er = rea_dev(disk, 0, out_header, 1);
-    
-    /* 3. Close device handle */
-    cls_dev(disk);
-    return er;
+    /* 2. Write command string into transmit end */
+    const char msg[] = "CLU_TEST_PING\n";
+    wri_dev(tx_port, 0, msg, sizeof(msg));
+
+    /* 3. Read streamed command on receive end */
+    char recv_buf[32];
+    ER er = rea_dev(rx_port, 0, recv_buf, sizeof(recv_buf));
+    if (er == E_OK) {
+        /* Packet verified via zero-allocation ringbuffer */
+    }
+
+    /* 4. Release device ports */
+    cls_dev(tx_port);
+    cls_dev(rx_port);
 }</code></pre>
 
     <footer class="book-footer">
       <div><a href="settings.html">&larr; Previous: Settings Subsystem</a></div>
-      <div><a href="apps.html">Next: Apps Subsystem &rarr;</a></div>
+      <div><a href="fs.html">Next: File System Subsystem &rarr;</a></div>
     </footer>
   </main>
 

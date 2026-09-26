@@ -1,0 +1,463 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>File System – Volume Architecture, B-FS & Real-Body Records | B-Book</title>
+  <meta name="description" content="Technical specification and C99 API manual for the B-System BTRON File System: Chokanji B-right/V FS, B-FS V1 block allocation, B-FS V2 redo journaling, and default system volumes (SYS, ANDERS, CHOKANJI, NEW-V2).">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="b-book.css">
+</head>
+<body>
+
+  <nav class="book-global-nav" aria-label="Site navigation">
+    <div class="book-global-nav-container">
+      <a href="../index.html" class="book-global-logo"><img width="48" src="https://n2o.dev/img/synrc.svg" alt="Synrc Logo"></a>
+      <button class="book-nav-toggle" aria-label="Toggle navigation" aria-expanded="false" onclick="const links = this.nextElementSibling; const sidebar = document.querySelector('.book-sidebar'); const open = links.classList.toggle('open'); sidebar.classList.toggle('open', open); this.classList.toggle('open', open); this.setAttribute('aria-expanded', open);">
+        <span class="hamburger"></span>
+      </button>
+      <ul class="book-global-links">
+        <li><a href="../index.html">VirtIO</a></li>
+        <li><a href="../b-system.html">B-System</a></li>
+        <li><a href="index.html" class="active">B-Book</a></li>
+        <li><a href="../conformance.html">B-Spec</a></li>
+        <li><a href="../mobile.html">FOMA</a></li>
+        <li><a href="../releases.html">Releases</a></li>
+        <li><a href="https://github.com/bitedits/btron">GitHub</a></li>
+      </ul>
+    </div>
+  </nav>
+
+  <!-- Navigation Sidebar -->
+  <nav class="book-sidebar">
+    <div class="sidebar-brand">
+      <div class="brand-title">B-Book <span class="badge">Rev 3.20</span></div>
+      <div class="brand-sub">File System Subsystem Reference</div>
+    </div>
+    <div class="sidebar-nav">
+      <div class="nav-heading">Overview</div>
+      <a href="index.html" class="nav-link">Master Index</a>
+      
+      <div class="nav-heading">Core Subsystems</div>
+      <a href="kernel.html" class="nav-link">Kernel (T-Kernel 2.0)</a>
+      <a href="cores.html" class="nav-link">Cores (Kernel & SMP)</a>
+      <a href="graphics.html" class="nav-link">Graphics (DP & 2D)</a>
+      <a href="tip.html" class="nav-link">Tip (Input & IME)</a>
+      <a href="vobject.html" class="nav-link">VObject (Hyper-Data)</a>
+      <a href="window.html" class="nav-link">Window (WM & Menus)</a>
+
+      <div class="nav-heading">Extended Subsystems</div>
+      <a href="desktop.html" class="nav-link">Desktop (Shell & Mobile)</a>
+      <a href="hmi.html" class="nav-link">HMI (Human-Machine Interface)</a>
+      <a href="font.html" class="nav-link">Font (Typography Engine)</a>
+      <a href="settings.html" class="nav-link">Settings (Control Panel)</a>
+      <a href="drivers.html" class="nav-link">Drivers (Hardware & VirtIO)</a>
+      <a href="fs.html" class="nav-link active">File System (B-FS & Volumes)</a>
+      <div class="nav-sublinks">
+        <a href="#arch" class="nav-sublink">Storage Architecture</a>
+        <a href="#generations" class="nav-sublink">Three FS Generations</a>
+        <a href="#chokanji" class="nav-sublink">1. Chokanji (B-right/V FS)</a>
+        <a href="#v1" class="nav-sublink">2. B-FS V1 (FAT-like Block FS)</a>
+        <a href="#v2" class="nav-sublink">3. B-FS V2 (Journaling BeFS)</a>
+        <a href="#volumes" class="nav-sublink">Default Shipped Volumes</a>
+        <a href="#records" class="nav-sublink">Real-Body Record Model</a>
+        <a href="#api" class="nav-sublink">API Function Reference</a>
+        <a href="#examples" class="nav-sublink">Implementation Examples</a>
+      </div>
+      <a href="apps.html" class="nav-link">Apps (Application Suite)</a>
+    </div>
+  </nav>
+
+  <!-- Main Content Canvas -->
+  <main class="book-content">
+    <header class="book-header">
+      <div class="breadcrumb">
+        <a href="index.html">B-Book</a> / <span>File System</span>
+      </div>
+      <h1 class="page-title">File System: B-FS, Chokanji & Volume Architecture</h1>
+      <p class="page-lead">
+        Comprehensive C99 technical specification and system programming reference for the B-System volume layer: multi-format support spanning vintage Chokanji (B-right/V 4.02), B-FS V1 block allocation, modern B-FS V2 write-ahead redo journaling (WAL), and the four standard system volumes (<code>/SYS</code>, <code>/ANDERS</code>, <code>/CHOKANJI</code>, <code>/NEW-V2</code>).
+      </p>
+    </header>
+
+    <div class="callout callout-info">
+      <div class="callout-title">Architectural Scope & Tenets</div>
+      The BTRON File System departs fundamentally from UNIX linear byte streams. A BTRON file is an ordered collection of typed <strong>Real-Body records</strong> (<code>RT_LINK</code>, <code>RT_TADDATA</code>, <code>RT_PROG</code>, <code>RT_VECTOR</code>). Adhering to <strong>NASA JPL Rule 3</strong>, the storage subsystem operates without post-boot dynamic heap allocation, providing deterministic I/O across bare-metal workstations, embedded microcontrollers, POSIX emulators, and paravirtualized cloud hypervisors.
+    </div>
+
+    <!-- Section 1: Storage Architecture -->
+    <h2 id="arch">1. Layered Storage Architecture</h2>
+    <p>
+      Storage in B-System is partitioned into four decoupled layers, isolating high-level TAD hyper-data semantics from physical bus controllers:
+    </p>
+
+    <pre><code>┌────────────────────────────────────────────────────────────────────────┐
+│                        Level 3: Application & VFS                      │
+│   clu (Shell)  ·  tad_browser  ·  t_editor  ·  b_drivesetup (Volumes)   │
+│   [ APIs: opn_fil, cls_fil, rea_rec, wri_rec, cre_lnk, fil_set_vectors ]│
+├────────────────────────────────────────────────────────────────────────┤
+│                   Level 2: Inode, Data Stream & B+Tree                 │
+│   • B-FS V2 512B Inode (bfs_inode_v2) with inline small_data / RT_VEC   │
+│   • 12 Direct Runs, 1 Indirect Run, 1 Double-Indirect Block Run         │
+│   • Parameterized B+Tree: Directory Index, Attribute Index, ANN HNSW   │
+├────────────────────────────────────────────────────────────────────────┤
+│                 Level 1: Volume, Allocation & Journaling               │
+│   • Dual-Anchor Superblock: 128B VolumeHeaderV2 (Blk 0) + 512B BFS1    │
+│   • Block Allocators: 64-bit Allocation Groups (AGs), Buddy & Bitmaps  │
+│   • Redo Journaling (WAL): Circular log, transaction commit, crash fix │
+├────────────────────────────────────────────────────────────────────────┤
+│                 Level 0: Block Device Layer (BlkDev)                   │
+│   • blk_mem (ROM/RAM disk)  ·  blk_file (POSIX host image)             │
+│   • blk_qcow2 (Chokanji VM) ·  blk_part (MBR 0x13/0x61/0x62 & GPT)     │
+│   • Physical hardware: VirtIO-blk, AHCI SATA, NVMe, SD/MMC, PS2 IOP    │
+└────────────────────────────────────────────────────────────────────────┘</code></pre>
+
+    <!-- Section 2: Three Filesystem Generations -->
+    <h2 id="generations">2. The Three Filesystem Generations</h2>
+    <p>
+      B-System provides unified driver support for three distinct filesystem formats, ensuring seamless backward interoperability with thirty years of TRON hardware alongside next-generation transactional capabilities:
+    </p>
+
+    <table class="api-table">
+      <thead>
+        <tr>
+          <th>Filesystem Generation</th>
+          <th>Superblock Magic</th>
+          <th>FS Type ID</th>
+          <th>MBR / GPT Partition Code</th>
+          <th>Primary Operational Characteristics</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>Chokanji (B-right/V FS)</strong></td>
+          <td><code>0x52FE</code> (LE)</td>
+          <td><code>0x6402</code></td>
+          <td>MBR <code>0x13</code><br>GPT: <code>706D636F-7270-4254-524E-000000000001</code></td>
+          <td>Historical Personal Media Corporation (PMC) B-right/V 4.02 format. Quasi little-endian 32-bit layout, 1024B blocks, 4B FID descriptors, 40B short-name hash.</td>
+        </tr>
+        <tr>
+          <td><strong>B-FS V1 (Standard BTRON3)</strong></td>
+          <td><code>0x42FE</code> (BE)</td>
+          <td><code>0x6400</code></td>
+          <td>MBR <code>0x61</code> (signed: <code>0xB3</code>, enc: <code>0xE1</code>)<br>GPT: <code>8B684653-BTRN-3100-BEEF-000000000001</code></td>
+          <td>Cleanroom standard BTRON3 3.20 format. Big-endian on-disk fields, 1024B blocks, flat allocation bitmap (FAT-like predictability), 192B FileHeader, 16B record indexes.</td>
+        </tr>
+        <tr>
+          <td><strong>B-FS V2 (Journaled BFS)</strong></td>
+          <td><code>0x62FE</code> + <code>'BFS1'</code></td>
+          <td><code>0x6403</code></td>
+          <td>MBR <code>0x62</code> (signed: <code>0xB5</code>, enc: <code>0xE2</code>)<br>GPT: <code>8B684653-BTRN-3200-BEEF-000000000002</code></td>
+          <td>Modern 64-bit filesystem inspired by BeOS/Haiku BeFS/BFS. Dual-anchor superblocks, write-ahead redo logging (WAL), 64-bit Allocation Groups, parameterized B+Tree, native vector storage.</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <!-- Subsection: Chokanji -->
+    <h3 id="chokanji">2.1 Chokanji (B-right/V 4.02 Filesystem)</h3>
+    <p>
+      The <strong>Chokanji</strong> filesystem format (represented by <code>FS_TYPE_BRIGHTV</code>, code <code>0x6402</code>) originates from Personal Media Corporation's commercial B-right/V operating system for x86 PCs. While standard TRON specification documents specify big-endian fields, PMC adapted the on-disk structures to little-endian byte ordering (magic <code>0x52FE</code>) for native performance on Intel 80386/80486 processors.
+    </p>
+    <ul>
+      <li><strong>Block Organization</strong>: 1024-byte logical blocks. Block 0 contains the 128-byte System Header.</li>
+      <li><strong>FID Table</strong>: Indexed 4-byte entries. The high 3 bytes define the logical block address of the file's header block; the lower 1 byte stores the reference link count (1 to 255). FID 0 is reserved for the root folder.</li>
+      <li><strong>Short-Name Hash Table</strong>: A 4-byte hash per FID that accelerates file path lookups. File names are packed into ten 32-bit words (up to 40 UTF-8 / TRON-Code bytes) and hashed via sequential XOR and 1-bit right rotation:
+        <pre><code>hash = 0;
+for (int i = 0; i &lt; 10; i++) {
+    hash ^= NAME[i];
+    hash = (hash &gt;&gt; 1) | (hash &lt;&lt; 31); /* Rotate Right 1 bit */
+}</code></pre>
+      </li>
+      <li><strong>Allocation Bitmaps</strong>: Dual bitmaps—a <em>Used-Block Bitmap</em> (0 = free, 1 = allocated) and a <em>Bad-Block Bitmap</em> for defective media tracking.</li>
+      <li><strong>Interoperability</strong>: B-System mounts raw PMC hard disk images and QEMU copy-on-write files (<code>hda.qcow2</code>) transparently into the unified VFS at <code>/CHOKANJI</code>.</li>
+    </ul>
+
+    <!-- Subsection: B-FS V1 -->
+    <h3 id="v1">2.2 B-FS V1 (Standard FAT-like Block Filesystem)</h3>
+    <p>
+      <strong>B-FS V1</strong> (<code>FS_TYPE_STD</code>, code <code>0x6400</code>) is the reference cleanroom implementation of the canonical BTRON3 3.20 specification. It functions as a lightweight, highly deterministic block filesystem with architectural simplicity comparable to MS-DOS FAT, but enriched with typed Real-Body metadata and extent fragment tables:
+    </p>
+    <ul>
+      <li><strong>Endianness</strong>: Big-endian (<code>VOL_MAGIC_BE = 0x42FE</code>).</li>
+      <li><strong>Deterministic Block Allocation</strong>: Operates on flat 1024-byte logical blocks. A single allocation bitmap maps all blocks, eliminating non-deterministic tree balancing overhead during embedded writes.</li>
+      <li><strong>File Header (192 bytes)</strong>: Every Real Body begins with a 192-byte header block defining permissions (<code>FFLG_PERM</code>, <code>FFLG_WPROTECT</code>, <code>FFLG_READ</code>, <code>FFLG_WRITE</code>, <code>FFLG_EXEC</code>), modification timestamps, 40-byte UTF-8 file name, and an extent table:
+        <pre><code>typedef struct __attribute__((packed)) {
+    UW   start_blk;   /* Starting logical block address */
+    UH   num_blks;    /* Number of contiguous blocks     */
+} FragEntry;          /* Max 32 fragments per Real Body */</code></pre>
+      </li>
+      <li><strong>Level 0 Record Index</strong>: Following the 192-byte FileHeader within block 0 of the file, up to 40 <code>RecordIndex</code> entries (16 bytes each) index the ordered Real-Body records. Files exceeding 40 records allocate indirect index blocks.</li>
+      <li><strong>Suitability</strong>: Ideal for microcontroller flash memory, RAM disks, boot ROMs, and real-time sensor logging where execution time bounds must be mathematically proven.</li>
+    </ul>
+
+    <!-- Subsection: B-FS V2 -->
+    <h3 id="v2">2.3 B-FS V2 (Modern Redo-Journaled BeFS Engine)</h3>
+    <p>
+      <strong>B-FS V2</strong> (<code>FS_TYPE_MODERN</code>, code <code>0x6403</code>) combines the high-performance metadata capabilities of Haiku's BeFS with BTRON's native record model and modern artificial intelligence workloads:
+    </p>
+    
+    <div class="callout callout-info">
+      <div class="callout-title">Dual-Anchor Superblock Architecture</div>
+      To guarantee 100% backward compatibility with legacy BTRON boot ROMs while providing full 64-bit capability, B-FS V2 implements a <strong>Dual-Anchor Superblock</strong>:
+      <ul>
+        <li><strong>Block 0 (128 bytes)</strong>: <code>VolumeHeaderV2</code> (Magic <code>0x62FE</code>). Classic bootloaders read this block to determine basic volume geometry, root FID, and feature flags without faulting.</li>
+        <li><strong>Block 1 (512 bytes)</strong>: <code>bfs_super_block_v2</code> (Magic <code>'BFS1'</code> / <code>0x42465331</code>). Modern B-System kernels read this block to activate 64-bit Allocation Groups, journal bounds, and B+Tree roots.</li>
+      </ul>
+    </div>
+
+    <h4>Key Technical Innovations in B-FS V2:</h4>
+    <ul>
+      <li><strong>64-bit Block Runs & FIDs</strong>:
+        <pre><code>typedef struct __attribute__((packed)) {
+    int64_t  allocation_group; /* 48-bit AG index */
+    uint16_t start;            /* 16-bit block offset in AG */
+    uint16_t length;           /* Contiguous block count */
+} block_run_64;
+typedef uint64_t fid64_t;     /* (AG &lt;&lt; 16) | start */</code></pre>
+      </li>
+      <li><strong>Write-Ahead Redo Journaling (WAL)</strong>: All metadata modifications (inode updates, B+Tree balancing, block allocations) are written sequentially to a circular journal buffer (<code>log_blocks</code>) before touching on-disk structures. On reboot after power failure, the journal replayer scans between <code>log_start</code> and <code>log_end</code>, restoring disk consistency in milliseconds without full-volume scans.</li>
+      <li><strong>512-Byte Inode with Inline Small Data</strong>:
+        Every file inode (<code>bfs_inode_v2</code>) contains 12 direct block runs, 1 indirect run, 1 double-indirect run, and an inline <code>small_data</code> region. Small records (such as TAD text clips or vector embeddings) are embedded directly within the inode sector, requiring zero additional disk reads.</li>
+      <li><strong>Parameterized B+Tree Engine</strong>: Supports selectable node page sizes (1024, 2048, 4096, 8192 bytes) with B-Link concurrency control for million-record directories and fast attribute indexes.</li>
+      <li><strong>Native Vector Storage (<code>RT_VECTOR</code>)</strong>: Dedicated support for dense floating-point embedding vectors, enabling nearest-neighbor (ANN) similarity queries across TAD documents directly at the filesystem layer.</li>
+    </ul>
+
+    <!-- Section 3: Default Shipped Volumes -->
+    <h2 id="volumes">3. Default Shipped Volumes in B-System OS</h2>
+    <p>
+      Out of the box, B-System boots with and manages four standard volumes, each serving a tailored role within the operating system:
+    </p>
+
+    <table class="api-table">
+      <thead>
+        <tr>
+          <th>Volume Name</th>
+          <th>Mount Point</th>
+          <th>Filesystem Type</th>
+          <th>Default Backing Store</th>
+          <th>Operational Role & Shipped Content</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>SYS</strong></td>
+          <td><code>/SYS</code></td>
+          <td>B-FS V1 (Standard)</td>
+          <td><code>btron_sys.vol</code><br>(or RAM disk <code>mem0</code>)</td>
+          <td>
+            <strong>System Root & OS Core</strong><br>
+            Houses the core operating system Real-Bodies, system fonts (JIS X 0208 / 0213 bitmap planes, Classical Tibetan glyph tables), system configuration dictionaries, shell utilities (<code>clu</code>), and Tier-1 system applications (<code>Workbench</code>, <code>Terminal</code>, <code>Editor</code>, <code>Cabinet</code>).
+          </td>
+        </tr>
+        <tr>
+          <td><strong>ANDERS</strong></td>
+          <td><code>/ANDERS</code></td>
+          <td>B-FS V1 (Standard)</td>
+          <td><code>btron_anders.vol</code><br>(or RAM disk <code>mem1</code>)</td>
+          <td>
+            <strong>User Workspace & Tooling</strong><br>
+            The personal and developer workstation volume. Contains Anders' active programming workspace, C source trees, experimental TAD hyper-documents, personalized desktop profiles, and compiler toolchains. Mounted read-write alongside <code>/SYS</code>.
+          </td>
+        </tr>
+        <tr>
+          <td><strong>CHOKANJI</strong></td>
+          <td><code>/CHOKANJI</code></td>
+          <td>Chokanji (B-right/V 4.02)</td>
+          <td><code>hda.qcow2</code><br>(PMC BTRON image)</td>
+          <td>
+            <strong>Historical Compatibility & Preservation</strong><br>
+            Contains authentic Personal Media Corporation (PMC) B-right/V 4.x software installations, original Japanese TRON-Code character dictionaries, legacy TAD documents, and vintage applications. Preserves 100% binary compatibility with physical BTRON disks.
+          </td>
+        </tr>
+        <tr>
+          <td><strong>NEW-V2</strong></td>
+          <td><code>/NEW-V2</code></td>
+          <td>B-FS V2 (Journaling)</td>
+          <td><code>btron_v2.vol</code><br>(GPT Partition)</td>
+          <td>
+            <strong>Modern High-Assurance Storage</strong><br>
+            The next-generation transactional volume. Pre-configured with write-ahead redo journaling (WAL), 4096-byte B+Tree indexes, and native vector embedding storage (<code>RT_VECTOR</code>). Shipped for mission-critical databases, multimedia streams, and crash-resilient document archives.
+          </td>
+        </tr>
+      </tbody>
+    </table>
+
+    <!-- Section 4: Real-Body Record Model -->
+    <h2 id="records">4. Real-Body & Record Architecture</h2>
+    <p>
+      In BTRON, a file is structured as a typed sequence of records rather than an unformatted byte stream. Each record is identified by a 16-bit type tag:
+    </p>
+
+    <pre><code>┌────────────────────────────────────────────────────────────────────────┐
+│                        Real Body (File on Disk)                        │
+│                                                                        │
+│   [ FileHeader: 192 B ]                                                │
+│   ┌────────────────────────┬───────────────────────────────────────┐   │
+│   │ Record 1 (RT_LINK)     │ Virtual Object Fusen Link Descriptor  │   │
+│   ├────────────────────────┼───────────────────────────────────────┤   │
+│   │ Record 2 (RT_TADDATA)  │ TAD Segment: Formatted Multilingual   │   │
+│   ├────────────────────────┼───────────────────────────────────────┤   │
+│   │ Record 3 (RT_VECTOR)   │ 768-dim Embedding Vector for AI Search│   │
+│   ├────────────────────────┼───────────────────────────────────────┤   │
+│   │ Record 4 (RT_PROG)     │ Executable Machine Code / Bytecode    │   │
+│   └────────────────────────┴───────────────────────────────────────┘   │
+└────────────────────────────────────────────────────────────────────────┘</code></pre>
+
+    <table class="api-table">
+      <thead>
+        <tr>
+          <th>Record Type</th>
+          <th>Value</th>
+          <th>Payload Structure</th>
+          <th>Semantic Description</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><code>RT_LINK</code></td>
+          <td><code>0x0001</code></td>
+          <td><code>FS_LINK</code> (Target FID + Attributes)</td>
+          <td>Virtual Object (Fusen) link pointing to another Real Body.</td>
+        </tr>
+        <tr>
+          <td><code>RT_TADDATA</code></td>
+          <td><code>0x0002</code></td>
+          <td>Binary TRON Application Databus (TAD)</td>
+          <td>Rich multilingual text, geometric shapes, fonts, and inline Fusen.</td>
+        </tr>
+        <tr>
+          <td><code>RT_PROG</code></td>
+          <td><code>0x0003</code></td>
+          <td>ELF / Raw Executable Image</td>
+          <td>Executable application binary launched directly from the shell or desktop.</td>
+        </tr>
+        <tr>
+          <td><code>RT_VECTOR</code></td>
+          <td><code>0x0004</code></td>
+          <td>IEEE 754 float32 array + metadata</td>
+          <td>High-dimensional dense semantic embedding vector for AI indexing.</td>
+        </tr>
+        <tr>
+          <td><code>RT_USER</code></td>
+          <td><code>0x8000+</code></td>
+          <td>Application-defined payload</td>
+          <td>Private application-specific data segments.</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <!-- Section 5: API Function Reference -->
+    <h2 id="api">5. File System C99 API Reference</h2>
+
+    <!-- vol_mount -->
+    <div class="api-card">
+      <div class="api-header">
+        <span class="api-name">vol_mount</span>
+        <span class="ret-badge">Volume *</span>
+      </div>
+      <p>Probes a block device, detects its filesystem generation (Chokanji, B-FS V1, or B-FS V2), validates superblocks, and attaches it into the active volume registry.</p>
+      <div class="api-signature">Volume *vol_mount(BlkDev *dev);</div>
+    </div>
+
+    <!-- vol_format -->
+    <div class="api-card">
+      <div class="api-header">
+        <span class="api-name">vol_format</span>
+        <span class="ret-badge">int</span>
+      </div>
+      <p>Formats a block device with a clean standard B-FS V1 volume, writing system headers, initial allocation bitmaps, root FID 0, and short-name tables.</p>
+      <div class="api-signature">int vol_format(BlkDev *dev, UW nfmax, UW nlb, const char *name);</div>
+    </div>
+
+    <!-- vol_format_v2 -->
+    <div class="api-card">
+      <div class="api-header">
+        <span class="api-name">vol_format_v2</span>
+        <span class="ret-badge">int</span>
+      </div>
+      <p>Formats a block device with a high-performance modern B-FS V2 journaled filesystem, configuring dual-anchor superblocks, allocation groups, journal size, and vector indexes.</p>
+      <div class="api-signature">int vol_format_v2(BlkDev *dev, UW nfmax, UW nlb, const char *name, UW block_size, UW btree_size, UW journal_blocks, UW features);</div>
+    </div>
+
+    <!-- opn_fil -->
+    <div class="api-card">
+      <div class="api-header">
+        <span class="api-name">opn_fil</span>
+        <span class="ret-badge">FID</span>
+      </div>
+      <p>Resolves a path across mounted volumes (e.g. <code>/SYS/FONTS/KANJI16</code> or <code>/ANDERS/PROJECT.TAD</code>) and returns an active File ID handle.</p>
+      <div class="api-signature">FID opn_fil(const char *path, UW mode);</div>
+    </div>
+
+    <!-- rea_rec -->
+    <div class="api-card">
+      <div class="api-header">
+        <span class="api-name">rea_rec</span>
+        <span class="ret-badge">ER</span>
+      </div>
+      <p>Reads an ordered typed record from an open Real Body into a user-provided buffer.</p>
+      <div class="api-signature">ER rea_rec(FID fid, UH rec_type, UW rec_idx, void *buf, UW buf_sz, UW *out_actual);</div>
+    </div>
+
+    <!-- wri_rec -->
+    <div class="api-card">
+      <div class="api-header">
+        <span class="api-name">wri_rec</span>
+        <span class="ret-badge">ER</span>
+      </div>
+      <p>Appends or overwrites a typed record within a Real Body, updating index blocks and committing journal transactions.</p>
+      <div class="api-signature">ER wri_rec(FID fid, UH rec_type, UW rec_idx, const void *data, UW data_sz);</div>
+    </div>
+
+    <!-- Section 6: Canonical Implementation Examples -->
+    <h2 id="examples">6. Canonical Implementation Examples</h2>
+
+    <h3>Mounting Volumes and Reading TAD Records</h3>
+    <p>
+      The following example illustrates mounting the user workspace volume <code>/ANDERS</code>, opening a document, and streaming its TAD payload:
+    </p>
+
+    <pre><code>#include &lt;btron/fs/vol_api.h&gt;
+#include &lt;btron/file.h&gt;
+#include &lt;btron/fs/fs_types.h&gt;
+
+void inspect_user_document(void) {
+    /* 1. Open backing storage file for user volume */
+    BlkDev *dev = blk_file_create("btron_anders.vol", 0, 0);
+    if (!dev) return;
+
+    /* 2. Mount volume into B-System VFS */
+    Volume *v = vol_mount(dev);
+    if (!v) {
+        blk_destroy(dev);
+        return;
+    }
+
+    /* 3. Open Real Body by path */
+    FID fid = opn_fil("/ANDERS/NOTES.TAD", FFLG_READ);
+    if (fid != FID_INVALID) {
+        UB buffer[1024];
+        UW actual = 0;
+
+        /* 4. Read primary TAD record (RT_TADDATA) */
+        ER err = rea_rec(fid, RT_TADDATA, 0, buffer, sizeof(buffer), &amp;actual);
+        if (err == E_OK) {
+            /* Process TAD text and graphic segments */
+        }
+        cls_fil(fid);
+    }
+
+    /* 5. Unmount volume when shutting down */
+    vol_umount(v);
+}</code></pre>
+
+    <footer class="book-footer">
+      <div><a href="drivers.html">&larr; Previous: Drivers Subsystem</a></div>
+      <div><a href="apps.html">Next: Apps Subsystem &rarr;</a></div>
+    </footer>
+  </main>
+
+</body>
+</html>

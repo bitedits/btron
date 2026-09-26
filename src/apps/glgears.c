@@ -309,7 +309,11 @@ WND* open_glgears_window(void) {
     s_glgears_tskid = cre_tsk(&ctsk);
     if (s_glgears_tskid > 0) {
         sta_tsk(s_glgears_tskid, 0);
+#if defined(BTRON_UEFI_TARGET)
         uart_puts_raw("[GL] glgears: animation task started (Local APIC timer scheduler)\n");
+#else
+        uart_puts_raw("[GL] glgears: animation task started (VirtIO GPU OpenGL)\n");
+#endif
     }
 
     uart_puts_raw("[GL] glgears window open\n");

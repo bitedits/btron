@@ -5,41 +5,62 @@
  */
 
 #include "gl_dispatch.h"
+#include "backend_virgl.h"
+#if !defined(BTRON_QEMU_TARGET)
 #include "backend_tinygl.h"
+#endif
 #include <btron/btron.h>
 
 extern void uart_puts_raw(const char *s);
 
 /* Active backend — set at gl_init() time */
 gl_ops_t *g_gl = NULL;
+static GL_BACKEND s_active_backend = GL_BACKEND_TINYGL;
 
 void gl_init(GL_BACKEND backend, int width, int height, void *pixel_buf) {
+    s_active_backend = backend;
     switch (backend) {
+
+    case GL_BACKEND_VIRGL:
+        virgl_backend_init(width, height, pixel_buf);
+        g_gl = &g_virgl_ops;
+        break;
 
     case GL_BACKEND_TINYGL:
     default:
+#if !defined(BTRON_QEMU_TARGET)
         tinygl_backend_init(width, height, pixel_buf);
         g_gl = &g_tinygl_ops;
-        break;
-
-    /* Phase 2: virgl stub */
-    case GL_BACKEND_VIRGL:
-        uart_puts_raw("[GL] virgl backend not yet implemented\n");
-        /* fall back to TinyGL so the system stays usable */
-        tinygl_backend_init(width, height, pixel_buf);
-        g_gl = &g_tinygl_ops;
+#else
+        virgl_backend_init(width, height, pixel_buf);
+        g_gl = &g_virgl_ops;
+#endif
         break;
     }
 }
 
 void gl_resize(int width, int height, void *pixel_buf) {
     if (!g_gl) return;
-    /* Only TinyGL needs explicit ZBuffer resize notification */
-    tinygl_backend_resize(width, height, pixel_buf);
+    if (s_active_backend == GL_BACKEND_VIRGL) {
+        virgl_backend_resize(width, height, pixel_buf);
+    }
+#if !defined(BTRON_QEMU_TARGET)
+    else if (s_active_backend == GL_BACKEND_TINYGL) {
+        tinygl_backend_resize(width, height, pixel_buf);
+    }
+#endif
 }
 
 void gl_shutdown(void) {
     if (!g_gl) return;
-    tinygl_backend_shutdown();
+    if (s_active_backend == GL_BACKEND_VIRGL) {
+        virgl_backend_shutdown();
+    }
+#if !defined(BTRON_QEMU_TARGET)
+    else if (s_active_backend == GL_BACKEND_TINYGL) {
+        tinygl_backend_shutdown();
+    }
+#endif
     g_gl = NULL;
 }
+

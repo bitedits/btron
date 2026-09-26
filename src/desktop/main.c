@@ -21,6 +21,7 @@ extern WND* open_t_editor_window(void);
 extern WND* open_gterm_window(void);
 extern WND* open_audio_player_window(void);
 extern WND* launch_beos_chat(void);
+extern WND* open_glgears_window(void);
 
 extern BOOL init_sdl_backend(H width, H height, const char *title);
 extern void flush_gdev_to_sdl(GDEV *dev);
@@ -117,6 +118,9 @@ int main(int argc, char **argv) {
     open_clarity_window();
     open_t_editor_window();
     open_gterm_window();
+#if defined(BTRON_QEMU_TARGET)
+    open_glgears_window();
+#endif
 
     while (running) {
         /* Poll and process all pending system events */

@@ -10,6 +10,7 @@
 #include <string.h>
 #include <btron/fs/vol_api.h>
 #include <btron/fs/block.h>
+#include <sys/time.h>
 
 #define MAX_TK_TASKS 64
 #define MAX_TK_SEMS  64
@@ -211,9 +212,17 @@ ER del_sem(ID semid) {
     return E_OK;
 }
 
+void uart_puts_raw(const char *str) {
+    if (!str) return;
+    fputs(str, stdout);
+    fflush(stdout);
+}
+
 ER get_tim(SYSTIME *p_time) {
     if (!p_time) return E_PAR;
-    *p_time = ++g_tk_system_ticks;
+    struct timeval tv;
+    gettimeofday(&tv, NULL);
+    *p_time = (SYSTIME)tv.tv_sec * 1000 + (tv.tv_usec / 1000);
     return E_OK;
 }
 

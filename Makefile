@@ -31,7 +31,7 @@
 #   debug-gdb     QEMU + GDB stub on Pi 2B
 
 CC ?= gcc
-CFLAGS ?= -O2 -Wall -Wextra -std=c99 -Iinclude -Iinclude/drivers -Isrc/kernel -Isrc/cores
+CFLAGS ?= -O2 -Wall -Wextra -std=c99 -Iinclude -Iinclude/gl -Isrc/gl -Iinclude/drivers -Isrc/kernel -Isrc/cores
 
 .PHONY: all posix qemu kernel tkernel sakamura foma uefi pc98 arm-elf arm64-elf m68k ps2 mips \
         html2tad book2tad tad_bin test test-kernel test-yoko test-yoko4 test-m68k test-mips test-ps2 test-foma test-foma-ui foma-screens \
@@ -214,7 +214,14 @@ QEMU_STARTUP = src/cores/core_virtio.c
 QEMU_SRCS    = $(QEMU_STARTUP)          \
                src/drivers/virtio/virtio.c \
                src/cores/core_init.c   \
+               $(VIRGL_SRCS)           \
                $(COMMON_SRCS)
+
+VIRGL_SRCS = \
+    src/gl/gl_dispatch.c \
+    src/gl/egl_surface.c \
+    src/gl/backend_virgl.c \
+    src/apps/glgears.c
 
 TINYGL_SRCS = \
     src/gl/tinygl/api.c \
@@ -247,6 +254,7 @@ GL_SRCS = \
     src/gl/gl_dispatch.c \
     src/gl/egl_surface.c \
     src/gl/backend_tinygl.c \
+    src/gl/backend_virgl.c \
     src/apps/glgears.c
 
 # ── X86_64 / EMT64 UEFI build (Target 4) ────────────────────────

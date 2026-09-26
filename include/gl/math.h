@@ -1,3 +1,6 @@
+#if defined(__STDC_HOSTED__) && __STDC_HOSTED__ == 1 && !defined(BTRON_UEFI_TARGET)
+#include_next <math.h>
+#else
 #ifndef _GL_MATH_H_
 #define _GL_MATH_H_
 
@@ -63,3 +66,5 @@ static inline double pow(double x, double y) {
 }
 
 #endif /* _GL_MATH_H_ */
+#endif /* HOSTED */
+

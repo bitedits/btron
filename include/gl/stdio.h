@@ -1,5 +1,6 @@
-#ifndef _GL_STDIO_H_
-#define _GL_STDIO_H_
+#if defined(__STDC_HOSTED__) && __STDC_HOSTED__ == 1 && !defined(BTRON_UEFI_TARGET)
+#include_next <stdio.h>
+#else
 
 #include <libstr.h>
 #include <stdarg.h>
@@ -23,4 +24,5 @@ extern int tkl_snprintf(char *str, size_t size, const char *format, ...);
 #define snprintf        tkl_snprintf
 #define vsnprintf       tkl_vsnprintf
 
-#endif /* _GL_STDIO_H_ */
+#endif /* HOSTED */
+

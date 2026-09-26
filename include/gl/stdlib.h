@@ -1,3 +1,6 @@
+#if defined(__STDC_HOSTED__) && __STDC_HOSTED__ == 1 && !defined(BTRON_UEFI_TARGET)
+#include_next <stdlib.h>
+#else
 #ifndef _GL_STDLIB_H_
 #define _GL_STDLIB_H_
 
@@ -14,3 +17,5 @@ static inline void  exit(int status) { (void)status; }
 static inline void  abort(void) { for (;;) { __asm__ volatile("hlt"); } }
 
 #endif /* _GL_STDLIB_H_ */
+#endif /* HOSTED */
+

@@ -76,7 +76,7 @@ volatile uint32_t  g_cpus_online = 4;
 static uint8_t g_ap_stacks[BTRON_SMP_MAX_CPUS][BTRON_SMP_AP_STACK_SIZE]
     __attribute__((aligned(16)));
 
-static volatile uint32_t *s_lapic = (volatile uint32_t *)(uintptr_t)BTRON_LAPIC_DEFAULT_BASE;
+volatile uint32_t *s_lapic = (volatile uint32_t *)(uintptr_t)BTRON_LAPIC_DEFAULT_BASE;
 
 static inline void btron_smp_pause(void) {
 #if defined(__x86_64__) || defined(__i386__)
@@ -253,8 +253,8 @@ __attribute__((naked)) static void btron_ctx_switch(void **old_sp, void *new_sp)
         "pushq %r13\n\t"
         "pushq %r14\n\t"
         "pushq %r15\n\t"
-        "movq %%rsp, (%rdi)\n\t"
-        "movq %rsi, %%rsp\n\t"
+        "movq %rsp, (%rdi)\n\t"
+        "movq %rsi, %rsp\n\t"
         "popq %r15\n\t"
         "popq %r14\n\t"
         "popq %r13\n\t"
@@ -264,6 +264,23 @@ __attribute__((naked)) static void btron_ctx_switch(void **old_sp, void *new_sp)
         "ret\n\t"
     );
 }
+#elif defined(__i386__)
+__attribute__((naked, regparm(2))) static void btron_ctx_switch(void **old_sp, void *new_sp) {
+    __asm__ volatile(
+        "pushl %ebx\n\t"
+        "pushl %esi\n\t"
+        "pushl %edi\n\t"
+        "pushl %ebp\n\t"
+        "movl %esp, (%eax)\n\t"
+        "movl %edx, %esp\n\t"
+        "popl %ebp\n\t"
+        "popl %edi\n\t"
+        "popl %esi\n\t"
+        "popl %ebx\n\t"
+        "ret\n\t"
+    );
+}
+#endif
 
 static void btron_task_trampoline(void) {
     int idx = s_current_task_idx;
@@ -272,7 +289,6 @@ static void btron_task_trampoline(void) {
     }
     ext_tsk();
 }
-#endif
 #endif
 
 ID cre_tsk(const T_CTSK *pk_ctsk) {
@@ -305,6 +321,17 @@ ID cre_tsk(const T_CTSK *pk_ctsk) {
             *(--sp) = 0; /* r13 */
             *(--sp) = 0; /* r14 */
             *(--sp) = 0; /* r15 */
+            s_smp_tasks[i].sp = (void *)sp;
+            s_smp_tasks[i].stack = s_baremetal_task_stacks[i];
+#elif defined(__i386__)
+            uint8_t *stk_top = s_baremetal_task_stacks[i] + sizeof(s_baremetal_task_stacks[i]);
+            stk_top = (uint8_t *)((uintptr_t)stk_top & ~0xFULL);
+            uint32_t *sp = (uint32_t *)stk_top;
+            *(--sp) = (uint32_t)(uintptr_t)btron_task_trampoline;
+            *(--sp) = 0; /* ebp */
+            *(--sp) = 0; /* edi */
+            *(--sp) = 0; /* esi */
+            *(--sp) = 0; /* ebx */
             s_smp_tasks[i].sp = (void *)sp;
             s_smp_tasks[i].stack = s_baremetal_task_stacks[i];
 #endif
@@ -517,7 +544,7 @@ void dly_tsk(W dlytim) {
         s_smp_tasks[idx].runnable = FALSE;
         s_smp_tasks[idx].wake_tick = g_lapic_ticks + (uint64_t)dlytim;
         s_current_task_idx = -1;
-#if defined(__x86_64__)
+#if defined(__x86_64__) || defined(__i386__)
         if (s_scheduler_sp) {
             btron_ctx_switch(&s_smp_tasks[idx].sp, s_scheduler_sp);
         }
@@ -532,7 +559,9 @@ void dly_tsk(W dlytim) {
 #endif
 }
 
-#if !SMP_HOSTED && defined(__x86_64__)
+#if !SMP_HOSTED && (defined(__x86_64__) || defined(__i386__))
+
+#if defined(__x86_64__)
 static struct {
     uint16_t offset_low;
     uint16_t selector;
@@ -630,10 +659,94 @@ static void btron_init_idt(void) {
     __asm__ volatile("outb %0, $0x21" : : "a"((uint8_t)0xFF));
     __asm__ volatile("outb %0, $0xA1" : : "a"((uint8_t)0xFF));
 }
+#elif defined(__i386__)
+static struct {
+    uint16_t offset_low;
+    uint16_t selector;
+    uint8_t  zero;
+    uint8_t  type_attr;
+    uint16_t offset_high;
+} __attribute__((packed)) s_idt[256] __attribute__((aligned(16)));
+
+static struct {
+    uint16_t limit;
+    uint32_t base;
+} __attribute__((packed)) s_idtr;
+
+__attribute__((naked)) static void btron_default_isr(void) {
+    __asm__ volatile(
+        "pushl %eax\n\t"
+        "movl s_lapic, %eax\n\t"
+        "testl %eax, %eax\n\t"
+        "jz 1f\n\t"
+        "movl $0, 0xB0(%eax)\n\t"
+        "1:\n\t"
+        "popl %eax\n\t"
+        "iretl\n\t"
+    );
+}
+
+void btron_lapic_timer_isr_c(void) {
+    g_lapic_ticks++;
+    for (int i = 0; i < MAX_SMP_TASKS; i++) {
+        if (s_smp_tasks[i].active && s_smp_tasks[i].sleeping) {
+            if (g_lapic_ticks >= s_smp_tasks[i].wake_tick) {
+                s_smp_tasks[i].sleeping = FALSE;
+                s_smp_tasks[i].runnable = TRUE;
+            }
+        }
+    }
+}
+
+__attribute__((naked)) static void btron_lapic_timer_isr(void) {
+    __asm__ volatile(
+        "pushl %eax\n\t"
+        "pushl %ecx\n\t"
+        "pushl %edx\n\t"
+        "call btron_lapic_timer_isr_c\n\t"
+        "movl s_lapic, %eax\n\t"
+        "testl %eax, %eax\n\t"
+        "jz 1f\n\t"
+        "movl $0, 0xB0(%eax)\n\t"
+        "1:\n\t"
+        "popl %edx\n\t"
+        "popl %ecx\n\t"
+        "popl %eax\n\t"
+        "iretl\n\t"
+    );
+}
+
+static void btron_init_idt(void) {
+    for (int i = 0; i < 256; i++) {
+        uint32_t addr = (uint32_t)(uintptr_t)btron_default_isr;
+        s_idt[i].offset_low  = (uint16_t)(addr & 0xFFFF);
+        s_idt[i].selector    = 0x08;
+        s_idt[i].zero        = 0;
+        s_idt[i].type_attr   = 0x8E;
+        s_idt[i].offset_high = (uint16_t)((addr >> 16) & 0xFFFF);
+    }
+    uint32_t taddr = (uint32_t)(uintptr_t)btron_lapic_timer_isr;
+    s_idt[0x20].offset_low  = (uint16_t)(taddr & 0xFFFF);
+    s_idt[0x20].selector    = 0x08;
+    s_idt[0x20].zero        = 0;
+    s_idt[0x20].type_attr   = 0x8E;
+    s_idt[0x20].offset_high = (uint16_t)((taddr >> 16) & 0xFFFF);
+
+    s_idtr.limit = sizeof(s_idt) - 1;
+    s_idtr.base  = (uint32_t)(uintptr_t)s_idt;
+    __asm__ volatile("lidt %0" : : "m"(s_idtr));
+
+    __asm__ volatile("outb %0, $0x21" : : "a"((uint8_t)0xFF));
+    __asm__ volatile("outb %0, $0xA1" : : "a"((uint8_t)0xFF));
+}
+#endif
 
 static void btron_init_lapic_timer(void) {
     if (!s_lapic) {
-        uint32_t base = smp_read_lapic_base_msr();
+        uint32_t base = (uint32_t)BTRON_LAPIC_DEFAULT_BASE;
+#if defined(__x86_64__) || defined(__i386__)
+        base = smp_read_lapic_base_msr();
+#endif
         s_lapic = (volatile uint32_t *)(uintptr_t)base;
     }
     if (!s_lapic) return;
@@ -650,7 +763,7 @@ static void btron_init_lapic_timer(void) {
 #endif
 
 void btron_scheduler_tick(void) {
-#if !SMP_HOSTED && defined(__x86_64__)
+#if !SMP_HOSTED && (defined(__x86_64__) || defined(__i386__))
     static uint32_t s_last_lapic_count = 0;
     if (s_lapic) {
         uint32_t curr = s_lapic[LAPIC_CURR_COUNT / 4];
@@ -673,7 +786,7 @@ void btron_scheduler_tick(void) {
 }
 
 void btron_scheduler_dispatch(void) {
-#if !SMP_HOSTED && defined(__x86_64__)
+#if !SMP_HOSTED && (defined(__x86_64__) || defined(__i386__))
     btron_scheduler_tick();
 
     for (int i = 0; i < MAX_SMP_TASKS; i++) {
@@ -739,7 +852,7 @@ void btron_core_init(void) {
     if (hpet_period_ns > 0) smp_uart_dec(hpet_period_ns); else uart_puts_raw("100");
     uart_puts_raw(" ns  [OK]\r\n");
     uart_puts_raw("[IRQ ] Local APIC Timer: TSC-deadline mode  [CALIBRATING]\r\n");
-#if !SMP_HOSTED && defined(__x86_64__)
+#if !SMP_HOSTED && (defined(__x86_64__) || defined(__i386__))
     btron_init_lapic_timer();
     uart_puts_raw("[IRQ ] Local APIC Timer: Periodic mode @ 1000 Hz (vector 0x20)  [ACTIVE]\r\n");
     uart_puts_raw("[SMP ] Scheduler active: Local APIC timer tick plugged\r\n");

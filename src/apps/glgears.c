@@ -13,6 +13,10 @@
 #include <math.h>
 #include <btron/btron.h>
 
+#ifndef M_PI
+#define M_PI 3.1415926535897932384626433832795
+#endif
+
 extern void uart_puts_raw(const char *s);
 
 static WND         *s_glgears_wnd = NULL;

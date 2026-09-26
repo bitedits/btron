@@ -17,6 +17,10 @@
 #include <stdlib.h>
 #include <string.h>
 
+#ifndef M_PI
+#define M_PI 3.1415926535897932384626433832795
+#endif
+
 #define BTRON_GL_NO_MACRO_SHIMS 1
 #include "backend_virgl.h"
 

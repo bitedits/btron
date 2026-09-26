@@ -1,5 +1,8 @@
 #if defined(__STDC_HOSTED__) && __STDC_HOSTED__ == 1 && !defined(BTRON_UEFI_TARGET)
 #include_next <math.h>
+#ifndef M_PI
+#define M_PI 3.1415926535897932384626433832795
+#endif
 #else
 #ifndef _GL_MATH_H_
 #define _GL_MATH_H_

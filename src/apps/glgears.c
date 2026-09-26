@@ -165,6 +165,17 @@ static void init_gears_scene(void) {
 
 /* ── Window callbacks ────────────────────────────────────────────── */
 
+static ID s_glgears_tskid = 0;
+
+static void glgears_task_fn(VW exinf) {
+    (void)exinf;
+    while (s_glgears_wnd) {
+        inval_wnd(s_glgears_wnd);
+        dly_tsk(16); /* ~60 FPS driven by Local APIC timer */
+    }
+    s_glgears_tskid = 0;
+}
+
 static void glgears_paint(WND *wnd, GDEV *dev) {
     if (!wnd || !dev || !s_surf) return;
 
@@ -189,6 +200,18 @@ static void glgears_paint(WND *wnd, GDEV *dev) {
     glRotatef(view_rotx, 1.0f, 0.0f, 0.0f);
     glRotatef(view_roty, 0.0f, 1.0f, 0.0f);
 
+    /* Advance rotation angle based on Local APIC timer clock */
+    SYSTIME now = 0;
+    get_tim(&now);
+    if (now > 0) {
+        /* Rotate gears smoothly at 70 degrees per second based on Local APIC timer */
+        uint32_t ms = (uint32_t)now;
+        uint32_t cycle_ms = ms % 360000u;
+        angle = (GLfloat)((cycle_ms * 70u) % 360000u) / 1000.0f;
+    } else {
+        angle += 2.0f;
+    }
+
     /* Gear 1 */
     glPushMatrix();
     glTranslatef(-3.0f, -2.0f, 0.0f);
@@ -212,9 +235,8 @@ static void glgears_paint(WND *wnd, GDEV *dev) {
 
     glPopMatrix();
 
-    /* Swap / present and mark invalid for continuous animation */
+    /* Swap / present */
     egl_swap_buffers(s_surf);
-    angle += 2.0f;
 }
 
 static void glgears_event(WND *wnd, const EVT *evt) {
@@ -246,6 +268,9 @@ static void glgears_destroy(WND *wnd) {
         s_surf = NULL;
     }
     s_glgears_wnd = NULL;
+    if (s_glgears_tskid > 0) {
+        wup_tsk(s_glgears_tskid);
+    }
 }
 
 WND* open_glgears_window(void) {
@@ -273,6 +298,19 @@ WND* open_glgears_window(void) {
     }
 
     init_gears_scene();
+
+    /* Register glgears animation task with the scheduler */
+    T_CTSK ctsk;
+    ctsk.exinf = 0;
+    ctsk.tskatr = TA_HLNG;
+    ctsk.task = glgears_task_fn;
+    ctsk.itskpri = 10;
+    ctsk.stksz = 16384;
+    s_glgears_tskid = cre_tsk(&ctsk);
+    if (s_glgears_tskid > 0) {
+        sta_tsk(s_glgears_tskid, 0);
+        uart_puts_raw("[GL] glgears: animation task started (Local APIC timer scheduler)\n");
+    }
 
     uart_puts_raw("[GL] glgears window open\n");
     return s_glgears_wnd;

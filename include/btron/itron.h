@@ -22,6 +22,7 @@ typedef VW       VP_INT;
 
 #define TMO_POL        (0)
 #define TMO_FEVR       (-1)
+#define TA_HLNG        (0x00000001U)
 #define TSK_DESKTOP_UI ((ID)1)
 #define TSK_TIP_CONV   ((ID)2)
 

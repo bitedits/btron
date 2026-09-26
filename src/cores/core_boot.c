@@ -379,6 +379,7 @@ extern WND* open_t_editor_window(void);
 extern WND* open_gterm_window(void);
 #if defined(BTRON_UEFI_TARGET)
 extern WND* open_glgears_window(void);
+extern void btron_scheduler_dispatch(void);
 #endif
 
 static COLOR s_desktop_backbuffer[1024 * 768] __attribute__((aligned(16)));
@@ -506,6 +507,11 @@ static void launch_vesa_desktop_session(int active_cores) {
             workbench_process_event(dt->screen, &ev);
             need_redraw = 1;
         }
+
+#if defined(BTRON_UEFI_TARGET)
+        /* Dispatch tasks in the UEFI scheduler (Local APIC timer driven) */
+        btron_scheduler_dispatch();
+#endif
 
         /* Commit any pending window resize once per frame.
          * wnd_mgr_handle_event(MOUSE_MOVE) only accumulates pending_w/h;

@@ -195,16 +195,23 @@ void btron_smp_ap_entry(uint32_t cpu_idx) {
 #define MAX_SMP_TASKS 64
 #define MAX_SMP_SEMS  64
 
+volatile uint64_t g_lapic_ticks = 0;
+
 typedef struct {
     ID tskid;
     T_CTSK config;
     BOOL active;
     BOOL sleeping;
+    BOOL runnable;
+    uint64_t wake_tick;
     uint32_t affinity_cpu;
 #if SMP_HOSTED
     pthread_t thread;
     pthread_cond_t cond;
     pthread_mutex_t mutex;
+#else
+    void *sp;
+    uint8_t *stack;
 #endif
 } SMP_TASK;
 
@@ -232,6 +239,40 @@ static void* smp_task_trampoline(void *arg) {
     }
     return NULL;
 }
+#else
+static uint8_t s_baremetal_task_stacks[MAX_SMP_TASKS][16384] __attribute__((aligned(16)));
+static void *s_scheduler_sp = NULL;
+static int s_current_task_idx = -1;
+
+#if defined(__x86_64__)
+__attribute__((naked)) static void btron_ctx_switch(void **old_sp, void *new_sp) {
+    __asm__ volatile(
+        "pushq %rbx\n\t"
+        "pushq %rbp\n\t"
+        "pushq %r12\n\t"
+        "pushq %r13\n\t"
+        "pushq %r14\n\t"
+        "pushq %r15\n\t"
+        "movq %%rsp, (%rdi)\n\t"
+        "movq %rsi, %%rsp\n\t"
+        "popq %r15\n\t"
+        "popq %r14\n\t"
+        "popq %r13\n\t"
+        "popq %r12\n\t"
+        "popq %rbp\n\t"
+        "popq %rbx\n\t"
+        "ret\n\t"
+    );
+}
+
+static void btron_task_trampoline(void) {
+    int idx = s_current_task_idx;
+    if (idx >= 0 && idx < MAX_SMP_TASKS && s_smp_tasks[idx].config.task) {
+        s_smp_tasks[idx].config.task(s_smp_tasks[idx].config.exinf);
+    }
+    ext_tsk();
+}
+#endif
 #endif
 
 ID cre_tsk(const T_CTSK *pk_ctsk) {
@@ -245,11 +286,28 @@ ID cre_tsk(const T_CTSK *pk_ctsk) {
             s_smp_tasks[i].config = *pk_ctsk;
             s_smp_tasks[i].active = TRUE;
             s_smp_tasks[i].sleeping = FALSE;
+            s_smp_tasks[i].runnable = FALSE;
+            s_smp_tasks[i].wake_tick = 0;
             s_smp_tasks[i].affinity_cpu = (uint32_t)(i % g_num_cpus);
 #if SMP_HOSTED
             pthread_mutex_init(&s_smp_tasks[i].mutex, NULL);
             pthread_cond_init(&s_smp_tasks[i].cond, NULL);
             pthread_mutex_unlock(&s_smp_kernel_mutex);
+#else
+#if defined(__x86_64__)
+            uint8_t *stk_top = s_baremetal_task_stacks[i] + sizeof(s_baremetal_task_stacks[i]);
+            stk_top = (uint8_t *)((uintptr_t)stk_top & ~0xFULL);
+            uint64_t *sp = (uint64_t *)stk_top;
+            *(--sp) = (uint64_t)(uintptr_t)btron_task_trampoline;
+            *(--sp) = 0; /* rbx */
+            *(--sp) = 0; /* rbp */
+            *(--sp) = 0; /* r12 */
+            *(--sp) = 0; /* r13 */
+            *(--sp) = 0; /* r14 */
+            *(--sp) = 0; /* r15 */
+            s_smp_tasks[i].sp = (void *)sp;
+            s_smp_tasks[i].stack = s_baremetal_task_stacks[i];
+#endif
 #endif
             return s_smp_tasks[i].tskid;
         }
@@ -274,9 +332,10 @@ ER sta_tsk(ID tskid, VW exinf) {
     pthread_mutex_unlock(&s_smp_kernel_mutex);
     return (rc == 0) ? E_OK : E_SYS;
 #else
-    if (s_smp_tasks[idx].config.task) {
-        s_smp_tasks[idx].config.task(exinf ? exinf : s_smp_tasks[idx].config.exinf);
-    }
+    if (!s_smp_tasks[idx].active) return E_NOEXS;
+    if (exinf != 0) s_smp_tasks[idx].config.exinf = exinf;
+    s_smp_tasks[idx].runnable = TRUE;
+    s_smp_tasks[idx].sleeping = FALSE;
     return E_OK;
 #endif
 }
@@ -284,6 +343,23 @@ ER sta_tsk(ID tskid, VW exinf) {
 void ext_tsk(void) {
 #if SMP_HOSTED
     pthread_exit(NULL);
+#else
+    int idx = s_current_task_idx;
+    if (idx >= 0 && idx < MAX_SMP_TASKS) {
+        s_smp_tasks[idx].active = FALSE;
+        s_smp_tasks[idx].runnable = FALSE;
+        s_smp_tasks[idx].sleeping = FALSE;
+    }
+    s_current_task_idx = -1;
+#if defined(__x86_64__)
+    if (s_scheduler_sp) {
+        void *dummy = NULL;
+        btron_ctx_switch(&dummy, s_scheduler_sp);
+    }
+#endif
+    for (;;) {
+        btron_smp_pause();
+    }
 #endif
 }
 
@@ -306,14 +382,26 @@ ER slp_tsk(void) {
         pthread_cond_wait(&target->cond, &target->mutex);
     }
     pthread_mutex_unlock(&target->mutex);
+#else
+    int idx = s_current_task_idx;
+    if (idx >= 0 && idx < MAX_SMP_TASKS) {
+        s_smp_tasks[idx].sleeping = TRUE;
+        s_smp_tasks[idx].runnable = FALSE;
+        s_current_task_idx = -1;
+#if defined(__x86_64__)
+        if (s_scheduler_sp) {
+            btron_ctx_switch(&s_smp_tasks[idx].sp, s_scheduler_sp);
+        }
+#endif
+    }
 #endif
     return E_OK;
 }
 
 ER wup_tsk(ID tskid) {
     if (tskid <= 0 || tskid > MAX_SMP_TASKS) return E_ID;
-#if SMP_HOSTED
     int idx = tskid - 1;
+#if SMP_HOSTED
     pthread_mutex_lock(&s_smp_kernel_mutex);
     if (!s_smp_tasks[idx].active) {
         pthread_mutex_unlock(&s_smp_kernel_mutex);
@@ -324,6 +412,10 @@ ER wup_tsk(ID tskid) {
     pthread_cond_signal(&s_smp_tasks[idx].cond);
     pthread_mutex_unlock(&s_smp_tasks[idx].mutex);
     pthread_mutex_unlock(&s_smp_kernel_mutex);
+#else
+    if (!s_smp_tasks[idx].active) return E_NOEXS;
+    s_smp_tasks[idx].sleeping = FALSE;
+    s_smp_tasks[idx].runnable = TRUE;
 #endif
     return E_OK;
 }
@@ -409,7 +501,7 @@ ER get_tim(SYSTIME *p_time) {
     gettimeofday(&tv, NULL);
     *p_time = (SYSTIME)((uint64_t)tv.tv_sec * 1000 + tv.tv_usec / 1000);
 #else
-    *p_time = 0;
+    *p_time = (SYSTIME)g_lapic_ticks;
 #endif
     return E_OK;
 }
@@ -417,6 +509,189 @@ ER get_tim(SYSTIME *p_time) {
 void dly_tsk(W dlytim) {
 #if SMP_HOSTED
     if (dlytim > 0) usleep((unsigned int)dlytim * 1000U);
+#else
+    if (dlytim <= 0) return;
+    int idx = s_current_task_idx;
+    if (idx >= 0 && idx < MAX_SMP_TASKS) {
+        s_smp_tasks[idx].sleeping = TRUE;
+        s_smp_tasks[idx].runnable = FALSE;
+        s_smp_tasks[idx].wake_tick = g_lapic_ticks + (uint64_t)dlytim;
+        s_current_task_idx = -1;
+#if defined(__x86_64__)
+        if (s_scheduler_sp) {
+            btron_ctx_switch(&s_smp_tasks[idx].sp, s_scheduler_sp);
+        }
+#endif
+    } else {
+        uint64_t target = g_lapic_ticks + (uint64_t)dlytim;
+        while (g_lapic_ticks < target) {
+            btron_scheduler_tick();
+            btron_smp_pause();
+        }
+    }
+#endif
+}
+
+#if !SMP_HOSTED && defined(__x86_64__)
+static struct {
+    uint16_t offset_low;
+    uint16_t selector;
+    uint8_t  ist;
+    uint8_t  flags;
+    uint16_t offset_mid;
+    uint32_t offset_high;
+    uint32_t reserved;
+} __attribute__((packed)) s_idt[256] __attribute__((aligned(16)));
+
+static struct {
+    uint16_t limit;
+    uint64_t base;
+} __attribute__((packed)) s_idtr;
+
+__attribute__((naked)) static void btron_default_isr(void) {
+    __asm__ volatile(
+        "pushq %rax\n\t"
+        "movq s_lapic(%rip), %rax\n\t"
+        "testq %rax, %rax\n\t"
+        "jz 1f\n\t"
+        "movl $0, 0xB0(%rax)\n\t"
+        "1:\n\t"
+        "popq %rax\n\t"
+        "iretq\n\t"
+    );
+}
+
+void btron_lapic_timer_isr_c(void) {
+    g_lapic_ticks++;
+    for (int i = 0; i < MAX_SMP_TASKS; i++) {
+        if (s_smp_tasks[i].active && s_smp_tasks[i].sleeping) {
+            if (g_lapic_ticks >= s_smp_tasks[i].wake_tick) {
+                s_smp_tasks[i].sleeping = FALSE;
+                s_smp_tasks[i].runnable = TRUE;
+            }
+        }
+    }
+}
+
+__attribute__((naked)) static void btron_lapic_timer_isr(void) {
+    __asm__ volatile(
+        "pushq %rax\n\t"
+        "pushq %rcx\n\t"
+        "pushq %rdx\n\t"
+        "pushq %rsi\n\t"
+        "pushq %rdi\n\t"
+        "pushq %r8\n\t"
+        "pushq %r9\n\t"
+        "pushq %r10\n\t"
+        "pushq %r11\n\t"
+        "call btron_lapic_timer_isr_c\n\t"
+        "movq s_lapic(%rip), %rax\n\t"
+        "testq %rax, %rax\n\t"
+        "jz 1f\n\t"
+        "movl $0, 0xB0(%rax)\n\t"
+        "1:\n\t"
+        "popq %r11\n\t"
+        "popq %r10\n\t"
+        "popq %r9\n\t"
+        "popq %r8\n\t"
+        "popq %rdi\n\t"
+        "popq %rsi\n\t"
+        "popq %rdx\n\t"
+        "popq %rcx\n\t"
+        "popq %rax\n\t"
+        "iretq\n\t"
+    );
+}
+
+static void btron_init_idt(void) {
+    for (int i = 0; i < 256; i++) {
+        uintptr_t addr = (uintptr_t)btron_default_isr;
+        s_idt[i].offset_low  = (uint16_t)(addr & 0xFFFF);
+        s_idt[i].selector    = 0x08;
+        s_idt[i].ist         = 0;
+        s_idt[i].flags       = 0x8E;
+        s_idt[i].offset_mid  = (uint16_t)((addr >> 16) & 0xFFFF);
+        s_idt[i].offset_high = (uint32_t)((addr >> 32) & 0xFFFFFFFF);
+        s_idt[i].reserved    = 0;
+    }
+    uintptr_t taddr = (uintptr_t)btron_lapic_timer_isr;
+    s_idt[0x20].offset_low  = (uint16_t)(taddr & 0xFFFF);
+    s_idt[0x20].selector    = 0x08;
+    s_idt[0x20].ist         = 0;
+    s_idt[0x20].flags       = 0x8E;
+    s_idt[0x20].offset_mid  = (uint16_t)((taddr >> 16) & 0xFFFF);
+    s_idt[0x20].offset_high = (uint32_t)((taddr >> 32) & 0xFFFFFFFF);
+    s_idt[0x20].reserved    = 0;
+
+    s_idtr.limit = sizeof(s_idt) - 1;
+    s_idtr.base  = (uint64_t)(uintptr_t)s_idt;
+    __asm__ volatile("lidt %0" : : "m"(s_idtr));
+
+    __asm__ volatile("outb %0, $0x21" : : "a"((uint8_t)0xFF));
+    __asm__ volatile("outb %0, $0xA1" : : "a"((uint8_t)0xFF));
+}
+
+static void btron_init_lapic_timer(void) {
+    if (!s_lapic) {
+        uint32_t base = smp_read_lapic_base_msr();
+        s_lapic = (volatile uint32_t *)(uintptr_t)base;
+    }
+    if (!s_lapic) return;
+
+    s_lapic[LAPIC_SVR / 4] = LAPIC_SVR_ENABLE | 0xFF;
+    s_lapic[LAPIC_TPR / 4] = 0;
+    s_lapic[LAPIC_DIV_CFG / 4] = 0x03;
+    s_lapic[LAPIC_TIMER / 4] = 0x20000 | 0x20;
+    s_lapic[LAPIC_INIT_COUNT / 4] = 62500;
+
+    btron_init_idt();
+    __asm__ volatile("sti");
+}
+#endif
+
+void btron_scheduler_tick(void) {
+#if !SMP_HOSTED && defined(__x86_64__)
+    static uint32_t s_last_lapic_count = 0;
+    if (s_lapic) {
+        uint32_t curr = s_lapic[LAPIC_CURR_COUNT / 4];
+        if (s_last_lapic_count == 0) {
+            s_last_lapic_count = curr;
+        } else if (curr > s_last_lapic_count) {
+            g_lapic_ticks++;
+        }
+        s_last_lapic_count = curr;
+    }
+    for (int i = 0; i < MAX_SMP_TASKS; i++) {
+        if (s_smp_tasks[i].active && s_smp_tasks[i].sleeping) {
+            if (g_lapic_ticks >= s_smp_tasks[i].wake_tick) {
+                s_smp_tasks[i].sleeping = FALSE;
+                s_smp_tasks[i].runnable = TRUE;
+            }
+        }
+    }
+#endif
+}
+
+void btron_scheduler_dispatch(void) {
+#if !SMP_HOSTED && defined(__x86_64__)
+    btron_scheduler_tick();
+
+    for (int i = 0; i < MAX_SMP_TASKS; i++) {
+        if (!s_smp_tasks[i].active) continue;
+        if (s_smp_tasks[i].sleeping) {
+            if (g_lapic_ticks >= s_smp_tasks[i].wake_tick) {
+                s_smp_tasks[i].sleeping = FALSE;
+                s_smp_tasks[i].runnable = TRUE;
+            } else {
+                continue;
+            }
+        }
+        if (s_smp_tasks[i].runnable) {
+            s_current_task_idx = i;
+            btron_ctx_switch(&s_scheduler_sp, s_smp_tasks[i].sp);
+            s_current_task_idx = -1;
+        }
+    }
 #endif
 }
 
@@ -464,6 +739,11 @@ void btron_core_init(void) {
     if (hpet_period_ns > 0) smp_uart_dec(hpet_period_ns); else uart_puts_raw("100");
     uart_puts_raw(" ns  [OK]\r\n");
     uart_puts_raw("[IRQ ] Local APIC Timer: TSC-deadline mode  [CALIBRATING]\r\n");
+#if !SMP_HOSTED && defined(__x86_64__)
+    btron_init_lapic_timer();
+    uart_puts_raw("[IRQ ] Local APIC Timer: Periodic mode @ 1000 Hz (vector 0x20)  [ACTIVE]\r\n");
+    uart_puts_raw("[SMP ] Scheduler active: Local APIC timer tick plugged\r\n");
+#endif
     uart_puts_raw("[IRQ ] UART NS16550A COM1 0x3F8 (115200 8N1)  [ACTIVE]\r\n");
 }
 

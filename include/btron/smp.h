@@ -78,6 +78,8 @@ int  btron_smp_boot_aps(void);
 void btron_smp_ap_entry(uint32_t cpu_idx);
 uint32_t btron_cpu_id(void);
 void btron_smp_spin_us(uint32_t us);
+void btron_scheduler_tick(void);
+void btron_scheduler_dispatch(void);
 
 #ifdef __cplusplus
 }

@@ -174,7 +174,7 @@ void ps2_mouse_feed_byte(uint8_t b) {
             ev.pos.x = s_mouse_x;
             ev.pos.y = s_mouse_y;
             ev.key = 0;
-            ev.button = 0;
+            ev.button = s_prev_btn;  /* carry live button bitmask so resize/drag gate works */
             ev.data = 0;
             snd_evt(&ev);
         }

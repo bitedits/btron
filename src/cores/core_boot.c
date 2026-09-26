@@ -14,6 +14,7 @@
 #include <btron/smp.h>
 #include <btron/workbench.h>
 #include <drivers/vesa.h>
+#include <drivers/virtio_gpu.h>
 #include <drivers/ps2_mouse.h>
 #include <drivers/pc98_mouse.h>
 #include <libstr.h>
@@ -389,6 +390,13 @@ static void launch_vesa_desktop_session(int active_cores) {
     kprint("\n[VESA] Switching to B-System 1024x768x32 Linear Framebuffer Desktop...\n", 0x0E);
     vesa_init(1024, 768, 32);
 
+#if !defined(BTRON_PC98_TARGET)
+    /* Initialize VirtIO-GPU 2D accelerator if detected on PCI bus */
+    if (virtio_gpu_pci_probe() == 0 || g_virtio_gpu.is_detected) {
+        virtio_gpu_pci_init(1024, 768, s_desktop_backbuffer);
+    }
+#endif
+
     /* Initialize authentic BTRON desktop with off-screen backbuffer for tear-free rendering */
     init_desktop_vram(1024, 768, s_desktop_backbuffer);
     BTRON_DESKTOP *dt = get_btron_desktop();
@@ -412,8 +420,13 @@ static void launch_vesa_desktop_session(int active_cores) {
     /* Initial paint of authentic B-System desktop to backbuffer */
     workbench_render(dt->screen, 1024, 768);
 
-    /* Blit composite frame to VESA VRAM */
-    if (g_vesa.framebuffer) {
+    /* Flush frame to VirtIO-GPU hardware and/or VESA LFB */
+#if !defined(BTRON_PC98_TARGET)
+    if (g_virtio_gpu.is_active) {
+        virtio_gpu_pci_flush_all();
+    }
+#endif
+    if (g_vesa.framebuffer && g_vesa.framebuffer != (uint32_t *)s_desktop_backbuffer) {
         memcpy((void *)g_vesa.framebuffer, s_desktop_backbuffer, 1024 * 768 * sizeof(COLOR));
     }
 
@@ -488,9 +501,22 @@ static void launch_vesa_desktop_session(int active_cores) {
             need_redraw = 1;
         }
 
+        /* Commit any pending window resize once per frame.
+         * wnd_mgr_handle_event(MOUSE_MOVE) only accumulates pending_w/h;
+         * flush_resize() is what calls rsz_wnd() and makes the window
+         * actually change size.  Without this the resize grip is a no-op. */
+        if (wnd_mgr_flush_resize()) {
+            need_redraw = 1;
+        }
+
         if (need_redraw) {
             workbench_render(dt->screen, 1024, 768);
-            if (g_vesa.framebuffer) {
+#if !defined(BTRON_PC98_TARGET)
+            if (g_virtio_gpu.is_active) {
+                virtio_gpu_pci_flush_all();
+            }
+#endif
+            if (g_vesa.framebuffer && g_vesa.framebuffer != (uint32_t *)s_desktop_backbuffer) {
                 memcpy((void *)g_vesa.framebuffer, s_desktop_backbuffer, 1024 * 768 * sizeof(COLOR));
             }
         }
@@ -632,8 +658,11 @@ void kernel_main(void) {
     uart_puts_raw("\r\n");
     btron_core_hfds_log();
 
-    /* Graphics — vesa.c (real PCI BAR0 scan) */
+    /* Graphics — VirtIO-GPU & VESA (real PCI BAR0 scan) */
     uart_puts_raw("\r\n");
+#if !defined(BTRON_PC98_TARGET)
+    virtio_gpu_pci_probe();
+#endif
     vesa_probe_log();
 
 

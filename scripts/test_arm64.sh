@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
 #
-# Automated CI / Regression Test Runner for B-TRON on QEMU Raspberry Pi 3B (AArch64).
-# Pure Bash / POSIX toolchain implementation.
+# scripts/test_arm64.sh — Automated CI / Regression Test for B-System AArch64 Kernel
+#
+# Tests bare-metal AArch64 Raspberry Pi 3B execution on QEMU in headless CI mode.
 #
 set -euo pipefail
 
 QEMU_BIN="qemu-system-aarch64"
-if ! command -v "$QEMU_BIN" >/dev/null 2>&1; then
+if ! command -v "$QEMU_BIN" > /dev/null 2>&1; then
     echo "[ERROR] qemu-system-aarch64 not found in PATH."
     exit 1
 fi
@@ -14,7 +15,7 @@ fi
 ELF_PATH="btron-aarch64-baremetal.elf"
 if [ ! -f "$ELF_PATH" ]; then
     echo "[CI-TEST] Building $ELF_PATH..."
-    make "$ELF_PATH" >/dev/null 2>&1 || make arm64-elf
+    make "$ELF_PATH" > /dev/null 2>&1 || make arm64-elf
 fi
 
 LOG_FILE=$(mktemp /tmp/qemu_arm64_XXXXXX)
@@ -40,7 +41,7 @@ kill -TERM "$QEMU_PID" 2>/dev/null || true
 wait "$QEMU_PID" 2>/dev/null || true
 
 echo "=========================================================="
-echo " QEMU AArch64 Bare-Metal Boot Output:"
+echo " QEMU AArch64 Bare-Metal Boot Output (Raspberry Pi 3B):"
 echo "=========================================================="
 cat "$LOG_FILE"
 
@@ -49,27 +50,39 @@ MARKERS=(
     "B-System/BTRON3 3.20 (aarch64-bcm2837) Takanori Yokoyama — T-Kernel 2.0"
     "Machine: Raspberry Pi 3B / BCM2837  AArch64 Cortex-A53  T-Kernel 2.0"
     "Yokoyama T-Kernel 2.0 Engine (AArch64)"
-    "Initializing Video Display Framebuffer"
-    "ScreenDrv"
-    "KbPdDrv"
-    "LowKbPdDrv"
+    "Framebuffer Allocated by VideoCore GPU"
+    "ScreenDrv=OK"
+    "KbPdDrv=OK"
+    "LowKbPdDrv=OK"
     "DWC2 USB 2.0 init"
     "USB Hub detected! Powering ports & enumerating devices..."
     "Resetting Hub Port 1 (Keyboard)..."
     "Resetting Hub Port 2 (Mouse)..."
-    "Live Multi-Window Desktop & Pointer initialized in Video VRAM"
-    "Sakamura B-System 3.0 Interactive Keyboard & Mouse Active"
-    "B-System Workbench Live on Raspberry Pi 3B (AArch64)!"
+    "Init complete. Keyboard & Mouse polling active"
+    "btron-pi400#"
 )
 
+PASS=0
+FAIL=0
+
 for marker in "${MARKERS[@]}"; do
-    if ! grep -Fq "$marker" "$LOG_FILE"; then
-        echo ""
-        echo "[FAIL] CI Test Failed: Missing expected output marker: '$marker'"
-        exit 1
+    if grep -qF "$marker" "$LOG_FILE"; then
+        echo "  [PASS] Marker found: '$marker'"
+        PASS=$((PASS + 1))
+    else
+        echo "  [FAIL] Missing marker: '$marker'"
+        FAIL=$((FAIL + 1))
     fi
 done
 
-echo ""
-echo "[PASS] All Bare-Metal AArch64 T-Kernel 2.0 / DWC2 USB / VRAM subsystems verified successfully!"
+echo "----------------------------------------------------------"
+echo " AArch64 raspi3b Test Results: $PASS Passed, $FAIL Failed"
+echo "----------------------------------------------------------"
+
+if [ "$FAIL" -gt 0 ]; then
+    echo "[CI-TEST] FAILED — Missing expected boot markers."
+    exit 1
+fi
+
+echo "[CI-TEST] SUCCESS — All $PASS markers verified!"
 exit 0

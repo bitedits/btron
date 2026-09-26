@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
 #
-# Automated CI / Regression Test Runner for B-TRON on QEMU Raspberry Pi 4B (AArch64).
-# Pure Bash / POSIX toolchain implementation.
+# scripts/test_arm64_rpi4.sh — Automated CI / Regression Test for B-System AArch64 Pi 4B Kernel
+#
+# Tests bare-metal AArch64 Raspberry Pi 4B execution on QEMU in headless CI mode.
 #
 set -euo pipefail
 
 QEMU_BIN="qemu-system-aarch64"
-if ! command -v "$QEMU_BIN" >/dev/null 2>&1; then
+if ! command -v "$QEMU_BIN" > /dev/null 2>&1; then
     echo "[ERROR] qemu-system-aarch64 not found in PATH."
     exit 1
 fi
@@ -14,7 +15,7 @@ fi
 ELF_PATH="btron-aarch64-baremetal.elf"
 if [ ! -f "$ELF_PATH" ]; then
     echo "[CI-TEST] Building $ELF_PATH..."
-    make "$ELF_PATH" >/dev/null 2>&1 || make arm64-elf
+    make "$ELF_PATH" > /dev/null 2>&1 || make arm64-elf
 fi
 
 LOG_FILE=$(mktemp /tmp/qemu_arm64_rpi4_XXXXXX)
@@ -50,22 +51,40 @@ MARKERS=(
     "Machine: Raspberry Pi 4B / BCM2711  AArch64 Cortex-A72  T-Kernel 2.0"
     "BCM2711 Physical Memory Map (Pi 4B, 2 GB / 4 GB RAM):"
     "Yokoyama T-Kernel 2.0 Engine (AArch64)"
-    "ScreenDrv: OK"
-    "KbPdDrv: OK"
-    "LowKbPdDrv: OK"
-    "USB Subsystem ready."
+    "Framebuffer Allocated by VideoCore GPU"
+    "ScreenDrv=OK"
+    "KbPdDrv=OK"
+    "LowKbPdDrv=OK"
+    "DWC2 USB 2.0 init"
+    "USB Hub detected! Powering ports & enumerating devices..."
+    "Resetting Hub Port 1 (Keyboard)..."
+    "Resetting Hub Port 2 (Mouse)..."
+    "Init complete. Keyboard & Mouse polling active"
     "Stage 1: Terminal Console Active"
     "btron-pi400#"
 )
 
+PASS=0
+FAIL=0
+
 for marker in "${MARKERS[@]}"; do
-    if ! grep -Fq "$marker" "$LOG_FILE"; then
-        echo ""
-        echo "[FAIL] CI Test Failed: Missing expected output marker: '$marker'"
-        exit 1
+    if grep -qF "$marker" "$LOG_FILE"; then
+        echo "  [PASS] Marker found: '$marker'"
+        PASS=$((PASS + 1))
+    else
+        echo "  [FAIL] Missing marker: '$marker'"
+        FAIL=$((FAIL + 1))
     fi
 done
 
-echo ""
-echo "[PASS] All Bare-Metal Raspberry Pi 4B AArch64 Subsystems Verified Successfully!"
+echo "----------------------------------------------------------"
+echo " AArch64 raspi4b Test Results: $PASS Passed, $FAIL Failed"
+echo "----------------------------------------------------------"
+
+if [ "$FAIL" -gt 0 ]; then
+    echo "[CI-TEST] FAILED — Missing expected boot markers."
+    exit 1
+fi
+
+echo "[CI-TEST] SUCCESS — All $PASS markers verified!"
 exit 0

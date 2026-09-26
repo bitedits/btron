@@ -101,6 +101,7 @@ ER    cls_robj(ROBJ *robj) { (void)robj; return E_OK; }
 ER    wr_vobj_data(ROBJ *robj, const void *buf, UW len) { (void)robj; (void)buf; (void)len; return E_OK; }
 ER    rd_vobj_data(ROBJ *robj, void *buf, UW len, UW *rb) { (void)robj; (void)buf; (void)len; if (rb) *rb = 0; return E_OK; }
 VOBJ_LINK* cre_vobj_link(ID t, const char *l, H x, H y) { (void)t; (void)l; (void)x; (void)y; return NULL; }
+ROBJ* find_robj_by_path(const char *path) { (void)path; return NULL; }
 
 /* Helper to dump raw ARGB rectangle to file */
 static void dump_window_rect(GDEV *dev, WND *wnd, const char *out_filename) {

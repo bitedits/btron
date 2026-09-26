@@ -223,6 +223,7 @@ UEFI_SRCS    = $(UEFI_STARTUP)          \
                src/kernel/libstr.c      \
                src/drivers/vesa/vesa.c  \
                src/drivers/uefi/ps2_mouse.c \
+               src/drivers/virtio/virtio_gpu.c \
                $(COMMON_NO_SDL_SRCS)
 
 # ── NEC PC-98 build (Target 5) ──────────────────────────────────
@@ -638,18 +639,23 @@ run-uefi: $(UEFI_TARGET)
 	@echo " Honoring : Kota Uchida (内田 公太) — MikanOS Pioneer"
 	@echo " Machine  : q35  |  CPU: qemu64 (SMP 4 Cores)  |  RAM: 1G"
 	@echo " Firmware : ACPI 6.5 MADT + LAPIC SMP Bring-up (core_smp.c)"
-	@echo " Graphics : VESA VBE 1024x768 32-bpp Linear Framebuffer"
+	@echo " Graphics : VirtIO-GPU 2D Display & VESA VBE 1024x768 32-bpp"
 	@echo " Desktop  : desktop.c · wnd.c · gterm.c · Mozc IME"
 	@echo "=========================================================="
 	$(QEMU_X86_64) -M q35,accel=tcg -cpu qemu64 -smp cores=4,threads=1,sockets=1 -m 1G \
 	    $(QEMU_DISPLAY) \
-	    -vga std \
+	    -device virtio-vga \
 	    -kernel $(UEFI_TARGET) -serial stdio
 
 run-eufi: run-uefi
 
 test-uefi: $(UEFI_TARGET)
-	@./$(UEFI_TARGET)
+	@echo "=========================================================="
+	@echo " Testing B-System x86_64 UEFI SMP Kernel on QEMU q35 (Headless CI)"
+	@echo " Machine : q35  |  CPU: qemu64 (SMP 4)  |  RAM: 1G"
+	@echo " Graphics: VirtIO-GPU 2D  |  Mode: headless, serial validation"
+	@echo "=========================================================="
+	@bash scripts/test_uefi.sh
 # ═══════════════════════════════════════════════════════════════════
 # NEC PC-98 Kernel Desktop (Honoring Awe Morris — zedBSD Pioneer)
 # ═══════════════════════════════════════════════════════════════════
@@ -690,7 +696,12 @@ run-pc98: $(PC98_TARGET)
 	fi
 
 test-pc98: $(PC98_TARGET)
-	@./$(PC98_TARGET)
+	@echo "=========================================================="
+	@echo " Testing B-System NEC PC-98 Kernel on QEMU (Headless CI)"
+	@echo " Honoring : Awe Morris — zedBSD & NEC PC-98 Pioneer"
+	@echo " Machine  : q35 (PC-98 compat)  |  Mode: headless, serial validation"
+	@echo "=========================================================="
+	@bash scripts/test_pc98.sh
 
 # ═══════════════════════════════════════════════════════════════════
 # Motorola 68040 Macintosh Quadra 800 Kernel (q800)
@@ -737,8 +748,13 @@ run-m68k: $(M68K_TARGET)
 	    -kernel $(M68K_TARGET) -serial stdio
 
 test-m68k: $(M68K_TARGET)
-	$(QEMU_M68K) -M q800 -cpu m68040 -m 128M \
-	    -kernel $(M68K_TARGET) -serial stdio -display none
+	@echo "=========================================================="
+	@echo " Testing B-System M68K Kernel on QEMU Quadra 800 (Headless CI)"
+	@echo " Honoring : Fumihiko Itagaki — uITRON 3.0 Pioneer"
+	@echo " Machine  : q800  |  CPU: m68040  |  RAM: 128M"
+	@echo " Mode     : headless, serial validation"
+	@echo "=========================================================="
+	@bash scripts/test_m68k.sh
 
 # ═══════════════════════════════════════════════════════════════════
 # Sony PlayStation 2 Emotion Engine Kernel (ps2 / PCSX2) [Target 8]
@@ -1629,6 +1645,8 @@ screenshots: $(CAPTURE_SCREENS_BIN)
 	@./$(CAPTURE_SCREENS_BIN)
 	@python3 scripts/raw_to_png.py
 	@python3 scripts/populate_doc_screens.py
+
+sreenshots: screenshots
 
 # ═══════════════════════════════════════════════════════════════════
 # µBTRON-FOMA Automated Screen Capture & Documentation

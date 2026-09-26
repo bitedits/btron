@@ -342,9 +342,9 @@ static void rasterize_tri(const virgl_tri_t *tri, const mat4_t *mv, const mat4_t
         sz[i] = (ndc_z + 1.0f) * 0.5f;
     }
 
-    /* Backface culling check */
+    /* Backface culling check: in screen space (Y down), front-facing (CCW) triangles have area < 0 */
     float area = (sx[1] - sx[0]) * (sy[2] - sy[0]) - (sx[2] - sx[0]) * (sy[1] - sy[0]);
-    if (s_cull_face_enabled && area <= 0.0f) {
+    if (s_cull_face_enabled && area >= 0.0f) {
         return;
     }
 
@@ -390,12 +390,16 @@ static void rasterize_tri(const virgl_tri_t *tri, const mat4_t *mv, const mat4_t
                     float g = w0 * lit_g[0] + w1 * lit_g[1] + w2 * lit_g[2];
                     float b = w0 * lit_b[0] + w1 * lit_b[1] + w2 * lit_b[2];
 
+                    if (r < 0.0f) r = 0.0f;
+                    if (g < 0.0f) g = 0.0f;
+                    if (b < 0.0f) b = 0.0f;
+                    if (r > 1.0f) r = 1.0f;
+                    if (g > 1.0f) g = 1.0f;
+                    if (b > 1.0f) b = 1.0f;
+
                     uint32_t ir = (uint32_t)(r * 255.0f);
                     uint32_t ig = (uint32_t)(g * 255.0f);
                     uint32_t ib = (uint32_t)(b * 255.0f);
-                    if (ir > 255) ir = 255;
-                    if (ig > 255) ig = 255;
-                    if (ib > 255) ib = 255;
 
                     s_pixel_buf[pixel_idx] = virgl_pack_color(ir, ig, ib);
                 }

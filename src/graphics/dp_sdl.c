@@ -169,6 +169,9 @@ BOOL init_sdl_backend(H width, H height, const char *title) {
         SDL_TEXTUREACCESS_STREAMING,
         width, height
     );
+    if (g_sdl_texture) {
+        SDL_SetTextureBlendMode(g_sdl_texture, SDL_BLENDMODE_NONE);
+    }
 
     return TRUE;
 }

@@ -21,8 +21,8 @@
   <div class="setting-hero">
     <div class="setting-hero-icon"><img src="https://openmoji.org/data/color/svg/1F680.svg" alt="🚀" width="64" height="64"></div>
     <h1>ブート設定 (Boot)</h1>
-    <div class="setting-hero-badge">ダイレクトMultiboot · ハードウェア実値検出 · x86_64 UEFI SMP · ARM MMIO · NEC PC-98 · Motorola 68040</div>
-    <div class="subtitle">マルチアーキテクチャ起動制御、ハードウェア探索パイプライン、カーネル実行マトリクスの技術仕様<br><span style="font-size:0.9em; opacity:0.85;">"Architectural specification of single-stage Multiboot loading, zero-mock hardware discovery, and multi-target kernel orchestration."</span></div>
+    <div class="setting-hero-badge">ダイレクトMultiboot · ハードウェア実値検出 · x86_64 UEFI SMP · ARM MMIO · NEC PC-98 · Motorola 68040 · PlayStation 2 · MIPS · FOMA · SEGUI</div>
+    <div class="subtitle">マルチアーキテクチャ起動制御、ハードウェア探索パイプライン、カーネル実行マトリクスの技術仕様<br><span style="font-size:0.9em; opacity:0.85;">"Architectural specification of single-stage Multiboot loading, zero-mock hardware discovery, and multi-target kernel orchestration across 12 hardware targets."</span></div>
   </div>
 
   <div class="setting-content">
@@ -147,6 +147,26 @@
             <td>0x50000000 Mac-IO (VIA1/VIA2) 初期化、SONY DAFB 800x600 32bpp VRAMマッピング、ADB (Apple Desktop Bus) キーボード・マウス割り込みハンドシェイク、128MB物理RAMダイレクトELF展開。</td>
             <td><code>src/kernel/core_m68k.c</code><br>Mac-IO MMIO: <code>0x50000000</code><br>VRAM: <code>0xF9000000</code> / ADB VIA1</td>
           </tr>
+          <tr>
+            <td><b>PlayStation 2<br>(Emotion Engine R5900)</b></td>
+            <td>0x00100000物理RAM直接展開、DMAC Channel 2 (GIF) Host-to-Local eDRAMブリット、GS VESA 800x600 32bppプログレッシブ走査、DualShock 2 (SIO2) 速度積分、OHCI USB HIDブートプロトコル。</td>
+            <td><code>src/cores/core_ps2.c</code><br><code>src/drivers/ps2/boot_ps2.s</code><br>GS MMIO: <code>0x12000000</code> / SIO0: <code>0x1000F180</code></td>
+          </tr>
+          <tr>
+            <td><b>Bare-Metal MIPS<br>(QEMU Malta &amp; Magnum)</b></td>
+            <td>KSEG0 0x80100000ダイレクトロード、CP0 Count/Compareタイマ割り込み、NS16550 UART (COM1 115200 8N1) 初期化、256MB物理RAMマッピング。</td>
+            <td><code>src/cores/core_mips.c</code><br><code>src/drivers/mips/mips_uart.c</code><br>UART MMIO: <code>0x180003F8</code></td>
+          </tr>
+          <tr>
+            <td><b>NTT DoCoMo FOMA<br>(SH903i Mobile Profile)</b></td>
+            <td>TI OMAP2430 ARM1136 AArch32初期化、480x640 TFT 32bpp縦画面フレームバッファ展開、VirtIO-Block MMIO 0x10001000ストレージマウント、T-Kernel 2.0モバイルタスクディスパッチ。</td>
+            <td><code>src/cores/core_foma.c</code><br>OMAP2430 MMIO<br>480x640 Portrait VGA</td>
+          </tr>
+          <tr>
+            <td><b>SEGUI マイクロコントローラ<br>(Embedded MCU &amp; Appliance)</b></td>
+            <td>画面高予算分割型セグメントUI (STATUS/TABBAR/BODY/SOFTKEY)、ブート後ゼロ動的ヒープ静的割り当て、Cortex-M / 組込家電向け超軽量実行。</td>
+            <td><code>src/segui/segui_demo.c</code><br><code>include/btron/segui.h</code><br>NASA JPL Rule 3 準拠</td>
+          </tr>
         </tbody>
       </table>
     </div>
@@ -156,8 +176,8 @@
     <div class="section">
       <h2>3. カーネル実行マトリクス (Supported Kernels &amp; Execution Matrix)</h2>
       <p>
-        B-Systemがサポートする全8種類のカーネルビルドターゲットおよび技術仕様マトリクス。<br>
-        <span style="font-size:0.9em; opacity:0.85;">"Comprehensive execution matrix of all eight purpose-built kernel targets spanning host emulation, cloud VirtIO, bare-metal ARM, UEFI SMP, vintage PC-98, and Motorola 68040 Macintosh."</span>
+        B-Systemがサポートする全12種類のカーネルビルドターゲットおよび技術仕様マトリクス。<br>
+        <span style="font-size:0.9em; opacity:0.85;">"Comprehensive execution matrix of all twelve purpose-built kernel targets spanning host emulation, cloud VirtIO, bare-metal ARM, UEFI SMP, vintage PC-98, Motorola 68040, PlayStation 2, Bare-Metal MIPS, NTT DoCoMo FOMA mobile, and SEGUI MCU."</span>
       </p>
 
 <div style="margin-top: 1rem;">
@@ -227,6 +247,34 @@
               <td>Motorola 68040<br><small style="color: #6b4f7e;">Apple Macintosh Quadra 800</small></td>
               <td>Cleanroom TRON</td>
               <td><strong>板垣 史彦 (Fumihiko Itagaki)</strong><br><small style="color: #6b4f7e;">Human68k Architect / X68000 &amp; m68k Pioneer</small></td>
+            </tr>
+            <tr>
+              <td><br><span class="app-badge">ps2</span></td>
+              <td><small style="color: #6b4f7e;">mips64-ps2-ee</small></td>
+              <td>Sony PlayStation 2<br><small style="color: #6b4f7e;">Emotion Engine R5900 / GS eDRAM 32bpp</small></td>
+              <td>Cleanroom TRON</td>
+              <td><strong>久夛良木 健 (Ken Kutaragi)</strong><br><small style="color: #6b4f7e;">Father of PlayStation / Sony Interactive Architect</small></td>
+            </tr>
+            <tr>
+              <td><br><span class="app-badge teal">mips</span></td>
+              <td><small style="color: #6b4f7e;">mips32-malta</small></td>
+              <td>Bare-Metal MIPS<br><small style="color: #6b4f7e;">QEMU Malta &amp; Magnum / NS16550 UART</small></td>
+              <td>Cleanroom TRON</td>
+              <td><strong>進藤 雅弘 (Masahiro Shindo)</strong><br><small style="color: #6b4f7e;">Nintendo 64 MIPS Microcode &amp; 3D Graphics Pioneer</small></td>
+            </tr>
+            <tr>
+              <td><br><span class="app-badge pink">foma</span></td>
+              <td><small style="color: #6b4f7e;">foma-tkernel-virtio</small></td>
+              <td>NTT DoCoMo FOMA Mobile<br><small style="color: #6b4f7e;">SH903i OMAP2430 ARM1136 / 480x640 TFT</small></td>
+              <td>T-Kernel 2.0</td>
+              <td><strong>新部 裕 (Yutaka Niibe)</strong><br><small style="color: #6b4f7e;">Linux SuperH / Mobile Architecture Pioneer &amp; Free Software Hacker</small></td>
+            </tr>
+            <tr>
+              <td><br><span class="app-badge gold">segui</span></td>
+              <td><small style="color: #6b4f7e;">mcu-segui-rtos</small></td>
+              <td>Embedded MCU &amp; Appliance<br><small style="color: #6b4f7e;">Zero-Heap Segmented Budget UI / Cortex-M</small></td>
+              <td>T-Kernel 2.0</td>
+              <td><strong>本田 晋也 (Shinya Honda)</strong><br><small style="color: #6b4f7e;">TOPPERS Embedded MCU &amp; Real-Time System Architect</small></td>
             </tr>
           </tbody>
         </table>

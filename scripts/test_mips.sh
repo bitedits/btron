@@ -17,9 +17,14 @@ else
 fi
 
 ELF_PATH="btron-mips.elf"
-if [ ! -f "$ELF_PATH" ]; then
+if [ ! -f "$ELF_PATH" ] && [ -f ".build/btron-mips.elf" ]; then
+    ELF_PATH=".build/btron-mips.elf"
+elif [ ! -f "$ELF_PATH" ]; then
     echo "[CI-TEST] Building $ELF_PATH..."
     make mips >/dev/null 2>&1
+    if [ ! -f "$ELF_PATH" ] && [ -f ".build/btron-mips.elf" ]; then
+        ELF_PATH=".build/btron-mips.elf"
+    fi
 fi
 
 LOG_FILE=$(mktemp /tmp/qemu_btron_mips_XXXXXX)

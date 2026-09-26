@@ -951,6 +951,7 @@ $(MIPS_TARGET): $(MIPS_OBJS) $(MIPS_LD_SCRIPT)
 	@echo " Building B-System MIPS Kernel: $@"
 	@echo "=========================================================="
 	$(MIPS_LD) -T $(MIPS_LD_SCRIPT) $(MIPS_OBJS) -o $@
+	@ln -sf $@ btron-mips.elf
 	@echo "[MIPS-ELF] Built: $@"
 	@file $@
 

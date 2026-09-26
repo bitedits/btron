@@ -31,31 +31,11 @@
 extern void uart_puts_raw(const char *s);
 
 /*
- * virgl_pack_color — Pack 8-bit R, G, B into target-specific COLOR word so that
- * when the framebuffer is textured by SDL2 using that target's SDL_PIXELFORMAT,
- * the OpenGL content appears authentic (R=Red, G=Green, B=Blue, Alpha=1.0),
- * matching baremetal UEFI output without participating in the desktop UI's
- * intentional target color swap/palette schemes or causing partial transparency.
+ * virgl_pack_color — Pack 8-bit R, G, B into authentic ARGB8888 COLOR word,
+ * matching baremetal UEFI VESA LFB and unified SDL2 SDL_PIXELFORMAT_ARGB8888.
  */
 static inline uint32_t virgl_pack_color(uint32_t r, uint32_t g, uint32_t b) {
-#if BTRON_TARGET == 2 || BTRON_TARGET == 10 || defined(BTRON_UEFI_TARGET)
-    /* Target 2 (Yokobayashi), Target 10 (FOMA Mobile), UEFI: SDL_PIXELFORMAT_ARGB8888 */
     return 0xFF000000 | (r << 16) | (g << 8) | b;
-#elif BTRON_TARGET == 3
-    /* Target 3 (Sakamura Host): SDL_PIXELFORMAT_ABGR8888
-     * Memory bytes = R, G, B, 0xFF so SDL displays R=Red, G=Green, B=Blue, A=0xFF */
-    return 0xFF000000 | (b << 16) | (g << 8) | r;
-#elif BTRON_TARGET == 1
-    /* Target 1 (QEMU VirtIO host): SDL_PIXELFORMAT_BGRA8888
-     * Byte 0 must be 0xFF so SDL alpha is 100% opaque (not partially visible)!
-     * Memory bytes = 0xFF, R, G, B so SDL displays R=Red, G=Green, B=Blue, A=0xFF */
-    return (b << 24) | (g << 16) | (r << 8) | 0xFF;
-#else
-    /* Target 0 (POSIX host): SDL_PIXELFORMAT_RGBA8888
-     * Byte 0 must be 0xFF so SDL alpha is 100% opaque (not partially visible)!
-     * Memory bytes = 0xFF, B, G, R so SDL displays R=Red, G=Green, B=Blue, A=0xFF */
-    return (r << 24) | (g << 16) | (b << 8) | 0xFF;
-#endif
 }
 
 /* ── 4x4 Matrix Mathematics ───────────────────────────────────────── */
@@ -318,12 +298,13 @@ static void rasterize_tri(const virgl_tri_t *tri, const mat4_t *mv, const mat4_t
             float n_dot_l = tnx * lx + tny * ly + tnz * lz;
             if (n_dot_l < 0.0f) n_dot_l = 0.0f;
 
-            float r = tri->mat_ambient[0] * s_light0_ambient[0] +
-                      tri->mat_diffuse[0] * s_light0_diffuse[0] * n_dot_l;
-            float g = tri->mat_ambient[1] * s_light0_ambient[1] +
-                      tri->mat_diffuse[1] * s_light0_diffuse[1] * n_dot_l;
-            float b = tri->mat_ambient[2] * s_light0_ambient[2] +
-                      tri->mat_diffuse[2] * s_light0_diffuse[2] * n_dot_l;
+            float amb_r = (tri->mat_diffuse[0] > 0.0f) ? tri->mat_diffuse[0] * 0.2f : tri->mat_ambient[0] * s_light0_ambient[0];
+            float amb_g = (tri->mat_diffuse[1] > 0.0f) ? tri->mat_diffuse[1] * 0.2f : tri->mat_ambient[1] * s_light0_ambient[1];
+            float amb_b = (tri->mat_diffuse[2] > 0.0f) ? tri->mat_diffuse[2] * 0.2f : tri->mat_ambient[2] * s_light0_ambient[2];
+
+            float r = amb_r + tri->mat_diffuse[0] * s_light0_diffuse[0] * n_dot_l;
+            float g = amb_g + tri->mat_diffuse[1] * s_light0_diffuse[1] * n_dot_l;
+            float b = amb_b + tri->mat_diffuse[2] * s_light0_diffuse[2] * n_dot_l;
 
             if (r > 1.0f) r = 1.0f;
             if (g > 1.0f) g = 1.0f;

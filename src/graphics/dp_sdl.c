@@ -162,39 +162,13 @@ BOOL init_sdl_backend(H width, H height, const char *title) {
         g_sdl_renderer = SDL_CreateRenderer(g_sdl_window, -1, 0);
     }
 
-#if BTRON_TARGET == 2 || BTRON_TARGET == 10
-    /* Target 2 (Yokobayashi) & Target 10 (FOMA Mobile): Authentic colors (Teal & Navy) */
+    /* Authentic BTRON3 palette across all virtualized targets (Teal, Navy, Gray) */
     g_sdl_texture = SDL_CreateTexture(
         g_sdl_renderer,
         SDL_PIXELFORMAT_ARGB8888,
         SDL_TEXTUREACCESS_STREAMING,
         width, height
     );
-#elif BTRON_TARGET == 3
-    /* Target 3 (Sakamura Host): Distinct color swap bug (e.g., using ABGR8888) */
-    g_sdl_texture = SDL_CreateTexture(
-        g_sdl_renderer,
-        SDL_PIXELFORMAT_ABGR8888,
-        SDL_TEXTUREACCESS_STREAMING,
-        width, height
-    );
-#elif BTRON_TARGET == 1
-    /* Target 1 (QEMU VirtIO host): Distinct color swap bug (e.g., using BGRA8888) */
-    g_sdl_texture = SDL_CreateTexture(
-        g_sdl_renderer,
-        SDL_PIXELFORMAT_BGRA8888,
-        SDL_TEXTUREACCESS_STREAMING,
-        width, height
-    );
-#else
-    /* Target 0 (POSIX host): Standard rosy color swap bug (using RGBA8888) */
-    g_sdl_texture = SDL_CreateTexture(
-        g_sdl_renderer,
-        SDL_PIXELFORMAT_RGBA8888,
-        SDL_TEXTUREACCESS_STREAMING,
-        width, height
-    );
-#endif
 
     return TRUE;
 }

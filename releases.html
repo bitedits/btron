@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Releases &amp; Development History — B-System (BTRON3 3.20)</title>
-    <meta name="description" content="Official Alpha 1 release announcement and comprehensive 631-commit, 44-session development history log of the B-System BTRON cleanroom operating system.">
+    <meta name="description" content="Official Alpha 1 release announcement and comprehensive 647-commit, 45-session development history log of the B-System BTRON cleanroom operating system.">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&family=Noto+Sans+JP:wght@400;500;600;700;800&family=Shippori+Mincho:wght@600;700&display=swap" rel="stylesheet">
@@ -262,7 +262,7 @@
             </h1>
             <p class="hero-subtitle" style="text-align: center; margin: 0 auto; max-width: 760px; line-height: 1.75;">
                 BTRON3 3.20準拠 クリーンルームOS<strong>「B-System Alpha 1」</strong>公式アナウンス。<br>
-                初コミットから完成までの全<strong>631コミット</strong>・<strong>44セッション</strong>（約228.0時間）の開発全記録。
+                初コミットから完成までの全<strong>647コミット</strong>・<strong>45セッション</strong>（約234.0時間）の開発全記録。
             </p>
             <div style="margin-top: 1.6rem; display: flex; flex-wrap: wrap; gap: 0.8rem; justify-content: center;">
                 <a href="#alpha-1-announcement" class="pdf-badge" style="background: linear-gradient(135deg, #ff2d95, #c026d3); color:white; box-shadow: 0 4px 14px rgba(255, 45, 149, 0.35);">🌸 Alpha 1 公開アナウンス</a>
@@ -282,15 +282,15 @@
                 <div class="stat-label">初版公開<br><small style="font-size:0.72rem; font-weight:500;">Initial Release</small></div>
             </div>
             <div class="stat-card">
-                <div class="stat-num">631</div>
+                <div class="stat-num">647</div>
                 <div class="stat-label">総コミット数<br><small style="font-size:0.72rem; font-weight:500;">Git Commits</small></div>
             </div>
             <div class="stat-card">
-                <div class="stat-num">44</div>
+                <div class="stat-num">45</div>
                 <div class="stat-label">作業セッション<br><small style="font-size:0.72rem; font-weight:500;">Dev Sessions</small></div>
             </div>
             <div class="stat-card">
-                <div class="stat-num">~228.0 h</div>
+                <div class="stat-num">~234.0 h</div>
                 <div class="stat-label">実稼働開発時間<br><small style="font-size:0.72rem; font-weight:500;">Active Dev Time</small></div>
             </div>
             <div class="stat-card">
@@ -528,10 +528,30 @@ $ make verify</pre>
                 </p>
             </div>
 
-            <!-- Complete 44-Session Table -->
-            <h3 style="margin-top: 3rem;">セッション詳細開発ログ（Complete 44-Session Engineering Log）</h3>
+            <div class="phase-card">
+                <span class="phase-badge">Phase 14 · OpenGL ES 3Dグラフィックス基盤・TinyGL &amp; VirtIO-GPUデュアルバックエンド (Phase 14, OpenGL ES 3D Subsystem)</span>
+                <div class="phase-header">
+                    <h3 class="phase-title">14. OpenGL ES 3Dサブシステム・TinyGL &amp; VirtIO-GPUデュアルバックエンド (OpenGL ES 1.1 Architecture, TinyGL &amp; VirtIO-GPU Dual Backends · Commits 632–647 · Sept 26–27)</h3>
+                    <span class="phase-meta">Session 45 · 実動約6.0時間 · 3D Graphics Subsystem, Hardware Acceleration &amp; Window Integration</span>
+                </div>
+                <p style="color: #4a3560; line-height: 1.7;">
+                    B-Systemの3Dグラフィックス基盤（<code>src/gl/</code>）を新設：統一ディスパッチテーブル（<code>gl_dispatch.c</code>）、EGL-liteウィンドウサーフェスブリッジ（<code>egl_surface.c</code>）、およびベアメタルUEFIと仮想化ホスト双方を網羅するデュアルバックエンド体系を確立。
+                    x86_64 UEFIベアメタル環境にはTinyGLソフトウェアラスタライザ（<code>backend_tinygl.c</code>）を統合しVESAリニアフレームバッファ（LFB）へ直接描画。POSIX（<code>btron-posix</code>）、QEMU（<code>btron-qemu.elf</code>）、Sakamura T-Kernel（<code>btron-sakamura.elf</code>）にはVirtIO-GPU 3Dハードウェアアクセラレーション（<code>backend_virgl.c</code>）をクリーンルーム実装し、4x4行列スタック、グーロー平滑シェーディング、法線変換、環境光・拡散反射ライティング、ディスプレイリスト（<code>glGenLists</code>/<code>glNewList</code>/<code>glEndList</code>/<code>glCallList</code>）、デプスバッファ三角形ラスタライザを完備。
+                    BTRONウィンドウマネージャ（WND）配下で滑らかに回転する<code>glgears</code> 3Dデスクトップアプリ（<code>src/apps/glgears.c</code>）とローカルAPICタイマースケジューラ（<code>get_tim()</code>）による60 FPSアニメーションを統合。
+                    さらに全仮想化ターゲットのパレット体系を<code>SDL_PIXELFORMAT_ARGB8888</code>および<code>SDL_BLENDMODE_NONE</code>で完全統一し、白ボケ・透過アーティファクトを根絶してUEFI実機と100%同一の鮮やかなティール・ネイビー・真正3D発色を実現しました。
+                </p>
+                <div style="margin-top: 1rem; padding: 0.75rem 1rem; background: rgba(0, 128, 128, 0.08); border-left: 4px solid var(--tron-teal); border-radius: 4px;">
+                    <strong style="color: #008080;">謝辞とクレジット（Acknowledgements &amp; Credits）：</strong><br>
+                    <span style="font-size: 0.9rem; color: #4a3560; line-height: 1.6;">
+                        TinyGLの元設計者 <strong>Fabrice Bellard</strong> 氏、32ビット近代化を行った <strong>C-Chads</strong> コミュニティ、glgearsおよびMesa 3Dの創始者 <strong>Brian Paul</strong> 氏、VirtIO-GPU / virgl 3Dプロトコル仕様を策定した <strong>Gerd Hoffmann</strong> 氏、そしてTRONアーキテクチャを創始した <strong>坂村健</strong> 博士に深く敬意を表します。
+                    </span>
+                </div>
+            </div>
+
+            <!-- Complete 45-Session Table -->
+            <h3 style="margin-top: 3rem;">セッション詳細開発ログ（Complete 45-Session Engineering Log）</h3>
             <p style="color: #4a3560; line-height: 1.7;">
-                36日間の開発スプリントにおける全作業セッション、実施時間帯、実働時間、コミット範囲、および各セッションで実装された主要サブシステムの一覧：
+                37日間の開発スプリントにおける全作業セッション、実施時間帯、実働時間、コミット範囲、および各セッションで実装された主要サブシステムの一覧：
             </p>
 
             <div class="session-table-wrapper">
@@ -853,6 +873,13 @@ $ make verify</pre>
                             <td>~0.5 h <small style="color: #704b75;">(2 commits)</small></td>
                             <td><code>efae14a..b407cc7</code></td>
                             <td>B-Book &amp; B-System Architecture Grand Unification: comprehensive BTRON File System manual (<code>fs.html</code>: Chokanji B-right/V FS, B-FS V1, B-FS V2, and default volumes <code>/SYS</code>, <code>/ANDERS</code>, <code>/CHOKANJI</code>, <code>/NEW-V2</code>), PCIe Device Tree &amp; Console Preservation (<code>drivers.html</code>), and 12-kernel Multiboot matrix in <code>Boot.html</code> honoring Ken Kutaragi (Sony) and Masahiro Shindo (N64).</td>
+                        </tr>
+                        <tr>
+                            <td><strong>Session 45</strong></td>
+                            <td>2026-09-26 21:00 – 2026-09-27 01:45</td>
+                            <td>~4.8 h <small style="color: #704b75;">(16 commits)</small></td>
+                            <td><code>b94549f..beb4261</code></td>
+                            <td>OpenGL ES 1.1 3Dグラフィックス基盤（<code>src/gl/</code>）：統一ディスパッチテーブル（<code>gl_dispatch.c</code>）、EGL-liteサーフェスブリッジ（<code>egl_surface.c</code>）；x86_64 UEFI向けTinyGLバックエンド（<code>backend_tinygl.c</code>）およびPOSIX/QEMU/Sakamura向けVirtIO-GPU 3Dバックエンド（<code>backend_virgl.c</code>）；WND統合<code>glgears</code> 3Dアプリ（<code>src/apps/glgears.c</code>）とローカルAPICタイマースケジューラ；背面カリング（backface culling）符号修正、浮動小数点アンダーフロー白ボケ防止、および<code>SDL_PIXELFORMAT_ARGB8888</code> / <code>SDL_BLENDMODE_NONE</code>によるパレット・不透明度完全統一。Fabrice Bellard、C-Chads、Brian Paul、Gerd Hoffmann、坂村健各氏に謝意。</td>
                         </tr>
                     </tbody>
                 </table>

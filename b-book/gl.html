@@ -1,0 +1,326 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>OpenGL: 3D Graphics Subsystem &amp; Hardware Backends | B-Book</title>
+  <meta name="description" content="Formal developer documentation for the B-System OpenGL ES 1.1 3D Graphics Subsystem: dispatch table, EGL-lite surface bridge, and existing &amp; future backends (TinyGL, VirtIO-GPU, Intel i915 Venus, N64 LibDragon, PS2 ps2gl, Raspberry Pi VC4).">
+  <link rel="stylesheet" href="b-book.css">
+</head>
+<body>
+
+  <nav class="book-global-nav" aria-label="Site navigation">
+    <div class="book-global-nav-container">
+      <a href="../index.html" class="book-global-logo"><img width="48" src="https://n2o.dev/img/synrc.svg" alt="Synrc Logo"></a>
+      <button class="book-nav-toggle" aria-label="Toggle navigation" aria-expanded="false" onclick="const links = this.nextElementSibling; const sidebar = document.querySelector('.book-sidebar'); const open = links.classList.toggle('open'); sidebar.classList.toggle('open', open); this.classList.toggle('open', open); this.setAttribute('aria-expanded', open);">
+        <span class="hamburger"></span>
+      </button>
+      <ul class="book-global-links">
+        <li><a href="../index.html">VirtIO</a></li>
+        <li><a href="../b-system.html">B-System</a></li>
+        <li><a href="index.html" class="active">B-Book</a></li>
+        <li><a href="../conformance.html">B-Spec</a></li>
+        <li><a href="../mobile.html">FOMA</a></li>
+        <li><a href="../releases.html">Releases</a></li>
+        <li><a href="https://github.com/bitedits/btron">GitHub</a></li>
+      </ul>
+    </div>
+  </nav>
+
+  <!-- Navigation Sidebar -->
+  <nav class="book-sidebar">
+    <div class="sidebar-brand">
+      <div class="brand-title">B-Book <span class="badge">Rev 3.20</span></div>
+      <div class="brand-sub">OpenGL 3D Graphics Reference</div>
+    </div>
+    <div class="sidebar-nav">
+      <div class="nav-heading">Overview</div>
+      <a href="index.html" class="nav-link">Master Index</a>
+      
+      <div class="nav-heading">Core Subsystems</div>
+      <a href="kernel.html" class="nav-link">Kernel (T-Kernel 2.0)</a>
+      <a href="cores.html" class="nav-link">Cores (Kernel &amp; SMP)</a>
+      <a href="graphics.html" class="nav-link">Graphics (DP &amp; 2D)</a>
+      <a href="gl.html" class="nav-link active">OpenGL (3D Graphics)</a>
+      <div class="nav-sublinks">
+        <a href="#arch" class="nav-sublink">3D Architecture &amp; Pipeline</a>
+        <a href="#dispatch" class="nav-sublink">Dispatch Table (gl_ops_t)</a>
+        <a href="#egl" class="nav-sublink">EGL-lite Window Bridge</a>
+        <a href="#tinygl" class="nav-sublink">1. TinyGL Software Backend</a>
+        <a href="#virtio" class="nav-sublink">2. VirtIO-GPU 3D Backend</a>
+        <a href="#venus" class="nav-sublink">3. Awe Morris i915 (Venus)</a>
+        <a href="#libdragon" class="nav-sublink">4. LibDragon OpenGL (N64)</a>
+        <a href="#ps2gl" class="nav-sublink">5. ps2dev ps2gl (PlayStation 2)</a>
+        <a href="#vc4" class="nav-sublink">6. Broadcom VC4 (Raspberry Pi)</a>
+        <a href="#credits" class="nav-sublink">Credits &amp; Acknowledgements</a>
+      </div>
+      <a href="tip.html" class="nav-link">Tip (Input &amp; IME)</a>
+      <a href="vobject.html" class="nav-link">VObject (Hyper-Data)</a>
+      <a href="window.html" class="nav-link">Window (WM &amp; Menus)</a>
+
+      <div class="nav-heading">Extended Subsystems</div>
+      <a href="desktop.html" class="nav-link">Desktop (Shell &amp; Mobile)</a>
+      <a href="hmi.html" class="nav-link">HMI (Human-Machine Interface)</a>
+      <a href="font.html" class="nav-link">Font (Typography Engine)</a>
+      <a href="settings.html" class="nav-link">Settings (Control Panel)</a>
+      <a href="drivers.html" class="nav-link">Drivers (Hardware &amp; VirtIO)</a>
+      <a href="fs.html" class="nav-link">File System (B-FS &amp; Volumes)</a>
+      <a href="apps.html" class="nav-link">Apps (Application Suite)</a>
+    </div>
+  </nav>
+
+  <!-- Main Content Canvas -->
+  <main class="book-content">
+    <header class="book-header">
+      <div class="breadcrumb">
+        <a href="index.html">B-Book</a> / <span>OpenGL</span>
+      </div>
+      <h1 class="page-title">OpenGL: 3D Graphics Subsystem, Architecture &amp; Backends</h1>
+      <p class="page-lead">
+        Formal C99 developer manual and architectural specification for the B-System OpenGL ES 1.1 3D graphics pipeline. Documents the uniform function pointer dispatch engine, EGL-lite window surface compositor bridge, and the six production and roadmap backends: TinyGL, VirtIO-GPU, Intel Gen12 i915 (Venus), Nintendo 64 (LibDragon), Sony PlayStation 2 (ps2gl), and Broadcom VideoCore IV.
+      </p>
+    </header>
+
+    <div class="callout callout-info">
+      <div class="callout-title">Architectural Scope &amp; Zero Post-Boot Allocations</div>
+      The B-System 3D graphics subsystem provides an industry-standard, fixed-function OpenGL ES 1.1 API decoupled from physical hardware through a lightweight 26-method dispatch table. All display list allocations, vertex pipeline buffers, and depth buffers adhere to <strong>NASA JPL Rule 3</strong> (zero dynamic heap allocation during live animation frames).
+    </div>
+
+    <!-- Section 1: Architecture -->
+    <h2 id="arch">1. 3D Graphics Architecture &amp; Pipeline Overview</h2>
+    <p>
+      In classic TRON specifications, 2D display primitives (GDEV) handled all desktop drawing. B-System extends this model by embedding a full 3D rasterization engine that treats window client canvases as offscreen color buffers. Applications call standard OpenGL functions (<code>glMatrixMode</code>, <code>glRotatef</code>, <code>glLightfv</code>, <code>glCallList</code>), which route transparently through the active backend into the window's backing pixmap:
+    </p>
+
+    <pre><code>┌────────────────────────────────────────────────────────────────────────┐
+│               B-System Application Layer (glgears, 3D CAD)             │
+│   • glMatrixMode / glLoadIdentity / glTranslatef / glRotatef           │
+│   • glEnable(GL_LIGHTING) / glMaterialfv / glColor3f                   │
+│   • glGenLists / glNewList / glEndList / glCallList                    │
+└───────────────────────────────────┬────────────────────────────────────┘
+                                    │ Standard OpenGL API
+┌───────────────────────────────────▼────────────────────────────────────┐
+│          B-System OpenGL Dispatch Engine (src/gl/gl_dispatch.c)        │
+│          Uniform 26-Method Vector Table: gl_ops_t *g_gl                │
+└───────────────────┬────────────────────────────────┬───────────────────┘
+                    │                                │
+┌───────────────────▼──────────────┐   ┌─────────────▼───────────────────┐
+│     Bare-Metal x86_64 UEFI       │   │   POSIX / QEMU / Sakamura Host  │
+│  TinyGL Software Rasterizer      │   │  VirtIO-GPU 3D (virgl) Engine   │
+│  (src/gl/backend_tinygl.c)       │   │  (src/gl/backend_virgl.c)       │
+└───────────────────┬──────────────┘   └─────────────┬───────────────────┘
+                    │                                │
+┌───────────────────▼────────────────────────────────▼───────────────────┐
+│              EGL-lite Window Bridge (src/gl/egl_surface.c)             │
+│   • egl_create_window_surface(WND*) ──► wnd-&gt;dev-&gt;pixels (ARGB8888)    │
+│   • egl_swap_buffers(EGL_SURFACE*)  ──► inval_wnd(WND*) (Tear-Free WM) │
+└───────────────────┬────────────────────────────────────────────────────┘
+                    │
+┌───────────────────▼────────────────────────────────────────────────────┐
+│      BTRON Desktop Window Compositor &amp; Display Engine (wnd.c, dp_sdl.c)│
+│      1024x768x32 ARGB8888 Opaque Blit ──► VESA LFB / SDL2 Streaming    │
+└────────────────────────────────────────────────────────────────────────┘</code></pre>
+
+    <!-- Section 2: Dispatch Table -->
+    <h2 id="dispatch">2. Dispatch Table Architecture (<code>gl_ops_t</code>)</h2>
+    <p>
+      The core dispatch interface is defined in <code>src/gl/gl_dispatch.h</code>. It defines function pointers for all supported OpenGL ES 1.1 primitives, state toggles, and buffer presentation:
+    </p>
+
+    <table class="api-table">
+      <thead>
+        <tr>
+          <th>Category</th>
+          <th>Dispatch Operations</th>
+          <th>Description</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>Primitives</strong></td>
+          <td><code>gl_begin</code>, <code>gl_end</code>, <code>gl_vertex3f</code>, <code>gl_normal3f</code>, <code>gl_color3f</code>, <code>gl_color3fv</code></td>
+          <td>Immediate mode vertex submission for <code>GL_TRIANGLES</code>, <code>GL_QUADS</code>, and <code>GL_QUAD_STRIP</code>.</td>
+        </tr>
+        <tr>
+          <td><strong>Transformations</strong></td>
+          <td><code>gl_matrix_mode</code>, <code>gl_load_identity</code>, <code>gl_push_matrix</code>, <code>gl_pop_matrix</code>, <code>gl_translate_f</code>, <code>gl_rotate_f</code>, <code>gl_frustum</code>, <code>gl_viewport</code></td>
+          <td>4x4 matrix stack arithmetic for ModelView and Projection matrices (16 levels deep).</td>
+        </tr>
+        <tr>
+          <td><strong>Buffers &amp; State</strong></td>
+          <td><code>gl_clear</code>, <code>gl_clear_color</code>, <code>gl_enable</code>, <code>gl_disable</code>, <code>gl_shade_model</code></td>
+          <td>Depth buffer clear (1.0e10f), color buffer clear, lighting toggles, culling, and smooth shading.</td>
+        </tr>
+        <tr>
+          <td><strong>Lighting &amp; Material</strong></td>
+          <td><code>gl_light_fv</code>, <code>gl_material_fv</code></td>
+          <td>Ambient, diffuse, and specular illumination from directional and positional lights; front/back material responses.</td>
+        </tr>
+        <tr>
+          <td><strong>Display Lists</strong></td>
+          <td><code>gl_gen_lists</code>, <code>gl_new_list</code>, <code>gl_end_list</code>, <code>gl_call_list</code></td>
+          <td>Pre-compiled geometry lists enabling static mesh caching without per-frame vertex generation overhead.</td>
+        </tr>
+        <tr>
+          <td><strong>Presentation</strong></td>
+          <td><code>swap_buffers</code></td>
+          <td>Flushes rendered frame to underlying host/hypervisor driver (VirtIO scanout sync or VESA LFB).</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <!-- Section 3: EGL-lite Surface Bridge -->
+    <h2 id="egl">3. EGL-lite Window Surface Bridge</h2>
+    <p>
+      Instead of requiring full EGL/X11 infrastructure, B-System introduces <strong>EGL-lite</strong> (<code>src/gl/egl_surface.c</code>). It seamlessly links any BTRON window (<code>WND</code>) with the active 3D rasterizer:
+    </p>
+
+    <pre><code>/* Create EGL surface directly bound to window client device context */
+EGL_SURFACE* egl_create_window_surface(WND *wnd) {
+    if (!wnd || !wnd-&gt;dev || !wnd-&gt;dev-&gt;pixels) return NULL;
+    EGL_SURFACE *surf = (EGL_SURFACE *)calloc(1, sizeof(EGL_SURFACE));
+    surf-&gt;wnd    = wnd;
+    surf-&gt;width  = wnd-&gt;dev-&gt;width;
+    surf-&gt;height = wnd-&gt;dev-&gt;height;
+    surf-&gt;pixels = wnd-&gt;dev-&gt;pixels;
+#if defined(BTRON_UEFI_TARGET)
+    gl_init(GL_BACKEND_TINYGL, surf-&gt;width, surf-&gt;height, surf-&gt;pixels);
+#else
+    gl_init(GL_BACKEND_VIRGL, surf-&gt;width, surf-&gt;height, surf-&gt;pixels);
+#endif
+    return surf;
+}
+
+/* Present frame: triggers backend flush and marks window region for WM compositor */
+void egl_swap_buffers(EGL_SURFACE *surf) {
+    if (!surf) return;
+    if (g_gl &amp;&amp; g_gl-&gt;swap_buffers) g_gl-&gt;swap_buffers();
+    if (surf-&gt;wnd) inval_wnd(surf-&gt;wnd);
+}</code></pre>
+
+    <!-- Section 4: Production Backends -->
+    <h2 id="tinygl">4. Production Backend 1: TinyGL Software Rasterizer</h2>
+    <div class="callout callout-success">
+      <div class="callout-title">Production Status: Active in Bare-Metal x86_64 UEFI SMP</div>
+      Source: <code>src/gl/backend_tinygl.c</code> | Credits: <strong>Fabrice Bellard</strong> &amp; <strong>C-Chads</strong>
+    </div>
+    <p>
+      TinyGL is a high-performance, freestanding C99 software 3D rasterizer designed for operating environments with no libc, no FPU runtime helpers, and no GPU hardware. In B-System, it serves as the primary 3D engine for bare-metal UEFI:
+    </p>
+    <ul>
+      <li><strong>Direct Framebuffer Rendering</strong>: Renders 32-bit ARGB8888 color directly into allocated window pixmaps without intermediate host driver translation.</li>
+      <li><strong>Fixed-Point Depth Buffering</strong>: Operates a 16-bit or 32-bit Z-buffer with sub-pixel barycentric interpolation.</li>
+      <li><strong>Zero Dependencies</strong>: Compiles cleanly under freestanding LLVM/Clang (<code>-target i686-none-elf -ffreestanding -nostdlib</code>).</li>
+    </ul>
+
+    <h2 id="virtio">5. Production Backend 2: VirtIO-GPU 3D (virgl) Cleanroom Acceleration</h2>
+    <div class="callout callout-success">
+      <div class="callout-title">Production Status: Active in POSIX, QEMU, and Sakamura T-Kernel</div>
+      Source: <code>src/gl/backend_virgl.c</code> | Credits: <strong>Gerd Hoffmann</strong> &amp; <strong>Synrc Research Center</strong>
+    </div>
+    <p>
+      For virtualized environments running under QEMU or POSIX host emulation, B-System provides a cleanroom implementation of the VirtIO-GPU 3D (virgl) pipeline:
+    </p>
+    <ul>
+      <li><strong>Complete gl_ops_t Dispatch</strong>: Implements all 26 vector table methods including matrix stacks, lighting, materials, and display lists.</li>
+      <li><strong>View-Space Normal Lighting</strong>: Transforms normals by the upper 3x3 modelview matrix and computes Lambertian diffuse lighting ($N \cdot L$) against directional sources.</li>
+      <li><strong>Screen-Space Winding &amp; Culling</strong>: Correctly identifies counter-clockwise (CCW) front-facing triangles in top-left origin coordinates (<code>area &lt; 0</code>), eliminating back-facing polygons without culling front-facing facets.</li>
+      <li><strong>Palette Unification</strong>: Packs true 32-bit ARGB8888 words (<code>0xFFRRGGBB</code>), matching SDL2 <code>SDL_BLENDMODE_NONE</code> streaming textures and eliminating white fog or translucency leaks.</li>
+    </ul>
+
+    <!-- Section 5: Future Backends Roadmap -->
+    <h2>6. Future Roadmap: The Four Hardware 3D Backends</h2>
+    <p>
+      To expand B-System into bare-metal workstations and vintage consoles, four additional specialized hardware 3D backends are scheduled in the architecture roadmap:
+    </p>
+
+    <h3 id="venus">3. Awe Morris Intel i915 (Venus Engine)</h3>
+    <div class="callout callout-info">
+      <div class="callout-title">Target: Bare-Metal Intel Gen12+ Iris Xe / UHD Graphics (Tiger Lake, Alder Lake, Raptor Lake)</div>
+      Design Specification: <code>doc/txt/VENUS.txt</code>
+    </div>
+    <p>
+      The Venus driver provides bare-metal hardware acceleration on modern Intel PC platforms:
+    </p>
+    <ul>
+      <li><strong>Atomic Display Plane Page-Flipping</strong>: Replaces 3 MB software <code>memcpy</code> frame blitting with atomic <code>PLANE_SURF</code> register updates synchronized to hardware VBLANK, slashing CPU presentation latency from 3.2 ms to 12 microseconds.</li>
+      <li><strong>Gen12 Render &amp; Copy Engines (RCS0 / BCS0)</strong>: Executes hardware BitBlt fragment kernels for rectangular window scrolling, drag previews, and solid fills.</li>
+      <li><strong>Lock-Free Multi-Core Actor Model</strong>: UI plane on Core 0 produces requests into a single-producer queue; GPU request worker thread pinned to Core 1 handles CSB status buffers and ring submissions.</li>
+    </ul>
+
+    <h3 id="libdragon">4. OpenGL for LibDragon (Nintendo 64)</h3>
+    <div class="callout callout-info">
+      <div class="callout-title">Target: NEC VR4300 RISC CPU with Reality Coprocessor (RCP)</div>
+      Architecture: Reality Signal Processor (RSP) Microcode &amp; Reality Display Processor (RDP)
+    </div>
+    <p>
+      Adapted from the LibDragon homebrew ecosystem, this backend brings OpenGL ES 1.1 to the Nintendo 64 architecture:
+    </p>
+    <ul>
+      <li><strong>RSP Vector Geometry Engine</strong>: Offloads vertex transformation, 4x4 matrix multiplication, clipping, and lighting calculations to the vector SIMD RSP unit running specialized geometry microcode.</li>
+      <li><strong>RDP Hardware Rasterization</strong>: Commands stream directly via DMA to the RDP 1-cycle pipeline for hardware depth testing (16-bit Z-buffer in RDRAM), Gouraud shading, and perspective-correct texture mapping.</li>
+      <li><strong>Zero-Copy Desktop Scanout</strong>: Video Interface (VI) scanout displays RDRAM framebuffers natively without CPU intervention.</li>
+    </ul>
+
+    <h3 id="ps2gl">5. OpenGL for PlayStation 2 (ps2dev / ps2gl)</h3>
+    <div class="callout callout-info">
+      <div class="callout-title">Target: Sony PlayStation 2 (Emotion Engine R5900 + Graphic Synthesizer)</div>
+      Architecture: Vector Unit 1 (VU1) Parallel Pipeline &amp; 4 MB eDRAM GS Blitter
+    </div>
+    <p>
+      Leveraging the battle-tested <code>ps2gl</code> architecture pioneered by the ps2dev community:
+    </p>
+    <ul>
+      <li><strong>VU1 Geometry Co-Processor</strong>: Vector Unit 1 executes microprograms in parallel with the 294 MHz R5900 core, transforming vertices and computing lighting at 66 million polygons/sec peak throughput.</li>
+      <li><strong>VIF1 Direct DMA Packaging</strong>: Geometry batches are packed into VIF packets and transferred via high-speed DMA directly to the Graphic Synthesizer.</li>
+      <li><strong>GS 4 MB Ultra-Wide eDRAM</strong>: Massive 48 GB/s internal memory bandwidth enables free 32-bit Z-buffering and alpha blending with zero bus stalls.</li>
+    </ul>
+
+    <h3 id="vc4">6. Broadcom VideoCore IV (Raspberry Pi)</h3>
+    <div class="callout callout-info">
+      <div class="callout-title">Target: Raspberry Pi 2, 3, and Pi 400 (BCM2836 / BCM2837 / BCM2711)</div>
+      Architecture: VideoCore IV 3D (V3D) Tile-Based Deferred Rasterizer (TBDR)
+    </div>
+    <p>
+      Direct hardware OpenGL ES 1.1 / 2.0 driver interfacing with the Broadcom VideoCore IV 3D hardware core:
+    </p>
+    <ul>
+      <li><strong>Tile-Based Deferred Rendering (TBDR)</strong>: Divides the 1024x768 screen into 64x64 pixel tiles. Primitives are binned into tile memory before rasterization, drastically reducing memory bandwidth on LPDDR2/LPDDR4 memory.</li>
+      <li><strong>Direct MMIO V3D Control</strong>: Communicates with V3D register apertures (<code>0x3F000000</code> / <code>0xFE000000</code>), programming binning memory and render control blocks without Linux kernel or proprietary firmware blobs.</li>
+      <li><strong>Hardware Cursor Overlay</strong>: Maps the BTRON mouse pointer directly to the HVS (Hardware Video Scaler) overlay plane for zero-overhead cursor motion.</li>
+    </ul>
+
+    <!-- Section 6: Credits -->
+    <h2 id="credits">7. Credits &amp; Acknowledgements</h2>
+    <p>
+      The B-System OpenGL 3D Subsystem stands upon the pioneering engineering of several luminaries in computer graphics and systems architecture:
+    </p>
+    <div class="feature-box" style="border-left-color: #008080;">
+      <ul>
+        <li><strong>Fabrice Bellard</strong>: Creator of TinyGL, whose clean C-based fixed-point 3D rasterization architecture demonstrated that complete 3D graphics can run on bare-metal systems without external dependencies.</li>
+        <li><strong>C-Chads Community</strong>: Modernizers of TinyGL, whose 32-bit cleanups and bug fixes formed the foundation of our bare-metal UEFI TinyGL backend.</li>
+        <li><strong>Brian Paul</strong>: Author of the original <code>glgears</code> demonstration and founder of Mesa 3D, whose work defined modern open-source 3D graphics standards.</li>
+        <li><strong>Gerd Hoffmann</strong>: Principal architect of the VirtIO-GPU and virgl 3D protocol specifications at Red Hat, enabling hypervisor-accelerated 3D graphics.</li>
+        <li><strong>Dr. Ken Sakamura</strong>: Founder of the TRON Project and architect of BTRON, whose vision of responsive, aesthetically unified workstations continues to inspire our implementation.</li>
+      </ul>
+    </div>
+
+  </main>
+
+  <footer class="book-footer">
+    <div class="footer-container">
+      <div class="footer-links">
+        <a href="index.html">Master Index</a>
+        <a href="graphics.html">2D Graphics</a>
+        <a href="window.html">Window System</a>
+        <a href="drivers.html">Drivers HAL</a>
+        <a href="../releases.html">Release Log</a>
+      </div>
+      <div class="footer-copy">
+        B-Book Systems Reference &nbsp;·&nbsp; B-System 3.20 &nbsp;·&nbsp; Synrc Research Center
+      </div>
+    </div>
+  </footer>
+
+</body>
+</html>

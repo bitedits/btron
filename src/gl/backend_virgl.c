@@ -30,6 +30,34 @@
 
 extern void uart_puts_raw(const char *s);
 
+/*
+ * virgl_pack_color — Pack 8-bit R, G, B into target-specific COLOR word so that
+ * when the framebuffer is textured by SDL2 using that target's SDL_PIXELFORMAT,
+ * the OpenGL content appears authentic (R=Red, G=Green, B=Blue, Alpha=1.0),
+ * matching baremetal UEFI output without participating in the desktop UI's
+ * intentional target color swap/palette schemes or causing partial transparency.
+ */
+static inline uint32_t virgl_pack_color(uint32_t r, uint32_t g, uint32_t b) {
+#if BTRON_TARGET == 2 || BTRON_TARGET == 10 || defined(BTRON_UEFI_TARGET)
+    /* Target 2 (Yokobayashi), Target 10 (FOMA Mobile), UEFI: SDL_PIXELFORMAT_ARGB8888 */
+    return 0xFF000000 | (r << 16) | (g << 8) | b;
+#elif BTRON_TARGET == 3
+    /* Target 3 (Sakamura Host): SDL_PIXELFORMAT_ABGR8888
+     * Memory bytes = R, G, B, 0xFF so SDL displays R=Red, G=Green, B=Blue, A=0xFF */
+    return 0xFF000000 | (b << 16) | (g << 8) | r;
+#elif BTRON_TARGET == 1
+    /* Target 1 (QEMU VirtIO host): SDL_PIXELFORMAT_BGRA8888
+     * Byte 0 must be 0xFF so SDL alpha is 100% opaque (not partially visible)!
+     * Memory bytes = 0xFF, R, G, B so SDL displays R=Red, G=Green, B=Blue, A=0xFF */
+    return (b << 24) | (g << 16) | (r << 8) | 0xFF;
+#else
+    /* Target 0 (POSIX host): SDL_PIXELFORMAT_RGBA8888
+     * Byte 0 must be 0xFF so SDL alpha is 100% opaque (not partially visible)!
+     * Memory bytes = 0xFF, B, G, R so SDL displays R=Red, G=Green, B=Blue, A=0xFF */
+    return (r << 24) | (g << 16) | (b << 8) | 0xFF;
+#endif
+}
+
 /* ── 4x4 Matrix Mathematics ───────────────────────────────────────── */
 
 typedef struct {
@@ -388,7 +416,7 @@ static void rasterize_tri(const virgl_tri_t *tri, const mat4_t *mv, const mat4_t
                     if (ig > 255) ig = 255;
                     if (ib > 255) ib = 255;
 
-                    s_pixel_buf[pixel_idx] = 0xFF000000 | (ir << 16) | (ig << 8) | ib;
+                    s_pixel_buf[pixel_idx] = virgl_pack_color(ir, ig, ib);
                 }
             }
         }
@@ -537,7 +565,7 @@ static void virgl_clear_color(GLfloat r, GLfloat g, GLfloat b, GLfloat a) {
     uint32_t ir = (uint32_t)(r * 255.0f) & 0xFF;
     uint32_t ig = (uint32_t)(g * 255.0f) & 0xFF;
     uint32_t ib = (uint32_t)(b * 255.0f) & 0xFF;
-    s_clear_color = 0xFF000000 | (ir << 16) | (ig << 8) | ib;
+    s_clear_color = virgl_pack_color(ir, ig, ib);
 }
 
 static void virgl_enable(GLenum cap) {
@@ -666,6 +694,7 @@ void virgl_backend_init(int w, int h, void *pixel_buf) {
     s_width = w;
     s_height = h;
     s_pixel_buf = (uint32_t *)pixel_buf;
+    s_clear_color = virgl_pack_color(0, 0, 0);
 
     s_vp_x = 0; s_vp_y = 0;
     s_vp_w = w; s_vp_h = h;

@@ -418,3 +418,10 @@ ER tkernel_sta_tsk(ID tskid, VW exinf) {
 void tkernel_dispatch(void) {
     /* POSIX scheduling managed by OS pthreads */
 }
+
+void uart_puts_raw(const char *str) {
+    if (!str) return;
+    fputs(str, stdout);
+    fflush(stdout);
+}
+

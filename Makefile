@@ -202,26 +202,27 @@ COMMON_SRCS = src/graphics/dp_core.c   \
               src/fs/file.c            \
               src/apps/clu.c
 
-# ── POSIX build (Target 0) ────────────────────────────────────────
-POSIX_STARTUP = src/cores/core_posix.c
-POSIX_SRCS    = $(POSIX_STARTUP)        \
-                src/drivers/virtio/virtio.c \
-                src/cores/core_init.c  \
-                $(COMMON_SRCS)
-
-# ── QEMU VirtIO build (Target 1) ─────────────────────────────────
-QEMU_STARTUP = src/cores/core_virtio.c
-QEMU_SRCS    = $(QEMU_STARTUP)          \
-               src/drivers/virtio/virtio.c \
-               src/cores/core_init.c   \
-               $(VIRGL_SRCS)           \
-               $(COMMON_SRCS)
-
 VIRGL_SRCS = \
     src/gl/gl_dispatch.c \
     src/gl/egl_surface.c \
     src/gl/backend_virgl.c \
     src/apps/glgears.c
+
+# ── POSIX build (Target 0) ────────────────────────────────────────
+POSIX_STARTUP = src/cores/core_posix.c
+POSIX_SRCS    = $(POSIX_STARTUP)        \
+                src/drivers/virtio/virtio.c \
+                src/cores/core_init.c  \
+                $(VIRGL_SRCS)          \
+                $(COMMON_SRCS)
+
+# ── QEMU VirtIO build (Target 1) ─────────────────────────────────
+QEMU_STARTUP = src/cores/core_virtio.c
+QEMU_SRCS    = $(QEMU_STARTUP)          \
+                src/drivers/virtio/virtio.c \
+                src/cores/core_init.c   \
+                $(VIRGL_SRCS)           \
+                $(COMMON_SRCS)
 
 TINYGL_SRCS = \
     src/gl/tinygl/api.c \
@@ -323,6 +324,7 @@ TKERNEL_SRCS = src/cores/core_tkernel.c \
                src/drivers/virtio/virtio.c \
                src/cores/core_init.c     \
                $(TKERNEL_SAKAMURA_SRCS)   \
+               $(VIRGL_SRCS)              \
                $(COMMON_SRCS)
 
 # ── µBTRON-FOMA Mobile Target (Target 10) ────────────────────────

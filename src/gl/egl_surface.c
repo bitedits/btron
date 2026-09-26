@@ -23,10 +23,10 @@ EGL_SURFACE* egl_create_window_surface(WND *wnd) {
     surf->height = wnd->dev->height;
     surf->pixels = wnd->dev->pixels;
 
-#if defined(BTRON_QEMU_TARGET)
-    gl_init(GL_BACKEND_VIRGL, surf->width, surf->height, surf->pixels);
-#else
+#if defined(BTRON_UEFI_TARGET)
     gl_init(GL_BACKEND_TINYGL, surf->width, surf->height, surf->pixels);
+#else
+    gl_init(GL_BACKEND_VIRGL, surf->width, surf->height, surf->pixels);
 #endif
     return surf;
 }

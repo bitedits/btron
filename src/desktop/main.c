@@ -118,9 +118,7 @@ int main(int argc, char **argv) {
     open_clarity_window();
     open_t_editor_window();
     open_gterm_window();
-#if defined(BTRON_QEMU_TARGET)
     open_glgears_window();
-#endif
 
     while (running) {
         /* Poll and process all pending system events */

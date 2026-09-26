@@ -17,6 +17,7 @@
 #include <sys/utsname.h>
 #include <btron/fs/vol_api.h>
 #include <btron/fs/block.h>
+#include <sys/time.h>
 
 extern void tkernel_init_subsystems(int full_suite);
 
@@ -287,4 +288,32 @@ ER tk_del_sem(ID semid) {
 
 ER tk_dly_tsk(RELTIM dlytim) {
     return _tk_dly_tsk(dlytim);
+}
+
+void uart_puts_raw(const char *str) {
+    if (!str) return;
+    fputs(str, stdout);
+    fflush(stdout);
+}
+
+typedef uint64_t SYSTIME;
+
+ER get_tim(SYSTIME *p_time) {
+    if (!p_time) return E_PAR;
+    struct timeval tv;
+    gettimeofday(&tv, NULL);
+    *p_time = (SYSTIME)tv.tv_sec * 1000 + (tv.tv_usec / 1000);
+    return E_OK;
+}
+
+ID cre_tsk(CONST T_CTSK *pk_ctsk) {
+    return _tk_cre_tsk(pk_ctsk);
+}
+
+ER sta_tsk(ID tskid, INT stacd) {
+    return _tk_sta_tsk(tskid, stacd);
+}
+
+void dly_tsk(W dlytim) {
+    _tk_dly_tsk(dlytim);
 }

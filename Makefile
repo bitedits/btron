@@ -216,6 +216,39 @@ QEMU_SRCS    = $(QEMU_STARTUP)          \
                src/cores/core_init.c   \
                $(COMMON_SRCS)
 
+TINYGL_SRCS = \
+    src/gl/tinygl/api.c \
+    src/gl/tinygl/arrays.c \
+    src/gl/tinygl/clear.c \
+    src/gl/tinygl/clip.c \
+    src/gl/tinygl/get.c \
+    src/gl/tinygl/image_util.c \
+    src/gl/tinygl/init.c \
+    src/gl/tinygl/light.c \
+    src/gl/tinygl/list.c \
+    src/gl/tinygl/matrix.c \
+    src/gl/tinygl/memory.c \
+    src/gl/tinygl/misc.c \
+    src/gl/tinygl/msghandling.c \
+    src/gl/tinygl/select.c \
+    src/gl/tinygl/specbuf.c \
+    src/gl/tinygl/texture.c \
+    src/gl/tinygl/vertex.c \
+    src/gl/tinygl/zbuffer.c \
+    src/gl/tinygl/zline.c \
+    src/gl/tinygl/zmath.c \
+    src/gl/tinygl/ztriangle.c \
+    src/gl/tinygl/accum.c \
+    src/gl/tinygl/zpostprocess.c \
+    src/gl/tinygl/zraster.c \
+    src/gl/tinygl/ztext.c
+
+GL_SRCS = \
+    src/gl/gl_dispatch.c \
+    src/gl/egl_surface.c \
+    src/gl/backend_tinygl.c \
+    src/apps/glgears.c
+
 # ── X86_64 / EMT64 UEFI build (Target 4) ────────────────────────
 UEFI_STARTUP = src/cores/core_boot.c src/cores/core_smp.c
 UEFI_SRCS    = $(UEFI_STARTUP)          \
@@ -224,6 +257,8 @@ UEFI_SRCS    = $(UEFI_STARTUP)          \
                src/drivers/vesa/vesa.c  \
                src/drivers/uefi/ps2_mouse.c \
                src/drivers/virtio/virtio_gpu.c \
+               $(TINYGL_SRCS)           \
+               $(GL_SRCS)               \
                $(COMMON_NO_SDL_SRCS)
 
 # ── NEC PC-98 build (Target 5) ──────────────────────────────────
@@ -612,7 +647,10 @@ test-foma: $(FOMA_TARGET) $(TEST_FOMA_BIN)
 
 # ── X86_64 / EMT64 UEFI SMP QEMU Kernel (Honoring Kota Uchida) ───
 UEFI_LD     = src/drivers/uefi/uefi_qemu.ld
-UEFI_CFLAGS = -O2 -Wall -Wextra -std=c99 -mno-sse -mno-mmx -mno-sse2 -DBTRON_TARGET=4 -DBTRON_UEFI_TARGET -DBTRON_SMP -Iinclude -Iinclude/drivers -Isrc/kernel -Isrc/cores
+UEFI_CFLAGS = -O2 -Wall -Wextra -std=c99 -mno-sse -mno-mmx -mno-sse2 \
+              -Wno-unused-parameter -Wno-unused-function -Wno-unused-variable -Wno-constant-conversion \
+              -DBTRON_TARGET=4 -DBTRON_UEFI_TARGET -DBTRON_SMP -DBTRON_GL_BACKEND_TINYGL \
+              -Iinclude -Iinclude/gl -Iinclude/drivers -Isrc/kernel -Isrc/cores -Isrc/gl -Isrc/gl/tinygl
 
 %.uefi.o: %.c
 	$(X86_CC) $(UEFI_CFLAGS) -c $< -o $@

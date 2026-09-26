@@ -377,6 +377,9 @@ extern BTRON_DESKTOP* get_btron_desktop(void);
 extern WND* open_vobj_manager_window(void);
 extern WND* open_t_editor_window(void);
 extern WND* open_gterm_window(void);
+#if defined(BTRON_UEFI_TARGET)
+extern WND* open_glgears_window(void);
+#endif
 
 static COLOR s_desktop_backbuffer[1024 * 768] __attribute__((aligned(16)));
 
@@ -416,6 +419,9 @@ static void launch_vesa_desktop_session(int active_cores) {
     open_vobj_manager_window();
     open_t_editor_window();
     open_gterm_window();
+#if defined(BTRON_UEFI_TARGET)
+    open_glgears_window();
+#endif
 
     /* Initial paint of authentic B-System desktop to backbuffer */
     workbench_render(dt->screen, 1024, 768);
@@ -506,6 +512,10 @@ static void launch_vesa_desktop_session(int active_cores) {
          * flush_resize() is what calls rsz_wnd() and makes the window
          * actually change size.  Without this the resize grip is a no-op. */
         if (wnd_mgr_flush_resize()) {
+            need_redraw = 1;
+        }
+
+        if (wnd_any_image_invalid()) {
             need_redraw = 1;
         }
 

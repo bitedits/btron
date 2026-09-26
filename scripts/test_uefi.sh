@@ -22,7 +22,7 @@ trap 'rm -f "$LOG_FILE"' EXIT
 
 echo "[CI-TEST] Running QEMU ($QEMU_BIN) for $ELF_PATH on q35 (VirtIO-GPU)..."
 
-("$QEMU_BIN" \
+((sleep 1; printf "\n"; sleep 1; printf "desktop\n") | "$QEMU_BIN" \
     -M q35,accel=tcg -cpu qemu64 -smp cores=4,threads=1,sockets=1 -m 1G \
     -device virtio-vga \
     -display none \
@@ -30,7 +30,7 @@ echo "[CI-TEST] Running QEMU ($QEMU_BIN) for $ELF_PATH on q35 (VirtIO-GPU)..."
     -serial stdio > "$LOG_FILE" 2>&1) &
 QEMU_PID=$!
 
-sleep 3
+sleep 5
 
 kill -TERM "$QEMU_PID" 2>/dev/null || true
 wait "$QEMU_PID" 2>/dev/null || true
@@ -48,6 +48,9 @@ MARKERS=(
     "VIRTIO-GPU"
     "VESA"
     "Ski Bootloader Active"
+    "TinyGL ZBuffer init"
+    "glgears: gear geometry built"
+    "glgears window open"
 )
 
 for marker in "${MARKERS[@]}"; do

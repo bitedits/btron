@@ -161,7 +161,6 @@ typedef struct {
 } virgl_dlist_t;
 
 #define MAX_DLISTS 32
-#define MAX_VERT_BUF 256
 
 /* ── Backend State ───────────────────────────────────────────────── */
 
@@ -198,16 +197,23 @@ static float s_light0_diffuse[4] = {1.0f, 1.0f, 1.0f, 1.0f};
 static float s_light0_ambient[4] = {0.2f, 0.2f, 0.2f, 1.0f};
 
 /* GL Flags */
-static int s_lighting_enabled   = 1;
+static int s_lighting_enabled   = 0;
 static int s_light0_enabled     = 1;
 static int s_depth_test_enabled = 1;
 static int s_cull_face_enabled  = 0;
 
-/* Primitive Assembly */
+/* Primitive assembly: a bounded sliding window that closes each primitive the
+ * moment its last vertex arrives, so one glBegin block can be as long as the
+ * caller likes.  A fixed 256-vertex block used to hold the whole block back until
+ * glEnd and then lose its tail, which truncated every monster, weapon view and
+ * HUD text line that needed more than that. */
+#define PRIM_WINDOW 4
 static GLenum       s_prim_mode = 0;
 static int          s_in_begin  = 0;
-static virgl_vert_t s_vert_buf[MAX_VERT_BUF];
-static int          s_vert_count = 0;
+static virgl_vert_t s_win[PRIM_WINDOW];
+static int          s_win_n = 0;        /* vertices held, incomplete primitive */
+static int          s_win_i = 0;        /* vertices seen in this block */
+static virgl_vert_t s_fan_base;         /* v0 for GL_POLYGON / GL_TRIANGLE_FAN */
 
 /* Display Lists */
 static virgl_dlist_t s_dlists[MAX_DLISTS];
@@ -266,80 +272,70 @@ static void emit_tri(const virgl_vert_t *v0, const virgl_vert_t *v1, const virgl
 
 /* ── Geometry Rasterizer ──────────────────────────────────────────── */
 
-static void rasterize_tri(const virgl_tri_t *tri, const mat4_t *mv, const mat4_t *proj) {
-    if (!s_pixel_buf || s_width <= 0 || s_height <= 0) return;
+/* A vertex in clip space, carrying the colour lighting resolved to. */
+typedef struct {
+    float x, y, z, w;
+    float r, g, b;
+} clip_v_t;
 
-    /* 1. Transform vertices to eye/view space and compute lighting */
-    float ex[3], ey[3], ez[3], ew[3];
-    float cx[3], cy[3], cz[3], cw[3];
-    float lit_r[3], lit_g[3], lit_b[3];
+/* A triangle gains at most one vertex per plane clipped. */
+#define CLIP_POLY_MAX 16
 
-    /* Light direction vector in eye space */
-    float lx = s_light0_pos[0];
-    float ly = s_light0_pos[1];
-    float lz = s_light0_pos[2];
-    float llen = (float)sqrt(lx * lx + ly * ly + lz * lz);
-    if (llen > 0.0001f) {
-        lx /= llen; ly /= llen; lz /= llen;
-    } else {
-        lz = 1.0f;
-    }
+/* One Sutherland-Hodgman pass against the clip-space half-space
+ * ax*x + ay*y + az*z + aw*w >= 0, on the closed polygon `in`. */
+static int clip_hplane(const clip_v_t *in, int n, clip_v_t *out,
+                       float ax, float ay, float az, float aw) {
+    if (n < 3) return 0;
+    int m = 0;
+    for (int i = 0; i < n; i++) {
+        const clip_v_t *a = &in[i];
+        const clip_v_t *b = &in[(i + 1) % n];
+        float sa = ax * a->x + ay * a->y + az * a->z + aw * a->w;
+        float sb = ax * b->x + ay * b->y + az * b->z + aw * b->w;
+        int a_in = (sa >= 0.0f), b_in = (sb >= 0.0f);
 
-    for (int i = 0; i < 3; i++) {
-        mat4_transform_vec4(mv, tri->v[i].x, tri->v[i].y, tri->v[i].z,
-                            &ex[i], &ey[i], &ez[i], &ew[i]);
-
-        /* Lighting calculation */
-        if (s_lighting_enabled && s_light0_enabled) {
-            float tnx, tny, tnz;
-            mat4_transform_normal(mv, tri->v[i].nx, tri->v[i].ny, tri->v[i].nz,
-                                  &tnx, &tny, &tnz);
-
-            float n_dot_l = tnx * lx + tny * ly + tnz * lz;
-            if (n_dot_l < 0.0f) n_dot_l = 0.0f;
-
-            float amb_r = (tri->mat_diffuse[0] > 0.0f) ? tri->mat_diffuse[0] * 0.2f : tri->mat_ambient[0] * s_light0_ambient[0];
-            float amb_g = (tri->mat_diffuse[1] > 0.0f) ? tri->mat_diffuse[1] * 0.2f : tri->mat_ambient[1] * s_light0_ambient[1];
-            float amb_b = (tri->mat_diffuse[2] > 0.0f) ? tri->mat_diffuse[2] * 0.2f : tri->mat_ambient[2] * s_light0_ambient[2];
-
-            float r = amb_r + tri->mat_diffuse[0] * s_light0_diffuse[0] * n_dot_l;
-            float g = amb_g + tri->mat_diffuse[1] * s_light0_diffuse[1] * n_dot_l;
-            float b = amb_b + tri->mat_diffuse[2] * s_light0_diffuse[2] * n_dot_l;
-
-            if (r > 1.0f) r = 1.0f;
-            if (g > 1.0f) g = 1.0f;
-            if (b > 1.0f) b = 1.0f;
-
-            lit_r[i] = r;
-            lit_g[i] = g;
-            lit_b[i] = b;
-        } else {
-            lit_r[i] = tri->v[i].r;
-            lit_g[i] = tri->v[i].g;
-            lit_b[i] = tri->v[i].b;
+        if (b_in && !a_in && m < CLIP_POLY_MAX) {
+            float t = sa / (sa - sb);
+            clip_v_t *o = &out[m++];
+            o->x = a->x + t * (b->x - a->x);
+            o->y = a->y + t * (b->y - a->y);
+            o->z = a->z + t * (b->z - a->z);
+            o->w = a->w + t * (b->w - a->w);
+            o->r = a->r + t * (b->r - a->r);
+            o->g = a->g + t * (b->g - a->g);
+            o->b = a->b + t * (b->b - a->b);
         }
-
-        /* Project to clip space */
-        mat4_transform_vec4(proj, ex[i], ey[i], ez[i],
-                            &cx[i], &cy[i], &cz[i], &cw[i]);
+        if (b_in && m < CLIP_POLY_MAX) out[m++] = *b;
+        if (a_in && !b_in && m < CLIP_POLY_MAX) {
+            float t = sa / (sa - sb);
+            clip_v_t *o = &out[m++];
+            o->x = a->x + t * (b->x - a->x);
+            o->y = a->y + t * (b->y - a->y);
+            o->z = a->z + t * (b->z - a->z);
+            o->w = a->w + t * (b->w - a->w);
+            o->r = a->r + t * (b->r - a->r);
+            o->g = a->g + t * (b->g - a->g);
+            o->b = a->b + t * (b->b - a->b);
+        }
     }
+    return m;
+}
 
-    /* Near-plane clipping check: drop triangle if any vertex is behind near plane */
-    if (cw[0] <= 0.05f || cw[1] <= 0.05f || cw[2] <= 0.05f) {
-        return;
-    }
+/* Rasterize one already-clipped triangle, given in clip space. */
+static void raster_clip_tri(const clip_v_t *v0, const clip_v_t *v1, const clip_v_t *v2) {
+    float sx[3], sy[3], sz[3], cr[3], cg[3], cb[3];
+    const clip_v_t *cv[3] = { v0, v1, v2 };
 
-    /* 2. Viewport / Screen projection */
-    float sx[3], sy[3], sz[3];
     for (int i = 0; i < 3; i++) {
-        float inv_w = 1.0f / cw[i];
-        float ndc_x = cx[i] * inv_w;
-        float ndc_y = cy[i] * inv_w;
-        float ndc_z = cz[i] * inv_w;
+        float inv_w = 1.0f / cv[i]->w;
+        float ndc_x = cv[i]->x * inv_w;
+        float ndc_y = cv[i]->y * inv_w;
+        float ndc_z = cv[i]->z * inv_w;
 
         sx[i] = (ndc_x + 1.0f) * 0.5f * (float)s_vp_w + (float)s_vp_x;
         sy[i] = (1.0f - ndc_y) * 0.5f * (float)s_vp_h + (float)s_vp_y;
         sz[i] = (ndc_z + 1.0f) * 0.5f;
+        cr[i] = cv[i]->r; cg[i] = cv[i]->g; cb[i] = cv[i]->b;
     }
 
     /* Backface culling check: only active in 3D mode when depth test is enabled */
@@ -348,7 +344,7 @@ static void rasterize_tri(const virgl_tri_t *tri, const mat4_t *mv, const mat4_t
         return;
     }
 
-    /* 3. Bounding box computation clamped to viewport */
+    /* Bounding box computation clamped to viewport */
     int min_x = v_floor(v_min(v_min(sx[0], sx[1]), sx[2]));
     int max_x = v_ceil(v_max(v_max(sx[0], sx[1]), sx[2]));
     int min_y = v_floor(v_min(v_min(sy[0], sy[1]), sy[2]));
@@ -365,7 +361,7 @@ static void rasterize_tri(const virgl_tri_t *tri, const mat4_t *mv, const mat4_t
     if (v_abs(denom) < 0.00001f) return;
     float inv_denom = 1.0f / denom;
 
-    /* 4. Pixel-level rasterization with Depth Buffer test and edge tie-breaking */
+    /* Pixel-level rasterization with Depth Buffer test and edge tie-breaking */
     for (int y = min_y; y <= max_y; y++) {
         float py = (float)y + 0.5f;
         int row_idx = y * s_width;
@@ -386,9 +382,9 @@ static void rasterize_tri(const virgl_tri_t *tri, const mat4_t *mv, const mat4_t
                         s_depth_buf[pixel_idx] = z;
                     }
 
-                    float r = w0 * lit_r[0] + w1 * lit_r[1] + w2 * lit_r[2];
-                    float g = w0 * lit_g[0] + w1 * lit_g[1] + w2 * lit_g[2];
-                    float b = w0 * lit_b[0] + w1 * lit_b[1] + w2 * lit_b[2];
+                    float r = w0 * cr[0] + w1 * cr[1] + w2 * cr[2];
+                    float g = w0 * cg[0] + w1 * cg[1] + w2 * cg[2];
+                    float b = w0 * cb[0] + w1 * cb[1] + w2 * cb[2];
 
                     if (r < 0.0f) r = 0.0f;
                     if (g < 0.0f) g = 0.0f;
@@ -408,55 +404,173 @@ static void rasterize_tri(const virgl_tri_t *tri, const mat4_t *mv, const mat4_t
     }
 }
 
+static void rasterize_tri(const virgl_tri_t *tri, const mat4_t *mv, const mat4_t *proj) {
+    if (!s_pixel_buf || s_width <= 0 || s_height <= 0) return;
+
+    clip_v_t poly[CLIP_POLY_MAX], work[CLIP_POLY_MAX];
+
+    /* Light direction vector in eye space */
+    float lx = s_light0_pos[0];
+    float ly = s_light0_pos[1];
+    float lz = s_light0_pos[2];
+    float llen = (float)sqrt(lx * lx + ly * ly + lz * lz);
+    if (llen > 0.0001f) {
+        lx /= llen; ly /= llen; lz /= llen;
+    } else {
+        lz = 1.0f;
+    }
+
+    for (int i = 0; i < 3; i++) {
+        float ex, ey, ez, ew;
+        mat4_transform_vec4(mv, tri->v[i].x, tri->v[i].y, tri->v[i].z,
+                            &ex, &ey, &ez, &ew);
+
+        /* Lighting calculation */
+        float lr, lg, lb;
+        if (s_lighting_enabled && s_light0_enabled) {
+            float tnx, tny, tnz;
+            mat4_transform_normal(mv, tri->v[i].nx, tri->v[i].ny, tri->v[i].nz,
+                                  &tnx, &tny, &tnz);
+
+            float n_dot_l = tnx * lx + tny * ly + tnz * lz;
+            if (n_dot_l < 0.0f) n_dot_l = 0.0f;
+
+            float amb_r = (tri->mat_diffuse[0] > 0.0f) ? tri->mat_diffuse[0] * 0.2f : tri->mat_ambient[0] * s_light0_ambient[0];
+            float amb_g = (tri->mat_diffuse[1] > 0.0f) ? tri->mat_diffuse[1] * 0.2f : tri->mat_ambient[1] * s_light0_ambient[1];
+            float amb_b = (tri->mat_diffuse[2] > 0.0f) ? tri->mat_diffuse[2] * 0.2f : tri->mat_ambient[2] * s_light0_ambient[2];
+
+            lr = amb_r + tri->mat_diffuse[0] * s_light0_diffuse[0] * n_dot_l;
+            lg = amb_g + tri->mat_diffuse[1] * s_light0_diffuse[1] * n_dot_l;
+            lb = amb_b + tri->mat_diffuse[2] * s_light0_diffuse[2] * n_dot_l;
+
+            if (lr > 1.0f) lr = 1.0f;
+            if (lg > 1.0f) lg = 1.0f;
+            if (lb > 1.0f) lb = 1.0f;
+        } else {
+            lr = tri->v[i].r;
+            lg = tri->v[i].g;
+            lb = tri->v[i].b;
+        }
+
+        /* Project to clip space */
+        clip_v_t *c = &poly[i];
+        mat4_transform_vec4(proj, ex, ey, ez, &c->x, &c->y, &c->z, &c->w);
+        c->r = lr; c->g = lg; c->b = lb;
+    }
+
+    /* Clip against the view frustum instead of discarding.  Rejecting a triangle
+     * as soon as one vertex crossed the near plane made every face the eye was
+     * touching vanish — a wall disappearing as the player walked into it, through
+     * which the player then saw the void — while a vertex that survived with a
+     * near-zero w divided into a screen position thousands of pixels wide, i.e.
+     * one skewed polygon smeared over the whole view.
+     *
+     * The far plane is deliberately not clipped here: the app's zFar is 1000 units
+     * against map extents several times that, and the float depth buffer has no
+     * precision problem beyond it, so geometry past zFar still draws as it always
+     * has. */
+    static const float planes[5][4] = {
+        {  1.0f,  0.0f, 0.0f, 1.0f },   /* left   w + x >= 0 */
+        { -1.0f,  0.0f, 0.0f, 1.0f },   /* right  w - x >= 0 */
+        {  0.0f,  1.0f, 0.0f, 1.0f },   /* bottom w + y >= 0 */
+        {  0.0f, -1.0f, 0.0f, 1.0f },   /* top    w - y >= 0 */
+        {  0.0f,  0.0f, 1.0f, 1.0f },   /* near   w + z >= 0 */
+    };
+    int n = 3;
+    for (int p = 0; p < 5; p++) {
+        memcpy(work, poly, (size_t)n * sizeof(clip_v_t));
+        n = clip_hplane(work, n, poly, planes[p][0], planes[p][1],
+                        planes[p][2], planes[p][3]);
+        if (n < 3) return;
+    }
+
+    /* The clipped polygon is convex, so a fan from vertex 0 covers it. */
+    for (int i = 1; i + 1 < n; i++) {
+        raster_clip_tri(&poly[0], &poly[i], &poly[i + 1]);
+    }
+}
+
 /* ── gl_ops_t Implementations ─────────────────────────────────────── */
 
 static void virgl_begin(GLenum mode) {
     s_prim_mode = mode;
-    s_vert_count = 0;
+    s_win_n = 0;
+    s_win_i = 0;
     s_in_begin = 1;
 }
 
 static void virgl_end(void) {
     if (!s_in_begin) return;
-
-    if (s_prim_mode == GL_QUADS) {
-        for (int i = 0; i + 3 < s_vert_count; i += 4) {
-            emit_tri(&s_vert_buf[i],     &s_vert_buf[i + 1], &s_vert_buf[i + 2]);
-            emit_tri(&s_vert_buf[i],     &s_vert_buf[i + 2], &s_vert_buf[i + 3]);
-        }
-    } else if (s_prim_mode == GL_QUAD_STRIP) {
-        for (int i = 0; i + 3 < s_vert_count; i += 2) {
-            emit_tri(&s_vert_buf[i],     &s_vert_buf[i + 1], &s_vert_buf[i + 3]);
-            emit_tri(&s_vert_buf[i],     &s_vert_buf[i + 3], &s_vert_buf[i + 2]);
-        }
-    } else if (s_prim_mode == GL_TRIANGLES) {
-        for (int i = 0; i + 2 < s_vert_count; i += 3) {
-            emit_tri(&s_vert_buf[i], &s_vert_buf[i + 1], &s_vert_buf[i + 2]);
-        }
-    } else if (s_prim_mode == GL_TRIANGLE_STRIP) {
-        for (int i = 0; i + 2 < s_vert_count; i++) {
-            if (i & 1) {
-                emit_tri(&s_vert_buf[i + 1], &s_vert_buf[i], &s_vert_buf[i + 2]);
-            } else {
-                emit_tri(&s_vert_buf[i], &s_vert_buf[i + 1], &s_vert_buf[i + 2]);
-            }
-        }
-    } else if (s_prim_mode == GL_POLYGON || s_prim_mode == GL_TRIANGLE_FAN) {
-        for (int i = 1; i + 1 < s_vert_count; i++) {
-            emit_tri(&s_vert_buf[0], &s_vert_buf[i], &s_vert_buf[i + 1]);
-        }
-    }
-
-    s_vert_count = 0;
+    /* A primitive left incomplete by the last glVertex is discarded, as GL says. */
+    s_win_n = 0;
+    s_win_i = 0;
     s_in_begin = 0;
 }
 
+/* Feed one vertex to the window and emit whatever primitives it completed. */
+static void virgl_prim_vertex(const virgl_vert_t *v) {
+    switch (s_prim_mode) {
+    case GL_TRIANGLES:
+        s_win[s_win_n++] = *v;
+        if (s_win_n == 3) {
+            emit_tri(&s_win[0], &s_win[1], &s_win[2]);
+            s_win_n = 0;
+        }
+        break;
+    case GL_QUADS:
+        s_win[s_win_n++] = *v;
+        if (s_win_n == 4) {
+            emit_tri(&s_win[0], &s_win[1], &s_win[2]);
+            emit_tri(&s_win[0], &s_win[2], &s_win[3]);
+            s_win_n = 0;
+        }
+        break;
+    case GL_QUAD_STRIP:
+        s_win[s_win_n++] = *v;
+        if (s_win_n == 4) {
+            emit_tri(&s_win[0], &s_win[1], &s_win[3]);
+            emit_tri(&s_win[0], &s_win[3], &s_win[2]);
+            s_win[0] = s_win[2];
+            s_win[1] = s_win[3];
+            s_win_n = 2;
+        }
+        break;
+    case GL_TRIANGLE_STRIP:
+        s_win[s_win_n++] = *v;
+        if (s_win_n == 3) {
+            /* s_win holds v[i], v[i+1], v[i+2] for i = s_win_i - 2 */
+            if ((s_win_i - 2) & 1) emit_tri(&s_win[1], &s_win[0], &s_win[2]);
+            else                   emit_tri(&s_win[0], &s_win[1], &s_win[2]);
+            s_win[0] = s_win[1];
+            s_win[1] = s_win[2];
+            s_win_n = 2;
+        }
+        break;
+    case GL_TRIANGLE_FAN:
+    case GL_POLYGON:
+        if (s_win_i == 0) {
+            s_fan_base = *v;
+        } else if (s_win_i >= 2) {
+            emit_tri(&s_fan_base, &s_win[0], v);
+        }
+        s_win[0] = *v;
+        s_win_n = 1;
+        break;
+    default:
+        /* GL_LINES and friends have no assembly here; the vertex is dropped as
+         * before rather than filling the window with something unrasterizable. */
+        break;
+    }
+    s_win_i++;
+}
+
 static void virgl_vertex3f(GLfloat x, GLfloat y, GLfloat z) {
-    if (!s_in_begin || s_vert_count >= MAX_VERT_BUF) return;
-    virgl_vert_t *v = &s_vert_buf[s_vert_count++];
-    v->x = x; v->y = y; v->z = z;
-    v->nx = s_cur_nx; v->ny = s_cur_ny; v->nz = s_cur_nz;
-    v->r = s_cur_r; v->g = s_cur_g; v->b = s_cur_b;
+    if (!s_in_begin) return;
+    virgl_vert_t v;
+    v.x = x; v.y = y; v.z = z;
+    v.nx = s_cur_nx; v.ny = s_cur_ny; v.nz = s_cur_nz;
+    v.r = s_cur_r; v.g = s_cur_g; v.b = s_cur_b;
+    virgl_prim_vertex(&v);
 }
 
 static void virgl_normal3f(GLfloat x, GLfloat y, GLfloat z) {

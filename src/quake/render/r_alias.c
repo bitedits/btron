@@ -337,10 +337,18 @@ void R_DrawAliasModel(int model_idx, int frame, const float *origin,
     glBegin(GL_TRIANGLES);
 
     for (int t = 0; t < mdl->numtris; t++) {
+        /* A triangle with an out-of-range index is skipped whole.  Dropping only
+         * the bad vertex would leave two of its three in the block, and the
+         * backend groups every later triangle from that point on. */
+        int vi[3], bad = 0;
         for (int k = 0; k < 3; k++) {
-            int vi = mdl->tris[t][k];
-            if (vi >= mdl->numverts) continue;
-            const mdl_vert_t *v = &verts[vi];
+            vi[k] = mdl->tris[t][k];
+            if (vi[k] < 0 || vi[k] >= mdl->numverts) bad = 1;
+        }
+        if (bad) continue;
+
+        for (int k = 0; k < 3; k++) {
+            const mdl_vert_t *v = &verts[vi[k]];
             glNormal3f(v->n[0], v->n[1], v->n[2]);
             if (has_skin) {
                 glTexCoord2f(mdl->tri_st[t][k][0], mdl->tri_st[t][k][1]);

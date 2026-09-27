@@ -37,7 +37,7 @@ CFLAGS ?= -O2 -Wall -Wextra -std=c99 -Iinclude -Iinclude/gl -Isrc/gl -Iinclude/d
         html2tad book2tad tad_bin test test-kernel test-yoko test-yoko4 test-m68k test-mips test-ps2 test-foma test-foma-ui foma-screens \
         segui-screens \
         test-mozc test-editor test-hmi test-tad test-chat test-wylie verify test-fs test-chokanji test-quake test-replay \
-        test-hull test-view \
+        test-hull test-view test-secret test-render \
         mkbtronfs btron_sys.vol \
         run-posix run-qemu run-kernel run-yoko run-yoko4 run-sakamura run-foma run-uefi run-eufi run-uefu run-pc98 run-m68k run-ps2 run-mips debug-virtio debug-gdb clean \
         ps2-cfg \
@@ -1704,6 +1704,44 @@ $(TEST_QUAKE_VIEW_BIN): $(TEST_QUAKE_VIEW_OBJS)
 
 test-view: $(TEST_QUAKE_VIEW_BIN)
 	@./$(TEST_QUAKE_VIEW_BIN)
+
+TEST_QUAKE_SECRET_SRCS = verify/tests/test_quake_secret.c \
+                         src/quake/core/cl_demo.c \
+                         src/quake/core/cmd.c src/quake/core/cvar.c src/quake/core/mem.c \
+                         src/quake/core/mathlib.c src/quake/core/world.c src/quake/core/pr_exec.c \
+                         src/quake/core/sv_phys.c src/quake/core/sv_main.c \
+                         src/quake/sys/sys_btron.c src/quake/sys/fs_btron.c \
+                         src/quake/app/quake_ui.c
+TEST_QUAKE_SECRET_OBJS = $(TEST_QUAKE_SECRET_SRCS:.c=.test.o)
+TEST_QUAKE_SECRET_BIN  = ./.build/test_quake_secret
+
+$(TEST_QUAKE_SECRET_BIN): $(TEST_QUAKE_SECRET_OBJS)
+	@mkdir -p ./.build
+	$(CC) $(TEST_QUAKE_SECRET_OBJS) -o $@ $(LDFLAGS) -lm
+
+test-secret: $(TEST_QUAKE_SECRET_BIN)
+	@./$(TEST_QUAKE_SECRET_BIN)
+
+TEST_QUAKE_RENDER_SRCS = verify/tests/test_quake_render.c \
+                         src/quake/core/cl_demo.c \
+                         src/quake/core/cmd.c src/quake/core/cvar.c src/quake/core/mem.c \
+                         src/quake/core/mathlib.c src/quake/core/world.c src/quake/core/pr_exec.c \
+                         src/quake/core/sv_phys.c src/quake/core/sv_main.c \
+                         src/quake/render/r_brush.c src/quake/render/r_light.c \
+                         src/quake/render/r_surf.c src/quake/render/r_alias.c \
+                         src/quake/render/texture.c \
+                         src/quake/sys/sys_btron.c src/quake/sys/fs_btron.c \
+                         src/quake/app/quake_ui.c \
+                         src/gl/gl_dispatch.c src/gl/backend_virgl.c
+TEST_QUAKE_RENDER_OBJS = $(TEST_QUAKE_RENDER_SRCS:.c=.test.o)
+TEST_QUAKE_RENDER_BIN  = ./.build/test_quake_render
+
+$(TEST_QUAKE_RENDER_BIN): $(TEST_QUAKE_RENDER_OBJS)
+	@mkdir -p ./.build
+	$(CC) $(TEST_QUAKE_RENDER_OBJS) -o $@ $(LDFLAGS) -lm
+
+test-render: $(TEST_QUAKE_RENDER_BIN)
+	@./$(TEST_QUAKE_RENDER_BIN)
 
 test-quake: $(TEST_QUAKEC_BIN) $(TEST_QUAKE_ENT_BIN) $(TEST_QUAKE_CTRL_BIN) $(TEST_QUAKE_REPLAY_BIN)
 	@echo "=========================================================="

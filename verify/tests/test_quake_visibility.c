@@ -100,38 +100,86 @@ static int popcount8(int b) { int n = 0; while (b) { n += b & 1; b >>= 1; } retu
 /* Point → leaf, using the drawing BSP (the same tree the renderer walks). */
 static int leaf_of(const float *p) { return World_PointInLeaf(p); }
 
-#define KEYSTRIDE 16384   /* leaf numbers stay far below this in pak0's maps */
+/* Re-walk one ray at 1 unit.  Returns the distance at which the first solid or
+ * sky leaf appears, or -max if the whole segment stays in open leafs.  A coarse
+ * sampling step can jump straight over a thin wall; this is what separates that
+ * false positive from a visibility entry qbsp really left out. */
+static float first_blocker(const float *org, const float *dst)
+{
+    float d[3] = { dst[0]-org[0], dst[1]-org[1], dst[2]-org[2] };
+    float len = sqrtf(d[0]*d[0] + d[1]*d[1] + d[2]*d[2]);
+    if (len < 1.0f) return -1.0f;
+    d[0] /= len; d[1] /= len; d[2] /= len;
+    for (float t = 0.5f; t <= len; t += 1.0f) {
+        float p[3] = { org[0] + d[0]*t, org[1] + d[1]*t, org[2] + d[2]*t };
+        int L = leaf_of(p);
+        if (L <= 0) return t;
+        int c = g_world.leafs[L].contents;
+        if (c == CONTENTS_SOLID || c == CONTENTS_SKY) return t;
+    }
+    return -1.0f;
+}
 
-static int cmp_u64(const void *a, const void *b) {
-    unsigned long long x = *(const unsigned long long *)a, y = *(const unsigned long long *)b;
-    return (x < y) ? -1 : (x > y) ? 1 : 0;
+/* Walk the CLIPNODE tree from an arbitrary head node.  Hull 0 of the world
+ * model is the drawing tree itself, so anything a line of sight passes but the
+ * world tree cannot show has to live in a submodel — a brush entity (func_wall,
+ * func_detail, a door body) that qbsp knew was solid when it built the vis. */
+static int clip_walk(int nodenum, const float *p)
+{
+    while (nodenum >= 0) {
+        if (nodenum >= g_world.numclipnodes) return CONTENTS_EMPTY;
+        const dclipnode_t *node = &g_world.clipnodes[nodenum];
+        if (node->planenum < 0 || node->planenum >= g_world.numplanes) return CONTENTS_EMPTY;
+        const dplane_t *plane = &g_world.planes[node->planenum];
+        float dist = DotProduct(p, plane->normal) - plane->dist;
+        nodenum = (dist >= 0.0f) ? node->children[0] : node->children[1];
+    }
+    return nodenum;   /* negative leaf value = contents */
 }
-/* sort + dedupe in place, return the number of distinct values */
-static size_t uniq64(unsigned long long *v, size_t n) {
-    if (!n) return 0;
-    qsort(v, n, sizeof(v[0]), cmp_u64);
-    size_t k = 1;
-    for (size_t i = 1; i < n; i++) if (v[i] != v[k - 1]) v[k++] = v[i];
-    return k;
+
+/* Returns the submodel index whose solid geometry blocks org→dst, or -1. */
+static int submodel_blocker(const float *org, const float *dst)
+{
+    float d[3] = { dst[0]-org[0], dst[1]-org[1], dst[2]-org[2] };
+    float len = sqrtf(d[0]*d[0] + d[1]*d[1] + d[2]*d[2]);
+    if (len < 1.0f) return -1;
+    d[0] /= len; d[1] /= len; d[2] /= len;
+    for (float t = 1.0f; t <= len; t += 2.0f) {
+        float p[3] = { org[0] + d[0]*t, org[1] + d[1]*t, org[2] + d[2]*t };
+        for (int m = 1; m < g_world.nummodels; m++)
+            if (clip_walk(g_world.models[m].headnode[0], p) == CONTENTS_SOLID)
+                return m;
+    }
+    return -1;
 }
+
+typedef struct { float org[3], dst[3]; int C, L; } MissRec;
 
 /* ── The see-through-wall gate, one step size ───────────────────────── *
  * March rays through the drawing BSP.  A sample that is not in a solid or sky
- * leaf is unobstructed from the camera along that ray, so the (camera,target)
- * pair must appear in qbsp's visibility data.  Missing pairs are then split by
- * direction: if the target's own row does contain the camera, qbsp simply
- * dropped the one-way pair (a property of the data, not of the decoder); only
- * pairs missing in BOTH directions can be our bug.                         */
+ * leaf is unobstructed along that ray as far as the world tree is concerned, so
+ * the (camera,target) pair must appear in qbsp's visibility data.  A pair that
+ * does not is classified before it is called a bug: the target's row may see the
+ * camera (qbsp dropped a one-way pair), a 1-unit re-walk may find a thin wall the
+ * coarse step jumped over (the gate's own aliasing), or a brush entity in a
+ * submodel may block the line — qbsp sees submodels, the drawing tree does not.
+ * Only a pair that survives all three means the renderer really culls geometry
+ * the player is looking at.                                                   */
+
 static void ray_gate(const byte *mat, int W, int vis, float step)
 {
     const dmodel_t *mm = &g_world.models[0];
     const float maxdist = 2400.0f;
-    const int ncams = 240, ndirs = 12;
-    size_t cap = (size_t)ncams * ndirs * (int)(maxdist / step) + 16;
-    unsigned long long *reached = malloc(cap * sizeof(*reached));
-    unsigned long long *missing = malloc(cap * sizeof(*reached));
-    size_t nre = 0, nmi = 0, outside = 0, solid_cam = 0, cams_used = 0, used = 0;
-    float miss_pts[6][3]; int miss_leaf[6]; int miss_n = 0;
+    const int ncams = 2000, ndirs = 12;
+
+    size_t bitsz = ((size_t)vis * vis + 7) / 8;
+    byte *reached_bits = calloc(bitsz, 1);
+    byte *miss_bits    = calloc(bitsz, 1);
+    size_t mcap = 4096, nmi = 0, d_re = 0;
+    MissRec *ms = malloc(mcap * sizeof(*ms));
+    size_t outside = 0, solid_cam = 0, norow_cam = 0, cams_used = 0;
+    int *cam_reach = calloc((size_t)vis + 1, sizeof(int));
+    int *cam_miss  = calloc((size_t)vis + 1, sizeof(int));
 
     unsigned seed = 12345;
     for (int cam = 0; cam < ncams; cam++) {
@@ -142,9 +190,9 @@ static void ray_gate(const byte *mat, int W, int vis, float step)
             org[k] = mm->mins[k] + t * (mm->maxs[k] - mm->mins[k]);
         }
         int cam_leaf = leaf_of(org);
-        if (cam_leaf <= 0)        { outside++;  continue; }
-        if (cam_leaf > vis)       { used++;     continue; }  /* no row: renderer draws all */
+        if (cam_leaf <= 0) { outside++;   continue; }   /* the sky region: leaf 0 */
         if (g_world.leafs[cam_leaf].contents == CONTENTS_SOLID) { solid_cam++; continue; }
+        if (cam_leaf > vis) { norow_cam++; continue; }  /* no row: renderer draws all */
         cams_used++;
         const byte *row = mat + (size_t)(cam_leaf - 1) * W;
 
@@ -163,43 +211,80 @@ static void ray_gate(const byte *mat, int W, int vis, float step)
                 int L = leaf_of(p);
                 if (L <= 0) break;
                 int c = g_world.leafs[L].contents;
-                if (c == CONTENTS_SOLID) break;
-                if (c == CONTENTS_SKY)   break;
+                if (c == CONTENTS_SOLID || c == CONTENTS_SKY) break;
                 if (L == cam_leaf || L > vis) continue;
-                unsigned long long key = (unsigned long long)cam_leaf * KEYSTRIDE + (unsigned)L;
-                if (nre < cap) reached[nre++] = key;
-                if (!(row[(L - 1) >> 3] & (1u << ((L - 1) & 7)))) {
-                    if (nmi < cap) missing[nmi++] = key;
-                    if (miss_n < 6) {
-                        miss_pts[miss_n][0] = org[0]; miss_pts[miss_n][1] = org[1];
-                        miss_pts[miss_n][2] = org[2]; miss_leaf[miss_n] = L; miss_n++;
-                    }
+                unsigned long long idx = (unsigned long long)(cam_leaf - 1) * vis + (L - 1);
+                if (!(reached_bits[idx >> 3] & (1u << (idx & 7)))) {
+                    reached_bits[idx >> 3] |= (1u << (idx & 7));
+                    d_re++;
+                    cam_reach[cam_leaf]++;
+                }
+                if (!(row[(L - 1) >> 3] & (1u << ((L - 1) & 7))) &&
+                    !(miss_bits[idx >> 3] & (1u << (idx & 7)))) {
+                    miss_bits[idx >> 3] |= (1u << (idx & 7));
+                    cam_miss[cam_leaf]++;
+                    if (nmi == mcap) { mcap *= 2; ms = realloc(ms, mcap * sizeof(*ms)); }
+                    for (int k = 0; k < 3; k++) { ms[nmi].org[k] = org[k]; ms[nmi].dst[k] = p[k]; }
+                    ms[nmi].C = cam_leaf; ms[nmi].L = L;
+                    nmi++;
                 }
             }
         }
     }
 
-    size_t d_re = uniq64(reached, nre);
-    size_t d_mi = uniq64(missing, nmi);
-    int one_way = 0, both_ways = 0, bad_self = 0;
-    for (size_t i = 0; i < d_mi; i++) {
-        int L = (int)(missing[i] % KEYSTRIDE);
-        int C = (int)(missing[i] / KEYSTRIDE);
-        if (L <= 0 || L > vis || C <= 0 || C > vis) { bad_self++; continue; }
-        const byte *rowL = mat + (size_t)(L - 1) * W;
-        if (rowL[(C - 1) >> 3] & (1u << ((C - 1) & 7))) one_way++;
-        else both_ways++;
+    int one_way = 0, alias = 0, ent = 0, open = 0, shown = 0;
+    int ent_models[64]; int ent_model_n = 0;
+    for (size_t i = 0; i < nmi; i++) {
+        const byte *rowL = mat + (size_t)(ms[i].L - 1) * W;
+        if (rowL[(ms[i].C - 1) >> 3] & (1u << ((ms[i].C - 1) & 7))) { one_way++; continue; }
+        if (first_blocker(ms[i].org, ms[i].dst) > 0) { alias++; continue; }
+        int m = submodel_blocker(ms[i].org, ms[i].dst);
+        if (m >= 0) {
+            ent++;
+            int known = 0;
+            for (int k = 0; k < ent_model_n; k++) if (ent_models[k] == m) known = 1;
+            if (!known && ent_model_n < 64) ent_models[ent_model_n++] = m;
+            continue;
+        }
+        open++;
+        if (shown < 8) {
+            printf("      cam leaf %d -> leaf %d at (%.0f,%.0f,%.0f): open in the world tree"
+                   " and no submodel blocks it -> CULLED VISIBLE GEOMETRY\n",
+                   ms[i].C, ms[i].L, ms[i].org[0], ms[i].org[1], ms[i].org[2]);
+            shown++;
+        }
     }
-    printf("    step=%-4.0f  cams: used=%d outside-tree=%d solid=%d | samples: reached=%d missing=%d\n",
-           step, cams_used, outside, solid_cam, (int)d_re, (int)d_mi);
+
+    /* Is the loss spread over the level, or concentrated in a few camera
+     * leafs whose rows qbsp left (nearly) empty? */
+    {
+        int cams_with_miss = 0, empty_rows = 0;
+        printf("      per-camera detail (leaf, contents, row bits, reached, missing):\n");
+        for (int l = 1; l <= vis; l++) {
+            if (!cam_miss[l]) continue;
+            cams_with_miss++;
+            int bits = 0;
+            const byte *r = mat + (size_t)(l - 1) * W;
+            for (int b = 0; b < W; b++) bits += popcount8(r[b]);
+            if (bits <= 2) empty_rows++;
+            if (cams_with_miss <= 12)
+                printf("        leaf %-5d contents=%-4d rowbits=%-4d reached=%-4d missing=%d\n",
+                       l, g_world.leafs[l].contents, bits, cam_reach[l], cam_miss[l]);
+        }
+        printf("      cameras with at least one missing pair=%d, of which their row holds <=2 bits=%d\n",
+               cams_with_miss, empty_rows);
+    }
+
+    printf("    step=%-4.0f cameras: used=%d sky/outside=%d solid=%d no-row=%d\n",
+           step, cams_used, (int)outside, (int)solid_cam, (int)norow_cam);
     printf("      distinct unobstructed pairs=%d   absent from the camera row=%d (%.2f%%)\n"
-           "        of those, qbsp one-way (target row does see the camera)=%d\n"
-           "        missing in BOTH directions (our bug)               =%d\n",
-           (int)d_re, (int)d_mi, d_re ? 100.0 * d_mi / d_re : 0.0, one_way, both_ways);
-    for (int i = 0; i < miss_n; i++)
-        printf("      cam=(%.0f,%.0f,%.0f) leaf %d reached but not in PVS\n",
-               miss_pts[i][0], miss_pts[i][1], miss_pts[i][2], miss_leaf[i]);
-    free(reached); free(missing);
+           "        qbsp one-way (target row does see the camera) =%d\n"
+           "        gate sampling alias (a 1-unit walk blocks)    =%d\n"
+           "        blocked by a brush entity (submodel solid)    =%d  [%d distinct models]\n"
+           "        open all the way yet culled (the real bug)    =%d\n",
+           (int)d_re, (int)nmi, d_re ? 100.0 * nmi / d_re : 0.0, one_way, alias, ent,
+           ent_model_n, open);
+    free(reached_bits); free(miss_bits); free(ms);
 }
 
 /* ── Cross-map convention check ──────────────────────────────────────── *
@@ -847,84 +932,16 @@ int main(void) {
         free(ref); free(eng); free(m);
     }
 
-    /* ── 3. The see-through-wall gate ───────────────────────────────── *
-     * March a ray through the drawing BSP.  Every non-solid leaf entered before
-     * the ray is blocked is unobstructed from the camera, so its bit MUST be set
-     * in the camera's PVS row; a missing bit is geometry the renderer throws
-     * away while the player is still looking at it.  Two step sizes are run: a
-     * wall thinner than the step is missed by the coarse pass, so the fine pass
-     * is the one that must be clean.                                    */
+    /* ── 3. The see-through-wall gate ───────────────────────────────── */
     printf("\n== 3. unobstructed leaf reached by ray but absent from PVS (see-through)\n");
     {
-        const dmodel_t *mm = &g_world.models[0];
-        byte *row = malloc((size_t)W);
-        float maxdist = 2400.0f;
+        byte *mat = malloc((size_t)vis * W);
+        for (int l = 1; l <= vis; l++)
+            World_LeafPVS(l, mat + (size_t)(l - 1) * W, W);   /* the engine's decoder */
         static const float steps[] = { 16.0f, 4.0f };
-        for (size_t s = 0; s < sizeof(steps) / sizeof(steps[0]); s++) {
-            float step = steps[s];
-            int rays = 0, visited = 0, missing = 0, rowless = 0, cam_norow = 0, cam_solid = 0;
-            float miss_pts[6][3]; int miss_leaf[6]; int miss_n = 0;
-
-            /* Deterministic pseudo-random sampling: comparable across builds. */
-            unsigned seed = 12345;
-            for (int cam = 0; cam < 240; cam++) {
-                float org[3];
-                for (int k = 0; k < 3; k++) {
-                    seed = seed * 1103515245u + 12345u;
-                    float t = (float)((seed >> 8) & 0xFFFF) / 65535.0f;
-                    org[k] = mm->mins[k] + t * (mm->maxs[k] - mm->mins[k]);
-                }
-                int cam_leaf = leaf_of(org);
-                if (cam_leaf <= 0) continue;
-                if (g_world.leafs[cam_leaf].contents == CONTENTS_SOLID) { cam_solid++; continue; }
-                if (World_LeafVisBit(cam_leaf) < 0) { cam_norow++; continue; }
-
-                rays++;
-                World_LeafPVS(cam_leaf, row, W);
-
-                for (int d = 0; d < 12; d++) {
-                    float dir[3];
-                    for (int k = 0; k < 3; k++) {
-                        seed = seed * 1103515245u + 12345u;
-                        dir[k] = ((float)((seed >> 8) & 0xFFFF) / 65535.0f) * 2.0f - 1.0f;
-                    }
-                    float len = sqrtf(dir[0]*dir[0] + dir[1]*dir[1] + dir[2]*dir[2]);
-                    if (len < 0.001f) continue;
-                    dir[0] /= len; dir[1] /= len; dir[2] /= len;
-
-                    for (float t = step; t < maxdist; t += step) {
-                        float p[3] = { org[0] + dir[0]*t, org[1] + dir[1]*t, org[2] + dir[2]*t };
-                        int L = leaf_of(p);
-                        if (L <= 0) break;
-                        int c = g_world.leafs[L].contents;
-                        if (c == CONTENTS_SOLID) break;
-                        if (c == CONTENTS_SKY)   break;
-                        if (L == cam_leaf) continue;
-                        visited++;
-                        int bit = World_LeafVisBit(L);
-                        if (bit < 0) { rowless++; continue; }
-                        if (!(row[bit >> 3] & (1 << (bit & 7)))) {
-                            missing++;
-                            if (miss_n < 6) {
-                                miss_pts[miss_n][0] = org[0];
-                                miss_pts[miss_n][1] = org[1];
-                                miss_pts[miss_n][2] = org[2];
-                                miss_leaf[miss_n] = L;
-                                miss_n++;
-                            }
-                        }
-                    }
-                }
-            }
-            printf("    step=%-4.0f cams=%d (solid=%d, no row=%d) rays=%d leaf entries=%d\n",
-                   step, 240, cam_solid, cam_norow, rays, visited);
-            printf("      culled-but-visible=%d (%.2f%%)   rowless-along-ray=%d\n",
-                   missing, visited ? 100.0 * missing / visited : 0.0, rowless);
-            for (int i = 0; i < miss_n; i++)
-                printf("      cam=(%.0f,%.0f,%.0f) leaf %d reached but not in PVS\n",
-                       miss_pts[i][0], miss_pts[i][1], miss_pts[i][2], miss_leaf[i]);
-        }
-        free(row);
+        for (size_t s = 0; s < sizeof(steps) / sizeof(steps[0]); s++)
+            ray_gate(mat, W, vis, steps[s]);
+        free(mat);
     }
 
     /* ── 4. the same convention on every map in pak0 ────────────────── */

@@ -87,27 +87,29 @@ static menu_page_t s_menu_page = MENU_MAIN;
 static int s_menu_cursor = 0;
 
 static const char *s_map_list[] = {
-    "e1m1", "e1m2", "e1m3", "e1m4",
-    "e1m5", "e1m6", "e1m7", "start"
+    "start", "e1m1", "e1m2", "e1m3", "e1m4", "e1m5", "e1m6", "e1m7", "e1m8"
 };
 
 static const char *s_map_titles[] = {
-    "1. E1M1: THE SLIPGATE COMPLEX",
-    "2. E1M2: CASTLE OF THE DAMNED",
-    "3. E1M3: THE NECROPOLIS",
-    "4. E1M4: THE GRISLY GROTTO",
-    "5. E1M5: GLOOM KEEP",
-    "6. E1M6: THE DOOR TO CHTHON",
-    "7. E1M7: THE HOUSE OF CHTHON",
-    "8. START: THE SLIPGATE HUB"
+    "1. START: WELCOME TO QUAKE",
+    "2. E1M1: SLIPGATE COMPLEX",
+    "3. E1M2: CASTLE OF THE DAMNED",
+    "4. E1M3: THE NECROPOLIS",
+    "5. E1M4: THE GRISLY GROTTO",
+    "6. E1M5: GLOOM KEEP",
+    "7. E1M6: THE DOOR TO CHTHON",
+    "8. E1M7: THE HOUSE OF CHTHON",
+    "9. E1M8: ZIGGURAT VERTIGO"
 };
-#define NUM_MAPS 8
+#define NUM_MAPS 9
+
+#include "../include/cl_demo.h"
 
 static const char *s_demo_titles[] = {
     "1. DEMO 1: THE NECROPOLIS (E1M3)",
     "2. DEMO 2: THE GRISLY GROTTO (E1M4)",
     "3. DEMO 3: THE DOOR TO CHTHON (E1M6)",
-    "4. CINEMATIC CAMERA FLYTHROUGH (E1M1)",
+    "4. DEMO 4: SLIPGATE COMPLEX (E1M1)",
     "5. RETURN TO MAIN MENU"
 };
 #define NUM_DEMOS 5
@@ -334,6 +336,14 @@ int World_ChangeMap(const char *mapname) {
 }
 
 /* ── Demo / Replay Playback Implementation ─────────────────────────────── */
+void Replay_StartDemoFile(const char *demopath) {
+    g_menu_active = 0;
+    g_console_active = 0;
+    if (!Demo_Play(demopath)) {
+        Replay_StartDemo(1);
+    }
+}
+
 void Replay_StartDemo(int demo_num) {
     if (demo_num < 1) demo_num = 1;
     if (demo_num > 4) demo_num = 4;
@@ -342,26 +352,39 @@ void Replay_StartDemo(int demo_num) {
     g_menu_active = 0;
     g_console_active = 0;
 
-    const char *mapname = "maps/e1m3.bsp";
-    if (demo_num == 1) mapname = "maps/e1m3.bsp";
-    else if (demo_num == 2) mapname = "maps/e1m4.bsp";
-    else if (demo_num == 3) mapname = "maps/e1m6.bsp";
-    else if (demo_num == 4) mapname = "maps/e1m1.bsp";
+    const char *demoname = "demo1.dem";
+    if (demo_num == 1) demoname = "demo1.dem";
+    else if (demo_num == 2) demoname = "demo2.dem";
+    else if (demo_num == 3) demoname = "demo3.dem";
+    else if (demo_num == 4) demoname = "assets/quake/e1m1.dem";
 
-    World_ChangeMap(mapname);
+    if (!Demo_Play(demoname)) {
+        const char *mapname = "maps/e1m3.bsp";
+        if (demo_num == 1) mapname = "maps/e1m3.bsp";
+        else if (demo_num == 2) mapname = "maps/e1m4.bsp";
+        else if (demo_num == 3) mapname = "maps/e1m6.bsp";
+        else if (demo_num == 4) mapname = "maps/e1m1.bsp";
+        World_ChangeMap(mapname);
+        g_replay_active = 1;
+    }
     g_menu_active = 0;
-    g_replay_active = 1;
-    Con_LogAppend("=== Demo Replay Started (Press ESC for Menu) ===");
+    Con_LogAppend("=== Demo Replay Started (Press any key to Play) ===");
 }
 
 void Replay_Stop(void) {
+    Demo_Stop();
     g_replay_active = 0;
-    g_menu_active = 1;
+    g_menu_active = 0;
 }
 
 void Replay_Update(float dt) {
     if (!g_replay_active) return;
     g_replay_time += dt;
+
+    if (Demo_IsPlaying()) {
+        Demo_Update(dt);
+        return;
+    }
 
     extern refdef_t r_refdef;
 
@@ -633,8 +656,12 @@ int UI_HandleKey(UW key) {
                 s_menu_cursor = (s_menu_cursor + 1) % (NUM_MAPS + 1);
                 return 1;
             }
-            if (key >= '1' && key <= '8') {
+            if (key >= '1' && key <= '9') {
                 s_menu_cursor = key - '1';
+                key = '\r';
+            }
+            if (key == '0') {
+                s_menu_cursor = NUM_MAPS;
                 key = '\r';
             }
             if (key == '\r' || key == '\n' || key == ' ' || key == BTRON_KEY_RETURN || key == BTRON_KEY_KP_ENTER) {
@@ -659,6 +686,10 @@ int UI_HandleKey(UW key) {
             }
             if (key >= '1' && key <= '5') {
                 s_menu_cursor = key - '1';
+                key = '\r';
+            }
+            if (key == '0') {
+                s_menu_cursor = NUM_DEMOS - 1;
                 key = '\r';
             }
             if (key == '\r' || key == '\n' || key == ' ' || key == BTRON_KEY_RETURN || key == BTRON_KEY_KP_ENTER) {
@@ -845,7 +876,7 @@ void UI_Draw(int width, int height) {
             Draw_Fill(cx, cy + 18, 280, 2, 0x8C2020);
 
             for (int i = 0; i < NUM_MAPS; i++) {
-                int item_y = cy + 32 + i * 18;
+                int item_y = cy + 24 + i * 16;
                 if (i == s_menu_cursor) {
                     Draw_Fill(cx - 12, item_y - 2, 304, 15, 0x3A2814);
                     Draw_String(cx, item_y, s_map_titles[i]);
@@ -854,12 +885,12 @@ void UI_Draw(int width, int height) {
                 }
             }
 
-            int back_y = cy + 32 + NUM_MAPS * 18 + 8;
+            int back_y = cy + 24 + NUM_MAPS * 16 + 6;
             if (s_menu_cursor == NUM_MAPS) {
                 Draw_Fill(cx - 12, back_y - 2, 304, 15, 0x3A2814);
-                Draw_String(cx, back_y, "9. RETURN TO MAIN MENU");
+                Draw_String(cx, back_y, "0. RETURN TO MAIN MENU");
             } else {
-                Draw_String(cx, back_y, "9. RETURN TO MAIN MENU");
+                Draw_String(cx, back_y, "0. RETURN TO MAIN MENU");
             }
         } else if (s_menu_page == MENU_DEMOS) {
             int cx = width / 2 - 140;
@@ -869,7 +900,7 @@ void UI_Draw(int width, int height) {
             Draw_Fill(cx, cy + 18, 280, 2, 0x8C2020);
 
             for (int i = 0; i < NUM_DEMOS; i++) {
-                int item_y = cy + 36 + i * 20 + (i == NUM_DEMOS - 1 ? 6 : 0);
+                int item_y = cy + 32 + i * 18 + (i == NUM_DEMOS - 1 ? 6 : 0);
                 if (i == s_menu_cursor) {
                     Draw_Fill(cx - 12, item_y - 2, 304, 16, 0x3A2814);
                     Draw_String(cx, item_y, s_demo_titles[i]);

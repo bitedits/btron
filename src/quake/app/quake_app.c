@@ -185,6 +185,7 @@ WND *open_quake_window(int x, int y, int width, int height) {
         SV_SpawnServer("maps/e1m1.bsp");
         UI_Init();
         s_initialised = 1;
+        Replay_StartDemoFile("assets/quake/e1m1.dem");
     }
 
     /* ── Start animation task ────────────────────────────────────── */

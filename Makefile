@@ -36,7 +36,7 @@ CFLAGS ?= -O2 -Wall -Wextra -std=c99 -Iinclude -Iinclude/gl -Isrc/gl -Iinclude/d
 .PHONY: all posix qemu kernel tkernel sakamura foma uefi pc98 arm-elf arm64-elf m68k ps2 mips \
         html2tad book2tad tad_bin test test-kernel test-yoko test-yoko4 test-m68k test-mips test-ps2 test-foma test-foma-ui foma-screens \
         segui-screens \
-        test-mozc test-editor test-hmi test-tad test-chat test-wylie verify test-fs test-chokanji test-quake \
+        test-mozc test-editor test-hmi test-tad test-chat test-wylie verify test-fs test-chokanji test-quake test-replay \
         mkbtronfs btron_sys.vol \
         run-posix run-qemu run-kernel run-yoko run-yoko4 run-sakamura run-foma run-uefi run-eufi run-uefu run-pc98 run-m68k run-ps2 run-mips debug-virtio debug-gdb clean \
         ps2-cfg \
@@ -222,6 +222,7 @@ QUAKE_SRCS = \
     src/quake/render/r_alias.c \
     src/quake/render/r_part.c \
     src/quake/render/texture.c \
+    src/quake/core/cl_demo.c \
     src/quake/app/quake_ui.c \
     src/quake/app/quake_app.c
 
@@ -1649,13 +1650,33 @@ $(TEST_QUAKE_CTRL_BIN): $(TEST_QUAKE_CTRL_OBJS)
 	@mkdir -p ./.build
 	$(CC) $(TEST_QUAKE_CTRL_OBJS) -o $@ $(LDFLAGS) -lm
 
-test-quake: $(TEST_QUAKEC_BIN) $(TEST_QUAKE_ENT_BIN) $(TEST_QUAKE_CTRL_BIN)
+TEST_QUAKE_REPLAY_SRCS = verify/tests/test_quake_replay.c src/quake/core/cl_demo.c \
+                         src/quake/core/cmd.c src/quake/core/cvar.c src/quake/core/mem.c \
+                         src/quake/core/mathlib.c src/quake/core/world.c src/quake/core/pr_exec.c \
+                         src/quake/core/sv_phys.c src/quake/core/sv_main.c \
+                         src/quake/sys/sys_btron.c src/quake/sys/fs_btron.c \
+                         src/quake/app/quake_ui.c
+TEST_QUAKE_REPLAY_OBJS = $(TEST_QUAKE_REPLAY_SRCS:.c=.test.o)
+TEST_QUAKE_REPLAY_BIN  = ./.build/test_quake_replay
+
+$(TEST_QUAKE_REPLAY_BIN): $(TEST_QUAKE_REPLAY_OBJS)
+	@mkdir -p ./.build
+	$(CC) $(TEST_QUAKE_REPLAY_OBJS) -o $@ $(LDFLAGS) -lm
+
+test-replay: $(TEST_QUAKE_REPLAY_BIN)
 	@echo "=========================================================="
-	@echo " Running Quake Verification & Glitches Test Suite..."
+	@echo " Running Quake Demo Replay & Level Select Test Suite..."
+	@echo "=========================================================="
+	@./$(TEST_QUAKE_REPLAY_BIN)
+
+test-quake: $(TEST_QUAKEC_BIN) $(TEST_QUAKE_ENT_BIN) $(TEST_QUAKE_CTRL_BIN) $(TEST_QUAKE_REPLAY_BIN)
+	@echo "=========================================================="
+	@echo " Running Quake Verification, Glitches & Replay Suite..."
 	@echo "=========================================================="
 	@./$(TEST_QUAKEC_BIN)
 	@./$(TEST_QUAKE_ENT_BIN)
 	@./$(TEST_QUAKE_CTRL_BIN)
+	@./$(TEST_QUAKE_REPLAY_BIN)
 
 clean:
 	@$(MAKE) -C verify clean >/dev/null 2>&1 || true

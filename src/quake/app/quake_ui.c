@@ -35,7 +35,7 @@ int g_console_active = 0;
 int g_godmode        = 0;
 int g_noclip         = 0;
 int g_replay_active  = 0;
-static int g_replay_demo_num = 1;
+static char s_replay_label[40] = "DEMO 1";
 static float g_replay_time   = 0.0f;
 static int s_ui_w            = 480;
 static int s_ui_h            = 360;
@@ -105,13 +105,31 @@ static const char *s_map_titles[] = {
 
 #include "../include/cl_demo.h"
 
-static const char *s_demo_titles[] = {
-    "1. DEMO 1: THE NECROPOLIS (E1M3)",
-    "2. DEMO 2: THE GRISLY GROTTO (E1M4)",
-    "3. DEMO 3: THE DOOR TO CHTHON (E1M6)",
-    "4. RETURN TO MAIN MENU"
+/* The recorded drone runs (verify/tests/test_quake_drone.c, `make test-drone
+ * [DRONE_MAP=maps/e1m5.bsp]` or `make test-drone-all`), written next to the pak
+ * as loose files so FS_LoadFile's directory search finds them by name.
+ * A fixed table rather than a directory scan: the BTRON filesystem has no
+ * readdir, and a file that is not there says so when `play` cannot load it. */
+static const char *s_drone_files[] = {
+    "drone1m1", "drone1m2", "drone1m3", "drone1m4",
+    "drone1m5", "drone1m6", "drone1m7", "drone1m8"
 };
-#define NUM_DEMOS 4
+#define NUM_DRONES ((int)(sizeof s_drone_files / sizeof s_drone_files[0]))
+
+/* One row per drone run, then the stock demo, then the return row — which is
+ * drawn and keyed separately as '0', exactly like the level list. */
+static const char *s_demo_titles[] = {
+    "1. E1M1: SLIPGATE COMPLEX",
+    "2. E1M2: CASTLE OF THE DAMNED",
+    "3. E1M3: THE NECROPOLIS",
+    "4. E1M4: THE GRISLY GROTTO",
+    "5. E1M5: GLOOM KEEP",
+    "6. E1M6: THE DOOR TO CHTHON",
+    "7. E1M7: THE HOUSE OF CHTHON",
+    "8. E1M8: ZIGGURAT VERTIGO",
+    "9. STOCK DEMO 1: E1M3 FLYTHROUGH"
+};
+#define NUM_DEMOS 9
 
 /* ── Weapon Combat & Animation State ──────────────────────────────────── */
 static int   s_gun_frame = 0;
@@ -479,18 +497,28 @@ int World_ChangeMap(const char *mapname) {
 }
 
 /* ── Demo / Replay Playback Implementation ─────────────────────────────── */
-void Replay_StartDemoFile(const char *demopath) {
+/* Play one named track.  A failed `play` used to fall through to demo1, which
+ * hides the reason: a drone track is only in assets/quake/ once it has been
+ * recorded with `make test-drone-all`.  Report and open the console instead. */
+int Replay_StartDemoFile(const char *demopath) {
+    char msg[112];
     g_menu_active = 0;
     g_console_active = 0;
     if (!Demo_Play(demopath)) {
-        Replay_StartDemo(1);
+        snprintf(msg, sizeof(msg), "play: '%s' not found (run `make test-drone-all`)", demopath);
+        Con_LogAppend(msg);
+        g_console_active = 1;
+        return 0;
     }
+    snprintf(s_replay_label, sizeof(s_replay_label), "%s", demopath);
+    snprintf(msg, sizeof(msg), "Playing %s", demopath);
+    Con_LogAppend(msg);
+    return 1;
 }
 
 void Replay_StartDemo(int demo_num) {
     if (demo_num < 1) demo_num = 1;
     if (demo_num > 4) demo_num = 4;
-    g_replay_demo_num = demo_num;
     g_replay_time = 0.0f;
     g_menu_active = 0;
     g_console_active = 0;
@@ -499,6 +527,8 @@ void Replay_StartDemo(int demo_num) {
     if (demo_num == 1) demoname = "demo1.dem";
     else if (demo_num == 2) demoname = "demo2.dem";
     else if (demo_num == 3) demoname = "demo3.dem";
+
+    snprintf(s_replay_label, sizeof(s_replay_label), "DEMO %d", demo_num);
 
     if (!Demo_Play(demoname)) {
         const char *mapname = "maps/e1m3.bsp";
@@ -653,9 +683,29 @@ static void Cmd_Clear_f(void) {
     s_con_num_lines = 0;
 }
 
+/* play <track> — the recorded drone runs and the stock demos.  Demo_Play takes
+ * the name in any of the forms it searches: `play drone1m1`, `play drone1m5.dem`
+ * or a full `play assets/quake/drone1m5.dem` all load the same track. */
+static void Cmd_Play_f(void) {
+    if (Cmd_Argc() < 2) {
+        char line[128];
+        line[0] = 0;
+        for (int i = 0; i < NUM_DRONES; i++) {
+            if (line[0]) strncat(line, " ", sizeof(line) - strlen(line) - 1);
+            strncat(line, s_drone_files[i], sizeof(line) - strlen(line) - 1);
+        }
+        Con_LogAppend("Usage: play <track>");
+        Con_LogAppend(line);
+        Con_LogAppend("demo1  demo2  demo3  (stock: angles only, camera stays at level start)");
+        return;
+    }
+    Replay_StartDemoFile(Cmd_Argv(1));
+}
+
 static void Cmd_Help_f(void) {
     Con_LogAppend("=== Quake 3D Commands ===");
     Con_LogAppend("  map <name>     - Load level (e1m1..e1m8, start)");
+    Con_LogAppend("  play <track>   - Drone run (drone1m1..drone1m8) or demo1..3");
     Con_LogAppend("  god            - Toggle godmode");
     Con_LogAppend("  noclip         - Toggle fly/walk through walls");
     Con_LogAppend("  give all       - Own every weapon and fill all ammunition");
@@ -670,6 +720,7 @@ void UI_Init(void) {
     Cmd_Init();
     Cmd_AddCommand("map",         Cmd_Map_f);
     Cmd_AddCommand("changelevel", Cmd_Map_f);
+    Cmd_AddCommand("play",        Cmd_Play_f);
     Cmd_AddCommand("god",         Cmd_God_f);
     Cmd_AddCommand("noclip",      Cmd_Noclip_f);
     Cmd_AddCommand("give",        Cmd_Give_f);
@@ -861,26 +912,29 @@ int UI_HandleKey(UW key) {
                 return 1;
             }
         } else if (s_menu_page == MENU_DEMOS) {
+            /* Rows 0..NUM_DEMOS-1 are tracks, row NUM_DEMOS is the return row
+               selected by '0' — the same shape as the level list. */
             if (key == 0xFF52 || key == BTRON_KEY_UP || key == 'w' || key == 'W') {
-                s_menu_cursor = (s_menu_cursor + NUM_DEMOS - 1) % NUM_DEMOS;
+                s_menu_cursor = (s_menu_cursor + NUM_DEMOS) % (NUM_DEMOS + 1);
                 return 1;
             }
             if (key == 0xFF54 || key == BTRON_KEY_DOWN || key == 's' || key == 'S') {
-                s_menu_cursor = (s_menu_cursor + 1) % NUM_DEMOS;
+                s_menu_cursor = (s_menu_cursor + 1) % (NUM_DEMOS + 1);
                 return 1;
             }
-            if (key >= '1' && key <= '4') {
+            if (key >= '1' && key <= '9') {
                 s_menu_cursor = key - '1';
                 key = '\r';
             }
             if (key == '0') {
-                s_menu_cursor = NUM_DEMOS - 1;
+                s_menu_cursor = NUM_DEMOS;
                 key = '\r';
             }
             if (key == '\r' || key == '\n' || key == ' ' || key == BTRON_KEY_RETURN || key == BTRON_KEY_KP_ENTER) {
-                if (s_menu_cursor < 3) {
-                    g_menu_active = 0;
-                    Replay_StartDemo(s_menu_cursor + 1);
+                if (s_menu_cursor < NUM_DRONES) {
+                    Replay_StartDemoFile(s_drone_files[s_menu_cursor]);
+                } else if (s_menu_cursor == NUM_DRONES) {
+                    Replay_StartDemo(1);
                 } else {
                     s_menu_page = MENU_MAIN;
                     s_menu_cursor = 2;
@@ -973,12 +1027,18 @@ int UI_HandleMouse(int mx, int my, int button_down) {
             int cy = s_ui_h / 2 - 110;
             if (mx >= cx - 20 && mx <= cx + 290) {
                 for (int i = 0; i < NUM_DEMOS; i++) {
-                    int item_y = cy + 32 + i * 18 + (i == NUM_DEMOS - 1 ? 6 : 0);
-                    if (my >= item_y - 2 && my <= item_y + 16) {
+                    int item_y = cy + 24 + i * 16;
+                    if (my >= item_y - 2 && my <= item_y + 14) {
                         s_menu_cursor = i;
                         UI_HandleKey('\r');
                         return 1;
                     }
+                }
+                int back_y = cy + 24 + NUM_DEMOS * 16 + 6;
+                if (my >= back_y - 2 && my <= back_y + 14) {
+                    s_menu_cursor = NUM_DEMOS;
+                    UI_HandleKey('\r');
+                    return 1;
                 }
             }
         }
@@ -998,8 +1058,8 @@ void UI_Draw(int width, int height) {
         Draw_Fill(0, 0, width, 26, 0x181410);
         Draw_Fill(0, 26, width, 1, 0x6A4828);
         char rep_buf[80];
-        snprintf(rep_buf, sizeof(rep_buf), "*** REPLAY: DEMO %d [%s] (ESC FOR MENU) ***",
-                 g_replay_demo_num, g_world.name);
+        snprintf(rep_buf, sizeof(rep_buf), "*** REPLAY: %s [%s] (ESC FOR MENU) ***",
+                 s_replay_label, g_world.name);
         Draw_String(width / 2 - 160, 8, rep_buf);
     }
 
@@ -1092,17 +1152,25 @@ void UI_Draw(int width, int height) {
             int cx = width / 2 - 140;
             int cy = height / 2 - 110;
 
-            Draw_String(cx + 40, cy, "SELECT DEMO / REPLAY");
+            Draw_String(cx + 40, cy, "SELECT DRONE RUN");
             Draw_Fill(cx, cy + 18, 280, 2, 0x8C2020);
 
             for (int i = 0; i < NUM_DEMOS; i++) {
-                int item_y = cy + 32 + i * 18 + (i == NUM_DEMOS - 1 ? 6 : 0);
+                int item_y = cy + 24 + i * 16;
                 if (i == s_menu_cursor) {
-                    Draw_Fill(cx - 12, item_y - 2, 304, 16, 0x3A2814);
+                    Draw_Fill(cx - 12, item_y - 2, 304, 15, 0x3A2814);
                     Draw_String(cx, item_y, s_demo_titles[i]);
                 } else {
                     Draw_String(cx, item_y, s_demo_titles[i]);
                 }
+            }
+
+            int back_y = cy + 24 + NUM_DEMOS * 16 + 6;
+            if (s_menu_cursor == NUM_DEMOS) {
+                Draw_Fill(cx - 12, back_y - 2, 304, 15, 0x3A2814);
+                Draw_String(cx, back_y, "0. RETURN TO MAIN MENU");
+            } else {
+                Draw_String(cx, back_y, "0. RETURN TO MAIN MENU");
             }
         } else if (s_menu_page == MENU_CONTROLS) {
             int cx = width / 2 - 160;

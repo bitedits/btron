@@ -37,7 +37,7 @@ CFLAGS ?= -O2 -Wall -Wextra -std=c99 -Iinclude -Iinclude/gl -Isrc/gl -Iinclude/d
         html2tad book2tad tad_bin test test-kernel test-yoko test-yoko4 test-m68k test-mips test-ps2 test-foma test-foma-ui foma-screens \
         segui-screens \
         test-mozc test-editor test-hmi test-tad test-chat test-wylie verify test-fs test-chokanji test-quake test-replay \
-        test-hull test-view test-secret test-render \
+        test-hull test-view test-secret test-render test-drone test-drone-all \
         mkbtronfs btron_sys.vol \
         run-posix run-qemu run-kernel run-yoko run-yoko4 run-sakamura run-foma run-uefi run-eufi run-uefu run-pc98 run-m68k run-ps2 run-mips debug-virtio debug-gdb clean \
         ps2-cfg \
@@ -1742,6 +1742,45 @@ $(TEST_QUAKE_RENDER_BIN): $(TEST_QUAKE_RENDER_OBJS)
 
 test-render: $(TEST_QUAKE_RENDER_BIN)
 	@./$(TEST_QUAKE_RENDER_BIN)
+
+TEST_QUAKE_DRONE_SRCS = verify/tests/test_quake_drone.c \
+                        src/quake/core/cl_demo.c \
+                        src/quake/core/cmd.c src/quake/core/cvar.c src/quake/core/mem.c \
+                        src/quake/core/mathlib.c src/quake/core/world.c src/quake/core/pr_exec.c \
+                        src/quake/core/sv_phys.c src/quake/core/sv_main.c \
+                        src/quake/sys/sys_btron.c src/quake/sys/fs_btron.c \
+                        src/quake/app/quake_ui.c
+TEST_QUAKE_DRONE_OBJS = $(TEST_QUAKE_DRONE_SRCS:.c=.test.o)
+TEST_QUAKE_DRONE_BIN  = ./.build/test_quake_drone
+
+$(TEST_QUAKE_DRONE_BIN): $(TEST_QUAKE_DRONE_OBJS)
+	@mkdir -p ./.build
+	$(CC) $(TEST_QUAKE_DRONE_OBJS) -o $@ $(LDFLAGS) -lm
+
+# Leaf-graph route planner for a drone run.  DRONE_MAP=maps/e1m2.bsp picks the level.
+test-drone: $(TEST_QUAKE_DRONE_BIN)
+	@DRONE_MAP=$${DRONE_MAP:-maps/e1m1.bsp} ./$(TEST_QUAKE_DRONE_BIN)
+
+# "Footage for each level": record and re-read a track for every base episode map.
+# Each one writes assets/quake/drone<map>.dem and verifies it through the
+# player's own packet framing; a failure stops the run with that map's log.
+# The pak0.pak in the tree is the shareware one, so episodes 2-4 report SKIP and
+# start being recorded as soon as a registered pak is dropped in.
+test-drone-all: $(TEST_QUAKE_DRONE_BIN)
+	@for m in e1m1 e1m2 e1m3 e1m4 e1m5 e1m6 e1m7 e1m8 \
+	           e2m1 e2m2 e2m3 e2m4 e2m5 e2m6 e2m7 e2m8 \
+	           e3m1 e3m2 e3m3 e3m4 e3m5 e3m6 e3m7 \
+	           e4m1 e4m2 e4m3 e4m4 e4m5 e4m6 ; do \
+	  log=.build/drone_$$m.log ; \
+	  DRONE_MAP=maps/$$m.bsp ./$(TEST_QUAKE_DRONE_BIN) > $$log 2>&1 ; rc=$$? ; \
+	  if [ $$rc -eq 77 ] ; then \
+	    printf '%-6s SKIP — %s is not in this pak0.pak\n' $$m $$m; continue ; \
+	  fi ; \
+	  if [ $$rc -ne 0 ] ; then \
+	    printf '%-6s FAILED — see %s\n' $$m $$log ; cat $$log ; exit 1 ; \
+	  fi ; \
+	  printf '%-6s %s\n' $$m "$$(grep 'assets/quake' $$log | head -1 | sed 's/^ *//')" ; \
+	done
 
 test-quake: $(TEST_QUAKEC_BIN) $(TEST_QUAKE_ENT_BIN) $(TEST_QUAKE_CTRL_BIN) $(TEST_QUAKE_REPLAY_BIN)
 	@echo "=========================================================="

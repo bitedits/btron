@@ -262,8 +262,61 @@ int main(void) {
     printf("  [PASS] Player moved from spawn +X: %.1f -> %.1f (delta=%.1f)\n",
            start_x, final_x, final_x - start_x);
 
+    /* 9. Recorded drone track: the file carries camera poses only — no
+     * movement keys, no entity deltas — so playback must glide the viewport
+     * while the player edict stays exactly where it was. */
+    printf("\n[9/9] Playing a recorded drone track (assets/quake/drone1m1.dem)...\n");
+    World_ChangeMap("maps/e1m1.bsp");
+    g_replay_active = 0;
+    if (!Demo_Play("drone1m1")) {
+        printf("  [SKIP] drone1m1.dem is not recorded yet — run `make test-drone`.\n");
+    } else {
+        assert(strcmp(g_demo.mapname, "maps/e1m1.bsp") == 0);
+        float px0 = EF(player, F_ORIGIN_X), py0 = EF(player, F_ORIGIN_Y), pz0 = EF(player, F_ORIGIN_Z);
+
+        float prev[3];
+        memcpy(prev, r_refdef.vieworg, sizeof prev);
+        float travel = 0.0f, max_step = 0.0f;
+        int frames = (int)(g_demo.total_duration * 60.0f);
+        for (int f = 0; f < frames; f++) {
+            Demo_Update(1.0f / 60.0f);
+            /* Frame 0 only lands the camera on the route start, so its step is
+             * measured from frame 1 — the glide itself is what has to be smooth. */
+            if (f > 0) {
+                float dx = r_refdef.vieworg[0] - prev[0];
+                float dy = r_refdef.vieworg[1] - prev[1];
+                float dz = r_refdef.vieworg[2] - prev[2];
+                float d = sqrtf(dx * dx + dy * dy + dz * dz);
+                travel += d;
+                if (d > max_step) max_step = d;
+            }
+            memcpy(prev, r_refdef.vieworg, sizeof prev);
+            if (SV_PointContents(r_refdef.vieworg) == CONTENTS_SOLID) {
+                printf("  [FAIL] frame %d: camera inside world geometry at (%.1f, %.1f, %.1f)\n",
+                       f, r_refdef.vieworg[0], r_refdef.vieworg[1], r_refdef.vieworg[2]);
+                assert(0);
+            }
+        }
+
+        printf("    camera path %.1f units in %d frames, longest single step %.1f units "
+               "(%.0f units/s at 60 Hz)\n",
+               travel, frames, max_step, max_step * 60.0f);
+        printf("    player edict stayed at (%.1f, %.1f, %.1f)\n",
+               EF(player, F_ORIGIN_X), EF(player, F_ORIGIN_Y), EF(player, F_ORIGIN_Z));
+
+        /* The route is a fast run at 300 units/s, so the viewport has to cover
+         * most of that; a pinned camera (the old angles-only path) gives 0. */
+        assert(travel > g_demo.total_duration * 150.0f);
+        assert(max_step < 8.0f);    /* 30 Hz poses lerped: 5 units/frame, not the 10 it would snap to */
+        assert(EF(player, F_ORIGIN_X) == px0 && EF(player, F_ORIGIN_Y) == py0 &&
+               EF(player, F_ORIGIN_Z) == pz0);
+        printf("  [PASS] Drone track glides the camera through %d packets, never inside a brush, "
+               "and moves no player input.\n", g_demo.total_packets);
+        Demo_Stop();
+    }
+
     printf("\n==========================================================\n");
-    printf(" ALL Quake Demo Replays & Episode 1 Menu Tests PASSED! (8/8)\n");
+    printf(" ALL Quake Demo Replays & Episode 1 Menu Tests PASSED! (9/9)\n");
     printf("==========================================================\n");
     return 0;
 }

@@ -213,6 +213,7 @@ void  SV_RunThink(edict_t *ed);
 trace_t SV_Move(const float *start, const float *mins, const float *maxs,
                 const float *end, int type, edict_t *passedict);
 int     SV_PointContents(const float *p);
+int     SV_UseEntity(int edictnum, int other_edict);
 
 /* Player movement */
 void  SV_WalkMove(edict_t *player, float dt);

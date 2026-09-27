@@ -27,7 +27,7 @@ int  UI_HandleMouse(int mx, int my, int button_down);
 
 /* Demo & Replay Playback */
 void Replay_StartDemo(int demo_num);
-void Replay_StartDemoFile(const char *demopath);
+int  Replay_StartDemoFile(const char *demopath);
 void Replay_Update(float dt);
 void Replay_Stop(void);
 

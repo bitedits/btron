@@ -790,6 +790,26 @@ void SV_Physics(void) {
     }
 }
 
+/* ── Use dispatch ─────────────────────────────────────────────────────── */
+/* Run one entity's use function the way the QC doors and buttons expect:
+ * self = that entity, other = the player.  Returns 0 when there is no use
+ * function to run, so callers can tell "nothing here" from "it worked". */
+int SV_UseEntity(int edictnum, int other_edict) {
+    if (!g_prvm.is_loaded) return 0;
+    if (edictnum <= 0 || edictnum >= g_prvm.num_edicts) return 0;
+
+    edict_t *ed = &g_prvm.edicts[edictnum];
+    if (ed->free) return 0;
+
+    int fn = EI(ed, F_USE);
+    if (fn <= 0) return 0;
+
+    ((eval_t *)g_prvm.globals)[28].i = edictnum;   /* self  */
+    ((eval_t *)g_prvm.globals)[29].i = other_edict; /* other */
+    PR_ExecuteProgram(fn);
+    return 1;
+}
+
 /* ── Server init ────────────────────────────────────────────────────── */
 void SV_Init(void) {
     memset(&g_server, 0, sizeof(g_server));

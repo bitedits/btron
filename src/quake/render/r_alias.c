@@ -17,6 +17,7 @@
 #include "../include/r_light.h"
 #include "../include/quakedef.h"
 #include "../include/fs_btron.h"
+#include "../include/texture.h"
 #include "../../gl/gl_dispatch.h"
 
 /* ── Globals ─────────────────────────────────────────────────────────── */
@@ -36,7 +37,6 @@ const float r_avertexnormals[162][3] = {
     { 1.000000f,  0.000000f,  0.000000f}, {-1.000000f,  0.000000f,  0.000000f},
     { 0.000000f,  1.000000f,  0.000000f}, { 0.000000f, -1.000000f,  0.000000f},
     /* … remaining 144 normals: approximate with cardinal set for BSS size */
-    /* (Full 162-entry table consumes ~8 KB; padded rows use normalised variants) */
     {-0.681718f, -0.147621f, -0.716567f}, {-0.681718f,  0.147621f, -0.716567f},
     { 0.442863f,  0.238856f, -0.864188f}, { 0.162460f,  0.500000f, -0.850651f},
     { 0.309017f,  0.500000f, -0.809017f}, { 0.147621f,  0.716567f, -0.681718f},
@@ -79,6 +79,10 @@ static void dequantize(const dtrivert_t *tv, const float *scale, const float *or
     out[2] = (float)tv->v[2] * scale[2] + origin[2];
 }
 
+/* ── Scratch RGBA buffer for skin upload (max 512×512 skin) ──────────── */
+#define SKIN_SCRATCH_MAX (512 * 512 * 4)
+static byte s_skin_rgba[SKIN_SCRATCH_MAX];
+
 /* ── Load an MDL from the PAK filesystem ─────────────────────────────── */
 int R_LoadAliasModel(const char *path) {
     if (!path) return -1;
@@ -118,31 +122,78 @@ int R_LoadAliasModel(const char *path) {
     VectorCopy(hdr->scale, mdl->scale);
     VectorCopy(hdr->scale_origin, mdl->origin);
 
-    if (mdl->numverts > MAX_MDL_VERTS) mdl->numverts = MAX_MDL_VERTS;
-    if (mdl->numtris  > MAX_MDL_TRIS)  mdl->numtris  = MAX_MDL_TRIS;
-    if (mdl->numframes> MAX_MDL_FRAMES) mdl->numframes= MAX_MDL_FRAMES;
+    if (mdl->numverts  > MAX_MDL_VERTS)  mdl->numverts  = MAX_MDL_VERTS;
+    if (mdl->numtris   > MAX_MDL_TRIS)   mdl->numtris   = MAX_MDL_TRIS;
+    if (mdl->numframes > MAX_MDL_FRAMES) mdl->numframes = MAX_MDL_FRAMES;
 
     /* ── Walk the MDL binary layout ─────────────────────────────────── */
     const byte *p = data + sizeof(mdl_header_t);
 
-    /* Skip skin data: each skin is skinwidth×skinheight bytes */
+    /* ── Skin data ───────────────────────────────────────────────────── *
+     * Each skin is: 4-byte type int + (skinwidth×skinheight) bytes.     *
+     * We upload the first skin to OpenGL using the Quake palette.       */
+    int sw = hdr->skinwidth;
+    int sh = hdr->skinheight;
+    int skinpix = sw * sh;
+
     for (int s = 0; s < hdr->numskins && s < MAX_MDL_SKINS; s++) {
         int stype = *(const int *)p; p += 4;
+        const byte *pixels = NULL;
         if (stype == 0) {
-            /* Single skin */
-            p += hdr->skinwidth * hdr->skinheight;
+            /* Single skin: pixels follow immediately */
+            pixels = p;
+            p += skinpix;
         } else {
-            /* Group skin: skip nb + times */
+            /* Group skin: 4-byte nb + nb×float times + nb×skinpix pixels */
             int nb = *(const int *)p; p += 4;
-            p += nb * 4;                        /* times */
-            p += nb * hdr->skinwidth * hdr->skinheight; /* pixels */
+            p += nb * 4;          /* times */
+            pixels = p;           /* take first frame */
+            p += nb * skinpix;
+        }
+
+        /* Upload to GL if GL context is available */
+        if (g_gl && pixels && skinpix > 0 && skinpix <= (512*512)) {
+            /* Expand indexed palette to RGBA */
+            for (int px = 0; px < skinpix; px++) {
+                byte idx = pixels[px];
+                quake_pal_t c = g_quake_palette[idx];
+                s_skin_rgba[px*4+0] = c.r;
+                s_skin_rgba[px*4+1] = c.g;
+                s_skin_rgba[px*4+2] = c.b;
+                s_skin_rgba[px*4+3] = (idx == 255) ? 0x00 : 0xFF;
+            }
+            GLuint tex_id = 0;
+            glGenTextures(1, &tex_id);
+            glBindTexture(GL_TEXTURE_2D, tex_id);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, sw, sh, 0,
+                         GL_RGBA, GL_UNSIGNED_BYTE, s_skin_rgba);
+            glBindTexture(GL_TEXTURE_2D, 0);
+            mdl->skin_tex[s] = (unsigned int)tex_id;
         }
     }
 
-    /* Skip texture coordinate (st) array: numverts × (onseam, s, t) */
-    p += hdr->numverts * 3 * 4;  /* 3 ints per vert */
+    /* ── Texture coordinate (st) array ──────────────────────────────── *
+     * numverts × dstvert_t (3 ints = 12 bytes each):                    *
+     *   { int onseam, int s, int t }                                     *
+     * We read into a temporary array then compute per-triangle UVs.     */
 
-    /* Triangle array */
+    /* Allocate temp stverts on the stack — MDL verts capped to 2048 */
+    dstvert_t stverts_tmp[MAX_MDL_VERTS];
+    memset(stverts_tmp, 0, sizeof(stverts_tmp));
+
+    int numv_raw = (hdr->numverts < MAX_MDL_VERTS) ? hdr->numverts : MAX_MDL_VERTS;
+    for (int v = 0; v < numv_raw; v++) {
+        stverts_tmp[v].onseam = *(const int *)(p + 0);
+        stverts_tmp[v].s      = *(const int *)(p + 4);
+        stverts_tmp[v].t      = *(const int *)(p + 8);
+        p += 12;
+    }
+
+    /* ── Triangle array ─────────────────────────────────────────────── */
     for (int t = 0; t < mdl->numtris; t++) {
         const int *tri = (const int *)p;
         mdl->tri_facesfront[t] = tri[0];
@@ -152,19 +203,41 @@ int R_LoadAliasModel(const char *path) {
         p += 4 * 4;
     }
 
-    /* Frame data: each frame = 4-byte type + daliasframe_t + numverts dtrivert_t */
+    /* ── Precompute normalised UV per triangle corner ───────────────── *
+     * Seam correction: back-face triangles (!facesfront) whose vertex   *
+     * is on the seam get s shifted right by skinwidth/2.                */
+    float inv_w = (sw > 0) ? (1.0f / (float)sw) : 1.0f;
+    float inv_h = (sh > 0) ? (1.0f / (float)sh) : 1.0f;
+
+    for (int t = 0; t < mdl->numtris; t++) {
+        int ff = mdl->tri_facesfront[t];
+        for (int k = 0; k < 3; k++) {
+            int vi = mdl->tris[t][k];
+            if (vi < 0 || vi >= numv_raw) { mdl->tri_st[t][k][0] = 0.0f; mdl->tri_st[t][k][1] = 0.0f; continue; }
+            int s_val = stverts_tmp[vi].s;
+            int t_val = stverts_tmp[vi].t;
+            /* Back-face vertex on seam → offset to back skin half */
+            if (!ff && stverts_tmp[vi].onseam) {
+                s_val += sw / 2;
+            }
+            mdl->tri_st[t][k][0] = ((float)s_val + 0.5f) * inv_w;
+            mdl->tri_st[t][k][1] = ((float)t_val + 0.5f) * inv_h;
+        }
+    }
+
+    /* ── Frame data ─────────────────────────────────────────────────── *
+     * each frame = 4-byte type + daliasframe_t header + numverts dtrivert_t */
     for (int f = 0; f < mdl->numframes; f++) {
         int ftype = *(const int *)p; p += 4;
         if (ftype != 0) {
-            /* Group frame: skip nb + times, then take first sub-frame */
+            /* Group frame: skip nb + nb×float times, take first sub-frame */
             int nb = *(const int *)p; p += 4;
-            p += nb * 4;  /* times */
+            p += nb * 4;  /* float times */
         }
 
-        /* daliasframe_t header (24 bytes: 2 trivert_t + 16-char name) */
-        const dtrivert_t *bbox_min = (const dtrivert_t *)p; p += 4;
-        const dtrivert_t *bbox_max = (const dtrivert_t *)p; p += 4;
-        (void)bbox_min; (void)bbox_max;
+        /* daliasframe_t: bbox_min(4 bytes) + bbox_max(4 bytes) + name(16 bytes) */
+        p += 4;  /* bbox_min dtrivert_t */
+        p += 4;  /* bbox_max dtrivert_t */
         p += 16; /* name */
 
         /* Allocate frame vertex array on hunk */
@@ -181,15 +254,17 @@ int R_LoadAliasModel(const char *path) {
             verts[v].n[1] = r_avertexnormals[ni][1];
             verts[v].n[2] = r_avertexnormals[ni][2];
         }
-        p += (size_t)(hdr->numverts) * 4;  /* each dtrivert_t = 4 bytes */
+        /* Each dtrivert_t is exactly 4 bytes */
+        p += (size_t)(hdr->numverts) * sizeof(dtrivert_t);
 
         mdl->frames[f] = verts;
     }
 
     mdl->is_loaded = 1;
     int idx = g_num_alias_models++;
-    Con_Printf("R_LoadAliasModel: %s (%d verts, %d tris, %d frames)\n",
-               path, mdl->numverts, mdl->numtris, mdl->numframes);
+    Con_Printf("R_LoadAliasModel: %s (%d verts, %d tris, %d frames, skin=%dx%d, tex=%u)\n",
+               path, mdl->numverts, mdl->numtris, mdl->numframes,
+               mdl->skinwidth, mdl->skinheight, mdl->skin_tex[0]);
     return idx;
 }
 
@@ -213,13 +288,24 @@ void R_DrawAliasModel(int model_idx, int frame, const float *origin,
     glPushMatrix();
 
     glTranslatef(origin[0], origin[1], origin[2]);
-    /* Quake MDL is Y-forward, needs rotation to match world orientation */
-    glRotatef(angles[1], 0.0f, 0.0f, 1.0f);  /* Yaw  around Z */
-    glRotatef(-angles[0], 0.0f, 1.0f, 0.0f); /* Pitch around Y */
-    glRotatef(angles[2], 1.0f, 0.0f, 0.0f);  /* Roll  around X */
+    /* Quake MDL: yaw around Z, pitch around Y (negated), roll around X */
+    glRotatef(angles[1], 0.0f, 0.0f, 1.0f);   /* Yaw  */
+    glRotatef(-angles[0], 0.0f, 1.0f, 0.0f);  /* Pitch */
+    glRotatef(angles[2], 1.0f, 0.0f, 0.0f);   /* Roll  */
 
-    /* ── Emit triangles with lightmap modulation ───────────────────── */
-    glColor3f(light, light * 0.95f, light * 0.88f);
+    /* ── Bind skin texture ─────────────────────────────────────────── */
+    int has_skin = (mdl->skin_tex[0] != 0);
+    if (has_skin) {
+        glEnable(GL_TEXTURE_2D);
+        glBindTexture(GL_TEXTURE_2D, (GLuint)mdl->skin_tex[0]);
+        glColor3f(light, light * 0.95f, light * 0.88f);
+    } else {
+        glDisable(GL_TEXTURE_2D);
+        /* Flat shade: use the model's characteristic colour tinted by light */
+        glColor3f(light * 0.80f, light * 0.65f, light * 0.50f);
+    }
+
+    /* ── Emit triangles ────────────────────────────────────────────── */
     glBegin(GL_TRIANGLES);
 
     for (int t = 0; t < mdl->numtris; t++) {
@@ -228,10 +314,18 @@ void R_DrawAliasModel(int model_idx, int frame, const float *origin,
             if (vi >= mdl->numverts) continue;
             const mdl_vert_t *v = &verts[vi];
             glNormal3f(v->n[0], v->n[1], v->n[2]);
+            if (has_skin) {
+                glTexCoord2f(mdl->tri_st[t][k][0], mdl->tri_st[t][k][1]);
+            }
             glVertex3f(v->v[0], v->v[1], v->v[2]);
         }
     }
 
     glEnd();
+
+    if (has_skin) {
+        glBindTexture(GL_TEXTURE_2D, 0);
+    }
+
     glPopMatrix();
 }

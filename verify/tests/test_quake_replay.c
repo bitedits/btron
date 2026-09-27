@@ -45,7 +45,7 @@ void R_AddDynamicLight(const float o[3], float rad, float r, float g, float b, f
     (void)o; (void)rad; (void)r; (void)g; (void)b; (void)decay;
 }
 void *R_LoadAliasModel(const char *name) { (void)name; return NULL; }
-int TEX_LoadBSPTextures(const char *bsp_path) { (void)bsp_path; return 1; }
+int TEX_LoadBSPTextures(const byte *tex_lump, int lump_len) { (void)tex_lump; (void)lump_len; return 1; }
 
 void P_UpdateParticles(float dt) { (void)dt; }
 
@@ -101,7 +101,7 @@ int main(void) {
     assert(Demo_IsPlaying() == 0);
 
     /* 3. Test Official demo2.dem and demo3.dem from pak0.pak */
-    printf("\n[3/5] Testing demo2.dem (E1M4) and demo3.dem (E1M6) from pak0.pak...\n");
+    printf("\n[3/7] Testing demo2.dem (E1M4) and demo3.dem (E1M6) from pak0.pak...\n");
     int ok2 = Demo_Play("demo2.dem");
     assert(ok2 == 1);
     assert(g_demo.total_packets == 991);
@@ -122,25 +122,8 @@ int main(void) {
            g_demo.total_packets, g_demo.mapname, g_demo.total_duration);
     Demo_Stop();
 
-    /* 4. Test E1M1 Walkthrough Demo (e1m1.dem) */
-    printf("\n[4/5] Testing e1m1.dem walkthrough playback...\n");
-    int ok_e1m1 = Demo_Play("assets/quake/e1m1.dem");
-    assert(ok_e1m1 == 1);
-    assert(g_demo.total_packets >= 540);
-    assert(strcmp(g_demo.mapname, "maps/e1m1.bsp") == 0);
-    printf("  [PASS] e1m1.dem loaded: %d packets, map='%s', duration=%.1fs\n",
-           g_demo.total_packets, g_demo.mapname, g_demo.total_duration);
-
-    /* Step through all 540 packets (18.0s at 30Hz) */
-    for (int f = 0; f < 200; f++) {
-        Demo_Update(0.1f);
-    }
-    printf("  [PASS] e1m1.dem reached time=%.1fs, player pos=(%.1f, %.1f, %.1f)\n",
-           g_demo.time, r_refdef.vieworg[0], r_refdef.vieworg[1], r_refdef.vieworg[2]);
-    Demo_Stop();
-
-    /* 5. Test Episode 1 Level Selection Menu */
-    printf("\n[5/5] Testing Episode 1 Map Selection Menu...\n");
+    /* 4. Test Episode 1 Level Selection Menu */
+    printf("\n[4/7] Testing Episode 1 Map Selection Menu...\n");
     const char *ep1_maps[] = {
         "start", "e1m1", "e1m2", "e1m3", "e1m4", "e1m5", "e1m6", "e1m7", "e1m8"
     };
@@ -170,8 +153,117 @@ int main(void) {
     assert(strcmp(g_world.name, "maps/e1m1.bsp") == 0);
     printf("  [PASS] Menu selected map maps/e1m1.bsp successfully!\n");
 
+    /* 6. Test Loading ALL 9 Episode 1 Maps via World_ChangeMap */
+    printf("\n[6/8] Testing full loading & server initialization of all Episode 1 maps...\n");
+    int map_faces[9];
+    for (int i = 0; i < 9; i++) {
+        int ok = World_ChangeMap(ep1_maps[i]);
+        assert(ok == 1);
+        assert(g_world.is_loaded == 1);
+        assert(g_prvm.num_edicts >= 2);
+        edict_t *player = &g_prvm.edicts[1];
+        assert(player->free == 0);
+        assert(EF(player, F_HEALTH) == 100.0f);
+        assert(EF(player, F_MOVETYPE) == (float)MOVETYPE_WALK);
+
+        map_faces[i] = g_world.numfaces;
+
+        /* Step server frame to verify collision, physics, and world stability */
+        for (int f = 0; f < 5; f++) {
+            SV_ServerFrame(0.05f);
+        }
+
+        printf("  [PASS] Map '%s' loaded: %d faces, %d clipnodes, %d edicts, spawn=(%.1f, %.1f, %.1f)\n",
+               g_world.name, g_world.numfaces, g_world.numclipnodes, g_prvm.num_edicts,
+               g_world.spawn_origin[0], g_world.spawn_origin[1], g_world.spawn_origin[2]);
+    }
+    /* Verify that different maps loaded distinct geometry, not stale e1m1 cache */
+    assert(map_faces[0] != map_faces[1]); /* start vs e1m1 */
+    assert(map_faces[1] != map_faces[6]); /* e1m1 vs e1m6 */
+    printf("  [PASS] Verified distinct BSP geometry loaded across Episode 1 levels (cache invalidated properly)!\n");
+
+    /* 7. Test Demo Mode Input Suppression */
+    printf("\n[7/8] Testing Demo Mode Input Suppression...\n");
+    int demo_ok = Demo_Play("demo1.dem");
+    assert(demo_ok == 1);
+    assert(g_replay_active == 1);
+
+    /* Gameplay keys must be suppressed in demo mode */
+    assert(UI_HandleKey('w') == 1);
+    assert(UI_HandleKey('s') == 1);
+    assert(UI_HandleKey('a') == 1);
+    assert(UI_HandleKey('d') == 1);
+    assert(UI_HandleKey(' ') == 1);
+    assert(UI_HandleKey('c') == 1);
+    assert(in_forward == 0 && in_back == 0 && in_left == 0 && in_right == 0 && in_jump == 0 && in_down == 0);
+
+    /* Mouse input must be suppressed in demo mode */
+    assert(UI_HandleMouse(100, 100, 1) == 1);
+    assert(in_attack == 0);
+
+    /* Demo must still be playing */
+    assert(Demo_IsPlaying() == 1);
+    assert(g_replay_active == 1);
+
+    /* ESC key stops demo mode and opens menu */
+    assert(UI_HandleKey(27) == 1); /* ESC */
+    assert(Demo_IsPlaying() == 0);
+    assert(g_replay_active == 0);
+    assert(g_menu_active == 1);
+    printf("  [PASS] Demo mode ignores gameplay keys & mouse; ESC stops demo and opens menu.\n");
+
+    printf("\n[8/8] Testing player movement from spawn on E1M1...\n");
+    World_ChangeMap("maps/e1m1.bsp");
+    assert(g_world.is_loaded == 1);
+    edict_t *player = &g_prvm.edicts[1];
+    assert(player && !player->free);
+
+    /* Place player exactly at the E1M1 spawn origin (verified by test 6) */
+    float spawn_x = g_world.spawn_origin[0]; /* 480.0 */
+    float spawn_y = g_world.spawn_origin[1]; /* -352.0 */
+    float spawn_z = g_world.spawn_origin[2]; /* 88.0  */
+    printf("    E1M1 spawn: (%.1f, %.1f, %.1f)\n", spawn_x, spawn_y, spawn_z);
+
+    EF(player, F_ORIGIN_X) = spawn_x;
+    EF(player, F_ORIGIN_Y) = spawn_y;
+    EF(player, F_ORIGIN_Z) = spawn_z;
+    EF(player, F_VELOCITY_X) = 0.0f;
+    EF(player, F_VELOCITY_Y) = 0.0f;
+    EF(player, F_VELOCITY_Z) = 0.0f;
+    EF(player, F_FLAGS) = 512.0f; /* FL_ONGROUND */
+    EF(player, F_MOVETYPE) = (float)MOVETYPE_WALK;
+
+    g_menu_active    = 0;
+    g_console_active = 0;
+    g_replay_active  = 0;
+
+    /* Walk in +X direction (yaw = 0°, forward = +X) */
+    r_refdef.viewangles[0] = 0.0f;
+    r_refdef.viewangles[1] = 0.0f;   /* Yaw 0 = +X */
+    r_refdef.viewangles[2] = 0.0f;
+
+    float start_x = EF(player, F_ORIGIN_X);
+    in_forward = 1;
+    for (int step = 0; step < 30; step++) {
+        SV_ServerFrame(0.05f);
+        float px = EF(player, F_ORIGIN_X);
+        float py = EF(player, F_ORIGIN_Y);
+        float pz = EF(player, F_ORIGIN_Z);
+        printf("    step %d: pos=(%.1f, %.1f, %.1f) flags=%d\n",
+               step, px, py, pz, (int)EF(player, F_FLAGS));
+        /* Player must not fall into the void */
+        assert(pz >= spawn_z - 40.0f);
+    }
+    in_forward = 0;
+
+    /* Player must have moved in +X direction */
+    float final_x = EF(player, F_ORIGIN_X);
+    assert(final_x > start_x + 10.0f);
+    printf("  [PASS] Player moved from spawn +X: %.1f -> %.1f (delta=%.1f)\n",
+           start_x, final_x, final_x - start_x);
+
     printf("\n==========================================================\n");
-    printf(" ALL Quake Demo Replays & Episode 1 Menu Tests PASSED! (5/5)\n");
+    printf(" ALL Quake Demo Replays & Episode 1 Menu Tests PASSED! (8/8)\n");
     printf("==========================================================\n");
     return 0;
 }

@@ -19,12 +19,18 @@ typedef struct {
     float n[3];   /* Normal from lookup table */
 } mdl_vert_t;
 
+/* On-disk MDL vertex: exactly 4 bytes — do NOT add onseam prefix */
 typedef struct {
-    /* Raw on-disk trivert: quantized xyz + normal index */
-    byte onseam;     /* Unused in rendering path */
-    byte v[3];
-    byte normalidx;
+    byte v[3];         /* Quantized XYZ */
+    byte normalidx;    /* Index into r_avertexnormals[162] */
 } dtrivert_t;
+
+/* On-disk texture-coordinate vertex: 3 ints = 12 bytes */
+typedef struct {
+    int onseam;   /* Non-zero if vertex is on seam between front/back skins */
+    int s;        /* U coordinate (pixel, not normalised) */
+    int t;        /* V coordinate (pixel, not normalised) */
+} dstvert_t;
 
 typedef struct {
     int  facesfront;
@@ -79,6 +85,9 @@ typedef struct {
     /* Triangle index array */
     int      tris[MAX_MDL_TRIS][3];
     int      tri_facesfront[MAX_MDL_TRIS];
+
+    /* Precomputed normalised UV for each triangle corner [tri][vert][u/v] */
+    float    tri_st[MAX_MDL_TRIS][3][2];
 
     /* Skin GL texture IDs */
     unsigned int skin_tex[MAX_MDL_SKINS];

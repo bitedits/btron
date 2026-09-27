@@ -17,6 +17,7 @@ void World_UnloadMap(void) {
         }
         memset(&g_world, 0, sizeof(g_world));
     }
+    memset(&g_bsp_cache, 0, sizeof(g_bsp_cache));
 }
 
 static void parse_spawn_entity(const char *ents) {
@@ -68,8 +69,8 @@ static void parse_spawn_entity(const char *ents) {
 int World_LoadMap(const char *mapname) {
     if (!mapname) return 0;
 
-    int mark = Hunk_LowMark();
     World_UnloadMap();
+    int mark = Hunk_LowMark();
 
     /*
      * Fast-path: FS_CacheBSP slurps the entire .bsp into the hunk once

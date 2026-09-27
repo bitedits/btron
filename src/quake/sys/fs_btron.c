@@ -222,9 +222,11 @@ byte *FS_LoadFile(const char *path, int *out_len) {
 
 /* ── BSP pre-cache: load once, expose lump pointers ─────────────── */
 int FS_CacheBSP(const char *bsp_path) {
-    if (g_bsp_cache.is_ready) return 1; /* Already cached */
+    if (!bsp_path || !bsp_path[0]) return 0;
+    if (g_bsp_cache.is_ready && strcmp(g_bsp_cache.path, bsp_path) == 0) return 1; /* Already cached */
 
     memset(&g_bsp_cache, 0, sizeof(g_bsp_cache));
+    strncpy(g_bsp_cache.path, bsp_path, sizeof(g_bsp_cache.path) - 1);
 
     int bsp_len = 0;
     const byte *data = FS_FindInPak(bsp_path, &bsp_len);

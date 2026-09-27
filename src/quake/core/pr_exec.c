@@ -17,6 +17,7 @@
 #include "../include/world.h"
 #include "../include/r_alias.h"
 #include "../include/mathlib.h"
+#include "../include/render.h"
 
 /* ── Global VM state ─────────────────────────────────────────────────── */
 prvm_t g_prvm;
@@ -230,7 +231,7 @@ void PR_ExecuteBuiltin(int bnum) {
             break;
         case 10: /* error(msg) */
         case 11: /* objerror(msg) */
-            Con_DPrintf("[QC] error builtin called\n");
+            Con_DPrintf("[QC] error: %s\n", PR_GetString(eglobals[4].i));
             break;
         case 12: /* vlen(v) */
             {
@@ -283,6 +284,23 @@ void PR_ExecuteBuiltin(int bnum) {
                 eglobals[78].i = tr.ent ? NUM_FOR_EDICT(tr.ent) : 0;
             }
             break;
+        case 17: /* setspawnparms — no-op */ break;
+        case 18: /* find(start, field, match_str) → entity */
+            {
+                int   start_e = eglobals[4].i;
+                int   fofs    = eglobals[7].i;   /* field index into edict (QC field type) */
+                const char *val = PR_GetString(eglobals[10].i);
+                eglobals[1].i = 0;              /* default: world = not found */
+                if (val && val[0] && fofs >= 0 && fofs < EDICT_FIELDS) {
+                    for (int i = start_e + 1; i < g_prvm.num_edicts; i++) {
+                        edict_t *e = &g_prvm.edicts[i];
+                        if (e->free) continue;
+                        const char *fs = PR_GetString(e->v[fofs].i);
+                        if (fs && strcmp(fs, val) == 0) { eglobals[1].i = i; break; }
+                    }
+                }
+            }
+            break;
         case 19: /* precache_sound(s) */
             eglobals[1].i = eglobals[4].i;
             break;
@@ -295,13 +313,83 @@ void PR_ExecuteBuiltin(int bnum) {
                 eglobals[1].i = eglobals[4].i;
             }
             break;
-        case 21: /* stuffcmd */
+        case 21: /* stuffcmd */ break;
+        case 22: /* findradius(origin, radius) → chain of entities in sphere */
+            {
+                float ox = globals[4], oy = globals[5], oz = globals[6];
+                float r  = globals[7], r2 = r * r;
+                int head = 0;  /* world entity = empty chain */
+                for (int i = g_prvm.num_edicts - 1; i >= 1; i--) {
+                    edict_t *e = &g_prvm.edicts[i];
+                    if (e->free) continue;
+                    float dx = EF(e,F_ORIGIN_X)-ox;
+                    float dy = EF(e,F_ORIGIN_Y)-oy;
+                    float dz = EF(e,F_ORIGIN_Z)-oz;
+                    if (dx*dx + dy*dy + dz*dz <= r2) {
+                        EI(e, F_CHAIN) = head;
+                        head = i;
+                    }
+                }
+                eglobals[1].i = head;
+            }
             break;
         case 25: /* print(s) */
             Con_Printf("[QC] %s", PR_GetString(eglobals[4].i));
             break;
         case 26: /* bprint(s) */
         case 27: /* sprint(ent, s) */
+            break;
+        case 32: /* walkmove(yaw, dist) → bool — move monster one step */
+            {
+                edict_t *ed = PROG_TO_EDICT(((eval_t *)globals)[28].i); /* self */
+                float yaw_rad = globals[4] * (3.14159265f / 180.0f);
+                float dist    = globals[7];
+                float fwd_x   = cosf(yaw_rad);
+                float fwd_y   = sinf(yaw_rad);
+                float org[3]  = { EF(ed,F_ORIGIN_X), EF(ed,F_ORIGIN_Y), EF(ed,F_ORIGIN_Z) };
+                float mins[3] = { EF(ed,F_MINS_X),   EF(ed,F_MINS_Y),   EF(ed,F_MINS_Z)   };
+                float maxs[3] = { EF(ed,F_MAXS_X),   EF(ed,F_MAXS_Y),   EF(ed,F_MAXS_Z)   };
+                /* Use default monster hull if bbox not set */
+                if (mins[0] == 0.0f && maxs[0] == 0.0f) {
+                    mins[0]=-16; mins[1]=-16; mins[2]=-24;
+                    maxs[0]= 16; maxs[1]= 16; maxs[2]= 32;
+                }
+                float end[3] = { org[0]+fwd_x*dist, org[1]+fwd_y*dist, org[2] };
+                trace_t tr = SV_Move(org, mins, maxs, end, SOLID_SLIDEBOX, ed);
+                if (tr.fraction == 1.0f && !tr.allsolid) {
+                    /* Step succeeded — commit new position */
+                    EF(ed,F_ORIGIN_X) = tr.endpos[0];
+                    EF(ed,F_ORIGIN_Y) = tr.endpos[1];
+                    /* Re-snap to floor (step-down up to 18 units) */
+                    float new_org[3] = { tr.endpos[0], tr.endpos[1], tr.endpos[2] };
+                    float down[3]    = { new_org[0], new_org[1], new_org[2] - 18.0f };
+                    trace_t vtr = SV_Move(new_org, mins, maxs, down, SOLID_SLIDEBOX, ed);
+                    if (vtr.fraction < 1.0f && vtr.plane_normal[2] >= 0.7f) {
+                        EF(ed,F_ORIGIN_Z) = vtr.endpos[2];
+                    }
+                    globals[1] = 1.0f;
+                } else {
+                    globals[1] = 0.0f;
+                }
+            }
+            break;
+        case 33: /* changeyaw() — step entity yaw toward ideal_yaw at yaw_speed */
+            /* Note: QC calls this as changeyaw() with no args */
+            /* Fall through to case 61 which is the proper builtin # */
+            /* Both can exist; handle here for safety */
+            {
+                edict_t *ed = PROG_TO_EDICT(((eval_t *)globals)[28].i);
+                float cur   = EF(ed, F_ANGLES_Y);
+                float ideal = EF(ed, F_IDEAL_YAW);
+                float spd   = EF(ed, F_YAW_SPEED);
+                if (spd <= 0.0f) spd = 10.0f;
+                float delta = ideal - cur;
+                while (delta >  180.0f) delta -= 360.0f;
+                while (delta < -180.0f) delta += 360.0f;
+                if (delta >  spd) delta =  spd;
+                if (delta < -spd) delta = -spd;
+                EF(ed, F_ANGLES_Y) = cur + delta;
+            }
             break;
         case 34: /* droptofloor() */
             {
@@ -338,6 +426,22 @@ void PR_ExecuteBuiltin(int bnum) {
         case 38: /* ceil(f) */
             { int i = (int)globals[4]; globals[1] = (float)(globals[4] > (float)i ? i+1 : i); }
             break;
+        case 39: /* checkbottom(ent) → bool — is entity standing on solid ground? */
+            {
+                edict_t *ed = PROG_TO_EDICT(eglobals[4].i);
+                float org[3]  = { EF(ed,F_ORIGIN_X), EF(ed,F_ORIGIN_Y), EF(ed,F_ORIGIN_Z) };
+                float mins[3] = { EF(ed,F_MINS_X),   EF(ed,F_MINS_Y),   EF(ed,F_MINS_Z)   };
+                float maxs[3] = { EF(ed,F_MAXS_X),   EF(ed,F_MAXS_Y),   EF(ed,F_MAXS_Z)   };
+                if (mins[0] == 0.0f && maxs[0] == 0.0f) {
+                    mins[0]=-16; mins[1]=-16; mins[2]=-24;
+                    maxs[0]= 16; maxs[1]= 16; maxs[2]= 32;
+                }
+                float down[3] = { org[0], org[1], org[2] + mins[2] - 2.0f };
+                trace_t tr = SV_Move(org, mins, maxs, down, SOLID_SLIDEBOX, ed);
+                globals[1] = (tr.fraction < 1.0f && tr.plane_normal[2] >= 0.7f) ? 1.0f : 0.0f;
+            }
+            break;
+        case 40: /* pointcontents (alternate index in some progs) */
         case 41: /* pointcontents(v) */
             {
                 float p[3] = { globals[4], globals[5], globals[6] };
@@ -347,8 +451,78 @@ void PR_ExecuteBuiltin(int bnum) {
         case 43: /* fabs(f) */
             globals[1] = fabsf(globals[4]);
             break;
+        case 44: /* aim(ent, speed) → forward vector toward nearest enemy */
+            {
+                /* Return player's view forward direction */
+                vec3_t fwd, right, up;
+                AngleVectors(r_refdef.viewangles, fwd, right, up);
+                globals[1] = fwd[0]; globals[2] = fwd[1]; globals[3] = fwd[2];
+            }
+            break;
         case 45: /* cvar(s) */
             globals[1] = 0.0f;
+            break;
+        case 46: /* localcmd — no-op */ break;
+        case 47: /* nextent(ent) → next non-free entity */
+            {
+                int idx = eglobals[4].i + 1;
+                while (idx < g_prvm.num_edicts && g_prvm.edicts[idx].free) idx++;
+                eglobals[1].i = (idx < g_prvm.num_edicts) ? idx : 0;
+            }
+            break;
+        case 48: /* particle — no-op */ break;
+        case 49: /* changeyaw (alternate number used by some progs) */
+        case 61: /* changeyaw() */
+            {
+                edict_t *ed = PROG_TO_EDICT(((eval_t *)globals)[28].i);
+                float cur   = EF(ed, F_ANGLES_Y);
+                float ideal = EF(ed, F_IDEAL_YAW);
+                float spd   = EF(ed, F_YAW_SPEED);
+                if (spd <= 0.0f) spd = 10.0f;
+                float delta = ideal - cur;
+                while (delta >  180.0f) delta -= 360.0f;
+                while (delta < -180.0f) delta += 360.0f;
+                if (delta >  spd) delta =  spd;
+                if (delta < -spd) delta = -spd;
+                EF(ed, F_ANGLES_Y) = cur + delta;
+            }
+            break;
+        case 50: /* writebyte / misc net — no-op */ break;
+        case 51: /* vectoangles(v) → pitch/yaw angles */
+            {
+                float fx = globals[4], fy = globals[5], fz = globals[6];
+                float pitch, yaw;
+                if (fy == 0.0f && fx == 0.0f) {
+                    yaw   = 0.0f;
+                    pitch = (fz > 0.0f) ? 90.0f : -90.0f;
+                } else {
+                    yaw   = atan2f(fy, fx) * (180.0f / 3.14159265f);
+                    if (yaw < 0.0f) yaw += 360.0f;
+                    float horiz = sqrtf(fx*fx + fy*fy);
+                    pitch = atan2f(fz, horiz) * (180.0f / 3.14159265f);
+                    if (pitch < 0.0f) pitch += 360.0f;
+                }
+                globals[1] = pitch; globals[2] = yaw; globals[3] = 0.0f;
+            }
+            break;
+        case 67: /* movetogoal(dist) — step monster toward goalentity */
+            {
+                edict_t *self = PROG_TO_EDICT(((eval_t *)globals)[28].i);
+                int gi = EI(self, F_GOALENTITY);
+                if (gi > 0 && gi < g_prvm.num_edicts) {
+                    edict_t *goal = &g_prvm.edicts[gi];
+                    float dx = EF(goal,F_ORIGIN_X) - EF(self,F_ORIGIN_X);
+                    float dy = EF(goal,F_ORIGIN_Y) - EF(self,F_ORIGIN_Y);
+                    float yaw = atan2f(dy, dx) * (180.0f / 3.14159265f);
+                    if (yaw < 0.0f) yaw += 360.0f;
+                    /* Invoke walkmove(yaw, dist) */
+                    globals[4] = yaw;
+                    globals[7] = globals[7]; /* dist already in param slot */
+                    PR_ExecuteBuiltin(32);
+                } else {
+                    globals[1] = 0.0f;
+                }
+            }
             break;
         default:
             /* Silently ignore unimplemented builtins */

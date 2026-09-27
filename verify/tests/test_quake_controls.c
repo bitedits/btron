@@ -213,6 +213,62 @@ int main(void) {
     assert(r_refdef.vieworg[2] == EF(player, F_ORIGIN_Z) + 22.0f);
     printf("  [PASS] Uncrouch restores bbox maxs_z=32.0f and viewpoint eye_height=22.0f\n");
 
+    /* 5. Test Demo Mode Input Suppression */
+    printf("\n  Testing Demo Mode Input Suppression...\n");
+    g_replay_active = 1;
+
+    /* Key events when g_replay_active == 1 should NOT set input flags */
+    ev.type = EV_KEY_DOWN; ev.key = 'w';
+    IN_Btron_HandleEvent(NULL, &ev);
+    assert(in_forward == 0);
+
+    ev.type = EV_KEY_DOWN; ev.key = 's';
+    IN_Btron_HandleEvent(NULL, &ev);
+    assert(in_back == 0);
+
+    ev.type = EV_KEY_DOWN; ev.key = 'a';
+    IN_Btron_HandleEvent(NULL, &ev);
+    assert(in_left == 0);
+
+    ev.type = EV_KEY_DOWN; ev.key = 'd';
+    IN_Btron_HandleEvent(NULL, &ev);
+    assert(in_right == 0);
+
+    ev.type = EV_KEY_DOWN; ev.key = ' ';
+    IN_Btron_HandleEvent(NULL, &ev);
+    assert(in_jump == 0);
+
+    ev.type = EV_KEY_DOWN; ev.key = 'c';
+    IN_Btron_HandleEvent(NULL, &ev);
+    assert(in_down == 0);
+
+    /* Mouse buttons should NOT set attack/jump */
+    ev.type = EV_BUT_DOWN; ev.button = 1;
+    IN_Btron_HandleEvent(NULL, &ev);
+    assert(in_attack == 0);
+
+    ev.type = EV_BUT_DOWN; ev.button = 3;
+    IN_Btron_HandleEvent(NULL, &ev);
+    assert(in_jump == 0);
+
+    /* Mouse movement should NOT alter viewangles */
+    float saved_yaw = r_refdef.viewangles[1];
+    float saved_pitch = r_refdef.viewangles[0];
+    ev.type = EV_MOUSE_MOVE; ev.pos.x = 200; ev.pos.y = 200;
+    IN_Btron_HandleEvent(NULL, &ev);
+    assert(r_refdef.viewangles[1] == saved_yaw);
+    assert(r_refdef.viewangles[0] == saved_pitch);
+
+    /* Server frame in demo mode should ignore player movement controls */
+    float old_px = EF(player, F_ORIGIN_X);
+    float old_py = EF(player, F_ORIGIN_Y);
+    SV_ServerFrame(1.0f / 60.0f);
+    assert(EF(player, F_ORIGIN_X) == old_px);
+    assert(EF(player, F_ORIGIN_Y) == old_py);
+
+    g_replay_active = 0;
+    printf("  [PASS] Demo mode ignores all keyboard, mouse and server movement inputs\n");
+
     printf("\n>>> ALL QUAKE CONTROLS TESTS PASSED SUCCESSFULLY! <<<\n");
     return 0;
 }

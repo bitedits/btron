@@ -104,6 +104,19 @@ static void quake_paint(WND *wnd, GDEV *dev) {
 static void quake_event(WND *wnd, const EVT *evt) {
     if (!wnd || !evt || s_shutdown_req) return;
 
+    /* In demo mode, do not react to inputs. Only ESC/Enter interrupts demo to menu */
+    if (g_replay_active) {
+        if (evt->type == EV_KEY_DOWN) {
+            if (evt->key == 0x1B || evt->key == 27 || evt->key == BTRON_KEY_ESCAPE ||
+                evt->key == '\r' || evt->key == '\n' || evt->key == BTRON_KEY_RETURN) {
+                Replay_Stop();
+                g_menu_active = 1;
+                inval_wnd(wnd);
+            }
+        }
+        return;
+    }
+
     if (evt->type == EV_KEY_DOWN) {
         if (UI_HandleKey(evt->key)) {
             inval_wnd(wnd);
@@ -182,10 +195,10 @@ WND *open_quake_window(int x, int y, int width, int height) {
         FS_Init();
         R_Init(width, height);
         /* Spawn all entities & start Quake server */
-        SV_SpawnServer("maps/e1m1.bsp");
+        SV_SpawnServer("maps/start.bsp");
         UI_Init();
         s_initialised = 1;
-        Replay_StartDemoFile("assets/quake/e1m1.dem");
+        Replay_StartDemo(1);
     }
 
     /* ── Start animation task ────────────────────────────────────── */

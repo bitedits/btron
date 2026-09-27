@@ -270,6 +270,12 @@ void SV_ServerFrame(float dt) {
 
     if (g_replay_active) {
         Replay_Update(dt);
+        if (g_prvm.num_edicts >= 2) {
+            edict_t *player = &g_prvm.edicts[1];
+            EF(player, F_VELOCITY_X) = 0.0f;
+            EF(player, F_VELOCITY_Y) = 0.0f;
+            EF(player, F_VELOCITY_Z) = 0.0f;
+        }
     } else {
         /* Keyboard turning */
         if (!g_menu_active && !g_console_active) {
@@ -386,8 +392,11 @@ void SV_SpawnServer(const char *mapname) {
     /* Init server + collision hull from g_world.clipnodes */
     SV_Init();
 
-    /* Edict 0 = world entity */
-    memset(&g_prvm.edicts[0], 0, sizeof(edict_t));
+    /* Clear all edicts: edict 0 = world entity */
+    for (int i = 0; i < MAX_EDICTS; i++) {
+        memset(&g_prvm.edicts[i], 0, sizeof(edict_t));
+        g_prvm.edicts[i].free = 1;
+    }
     g_prvm.edicts[0].free  = 0;
     g_prvm.num_edicts       = 1;
 

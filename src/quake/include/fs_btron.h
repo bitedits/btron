@@ -45,6 +45,7 @@ typedef struct {
 
 /* ── BSP lump pre-cache (populated by FS_CacheBSP) ──────────────── */
 typedef struct {
+    char         path[64];           /* Map path currently cached       */
     const byte  *data;               /* Pointer into hunk               */
     int          length;             /* Total BSP byte count            */
     const byte  *lumps[HEADER_LUMPS];/* Per-lump base pointers          */

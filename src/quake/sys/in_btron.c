@@ -24,6 +24,7 @@ int in_turn_right = 0;
 
 extern int g_menu_active;
 extern int g_console_active;
+extern int g_replay_active;
 
 static int s_mouse_init = 0;
 static H   s_last_mx    = 0;
@@ -32,6 +33,12 @@ static H   s_last_my    = 0;
 void IN_Btron_HandleEvent(WND *wnd, const EVT *evt) {
     (void)wnd;
     if (!evt) return;
+
+    if (g_replay_active) {
+        in_forward = in_back = in_left = in_right = in_down = in_jump = in_attack = 0;
+        in_turn_left = in_turn_right = 0;
+        return;
+    }
 
     switch (evt->type) {
     case EV_BUT_DOWN:

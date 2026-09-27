@@ -109,10 +109,9 @@ static const char *s_demo_titles[] = {
     "1. DEMO 1: THE NECROPOLIS (E1M3)",
     "2. DEMO 2: THE GRISLY GROTTO (E1M4)",
     "3. DEMO 3: THE DOOR TO CHTHON (E1M6)",
-    "4. DEMO 4: SLIPGATE COMPLEX (E1M1)",
-    "5. RETURN TO MAIN MENU"
+    "4. RETURN TO MAIN MENU"
 };
-#define NUM_DEMOS 5
+#define NUM_DEMOS 4
 
 /* ── Weapon Combat & Animation State ──────────────────────────────────── */
 static int   s_gun_frame = 0;
@@ -285,12 +284,20 @@ int World_ChangeMap(const char *mapname) {
     if (!mapname || !mapname[0]) return 0;
 
     char fullpath[64];
-    if (q_strstr(mapname, "maps/")) {
-        strncpy(fullpath, mapname, sizeof(fullpath) - 1);
-    } else {
-        snprintf(fullpath, sizeof(fullpath), "maps/%s.bsp", mapname);
-    }
-    fullpath[sizeof(fullpath) - 1] = '\0';
+    char clean[64];
+    strncpy(clean, mapname, sizeof(clean) - 1);
+    clean[sizeof(clean) - 1] = '\0';
+
+    const char *p = clean;
+    if (strncmp(p, "maps/", 5) == 0) p += 5;
+
+    char base[64];
+    strncpy(base, p, sizeof(base) - 1);
+    base[sizeof(base) - 1] = '\0';
+    char *dot = strstr(base, ".bsp");
+    if (dot) *dot = '\0';
+
+    snprintf(fullpath, sizeof(fullpath), "maps/%s.bsp", base);
 
     char logmsg[80];
     snprintf(logmsg, sizeof(logmsg), "Warping to %s...", fullpath);
@@ -356,14 +363,12 @@ void Replay_StartDemo(int demo_num) {
     if (demo_num == 1) demoname = "demo1.dem";
     else if (demo_num == 2) demoname = "demo2.dem";
     else if (demo_num == 3) demoname = "demo3.dem";
-    else if (demo_num == 4) demoname = "assets/quake/e1m1.dem";
 
     if (!Demo_Play(demoname)) {
         const char *mapname = "maps/e1m3.bsp";
         if (demo_num == 1) mapname = "maps/e1m3.bsp";
         else if (demo_num == 2) mapname = "maps/e1m4.bsp";
         else if (demo_num == 3) mapname = "maps/e1m6.bsp";
-        else if (demo_num == 4) mapname = "maps/e1m1.bsp";
         World_ChangeMap(mapname);
         g_replay_active = 1;
     }
@@ -503,12 +508,15 @@ void UI_Init(void) {
 
 /* ── UI Input Handling ────────────────────────────────────────────────── */
 int UI_HandleKey(UW key) {
-    /* If in Replay, ESC or Space or Enter opens menu */
+    /* If in Replay, only ESC or Enter opens menu; all other inputs are ignored */
     if (g_replay_active) {
-        if (key == 0x1B || key == '\r' || key == '\n' || key == ' ') {
+        if (key == 0x1B || key == 27 || key == BTRON_KEY_ESCAPE ||
+            key == '\r' || key == '\n' || key == BTRON_KEY_RETURN) {
             Replay_Stop();
+            g_menu_active = 1;
             return 1;
         }
+        return 1;
     }
 
     /* Toggle Console with ~ / ` or Tab */
@@ -684,7 +692,7 @@ int UI_HandleKey(UW key) {
                 s_menu_cursor = (s_menu_cursor + 1) % NUM_DEMOS;
                 return 1;
             }
-            if (key >= '1' && key <= '5') {
+            if (key >= '1' && key <= '4') {
                 s_menu_cursor = key - '1';
                 key = '\r';
             }
@@ -693,7 +701,7 @@ int UI_HandleKey(UW key) {
                 key = '\r';
             }
             if (key == '\r' || key == '\n' || key == ' ' || key == BTRON_KEY_RETURN || key == BTRON_KEY_KP_ENTER) {
-                if (s_menu_cursor < 4) {
+                if (s_menu_cursor < 3) {
                     g_menu_active = 0;
                     Replay_StartDemo(s_menu_cursor + 1);
                 } else {
@@ -723,11 +731,16 @@ int UI_HandleMouse(int mx, int my, int button_down) {
     if (mx >= s_ui_w - 185 && mx <= s_ui_w - 95 && my >= 6 && my <= 28) {
         if (g_replay_active) {
             Replay_Stop();
+            g_menu_active = 1;
         } else {
             g_menu_active = !g_menu_active;
             if (g_menu_active) g_console_active = 0;
         }
         return 1;
+    }
+
+    if (g_replay_active) {
+        return 1; /* In demo mode, ignore all other mouse interactions */
     }
 
     /* Top HUD Button [~] CONSOLE */
@@ -763,13 +776,19 @@ int UI_HandleMouse(int mx, int my, int button_down) {
             int cx = s_ui_w / 2 - 140;
             int cy = s_ui_h / 2 - 110;
             if (mx >= cx - 20 && mx <= cx + 290) {
-                for (int i = 0; i < NUM_MAPS + 1; i++) {
-                    int item_y = cy + 32 + i * 18 + (i == NUM_MAPS ? 6 : 0);
-                    if (my >= item_y - 2 && my <= item_y + 15) {
+                for (int i = 0; i < NUM_MAPS; i++) {
+                    int item_y = cy + 24 + i * 16;
+                    if (my >= item_y - 2 && my <= item_y + 14) {
                         s_menu_cursor = i;
                         UI_HandleKey('\r');
                         return 1;
                     }
+                }
+                int back_y = cy + 24 + NUM_MAPS * 16 + 6;
+                if (my >= back_y - 2 && my <= back_y + 14) {
+                    s_menu_cursor = NUM_MAPS;
+                    UI_HandleKey('\r');
+                    return 1;
                 }
             }
         } else if (s_menu_page == MENU_DEMOS) {
@@ -777,7 +796,7 @@ int UI_HandleMouse(int mx, int my, int button_down) {
             int cy = s_ui_h / 2 - 110;
             if (mx >= cx - 20 && mx <= cx + 290) {
                 for (int i = 0; i < NUM_DEMOS; i++) {
-                    int item_y = cy + 36 + i * 20 + (i == NUM_DEMOS - 1 ? 6 : 0);
+                    int item_y = cy + 32 + i * 18 + (i == NUM_DEMOS - 1 ? 6 : 0);
                     if (my >= item_y - 2 && my <= item_y + 16) {
                         s_menu_cursor = i;
                         UI_HandleKey('\r');

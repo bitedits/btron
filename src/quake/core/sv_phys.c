@@ -147,7 +147,7 @@ static int SV_RecursiveHullCheck(const hull_t *hull, int num,
 
 trace_t SV_Move(const float *start, const float *mins, const float *maxs,
                 const float *end, int type, edict_t *passedict) {
-    (void)mins; (void)maxs; (void)type; (void)passedict;
+    (void)type;
 
     trace_t trace;
     memset(&trace, 0, sizeof(trace));
@@ -157,10 +157,11 @@ trace_t SV_Move(const float *start, const float *mins, const float *maxs,
     trace.endpos[0] = end[0];
     trace.endpos[1] = end[1];
     trace.endpos[2] = end[2];
+    trace.ent = NULL;
 
     if (!g_world.is_loaded || !g_server.worldhull.clipnodes) return trace;
 
-    /* Check if start point is already inside solid */
+    /* 1. Trace against static world BSP */
     int start_contents = SV_HullPointContents(&g_server.worldhull,
                                               g_server.worldhull.firstclipnode,
                                               start);
@@ -183,6 +184,153 @@ trace_t SV_Move(const float *start, const float *mins, const float *maxs,
         trace.endpos[0] = start[0];
         trace.endpos[1] = start[1];
         trace.endpos[2] = start[2];
+    }
+
+    /* 2. Trace against active solid entities (SOLID_BSP, SOLID_BBOX) */
+    if (g_prvm.is_loaded && g_prvm.num_edicts > 1) {
+        for (int e = 1; e < g_prvm.num_edicts; e++) {
+            edict_t *touch = &g_prvm.edicts[e];
+            if (touch->free || touch == passedict) continue;
+
+            int solid = (int)EF(touch, F_SOLID);
+            if (solid == SOLID_NOT || solid == SOLID_TRIGGER) continue;
+
+            if (solid == SOLID_BSP) {
+                int modelindex = (int)EF(touch, F_MODELINDEX);
+                int sub = (modelindex >= 1000) ? (modelindex - 1000) : 0;
+                if (sub <= 0 || sub >= g_world.nummodels) continue;
+
+                const dmodel_t *submodel = &g_world.models[sub];
+                float eorg[3] = { EF(touch, F_ORIGIN_X), EF(touch, F_ORIGIN_Y), EF(touch, F_ORIGIN_Z) };
+
+                /* Expanded AABB bounds of submodel in world space */
+                float bmin[3] = { submodel->mins[0] + eorg[0], submodel->mins[1] + eorg[1], submodel->mins[2] + eorg[2] };
+                float bmax[3] = { submodel->maxs[0] + eorg[0], submodel->maxs[1] + eorg[1], submodel->maxs[2] + eorg[2] };
+
+                if (mins && maxs) {
+                    bmin[0] += mins[0]; bmin[1] += mins[1]; bmin[2] += mins[2];
+                    bmax[0] += maxs[0]; bmax[1] += maxs[1]; bmax[2] += maxs[2];
+                }
+
+                /* Quick bounding check against ray segment [start, trace.endpos] */
+                float rmin[3], rmax[3];
+                for (int i = 0; i < 3; i++) {
+                    rmin[i] = (start[i] < trace.endpos[i]) ? start[i] : trace.endpos[i];
+                    rmax[i] = (start[i] > trace.endpos[i]) ? start[i] : trace.endpos[i];
+                }
+                if (rmax[0] < bmin[0] || rmin[0] > bmax[0] ||
+                    rmax[1] < bmin[1] || rmin[1] > bmax[1] ||
+                    rmax[2] < bmin[2] || rmin[2] > bmax[2]) {
+                    continue;
+                }
+
+                /* Choose hull: player/box uses headnode[1], point uses headnode[0] */
+                int headnode = (mins && maxs) ? submodel->headnode[1] : submodel->headnode[0];
+                if (headnode >= 0) {
+                    float start_l[3] = { start[0] - eorg[0], start[1] - eorg[1], start[2] - eorg[2] };
+                    float end_l[3]   = { end[0]   - eorg[0], end[1]   - eorg[1], end[2]   - eorg[2] };
+
+                    hull_t subhull;
+                    subhull.clipnodes     = g_world.clipnodes;
+                    subhull.planes        = g_world.planes;
+                    subhull.firstclipnode = headnode;
+                    subhull.lastclipnode  = g_world.numclipnodes - 1;
+
+                    trace_t subtrace;
+                    memset(&subtrace, 0, sizeof(subtrace));
+                    subtrace.fraction = trace.fraction;
+                    subtrace.endpos[0] = end_l[0];
+                    subtrace.endpos[1] = end_l[1];
+                    subtrace.endpos[2] = end_l[2];
+
+                    SV_RecursiveHullCheck(&subhull, headnode, 0.0f, 1.0f, start_l, end_l, &subtrace);
+
+                    if (subtrace.fraction < trace.fraction) {
+                        trace.fraction = subtrace.fraction;
+                        trace.endpos[0] = subtrace.endpos[0] + eorg[0];
+                        trace.endpos[1] = subtrace.endpos[1] + eorg[1];
+                        trace.endpos[2] = subtrace.endpos[2] + eorg[2];
+                        trace.plane_normal[0] = subtrace.plane_normal[0];
+                        trace.plane_normal[1] = subtrace.plane_normal[1];
+                        trace.plane_normal[2] = subtrace.plane_normal[2];
+                        trace.plane_dist      = subtrace.plane_dist;
+                        trace.ent             = touch;
+                        trace.allsolid        = subtrace.allsolid;
+                        trace.startsolid      = subtrace.startsolid;
+                    }
+                } else if (headnode == CONTENTS_SOLID) {
+                    /* Solid leaf: slab test against expanded AABB */
+                    float tmin = 0.0f, tmax = trace.fraction;
+                    int hit_axis = -1;
+                    float hit_sign = 1.0f;
+                    int ok = 1;
+                    for (int i = 0; i < 3; i++) {
+                        float d = end[i] - start[i];
+                        if (fabsf(d) < 1e-6f) {
+                            if (start[i] < bmin[i] || start[i] > bmax[i]) { ok = 0; break; }
+                        } else {
+                            float inv_d = 1.0f / d;
+                            float t1 = (bmin[i] - start[i]) * inv_d;
+                            float t2 = (bmax[i] - start[i]) * inv_d;
+                            float sign = -1.0f;
+                            if (t1 > t2) { float tmp = t1; t1 = t2; t2 = tmp; sign = 1.0f; }
+                            if (t1 > tmin) { tmin = t1; hit_axis = i; hit_sign = sign; }
+                            if (t2 < tmax) tmax = t2;
+                            if (tmin > tmax) { ok = 0; break; }
+                        }
+                    }
+                    if (ok && tmin >= 0.0f && tmin < trace.fraction) {
+                        trace.fraction = tmin;
+                        trace.endpos[0] = start[0] + (end[0] - start[0]) * tmin;
+                        trace.endpos[1] = start[1] + (end[1] - start[1]) * tmin;
+                        trace.endpos[2] = start[2] + (end[2] - start[2]) * tmin;
+                        trace.plane_normal[0] = (hit_axis == 0) ? hit_sign : 0.0f;
+                        trace.plane_normal[1] = (hit_axis == 1) ? hit_sign : 0.0f;
+                        trace.plane_normal[2] = (hit_axis == 2) ? hit_sign : 0.0f;
+                        trace.ent = touch;
+                    }
+                }
+            } else if (solid == SOLID_BBOX || solid == SOLID_SLIDEBOX) {
+                float eorg[3] = { EF(touch, F_ORIGIN_X), EF(touch, F_ORIGIN_Y), EF(touch, F_ORIGIN_Z) };
+                float bmin[3] = { eorg[0] + EF(touch, F_MINS_X), eorg[1] + EF(touch, F_MINS_Y), eorg[2] + EF(touch, F_MINS_Z) };
+                float bmax[3] = { eorg[0] + EF(touch, F_MAXS_X), eorg[1] + EF(touch, F_MAXS_Y), eorg[2] + EF(touch, F_MAXS_Z) };
+
+                if (mins && maxs) {
+                    bmin[0] += mins[0]; bmin[1] += mins[1]; bmin[2] += mins[2];
+                    bmax[0] += maxs[0]; bmax[1] += maxs[1]; bmax[2] += maxs[2];
+                }
+
+                float tmin = 0.0f, tmax = trace.fraction;
+                int hit_axis = -1;
+                float hit_sign = 1.0f;
+                int ok = 1;
+                for (int i = 0; i < 3; i++) {
+                    float d = end[i] - start[i];
+                    if (fabsf(d) < 1e-6f) {
+                        if (start[i] < bmin[i] || start[i] > bmax[i]) { ok = 0; break; }
+                    } else {
+                        float inv_d = 1.0f / d;
+                        float t1 = (bmin[i] - start[i]) * inv_d;
+                        float t2 = (bmax[i] - start[i]) * inv_d;
+                        float sign = -1.0f;
+                        if (t1 > t2) { float tmp = t1; t1 = t2; t2 = tmp; sign = 1.0f; }
+                        if (t1 > tmin) { tmin = t1; hit_axis = i; hit_sign = sign; }
+                        if (t2 < tmax) tmax = t2;
+                        if (tmin > tmax) { ok = 0; break; }
+                    }
+                }
+                if (ok && tmin >= 0.0f && tmin < trace.fraction) {
+                    trace.fraction = tmin;
+                    trace.endpos[0] = start[0] + (end[0] - start[0]) * tmin;
+                    trace.endpos[1] = start[1] + (end[1] - start[1]) * tmin;
+                    trace.endpos[2] = start[2] + (end[2] - start[2]) * tmin;
+                    trace.plane_normal[0] = (hit_axis == 0) ? hit_sign : 0.0f;
+                    trace.plane_normal[1] = (hit_axis == 1) ? hit_sign : 0.0f;
+                    trace.plane_normal[2] = (hit_axis == 2) ? hit_sign : 0.0f;
+                    trace.ent = touch;
+                }
+            }
+        }
     }
     return trace;
 }
@@ -309,9 +457,11 @@ void SV_WalkMove(edict_t *ed, float dt) {
             org[2] = vtrace.endpos[2];
             vel[2] = 0.0f;
             flags |= 512;
+            EI(ed, F_GROUNDENTITY) = vtrace.ent ? NUM_FOR_EDICT(vtrace.ent) : 0;
         } else {
             /* Walked off ledge */
             flags &= ~512;
+            EI(ed, F_GROUNDENTITY) = -1;
         }
     } else {
         /* In the air or jumping */
@@ -323,6 +473,7 @@ void SV_WalkMove(edict_t *ed, float dt) {
                 /* Landed on walkable floor */
                 vel[2] = 0.0f;
                 flags |= 512;
+                EI(ed, F_GROUNDENTITY) = vtrace.ent ? NUM_FOR_EDICT(vtrace.ent) : 0;
             } else if (vel[2] > 0.0f) {
                 /* Hit ceiling */
                 vel[2] = 0.0f;
@@ -399,9 +550,24 @@ void SV_RunEntity(edict_t *ed) {
         float thinktime = EF(ed, F_NEXTTHINK);
         float oldltime  = EF(ed, F_LTIME);
         EF(ed, F_LTIME) += dt;
-        EF(ed, F_ORIGIN_X) += EF(ed, F_VELOCITY_X) * dt;
-        EF(ed, F_ORIGIN_Y) += EF(ed, F_VELOCITY_Y) * dt;
-        EF(ed, F_ORIGIN_Z) += EF(ed, F_VELOCITY_Z) * dt;
+        float mx = EF(ed, F_VELOCITY_X) * dt;
+        float my = EF(ed, F_VELOCITY_Y) * dt;
+        float mz = EF(ed, F_VELOCITY_Z) * dt;
+        EF(ed, F_ORIGIN_X) += mx;
+        EF(ed, F_ORIGIN_Y) += my;
+        EF(ed, F_ORIGIN_Z) += mz;
+
+        /* Move any entity riding on this pusher */
+        int pusher_num = NUM_FOR_EDICT(ed);
+        for (int r = 1; r < g_prvm.num_edicts; r++) {
+            edict_t *rider = &g_prvm.edicts[r];
+            if (!rider->free && EI(rider, F_GROUNDENTITY) == pusher_num) {
+                EF(rider, F_ORIGIN_X) += mx;
+                EF(rider, F_ORIGIN_Y) += my;
+                EF(rider, F_ORIGIN_Z) += mz;
+            }
+        }
+
         if (thinktime > 0.0f && thinktime > oldltime && thinktime <= EF(ed, F_LTIME)) {
             EF(ed, F_NEXTTHINK) = 0.0f;
             int think_fn = EI(ed, F_THINK);

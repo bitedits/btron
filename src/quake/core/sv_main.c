@@ -245,6 +245,17 @@ static void SV_InitPlayerEdict(void) {
     EF(player, F_ITEMS)         = (float)(IT_AXE | IT_SHOTGUN);
     EI(player, F_CLASSNAME)     = PR_SetString("player");
 
+    /* progs.dat declares an edict-typed global named `client` that only the
+     * engine can fill.  Trigger callbacks compare `other` against it, so while
+     * it holds 0 (the world) every one of them returns on its first statement
+     * and sealed doors stay sealed. */
+    int ofs_client = PR_GlobalOfs("client");
+    if (ofs_client >= 0) {
+        ((eval_t *)g_prvm.globals)[ofs_client].i = NUM_FOR_EDICT(player);
+        Con_Printf("SV_InitPlayerEdict: bound global client -> edict %d\n",
+                   NUM_FOR_EDICT(player));
+    }
+
     Con_Printf("SV_InitPlayerEdict: player at (%.0f %.0f %.0f) yaw=%.0f\n",
                g_world.spawn_origin[0], g_world.spawn_origin[1],
                g_world.spawn_origin[2], g_world.spawn_angle);

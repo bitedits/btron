@@ -136,6 +136,16 @@ const char *PR_QCFunctionName(int fnum) {
     return PR_GetString(g_prvm.functions[fnum].s_name);
 }
 
+int PR_GlobalOfs(const char *name) {
+    if (!g_prvm.header || !g_prvm.globaldefs || !name) return -1;
+    const int n = g_prvm.header->num_globaldefs;
+    for (int i = 0; i < n; i++) {
+        const char *nm = PR_GetString(g_prvm.globaldefs[i].s_name);
+        if (nm && strcmp(nm, name) == 0) return g_prvm.globaldefs[i].ofs;
+    }
+    return -1;
+}
+
 /* ── Progs loader ───────────────────────────────────────────────────── */
 int PR_LoadProgs(const char *path) {
     if (g_prvm.is_loaded) return 1;

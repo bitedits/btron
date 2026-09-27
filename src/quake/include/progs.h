@@ -206,6 +206,12 @@ void        PR_ExecuteBuiltin(int bnum);
 /* Name of a QC function index ("?" when out of range); also names builtins */
 const char *PR_QCFunctionName(int fnum);
 
+/* Global index of a named interpreter global from progs.dat's globaldefs, or -1
+ * when the program has no such global.  The engine owns a handful of these: the
+ * game code reads them by name, so a global the engine never fills makes every
+ * callback that tests it return at its first statement. */
+int PR_GlobalOfs(const char *name);
+
 /*
  * VM execution statistics. g_pr_runaway_aborts is the one that matters for
  * "the game froze": a non-zero count means a QC loop was cut off rather than

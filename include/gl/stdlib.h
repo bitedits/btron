@@ -16,6 +16,15 @@ static inline void  free(void *ptr) { Ifree(ptr); }
 static inline void  exit(int status) { (void)status; }
 static inline void  abort(void) { for (;;) { __asm__ volatile("hlt"); } }
 
+/* Hosted builds get rand() from libc; the Quake sources call it for weapon
+ * spread.  Same 24-bit LCG as the QC random() builtin so both targets jitter
+ * alike. */
+static inline int rand(void) {
+    static unsigned s_rnd = 0xDEADBEEFu;
+    s_rnd = s_rnd * 1664525u + 1013904223u;
+    return (int)(s_rnd >> 8);
+}
+
 #endif /* _GL_STDLIB_H_ */
 #endif /* HOSTED */
 

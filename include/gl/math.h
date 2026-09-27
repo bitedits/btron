@@ -33,6 +33,31 @@ static inline double fabs(double x) {
     return (x < 0.0) ? -x : x;
 }
 
+/* fpatan returns atan(ST0/ST1) and pops, so the operand tied to the output
+ * slot is the numerator.  Only the principal branch; the caller fixes the
+ * quadrant. */
+static inline double _atan_ratio(double y, double x) {
+    double res;
+    __asm__ ("fpatan" : "=t" (res) : "0" (y), "u" (x) : "st(1)");
+    return res;
+}
+
+static inline double atan2(double y, double x) {
+    if (x > 0.0) return _atan_ratio(y, x);
+    if (x < 0.0) return _atan_ratio(y, x) + (y >= 0.0 ? M_PI : -M_PI);
+    if (y > 0.0) return M_PI / 2.0;
+    if (y < 0.0) return -M_PI / 2.0;
+    return 0.0;
+}
+
+/* The Quake sources are float-native, so the x87 helpers above need single
+ * wrappers here; the hosted branch gets them from the real math.h. */
+static inline float sinf(float x)   { return (float)sin((double)x); }
+static inline float cosf(float x)   { return (float)cos((double)x); }
+static inline float sqrtf(float x)  { return (float)sqrt((double)x); }
+static inline float fabsf(float x)  { return (x < 0.0f) ? -x : x; }
+static inline float atan2f(float y, float x) { return (float)atan2((double)y, (double)x); }
+
 static inline double floor(double x) {
     int i = (int)x;
     if (x < (double)i) return (double)(i - 1);

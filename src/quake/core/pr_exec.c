@@ -21,32 +21,67 @@
 /* ── Global VM state ─────────────────────────────────────────────────── */
 prvm_t g_prvm;
 
+/* ── Dynamic string pool for map strings not in progs.dat ───────────── */
+#define DYNAMIC_STRING_BASE 1000000
+static char s_dynamic_strings[65536];
+static int s_dynamic_strings_len = 0;
+
 /* ── String interning helpers ────────────────────────────────────────── */
 const char *PR_GetString(int ofs) {
+    if (ofs >= DYNAMIC_STRING_BASE && ofs < DYNAMIC_STRING_BASE + s_dynamic_strings_len)
+        return s_dynamic_strings + (ofs - DYNAMIC_STRING_BASE);
     if (!g_prvm.strings || ofs < 0 || ofs >= g_prvm.header->num_strings)
         return "";
     return g_prvm.strings + ofs;
 }
 
 int PR_SetString(const char *s) {
-    /* For now return offset from start of string table if found */
-    if (!s || !g_prvm.strings) return 0;
-    const char *p = g_prvm.strings;
-    int limit = g_prvm.header->num_strings;
-    for (int i = 0; i < limit; i++) {
-        if (p[i] && q_strcasecmp(p + i, s) == 0) return i;
+    if (!s) return 0;
+    if (g_prvm.strings && g_prvm.header) {
+        const char *p = g_prvm.strings;
+        int limit = g_prvm.header->num_strings;
+        for (int i = 0; i < limit; i++) {
+            if (p[i] && q_strcasecmp(p + i, s) == 0) return i;
+        }
+    }
+    /* Search dynamic string pool */
+    int cur = 0;
+    while (cur < s_dynamic_strings_len) {
+        if (q_strcasecmp(s_dynamic_strings + cur, s) == 0)
+            return DYNAMIC_STRING_BASE + cur;
+        cur += (int)strlen(s_dynamic_strings + cur) + 1;
+    }
+    /* Allocate in dynamic string pool */
+    int len = (int)strlen(s) + 1;
+    if (s_dynamic_strings_len + len < (int)sizeof(s_dynamic_strings)) {
+        int ofs = s_dynamic_strings_len;
+        memcpy(s_dynamic_strings + ofs, s, (size_t)len);
+        s_dynamic_strings_len += len;
+        return DYNAMIC_STRING_BASE + ofs;
     }
     return 0;
 }
 
 /* ── Edict helpers ──────────────────────────────────────────────────── */
+edict_t *PROG_TO_EDICT(int prog_ent) {
+    if (prog_ent <= 0) return &g_prvm.edicts[0];
+    if (prog_ent >= (int)sizeof(edict_t)) {
+        int idx = prog_ent / (int)sizeof(edict_t);
+        if (idx >= 0 && idx < MAX_EDICTS) return &g_prvm.edicts[idx];
+    }
+    if (prog_ent >= 0 && prog_ent < MAX_EDICTS) return &g_prvm.edicts[prog_ent];
+    return &g_prvm.edicts[0];
+}
+
 edict_t *EDICT_NUM(int num) {
-    if (num < 0 || num >= MAX_EDICTS) return &g_prvm.edicts[0];
-    return &g_prvm.edicts[num];
+    return PROG_TO_EDICT(num);
 }
 
 int NUM_FOR_EDICT(const edict_t *ed) {
-    return (int)(ed - g_prvm.edicts);
+    if (!ed || ed < g_prvm.edicts) return 0;
+    int idx = (int)(ed - g_prvm.edicts);
+    if (idx < 0 || idx >= MAX_EDICTS) return 0;
+    return idx;
 }
 
 eval_t *PR_GetEntityField(edict_t *ed, int ofs) {
@@ -107,18 +142,20 @@ int PR_LoadProgs(const char *path) {
 /* ── Built-in dispatch (vanilla Quake 1 builtins) ──────────────────── */
 void PR_ExecuteBuiltin(int bnum) {
     float *globals = g_prvm.globals;
+    eval_t *eglobals = (eval_t *)globals;
     (void)globals;
+    (void)eglobals;
 
     switch (bnum) {
         case 1:  /* makevectors(angles) */
             {
                 vec3_t ang = { globals[4], globals[5], globals[6] };
-                AngleVectors(ang, globals + 37, globals + 43, globals + 40);
+                AngleVectors(ang, globals + 59, globals + 65, globals + 62);
             }
             break;
         case 2:  /* setorigin(ent, origin) */
             {
-                edict_t *ed = EDICT_NUM((int)globals[4]);
+                edict_t *ed = PROG_TO_EDICT(eglobals[4].i);
                 EF(ed, F_ORIGIN_X) = globals[7];
                 EF(ed, F_ORIGIN_Y) = globals[8];
                 EF(ed, F_ORIGIN_Z) = globals[9];
@@ -126,10 +163,10 @@ void PR_ExecuteBuiltin(int bnum) {
             break;
         case 3:  /* setmodel(ent, model) */
             {
-                edict_t *ed = EDICT_NUM((int)globals[4]);
-                const char *m = PR_GetString((int)globals[7]);
+                edict_t *ed = PROG_TO_EDICT(eglobals[4].i);
+                const char *m = PR_GetString(eglobals[7].i);
                 if (m && m[0]) {
-                    EF(ed, F_MODEL) = globals[7];
+                    EI(ed, F_MODEL) = eglobals[7].i;
                     if (m[0] == '*') {
                         /* Submodel in BSP */
                         int sub = q_atoi(m + 1);
@@ -157,7 +194,7 @@ void PR_ExecuteBuiltin(int bnum) {
             break;
         case 4:  /* setsize(ent, mins, maxs) */
             {
-                edict_t *ed = EDICT_NUM((int)globals[4]);
+                edict_t *ed = PROG_TO_EDICT(eglobals[4].i);
                 EF(ed, F_MINS_X) = globals[7];
                 EF(ed, F_MINS_Y) = globals[8];
                 EF(ed, F_MINS_Z) = globals[9];
@@ -217,14 +254,14 @@ void PR_ExecuteBuiltin(int bnum) {
             if (g_prvm.num_edicts < MAX_EDICTS) {
                 int idx = g_prvm.num_edicts++;
                 memset(&g_prvm.edicts[idx], 0, sizeof(edict_t));
-                globals[1] = (float)idx;
+                eglobals[1].i = idx;
             } else {
-                globals[1] = 0.0f;
+                eglobals[1].i = 0;
             }
             break;
         case 15: /* remove(ent) */
             {
-                edict_t *ed = EDICT_NUM((int)globals[4]);
+                edict_t *ed = PROG_TO_EDICT(eglobals[4].i);
                 ed->free = 1;
             }
             break;
@@ -233,42 +270,42 @@ void PR_ExecuteBuiltin(int bnum) {
                 float p1[3] = { globals[4], globals[5], globals[6] };
                 float p2[3] = { globals[7], globals[8], globals[9] };
                 trace_t tr = SV_Move(p1, NULL, NULL, p2, SOLID_BBOX, NULL);
-                globals[40] = (float)tr.allsolid;
-                globals[41] = (float)tr.startsolid;
-                globals[42] = tr.fraction;
-                globals[43] = tr.endpos[0];
-                globals[44] = tr.endpos[1];
-                globals[45] = tr.endpos[2];
-                globals[46] = tr.plane_normal[0];
-                globals[47] = tr.plane_normal[1];
-                globals[48] = tr.plane_normal[2];
-                globals[49] = tr.plane_dist;
-                globals[50] = 0.0f;
+                globals[68] = (float)tr.allsolid;
+                globals[69] = (float)tr.startsolid;
+                globals[70] = tr.fraction;
+                globals[71] = tr.endpos[0];
+                globals[72] = tr.endpos[1];
+                globals[73] = tr.endpos[2];
+                globals[74] = tr.plane_normal[0];
+                globals[75] = tr.plane_normal[1];
+                globals[76] = tr.plane_normal[2];
+                globals[77] = tr.plane_dist;
+                eglobals[78].i = tr.ent ? NUM_FOR_EDICT(tr.ent) : 0;
             }
             break;
         case 19: /* precache_sound(s) */
-            globals[1] = globals[4];
+            eglobals[1].i = eglobals[4].i;
             break;
         case 20: /* precache_model(s) */
             {
-                const char *m = PR_GetString((int)globals[4]);
+                const char *m = PR_GetString(eglobals[4].i);
                 if (m && m[0] && m[0] != '*') {
                     R_LoadAliasModel(m);
                 }
-                globals[1] = globals[4];
+                eglobals[1].i = eglobals[4].i;
             }
             break;
         case 21: /* stuffcmd */
             break;
         case 25: /* print(s) */
-            Con_Printf("[QC] %s", PR_GetString((int)globals[4]));
+            Con_Printf("[QC] %s", PR_GetString(eglobals[4].i));
             break;
         case 26: /* bprint(s) */
         case 27: /* sprint(ent, s) */
             break;
         case 34: /* droptofloor() */
             {
-                edict_t *ed = EDICT_NUM((int)globals[28]);
+                edict_t *ed = PROG_TO_EDICT(eglobals[28].i);
                 float org[3]  = { EF(ed, F_ORIGIN_X), EF(ed, F_ORIGIN_Y), EF(ed, F_ORIGIN_Z) };
                 float mins[3] = { EF(ed, F_MINS_X),   EF(ed, F_MINS_Y),   EF(ed, F_MINS_Z) };
                 float maxs[3] = { EF(ed, F_MAXS_X),   EF(ed, F_MAXS_Y),   EF(ed, F_MAXS_Z) };
@@ -320,6 +357,63 @@ void PR_ExecuteBuiltin(int bnum) {
 }
 
 /* ── Bytecode interpreter ────────────────────────────────────────────── */
+#define LOCALSTACK_SIZE 2048
+static int s_localstack[LOCALSTACK_SIZE];
+static int s_localstack_used = 0;
+
+static int PR_EnterFunction(dfunction_t *f) {
+    if (g_prvm.depth >= MAX_STACK_DEPTH) {
+        PR_RunError("stack overflow");
+        return f->first_statement - 1;
+    }
+    g_prvm.stack[g_prvm.depth].s = g_prvm.xstatement;
+    g_prvm.stack[g_prvm.depth].f = g_prvm.xfunction;
+    g_prvm.depth++;
+
+    int c = f->locals;
+    if (s_localstack_used + c > LOCALSTACK_SIZE) {
+        PR_RunError("PR_ExecuteProgram: locals stack overflow");
+        return f->first_statement - 1;
+    }
+
+    eval_t *eglobals = (eval_t *)g_prvm.globals;
+    for (int i = 0; i < c; i++) {
+        s_localstack[s_localstack_used + i] = eglobals[f->parm_start + i].i;
+    }
+    s_localstack_used += c;
+
+    int o = f->parm_start;
+    for (int i = 0; i < f->numparms; i++) {
+        for (int j = 0; j < f->parm_size[i]; j++) {
+            eglobals[o++].i = eglobals[4 + i * 3 + j].i;
+        }
+    }
+
+    g_prvm.xfunction = f;
+    return f->first_statement - 1;
+}
+
+static int PR_LeaveFunction(void) {
+    if (g_prvm.depth <= 0) {
+        return 0;
+    }
+    if (g_prvm.xfunction) {
+        int c = g_prvm.xfunction->locals;
+        s_localstack_used -= c;
+        if (s_localstack_used < 0) {
+            s_localstack_used = 0;
+        }
+        eval_t *eglobals = (eval_t *)g_prvm.globals;
+        for (int i = 0; i < c; i++) {
+            eglobals[g_prvm.xfunction->parm_start + i].i = s_localstack[s_localstack_used + i];
+        }
+    }
+
+    g_prvm.depth--;
+    g_prvm.xfunction = g_prvm.stack[g_prvm.depth].f;
+    return g_prvm.stack[g_prvm.depth].s;
+}
+
 void PR_ExecuteProgram(int fnum) {
     if (!g_prvm.is_loaded) return;
     if (fnum <= 0 || fnum >= g_prvm.header->num_functions) return;
@@ -332,19 +426,11 @@ void PR_ExecuteProgram(int fnum) {
         return;
     }
 
-    if (g_prvm.depth >= MAX_STACK_DEPTH) {
-        PR_RunError("stack overflow");
-        return;
-    }
-
-    /* Push call frame */
-    prstack_t *frame = &g_prvm.stack[g_prvm.depth++];
-    frame->s = g_prvm.xstatement;
-    frame->f = f;
+    int exitdepth = g_prvm.depth;
+    int s = PR_EnterFunction(f);
 
     float        *globals = g_prvm.globals;
     dstatement_t *stmts   = g_prvm.statements;
-    int           s       = f->first_statement - 1;
 
     while (1) {
         s++;
@@ -356,77 +442,93 @@ void PR_ExecuteProgram(int fnum) {
         g_prvm.xstatement = s;
         dstatement_t *st = &stmts[s];
 
-#define OPA  (globals + st->a)
-#define OPB  (globals + st->b)
-#define OPC  (globals + st->c)
+#define G_EVAL(idx) ((eval_t *)&globals[(idx)])
+#define G_VEC(idx)  (&globals[(idx)])
+#define OPA   G_EVAL(st->a)
+#define OPB   G_EVAL(st->b)
+#define OPC   G_EVAL(st->c)
+#define V_OPA G_VEC(st->a)
+#define V_OPB G_VEC(st->b)
+#define V_OPC G_VEC(st->c)
 
         switch (st->op) {
-        case OP_ADD_F:    *OPC = *OPA + *OPB; break;
+        case OP_ADD_F:    OPC->f = OPA->f + OPB->f; break;
         case OP_ADD_V:
-            OPC[0]=OPA[0]+OPB[0]; OPC[1]=OPA[1]+OPB[1]; OPC[2]=OPA[2]+OPB[2];
+            V_OPC[0] = V_OPA[0] + V_OPB[0];
+            V_OPC[1] = V_OPA[1] + V_OPB[1];
+            V_OPC[2] = V_OPA[2] + V_OPB[2];
             break;
-        case OP_SUB_F:    *OPC = *OPA - *OPB; break;
+        case OP_SUB_F:    OPC->f = OPA->f - OPB->f; break;
         case OP_SUB_V:
-            OPC[0]=OPA[0]-OPB[0]; OPC[1]=OPA[1]-OPB[1]; OPC[2]=OPA[2]-OPB[2];
+            V_OPC[0] = V_OPA[0] - V_OPB[0];
+            V_OPC[1] = V_OPA[1] - V_OPB[1];
+            V_OPC[2] = V_OPA[2] - V_OPB[2];
             break;
-        case OP_MUL_F:    *OPC = *OPA * *OPB; break;
+        case OP_MUL_F:    OPC->f = OPA->f * OPB->f; break;
         case OP_MUL_V:
-            *OPC = OPA[0]*OPB[0] + OPA[1]*OPB[1] + OPA[2]*OPB[2]; break;
+            OPC->f = V_OPA[0]*V_OPB[0] + V_OPA[1]*V_OPB[1] + V_OPA[2]*V_OPB[2]; break;
         case OP_MUL_FV:
-            OPC[0]=*OPA*OPB[0]; OPC[1]=*OPA*OPB[1]; OPC[2]=*OPA*OPB[2]; break;
+            V_OPC[0] = OPA->f * V_OPB[0];
+            V_OPC[1] = OPA->f * V_OPB[1];
+            V_OPC[2] = OPA->f * V_OPB[2];
+            break;
         case OP_MUL_VF:
-            OPC[0]=OPA[0]**OPB; OPC[1]=OPA[1]**OPB; OPC[2]=OPA[2]**OPB; break;
-        case OP_DIV_F:    *OPC = (*OPB != 0.0f) ? *OPA / *OPB : 0.0f; break;
+            V_OPC[0] = V_OPA[0] * OPB->f;
+            V_OPC[1] = V_OPA[1] * OPB->f;
+            V_OPC[2] = V_OPA[2] * OPB->f;
+            break;
+        case OP_DIV_F:    OPC->f = (OPB->f != 0.0f) ? OPA->f / OPB->f : 0.0f; break;
 
-        case OP_EQ_F:   *OPC = (*OPA == *OPB) ? 1.0f : 0.0f; break;
-        case OP_EQ_V:   *OPC = (OPA[0]==OPB[0]&&OPA[1]==OPB[1]&&OPA[2]==OPB[2]) ? 1.f : 0.f; break;
-        case OP_EQ_S:   *OPC = (q_strcasecmp(PR_GetString((int)*OPA), PR_GetString((int)*OPB))==0)?1.f:0.f; break;
+        case OP_EQ_F:   OPC->f = (OPA->f == OPB->f) ? 1.0f : 0.0f; break;
+        case OP_EQ_V:   OPC->f = (V_OPA[0]==V_OPB[0] && V_OPA[1]==V_OPB[1] && V_OPA[2]==V_OPB[2]) ? 1.0f : 0.0f; break;
+        case OP_EQ_S:   OPC->f = (q_strcasecmp(PR_GetString(OPA->i), PR_GetString(OPB->i))==0)?1.0f:0.0f; break;
         case OP_EQ_E:
-        case OP_EQ_FNC: *OPC = (*OPA == *OPB) ? 1.0f : 0.0f; break;
-        case OP_NE_F:   *OPC = (*OPA != *OPB) ? 1.0f : 0.0f; break;
-        case OP_NE_V:   *OPC = (OPA[0]!=OPB[0]||OPA[1]!=OPB[1]||OPA[2]!=OPB[2]) ? 1.f : 0.f; break;
-        case OP_NE_S:   *OPC = (q_strcasecmp(PR_GetString((int)*OPA), PR_GetString((int)*OPB))!=0)?1.f:0.f; break;
+        case OP_EQ_FNC: OPC->f = (OPA->i == OPB->i) ? 1.0f : 0.0f; break;
+        case OP_NE_F:   OPC->f = (OPA->f != OPB->f) ? 1.0f : 0.0f; break;
+        case OP_NE_V:   OPC->f = (V_OPA[0]!=V_OPB[0] || V_OPA[1]!=V_OPB[1] || V_OPA[2]!=V_OPB[2]) ? 1.0f : 0.0f; break;
+        case OP_NE_S:   OPC->f = (q_strcasecmp(PR_GetString(OPA->i), PR_GetString(OPB->i))!=0)?1.0f:0.0f; break;
         case OP_NE_E:
-        case OP_NE_FNC: *OPC = (*OPA != *OPB) ? 1.0f : 0.0f; break;
-        case OP_LE:     *OPC = (*OPA <= *OPB) ? 1.0f : 0.0f; break;
-        case OP_GE:     *OPC = (*OPA >= *OPB) ? 1.0f : 0.0f; break;
-        case OP_LT:     *OPC = (*OPA < *OPB)  ? 1.0f : 0.0f; break;
-        case OP_GT:     *OPC = (*OPA > *OPB)  ? 1.0f : 0.0f; break;
-        case OP_AND:    *OPC = (*OPA && *OPB) ? 1.0f : 0.0f; break;
-        case OP_OR:     *OPC = (*OPA || *OPB) ? 1.0f : 0.0f; break;
-        case OP_BITAND: *OPC = (float)((int)*OPA & (int)*OPB); break;
-        case OP_BITOR:  *OPC = (float)((int)*OPA | (int)*OPB); break;
-        case OP_NOT_F:  *OPC = (*OPA == 0.0f) ? 1.0f : 0.0f; break;
-        case OP_NOT_V:  *OPC = (!OPA[0]&&!OPA[1]&&!OPA[2]) ? 1.f : 0.f; break;
-        case OP_NOT_S:  *OPC = (!*OPA || !PR_GetString((int)*OPA)[0]) ? 1.f : 0.f; break;
-        case OP_NOT_ENT:
-        case OP_NOT_FNC: *OPC = (*OPA == 0.0f) ? 1.0f : 0.0f; break;
+        case OP_NE_FNC: OPC->f = (OPA->i != OPB->i) ? 1.0f : 0.0f; break;
+        case OP_LE:     OPC->f = (OPA->f <= OPB->f) ? 1.0f : 0.0f; break;
+        case OP_GE:     OPC->f = (OPA->f >= OPB->f) ? 1.0f : 0.0f; break;
+        case OP_LT:     OPC->f = (OPA->f < OPB->f)  ? 1.0f : 0.0f; break;
+        case OP_GT:     OPC->f = (OPA->f > OPB->f)  ? 1.0f : 0.0f; break;
+        case OP_AND:    OPC->f = (OPA->f != 0.0f && OPB->f != 0.0f) ? 1.0f : 0.0f; break;
+        case OP_OR:     OPC->f = (OPA->f != 0.0f || OPB->f != 0.0f) ? 1.0f : 0.0f; break;
+        case OP_BITAND: OPC->f = (float)(OPA->i & OPB->i); break;
+        case OP_BITOR:  OPC->f = (float)(OPA->i | OPB->i); break;
+        case OP_NOT_F:   OPC->f = (OPA->f == 0.0f) ? 1.0f : 0.0f; break;
+        case OP_NOT_V:   OPC->f = (V_OPA[0]==0.0f && V_OPA[1]==0.0f && V_OPA[2]==0.0f) ? 1.0f : 0.0f; break;
+        case OP_NOT_S:   OPC->f = (!OPA->i || !PR_GetString(OPA->i)[0]) ? 1.0f : 0.0f; break;
+        case OP_NOT_ENT: OPC->f = (OPA->i == 0) ? 1.0f : 0.0f; break;
+        case OP_NOT_FNC: OPC->f = (OPA->i == 0) ? 1.0f : 0.0f; break;
 
         case OP_STORE_F:
         case OP_STORE_S:
         case OP_STORE_FNC:
         case OP_STORE_ENT:
-        case OP_STORE_FLD: *OPB = *OPA; break;
-        case OP_STORE_V:   OPB[0]=OPA[0]; OPB[1]=OPA[1]; OPB[2]=OPA[2]; break;
+        case OP_STORE_FLD: OPB->i = OPA->i; break;
+        case OP_STORE_V:
+            V_OPB[0]=V_OPA[0]; V_OPB[1]=V_OPA[1]; V_OPB[2]=V_OPA[2]; break;
 
         case OP_STOREP_F:
         case OP_STOREP_S:
         case OP_STOREP_FNC:
         case OP_STOREP_ENT:
         case OP_STOREP_FLD: {
-            int byte_ofs = (int)*OPB;
+            int byte_ofs = OPB->i;
             if (byte_ofs >= 0 && byte_ofs + (int)sizeof(eval_t) <= (int)sizeof(g_prvm.edicts)) {
                 eval_t *ptr = (eval_t *)((byte *)g_prvm.edicts + byte_ofs);
-                ptr->f = *OPA;
+                ptr->i = OPA->i;
             }
             break; }
         case OP_STOREP_V: {
-            int byte_ofs = (int)*OPB;
+            int byte_ofs = OPB->i;
             if (byte_ofs >= 0 && byte_ofs + (int)sizeof(vec3_t) <= (int)sizeof(g_prvm.edicts)) {
-                eval_t *ptr = (eval_t *)((byte *)g_prvm.edicts + byte_ofs);
-                ptr->v[0] = OPA[0];
-                ptr->v[1] = OPA[1];
-                ptr->v[2] = OPA[2];
+                float *ptr = (float *)((byte *)g_prvm.edicts + byte_ofs);
+                ptr[0] = V_OPA[0];
+                ptr[1] = V_OPA[1];
+                ptr[2] = V_OPA[2];
             }
             break; }
 
@@ -435,67 +537,74 @@ void PR_ExecuteProgram(int fnum) {
         case OP_LOAD_ENT:
         case OP_LOAD_S:
         case OP_LOAD_FNC: {
-            edict_t *ed = EDICT_NUM((int)*OPA);
-            int fld = (int)*OPB;
-            *OPC = (fld >= 0 && fld < EDICT_FIELDS) ? ed->v[fld].f : 0.0f;
+            edict_t *ed = PROG_TO_EDICT(OPA->i);
+            int fld = OPB->i;
+            OPC->i = (fld >= 0 && fld < EDICT_FIELDS) ? ed->v[fld].i : 0;
             break; }
         case OP_LOAD_V: {
-            edict_t *ed = EDICT_NUM((int)*OPA);
-            int fld = (int)*OPB;
+            edict_t *ed = PROG_TO_EDICT(OPA->i);
+            int fld = OPB->i;
             if (fld >= 0 && fld+2 < EDICT_FIELDS) {
-                OPC[0]=ed->v[fld].v[0]; OPC[1]=ed->v[fld].v[1]; OPC[2]=ed->v[fld].v[2];
-            } break; }
+                V_OPC[0] = ed->v[fld].f;
+                V_OPC[1] = ed->v[fld+1].f;
+                V_OPC[2] = ed->v[fld+2].f;
+            } else {
+                V_OPC[0] = V_OPC[1] = V_OPC[2] = 0.0f;
+            }
+            break; }
         case OP_ADDRESS: {
-            edict_t *ed = EDICT_NUM((int)*OPA);
-            int fld = (int)*OPB;
-            *OPC = (float)((byte *)((eval_t *)&ed->v[fld]) - (byte *)g_prvm.edicts);
+            edict_t *ed = PROG_TO_EDICT(OPA->i);
+            int fld = OPB->i;
+            OPC->i = (int)((byte *)&ed->v[fld] - (byte *)g_prvm.edicts);
             break; }
 
-        case OP_IF:     if (*OPA != 0.0f) { s += st->b - 1; } break;
-        case OP_IFNOT:  if (*OPA == 0.0f) { s += st->b - 1; } break;
+        case OP_IF:     if (OPA->i != 0) { s += st->b - 1; } break;
+        case OP_IFNOT:  if (OPA->i == 0) { s += st->b - 1; } break;
         case OP_GOTO:   s += st->a - 1; break;
 
         case OP_CALL0: case OP_CALL1: case OP_CALL2: case OP_CALL3:
         case OP_CALL4: case OP_CALL5: case OP_CALL6: case OP_CALL7:
         case OP_CALL8: {
-            int callee = (int)*OPA;
+            int callee = OPA->i;
             if (callee > 0 && callee < g_prvm.header->num_functions) {
                 dfunction_t *cf = &g_prvm.functions[callee];
                 if (cf->first_statement <= 0) {
                     PR_ExecuteBuiltin(-cf->first_statement);
                 } else {
-                    /* Recursive call — push frame and jump */
-                    if (g_prvm.depth < MAX_STACK_DEPTH) {
-                        prstack_t *fr2 = &g_prvm.stack[g_prvm.depth++];
-                        fr2->s = s;
-                        fr2->f = cf;
-                        s = cf->first_statement - 1;
-                        f = cf;
-                    }
+                    s = PR_EnterFunction(cf);
                 }
             }
             break; }
 
-        case OP_RETURN:
-            /* Pop call frame */
-            if (g_prvm.depth > 0) {
-                prstack_t *fr = &g_prvm.stack[--g_prvm.depth];
-                s = fr->s;
-                f = fr->f;
-                if (g_prvm.depth == 0) goto done;
-            } else { goto done; }
-            break;
+        case OP_DONE:
+        case OP_RETURN: {
+            globals[1] = OPA->f;
+            globals[2] = (st->a+1 < g_prvm.header->num_globals) ? globals[st->a+1] : 0.0f;
+            globals[3] = (st->a+2 < g_prvm.header->num_globals) ? globals[st->a+2] : 0.0f;
+            s = PR_LeaveFunction();
+            if (g_prvm.depth == exitdepth) {
+                return;
+            }
+            break; }
 
-        case OP_STATE:   /* animation frame control — no-op for now */ break;
-        case OP_DONE:    goto done;
+        case OP_STATE: {
+            edict_t *ed = PROG_TO_EDICT(G_EVAL(28)->i); /* self */
+            ed->v[F_FRAME].f = OPA->f;
+            ed->v[F_NEXTTHINK].f = globals[31] + 0.1f;  /* time + 0.1 */
+            ed->v[F_THINK].i = OPB->i;
+            break; }
 
         default: break;
         }
 
+#undef G_EVAL
+#undef G_VEC
 #undef OPA
 #undef OPB
 #undef OPC
+#undef V_OPA
+#undef V_OPB
+#undef V_OPC
     }
-done:
-    if (g_prvm.depth > 0) g_prvm.depth--;
 }
+

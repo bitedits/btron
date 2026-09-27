@@ -31,12 +31,12 @@
 #   debug-gdb     QEMU + GDB stub on Pi 2B
 
 CC ?= gcc
-CFLAGS ?= -O2 -Wall -Wextra -std=c99 -Iinclude -Iinclude/gl -Isrc/gl -Iinclude/drivers -Isrc/kernel -Isrc/cores
+CFLAGS ?= -O2 -Wall -Wextra -std=c99 -Iinclude -Iinclude/gl -Isrc/gl -Iinclude/drivers -Isrc/kernel -Isrc/cores -Isrc/quake/include
 
 .PHONY: all posix qemu kernel tkernel sakamura foma uefi pc98 arm-elf arm64-elf m68k ps2 mips \
         html2tad book2tad tad_bin test test-kernel test-yoko test-yoko4 test-m68k test-mips test-ps2 test-foma test-foma-ui foma-screens \
         segui-screens \
-        test-mozc test-editor test-hmi test-tad test-chat test-wylie verify test-fs test-chokanji \
+        test-mozc test-editor test-hmi test-tad test-chat test-wylie verify test-fs test-chokanji test-quake \
         mkbtronfs btron_sys.vol \
         run-posix run-qemu run-kernel run-yoko run-yoko4 run-sakamura run-foma run-uefi run-eufi run-uefu run-pc98 run-m68k run-ps2 run-mips debug-virtio debug-gdb clean \
         ps2-cfg \
@@ -1573,7 +1573,7 @@ test-drivesetup: $(TEST_DRIVESETUP_BIN)
 $(TEST_DRIVESETUP_BIN): $(TEST_DRIVESETUP_OBJS) $(FS_OBJS) src/apps/clu.host.o
 	$(CC) $(TEST_DRIVESETUP_OBJS) $(FS_OBJS) src/apps/clu.host.o -o $@ $(LDFLAGS) -lm
 
-test: test-tad test-editor test-chat test-mozc test-wylie test-hmi test-ski test-tracker test-settings test-global-menu test-app-menu test-drivesetup test-fs
+test: test-tad test-editor test-chat test-mozc test-wylie test-hmi test-ski test-tracker test-settings test-global-menu test-app-menu test-drivesetup test-fs test-quake
 	@echo "=========================================================="
 	@echo " ALL B-SYSTEM TEST SUITES PASSED (100% SUCCESS)!"
 	@echo "=========================================================="
@@ -1615,6 +1615,47 @@ test-wylie: $(TEST_WYLIE_BIN)
 $(TEST_WYLIE_BIN): $(TEST_WYLIE_OBJS)
 	$(CC) $(TEST_WYLIE_OBJS) -o $@ $(LDFLAGS) -lm
 
+# ═══════════════════════════════════════════════════════════════════
+# Quake Verification & Glitches Test Suite
+# ═══════════════════════════════════════════════════════════════════
+TEST_QUAKEC_SRCS = verify/tests/test_quakec_interpreter.c src/quake/core/pr_exec.c \
+                   src/quake/sys/fs_btron.c src/quake/core/mem.c src/quake/core/mathlib.c \
+                   src/quake/core/sv_phys.c src/quake/core/world.c
+TEST_QUAKEC_OBJS = $(TEST_QUAKEC_SRCS:.c=.test.o)
+TEST_QUAKEC_BIN  = ./.build/test_quakec
+
+TEST_QUAKE_ENT_SRCS = verify/tests/test_quake_entities_glitches.c src/quake/core/pr_exec.c \
+                      src/quake/sys/fs_btron.c src/quake/core/mem.c src/quake/core/mathlib.c \
+                      src/quake/core/sv_phys.c src/quake/core/world.c
+TEST_QUAKE_ENT_OBJS = $(TEST_QUAKE_ENT_SRCS:.c=.test.o)
+TEST_QUAKE_ENT_BIN  = ./.build/test_quake_entities
+
+TEST_QUAKE_CTRL_SRCS = verify/tests/test_quake_controls.c src/quake/sys/in_btron.c \
+                       src/quake/core/sv_phys.c src/quake/core/sv_main.c src/quake/core/cmd.c \
+                       src/quake/core/cvar.c src/quake/core/mathlib.c src/quake/core/mem.c \
+                       src/quake/sys/fs_btron.c src/quake/core/world.c
+TEST_QUAKE_CTRL_OBJS = $(TEST_QUAKE_CTRL_SRCS:.c=.test.o)
+TEST_QUAKE_CTRL_BIN  = ./.build/test_quake_controls
+
+$(TEST_QUAKEC_BIN): $(TEST_QUAKEC_OBJS)
+	@mkdir -p ./.build
+	$(CC) $(TEST_QUAKEC_OBJS) -o $@ $(LDFLAGS) -lm
+
+$(TEST_QUAKE_ENT_BIN): $(TEST_QUAKE_ENT_OBJS)
+	@mkdir -p ./.build
+	$(CC) $(TEST_QUAKE_ENT_OBJS) -o $@ $(LDFLAGS) -lm
+
+$(TEST_QUAKE_CTRL_BIN): $(TEST_QUAKE_CTRL_OBJS)
+	@mkdir -p ./.build
+	$(CC) $(TEST_QUAKE_CTRL_OBJS) -o $@ $(LDFLAGS) -lm
+
+test-quake: $(TEST_QUAKEC_BIN) $(TEST_QUAKE_ENT_BIN) $(TEST_QUAKE_CTRL_BIN)
+	@echo "=========================================================="
+	@echo " Running Quake Verification & Glitches Test Suite..."
+	@echo "=========================================================="
+	@./$(TEST_QUAKEC_BIN)
+	@./$(TEST_QUAKE_ENT_BIN)
+	@./$(TEST_QUAKE_CTRL_BIN)
 
 clean:
 	@$(MAKE) -C verify clean >/dev/null 2>&1 || true
@@ -1627,7 +1668,8 @@ clean:
 	      $(ARM32_TARGET) $(ARM64_TARGET) $(DEFAULT_TARGET) $(UEFI_TARGET) $(PC98_TARGET) \
 	      $(M68K_TARGET) $(PS2_TARGET) $(PS2_ISO) $(MIPS_TARGET) $(TEST_MOZC_BIN) \
 	      $(TEST_EDITOR_BIN) $(TEST_HMI_BIN) $(TEST_TAD_BIN) $(TEST_CHAT_BIN) \
-	      $(TEST_SKI_BIN) $(TEST_GMENU_BIN) $(TEST_DRIVESETUP_BIN)
+	      $(TEST_SKI_BIN) $(TEST_GMENU_BIN) $(TEST_DRIVESETUP_BIN) \
+	      $(TEST_QUAKEC_BIN) $(TEST_QUAKE_ENT_BIN) $(TEST_QUAKE_CTRL_BIN)
 	find src verify -type f \( -name "*.o" \) -delete 2>/dev/null || true
 	rm -f ./verify/models/bfs_allocator_model
 	rm -f ./verify/models/bfs_btree_model

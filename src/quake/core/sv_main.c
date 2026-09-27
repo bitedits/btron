@@ -133,13 +133,13 @@ static void edict_set_kv(edict_t *ed, const ent_kv_t *ent) {
         } else if (q_strcasecmp(k, "health") == 0) {
             EF(ed, F_HEALTH) = q_atof(v);
         } else if (q_strcasecmp(k, "target") == 0) {
-            EF(ed, F_TARGET) = (float)PR_SetString(v);
+            EI(ed, F_TARGET) = PR_SetString(v);
         } else if (q_strcasecmp(k, "targetname") == 0) {
-            EF(ed, F_TARGETNAME) = (float)PR_SetString(v);
+            EI(ed, F_TARGETNAME) = PR_SetString(v);
         } else if (q_strcasecmp(k, "message") == 0) {
-            EF(ed, F_MESSAGE) = (float)PR_SetString(v);
+            EI(ed, F_MESSAGE) = PR_SetString(v);
         } else if (q_strcasecmp(k, "model") == 0) {
-            EF(ed, F_MODEL) = (float)PR_SetString(v);
+            EI(ed, F_MODEL) = PR_SetString(v);
             if (v[0] == '*') {
                 int sub = q_atoi(v + 1);
                 EF(ed, F_MODELINDEX) = (float)(sub + 1000);
@@ -189,7 +189,7 @@ static int SV_SpawnEntities(const char *ents) {
         ed->free = 0;
 
         /* Set classname string field */
-        EF(ed, F_CLASSNAME) = (float)PR_SetString(classname);
+        EI(ed, F_CLASSNAME) = PR_SetString(classname);
 
         /* Apply all parsed key-value pairs */
         edict_set_kv(ed, &ent);
@@ -198,7 +198,7 @@ static int SV_SpawnEntities(const char *ents) {
         int fn = PR_FindFunction(classname);
         if (fn > 0) {
             /* Set self = this edict in QC globals (offset 28 = OFS_SELF) */
-            g_prvm.globals[28] = (float)g_prvm.num_edicts;
+            ((eval_t *)g_prvm.globals)[28].i = g_prvm.num_edicts;
             PR_ExecuteProgram(fn);
         }
 
@@ -243,11 +243,12 @@ static void SV_InitPlayerEdict(void) {
     EF(player, F_CURRENTAMMO)   = 25.0f;
     EF(player, F_WEAPON)        =  1.0f;   /* IT_SHOTGUN */
     EF(player, F_ITEMS)         =  1.0f;
-    EF(player, F_CLASSNAME)     = (float)PR_SetString("player");
+    EI(player, F_CLASSNAME)     = PR_SetString("player");
 
     Con_Printf("SV_InitPlayerEdict: player at (%.0f %.0f %.0f) yaw=%.0f\n",
                g_world.spawn_origin[0], g_world.spawn_origin[1],
                g_world.spawn_origin[2], g_world.spawn_angle);
+
 }
 
 #include "../include/r_part.h"
@@ -393,7 +394,7 @@ void SV_SpawnServer(const char *mapname) {
     /* Call worldspawn QC function (sets gravity, sky, fog, etc.) */
     int worldspawn_fn = PR_FindFunction("worldspawn");
     if (worldspawn_fn > 0) {
-        g_prvm.globals[28] = 0.0f;  /* self = world */
+        ((eval_t *)g_prvm.globals)[28].i = 0;  /* self = world */
         PR_ExecuteProgram(worldspawn_fn);
     }
 

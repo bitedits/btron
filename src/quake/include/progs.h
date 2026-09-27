@@ -142,7 +142,6 @@ typedef struct {
 typedef union {
     float   f;
     int     i;
-    float   v[3];
 } eval_t;
 
 typedef struct edict_s {
@@ -180,6 +179,7 @@ typedef struct {
     prstack_t    stack[MAX_STACK_DEPTH];
     int          depth;
     int          xstatement;
+    dfunction_t *xfunction;
 
     int          is_loaded;
 } prvm_t;

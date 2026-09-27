@@ -134,7 +134,8 @@
 
 /* Accessors into prvm globals via entity field indices */
 #define EF(ed, field) ((ed)->v[field].f)
-#define EV(ed, field) ((ed)->v[field].v)
+#define EV(ed, field) (&(ed)->v[field].f)
+#define EI(ed, field) ((ed)->v[field].i)
 
 /* ── Movetypes ──────────────────────────────────────────────────────── */
 #define MOVETYPE_NONE       0

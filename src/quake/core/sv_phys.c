@@ -195,9 +195,9 @@ void SV_RunThink(edict_t *ed) {
     if (thinktime <= 0.0f || thinktime > g_server.time + g_server.frametime) return;
 
     EF(ed, F_NEXTTHINK) = 0.0f;
-    int think_fn = (int)EF(ed, F_THINK);
+    int think_fn = EI(ed, F_THINK);
     if (think_fn > 0) {
-        g_prvm.globals[28] = (float)NUM_FOR_EDICT(ed);
+        ((eval_t *)g_prvm.globals)[28].i = NUM_FOR_EDICT(ed);
         PR_ExecuteProgram(think_fn);
     }
 }
@@ -404,9 +404,9 @@ void SV_RunEntity(edict_t *ed) {
         EF(ed, F_ORIGIN_Z) += EF(ed, F_VELOCITY_Z) * dt;
         if (thinktime > 0.0f && thinktime > oldltime && thinktime <= EF(ed, F_LTIME)) {
             EF(ed, F_NEXTTHINK) = 0.0f;
-            int think_fn = (int)EF(ed, F_THINK);
+            int think_fn = EI(ed, F_THINK);
             if (think_fn > 0) {
-                g_prvm.globals[28] = (float)NUM_FOR_EDICT(ed);
+                ((eval_t *)g_prvm.globals)[28].i = NUM_FOR_EDICT(ed);
                 PR_ExecuteProgram(think_fn);
             }
         }
@@ -488,7 +488,7 @@ void SV_Physics(void) {
             for (int i = 2; i < g_prvm.num_edicts; i++) {
                 edict_t *target = &g_prvm.edicts[i];
                 if (target->free) continue;
-                int touch_fn = (int)EF(target, F_TOUCH);
+                int touch_fn = EI(target, F_TOUCH);
                 if (touch_fn <= 0) continue;
 
                 float t_min[3] = {
@@ -506,8 +506,8 @@ void SV_Physics(void) {
                 if (p_min[0] <= t_max[0] + 4.0f && p_max[0] >= t_min[0] - 4.0f &&
                     p_min[1] <= t_max[1] + 4.0f && p_max[1] >= t_min[1] - 4.0f &&
                     p_min[2] <= t_max[2] + 4.0f && p_max[2] >= t_min[2] - 4.0f) {
-                    g_prvm.globals[28] = (float)i;  /* self = target entity */
-                    g_prvm.globals[29] = 1.0f;     /* other = player */
+                    ((eval_t *)g_prvm.globals)[28].i = i;  /* self = target entity */
+                    ((eval_t *)g_prvm.globals)[29].i = 1;  /* other = player */
                     PR_ExecuteProgram(touch_fn);
                 }
             }

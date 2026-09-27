@@ -245,10 +245,10 @@ static void SV_InitPlayerEdict(void) {
     EF(player, F_ITEMS)         = (float)(IT_AXE | IT_SHOTGUN);
     EI(player, F_CLASSNAME)     = PR_SetString("player");
 
-    /* progs.dat declares an edict-typed global named `client` that only the
-     * engine can fill.  Trigger callbacks compare `other` against it, so while
-     * it holds 0 (the world) every one of them returns on its first statement
-     * and sealed doors stay sealed. */
+    /* progs.dat exposes the local player as the edict-typed global `client`,
+     * which only the engine can fill.  Binding it was measured to change no
+     * trigger outcome on e1m1 -- the touch gates compare other.classname --
+     * but leaving it 0 would make the global mean "world", which is wrong. */
     int ofs_client = PR_GlobalOfs("client");
     if (ofs_client >= 0) {
         ((eval_t *)g_prvm.globals)[ofs_client].i = NUM_FOR_EDICT(player);
@@ -270,12 +270,28 @@ static void SV_InitPlayerEdict(void) {
 extern int in_forward, in_back, in_left, in_right;
 extern int in_jump, in_down, in_attack, in_turn_left, in_turn_right;
 
+/* QuakeC schedules every mover as `nextthink = time + delay` (OP_STATE in
+ * pr_exec.c reads global `time`), and `time` is engine-owned: progs.dat never
+ * writes it.  Left at 0, each think re-arms the same absolute deadline, so a
+ * door that should hold open for its `wait` thinks on every frame instead, and
+ * any gate comparing an absolute timestamp against it latches on the first
+ * touch.  Cached because the lookup scans every globaldef. */
+static int s_qc_time_ofs = -2;
+
+static void SV_SyncQCGameTime(void) {
+    if (!g_prvm.is_loaded || !g_prvm.globals) return;
+    if (s_qc_time_ofs == -2) s_qc_time_ofs = PR_GlobalOfs("time");
+    if (s_qc_time_ofs >= 0)
+        ((eval_t *)g_prvm.globals)[s_qc_time_ofs].f = g_server.time;
+}
+
 /* ── Server frame (called once per render frame) ─────────────────────── */
 void SV_ServerFrame(float dt) {
     if (!g_server.active) return;
 
     g_server.frametime = dt;
     g_server.time     += dt;
+    SV_SyncQCGameTime();
 
     extern refdef_t r_refdef;
 
@@ -402,6 +418,12 @@ void SV_SpawnServer(const char *mapname) {
 
     /* Init server + collision hull from g_world.clipnodes */
     SV_Init();
+
+    /* Zero the clock before any QC runs: worldspawn and the spawn functions
+     * below all arm nextthink against `time`. */
+    g_server.time   = 0.0f;
+    s_qc_time_ofs   = -2;
+    SV_SyncQCGameTime();
 
     /* Clear all edicts: edict 0 = world entity */
     for (int i = 0; i < MAX_EDICTS; i++) {

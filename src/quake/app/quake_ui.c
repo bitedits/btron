@@ -393,11 +393,11 @@ static void Cmd_God_f(void) {
 }
 
 static void Cmd_Noclip_f(void) {
-    g_noclip = !g_noclip;
+    g_noclip = 0;
     if (g_prvm.num_edicts >= 2) {
-        EF(&g_prvm.edicts[1], F_MOVETYPE) = g_noclip ? (float)MOVETYPE_NOCLIP : (float)MOVETYPE_WALK;
+        EF(&g_prvm.edicts[1], F_MOVETYPE) = (float)MOVETYPE_WALK;
     }
-    Con_LogAppend(g_noclip ? "Noclip ON" : "Noclip OFF");
+    Con_LogAppend("Noclip is disabled");
 }
 
 static void Cmd_Give_f(void) {
@@ -487,7 +487,7 @@ int UI_HandleKey(UW key) {
     }
 
     /* Toggle Menu with ESC */
-    if (key == 0x1B) {
+    if (key == 0x1B || key == 27 || key == BTRON_KEY_ESCAPE) {
         if (g_console_active) {
             g_console_active = 0;
             return 1;
@@ -580,6 +580,7 @@ int UI_HandleKey(UW key) {
                 switch (s_menu_cursor) {
                 case 0: /* New Game: E1M1 */
                     g_replay_active = 0;
+                    g_menu_active = 0;
                     World_ChangeMap("maps/e1m1.bsp");
                     break;
                 case 1: /* Select Map Submenu */
@@ -627,6 +628,7 @@ int UI_HandleKey(UW key) {
             if (key == '\r' || key == '\n' || key == ' ' || key == BTRON_KEY_RETURN || key == BTRON_KEY_KP_ENTER) {
                 if (s_menu_cursor < NUM_MAPS) {
                     g_replay_active = 0;
+                    g_menu_active = 0;
                     World_ChangeMap(s_map_list[s_menu_cursor]);
                 } else {
                     s_menu_page = MENU_MAIN;
@@ -649,6 +651,7 @@ int UI_HandleKey(UW key) {
             }
             if (key == '\r' || key == '\n' || key == ' ' || key == BTRON_KEY_RETURN || key == BTRON_KEY_KP_ENTER) {
                 if (s_menu_cursor < 4) {
+                    g_menu_active = 0;
                     Replay_StartDemo(s_menu_cursor + 1);
                 } else {
                     s_menu_page = MENU_MAIN;
@@ -870,12 +873,13 @@ void UI_Draw(int width, int height) {
             Draw_Fill(cx, cy + 18, 320, 2, 0x8C2020);
 
             Draw_String(cx, cy + 34, "W / S          : MOVE FORWARD / BACK");
-            Draw_String(cx, cy + 50, "A / D          : STRAFE LEFT / RIGHT");
-            Draw_String(cx, cy + 66, "MOUSE MOVE     : 360-DEGREE MOUSELOOK");
-            Draw_String(cx, cy + 82, "LEFT CLICK / E : FIRE WEAPON (SHOTGUN)");
-            Draw_String(cx, cy + 98, "SPACE / R-CLICK: JUMP OVER OBSTACLES");
-            Draw_String(cx, cy + 114,"ARROWS         : MOVE & TURN (CLASSICAL)");
-            Draw_String(cx, cy + 130,"~ OR TAB       : DEVELOPER CONSOLE");
+            Draw_String(cx, cy + 48, "A / D          : STRAFE LEFT / RIGHT");
+            Draw_String(cx, cy + 62, "SPACE / R-CLICK: JUMP OVER OBSTACLES");
+            Draw_String(cx, cy + 76, "C              : CROUCH / MOVE DOWN");
+            Draw_String(cx, cy + 90, "MOUSE MOVE     : 360-DEGREE MOUSELOOK");
+            Draw_String(cx, cy + 104,"LEFT CLICK / E : FIRE WEAPON (SHOTGUN)");
+            Draw_String(cx, cy + 118,"ARROWS         : MOVE & TURN (CLASSICAL)");
+            Draw_String(cx, cy + 132,"~ OR TAB       : DEVELOPER CONSOLE");
             Draw_String(cx, cy + 146,"ESC            : OPEN / CLOSE THIS MENU");
 
             Draw_Fill(cx, cy + 168, 320, 1, 0x444455);

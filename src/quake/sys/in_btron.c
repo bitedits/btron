@@ -16,6 +16,7 @@ int in_forward    = 0;
 int in_back       = 0;
 int in_left       = 0;
 int in_right      = 0;
+int in_down       = 0;
 int in_jump       = 0;
 int in_attack     = 0;
 int in_turn_left  = 0;
@@ -88,6 +89,7 @@ void IN_Btron_HandleEvent(WND *wnd, const EVT *evt) {
         else if (code == 's' || code == 'S') in_back = 1;
         else if (code == 'a' || code == 'A') in_left = 1;
         else if (code == 'd' || code == 'D') in_right = 1;
+        else if (code == 'c' || code == 'C') in_down = 1;
         else if (code == BTRON_KEY_UP || code == 0xFF52 || code == 0x01) in_forward = 1;
         else if (code == BTRON_KEY_DOWN || code == 0xFF54 || code == 0x02) in_back = 1;
         else if (code == BTRON_KEY_LEFT || code == 0xFF51 || code == 0x04) in_turn_left = 1;
@@ -105,6 +107,7 @@ void IN_Btron_HandleEvent(WND *wnd, const EVT *evt) {
         else if (code == 's' || code == 'S') in_back = 0;
         else if (code == 'a' || code == 'A') in_left = 0;
         else if (code == 'd' || code == 'D') in_right = 0;
+        else if (code == 'c' || code == 'C') in_down = 0;
         else if (code == BTRON_KEY_UP || code == 0xFF52 || code == 0x01) in_forward = 0;
         else if (code == BTRON_KEY_DOWN || code == 0xFF54 || code == 0x02) in_back = 0;
         else if (code == BTRON_KEY_LEFT || code == 0xFF51 || code == 0x04) in_turn_left = 0;

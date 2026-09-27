@@ -240,7 +240,7 @@ static void SV_InitPlayerEdict(void) {
 #include "../include/mathlib.h"
 
 extern int in_forward, in_back, in_left, in_right;
-extern int in_jump, in_attack, in_turn_left, in_turn_right;
+extern int in_jump, in_down, in_attack, in_turn_left, in_turn_right;
 
 /* ── Server frame (called once per render frame) ─────────────────────── */
 void SV_ServerFrame(float dt) {
@@ -288,13 +288,24 @@ void SV_ServerFrame(float dt) {
                 if (fabsf(EF(player, F_VELOCITY_Y)) < 1.0f) EF(player, F_VELOCITY_Y) = 0.0f;
             }
 
-            if (in_jump) {
+            /* Noclip disabled: strictly enforce MOVETYPE_WALK */
+            EF(player, F_MOVETYPE) = (float)MOVETYPE_WALK;
+
+            /* Jump & Crouch/Down movement */
+            int contents = SV_PointContents(r_refdef.vieworg);
+            if (contents == CONTENTS_WATER || contents == CONTENTS_SLIME || contents == CONTENTS_LAVA) {
+                if (in_jump)      EF(player, F_VELOCITY_Z) =  150.0f;
+                else if (in_down) EF(player, F_VELOCITY_Z) = -150.0f;
+            } else if (in_jump) {
                 int flags = (int)EF(player, F_FLAGS);
                 if (flags & 512) { /* FL_ONGROUND */
                     EF(player, F_VELOCITY_Z) = 270.0f;
                     EF(player, F_FLAGS) = (float)(flags & ~512);
                 }
             }
+
+            /* Crouch shrinks physical bounding box height */
+            EF(player, F_MAXS_Z) = in_down ? 12.0f : 32.0f;
 
             if (in_attack) {
                 Player_FireWeapon();
@@ -318,10 +329,26 @@ void SV_ServerFrame(float dt) {
             float px = EF(player, F_ORIGIN_X);
             float py = EF(player, F_ORIGIN_Y);
             float pz = EF(player, F_ORIGIN_Z);
+
+            /* Safeguard: if player ever falls below map bounds, rescue to spawn origin */
+            if (g_world.is_loaded && pz < g_world.mins[2] - 128.0f) {
+                px = g_world.spawn_origin[0];
+                py = g_world.spawn_origin[1];
+                pz = g_world.spawn_origin[2];
+                EF(player, F_ORIGIN_X)   = px;
+                EF(player, F_ORIGIN_Y)   = py;
+                EF(player, F_ORIGIN_Z)   = pz;
+                EF(player, F_VELOCITY_X) = 0.0f;
+                EF(player, F_VELOCITY_Y) = 0.0f;
+                EF(player, F_VELOCITY_Z) = 0.0f;
+                EF(player, F_FLAGS)      = 512.0f; /* FL_ONGROUND */
+            }
+
             if (pz != 0.0f || px != 0.0f || py != 0.0f) {
                 r_refdef.vieworg[0] = px;
                 r_refdef.vieworg[1] = py;
-                r_refdef.vieworg[2] = pz + 22.0f; /* eye height */
+                float eye_height = in_down ? 8.0f : 22.0f; /* Crouch lowers eye viewpoint */
+                r_refdef.vieworg[2] = pz + eye_height;
             }
         }
     }

@@ -57,6 +57,8 @@ int SV_PointContents(const float *p) {
     return SV_HullPointContents(&g_server.worldhull, g_server.worldhull.firstclipnode, p);
 }
 
+#define DIST_EPSILON 0.03125f
+
 /* Recursive BSP hull check — fills trace on first solid hit */
 static int SV_RecursiveHullCheck(const hull_t *hull, int num,
                                   float p1f, float p2f,
@@ -90,7 +92,11 @@ static int SV_RecursiveHullCheck(const hull_t *hull, int num,
     if (t1 >= 0 && t2 >= 0) return SV_RecursiveHullCheck(hull, node->children[0], p1f, p2f, p1, p2, trace);
     if (t1 < 0  && t2 < 0)  return SV_RecursiveHullCheck(hull, node->children[1], p1f, p2f, p1, p2, trace);
 
-    float frac = t1 / (t1 - t2);
+    float frac;
+    if (t1 < 0)
+        frac = (t1 + DIST_EPSILON) / (t1 - t2);
+    else
+        frac = (t1 - DIST_EPSILON) / (t1 - t2);
     if (frac < 0.0f) frac = 0.0f;
     if (frac > 1.0f) frac = 1.0f;
 
@@ -107,10 +113,6 @@ static int SV_RecursiveHullCheck(const hull_t *hull, int num,
 
     if (trace->allsolid) return 0;
 
-    trace->fraction  = midf;
-    trace->endpos[0] = mid[0];
-    trace->endpos[1] = mid[1];
-    trace->endpos[2] = mid[2];
     if (side) {
         trace->plane_normal[0] = -plane->normal[0];
         trace->plane_normal[1] = -plane->normal[1];
@@ -122,6 +124,24 @@ static int SV_RecursiveHullCheck(const hull_t *hull, int num,
         trace->plane_normal[2] = plane->normal[2];
         trace->plane_dist      = plane->dist;
     }
+
+    while (SV_HullPointContents(hull, hull->firstclipnode, mid) == CONTENTS_SOLID) {
+        frac -= 0.1f;
+        if (frac < 0.0f) {
+            trace->fraction = midf;
+            trace->endpos[0] = mid[0];
+            trace->endpos[1] = mid[1];
+            trace->endpos[2] = mid[2];
+            return 0;
+        }
+        midf = p1f + (p2f - p1f) * frac;
+        for (int i = 0; i < 3; i++) mid[i] = p1[i] + frac * (p2[i] - p1[i]);
+    }
+
+    trace->fraction  = midf;
+    trace->endpos[0] = mid[0];
+    trace->endpos[1] = mid[1];
+    trace->endpos[2] = mid[2];
     return 0;
 }
 
@@ -132,16 +152,38 @@ trace_t SV_Move(const float *start, const float *mins, const float *maxs,
     trace_t trace;
     memset(&trace, 0, sizeof(trace));
     trace.fraction = 1.0f;
-    trace.allsolid = 1;
+    trace.allsolid = 0;
+    trace.startsolid = 0;
     trace.endpos[0] = end[0];
     trace.endpos[1] = end[1];
     trace.endpos[2] = end[2];
 
     if (!g_world.is_loaded || !g_server.worldhull.clipnodes) return trace;
 
+    /* Check if start point is already inside solid */
+    int start_contents = SV_HullPointContents(&g_server.worldhull,
+                                              g_server.worldhull.firstclipnode,
+                                              start);
+    if (start_contents == CONTENTS_SOLID) {
+        trace.startsolid = 1;
+        trace.allsolid   = 1;
+        trace.fraction   = 0.0f;
+        trace.endpos[0]  = start[0];
+        trace.endpos[1]  = start[1];
+        trace.endpos[2]  = start[2];
+        return trace;
+    }
+
     SV_RecursiveHullCheck(&g_server.worldhull,
                           g_server.worldhull.firstclipnode,
                           0.0f, 1.0f, start, end, &trace);
+
+    if (trace.allsolid || trace.startsolid) {
+        trace.fraction  = 0.0f;
+        trace.endpos[0] = start[0];
+        trace.endpos[1] = start[1];
+        trace.endpos[2] = start[2];
+    }
     return trace;
 }
 
@@ -166,9 +208,14 @@ void SV_Gravity(edict_t *ed, float dt) {
 
 /* ── Friction ───────────────────────────────────────────────────────── */
 void SV_ApplyFriction(edict_t *ed) {
-    float *vel = EV(ed, F_VELOCITY_X);
-    float speed = sqrtf(vel[0]*vel[0] + vel[1]*vel[1]);
-    if (speed < 1.0f) { vel[0] = vel[1] = 0.0f; return; }
+    float vx = EF(ed, F_VELOCITY_X);
+    float vy = EF(ed, F_VELOCITY_Y);
+    float speed = sqrtf(vx*vx + vy*vy);
+    if (speed < 1.0f) {
+        EF(ed, F_VELOCITY_X) = 0.0f;
+        EF(ed, F_VELOCITY_Y) = 0.0f;
+        return;
+    }
 
     float drop = 0.0f;
     if ((int)EF(ed, F_FLAGS) & 512 /* FL_ONGROUND */) {
@@ -178,8 +225,8 @@ void SV_ApplyFriction(edict_t *ed) {
     float newspeed = speed - drop;
     if (newspeed < 0.0f) newspeed = 0.0f;
     newspeed /= speed;
-    vel[0] *= newspeed;
-    vel[1] *= newspeed;
+    EF(ed, F_VELOCITY_X) = vx * newspeed;
+    EF(ed, F_VELOCITY_Y) = vy * newspeed;
 }
 
 /* ── Accelerate toward wish direction ─────────────────────────────────── */
@@ -187,8 +234,10 @@ void SV_AirAccelerate(edict_t *ed, const float *wishvel, float dt) {
     float wishspeed = sqrtf(wishvel[0]*wishvel[0] + wishvel[1]*wishvel[1] + wishvel[2]*wishvel[2]);
     if (wishspeed > SV_MAXSPEED) wishspeed = SV_MAXSPEED;
 
-    float *vel = EV(ed, F_VELOCITY_X);
-    float curspeed = vel[0]*wishvel[0] + vel[1]*wishvel[1] + vel[2]*wishvel[2];
+    float vx = EF(ed, F_VELOCITY_X);
+    float vy = EF(ed, F_VELOCITY_Y);
+    float vz = EF(ed, F_VELOCITY_Z);
+    float curspeed = vx*wishvel[0] + vy*wishvel[1] + vz*wishvel[2];
     if (wishspeed > 0.0f) curspeed /= wishspeed;
 
     float addspeed = wishspeed - curspeed;
@@ -198,16 +247,16 @@ void SV_AirAccelerate(edict_t *ed, const float *wishvel, float dt) {
     if (accelspeed > addspeed) accelspeed = addspeed;
 
     if (wishspeed > 0.0f) {
-        vel[0] += accelspeed * wishvel[0] / wishspeed;
-        vel[1] += accelspeed * wishvel[1] / wishspeed;
-        vel[2] += accelspeed * wishvel[2] / wishspeed;
+        EF(ed, F_VELOCITY_X) += accelspeed * wishvel[0] / wishspeed;
+        EF(ed, F_VELOCITY_Y) += accelspeed * wishvel[1] / wishspeed;
+        EF(ed, F_VELOCITY_Z) += accelspeed * wishvel[2] / wishspeed;
     }
 }
 
 /* ── Player walkmove ────────────────────────────────────────────────── */
 void SV_WalkMove(edict_t *ed, float dt) {
-    float *org = EV(ed, F_ORIGIN_X);
-    float *vel = EV(ed, F_VELOCITY_X);
+    float org[3] = { EF(ed, F_ORIGIN_X), EF(ed, F_ORIGIN_Y), EF(ed, F_ORIGIN_Z) };
+    float vel[3] = { EF(ed, F_VELOCITY_X), EF(ed, F_VELOCITY_Y), EF(ed, F_VELOCITY_Z) };
 
     /* Try horizontal move */
     float end[3] = {
@@ -215,8 +264,12 @@ void SV_WalkMove(edict_t *ed, float dt) {
         org[1] + vel[1] * dt,
         org[2]
     };
-    float mins[3] = { -16.0f, -16.0f, -24.0f };
-    float maxs[3] = {  16.0f,  16.0f,  32.0f };
+    float mins[3] = { EF(ed, F_MINS_X), EF(ed, F_MINS_Y), EF(ed, F_MINS_Z) };
+    float maxs[3] = { EF(ed, F_MAXS_X), EF(ed, F_MAXS_Y), EF(ed, F_MAXS_Z) };
+    if (mins[0] == 0.0f && maxs[0] == 0.0f) {
+        mins[0] = -16.0f; mins[1] = -16.0f; mins[2] = -24.0f;
+        maxs[0] =  16.0f; maxs[1] =  16.0f; maxs[2] =  32.0f;
+    }
 
     trace_t trace = SV_Move(org, mins, maxs, end, SOLID_SLIDEBOX, ed);
 
@@ -243,21 +296,46 @@ void SV_WalkMove(edict_t *ed, float dt) {
         }
     }
 
-    /* Apply gravity (vertical) */
-    float down[3] = { org[0], org[1], org[2] + vel[2] * dt };
-    trace_t vtrace = SV_Move(org, mins, maxs, down, SOLID_SLIDEBOX, ed);
+    /* Apply ground snap or air gravity */
+    int flags = (int)EF(ed, F_FLAGS);
 
-    if (vtrace.fraction == 1.0f) {
-        org[2] = down[2];
-        int flags = (int)EF(ed, F_FLAGS);
-        EF(ed, F_FLAGS) = (float)(flags & ~512);
+    if ((flags & 512) && vel[2] <= 0.0f) {
+        /* On ground: check for floor beneath feet (step-down) */
+        float down[3] = { org[0], org[1], org[2] - SV_STEPSIZE };
+        trace_t vtrace = SV_Move(org, mins, maxs, down, SOLID_SLIDEBOX, ed);
+        if (vtrace.fraction < 1.0f && vtrace.plane_normal[2] >= 0.7f) {
+            /* Snap firmly to floor */
+            org[2] = vtrace.endpos[2];
+            vel[2] = 0.0f;
+            flags |= 512;
+        } else {
+            /* Walked off ledge */
+            flags &= ~512;
+        }
     } else {
+        /* In the air or jumping */
+        float down[3] = { org[0], org[1], org[2] + vel[2] * dt };
+        trace_t vtrace = SV_Move(org, mins, maxs, down, SOLID_SLIDEBOX, ed);
         org[2] = vtrace.endpos[2];
-        vel[2] = 0.0f;
-        /* Mark as on-ground */
-        int flags = (int)EF(ed, F_FLAGS);
-        EF(ed, F_FLAGS) = (float)(flags | 512);
+        if (vtrace.fraction < 1.0f) {
+            if (vel[2] <= 0.0f && vtrace.plane_normal[2] >= 0.7f) {
+                /* Landed on walkable floor */
+                vel[2] = 0.0f;
+                flags |= 512;
+            } else if (vel[2] > 0.0f) {
+                /* Hit ceiling */
+                vel[2] = 0.0f;
+            }
+        }
     }
+    EF(ed, F_FLAGS) = (float)flags;
+
+    EF(ed, F_ORIGIN_X) = org[0];
+    EF(ed, F_ORIGIN_Y) = org[1];
+    EF(ed, F_ORIGIN_Z) = org[2];
+    EF(ed, F_VELOCITY_X) = vel[0];
+    EF(ed, F_VELOCITY_Y) = vel[1];
+    EF(ed, F_VELOCITY_Z) = vel[2];
 }
 
 /* ── Toss / ballistic ───────────────────────────────────────────────── */
@@ -269,13 +347,17 @@ static void SV_Physics_Toss(edict_t *ed) {
 
     SV_Gravity(ed, dt);
 
-    float *org = EV(ed, F_ORIGIN_X);
-    float *vel = EV(ed, F_VELOCITY_X);
+    float org[3] = { EF(ed, F_ORIGIN_X), EF(ed, F_ORIGIN_Y), EF(ed, F_ORIGIN_Z) };
+    float vel[3] = { EF(ed, F_VELOCITY_X), EF(ed, F_VELOCITY_Y), EF(ed, F_VELOCITY_Z) };
+    vel[2] -= SV_GRAVITY * dt;
+
     float end[3] = { org[0]+vel[0]*dt, org[1]+vel[1]*dt, org[2]+vel[2]*dt };
     float mins[3] = {-8.0f,-8.0f,-8.0f}, maxs[3] = {8.0f,8.0f,8.0f};
 
     trace_t trace = SV_Move(org, mins, maxs, end, SOLID_BBOX, ed);
-    VectorCopy(trace.endpos, org);
+    org[0] = trace.endpos[0];
+    org[1] = trace.endpos[1];
+    org[2] = trace.endpos[2];
 
     if (trace.fraction < 1.0f) {
         /* Bounce: reflect velocity */
@@ -286,11 +368,18 @@ static void SV_Physics_Toss(edict_t *ed) {
 
         float speed = sqrtf(vel[0]*vel[0]+vel[1]*vel[1]+vel[2]*vel[2]);
         if (speed < 60.0f) {
-            VectorClear(vel);
+            vel[0] = vel[1] = vel[2] = 0.0f;
             int f = (int)EF(ed, F_FLAGS);
             EF(ed, F_FLAGS) = (float)(f | 512);
         }
     }
+
+    EF(ed, F_ORIGIN_X) = org[0];
+    EF(ed, F_ORIGIN_Y) = org[1];
+    EF(ed, F_ORIGIN_Z) = org[2];
+    EF(ed, F_VELOCITY_X) = vel[0];
+    EF(ed, F_VELOCITY_Y) = vel[1];
+    EF(ed, F_VELOCITY_Z) = vel[2];
 }
 
 /* ── Per-entity dispatch ─────────────────────────────────────────────── */
@@ -327,13 +416,19 @@ void SV_RunEntity(edict_t *ed) {
     case MOVETYPE_FLY:
     case MOVETYPE_FLYMISSILE: {
         SV_RunThink(ed);
-        float *org = EV(ed, F_ORIGIN_X);
-        float *vel = EV(ed, F_VELOCITY_X);
+        float org[3] = { EF(ed, F_ORIGIN_X), EF(ed, F_ORIGIN_Y), EF(ed, F_ORIGIN_Z) };
+        float vel[3] = { EF(ed, F_VELOCITY_X), EF(ed, F_VELOCITY_Y), EF(ed, F_VELOCITY_Z) };
         float end[3] = {org[0]+vel[0]*dt, org[1]+vel[1]*dt, org[2]+vel[2]*dt};
         float mins[3]={-8.f,-8.f,-8.f}, maxs[3]={8.f,8.f,8.f};
         trace_t tr = SV_Move(org, mins, maxs, end, SOLID_BBOX, ed);
-        VectorCopy(tr.endpos, org);
-        if (tr.fraction < 1.0f) VectorClear(vel);
+        EF(ed, F_ORIGIN_X) = tr.endpos[0];
+        EF(ed, F_ORIGIN_Y) = tr.endpos[1];
+        EF(ed, F_ORIGIN_Z) = tr.endpos[2];
+        if (tr.fraction < 1.0f) {
+            EF(ed, F_VELOCITY_X) = 0.0f;
+            EF(ed, F_VELOCITY_Y) = 0.0f;
+            EF(ed, F_VELOCITY_Z) = 0.0f;
+        }
         break; }
 
     case MOVETYPE_TOSS:
@@ -343,11 +438,9 @@ void SV_RunEntity(edict_t *ed) {
 
     case MOVETYPE_NOCLIP: {
         SV_RunThink(ed);
-        float *org = EV(ed, F_ORIGIN_X);
-        float *vel = EV(ed, F_VELOCITY_X);
-        org[0] += vel[0]*dt;
-        org[1] += vel[1]*dt;
-        org[2] += vel[2]*dt;
+        EF(ed, F_ORIGIN_X) += EF(ed, F_VELOCITY_X) * dt;
+        EF(ed, F_ORIGIN_Y) += EF(ed, F_VELOCITY_Y) * dt;
+        EF(ed, F_ORIGIN_Z) += EF(ed, F_VELOCITY_Z) * dt;
         break; }
 
     default:
@@ -368,15 +461,15 @@ void SV_Physics(void) {
 void SV_Init(void) {
     memset(&g_server, 0, sizeof(g_server));
 
-    /* Build hull 1 (player bbox 18×18×56 shrunk) from BSP clipnodes */
+    /* Build hull 1 (player bbox 32×32×56) from BSP clipnodes */
     if (g_world.is_loaded && g_world.clipnodes && g_world.planes) {
         hull_t *h = &g_server.worldhull;
         h->clipnodes     = g_world.clipnodes;
         h->planes        = g_world.planes;
-        h->firstclipnode = 0;
+        h->firstclipnode = (g_world.models && g_world.nummodels > 0) ? g_world.models[0].headnode[1] : 0;
         h->lastclipnode  = g_world.numclipnodes - 1;
-        h->clip_mins[0]  = -16.0f; h->clip_mins[1] = -16.0f; h->clip_mins[2] = -36.0f;
-        h->clip_maxs[0]  =  16.0f; h->clip_maxs[1] =  16.0f; h->clip_maxs[2] =  36.0f;
+        h->clip_mins[0]  = -16.0f; h->clip_mins[1] = -16.0f; h->clip_mins[2] = -24.0f;
+        h->clip_maxs[0]  =  16.0f; h->clip_maxs[1] =  16.0f; h->clip_maxs[2] =  32.0f;
     }
 
     g_server.active    = 1;

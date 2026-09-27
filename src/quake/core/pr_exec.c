@@ -18,6 +18,8 @@
 #include "../include/r_alias.h"
 #include "../include/mathlib.h"
 #include "../include/render.h"
+#include "../include/cvar.h"
+#include <stdio.h>
 
 /* ── Global VM state ─────────────────────────────────────────────────── */
 prvm_t g_prvm;
@@ -36,9 +38,19 @@ const char *PR_GetString(int ofs) {
     return g_prvm.strings + ofs;
 }
 
+/* ftos/vtos hand out a fresh string per call; interning them through
+ * PR_SetString would rescan every known string each time. */
+static int PR_AllocString(const char *s) {
+    int len = (int)strlen(s) + 1;
+    if (s_dynamic_strings_len + len > (int)sizeof(s_dynamic_strings)) return 0;
+    int ofs = s_dynamic_strings_len;
+    memcpy(s_dynamic_strings + ofs, s, (size_t)len);
+    s_dynamic_strings_len += len;
+    return DYNAMIC_STRING_BASE + ofs;
+}
+
 int PR_SetString(const char *s) {
-    if (!s) return 0;
-    if (g_prvm.strings && g_prvm.header) {
+    if (!s) return 0;    if (g_prvm.strings && g_prvm.header) {
         const char *p = g_prvm.strings;
         int limit = g_prvm.header->num_strings;
         for (int i = 0; i < limit; i++) {
@@ -53,14 +65,7 @@ int PR_SetString(const char *s) {
         cur += (int)strlen(s_dynamic_strings + cur) + 1;
     }
     /* Allocate in dynamic string pool */
-    int len = (int)strlen(s) + 1;
-    if (s_dynamic_strings_len + len < (int)sizeof(s_dynamic_strings)) {
-        int ofs = s_dynamic_strings_len;
-        memcpy(s_dynamic_strings + ofs, s, (size_t)len);
-        s_dynamic_strings_len += len;
-        return DYNAMIC_STRING_BASE + ofs;
-    }
-    return 0;
+    return PR_AllocString(s);
 }
 
 /* ── Edict helpers ──────────────────────────────────────────────────── */
@@ -98,6 +103,37 @@ void PR_RunError(const char *fmt, ...) {
     strncpy(buf + 7, fmt, 248);
     buf[255] = '\0';
     Con_Printf("%s\n", buf);
+}
+
+#define PR_STATEMENT_LIMIT 1000000
+#define PR_BUILTIN_SLOTS     256
+
+/*
+ * Runaway protection. A QC `while` that never exits — typically because a
+ * builtin the port does not implement left a stale entity in the global the
+ * loop advances on — freezes the whole game: the interpreter is called
+ * synchronously from SV_Physics, so nothing else runs until it returns.
+ * id's VM turns that into a Host_Error; here it aborts the activation and
+ * keeps the frame alive. The counters are what the headless tests read to
+ * tell "slow" from "never finishes".
+ */
+int   g_pr_statements_executed  = 0;
+int   g_pr_runaway_aborts       = 0;
+int   g_pr_runaway_statement    = -1;
+int   g_pr_runaway_function     = -1;
+int   g_pr_unimpl_builtin       = 0;
+int   g_pr_unimpl_builtin_count = 0;
+int   g_pr_builtin_calls[PR_BUILTIN_SLOTS];
+int   g_pr_builtin_missing[PR_BUILTIN_SLOTS];
+
+static int PR_FunctionIndex(const dfunction_t *f) {
+    if (!f || !g_prvm.functions) return -1;
+    return (int)(f - g_prvm.functions);
+}
+
+const char *PR_QCFunctionName(int fnum) {
+    if (!g_prvm.header || fnum <= 0 || fnum >= g_prvm.header->num_functions) return "?";
+    return PR_GetString(g_prvm.functions[fnum].s_name);
 }
 
 /* ── Progs loader ───────────────────────────────────────────────────── */
@@ -143,6 +179,7 @@ int PR_LoadProgs(const char *path) {
 /* ── Built-in dispatch (vanilla Quake 1 builtins) ──────────────────── */
 void PR_ExecuteBuiltin(int bnum) {
     float *globals = g_prvm.globals;
+    if (bnum >= 0 && bnum < PR_BUILTIN_SLOTS) g_pr_builtin_calls[bnum]++;
     eval_t *eglobals = (eval_t *)globals;
     (void)globals;
     (void)eglobals;
@@ -284,7 +321,9 @@ void PR_ExecuteBuiltin(int bnum) {
                 eglobals[78].i = tr.ent ? NUM_FOR_EDICT(tr.ent) : 0;
             }
             break;
-        case 17: /* setspawnparms — no-op */ break;
+        case 17: /* checkclient(e) → the client entity to aim/trace at; single player = edict 1 */
+            eglobals[1].i = (g_prvm.num_edicts > 1) ? 1 : 0;
+            break;
         case 18: /* find(start, field, match_str) → entity */
             {
                 int   start_e = eglobals[4].i;
@@ -333,11 +372,34 @@ void PR_ExecuteBuiltin(int bnum) {
                 eglobals[1].i = head;
             }
             break;
-        case 25: /* print(s) */
-            Con_Printf("[QC] %s", PR_GetString(eglobals[4].i));
+        case 23: /* bprint(text) → server console */
+        case 24: /* sprint(client, text) → that client's console; one local client */
+            Con_Printf("[QC] %s", PR_GetString(eglobals[(bnum == 24) ? 7 : 4].i));
             break;
-        case 26: /* bprint(s) */
-        case 27: /* sprint(ent, s) */
+        case 25: /* dprint(text) → developer-only console */
+            Con_DPrintf("[QC] %s", PR_GetString(eglobals[4].i));
+            break;
+        case 26: /* ftos(f) → string */
+            {
+                char buf[32];
+                snprintf(buf, sizeof buf, "%5.1f", globals[4]);
+                eglobals[1].i = PR_AllocString(buf);
+            }
+            break;
+        case 27: /* vtos(v) → string */
+            {
+                char buf[48];
+                snprintf(buf, sizeof buf, "[%5.1f %5.1f %5.1f]",
+                         globals[4], globals[5], globals[6]);
+                eglobals[1].i = PR_AllocString(buf);
+            }
+            break;
+        case 31: /* eprint(ent) → dump an entity's fields to the console */
+            {
+                edict_t *ed = PROG_TO_EDICT(eglobals[4].i);
+                Con_Printf("[QC] ent %d %s\n", NUM_FOR_EDICT(ed),
+                           PR_GetString(EI(ed, F_CLASSNAME)));
+            }
             break;
         case 32: /* walkmove(yaw, dist) → bool — move monster one step */
             {
@@ -371,24 +433,6 @@ void PR_ExecuteBuiltin(int bnum) {
                 } else {
                     globals[1] = 0.0f;
                 }
-            }
-            break;
-        case 33: /* changeyaw() — step entity yaw toward ideal_yaw at yaw_speed */
-            /* Note: QC calls this as changeyaw() with no args */
-            /* Fall through to case 61 which is the proper builtin # */
-            /* Both can exist; handle here for safety */
-            {
-                edict_t *ed = PROG_TO_EDICT(((eval_t *)globals)[28].i);
-                float cur   = EF(ed, F_ANGLES_Y);
-                float ideal = EF(ed, F_IDEAL_YAW);
-                float spd   = EF(ed, F_YAW_SPEED);
-                if (spd <= 0.0f) spd = 10.0f;
-                float delta = ideal - cur;
-                while (delta >  180.0f) delta -= 360.0f;
-                while (delta < -180.0f) delta += 360.0f;
-                if (delta >  spd) delta =  spd;
-                if (delta < -spd) delta = -spd;
-                EF(ed, F_ANGLES_Y) = cur + delta;
             }
             break;
         case 34: /* droptofloor() */
@@ -426,7 +470,7 @@ void PR_ExecuteBuiltin(int bnum) {
         case 38: /* ceil(f) */
             { int i = (int)globals[4]; globals[1] = (float)(globals[4] > (float)i ? i+1 : i); }
             break;
-        case 39: /* checkbottom(ent) → bool — is entity standing on solid ground? */
+        case 40: /* checkbottom(ent) → bool — is entity standing on solid ground? */
             {
                 edict_t *ed = PROG_TO_EDICT(eglobals[4].i);
                 float org[3]  = { EF(ed,F_ORIGIN_X), EF(ed,F_ORIGIN_Y), EF(ed,F_ORIGIN_Z) };
@@ -441,7 +485,6 @@ void PR_ExecuteBuiltin(int bnum) {
                 globals[1] = (tr.fraction < 1.0f && tr.plane_normal[2] >= 0.7f) ? 1.0f : 0.0f;
             }
             break;
-        case 40: /* pointcontents (alternate index in some progs) */
         case 41: /* pointcontents(v) */
             {
                 float p[3] = { globals[4], globals[5], globals[6] };
@@ -459,10 +502,12 @@ void PR_ExecuteBuiltin(int bnum) {
                 globals[1] = fwd[0]; globals[2] = fwd[1]; globals[3] = fwd[2];
             }
             break;
-        case 45: /* cvar(s) */
-            globals[1] = 0.0f;
+        case 45: /* cvar(name) → its current value */
+            globals[1] = Cvar_VariableValue(PR_GetString(eglobals[4].i));
             break;
-        case 46: /* localcmd — no-op */ break;
+        case 46: /* localcmd() → pending client command string, none here */
+            eglobals[1].i = 0;
+            break;
         case 47: /* nextent(ent) → next non-free entity */
             {
                 int idx = eglobals[4].i + 1;
@@ -471,8 +516,7 @@ void PR_ExecuteBuiltin(int bnum) {
             }
             break;
         case 48: /* particle — no-op */ break;
-        case 49: /* changeyaw (alternate number used by some progs) */
-        case 61: /* changeyaw() */
+        case 49: /* ChangeYaw() — step self toward ideal_yaw at yaw_speed */
             {
                 edict_t *ed = PROG_TO_EDICT(((eval_t *)globals)[28].i);
                 float cur   = EF(ed, F_ANGLES_Y);
@@ -487,7 +531,16 @@ void PR_ExecuteBuiltin(int bnum) {
                 EF(ed, F_ANGLES_Y) = cur + delta;
             }
             break;
-        case 50: /* writebyte / misc net — no-op */ break;
+        case 50: /* unused by this progs.dat (no builtin name at slot 50) */ break;
+        /*
+         * Write* (52..59) append into the client datagram that multicast /
+         * broadcast would open.  This build has no net clients, so there is no
+         * destination; accept the calls rather than falling through to the
+         * unimplemented path, which leaves stale return globals behind.
+         */
+        case 52: case 53: case 54: case 55:
+        case 56: case 57: case 58: case 59:
+            break;
         case 51: /* vectoangles(v) → pitch/yaw angles */
             {
                 float fx = globals[4], fy = globals[5], fz = globals[6];
@@ -515,17 +568,36 @@ void PR_ExecuteBuiltin(int bnum) {
                     float dy = EF(goal,F_ORIGIN_Y) - EF(self,F_ORIGIN_Y);
                     float yaw = atan2f(dy, dx) * (180.0f / 3.14159265f);
                     if (yaw < 0.0f) yaw += 360.0f;
-                    /* Invoke walkmove(yaw, dist) */
+                    /* Invoke walkmove(yaw, dist); walkmove reads parm1 at 4, parm2 at 7 */
+                    float dist    = globals[4];
                     globals[4] = yaw;
-                    globals[7] = globals[7]; /* dist already in param slot */
+                    globals[7] = dist;
                     PR_ExecuteBuiltin(32);
                 } else {
                     globals[1] = 0.0f;
                 }
             }
             break;
+        case 72: /* cvar_set(name, value) */
+            Cvar_Set(PR_GetString(eglobals[4].i), PR_GetString(eglobals[7].i));
+            break;
+        case 73: /* centerprint(client, text) → centre of that client's HUD */
+            Con_Printf("[QC] %s", PR_GetString(eglobals[7].i));
+            break;
+        case 74: /* ambientsound(origin, sample, vol, atten) — no audio device yet */
+            break;
         default:
-            /* Silently ignore unimplemented builtins */
+            /*
+             * An unimplemented builtin leaves the return-value globals at
+             * whatever the previous call put there. QC that loops over that
+             * value (`while (ent != world) ent = ent.chain`) then never
+             * terminates, so this must be loud even though it is ignored.
+             */
+            g_pr_unimpl_builtin       = bnum;
+            g_pr_unimpl_builtin_count++;
+            if (bnum >= 0 && bnum < PR_BUILTIN_SLOTS) g_pr_builtin_missing[bnum]++;
+            if (g_pr_unimpl_builtin_count <= 64)
+                Con_Printf("[PRVM] unimplemented builtin %d ignored\n", bnum);
             break;
     }
 }
@@ -602,6 +674,7 @@ void PR_ExecuteProgram(int fnum) {
 
     int exitdepth = g_prvm.depth;
     int s = PR_EnterFunction(f);
+    int stmt_budget = PR_STATEMENT_LIMIT;
 
     float        *globals = g_prvm.globals;
     dstatement_t *stmts   = g_prvm.statements;
@@ -612,6 +685,20 @@ void PR_ExecuteProgram(int fnum) {
             PR_RunError("statement out of range");
             break;
         }
+
+        if (--stmt_budget <= 0) {
+            g_pr_runaway_aborts++;
+            g_pr_runaway_statement = s;
+            g_pr_runaway_function  = PR_FunctionIndex(f);
+            if (g_pr_runaway_aborts <= 3) {
+                Con_Printf("[PRVM] runaway loop: %d+ statements in %s at statement %d -> aborted\n",
+                           PR_STATEMENT_LIMIT,
+                           PR_QCFunctionName(g_pr_runaway_function), s);
+            }
+            while (g_prvm.depth > exitdepth) PR_LeaveFunction();
+            break;
+        }
+        g_pr_statements_executed++;
 
         g_prvm.xstatement = s;
         dstatement_t *st = &stmts[s];

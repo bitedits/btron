@@ -11,6 +11,8 @@
 #include <btron/fs/vol_api.h>
 #include <btron/fs/block.h>
 #include <sys/time.h>
+#include <pthread.h>
+#include <time.h>
 
 #define MAX_TK_TASKS 64
 #define MAX_TK_SEMS  64
@@ -29,6 +31,11 @@ typedef struct {
     TK_TASK_STATE state;
     PRI current_pri;
     VP stack_ptr;
+    pthread_t thread;
+    pthread_mutex_t mutex;
+    pthread_cond_t  cond;
+    int  started;
+    int  sleeping;
 } TK_TCB;
 
 typedef struct {
@@ -42,6 +49,23 @@ static TK_TCB  g_tk_tasks[MAX_TK_TASKS];
 static TK_SEMB g_tk_sems[MAX_TK_SEMS];
 static ID      g_current_tskid = 1;
 static SYSTIME g_tk_system_ticks = 0;
+static pthread_mutex_t g_tk_kernel_lock = PTHREAD_MUTEX_INITIALIZER;
+
+/* The TCB of whichever task the calling thread belongs to; -1 for the thread
+ * that started the task (the desktop loop), which is not a T-Kernel task. */
+static int tk_self_index(void) {
+    pthread_t self = pthread_self();
+    int idx = -1;
+    pthread_mutex_lock(&g_tk_kernel_lock);
+    for (int i = 0; i < MAX_TK_TASKS; i++) {
+        if (g_tk_tasks[i].started && pthread_equal(g_tk_tasks[i].thread, self)) {
+            idx = i;
+            break;
+        }
+    }
+    pthread_mutex_unlock(&g_tk_kernel_lock);
+    return idx;
+}
 
 #include <btron/apps.h>
 
@@ -133,10 +157,22 @@ ID cre_tsk(const T_CTSK *pk_ctsk) {
             g_tk_tasks[i].config = *pk_ctsk;
             g_tk_tasks[i].state = TK_TS_DORM;
             g_tk_tasks[i].current_pri = pk_ctsk->itskpri;
+            g_tk_tasks[i].started = 0;
+            g_tk_tasks[i].sleeping = 0;
+            pthread_mutex_init(&g_tk_tasks[i].mutex, NULL);
+            pthread_cond_init(&g_tk_tasks[i].cond, NULL);
             return g_tk_tasks[i].tskid;
         }
     }
     return E_NOMEM;
+}
+
+static void *tk_task_wrapper(void *arg) {
+    TK_TCB *tcb = (TK_TCB *)arg;
+    if (tcb->config.task) tcb->config.task(tcb->config.exinf);
+    tcb->state = TK_TS_DORM;
+    tcb->started = 0;
+    return NULL;
 }
 
 ER sta_tsk(ID tskid, VW exinf) {
@@ -146,28 +182,57 @@ ER sta_tsk(ID tskid, VW exinf) {
 
     tcb->config.exinf = exinf;
     tcb->state = TK_TS_READY;
+
+    /* This core is a host executable, so a task is a thread: without this the
+     * READY state was never observed and no app task ever ran. */
+    if (!tcb->started) {
+        if (pthread_create(&tcb->thread, NULL, tk_task_wrapper, tcb) != 0)
+            return E_SYS;
+        tcb->started = 1;
+    } else {
+        pthread_mutex_lock(&tcb->mutex);
+        tcb->sleeping = 0;
+        pthread_cond_broadcast(&tcb->cond);
+        pthread_mutex_unlock(&tcb->mutex);
+    }
     return E_OK;
 }
 
 void ext_tsk(void) {
-    if (g_current_tskid > 0 && g_current_tskid <= MAX_TK_TASKS) {
-        g_tk_tasks[g_current_tskid - 1].state = TK_TS_DORM;
+    int i = tk_self_index();
+    if (i >= 0) {
+        g_tk_tasks[i].state = TK_TS_DORM;
+        g_tk_tasks[i].started = 0;
     }
+    pthread_exit(NULL);
 }
 
 ER slp_tsk(void) {
-    if (g_current_tskid > 0 && g_current_tskid <= MAX_TK_TASKS) {
-        g_tk_tasks[g_current_tskid - 1].state = TK_TS_WAIT;
-    }
+    int i = tk_self_index();
+    if (i < 0) return E_OBJ;
+    TK_TCB *tcb = &g_tk_tasks[i];
+
+    pthread_mutex_lock(&tcb->mutex);
+    tcb->state = TK_TS_WAIT;
+    tcb->sleeping = 1;
+    while (tcb->sleeping) pthread_cond_wait(&tcb->cond, &tcb->mutex);
+    tcb->state = TK_TS_READY;
+    pthread_mutex_unlock(&tcb->mutex);
     return E_OK;
 }
 
 ER wup_tsk(ID tskid) {
     if (tskid <= 0 || tskid > MAX_TK_TASKS) return E_ID;
     TK_TCB *tcb = &g_tk_tasks[tskid - 1];
-    if (tcb->state == TK_TS_WAIT) {
+    if (tcb->state == TK_TS_NONEXS) return E_NOEXS;
+
+    pthread_mutex_lock(&tcb->mutex);
+    if (tcb->sleeping) {
+        tcb->sleeping = 0;
         tcb->state = TK_TS_READY;
+        pthread_cond_signal(&tcb->cond);
     }
+    pthread_mutex_unlock(&tcb->mutex);
     return E_OK;
 }
 
@@ -227,7 +292,12 @@ ER get_tim(SYSTIME *p_time) {
 }
 
 void dly_tsk(W dlytim) {
-    (void)dlytim;
+    /* dlytim is in B-Tick (ms) units on this host core. */
+    if (dlytim <= 0) return;
+    struct timespec ts;
+    ts.tv_sec  = dlytim / 1000;
+    ts.tv_nsec = (long)(dlytim % 1000) * 1000000L;
+    nanosleep(&ts, NULL);
 }
 
 ID tkernel_cre_tsk(const T_CTSK *pk_ctsk) {

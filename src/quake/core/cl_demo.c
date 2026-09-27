@@ -153,6 +153,7 @@ int Demo_Play(const char *demoname) {
 
     Con_Printf("Demo_Play: started playback of '%s' (%d packets, %.1fs)\n",
                demoname, pkt_count, current_time);
+    Con_Printf("  angles-only: entity-delta positions are not decoded yet, camera stays at level start\n");
     return 1;
 }
 
@@ -188,114 +189,10 @@ void Demo_Update(float dt) {
         g_demo.last_angles[1] = u1.f;
         g_demo.last_angles[2] = u2.f;
 
-        const byte *payload = s_demo_buffer + ofs + 16;
-
-        /* Inspect payload for POS tag */
-        if (msglen >= 25 && payload[5] == 'P' && payload[6] == 'O' && payload[7] == 'S' && payload[8] == ' ') {
-            union { uint32_t u; float f; } px, py, pz;
-            px.u = (uint32_t)payload[9]  | ((uint32_t)payload[10] << 8) |
-                   ((uint32_t)payload[11] << 16) | ((uint32_t)payload[12] << 24);
-            py.u = (uint32_t)payload[13] | ((uint32_t)payload[14] << 8) |
-                   ((uint32_t)payload[15] << 16) | ((uint32_t)payload[16] << 24);
-            pz.u = (uint32_t)payload[17] | ((uint32_t)payload[18] << 8) |
-                   ((uint32_t)payload[19] << 16) | ((uint32_t)payload[20] << 24);
-
-            int32_t action = (int32_t)payload[21] | ((int32_t)payload[22] << 8) |
-                             ((int32_t)payload[23] << 16) | ((int32_t)payload[24] << 24);
-
-            g_demo.last_origin[0] = px.f;
-            g_demo.last_origin[1] = py.f;
-            g_demo.last_origin[2] = pz.f;
-
-            /* Action 1: Fire weapon */
-            if (action & 1) {
-                Player_FireWeapon();
-            }
-
-            /* Action 2: Trigger button touch (Pavilion bridge locker/semaphore) */
-            if (action & 2) {
-                if (g_prvm.is_loaded && g_prvm.num_edicts > 1) {
-                    for (int e = 2; e < g_prvm.num_edicts; e++) {
-                        edict_t *ed = &g_prvm.edicts[e];
-                        const char *tgt = PR_GetString(EI(ed, F_TARGET));
-                        if (tgt && strcmp(tgt, "t1") == 0) {
-                            int touch_fn = EI(ed, F_TOUCH);
-                            if (touch_fn > 0) {
-                                ((eval_t *)g_prvm.globals)[28].i = e; /* self */
-                                ((eval_t *)g_prvm.globals)[29].i = 1; /* other */
-                                PR_ExecuteProgram(touch_fn);
-                            }
-                        }
-                    }
-                }
-            }
-        } else {
-            /* Standard NetQuake server message: parse fast updates to track entity 1 origin */
-            uint32_t ppos = 0;
-            while (ppos < msglen) {
-                byte cmd = payload[ppos];
-                if (cmd == 0) break;
-                if (cmd & 0x80) { /* Fast update */
-                    int bits = cmd & 127;
-                    ppos++;
-                    if (bits & 1) { /* U_MOREBITS */
-                        if (ppos >= msglen) break;
-                        bits |= ((int)payload[ppos++] << 8);
-                    }
-                    int ent = 0;
-                    if (bits & (1 << 14)) { /* U_LONGENTITY */
-                        if (ppos + 2 > msglen) break;
-                        ent = (int)payload[ppos] | ((int)payload[ppos+1] << 8);
-                        ppos += 2;
-                    } else {
-                        if (ppos >= msglen) break;
-                        ent = payload[ppos++];
-                    }
-
-                    if (bits & (1 << 10)) ppos++; /* U_MODEL */
-                    if (bits & (1 << 6))  ppos++; /* U_FRAME */
-                    if (bits & (1 << 11)) ppos++; /* U_COLORMAP */
-                    if (bits & (1 << 12)) ppos++; /* U_SKIN */
-                    if (bits & (1 << 13)) ppos++; /* U_EFFECTS */
-
-                    if (ent == 1) {
-                        if (bits & (1 << 1)) { /* U_ORIGIN1 */
-                            if (ppos + 2 <= msglen) {
-                                int16_t s = (int16_t)((uint16_t)payload[ppos] | ((uint16_t)payload[ppos+1] << 8));
-                                g_demo.last_origin[0] = (float)s / 8.0f;
-                                ppos += 2;
-                            }
-                        }
-                        if (bits & (1 << 8)) ppos++; /* U_ANGLE1 */
-                        if (bits & (1 << 2)) { /* U_ORIGIN2 */
-                            if (ppos + 2 <= msglen) {
-                                int16_t s = (int16_t)((uint16_t)payload[ppos] | ((uint16_t)payload[ppos+1] << 8));
-                                g_demo.last_origin[1] = (float)s / 8.0f;
-                                ppos += 2;
-                            }
-                        }
-                        if (bits & (1 << 4)) ppos++; /* U_ANGLE2 */
-                        if (bits & (1 << 3)) { /* U_ORIGIN3 */
-                            if (ppos + 2 <= msglen) {
-                                int16_t s = (int16_t)((uint16_t)payload[ppos] | ((uint16_t)payload[ppos+1] << 8));
-                                g_demo.last_origin[2] = (float)s / 8.0f;
-                                ppos += 2;
-                            }
-                        }
-                        if (bits & (1 << 9)) ppos++; /* U_ANGLE3 */
-                    } else {
-                        if (bits & (1 << 1)) ppos += 2;
-                        if (bits & (1 << 8)) ppos++;
-                        if (bits & (1 << 2)) ppos += 2;
-                        if (bits & (1 << 4)) ppos++;
-                        if (bits & (1 << 3)) ppos += 2;
-                        if (bits & (1 << 9)) ppos++;
-                    }
-                    continue;
-                }
-                ppos++;
-            }
-        }
+        /* Player position lives inside the NetQuake entity-delta stream, which
+         * this player does not decode yet; hold the camera at the recorded
+         * start rather than guessing offsets in the packet body. */
+        (void)msglen;
 
         r_refdef.vieworg[0] = g_demo.last_origin[0];
         r_refdef.vieworg[1] = g_demo.last_origin[1];
@@ -304,9 +201,6 @@ void Demo_Update(float dt) {
         /* Sync player edict in server world */
         if (g_prvm.is_loaded && g_prvm.num_edicts > 1) {
             edict_t *player = &g_prvm.edicts[1];
-            EF(player, F_ORIGIN_X) = g_demo.last_origin[0];
-            EF(player, F_ORIGIN_Y) = g_demo.last_origin[1];
-            EF(player, F_ORIGIN_Z) = g_demo.last_origin[2];
             EF(player, F_ANGLES_X) = u0.f;
             EF(player, F_ANGLES_Y) = u1.f;
             EF(player, F_ANGLES_Z) = u2.f;

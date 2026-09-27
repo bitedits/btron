@@ -83,6 +83,29 @@ static void dequantize(const dtrivert_t *tv, const float *scale, const float *or
 #define SKIN_SCRATCH_MAX (512 * 512 * 4)
 static byte s_skin_rgba[SKIN_SCRATCH_MAX];
 
+/* ── Names that are not MDL meshes ────────────────────────────────────── *
+ * progs.dat assigns sprites (progs/s_bubble.spr, s_explod.spr, s_light.spr)
+ * as the model of missile and particle entities.  They start with "IDSP",
+ * not "IDPO", so they can never be alias meshes: reject them once and
+ * silently, otherwise setmodel logs a failure every frame the entity thinks. */
+#define IDSPRITEHEADER 0x50534449  /* "IDSP" */
+#define REJECT_SLOTS   32
+static char s_rejected[REJECT_SLOTS][64];
+static int  s_num_rejected;
+
+static int R_ModelRejected(const char *path) {
+    for (int i = 0; i < s_num_rejected; i++)
+        if (q_strcasecmp(s_rejected[i], path) == 0) return 1;
+    return 0;
+}
+
+static void R_RejectModel(const char *path) {
+    if (s_num_rejected >= REJECT_SLOTS) return;
+    strncpy(s_rejected[s_num_rejected], path, 63);
+    s_rejected[s_num_rejected][63] = '\0';
+    s_num_rejected++;
+}
+
 /* ── Load an MDL from the PAK filesystem ─────────────────────────────── */
 int R_LoadAliasModel(const char *path) {
     if (!path) return -1;
@@ -93,6 +116,8 @@ int R_LoadAliasModel(const char *path) {
             return i;
     }
 
+    if (R_ModelRejected(path)) return -1;
+
     if (g_num_alias_models >= MAX_MDL_MODELS) return -1;
 
     int mark = Hunk_LowMark();
@@ -100,12 +125,15 @@ int R_LoadAliasModel(const char *path) {
     byte *data = FS_LoadFile(path, &len);
     if (!data || len < (int)sizeof(mdl_header_t)) {
         Con_DPrintf("R_LoadAliasModel: %s not found\n", path);
+        R_RejectModel(path);
         return -1;
     }
 
     const mdl_header_t *hdr = (const mdl_header_t *)data;
     if (hdr->ident != IDPOLYHEADER || hdr->version != ALIAS_VERSION) {
-        Con_DPrintf("R_LoadAliasModel: %s bad header\n", path);
+        if (hdr->ident != IDSPRITEHEADER)
+            Con_DPrintf("R_LoadAliasModel: %s bad header\n", path);
+        R_RejectModel(path);
         return -1;
     }
 

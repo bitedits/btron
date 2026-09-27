@@ -8,6 +8,10 @@
 #include "../include/world.h"
 #include "../include/fs_btron.h"
 
+/* A PVS row is (visleafs+7)/8 bytes; e1m1 measures 144, and the largest maps
+ * in pak0 stay well under this ceiling. */
+#define WORLD_MAX_PVS_BYTES 4096
+
 bsp_world_t g_world;
 
 void World_UnloadMap(void) {
@@ -180,40 +184,69 @@ int World_PointInLeaf(const vec3_t point) {
     return leafnum;
 }
 
+int World_VisLeafCount(void) {
+    if (!g_world.is_loaded || g_world.nummodels <= 0) return 0;
+    return g_world.models[0].visleafs;
+}
+
+int World_VisRowBytes(void) {
+    int n = World_VisLeafCount();
+    return n > 0 ? (n + 7) / 8 : 0;
+}
+
+/* qbsp numbers the visible leafs as the contiguous prefix 1..visleafs of the
+ * leaf array, and a PVS row addresses those numbers, not leaf numbers:
+ * the bit for leaf N is bit (N-1) of the row.  Solid/sky leafs (visofs == -1)
+ * have no bit at all. */
+int World_LeafVisBit(int leafnum) {
+    if (!g_world.is_loaded) return -1;
+    if (leafnum <= 0 || leafnum > World_VisLeafCount()) return -1;
+    if (g_world.leafs[leafnum].visofs < 0) return -1;
+    return leafnum - 1;
+}
+
 byte *World_LeafPVS(int leafnum, byte *decompressed_buffer, int max_len) {
     if (!decompressed_buffer || max_len <= 0) return NULL;
 
-    if (!g_world.is_loaded || leafnum <= 0 || leafnum >= g_world.numleafs || !g_world.visdata) {
-        memset(decompressed_buffer, 0xFF, max_len);
-        return decompressed_buffer;
-    }
-
-    int visofs = g_world.leafs[leafnum].visofs;
-    if (visofs < 0 || visofs >= g_world.vislen) {
-        memset(decompressed_buffer, 0xFF, max_len);
-        return decompressed_buffer;
-    }
-
-    const byte *in = g_world.visdata + visofs;
-    int row_bytes = (g_world.numleafs + 7) / 8;
+    int row_bytes = World_VisRowBytes();
     if (row_bytes > max_len) row_bytes = max_len;
+    if (row_bytes > WORLD_MAX_PVS_BYTES) row_bytes = WORLD_MAX_PVS_BYTES;
 
+    int visofs = (World_LeafVisBit(leafnum) >= 0) ? g_world.leafs[leafnum].visofs : -1;
+    if (visofs < 0 || visofs >= g_world.vislen || row_bytes <= 0) {
+        /* The camera is not in a leaf qbsp gave a row to — either outside the
+         * world or embedded in solid geometry.  There is no visibility data to
+         * consult, so mark every leaf with a row visible: over-drawing is
+         * survivable, holes where a wall should be are not.  Faces belonging to
+         * the row-less leafs are still skipped by callers through
+         * World_LeafVisBit(), so this does not draw solid/sky shells. */
+        memset(decompressed_buffer, 0xFF, row_bytes);
+        if (max_len > row_bytes)
+            memset(decompressed_buffer + row_bytes, 0, max_len - row_bytes);
+        return decompressed_buffer;
+    }
+
+    const byte *in  = g_world.visdata + visofs;
+    const byte *end = g_world.visdata + g_world.vislen;
+    memset(decompressed_buffer, 0, row_bytes);
+
+    /* Run-length form: a literal byte, or 0x00 followed by a count of zeros. */
     int out_idx = 0;
-    while (out_idx < row_bytes) {
+    while (out_idx < row_bytes && in < end) {
         if (*in) {
             decompressed_buffer[out_idx++] = *in++;
         } else {
             in++;
+            if (in >= end) break;
             int count = *in++;
-            while (count-- > 0 && out_idx < row_bytes) {
+            while (count-- > 0 && out_idx < row_bytes)
                 decompressed_buffer[out_idx++] = 0;
-            }
         }
     }
 
-    if (out_idx < max_len) {
-        memset(decompressed_buffer + out_idx, 0, max_len - out_idx);
-    }
+    if (max_len > row_bytes)
+        memset(decompressed_buffer + row_bytes, 0, max_len - row_bytes);
+
     return decompressed_buffer;
 }
 

@@ -72,6 +72,18 @@
 #define F_BLOCKED      45
 #define F_NEXTTHINK    46
 #define F_GROUNDENTITY 47
+/* Item tags (Quake's `items` / `weapon` bit values) */
+#define IT_AXE             1
+#define IT_SHOTGUN         2
+#define IT_SUPERSHOTGUN    4
+#define IT_NAILGUN         8
+#define IT_SUPER_NAILGUN   16
+#define IT_GRENAD_LAUNCHER 32
+#define IT_ROCKET_LAUNCHER 64
+#define IT_LIGHTNING       128
+#define IT_ALL_WEAPONS     (IT_AXE|IT_SHOTGUN|IT_SUPERSHOTGUN|IT_NAILGUN| \
+                            IT_SUPER_NAILGUN|IT_GRENAD_LAUNCHER|IT_ROCKET_LAUNCHER|IT_LIGHTNING)
+
 /* Stats */
 #define F_HEALTH       48
 #define F_FRAGS        49

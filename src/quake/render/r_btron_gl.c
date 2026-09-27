@@ -27,6 +27,14 @@
 
 refdef_t r_refdef;
 
+/*
+ * The held weapon is not drawn: the alias meshes reach the virgl backend as one
+ * whole-mesh glBegin, which silently drops everything past its 256-vertex buffer
+ * and has no UVs at all, so a viewmodel on screen is unreadable noise. Flip this
+ * back to 1 once Phase C (flush-on-full + real texturing) lands.
+ */
+#define R_DRAW_WEAPON_VIEWMODEL 0
+
 static int s_vid_width  = 640;
 static int s_vid_height = 480;
 static float s_anim_angle = 0.0f;
@@ -476,6 +484,14 @@ void R_RenderView(void) {
         i=0; fmt="AMMO: "; while(*fmt) hbuf[i++]=*fmt++;
         tmp=amm>0?amm:0; if(tmp==0){hbuf[i++]='0';} else{char d[8];int di=0;while(tmp){d[di++]=(char)('0'+tmp%10);tmp/=10;}while(di--)hbuf[i++]=d[di+1];} hbuf[i]=0;
         Draw_String(270, s_vid_height - 28, hbuf);
+        /* "WEAPON: <held>" — the viewmodel itself is off, so this is the only cue */
+        i=0; fmt="WEAPON: "; while(*fmt) hbuf[i++]=*fmt++;
+        {
+            const char *wn = Player_WeaponName();
+            while (*wn && i < 40) hbuf[i++] = *wn++;
+            hbuf[i] = 0;
+        }
+        Draw_String(372, s_vid_height - 28, hbuf);
     }
 
     char map_tag[32];
@@ -509,6 +525,7 @@ void R_RenderView(void) {
     Draw_Fill(s_vid_width - 92, 8, 86, 18, g_console_active ? 0x8C2020 : 0x2A2420);
     Draw_String(s_vid_width - 88, 13, "[~] CONSOLE");
 
+#if R_DRAW_WEAPON_VIEWMODEL
     /* First-Person Viewmodel (drawn in camera space) */
     if (s_v_shot_idx >= 0 && g_world.is_loaded && !g_menu_active && !g_console_active) {
         /* Clear depth buffer so viewmodel is never clipped/occluded by nearby world geometry */
@@ -560,6 +577,7 @@ void R_RenderView(void) {
         glPopMatrix();
         glMatrixMode(GL_MODELVIEW);
     }
+#endif /* R_DRAW_WEAPON_VIEWMODEL */
 
     /* Menu & Developer Console Overlay */
     UI_Draw(s_vid_width, s_vid_height);

@@ -241,8 +241,8 @@ static void SV_InitPlayerEdict(void) {
     EF(player, F_HEALTH)        = 100.0f;
     EF(player, F_AMMO_SHELLS)   = 25.0f;
     EF(player, F_CURRENTAMMO)   = 25.0f;
-    EF(player, F_WEAPON)        =  1.0f;   /* IT_SHOTGUN */
-    EF(player, F_ITEMS)         =  1.0f;
+    EF(player, F_WEAPON)        = (float)IT_SHOTGUN;
+    EF(player, F_ITEMS)         = (float)(IT_AXE | IT_SHOTGUN);
     EI(player, F_CLASSNAME)     = PR_SetString("player");
 
     Con_Printf("SV_InitPlayerEdict: player at (%.0f %.0f %.0f) yaw=%.0f\n",

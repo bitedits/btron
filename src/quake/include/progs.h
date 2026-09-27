@@ -203,4 +203,21 @@ eval_t     *PR_GetEntityField(edict_t *ed, int ofs);
 /* Builtins called from QC */
 void        PR_ExecuteBuiltin(int bnum);
 
+/* Name of a QC function index ("?" when out of range); also names builtins */
+const char *PR_QCFunctionName(int fnum);
+
+/*
+ * VM execution statistics. g_pr_runaway_aborts is the one that matters for
+ * "the game froze": a non-zero count means a QC loop was cut off rather than
+ * allowed to spin forever inside SV_Physics.
+ */
+extern int g_pr_statements_executed;
+extern int g_pr_runaway_aborts;
+extern int g_pr_runaway_statement;
+extern int g_pr_runaway_function;
+extern int g_pr_unimpl_builtin;
+extern int g_pr_unimpl_builtin_count;
+extern int g_pr_builtin_calls[256];   /* per-builtin dispatch counts */
+extern int g_pr_builtin_missing[256]; /* per-builtin "not implemented" counts */
+
 #endif /* QUAKE_PROGS_H */

@@ -110,11 +110,15 @@ void R_DrawWorld(void) {
     int cam_leaf = World_PointInLeaf(r_refdef.vieworg);
     World_LeafPVS(cam_leaf, s_pvs_buffer, sizeof(s_pvs_buffer));
 
-    /* 2. Mark faces of PVS-visible leaves */
+    /* 2. Mark faces of PVS-visible leaves.  The row is addressed by vis-leaf
+     * rank (leafnum-1), not by leaf number — reading it by leaf number shifts
+     * every test by one position, which is what made walls vanish. */
     for (int l = 1; l < g_world.numleafs; l++) {
-        int byte_idx = l >> 3, bit_idx = l & 7;
-        if (byte_idx < (int)sizeof(s_pvs_buffer) &&
-            !(s_pvs_buffer[byte_idx] & (1 << bit_idx))) continue;
+        int bit = World_LeafVisBit(l);
+        if (bit < 0) continue;                       /* solid/sky leaf: no row bit */
+        int byte_idx = bit >> 3, bit_idx = bit & 7;
+        if (byte_idx >= (int)sizeof(s_pvs_buffer)) continue;
+        if (!(s_pvs_buffer[byte_idx] & (1 << bit_idx))) continue;
 
         const dleaf_t *leaf = &g_world.leafs[l];
         for (int m = 0; m < leaf->nummarksurfaces; m++) {

@@ -118,11 +118,105 @@ static int   s_gun_frame = 0;
 static float s_gun_anim_time = 0.0f;
 static float s_next_attack_time = 0.0f;
 
+/*
+ * Weapon table. Slot order matches Quake's number keys: 1 axe .. 8 lightning.
+ * Rates and per-hit damage follow the published Quake weapon behaviour; the
+ * grenade and rocket launchers trace instantly because the port has no
+ * projectile entity yet, so they are given blast damage at the impact point.
+ */
+typedef struct {
+    int         tag;         /* IT_* inventory bit          */
+    const char *name;        /* HUD label                   */
+    const char *cls;         /* classname fragment to pick it up */
+    int         ammo_field;  /* F_AMMO_*, 0 = melee needs no ammo */
+    float       cost;        /* ammo spent per shot          */
+    float       rate;        /* seconds between shots        */
+    int         pellets;     /* rays per shot                */
+    float       damage;      /* damage per ray hit           */
+    float       spread;      /* per-ray angular deviation    */
+    float       kick;        /* pitch recoil in degrees      */
+    float       range;       /* ray length                   */
+} weapon_def_t;
+
+#define WEAPON_MELEE_RANGE   64.0f
+#define WEAPON_SHOT_RANGE  2048.0f
+
+static const weapon_def_t s_weapons[8] = {
+    { IT_AXE,             "AXE",         "axe",        0,             0.0f, 0.55f, 1, 40.0f, 0.00f, 1.0f, WEAPON_MELEE_RANGE },
+    { IT_SHOTGUN,         "SHOTGUN",     "shotgun",    F_AMMO_SHELLS, 1.0f, 0.45f, 6,  6.0f, 0.08f, 2.0f, WEAPON_SHOT_RANGE  },
+    { IT_SUPERSHOTGUN,    "2X SHOTGUN",  "supershotgun", F_AMMO_SHELLS, 2.0f, 1.00f, 14, 6.0f, 0.11f, 4.0f, WEAPON_SHOT_RANGE },
+    { IT_NAILGUN,         "NAILGUN",     "nailgun",    F_AMMO_NAILS,  1.0f, 0.20f, 1, 13.0f, 0.02f, 1.0f, WEAPON_SHOT_RANGE  },
+    { IT_SUPER_NAILGUN,   "2X NAILGUN",  "supernailgun", F_AMMO_NAILS, 2.0f, 0.12f, 1, 13.0f, 0.06f, 1.5f, WEAPON_SHOT_RANGE },
+    { IT_GRENAD_LAUNCHER, "GRENADES",    "grenade",    F_AMMO_ROCKETS, 1.0f, 0.70f, 1, 60.0f, 0.04f, 3.0f, WEAPON_SHOT_RANGE  },
+    { IT_ROCKET_LAUNCHER, "ROCKETS",     "rocket",     F_AMMO_ROCKETS, 1.0f, 0.90f, 1, 70.0f, 0.00f, 4.0f, WEAPON_SHOT_RANGE  },
+    { IT_LIGHTNING,       "LIGHTNING",   "lightning",  F_AMMO_CELLS,  2.0f, 0.08f, 1, 15.0f, 0.00f, 1.0f, WEAPON_SHOT_RANGE  },
+};
+
+/* Held weapon, as a table index. Quake keeps the axe available from boot. */
+static int s_weapon_slot = 1; /* IT_SHOTGUN */
+static int s_weapon_request = 0;
+
+static const weapon_def_t *Player_HeldWeapon(void) { return &s_weapons[s_weapon_slot]; }
+
+/* F_CURRENTAMMO mirrors the pool of the held weapon so the HUD stays correct. */
+static void Player_SyncAmmo(edict_t *player, const weapon_def_t *w) {
+    EF(player, F_CURRENTAMMO) = w->ammo_field ? EF(player, w->ammo_field) : 0.0f;
+}
+
+const char *Player_WeaponName(void) {
+    if (g_prvm.num_edicts < 2) return s_weapons[s_weapon_slot].name;
+    return Player_HeldWeapon()->name;
+}
+
+void UI_RequestWeapon(int slot) {
+    if (slot >= 1 && slot <= 8) s_weapon_request = slot;
+}
+
+/*
+ * Select slot 1..8. Pressing a key for a weapon that is not carried falls
+ * back to the closest owned weapon, first downwards then upwards.
+ */
+static int Player_SelectWeapon(int slot) {
+    if (g_prvm.num_edicts < 2) return 0;
+    edict_t *player = &g_prvm.edicts[1];
+    if (player->free) return 0;
+
+    int owned = (int)EF(player, F_ITEMS) | IT_AXE;
+    int want  = slot - 1;
+    int idx   = -1;
+
+    if (owned & s_weapons[want].tag) {
+        idx = want;
+    } else {
+        for (int i = want - 1; i >= 0; i--)
+            if (owned & s_weapons[i].tag) { idx = i; break; }
+        for (int i = want + 1; i < 8 && idx < 0; i++)
+            if (owned & s_weapons[i].tag) { idx = i; break; }
+    }
+    if (idx < 0 || idx == s_weapon_slot) return 0;
+
+    s_weapon_slot = idx;
+    EF(player, F_WEAPON) = (float)s_weapons[idx].tag;
+    Player_SyncAmmo(player, &s_weapons[idx]);
+    s_gun_frame = 0;
+    s_next_attack_time = g_server.time + 0.25f; /* switching costs a beat */
+
+    char msg[48];
+    snprintf(msg, sizeof(msg), "[WEAPON] %s", s_weapons[idx].name);
+    Con_LogAppend(msg);
+    return 1;
+}
+
 int Player_GetGunFrame(void) {
     return s_gun_frame;
 }
 
 void Player_UpdateAnimation(float dt) {
+    if (s_weapon_request) {
+        Player_SelectWeapon(s_weapon_request);
+        s_weapon_request = 0;
+    }
+
     if (s_gun_frame > 0) {
         s_gun_anim_time += dt;
         if (s_gun_anim_time >= 0.07f) {
@@ -151,7 +245,7 @@ void Player_UpdateAnimation(float dt) {
 
                 float dx = px - ex, dy = py - ey, dz = pz - ez;
                 if (dx*dx + dy*dy + dz*dz < (48.0f * 48.0f)) {
-                    const char *cn = PR_GetString((int)EF(ed, F_CLASSNAME));
+                    const char *cn = PR_GetString(EI(ed, F_CLASSNAME));
                     if (!cn) continue;
 
                     if (q_strstr(cn, "health") || q_strstr(cn, "medkit")) {
@@ -165,16 +259,53 @@ void Player_UpdateAnimation(float dt) {
                             Con_LogAppend("[ITEM] Medkit: Health +25");
                             ed->free = 1;
                         }
-                    } else if (q_strstr(cn, "shell") || q_strstr(cn, "ammo")) {
-                        float am = EF(player, F_CURRENTAMMO);
-                        if (am < 100.0f) {
-                            am += 20.0f;
-                            EF(player, F_CURRENTAMMO) = am;
-                            EF(player, F_AMMO_SHELLS) = am;
+                    } else if (q_strstr(cn, "weapon_")) {
+                        /* Reverse scan: "supershotgun" must win over "shotgun" */
+                        const weapon_def_t *w = NULL;
+                        int slot = 0;
+                        for (int i = 7; i >= 0; i--) {
+                            if (q_strstr(cn, s_weapons[i].cls)) { w = &s_weapons[i]; slot = i + 1; break; }
+                        }
+                        if (!w) continue;
+
+                        char msg[48];
+                        int owned = (int)EF(player, F_ITEMS);
+                        ed->free = 1;
+                        R_AddDynamicLight(r_refdef.vieworg, 180.0f, 1.0f);
+                        P_RunParticleEffect(r_refdef.vieworg, (float[]){0,0,1}, 0, 16);
+                        if (owned & w->tag) {
+                            snprintf(msg, sizeof(msg), "[ITEM] %s ammunition", w->name);
+                            Con_LogAppend(msg);
+                        } else {
+                            EF(player, F_ITEMS) = (float)(owned | w->tag);
+                            snprintf(msg, sizeof(msg), "[ITEM] You got the %s!", w->name);
+                            Con_LogAppend(msg);
+                            Player_SelectWeapon(slot);
+                        }
+                    } else if (q_strstr(cn, "ammo_")) {
+                        static const struct {
+                            const char *cls; int field; float amount, cap;
+                        } kinds[4] = {
+                            { "shell",  F_AMMO_SHELLS,  20.0f, 125.0f },
+                            { "nail",   F_AMMO_NAILS,   50.0f, 200.0f },
+                            { "rocket", F_AMMO_ROCKETS,  5.0f, 250.0f },
+                            { "cell",   F_AMMO_CELLS,   50.0f, 250.0f },
+                        };
+                        char msg[48];
+                        for (int i = 0; i < 4; i++) {
+                            if (!q_strstr(cn, kinds[i].cls)) continue;
+                            float am = EF(player, kinds[i].field);
+                            if (am >= kinds[i].cap) break;
+                            am += kinds[i].amount;
+                            if (am > kinds[i].cap) am = kinds[i].cap;
+                            EF(player, kinds[i].field) = am;
+                            Player_SyncAmmo(player, Player_HeldWeapon());
                             R_AddDynamicLight(r_refdef.vieworg, 180.0f, 1.0f);
                             P_RunParticleEffect(r_refdef.vieworg, (float[]){0,0,1}, 0, 16);
-                            Con_LogAppend("[ITEM] Shotgun Shells: Ammo +20");
+                            snprintf(msg, sizeof(msg), "[ITEM] Ammo +%d", (int)kinds[i].amount);
+                            Con_LogAppend(msg);
                             ed->free = 1;
+                            break;
                         }
                     } else if (q_strstr(cn, "armor")) {
                         EF(player, F_ARMORVALUE) = 100.0f;
@@ -194,21 +325,25 @@ void Player_FireWeapon(void) {
     edict_t *player = &g_prvm.edicts[1];
     if (player->free) return;
 
-    if (g_server.time < s_next_attack_time) return;
-    s_next_attack_time = g_server.time + 0.45f; /* ~2.2 shots/sec */
+    const weapon_def_t *w = Player_HeldWeapon();
 
-    float ammo = EF(player, F_CURRENTAMMO);
-    if (ammo <= 0.0f) {
-        Con_LogAppend("Out of ammo!");
-        return;
+    if (g_server.time < s_next_attack_time) return;
+    s_next_attack_time = g_server.time + w->rate;
+
+    if (w->ammo_field) {
+        float pool = EF(player, w->ammo_field);
+        if (pool < w->cost) {
+            Con_LogAppend("Out of ammo!");
+            return;
+        }
+        EF(player, w->ammo_field) = pool - w->cost;
+        Player_SyncAmmo(player, w);
     }
-    EF(player, F_CURRENTAMMO) = ammo - 1.0f;
-    EF(player, F_AMMO_SHELLS) = ammo - 1.0f;
 
     /* Start firing animation & recoil screen kick */
     s_gun_frame = 1;
     s_gun_anim_time = 0.0f;
-    r_refdef.viewangles[0] -= 2.0f; /* Pitch recoil */
+    r_refdef.viewangles[0] -= w->kick; /* Pitch recoil */
 
     /* Muzzle flash */
     R_AddDynamicLight(r_refdef.vieworg, 260.0f, 1.0f);
@@ -217,10 +352,9 @@ void Player_FireWeapon(void) {
     vec3_t forward, right, up;
     AngleVectors(r_refdef.viewangles, forward, right, up);
 
-    /* Emit 6 shotgun pellets */
-    for (int p = 0; p < 6; p++) {
-        float r_spread = ((float)(rand() % 100) / 100.0f - 0.5f) * 0.08f;
-        float u_spread = ((float)(rand() % 100) / 100.0f - 0.5f) * 0.08f;
+    for (int p = 0; p < w->pellets; p++) {
+        float r_spread = ((float)(rand() % 100) / 100.0f - 0.5f) * w->spread;
+        float u_spread = ((float)(rand() % 100) / 100.0f - 0.5f) * w->spread;
         float dir[3] = {
             forward[0] + right[0] * r_spread + up[0] * u_spread,
             forward[1] + right[1] * r_spread + up[1] * u_spread,
@@ -228,9 +362,9 @@ void Player_FireWeapon(void) {
         };
 
         float end[3] = {
-            r_refdef.vieworg[0] + dir[0] * 2048.0f,
-            r_refdef.vieworg[1] + dir[1] * 2048.0f,
-            r_refdef.vieworg[2] + dir[2] * 2048.0f
+            r_refdef.vieworg[0] + dir[0] * w->range,
+            r_refdef.vieworg[1] + dir[1] * w->range,
+            r_refdef.vieworg[2] + dir[2] * w->range
         };
 
         trace_t tr = SV_Move(r_refdef.vieworg, NULL, NULL, end, SOLID_BBOX, player);
@@ -255,7 +389,7 @@ void Player_FireWeapon(void) {
                 P_BloodSplash(tr.endpos, 12);
                 float hp = EF(ed, F_HEALTH);
                 if (hp > 0.0f) {
-                    hp -= 6.0f;
+                    hp -= w->damage;
                     EF(ed, F_HEALTH) = hp;
                     if (hp <= 0.0f) {
                         P_ExplosionParticles(eorg);
@@ -263,15 +397,13 @@ void Player_FireWeapon(void) {
                         ed->free = 1;
                     }
                 }
-                /* Trigger shootable doors or buttons */
-                if (EF(ed, F_USE) > 0.0f) {
-                    g_prvm.globals[28] = (float)ei;
-                    g_prvm.globals[29] = 1.0f;
-                    PR_ExecuteProgram((int)EF(ed, F_USE));
-                } else if (EF(ed, F_TOUCH) > 0.0f) {
-                    g_prvm.globals[28] = (float)ei;
-                    g_prvm.globals[29] = 1.0f;
-                    PR_ExecuteProgram((int)EF(ed, F_TOUCH));
+                /* Trigger shootable doors or buttons (function fields are .i, not .f) */
+                int fn = EI(ed, F_USE);
+                if (!fn) fn = EI(ed, F_TOUCH);
+                if (fn) {
+                    ((eval_t *)g_prvm.globals)[28].i = ei;  /* self  */
+                    ((eval_t *)g_prvm.globals)[29].i = 1;   /* other = player */
+                    PR_ExecuteProgram(fn);
                 }
                 break;
             }
@@ -325,6 +457,10 @@ int World_ChangeMap(const char *mapname) {
 
     /* 4. Spawn server, player and entities */
     SV_SpawnServer(fullpath);
+    s_weapon_slot = 1; /* SV_InitPlayerEdict boots the player with axe + shotgun */
+    s_weapon_request = 0;
+    s_gun_frame = 0;
+    s_next_attack_time = 0.0f;
 
     /* 5. Set camera vieworg and angles */
     VectorCopy(g_world.spawn_origin, r_refdef.vieworg);
@@ -382,6 +518,20 @@ void Replay_Stop(void) {
     g_menu_active = 0;
 }
 
+/* A synthetic camera spot is legal when it sits in open space with floor
+ * within reach below; the orbit otherwise clips through level solids. */
+static int Replay_PointLegal(const float *p) {
+    if (SV_PointContents(p) == CONTENTS_SOLID) return 0;
+
+    float down[3] = { p[0], p[1], p[2] - 512.0f };
+    trace_t tr = SV_Move(p, NULL, NULL, down, SOLID_NOT, NULL);
+    if (tr.startsolid || tr.allsolid) return 0;
+    return tr.fraction < 1.0f;
+}
+
+/* ── Cinematic flythrough ─────────────────────────────────────────────── *
+ * Used only when no .dem file can be played back; real demo playback goes   *
+ * through Demo_Update() above.                                             */
 void Replay_Update(float dt) {
     if (!g_replay_active) return;
     g_replay_time += dt;
@@ -397,13 +547,33 @@ void Replay_Update(float dt) {
     float base_y = g_world.spawn_origin[1];
     float base_z = g_world.spawn_origin[2] + 24.0f;
 
-    /* Smooth 3D flythrough path around the level */
-    float r = 160.0f + 60.0f * sinf(g_replay_time * 0.25f);
     float ang = g_replay_time * 0.40f;
 
-    r_refdef.vieworg[0] = base_x + cosf(ang) * r;
-    r_refdef.vieworg[1] = base_y + sinf(ang) * r;
-    r_refdef.vieworg[2] = base_z + 20.0f * sinf(g_replay_time * 0.6f);
+    /* Shrink the orbit until the camera spot is in open space */
+    vec3_t placed = { base_x, base_y, base_z };
+    int ok = 0;
+    for (int attempt = 0; attempt < 10; attempt++) {
+        float r = (160.0f + 60.0f * sinf(g_replay_time * 0.25f)) * (1.0f - attempt * 0.18f);
+        float z = base_z + 20.0f * sinf(g_replay_time * 0.6f) - attempt * 16.0f;
+        float cand[3] = { base_x + cosf(ang) * r, base_y + sinf(ang) * r, z };
+        if (Replay_PointLegal(cand)) {
+            placed[0] = cand[0];
+            placed[1] = cand[1];
+            placed[2] = cand[2];
+            ok = 1;
+            break;
+        }
+    }
+    if (!ok) {
+        /* Nowhere legal near the spawn: hold the eye at the start point */
+        placed[0] = base_x;
+        placed[1] = base_y;
+        placed[2] = base_z;
+    }
+
+    r_refdef.vieworg[0] = placed[0];
+    r_refdef.vieworg[1] = placed[1];
+    r_refdef.vieworg[2] = placed[2];
 
     r_refdef.viewangles[1] = (ang + 3.14159f) * 180.0f / 3.14159f + 20.0f * sinf(g_replay_time * 0.4f);
     r_refdef.viewangles[0] = -6.0f + 8.0f * sinf(g_replay_time * 0.5f);
@@ -443,11 +613,15 @@ static void Cmd_Noclip_f(void) {
 static void Cmd_Give_f(void) {
     if (g_prvm.num_edicts < 2) return;
     edict_t *player = &g_prvm.edicts[1];
-    EF(player, F_HEALTH)        = 100.0f;
-    EF(player, F_ARMORVALUE)    = 100.0f;
-    EF(player, F_CURRENTAMMO)   = 100.0f;
-    EF(player, F_AMMO_SHELLS)   = 100.0f;
-    Con_LogAppend("Given full health, armor, and shotgun ammo!");
+    EF(player, F_HEALTH)      = 100.0f;
+    EF(player, F_ARMORVALUE)  = 100.0f;
+    EF(player, F_ITEMS)       = (float)IT_ALL_WEAPONS;
+    EF(player, F_AMMO_SHELLS) = 125.0f;
+    EF(player, F_AMMO_NAILS)  = 200.0f;
+    EF(player, F_AMMO_ROCKETS) = 250.0f;
+    EF(player, F_AMMO_CELLS)  = 250.0f;
+    Player_SyncAmmo(player, Player_HeldWeapon());
+    Con_LogAppend("Given every weapon, full health, armor and ammunition!");
 }
 
 static void Cmd_Restart_f(void) {
@@ -465,9 +639,12 @@ static void Cmd_Status_f(void) {
     Con_LogAppend(buf);
     if (g_prvm.num_edicts >= 2) {
         edict_t *p = &g_prvm.edicts[1];
-        snprintf(buf, sizeof(buf), "Player pos: (%.0f, %.0f, %.0f) HP: %.0f AMMO: %.0f",
+        snprintf(buf, sizeof(buf), "Player pos: (%.0f, %.0f, %.0f) HP: %.0f",
                  EF(p, F_ORIGIN_X), EF(p, F_ORIGIN_Y), EF(p, F_ORIGIN_Z),
-                 EF(p, F_HEALTH), EF(p, F_CURRENTAMMO));
+                 EF(p, F_HEALTH));
+        Con_LogAppend(buf);
+        snprintf(buf, sizeof(buf), "Weapon: %s  Ammo: %.0f  Owned: %02x",
+                 Player_WeaponName(), EF(p, F_CURRENTAMMO), (int)EF(p, F_ITEMS));
         Con_LogAppend(buf);
     }
 }
@@ -481,7 +658,7 @@ static void Cmd_Help_f(void) {
     Con_LogAppend("  map <name>     - Load level (e1m1..e1m8, start)");
     Con_LogAppend("  god            - Toggle godmode");
     Con_LogAppend("  noclip         - Toggle fly/walk through walls");
-    Con_LogAppend("  give all       - Maximize health, armor, ammo");
+    Con_LogAppend("  give all       - Own every weapon and fill all ammunition");
     Con_LogAppend("  restart        - Restart current map");
     Con_LogAppend("  status         - Show player coordinates & stats");
     Con_LogAppend("  clear          - Clear console log");
@@ -940,11 +1117,12 @@ void UI_Draw(int width, int height) {
             Draw_String(cx, cy + 72, "C              : CROUCH / MOVE DOWN");
             Draw_String(cx, cy + 86, "MOUSE MOVE     : 360-DEGREE MOUSELOOK");
             Draw_String(cx, cy + 100,"LEFT CLICK / E : FIRE WEAPON / INTERACT");
-            Draw_String(cx, cy + 114,"DOORS & LIFTS  : WALK INTO / TOUCH OR SHOOT");
-            Draw_String(cx, cy + 128,"BUTTONS        : STEP ON OR SHOOT");
-            Draw_String(cx, cy + 142,"ARROWS         : MOVE & TURN (CLASSICAL)");
-            Draw_String(cx, cy + 156,"~ OR TAB       : DEVELOPER CONSOLE");
-            Draw_String(cx, cy + 170,"ESC            : OPEN / CLOSE THIS MENU");
+            Draw_String(cx, cy + 114,"1 - 8          : SELECT WEAPON");
+            Draw_String(cx, cy + 128,"DOORS & LIFTS  : WALK INTO / TOUCH OR SHOOT");
+            Draw_String(cx, cy + 142,"BUTTONS        : STEP ON OR SHOOT");
+            Draw_String(cx, cy + 156,"ARROWS         : MOVE & TURN (CLASSICAL)");
+            Draw_String(cx, cy + 170,"~ OR TAB       : DEVELOPER CONSOLE");
+            Draw_String(cx, cy + 184,"ESC            : OPEN / CLOSE THIS MENU");
 
             Draw_Fill(cx, cy + 192, 320, 1, 0x444455);
             Draw_String(cx, cy + 200, "CONSOLE CHEATS : GOD, NOCLIP, GIVE ALL");

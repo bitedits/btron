@@ -38,5 +38,7 @@ int  World_ChangeMap(const char *mapname);
 void Player_FireWeapon(void);
 void Player_UpdateAnimation(float dt);
 int  Player_GetGunFrame(void);
+void UI_RequestWeapon(int slot);     /* slot 1..8, bound to the number keys */
+const char *Player_WeaponName(void); /* HUD label of the held weapon */
 
 #endif /* QUAKE_UI_H */

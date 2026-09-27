@@ -8,6 +8,7 @@
 #include "../include/quakedef.h"
 #include "../include/render.h"
 #include "../include/mathlib.h"
+#include "../include/quake_ui.h"
 #include <btron/event.h>
 #include <btron/wnd.h>
 
@@ -105,6 +106,7 @@ void IN_Btron_HandleEvent(WND *wnd, const EVT *evt) {
         else if (code == '\r' || code == '\n' || code == 0x11 || code == 'e' || code == 'E' ||
                  code == BTRON_KEY_RETURN || code == BTRON_KEY_KP_ENTER) in_attack = 1;
         else if (code == 0x12) in_jump = 1; /* Alt = Jump */
+        else if (code >= '1' && code <= '8') UI_RequestWeapon(code - '0');
         break;
     }
 

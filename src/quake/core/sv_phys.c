@@ -42,7 +42,11 @@ static int SV_HullPointContents(const hull_t *hull, int num, const float *p) {
         const dplane_t    *plane = &hull->planes[node->planenum];
 
         float d;
-        if (plane->type < 3) {
+        /*
+         * Only 0..2 name an axis. The on-disk record marks a generic plane with
+         * type -1, so a bare `type < 3` would index p[-1].
+         */
+        if (plane->type >= 0 && plane->type < 3) {
             d = p[plane->type] - plane->dist;
         } else {
             d = DotProduct(plane->normal, p) - plane->dist;
@@ -81,7 +85,7 @@ static int SV_RecursiveHullCheck(const hull_t *hull, int num,
     const dplane_t    *plane = &hull->planes[node->planenum];
 
     float t1, t2;
-    if (plane->type < 3) {
+    if (plane->type >= 0 && plane->type < 3) {
         t1 = p1[plane->type] - plane->dist;
         t2 = p2[plane->type] - plane->dist;
     } else {
@@ -260,6 +264,15 @@ trace_t SV_Move(const float *start, const float *mins, const float *maxs,
                     }
                 } else if (headnode == CONTENTS_SOLID) {
                     /* Solid leaf: slab test against expanded AABB */
+                    int start_inside = 1;
+                    for (int i = 0; i < 3; i++)
+                        if (start[i] < bmin[i] || start[i] > bmax[i]) { start_inside = 0; break; }
+                    if (start_inside) {
+                        trace.startsolid = 1;
+                        trace.ent = touch;
+                        continue;
+                    }
+
                     float tmin = 0.0f, tmax = trace.fraction;
                     int hit_axis = -1;
                     float hit_sign = 1.0f;
@@ -291,6 +304,12 @@ trace_t SV_Move(const float *start, const float *mins, const float *maxs,
                     }
                 }
             } else if (solid == SOLID_BBOX || solid == SOLID_SLIDEBOX) {
+                /* A zero-size entity box is an uncontracted placeholder (e.g.
+                 * misc_explobox), not a hull. */
+                if (EF(touch, F_MINS_X) == EF(touch, F_MAXS_X) &&
+                    EF(touch, F_MINS_Y) == EF(touch, F_MAXS_Y) &&
+                    EF(touch, F_MINS_Z) == EF(touch, F_MAXS_Z)) continue;
+
                 float eorg[3] = { EF(touch, F_ORIGIN_X), EF(touch, F_ORIGIN_Y), EF(touch, F_ORIGIN_Z) };
                 float bmin[3] = { eorg[0] + EF(touch, F_MINS_X), eorg[1] + EF(touch, F_MINS_Y), eorg[2] + EF(touch, F_MINS_Z) };
                 float bmax[3] = { eorg[0] + EF(touch, F_MAXS_X), eorg[1] + EF(touch, F_MAXS_Y), eorg[2] + EF(touch, F_MAXS_Z) };
@@ -298,6 +317,17 @@ trace_t SV_Move(const float *start, const float *mins, const float *maxs,
                 if (mins && maxs) {
                     bmin[0] += mins[0]; bmin[1] += mins[1]; bmin[2] += mins[2];
                     bmax[0] += maxs[0]; bmax[1] += maxs[1]; bmax[2] += maxs[2];
+                }
+
+                /* A mover that starts inside the box is stuck, not blocked: report
+                 * startsolid and let it walk out instead of pinning fraction to 0. */
+                int start_inside = 1;
+                for (int i = 0; i < 3; i++)
+                    if (start[i] < bmin[i] || start[i] > bmax[i]) { start_inside = 0; break; }
+                if (start_inside) {
+                    trace.startsolid = 1;
+                    trace.ent = touch;
+                    continue;
                 }
 
                 float tmin = 0.0f, tmax = trace.fraction;
@@ -333,6 +363,48 @@ trace_t SV_Move(const float *start, const float *mins, const float *maxs,
         }
     }
     return trace;
+}
+
+/* ── Entity world AABB ────────────────────────────────────────────────── *
+ * SOLID_BSP bounds in a Quake 1 BSP are absolute and the entity origin is    *
+ * the movement delta accumulated by MOVETYPE_PUSH, so the world box is        *
+ * abs bounds + origin.  Returns 0 for entities with no usable hull box.       */
+static int SV_EntityWorldBox(const edict_t *ed, float bmin[3], float bmax[3]) {
+    int solid = (int)EF(ed, F_SOLID);
+    float org[3] = { EF(ed, F_ORIGIN_X), EF(ed, F_ORIGIN_Y), EF(ed, F_ORIGIN_Z) };
+
+    if (solid == SOLID_BSP) {
+        int sub = (int)EF(ed, F_MODELINDEX) - 1000;
+        if (sub <= 0 || sub >= g_world.nummodels || !g_world.models) return 0;
+        const dmodel_t *m = &g_world.models[sub];
+        for (int i = 0; i < 3; i++) {
+            bmin[i] = m->mins[i] + org[i];
+            bmax[i] = m->maxs[i] + org[i];
+        }
+        return 1;
+    }
+
+    float mn[3] = { EF(ed, F_MINS_X), EF(ed, F_MINS_Y), EF(ed, F_MINS_Z) };
+    float mx[3] = { EF(ed, F_MAXS_X), EF(ed, F_MAXS_Y), EF(ed, F_MAXS_Z) };
+    if (mn[0] == mx[0] && mn[1] == mx[1] && mn[2] == mx[2]) {
+        /* Walkers with no contracted hull still occupy the player box */
+        int mt = (int)EF(ed, F_MOVETYPE);
+        if (mt != MOVETYPE_WALK && mt != MOVETYPE_STEP) return 0;
+        mn[0] = -16.0f; mn[1] = -16.0f; mn[2] = -24.0f;
+        mx[0] =  16.0f; mx[1]  = 16.0f; mx[2] =  32.0f;
+    }
+    for (int i = 0; i < 3; i++) {
+        bmin[i] = org[i] + mn[i];
+        bmax[i] = org[i] + mx[i];
+    }
+    return 1;
+}
+
+static int SV_BoxesOverlap(const float *a_min, const float *a_max,
+                           const float *b_min, const float *b_max) {
+    for (int i = 0; i < 3; i++)
+        if (a_max[i] <= b_min[i] || b_max[i] <= a_min[i]) return 0;
+    return 1;
 }
 
 /* ── Think scheduling ───────────────────────────────────────────────── */
@@ -421,6 +493,25 @@ void SV_WalkMove(edict_t *ed, float dt) {
     }
 
     trace_t trace = SV_Move(org, mins, maxs, end, SOLID_SLIDEBOX, ed);
+
+    /* Decisive row for "player became immovable": name the entity whose box the
+     * player starts inside, and its bounds, at most once per blocker. */
+    if (ed == &g_prvm.edicts[1] && trace.fraction == 0.0f && trace.ent) {
+        static int s_last_pin = -1;
+        int num = NUM_FOR_EDICT(trace.ent);
+        if (num != s_last_pin) {
+            s_last_pin = num;
+            Con_Printf("[PIN] ent %d %s solid=%d org=%.0f %.0f %.0f "
+                       "mins=%.0f %.0f %.0f maxs=%.0f %.0f %.0f "
+                       "player org=%.0f %.0f %.0f\n",
+                       num, PR_GetString(EI(trace.ent, F_CLASSNAME)),
+                       (int)EF(trace.ent, F_SOLID),
+                       EF(trace.ent, F_ORIGIN_X), EF(trace.ent, F_ORIGIN_Y), EF(trace.ent, F_ORIGIN_Z),
+                       EF(trace.ent, F_MINS_X), EF(trace.ent, F_MINS_Y), EF(trace.ent, F_MINS_Z),
+                       EF(trace.ent, F_MAXS_X), EF(trace.ent, F_MAXS_Y), EF(trace.ent, F_MAXS_Z),
+                       org[0], org[1], org[2]);
+        }
+    }
 
     if (trace.fraction == 1.0f) {
         /* Unobstructed — commit horizontal move */
@@ -553,6 +644,24 @@ void SV_RunEntity(edict_t *ed) {
         float mx = EF(ed, F_VELOCITY_X) * dt;
         float my = EF(ed, F_VELOCITY_Y) * dt;
         float mz = EF(ed, F_VELOCITY_Z) * dt;
+
+        /* A pusher must never swallow a mover: Quake stop-checks the push before
+         * applying it.  Without a full push list, hold the pusher on the tick
+         * whose step would newly overlap the player instead of trapping them. */
+        if ((mx != 0.0f || my != 0.0f || mz != 0.0f) && g_prvm.num_edicts > 1) {
+            edict_t *pl = &g_prvm.edicts[1];
+            float pmin[3], pmax[3], bmin[3], bmax[3];
+            if (!pl->free && SV_EntityWorldBox(pl, pmin, pmax) &&
+                SV_EntityWorldBox(ed, bmin, bmax)) {
+                float nmin[3] = { bmin[0] + mx, bmin[1] + my, bmin[2] + mz };
+                float nmax[3] = { bmax[0] + mx, bmax[1] + my, bmax[2] + mz };
+                if (!SV_BoxesOverlap(bmin, bmax, pmin, pmax) &&
+                    SV_BoxesOverlap(nmin, nmax, pmin, pmax)) {
+                    mx = my = mz = 0.0f;
+                }
+            }
+        }
+
         EF(ed, F_ORIGIN_X) += mx;
         EF(ed, F_ORIGIN_Y) += my;
         EF(ed, F_ORIGIN_Z) += mz;

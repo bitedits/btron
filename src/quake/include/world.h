@@ -79,6 +79,12 @@ void World_UnloadMap(void);
 int   World_PointInLeaf(const vec3_t point);
 byte *World_LeafPVS(int leafnum, byte *decompressed_buffer, int max_len);
 
+/* Visibility rows are addressed by the leaf's *vis* number, not its leaf
+ * number: qbsp writes (World_VisLeafCount()+7)/8 bytes per row. */
+int   World_VisLeafCount(void);
+int   World_VisRowBytes(void);
+int   World_LeafVisBit(int leafnum);   /* bit index in other leafs' rows, -1 if none */
+
 /* Collision hulls */
 int   World_HullPointContents(int hullnum, int nodenum, const vec3_t point);
 

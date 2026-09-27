@@ -49,6 +49,7 @@ int NUM_FOR_EDICT(const edict_t *ed) { return (int)(ed - g_prvm.edicts); }
 void P_UpdateParticles(float dt) { (void)dt; }
 void Player_FireWeapon(void) {}
 void Player_UpdateAnimation(float dt) { (void)dt; }
+void UI_RequestWeapon(int slot) { (void)slot; }
 void Replay_Update(float dt) { (void)dt; }
 
 int main(void) {

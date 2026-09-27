@@ -110,7 +110,9 @@ static void quake_event(WND *wnd, const EVT *evt) {
             return;
         }
     } else if (evt->type == EV_BUT_DOWN) {
-        if (UI_HandleMouse(evt->pos.x, evt->pos.y, 1)) {
+        int lx = evt->pos.x - wnd->client.left;
+        int ly = evt->pos.y - wnd->client.top;
+        if (UI_HandleMouse(lx, ly, 1)) {
             inval_wnd(wnd);
             return;
         }

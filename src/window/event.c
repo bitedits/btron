@@ -236,6 +236,12 @@ ER get_evt(EVT *p_evt, W timeout_ms) {
                 ev.data = (VW)(uintptr_t)sdlev.key.keysym.mod;
                 snd_evt(&ev);
                 break;
+            case SDL_KEYUP:
+                ev.type = EV_KEY_UP;
+                ev.key = sdlev.key.keysym.sym;
+                ev.data = (VW)(uintptr_t)sdlev.key.keysym.mod;
+                snd_evt(&ev);
+                break;
             default:
                 break;
         }

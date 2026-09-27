@@ -21,7 +21,10 @@ int in_attack     = 0;
 int in_turn_left  = 0;
 int in_turn_right = 0;
 
-static int s_mouse_down = 0;
+extern int g_menu_active;
+extern int g_console_active;
+
+static int s_mouse_init = 0;
 static H   s_last_mx    = 0;
 static H   s_last_my    = 0;
 
@@ -31,34 +34,51 @@ void IN_Btron_HandleEvent(WND *wnd, const EVT *evt) {
 
     switch (evt->type) {
     case EV_BUT_DOWN:
-        s_mouse_down = 1;
-        s_last_mx = evt->pos.x;
-        s_last_my = evt->pos.y;
-        in_attack = 1; /* Left click fires weapon */
+        if (evt->button == 3) {
+            in_jump = 1;   /* Right click = Jump */
+        } else {
+            in_attack = 1; /* Left click = Fire weapon */
+        }
         break;
 
     case EV_BUT_UP:
-        s_mouse_down = 0;
-        in_attack = 0;
+        if (evt->button == 3) {
+            in_jump = 0;
+        } else {
+            in_attack = 0;
+        }
         break;
 
     case EV_MOUSE_MOVE:
-        if (s_mouse_down) {
+        if (!s_mouse_init) {
+            s_last_mx = evt->pos.x;
+            s_last_my = evt->pos.y;
+            s_mouse_init = 1;
+            break;
+        }
+        {
             float dx = (float)(evt->pos.x - s_last_mx);
             float dy = (float)(evt->pos.y - s_last_my);
             s_last_mx = evt->pos.x;
             s_last_my = evt->pos.y;
 
-            r_refdef.viewangles[1] -= dx * 0.4f; /* Yaw */
-            r_refdef.viewangles[0] += dy * 0.4f; /* Pitch */
+            if (!g_menu_active && !g_console_active) {
+                if (dx > 80.0f)  dx = 80.0f;
+                if (dx < -80.0f) dx = -80.0f;
+                if (dy > 80.0f)  dy = 80.0f;
+                if (dy < -80.0f) dy = -80.0f;
 
-            /* Clamp pitch */
-            if (r_refdef.viewangles[0] > 70.0f)  r_refdef.viewangles[0] = 70.0f;
-            if (r_refdef.viewangles[0] < -70.0f) r_refdef.viewangles[0] = -70.0f;
+                r_refdef.viewangles[1] -= dx * 0.35f; /* Smooth Yaw */
+                r_refdef.viewangles[0] += dy * 0.35f; /* Smooth Pitch */
 
-            /* Wrap yaw */
-            while (r_refdef.viewangles[1] < 0.0f)   r_refdef.viewangles[1] += 360.0f;
-            while (r_refdef.viewangles[1] >= 360.0f) r_refdef.viewangles[1] -= 360.0f;
+                /* Clamp pitch */
+                if (r_refdef.viewangles[0] > 70.0f)  r_refdef.viewangles[0] = 70.0f;
+                if (r_refdef.viewangles[0] < -70.0f) r_refdef.viewangles[0] = -70.0f;
+
+                /* Wrap yaw */
+                while (r_refdef.viewangles[1] < 0.0f)   r_refdef.viewangles[1] += 360.0f;
+                while (r_refdef.viewangles[1] >= 360.0f) r_refdef.viewangles[1] -= 360.0f;
+            }
         }
         break;
 
@@ -68,12 +88,14 @@ void IN_Btron_HandleEvent(WND *wnd, const EVT *evt) {
         else if (code == 's' || code == 'S') in_back = 1;
         else if (code == 'a' || code == 'A') in_left = 1;
         else if (code == 'd' || code == 'D') in_right = 1;
-        else if (code == 0xFF52 || code == 0x01) in_forward = 1;   /* Up Arrow */
-        else if (code == 0xFF54 || code == 0x02) in_back = 1;      /* Down Arrow */
-        else if (code == 0xFF51 || code == 0x04) in_turn_left = 1; /* Left Arrow */
-        else if (code == 0xFF53 || code == 0x03) in_turn_right = 1;/* Right Arrow */
-        else if (code == ' ') in_jump = 1;
-        else if (code == '\r' || code == '\n' || code == 0x11 || code == 'e' || code == 'E') in_attack = 1;
+        else if (code == BTRON_KEY_UP || code == 0xFF52 || code == 0x01) in_forward = 1;
+        else if (code == BTRON_KEY_DOWN || code == 0xFF54 || code == 0x02) in_back = 1;
+        else if (code == BTRON_KEY_LEFT || code == 0xFF51 || code == 0x04) in_turn_left = 1;
+        else if (code == BTRON_KEY_RIGHT || code == 0xFF53 || code == 0x03) in_turn_right = 1;
+        else if (code == ' ' || code == BTRON_KEY_SPACE) in_jump = 1;
+        else if (code == '\r' || code == '\n' || code == 0x11 || code == 'e' || code == 'E' ||
+                 code == BTRON_KEY_RETURN || code == BTRON_KEY_KP_ENTER) in_attack = 1;
+        else if (code == 0x12) in_jump = 1; /* Alt = Jump */
         break;
     }
 
@@ -83,12 +105,14 @@ void IN_Btron_HandleEvent(WND *wnd, const EVT *evt) {
         else if (code == 's' || code == 'S') in_back = 0;
         else if (code == 'a' || code == 'A') in_left = 0;
         else if (code == 'd' || code == 'D') in_right = 0;
-        else if (code == 0xFF52 || code == 0x01) in_forward = 0;
-        else if (code == 0xFF54 || code == 0x02) in_back = 0;
-        else if (code == 0xFF51 || code == 0x04) in_turn_left = 0;
-        else if (code == 0xFF53 || code == 0x03) in_turn_right = 0;
-        else if (code == ' ') in_jump = 0;
-        else if (code == '\r' || code == '\n' || code == 0x11 || code == 'e' || code == 'E') in_attack = 0;
+        else if (code == BTRON_KEY_UP || code == 0xFF52 || code == 0x01) in_forward = 0;
+        else if (code == BTRON_KEY_DOWN || code == 0xFF54 || code == 0x02) in_back = 0;
+        else if (code == BTRON_KEY_LEFT || code == 0xFF51 || code == 0x04) in_turn_left = 0;
+        else if (code == BTRON_KEY_RIGHT || code == 0xFF53 || code == 0x03) in_turn_right = 0;
+        else if (code == ' ' || code == BTRON_KEY_SPACE) in_jump = 0;
+        else if (code == '\r' || code == '\n' || code == 0x11 || code == 'e' || code == 'E' ||
+                 code == BTRON_KEY_RETURN || code == BTRON_KEY_KP_ENTER) in_attack = 0;
+        else if (code == 0x12) in_jump = 0;
         break;
     }
 

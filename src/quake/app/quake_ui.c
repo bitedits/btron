@@ -92,23 +92,23 @@ static const char *s_map_list[] = {
 };
 
 static const char *s_map_titles[] = {
-    "1. E1M1: The Slipgate Complex",
-    "2. E1M2: Castle of the Damned",
-    "3. E1M3: The Necropolis",
-    "4. E1M4: The Grisly Grotto",
-    "5. E1M5: Gloom Keep",
-    "6. E1M6: The Door To Chthon",
-    "7. E1M7: The House of Chthon",
-    "8. START: The Slipgate Hub"
+    "1. E1M1: THE SLIPGATE COMPLEX",
+    "2. E1M2: CASTLE OF THE DAMNED",
+    "3. E1M3: THE NECROPOLIS",
+    "4. E1M4: THE GRISLY GROTTO",
+    "5. E1M5: GLOOM KEEP",
+    "6. E1M6: THE DOOR TO CHTHON",
+    "7. E1M7: THE HOUSE OF CHTHON",
+    "8. START: THE SLIPGATE HUB"
 };
 #define NUM_MAPS 8
 
 static const char *s_demo_titles[] = {
-    "1. Demo 1: The Necropolis (E1M3)",
-    "2. Demo 2: The Grisly Grotto (E1M4)",
-    "3. Demo 3: The Door To Chthon (E1M6)",
-    "4. Cinematic Camera Flythrough (E1M1)",
-    "5. Return to Main Menu"
+    "1. DEMO 1: THE NECROPOLIS (E1M3)",
+    "2. DEMO 2: THE GRISLY GROTTO (E1M4)",
+    "3. DEMO 3: THE DOOR TO CHTHON (E1M6)",
+    "4. CINEMATIC CAMERA FLYTHROUGH (E1M1)",
+    "5. RETURN TO MAIN MENU"
 };
 #define NUM_DEMOS 5
 
@@ -534,7 +534,7 @@ int UI_HandleKey(UW key) {
             }
             return 1;
         }
-        if (key == 0xFF52 /* Up arrow - history */) {
+        if (key == 0xFF52 || key == BTRON_KEY_UP /* Up arrow - history */) {
             if (s_con_history_pos > 0) {
                 s_con_history_pos--;
                 strncpy(s_con_input, s_con_history[s_con_history_pos], 127);
@@ -542,7 +542,7 @@ int UI_HandleKey(UW key) {
             }
             return 1;
         }
-        if (key == 0xFF54 /* Down arrow */) {
+        if (key == 0xFF54 || key == BTRON_KEY_DOWN /* Down arrow */) {
             if (s_con_history_pos < s_con_history_count - 1) {
                 s_con_history_pos++;
                 strncpy(s_con_input, s_con_history[s_con_history_pos], 127);
@@ -566,17 +566,17 @@ int UI_HandleKey(UW key) {
     /* Menu Active Input */
     if (g_menu_active) {
         if (s_menu_page == MENU_MAIN) {
-            if (key == 0xFF52 || key == 'w' || key == 'W') { /* Up */
+            if (key == 0xFF52 || key == BTRON_KEY_UP || key == 'w' || key == 'W') { /* Up */
                 s_menu_cursor = (s_menu_cursor + 7) % 8;
                 return 1;
             }
-            if (key == 0xFF54 || key == 's' || key == 'S') { /* Down */
+            if (key == 0xFF54 || key == BTRON_KEY_DOWN || key == 's' || key == 'S') { /* Down */
                 s_menu_cursor = (s_menu_cursor + 1) % 8;
                 return 1;
             }
             if (key >= '1' && key <= '8') { s_menu_cursor = key - '1'; key = '\r'; }
 
-            if (key == '\r' || key == '\n' || key == ' ') {
+            if (key == '\r' || key == '\n' || key == ' ' || key == BTRON_KEY_RETURN || key == BTRON_KEY_KP_ENTER) {
                 switch (s_menu_cursor) {
                 case 0: /* New Game: E1M1 */
                     g_replay_active = 0;
@@ -612,11 +612,11 @@ int UI_HandleKey(UW key) {
                 return 1;
             }
         } else if (s_menu_page == MENU_MAPS) {
-            if (key == 0xFF52 || key == 'w' || key == 'W') {
+            if (key == 0xFF52 || key == BTRON_KEY_UP || key == 'w' || key == 'W') {
                 s_menu_cursor = (s_menu_cursor + NUM_MAPS) % (NUM_MAPS + 1);
                 return 1;
             }
-            if (key == 0xFF54 || key == 's' || key == 'S') {
+            if (key == 0xFF54 || key == BTRON_KEY_DOWN || key == 's' || key == 'S') {
                 s_menu_cursor = (s_menu_cursor + 1) % (NUM_MAPS + 1);
                 return 1;
             }
@@ -624,7 +624,7 @@ int UI_HandleKey(UW key) {
                 s_menu_cursor = key - '1';
                 key = '\r';
             }
-            if (key == '\r' || key == '\n' || key == ' ') {
+            if (key == '\r' || key == '\n' || key == ' ' || key == BTRON_KEY_RETURN || key == BTRON_KEY_KP_ENTER) {
                 if (s_menu_cursor < NUM_MAPS) {
                     g_replay_active = 0;
                     World_ChangeMap(s_map_list[s_menu_cursor]);
@@ -635,11 +635,11 @@ int UI_HandleKey(UW key) {
                 return 1;
             }
         } else if (s_menu_page == MENU_DEMOS) {
-            if (key == 0xFF52 || key == 'w' || key == 'W') {
+            if (key == 0xFF52 || key == BTRON_KEY_UP || key == 'w' || key == 'W') {
                 s_menu_cursor = (s_menu_cursor + NUM_DEMOS - 1) % NUM_DEMOS;
                 return 1;
             }
-            if (key == 0xFF54 || key == 's' || key == 'S') {
+            if (key == 0xFF54 || key == BTRON_KEY_DOWN || key == 's' || key == 'S') {
                 s_menu_cursor = (s_menu_cursor + 1) % NUM_DEMOS;
                 return 1;
             }
@@ -647,7 +647,7 @@ int UI_HandleKey(UW key) {
                 s_menu_cursor = key - '1';
                 key = '\r';
             }
-            if (key == '\r' || key == '\n' || key == ' ') {
+            if (key == '\r' || key == '\n' || key == ' ' || key == BTRON_KEY_RETURN || key == BTRON_KEY_KP_ENTER) {
                 if (s_menu_cursor < 4) {
                     Replay_StartDemo(s_menu_cursor + 1);
                 } else {
@@ -657,7 +657,8 @@ int UI_HandleKey(UW key) {
                 return 1;
             }
         } else if (s_menu_page == MENU_CONTROLS) {
-            if (key == '\r' || key == '\n' || key == ' ' || key == 0x1B) {
+            if (key == '\r' || key == '\n' || key == ' ' || key == 0x1B || key == 27 ||
+                key == BTRON_KEY_RETURN || key == BTRON_KEY_ESCAPE) {
                 s_menu_page = MENU_MAIN;
                 s_menu_cursor = 3;
                 return 1;
@@ -798,14 +799,14 @@ void UI_Draw(int width, int height) {
             Draw_Fill(cx, cy + 18, 240, 2, 0x8C2020);
 
             const char *items[] = {
-                "1. New Game (E1M1)",
-                "2. Select Mission Level",
-                "3. Play Replay / Demo",
-                "4. Controls & Cheats",
-                "5. Developer Console",
-                "6. Restart Current Map",
-                "7. Resume Game",
-                "8. Quit to Desktop"
+                "1. NEW GAME (E1M1)",
+                "2. SELECT MISSION LEVEL",
+                "3. PLAY REPLAY / DEMO",
+                "4. CONTROLS & COMMANDS",
+                "5. DEVELOPER CONSOLE",
+                "6. RESTART CURRENT MAP",
+                "7. RESUME GAME",
+                "8. QUIT TO DESKTOP"
             };
 
             for (int i = 0; i < 8; i++) {
@@ -820,7 +821,7 @@ void UI_Draw(int width, int height) {
                 }
             }
 
-            Draw_String(cx - 10, cy + 205, "[UP/DOWN] Select  [ENTER] Confirm");
+            Draw_String(cx - 10, cy + 205, "[UP/DOWN/W/S] SELECT  [ENTER] CONFIRM");
         } else if (s_menu_page == MENU_MAPS) {
             int cx = width / 2 - 140;
             int cy = height / 2 - 110;
@@ -841,9 +842,9 @@ void UI_Draw(int width, int height) {
             int back_y = cy + 32 + NUM_MAPS * 18 + 8;
             if (s_menu_cursor == NUM_MAPS) {
                 Draw_Fill(cx - 12, back_y - 2, 304, 15, 0x3A2814);
-                Draw_String(cx, back_y, "9. Return to Main Menu");
+                Draw_String(cx, back_y, "9. RETURN TO MAIN MENU");
             } else {
-                Draw_String(cx, back_y, "9. Return to Main Menu");
+                Draw_String(cx, back_y, "9. RETURN TO MAIN MENU");
             }
         } else if (s_menu_page == MENU_DEMOS) {
             int cx = width / 2 - 140;
@@ -863,21 +864,23 @@ void UI_Draw(int width, int height) {
             }
         } else if (s_menu_page == MENU_CONTROLS) {
             int cx = width / 2 - 160;
-            int cy = height / 2 - 110;
+            int cy = height / 2 - 115;
 
             Draw_String(cx + 60, cy, "CONTROLS & COMMANDS");
             Draw_Fill(cx, cy + 18, 320, 2, 0x8C2020);
 
-            Draw_String(cx, cy + 36, "WASD / Arrows  : Move forward/strafe/turn");
-            Draw_String(cx, cy + 54, "Mouse Drag     : 360-degree mouselook");
-            Draw_String(cx, cy + 72, "Left Click / E : Fire Shotgun / Interact");
-            Draw_String(cx, cy + 90, "Spacebar       : Jump over obstacles");
-            Draw_String(cx, cy + 108,"~ or Tab       : Toggle Developer Console");
-            Draw_String(cx, cy + 126,"ESC            : Open / Close this Menu");
+            Draw_String(cx, cy + 34, "W / S          : MOVE FORWARD / BACK");
+            Draw_String(cx, cy + 50, "A / D          : STRAFE LEFT / RIGHT");
+            Draw_String(cx, cy + 66, "MOUSE MOVE     : 360-DEGREE MOUSELOOK");
+            Draw_String(cx, cy + 82, "LEFT CLICK / E : FIRE WEAPON (SHOTGUN)");
+            Draw_String(cx, cy + 98, "SPACE / R-CLICK: JUMP OVER OBSTACLES");
+            Draw_String(cx, cy + 114,"ARROWS         : MOVE & TURN (CLASSICAL)");
+            Draw_String(cx, cy + 130,"~ OR TAB       : DEVELOPER CONSOLE");
+            Draw_String(cx, cy + 146,"ESC            : OPEN / CLOSE THIS MENU");
 
-            Draw_Fill(cx, cy + 150, 320, 1, 0x444455);
-            Draw_String(cx, cy + 160, "Console Cheats: god, noclip, give all");
-            Draw_String(cx + 60, cy + 195, "[PRESS ENTER OR ESC TO RETURN]");
+            Draw_Fill(cx, cy + 168, 320, 1, 0x444455);
+            Draw_String(cx, cy + 176, "CONSOLE CHEATS : GOD, NOCLIP, GIVE ALL");
+            Draw_String(cx + 40, cy + 205, "[PRESS ENTER OR ESC TO RETURN]");
         }
     }
 }

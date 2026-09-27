@@ -281,6 +281,11 @@ void SV_ServerFrame(float dt) {
                 float inv = 1.0f / len;
                 EF(player, F_VELOCITY_X) = mx * inv * wishspeed;
                 EF(player, F_VELOCITY_Y) = my * inv * wishspeed;
+            } else {
+                EF(player, F_VELOCITY_X) *= 0.6f;
+                EF(player, F_VELOCITY_Y) *= 0.6f;
+                if (fabsf(EF(player, F_VELOCITY_X)) < 1.0f) EF(player, F_VELOCITY_X) = 0.0f;
+                if (fabsf(EF(player, F_VELOCITY_Y)) < 1.0f) EF(player, F_VELOCITY_Y) = 0.0f;
             }
 
             if (in_jump) {

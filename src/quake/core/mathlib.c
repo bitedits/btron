@@ -41,11 +41,11 @@ void AngleVectors(const vec3_t angles, vec3_t forward, vec3_t right, vec3_t up) 
     float angle;
     float sr, sp, sy, cr, cp, cy;
 
-    angle = angles[0] * (float)(M_PI * 2.0 / 360.0);
+    angle = angles[1] * (float)(M_PI * 2.0 / 360.0);
     sy = (float)sin(angle);
     cy = (float)cos(angle);
 
-    angle = angles[1] * (float)(M_PI * 2.0 / 360.0);
+    angle = angles[0] * (float)(M_PI * 2.0 / 360.0);
     sp = (float)sin(angle);
     cp = (float)cos(angle);
 

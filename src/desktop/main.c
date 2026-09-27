@@ -249,10 +249,10 @@ int main(int argc, char **argv) {
                         top->event_handler(top, &ev);
                     }
                 }
-            } else if (ev.type == EV_KEY_DOWN) {
-                if (global_menu_handle_key(ev.key, ev.data)) {
+            } else if (ev.type == EV_KEY_DOWN || ev.type == EV_KEY_UP) {
+                if (ev.type == EV_KEY_DOWN && global_menu_handle_key(ev.key, ev.data)) {
                     /* Handled by Global System Menu */
-                } else if (tracker_handle_key(ev.key)) {
+                } else if (ev.type == EV_KEY_DOWN && tracker_handle_key(ev.key)) {
                     /* Handled by Tracker Start menu navigation */
                 } else {
                     /* Exclusively route keystrokes to the top focused active window */

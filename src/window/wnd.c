@@ -920,7 +920,7 @@ BOOL wnd_mgr_handle_event(const EVT *ev) {
         return FALSE;
     }
 
-    if (ev->type == EV_KEY_DOWN) {
+    if (ev->type == EV_KEY_DOWN || ev->type == EV_KEY_UP) {
         WND *top = get_top_wnd();
         if (top && top->event_handler) {
             top->focused = TRUE;

@@ -40,10 +40,12 @@ refdef_t r_refdef;
 
 void Con_Printf(const char *fmt, ...) { (void)fmt; }
 void Con_DPrintf(const char *fmt, ...) { (void)fmt; }
+void Sys_Error(const char *fmt, ...) { (void)fmt; exit(1); }
 void PR_ExecuteProgram(int f) { (void)f; }
 int PR_SetString(const char *s) { (void)s; return 0; }
 const char *PR_GetString(int o) { (void)o; return ""; }
 int PR_LoadProgs(const char *n) { (void)n; return 0; }
+int NUM_FOR_EDICT(const edict_t *ed) { return (int)(ed - g_prvm.edicts); }
 void P_UpdateParticles(float dt) { (void)dt; }
 void Player_FireWeapon(void) {}
 void Player_UpdateAnimation(float dt) { (void)dt; }

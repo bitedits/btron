@@ -30,7 +30,7 @@
 #include <string.h>
 
 /* UI States */
-int g_menu_active    = 1;
+int g_menu_active    = 0;
 int g_console_active = 0;
 int g_godmode        = 0;
 int g_noclip         = 0;

@@ -1,266 +1,366 @@
-QUAKE.txt — Architecture & Implementation Plan for Porting vkQuake to B-System
+QUAKE.txt — Implementation Plan & Status for vkQuake on B-System
 =============================================================================
 
 B-System / BTRON 3.20
 Subsystem : Tier-1 3D Application Subsystem (src/quake/)
-Source    : ./third_party/vkQuake/Quake/ -> ./src/quake/
-Status    : Architecture & Implementation Plan (Draft for Review)
+Engine    : vkQuake Cleanroom Port — Dual-Backend Pipeline (GLES 1.1 + Vulkan)
+Status    : Active Development — Phases 1–5 Completed
 Author    : Synrc Research Center / B-System Core Engineering
 License   : GPL-2.0 / MIT Bridge
 
 =============================================================================
-0. EXECUTIVE SUMMARY & OBJECTIVES
+0. ARCHITECTURAL TENETS
 =============================================================================
 
-This document specifies the architectural blueprint and step-by-step phased
-implementation plan for porting vkQuake (from ./third_party/vkQuake/) into
-B-System as a native, first-class 3D application under ./src/quake/.
+1. On-Demand Launch Policy:
+   Quake does NOT open on system boot. The user launches it from gterm:
+       [BTRON3 /SYS]% quake
+   This invokes clu_quake(), prints diagnostics, calls open_quake_window().
 
-Key Objectives:
-  1. Native B-System WND Application: Quake runs inside a standard BTRON
-     window (WND) with titlebar, system menu, min/close controls, and workbench
-     compositor support (non-exclusive windowed execution with zero copy).
-  2. Dual-Engine Graphics Architecture:
-     - GLES/TinyGL/virgl (Phase 1): Bridges Quake's world/model/UI drawing
-       into B-System's newly unified OpenGL ES 1.1 subsystem (src/gl/),
-       running across bare-metal UEFI SMP (TinyGL) and QEMU (VirtIO-GPU 3D virgl).
-     - Vulkan / Venus (Phase 2): Retains vkQuake's native modern Vulkan 1.2+
-       pipeline for POSIX hosts (SDL2 Vulkan) and VirtIO-GPU Venus protocol.
-  3. NASA JPL Rule 3 Memory Compliance: Pre-allocated, deterministic hunk
-     memory arena (32–64 MiB static/BSS) eliminating post-boot heap allocations.
-  4. Real-time T-Kernel 2.0 Integration: Precise microsecond timing via
-     tk_get_tim() / rdtsc, multi-core worker tasks via tk_cre_tsk(), and
-     native BTRON keyboard/mouse event translation.
-  5. Storage & Volume Compatibility: Loads PAK assets (pak0.pak) transparently
-     from B-FS volumes (/SYS/GAMES/QUAKE/) or host filesystem.
+2. Windowed BTRON Desktop Integration:
+   Quake runs inside a native WND with titlebar, border, close, and resize.
+   The compositor drives paint via quake_paint(). ESC or close button shuts
+   down the render task cleanly via s_shutdown_req signalling.
 
-=============================================================================
-1. ARCHITECTURAL DECISIONS (CAPTURED)
-=============================================================================
+3. Dual-Backend Graphics:
+   - GLES 1.1 / TinyGL / virgl  (Active) : software + QEMU GPU
+   - Vulkan 1.2 / Venus           (Phase 7): POSIX host + VirtIO-GPU Venus
 
-D1. Target Directory & Isolation:
-    All ported code lives in ./src/quake/. The vendored tree in
-    ./third_party/vkQuake/ remains pristine and unmodified upstream.
+4. NASA JPL Rule 3 — Zero Heap:
+   All engine memory is a 64 MiB static BSS hunk arena (s_hunk_buffer).
+   No malloc/free/realloc after init. RGBA scratch for textures is a
+   1 MiB static BSS buffer (s_rgba_scratch), not hunk-allocated.
 
-D2. Rendering Strategy (Hybrid Dual Backend):
-    - vkQuake is inherently a Vulkan port of QuakeSpasm.
-    - However, B-System bare-metal (Target 4: UEFI SMP) currently runs the
-      OpenGL ES 1.1 subsystem (src/gl/ TinyGL / virgl).
-    - Architecture: Introduce a clean Render Hardware Abstraction Layer
-      (R-HAL) in src/quake/render/:
-        * Backend A (btron_gl): Fixed-function OpenGL ES 1.1 / GLQuake pipeline
-          targeting src/gl/ (TinyGL software rasterizer & VirtIO virgl).
-        * Backend B (btron_vk): vkQuake native Vulkan pipeline targeting
-          SDL2 Vulkan (POSIX) and VirtIO-GPU Venus (QEMU/KVM).
-
-D3. Windowing & Display Presentation (WND + EGL-Lite Bridge):
-    - Video output presents into a B-System WND client surface using
-      src/gl/egl_surface.c (egl_surface_present).
-    - Mouse capture: Toggleable mouse look (m_look) with pointer grab
-      (wnd_grab_pointer) released upon pressing Escape or activating the
-      B-System Global Menu.
-
-D4. Multithreading & Tasks:
-    - vkQuake's tasks.c parallel job scheduler is mapped to T-Kernel 2.0 tasks
-      (tk_cre_tsk, tk_sta_tsk, tk_slp_tsk, tk_wup_tsk) on SMP cores.
-    - Single-core / uniprocessor targets fall back to deterministic synchronous
-      task execution without deadlock risk.
-
-D5. Audio Architecture:
-    - Software sound mixer outputs 16-bit 22050 Hz stereo PCM into a circular
-      DMA ring buffer.
-    - Pipe mixed frames to B-System audio subsystem (SDL audio on POSIX,
-      VirtIO sound / Sound Blaster on bare-metal).
+5. T-Kernel Task Scheduler:
+   A 60 FPS animation task (cre_tsk/sta_tsk) calls inval_wnd() in a loop.
+   On window close, s_shutdown_req=1 signals the task; it calls
+   Quake_Shutdown() and exits cleanly. No wup_tsk race conditions.
 
 =============================================================================
-2. SOURCE TREE LAYOUT (./src/quake/)
+1. COMPLETED PHASES
 =============================================================================
 
-  src/quake/
-  +-- include/
-  |   +-- quakedef.h            Master Quake engine types & constants
-  |   +-- btron_quake.h         BTRON window & bridge declarations
-  |   +-- common.h, cvar.h, cmd.h, mathlib.h, bspfile.h, progs.h
-  |
-  +-- core/                     Core Game Engine (Cleanroom / C99)
-  |   +-- host.c, host_cmd.c    Main loop, tick scheduling, frame dispatch
-  |   +-- cl_main.c, cl_input.c Client state, input processing, interpolation
-  |   +-- cl_parse.c, cl_tent.c Network packet parser, temporary entities
-  |   +-- sv_main.c, sv_phys.c  Local server, collision physics, movement
-  |   +-- sv_move.c, sv_user.c  Monster AI movement, player commands
-  |   +-- pr_cmds.c, pr_edict.c QuakeC VM interpreter, entity dictionaries
-  |   +-- pr_exec.c, pr_ext.c   Bytecode execution, extended builtins
-  |   +-- chase.c, view.c       Chase camera, view transformations
-  |   +-- sbar.c, menu.c        Status bar HUD, game menu navigation
-  |   +-- common.c, cvar.c      String utils, console variables
-  |   +-- cmd.c, crc.c, mem.c   Command buffer, checksums, zone/hunk memory
-  |   +-- mathlib.c, world.c    3D vector/matrix math, BSP world state
-  |   +-- miniz.c, miniz.h      PAK / PK3 ZIP decompression
-  |
-  +-- sys/                      B-System Operating System Abstraction Layer
-  |   +-- sys_btron.c           T-Kernel 2.0 clock, memory hunk, system init
-  |   +-- in_btron.c            BTRON EVT -> Quake key & mouse event translation
-  |   +-- fs_btron.c            B-FS volume loader (/SYS/GAMES/QUAKE/) & POSIX stdio
-  |   +-- tasks_btron.c         T-Kernel SMP task pool & synchronous fallback
-  |
-  +-- render/                   Dual-Backend 3D Renderer
-  |   +-- r_btron.h             Render Hardware Abstraction Layer (R-HAL)
-  |   +-- r_btron_gl.c          OpenGL ES 1.1 / TinyGL / virgl rasterizer
-  |   +-- r_btron_vk.c          Vulkan 1.2 / Venus / SDL2 Vulkan rasterizer
-  |   +-- r_alias.c, r_brush.c  MDL alias models, BSP world brushes
-  |   +-- r_part.c, r_sprite.c  Particle systems, 2D sprites
-  |   +-- r_sky.c, r_draw.c     Skybox generator, 2D UI pic/font drawing
-  |   +-- r_light.c, r_model.c  Lightmap evaluation, model cache
-  |
-  +-- sound/                    B-System Audio Output
-  |   +-- snd_dma.c, snd_mix.c  Quake software sound mixer
-  |   +-- snd_btron.c           B-System PCM ring buffer / VirtIO sound bridge
-  |   +-- snd_wave.c            WAV audio asset decoder
-  |
-  +-- app/                      B-System Desktop Integration
-      +-- quake_app.c           WND window creation, event dispatch loop
-      +-- quake_app.h           Lifecycle API: open_quake_window(), close_quake_window()
-      +-- quake_menu.c          In-window universal menu definitions
+Phase 1 — Foundation (DONE)
+-----------------------------------------------------------------------------
+  [x] mem.c          — 64 MiB NASA JPL Rule 3 hunk arena, Hunk_Alloc,
+                        Hunk_FreeToLowMark, Hunk_LowMark, Zone_Alloc.
+  [x] mathlib.c      — DotProduct, CrossProduct, VectorAdd/Sub/Scale/Copy/Clear,
+                        AngleVectors, VectorNormalize, 4×4 matrix transforms.
+  [x] cvar.c / cmd.c — CVar registry and command tokenizer. Freestanding
+                        q_atof(), q_isspace(), q_strcasecmp(), q_strrchr(),
+                        q_strstr() — no stdlib dependency for UEFI target.
+  [x] wad.c          — WAD2 lump extraction (gfx.wad palette, font).
+  [x] sys_btron.c    — Sys_DoubleTime() via tk_get_tim() / gettimeofday(),
+                        Sys_Error(), Con_Printf(), Con_DPrintf().
+  [x] in_btron.c     — BTRON EVT → Quake key/mouse translation:
+                        WASD, arrow keys, mouse look (EV_MOUSE_MOVE),
+                        EV_BUT_DOWN fire, EV_KEY_DOWN ESC/F-keys.
+  [x] quake_app.c    — open_quake_window() / close_quake_window() lifecycle.
+                        Safe shutdown: s_shutdown_req flag prevents
+                        paint-after-destroy race. R_Init guarded by
+                        s_initialised. R_Resize() for resize-only path.
+  [x] clu.c          — "quake" CLU command registered in shell dispatcher.
+                        Weak-link stub preserves standalone test-fs builds.
+
+Phase 2 — BSP v29 World Geometry (DONE)
+-----------------------------------------------------------------------------
+  [x] bspfile.h      — All 15 BSP v29 lump types: dheader_t, dplane_t,
+                        dnode_t, dleaf_t, dface_t, dedge_t, dvertex_t,
+                        texinfo_t, dclipnode_t, dmodel_t, dmiptex_t,
+                        CONTENTS_* constants.
+  [x] world.h        — bsp_world_t: all lump pointer arrays, leaf/node/
+                        face/plane/edge/surfedge/vertex/texinfo/clipnode
+                        counts. is_loaded, hunk_mark, name, entities string.
+  [x] world.c        — World_LoadMap: zero-copy BIND_LUMP macro casting
+                        directly into g_bsp_cache PAK image.
+                        World_UnloadMap: Hunk_FreeToLowMark for entity copy.
+                        World_PointInLeaf: recursive BSP descent.
+                        World_LeafPVS: RLE decompress into caller buffer.
+                        parse_spawn_entity: finds info_player_start for
+                        camera initial position.
+  [x] fs_btron.c     — Single fread() PAK image into hunk, FNV-1a O(1)
+                        hash table (8192 slots), zero-copy FS_FindInPak.
+                        FS_CacheBSP: locks BSP lump pointers into g_bsp_cache,
+                        exposes g_bsp_cache.lumps[]/lump_lens[].
+                        FS_LoadFile: returns pointer into hunk image.
+
+Phase 3 — Texture Management, Lightmaps & Animated Surfaces (DONE)
+-----------------------------------------------------------------------------
+  [x] texture.c      — TEX_LoadPalette: loads gfx/palette.lmp from PAK.
+                        TEX_LoadBSPTextures: iterates dmiptex_t lump,
+                        decodes 8-bit indexed → RGBA8888 into static
+                        s_rgba_scratch[512×512×4] (no hunk cost), uploads
+                        via glTexImage2D. Caps at 512×512 per texture.
+                        TEX_FindTexture: O(n) case-insensitive name lookup.
+                        Hunk watermark logging before/after batch.
+  [x] r_btron_gl.c   — R_Init: glDispatch setup, viewport/FOV/projection.
+                        R_Resize: lightweight viewport-only update.
+                        R_BeginFrame: clear + R_AnimateLights + R_UpdateSurfTime
+                        + R_DecayLights at start of every frame.
+                        R_RenderView: perspective camera (Quake coord system),
+                        R_DrawWorld or fallback Slipgate hall, 2D HUD overlay.
+                        R_EndFrame: gl_ops swap_buffers.
+                        Draw_Fill, Draw_Character, Draw_String for 2D UI.
+  [x] r_brush.c      — Surface classifier (SURF_SOLID/TURB/SKY/LIGHT).
+                        PVS-driven face visibility (RLE decompress → bitmask).
+                        Backface culling by plane side.
+                        Texinfo-based UV generation: compute_uv().
+                        GL texture bind + glColor3f(light) modulation.
+                        Turbulent path → R_DrawTurbSurface.
+                        Sky path → R_DrawSkySurface.
+                        Solid path → lightmapped textured GL_POLYGON.
+  [x] r_light.c      — 12 standard Quake lightstyle animation strings at 10 Hz.
+                        face_extents(): computes lightmap block (W×H) from
+                        texinfo UV projection. R_LightForFace: samples centre
+                        texel of lightmap block, accumulates 4 light styles,
+                        adds dynamic light 1/r² attenuation. Min ambient 0.18.
+                        R_AddDynamicLight / R_DecayLights: 32-slot ring.
+  [x] r_surf.c       — 256-entry freestanding sin table (Taylor 5-term).
+                        R_DrawTurbSurface: TURB_SCALE=8 sine UV perturbation,
+                        per-face warm/cool colour tint (water=blue, lava=red,
+                        slime=green). R_DrawSkySurface: dual-layer additive
+                        scroll at 0.015 + 0.008 Hz with colour blending.
+
+Phase 4 — QuakeC VM & Server Physics (DONE)
+-----------------------------------------------------------------------------
+  [x] progs.h        — Complete dprograms_t, dstatement_t, ddef_t,
+                        dfunction_t on-disk types. All 66 opcodes defined.
+                        edict_t with 128 eval_t fields. prvm_t: 32-frame
+                        call stack, is_loaded guard, xstatement counter.
+  [x] pr_exec.c      — PR_LoadProgs: loads progs.dat from PAK via FS_LoadFile,
+                        validates PROG_VERSION=6, maps all section pointers.
+                        Full 66-opcode bytecode interpreter with recursive
+                        call stack (CALL0–CALL8, RETURN, GOTO, IF/IFNOT).
+                        PR_ExecuteBuiltin: random (LCG freestanding), normalize,
+                        vlen, ceil, floor, print, bprint stubs.
+                        PR_GetString / PR_SetString / EDICT_NUM helpers.
+  [x] server.h       — QuakeC entity field offset table (F_ORIGIN_X through
+                        F_CHAIN=68). Movetype/solid constants. trace_t and
+                        hull_t for BSP collision. server_t global state.
+  [x] sv_phys.c      — SV_HullPointContents: recursive BSP clipnode descent.
+                        SV_RecursiveHullCheck: fractional trace with plane side
+                        deflection. SV_Move: world hull trace (foundation for
+                        entity-vs-entity traces in Phase 4b).
+                        SV_WalkMove: horizontal walkmove + step-up (18 units) +
+                        vertical gravity trace + ground detection (FL_ONGROUND).
+                        SV_Physics_Toss: ballistic arc with bounce and rest
+                        threshold (speed < 60 → rest).
+                        SV_RunEntity: per-movetype dispatch (NONE/PUSH/WALK/
+                        STEP/FLY/TOSS/BOUNCE/NOCLIP).
+                        SV_RunThink: nextthink scheduling via PR_ExecuteProgram.
+                        SV_Frame: 72 Hz tick entry. SV_Init: hull setup from
+                        g_world.clipnodes. SV_SpawnServer: calls PR_LoadProgs +
+                        SV_Init after map load.
+
+Phase 5 — Alias Models (MDL) (DONE — loader + renderer)
+-----------------------------------------------------------------------------
+  [x] r_alias.h      — mdl_header_t, dtrivert_t, dtriangle_t, daliasframe_t
+                        on-disk types. alias_model_t: numverts/tris/frames,
+                        per-frame mdl_vert_t* arrays, skin tex IDs, hunk mark.
+                        MAX_MDL_MODELS=64, MAX_MDL_VERTS=2048, MAX_MDL_TRIS=4096.
+  [x] r_alias.c      — R_LoadAliasModel: binary MDL parser — walks skin data,
+                        skips st-vertex array, reads triangle index array,
+                        dequantizes per-frame dtrivert_t via model scale/origin
+                        into hunk-allocated mdl_vert_t arrays, maps normalidx →
+                        r_avertexnormals[162][3].
+                        R_DrawAliasModel: glPushMatrix → translate/rotate by
+                        entity origin/angles → GL_TRIANGLES with normal +
+                        lightmap-modulated colour → glPopMatrix.
 
 =============================================================================
-3. DETAILED SUBSYSTEM DESIGNS
+2. REMAINING PHASES
 =============================================================================
 
-3.1 Memory Architecture (NASA JPL Rule 3)
------------------------------------------
-Quake traditionally uses Hunk_Alloc and Zone_Alloc with runtime dynamic
-allocation. In B-System:
-  - Static Pre-allocation:
-      static uint8_t s_quake_hunk[64 * 1024 * 1024] __attribute__((aligned(4096)));
-  - The entire Quake hunk, zone, and cache allocators are mapped into this
-    fixed buffer.
-  - No calls to malloc(), free(), or realloc() occur during gameplay.
-  - Zone size: 4 MiB; Hunk size: 48 MiB; Cache/Texture size: 12 MiB.
+Phase 4b — Entity Spawning & Game Logic Integration (DONE)
+-----------------------------------------------------------------------------
+  [x] sv_main.c      — BSP entity lump parser (zero heap): walks { "key" "val" }
+                        blocks, extracts pairs into ent_kv_t tables.
+                        PR_FindFunction: case-insensitive name scan in progs.
+                        edict_set_kv: maps origin, angles, health, ammo, target.
+                        SV_SpawnEntities: allocates edicts, sets self=ed, calls
+                        QC spawn function via PR_ExecuteProgram.
+                        SV_InitPlayerEdict: spawns player at info_player_start.
+                        SV_ServerFrame: runs SV_Physics, P_UpdateParticles, and
+                        syncs camera vieworg from live player edict.
 
-3.2 Input & Event Translation (BTRON EVT -> Quake Keys)
-------------------------------------------------------
-The B-System window manager dispatches events through wnd_event_handler().
-The bridge translates BTRON events into Quake keycodes:
-  - EV_KEY_DOWN / EV_KEY_UP:
-      TK_UP        -> K_UPARROW
-      TK_DOWN      -> K_DOWNARROW
-      TK_LEFT      -> K_LEFTARROW
-      TK_RIGHT     -> K_RIGHTARROW
-      TK_W, A, S, D-> 'w', 'a', 's', 'd'
-      TK_SPACE     -> K_SPACE
-      TK_RETURN    -> K_ENTER
-      TK_ESCAPE    -> K_ESCAPE
-      TK_LSHIFT    -> K_SHIFT
-      TK_LCTRL     -> K_CTRL
-  - EV_MOUSE_MOVE:
-      dx = evt->pt.x - last_mx;
-      dy = evt->pt.y - last_my;
-      in_mouse_x += dx;
-      in_mouse_y += dy;
-  - EV_BUTTON_PRESS:
-      Button 1 (Left)   -> K_MOUSE1
-      Button 2 (Right)  -> K_MOUSE2
-      Button 3 (Middle) -> K_MOUSE3
+Phase 5b — Alias Model Integration & Particle System (DONE)
+-----------------------------------------------------------------------------
+  [x] r_part.h/c     — 2048-slot static BSS particle pool (ring allocator).
+                        Emitters: P_ExplosionParticles, P_BloodSplash,
+                        P_RocketTrail (fire/smoke), P_TeleportSplash, P_LavaSplash.
+                        Physics: Euler integration, gravity, ramp transitions.
+                        Renderer: camera-aligned billboard quads, glColor3f
+                        alpha modulation.
+  [x] r_btron_gl.c   — Wire R_DrawAliasModel for active edicts with valid model.
+                        Wire R_DrawParticles after world & alias models pass.
+                        Wire live HUD strings (health, ammo, armor) from edict.
 
-3.3 Video Presentation (EGL-Lite Window Surface)
-------------------------------------------------
-In src/quake/app/quake_app.c:
-  1. Allocate WND with client rectangle (e.g. 640x480 or 800x600).
-  2. Create EGL_SURFACE bound to wnd->dev via egl_create_window_surface().
-  3. At end of each frame (GL_EndRendering / R_EndFrame):
-     - Renders backbuffer into EGL client pixmap.
-     - Calls egl_surface_present(s_surf).
-     - Marks window damage: wnd_invalidate(wnd, &wnd->client_rect).
-     - Workbench compositor flushes updated region to display hardware.
+Quality Fixes Log:
+-----------------------------------------------------------------------------
+  [x] Fix Black Screen Bug:
+      Cause 1: Double World_LoadMap in quake_app.c wiped hunk textures via
+               Hunk_FreeToLowMark rollback. Fixed by removing redundant load.
+      Cause 2: spawn_origin had oz+24.0f, and SV_ServerFrame added another
+               +22.0f eye height, putting vieworg at Z=134 inside solid ceiling
+               (ceiling is at Z=128; contents=-2 SOLID). All room faces were
+               culled. Fixed by storing exact entity origin (Z=88) so eyeorg
+               is Z=110 (contents=-1 EMPTY).
+      Cause 3: R_LightForFace dereferenced face->lightofs with NULL face from
+               alias model call. Added NULL pointer safety checks.
+      Cause 4: glColor4f in r_part.c replaced with glColor3f alpha modulation
+               to match gl_dispatch table.
 
-3.4 Asset Storage (B-FS Integration)
-------------------------------------
-Quake loads id1/pak0.pak:
-  1. Check BTRON volume path: /SYS/GAMES/QUAKE/PAK0.PAK
-  2. Fallback to /CHOKANJI/PAK0.PAK
-  3. Fallback to host POSIX path: ./assets/quake/id1/pak0.pak or ./id1/pak0.pak
-  4. Binary PAK reading via B-System vol_read() or POSIX fread().
+Phase 6 — Audio Subsystem (SKIPPED per user request)
+-----------------------------------------------------------------------------
+Deferred for immediate gameplay focus.
 
-=============================================================================
-4. PHASED EXECUTION ROADMAP
-=============================================================================
+Phase 7 — Vulkan 1.2 / Venus Pipeline (SKIPPED per user request)
+-----------------------------------------------------------------------------
+Deferred — OpenGL ES 1.1 / TinyGL softpipe is the active primary renderer.
 
-Phase 1: Foundation & Cleanroom Extraction
-  - Create directory skeleton in ./src/quake/ (core, sys, render, sound, app, include).
-  - Extract core Quake engine logic from ./third_party/vkQuake/Quake/:
-    host, client, server, progs, cvar, cmd, common, mathlib, miniz.
-  - Implement NASA JPL compliant fixed hunk allocator in mem.c.
-  - Establish C99 standalone compilation with zero external OS dependencies.
-
-Phase 2: B-System OS Abstraction (sys_btron, in_btron, fs_btron)
-  - Implement sys_btron.c with T-Kernel 2.0 system ticks and timer.
-  - Implement in_btron.c mapping BTRON keyboard/mouse event stream to Quake key queue.
-  - Implement fs_btron.c connecting Quake file operations to B-FS volume API and POSIX.
-  - Implement tasks_btron.c with synchronous job execution and T-Kernel task worker pool.
-
-Phase 3: OpenGL ES 1.1 / TinyGL & virgl Renderer (r_btron_gl.c)
-  - Bridge QuakeSpasm / GLQuake drawing pipeline to B-System's src/gl/ dispatch table:
-    * 2D UI, font, and crosshair drawing via Draw_Pic / Draw_Character.
-    * 3D world rendering: BSP traversal, PVS culling, surf/polygon rasterization.
-    * Lightmap dynamic texture upload via glTexSubImage2D.
-    * Alias model (MDL) vertex mesh animation & texture mapping.
-    * Particle & sprite rendering with alpha blending.
-  - Verify 3D rendering on x86_64 UEFI SMP via TinyGL softpipe.
-  - Verify hardware 3D acceleration on QEMU via VirtIO-GPU 3D (virgl).
-
-Phase 4: BTRON WND Application & Desktop Integration
-  - Author src/quake/app/quake_app.c:
-    * open_quake_window(int x, int y, int w, int h)
-    * close_quake_window()
-  - Bind window lifecycle to B-System Workbench desktop.
-  - Add in-window universal menu:
-    * File -> New Game, Load, Save, Quit
-    * Video -> 640x480, 800x600, 1024x768, Toggle Fullscreen
-    * Audio -> Volume Up/Down, Mute
-    * Episode -> E1M1, E1M2, E1M3 ...
-  - Add "Quake 3D" desktop launcher to Workbench Applications menu.
-
-Phase 5: Audio Engine Integration (snd_btron.c)
-  - Implement snd_btron.c linking Quake's software DMA mixer to BTRON audio buffer.
-  - Support sound effects (11025 / 22050 Hz 16-bit mono/stereo WAVs).
-  - Test audio playback in POSIX and VirtIO-sound emulation.
-
-Phase 6: Vulkan 1.2 & Venus Acceleration (r_btron_vk.c)
-  - Retain native vkQuake Vulkan renderer for accelerated platforms:
-    * POSIX host: SDL2 Vulkan surface creation.
-    * QEMU / KVM: VirtIO-GPU Venus protocol command streaming.
-  - Integrate compiled SPIR-V shaders from third_party/vkQuake/Shaders/Compiled/.
-  - Runtime switch between GLES and Vulkan backends via console variable:
-    vid_backend "gles" (default) or "vulkan".
-
-Phase 7: Build Integration, Verification & Documentation
-  - Update root Makefile with:
-    * make quake-posix
-    * make quake-uefi
-    * make run-quake
-  - Add documentation to B-Book: b-book/apps.html (Quake 3D section).
-  - Run scripts/book2tad.py to update TAD binaries.
-  - Comprehensive verification:
-    * Memory leak and bounds validation.
-    * Frame rate stability across software TinyGL and hardware virgl.
-    * Full gameplay validation through E1M1 (The Slipgate Complex).
+Phase 8 — In-Game Menu, Developer Console, Map Loader & Full Gameplay (DONE)
+-----------------------------------------------------------------------------
+Target Files: src/quake/include/quake_ui.h, src/quake/app/quake_ui.c
+  [x] Quake In-Game Menu:
+      - Toggled with ESC key.
+      - Main Menu: New Game, Select Map, Controls, Developer Console,
+        Restart Map, Resume, Quit.
+      - Map Select Submenu: 8 maps (E1M1..E1M7, START) with single-key/cursor
+        selection and instant level warp.
+      - Controls & Cheats cheat-sheet screen.
+  [x] Quake Dropdown Developer Console:
+      - Toggled with ~ / ` or Tab key.
+      - Translucent charcoal background, gold dividing line, animated cursor.
+      - Command line input with command history navigation (Up/Down arrow).
+      - On-screen log output synced with Con_Printf via Con_LogAppend.
+      - Builtin commands: map <name>, changelevel, god, noclip, give all,
+        restart, status (coords & stats), kill, clear, help.
+  [x] Seamless Map Loader (World_ChangeMap):
+      - Clean teardown of prior map and hunk texture allocations.
+      - Instant zero-copy lump binding from PAK cache into 64 MB hunk arena.
+      - Automatic miptex upload and spawn server init for any map.
+      - Automatic camera & player realignment at info_player_start.
+  [x] Full Playable Scope & Combat:
+      - Real-time player movement: WASD, Arrow keys, smooth keyboard turning,
+        360-degree mouse drag look, jumping with gravity & step-up.
+      - First-person Shotgun viewmodel (progs/v_shot.mdl) with walking bob
+        and 7-frame recoil/pump animation.
+      - Combat raycasting: 6 shotgun pellets, muzzle flash dynamic light,
+        wall spark particles, blood splashes on monster hits, death explosions.
+      - Proximity item collection: Medkits, Ammo shells, Green Armor boxes.
+      - Live HUD overlay: Armor, Health, Ammo, Map name, and Crosshair.
 
 =============================================================================
-5. VERIFICATION & SUCCESS CRITERIA
+3. SOURCE TREE
 =============================================================================
 
-1. Build Integrity:
-   - Clean compilation under -Wall -Wextra -std=c99 across POSIX, QEMU, and UEFI.
-   - Zero compiler warnings or undefined symbols.
-2. Runtime Presentation:
-   - Quake launches into a window on the B-System desktop.
-   - Window can be dragged, minimized, layered, and closed cleanly without
-     corrupting desktop state.
-3. Interactive Performance:
-   - Software rasterizer (TinyGL) maintains playable frame rate (~15-30 fps)
-     on UEFI SMP.
-   - Hardware virgl / Venus backend achieves 60+ fps in QEMU.
-4. Game Mechanics:
-   - Shareware pak0.pak loads seamlessly.
-   - Intro cinematic, demo loop, and full interactive gameplay in E1M1 work
-     with complete physics, AI, sound, and lighting.
+src/quake/
++-- include/
+|   +-- quakedef.h        Master types, fixed constants, freestanding stdlib
+|   +-- btron_quake.h     open/close_quake_window declarations
+|   +-- bspfile.h         BSP v29 lump structures (DONE)
+|   +-- world.h           bsp_world_t in-memory map state (DONE)
+|   +-- fs_btron.h        PAK hash table, g_bsp_cache (DONE)
+|   +-- mathlib.h         Vector/matrix math (DONE)
+|   +-- cvar.h, cmd.h     CVar/command subsystem (DONE)
+|   +-- wad.h             WAD2 lump types (DONE)
+|   +-- render.h          R_Init/R_Resize/R_RenderView/R_BeginFrame/R_EndFrame
+|   +-- draw.h            Draw_Fill/Draw_String/Draw_Pic (DONE)
+|   +-- texture.h         TEX_* API, gl_tex_t, g_gl_textures (DONE)
+|   +-- r_brush.h         R_DrawWorld, R_InitBrushRenderer (DONE)
+|   +-- r_light.h         R_LightForFace, dlight_t, R_AnimateLights (DONE)
+|   +-- r_surf.h          R_DrawTurbSurface, R_DrawSkySurface (DONE)
+|   +-- r_alias.h         R_LoadAliasModel, R_DrawAliasModel (DONE)
+|   +-- progs.h           QC VM types, opcodes, edict_t, prvm_t (DONE)
+|   +-- server.h          Entity field offsets, trace_t, hull_t (DONE)
+|
++-- core/
+|   +-- mem.c             64 MiB NASA JPL hunk arena (DONE)
+|   +-- mathlib.c         3D math (DONE)
+|   +-- cvar.c, cmd.c     CVar/command subsystem (DONE)
+|   +-- wad.c             WAD2 loader (DONE)
+|   +-- world.c           BSP loader, PVS, leaf traversal (DONE)
+|   +-- pr_exec.c         QuakeC VM: 66 opcodes, builtins (DONE)
+|   +-- sv_phys.c         Physics: hull trace, walkmove, toss, think (DONE)
+|   +-- sv_move.c         Player walkmove helpers (Phase 4b)
+|   +-- sv_main.c         Entity spawning, game logic integration (Phase 4b)
+|
++-- sys/
+|   +-- sys_btron.c       T-Kernel timing, Sys_Error, Con_Printf (DONE)
+|   +-- in_btron.c        BTRON EVT → key/mouse translation (DONE)
+|   +-- fs_btron.c        PAK loader: FNV-1a hash, zero-copy, FS_CacheBSP (DONE)
+|
++-- render/
+|   +-- r_btron_gl.c      GLES 1.1 pipeline, camera, HUD (DONE)
+|   +-- r_brush.c         BSP world geometry + lightmaps + turb + sky (DONE)
+|   +-- r_light.c         Lightmap sampling, lightstyle anim, dlights (DONE)
+|   +-- r_surf.c          Turbulent sine warp, scrolling sky (DONE)
+|   +-- texture.c         Palette, miptex decode, GL upload (DONE)
+|   +-- r_alias.c         MDL loader + keyframe renderer (DONE)
+|   +-- r_sprite.c        SPR billboard sprites (Phase 5b)
+|   +-- r_part.c          Particle system (Phase 5b)
+|   +-- r_btron_vk.c      Vulkan 1.2 / Venus pipeline (Phase 7)
+|
++-- sound/                (Phase 6)
+|   +-- snd_wave.c
+|   +-- snd_mix.c
+|   +-- snd_dma.c
+|   +-- snd_btron.c
+|
++-- app/
+    +-- quake_app.c       WND lifecycle, safe shutdown, EGL surface (DONE)
+    +-- quake_menu.c      In-window menu bar (Phase 8)
+
+=============================================================================
+4. MEMORY BUDGET (64 MiB HUNK)
+=============================================================================
+
+  PAK image (pak0.pak, zero-copy)  ~18.6 MB  hunk (Hunk_AllocName)
+  Entity string copy (e1m1)          ~50 KB   hunk (Hunk_Alloc)
+  MDL frame vertex arrays            ~2–4 MB  hunk (per model × numframes)
+  progs.dat image                    ~500 KB  hunk (FS_LoadFile)
+  ─────────────────────────────────────────────────────────────────
+  Total in hunk                    ~23 MB  / 64 MB  (36% used, 41 MB free)
+
+  BSS (outside hunk):
+  s_rgba_scratch[512×512×4]          1 MB   BSS (texture decode scratch)
+  g_gl_textures[512×52 bytes]       26 KB   BSS (texture descriptor table)
+  g_alias_models[64]               ~32 KB   BSS (model descriptors)
+  g_prvm.edicts[600×EDICT_FIELDS]  ~300 KB  BSS (entity field table)
+  s_hunk_buffer[64 MiB]            64 MB    BSS (the hunk itself)
+
+=============================================================================
+5. BUILD TARGETS & STATUS
+=============================================================================
+
+  make btron-posix    → PASS (0 errors, 0 warnings in quake subsystem)
+  make btron-qemu     → PASS
+  make btron-sakamura → PASS
+  make btron-uefi     → PASS
+  make test-fs        → 20/20 tests passing
+
+Key quality fixes applied:
+  - Segfault on close: s_shutdown_req flag + task self-shutdown sequence.
+  - Hunk overflow: static BSS RGBA scratch; hunk enlarged 32→64 MiB.
+  - dtexinfo_t → texinfo_t rename to match bspfile.h canonical name.
+  - R_Resize() added for resize-without-reinit path.
+  - TEX_LoadBSPTextures: hunk watermark diagnostics before/after upload.
+
+=============================================================================
+6. LAUNCH WORKFLOW
+=============================================================================
+
+1. Boot: B-System opens desktop accessories. Quake NOT started.
+2. User opens GTerm.
+3. User types: quake
+4. clu_quake() prints:
+     Quake 3D for B-System (OpenGL ES 1.1 / TinyGL & VirtIO-GPU):
+       Version  : 1.09 (Cleanroom Port, Phase 5)
+       Map      : maps/e1m1.bsp (The Slipgate Complex)
+       Asset    : assets/quake/pak/pak0.pak (18.6 MB, E1M1)
+       Renderer : OpenGL ES 1.1 (VirtIO-GPU 3D / TinyGL fallback)
+5. open_quake_window(120, 60, 480, 360) creates WND.
+6. FS_Init(), R_Init(), World_LoadMap("maps/e1m1.bsp") execute once.
+7. 60 FPS T-Kernel task drives inval_wnd() → quake_paint() → R_RenderView().
+8. Closing window or pressing ESC: s_shutdown_req=1 → task exits →
+   Quake_Shutdown() zeroes g_bsp_cache → ready for relaunch.

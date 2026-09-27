@@ -58,6 +58,16 @@ typedef struct {
     void   (*gl_end_list)     (void);
     void   (*gl_call_list)    (GLuint list);
 
+    /* Textures */
+    void   (*gl_tex_coord2f)  (GLfloat s, GLfloat t);
+    void   (*gl_tex_coord2fv) (const GLfloat *v);
+    void   (*gl_gen_textures) (GLsizei n, GLuint *textures);
+    void   (*gl_bind_texture) (GLenum target, GLuint texture);
+    void   (*gl_tex_image_2d) (GLenum target, GLint level, GLint components,
+                               GLsizei width, GLsizei height, GLint border,
+                               GLenum format, GLenum type, const void *pixels);
+    void   (*gl_tex_parameteri)(GLenum target, GLenum pname, GLint param);
+
     /* Present */
     void   (*swap_buffers)    (void);
 } gl_ops_t;
@@ -97,6 +107,12 @@ void gl_shutdown (void);
 #define glNewList(l,m)          g_gl->gl_new_list(l,m)
 #define glEndList()             g_gl->gl_end_list()
 #define glCallList(l)           g_gl->gl_call_list(l)
+#define glTexCoord2f(s,t)       g_gl->gl_tex_coord2f(s,t)
+#define glTexCoord2fv(v)        g_gl->gl_tex_coord2fv(v)
+#define glGenTextures(n,t)      g_gl->gl_gen_textures(n,t)
+#define glBindTexture(tg,tx)    g_gl->gl_bind_texture(tg,tx)
+#define glTexImage2D(tg,l,c,w,h,b,f,tp,px) g_gl->gl_tex_image_2d(tg,l,c,w,h,b,f,tp,px)
+#define glTexParameteri(tg,pn,pv) g_gl->gl_tex_parameteri(tg,pn,pv)
 #endif /* BTRON_GL_NO_MACRO_SHIMS */
 
 #endif /* BTRON_GL_DISPATCH_H */

@@ -202,11 +202,35 @@ COMMON_SRCS = src/graphics/dp_core.c   \
               src/fs/file.c            \
               src/apps/clu.c
 
+QUAKE_SRCS = \
+    src/quake/core/mathlib.c \
+    src/quake/core/mem.c \
+    src/quake/core/cvar.c \
+    src/quake/core/cmd.c \
+    src/quake/core/wad.c \
+    src/quake/core/world.c \
+    src/quake/core/pr_exec.c \
+    src/quake/core/sv_phys.c \
+    src/quake/core/sv_main.c \
+    src/quake/sys/sys_btron.c \
+    src/quake/sys/in_btron.c \
+    src/quake/sys/fs_btron.c \
+    src/quake/render/r_btron_gl.c \
+    src/quake/render/r_brush.c \
+    src/quake/render/r_light.c \
+    src/quake/render/r_surf.c \
+    src/quake/render/r_alias.c \
+    src/quake/render/r_part.c \
+    src/quake/render/texture.c \
+    src/quake/app/quake_ui.c \
+    src/quake/app/quake_app.c
+
 VIRGL_SRCS = \
     src/gl/gl_dispatch.c \
     src/gl/egl_surface.c \
     src/gl/backend_virgl.c \
-    src/apps/glgears.c
+    src/apps/glgears.c \
+    $(QUAKE_SRCS)
 
 # ── POSIX build (Target 0) ────────────────────────────────────────
 POSIX_STARTUP = src/cores/core_posix.c
@@ -256,7 +280,8 @@ GL_SRCS = \
     src/gl/egl_surface.c \
     src/gl/backend_tinygl.c \
     src/gl/backend_virgl.c \
-    src/apps/glgears.c
+    src/apps/glgears.c \
+    $(QUAKE_SRCS)
 
 # ── X86_64 / EMT64 UEFI build (Target 4) ────────────────────────
 UEFI_STARTUP = src/cores/core_boot.c src/cores/core_smp.c

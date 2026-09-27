@@ -54,6 +54,7 @@
 #include <btron/file.h>
 #include <btron/tad.h>
 #include <btron/dp.h>   /* COLOR_* constants */
+#include <btron/wnd.h>
 
 static char *fs_strrchr(const char *s, int c) {
     if (!s) return NULL;
@@ -1881,4 +1882,34 @@ void clu_sync_cmd(const char *args, ShellOutputFn out, void *ud)
     if (!g_sys_vol) { out("sync: no volume mounted", COLOR_YELLOW, ud); return; }
     vol_sync(g_sys_vol);
     out("(all caches flushed)", COLOR_GREEN, ud);
+}
+
+__attribute__((weak)) WND *open_quake_window(int x, int y, int width, int height)
+{
+    (void)x; (void)y; (void)width; (void)height;
+    return NULL;
+}
+
+/* ── clu_quake ───────────────────────────────────────────────────── */
+void clu_quake(const char *args, ShellOutputFn out, void *ud)
+{
+    (void)args;
+    out("Quake 3D for B-System (OpenGL ES 1.1 / TinyGL & VirtIO-GPU):", COLOR_CYAN, ud);
+    out("  Renderer : Dual-Backend (TinyGL Software & VirtIO 3D)", COLOR_LTGRAY, ud);
+    out("  Asset    : assets/quake/pak/pak0.pak (18.6 MB, E1M1 Slipgate Complex)", COLOR_LTGRAY, ud);
+    out("  Window   : 480x360 WND client surface (~60 FPS)", COLOR_LTGRAY, ud);
+    out("  Controls : WASD/Arrows = Move, Mouse Drag = Look, Space = Jump", COLOR_YELLOW, ud);
+
+    WND *w = NULL;
+    if (open_quake_window) {
+        w = open_quake_window(120, 60, 480, 360);
+    }
+
+    if (w) {
+        out("Quake 3D window launched on Workbench desktop.", COLOR_GREEN, ud);
+    } else if (open_quake_window) {
+        out("quake: failed to open window surface", COLOR_RED, ud);
+    } else {
+        out("quake: GUI subsystem not linked in headless/test build", COLOR_YELLOW, ud);
+    }
 }

@@ -70,6 +70,14 @@ static GLuint tgl_gen_lists   (GLsizei range);
 static void   tgl_new_list    (GLuint list, GLenum mode);
 static void   tgl_end_list    (void);
 static void   tgl_call_list   (GLuint list);
+static void   tgl_tex_coord2f (GLfloat s, GLfloat t);
+static void   tgl_tex_coord2fv(const GLfloat *v);
+static void   tgl_gen_textures(GLsizei n, GLuint *textures);
+static void   tgl_bind_texture(GLenum target, GLuint texture);
+static void   tgl_tex_image_2d(GLenum target, GLint level, GLint components,
+                               GLsizei width, GLsizei height, GLint border,
+                               GLenum format, GLenum type, const void *pixels);
+static void   tgl_tex_parameteri(GLenum target, GLenum pname, GLint param);
 static void   tgl_swap_buffers(void);
 
 /* ── Dispatch table ──────────────────────────────────────────────── */
@@ -99,6 +107,12 @@ gl_ops_t g_tinygl_ops = {
     .gl_new_list     = tgl_new_list,
     .gl_end_list     = tgl_end_list,
     .gl_call_list    = tgl_call_list,
+    .gl_tex_coord2f  = tgl_tex_coord2f,
+    .gl_tex_coord2fv = tgl_tex_coord2fv,
+    .gl_gen_textures = tgl_gen_textures,
+    .gl_bind_texture = tgl_bind_texture,
+    .gl_tex_image_2d = tgl_tex_image_2d,
+    .gl_tex_parameteri= tgl_tex_parameteri,
     .swap_buffers    = tgl_swap_buffers,
 };
 
@@ -170,6 +184,18 @@ static GLuint tgl_gen_lists(GLsizei range)                { return (GLuint)glGen
 static void tgl_new_list(GLuint list, GLenum mode)        { glNewList((GLint)list, (GLint)mode); }
 static void tgl_end_list(void)                            { glEndList(); }
 static void tgl_call_list(GLuint list)                    { glCallList((GLint)list); }
+static void tgl_tex_coord2f(GLfloat s, GLfloat t)         { glTexCoord2f(s, t); }
+static void tgl_tex_coord2fv(const GLfloat *v)            { glTexCoord2fv((GLfloat *)v); }
+static void tgl_gen_textures(GLsizei n, GLuint *textures) { glGenTextures(n, (GLuint *)textures); }
+static void tgl_bind_texture(GLenum target, GLuint texture) { glBindTexture((GLint)target, (GLint)texture); }
+static void tgl_tex_image_2d(GLenum target, GLint level, GLint components,
+                             GLsizei width, GLsizei height, GLint border,
+                             GLenum format, GLenum type, const void *pixels) {
+    glTexImage2D((GLint)target, level, components, width, height, border, (GLint)format, (GLint)type, (void *)pixels);
+}
+static void tgl_tex_parameteri(GLenum target, GLenum pname, GLint param) {
+    glTexParameteri((GLint)target, (GLint)pname, param);
+}
 
 /*
  * swap_buffers: TinyGL rendered directly into s_pixel_buf (ZB_MODE_RGBA).

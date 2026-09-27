@@ -54,8 +54,11 @@ void clu_touch  (const char *args, ShellOutputFn out, void *ud);
 void clu_chtime (const char *args, ShellOutputFn out, void *ud);
 
 /* ── Volume / system ────────────────────────────────────────────── */
-void clu_df      (const char *args, ShellOutputFn out, void *ud);
-void clu_sync_cmd(const char *args, ShellOutputFn out, void *ud);
+void clu_df       (const char *args, ShellOutputFn out, void *ud);
+void clu_sync_cmd (const char *args, ShellOutputFn out, void *ud);
+
+/* ── 3D Gaming & Applications ───────────────────────────────────── */
+void clu_quake    (const char *args, ShellOutputFn out, void *ud);
 
 #ifdef __cplusplus
 }

@@ -16,8 +16,9 @@
 extern gl_ops_t g_virgl_ops;
 
 /* Lifecycle functions called by gl_init() / gl_resize() / gl_shutdown() */
-void virgl_backend_init    (int w, int h, void *pixel_buf);
-void virgl_backend_resize  (int w, int h, void *pixel_buf);
-void virgl_backend_shutdown(void);
+void virgl_backend_init        (int w, int h, void *pixel_buf);
+void virgl_backend_resize      (int w, int h, void *pixel_buf);
+void virgl_backend_make_current(int w, int h, void *pixel_buf);
+void virgl_backend_shutdown    (void);
 
 #endif /* BTRON_GL_BACKEND_VIRGL_H */

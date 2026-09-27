@@ -22,6 +22,7 @@ typedef struct {
 
 /* Bind or create GL surface for window */
 EGL_SURFACE* egl_create_window_surface(WND *wnd);
+void         egl_make_current(EGL_SURFACE *surf);
 void         egl_surface_resize(EGL_SURFACE *surf, int width, int height);
 void         egl_swap_buffers(EGL_SURFACE *surf);
 void         egl_destroy_surface(EGL_SURFACE *surf);

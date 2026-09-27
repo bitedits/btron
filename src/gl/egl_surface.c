@@ -31,6 +31,18 @@ EGL_SURFACE* egl_create_window_surface(WND *wnd) {
     return surf;
 }
 
+#if !defined(BTRON_UEFI_TARGET)
+#include "backend_virgl.h"
+#endif
+
+void egl_make_current(EGL_SURFACE *surf) {
+    if (!surf || !surf->wnd || !surf->wnd->dev) return;
+    surf->pixels = surf->wnd->dev->pixels;
+#if !defined(BTRON_UEFI_TARGET)
+    virgl_backend_make_current(surf->width, surf->height, surf->pixels);
+#endif
+}
+
 void egl_surface_resize(EGL_SURFACE *surf, int width, int height) {
     if (!surf || !surf->wnd || !surf->wnd->dev) return;
     surf->width = width;

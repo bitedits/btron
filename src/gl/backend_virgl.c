@@ -324,9 +324,12 @@ static void rasterize_tri(const virgl_tri_t *tri, const mat4_t *mv, const mat4_t
                             &cx[i], &cy[i], &cz[i], &cw[i]);
     }
 
-    /* Near-plane clipping check */
-    if (cw[0] <= 0.01f || cw[1] <= 0.01f || cw[2] <= 0.01f) {
+    /* Near-plane clipping check: only drop if all vertices behind near plane */
+    if (cw[0] <= 0.001f && cw[1] <= 0.001f && cw[2] <= 0.001f) {
         return;
+    }
+    for (int i = 0; i < 3; i++) {
+        if (cw[i] < 0.01f) cw[i] = 0.01f;
     }
 
     /* 2. Viewport / Screen projection */
@@ -342,9 +345,9 @@ static void rasterize_tri(const virgl_tri_t *tri, const mat4_t *mv, const mat4_t
         sz[i] = (ndc_z + 1.0f) * 0.5f;
     }
 
-    /* Backface culling check: in screen space (Y down), front-facing (CCW) triangles have area < 0 */
+    /* Backface culling check: only active in 3D mode when depth test is enabled */
     float area = (sx[1] - sx[0]) * (sy[2] - sy[0]) - (sx[2] - sx[0]) * (sy[1] - sy[0]);
-    if (s_cull_face_enabled && area >= 0.0f) {
+    if (s_cull_face_enabled && s_depth_test_enabled && area >= 0.0f) {
         return;
     }
 
@@ -440,6 +443,10 @@ static void virgl_end(void) {
             } else {
                 emit_tri(&s_vert_buf[i], &s_vert_buf[i + 1], &s_vert_buf[i + 2]);
             }
+        }
+    } else if (s_prim_mode == GL_POLYGON || s_prim_mode == GL_TRIANGLE_FAN) {
+        for (int i = 1; i + 1 < s_vert_count; i++) {
+            emit_tri(&s_vert_buf[0], &s_vert_buf[i], &s_vert_buf[i + 1]);
         }
     }
 
@@ -642,6 +649,34 @@ static void virgl_swap_buffers(void) {
 #endif
 }
 
+/* ── Texture Stubs (Phase 3 placeholder — colour-only rasteriser) ─── */
+static float s_cur_s = 0.0f, s_cur_t_uv = 0.0f;
+static GLuint s_next_tex_id = 1;
+
+static void virgl_tex_coord2f(GLfloat s, GLfloat t) {
+    s_cur_s = s; s_cur_t_uv = t;
+}
+static void virgl_tex_coord2fv(const GLfloat *v) {
+    if (v) { s_cur_s = v[0]; s_cur_t_uv = v[1]; }
+}
+static void virgl_gen_textures(GLsizei n, GLuint *textures) {
+    for (GLsizei i = 0; i < n; i++) {
+        textures[i] = s_next_tex_id++;
+    }
+}
+static void virgl_bind_texture(GLenum target, GLuint texture) {
+    (void)target; (void)texture;
+}
+static void virgl_tex_image_2d(GLenum target, GLint level, GLint components,
+                               GLsizei width, GLsizei height, GLint border,
+                               GLenum format, GLenum type, const void *pixels) {
+    (void)target; (void)level; (void)components; (void)width; (void)height;
+    (void)border; (void)format; (void)type; (void)pixels;
+}
+static void virgl_tex_parameteri(GLenum target, GLenum pname, GLint param) {
+    (void)target; (void)pname; (void)param;
+}
+
 /* ── Dispatch Table Instance ──────────────────────────────────────── */
 
 gl_ops_t g_virgl_ops = {
@@ -670,6 +705,12 @@ gl_ops_t g_virgl_ops = {
     .gl_new_list      = virgl_new_list,
     .gl_end_list      = virgl_end_list,
     .gl_call_list     = virgl_call_list,
+    .gl_tex_coord2f   = virgl_tex_coord2f,
+    .gl_tex_coord2fv  = virgl_tex_coord2fv,
+    .gl_gen_textures  = virgl_gen_textures,
+    .gl_bind_texture  = virgl_bind_texture,
+    .gl_tex_image_2d  = virgl_tex_image_2d,
+    .gl_tex_parameteri= virgl_tex_parameteri,
     .swap_buffers     = virgl_swap_buffers,
 };
 
@@ -695,6 +736,10 @@ void virgl_backend_init(int w, int h, void *pixel_buf) {
         for (int i = 0; i < w * h; i++) s_depth_buf[i] = 1.0e10f;
     }
 
+    s_cull_face_enabled  = 0;
+    s_lighting_enabled   = 0;
+    s_depth_test_enabled = 0;
+
     uart_puts_raw("[GL] VirtIO-GPU OpenGL (virgl) backend init: ");
     virgl_uart_dec(w);
     uart_puts_raw("x");
@@ -702,6 +747,16 @@ void virgl_backend_init(int w, int h, void *pixel_buf) {
     uart_puts_raw("\n");
     uart_puts_raw("[GL] VirtIO-GPU 3D context created (ctx_id=1, res_id=2)\n");
     uart_puts_raw("[GL] VirtIO-GPU 3D hardware rasterizer active\n");
+}
+
+void virgl_backend_make_current(int w, int h, void *pixel_buf) {
+    if (s_width != w || s_height != h || !s_depth_buf) {
+        virgl_backend_resize(w, h, pixel_buf);
+    } else {
+        s_pixel_buf = (uint32_t *)pixel_buf;
+        s_vp_w = w;
+        s_vp_h = h;
+    }
 }
 
 void virgl_backend_resize(int w, int h, void *pixel_buf) {

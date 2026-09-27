@@ -352,6 +352,10 @@ void shell_execute_cmd(const char *cmd_line, ShellOutputFn out_fn, void *user_da
         if (st_cd) snprintf(st_cd->prompt, sizeof(st_cd->prompt) - 1, "[%s]%% ", g_cwd_path);
         return;
     }
+    if (strcmp(cmd, "quake") == 0) {
+        clu_quake(arg, out_fn, user_data);
+        return;
+    }
     /* ── END CLU Builtins ────────────────────────────────────────────────── */
 
     if (strcmp(cmd, "help") == 0 || strcmp(cmd, "?") == 0) {
@@ -383,6 +387,7 @@ void shell_execute_cmd(const char *cmd_line, ShellOutputFn out_fn, void *user_da
         out_fn("  mem                 - Memory pool allocation statistics", COLOR_LTGRAY, user_data);
         out_fn("  mouse status|move|click - Cursor control", COLOR_LTGRAY, user_data);
         out_fn("── Applications ──────────────────────────────────", COLOR_CYAN, user_data);
+        out_fn("  quake               - Launch Quake 3D (OpenGL ES 1.1)", COLOR_YELLOW, user_data);
         out_fn("  edit, editor        - Launch Editor instance", COLOR_LTGRAY, user_data);
         out_fn("  tad, browser        - Launch TAD Browser instance", COLOR_LTGRAY, user_data);
         out_fn("  chat                - Launch BeOS Chat instance", COLOR_LTGRAY, user_data);

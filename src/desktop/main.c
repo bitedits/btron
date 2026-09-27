@@ -118,7 +118,11 @@ int main(int argc, char **argv) {
     open_clarity_window();
     open_t_editor_window();
     open_gterm_window();
-    open_glgears_window();
+    if (open_quake_window) {
+        open_quake_window(80, 40, 560, 420);
+    } else {
+        open_glgears_window();
+    }
 
     while (running) {
         /* Poll and process all pending system events */

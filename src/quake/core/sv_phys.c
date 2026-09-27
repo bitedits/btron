@@ -197,6 +197,7 @@ void SV_RunThink(edict_t *ed) {
     EF(ed, F_NEXTTHINK) = 0.0f;
     int think_fn = (int)EF(ed, F_THINK);
     if (think_fn > 0) {
+        g_prvm.globals[28] = (float)NUM_FOR_EDICT(ed);
         PR_ExecuteProgram(think_fn);
     }
 }
@@ -394,9 +395,22 @@ void SV_RunEntity(edict_t *ed) {
         SV_RunThink(ed);
         break;
 
-    case MOVETYPE_PUSH:
-        SV_RunThink(ed);
-        break;
+    case MOVETYPE_PUSH: {
+        float thinktime = EF(ed, F_NEXTTHINK);
+        float oldltime  = EF(ed, F_LTIME);
+        EF(ed, F_LTIME) += dt;
+        EF(ed, F_ORIGIN_X) += EF(ed, F_VELOCITY_X) * dt;
+        EF(ed, F_ORIGIN_Y) += EF(ed, F_VELOCITY_Y) * dt;
+        EF(ed, F_ORIGIN_Z) += EF(ed, F_VELOCITY_Z) * dt;
+        if (thinktime > 0.0f && thinktime > oldltime && thinktime <= EF(ed, F_LTIME)) {
+            EF(ed, F_NEXTTHINK) = 0.0f;
+            int think_fn = (int)EF(ed, F_THINK);
+            if (think_fn > 0) {
+                g_prvm.globals[28] = (float)NUM_FOR_EDICT(ed);
+                PR_ExecuteProgram(think_fn);
+            }
+        }
+        break; }
 
     case MOVETYPE_WALK:
         if (!((int)EF(ed, F_FLAGS) & 512)) {
@@ -454,6 +468,50 @@ void SV_Physics(void) {
     for (int i = 0; i < g_prvm.num_edicts; i++) {
         edict_t *ed = &g_prvm.edicts[i];
         if (!ed->free) SV_RunEntity(ed);
+    }
+
+    /* Touch trigger check between player and all solid/trigger entities */
+    if (g_prvm.num_edicts >= 2) {
+        edict_t *player = &g_prvm.edicts[1];
+        if (!player->free) {
+            float p_min[3] = {
+                EF(player, F_ORIGIN_X) + EF(player, F_MINS_X),
+                EF(player, F_ORIGIN_Y) + EF(player, F_MINS_Y),
+                EF(player, F_ORIGIN_Z) + EF(player, F_MINS_Z)
+            };
+            float p_max[3] = {
+                EF(player, F_ORIGIN_X) + EF(player, F_MAXS_X),
+                EF(player, F_ORIGIN_Y) + EF(player, F_MAXS_Y),
+                EF(player, F_ORIGIN_Z) + EF(player, F_MAXS_Z)
+            };
+
+            for (int i = 2; i < g_prvm.num_edicts; i++) {
+                edict_t *target = &g_prvm.edicts[i];
+                if (target->free) continue;
+                int touch_fn = (int)EF(target, F_TOUCH);
+                if (touch_fn <= 0) continue;
+
+                float t_min[3] = {
+                    EF(target, F_ORIGIN_X) + EF(target, F_MINS_X),
+                    EF(target, F_ORIGIN_Y) + EF(target, F_MINS_Y),
+                    EF(target, F_ORIGIN_Z) + EF(target, F_MINS_Z)
+                };
+                float t_max[3] = {
+                    EF(target, F_ORIGIN_X) + EF(target, F_MAXS_X),
+                    EF(target, F_ORIGIN_Y) + EF(target, F_MAXS_Y),
+                    EF(target, F_ORIGIN_Z) + EF(target, F_MAXS_Z)
+                };
+
+                /* AABB overlap test with 4 unit margin */
+                if (p_min[0] <= t_max[0] + 4.0f && p_max[0] >= t_min[0] - 4.0f &&
+                    p_min[1] <= t_max[1] + 4.0f && p_max[1] >= t_min[1] - 4.0f &&
+                    p_min[2] <= t_max[2] + 4.0f && p_max[2] >= t_min[2] - 4.0f) {
+                    g_prvm.globals[28] = (float)i;  /* self = target entity */
+                    g_prvm.globals[29] = 1.0f;     /* other = player */
+                    PR_ExecuteProgram(touch_fn);
+                }
+            }
+        }
     }
 }
 

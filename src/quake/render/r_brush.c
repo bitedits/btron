@@ -238,3 +238,110 @@ void R_DrawWorld(void) {
         s_drawn_faces++;
     }
 }
+
+/* ── Submodel (Brush Entity) Rendering (doors, lifts, buttons) ───────── */
+void R_DrawBModel(int model_idx, const float *origin, const float *angles) {
+    if (!g_gl || !g_world.is_loaded) return;
+    if (model_idx <= 0 || model_idx >= g_world.nummodels) return;
+
+    const dmodel_t *mod = &g_world.models[model_idx];
+    if (mod->numfaces <= 0) return;
+
+    glPushMatrix();
+    glTranslatef(origin[0], origin[1], origin[2]);
+    if (angles[1] != 0.0f) glRotatef(angles[1], 0.0f, 0.0f, 1.0f);
+    if (angles[0] != 0.0f) glRotatef(-angles[0], 0.0f, 1.0f, 0.0f);
+    if (angles[2] != 0.0f) glRotatef(angles[2], 1.0f, 0.0f, 0.0f);
+
+    for (int f = 0; f < mod->numfaces; f++) {
+        int fi = mod->firstface + f;
+        if (fi < 0 || fi >= g_world.numfaces) continue;
+
+        const dface_t  *face  = &g_world.faces[fi];
+        if (face->planenum < 0 || face->planenum >= g_world.numplanes) continue;
+        const dplane_t *plane = &g_world.planes[face->planenum];
+
+        const char      *texname = "";
+        const texinfo_t *ti      = NULL;
+        int              tex_w   = 64, tex_h = 64;
+        int              gl_idx  = -1;
+
+        if (face->texinfo >= 0 && face->texinfo < g_world.numtexinfo) {
+            ti = &g_world.texinfo[face->texinfo];
+            if (ti->miptex >= 0 && ti->miptex < g_world.numtextures) {
+                texname = g_world.texture_names[ti->miptex];
+                gl_idx  = TEX_FindTexture(texname);
+                if (gl_idx >= 0) {
+                    tex_w = g_gl_textures[gl_idx].width;
+                    tex_h = g_gl_textures[gl_idx].height;
+                }
+            }
+        }
+
+        surf_class_t sc = classify_surface(texname);
+        if (sc == SURF_SKY) continue;
+
+        float face_center[3] = {0,0,0};
+        int cnt = 0;
+        for (int e = 0; e < face->numedges && cnt < 3; e++) {
+            int se = face->firstedge + e;
+            if (se >= g_world.numsurfedges) break;
+            int ev = g_world.surfedges[se];
+            int vi = (ev >= 0) ? g_world.edges[ev].v[0] : g_world.edges[-ev].v[1];
+            if (vi < g_world.numvertexes) {
+                face_center[0] += g_world.vertexes[vi].point[0];
+                face_center[1] += g_world.vertexes[vi].point[1];
+                face_center[2] += g_world.vertexes[vi].point[2];
+                cnt++;
+            }
+        }
+        if (cnt > 0) {
+            face_center[0] /= cnt;
+            face_center[1] /= cnt;
+            face_center[2] /= cnt;
+        }
+
+        float wfc[3] = {
+            face_center[0] + origin[0],
+            face_center[1] + origin[1],
+            face_center[2] + origin[2]
+        };
+        float light = R_LightForFace(face, wfc);
+
+        int has_tex = (gl_idx >= 0 && g_gl_textures[gl_idx].is_uploaded);
+        float rgb[3];
+        get_surface_color(texname, sc, plane, light, rgb);
+        if (has_tex) {
+            glBindTexture(GL_TEXTURE_2D, (GLuint)g_gl_textures[gl_idx].tex_id);
+        } else {
+            glBindTexture(GL_TEXTURE_2D, 0);
+        }
+        glColor3f(rgb[0], rgb[1], rgb[2]);
+
+        float nx = plane->normal[0], ny = plane->normal[1], nz = plane->normal[2];
+        if (face->side) { nx = -nx; ny = -ny; nz = -nz; }
+        glNormal3f(nx, ny, nz);
+        glBegin(GL_POLYGON);
+
+        for (int e = 0; e < face->numedges; e++) {
+            int se = face->firstedge + e;
+            if (se >= g_world.numsurfedges) break;
+            int ev = g_world.surfedges[se];
+            int vi = (ev >= 0) ? g_world.edges[ev].v[0] : g_world.edges[-ev].v[1];
+            if (vi < g_world.numvertexes) {
+                const float *p = g_world.vertexes[vi].point;
+                if (ti) {
+                    float s, t;
+                    compute_uv(p, ti, tex_w, tex_h, &s, &t);
+                    glTexCoord2f(s, t);
+                }
+                glVertex3f(p[0], p[1], p[2]);
+            }
+        }
+        glEnd();
+        if (has_tex) glBindTexture(GL_TEXTURE_2D, 0);
+    }
+
+    glPopMatrix();
+}
+

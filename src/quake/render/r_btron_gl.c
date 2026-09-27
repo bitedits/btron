@@ -424,16 +424,28 @@ void R_RenderView(void) {
     if (g_world.is_loaded) {
         R_DrawWorld();
 
-        /* Alias model pass: draw all edicts with a valid model index */
+        /* Entity pass: draw all edicts with a valid model index */
         for (int ei = 2; ei < g_prvm.num_edicts; ei++) {
             edict_t *ed = &g_prvm.edicts[ei];
             if (ed->free) continue;
-            int mi = (int)EF(ed, F_MODELINDEX) - 1;
-            if (mi < 0 || mi >= g_num_alias_models) continue;
-            float eorg[3] = { EF(ed,F_ORIGIN_X), EF(ed,F_ORIGIN_Y), EF(ed,F_ORIGIN_Z) };
-            float eang[3] = { EF(ed,F_ANGLES_X), EF(ed,F_ANGLES_Y), EF(ed,F_ANGLES_Z) };
-            float lt = R_LightForFace(NULL, eorg);
-            R_DrawAliasModel(mi, (int)EF(ed, F_FRAME), eorg, eang, lt);
+            int modelindex = (int)EF(ed, F_MODELINDEX);
+            if (modelindex <= 0) continue;
+
+            float eorg[3] = { EF(ed, F_ORIGIN_X), EF(ed, F_ORIGIN_Y), EF(ed, F_ORIGIN_Z) };
+            float eang[3] = { EF(ed, F_ANGLES_X), EF(ed, F_ANGLES_Y), EF(ed, F_ANGLES_Z) };
+
+            if (modelindex >= 1000) {
+                /* Brush submodel (doors, platforms, lifts, buttons) */
+                int sub = modelindex - 1000;
+                R_DrawBModel(sub, eorg, eang);
+            } else {
+                /* Alias model (weapons, armors, health, monsters) */
+                int mi = modelindex - 1;
+                if (mi >= 0 && mi < g_num_alias_models) {
+                    float lt = R_LightForFace(NULL, eorg);
+                    R_DrawAliasModel(mi, (int)EF(ed, F_FRAME), eorg, eang, lt);
+                }
+            }
         }
 
         /* Particle pass: camera-aligned billboards */
@@ -497,8 +509,11 @@ void R_RenderView(void) {
     Draw_Fill(s_vid_width - 92, 8, 86, 18, g_console_active ? 0x8C2020 : 0x2A2420);
     Draw_String(s_vid_width - 88, 13, "[~] CONSOLE");
 
-    /* First-Person Shotgun Viewmodel (drawn in camera space) */
+    /* First-Person Viewmodel (drawn in camera space) */
     if (s_v_shot_idx >= 0 && g_world.is_loaded && !g_menu_active && !g_console_active) {
+        /* Clear depth buffer so viewmodel is never clipped/occluded by nearby world geometry */
+        glClear(GL_DEPTH_BUFFER_BIT);
+
         glMatrixMode(GL_PROJECTION);
         glPushMatrix();
         glLoadIdentity();
@@ -521,11 +536,24 @@ void R_RenderView(void) {
         glRotatef(90.0f, 1.0f, 0.0f, 0.0f);
 
         int gun_fr = Player_GetGunFrame();
+        if (g_prvm.num_edicts >= 2 && EF(&g_prvm.edicts[1], F_WEAPONFRAME) > 0.0f) {
+            gun_fr = (int)EF(&g_prvm.edicts[1], F_WEAPONFRAME);
+        }
+
+        int active_vmodel = s_v_shot_idx;
+        if (g_prvm.num_edicts >= 2) {
+            const char *wm = PR_GetString((int)EF(&g_prvm.edicts[1], F_WEAPONMODEL));
+            if (wm && wm[0]) {
+                int mi = R_LoadAliasModel(wm);
+                if (mi >= 0) active_vmodel = mi;
+            }
+        }
+
         float gun_lt = R_LightForFace(NULL, r_refdef.vieworg) * 1.3f;
         if (gun_lt < 0.45f) gun_lt = 0.45f;
         if (gun_lt > 1.0f) gun_lt = 1.0f;
 
-        R_DrawAliasModel(s_v_shot_idx, gun_fr, (float[]){0,0,0}, (float[]){0,0,0}, gun_lt);
+        R_DrawAliasModel(active_vmodel, gun_fr, (float[]){0,0,0}, (float[]){0,0,0}, gun_lt);
 
         glPopMatrix();
         glMatrixMode(GL_PROJECTION);

@@ -242,7 +242,7 @@ void Player_FireWeapon(void) {
             }
         }
 
-        /* Check monster damage */
+        /* Check monster damage & shootable button/door triggers */
         for (int ei = 2; ei < g_prvm.num_edicts; ei++) {
             edict_t *ed = &g_prvm.edicts[ei];
             if (ed->free) continue;
@@ -253,12 +253,24 @@ void Player_FireWeapon(void) {
             if (dx*dx + dy*dy + dz*dz < (40.0f * 40.0f)) {
                 P_BloodSplash(tr.endpos, 12);
                 float hp = EF(ed, F_HEALTH);
-                hp -= 6.0f;
-                EF(ed, F_HEALTH) = hp;
-                if (hp <= 0.0f) {
-                    P_ExplosionParticles(eorg);
-                    Con_LogAppend("[COMBAT] Target neutralized!");
-                    ed->free = 1;
+                if (hp > 0.0f) {
+                    hp -= 6.0f;
+                    EF(ed, F_HEALTH) = hp;
+                    if (hp <= 0.0f) {
+                        P_ExplosionParticles(eorg);
+                        Con_LogAppend("[COMBAT] Target neutralized!");
+                        ed->free = 1;
+                    }
+                }
+                /* Trigger shootable doors or buttons */
+                if (EF(ed, F_USE) > 0.0f) {
+                    g_prvm.globals[28] = (float)ei;
+                    g_prvm.globals[29] = 1.0f;
+                    PR_ExecuteProgram((int)EF(ed, F_USE));
+                } else if (EF(ed, F_TOUCH) > 0.0f) {
+                    g_prvm.globals[28] = (float)ei;
+                    g_prvm.globals[29] = 1.0f;
+                    PR_ExecuteProgram((int)EF(ed, F_TOUCH));
                 }
                 break;
             }
@@ -867,24 +879,26 @@ void UI_Draw(int width, int height) {
             }
         } else if (s_menu_page == MENU_CONTROLS) {
             int cx = width / 2 - 160;
-            int cy = height / 2 - 115;
+            int cy = height / 2 - 125;
 
             Draw_String(cx + 60, cy, "CONTROLS & COMMANDS");
             Draw_Fill(cx, cy + 18, 320, 2, 0x8C2020);
 
-            Draw_String(cx, cy + 34, "W / S          : MOVE FORWARD / BACK");
-            Draw_String(cx, cy + 48, "A / D          : STRAFE LEFT / RIGHT");
-            Draw_String(cx, cy + 62, "SPACE / R-CLICK: JUMP OVER OBSTACLES");
-            Draw_String(cx, cy + 76, "C              : CROUCH / MOVE DOWN");
-            Draw_String(cx, cy + 90, "MOUSE MOVE     : 360-DEGREE MOUSELOOK");
-            Draw_String(cx, cy + 104,"LEFT CLICK / E : FIRE WEAPON (SHOTGUN)");
-            Draw_String(cx, cy + 118,"ARROWS         : MOVE & TURN (CLASSICAL)");
-            Draw_String(cx, cy + 132,"~ OR TAB       : DEVELOPER CONSOLE");
-            Draw_String(cx, cy + 146,"ESC            : OPEN / CLOSE THIS MENU");
+            Draw_String(cx, cy + 30, "W / S          : MOVE FORWARD / BACK");
+            Draw_String(cx, cy + 44, "A / D          : STRAFE LEFT / RIGHT");
+            Draw_String(cx, cy + 58, "SPACE / R-CLICK: JUMP OVER OBSTACLES");
+            Draw_String(cx, cy + 72, "C              : CROUCH / MOVE DOWN");
+            Draw_String(cx, cy + 86, "MOUSE MOVE     : 360-DEGREE MOUSELOOK");
+            Draw_String(cx, cy + 100,"LEFT CLICK / E : FIRE WEAPON / INTERACT");
+            Draw_String(cx, cy + 114,"DOORS & LIFTS  : WALK INTO / TOUCH OR SHOOT");
+            Draw_String(cx, cy + 128,"BUTTONS        : STEP ON OR SHOOT");
+            Draw_String(cx, cy + 142,"ARROWS         : MOVE & TURN (CLASSICAL)");
+            Draw_String(cx, cy + 156,"~ OR TAB       : DEVELOPER CONSOLE");
+            Draw_String(cx, cy + 170,"ESC            : OPEN / CLOSE THIS MENU");
 
-            Draw_Fill(cx, cy + 168, 320, 1, 0x444455);
-            Draw_String(cx, cy + 176, "CONSOLE CHEATS : GOD, NOCLIP, GIVE ALL");
-            Draw_String(cx + 40, cy + 205, "[PRESS ENTER OR ESC TO RETURN]");
+            Draw_Fill(cx, cy + 192, 320, 1, 0x444455);
+            Draw_String(cx, cy + 200, "CONSOLE CHEATS : GOD, NOCLIP, GIVE ALL");
+            Draw_String(cx + 40, cy + 225, "[PRESS ENTER OR ESC TO RETURN]");
         }
     }
 }

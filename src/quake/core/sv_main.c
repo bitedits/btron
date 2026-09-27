@@ -140,6 +140,22 @@ static void edict_set_kv(edict_t *ed, const ent_kv_t *ent) {
             EF(ed, F_MESSAGE) = (float)PR_SetString(v);
         } else if (q_strcasecmp(k, "model") == 0) {
             EF(ed, F_MODEL) = (float)PR_SetString(v);
+            if (v[0] == '*') {
+                int sub = q_atoi(v + 1);
+                EF(ed, F_MODELINDEX) = (float)(sub + 1000);
+                if (g_world.is_loaded && g_world.models && sub >= 0 && sub < g_world.nummodels) {
+                    const dmodel_t *mod = &g_world.models[sub];
+                    EF(ed, F_MINS_X) = mod->mins[0];
+                    EF(ed, F_MINS_Y) = mod->mins[1];
+                    EF(ed, F_MINS_Z) = mod->mins[2];
+                    EF(ed, F_MAXS_X) = mod->maxs[0];
+                    EF(ed, F_MAXS_Y) = mod->maxs[1];
+                    EF(ed, F_MAXS_Z) = mod->maxs[2];
+                    EF(ed, F_SIZE_X) = mod->maxs[0] - mod->mins[0];
+                    EF(ed, F_SIZE_Y) = mod->maxs[1] - mod->mins[1];
+                    EF(ed, F_SIZE_Z) = mod->maxs[2] - mod->mins[2];
+                }
+            }
         }
     }
 }

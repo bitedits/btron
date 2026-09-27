@@ -90,6 +90,10 @@ static inline float q_atof(const char *str) {
     return val * sign;
 }
 
+static inline int q_atoi(const char *str) {
+    return (int)q_atof(str);
+}
+
 static inline const char *q_strchr(const char *s, int c) {
     if (!s) return NULL;
     while (*s) {

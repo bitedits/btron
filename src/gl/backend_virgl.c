@@ -324,12 +324,9 @@ static void rasterize_tri(const virgl_tri_t *tri, const mat4_t *mv, const mat4_t
                             &cx[i], &cy[i], &cz[i], &cw[i]);
     }
 
-    /* Near-plane clipping check: only drop if all vertices behind near plane */
-    if (cw[0] <= 0.001f && cw[1] <= 0.001f && cw[2] <= 0.001f) {
+    /* Near-plane clipping check: drop triangle if any vertex is behind near plane */
+    if (cw[0] <= 0.05f || cw[1] <= 0.05f || cw[2] <= 0.05f) {
         return;
-    }
-    for (int i = 0; i < 3; i++) {
-        if (cw[i] < 0.01f) cw[i] = 0.01f;
     }
 
     /* 2. Viewport / Screen projection */
@@ -368,7 +365,7 @@ static void rasterize_tri(const virgl_tri_t *tri, const mat4_t *mv, const mat4_t
     if (v_abs(denom) < 0.00001f) return;
     float inv_denom = 1.0f / denom;
 
-    /* 4. Pixel-level rasterization with Depth Buffer test */
+    /* 4. Pixel-level rasterization with Depth Buffer test and edge tie-breaking */
     for (int y = min_y; y <= max_y; y++) {
         float py = (float)y + 0.5f;
         int row_idx = y * s_width;
@@ -380,11 +377,11 @@ static void rasterize_tri(const virgl_tri_t *tri, const mat4_t *mv, const mat4_t
             float w1 = ((sy[2] - sy[0]) * (px - sx[2]) + (sx[0] - sx[2]) * (py - sy[2])) * inv_denom;
             float w2 = 1.0f - w0 - w1;
 
-            if (w0 >= 0.0f && w1 >= 0.0f && w2 >= 0.0f) {
+            if (w0 >= -0.0005f && w1 >= -0.0005f && w2 >= -0.0005f) {
                 float z = w0 * sz[0] + w1 * sz[1] + w2 * sz[2];
                 int pixel_idx = row_idx + x;
 
-                if (!s_depth_test_enabled || (s_depth_buf && z < s_depth_buf[pixel_idx])) {
+                if (!s_depth_test_enabled || (s_depth_buf && z <= s_depth_buf[pixel_idx] + 0.00005f)) {
                     if (s_depth_buf && s_depth_test_enabled) {
                         s_depth_buf[pixel_idx] = z;
                     }

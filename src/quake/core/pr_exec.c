@@ -13,6 +13,10 @@
 #include "../include/progs.h"
 #include "../include/quakedef.h"
 #include "../include/fs_btron.h"
+#include "../include/server.h"
+#include "../include/world.h"
+#include "../include/r_alias.h"
+#include "../include/mathlib.h"
 
 /* ── Global VM state ─────────────────────────────────────────────────── */
 prvm_t g_prvm;
@@ -100,27 +104,81 @@ int PR_LoadProgs(const char *path) {
     return 1;
 }
 
-/* ── Built-in dispatch (subset for E1M1 playability) ────────────────── */
+/* ── Built-in dispatch (vanilla Quake 1 builtins) ──────────────────── */
 void PR_ExecuteBuiltin(int bnum) {
     float *globals = g_prvm.globals;
     (void)globals;
 
     switch (bnum) {
         case 1:  /* makevectors(angles) */
-        case 2:  /* setorigin(ent, origin) — no-op stub */
+            {
+                vec3_t ang = { globals[4], globals[5], globals[6] };
+                AngleVectors(ang, globals + 37, globals + 43, globals + 40);
+            }
+            break;
+        case 2:  /* setorigin(ent, origin) */
+            {
+                edict_t *ed = EDICT_NUM((int)globals[4]);
+                EF(ed, F_ORIGIN_X) = globals[7];
+                EF(ed, F_ORIGIN_Y) = globals[8];
+                EF(ed, F_ORIGIN_Z) = globals[9];
+            }
+            break;
         case 3:  /* setmodel(ent, model) */
+            {
+                edict_t *ed = EDICT_NUM((int)globals[4]);
+                const char *m = PR_GetString((int)globals[7]);
+                if (m && m[0]) {
+                    EF(ed, F_MODEL) = globals[7];
+                    if (m[0] == '*') {
+                        /* Submodel in BSP */
+                        int sub = q_atoi(m + 1);
+                        EF(ed, F_MODELINDEX) = (float)(sub + 1000);
+                        if (g_world.is_loaded && g_world.models && sub >= 0 && sub < g_world.nummodels) {
+                            const dmodel_t *mod = &g_world.models[sub];
+                            EF(ed, F_MINS_X) = mod->mins[0];
+                            EF(ed, F_MINS_Y) = mod->mins[1];
+                            EF(ed, F_MINS_Z) = mod->mins[2];
+                            EF(ed, F_MAXS_X) = mod->maxs[0];
+                            EF(ed, F_MAXS_Y) = mod->maxs[1];
+                            EF(ed, F_MAXS_Z) = mod->maxs[2];
+                            EF(ed, F_SIZE_X) = mod->maxs[0] - mod->mins[0];
+                            EF(ed, F_SIZE_Y) = mod->maxs[1] - mod->mins[1];
+                            EF(ed, F_SIZE_Z) = mod->maxs[2] - mod->mins[2];
+                        }
+                    } else {
+                        int mi = R_LoadAliasModel(m);
+                        if (mi >= 0) {
+                            EF(ed, F_MODELINDEX) = (float)(mi + 1);
+                        }
+                    }
+                }
+            }
+            break;
         case 4:  /* setsize(ent, mins, maxs) */
+            {
+                edict_t *ed = EDICT_NUM((int)globals[4]);
+                EF(ed, F_MINS_X) = globals[7];
+                EF(ed, F_MINS_Y) = globals[8];
+                EF(ed, F_MINS_Z) = globals[9];
+                EF(ed, F_MAXS_X) = globals[10];
+                EF(ed, F_MAXS_Y) = globals[11];
+                EF(ed, F_MAXS_Z) = globals[12];
+                EF(ed, F_SIZE_X) = globals[10] - globals[7];
+                EF(ed, F_SIZE_Y) = globals[11] - globals[8];
+                EF(ed, F_SIZE_Z) = globals[12] - globals[9];
+            }
+            break;
         case 6:  /* break() */
             break;
         case 7:  /* random() → G_FLOAT(OFS_RETURN) */
-            /* Simple LCG: avoid stdlib rand() for freestanding builds */
             {
                 static unsigned s_rng = 0xDEADBEEFu;
                 s_rng = s_rng * 1664525u + 1013904223u;
                 globals[1] = (float)(s_rng >> 8) * (1.0f / (float)0xFFFFFF);
             }
             break;
-        case 8:  /* sound(ent, channel, sample, vol, atten) — stub */
+        case 8:  /* sound(ent, channel, sample, vol, atten) */
             break;
         case 9:  /* normalize(v) */
             {
@@ -143,8 +201,64 @@ void PR_ExecuteBuiltin(int bnum) {
                 globals[1] = sqrtf(x*x + y*y + z*z);
             }
             break;
-        case 14: /* ceil(f) */
-            { int i = (int)globals[4]; globals[1] = (float)(globals[4] > (float)i ? i+1 : i); }
+        case 13: /* vectoyaw(v) */
+            {
+                float dx = globals[4], dy = globals[5];
+                if (dx == 0.0f && dy == 0.0f) {
+                    globals[1] = 0.0f;
+                } else {
+                    float yaw = atan2f(dy, dx) * 180.0f / 3.14159265f;
+                    if (yaw < 0.0f) yaw += 360.0f;
+                    globals[1] = yaw;
+                }
+            }
+            break;
+        case 14: /* spawn() -> entity */
+            if (g_prvm.num_edicts < MAX_EDICTS) {
+                int idx = g_prvm.num_edicts++;
+                memset(&g_prvm.edicts[idx], 0, sizeof(edict_t));
+                globals[1] = (float)idx;
+            } else {
+                globals[1] = 0.0f;
+            }
+            break;
+        case 15: /* remove(ent) */
+            {
+                edict_t *ed = EDICT_NUM((int)globals[4]);
+                ed->free = 1;
+            }
+            break;
+        case 16: /* traceline(v1, v2, nomonsters, forent) */
+            {
+                float p1[3] = { globals[4], globals[5], globals[6] };
+                float p2[3] = { globals[7], globals[8], globals[9] };
+                trace_t tr = SV_Move(p1, NULL, NULL, p2, SOLID_BBOX, NULL);
+                globals[40] = (float)tr.allsolid;
+                globals[41] = (float)tr.startsolid;
+                globals[42] = tr.fraction;
+                globals[43] = tr.endpos[0];
+                globals[44] = tr.endpos[1];
+                globals[45] = tr.endpos[2];
+                globals[46] = tr.plane_normal[0];
+                globals[47] = tr.plane_normal[1];
+                globals[48] = tr.plane_normal[2];
+                globals[49] = tr.plane_dist;
+                globals[50] = 0.0f;
+            }
+            break;
+        case 19: /* precache_sound(s) */
+            globals[1] = globals[4];
+            break;
+        case 20: /* precache_model(s) */
+            {
+                const char *m = PR_GetString((int)globals[4]);
+                if (m && m[0] && m[0] != '*') {
+                    R_LoadAliasModel(m);
+                }
+                globals[1] = globals[4];
+            }
+            break;
+        case 21: /* stuffcmd */
             break;
         case 25: /* print(s) */
             Con_Printf("[QC] %s", PR_GetString((int)globals[4]));
@@ -152,8 +266,52 @@ void PR_ExecuteBuiltin(int bnum) {
         case 26: /* bprint(s) */
         case 27: /* sprint(ent, s) */
             break;
-        case 36: /* floor(f) */
+        case 34: /* droptofloor() */
+            {
+                edict_t *ed = EDICT_NUM((int)globals[28]);
+                float org[3]  = { EF(ed, F_ORIGIN_X), EF(ed, F_ORIGIN_Y), EF(ed, F_ORIGIN_Z) };
+                float mins[3] = { EF(ed, F_MINS_X),   EF(ed, F_MINS_Y),   EF(ed, F_MINS_Z) };
+                float maxs[3] = { EF(ed, F_MAXS_X),   EF(ed, F_MAXS_Y),   EF(ed, F_MAXS_Z) };
+                float end[3]  = { org[0], org[1], org[2] - 256.0f };
+
+                trace_t tr = SV_Move(org, mins, maxs, end, SOLID_BBOX, ed);
+                if (tr.fraction == 1.0f || tr.allsolid) {
+                    globals[1] = 0.0f;
+                } else {
+                    EF(ed, F_ORIGIN_X) = tr.endpos[0];
+                    EF(ed, F_ORIGIN_Y) = tr.endpos[1];
+                    EF(ed, F_ORIGIN_Z) = tr.endpos[2] + 1.0f;
+                    int flags = (int)EF(ed, F_FLAGS);
+                    EF(ed, F_FLAGS) = (float)(flags | 512); /* FL_ONGROUND */
+                    globals[1] = 1.0f;
+                }
+            }
+            break;
+        case 35: /* lightstyle */
+            break;
+        case 36: /* rint(f) */
+            {
+                float v = globals[4];
+                globals[1] = (v >= 0.0f) ? (float)(int)(v + 0.5f) : (float)(int)(v - 0.5f);
+            }
+            break;
+        case 37: /* floor(f) */
             { int i = (int)globals[4]; globals[1] = (float)(globals[4] < (float)i ? i-1 : i); }
+            break;
+        case 38: /* ceil(f) */
+            { int i = (int)globals[4]; globals[1] = (float)(globals[4] > (float)i ? i+1 : i); }
+            break;
+        case 41: /* pointcontents(v) */
+            {
+                float p[3] = { globals[4], globals[5], globals[6] };
+                globals[1] = (float)SV_PointContents(p);
+            }
+            break;
+        case 43: /* fabs(f) */
+            globals[1] = fabsf(globals[4]);
+            break;
+        case 45: /* cvar(s) */
+            globals[1] = 0.0f;
             break;
         default:
             /* Silently ignore unimplemented builtins */
@@ -255,10 +413,22 @@ void PR_ExecuteProgram(int fnum) {
         case OP_STOREP_S:
         case OP_STOREP_FNC:
         case OP_STOREP_ENT:
-        case OP_STOREP_FLD:
-            { int ptr = (int)*OPB; if (ptr >= 0 && ptr < g_prvm.header->num_globals) globals[ptr] = *OPA; break; }
-        case OP_STOREP_V:
-            { int ptr = (int)*OPB; if (ptr >= 0 && ptr+2 < g_prvm.header->num_globals) { globals[ptr]=OPA[0]; globals[ptr+1]=OPA[1]; globals[ptr+2]=OPA[2]; } break; }
+        case OP_STOREP_FLD: {
+            int byte_ofs = (int)*OPB;
+            if (byte_ofs >= 0 && byte_ofs + (int)sizeof(eval_t) <= (int)sizeof(g_prvm.edicts)) {
+                eval_t *ptr = (eval_t *)((byte *)g_prvm.edicts + byte_ofs);
+                ptr->f = *OPA;
+            }
+            break; }
+        case OP_STOREP_V: {
+            int byte_ofs = (int)*OPB;
+            if (byte_ofs >= 0 && byte_ofs + (int)sizeof(vec3_t) <= (int)sizeof(g_prvm.edicts)) {
+                eval_t *ptr = (eval_t *)((byte *)g_prvm.edicts + byte_ofs);
+                ptr->v[0] = OPA[0];
+                ptr->v[1] = OPA[1];
+                ptr->v[2] = OPA[2];
+            }
+            break; }
 
         case OP_LOAD_F:
         case OP_LOAD_FLD:
@@ -278,7 +448,7 @@ void PR_ExecuteProgram(int fnum) {
         case OP_ADDRESS: {
             edict_t *ed = EDICT_NUM((int)*OPA);
             int fld = (int)*OPB;
-            *OPC = (float)(((char *)&ed->v[fld]) - ((char *)globals));
+            *OPC = (float)((byte *)((eval_t *)&ed->v[fld]) - (byte *)g_prvm.edicts);
             break; }
 
         case OP_IF:     if (*OPA != 0.0f) { s += st->b - 1; } break;

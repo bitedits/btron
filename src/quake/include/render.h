@@ -23,5 +23,6 @@ void R_Resize(int width, int height);  /* Viewport-only update, no engine reinit
 void R_RenderView(void);
 void R_BeginFrame(void);
 void R_EndFrame(void);
+void R_DrawBModel(int model_idx, const float *origin, const float *angles);
 
 #endif /* QUAKE_RENDER_H */

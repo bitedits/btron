@@ -364,3 +364,43 @@ Key quality fixes applied:
 7. 60 FPS T-Kernel task drives inval_wnd() → quake_paint() → R_RenderView().
 8. Closing window or pressing ESC: s_shutdown_req=1 → task exits →
    Quake_Shutdown() zeroes g_bsp_cache → ready for relaunch.
+
+=============================================================================
+7. RESOLUTION OF "NO MENU NO REPLAY NO SCENE"
+=============================================================================
+
+Root causes diagnosed and resolved:
+1. Scene Missing:
+   - virgl_end() in backend_virgl.c lacked GL_POLYGON and GL_TRIANGLE_FAN
+     support. Because r_brush.c, r_surf.c emit all BSP world and fluid faces
+     via GL_POLYGON, all world faces were discarded. Added triangle fan
+     triangulation (v0, vi, vi+1) for GL_POLYGON and GL_TRIANGLE_FAN.
+   - Near plane clipping in rasterize_tri() previously discarded any triangle
+     where a single vertex had cw <= 0.01f. Changed to only discard if all 3
+     vertices are behind the near plane, clamping cw[i] to near epsilon.
+   - Surface color modulation: get_surface_color() applied to modulate rich
+     Quake gothic stone/metal/tile/water/lava colors across all faces.
+
+2. Menu Missing:
+   - Cull Face state pollution: glgears previously enabled GL_CULL_FACE.
+     Because 2D screen quads in screen space (Y down) had positive cross
+     product, backend_virgl.c culled all 2D UI quads (Draw_Fill/Draw_Character).
+     Fixed by bypassing culling when !s_depth_test_enabled, resetting states
+     on virgl_backend_init(), and disabling GL_CULL_FACE in 2D Draw routines.
+   - Default Menu State: g_menu_active is now 1 by default on launch.
+   - Top HUD Buttons: [ESC] MENU and [~] CONSOLE clickable buttons added to
+     the top-right HUD with full mouse hit-testing.
+
+3. Replay Missing:
+   - Added Demo / Replay playback system (Replay_StartDemo, Replay_Update,
+     Replay_Stop) with support for Demo 1 (E1M3), Demo 2 (E1M4), Demo 3 (E1M6),
+     and Cinematic Flythrough (E1M1).
+   - Replay submenu added to In-Game Menu.
+   - Replay HUD banner displayed during playback; any key or click exits to Menu.
+
+4. Double Buffer Swap Eliminated:
+   - Removed redundant swap_buffers() inside R_EndFrame(). Presentation is
+     cleanly performed once per frame by egl_swap_buffers(s_surf).
+   - Added egl_make_current() / virgl_backend_make_current() for clean surface
+     switching without framebuffer clobbering.
+

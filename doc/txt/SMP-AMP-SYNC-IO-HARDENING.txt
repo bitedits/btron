@@ -26,13 +26,26 @@ REV 2 DECISIONS (owner: Namdak Tonpa, 2026-09-28)
       actually proves.
   D3  Code home = ./src/mp/ (multiprocessing), NOT src/kernel/.  The InterCore
       API surface (§7.3) is the multicore core API; the ring is its private
-      implementation detail.  One object set linked into every port.
+      implementation detail.  One object set linked into every port — but that
+      object set is only built when BTRON_MP is on (D6).
   D4  Naming standardised on the full word async everywhere — test-async
       targets, --test=async, src/mp/async_*, [ASYNC] report rows.  The shorter
       rev-1 spelling of these names is retired.
   D5  This document is amended before any implementation; doc/txt/ASYNC.txt and
       doc/md/SMP.md still contain the stale claims listed in §3b and are
       corrected in a separate pass.
+  D6  src/mp/ is an OPTIONAL, OFF-BY-DEFAULT layer: -DBTRON_MP=$(BTRON_MP) with
+      BTRON_MP ?= 0, consumed as #if BTRON_MP.  That is the numeric gate idiom
+      this tree already uses for BTRON_HID_TRACE (Makefile:847, ~19 #if sites),
+      NOT the presence-only idiom -DBTRON_SMP uses (Makefile:689, uefi only).
+      Scope: the real-time multicore queues exist only for appliances that
+      dedicate a core to I/O — military/rugged product lines.  Consumer desktop
+      builds must not pay for the static sector pools, so the pools are not
+      reserved at all when the flag is off.
+      Contract: with BTRON_MP=0 the ASYNC path is byte-identical to today's
+      Tier-1 behaviour (seqlock snapshot + direct drain per async_rt.h).  The
+      flag is therefore a pure additive seam, never a behaviour change, and any
+      diff in a BTRON_MP=0 build after this work is a bug.
 
 ==============================================================================
 TABLE OF CONTENTS
@@ -47,7 +60,7 @@ TABLE OF CONTENTS
 6.  Phases
     6.0  Phase 0.0 — Multi-Core Existence (blocks Phases 2-3)
     6.1  Phase 0 — Baseline & Measurement
-    6.2  Phase 1 — ASYN / InterCore (src/mp/)
+    6.2  Phase 1 — ASYNC / InterCore (src/mp/)
     6.3  Phase 2 — SMP Core Hardening
     6.4  Phase 3 — AMP I/O Core (IO.txt)
     6.5  Phase 4 — Cross-Port Validation
@@ -73,7 +86,7 @@ future GStreamer/PipeWire-style media plane sit on top of this foundation.
 
 Hardening order is therefore:
 
-  ASYN (actor / MPSC / InterCore)  →  SMP (multi-core isolation)
+  ASYNC (actor / MPSC / InterCore)  →  SMP (multi-core isolation)
   →  AMP (single dedicated I/O core)  →  media-plane expansion.
 
 This document is the single plan that binds:
@@ -114,14 +127,24 @@ The new substrate lives in ./src/mp/, not src/kernel/.  It must be
 port-independent C99 with no kernel header dependency beyond include/basic.h,
 so that ONE object set is linked into btron-posix, btron-qemu.elf,
 btron-uefi.elf and the bare-metal ARM builds.  Testing a posix-only copy would
-prove nothing about the shipped path (see §3b-1).
+prove nothing about the shipped path (see §3b-R1).
 
-1. Create src/mp/asyn_core.h + src/mp/asyn_ring.c + src/mp/mp_clock.c.
-   asyn_core.h exposes ONLY the InterCore surface of §7.3 (pub / sub / spawn /
+1. Create src/mp/async_core.h + src/mp/async_ring.c + src/mp/mp_clock.c.
+   async_core.h exposes ONLY the InterCore surface of §7.3 (pub / sub / spawn /
    snd / rcv) as the multicore core API.  The CAS multicursor ring, its static
-   sector pools, and the cursor-id allocator are private to asyn_ring.c and are
+   sector pools, and the cursor-id allocator are private to async_ring.c and are
    not reachable from outside src/mp/.
    NOT the unbounded intrusive-list MPSC of SMP.md §3 (decision D1).
+
+   All three compile only under BTRON_MP (decision D6).  async_core.h keeps its
+   declarations unconditionally and gates the CONTRACT, not the prototypes:
+     #if BTRON_MP   → real InterCore cursors, ring transport, static pools
+     #else          → the existing Tier-1 seam: pub/sub/snd/rcv are thin inline
+                      calls into the current direct-drain path, no pools exist,
+                      and spawn accepts core 0 only
+   Call sites must therefore contain no #if BTRON_MP of their own; the only
+   branch lives in this one header.  A BTRON_MP=0 build links zero bytes of
+   src/mp/ and reserves no sector RAM.
 
 2. Implement --mode=ring on posix AND qemu.
    Both of those ports are SDL2 host builds (Makefile:468-503 and 578-591), so
@@ -131,7 +154,7 @@ prove nothing about the shipped path (see §3b-1).
 
 3. CLI hook.  src/desktop/main.c:62 currently discards its arguments
    ((void)argc; (void)argv;) and nothing in the tree parses --flag=value except
-   the --csv idiom in verify/btron_verify.c:59.  Add a --test=asyn dispatcher
+   the --csv idiom in verify/btron_verify.c:59.  Add a --test=async dispatcher
    at the top of main() and reuse that idiom.
 
 4. Makefile targets, following the existing TEST_<NAME>_SRCS/OBJS/BIN template
@@ -201,7 +224,7 @@ R3  "posix and qemu" IS A HOST GATE ON ONE ISA, AND THAT ISA IS WEAKLY ORDERED.
     moves to x86.  Record the host triple in every results row, and do not let a
     posix/qemu pass substitute for the raspi3b run.
 
-R4  THE ASYN PLANES EXIST, BUT ONLY ON ARM64 BARE METAL AND ONLY AT 1 ms.
+R4  THE ASYNC PLANES EXIST, BUT ONLY ON ARM64 BARE METAL AND ONLY AT 1 ms.
     include/btron/async_rt.h is real, shipped, and the only implemented part of
     this plan: wait-free seqlock pointer_slot_t (:46-55), async_rt_stats_t
     telemetry already carrying input_gap_max_us / trb_max / isr_max_us /
@@ -210,7 +233,7 @@ R4  THE ASYN PLANES EXIST, BUT ONLY ON ARM64 BARE METAL AND ONLY AT 1 ms.
     core_arm64.c:1498-1576.  src/cores/core_posix.c references none of it
     (zero hits for async_rt, input_plane, pointer_slot).
     ASYNC_INPUT_PERIOD_US is 1000 (async_rt.h:17), not 250.  So §7.4's metrics
-    should be REUSED from async_rt_stats_t, not reinvented as asyn_metrics.
+    should be REUSED from async_rt_stats_t, not reinvented as async_metrics.
     async_rt_format_compact_status (core_arm64.c:155) already exists, which is
     what IO.txt VR2 asks to extend.
 
@@ -258,7 +281,7 @@ Priority | Makefile / Boot target      | Kernel ID                  | Platform  
 ---------|-----------------------------|----------------------------|------------------------------|------------------------------------------
 P0       | posix                       | posix-host                 | macOS/Linux/BSD (SDL2)       | Fastest iteration; full desktop + audio
 P0       | uefi                        | x86_64-uefi-smp            | x86_64 UEFI SMP (MADT/LAPIC) | Native SMP reference (CR3/PCID, AP)
-P1       | qemu                        | arm-qemu-virtio            | ARMv7 Cortex-A7 VirtIO       | Primary VirtIO + ASYN interaction
+P1       | qemu                        | arm-qemu-virtio            | ARMv7 Cortex-A7 VirtIO       | Primary VirtIO + ASYNC interaction
 P1       | sakamura                    | sakamura-tkernel-virtio    | QEMU VirtIO + T-Kernel 2.0   | Reference µITRON desktop
 P2       | arm-elf / kernel            | armv7-bcm2836-yoko         | Pi 2B bare-metal             | Unicore RT baseline (Tier-1)
 P2       | arm64-elf / yoko / yoko4    | aarch64-bcm2711-yoko       | Pi 3B/4B AArch64             | Multi-core ARM + AMP (IO.txt)
@@ -266,7 +289,15 @@ P3       | pc98                        | i386-pc98                  | NEC PC-980
 P3       | foma                        | foma-tkernel-virtio        | NTT DoCoMo FOMA              | Mobile single-viewport later
 P4       | m68k, ps2, mips, segui      | m68k-q800, ps2-ee, malta…  | Quadra / PS2 / Malta / MCU   | Keep compiling; harden after P0–P2
 
-Daily development loop = make run-posix (fast) + periodic make run-uefi (true SMP).
+Daily development loop = make run-posix (fast) + periodic make run-uefi.
+Rev 1 labelled run-uefi "true SMP"; per §3b-R1 it is not — the guest is given 4
+vCPUs while btron_cpu_id() still returns 0.
+
+BTRON_MP BY PORT (D6): off by default on every port listed above.  The appliance
+configuration is arm64-elf / yoko / yoko4 (the Pi 4/400 I/O-core target IO.txt
+describes), plus uefi as its simulation host once Phase 0.0 lands.  posix and
+qemu carry the flag on only under make test-async, which forces it (§7.5).
+P3/P4 ports never enable it and must still compile.
 
 
 ==============================================================================
@@ -282,10 +313,10 @@ AMP (dedicated IO core(s),       | IO.txt: exactly one I/O core                 
   static affinity)               | (ASYNC_IO_CORE_ID = 3)  **TO BUILD** (R1:     | single-producer invariants
                                  | every port is single-core; cores 1-3 parked)   | BLOCKED until §6.0
 InterCore bus                    | MPSC queues + seqlock + SPSC EVT              | Cursor ownership, non-blocking
-  (pub / sub / spawn / snd / rcv)| **TO BUILD in src/mp/** (R2: no MPSC, no CAS  | snd/rcv, no locks on hot path
+  (pub / sub / spawn / snd / rcv)| **TO BUILD in src/mp/, BTRON_MP** (R2: no MPSC, no CAS  | snd/rcv, no locks on hot path
                                  | exist; seqlock is arm64-only R4; EVT queue in  |
                                  | src/window/event.c is plain non-atomic ints)   |
-CAS multicursor ring buffers     | Lock-free MPSC / SPSC rings, atomic cursors   | Zero-copy, no cursor intersection,
+CAS multicursor ring buffers     | Lock-free rings + atomic cursors, BTRON_MP=1  | Zero-copy, no cursor intersection,
   (sectors)                      | **TO BUILD** — normative transport (D1)        | bounded sectors, pure CAS
 Ractors (Task / Timer / IO       | Pinned worker loops + absolute-deadline       | One drain loop per core, budgeted
   per core)                      | periods: PARTIAL — loop exists at 1 ms on     | periods, no cross-core contention
@@ -323,7 +354,7 @@ Targets: posix + qemu (see D2; uefi only after Phase 0.0)
   drop rates are only definable for the bounded ring of D1 — the SMP.md §3 list
   queue cannot drop.
 • Reuse async_rt_stats_t (include/btron/async_rt.h:69-84) rather than adding a
-  parallel asyn_metrics struct; it already carries input_gap_max_us, trb_max,
+  parallel async_metrics struct; it already carries input_gap_max_us, trb_max,
   isr_max_us, blit_max_us, composite_max_us and key enqueue→dispatch.
 • Simple stress harness (concurrent producers + light TAD + windowing).  Audio
   is excluded: Orchestra is a facade (§3b-R8), so there is no audio worker to load.
@@ -334,13 +365,13 @@ Deliverable: measured maxima table → choose latency budgets for later phases.
   Record the host triple in the table (§3b-R3): the numbers are only portable
   to the same memory model.
 
-6.2  Phase 1 — ASYN / InterCore (src/mp/)
+6.2  Phase 1 — ASYNC / InterCore (src/mp/)
 ----------------------------------------
 Primary: posix + qemu → sakamura
 • Lock-free correctness (memory ordering, ABA, overflow policy) on the CAS
   multicursor ring.
 • Bounded static sector pools (NASA JPL Rule 3 style); no post-boot allocation.
-• Implement the InterCore surface (pub/sub/spawn/snd/rcv) as src/mp/asyn_core.h,
+• Implement the InterCore surface (pub/sub/spawn/snd/rcv) as src/mp/async_core.h,
   with the ring private behind it.
 • Priority / affinity hooks so Orchestra / Cassette can pin real-time workers —
   hooks only; the pinning itself needs Phase 0.0.
@@ -382,7 +413,7 @@ Success: make test-async --mode=amp green; dual-producer windows == 0.
 
 6.5  Phase 4 — Cross-Port Validation
 ------------------------------------
-• arm-elf / Pi 2B: prove ASYN still meets hard RT bounds with flat address
+• arm-elf / Pi 2B: prove ASYNC still meets hard RT bounds with flat address
   space and zero MMU (Tier-1).
 • sakamura + qemu: full T-Kernel + VirtIO integration.
 • Re-run conformance / stress suite on all P0–P2 targets.
@@ -392,7 +423,7 @@ Success: make test-async --mode=amp green; dual-producer windows == 0.
 -----------------------------------------------
 • Extend Orchestra’s zero-dep C99 GStreamer pipeline with confidence.
 • Optional constrained GStreamer subset or thin PipeWire-like node graph
-  mapped onto the hardened ASYN workers.
+  mapped onto the hardened ASYNC workers.
 • Multi-app mixing, WebRTC-style MCU (GST.md patterns), recording, etc.
 Do not start until Phases 0–4 are green.
 
@@ -422,6 +453,13 @@ Each mode lists what it can PROVE per port, because the ports are not
 equivalent (R1, R3).  A mode that requires a second core is reported SKIP, not
 PASS, on a port that does not have one — silently passing on a single core is
 how this plan would have certified nothing.
+
+A second axis gates the same way: BTRON_MP (D6).  ring, intercore and amp are
+compiled out when BTRON_MP=0, so on such a binary they report
+SKIP (reason: BTRON_MP=0) rather than running the inline Tier-1 seam and
+reporting that as queue coverage.  --mode=planes is the deliberate exception: it
+IS the Tier-1 contract, so it must pass with the flag OFF — that run is what
+proves the flag changed nothing.
 
 --mode=ring        CAS multicursor ring: accounting, bounds, drop policy,
                    cursor intersection.  Provable on posix + qemu (host threads)
@@ -459,10 +497,10 @@ Common options:
   --trb-budget=32  --policy=leaky|drop|block
   --audio=0|1  --verbose=0|1
 
-7.3  InterCore API Surface — src/mp/asyn_core.h
+7.3  InterCore API Surface — src/mp/async_core.h
 -----------------------------------------------
 This surface IS the multicore core API (D3).  Nothing outside src/mp/ may touch
-a ring, a cursor, or a sector pool; asyn_core.h is the only header installed.
+a ring, a cursor, or a sector pool; async_core.h is the only header installed.
 Taxonomy is identical to platform.rs / ASYNC.txt §0.1, with two resolutions:
 
   writer_id_t  pub(size_t capacity);              /* publisher CAS cursor   */
@@ -493,22 +531,22 @@ behaviour and are NOT rerouted until this surface passes §7.4 on two ports.
 Reporting is SPLIT, because the repo already owns a conformance-clause registry
 and adding a second, unlinked one would orphan the results matrix:
 
-  structural invariants  →  verify/suite/v_asyn.c, recorded with
+  structural invariants  →  verify/suite/v_async.c, recorded with
       vfy_record(suite, entity, pass, ...) where entity is the spec section,
       e.g. "IO.txt §5.1", "ASYNC.txt §3.1", "SMP.md §3".  These flow into the
       existing dynamic subsystem matrix and CSV (verify/report/results.c) and
       satisfy "a reason that maps back to a section" for free.
-  latency / stress runs   →  the runtime --test=asyn harness, which prints the
-      [ASYN] rows below and additionally appends its rows to the same vfy_state
+  latency / stress runs   →  the runtime --test=async harness, which prints the
+      [ASYNC] rows below and additionally appends its rows to the same vfy_state
       so one table covers both.
 
-[ASYN] mode=full port=posix host=aarch64-apple-darwin cores_req=4 cores_have=1
-[ASYN] ring: enq=1000000 deq=998412 drop=1588 max_lat_ns=41200 p99_ns=9100 pool_free=0
-[ASYN] intercore: pub=4 sub=8 spawn_ok=1 ownership_exclusive=1 cursor_intersect=0
-[ASYN] planes: input_jitter_us=180 ui_budget_overruns=0 gap_max_us=1920 (bar 2xTi=2000)
-[ASYN] amp: SKIP (no second core on this port — see §3b-R1, Phase 0.0)
-[ASYN] io_wcet_us=187 evt_spsc_ok=1 prohibitions_ok=1
-[ASYN] PASS(4/5 modes, 1 SKIP)
+[ASYNC] mode=full port=posix host=aarch64-apple-darwin cores_req=4 cores_have=1
+[ASYNC] ring: enq=1000000 deq=998412 drop=1588 max_lat_ns=41200 p99_ns=9100 pool_free=0
+[ASYNC] intercore: pub=4 sub=8 spawn_ok=1 ownership_exclusive=1 cursor_intersect=0
+[ASYNC] planes: input_jitter_us=180 ui_budget_overruns=0 gap_max_us=1920 (bar 2xTi=2000)
+[ASYNC] amp: SKIP (no second core on this port — see §3b-R1, Phase 0.0)
+[ASYNC] io_wcet_us=187 evt_spsc_ok=1 prohibitions_ok=1
+[ASYNC] PASS(4/5 modes, 1 SKIP)
 
 Rules for this output:
   • echo the host triple and cores actually available on every row (R3); a
@@ -527,10 +565,10 @@ Rules for this output:
 
 7.5  Makefile Integration
 -------------------------
-Rev 1 was not droppable into the Makefile: its .PHONY line and its rule used two
-different names for the same target, so the documented gate command had no rule
-to build, and the
-uefi/qemu/arm64 lines were "…", which is not Make syntax.  Real recipes below.
+Rev 1 was not droppable into the Makefile: its .PHONY line promised a target
+under one name while the rule was written under the short rev-1 spelling, so the
+documented gate command had no rule to build, and the uefi/qemu/arm64 lines were
+"…", which is not valid Make syntax.  Real recipes below.
 
 Anchor: insert after the aggregate test: target (Makefile:1578), following the
 TEST_<NAME>_SRCS/OBJS/BIN template used by test-ski (Makefile:1589-1601).
@@ -538,29 +576,49 @@ Add test-async to that test: prerequisite list.  Touch nothing else (RoE 4).
 Names: $(POSIX_TARGET) = btron-posix$(EXEEXT) (Makefile:468), $(QEMU_TARGET) =
 btron-qemu.elf$(EXEEXT) (Makefile:469); link flags $(LDFLAGS) $(SDL_LIBS).
 
-  MP_SRCS        = src/mp/asyn_ring.c src/mp/asyn_core.c src/mp/mp_clock.c \
+Build switch (D6), mirroring the existing HIDTRACE pattern (Makefile:847):
+
+  BTRON_MP   ?= 0
+  MP_CFLAGS   = -DBTRON_MP=$(BTRON_MP)
+
+MP_CFLAGS is appended for the src/mp objects and for appliance builds only.
+A plain `make` on any port must produce a BTRON_MP=0 binary identical in the
+ASYNC path to today, so the aggregate test: target does not flip the switch —
+the test-async targets pass it explicitly:
+
+  make test-async                    # forces BTRON_MP=1 for the harness
+  make BTRON_MP=0 btron-posix        # consumer build: no pools, no src/mp linked
+
+  MP_SRCS        = src/mp/async_ring.c src/mp/async_core.c src/mp/mp_clock.c \
                    verify/tests/test_async.c
   MP_OBJS        = $(MP_SRCS:.c=.test.o)
   TEST_ASYNC_BIN = ./.build/test_async
+
+  # (a) standalone host binary: links src/mp only, no SDL, no desktop window.
+  #     Fast loop, and the only place a 1 M-message ring soak belongs.  It
+  #     always builds the MP path — it must never be able to accidentally test
+  #     the BTRON_MP=0 seam and report that as multicore coverage.
+  $(TEST_ASYNC_BIN): $(MP_OBJS)
+	$(CC) $(MP_OBJS) -o $@ $(LDFLAGS) -DBTRON_MP=1 -lpthread
 
   .PHONY: test-async test-async-posix test-async-qemu test-async-uefi test-async-arm64
 
   test-async: test-async-posix test-async-qemu
 
-  # (a) standalone host binary: links src/mp only, no SDL, no desktop window.
-  #     Fast loop, and it is the only place a 1 M-message ring soak belongs.
-  $(TEST_ASYNC_BIN): $(MP_OBJS)
-	$(CC) $(MP_OBJS) -o $@ $(LDFLAGS) -lpthread
-
+  # target-specific export, so the port binaries below are rebuilt with the MP
+  # path on; without it a default BTRON_MP=0 build would make every MP mode
+  # vacuously pass the seam instead of the queues
+  test-async-posix: export BTRON_MP := 1
+  test-async-qemu:  export BTRON_MP := 1
   test-async-posix: $(TEST_ASYNC_BIN) $(POSIX_TARGET)
 	@./$(TEST_ASYNC_BIN) --mode=ring --producers=4 --msgs=1000000
 	@./$(TEST_ASYNC_BIN) --mode=intercore
-	@./$(POSIX_TARGET) --test=asyn --mode=full --duration=10
-	@./$(POSIX_TARGET) --test=asyn --mode=unicore --duration=5
+	@./$(POSIX_TARGET) --test=async --mode=full --duration=10
+	@./$(POSIX_TARGET) --test=async --mode=unicore --duration=5
 
   # (b) the qemu PORT is also a host SDL build (R3), so this is still host code
   test-async-qemu: $(QEMU_TARGET)
-	@./$(QEMU_TARGET) --test=asyn --mode=unicore --duration=5
+	@./$(QEMU_TARGET) --test=async --mode=unicore --duration=5
 
   # (c) true cross-arch runs under system emulation.  Blocked on Phase 0.0 for
   #     anything beyond --mode=unicore; kept as separate targets so they cannot
@@ -569,11 +627,11 @@ btron-qemu.elf$(EXEEXT) (Makefile:469); link flags $(LDFLAGS) $(SDL_LIBS).
   #     already pass -serial stdio, so grep the log rather than inventing a
   #     new emulator invocation here.
   test-async-arm64: $(ARM64_TARGET)
-	$(QEMU_AARCH64) -M raspi3b -m 1G $(KERNEL_DISPLAY) -kernel $(ARM64_TARGET) -serial stdio | tee .build/asyn-arm64.log
-	@grep -q "\[ASYN\] PASS" .build/asyn-arm64.log
+	$(QEMU_AARCH64) -M raspi3b -m 1G $(KERNEL_DISPLAY) -kernel $(ARM64_TARGET) -serial stdio | tee .build/async-arm64.log
+	@grep -q "\[ASYNC\] PASS" .build/async-arm64.log
   test-async-uefi: $(UEFI_TARGET)
-	$(QEMU_X86_64) -M q35,accel=tcg -cpu qemu64 -smp cores=4,threads=1,sockets=1 -m 1G -kernel $(UEFI_TARGET) -serial stdio | tee .build/asyn-uefi.log
-	@grep -q "\[ASYN\] PASS" .build/asyn-uefi.log
+	$(QEMU_X86_64) -M q35,accel=tcg -cpu qemu64 -smp cores=4,threads=1,sockets=1 -m 1G -kernel $(UEFI_TARGET) -serial stdio | tee .build/async-uefi.log
+	@grep -q "\[ASYNC\] PASS" .build/async-uefi.log
 
 
 ==============================================================================
@@ -588,15 +646,15 @@ btron-qemu.elf$(EXEEXT) (Makefile:469); link flags $(LDFLAGS) $(SDL_LIBS).
    SMP/AMP features.  This is now doubly load-bearing: unicore is the only
    contract that currently exists (R1), so --mode=unicore is the regression
    baseline for every later change.
-3. All new ASYN/SMP/AMP code stays cleanroom C99 + static allocation on
+3. All new ASYNC/SMP/AMP code stays cleanroom C99 + static allocation on
    critical paths.  src/mp/ additionally may not include any kernel header
    other than include/basic.h, so that the same objects link everywhere (D3).
-4. Makefile targets stay as they are; only add test-async* targets (D4 — the
-   test-async spelling is retired).
+4. Makefile targets stay as they are; only add test-async* targets, all spelled
+   with the full word (D4).
 5. Document every latency bound and isolation guarantee.  Where a bound differs
    by layer, write it in the per-layer table of §3b-R5 rather than as one
    number; the rev-1 conflict between 200/500 us came from a single-number habit.
-6. InterCore (src/mp/asyn_core.h) is the only permitted cross-core primitive on
+6. InterCore (src/mp/async_core.h) is the only permitted cross-core primitive on
    the ASYNC path.  Until it passes §7.4 on two ports, ipc_msg.c remains the
    mailbox surface and nothing is rerouted onto an unproven bus.
 7. Exactly one I/O core; never share the input workload across cores.
@@ -609,6 +667,14 @@ btron-qemu.elf$(EXEEXT) (Makefile:469); link flags $(LDFLAGS) $(SDL_LIBS).
 9. NEW: a mode that cannot run on a port reports SKIP with the blocking phase
    named.  Reporting PASS because the assertion degenerated on one core is the
    failure mode this whole revision exists to prevent.
+10. NEW: BTRON_MP is opt-in and off by default on every port (D6).  No existing
+    target's flags change and src/mp enters no link unless it is on.  Every
+    merge is built and run BOTH ways — BTRON_MP=1 for the new contracts,
+    BTRON_MP=0 for the Tier-1 regression — and any diff appearing in a
+    BTRON_MP=0 build blocks the merge.  The conditional lives in
+    async_core.h and nowhere else: #if BTRON_MP scattered across call sites
+    would make the off configuration untestable and the appliance build
+    unmaintainable.
 
 
 ==============================================================================
@@ -625,10 +691,16 @@ Phase 1 bar (what make test-async must actually mean):
   this bar is tightened.
 • Unicore (Tier-1) path still meets hard RT bounds, on arm64 hardware, measured
   not inferred.
-• Every [ASYN] row carries its host triple and cores-actually-available.
+• Every [ASYNC] row carries its host triple and cores-actually-available.
+• BOTH configurations are part of the bar (D6): BTRON_MP=1 green on ring /
+  intercore, and BTRON_MP=0 green on --mode=planes with the ASYNC path
+  unchanged.  Confirm a consumer image links no src/mp object and reserves no
+  sector pool from the binary itself (size + nm), not by trusting the flag.
 
 Phase 2/3 bar (only reachable after Phase 0.0):
 • Two cores reporting distinct btron_cpu_id() values on uefi and arm64.
+• Only BTRON_MP=1 appliance builds expose the dedicated I/O core at all; every
+  consumer image keeps the single-core Tier-1 contract untouched.
 • AMP: dual-producer windows == 0, release/takeover OK, heartbeat takeover at
   100 ms with the 50 ms warning distinguished, I/O-core prohibitions held
   including the no-console-write rule for the harness itself, WCET ≤ 500 us at
@@ -650,5 +722,17 @@ DOC DEBT CREATED BY THIS REVISION (fix in the D5 pass)
   5. doc/txt/IO.txt §16 checklist — "50 ms confirmation" vs HM1's 100 ms (R6).
   6. doc/md/GST-SYNC-RTP.md §6 — "already partially embodied in Orchestra's
      zero-dependency C99 GStreamer pipeline": Orchestra is a facade (R8).
+  7. The tree has two conditional-compilation idioms and they disagree.
+     -DBTRON_HID_TRACE=$(HIDTRACE) is numeric and read as #if BTRON_HID_TRACE
+     (~19 sites); -DBTRON_SMP is presence-only, set for uefi alone
+     (Makefile:689), and read as #if defined(BTRON_SMP) at exactly one call site
+     (src/apps/gterm.c:545) while core_smp.c itself compiles unconditionally for
+     every port.  So BTRON_SMP does NOT currently mean "multicore is available"
+     — it means "this is the uefi build".  BTRON_MP deliberately takes the
+     numeric form (D6).  Either migrate BTRON_SMP to the numeric idiom or rename
+     it to BTRON_TARGET_UEFI in a later pass so the two flags stop implying each
+     other.
+  8. doc/md/PORTING.md and doc/md/SMP.md gain a "build configurations" note:
+     BTRON_MP=0 is the default consumer image, BTRON_MP=1 the appliance image.
 
 End of SMP-AMP-SYNC-IO-HARDENING.txt

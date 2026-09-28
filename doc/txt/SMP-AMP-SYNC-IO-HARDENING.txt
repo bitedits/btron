@@ -30,7 +30,7 @@ TABLE OF CONTENTS
     6.4  Phase 3 — AMP I/O Core (IO.txt)
     6.5  Phase 4 — Cross-Port Validation
     6.6  Phase 5 — Media Plane Expansion (deferred)
-7.  test-asyn Specification
+7.  test-async Specification
     7.1  Coverage Map
     7.2  Modes
     7.3  InterCore API Surface
@@ -76,7 +76,7 @@ This file is organised as:
   • Port priority matrix   — which existing Makefile/Boot targets are P0–P4
   • Unified model          — exact mapping of platform.rs primitives onto B-System
   • Phases                 — ordered hardening sequence with deliverables
-  • test-asyn              — normative test suite that encodes the three specs
+  • test-async              — normative test suite that encodes the three specs
                              + InterCore contracts
   • Rules & success criteria
 
@@ -98,7 +98,7 @@ style on critical paths), and the existing µITRON / T-Kernel task model.
                ./btron-posix --test=asyn --mode=mpsc --cores=4 --msgs=100000
 
 4. Instrument enqueue→dequeue latency (max / p99 / avg) and pool accounting.
-5. Gate: make test-asyn must be green on posix before any other phase work.
+5. Gate: make test-async must be green on posix before any other phase work.
 
 This is the smallest vertical slice that protects the Zero-Switch Actor
 Topology and gives a repeatable CI gate.
@@ -127,7 +127,7 @@ Daily development loop = make run-posix (fast) + periodic make run-uefi (true SM
 5. UNIFIED MODEL: platform.rs ↔ B-System
 ==============================================================================
 
-platform.rs concept              | B-System realisation                          | test-asyn verification
+platform.rs concept              | B-System realisation                          | test-async verification
 ---------------------------------|-----------------------------------------------|------------------------------------------
 AMP (dedicated IO core(s),       | IO.txt: exactly one I/O core                  | Core assignment, release/takeover,
   static affinity)               | (ASYNC_IO_CORE_ID), others parked             | single-producer invariants
@@ -166,7 +166,7 @@ Primary: posix → qemu / sakamura
 • Implement InterCore surface (pub/sub/spawn/snd/rcv) on top of MPSC.
 • Non-blocking drain loop robust under overload.
 Success: deterministic sub-ms message delivery on posix and qemu under
-         concurrent audio + UI load; make test-asyn --mode=mpsc,intercore green.
+         concurrent audio + UI load; make test-async --mode=mpsc,intercore green.
 
 6.3  Phase 2 — SMP Core Hardening
 ---------------------------------
@@ -190,7 +190,7 @@ Primary: arm64 (Pi 4 / Pi 400) then uefi simulation
 • I/O-core prohibitions: no mailbox, no uart, no heap, no full paint.
 • Absolute-deadline loop @ 250 µs, WCET budget 500 µs.
 • Fallback path when I/O core never starts (core 0 cooperative path still works).
-Success: make test-asyn --mode=amp green; dual-producer windows == 0.
+Success: make test-async --mode=amp green; dual-producer windows == 0.
 
 6.5  Phase 4 — Cross-Port Validation
 ------------------------------------
@@ -210,7 +210,7 @@ Do not start until Phases 0–4 are green.
 
 
 ==============================================================================
-7. test-asyn SPECIFICATION
+7. test-async SPECIFICATION
 ==============================================================================
 
 7.1  Coverage Map
@@ -270,14 +270,14 @@ SMP.md / ASYNC.txt / IO.txt / platform.rs.
 
 7.5  Makefile Integration
 -------------------------
-.PHONY: test-asyn test-asyn-posix test-asyn-uefi test-asyn-qemu test-asyn-arm64
+.PHONY: test-async test-asyn-posix test-asyn-uefi test-asyn-qemu test-asyn-arm64
 
 test-asyn: test-asyn-posix
 
 test-asyn-posix: btron-posix
 	./btron-posix --test=asyn --mode=full --cores=4 --duration=10
 	./btron-posix --test=asyn --mode=unicore --duration=5
-	@echo "[PASS] test-asyn (posix)"
+	@echo "[PASS] test-async (posix)"
 
 test-asyn-uefi:   …   # true SMP + PCID
 test-asyn-qemu:   …
@@ -306,7 +306,7 @@ test-asyn-arm64:  …   # Pi 4 AMP path
 9. SUCCESS CRITERIA SUMMARY
 ==============================================================================
 
-• make test-asyn green on posix, qemu, sakamura, uefi, arm64.
+• make test-async green on posix, qemu, sakamura, uefi, arm64.
 • MPSC / InterCore: perfect accounting, sub-ms latency, zero post-boot alloc.
 • Planes: max pointer-snapshot gap ≤ 2×Ti under continuous dirty UI.
 • AMP: dual-producer windows == 0, release/takeover/heartbeat OK,

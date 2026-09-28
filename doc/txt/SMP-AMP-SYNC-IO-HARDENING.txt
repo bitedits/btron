@@ -1,0 +1,317 @@
+SMP-AMP-SYNC-IO-HARDENING.txt
+================================
+B-System (BTRON 3.20) × platform.rs (Tachyonic / InterCore)
+Symmetric Multiprocessing · Asymmetric Multiprocessing · ASYNC Planes · I/O Core · Hardening Plan
+
+Status: Design + Conformance Plan
+Related:
+  - doc/md/SMP.md
+  - doc/txt/ASYNC.txt
+  - doc/txt/IO.txt
+  - doc/md/GST-SYNC-RTP.md (deterministic real-time media pipelines, media-plane reference, deferred until foundation solid)
+  - https://github.com/o83/platform.rs  (InterCore, AMP, CAS multicursor, Ractors)
+  - Makefile / Boot.html port matrix
+
+Author context: hardening order before native GStreamer / PipeWire-style audio stack expansion.
+
+==============================================================================
+TABLE OF CONTENTS
+==============================================================================
+
+1.  Introduction & Goals
+2.  Document Structure
+3.  Initial Shot (Immediate Next Action)
+4.  Port Priority Matrix (Makefile / Boot.html)
+5.  Unified Model: platform.rs ↔ B-System
+6.  Phases
+    6.1  Phase 0 — Baseline & Measurement
+    6.2  Phase 1 — ASYN / MPSC / InterCore
+    6.3  Phase 2 — SMP Core Hardening
+    6.4  Phase 3 — AMP I/O Core (IO.txt)
+    6.5  Phase 4 — Cross-Port Validation
+    6.6  Phase 5 — Media Plane Expansion (deferred)
+7.  test-asyn Specification
+    7.1  Coverage Map
+    7.2  Modes
+    7.3  InterCore API Surface
+    7.4  Metrics & Pass Criteria
+    7.5  Makefile Integration
+8.  Rules of Engagement
+9.  Success Criteria Summary
+
+
+==============================================================================
+1. INTRODUCTION & GOALS
+==============================================================================
+
+B-System concurrency is deliberately Erlang/BEAM-style actors in pure C99
+(Zero-Switch Actor Topology) rather than classic synchronous RPC/microkernel
+IPC. The real-time audio path (VirtIO-Sound, Cassette, Orchestra) and any
+future GStreamer/PipeWire-style media plane sit on top of this foundation.
+
+Hardening order is therefore:
+
+  ASYN (actor / MPSC / InterCore)  →  SMP (multi-core isolation)
+  →  AMP (single dedicated I/O core)  →  media-plane expansion.
+
+This document is the single plan that binds:
+
+  • SMP.md          — Tier-1 unicore vs Tier-2 SMP, MPSC, PML4/PCID, DP policy
+  • ASYNC.txt       — equal-priority INPUT/UI planes, periods, budgets, InterCore
+  • IO.txt          — exactly one I/O core, release/takeover, SPSC EVT, prohibitions
+  • platform.rs     — AMP, CAS multicursor sectors, InterCore (pub/sub/spawn/snd/rcv),
+                      Ractors (Task/Timer/IO), zero-copy, static affinity
+
+Goal: make the actor substrate deterministic, lock-free, allocation-free on
+critical paths, and verifiable by a single conformance harness (test-asyn)
+before any further media-plane investment.
+
+
+==============================================================================
+2. DOCUMENT STRUCTURE
+==============================================================================
+
+This file is organised as:
+
+  • Port priority matrix   — which existing Makefile/Boot targets are P0–P4
+  • Unified model          — exact mapping of platform.rs primitives onto B-System
+  • Phases                 — ordered hardening sequence with deliverables
+  • test-asyn              — normative test suite that encodes the three specs
+                             + InterCore contracts
+  • Rules & success criteria
+
+All new code stays inside cleanroom C99, static allocation (NASA JPL Rule 3
+style on critical paths), and the existing µITRON / T-Kernel task model.
+
+
+==============================================================================
+3. INITIAL SHOT (Immediate Next Action)
+==============================================================================
+
+1. Create verify/test_asyn.c skeleton + asyn_metrics helpers.
+2. Implement --mode=mpsc on the posix target only
+   (exact btron_mpsc_enqueue / dequeue from SMP.md §3 + pure CAS multicursor).
+3. Add Makefile target:
+
+       test-asyn: test-asyn-posix
+       test-asyn-posix: btron-posix
+               ./btron-posix --test=asyn --mode=mpsc --cores=4 --msgs=100000
+
+4. Instrument enqueue→dequeue latency (max / p99 / avg) and pool accounting.
+5. Gate: make test-asyn must be green on posix before any other phase work.
+
+This is the smallest vertical slice that protects the Zero-Switch Actor
+Topology and gives a repeatable CI gate.
+
+
+==============================================================================
+4. PORT PRIORITY MATRIX (Makefile / Boot.html)
+==============================================================================
+
+Priority | Makefile / Boot target      | Kernel ID                  | Platform                     | Role for hardening
+---------|-----------------------------|----------------------------|------------------------------|------------------------------------------
+P0       | posix                       | posix-host                 | macOS/Linux/BSD (SDL2)       | Fastest iteration; full desktop + audio
+P0       | uefi                        | x86_64-uefi-smp            | x86_64 UEFI SMP (MADT/LAPIC) | Native SMP reference (CR3/PCID, AP)
+P1       | qemu                        | arm-qemu-virtio            | ARMv7 Cortex-A7 VirtIO       | Primary VirtIO + ASYN interaction
+P1       | sakamura                    | sakamura-tkernel-virtio    | QEMU VirtIO + T-Kernel 2.0   | Reference µITRON desktop
+P2       | arm-elf / kernel            | armv7-bcm2836-yoko         | Pi 2B bare-metal             | Unicore RT baseline (Tier-1)
+P2       | arm64-elf / yoko / yoko4    | aarch64-bcm2711-yoko       | Pi 3B/4B AArch64             | Multi-core ARM + AMP (IO.txt)
+P3       | pc98                        | i386-pc98                  | NEC PC-9801/21               | Legacy; lower urgency
+P3       | foma                        | foma-tkernel-virtio        | NTT DoCoMo FOMA              | Mobile single-viewport later
+P4       | m68k, ps2, mips, segui      | m68k-q800, ps2-ee, malta…  | Quadra / PS2 / Malta / MCU   | Keep compiling; harden after P0–P2
+
+Daily development loop = make run-posix (fast) + periodic make run-uefi (true SMP).
+
+
+==============================================================================
+5. UNIFIED MODEL: platform.rs ↔ B-System
+==============================================================================
+
+platform.rs concept              | B-System realisation                          | test-asyn verification
+---------------------------------|-----------------------------------------------|------------------------------------------
+AMP (dedicated IO core(s),       | IO.txt: exactly one I/O core                  | Core assignment, release/takeover,
+  static affinity)               | (ASYNC_IO_CORE_ID), others parked             | single-producer invariants
+InterCore bus                    | MPSC queues + seqlock + SPSC EVT              | Cursor ownership, non-blocking
+  (pub / sub / spawn / snd / rcv)| (SMP.md §3 + ASYNC.txt §0.1)                  | snd/rcv, no locks on hot path
+CAS multicursor ring buffers     | Lock-free MPSC / SPSC rings, atomic cursors   | Zero-copy, no cursor intersection,
+  (sectors)                      |                                               | bounded sectors, pure CAS
+Ractors (Task / Timer / IO       | Pinned worker loops + absolute-deadline       | One drain loop per core, budgeted
+  per core)                      | periods                                       | periods, no cross-core contention
+Zero-copy + L1/L2 affinity       | Static message pools, pinned workers          | Cache-friendly layout, measured
+                                 |                                               | latency under contention
+Star topology of publisher       | Each core owns its publisher queue;           | No central broker, no kernel traps
+  queues                         | MPSC is pure function over them               | on critical path
+
+
+==============================================================================
+6. PHASES
+==============================================================================
+
+6.1  Phase 0 — Baseline & Measurement
+-------------------------------------
+Targets: posix + uefi
+• Instrument MPSC enqueue/dequeue latency and drop rates under load.
+• Simple stress harness (concurrent producers + light audio + TAD + windowing).
+• Document current WCET bounds (message → worker → VirtIO-Sound write).
+• Confirm make run-posix and make run-uefi are the daily loops.
+Deliverable: measured maxima table → choose latency budgets for later phases.
+
+6.2  Phase 1 — ASYN / MPSC / InterCore
+-------------------------------------
+Primary: posix → qemu / sakamura
+• Lock-free correctness (memory ordering, ABA, overflow policy).
+• Bounded static message pools (NASA JPL Rule 3 style).
+• Priority / affinity hooks so Orchestra / Cassette can pin real-time workers.
+• Leaky / drop policy consistent with GST.md-style queues.
+• Implement InterCore surface (pub/sub/spawn/snd/rcv) on top of MPSC.
+• Non-blocking drain loop robust under overload.
+Success: deterministic sub-ms message delivery on posix and qemu under
+         concurrent audio + UI load; make test-asyn --mode=mpsc,intercore green.
+
+6.3  Phase 2 — SMP Core Hardening
+---------------------------------
+Primary: uefi (x86_64-uefi-smp)
+Secondary: arm64-elf (Pi 4B)
+• Stabilise AP rendezvous (INIT-SIPI-SIPI, trampoline @ 0x9000, per-CPU stacks).
+• CR3 / PCID switching and TLB behaviour.
+• Shared kernel high-half + per-process user space isolation.
+• Keep Display Primitives (DP) in Ring 0 / shared mapped buffers
+  (avoid NT 3.51 graphics tax).
+• Explicit core affinity for media tasks.
+Success: multi-core Orchestra + Cassette + TAD workloads without priority
+         inversion or unbounded latency on uefi.
+
+6.4  Phase 3 — AMP I/O Core (IO.txt)
+------------------------------------
+Primary: arm64 (Pi 4 / Pi 400) then uefi simulation
+• Exactly one I/O core (default ASYNC_IO_CORE_ID = 3).
+• Release word + heartbeat (≤ 50 ms) + takeover handshake (BR1–BR5).
+• EVT queue converted to wait-free SPSC; single-producer invariants enforced.
+• I/O-core prohibitions: no mailbox, no uart, no heap, no full paint.
+• Absolute-deadline loop @ 250 µs, WCET budget 500 µs.
+• Fallback path when I/O core never starts (core 0 cooperative path still works).
+Success: make test-asyn --mode=amp green; dual-producer windows == 0.
+
+6.5  Phase 4 — Cross-Port Validation
+------------------------------------
+• arm-elf / Pi 2B: prove ASYN still meets hard RT bounds with flat address
+  space and zero MMU (Tier-1).
+• sakamura + qemu: full T-Kernel + VirtIO integration.
+• Re-run conformance / stress suite on all P0–P2 targets.
+• Only then bring P3/P4 ports up to the same bar.
+
+6.6  Phase 5 — Media Plane Expansion (deferred)
+-----------------------------------------------
+• Extend Orchestra’s zero-dep C99 GStreamer pipeline with confidence.
+• Optional constrained GStreamer subset or thin PipeWire-like node graph
+  mapped onto the hardened ASYN workers.
+• Multi-app mixing, WebRTC-style MCU (GST.md patterns), recording, etc.
+Do not start until Phases 0–4 are green.
+
+
+==============================================================================
+7. test-asyn SPECIFICATION
+==============================================================================
+
+7.1  Coverage Map
+-----------------
+Document          | Key invariants exercised by test-asyn
+------------------|-------------------------------------------------------------------
+SMP.md            | Tier-1 vs Tier-2; lock-free MPSC; Zero-Switch Actor Topology;
+                  | shared kernel high-half; PCID/CR3 on UEFI; DP out of user IPC
+ASYNC.txt         | Equal pri INPUT/UI; fixed periods + budgets; bounded ISR/polling;
+                  | wait-free pointer snapshot; gated MOVE; InterCore mapping;
+                  | elimination of “USB progress only inside paint”
+IO.txt (AMP)      | Exactly one I/O core; release/takeover; SPSC EVT; single-producer
+                  | (xHCI, pointer_slot, EVT); I/O-core prohibitions; absolute
+                  | deadline + WCET budget; heartbeat / fallback
+platform.rs       | AMP affinity; CAS multicursor sectors; InterCore pub/sub/spawn/
+                  | snd/rcv; Ractor isolation; zero-copy; star topology of publishers
+
+7.2  Modes
+----------
+--mode=mpsc        pure CAS MPSC (SMP.md §3 + platform.rs multicursor)
+--mode=intercore   full pub/sub/spawn/snd/rcv surface
+--mode=planes      ASYNC.txt INPUT/UI equal-pri periods + budgets
+--mode=amp         IO.txt single I/O core + release protocol
+--mode=reactors    Task/Timer/IO reactor isolation
+--mode=full        all of the above + light VirtIO-Sound / Orchestra stub
+--mode=unicore     force Tier-1 behaviour (1 core, flat, no AMP)
+
+Common options:
+  --cores=N  --producers=M  --duration=S  --msgs=K
+  --io-core=3  --period-io-us=250  --budget-io-us=500
+  --period-ui-us=8333  --budget-ui-us=4000
+  --trb-budget=32  --policy=leaky|drop|block
+  --audio=0|1  --verbose=0|1
+
+7.3  InterCore API Surface (normative, identical to platform.rs taxonomy)
+------------------------------------------------------------------------
+writer_id_t  pub(size_t capacity);              /* publisher CAS cursor   */
+reader_id_t  sub(writer_id_t pub);              /* subscriber cursor      */
+task_id_t    spawn(core_id_t, program, cursors[]); /* exclusive ownership */
+bool         snd(writer_id_t, void *data);      /* non-blocking send      */
+bool         rcv(reader_id_t, void *out);       /* non-blocking receive   */
+
+All later modes (planes, amp, full) post events only through this surface.
+
+7.4  Metrics & Pass Criteria (example output)
+---------------------------------------------
+[ASYN] mode=full cores=4 io_core=3
+[ASYN] mpsc: enq=1000000 deq=998412 drop=1588 max_lat_ns=41200
+[ASYN] intercore: pub=4 sub=8 spawn_ok=1 ownership_exclusive=1 cursor_intersect=0
+[ASYN] planes: input_jitter_us=180 ui_budget_overruns=0 gap_max_us=1920
+[ASYN] amp: release_ok=1 heartbeat_ms=12 takeover_ok=1 dual_producer=0
+[ASYN] io_wcet_us=187 evt_spsc_ok=1 prohibitions_ok=1
+[ASYN] PASS
+
+Fail with non-zero exit and a reason that maps back to a section of
+SMP.md / ASYNC.txt / IO.txt / platform.rs.
+
+7.5  Makefile Integration
+-------------------------
+.PHONY: test-asyn test-asyn-posix test-asyn-uefi test-asyn-qemu test-asyn-arm64
+
+test-asyn: test-asyn-posix
+
+test-asyn-posix: btron-posix
+	./btron-posix --test=asyn --mode=full --cores=4 --duration=10
+	./btron-posix --test=asyn --mode=unicore --duration=5
+	@echo "[PASS] test-asyn (posix)"
+
+test-asyn-uefi:   …   # true SMP + PCID
+test-asyn-qemu:   …
+test-asyn-arm64:  …   # Pi 4 AMP path
+
+
+==============================================================================
+8. RULES OF ENGAGEMENT
+==============================================================================
+
+1. Daily loop = make run-posix + periodic make run-uefi.
+2. Never break the unicore real-time contract on arm-elf / Pi 2B while
+   adding SMP/AMP features.
+3. All new ASYN/SMP/AMP code stays cleanroom C99 + static allocation on
+   critical paths.
+4. Makefile targets stay as they are; only add test-asyn* targets.
+5. Document every latency bound and isolation guarantee (extend SMP.md
+   or add ASYN.md).
+6. InterCore is the only permitted cross-core primitive on the ASYNC path.
+7. Exactly one I/O core; never share the input workload across cores.
+8. Media-plane (GStreamer subset, PipeWire-like graph, WebRTC MCU) work
+   is forbidden until Phases 0–4 are green.
+
+
+==============================================================================
+9. SUCCESS CRITERIA SUMMARY
+==============================================================================
+
+• make test-asyn green on posix, qemu, sakamura, uefi, arm64.
+• MPSC / InterCore: perfect accounting, sub-ms latency, zero post-boot alloc.
+• Planes: max pointer-snapshot gap ≤ 2×Ti under continuous dirty UI.
+• AMP: dual-producer windows == 0, release/takeover/heartbeat OK,
+  I/O-core prohibitions held, WCET ≤ budget.
+• Unicore (Tier-1) path still meets hard RT bounds.
+• Only then open Phase 5 (media plane).
+
+End of SMP-AMP-SYNC-IO-HARDENING.txt

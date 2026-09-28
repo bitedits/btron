@@ -22,12 +22,14 @@ REV 2 DECISIONS (owner: Namdak Tonpa, 2026-09-28)
       SMP.md §3 is DEMOTED to informative — it structurally cannot produce the
       drop / p99 columns of §7.4, and its reference dequeue has a missing-return
       path on CAS failure (undefined behaviour).
-  D2  Gate = posix AND qemu, not posix alone.  See §3b-3 for what each ISA
+  D2  Gate = posix AND qemu, not posix alone.  See §3b-R3 for what each ISA
       actually proves.
   D3  Code home = ./src/mp/ (multiprocessing), NOT src/kernel/.  The InterCore
       API surface (§7.3) is the multicore core API; the ring is its private
       implementation detail.  One object set linked into every port.
-  D4  Naming standardised on test-async.  The test-async spelling is retired.
+  D4  Naming standardised on the full word async everywhere — test-async
+      targets, --test=async, src/mp/async_*, [ASYNC] report rows.  The shorter
+      rev-1 spelling of these names is retired.
   D5  This document is amended before any implementation; doc/txt/ASYNC.txt and
       doc/md/SMP.md still contain the stale claims listed in §3b and are
       corrected in a separate pass.
@@ -525,8 +527,9 @@ Rules for this output:
 
 7.5  Makefile Integration
 -------------------------
-Rev 1 was not droppable into the Makefile: .PHONY declared test-async while the
-only rule was test-async (so the documented gate command had no target), and the
+Rev 1 was not droppable into the Makefile: its .PHONY line and its rule used two
+different names for the same target, so the documented gate command had no rule
+to build, and the
 uefi/qemu/arm64 lines were "…", which is not Make syntax.  Real recipes below.
 
 Anchor: insert after the aggregate test: target (Makefile:1578), following the

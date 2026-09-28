@@ -46,6 +46,22 @@ REV 2 DECISIONS (owner: Namdak Tonpa, 2026-09-28)
       Tier-1 behaviour (seqlock snapshot + direct drain per async_rt.h).  The
       flag is therefore a pure additive seam, never a behaviour change, and any
       diff in a BTRON_MP=0 build after this work is a bug.
+  D7  Media-plane source compatibility is obtained by FORKING src/gst/gst.c with
+      in-file #if BTRON_GST blocks, not by a compat include directory.  The cost
+      is accepted explicitly: byte parity with rtp/c_src/gst.c is spent from the
+      first edit onward, so the re-sync protocol in §6.6 becomes load-bearing
+      rather than optional.
+  D8  Media build switch is BTRON_GST: -DBTRON_GST=$(BTRON_GST) with
+      BTRON_GST ?= 0, consumed as #if BTRON_GST (same numeric idiom as
+      BTRON_HID_TRACE and D6's BTRON_MP).  It is INDEPENDENT of BTRON_MP: an
+      appliance may ship the media graph without a dedicated I/O core, and the
+      multicore substrate without a media graph.  Because the branch lives inside
+      gst.c (D7), a BTRON_GST=0 preprocessing must yield the exact upstream text
+      — the fork may add blocks, never replace them.
+  D9  Audio first.  Only tiers T1 (pipeline topology) and T3 (static pools + drain
+      loop, replacing GMainLoop and the 17 heap sites) are shimmed.  T4
+      (webrtcbin / SDP / ICE / DTLS-SRTP / json-glib, 52 sites) is NOT shimmed and
+      stays host-only; btron has no JSON library and no ICE.  See §6.6.
 
 ==============================================================================
 TABLE OF CONTENTS
@@ -272,6 +288,29 @@ R8  THE MEDIA PLANE IS A FACADE.  src/apps/orchestra.c is not a GStreamer
     Orchestra's zero-dependency C99 GStreamer pipeline") is not true.  --mode=full
     is cut from the rev-2 gate; see §7.2.
 
+R9  src/gst/gst.c IS REAL UPSTREAM SOURCE, AND IT IS INERT.
+    952 lines, added by commit 4b32072 "gst.c sample", md5-identical at import to
+    /Users/tonpa/depot/zencrypted/rtp/c_src/gst.c (6f4e59bed60f447b80a10d136dd1d1e5).
+    Upstream builds it standalone as the media plane of the WebRTC stack:
+    rebar.config:20-21 and mix.exs:52 both run
+      cc -O3 c_src/gst.c -o priv/gst $(pkg-config --cflags --libs
+        gstreamer-1.0 gstreamer-video-1.0 gstreamer-webrtc-1.0
+        gstreamer-sdp-1.0 gstreamer-app-1.0 json-glib-1.0)
+    as an Erlang stdio-JSON port supervised by rtp_broker.
+    In btron it appears in NO _SRCS list, so no port compiles it; nothing breaks
+    and nothing is proven.  Its measured coupling, which is the actual size of the
+    compatibility problem:
+      T1 pipeline topology     35 of 49 distinct gst_* symbols
+      T2 property + signal     15 g_object_set sites, 13 g_signal_connect/emit
+      T3 GLib runtime          40 distinct g_*, 17 heap sites, g_main_loop_run
+      T4 WebRTC/SDP/ICE/json   14 gst_webrtc|sdp|promise symbols + 52 json sites
+    btron carries no JSON library (json_* occurs in this file and nowhere else)
+    and no ICE/DTLS/SRTP, so T4 has no substrate to attach to.
+    Consequence for this plan: source compatibility with the future Audio Stack is
+    achievable at T1+T3 only (D9).  The audio graph — audiomixer, audioconvert,
+    audioresample, opus, the leaky temporal queues of GST-SYNC-RTP.md §3.3 — needs
+    none of T4.
+
 
 ==============================================================================
 4. PORT PRIORITY MATRIX (Makefile / Boot.html)
@@ -419,13 +458,35 @@ Success: make test-async --mode=amp green; dual-producer windows == 0.
 • Re-run conformance / stress suite on all P0–P2 targets.
 • Only then bring P3/P4 ports up to the same bar.
 
-6.6  Phase 5 — Media Plane Expansion (deferred)
------------------------------------------------
-• Extend Orchestra’s zero-dep C99 GStreamer pipeline with confidence.
-• Optional constrained GStreamer subset or thin PipeWire-like node graph
-  mapped onto the hardened ASYNC workers.
-• Multi-app mixing, WebRTC-style MCU (GST.md patterns), recording, etc.
-Do not start until Phases 0–4 are green.
+6.6  Phase 5 — Media Plane Expansion (contract fixed now, work deferred)
+------------------------------------------------------------------------
+The reference source is src/gst/gst.c (952 lines, verbatim copy of
+rtp/c_src/gst.c — see §3b-R9).  Its goal is SOURCE compatibility with the future
+B-System Audio Stack pipeline, so the same pipeline description builds against
+real GStreamer on the host and against the native graph on target.
+
+1. Mechanism (D7).  Fork src/gst/gst.c with in-file #if BTRON_GST blocks.  Byte
+   parity with upstream is spent by the first edit; the re-sync protocol below is
+   what keeps that recoverable.  Blocks are ADDITIVE: preprocessing a
+   BTRON_GST=0 build must reproduce the upstream text, so no upstream line is
+   ever modified or deleted — wrap it.
+2. Scope by tier (D9).  Shim T1 (35 core gst_* topology calls) onto the NuStream
+   rt_element/rt_pad/rt_buffer model of GST-SYNC-RTP.md §4.4 and T3 (static pools
+   + drain loop) onto the InterCore surface of §7.3.  Do NOT shim T2 beyond the
+   property names actually used (xpos, ypos, width, height, zorder,
+   sizing-policy, leaky, max-size-time, latency) or T4 at all: webrtcbin, SDP,
+   ICE, DTLS-SRTP and json-glib stay host-only.  The audio graph — audiomixer,
+   audioconvert, audioresample, opus, leaky temporal queues — is the first
+   native target because it needs no T4 code path.
+3. Re-sync protocol.  Keep the pristine import at src/gst/upstream/gst.c with its
+   md5 recorded in src/gst/upstream/CHECKSUMS; src/gst/gst.c is the fork.
+   make gst-upstream-diff prints the fork's delta against the pristine copy so a
+   reviewer sees only the BTRON_GST blocks, and re-importing upstream is a file
+   copy plus re-applying that diff.
+4. Deferred, unchanged from rev 1: multi-app mixing, WebRTC-style MCU compositing,
+   recording.  Do not start Phase 5 runtime work until Phases 0, 0.0, 1-4 are
+   green (RoE 8).  The only Phase 5 activity permitted before that is the
+   interface contract above and its compile-only clause (§7.5).
 
 
 ==============================================================================

@@ -5,6 +5,9 @@
 #   - bfs_btree_model.ml / bfs_btree_properties.v (Parameterized B+Tree full stack)
 #   - bfs_allocator_model.ml / bfs_allocator_properties.v (64-bit AGs & Block Allocator)
 #   - bfs_model.ml / bfs_properties.v (Volume V2 Journal WAL, Real Bodies, Vectors)
+#   - hypermedia_dnd_model.ml / hypermedia_dnd_properties.v (Clarity frames, Cabinet DND, TAD)
+#   - media_smp_model.ml / media_smp_properties.v (CAS multicursor ring, AMP, seqlock, BTRON_MP)
+#   - media_rtp_model.ml / media_rtp_properties.v (NuStream pools, leaky queues, PTS, budgets, grid)
 #
 # Usage:
 #   ./verify_models.sh
@@ -31,8 +34,12 @@ for arg in "$@"; do
   esac
 done
 
-OCAML_MODELS=("bfs_btree_model.ml" "bfs_allocator_model.ml" "bfs_model.ml" "hypermedia_dnd_model.ml")
-COQ_PROPERTIES=("bfs_btree_properties.v" "bfs_allocator_properties.v" "bfs_properties.v" "hypermedia_dnd_properties.v")
+OCAML_MODELS=("bfs_btree_model.ml" "bfs_allocator_model.ml" "bfs_model.ml"
+               "hypermedia_dnd_model.ml"
+               "media_smp_model.ml" "media_rtp_model.ml")
+COQ_PROPERTIES=("bfs_btree_properties.v" "bfs_allocator_properties.v" "bfs_properties.v"
+                  "hypermedia_dnd_properties.v"
+                  "media_smp_properties.v" "media_rtp_properties.v")
 PASS=0
 FAIL=0
 

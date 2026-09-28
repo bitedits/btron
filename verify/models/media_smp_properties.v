@@ -444,7 +444,7 @@ Section MediaSmp.
     forall age heart, warn_due age heart = false -> take_over_due age heart = false.
   Proof.
     intros age heart H. unfold warn_due, take_over_due, stale in *.
-    apply Nat.leb_gt in H. apply Nat.leb_gt. exact H.
+    apply Nat.leb_gt in H. apply Nat.leb_gt. lia.
   Qed.
 
   (* Transition: the I/O core may only start draining after it observed the
@@ -494,7 +494,8 @@ Section MediaSmp.
 
   Lemma publish_keeps_stability : forall d s, stable s -> stable (publish_delta d s).
   Proof.
-    intros d s [k Hk]. unfold publish_delta, stable. exists (S k). lia.
+    intros d s [k Hk]. unfold publish_delta, stable. exists (S k).
+    cbn [sl_seq]. lia.
   Qed.
 
   Lemma publish_advances_seq_by_two :
@@ -586,13 +587,17 @@ Section MediaSmp.
 
   Theorem mp_gate_is_additive :
     forall b ring_ok s d, mp_step b ring_ok s d = mp_off_step s d.
-  Proof. reflexivity. Qed.
+  Proof.
+    intros b ring_ok s d. destruct b; destruct ring_ok; reflexivity.
+  Qed.
 
   Theorem gate_does_not_change_observed_delta :
     forall b ring_ok s d,
       fst (mp_step b ring_ok s d) = fst (legacy_step s d) /\
       snd (mp_step b ring_ok s d) = snd (legacy_step s d).
-  Proof. split; reflexivity. Qed.
+  Proof.
+    intros b ring_ok s d. destruct b; destruct ring_ok; split; reflexivity.
+  Qed.
 
   (* With the gate off the multicursor lane is not even an input to the drain
      path: this is the formal form of "links zero src/mp objects".  The second
@@ -618,27 +623,27 @@ End MediaSmp.
 
 Section ShippedValues.
 
-  Definition catch_up_lane : MediaSmp.lane_state := MediaSmp.mk_lane 2 2 0.
+  Definition catch_up_lane : lane_state := mk_lane 2 2 0.
 
-  Definition lagged_lane : MediaSmp.lane_state := MediaSmp.mk_lane 2 0 0.
+  Definition lagged_lane : lane_state := mk_lane 2 0 0.
 
-  Definition full_lane : MediaSmp.lane_state := MediaSmp.mk_lane 4 4 0.
+  Definition full_lane : lane_state := mk_lane 4 4 0.
 
   Example one_byte_claim_is_admitted_at_shipped_geometry :
-    @MediaSmp.claim_admissible 4 2 1 catch_up_lane = true.
+    @claim_admissible 4 2 1 catch_up_lane = true.
   Proof. reflexivity. Qed.
 
   Example one_byte_claim_is_refused_by_capacity :
-    @MediaSmp.claim_admissible 4 2 1 full_lane = false.
+    @claim_admissible 4 2 1 full_lane = false.
   Proof. reflexivity. Qed.
 
   Lemma a_lane_at_capacity_refuses_any_positive_claim :
     forall n s,
-      MediaSmp.l_reserved s = MediaSmp.l_read s + 4 -> 0 < n ->
-      @MediaSmp.claim_admissible 4 2 n s = false.
+      l_reserved s = l_read s + 4 -> 0 < n ->
+      @claim_admissible 4 2 n s = false.
   Proof.
-    intros n s Hfull Hpos. unfold MediaSmp.claim_admissible.
-    destruct (Nat.leb (MediaSmp.l_reserved s + n) (MediaSmp.l_read s + 4)) eqn:E.
+    intros n s Hfull Hpos. unfold claim_admissible.
+    destruct (Nat.leb (l_reserved s + n) (l_read s + 4)) eqn:E.
     - apply Nat.leb_le in E. lia.
     - reflexivity.
   Qed.
@@ -648,40 +653,42 @@ Section ShippedValues.
      bound that refuses it.  A producer whose commit is delayed by another lane
      stalls on refusal, not on wrap. *)
   Example capacity_would_admit_the_lagged_claim :
-    Nat.leb (MediaSmp.l_reserved lagged_lane + 2)
-            (MediaSmp.l_read lagged_lane + 4) = true.
+    Nat.leb (l_reserved lagged_lane + 2)
+            (l_read lagged_lane + 4) = true.
   Proof. reflexivity. Qed.
 
   Example inflight_window_refuses_the_lagged_claim :
-    @MediaSmp.claim_admissible 4 2 2 lagged_lane = false.
+    @claim_admissible 4 2 2 lagged_lane = false.
   Proof. reflexivity. Qed.
 
   Example published_shipped_claim_is_well_formed :
-    @MediaSmp.wf_lane 4 2 (MediaSmp.publish (@MediaSmp.claim 4 2 1 catch_up_lane)).
+    @wf_lane 4 2 (publish (@claim 4 2 1 catch_up_lane)).
   Proof.
-    unfold MediaSmp.wf_lane. cbn. repeat split; lia.
+    unfold wf_lane. cbn. repeat split; lia.
   Qed.
 
-  Example warn_fires_at_fifty_ms_gap : @MediaSmp.warn_due 50 100 50 0 = true.
+  (* Closing the section leaves each predicate parameterised only by the bar it
+     actually reads: warn_due by warn_ms, take_over_due by timeout_ms. *)
+  Example warn_fires_at_fifty_ms_gap : @warn_due 50 50 0 = true.
   Proof. reflexivity. Qed.
 
-  Example warn_is_silent_at_forty_nine_ms_gap : @MediaSmp.warn_due 50 100 49 0 = false.
+  Example warn_is_silent_at_forty_nine_ms_gap : @warn_due 50 49 0 = false.
   Proof. reflexivity. Qed.
 
   Example takeover_fires_at_one_hundred_ms_gap :
-    @MediaSmp.take_over_due 50 100 100 0 = true.
+    @take_over_due 100 100 0 = true.
   Proof. reflexivity. Qed.
 
   Example takeover_is_premature_at_ninety_nine_ms_gap :
-    @MediaSmp.take_over_due 50 100 99 0 = false.
+    @take_over_due 100 99 0 = false.
   Proof. reflexivity. Qed.
 
   Example shipped_ladder_warns_first :
-    forall age heart, @MediaSmp.take_over_due 50 100 age heart = true ->
-                      @MediaSmp.warn_due 50 100 age heart = true.
+    forall age heart, @take_over_due 100 age heart = true ->
+                      @warn_due 50 age heart = true.
   Proof.
     intros age heart H.
-    unfold MediaSmp.take_over_due, MediaSmp.warn_due, MediaSmp.stale in *.
+    unfold take_over_due, warn_due, stale in *.
     apply Nat.leb_le in H. apply Nat.leb_le. lia.
   Qed.
 

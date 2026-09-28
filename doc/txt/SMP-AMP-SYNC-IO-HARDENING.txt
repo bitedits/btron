@@ -3,7 +3,7 @@ SMP-AMP-SYNC-IO-HARDENING.txt
 B-System (BTRON 3.20) × platform.rs (Tachyonic / InterCore)
 Symmetric Multiprocessing · Asymmetric Multiprocessing · ASYNC Planes · I/O Core · Hardening Plan
 
-Status: Design + Conformance Plan
+Status: Design + Conformance Plan — rev 2, corrected against commit 872b7fd
 Related:
   - doc/md/SMP.md
   - doc/txt/ASYNC.txt
@@ -11,8 +11,26 @@ Related:
   - doc/md/GST-SYNC-RTP.md (deterministic real-time media pipelines, media-plane reference, deferred until foundation solid)
   - https://github.com/o83/platform.rs  (InterCore, AMP, CAS multicursor, Ractors)
   - Makefile / Boot.html port matrix
+  - src/mp/  (NEW: the port-independent multicore substrate this plan builds)
 
 Author context: hardening order before native GStreamer / PipeWire-style audio stack expansion.
+
+REV 2 DECISIONS (owner: Namdak Tonpa, 2026-09-28)
+
+  D1  Normative transport = the platform.rs CAS multicursor ring (bounded, with
+      explicit drop accounting).  The unbounded intrusive-list MPSC printed in
+      SMP.md §3 is DEMOTED to informative — it structurally cannot produce the
+      drop / p99 columns of §7.4, and its reference dequeue has a missing-return
+      path on CAS failure (undefined behaviour).
+  D2  Gate = posix AND qemu, not posix alone.  See §3b-3 for what each ISA
+      actually proves.
+  D3  Code home = ./src/mp/ (multiprocessing), NOT src/kernel/.  The InterCore
+      API surface (§7.3) is the multicore core API; the ring is its private
+      implementation detail.  One object set linked into every port.
+  D4  Naming standardised on test-async.  The test-async spelling is retired.
+  D5  This document is amended before any implementation; doc/txt/ASYNC.txt and
+      doc/md/SMP.md still contain the stale claims listed in §3b and are
+      corrected in a separate pass.
 
 ==============================================================================
 TABLE OF CONTENTS
@@ -21,11 +39,13 @@ TABLE OF CONTENTS
 1.  Introduction & Goals
 2.  Document Structure
 3.  Initial Shot (Immediate Next Action)
+3b. Reality Check against commit 872b7fd (normative prerequisites)
 4.  Port Priority Matrix (Makefile / Boot.html)
 5.  Unified Model: platform.rs ↔ B-System
 6.  Phases
+    6.0  Phase 0.0 — Multi-Core Existence (blocks Phases 2-3)
     6.1  Phase 0 — Baseline & Measurement
-    6.2  Phase 1 — ASYN / MPSC / InterCore
+    6.2  Phase 1 — ASYN / InterCore (src/mp/)
     6.3  Phase 2 — SMP Core Hardening
     6.4  Phase 3 — AMP I/O Core (IO.txt)
     6.5  Phase 4 — Cross-Port Validation
@@ -63,7 +83,7 @@ This document is the single plan that binds:
                       Ractors (Task/Timer/IO), zero-copy, static affinity
 
 Goal: make the actor substrate deterministic, lock-free, allocation-free on
-critical paths, and verifiable by a single conformance harness (test-asyn)
+critical paths, and verifiable by a single conformance harness (test-async)
 before any further media-plane investment.
 
 
@@ -85,23 +105,147 @@ style on critical paths), and the existing µITRON / T-Kernel task model.
 
 
 ==============================================================================
-3. INITIAL SHOT (Immediate Next Action)
-==============================================================================
+3. INITIAL SHOT (Immediate Next Action) — rev 2
+================================================
 
-1. Create verify/test_asyn.c skeleton + asyn_metrics helpers.
-2. Implement --mode=mpsc on the posix target only
-   (exact btron_mpsc_enqueue / dequeue from SMP.md §3 + pure CAS multicursor).
-3. Add Makefile target:
+The new substrate lives in ./src/mp/, not src/kernel/.  It must be
+port-independent C99 with no kernel header dependency beyond include/basic.h,
+so that ONE object set is linked into btron-posix, btron-qemu.elf,
+btron-uefi.elf and the bare-metal ARM builds.  Testing a posix-only copy would
+prove nothing about the shipped path (see §3b-1).
 
-       test-asyn: test-asyn-posix
-       test-asyn-posix: btron-posix
-               ./btron-posix --test=asyn --mode=mpsc --cores=4 --msgs=100000
+1. Create src/mp/asyn_core.h + src/mp/asyn_ring.c + src/mp/mp_clock.c.
+   asyn_core.h exposes ONLY the InterCore surface of §7.3 (pub / sub / spawn /
+   snd / rcv) as the multicore core API.  The CAS multicursor ring, its static
+   sector pools, and the cursor-id allocator are private to asyn_ring.c and are
+   not reachable from outside src/mp/.
+   NOT the unbounded intrusive-list MPSC of SMP.md §3 (decision D1).
 
-4. Instrument enqueue→dequeue latency (max / p99 / avg) and pool accounting.
-5. Gate: make test-async must be green on posix before any other phase work.
+2. Implement --mode=ring on posix AND qemu.
+   Both of those ports are SDL2 host builds (Makefile:468-503 and 578-591), so
+   producers are real threads and the harness is a real process — the kernel
+   task API on posix already maps sta_tsk to pthread_create
+   (src/cores/core_posix.c:267) and SDL_LIBS carries -lpthread.
+
+3. CLI hook.  src/desktop/main.c:62 currently discards its arguments
+   ((void)argc; (void)argv;) and nothing in the tree parses --flag=value except
+   the --csv idiom in verify/btron_verify.c:59.  Add a --test=asyn dispatcher
+   at the top of main() and reuse that idiom.
+
+4. Makefile targets, following the existing TEST_<NAME>_SRCS/OBJS/BIN template
+   at Makefile:1589-1601 (test-ski).  Binary name is $(POSIX_TARGET)
+   (Makefile:468); link flags are $(LDFLAGS) $(SDL_LIBS) (Makefile:503).
+   Add the new names to .PHONY (Makefile:36-44) and to the aggregate test:
+   prerequisite list (Makefile:1578).  No existing target is modified
+   (Rules of Engagement 4).
+
+5. Instrument enqueue→dequeue latency (max / p99 / avg) and pool accounting
+   through mp_clock_us().  Do NOT use the existing time sources: posix get_tim
+   is gettimeofday (core_posix.c:392), i.e. wall-clock and steerable, and
+   btron_smp_spin_us (core_smp.c:153) is a fake pause-count loop that does not
+   produce microseconds.
+
+6. Gate: make test-async green on posix AND qemu before any other phase work.
 
 This is the smallest vertical slice that protects the Zero-Switch Actor
-Topology and gives a repeatable CI gate.
+Topology, gives a repeatable CI gate, and — critically — tests code that ships.
+
+
+==============================================================================
+3b. REALITY CHECK against commit 872b7fd (normative prerequisites)
+==============================================================================
+
+These are measured facts about the tree as it stands, verified file by file.
+Every one of them contradicts a claim in §5 or §6 of this document, or in the
+documents it binds.  They are listed here so no phase is planned against a
+primitive that does not exist.
+
+R1  SMP IS COSMETIC ON EVERY PORT.
+    src/cores/core_smp.c:168-182 btron_smp_boot_aps() sets g_cpu_ready[i]=1 in
+    a loop and prints "AP Trampoline: 16-bit stub @ ... (INIT-SIPI-SIPI)" and
+    "N cores online: Round-Robin SMP dispatcher active".  No ICR write exists:
+    LAPIC_ICR_LO/HI are defined (include/btron/smp.h:31-32) and referenced
+    nowhere.  btron_cpu_id() returns a hardcoded 0 (:184-186).
+    btron_smp_parse_madt() fabricates 4 CPUs (:102-110).  affinity_cpu is set
+    (:207, :307) but never consulted by the dispatcher — there is no pinning.
+    On ARM, src/drivers/bcm283x/cpu/armstub8.S:34 parks every secondary in wfe
+    with the comment "Park secondary cores; BTRON3 runs single-core on core 0."
+    CONSEQUENCE: --cores=N is meaningless on uefi/arm64 today.  §6.3 Phase 2 is
+    not "stabilise AP rendezvous", it is IMPLEMENT AP rendezvous from zero.
+    That is a prerequisite phase, see §6.0.
+
+R2  THERE ARE NO MPSC QUEUES AND NO CAS IN THE TREE.
+    Zero hits for mpsc, btron_mpsc_enqueue, __atomic_*, lock cmpxchg, seqlock
+    under src/ and include/, except dmb sy in src/cores/core_arm64.c and one
+    fence in xhci.c.  doc/txt/ASYNC.txt §0.1 asserts the InterCore bus "maps
+    directly onto the lock-free MPSC queues of core_smp.c"; core_smp.c has no
+    queues of any kind.  That sentence is stale and is corrected with D5.
+    The nearest real thing is src/kernel/ipc_msg.c — a static 32x64 ring with
+    snd_msg/rcv_msg/chk_msg, host-safe and allocation-free, but mutex+cond
+    based.  src/mp/ is therefore a NEW layer, and T-Kernel mailbox surface must
+    keep resolving to ipc_msg.c until InterCore is proven.
+
+R3  "posix and qemu" IS A HOST GATE ON ONE ISA, AND THAT ISA IS WEAKLY ORDERED.
+    btron-posix and btron-qemu.elf are both built by the host compiler with
+    SDL2 (Makefile:578-591: $(QEMU_TARGET): $(QEMU_OBJS); $(CC) ... $(SDL_LIBS);
+    run-qemu executes ./btron-qemu.elf).  Neither runs under qemu-system.
+    Real emulation is used for other ports: uefi under
+    $(QEMU_X86_64) -M q35 -smp cores=4,threads=1,sockets=1,accel=tcg
+    (Makefile:720) and arm64 under $(QEMU_AARCH64) -M raspi3b (Makefile:1253).
+    CONSEQUENCE: on this host (arm64 Darwin) the gate does exercise a weakly
+    ordered memory model with real atomics — which is exactly the model Cortex-
+    A72 uses, so a posix+qemu green here is genuinely predictive for ARM.  It is
+    NOT predictive for x86 uefi, and it will silently stop being predictive if CI
+    moves to x86.  Record the host triple in every results row, and do not let a
+    posix/qemu pass substitute for the raspi3b run.
+
+R4  THE ASYN PLANES EXIST, BUT ONLY ON ARM64 BARE METAL AND ONLY AT 1 ms.
+    include/btron/async_rt.h is real, shipped, and the only implemented part of
+    this plan: wait-free seqlock pointer_slot_t (:46-55), async_rt_stats_t
+    telemetry already carrying input_gap_max_us / trb_max / isr_max_us /
+    blit_max_us / key_enqueue→dispatch (:69-84), budgets ASYNC_ISR_TRB_BUDGET=32,
+    ASYNC_UI_BUDGET_US=4000, and an absolute-deadline loop at
+    core_arm64.c:1498-1576.  src/cores/core_posix.c references none of it
+    (zero hits for async_rt, input_plane, pointer_slot).
+    ASYNC_INPUT_PERIOD_US is 1000 (async_rt.h:17), not 250.  So §7.4's metrics
+    should be REUSED from async_rt_stats_t, not reinvented as asyn_metrics.
+    async_rt_format_compact_status (core_arm64.c:155) already exists, which is
+    what IO.txt VR2 asks to extend.
+
+R5  PERIOD / BUDGET NORMS CONFLICT ACROSS THE THREE SPECS.  Resolved here.
+    plane          period      budget    source                     status
+    INPUT (T1)     1000 us     500 us    async_rt.h:17,27           SHIPPED
+    INPUT (T1)     1000 us     200 us    ASYNC.txt §3.1 table       doc only
+    I/O core (AMP) 250 us      500 us    IO.txt:337-338             not built
+    UI             8333 us     4000 us   async_rt.h:18,28 == IO.txt SHIPPED
+    RULING: --mode=planes uses the SHIPPED Tier-1 values 1000/500, because a
+    test must assert what the code promises; ASYNC.txt's 200 us is the open
+    defect, not the requirement.  --mode=amp uses 250/500 and is unbuildable
+    until R1 is fixed.  Fix the 200-vs-500 divergence in ASYNC.txt under D5.
+    Success criterion "max pointer-snapshot gap <= 2xTi" inherits this choice:
+    at Ti=1000 us the bar is 2000 us, not 500 us.  §9 corrected accordingly.
+
+R6  HEARTBEAT NORM.  IO.txt HM1 (:321) sets ASYNC_IO_HEARTBEAT_MS = 100 as the
+    takeover trigger, while the IO.txt §16 checklist says "50 ms confirmation".
+    Both were transcribed into this document.  RULING: 100 ms is the timeout;
+    50 ms is a stricter WARNING threshold that must not trigger takeover.  §6.4
+    corrected.  Flag the IO.txt self-contradiction for D5.
+
+R7  rcv SEMANTICS CONFLICT.  ASYNC.txt §0.1 canonical rcv "yields to scheduler
+    if empty"; §7.3 of this document declares bool rcv(...) non-blocking, and
+    snd returns bool where the canonical form returns nil-on-success.  A yield
+    on an empty cursor is a scheduler sleep on the hot path, which is precisely
+    what Zero-Switch Actor Topology forbids.  RULING in §7.3: rcv is strictly
+    non-blocking and returns a tri-state (data / empty / cursor-exhausted); any
+    blocking variant is a separate call outside the ASYNC path.
+
+R8  THE MEDIA PLANE IS A FACADE.  src/apps/orchestra.c is not a GStreamer
+    pipeline: it builds a fake in-repo gst_element struct (:390) and prints
+    hardcoded virtiosndsink HUD strings (:809), with no threads and no VirtIO
+    queue.  So --mode=full's "light VirtIO-Sound / Orchestra stub" would stub a
+    stub, and doc/md/GST-SYNC-RTP.md §6 line 365 ("already partially embodied in
+    Orchestra's zero-dependency C99 GStreamer pipeline") is not true.  --mode=full
+    is cut from the rev-2 gate; see §7.2.
 
 
 ==============================================================================
@@ -127,52 +271,90 @@ Daily development loop = make run-posix (fast) + periodic make run-uefi (true SM
 5. UNIFIED MODEL: platform.rs ↔ B-System
 ==============================================================================
 
+Rev 2: the middle column now states the ACTUAL status of each realisation, per
+§3b.  "TO BUILD" means nothing in the tree implements it today.
+
 platform.rs concept              | B-System realisation                          | test-async verification
 ---------------------------------|-----------------------------------------------|------------------------------------------
 AMP (dedicated IO core(s),       | IO.txt: exactly one I/O core                  | Core assignment, release/takeover,
-  static affinity)               | (ASYNC_IO_CORE_ID), others parked             | single-producer invariants
+  static affinity)               | (ASYNC_IO_CORE_ID = 3)  **TO BUILD** (R1:     | single-producer invariants
+                                 | every port is single-core; cores 1-3 parked)   | BLOCKED until §6.0
 InterCore bus                    | MPSC queues + seqlock + SPSC EVT              | Cursor ownership, non-blocking
-  (pub / sub / spawn / snd / rcv)| (SMP.md §3 + ASYNC.txt §0.1)                  | snd/rcv, no locks on hot path
+  (pub / sub / spawn / snd / rcv)| **TO BUILD in src/mp/** (R2: no MPSC, no CAS  | snd/rcv, no locks on hot path
+                                 | exist; seqlock is arm64-only R4; EVT queue in  |
+                                 | src/window/event.c is plain non-atomic ints)   |
 CAS multicursor ring buffers     | Lock-free MPSC / SPSC rings, atomic cursors   | Zero-copy, no cursor intersection,
-  (sectors)                      |                                               | bounded sectors, pure CAS
+  (sectors)                      | **TO BUILD** — normative transport (D1)        | bounded sectors, pure CAS
 Ractors (Task / Timer / IO       | Pinned worker loops + absolute-deadline       | One drain loop per core, budgeted
-  per core)                      | periods                                       | periods, no cross-core contention
+  per core)                      | periods: PARTIAL — loop exists at 1 ms on     | periods, no cross-core contention
+                                 | arm64 only (R4); pinning does not exist (R1)   |
 Zero-copy + L1/L2 affinity       | Static message pools, pinned workers          | Cache-friendly layout, measured
-                                 |                                               | latency under contention
+                                 | **PARTIAL**: ipc_msg.c is static but mutex-    | latency under contention
+                                 | based (R2); async_rt_stats_t telemetry exists  |
 Star topology of publisher       | Each core owns its publisher queue;           | No central broker, no kernel traps
-  queues                         | MPSC is pure function over them               | on critical path
+  queues                         | MPSC is pure function over them **TO BUILD**   | on critical path
 
 
 ==============================================================================
 6. PHASES
 ==============================================================================
 
+6.0  Phase 0.0 — Multi-Core Existence (NEW, blocks Phases 2 and 3)
+------------------------------------------------------------------
+Primary: uefi (x86_64) and arm64 (Pi 3B/4B/400)
+Per §3b-R1 there is currently no second core running on any port.  Before any
+SMP or AMP assertion can mean anything:
+• UEFI: issue a real INIT-SIPI-SIPI via LAPIC_ICR_LO/HI (already defined, never
+  used), land the trampoline, give each AP its own stack, and make
+  btron_cpu_id() read a real source (TPR/MPIDR) instead of returning 0.
+• ARM: remove the unconditional park loop in armstub8.S:34 and add the
+  release word from IO.txt §4 so cores 1..3 can be woken selectively.
+• Make affinity_cpu actually bind a task; today it is written and ignored.
+Deliverable: a port where btron_cpu_id() returns distinct values on two cores.
+Nothing in Phases 2-4 may be attempted before this is true.  Phases 0 and 1 do
+NOT depend on it (they run single-producer-plus-ISR on one core, or host threads).
+
 6.1  Phase 0 — Baseline & Measurement
 -------------------------------------
-Targets: posix + uefi
-• Instrument MPSC enqueue/dequeue latency and drop rates under load.
-• Simple stress harness (concurrent producers + light audio + TAD + windowing).
-• Document current WCET bounds (message → worker → VirtIO-Sound write).
-• Confirm make run-posix and make run-uefi are the daily loops.
+Targets: posix + qemu (see D2; uefi only after Phase 0.0)
+• Instrument ring enqueue/dequeue latency and drop rates under load.  Note that
+  drop rates are only definable for the bounded ring of D1 — the SMP.md §3 list
+  queue cannot drop.
+• Reuse async_rt_stats_t (include/btron/async_rt.h:69-84) rather than adding a
+  parallel asyn_metrics struct; it already carries input_gap_max_us, trb_max,
+  isr_max_us, blit_max_us, composite_max_us and key enqueue→dispatch.
+• Simple stress harness (concurrent producers + light TAD + windowing).  Audio
+  is excluded: Orchestra is a facade (§3b-R8), so there is no audio worker to load.
+• Document current WCET bounds (message → worker → VirtIO-Sound write).  On
+  arm64 these are already measured in the HUD path; record them, do not restate.
+• Confirm make run-posix and make run-qemu are the daily loops.
 Deliverable: measured maxima table → choose latency budgets for later phases.
+  Record the host triple in the table (§3b-R3): the numbers are only portable
+  to the same memory model.
 
-6.2  Phase 1 — ASYN / MPSC / InterCore
--------------------------------------
-Primary: posix → qemu / sakamura
-• Lock-free correctness (memory ordering, ABA, overflow policy).
-• Bounded static message pools (NASA JPL Rule 3 style).
-• Priority / affinity hooks so Orchestra / Cassette can pin real-time workers.
-• Leaky / drop policy consistent with GST.md-style queues.
-• Implement InterCore surface (pub/sub/spawn/snd/rcv) on top of MPSC.
-• Non-blocking drain loop robust under overload.
-Success: deterministic sub-ms message delivery on posix and qemu under
-         concurrent audio + UI load; make test-async --mode=mpsc,intercore green.
+6.2  Phase 1 — ASYN / InterCore (src/mp/)
+----------------------------------------
+Primary: posix + qemu → sakamura
+• Lock-free correctness (memory ordering, ABA, overflow policy) on the CAS
+  multicursor ring.
+• Bounded static sector pools (NASA JPL Rule 3 style); no post-boot allocation.
+• Implement the InterCore surface (pub/sub/spawn/snd/rcv) as src/mp/asyn_core.h,
+  with the ring private behind it.
+• Priority / affinity hooks so Orchestra / Cassette can pin real-time workers —
+  hooks only; the pinning itself needs Phase 0.0.
+• Leaky / drop policy consistent with the temporal-queue rules of GST-SYNC-RTP.md §3.3.
+• Non-blocking drain loop robust under overload; rcv is tri-state, never a sleep (R7).
+Success: deterministic sub-ms message delivery on posix and qemu under concurrent
+         UI load; make test-async --modes=ring,intercore green.
+         ("+ audio" removed from the criterion — R8.)
 
 6.3  Phase 2 — SMP Core Hardening
 ---------------------------------
+REQUIRES Phase 0.0 complete (§3b-R1).  "Stabilise" is the wrong verb: none of
+the below exists, it is being written from zero.
 Primary: uefi (x86_64-uefi-smp)
 Secondary: arm64-elf (Pi 4B)
-• Stabilise AP rendezvous (INIT-SIPI-SIPI, trampoline @ 0x9000, per-CPU stacks).
+• AP rendezvous (INIT-SIPI-SIPI, trampoline @ 0x9000, per-CPU stacks).
 • CR3 / PCID switching and TLB behaviour.
 • Shared kernel high-half + per-process user space isolation.
 • Keep Display Primitives (DP) in Ring 0 / shared mapped buffers
@@ -183,9 +365,13 @@ Success: multi-core Orchestra + Cassette + TAD workloads without priority
 
 6.4  Phase 3 — AMP I/O Core (IO.txt)
 ------------------------------------
+REQUIRES Phase 0.0: cores 1..3 are parked in wfe at armstub8.S:34 and
+ASYNC_IO_CORE_ID is not defined anywhere in src/ or include/ (§3b-R1/R2).
 Primary: arm64 (Pi 4 / Pi 400) then uefi simulation
 • Exactly one I/O core (default ASYNC_IO_CORE_ID = 3).
-• Release word + heartbeat (≤ 50 ms) + takeover handshake (BR1–BR5).
+• Release word + heartbeat (takeover timeout 100 ms per IO.txt HM1; 50 ms is a
+  warning threshold only and must not trigger takeover — §3b-R6) + takeover
+  handshake (BR1–BR5).
 • EVT queue converted to wait-free SPSC; single-producer invariants enforced.
 • I/O-core prohibitions: no mailbox, no uart, no heap, no full paint.
 • Absolute-deadline loop @ 250 µs, WCET budget 500 µs.
@@ -215,7 +401,7 @@ Do not start until Phases 0–4 are green.
 
 7.1  Coverage Map
 -----------------
-Document          | Key invariants exercised by test-asyn
+Document          | Key invariants exercised by test-async
 ------------------|-------------------------------------------------------------------
 SMP.md            | Tier-1 vs Tier-2; lock-free MPSC; Zero-Switch Actor Topology;
                   | shared kernel high-half; PCID/CR3 on UEFI; DP out of user IPC
@@ -230,88 +416,236 @@ platform.rs       | AMP affinity; CAS multicursor sectors; InterCore pub/sub/spa
 
 7.2  Modes
 ----------
---mode=mpsc        pure CAS MPSC (SMP.md §3 + platform.rs multicursor)
---mode=intercore   full pub/sub/spawn/snd/rcv surface
---mode=planes      ASYNC.txt INPUT/UI equal-pri periods + budgets
---mode=amp         IO.txt single I/O core + release protocol
---mode=reactors    Task/Timer/IO reactor isolation
---mode=full        all of the above + light VirtIO-Sound / Orchestra stub
---mode=unicore     force Tier-1 behaviour (1 core, flat, no AMP)
+Each mode lists what it can PROVE per port, because the ports are not
+equivalent (R1, R3).  A mode that requires a second core is reported SKIP, not
+PASS, on a port that does not have one — silently passing on a single core is
+how this plan would have certified nothing.
+
+--mode=ring        CAS multicursor ring: accounting, bounds, drop policy,
+                   cursor intersection.  Provable on posix + qemu (host threads)
+                   and on arm64 (main loop + 1 kHz ISR producer).  Replaces the
+                   old --mode=mpsc label; D1 makes it a ring, not the list queue.
+--mode=intercore   full pub/sub/spawn/snd/rcv surface.  spawn with core affinity
+                   is SKIP until Phase 0.0; single-core spawn is provable now.
+--mode=planes      Tier-1 INPUT/UI equal-priority periods + budgets.
+                   Normative values are the SHIPPED 1000/500 + 8333/4000
+                   (async_rt.h), not ASYNC.txt's 200 us — see R5.  This mode
+                   already has a real implementation on arm64 and is the closest
+                   thing to a regression test the plan has.
+--mode=amp         IO.txt single I/O core + release protocol.  SKIP everywhere
+                   until Phase 0.0 lands; 250/500 values.
+--mode=reactors    Task/Timer/IO reactor isolation.  Partially provable host-side.
+--mode=full        all modes that are not SKIP on this port.  The old
+                   "+ light VirtIO-Sound / Orchestra stub" clause is deleted:
+                   Orchestra is a facade (R8), so the stub would assert against
+                   itself.
+--mode=unicore     force Tier-1 behaviour (1 core, flat, no AMP).  NOTE: this is
+                   the ONLY behaviour any port has today.  It is the default and
+                   the first mode to take green.
 
 Common options:
-  --cores=N  --producers=M  --duration=S  --msgs=K
-  --io-core=3  --period-io-us=250  --budget-io-us=500
+  --cores=N        N is a REQUEST, and the harness prints the cores actually
+                   available; oversubscription on a single-core port is an error,
+                   not a pass.
+  --producers=M  --duration=S  --msgs=K   (K default 1000000, one scale
+                   throughout — the rev-1 text mixed 100000 and 1000000)
+  --io-core=3  --period-io-us=<1000|250>  --budget-io-us=<500|500>
+                   mode=planes → 1000/500;  mode=amp → 250/500.  A single
+                   global default is wrong for one of the two (R5), so defaults
+                   are per-mode and an explicit flag overrides.
   --period-ui-us=8333  --budget-ui-us=4000
   --trb-budget=32  --policy=leaky|drop|block
   --audio=0|1  --verbose=0|1
 
-7.3  InterCore API Surface (normative, identical to platform.rs taxonomy)
-------------------------------------------------------------------------
-writer_id_t  pub(size_t capacity);              /* publisher CAS cursor   */
-reader_id_t  sub(writer_id_t pub);              /* subscriber cursor      */
-task_id_t    spawn(core_id_t, program, cursors[]); /* exclusive ownership */
-bool         snd(writer_id_t, void *data);      /* non-blocking send      */
-bool         rcv(reader_id_t, void *out);       /* non-blocking receive   */
+7.3  InterCore API Surface — src/mp/asyn_core.h
+-----------------------------------------------
+This surface IS the multicore core API (D3).  Nothing outside src/mp/ may touch
+a ring, a cursor, or a sector pool; asyn_core.h is the only header installed.
+Taxonomy is identical to platform.rs / ASYNC.txt §0.1, with two resolutions:
+
+  writer_id_t  pub(size_t capacity);              /* publisher CAS cursor   */
+  reader_id_t  sub(writer_id_t pub);              /* subscriber cursor      */
+  task_id_t    spawn(core_id_t, program, cursors[]); /* exclusive ownership */
+  snd_result_t snd(writer_id_t, const void *data);   /* OK | FULL(dropped) | BAD_CURSOR */
+  rcv_result_t rcv(reader_id_t, void *out);          /* DATA | EMPTY | BAD_CURSOR */
+
+R7 resolutions, normative here and superseding both earlier texts:
+  • rcv is STRICTLY non-blocking.  ASYNC.txt §0.1 says it "yields to scheduler
+    if empty"; a scheduler yield on the drain path is the sleep/wake transition
+    the Zero-Switch Actor Topology exists to avoid, so EMPTY is returned to the
+    caller and any blocking wait is a different, non-ASYNC entry point.
+  • snd returns WHY it failed, not a bare bool.  A silent false cannot be
+    distinguished from a policy drop, and §7.4 needs the drop count.
+  • cursor ids are dense small ints into static tables; no handle, no pointer
+    escape, so spawn can transfer ownership by value.
+  • spawn's core_id is validated against the cores that actually exist (R1).
+    On today's ports only core 0 is real, so spawn(core_id>0) returns an error
+    rather than quietly scheduling on core 0.
 
 All later modes (planes, amp, full) post events only through this surface.
+T-Kernel mailbox/message-buffer APIs (src/kernel/ipc_msg.c) keep their current
+behaviour and are NOT rerouted until this surface passes §7.4 on two ports.
 
 7.4  Metrics & Pass Criteria (example output)
 ---------------------------------------------
-[ASYN] mode=full cores=4 io_core=3
-[ASYN] mpsc: enq=1000000 deq=998412 drop=1588 max_lat_ns=41200
-[ASYN] intercore: pub=4 sub=8 spawn_ok=1 ownership_exclusive=1 cursor_intersect=0
-[ASYN] planes: input_jitter_us=180 ui_budget_overruns=0 gap_max_us=1920
-[ASYN] amp: release_ok=1 heartbeat_ms=12 takeover_ok=1 dual_producer=0
-[ASYN] io_wcet_us=187 evt_spsc_ok=1 prohibitions_ok=1
-[ASYN] PASS
+Reporting is SPLIT, because the repo already owns a conformance-clause registry
+and adding a second, unlinked one would orphan the results matrix:
 
-Fail with non-zero exit and a reason that maps back to a section of
-SMP.md / ASYNC.txt / IO.txt / platform.rs.
+  structural invariants  →  verify/suite/v_asyn.c, recorded with
+      vfy_record(suite, entity, pass, ...) where entity is the spec section,
+      e.g. "IO.txt §5.1", "ASYNC.txt §3.1", "SMP.md §3".  These flow into the
+      existing dynamic subsystem matrix and CSV (verify/report/results.c) and
+      satisfy "a reason that maps back to a section" for free.
+  latency / stress runs   →  the runtime --test=asyn harness, which prints the
+      [ASYN] rows below and additionally appends its rows to the same vfy_state
+      so one table covers both.
+
+[ASYN] mode=full port=posix host=aarch64-apple-darwin cores_req=4 cores_have=1
+[ASYN] ring: enq=1000000 deq=998412 drop=1588 max_lat_ns=41200 p99_ns=9100 pool_free=0
+[ASYN] intercore: pub=4 sub=8 spawn_ok=1 ownership_exclusive=1 cursor_intersect=0
+[ASYN] planes: input_jitter_us=180 ui_budget_overruns=0 gap_max_us=1920 (bar 2xTi=2000)
+[ASYN] amp: SKIP (no second core on this port — see §3b-R1, Phase 0.0)
+[ASYN] io_wcet_us=187 evt_spsc_ok=1 prohibitions_ok=1
+[ASYN] PASS(4/5 modes, 1 SKIP)
+
+Rules for this output:
+  • echo the host triple and cores actually available on every row (R3); a
+    number without its memory model is not evidence.
+  • drop is only meaningful because D1 made the transport a bounded ring; the
+    latency figures come from mp_clock_us, never gettimeofday or
+    btron_smp_spin_us (R3, Initial Shot 5).
+  • SKIP is not PASS.  --mode=amp on a single-core port must fail the run if
+    --require=amp was given, and report SKIP otherwise.
+  • pool_free must return to its initial value at exit: any leak in a static
+    pool is a hard fail, and this is the assertion that actually protects the
+    no-post-boot-allocation rule.
+  • Add one wrap-boundary case: IO.txt:57 warns the CLO wraps every ~71.6 min
+    and deadline arithmetic must survive it; no rev-1 mode covered it.
+  • Exit non-zero on the first failed clause, printing its entity string.
 
 7.5  Makefile Integration
 -------------------------
-.PHONY: test-async test-asyn-posix test-asyn-uefi test-asyn-qemu test-asyn-arm64
+Rev 1 was not droppable into the Makefile: .PHONY declared test-async while the
+only rule was test-async (so the documented gate command had no target), and the
+uefi/qemu/arm64 lines were "…", which is not Make syntax.  Real recipes below.
 
-test-asyn: test-asyn-posix
+Anchor: insert after the aggregate test: target (Makefile:1578), following the
+TEST_<NAME>_SRCS/OBJS/BIN template used by test-ski (Makefile:1589-1601).
+Add test-async to that test: prerequisite list.  Touch nothing else (RoE 4).
+Names: $(POSIX_TARGET) = btron-posix$(EXEEXT) (Makefile:468), $(QEMU_TARGET) =
+btron-qemu.elf$(EXEEXT) (Makefile:469); link flags $(LDFLAGS) $(SDL_LIBS).
 
-test-asyn-posix: btron-posix
-	./btron-posix --test=asyn --mode=full --cores=4 --duration=10
-	./btron-posix --test=asyn --mode=unicore --duration=5
-	@echo "[PASS] test-async (posix)"
+  MP_SRCS        = src/mp/asyn_ring.c src/mp/asyn_core.c src/mp/mp_clock.c \
+                   verify/tests/test_async.c
+  MP_OBJS        = $(MP_SRCS:.c=.test.o)
+  TEST_ASYNC_BIN = ./.build/test_async
 
-test-asyn-uefi:   …   # true SMP + PCID
-test-asyn-qemu:   …
-test-asyn-arm64:  …   # Pi 4 AMP path
+  .PHONY: test-async test-async-posix test-async-qemu test-async-uefi test-async-arm64
+
+  test-async: test-async-posix test-async-qemu
+
+  # (a) standalone host binary: links src/mp only, no SDL, no desktop window.
+  #     Fast loop, and it is the only place a 1 M-message ring soak belongs.
+  $(TEST_ASYNC_BIN): $(MP_OBJS)
+	$(CC) $(MP_OBJS) -o $@ $(LDFLAGS) -lpthread
+
+  test-async-posix: $(TEST_ASYNC_BIN) $(POSIX_TARGET)
+	@./$(TEST_ASYNC_BIN) --mode=ring --producers=4 --msgs=1000000
+	@./$(TEST_ASYNC_BIN) --mode=intercore
+	@./$(POSIX_TARGET) --test=asyn --mode=full --duration=10
+	@./$(POSIX_TARGET) --test=asyn --mode=unicore --duration=5
+
+  # (b) the qemu PORT is also a host SDL build (R3), so this is still host code
+  test-async-qemu: $(QEMU_TARGET)
+	@./$(QEMU_TARGET) --test=asyn --mode=unicore --duration=5
+
+  # (c) true cross-arch runs under system emulation.  Blocked on Phase 0.0 for
+  #     anything beyond --mode=unicore; kept as separate targets so they cannot
+  #     silently drop out of the gate.  Reuse the existing raspi3b recipe
+  #     (Makefile:1253-1258) and the uefi q35 recipe (Makefile:720); both
+  #     already pass -serial stdio, so grep the log rather than inventing a
+  #     new emulator invocation here.
+  test-async-arm64: $(ARM64_TARGET)
+	$(QEMU_AARCH64) -M raspi3b -m 1G $(KERNEL_DISPLAY) -kernel $(ARM64_TARGET) -serial stdio | tee .build/asyn-arm64.log
+	@grep -q "\[ASYN\] PASS" .build/asyn-arm64.log
+  test-async-uefi: $(UEFI_TARGET)
+	$(QEMU_X86_64) -M q35,accel=tcg -cpu qemu64 -smp cores=4,threads=1,sockets=1 -m 1G -kernel $(UEFI_TARGET) -serial stdio | tee .build/asyn-uefi.log
+	@grep -q "\[ASYN\] PASS" .build/asyn-uefi.log
 
 
 ==============================================================================
-8. RULES OF ENGAGEMENT
+8. RULES OF ENGAGEMENT — rev 2
 ==============================================================================
 
-1. Daily loop = make run-posix + periodic make run-uefi.
-2. Never break the unicore real-time contract on arm-elf / Pi 2B while
-   adding SMP/AMP features.
+1. Daily loop = make run-posix + make test-async, with periodic
+   make run-uefi / make test-async-arm64.  Note that run-uefi is a 4-vCPU
+   QEMU guest whose kernel still believes it has one CPU (R1) — treat it as a
+   build check until Phase 0.0, not as SMP evidence.
+2. Never break the unicore real-time contract on arm-elf / Pi 2B while adding
+   SMP/AMP features.  This is now doubly load-bearing: unicore is the only
+   contract that currently exists (R1), so --mode=unicore is the regression
+   baseline for every later change.
 3. All new ASYN/SMP/AMP code stays cleanroom C99 + static allocation on
-   critical paths.
-4. Makefile targets stay as they are; only add test-asyn* targets.
-5. Document every latency bound and isolation guarantee (extend SMP.md
-   or add ASYN.md).
-6. InterCore is the only permitted cross-core primitive on the ASYNC path.
+   critical paths.  src/mp/ additionally may not include any kernel header
+   other than include/basic.h, so that the same objects link everywhere (D3).
+4. Makefile targets stay as they are; only add test-async* targets (D4 — the
+   test-async spelling is retired).
+5. Document every latency bound and isolation guarantee.  Where a bound differs
+   by layer, write it in the per-layer table of §3b-R5 rather than as one
+   number; the rev-1 conflict between 200/500 us came from a single-number habit.
+6. InterCore (src/mp/asyn_core.h) is the only permitted cross-core primitive on
+   the ASYNC path.  Until it passes §7.4 on two ports, ipc_msg.c remains the
+   mailbox surface and nothing is rerouted onto an unproven bus.
 7. Exactly one I/O core; never share the input workload across cores.
-8. Media-plane (GStreamer subset, PipeWire-like graph, WebRTC MCU) work
-   is forbidden until Phases 0–4 are green.
+   Corollary the rev-1 text omitted: a test harness must not print from the I/O
+   core either.  IO.txt §5.3 forbids console writes there, so amp-mode telemetry
+   is buffered into a static struct and formatted by core 0 — otherwise the
+   harness itself breaks the invariant it is checking.
+8. Media-plane work (GStreamer subset, PipeWire-like graph, WebRTC MCU, NuStream)
+   is forbidden until Phases 0, 0.0, 1-4 are green.
+9. NEW: a mode that cannot run on a port reports SKIP with the blocking phase
+   named.  Reporting PASS because the assertion degenerated on one core is the
+   failure mode this whole revision exists to prevent.
 
 
 ==============================================================================
-9. SUCCESS CRITERIA SUMMARY
+9. SUCCESS CRITERIA SUMMARY — rev 2
 ==============================================================================
 
-• make test-async green on posix, qemu, sakamura, uefi, arm64.
-• MPSC / InterCore: perfect accounting, sub-ms latency, zero post-boot alloc.
-• Planes: max pointer-snapshot gap ≤ 2×Ti under continuous dirty UI.
-• AMP: dual-producer windows == 0, release/takeover/heartbeat OK,
-  I/O-core prohibitions held, WCET ≤ budget.
-• Unicore (Tier-1) path still meets hard RT bounds.
-• Only then open Phase 5 (media plane).
+Phase 1 bar (what make test-async must actually mean):
+• Green on posix AND qemu, on the SAME src/mp/ objects that link into the ARM
+  and UEFI builds — not on a posix-only reimplementation (D3, Initial Shot).
+• Ring / InterCore: perfect accounting (enq == deq + drop, pool_free returns to
+  its initial value), sub-ms p99, zero post-boot allocation.
+• Planes: max pointer-snapshot gap ≤ 2×Ti with Ti = 1000 us as shipped, i.e.
+  2000 us — NOT 500 us.  See R5; resolve the ASYNC.txt 200 us divergence before
+  this bar is tightened.
+• Unicore (Tier-1) path still meets hard RT bounds, on arm64 hardware, measured
+  not inferred.
+• Every [ASYN] row carries its host triple and cores-actually-available.
+
+Phase 2/3 bar (only reachable after Phase 0.0):
+• Two cores reporting distinct btron_cpu_id() values on uefi and arm64.
+• AMP: dual-producer windows == 0, release/takeover OK, heartbeat takeover at
+  100 ms with the 50 ms warning distinguished, I/O-core prohibitions held
+  including the no-console-write rule for the harness itself, WCET ≤ 500 us at
+  the 250 us period.
+• sakamura, uefi, arm64 all green.
+
+Only then open Phase 5 (media plane).
+
+DOC DEBT CREATED BY THIS REVISION (fix in the D5 pass)
+  1. doc/txt/ASYNC.txt §0.1 — "maps directly onto the lock-free MPSC queues of
+     core_smp.c": false, no such queues exist (R2).
+  2. doc/txt/ASYNC.txt §0.1 — rcv "yields to scheduler if empty": contradicts
+     the non-blocking ruling in §7.3 (R7).
+  3. doc/md/SMP.md §3 — the MPSC listing is demoted to informative under D1;
+     keep it only with a note that its dequeue lacks a return on the CAS-fail
+     path.
+  4. doc/txt/ASYNC.txt §3.1 table — INPUT budget 200 us vs the shipped 500 us
+     in include/btron/async_rt.h:27 (R5).
+  5. doc/txt/IO.txt §16 checklist — "50 ms confirmation" vs HM1's 100 ms (R6).
+  6. doc/md/GST-SYNC-RTP.md §6 — "already partially embodied in Orchestra's
+     zero-dependency C99 GStreamer pipeline": Orchestra is a facade (R8).
 
 End of SMP-AMP-SYNC-IO-HARDENING.txt

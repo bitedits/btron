@@ -2,9 +2,13 @@
 
 \usepackage[margin=1.8cm,top=2.0cm,bottom=2.0cm]{geometry}
 \usepackage{amsmath,amssymb,amsfonts,amsthm}
-\newtheorem{definition}{Definition}
-\newtheorem{theorem}{Theorem}
-\newtheorem{lemma}{Lemma}
+\newtheorem{theorem}{Theorem}[section]
+\newtheorem{lemma}[theorem]{Lemma}
+\theoremstyle{definition}
+\newtheorem{definition}{Definition}[section]
+\theoremstyle{remark}
+\newtheorem{remark}{Remark}[section]
+\theoremstyle{plain}
 \usepackage{algorithmic}
 \usepackage{graphicx}
 \usepackage{textcomp}
@@ -59,6 +63,14 @@
     showstringspaces=false,
     tabsize=2
 }
+
+% Compact, unframed Coq text for the theorem accounting (Section \ref{sec:accounting}).
+\lstnewenvironment{coc}
+    {\lstset{language=Coq,basicstyle=\ttfamily\fontsize{7.4}{8.6}\selectfont,
+             frame=none,backgroundcolor=\color{white},xleftmargin=0.6em,aboveskip=2pt,belowskip=1pt,
+             showstringspaces=false,breaklines=true,columns=fullflexible,
+             keepspaces=true,numberstyle=}}
+    {}
 
 \title{\LARGE \textbf{BTRON Concurrency Tiers.\\ MP/AMP/SMP/Async, Media RTP and the InterCore\\ in the Calculus of Inductive Constructions,\\ with Modal Extensions for Non-Determined Multicore Parallelism}}
 
@@ -120,7 +132,7 @@ Each of these is an \emph{equation} between naturals or booleans computed from o
 
 \subsection{Contributions}
 \begin{enumerate}[leftmargin=*]
-    \item A single signature---total state transformer over a table-shaped bus, with derived accounting---is shown to cover all four concurrency tiers, the media stack, and InterCore (Table~\ref{tab:signature}).
+    \item A single signature---total state transformer over a table-shaped bus, with derived accounting---is shown to cover all four concurrency tiers, the media stack, and InterCore (Section~\ref{sec:tiers}).
     \item The watermark operator \ctr{min\_fold} is identified as the shared algebraic content of multi-consumer retention in both media (\S\ref{sec:media}) and InterCore (\S\ref{sec:watermark}): residence, freeing, and the ``no over-fill'' theorem are the same three lemmas in two guises.
     \item Cursor ownership is proved, not assumed, to be the mutex-elimination theorem of the InterCore star (\S\ref{sec:ownership}), and the resulting absence of priority inversion between equal-priority INPUT and UI planes is stated as a corollary about the guards of the five calls.
     \item Non-determined parallelism is internalised (\S\ref{sec:modal}) as a box/diamond pair over the step alphabet, computed by \ctr{forallb}/\ctr{existsb} on the same tables the model uses, with trace equivalence induced by commutation of independent calls---a machine-checked partial-order reduction.
@@ -234,23 +246,20 @@ All four tiers are instances of:
 \end{equation}
 with \(\mathcal{A}\) the alphabet of calls, \(R\) the receipts, and \(\pi_i\) the derived observables of Equation~(\ref{eq:accounting}). A tier is then characterised by which coordinates \(\delta\) reads in its guard and which it writes in its state change.
 
-\begin{table}[h]
-\centering
-\small
-\caption{The four concurrency tiers as one signature with different guards. ``Reads'' lists the coordinates consulted by the admission predicate; ``writes'' the coordinates the accepting branch changes.}
-\label{tab:signature}
-\footnotesize
-\begin{tabular}{@{}lllll@{}}
-\toprule
-Tier & Alphabet & Reads & Writes & Determinism \\
-\midrule
-MP    & \ctr{pub,sub}   & \ctr{b\_w,b\_t} & \ctr{b\_w} & sequential \\
-AMP   & \ctr{+,spawn}   & \(+\)\ctr{b\_cores} & \ctr{b\_t} & pinned \\
-SMP   & \ctr{+snd,rcv}  & all \(+\)\ctr{owns} & \ctr{b\_w,b\_r} & non-det.\\
-Async & \ctr{evt\_put}  & head, tail & one each & bounded \\
-\bottomrule
-\end{tabular}
-\end{table}
+The four instances, each read as alphabet, guard, effect, and determinism:
+\begin{itemize}[leftmargin=*,itemsep=1pt,topsep=2pt]
+    \item \textbf{MP} --- alphabet \ctr{pub}, \ctr{sub}; the admission predicate
+    reads \ctr{b\_w} and \ctr{b\_t}, the accepting branch writes \ctr{b\_w};
+    sequential by construction.
+    \item \textbf{AMP} --- adds \ctr{spawn}; the guard additionally reads
+    \ctr{b\_cores} and writes \ctr{b\_t}; every task is pinned to a core.
+    \item \textbf{SMP} --- adds \ctr{snd}, \ctr{rcv}; the guard reads every
+    coordinate together with \ctr{owns}, and the accepting branch writes
+    \ctr{b\_w} and \ctr{b\_r}; the step relation is non-determined
+    (\S\ref{sec:modal}).
+    \item \textbf{Async} --- \ctr{evt\_put} over the event ring; head and tail
+    each have exactly one writer; progress is bounded rather than determined.
+\end{itemize}
 
 \subsection{MP: The Uniprocessor Baseline}
 With \ctr{cores\_shipped} \(=1\), the model degenerates honestly: \ctr{b\_cores} \(=1\) makes \lstinline|core <? b_cores b| admit only core~0, every \ctr{spawn} lands on core~0, and the star of Figure~\ref{fig:star} has one spoke. This is not a limitation but a test of the specification: a model of multicore messaging that cannot be \emph{run} on the shipped single-core board is not a model of the shipped board. The shipped-value section of the theory instantiates the general laws at \ctr{cores\_shipped} and the OCaml oracle executes them.
@@ -412,7 +421,10 @@ A cursor is either a publisher or a subscriber identifier, \ctr{cref := CPub wid
 \label{sec:ownership}
 \begin{lstlisting}[language=Coq]
 Definition owns b (t : nat) (c : cref) : bool :=
-  existsb (fun k => cref_eqb (nth k (t_curs (b_t b t)) (CPub 0)) c) (nat_list (length (t_curs (b_t b t)))).
+  andb (t_live (b_t b t)) (existsb (cref_eqb c) (t_curs (b_t b t))).
+
+Definition cursor_taken b (c : cref) : bool :=
+  existsb (fun t => owns b t c) (nat_list max_tasks).
 
 Definition usable b (cl : caller) (c : cref) : bool :=
   match cl with
@@ -426,6 +438,123 @@ The guard of \ctr{snd} and \ctr{rcv} is not ``the queue is empty'' or ``the lock
 For every admitted call and every state, the set of cursors usable by a task is exactly the set it received from a successful \ctr{spawn}; no \ctr{snd}, \ctr{rcv}, \ctr{pub}, or \ctr{sub} alters \(\mathit{usable}\); and \ctr{spawn} refuses any request naming a cursor already taken. Hence the sharing invariant is established once, at task creation, and the mutual-exclusion question is never asked again at run time.
 \end{theorem}
 The real-time corollary is the one the shipping decision cares about: because no two equal-priority planes contend for a lock, there is no lock to be held by a low-priority context, and therefore \emph{no priority inversion between INPUT and UI at equal priority}. A blocking primitive cannot give this guarantee; a non-blocking one plus exclusive ownership can, and the proof is the four lines of \(\mathit{usable}\).
+
+\subsection{The Five Primitives}
+\label{sec:primitives}
+The whole protocol is five functions, and the whole of their behaviour is four
+cell updates behind decidable guards. A ring is re-adopted, extended, charged
+with a loss, or a cursor is advanced; there is no fifth verb, and no update
+touches two cells. Writing \(w=(\_,c,h,d)\) for a writer and
+\(r=(\_,\mathit{wid},s,\mathit{cur})\) for a reader:
+\begin{equation}
+\label{eq:updates}
+\begin{aligned}
+\mathit{revive}\;\kappa\;w &= (\top,\kappa,h,d)\\
+\mathit{push}\;x\;w &= (\top,c,h\frown\langle x\rangle,d)\\
+\mathit{drop1}\;w &= (\top,c,h,d+1)\\
+\mathit{advance}\;r &= (\top,\mathit{wid},s,\mathit{cur}+1)
+\end{aligned}
+\end{equation}
+which are \ctr{writer\_revive}, \ctr{writer\_push}, \ctr{writer\_drop1} and
+\ctr{reader\_advance} in the file. The calls themselves are short enough to quote
+in full, and every later theorem is a statement about these five terms:
+\begin{lstlisting}[language=Coq,basicstyle=\ttfamily\fontsize{6.9}{8}\selectfont]
+Definition pub_slot b := first_dead (fun i => w_live (b_w b i)) max_writers 0.
+Definition pub (b : bus) (cap : nat) : bus * option nat :=
+  match pub_slot b with
+  | None    => (b, None)
+  | Some i  => (bus_w b i (writer_revive (b_w b i) cap), Some i)
+  end.
+
+Definition sub_admit b cl wid :=
+  andb (w_live (b_w b wid)) (usable b cl (CPub wid)).
+Definition sub (b : bus) (cl : caller) (wid : nat) : bus * option nat :=
+  if sub_admit b cl wid then
+    match sub_slot b with
+    | Some i => (bus_r b i (mk_reader true wid
+                     (w_enq (b_w b wid)) (w_enq (b_w b wid))), Some i)
+    | None   => (b, None)
+    end
+  else (b, None).
+
+Definition spawn (b : bus) (core : nat) (l : list cref) : bus * option nat :=
+  match spawn_slot b with
+  | None   => (b, None)
+  | Some i => if spawn_ok b core l then (bus_t b i (task_revive core l), Some i)
+              else (b, None)
+  end.
+
+Definition snd (b : bus) (cl : caller) (wid : nat) (d : nat) : bus * snd_result :=
+  if negb (snd_admit b cl wid) then (b, S_BAD_CURSOR)
+  else if negb (snd_fits b wid) then
+         (bus_w b wid (writer_drop1 (b_w b wid)), S_FULL (S (w_drop (b_w b wid))))
+       else (bus_w b wid (writer_push (b_w b wid) d), S_OK).
+
+Definition rcv (b : bus) (cl : caller) (rid : nat) : bus * rcv_result :=
+  if negb (rcv_admit b cl rid) then (b, R_BAD_CURSOR)
+  else if negb (rcv_ready b rid) then (b, R_EMPTY)
+  else (bus_r b rid (reader_advance (b_r b rid)),
+         R_DATA (nth (r_cur (b_r b rid)) (w_hist (b_w b (r_wid (b_r b rid)))) 0)).
+\end{lstlisting}
+Three readings of that text carry the rest of the paper.
+
+\emph{(i) Refusal is stuttering.} Every guard is a closed boolean term over the
+bus, and its negation returns the input state unchanged:
+\begin{equation}
+\label{eq:stutter}
+\gamma(p,b) = \mathit{false} \;\Longrightarrow\; \pi_1(\mathrm{call}(p,b)) = b ,
+\end{equation}
+the lemmas \ctr{pub\_full\_refuses}, \ctr{sub\_full\_refuses},
+\ctr{spawn\_refused\_shape}, \ctr{snd\_full\_bus}, \ctr{rcv\_bad\_cursor\_receipt}.
+An error path is therefore inert by construction rather than by review, and a
+\(\Box\)-validity is preserved across a refusal because the refused step is the
+identity (\S\ref{sec:independence}).
+
+\emph{(ii) Acceptance writes one cell of one table.} With \(\pi_j(b)\) the
+\(j\)-th cell of any of the three tables of \(b\),
+\begin{equation}
+\label{eq:locality}
+i \neq j \;\Longrightarrow\; \pi_j\big(b[i \mapsto v]\big) = \pi_j(b),
+\end{equation}
+the pointwise content of the frame lemmas \ctr{at\_w\_other\_w},
+\ctr{at\_r\_bus\_w}, \ctr{cores\_inert\_t} and their fourteen relatives
+(\S\ref{sec:tables}). A writer cell is written by \ctr{pub}, which adopts a slot,
+and by \ctr{snd}, which extends one; a reader cell by \ctr{sub} and \ctr{rcv};
+the task table by \ctr{spawn} alone. Each of those pairs is gated by the same
+\(\mathit{usable}\) test, which is exactly where the ownership discipline of
+Theorem~\ref{thm:mutex} bites. Equation~(\ref{eq:locality}) is also what makes
+two calls to distinct cells commute, and commutation is the reduction that makes
+non-determined interleavings tractable (\S\ref{sec:traces}).
+
+\emph{(iii) Cost is bounded by the tables, not by the traffic.} Each call is one
+fuel-bounded scan of a fixed table plus one constructor application: nothing
+iterates over \(\mathit{w\_hist}\), nothing copies a list, nothing allocates.
+Hence the worst case of \ctr{rcv} is the three-way case analysis of
+\S\ref{sec:receipts} and the worst case of \ctr{snd} is two guards and a
+cons---independent of how deep the queue has become or how long the process has
+run. Note in particular what \ctr{snd} does on overflow: it writes the same cell
+with \(\mathit{drop}{+}1\) and returns the new count, so a full ring costs one
+word of state and cannot stall the caller.
+
+Admission for \ctr{sub} and \ctr{snd} is literally the same term
+\(\mathit{w\_live}(b_w[b,w]) \wedge \mathit{usable}(b,t,\mathit{CPub}\,w)\): a
+core that may attach a subscriber to a ring is the core that may publish on it,
+and there is no separate permission to keep consistent. The guards the other two
+calls add are arithmetic on derived counters,
+\begin{equation}
+\label{eq:guards}
+\begin{aligned}
+\mathit{snd\_fits}(b,w) &= \big(\mathit{held}(b,w) < \mathit{w\_cap}(b_w[b,w])\big)
+  \wedge \big(\mathit{total\_held}(b) < P\big)\\
+\mathit{rcv\_ready}(b,\rho) &= \mathit{r\_cur}(b_r[b,\rho]) <
+  \mathit{w\_enq}\big(b_w[b,\mathit{wid}(\rho)]\big)
+\end{aligned}
+\end{equation}
+with \(\mathit{held}\) the watermark fold of \S\ref{sec:watermark} and \(P\) the
+sector pool. Nothing in Equations~(\ref{eq:updates})--(\ref{eq:guards}) is a
+specification \emph{about} the implementation: they \emph{are} the model that the
+C kernel is required to refine, and Section~\ref{sec:acct:intercore} states the
+headline judgements they yield, group by group.
 
 \subsection{Watermarks}
 \label{sec:watermark}
@@ -478,32 +607,61 @@ For every admitted call:
 \end{theorem}
 Statement (c) is why \ctr{pool\_room} is a redundant guard in the shipped configuration---kept for the general case, proved inert here. Statement (d) is the reason the launch-time accounting of \S\ref{sec:oracles} closes: sectors leave the pool only through \ctr{held}, and every path that raises \ctr{held} lowers \ctr{pool\_free} by the same amount, by conversion. Statement (e) is the broker-freeness of Equation~(\ref{eq:mpsc-free}) observed at the level of values rather than state: the item crosses the star, and the receipt names it.
 
-\subsection{The Eleven Property Groups}
-The theory is organised in eleven groups, each a section of the same file and each mirrored by an identically named group in the OCaml oracle:
+\subsection{The Sixteen Property Groups}
+The theory is organised in sixteen groups, each a section of the same file and
+each mirrored by an identically named group in the OCaml oracle. Section
+\ref{sec:acct:intercore} states the headline judgement of every group
+classically, with the vocabulary it is written in and the reason it was worth
+proving; the counts below are the closed judgements currently discharged in each
+group's sections, so that the shape of the effort is visible before its content.
+The model layer beneath the sixteen groups --- the frame lemmas of
+\S\ref{sec:tables}, the derived accounting, the receipts, and \ctr{bus\_wf} ---
+carries a further \(67\), for \(602\) in the file.
 
-\begin{table}[h]
-\centering
-\small
-\caption{InterCore property groups. Counts are the obligations currently discharged in the assembled \ctr{media\_intercore\_properties.v}.}
-\label{tab:groups}
-\begin{tabular}{@{}clp{5.7cm}@{}}
-\toprule
- & Group & Content \\
-\midrule
-I1  & Admission   & slot searches terminate inside the table; \ctr{pub}/\ctr{sub} refuse a full table; distinct grants; a call never creates a core \\
-I2  & Topology    & a subscriber joins at its publisher's tail and pins nothing; \ctr{snd} respects capacity and pool; no over-fill \\
-I3  & Non-blocking & receipts are exclusive and exhaustive; \ctr{rcv} never yields, never rewinds, never advances by two, never spends a slot \\
-I4  & Integrity   & \ctr{received} is a slice of the publisher's history, its items were published, appending-on-read, \ctr{snd}-then-\ctr{rcv} round trip \\
-I5  & Star        & one publisher per task, one publisher-holding task per core; watermark locality; \ctr{star\_ok} characterisation \\
-I6  & Naming      & \ctr{spawn} validates \ctr{core\_id}; taken cursors refused; task shape preserved \\
-I7  & Ownership   & exclusive ownership preserved by all five calls (Theorem~\ref{thm:mutex}) \\
-I8  & Conservation& Theorem~\ref{thm:conservation}; \(\mathit{enq} = \mathit{deq} + \mathit{drop} + \mathit{held}\) \\
-I9  & Determinacy & general laws standing in for the exhaustive interleaving search \\
-I10 & Planes      & mode-indexed supply/budget equations; \ctr{SKIP} for unbuildable modes \\
-I11 & Events      & masked-index ring algebra; one writer per field; FIFO across the wrap; \(\mathit{KEY}\)/\(\mathit{BUT}\) never dropped \\
-\bottomrule
-\end{tabular}
-\end{table}
+\begin{enumerate}[leftmargin=*,itemsep=0pt,topsep=2pt]
+    \item[\textbf{I1}] \emph{Admission} (\(16\)): slot searches terminate inside
+    the static table, a full table refuses with a receipt, grants are distinct,
+    and no call creates a core.
+    \item[\textbf{I2}] \emph{Topology} (\(67\)): a subscriber joins at its
+    publisher's tail and pins nothing; \ctr{snd} respects capacity and pool, and
+    never over-fills.
+    \item[\textbf{I3}] \emph{Non-blocking} (\(48\)): the three receipts are
+    exclusive and exhaustive; \ctr{rcv} never yields, never rewinds, never
+    advances by two, never spends a slot when empty.
+    \item[\textbf{I4}] \emph{Integrity} (\(10\)): \ctr{received} is one slice of
+    the publisher's own history, its items were published, and a read appends.
+    \item[\textbf{I5}] \emph{Star} (\(20\)): one publisher per task, one
+    publisher-holding task per core, watermark locality, and a characterisation
+    of \ctr{star\_ok}.
+    \item[\textbf{I6}] \emph{Naming} (\(37\)): \ctr{spawn} validates
+    \ctr{core\_id}; each refusal leaves the bus untouched; an admission is
+    exactly the request.
+    \item[\textbf{I7}] \emph{Ownership} (\(28\)): one cursor, one owner,
+    preserved by all five calls (Theorem~\ref{thm:mutex}).
+    \item[\textbf{I8}] \emph{Conservation} (\(19\)):
+    \(\mathit{enq}=\mathit{deq}+\mathit{drop}+\mathit{held}\)
+    (Theorem~\ref{thm:conservation}), and quiescence returns the whole pool.
+    \item[\textbf{I9}] \emph{Determinacy} (\(52\)): \ctr{bus\_wf} is an inductive
+    invariant --- the general law standing in for the exhaustive interleaving
+    search.
+    \item[\textbf{I10}] \emph{Planes} (\(21\)): mode-indexed supply and budget
+    equations, with \ctr{SKIP} for an unbuildable mode.
+    \item[\textbf{I11}] \emph{Events} (\(56\)): masked power-of-two ring algebra,
+    one writer per field, FIFO across the wrap, proved for a 600-step soak.
+    \item[\textbf{I12}] \emph{Commutation} (\(48\)): two independent grants in
+    either order give observably equal buses, and the class is closed under that
+    equality.
+    \item[\textbf{I13}] \emph{Modality} (\(35\)): box and diamond over the step
+    alphabet with \(\mathsf{K}\), duality and the \ctr{always} induction rule;
+    \ctr{bus\_wf} proved always.
+    \item[\textbf{I14}] \emph{Branching} (\(35\)): witnesses that the enabled set
+    is not a singleton and that call order is observable.
+    \item[\textbf{I15}] \emph{Visibility} (\(23\)): the subscriber cursor is a
+    floor; a store is in the fabric while only the publish is visible.
+    \item[\textbf{I16}] \emph{Catch-up} (\(20\)):
+    \(\mathit{pending}(\mathit{read\_k}\ k)=\max(0,\mathit{pending}-k)\), and a
+    drain stops at the tail.
+\end{enumerate}
 
 %-------------------------------------------------------------------------
 \section{Modal Extensions: Non-Determined Parallelism Inside the Kernel}
@@ -573,12 +731,13 @@ $ ./media_intercore_model
 ==> B-System media_intercore model: pub/sub/spawn/snd/rcv cursors,
     star topology, sector pool
 PASS: OCaml oracle (media_intercore_model.ml) -
-      InterCore invariants I1..I11 passed (75 checks, 262144 interleavings).
+      InterCore invariants I1..I16 passed (103 checks, 262144 interleavings).
 $ coqc media_intercore_properties.v          # silent, exit 0: nothing left open
 $ coqchk -o -silent media_intercore_properties
 * Axioms: <none>
 * Constants/Inductives relying on type-in-type: <none>
 * Constants/Inductives relying on unsafe (co)fixpoints: <none>
+* Inductives whose positivity is assumed: <none>
 \end{lstlisting}
 
 The search is eight call forms at each of six positions, \(8^{6} = 262{,}144\) runs from a seeded bus, and the oracle records which \emph{interesting} branch was reached during the search---so that ``sectors really leave the pool under interleaving'' and ``a full ring really reports \(\mathit{S\_FULL}\)'' are witnessed, not merely unrefuted. Coverage witnesses are what distinguishes an exhaustive search from an exhaustive pass.
@@ -603,21 +762,1079 @@ The policy is one line in the harness, and it is the line that makes the other s
 The harness emits one verdict per model---OCaml oracle and Coq theory separately---and a summary count that is the only number the reviewer is asked to trust. The media block of a current run:
 
 \begin{lstlisting}[basicstyle=\ttfamily\scriptsize]
+==> OCaml model (media_intercore_model.ml)
+PASS: OCaml oracle (media_intercore_model.ml) - InterCore invariants
+      I1..I16 passed (103 checks, 262144 interleavings).
+==> OCaml model (media_rtp_model.ml)
+PASS: OCaml oracle (media_rtp_model.ml) - media invariants R1..R10 passed (80 checks).
 ==> OCaml model (media_smp_model.ml)
     ring: explored 279936 interleavings (6 ops ^ length 7)
 PASS: OCaml oracle (media_smp_model.ml) - invariants S1..S11 passed
       (52 checks, 279936 interleavings, 35 cursor triples).
-PASS: OCaml oracle (media_rtp_model.ml) - media invariants R1..R10 passed (80 checks).
-PASS: OCaml oracle (media_intercore_model.ml) - InterCore invariants
-      I1..I11 passed (75 checks, 262144 interleavings).
-==> Coq/Rocq properties (media_rtp_properties.v)
-PASS: coqc + coqchk (media_rtp_properties.v - theorems closed, no axioms)
 ==> Coq/Rocq properties (media_intercore_properties.v)
 PASS: coqc + coqchk (media_intercore_properties.v - theorems closed, no axioms)
-==> Summary: 14 passed, 0 failed
+==> Coq/Rocq properties (media_properties.v)
+FAIL: coqc exited non-zero for media_properties.v
+Error: Can't find file ./media_properties.v
+==> Summary: 15 passed, 1 failed
 \end{lstlisting}
 
+The last three lines are quoted deliberately. \ctr{media\_properties.v} --- the global model of \S\ref{sec:conclusion} --- is registered in the harness array and has not been written, so the run reports \ctr{FAIL} and the summary reads \(15\) passed, \(1\) failed, not a clean sheet. A suite that printed only its passes would be a marketing artefact; this one is a specification, including about its own gaps.
+
 Each line is a claim about a \emph{definition} that the reader may open and read. Nothing here is a claim about timing, memory, or the compiler---those are the C implementation's burden, discharged by instrumentation on the board. The division is deliberate: mathematics owns the invariants, hardware owns the constants.
+
+%-------------------------------------------------------------------------
+\section{The \Coq{} Base Library: A Theorem Accounting}
+\label{sec:accounting}
+
+Sections \ref{sec:kernel}--\ref{sec:modal} argue method; this section is the
+ledger, item by item. The mathematics lives in seven \Coq{} files under
+\ctr{verify/models/}, one per subsystem, each with its OCaml oracle beside it and
+both registered in the same harness array. What follows is stated in the
+classical form --- the \emph{definition} a claim is written in, the
+\emph{judgement} as the file states it, and the \emph{remark} that says why the
+judgement was worth its price in proof. No proof is reproduced: a proof in this
+corpus is \ctr{reflexivity}, \ctr{lia}, or an induction of a few lines, and the
+interesting artefact is the statement.
+
+\textbf{Counting rule.} Obligations are the closed judgements introduced by
+\ctr{Lemma}, \ctr{Theorem}, \ctr{Corollary} and \ctr{Example}; vocabulary is
+introduced by \ctr{Definition}, \ctr{Record}, \ctr{Inductive}, \ctr{Fixpoint} and
+\ctr{Notation}. Both counts are keyword counts over the file, so the inventory
+below is reproducible from the tree by \ctr{grep}. The two numbers that decide
+soundness are not counted but asserted: \ctr{admit} and \ctr{Admitted} occur
+nowhere in the corpus except in prose, and \ctr{Axiom}, \ctr{Parameter} and
+\ctr{Hypothesis} occur nowhere at all. Every obligation in every file is closed,
+because one open obligation would make \ctr{coqc} emit a warning the harness
+prints and \ctr{coqchk -o} name in its axiom list.
+
+\subsection{Inventory}
+The library as it stands, seven theories and eight oracles under one harness:
+
+\begin{itemize}[leftmargin=*]
+    \item \ctr{media\_intercore\_properties.v} --- the InterCore star and the
+    modal layer: \(6{,}218\) lines, \(127\) vocabulary declarations, \(602\) closed
+    judgements, \(15\) \ctr{Print Assumptions} lines, sixteen groups
+    I1--I16 (\S\ref{sec:acct:intercore}).
+    \item \ctr{media\_rtp\_properties.v} --- NuStreams, RTP, budgets, the fork
+    rule: \(1{,}977\) lines, \(107\) declarations, \(161\) judgements, \(12\) gate
+    lines, ten groups R1--R10 (\S\ref{sec:acct:rtp}).
+    \item \ctr{media\_smp\_properties.v} --- the CAS ring, AMP ownership, the
+    seqlock: \(699\) lines, \(39\) declarations, \(69\) judgements, eight groups
+    (\S\ref{sec:acct:smp}).
+    \item \ctr{hypermedia\_dnd\_properties.v} --- Real/Virtual Body, the
+    direct-manipulation protocol, TAD persistence: \(1{,}034\) lines, \(55\)
+    declarations, \(61\) judgements, \(6\) gate lines (\S\ref{sec:acct:dnd}).
+    \item \ctr{bfs\_properties.v} --- the Volume V2 journal and its write-ahead
+    log: \(554\) lines, \(21\) declarations, \(39\) judgements, \(6\) gate lines;
+    with \ctr{bfs\_btree\_properties.v} (\(192\) lines, \(10\)/\(6\)) and
+    \ctr{bfs\_allocator\_properties.v} (\(141\) lines, \(11\)/\(6\))
+    (\S\ref{sec:acct:bfs}).
+\end{itemize}
+
+\noindent
+That is \(10{,}815\) lines, \(370\) vocabulary declarations and \(944\) closed
+judgements, of which \(39\) are additionally named in the file for a reader who
+wants to ask the kernel about them directly. The distribution is deliberately
+uneven. InterCore carries \(602\) of the \(944\) obligations because it is the
+only subsystem whose claims are about \emph{non-determined} execution, and a
+modal property decomposes: one \(\Box\) claim is a reachability lemma, an
+induction rule, and a corollary per conjunct. The file-system theories are small
+because their claims are local to one data structure. Three files
+(\ctr{bfs\_btree}, \ctr{bfs\_allocator}, \ctr{media\_smp}) predate the in-file
+gate and are audited by \ctr{coqchk} alone; the gate block is now the convention,
+and adding it to those three is the cheapest outstanding work in the library.
+
+%-------------------------------------------------------------------------
+\subsection{The InterCore Theory}
+\label{sec:acct:intercore}
+
+Sixteen groups, \(535\) obligations, standing on a \(67\)-obligation model layer,
+and mirrored line for line by the identically numbered groups of
+\ctr{media\_intercore\_model.ml}, which runs \(103\) checks over the same
+alphabet. The vocabulary is the one fixed in \S\ref{sec:intercore}; it is repeated
+here only so that each statement below can be read on its own.
+
+\begin{definition}[Bus, cursors, derived holding]
+\label{def:acct:bus}
+\begin{coc}
+Record writer := mk_writer { w_live : bool; w_cap : nat
+                             ; w_hist : list nat; w_drop : nat }.
+Record reader := mk_reader { r_live : bool; r_wid : nat
+                             ; r_start : nat; r_cur : nat }.
+Record bus    := mk_bus { b_cores : nat; b_w : nat -> writer
+                               ; b_r : nat -> reader; b_t : nat -> task }.
+Definition w_enq (w : writer) : nat := length (w_hist w).
+Definition held b (wid : nat) : nat :=
+  if w_live (b_w b wid)
+  then w_enq (b_w b wid) - floor_of b wid (w_enq (b_w b wid)) else 0.
+Definition bus_wf b := wf_tables b /\ wf_bounded b /\ wf_reader_bounds b
+     /\ wf_tasks b /\ wf_ownership b /\ wf_star b /\ wf_retired b.
+\end{coc}\end{definition}
+
+\begin{remark}
+Counters that are stored can disagree; these cannot. \(\mathit{w\_enq}\) is a
+length, \(\mathit{held}\) a difference of two cursors, \(\mathit{bus\_wf}\) the
+one conjunction every group below reads as its hypothesis. The defect class
+``the bookkeeping said one thing and the data said another'' is not proved
+absent, it is unnameable.
+\end{remark}
+
+\subsubsection*{I1 --- Admission: the tables are static}
+\begin{definition}[Slot search]
+\begin{coc}
+Fixpoint first_dead (slot : nat -> bool) (fuel i : nat) : option nat :=
+  match fuel with
+  | 0    => None
+  | S k  => if negb (slot i) then Some i else first_dead slot k (S i)
+  end.
+Definition pub_slot (b : bus) : option nat :=
+  first_dead (fun i => w_live (b_w b i)) max_writers 0.
+\end{coc}\end{definition}
+\begin{theorem}[A full table refuses; a grant is new]
+\begin{coc}
+Lemma pub_full_refuses : forall b cap,
+  (forall j, j < max_writers -> w_live (b_w b j) = true) -> pub b cap = (b, None).
+Lemma pub_grants_are_distinct : forall b c1 i j,
+  pub_slot b = Some i -> pub_slot (fst (pub b c1)) = Some j -> i <> j.
+\end{coc}\end{theorem}
+\begin{remark}
+Post-boot allocation is not forbidden by policy, which a code path can bypass; it
+is inexpressible, because the only way to name a writer is to point at a cell of
+a fixed table. An exhausted table returns \ctr{None}, so the worst outcome of
+over-subscription is an error code at the call site rather than memory pressure
+somewhere else.
+\end{remark}
+
+\subsubsection*{I2 --- Topology: a join lands at the tail}
+\begin{theorem}[Late subscribers cannot replay]
+\begin{coc}
+Lemma sub_joins_at_the_tail : forall b cl wid i,
+  sub_slot b = Some i -> sub_admit b cl wid = true ->
+  r_start (b_r (fst (sub b cl wid)) i) = w_enq (b_w b wid) /\
+  r_cur   (b_r (fst (sub b cl wid)) i) = w_enq (b_w b wid) /\
+  r_wid   (b_r (fst (sub b cl wid)) i) = wid.
+\end{coc}\end{theorem}
+\begin{remark}
+A subscriber seeds at its publisher's tail and therefore holds zero sectors at
+birth. This is the memory claim of the whole layer: retention is bounded by the
+tables and the ring capacities, never by how long a consumer has been absent, and
+a daemon that restarts cannot pin a week of history.
+\end{remark}
+
+\subsubsection*{I3 --- \ctr{rcv} is total and strictly non-blocking}
+\begin{definition}[The protocol's whole error surface]
+\begin{coc}
+Inductive snd_result := S_OK | S_FULL (dropped : nat) | S_BAD_CURSOR.
+Inductive rcv_result := R_DATA (v : nat) | R_EMPTY | R_BAD_CURSOR.
+\end{coc}\end{definition}
+\begin{theorem}[The receipts are exhaustive]
+\begin{coc}
+Lemma rcv_receipt_exhaustive : forall b cl rid,
+  pr2 (rcv b cl rid) = R_BAD_CURSOR \/ pr2 (rcv b cl rid) = R_EMPTY
+  \/ (exists d, pr2 (rcv b cl rid) = R_DATA d).
+\end{coc}\end{theorem}
+\begin{remark}
+There is no inhabitant of the result type meaning ``park the caller'', so
+\ctr{rcv} cannot become an implicit scheduler yield; its worst case is a
+three-way case analysis. The companion lemmas of the group add the other half of
+the real-time argument: the three constructors are exclusive, a read never
+rewinds a cursor, never advances it by two, and never spends a slot when the
+publisher has nothing.
+\end{remark}
+
+\subsubsection*{I4 --- Integrity of what was received}
+\begin{definition}[The receipt, derived]
+\begin{coc}
+Definition received b (r : reader) : list nat :=
+  firstn (r_deq r) (skipn (r_start r) (w_hist (b_w b (r_wid r)))).
+\end{coc}\end{definition}
+\begin{theorem}[Every receipt is a slice of its own publisher]
+\begin{coc}
+Lemma received_is_a_slice : forall b r n, r_deq r = n ->
+  received b r = firstn n (skipn (r_start r) (w_hist (b_w b (r_wid r)))).
+\end{coc}\end{theorem}
+\begin{remark}
+Torn reads, replay, and cross-talk between arms of the star are the three ways a
+lock-free multi-consumer queue is normally wrong, and here they are excluded by
+the shape of the definition: a reader's history \emph{is} a contiguous slice of
+one writer's \(\mathit{w\_hist}\). A value an arm never published cannot be read
+by it, because there is no other place for it to come from.
+\end{remark}
+
+\subsubsection*{I5 --- The star is the topology}
+\begin{definition}[One publisher per core]
+\begin{coc}
+Definition star_ok b (core : nat) (l : list cref) : bool :=
+  if negb (Nat.eqb (pub_count_c l) 0)
+  then negb (core_holds_publisher b core) else true.
+\end{coc}\end{definition}
+\begin{theorem}[A core has at most one publisher]
+\begin{coc}
+Lemma publisher_per_core_is_unique : forall b t1 t2, bus_wf b ->
+  holds_pub b t1 = true -> holds_pub b t2 = true ->
+  t_core (b_t b t1) = t_core (b_t b t2) -> t1 = t2.
+\end{coc}\end{theorem}
+\begin{remark}
+The broker does not exist, so it cannot be the bottleneck, the latency source,
+or the single point of failure; and two tasks on one core cannot both own the
+same publisher cursor. This is the theorem that lets the multi-consumer view be
+a projection (Equation~(\ref{eq:mpsc-free})) rather than a component.
+\end{remark}
+
+\subsubsection*{I6 --- \ctr{spawn} validates before it grants}
+\begin{definition}[Admission]
+\begin{coc}
+Definition spawn_ok b (core : nat) (l : list cref) : bool :=
+  andb (core <? b_cores b)
+       (andb (negb (Nat.eqb (length l) 0))
+             (andb (cursors_live b l)
+                   (andb (forallb (fun c => negb (cursor_taken b c)) l)
+                         (andb (Nat.leb (pub_count_c l) 1) (star_ok b core l))))).
+\end{coc}\end{definition}
+\begin{theorem}[An admission is exactly the request]
+\begin{coc}
+Lemma spawn_grants_ownership : forall b core l i c,
+  spawn_slot b = Some i -> spawn_ok b core l = true -> In c l ->
+  owns (fst (spawn b core l)) i c = true.
+\end{coc}\end{theorem}
+\begin{remark}
+Half-granted ownership --- a cursor left owned by nobody, or by two tasks, after
+a rejected call --- is the classic error-path bug, and the group kills it in both
+directions: \ctr{spawn\_grants\_ownership} for the admitted case and six
+refusal lemmas, one per conjunct of \ctr{spawn\_ok}, each proving the returned
+bus is the input bus. The error path is as safe as the success path.
+\end{remark}
+
+\subsubsection*{I7 --- Ownership: the rule that removes the mutex}
+\begin{definition}[The caller \emph{is} the lock]
+\begin{coc}
+Definition owns b (t : nat) (c : cref) : bool :=
+  andb (t_live (b_t b t)) (existsb (cref_eqb c) (t_curs (b_t b t))).
+Definition usable b (cl : caller) (c : cref) : bool :=
+  match cl with
+  | NoTask   => negb (cursor_taken b c)
+  | ByTask t => owns b t c
+  end.
+\end{coc}\end{definition}
+\begin{theorem}[Exclusivity]
+\label{thm:acct:usable}
+\begin{coc}
+Lemma usable_is_exclusive : forall b t1 t2 c, bus_wf b ->
+  usable b (ByTask t1) c = true -> usable b (ByTask t2) c = true -> t1 = t2.
+\end{coc}\end{theorem}
+\begin{remark}
+One cursor, one owner, definitionally --- and since no two equal-priority planes
+contend for a lock, there is no lock a low-priority context can hold, hence no
+priority inversion between the INPUT and UI planes (Theorem~\ref{thm:mutex}).
+The remaining \(27\) obligations of the group are the other half: the invariant
+survives all five calls, so the question is asked once at task creation and
+never again at run time.
+\end{remark}
+
+\subsubsection*{I8 --- Conservation of sectors}
+\begin{theorem}[The gap is the holding, seen from any subscriber]
+\begin{coc}
+Lemma conservation_at_the_floor : forall b wid rid,
+  rid < max_readers -> r_live (b_r b rid) = true -> r_wid (b_r b rid) = wid ->
+  w_live (b_w b wid) = true ->
+  floor_of b wid (w_enq (b_w b wid)) = r_cur (b_r b rid) ->
+  r_cur (b_r b rid) + held b wid = w_enq (b_w b wid).
+Lemma pool_never_overdrawn : forall b, bus_wf b -> total_held b <= sector_pool.
+\end{coc}\end{theorem}
+\begin{remark}
+This is the leak assertion of the launch review, as a theorem: \(\mathit{enq} =
+\mathit{deq} + \mathit{drop} + \mathit{held}\) coordinate by coordinate, the pool
+is never overdrawn, and the quiescence lemmas give \(\mathit{pool\_free} =
+\mathit{sector\_pool}\) once every subscriber has caught up. A soak therefore
+proves conservation instead of hoping nothing leaked.
+\end{remark}
+
+\subsubsection*{I9 --- The class the five calls cannot leave}
+\begin{definition}[Steps and runs]
+\begin{coc}
+Definition apply_step (b : bus) (st : step) : bus :=
+  match st with
+  | Pub_step cap       => fst (pub b cap)
+  | Sub_step wid       => fst (sub b NoTask wid)
+  | Snd_step wid d     => fst (snd b NoTask wid d)
+  | Rcv_step rid       => fst (rcv b NoTask rid)
+  | Spawn_step core l  => fst (spawn b core l)
+  end.
+Fixpoint run (b : bus) (steps : list step) : bus :=
+  match steps with
+  | nil      => b
+  | st :: tl => run (apply_step b st) tl
+  end.
+\end{coc}\end{definition}
+\begin{theorem}[Inductivity over all words]
+\begin{coc}
+Theorem interleavings_preserve_bus_wf : forall steps,
+  (forall st, In st steps -> wf_step st) -> bus_wf (run bus0 steps).
+\end{coc}\end{theorem}
+\begin{remark}
+The general law that the oracle's \(8^{6}=262{,}144\)-run search can only
+witness. Its six corollaries --- no run overdraws the pool, exceeds the rings,
+over-fills a ring, shares a cursor, has two publishers on a core, or changes the
+core count --- are what turn ``no counterexample found'' into a proof, and they
+are the reason the enumeration below is a coverage instrument rather than the
+argument itself.
+\end{remark}
+
+\subsubsection*{I10 --- Modes, and a gate that cannot fake coverage}
+\begin{definition}[Verdicts]
+\begin{coc}
+Inductive verdict := V_PASS | V_SKIP | V_FAIL.
+Definition row_verdict (mp : mp_flag) (cores : nat) (require : bool) (r : vrow) :=
+  if negb (row_compiled mp r) then V_SKIP
+  else if row_has_the_topology r cores then V_PASS
+       else if require then V_FAIL else V_SKIP.
+\end{coc}\end{definition}
+\begin{theorem}[The target topology passes every row; the shipped port skips one]
+\begin{coc}
+Theorem the_target_topology_passes_every_row :
+  forall r, row_verdict MP_ON cores_target true r = V_PASS.
+Theorem shipped_port_four_pass_one_skip : run_summary MP_ON cores_shipped false
+  = (4, (1, 0)).
+Theorem no_gate_ever_reports_an_uncompiled_row : forall mp cores require r,
+  row_verdict mp cores require r = V_PASS -> row_compiled mp r = true.
+\end{coc}\end{theorem}
+\begin{remark}
+\ctr{SKIP} is a value in the result type, and the second theorem is the harness's
+policy as mathematics: on the one-core port four of the five rows pass, one
+reports \ctr{V\_SKIP}, and the \ctr{V\_FAIL} count is zero --- a row that is not
+compiled in cannot be counted as covered. The third is the general form of the
+same claim, quantified over gates, core counts and rows, and it is the theorem
+that makes a faked pass in the shell script a contradiction rather than an
+overnight surprise.
+\end{remark}
+
+\subsubsection*{I11 --- The event queue: masked indices, one writer per field}
+\begin{definition}[A power-of-two ring whose cursors are never wrapped]
+\begin{coc}
+Record evtq := mk_evtq { q_buf : nat -> option nat
+                        ; q_head : nat; q_tail : nat }.
+Definition evt_idx (k : nat) : nat := k mod event_queue_size.
+Definition occupancy (e : evtq) : nat := q_tail e - q_head e.
+\end{coc}\end{definition}
+\begin{theorem}[The wrap law, and a 600-step soak in order]
+\begin{coc}
+Theorem evt_index_wraps : forall k, evt_idx (k + event_queue_size) = evt_idx k.
+Theorem soak_of_six_hundred_is_fifo : rev (pr2 (soak 600 1 evtq0 nil)) = seq 1 600.
+\end{coc}\end{theorem}
+\begin{remark}
+The wrap is the one place a ring defect survives testing silently, because a
+short test never reaches it: \(256\) steps must be run, and \(\mathit{evt\_idx}\)
+must be proved periodic rather than sampled. \(\mathit{soak}\) is the executable
+producer/consumer loop, and its FIFO law closes by computation --- the same
+computation the oracle runs, which is why the two agree without a bridge lemma.
+\end{remark}
+
+\subsubsection*{I12 --- What two cores can and cannot tell about each other}
+\begin{definition}[Observational equality]
+\begin{coc}
+Definition obs_eq (b1 b2 : bus) : Prop :=
+  b_cores b1 = b_cores b2
+  /\ (forall j, b_w b1 j = b_w b2 j)
+  /\ (forall j, b_r b1 j = b_r b2 j)
+  /\ (forall j, b_t b1 j = b_t b2 j).
+\end{coc}\end{definition}
+\begin{theorem}[Independent grants are interchangeable]
+\begin{coc}
+Theorem independent_grants_are_interchangeable :
+  forall b i (w : writer) j (r : reader),
+    bus_wf (bus_r (bus_w b i w) j r) ->
+    bus_wf (bus_w (bus_r b j r) i w).
+Theorem two_writes_to_one_cell_need_not_agree :
+  ~ obs_eq (bus_w bus0 0 (mk_writer true ring_capacity nil 0))
+           (bus_w bus0 0 empty_writer).
+\end{coc}\end{theorem}
+\begin{remark}
+The first statement is the multicore law behind ``no lock needed'': two writes to
+\emph{distinct} cells may be performed in either order and the resulting bus is
+the same. The second is the honesty condition, showing the equivalence is not
+trivially total --- writes to one cell genuinely do distinguish states. Together
+they are a partial-order reduction: the non-commuting residue is exactly what
+I9's induction has to handle, and everything else is quotiented away before any
+search.
+\end{remark}
+
+\subsubsection*{I13 --- The modal reading: laws with no chosen schedule}
+\begin{definition}[Box, diamond, reachability, always]
+\begin{coc}
+Definition next_adm (b b' : bus) : Prop :=
+  exists st, wf_step st /\ apply_step b st = b'.
+Definition necessary (P : bus -> Prop) (b : bus) : Prop :=
+  forall b', next_adm b b' -> P b'.
+Definition possible (P : bus -> Prop) (b : bus) : Prop :=
+  exists b', next_adm b b' /\ P b'.
+Inductive reachable (from : bus) : bus -> Prop :=
+  | R_here : reachable from from
+  | R_next : forall b b', reachable from b -> next_adm b b' -> reachable from b'.
+Definition always (P : bus -> Prop) (b : bus) : Prop :=
+  forall b', reachable b b' -> P b'.
+\end{coc}\end{definition}
+\begin{theorem}[\ctr{bus\_wf} holds always, by the rule that proves it]
+\begin{coc}
+Theorem always_induction : forall P b,
+  P b -> (forall x, P x -> necessary P x) -> always P b.
+Theorem bus_wf_is_always : forall b, bus_wf b -> always bus_wf b.
+Corollary always_within_the_pool : forall b, bus_wf b ->
+  always (fun x => total_held x <= sector_pool) b.
+\end{coc}\end{theorem}
+\begin{remark}
+This is the section that makes the paper's fourth claim precise: the invariant
+survives \emph{whatever} the hardware picks next, not a schedule the prover
+chose. The skeleton is proved for its own sake --- \(\mathsf{K}\), distribution
+over \(\wedge\) and \(\vee\), box--diamond duality, \(\mathsf{T}\), 4 --- and one
+group of witnesses shows \ctr{wf\_step} is load-bearing by making the box over
+the unrestricted relation false (\S\ref{sec:modes}).
+\end{remark}
+
+\subsubsection*{I14 --- The schedule is genuinely undetermined}
+\begin{theorem}[Three successors, no function, observable order]
+\begin{coc}
+Theorem pub_bus_branches_three_ways : exists s1 s2 s3 : bus,
+  next_adm pub_bus s1 /\ next_adm pub_bus s2 /\ next_adm pub_bus s3
+  /\ ~ obs_eq s1 s2 /\ ~ obs_eq s1 s3 /\ ~ obs_eq s2 s3.
+Theorem the_alphabet_is_not_a_function :
+  ~ (forall b b1 b2, next_adm b b1 -> next_adm b b2 -> b1 = b2).
+Theorem the_order_is_observable : ~ obs_eq sub_then_snd snd_then_sub.
+\end{coc}\end{theorem}
+\begin{remark}
+Negative statements, and the most useful ones in the file: they are the
+non-vacuity obligations for I12--I13. Without them a reader could object that the
+``modal'' layer is an interleaving simulator wearing a hat, or that \(\Box\) is
+true because only one step exists. Here the branching the hardware has, the
+model has --- three pairwise distinguishable successors from one state, a step
+relation that is not a function, and an order of protocol calls that a bus
+observation can see --- and the invariants of I9 and I13 still hold.
+\end{remark}
+
+\subsubsection*{I15 --- The visibility gap: store, then publish}
+\begin{definition}[The two phases of one producer step]
+\begin{coc}
+Definition evt_store (e : evtq) (v : nat) : evtq :=
+  evt_write e (evt_idx (q_tail e)) (Some v).
+Definition evt_publish (e : evtq) : evtq :=
+  mk_evtq (q_buf e) (q_head e) (S (q_tail e)).
+\end{coc}\end{definition}
+\begin{theorem}[A floor, not a window; and the phases cannot be swapped]
+\begin{coc}
+Theorem the_watermark_is_a_floor : forall b, always (fun x => forall rid,
+  r_live (b_r b rid) = true ->
+  r_live (b_r x rid) = true /\ r_cur (b_r b rid) <= r_cur (b_r x rid)) b.
+Theorem an_unpublished_store_is_invisible : forall e v,
+  q_head e = q_tail e -> pr2 (evt_get (evt_store e v)) = None.
+Theorem publishing_delivers_what_was_stored : forall e v,
+  q_head e = q_tail e -> pr2 (evt_get (evt_publish (evt_store e v))) = Some v.
+Theorem the_phases_cannot_be_swapped :
+  pr2 (evt_get (evt_store (evt_publish evtq0) 7)) = None.
+\end{coc}\end{theorem}
+\begin{remark}
+A published queue fails in two opposite ways: consuming bytes that were reserved
+but never committed, and committing without ever publishing. This group
+separates the two and rules out each, which is exactly the release ordering the
+target's ARM cores require and the ordering the C implementation must reproduce
+with a barrier. The first statement adds the dual guarantee for the subscriber:
+its cursor is a monotone floor, so a slow reader loses items but never gains a
+phantom one, and the modality is what makes that a claim about every future
+state.
+\end{remark}
+
+\subsubsection*{I16 --- Bounded catch-up: a drain budget with an exact effect}
+\begin{definition}[Outstanding items, and a drain of \(k\) reads]
+\begin{coc}
+Definition pending b (r : reader) : nat := w_enq (b_w b (r_wid r)) - r_cur r.
+Fixpoint read_k (b : bus) (rid : nat) (k : nat) : bus :=
+  match k with
+  | 0   => b
+  | S j => read_k (fst (rcv b NoTask rid)) rid j
+  end.
+\end{coc}\end{definition}
+\begin{theorem}[Exactly \(k\) of the gap, and no more than there is]
+\begin{coc}
+Theorem i16_bounded_catch_up : forall b rid k, rcv_admit b NoTask rid = true ->
+  pending (read_k b rid k) (b_r (read_k b rid k) rid)
+    = Nat.max 0 (pending b (b_r b rid) - k).
+Theorem the_drained_reader_reads_empty : forall b rid,
+  rcv_admit b NoTask rid = true ->
+  pr2 (rcv (read_k b rid (pending b (b_r b rid))) NoTask rid) = R_EMPTY.
+\end{coc}\end{theorem}
+\begin{remark}
+A drain budget now has a worst case one can state to a systems engineer: \(k\)
+reads close exactly \(k\) of the gap, a budget larger than the gap is inert
+rather than wrong, and a drained reader's next call returns \ctr{R\_EMPTY}
+instead of consuming somebody else's slot. The supporting obligations are the
+ones a reviewer should ask for first --- \ctr{read\_k\_never\_loses\_the\_cursor}
+(a drain never retires a reader), \ctr{read\_k\_never\_widens\_the\_gap}, and
+\ctr{a\_send\_widens\_the\_gap\_of\_its\_own\_subscribers}, which says a
+\ctr{snd} moves exactly its own subscribers' gaps and no other.
+\end{remark}
+
+%-------------------------------------------------------------------------
+\subsection{The RTP Theory}
+\label{sec:acct:rtp}
+
+Ten groups against oracle invariants R1--R10, \(161\) obligations, of which
+\(31\) are a support layer of list and fold facts proved once so that each
+contract below is a few lines.
+
+\begin{definition}[NuStream static buffer pool]
+\label{def:acct:pool}
+\begin{coc}
+Record buf  := mk_buf  { b_id : nat; b_rc : nat }.
+Record pool := mk_pool { p_cap : nat; free_ids : list nat
+                         ; active : list buf; refused : nat; illegal : nat }.
+Definition acquire (p : pool) : pool :=
+  match free_ids p with
+  | []        => mk_pool (p_cap p) [] (active p) (S (refused p)) (illegal p)
+  | i :: rest => mk_pool (p_cap p) rest (mk_buf i 1 :: active p) (refused p) (illegal p)
+  end.
+\end{coc}\end{definition}
+\begin{theorem}[No minting, no double free, exact recycle]
+\begin{coc}
+Lemma acquire_never_mints : forall p i,
+  In i (active_ids (acquire p)) -> In i (free_ids p) \/ In i (active_ids p).
+Theorem unref_last_release_recycles : forall p i b, pool_wf p ->
+  find_buf i p = Some b -> b_rc b = 1 ->
+  free_ids (unref i p) = i :: free_ids p /\
+  ~ In i (active_ids (unref i p)) /\ pool_conserved (unref i p).
+\end{coc}\end{theorem}
+\begin{remark}
+Use-after-free and double-free, proved at buffer granularity rather than at word
+granularity: an acquire cannot invent an id outside the fixed set, a shared
+buffer survives one \ctr{unref} untouched, the release that reaches zero
+recycles exactly once, and a release of an id not in the pool increments
+\ctr{illegal} instead of being silently accepted. The conservativity conjunct is
+the leak claim --- release everything and the pool is \ctr{pool0} again.
+\end{remark}
+
+\begin{definition}[Leaky temporal queue]
+\begin{coc}
+Definition enqueue (t : nat) (q : qstate) : qstate :=
+  if Nat.ltb (length (q_items q)) queue_cap then
+    mk_q (q_items q ++ [t]) (q_dropped q)
+  else match q_items q with
+       | []       => mk_q [t] (q_dropped q)
+       | _ :: rest => mk_q (rest ++ [t]) (S (q_dropped q))
+       end.
+\end{coc}\end{definition}
+\begin{theorem}[The window is a hard bound (R2)]
+\begin{coc}
+Lemma enqueue_respects_cap : forall t q,
+  length (q_items q) <= queue_cap -> length (q_items (enqueue t q)) <= queue_cap.
+\end{coc}\end{theorem}
+\begin{remark}
+Bounded memory under overload, with the overload visible: the jettisoned stamp
+increments \ctr{q\_dropped}, so a congested path shows up as a counter the
+monitor can print rather than as an unexplained stall.
+\end{remark}
+
+\begin{definition}[Stamping and dilation]
+\begin{coc}
+Definition monotone (l : list nat) : bool :=
+  match l with [] => true | x :: r => mono_from x r end.
+Definition dilate (k t : nat) : nat := k * t.
+\end{coc}\end{definition}
+\begin{theorem}[Order survives rescaling (R3, R4)]
+\begin{coc}
+Theorem dilate_preserves_monotone : forall k l,
+  monotone l = true -> monotone (map (dilate k) l) = true.
+\end{coc}\end{theorem}
+\begin{remark}
+Timestamp monotonicity is the synchronisation claim of the whole media plane, and
+the group's companion proves the enforcement half: a regressed or duplicated
+stamp is refused and leaves the queue identical apart from its refusal counter.
+Dilation stops being a tuned gain and becomes a proven policy --- declaring the
+capacity rate removes it identically.
+\end{remark}
+
+\begin{theorem}[No interpolated frame claims a future source (R5)]
+\begin{coc}
+Definition outputs_upto (P last : nat) : list nat := map (Nat.mul P) (seq 0 (S (last / P))).
+Theorem outputs_never_ahead : forall P last s, In s (outputs_upto P last) -> s <= last.
+\end{coc}\end{theorem}
+\begin{remark}
+The frame-rate-conversion class, including the phantom frame that would read a
+buffer whose packet has not arrived. \(\mathit{outputs\_upto}\) is the emitted
+cadence as a list, so ``exact cadence'' and ``never ahead'' are two readings of
+the same term.
+\end{remark}
+
+\begin{definition}[Per-plane CPU budget]
+\begin{coc}
+Definition run_periods (n : nat) (use_tail : bool) (overrun : nat) : plane_state :=
+  run_aux n true (if use_tail then supply_tail else supply_whole) overrun plane0.
+\end{coc}\end{definition}
+\begin{theorem}[A silent run carries no debt (R6)]
+\begin{coc}
+Theorem no_overrun_leaves_no_debt : forall n (ut : bool), run_periods n ut 0 = plane0.
+\end{coc}\end{theorem}
+\begin{remark}
+The admission test for a plane budget, and the proof's most useful by-product:
+the shipped INPUT/UI figures balance to the microsecond, so the only headroom in
+the plan is the sub-millisecond tail, and an overrun without that tail never
+drains. That is a statement that one specific row of the shipped table is
+unbuildable by design --- found by the proof, not by the review.
+\end{remark}
+
+\begin{definition}[Peer lifecycle on the compositor grid]
+\begin{coc}
+Definition wf_session (s : session) : Prop :=
+  length (ss_slots s) = grid_slots /\ count_true (ss_slots s) = ss_peers s
+  /\ ss_res s = res_per_peer * ss_peers s.
+\end{coc}\end{definition}
+\begin{theorem}[Sixteen fill it; a seventeenth is refused (R7)]
+\begin{coc}
+Lemma join_preserves_wf : forall s, wf_session s -> wf_session (fst (join s)).
+Lemma leave_released_preserves_wf : forall s i b,
+  wf_session s -> ss_peers s = S b -> nth_error (ss_slots s) i = Some true ->
+  wf_session (fst (leave s i)).
+\end{coc}\end{theorem}
+\begin{remark}
+Session-table exhaustion is an error code, not corruption, and a departed peer
+cannot keep a resource slot: the join/leave cycle returns the session to its
+initial state. \(\mathit{wf\_session}\) ties slots to peers to resources, so a
+leak in any one of the three is a contradiction rather than an accounting drift.
+\end{remark}
+
+\begin{theorem}[The documented grid mapping is wrong (R8)]
+\begin{coc}
+Example documented_mapping_cannot_address_the_grid :
+  cells_on_canvas cell_doc grid_slots <> grid_slots.
+Example quarter_grid_tiles_the_canvas_exactly :
+  grid_slots * (canvas_w / 4) * (canvas_h / 4) = canvas_w * canvas_h.
+\end{coc}\end{theorem}
+\begin{remark}
+The single most concrete argument in the library for writing geometry down
+before implementing it: the mapping in the shipped document addresses four of
+the sixteen slots, and the quarter-cell lattice that tiles the canvas exactly was
+found by disproving the documented one. A proof that fails the specification is
+worth more than a proof that passes it.
+\end{remark}
+
+\begin{theorem}[The fork is additive and the gate is orthogonal (R9)]
+\begin{coc}
+Theorem strip_fork_reproduces_upstream : forall shim, strip (make_fork shim) = pristine.
+Theorem gate_orthogonality : forall mp mp' m, media_table mp m = media_table mp' m.
+\end{coc}\end{theorem}
+\begin{remark}
+Fork hygiene as mathematics: stripping the fork recovers the pristine upstream
+text byte for byte, so ``additive only'' is checkable mechanically instead of
+being a review habit, and the media symbol table is constant along the
+\ctr{BTRON\_MP} axis --- the gate adds no symbol and removes none.
+\end{remark}
+
+\begin{definition}[RTP serial arithmetic, grounded in upstream]
+\begin{coc}
+Definition diff16 (s1 s2 : nat) : nat :=
+  if Nat.leb s1 s2 then s2 - s1 else seq_mod - s1 + s2.
+\end{coc}\end{definition}
+\begin{theorem}[The wrap span, and ordered watermarks (R10)]
+\begin{coc}
+Lemma diff16_forward_is_the_span : forall s1 s2,
+  s1 <= s2 -> s2 < seq_mod -> diff16 s1 s2 = s2 - s1.
+Lemma jb_watermarks_are_ordered : forall probs, jb_low_ms probs <= jb_high_ms probs.
+\end{coc}\end{theorem}
+\begin{remark}
+Twenty-three obligations whose content is that the model's constants are a
+deployed implementation's constants --- the \(16\)-bit serial ring and its wrap
+span, the jitter-buffer full test, the \(15\,\%\) and \(90\,\%\) watermarks, the
+jitter EWMA bound, probation \(=2\), the \ctr{CLOCK\_TIME\_NONE} sentinel,
+DTS-over-PTS, the power-of-two mask, videorate's forward gate --- each cited to
+an upstream source line. The off-by-one in a wrap or a mask is exactly what no
+test on a quiet network would surface.
+\end{remark}
+
+%-------------------------------------------------------------------------
+\subsection{The SMP Substrate}
+\label{sec:acct:smp}
+
+Eight groups, \(69\) obligations, the proved companion of
+\ctr{media\_smp\_model.ml}, which runs \(52\) checks over \(279{,}936\)
+interleavings of the same three cursors.
+
+\begin{definition}[One producer lane of a multicursor ring]
+\label{def:acct:lane}
+\begin{coc}
+Record lane_state := mk_lane { l_reserved : nat; l_published : nat; l_read : nat }.
+Definition wf_lane (s : lane_state) : Prop :=
+  l_read s <= l_published s /\ l_published s <= l_reserved s /\
+  l_reserved s <= l_read s + capacity /\ l_reserved s <= l_published s + inflight_max.
+Definition claim (n : nat) (s : lane_state) : lane_state :=
+  if claim_admissible n s then {| l_reserved := l_reserved s + n |} else s.
+\end{coc}\end{definition}
+\begin{theorem}[Admission is safe and refusal inert (1)]
+\begin{coc}
+Lemma claim_preserves_wf : forall n s, wf_lane s -> wf_lane (claim n s).
+Lemma claim_refused_is_inert : forall n s, claim_admissible n s = false -> claim n s = s.
+\end{coc}\end{theorem}
+\begin{remark}
+A lost CAS race leaves no residue: the refused claim is the identity on the
+lane, so a retry loop needs no compensation code. The admitted claim can neither
+oversubscribe the ring nor outrun its own publish watermark, which is the whole
+correctness argument for the lock-free claim/publish discipline of decision D1.
+\end{remark}
+
+\begin{theorem}[No tearing (2)]
+\begin{coc}
+Lemma drain_never_reaches_unpublished : forall n s, wf_lane s ->
+  l_read s + drained n s <= l_published s.
+Lemma claim_publish_drain_round_trip : forall n s, wf_lane s ->
+  claim_admissible n s = true -> drained n (publish (claim n s)) = n.
+\end{coc}\end{theorem}
+\begin{remark}
+A reader can never consume reserved-but-unpublished bytes, and an accepted
+claim/publish/drain round trip returns exactly what was claimed --- the
+half-packet class, stated as an invariant of the model rather than as a rule
+about memory barriers.
+\end{remark}
+
+\begin{theorem}[Three states, none of them blocking (3)]
+\begin{coc}
+Theorem rcv_is_never_blocking : forall n s, rcv n s <> RCV_BLOCKED.
+\end{coc}\end{theorem}
+\begin{remark}
+Discharged by three case analyses and a \ctr{discriminate}. The group also
+proves each of the three states reachable, which is what keeps the statement
+from being vacuous: \ctr{rcv} can never become an implicit scheduler yield, and
+it can never be starved by a definition that makes the ready state empty.
+\end{remark}
+
+\begin{theorem}[Byte conservation (4)]
+\begin{coc}
+Lemma conservation : forall s, wf_lane s ->
+  in_flight s = (l_published s - l_read s) + outstanding s.
+Lemma drain_splits_the_readable_pool : forall n s,
+  drained n s + (l_published s - l_read s - drained n s) = l_published s - l_read s.
+\end{coc}\end{theorem}
+\begin{remark}
+In flight is readable plus still-in-commit, and a drain takes only from the
+readable pool. This is the equation a monitor prints, which is the point: the
+counters on the console are the counters that were proved.
+\end{remark}
+
+\begin{definition}[AMP drain ownership]
+\begin{coc}
+Inductive core := CORE_BOOT | CORE_IO.
+Definition owner (p : amp_phase) : option core :=
+  match p with
+  | PH_BOOT | PH_RELEASED | PH_TAKEOVER => Some CORE_BOOT
+  | PH_IO_ACTIVE | PH_IO_STALE          => Some CORE_IO
+  | PH_DEAD                             => None
+  end.
+Definition io_may_drain (p : amp_phase) (released : bool) : bool :=
+  andb (io_phase p) released.
+Definition boot_may_drain (p : amp_phase) (age heart : nat) : bool :=
+  andb (boot_phase p) (take_over_due age heart).
+\end{coc}\end{definition}
+\begin{theorem}[One owner, and no early failover (5)]
+\begin{coc}
+Lemma owner_is_single_valued : forall p c1 c2,
+  owner p = Some c1 -> owner p = Some c2 -> c1 = c2.
+Lemma io_cannot_drain_before_release : forall p, io_may_drain p false = false.
+Lemma boot_and_io_cannot_both_drain : forall p released age heart,
+  io_may_drain p released = true -> boot_may_drain p age heart = false.
+Lemma takeover_not_premature : forall age heart,
+  stale age heart < timeout_ms -> take_over_due age heart = false.
+\end{coc}\end{theorem}
+\begin{remark}
+The shared accumulator between planes has one owner by construction, the I/O
+core cannot touch it before the release word, and failover cannot fire before the
+timeout bar. The last of the four is the one that prevents the classical
+dual-consumer corruption: a takeover that reads a timestamp too optimistically
+and drains while the other core is still draining.
+\end{remark}
+
+\begin{definition}[Seqlock slot]
+\begin{coc}
+Record slot := mk_slot { sl_seq : nat; sl_acc : nat }.
+Definition stable (s : slot) : Prop := exists k, sl_seq s = 2 * k.
+Definition consumer_delta (cur before : slot) : nat := sl_acc cur - sl_acc before.
+\end{coc}\end{definition}
+\begin{theorem}[Lossless coalescing (6)]
+\begin{coc}
+Lemma publish_is_monotonic : forall d s, sl_acc s <= sl_acc (publish_delta d s).
+Lemma delta_nonneg : forall cur before, sl_acc before <= sl_acc cur ->
+  0 <= consumer_delta cur before.
+Lemma guarded_rejects_unstable : forall a b, seq_matches a b = true ->
+  updating a = true -> guarded a b = None.
+\end{coc}\end{theorem}
+\begin{remark}
+Truncated subtraction is the hazard here: a lagging consumer's delta must never
+be negative, and monotonicity is what makes \ctr{sub} faithful. A torn read is
+not corrected --- it is rejected, returning no delta at all, which is the only
+safe answer an interrupt-unfriendly core can give.
+\end{remark}
+
+\begin{theorem}[Refinement when the gate is off (7)]
+\begin{coc}
+Theorem mp_gate_is_additive : forall b ring_ok s d, mp_step b ring_ok s d = mp_off_step s d.
+Theorem gate_does_not_change_observed_delta : forall b ring_ok s d,
+  fst (mp_step b ring_ok s d) = fst (legacy_step s d) /\
+  snd (mp_step b ring_ok s d) = snd (legacy_step s d).
+\end{coc}\end{theorem}
+\begin{remark}
+With \ctr{BTRON\_MP=0} the asynchronous path \emph{is} the legacy path, step for
+step, and the ring is not even an input to it. Shipping a flag off is normally a
+promise about a build; here it is discharged by refinement, which removes the
+regression risk that made the flag politically difficult in the first place.
+\end{remark}
+
+\begin{theorem}[The shipped constants instantiate the contracts (8)]
+\begin{coc}
+Example one_byte_claim_is_admitted_at_shipped_geometry :
+  @claim_admissible 4 2 1 catch_up_lane = true.
+Lemma a_lane_at_capacity_refuses_any_positive_claim : forall n s,
+  l_reserved s = l_read s + 4 -> 0 < n -> @claim_admissible 4 2 n s = false.
+Example shipped_ladder_warns_first : forall age heart,
+  @take_over_due 100 age heart = true -> @warn_due 50 age heart = true.
+\end{coc}\end{theorem}
+\begin{remark}
+Ring \(4/2\) and the \(50\)/\(100\) ms heartbeat bars, written as closed
+obligations rather than as numbers in a comment --- and the group names the
+inequality the proofs actually need, so a future retune knows which bound it is
+allowed to move.
+\end{remark}
+
+%-------------------------------------------------------------------------
+\subsection{Hypermedia, Direct Manipulation, and TAD}
+\label{sec:acct:dnd}
+
+\(61\) obligations over the Real/Virtual Body model, the drag-and-drop protocol,
+and the persistence format. The two headline results are the integrity of a drop
+and the bijectivity of the encoding.
+
+\begin{definition}[Registry, integrity, and the sentinel]
+\begin{coc}
+Definition storage := list robj.
+Definition body_registered (s : storage) (i : robj_id) : Prop :=
+  exists r, In r s /\ r_id r = i.
+Definition registry_wf (s : storage) : Prop := forall r, In r s -> r_id r <> 0.
+Definition doc_integrity (s : storage) (doc : clarity_doc) : Prop :=
+  forall f, In f (d_frames doc) -> forall v, In v (f_vobjs f) -> body_registered s (v_target v).
+\end{coc}\end{definition}
+\begin{remark}
+Id \(0\) is the TAD ``no Real Body'' sentinel, so the first conjunct is what makes
+the on-disk encoding unambiguous, and \(\mathit{doc\_integrity}\) is the
+serializer's precondition stated as a property of a document rather than as an
+assertion in a writer.
+\end{remark}
+
+\begin{theorem}[A drop cannot dangle or lose a frame]
+\begin{coc}
+Theorem dnd_drop_into_preserves_integrity : forall s doc fid r,
+  In r s -> doc_integrity s doc -> doc_integrity s (drop_into doc fid r).
+\end{coc}\end{theorem}
+\begin{remark}
+The hypermedia defect class ``an icon that opens nothing'': a Virtual Body can
+only ever be bound to a registered Real Body, because the operation that performs
+the binding is proved to preserve the property that makes the binding sound.
+\end{remark}
+
+\begin{definition}[The protocol's state machine]
+\begin{coc}
+Inductive dnd_state :=
+  | DND_Idle
+  | DND_Dragging (r : robj) (pt : point)
+  | DND_Hovering (r : robj) (target_fid : robj_id) (pt : point).
+Definition dnd_drop (st : dnd_state) (doc : clarity_doc) : clarity_doc * dnd_state :=
+  match st with
+  | DND_Idle         => (doc, DND_Idle)
+  | DND_Dragging r pt => (canvas_drop r pt doc, DND_Idle)
+  | DND_Hovering r fid _ => (drop_into doc fid r, DND_Idle)
+  end.
+\end{coc}\end{definition}
+\begin{theorem}[The GUI cannot lock up (8)]
+\begin{coc}
+Theorem dnd_drop_returns_idle : forall st doc, snd (dnd_drop st doc) = DND_Idle.
+Theorem dnd_no_stranded_hover : forall st doc r fid pt,
+  snd (dnd_drop st doc) <> DND_Hovering r fid pt.
+\end{coc}\end{theorem}
+\begin{remark}
+Every drop and every cancel lands in \ctr{DND\_Idle}, and no drop can leave a
+hover on a frame that has moved. Stranded state --- a cursor that thinks it is
+still dragging, a session that can only be escaped by restarting --- is the class
+of defect users report and testers never reproduce.
+\end{remark}
+
+\begin{theorem}[No type confusion at the persistence boundary]
+\begin{coc}
+Definition r_is_draw (r : robj) : bool :=
+  match r_kind r with VObjDraw => true | _ => false end.
+Theorem drop_onto_never_rebinds_to_a_non_draw_body : forall fid r f,
+  r_is_draw r = false -> f_img (drop_onto fid r f) = f_img f.
+\end{coc}\end{theorem}
+\begin{remark}
+An Image Frame's bound Real Body stays a registered Draw Body, and a body of
+another kind leaves the binding untouched: a sound or text body can never be
+re-read as an image, which is the class of bug that makes a saved document
+unopenable.
+\end{remark}
+
+\begin{definition}[TAD streams]
+\begin{coc}
+Definition encode_stream (doc : clarity_doc) : tad_stream :=
+  mk_tad (d_fmt doc) (map encode_frame (d_frames doc)).
+Definition decode_stream (t : tad_stream) : clarity_doc :=
+  mk_doc (ts_fmt t) (map decode_frame (ts_frames t)).
+Definition doc_norm (doc : clarity_doc) : Prop :=
+  forall f, In f (d_frames doc) -> frame_norm f.
+\end{coc}\end{definition}
+\begin{theorem}[The format is a bijection (9)]
+\begin{coc}
+Theorem tad_roundtrip_isomorphic : forall doc, doc_norm doc ->
+  decode_stream (encode_stream doc) = doc.
+Theorem tad_encoding_is_injective : forall d1 d2, doc_norm d1 -> doc_norm d2 ->
+  encode_stream d1 = encode_stream d2 -> d1 = d2.
+\end{coc}\end{theorem}
+\begin{remark}
+Round trip and injectivity together are the interchange claim the cleanroom
+exists for: no document is lost or invented, and any conforming reader is
+adequate. The final group of the file (\(13\) obligations) proves \(\mathit{doc\_norm}\)
+for the concrete documents the oracle manipulates, so the theorems are about the
+states that actually run rather than about a subclass test data happens to fall
+into.
+\end{remark}
+
+%-------------------------------------------------------------------------
+\subsection{The B-FS Theories}
+\label{sec:acct:bfs}
+
+The smallest and oldest part of the library, and the most concrete: a journal
+with a write-ahead log, a parameterised B+Tree, and a \(64\)-bit block allocator.
+
+\begin{definition}[Volume, journal, crash, recovery]
+\begin{coc}
+Record journal := mkJournal { log : list mutation; committed : list mutation; in_tx : bool }.
+Record volume   := mkVolume { gen : generation; dirty : bool; j : journal }.
+Definition well_formed (v : volume) : Prop := (j v).(in_tx) = false -> (j v).(log) = [].
+Definition crash  (v : volume) : volume := {| gen := v.(gen); dirty := true
+  ; j := {| log := []; committed := (j v).(committed); in_tx := false |} |}.
+Definition replay (v : volume) : volume := {| gen := v.(gen); dirty := false
+  ; j := {| log := []; committed := (j v).(committed); in_tx := false |} |}.
+\end{coc}\end{definition}
+\begin{theorem}[Crash consistency, and recovery that is idempotent]
+\begin{coc}
+Theorem crash_replay_safety : forall v, is_clean (replay (crash v)) /\
+  (j (replay (crash v))).(committed) = (j v).(committed).
+Theorem recovery_idempotent : forall v, replay (crash (replay (crash v))) = replay (crash v).
+Theorem steps_preserve_wf : forall v v', well_formed v -> steps v v' -> well_formed v'.
+\end{coc}\end{theorem}
+\begin{remark}
+There is no ``recovery failed'' branch at boot, running recovery twice is running
+it once, and the state machine cannot be driven into an undefined phase. The
+illegality of an out-of-sequence call is a returned \ctr{option} --- four lemmas
+say \ctr{begin\_tx} refuses a nested transaction and \ctr{log\_mut}, \ctr{commit}
+and \ctr{abort} refuse outside one --- so an error path is inert rather than
+corrupting.
+\end{remark}
+
+\begin{theorem}[What the WAL exists for]
+\begin{coc}
+Theorem log_then_crash_not_durable : forall v v_tx v_log m,
+  begin_tx v = Some v_tx -> log_mut v_tx m = Some v_log ->
+  (j (replay (crash v_log))).(committed) = (j v).(committed) /\
+  (j (replay (crash v_log))).(log) = [].
+Theorem crash_during_tx_recovery : forall v v_tx, begin_tx v = Some v_tx ->
+  is_clean (replay (crash v_tx)) /\ gen (replay (crash v_tx)) = gen v.
+Theorem step_generation_ge : forall v v', step v v' -> gen v' >= gen v.
+\end{coc}\end{theorem}
+\begin{remark}
+Uncommitted log never enters durable history, a crash mid-transaction restores the
+pre-transaction state, and the generation never decreases --- so the defect
+``the file looked right until the power cut'' and its cousins, ABA reuse of a
+transaction id and time-travelling generations, are excluded. The group's two
+\ctr{Example} obligations are the audited scenarios themselves, closed by
+computation, which is what lets a console audit re-run them.
+\end{remark}
+
+\begin{definition}[Sorted leaf]
+\begin{coc}
+Inductive sorted : list key -> Prop :=
+  | sorted_nil  : sorted []
+  | sorted_one  : forall x, sorted [x]
+  | sorted_cons : forall x y l, x < y -> sorted (y :: l) -> sorted (x :: y :: l).
+Fixpoint lookup (k : key) (l : list (key * fid64)) : option fid64 :=
+  match l with [] => None | (x, v) :: xs => if Nat.eqb k x then Some v else lookup k xs end.
+\end{coc}\end{definition}
+\begin{theorem}[A stored key stays findable]
+\begin{coc}
+Lemma insert_sorted_preserves_sorted : forall l k, sorted l -> sorted (insert_sorted k l).
+Lemma lookup_insert_same : forall l k v, lookup k (insert_kv k v l) = Some v.
+Lemma lookup_insert_other : forall l k1 k2 v, k1 <> k2 ->
+  lookup k1 (insert_kv k2 v l) = lookup k1 l.
+Theorem split_preserves_elements : forall (A : Type) (n : nat) (l : list A),
+  let (left, right) := split_at n l in left ++ right = l.
+\end{coc}\end{theorem}
+\begin{remark}
+Three silent-data-loss classes in four statements: an insertion that breaks order
+so a binary probe misses an extent, an update that drops the key it overwrote or
+disturbs its neighbours, and a node overflow that loses a record on the split.
+\(\mathit{split\_preserves\_elements}\) is the non-loss law for the second of
+these, and \(\mathit{valid\_sibling\_pair}\) the corresponding statement that a
+\ctr{readdir} walking the sibling chain sees every record exactly once.
+\end{remark}
+
+\begin{definition}[Block runs and the 64-bit FID]
+\begin{coc}
+Record block_run := mkRun { run_ag : ag_id; run_start : block_offset; run_len : run_length }.
+Definition blocks_per_ag : nat := 256 * 256.
+Definition encode_fid (r : block_run) : nat := r.(run_ag) * blocks_per_ag + r.(run_start).
+Definition decode_ag (fid : nat) : ag_id := fid / blocks_per_ag.
+Definition decode_start (fid : nat) : block_offset := fid mod blocks_per_ag.
+Definition runs_disjoint (r1 r2 : block_run) : Prop :=
+  r1.(run_ag) <> r2.(run_ag) \/
+  r1.(run_start) + r1.(run_len) <= r2.(run_start) \/
+  r2.(run_start) + r2.(run_len) <= r1.(run_start).
+\end{coc}\end{definition}
+\begin{theorem}[Faithful encoding; no two runs overlap]
+\begin{coc}
+Theorem fid_encode_decode_inv : forall r, blocks_per_ag <> 0 ->
+  r.(run_start) < blocks_per_ag ->
+  decode_ag (encode_fid r) = r.(run_ag) /\ decode_start (encode_fid r) = r.(run_start).
+Theorem no_self_disjoint_positive : forall r, r.(run_len) > 0 -> ~ (runs_disjoint r r).
+Theorem alloc_in_bounds_preserved : forall (runs : list block_run) (new_r : block_run),
+  (forall r, In r runs -> run_in_bounds r) -> run_in_bounds new_r ->
+  forall r, In r (new_r :: runs) -> run_in_bounds r.
+\end{coc}\end{theorem}
+\begin{remark}
+Two files never share clusters, a run never overlaps itself, nothing is allocated
+outside its allocation group, and the cluster-to-FID conversion is invertible on
+in-range runs --- which is the statement that the free-space figure in the volume
+header can be trusted without \ctr{fsck}. \(\mathit{total\_blocks}\) adds the
+third: the used-block count is conserved by extending the run list.
+\end{remark}
+
+%-------------------------------------------------------------------------
+\subsection{What the Ledger Is For}
+Three uses, and only the first is a number.
+
+\emph{(i) Defect classes, not test coverage.} Every remark above names a failure
+a reviewer would otherwise have to be reassured about: late joiners pinning
+history, a torn seqlock read, two files on one cluster, an icon that opens
+nothing, a budget that never recovers. The grouping is chosen so a claim can be
+challenged item by item --- and the two entries whose proofs found something the
+document had wrong (R8's four-of-sixteen cells, R6's unbuildable tail) are the
+argument that this was not ceremony.
+
+\emph{(ii) An audit artefact.} The \(39\) \ctr{Print Assumptions} lines are the
+headline obligations a reader may ask the kernel about directly, and
+\ctr{coqchk -o} then re-validates the compiled module and must answer
+\ctr{<none>} four times (\S\ref{sec:axioms}). That is machine-checkable by someone
+who does not read \Coq{} --- which is the difference between a proof and a proof
+modulo wishes.
+
+\emph{(iii) A regression budget.} Once each entry's statement is published,
+weakening it is visible: deleting a hard case changes the obligation count, and
+moving a hypothesis into an \ctr{Axiom} makes \ctr{coqchk} speak. Two omissions
+are recorded here rather than hidden. Three files still lack the in-file gate and
+are audited by \ctr{coqchk} alone. And the harness array also registers
+\ctr{media\_properties.v} --- the global model in which the ATR/VP object
+semantics and the OS task states share the bus with the message layer --- which is
+authored nowhere, is written as continuing work (\S\ref{sec:conclusion}), and is
+reported by the harness as \ctr{FAIL}, never as a quiet pass.
 
 %-------------------------------------------------------------------------
 \section{Conclusion}

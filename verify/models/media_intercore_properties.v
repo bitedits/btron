@@ -2,20 +2,36 @@
  *
  * Modal (multi-core) properties of the InterCore protocol: the pub / sub /
  * spawn / snd / rcv surface that realises the Zero-Switch Actor Topology under
- * the ASYNC planes.
+ * the ASYNC planes, plus the EVT event ring that the I/O plane shares with it.
  *
  * Normative sources: doc/txt/ASYNC.txt §0.1 for the canonical taxonomy,
  * doc/txt/SMP-AMP-SYNC-IO-HARDENING.txt §7.3 for the R7 resolutions that
  * supersede it and §7.4 for the metric rows, doc/txt/IO.txt §5 for the EVT
  * queue.  The companion executable oracle is media_intercore_model.ml.
  *
- * Scope of what is proved here.  Every theorem is a property that a
- * single-core build cannot express: it is about the relation between two
- * cursors, two cores, or one core running while another is parked.  That is
- * what "modal" means in the file name - Tier 1 unicore versus Tier 2 SMP, and
- * the BTRON_MP gate between them (I10).
+ * Layout.  §1-§7 fix the bus and the five calls.  §8-§18 (I1-I9) are the modal
+ * part: the cursor tables, the three states of snd, the totality of rcv, receipt
+ * integrity, the star, the three shapes of spawn, ownership as the mutex that is
+ * not there, conservation of sectors, and the class of states the five calls
+ * cannot leave - §18.7 closes it with the theorem that no word over the five
+ * calls escapes that class, which is what media_intercore_model.ml §12 measures
+ * by enumerating 262,144 interleavings.  §19 (I10) is the shipped-mode gate
+ * written as arithmetic on the contract constants, including the honest FAIL of
+ * --require=amp on a one-core port and the four SKIP rows of MP_OFF.  §20-§21
+ * (I11) model the EVT queue as a masked power-of-two ring and run its 600-step
+ * soak.
  *
- * Two deliberate modelling choices, both of which the oracle does NOT share:
+ * Scope of what is proved.  §14-§18 prove properties a single-core build cannot
+ * express: the relation between two cursors, two cores, or one core running
+ * while another is parked.  That is what "modal" means in the file name - Tier 1
+ * unicore versus Tier 2 SMP, and the BTRON_MP gate between them.  §19 is
+ * deliberately not modal: it is the arithmetic that decides which gate row can
+ * pass at all, so that a row cannot report coverage the port does not have.
+ * §20-§21 are single-producer/single-consumer, because that is the shape the I/O
+ * plane actually uses; the two-writer case is where the ring would break, and
+ * the rows say so.
+ *
+ * Four deliberate modelling choices, which the oracle does NOT share:
  *
  *   - in Coq, w_enq is LENGTH w_hist and r_deq is r_cur - r_start, so the
  *     publisher accounting and the delivered count are tautologies.  The C
@@ -23,11 +39,23 @@
  *     them as runtime checks.  Here they become definitional and the proof
  *     effort goes where the risk actually is: ownership and conservation.
  *
- *   - in Coq, a reader's receipts are DERIVED from its cursor
- *     (received b r), while the oracle keeps a receipt log and checks it
- *     against the slice.  Deriving it makes the receipt-integrity group (I4)
- *     theorems about the cursor protocol rather than about a bookkeeping
- *     field, which is the property the planes actually depend on.
+ *   - in Coq, a reader's receipts are DERIVED from its cursor (received b r),
+ *     while the oracle keeps a receipt log and checks it against the slice.
+ *     Deriving it makes the receipt-integrity group (I4) theorems about the
+ *     cursor protocol rather than about a bookkeeping field, which is the
+ *     property the planes actually depend on.
+ *
+ *   - the step alphabet of §18.7 carries the two contract clauses that the
+ *     shipped guards do not check: pub rejects a cap outside 1..ring_capacity,
+ *     and spawn rejects a cursor another live task already owns.  The shipped
+ *     guards accept both, so the gap is in the guards, not in the model: a run
+ *     of the modelled steps is a run of the protocol as specified, not as
+ *     shipped.
+ *
+ *   - in Coq the EVT index is k mod event_queue_size, while the shipped C masks
+ *     it with (k & (N-1)).  §20 proves the two agree, and proves that they agree
+ *     because N is a power of two - the row that makes the missing divide safe
+ *     rather than lucky.
  *
  * Where the two models could disagree - a cursor owned by two live tasks - is
  * excluded by bus_wf and is proved invariant (I9), so usable/owner reasoning
@@ -62,6 +90,8 @@ Definition ring_capacity : nat := 4.
 Definition sector_pool : nat := 64.
 
 Definition event_queue_size : nat := 2 ^ 8.
+
+(* ── 2. The three tables and the two cursor kinds ─────────────────── *)
 
 Record writer : Type := mk_writer {
     w_live : bool;
@@ -629,14 +659,20 @@ Definition wf_star b :=
   forall t1 t2, holds_pub b t1 = true -> holds_pub b t2 = true ->
     t_core (b_t b t1) = t_core (b_t b t2) -> t1 = t2.
 
+(* A writer slot that is not live holds no sector.  The table-first calls only
+ * ever revive a dead slot, so this is what makes a revived ring start empty:
+ * without it, a stale history would be charged against the new ring's cap. *)
+Definition wf_retired b :=
+  forall j, w_live (b_w b j) = false -> w_enq (b_w b j) = 0 /\ w_hist (b_w b j) = nil.
+
 Definition bus_wf b :=
   wf_tables b /\ wf_bounded b /\ wf_reader_bounds b /\
-  wf_tasks b /\ wf_ownership b /\ wf_star b.
+  wf_tasks b /\ wf_ownership b /\ wf_star b /\ wf_retired b.
 
 Lemma bus_wf0 : bus_wf bus0.
 Proof.
   unfold bus_wf, wf_tables, wf_bounded, wf_reader_bounds, wf_tasks,
-         wf_ownership, wf_star, holds_pub, owns, pub_count_c, held, w_enq.
+         wf_ownership, wf_star, wf_retired, holds_pub, owns, pub_count_c, held, w_enq.
   repeat split; simpl; try lia; try discriminate; auto; vm_compute; auto.
 Qed.
 
@@ -842,6 +878,7 @@ Proof.
   assert (HK : f k = g k) by (apply H; lia).
   rewrite HK, HS. reflexivity.
 Qed.
+
 (* ── 9. I1: the cursor tables are static; a full table refuses ──── *)
 
 Lemma pub_full_refuses : forall b cap,
@@ -955,6 +992,7 @@ Proof. intros b cl wid H. unfold sub, sub_admit. rewrite H. reflexivity. Qed.
 Lemma sub_refuses_an_unusable_publisher : forall b cl wid,
     usable b cl (CPub wid) = false -> w_live (b_w b wid) = true -> sub b cl wid = (b, None).
 Proof. intros b cl wid Hu Hw. unfold sub, sub_admit. rewrite Hu, Hw. reflexivity. Qed.
+
 (* ── 10. I2a: a subscriber joins at the publisher's tail and pins nothing ── *)
 
 Lemma bus_r_apply : forall b i (r : reader) j,
@@ -1450,7 +1488,8 @@ Proof.
       rewrite snd_full_held_bus by (exact (snd_admit_live b cl wid A)). exact H0.
   - rewrite (snd_bad_cursor_bus b cl wid d A). exact H0.
 Qed.
-(* ── 10. I3: rcv is total, and strictly non-blocking ─────────────── *)
+
+(* ── 12. I3: rcv is total, and strictly non-blocking ─────────────── *)
 
 (* A live cursor id is inside its static table by construction: no id
  * ever escapes the table it came from. *)
@@ -1597,6 +1636,7 @@ Proof.
     by (apply rcv_refuses_a_stranger; exact H).
   rewrite (rcv_bad_cursor_shape b (ByTask t) rid A). reflexivity.
 Qed.
+
 (* reading is what frees a sector: the watermark can only move forward *)
 Lemma min_fold_fg_mono : forall f1 g1 f2 g2 fuel i acc,
     (forall j, i <= j -> j < i + fuel -> f1 j = f2 j /\ g1 j <= g2 j) ->
@@ -1912,7 +1952,8 @@ Lemma rcv_empty_deq_unchanged : forall b cl rid,
 Proof.
   intros b cl rid A R. rewrite (rcv_empty_bus b cl rid A R). reflexivity.
 Qed.
-(* ── 11. I4: receipt integrity ──────────────────────────────────── *)
+
+(* ── 13. I4: receipt integrity ──────────────────────────────────── *)
 (* A subscriber's receipts are exactly the publisher's own items, from the
  * index it joined at, in publication order, one per R_DATA. Nothing is
  * invented, dropped or reordered by the protocol. *)
@@ -2030,7 +2071,8 @@ Proof.
     by (apply rcv_refuses_a_stranger; exact H).
   rewrite (rcv_bad_cursor_bus b (ByTask t) rid A). reflexivity.
 Qed.
-(* ── 12. I5: the star is the topology: no broker, one queue per core *)
+
+(* ── 14. I5: the star is the topology: no broker, one queue per core *)
 
 Lemma nat_eqb_false : forall x y, x <> y -> (x =? y) = false.
 Proof. intros x y H. apply (proj2 (Nat.eqb_neq _ _)). exact H. Qed.
@@ -2157,7 +2199,7 @@ Lemma publisher_per_core_is_unique : forall b t1 t2, bus_wf b ->
     holds_pub b t1 = true -> holds_pub b t2 = true ->
     t_core (b_t b t1) = t_core (b_t b t2) -> t1 = t2.
 Proof.
-  intros b t1 t2 Wb H1 H2 Hc. destruct Wb as [_ [_ [_ [_ [_ Ws]]]]].
+  intros b t1 t2 Wb H1 H2 Hc. destruct Wb as [_ [_ [_ [_ [_ [Ws _]]]]]].
   apply (Ws t1 t2); [exact H1|exact H2|exact Hc].
 Qed.
 
@@ -2209,4 +2251,2257 @@ Proof.
   rewrite E. cbn [negb].
   rewrite (core_holds_publisher_none b core H). reflexivity.
 Qed.
+
+(* ── 15. I6: spawn validates the core, the shape, and the grant ───────── *)
+(*
+ * The oracle's I6 group asserts, for each refusal, both the receipt and the
+ * identity `b' = !sb0`.  The Coq counterpart cannot name the oracle's
+ * T_BAD_CORE / T_BAD_CURSOR / T_CURSOR_TAKEN / T_SHARED_PUBLISHER split --
+ * the model collapses every refusal into `None`, because the R7 resolution
+ * asks only that a refusal be distinguishable and harmless.  What is proved
+ * here is the harmless half, in full, and the distinguishable half as far as
+ * the collapsed receipt allows: one lemma per refusal reason, each of the
+ * form "this state cannot be granted", plus the shape of a grant.
+ *)
+
+Lemma task_revive_live : forall core l, t_live (task_revive core l) = true.
+Proof. reflexivity. Qed.
+
+Lemma task_revive_core : forall core l, t_core (task_revive core l) = core.
+Proof. reflexivity. Qed.
+
+Lemma task_revive_curs : forall core l, t_curs (task_revive core l) = l.
+Proof. reflexivity. Qed.
+
+Lemma cref_eqb_true : forall c, cref_eqb c c = true.
+Proof. destruct c; cbn [cref_eqb]; apply Nat.eqb_refl. Qed.
+
+Lemma forallb_all : forall (A : Type) (f : A -> bool) (l : list A),
+    (forall x, In x l -> f x = true) -> forallb f l = true.
+Proof.
+  intros A f l. induction l as [|a t IH]; intros H; cbn [forallb].
+  - reflexivity.
+  - rewrite (H a (or_introl eq_refl)). apply IH. intros x Hin. apply H. right. exact Hin.
+Qed.
+
+Lemma forallb_elim : forall (A : Type) (f : A -> bool) (l : list A) x,
+    forallb f l = true -> In x l -> f x = true.
+Proof.
+  intros A f l. induction l as [|a t IH]; intros x H Hin; cbn [forallb] in H.
+  - contradiction.
+  - apply andb_true_iff in H. destruct H as [Ha Ht].
+    destruct Hin as [He|Hin']; [subst x; exact Ha| apply IH; auto].
+Qed.
+
+Lemma cursors_live_elim : forall b l c,
+    cursors_live b l = true -> In c l -> cursor_live b c = true.
+Proof.
+  intros b l. induction l as [|a t IH]; intros c H Hin; cbn [cursors_live] in H.
+  - contradiction.
+  - apply andb_true_iff in H. destruct H as [Ha Ht].
+    destruct Hin as [He|Hin']; [subst a; exact Ha| apply IH; auto].
+Qed.
+
+(* polymorphic existsb introduction: owns/usable search a list of cref, not nat *)
+Lemma existsb_here_true : forall (A : Type) (f : A -> bool) (l : list A) x,
+    In x l -> f x = true -> existsb f l = true.
+Proof.
+  intros A f l x. induction l as [|a t IH]; intros Hin Hf; cbn [existsb].
+  - contradiction.
+  - destruct Hin as [Hx|Hin'].
+    + subst a. rewrite Hf. reflexivity.
+    + destruct (f a); [reflexivity|apply IH; auto].
+Qed.
+
+(* a task write cannot revive a cursor: liveness lives in the cell tables *)
+Lemma cursor_live_bus_t : forall b i (t : task) c, cursor_live (bus_t b i t) c = cursor_live b c.
+Proof. intros b i t c. destruct c; reflexivity. Qed.
+
+(* ── 15.1 the three shapes of a spawn ────────────────────────────────── *)
+
+Lemma spawn_no_slot_shape : forall b core l,
+    spawn_slot b = None -> spawn b core l = (b, None).
+Proof. intros b core l H. unfold spawn. rewrite H. reflexivity. Qed.
+
+Lemma spawn_refused_shape : forall b core l i,
+    spawn_slot b = Some i -> spawn_ok b core l = false -> spawn b core l = (b, None).
+Proof. intros b core l i H K. unfold spawn. rewrite H, K. reflexivity. Qed.
+
+Lemma spawn_granted_shape : forall b core l i,
+    spawn_slot b = Some i -> spawn_ok b core l = true ->
+    spawn b core l = (bus_t b i (task_revive core l), Some i).
+Proof. intros b core l i H K. unfold spawn. rewrite H, K. reflexivity. Qed.
+
+Lemma spawn_grant_is_the_slot : forall b core l i,
+    spawn_slot b = Some i -> spawn_ok b core l = true -> pr2 (spawn b core l) = Some i.
+Proof.
+  intros b core l i H K. unfold spawn. rewrite H, K. reflexivity.
+Qed.
+
+(* the collapsed receipt: a full task table refuses, and refuses silently *)
+Lemma spawn_without_a_slot_refuses : forall b core l,
+    spawn_slot b = None -> pr2 (spawn b core l) = None.
+Proof. intros b core l H. rewrite (spawn_no_slot_shape b core l H). reflexivity. Qed.
+
+Lemma spawn_slot_bounded : forall b i, spawn_slot b = Some i -> i < max_tasks.
+Proof.
+  intros b i H. unfold spawn_slot in H.
+  apply first_dead_Some_lt with (fuel := max_tasks) (i := 0) in H. lia.
+Qed.
+
+Lemma spawn_slot_offers_a_dead_slot : forall b i,
+    spawn_slot b = Some i -> t_live (b_t b i) = false.
+Proof.
+  intros b i H. unfold spawn_slot in H.
+  apply first_dead_Some_free with (fuel := max_tasks) (i := 0) (o := i) in H. exact H.
+Qed.
+
+(* ── 15.2 what an admitted grant implies, conjunct by conjunct ───────── *)
+
+(* One decomposition of the guard, done by hand: `repeat (apply andb_true_iff in S)`
+ * on this six-deep conjunction enumerates hypotheses quadratically and stalls the
+ * kernel, so the shape is extracted once and every elimination reads it off. *)
+Lemma spawn_ok_six : forall b core l, spawn_ok b core l = true ->
+    (core <? b_cores b) = true /\
+    negb (Nat.eqb (length l) 0) = true /\
+    cursors_live b l = true /\
+    (forallb (fun c => negb (cursor_taken b c)) l = true) /\
+    (pub_count_c l <=? 1) = true /\
+    star_ok b core l = true.
+Proof.
+  intros b core l S. unfold spawn_ok in S.
+  apply andb_true_iff in S. destruct S as [H1 S].
+  apply andb_true_iff in S. destruct S as [H2 S].
+  apply andb_true_iff in S. destruct S as [H3 S].
+  apply andb_true_iff in S. destruct S as [H4 S].
+  apply andb_true_iff in S. destruct S as [H5 H6].
+  split; [exact H1|split;[exact H2|split;[exact H3|split;[exact H4|split;[exact H5|exact H6]]]]].
+Qed.
+
+Lemma spawn_ok_core_exists : forall b core l,
+    spawn_ok b core l = true -> core < b_cores b.
+Proof.
+  intros b core l S. destruct (spawn_ok_six b core l S) as [Hc _].
+  apply Nat.ltb_lt in Hc. exact Hc.
+Qed.
+
+Lemma spawn_ok_grants_work : forall b core l,
+    spawn_ok b core l = true -> length l <> 0.
+Proof.
+  intros b core l S. destruct (spawn_ok_six b core l S) as [_ [Hlen _]].
+  apply negb_true_iff in Hlen.
+  apply (proj1 (Nat.eqb_neq (length l) 0)) in Hlen. exact Hlen.
+Qed.
+
+Lemma spawn_ok_cursors_live : forall b core l,
+    spawn_ok b core l = true -> cursors_live b l = true.
+Proof.
+  intros b core l S. destruct (spawn_ok_six b core l S) as [_ [_ [Hlive _]]]. exact Hlive.
+Qed.
+
+Lemma spawn_ok_one_publisher_per_task : forall b core l,
+    spawn_ok b core l = true -> pub_count_c l <= 1.
+Proof.
+  intros b core l S. destruct (spawn_ok_six b core l S) as [_ [_ [_ [_ [Hpub _]]]]].
+  apply Nat.leb_le in Hpub. exact Hpub.
+Qed.
+
+Lemma spawn_ok_cursors_free : forall b core l c,
+    spawn_ok b core l = true -> In c l -> cursor_taken b c = false.
+Proof.
+  intros b core l c S Hin. destruct (spawn_ok_six b core l S) as [_ [_ [_ [Hfree _]]]].
+  apply negb_true_iff. apply (forallb_elim _ _ l c Hfree Hin).
+Qed.
+
+Lemma spawn_ok_star_holds : forall b core l,
+    spawn_ok b core l = true -> star_ok b core l = true.
+Proof.
+  intros b core l S. destruct (spawn_ok_six b core l S) as [_ [_ [_ [_ [_ Hstar]]]]]. exact Hstar.
+Qed.
+
+(* ── 15.3 the six refusal reasons, each leaving the bus untouched ───── *)
+
+(* a live-listed cursor that is dead makes the whole grant dead *)
+Lemma cursors_live_false : forall b l c,
+    In c l -> cursor_live b c = false -> cursors_live b l = false.
+Proof.
+  intros b l c. induction l as [|a t IH]; intros Hin Hdead; cbn [cursors_live].
+  - contradiction.
+  - destruct Hin as [He|Hin'].
+    + subst a. rewrite Hdead. reflexivity.
+    + destruct (cursor_live b a) eqn:Ha; cbn [andb].
+      * exact (IH Hin' Hdead).
+      * reflexivity.
+Qed.
+
+(* each refusal is discharged by pointing at the conjunct that fails, so the
+ * guard is read as data rather than exploded into hypotheses *)
+Lemma spawn_not_ok_when_core_absent : forall b core l,
+    b_cores b <= core -> spawn_ok b core l = false.
+Proof.
+  intros b core l H. unfold spawn_ok. apply andb_false_left.
+  apply Nat.ltb_ge. exact H.
+Qed.
+
+Lemma spawn_not_ok_on_an_empty_grant : forall b core l,
+    length l = 0 -> spawn_ok b core l = false.
+Proof.
+  intros b core l H. unfold spawn_ok. apply andb_false_right. apply andb_false_left.
+  rewrite H. reflexivity.
+Qed.
+
+Lemma spawn_not_ok_on_a_dead_cursor : forall b core l c,
+    In c l -> cursor_live b c = false -> spawn_ok b core l = false.
+Proof.
+  intros b core l c Hin Hdead. unfold spawn_ok.
+  apply andb_false_right. apply andb_false_right. apply andb_false_left.
+  apply (cursors_live_false b l c Hin Hdead).
+Qed.
+
+Lemma spawn_not_ok_on_a_taken_cursor : forall b core l c,
+    In c l -> cursor_taken b c = true -> spawn_ok b core l = false.
+Proof.
+  intros b core l c Hin Ht. unfold spawn_ok.
+  apply andb_false_right. apply andb_false_right. apply andb_false_right. apply andb_false_left.
+  apply (forallb_here_false _ _ l c Hin). rewrite Ht. reflexivity.
+Qed.
+
+Lemma spawn_not_ok_with_two_publishers : forall b core l,
+    2 <= pub_count_c l -> spawn_ok b core l = false.
+Proof.
+  intros b core l Hn. unfold spawn_ok.
+  apply andb_false_right. apply andb_false_right. apply andb_false_right.
+  apply andb_false_right. apply andb_false_left.
+  apply (proj2 (Nat.leb_gt (pub_count_c l) 1)). lia.
+Qed.
+
+Lemma spawn_not_ok_on_a_held_core : forall b core l t,
+    t < max_tasks -> holds_pub b t = true -> t_core (b_t b t) = core ->
+    pub_count_c l <> 0 -> spawn_ok b core l = false.
+Proof.
+  intros b core l t Lt Hp Hc Hn. unfold spawn_ok.
+  apply andb_false_right. apply andb_false_right. apply andb_false_right.
+  apply andb_false_right. apply andb_false_right.
+  apply (star_ok_refuses_a_second_publisher b core l t Lt Hp Hc Hn).
+Qed.
+
+(* ── 15.4 an admission, when it happens, is exactly the request ──────── *)
+
+Lemma spawn_ok_grants_a_clean_actor : forall b core l,
+    core < b_cores b -> length l <> 0 -> pub_count_c l = 0 ->
+    cursors_live b l = true ->
+    (forall c, In c l -> cursor_taken b c = false) ->
+    spawn_ok b core l = true.
+Proof.
+  intros b core l Hcore Hlen Hpub Hlive Hfree. unfold spawn_ok.
+  assert (E1 : (core <? b_cores b) = true)
+    by (apply (proj2 (Nat.ltb_lt core (b_cores b))); exact Hcore).
+  assert (E2 : (length l =? 0) = false)
+    by (apply (proj2 (Nat.eqb_neq (length l) 0)); exact Hlen).
+  assert (E3 : (pub_count_c l <=? 1) = true).
+  { apply Nat.leb_le. rewrite Hpub. lia. }
+  assert (E4 : forallb (fun c => negb (cursor_taken b c)) l = true).
+  { apply forallb_all. intros c Hin. apply negb_true_iff. apply (Hfree c Hin). }
+  rewrite E1, E2, Hlive, E4, E3, (star_ok_allows_a_subscriber_only_task b core l Hpub).
+  reflexivity.
+Qed.
+
+Lemma spawn_grant_is_live_on_the_named_core : forall b core l i,
+    spawn_slot b = Some i -> spawn_ok b core l = true ->
+    let b' := fst (spawn b core l) in
+    t_live (b_t b' i) = true /\ t_core (b_t b' i) = core /\ t_curs (b_t b' i) = l.
+Proof.
+  intros b core l i S Q. rewrite (spawn_granted_shape b core l i S Q). cbn [fst].
+  split.
+  - rewrite at_t_same_t, task_revive_live. reflexivity.
+  - split.
+    + rewrite at_t_same_t, task_revive_core. reflexivity.
+    + rewrite at_t_same_t, task_revive_curs. reflexivity.
+Qed.
+
+Lemma spawn_grants_ownership : forall b core l i c,
+    spawn_slot b = Some i -> spawn_ok b core l = true -> In c l ->
+    owns (fst (spawn b core l)) i c = true.
+Proof.
+  intros b core l i c S Q Hin.
+  rewrite (spawn_granted_shape b core l i S Q). cbn [fst].
+  unfold owns. rewrite at_t_same_t, task_revive_curs, task_revive_live. cbn [andb].
+  apply (existsb_here_true _ _ l c Hin). apply cref_eqb_true.
+Qed.
+
+Lemma spawn_other_tasks_untouched : forall b core l i j,
+    spawn_slot b = Some i -> i <> j -> b_t (fst (spawn b core l)) j = b_t b j.
+Proof.
+  intros b core l i j S Hij.
+  destruct (spawn_ok b core l) eqn:Q.
+  - rewrite (spawn_granted_shape b core l i S Q). cbn [fst].
+    rewrite at_t_other_t by exact Hij. reflexivity.
+  - rewrite (spawn_refused_shape b core l i S Q). reflexivity.
+Qed.
+
+(* a spawn touches no ring, so it spends and returns no sector: the pool is a
+ * property of the writer table and spawn does not read from it *)
+Lemma total_held_bus_t : forall b i (t : task), total_held (bus_t b i t) = total_held b.
+Proof.
+  intros b i t. unfold total_held. apply sum_f_pointwise. intros j Lt.
+  unfold held. rewrite at_w_bus_t. reflexivity.
+Qed.
+
+Lemma spawn_preserves_the_pool : forall b core l,
+    pool_free (fst (spawn b core l)) = pool_free b.
+Proof.
+  intros b core l. unfold pool_free.
+  destruct (spawn_slot b) as [i|] eqn:S.
+  - destruct (spawn_ok b core l) eqn:Q.
+    + rewrite (spawn_granted_shape b core l i S Q). cbn [fst].
+      rewrite (total_held_bus_t b i (task_revive core l)). reflexivity.
+    + rewrite (spawn_refused_shape b core l i S Q). reflexivity.
+  - rewrite (spawn_no_slot_shape b core l S). reflexivity.
+Qed.
+
+Lemma spawn_never_makes_a_core : forall b core l, b_cores (fst (spawn b core l)) = b_cores b.
+Proof.
+  intros b core l.
+  destruct (spawn_slot b) as [i|] eqn:S.
+  - destruct (spawn_ok b core l) eqn:Q.
+    + rewrite (spawn_granted_shape b core l i S Q). cbn [fst]. apply cores_inert_t.
+    + rewrite (spawn_refused_shape b core l i S Q). reflexivity.
+  - rewrite (spawn_no_slot_shape b core l S). reflexivity.
+Qed.
+
+(* ── 16. I7: one cursor, one owner; the caller is the mutex ───────────── *)
+(*
+ * I7 is the safety half of the mutex-elimination claim of §5: no call can be
+ * made through a cursor the caller does not hold, and two holders cannot
+ * exist.  The oracle checks this by pairing a stranger with an owner on the
+ * same cursor and reading the two receipts; the theory proves the general
+ * statement, which subsumes every pair the search can build.
+ *)
+
+(* two cursors are equal exactly when cref_eqb says so *)
+Lemma cref_eqb_iff : forall a b, cref_eqb a b = true -> a = b.
+Proof.
+  intros a b H. destruct a as [i|j]; destruct b as [i'|j']; cbn [cref_eqb] in H.
+  - apply f_equal. apply (proj1 (Nat.eqb_eq i i')) in H. exact H.
+  - discriminate H.
+  - discriminate H.
+  - apply f_equal. apply (proj1 (Nat.eqb_eq j j')) in H. exact H.
+Qed.
+
+(* ── 16.1 who may own ─────────────────────────────────────────────────── *)
+
+Lemma owns_dead_task : forall b t c,
+    t_live (b_t b t) = false -> owns b t c = false.
+Proof.
+  intros b t c H. unfold owns. rewrite H. cbn [andb]. reflexivity.
+Qed.
+
+Lemma owns_of_empty_task : forall b t c,
+    b_t b t = empty_task -> owns b t c = false.
+Proof. intros b t c H. unfold owns. rewrite H. reflexivity. Qed.
+
+(* a holder makes its cursor taken: the witness needs the table bound, which
+ * bus_wf supplies for every live task *)
+Lemma cursor_taken_if_owned : forall b t c,
+    t < max_tasks -> owns b t c = true -> cursor_taken b c = true.
+Proof.
+  intros b t c Lt H. unfold cursor_taken.
+  apply (existsb_true (fun u => owns b u c) (nat_list max_tasks) t).
+  - apply in_nat_list. exact Lt.
+  - exact H.
+Qed.
+
+Lemma free_cursor_is_usable_anonymously : forall b c,
+    cursor_taken b c = false -> usable b NoTask c = true.
+Proof. intros b c H. unfold usable. rewrite H. reflexivity. Qed.
+
+Lemma owned_cursor_is_not_usable_anonymously : forall b t c,
+    t < max_tasks -> owns b t c = true -> usable b NoTask c = false.
+Proof.
+  intros b t c Lt H. unfold usable.
+  rewrite (cursor_taken_if_owned b t c Lt H). reflexivity.
+Qed.
+
+(* ── 16.2 exclusivity ─────────────────────────────────────────────────── *)
+
+Lemma one_owner_per_cursor : forall b t1 t2 c,
+    bus_wf b -> owns b t1 c = true -> owns b t2 c = true -> t1 = t2.
+Proof.
+  intros b t1 t2 c W H1 H2. destruct W as [_ [_ [_ [_ [Wown _]]]]].
+  apply (Wown t1 t2 c); [exact H1|exact H2].
+Qed.
+
+Lemma usable_is_exclusive : forall b t1 t2 c,
+    bus_wf b -> usable b (ByTask t1) c = true -> usable b (ByTask t2) c = true -> t1 = t2.
+Proof.
+  intros b t1 t2 c W U1 U2.
+  apply (one_owner_per_cursor b t1 t2 c W).
+  - unfold usable in U1. exact U1.
+  - unfold usable in U2. exact U2.
+Qed.
+
+(* the bound of a live task is a clause of wf_tasks, so a holder is in range *)
+Lemma a_holder_is_in_range : forall b t c,
+    bus_wf b -> owns b t c = true -> t < max_tasks.
+Proof.
+  intros b t c W H. destruct W as [_ [_ [_ [Wt _]]]].
+  unfold owns in H. apply andb_true_iff in H. destruct H as [Live _].
+  apply (Wt t Live).
+Qed.
+
+Lemma no_anonymous_use_of_an_owned_cursor : forall b t c,
+    bus_wf b -> owns b t c = true -> usable b NoTask c = false.
+Proof.
+  intros b t c W H.
+  apply (owned_cursor_is_not_usable_anonymously b t c (a_holder_is_in_range b t c W H) H).
+Qed.
+
+(* the anonymous caller and the owner can never both be admitted *)
+Lemma anonymous_and_owner_are_disjoint : forall b t c,
+    bus_wf b -> usable b NoTask c = true -> usable b (ByTask t) c = false.
+Proof.
+  intros b t c W A. destruct (owns b t c) eqn:H.
+  - exfalso.
+    assert (B : usable b NoTask c = false)
+      by (apply (no_anonymous_use_of_an_owned_cursor b t c W H)).
+    unfold usable in A, B. rewrite B in A. cbn [negb] in A. discriminate A.
+  - unfold usable. exact H.
+Qed.
+
+(* ── 16.3 the stranger receipts, by call ──────────────────────────────── *)
+
+Lemma snd_refused_for_a_non_owner : forall b t wid d,
+    owns b t (CPub wid) = false -> snd b (ByTask t) wid d = (b, S_BAD_CURSOR).
+Proof.
+  intros b t wid d H. apply snd_bad_cursor_inert. unfold snd_admit, usable.
+  apply andb_false_right. exact H.
+Qed.
+
+Lemma rcv_refused_for_a_non_owner : forall b t rid,
+    owns b t (CSub rid) = false -> rcv b (ByTask t) rid = (b, R_BAD_CURSOR).
+Proof.
+  intros b t rid H. apply rcv_bad_cursor_shape. unfold rcv_admit, usable.
+  apply andb_false_right. apply andb_false_right. exact H.
+Qed.
+
+Lemma sub_refused_for_a_non_owner : forall b t wid,
+    owns b t (CPub wid) = false -> sub_admit b (ByTask t) wid = false.
+Proof.
+  intros b t wid H. unfold sub_admit. apply andb_false_right. unfold usable. exact H.
+Qed.
+
+Lemma a_dead_task_may_send_nothing : forall b t wid d,
+    t_live (b_t b t) = false -> snd b (ByTask t) wid d = (b, S_BAD_CURSOR).
+Proof.
+  intros b t wid d H.
+  apply (snd_refused_for_a_non_owner b t wid d).
+  apply (owns_dead_task b t (CPub wid) H).
+Qed.
+
+Lemma a_dead_task_may_read_nothing : forall b t rid,
+    t_live (b_t b t) = false -> rcv b (ByTask t) rid = (b, R_BAD_CURSOR).
+Proof.
+  intros b t rid H.
+  apply (rcv_refused_for_a_non_owner b t rid).
+  apply (owns_dead_task b t (CSub rid) H).
+Qed.
+
+(* ── 16.4 the owner's own privileges ──────────────────────────────────── *)
+
+Lemma sub_admit_by_the_publisher_owner : forall b t wid,
+    w_live (b_w b wid) = true -> owns b t (CPub wid) = true ->
+    sub_admit b (ByTask t) wid = true.
+Proof.
+  intros b t wid L H. unfold sub_admit, usable. rewrite L, H. reflexivity.
+Qed.
+
+Lemma snd_admit_by_the_publisher_owner : forall b t wid,
+    w_live (b_w b wid) = true -> owns b t (CPub wid) = true ->
+    snd_admit b (ByTask t) wid = true.
+Proof.
+  intros b t wid L H. unfold snd_admit, usable. rewrite L, H. reflexivity.
+Qed.
+
+Lemma rcv_admit_by_the_reader_owner : forall b t rid,
+    r_live (b_r b rid) = true -> w_live (b_w b (r_wid (b_r b rid))) = true ->
+    owns b t (CSub rid) = true -> rcv_admit b (ByTask t) rid = true.
+Proof.
+  intros b t rid L1 L2 H. unfold rcv_admit, usable. rewrite L1, L2, H. reflexivity.
+Qed.
+
+(* two admitted readers of one cursor are the same task *)
+Lemma the_owner_is_the_only_reader : forall b t t' rid,
+    bus_wf b -> rcv_admit b (ByTask t) rid = true -> rcv_admit b (ByTask t') rid = true ->
+    t = t'.
+Proof.
+  intros b t t' rid W A1 A2.
+  apply (usable_is_exclusive b t t' (CSub rid) W).
+  - unfold rcv_admit in A1. apply andb_true_iff in A1. destruct A1 as [_ A1].
+    apply andb_true_iff in A1. destruct A1 as [_ U]. exact U.
+  - unfold rcv_admit in A2. apply andb_true_iff in A2. destruct A2 as [_ A2].
+    apply andb_true_iff in A2. destruct A2 as [_ U]. exact U.
+Qed.
+
+(* ── 16.5 ownership is created once and survives every other call ─────── *)
+
+Lemma pub_ownership_untouched : forall b cap t c,
+    owns (fst (pub b cap)) t c = owns b t c.
+Proof.
+  intros b cap t c. unfold pub.
+  destruct (pub_slot b) as [i|] eqn:S; [apply owns_w_inert|reflexivity].
+Qed.
+
+Lemma sub_ownership_untouched : forall b cl wid t c,
+    owns (fst (sub b cl wid)) t c = owns b t c.
+Proof.
+  intros b cl wid t c. unfold sub.
+  destruct (sub_admit b cl wid) eqn:A.
+  - destruct (sub_slot b) as [i|] eqn:S; [apply owns_r_inert|reflexivity].
+  - reflexivity.
+Qed.
+
+Lemma snd_ownership_untouched : forall b cl wid d t c,
+    owns (fst (snd b cl wid d)) t c = owns b t c.
+Proof.
+  intros b cl wid d t c. unfold snd.
+  destruct (snd_admit b cl wid) eqn:A.
+  - destruct (snd_fits b wid) eqn:F; apply owns_w_inert.
+  - reflexivity.
+Qed.
+
+(* existsb can only be satisfied by a member of the list it searches *)
+Lemma existsb_witness : forall (A : Type) (f : A -> bool) (l : list A),
+    existsb f l = true -> exists x, In x l /\ f x = true.
+Proof.
+  intros A f l. induction l as [|a t IH]; intros H; cbn [existsb] in H.
+  - discriminate H.
+  - destruct (f a) eqn:Fa.
+    + exists a. split; [left; reflexivity|exact Fa].
+    + destruct IH as [x [Hin Hf]]; [exact H|]. exists x. split; [right; exact Hin|exact Hf].
+Qed.
+
+(* the only way to acquire a cursor: it was in the grant *)
+Lemma spawn_ownership_is_the_grant : forall b core l i t c,
+    spawn_slot b = Some i -> pr2 (spawn b core l) = Some i ->
+    owns (fst (spawn b core l)) t c = true ->
+    (t = i /\ In c l) \/ owns b t c = true.
+Proof.
+  intros b core l i t c S G H.
+  destruct (spawn_ok b core l) eqn:Q.
+  - rewrite (spawn_granted_shape b core l i S Q) in G, H. cbn [pr2 fst] in G, H.
+    destruct (Nat.eqb_spec t i) as [Hti|Hne].
+    + left. split; [exact Hti|].
+      rewrite Hti in H.
+      rewrite owns_bus_t_same, task_revive_live, task_revive_curs in H. cbn [andb] in H.
+      destruct (existsb_witness _ (cref_eqb c) l H) as [y [Hin Hy]].
+      assert (Ey : c = y) by (apply cref_eqb_iff; exact Hy). subst c. exact Hin.
+    + right. rewrite (owns_bus_t_other b i (task_revive core l) t c Hne) in H. exact H.
+  - rewrite (spawn_refused_shape b core l i S Q) in H. cbn [fst] in H. right. exact H.
+Qed.
+
+(* a grant of a cursor somebody already holds is refused: the exclusivity that
+ * spawn preserves is bought by the taken-cursor guard *)
+Lemma spawn_does_not_take_an_owned_cursor : forall b core l c,
+    bus_wf b -> spawn_ok b core l = true -> In c l ->
+    (exists t, owns b t c = true) -> False.
+Proof.
+  intros b core l c W Q Hin [t H].
+  assert (F : cursor_taken b c = false)
+    by (apply (spawn_ok_cursors_free b core l c Q Hin)).
+  rewrite (cursor_taken_if_owned b t c (a_holder_is_in_range b t c W H) H) in F.
+  discriminate F.
+Qed.
+
+Lemma ownership_survives_a_spawn : forall b core l t c,
+    spawn_ok b core l = true -> owns b t c = true ->
+    owns (fst (spawn b core l)) t c = true.
+Proof.
+  intros b core l t c Q H.
+  destruct (spawn_slot b) as [i|] eqn:S.
+  - destruct (spawn_ok b core l) eqn:Q2.
+    + rewrite (spawn_granted_shape b core l i S Q2). cbn [fst].
+      destruct (Nat.eqb_spec t i) as [Hti|Hne].
+      * subst t. exfalso.
+        assert (Dead : t_live (b_t b i) = false) by (apply (spawn_slot_offers_a_dead_slot b i S)).
+        unfold owns in H. apply andb_true_iff in H.
+        destruct H as [Live _]. rewrite Dead in Live. discriminate Live.
+      * rewrite (owns_bus_t_other b i (task_revive core l) t c Hne). exact H.
+    + rewrite (spawn_refused_shape b core l i S Q2). cbn [fst]. exact H.
+  - rewrite (spawn_no_slot_shape b core l S). cbn [fst]. exact H.
+Qed.
+
+Lemma a_taken_cursor_has_a_holder : forall b c,
+    bus_wf b -> cursor_taken b c = true -> exists t, owns b t c = true.
+Proof.
+  intros b c W H.
+  destruct (existsb_witness _ (fun t => owns b t c) (nat_list max_tasks) H) as [t [Hin Hown]].
+  exists t. exact Hown.
+Qed.
+
+(* ── 17. I8: conservation of sectors ─────────────────────────────────── *)
+(*
+ * The oracle's I8 group is arithmetic on the shipped launch: accepted plus
+ * dropped equals attempts, residency never exceeds the pool, and a drain
+ * returns the pool to its initial value.  The numerals stay in the oracle;
+ * the laws behind them are general, and are proved here for every state.
+ *)
+
+(* what a single subscriber still pins: the gap between the publisher's tail
+ * and its own cursor *)
+Definition pending b (r : reader) : nat :=
+  w_enq (b_w b (r_wid r)) - r_cur r.
+
+(* the fold only needs the bound at the slots it actually visits *)
+Lemma min_fold_hits_ge : forall f g fuel i acc,
+    (forall j, i <= j -> j < i + fuel -> f j = true -> acc <= g j) ->
+    min_fold f g fuel i acc = acc.
+Proof.
+  intros f g fuel. induction fuel as [|k IH]; intros i acc H; cbn [min_fold]; [reflexivity|].
+  destruct (f i) eqn:Fi.
+  - assert (Hi : acc <= g i) by (apply H; [lia | lia | exact Fi]).
+    replace (Nat.min acc (g i)) with acc by lia.
+    apply IH. intros j Le Lt F. apply H; [lia | lia | exact F].
+  - apply IH. intros j Le Lt F. apply H; [lia | lia | exact F].
+Qed.
+
+Lemma sum_f_all_zero : forall (f : nat -> nat) n,
+    (forall j, j < n -> f j = 0) -> sum_f f n = 0.
+Proof.
+  intros f n. induction n as [|k IH]; intros H; cbn [sum_f].
+  - reflexivity.
+  - rewrite (H k) by lia. rewrite Nat.add_0_l. apply IH.
+    intros j Lt. apply H. lia.
+Qed.
+
+(* one slot may exceed its mate by one; the fold then exceeds it by one *)
+Lemma sum_f_all_but_one : forall (f g : nat -> nat) n i,
+    (forall j, j < n -> i <> j -> f j <= g j) ->
+    (forall j, j < n -> f j <= S (g j)) ->
+    sum_f f n <= S (sum_f g n).
+Proof.
+  intros f g n. induction n as [|k IH]; intros i H1 H2; cbn [sum_f].
+  - lia.
+  - destruct (Nat.eqb_spec i k) as [Hik|Hne].
+    + subst i.
+      assert (A : f k <= S (g k)) by (apply H2; lia).
+      assert (B : sum_f f k <= sum_f g k).
+      { apply sum_f_le. intros j Lt. apply H1; lia. }
+      lia.
+    + assert (A : f k <= g k) by (apply H1; [lia | exact Hne]).
+      assert (B : sum_f f k <= S (sum_f g k)).
+      { apply (IH i).
+        - intros j Lt Hj. apply H1; [lia | exact Hj].
+        - intros j Lt. apply H2. lia. }
+      lia.
+Qed.
+
+(* ── 17.1 the gap is the holding, seen from any subscriber ──────────── *)
+
+Lemma gap_below_held : forall b wid rid,
+    rid < max_readers -> r_live (b_r b rid) = true -> r_wid (b_r b rid) = wid ->
+    w_live (b_w b wid) = true -> r_cur (b_r b rid) <= w_enq (b_w b wid) ->
+    pending b (b_r b rid) <= held b wid.
+Proof.
+  intros b wid rid Lt Lr Rw Lw Le.
+  assert (Lf : floor_of b (r_wid (b_r b rid)) (w_enq (b_w b wid)) <= r_cur (b_r b rid)).
+  { apply (floor_of_hit b rid (w_enq (b_w b wid)) Lt Lr Le). }
+  rewrite Rw in Lf.
+  unfold pending. rewrite Rw, (held_of_live_writer b wid Lw). lia.
+Qed.
+
+(* the slowest subscriber is exactly the holding: conservation at the floor *)
+Lemma conservation_at_the_floor : forall b wid rid,
+    rid < max_readers -> r_live (b_r b rid) = true -> r_wid (b_r b rid) = wid ->
+    w_live (b_w b wid) = true ->
+    floor_of b wid (w_enq (b_w b wid)) = r_cur (b_r b rid) ->
+    r_cur (b_r b rid) + held b wid = w_enq (b_w b wid).
+Proof.
+  intros b wid rid Lt Lr Rw Lw Hf.
+  assert (Le : r_cur (b_r b rid) <= w_enq (b_w b wid)).
+  { rewrite <- Hf. apply floor_of_le. }
+  rewrite (held_of_live_writer b wid Lw), Hf. lia.
+Qed.
+
+(* a read retires exactly one sector of that subscriber's holding *)
+Lemma a_read_retires_one_sector : forall b r,
+    r_cur r < w_enq (b_w b (r_wid r)) ->
+    S (pending b (reader_advance r)) = pending b r.
+Proof.
+  intros b r Lt. unfold pending.
+  rewrite reader_advance_cur, reader_advance_wid.
+  assert (Le : r_cur r <= w_enq (b_w b (r_wid r))) by lia. lia.
+Qed.
+
+(* an accepted write widens every subscriber's gap by one *)
+Lemma a_write_widens_the_gap : forall b wid rid d,
+    r_wid (b_r b rid) = wid ->
+    r_cur (b_r b rid) <= w_enq (b_w b wid) ->
+    pending (bus_w b wid (writer_push (b_w b wid) d))
+            (b_r (bus_w b wid (writer_push (b_w b wid) d)) rid)
+    = S (pending b (b_r b rid)).
+Proof.
+  intros b wid rid d Rw Le.
+  unfold pending.
+  rewrite at_r_bus_w, Rw, at_w_same_w, writer_push_enq. lia.
+Qed.
+
+(* attempts are conserved: one more datum is either in the ring or counted as
+ * dropped -- the general form of the oracle's accepted + dropped = attempts *)
+Lemma attempts_are_conserved : forall b cl wid d,
+    snd_admit b cl wid = true ->
+    w_enq (b_w (fst (snd b cl wid d)) wid) + w_drop (b_w (fst (snd b cl wid d)) wid)
+    = S (w_enq (b_w b wid) + w_drop (b_w b wid)).
+Proof.
+  intros b cl wid d A. rewrite (snd_attempts_counted b cl wid d A). lia.
+Qed.
+
+(* ── 17.2 residency is bounded by the tables, not by the run ────────── *)
+
+Lemma wf_cap_le_ring : forall b j, bus_wf b -> w_cap (b_w b j) <= ring_capacity.
+Proof.
+  intros b j W. destruct W as [Wtabs _]. destruct Wtabs as [_ [_ [_ Hcap]]].
+  apply (Hcap j).
+Qed.
+
+Lemma resident_bounded_by_capacity : forall b wid,
+    bus_wf b -> held b wid <= ring_capacity.
+Proof.
+  intros b wid W.
+  pose proof (wf_cap_le_ring b wid W) as Cc.
+  destruct W as [_ [Wb _]].
+  apply Nat.le_trans with (w_cap (b_w b wid)); [ apply (Wb wid) | exact Cc ].
+Qed.
+
+Lemma total_resident_bounded : forall b,
+    bus_wf b -> total_held b <= max_writers * ring_capacity.
+Proof.
+  intros b W. unfold total_held. apply sum_f_bound. intros j Lt.
+  apply (resident_bounded_by_capacity b j W).
+Qed.
+
+Lemma pool_never_overdrawn : forall b, bus_wf b -> total_held b <= sector_pool.
+Proof.
+  intros b W.
+  assert (K : max_writers * ring_capacity <= sector_pool).
+  { apply (proj1 (Nat.leb_le (max_writers * ring_capacity) sector_pool)).
+    vm_compute. reflexivity. }
+  apply Nat.le_trans with (max_writers * ring_capacity).
+  - apply (total_resident_bounded b W).
+  - exact K.
+Qed.
+
+(* the pool survives every call: a write may pin one more sector, but only
+ * when there was room, and a drop pins none *)
+Lemma a_write_keeps_the_pool : forall b cl wid d,
+    bus_wf b -> total_held (fst (snd b cl wid d)) <= sector_pool.
+Proof.
+  intros b cl wid d W.
+  destruct (snd_admit b cl wid) eqn:A.
+  - destruct (snd_fits b wid) eqn:F.
+    + assert (Lw : w_live (b_w b wid) = true) by (apply (snd_admit_live b cl wid A)).
+      assert (R : total_held b < sector_pool) by (apply (snd_fits_room b wid); exact F).
+      assert (G : total_held (fst (snd b cl wid d)) <= S (total_held b)).
+      { unfold total_held. rewrite (snd_ok_bus b cl wid d A F).
+        apply sum_f_all_but_one with (i := wid).
+        - intros j Lt Hj.
+          rewrite (held_w_inert b wid (writer_push (b_w b wid) d) j Hj). apply Nat.le_refl.
+        - intros j Lt.
+          destruct (Nat.eqb_spec wid j) as [Hjw|Hne].
+          * rewrite <- Hjw. apply (held_push_bus b wid d Lw).
+          * rewrite (held_w_inert b wid (writer_push (b_w b wid) d) j Hne). lia. }
+      lia.
+    + rewrite (snd_full_total_held_unchanged b cl wid d A F).
+      apply (pool_never_overdrawn b W).
+  - rewrite (snd_bad_cursor_bus b cl wid d A). apply (pool_never_overdrawn b W).
+Qed.
+
+Lemma a_read_keeps_the_pool : forall b cl rid,
+    bus_wf b -> total_held (fst (rcv b cl rid)) <= sector_pool.
+Proof.
+  intros b cl rid W.
+  apply Nat.le_trans with (total_held b).
+  - apply (rcv_never_increases_total_holding b cl rid W).
+  - apply (pool_never_overdrawn b W).
+Qed.
+
+(* ── 17.3 drain: quiescence returns the whole pool ─────────────────── *)
+
+Lemma quiescence_empties_a_publisher : forall b wid,
+    (forall r, r < max_readers -> sub_reader wid (b_r b r) = true ->
+               r_cur (b_r b r) = w_enq (b_w b wid)) ->
+    held b wid = 0.
+Proof.
+  intros b wid H.
+  destruct (w_live (b_w b wid)) eqn:Lw.
+  - rewrite (held_of_live_writer b wid Lw).
+    assert (F : floor_of b wid (w_enq (b_w b wid)) = w_enq (b_w b wid)).
+    { unfold floor_of. apply min_fold_hits_ge.
+      intros j Le Lt S. rewrite (H j Lt S). apply Nat.le_refl. }
+    rewrite F. lia.
+  - unfold held. rewrite Lw. reflexivity.
+Qed.
+
+Lemma quiescence_empties_the_bus : forall b,
+    (forall r, r < max_readers -> r_live (b_r b r) = true ->
+               r_cur (b_r b r) = w_enq (b_w b (r_wid (b_r b r)))) ->
+    total_held b = 0.
+Proof.
+  intros b H. unfold total_held. apply sum_f_all_zero. intros j Lt.
+  apply (quiescence_empties_a_publisher b j).
+  intros r Hr Sr. cbn [sub_reader] in Sr. apply andb_true_iff in Sr.
+  destruct Sr as [Lr Rw].
+  apply (proj1 (Nat.eqb_eq (r_wid (b_r b r)) j)) in Rw.
+  rewrite <- Rw. apply (H r Hr Lr).
+Qed.
+
+Lemma a_quiescent_pool_is_whole : forall b,
+    total_held b = 0 -> pool_free b = sector_pool.
+Proof.
+  intros b H. unfold pool_free. rewrite H. apply Nat.sub_0_r.
+Qed.
+
+(* the empty bus holds nothing: the pool starts whole *)
+Lemma bus0_holds_nothing : total_held bus0 = 0.
+Proof.
+  apply quiescence_empties_the_bus. intros r Hr Lr.
+  unfold bus0 in Lr. cbn [b_r r_live empty_reader] in Lr. discriminate Lr.
+Qed.
+
+Lemma bus0_pool_is_whole : pool_free bus0 = sector_pool.
+Proof.
+  apply a_quiescent_pool_is_whole, bus0_holds_nothing.
+Qed.
+
+(* ── 18. I9: the class of states the five calls cannot leave ───── *)
+(*
+ * The oracle's I9 group enumerates every run of length six over the five calls
+ * and reports that no invariant breaks.  What it searches, the theorems below
+ * prove once: each call maps well-formed buses to well-formed buses, so every
+ * word over the call alphabet does, in every interleaving.
+ *
+ * Two obligations are carried as hypotheses rather than checked by the shipped
+ * guards, because the guards do not check them: pub accepts a capacity without
+ * validating it against the ring bound, and spawn accepts a cursor list without
+ * checking it for duplicates.  Both are contract gaps to close in the API, not
+ * facts the model can invent.
+ *)
+
+(* ── 18.1 the conjuncts, read off a well-formed bus ─────────────── *)
+
+Lemma bus_wf_tables : forall b, bus_wf b -> wf_tables b.
+Proof. intros b W. exact (proj1 W). Qed.
+
+Lemma bus_wf_bounded : forall b, bus_wf b -> wf_bounded b.
+Proof. intros b W. exact (proj1 (proj2 W)). Qed.
+
+Lemma bus_wf_reader_bounds : forall b, bus_wf b -> wf_reader_bounds b.
+Proof. intros b W. exact (proj1 (proj2 (proj2 W))). Qed.
+
+Lemma bus_wf_tasks : forall b, bus_wf b -> wf_tasks b.
+Proof. intros b W. exact (proj1 (proj2 (proj2 (proj2 W)))). Qed.
+
+Lemma bus_wf_ownership : forall b, bus_wf b -> wf_ownership b.
+Proof. intros b W. exact (proj1 (proj2 (proj2 (proj2 (proj2 W))))). Qed.
+
+Lemma bus_wf_star : forall b, bus_wf b -> wf_star b.
+Proof. intros b W. exact (proj1 (proj2 (proj2 (proj2 (proj2 (proj2 W)))))). Qed.
+
+Lemma bus_wf_retired : forall b, bus_wf b -> wf_retired b.
+Proof. intros b W. exact (proj2 (proj2 (proj2 (proj2 (proj2 (proj2 W)))))). Qed.
+
+Lemma wf_cap_range : forall b j, wf_tables b ->
+    0 < w_cap (b_w b j) /\ w_cap (b_w b j) <= ring_capacity.
+Proof. intros b j W. exact (proj2 (proj2 (proj2 W)) j). Qed.
+
+Lemma bus_wf_cap : forall b j, bus_wf b ->
+    0 < w_cap (b_w b j) /\ w_cap (b_w b j) <= ring_capacity.
+Proof. intros b j W. apply (wf_cap_range b j). exact (bus_wf_tables b W). Qed.
+
+(* ── 18.2 what each table update does to the derived predicates ─── *)
+
+Lemma held_bus_t : forall b i (t : task) j, held (bus_t b i t) j = held b j.
+Proof. intros b i t j. unfold held. rewrite at_w_bus_t. reflexivity. Qed.
+
+Lemma b_cores_bus_t : forall b i (t : task), b_cores (bus_t b i t) = b_cores b.
+Proof. reflexivity. Qed.
+
+(* a reader that does not subscribe to this publisher, written into a dead
+ * slot, cannot lower anybody's watermark *)
+Lemma floor_of_bus_r_dead : forall b i (r : reader) wid e,
+    r_live (b_r b i) = false -> sub_reader wid r = false ->
+    floor_of (bus_r b i r) wid e = floor_of b wid e.
+Proof.
+  intros b i r wid e Hd Hr. unfold floor_of.
+  apply (min_fold_cong_if (fun j => sub_reader wid (b_r (bus_r b i r) j))
+                          (fun j => r_cur (b_r (bus_r b i r) j))
+                          (fun j => sub_reader wid (b_r b j))
+                          (fun j => r_cur (b_r b j)) max_readers 0 e).
+  intros j Le Lt. destruct (Nat.eqb_spec i j) as [Hij|Hne].
+  - subst j. split.
+    + rewrite at_r_same_r, Hr. unfold sub_reader.
+      rewrite Hd. cbn [andb]. reflexivity.
+    + intros Hsub. unfold sub_reader in Hsub.
+      rewrite Hd in Hsub. cbn [andb] in Hsub. discriminate Hsub.
+  - split.
+    + rewrite (at_r_other_r b i r j Hne). reflexivity.
+    + intros _. rewrite (at_r_other_r b i r j Hne). reflexivity.
+Qed.
+
+Lemma held_bus_r_dead_inert : forall b i (r : reader) j,
+    r_live (b_r b i) = false -> sub_reader j r = false ->
+    held (bus_r b i r) j = held b j.
+Proof.
+  intros b i r j Hd Hj. unfold held.
+  rewrite at_w_bus_r, (floor_of_bus_r_dead b i r j (w_enq (b_w b j)) Hd Hj).
+  reflexivity.
+Qed.
+
+(* a subscriber that joins at the publisher's tail pins nothing *)
+Lemma held_join_at_seed_same : forall b i wid,
+    r_live (b_r b i) = false -> i < max_readers -> w_live (b_w b wid) = true ->
+    held (bus_r b i (mk_reader true wid (w_enq (b_w b wid)) (w_enq (b_w b wid)))) wid = held b wid.
+Proof.
+  intros b i wid Hd Hlt Hw.
+  assert (Hw' : w_live (b_w (bus_r b i (mk_reader true wid (w_enq (b_w b wid)) (w_enq (b_w b wid)))) wid) = true)
+    by (rewrite at_w_bus_r; exact Hw).
+  rewrite (held_of_live_writer _ _ Hw'), (held_of_live_writer b wid Hw).
+  rewrite at_w_bus_r.
+  rewrite (floor_of_join_at_seed b i wid (w_enq (b_w b wid)) Hd Hlt).
+  reflexivity.
+Qed.
+
+Lemma cursor_exists_of_live : forall b c, bus_wf b ->
+    cursor_live b c = true -> cursor_exists c = true.
+Proof.
+  intros b c W H. destruct c as [i|j].
+  - cbn [cursor_exists]. apply (proj2 (Nat.ltb_lt i max_writers)).
+    apply (w_live_lt b i W). exact H.
+  - cbn [cursor_exists]. apply (proj2 (Nat.ltb_lt j max_readers)).
+    apply (r_live_lt b j W). exact H.
+Qed.
+
+(* a live update can only make a cursor easier to name *)
+Lemma cursor_live_bus_w_mono : forall b i (w : writer) c,
+    cursor_live b c = true -> w_live w = true -> cursor_live (bus_w b i w) c = true.
+Proof.
+  intros b i w c H Hw. destruct c as [j|j]; cbn [cursor_live].
+  - destruct (Nat.eqb_spec i j) as [Hij|Hne].
+    + subst j. rewrite at_w_same_w. exact Hw.
+    + rewrite (at_w_other_w b i w j Hne). exact H.
+  - rewrite at_r_bus_w. exact H.
+Qed.
+
+Lemma cursor_live_bus_r_mono : forall b i (r : reader) c,
+    cursor_live b c = true -> r_live r = true -> cursor_live (bus_r b i r) c = true.
+Proof.
+  intros b i r c H Hr. destruct c as [j|j]; cbn [cursor_live].
+  - rewrite at_w_bus_r. exact H.
+  - destruct (Nat.eqb_spec i j) as [Hij|Hne].
+    + subst j. rewrite at_r_same_r. exact Hr.
+    + rewrite (at_r_other_r b i r j Hne). exact H.
+Qed.
+
+Lemma wf_retired_bus_w : forall b i (w : writer), w_live w = true ->
+    wf_retired b -> wf_retired (bus_w b i w).
+Proof.
+  intros b i w Hw H j.
+  destruct (Nat.eqb_spec i j) as [Hij|Hne].
+  - subst j. rewrite at_w_same_w. intros Hj. exfalso. rewrite Hw in Hj. discriminate Hj.
+  - rewrite (at_w_other_w b i w j Hne). intros Hj. apply (H j Hj).
+Qed.
+
+Lemma wf_retired_bus_r : forall b i (r : reader), wf_retired b -> wf_retired (bus_r b i r).
+Proof.
+  intros b i r H j. rewrite at_w_bus_r. intros Hj. apply (H j Hj).
+Qed.
+
+Lemma wf_retired_bus_t : forall b i (t : task), wf_retired b -> wf_retired (bus_t b i t).
+Proof.
+  intros b i t H j. rewrite at_w_bus_t. intros Hj. apply (H j Hj).
+Qed.
+
+Lemma wf_tables_bus_w : forall b i (w : writer), i < max_writers ->
+    0 < w_cap w /\ w_cap w <= ring_capacity ->
+    wf_tables b -> wf_tables (bus_w b i w).
+Proof.
+  intros b i w Hlt Hcap W. unfold wf_tables in *.
+  destruct W as [A [B [C D]]].
+  split.
+  { intros j Lt. destruct (Nat.eqb_spec i j) as [Hij|Hne].
+    - subst j. exfalso. lia.
+    - rewrite (at_w_other_w b i w j Hne). exact (A j Lt). }
+  split. { intros k Lt. rewrite at_r_bus_w. exact (B k Lt). }
+  split. { intros k Lt. rewrite at_t_bus_w. exact (C k Lt). }
+  { intros k. destruct (Nat.eqb_spec i k) as [Hik|Hne].
+    - subst k. rewrite at_w_same_w. exact Hcap.
+    - rewrite (at_w_other_w b i w k Hne). exact (D k). }
+Qed.
+
+Lemma wf_tables_bus_r : forall b i (r : reader), i < max_readers ->
+    wf_tables b -> wf_tables (bus_r b i r).
+Proof.
+  intros b i r Hlt W. unfold wf_tables in *.
+  destruct W as [A [B [C D]]].
+  split. { intros j Lt. rewrite at_w_bus_r. exact (A j Lt). }
+  split.
+  { intros k Lt. destruct (Nat.eqb_spec i k) as [Hik|Hne].
+    - subst k. exfalso. lia.
+    - rewrite (at_r_other_r b i r k Hne). exact (B k Lt). }
+  split. { intros k Lt. rewrite at_t_bus_r. exact (C k Lt). }
+  { intros k. rewrite at_w_bus_r. exact (D k). }
+Qed.
+
+Lemma wf_tables_bus_t : forall b i (t : task), i < max_tasks ->
+    wf_tables b -> wf_tables (bus_t b i t).
+Proof.
+  intros b i t Hlt W. unfold wf_tables in *.
+  destruct W as [A [B [C D]]].
+  split. { intros j Lt. rewrite at_w_bus_t. exact (A j Lt). }
+  split. { intros k Lt. rewrite at_r_bus_t. exact (B k Lt). }
+  split.
+  { intros u Lt. destruct (Nat.eqb_spec i u) as [Hiu|Hne].
+    - subst u. exfalso. lia.
+    - rewrite (at_t_other_t b i t u Hne). exact (C u Lt). }
+  { intros u. rewrite at_w_bus_t. exact (D u). }
+Qed.
+
+(* ── 18.3 the two inert updates, proved once ────────────────────── *)
+
+(* Everything the invariant says about the bus is either about slot i, which the
+ * obligations below cover, or about some other slot, which is inert. *)
+Lemma bus_w_preserves_wf : forall b i (w : writer),
+    i < max_writers -> w_live w = true ->
+    0 < w_cap w /\ w_cap w <= ring_capacity ->
+    held (bus_w b i w) i <= w_cap w ->
+    (forall k, k < max_readers -> r_live (b_r b k) = true ->
+               r_wid (b_r b k) = i -> r_cur (b_r b k) <= w_enq w) ->
+    bus_wf b -> bus_wf (bus_w b i w).
+Proof.
+  intros b i w Hlt Hw Hcap Hhb Hread W.
+  unfold bus_wf.
+  split. { apply (wf_tables_bus_w b i w Hlt Hcap (bus_wf_tables b W)). }
+  split.
+  { intros j. destruct (Nat.eqb_spec i j) as [Hij|Hne].
+    - subst j. rewrite (at_w_same_w b i w). exact Hhb.
+    - rewrite (held_w_inert b i w j Hne), (at_w_other_w b i w j Hne).
+      apply (bus_wf_bounded b W j). }
+  split.
+  { intros k Hr. rewrite (at_r_bus_w b i w k) in Hr.
+    destruct (bus_wf_reader_bounds b W k Hr) as [L1 [L2 [L3 L4]]].
+    rewrite (at_r_bus_w b i w k).
+    split. { exact L1. }
+    split.
+    { destruct (Nat.eqb_spec i (r_wid (b_r b k))) as [Hik|Hne].
+      - rewrite <- Hik, at_w_same_w. exact Hw.
+      - rewrite (at_w_other_w b i w (r_wid (b_r b k)) Hne). exact L2. }
+    split. { exact L3. }
+    { destruct (Nat.eqb_spec i (r_wid (b_r b k))) as [Hik|Hne].
+      - assert (He : r_wid (b_r b k) = i) by (symmetry; exact Hik).
+        rewrite <- Hik, at_w_same_w.
+        apply (Hread k); [ exact L1 | exact Hr | exact He ].
+      - rewrite (at_w_other_w b i w (r_wid (b_r b k)) Hne). exact L4. } }
+  split.
+  { intros t Ht. rewrite (at_t_bus_w b i w t) in Ht.
+    destruct (bus_wf_tasks b W t Ht) as [L1 [L2 [L3 [L4 [L5 L6]]]]].
+    rewrite !at_t_bus_w, cores_inert_w.
+    split. { exact L1. }
+    split. { exact L2. }
+    split.
+    { intros c Hin. destruct (L3 c Hin) as [Ex Lv].
+      split. { exact Ex. }
+      { apply (cursor_live_bus_w_mono b i w c Lv Hw). } }
+    split. { exact L4. }
+    split. { exact L5. }
+    { exact L6. } }
+  split. { intros t1 t2 c H1 H2. exact (bus_wf_ownership b W t1 t2 c H1 H2). }
+  split. { intros t1 t2 H1 H2 Hc. exact (bus_wf_star b W t1 t2 H1 H2 Hc). }
+  { exact (wf_retired_bus_w b i w Hw (bus_wf_retired b W)). }
+Qed.
+
+Lemma bus_r_preserves_wf : forall b i (r : reader),
+    i < max_readers -> r_live r = true ->
+    (forall j, held (bus_r b i r) j <= held b j) ->
+    (r_start r <= r_cur r /\
+     r_cur r <= w_enq (b_w b (r_wid r)) /\ w_live (b_w b (r_wid r)) = true) ->
+    bus_wf b -> bus_wf (bus_r b i r).
+Proof.
+  intros b i r Hlt Hr Hheld Hb W.
+  destruct Hb as [B1 [B2 B3]].
+  unfold bus_wf.
+  split. { apply (wf_tables_bus_r b i r Hlt (bus_wf_tables b W)). }
+  split.
+  { intros j. rewrite (at_w_bus_r b i r j).
+    apply Nat.le_trans with (held b j);
+      [ apply (Hheld j) | apply (bus_wf_bounded b W j) ]. }
+  split.
+  { intros k Hk. destruct (Nat.eqb_spec i k) as [Hik|Hne].
+    - subst k. rewrite !at_r_same_r, !at_w_bus_r.
+      split. { exact Hlt. }
+      split. { exact B3. }
+      split. { exact B1. }
+      { exact B2. }
+    - rewrite (at_r_other_r b i r k Hne) in Hk.
+      destruct (bus_wf_reader_bounds b W k Hk) as [L1 [L2 [L3 L4]]].
+      rewrite (at_r_other_r b i r k Hne), at_w_bus_r.
+      split. { exact L1. }
+      split. { exact L2. }
+      split. { exact L3. }
+      { exact L4. } }
+  split.
+  { intros t Ht. rewrite (at_t_bus_r b i r t) in Ht.
+    destruct (bus_wf_tasks b W t Ht) as [L1 [L2 [L3 [L4 [L5 L6]]]]].
+    rewrite !at_t_bus_r, cores_inert_r.
+    split. { exact L1. }
+    split. { exact L2. }
+    split.
+    { intros c Hin. destruct (L3 c Hin) as [Ex Lv].
+      split. { exact Ex. }
+      { apply (cursor_live_bus_r_mono b i r c Lv Hr). } }
+    split. { exact L4. }
+    split. { exact L5. }
+    { exact L6. } }
+  split. { intros t1 t2 c H1 H2. exact (bus_wf_ownership b W t1 t2 c H1 H2). }
+  split. { intros t1 t2 H1 H2 Hc. exact (bus_wf_star b W t1 t2 H1 H2 Hc). }
+  { exact (wf_retired_bus_r b i r (bus_wf_retired b W)). }
+Qed.
+
+(* ── 18.4 pub and snd ───────────────────────────────────────────── *)
+
+Lemma pub_no_slot_refuses : forall b cap, pub_slot b = None -> pub b cap = (b, None).
+Proof. intros b cap H. unfold pub. rewrite H. reflexivity. Qed.
+
+(* a revived ring starts empty, because a retired slot holds nothing *)
+Lemma pub_held_zero : forall b i cap, w_live (b_w b i) = false -> wf_retired b ->
+    held (bus_w b i (writer_revive (b_w b i) cap)) i = 0.
+Proof.
+  intros b i cap Hd Hret.
+  rewrite (held_bus_w_same b i (writer_revive (b_w b i) cap))
+    by apply writer_revive_live.
+  rewrite writer_revive_enq.
+  destruct (Hret i Hd) as [En _]. lia.
+Qed.
+
+Lemma pub_preserves_bus_wf : forall b cap, 0 < cap -> cap <= ring_capacity ->
+    bus_wf b -> bus_wf (fst (pub b cap)).
+Proof.
+  intros b cap Hpos Hle W.
+  destruct (pub_slot b) as [i|] eqn:S.
+  - rewrite (pub_grant_shape b cap i S). cbn [fst].
+    assert (Hdead : w_live (b_w b i) = false)
+      by (apply (pub_slot_offers_a_dead_slot b i S)).
+    assert (Hh : held (bus_w b i (writer_revive (b_w b i) cap)) i
+                  <= w_cap (writer_revive (b_w b i) cap)).
+    { rewrite (pub_held_zero b i cap Hdead (bus_wf_retired b W)), writer_revive_cap.
+      apply Nat.le_0_l. }
+    assert (Hread : forall k, k < max_readers -> r_live (b_r b k) = true ->
+                   r_wid (b_r b k) = i ->
+                   r_cur (b_r b k) <= w_enq (writer_revive (b_w b i) cap)).
+    { intros k Lk Rk Hwid.
+      destruct (bus_wf_reader_bounds b W k Rk) as [_ [P _]].
+      rewrite Hwid, Hdead in P. discriminate P. }
+    apply (bus_w_preserves_wf b i (writer_revive (b_w b i) cap)
+             (pub_slot_bounded b i S) (writer_revive_live (b_w b i) cap)
+             (conj Hpos Hle) Hh Hread W).
+  - rewrite (pub_no_slot_refuses b cap S). exact W.
+Qed.
+
+Lemma snd_preserves_bus_wf : forall b cl wid d, bus_wf b -> bus_wf (fst (snd b cl wid d)).
+Proof.
+  intros b cl wid d W.
+  destruct (snd_admit b cl wid) eqn:A.
+  - assert (Hw : w_live (b_w b wid) = true) by (apply (snd_admit_live b cl wid A)).
+    assert (Hlt : wid < max_writers) by (apply (w_live_lt b wid W Hw)).
+    destruct (snd_fits b wid) eqn:F.
+    + rewrite (snd_ok_bus b cl wid d A F).
+      assert (Hh : held (bus_w b wid (writer_push (b_w b wid) d)) wid
+                    <= w_cap (writer_push (b_w b wid) d)).
+      { rewrite writer_push_cap.
+        apply Nat.le_trans with (S (held b wid)).
+        - apply (held_push_bus b wid d Hw).
+        - assert (HL : held b wid < w_cap (b_w b wid))
+            by (apply (snd_fits_below_cap b wid); exact F).
+          lia. }
+      assert (Hcap : 0 < w_cap (writer_push (b_w b wid) d) /\
+                     w_cap (writer_push (b_w b wid) d) <= ring_capacity).
+      { rewrite writer_push_cap. apply (bus_wf_cap b wid W). }
+      assert (Hread : forall k, k < max_readers -> r_live (b_r b k) = true ->
+                     r_wid (b_r b k) = wid ->
+                     r_cur (b_r b k) <= w_enq (writer_push (b_w b wid) d)).
+      { intros k Lk Rk Hwid.
+        destruct (bus_wf_reader_bounds b W k Rk) as [_ [_ [_ L4]]].
+        rewrite Hwid in L4. rewrite writer_push_enq. lia. }
+      apply (bus_w_preserves_wf b wid (writer_push (b_w b wid) d) Hlt
+               (writer_push_live (b_w b wid) d) Hcap Hh Hread W).
+    + rewrite (snd_full_bus b cl wid d A F).
+      assert (Hh : held (bus_w b wid (writer_drop1 (b_w b wid))) wid
+                    <= w_cap (writer_drop1 (b_w b wid))).
+      { rewrite writer_drop1_cap, (snd_full_held_bus b wid Hw).
+        apply (bus_wf_bounded b W wid). }
+      assert (Hcap : 0 < w_cap (writer_drop1 (b_w b wid)) /\
+                     w_cap (writer_drop1 (b_w b wid)) <= ring_capacity).
+      { rewrite writer_drop1_cap. apply (bus_wf_cap b wid W). }
+      assert (Hread : forall k, k < max_readers -> r_live (b_r b k) = true ->
+                     r_wid (b_r b k) = wid ->
+                     r_cur (b_r b k) <= w_enq (writer_drop1 (b_w b wid))).
+      { intros k Lk Rk Hwid.
+        destruct (bus_wf_reader_bounds b W k Rk) as [_ [_ [_ L4]]].
+        rewrite Hwid in L4. rewrite writer_drop1_enq. exact L4. }
+      apply (bus_w_preserves_wf b wid (writer_drop1 (b_w b wid)) Hlt
+               (writer_drop1_live (b_w b wid)) Hcap Hh Hread W).
+  - rewrite (snd_bad_cursor_bus b cl wid d A). exact W.
+Qed.
+
+(* ── 18.5 sub, rcv and spawn ────────────────────────────────────── *)
+
+(* a late joiner seeded at the tail cannot deepen any publisher's holding: it
+ * subscribes to exactly one writer, and for that writer the watermark does not
+ * move because its cursor starts at the tail; for every other writer the new
+ * slot is simply not a subscriber. *)
+Lemma a_join_never_deepens : forall b i wid,
+    r_live (b_r b i) = false -> i < max_readers ->
+    forall j, held (bus_r b i (mk_reader true wid (w_enq (b_w b wid)) (w_enq (b_w b wid)))) j
+               <= held b j.
+Proof.
+  intros b i wid Hd Hlt j.
+  destruct (Nat.eqb_spec j wid) as [Hjw|Hne].
+  - subst j.
+    destruct (w_live (b_w b wid)) eqn:Lw.
+    + rewrite (held_join_at_seed_same b i wid Hd Hlt Lw). apply Nat.le_refl.
+    + assert (E : held (bus_r b i (mk_reader true wid (w_enq (b_w b wid)) (w_enq (b_w b wid)))) wid = 0).
+      { unfold held. rewrite at_w_bus_r, Lw. reflexivity. }
+      rewrite E. apply Nat.le_0_l.
+  - assert (Hsub : sub_reader j
+                   (mk_reader true wid (w_enq (b_w b wid)) (w_enq (b_w b wid))) = false).
+    { unfold sub_reader. cbn.
+      destruct (Nat.eqb_spec wid j) as [Heq|_].
+      - exfalso. apply Hne. symmetry. exact Heq.
+      - reflexivity. }
+    rewrite (held_bus_r_dead_inert b i
+               (mk_reader true wid (w_enq (b_w b wid)) (w_enq (b_w b wid))) j Hd Hsub).
+    apply Nat.le_refl.
+Qed.
+
+Lemma sub_preserves_bus_wf : forall b cl wid, bus_wf b -> bus_wf (fst (sub b cl wid)).
+Proof.
+  intros b cl wid W.
+  destruct (sub_admit b cl wid) eqn:A.
+  - destruct (sub_slot b) as [i|] eqn:S.
+    + rewrite (sub_grant_shape b cl wid i S A). cbn [fst].
+      apply andb_true_iff in A. destruct A as [Lw _].
+      apply (bus_r_preserves_wf b i
+               (mk_reader true wid (w_enq (b_w b wid)) (w_enq (b_w b wid)))
+               (sub_slot_bounded b i S)).
+      * reflexivity.
+      * apply (a_join_never_deepens b i wid (sub_slot_offers_a_dead_slot b i S)
+                 (sub_slot_bounded b i S)).
+      * split.
+        { apply Nat.le_refl. }
+        { split.
+          { cbn. apply Nat.le_refl. }
+          { cbn. exact Lw. } }
+      * exact W.
+    + unfold sub. rewrite A, S. cbn [fst]. exact W.
+  - unfold sub. rewrite A. cbn [fst]. exact W.
+Qed.
+
+Lemma rcv_preserves_bus_wf : forall b cl rid, bus_wf b -> bus_wf (fst (rcv b cl rid)).
+Proof.
+  intros b cl rid W.
+  destruct (rcv_admit b cl rid) eqn:A.
+  - destruct (rcv_ready b rid) eqn:R.
+    + rewrite (rcv_data_bus b cl rid A R).
+      assert (Hlive : r_live (b_r b rid) = true)
+        by (apply (rcv_admit_live_reader b cl rid A)).
+      assert (Hlt : rid < max_readers) by (apply (r_live_lt b rid W Hlive)).
+      destruct (bus_wf_reader_bounds b W rid Hlive) as [_ [P [B1 B2]]].
+      apply (bus_r_preserves_wf b rid (reader_advance (b_r b rid)) Hlt
+               (reader_advance_live (b_r b rid))
+               (fun wid => held_advance_le b rid wid Hlt Hlive)).
+      * rewrite reader_advance_start, reader_advance_cur, reader_advance_wid.
+        unfold rcv_ready in R. rewrite Nat.ltb_lt in R.
+        split.
+        { lia. }
+        { split.
+          { lia. }
+          { exact P. } }
+      * exact W.
+    + rewrite (rcv_empty_bus b cl rid A R). exact W.
+  - rewrite (rcv_bad_cursor_bus b cl rid A). exact W.
+Qed.
+
+(* ── 18.6 spawn: the actor update, with the two carried obligations ─ *)
+
+Lemma star_ok_empty_core : forall b core l, star_ok b core l = true ->
+    pub_count_c l <> 0 -> core_holds_publisher b core = false.
+Proof.
+  intros b core l Hstar Hn. unfold star_ok in Hstar.
+  assert (E : Nat.eqb (pub_count_c l) 0 = false)
+    by (destruct (Nat.eqb_spec (pub_count_c l) 0) as [Heq|_]; [contradiction|reflexivity]).
+  rewrite E in Hstar. cbn [negb] in Hstar. apply negb_true_iff in Hstar. exact Hstar.
+Qed.
+
+Lemma holds_pub_bus_t_same : forall b i (t : task),
+    holds_pub (bus_t b i t) i =
+      andb (t_live t) (negb (Nat.eqb (pub_count_c (t_curs t)) 0)).
+Proof. intros b i t. unfold holds_pub. rewrite at_t_same_t. reflexivity. Qed.
+
+Lemma holds_pub_bus_t_other : forall b i (t : task) u, i <> u ->
+    holds_pub (bus_t b i t) u = holds_pub b u.
+Proof.
+  intros b i t u H. unfold holds_pub.
+  rewrite (at_t_other_t b i t u H). reflexivity.
+Qed.
+
+Lemma new_task_publisher_count : forall b i core l,
+    holds_pub (bus_t b i (task_revive core l)) i = true -> pub_count_c l <> 0.
+Proof.
+  intros b i core l H HC.
+  rewrite holds_pub_bus_t_same, task_revive_live, task_revive_curs in H.
+  cbn [andb] in H. apply negb_true_iff in H.
+  exact ((proj1 (Nat.eqb_neq (pub_count_c l) 0) H) HC).
+Qed.
+
+(* the same frame fact as owns_bus_t_other, in the orientation the case analyses
+ * of Nat.eqb i t produce *)
+Lemma owns_slot_inert : forall b i (t : task) j c, i <> j ->
+    owns (bus_t b i t) j c = owns b j c.
+Proof.
+  intros b i t j c H. apply (owns_bus_t_other b i t j c).
+  intros Heq. apply H. symmetry. exact Heq.
+Qed.
+
+(* the cursor a grant names cannot already be somebody's: exclusivity is bought
+ * by the taken-cursor guard, not by the table-first slot choice *)
+Lemma owns_the_new_task_is_the_grant : forall b core l i c,
+    owns (bus_t b i (task_revive core l)) i c = true -> In c l.
+Proof.
+  intros b core l i c H.
+  rewrite owns_bus_t_same, task_revive_live, task_revive_curs in H. cbn [andb] in H.
+  destruct (existsb_witness _ (cref_eqb c) l H) as [y [Hin Hy]].
+  assert (Ey : c = y) by (apply cref_eqb_iff; exact Hy).
+  subst c. exact Hin.
+Qed.
+
+Lemma spawn_keeps_ownership_unique : forall b core l i t1 t2 c,
+    spawn_ok b core l = true -> bus_wf b ->
+    owns (bus_t b i (task_revive core l)) t1 c = true ->
+    owns (bus_t b i (task_revive core l)) t2 c = true -> t1 = t2.
+Proof.
+  intros b core l i t1 t2 c Q W H1 H2.
+  destruct (Nat.eqb_spec i t1) as [Ht1|Hn1].
+  - subst t1.
+    destruct (Nat.eqb_spec i t2) as [Ht2|Hn2].
+    + subst t2. reflexivity.
+    + exfalso.
+      assert (Hin : In c l) by (apply (owns_the_new_task_is_the_grant b core l i c H1)).
+      assert (Free : cursor_taken b c = false)
+        by (apply (spawn_ok_cursors_free b core l c Q Hin)).
+      rewrite (owns_slot_inert b i (task_revive core l) t2 c Hn2) in H2.
+      assert (Lt : t2 < max_tasks) by (apply (a_holder_is_in_range b t2 c W H2)).
+      rewrite (cursor_taken_if_owned b t2 c Lt H2) in Free. discriminate Free.
+  - destruct (Nat.eqb_spec i t2) as [Ht2|Hn2].
+    + subst t2. exfalso.
+      assert (Hin : In c l) by (apply (owns_the_new_task_is_the_grant b core l i c H2)).
+      assert (Free : cursor_taken b c = false)
+        by (apply (spawn_ok_cursors_free b core l c Q Hin)).
+      rewrite (owns_slot_inert b i (task_revive core l) t1 c Hn1) in H1.
+      assert (Lt : t1 < max_tasks) by (apply (a_holder_is_in_range b t1 c W H1)).
+      rewrite (cursor_taken_if_owned b t1 c Lt H1) in Free. discriminate Free.
+    + rewrite (owns_slot_inert b i (task_revive core l) t1 c Hn1) in H1.
+      rewrite (owns_slot_inert b i (task_revive core l) t2 c Hn2) in H2.
+      apply (bus_wf_ownership b W t1 t2 c H1 H2).
+Qed.
+
+Lemma spawn_keeps_the_star : forall b core l i t1 t2,
+    spawn_ok b core l = true -> bus_wf b ->
+    holds_pub (bus_t b i (task_revive core l)) t1 = true ->
+    holds_pub (bus_t b i (task_revive core l)) t2 = true ->
+    t_core (b_t (bus_t b i (task_revive core l)) t1) =
+    t_core (b_t (bus_t b i (task_revive core l)) t2) -> t1 = t2.
+Proof.
+  intros b core l i t1 t2 Q W P1 P2 Hc.
+  destruct (Nat.eqb_spec i t1) as [Ht1|Hn1].
+  - destruct (Nat.eqb_spec i t2) as [Ht2|Hn2].
+    + subst t1. subst t2. reflexivity.
+    + subst t1. exfalso.
+      assert (Hn : pub_count_c l <> 0)
+        by (apply (new_task_publisher_count b i core l P1)).
+      assert (Ch : core_holds_publisher b core = false)
+        by (apply (star_ok_empty_core b core l (spawn_ok_star_holds b core l Q) Hn)).
+      rewrite (holds_pub_bus_t_other b i (task_revive core l) t2 Hn2) in P2.
+      assert (P2b : holds_pub b t2 = true) by exact P2.
+      unfold holds_pub in P2. apply andb_true_iff in P2. destruct P2 as [Live _].
+      assert (Lt : t2 < max_tasks) by (apply (t_live_lt b t2 W Live)).
+      rewrite at_t_same_t, task_revive_core,
+              (at_t_other_t b i (task_revive core l) t2 Hn2) in Hc.
+      assert (Hp : core_holds_publisher b core = true).
+      { apply (core_holds_publisher_witness b core t2 Lt P2b). symmetry. exact Hc. }
+      rewrite Ch in Hp. discriminate Hp.
+  - destruct (Nat.eqb_spec i t2) as [Ht2|Hn2].
+    + subst t2. exfalso.
+      assert (Hn : pub_count_c l <> 0)
+        by (apply (new_task_publisher_count b i core l P2)).
+      assert (Ch : core_holds_publisher b core = false)
+        by (apply (star_ok_empty_core b core l (spawn_ok_star_holds b core l Q) Hn)).
+      rewrite (holds_pub_bus_t_other b i (task_revive core l) t1 Hn1) in P1.
+      assert (P1b : holds_pub b t1 = true) by exact P1.
+      unfold holds_pub in P1. apply andb_true_iff in P1. destruct P1 as [Live _].
+      assert (Lt : t1 < max_tasks) by (apply (t_live_lt b t1 W Live)).
+      rewrite (at_t_other_t b i (task_revive core l) t1 Hn1),
+              at_t_same_t, task_revive_core in Hc.
+      assert (Hp : core_holds_publisher b core = true)
+        by (apply (core_holds_publisher_witness b core t1 Lt P1b Hc)).
+      rewrite Ch in Hp. discriminate Hp.
+    + rewrite (holds_pub_bus_t_other b i (task_revive core l) t1 Hn1) in P1.
+      rewrite (holds_pub_bus_t_other b i (task_revive core l) t2 Hn2) in P2.
+      rewrite (at_t_other_t b i (task_revive core l) t1 Hn1),
+              (at_t_other_t b i (task_revive core l) t2 Hn2) in Hc.
+      apply (bus_wf_star b W t1 t2 P1 P2 Hc).
+Qed.
+
+Lemma spawn_preserves_bus_wf : forall b core l, NoDup l ->
+    bus_wf b -> bus_wf (fst (spawn b core l)).
+Proof.
+  intros b core l Hnd W.
+  destruct (spawn_slot b) as [i|] eqn:S.
+  - destruct (spawn_ok b core l) eqn:Q.
+    + rewrite (spawn_granted_shape b core l i S Q). cbn [fst].
+      destruct (spawn_ok_six b core l Q) as [Hc [Hlen [Hcl [Hfree [Hpub1 Hstar]]]]].
+      unfold bus_wf.
+      split. { apply (wf_tables_bus_t b i (task_revive core l) (spawn_slot_bounded b i S)
+                              (bus_wf_tables b W)). }
+      split. { intros j. rewrite held_bus_t. apply (bus_wf_bounded b W j). }
+      split.
+      { intros k Hk. rewrite (at_r_bus_t b i (task_revive core l) k) in Hk.
+        destruct (bus_wf_reader_bounds b W k Hk) as [R1 [R2 [R3 R4]]].
+        rewrite !at_r_bus_t, !at_w_bus_t.
+        split. { exact R1. } split. { exact R2. } split. { exact R3. } { exact R4. } }
+      split.
+      { intros t Ht. destruct (Nat.eqb_spec i t) as [Hti|Hne].
+        { subst t.
+          rewrite !at_t_same_t, !task_revive_core, !task_revive_curs, cores_inert_t.
+          split. { exact (spawn_slot_bounded b i S). }
+          split.
+          { apply (proj1 (Nat.ltb_lt core (b_cores b))). exact Hc. }
+          split.
+          { intros c Hin. split.
+            { apply (cursor_exists_of_live b c W (cursors_live_elim b l c Hcl Hin)). }
+            { rewrite cursor_live_bus_t. apply (cursors_live_elim b l c Hcl Hin). } }
+          split. { exact Hnd. }
+          split.
+          { apply (proj1 (Nat.leb_le (pub_count_c l) 1)). exact Hpub1. }
+          { exact (spawn_ok_grants_work b core l Q). } }
+        { rewrite (at_t_other_t b i (task_revive core l) t Hne) in Ht.
+          destruct (bus_wf_tasks b W t Ht) as [T1 [T2 [T3 [T4 [T5 T6]]]]].
+          rewrite (at_t_other_t b i (task_revive core l) t Hne), cores_inert_t.
+          split. { exact T1. } split. { exact T2. } split.
+          { intros c Hin. destruct (T3 c Hin) as [Ex Lv].
+            split. { exact Ex. }
+            { rewrite cursor_live_bus_t. exact Lv. } }
+          split. { exact T4. } split. { exact T5. } { exact T6. } } }
+      split.
+      { intros t1 t2 c. apply (spawn_keeps_ownership_unique b core l i t1 t2 c Q W). }
+      split.
+      { intros t1 t2. apply (spawn_keeps_the_star b core l i t1 t2 Q W). }
+      { apply (wf_retired_bus_t b i (task_revive core l) (bus_wf_retired b W)). }
+    + rewrite (spawn_refused_shape b core l i S Q). cbn [fst]. exact W.
+  - rewrite (spawn_no_slot_shape b core l S). cbn [fst]. exact W.
+Qed.
+
+(* ── 18.7 the closure: no word over the five calls leaves the class ── *)
+
+(* The oracle's I9 enumerates runs; the alphabet below is the same five calls,
+ * and a run is a word over it.  A refusal is in the alphabet too - it is the
+ * stuttering step, the one that leaves the bus untouched. *)
+Inductive step : Type :=
+  | Pub_step : nat -> step
+  | Sub_step : nat -> step
+  | Snd_step : nat -> nat -> step
+  | Rcv_step : nat -> step
+  | Spawn_step : nat -> list cref -> step.
+
+(* the two obligations the shipped guards do not check, read off the call *)
+Definition wf_step (st : step) : Prop :=
+  match st with
+  | Pub_step cap => 0 < cap /\ cap <= ring_capacity
+  | Spawn_step _ l => NoDup l
+  | _ => True
+  end.
+
+Definition apply_step (b : bus) (st : step) : bus :=
+  match st with
+  | Pub_step cap => fst (pub b cap)
+  | Sub_step wid => fst (sub b NoTask wid)
+  | Snd_step wid d => fst (snd b NoTask wid d)
+  | Rcv_step rid => fst (rcv b NoTask rid)
+  | Spawn_step core l => fst (spawn b core l)
+  end.
+
+Fixpoint run (b : bus) (steps : list step) : bus :=
+  match steps with
+  | nil => b
+  | st :: tl => run (apply_step b st) tl
+  end.
+
+Lemma snd_never_makes_a_core : forall b cl wid d,
+    b_cores (fst (snd b cl wid d)) = b_cores b.
+Proof.
+  intros b cl wid d.
+  destruct (snd_admit b cl wid) eqn:A.
+  - destruct (snd_fits b wid) eqn:F.
+    + rewrite (snd_ok_bus b cl wid d A F). apply cores_inert_w.
+    + rewrite (snd_full_bus b cl wid d A F). apply cores_inert_w.
+  - rewrite (snd_bad_cursor_bus b cl wid d A). reflexivity.
+Qed.
+
+Lemma step_preserves_bus_wf : forall b st, bus_wf b -> wf_step st ->
+    bus_wf (apply_step b st).
+Proof.
+  intros b st W Hst. unfold apply_step.
+  destruct st as [cap|wid|wid d|rid|core l]; cbn [wf_step] in Hst.
+  - apply (pub_preserves_bus_wf b cap); [ apply (proj1 Hst) | apply (proj2 Hst) | exact W ].
+  - apply (sub_preserves_bus_wf b NoTask wid W).
+  - apply (snd_preserves_bus_wf b NoTask wid d W).
+  - apply (rcv_preserves_bus_wf b NoTask rid W).
+  - apply (spawn_preserves_bus_wf b core l Hst W).
+Qed.
+
+Lemma run_preserves_bus_wf : forall steps b,
+    bus_wf b -> (forall st, In st steps -> wf_step st) -> bus_wf (run b steps).
+Proof.
+  intros steps. induction steps as [|a t IH]; intros b W Hall.
+  - exact W.
+  - cbn [run]. apply IH.
+    + apply (step_preserves_bus_wf b a).
+      * exact W.
+      * exact (Hall a (or_introl eq_refl)).
+    + intros st Hin. apply (Hall st). right. exact Hin.
+Qed.
+
+Theorem interleavings_preserve_bus_wf : forall steps,
+    (forall st, In st steps -> wf_step st) -> bus_wf (run bus0 steps).
+Proof.
+  intros steps Hall. apply (run_preserves_bus_wf steps bus0 bus_wf0 Hall).
+Qed.
+
+(* the box: at every state of every admissible interleaving, the star's laws
+ * hold - one owner per cursor, one publisher per core, the pool unbroken *)
+Corollary no_run_overdraws_the_pool : forall steps,
+    (forall st, In st steps -> wf_step st) ->
+    total_held (run bus0 steps) <= sector_pool.
+Proof.
+  intros steps Hall. apply (pool_never_overdrawn (run bus0 steps)).
+  apply (interleavings_preserve_bus_wf steps Hall).
+Qed.
+
+Corollary no_run_exceeds_the_rings : forall steps,
+    (forall st, In st steps -> wf_step st) ->
+    total_held (run bus0 steps) <= max_writers * ring_capacity.
+Proof.
+  intros steps Hall. apply (total_resident_bounded (run bus0 steps)).
+  apply (interleavings_preserve_bus_wf steps Hall).
+Qed.
+
+Corollary no_run_leaves_a_ring_over_cap : forall steps wid,
+    (forall st, In st steps -> wf_step st) ->
+    held (run bus0 steps) wid <= w_cap (b_w (run bus0 steps) wid).
+Proof.
+  intros steps wid Hall.
+  apply (bus_wf_bounded (run bus0 steps) (interleavings_preserve_bus_wf steps Hall) wid).
+Qed.
+
+Corollary no_run_shares_a_cursor : forall steps t1 t2 c,
+    (forall st, In st steps -> wf_step st) ->
+    owns (run bus0 steps) t1 c = true -> owns (run bus0 steps) t2 c = true -> t1 = t2.
+Proof.
+  intros steps t1 t2 c Hall H1 H2.
+  apply (bus_wf_ownership (run bus0 steps) (interleavings_preserve_bus_wf steps Hall)
+            t1 t2 c H1 H2).
+Qed.
+
+Corollary no_run_has_two_publishers_on_a_core : forall steps t1 t2,
+    (forall st, In st steps -> wf_step st) ->
+    holds_pub (run bus0 steps) t1 = true -> holds_pub (run bus0 steps) t2 = true ->
+    t_core (b_t (run bus0 steps) t1) = t_core (b_t (run bus0 steps) t2) -> t1 = t2.
+Proof.
+  intros steps t1 t2 Hall H1 H2 Hc.
+  apply (bus_wf_star (run bus0 steps) (interleavings_preserve_bus_wf steps Hall)
+            t1 t2 H1 H2 Hc).
+Qed.
+
+Lemma run_never_makes_a_core : forall steps b, b_cores (run b steps) = b_cores b.
+Proof.
+  intros steps. induction steps as [|a t IH]; intros b; cbn [run].
+  - reflexivity.
+  - rewrite IH. unfold apply_step.
+    destruct a as [cap|wid|wid d|rid|core l].
+    + apply pub_never_makes_a_core.
+    + apply sub_never_makes_a_core.
+    + apply snd_never_makes_a_core.
+    + apply rcv_never_makes_a_core.
+    + apply spawn_never_makes_a_core.
+Qed.
+
+Corollary the_shipped_core_count_survives_every_run : forall steps,
+    b_cores (run bus0 steps) = cores_shipped.
+Proof.
+  intros steps. rewrite (run_never_makes_a_core steps bus0). reflexivity.
+Qed.
+
+(* ── 19. I10: the shipped modes, and a gate that cannot fake coverage ── *)
+
+(* The oracle's §7.4 gate decides, for each verification row, whether this port
+ * may call itself covered.  Two things are modelled here: the flag (BTRON_MP)
+ * decides which rows are compiled in at all, and the core count the port
+ * actually has decides whether a compiled row is evidence.  A row that is not
+ * compiled in is SKIP, and a row that is demanded but impossible is FAIL: the
+ * gate can report neither as PASS. *)
+
+Inductive mp_flag : Type := MP_ON | MP_OFF.
+
+Inductive verdict : Type := V_PASS | V_SKIP | V_FAIL.
+
+Definition verdict_eqb (a b : verdict) : bool :=
+  match a, b with
+  | V_PASS, V_PASS => true
+  | V_SKIP, V_SKIP => true
+  | V_FAIL, V_FAIL => true
+  | _, _ => false
+  end.
+
+(* the five rows --mode=full prints *)
+Inductive vrow : Type :=
+  | R_ring | R_intercore | R_planes | R_amp | R_io_wcet.
+
+Definition all_rows : list vrow :=
+  [R_ring; R_intercore; R_planes; R_amp; R_io_wcet].
+
+(* with the flag off, only the Tier-1 contract survives the build *)
+Definition row_compiled (mp : mp_flag) (r : vrow) : bool :=
+  match mp with
+  | MP_OFF => match r with R_planes => true | _ => false end
+  | MP_ON => true
+  end.
+
+(* the topology a row needs: the ring, the bus and the WCET row run on one core,
+ * the AMP row needs the I/O core to exist *)
+Definition row_has_the_topology (r : vrow) (cores : nat) : bool :=
+  match r with
+  | R_planes => true
+  | R_amp => (io_core_id <? cores)
+  | _ => Nat.leb 1 cores
+  end.
+
+Definition row_verdict (mp : mp_flag) (cores : nat) (require : bool) (r : vrow) : verdict :=
+  if negb (row_compiled mp r) then V_SKIP
+  else if row_has_the_topology r cores then V_PASS
+       else if require then V_FAIL else V_SKIP.
+
+Definition row_count (mp : mp_flag) (cores : nat) (require : bool) (v : verdict) : nat :=
+  length (filter (fun r => verdict_eqb (row_verdict mp cores require r) v) all_rows).
+
+Definition run_summary (mp : mp_flag) (cores : nat) (require : bool) : nat * (nat * nat) :=
+  (row_count mp cores require V_PASS,
+   (row_count mp cores require V_SKIP, row_count mp cores require V_FAIL)).
+
+(* the arithmetic the rows rest on *)
+
+Lemma bus0_has_the_shipped_core_count : b_cores bus0 = cores_shipped.
+Proof. reflexivity. Qed.
+
+Lemma shipped_is_below_the_target : cores_shipped < cores_target.
+Proof. unfold cores_shipped, cores_target. lia. Qed.
+
+Lemma the_io_core_is_the_last_target_core : io_core_id = cores_target - 1.
+Proof. unfold io_core_id, cores_target. reflexivity. Qed.
+
+Lemma the_io_core_is_not_shipped : cores_shipped <= io_core_id.
+Proof. unfold cores_shipped, io_core_id. lia. Qed.
+
+Lemma the_io_core_exists_only_on_the_target :
+    forall cores, (io_core_id <? cores) = true <-> cores_target <= cores.
+Proof.
+  intros cores. unfold io_core_id, cores_target.
+  split.
+  { intros H. apply (proj1 (Nat.ltb_lt 3 cores)) in H. lia. }
+  { intros H. apply (proj2 (Nat.ltb_lt 3 cores)). lia. }
+Qed.
+
+Lemma the_budget_is_two_periods : io_budget_us = 2 * io_period_us.
+Proof. unfold io_budget_us, io_period_us. reflexivity. Qed.
+
+Lemma the_period_fits_the_budget : io_period_us <= io_budget_us.
+Proof. unfold io_period_us, io_budget_us. lia. Qed.
+
+Lemma the_period_is_positive : 0 < io_period_us.
+Proof. unfold io_period_us. lia. Qed.
+
+Lemma the_ring_holds_four_sectors : ring_capacity = 4.
+Proof. reflexivity. Qed.
+
+Lemma the_pool_is_four_rings_per_writer : sector_pool = max_writers * 4 * ring_capacity.
+Proof. unfold sector_pool, max_writers, ring_capacity. reflexivity. Qed.
+
+(* the parked core: the shipped port refuses the I/O core in every argument,
+ * and the refusal is the stuttering step - the bus is returned untouched *)
+Lemma the_shipped_port_parks_the_io_core :
+    forall l, spawn_ok bus0 io_core_id l = false.
+Proof.
+  intros l. unfold spawn_ok.
+  rewrite (bus0_has_the_shipped_core_count). cbn. reflexivity.
+Qed.
+
+Theorem parked_core_never_gets_a_task : forall l, spawn bus0 io_core_id l = (bus0, None).
+Proof.
+  intros l. destruct (spawn_slot bus0) as [i|] eqn:S.
+  - apply (spawn_refused_shape bus0 io_core_id l i S).
+    exact (the_shipped_port_parks_the_io_core l).
+  - exact (spawn_no_slot_shape bus0 io_core_id l S).
+Qed.
+
+(* the five §7.4 rows, computed *)
+
+Theorem shipped_port_four_pass_one_skip :
+    run_summary MP_ON cores_shipped false = (4, (1, 0)).
+Proof. unfold run_summary, row_count, all_rows, cores_shipped. vm_compute. reflexivity. Qed.
+
+Theorem demanding_amp_on_the_shipped_port_fails :
+    run_summary MP_ON cores_shipped true = (4, (0, 1)).
+Proof. unfold run_summary, row_count, all_rows, cores_shipped. vm_compute. reflexivity. Qed.
+
+Theorem flag_off_is_one_pass_four_skip :
+    run_summary MP_OFF cores_shipped false = (1, (4, 0)).
+Proof. unfold run_summary, row_count, all_rows, cores_shipped. vm_compute. reflexivity. Qed.
+
+Theorem planes_is_the_row_that_passes_with_the_flag_off :
+    row_verdict MP_OFF cores_shipped false R_planes = V_PASS.
+Proof. unfold row_verdict, row_compiled, row_has_the_topology. cbn. reflexivity. Qed.
+
+Theorem amp_row_is_skip_not_pass_on_the_shipped_port :
+    row_verdict MP_ON (b_cores bus0) false R_amp = V_SKIP.
+Proof.
+  unfold row_verdict, row_compiled, row_has_the_topology.
+  rewrite bus0_has_the_shipped_core_count. unfold io_core_id, cores_shipped. cbn. reflexivity.
+Qed.
+
+Theorem no_gate_ever_reports_an_uncompiled_row :
+    forall mp cores require r,
+      row_verdict mp cores require r = V_PASS -> row_compiled mp r = true.
+Proof.
+  intros mp cores require r H. unfold row_verdict in H.
+  destruct (row_compiled mp r) eqn:C; [| cbn in H; discriminate H].
+  reflexivity.
+Qed.
+
+Theorem the_amp_row_passes_only_with_the_io_core :
+    forall cores require, row_verdict MP_ON cores require R_amp = V_PASS -> io_core_id < cores.
+Proof.
+  intros cores require H. unfold row_verdict in H.
+  cbn [row_compiled negb] in H.
+  destruct (row_has_the_topology R_amp cores) eqn:T.
+  - cbn [row_has_the_topology] in T.
+    apply (proj1 (Nat.ltb_lt io_core_id cores)). exact T.
+  - destruct require; discriminate H.
+Qed.
+
+Theorem the_target_topology_passes_every_row :
+    forall r, row_verdict MP_ON cores_target true r = V_PASS.
+Proof.
+  intros r. unfold row_verdict, row_compiled, row_has_the_topology, io_core_id, cores_target.
+  destruct r; cbn; reflexivity.
+Qed.
+
+(* a request is not a topology: --cores=N echoes both numbers because the row
+ * must carry the memory model it was run under *)
+Definition cores_echo (req have : nat) : nat * nat := (req, have).
+
+Theorem the_request_does_not_change_the_port :
+    forall req, pr2 (cores_echo req (b_cores bus0)) = cores_shipped.
+Proof.
+  intros req. unfold cores_echo.
+  rewrite bus0_has_the_shipped_core_count. reflexivity.
+Qed.
+
+(* ── 20. I11: the EVT queue, a masked ring with one writer per field ── *)
+
+(* IO.txt §5.1 gives the I/O core a lock-free event ring shared with the core
+ * that produces the events.  The shipped C masks the index (i & (N-1)) because
+ * the bus has no divide; the model uses mod, which agrees with the mask exactly
+ * when N is a power of two - and the row below is the proof that it is.
+ * §5.2's rule is the one that makes the lock unnecessary: head is written only
+ * by the consumer, tail only by the producer. *)
+
+Definition evt_idx (k : nat) : nat := k mod event_queue_size.
+
+Record evtq : Type := mk_evtq {
+    q_buf  : nat -> option nat;
+    q_head : nat;
+    q_tail : nat
+  }.
+
+Definition evtq0 : evtq := mk_evtq (fun _ => None) 0 0.
+
+Definition occupancy (e : evtq) : nat := q_tail e - q_head e.
+
+Definition evt_room (e : evtq) : bool := Nat.ltb (occupancy e) event_queue_size.
+
+(* the buffer alone: a write never touches head or tail *)
+Definition evt_write (e : evtq) (k : nat) (v : option nat) : evtq :=
+  mk_evtq (@upd (option nat) (q_buf e) k v) (q_head e) (q_tail e).
+
+(* the producer's step: store at the masked tail, then publish the new tail *)
+Definition evt_advance (e : evtq) (v : nat) : evtq :=
+  mk_evtq (@upd (option nat) (q_buf e) (evt_idx (q_tail e)) (Some v))
+          (q_head e) (S (q_tail e)).
+
+Definition evt_put (e : evtq) (v : nat) : evtq * bool :=
+  if evt_room e then (evt_advance e v, true) else (e, false).
+
+(* the consumer's step: clear the masked head slot, then publish the new head *)
+Definition evt_retire (e : evtq) : evtq :=
+  mk_evtq (@upd (option nat) (q_buf e) (evt_idx (q_head e)) None)
+          (S (q_head e)) (q_tail e).
+
+Definition evt_get (e : evtq) : evtq * option nat :=
+  if Nat.eqb (q_head e) (q_tail e) then (e, None)
+  else (evt_retire e, q_buf e (evt_idx (q_head e))).
+
+(* the buffer is a total table, so a write is visible at its own index and
+ * invisible anywhere else - that is the whole of the aliasing question *)
+Lemma evt_write_buf_at_itself : forall e k v, q_buf (evt_write e k v) k = v.
+Proof. intros e k v. unfold evt_write. cbn [q_buf]. apply upd_same. Qed.
+
+Lemma evt_write_buf_elsewhere : forall e k v k', k <> k' ->
+    q_buf (evt_write e k v) k' = q_buf e k'.
+Proof.
+  intros e k v k' H. unfold evt_write. cbn [q_buf].
+  apply (upd_other (option nat) (q_buf e) k v k'). exact H.
+Qed.
+
+Lemma evt_write_leaves_head_alone : forall e k v, q_head (evt_write e k v) = q_head e.
+Proof. reflexivity. Qed.
+
+Lemma evt_write_leaves_tail_alone : forall e k v, q_tail (evt_write e k v) = q_tail e.
+Proof. reflexivity. Qed.
+
+Lemma evt_advance_stores_at_the_tail : forall e v,
+    q_buf (evt_advance e v) (evt_idx (q_tail e)) = Some v.
+Proof. intros e v. unfold evt_advance. cbn [q_buf]. apply upd_same. Qed.
+
+Lemma evt_advance_leaves_head_alone : forall e v, q_head (evt_advance e v) = q_head e.
+Proof. reflexivity. Qed.
+
+Lemma evt_advance_publishes_the_tail : forall e v,
+    q_tail (evt_advance e v) = S (q_tail e).
+Proof. reflexivity. Qed.
+
+Lemma evt_retire_clears_the_head_slot : forall e,
+    q_buf (evt_retire e) (evt_idx (q_head e)) = None.
+Proof. intros e. unfold evt_retire. cbn [q_buf]. apply upd_same. Qed.
+
+Lemma evt_retire_leaves_tail_alone : forall e, q_tail (evt_retire e) = q_tail e.
+Proof. reflexivity. Qed.
+
+Lemma evt_retire_publishes_the_head : forall e, q_head (evt_retire e) = S (q_head e).
+Proof. reflexivity. Qed.
+
+(* the room test, read as a Prop *)
+Lemma evt_room_true : forall e, evt_room e = true -> occupancy e < event_queue_size.
+Proof.
+  intros e R. unfold evt_room in R.
+  apply (proj1 (Nat.ltb_lt (occupancy e) event_queue_size)). exact R.
+Qed.
+
+Lemma evt_room_false : forall e, evt_room e = false -> event_queue_size <= occupancy e.
+Proof.
+  intros e R. unfold evt_room in R.
+  apply (proj1 (Nat.ltb_ge (occupancy e) event_queue_size)). exact R.
+Qed.
+
+(* the capacity row *)
+
+Theorem evt_queue_is_256_slots : event_queue_size = 256.
+Proof. vm_compute. reflexivity. Qed.
+
+Theorem evt_queue_is_a_power_of_two : event_queue_size = 2 ^ 8.
+Proof. reflexivity. Qed.
+
+Theorem evt_index_is_always_in_range : forall k, evt_idx k < event_queue_size.
+Proof.
+  intros k. unfold evt_idx.
+  apply Nat.mod_upper_bound. unfold event_queue_size. cbn. lia.
+Qed.
+
+Theorem evt_index_is_the_identity_below_the_ring :
+    forall k, k < event_queue_size -> evt_idx k = k.
+Proof.
+  intros k H. unfold evt_idx. apply Nat.mod_small. exact H.
+Qed.
+
+(* the wrap: the mask of a lap is the mask of the mile *)
+Theorem evt_index_wraps : forall k, evt_idx (k + event_queue_size) = evt_idx k.
+Proof.
+  intros k. unfold evt_idx.
+  rewrite Nat.add_mod by (unfold event_queue_size; cbn; lia).
+  rewrite (Nat.mod_same event_queue_size) by (unfold event_queue_size; cbn; lia).
+  rewrite Nat.add_0_r.
+  rewrite (Nat.mod_mod) by (unfold event_queue_size; cbn; lia).
+  reflexivity.
+Qed.
+
+Theorem evt_index_wraps_twice : forall k, evt_idx (k + 2 * event_queue_size) = evt_idx k.
+Proof.
+  intros k.
+  replace (k + 2 * event_queue_size) with ((k + event_queue_size) + event_queue_size) by lia.
+  rewrite evt_index_wraps, evt_index_wraps. reflexivity.
+Qed.
+
+(* the full ring refuses: the producer is turned away, the queue is untouched *)
+Theorem evt_full_refuses_the_producer : forall e v,
+    event_queue_size <= occupancy e -> evt_put e v = (e, false).
+Proof.
+  intros e v H. unfold evt_put, evt_room.
+  rewrite (proj2 (Nat.ltb_ge (occupancy e) event_queue_size)) by exact H.
+  cbn. reflexivity.
+Qed.
+
+Theorem evt_room_admits_the_producer : forall e v,
+    occupancy e < event_queue_size -> pr2 (evt_put e v) = true.
+Proof.
+  intros e v H. unfold evt_put, evt_room.
+  rewrite (proj2 (Nat.ltb_lt (occupancy e) event_queue_size)) by exact H.
+  cbn. reflexivity.
+Qed.
+
+(* §5.2: one writer per field.  The producer owns tail, the consumer owns head. *)
+Theorem evt_put_never_moves_head : forall e v,
+    q_head (fst (evt_put e v)) = q_head e.
+Proof.
+  intros e v. unfold evt_put, evt_advance.
+  destruct (evt_room e); cbn [fst q_head]; reflexivity.
+Qed.
+
+Theorem evt_put_bumps_the_tail_only_when_admitted : forall e v,
+    q_tail (fst (evt_put e v)) = if evt_room e then S (q_tail e) else q_tail e.
+Proof.
+  intros e v. unfold evt_put, evt_advance.
+  destruct (evt_room e); cbn [fst q_tail]; reflexivity.
+Qed.
+
+Theorem evt_put_stores_the_item_only_when_admitted : forall e v,
+    q_buf (fst (evt_put e v)) (evt_idx (q_tail e)) =
+      if evt_room e then Some v else q_buf e (evt_idx (q_tail e)).
+Proof.
+  intros e v. unfold evt_put, evt_advance.
+  destruct (evt_room e); cbn [fst].
+  - cbn [q_buf]. apply upd_same.
+  - reflexivity.
+Qed.
+
+Theorem evt_get_never_moves_tail : forall e, q_tail (fst (evt_get e)) = q_tail e.
+Proof.
+  intros e. unfold evt_get, evt_retire.
+  destruct (Nat.eqb (q_head e) (q_tail e)); cbn [fst q_tail]; reflexivity.
+Qed.
+
+Theorem evt_get_bumps_the_head_only_with_data : forall e,
+    q_head (fst (evt_get e)) =
+      if Nat.eqb (q_head e) (q_tail e) then q_head e else S (q_head e).
+Proof.
+  intros e. unfold evt_get, evt_retire.
+  destruct (Nat.eqb (q_head e) (q_tail e)); cbn [fst q_head]; reflexivity.
+Qed.
+
+(* the empty queue answers nothing, and never a stale slot *)
+Theorem evt_get_on_empty_is_none : forall e, q_head e = q_tail e -> evt_get e = (e, None).
+Proof.
+  intros e H. unfold evt_get.
+  rewrite (proj2 (Nat.eqb_eq (q_head e) (q_tail e))) by exact H.
+  cbn. reflexivity.
+Qed.
+
+Theorem evt_get_reads_the_head_slot : forall e,
+    q_head e <> q_tail e ->
+    pr2 (evt_get e) = q_buf e (evt_idx (q_head e)).
+Proof.
+  intros e H. unfold evt_get.
+  rewrite (proj2 (Nat.eqb_neq (q_head e) (q_tail e))) by exact H.
+  cbn. reflexivity.
+Qed.
+
+Theorem evt_get_clears_the_slot_it_reads : forall e,
+    q_head e <> q_tail e ->
+    q_buf (fst (evt_get e)) (evt_idx (q_head e)) = None.
+Proof.
+  intros e H. unfold evt_get.
+  rewrite (proj2 (Nat.eqb_neq (q_head e) (q_tail e))) by exact H.
+  cbn [fst]. apply evt_retire_clears_the_head_slot.
+Qed.
+
+(* the handoff: a producer putting into an empty ring is read back by the
+ * consumer at the very next position, and the ring is empty again *)
+Theorem evt_handoff_delivers_the_item : forall e v,
+    q_head e = q_tail e -> occupancy e < event_queue_size ->
+    pr2 (evt_get (fst (evt_put e v))) = Some v
+    /\ q_head (fst (evt_get (fst (evt_put e v))))
+       = q_tail (fst (evt_get (fst (evt_put e v)))).
+Proof.
+  intros e v H0 Hroom.
+  assert (Room : evt_room e = true).
+  { unfold evt_room.
+    apply (proj2 (Nat.ltb_lt (occupancy e) event_queue_size)). exact Hroom. }
+  assert (Ne : q_head (fst (evt_put e v)) <> q_tail (fst (evt_put e v))).
+  { rewrite evt_put_never_moves_head,
+            evt_put_bumps_the_tail_only_when_admitted, Room.
+    cbn. lia. }
+  assert (HeadStep :
+      q_head (fst (evt_get (fst (evt_put e v)))) = S (q_head (fst (evt_put e v)))).
+  { rewrite evt_get_bumps_the_head_only_with_data.
+    rewrite (proj2 (Nat.eqb_neq (q_head (fst (evt_put e v)))
+                                (q_tail (fst (evt_put e v))))) by exact Ne.
+    cbn. reflexivity. }
+  rewrite (evt_get_reads_the_head_slot (fst (evt_put e v))) by exact Ne.
+  rewrite evt_put_never_moves_head.
+  replace (evt_idx (q_head e)) with (evt_idx (q_tail e)) by (rewrite H0; reflexivity).
+  rewrite evt_put_stores_the_item_only_when_admitted, Room. cbn.
+  split.
+  { reflexivity. }
+  { rewrite HeadStep, evt_get_never_moves_tail, evt_put_never_moves_head,
+            evt_put_bumps_the_tail_only_when_admitted, Room.
+    cbn. rewrite H0. reflexivity. }
+Qed.
+
+(* the occupancy accounting, in one step per call *)
+Theorem occupancy_after_put : forall e v,
+    q_head e <= q_tail e ->
+    occupancy (fst (evt_put e v)) = if evt_room e then S (occupancy e) else occupancy e.
+Proof.
+  intros e v Hle. unfold evt_put, evt_advance, occupancy.
+  destruct (evt_room e); cbn [fst q_head q_tail]; lia.
+Qed.
+
+Theorem occupancy_after_get : forall e,
+    q_head e <= q_tail e ->
+    occupancy (fst (evt_get e)) =
+      if Nat.eqb (q_head e) (q_tail e) then occupancy e else occupancy e - 1.
+Proof.
+  intros e Hle. unfold evt_get, evt_retire, occupancy.
+  destruct (Nat.eqb (q_head e) (q_tail e)); cbn [fst q_head q_tail]; lia.
+Qed.
+
+(* the class the ring stays in: head never overtakes tail, and the occupancy
+ * never exceeds the capacity - the two facts the C relies on when it reads the
+ * pair without a lock *)
+Definition evt_wf (e : evtq) : Prop :=
+  q_head e <= q_tail e /\ occupancy e <= event_queue_size.
+
+Theorem evtq0_is_wf : evt_wf evtq0.
+Proof. unfold evt_wf, occupancy. cbn. split; lia. Qed.
+
+Theorem evt_put_preserves_wf : forall e v, evt_wf e -> evt_wf (fst (evt_put e v)).
+Proof.
+  intros e v W. unfold evt_put.
+  destruct (evt_room e) eqn:R.
+  - destruct W as [Hle Hold]. unfold occupancy in Hold.
+    assert (LT : occupancy e < event_queue_size)
+      by (apply (evt_room_true e); exact R).
+    unfold occupancy in LT. cbn [fst]. unfold evt_wf, occupancy, evt_advance.
+    cbn [q_head q_tail]. split; lia.
+  - cbn [fst]. exact W.
+Qed.
+
+Theorem evt_get_preserves_wf : forall e, evt_wf e -> evt_wf (fst (evt_get e)).
+Proof.
+  intros e W. unfold evt_get.
+  destruct (Nat.eqb (q_head e) (q_tail e)) eqn:R.
+  - cbn [fst]. exact W.
+  - destruct W as [Hle Hold]. unfold occupancy in Hold.
+    assert (Ne : q_head e <> q_tail e)
+      by (apply (proj1 (Nat.eqb_neq (q_head e) (q_tail e))); exact R).
+    cbn [fst]. unfold evt_wf, occupancy, evt_retire.
+    cbn [q_head q_tail]. split; lia.
+Qed.
+
+Theorem evt_wf_head_never_passes_tail : forall e, evt_wf e -> q_head e <= q_tail e.
+Proof. intros e W. destruct W as [H _]. exact H. Qed.
+
+Theorem evt_wf_occupancy_bounded : forall e, evt_wf e -> occupancy e <= event_queue_size.
+Proof. intros e W. destruct W as [_ H]. exact H. Qed.
+
+(* ── 21. I11 continued: the soak - 600 producer/consumer steps, in order ── *)
+
+(* media_intercore.ml §10 runs one producer and one consumer for 600 steps and
+ * checks that every item comes back, in the order it went in.  The loop below is
+ * that soak written as a Coq function: one put, one get, per step.  The division
+ * of labour is the honest one - the laws are proved for every n, and the
+ * 600-step instance is computed. *)
+
+Lemma pair_of_get : forall X, evt_get X = (fst (evt_get X), pr2 (evt_get X)).
+Proof. intros X. destruct (evt_get X) as [e o]; cbn [fst pr2]; reflexivity. Qed.
+
+(* one round trip: produce, then consume, and keep the item that came back.  The
+ * 0 in the None arm is a sentinel that the laws below show is never reached. *)
+Definition soak_step (i : nat) (e : evtq) : evtq * nat :=
+  match evt_get (fst (evt_put e i)) with
+  | (e2, Some v) => (e2, v)
+  | (e2, None) => (e2, 0)
+  end.
+
+Definition step_q (i : nat) (e : evtq) : evtq := fst (soak_step i e).
+Definition step_v (i : nat) (e : evtq) : nat := pr2 (soak_step i e).
+
+Fixpoint soak (n i : nat) (e : evtq) (acc : list nat) : evtq * list nat :=
+  match n with
+  | 0 => (e, acc)
+  | S n' => soak n' (S i) (step_q i e) (step_v i e :: acc)
+  end.
+
+(* one step, proved: the item that goes into an empty ring comes straight back,
+ * the ring is empty again, and there is room for the next one *)
+Theorem one_step_delivers_its_own_item : forall e i,
+    q_head e = q_tail e -> occupancy e < event_queue_size ->
+    pr2 (evt_get (fst (evt_put e i))) = Some i.
+Proof.
+  intros e i H0 H1. apply (proj1 (evt_handoff_delivers_the_item e i H0 H1)).
+Qed.
+
+Theorem one_step_leaves_the_ring_empty : forall e i,
+    q_head e = q_tail e -> occupancy e < event_queue_size ->
+    q_head (fst (evt_get (fst (evt_put e i)))) = q_tail (fst (evt_get (fst (evt_put e i)))).
+Proof.
+  intros e i H0 H1. apply (proj2 (evt_handoff_delivers_the_item e i H0 H1)).
+Qed.
+
+Theorem one_step_leaves_room : forall e i,
+    q_head e = q_tail e -> occupancy e < event_queue_size ->
+    occupancy (fst (evt_get (fst (evt_put e i)))) < event_queue_size.
+Proof.
+  intros e i H0 H1.
+  assert (E : q_head (fst (evt_get (fst (evt_put e i))))
+              = q_tail (fst (evt_get (fst (evt_put e i)))))
+    by (apply one_step_leaves_the_ring_empty; assumption).
+  unfold occupancy. rewrite E. rewrite Nat.sub_diag.
+  unfold event_queue_size. cbn. lia.
+Qed.
+
+Lemma step_q_is_the_consumer_queue : forall i e,
+    step_q i e = fst (evt_get (fst (evt_put e i))).
+Proof.
+  intros i e. unfold step_q, soak_step.
+  destruct (evt_get (fst (evt_put e i))) as [e2 [v|]]; cbn [fst]; reflexivity.
+Qed.
+
+Lemma step_v_of_an_empty_ring : forall e i,
+    q_head e = q_tail e -> occupancy e < event_queue_size -> step_v i e = i.
+Proof.
+  intros e i H0 H1. unfold step_v, soak_step.
+  rewrite pair_of_get, (one_step_delivers_its_own_item e i H0 H1).
+  cbn. reflexivity.
+Qed.
+
+Lemma step_q_stays_empty : forall e i,
+    q_head e = q_tail e -> occupancy e < event_queue_size ->
+    q_head (step_q i e) = q_tail (step_q i e).
+Proof.
+  intros e i H0 H1. rewrite step_q_is_the_consumer_queue.
+  apply (one_step_leaves_the_ring_empty e i H0 H1).
+Qed.
+
+Lemma step_q_leaves_room : forall e i,
+    q_head e = q_tail e -> occupancy e < event_queue_size ->
+    occupancy (step_q i e) < event_queue_size.
+Proof.
+  intros e i H0 H1. rewrite step_q_is_the_consumer_queue.
+  apply (one_step_leaves_room e i H0 H1).
+Qed.
+
+Lemma step_q_is_wf : forall i e, evt_wf e -> evt_wf (step_q i e).
+Proof.
+  intros i e W. rewrite step_q_is_the_consumer_queue.
+  apply evt_get_preserves_wf, evt_put_preserves_wf. exact W.
+Qed.
+
+(* for every number of steps the soak reads back exactly one item per step:
+ * nothing is lost, nothing is duplicated, and the ring never stalls *)
+Theorem soak_reads_one_item_per_step : forall n i e acc,
+    q_head e = q_tail e -> occupancy e < event_queue_size ->
+    length (pr2 (soak n i e acc)) = n + length acc.
+Proof.
+  induction n as [| n IH]; intros i e acc H0 H1.
+  - cbn. reflexivity.
+  - cbn [soak].
+    rewrite (IH (S i) (step_q i e) (step_v i e :: acc)).
+    { rewrite (step_v_of_an_empty_ring e i H0 H1). cbn [length]. lia. }
+    { apply (step_q_stays_empty e i H0 H1). }
+    { apply (step_q_leaves_room e i H0 H1). }
+Qed.
+
+Theorem soak_preserves_evt_wf : forall n i e acc,
+    evt_wf e -> evt_wf (fst (soak n i e acc)).
+Proof.
+  induction n as [| n IH]; intros i e acc W.
+  - cbn [soak]. exact W.
+  - cbn [soak]. apply (IH (S i)). apply step_q_is_wf. exact W.
+Qed.
+
+Theorem soak_head_never_passes_tail : forall n i e acc,
+    evt_wf e -> q_head (fst (soak n i e acc)) <= q_tail (fst (soak n i e acc)).
+Proof.
+  intros n i e acc W.
+  apply (evt_wf_head_never_passes_tail (fst (soak n i e acc))).
+  apply (soak_preserves_evt_wf n i e acc). exact W.
+Qed.
+
+(* the computed instance: 600 steps through a 256-slot ring, so the masked index
+ * wraps twice along the way *)
+Theorem soak_of_eight_is_fifo : rev (pr2 (soak 8 1 evtq0 nil)) = seq 1 8.
+Proof. vm_compute. reflexivity. Qed.
+
+Theorem soak_of_six_hundred_is_fifo : rev (pr2 (soak 600 1 evtq0 nil)) = seq 1 600.
+Proof. vm_compute. reflexivity. Qed.
+
+Theorem soak_of_six_hundred_leaves_the_ring_empty :
+    q_head (fst (soak 600 1 evtq0 nil)) = 600
+    /\ q_tail (fst (soak 600 1 evtq0 nil)) = 600.
+Proof. vm_compute. split; reflexivity. Qed.
+
+Theorem soak_of_six_hundred_reads_its_own_count :
+    length (pr2 (soak 600 1 evtq0 nil)) = 600.
+Proof.
+  rewrite (soak_reads_one_item_per_step 600 1 evtq0 nil).
+  - cbn [length]. lia.
+  - unfold occupancy, event_queue_size. cbn. lia.
+  - unfold occupancy, event_queue_size. cbn. lia.
+Qed.
+
+Theorem soak_of_six_hundred_is_well_formed : evt_wf (fst (soak 600 1 evtq0 nil)).
+Proof.
+  apply (soak_preserves_evt_wf 600 1 evtq0 nil). apply evtq0_is_wf.
+Qed.
+
+(* the index at the two wrap points, computed - the row that ties the mask of the
+ * shipped C to the mod of the model *)
+Theorem masked_index_at_256 : evt_idx 256 = 0.
+Proof. unfold evt_idx. vm_compute. reflexivity. Qed.
+
+Theorem masked_index_at_512 : evt_idx 512 = 0.
+Proof. unfold evt_idx. vm_compute. reflexivity. Qed.
+
+Theorem masked_index_at_600 : evt_idx 600 = 88.
+Proof. unfold evt_idx. vm_compute. reflexivity. Qed.
+
 End MediaInterCore.
+
+(* ── 22. The gate: the file rests on nothing ────────────────────── *)
+
+(* One line per headline result.  Each must print "Closed under the global
+ * context"; anything else means the file has picked up an axiom, an unsafe
+ * (co)fixpoint or a positivity assumption.  verify_models.sh re-checks the same
+ * .vo with coqchk -o, so this block is the author-facing half of that gate. *)
+
+Print Assumptions interleavings_preserve_bus_wf.
+Print Assumptions the_shipped_core_count_survives_every_run.
+Print Assumptions the_target_topology_passes_every_row.
+Print Assumptions evt_handoff_delivers_the_item.
+Print Assumptions soak_reads_one_item_per_step.
+Print Assumptions soak_of_six_hundred_is_fifo.

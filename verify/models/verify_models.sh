@@ -13,8 +13,10 @@
 #   ./verify_models.sh
 #   ./verify_models.sh --skip-coq          # OCaml only
 #   ./verify_models.sh --skip-ocaml        # Coq only
-#
 # Exit 0 only if all selected checks pass.
+#
+# Prerequisite:
+#   ulimit -s 65535
 
 set -euo pipefail
 

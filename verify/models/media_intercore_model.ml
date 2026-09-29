@@ -12,6 +12,8 @@
  *   - sector-pool conservation, no post-boot allocation (plan §7.4)
  *   - receipt integrity: no torn read, no replay, no cross-talk
  *   - EVT queue: power-of-two SPSC, one writer per field (IO.txt §5.1-5.2)
+ *   - publication has two phases: a store is in the fabric, a publish is visible
+ *   - a subscriber's cursor is a floor, and catch-up is bounded by the gap
  *   - mode and gate reporting: SKIP is not PASS    (plan §7.2, §7.4)
  *
  * Normative sources: doc/txt/ASYNC.txt §0.1 for the canonical taxonomy,
@@ -315,6 +317,18 @@ let cursor_intersect b =
 
 let ownership_exclusive b = if cursor_intersect b = 0 then 1 else 0
 
+(* The ownership map read without the task ids: two grants taken in opposite
+ * orders name their tasks differently, and that is not an observable. *)
+let cursor_key cr =
+  match cr with
+  | CPub i -> sprintf "pub%d" i
+  | CSub i -> sprintf "sub%d" i
+
+let grants_of b =
+  List.map
+    (fun t -> if t.t_live then String.concat "+" (List.map cursor_key t.t_cursors) else "")
+    b.tasks
+
 let check_bus b : string list =
   let bad = ref ([] : string list) in
   let say s = bad := s :: !bad in
@@ -406,6 +420,15 @@ let evt_get e =
     ( { e with buf = List.mapi (fun i s -> if i = evt_idx e.head then evt_empty else s) e.buf; head = e.head + 1 },
       Some slot )
 
+(* The shipped put is store-then-publish.  Taken apart, the two halves show the
+ * visibility gap the hardware actually has: the store leaves the item in the
+ * fabric without telling anybody, and only the publish moves the tail the
+ * consumer reads.  §25 of the proof file makes I15 out of this split. *)
+let evt_store e v =
+  { e with buf = List.mapi (fun i s -> if i = evt_idx e.tail then v else s) e.buf }
+
+let evt_publish e = { e with tail = e.tail + 1 }
+
 (* ── 11. Modes and gates: SKIP is not PASS (plan §7.2, §7.4) ────── *)
 
 type mp_gate = MP_ON | MP_OFF
@@ -437,7 +460,24 @@ let run_summary ~mp ~cores ~require =
  * without its memory model is not evidence (§3b-R3). *)
 let cores_row req have = sprintf "cores_req=%d cores_have=%d" req have
 
-(* ── 12. Exhaustive interleaving search ─────────────────────────── *)
+(* ── 12. The gap, and draining it in a bounded number of reads ──── *)
+
+(* How far a subscriber has been left behind: its publisher's watermark minus
+ * its own cursor.  I16's headline is the exact arithmetic of a bounded catch-up
+ * run over this quantity. *)
+let pending b rid =
+  match reader_at b rid with
+  | Some r -> (match live_writer b r.r_writer with Some w -> w.w_enq - r.r_cursor | None -> 0)
+  | None -> 0
+
+(* read_k: k drains back to back, the way an actor loops over its queue until it
+ * runs dry or its budget runs out. *)
+let rec read_k b rid k =
+  match k with
+  | 0 -> b
+  | j -> read_k (state_of (rcv b rid)) rid (j - 1)
+
+(* ── 13. Exhaustive interleaving search ─────────────────────────── *)
 
 (* Eight calls over six positions: all 262144 sequences are run from the seeded
  * bus, which reaches admission, bounded refusal, drop, late subscription, both
@@ -540,7 +580,23 @@ let first_violation = ref ("" : string)
 let max_resident_seen = ref 0
 let pool_below_seen = ref false
 
+(* The modal layer reads the same tree this search walks.  A law that holds
+ * "always" holds at every state the closure reaches, so these accumulators are
+ * the box over the whole alphabet rather than a fresh sample of it. *)
+let visited_states = ref 0
+let floor_violation = ref ("" : string)
+let pool_band_low = ref sector_pool
+let pool_band_high = ref 0
+
+(* every reachable state: 1 root plus n_ops children per node, down to seq_len *)
+let closure_size base depth =
+  let rec go acc n k = if n = 0 then acc else go (acc + k) (n - 1) (k * base) in
+  go 1 depth base
+
 let rec explore depth b =
+  visited_states := !visited_states + 1;
+  if b.pool_free < !pool_band_low then pool_band_low := b.pool_free;
+  if b.pool_free > !pool_band_high then pool_band_high := b.pool_free;
   if total_resident b > !max_resident_seen then max_resident_seen := total_resident b;
   if b.pool_free < sector_pool then pool_below_seen := true;
   if depth = seq_len then incr search_total
@@ -548,6 +604,16 @@ let rec explore depth b =
     for k = 0 to n_ops - 1 do
       let b', o = apply_op k b in
       reach o;
+      (* the watermark is a floor: a cursor never recedes and a live reader is
+       * never silently retired, whatever step was taken *)
+      List.iter
+        (fun r ->
+          match reader_at b' r.r_id with
+          | Some r' when r.r_cursor > r'.r_cursor || (r.r_live && not r'.r_live) ->
+            if !floor_violation = "" then
+              floor_violation := sprintf "reader %d receded at depth %d" r.r_id depth
+          | _ -> ())
+        b.readers;
       match check_bus b' with
       | [] -> explore (depth + 1) b'
       | s :: _ -> if !first_violation = "" then first_violation := sprintf "op %d at depth %d: %s" k depth s
@@ -557,7 +623,7 @@ let pow_int base e =
   let rec go acc n = if n = 0 then acc else go (acc * base) (n - 1) in
   go 1 e
 
-(* ── 13. Oracle ─────────────────────────────────────────────────── *)
+(* ── 14. Oracle ─────────────────────────────────────────────────── *)
 
 let failures = ref ([] : string list)
 let checks = ref 0
@@ -981,11 +1047,175 @@ let () =
   expect "I11 the I/O core contract is the shipped one: core 3, 250 us, 500 us WCET"
     (io_core_id = cores_target - 1 && io_period_us = 250 && io_budget_us = 2 * io_period_us);
 
+  (* I12. two calls on disjoint cursors: the order of independent grants is not
+   * an observable, which is the whole content of "no lock between the cores".
+   * Not that the hardware is ordered - that the laws are observables, and the
+   * observables do not depend on the order. *)
+  let pair1 = state_of (pub bus0 writer_capacity) in
+  let pair2 = state_of (pub pair1 writer_capacity) in
+  let pair3 = state_of (sub pair2 0) in
+  let pair4 = state_of (sub pair3 1) in
+  let pair5 = state_of (snd pair4 0 111) in
+  let pair6 = state_of (snd pair5 1 222) in
+  let rcv_then_snd = state_of (snd (state_of (rcv pair6 0)) 1 333) in
+  let snd_then_rcv = state_of (rcv (state_of (snd pair6 1 333)) 0) in
+  expect "I12 a receive on one arm and a send on the other build one identical bus, sector ledger included"
+    (rcv_then_snd = snd_then_rcv && check_bus rcv_then_snd = [] && check_bus snd_then_rcv = []
+     && rcv_then_snd.pool_free = pair6.pool_free);
+  let s0_then_s1 = state_of (snd (state_of (snd pair6 0 444)) 1 555) in
+  let s1_then_s0 = state_of (snd (state_of (snd pair6 1 555)) 0 444) in
+  expect "I12 two publishers accept their messages in either order and land on the same history"
+    (s0_then_s1 = s1_then_s0 && (List.nth s0_then_s1.writers 0).w_hist = [ 111; 444 ]
+     && (List.nth s1_then_s0.writers 1).w_hist = [ 222; 555 ]);
+  let r0_then_r1 = state_of (rcv (state_of (rcv s0_then_s1 0)) 1) in
+  let r1_then_r0 = state_of (rcv (state_of (rcv s0_then_s1 1)) 0) in
+  expect "I12 two readers draining their own arms commute, and neither sees the other's arm"
+    (r0_then_r1 = r1_then_r0 && r0_then_r1.pool_free = r1_then_r0.pool_free
+     && check_bus r1_then_r0 = []
+     && (List.nth r0_then_r1.writers 1).w_hist = (List.nth s0_then_s1.writers 1).w_hist);
+  let gp, _ = spawn s0_then_s1 0 1 [ CPub 0 ] in
+  let gb, rb_grant = spawn gp 0 2 [ CSub 1 ] in
+  let gs, _ = spawn s0_then_s1 0 1 [ CSub 1 ] in
+  let ge, re_grant = spawn gs 0 2 [ CPub 0 ] in
+  expect "I12 the same two ownership grants, taken in opposite orders, leave the same cursors and the same exclusivity"
+    ((match rb_grant, re_grant with
+      | T_SPAWNED _, T_SPAWNED _ -> true
+      | _ -> false)
+     && gb.writers = ge.writers && gb.readers = ge.readers
+     && List.sort Stdlib.compare (grants_of gb) = List.sort Stdlib.compare (grants_of ge)
+     && ownership_exclusive gb = 1 && ownership_exclusive ge = 1
+     && check_bus gb = [] && check_bus ge = []);
+
+  (* I13. the modal layer: what "always" costs, and what it buys *)
+  expect "I13 the base case of the induction: the empty bus is lawful and holds nothing"
+    (check_bus bus0 = [] && total_resident bus0 = 0 && bus0.pool_free = sector_pool);
+  expect "I13 bus_wf is always: the closure the box quantifies over is the whole tree, and every state in it is lawful"
+    (!first_violation = "" && !visited_states = closure_size n_ops seq_len
+     && !search_total = pow_int n_ops seq_len && !visited_states > !search_total);
+  expect "I13 always_within_the_pool: free + resident stays conserved inside the reserved band at every reachable state"
+    (!pool_band_low >= 0 && !pool_band_high <= sector_pool
+     && sector_pool - !pool_band_low = !max_resident_seen
+     && !pool_band_low < !pool_band_high && !pool_band_low < sector_pool);
+  expect "I13 a step that is not admissible is a stutter, so the closure never grows sideways"
+    (let bx, rx = snd s0_then_s1 9 0 in
+     let by, ry = rcv s0_then_s1 42 in
+     let bz, rz = spawn s0_then_s1 7 1 [ CPub 0 ] in
+     rx = S_BAD_CURSOR && bx = s0_then_s1 && ry = R_BAD_CURSOR && by = s0_then_s1
+     && rz = T_BAD_CORE && bz = s0_then_s1);
+
+  (* I14. the alphabet is not a function, and the order of calls is visible *)
+  let n_snd = state_of (snd pair6 0 7) in
+  let n_rcv = state_of (rcv pair6 0) in
+  expect "I14 one bus, two admissible steps, two different successors: next is not a function"
+    (n_snd <> n_rcv && check_bus n_snd = [] && check_bus n_rcv = []
+     && n_snd.pool_free < pair6.pool_free && n_rcv.pool_free > pair6.pool_free);
+  expect "I14 the capacity is a free parameter of the alphabet, and every value is its own successor"
+    (let ca = state_of (pub bus0 2) in
+     let cc = state_of (pub bus0 5) in
+     ca <> cc && check_bus ca = [] && check_bus cc = []
+     && (List.nth ca.writers 0).w_cap = 2 && (List.nth cc.writers 0).w_cap = 5);
+  let ordA1 = state_of (pub bus0 writer_capacity) in
+  let ordA2 = state_of (sub ordA1 0) in
+  let ordA3 = state_of (snd ordA2 0 1) in
+  let ordA4, resA = rcv ordA3 0 in
+  let ordB1 = state_of (pub bus0 writer_capacity) in
+  let ordB2 = state_of (snd ordB1 0 1) in
+  let ordB3, sidB = sub ordB2 0 in
+  let ordB4, resB = rcv ordB3 0 in
+  expect "I14 the order of sub and snd is observable: the parked reader reads the item, the late one never will"
+    (resA = R_DATA 1 && resB = R_EMPTY && ordA4 <> ordB4 && sidB <> None);
+  expect "I14 and both orders stay inside the class, so this is not a law being broken"
+    (check_bus ordA4 = [] && check_bus ordB4 = [] && ownership_exclusive ordA4 = 1
+     && ownership_exclusive ordB4 = 1);
+  expect "I14 the difference is the watermark the reader pinned, not bookkeeping"
+    (let ra = List.find (fun r -> r.r_id = 0) ordA4.readers in
+     let rb = List.find (fun r -> r.r_id = 0) ordB4.readers in
+     ra.r_start = 0 && rb.r_start = 1 && ra.r_log = [ 1 ] && rb.r_log = []
+     && ra.r_deq = 1 && rb.r_deq = 0);
+
+  (* I15. the cursor is a floor, and publication has two phases *)
+  let fl1 = ref ordB4 in
+  let fl_seen = ref ([] : int list) in
+  for _ = 1 to 3 do
+    let b', r = rcv !fl1 0 in
+    fl1 := b';
+    fl_seen := (match r with R_DATA v -> v | R_EMPTY -> -1 | R_BAD_CURSOR -> -2) :: !fl_seen
+  done;
+  expect "I15 an item already in the fabric, behind a cursor that joined late, is unreachable at every step"
+    (List.rev !fl_seen = [ -1; -1; -1 ] && !fl1 = ordB4
+     && (List.nth !fl1.writers 0).w_hist = [ 1 ]
+     && (List.find (fun r -> r.r_id = 0) !fl1.readers).r_log = []);
+  expect "I15 the watermark is a floor at every state the closure reaches: no cursor receded, no reader died"
+    (!floor_violation = "" && !visited_states = closure_size n_ops seq_len);
+  expect "I15 a store leaves the item in the fabric and the occupancy alone"
+    (let e1 = evt_store evt0 77 in
+     List.nth e1.buf (evt_idx 0) = 77 && e1.head = evt0.head && e1.tail = evt0.tail
+     && evt_occupancy e1 = 0 && e1 <> evt0);
+  expect "I15 and the consumer reading that very queue at that very moment gets nothing"
+    (let e1 = evt_store evt0 77 in
+     match evt_get e1 with
+     | b, None -> b = e1
+     | _ -> false);
+  expect "I15 only the publish delivers what the store left there, and it adds exactly one to the occupancy"
+    (let e2 = evt_publish (evt_store evt0 77) in
+     (match evt_get e2 with
+      | _, Some v -> v = 77
+      | _ -> false)
+     && evt_occupancy e2 = 1 && e2.head = evt0.head && e2.tail = evt0.tail + 1);
+  expect "I15 the shipped put IS store-then-publish, read in the order the hardware performs it"
+    (let p, ok = evt_put evt0 77 in ok && p = evt_publish (evt_store evt0 77));
+  expect "I15 so the phases cannot be swapped: publishing first hands out the empty sentinel"
+    (match evt_get (evt_store (evt_publish evt0) 77) with
+     | _, Some v -> v = evt_empty && v <> 77
+     | _ -> false);
+  expect "I15 a get never passes the published head: it cannot read what was never published"
+    (let e4 = evt_store evt0 9 in
+     let _, v = evt_get e4 in
+     let e5 = state_of (evt_get (evt_publish e4)) in
+     v = None && e5.head = 1 && e5.tail = 1 && evt_occupancy e5 = 0);
+
+  (* I16. bounded catch-up: the gap drains by exactly one per admitted read *)
+  let catch1 = state_of (pub bus0 writer_capacity) in
+  let catch2 = state_of (sub catch1 0) in
+  let catch3 = List.fold_left (fun acc i -> state_of (snd acc 0 (100 + i))) catch2 (List.init writer_capacity (fun j -> j + 1)) in
+  let caught = catch3 in
+  expect "I16 read_k drains the gap exactly: pending (read_k k) = max 0 (pending - k), for every k"
+    (pending caught 0 = writer_capacity
+     && List.for_all
+          (fun k -> pending (read_k caught 0 k) 0 = max 0 (pending caught 0 - k))
+          (List.init (3 * writer_capacity + 1) Fun.id));
+  expect "I16 one admitted read moves the gap by exactly one, and leaves the publisher where it stood"
+    (let b1 = state_of (rcv caught 0) in
+     pending b1 0 = pending caught 0 - 1
+     && (List.nth b1.writers 0).w_enq = (List.nth caught.writers 0).w_enq
+     && (List.nth b1.writers 0).w_hist = (List.nth caught.writers 0).w_hist
+     && (List.nth b1.writers 0).w_drop = (List.nth caught.writers 0).w_drop);
+  let drained = read_k caught 0 writer_capacity in
+  let drained_reader = List.find (fun r -> r.r_id = 0) drained.readers in
+  expect "I16 the drain never loses the subscription: the reader sits exactly where the publisher stood"
+    (drained_reader.r_live && drained_reader.r_cursor = writer_capacity
+     && pending drained 0 = 0 && check_bus drained = []);
+  expect "I16 the drained reader reads empty, and the bus does not move at all"
+    (let b', r = rcv drained 0 in r = R_EMPTY && b' = drained);
+  expect "I16 a drain longer than the gap stops at the tail instead of coming back from it"
+    (let b2 = read_k caught 0 (3 * writer_capacity) in
+     let r2 = List.find (fun r -> r.r_id = 0) b2.readers in
+     b2 = drained && r2.r_cursor = writer_capacity && r2.r_deq = writer_capacity
+     && r2.r_log = [ 101; 102; 103; 104 ] && pending b2 0 = 0);
+  expect "I16 no number of reads widens the gap: the drain is monotonically shrinking"
+    (List.for_all
+       (fun k -> pending (read_k caught 0 (k + 1)) 0 <= pending (read_k caught 0 k) 0)
+       (List.init (2 * writer_capacity) Fun.id));
+  expect "I16 a send widens the gap of its own subscriber by exactly one, and the pool pays for it"
+    (let after_snd = state_of (snd drained 0 999) in
+     pending after_snd 0 = pending drained 0 + 1 && check_bus after_snd = []
+     && after_snd.pool_free = drained.pool_free - 1);
+
   List.iter (fun f -> printf "    FAILED: %s\n" f) !failures;
   if !failures <> [] then begin
     printf "media_intercore_model: %d of %d checks FAILED\n" (List.length !failures) !checks;
     exit 1
   end;
   printf
-    "PASS: OCaml oracle (media_intercore_model.ml) - InterCore invariants I1..I11 passed (%d checks, %d interleavings).\n"
+    "PASS: OCaml oracle (media_intercore_model.ml) - InterCore invariants I1..I16 passed (%d checks, %d interleavings).\n"
     !checks !search_total

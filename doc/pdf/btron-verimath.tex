@@ -503,32 +503,46 @@ Definition rcv (b : bus) (cl : caller) (rid : nat) : bus * rcv_result :=
 \end{lstlisting}
 Three readings of that text carry the rest of the paper.
 
-\emph{(i) Refusal is stuttering.} Every guard is a closed boolean term over the
-bus, and its negation returns the input state unchanged:
+\emph{(i) Refusal is stuttering.} Each guard is a closed boolean term over the
+bus, and for every call but one its negation returns the input state unchanged:
 \begin{equation}
 \label{eq:stutter}
-\gamma(p,b) = \mathit{false} \;\Longrightarrow\; \pi_1(\mathrm{call}(p,b)) = b ,
+\gamma(p,b) = \mathit{false} \;\Longrightarrow\; \mathrm{call}(p,b) = (b,\rho),
 \end{equation}
-the lemmas \ctr{pub\_full\_refuses}, \ctr{sub\_full\_refuses},
-\ctr{spawn\_refused\_shape}, \ctr{snd\_full\_bus}, \ctr{rcv\_bad\_cursor\_receipt}.
-An error path is therefore inert by construction rather than by review, and a
-\(\Box\)-validity is preserved across a refusal because the refused step is the
-identity (\S\ref{sec:independence}).
+with \(\rho\) the refusal receipt---\ctr{pub\_no\_slot\_refuses},
+\ctr{sub\_full\_refuses}, \ctr{spawn\_refused\_shape},
+\ctr{snd\_bad\_cursor\_inert}, \ctr{rcv\_never\_yields}. An error path is
+therefore inert by construction rather than by review, and a
+\(\Box\)-validity survives a refusal because the refused step is the identity
+(\S\ref{sec:independence}). The exception is \ctr{snd}'s capacity guard, the one
+place where a negative branch is not the identity: a full ring charges the loss
+to its own cell and reports it,
+\(\mathit{snd\_fits}(b,w) = \mathit{false}\) gives
+\(\pi_1(\mathit{snd}\,b\,\mathit{cl}\,w\,d) = b[w \mapsto \mathit{drop1}]\)
+(\ctr{snd\_full\_bus}), because a dropped sector is data the model must keep.
 
-\emph{(ii) Acceptance writes one cell of one table.} With \(\pi_j(b)\) the
-\(j\)-th cell of any of the three tables of \(b\),
+\emph{(ii) Acceptance writes one cell of one table.} Writing
+\(b[X,i \mapsto v]\) for \ctr{bus\_$X$}\(~b~i~v\), the whole frame discipline is
+one lemma about the underlying table update, \ctr{upd\_other},
 \begin{equation}
 \label{eq:locality}
-i \neq j \;\Longrightarrow\; \pi_j\big(b[i \mapsto v]\big) = \pi_j(b),
+i \neq j \;\Longrightarrow\; (b[X,i \mapsto v])_X[j] = b_X[j],
 \end{equation}
-the pointwise content of the frame lemmas \ctr{at\_w\_other\_w},
-\ctr{at\_r\_bus\_w}, \ctr{cores\_inert\_t} and their fourteen relatives, one per
-table and coordinate (\S\ref{sec:tables}). A writer cell is written by \ctr{pub}, which adopts a slot,
-and by \ctr{snd}, which extends one; a reader cell by \ctr{sub} and \ctr{rcv};
-the task table by \ctr{spawn} alone. Each of those pairs is gated by the same
-\(\mathit{usable}\) test, which is exactly where the ownership discipline of
-Theorem~\ref{thm:mutex} bites. Equation~(\ref{eq:locality}) is also what makes
-two calls to distinct cells commute, and commutation is the reduction that makes
+instantiated as \ctr{at\_w\_other\_w}, \ctr{at\_r\_other\_r},
+\ctr{at\_t\_other\_t}, and strengthened across tables by the six lemmas
+\ctr{at\_\(X\) bus\_\(Y\)}, which say that writing table \(Y\) leaves table \(X
+\neq Y\) pointwise unchanged (\S\ref{sec:tables}). A writer cell is written by
+\ctr{pub}, which adopts a slot, and by \ctr{snd}, which extends one; a reader
+cell by \ctr{sub} and \ctr{rcv}; the task table by \ctr{spawn} alone. All four
+of the cursor-carrying calls pass the same \(\mathit{usable}\) test first, which
+is exactly where the ownership discipline of Theorem~\ref{thm:mutex} bites. Every
+stored coordinate is inert for the calls that do not write it, and the derived
+ones inherit it---\ctr{held\_w\_inert}, \ctr{usable\_w\_inert},
+\ctr{floor\_of\_w\_inert}---so \(46\) obligations in the file are named
+\ctr{inert}, \ctr{untouched} or \ctr{unchanged}. That number is not padding:
+each is a premise a later commutation step discharges by rewriting rather than
+by induction. Equation~(\ref{eq:locality}) is also what makes two calls to
+distinct cells commute, and commutation is the reduction that makes
 non-determined interleavings tractable (\S\ref{sec:traces}).
 
 \emph{(iii) Cost is bounded by the tables, not by the traffic.} Each call is one
@@ -537,22 +551,27 @@ iterates over \(\mathit{w\_hist}\), nothing copies a list, nothing allocates.
 Hence the worst case of \ctr{rcv} is the three-way case analysis of
 \S\ref{sec:receipts} and the worst case of \ctr{snd} is two guards and a
 cons---independent of how deep the queue has become or how long the process has
-run. Note in particular what \ctr{snd} does on overflow: it writes the same cell
-with \(\mathit{drop}{+}1\) and returns the new count, so a full ring costs one
-word of state and cannot stall the caller.
+run. A full ring thus costs one word of state and cannot stall its caller:
+the accepted overflow path is \(\mathit{drop}{+}1\) and a receipt, not a wait.
 
-Admission for \ctr{sub} and \ctr{snd} is literally the same term
-\(\mathit{w\_live}(b_w[b,w]) \wedge \mathit{usable}(b,t,\mathit{CPub}\,w)\): a
-core that may attach a subscriber to a ring is the core that may publish on it,
-and there is no separate permission to keep consistent. The guards the other two
-calls add are arithmetic on derived counters,
+There are three admission tests but two of them are the same term:
+\(\mathit{sub\_admit} = \mathit{snd\_admit}\), both
+\(\mathit{w\_live}(b_w[b,w]) \wedge \mathit{usable}(b,\mathit{cl},\mathit{CPub}\,w)\).
+A core that may attach a subscriber to a ring is the core that may publish on
+it, and there is no second permission to keep consistent. Reading is gated by
+the cursor's own row and its publisher's,
+\(\mathit{rcv\_admit}(b,\mathit{cl},\rho) =
+\mathit{r\_live}(b_r[b,\rho]) \wedge
+\mathit{w\_live}(b_w[b,\mathit{r\_wid}(b_r[b,\rho])]) \wedge
+\mathit{usable}(b,\mathit{cl},\mathit{CSub}\,\rho)\).
+What the last two calls add on top is arithmetic on derived counters,
 \begin{equation}
 \label{eq:guards}
 \begin{aligned}
 \mathit{snd\_fits}(b,w) &= \mathit{held}(b,w) < \mathit{w\_cap}(b_w[b,w])\\
  &\quad \wedge\ \mathit{total\_held}(b) < P\\
 \mathit{rcv\_ready}(b,\rho) &= \mathit{r\_cur}(b_r[b,\rho])\\
- &< \mathit{w\_enq}\big(b_w[b,\mathit{wid}(\rho)]\big)
+ &< \mathit{w\_enq}\big(b_w[b,\mathit{r\_wid}(b_r[b,\rho])]\big)
 \end{aligned}
 \end{equation}
 with \(\mathit{held}\) the watermark fold of \S\ref{sec:watermark} and \(P\) the

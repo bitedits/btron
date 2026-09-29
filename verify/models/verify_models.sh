@@ -8,6 +8,7 @@
 #   - hypermedia_dnd_model.ml / hypermedia_dnd_properties.v (Clarity frames, Cabinet DND, TAD)
 #   - media_smp_model.ml / media_smp_properties.v (CAS multicursor ring, AMP, seqlock, BTRON_MP)
 #   - media_rtp_model.ml / media_rtp_properties.v (NuStream pools, leaky queues, PTS, budgets, grid)
+#   - media_intercore_model.ml / media_intercore_properties.v (pub/sub/spawn/snd/rcv star, sector pool)
 #
 # Usage:
 #   ./verify_models.sh
@@ -91,8 +92,21 @@ if [[ "$SKIP_COQ" -eq 0 ]]; then
           echo "$COQ_OUT"
           FAIL=$((FAIL + 1))
         else
-          green "PASS: coqc ($p - theorems closed, no axioms)"
-          PASS=$((PASS + 1))
+          # compiling is not the same as being axiom-free: re-check the .vo in
+          # the kernel and refuse a non-empty axiom / unsafe-construction list.
+          MOD="${p%.v}"
+          if AX="$(coqchk -o -silent "$MOD" 2>&1)" \
+             && echo "$AX" | grep -q "Axioms: <none>" \
+             && echo "$AX" | grep -q "type-in-type: <none>" \
+             && echo "$AX" | grep -q "(co)fixpoints: <none>" \
+             && echo "$AX" | grep -q "positivity is assumed: <none>"; then
+            green "PASS: coqc + coqchk ($p - theorems closed, no axioms)"
+            PASS=$((PASS + 1))
+          else
+            red "FAIL: coqchk found axioms or unsafe constructions in $p"
+            echo "$AX" | grep -i -A3 "axioms:\|type-in-type:\|fixpoints:\|positivity"
+            FAIL=$((FAIL + 1))
+          fi
         fi
       else
         red "FAIL: coqc exited non-zero for $p"

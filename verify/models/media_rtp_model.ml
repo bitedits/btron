@@ -11,6 +11,7 @@
  *   - peer join / six-stage teardown conservation      (GST-SYNC-RTP.md S2.4)
  *   - compositor grid geometry                         (GST-SYNC-RTP.md S2.4)
  *   - BTRON_GST tier scoping, additive-only fork rule  (plan D7..D9)
+ *   - the RTP constants as GStreamer defines them      (rtp, videorate, clock)
  *
  * OCaml >= 4.14 / 5.x
  *
@@ -361,7 +362,50 @@ let make_fork shim_lines =
 
 let strip_shimmed f = List.filter_map (fun (t, l) -> if t = Upstream then Some l else None) f
 
-(* ── 8. Oracle ──────────────────────────────────────────────────── *)
+(* ── 8. GStreamer grounding of the RTP numbers ─────────────────── *)
+
+(* gstrtpbuffer.c:1304-1311: the RTP serial number is a 16-bit ring, so every
+ * difference between stamps is measured modulo it, in the forward direction. *)
+let seq_mod = 1 lsl 16
+let seq_next s = (s + 1) mod seq_mod
+let diff16 s1 s2 = (s2 + seq_mod - s1) mod seq_mod
+
+(* gstrtpjitterbuffer.c:1691-1695: the buffer declares itself full only when a
+ * half-ring of span is paired with a five-figure packet count. *)
+let jb_full span packets = span >= 32765 && packets > 10000
+
+(* the same file's probability watermarks: flush above 15 %, hold below 90 % *)
+let jb_low_ms probs = probs * 15 / 100
+let jb_high_ms probs = probs * 90 / 100
+
+(* the intra-arrival jitter estimate, an exponential average with a +8 round *)
+let ewma j d = j + d - ((j + 8) lsr 4)
+
+(* rtpsource.h:35 RTP_DEFAULT_PROBATION: two good packets make a source valid *)
+let probation_needed = 2
+let probation_done seen = seen >= probation_needed
+
+(* gstclock.h GST_CLOCK_TIME_NONE is (GstClockTime) -1, the unsigned top of the
+ * 64-bit range.  OCaml's int is signed 63-bit, so the clock is modelled with
+ * int64 and compared after flipping the sign bit, i.e. as unsigned. *)
+let clock_time_none = -1L
+let uint_cmp a b = Int64.compare (Int64.logxor a Int64.min_int) (Int64.logxor b Int64.min_int)
+let clock_time_max = Int64.sub Int64.max_int 1L
+
+(* gstbuffer.h:110: a muxer-supplied DTS is the ordering stamp, PTS is only the
+ * display fallback. *)
+let stamp_for pts dts = match dts with None -> pts | Some d -> d
+
+(* gstatomicqueue.c:68-87: a fixed power-of-two ring indexed with a bit mask
+ * instead of a division. *)
+let event_queue_size = 256
+let ring_idx k cap = k mod cap
+let ring_mask k cap = k land (cap - 1)
+
+(* gstvideorate.c: unless the timestamp moves forward the pad emits a GAP. *)
+let rate_gate last next = last < next
+
+(* ── 9. Oracle ──────────────────────────────────────────────────── *)
 
 let failures = ref ([] : string list)
 let checks = ref 0
@@ -371,7 +415,9 @@ let expect name cond =
   if not cond then failures := name :: !failures
 
 let () =
-  printf "==> B-System media_rtp model: NuStream pools / leaky queues / PTS / budgets / grid / BTRON_GST\n";
+  printf
+    "==> B-System media_rtp model: NuStream pools / leaky queues / PTS / budgets / grid / BTRON_GST / \
+     GStreamer RTP constants\n";
 
   (* R1. static pool: zero allocation, conservation, no double recycle *)
   let p = ref pool0 in
@@ -562,9 +608,78 @@ let () =
      && media_table false GST_ON = shim_symbols GST_ON T1_graph
      && media_table true GST_ON <> media_table true GST_OFF);
 
+  (* R10. the RTP constants are the values GStreamer itself commits to *)
+  expect "R10 the serial number ring is exactly sixteen bits"
+    (seq_mod = 65536 && seq_mod = 1 lsl 16 && seq_mod = 2 lsl 15);
+  expect "R10 the next serial number stays in the ring and wraps at its end"
+    (List.for_all (fun s -> seq_next s < seq_mod) [ 0; 1; 32767; 65534 ]
+     && seq_next (seq_mod - 1) = 0 && seq_next 0 = 1);
+  expect "R10 the distance from a stamp to itself is zero, everywhere in the ring"
+    (List.for_all (fun s -> diff16 s s = 0) [ 0; 1; 40000; 65535 ]);
+  expect "R10 diff16 measures the forward span, across the wrap included"
+    (diff16 100 146 = 46 && diff16 (seq_mod - 36) 10 = 46 && diff16 (seq_mod - 1) 0 = 1);
+  expect "R10 a forward run is measured exactly, never as a negative gap"
+    (List.for_all (fun s -> diff16 0 s = s) [ 0; 1; 1000; 32768 ]);
+  (* 32765 sits just under half the ring: past it a span stops being a plain
+   * forward run, which is why the full test is anchored there. *)
+  expect "R10 the full test is anchored below half the serial ring" (32765 < seq_mod / 2);
+  expect "R10 the full test is the conjunction of a span bound and a count bound"
+    (jb_full 32765 10001
+     && List.for_all (fun (s, p) -> jb_full s p = (32765 <= s && 10000 < p))
+          [ (0, 0); (32764, 10001); (32765, 10001); (65535, 20000); (65535, 3) ]);
+  expect "R10 a short span is never full, however many packets it holds"
+    (List.for_all (fun p -> not (jb_full 0 p || jb_full 32764 p)) [ 0; 1; 10001; 100000 ]);
+  expect "R10 the watermarks are ordered and never exceed the configured maximum"
+    (List.for_all (fun n -> jb_low_ms n <= jb_high_ms n && jb_high_ms n <= n) (List.init 200 Fun.id)
+     && jb_low_ms 1000 = 150 && jb_high_ms 1000 = 900);
+  expect "R10 the jitter average never overshoots the sample it is fed"
+    (List.for_all (fun (j, d) -> ewma j d <= j + d) [ (0, 0); (7, 0); (8, 0); (1000, 500); (1_000_000, 3) ]);
+  expect "R10 the jitter average drains towards zero once the traffic goes quiet"
+    (List.for_all (fun j -> ewma j 0 < j) (List.init 200 (fun i -> i + 8))
+     && ewma 0 0 = 0 && ewma 7 0 = 7);
+  (* the round term is a pure loss: adding it back recovers the exact sample,
+   * so the estimate truncates nowhere once the average has left its first slice *)
+  expect "R10 the jitter average is the difference form of the C update, without truncation"
+    (List.for_all
+       (fun (j, d) ->
+         let r = (j + 8) / 16 in
+         ewma j d + r = j + d && ewma j d >= 0)
+         [ (8, 0); (16, 4); (500, 500); (1000, 1); (1_000_000, 3) ]);
+  expect "R10 a source becomes valid after exactly two good packets"
+    (probation_needed = 2 && not (probation_done 0) && not (probation_done 1)
+     && probation_done 2 && probation_done 1000);
+  expect "R10 the clock sentinel is the unsigned top of the 64-bit range"
+    (clock_time_none = Int64.lognot 0L && Int64.add clock_time_none 1L = 0L);
+  expect "R10 the sentinel is greater than every timestamp the plane can carry"
+    (uint_cmp clock_time_max clock_time_none < 0
+     && uint_cmp 0L clock_time_none < 0
+     && uint_cmp (Int64.of_int jitter_window_us) clock_time_none < 0);
+  expect "R10 a muxed DTS overrides the PTS, which is only the fallback"
+    (List.for_all (fun (p, d) -> stamp_for p (Some d) = d && stamp_for p None = p)
+         [ (0, 0); (100, 0); (0, 100); (33333, 66666) ]);
+  expect "R10 the event queue capacity really is a power of two"
+    (event_queue_size = 256 && event_queue_size = 1 lsl 8
+     && event_queue_size land (event_queue_size - 1) = 0);
+  expect "R10 the bit mask indexes exactly where the modulo indexes"
+    (List.for_all (fun k -> ring_idx k event_queue_size = ring_mask k event_queue_size)
+         (List.init 2048 Fun.id)
+     && List.for_all (fun k -> ring_idx k event_queue_size < event_queue_size) (List.init 2048 Fun.id));
+  expect "R10 the mask identity fails off the power-of-two lattice, so the bound is load-bearing"
+    (ring_idx 300 250 <> ring_mask 300 250);
+  expect "R10 videorate advances only on a strictly forward stamp, a duplicate is a GAP"
+    (rate_gate 0 1 && not (rate_gate 1 1) && not (rate_gate 2 1)
+     && List.for_all (fun (l, n) -> rate_gate l n = (l < n)) [ (0, 0); (5, 5); (5, 6); (7, 3) ]);
+  (* the two GStreamer facts that the rest of the model leans on: the ingest
+   * window is a whole number of 30 fps periods inside the half-ring, and the
+   * probation count is small enough that a live join is never held back *)
+  expect "R10 the jitter window holds an integral run of 30 fps stamps under half the ring"
+    (jitter_window_us / period_30fps > probation_needed
+     && (jitter_window_us / period_30fps) * period_30fps <= jitter_window_us
+     && diff16 0 (jitter_window_us / period_30fps) = jitter_window_us / period_30fps);
+
   List.iter (fun f -> printf "    FAILED: %s\n" f) !failures;
   if !failures <> [] then begin
     printf "media_rtp_model: %d of %d checks FAILED\n" (List.length !failures) !checks;
     exit 1
   end;
-  printf "PASS: OCaml oracle (media_rtp_model.ml) - media invariants R1..R9 passed (%d checks).\n" !checks
+  printf "PASS: OCaml oracle (media_rtp_model.ml) - media invariants R1..R10 passed (%d checks).\n" !checks

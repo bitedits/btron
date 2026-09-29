@@ -93,7 +93,7 @@
 \maketitle
 
 \begin{abstract}
-The cleanroom reconstruction of B-System (BTRON 3.20) has produced, alongside the C kernel, a second artefact that is easy to overlook: a body of mechanical mathematics in which the concurrency, media, and inter-core subsystems are not described but \emph{defined}, and in which their properties are not argued for but \emph{computed}. This paper presents that body of work as a single mathematical model. We take as our object language the Calculus of Inductive Constructions, and as our single rule of inference the judgemental equality $t = u$ discharged by \ctr{reflexivity}. Four claims are made. First, that the apparently heterogeneous tiers of the BTRON scheduling model---multi-processing, asymmetric multiprocessing, symmetric multiprocessing, and the asynchronous I/O plane---are four instances of one algebraic signature, a total state transformer $S \to S \times R$ over a table-shaped bus, differing only in which coordinates of the state their guards read. Second, that the media stack, from NuStreams abstraction layers through RTP packetisation and loss accounting to the symmetric multi-plane pipeline, is equationally a \emph{fold over a watermark}: every streaming invariant we state, including the sequence-number, jitter, and residence-time laws, reduces to arithmetic on counters that are themselves derived as lengths and differences of lists, never stored. Third, that the InterCore protocol---\ctr{pub}, \ctr{sub}, \ctr{spawn}, \ctr{snd}, \ctr{rcv} over a star of single-producer queues---admits a broker-free construction in which the multi-consumer view is a pure function of the producer views, so that the entire sharing discipline collapses to one equation about cursor ownership and its corollary, the absence of mutual exclusion and therefore of priority inversion between equal-priority planes. Fourth, that genuine, non-determined multicore parallelism---not an interleaving chosen by a simulator but the modal fact that \emph{any} of several next steps may occur---is representable inside the same kernel as an internal box-and-diamond pair over the step alphabet, with trace equivalence induced by a commutation lemma between independent calls, and with platform modes as indices of a small Kripke frame in which an unbuildable mode yields \emph{SKIP}, never a vacuous \emph{PASS}. Every number quoted is produced by an executable harness: the assembled InterCore theory discharges 228 closed obligations with \ctr{Print Assumptions} reporting no axioms, mirrored by 75 oracle checks over all $8^{6} = 262{,}144$ runs of six call sites, each site drawn independently from the eight operations admitted by the API.
+The cleanroom reconstruction of B-System (BTRON 3.20) has produced, alongside the C kernel, a second artefact that is easy to overlook: a body of mechanical mathematics in which the concurrency, media, and inter-core subsystems are not described but \emph{defined}, and in which their properties are not argued for but \emph{computed}. This paper presents that body of work as a single mathematical model. We take as our object language the Calculus of Inductive Constructions, and as our single rule of inference the judgemental equality $t = u$ discharged by \ctr{reflexivity}. Four claims are made. First, that the apparently heterogeneous tiers of the BTRON scheduling model---multi-processing, asymmetric multiprocessing, symmetric multiprocessing, and the asynchronous I/O plane---are four instances of one algebraic signature, a total state transformer $S \to S \times R$ over a table-shaped bus, differing only in which coordinates of the state their guards read. Second, that the media stack, from NuStreams abstraction layers through RTP packetisation and loss accounting to the symmetric multi-plane pipeline, is equationally a \emph{fold over a watermark}: every streaming invariant we state, including the sequence-number, jitter, and residence-time laws, reduces to arithmetic on counters that are themselves derived as lengths and differences of lists, never stored. Third, that the InterCore protocol---\ctr{pub}, \ctr{sub}, \ctr{spawn}, \ctr{snd}, \ctr{rcv} over a star of single-producer queues---admits a broker-free construction in which the multi-consumer view is a pure function of the producer views, so that the entire sharing discipline collapses to one equation about cursor ownership and its corollary, the absence of mutual exclusion and therefore of priority inversion between equal-priority planes. Fourth, that genuine, non-determined multicore parallelism---not an interleaving chosen by a simulator but the modal fact that \emph{any} of several next steps may occur---is representable inside the same kernel as an internal box-and-diamond pair over the step alphabet, with trace equivalence induced by a commutation lemma between independent calls, and with platform modes as indices of a small Kripke frame in which an unbuildable mode yields \emph{SKIP}, never a vacuous \emph{PASS}. Every number quoted is produced by an executable harness: the assembled InterCore theory discharges \(602\) closed judgements spread over sixteen property groups, \(15\) of them named in the file for \ctr{Print Assumptions}, which reports no axioms, mirrored by \(103\) oracle checks over all $8^{6} = 262{,}144$ runs of six call sites, each site drawn independently from the eight operations admitted by the API; across the library---seven theories and eight oracles---the count is $944$ judgements, and Section~\ref{sec:accounting} states each of them.
 \end{abstract}
 
 \noindent\textbf{\small Keywords}---BTRON, Calculus of Inductive Constructions, equational reasoning, formal semantics, lock-free queues, InterCore, RTP, NuStreams, SMP, modal logic, model checking, theorem proving.
@@ -456,30 +456,35 @@ touches two cells. Writing \(w=(\_,c,h,d)\) for a writer and
 \end{aligned}
 \end{equation}
 which are \ctr{writer\_revive}, \ctr{writer\_push}, \ctr{writer\_drop1} and
-\ctr{reader\_advance} in the file. The calls themselves are short enough to quote
-in full, and every later theorem is a statement about these five terms:
+\ctr{reader\_advance} in the file. The five calls are short enough to quote
+entire, and every later judgement is a statement about these terms; the guards
+they test are defined immediately below the display, and the \ctr{first\_dead}
+slot scans they call are one fuel-bounded search for an unused row:
 \begin{lstlisting}[language=Coq,basicstyle=\ttfamily\fontsize{6.9}{8}\selectfont]
-Definition pub_slot b := first_dead (fun i => w_live (b_w b i)) max_writers 0.
+Definition pub_slot (b : bus) : option nat :=
+  first_dead (fun i => w_live (b_w b i)) max_writers 0.
+
 Definition pub (b : bus) (cap : nat) : bus * option nat :=
   match pub_slot b with
-  | None    => (b, None)
-  | Some i  => (bus_w b i (writer_revive (b_w b i) cap), Some i)
+  | None => (b, None)
+  | Some i => (bus_w b i (writer_revive (b_w b i) cap), Some i)
   end.
 
-Definition sub_admit b cl wid :=
+Definition sub_admit (b : bus) (cl : caller) (wid : nat) : bool :=
   andb (w_live (b_w b wid)) (usable b cl (CPub wid)).
+
 Definition sub (b : bus) (cl : caller) (wid : nat) : bus * option nat :=
   if sub_admit b cl wid then
     match sub_slot b with
+    | None => (b, None)
     | Some i => (bus_r b i (mk_reader true wid
-                     (w_enq (b_w b wid)) (w_enq (b_w b wid))), Some i)
-    | None   => (b, None)
+                 (w_enq (b_w b wid)) (w_enq (b_w b wid))), Some i)
     end
   else (b, None).
 
 Definition spawn (b : bus) (core : nat) (l : list cref) : bus * option nat :=
   match spawn_slot b with
-  | None   => (b, None)
+  | None => (b, None)
   | Some i => if spawn_ok b core l then (bus_t b i (task_revive core l), Some i)
               else (b, None)
   end.
@@ -488,7 +493,7 @@ Definition snd (b : bus) (cl : caller) (wid : nat) (d : nat) : bus * snd_result 
   if negb (snd_admit b cl wid) then (b, S_BAD_CURSOR)
   else if negb (snd_fits b wid) then
          (bus_w b wid (writer_drop1 (b_w b wid)), S_FULL (S (w_drop (b_w b wid))))
-       else (bus_w b wid (writer_push (b_w b wid) d), S_OK).
+  else (bus_w b wid (writer_push (b_w b wid) d), S_OK).
 
 Definition rcv (b : bus) (cl : caller) (rid : nat) : bus * rcv_result :=
   if negb (rcv_admit b cl rid) then (b, R_BAD_CURSOR)
@@ -517,8 +522,8 @@ identity (\S\ref{sec:independence}).
 i \neq j \;\Longrightarrow\; \pi_j\big(b[i \mapsto v]\big) = \pi_j(b),
 \end{equation}
 the pointwise content of the frame lemmas \ctr{at\_w\_other\_w},
-\ctr{at\_r\_bus\_w}, \ctr{cores\_inert\_t} and their fourteen relatives
-(\S\ref{sec:tables}). A writer cell is written by \ctr{pub}, which adopts a slot,
+\ctr{at\_r\_bus\_w}, \ctr{cores\_inert\_t} and their fourteen relatives, one per
+table and coordinate (\S\ref{sec:tables}). A writer cell is written by \ctr{pub}, which adopts a slot,
 and by \ctr{snd}, which extends one; a reader cell by \ctr{sub} and \ctr{rcv};
 the task table by \ctr{spawn} alone. Each of those pairs is gated by the same
 \(\mathit{usable}\) test, which is exactly where the ownership discipline of
@@ -544,10 +549,10 @@ calls add are arithmetic on derived counters,
 \begin{equation}
 \label{eq:guards}
 \begin{aligned}
-\mathit{snd\_fits}(b,w) &= \big(\mathit{held}(b,w) < \mathit{w\_cap}(b_w[b,w])\big)
-  \wedge \big(\mathit{total\_held}(b) < P\big)\\
-\mathit{rcv\_ready}(b,\rho) &= \mathit{r\_cur}(b_r[b,\rho]) <
-  \mathit{w\_enq}\big(b_w[b,\mathit{wid}(\rho)]\big)
+\mathit{snd\_fits}(b,w) &= \mathit{held}(b,w) < \mathit{w\_cap}(b_w[b,w])\\
+ &\quad \wedge\ \mathit{total\_held}(b) < P\\
+\mathit{rcv\_ready}(b,\rho) &= \mathit{r\_cur}(b_r[b,\rho])\\
+ &< \mathit{w\_enq}\big(b_w[b,\mathit{wid}(\rho)]\big)
 \end{aligned}
 \end{equation}
 with \(\mathit{held}\) the watermark fold of \S\ref{sec:watermark} and \(P\) the
@@ -756,7 +761,7 @@ A total, computational model can be kept axiom-free, and doing so constrains the
 The harness does not take \ctr{coqc}'s word for it: after each theory compiles, \ctr{coqchk -o -silent} re-validates the \ctr{.vo} in the kernel, and the four lists it prints---axioms, type-in-type dependencies, unsafe (co)fixpoints, assumed positivity---must each read \mbox{\ctr{<none>}}. A non-empty list fails the build even if every obligation closed, and the summary count distinguishes the failure from a \ctr{SKIP}. This is the difference between a proof and a proof modulo wishes.
 
 \subsection{SKIP Is Not PASS}
-The policy is one line in the harness, and it is the line that makes the other sections trustworthy: an obligation whose mode is not compiled in is reported \ctr{SKIP}, is counted separately from \ctr{PASS}, and is printed at the end. A suite of 14 models whose Coq array silently tolerated an unbuildable file reports a property of the shell script, not of the kernel. Related discipline, learned the hard way in this programme: a \ctr{coqc} invocation piped through \ctr{head} loses its exit status through the pipe; a missing diagonal row in the monitor can mean the flag never compiled in rather than the code being wrong; and an assertion that cannot be built is marked \ctr{SKIP}, never optimistically \ctr{PASS}.
+The policy is one line in the harness, and it is the line that makes the other sections trustworthy: an obligation whose mode is not compiled in is reported \ctr{SKIP}, is counted separately from \ctr{PASS}, and is printed at the end. A suite of sixteen registered entries---eight oracles and eight theory files, one of which the tree does not yet contain---whose Coq array silently tolerated an unbuildable file reports a property of the shell script, not of the kernel. Related discipline, learned the hard way in this programme: a \ctr{coqc} invocation piped through \ctr{head} loses its exit status through the pipe; a missing diagonal row in the monitor can mean the flag never compiled in rather than the code being wrong; and an assertion that cannot be built is marked \ctr{SKIP}, never optimistically \ctr{PASS}.
 
 \subsection{Reading the Harness Output as a Specification}
 The harness emits one verdict per model---OCaml oracle and Coq theory separately---and a summary count that is the only number the reviewer is asked to trust. The media block of a current run:
@@ -800,8 +805,8 @@ interesting artefact is the statement.
 \textbf{Counting rule.} Obligations are the closed judgements introduced by
 \ctr{Lemma}, \ctr{Theorem}, \ctr{Corollary} and \ctr{Example}; vocabulary is
 introduced by \ctr{Definition}, \ctr{Record}, \ctr{Inductive}, \ctr{Fixpoint} and
-\ctr{Notation}. Both counts are keyword counts over the file, so the inventory
-below is reproducible from the tree by \ctr{grep}. The two numbers that decide
+\ctr{Notation}. Both counts are keyword counts over the file, and the line counts are
+\ctr{wc -l}, so the inventory below is reproducible from the tree by \ctr{grep}. The two numbers that decide
 soundness are not counted but asserted: \ctr{admit} and \ctr{Admitted} occur
 nowhere in the corpus except in prose, and \ctr{Axiom}, \ctr{Parameter} and
 \ctr{Hypothesis} occur nowhere at all. Every obligation in every file is closed,
@@ -813,27 +818,27 @@ The library as it stands, seven theories and eight oracles under one harness:
 
 \begin{itemize}[leftmargin=*]
     \item \ctr{media\_intercore\_properties.v} --- the InterCore star and the
-    modal layer: \(6{,}218\) lines, \(127\) vocabulary declarations, \(602\) closed
+    modal layer: \(6{,}217\) lines, \(127\) vocabulary declarations, \(602\) closed
     judgements, \(15\) \ctr{Print Assumptions} lines, sixteen groups
     I1--I16 (\S\ref{sec:acct:intercore}).
     \item \ctr{media\_rtp\_properties.v} --- NuStreams, RTP, budgets, the fork
-    rule: \(1{,}977\) lines, \(107\) declarations, \(161\) judgements, \(12\) gate
+    rule: \(1{,}976\) lines, \(107\) declarations, \(161\) judgements, \(12\) gate
     lines, ten groups R1--R10 (\S\ref{sec:acct:rtp}).
     \item \ctr{media\_smp\_properties.v} --- the CAS ring, AMP ownership, the
-    seqlock: \(699\) lines, \(39\) declarations, \(69\) judgements, eight groups
+    seqlock: \(698\) lines, \(39\) declarations, \(69\) judgements, eight groups
     (\S\ref{sec:acct:smp}).
     \item \ctr{hypermedia\_dnd\_properties.v} --- Real/Virtual Body, the
-    direct-manipulation protocol, TAD persistence: \(1{,}034\) lines, \(55\)
+    direct-manipulation protocol, TAD persistence: \(1{,}033\) lines, \(55\)
     declarations, \(61\) judgements, \(6\) gate lines (\S\ref{sec:acct:dnd}).
     \item \ctr{bfs\_properties.v} --- the Volume V2 journal and its write-ahead
-    log: \(554\) lines, \(21\) declarations, \(39\) judgements, \(6\) gate lines;
-    with \ctr{bfs\_btree\_properties.v} (\(192\) lines, \(10\)/\(6\)) and
-    \ctr{bfs\_allocator\_properties.v} (\(141\) lines, \(11\)/\(6\))
+    log: \(553\) lines, \(21\) declarations, \(39\) judgements, \(6\) gate lines;
+    with \ctr{bfs\_btree\_properties.v} (\(191\) lines, \(10\)/\(6\)) and
+    \ctr{bfs\_allocator\_properties.v} (\(140\) lines, \(11\)/\(6\))
     (\S\ref{sec:acct:bfs}).
 \end{itemize}
 
 \noindent
-That is \(10{,}815\) lines, \(370\) vocabulary declarations and \(944\) closed
+That is \(10{,}808\) lines, \(370\) vocabulary declarations and \(944\) closed
 judgements, of which \(39\) are additionally named in the file for a reader who
 wants to ask the kernel about them directly. The distribution is deliberately
 uneven. InterCore carries \(602\) of the \(944\) obligations because it is the
@@ -1848,7 +1853,7 @@ The four tiers of the BTRON concurrency model, the media stack above it, and the
     \item \textbf{Total accounting removes a bug class.} Deriving \(\mathit{enq}\), \(\mathit{deq}\), \(\mathit{held}\) and \(\mathit{pool\_free}\) as lengths and minima (Equation~(\ref{eq:accounting})) made state-reachability disagreement between counters unnameable---and, twice, made the model correct where the C prototype was not.
 \end{enumerate}
 
-Work continuing along this line is the integration of the three media theories into one \emph{global} model in which the ATR/VP object semantics and the OS task states share the bus with the message layer, the remaining InterCore groups (I6--I11), and the transfer of the shipped-value arithmetic from oracle to theory via binary numerals with a proven bridge.
+Work continuing along this line has a name in the tree already. The harness registers eight oracles and eight theory files; one of the latter, \ctr{media\_properties.v}, is the file the corpus does not yet contain, and the \ctr{FAIL} that prints for it is the line the ledger of Section~\ref{sec:accounting} records. That file is the \emph{global} model: one bus on which the Real/Virtual Body semantics, the OS task states, and the message layer are coordinates of the same state transformer, so that the four claims of this paper are proved together rather than four times. Its companion is the transfer of the shipped-value arithmetic from oracle to theory via binary numerals with a proven bridge, which would let \(10^{6}\)-scale launch figures be asserted where they are today only executed.
 
 \begin{thebibliography}{99}
 

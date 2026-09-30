@@ -1620,5 +1620,253 @@ Lemma chg_pri_bad_double_queues :
     memb 3 (row_at 9 (chg_pri_good 5 9 3 (rq_insert 5 3 nil))) = true.
 Proof. repeat split; vm_compute; reflexivity. Qed.
 
-(* APPEND-12 *)
+(* ── 12. The wait engine: wait specifications, the release matrix ────── *)
+
+(* winfo.h:135-143: WSPEC is the three-field struct tskwait (a UINT wait
+ * factor), chg_pri_hook (a pointer to a function taking TCB and INT) and
+ * rel_wai_hook (a pointer to a function taking TCB).  A C function pointer is
+ * not a datum this model can invoke, so a hook is recorded by whether it is
+ * present.  No observation is lost: chg_pri_hook is reached only through
+ * gcb_change_priority (wait.c:181-186) and rel_wai_hook only from
+ * wait_release_ng and wait_release_tmout (wait.c:60-76); nothing else reads
+ * the struct. *)
+Record wspec : Set := mk_wspec {
+    ws_tskwait : nat;     (* the TTW_* bit *)
+    ws_chg_pri : bool;    (* NULL => false *)
+    ws_rel_wai : bool
+  }.
+
+(* syscall.h:67-87.  One bit per wait reason, but the positions are SPARSE:
+ * TTW_FLG is 0x8 and TTW_MBX is 0x40, so 0x10 and 0x20 name nothing and the
+ * run of task-event factors starts at 0x10000.  A wait mask can therefore be
+ * tested but never ordered -- (ctxtsk->waitmask & TTW_SLP) != 0
+ * (task_sync.c:189) is the only legal reading of it. *)
+Definition ttw_slp  : nat := 1.
+Definition ttw_dly  : nat := 2.
+Definition ttw_sem  : nat := 4.
+Definition ttw_flg  : nat := 8.
+Definition ttw_mbx  : nat := 64.
+Definition ttw_mtx  : nat := 128.
+Definition ttw_smbf : nat := 256.
+Definition ttw_rmbf : nat := 512.
+Definition ttw_cal  : nat := 1024.
+Definition ttw_acp  : nat := 2048.
+Definition ttw_rdv  : nat := 4096.
+Definition ttw_mpf  : nat := 8192.
+Definition ttw_mpl  : nat := 16384.
+
+Inductive wobj : Set :=
+    WO_SLP | WO_DLY | WO_SEM | WO_FLG | WO_MBX | WO_MTX | WO_SMBF
+  | WO_RMBF | WO_CAL | WO_ACP | WO_RDV | WO_MPF | WO_MPL.
+
+Definition ttw_of (o : wobj) : nat :=
+  match o with
+  | WO_SLP  => ttw_slp  | WO_DLY  => ttw_dly  | WO_SEM  => ttw_sem
+  | WO_FLG  => ttw_flg  | WO_MBX  => ttw_mbx  | WO_MTX  => ttw_mtx
+  | WO_SMBF => ttw_smbf | WO_RMBF => ttw_rmbf | WO_CAL  => ttw_cal
+  | WO_ACP  => ttw_acp  | WO_RDV  => ttw_rdv  | WO_MPF  => ttw_mpf
+  | WO_MPL  => ttw_mpl
+  end.
+
+Lemma ttw_is_a_single_bit : forall o, Nat.land (ttw_of o) (Nat.pred (ttw_of o)) = 0.
+Proof. destruct o; vm_compute; reflexivity. Qed.
+
+Lemma ttw_is_nonzero : forall o, Nat.ltb 0 (ttw_of o) = true.
+Proof. destruct o; vm_compute; reflexivity. Qed.
+
+Lemma ttw_pairwise_disjoint : forall o1 o2, o1 <> o2 ->
+    Nat.land (ttw_of o1) (ttw_of o2) = 0.
+Proof.
+  intros o1 o2 H. destruct o1, o2;
+    try (exfalso; apply H; reflexivity); vm_compute; reflexivity.
+Qed.
+
+(* rel_wai is present in exactly the classes whose waiter holds a claim on a
+ * finite resource: semaphore (semaphore.c:134-135), variable-size memory pool
+ * (mempool.c:418-419), message-buffer SEND wait (messagebuf.c:245-246).
+ * Mutex is the single class decided by a third attribute -- the hook exists
+ * only for TA_INHERIT (mutex.c:308-310, selected at mutex.c:483-485). *)
+Definition rel_claimed (o : wobj) : bool :=
+  match o with WO_SEM | WO_MPL | WO_SMBF => true | _ => false end.
+
+Definition rel_of (o : wobj) (inh : bool) : bool :=
+  orb (rel_claimed o) (match o with WO_MTX => inh | _ => false end).
+
+Definition wspec_of (o : wobj) (tpri inh : bool) : wspec :=
+  mk_wspec (ttw_of o) tpri (rel_of o inh).
+
+(* The 22 shipped literals, each with its source line. *)
+Definition w_slp        : wspec := mk_wspec ttw_slp  false false.  (* task_sync.c:167 *)
+Definition w_dly        : wspec := mk_wspec ttw_dly  false false.  (* time_calls.c:156 *)
+Definition w_mbx_tfifo  : wspec := mk_wspec ttw_mbx  false false.  (* mailbox.c:136 *)
+Definition w_mbx_tpri   : wspec := mk_wspec ttw_mbx  true  false.  (* mailbox.c:137 *)
+Definition w_sem_tfifo  : wspec := mk_wspec ttw_sem  false true.   (* semaphore.c:134 *)
+Definition w_sem_tpri   : wspec := mk_wspec ttw_sem  true  true.   (* semaphore.c:135 *)
+Definition w_flg_tfifo  : wspec := mk_wspec ttw_flg  false false.  (* eventflag.c:109 *)
+Definition w_flg_tpri   : wspec := mk_wspec ttw_flg  true  false.  (* eventflag.c:110 *)
+Definition w_mtx_tfifo  : wspec := mk_wspec ttw_mtx  false false.  (* mutex.c:308 *)
+Definition w_mtx_tpri   : wspec := mk_wspec ttw_mtx  true  false.  (* mutex.c:309 *)
+Definition w_mtx_inherit: wspec := mk_wspec ttw_mtx  true  true.   (* mutex.c:310 *)
+Definition w_mpf_tfifo  : wspec := mk_wspec ttw_mpf  false false.  (* mempfix.c:122 *)
+Definition w_mpf_tpri   : wspec := mk_wspec ttw_mpf  true  false.  (* mempfix.c:123 *)
+Definition w_smbf_tfifo : wspec := mk_wspec ttw_smbf false true.   (* messagebuf.c:245 *)
+Definition w_smbf_tpri  : wspec := mk_wspec ttw_smbf true  true.   (* messagebuf.c:246 *)
+Definition w_rmbf       : wspec := mk_wspec ttw_rmbf false false.  (* messagebuf.c:247 *)
+Definition w_mpl_tfifo  : wspec := mk_wspec ttw_mpl  false true.   (* mempool.c:418 *)
+Definition w_mpl_tpri   : wspec := mk_wspec ttw_mpl  true  true.   (* mempool.c:419 *)
+Definition w_cal_tfifo  : wspec := mk_wspec ttw_cal  false false.  (* rendezvous.c:133 *)
+Definition w_cal_tpri   : wspec := mk_wspec ttw_cal  true  false.  (* rendezvous.c:134 *)
+Definition w_acp        : wspec := mk_wspec ttw_acp  false false.  (* rendezvous.c:135 *)
+Definition w_rdv        : wspec := mk_wspec ttw_rdv  false false.  (* rendezvous.c:136 *)
+
+(* MORPHISM (traceability): the whole shipped table is generated by three
+ * independent coordinates -- the class, the TA_TPRI attribute, and for mutex
+ * alone the TA_INHERIT attribute.  There is no exception to the pattern in the
+ * kernel, which is what makes the hook law below a law rather than a list. *)
+Lemma shipped_table_is_generated :
+  w_slp = wspec_of WO_SLP false false /\
+  w_dly = wspec_of WO_DLY false false /\
+  w_mbx_tfifo = wspec_of WO_MBX false false /\
+  w_mbx_tpri = wspec_of WO_MBX true false /\
+  w_sem_tfifo = wspec_of WO_SEM false false /\
+  w_sem_tpri = wspec_of WO_SEM true false /\
+  w_flg_tfifo = wspec_of WO_FLG false false /\
+  w_flg_tpri = wspec_of WO_FLG true false /\
+  w_mtx_tfifo = wspec_of WO_MTX false false /\
+  w_mtx_tpri = wspec_of WO_MTX true false /\
+  w_mtx_inherit = wspec_of WO_MTX true true /\
+  w_mpf_tfifo = wspec_of WO_MPF false false /\
+  w_mpf_tpri = wspec_of WO_MPF true false /\
+  w_smbf_tfifo = wspec_of WO_SMBF false false /\
+  w_smbf_tpri = wspec_of WO_SMBF true false /\
+  w_rmbf = wspec_of WO_RMBF false false /\
+  w_mpl_tfifo = wspec_of WO_MPL false false /\
+  w_mpl_tpri = wspec_of WO_MPL true false /\
+  w_cal_tfifo = wspec_of WO_CAL false false /\
+  w_cal_tpri = wspec_of WO_CAL true false /\
+  w_acp = wspec_of WO_ACP false false /\
+  w_rdv = wspec_of WO_RDV false false.
+Proof. repeat split; vm_compute; reflexivity. Qed.
+
+(* HOOK LAW 1: the priority hook is exactly the TA_TPRI coordinate.  A FIFO
+ * wait queue never needs one, because its order does not depend on priority. *)
+Lemma hook_law_chg_pri : forall o tpri inh, ws_chg_pri (wspec_of o tpri inh) = tpri.
+Proof. intros o tpri inh. reflexivity. Qed.
+
+(* HOOK LAW 2: the abort hook does not depend on the ordering attribute at all.
+ * It answers a different question -- does the departing waiter owe the object
+ * anything -- and the two variants of every class agree on it. *)
+Lemma hook_law_rel_wai : forall o tpri inh, ws_rel_wai (wspec_of o inh tpri) = rel_of o tpri.
+Proof. intros o tpri inh. reflexivity. Qed.
+
+Lemma hook_law_rel_wai_order_independent : forall o tpri1 tpri2 inh,
+    ws_rel_wai (wspec_of o tpri1 inh) = ws_rel_wai (wspec_of o tpri2 inh).
+Proof. intros o tpri1 tpri2 inh. unfold wspec_of. destruct o; reflexivity. Qed.
+
+Lemma hook_law_tskwait : forall o tpri inh, ws_tskwait (wspec_of o tpri inh) = ttw_of o.
+Proof. intros o tpri inh. reflexivity. Qed.
+
+(* The classes with neither hook: sleep, delay, mailbox, event flag, the two
+ * rendezvous receive sides and the receive side of a message buffer.  A hook
+ * here would be a bug: the wait holds nothing. *)
+Lemma bare_classes_are_bare : forall inh,
+  ws_chg_pri w_slp = false /\ ws_rel_wai w_slp = false /\
+  ws_rel_wai w_dly = false /\ ws_rel_wai w_mbx_tpri = false /\
+  ws_rel_wai w_flg_tpri = false /\ ws_rel_wai w_mpf_tpri = false /\
+  ws_rel_wai w_rmbf = false /\ ws_rel_wai w_acp = false /\
+  ws_rel_wai w_rdv = false /\ ws_rel_wai w_cal_tpri = false /\
+  ws_rel_wai (wspec_of WO_MTX true inh) = inh.
+Proof. intros inh. repeat split; vm_compute; reflexivity. Qed.
+
+(* semaphore.c:88-105 and mempool.c / messagebuf.c share the hook body shape:
+ * reorder the departing task if oldpri >= 0, then re-run the head-claim pass.
+ * The *_rel_wai hook is literally the same function at oldpri = -1
+ * (semaphore.c:126-129, messagebuf.c:237-240), so only the pass runs.  The
+ * test is on the signed figure, which is why -1 is the sentinel: *)
+Lemma minus_one_skips_the_reorder : Z.leb 0 (Z.opp 1) = false.
+Proof. reflexivity. Qed.
+
+Lemma nonneg_arms_the_reorder : forall n : nat, Z.leb 0 (Z.of_nat n) = true.
+Proof. intros n. apply Z.leb_le. lia. Qed.
+
+(* mutex.c:290-303 is the exception worth recording: mtx_rel_wai does not call
+ * mtx_chg_pri at all, it recomputes the OWNER's inherited priority.  The claim
+ * it returns is a priority, not a resource. *)
+Lemma mtx_hook_is_claimed : rel_claimed WO_MTX = false.
+Proof. reflexivity. Qed.
+
+(* ── 12.2 Entering and leaving the wait state ───────────────────────── *)
+
+(* wait.c:91-104.  Two arms and NO default: any other state is left exactly as
+ * it was.  READY gives up the ready bit and takes the wait bit; SUSPEND keeps
+ * the suspend bit and adds the wait bit -- TS_WAITSUS = 6 is the join of
+ * TS_WAIT = 2 and TS_SUSPEND = 4 (task.h:48-50). *)
+Definition make_wait (s : tstat) : tstat :=
+  match s with
+  | S_READY   => S_WAIT
+  | S_SUSPEND => S_WAITSUS
+  | _         => s
+  end.
+
+(* wait.c:29-36: make_non_wait.  The test is the WORD EQUALITY state == TS_WAIT,
+ * not a bit test, so a WAITSUS task (6) takes the else arm and lands on plain
+ * TS_SUSPEND.  The suspension coordinate survives; only the wait coordinate is
+ * cleared. *)
+Definition make_non_wait (s : tstat) : tstat :=
+  if stat_eqb s S_WAIT then S_READY else S_SUSPEND.
+
+Lemma waitsus_is_the_join : bits (make_wait S_SUSPEND) = Nat.lor ts_wait ts_suspend.
+Proof. reflexivity. Qed.
+
+(* The two are inverses on the reachable domain: a task that waits from READY
+ * or SUSPEND and is then released is exactly where it started.  This is the
+ * structural fact that makes the wait state a coordinate rather than a copy. *)
+Lemma release_undoes_wait :
+  make_non_wait (make_wait S_READY) = S_READY /\
+  make_non_wait (make_wait S_SUSPEND) = S_SUSPEND.
+Proof. split; reflexivity. Qed.
+
+Lemma wait_undoes_release :
+  make_wait (make_non_wait S_WAIT) = S_WAIT /\
+  make_wait (make_non_wait S_WAITSUS) = S_WAITSUS.
+Proof. split; reflexivity. Qed.
+
+(* make_wait is a closure on the wait bit: idempotent for every state,
+ * including the ones the C switch leaves alone. *)
+Lemma make_wait_idempotent : forall s, make_wait (make_wait s) = make_wait s.
+Proof. destruct s; reflexivity. Qed.
+
+(* Releasing a task that is genuinely waiting never dispatches a suspended task
+ * and never leaves a wait bit behind. *)
+Lemma released_waiter_is_not_waiting : forall s,
+    bit_any (bits s) ts_wait = true ->
+    bit_any (bits (make_non_wait s)) ts_wait = false /\
+    bit_any (bits (make_non_wait s)) ts_suspend = bit_any (bits s) ts_suspend.
+Proof.
+  intros s H. destruct s; vm_compute in H; try discriminate H.
+  - split; vm_compute; reflexivity.
+  - split; vm_compute; reflexivity.
+Qed.
+
+(* make_non_wait is NOT idempotent.  A double release -- the shape a timeout
+ * racing an event would leave behind if the timer cell were not inert -- moves
+ * a task from READY to SUSPEND, which no caller asked for.  The kernel avoids
+ * it by making the timer path the one that does not unlink twice (12.3). *)
+Lemma double_release_suspends : make_non_wait (make_non_wait S_WAIT) = S_SUSPEND.
+Proof. reflexivity. Qed.
+
+Lemma make_non_wait_is_idempotent_elsewhere : forall s,
+    bit_any (bits s) ts_wait = false ->
+    make_non_wait (make_non_wait s) = make_non_wait s.
+Proof. intros s H. destruct s; vm_compute in H; try discriminate H; reflexivity. Qed.
+
+(* The C switch's missing default is a total function here; recording what it
+ * would do to a state that cannot reach it keeps the hazard visible. *)
+Lemma make_wait_leaves_dead_states_alone :
+  make_wait S_DORMANT = S_DORMANT /\ make_wait S_NONEXIST = S_NONEXIST /\
+  make_wait S_WAITSUS = S_WAITSUS.
+Proof. repeat split; reflexivity. Qed.
+
+
+(* APPEND-12b *)
 

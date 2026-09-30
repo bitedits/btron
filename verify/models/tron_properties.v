@@ -5094,3 +5094,523 @@ Proof.
   - reflexivity.
   - reflexivity.
 Qed.
+
+(* ── 15.4 The receipts of this service: a second, flat error namespace ── *)
+
+(* ipc_msg.c includes <btron/error.h> and returns its figures directly, so a
+ * receipt from snd_msg, rcv_msg or chk_msg is a FLAT negative integer: there
+ * E_PAR is -33 (error.h:21).  Every T-Kernel service §2 models hands back the
+ * check.h main code scaled by 2^16 (errno.h:29), where E_PAR is -1114112.  One
+ * spelling, two namespaces, and a caller that mixes the headers can only tell
+ * them apart by the figure.  This section models the flat namespace and the
+ * guard cascades that produce it: :46-58 for the send, :71-116 for the receive,
+ * :132-134 for the check. *)
+
+(* The five figures ipc_msg.c can hand back: E_OK (error.h:15), E_PAR (:21),
+ * ER_ID, which :56 aliases to E_ID (:23), ER_NOSPC (:32) and E_TMOUT (:27).
+ * E_SYS, E_NOMEM, E_NOSPT, E_RSVR, E_LIMIT, E_OBJ, E_NOEXS and E_BUSY ship in the
+ * same header and ER_ADR ... ER_OVVR ship in its extended block, but no line of
+ * this file can produce any of them -- they are outside the vocabulary rather
+ * than forgotten.  ER_TIMEOUT (:48) is left out for the opposite reason: it is
+ * not a sixth figure, it is E_TMOUT's other name, and 15.4.1 proves that. *)
+Inductive ber : Type :=
+  | BE_OK
+  | BE_PAR
+  | BE_ID
+  | BE_NOSPC
+  | BE_TMOUT.
+
+Definition ber_code (b : ber) : Z :=
+  match b with
+  | BE_OK    => Z0
+  | BE_PAR   => Z.opp 33
+  | BE_ID    => Z.opp 35
+  | BE_NOSPC => Z.opp 11
+  | BE_TMOUT => Z.opp 69
+  end.
+
+Lemma ber_code_is_the_shipped_figure :
+    ber_code BE_OK = Z0 /\ ber_code BE_PAR = Z.opp 33
+    /\ ber_code BE_ID = Z.opp 35 /\ ber_code BE_NOSPC = Z.opp 11
+    /\ ber_code BE_TMOUT = Z.opp 69.
+Proof. repeat split; reflexivity. Qed.
+
+Lemma ber_code_separates : forall b1 b2, ber_code b1 = ber_code b2 -> b1 = b2.
+Proof.
+  intros b1 b2 H. destruct b1, b2; try reflexivity.
+  all: (vm_compute in H; discriminate H).
+Qed.
+
+(* types.h:19 is typedef int32_t ER, and every figure of either namespace fits
+ * that word with room to spare: the collision between them is a naming hazard,
+ * not an overflow. *)
+Lemma every_flat_receipt_fits_the_shipped_int32 : forall b,
+    Z.leb (Z.opp 2147483648) (ber_code b) = true.
+Proof. destruct b; cbn [ber_code]; lia. Qed.
+
+Lemma every_scaled_receipt_fits_the_shipped_int32 : forall e,
+    Z.leb (Z.opp 2147483648) (er_code e) = true.
+Proof. destruct e; vm_compute; reflexivity. Qed.
+
+(* ── 15.4.1 The two vocabularies meet only at success ───────────── *)
+
+(* A nonzero T-Kernel main code is at least 1, so its figure is at most -65536,
+ * while the flat figures never go below -69.  The gap between the vocabularies
+ * is wider than either of them. *)
+Lemma er_nonzero_is_large : forall e,
+    er_mer e <> 0 -> Z.leb (er_code e) (Z.opp 65536) = true.
+Proof. intros e NE. unfold er_code. lia. Qed.
+
+Lemma ber_is_small : forall b, Z.leb (Z.opp 69) (ber_code b) = true.
+Proof. destruct b; cbn [ber_code]; lia. Qed.
+
+Lemma the_two_nonzero_vocabularies_are_disjoint : forall e b,
+    er_mer e <> 0 -> er_code e <> ber_code b.
+Proof.
+  intros e b NE EQ. apply er_nonzero_is_large in NE.
+  assert (SB : Z.leb (Z.opp 69) (ber_code b) = true) by (apply ber_is_small).
+  rewrite EQ in NE. lia.
+Qed.
+
+Lemma er_mer_is_zero_only_for_ok : forall e, er_mer e = 0 -> e = E_OK.
+Proof. destruct e; cbn [er_mer]; intros H; try discriminate H; reflexivity. Qed.
+
+(* So the single figure the namespaces share is the success code, and one spelled
+ * name means two different numbers depending on which header the service
+ * includes. *)
+Lemma the_shared_figure_is_success_only :
+    er_code E_OK = ber_code BE_OK
+    /\ forall e b, er_code e = ber_code b -> e = E_OK /\ b = BE_OK.
+Proof.
+  split; [ reflexivity | intros e b H ].
+  destruct (er_mer e) eqn:ZE.
+  - assert (E : e = E_OK) by (apply er_mer_is_zero_only_for_ok; exact ZE).
+    subst e. destruct b; cbn [ber_code] in H; try discriminate H.
+    + split; reflexivity.
+  - exfalso. apply (the_two_nonzero_vocabularies_are_disjoint e b).
+    + intros EQ. rewrite EQ in ZE. discriminate ZE.
+    + exact H.
+Qed.
+
+Lemma e_par_names_two_figures : er_code E_PAR <> ber_code BE_PAR.
+Proof.
+  intros H. unfold er_code, er_mer, ber_code in H. vm_compute in H.
+  discriminate H.
+Qed.
+
+(* The alias block error.h:51-63 is the second hazard: ER_x expands to E_x, so
+ * the two spellings in a caller's source are the same number.  Only the extended
+ * block adds figures of its own (ER_NOSPC), and ER_TIMEOUT is a synonym of
+ * E_TMOUT rather than a code in its own right. *)
+Inductive receipt_name :=
+  | RN_E_OK | RN_ER_OK | RN_E_PAR | RN_ER_PAR | RN_E_ID | RN_ER_ID
+  | RN_ER_NOSPC | RN_E_TMOUT | RN_ER_TIMEOUT.
+
+Definition name_code (n : receipt_name) : Z :=
+  match n with
+  | RN_E_OK | RN_ER_OK => Z0
+  | RN_E_PAR | RN_ER_PAR => Z.opp 33
+  | RN_E_ID | RN_ER_ID => Z.opp 35
+  | RN_ER_NOSPC => Z.opp 11
+  | RN_E_TMOUT | RN_ER_TIMEOUT => Z.opp 69
+  end.
+
+Lemma the_alias_block_is_two_spellings_of_one_figure :
+    name_code RN_ER_OK = name_code RN_E_OK
+    /\ name_code RN_ER_PAR = name_code RN_E_PAR
+    /\ name_code RN_ER_ID = name_code RN_E_ID.
+Proof. repeat split; reflexivity. Qed.
+
+Lemma er_timeout_is_a_second_name_for_the_timeout :
+    name_code RN_ER_TIMEOUT = name_code RN_E_TMOUT.
+Proof. reflexivity. Qed.
+
+Lemma the_alias_block_is_not_injective :
+    name_code RN_E_PAR = name_code RN_ER_PAR /\ RN_E_PAR <> RN_ER_PAR.
+Proof. split; [ reflexivity | discriminate ]. Qed.
+
+Lemma every_shipped_spelling_names_a_modelled_receipt : forall n,
+    exists b, name_code n = ber_code b.
+Proof.
+  destruct n; cbn [name_code];
+    [ exists BE_OK | exists BE_OK | exists BE_PAR | exists BE_PAR
+    | exists BE_ID | exists BE_ID | exists BE_NOSPC | exists BE_TMOUT
+    | exists BE_TMOUT ]; reflexivity.
+Qed.
+
+(* §7's first_bad is monomorphic in `er`, so the flat namespace needs its own
+ * reader.  The shape is the left-to-right one the C has: the first failing test
+ * names the receipt, and a list with no failure is a call that proceeds. *)
+Fixpoint ber_first_bad (gs : list (bool * ber)) : option ber :=
+  match gs with
+  | nil => None
+  | (p, e) :: rest => if p then ber_first_bad rest else Some e
+  end.
+
+Lemma ber_first_bad_nil : ber_first_bad (@nil (bool * ber)) = @None ber.
+Proof. reflexivity. Qed.
+
+Lemma ber_first_bad_pass : forall e gs, ber_first_bad ((true, e) :: gs) = ber_first_bad gs.
+Proof. intros e gs. reflexivity. Qed.
+
+Lemma ber_first_bad_fail : forall e gs, ber_first_bad ((false, e) :: gs) = Some e.
+Proof. intros e gs. reflexivity. Qed.
+
+(* Reading a whole cascade at once, which is what lets the theorems below name
+ * the receipt without case-splitting on four separate hypotheses. *)
+Lemma four_guard_classification : forall p1 p2 p3 p4 : bool,
+    ber_first_bad ((p1, BE_PAR) :: (p2, BE_ID) :: (p3, BE_PAR) :: (p4, BE_NOSPC) :: nil)
+    = match p1, p2, p3, p4 with
+      | true, true, true, true => None
+      | true, true, true, false => Some BE_NOSPC
+      | true, true, false, _ => Some BE_PAR
+      | true, false, _, _ => Some BE_ID
+      | false, _, _, _ => Some BE_PAR
+      end.
+Proof. destruct p1, p2, p3, p4; reflexivity. Qed.
+
+Lemma two_guard_classification : forall p1 p2 : bool,
+    ber_first_bad ((p1, BE_PAR) :: (p2, BE_ID) :: nil)
+    = match p1, p2 with
+      | true, true => None
+      | true, false => Some BE_ID
+      | false, _ => Some BE_PAR
+      end.
+Proof. destruct p1, p2; reflexivity. Qed.
+
+(* ── 15.4.2 The send cascade: four tests, then one store ────────── *)
+
+(* :47 is "pid < 0 || pid >= MAX_IPC_PIDS".  W is int32_t (types.h:21), so the
+ * lower half of that test is reachable: a pid of -1 is a real caller error, and
+ * ER_ID is what it gets. *)
+Definition ipc_pid_ok (pid : Z) : bool :=
+  andb (Z.ltb (Z.opp 1) pid) (Z.ltb pid (Z.of_nat msg_domains)).
+
+Lemma a_negative_pid_fails_the_test : forall pid,
+    Z.ltb pid Z0 = true -> ipc_pid_ok pid = false.
+Proof. intros pid H. unfold ipc_pid_ok. lia. Qed.
+
+Lemma a_pid_inside_the_domain_array_passes : forall pid,
+    Z.ltb (Z.opp 1) pid = true -> Z.ltb pid (Z.of_nat msg_domains) = true ->
+    ipc_pid_ok pid = true.
+Proof. intros pid H1 H2. unfold ipc_pid_ok. lia. Qed.
+
+Lemma the_endpoints_of_the_pid_test :
+    ipc_pid_ok Z0 = true /\ ipc_pid_ok (Z.of_nat msg_domains) = false
+    /\ ipc_pid_ok (Z.opp 1) = false.
+Proof.
+  split; [ | split ].
+  - vm_compute; reflexivity.
+  - vm_compute; reflexivity.
+  - vm_compute; reflexivity.
+Qed.
+
+(* :46 asks whether the caller's buffer exists; :48 whether the type it names is
+ * sendable.  With no buffer there is nothing to read a type from, so the third
+ * test simply is not reached -- which is why None may carry it as passed while
+ * the first test still refuses the call. *)
+Definition msg_ptr_ok (m : option bmsg) : bool :=
+  match m with Some _ => true | None => false end.
+
+Definition type_ok_of (m : option bmsg) : bool :=
+  match m with
+  | Some b => type_in_range (bm_type b)
+  | None => true
+  end.
+
+Lemma ptr_ok_of_a_buffer : forall b, msg_ptr_ok (Some b) = true.
+Proof. intros b. reflexivity. Qed.
+
+Lemma type_ok_of_a_buffer : forall b, type_ok_of (Some b) = type_in_range (bm_type b).
+Proof. intros b. reflexivity. Qed.
+
+Lemma zero_is_not_a_sendable_type : type_in_range 0 = false.
+Proof. unfold type_in_range, msg_type_min, msg_type_max. cbn. reflexivity. Qed.
+
+(* :55 "mb->count >= MAX_QUEUED_MSGS" -- the fourth test, and the only one that
+ * reads state rather than arguments. *)
+Definition has_room (r : msg_ring) : bool := Nat.ltb (mr_count r) msg_ring_cap.
+
+Definition snd_guards (pid : Z) (m : option bmsg) (r : msg_ring) : list (bool * ber) :=
+  (msg_ptr_ok m, BE_PAR)
+  :: (ipc_pid_ok pid, BE_ID)
+  :: (type_ok_of m, BE_PAR)
+  :: (has_room r, BE_NOSPC)
+  :: nil.
+
+(* ipc_msg.c:45-68: refuse, or store at the cursor and come back E_OK.  Nothing
+ * in the cascade writes -- the first write is :60, after all four tests -- so a
+ * refusal leaves the mailbox exactly as the caller found it. *)
+Definition snd_msg_service (pid : Z) (m : option bmsg) (r : msg_ring) : ber * msg_ring :=
+  match ber_first_bad (snd_guards pid m r) with
+  | Some e => (e, r)
+  | None => (BE_OK, snd_store (match m with Some b => b | None => dead_cell end) r)
+  end.
+
+(* 1. A null buffer is refused before the pid, the type or the room are read. *)
+Lemma a_null_buffer_is_E_PAR_and_stores_nothing : forall pid r,
+    snd_msg_service pid None r = (BE_PAR, r).
+Proof.
+  intros pid r. unfold snd_msg_service, snd_guards.
+  rewrite four_guard_classification. cbn [msg_ptr_ok]. reflexivity.
+Qed.
+
+(* 2. A bad pid gets the second test's own code, ER_ID, not the parameter error
+ * its neighbours use. *)
+Lemma a_bad_pid_is_ER_ID : forall pid b r,
+    ipc_pid_ok pid = false -> snd_msg_service pid (Some b) r = (BE_ID, r).
+Proof.
+  intros pid b r I. unfold snd_msg_service, snd_guards.
+  rewrite four_guard_classification.
+  cbn [msg_ptr_ok type_ok_of]. rewrite I. reflexivity.
+Qed.
+
+(* 3. E_PAR comes from two different tests (:46 and :48), so the receipt alone
+ * never says which one refused. *)
+Example the_parameter_error_does_not_name_its_test :
+    snd_msg_service 0 None (mk_mring nil O O O) = (BE_PAR, mk_mring nil O O O)
+    /\ snd_msg_service 0 (Some (mk_bmsg 0 O O)) (mk_mring nil O O O)
+       = (BE_PAR, mk_mring nil O O O).
+Proof. split; vm_compute; reflexivity. Qed.
+
+(* 4. Precedence: an illegal type on a full ring is E_PAR, and the caller never
+ * learns that there was no room either. *)
+Lemma the_parameter_test_outranks_the_room_test : forall pid b r,
+    ipc_pid_ok pid = true -> type_in_range (bm_type b) = false -> has_room r = false ->
+    snd_msg_service pid (Some b) r = (BE_PAR, r).
+Proof.
+  intros pid b r I T R. unfold snd_msg_service, snd_guards.
+  rewrite four_guard_classification.
+  cbn [msg_ptr_ok type_ok_of]. rewrite I, T. reflexivity.
+Qed.
+
+Lemma a_full_ring_refuses_another_message : forall pid b r,
+    ipc_pid_ok pid = true -> type_in_range (bm_type b) = true -> has_room r = false ->
+    snd_msg_service pid (Some b) r = (BE_NOSPC, r).
+Proof.
+  intros pid b r I T R. unfold snd_msg_service, snd_guards.
+  rewrite four_guard_classification.
+  cbn [msg_ptr_ok type_ok_of]. rewrite I, T, R. reflexivity.
+Qed.
+
+(* 5. Everything passing is the only route to the store, and it pays E_OK. *)
+Lemma an_accepted_send_is_the_only_way_the_ring_moves : forall pid b r,
+    ipc_pid_ok pid = true -> type_in_range (bm_type b) = true -> has_room r = true ->
+    snd_msg_service pid (Some b) r = (BE_OK, snd_store b r).
+Proof.
+  intros pid b r I T R. unfold snd_msg_service, snd_guards.
+  rewrite four_guard_classification.
+  cbn [msg_ptr_ok type_ok_of]. rewrite I, T, R. reflexivity.
+Qed.
+
+Lemma a_refused_send_leaves_the_mailbox_untouched : forall pid m e r,
+    ber_first_bad (snd_guards pid m r) = Some e ->
+    snd_msg_service pid m r = (e, r).
+Proof.
+  intros pid m e r H. unfold snd_msg_service. rewrite H. reflexivity.
+Qed.
+
+(* ER_NOSPC is the only refusal this service reads out of state, and §15.2 shows
+ * a successful send keeps count <= 64, so the 64 cells of MAX_QUEUED_MSGS are
+ * the whole residency bound the API offers. *)
+Lemma ER_NOSPC_is_the_only_state_dependent_refusal : forall pid m r,
+    ber_first_bad (snd_guards pid m r) = Some BE_NOSPC -> has_room r = false.
+Proof.
+  intros pid m r H. unfold snd_guards in H.
+  rewrite four_guard_classification in H.
+  destruct (msg_ptr_ok m), (ipc_pid_ok pid), (type_ok_of m), (has_room r);
+    cbn in H; try discriminate H; reflexivity.
+Qed.
+
+(* ── 15.4.3 The receive cascade, and chk_msg as its special case ─── *)
+
+(* :71-72 is the whole guard block of rcv_msg: two tests, and nothing else.  The
+ * scan of :93-111 is not a guard at all -- it cannot refuse the call, only fail
+ * to find a cell -- and §15.3.2 is what proves that. *)
+Definition rcv_guards (pid : Z) (m : option bmsg) : list (bool * ber) :=
+  (msg_ptr_ok m, BE_PAR) :: (ipc_pid_ok pid, BE_ID) :: nil.
+
+Lemma the_receive_guard_cascade_is_two_long : forall pid m,
+    map snd (rcv_guards pid m) = BE_PAR :: BE_ID :: nil.
+Proof. intros pid m. reflexivity. Qed.
+
+Lemma rcv_guards_pass : forall pid m,
+    msg_ptr_ok m = true -> ipc_pid_ok pid = true ->
+    ber_first_bad (rcv_guards pid m) = None.
+Proof.
+  intros pid m P I. unfold rcv_guards. rewrite two_guard_classification.
+  rewrite P, I. reflexivity.
+Qed.
+
+Lemma a_rcv_guard_refusal_is_one_of_the_two_codes : forall pid m e,
+    ber_first_bad (rcv_guards pid m) = Some e -> e = BE_PAR \/ e = BE_ID.
+Proof.
+  intros pid m e H. unfold rcv_guards in H.
+  rewrite two_guard_classification in H.
+  destruct (msg_ptr_ok m), (ipc_pid_ok pid); cbn in H.
+  - discriminate H.
+  - injection H. intros X. subst e. right. reflexivity.
+  - injection H. intros X. subst e. left. reflexivity.
+  - injection H. intros X. subst e. left. reflexivity.
+Qed.
+
+(* None stands for "this call has not returned yet": a blocking miss parks in
+ * :120-128 and hands back no figure at all. *)
+Definition rcv_phase (t : tmo) (mask : nat) (r : msg_ring) : option ber :=
+  match rcv_choice t mask r with
+  | Some _ => Some BE_OK
+  | None => if tmo_blocks t then None else Some BE_TMOUT
+  end.
+
+Definition rcv_msg_service (pid : Z) (m : option bmsg) (t : tmo)
+  (mask : nat) (r : msg_ring) : option ber :=
+  match ber_first_bad (rcv_guards pid m) with
+  | Some e => Some e
+  | None => rcv_phase t mask r
+  end.
+
+Lemma rcv_phase_hit : forall t mask r i,
+    rcv_match mask r = Some i -> rcv_phase t mask r = Some BE_OK.
+Proof.
+  intros t mask r i H. unfold rcv_phase, rcv_choice. rewrite H. reflexivity.
+Qed.
+
+Lemma rcv_phase_poll_miss : forall mask r,
+    rcv_match mask r = None -> rcv_phase TMO_POLL mask r = Some BE_TMOUT.
+Proof.
+  intros mask r H. unfold rcv_phase, rcv_choice. rewrite H. reflexivity.
+Qed.
+
+Lemma rcv_phase_blocking_miss : forall t mask r,
+    tmo_blocks t = true -> rcv_match mask r = None -> rcv_phase t mask r = None.
+Proof.
+  intros t mask r HT HM. unfold rcv_phase, rcv_choice. rewrite HM.
+  destruct t; cbn [tmo_blocks] in HT; try discriminate HT; reflexivity.
+Qed.
+
+Lemma a_poll_never_parks : forall mask r,
+    rcv_phase TMO_POLL mask r = Some BE_OK
+    \/ rcv_phase TMO_POLL mask r = Some BE_TMOUT.
+Proof.
+  intros mask r. unfold rcv_phase, rcv_choice.
+  destruct (rcv_match mask r) as [i|]; [ left | right ]; reflexivity.
+Qed.
+
+Lemma a_null_receive_buffer_is_E_PAR : forall pid t mask r,
+    rcv_msg_service pid None t mask r = Some BE_PAR.
+Proof.
+  intros pid t mask r. unfold rcv_msg_service, rcv_guards.
+  rewrite two_guard_classification. cbn [msg_ptr_ok]. reflexivity.
+Qed.
+
+Lemma a_bad_receive_pid_is_ER_ID : forall pid m t mask r,
+    ipc_pid_ok pid = false -> rcv_msg_service pid (Some m) t mask r = Some BE_ID.
+Proof.
+  intros pid m t mask r I. unfold rcv_msg_service, rcv_guards.
+  rewrite two_guard_classification. cbn [msg_ptr_ok]. rewrite I. reflexivity.
+Qed.
+
+(* No timeout figure can be the reason a caller is refused: once the two tests
+ * pass, the outcomes are success, time-out, or no return at all.  The T-Kernel
+ * family refuses tmo < -1 from check.h:185; ipc_msg.c has no such guard, which is
+ * why §3's legal range needs no counterpart here. *)
+Lemma the_timeout_figure_is_never_guarded : forall pid m t mask r,
+    msg_ptr_ok m = true -> ipc_pid_ok pid = true ->
+    match rcv_msg_service pid m t mask r with
+    | Some BE_PAR | Some BE_ID | Some BE_NOSPC => false
+    | _ => true
+    end = true.
+Proof.
+  intros pid m t mask r P I. unfold rcv_msg_service.
+  rewrite rcv_guards_pass; [ | exact P | exact I ].
+  unfold rcv_phase, rcv_choice.
+  destruct (rcv_match mask r) as [i|]; destruct (tmo_blocks t); reflexivity.
+Qed.
+
+Lemma a_blocked_waiter_hands_back_nothing_yet : forall pid m t mask r,
+    msg_ptr_ok (Some m) = true -> ipc_pid_ok pid = true -> tmo_blocks t = true ->
+    rcv_match mask r = None -> rcv_msg_service pid (Some m) t mask r = None.
+Proof.
+  intros pid m t mask r P I HT HM. unfold rcv_msg_service.
+  rewrite rcv_guards_pass; [ | exact P | exact I ].
+  apply (rcv_phase_blocking_miss t mask r HT HM).
+Qed.
+
+Lemma a_poll_on_a_miss_is_E_TMOUT : forall pid m mask r,
+    msg_ptr_ok (Some m) = true -> ipc_pid_ok pid = true -> rcv_match mask r = None ->
+    rcv_msg_service pid (Some m) TMO_POLL mask r = Some BE_TMOUT.
+Proof.
+  intros pid m mask r P I HM. unfold rcv_msg_service.
+  rewrite rcv_guards_pass; [ | exact P | exact I ].
+  apply (rcv_phase_poll_miss mask r HM).
+Qed.
+
+Lemma a_hit_is_E_OK_whatever_the_timeout : forall pid m i t mask r,
+    ipc_pid_ok pid = true -> rcv_match mask r = Some i ->
+    rcv_msg_service pid (Some m) t mask r = Some BE_OK.
+Proof.
+  intros pid m i t mask r I HM. unfold rcv_msg_service.
+  rewrite rcv_guards_pass; [ | apply ptr_ok_of_a_buffer | exact I ].
+  apply (rcv_phase_hit t mask r i HM).
+Qed.
+
+Lemma ER_NOSPC_never_refuses_a_receive : forall pid m t mask r,
+    rcv_msg_service pid m t mask r <> Some BE_NOSPC.
+Proof.
+  intros pid m t mask r H. unfold rcv_msg_service in H.
+  destruct (ber_first_bad (rcv_guards pid m)) as [e|] eqn:G.
+  - apply a_rcv_guard_refusal_is_one_of_the_two_codes in G.
+    destruct G as [X|X]; subst e; discriminate H.
+  - unfold rcv_phase, rcv_choice in H.
+    destruct (rcv_match mask r) as [i|].
+    + discriminate H.
+    + destruct (tmo_blocks t); discriminate H.
+Qed.
+
+(* chk_msg (:132-134) is literally rcv_msg with the figure 0, so it can never
+ * park: its receipt set is the four flat codes minus ER_NOSPC, which only the
+ * send path reaches. *)
+Definition chk_msg_service (pid : Z) (m : option bmsg) (mask : nat) (r : msg_ring)
+  : option ber := rcv_msg_service pid m TMO_POLL mask r.
+
+Lemma a_check_always_hands_back_a_figure : forall pid m mask r,
+    rcv_msg_service pid m TMO_POLL mask r <> None.
+Proof.
+  intros pid m mask r H. unfold rcv_msg_service in H.
+  destruct (ber_first_bad (rcv_guards pid m)) eqn:G.
+  - discriminate H.
+  - destruct (a_poll_never_parks mask r) as [A|A]; rewrite A in H; discriminate H.
+Qed.
+
+Lemma chk_receipts_are_the_four_enumerated : forall pid m mask r b,
+    chk_msg_service pid m mask r = Some b ->
+    b = BE_PAR \/ b = BE_ID \/ b = BE_TMOUT \/ b = BE_OK.
+Proof.
+  intros pid m mask r b H. unfold chk_msg_service, rcv_msg_service in H.
+  destruct (ber_first_bad (rcv_guards pid m)) as [e|] eqn:G.
+  - apply a_rcv_guard_refusal_is_one_of_the_two_codes in G.
+    injection H. intros X. subst b.
+    destruct G as [Y|Y]; subst e; [ left | right; left ]; reflexivity.
+  - destruct (a_poll_never_parks mask r) as [A|A].
+    + rewrite A in H. injection H. intros X. subst b.
+      right. right. right. reflexivity.
+    + rewrite A in H. injection H. intros X. subst b.
+      right. right. left. reflexivity.
+Qed.
+
+Lemma chk_never_produces_the_room_refusal : forall pid m mask r,
+    chk_msg_service pid m mask r <> Some BE_NOSPC.
+Proof.
+  intros pid m mask r H.
+  exact (ER_NOSPC_never_refuses_a_receive pid m TMO_POLL mask r H).
+Qed.
+
+(* The window is never read by the guard block, so a receive with an illegal pid
+ * is refused even though its ring is perfectly reachable -- the mirror image of
+ * the send, where the ring is read only after the arguments are. *)
+Lemma an_illegal_pid_is_refused_before_the_window_is_read : forall pid m mask r,
+    ipc_pid_ok pid = false ->
+    rcv_msg_service pid (Some m) TMO_REL mask r = Some BE_ID.
+Proof.
+  intros pid m mask r I. apply (a_bad_receive_pid_is_ER_ID pid m TMO_REL mask r I).
+Qed.

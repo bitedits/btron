@@ -621,22 +621,22 @@ In B-System, the storage subsystem (\texttt{src/fs/}) provides complete, backwar
     \item \textbf{BrightVVolumeHeader Structure:} B-System maps the exact 128-byte on-disk superblock used by commercial Cho-Kanji disks:
     \begin{lstlisting}[language=C]
 typedef struct __attribute__((packed)) {
-    UH   magic;      /* +0x00  0x52FE (VOL_MAGIC_LE) */
-    UH   fs_type;    /* +0x02  0x6402 (FS_TYPE_BRIGHTV) */
-    UH   nbmp;       /* +0x04  bitmap block count (41) */
-    UH   sfidt;      /* +0x06  FID table block count (32) */
-    UH   sfnmt;      /* +0x08  short-name blocks (32) */
-    UB   rsv1[14];   /* +0x0A  partition metadata */
-    UH   fs_bsize;   /* +0x18  logical block size (8192) */
-    UH   fs_nfile;   /* +0x1A  max files / FIDs (65535) */
-    H    fs_lang;    /* +0x1C  0x0021 = F_JPN (Japanese) */
-    H    fs_level;   /* +0x1E  access management level */
-    UW   fs_nblk;    /* +0x20  total logical blocks */
-    UW   fs_nfree;   /* +0x24  free logical blocks */
-    UW   fs_mtime;   /* +0x28  system mtime */
-    UW   fs_ctime;   /* +0x2C  system ctime */
-    UH   fs_name[20];/* +0x30  volume name (16-bit T-Code) */
-    UH   fs_locat[20];/* +0x58 device locat (16-bit T-Code) */
+UH   magic;    /* +0x00  0x52FE (VOL_MAGIC_LE) */
+UH   fs_type;  /* +0x02  0x6402 (FS_TYPE_BRIGHTV) */
+UH   nbmp;     /* +0x04  bitmap block count (41) */
+UH   sfidt;    /* +0x06  FID table block count */
+UH   sfnmt;    /* +0x08  short-name blocks */
+UB   rsv1[14]; /* +0x0A  partition metadata */
+UH   fs_bsize; /* +0x18  logical block size (8192) */
+UH   fs_nfile; /* +0x1A  max files / FIDs (65535) */
+H    fs_lang;  /* +0x1C  0x0021 = F_JPN (Japanese) */
+H    fs_level; /* +0x1E  access management level */
+UW   fs_nblk;  /* +0x20  total logical blocks */
+UW   fs_nfree; /* +0x24  free logical blocks */
+UW   fs_mtime; /* +0x28  system mtime */
+UW   fs_ctime; /* +0x2C  system ctime */
+UH   fs_name[20];/* +0x30  volume name (T-Code) */
+UH   fs_locat[20];/* +0x58 device locat (T-Code) */
 } BrightVVolumeHeader;
     \end{lstlisting}
     \item \textbf{Native QCOW2 Disk Image Mounting:} B-System incorporates an embedded, self-contained QCOW2 (v2/v3) block driver (\texttt{src/fs/blk\_qcow2.c}) that mounts authentic 2001 Cho-Kanji disk images (\texttt{hda.qcow2}) without host dependencies, parsing cluster offsets and L1/L2 tables directly.

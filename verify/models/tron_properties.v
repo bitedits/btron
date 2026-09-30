@@ -4276,7 +4276,7 @@ Proof.
       rewrite slot_write_past_the_cursor, win_cons, (IH k Hk), win_cons. reflexivity.
 Qed.
 
-(* ── 15.2.2 The two operations, as the C writes them ────────────── *)
+(* ── 15.2.1 The two operations, as the C writes them ────────────── *)
 
 (* ipc_msg.c:60-62: write at the cursor, advance it modulo the capacity, count
  * up. *)
@@ -4367,7 +4367,7 @@ Proof.
   rewrite M. lia.
 Qed.
 
-(* ── 15.2.1 The head is an inert coordinate ─────────────────────── *)
+(* ── 15.2.2 The head is an inert coordinate ─────────────────────── *)
 
 (* ipc_msg.c has four reads of mb->head (:94, :101, :102, :106) and no write to
  * it.  Both operations hand the field back unchanged, and that pair of refl
@@ -4394,7 +4394,7 @@ Proof.
   - exact A. - exact B. - exact C. - exact D.
 Qed.
 
-(* ── 15.2.2 What the two operations do to the reachable window ───── *)
+(* ── 15.2.3 What the two operations do to the reachable window ───── *)
 
 (* The send appends to the queue: :60 writes at tail, and tail is the first cell
  * the window does not cover. *)
@@ -4566,7 +4566,7 @@ Proof.
   - reflexivity.
 Qed.
 
-(* ── 15.2.3 The one writer validates the type, and the readers do not ── *)
+(* ── 15.2.4 The one writer validates the type, and the readers do not ── *)
 
 (* :48 is the only range test in the file, and it is on the SEND side.  rcv_msg
  * never rechecks the type of what it finds (:96 reads it, :97 hands it over), so
@@ -4590,4 +4590,507 @@ Proof.
   rewrite snd_store_appends; [ | exact H | exact OK ].
   rewrite types_in_range_app, T. cbn [types_in_range forallb].
   rewrite R. reflexivity.
+Qed.
+
+
+(* ── 15.3 The masked scan: which message a receive takes ────────── *)
+
+(* :96's test read off a whole cell.  The mask lives in the CALL, not in the
+ * mailbox: no message carries a bit, its type does, and MSGMASK turns the type
+ * into one (:96 against message.h:32). *)
+Definition cell_accepts (mask : nat) (m : bmsg) : bool := masked_accepts mask (bm_type m).
+
+Definition omap_succ (o : option nat) : option nat :=
+  match o with None => None | Some k => Some (S k) end.
+
+(* ipc_msg.c:93-96 is a linear walk i = 0 .. count-1 that stops at the first
+ * cell passing :96.  That index is the whole service: :97 copies that cell into
+ * the caller's MESSAGE and :100-104 deletes exactly it. *)
+Fixpoint first_match (mask : nat) (q : list bmsg) : option nat :=
+  match q with
+  | nil => None
+  | a :: rest => if cell_accepts mask a then Some O
+                 else omap_succ (first_match mask rest)
+  end.
+
+Lemma first_match_nil : forall mask, first_match mask nil = None.
+Proof. intros mask. reflexivity. Qed.
+
+Lemma first_match_accepts : forall mask a rest,
+    cell_accepts mask a = true -> first_match mask (a :: rest) = Some O.
+Proof. intros mask a rest H. cbn [first_match]. rewrite H. reflexivity. Qed.
+
+Lemma first_match_rejects : forall mask a rest,
+    cell_accepts mask a = false ->
+    first_match mask (a :: rest) = omap_succ (first_match mask rest).
+Proof. intros mask a rest H. cbn [first_match]. rewrite H. reflexivity. Qed.
+
+(* Reading past the end of the window yields the zeroed cell the memset puts in
+ * an untouched slot, and nothing in the window can be read from outside it. *)
+Lemma nth_in_range_is_in : forall q i,
+    i < length q -> In (nth i q dead_cell) q.
+Proof.
+  intros q. induction q as [|a rest IH]; intros i H; cbn [length] in H.
+  - lia.
+  - destruct i as [|k]; cbn [nth].
+    + left. reflexivity.
+    + right. apply IH. lia.
+Qed.
+
+Lemma omap_succ_some : forall o i,
+    omap_succ o = Some i -> exists k, o = Some k /\ i = S k.
+Proof.
+  intros o i H. destruct o as [k|].
+  - exists k. split; [ reflexivity | ].
+    cbn [omap_succ] in H. injection H as Hi. symmetry. exact Hi.
+  - cbn [omap_succ] in H. discriminate H.
+Qed.
+
+(* The walk returns a position inside the window, that cell does pass the test,
+ * and every cell ahead of it fails.  "First" is first in QUEUE order, which is
+ * not arrival order once a mask is in play -- see the jump below. *)
+Lemma the_scan_delivers_the_earliest_acceptable_cell : forall mask q i,
+    first_match mask q = Some i ->
+    i < length q
+    /\ cell_accepts mask (nth i q dead_cell) = true
+    /\ forall j, j < i -> cell_accepts mask (nth j q dead_cell) = false.
+Proof.
+  intros mask q. induction q as [|a rest IH]; intros i H.
+  - rewrite first_match_nil in H. discriminate H.
+  - destruct (cell_accepts mask a) eqn:Ha.
+    + rewrite (first_match_accepts mask a rest Ha) in H.
+      injection H as Hi. subst i. cbn [length nth]. repeat split.
+      * lia.
+      * exact Ha.
+      * intros j Hj. exfalso. lia.
+    + rewrite (first_match_rejects mask a rest Ha) in H.
+      destruct (omap_succ_some (first_match mask rest) i H) as [k [Hk Hi]].
+      subst i.
+      destruct (IH k Hk) as [L [Acc Before]].
+      cbn [length nth]. repeat split.
+      -- lia.
+      -- exact Acc.
+      -- intros j Hj. destruct j as [|j'].
+         ++ exact Ha.
+         ++ cbn [nth]. apply Before. lia.
+Qed.
+
+(* The other half of :96's job: the walk gives up only when nothing passes. *)
+Lemma a_walk_that_finds_nothing_has_skipped_everything : forall mask q,
+    (forall m, In m q -> cell_accepts mask m = false) -> first_match mask q = None.
+Proof.
+  intros mask q. induction q as [|a rest IH]; intros H.
+  - reflexivity.
+  - destruct (cell_accepts mask a) eqn:Ha.
+    + assert (HA : cell_accepts mask a = false) by (apply H; left; reflexivity).
+      rewrite Ha in HA. discriminate HA.
+    + rewrite (first_match_rejects mask a rest Ha).
+      rewrite (IH (fun m Hin => H m (or_intror Hin))).
+      reflexivity.
+Qed.
+
+(* :94's coordinate for the walk.  Nothing ever writes head (15's opening
+ * observation), so under the ring invariant this is the identity on the range
+ * the walk visits: the wrap the C guards against is unreachable here. *)
+Definition cell_of (r : msg_ring) (i : nat) : nat :=
+  Nat.modulo (Nat.add (mr_head r) i) msg_ring_cap.
+
+Lemma cell_of_is_the_index : forall r i,
+    ring_ok r = true -> i < mr_count r -> cell_of r i = i.
+Proof.
+  intros r i H LT. destruct (ring_ok_parts r H) as [A [B [C _]]].
+  unfold cell_of. rewrite B. cbn [Nat.add].
+  apply Nat.mod_small. apply Nat.lt_le_trans with (m := mr_count r).
+  - exact LT.
+  - exact C.
+Qed.
+
+(* The receive as the C leaves it: the matched index, the cell handed to the
+ * caller, and the mailbox after :100-106. *)
+Definition rcv_match (mask : nat) (r : msg_ring) : option nat :=
+  first_match mask (mqueue r).
+
+Definition rcv_take (mask : nat) (r : msg_ring) : option (bmsg * msg_ring) :=
+  match rcv_match mask r with
+  | Some i => Some (nth i (mqueue r) dead_cell, rcv_shift i r)
+  | None => None
+  end.
+
+Lemma rcv_take_hit_is_the_matched_cell : forall mask r i,
+    rcv_match mask r = Some i ->
+    rcv_take mask r = Some (nth i (mqueue r) dead_cell, rcv_shift i r).
+Proof.
+  intros mask r i H. unfold rcv_take. rewrite H. reflexivity. Qed.
+
+Lemma rcv_take_miss_is_a_miss : forall mask r,
+    rcv_match mask r = None -> rcv_take mask r = None.
+Proof. intros mask r H. unfold rcv_take. rewrite H. reflexivity. Qed.
+
+(* ── 15.3.1 What the mask can and cannot do ─────────────────────── *)
+
+(* mask == 0 is a WILDCARD, not an empty set (:96's first disjunct).  With it a
+ * receive can never skip a cell, so the walk stops at the head and the dequeue
+ * degenerates into a pop-front: the O(1) case of the copy-based design. *)
+Lemma mask_zero_accepts_any_type : forall t, masked_accepts O t = true.
+Proof.
+  intros t. unfold masked_accepts. apply orb_true_iff. left.
+  apply Nat.eqb_eq. reflexivity.
+Qed.
+
+Lemma the_wildcard_stops_at_the_front : forall a rest,
+    first_match O (a :: rest) = Some O.
+Proof.
+  intros a rest. apply (first_match_accepts O a rest).
+  unfold cell_accepts. apply mask_zero_accepts_any_type.
+Qed.
+
+Lemma the_window_is_the_count_under_the_ring_invariant : forall r,
+    ring_ok r = true -> length (mqueue r) = mr_count r.
+Proof.
+  intros r H. unfold mqueue. rewrite win_length.
+  destruct (ring_ok_parts r H) as [A [B [C _]]]. rewrite A.
+  apply Nat.min_l. exact C.
+Qed.
+
+Lemma the_wildcard_matches_the_front_of_any_window : forall r,
+    mqueue r <> nil -> rcv_match O r = Some O.
+Proof.
+  intros r Hq. unfold rcv_match.
+  destruct (mqueue r) as [|a rest]; [ contradiction | apply the_wildcard_stops_at_the_front ].
+Qed.
+
+Lemma a_nonempty_ring_matches_zero_under_the_wildcard : forall r,
+    ring_ok r = true -> mr_count r <> 0 -> rcv_match O r = Some O.
+Proof.
+  intros r H NZ. apply the_wildcard_matches_the_front_of_any_window.
+  intros Hnil. apply NZ.
+  rewrite <- (the_window_is_the_count_under_the_ring_invariant r H), Hnil. reflexivity.
+Qed.
+
+(* But a mask that is not 0 lets a receive reach PAST the front, and this is the
+ * one place where the queue is not FIFO: an older message that does not match
+ * stays queued while a newer one that does is delivered ahead of it. *)
+Example a_masked_receive_reaches_past_an_older_message :
+    let q := mk_bmsg 2 0 77 :: mk_bmsg 1 0 88 :: nil in
+    cell_accepts (msgmask 1) (nth O q dead_cell) = false
+    /\ first_match (msgmask 1) q = Some 1.
+Proof. split; vm_compute; reflexivity. Qed.
+
+(* Deleting that cell leaves the cells ahead of it exactly where they were and
+ * pulls every cell behind it up by one: :100-104 is a deletion, not a rotation
+ * and not a reorder. *)
+(* Three reading facts about nth, stated as equations so the proofs below can
+ * rewrite with them instead of letting cbn unfold a stuck nth. *)
+Lemma nth_nil : forall j, nth j nil dead_cell = dead_cell.
+Proof. intros j. destruct j; reflexivity. Qed.
+
+Lemma nth_head : forall a rest, nth O (a :: rest) dead_cell = a.
+Proof. reflexivity. Qed.
+
+Lemma nth_tail : forall j a rest, nth (S j) (a :: rest) dead_cell = nth j rest dead_cell.
+Proof. reflexivity. Qed.
+
+(* Deleting that cell leaves the cells ahead of it exactly where they were and
+ * pulls every cell behind it up by one: :100-104 is a deletion, not a rotation
+ * and not a reorder. *)
+Lemma remove_at_keeps_earlier_cells : forall i l j,
+    j < i -> nth j (remove_at i l) dead_cell = nth j l dead_cell.
+Proof.
+  intros i. induction i as [|k IH]; intros l j H.
+  - exfalso. lia.
+  - destruct l as [|a rest]; [ reflexivity | ].
+    cbn [remove_at]. destruct j as [|j']; [ rewrite !nth_head; reflexivity | ].
+    rewrite !nth_tail. apply IH. lia.
+Qed.
+
+Lemma remove_at_shifts_later_cells : forall i l j,
+    i <= j -> S j < length l ->
+    nth j (remove_at i l) dead_cell = nth (S j) l dead_cell.
+Proof.
+  intros i. induction i as [|k IH]; intros l j LEJ LTJ.
+  - destruct l as [|a rest]; [ rewrite nth_nil; reflexivity | ].
+    rewrite nth_tail. reflexivity.
+  - destruct l as [|a rest]; [ rewrite nth_nil; reflexivity | ].
+    cbn [remove_at]. destruct j as [|j'].
+    + exfalso. lia.
+    + rewrite nth_tail. rewrite nth_tail. apply IH.
+      * lia.
+      * cbn [length] in LTJ. lia.
+Qed.
+
+(* The masked receive therefore invents, duplicates and reorders nothing: what it
+ * hands back is a cell of the window, and what survives is the window with that
+ * one cell deleted (15.2's rcv_shift_removes_the_index). *)
+Lemma a_hit_returns_a_queued_cell : forall mask r i,
+    rcv_match mask r = Some i ->
+    exists m, In m (mqueue r) /\ m = nth i (mqueue r) dead_cell.
+Proof.
+  intros mask r i H.
+  destruct (the_scan_delivers_the_earliest_acceptable_cell mask (mqueue r) i H)
+    as [LT _].
+  exists (nth i (mqueue r) dead_cell).
+  split; [ apply nth_in_range_is_in; exact LT | reflexivity ].
+Qed.
+
+(* ── 15.3.2 The timeout figure chooses nothing ──────────────────── *)
+
+(* tmo appears at :80-89 (the deadline) and at :114-128 (what to do after a
+ * miss).  It appears nowhere inside the scan, so no two timeout figures can
+ * select different messages: which message is decided by mask and window alone. *)
+Definition rcv_choice (t : tmo) (mask : nat) (r : msg_ring) : option nat :=
+  rcv_match mask r.
+
+Example the_timeout_figure_never_selects_a_different_message :
+    forall t1 t2 mask r, rcv_choice t1 mask r = rcv_choice t2 mask r.
+Proof. intros t1 t2 mask r. reflexivity. Qed.
+
+Inductive rcv_outcome : Type := R_OK | R_TMOUT | R_BLOCKED.
+
+(* :114-116 against :120-128. *)
+Definition miss_outcome (t : tmo) : rcv_outcome :=
+  if tmo_blocks t then R_BLOCKED else R_TMOUT.
+
+Definition rcv_service (t : tmo) (mask : nat) (r : msg_ring) : rcv_outcome :=
+  match rcv_choice t mask r with
+  | Some _ => R_OK
+  | None => miss_outcome t
+  end.
+
+Lemma a_hit_is_the_same_service_whatever_the_timeout : forall i t1 t2 mask r,
+    rcv_match mask r = Some i -> rcv_service t1 mask r = rcv_service t2 mask r.
+Proof.
+  intros i t1 t2 mask r H. unfold rcv_service, rcv_choice. rewrite H. reflexivity.
+Qed.
+
+(* A miss is the only place the figure is read, and it is read through the
+ * blocking verdict alone: two timeouts that both block, or both do not, leave
+ * a caller in the same position. *)
+Lemma a_miss_decides_only_the_giving_up : forall t1 t2 mask r,
+    tmo_blocks t1 = tmo_blocks t2 -> rcv_match mask r = None ->
+    rcv_service t1 mask r = rcv_service t2 mask r.
+Proof.
+  intros t1 t2 mask r Hb Hm. unfold rcv_service, rcv_choice. rewrite Hm.
+  unfold miss_outcome. rewrite Hb. reflexivity.
+Qed.
+
+Lemma a_poll_on_a_miss_times_out : forall mask r,
+    rcv_match mask r = None -> rcv_service TMO_POLL mask r = R_TMOUT.
+Proof. intros mask r H. unfold rcv_service, rcv_choice. rewrite H. reflexivity. Qed.
+
+Example only_a_poll_gives_up_immediately :
+    miss_outcome TMO_POLL = R_TMOUT
+    /\ miss_outcome TMO_REL = R_BLOCKED
+    /\ miss_outcome TMO_FEVR = R_BLOCKED.
+Proof. repeat split; reflexivity. Qed.
+
+Example a_miss_with_a_deadline_blocks_and_a_miss_as_a_poll_times_out :
+    rcv_service TMO_POLL O (mk_mring nil O O O) = R_TMOUT
+    /\ rcv_service TMO_REL (msgmask 1) (mk_mring nil O O O) = R_BLOCKED.
+Proof. split; reflexivity. Qed.
+
+(* rcv_msg's own reading of W tmo: zero polls, a positive figure is a relative
+ * millisecond deadline, and ANY negative figure waits forever.  Unlike the
+ * T-Kernel family of 3 and check.h:185, this service has no guard on the
+ * timeout at all -- :71-72 check only the pointer and the pid -- so nothing
+ * below -1 is refused and E_PAR can never come from tmo. *)
+Definition btron_tmo (t : Z) : tmo :=
+  if Z.ltb t Z0 then TMO_FEVR else if Z.eqb t Z0 then TMO_POLL else TMO_REL.
+
+Lemma the_btron_poll_is_exactly_zero : forall t,
+    Z.eqb t Z0 = true -> btron_tmo t = TMO_POLL.
+Proof.
+  intros t H. unfold btron_tmo.
+  destruct (Z.ltb t Z0) eqn:HL.
+  - exfalso. apply Z.ltb_lt in HL. apply Z.eqb_eq in H. lia.
+  - rewrite H. reflexivity.
+Qed.
+
+Lemma any_negative_figure_waits_forever : forall t,
+    Z.ltb t Z0 = true -> btron_tmo t = TMO_FEVR.
+Proof. intros t H. unfold btron_tmo. rewrite H. reflexivity. Qed.
+
+Example the_three_btron_timeout_cases :
+    btron_tmo (Z.opp 5) = TMO_FEVR
+    /\ btron_tmo Z0 = TMO_POLL
+    /\ btron_tmo (Z.pos 7) = TMO_REL.
+Proof. repeat split; reflexivity. Qed.
+
+(* ── 15.3.3 The deadline arithmetic of :80-89 ───────────────────── *)
+
+(* :83-84 build an absolute timespec from a relative millisecond figure:
+ *
+ *   ts.tv_sec  = now.tv_sec  + (tmo / 1000);
+ *   ts.tv_nsec = (now.tv_usec + (tmo % 1000) * 1000) * 1000;
+ *   if (ts.tv_nsec >= 1000000000L) { ts.tv_sec += 1; ts.tv_nsec -= 1000000000L; }
+ *
+ * The added time is split into whole seconds and a sub-second remainder, the
+ * remainder is normalised by ONE conditional carry, and nothing is lost.  Those
+ * four structural facts are what this section proves.
+ *
+ * The model reads the arithmetic in milliseconds rather than the C's
+ * nanoseconds: dividing :84 and :85-88 through by 1000 twice turns
+ * `(usec + rest*1000)*1000` compared with 1e9 into `now_rem + rest` compared
+ * with 1000.  That unit reduction is INFERRED -- it is a rescaling of the same
+ * test, not a transcription of a line -- while the four facts below are PROVEN
+ * of the scaled model and are exactly the facts the unscaled one must satisfy.
+ * Staying at ms scale also keeps every numeral here under 2000, so the proofs
+ * use plain arithmetic instead of the folded representation large nats get. *)
+Definition ms_per_s : nat := 1000.                                   (* :83, :84 *)
+
+Definition deadline_sec (tmo : nat) : nat := tmo / ms_per_s.          (* :83 *)
+Definition deadline_rem_ms (tmo : nat) : nat := tmo mod ms_per_s.     (* :84 *)
+Definition deadline_rest (now_rem tmo : nat) : nat :=
+  now_rem + deadline_rem_ms tmo.                                      (* :84 *)
+Definition deadline_carry (now_rem tmo : nat) : bool :=
+  Nat.leb ms_per_s (deadline_rest now_rem tmo).                       (* :85 *)
+Definition deadline_extra_sec (now_rem tmo : nat) : nat :=
+  if deadline_carry now_rem tmo then 1 else 0.                        (* :86 *)
+Definition deadline_final_ms (now_rem tmo : nat) : nat :=
+  deadline_rest now_rem tmo
+  - (if deadline_carry now_rem tmo then ms_per_s else 0).             (* :87 *)
+
+(* :83-84 split tmo without losing or inventing time. *)
+Lemma the_millisecond_split_is_exact : forall tmo,
+    ms_per_s * deadline_sec tmo + deadline_rem_ms tmo = tmo.
+Proof.
+  intros tmo. unfold deadline_sec, deadline_rem_ms, ms_per_s.
+  assert (E : tmo = 1000 * (tmo / 1000) + tmo mod 1000) by (apply Nat.div_mod_eq).
+  lia.
+Qed.
+
+(* :85's single conditional covers the whole overflow: a sub-second figure below
+ * 1000 ms plus at most 999 ms of remainder is under two seconds, so one carry
+ * suffices and the absence of a loop is correct. *)
+Lemma the_remainder_needs_at_most_one_carry : forall now_rem tmo,
+    now_rem < ms_per_s -> deadline_rest now_rem tmo < 2 * ms_per_s.
+Proof.
+  intros now_rem tmo H. unfold deadline_rest, deadline_rem_ms, ms_per_s in H |- *.
+  assert (M : tmo mod 1000 < 1000) by (apply Nat.mod_upper_bound; lia).
+  lia.
+Qed.
+
+(* Which way the conditional went, and what it therefore did. *)
+Lemma carry_gives_a_whole_second : forall now_rem tmo,
+    deadline_carry now_rem tmo = true -> ms_per_s <= deadline_rest now_rem tmo.
+Proof.
+  intros now_rem tmo HC.
+  unfold deadline_carry, deadline_rest, deadline_rem_ms, ms_per_s in HC.
+  apply Nat.leb_le in HC. exact HC.
+Qed.
+
+Lemma no_carry_leaves_a_sub_second : forall now_rem tmo,
+    deadline_carry now_rem tmo = false -> deadline_rest now_rem tmo < ms_per_s.
+Proof.
+  intros now_rem tmo HC.
+  unfold deadline_carry, deadline_rest, deadline_rem_ms, ms_per_s in HC.
+  apply Nat.leb_gt in HC. exact HC.
+Qed.
+
+Lemma deadline_extra_when_carry : forall now_rem tmo,
+    deadline_carry now_rem tmo = true -> deadline_extra_sec now_rem tmo = 1.
+Proof. intros now_rem tmo HC. unfold deadline_extra_sec. rewrite HC. reflexivity. Qed.
+
+Lemma deadline_extra_when_no_carry : forall now_rem tmo,
+    deadline_carry now_rem tmo = false -> deadline_extra_sec now_rem tmo = 0.
+Proof. intros now_rem tmo HC. unfold deadline_extra_sec. rewrite HC. reflexivity. Qed.
+
+Lemma deadline_final_when_carry : forall now_rem tmo,
+    deadline_carry now_rem tmo = true ->
+    deadline_final_ms now_rem tmo = deadline_rest now_rem tmo - ms_per_s.
+Proof. intros now_rem tmo HC. unfold deadline_final_ms. rewrite HC. reflexivity. Qed.
+
+Lemma deadline_final_when_no_carry : forall now_rem tmo,
+    deadline_carry now_rem tmo = false ->
+    deadline_final_ms now_rem tmo = deadline_rest now_rem tmo.
+Proof. intros now_rem tmo HC. unfold deadline_final_ms. rewrite HC. exact (Nat.sub_0_r _). Qed.
+
+(* The normalised remainder is a legal sub-second figure, which is what makes the
+ * timespec :88-89 hands to pthread_cond_timedwait well formed. *)
+Lemma one_conditional_normalises : forall now_rem tmo,
+    now_rem < ms_per_s -> deadline_final_ms now_rem tmo < ms_per_s.
+Proof.
+  intros now_rem tmo H.
+  destruct (deadline_carry now_rem tmo) eqn:HC.
+  - rewrite (deadline_final_when_carry now_rem tmo HC).
+    assert (U : ms_per_s <= deadline_rest now_rem tmo)
+      by (apply carry_gives_a_whole_second; exact HC).
+    assert (B : deadline_rest now_rem tmo < 2 * ms_per_s)
+      by (apply the_remainder_needs_at_most_one_carry; exact H).
+    lia.
+  - rewrite (deadline_final_when_no_carry now_rem tmo HC).
+    apply (no_carry_leaves_a_sub_second now_rem tmo HC).
+Qed.
+
+(* The normalisation is lossless: the (:86,:87) pair names the same instant as
+ * the un-normalised sum added to the whole seconds :83 took out.  No bound on
+ * now_rem is needed here -- the carry branch is only taken when there really is
+ * a whole second to subtract. *)
+Lemma the_deadline_is_the_same_instant : forall now_rem tmo,
+    ms_per_s * (deadline_sec tmo + deadline_extra_sec now_rem tmo)
+    + deadline_final_ms now_rem tmo
+    = deadline_rest now_rem tmo + ms_per_s * deadline_sec tmo.
+Proof.
+  intros now_rem tmo.
+  destruct (deadline_carry now_rem tmo) eqn:HC.
+  - rewrite (deadline_extra_when_carry now_rem tmo HC),
+             (deadline_final_when_carry now_rem tmo HC).
+    rewrite Nat.mul_add_distr_l, Nat.mul_1_r.
+    assert (U : ms_per_s <= deadline_rest now_rem tmo)
+      by (apply carry_gives_a_whole_second; exact HC).
+    lia.
+  - rewrite (deadline_extra_when_no_carry now_rem tmo HC),
+             (deadline_final_when_no_carry now_rem tmo HC).
+    lia.
+Qed.
+
+Example the_carry_case_is_a_figure_a_real_call_can_reach :
+    deadline_carry 999 999 = true
+    /\ deadline_extra_sec 999 999 = 1
+    /\ deadline_final_ms 999 999 = 998.
+Proof. repeat split; reflexivity. Qed.
+
+Example the_no_carry_case_needs_no_normalisation :
+    deadline_carry 250 400 = false
+    /\ deadline_extra_sec 250 400 = 0
+    /\ deadline_final_ms 250 400 = 650.
+Proof. repeat split; reflexivity. Qed.
+
+(* The test is `>=`, not `>`, so a remainder that lands exactly on a second
+ * becomes a carry and a zero sub-second field rather than an illegal 1000. *)
+Example a_remainder_of_exactly_one_second_carries :
+    deadline_carry 1 999 = true
+    /\ deadline_extra_sec 1 999 = 1
+    /\ deadline_final_ms 1 999 = 0
+    /\ deadline_sec 999 = 0.
+Proof. repeat split; reflexivity. Qed.
+
+(* :80 gates the whole deadline block on `tmo > 0`, which among the three figures
+ * this service recognises is true of TMO_REL alone: a poll never builds a
+ * timespec, and the forever path leaves `ts` uninitialised but never reads it,
+ * because :126-128 waits with pthread_cond_wait.  Note this is the arithmetic
+ * reading of the figure, whereas check.h:254-258 tests the sentinel; the two
+ * tests disagree exactly on TMO_FEVR, and each is faithful to the code it models
+ * (§3's positive_test_misclassifies_fevr). *)
+Definition deadline_requested (t : tmo) : bool := Z.ltb Z0 (tmo_code t).
+
+Lemma only_a_relative_figure_builds_a_deadline :
+    deadline_requested TMO_REL = true
+    /\ deadline_requested TMO_POLL = false
+    /\ deadline_requested TMO_FEVR = false.
+Proof. repeat split; reflexivity. Qed.
+
+(* The figures that reach a wait are exactly the figures that block, and only
+ * TMO_REL has a deadline there to time out against. *)
+Lemma the_blocking_figures_are_the_figures_that_wait : forall t,
+    tmo_blocks t = true ->
+    match t with
+    | TMO_REL => deadline_requested t = true
+    | TMO_FEVR => deadline_requested t = false
+    | TMO_POLL => False
+    end.
+Proof.
+  destruct t; intros H; cbn [tmo_blocks] in H.
+  - discriminate.
+  - reflexivity.
+  - reflexivity.
 Qed.

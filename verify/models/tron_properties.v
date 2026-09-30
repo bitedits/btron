@@ -1868,5 +1868,786 @@ Lemma make_wait_leaves_dead_states_alone :
 Proof. repeat split; reflexivity. Qed.
 
 
-(* APPEND-12b *)
+(* ── 12.3 The release matrix ───────────────────────────────────────── *)
+
+(* wait.c:41-76 plus wait.c:125-133 give five release paths.  They differ in
+ * exactly four independent observations, recorded here in source order.  The
+ * C spellings below drop the outer paren of a pointer deref, because an
+ * asterisk right after one opens a nested comment in this language:
+ *   ef_timer   timer_delete of the wtmeb field       wait.c:43
+ *   ef_unqueue QueRemove of the tskque field         wait.c:44
+ *   ef_hook    the object's rel_wai_hook on the TCB  wait.c:64, wait.c:73
+ *   ef_write   the TCB's wercd slot                  wait.c:51,56,66,132
+ *              None means the path writes nothing at all. *)
+Record effect : Type := mk_eff {
+    ef_timer   : bool;
+    ef_unqueue : bool;
+    ef_hook    : bool;
+    ef_write   : option er
+  }.
+
+Inductive relkind : Type :=
+  | RK_release                     (* wait.c:41-47, the Inline body alone *)
+  | RK_ok                          (* wait.c:48-52 *)
+  | RK_oke  (e : er)               (* wait.c:54-57 *)
+  | RK_ng   (e : er)               (* wait.c:60-67 *)
+  | RK_tmout                       (* wait.c:69-76 *)
+  | RK_del.                        (* wait.c:125-133, the delete broadcast *)
+
+Definition effect_of (k : relkind) : effect :=
+  match k with
+  | RK_release   => mk_eff true true false None
+  | RK_ok        => mk_eff true true false (Some E_OK)
+  | RK_oke e     => mk_eff true true false (Some e)
+  | RK_ng e      => mk_eff true true true (Some e)
+  | RK_tmout     => mk_eff false true true None
+  | RK_del       => mk_eff true true false (Some E_DLT)
+  end.
+
+Definition silent_kind (k : relkind) : bool :=
+  match k with RK_release | RK_tmout => true | _ => false end.
+
+Definition hooked_kind (k : relkind) : bool :=
+  match k with RK_ng _ | RK_tmout => true | _ => false end.
+
+(* Every path unlinks.  There is no release that leaves the TCB linked into an
+ * object's wait queue, which is what lets the same TCB be re-queued by the next
+ * gcb_make_wait without corrupting the list. *)
+Lemma every_release_unqueues : forall k, ef_unqueue (effect_of k) = true.
+Proof. destruct k; reflexivity. Qed.
+
+(* The two hooks and the two silent paths are different coordinates: RK_ng is
+ * hooked AND writing, RK_tmout is hooked AND silent, RK_del writes and is
+ * unhooked.  So "ran the abort hook" and "wrote the caller's slot" are not the
+ * same observation, and no release is both silent and unhooked by accident.
+ * The option is read with a match rather than with an equation: silent_kind is
+ * a boolean, and bool is not Prop here. *)
+Lemma classification_of_hooks : forall k, ef_hook (effect_of k) = hooked_kind k.
+Proof. destruct k; reflexivity. Qed.
+
+Lemma classification_of_silence : forall k,
+    match ef_write (effect_of k) with None => true | Some _ => false end
+    = silent_kind k.
+Proof. destruct k; reflexivity. Qed.
+
+Lemma timeout_is_the_only_path_that_keeps_its_timer : forall k,
+    ef_timer (effect_of k) = false <-> k = RK_tmout.
+Proof.
+  destruct k; split; intros H; try discriminate H; try reflexivity.
+Qed.
+
+(* Two code paths, one observable: the delete broadcast is exactly a release
+ * that carries E_DLT, and a grant is exactly a release that carries E_OK.  A
+ * caller that ignores the receipt cannot tell deletion from granting at all. *)
+Lemma delete_collapses_into_a_written_receipt :
+    effect_of RK_del = effect_of (RK_oke E_DLT) /\
+    effect_of RK_ok = effect_of (RK_oke E_OK).
+Proof. split; reflexivity. Qed.
+
+(* wait_release_ok_ercd has exactly ONE call site in the kernel: task_sync.c:348
+ * in _tk_ssig_tsk, where the value handed over is (ER)(tcb->tskevt | evtmsk) --
+ * the OR'd task-event bits, not an error at all.  Together with _tk_can_wup
+ * (task_sync.c:243-266), which returns a count in the same word, the ercd
+ * cursor is a data channel as much as an error channel.  The two uses stay
+ * distinguishable because every E_* figure is non-positive. *)
+Lemma every_receipt_is_nonpositive : forall e, Z.leb (er_code e) Z0 = true.
+Proof. destruct e; vm_compute; reflexivity. Qed.
+
+Lemma a_count_is_not_a_receipt : forall n, 0 < n -> Z.ltb Z0 (Z.of_nat n) = true.
+Proof. intros n H. apply Z.ltb_lt. change ((0 < Z.of_nat n)%Z). lia. Qed.
+
+(* ── 12.4 The two-phase write: where a blocked call's receipt comes from ── *)
+
+(* wait.c:166-177 (gcb_make_wait_with_diswai) writes the caller's OWN local
+ * through the cursor ctxtsk->wercd BEFORE it decides whether to enqueue:
+ *   if (is_diswai(...)) *wercd = E_DISWAI;
+ *   else { *wercd = E_TMOUT; if (tmout != TMO_POL) gcb_make_wait(...); }
+ * So E_TMOUT is never produced by a release: it is the pre-write that the
+ * silent timeout release (RK_tmout) leaves standing.  A poll's E_TMOUT comes
+ * from the guard alone, because a poll never enqueues at all. *)
+Definition prewrite (diswai : bool) : er := if diswai then E_DISWAI else E_TMOUT.
+
+Definition enqueues (diswai : bool) (t : tmo) : bool := negb diswai && tmo_blocks t.
+
+Lemma poll_never_enqueues : forall d, enqueues d TMO_POLL = false.
+Proof. intros d. unfold enqueues, tmo_blocks. destruct d; reflexivity. Qed.
+
+Lemma diswai_never_enqueues : forall t, enqueues true t = false.
+Proof. intros t. unfold enqueues. destruct t; reflexivity. Qed.
+
+Lemma enqueues_is_exactly_blocking : forall t, enqueues false t = tmo_blocks t.
+Proof. intros t. unfold enqueues. destruct t; reflexivity. Qed.
+
+Definition final_receipt (k : relkind) (pre : er) : er :=
+  match ef_write (effect_of k) with Some e => e | None => pre end.
+
+Lemma a_writing_release_overrides_the_prewrite : forall e pre,
+    final_receipt (RK_oke e) pre = e /\ final_receipt (RK_ng e) pre = e /\
+    final_receipt RK_ok pre = E_OK /\ final_receipt RK_del pre = E_DLT.
+Proof. intros e pre. repeat split; reflexivity. Qed.
+
+Lemma a_silent_release_keeps_the_prewrite : forall pre,
+    final_receipt RK_tmout pre = pre /\ final_receipt RK_release pre = pre.
+Proof. intros pre. split; reflexivity. Qed.
+
+(* The two halves together are the whole reason the timeout path can be silent.
+ * Delete either half and the composition breaks: without the pre-write a
+ * timed-out wait reports success, and without the silent release a poll's
+ * E_TMOUT would be overwritten by whatever the object later decided. *)
+Lemma timeout_needs_the_prewrite :
+    final_receipt RK_tmout (prewrite false) = E_TMOUT /\
+    final_receipt RK_tmout E_OK = E_OK.
+Proof. split; reflexivity. Qed.
+
+Lemma diswai_receipt_survives_because_nothing_enqueues :
+    prewrite true = E_DISWAI /\ final_receipt RK_release (prewrite true) = E_DISWAI.
+Proof. split; reflexivity. Qed.
+
+(* The cursor pair a blocked call leaves behind: the state coordinate and the
+ * receipt slot.  A release is a function of the effect and the slot ONLY -- it
+ * never consults the object, and the object cannot see whether the slot was
+ * pre-written.  This is the InterCore shape exactly: one domain registers a
+ * location, the other writes into it, and the roles never swap. *)
+Definition wcell : Type := tstat * (option er).
+
+Definition block_cell (t : tstat) (pre : er) : wcell := (make_wait t, Some pre).
+
+Definition release_cell (k : relkind) (c : wcell) : wcell :=
+  (make_non_wait (fst c),
+   match ef_write (effect_of k) with Some e => Some e | None => snd c end).
+
+Lemma release_cell_state_is_independent_of_the_object : forall k s slot,
+    fst (release_cell k (s, slot)) = make_non_wait s.
+Proof. intros k s slot. unfold release_cell. cbn [fst]. reflexivity. Qed.
+
+Lemma release_cell_delivers_at_the_registered_slot : forall k s slot,
+    snd (release_cell k (s, slot)) =
+    match ef_write (effect_of k) with Some e => Some e | None => slot end.
+Proof.
+  intros k s slot. unfold release_cell. destruct (ef_write (effect_of k)); reflexivity.
+Qed.
+
+Lemma timeout_delivers_the_prewrite :
+    snd (release_cell RK_tmout (block_cell S_READY (prewrite false))) = Some E_TMOUT.
+Proof. vm_compute. reflexivity. Qed.
+
+Lemma grant_delivers_E_OK :
+    snd (release_cell RK_ok (block_cell S_READY (prewrite false))) = Some E_OK.
+Proof. vm_compute. reflexivity. Qed.
+
+Lemma delete_delivers_E_DLT :
+    snd (release_cell RK_del (block_cell S_WAITSUS (prewrite false))) = Some E_DLT.
+Proof. vm_compute. reflexivity. Qed.
+
+Lemma blocked_from_ready_or_suspended_never_stays_waiting :
+    forall k, bit_any (bits (fst (release_cell k (block_cell S_READY (prewrite false))))) ts_wait = false /\
+              bit_any (bits (fst (release_cell k (block_cell S_SUSPEND (prewrite false))))) ts_wait = false /\
+              bit_any (bits (fst (release_cell k (block_cell S_READY (prewrite false))))) ts_suspend = false /\
+              bit_any (bits (fst (release_cell k (block_cell S_SUSPEND (prewrite false))))) ts_suspend = true.
+Proof. repeat split; vm_compute; reflexivity. Qed.
+
+(* ── 13. Mailbox: the frontier rendezvous ───────────────────────── *)
+
+(* mailbox.c:239-241 is the whole interesting part of the send.  Quoted in
+ * prose, because a C pointer cast contains the two characters that close a
+ * comment in this language: if the wait queue is not empty, take its head as
+ * the TCB, assign the message pointer through that TCB's winfo.mbx.ppk_msg,
+ * and call wait_release_ok on it.  Otherwise connect the message to the queue.
+
+ * A send does not deposit a message in the object and then wake somebody; it
+ * writes the item into a cursor the receiver registered when it blocked
+ * (mailbox.c:310) and releases the receiver through the grant path of §12.3.
+ * So the mailbox is one queue plus one cursor, and the cursor is the only
+ * place the two domains touch.  The write and the release are separate
+ * statements in C, so they are separate functions here: the transient state
+ * the kernel passes through is observable in the model and named by FR_full. *)
+Inductive frontier : Set :=
+  | FR_free : frontier                      (* nobody registered at the cursor *)
+  | FR_wait : frontier                      (* a receiver is blocked, nothing delivered *)
+  | FR_full : nat -> frontier.              (* the sender wrote the item in *)
+
+(* isQueEmpty is a pointer compare (mailbox.c:239), read here off the cursor. *)
+Definition has_receiver (f : frontier) : bool :=
+  match f with FR_wait | FR_full _ => true | FR_free => false end.
+
+Definition waiting (f : frontier) : bool :=
+  match f with FR_wait => true | _ => false end.
+
+Definition has_item (f : frontier) : bool :=
+  match f with FR_full _ => true | _ => false end.
+
+Definition item_of (f : frontier) : option nat :=
+  match f with FR_full msg => Some msg | _ => None end.
+
+Lemma has_receiver_is_wait_or_full : forall f, has_receiver f = orb (waiting f) (has_item f).
+Proof. destruct f; reflexivity. Qed.
+
+Lemma waiting_excludes_item : forall f, andb (waiting f) (has_item f) = false.
+Proof. destruct f; reflexivity. Qed.
+
+Lemma item_of_none_when_free : forall f, item_of f = None <-> has_item f = false.
+Proof.
+  destruct f as [|_|msg]; cbn [item_of has_item]; split;
+    intros H; try discriminate H; reflexivity.
+Qed.
+
+(* The write, mailbox.c:240.  Only a blocked receiver has a cursor to write
+ * into; against a free frontier -- or a cursor already full, which the kernel
+ * can never present twice in one critical section -- the step is the identity. *)
+Definition snd_write (msg : nat) (f : frontier) : frontier :=
+  match f with
+  | FR_wait => FR_full msg
+  | _       => f
+  end.
+
+(* The release, mailbox.c:241 -- wait_release_ok, i.e. RK_ok of §12.3.  The
+ * receiver leaves with the item, so the cursor is empty behind it. *)
+Definition retire (f : frontier) : frontier :=
+  match f with FR_full _ => FR_free | _ => f end.
+
+Lemma retire_empties_a_delivered_cursor : forall msg, retire (snd_write msg FR_wait) = FR_free.
+Proof. intros msg. reflexivity. Qed.
+
+Lemma retire_keeps_a_free_cursor : retire FR_free = FR_free.
+Proof. reflexivity. Qed.
+
+Lemma retire_is_inert_on_wait : retire FR_wait = FR_wait.
+Proof. reflexivity. Qed.
+
+Lemma retire_clears_the_item : forall f, item_of (retire f) = None.
+Proof. destruct f; reflexivity. Qed.
+
+(* A retire leaves nobody behind: the receiver that took the item is gone from
+ * the cursor, and the only cursor that survives is one still waiting. *)
+Lemma retire_leaves_only_a_waiter : forall f, has_receiver (retire f) = waiting f.
+Proof. destruct f; reflexivity. Qed.
+
+(* The one object plus the one cursor it owns. *)
+Definition mbx_cell : Set := mbx * frontier.
+
+(* mailbox.c:247-253, the FIFO tail attach: nextmsg(tail) = msg; tail = msg. *)
+Definition enqueue (q : list nat) (msg : nat) : list nat := q ++ [msg].
+
+(* mailbox.c:244-246, queue_insert_mpri.  The chain is kept in descending
+ * msgpri, so the new item goes before the first queued message of strictly
+ * lower priority -- which is what makes headmsg() (and therefore tk_rcv_mbx,
+ * which only ever looks at the head) return the best available message.
+ * pri is the message's own priority: a function, because the model has no
+ * message payload to project. *)
+Fixpoint insert_mpri (pri : nat -> nat) (msg : nat) (q : list nat) : list nat :=
+  match q with
+  | nil => msg :: nil
+  | m :: rest => if Nat.ltb (pri m) (pri msg)
+                 then msg :: q
+                 else m :: insert_mpri pri msg rest
+  end.
+
+Lemma insert_mpri_length : forall pri msg q,
+    length (insert_mpri pri msg q) = S (length q).
+Proof.
+  intros pri msg q. induction q as [|a rest IH]; cbn [insert_mpri length].
+  - reflexivity.
+  - destruct (Nat.ltb (pri a) (pri msg)); cbn [length]; [ | rewrite IH]; reflexivity.
+Qed.
+
+Lemma insert_mpri_memb : forall pri msg q, memb msg (insert_mpri pri msg q) = true.
+Proof.
+  intros pri msg q. induction q as [|a rest IH]; cbn [insert_mpri]; unfold memb.
+  - cbn [existsb]. rewrite Nat.eqb_refl. reflexivity.
+  - destruct (Nat.ltb (pri a) (pri msg)).
+    + cbn [existsb]. rewrite Nat.eqb_refl. cbn [orb]. reflexivity.
+    + cbn [existsb]. destruct (Nat.eqb msg a); [cbn [orb]; reflexivity | exact IH].
+Qed.
+
+(* The frontier of a priority-ordered chain is the best of what is there.  This
+ * is why the receive side can afford to look only at headmsg (mailbox.c:302). *)
+Lemma insert_mpri_head_is_best : forall pri msg q,
+    hd msg (insert_mpri pri msg q) =
+    if Nat.ltb (pri (hd msg q)) (pri msg) then msg else hd msg q.
+Proof.
+  intros pri msg q. destruct q as [|a rest].
+  - cbn [insert_mpri hd]. destruct (Nat.ltb (pri msg) (pri msg)); reflexivity.
+  - cbn [insert_mpri hd]. destruct (Nat.ltb (pri a) (pri msg)); reflexivity.
+Qed.
+Lemma enqueue_is_append_of_one : forall q msg, length (enqueue q msg) = S (length q).
+Proof. intros q msg. unfold enqueue. rewrite length_app. cbn [length]. lia. Qed.
+
+(* The two chain moves are one function decided by the attribute
+ * (mbxcb->mbxatr & TA_MPRI), and the FIFO mailbox is the branch that never
+ * reorders: its head is the oldest item, always. *)
+Definition chain_move (mpri : bool) (pri : nat -> nat) (msg : nat) (m : mbx) : list nat :=
+  if mpri then insert_mpri pri msg (m_chain m) else enqueue (m_chain m) msg.
+
+Lemma chain_move_length : forall mpri pri msg m,
+    length (chain_move mpri pri msg m) = S (length (m_chain m)).
+Proof.
+  intros mpri pri msg m. unfold chain_move. destruct mpri.
+  - apply insert_mpri_length.
+  - apply enqueue_is_append_of_one.
+Qed.
+
+(* wait.c:44 plus mailbox.c:241: the receiver that took the message leaves the
+ * wait queue; the object keeps its order. *)
+Definition drain_head (m : mbx) : mbx :=
+  mk_mbx (m_id m) (m_mpri m) (m_chain m)
+         (match m_wait m with nil => nil | _ :: rest => rest end).
+
+Lemma drain_head_keeps_the_chain : forall m, m_chain (drain_head m) = m_chain m.
+Proof. intros m. reflexivity. Qed.
+
+Lemma drain_head_shortens_the_wait : forall m,
+    length (m_wait (drain_head m)) = Nat.pred (length (m_wait m)).
+Proof.
+  intros m. unfold drain_head. cbn [m_wait].
+  destruct (m_wait m); reflexivity.
+Qed.
+
+Lemma drain_head_is_inert_on_an_empty_queue : forall m, m_wait m = nil -> drain_head m = m.
+Proof.
+  intros m E. unfold drain_head.
+  destruct m as [mi mm mc mw]; cbn [m_wait] in E; rewrite E; reflexivity.
+Qed.
+
+(* The cascade of _tk_snd_mbx: CHECK_MBXID (mailbox.c:225), the stored marker
+ * (:229), and the TA_MPRI attribute test on the message's own priority
+ * (:234-236).  The order is the order the receipts are reported in, and the
+ * third guard exists only for a priority-ordered mailbox. *)
+Definition mbx_snd_guards (st : kst) (mpri : bool) (id msgpri : nat) : list (bool * er) :=
+  (chk_id min_mbxid num_mbx id, E_ID) ::
+  (mbx_used st (index_of min_mbxid id), E_NOEXS) ::
+  (orb (negb mpri) (Nat.ltb 0 msgpri), E_PAR) :: nil.
+
+(* E_PAR on a send is unreachable for a FIFO mailbox: the attribute decides
+ * whether the guard can fire at all.  The contrapositive is the load-bearing
+ * half -- a receipt of E_PAR is evidence of TA_MPRI, not merely of a bad
+ * message. *)
+Lemma snd_E_PAR_is_evidence_of_mpri : forall st mpri id msgpri,
+    first_bad (mbx_snd_guards st mpri id msgpri) = Some E_PAR ->
+    mpri = true /\ Nat.ltb 0 msgpri = false.
+Proof.
+  intros st mpri id msgpri H. unfold mbx_snd_guards in H.
+  destruct (chk_id min_mbxid num_mbx id) eqn:C;
+  destruct (mbx_used st (index_of min_mbxid id)) eqn:U;
+  destruct mpri eqn:M;
+  destruct (Nat.ltb 0 msgpri) eqn:P;
+  cbn [first_bad negb orb] in H;
+  try discriminate H;
+  split; first [reflexivity | assumption].
+Qed.
+
+(* msgpri <= 0 is the C test (mailbox.c:235); on the naturals the model can
+ * name, that is exactly the figure 0, so the guard is a positivity test and
+ * not a range test.  The guard itself is the attribute-conditional third
+ * element of the cascade above, factored out so its truth table can be stated
+ * without a kernel state. *)
+Definition snd_attr_guard (mpri : bool) (msgpri : nat) : bool :=
+  orb (negb mpri) (Nat.ltb 0 msgpri).
+
+Lemma fifo_admits_every_priority : forall p, snd_attr_guard false p = true.
+Proof. intros p. unfold snd_attr_guard. reflexivity. Qed.
+
+Lemma mpri_admits_only_positive : forall p, snd_attr_guard true p = true <-> 0 < p.
+Proof. intros p. unfold snd_attr_guard. apply Nat.ltb_lt. Qed.
+
+(* One figure, two verdicts: the same message priority is refused by a
+ * TA_MPRI mailbox and admitted by a FIFO one. *)
+Lemma zero_priority_is_refused_only_by_mpri :
+    snd_attr_guard true 0 = false /\ snd_attr_guard false 0 = true.
+Proof. split; reflexivity. Qed.
+
+(* The send itself, mailbox.c:222-267, as one step on the cell.  The two
+ * branches are the two statements of the C if: the rendezvous drains the head
+ * of the wait queue and hands the item over the cursor (and the item is
+ * returned here so the write stays observable after the cursor is retired),
+ * while the queueing branch moves the chain and leaves the cursor alone. *)
+Definition mbx_snd (pri : nat -> nat) (msg : nat) (mc : mbx_cell) : mbx_cell * option nat :=
+  match mc with
+  | (m, FR_wait) => ((drain_head m, retire (snd_write msg FR_wait)), Some msg)
+  | (m, f) => ((mk_mbx (m_id m) (m_mpri m) (chain_move (m_mpri m) pri msg m) (m_wait m), f), None)
+  end.
+
+(* The send's write and the send's release, read back off the step. *)
+Lemma snd_rendezvous_never_queues : forall pri msg m,
+    m_chain (fst (fst (mbx_snd pri msg (m, FR_wait)))) = m_chain m.
+Proof. intros pri msg m. reflexivity. Qed.
+
+Lemma snd_rendezvous_delivers_the_item : forall pri msg m,
+    snd (mbx_snd pri msg (m, FR_wait)) = Some msg.
+Proof. intros pri msg m. reflexivity. Qed.
+
+Lemma snd_rendezvous_leaves_an_empty_cursor : forall pri msg m,
+    snd (fst (mbx_snd pri msg (m, FR_wait))) = FR_free.
+Proof. intros pri msg m. reflexivity. Qed.
+
+Lemma snd_rendezvous_drains_one_receiver : forall pri msg m,
+    length (m_wait (fst (fst (mbx_snd pri msg (m, FR_wait)))))
+    = Nat.pred (length (m_wait m)).
+Proof.
+  intros pri msg m. unfold mbx_snd. cbn [fst snd].
+  apply drain_head_shortens_the_wait.
+Qed.
+
+Lemma snd_writes_through_the_cursor_before_retiring : forall pri msg m,
+    item_of (snd_write msg FR_wait) = Some msg /\ item_of (snd (fst (mbx_snd pri msg (m, FR_wait)))) = None.
+Proof. split; reflexivity. Qed.
+
+Lemma snd_against_a_free_frontier_queues : forall pri msg m,
+    snd (fst (mbx_snd pri msg (m, FR_free))) = FR_free /\
+    m_chain (fst (fst (mbx_snd pri msg (m, FR_free)))) = chain_move (m_mpri m) pri msg m.
+Proof. split; reflexivity. Qed.
+
+Lemma snd_queues_exactly_one_item : forall pri msg m,
+    m_chain (fst (fst (mbx_snd pri msg (m, FR_free)))) = chain_move (m_mpri m) pri msg m /\
+    length (m_chain (fst (fst (mbx_snd pri msg (m, FR_free))))) = S (length (m_chain m)).
+Proof.
+  intros pri msg m. split; [reflexivity | apply chain_move_length].
+Qed.
+
+Lemma snd_against_a_free_frontier_delivers_nothing : forall pri msg m,
+    snd (mbx_snd pri msg (m, FR_free)) = None.
+Proof. intros pri msg m. reflexivity. Qed.
+
+(* The conservation law.  no_stalled says a message only sits in the chain
+ * while nobody is waiting at the cursor -- which is exactly the shape of the
+ * C if at mailbox.c:239, one branch taken to the exclusion of the other.
+ * no_delivered says the transient FR_full cursor is never left standing
+ * between two calls, because the write and the release are in the same
+ * critical section. *)
+Definition no_stalled (mc : mbx_cell) : bool :=
+  negb (andb (has_receiver (snd mc)) (negb (nilp (m_chain (fst mc))))).
+
+Definition no_delivered (mc : mbx_cell) : bool := negb (has_item (snd mc)).
+
+Definition mbx_inv (mc : mbx_cell) : bool := andb (no_stalled mc) (no_delivered mc).
+
+(* Each half of the invariant can be refuted from the shape of the cell alone,
+ * which is what makes the impossible cases of the two preservation proofs
+ * decidable without looking at the chain. *)
+Lemma full_cursor_is_never_wellformed : forall m x, mbx_inv (m, FR_full x) = false.
+Proof.
+  intros m x. unfold mbx_inv, no_delivered, has_item.
+  destruct (no_stalled (m, FR_full x)); reflexivity.
+Qed.
+
+Lemma waiting_with_a_message_is_never_wellformed : forall mi mm mw msg rest,
+    mbx_inv (mk_mbx mi mm (msg :: rest) mw, FR_wait) = false.
+Proof.
+  intros mi mm mw msg rest. unfold mbx_inv, no_stalled, no_delivered.
+  cbn [m_chain nilp has_receiver has_item negb andb]. reflexivity.
+Qed.
+
+Lemma mbx_snd_preserves_the_invariant : forall pri msg mc,
+    mbx_inv mc = true -> mbx_inv (fst (mbx_snd pri msg mc)) = true.
+Proof.
+  intros pri msg mc H. destruct mc as [m f]. destruct f as [| |x].
+  - reflexivity.
+  - reflexivity.
+  - rewrite (full_cursor_is_never_wellformed m x) in H. discriminate H.
+Qed.
+
+(* The receive, mailbox.c:279-317.  CHECK_MBXID, CHECK_TMOUT, CHECK_DISPATCH,
+ * then the stored marker, then the head-or-block split.  CHECK_DISPATCH
+ * (check.h:254-258) refuses anything but a poll while dispatch is disabled,
+ * and §3 proved that the shipped test is against the TMO_POL sentinel, so the
+ * guard below reads tmo_blocks rather than a sign test. *)
+Definition rcv_dispatch_guard (indp : bool) (t : tmo) : bool :=
+  orb indp (negb (tmo_blocks t)).
+
+Definition mbx_rcv_guards (st : kst) (id : nat) (t : tmo) : list (bool * er) :=
+  (chk_id min_mbxid num_mbx id, E_ID) ::
+  (mbx_used st (index_of min_mbxid id), E_NOEXS) ::
+  (rcv_dispatch_guard (b_indp st) t, E_CTX) :: nil.
+
+Lemma rcv_E_CTX_is_a_context_refusal : forall st id t,
+    first_bad (mbx_rcv_guards st id t) = Some E_CTX ->
+    chk_id min_mbxid num_mbx id = true /\ mbx_used st (index_of min_mbxid id) = true /\
+    b_indp st = false /\ tmo_blocks t = true.
+Proof.
+  intros st id t H. unfold mbx_rcv_guards, rcv_dispatch_guard in H.
+  set (c := chk_id min_mbxid num_mbx id) in *.
+  set (u := mbx_used st (index_of min_mbxid id)) in *.
+  set (i := b_indp st) in *.
+  set (b := tmo_blocks t) in *.
+  destruct c; destruct u; destruct i; destruct b;
+  cbn [first_bad negb orb] in H;
+  try discriminate H;
+  repeat split; reflexivity.
+Qed.
+
+(* A permanent wait is refused in a dispatch-disabled context exactly like a
+ * timed one: the guard reads the sentinel, and TMO_FEVR is not the sentinel.
+ * An arithmetic sign test would have let it through (positive_test_misclassifies_fevr). *)
+Lemma fevr_is_no_escape_from_dispatch : forall st,
+    b_indp st = false -> rcv_dispatch_guard false TMO_FEVR = false.
+Proof. intros st _. reflexivity. Qed.
+
+Lemma poll_always_passes_the_dispatch_guard : forall indp,
+    rcv_dispatch_guard indp TMO_POLL = true.
+Proof. intros indp. unfold rcv_dispatch_guard, tmo_blocks. destruct indp; reflexivity. Qed.
+
+Lemma rcv_guards_admit_a_blocking_wait_only_alone : forall st id t,
+    b_indp st = true -> first_bad (mbx_rcv_guards st id t) = None <->
+    chk_id min_mbxid num_mbx id = true /\ mbx_used st (index_of min_mbxid id) = true.
+Proof.
+  intros st id t I. unfold mbx_rcv_guards, rcv_dispatch_guard.
+  rewrite I. cbn [orb negb tmo_blocks].
+  destruct (chk_id min_mbxid num_mbx id);
+  destruct (mbx_used st (index_of min_mbxid id)); cbn [first_bad];
+  split; intros H.
+  - split; reflexivity.
+  - reflexivity.
+  - discriminate H.
+  - destruct H; discriminate.
+  - discriminate H.
+  - destruct H; discriminate.
+  - discriminate H.
+  - destruct H; discriminate.
+Qed.
+
+(* The receiver's own local, as an outcome record.  The head-take at
+ * mailbox.c:302-304 writes it directly; a blocked call leaves it held by the
+ * cursor and a later sender writes it from the other side (mailbox.c:240).
+ * Reading the two as one observable is the point of caller_item. *)
+Record rcv_res : Type := mk_rcv_res {
+    rr_cell : mbx_cell;
+    rr_item : option nat;
+    rr_ercd : er
+  }.
+
+Definition caller_item (res : rcv_res) : option nat :=
+  match rr_item res with
+  | Some msg => Some msg
+  | None => item_of (snd (rr_cell res))
+  end.
+
+Definition mbx_rcv (diswai : bool) (t : tmo) (mc : mbx_cell) : rcv_res :=
+  match mc with
+  | (m, f) => match m_chain m with
+              | msg :: rest =>
+                  mk_rcv_res (mk_mbx (m_id m) (m_mpri m) rest (m_wait m), f) (Some msg) E_OK
+              | nil =>
+                  if enqueues diswai t
+                  then mk_rcv_res (m, FR_wait) None (prewrite diswai)
+                  else mk_rcv_res (m, f) None (prewrite diswai)
+              end
+  end.
+
+Lemma rcv_take_is_E_OK : forall diswai t msg rest m f,
+    rr_ercd (mbx_rcv diswai t (mk_mbx (m_id m) (m_mpri m) (msg :: rest) (m_wait m), f)) = E_OK.
+Proof. intros diswai t msg rest m f. reflexivity. Qed.
+
+Lemma rcv_take_returns_the_head : forall diswai t msg rest m f,
+    caller_item (mbx_rcv diswai t (mk_mbx (m_id m) (m_mpri m) (msg :: rest) (m_wait m), f))
+    = Some msg.
+Proof. intros diswai t msg rest m f. reflexivity. Qed.
+
+Lemma rcv_take_shortens_the_chain : forall diswai t msg rest m f,
+    m_chain (fst (rr_cell (mbx_rcv diswai t (mk_mbx (m_id m) (m_mpri m) (msg :: rest) (m_wait m), f))))
+    = rest.
+Proof. intros diswai t msg rest m f. reflexivity. Qed.
+
+Lemma rcv_take_leaves_the_wait_queue_alone : forall diswai t msg rest m f,
+    m_wait (fst (rr_cell (mbx_rcv diswai t (mk_mbx (m_id m) (m_mpri m) (msg :: rest) (m_wait m), f))))
+    = m_wait m.
+Proof. intros diswai t msg rest m f. reflexivity. Qed.
+
+(* The receipt of a call that did not take a message is the pre-write of
+ * §12.4 in both cases, whether or not the call went to sleep: polling and
+ * blocking differ in the cursor, not in the figure. *)
+Lemma rcv_without_a_message_pre_writes : forall diswai t m f,
+    m_chain m = nil ->
+    rr_ercd (mbx_rcv diswai t (m, f)) = prewrite diswai.
+Proof.
+  intros diswai t m f E. unfold mbx_rcv. rewrite E.
+  destruct (enqueues diswai t); reflexivity.
+Qed.
+
+Lemma poll_registers_nobody : forall m f,
+    m_chain m = nil -> rr_cell (mbx_rcv false TMO_POLL (m, f)) = (m, f).
+Proof.
+  intros m f E. unfold mbx_rcv. rewrite E, poll_never_enqueues. reflexivity.
+Qed.
+
+Lemma diswai_registers_nobody : forall t m f,
+    m_chain m = nil -> rr_cell (mbx_rcv true t (m, f)) = (m, f).
+Proof.
+  intros t m f E. unfold mbx_rcv. rewrite E, diswai_never_enqueues. reflexivity.
+Qed.
+
+Lemma blocking_rcv_registers_the_cursor : forall m f,
+    m_chain m = nil -> rr_cell (mbx_rcv false TMO_REL (m, f)) = (m, FR_wait).
+Proof.
+  intros m f E. unfold mbx_rcv. rewrite E, enqueues_is_exactly_blocking.
+  cbn [tmo_blocks]. reflexivity.
+Qed.
+
+Lemma registered_rcv_delivers_nothing_yet : forall m,
+    m_chain m = nil -> caller_item (mbx_rcv false TMO_REL (m, FR_free)) = None.
+Proof.
+  intros m E. unfold caller_item, mbx_rcv. rewrite E, enqueues_is_exactly_blocking.
+  cbn [tmo_blocks]. reflexivity.
+Qed.
+
+(* The invariant says in particular that a well-formed mailbox is never
+ * sitting on a half-delivered item: the transient cursor of §13 exists only
+ * inside one send. *)
+Lemma mbx_inv_has_no_item : forall mc, mbx_inv mc = true -> has_item (snd mc) = false.
+Proof.
+  intros mc H. unfold mbx_inv, no_delivered in H.
+  apply andb_true_iff in H. destruct H as [_ H2].
+  apply negb_true_iff in H2. exact H2.
+Qed.
+
+Lemma rcv_never_stalls_a_delivered_cursor : forall diswai t mc,
+    mbx_inv mc = true -> has_item (snd (rr_cell (mbx_rcv diswai t mc))) = false.
+Proof.
+  intros diswai t mc H. destruct mc as [m f].
+  assert (N : has_item f = false) by (apply (mbx_inv_has_no_item (m, f)); exact H).
+  unfold mbx_rcv. destruct (m_chain m) as [|msg rest].
+  - destruct (enqueues diswai t); cbn [rr_cell snd];
+      first [ reflexivity | exact N ].
+  - cbn [rr_cell snd]. exact N.
+Qed.
+
+(* The conservation law survives a receive: the take shrinks the chain, and the
+ * only cursor a receive can install is FR_wait against an empty chain. *)
+Lemma mbx_rcv_preserves_the_invariant : forall diswai t mc,
+    mbx_inv mc = true -> mbx_inv (rr_cell (mbx_rcv diswai t mc)) = true.
+Proof.
+  intros diswai t mc H. destruct mc as [m f]. destruct m as [mi mm mch mw].
+  destruct f as [| |x].
+  - unfold mbx_rcv; cbn [m_chain]; destruct mch as [|msg rest].
+    + destruct (enqueues diswai t); cbn [rr_cell]; reflexivity.
+    + cbn [rr_cell]; reflexivity.
+  - destruct mch as [|msg rest].
+    + unfold mbx_rcv; cbn [m_chain]; destruct (enqueues diswai t);
+      cbn [rr_cell]; reflexivity.
+    + rewrite (waiting_with_a_message_is_never_wellformed mi mm mw msg rest) in H.
+      discriminate H.
+  - rewrite (full_cursor_is_never_wellformed (mk_mbx mi mm mch mw) x) in H.
+    discriminate H.
+Qed.
+
+(* THE RENDEZVOUS.  A receiver blocks on an empty mailbox, a sender arrives,
+ * and the item lands in the cursor the receiver registered -- with the chain
+ * never having grown and one receiver drained from the object.  This is the
+ * InterCore send/receive pair read in T-Kernel's own vocabulary, and it is the
+ * reason a mailbox needs no buffer of its own on the awake-receiver path. *)
+Record rdv : Type := mk_rdv {
+    rd_delivered : option nat;      (* written into the cursor by a sender *)
+    rd_taken     : option nat;      (* taken out of the chain by the receiver *)
+    rd_chain     : list nat;        (* the chain afterwards *)
+    rd_wait      : list nat         (* receivers still queued *)
+  }.
+
+Definition full_rendezvous (pri : nat -> nat) (msg : nat) (m : mbx) : rdv :=
+  let res := mbx_rcv false TMO_REL (m, FR_free) in
+  let (mc, d) := mbx_snd pri msg (rr_cell res) in
+  mk_rdv d None (m_chain (fst mc)) (m_wait (fst mc)).
+
+Lemma full_rendezvous_delivers_to_the_cursor : forall pri msg m,
+    m_chain m = nil -> m_wait m = nil ->
+    rd_delivered (full_rendezvous pri msg m) = Some msg.
+Proof.
+  intros pri msg m E W. unfold full_rendezvous, mbx_rcv.
+  destruct m as [mi mm mc mw]; cbn [m_chain m_wait] in E, W; rewrite E, W.
+  cbn [m_chain m_wait]. rewrite enqueues_is_exactly_blocking. cbn. reflexivity.
+Qed.
+
+Lemma rendezvous_leaves_no_message_behind : forall pri msg m,
+    m_chain m = nil -> m_wait m = nil ->
+    rd_chain (full_rendezvous pri msg m) = nil /\ rd_wait (full_rendezvous pri msg m) = nil.
+Proof.
+  intros pri msg m E W. unfold full_rendezvous, mbx_rcv.
+  destruct m as [mi mm mc mw]; cbn [m_chain m_wait] in E, W; rewrite E, W.
+  cbn [m_chain m_wait]. rewrite enqueues_is_exactly_blocking. cbn. split; reflexivity.
+Qed.
+
+Lemma full_rendezvous_drains_the_receiver : forall pri msg m,
+    m_chain m = nil -> m_wait m = nil ->
+    rd_wait (full_rendezvous pri msg m) = nil.
+Proof.
+  intros pri msg m E W. unfold full_rendezvous, mbx_rcv.
+  destruct m as [mi mm mc mw]; cbn [m_chain m_wait] in E, W; rewrite E, W.
+  cbn [m_chain m_wait]. rewrite enqueues_is_exactly_blocking. cbn. reflexivity.
+Qed.
+
+(* The other ordering, for contrast: a send that finds nobody queues, and the
+ * receive that follows takes the item out of the object instead of meeting a
+ * sender at the cursor.  The two paths deliver the same message and differ
+ * only in whether the chain ever held it. *)
+Definition queue_then_take (pri : nat -> nat) (msg : nat) (m : mbx) : rdv :=
+  let (mc, d) := mbx_snd pri msg (m, FR_free) in
+  let res := mbx_rcv false TMO_POLL mc in
+  mk_rdv d (caller_item res) (m_chain (fst (rr_cell res))) (m_wait (fst (rr_cell res))).
+
+Lemma take_delivers_once_and_empties_the_chain : forall pri msg m,
+    m_chain m = nil -> m_mpri m = false ->
+    rd_delivered (queue_then_take pri msg m) = None /\
+    rd_taken (queue_then_take pri msg m) = Some msg /\
+    rd_chain (queue_then_take pri msg m) = nil.
+Proof.
+  intros pri msg m E M. destruct m as [mi mm mc mw].
+  cbn [m_chain m_mpri] in E, M. rewrite E, M.
+  unfold queue_then_take, mbx_snd, mbx_rcv, chain_move, enqueue, caller_item. cbn.
+  repeat split; reflexivity.
+Qed.
+
+(* One item per round trip, on either path, and it is the item that was sent.
+ * The channels are different -- the receiver's own local on the take, the
+ * registered cursor on the rendezvous -- but the accounting is the same, which
+ * is the conservation property the frontier was introduced to express. *)
+(* The rendezvous path never takes from the chain, so its own local records no
+ * take.  Stated on the shipped shape: the let-bound cursor of a blocked
+ * receiver is what makes the projection reduce at all. *)
+Lemma rendezvous_records_no_take : forall pri msg m,
+    m_chain m = nil -> m_wait m = nil ->
+    rd_taken (full_rendezvous pri msg m) = None.
+Proof.
+  intros pri msg m E W. unfold full_rendezvous, mbx_rcv.
+  destruct m as [mi mm mc mw]; cbn [m_chain m_wait] in E, W; rewrite E, W.
+  cbn. reflexivity.
+Qed.
+
+Lemma one_item_per_path : forall pri msg m,
+    m_chain m = nil -> m_wait m = nil -> m_mpri m = false ->
+    rd_delivered (full_rendezvous pri msg m) = Some msg /\
+    rd_taken (queue_then_take pri msg m) = Some msg /\
+    rd_taken (full_rendezvous pri msg m) = None /\
+    rd_delivered (queue_then_take pri msg m) = None.
+Proof.
+  intros pri msg m E W M.
+  destruct (take_delivers_once_and_empties_the_chain pri msg m E M) as [T1 [T2 _]].
+  split; [ apply full_rendezvous_delivers_to_the_cursor; assumption
+         | split; [ exact T2
+                  | split; [ apply (rendezvous_records_no_take pri msg m E W)
+                           | exact T1 ] ] ].
+Qed.
+
+(* A priority-ordered chain is walked in descending msgpri, so the head -- the
+ * only position tk_rcv_mbx looks at (mailbox.c:302) -- is the best message
+ * available.  Computed on the shipped shape rather than asserted. *)
+Example mpri_chain_is_ordered_at_the_frontier :
+    chain_move true (fun n => n) 7 (mk_mbx 1 true [5] nil) = [7; 5] /\
+    chain_move true (fun n => n) 3 (mk_mbx 1 true [5] nil) = [5; 3] /\
+    chain_move false (fun n => n) 7 (mk_mbx 1 false [5] nil) = [5; 7].
+Proof. repeat split; reflexivity. Qed.
+
+(* wait.c:125-133 is the delete broadcast: every receiver at the object leaves
+ * through wait_release_ng with E_DLT.  Read against §12.4 the receipt is the
+ * composition of the pre-write and the writing release, which is what makes
+ * E_DLT override the E_TMOUT the blocked call parked in its own slot. *)
+Definition mbx_broadcast (m : mbx) : list er :=
+  map (fun _ => final_receipt RK_del (prewrite false)) (m_wait m).
+
+Lemma broadcast_is_all_E_DLT : forall m, mbx_broadcast m = repeat E_DLT (length (m_wait m)).
+Proof.
+  intros m. unfold mbx_broadcast.
+  assert (A : forall l : list nat, map (fun _ => final_receipt RK_del (prewrite false)) l
+                                    = repeat E_DLT (length l)).
+  { induction l as [|x l IH]; cbn [map repeat length]; [reflexivity |].
+    cbn [final_receipt effect_of ef_write prewrite] in *. rewrite IH. reflexivity. }
+  apply A.
+Qed.
+
 

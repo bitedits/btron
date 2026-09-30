@@ -2731,3 +2731,1281 @@ Proof.
 Qed.
 
 
+(* ── 14. Semaphore: the count, and the walk that spends it ──────── *)
+
+(* semaphore.c is small enough to read as one sentence.  A semaphore is a count
+ * with a ceiling, a queue of callers each of which named the number of units it
+ * needs (TCB.winfo.sem.cnt), and two walks over that queue: the one a signal
+ * runs as it hands units back (semaphore.c:245-265), and the one a released
+ * waiter's departure runs (semaphore.c:99-120).  They are the same walk.  The
+ * only difference is what happens to a caller the count cannot satisfy: a
+ * TA_CNT semaphore steps over it and keeps going, a FIFO semaphore stops.
+ * Everything in this section is built out of that one asymmetry. *)
+
+(* A waiter is not an ID: the number it asked for is part of its identity in the
+ * queue, because the walk subtracts it.  semaphore.c:310 writes exactly these
+ * three things (the TCB, cnt, and the priority the queue is ordered by). *)
+Record sem_who : Type := mk_who {
+    w_tid  : nat;                 (* TCB.tskid *)
+    w_need : nat;                 (* TCB.winfo.sem.cnt *)
+    w_pri  : nat                  (* TCB.priority, the TPRI key *)
+  }.
+
+(* The units a set of waiters would take. *)
+Fixpoint qsum (q : list sem_who) : nat :=
+  match q with
+  | nil => 0
+  | x :: rest => w_need x + qsum rest
+  end.
+
+(* CHECK_PAR(cnt > 0) at the two entry points (semaphore.c:224, :287) is what
+ * makes every queued need strictly positive; the model keeps that as a boolean
+ * so the walk laws can be stated without a hypothesis about each element. *)
+Definition every_needs (q : list sem_who) : bool :=
+  forallb (fun x => Nat.ltb 0 (w_need x)) q.
+
+(* The walk's state: what is left to hand out, who stays, who leaves.  Three
+ * separate answers because the kernel's loop mutates one variable (semcnt) and
+ * two list positions as it goes; splitting them is what lets the laws below say
+ * anything about conservation. *)
+Record drain : Type := mk_drain {
+    d_left : nat;
+    d_kept : list sem_who;
+    d_gone : list sem_who
+  }.
+
+Definition drain_skip (x : sem_who) (r : drain) : drain :=
+  mk_drain (d_left r) (x :: d_kept r) (d_gone r).
+
+Definition drain_take (x : sem_who) (r : drain) : drain :=
+  mk_drain (d_left r) (d_kept r) (x :: d_gone r).
+
+(* semaphore.c:245-265 read as a fold.  gran is TA_CNT.  At each entry: if the
+ * count cannot satisfy the need, the FIFO walk breaks (the rest of the queue is
+ * kept, nothing further is released) and the granular walk steps over;
+ * otherwise release the entry and subtract its need.  The kernel's closing
+ * "if (semcb->semcnt <= 0) break" (semaphore.c:262) needs no counterpart here:
+ * every need is positive, so a zero balance already makes the next test fail. *)
+Fixpoint sig_walk (gran : bool) (count : nat) (q : list sem_who) : drain :=
+  match q with
+  | nil => mk_drain count nil nil
+  | x :: rest =>
+      if Nat.ltb count (w_need x) then
+        if gran then drain_skip x (sig_walk gran count rest)
+        else mk_drain count (x :: rest) nil
+      else drain_take x (sig_walk gran (Nat.sub count (w_need x)) rest)
+  end.
+
+Lemma ltb_false_ge : forall a b, Nat.ltb a b = false -> b <= a.
+Proof. intros a b H. apply Nat.ltb_ge. exact H. Qed.
+
+Lemma sig_walk_nil : forall gran count, sig_walk gran count nil = mk_drain count nil nil.
+Proof. intros gran count. reflexivity. Qed.
+
+Lemma sig_walk_unsat_fifo : forall count x rest,
+    Nat.ltb count (w_need x) = true ->
+    sig_walk false count (x :: rest) = mk_drain count (x :: rest) nil.
+Proof. intros count x rest N. unfold sig_walk. rewrite N. reflexivity. Qed.
+
+Lemma sig_walk_unsat_gran : forall count x rest,
+    Nat.ltb count (w_need x) = true ->
+    sig_walk true count (x :: rest) = drain_skip x (sig_walk true count rest).
+Proof. intros count x rest N. unfold sig_walk. rewrite N. reflexivity. Qed.
+
+Lemma sig_walk_sat_gone : forall gran count x rest,
+    Nat.ltb count (w_need x) = false ->
+    d_gone (sig_walk gran count (x :: rest)) = x :: d_gone (sig_walk gran (Nat.sub count (w_need x)) rest).
+Proof. intros gran count x rest N. unfold sig_walk. rewrite N. reflexivity. Qed.
+
+Lemma sig_walk_sat_left : forall gran count x rest,
+    Nat.ltb count (w_need x) = false ->
+    d_left (sig_walk gran count (x :: rest)) = d_left (sig_walk gran (Nat.sub count (w_need x)) rest).
+Proof. intros gran count x rest N. unfold sig_walk. rewrite N. reflexivity. Qed.
+
+Lemma sig_walk_sat_kept : forall gran count x rest,
+    Nat.ltb count (w_need x) = false ->
+    d_kept (sig_walk gran count (x :: rest)) = d_kept (sig_walk gran (Nat.sub count (w_need x)) rest).
+Proof. intros gran count x rest N. unfold sig_walk. rewrite N. reflexivity. Qed.
+
+(* The units are neither created nor lost by the walk: what the signal put in is
+ * exactly what stayed plus what the released waiters took out.  This is the
+ * statement the kernel relies on when it decrements semcnt in place. *)
+Lemma sig_walk_conserves : forall gran count q,
+    count = d_left (sig_walk gran count q) + qsum (d_gone (sig_walk gran count q)).
+Proof.
+  intros gran count q. revert gran count.
+  induction q as [|x rest IH]; intros gran count.
+  - unfold sig_walk. cbn [d_left d_gone qsum]. lia.
+  - destruct (Nat.ltb count (w_need x)) eqn:N.
+    + destruct gran.
+      * rewrite sig_walk_unsat_gran; [ | exact N]. specialize (IH true count).
+        cbn [drain_skip d_left d_gone qsum]. lia.
+      * rewrite sig_walk_unsat_fifo; [ | exact N]. specialize (IH false count).
+        cbn [d_left d_gone qsum]. lia.
+    + rewrite sig_walk_sat_gone; [ | exact N].
+      rewrite sig_walk_sat_left; [ | exact N].
+      assert (L : w_need x <= count). { apply ltb_false_ge. exact N. }
+      specialize (IH gran (Nat.sub count (w_need x))).
+      cbn [qsum]. lia.
+Qed.
+
+(* And the walk is a partition of the queue: every waiter is either still
+ * waiting or released, exactly once.  A "step over" (TA_CNT) keeps the count
+ * right; this says it also keeps the people right. *)
+Lemma sig_walk_partitions : forall gran count q,
+    length q = length (d_kept (sig_walk gran count q)) + length (d_gone (sig_walk gran count q)).
+Proof.
+  intros gran count q. revert gran count.
+  induction q as [|x rest IH]; intros gran count.
+  - unfold sig_walk. cbn [d_kept d_gone length]. reflexivity.
+  - destruct (Nat.ltb count (w_need x)) eqn:N.
+    + destruct gran.
+      * rewrite sig_walk_unsat_gran; [ | exact N]. specialize (IH true count).
+        cbn [drain_skip d_kept d_gone length]. lia.
+      * rewrite sig_walk_unsat_fifo; [ | exact N]. specialize (IH false count).
+        cbn [d_kept d_gone length]. lia.
+    + rewrite sig_walk_sat_gone; [ | exact N].
+      rewrite sig_walk_sat_kept; [ | exact N].
+      specialize (IH gran (Nat.sub count (w_need x))).
+      cbn [length]. lia.
+Qed.
+
+(* The FIFO shape, as a theorem rather than a comment: the released set is a
+ * prefix, so a waiter can never be passed over.  This is what "sequential-
+ * order wait queue" (T-Kernel 2.0 §7.4.2) buys, and what TA_CNT gives up. *)
+Lemma fifo_drains_a_prefix : forall count q,
+    exists s, q = d_gone (sig_walk false count q) ++ s /\
+              d_kept (sig_walk false count q) = s.
+Proof.
+  intros count q. revert count.
+  induction q as [|x rest IH]; intros count.
+  - exists nil. unfold sig_walk. cbn [app]. split; reflexivity.
+  - destruct (Nat.ltb count (w_need x)) eqn:N.
+    + exists (x :: rest). rewrite (sig_walk_unsat_fifo count x rest N).
+      cbn [app]. split; reflexivity.
+    + rewrite (sig_walk_sat_gone false count x rest N).
+      assert (L : w_need x <= count). { apply ltb_false_ge. exact N. }
+      destruct (IH (Nat.sub count (w_need x))) as [s [H1 H2]].
+      exists s. split.
+      * cbn [app]. rewrite <- H1. reflexivity.
+      * rewrite (sig_walk_sat_kept false count x rest N). exact H2.
+Qed.
+
+Lemma gran_releases_at_least_fifo : forall count q,
+    length (d_gone (sig_walk false count q)) <= length (d_gone (sig_walk true count q)).
+Proof.
+  intros count q. revert count.
+  induction q as [|x rest IH]; intros count.
+  - unfold sig_walk. cbn [d_gone length]. lia.
+  - destruct (Nat.ltb count (w_need x)) eqn:N.
+    + rewrite (sig_walk_unsat_fifo count x rest N).
+      cbn [sig_walk drain_skip d_gone length]. apply Nat.le_0_l.
+    + assert (L : w_need x <= count). { apply ltb_false_ge. exact N. }
+      rewrite (sig_walk_sat_gone false count x rest N), (sig_walk_sat_gone true count x rest N).
+      cbn [length]. specialize (IH (Nat.sub count (w_need x))). lia.
+Qed.
+
+(* A signal of zero units walks nobody: with every need positive, each test
+ * fails, and a failing test either stops a FIFO walk or steps over in a
+ * granular one.  CHECK_PAR(cnt > 0) is therefore not politeness -- the only way
+ * to run the drain walk without adding units is §14.6's rel_wai path. *)
+Lemma sig_walk_zero_keeps_everyone : forall gran q,
+    every_needs q = true -> sig_walk gran 0 q = mk_drain 0 q nil.
+Proof.
+  intros gran q. revert gran.
+  induction q as [|x rest IH]; intros gran H.
+  - reflexivity.
+  - cbn [every_needs forallb] in H. apply andb_true_iff in H. destruct H as [Nx Hrest].
+    destruct gran.
+    + rewrite (sig_walk_unsat_gran 0 x rest Nx). rewrite (IH true Hrest).
+      cbn [drain_skip]. reflexivity.
+    + rewrite (sig_walk_unsat_fifo 0 x rest Nx). reflexivity.
+Qed.
+
+Lemma a_zero_signal_releases_nobody : forall gran q,
+    every_needs q = true -> d_gone (sig_walk gran 0 q) = nil.
+Proof.
+  intros gran q H. rewrite (sig_walk_zero_keeps_everyone gran q H). reflexivity.
+Qed.
+
+Example granular_grants_out_of_turn :
+    d_gone (sig_walk true 2 [mk_who 7 3 1; mk_who 8 1 2]) = [mk_who 8 1 2].
+Proof. reflexivity. Qed.
+
+Example fifo_refuses_to_grant_out_of_turn :
+    d_gone (sig_walk false 2 [mk_who 7 3 1; mk_who 8 1 2]) = nil.
+Proof. reflexivity. Qed.
+
+(* ── 14.1 Where a new waiter is written ─────────────────────────── *)
+
+(* wait.c:79-97, queue_insert_tpri: walk from the head and break at the first
+ * entry of strictly lower priority figure (lower figure = higher priority), so
+ * the queue is ascending and a tie keeps the task that was already waiting. *)
+Fixpoint insert_tpri (who : sem_who) (q : list sem_who) : list sem_who :=
+  match q with
+  | nil => who :: nil
+  | x :: rest => if Nat.ltb (w_pri who) (w_pri x)
+                 then who :: q
+                 else x :: insert_tpri who rest
+  end.
+
+Lemma insert_tpri_puts_the_better_task_first : forall who x q,
+    Nat.ltb (w_pri who) (w_pri x) = true -> insert_tpri who (x :: q) = who :: x :: q.
+Proof. intros who x q P. unfold insert_tpri. rewrite P. reflexivity. Qed.
+
+Lemma insert_tpri_tie_defers : forall who x q,
+    Nat.ltb (w_pri who) (w_pri x) = false -> insert_tpri who (x :: q) = x :: insert_tpri who q.
+Proof. intros who x q P. unfold insert_tpri. rewrite P. reflexivity. Qed.
+
+Lemma a_tie_keeps_the_waiting_task_first : forall who x q,
+    Nat.ltb (w_pri who) (w_pri x) = false -> exists q', insert_tpri who (x :: q) = x :: q'.
+Proof. intros who x q P. exists (insert_tpri who q). apply insert_tpri_tie_defers. exact P. Qed.
+
+Lemma app_one_length : forall (q : list sem_who) (who : sem_who),
+    length (q ++ [who]) = S (length q).
+Proof.
+  intros q. induction q as [|x rest IH]; intros who.
+  - cbn [app length]. reflexivity.
+  - cbn [app length]. rewrite IH. reflexivity.
+Qed.
+
+Lemma insert_tpri_adds_exactly_one : forall who q,
+    length (insert_tpri who q) = S (length q).
+Proof.
+  intros who q. revert who.
+  induction q as [|x rest IH]; intros who.
+  - cbn [insert_tpri length]. reflexivity.
+  - destruct (Nat.ltb (w_pri who) (w_pri x)) eqn:P.
+    + rewrite (insert_tpri_puts_the_better_task_first who x rest P).
+      cbn [length]. reflexivity.
+    + rewrite (insert_tpri_tie_defers who x rest P).
+      cbn [length]. rewrite (IH who). reflexivity.
+Qed.
+
+(* The order the insertion maintains, stated so the head-only test below is
+ * seen to be enough.  A two-argument fixpoint because the nested pattern
+ * "_ :: _ :: _ " is not a guarded recursion in Rocq. *)
+Fixpoint pri_ascending_tail (prev : sem_who) (q : list sem_who) : bool :=
+  match q with
+  | nil => true
+  | x :: rest => andb (Nat.leb (w_pri prev) (w_pri x)) (pri_ascending_tail x rest)
+  end.
+
+Definition pri_ascending (q : list sem_who) : bool :=
+  match q with
+  | nil => true
+  | x :: rest => pri_ascending_tail x rest
+  end.
+
+(* wait.c:96 (gcb_make_wait) picks between the two by the TA_TPRI attribute: a
+ * FIFO semaphore appends, a TPRI semaphore inserts. *)
+Definition sem_enqueue (tpri : bool) (who : sem_who) (q : list sem_who) : list sem_who :=
+  if tpri then insert_tpri who q else q ++ [who].
+
+Lemma a_fifo_sem_enqueue_goes_to_the_tail : forall who q,
+    sem_enqueue false who q = q ++ [who].
+Proof. intros who q. reflexivity. Qed.
+
+Lemma sem_enqueue_adds_exactly_one : forall tpri who q,
+    length (sem_enqueue tpri who q) = S (length q).
+Proof.
+  intros tpri who q. destruct tpri.
+  - apply insert_tpri_adds_exactly_one.
+  - cbn [sem_enqueue]. apply app_one_length.
+Qed.
+
+(* The kernel's soundness argument for looking only at the head of the queue
+ * (wait.c:196-207) is that the TPRI queue is kept sorted.  Here that is a
+ * theorem about the insertion, not an assumption. *)
+Lemma sem_enqueue_keeps_the_queue_ascending : forall q who,
+    pri_ascending q = true -> pri_ascending (sem_enqueue true who q) = true.
+Proof.
+  unfold sem_enqueue. intros q who H. revert who H.
+  induction q as [|x rest IH]; intros who H.
+  - cbn [insert_tpri pri_ascending]. reflexivity.
+  - destruct rest as [|y rest'] eqn:Er; subst rest.
+    + destruct (Nat.ltb (w_pri who) (w_pri x)) eqn:P.
+      * rewrite (insert_tpri_puts_the_better_task_first who x nil P).
+        cbn [pri_ascending pri_ascending_tail].
+        assert (B : Nat.leb (w_pri who) (w_pri x) = true).
+        { apply Nat.leb_le. apply Nat.lt_le_incl. apply Nat.ltb_lt. exact P. }
+        rewrite B. reflexivity.
+      * rewrite (insert_tpri_tie_defers who x nil P).
+        cbn [insert_tpri pri_ascending pri_ascending_tail].
+        assert (B : Nat.leb (w_pri x) (w_pri who) = true).
+        { apply Nat.leb_le. apply ltb_false_ge. exact P. }
+        rewrite B. reflexivity.
+    + cbn [pri_ascending pri_ascending_tail] in H. apply andb_true_iff in H.
+      destruct H as [A C].
+      destruct (Nat.ltb (w_pri who) (w_pri x)) eqn:P.
+      * rewrite (insert_tpri_puts_the_better_task_first who x (y :: rest') P).
+        cbn [pri_ascending pri_ascending_tail]. rewrite A, C.
+        assert (B : Nat.leb (w_pri who) (w_pri x) = true).
+        { apply Nat.leb_le. apply Nat.lt_le_incl. apply Nat.ltb_lt. exact P. }
+        rewrite B. reflexivity.
+      * rewrite (insert_tpri_tie_defers who x (y :: rest') P).
+        destruct (Nat.ltb (w_pri who) (w_pri y)) eqn:Q.
+        { rewrite (insert_tpri_puts_the_better_task_first who y rest' Q).
+          cbn [pri_ascending pri_ascending_tail].
+          assert (B1 : Nat.leb (w_pri x) (w_pri who) = true).
+          { apply Nat.leb_le. apply ltb_false_ge. exact P. }
+          assert (B2 : Nat.leb (w_pri who) (w_pri y) = true).
+          { apply Nat.leb_le. apply Nat.lt_le_incl. apply Nat.ltb_lt. exact Q. }
+          rewrite B1, B2, C. reflexivity. }
+        { specialize (IH who C).
+          rewrite (insert_tpri_tie_defers who y rest' Q) in IH.
+          rewrite (insert_tpri_tie_defers who y rest' Q).
+          cbn [pri_ascending pri_ascending_tail] in IH.
+          cbn [pri_ascending pri_ascending_tail].
+          apply andb_true_iff. split; [ exact A | exact IH ]. }
+Qed.
+
+(* ── 14.2 Who may take the count ────────────────────────────────── *)
+
+(* wait.c:196-207, gcb_top_of_wait_queue.  An empty queue makes the caller the
+ * top; a non-empty FIFO queue never does (the head is somebody else); a TPRI
+ * queue does only on a strict improvement, and the comparison is against the
+ * HEAD ONLY -- which is sound because §14.1 keeps the queue ascending. *)
+Definition top_of_queue (tpri : bool) (pri : nat) (q : list sem_who) : bool :=
+  match q with
+  | nil => true
+  | x :: _ => andb tpri (Nat.ltb pri (w_pri x))
+  end.
+
+Lemma an_empty_queue_admits_any_caller : forall tpri pri,
+    top_of_queue tpri pri nil = true.
+Proof. intros tpri pri. reflexivity. Qed.
+
+Lemma a_plain_fifo_never_lets_anyone_cut : forall pri x q,
+    top_of_queue false pri (x :: q) = false.
+Proof. intros pri x q. reflexivity. Qed.
+
+Lemma a_priority_waiter_must_be_strictly_better_than_the_head : forall pri x q,
+    top_of_queue true pri (x :: q) = true <-> Nat.ltb pri (w_pri x) = true.
+Proof.
+  intros pri x q. split.
+  - intros H. cbn [top_of_queue] in H. apply andb_true_iff in H.
+    destruct H as [T P]. exact P.
+  - intros P. cbn [top_of_queue]. apply andb_true_iff. split; [ reflexivity | exact P ].
+Qed.
+
+Lemma a_tie_is_not_a_head_place : forall x q tpri,
+    top_of_queue tpri (w_pri x) (x :: q) = false.
+Proof.
+  intros x q tpri. cbn [top_of_queue].
+  destruct tpri.
+  - apply Nat.ltb_ge. lia.
+  - reflexivity.
+Qed.
+
+(* semaphore.c:328-330, the claim test: (TA_CNT || top-of-queue) && semcnt >=
+ * cnt.  Note which conjunct the attribute can substitute for. *)
+Definition sem_claimed (gran head : bool) (count need : nat) : bool :=
+  andb (orb gran head) (Nat.leb need count).
+
+Lemma a_granular_semaphore_does_not_consult_the_frontier : forall head count need,
+    sem_claimed true head count need = Nat.leb need count.
+Proof. intros head count need. reflexivity. Qed.
+
+Lemma a_fifo_semaphore_admits_only_the_head : forall head count need,
+    sem_claimed false head count need = andb head (Nat.leb need count).
+Proof. intros head count need. reflexivity. Qed.
+
+Lemma no_claim_without_the_units : forall gran head count need,
+    sem_claimed gran head count need = true -> Nat.leb need count = true.
+Proof.
+  intros gran head count need H. unfold sem_claimed in H.
+  apply andb_true_iff in H. destruct H as [C U]. exact U.
+Qed.
+
+Lemma enough_units_at_a_head_place_is_a_claim : forall gran head count need,
+    orb gran head = true -> Nat.leb need count = true ->
+    sem_claimed gran head count need = true.
+Proof.
+  intros gran head count need F U. unfold sem_claimed. rewrite F, U. reflexivity.
+Qed.
+
+Lemma a_claim_is_either_granular_or_a_head_place : forall gran head count need,
+    sem_claimed gran head count need = true ->
+    orb gran head = true /\ Nat.leb need count = true.
+Proof.
+  intros gran head count need H. unfold sem_claimed in H.
+  apply andb_true_iff in H. exact H.
+Qed.
+
+(* ── 14.3 The control block, and how the table sees it ──────────── *)
+
+(* semaphore.c:35-45 is seven fields, of which §6's sem records the marker, the
+ * count and the queue.  The ceiling and the three attribute bits are not
+ * decoration here: they decide which guard fires (E_QOVR against maxsem at
+ * :238, the break against TA_CNT at :254, the insertion point against TA_TPRI
+ * at :321, the wait-disable test against TA_NODISWAI at :308), so the walk and
+ * the entry points both need them.  semcb is the same object with those fields
+ * exposed; sem_view is the projection back onto §6, through which the bus, the
+ * stored-marker test and the ID/index map of §5 keep applying. *)
+Record semcb : Type := mk_semcb {
+    sc_id    : nat;             (* SEMCB.semid -- stored marker, 0 = free cell *)
+    sc_max   : nat;             (* SEMCB.maxsem -- the ceiling *)
+    sc_gran  : bool;            (* TA_CNT: a signal may step over an unsatisfied waiter *)
+    sc_tpri  : bool;            (* TA_TPRI: the queue is ordered by priority *)
+    sc_nodis : bool;            (* TA_NODISWAI: this object never disables waits *)
+    sc_cnt   : nat;             (* SEMCB.semcnt *)
+    sc_wait  : list sem_who     (* SEMCB.wait_queue, head waiter first *)
+  }.
+
+(* The kernel's queue is a queue of TCBs; an ID-only view sees the tasks and
+ * forgets the need each of them named -- which is precisely the information a
+ * refer call cannot return (semaphore.c:352 hands back only the count). *)
+Definition sem_view (c : semcb) : sem :=
+  mk_sem (sc_id c) (sc_cnt c) (map w_tid (sc_wait c)).
+
+Lemma view_keeps_the_marker : forall c, s_id (sem_view c) = sc_id c.
+Proof. intros c. reflexivity. Qed.
+
+Lemma view_keeps_the_count : forall c, s_count (sem_view c) = sc_cnt c.
+Proof. intros c. reflexivity. Qed.
+
+Lemma map_w_tid_length : forall q : list sem_who, length (map w_tid q) = length q.
+Proof.
+  intros q. induction q as [|x q IH]; cbn [map length]; [reflexivity |].
+  rewrite IH. reflexivity.
+Qed.
+
+Lemma view_keeps_the_length : forall c,
+    length (s_wait (sem_view c)) = length (sc_wait c).
+Proof. intros c. unfold sem_view. apply map_w_tid_length. Qed.
+
+(* §6 wrote the bus read-back lemmas for the task table only; §13's mailbox is a
+ * single cell so it never needed one.  The semaphore laws below are stated at a
+ * table index, so the sem case is now load-bearing. *)
+Lemma at_s_same_s : forall st i (v : sem), b_s (bus_s st i v) i = v.
+Proof. intros st i v. unfold bus_s. apply upd_same. Qed.
+
+Lemma at_s_other_s : forall st i (v : sem) j, i <> j -> b_s (bus_s st i v) j = b_s st j.
+Proof. intros st i v j H. unfold bus_s. apply upd_other; exact H. Qed.
+
+Lemma bus_s_reads_the_cell : forall st i (c : semcb),
+    b_s (bus_s st i (sem_view c)) i = sem_view c.
+Proof. intros st i c. apply at_s_same_s. Qed.
+
+Lemma bus_s_leaves_the_task_table : forall st i (c : semcb) j,
+    b_t (bus_s st i (sem_view c)) j = b_t st j.
+Proof. intros st i c j. unfold bus_s. reflexivity. Qed.
+
+Lemma bus_s_leaves_the_mailbox_table : forall st i (c : semcb) j,
+    b_m (bus_s st i (sem_view c)) j = b_m st j.
+Proof. intros st i c j. unfold bus_s. reflexivity. Qed.
+
+Lemma indp_inert_s : forall st i (v : sem), b_indp (bus_s st i v) = b_indp st.
+Proof. intros st i v. unfold bus_s. reflexivity. Qed.
+
+(* semaphore.c:235 and :297 both read the stored marker INSIDE the critical
+ * section, which is the E_NOEXS of this family.  §6's sem_used is that test;
+ * here it is shown to survive the projection. *)
+Lemma used_is_the_marker : forall st i (c : semcb),
+    sem_used (bus_s st i (sem_view c)) i = negb (Nat.eqb (sc_id c) 0).
+Proof.
+  intros st i c. unfold sem_used.
+  rewrite bus_s_reads_the_cell, view_keeps_the_marker. reflexivity.
+Qed.
+
+(* The two shape properties the C maintains.  semcnt <= maxsem is what makes
+ * "cnt > maxsem - semcnt" (:238) a headroom test rather than a wrap-around
+ * test, and CHECK_PAR(cnt > 0) at both entry points (:229, :289) is what makes
+ * positive needs a standing property of the queue rather than an assumption
+ * about one call. *)
+Definition count_within_ceiling (c : semcb) : bool := Nat.leb (sc_cnt c) (sc_max c).
+Definition waiters_have_needs (c : semcb) : bool := every_needs (sc_wait c).
+Definition sem_wf (c : semcb) : bool :=
+  andb (count_within_ceiling c) (waiters_have_needs c).
+
+Lemma a_wellformed_cell_is_within_its_ceiling : forall c,
+    sem_wf c = true -> sc_cnt c <= sc_max c.
+Proof.
+  intros c H. unfold sem_wf, count_within_ceiling in H.
+  apply andb_true_iff in H. apply Nat.leb_le. exact (proj1 H).
+Qed.
+
+Lemma a_wellformed_cell_has_positive_needs : forall c,
+    sem_wf c = true -> every_needs (sc_wait c) = true.
+Proof.
+  intros c H. unfold sem_wf, waiters_have_needs in H.
+  apply andb_true_iff in H. exact (proj2 H).
+Qed.
+
+Lemma a_fresh_cell_is_wellformed : forall m g tp nd,
+    sem_wf (mk_semcb 0 m g tp nd 0 nil) = true.
+Proof.
+  intros m g tp nd. unfold sem_wf, count_within_ceiling, waiters_have_needs, every_needs.
+  cbn [forallb andb]. apply andb_true_iff. split.
+  - destruct m; reflexivity.
+  - reflexivity.
+Qed.
+
+(* ── 14.4 The wait-disable guard ────────────────────────────────── *)
+
+(* wait.h:128-132, is_diswai.  Two independent coordinates, one read from the
+ * task and one from the object:
+ *   (tcb->waitmask & tskwait) != 0 && (gcb->objatr & TA_NODISWAI) == 0
+ * The task side is a bit test on the sparse mask of §12 -- a mask can be
+ * tested but never ordered -- and the object side is the negation of an
+ * attribute bit.  semaphore.c:144-147 lists TA_NODISWAI among the attributes
+ * cre_sem accepts, so both coordinates are reachable on this family. *)
+Definition masked_for (mask : nat) (o : wobj) : bool := bit_any mask (ttw_of o).
+
+Lemma a_task_waiting_on_a_semaphore_is_masked_for_it : masked_for ttw_sem WO_SEM = true.
+Proof. unfold masked_for, bit_any. vm_compute. reflexivity. Qed.
+
+Lemma a_sleeping_task_is_not_masked_for_a_semaphore : masked_for ttw_slp WO_SEM = false.
+Proof. unfold masked_for, bit_any. vm_compute. reflexivity. Qed.
+
+(* One bit per class is what makes the test conservative in the right
+ * direction: a task masked for any OTHER reason is not disabled here. *)
+Lemma a_disjoint_mask_never_disables : forall o1 o2, o1 <> o2 ->
+    masked_for (ttw_of o1) o2 = false.
+Proof.
+  intros o1 o2 H. unfold masked_for, bit_any.
+  rewrite (ttw_pairwise_disjoint o1 o2 H). reflexivity.
+Qed.
+
+Lemma the_mask_test_asks_for_the_object : forall o,
+    masked_for (ttw_of o) o = true.
+Proof.
+  intros o. unfold masked_for, bit_any. destruct o; vm_compute; reflexivity.
+Qed.
+
+Definition diswai_of (masked nodiswai : bool) : bool := andb masked (negb nodiswai).
+
+Lemma a_nodiswai_object_never_refuses_a_wait : forall m, diswai_of m true = false.
+Proof. intros m. unfold diswai_of. destruct m; reflexivity. Qed.
+
+Lemma an_unmasked_task_is_never_refused : forall n, diswai_of false n = false.
+Proof. intros n. unfold diswai_of. reflexivity. Qed.
+
+Lemma the_guard_needs_both_coordinates : forall m n,
+    diswai_of m n = true -> m = true /\ n = false.
+Proof.
+  intros m n H. unfold diswai_of in H. apply andb_true_iff in H. destruct H as [M N].
+  split; [ exact M | apply negb_true_iff; exact N ].
+Qed.
+
+(* The whole truth table, because this guard is the only one in the family
+ * decided by a conjunction of two independent coordinates. *)
+Lemma the_guard_is_beatable_from_either_side :
+    diswai_of true false = true /\ diswai_of true true = false /\
+    diswai_of false false = false /\ diswai_of false true = false.
+Proof. repeat split; reflexivity. Qed.
+
+(* A refusal is not a wait: §12.4's enqueues consumes the verdict, so the
+ * refused caller neither registers on the queue nor has its receipt
+ * pre-written -- semaphore.c:308-310 returns E_DISWAI as the service's OWN
+ * figure, from the guard, before the claim test at :313 is even evaluated. *)
+Lemma a_refused_wait_never_registers : forall m n t,
+    diswai_of m n = true -> enqueues (diswai_of m n) t = false.
+Proof. intros m n t H. rewrite H. apply diswai_never_enqueues. Qed.
+
+Lemma diswai_is_a_refusal_not_a_prewrite :
+    prewrite true = E_DISWAI /\ diswai_of true false = true.
+Proof. split; reflexivity. Qed.
+
+(* ── 14.5 The preflight cascades of this family ─────────────────── *)
+
+(* cre_sem, semaphore.c:157-160, then the FreeQue failure at :166.  Two of the
+ * four guards are arithmetic on the initialization figures and the third is the
+ * table's own exhaustion; the fourth, isemcnt >= 0, is a signed test that every
+ * natural passes, so the model's type carries it and the cascade does not need
+ * it.  CHECK_RSATR (:157) is omitted for the same reason as in §12: the cell
+ * already records the three bits cre_sem accepts (TA_TPRI | TA_CNT |
+ * TA_NODISWAI, semaphore.c:144-147), so an illegal attribute is not a state the
+ * model can name. *)
+Definition sem_cre_guards (free_cell : bool) (isemcnt maxsem : nat) : list (bool * er) :=
+  (Nat.ltb 0 maxsem, E_PAR) ::
+  (Nat.leb isemcnt maxsem, E_PAR) ::
+  (free_cell, E_LIMIT) :: nil.
+
+Lemma cre_E_LIMIT_is_exhaustion : forall free i m,
+    first_bad (sem_cre_guards free i m) = Some E_LIMIT ->
+    Nat.ltb 0 m = true /\ Nat.leb i m = true /\ free = false.
+Proof.
+  intros free i m H. unfold sem_cre_guards in H.
+  destruct (Nat.ltb 0 m); destruct (Nat.leb i m); destruct free;
+    cbn [first_bad] in H; try discriminate H;
+    repeat split; reflexivity.
+Qed.
+
+(* E_LIMIT is the only receipt of this service that is not a verdict on the two
+ * numbers the caller supplied -- which is why a caller that gets E_LIMIT learns
+ * nothing about its own ceiling. *)
+Lemma cre_E_PAR_is_never_the_table : forall free i m,
+    first_bad (sem_cre_guards free i m) = Some E_PAR ->
+    Nat.ltb 0 m = false \/ Nat.leb i m = false.
+Proof.
+  intros free i m H. unfold sem_cre_guards in H.
+  set (p := Nat.ltb 0 m) in *. set (q := Nat.leb i m) in *.
+  destruct p; destruct q; destruct free;
+    cbn [first_bad] in H; try discriminate H;
+    first [left; reflexivity | right; reflexivity].
+Qed.
+
+(* sig_sem, semaphore.c:228-239: the range test, cnt > 0, the stored marker read
+ * inside the critical section, and the ceiling as a HEADROOM test.  Note what
+ * is absent: _tk_sig_sem has no CHECK_DISPATCH.  A signal is legal from a
+ * dispatch-disabled or task-independent context, which is what makes the
+ * release path usable from a hook. *)
+Definition sem_sig_guards (used : bool) (id cnt max count : nat) : list (bool * er) :=
+  (chk_id min_semid num_sem id, E_ID) ::
+  (Nat.ltb 0 cnt, E_PAR) ::
+  (used, E_NOEXS) ::
+  (Nat.leb cnt (Nat.sub max count), E_QOVR) :: nil.
+
+Lemma sig_E_ID_is_the_range : forall used id cnt max count,
+    first_bad (sem_sig_guards used id cnt max count) = Some E_ID ->
+    chk_id min_semid num_sem id = false.
+Proof.
+  intros used id cnt max count H. unfold sem_sig_guards in H.
+  destruct (chk_id min_semid num_sem id);
+    destruct (Nat.ltb 0 cnt); destruct used;
+    destruct (Nat.leb cnt (Nat.sub max count));
+    cbn [first_bad] in H; try discriminate H; reflexivity.
+Qed.
+
+Lemma sig_E_PAR_is_a_zero_request : forall used id cnt max count,
+    first_bad (sem_sig_guards used id cnt max count) = Some E_PAR ->
+    chk_id min_semid num_sem id = true /\ Nat.ltb 0 cnt = false.
+Proof.
+  intros used id cnt max count H. unfold sem_sig_guards in H.
+  set (c := chk_id min_semid num_sem id) in *.
+  destruct c; destruct (Nat.ltb 0 cnt); destruct used;
+    destruct (Nat.leb cnt (Nat.sub max count));
+    cbn [first_bad] in H; try discriminate H; split; reflexivity.
+Qed.
+
+(* The marker test comes BEFORE the ceiling test (:235 then :238): signalling
+ * into a free cell reports E_NOEXS even when the figures would overflow it. *)
+Lemma sig_E_NOEXS_is_the_stored_marker : forall used id cnt max count,
+    first_bad (sem_sig_guards used id cnt max count) = Some E_NOEXS ->
+    chk_id min_semid num_sem id = true /\ Nat.ltb 0 cnt = true /\ used = false.
+Proof.
+  intros used id cnt max count H. unfold sem_sig_guards in H.
+  set (c := chk_id min_semid num_sem id) in *.
+  set (p := Nat.ltb 0 cnt) in *.
+  destruct c; destruct p; destruct used;
+    destruct (Nat.leb cnt (Nat.sub max count));
+    cbn [first_bad] in H; try discriminate H;
+    repeat split; reflexivity.
+Qed.
+
+Lemma sig_E_QOVR_is_the_ceiling : forall used id cnt max count,
+    first_bad (sem_sig_guards used id cnt max count) = Some E_QOVR ->
+    chk_id min_semid num_sem id = true /\ Nat.ltb 0 cnt = true /\ used = true /\
+    Nat.leb cnt (Nat.sub max count) = false.
+Proof.
+  intros used id cnt max count H. unfold sem_sig_guards in H.
+  set (c := chk_id min_semid num_sem id) in *.
+  set (p := Nat.ltb 0 cnt) in *.
+  destruct c; destruct p; destruct used;
+    destruct (Nat.leb cnt (Nat.sub max count));
+    cbn [first_bad] in H; try discriminate H;
+    repeat split; reflexivity.
+Qed.
+
+(* The C test is "cnt > maxsem - semcnt" (:238) in signed arithmetic.  On the
+ * model's naturals the subtraction truncates, so the translation to the
+ * addition form the invariant suggests is only valid under semcnt <= maxsem --
+ * and that is exactly §14.3's count_within_ceiling, not a free assumption. *)
+Lemma headroom_matches_addition : forall cnt max count, count <= max ->
+    Nat.leb cnt (Nat.sub max count) = Nat.leb (cnt + count) max.
+Proof.
+  intros cnt max count H.
+  destruct (Nat.leb cnt (Nat.sub max count)) eqn:E1;
+  destruct (Nat.leb (cnt + count) max) eqn:E2.
+  - reflexivity.
+  - apply Nat.leb_le in E1. apply Nat.leb_gt in E2. lia.
+  - apply Nat.leb_gt in E1. apply Nat.leb_le in E2. lia.
+  - reflexivity.
+Qed.
+
+(* E_CTX is unreachable from the signal cascade and reachable from the wait
+ * cascade.  One figure, ERCD aside, separates the two services on the context
+ * coordinate alone. *)
+Lemma a_signal_is_never_refused_on_context : forall used id cnt max count,
+    first_bad (sem_sig_guards used id cnt max count) <> Some E_CTX.
+Proof.
+  intros used id cnt max count. unfold sem_sig_guards.
+  destruct (chk_id min_semid num_sem id);
+    destruct (Nat.ltb 0 cnt); destruct used;
+    destruct (Nat.leb cnt (Nat.sub max count));
+    cbn [first_bad]; discriminate.
+Qed.
+
+(* wai_sem, semaphore.c:288-309, in the order the receipts are produced.
+ * CHECK_TMOUT (:290) is absent because §3's tmo_legal_is_total says the model's
+ * timeout type already carries that check, and the cnt > maxsem test
+ * (:300-303) is absent because it lives inside #if CHK_PAR and so is not in the
+ * shipped build: an over-large request is not refused as a parameter error here,
+ * it simply never satisfies the claim test and goes onto the queue. *)
+Definition sem_wai_guards (st : kst) (used nodis mask : bool) (id cnt : nat) : list (bool * er) :=
+  (chk_id min_semid num_sem id, E_ID) ::
+  (Nat.ltb 0 cnt, E_PAR) ::
+  (negb (b_ddsp st), E_CTX) ::
+  (used, E_NOEXS) ::
+  (negb (diswai_of mask nodis), E_DISWAI) :: nil.
+
+Lemma wai_E_CTX_is_a_context_refusal : forall st used nodis mask id cnt,
+    first_bad (sem_wai_guards st used nodis mask id cnt) = Some E_CTX ->
+    chk_id min_semid num_sem id = true /\ Nat.ltb 0 cnt = true /\ b_ddsp st = true.
+Proof.
+  intros st used nodis mask id cnt H. unfold sem_wai_guards in H.
+  set (c := chk_id min_semid num_sem id) in *.
+  set (p := Nat.ltb 0 cnt) in *.
+  set (d := b_ddsp st) in *.
+  destruct c; destruct p; destruct d; destruct used; destruct (diswai_of mask nodis);
+    cbn [first_bad negb] in H; try discriminate H;
+    repeat split; reflexivity.
+Qed.
+
+Lemma wai_E_NOEXS_is_the_stored_marker : forall st used nodis mask id cnt,
+    first_bad (sem_wai_guards st used nodis mask id cnt) = Some E_NOEXS ->
+    chk_id min_semid num_sem id = true /\ Nat.ltb 0 cnt = true /\ b_ddsp st = false /\
+    used = false.
+Proof.
+  intros st used nodis mask id cnt H. unfold sem_wai_guards in H.
+  set (c := chk_id min_semid num_sem id) in *.
+  set (p := Nat.ltb 0 cnt) in *.
+  set (d := b_ddsp st) in *.
+  destruct c; destruct p; destruct d; destruct used; destruct (diswai_of mask nodis);
+    cbn [first_bad negb] in H; try discriminate H;
+    repeat split; reflexivity.
+Qed.
+
+(* The last guard of the cascade, and the only one that reads both a task
+ * coordinate and an object coordinate.  Everything before it passed, so an
+ * E_DISWAI is evidence that the caller was masked AND the object was not
+ * exempt -- the two halves §14.4 separates. *)
+Lemma wai_E_DISWAI_is_a_diswai_refusal : forall st used nodis mask id cnt,
+    first_bad (sem_wai_guards st used nodis mask id cnt) = Some E_DISWAI ->
+    chk_id min_semid num_sem id = true /\ Nat.ltb 0 cnt = true /\ b_ddsp st = false /\
+    used = true /\ diswai_of mask nodis = true.
+Proof.
+  intros st used nodis mask id cnt H. unfold sem_wai_guards in H.
+  set (c := chk_id min_semid num_sem id) in *.
+  set (p := Nat.ltb 0 cnt) in *.
+  set (d := b_ddsp st) in *.
+  set (v := diswai_of mask nodis) in *.
+  destruct c; destruct p; destruct d; destruct used; destruct v;
+    cbn [first_bad negb] in H; try discriminate H;
+    repeat split; reflexivity.
+Qed.
+
+(* A wait can be refused for a reason a signal cannot, and the guard that does
+ * it is the context one; st0 is §6's honest idle state, which is both
+ * independent and dispatch-disabled. *)
+Example the_two_services_differ_on_one_guard :
+    first_bad (sem_sig_guards true 1 2 5 0) = None /\
+    first_bad (sem_wai_guards st0 true false false 1 2) = Some E_CTX.
+Proof. split; vm_compute; reflexivity. Qed.
+
+(* ── 14.6 The two entry points as steps on the cell ─────────────── *)
+
+(* sem_after is the walk's answer written back over an existing cell: the ID
+ * marker, the ceiling and the three attribute bits are carried through, and the
+ * count and the queue are the walk's two remaining fields.  The pair is
+ * returned separately, never as a let, so every law below is a projection. *)
+Definition sem_after (c : semcb) (d : drain) : semcb :=
+  mk_semcb (sc_id c) (sc_max c) (sc_gran c) (sc_tpri c) (sc_nodis c) (d_left d) (d_kept d).
+
+(* sig_sem, semaphore.c:244-266: add the units, then run the drain over the
+ * queue.  The signal's own receipt is E_OK either way, so what the step returns
+ * beside the cell is the list the kernel released -- the tasks that left the
+ * queue are the whole observable content of the walk. *)
+Definition sem_sig_step (cnt : nat) (c : semcb) : semcb * list sem_who :=
+  (sem_after c (sig_walk (sc_gran c) (sc_cnt c + cnt) (sc_wait c)),
+   d_gone (sig_walk (sc_gran c) (sc_cnt c + cnt) (sc_wait c))).
+
+Lemma sig_step_conserves : forall cnt c,
+    sc_cnt (fst (sem_sig_step cnt c)) + qsum (snd (sem_sig_step cnt c)) = sc_cnt c + cnt.
+Proof.
+  intros cnt c. unfold sem_sig_step. cbn [fst snd sem_after].
+  symmetry. apply sig_walk_conserves.
+Qed.
+
+Lemma sig_step_keeps_the_survivors : forall cnt c,
+    sc_wait (fst (sem_sig_step cnt c)) = d_kept (sig_walk (sc_gran c) (sc_cnt c + cnt) (sc_wait c)).
+Proof. intros cnt c. reflexivity. Qed.
+
+Lemma sig_step_releases_the_gone : forall cnt c,
+    snd (sem_sig_step cnt c) = d_gone (sig_walk (sc_gran c) (sc_cnt c + cnt) (sc_wait c)).
+Proof. intros cnt c. reflexivity. Qed.
+
+(* A signal cannot invent units: the balance after the step is at most the old
+ * balance plus what was handed in.  This is the conservation law read in one
+ * direction, and it is the half the kernel's in-place decrement depends on. *)
+Lemma sig_never_invents_units : forall cnt c,
+    Nat.leb (sc_cnt (fst (sem_sig_step cnt c))) (sc_cnt c + cnt) = true.
+Proof.
+  intros cnt c. assert (C := sig_step_conserves cnt c).
+  apply Nat.leb_le. lia.
+Qed.
+
+(* A signal moves the count and the queue and nothing else: the marker, the
+ * ceiling and the three attribute bits are carried through by sem_after.  The
+ * ceiling in particular has to be named, because every inequality below is
+ * against sc_max c and the result cell is a different term. *)
+Lemma sig_step_keeps_the_identity_fields : forall cnt c,
+    sc_id (fst (sem_sig_step cnt c)) = sc_id c /\
+    sc_max (fst (sem_sig_step cnt c)) = sc_max c /\
+    sc_gran (fst (sem_sig_step cnt c)) = sc_gran c /\
+    sc_tpri (fst (sem_sig_step cnt c)) = sc_tpri c /\
+    sc_nodis (fst (sem_sig_step cnt c)) = sc_nodis c.
+Proof.
+  intros cnt c. unfold sem_sig_step. cbn [fst sem_after]. repeat split; reflexivity.
+Qed.
+
+Lemma sig_step_keeps_the_ceiling : forall cnt c,
+    sc_max (fst (sem_sig_step cnt c)) = sc_max c.
+Proof. intros cnt c. unfold sem_sig_step. cbn [fst sem_after]. reflexivity. Qed.
+
+(* The other half of the accounting: a well-formed cell stays well-formed
+ * through a signal that the ceiling guard admitted. *)
+Lemma sig_step_within_ceiling : forall cnt c,
+    sem_wf c = true -> Nat.leb cnt (Nat.sub (sc_max c) (sc_cnt c)) = true ->
+    count_within_ceiling (fst (sem_sig_step cnt c)) = true.
+Proof.
+  intros cnt c W H.
+  assert (U : sc_cnt c <= sc_max c) by (apply a_wellformed_cell_is_within_its_ceiling; exact W).
+  assert (L : cnt <= Nat.sub (sc_max c) (sc_cnt c)). { apply Nat.leb_le in H. exact H. }
+  assert (C := sig_step_conserves cnt c).
+  unfold count_within_ceiling. rewrite sig_step_keeps_the_ceiling. apply Nat.leb_le. lia.
+Qed.
+
+(* Only a FIFO walk can be run with no units to hand out.  The zero signal is
+ * not the identity on the cell -- it is exactly the drain that §14.7's rel_wai
+ * hook runs, starting from the count the object already holds. *)
+Lemma sig_zero_is_the_drain_from_the_current_count : forall c,
+    fst (sem_sig_step 0 c) = sem_after c (sig_walk (sc_gran c) (sc_cnt c) (sc_wait c)) /\
+    snd (sem_sig_step 0 c) = d_gone (sig_walk (sc_gran c) (sc_cnt c) (sc_wait c)).
+Proof.
+  intros c. unfold sem_sig_step. rewrite Nat.add_0_r. split; reflexivity.
+Qed.
+
+Lemma a_zero_signal_onto_an_empty_queue_is_the_identity : forall c,
+    sc_wait c = nil -> sem_sig_step 0 c = (c, nil).
+Proof.
+  intros c E. destruct c as [i m g tp nd cnt q].
+  cbn [sc_wait] in E. rewrite E.
+  unfold sem_sig_step, sem_after. rewrite Nat.add_0_r, sig_walk_nil.
+  cbn [d_left d_kept d_gone]. reflexivity.
+Qed.
+
+(* The queue a signal leaves behind is a sublist of the queue it started with,
+ * so the positive-needs half of the invariant is a property of the walk rather
+ * than of the request. *)
+Lemma the_walk_keeps_only_positive_needs : forall gran q count,
+    every_needs q = true -> every_needs (d_kept (sig_walk gran count q)) = true.
+Proof.
+  intros gran q. revert gran.
+  induction q as [|x rest IH]; intros gran count H.
+  - cbn [sig_walk d_kept every_needs forallb]. reflexivity.
+  - cbn [every_needs forallb] in H. apply andb_true_iff in H. destruct H as [P Hrest].
+    destruct (Nat.ltb count (w_need x)) eqn:N.
+    + destruct gran.
+      * rewrite (sig_walk_unsat_gran count x rest N).
+        cbn [d_kept drain_skip every_needs forallb]. apply andb_true_iff.
+        split; [ exact P | apply (IH true count Hrest) ].
+      * rewrite (sig_walk_unsat_fifo count x rest N).
+        cbn [d_kept every_needs forallb]. apply andb_true_iff.
+        split; [ exact P | exact Hrest ].
+    + rewrite (sig_walk_sat_kept gran count x rest N). apply IH. exact Hrest.
+Qed.
+
+Lemma sig_step_preserves_the_invariant : forall cnt c,
+    sem_wf c = true -> Nat.leb cnt (Nat.sub (sc_max c) (sc_cnt c)) = true ->
+    sem_wf (fst (sem_sig_step cnt c)) = true.
+Proof.
+  intros cnt c W H. unfold sem_wf, waiters_have_needs.
+  apply andb_true_iff. split.
+  - apply sig_step_within_ceiling. exact W. exact H.
+  - apply the_walk_keeps_only_positive_needs.
+    apply a_wellformed_cell_has_positive_needs. exact W.
+Qed.
+
+(* wai_sem, semaphore.c:308-325.  Three branches in the C order: the wait-
+ * disable guard returns its own figure before anything is examined, the claim
+ * test subtracts, and the failure branch registers the caller and pre-writes
+ * E_TMOUT through §12.4 -- or, for a poll, does neither and reports the same
+ * figure from the guard.  sem_take and sem_block are the two assignments the
+ * kernel makes, each leaving the other fields alone. *)
+Definition sem_take (need : nat) (c : semcb) : semcb :=
+  mk_semcb (sc_id c) (sc_max c) (sc_gran c) (sc_tpri c) (sc_nodis c)
+           (Nat.sub (sc_cnt c) need) (sc_wait c).
+
+Definition sem_block (who : sem_who) (c : semcb) : semcb :=
+  mk_semcb (sc_id c) (sc_max c) (sc_gran c) (sc_tpri c) (sc_nodis c)
+           (sc_cnt c) (sem_enqueue (sc_tpri c) who (sc_wait c)).
+
+Definition sem_wai (mask : nat) (t : tmo) (who : sem_who) (c : semcb) : semcb * er :=
+  if diswai_of (masked_for mask WO_SEM) (sc_nodis c) then (c, E_DISWAI)
+  else if sem_claimed (sc_gran c)
+                      (top_of_queue (sc_tpri c) (w_pri who) (sc_wait c))
+                      (sc_cnt c) (w_need who)
+       then (sem_take (w_need who) c, E_OK)
+       else if tmo_blocks t then (sem_block who c, prewrite false)
+       else (c, prewrite false).
+
+Lemma wai_refusal_leaves_the_cell_alone : forall mask t who c,
+    diswai_of (masked_for mask WO_SEM) (sc_nodis c) = true ->
+    fst (sem_wai mask t who c) = c.
+Proof.
+  intros mask t who c D. unfold sem_wai. rewrite D. reflexivity.
+Qed.
+
+Lemma wai_refusal_reports_its_own_figure : forall mask t who c,
+    diswai_of (masked_for mask WO_SEM) (sc_nodis c) = true ->
+    snd (sem_wai mask t who c) = E_DISWAI.
+Proof.
+  intros mask t who c D. unfold sem_wai. rewrite D. reflexivity.
+Qed.
+
+Lemma wai_take_subtracts_the_need : forall mask t who c,
+    diswai_of (masked_for mask WO_SEM) (sc_nodis c) = false ->
+    sem_claimed (sc_gran c) (top_of_queue (sc_tpri c) (w_pri who) (sc_wait c))
+                (sc_cnt c) (w_need who) = true ->
+    fst (sem_wai mask t who c) = sem_take (w_need who) c.
+Proof.
+  intros mask t who c D C. unfold sem_wai. rewrite D, C. reflexivity.
+Qed.
+
+Lemma wai_take_reports_E_OK : forall mask t who c,
+    diswai_of (masked_for mask WO_SEM) (sc_nodis c) = false ->
+    sem_claimed (sc_gran c) (top_of_queue (sc_tpri c) (w_pri who) (sc_wait c))
+                (sc_cnt c) (w_need who) = true ->
+    snd (sem_wai mask t who c) = E_OK.
+Proof.
+  intros mask t who c D C. unfold sem_wai. rewrite D, C. reflexivity.
+Qed.
+
+(* A wait that blocks registers the caller, and does so in the position §14.1
+ * decides; a poll does not register anybody (§12.4's enqueues, and the
+ * semaphore's own queue is untouched). *)
+Lemma wai_block_registers_the_caller : forall mask t who c,
+    diswai_of (masked_for mask WO_SEM) (sc_nodis c) = false ->
+    sem_claimed (sc_gran c) (top_of_queue (sc_tpri c) (w_pri who) (sc_wait c))
+                (sc_cnt c) (w_need who) = false ->
+    tmo_blocks t = true ->
+    sc_wait (fst (sem_wai mask t who c)) = sem_enqueue (sc_tpri c) who (sc_wait c).
+Proof.
+  intros mask t who c D C B. unfold sem_wai. rewrite D, C, B. reflexivity.
+Qed.
+
+Lemma wai_block_leaves_the_count_alone : forall mask t who c,
+    diswai_of (masked_for mask WO_SEM) (sc_nodis c) = false ->
+    sem_claimed (sc_gran c) (top_of_queue (sc_tpri c) (w_pri who) (sc_wait c))
+                (sc_cnt c) (w_need who) = false ->
+    tmo_blocks t = true ->
+    sc_cnt (fst (sem_wai mask t who c)) = sc_cnt c.
+Proof.
+  intros mask t who c D C B. unfold sem_wai. rewrite D, C, B. reflexivity.
+Qed.
+
+Lemma a_poll_registers_nobody : forall mask who c,
+    diswai_of (masked_for mask WO_SEM) (sc_nodis c) = false ->
+    sem_claimed (sc_gran c) (top_of_queue (sc_tpri c) (w_pri who) (sc_wait c))
+                (sc_cnt c) (w_need who) = false ->
+    fst (sem_wai mask TMO_POLL who c) = c.
+Proof.
+  intros mask who c D C. unfold sem_wai. rewrite D, C.
+  cbn [tmo_blocks]. reflexivity.
+Qed.
+
+(* Every branch of the wait reads the same figure beside the pair: a blocked
+ * call and a poll are distinguished by the queue, not by the receipt -- §12.4
+ * again, and exactly as in §13's mailbox. *)
+Lemma wai_without_a_take_pre_writes_the_timeout : forall mask t who c,
+    diswai_of (masked_for mask WO_SEM) (sc_nodis c) = false ->
+    sem_claimed (sc_gran c) (top_of_queue (sc_tpri c) (w_pri who) (sc_wait c))
+                (sc_cnt c) (w_need who) = false ->
+    snd (sem_wai mask t who c) = prewrite false.
+Proof.
+  intros mask t who c D C. unfold sem_wai. rewrite D, C.
+  destruct t; reflexivity.
+Qed.
+
+(* E_OK is the signature of the take branch and of nothing else. *)
+Lemma an_E_OK_wait_is_a_take : forall mask t who c,
+    snd (sem_wai mask t who c) = E_OK ->
+    diswai_of (masked_for mask WO_SEM) (sc_nodis c) = false /\
+    sem_claimed (sc_gran c) (top_of_queue (sc_tpri c) (w_pri who) (sc_wait c))
+                (sc_cnt c) (w_need who) = true.
+Proof.
+  intros mask t who c H. unfold sem_wai in H.
+  set (v := diswai_of (masked_for mask WO_SEM) (sc_nodis c)) in *.
+  set (u := sem_claimed (sc_gran c) (top_of_queue (sc_tpri c) (w_pri who) (sc_wait c))
+                        (sc_cnt c) (w_need who)) in *.
+  destruct v; destruct u; destruct t; cbn [tmo_blocks prewrite snd] in H;
+    try discriminate H; split; reflexivity.
+Qed.
+
+(* The wait never raises the balance, on any branch -- including the take, where
+ * the subtraction truncates rather than going negative. *)
+Lemma a_wait_never_adds_units : forall mask t who c,
+    Nat.leb (sc_cnt (fst (sem_wai mask t who c))) (sc_cnt c) = true.
+Proof.
+  intros mask t who c. unfold sem_wai.
+  destruct (diswai_of (masked_for mask WO_SEM) (sc_nodis c)).
+  - cbn [fst]. apply Nat.leb_le. reflexivity.
+  - destruct (sem_claimed (sc_gran c)
+                          (top_of_queue (sc_tpri c) (w_pri who) (sc_wait c))
+                          (sc_cnt c) (w_need who)).
+    + cbn [fst]. unfold sem_take. cbn [sc_cnt]. apply Nat.leb_le. lia.
+    + destruct t; cbn [fst tmo_blocks]; unfold sem_block; cbn [sc_cnt];
+        apply Nat.leb_le; reflexivity.
+Qed.
+
+(* ── 14.7 The departure walk, and the delete broadcast ──────────── *)
+
+(* semaphore.c:149-165 and :126-131.  sem_chg_pri re-orders the queue only when
+ * a priority actually changed (gcb_change_priority at :157, skipped for
+ * oldpri < 0) and then runs the drain -- but it RETURNS AT ONCE when TA_CNT is
+ * set (:161-163). sem_rel_wai is sem_chg_pri with oldpri = -1.  So the hook that
+ * fires when a waiter disappears runs the zero-signal FIFO walk: no units are
+ * handed in, and a waiter can still be released.  That is the one path on which
+ * §14.5's CHECK_PAR(cnt > 0) does not apply, which is why the sig_walk_zero laws
+ * above are stated about the walk and not about the service.  The C loop of the
+ * departure walk (:166-175) also lacks the "if (semcnt <= 0) break" of the
+ * signal walk (:264); with positive needs the next test fails anyway, so the two
+ * walks agree and are modelled by the same function. *)
+Definition sem_rel_wai_step (c : semcb) : semcb * list sem_who :=
+  if sc_gran c then (c, nil)
+  else (sem_after c (sig_walk false (sc_cnt c) (sc_wait c)),
+        d_gone (sig_walk false (sc_cnt c) (sc_wait c))).
+
+Lemma a_granular_departure_does_nothing : forall c,
+    sc_gran c = true -> sem_rel_wai_step c = (c, nil).
+Proof. intros c G. unfold sem_rel_wai_step. rewrite G. reflexivity. Qed.
+
+Lemma rel_wai_is_the_fifo_zero_signal : forall c,
+    sc_gran c = false -> sem_rel_wai_step c = sem_sig_step 0 c.
+Proof.
+  intros c G. unfold sem_rel_wai_step, sem_sig_step.
+  rewrite G, Nat.add_0_r. reflexivity.
+Qed.
+
+Lemma rel_wai_conserves : forall c, sc_gran c = false ->
+    sc_cnt (fst (sem_rel_wai_step c)) + qsum (snd (sem_rel_wai_step c)) = sc_cnt c.
+Proof.
+  intros c G. unfold sem_rel_wai_step. rewrite G. cbn [fst snd sem_after].
+  symmetry. apply sig_walk_conserves.
+Qed.
+
+(* A departure releases only from the head, in FIFO order -- §14's prefix law
+ * read onto the hook, and the reason a semaphore's timeout can hand its place
+ * to the NEXT waiter but never to a later one. *)
+Lemma rel_wai_releases_a_fifo_prefix : forall c, sc_gran c = false ->
+    exists s, sc_wait c = d_gone (sig_walk false (sc_cnt c) (sc_wait c)) ++ s /\
+              sc_wait (fst (sem_rel_wai_step c)) = s.
+Proof.
+  intros c G. unfold sem_rel_wai_step. rewrite G. cbn [fst sem_after d_kept].
+  destruct (fifo_drains_a_prefix (sc_cnt c) (sc_wait c)) as [s [H1 H2]].
+  exists s. split; [ exact H1 | apply H2 ].
+Qed.
+
+(* The punchline of §14: a waiter leaves, the count is untouched by any signal,
+ * and still another task is granted.  Computed, not asserted. *)
+Example a_departure_releases_without_a_signal :
+    snd (sem_rel_wai_step (mk_semcb 1 5 false false false 2 [mk_who 9 2 1]))
+    = [mk_who 9 2 1] /\
+    fst (sem_rel_wai_step (mk_semcb 1 5 false false false 2 [mk_who 9 2 1]))
+    = mk_semcb 1 5 false false false 0 nil.
+Proof. split; vm_compute; reflexivity. Qed.
+
+(* del_sem, semaphore.c:197-215: wait_delete walks the queue and releases every
+ * waiter through wait_release_ng with E_DLT, then the cell goes back to the
+ * free list with its marker cleared (:210-211).  Same reading as §13's mailbox
+ * broadcast: the receipt each waiter ends with is the composition of §12.4's
+ * pre-write and a WRITING release, so E_DLT overrides the E_TMOUT the blocked
+ * call parked in its own slot. *)
+Definition sem_broadcast (c : semcb) : list er :=
+  map (fun _ => final_receipt RK_del (prewrite false)) (sc_wait c).
+
+Lemma sem_broadcast_is_all_E_DLT : forall c,
+    sem_broadcast c = repeat E_DLT (length (sc_wait c)).
+Proof.
+  intros c. unfold sem_broadcast.
+  assert (A : forall l : list sem_who,
+            map (fun _ => final_receipt RK_del (prewrite false)) l = repeat E_DLT (length l)).
+  { induction l as [|x l IH]; cbn [map repeat length]; [reflexivity |].
+    cbn [final_receipt effect_of ef_write prewrite] in *. rewrite IH. reflexivity. }
+  apply A.
+Qed.
+
+(* The cell the free list gets back: the marker is cleared, and nothing else is
+ * reset -- semcnt and maxsem stay stale in the C, which is legal only because
+ * every reader goes through the marker test first (semaphore.c:235, :297). *)
+Definition sem_forget (c : semcb) : semcb :=
+  mk_semcb 0 (sc_max c) (sc_gran c) (sc_tpri c) (sc_nodis c) (sc_cnt c) nil.
+
+Lemma a_forgotten_cell_reports_no_existence : forall st i c,
+    sem_used (bus_s st i (sem_view (sem_forget c))) i = false.
+Proof.
+  intros st i c. rewrite used_is_the_marker. unfold sem_forget.
+  cbn [sc_id]. reflexivity.
+Qed.
+
+Lemma a_forgotten_cell_holds_no_waiters : forall c,
+    length (s_wait (sem_view (sem_forget c))) = 0.
+Proof. intros c. unfold sem_view. cbn [s_wait]. reflexivity. Qed.
+
+(* ── 14.8 The two services, computed ───────────────────────────── *)
+
+(* The wait's own invariant step, which needs §14.1's insertion law: a blocked
+ * caller joins the queue, and the queue keeps positive needs only because the
+ * caller was refused by the claim test rather than by CHECK_PAR. *)
+Lemma every_needs_cons : forall x q,
+    every_needs (x :: q) = andb (Nat.ltb 0 (w_need x)) (every_needs q).
+Proof. intros x q. reflexivity. Qed.
+
+Lemma every_needs_app : forall q1 q2,
+    every_needs (q1 ++ q2) = andb (every_needs q1) (every_needs q2).
+Proof.
+  intros q1. induction q1 as [|x rest IH]; intros q2.
+  - cbn [app every_needs forallb]. reflexivity.
+  - cbn [app]. rewrite !every_needs_cons, IH. apply andb_assoc.
+Qed.
+
+Lemma insert_tpri_keeps_the_needs_positive : forall who q,
+    every_needs q = true -> Nat.ltb 0 (w_need who) = true ->
+    every_needs (insert_tpri who q) = true.
+Proof.
+  intros who q. revert who.
+  induction q as [|x rest IH]; intros who H P.
+  - cbn [insert_tpri]. rewrite every_needs_cons, P. reflexivity.
+  - destruct (Nat.ltb (w_pri who) (w_pri x)) eqn:Pr.
+    + rewrite (insert_tpri_puts_the_better_task_first who x rest Pr).
+      rewrite every_needs_cons. apply andb_true_iff. split; [ exact P | exact H ].
+    + rewrite every_needs_cons in H. apply andb_true_iff in H. destruct H as [Nx Hrest].
+      rewrite (insert_tpri_tie_defers who x rest Pr).
+      rewrite every_needs_cons, Nx. apply andb_true_iff.
+      split; [ reflexivity | apply (IH who Hrest P) ].
+Qed.
+
+Lemma sem_enqueue_keeps_the_needs_positive : forall tpri who q,
+    every_needs q = true -> Nat.ltb 0 (w_need who) = true ->
+    every_needs (sem_enqueue tpri who q) = true.
+Proof.
+  intros tpri who q H P. unfold sem_enqueue. destruct tpri.
+  - apply insert_tpri_keeps_the_needs_positive. exact H. exact P.
+  - rewrite every_needs_app, H, every_needs_cons, P. reflexivity.
+Qed.
+
+(* Reading the invariant off a freshly built cell, so that no projection of a
+ * constructor is left for a linear-arithmetic tactic to relate. *)
+Lemma sem_wf_of_a_cell : forall i mx g tp nd cnt q,
+    sem_wf (mk_semcb i mx g tp nd cnt q) = andb (Nat.leb cnt mx) (every_needs q).
+Proof. intros i mx g tp nd cnt q. reflexivity. Qed.
+
+Lemma a_blocking_wait_keeps_the_invariant : forall who c,
+    sem_wf c = true -> Nat.ltb 0 (w_need who) = true ->
+    sem_wf (sem_block who c) = true.
+Proof.
+  intros who c W P. unfold sem_block. rewrite sem_wf_of_a_cell.
+  apply andb_true_iff. split.
+  - apply Nat.leb_le. apply a_wellformed_cell_is_within_its_ceiling. exact W.
+  - apply sem_enqueue_keeps_the_needs_positive.
+    + apply a_wellformed_cell_has_positive_needs. exact W.
+    + exact P.
+Qed.
+
+Lemma wai_step_preserves_the_invariant : forall mask t who c,
+    sem_wf c = true -> Nat.ltb 0 (w_need who) = true ->
+    sem_wf (fst (sem_wai mask t who c)) = true.
+Proof.
+  intros mask t who c W P.
+  assert (U : sc_cnt c <= sc_max c) by (apply a_wellformed_cell_is_within_its_ceiling; exact W).
+  assert (N : every_needs (sc_wait c) = true)
+    by (apply a_wellformed_cell_has_positive_needs; exact W).
+  unfold sem_wai.
+  destruct (diswai_of (masked_for mask WO_SEM) (sc_nodis c)).
+  - cbn [fst]. exact W.
+  - destruct (sem_claimed (sc_gran c)
+                          (top_of_queue (sc_tpri c) (w_pri who) (sc_wait c))
+                          (sc_cnt c) (w_need who)).
+    + cbn [fst]. unfold sem_take. rewrite sem_wf_of_a_cell. apply andb_true_iff. split.
+      * apply Nat.leb_le. lia.
+      * exact N.
+    + destruct t; cbn [fst tmo_blocks].
+      * exact W.
+      * apply a_blocking_wait_keeps_the_invariant; assumption.
+      * apply a_blocking_wait_keeps_the_invariant; assumption.
+Qed.
+
+(* A first FIFO caller takes the only unit; a second one blocks and is written at
+ * the TAIL, and both the count and the queue move exactly as the C says. *)
+Example a_fifo_wait_takes_then_queues :
+    sem_wai 0 TMO_REL (mk_who 7 1 3) (mk_semcb 1 4 false false false 1 nil)
+    = (mk_semcb 1 4 false false false 0 nil, E_OK) /\
+    sem_wai 0 TMO_REL (mk_who 8 1 2) (mk_semcb 1 4 false false false 0 [mk_who 7 1 3])
+    = (mk_semcb 1 4 false false false 0 [mk_who 7 1 3; mk_who 8 1 2], E_TMOUT).
+Proof. split; vm_compute; reflexivity. Qed.
+
+(* The two attributes the queue order depends on, on the shipped shapes: a TA_TPRI
+ * caller with a strictly better priority takes the head place and the units, a
+ * caller tied with the head does not (wait.c:196-207). *)
+Example tpri_cuts_in_only_on_a_strict_improvement :
+    sem_wai 0 TMO_REL (mk_who 8 1 3) (mk_semcb 1 4 false true false 1 [mk_who 7 1 5])
+    = (mk_semcb 1 4 false true false 0 [mk_who 7 1 5], E_OK) /\
+    sem_wai 0 TMO_REL (mk_who 8 1 5) (mk_semcb 1 4 false true false 0 [mk_who 7 1 5])
+    = (mk_semcb 1 4 false true false 0 [mk_who 7 1 5; mk_who 8 1 5], E_TMOUT).
+Proof. split; vm_compute; reflexivity. Qed.
+
+(* A poll is refused by the same claim test and reports the same figure as a
+ * blocking call that queued -- the difference is only in the queue (§12.4). *)
+Example a_poll_and_a_wait_differ_only_in_the_queue :
+    snd (sem_wai 0 TMO_POLL (mk_who 8 1 2) (mk_semcb 1 4 false false false 0 [mk_who 7 1 3]))
+    = snd (sem_wai 0 TMO_REL (mk_who 8 1 2) (mk_semcb 1 4 false false false 0 [mk_who 7 1 3])) /\
+    fst (sem_wai 0 TMO_POLL (mk_who 8 1 2) (mk_semcb 1 4 false false false 0 [mk_who 7 1 3]))
+    = mk_semcb 1 4 false false false 0 [mk_who 7 1 3].
+Proof. split; vm_compute; reflexivity. Qed.
+
+(* The guard order of §14.5, computed: the wait-disable refusal beats a claim
+ * that would have succeeded, because semaphore.c:308 precedes :313 -- and the
+ * object's own TA_NODISWAI bit beats the refusal. *)
+Example the_wait_disable_guard_precedes_the_claim :
+    sem_wai ttw_sem TMO_FEVR (mk_who 8 1 2) (mk_semcb 1 4 false false false 5 nil)
+    = (mk_semcb 1 4 false false false 5 nil, E_DISWAI) /\
+    sem_wai ttw_sem TMO_FEVR (mk_who 8 1 2) (mk_semcb 1 4 false false true 5 nil)
+    = (mk_semcb 1 4 false false true 4 nil, E_OK).
+Proof. split; vm_compute; reflexivity. Qed.
+
+(* A signal spends the units it handed in, in queue order.  Without TA_CNT the
+ * walk breaks at the first waiter it cannot satisfy (semaphore.c:254-256); with
+ * TA_CNT it continues past that waiter and releases a later one it can satisfy
+ * (:253-254), leaving the unsatisfied task queued in its original place. *)
+Example a_fifo_signal_stops_and_a_granular_one_steps_over :
+    snd (sem_sig_step 3 (mk_semcb 1 8 false false false 0 [mk_who 7 2 3; mk_who 8 2 4]))
+    = [mk_who 7 2 3] /\
+    fst (sem_sig_step 3 (mk_semcb 1 8 false false false 0 [mk_who 7 2 3; mk_who 8 2 4]))
+    = mk_semcb 1 8 false false false 1 [mk_who 8 2 4] /\
+    snd (sem_sig_step 3 (mk_semcb 1 8 true false false 0 [mk_who 7 5 3; mk_who 8 1 4]))
+    = [mk_who 8 1 4] /\
+    fst (sem_sig_step 3 (mk_semcb 1 8 true false false 0 [mk_who 7 5 3; mk_who 8 1 4]))
+    = mk_semcb 1 8 true false false 2 [mk_who 7 5 3].
+Proof. repeat split; vm_compute; reflexivity. Qed.
+
+(* The ceiling guard, computed against §14.5's cascade: three units into a
+ * balance of 3 under a ceiling of 5 overflow, two do not -- and the receipt is
+ * E_QOVR, which no other service in this family can produce. *)
+Example the_ceiling_guard_is_the_only_state_dependent_one :
+    first_bad (sem_sig_guards true 1 3 5 3) = Some E_QOVR /\
+    first_bad (sem_sig_guards true 1 2 5 3) = None /\
+    first_bad (sem_sig_guards false 1 3 5 3) = Some E_NOEXS /\
+    first_bad (sem_sig_guards true 0 2 5 3) = Some E_ID /\
+    first_bad (sem_sig_guards true 1 0 5 3) = Some E_PAR.
+Proof. repeat split; vm_compute; reflexivity. Qed.
+
+(* The two encodings of this family agree: §6's sem, the projection of a full
+ * control block, and the cell the walk moves are one object. *)
+Example the_projection_is_the_shipped_shape :
+    sem_view (mk_semcb 1 8 false false false 3 [mk_who 7 2 3; mk_who 8 2 4])
+    = mk_sem 1 3 [7; 8] /\
+    sem_view (mk_semcb 0 1 false false false 0 nil) = free_sem.
+Proof. split; reflexivity. Qed.

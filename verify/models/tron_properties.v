@@ -542,15 +542,16 @@ Record kst : Type := mk_kst {
     b_m    : nat -> mbx;
     b_s    : nat -> sem;
     b_run  : nat;               (* task.h:200 schedtsk, 0 = nothing to run *)
-    b_indp : bool               (* check.h in_indp(): interrupt/dispatched *)
+    b_indp : bool;              (* cpu_status.h:73 in_indp(): the task-independent part *)
+    b_ddsp : bool               (* cpu_status.h:77 in_ddsp(): dispatch disabled *)
   }.
 
 Definition bus_t (st : kst) (i : nat) (v : tcb) : kst :=
-  mk_kst (@upd tcb (b_t st) i v) (b_m st) (b_s st) (b_run st) (b_indp st).
+  mk_kst (@upd tcb (b_t st) i v) (b_m st) (b_s st) (b_run st) (b_indp st) (b_ddsp st).
 Definition bus_m (st : kst) (i : nat) (v : mbx) : kst :=
-  mk_kst (b_t st) (@upd mbx (b_m st) i v) (b_s st) (b_run st) (b_indp st).
+  mk_kst (b_t st) (@upd mbx (b_m st) i v) (b_s st) (b_run st) (b_indp st) (b_ddsp st).
 Definition bus_s (st : kst) (i : nat) (v : sem) : kst :=
-  mk_kst (b_t st) (b_m st) (@upd sem (b_s st) i v) (b_run st) (b_indp st).
+  mk_kst (b_t st) (b_m st) (@upd sem (b_s st) i v) (b_run st) (b_indp st) (b_ddsp st).
 
 Lemma at_t_same_t : forall st i (t : tcb), b_t (bus_t st i t) i = t.
 Proof. intros st i t. unfold bus_t. apply upd_same. Qed.
@@ -575,6 +576,15 @@ Proof. intros st i t. unfold bus_t. reflexivity. Qed.
 
 Lemma indp_inert_t : forall st i (t : tcb), b_indp (bus_t st i t) = b_indp st.
 Proof. intros st i t. unfold bus_t. reflexivity. Qed.
+
+Lemma ddsp_inert_t : forall st i (t : tcb), b_ddsp (bus_t st i t) = b_ddsp st.
+Proof. intros st i t. unfold bus_t. reflexivity. Qed.
+
+Lemma ddsp_inert_m : forall st i (v : mbx), b_ddsp (bus_m st i v) = b_ddsp st.
+Proof. intros st i v. unfold bus_m. reflexivity. Qed.
+
+Lemma ddsp_inert_s : forall st i (v : sem), b_ddsp (bus_s st i v) = b_ddsp st.
+Proof. intros st i v. unfold bus_s. reflexivity. Qed.
 
 (* Field setters, positional, in the style of writer_revive / writer_push. *)
 Definition t_stat_ (s : tstat) (t : tcb) : tcb :=
@@ -644,8 +654,63 @@ Definition free_sem : sem := mk_sem 0 0 [].
 Definition make_dormant (t : tcb) : tcb :=
   t_slot_ None (t_wait_ None (t_klock_ false (t_sus_ 0 (t_wup_ 0 (t_pri_ (t_bpri t) (t_stat_ S_DORMANT t)))))).
 
+(* The empty kernel has no running task.  ctxtsk == NULL is one of the two arms
+ * of in_indp() (cpu_status.h:73), and in_indp() is one of the three arms of
+ * in_ddsp() (:77), so an idle state is both independent and dispatch-disabled
+ * -- the honest initial values are true, not false. *)
 Definition st0 : kst :=
-  mk_kst (fun _ => free_tcb) (fun _ => free_mbx) (fun _ => free_sem) 0 false.
+  mk_kst (fun _ => free_tcb) (fun _ => free_mbx) (fun _ => free_sem) 0 true true.
+
+(* Two coordinates, one implication.  The kernel's own header comments the
+ * subsumption ("Also include the task independent part as during dispatch
+ * disable", cpu_status.h:76-77), and the second arm says a missing ctxtsk is
+ * an independent call.  A state that violates either is not a state the shipped
+ * macros can produce, so the services that read one coordinate and refuse on
+ * the other are stated over ctx_wf rather than over every kst. *)
+Definition impliesb (a b : bool) : bool := orb (negb a) b.
+
+Definition ctx_wf (st : kst) : bool :=
+  andb (impliesb (b_indp st) (b_ddsp st))
+       (impliesb (Nat.eqb (b_run st) 0) (b_indp st)).
+
+Lemma st0_is_a_wellformed_context : ctx_wf st0 = true.
+Proof. unfold ctx_wf, st0. cbn [impliesb negb orb Nat.eqb]. reflexivity. Qed.
+
+(* The consequence the two guards are read for: an independent call may name
+ * TSK_SELF (check.h:27 admits it) and may not block (check.h:250 refuses it).
+ * So the §9 self guard and the §13 dispatch guard cannot both be satisfied by
+ * one state -- which is exactly what a single b_indp coordinate would have
+ * claimed they could. *)
+Lemma independent_calls_may_not_wait : forall st,
+    ctx_wf st = true -> b_indp st = true -> b_ddsp st = true.
+Proof.
+  intros st W I. unfold ctx_wf, impliesb in W. rewrite I in W.
+  cbn [negb orb] in W. apply andb_true_iff in W. destruct W as [H1 _].
+  exact H1.
+Qed.
+
+Lemma dispatching_calls_are_dependent : forall st,
+    ctx_wf st = true -> b_ddsp st = false -> b_indp st = false /\ 0 < b_run st.
+Proof.
+  intros st W D. unfold ctx_wf, impliesb in W. rewrite D in W.
+  apply andb_true_iff in W. destruct W as [X Y].
+  apply orb_true_iff in X. destruct X as [Q | F]; [ | discriminate F].
+  apply negb_true_iff in Q.
+  assert (Z : b_run st <> 0).
+  { apply orb_true_iff in Y. destruct Y as [Q2 | F2].
+    - apply negb_true_iff in Q2. intros E. rewrite E in Q2.
+      cbn [Nat.eqb] in Q2. discriminate Q2.
+    - rewrite F2 in Q. discriminate Q. }
+  split; [ exact Q | ].
+  destruct (b_run st); [ contradiction | ]; lia.
+Qed.
+
+Lemma some_context_admits_a_wait : exists st, ctx_wf st = true /\ b_ddsp st = false.
+Proof.
+  exists (mk_kst (b_t st0) (b_m st0) (b_s st0) min_tskid false false). split.
+  - unfold ctx_wf, impliesb. cbn [impliesb negb Nat.eqb orb andb]. reflexivity.
+  - reflexivity.
+Qed.
 
 (* Existence is a stored marker, not a bit: mailbox.c:229 and 334 both test
  * mbxcb->mbxid == 0 after the range check. *)
@@ -2345,54 +2410,69 @@ Proof.
   - rewrite (full_cursor_is_never_wellformed m x) in H. discriminate H.
 Qed.
 
-(* The receive, mailbox.c:279-317.  CHECK_MBXID, CHECK_TMOUT, CHECK_DISPATCH,
- * then the stored marker, then the head-or-block split.  CHECK_DISPATCH
- * (check.h:254-258) refuses anything but a poll while dispatch is disabled,
- * and §3 proved that the shipped test is against the TMO_POL sentinel, so the
- * guard below reads tmo_blocks rather than a sign test. *)
-Definition rcv_dispatch_guard (indp : bool) (t : tmo) : bool :=
-  orb indp (negb (tmo_blocks t)).
-
+(* The receive, mailbox.c:279-317.  CHECK_MBXID (E_ID) at :284, CHECK_TMOUT at
+ * :285, the stored marker (E_NOEXS) inside the critical section, and
+ * CHECK_DISPATCH (E_CTX) at :286.  That last macro is the unconditional form
+ * of check.h:249-253, not the TMO_POL-exempt form of check.h:254-258: here a
+ * dispatch-disabled context refuses even a poll.  The time-out is therefore
+ * not an input to the context guard at all, which is the difference between
+ * this service and the message ring of §15. *)
 Definition mbx_rcv_guards (st : kst) (id : nat) (t : tmo) : list (bool * er) :=
   (chk_id min_mbxid num_mbx id, E_ID) ::
   (mbx_used st (index_of min_mbxid id), E_NOEXS) ::
-  (rcv_dispatch_guard (b_indp st) t, E_CTX) :: nil.
+  (negb (b_ddsp st), E_CTX) :: nil.
 
 Lemma rcv_E_CTX_is_a_context_refusal : forall st id t,
     first_bad (mbx_rcv_guards st id t) = Some E_CTX ->
     chk_id min_mbxid num_mbx id = true /\ mbx_used st (index_of min_mbxid id) = true /\
-    b_indp st = false /\ tmo_blocks t = true.
+    b_ddsp st = true.
 Proof.
-  intros st id t H. unfold mbx_rcv_guards, rcv_dispatch_guard in H.
+  intros st id t H. unfold mbx_rcv_guards in H.
   set (c := chk_id min_mbxid num_mbx id) in *.
   set (u := mbx_used st (index_of min_mbxid id)) in *.
-  set (i := b_indp st) in *.
-  set (b := tmo_blocks t) in *.
-  destruct c; destruct u; destruct i; destruct b;
-  cbn [first_bad negb orb] in H;
+  set (d := b_ddsp st) in *.
+  destruct c; destruct u; destruct d;
+  cbn [first_bad negb] in H;
   try discriminate H;
   repeat split; reflexivity.
 Qed.
 
-(* A permanent wait is refused in a dispatch-disabled context exactly like a
- * timed one: the guard reads the sentinel, and TMO_FEVR is not the sentinel.
- * An arithmetic sign test would have let it through (positive_test_misclassifies_fevr). *)
-Lemma fevr_is_no_escape_from_dispatch : forall st,
-    b_indp st = false -> rcv_dispatch_guard false TMO_FEVR = false.
-Proof. intros st _. reflexivity. Qed.
+(* The guard list never reads the time-out argument, so two calls that differ
+ * only in their timeout receive identically -- the shape of the C is the
+ * theorem, and it is what makes the exempt form a different service. *)
+Lemma the_mailbox_context_guard_ignores_the_time_out : forall st id t1 t2,
+    mbx_rcv_guards st id t1 = mbx_rcv_guards st id t2.
+Proof. intros st id t1 t2. reflexivity. Qed.
 
-Lemma poll_always_passes_the_dispatch_guard : forall indp,
-    rcv_dispatch_guard indp TMO_POLL = true.
-Proof. intros indp. unfold rcv_dispatch_guard, tmo_blocks. destruct indp; reflexivity. Qed.
+(* check.h:254-258, the exempt form.  messagebuf.c:372 is its only user in the
+ * shipped kernel, and §3's positive_test_misclassifies_fevr applies to it: the
+ * exemption is the sentinel test, not a sign test. *)
+Definition ddsp_pol_guard (ddsp : bool) (t : tmo) : bool :=
+  orb (negb ddsp) (negb (tmo_blocks t)).
+
+Lemma a_poll_passes_the_exempt_guard : forall ddsp,
+    ddsp_pol_guard ddsp TMO_POLL = true.
+Proof. intros ddsp. unfold ddsp_pol_guard, tmo_blocks. destruct ddsp; reflexivity. Qed.
+
+Lemma fevr_is_no_escape_from_the_exempt_guard : ddsp_pol_guard true TMO_FEVR = false.
+Proof. reflexivity. Qed.
+
+Lemma the_exemption_reaches_only_a_poll : forall ddsp,
+    ddsp_pol_guard ddsp TMO_POLL = true /\
+    ddsp_pol_guard ddsp TMO_REL = negb ddsp /\
+    ddsp_pol_guard ddsp TMO_FEVR = negb ddsp.
+Proof.
+  intros ddsp. unfold ddsp_pol_guard, tmo_blocks.
+  destruct ddsp; repeat split; reflexivity.
+Qed.
 
 Lemma rcv_guards_admit_a_blocking_wait_only_alone : forall st id t,
-    b_indp st = true -> first_bad (mbx_rcv_guards st id t) = None <->
+    b_ddsp st = false -> first_bad (mbx_rcv_guards st id t) = None <->
     chk_id min_mbxid num_mbx id = true /\ mbx_used st (index_of min_mbxid id) = true.
 Proof.
-  intros st id t I. unfold mbx_rcv_guards, rcv_dispatch_guard.
-  rewrite I. cbn [orb negb tmo_blocks].
+  intros st id t I. unfold mbx_rcv_guards.
   destruct (chk_id min_mbxid num_mbx id);
-  destruct (mbx_used st (index_of min_mbxid id)); cbn [first_bad];
+  destruct (mbx_used st (index_of min_mbxid id)); rewrite I; cbn [first_bad negb];
   split; intros H.
   - split; reflexivity.
   - reflexivity.

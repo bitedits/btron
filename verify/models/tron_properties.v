@@ -6952,3 +6952,573 @@ Example the_accept_loop_resumes_when_a_read_frees_space :
     /\ mbf_drain (mbf_read (mk_mbf 16 0 0 0) 4) (1 :: nil)
        = (mk_mbf 16 0 8 8, nil).
 Proof. repeat split; reflexivity. Qed.
+
+(* ── 15.6 The two services, computed ───────────────────────────────── *)
+
+(* Everything above this point is a law with hypotheses.  This subsection is the
+ * same laws read as figures: a request record per row, the buffer beside it, and
+ * the value the service hands back.  These are reflexivity checks on the
+ * transcription, which is the only form of evidence this file can offer that the
+ * model and the C agree short of running the C -- and the oracle of task 9 runs
+ * the same figures the other way round. *)
+
+Definition empty16 : mbf := mbf_fresh 16.
+
+(* The three requests that differ only in what the caller was willing to wait
+ * for.  :406 sets E_TMOUT in all three cases; :408 alone decides whether the
+ * caller learns it now or later. *)
+Definition send_served : snd_req :=
+  mk_snd_req 1 4 Z0 false true 32 false true false false.
+
+Definition send_blocked_miss : snd_req :=
+  mk_snd_req 1 4 (Z.pos 100) false true 32 false true false false.
+
+Definition send_polled_miss : snd_req :=
+  mk_snd_req 1 4 Z0 false true 32 false true false false.
+
+Example a_store_moves_the_tail_and_pays_eight_bytes :
+    mbf_snd_service send_served empty16
+    = Some (E_OK, mk_mbf 16 8 0 8).
+Proof. vm_compute. reflexivity. Qed.
+
+Example the_same_miss_blocks_with_a_deadline_and_returns_with_a_poll :
+    mbf_snd_service send_blocked_miss mbf_full8 = @None (er * mbf)
+    /\ mbf_snd_service send_polled_miss mbf_full8 = Some (E_TMOUT, mbf_full8).
+Proof. repeat split; vm_compute; reflexivity. Qed.
+
+(* The ownership test at :401 is not a capacity test, and this is the case that
+ * separates them: the buffer has nothing in it at all, every byte is free, and
+ * the send still cannot store, because a message buffer serves its send-wait
+ * queue in order and this caller is not at its head.  The E_TMOUT is not "the
+ * ring is full"; it is "it is not your turn". *)
+Definition send_behind_another_waiter : snd_req :=
+  mk_snd_req 1 4 Z0 false true 32 false false false false.
+
+Example an_untitled_sender_times_out_on_an_empty_buffer :
+    mbf_snd_service send_behind_another_waiter empty16
+    = Some (E_TMOUT, empty16)
+    /\ mb_free empty16 = mb_bufsz empty16.
+Proof. repeat split; vm_compute; reflexivity. Qed.
+
+(* The four refusals, each with the guard that produces it.  All four leave the
+ * buffer exactly as it was, which is 15.5.5's nothing_but_a_store_moves_the_-
+ * buffer read as figures rather than as a disjunction. *)
+Definition send_to_a_dead_buffer : snd_req :=
+  mk_snd_req 1 4 Z0 false false 32 false true false false.
+
+Definition send_larger_than_maxmsz : snd_req :=
+  mk_snd_req 1 40 Z0 false true 32 false true false false.
+
+Definition send_while_dispatch_is_disabled : snd_req :=
+  mk_snd_req 1 4 (Z.pos 100) true true 32 false true false false.
+
+Definition send_with_an_id_outside_the_family : snd_req :=
+  mk_snd_req 20 4 Z0 false true 32 false true false false.
+
+Example each_send_refusal_names_its_own_guard :
+    mbf_snd_service send_to_a_dead_buffer empty16 = Some (E_NOEXS, empty16)
+    /\ mbf_snd_service send_larger_than_maxmsz empty16 = Some (E_PAR, empty16)
+    /\ mbf_snd_service send_while_dispatch_is_disabled empty16
+       = Some (E_CTX, empty16)
+    /\ mbf_snd_service send_with_an_id_outside_the_family empty16
+       = Some (E_ID, empty16).
+Proof. repeat split; vm_compute; reflexivity. Qed.
+
+(* The three receives, on the buffer the first send above leaves behind. *)
+Definition rcv_a_stored_message : rcv_req :=
+  mk_rcv_req 1 (Z.pos 100) false true false false 4 0.
+
+Definition rcv_from_a_waiting_sender : rcv_req :=
+  mk_rcv_req 1 (Z.pos 100) false true false true 0 6.
+
+Definition rcv_polled_miss : rcv_req := mk_rcv_req 1 Z0 false true false false 0 0.
+
+Definition rcv_blocked_miss : rcv_req :=
+  mk_rcv_req 1 (Z.pos 100) false true false false 0 0.
+
+Example a_read_answers_with_the_length_and_repays_the_charge :
+    mbf_rcv_service rcv_a_stored_message (mbf_store empty16 4)
+    = Some (4%Z, mk_mbf 16 16 8 8).
+Proof. vm_compute. reflexivity. Qed.
+
+Example a_handoff_answers_with_the_senders_length_and_touches_nothing :
+    mbf_rcv_service rcv_from_a_waiting_sender empty16
+    = Some (6%Z, empty16).
+Proof. vm_compute. reflexivity. Qed.
+
+Example a_polled_miss_answers_E_TMOUT_and_a_blocked_miss_does_not_answer :
+    mbf_rcv_service rcv_polled_miss empty16
+    = Some (er_code E_TMOUT, empty16)
+    /\ mbf_rcv_service rcv_blocked_miss empty16 = @None (Z * mbf).
+Proof. repeat split; vm_compute; reflexivity. Qed.
+
+(* The wire figures themselves.  er_code is errno.h:27's composition -- the main
+ * code shifted by 16 and negated -- and these are the six values this pair of
+ * services can produce, so the oracle has constants to compare against rather
+ * than names. *)
+Example the_six_figures_this_pair_returns :
+    er_code E_TMOUT = (Z.opp 3276800)
+    /\ er_code E_ID = (Z.opp 1179648)
+    /\ er_code E_PAR = (Z.opp 1114112)
+    /\ er_code E_CTX = (Z.opp 1638400)
+    /\ er_code E_NOEXS = (Z.opp 2752512)
+    /\ er_code E_DISWAI = (Z.opp 3407872).
+Proof. repeat split; reflexivity. Qed.
+
+Definition rcv_a_dead_buffer : rcv_req :=
+  mk_rcv_req 1 (Z.pos 100) false false false false 0 0.
+
+Definition rcv_with_a_disabled_wait : rcv_req :=
+  mk_rcv_req 1 (Z.pos 100) false true true false 0 0.
+
+Example a_receive_refusal_is_a_length_that_is_never_zero :
+    mbf_rcv_answer rcv_a_dead_buffer empty16 = er_code E_NOEXS
+    /\ mbf_rcv_answer rcv_with_a_disabled_wait empty16 = er_code E_DISWAI
+    /\ Z.ltb (mbf_rcv_answer rcv_a_dead_buffer empty16) Z0 = true.
+Proof. repeat split; vm_compute; reflexivity. Qed.
+
+(* Send then receive, composed: the pair of services is a round trip, and the
+ * buffer it returns is the one the store built with the read applied -- full
+ * counter, cursors coincident at 8, which is 15.5.2's a_round_trip example seen
+ * through the two service wrappers instead of the two cursor updates. *)
+Example a_send_then_a_receive_on_the_same_buffer_is_a_round_trip :
+    match mbf_snd_service send_served empty16 with
+    | Some (_, m) => mbf_rcv_service rcv_a_stored_message m
+    | None => @None (Z * mbf)
+    end
+    = Some (4%Z, mk_mbf 16 16 8 8).
+Proof. vm_compute. reflexivity. Qed.
+
+(* The accept loop (:198-214) at the two ends of its range, and the case the
+ * split copy is for.  In the third row the header lands at 8, the eight payload
+ * bytes straddle the end of the buffer, and the cursor comes back to 4 -- the
+ * only place in this section where a message occupies two runs of cells, which
+ * is exactly why :141-148 rounds the REDUCED size rather than the original one. *)
+Example an_accept_loop_takes_a_prefix_and_leaves_the_rest_queued :
+    mbf_drain (mbf_store empty16 4) (4 :: 4 :: nil)
+    = (mk_mbf 16 0 0 0, 4 :: nil)
+    /\ mbf_drain (mbf_store empty16 4) (8 :: nil)
+       = (mk_mbf 16 8 0 8, 8 :: nil).
+Proof. repeat split; reflexivity. Qed.
+
+Example the_loop_resumes_after_a_read_and_a_message_can_straddle_the_end :
+    mbf_drain (mbf_read (mbf_store empty16 4) 4) (8 :: nil)
+    = (mk_mbf 16 4 8 4, @nil nat).
+Proof. reflexivity. Qed.
+
+(* ── 15.7 Three copy axes: what BTRON 3.20 mandates and what it does not ── *)
+
+(* "Zero-copy" is not one claim but three, and the standard is not equally tight
+ * about each of them.  A message crosses a domain boundary three ways:
+ *
+ *   - the BODY: the bytes the caller means to move,
+ *   - the ENVELOPE: the struct that names the body,
+ *   - the QUEUE: the bookkeeping that moves a cell out of the ring.
+ *
+ * Read against ipc_msg.c, 3.20 mandates exactly one of the three and leaves the
+ * other two alone.  15.7.1 is the queue axis, fixable inside the standard;
+ * 15.7.2 the body axis, which the standard already leaves to the caller; and
+ * 15.7.3 the envelope axis, which it does not, and which therefore needs a
+ * surface of its own.  Nothing in 15.7.3 is implemented in this tree: the code
+ * below models a proposal and says so at each step. *)
+
+(* ── 15.7.1 The queue axis: a rotating head is the same dequeue for free ── *)
+
+(* ipc_msg.c:100-104 removes a cell by copying every survivor one slot towards
+ * the head.  The array is a ring -- :61 advances tail modulo the capacity -- but
+ * the dequeue is not: it is a move, and it costs one cell write per message that
+ * stays.  A rotating head costs none: the cells do not move, the coordinate does.
+ * That is what messagebuf.c:137-151 already does for T-Kernel's byte buffer,
+ * where both cursors advance and a message wraps instead of shifting.  So this is
+ * not an exotic idea bolted onto B-TRON; it is the neighbouring service's own
+ * design.  15's opening observation is the whole obstacle: nothing in ipc_msg.c
+ * ever assigns to mb->head, and 15.2.2's rcv_shift_leaves_the_head_alone is the
+ * model saying the same thing about the transcription. *)
+
+(* An array read as a function from index to cell.  The wrap lives in the index,
+ * so the span below needs no modulo of its own: cell 64 of a 64-slot ring is a
+ * caller's error, not a wrapped read, and folding the modulo in here would hide
+ * that. *)
+(* Three messages with three different types, small enough for the examples below
+ * to compute on and distinct enough for a mask to tell them apart. *)
+Definition hold_a : bmsg := mk_bmsg 1 4 100.
+Definition hold_b : bmsg := mk_bmsg 2 4 200.
+Definition hold_c : bmsg := mk_bmsg 3 4 300.
+
+(* A well-formed mailbox holding exactly the queue given: the array is padded to
+ * the ring's capacity with never-written cells, so ring_ok holds and the head is
+ * the inert 0 of :35 -- the state space the C can actually reach. *)
+Definition test_ring (q : list bmsg) : msg_ring :=
+  mk_mring (q ++ repeat dead_cell (Nat.sub msg_ring_cap (length q)))
+           0 (length q) (length q).
+
+Definition slotfn : Set := nat -> bmsg.
+
+(* The queue as a span: len cells starting at base, walked one cell at a time.
+ * Because the walk carries the base along with it, both pop laws below are
+ * reflexivity checks -- a pop either moves the base or moves the cells, and the
+ * span reads the same indices either way. *)
+Fixpoint span (cells : slotfn) (base len : nat) : list bmsg :=
+  match len with
+  | 0 => nil
+  | S k => cells base :: span cells (S base) k
+  end.
+
+Lemma span_pops_at_either_end : forall cells base k,
+    span cells base (S k) = cells base :: span cells (S base) k
+    /\ tl (span cells base (S k)) = span cells (S base) k.
+Proof. intros cells base k. repeat split; reflexivity. Qed.
+
+(* The two designs, as functions on the same array. *)
+Definition shift_pop (cells : slotfn) : slotfn := fun i => cells (S i).  (* :101 *)
+
+Definition rotating_pop (base : nat) : nat := S base.                    (* :106 *)
+
+(* Moving the cells and moving the base read the same span. *)
+Lemma span_of_shift : forall cells k b,
+    span (shift_pop cells) b k = span cells (S b) k.
+Proof.
+  intros cells. induction k as [|k IH]; intros b; cbn [span shift_pop].
+  - reflexivity.
+  - rewrite IH. reflexivity.
+Qed.
+
+Lemma a_shifting_body_pops_the_span : forall cells base len,
+    0 < len ->
+    tl (span cells base len) = span (shift_pop cells) base (Nat.pred len).
+Proof.
+  intros cells base len LT. destruct len as [|k]; [ lia | ].
+  cbn [Nat.pred]. rewrite (span_of_shift cells k base).
+  apply (proj2 (span_pops_at_either_end cells base k)).
+Qed.
+
+Lemma a_rotating_head_pops_the_span : forall cells base len,
+    0 < len ->
+    tl (span cells base len) = span cells (rotating_pop base) (Nat.pred len).
+Proof.
+  intros cells base len LT. destruct len as [|k]; [ lia | ].
+  cbn [Nat.pred]. unfold rotating_pop.
+  apply (proj2 (span_pops_at_either_end cells base k)).
+Qed.
+
+(* The refinement, stated as the API would see it: whatever the queue held, both
+ * designs leave the same queue behind.  Nothing here is a change a caller can
+ * observe. *)
+Lemma the_two_pops_agree : forall cells base len,
+    0 < len ->
+    span (shift_pop cells) base (Nat.pred len)
+    = span cells (rotating_pop base) (Nat.pred len).
+Proof.
+  intros cells base len LT.
+  rewrite <- (a_rotating_head_pops_the_span cells base len LT).
+  symmetry. apply (a_shifting_body_pops_the_span cells base len LT).
+Qed.
+
+(* The cost, which is the only thing that differs -- and it is the C's own loop
+ * bound that says so: :101 runs while i is short of count-1, so every survivor is
+ * assigned once and the last cell is left alone, which is the stale tail cell
+ * 15.2.4's dequeue_leaves_one_stale_cell names. *)
+Definition shift_writes (len : nat) : nat := Nat.pred len.    (* :100-104 *)
+Definition rotating_writes (len : nat) : nat := 0.            (* :106 *)
+
+Lemma a_shift_writes_one_cell_per_survivor : forall len,
+    shift_writes (S len) = len /\ rotating_writes (S len) = 0.
+Proof. intros len. repeat split; reflexivity. Qed.
+
+Lemma a_rotating_head_never_costs_more : forall len,
+    rotating_writes len <= shift_writes len.
+Proof. intros len. unfold rotating_writes, shift_writes. apply Nat.le_0_l. Qed.
+
+Example only_a_queue_of_one_or_fewer_costs_nothing_to_drain :
+    shift_writes 1 = 0 /\ shift_writes 2 = 1 /\ shift_writes 64 = 63.
+Proof. repeat split; reflexivity. Qed.
+
+(* What the difference is worth at the capacity the ring actually has: a queue N
+ * deep drained by N receives pays 0 + 1 + ... + (N-1) cell writes under the copy
+ * design, and nothing under a rotating head. *)
+Fixpoint writes_to_drain (len : nat) : nat :=
+  match len with
+  | 0 => 0
+  | S k => shift_writes (S k) + writes_to_drain k
+  end.
+
+Lemma a_drain_of_one_more_costs_its_depth : forall len,
+    writes_to_drain (S len) = len + writes_to_drain len.
+Proof. intros len. reflexivity. Qed.
+
+Example draining_a_full_ring_by_hand :
+    writes_to_drain 1 = 0 /\ writes_to_drain 2 = 1 /\ writes_to_drain 64 = 2016
+    /\ shift_writes 64 = 63 /\ rotating_writes 64 = 0.
+Proof. repeat split; vm_compute; reflexivity. Qed.
+
+(* The bridge to 15.2 is checked by witness rather than by law: span over the
+ * array function reads the same cells in the same order as win reads the prefix.
+ * The laws above are about what a pop costs, which neither reading of the array
+ * can change. *)
+Example span_and_win_read_the_same_cells :
+    span (fun i => nth i (hold_a :: hold_b :: hold_c :: nil) dead_cell) 0 2
+    = win 2 (hold_a :: hold_b :: hold_c :: nil)
+    /\ span (fun i => nth i (hold_a :: hold_b :: hold_c :: nil) dead_cell) 1 2
+       = hold_b :: hold_c :: nil.
+Proof. repeat split; reflexivity. Qed.
+
+(* The scope of the claim, so it is not read as more than it is: shift_writes
+ * counts the assignment in the loop at :101, which is the C's own unit of work.
+ * It says nothing about cache lines, DMA, or whether the ring's memory is ever
+ * fetched -- the model keeps no bytes to fetch. *)
+
+(* ── 15.7.2 The body axis: the standard already leaves it to the caller ── *)
+
+(* The cell a send writes is one cell (:60) whatever the message claims its body
+ * is, and 15.1's observation -- the kernel reads msg_type and nothing else -- is
+ * why a caller may put a segment number in the body and a byte count in msg_size
+ * and move a whole segment for the price of one cell. *)
+Lemma a_send_costs_one_cell_whatever_it_carries : forall m m' r,
+    ring_ok r = true -> mr_count r < msg_ring_cap ->
+    length (mqueue (snd_store m r)) = S (length (mqueue r))
+    /\ length (mqueue (snd_store m' r)) = S (length (mqueue r)).
+Proof.
+  intros m m' r H OK. split;
+    rewrite (snd_store_appends _ r H OK), length_app; cbn [length]; lia.
+Qed.
+
+(* The guard that refuses a send counts cells, never bytes: two sends of the same
+ * size into two rings that differ by one cell go opposite ways. *)
+Example a_full_ring_refuses_on_count_never_on_size :
+    has_room (test_ring (repeat hold_a 64)) = false
+    /\ has_room (test_ring (repeat hold_a 63)) = true.
+Proof. repeat split; vm_compute; reflexivity. Qed.
+
+(* The T-Kernel byte buffer is the contrast: :133 debits HEADERSZ plus the ROUNDED
+ * size, so its price is a function of the payload.  One ring charges by the
+ * message, the other by the byte. *)
+Example the_two_rings_price_a_kibibyte_differently :
+    shift_writes 1 = 0 /\ mbf_charge 1024 = 1028.
+Proof. repeat split; reflexivity. Qed.
+
+(* The routing is blind to the body as well, which is what makes a descriptor
+ * usable rather than merely cheap: a selective receive decides on the type bit
+ * alone, so a message naming 4 KiB is matched and handed out exactly as a message
+ * naming 4 bytes. *)
+Lemma the_mask_reads_the_type_only : forall m1 m2 mask,
+    bm_type m1 = bm_type m2 ->
+    cell_accepts mask m1 = cell_accepts mask m2.
+Proof.
+  intros m1 m2 mask T. destruct m1 as [t1 s1 d1], m2 as [t2 s2 d2].
+  cbn [bm_type] in T. unfold cell_accepts. cbn [bm_type]. rewrite T.
+  reflexivity.
+Qed.
+
+Lemma a_kibibyte_and_a_word_cost_the_same_cell : forall r,
+    ring_ok r = true -> mr_count r < msg_ring_cap ->
+    length (mqueue (snd_store hold_a r))
+    = length (mqueue (snd_store (mk_bmsg 1 4096 9) r)).
+Proof.
+  intros r H OK.
+  rewrite (snd_store_appends hold_a r H OK), (snd_store_appends _ r H OK).
+  rewrite !length_app. cbn [length]. lia.
+Qed.
+
+(* What this does not buy: the caller still stores its bytes into the struct it
+ * hands to snd_msg, and the receiving task still reads them out of the struct the
+ * kernel filled.  Those copies are real; they are just not this service's.  A
+ * zero-copy claim that counts them is a claim about the application's memory, not
+ * about BTRON 3.20's message queue. *)
+
+(* ── 15.7.3 The envelope axis: what 3.20 mandates, and what it would take ── *)
+
+(* NOT IMPLEMENTED.  Nothing in this tree provides the surface modelled below, and
+ * 3.20 cannot: rcv_msg's second argument is a MESSAGE pointer the kernel writes
+ * into (:97), so a conforming receive produces a copy of the envelope at the
+ * caller's address by construction.  Removing that copy needs a call that returns
+ * a POSITION rather than a value; that needs a second call to give the position
+ * back; and that needs receipts for the states only the pair can reach.  Three
+ * additions, none of them in the standard -- which is why this subsection takes
+ * its own names instead of overloading the 3.20 ones. *)
+
+(* The receipts.  The first five are 15.4's flat figures (error.h:15, :21, :23,
+ * :32, :27) and mean what they mean there.  E_BUSY (:31) and E_OBJ (:26) are also
+ * shipped figures, ones no line of ipc_msg.c can produce, so borrowing them costs
+ * nothing.  A stale borrow has no shipped figure at all: -70 sits one below the
+ * last code in error.h's standard block, and it is a proposal, not a citation. *)
+Inductive zc_ber : Type :=
+  | ZBE_OK
+  | ZBE_PAR
+  | ZBE_ID
+  | ZBE_NOSPC
+  | ZBE_TMOUT
+  | ZBE_BUSY
+  | ZBE_OBJ
+  | ZBE_STALE.
+
+Definition zc_ber_code (b : zc_ber) : Z :=
+  match b with
+  | ZBE_OK    => Z0
+  | ZBE_PAR   => Z.opp 33
+  | ZBE_ID    => Z.opp 35
+  | ZBE_NOSPC => Z.opp 11
+  | ZBE_TMOUT => Z.opp 69
+  | ZBE_BUSY  => Z.opp 65
+  | ZBE_OBJ   => Z.opp 41
+  | ZBE_STALE => Z.opp 70
+  end.
+
+Lemma the_zc_figures_extend_the_shipped_ones :
+    zc_ber_code ZBE_OK = ber_code BE_OK
+    /\ zc_ber_code ZBE_PAR = ber_code BE_PAR
+    /\ zc_ber_code ZBE_ID = ber_code BE_ID
+    /\ zc_ber_code ZBE_NOSPC = ber_code BE_NOSPC
+    /\ zc_ber_code ZBE_TMOUT = ber_code BE_TMOUT.
+Proof. repeat split; reflexivity. Qed.
+
+Lemma zc_ber_code_separates : forall b1 b2, zc_ber_code b1 = zc_ber_code b2 -> b1 = b2.
+Proof.
+  intros b1 b2 H. destruct b1, b2; try reflexivity.
+  all: (vm_compute in H; discriminate H).
+Qed.
+
+(* Below the most negative figure error.h's standard block ships, and one below
+ * the alias ER_TIMEOUT, so the new code cannot be mistaken for an old one. *)
+Lemma a_stale_borrow_is_outside_the_shipped_range :
+    Z.ltb (zc_ber_code ZBE_STALE) (Z.opp 69) = true
+    /\ Z.leb (Z.opp 2147483648) (zc_ber_code ZBE_STALE) = true.
+Proof. repeat split; vm_compute; reflexivity. Qed.
+
+(* The state: a mailbox, plus the one index the receiving task is holding.  One
+ * borrow at a time is a design rule rather than an optimisation -- the second
+ * example below is what a second concurrent borrow costs. *)
+Record zc_box : Set := mk_zbox {
+    zb_ring : msg_ring;
+    zb_held : option nat            (* the borrowed cell, if any *)
+  }.
+
+(* zc_rcv_msg(pid, mask, TMO_POL): match, hand out the index, remove nothing.  The
+ * polling shape alone is modelled; a blocking borrow would park on the queue
+ * 15.3.2 already describes, and the borrow adds nothing to that story. *)
+Definition zc_rcv (mask : nat) (b : zc_box) : zc_ber * zc_box :=
+  match zb_held b with
+  | Some _ => (ZBE_BUSY, b)
+  | None => match rcv_match mask (zb_ring b) with
+            | Some i => (ZBE_OK, mk_zbox (zb_ring b) (Some i))
+            | None => (ZBE_TMOUT, b)
+            end
+  end.
+
+(* zc_rel_msg(pid): the removal, deferred to the moment the caller is done with the
+ * envelope.  It IS the C's dequeue -- rcv_shift, :100-106 -- so the copy this
+ * design takes out of the receive reappears, once, at the release.  Taking 15.7.1
+ * first is what stops it reappearing at all. *)
+Definition zc_rel (b : zc_box) : zc_ber * zc_box :=
+  match zb_held b with
+  | None => (ZBE_OBJ, b)
+  | Some i => (ZBE_OK, mk_zbox (rcv_shift i (zb_ring b)) None)
+  end.
+
+(* The borrow itself writes no cell: the ring field comes back identical in all
+ * three branches. *)
+Lemma a_borrow_writes_no_cell : forall mask b,
+    zb_ring (snd (zc_rcv mask b)) = zb_ring b.
+Proof.
+  intros mask b. unfold zc_rcv. destruct (zb_held b) as [j|].
+  - reflexivity.
+  - destruct (rcv_match mask (zb_ring b)); reflexivity.
+Qed.
+
+Lemma a_release_with_nothing_held_moves_nothing : forall b,
+    zb_held b = None -> zc_rel b = (ZBE_OBJ, b).
+Proof. intros b H. unfold zc_rel. rewrite H. reflexivity. Qed.
+
+Lemma a_second_borrow_while_held_changes_nothing : forall mask b j,
+    zb_held b = Some j -> zc_rcv mask b = (ZBE_BUSY, b).
+Proof. intros mask b j H. unfold zc_rcv. rewrite H. reflexivity. Qed.
+
+Lemma the_release_of_a_held_cell_is_the_dequeue : forall r i,
+    zc_rel (mk_zbox r (Some i)) = (ZBE_OK, mk_zbox (rcv_shift i r) None).
+Proof. intros r i. reflexivity. Qed.
+
+(* Why the names cannot be overloaded onto the 3.20 surface.  With a borrow in
+ * hand the message is still queued, so the same scan finds it again -- and the
+ * count says nothing was taken, while 15.3.1's a_hit_returns_a_queued_cell says a
+ * hit hands out a queued cell.  A caller of rcv_msg can never see a cell twice; a
+ * caller of zc_rcv_msg sees one until it gives it back.  That is a different
+ * contract, not a faster one. *)
+Definition three_deep : msg_ring := test_ring (hold_a :: hold_b :: hold_c :: nil).
+
+Definition box0 : zc_box := mk_zbox three_deep None.
+Definition box1 : zc_box := snd (zc_rcv (msgmask 2) box0).
+
+Example a_borrowed_cell_is_still_there_to_be_found :
+    ring_ok three_deep = true
+    /\ fst (zc_rcv (msgmask 2) box0) = ZBE_OK
+    /\ mr_count (zb_ring box1) = 3
+    /\ rcv_match (msgmask 2) (zb_ring box1) = Some 1
+    /\ fst (zc_rcv (msgmask 2) box1) = ZBE_BUSY.
+Proof. repeat split; vm_compute; reflexivity. Qed.
+
+(* And the hazard the one-borrow rule is for.  A borrow names a cell by INDEX; a
+ * receive whose match lies EARLIER in the queue shifts every later cell one slot
+ * towards the head -- that is what :100-104 does -- so the index the borrower was
+ * handed stops naming the borrowed message.  Three messages is enough: borrow the
+ * middle one at index 1, let another receive take the front one, and index 1 now
+ * names the THIRD message.  A release by index then deletes a message nobody has
+ * read. *)
+Example a_borrowed_index_is_not_a_stable_name :
+    rcv_match (msgmask 2) three_deep = Some 1
+    /\ mqueue (rcv_shift 0 three_deep) = hold_b :: hold_c :: nil
+    /\ nth 1 (mqueue (rcv_shift 0 three_deep)) dead_cell = hold_c
+    /\ rcv_match (msgmask 2) (rcv_shift 0 three_deep) = Some 0.
+Proof. repeat split; vm_compute; reflexivity. Qed.
+
+(* Two ways out, and the model says which one it takes: a cookie the release CHECKS
+ * rather than uses turns the stale case into a receipt instead of a silent
+ * deletion, and 15.7.1's rotating head makes removals at the head leave every
+ * index alone -- which covers the common case and, since the mask can match in
+ * the middle, does not cover all of it. *)
+Definition zc_rel_at (b : zc_box) (i : nat) : zc_ber * zc_box :=
+  match zb_held b with
+  | None => (ZBE_OBJ, b)
+  | Some j => if Nat.eqb i j
+              then (ZBE_OK, mk_zbox (rcv_shift j (zb_ring b)) None)
+              else (ZBE_STALE, b)
+  end.
+
+Lemma a_stale_release_writes_nothing : forall b i j,
+    zb_held b = Some j -> Nat.eqb i j = false -> zc_rel_at b i = (ZBE_STALE, b).
+Proof. intros b i j H N. unfold zc_rel_at. rewrite H, N. reflexivity. Qed.
+
+Lemma a_current_release_is_the_dequeue : forall b i j,
+    zb_held b = Some j -> Nat.eqb i j = true ->
+    zc_rel_at b i = (ZBE_OK, mk_zbox (rcv_shift j (zb_ring b)) None).
+Proof. intros b i j H E. unfold zc_rel_at. rewrite H, E. reflexivity. Qed.
+
+Lemma a_release_of_nothing_held_is_e_obj : forall b,
+    zb_held b = None -> zc_rel_at b 0 = (ZBE_OBJ, b).
+Proof. intros b H. unfold zc_rel_at. rewrite H. reflexivity. Qed.
+
+Example the_three_release_receipts :
+    zc_rel_at (mk_zbox (test_ring (hold_a :: nil)) None) 0 = (ZBE_OBJ, mk_zbox (test_ring (hold_a :: nil)) None)
+    /\ fst (zc_rel_at (mk_zbox (test_ring (hold_a :: hold_b :: nil)) (Some 1)) 1) = ZBE_OK
+    /\ fst (zc_rel_at (mk_zbox (test_ring (hold_a :: hold_b :: nil)) (Some 1)) 0) = ZBE_STALE.
+Proof. repeat split; vm_compute; reflexivity. Qed.
+
+(* ── 15.7.4 The copy budget, as this file can claim it ─────────────── *)
+
+(* Against the three axes: the shipped tree, 15.7.1's fix, and 15.7.3's proposal.
+ * Each figure is a definition or a lemma above, not an estimate.
+
+     axis      shipped             with 15.7.1        with 15.7.3
+     body      0 kernel copies     0                  0
+     envelope  1 in, 1 out         1 in, 1 out        0, with a borrow and a release
+     queue     count minus 1       0                  0, at the release
+
+ * So the honest sentence is this.  The payload path is zero-copy already, because
+ * a cell costs one write at any declared size and the kernel never reads it.  The
+ * dequeue is zero-copy after 15.7.1 -- inside the standard, invisible to the API,
+ * and the design messagebuf.c has always used.  The envelope is copied once each
+ * way in, and that last copy is the one BTRON 3.20 mandates. *)
+Lemma the_three_axes_in_figures :
+    shift_writes 64 = 63
+    /\ rotating_writes 64 = 0
+    /\ zc_ber_code ZBE_STALE = Z.opp 70
+    /\ mbf_charge 1024 = 1028.
+Proof. repeat split; reflexivity. Qed.

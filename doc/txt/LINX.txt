@@ -1,0 +1,487 @@
+LINX.txt — Linux Personality: Syscall Numbers, ELF, musl on T-Kernel
+====================================================================
+
+B-System (BTRON 3.20)
+Linux ABI guest plane for unmodified musl / Alpine userland
+Related: NOTE.md (volume / Real Body), ASYNC.txt, IO.txt, SMP.md,
+         t-kernel task model, BFS_V2.txt
+
+Status: Architecture and implementation requirements (normative)
+Policy: B-System remains a T-Kernel / BTRON machine.  Linux software is
+        admitted by a personality, not by replacing the nucleus.
+        Native BTRON APIs are never rewritten as POSIX.
+        Compatibility is an ABI.  The kernel exports two call gates;
+        only one of them is Linux-shaped.
+
+
+0. Scope, naming, and the one-sentence claim
+--------------------------------------------
+
+0.1 What this document covers
+
+  * The architectural contract of the LINX personality: Linux syscall
+    numbers, ELF loading, and musl (or mlibc with a BTRON sysdep) on
+    top of existing T-Kernel objects and BTRON volumes.
+  * The object map from Linux process / fd / VMA / futex onto
+    cre_tsk / FID / memory pool / wait queue.
+  * The POSIX projection of a Real Body (byte-stream view) that must
+    not mutilate TAD records.
+  * The minimal syscall surface that boots static musl, then dynamic
+    musl, then an Alpine miniroot.
+  * Phased implementation and explicit non-goals.
+
+0.2 Naming hygiene
+
+  *LINX*           The personality subsystem.  Not a second kernel.
+  *Linux gate*     Syscall entry that uses Linux numbers and the SysV
+                   userspace calling convention for the chosen ISA.
+  *tk gate*        Native T-Kernel / BTRON supervisor calls.
+  *LinxProc*       Linux-shaped process control block (thread group).
+  *POSIX projection*
+                   Read/write/getdents view of a Real Body.  Not the
+                   hypertext model.
+  *musl root*      A POSIX directory tree (static busybox first;
+                   Alpine miniroot later).  Lives beside /SYS and /USER,
+                   not inside TAD.
+
+0.3 One-sentence summary
+
+  B-System implements Linux syscall numbers, ELF, and musl as a
+  translation onto T-Kernel tasks and a byte-stream view of Real
+  Bodies, so Alpine-class C software runs without becoming the OS.
+
+
+1. Duality (normative)
+----------------------
+
+B-System enforces a strict duality, same family as ASYNC.txt Tier-1 /
+Tier-2 and IO.txt core pinning:
+
+  Gate          ABI                         Who uses it
+  ------------  --------------------------  --------------------------------
+  tk_* / BTRON  T-Kernel 2.0 + BTRON3       Real Bodies, HMI, TAD, Workbench
+  linx          Linux syscall set + ELF     musl processes (guest class)
+
+LINX is a T-Kernel subsystem (or a privileged server task).  It does
+not own the scheduler, the volume format, or Display Primitives.
+
+  | Invariant (personality, not kernel):
+  | A Linux program talks to a numbered interface (openat, mmap,
+  | clone, futex, …) and an ELF memory image.  LINX implements that
+  | interface.  The nucleus stays T-Kernel.
+
+Priority bands (hard):
+
+  T-Kernel RT / ASYNC INPUT+UI   >   LINX kernel work   >   LINX user
+
+A busy Alpine process must not steal the 250 us INPUT period or the
+8.33 ms UI period (ASYNC.txt / IO.txt).  LINX user tasks run in a
+lower T-Kernel priority class than TASK_INPUT / TASK_UI.
+
+
+2. Layer diagram
+----------------
+
+                    musl / Alpine ELF
+                           |
+                    Linux syscall gate
+                    (ISA syscall insn; nr in the
+                     architecture-defined register)
+                           |
+                 +---------v---------+
+                 |  linx             |
+                 |  nr -> handler    |
+                 |  fd / pid / mmap  |
+                 |  errno / clone    |
+                 +---------+---------+
+                           |
+           T-Kernel 2.0              BTRON volume
+           cre_tsk / sem / mpl       FID / Real Body
+           tk_get_tim                records as byte stream
+
+Tree sketch:
+
+  b-system/
+    t-kernel/                 unchanged nucleus
+    fs/                       BTRON volume (NOTE.md)
+    linx/                     THIS document
+      include/linux-abi/      numbers, errno, struct layouts
+      entry/                  syscall stub
+      proc.c  vm.c  fs.c
+      elf.c   time.c
+      posix_proj.c            FID <-> path, record linearize
+    user/musl-root/           miniroot — not in the nucleus tree
+
+
+3. Object map (the whole design)
+--------------------------------
+
+  Linux object          B-System object
+  --------------------  ------------------------------------------------
+  pid_t                 T-Kernel task ID of the group leader + thread group
+  thread                cre_tsk / sta_tsk; TLS in TCB extension
+  fd                    per-LinxProc table; FID+offset, or pipe/socket
+  regular file          Real Body linearized: record payloads in index order
+  directory             Real Body whose visible children are RT_LINK / VOBJ
+  Linux executable      ELF in the POSIX tree first; later ELF in RT_PROG
+  mmap anonymous        T-Kernel memory pool / page allocator
+  mmap file             same + file-backed pages
+  brk                   heap VMA on the LinxProc
+  pipe                  two fds + T-Kernel message buffer or SPSC ring
+  futex                 wait queue keyed by user VA (required for musl)
+  clock_gettime         tk_get_otm / board timer (CLO / TSC / CNTV)
+  uname                 sysname "Linux" + a frozen release string
+
+uname MUST report Linux.  Alpine and many configure scripts abort on
+any other sysname.  This is a personality string, not a claim that
+the nucleus is Linux.
+
+
+4. Modules (six, no more)
+-------------------------
+
+  linx/
+    abi.h          syscall numbers, errno, flags (copy Linux for the ISA)
+    entry.S        syscall stub; optional VDSO-ish page later
+    proc.c         clone, execve, exit_group, wait4, pid
+    vm.c           mmap, munmap, mprotect, brk
+    fs.c           openat, read, write, close, lseek, stat, getdents64
+    time.c         clock_gettime, nanosleep, futex (futex may live here)
+    elf.c          PT_LOAD, auxv, PT_INTERP = musl loader
+
+No Cosmopolitan.  Userspace libc is musl (binary Alpine on one ISA)
+or mlibc with sysdeps/btron that only calls the Linux gate.
+
+Userspace libc is NOT part of the nucleus.  Do not grow linx/ with
+stdio or malloc.
+
+
+5. ABI freeze (normative)
+-------------------------
+
+AF1  Pick exactly one ISA for the first personality (the ISA B-System
+     already boots on the target QEMU machine).  Alpine binaries match
+     that ISA only.  A second ISA is a second table, not a #ifdef forest.
+
+AF2  Syscall numbers are the Linux numbers for that ISA (x86-64 or
+     aarch64).  Do not invent numbers.
+
+AF3  Struct layouts are Linux layouts for that ISA: stat / statx,
+     timespec, timeval, sigaction, sigset_t, dirent64, pollfd,
+     epoll_event (when implemented).  Field sizes are not negotiable.
+     This is the Vinix / mlibc lesson.
+
+AF4  Errno values are Linux errno values.  T-Kernel ER codes are
+     translated at the gate.  Native tk callers never see Linux errno.
+
+AF5  Unimplemented nr returns -ENOSYS.  Growth rule: run a binary,
+     log the nr, add a handler.  No speculative syscall museum.
+
+AF6  ELF: ET_EXEC and ET_DYN, PT_LOAD, PT_INTERP, PT_TLS.
+     Auxv minimum: AT_PHDR, AT_PHENT, AT_PHNUM, AT_PAGESZ, AT_BASE,
+     AT_ENTRY, AT_UID/EUID/GID/EGID, AT_SECURE=0, AT_RANDOM,
+     AT_HWCAP, AT_EXECFN, AT_NULL.
+
+AF7  TLS: x86-64 arch_prctl(ARCH_SET_FS) / FS base; aarch64 TPIDR_EL0.
+
+
+6. LinxProc
+-----------
+
+  LinxProc
+    pid, ppid, pgid
+    aspace          list of VMA { start, end, prot, file?, off }
+    fdtable[N]
+    tid_group[]     T-Kernel tasks
+    fs_root, cwd
+    brk
+    exit_code
+    tid_address     (set_tid_address / musl thread exit)
+
+clone:
+
+  * CLONE_VM|CLONE_FS|CLONE_FILES|CLONE_SIGHAND|CLONE_THREAD
+    -> new T-Kernel task, same LinxProc (thread).
+  * without those flags
+    -> new LinxProc (fork-lite).  Copy VMAs as COW or copy-on-write
+    later; Phase 3 MAY copy eagerly if the address space is small.
+
+execve: tear VMAs, load ELF, reset stack, keep fds except O_CLOEXEC.
+
+exit_group: terminate the whole tid_group; wake waiters.
+
+Signals (Phase 3 minimum): SIGKILL, SIGTERM, SIGCHLD.
+Full rt_sigaction is Phase 5+.  musl starts if clone / futex / mmap
+work even with a small signal set.
+
+  | Invariant:
+  | One LinxProc is one Linux pid.  Threads share the fd table and
+  | aspace.  T-Kernel task IDs are not shown to Linux as pid_t except
+  | for the leader and gettid.
+
+
+7. POSIX projection of BTRON volumes
+------------------------------------
+
+Two mounts, one policy:
+
+  /                 linx root   (POSIX tree: musl root / Alpine)
+    bin lib etc
+    SYS             BTRON system volume, projected, read-mostly
+    USER            BTRON user volume, projected, writable
+
+Projection rules (freeze; dissertation appendix):
+
+P1  Path /SYS/<name> <-> FID lookup by short-name hash (NOTE.md §3.3),
+    then the Real Body.
+
+P2  read() / lseek() see concatenated record payloads in record-index
+    order.  Not TAD-aware.  Continuation index entries are not extra
+    files.
+
+P3  write() on /USER creates or rewrites a single data record
+    (RT_DATABOX or a dedicated RT_POSIX type).  write() on a TAD-
+    carrying record under /SYS is EROFS or EPERM.
+
+P4  getdents64 lists RT_LINK / Virtual Body targets as directory
+    entries.  Names come from the link / file header (40-byte name).
+
+P5  Linux executables live as ELF files in the POSIX tree first.
+    Embedding ELF inside RT_PROG is Phase 6+, not a boot dependency.
+
+P6  The on-disk BTRON volume format does not change (NOTE.md).
+    Projection is a view.  Cho-Kanji volumes stay readable.
+
+P7  /dev/null, /dev/zero, /dev/console are linx nodes.  Console maps
+    to the existing UART / FB log path owned by core 0 (IO.txt:
+    mailbox and uart stay single-writer).  LINX must not become a
+    second uart writer; it posts to a SPSC console ring if the I/O
+    core split is active.
+
+Hypertext remains native-only.  LINX is not a TAD editor.
+
+
+8. Virtual memory
+-----------------
+
+VM1  Page size is the hardware page (4 KiB on the first targets).
+     AT_PAGESZ reports that value.
+
+VM2  mmap anonymous + MAP_PRIVATE is the first path.  MAP_SHARED
+     file maps wait until Phase 4.
+
+VM3  brk/sbrk manage one heap VMA per LinxProc.
+
+VM4  mprotect must work; musl and ld-musl use it.
+
+VM5  On Tier-1 flat physical (MMU off) the "VMA" is still recorded
+     so munmap / mprotect have a table to walk; protection may be
+     advisory until PML4 exists (SMP.md Tier-2).  Document the
+     weakness: isolation is software until Tier-2.
+
+VM6  LINX kernel work that touches user pages must not run on the
+     I/O core (IO.txt §5.3 prohibitions stay absolute).
+
+
+9. Syscall surface (ordered)
+----------------------------
+
+Must (static musl busybox / dash):
+
+  read write close openat lseek
+  mmap mprotect munmap brk
+  exit_group exit
+  clone execve wait4
+  getpid gettid getppid
+  clock_gettime nanosleep
+  ioctl          (TCGETS/TCSETS stub sufficient at first)
+  fcntl
+  uname
+  getcwd chdir
+  getdents64
+  newfstatat / statx
+  access
+  writev readv
+  set_tid_address set_robust_list
+  rt_sigprocmask rt_sigreturn
+  prctl / arch_prctl
+
+Next (dynamic musl + pthreads):
+
+  futex
+  madvise
+  getrandom
+  pipe2 dup3
+  poll or ppoll or select     (one of them)
+  socket connect bind listen accept  (subset)
+  clock_nanosleep
+
+Later (Alpine apk / desktop-class):
+
+  eventfd timerfd signalfd
+  clone3
+  statfs
+  mount          (stub: EPERM except the two projected volumes)
+  cap*           (no-op success for uid 0)
+  getuid geteuid getgid getegid   -> 0
+
+ioctl policy: unknown request returns ENOTTY, not SIGSYS.
+
+
+10. Requirements (R-list)
+-------------------------
+
+R1   Dual gate.  tk callers never enter the Linux number table.
+
+R2   Single ISA table per build.  Cross-ISA is a second personality.
+
+R3   Linux struct layouts and errno.  No "almost Linux" padding.
+
+R4   -ENOSYS for holes.  Trace every hole in a ring buffer readable
+     from the compact HUD or uart on core 0.
+
+R5   Static musl before dynamic musl before apk.
+
+R6   POSIX projection never writes TAD records.
+
+R7   LINX user priority < ASYNC planes.
+
+R8   No heap in the syscall entry path.  Handlers that need memory
+     take it from a pre-sized LinxProc pool.
+
+R9   uname.sysname is "Linux".
+
+R10  Futex is mandatory before advertising pthreads.
+
+R11  Cosmopolitan, glibc, and a Linux kernel tree are out of scope.
+
+R12  Source tree: Linux ABI headers may be copied (numbers + structs
+     only).  No Linux kernel .c files in linx/.
+
+
+11. Rejected patterns
+---------------------
+
+  Pattern                         Violation
+  ------------------------------  -----------------------------------------
+  Replace tk_* with POSIX         Destroys BTRON; wrong thesis
+  Cosmopolitan fat binaries       Wrong portability axis (multi-OS host,
+                                  not a new nucleus)
+  Per-app #ifdef BTRON in ports   The gate is the portability layer
+  Invent struct stat              Breaks musl and Alpine binaries
+  Run LINX drain on I/O core      IO.txt single-producer / no-lock core
+  write() into RT_TADDATA         Corrupts Cho-Kanji documents
+  Busy-loop futex                 Destroys RT budgets
+  Claim "we are Linux" in docs    Personality, not identity
+
+
+12. Implementation phases
+-------------------------
+
+Phase 0 — Contract
+  - Freeze ISA, syscall table file, struct layouts.
+  - Publish this document as the spec appendix.
+  - Decision recorded: static musl first.
+  Exit: abi.h exists and matches Linux for that ISA.
+
+Phase 1 — Trap + hello
+  - Syscall entry from EL0 / Ring 3 (or the B-System user convention).
+  - Dispatch table, default -ENOSYS, nr trace.
+  - write(1, …), exit_group.
+  - Hand-written static ELF: _start + syscall, no libc.
+  Exit: hello prints and exits.
+
+Phase 2 — VM + ELF
+  - Page / pool allocator hooked to T-Kernel mpl.
+  - mmap anonymous, mprotect, munmap, brk.
+  - ELF PT_LOAD, stack, auxv, TLS register.
+  Exit: static musl busybox echo and busybox true.
+
+Phase 3 — Process
+  - LinxProc, fd table, clone (thread + fork-lite), execve, wait4.
+  - set_tid_address.
+  Exit: static busybox sh; simple pipelines if pipe2 exists, else
+        sequential commands.
+
+Phase 4 — POSIX projection
+  - Overlay root + /SYS FID lookup + record linearize.
+  - getdents64 from RT_LINK.
+  - openat create only on /USER.
+  Exit: cat a /SYS name; write /USER/tmp/x.
+
+Phase 5 — musl pthreads
+  - futex wait/wake, clock_gettime, nanosleep.
+  - pipe2, dup3, poll or select.
+  Exit: dynamic musl busybox; a C99 pthread program.
+
+Phase 6 — Alpine miniroot
+  - Drop miniroot into the POSIX volume.
+  - Fill -ENOSYS hits (getrandom, TTY ioctl, sockets).
+  - apk only after socket/connect/network.
+  Exit: a CLI Alpine package runs; GCC optional.
+
+Phase 7 — Coexistence (thesis chapter)
+  - Measure syscall latency vs a Linux host of the same ISA.
+  - Measure ASYNC INPUT jitter with a busy LINX process.
+  - Prove TAD volumes still mount and Workbench still paints.
+
+
+13. First artifact
+------------------
+
+One table, one header, one ELF.
+
+  /* linx/abi.h */
+  typedef long (*linx_fn)(long, long, long, long, long, long);
+
+  struct linx_entry {
+      int          nr;
+      linx_fn      fn;
+      const char  *name;
+  };
+
+  /* numbers: Linux uapi for the frozen ISA, not a private enum */
+
+Phase 1 hello.elf is the acceptance test for the gate.  Everything
+after that is filling the table and the object map in §3.
+
+
+14. Non-goals
+-------------
+
+  * Not Cosmopolitan, not glibc, not Linux sources in-tree.
+  * Not binary TAD editors from Linux processes.
+  * Not io_uring, full namespaces, cgroups, seccomp (return ENOSYS).
+  * Not rewriting the BTRON programmer API as POSIX.
+  * Not running LINX on the dedicated I/O core.
+
+
+15. Relation to other B-System planes
+-------------------------------------
+
+  ASYNC.txt / IO.txt   LINX must not break INPUT/UI periods or the
+                       single-producer EVT ring.  Console output from
+                       LINX is a message to core 0, never a second
+                       uart writer.
+
+  NOTE.md / BFS_V2     Volume format unchanged.  Projection is a view.
+
+  VENUS.txt / GPU.txt  Linux Mesa/X later consume /dev nodes published
+                       by B-System drivers, not a DRM import in Phase
+                       1–5.  Out of scope until Alpine graphics.
+
+  SMP.md               LinxProc on Tier-2 may receive a PML4.  Tier-1
+                       stays flat physical; document the isolation gap.
+
+
+16. Status line for implementers
+--------------------------------
+
+Implement the gate.  Do not port applications one by one.
+The application set is a consequence of the ABI, as in Vinix:
+source-level Linux compatibility first, Alpine binaries when the
+ISA and the syscall set are thick enough.
+
+Document version: 1.0
+Target: B-System (BTRON 3.20) LINX personality
+Date: 2026-10-01

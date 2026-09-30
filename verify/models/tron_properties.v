@@ -71,16 +71,18 @@ Definition num_pri : nat := 140.          (* config.h:130, ready_queue.h:48 *)
  * not of shape. *)
 Definition wupcap : nat := 255.
 
-(* config.h:32-37 (semaphore), :48-53 (event flag), :56-61 (mailbox): the
- * object families the API reaches, each with the same MIN/MAX/INDEX/ID
- * quartet.  Every ID is an affine image of a table index, and that is the
- * whole ID story -- the same morphism, family by family. *)
+(* config.h:32-37 (semaphore), :48-53 (event flag), :56-61 (mailbox), :64-69
+ * (message buffer): the object families the API reaches, each with the same
+ * MIN/MAX/INDEX/ID quartet.  Every ID is an affine image of a table index, and
+ * that is the whole ID story -- the same morphism, family by family. *)
 Definition min_mbxid : nat := 1.          (* config.h:56 *)
 Definition num_mbx : nat := 16.           (* oracle geometry for max_mbxid *)
 Definition min_semid : nat := 1.          (* config.h:32 *)
 Definition num_sem : nat := 16.           (* oracle geometry for max_semid *)
 Definition min_flgid : nat := 1.          (* config.h:48 *)
 Definition num_flg : nat := 16.           (* oracle geometry for max_flgid *)
+Definition min_mbfid : nat := 1.          (* config.h:64 *)
+Definition num_mbf : nat := 16.           (* oracle geometry for max_mbfid *)
 Definition name_len : nat := 8.           (* config.h:165, USE_OBJECT_NAME :163 *)
 
 (* ipc_msg.c:17-18 and message.h:12-24: the B-TRON message ring that crosses
@@ -813,6 +815,20 @@ Proof.
       exists (@nil (bool * er)). exists false. exists gs. split.
       * cbn [app]. reflexivity.
       * split; reflexivity.
+Qed.
+
+(* The contrapositive the services below use: a refusal can only name a code
+ * the cascade itself carries, so an unlisted receipt is unreachable by
+ * construction rather than by inspection of each guard. *)
+Lemma first_bad_names_a_listed_receipt : forall gs e,
+    first_bad gs = Some e -> In e (map snd gs).
+Proof.
+  induction gs as [|[p e0] l IH].
+  - intros e H. discriminate H.
+  - destruct p.
+    + cbn [first_bad map]. intros e H. right. apply IH. exact H.
+    + cbn [first_bad map]. intros e H. injection H. intros E. subst e0.
+      left. reflexivity.
 Qed.
 
 (* Two guards, not one.  CHECK_TSKID admits nothing outside the ID range, and
@@ -4026,8 +4042,13 @@ Proof. split; reflexivity. Qed.
  *   - The B-TRON ring counts MESSAGES, so a dequeue costs one cell; the message
  *     buffer counts BYTES and rounds each message up to a 4-byte boundary
  *     (messagebuf.c:105), so what a store costs is not what its own free-space
- *     test charged for (:113 against :133).  15.5 makes that precise, and it is
- *     a defect rather than a difference.
+ *     test charged for: mbf_free admits a message at HEADERSZ+msgsz bytes (:113)
+ *     while msg_to_mbf debits HEADERSZ+ROUNDSZ(msgsz) (:133).  15.5 shows the
+ *     debt can exceed the admitted space -- 5 bytes admitted against 8 charged --
+ *     and that the two nevertheless agree, because _tk_cre_mbf rounds the buffer
+ *     itself to a multiple of 4 (:273) and every debit is a multiple of 4, so
+ *     frbufsz can never sit at an unaligned value like 9.  An under-charge that
+ *     the create-time alignment rescues, not a defect.
  *
  * The fact that makes this section provable is a hole in the C: nothing in
  * ipc_msg.c ever assigns to g_mailboxes[pid].head.  The memset at :35 puts 0

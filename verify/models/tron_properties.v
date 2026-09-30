@@ -5635,3 +5635,1320 @@ Lemma an_illegal_pid_is_refused_before_the_window_is_read : forall pid m mask r,
 Proof.
   intros pid m mask r I. apply (a_bad_receive_pid_is_ER_ID pid m TMO_REL mask r I).
 Qed.
+
+(* ── 15.5 The byte ring: what a message costs and what it may spend ───── *)
+
+(* T-Kernel's message buffer (src/kernel/messagebuf.c) is the construction of
+ * 15.1-15.4 read at byte granularity: a fixed buffer, a pair of cursors, and a
+ * counter.  Three things the message queue never had to deal with:
+ *
+ *   - every charge is rounded up to a 4-byte boundary (:105),
+ *   - the free-space test that authorises the charge does not round (:113),
+ *   - the emptiness test reads the counter, not the cursors (:121).
+ *
+ * 15.5.1 closes the gap between the first two: an unaligned free-space count
+ * does admit a message it cannot pay for, and a created buffer's count is never
+ * unaligned.  15.5.2 shows the third is not a stylistic preference -- the cursor
+ * pair takes the same value in an empty buffer and in a full one, so it cannot
+ * say whether there is anything to read.
+ *
+ * Scope, stated once so nothing below is read as more than it is: this models
+ * the bookkeeping -- cursor pair, byte counter, guard cascades, receipts, and the
+ * two wait queues.  It does not model the bytes of the buffer.  Nothing here says
+ * the split copy at :141-147 cannot land on a byte an unread message still owns;
+ * that is a memory-layout question, and this file neither answers it nor claims
+ * to. *)
+
+(* ── 15.5.1 The round, the admission, and the charge ─────────────────── *)
+
+(* messagebuf.c:101-105: HEADER is an INT, so HEADERSZ = ROUNDSIZE = sizeof(INT)
+ * = 4, and ROUNDSZ(sz) = (sz + 3) & ~3, i.e. the low two bits of sz+3 cleared.
+ * The model writes that as "4 times the number of blocks sz needs";
+ * roundsz_is_the_least_aligned_upper_bound is the theorem that makes the two the
+ * same function, since a least such figure is unique. *)
+Definition headersz : nat := 4.                          (* :102 *)
+Definition roundsz (sz : nat) : nat := 4 * ((sz + 3) / 4).   (* :105 *)
+
+Lemma roundsz_covers_the_size : forall sz, sz <= roundsz sz.
+Proof.
+  intros sz. unfold roundsz.
+  assert (E : sz + 3 = 4 * ((sz + 3) / 4) + (sz + 3) mod 4) by apply Nat.div_mod_eq.
+  assert (M : (sz + 3) mod 4 < 4) by (apply Nat.mod_upper_bound; lia).
+  lia.
+Qed.
+
+Lemma roundsz_needs_at_most_three_more_bytes : forall sz, roundsz sz <= sz + 3.
+Proof. intros sz. unfold roundsz. apply Nat.Div0.mul_div_le. Qed.
+
+Lemma roundsz_is_aligned : forall sz, roundsz sz mod 4 = 0.
+Proof. intros sz. unfold roundsz. rewrite Nat.mul_comm. apply Nat.Div0.mod_mul. Qed.
+
+(* :105 read as a specification: no aligned figure rounds up past it. *)
+Lemma roundsz_is_the_least_aligned_upper_bound : forall sz q,
+    sz <= 4 * q -> roundsz sz <= 4 * q.
+Proof.
+  intros sz q H. unfold roundsz. apply Nat.mul_le_mono_l.
+  assert (D : (sz + 3) / 4 < q + 1) by (apply Nat.Div0.div_lt_upper_bound; lia).
+  lia.
+Qed.
+
+Lemma roundsz_of_an_aligned_size_is_itself : forall sz,
+    sz mod 4 = 0 -> roundsz sz = sz.
+Proof.
+  intros sz A. apply Nat.le_antisymm.
+  - assert (H4 : sz = 4 * (sz / 4)).
+    { assert (E : sz = 4 * (sz / 4) + sz mod 4) by apply Nat.div_mod_eq.
+      rewrite A in E. lia. }
+    rewrite H4 at 2.
+    apply (roundsz_is_the_least_aligned_upper_bound sz (sz / 4)). lia.
+  - apply roundsz_covers_the_size.
+Qed.
+
+Lemma roundsz_is_idempotent : forall sz, roundsz (roundsz sz) = roundsz sz.
+Proof.
+  intros sz. apply (roundsz_of_an_aligned_size_is_itself (roundsz sz)).
+  apply roundsz_is_aligned.
+Qed.
+
+(* The header is itself a whole aligned block, so rounding a message together
+ * with its header rounds the message alone: :133's HEADERSZ + ROUNDSZ(msgsz) is
+ * also ROUNDSZ(HEADERSZ + msgsz).  This is why a run of stores never pushes the
+ * counter off the boundary. *)
+Lemma the_header_needs_no_rounding_of_its_own : forall sz,
+    roundsz (headersz + sz) = headersz + roundsz sz.
+Proof.
+  intros sz. unfold headersz, roundsz.
+  replace (4 + sz + 3) with (1 * 4 + (sz + 3)) by lia.
+  rewrite Nat.div_add_l; [ | lia ].
+  lia.
+Qed.
+
+(* :113, the admission: HEADERSZ + msgsz bytes free, with no rounding.  The C
+ * casts both sides to UINT; msgsz is positive by :370, so the signed figure and
+ * the model's nat read the same way. *)
+Definition mbf_admits (free sz : nat) : bool := Nat.leb (headersz + sz) free.
+
+(* :133, the charge: HEADERSZ + ROUNDSZ(msgsz).  Strictly the larger figure. *)
+Definition mbf_charge (sz : nat) : nat := headersz + roundsz sz.
+
+Lemma mbf_admits_iff : forall free sz,
+    mbf_admits free sz = true <-> headersz + sz <= free.
+Proof. intros free sz. unfold mbf_admits, headersz. apply Nat.leb_le. Qed.
+
+Lemma every_charge_is_aligned : forall sz, mbf_charge sz mod 4 = 0.
+Proof.
+  intros sz. unfold mbf_charge, headersz, roundsz.
+  replace (4 + 4 * ((sz + 3) / 4)) with ((1 + (sz + 3) / 4) * 4) by lia.
+  apply Nat.Div0.mod_mul.
+Qed.
+
+Lemma headersz_is_aligned : headersz mod 4 = 0.
+Proof. unfold headersz. apply Nat.Div0.mod_same. Qed.
+(* Two shapes lia can see but replace cannot match: a block taken away, and a
+ * whole debit taken away. *)
+Lemma four_times_minus_a_block : forall x, 4 * x - 4 = 4 * (x - 1).
+Proof. intros x. lia. Qed.
+
+
+(* The gap the two definitions open, at its narrowest: 5 bytes admitted on a
+ * count of 9, which the rounding turns into a charge of 12.  An unaligned count
+ * therefore makes the pair unsound, so the hypothesis of the next theorem is
+ * doing work rather than tidying up. *)
+Example an_unaligned_count_admits_more_than_it_can_pay :
+    mbf_admits 9 5 = true /\ headersz + 5 = 9 /\ mbf_charge 5 = 12.
+Proof. repeat split; vm_compute; reflexivity. Qed.
+
+(* The rounding never passes an aligned bound that the size itself respects --
+ * the minimality fact above, stated so a proof can use a subtraction as the
+ * bound instead of having to name a block count. *)
+Lemma roundsz_never_passes_an_aligned_bound : forall sz bound,
+    sz <= bound -> bound mod 4 = 0 -> roundsz sz <= bound.
+Proof.
+  intros sz bound H A.
+  assert (GE : bound = 4 * (bound / 4)).
+  { assert (D : bound = 4 * (bound / 4) + bound mod 4) by apply Nat.div_mod_eq.
+    rewrite A in D. lia. }
+  assert (U : sz <= 4 * (bound / 4)) by lia.
+  assert (R : roundsz sz <= 4 * (bound / 4))
+    by (apply (roundsz_is_the_least_aligned_upper_bound sz (bound / 4)); exact U).
+  lia.
+Qed.
+
+(* :113 against :133, closed: with the count on a boundary, everything the
+ * unrounded test admits the rounded charge can pay for.  The bound is free minus
+ * the header, which is aligned exactly when free is. *)
+Lemma an_aligned_count_never_underpays : forall free sz,
+    free mod 4 = 0 -> mbf_admits free sz = true -> mbf_charge sz <= free.
+Proof.
+  intros free sz A P. unfold mbf_admits, headersz in P. apply Nat.leb_le in P.
+  unfold mbf_charge, headersz.
+  assert (E : free = 4 * (free / 4)).
+  { assert (D : free = 4 * (free / 4) + free mod 4) by apply Nat.div_mod_eq.
+    rewrite A in D. lia. }
+  assert (A4 : Nat.sub free 4 mod 4 = 0).
+  { rewrite E, four_times_minus_a_block, Nat.mul_comm. apply Nat.Div0.mod_mul. }
+  assert (R : roundsz sz <= Nat.sub free 4)
+    by (apply (roundsz_never_passes_an_aligned_bound sz (free - 4)); lia).
+  lia.
+Qed.
+
+Lemma four_times_minus_four_times : forall x y, 4 * x - 4 * y = 4 * (x - y).
+Proof. intros x y. lia. Qed.
+
+Lemma aligned_plus_aligned_is_aligned : forall a b,
+    a mod 4 = 0 -> b mod 4 = 0 -> (a + b) mod 4 = 0.
+Proof.
+  intros a b A B.
+  assert (EA : a = 4 * (a / 4)).
+  { assert (D : a = 4 * (a / 4) + a mod 4) by apply Nat.div_mod_eq.
+    rewrite A in D. lia. }
+  assert (EB : b = 4 * (b / 4)).
+  { assert (D : b = 4 * (b / 4) + b mod 4) by apply Nat.div_mod_eq.
+    rewrite B in D. lia. }
+  rewrite EA, EB.
+  replace (4 * (a / 4) + 4 * (b / 4)) with ((a / 4 + b / 4) * 4) by lia.
+  apply Nat.Div0.mod_mul.
+Qed.
+
+Lemma a_block_is_aligned : forall k, 4 * k mod 4 = 0.
+Proof. intros k. rewrite Nat.mul_comm. apply Nat.Div0.mod_mul. Qed.
+
+Lemma a_difference_of_blocks_is_blocks : forall x y,
+    Nat.sub (4 * x) (4 * y) mod 4 = 0.
+Proof.
+  intros x y. rewrite four_times_minus_four_times. apply a_block_is_aligned.
+Qed.
+
+Lemma the_difference_of_two_aligned_counts_is_aligned : forall a b,
+    a mod 4 = 0 -> b mod 4 = 0 -> Nat.sub a b mod 4 = 0.
+Proof.
+  intros a b A B.
+  assert (EA : a = 4 * (a / 4)).
+  { assert (D : a = 4 * (a / 4) + a mod 4) by apply Nat.div_mod_eq.
+    rewrite A in D. lia. }
+  assert (EB : b = 4 * (b / 4)).
+  { assert (D : b = 4 * (b / 4) + b mod 4) by apply Nat.div_mod_eq.
+    rewrite B in D. lia. }
+  rewrite EA, EB. apply a_difference_of_blocks_is_blocks.
+Qed.
+
+(* A history of stores debits nothing but whole aligned blocks (:133 through the
+ * header lemma above), so a counter that starts on the boundary stays there
+ * however the messages are sized. *)
+Fixpoint mbf_debits (l : list nat) : nat :=
+  match l with
+  | nil => 0
+  | sz :: rest => mbf_charge sz + mbf_debits rest
+  end.
+
+Lemma debits_are_a_multiple_of_the_round : forall l, exists k, mbf_debits l = 4 * k.
+Proof.
+  induction l as [|sz rest IH].
+  - exists 0. reflexivity.
+  - destruct IH as [k HK]. cbn [mbf_debits]. rewrite HK.
+    unfold mbf_charge, headersz, roundsz. exists (1 + (sz + 3) / 4 + k). lia.
+Qed.
+
+(* The shipped reason the alignment hypothesis is not luck: _tk_cre_mbf rounds the
+ * buffer itself, `bufsz = (INT)ROUNDSZ(pk_cmbf->bufsz)` at :273, and :299 then
+ * sets the counter to that same rounded figure. *)
+Definition created_count (requested : nat) : nat := roundsz requested.   (* :273 *)
+
+Lemma a_created_buffer_starts_aligned : forall requested,
+    created_count requested mod 4 = 0.
+Proof. intros requested. unfold created_count. apply roundsz_is_aligned. Qed.
+
+(* The sentence the 15 preamble promises: an under-charge that the create-time
+ * alignment rescues, for any history of stores. *)
+Theorem what_a_live_buffer_admits_it_can_pay : forall bufsz l sz,
+    bufsz mod 4 = 0 ->
+    mbf_admits (Nat.sub bufsz (mbf_debits l)) sz = true ->
+    mbf_charge sz <= Nat.sub bufsz (mbf_debits l).
+Proof.
+  intros bufsz l sz A P. apply (an_aligned_count_never_underpays _ sz).
+  - apply (the_difference_of_two_aligned_counts_is_aligned _ (mbf_debits l) A).
+    destruct (debits_are_a_multiple_of_the_round l) as [k HK].
+    rewrite HK. apply a_block_is_aligned.
+  - exact P.
+Qed.
+
+(* ── 15.5.2 Cursors, counter, and what an empty buffer is ────────────── *)
+
+(* MBFCB's bookkeeping fields: :299 for the size and the counter, :301 for the
+ * cursors.  The bytes themselves (buffer, :298) are outside the model, per the
+ * scope note; maxmsz and the two wait queues enter in 15.5.4. *)
+Record mbf : Set := mk_mbf {
+    mb_bufsz : nat;     (* INT bufsz -- aligned at create (:273,:299) *)
+    mb_free  : nat;     (* INT frbufsz (:113,:121,:133,:168) *)
+    mb_head  : nat;     (* INT head (:301,:162,:187) *)
+    mb_tail  : nat      (* INT tail (:301,:129,:153) *)
+  }.
+
+(* :299 and :301 together. *)
+Definition mbf_fresh (bufsz : nat) : mbf := mk_mbf bufsz bufsz 0 0.
+
+(* :121: the emptiness test is on the counter. *)
+Definition mbf_is_empty (m : mbf) : bool := Nat.eqb (mb_free m) (mb_bufsz m).
+
+Lemma mbf_is_empty_iff : forall m,
+    mbf_is_empty m = true <-> mb_free m = mb_bufsz m.
+Proof. intros m. unfold mbf_is_empty. apply Nat.eqb_eq. Qed.
+
+Lemma a_fresh_buffer_is_empty : forall bufsz, mbf_is_empty (mbf_fresh bufsz) = true.
+Proof. intros bufsz. unfold mbf_is_empty, mbf_fresh. apply Nat.eqb_refl. Qed.
+
+(* :137-139 and :149-151, the cursor's one conditional wrap: past the end of the
+ * buffer is back to zero.  Transcribed as a clamp because that is what the C
+ * says -- `if (x >= bufsz) x = 0`, not `x %= bufsz`.  The two readings agree
+ * while a step never overshoots the end, which is the hypothesis below; without
+ * it they do not agree, and the example after says so plainly. *)
+Definition mbf_advance (cur delta cap : nat) : nat :=
+  if Nat.ltb (cur + delta) cap then cur + delta else 0.
+
+Lemma advance_is_modulo_while_the_step_fits : forall cur delta cap,
+    cur + delta <= cap -> mbf_advance cur delta cap = (cur + delta) mod cap.
+Proof.
+  intros cur delta cap F. unfold mbf_advance.
+  destruct (Nat.ltb (cur + delta) cap) eqn:L.
+  - symmetry. apply Nat.mod_small. apply Nat.ltb_lt in L. exact L.
+  - apply Nat.ltb_nlt in L.
+    assert (E : cur + delta = cap) by lia.
+    rewrite E. symmetry. apply Nat.Div0.mod_same.
+Qed.
+
+Example a_clamp_is_not_a_modulo : mbf_advance 0 11 8 = 0 /\ 11 mod 8 = 3.
+Proof. repeat split; vm_compute; reflexivity. Qed.
+
+Lemma advance_keeps_the_boundary : forall cur delta cap,
+    cur mod 4 = 0 -> delta mod 4 = 0 -> mbf_advance cur delta cap mod 4 = 0.
+Proof.
+  intros cur delta cap C D. unfold mbf_advance.
+  destruct (Nat.ltb (cur + delta) cap) eqn:L.
+  - apply aligned_plus_aligned_is_aligned; assumption.
+  - reflexivity.
+Qed.
+
+(* :136-151, transcribed in the C's own two steps: past the header, then past the
+ * payload, which is split over the end of the buffer when it has to be, with the
+ * second rounding taken of the REDUCED size (:141-148).  The read path
+ * :170-185 is this same walk started from the other cursor -- the two services
+ * are one function used twice, and :144's reduced rounding is why the walk is
+ * written from the post-header position rather than from the start. *)
+Definition mbf_payload_walk (pos sz cap : nat) : nat :=
+  if Nat.ltb (Nat.sub cap pos) sz
+  then mbf_advance 0 (roundsz (Nat.sub sz (Nat.sub cap pos))) cap
+  else mbf_advance pos (roundsz sz) cap.
+
+Definition mbf_walk (start sz cap : nat) : nat :=
+  mbf_payload_walk (mbf_advance start headersz cap) sz cap.
+
+(* Both cursors stay on the boundary: the header step is a whole block and the
+ * payload step rounds to one, so no walk leaves the grid :273 put the buffer on.
+ * That is the other half of why :113's unrounded test survives -- the counter and
+ * the cursors are both reading the same 4-byte grid -- and note the buffer's own
+ * alignment is not needed here, only the start cursor's. *)
+Lemma payload_walk_keeps_the_boundary : forall pos sz cap,
+    pos mod 4 = 0 -> mbf_payload_walk pos sz cap mod 4 = 0.
+Proof.
+  intros pos sz cap P. unfold mbf_payload_walk.
+  destruct (Nat.ltb (Nat.sub cap pos) sz) eqn:L.
+  - apply advance_keeps_the_boundary.
+    + reflexivity.
+    + unfold roundsz. rewrite Nat.mul_comm. apply Nat.Div0.mod_mul.
+  - apply advance_keeps_the_boundary.
+    + exact P.
+    + unfold roundsz. rewrite Nat.mul_comm. apply Nat.Div0.mod_mul.
+Qed.
+
+Lemma a_walk_lands_on_the_boundary : forall start sz cap,
+    start mod 4 = 0 -> mbf_walk start sz cap mod 4 = 0.
+Proof.
+  intros start sz cap S. unfold mbf_walk. apply payload_walk_keeps_the_boundary.
+  apply (advance_keeps_the_boundary start headersz cap S headersz_is_aligned).
+Qed.
+
+(* :133 with :153: the counter pays and the tail moves; nothing else changes. *)
+Definition mbf_store (m : mbf) (sz : nat) : mbf :=
+  mk_mbf (mb_bufsz m) (Nat.sub (mb_free m) (mbf_charge sz)) (mb_head m)
+         (mbf_walk (mb_tail m) sz (mb_bufsz m)).
+
+(* :168 with :187: the counter is repaid and the head moves.  The C takes the
+ * size back off the header it reads at :167; the model is handed that size, since
+ * it keeps no bytes. *)
+Definition mbf_read (m : mbf) (sz : nat) : mbf :=
+  mk_mbf (mb_bufsz m) (Nat.add (mb_free m) (mbf_charge sz))
+         (mbf_walk (mb_head m) sz (mb_bufsz m)) (mb_tail m).
+
+(* One service, one cursor. *)
+Lemma a_store_moves_only_the_tail : forall m sz,
+    mb_head (mbf_store m sz) = mb_head m
+    /\ mb_bufsz (mbf_store m sz) = mb_bufsz m.
+Proof. intros m sz. unfold mbf_store. split; reflexivity. Qed.
+
+Lemma a_read_moves_only_the_head : forall m sz,
+    mb_tail (mbf_read m sz) = mb_tail m
+    /\ mb_bufsz (mbf_read m sz) = mb_bufsz m.
+Proof. intros m sz. unfold mbf_read. split; reflexivity. Qed.
+
+(* The counter's debt is exactly what the next read repays (:133 against :168):
+ * the counter moves by the charge, never by the message. *)
+Lemma a_read_repays_exactly_the_stored_charge : forall m sz,
+    mbf_charge sz <= mb_free m ->
+    mb_free (mbf_read (mbf_store m sz) sz) = mb_free m.
+Proof.
+  intros m sz F. unfold mbf_store, mbf_read.
+  cbn [mb_bufsz mb_free mb_head mb_tail]. lia.
+Qed.
+
+Lemma a_store_never_credits_the_counter : forall m sz,
+    mb_free (mbf_store m sz) <= mb_free m
+    /\ headersz <= mbf_charge sz.
+Proof.
+  intros m sz. split.
+  - unfold mbf_store. cbn [mb_free]. lia.
+  - unfold mbf_charge, headersz, roundsz. lia.
+Qed.
+
+(* The flagship of 15.5, and the reason :121 reads the counter.  bufsz=8 with one
+ * 4-byte message: the header takes bytes 0-3 and the rounded payload takes 4-7,
+ * so the cursor comes back to exactly where it started.  Head and tail are 0, as
+ * in the never-touched buffer, and the buffer is entirely full.  A `head == tail`
+ * emptiness test would report that full buffer empty and drop the message. *)
+Definition mbf_empty8 : mbf := mbf_fresh 8.
+Definition mbf_full8 : mbf := mbf_store mbf_empty8 4.
+
+Example the_cursors_take_the_same_value_in_an_empty_and_a_full_buffer :
+    mb_bufsz mbf_empty8 = mb_bufsz mbf_full8
+    /\ mb_head mbf_empty8 = mb_tail mbf_empty8
+    /\ mb_head mbf_full8 = mb_tail mbf_full8
+    /\ mbf_is_empty mbf_empty8 = true
+    /\ mbf_is_empty mbf_full8 = false.
+Proof. repeat split; vm_compute; reflexivity. Qed.
+
+(* So the cursor pair is a position, not a usage: hold the position and the
+ * counter still says something the position cannot.  The converse fails, and that
+ * is fine -- the counter alone cannot say WHERE the next message goes, which is
+ * why the state is the pair and each half of it is used for what it can say. *)
+Lemma the_cursors_do_not_determine_the_counter :
+    mb_free mbf_empty8 <> mb_free mbf_full8.
+Proof. unfold mbf_empty8, mbf_full8. vm_compute. discriminate. Qed.
+
+(* A round trip on a bigger buffer, computed: the counter comes back to its
+ * starting value and the two cursors coincide again -- but they have moved on, so
+ * the state they arrive at is empty in the :121 sense at a position the fresh
+ * buffer never had. *)
+Example a_round_trip_refills_the_counter_and_moves_both_cursors :
+    mbf_read (mbf_store (mbf_fresh 16) 4) 4 = mk_mbf 16 16 8 8.
+Proof. reflexivity. Qed.
+
+Lemma a_store_then_a_read_leave_the_cursors_coincident : forall m sz,
+    mb_head m = mb_tail m ->
+    mb_head (mbf_read (mbf_store m sz) sz)
+    = mb_tail (mbf_read (mbf_store m sz) sz).
+Proof.
+  intros m sz C. unfold mbf_store, mbf_read. cbn [mb_head mb_tail]. rewrite C.
+  reflexivity.
+Qed.
+
+(* ── 15.5.3 The two context tests, and the figure that feeds them ── *)
+
+(* check.h:184-188 is CHECK_TMOUT: "if (!((tmout) >= TMO_FEVR)) return E_PAR".
+ * The test is a lower bound, not a membership test on the two sentinels, so
+ * every figure from -1 upward passes and every figure below -1 is refused. *)
+Definition tmout_ok (t : Z) : bool := Z.leb (Z.opp 1) t.   (* :185 *)
+
+(* Section 3's three cases are exactly the figures this guard admits, which is
+ * why the file can speak of TMO_POLL/TMO_REL/TMO_FEVR without a fourth case
+ * for "illegal timeout": there is no such case to model. *)
+Lemma the_timeout_guard_admits_exactly_the_modelled_figures : forall t,
+    tmout_ok (tmo_code t) = true.
+Proof. intros t. unfold tmout_ok. apply tmo_legal_is_total. Qed.
+
+Lemma a_figure_below_the_sentinel_is_E_PAR : forall t,
+    Z.ltb t (Z.opp 1) = true -> tmout_ok t = false.
+Proof. intros t H. unfold tmout_ok. lia. Qed.
+
+(* check.h:254-258 (CHECK_DISPATCH_POL) and :249-253 (CHECK_DISPATCH) are the
+ * two context tests of this pair of services, and they are not the same test:
+ * the send refuses a WAIT while dispatch is disabled, the receive refuses
+ * ANYTHING.  _tk_snd_mbf :372 uses the _POL form because it is legal to send
+ * without blocking from a disabled context; _tk_rcv_mbf :442 cannot offer that
+ * escape, because a non-blocking miss still has nowhere to go. *)
+Definition snd_ctx_ok (ddsp : bool) (t : Z) : bool :=
+  negb (andb ddsp (negb (Z.eqb t Z0))).                  (* :255 *)
+
+Definition rcv_ctx_ok (ddsp : bool) : bool := negb ddsp.  (* :250 *)
+
+Lemma under_disabled_dispatch_only_a_poll_may_send : forall t,
+    snd_ctx_ok true t = true -> Z.eqb t Z0 = true.
+Proof.
+  intros t H. destruct t; vm_compute in H;
+    [ reflexivity | discriminate H | discriminate H ].
+Qed.
+
+Lemma a_poll_passes_the_dispatch_test_in_any_context : forall ddsp t,
+    Z.eqb t Z0 = true -> snd_ctx_ok ddsp t = true.
+Proof.
+  intros ddsp t H. unfold snd_ctx_ok. rewrite H. cbn [negb andb].
+  destruct ddsp; reflexivity.
+Qed.
+
+Lemma no_figure_saves_a_receive : forall (ddsp : bool) (t : Z),
+    ddsp = true -> rcv_ctx_ok ddsp = false.
+Proof. intros ddsp t H. unfold rcv_ctx_ok. rewrite H. reflexivity. Qed.
+
+Example a_disabled_dispatch_allows_a_polling_send_but_no_receive :
+    snd_ctx_ok true Z0 = true /\ rcv_ctx_ok true = false.
+Proof. split; reflexivity. Qed.
+
+(* The sentinel test and the arithmetic test agree because the only figure that
+ * is neither positive nor negative is the poll; the receive's test has no
+ * figure to agree with.  Stated as a law, this is what licenses modelling
+ * "blocks" as the negation of "== 0" (section 3's tmo_blocks_is_the_sentinel_test)
+ * inside a guard cascade that reads the raw caller figure. *)
+Lemma the_sentinel_survives_the_reading : forall t,
+    Z.eqb (tmo_code (btron_tmo t)) Z0 = Z.eqb t Z0.
+Proof.
+  intros t. destruct t; cbn [btron_tmo Z.ltb Z.eqb tmo_code]; reflexivity.
+Qed.
+
+(* The two timeout vocabularies of this pair of services now separate cleanly.
+ * _tk_snd_mbf refuses -5 with E_PAR at :371; rcv_msg (ipc_msg.c:71-72) has no
+ * timeout guard at all, so the same figure means "wait forever" there.  The
+ * model has to keep both readings, and 15.3.2's btron_tmo is the second one. *)
+Lemma the_btron_family_accepts_a_figure_the_kernel_refuses :
+    btron_tmo (Z.opp 5) = TMO_FEVR /\ tmout_ok (Z.opp 5) = false.
+Proof.
+  split.
+  - apply (any_negative_figure_waits_forever (Z.opp 5)). reflexivity.
+  - unfold tmout_ok. reflexivity.
+Qed.
+
+(* ... and the order of the two guards decides which of the two readings a
+ * caller of _tk_snd_mbf ever learns about: :371 fires before :372, so -5 is
+ * a parameter error even in a context where the dispatch test would have let
+ * it through. *)
+Example the_figure_guard_precedes_the_context_guard :
+    tmout_ok (Z.opp 5) = false /\ snd_ctx_ok false (Z.opp 5) = true.
+Proof. split; reflexivity. Qed.
+
+(* ── 15.5.4 The two guard cascades: seven tests to send, five to receive ── *)
+
+(* config.h:64-69 gives the message-buffer family the same affine ID geometry
+ * as the semaphore, the event flag and the mailbox, so CHK_MBFID (:67) is the
+ * shared chk_id of section 5 rather than a fifth implementation of it.
+ * MAX_MBFID is max_mbfid, i.e. MIN_MBFID + NUM_MBFID - 1, so the half-open
+ * form chk_id uses is the closed form the macro writes.  The ID argument is a
+ * signed int32 in C and a nat here, exactly as in sections 5-7: a negative
+ * figure fails the same left conjunct, and the model's domain simply cannot
+ * name it. *)
+Definition mbfid_ok (id : nat) : bool := chk_id min_mbfid num_mbf id.  (* :67 *)
+
+Lemma an_id_below_the_family_minimum_is_refused :
+    mbfid_ok 0 = false /\ mbfid_ok (min_mbfid + num_mbf) = false.
+Proof. unfold mbfid_ok, min_mbfid, num_mbf. vm_compute. split; reflexivity. Qed.
+
+(* :370 is CHECK_PAR(msgsz > 0) and :382 is "msgsz > mbfcb->maxmsz".  The first
+ * is a property of the argument, the second of the object, and both answer
+ * E_PAR -- see the example below, which is the same hazard 15.4.2 records for
+ * the B-TRON send, with three tests rather than two sharing one code. *)
+Definition msgsz_positive (sz : nat) : bool := Nat.ltb 0 sz.             (* :370 *)
+Definition within_maxmsz (sz maxmsz : nat) : bool := Nat.leb sz maxmsz.  (* :382 *)
+
+(* :389 reads "!in_indp() && is_diswai(mbfcb, ctxtsk, TTW_SMBF)", and :453
+ * reads "is_diswai(mbfcb, ctxtsk, TTW_RMBF)" -- the same test with no
+ * independent-context escape.  (Each casts its first argument to a generic
+ * object control block; the cast is dropped here only because the lexical
+ * form of a pointer cast ends a Roq comment.)  The receive's predicate
+ * therefore ignores the figure it is handed; that is the asymmetry, not a
+ * modelling convenience, and the two-argument form is what makes it
+ * stateable. *)
+Definition send_wait_enabled (indp diswai : bool) : bool :=
+  orb indp (negb diswai).                                                (* :389 *)
+
+Definition rcv_wait_enabled (indp diswai : bool) : bool := negb diswai.  (* :453 *)
+
+Example the_two_services_read_the_disable_flag_differently :
+    send_wait_enabled true true = true /\ rcv_wait_enabled true true = false.
+Proof. split; reflexivity. Qed.
+
+Lemma the_receive_guard_has_no_independent_escape : forall indp diswai,
+    rcv_wait_enabled indp diswai = rcv_wait_enabled (negb indp) diswai.
+Proof. intros indp diswai. unfold rcv_wait_enabled. reflexivity. Qed.
+
+(* messagebuf.c:369-392: the send's guard block, in source order.  Nothing in
+ * this list reads the buffer's counters -- the first read of mbf_free is
+ * :403 -- so a refusal here is a refusal the state cannot influence. *)
+Record snd_req := mk_snd_req {
+  sr_id : nat;
+  sr_msgsz : nat;
+  sr_tmo : Z;
+  sr_ddsp : bool;
+  sr_live : bool;
+  sr_maxmsz : nat;
+  sr_indp : bool;
+  sr_top_of_send_queue : bool;
+  sr_recv_waits : bool;
+  sr_diswai : bool
+}.
+
+Definition mbf_snd_guards (q : snd_req) : list (bool * er) :=
+  (mbfid_ok (sr_id q), E_ID)
+  :: (msgsz_positive (sr_msgsz q), E_PAR)
+  :: (tmout_ok (sr_tmo q), E_PAR)
+  :: (snd_ctx_ok (sr_ddsp q) (sr_tmo q), E_CTX)
+  :: (sr_live q, E_NOEXS)
+  :: (within_maxmsz (sr_msgsz q) (sr_maxmsz q), E_PAR)
+  :: (send_wait_enabled (sr_indp q) (sr_diswai q), E_DISWAI)
+  :: nil.
+
+Definition mbf_snd_refusal (q : snd_req) : option er :=
+  first_bad (mbf_snd_guards q).
+
+Lemma seven_guard_classification : forall p1 p2 p3 p4 p5 p6 p7 : bool,
+    first_bad ((p1, E_ID) :: (p2, E_PAR) :: (p3, E_PAR) :: (p4, E_CTX)
+      :: (p5, E_NOEXS) :: (p6, E_PAR) :: (p7, E_DISWAI) :: nil)
+    = match p1, p2, p3, p4, p5, p6, p7 with
+      | true, true, true, true, true, true, true => @None er
+      | true, true, true, true, true, true, false => Some E_DISWAI
+      | true, true, true, true, true, false, _ => Some E_PAR
+      | true, true, true, true, false, _, _ => Some E_NOEXS
+      | true, true, true, false, _, _, _ => Some E_CTX
+      | true, true, false, _, _, _, _ => Some E_PAR
+      | true, false, _, _, _, _, _ => Some E_PAR
+      | false, _, _, _, _, _, _ => Some E_ID
+      end.
+Proof. destruct p1, p2, p3, p4, p5, p6, p7; reflexivity. Qed.
+
+(* The seven tests answer with five codes.  Stated as a decidable predicate
+ * rather than a disjunction, because three of the tests share E_PAR and the
+ * interesting claim is the size of the image, not its enumeration. *)
+Definition a_messagebuf_guard_code (e : er) : bool :=
+  match e with
+  | E_ID | E_PAR | E_CTX | E_NOEXS | E_DISWAI => true
+  | _ => false
+  end.
+
+Lemma a_send_guard_refusal_names_a_listed_receipt : forall q e,
+    mbf_snd_refusal q = Some e -> a_messagebuf_guard_code e = true.
+Proof.
+  intros q e H. unfold mbf_snd_refusal, mbf_snd_guards in H.
+  rewrite seven_guard_classification in H.
+  destruct (mbfid_ok (sr_id q)), (msgsz_positive (sr_msgsz q)),
+    (tmout_ok (sr_tmo q)), (snd_ctx_ok (sr_ddsp q) (sr_tmo q)),
+    (sr_live q), (within_maxmsz (sr_msgsz q) (sr_maxmsz q)),
+    (send_wait_enabled (sr_indp q) (sr_diswai q)); cbn in H;
+    try discriminate H; injection H; intros X; subst e; reflexivity.
+Qed.
+
+(* Every guard passes: the cascade is silent exactly when the arguments and the
+ * object's own configuration agree. *)
+Lemma mbf_snd_guards_pass : forall q,
+    mbfid_ok (sr_id q) = true -> msgsz_positive (sr_msgsz q) = true ->
+    tmout_ok (sr_tmo q) = true ->
+    snd_ctx_ok (sr_ddsp q) (sr_tmo q) = true -> sr_live q = true ->
+    within_maxmsz (sr_msgsz q) (sr_maxmsz q) = true ->
+    send_wait_enabled (sr_indp q) (sr_diswai q) = true ->
+    mbf_snd_refusal q = @None er.
+Proof.
+  intros q A B C D E F G. unfold mbf_snd_refusal, mbf_snd_guards.
+  rewrite seven_guard_classification. rewrite A, B, C, D, E, F, G.
+  reflexivity.
+Qed.
+
+(* 1. The ID test is first (:369), and it is the only test that does not need
+ * the object to exist.  Blindness is stated as the sharpest form available:
+ * two requests that agree on the ID answer alike whatever their buffers are. *)
+Lemma a_bad_id_is_E_ID : forall q,
+    mbfid_ok (sr_id q) = false -> mbf_snd_refusal q = Some E_ID.
+Proof.
+  intros q H. unfold mbf_snd_refusal, mbf_snd_guards.
+  rewrite seven_guard_classification. rewrite H. reflexivity.
+Qed.
+
+Lemma the_id_test_blinds_the_rest : forall q1 q2,
+    sr_id q1 = sr_id q2 -> mbfid_ok (sr_id q1) = false ->
+    mbf_snd_refusal q1 = mbf_snd_refusal q2.
+Proof.
+  intros q1 q2 I H.
+  assert (H2 : mbfid_ok (sr_id q2) = false).
+  { rewrite <- I. exact H. }
+  rewrite (a_bad_id_is_E_ID q1 H), (a_bad_id_is_E_ID q2 H2). reflexivity.
+Qed.
+
+(* 2. msgsz = 0 is refused at :370, before the timeout, the context, the
+ * existence of the object, and its maxmsz.  A zero-length message is not a
+ * special case anywhere else in the service: HEADERSZ alone would fit, and the
+ * ring would then hold a message of no size, which mbf_to_msg :189 would hand
+ * back as rcvsz = 0 -- indistinguishable to the caller from the E_OK figure.
+ * This guard is what keeps 15.5.5's reply law decodable. *)
+Lemma a_zero_size_is_E_PAR : forall q,
+    mbfid_ok (sr_id q) = true -> msgsz_positive (sr_msgsz q) = false ->
+    mbf_snd_refusal q = Some E_PAR.
+Proof.
+  intros q A B. unfold mbf_snd_refusal, mbf_snd_guards.
+  rewrite seven_guard_classification. rewrite A, B. reflexivity.
+Qed.
+
+(* 3-4. :371 and :372 both read the caller's figure, and the order between them
+ * is the one recorded in 15.5.3: the range test fires first, so an illegal
+ * figure is E_PAR and never E_CTX. *)
+Lemma an_illegal_figure_is_E_PAR : forall q,
+    mbfid_ok (sr_id q) = true -> msgsz_positive (sr_msgsz q) = true ->
+    tmout_ok (sr_tmo q) = false -> mbf_snd_refusal q = Some E_PAR.
+Proof.
+  intros q A B C. unfold mbf_snd_refusal, mbf_snd_guards.
+  rewrite seven_guard_classification. rewrite A, B, C. reflexivity.
+Qed.
+
+Lemma a_disabled_dispatch_wait_is_E_CTX : forall q,
+    mbfid_ok (sr_id q) = true -> msgsz_positive (sr_msgsz q) = true ->
+    tmout_ok (sr_tmo q) = true -> snd_ctx_ok (sr_ddsp q) (sr_tmo q) = false ->
+    mbf_snd_refusal q = Some E_CTX.
+Proof.
+  intros q A B C D. unfold mbf_snd_refusal, mbf_snd_guards.
+  rewrite seven_guard_classification. rewrite A, B, C, D. reflexivity.
+Qed.
+
+(* 5. :377 is the existence test, and it is the first test inside the critical
+ * section -- the object's own configuration (maxmsz) is not read until :382,
+ * and the wait queues not until :394.  E_NOEXS is the receipt for a deleted or
+ * never-created ID that still lies inside the family range, which is exactly
+ * the gap 7's range_is_not_existence records for every family. *)
+Lemma a_dead_object_is_E_NOEXS : forall q,
+    mbfid_ok (sr_id q) = true -> msgsz_positive (sr_msgsz q) = true ->
+    tmout_ok (sr_tmo q) = true -> snd_ctx_ok (sr_ddsp q) (sr_tmo q) = true ->
+    sr_live q = false -> mbf_snd_refusal q = Some E_NOEXS.
+Proof.
+  intros q A B C D E. unfold mbf_snd_refusal, mbf_snd_guards.
+  rewrite seven_guard_classification. rewrite A, B, C, D, E. reflexivity.
+Qed.
+
+(* 6. The maxmsz test compiles: config.h:146 sets CHK_PAR (1), so :381-386 is
+ * live code and E_PAR is a reachable receipt here, not a build-option ghost. *)
+Lemma an_oversized_message_is_E_PAR : forall q,
+    mbfid_ok (sr_id q) = true -> msgsz_positive (sr_msgsz q) = true ->
+    tmout_ok (sr_tmo q) = true -> snd_ctx_ok (sr_ddsp q) (sr_tmo q) = true ->
+    sr_live q = true -> within_maxmsz (sr_msgsz q) (sr_maxmsz q) = false ->
+    mbf_snd_refusal q = Some E_PAR.
+Proof.
+  intros q A B C D E F. unfold mbf_snd_refusal, mbf_snd_guards.
+  rewrite seven_guard_classification. rewrite A, B, C, D, E, F. reflexivity.
+Qed.
+
+Lemma the_size_of_a_message_is_bounded_twice : forall q,
+    mbfid_ok (sr_id q) = true -> msgsz_positive (sr_msgsz q) = true ->
+    tmout_ok (sr_tmo q) = true -> snd_ctx_ok (sr_ddsp q) (sr_tmo q) = true ->
+    sr_live q = true -> within_maxmsz (sr_msgsz q) (sr_maxmsz q) = true ->
+    send_wait_enabled (sr_indp q) (sr_diswai q) = false ->
+    mbf_snd_refusal q = Some E_DISWAI.
+Proof.
+  intros q A B C D E F G. unfold mbf_snd_refusal, mbf_snd_guards.
+  rewrite seven_guard_classification. rewrite A, B, C, D, E, F, G.
+  reflexivity.
+Qed.
+
+(* 7. Three of the seven tests answer E_PAR, so the receipt alone never names
+ * its line.  The three concrete requests below differ in every field the
+ * guards read after the one that fired, and agree on the figure. *)
+Definition snd_zero_size : snd_req :=
+  mk_snd_req 1 0 Z0 false true 32 false false false false.
+Definition snd_bad_figure : snd_req :=
+  mk_snd_req 1 8 (Z.opp 5) false true 32 false false false false.
+Definition snd_over_maxmsz : snd_req :=
+  mk_snd_req 1 40 Z0 false true 32 false false false false.
+
+Example the_parameter_error_names_three_tests :
+    mbf_snd_refusal snd_zero_size = Some E_PAR
+    /\ mbf_snd_refusal snd_bad_figure = Some E_PAR
+    /\ mbf_snd_refusal snd_over_maxmsz = Some E_PAR
+    /\ msgsz_positive (sr_msgsz snd_zero_size) = false
+    /\ tmout_ok (sr_tmo snd_bad_figure) = false
+    /\ within_maxmsz (sr_msgsz snd_over_maxmsz) (sr_maxmsz snd_over_maxmsz) = false.
+Proof. repeat split; vm_compute; reflexivity. Qed.
+
+(* messagebuf.c:440-456: the receive's guard block.  Five tests, no size test
+ * (the caller supplies only a buffer to write into), and the context test in
+ * its unconditional form. *)
+Record rcv_req := mk_rcv_req {
+  rr_id : nat;
+  rr_tmo : Z;
+  rr_ddsp : bool;
+  rr_live : bool;
+  rr_diswai : bool;
+  rr_send_waits : bool;
+  rr_stored_msgsz : nat;
+  rr_handoff_msgsz : nat
+}.
+
+Definition mbf_rcv_guards (q : rcv_req) : list (bool * er) :=
+  (mbfid_ok (rr_id q), E_ID)
+  :: (tmout_ok (rr_tmo q), E_PAR)
+  :: (rcv_ctx_ok (rr_ddsp q), E_CTX)
+  :: (rr_live q, E_NOEXS)
+  :: (rcv_wait_enabled false (rr_diswai q), E_DISWAI)
+  :: nil.
+
+Definition mbf_rcv_refusal (q : rcv_req) : option er :=
+  first_bad (mbf_rcv_guards q).
+
+Lemma five_guard_classification : forall p1 p2 p3 p4 p5 : bool,
+    first_bad ((p1, E_ID) :: (p2, E_PAR) :: (p3, E_CTX)
+      :: (p4, E_NOEXS) :: (p5, E_DISWAI) :: nil)
+    = match p1, p2, p3, p4, p5 with
+      | true, true, true, true, true => @None er
+      | true, true, true, true, false => Some E_DISWAI
+      | true, true, true, false, _ => Some E_NOEXS
+      | true, true, false, _, _ => Some E_CTX
+      | true, false, _, _, _ => Some E_PAR
+      | false, _, _, _, _ => Some E_ID
+      end.
+Proof. destruct p1, p2, p3, p4, p5; reflexivity. Qed.
+
+Lemma a_receive_guard_refusal_names_a_listed_receipt : forall q e,
+    mbf_rcv_refusal q = Some e -> a_messagebuf_guard_code e = true.
+Proof.
+  intros q e H. unfold mbf_rcv_refusal, mbf_rcv_guards in H.
+  rewrite five_guard_classification in H.
+  destruct (mbfid_ok (rr_id q)), (tmout_ok (rr_tmo q)), (rcv_ctx_ok (rr_ddsp q)),
+    (rr_live q), (rcv_wait_enabled false (rr_diswai q)); cbn in H;
+    try discriminate H; injection H; intros X; subst e; reflexivity.
+Qed.
+
+Lemma mbf_rcv_guards_pass : forall q,
+    mbfid_ok (rr_id q) = true -> tmout_ok (rr_tmo q) = true ->
+    rcv_ctx_ok (rr_ddsp q) = true -> rr_live q = true ->
+    rr_diswai q = false -> mbf_rcv_refusal q = @None er.
+Proof.
+  intros q A B C D E. unfold mbf_rcv_refusal, mbf_rcv_guards.
+  rewrite five_guard_classification. rewrite A, B, C, D, E. reflexivity.
+Qed.
+
+Lemma a_receive_bad_id_is_E_ID : forall q,
+    mbfid_ok (rr_id q) = false -> mbf_rcv_refusal q = Some E_ID.
+Proof.
+  intros q H. unfold mbf_rcv_refusal, mbf_rcv_guards.
+  rewrite five_guard_classification. rewrite H. reflexivity.
+Qed.
+
+(* The receive has no msgsz argument, so its second test is the figure alone,
+ * and the second place it holds in the cascade is the same one the send gives
+ * it.  A bad timeout is one bug with one receipt across the pair. *)
+Lemma a_bad_figure_is_E_PAR : forall q,
+    mbfid_ok (rr_id q) = true -> tmout_ok (rr_tmo q) = false ->
+    mbf_rcv_refusal q = Some E_PAR.
+Proof.
+  intros q A B. unfold mbf_rcv_refusal, mbf_rcv_guards.
+  rewrite five_guard_classification. rewrite A, B. reflexivity.
+Qed.
+
+Lemma the_two_cascades_agree_on_the_figure_test : forall q s,
+    tmout_ok (sr_tmo s) = false -> tmout_ok (rr_tmo q) = false ->
+    mbfid_ok (sr_id s) = true -> msgsz_positive (sr_msgsz s) = true ->
+    mbfid_ok (rr_id q) = true ->
+    mbf_snd_refusal s = Some E_PAR /\ mbf_rcv_refusal q = Some E_PAR.
+Proof.
+  intros q s C D A B E. split.
+  - apply (an_illegal_figure_is_E_PAR s A B C).
+  - apply (a_bad_figure_is_E_PAR q E D).
+Qed.
+
+(* The remaining three tests, in source order.  A dead object still has an ID
+ * inside the family range -- 7's range_is_not_existence holds for this family
+ * too -- which is why the existence test is not a formality the range test
+ * subsumes. *)
+Lemma a_dead_receive_is_E_NOEXS : forall q,
+    mbfid_ok (rr_id q) = true -> tmout_ok (rr_tmo q) = true ->
+    rcv_ctx_ok (rr_ddsp q) = true -> rr_live q = false ->
+    mbf_rcv_refusal q = Some E_NOEXS.
+Proof.
+  intros q A B C D. unfold mbf_rcv_refusal, mbf_rcv_guards.
+  rewrite five_guard_classification. rewrite A, B, C, D. reflexivity.
+Qed.
+
+Lemma a_disabled_dispatch_is_E_CTX_for_the_receive_too : forall q,
+    mbfid_ok (rr_id q) = true -> tmout_ok (rr_tmo q) = true ->
+    rcv_ctx_ok (rr_ddsp q) = false -> mbf_rcv_refusal q = Some E_CTX.
+Proof.
+  intros q A B C. unfold mbf_rcv_refusal, mbf_rcv_guards.
+  rewrite five_guard_classification. rewrite A, B, C. reflexivity.
+Qed.
+
+Lemma a_disabled_receive_wait_is_E_DISWAI : forall q,
+    mbfid_ok (rr_id q) = true -> tmout_ok (rr_tmo q) = true ->
+    rcv_ctx_ok (rr_ddsp q) = true -> rr_live q = true -> rr_diswai q = true ->
+    mbf_rcv_refusal q = Some E_DISWAI.
+Proof.
+  intros q A B C D E. unfold mbf_rcv_refusal, mbf_rcv_guards.
+  rewrite five_guard_classification. rewrite A, B, C, D, E. reflexivity.
+Qed.
+
+(* Both services read the object's existence before anything about the object's
+ * contents, so the receipt of a call to a deleted buffer does not depend on
+ * whether the buffer is empty, full, or has a sender parked in it -- the queue
+ * state 15.5.5 defines the routes over is unreachable from here. *)
+Lemma a_dead_object_blinds_the_queue_state : forall q1 q2,
+    rr_id q1 = rr_id q2 -> rr_live q1 = false -> rr_live q2 = false ->
+    mbfid_ok (rr_id q1) = true -> tmout_ok (rr_tmo q1) = true ->
+    rcv_ctx_ok (rr_ddsp q1) = true -> tmout_ok (rr_tmo q2) = true ->
+    rcv_ctx_ok (rr_ddsp q2) = true ->
+    mbf_rcv_refusal q1 = mbf_rcv_refusal q2.
+Proof.
+  intros q1 q2 I L1 L2 A B C D E.
+  assert (M : mbfid_ok (rr_id q2) = true).
+  { rewrite <- I. exact A. }
+  rewrite (a_dead_receive_is_E_NOEXS q1 A B C L1).
+  rewrite (a_dead_receive_is_E_NOEXS q2 M D E L2). reflexivity.
+Qed.
+
+(* ── 15.5.5 Past the guards: three routes each, and the reply law ── *)
+
+(* messagebuf.c:394-416 is the body of the send, and it is a three-way chain:
+ * a waiting receiver takes the message directly out of the caller's buffer,
+ * failing that an eligible caller with room stores it in the ring, failing
+ * that the call answers E_TMOUT and -- unless the figure is a poll -- takes a
+ * place in the send-wait queue.  :401's eligibility disjunct is the queue
+ * ownership test, gcb_top_of_wait_queue(...) == ctxtsk: a caller may only
+ * store ahead of tasks that asked to be served first. *)
+Definition snd_eligible (q : snd_req) : bool :=
+  orb (sr_indp q) (sr_top_of_send_queue q).                (* :401 *)
+
+Inductive snd_route := RT_HANDOFF | RT_STORE | RT_TIMEOUT.  (* :394 :403 :406 *)
+
+Definition mbf_snd_route (q : snd_req) (m : mbf) : snd_route :=
+  if sr_recv_waits q
+  then RT_HANDOFF
+  else if andb (snd_eligible q) (mbf_admits (mb_free m) (sr_msgsz q))
+       then RT_STORE
+       else RT_TIMEOUT.
+
+(* The three projections are the C's three effects: the figure it returns, the
+ * buffer it leaves behind, and whether the call returns at all.  A parked send
+ * has not returned, so mbf_snd_service hands back None, the same convention
+ * 15.4.3 uses for a blocking receive miss; when the park does end, E_TMOUT is
+ * the figure the kernel stored in ctxtsk->wercd at :410, which is why the
+ * receipt below already names it. *)
+Definition mbf_snd_receipt (q : snd_req) (m : mbf) : er :=
+  match mbf_snd_refusal q with
+  | Some e => e
+  | None => match mbf_snd_route q m with
+            | RT_HANDOFF | RT_STORE => E_OK
+            | RT_TIMEOUT => E_TMOUT
+            end
+  end.
+
+Definition mbf_snd_next (q : snd_req) (m : mbf) : mbf :=
+  match mbf_snd_refusal q with
+  | Some _ => m
+  | None => match mbf_snd_route q m with
+            | RT_STORE => mbf_store m (sr_msgsz q)
+            | _ => m
+            end
+  end.
+
+Definition mbf_snd_parked (q : snd_req) (m : mbf) : bool :=
+  match mbf_snd_refusal q with
+  | Some _ => false
+  | None => match mbf_snd_route q m with
+            | RT_TIMEOUT => negb (Z.eqb (sr_tmo q) Z0)
+            | _ => false
+            end
+  end.
+
+Definition mbf_snd_service (q : snd_req) (m : mbf) : option (er * mbf) :=
+  if mbf_snd_parked q m
+  then @None (er * mbf)
+  else Some (mbf_snd_receipt q m, mbf_snd_next q m).
+
+Lemma a_handoff_goes_around_the_ring : forall q m,
+    mbf_snd_refusal q = @None er -> sr_recv_waits q = true ->
+    mbf_snd_route q m = RT_HANDOFF
+    /\ mbf_snd_next q m = m /\ mbf_snd_receipt q m = E_OK.
+Proof.
+  intros q m Ru W.
+  assert (Rt : mbf_snd_route q m = RT_HANDOFF)
+    by (unfold mbf_snd_route; rewrite W; reflexivity).
+  unfold mbf_snd_next, mbf_snd_receipt. rewrite Ru, Rt.
+  repeat split; reflexivity.
+Qed.
+
+(* :394 is tested before :403's mbf_free, so a receiver that is already waiting
+ * takes the message from a full buffer: the ring is not consulted, and the
+ * caller's own buffer is the destination.  This is the send-side reason
+ * 15.5.2's empty/full ambiguity matters -- the buffer can be full and still
+ * pass traffic. *)
+Lemma a_handoff_needs_no_free_space : forall q m,
+    mbf_snd_refusal q = @None er -> sr_recv_waits q = true ->
+    mbf_snd_service q m = Some (E_OK, m).
+Proof.
+  intros q m Ru W.
+  assert (Rt : mbf_snd_route q m = RT_HANDOFF)
+    by (exact (proj1 (a_handoff_goes_around_the_ring q m Ru W))).
+  unfold mbf_snd_service, mbf_snd_parked, mbf_snd_receipt, mbf_snd_next.
+  rewrite Ru, Rt. reflexivity.
+Qed.
+
+Definition snd_to_a_waiting_receiver : snd_req :=
+  mk_snd_req 1 4 Z0 false true 32 false false true false.
+
+Example a_full_buffer_still_hands_a_message_over :
+    mbf_snd_service snd_to_a_waiting_receiver mbf_full8 = Some (E_OK, mbf_full8)
+    /\ mb_free mbf_full8 = 0.
+Proof. repeat split; vm_compute; reflexivity. Qed.
+
+Lemma a_store_is_eligible_and_there_is_room : forall q m,
+    mbf_snd_route q m = RT_STORE ->
+    snd_eligible q = true /\ mbf_admits (mb_free m) (sr_msgsz q) = true.
+Proof.
+  intros q m R. unfold mbf_snd_route in R.
+  destruct (sr_recv_waits q) eqn:W; try discriminate R.
+  destruct (andb (snd_eligible q) (mbf_admits (mb_free m) (sr_msgsz q))) eqn:Ad;
+    try discriminate R.
+  apply andb_true_iff in Ad. destruct Ad as [El Fr]. split; assumption.
+Qed.
+
+Lemma a_timeout_means_no_ownership_or_no_room : forall q m,
+    mbf_snd_route q m = RT_TIMEOUT ->
+    sr_recv_waits q = false
+    /\ (snd_eligible q = false
+        \/ mbf_admits (mb_free m) (sr_msgsz q) = false).
+Proof.
+  intros q m R. unfold mbf_snd_route in R.
+  destruct (sr_recv_waits q) eqn:W; try discriminate R.
+  destruct (andb (snd_eligible q) (mbf_admits (mb_free m) (sr_msgsz q))) eqn:Ad;
+    try discriminate R.
+  apply andb_false_iff in Ad. split; [ reflexivity | exact Ad ].
+Qed.
+
+(* The one write in the whole service.  Stated as the disjunction it is: either
+ * the buffer is exactly as the caller found it, or this is the store route and
+ * the change is the charge of the message the caller named. *)
+Lemma nothing_but_a_store_moves_the_buffer : forall q m,
+    mbf_snd_next q m = m
+    \/ (mbf_snd_refusal q = @None er /\ mbf_snd_route q m = RT_STORE
+        /\ mbf_snd_next q m = mbf_store m (sr_msgsz q)).
+Proof.
+  intros q m. unfold mbf_snd_next, mbf_snd_route, mbf_snd_refusal.
+  destruct (first_bad (mbf_snd_guards q)) as [e|]; [ left; reflexivity | ].
+  destruct (sr_recv_waits q); [ left; reflexivity | ].
+  destruct (andb (snd_eligible q) (mbf_admits (mb_free m) (sr_msgsz q))).
+  - right. repeat repeat split; reflexivity.
+  - left. reflexivity.
+Qed.
+
+(* The admission test at :403 and the debit at :414->:133 are two different
+ * figures (15.5.1), so the route test on its own does not say the debit fits.
+ * On a live buffer it does: the counter is a difference of aligned quantities,
+ * so the rounded charge is within what the unrounded test admitted. *)
+Lemma a_free_boundary_is_a_multiple_of_the_round : forall m l,
+    mb_free m = Nat.sub (mb_bufsz m) (mbf_debits l) ->
+    mb_bufsz m mod 4 = 0 -> mb_free m mod 4 = 0.
+Proof.
+  intros m l E A. rewrite E.
+  destruct (debits_are_a_multiple_of_the_round l) as [k Dk].
+  assert (DL : mbf_debits l mod 4 = 0) by (rewrite Dk; apply a_block_is_aligned).
+  apply (the_difference_of_two_aligned_counts_is_aligned (mb_bufsz m) (mbf_debits l));
+    assumption.
+Qed.
+
+Theorem a_store_pays_what_it_was_admitted : forall q m l,
+    mb_bufsz m mod 4 = 0 ->
+    mb_free m = Nat.sub (mb_bufsz m) (mbf_debits l) ->
+    mbf_snd_refusal q = @None er -> mbf_snd_route q m = RT_STORE ->
+    mbf_charge (sr_msgsz q) <= mb_free m.
+Proof.
+  intros q m l A F Ru Rt.
+  destruct (a_store_is_eligible_and_there_is_room q m Rt) as [El Fr].
+  apply (an_aligned_count_never_underpays (mb_free m) (sr_msgsz q)).
+  - apply (a_free_boundary_is_a_multiple_of_the_round m l F A).
+  - exact Fr.
+Qed.
+
+(* A caller that cannot store learns it immediately when it only polled (:406
+ * sets ercd = E_TMOUT and the :408 test declines to queue), and waits when it
+ * did not.  Both branches leave the message in the caller's own buffer, so the
+ * accept loop of 15.5.6 is what moves it. *)
+Lemma a_polling_miss_returns_E_TMOUT_at_once : forall q m,
+    mbf_snd_refusal q = @None er -> mbf_snd_route q m = RT_TIMEOUT ->
+    Z.eqb (sr_tmo q) Z0 = true ->
+    mbf_snd_service q m = Some (E_TMOUT, m).
+Proof.
+  intros q m Ru Rt P. unfold mbf_snd_service, mbf_snd_parked, mbf_snd_receipt,
+    mbf_snd_next.
+  rewrite Ru, Rt, P. cbn [negb]. reflexivity.
+Qed.
+
+Lemma a_blocking_miss_parks_and_writes_nothing : forall q m,
+    mbf_snd_refusal q = @None er -> mbf_snd_route q m = RT_TIMEOUT ->
+    Z.eqb (sr_tmo q) Z0 = false ->
+    mbf_snd_service q m = @None (er * mbf) /\ mbf_snd_next q m = m.
+Proof.
+  intros q m Ru Rt P. split.
+  - unfold mbf_snd_service, mbf_snd_parked. rewrite Ru, Rt, P. reflexivity.
+  - unfold mbf_snd_next. rewrite Ru, Rt. reflexivity.
+Qed.
+
+(* The receive, messagebuf.c:458-484: read from the ring if it is not empty,
+ * take from the head of the send-wait queue if a sender is parked, otherwise
+ * time out or park.  The emptiness test is the counter at :121 -- the model
+ * reads it from the buffer rather than carrying a flag, because 15.5.2 shows
+ * the cursor pair does not determine it. *)
+Inductive rcv_route := RR_READ | RR_HANDOFF | RR_TIMEOUT.  (* :458 :464 :472 *)
+
+Definition mbf_rcv_route (q : rcv_req) (m : mbf) : rcv_route :=
+  if mbf_is_empty m
+  then if rr_send_waits q then RR_HANDOFF else RR_TIMEOUT
+  else RR_READ.
+
+Definition mbf_rcv_receipt (q : rcv_req) (m : mbf) : er :=
+  match mbf_rcv_refusal q with
+  | Some e => e
+  | None => match mbf_rcv_route q m with
+            | RR_READ | RR_HANDOFF => E_OK
+            | RR_TIMEOUT => E_TMOUT
+            end
+  end.
+
+(* rcvsz in the C (:437) is assigned only on the two accepting branches; on the
+ * :472 branch it holds whatever the declaration left there.  The model writes 0
+ * for that case, and the reply law below is the proof that the choice cannot be
+ * seen: :489 reads rcvsz only when ercd is E_OK. *)
+Definition mbf_rcv_size (q : rcv_req) (m : mbf) : nat :=
+  match mbf_rcv_refusal q with
+  | Some _ => 0
+  | None => match mbf_rcv_route q m with
+            | RR_READ => rr_stored_msgsz q
+            | RR_HANDOFF => rr_handoff_msgsz q
+            | RR_TIMEOUT => 0
+            end
+  end.
+
+Definition mbf_rcv_next (q : rcv_req) (m : mbf) : mbf :=
+  match mbf_rcv_refusal q with
+  | Some _ => m
+  | None => match mbf_rcv_route q m with
+            | RR_READ => mbf_read m (rr_stored_msgsz q)
+            | _ => m
+            end
+  end.
+
+Definition mbf_rcv_parked (q : rcv_req) (m : mbf) : bool :=
+  match mbf_rcv_refusal q with
+  | Some _ => false
+  | None => match mbf_rcv_route q m with
+            | RR_TIMEOUT => negb (Z.eqb (rr_tmo q) Z0)
+            | _ => false
+            end
+  end.
+
+(* :489 is the whole of the reply law, and it is the reason this service is not
+ * shaped like the others in the file: the success value is a length, not E_OK. *)
+Definition mbf_rcv_reply (ercd : er) (rcvsz : nat) : Z :=
+  if er_ok ercd then Z.of_nat rcvsz else er_code ercd.      (* :489 *)
+
+Definition mbf_rcv_answer (q : rcv_req) (m : mbf) : Z :=
+  mbf_rcv_reply (mbf_rcv_receipt q m) (mbf_rcv_size q m).
+
+Definition mbf_rcv_service (q : rcv_req) (m : mbf) : option (Z * mbf) :=
+  if mbf_rcv_parked q m
+  then @None (Z * mbf)
+  else Some (mbf_rcv_answer q m, mbf_rcv_next q m).
+
+Lemma a_read_answers_with_the_size_it_read : forall q m,
+    mbf_rcv_refusal q = @None er -> mbf_rcv_route q m = RR_READ ->
+    mbf_rcv_answer q m = Z.of_nat (rr_stored_msgsz q)
+    /\ mbf_rcv_next q m = mbf_read m (rr_stored_msgsz q).
+Proof.
+  intros q m Ru Rt. unfold mbf_rcv_answer, mbf_rcv_reply, mbf_rcv_receipt,
+    mbf_rcv_size, mbf_rcv_next.
+  rewrite Ru, Rt. repeat split; cbn [er_ok er_mer]; reflexivity.
+Qed.
+
+(* The read credits the counter by the charge of the size it just took out of
+ * the header (:167), which is the same figure msg_to_mbf debited at :133 --
+ * so the two services really are inverses on the counter, even though the
+ * admission test that let the store through was the unrounded one. *)
+Lemma a_read_credits_the_charge_of_its_own_header : forall q m,
+    mbf_rcv_refusal q = @None er -> mbf_rcv_route q m = RR_READ ->
+    mb_free (mbf_rcv_next q m) = mb_free m + mbf_charge (rr_stored_msgsz q).
+Proof.
+  intros q m Ru Rt. unfold mbf_rcv_next. rewrite Ru, Rt.
+  unfold mbf_read. cbn [mb_free]. reflexivity.
+Qed.
+
+Lemma a_handoff_answers_with_the_senders_size : forall q m,
+    mbf_rcv_refusal q = @None er -> mbf_is_empty m = true ->
+    rr_send_waits q = true ->
+    mbf_rcv_answer q m = Z.of_nat (rr_handoff_msgsz q)
+    /\ mbf_rcv_next q m = m.
+Proof.
+  intros q m Ru E W. unfold mbf_rcv_answer, mbf_rcv_reply, mbf_rcv_receipt,
+    mbf_rcv_size, mbf_rcv_next, mbf_rcv_route.
+  rewrite Ru, E, W. repeat split; cbn [er_ok er_mer]; reflexivity.
+Qed.
+
+Lemma a_miss_with_a_poll_answers_the_timeout : forall q m,
+    mbf_rcv_refusal q = @None er -> mbf_rcv_route q m = RR_TIMEOUT ->
+    Z.eqb (rr_tmo q) Z0 = true ->
+    mbf_rcv_service q m = Some (er_code E_TMOUT, m).
+Proof.
+  intros q m Ru Rt P. unfold mbf_rcv_service, mbf_rcv_parked, mbf_rcv_answer,
+    mbf_rcv_reply, mbf_rcv_receipt, mbf_rcv_size, mbf_rcv_next.
+  rewrite Ru, Rt, P. cbn [negb er_ok er_mer]. reflexivity.
+Qed.
+
+(* None of the five guard codes is E_OK, so a refused receive always takes the
+ * else-branch of :489. *)
+Lemma er_ok_is_false_for_a_guard_code : forall e,
+    a_messagebuf_guard_code e = true -> er_ok e = false.
+Proof. destruct e; vm_compute; intros C; try discriminate C; reflexivity. Qed.
+
+Lemma a_refused_receive_answers_with_its_own_receipt : forall q m e,
+    mbf_rcv_refusal q = Some e -> a_messagebuf_guard_code e = true ->
+    mbf_rcv_answer q m = er_code e.
+Proof.
+  intros q m e G C. unfold mbf_rcv_answer, mbf_rcv_reply, mbf_rcv_receipt.
+  rewrite G, (er_ok_is_false_for_a_guard_code e C). reflexivity.
+Qed.
+
+(* The hazard :489 creates for a caller: the return value lives in two
+ * namespaces at once, and the only thing that separates them is the sign.
+ * A length is positive (the send's :370 guard is what makes a stored message
+ * non-empty) and a receipt is at most -65536, so no answer of this service is
+ * ever the E_OK figure a task-sleep call would return. *)
+Lemma the_receive_answer_is_never_the_success_figure : forall q m,
+    mbf_rcv_refusal q = @None er -> 0 < rr_stored_msgsz q ->
+    0 < rr_handoff_msgsz q ->
+    Z.ltb (mbf_rcv_answer q m) Z0 = true
+    \/ Z.ltb Z0 (mbf_rcv_answer q m) = true.
+Proof.
+  intros q m Ru S1 S2. unfold mbf_rcv_answer, mbf_rcv_reply, mbf_rcv_receipt,
+    mbf_rcv_size.
+  rewrite Ru.
+  destruct (mbf_rcv_route q m); cbn [er_ok er_mer Nat.eqb].
+  - right. lia.
+  - right. lia.
+  - left. unfold er_code, er_mer. vm_compute; reflexivity.
+Qed.
+
+(* The mirror image: a successful send has no size to report, so it answers with
+ * the E_OK figure.  The two services of one pair therefore return different
+ * shapes -- an ER on one side, a length on the other -- and the only figure
+ * they share is zero, which neither of them can produce. *)
+Lemma a_store_answers_E_OK_with_the_message_written : forall q m,
+    mbf_snd_refusal q = @None er -> mbf_snd_route q m = RT_STORE ->
+    mbf_snd_service q m = Some (E_OK, mbf_store m (sr_msgsz q)).
+Proof.
+  intros q m Ru Rt. unfold mbf_snd_service, mbf_snd_parked, mbf_snd_receipt,
+    mbf_snd_next.
+  rewrite Ru, Rt. reflexivity.
+Qed.
+
+(* ── 15.5.6 The accept loop: mbf_wakeup takes a prefix, not a scan ───── *)
+
+(* messagebuf.c:198-214 drains the send-wait queue of the buffer whose space
+ * just freed up.  Each step re-reads the free count (:206), so the loop stops
+ * at the first sender it cannot serve and leaves that sender and everyone
+ * behind it queued.  This is a different drain from section 14's cell drain and
+ * from section 12's drain_head: it moves bytes, so whether a step happens at
+ * all depends on the counter 15.5.2 introduced. *)
+Fixpoint mbf_drain (m : mbf) (q : list nat) : mbf * list nat :=
+  match q with
+  | nil => (m, nil)
+  | sz :: rest => if mbf_admits (mb_free m) sz
+                  then mbf_drain (mbf_store m sz) rest
+                  else (m, q)
+  end.
+
+Lemma a_refused_head_stops_the_loop : forall m sz rest,
+    mbf_admits (mb_free m) sz = false ->
+    mbf_drain m (sz :: rest) = (m, sz :: rest).
+Proof. intros m sz rest A. cbn [mbf_drain]. rewrite A. reflexivity. Qed.
+
+Lemma a_fitting_head_is_stored_before_the_next_is_seen : forall m sz rest,
+    mbf_admits (mb_free m) sz = true ->
+    mbf_drain m (sz :: rest) = mbf_drain (mbf_store m sz) rest.
+Proof. intros m sz rest A. cbn [mbf_drain]. rewrite A. reflexivity. Qed.
+
+Lemma the_free_count_never_rises_under_a_drain : forall q m,
+    mb_free (fst (mbf_drain m q)) <= mb_free m.
+Proof.
+  induction q as [|sz rest IH]; intros m.
+  - cbn [mbf_drain fst]. apply Nat.le_refl.
+  - destruct (mbf_admits (mb_free m) sz) eqn:A.
+    + cbn [mbf_drain]. rewrite A.
+      assert (CS : mb_free (mbf_store m sz)
+                     = Nat.sub (mb_free m) (mbf_charge sz))
+        by (unfold mbf_store; reflexivity).
+      assert (H := IH (mbf_store m sz)). rewrite CS in H. lia.
+    + cbn [mbf_drain]. rewrite A. apply Nat.le_refl.
+Qed.
+
+(* The loop never reorders the queue and never loses a sender: what it accepts
+ * is a prefix, and what it leaves is the matching suffix.  On a live buffer the
+ * debit of that prefix is exact -- which is where 15.5.1's alignment work
+ * earns its keep, since an unrounded admission on an unaligned counter would
+ * make the subtracted debit larger than the space taken. *)
+Theorem the_accept_loop_pays_for_what_it_accepts : forall q,
+    forall (m : mbf) l,
+      mb_bufsz m mod 4 = 0 ->
+      mb_free m = Nat.sub (mb_bufsz m) (mbf_debits l) ->
+      exists accepted,
+        q = accepted ++ snd (mbf_drain m q)
+        /\ mb_free (fst (mbf_drain m q))
+           = Nat.sub (mb_free m) (mbf_debits accepted).
+Proof.
+  induction q as [|sz rest IH]; intros m l A F.
+  - exists (@nil nat). split; cbn [mbf_drain snd app fst mbf_debits].
+    + reflexivity.
+    + lia.
+  - destruct (mbf_admits (mb_free m) sz) eqn:Ad.
+    + assert (ALG : mb_free m mod 4 = 0)
+        by (apply (a_free_boundary_is_a_multiple_of_the_round m l); assumption).
+      assert (CH : mbf_charge sz <= mb_free m)
+        by (apply (an_aligned_count_never_underpays (mb_free m) sz ALG Ad)).
+      cbn [mbf_drain]. rewrite Ad.
+      destruct (IH (mbf_store m sz) (sz :: l)) as [accepted [Eq Ne]].
+      * unfold mbf_store. cbn [mb_bufsz]. exact A.
+      * replace (mbf_debits (sz :: l)) with (mbf_charge sz + mbf_debits l)
+          by reflexivity.
+        unfold mbf_store. rewrite F. cbn [mb_free mb_bufsz]. lia.
+      * exists (sz :: accepted). split.
+        -- cbn [app]. rewrite <- Eq. reflexivity.
+        -- rewrite Ne. cbn [mbf_debits]. unfold mbf_store. cbn [mb_free]. lia.
+    + exists (@nil nat). split.
+      * cbn [app mbf_drain snd]. rewrite Ad. reflexivity.
+      * cbn [mbf_drain fst mbf_debits]. rewrite Ad.
+        replace (mbf_debits (@nil nat)) with 0 by reflexivity. rewrite Nat.sub_0_r. reflexivity.
+Qed.
+
+(* Head-of-line blocking, computed.  A queue whose first sender cannot be
+ * served is not served at all, even though a later sender would fit: a greedy
+ * scan would take the 1-byte message, and the ring would then hold a message
+ * the receiver reads out of order.  The loop is a prefix loop for the same
+ * reason the byte ring is a contiguous buffer. *)
+Example a_large_head_blocks_a_small_one_behind_it :
+    mbf_drain (mbf_fresh 16) (8 :: 1 :: nil) = (mk_mbf 16 4 0 12, 1 :: nil).
+Proof. reflexivity. Qed.
+
+Example an_oversized_head_is_refused_before_the_smaller_one_is_seen :
+    mbf_drain (mk_mbf 16 8 0 8) (8 :: 1 :: nil) = (mk_mbf 16 8 0 8, 8 :: 1 :: nil)
+    /\ mbf_admits (mb_free (mk_mbf 16 8 0 8)) 8 = false.
+Proof. repeat split; reflexivity. Qed.
+
+(* The store that ends at the boundary walks the tail back to zero (:137-139
+ * and :149-151), so an accepted sender can leave head and tail coincident with
+ * the counter drained -- the empty/full ambiguity of 15.5.2, produced by the
+ * accept loop rather than by a send. *)
+Example a_split_copy_at_the_end_of_the_buffer_lands_the_cursor_at_zero :
+    mbf_drain (mk_mbf 16 8 0 8) (1 :: nil) = (mk_mbf 16 0 0 0, nil)
+    /\ mbf_is_empty (mk_mbf 16 0 0 0) = false.
+Proof. repeat split; reflexivity. Qed.
+
+(* The counter that a read credits (:168) is the counter the next accept loop
+ * reads, so the loop resumes exactly where the drained buffer stopped it. *)
+Example the_accept_loop_resumes_when_a_read_frees_space :
+    mbf_drain (mk_mbf 16 0 0 0) (1 :: nil) = (mk_mbf 16 0 0 0, 1 :: nil)
+    /\ mbf_drain (mbf_read (mk_mbf 16 0 0 0) 4) (1 :: nil)
+       = (mk_mbf 16 0 8 8, nil).
+Proof. repeat split; reflexivity. Qed.

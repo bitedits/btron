@@ -4009,3 +4009,585 @@ Example the_projection_is_the_shipped_shape :
     = mk_sem 1 3 [7; 8] /\
     sem_view (mk_semcb 0 1 false false false 0 nil) = free_sem.
 Proof. split; reflexivity. Qed.
+
+(* ── 15. Two rings: the B-TRON message queue and the T-Kernel byte buffer ── *)
+
+(* BTRON 3.20 gives a thread domain one message queue (src/kernel/ipc_msg.c) and
+ * T-Kernel gives a pair of tasks one byte buffer (src/kernel/messagebuf.c).  The
+ * two are the same construction read at two granularities: a fixed ring of
+ * cells plus a cursor pair, where one API's cell is a whole message and the
+ * other's is a byte.  They differ in exactly two ways, and both matter.
+ *
+ *   - The B-TRON receive is SELECTIVE.  rcv_msg(pid, msg, mask, tmo) scans the
+ *     queue for the first message whose type bit is set in mask (ipc_msg.c:93-96)
+ *     and removes THAT one -- from the middle of the queue, by shifting the
+ *     survivors one cell back towards the head (:100-104).  _tk_rcv_mbf has no
+ *     mask of any kind and always takes the front (:messagebuf.c:458-460).
+ *   - The B-TRON ring counts MESSAGES, so a dequeue costs one cell; the message
+ *     buffer counts BYTES and rounds each message up to a 4-byte boundary
+ *     (messagebuf.c:105), so what a store costs is not what its own free-space
+ *     test charged for (:113 against :133).  15.5 makes that precise, and it is
+ *     a defect rather than a difference.
+ *
+ * The fact that makes this section provable is a hole in the C: nothing in
+ * ipc_msg.c ever assigns to g_mailboxes[pid].head.  The memset at :35 puts 0
+ * there and every later mention -- :94, :101, :102, :106 -- reads it.  So the
+ * consumer's window is always the contiguous prefix of the array, the ring
+ * never actually wraps for a reader, and the head is an inert coordinate. *)
+
+(* ── 15.1 The message envelope and its type mask ────────────────── *)
+
+(* message.h:47-51 is a three-field envelope.  The kernel reads exactly one of
+ * the fields: msg_type decides the mask test, and msg_size plus the payload
+ * union are copied verbatim in (:60) and out (:97) and never inspected.  bm_data
+ * stands for the payload -- it has to be present, because 15.2's interesting
+ * theorem is about the cell a dequeue forgets to clear. *)
+Record bmsg : Set := mk_bmsg {
+    bm_type : nat;            (* W msg_type, 1..31 (message.h:48) *)
+    bm_size : nat;            (* W msg_size *)
+    bm_data : nat             (* MSGBODY msg_body, one word read as the model's payload *)
+  }.
+
+(* ipc_msg.c:35 zeroes the whole mailbox, so a cell that has never been written
+ * reads as this value -- with a type no sender could have stored. *)
+Definition dead_cell : bmsg := mk_bmsg 0 0 0.
+
+(* message.h:32, MSGMASK(t) = 1U << ((t) - 1).  *)
+Definition msgmask (t : nat) : nat := Nat.pow 2 (Nat.pred t).
+
+(* ipc_msg.c:48, "msg->msg_type < 1 || msg->msg_type > 31". *)
+Definition type_in_range (t : nat) : bool :=
+  andb (Nat.leb msg_type_min t) (Nat.ltb t (S msg_type_max)).
+
+Lemma type_in_range_iff : forall t,
+    type_in_range t = true <-> msg_type_min <= t /\ t < S msg_type_max.
+Proof.
+  unfold type_in_range, msg_type_min, msg_type_max.
+  intros t. split.
+  - intros H. apply andb_true_iff in H. destruct H as [A B].
+    apply Nat.leb_le in A. apply Nat.ltb_lt in B. split; assumption.
+  - intros [A B]. rewrite andb_true_iff. split.
+    + apply Nat.leb_le. exact A.
+    + apply Nat.ltb_lt. exact B.
+Qed.
+
+Lemma pow2_is_positive : forall k, Nat.ltb 0 (Nat.pow 2 k) = true.
+Proof.
+  intros k. apply Nat.ltb_lt. induction k as [|k IH]; cbn [Nat.pow]; lia.
+Qed.
+
+Lemma an_in_range_type_has_a_mask_bit : forall t,
+    type_in_range t = true -> Nat.ltb 0 (msgmask t) = true.
+Proof. intros t _. apply pow2_is_positive. Qed.
+
+(* ipc_msg.c:96, "(mask == 0) || (mask & MSGMASK(mtype))".  A zero mask is a
+ * wildcard rather than an empty set -- the one place in this corpus where
+ * "no bits" means "all messages". *)
+Definition masked_accepts (mask t : nat) : bool :=
+  orb (Nat.eqb mask 0) (Nat.ltb 0 (Nat.land mask (msgmask t))).
+
+Lemma a_zero_mask_accepts_every_type : forall t, masked_accepts 0 t = true.
+Proof. intros t. unfold masked_accepts. cbn [Nat.eqb]. reflexivity. Qed.
+
+Lemma a_nonzero_mask_asks_only_about_its_bits : forall mask t,
+    Nat.ltb 0 mask = true ->
+    masked_accepts mask t = Nat.ltb 0 (Nat.land mask (msgmask t)).
+Proof.
+  intros mask t H. unfold masked_accepts.
+  destruct (Nat.eqb mask 0) eqn:E.
+  - apply Nat.eqb_eq in E. rewrite <- E. cbn [Nat.land Nat.pow Nat.pred].
+    apply Nat.ltb_lt in H. lia.
+  - reflexivity.
+Qed.
+
+(* The two readings of a mask, computed.  MS_TYPE1..MS_TYPE7 are 25..31
+ * (message.h:24-30), so the highest legal bit is bit 30 and MSGMASK needs no
+ * wider a word than the UW it is stored in. *)
+Example a_mask_of_two_types_accepts_exactly_those_two :
+    masked_accepts (msgmask 2 + msgmask 5) 2 = true /\
+    masked_accepts (msgmask 2 + msgmask 5) 5 = true /\
+    masked_accepts (msgmask 2 + msgmask 5) 3 = false /\
+    masked_accepts (msgmask 2 + msgmask 5) 0 = false.
+Proof. repeat split; vm_compute; reflexivity. Qed.
+
+(* ── 15.2 The slot ring, and the coordinate that never moves ────── *)
+
+(* ipc_msg.c:17-25, one mailbox per IPC pid: the array of cells plus the three
+ * integers the C keeps beside them.  count is a stored field in C and a derived
+ * quantity here, because both operations move it by exactly one and no other
+ * statement writes it. *)
+Record msg_ring : Set := mk_mring {
+    mr_slots : list bmsg;     (* MESSAGE messages[64], in SLOT order *)
+    mr_head  : nat;           (* int head   :19 *)
+    mr_tail  : nat;           (* int tail   :20 *)
+    mr_count : nat            (* int count  :21 *)
+  }.
+
+(* The window the API can reach and the cells outside it.  :93-94 reads cell
+ * (head + i) mod 64 for i < count, and head is 0, so the reachable cells are the
+ * first count ones -- in queue order, because nothing in this file reorders
+ * them.  Both are structurally recursive on the ARRAY, not on the index: that is
+ * what keeps them a rewriteable application while the index is still a variable,
+ * instead of a stuck match that no lemma can name. *)
+Fixpoint win (n : nat) (l : list bmsg) {struct l} : list bmsg :=
+  match l with
+  | nil => nil
+  | a :: rest => match n with
+                 | 0 => nil
+                 | S k => a :: win k rest
+                 end
+  end.
+
+Fixpoint cells_after (n : nat) (l : list bmsg) {struct l} : list bmsg :=
+  match l with
+  | nil => nil
+  | a :: rest => match n with
+                 | 0 => l
+                 | S k => cells_after k rest
+                 end
+  end.
+
+Lemma win_nil : forall n, win n nil = nil.
+Proof. intros n. reflexivity. Qed.
+
+Lemma win_cons : forall k a rest, win (S k) (a :: rest) = a :: win k rest.
+Proof. intros k a rest. reflexivity. Qed.
+
+Lemma win_at_zero : forall l, win 0 l = nil.
+Proof. destruct l; reflexivity. Qed.
+
+Lemma cells_after_nil : forall n, cells_after n nil = nil.
+Proof. intros n. reflexivity. Qed.
+
+Lemma cells_after_cons : forall k a rest,
+    cells_after (S k) (a :: rest) = cells_after k rest.
+Proof. intros k a rest. reflexivity. Qed.
+
+Lemma cells_after_at_zero : forall l, cells_after 0 l = l.
+Proof. destruct l; reflexivity. Qed.
+
+Definition mqueue (r : msg_ring) : list bmsg := win (mr_count r) (mr_slots r).
+
+(* What the initialisation (:31-43) establishes and both operations preserve.
+ * The last clause is the ring coordinate: tail is not independent data, it is
+ * (head + count) mod 64, and every theorem 15.2.2 proves is a consequence. *)
+Definition ring_ok (r : msg_ring) : bool :=
+  andb (Nat.eqb (length (mr_slots r)) msg_ring_cap)
+       (andb (Nat.eqb (mr_head r) 0)
+             (andb (Nat.leb (mr_count r) msg_ring_cap)
+                   (Nat.eqb (mr_tail r)
+                            (Nat.modulo (Nat.add (mr_head r) (mr_count r)) msg_ring_cap)))).
+
+
+(* The one cell write, :60 and :103.  Again structurally recursive on the array:
+ * a write past the end of the list runs off it and returns it unchanged, which is
+ * what makes the capacity guard a guard rather than a formality. *)
+Fixpoint slot_write (i : nat) (m : bmsg) (l : list bmsg) {struct l} : list bmsg :=
+  match l with
+  | nil => nil
+  | a :: rest => match i with
+                 | 0 => m :: rest
+                 | S k => a :: slot_write k m rest
+                 end
+  end.
+Lemma slot_write_off_the_end : forall i (m : bmsg), slot_write i m nil = nil.
+Proof. intros i m. reflexivity. Qed.
+
+Lemma slot_write_at_the_cursor : forall m (a : bmsg) rest,
+    slot_write 0 m (a :: rest) = m :: rest.
+Proof. intros m a rest. reflexivity. Qed.
+
+Lemma slot_write_past_the_cursor : forall k m (a : bmsg) rest,
+    slot_write (S k) m (a :: rest) = a :: slot_write k m rest.
+Proof. intros k m a rest. reflexivity. Qed.
+
+Lemma slot_write_beyond_is_inert : forall i (m : bmsg) l,
+    length l <= i -> slot_write i m l = l.
+Proof.
+  intros i m l. revert i. induction l as [|a rest IH]; intros i H.
+  - reflexivity.
+  - destruct i as [|k].
+    + cbn [length Nat.leb] in H. lia.
+    + rewrite slot_write_past_the_cursor. f_equal. cbn [length] in H |- *.
+      apply IH. lia.
+Qed.
+
+Lemma slot_write_keeps_the_length : forall i (m : bmsg) l,
+    length (slot_write i m l) = length l.
+Proof.
+  intros i m l. revert i. induction l as [|a rest IH]; intros i; cbn [slot_write length].
+  - reflexivity.
+  - destruct i as [|k]; cbn [slot_write length]; [ reflexivity | rewrite IH; reflexivity ].
+Qed.
+
+Lemma min_succ : forall a b, Nat.min (S a) (S b) = S (Nat.min a b).
+Proof. intros a b. cbn [Nat.min]. destruct (Nat.leb a b); reflexivity. Qed.
+
+Lemma win_length : forall n l, length (win n l) = Nat.min n (length l).
+Proof.
+  intros n l. revert n. induction l as [|a rest IH]; intros n.
+  - destruct n; cbn [win length Nat.min]; reflexivity.
+  - destruct n as [|k]; cbn [win length].
+    + cbn [Nat.min]. reflexivity.
+    + rewrite min_succ, IH. reflexivity.
+Qed.
+
+Lemma cells_after_length : forall n l, length (cells_after n l) = Nat.sub (length l) n.
+Proof.
+  intros n l. revert n. induction l as [|a rest IH]; intros n.
+  - destruct n; cbn [cells_after length Nat.sub]; reflexivity.
+  - destruct n as [|k]; cbn [cells_after length Nat.sub].
+    + reflexivity.
+    + rewrite IH. reflexivity.
+Qed.
+
+Lemma win_cells_after_split : forall n l, win n l ++ cells_after n l = l.
+Proof.
+  intros n l. revert n. induction l as [|a rest IH]; intros n.
+  - reflexivity.
+  - destruct n as [|k]; cbn [win cells_after app].
+    + destruct rest; reflexivity.
+    + f_equal. apply IH.
+Qed.
+
+Lemma win_at_length : forall q rest, win (length q) (q ++ rest) = q.
+Proof.
+  intros q. induction q as [|a rest IH]; intros rest2.
+  - rewrite win_at_zero. reflexivity.
+  - cbn [app length win]. rewrite IH. reflexivity.
+Qed.
+
+Lemma cells_after_at_length : forall q rest, cells_after (length q) (q ++ rest) = rest.
+Proof.
+  intros q. induction q as [|a rest IH]; intros rest2.
+  - rewrite cells_after_at_zero. reflexivity.
+  - cbn [app length cells_after]. rewrite IH. reflexivity.
+Qed.
+
+Lemma win_slot_write_at_length : forall n (m : bmsg) l,
+    n < length l -> win (S n) (slot_write n m l) = win n l ++ [m].
+Proof.
+  intros n m l. revert n. induction l as [|a rest IH]; intros n H.
+  - cbn [length Nat.leb] in H. lia.
+  - destruct n as [|k].
+    + rewrite slot_write_at_the_cursor, win_cons, win_at_zero, win_at_zero.
+      cbn [app]. reflexivity.
+    + assert (Hk : k < length rest) by (cbn [length] in H |- *; lia).
+      rewrite slot_write_past_the_cursor, win_cons, (IH k Hk), win_cons. reflexivity.
+Qed.
+
+(* ── 15.2.2 The two operations, as the C writes them ────────────── *)
+
+(* ipc_msg.c:60-62: write at the cursor, advance it modulo the capacity, count
+ * up. *)
+Definition snd_store (m : bmsg) (r : msg_ring) : msg_ring :=
+  mk_mring (slot_write (mr_tail r) m (mr_slots r))
+           (mr_head r)
+           (Nat.modulo (S (mr_tail r)) msg_ring_cap)
+           (S (mr_count r)).
+
+(* The compaction loop, :100-104, and the cell it leaves behind.  The loop runs
+ * from i to count-2, so cell count-1 is never written and keeps the message that
+ * used to be the last one. *)
+Fixpoint last_of (d : bmsg) (l : list bmsg) : bmsg :=
+  match l with nil => d | a :: rest => last_of a rest end.
+
+Fixpoint remove_at (i : nat) (l : list bmsg) {struct l} : list bmsg :=
+  match l with
+  | nil => nil
+  | a :: rest => match i with
+                 | 0 => rest
+                 | S k => a :: remove_at k rest
+                 end
+  end.
+
+Lemma remove_at_nil : forall i, remove_at i nil = nil.
+Proof. intros i. reflexivity. Qed.
+
+Lemma remove_at_head : forall (a : bmsg) rest, remove_at 0 (a :: rest) = rest.
+Proof. intros a rest. reflexivity. Qed.
+
+Lemma remove_at_cons : forall k a rest,
+    remove_at (S k) (a :: rest) = a :: remove_at k rest.
+Proof. intros k a rest. reflexivity. Qed.
+
+(* :97-106: hand the matched cell out, pull every survivor one cell back towards
+ * the head, count down, and REBUILD tail from the coordinate. *)
+Definition rcv_shift (i : nat) (r : msg_ring) : msg_ring :=
+  mk_mring (remove_at i (mqueue r)
+                ++ last_of dead_cell (mqueue r) :: cells_after (mr_count r) (mr_slots r))
+           (mr_head r)
+           (Nat.modulo (Nat.add (mr_head r) (Nat.pred (mr_count r))) msg_ring_cap)
+           (Nat.pred (mr_count r)).
+
+(* The compaction loop takes one item out of the middle and leaves the two
+ * halves exactly where they were: everything before the index, then everything
+ * after it. *)
+Lemma remove_at_is_the_split : forall i l, i < length l ->
+    remove_at i l = win i l ++ cells_after (S i) l.
+Proof.
+  intros i l. revert i. induction l as [|a rest IH]; intros i H.
+  - cbn [length Nat.leb] in H. lia.
+  - destruct i as [|k].
+    + rewrite remove_at_head, win_at_zero, cells_after_cons, cells_after_at_zero.
+      reflexivity.
+    + assert (Hk : k < length rest) by (cbn [length] in H |- *; lia).
+      rewrite remove_at_cons, win_cons, cells_after_cons, (IH k Hk). reflexivity.
+Qed.
+
+(* The item that leaves the queue is the one at the index. *)
+Lemma cells_after_is_the_item_and_the_tail : forall i l, i < length l ->
+    exists m, cells_after i l = m :: cells_after (S i) l.
+Proof.
+  intros i l. revert i. induction l as [|a rest IH]; intros i H.
+  - cbn [length Nat.leb] in H. lia.
+  - destruct i as [|k].
+    + exists a. cbn [cells_after]. rewrite cells_after_at_zero. reflexivity.
+    + assert (Hk : k < length rest) by (cbn [length] in H |- *; lia).
+      destruct (IH k Hk) as [m Cm]. exists m.
+      cbn [cells_after]. exact Cm.
+Qed.
+
+Lemma remove_at_splits : forall i l, i < length l ->
+    exists m, l = win i l ++ m :: cells_after (S i) l
+              /\ remove_at i l = win i l ++ cells_after (S i) l.
+Proof.
+  intros i l H. destruct (cells_after_is_the_item_and_the_tail i l H) as [m Cm].
+  exists m. split.
+  - rewrite <- Cm. symmetry. apply win_cells_after_split.
+  - apply remove_at_is_the_split. exact H.
+Qed.
+
+Lemma remove_at_length : forall i l,
+    i < length l -> length (remove_at i l) = Nat.pred (length l).
+Proof.
+  intros i l H. rewrite remove_at_is_the_split; [ | exact H ].
+  rewrite length_app, win_length, cells_after_length.
+  assert (M : Nat.min i (length l) = i) by (apply Nat.min_l; lia).
+  rewrite M. lia.
+Qed.
+
+(* ── 15.2.1 The head is an inert coordinate ─────────────────────── *)
+
+(* ipc_msg.c has four reads of mb->head (:94, :101, :102, :106) and no write to
+ * it.  Both operations hand the field back unchanged, and that pair of refl
+ * claims is the whole reason the window is a prefix rather than a wrap. *)
+Lemma snd_store_leaves_the_head_alone : forall m r, mr_head (snd_store m r) = mr_head r.
+Proof. intros m r. reflexivity. Qed.
+
+Lemma rcv_shift_leaves_the_head_alone : forall i r, mr_head (rcv_shift i r) = mr_head r.
+Proof. intros i r. reflexivity. Qed.
+
+(* The four clauses of ring_ok, named once so the theorems below read as
+ * statements about the queue and the cursor rather than about boolean tests. *)
+Lemma ring_ok_parts : forall r, ring_ok r = true ->
+    length (mr_slots r) = msg_ring_cap /\ mr_head r = 0
+    /\ mr_count r <= msg_ring_cap
+    /\ mr_tail r = Nat.modulo (Nat.add (mr_head r) (mr_count r)) msg_ring_cap.
+Proof.
+  intros r H. unfold ring_ok in H.
+  apply andb_true_iff in H. destruct H as [A H2].
+  apply andb_true_iff in H2. destruct H2 as [B H3].
+  apply andb_true_iff in H3. destruct H3 as [C D].
+  apply Nat.eqb_eq in A. apply Nat.eqb_eq in B. apply Nat.leb_le in C.
+  apply Nat.eqb_eq in D. repeat split.
+  - exact A. - exact B. - exact C. - exact D.
+Qed.
+
+(* ── 15.2.2 What the two operations do to the reachable window ───── *)
+
+(* The send appends to the queue: :60 writes at tail, and tail is the first cell
+ * the window does not cover. *)
+Lemma snd_store_appends : forall (m : bmsg) r,
+    ring_ok r = true -> mr_count r < msg_ring_cap ->
+    mqueue (snd_store m r) = mqueue r ++ [m].
+Proof.
+  intros m r H OK. destruct (ring_ok_parts r H) as [A [B [C D]]].
+  cbn [mr_count] in OK.
+  unfold snd_store, mqueue. cbn [mr_slots mr_count].
+  rewrite B in D. cbn [Nat.add] in D.
+  rewrite (Nat.mod_small (mr_count r) msg_ring_cap OK) in D.
+  rewrite D. apply win_slot_write_at_length. rewrite A. exact OK.
+Qed.
+
+
+(* The receive deletes exactly the cell the scan matched, and nothing else moves
+ * relative to its neighbours. *)
+Lemma rcv_shift_removes_the_index : forall i r,
+    ring_ok r = true -> i < mr_count r ->
+    mqueue (rcv_shift i r) = remove_at i (mqueue r).
+Proof.
+  intros i r H LT. destruct (ring_ok_parts r H) as [A [B [C D]]].
+  unfold rcv_shift, mqueue. cbn [mr_slots mr_count mr_head].
+  assert (M : Nat.min (mr_count r) msg_ring_cap = mr_count r)
+    by (apply Nat.min_l; exact C).
+  assert (WL : length (win (mr_count r) (mr_slots r)) = mr_count r).
+  { rewrite win_length, A, M. reflexivity. }
+  replace (Nat.pred (mr_count r))
+    with (length (remove_at i (win (mr_count r) (mr_slots r)))).
+  - rewrite win_at_length. reflexivity.
+  - rewrite remove_at_length; [ rewrite WL; reflexivity | rewrite WL; exact LT ].
+Qed.
+
+Lemma a_dequeue_takes_one_item_out_of_the_middle : forall i r,
+    ring_ok r = true -> i < mr_count r ->
+    exists a b m, mqueue r = a ++ [m] ++ b /\ mqueue (rcv_shift i r) = a ++ b.
+Proof.
+  intros i r H LT. destruct (ring_ok_parts r H) as [A [B [C D]]].
+  assert (M : Nat.min (mr_count r) msg_ring_cap = mr_count r)
+    by (apply Nat.min_l; exact C).
+  assert (LT' : i < length (mqueue r)).
+  { unfold mqueue. rewrite win_length, A, M. exact LT. }
+  rewrite rcv_shift_removes_the_index.
+  { destruct (remove_at_splits i (mqueue r) LT') as [m [P Q]].
+    exists (win i (mqueue r)). exists (cells_after (S i) (mqueue r)). exists m.
+    split; [ exact P | exact Q ]. }
+  { exact H. }
+  { exact LT. }
+Qed.
+
+Lemma rcv_shift_consumes_one_message : forall i r,
+    ring_ok r = true -> i < mr_count r ->
+    length (mqueue (rcv_shift i r)) = Nat.pred (mr_count r).
+Proof.
+  intros i r H LT. destruct (ring_ok_parts r H) as [A [B [C D]]].
+  assert (M : Nat.min (mr_count r) msg_ring_cap = mr_count r)
+    by (apply Nat.min_l; exact C).
+  assert (WL : length (mqueue r) = mr_count r).
+  { unfold mqueue. rewrite win_length, A, M. reflexivity. }
+  rewrite rcv_shift_removes_the_index.
+  { rewrite remove_at_length; [ rewrite WL; reflexivity | rewrite WL; exact LT ]. }
+  { exact H. }
+  { exact LT. }
+Qed.
+
+(* THE PAYOFF.  Nothing in :100-106 erases a cell, so the cell immediately past
+ * the new end still holds the message that used to be the last one, and the
+ * cells beyond it are exactly what they were.  A dequeued payload therefore
+ * stays in the mailbox array: unreachable through the API, because mqueue no
+ * longer covers it, and plainly reachable by anyone who maps the array -- which
+ * in this implementation every domain of the same process can do. *)
+Lemma dequeue_leaves_one_stale_cell : forall i r,
+    ring_ok r = true -> i < mr_count r ->
+    cells_after (Nat.pred (mr_count r)) (mr_slots (rcv_shift i r))
+    = last_of dead_cell (mqueue r) :: cells_after (mr_count r) (mr_slots r).
+Proof.
+  intros i r H LT. destruct (ring_ok_parts r H) as [A [B [C D]]].
+  assert (M : Nat.min (mr_count r) msg_ring_cap = mr_count r)
+    by (apply Nat.min_l; exact C).
+  assert (WL : length (win (mr_count r) (mr_slots r)) = mr_count r).
+  { rewrite win_length, A, M. reflexivity. }
+  unfold rcv_shift, mqueue. cbn [mr_slots mr_count].
+  replace (Nat.pred (mr_count r))
+    with (length (remove_at i (win (mr_count r) (mr_slots r)))) at 1.
+  - rewrite cells_after_at_length. reflexivity.
+  - rewrite remove_at_length; [ rewrite WL; reflexivity | rewrite WL; exact LT ].
+Qed.
+
+(* Why :106 rebuilds the cursor instead of moving it: a full ring carries
+ * count = 64 and therefore tail = (0 + 64) mod 64 = 0, so decrementing the
+ * cursor would leave it at 0 where the next free cell is number 63. *)
+Lemma rebuilding_the_cursor_differs_from_decrementing :
+    Nat.modulo (Nat.add 0 (Nat.pred msg_ring_cap)) msg_ring_cap = Nat.pred msg_ring_cap /\
+    Nat.modulo (Nat.pred (Nat.modulo (Nat.add 0 msg_ring_cap) msg_ring_cap)) msg_ring_cap = 0.
+Proof. split; vm_compute; reflexivity. Qed.
+
+(* The two halves of ring_ok, written for a record whose fields are already
+ * separate, so that preserving the invariant is four obligations rather than a
+ * fight with a chain of andb. *)
+Lemma ring_ok_of_fields : forall s h t c,
+    length s = msg_ring_cap -> h = 0 -> c <= msg_ring_cap ->
+    t = Nat.modulo (Nat.add h c) msg_ring_cap ->
+    ring_ok (mk_mring s h t c) = true.
+Proof.
+  intros s h t c A B C D.
+  rewrite B in D. cbn [Nat.add] in D.
+  unfold ring_ok. cbn [mr_slots mr_head mr_count mr_tail].
+  rewrite A, B, D. cbn [Nat.add].
+  apply andb_true_iff. split.
+  - apply Nat.eqb_eq. reflexivity.
+  - apply andb_true_iff. split.
+    + apply Nat.eqb_eq. reflexivity.
+    + apply andb_true_iff. split.
+      * apply Nat.leb_le. exact C.
+      * apply Nat.eqb_eq. reflexivity.
+Qed.
+
+Lemma ring_ok_fields : forall s h t c,
+    ring_ok (mk_mring s h t c) = true ->
+    length s = msg_ring_cap /\ h = 0 /\ c <= msg_ring_cap
+    /\ t = Nat.modulo (Nat.add h c) msg_ring_cap.
+Proof.
+  intros s h t c H. unfold ring_ok in H.
+  cbn [mr_slots mr_head mr_count mr_tail] in H.
+  apply andb_true_iff in H. destruct H as [A H2].
+  apply andb_true_iff in H2. destruct H2 as [B H3].
+  apply andb_true_iff in H3. destruct H3 as [C D].
+  apply Nat.eqb_eq in A. apply Nat.eqb_eq in B. apply Nat.leb_le in C.
+  apply Nat.eqb_eq in D. repeat split; assumption.
+Qed.
+
+(* :55's guard is what keeps the count inside the array; both operations leave a
+ * mailbox the initialisation could have produced. *)
+Lemma push_keeps_the_ring_wellformed : forall (m : bmsg) r,
+    ring_ok r = true -> mr_count r < msg_ring_cap -> ring_ok (snd_store m r) = true.
+Proof.
+  intros m r H OK. destruct r as [s h t c]. cbn [mr_count] in OK.
+  destruct (ring_ok_fields s h t c H) as [A [B [C D]]].
+  rewrite B in D. cbn [Nat.add] in D.
+  rewrite (Nat.mod_small c msg_ring_cap OK) in D.
+  unfold snd_store. cbn [mr_slots mr_head mr_count mr_tail].
+  apply ring_ok_of_fields.
+  - rewrite slot_write_keeps_the_length. exact A.
+  - exact B.
+  - exact OK.
+  - rewrite D, B. cbn [Nat.add]. reflexivity.
+Qed.
+
+Lemma dequeue_keeps_the_ring_wellformed : forall i r,
+    ring_ok r = true -> i < mr_count r -> ring_ok (rcv_shift i r) = true.
+Proof.
+  intros i r H LT. destruct r as [s h t c]. cbn [mr_count] in LT.
+  destruct (ring_ok_fields s h t c H) as [A [B [C D]]].
+  assert (M : Nat.min c msg_ring_cap = c) by (apply Nat.min_l; exact C).
+  assert (WL : length (win c s) = c).
+  { rewrite win_length, A, M. reflexivity. }
+  unfold rcv_shift, mqueue. cbn [mr_slots mr_head mr_count mr_tail].
+  apply ring_ok_of_fields.
+  - rewrite length_app. cbn [length].
+    rewrite remove_at_length.
+    { rewrite WL, cells_after_length, A, <- Nat.sub_1_r. lia. }
+    { rewrite WL. exact LT. }
+  - exact B.
+  - apply Nat.le_trans with (m := c); [ | exact C ].
+    destruct c as [|k]; cbn [Nat.pred].
+    + apply Nat.le_0_l.
+    + apply Nat.le_succ_diag_r.
+  - reflexivity.
+Qed.
+
+(* ── 15.2.3 The one writer validates the type, and the readers do not ── *)
+
+(* :48 is the only range test in the file, and it is on the SEND side.  rcv_msg
+ * never rechecks the type of what it finds (:96 reads it, :97 hands it over), so
+ * the range of a queued type rests entirely on this invariant. *)
+Definition types_in_range (q : list bmsg) : bool :=
+  forallb (fun m => type_in_range (bm_type m)) q.
+
+Lemma types_in_range_app : forall q1 q2,
+    types_in_range (q1 ++ q2) = andb (types_in_range q1) (types_in_range q2).
+Proof.
+  intros q1. induction q1 as [|a rest IH]; intros q2; cbn [types_in_range forallb app].
+  - reflexivity.
+  - rewrite IH. destruct (type_in_range (bm_type a)); reflexivity.
+Qed.
+
+Lemma a_send_never_stores_a_type_its_receive_could_not_check : forall (m : bmsg) r,
+    ring_ok r = true -> mr_count r < msg_ring_cap -> type_in_range (bm_type m) = true ->
+    types_in_range (mqueue r) = true -> types_in_range (mqueue (snd_store m r)) = true.
+Proof.
+  intros m r H OK R T.
+  rewrite snd_store_appends; [ | exact H | exact OK ].
+  rewrite types_in_range_app, T. cbn [types_in_range forallb].
+  rewrite R. reflexivity.
+Qed.

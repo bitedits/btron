@@ -44,7 +44,7 @@
     tabsize=2
 }
 
-\title{\LARGE \textbf{Fair Comparison of satromi's TessronOS and 5HT's B-System:\\A Rigorous Comparative Audit of Symmetric Multiprocessing, UI Compositing Engines, and Bit Blitter Micro-Architectures in Modern TRON Lineages}}
+\title{\LARGE \textbf{Fair Comparison of satromi's TessronOS and 5HT's B-System:\\A Rigorous Comparative Audit of Symmetric Multiprocessing, UI Compositing Engines, Bit Blitter Micro-Architectures, and Cho-Kanji File Systems}}
 
 \author{
     \textbf{Maxim Sokhatsky (Namdak Tonpa)}\\[0.3em]
@@ -65,14 +65,14 @@
 \maketitle
 
 \begin{abstract}
-The contemporary renaissance of Ken Sakamura's TRON architecture is defined by two prominent, independent 64-bit cleanroom operating system implementations: satromi's \textbf{TessronOS}, rooted in $\mu$T-Kernel 3.0, the SMP T-Kernel specification, and T2EX for the quad-core ARM Cortex-A76 Raspberry Pi 5; and 5HT's \textbf{B-System} (BTRON 3.20), engineered as a multi-target, high-throughput real-time unikernel/microkernel hybrid spanning ARM64, x86\_64 UEFI, and vintage architectures. This paper delivers a doctoral-level comparative audit strictly restricted to isomorphic, comparable subsystems shared by both systems: (1) Symmetric Multiprocessing (SMP) concurrency, scheduler scalability, locking primitives, and operational maturity; (2) Display Primitives (DP), window compositing pipelines, dirty-rectangle management, and Bit Blitter micro-architectures; (3) Memory protection, page table structures, and subsystem isolation; and (4) Hyper-data representation across the TRON Application Databus (TAD) and Real Object / Virtual Object (\ja{実身}/\ja{仮身}) abstractions.
+The contemporary renaissance of Ken Sakamura's TRON architecture is defined by two prominent, independent 64-bit cleanroom operating system implementations: satromi's \textbf{TessronOS}, rooted in $\mu$T-Kernel 3.0, the SMP T-Kernel specification, and T2EX for the quad-core ARM Cortex-A76 Raspberry Pi 5; and 5HT's \textbf{B-System} (BTRON 3.20), engineered as a multi-target, high-throughput real-time unikernel/microkernel hybrid spanning ARM64, x86\_64 UEFI, and vintage architectures. This paper delivers a doctoral-level comparative audit strictly restricted to isomorphic, comparable subsystems shared by both systems: (1) Symmetric Multiprocessing (SMP) concurrency, scheduler scalability, locking primitives, and operational maturity; (2) Display Primitives (DP), window compositing pipelines, dirty-rectangle management, and Bit Blitter micro-architectures; (3) Memory protection, page table structures, and subsystem isolation; (4) On-disk file systems, spanning authentic Cho-Kanji (BTRON V1 / B-right/V 4.02), modern 64-bit B-FS (V2), and TSFS; and (5) Hyper-data representation across the TRON Application Databus (TAD) and Real Object / Virtual Object (\ja{実身}/\ja{仮身}) abstractions.
 
-To maintain methodological fairness, we establish an explicit epistemological boundary: while B-System is developed alongside mechanized formal verification in the Coq proof assistant (the VeriMath framework), introducing formal theorem-prover verification as a comparative metric would result in the immediate disqualification of TessronOS, which possesses no mechanized proofs. Therefore, we evaluate both systems strictly on their shared, empirically comparable artifacts: concrete C and assembly routines, hardware execution traces, cache-coherency protocols, and bus-transaction dynamics.
+To maintain methodological fairness, we establish an explicit epistemological boundary: while B-System is developed alongside mechanized formal verification in the Coq proof assistant (the VeriMath framework), introducing formal theorem-prover verification as a comparative metric would result in the immediate disqualification of TessronOS, which possesses no mechanized proofs. Therefore, we evaluate both systems strictly on their shared, empirically comparable artifacts: concrete C and assembly routines, hardware execution traces, cache-coherency protocols, bus-transaction dynamics, and on-disk binary formats.
 
-Our audit reveals sharp architectural divergences. In Symmetric Multiprocessing, TessronOS demonstrates operational maturity on physical hardware, booting four Cortex-A76 cores via ARM PSCI and managing core-to-core dispatch via GICv2 Inter-Processor Interrupts (IPIs); however, its reliance on a Big Kernel Lock (BKL) ticket spinlock and a single global ready queue induces $O(N^2)$ cacheline invalidation storms and cross-core priority inversions that compromise hard real-time determinism. Conversely, B-System advances a lock-free, per-core actor model avoiding BKL bottlenecks, though its baremetal x86\_64 SMP scheduler remains in an incremental staging phase while relying on POSIX threads for hosted multicore concurrency. In display compositing and bit blitting, B-System's Bit Blitter is decisively superior in memory bus efficiency and raw throughput, utilizing 128-bit ARMv8-A NEON SIMD vectorization with address phase-peeling and DMA engine offloading to saturate memory bandwidth on uncached framebuffers; TessronOS's Bit Blitter relies on scalar 32-bit word loops that suffer severe write-combining store-buffer stalls on uncached VRAM, but compensates with a richer Chokanji V (\ja{超漢字V}) visual compositor featuring scanline-region rounded corners, drop shadows, and an authentic widget hierarchy. Finally, in hyper-data architecture, we establish that TessronOS's text-based xmlTAD and jsTAD formats are not architectural advantages; they introduce non-deterministic parsing latency and heap fragmentation into an RTOS, whereas B-System's canonical binary TAD segment records preserve the deterministic data integrity necessary for a future formal ASN.1 / BER serialization pipeline.
+Our audit reveals sharp architectural divergences. In Symmetric Multiprocessing, TessronOS demonstrates operational maturity on physical hardware, booting four Cortex-A76 cores via ARM PSCI and managing core-to-core dispatch via GICv2 Inter-Processor Interrupts (IPIs); however, its reliance on a Big Kernel Lock (BKL) ticket spinlock and a single global ready queue induces $O(N^2)$ cacheline invalidation storms and cross-core priority inversions that compromise hard real-time determinism. Conversely, B-System advances a lock-free, per-core actor model avoiding BKL bottlenecks, though its baremetal x86\_64 SMP scheduler remains in an incremental staging phase while relying on POSIX threads for hosted multicore concurrency. In display compositing and bit blitting, B-System's Bit Blitter is decisively superior in memory bus efficiency and raw throughput, utilizing 128-bit ARMv8-A NEON SIMD vectorization with address phase-peeling and DMA engine offloading to saturate memory bandwidth on uncached framebuffers; TessronOS's Bit Blitter relies on scalar 32-bit word loops that suffer severe write-combining store-buffer stalls on uncached VRAM, but compensates with a richer Chokanji V (\ja{超漢字V}) visual compositor featuring scanline-region rounded corners, drop shadows, and an authentic widget hierarchy. In filesystem support, B-System achieves full backward compatibility with authentic Cho-Kanji (B-right/V 4.02, \texttt{FS\_TYPE\_BRIGHTV}) disk images and introduces modern 64-bit B-FS (V2) with dual-anchor superblocks, extents, and B+Trees, whereas TessronOS lacks any Cho-Kanji volume support, relying on a custom TSFS with JSON/xmlTAD metadata over FAT. Finally, in hyper-data architecture, we establish that TessronOS's text-based xmlTAD and jsTAD formats are not architectural advantages; they introduce non-deterministic parsing latency and heap fragmentation into an RTOS, whereas B-System's canonical binary TAD segment records preserve the deterministic data integrity necessary for a future formal ASN.1 / BER serialization pipeline.
 \end{abstract}
 
-\noindent\textbf{\small Keywords}---TRON, BTRON, $\mu$T-Kernel 3.0, TessronOS, B-System, Symmetric Multiprocessing, Big Kernel Lock, Bit Blitter, NEON SIMD, Window Compositor, Real Object / Virtual Object, Chokanji V, ASN.1, Formal Verification.
+\noindent\textbf{\small Keywords}---TRON, BTRON, $\mu$T-Kernel 3.0, TessronOS, B-System, Symmetric Multiprocessing, Big Kernel Lock, Bit Blitter, NEON SIMD, Window Compositor, Real Object / Virtual Object, Cho-Kanji Filesystem, B-FS, B-right/V, ASN.1, Formal Verification.
 
 %-------------------------------------------------------------------------
 \section{Introduction and Methodological Scope}
@@ -91,7 +91,7 @@ A critical epistemological consideration must be established at the outset of th
 
 \textbf{If formal mechanized verification were admitted as a comparative criterion, TessronOS would face immediate categorical disqualification.} TessronOS contains zero formal specifications, zero mechanized proofs, and zero machine-checked semantics; its correctness relies entirely on empirical testing and manual inspection of C code. 
 
-Therefore, to maintain a rigorous, objective, and fair peer-level academic audit, we deliberately bracket out Coq-level verification. We constrain this investigation strictly to **isomorphic, empirically comparable implementation artifacts**: concrete C and assembly codebases, hardware register transactions, cache-coherency protocols, bus-arbitration dynamics, and empirical scheduling behavior.
+Therefore, to maintain a rigorous, objective, and fair peer-level academic audit, we deliberately bracket out Coq-level verification. We constrain this investigation strictly to **isomorphic, empirically comparable implementation artifacts**: concrete C and assembly codebases, hardware register transactions, cache-coherency protocols, bus-arbitration dynamics, on-disk file systems, and empirical scheduling behavior.
 
 %-------------------------------------------------------------------------
 \section{Architectural Pedigree and System Models}
@@ -145,7 +145,7 @@ TessronOS adheres to the classic layered TRON architecture:
 \subsection{B-System: The Cleanroom BTRON3 Workstation}
 B-System is an independent, cleanroom implementation of the BTRON3 Version 3.20.00 specification~\cite{btron3spec}. Rejecting the heavy layering of modern desktop Unix and the microkernel IPC performance collapse experienced by systems like Mach and Windows NT 3.51~\cite{cutler1993nt, solomon1998inside}, B-System is conceived as a high-performance, single-address-space real-time operating system (SAS-RTOS) for embedded and workstation hardware.
 
-Rather than porting an existing $\mu$T-Kernel codebase, B-System implements direct Display Primitives (\texttt{src/graphics/dp\_core.c}), a streamlined windowing hierarchy (\texttt{src/window/wnd.c}), a native Hierarchical File/Data Set (HFDS) driver, and a hardware abstraction engine (\texttt{src/cores/}) capable of booting bare-metal across heterogeneous architectures without relying on third-party frameworks.
+Rather than porting an existing $\mu$T-Kernel codebase, B-System implements direct Display Primitives (\texttt{src/graphics/dp\_core.c}), a streamlined windowing hierarchy (\texttt{src/window/wnd.c}), an authentic Cho-Kanji and B-FS filesystem subsystem (\texttt{src/fs/}), and a hardware abstraction engine (\texttt{src/cores/}) capable of booting bare-metal across heterogeneous architectures without relying on third-party frameworks.
 
 %-------------------------------------------------------------------------
 \section{Comparative Audit: Symmetric Multiprocessing (SMP)}
@@ -180,12 +180,13 @@ B-System declares SMP support across two distinct runtime targets:
 \caption{Comprehensive Architectural and Micro-Architectural Comparison: TessronOS vs. B-System}
 \label{tab:comprehensive_comparison}
 \scriptsize
+\noindent\makebox[\textwidth][c]{
 \begin{tabular}{lll}
 \toprule
 \textbf{Architectural Dimension} & \textbf{satromi's TessronOS} & \textbf{5HT's B-System (BTRON3 3.20)} \\
 \midrule
 \textbf{Baseline / Pedigree} & $\mu$T-Kernel 3.0 + SMP T-Kernel + T2EX & Cleanroom BTRON3 Specification 3.20 \\
-\textbf{Hardware Target(s)} & Raspberry Pi 5 exclusively (BCM2712 Cortex-A76 $\times$ 4) & Multi-Target: Pi 400 (ARM64), x86\_64 UEFI, PS2, PC-98, M68k, POSIX \\
+\textbf{Hardware Target(s)} & Raspberry Pi 5 exclusively (BCM2712 Cortex-A76 $\times$ 4) & Multi-Target: Pi 400 (ARM64), x86\_64 UEFI, PS2, PC-98, M68k \\
 \textbf{Declared SMP Cores} & 4 Cores Live (Cortex-A76 quad-core) & 4 Cores Live (x86\_64 / Hosted POSIX) \\
 \textbf{SMP Core Bring-Up} & ARM PSCI \texttt{CPU\_ON} $\to$ \texttt{boot.S} secondary entry & ACPI 6.5 MADT probe + 16-bit \texttt{INIT-SIPI-SIPI} stub / \texttt{pthread} \\
 \textbf{Kernel Locking Model} & \textbf{Big Kernel Lock (BKL)}: Single ticket spinlock & \textbf{Lock-Free Actor Model}: MPSC atomic queues (\texttt{CMPXCHG8}) \\
@@ -204,13 +205,15 @@ B-System declares SMP support across two distinct runtime targets:
 \textbf{Visual Styling Fidelity} & \textbf{Superior Chokanji V Look}: Rounded corners, drop shadows & \textbf{Retro BTRON3 Look}: Rectangular tabs, high-contrast borders \\
 \textbf{Widget Abstractions} & Full xmlTAD Databox: switches, sliders, selectors, tabs & Programmatic C controls: window menus, buttons, text fields \\
 \midrule
+\textbf{Cho-Kanji FS (BTRON V1)} & \textbf{None}: Cannot mount/parse B-right/V volumes & \textbf{Native Support}: \texttt{FS\_TYPE\_BRIGHTV}, 128B header, QCOW2 \\
+\textbf{Modern B-FS (BTRON V2)} & Custom TSFS (GPT UUIDs, JSON/xmlTAD on FAT) & \textbf{Native B-FS}: Dual-anchor superblock, 64-bit FIDs, B+Trees \\
 \textbf{Memory Protection} & 48-bit Virtual Split (TTBR0/TTBR1), 16-bit ASID, EL0 processes & Single-Address Space (MCU/Baremetal); Ring 3 isolation design (UEFI) \\
 \textbf{Hyper-Data / TAD Format} & \textbf{xmlTAD} (Ad-hoc XML text, heap/parsing non-determinism) & \textbf{Binary TAD Streams} (Compact variable records, planned ASN.1) \\
 \textbf{Formal Serialization Target} & Web-oriented text dialects (TADjs Desktop conversion) & Strict binary segment stream; target for formal ASN.1 / BER \\
 \textbf{Japanese Text Conversion} & Embedded Mozc engine port (\texttt{kc\_} SVCs) & Native Mozc / JIS dictionary record table \\
 \bottomrule
 \end{tabular}
-\end{table*}
+}\end{table*}
 
 \subsection{Locking Granularity: The Big Kernel Lock Bottleneck}
 
@@ -513,6 +516,86 @@ B-System is architecturally divided based on its deployment target:
 \end{itemize}
 
 %-------------------------------------------------------------------------
+\section{Filesystem Architecture: Authentic Cho-Kanji (V1), Modern B-FS (V2), and TSFS}
+\label{sec:fs}
+
+A decisive, critical point of comparison between B-System and TessronOS lies in on-disk filesystem fidelity. Ken Sakamura's TRON specifications defined rigorous on-disk volume headers and hierarchical data sets that governed both historical 1980s BTRON workstations and commercial 1990s/2000s personal computers running Personal Media Corporation's \textbf{B-right/V} (commercially branded as \textbf{Cho-Kanji}, \ja{超漢字}).
+
+\subsection{Authentic Cho-Kanji (BTRON V1 / B-right/V 4.02) Support in B-System}
+In B-System, the storage subsystem (\texttt{src/fs/}) provides complete, backward-compatible on-disk support for authentic historical Cho-Kanji volumes:
+\begin{enumerate}[leftmargin=*]
+    \item \textbf{Superblock Recognition and Dual-Endian Support:} In \texttt{src/fs/vol.c} and \texttt{include/btron/fs/volume.h}, B-System natively detects:
+    \begin{itemize}
+        \item \texttt{VOL\_MAGIC\_BE} (\texttt{0x42FE}): Classic big-endian BTRON volume header.
+        \item \texttt{VOL\_MAGIC\_LE} (\texttt{0x52FE}): Little-endian B-right/V x86 volume header.
+        \item \texttt{FS\_TYPE\_BRIGHTV} (\texttt{0x6402}): The official on-disk filesystem identifier for \textbf{B-right/V 4.02 (Cho-Kanji)}.
+    \end{itemize}
+    \item \textbf{BrightVVolumeHeader Structure:} B-System maps the exact 128-byte on-disk superblock used by commercial Cho-Kanji disks:
+    \begin{lstlisting}[language=C]
+typedef struct __attribute__((packed)) {
+    UH   magic;      /* +0x00  0x52FE (VOL_MAGIC_LE) */
+    UH   fs_type;    /* +0x02  0x6402 (FS_TYPE_BRIGHTV) */
+    UH   nbmp;       /* +0x04  bitmap block count (41) */
+    UH   sfidt;      /* +0x06  FID table block count (32) */
+    UH   sfnmt;      /* +0x08  short-name blocks (32) */
+    UB   rsv1[14];   /* +0x0A  partition metadata */
+    UH   fs_bsize;   /* +0x18  logical block size (8192) */
+    UH   fs_nfile;   /* +0x1A  max files / FIDs (65535) */
+    H    fs_lang;    /* +0x1C  0x0021 = F_JPN (Japanese) */
+    H    fs_level;   /* +0x1E  access management level */
+    UW   fs_nblk;    /* +0x20  total logical blocks */
+    UW   fs_nfree;   /* +0x24  free logical blocks */
+    UW   fs_mtime;   /* +0x28  system mtime */
+    UW   fs_ctime;   /* +0x2C  system ctime */
+    UH   fs_name[20];/* +0x30  volume name (16-bit T-Code) */
+    UH   fs_locat[20];/* +0x58 device locat (16-bit T-Code) */
+} BrightVVolumeHeader;
+    \end{lstlisting}
+    \item \textbf{Native QCOW2 Disk Image Mounting:} B-System incorporates an embedded, self-contained QCOW2 (v2/v3) block driver (\texttt{src/fs/blk\_qcow2.c}) that mounts authentic 2001 Cho-Kanji disk images (\texttt{hda.qcow2}) without host dependencies, parsing cluster offsets and L1/L2 tables directly.
+    \item \textbf{Cho-Kanji Real-Body Header Handling:} In \texttt{src/fs/file.c}, B-System explicitly addresses the historical Cho-Kanji on-disk quirk where file data records place the Real Body Header at block offset $\text{blk} - 1$.
+\end{enumerate}
+
+\subsection{Modern BTRON V2 Filesystem Architecture (B-FS)}
+In addition to V1/Cho-Kanji compatibility, B-System specifies and implements the next-generation \textbf{B-FS (BTRON V2)} on-disk filesystem (\texttt{include/btron/fs/bfs\_disk.h}):
+\begin{itemize}[leftmargin=*]
+    \item \textbf{Dual-Anchor Superblock:} Block 0 houses a 128-byte \texttt{VolumeHeaderV2} (\texttt{VOL\_MAGIC\_V2 = 0x62FE}, \texttt{FS\_TYPE\_MODERN = 0x6403}), while Block 1 houses a 512-byte \texttt{bfs\_super\_block\_v2}.
+    \item \textbf{64-bit FID Addressing:} Implements \texttt{block\_run\_64} supporting up to 48-bit allocation group indices and 16-bit intra-group block offsets, lifting the historical 16-bit FID limitation ($65,535$ files) to $2^{64}$ files.
+    \item \textbf{Inline Small-Data Inodes:} Uses 512-byte inodes containing inline Real-Body records (\texttt{RT\_TADDATA}, \texttt{RT\_VECTOR}) for instant small-document retrieval without secondary block dereferencing.
+    \item \textbf{Integrity and Fault Tolerance:} Extent-based allocation trees, transaction journal replay (\texttt{FEAT\_JOURNAL}), and block checksum verification (\texttt{CRC32C} and \texttt{xxHash64}).
+\end{itemize}
+
+\subsection{TessronOS: Total Absence of Cho-Kanji / BTRON Volume Support}
+In stark contrast, \textbf{TessronOS possesses zero support for authentic Cho-Kanji (B-right/V) or canonical BTRON V1/V2 disk volumes}:
+\begin{itemize}[leftmargin=*]
+    \item \textbf{Inability to Mount Cho-Kanji Media:} TessronOS cannot mount, inspect, or traverse any authentic Personal Media Corporation B-right/V or Cho-Kanji disk partitions or QCOW2/raw images. It contains no parser for \texttt{BrightVVolumeHeader}, no 16-bit FID table traversal, and no support for BTRON volume superblocks.
+    \item \textbf{Synthetic TSFS vs. True On-Disk Volumes:} TessronOS introduces a custom, synthetic filesystem called \textbf{TSFS} (\texttt{docs/tessronos/07-filesystem.md}). While TSFS provides crash resilience (CRC32C and journaling) on GPT partitions, it represents Real Objects as JSON metadata files (\texttt{\{UUID\}.json}) and XML text files (\texttt{\{UUID\}\_0.xtad}) stored either in a custom layout or directly on an MS-DOS FAT32 partition.
+\end{itemize}
+
+\begin{table}[htbp]
+\centering
+\caption{Filesystem Support: Authentic Cho-Kanji vs. Modern V2}
+\label{tab:fs_comparison}
+\scriptsize
+\begin{tabular}{lll}
+\toprule
+\textbf{Capability} & \textbf{TessronOS (TSFS)} & \textbf{B-System (BTRON3)} \\
+\midrule
+\textbf{Authentic Cho-Kanji (B-right/V)} & \textbf{Unsupported (0\%)} & \textbf{Full Native Support} \\
+\textbf{B-right/V Superblock (0x6402)} & Missing & \texttt{BrightVVolumeHeader} (128B) \\
+\textbf{Historical Disk Mounts} & None & Direct QCOW2 (\texttt{hda.qcow2}) \\
+\textbf{Cho-Kanji Real-Body Offset} & None & Block offset $\text{blk} - 1$ handled \\
+\textbf{Canonical BTRON V1 Volume} & None & Supported (\texttt{VOL\_MAGIC\_BE}) \\
+\textbf{Modern BTRON V2 (B-FS)} & Custom TSFS & Supported (\texttt{VOL\_MAGIC\_V2}) \\
+\textbf{FID Address Space} & 128-bit UUID & 16-bit (V1) / 64-bit (V2) \\
+\textbf{On-Disk Inode Format} & JSON / loose text & Packed binary Inode (512B) \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Filesystem Verdict}
+\textbf{B-System is decisively superior in filesystem authenticity, backward compatibility, and binary on-disk architecture.} B-System preserves the historical continuity of the TRON project by mounting authentic commercial Cho-Kanji (B-right/V 4.02) disks while advancing to modern 64-bit B-FS (V2). TessronOS completely abandons BTRON volume compatibility in favor of an ad-hoc JSON/FAT layer.
+
+%-------------------------------------------------------------------------
 \section{Hyper-Data and Serialization: TAD, TSFS, and ASN.1 Foundations}
 \label{sec:tad}
 
@@ -543,6 +626,7 @@ Our audit reveals that TessronOS and B-System possess complementary strengths. A
 
 \begin{enumerate}[leftmargin=*]
     \item \textbf{SIMD Vector Blitter for TessronOS:} TessronOS should replace its scalar 32-bit loops in \texttt{dp\_copy\_rect()} and \texttt{wm\_composite\_at()} with B-System's NEON SIMD vector routine (\texttt{btron\_row\_blit()}). On the Raspberry Pi 5, this will eliminate uncached VRAM store stalls and dramatically improve compositing frame rates.
+    \item \textbf{Cho-Kanji Filesystem Integration for TessronOS:} TessronOS should port B-System's \texttt{BrightVVolumeHeader} parser and QCOW2 block driver, enabling Raspberry Pi 5 users to mount and inspect authentic historical Cho-Kanji (B-right/V 4.02) software and documents directly.
     \item \textbf{PSCI Multicore Bootstrap for B-System ARM64:} B-System's ARM64 core engine (\texttt{core\_arm64.c}) should adopt TessronOS's PSCI \texttt{CPU\_ON} bootstrap protocol and GICv2/v3 IPI handling to bring its multi-core actor execution live on physical Raspberry Pi hardware.
     \item \textbf{Formal ASN.1 TAD Specification:} Rather than standardizing on text-based xmlTAD, both projects should collaborate on defining a formal ASN.1 schema for TRON Application Databus structures, enabling automated code generation of deterministic binary codecs for B-System and optional schema-validated XML/JSON converters for web interoperability.
 \end{enumerate}
@@ -556,6 +640,8 @@ This paper has presented a rigorous comparative audit between satromi's \textbf{
 In Symmetric Multiprocessing, \textbf{TessronOS achieves superior operational maturity on bare-metal hardware today}, successfully orchestrating four physical Cortex-A76 cores on the Raspberry Pi 5 via PSCI and GICv2 IPIs, though constrained by a single Big Kernel Lock and a global ready queue. Conversely, \textbf{B-System presents a superior theoretical concurrency model} based on lock-free actor queues, with fully verified multi-threaded execution in hosted environments and a staged bare-metal scheduler.
 
 In display systems, \textbf{B-System's Bit Blitter is decisively superior in raw throughput and memory bus efficiency}, leveraging 128-bit NEON vector streaming with phase alignment to overcome video RAM bandwidth bottlenecks. In contrast, \textbf{TessronOS's UI composer achieves superior visual elegance and desktop fidelity}, delivering a complete Chokanji V desktop with scanline-region rounded corners, drop shadows, and an authentic widget library.
+
+In on-disk storage, \textbf{B-System is decisively superior in historical fidelity and binary filesystem engineering}, providing complete native support for authentic commercial Cho-Kanji (B-right/V 4.02) disks via embedded QCOW2 drivers while specifying modern 64-bit B-FS (V2). TessronOS possesses no Cho-Kanji volume support, relying on an ad-hoc JSON/xmlTAD scheme over FAT.
 
 Finally, in hyper-data architecture, we establish that \textbf{ad-hoc xmlTAD and jsTAD formats are not architectural advantages}; they introduce non-deterministic parsing latency and memory bloat into an RTOS. B-System's adherence to compact binary TAD segment records preserves the deterministic integrity necessary for a future formal ASN.1 / BER data exchange pipeline. Both systems represent monumental achievements in the modern revival of the TRON architecture, and their cross-pollination offers a compelling path toward the future of real-time hyper-data computing.
 

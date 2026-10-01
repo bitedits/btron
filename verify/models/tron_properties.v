@@ -7522,3 +7522,2154 @@ Lemma the_three_axes_in_figures :
     /\ zc_ber_code ZBE_STALE = Z.opp 70
     /\ mbf_charge 1024 = 1028.
 Proof. repeat split; reflexivity. Qed.
+
+
+(* ── 16. Event flags: one word, many tests ─────────────────────── *)
+
+(* §14's semaphore and this section's event flag are the two objects in the
+ * family whose state is a single number, and they are the family's best
+ * controls on each other.  A semaphore holds a count and every waiter asks the
+ * same question of it, "is at least my number still available"; an event flag
+ * holds a PATTERN and every waiter carries its OWN test, "have the bits I named
+ * all arrived" or "has any one of them".  That single difference generates
+ * everything below.  It is why the kernel's release loop (eventflag.c:224-226)
+ * must write each released caller's answer OUT OF THE CELL as it walks, why a
+ * waiter can be starved by the waiter in front of it (eventflag.c:230-237) in
+ * a way no semaphore can do, and why the same attribute that lets several
+ * tasks wait -- TA_WMUL -- is also the only attribute under which order
+ * matters at all.  The sources are eventflag.c in full plus wait.c and
+ * wait.h for the shared engine, whose two-phase write §12.4 already settled
+ * and which this section reuses unchanged. *)
+
+(* ── 16.1 The pattern word ────────────────────────────────────── *)
+
+(* FLGCB.flgptn is a UINT and every operation on it is bitwise.  Two
+ * combinations do all the work in this file: the union a set performs
+ * (eventflag.c:211 "flgcb->flgptn |= setptn") and the difference a
+ * bit-oriented clear performs (eventflag.c:229 "flgcb->flgptn &= ~waiptn").
+ * The difference is spelled here with Nat.ldiff, whose specification
+ * (Nat.ldiff_spec) says its test bit at position i is "a!!i && negb b!!i" --
+ * which is exactly the C's mask-then-AND, without needing a complement of the
+ * whole word. *)
+Definition pat_or (a b : nat) : nat := Nat.lor a b.
+Definition pat_and (a b : nat) : nat := Nat.land a b.
+Definition pat_clr (p w : nat) : nat := Nat.ldiff p w.
+
+(* A UINT is thirty-two bits wide.  The model does not materialise 2^32 as a
+ * unary numeral -- that would be four billion constructors in every
+ * computation -- so the bound is stated as a proposition about test bits,
+ * which is what the kernel actually relies on: nothing above bit 31 can be
+ * set, because the object's own word has no room for it. *)
+Definition in_word (p : nat) : Prop :=
+  forall i : nat, 32 <= i -> Nat.testbit p i = false.
+
+(* The one library tool this section leans on repeatedly: two naturals with the
+ * same test bits at every position are equal.  It converts a law about
+ * operations into a law about bits, which is where bitwise reasoning happens. *)
+Lemma bit_ext : forall a b,
+    (forall i : nat, Nat.testbit a i = Nat.testbit b i) -> a = b.
+Proof.
+  intros a b H. apply Nat.bits_inj. unfold Nat.eqf. exact H.
+Qed.
+
+(* Clearing removes exactly the bits named and keeps the rest.  Both halves of
+ * the sentence are used below: the first says a bit-clear really is a clear,
+ * the second says it is nothing else. *)
+Lemma cleared_bits_are_gone : forall p w,
+    Nat.land (pat_clr p w) w = 0.
+Proof.
+  intros p w. unfold pat_clr. apply Nat.land_ldiff.
+Qed.
+
+Lemma a_clear_never_grows_the_pattern : forall p w,
+    Nat.leb (pat_clr p w) p = true.
+Proof.
+  intros p w. apply Nat.leb_le. apply Nat.ldiff_le_l.
+Qed.
+
+Lemma clearing_nothing_changes_nothing : forall p,
+    pat_clr p 0 = p.
+Proof.
+  intros p. unfold pat_clr. apply Nat.ldiff_0_r.
+Qed.
+
+Lemma an_empty_pattern_clears_to_zero : forall w,
+    pat_clr 0 w = 0.
+Proof.
+  intros w. unfold pat_clr. apply Nat.ldiff_0_l.
+Qed.
+
+Lemma setting_bits_is_idempotent : forall p,
+    pat_or p p = p.
+Proof.
+  intros p. unfold pat_or. apply Nat.lor_diag.
+Qed.
+
+(* Every legal pattern is in-word, and both operations preserve it.  These three
+ * are the shape of the standing invariant §16.4 will state as a boolean. *)
+Lemma pat_or_stays_in_word : forall p q, in_word p -> in_word q -> in_word (pat_or p q).
+Proof.
+  intros p q P Q i N. unfold pat_or. rewrite Nat.lor_spec.
+  rewrite (P i N), (Q i N). destruct (Nat.testbit p i), (Nat.testbit q i); reflexivity.
+Qed.
+
+Lemma pat_and_stays_in_word : forall p q, in_word p -> in_word (pat_and p q).
+Proof.
+  intros p q P i N. unfold pat_and. rewrite Nat.land_spec.
+  rewrite (P i N). destruct (Nat.testbit p i); reflexivity.
+Qed.
+
+Lemma pat_clr_stays_in_word : forall p w, in_word p -> in_word (pat_clr p w).
+Proof.
+  intros p w P i N. unfold pat_clr. rewrite Nat.ldiff_spec.
+  rewrite (P i N). reflexivity.
+Qed.
+
+(* ── 16.2 The two wait modes ──────────────────────────────────── *)
+
+(* syscall.h:123-125.  TWF_ORW is the wait MODE (any-of versus all-of), the
+ * other two are what to do with the pattern once the wait succeeds, and the C
+ * applies them in that order: ORW decides the test, then BITCLR, then CLR. *)
+Definition twf_orw : nat := 1.
+Definition twf_clr : nat := 16.
+Definition twf_bitclr : nat := 32.
+
+(* The C's test is the bit at eventflag.c:87, "(wfmode & TWF_ORW) != 0", and
+ * the model writes it as an equality against the bit's own value below.  The
+ * two forms could disagree on a word whose ORW bit is set alongside something
+ * else -- wfmode 17 is ORW|CLR, which is exactly the combination the reference
+ * names -- and they do not, because TWF_ORW is 1: a land with 1 is either 0 or
+ * 1.  orw_mode_is_the_bit below states that equivalence outright, so no mode
+ * word needs a hypothesis to be read the same way here and in the C, and
+ * §16.9 computes the ORW|CLR case rather than leaving it as a comment. *)
+Definition orw_mode (m : nat) : bool := Nat.eqb (Nat.land m twf_orw) twf_orw.
+Definition bitclr_mode (m : nat) : bool := Nat.eqb (Nat.land m twf_bitclr) twf_bitclr.
+Definition clr_mode (m : nat) : bool := Nat.eqb (Nat.land m twf_clr) twf_clr.
+
+Lemma orw_mode_is_a_bit_at_most : forall m,
+    Nat.land m twf_orw <= twf_orw.
+Proof.
+  intros m. unfold twf_orw. apply Nat.land_le_r.
+Qed.
+
+Lemma orw_mode_is_the_bit : forall m,
+    orw_mode m = negb (Nat.eqb (Nat.land m twf_orw) 0).
+Proof.
+  intros m. unfold orw_mode, twf_orw.
+  assert (L : Nat.land m 1 <= 1) by (apply Nat.land_le_r).
+  destruct (Nat.land m 1); cbn [Nat.eqb negb].
+  - reflexivity.
+  - assert (L' : S n <= 1) by lia. destruct n; [reflexivity | lia].
+Qed.
+
+(* CHECK_PAR((wfmode & ~(TWF_ORW | TWF_CLR | TWF_BITCLR)) == 0) at
+ * eventflag.c:285, inside the CHK_PAR the build turns on.  The C's complement
+ * runs over the whole UINT.  The model takes it against 127, the first
+ * all-ones word past the highest legal bit, so the refused set is exactly the
+ * spacings between and above the three named bits; the computed figure below
+ * is what that leaves.  A stray bit at 128 or above is outside the tested
+ * range -- the C would refuse it and this model does not, which is the price
+ * of not materialising 2^32 as a unary numeral (see in_word above).  No
+ * caller in the tree passes one, and the oracle's own parameter check can. *)
+Definition wfmode_mask : nat :=
+  Nat.ldiff (Nat.pred (Nat.pow 2 7)) (Nat.lor twf_orw (Nat.lor twf_clr twf_bitclr)).
+
+Lemma wfmode_mask_computes : wfmode_mask = 78.
+Proof. unfold wfmode_mask. vm_compute. reflexivity. Qed.
+
+Definition wfmode_ok (m : nat) : bool := Nat.eqb (Nat.land m wfmode_mask) 0.
+
+Lemma the_three_modes_pass :
+    wfmode_ok 0 = true /\ wfmode_ok twf_orw = true
+    /\ wfmode_ok twf_clr = true /\ wfmode_ok twf_bitclr = true
+    /\ wfmode_ok (pat_or twf_orw twf_clr) = true
+    /\ wfmode_ok (pat_or twf_bitclr twf_clr) = true
+    /\ wfmode_ok (pat_or twf_orw (pat_or twf_bitclr twf_clr)) = true.
+Proof. repeat split; vm_compute; reflexivity. Qed.
+
+Lemma a_stray_bit_is_refused :
+    wfmode_ok 2 = false /\ wfmode_ok 8 = false /\ wfmode_ok 64 = false.
+Proof. repeat split; vm_compute; reflexivity. Qed.
+
+Lemma a_bit_above_the_range_is_not : wfmode_ok 128 = true.
+Proof. unfold wfmode_ok. vm_compute. reflexivity. Qed.
+
+(* eventflag_cond, eventflag.c:86-93, in the C order: an ORW waiter is
+ * satisfied by ANY named bit, an all-of waiter by ALL named bits. *)
+Definition flg_cond (p w m : nat) : bool :=
+  if orw_mode m then Nat.ltb 0 (pat_and p w)
+  else Nat.eqb (pat_and p w) w.
+
+Lemma and_mode_needs_every_bit : forall p w m,
+    orw_mode m = false ->
+    flg_cond p w m = true <-> Nat.land p w = w.
+Proof.
+  intros p w m M. unfold flg_cond. rewrite M. apply Nat.eqb_eq.
+Qed.
+
+(* The forward half on its own, in the form the later sections rewrite with:
+ * an all-of waiter that has been answered has every bit it asked for. *)
+Lemma and_mode_satisfied : forall p w m,
+    orw_mode m = false -> flg_cond p w m = true -> Nat.land p w = w.
+Proof.
+  intros p w m M H. unfold flg_cond in H. rewrite M in H.
+  rewrite Nat.eqb_eq in H. exact H.
+Qed.
+
+Lemma or_mode_needs_one_bit : forall p w m,
+    orw_mode m = true ->
+    flg_cond p w m = true <-> 0 < Nat.land p w.
+Proof.
+  intros p w m M. unfold flg_cond. rewrite M.
+  split.
+  - intros H. apply Nat.ltb_lt. exact H.
+  - intros H. apply Nat.ltb_lt. exact H.
+Qed.
+
+(* The first thing the test does not look at is the caller's own parameter.
+ * CHECK_PAR(waiptn != 0) at eventflag.c:284 is not a tidiness rule: with an
+ * empty pattern, the all-of test is satisfied by EVERY pattern, so a wai_flg
+ * that named no bits would return immediately and behave as a read of the
+ * flag through the ORW branch -- which is precisely the reading the
+ * reference call at :339 is for. *)
+Lemma an_empty_test_is_always_ready : forall p m,
+    orw_mode m = false -> flg_cond p 0 m = true.
+Proof.
+  intros p m M. unfold flg_cond. rewrite M.
+  unfold pat_and. rewrite Nat.land_0_r. reflexivity.
+Qed.
+
+(* And it does the same for the OR branch, so the guard is not a quirk of one
+ * mode. *)
+(* The library's bitwise operations compute when BOTH arguments are numerals,
+ * and never otherwise -- Nat.land m 1 with m a variable is stuck.  The three
+ * concrete figures this section needs are therefore recorded once here. *)
+Lemma land_1_1 : Nat.land 1 1 = 1. Proof. reflexivity. Qed.
+
+(* Adding TWF_ORW to a wfmode always turns it into an OR-mode, by whichever
+ * reading of the C's test one takes. *)
+Lemma oring_in_orw_sets_the_bit : forall m,
+    orw_mode (pat_or m twf_orw) = true.
+Proof.
+  intros m. unfold orw_mode, pat_or, twf_orw.
+  assert (L : Nat.land m 1 <= 1) by (apply Nat.land_le_r).
+  rewrite (Nat.land_lor_distr_l m 1 1), land_1_1.
+  destruct (Nat.land m 1); [reflexivity |].
+  replace (S n) with 1 by lia. rewrite Nat.lor_diag. apply Nat.eqb_refl.
+Qed.
+
+(* And the two modes part company on an empty test: the any-of reading is
+ * NEVER satisfied by it.  A caller that passed waiptn = 0 with TWF_ORW would
+ * therefore not return at once but block forever -- a different bad behaviour
+ * from the silent read above, and the same guard at :284 is what prevents
+ * it. *)
+Lemma an_empty_test_never_readies_an_or_waiter : forall p m,
+    flg_cond p 0 (pat_or m twf_orw) = false.
+Proof.
+  intros p m. unfold flg_cond. rewrite (oring_in_orw_sets_the_bit m).
+  unfold pat_and. rewrite Nat.land_0_r. cbn [Nat.ltb]. reflexivity.
+Qed.
+
+(* An all-of waiter is automatically an any-of waiter, provided it named
+ * something.  This is the one direction the two modes agree, and the reason a
+ * mixed queue cannot deadlock on the MODE alone. *)
+Lemma and_mode_readies_or_mode : forall p w m,
+    orw_mode m = false -> 0 < w -> flg_cond p w m = true ->
+    flg_cond p w (pat_or m twf_orw) = true.
+Proof.
+  intros p w m M N H.
+  assert (A : Nat.land p w = w) by (apply (and_mode_satisfied p w m M); exact H).
+  unfold flg_cond. rewrite (oring_in_orw_sets_the_bit m).
+  apply Nat.ltb_lt. unfold pat_and. rewrite A. lia.
+Qed.
+
+(* The monotone behaviour a kernel designer would expect, in the direction the
+ * library actually supports: a union on the TEST side preserves both readings,
+ * and a union on the PATTERN side preserves the any-of reading outright. *)
+
+(* Nat.lor has no order lemma in this library -- no monotone, no absorption --
+ * so "a union keeps a figure positive" goes through the single zero-test it
+ * does provide, Nat.lor_eq_0_l.  Both monotonicity facts below reuse it. *)
+Lemma a_union_keeps_a_nonzero : forall a b, 0 < a -> 0 < Nat.lor a b.
+Proof.
+  intros a b H. apply Nat.neq_0_lt_0.
+  intro Heq. apply Nat.lor_eq_0_l in Heq. lia.
+Qed.
+
+Lemma a_set_never_unreadies_an_or_waiter : forall p s w m,
+    orw_mode m = true ->
+    flg_cond p w m = true -> flg_cond (pat_or p s) w m = true.
+Proof.
+  intros p s w m M H. unfold flg_cond in *. rewrite M in H. rewrite M.
+  unfold pat_and, pat_or in *.
+  apply Nat.ltb_lt. apply Nat.ltb_lt in H.
+  assert (D : Nat.land (Nat.lor p s) w = Nat.lor (Nat.land p w) (Nat.land s w)).
+  { apply Nat.land_lor_distr_l. }
+  rewrite D. apply a_union_keeps_a_nonzero. exact H.
+Qed.
+
+Lemma an_or_of_the_tests_readies_an_or_waiter : forall p w x m,
+    orw_mode m = true ->
+    flg_cond p w m = true -> flg_cond p (pat_or w x) m = true.
+Proof.
+  intros p w x m M H. unfold flg_cond in *. rewrite M in H. rewrite M.
+  unfold pat_and, pat_or in *.
+  apply Nat.ltb_lt. apply Nat.ltb_lt in H.
+  assert (D : Nat.land p (Nat.lor w x) = Nat.lor (Nat.land p w) (Nat.land p x)).
+  { apply Nat.land_lor_distr_r. }
+  rewrite D. apply a_union_keeps_a_nonzero. exact H.
+Qed.
+
+(* The AND-mode twin goes the other way, and that asymmetry is the whole
+ * difference between the two readings: naming MORE bits can strand an
+ * all-of waiter, naming FEWER can never strand it.  Narrowing is intersection
+ * with an arbitrary figure, and intersection is associative. *)
+Lemma an_and_of_the_tests_readies_an_and_waiter : forall p w x m,
+    orw_mode m = false ->
+    flg_cond p w m = true -> flg_cond p (pat_and w x) m = true.
+Proof.
+  intros p w x m M H.
+  assert (A : Nat.land p w = w) by (apply (and_mode_satisfied p w m M); exact H).
+  unfold flg_cond. rewrite M. unfold pat_and.
+  assert (L : Nat.land p (Nat.land w x) = Nat.land (Nat.land p w) x)
+    by (apply Nat.land_assoc).
+  rewrite L, A. apply Nat.eqb_refl.
+Qed.
+
+(* What this section deliberately does NOT claim.  The complements of the two
+ * laws above -- "a set never un-readies an ALL-OF waiter", i.e. land p w = w
+ * implies land (p | s) w = w, and "widening a test never un-readies an all-of
+ * waiter" -- are true of the bits, and the C relies on the first of them
+ * silently.  But they are exactly the bitwise absorption laws, and neither
+ * this file's library nor any rewrite chain available here proves them: Nat
+ * has no land_lor_absorb, and the extensionality principle of §16.1 cannot
+ * turn the bit-level argument into a numeral equality without it.  The walk
+ * laws in §16.7 are therefore stated about the released waiter's OWN answer,
+ * which needs no absorption, and never about what a set does to a waiter still
+ * on the queue. *)
+
+(* Intersecting never grows a figure -- p & s <= p -- so an all-of test is
+ * never easier to satisfy than the pattern it is measured against. *)
+Lemma an_intersect_never_grows_the_pattern : forall p s, pat_and p s <= p.
+Proof.
+  intros p s. unfold pat_and. apply Nat.land_le_l.
+Qed.
+
+(* clr_flg, eventflag.c:263, is "flgcb->flgptn &= clrptn" -- the argument is a
+ * KEEP-mask, not a drop-mask.  The repository's own specification text says
+ * the opposite (b-spec/os_spec/kernel/taskcomm.html:341-368 describes clrptn
+ * as an AND with the INVERTED mask).  The two readings disagree on concrete
+ * figures, so this is a real divergence and not a translation nicety; the
+ * model follows the code. *)
+Example the_clr_flg_divergence :
+    Nat.land 11 3 = 3 /\ Nat.ldiff 11 3 = 8.
+Proof. split; vm_compute; reflexivity. Qed.
+
+(* ── 16.3 The waiter, and the two orders ──────────────────────── *)
+
+(* eventflag.c:324-326 writes three fields of tcb->winfo.flg -- waiptn, wfmode
+ * and p_flgptn -- and the queue itself is ordered by tcb->priority when the
+ * object carries TA_TPRI (:321 selects wspec_flg_tpri, whose chg_pri hook is
+ * flg_chg_pri at :98-104).  The pointer p_flgptn is not a natural: §16.6
+ * records its effect as a separate answer field instead of modelling C
+ * addresses. *)
+Record flg_who : Type := mk_flg_who {
+    fw_tid    : nat;          (* TCB.tskid *)
+    fw_waiptn : nat;          (* TCB.winfo.flg.waiptn *)
+    fw_wfmode : nat;          (* TCB.winfo.flg.wfmode *)
+    fw_pri    : nat           (* TCB.priority, the TPRI key *)
+  }.
+
+(* queue_insert_tpri (wait.c:79-97) again, read for this record type: walk from
+ * the head, stop at the first entry whose priority figure is not better, so a
+ * tie leaves the task that was already waiting in front. *)
+Fixpoint flg_insert_tpri (who : flg_who) (q : list flg_who) : list flg_who :=
+  match q with
+  | nil => who :: nil
+  | x :: rest => if Nat.ltb (fw_pri who) (fw_pri x)
+                 then who :: q
+                 else x :: flg_insert_tpri who rest
+  end.
+
+Lemma flg_insert_puts_the_better_task_first : forall who x q,
+    Nat.ltb (fw_pri who) (fw_pri x) = true ->
+    flg_insert_tpri who (x :: q) = who :: x :: q.
+Proof. intros who x q P. unfold flg_insert_tpri. rewrite P. reflexivity. Qed.
+
+Lemma flg_insert_tie_defers : forall who x q,
+    Nat.ltb (fw_pri who) (fw_pri x) = false ->
+    flg_insert_tpri who (x :: q) = x :: flg_insert_tpri who q.
+Proof. intros who x q P. unfold flg_insert_tpri. rewrite P. reflexivity. Qed.
+
+Lemma flg_insert_adds_exactly_one : forall who q,
+    length (flg_insert_tpri who q) = S (length q).
+Proof.
+  intros who q. revert who.
+  induction q as [|x rest IH]; intros who.
+  - cbn [flg_insert_tpri length]. reflexivity.
+  - destruct (Nat.ltb (fw_pri who) (fw_pri x)) eqn:P.
+    + rewrite (flg_insert_puts_the_better_task_first who x rest P).
+      cbn [length]. reflexivity.
+    + rewrite (flg_insert_tie_defers who x rest P).
+      cbn [length]. rewrite (IH who). reflexivity.
+Qed.
+
+Fixpoint flg_ascending_tail (prev : flg_who) (q : list flg_who) : bool :=
+  match q with
+  | nil => true
+  | x :: rest => andb (Nat.leb (fw_pri prev) (fw_pri x)) (flg_ascending_tail x rest)
+  end.
+
+Definition flg_ascending (q : list flg_who) : bool :=
+  match q with
+  | nil => true
+  | x :: rest => flg_ascending_tail x rest
+  end.
+
+(* gcb_make_wait (wait.c:152-161) chooses between the two by TA_TPRI. *)
+Definition flg_enqueue (tpri : bool) (who : flg_who) (q : list flg_who) : list flg_who :=
+  if tpri then flg_insert_tpri who q else q ++ [who].
+
+Lemma flg_enqueue_adds_exactly_one : forall tpri who q,
+    length (flg_enqueue tpri who q) = S (length q).
+Proof.
+  intros tpri who q. destruct tpri.
+  - apply flg_insert_adds_exactly_one.
+  - cbn [flg_enqueue]. rewrite length_app. cbn [length]. lia.
+Qed.
+
+Lemma flg_enqueue_keeps_the_queue_ascending : forall q who,
+    flg_ascending q = true -> flg_ascending (flg_enqueue true who q) = true.
+Proof.
+  unfold flg_enqueue. intros q who H. revert who H.
+  induction q as [|x rest IH]; intros who H.
+  - cbn [flg_insert_tpri flg_ascending]. reflexivity.
+  - destruct rest as [|y rest'] eqn:Er; subst rest.
+    + destruct (Nat.ltb (fw_pri who) (fw_pri x)) eqn:P.
+      * rewrite (flg_insert_puts_the_better_task_first who x nil P).
+        cbn [flg_ascending flg_ascending_tail].
+        assert (B : Nat.leb (fw_pri who) (fw_pri x) = true).
+        { apply Nat.leb_le. apply Nat.lt_le_incl. apply Nat.ltb_lt. exact P. }
+        rewrite B. reflexivity.
+      * rewrite (flg_insert_tie_defers who x nil P).
+        cbn [flg_insert_tpri flg_ascending flg_ascending_tail].
+        assert (B : Nat.leb (fw_pri x) (fw_pri who) = true).
+        { apply Nat.leb_le. apply ltb_false_ge. exact P. }
+        rewrite B. reflexivity.
+    + cbn [flg_ascending flg_ascending_tail] in H. apply andb_true_iff in H.
+      destruct H as [A C].
+      destruct (Nat.ltb (fw_pri who) (fw_pri x)) eqn:P.
+      * rewrite (flg_insert_puts_the_better_task_first who x (y :: rest') P).
+        cbn [flg_ascending flg_ascending_tail]. rewrite A, C.
+        assert (B : Nat.leb (fw_pri who) (fw_pri x) = true).
+        { apply Nat.leb_le. apply Nat.lt_le_incl. apply Nat.ltb_lt. exact P. }
+        rewrite B. reflexivity.
+      * rewrite (flg_insert_tie_defers who x (y :: rest') P).
+        destruct (Nat.ltb (fw_pri who) (fw_pri y)) eqn:Q.
+        { rewrite (flg_insert_puts_the_better_task_first who y rest' Q).
+          cbn [flg_ascending flg_ascending_tail].
+          assert (B1 : Nat.leb (fw_pri x) (fw_pri who) = true).
+          { apply Nat.leb_le. apply ltb_false_ge. exact P. }
+          assert (B2 : Nat.leb (fw_pri who) (fw_pri y) = true).
+          { apply Nat.leb_le. apply Nat.lt_le_incl. apply Nat.ltb_lt. exact Q. }
+          rewrite B1, B2, C. reflexivity. }
+        { specialize (IH who C).
+          rewrite (flg_insert_tie_defers who y rest' Q) in IH.
+          rewrite (flg_insert_tie_defers who y rest' Q).
+          cbn [flg_ascending flg_ascending_tail] in IH.
+          cbn [flg_ascending flg_ascending_tail].
+          apply andb_true_iff. split; [ exact A | exact IH ]. }
+Qed.
+
+(* ── 16.4 The control block ───────────────────────────────────── *)
+
+(* FLGCB, eventflag.c:31-44, projected onto what an API call can observe: the
+ * stored marker, the three attributes the entry points read, the pattern, and
+ * the queue.  The exinf and dsname fields are the same decoration §14 left out
+ * of semcb. *)
+Record flgcb : Type := mk_flgcb {
+    fc_id    : nat;             (* FLGCB.flgid -- stored marker, 0 = free cell *)
+    fc_tpri  : bool;            (* TA_TPRI: the queue is ordered by priority *)
+    fc_wmul  : bool;            (* TA_WMUL: more than one task may wait *)
+    fc_nodis : bool;            (* TA_NODISWAI: this object never disables waits *)
+    fc_pat   : nat;             (* FLGCB.flgptn *)
+    fc_wait  : list flg_who     (* FLGCB.wait_queue, head waiter first *)
+  }.
+
+Definition free_flgcb : flgcb := mk_flgcb 0 false false false 0 nil.
+
+Definition flg_used (c : flgcb) : bool := negb (Nat.eqb (fc_id c) 0).
+Definition flg_live (c : flgcb) : bool := flg_used c.
+
+(* The two shape properties the C maintains.  The pattern is a UINT, so every
+ * queued waiptn is in-word as well, and every queued wfmode passed the
+ * CHECK_PAR at :285.  Like §14.3's every_needs, these are STANDING properties
+ * of the cell rather than hypotheses about one call, because the guard that
+ * establishes them runs before the queue is touched. *)
+Definition every_test_nonzero (q : list flg_who) : bool :=
+  forallb (fun x => negb (Nat.eqb (fw_waiptn x) 0)) q.
+
+Definition every_mode_legal (q : list flg_who) : bool :=
+  forallb (fun x => wfmode_ok (fw_wfmode x)) q.
+
+Definition flg_wf (c : flgcb) : bool :=
+  andb (every_test_nonzero (fc_wait c)) (every_mode_legal (fc_wait c)).
+
+(* Reading the two halves off a cell in the form the later lemmas rewrite with,
+ * which is §14.3's sem_wf_of_a_cell idiom: no projection of a constructor is
+ * left for a tactic to relate. *)
+Lemma flg_wf_of_a_cell : forall i tp wm nd p q,
+    flg_wf (mk_flgcb i tp wm nd p q) = andb (every_test_nonzero q) (every_mode_legal q).
+Proof. intros i tp wm nd p q. reflexivity. Qed.
+
+Lemma a_fresh_flag_cell_is_wellformed : flg_wf free_flgcb = true.
+Proof. reflexivity. Qed.
+
+Lemma flg_wf_gives_positive_tests : forall c,
+    flg_wf c = true -> every_test_nonzero (fc_wait c) = true.
+Proof.
+  intros c W. unfold flg_wf in W. apply andb_true_iff in W.
+  destruct W as [E _]. exact E.
+Qed.
+
+Lemma flg_wf_gives_legal_modes : forall c,
+    flg_wf c = true -> every_mode_legal (fc_wait c) = true.
+Proof.
+  intros c W. unfold flg_wf in W. apply andb_true_iff in W.
+  destruct W as [_ E]. exact E.
+Qed.
+
+(* The per-waiter reading the walk needs is about the HEAD of the queue, not
+ * about an arbitrary member: memb (§10) is keyed on task ids, and a flg_who is
+ * not one, so the two cons laws below give the reading directly. *)
+Lemma every_test_nonzero_cons : forall x q,
+    every_test_nonzero (x :: q) = negb (Nat.eqb (fw_waiptn x) 0) && every_test_nonzero q.
+Proof. intros x q. reflexivity. Qed.
+
+Lemma every_mode_legal_cons : forall x q,
+    every_mode_legal (x :: q) = wfmode_ok (fw_wfmode x) && every_mode_legal q.
+Proof. intros x q. reflexivity. Qed.
+
+Lemma head_test_nonzero : forall x q,
+    every_test_nonzero (x :: q) = true -> negb (Nat.eqb (fw_waiptn x) 0) = true.
+Proof.
+  intros x q H. rewrite every_test_nonzero_cons in H.
+  apply andb_true_iff in H. destruct H as [P _]. exact P.
+Qed.
+
+Lemma head_mode_legal : forall x q,
+    every_mode_legal (x :: q) = true -> wfmode_ok (fw_wfmode x) = true.
+Proof.
+  intros x q H. rewrite every_mode_legal_cons in H.
+  apply andb_true_iff in H. destruct H as [P _]. exact P.
+Qed.
+
+(* A test that is not zero is a test that names at least one bit -- the guard
+ * at eventflag.c:284 restated as a figure, which is what makes the two silent
+ * failure modes of §16.2 unreachable from a well-formed cell. *)
+Lemma a_nonzero_test_names_a_bit : forall w,
+    negb (Nat.eqb w 0) = true -> 0 < w.
+Proof.
+  intros w H. destruct w as [|n]; [ | lia ].
+  cbn [Nat.eqb negb] in H. discriminate H.
+Qed.
+
+Lemma every_test_nonzero_app : forall q1 q2,
+    every_test_nonzero (q1 ++ q2) = every_test_nonzero q1 && every_test_nonzero q2.
+Proof.
+  intros q1. induction q1 as [|x rest IH]; intros q2.
+  - cbn [app every_test_nonzero forallb]. reflexivity.
+  - cbn [app]. rewrite !every_test_nonzero_cons, IH. apply andb_assoc.
+Qed.
+
+Lemma every_mode_legal_app : forall q1 q2,
+    every_mode_legal (q1 ++ q2) = every_mode_legal q1 && every_mode_legal q2.
+Proof.
+  intros q1. induction q1 as [|x rest IH]; intros q2.
+  - cbn [app every_mode_legal forallb]. reflexivity.
+  - cbn [app]. rewrite !every_mode_legal_cons, IH. apply andb_assoc.
+Qed.
+
+(* Both halves survive a join by priority, which is the invariant step of the
+ * blocking path: the caller that reaches the queue has already been through
+ * CHECK_PAR, so its own test and mode are in order. *)
+Lemma flg_insert_keeps_the_tests_nonzero : forall who q,
+    every_test_nonzero q = true -> negb (Nat.eqb (fw_waiptn who) 0) = true ->
+    every_test_nonzero (flg_insert_tpri who q) = true.
+Proof.
+  intros who q. revert who.
+  induction q as [|x rest IH]; intros who H P.
+  - cbn [flg_insert_tpri]. rewrite every_test_nonzero_cons, P. reflexivity.
+  - destruct (Nat.ltb (fw_pri who) (fw_pri x)) eqn:Pr.
+    + rewrite (flg_insert_puts_the_better_task_first who x rest Pr).
+      rewrite every_test_nonzero_cons. apply andb_true_iff.
+      split; [ exact P | exact H ].
+    + rewrite every_test_nonzero_cons in H. apply andb_true_iff in H.
+      destruct H as [Nx Hrest].
+      rewrite (flg_insert_tie_defers who x rest Pr), every_test_nonzero_cons, Nx.
+      apply andb_true_iff. split; [ reflexivity | apply (IH who Hrest P) ].
+Qed.
+
+Lemma flg_insert_keeps_the_modes_legal : forall who q,
+    every_mode_legal q = true -> wfmode_ok (fw_wfmode who) = true ->
+    every_mode_legal (flg_insert_tpri who q) = true.
+Proof.
+  intros who q. revert who.
+  induction q as [|x rest IH]; intros who H Q.
+  - cbn [flg_insert_tpri]. rewrite every_mode_legal_cons, Q. reflexivity.
+  - destruct (Nat.ltb (fw_pri who) (fw_pri x)) eqn:Pr.
+    + rewrite (flg_insert_puts_the_better_task_first who x rest Pr).
+      rewrite every_mode_legal_cons. apply andb_true_iff.
+      split; [ exact Q | exact H ].
+    + rewrite every_mode_legal_cons in H. apply andb_true_iff in H.
+      destruct H as [L Hrest].
+      rewrite (flg_insert_tie_defers who x rest Pr), every_mode_legal_cons, L.
+      apply andb_true_iff. split; [ reflexivity | apply (IH who Hrest Q) ].
+Qed.
+
+Lemma flg_enqueue_keeps_the_tests_nonzero : forall tpri who q,
+    every_test_nonzero q = true -> negb (Nat.eqb (fw_waiptn who) 0) = true ->
+    every_test_nonzero (flg_enqueue tpri who q) = true.
+Proof.
+  intros tpri who q H P. unfold flg_enqueue. destruct tpri.
+  - apply flg_insert_keeps_the_tests_nonzero. exact H. exact P.
+  - rewrite every_test_nonzero_app, H. rewrite every_test_nonzero_cons, P.
+    reflexivity.
+Qed.
+
+Lemma flg_enqueue_keeps_the_modes_legal : forall tpri who q,
+    every_mode_legal q = true -> wfmode_ok (fw_wfmode who) = true ->
+    every_mode_legal (flg_enqueue tpri who q) = true.
+Proof.
+  intros tpri who q H Q. unfold flg_enqueue. destruct tpri.
+  - apply flg_insert_keeps_the_modes_legal. exact H. exact Q.
+  - rewrite every_mode_legal_app, H. rewrite every_mode_legal_cons, Q.
+    reflexivity.
+Qed.
+
+Lemma flg_wf_survives_an_enqueue : forall tpri c who,
+    flg_wf c = true -> negb (Nat.eqb (fw_waiptn who) 0) = true ->
+    wfmode_ok (fw_wfmode who) = true ->
+    flg_wf (mk_flgcb (fc_id c) (fc_tpri c) (fc_wmul c) (fc_nodis c) (fc_pat c)
+                      (flg_enqueue tpri who (fc_wait c))) = true.
+Proof.
+  intros tpri c who W P Q. rewrite flg_wf_of_a_cell. apply andb_true_iff. split.
+  - apply flg_enqueue_keeps_the_tests_nonzero.
+    + apply (flg_wf_gives_positive_tests c W).
+    + exact P.
+  - apply flg_enqueue_keeps_the_modes_legal.
+    + apply (flg_wf_gives_legal_modes c W).
+    + exact Q.
+Qed.
+
+(* The pattern is not part of the shape: no guard reads it, so set_flg's
+ * union and clr_flg's intersection both leave flg_wf exactly where it was.
+ * Stated as an equality of figures, so §16.8 can rewrite with it. *)
+Lemma a_clear_leaves_the_shape_alone : forall c p,
+    flg_wf (mk_flgcb (fc_id c) (fc_tpri c) (fc_wmul c) (fc_nodis c) p (fc_wait c)) =
+    flg_wf c.
+Proof.
+  intros c p. unfold flg_wf. destruct c; reflexivity.
+Qed.
+
+(* ── 16.5 The preflight cascades of this family ────────────────── *)
+
+(* cre_flg, eventflag.c:116-158.  The only pre-creation test the shipped build
+ * runs is CHECK_RSATR (:132), and §12's reason for leaving E_RSATR out of every
+ * cascade applies here unchanged: the cell records the three attribute bits
+ * cre_flg accepts (TA_TPRI | TA_WMUL | TA_NODISWAI, :119-126), so an illegal
+ * attribute is not a state the model can name.  What is left is the FreeQue
+ * failure at :137, which is the whole cascade -- and the reason this service is
+ * the only one of the six with no E_ID receipt: cre_flg allocates its own id,
+ * so it has no range to check. *)
+Definition flg_cre_guards (free_cell : bool) : list (bool * er) :=
+  (free_cell, E_LIMIT) :: nil.
+
+Lemma flag_cre_E_LIMIT_is_exhaustion : forall free,
+    first_bad (flg_cre_guards free) = Some E_LIMIT -> free = false.
+Proof. intros free H. unfold flg_cre_guards in H. destruct free; cbn [first_bad] in H;
+  try discriminate H; reflexivity.
+Qed.
+
+Lemma cre_has_no_range_test : forall free,
+    first_bad (flg_cre_guards free) <> Some E_ID.
+Proof. intros free H. unfold flg_cre_guards in H. destruct free; cbn [first_bad] in H;
+  discriminate H.
+Qed.
+
+(* set_flg (:200, :205), clr_flg (:255, :260), del_flg (:169, :174) and
+ * ref_flg (:344, :349) all run the SAME two tests in the same order: the id
+ * range, then the stored marker inside the critical section.  One cascade
+ * therefore serves four services, which is a fact about this family and not a
+ * shortcut: none of the four has a CHECK_PAR, a CHECK_TMOUT or a
+ * CHECK_DISPATCH, so none of them can refuse on a parameter, a timeout figure
+ * or a context.  wai_flg is the one that has all three. *)
+Definition flg_object_guards (used : bool) (id : nat) : list (bool * er) :=
+  (chk_id min_flgid num_flg id, E_ID) :: (used, E_NOEXS) :: nil.
+
+Lemma an_object_refusal_is_the_range_or_the_marker : forall used id,
+    first_bad (flg_object_guards used id) = Some E_ID \/
+    first_bad (flg_object_guards used id) = Some E_NOEXS ->
+    chk_id min_flgid num_flg id = false \/ used = false.
+Proof.
+  intros used id H. unfold flg_object_guards in H.
+  destruct (chk_id min_flgid num_flg id); destruct used;
+    cbn [first_bad] in H;
+    first [destruct H; discriminate | left; reflexivity | right; reflexivity].
+Qed.
+
+Lemma the_range_test_comes_first : forall id,
+    first_bad (flg_object_guards false id) = Some E_ID ->
+    chk_id min_flgid num_flg id = false.
+Proof.
+  intros id H. unfold flg_object_guards in H.
+  destruct (chk_id min_flgid num_flg id); cbn [first_bad] in H;
+    [ discriminate H | reflexivity ].
+Qed.
+
+(* A deletion of a nonexistent flag reports E_NOEXS, not E_OBJ: the marker is
+ * the test the C actually makes (:174), and it is the same figure for all four
+ * services above.  This is worth writing down because §13's mailbox deletion
+ * reports E_OBJ once a waiter is present -- the two families differ there. *)
+Example a_missing_flag_is_not_an_object_error :
+    first_bad (flg_object_guards false 0) = Some E_ID /\
+    first_bad (flg_object_guards false 1) = Some E_NOEXS /\
+    first_bad (flg_object_guards true 1) = None.
+Proof. repeat split; vm_compute; reflexivity. Qed.
+
+(* The guard at :296-299, on its own before the cascade that uses it.  TA_WMUL
+ * is the attribute that makes a second waiter possible at all; without it, a
+ * non-empty queue is a refusal rather than a queueing decision. *)
+Definition another_waiter_is_present (q : list flg_who) : bool :=
+  match q with nil => false | _ :: _ => true end.
+
+Definition queue_refuses_a_second_waiter (wmul : bool) (q : list flg_who) : bool :=
+  andb (negb wmul) (another_waiter_is_present q).
+
+Lemma the_second_waiter_guard_needs_both_coordinates : forall w q,
+    queue_refuses_a_second_waiter w q = true ->
+    w = false /\ another_waiter_is_present q = true.
+Proof.
+  intros w q H. unfold queue_refuses_a_second_waiter in H. apply andb_true_iff in H.
+  destruct H as [A B]. split; [ apply negb_true_iff; exact A | exact B ].
+Qed.
+
+Lemma the_second_waiter_guard_is_beatable_from_either_side :
+    queue_refuses_a_second_waiter false [mk_flg_who 7 1 0 1] = true /\
+    queue_refuses_a_second_waiter true [mk_flg_who 7 1 0 1] = false /\
+    queue_refuses_a_second_waiter false nil = false.
+Proof. repeat split; vm_compute; reflexivity. Qed.
+
+(* wai_flg, eventflag.c:283-306, in the order the receipts are produced.  Seven
+ * tests, one more than §14.5's semaphore cascade, and the extra one is not a
+ * variant of a semaphore test: the two E_PAR entries in a row are unique to
+ * this family (CHECK_PAR(waiptn != 0) at :284 and the wfmode complement at
+ * :285), and the E_OBJ at :296-299 has no semaphore counterpart.
+ * CHECK_TMOUT (:286) is absent for §3's reason: tmo_legal_is_total says the
+ * model's timeout type already carries that test.
+ *
+ * Every test but the stored marker is written as its own definition, and that
+ * is not decoration: the cascade has to mention the same term the lemmas below
+ * conclude about, or a case analysis on the guard cannot reduce the goal.  Four
+ * of the six are negations in the C -- waiptn != 0 (:284), the complement of the
+ * mode mask (:285), !isQueEmpty (:297) and the double negation of is_diswai
+ * (:303) -- so each one also gets a bridge lemma, which is where the double
+ * negative is discharged once instead of in every statement below. *)
+Definition flg_guard_range (id : nat) : bool := chk_id min_flgid num_flg id.
+Definition flg_guard_test_nonzero (w : nat) : bool := negb (Nat.eqb w 0).
+Definition flg_guard_mode_legal (m : nat) : bool := wfmode_ok m.
+Definition flg_guard_dispatchable (st : kst) : bool := negb (b_ddsp st).
+Definition flg_guard_admits_a_waiter (wmul : bool) (q : list flg_who) : bool :=
+  negb (queue_refuses_a_second_waiter wmul q).
+Definition flg_guard_unmasked (mask : nat) (nodis : bool) : bool :=
+  negb (diswai_of (masked_for mask WO_FLG) nodis).
+
+Definition flg_wai_guards (st : kst) (used wmul nodis : bool) (mask : nat)
+           (q : list flg_who) (id ptn mode : nat) : list (bool * er) :=
+  (flg_guard_range id, E_ID) ::
+  (flg_guard_test_nonzero ptn, E_PAR) ::
+  (flg_guard_mode_legal mode, E_PAR) ::
+  (flg_guard_dispatchable st, E_CTX) ::
+  (used, E_NOEXS) ::
+  (flg_guard_admits_a_waiter wmul q, E_OBJ) ::
+  (flg_guard_unmasked mask nodis, E_DISWAI) :: nil.
+
+(* :284 refused the call exactly when the test named no bit; the converse, that
+ * a positive test passes, is §16.4's a_nonzero_test_names_a_bit read the other
+ * way round, and the two together make the guard a restatement of the C line. *)
+Lemma an_empty_test_is_what_refuses_the_nonzero_guard : forall w,
+    flg_guard_test_nonzero w = false -> w = 0.
+Proof.
+  intros w H. unfold flg_guard_test_nonzero in H. apply negb_false_iff in H.
+  apply Nat.eqb_eq in H. exact H.
+Qed.
+
+Lemma a_failed_dispatch_guard_disables_the_context : forall st,
+    flg_guard_dispatchable st = false -> b_ddsp st = true.
+Proof.
+  intros st H. unfold flg_guard_dispatchable in H.
+  apply negb_false_iff in H. exact H.
+Qed.
+
+Lemma a_disabled_context_fails_the_dispatch_guard : forall st,
+    b_ddsp st = true -> flg_guard_dispatchable st = false.
+Proof. intros st D. unfold flg_guard_dispatchable. rewrite D. reflexivity. Qed.
+
+Lemma a_failed_waiter_guard_refuses_a_second_waiter : forall w q,
+    flg_guard_admits_a_waiter w q = false ->
+    queue_refuses_a_second_waiter w q = true.
+Proof.
+  intros w q H. unfold flg_guard_admits_a_waiter in H.
+  apply negb_false_iff in H. exact H.
+Qed.
+
+Lemma a_refused_second_waiter_fails_the_guard : forall w q,
+    queue_refuses_a_second_waiter w q = true ->
+    flg_guard_admits_a_waiter w q = false.
+Proof. intros w q R. unfold flg_guard_admits_a_waiter. rewrite R. reflexivity. Qed.
+
+Lemma a_failed_diswai_guard_masks_the_task : forall mask nodis,
+    flg_guard_unmasked mask nodis = false ->
+    diswai_of (masked_for mask WO_FLG) nodis = true.
+Proof.
+  intros mask nodis H. unfold flg_guard_unmasked in H.
+  apply negb_false_iff in H. exact H.
+Qed.
+
+(* Each receipt names its own guard, and every guard before it passed -- the §5
+ * property of first_bad, instantiated on this family's seven tests.  The
+ * conclusions stay in the guard vocabulary for the reason above: the case
+ * analysis abstracts exactly the terms the cascade mentions. *)
+Lemma flg_wai_E_ID_is_the_range : forall st used wmul nodis mask q id ptn mode,
+    first_bad (flg_wai_guards st used wmul nodis mask q id ptn mode) = Some E_ID ->
+    flg_guard_range id = false.
+Proof.
+  intros st used wmul nodis mask q id ptn mode H. unfold flg_wai_guards in H.
+  destruct (flg_guard_range id); destruct (flg_guard_test_nonzero ptn);
+    destruct (flg_guard_mode_legal mode); destruct (flg_guard_dispatchable st);
+    destruct used; destruct (flg_guard_admits_a_waiter wmul q);
+    destruct (flg_guard_unmasked mask nodis);
+    cbn [first_bad] in H; try discriminate H; reflexivity.
+Qed.
+
+(* The two parameter errors share a receipt and are told apart only by which
+ * figure failed.  Both are worth keeping because §16.2 shows each one prevents
+ * a DIFFERENT silent misbehaviour: the empty test turns the call into a read
+ * (or, in OR-mode, into a wait that never ends), and a stray mode bit turns a
+ * named mode into an unnamed one. *)
+Lemma flg_wai_E_PAR_is_the_empty_or_the_mode_test :
+  forall st used wmul nodis mask q id ptn mode,
+    first_bad (flg_wai_guards st used wmul nodis mask q id ptn mode) = Some E_PAR ->
+    flg_guard_test_nonzero ptn = false \/ flg_guard_mode_legal mode = false.
+Proof.
+  intros st used wmul nodis mask q id ptn mode H. unfold flg_wai_guards in H.
+  destruct (flg_guard_range id); destruct (flg_guard_test_nonzero ptn);
+    destruct (flg_guard_mode_legal mode); destruct (flg_guard_dispatchable st);
+    destruct used; destruct (flg_guard_admits_a_waiter wmul q);
+    destruct (flg_guard_unmasked mask nodis);
+    cbn [first_bad] in H; try discriminate H;
+    first [left; reflexivity | right; reflexivity].
+Qed.
+
+(* The receipt E_PAR never arrives with the range test still owed: :283 runs
+ * before :284, so a parameter error is evidence that the id was in range. *)
+Lemma flg_wai_E_PAR_needs_a_passed_range :
+  forall st used wmul nodis mask q id ptn mode,
+    first_bad (flg_wai_guards st used wmul nodis mask q id ptn mode) = Some E_PAR ->
+    flg_guard_range id = true.
+Proof.
+  intros st used wmul nodis mask q id ptn mode H. unfold flg_wai_guards in H.
+  destruct (flg_guard_range id); destruct (flg_guard_test_nonzero ptn);
+    destruct (flg_guard_mode_legal mode); destruct (flg_guard_dispatchable st);
+    destruct used; destruct (flg_guard_admits_a_waiter wmul q);
+    destruct (flg_guard_unmasked mask nodis);
+    cbn [first_bad] in H; try discriminate H; reflexivity.
+Qed.
+
+Lemma flg_wai_E_CTX_is_a_context_refusal :
+  forall st used wmul nodis mask q id ptn mode,
+    first_bad (flg_wai_guards st used wmul nodis mask q id ptn mode) = Some E_CTX ->
+    flg_guard_range id = true /\ flg_guard_test_nonzero ptn = true /\
+    flg_guard_mode_legal mode = true /\ flg_guard_dispatchable st = false.
+Proof.
+  intros st used wmul nodis mask q id ptn mode H. unfold flg_wai_guards in H.
+  destruct (flg_guard_range id); destruct (flg_guard_test_nonzero ptn);
+    destruct (flg_guard_mode_legal mode); destruct (flg_guard_dispatchable st);
+    destruct used; destruct (flg_guard_admits_a_waiter wmul q);
+    destruct (flg_guard_unmasked mask nodis);
+    cbn [first_bad] in H; try discriminate H;
+    repeat split; reflexivity.
+Qed.
+
+Lemma flg_wai_E_NOEXS_is_the_stored_marker :
+  forall st used wmul nodis mask q id ptn mode,
+    first_bad (flg_wai_guards st used wmul nodis mask q id ptn mode) = Some E_NOEXS ->
+    flg_guard_range id = true /\ flg_guard_test_nonzero ptn = true /\
+    flg_guard_mode_legal mode = true /\ flg_guard_dispatchable st = true /\
+    used = false.
+Proof.
+  intros st used wmul nodis mask q id ptn mode H. unfold flg_wai_guards in H.
+  destruct (flg_guard_range id); destruct (flg_guard_test_nonzero ptn);
+    destruct (flg_guard_mode_legal mode); destruct (flg_guard_dispatchable st);
+    destruct used; destruct (flg_guard_admits_a_waiter wmul q);
+    destruct (flg_guard_unmasked mask nodis);
+    cbn [first_bad] in H; try discriminate H;
+    repeat split; reflexivity.
+Qed.
+
+(* :296-299: E_OBJ here means the queue was already occupied and the cell has no
+ * TA_WMUL.  The marker guard before it passed, so the cell IS live -- the
+ * refusal is about the queue, not about the object existing.  This is the
+ * receipt with no semaphore counterpart. *)
+Lemma flg_wai_E_OBJ_is_a_second_waiter :
+  forall st used wmul nodis mask q id ptn mode,
+    first_bad (flg_wai_guards st used wmul nodis mask q id ptn mode) = Some E_OBJ ->
+    used = true /\ flg_guard_admits_a_waiter wmul q = false.
+Proof.
+  intros st used wmul nodis mask q id ptn mode H. unfold flg_wai_guards in H.
+  destruct (flg_guard_range id); destruct (flg_guard_test_nonzero ptn);
+    destruct (flg_guard_mode_legal mode); destruct (flg_guard_dispatchable st);
+    destruct used; destruct (flg_guard_admits_a_waiter wmul q);
+    destruct (flg_guard_unmasked mask nodis);
+    cbn [first_bad] in H; try discriminate H;
+    repeat split; reflexivity.
+Qed.
+
+(* The last guard of the cascade, and like §14's semaphore counterpart it reads
+ * both a task coordinate (the mask) and an object coordinate (TA_NODISWAI). *)
+Lemma flg_wai_E_DISWAI_is_a_diswai_refusal :
+  forall st used wmul nodis mask q id ptn mode,
+    first_bad (flg_wai_guards st used wmul nodis mask q id ptn mode) = Some E_DISWAI ->
+    used = true /\ flg_guard_dispatchable st = true /\
+    flg_guard_admits_a_waiter wmul q = true /\
+    flg_guard_unmasked mask nodis = false.
+Proof.
+  intros st used wmul nodis mask q id ptn mode H. unfold flg_wai_guards in H.
+  destruct (flg_guard_range id); destruct (flg_guard_test_nonzero ptn);
+    destruct (flg_guard_mode_legal mode); destruct (flg_guard_dispatchable st);
+    destruct used; destruct (flg_guard_admits_a_waiter wmul q);
+    destruct (flg_guard_unmasked mask nodis);
+    cbn [first_bad] in H; try discriminate H;
+    repeat split; reflexivity.
+Qed.
+
+(* A wai call that reaches the critical section is a whole cascade that passes:
+ * the figure below is the geometry the rest of §16 assumes -- an in-range id, a
+ * test that names a bit, a legal mode, a dispatchable context, a live cell,
+ * either TA_WMUL or an empty queue, and an unmasked task.  §6's st0 is
+ * dispatch-disabled by construction, so the calls that have to get past
+ * CHECK_DISPATCH are computed against st_disp, the other half of §6's existence
+ * lemma at :710. *)
+Definition st_disp : kst :=
+  mk_kst (fun _ => free_tcb) (fun _ => free_mbx) (fun _ => free_sem) 7 false false.
+
+Example a_wai_call_that_reaches_the_critical_section :
+    first_bad (flg_wai_guards st_disp true true false 0 [mk_flg_who 8 1 0 2] 1 1 0) = None.
+Proof. vm_compute. reflexivity. Qed.
+
+(* The family comparison §14 invited: the semaphore's cascade spends one test on
+ * the requested count and one on the ceiling headroom, and it has no queue guard
+ * at all; the flag has no ceiling and spends its extra guard on TA_WMUL.  Same
+ * first test, same last test, and five figures between them that are not the
+ * same service. *)
+Example the_two_families_differ_in_the_middle :
+    first_bad (sem_wai_guards st_disp true false false 1 0) = Some E_PAR /\
+    first_bad (flg_wai_guards st_disp true true false 0 nil 1 0 0) = Some E_PAR /\
+    first_bad (sem_wai_guards st_disp true false false 1 1) = None /\
+    first_bad (flg_wai_guards st_disp true true false 0 nil 1 1 0) = None.
+Proof. repeat split; vm_compute; reflexivity. Qed.
+
+(* ── 16.6 The wait, as a step on the cell ──────────────────────── *)
+
+(* eventflag.c:313-318, the clear the answer path performs, and :229-237, the
+ * same two tests inside the set walk.  They are NOT an else-if chain in the C:
+ * a wfmode with both TWF_BITCLR and TWF_CLR drops the tested bits, tests the
+ * figure for zero, and then wipes it regardless.  The order is visible only
+ * through the intermediate zero-test, which is §16.7's stop condition. *)
+Definition wai_clear (mode : nat) (p w : nat) : nat :=
+  let p1 := if bitclr_mode mode then pat_clr p w else p in
+  if clr_mode mode then 0 else p1.
+
+Lemma a_full_clear_wipes_the_pattern : forall mode p w,
+    clr_mode mode = true -> wai_clear mode p w = 0.
+Proof. intros mode p w C. unfold wai_clear. rewrite C. reflexivity. Qed.
+
+Lemma a_bit_clear_only_drops_the_tested_bits : forall mode p w,
+    clr_mode mode = false -> bitclr_mode mode = true ->
+    wai_clear mode p w = pat_clr p w.
+Proof. intros mode p w C B. unfold wai_clear. rewrite C, B. reflexivity. Qed.
+
+Lemma no_clear_mode_is_the_identity : forall mode p w,
+    clr_mode mode = false -> bitclr_mode mode = false -> wai_clear mode p w = p.
+Proof. intros mode p w C B. unfold wai_clear. rewrite C, B. reflexivity. Qed.
+
+Lemma the_answered_clear_never_grows_the_pattern : forall mode p w,
+    Nat.leb (wai_clear mode p w) p = true.
+Proof.
+  intros mode p w. unfold wai_clear. destruct (clr_mode mode) eqn:C.
+  - apply Nat.leb_le. apply Nat.le_0_l.
+  - destruct (bitclr_mode mode) eqn:B.
+    + apply Nat.leb_le. unfold pat_clr. apply Nat.ldiff_le_l.
+    + apply Nat.leb_le. apply Nat.le_refl.
+Qed.
+
+(* The stop condition of the set walk (:230-236).  TWF_CLR always stops;
+ * TWF_BITCLR stops only when its own drop emptied the pattern.  Written as a
+ * disjunction of the two branches in the C's order. *)
+Definition flg_stop_after (mode : nat) (p_after : nat) : bool :=
+  orb (clr_mode mode) (andb (bitclr_mode mode) (Nat.eqb p_after 0)).
+
+Lemma a_full_clear_always_stops : forall mode p,
+    clr_mode mode = true -> flg_stop_after mode p = true.
+Proof. intros mode p C. unfold flg_stop_after. rewrite C. reflexivity. Qed.
+
+Lemma an_ordinary_waiter_never_stops_the_walk : forall mode p,
+    clr_mode mode = false -> bitclr_mode mode = false ->
+    flg_stop_after mode p = false.
+Proof.
+  intros mode p C B. unfold flg_stop_after. rewrite C, B.
+  cbn [orb negb]. reflexivity.
+Qed.
+
+(* The reply is a pair, because wai_flg has two outputs: the receipt and the
+ * figure it leaves in the caller's UINT.  Some p means "*p_flgptn was written
+ * with p during this call" (:310); None covers BOTH a refusal (:294, :298, :304
+ * return without touching the slot) and a block, where the write happens later,
+ * in the set walk at :225, with a value this call cannot know yet.  Collapsing
+ * those two into one answer is the error the §15 reply law was written to avoid. *)
+Record flg_reply : Type := mk_flg_reply {
+    fr_ptn : option nat;
+    fr_rc  : er
+  }.
+
+Definition flg_block (who : flg_who) (c : flgcb) : flgcb :=
+  mk_flgcb (fc_id c) (fc_tpri c) (fc_wmul c) (fc_nodis c) (fc_pat c)
+           (flg_enqueue (fc_tpri c) who (fc_wait c)).
+
+(* wai_flg, :289-328, after §16.5's cascade.  The three state tests are in the
+ * C's order: TA_WMUL, then the wait-disable, then the condition. *)
+Definition flg_wai (mask : nat) (t : tmo) (who : flg_who) (c : flgcb) : flgcb * flg_reply :=
+  if queue_refuses_a_second_waiter (fc_wmul c) (fc_wait c)
+  then (c, mk_flg_reply None E_OBJ)
+  else if diswai_of (masked_for mask WO_FLG) (fc_nodis c)
+  then (c, mk_flg_reply None E_DISWAI)
+  else if flg_cond (fc_pat c) (fw_waiptn who) (fw_wfmode who)
+  then (mk_flgcb (fc_id c) (fc_tpri c) (fc_wmul c) (fc_nodis c)
+                  (wai_clear (fw_wfmode who) (fc_pat c) (fw_waiptn who)) (fc_wait c),
+        mk_flg_reply (Some (fc_pat c)) E_OK)
+  else if tmo_blocks t
+  then (flg_block who c, mk_flg_reply None (prewrite false))
+  else (c, mk_flg_reply None (prewrite false)).
+
+(* The answer reads the cell BEFORE it clears it: :310 stores flgcb->flgptn and
+ * :313-318 mutate it afterwards.  So the figure the caller gets is the pattern
+ * that satisfied the test, not the pattern the object is left with -- and for a
+ * TWF_CLR waiter those two differ by everything the pattern had. *)
+Lemma the_answer_is_the_pattern_before_the_clear : forall mask t who c,
+    queue_refuses_a_second_waiter (fc_wmul c) (fc_wait c) = false ->
+    diswai_of (masked_for mask WO_FLG) (fc_nodis c) = false ->
+    flg_cond (fc_pat c) (fw_waiptn who) (fw_wfmode who) = true ->
+    fr_ptn (snd (flg_wai mask t who c)) = Some (fc_pat c).
+Proof.
+  intros mask t who c A B C. unfold flg_wai. rewrite A, B, C. reflexivity.
+Qed.
+
+Lemma an_answered_wait_returns_E_OK : forall mask t who c,
+    queue_refuses_a_second_waiter (fc_wmul c) (fc_wait c) = false ->
+    diswai_of (masked_for mask WO_FLG) (fc_nodis c) = false ->
+    flg_cond (fc_pat c) (fw_waiptn who) (fw_wfmode who) = true ->
+    fr_rc (snd (flg_wai mask t who c)) = E_OK.
+Proof.
+  intros mask t who c A B C. unfold flg_wai. rewrite A, B, C. reflexivity.
+Qed.
+
+(* and the cell it leaves is the cleared one, with the queue exactly as it was:
+ * a waiter that is answered was never on this queue. *)
+Lemma an_answered_wait_keeps_the_queue : forall mask t who c,
+    queue_refuses_a_second_waiter (fc_wmul c) (fc_wait c) = false ->
+    diswai_of (masked_for mask WO_FLG) (fc_nodis c) = false ->
+    flg_cond (fc_pat c) (fw_waiptn who) (fw_wfmode who) = true ->
+    fc_wait (fst (flg_wai mask t who c)) = fc_wait c.
+Proof.
+  intros mask t who c A B C. unfold flg_wai. rewrite A, B, C. reflexivity.
+Qed.
+
+Lemma an_answered_wait_leaves_the_identity_fields : forall mask t who c,
+    queue_refuses_a_second_waiter (fc_wmul c) (fc_wait c) = false ->
+    diswai_of (masked_for mask WO_FLG) (fc_nodis c) = false ->
+    flg_cond (fc_pat c) (fw_waiptn who) (fw_wfmode who) = true ->
+    fc_id (fst (flg_wai mask t who c)) = fc_id c /\
+    fc_tpri (fst (flg_wai mask t who c)) = fc_tpri c /\
+    fc_wmul (fst (flg_wai mask t who c)) = fc_wmul c /\
+    fc_nodis (fst (flg_wai mask t who c)) = fc_nodis c.
+Proof.
+  intros mask t who c A B C. unfold flg_wai. rewrite A, B, C.
+  repeat split; reflexivity.
+Qed.
+
+(* Every refusal writes nothing.  Three of the four branches below return
+ * straight out of the critical section without touching p_flgptn -- :294, :298
+ * and :304 -- and the fourth is the block, whose write belongs to the release. *)
+Lemma a_second_waiter_is_refused_without_a_write : forall mask t who c,
+    queue_refuses_a_second_waiter (fc_wmul c) (fc_wait c) = true ->
+    flg_wai mask t who c = (c, mk_flg_reply None E_OBJ).
+Proof. intros mask t who c A. unfold flg_wai. rewrite A. reflexivity. Qed.
+
+Lemma a_diswai_refusal_writes_nothing : forall mask t who c,
+    queue_refuses_a_second_waiter (fc_wmul c) (fc_wait c) = false ->
+    diswai_of (masked_for mask WO_FLG) (fc_nodis c) = true ->
+    flg_wai mask t who c = (c, mk_flg_reply None E_DISWAI).
+Proof.
+  intros mask t who c A B. unfold flg_wai. rewrite A, B. reflexivity.
+Qed.
+
+Lemma a_poll_failure_writes_nothing_and_registers_nobody : forall mask who c,
+    queue_refuses_a_second_waiter (fc_wmul c) (fc_wait c) = false ->
+    diswai_of (masked_for mask WO_FLG) (fc_nodis c) = false ->
+    flg_cond (fc_pat c) (fw_waiptn who) (fw_wfmode who) = false ->
+    flg_wai mask TMO_POLL who c = (c, mk_flg_reply None (prewrite false)).
+Proof.
+  intros mask who c A B C. unfold flg_wai. rewrite A, B, C.
+  cbn [tmo_blocks]. reflexivity.
+Qed.
+
+(* The blocking half: the caller joins the queue, the pattern is untouched, and
+ * the receipt is §12.4's pre-write, which is the figure the release path will
+ * later override. *)
+Lemma a_blocked_wait_registers_the_caller : forall mask t who c,
+    queue_refuses_a_second_waiter (fc_wmul c) (fc_wait c) = false ->
+    diswai_of (masked_for mask WO_FLG) (fc_nodis c) = false ->
+    flg_cond (fc_pat c) (fw_waiptn who) (fw_wfmode who) = false ->
+    tmo_blocks t = true ->
+    fc_wait (fst (flg_wai mask t who c)) =
+    flg_enqueue (fc_tpri c) who (fc_wait c).
+Proof.
+  intros mask t who c A B C D. unfold flg_wai. rewrite A, B, C, D. reflexivity.
+Qed.
+
+Lemma a_blocked_wait_leaves_the_pattern : forall mask t who c,
+    queue_refuses_a_second_waiter (fc_wmul c) (fc_wait c) = false ->
+    diswai_of (masked_for mask WO_FLG) (fc_nodis c) = false ->
+    flg_cond (fc_pat c) (fw_waiptn who) (fw_wfmode who) = false ->
+    tmo_blocks t = true ->
+    fc_pat (fst (flg_wai mask t who c)) = fc_pat c.
+Proof.
+  intros mask t who c A B C D. unfold flg_wai, flg_block. rewrite A, B, C, D.
+  reflexivity.
+Qed.
+
+Lemma a_blocked_wait_writes_nothing_yet : forall mask t who c,
+    queue_refuses_a_second_waiter (fc_wmul c) (fc_wait c) = false ->
+    diswai_of (masked_for mask WO_FLG) (fc_nodis c) = false ->
+    flg_cond (fc_pat c) (fw_waiptn who) (fw_wfmode who) = false ->
+    fr_ptn (snd (flg_wai mask t who c)) = None.
+Proof.
+  intros mask t who c A B C. unfold flg_wai. rewrite A, B, C.
+  destruct (tmo_blocks t); reflexivity.
+Qed.
+
+Lemma a_blocked_wait_keeps_the_shape : forall mask t who c,
+    flg_wf c = true -> negb (Nat.eqb (fw_waiptn who) 0) = true ->
+    wfmode_ok (fw_wfmode who) = true ->
+    queue_refuses_a_second_waiter (fc_wmul c) (fc_wait c) = false ->
+    diswai_of (masked_for mask WO_FLG) (fc_nodis c) = false ->
+    flg_cond (fc_pat c) (fw_waiptn who) (fw_wfmode who) = false ->
+    tmo_blocks t = true ->
+    flg_wf (fst (flg_wai mask t who c)) = true.
+Proof.
+  intros mask t who c W P Q A B C D.
+  unfold flg_wai. rewrite A, B, C, D.
+  unfold flg_block. apply flg_wf_survives_an_enqueue.
+  - exact W.
+  - exact P.
+  - exact Q.
+Qed.
+
+(* The two ways a wai_flg can be refused on STATE alone, computed: the same
+ * cell, the same caller, and the attribute bit as the only difference. *)
+Example the_attribute_bit_decides_the_second_waiter :
+    fr_rc (snd (flg_wai 0 TMO_FEVR (mk_flg_who 8 1 0 2)
+               (mk_flgcb 1 false false false 0 [mk_flg_who 7 1 0 1]))) = E_OBJ /\
+    fr_rc (snd (flg_wai 0 TMO_FEVR (mk_flg_who 8 1 0 2)
+               (mk_flgcb 1 false true false 0 [mk_flg_who 7 1 0 1]))) = E_TMOUT /\
+    fr_ptn (snd (flg_wai 0 TMO_FEVR (mk_flg_who 8 1 0 2)
+               (mk_flgcb 1 false true false 0 [mk_flg_who 7 1 0 1]))) = None.
+Proof. repeat split; vm_compute; reflexivity. Qed.
+
+(* ── 16.7 The set walk ────────────────────────────────────────── *)
+
+(* eventflag.c:214-239 as a fold.  Three answers, not two, because the walk
+ * mutates the pattern as it goes and each released task is handed the value the
+ * pattern had AT ITS OWN TEST (:225), which is a different figure for every
+ * release once a clearing mode is in the queue.  The released list therefore
+ * carries the waiter together with the answer it was given. *)
+Record flg_release : Type := mk_flg_release {
+    rl_who : flg_who;
+    rl_pat : nat                    (* *p_flgptn as the kernel wrote it, :225 *)
+  }.
+
+Record flg_walk : Type := mk_flg_walk {
+    k_pat  : nat;                   (* the pattern the object is left with *)
+    k_kept : list flg_who;          (* still waiting, in queue order *)
+    k_gone : list flg_release       (* released, in the order they were met *)
+  }.
+
+(* The one way an entry stays and the two ways it leaves, as functions rather
+ * than as inline record constructions -- §14.7's drain_skip and drain_take
+ * again, for the same reason: a branch equation can then name the step without
+ * talking about a projection of a constructor. *)
+Definition flg_walk_keeps (x : flg_who) (w : flg_walk) : flg_walk :=
+  mk_flg_walk (k_pat w) (x :: k_kept w) (k_gone w).
+
+Definition flg_walk_releases (x : flg_who) (ans : nat) (w : flg_walk) : flg_walk :=
+  mk_flg_walk (k_pat w) (k_kept w) (mk_flg_release x ans :: k_gone w).
+
+(* :222 tests, :225 answers, :229-237 clears and perhaps breaks.  Note the two
+ * different patterns in the body: a released entry is recorded with the pattern
+ * BEFORE its own clear, because :225 writes the caller's slot before :230
+ * mutates the object, while the walk continues from the pattern AFTER it.  That
+ * is the whole content of §16.6's "the answer is not the state", and it is why
+ * the answer travels in the release record.
+ *
+ * Written without let-bindings, so that each branch test occurs in the term
+ * exactly as the four equations below name it. *)
+Fixpoint flg_set_walk (p : nat) (q : list flg_who) : flg_walk :=
+  match q with
+  | nil => mk_flg_walk p nil nil
+  | x :: rest =>
+      if flg_cond p (fw_waiptn x) (fw_wfmode x) then
+        if flg_stop_after (fw_wfmode x)
+                          (wai_clear (fw_wfmode x) p (fw_waiptn x)) then
+          mk_flg_walk (wai_clear (fw_wfmode x) p (fw_waiptn x)) rest
+                      (mk_flg_release x p :: nil)
+        else
+          flg_walk_releases x p
+            (flg_set_walk (wai_clear (fw_wfmode x) p (fw_waiptn x)) rest)
+      else
+        flg_walk_keeps x (flg_set_walk p rest)
+  end.
+
+(* The four steps of the walk, each under its own branch test.  Everything below
+ * rewrites through these instead of case-analysing the fixpoint, which is what
+ * keeps the conservation laws honest about which pattern the recursion used --
+ * §14.7's sig_walk_* equations, one per branch. *)
+Lemma flg_set_walk_nil : forall p,
+    flg_set_walk p nil = mk_flg_walk p nil nil.
+Proof. intros p. reflexivity. Qed.
+
+Lemma flg_set_walk_not_answered : forall p x rest,
+    flg_cond p (fw_waiptn x) (fw_wfmode x) = false ->
+    flg_set_walk p (x :: rest) = flg_walk_keeps x (flg_set_walk p rest).
+Proof. intros p x rest C. unfold flg_set_walk. rewrite C. reflexivity. Qed.
+
+Lemma flg_set_walk_answered_stops : forall p x rest,
+    flg_cond p (fw_waiptn x) (fw_wfmode x) = true ->
+    flg_stop_after (fw_wfmode x)
+                   (wai_clear (fw_wfmode x) p (fw_waiptn x)) = true ->
+    flg_set_walk p (x :: rest) =
+    mk_flg_walk (wai_clear (fw_wfmode x) p (fw_waiptn x)) rest
+                (mk_flg_release x p :: nil).
+Proof.
+  intros p x rest C S. unfold flg_set_walk. rewrite C, S. reflexivity.
+Qed.
+
+Lemma flg_set_walk_answered_continues : forall p x rest,
+    flg_cond p (fw_waiptn x) (fw_wfmode x) = true ->
+    flg_stop_after (fw_wfmode x)
+                   (wai_clear (fw_wfmode x) p (fw_waiptn x)) = false ->
+    flg_set_walk p (x :: rest) =
+    flg_walk_releases x p
+      (flg_set_walk (wai_clear (fw_wfmode x) p (fw_waiptn x)) rest).
+Proof.
+  intros p x rest C S. unfold flg_set_walk. rewrite C, S. reflexivity.
+Qed.
+
+(* The two list answers are a partition of the queue the walk started from:
+ * every entry is either released or kept, exactly once, and none is lost -- the
+ * law the C's "queue = queue->next" step before each release exists to
+ * guarantee.  Stated as a count because the two lists interleave, so there is
+ * no equation between their concatenation and the queue. *)
+Lemma the_walk_never_loses_a_waiter : forall q p,
+    length q = length (k_kept (flg_set_walk p q)) + length (k_gone (flg_set_walk p q)).
+Proof.
+  induction q as [|x rest IH]; intros p.
+  - cbn [flg_set_walk k_kept k_gone length]. reflexivity.
+  - destruct (flg_cond p (fw_waiptn x) (fw_wfmode x)) eqn:C.
+    + destruct (flg_stop_after (fw_wfmode x)
+                               (wai_clear (fw_wfmode x) p (fw_waiptn x))) eqn:S.
+      * rewrite (flg_set_walk_answered_stops p x rest C S).
+        cbn [k_kept k_gone length]. lia.
+      * rewrite (flg_set_walk_answered_continues p x rest C S).
+        cbn [flg_walk_releases k_kept k_gone length].
+        specialize (IH (wai_clear (fw_wfmode x) p (fw_waiptn x))). lia.
+    + rewrite (flg_set_walk_not_answered p x rest C).
+      cbn [flg_walk_keeps k_kept k_gone length]. specialize (IH p). lia.
+Qed.
+
+(* What the walk gives back: the pattern it ends on is never larger than the one
+ * it started with.  Every step of the C is either a read of flgptn or an
+ * intersection with its complement, and §16.1 proved both shrink. *)
+Lemma the_walk_never_grows_the_pattern : forall q p,
+    Nat.leb (k_pat (flg_set_walk p q)) p = true.
+Proof.
+  induction q as [|x rest IH]; intros p.
+  - cbn [flg_set_walk k_pat]. apply Nat.leb_le. apply Nat.le_refl.
+  - destruct (flg_cond p (fw_waiptn x) (fw_wfmode x)) eqn:C.
+    + destruct (flg_stop_after (fw_wfmode x)
+                               (wai_clear (fw_wfmode x) p (fw_waiptn x))) eqn:S.
+      * rewrite (flg_set_walk_answered_stops p x rest C S). cbn [k_pat].
+        apply the_answered_clear_never_grows_the_pattern.
+      * rewrite (flg_set_walk_answered_continues p x rest C S).
+        cbn [flg_walk_releases k_pat].
+        apply Nat.leb_le.
+        apply Nat.le_trans with (m := wai_clear (fw_wfmode x) p (fw_waiptn x)).
+        { apply Nat.leb_le. apply (IH (wai_clear (fw_wfmode x) p (fw_waiptn x))). }
+        { apply Nat.leb_le. apply the_answered_clear_never_grows_the_pattern. }
+    + rewrite (flg_set_walk_not_answered p x rest C). cbn [flg_walk_keeps k_pat].
+      apply (IH p).
+Qed.
+
+(* The soundness half, in the shape §16.2's scope note allows: every release is
+ * justified by the answer that release was given, not by the figure the object
+ * ends with.  This is the claim the C relies on at :222, and it needs no
+ * absorption law, because the pattern recorded beside each waiter IS the one
+ * that was tested. *)
+Definition every_release_is_an_answer (w : flg_walk) : bool :=
+  forallb (fun r => flg_cond (rl_pat r) (fw_waiptn (rl_who r)) (fw_wfmode (rl_who r)))
+          (k_gone w).
+
+(* What the two list steps do to that verdict -- each side of the pair is a
+ * reflexive equation, so the induction below never has to look inside forallb. *)
+Lemma every_release_is_an_answer_of_keeps : forall x w,
+    every_release_is_an_answer (flg_walk_keeps x w) = every_release_is_an_answer w.
+Proof. intros x w. reflexivity. Qed.
+
+Lemma every_release_is_an_answer_of_releases : forall x ans w,
+    every_release_is_an_answer (flg_walk_releases x ans w) =
+    andb (flg_cond ans (fw_waiptn x) (fw_wfmode x)) (every_release_is_an_answer w).
+Proof. intros x ans w. reflexivity. Qed.
+
+Lemma the_walk_only_releases_answered_waiters : forall q p,
+    every_release_is_an_answer (flg_set_walk p q) = true.
+Proof.
+  induction q as [|x rest IH]; intros p.
+  - reflexivity.
+  - destruct (flg_cond p (fw_waiptn x) (fw_wfmode x)) eqn:C.
+    + destruct (flg_stop_after (fw_wfmode x)
+                               (wai_clear (fw_wfmode x) p (fw_waiptn x))) eqn:S.
+      * rewrite (flg_set_walk_answered_stops p x rest C S).
+        unfold every_release_is_an_answer. cbn [forallb rl_pat rl_who].
+        apply andb_true_iff. split; [ exact C | reflexivity ].
+      * rewrite (flg_set_walk_answered_continues p x rest C S).
+        rewrite every_release_is_an_answer_of_releases, C. cbn [andb].
+        apply (IH (wai_clear (fw_wfmode x) p (fw_waiptn x))).
+    + rewrite (flg_set_walk_not_answered p x rest C).
+      rewrite every_release_is_an_answer_of_keeps. apply (IH p).
+Qed.
+
+(* The inert set: a pattern that suits nobody leaves the object exactly as it
+ * was found -- same pattern, same queue, no release.  This is what makes
+ * set_flg with an irrelevant setptn safe to call from a hook, and it is the
+ * reason the walk's own induction has to carry the pattern. *)
+Lemma a_walk_with_nothing_to_give_is_the_identity : forall q p,
+    (forall x, In x q -> flg_cond p (fw_waiptn x) (fw_wfmode x) = false) ->
+    flg_set_walk p q = mk_flg_walk p q nil.
+Proof.
+  induction q as [|x rest IH]; intros p H.
+  - apply flg_set_walk_nil.
+  - rewrite (flg_set_walk_not_answered p x rest (H x (or_introl eq_refl))).
+    unfold flg_walk_keeps.
+    rewrite (IH p (fun y Hin => H y (or_intror Hin))). reflexivity.
+Qed.
+
+(* The head that stops the walk.  A TWF_CLR waiter that is satisfied takes the
+ * whole pattern and leaves everyone behind it waiting: the C's break at :236 is
+ * unconditional, so this is exact rather than a bound. *)
+Lemma a_full_clear_head_stops_the_walk : forall p x rest,
+    flg_cond p (fw_waiptn x) (fw_wfmode x) = true ->
+    clr_mode (fw_wfmode x) = true ->
+    flg_set_walk p (x :: rest) = mk_flg_walk 0 rest (mk_flg_release x p :: nil).
+Proof.
+  intros p x rest C F.
+  assert (S : flg_stop_after (fw_wfmode x)
+                             (wai_clear (fw_wfmode x) p (fw_waiptn x)) = true).
+  { unfold flg_stop_after. rewrite F. reflexivity. }
+  rewrite (flg_set_walk_answered_stops p x rest C S).
+  rewrite (a_full_clear_wipes_the_pattern (fw_wfmode x) p (fw_waiptn x) F).
+  reflexivity.
+Qed.
+
+(* A TWF_BITCLR head that empties the pattern stops for the same reason, and the
+ * zero-test at :230 is what decides it -- so the same attribute can stop one
+ * walk and continue another, depending only on the figure. *)
+Lemma a_bit_clear_head_stops_only_by_emptied_pattern : forall p x rest,
+    flg_cond p (fw_waiptn x) (fw_wfmode x) = true ->
+    clr_mode (fw_wfmode x) = false -> bitclr_mode (fw_wfmode x) = true ->
+    Nat.eqb (pat_clr p (fw_waiptn x)) 0 = true ->
+    flg_set_walk p (x :: rest) =
+    mk_flg_walk (pat_clr p (fw_waiptn x)) rest (mk_flg_release x p :: nil).
+Proof.
+  intros p x rest C F B Z.
+  assert (Q : wai_clear (fw_wfmode x) p (fw_waiptn x) = pat_clr p (fw_waiptn x))
+    by (apply (a_bit_clear_only_drops_the_tested_bits (fw_wfmode x) p (fw_waiptn x) F B)).
+  assert (S : flg_stop_after (fw_wfmode x)
+                             (wai_clear (fw_wfmode x) p (fw_waiptn x)) = true).
+  { rewrite Q. unfold flg_stop_after. rewrite F, B, Z. reflexivity. }
+  rewrite (flg_set_walk_answered_stops p x rest C S), Q. reflexivity.
+Qed.
+
+(* ... and the complement: the same head, with one bit left over, keeps walking,
+ * now from the cleared figure.  This is the branch in which the order of the
+ * queue changes the answers, and the three examples at the end of §16.7 compute
+ * exactly that. *)
+Lemma a_bit_clear_head_that_leaves_something_continues : forall p x rest,
+    flg_cond p (fw_waiptn x) (fw_wfmode x) = true ->
+    clr_mode (fw_wfmode x) = false -> bitclr_mode (fw_wfmode x) = true ->
+    Nat.eqb (pat_clr p (fw_waiptn x)) 0 = false ->
+    flg_set_walk p (x :: rest) =
+    flg_walk_releases x p (flg_set_walk (pat_clr p (fw_waiptn x)) rest).
+Proof.
+  intros p x rest C F B Z.
+  assert (Q : wai_clear (fw_wfmode x) p (fw_waiptn x) = pat_clr p (fw_waiptn x))
+    by (apply (a_bit_clear_only_drops_the_tested_bits (fw_wfmode x) p (fw_waiptn x) F B)).
+  assert (S : flg_stop_after (fw_wfmode x)
+                             (wai_clear (fw_wfmode x) p (fw_waiptn x)) = false).
+  { rewrite Q. unfold flg_stop_after. rewrite F, B, Z. reflexivity. }
+  rewrite (flg_set_walk_answered_continues p x rest C S), Q. reflexivity.
+Qed.
+
+(* set_flg, :204-245: the union first (:211), then the walk over the queue with
+ * the unioned figure.  The receipt is E_OK once the cell exists -- :244 returns
+ * the initialiser -- so the observable content of a set is entirely the pair
+ * (the cell it leaves, the tasks it released). *)
+Definition flg_set_step (setptn : nat) (c : flgcb) : flgcb * list flg_release :=
+  let w := flg_set_walk (pat_or (fc_pat c) setptn) (fc_wait c) in
+  (mk_flgcb (fc_id c) (fc_tpri c) (fc_wmul c) (fc_nodis c) (k_pat w) (k_kept w),
+   k_gone w).
+
+Lemma a_set_step_leaves_the_kept : forall s c,
+    fc_wait (fst (flg_set_step s c)) = k_kept (flg_set_walk (pat_or (fc_pat c) s) (fc_wait c)).
+Proof. intros s c. unfold flg_set_step. reflexivity. Qed.
+
+Lemma a_set_step_releases_the_gone : forall s c,
+    snd (flg_set_step s c) = k_gone (flg_set_walk (pat_or (fc_pat c) s) (fc_wait c)).
+Proof. intros s c. unfold flg_set_step. reflexivity. Qed.
+
+Lemma a_set_step_never_grows_the_union : forall s c,
+    Nat.leb (fc_pat (fst (flg_set_step s c))) (pat_or (fc_pat c) s) = true.
+Proof.
+  intros s c. unfold flg_set_step. apply the_walk_never_grows_the_pattern.
+Qed.
+
+Lemma a_set_step_only_releases_answered_waiters : forall s c,
+    every_release_is_an_answer
+      (flg_set_walk (pat_or (fc_pat c) s) (fc_wait c)) = true.
+Proof. intros s c. apply the_walk_only_releases_answered_waiters. Qed.
+
+(* The cell as the services leave it: every field but the pattern survives,
+ * because the C mutates flgptn in place (eventflag.c:211, :263) and touches
+ * nothing else in the object's own record.  Named because §16.8's clear step and
+ * the two laws below all speak it. *)
+Definition flg_with_pattern (p : nat) (c : flgcb) : flgcb :=
+  mk_flgcb (fc_id c) (fc_tpri c) (fc_wmul c) (fc_nodis c) p (fc_wait c).
+
+(* A set that suits nobody is the union and nothing else.  The claim is NOT that
+ * the cell is unchanged -- :211 unions setptn into flgptn whatever the queue
+ * does, and my first draft of this lemma said otherwise -- but that the union is
+ * the only difference, and that no task leaves the queue. *)
+Lemma a_set_onto_an_uninterested_queue_only_unions : forall s c,
+    (forall x, In x (fc_wait c) ->
+       flg_cond (pat_or (fc_pat c) s) (fw_waiptn x) (fw_wfmode x) = false) ->
+    flg_set_step s c = (flg_with_pattern (pat_or (fc_pat c) s) c, nil).
+Proof.
+  intros s c H. unfold flg_set_step, flg_with_pattern.
+  rewrite (a_walk_with_nothing_to_give_is_the_identity (fc_wait c)
+            (pat_or (fc_pat c) s) H).
+  cbn [k_pat k_kept k_gone]. destruct c. reflexivity.
+Qed.
+
+(* §16.4's shape law, read through the walk: the pattern is not part of the shape
+ * (a_clear_leaves_the_shape_alone), so an inert set leaves a well-formed cell
+ * well-formed. *)
+Lemma a_set_onto_an_uninterested_queue_keeps_the_shape : forall s c,
+    flg_wf c = true ->
+    (forall x, In x (fc_wait c) ->
+       flg_cond (pat_or (fc_pat c) s) (fw_waiptn x) (fw_wfmode x) = false) ->
+    flg_wf (fst (flg_set_step s c)) = true.
+Proof.
+  intros s c W H.
+  rewrite (a_set_onto_an_uninterested_queue_only_unions s c H).
+  cbn [fst]. unfold flg_with_pattern.
+  rewrite (a_clear_leaves_the_shape_alone c (pat_or (fc_pat c) s)). exact W.
+Qed.
+
+(* The queue the walk keeps is made of entries the queue it was given already
+ * had: a release only ever takes an entry out, never invents one.  This is the
+ * structural half of the shape law below. *)
+Lemma the_walk_keeps_only_who_it_was_given : forall q p x,
+    In x (k_kept (flg_set_walk p q)) -> In x q.
+Proof.
+  induction q as [|y rest IH]; intros p x Hin.
+  - cbn [flg_set_walk k_kept In] in Hin. exact Hin.
+  - destruct (flg_cond p (fw_waiptn y) (fw_wfmode y)) eqn:C.
+    + destruct (flg_stop_after (fw_wfmode y)
+                               (wai_clear (fw_wfmode y) p (fw_waiptn y))) eqn:S.
+      * rewrite (flg_set_walk_answered_stops p y rest C S) in Hin.
+        cbn [k_kept] in Hin. right. exact Hin.
+      * rewrite (flg_set_walk_answered_continues p y rest C S) in Hin.
+        cbn [flg_walk_releases k_kept] in Hin.
+        apply IH in Hin. right. exact Hin.
+    + rewrite (flg_set_walk_not_answered p y rest C) in Hin.
+      cbn [flg_walk_keeps k_kept In] in Hin.
+      destruct Hin as [E|K].
+      { left. exact E. }
+      { right. apply IH in K. exact K. }
+Qed.
+
+Lemma every_test_nonzero_of_a_subqueue : forall q1 q2,
+    (forall x, In x q2 -> In x q1) ->
+    every_test_nonzero q1 = true -> every_test_nonzero q2 = true.
+Proof.
+  intros q1 q2 S E. unfold every_test_nonzero in *. rewrite forallb_forall in E. rewrite forallb_forall.
+  intros x Hx. apply E. apply S. exact Hx.
+Qed.
+
+Lemma every_mode_legal_of_a_subqueue : forall q1 q2,
+    (forall x, In x q2 -> In x q1) ->
+    every_mode_legal q1 = true -> every_mode_legal q2 = true.
+Proof.
+  intros q1 q2 S E. unfold every_mode_legal in *. rewrite forallb_forall in E. rewrite forallb_forall.
+  intros x Hx. apply E. apply S. exact Hx.
+Qed.
+
+(* A set never makes a well-formed cell ill-formed, whether or not it releases
+ * anybody: both halves of flg_wf (§16.4) are forallb over the queue, and the
+ * queue the walk keeps is a sublist of the queue it was given.  §16.6 needed a
+ * hypothesis for the same claim about wai_flg because there a NEW entry joined
+ * the queue; here nothing enters. *)
+Lemma a_set_step_always_keeps_the_shape : forall s c,
+    flg_wf c = true -> flg_wf (fst (flg_set_step s c)) = true.
+Proof.
+  intros s c W.
+  assert (E : fst (flg_set_step s c) =
+      mk_flgcb (fc_id c) (fc_tpri c) (fc_wmul c) (fc_nodis c)
+        (k_pat (flg_set_walk (pat_or (fc_pat c) s) (fc_wait c)))
+        (k_kept (flg_set_walk (pat_or (fc_pat c) s) (fc_wait c)))) by reflexivity.
+  rewrite E. rewrite flg_wf_of_a_cell.
+  apply andb_true_iff. split.
+  - apply (every_test_nonzero_of_a_subqueue (fc_wait c)).
+    + intros x Hin. apply (the_walk_keeps_only_who_it_was_given (fc_wait c) _ x Hin).
+    + apply (flg_wf_gives_positive_tests c W).
+  - apply (every_mode_legal_of_a_subqueue (fc_wait c)).
+    + intros x Hin. apply (the_walk_keeps_only_who_it_was_given (fc_wait c) _ x Hin).
+    + apply (flg_wf_gives_legal_modes c W).
+Qed.
+
+(* The count form of the same fact: the queue can only shrink. *)
+Lemma the_walk_keeps_at_most_what_it_was_given : forall q p,
+    length (k_kept (flg_set_walk p q)) <= length q.
+Proof.
+  intros q p. assert (L : length q =
+      length (k_kept (flg_set_walk p q)) + length (k_gone (flg_set_walk p q)))
+    by (apply the_walk_never_loses_a_waiter).
+  apply Nat.le_trans with (m := length (k_kept (flg_set_walk p q)) +
+                                     length (k_gone (flg_set_walk p q))).
+  - apply Nat.le_add_r.
+  - rewrite <- L. apply Nat.le_refl.
+Qed.
+
+(* A walk that is given nobody to walk over: the set that finds an empty queue
+ * is the union and nothing else, which is the ordinary case in shipped code and
+ * the reason the C's loop body never runs for a single-waiter flag. *)
+Example a_set_onto_an_empty_queue_releases_nobody :
+    flg_set_walk 5 nil = mk_flg_walk 5 nil nil /\
+    snd (flg_set_step 2 (mk_flgcb 1 false true false 5 nil)) = nil /\
+    fc_pat (fst (flg_set_step 2 (mk_flgcb 1 false true false 5 nil))) = 7.
+Proof. repeat split; vm_compute; reflexivity. Qed.
+
+(* TA_WMUL's price, computed.  The same two waiters and the same figure give the
+ * same task different outcomes -- released, or still blocked -- when the queue
+ * order changes, because a clearing mode consumes the bits the next waiter would
+ * have tested and then stops the walk.  §14 could not show this: its walk spends
+ * a count that no waiter can remove from a later waiter's identity, and the
+ * semaphore's releasee learns nothing about the order it was met in. *)
+Example the_release_order_is_observable :
+    k_gone (flg_set_walk 3 [mk_flg_who 7 1 16 1; mk_flg_who 8 2 0 1])
+    = [mk_flg_release (mk_flg_who 7 1 16 1) 3] /\
+    k_kept (flg_set_walk 3 [mk_flg_who 7 1 16 1; mk_flg_who 8 2 0 1])
+    = [mk_flg_who 8 2 0 1] /\
+    k_pat (flg_set_walk 3 [mk_flg_who 7 1 16 1; mk_flg_who 8 2 0 1]) = 0.
+Proof. repeat split; vm_compute; reflexivity. Qed.
+
+Example the_same_queue_in_the_other_order :
+    k_gone (flg_set_walk 3 [mk_flg_who 8 2 0 1; mk_flg_who 7 1 16 1])
+    = [mk_flg_release (mk_flg_who 8 2 0 1) 3;
+       mk_flg_release (mk_flg_who 7 1 16 1) 3] /\
+    k_kept (flg_set_walk 3 [mk_flg_who 8 2 0 1; mk_flg_who 7 1 16 1]) = nil /\
+    k_pat (flg_set_walk 3 [mk_flg_who 8 2 0 1; mk_flg_who 7 1 16 1]) = 0.
+Proof. repeat split; vm_compute; reflexivity. Qed.
+
+(* The two walks above hand out one answer in one order and two in the other --
+ * which is what an oracle has to reproduce, and the reason §16.9 records the
+ * pair as a computation rather than asserting a general law about it. *)
+Example the_released_answers_differ_by_order :
+    map rl_pat (k_gone (flg_set_walk 3 [mk_flg_who 7 1 16 1; mk_flg_who 8 2 0 1]))
+    = [3] /\
+    map rl_pat (k_gone (flg_set_walk 3 [mk_flg_who 8 2 0 1; mk_flg_who 7 1 16 1]))
+    = [3; 3].
+Proof. repeat split; vm_compute; reflexivity. Qed.
+
+(* ── 16.8 The other four entry points, as steps on the cell ─────── *)
+
+(* cre_flg (:116-158), del_flg (:164-187), clr_flg (:250-268) and ref_flg
+ * (:339-359) are the four services §16.6 and §16.7 left aside.  Three of them
+ * are straight-line: a creation fills a cell in, a deletion takes it out, a
+ * clear intersects the pattern with its argument.  The fourth, ref_flg, is the
+ * only one that reads, and what it reads is exactly the pair a blocked caller
+ * will eventually be answered with -- which is why an observer can watch a flag
+ * without perturbing it.
+ *
+ * Like §14.6 and §14.7, these are the critical-section bodies only: the marker
+ * test that guards each of them is §16.5's flg_object_guards, and the steps here
+ * are reached exactly when that cascade returns None.
+ *
+ * §14 could project its cells onto §6's global table because that table has a
+ * semaphore column.  It has no flag column, so this section stays cell-local:
+ * flg_view and free_flg record what an observer of a flag can see, and the laws
+ * below relate a cell to its own receipts rather than to a bus index. *)
+Record flg : Type := mk_flg {
+    f_id   : nat;             (* FLGCB.flgid, the stored marker *)
+    f_pat  : nat;             (* FLGCB.flgptn, what a refer call reports *)
+    f_wait : list nat         (* the waiting tasks, head first, ids only *)
+  }.
+
+Definition free_flg : flg := mk_flg 0 0 nil.
+
+Definition flg_view (c : flgcb) : flg :=
+  mk_flg (fc_id c) (fc_pat c) (map fw_tid (fc_wait c)).
+
+Lemma view_keeps_the_flag_marker : forall c, f_id (flg_view c) = fc_id c.
+Proof. intros c. reflexivity. Qed.
+
+Lemma view_keeps_the_pattern : forall c, f_pat (flg_view c) = fc_pat c.
+Proof. intros c. reflexivity. Qed.
+
+Lemma map_fw_tid_length : forall q : list flg_who, length (map fw_tid q) = length q.
+Proof.
+  intros q. induction q as [|x q IH]; cbn [map length]; [reflexivity |].
+  rewrite IH. reflexivity.
+Qed.
+
+Lemma view_keeps_the_flag_length : forall c,
+    length (f_wait (flg_view c)) = length (fc_wait c).
+Proof. intros c. unfold flg_view. apply map_fw_tid_length. Qed.
+
+(* A flag exists for its readers exactly when its stored marker is non-zero --
+ * the same reading as §14.3's for semaphores, and the reason all four services
+ * here have one marker test and no other existence test at all. *)
+Lemma flag_used_is_the_view_marker : forall c,
+    flg_used c = negb (Nat.eqb (f_id (flg_view c)) 0).
+Proof. intros c. unfold flg_used. rewrite view_keeps_the_flag_marker. reflexivity. Qed.
+
+(* cre_flg, eventflag.c:139-154.  The cell it builds has the caller's attributes,
+ * the caller's initial pattern and nobody in its queue, and its receipt is the
+ * new id (:154) -- the only service of this family that returns a number rather
+ * than an ER, which is why §16.5's cre cascade has no E_ID: the id is an output
+ * here, not an input.  Note what is NOT tested: anything about iflgptn.  :147
+ * copies it verbatim, so a created flag can already satisfy a wait. *)
+Definition flg_created (id : nat) (tpri wmul nodis : bool) (initial : nat) : flgcb :=
+  mk_flgcb id tpri wmul nodis initial nil.
+
+Lemma a_created_cell_holds_nobody : forall i tp wm nd p,
+    fc_wait (flg_created i tp wm nd p) = nil.
+Proof. intros i tp wm nd p. unfold flg_created. reflexivity. Qed.
+
+Lemma a_created_cell_keeps_the_initial_pattern : forall i tp wm nd p,
+    fc_pat (flg_created i tp wm nd p) = p.
+Proof. intros i tp wm nd p. reflexivity. Qed.
+
+Lemma a_created_cell_keeps_the_three_attributes : forall i tp wm nd p,
+    fc_tpri (flg_created i tp wm nd p) = tp /\
+    fc_wmul (flg_created i tp wm nd p) = wm /\
+    fc_nodis (flg_created i tp wm nd p) = nd.
+Proof. intros i tp wm nd p. unfold flg_created. repeat split; reflexivity. Qed.
+
+Lemma a_created_cell_is_wellformed : forall i tp wm nd p,
+    flg_wf (flg_created i tp wm nd p) = true.
+Proof.
+  intros i tp wm nd p. unfold flg_created, flg_wf, every_test_nonzero, every_mode_legal.
+  cbn [forallb andb]. reflexivity.
+Qed.
+
+(* A flag created with a pattern that already matches is satisfied before any
+ * set: the wait takes its answer at :309-310 without queueing at all. *)
+Example a_creation_can_leave_a_flag_already_satisfied :
+    flg_cond (fc_pat (flg_created 1 false false false 6)) 2 0 = true /\
+    flg_cond (fc_pat (flg_created 1 false false false 4)) 2 0 = false /\
+    snd (flg_wai 0 TMO_REL (mk_flg_who 8 2 0 1) (flg_created 1 false false false 6))
+    = mk_flg_reply (Some 6) E_OK.
+Proof. repeat split; vm_compute; reflexivity. Qed.
+
+(* clr_flg, eventflag.c:263: the one line this service executes on the object.
+ * Two facts fall out of reading it literally.  First it is a KEEP-mask --
+ * flgptn &= clrptn retains the bits named -- which is the spec-versus-code
+ * divergence §16.2 records and §16.9 computes.  Second there is no release walk
+ * at all: the queue is untouched, so clearing bits never wakes the tasks that
+ * were waiting for them.  A task waiting on a bit another task clears keeps
+ * waiting; only a set can answer it, and the C's set walk is the sole place
+ * where a release happens (:222-238). *)
+Definition flg_clr_step (clrptn : nat) (c : flgcb) : flgcb :=
+  flg_with_pattern (pat_and (fc_pat c) clrptn) c.
+
+Lemma a_clear_step_never_grows_the_pattern : forall p c,
+    Nat.leb (fc_pat (flg_clr_step p c)) (fc_pat c) = true.
+Proof.
+  intros p c. unfold flg_clr_step, flg_with_pattern. apply Nat.leb_le. apply Nat.land_le_l.
+Qed.
+
+Lemma a_clear_leaves_the_queue_alone : forall p c,
+    fc_wait (flg_clr_step p c) = fc_wait c.
+Proof. intros p c. unfold flg_clr_step, flg_with_pattern. reflexivity. Qed.
+
+Lemma a_clear_keeps_the_marker : forall p c, fc_id (flg_clr_step p c) = fc_id c.
+Proof. intros p c. unfold flg_clr_step, flg_with_pattern. reflexivity. Qed.
+
+Lemma a_clear_keeps_the_shape : forall p c, flg_wf (flg_clr_step p c) = flg_wf c.
+Proof. intros p c. unfold flg_clr_step, flg_with_pattern.
+  apply a_clear_leaves_the_shape_alone. Qed.
+
+(* What the mask does not name is dropped, and what it names survives: the two
+ * halves of the keep-mask reading, with no hypothesis about the cell. *)
+Lemma a_clear_leaves_a_subset_alone : forall clr c,
+    Nat.eqb (pat_and (fc_pat c) clr) (fc_pat c) = true ->
+    fc_pat (flg_clr_step clr c) = fc_pat c.
+Proof.
+  intros clr c E. unfold flg_clr_step, flg_with_pattern. cbn [fc_pat].
+  apply Nat.eqb_eq in E. exact E.
+Qed.
+
+Lemma a_clear_of_a_disjoint_mask_is_the_zero : forall clr c,
+    Nat.eqb (pat_and (fc_pat c) clr) 0 = true ->
+    fc_pat (flg_clr_step clr c) = 0.
+Proof.
+  intros clr c E. unfold flg_clr_step, flg_with_pattern. apply Nat.eqb_eq. exact E.
+Qed.
+
+Lemma a_clear_is_idempotent : forall p c,
+    flg_clr_step p (flg_clr_step p c) = flg_clr_step p c.
+Proof.
+  intros p c. unfold flg_clr_step, flg_with_pattern.
+  destruct c as [i tp wm nd pt q]; cbn [fc_pat].
+  rewrite <- Nat.land_assoc. rewrite Nat.land_diag. reflexivity.
+Qed.
+
+Lemma a_clear_of_the_pattern_itself_is_the_identity : forall c, flg_clr_step (fc_pat c) c = c.
+Proof.
+  intros c. unfold flg_clr_step, flg_with_pattern, pat_and.
+  destruct c as [i tp wm nd pt q]; cbn [fc_id fc_tpri fc_wmul fc_nodis fc_pat fc_wait].
+  rewrite Nat.land_diag. reflexivity.
+Qed.
+
+(* Setting then clearing is not clearing then setting: the two are ordered
+ * operations on the pattern, and a set between two clears feeds the second
+ * one's mask.  No commutativity law holds here, so the section records the
+ * counterexample instead of a lemma. *)
+Example the_set_and_the_clear_do_not_commute :
+    fc_pat (flg_clr_step 5 (fst (flg_set_step 6 (flg_created 1 false false false 1)))) = 5 /\
+    fc_pat (fst (flg_set_step 6 (flg_clr_step 5 (flg_created 1 false false false 1)))) = 7.
+Proof. repeat split; vm_compute; reflexivity. Qed.
+
+(* ref_flg, eventflag.c:352-354, and the wait.c:139-146 helper it calls.  The
+ * reference reports the head waiter's id, or 0 when nobody waits, and the
+ * pattern as it stands.  Everything else about the queue -- how many wait, what
+ * each of them named -- is invisible through this service, and through every
+ * other one in 3.20: the only enumerator is the debugger call at :400. *)
+Definition flg_head_tid (ids : list nat) : nat :=
+  match ids with nil => 0 | t :: _ => t end.
+
+Record flg_stat : Type := mk_flg_stat { fs_wtsk : nat; fs_pat : nat }.
+
+Definition flg_ref (c : flgcb) : flg_stat :=
+  mk_flg_stat (flg_head_tid (f_wait (flg_view c))) (fc_pat c).
+
+Lemma a_reference_reports_the_stored_pattern : forall c, fs_pat (flg_ref c) = fc_pat c.
+Proof. intros c. reflexivity. Qed.
+
+Lemma an_empty_flag_reports_no_waiting_task : forall c,
+    fc_wait c = nil -> fs_wtsk (flg_ref c) = 0.
+Proof. intros c. unfold flg_ref, flg_view, f_wait. intros ->. reflexivity. Qed.
+
+Lemma a_reference_names_the_head_waiter : forall x q,
+    fs_wtsk (flg_ref (mk_flgcb 1 false false false 0 (x :: q))) = fw_tid x.
+Proof. intros x q. unfold flg_ref. reflexivity. Qed.
+
+(* The read is the promise: a blocked wait leaves the pattern where a reference
+ * finds it (§16.6), and §16.7's walk answers with the pattern the union built.
+ * So the figure a caller reads is the figure it will be given, as long as no
+ * other call intervenes -- and the second conjunct below is the case where one
+ * does, since the read of the EMPTY cell and the answer to the later set
+ * differ by exactly the setptn. *)
+Example a_reference_and_the_answer_it_promises :
+    fs_pat (flg_ref (mk_flgcb 1 false true false 7 nil)) = 7 /\
+    snd (flg_wai 0 TMO_REL (mk_flg_who 8 4 0 1) (mk_flgcb 1 false true false 7 nil))
+    = mk_flg_reply (Some 7) E_OK /\
+    fc_pat (fst (flg_set_step 8 (mk_flgcb 1 false true false 7 nil))) = 15.
+Proof. repeat split; vm_compute; reflexivity. Qed.
+
+Example a_reference_sees_only_the_head :
+    fs_wtsk (flg_ref (mk_flgcb 1 false true false 0
+                        [mk_flg_who 9 2 0 1; mk_flg_who 10 1 0 2])) = 9 /\
+    f_wait (flg_view (mk_flgcb 1 false true false 0
+                        [mk_flg_who 9 2 0 1; mk_flg_who 10 1 0 2])) = [9; 10].
+Proof. repeat split; vm_compute; reflexivity. Qed.
+
+(* del_flg, eventflag.c:176-182.  Two effects, in this order: wait_delete (:178)
+ * releases every waiter with E_DLT, and then the cell goes back to the free list
+ * with ONLY its marker cleared (:182).  The C does not reset flgptn or the
+ * attributes, and that asymmetry is legal solely because every reader tests the
+ * marker first (:174, :205, :260, :349) -- so flg_forget below clears fc_id and
+ * the queue and deliberately keeps the stale pattern and all three attribute
+ * bits, exactly as the kernel does.  A law that said otherwise would be a model
+ * of tidiness, not of this code. *)
+Definition flg_del_broadcast (c : flgcb) : list er :=
+  map (fun _ => final_receipt RK_del (prewrite false)) (fc_wait c).
+
+Lemma flg_del_broadcast_is_all_E_DLT : forall c,
+    flg_del_broadcast c = repeat E_DLT (length (fc_wait c)).
+Proof.
+  intros c. unfold flg_del_broadcast.
+  assert (A : forall l : list flg_who,
+            map (fun _ => final_receipt RK_del (prewrite false)) l = repeat E_DLT (length l)).
+  { induction l as [|x l IH]; cbn [map repeat length]; [reflexivity |].
+    cbn [final_receipt effect_of ef_write prewrite] in *. rewrite IH. reflexivity. }
+  apply A.
+Qed.
+
+Lemma the_delete_broadcast_has_one_receipt_per_waiter : forall c,
+    length (flg_del_broadcast c) = length (fc_wait c).
+Proof.
+  intros c. unfold flg_del_broadcast.
+  assert (A : forall l : list flg_who,
+              length (map (fun _ => final_receipt RK_del (prewrite false)) l) = length l).
+  { induction l as [|x l IH]; cbn [map length]; [reflexivity |]. rewrite IH. reflexivity. }
+  apply A.
+Qed.
+
+Definition flg_forget (c : flgcb) : flgcb :=
+  mk_flgcb 0 (fc_tpri c) (fc_wmul c) (fc_nodis c) (fc_pat c) nil.
+
+Definition flg_del_step (c : flgcb) : flgcb * list er :=
+  (flg_forget c, flg_del_broadcast c).
+
+Lemma a_forgotten_flag_cell_reports_no_existence : forall c, flg_used (flg_forget c) = false.
+Proof. intros c. unfold flg_used, flg_forget. reflexivity. Qed.
+
+Lemma a_forgotten_flag_cell_holds_no_waiters : forall c, fc_wait (flg_forget c) = nil.
+Proof. intros c. unfold flg_forget. reflexivity. Qed.
+
+Lemma a_forgotten_cell_keeps_its_attributes : forall c,
+    fc_tpri (flg_forget c) = fc_tpri c /\
+    fc_wmul (flg_forget c) = fc_wmul c /\
+    fc_nodis (flg_forget c) = fc_nodis c.
+Proof. intros c. unfold flg_forget. repeat split; reflexivity. Qed.
+
+Lemma a_forgotten_cell_keeps_the_stale_pattern : forall c,
+    fc_pat (flg_forget c) = fc_pat c.
+Proof. intros c. unfold flg_forget. reflexivity. Qed.
+
+Lemma a_forgotten_cell_is_wellformed : forall c, flg_wf (flg_forget c) = true.
+Proof.
+  intros c. unfold flg_forget, flg_wf, every_test_nonzero, every_mode_legal.
+  cbn [forallb andb]. reflexivity.
+Qed.
+
+Lemma a_forgotten_cell_views_as_the_free_cell : forall c p,
+    f_pat (flg_view (flg_forget c)) = p -> flg_view (flg_forget c) =
+    mk_flg 0 p nil.
+Proof.
+  intros c p H. unfold flg_forget, flg_view. cbn [fc_id fw_tid map].
+  rewrite <- H. reflexivity.
+Qed.
+
+(* The two readings of the marker test, side by side: the guard refuses a
+ * deletion of a cell whose marker is 0 (§16.5), while the step itself -- the C's
+ * else-branch, reached only when the guard passes -- broadcasts one E_DLT per
+ * waiter and returns the cell to the free list. *)
+Example a_delete_asks_the_marker_before_it_asks_the_queue :
+    first_bad (flg_object_guards false 3) = Some E_NOEXS /\
+    fst (flg_del_step (mk_flgcb 3 false true false 5 [mk_flg_who 9 2 0 1]))
+    = mk_flgcb 0 false true false 5 nil /\
+    snd (flg_del_step (mk_flgcb 3 false true false 5 [mk_flg_who 9 2 0 1])) = [E_DLT].
+Proof. repeat split; vm_compute; reflexivity. Qed.
+
+(* The composition a driver actually relies on: a flag used as a one-shot.  The
+ * waiter names TWF_CLR, so the set that answers it also empties the object --
+ * no clr_flg call is needed to make the flag ready for the next round.  This is
+ * §16.6's answer law and §16.7's stop law read together on shipped shapes. *)
+Example a_one_shot_flag_round_trip :
+    flg_wai 0 TMO_REL (mk_flg_who 9 2 16 1) (flg_created 1 false true false 0)
+    = (mk_flgcb 1 false true false 0 [mk_flg_who 9 2 16 1], mk_flg_reply None E_TMOUT) /\
+    fst (flg_set_step 2 (fst (flg_wai 0 TMO_REL (mk_flg_who 9 2 16 1)
+                                                (flg_created 1 false true false 0))))
+    = flg_created 1 false true false 0 /\
+    snd (flg_set_step 2 (fst (flg_wai 0 TMO_REL (mk_flg_who 9 2 16 1)
+                                                (flg_created 1 false true false 0))))
+    = [mk_flg_release (mk_flg_who 9 2 16 1) 2].
+Proof. repeat split; vm_compute; reflexivity. Qed.
+
+(* ── 16.9 The family, computed ────────────────────────────────── *)
+
+(* Every Example in this subsection is a FIXTURE, not an illustration: the
+ * executable oracle in verify/models/tron_model.ml has to reproduce each of
+ * these figures from its own independently written code, and the harness (§15's
+ * verify_models.sh) compares the two.  A law says the model agrees with itself;
+ * a fixture says the model agrees with the C, provided the fixture was read off
+ * the C -- which the comment above each one records.  Where a fixture disagrees
+ * with the shipped kernel it is the kernel that is right, so the readings here
+ * are line-by-line against src/kernel/eventflag.c. *)
+
+(* eventflag_cond, :86-93: any-of versus all-of, on figures where the two differ
+ * and on one where they agree.  (6&5)=4 is non-zero but not 5, so the pair
+ * (6,5) separates the readings; (7,5) satisfies both. *)
+Example fixture_the_two_wait_modes_separate_on_one_pair :
+    flg_cond 6 4 1 = true /\
+    flg_cond 6 5 1 = true /\
+    flg_cond 6 5 0 = false /\
+    flg_cond 7 5 0 = true /\
+    flg_cond 2 3 1 = true.
+Proof. repeat split; vm_compute; reflexivity. Qed.
+
+(* CHECK_PAR(wfmode & ~(TWF_ORW|TWF_CLR|TWF_BITCLR)) == 0, :285.  The legal set
+ * below 128 is the eight combinations of the three named bits; every other
+ * figure in range is refused.  The oracle's own parameter check should reproduce
+ * this table, and it should refuse 79 for the reason 78 gives (bit 1 and bit 2
+ * are named by nothing). *)
+Example fixture_every_legal_mode_word_passes :
+    wfmode_ok 0 = true /\ wfmode_ok 1 = true /\ wfmode_ok 16 = true /\
+    wfmode_ok 17 = true /\ wfmode_ok 32 = true /\ wfmode_ok 33 = true /\
+    wfmode_ok 48 = true /\ wfmode_ok 49 = true.
+Proof. repeat split; vm_compute; reflexivity. Qed.
+
+Example fixture_an_unnamed_bit_in_range_is_refused :
+    wfmode_ok 2 = false /\ wfmode_ok 8 = false /\ wfmode_ok 64 = false /\
+    wfmode_ok 78 = false /\ wfmode_ok 79 = false.
+Proof. repeat split; vm_compute; reflexivity. Qed.
+
+(* §16.2's note on the ORW bit read as a bit rather than as a whole word: both
+ * readings agree on 17, which is the combination the reference names ORW-and-CLR.
+ * The condition is any-of, the clear is a full wipe -- the answer is the pattern
+ * the caller found, not the pattern the object keeps. *)
+Example fixture_orw_combined_with_clr_is_an_any_of_wait_that_wipes :
+    orw_mode 17 = true /\
+    flg_cond 6 5 17 = true /\
+    flg_cond 6 5 16 = false /\
+    flg_wai 0 TMO_REL (mk_flg_who 8 4 17 1) (mk_flgcb 1 false false false 7 nil)
+    = (mk_flgcb 1 false false false 0 nil, mk_flg_reply (Some 7) E_OK).
+Proof. repeat split; vm_compute; reflexivity. Qed.
+
+(* :310 writes the answer BEFORE :313-318 clear, and the two clear modes are
+ * independent: BITCLR drops only the named bits, CLR drops everything, neither
+ * drops anything.  One figure and one test, five mode words, five cell
+ * patterns, ONE answer.  This is the single most misread pair in the family --
+ * the releasee's figure and the object's figure are different observables. *)
+Example fixture_the_clear_modes_price_the_object_not_the_answer :
+    snd (flg_wai 0 TMO_REL (mk_flg_who 8 4 0 1) (mk_flgcb 1 false false false 7 nil))
+    = mk_flg_reply (Some 7) E_OK /\
+    fc_pat (fst (flg_wai 0 TMO_REL (mk_flg_who 8 4 0 1) (mk_flgcb 1 false false false 7 nil))) = 7 /\
+    fc_pat (fst (flg_wai 0 TMO_REL (mk_flg_who 8 4 1 1) (mk_flgcb 1 false false false 7 nil))) = 7 /\
+    fc_pat (fst (flg_wai 0 TMO_REL (mk_flg_who 8 4 32 1) (mk_flgcb 1 false false false 7 nil))) = 3 /\
+    fc_pat (fst (flg_wai 0 TMO_REL (mk_flg_who 8 4 16 1) (mk_flgcb 1 false false false 7 nil))) = 0.
+Proof. repeat split; vm_compute; reflexivity. Qed.
+
+(* The set walk, :214-239, on three waiters that all name TWF_BITCLR.  Each
+ * releaseee is answered with the pattern as the walk found it for THAT waiter:
+ * 7, then 7-1=6, then 6-2=4, and the object ends empty.  The answer list is
+ * therefore not the union and not the final pattern; it is a trace.  §16.2's
+ * note on absorption is what makes this the honest statement -- the model can
+ * say what each released task received, and says nothing about what a task that
+ * STAYED would have received. *)
+Example fixture_a_bitclr_chain_answers_with_a_trace :
+    map rl_pat (k_gone (flg_set_walk 7 [mk_flg_who 9 1 32 1; mk_flg_who 10 2 32 1;
+                                        mk_flg_who 11 4 32 1])) = [7; 6; 4] /\
+    k_pat (flg_set_walk 7 [mk_flg_who 9 1 32 1; mk_flg_who 10 2 32 1;
+                           mk_flg_who 11 4 32 1]) = 0 /\
+    k_kept (flg_set_walk 7 [mk_flg_who 9 1 32 1; mk_flg_who 10 2 32 1;
+                            mk_flg_who 11 4 32 1]) = nil.
+Proof. repeat split; vm_compute; reflexivity. Qed.
+
+(* The same walk with the FIRST waiter on TWF_BITCLR and the second on an
+ * ordinary all-of wait: the first drop removes the bit the second was waiting
+ * for, so the second is not answered and stays queued -- and the pattern the
+ * object keeps, 2, is the figure a later reference call reports.  A driver that
+ * assumed "everyone whose bits are set wakes" is wrong here. *)
+Example fixture_a_bitclr_head_can_starve_the_waiter_behind_it :
+    flg_set_walk 3 [mk_flg_who 9 1 32 1; mk_flg_who 10 1 0 1]
+    = mk_flg_walk 2 [mk_flg_who 10 1 0 1] [mk_flg_release (mk_flg_who 9 1 32 1) 3].
+Proof. vm_compute. reflexivity. Qed.
+
+(* :211 unions setptn into the pattern and only THEN walks, so a set of 0 is not
+ * a no-op: it re-runs the test against whatever the object already held.  This
+ * is why the family has no CHECK_PAR on setptn -- eventflag.c:192-245 checks
+ * only the id -- and an oracle that skips the walk on setptn == 0 diverges. *)
+Example fixture_a_set_of_zero_still_walks_the_queue :
+    fst (flg_set_step 0 (mk_flgcb 1 false true false 7 [mk_flg_who 9 1 0 1]))
+    = mk_flgcb 1 false true false 7 nil /\
+    snd (flg_set_step 0 (mk_flgcb 1 false true false 7 [mk_flg_who 9 1 0 1]))
+    = [mk_flg_release (mk_flg_who 9 1 0 1) 7].
+Proof. repeat split; vm_compute; reflexivity. Qed.
+
+(* With a union, the release figure is the union: 3|4 = 7 is what the answered
+ * task receives, and the object keeps 7 because that waiter cleared nothing. *)
+Example fixture_the_union_is_what_the_released_task_reads :
+    fst (flg_set_step 4 (mk_flgcb 1 false true false 3 [mk_flg_who 9 1 0 1]))
+    = mk_flgcb 1 false true false 7 nil /\
+    snd (flg_set_step 4 (mk_flgcb 1 false true false 3 [mk_flg_who 9 1 0 1]))
+    = [mk_flg_release (mk_flg_who 9 1 0 1) 7].
+Proof. repeat split; vm_compute; reflexivity. Qed.
+
+(* The queue order TA_TPRI decides, :321 and wait.c:196-207: a lower number is
+ * the higher priority and takes the earlier place, and a tie defers to the
+ * incumbent -- so the insertion goes BETWEEN the 3 and the 7, not at the end. *)
+Example fixture_tpri_inserts_by_priority_not_by_arrival :
+    flg_insert_tpri (mk_flg_who 8 2 0 5)
+      [mk_flg_who 9 2 0 3; mk_flg_who 10 1 0 7]
+    = [mk_flg_who 9 2 0 3; mk_flg_who 8 2 0 5; mk_flg_who 10 1 0 7].
+Proof. vm_compute. reflexivity. Qed.
+
+(* The seven wai receipts, each isolated by making exactly one guard fail --
+ * :283, :284, :285, :287, the marker at :289, :296, :303.  The ORDER is the
+ * fixture: an oracle that tests the dispatch context after the marker reports
+ * E_NOEXS where the kernel reports E_CTX, and the difference is observable to
+ * any caller that passes a bad id to a disabled dispatcher.  st0 is §6's
+ * dispatch-disabled state, st_disp the enabled one. *)
+Example fixture_the_wai_cascade_in_the_kernels_order :
+    first_bad (flg_wai_guards st_disp true false false 0 nil 17 2 0) = Some E_ID /\
+    first_bad (flg_wai_guards st_disp true false false 0 nil 1 0 0) = Some E_PAR /\
+    first_bad (flg_wai_guards st_disp true false false 0 nil 1 2 79) = Some E_PAR /\
+    first_bad (flg_wai_guards st0 true false false 0 nil 1 2 0) = Some E_CTX /\
+    first_bad (flg_wai_guards st_disp false false false 0 nil 1 2 0) = Some E_NOEXS /\
+    first_bad (flg_wai_guards st_disp true false false 0 [mk_flg_who 9 2 0 1] 1 2 0)
+      = Some E_OBJ /\
+    first_bad (flg_wai_guards st_disp true false false ttw_flg nil 1 2 0) = Some E_DISWAI.
+Proof. repeat split; vm_compute; reflexivity. Qed.
+
+(* The other five services: cre has only the table's own exhaustion (:138) and
+ * no id test at all, because the id is its output (:154); set, clr, del and ref
+ * share the two-test cascade of §16.5. *)
+Example fixture_the_creation_and_the_object_services :
+    first_bad (flg_cre_guards false) = Some E_LIMIT /\
+    first_bad (flg_cre_guards true) = None /\
+    first_bad (flg_object_guards true 16) = None /\
+    first_bad (flg_object_guards true 17) = Some E_ID /\
+    first_bad (flg_object_guards false 1) = Some E_NOEXS.
+Proof. repeat split; vm_compute; reflexivity. Qed.
+
+(* The wait-disable pair, wait.h:128-132 through §12's mask vocabulary: the
+ * task's own bit (ttw_flg) refuses the wait, and the object's TA_NODISWAI bit
+ * overrides the refusal -- the second coordinate is the object's, which is why
+ * a driver can make a flag waitable from inside a masked region. *)
+Example fixture_the_wait_disable_needs_both_coordinates :
+    masked_for 0 WO_FLG = false /\
+    masked_for ttw_flg WO_FLG = true /\
+    diswai_of true false = true /\
+    diswai_of true true = false /\
+    diswai_of false false = false /\
+    snd (flg_wai ttw_flg TMO_FEVR (mk_flg_who 8 8 0 1) (mk_flgcb 1 false true false 7 nil))
+    = mk_flg_reply None E_DISWAI /\
+    snd (flg_wai ttw_flg TMO_FEVR (mk_flg_who 8 4 0 1) (mk_flgcb 1 false true true 7 nil))
+    = mk_flg_reply (Some 7) E_OK.
+Proof. repeat split; vm_compute; reflexivity. Qed.
+
+(* A poll and a block take the same test and differ only in the queue (:321-327
+ * versus :328): the figure the refused poll returns is the figure the blocked
+ * call will be given LATER, so both are None here -- §15's reply law is what
+ * this fixture is checking against. *)
+Example fixture_a_poll_and_a_block_differ_only_in_the_queue :
+    flg_wai 0 TMO_POLL (mk_flg_who 8 8 0 1) (mk_flgcb 1 false true false 7 nil)
+    = (mk_flgcb 1 false true false 7 nil, mk_flg_reply None E_TMOUT) /\
+    fc_wait (fst (flg_wai 0 TMO_REL (mk_flg_who 8 8 0 1) (mk_flgcb 1 false true false 7 nil)))
+    = [mk_flg_who 8 8 0 1] /\
+    snd (flg_wai 0 TMO_REL (mk_flg_who 8 8 0 1) (mk_flgcb 1 false true false 7 nil))
+    = mk_flg_reply None E_TMOUT.
+Proof. repeat split; vm_compute; reflexivity. Qed.
+
+(* clr_flg:263 as the keep-mask, computed on the figure §16.2 uses for the spec
+ * divergence.  11 & 3 keeps 3; the specification text's reading (an AND with the
+ * inverted mask) would give 8.  An oracle that follows b-spec reproduces 8 and
+ * fails this fixture; an oracle that follows the code reproduces 3. *)
+Example fixture_the_clear_is_a_keep_mask :
+    fc_pat (flg_clr_step 3 (mk_flgcb 1 false false false 11 nil)) = 3 /\
+    pat_and 11 3 = 3 /\
+    pat_clr 11 3 = 8 /\
+    fc_wait (flg_clr_step 3 (mk_flgcb 1 false false false 11 [mk_flg_who 9 1 0 1]))
+    = [mk_flg_who 9 1 0 1].
+Proof. repeat split; vm_compute; reflexivity. Qed.
+
+(* ref_flg:352-354 with wait.c:139-146, and del_flg's broadcast (:178) -- the
+ * two read-only and destructive bookends of the family.  The reference reports
+ * the head, 9, and the stored pattern; the delete hands both waiters E_DLT and
+ * leaves the cell's pattern stale at 5. *)
+Example fixture_the_reference_and_the_deletion :
+    flg_ref (mk_flgcb 1 false true false 5 [mk_flg_who 9 2 0 3; mk_flg_who 10 1 0 2])
+    = mk_flg_stat 9 5 /\
+    flg_del_broadcast (mk_flgcb 3 false true false 5
+                         [mk_flg_who 9 2 0 1; mk_flg_who 10 1 0 2]) = [E_DLT; E_DLT] /\
+    flg_forget (mk_flgcb 3 false true false 5 [mk_flg_who 9 2 0 1])
+    = mk_flgcb 0 false true false 5 nil.
+Proof. repeat split; vm_compute; reflexivity. Qed.
+
+(* ── 16.10 What this family adds, and what it does not claim ───── *)
+
+(* TA_WMUL, and the reason this section is the third one rather than an
+ * appendix to §14.  Three attributes drive three separate decisions in this
+ * family: TA_TPRI chooses the insertion point (:321, and the reinsertion hook at
+ * :98-104), TA_WMUL decides whether a second waiter is a queueing event or an
+ * E_OBJ refusal (:296), TA_NODISWAI decides whether the task's own wait mask can
+ * refuse the call (:303).  The semaphore family has all three as WELL, but the
+ * flag's queue carries a PATTERN in each entry, and a pattern is consumable:
+ *
+ *   §14's walk conserves units -- count = what stays + what was taken -- and no
+ *   waiter's identity is altered by the release of another, so the semaphore's
+ *   releasee learns nothing about the order it was met in.
+ *   §16's walk consumes a figure.  The queue order is then observable twice
+ *   over: in WHO is answered (§16.7's pair of Examples) and in what each
+ *   answered task READS (§16.9's BITCLR trace, [7;6;4] from one union of 7).
+ *   A model that released flags in the order-independent style of §14 would
+ *   reproduce neither.
+ *
+ * Divergences this section records rather than repairs, in one place:
+ *   1. clr_flg (:263) ANDs the argument as a KEEP-mask; b-spec/os_spec/kernel/
+ *      taskcomm.html:341-368 describes it as an AND with the INVERTED mask.  The
+ *      model follows the code; fixture_the_clear_is_a_keep_mask computes both.
+ *   2. CHECK_PAR on wfmode (:285) complements over the whole UINT, the model's
+ *      wfmode_mask stops at bit 7, so 128 and above pass here and are refused by
+ *      the kernel.  Materialising 2^32 unary is what costs, and §16.1's in_word
+ *      keeps the width as a Prop instead.
+ *   3. E_RSATR is in no cascade of this file, as in §12: the cell records only
+ *      the three bits cre_flg accepts (:119-126), so an illegal attribute is not
+ *      a state the model can name.
+ *   4. Deleting a flag whose cell does not exist reports E_NOEXS.  §13's mailbox
+ *      deletion reports E_OBJ once somebody is waiting.  Both are faithful to
+ *      their own C; the families simply differ.
+ *   5. clr_flg has no release walk.  A task waiting on a bit another task clears
+ *      keeps waiting, and nothing in the model wakes it -- matching :250-268.
+ *   6. §6's global state has no flag column, so every law here is cell-local:
+ *      there is no bus_f, no flag-index lemma, and no cross-object statement.
+ *      §14 could state those for semaphores; this family cannot, and the
+ *      difference is in the model's tables, not in the kernel.
+ *   7. The pointer UINT *p_flgptn is modelled as an option field in the reply,
+ *      not as memory: Some p means the slot was written during this call, None
+ *      covers both a refusal and a block whose write has not happened yet.
+ *
+ * Not modelled at all, and claimed nowhere: TA_DSNAME and the exinf field
+ * (:141, :145), the debugger services _td_lst_flg (:400) and _td_ref_flg (:424),
+ * the priority-change hook flg_chg_pri (:98-104) that reinserts a queued waiter
+ * when its task's priority moves, the timer expiry that turns a blocked wait into
+ * E_TMOUT on its own, and relwai's multi-object release.  Each is a live part of
+ * the shipped kernel; none of them changes a receipt in §16.5-§16.8, and the
+ * absence is stated so that a reader does not infer coverage from silence.
+ *
+ * The executable partner is verify/models/tron_model.ml, which reimplements
+ * §16.1's bit tests, §16.5's cascades, §16.6's wait and §16.7's walk without
+ * reference to this file, and is checked against the fixtures above by the same
+ * harness that runs §12-§15. *)

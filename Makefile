@@ -378,6 +378,7 @@ FOMA_SRCS = $(FOMA_STARTUP)             \
             src/window/wnd.c            \
             src/window/app_menu.c       \
             src/window/event.c          \
+            src/chokanji/pmc.c          \
             $(IME_SRCS)                 \
             src/apps/gterm.c            \
             src/apps/t_editor.c         \
@@ -404,6 +405,7 @@ COMMON_NO_SDL_SRCS = \
     src/window/app_menu.c  \
     src/window/event.c     \
     src/window/dnd.c       \
+    src/chokanji/pmc.c     \
     src/vobject/vobj.c     \
     src/desktop/desktop.c  \
     src/desktop/workbench.c \
@@ -753,7 +755,7 @@ test-uefi: $(UEFI_TARGET)
 # ═══════════════════════════════════════════════════════════════════
 # NEC PC-98 Kernel Desktop (Honoring Awe Morris — zedBSD Pioneer)
 # ═══════════════════════════════════════════════════════════════════
-PC98_CFLAGS = -O2 -Wall -Wextra -std=c99 -mno-sse -mno-mmx -mno-sse2 -DBTRON_TARGET=5 -DBTRON_PC98_TARGET -Iinclude -Iinclude/drivers -Isrc/kernel
+PC98_CFLAGS = -O2 -Wall -Wextra -std=c99 -mno-sse -mno-mmx -mno-sse2 -DBTRON_TARGET=5 -DBTRON_PC98_TARGET -Iinclude -Iinclude/gl -Iinclude/drivers -Isrc/kernel
 
 %.pc98.o: %.c
 	$(X86_CC) $(PC98_CFLAGS) -c $< -o $@

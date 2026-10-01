@@ -9,6 +9,7 @@
 #   - media_smp_model.ml / media_smp_properties.v (CAS multicursor ring, AMP, seqlock, BTRON_MP)
 #   - media_rtp_model.ml / media_rtp_properties.v (NuStream pools, leaky queues, PTS, budgets, grid)
 #   - media_intercore_model.ml / media_intercore_properties.v (pub/sub/spawn/snd/rcv star, sector pool)
+#   - tron_model.ml / tron_properties.v (T-Kernel 2.0 API layer: wait engine, semaphore, event flag)
 #
 # Usage:
 #   ./verify_models.sh

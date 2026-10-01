@@ -1404,6 +1404,8 @@ let check_flag_fixtures () =
     (List.for_all (fun m -> wfmode_ok m) [ 0; 1; 16; 17; 32; 33; 48; 49 ]);
   expect "S16 fixture_an_unnamed_bit_in_range_is_refused"
     (List.for_all (fun m -> not (wfmode_ok m)) [ 2; 8; 64; 78; 79 ]);
+  expect "S16 a stray bit above the model's word passes although the C would refuse it (a_bit_above_the_range_is_not; 16.10 records the divergence)"
+    (wfmode_ok 128 && wfmode_ok 256 && not (wfmode_ok 2));
   expect_eq "S16 wfmode_mask is the complement of the three named bits (wfmode_mask_computes)"
     show_int wfmode_mask 78;
   expect "S16 fixture_orw_combined_with_clr_is_an_any_of_wait_that_wipes"

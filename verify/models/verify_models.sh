@@ -37,7 +37,7 @@ for arg in "$@"; do
   esac
 done
 
-OCAML_MODELS=("bfs_btree_model.ml" "bfs_allocator_model.ml" "bfs_model.ml" "media_model.ml"
+OCAML_MODELS=("bfs_btree_model.ml" "bfs_allocator_model.ml" "bfs_model.ml" "media_model.ml" "tron_model.ml"
                "hypermedia_dnd_model.ml" "media_smp_model.ml" "media_rtp_model.ml" "media_intercore_model.ml")
 COQ_PROPERTIES=("bfs_btree_properties.v" "bfs_allocator_properties.v" "bfs_properties.v" "tron_properties.v"
                   "hypermedia_dnd_properties.v" "media_smp_properties.v" "media_rtp_properties.v" "media_intercore_properties.v")

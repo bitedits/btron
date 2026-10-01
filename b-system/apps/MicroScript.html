@@ -1,0 +1,568 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>MicroScript – マイクロスクリプト | B-System Specification</title>
+  <meta name="description" content="マイクロスクリプト（MicroScript）は、超漢字（Cho-Kanji／パーソナルメディア）由来の手続型・ブロック構造・マルチスレッド・アクター（役者）指向ハイパーメディア言語を再現する、B-System組込みのステージ解釈系（インタプリタ）。プログラミング言語Tの上位互換として英日コマンド対応表・型体系・コマンド群・組み込み関数・システム変数を公式マニュアル準拠で定義し、固定メモリ・有界ループのC99ランタイムで実行します。">
+  <link rel="stylesheet" href="../../index.css">
+  <link rel="stylesheet" href="../settings/settings.css">
+  <link rel="stylesheet" href="./apps.css">
+</head>
+<body>
+  <nav class="setting-nav">
+    <a href="../../b-system.html">B-System</a>
+    <span class="sep">/</span>
+    <a href="../../b-system.html#apps-section">Applications</a>
+    <span class="sep">/</span>
+    <span class="current">MicroScript</span>
+  </nav>
+
+  <div class="setting-hero">
+    <div class="setting-hero-icon"><img src="https://openmoji.org/data/color/svg/1F4DC.svg" alt="📜" width="64" height="64"></div>
+    <h1>マイクロスクリプト (MicroScript)</h1>
+    <div class="setting-hero-badge">超漢字言語系譜 · 手続型ブロック構造 · マルチスレッド · 役者(アクター)指向 · Power of 10</div>
+    <div class="subtitle">カード（ステージ）とフィギュア（図形）で構成される非線形ハイパーメディア文書を解釈・描画・実行する組込みスクリプトエンジン<br><span style="font-size:0.9em; opacity:0.85;">"C-family, block-structured, multithreaded, actor-oriented hypermedia interpreter replaying Cho-Kanji stages on a fixed-footprint C99 runtime."</span></div>
+  </div>
+
+  <div class="setting-content">
+    <a href="../../b-system.html#apps-section" class="back-link">← アプリケーション一覧 (Applications Index)</a>
+
+    <div class="tagline-card">
+      <strong>マイクロスクリプト（MicroScript）</strong> — 超漢字（Cho-Kanji／パーソナルメディア）の手続型・ブロック構造・マルチスレッド・アクター（役者）指向ハイパーメディア言語を再現する、B-System組込みのステージ解釈系。<br>
+      <span style="display:block; margin-top:0.45rem; font-size:0.88rem; color:#6b4f7e;">
+        "A deterministic, allocation-free runtime for a C-family, block-structured, multithreaded hypermedia language with actor (SEGMENT), scene (SCENE) and procedure (SCRIPT) constructs."
+      </span>
+    </div>
+
+    <div class="section">
+      <h2>概要 (Overview)</h2>
+      <p>
+        マイクロスクリプト（MicroScript）は、1990年代の超漢字／MicroEngineで導入されたハイパーメディア記述言語です。<b>C言語族に由来する手続型・ブロック構造・大文字小文字非区別の言語</b>であり、明示的なブロック終端子（<code>ENDxxx</code>／和名「〜おわり」）で構文を閉じます。花括弧は用いません。処理モデルは<b>アクター指向のマルチスレッド</b>で、<code>SEGMENT</code>（役者）が画面上のアクティブ要素、<code>SCENE</code>（シーン）が表示場面、<code>SCRIPT</code>（手続き）が呼び出し可能な処理単位に対応します。<br>
+        MicroScript の日本語ローカライズ後継が<b>プログラミング言語T</b>であり、公式のコマンド名対応表は英語キーワード（MicroScript 由来）と和名キーワード（T）を 1:1 で対応づけます。<b>両言語で英日どちらのキーワードも使用可能</b>です。本ページはパーソナルメディア（PMC）公式マニュアル（chokanji.com／超漢字V）に準拠した言語リファレンスを示します。<br>
+        本実装（<code>src/chokanji/microscript.c</code>）は NASA JPL「Power of 10」指針に厳密準拠し、初期化後の動的メモリ確保を一切行わず、字句解析・評価・描画の全ループに上限を課した確定論的エンジンとして提供されます。
+        <span style="font-size:0.9em; opacity:0.85;">"A C-family, case-insensitive, brace-free language with explicit ENDxxx block terminators and an actor-based (SEGMENT/役者) multithreaded model. Programming Language T is its Japanese-localized successor; both accept English and Japanese keywords."</span>
+      </p>
+    </div>
+
+    <div class="section">
+      <h2>出典と実装状況 (Sources &amp; Implementation Status)</h2>
+      <p>
+        本リファレンスの型・コマンド・関数・システム変数・状態・予約語は、パーソナルメディア（PMC）／TRON Forum 系の公式マニュアルに基づきます。<br>
+        <span style="font-size:0.9em; opacity:0.85;">"This reference is grounded in the official PMC / Chokanji manual."</span>
+      </p>
+      <table class="market-table">
+        <thead>
+          <tr><th>区分</th><th>出典 (Authoritative Source)</th><th>内容範囲</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>コマンド対応表</td><td><code>超漢字V manual §9.7.8</code>（コマンド名対応表）</td><td>80命令・34組み込み関数・システム変数・状態・予約語・型の英日対応</td></tr>
+          <tr><td>言語仕様</td><td><code>超漢字V manual §9.7.3</code>（仕様）</td><td>文法・型・演算子・宣言・コメント・代入・スコープ</td></tr>
+          <tr><td>ライブラリ関数</td><td><code>超漢字V manual §9.7.5</code>（ライブラリ関数）</td><td><code>表示</code>／<code>数値読込</code>／<code>文字列読み込み</code> の書式と上限</td></tr>
+          <tr><td>その他の命令</td><td><code>超漢字V manual §9.7.4</code></td><td>入出力・並列・役者操作の細部</td></tr>
+        </tbody>
+      </table>
+      <p style="margin-top:0.6rem; font-size:0.9em; color:#8a2540;">
+        <b>実装上の注意：</b> 現行のクリーンルーム解釈系（<code>src/chokanji/microscript.c</code>）は、カード遷移・図形クリック・最小限の変数操作のみを扱う<b>試作サブセット</b>であり、上記の公式コマンド群をまだ解釈しません。公式構文を完全にサポートするエンジン実装がタスク #20 の目標です。本ページはまず<b>言語の正式な仕様の全体像</b>を定義し、実装を進ませる参照仕様として提供します。
+      </p>
+    </div>
+
+    <div class="section">
+      <h2>1. クリーンルームエンジンの実行時データモデル (Clean-Room Engine Data Model)</h2>
+      <p>
+        現行エンジン <code>src/chokanji/microscript.c</code> の全状態は単一の静的インスタンス <code>MsEngine g_ms</code> に保持されます。これは公式の「役者(SCENE/SEGMENT)」概念をカード／フィギュアへ簡略化した試作モデルで、下記セクション3以降が本来の言語モデルです。<br>
+        <span style="font-size:0.9em; opacity:0.85;">"A minimal prototype mapping the actor/scene concept to cards and figures; the authoritative language model is defined from section 3 onward."</span>
+      </p>
+      <table class="market-table">
+        <thead>
+          <tr><th>構造体・型名</th><th>役割とメンバ構成 (Role &amp; Members)</th><th>技術仕様・C99定義 (C99 Definition)</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><b>MsEngine</b></td><td>解釈系全体のルート状態。カード配列・現在カード・変数テーブル・コンソールログ・実行フラグを保持。</td><td><code>cards[8] · current_card · vars[32] · console_log[128]</code></td></tr>
+          <tr><td><b>MsCard</b></td><td>1枚のステージ。<code>title[32]</code>、フィギュア配列 <code>figures[16]</code>、<code>fig_count</code>、カード・スクリプト <code>script[512]</code>。</td><td><code>MsFigure figures[MS_MAX_FIGS]</code></td></tr>
+          <tr><td><b>MsFigure</b></td><td>図形要素。<code>name[24]</code>、種別、<code>RECT bounds</code>、<code>text[64]</code>、塗色・枠色、遷移先 <code>target_card</code>、押下状態。</td><td><code>FigType type · RECT bounds · COLOR fill/border</code></td></tr>
+          <tr><td><b>MsVar</b></td><td>名前付き状態変数。<code>name[24]</code> と整数値 <code>int_val</code>・文字列値 <code>str_val[64]</code> の連合。</td><td><code>int int_val · char str_val[MS_MAX_STR_LEN]</code></td></tr>
+          <tr><td><b>FigType</b> (enum)</td><td>フィギュアの描画・挙動種別。<code>FIG_BUTTON</code>（遷移発火）／<code>FIG_LABEL</code>（文字）／<code>FIG_RECT</code>（塗箱）／<code>FIG_LINE</code>。</td><td><code>FIG_BUTTON, FIG_LABEL, FIG_RECT, FIG_LINE</code></td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="section">
+      <h2>2. 型・演算子・文法 (Value Types, Operators &amp; Grammar)</h2>
+      <p>
+        MicroScript／プログラミング言語T の基本表記規則。型は1文字の種別コードで宣言し、代入は矢印 <code>←</code> または <code>=</code>、コメントは行頭 <code>#</code>、ブロックは <code>ENDxxx</code> で閉じます（花括弧なし）。<br>
+        <span style="font-size:0.9em; opacity:0.85;">"Single-letter type codes, arrow assignment, # line comments, explicit ENDxxx terminators, no braces, no pointers."</span>
+      </p>
+
+      <p style="margin-top:0.6rem;"><b>2.1 型種別コード (Type Codes — 公式対応表)</b></p>
+      <table class="market-table">
+        <thead><tr><th>コード</th><th>和名</th><th>意味 (Meaning)</th></tr></thead>
+        <tbody>
+          <tr><td><code>G</code></td><td>汎用</td><td>General — 型を固定しない汎用値。</td></tr>
+          <tr><td><code>S</code></td><td>シンボル</td><td>Symbol / 文字列（16-bit TRON文字コード配列）。</td></tr>
+          <tr><td><code>F</code></td><td>浮動小数点数</td><td>Float — 64-bit 実数。</td></tr>
+          <tr><td><code>I</code></td><td>整数</td><td>Integer — 32-bit 整数。</td></tr>
+          <tr><td><code>C</code></td><td>文字</td><td>Character。</td></tr>
+          <tr><td><code>B</code></td><td>バイト</td><td>Byte。</td></tr>
+        </tbody>
+      </table>
+
+      <p style="margin-top:0.8rem;"><b>2.2 演算子と優先順位 (Operators &amp; Precedence — 上位から下位)</b></p>
+      <table class="market-table">
+        <thead><tr><th>分類</th><th>記号 (Symbols)</th><th>備考</th></tr></thead>
+        <tbody>
+          <tr><td>関係</td><td><code>&gt;</code> <code>&lt;</code> <code>&gt;= ≧</code> <code>&lt;= ≦</code></td><td>全角同義記号併用可。</td></tr>
+          <tr><td>等価</td><td><code>== = != ≠</code></td><td>単独 <code>=</code> は等価比較としても働く。</td></tr>
+          <tr><td>算術</td><td><code>+ - * × / ÷ %</code></td><td>全角 <code>× ÷</code> 受理。</td></tr>
+          <tr><td>論理</td><td><code>&amp;&amp; ||</code></td><td>短絡評価。</td></tr>
+          <tr><td>ビット</td><td><code>&amp; | ^ &gt;&gt; &lt;&lt;</code></td><td>シフト・ビット演算。</td></tr>
+          <tr><td>単項</td><td><code>- ~ ～ !</code></td><td>符号・否定（全角 <code>～</code> 受理）。</td></tr>
+        </tbody>
+      </table>
+      <p style="font-size:0.86rem; opacity:0.9; margin-top:0.3rem;">
+        式への代入の入れ子は不可。<code>a ← (b ← c)</code> のような文脈入れ子はコンパイル時に失敗します。関数呼び出しは値を返す設定なら演算項として式に埋め込めます。
+      </p>
+
+      <p style="margin-top:0.8rem;"><b>2.3 文法・表記規則 (Grammar &amp; Notation)</b></p>
+      <table class="market-table">
+        <thead><tr><th>要素</th><th>表記</th><th>説明 (Semantics)</th></tr></thead>
+        <tbody>
+          <tr><td>大文字小文字・全半角</td><td>—</td><td>識別子は大小・英数半角全角の差を区別しない。</td></tr>
+          <tr><td>文の区切り</td><td><code>;</code></td><td>1行に複数の命令を並べられる。</td></tr>
+          <tr><td>行継続</td><td><code>\</code></td><td>行末バックスラッシュで次の行へ継続。</td></tr>
+          <tr><td>コメント</td><td><code># …</code></td><td>行頭 <code>#</code>（命令 <code>COMMENT</code>）を行末まで無視。</td></tr>
+          <tr><td>代入</td><td><code>←</code> / <code>=</code></td><td>値バインド。評価式中への埋め込みは不可。</td></tr>
+          <tr><td>グローバル宣言</td><td><code>VARIABLE 変数名:型</code></td><td>和名 <code>変数</code>。グローバル初期化を兼ねる。</td></tr>
+          <tr><td>ローカル宣言</td><td><code>LOCAL 変数名:型</code></td><td>和名 <code>局所変数</code>。明示的ローカルスコープ（ブロック階層スコープではない）。</td></tr>
+          <tr><td>配列宣言</td><td><code>VARIABLE 変数名:型[容量]</code></td><td>添字は0起点。部分置換に <code>変数名[start:end]="…"</code>。多次元は発展構文。</td></tr>
+          <tr><td>ポインタ</td><td>—</td><td>ポインタ意味論は<b>非対応</b>。</td></tr>
+          <tr><td>手続き定義</td><td><code>SCRIPT 名前(引数…) … END</code></td><td>和名 <code>プログラム</code>／終端 <code>おわり</code>。返値は <code>EXIT 式</code>（和名 <code>返り値</code>）。</td></tr>
+          <tr><td>条件分岐</td><td><code>IF … ELSEIF … ELSE … ENDIF</code></td><td>和名 <code>もしも … そうでなくもし …そうでなければ …もしもおわり</code>。</td></tr>
+          <tr><td>ループ</td><td><code>REPEAT … ENDREPEAT</code> / <code>WHILE … ENDWHILE</code></td><td>終端は <code>BREAK</code>（中断）／<code>CONTINUE</code>（続行）。</td></tr>
+          <tr><td>引数区切り</td><td><code>,</code></td><td>カンマは語境界が曖昧でなければ省略可。</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="section">
+      <h2>3. 命令リファレンス (Command Reference — 公式 80命令)</h2>
+      <p>
+        公式コマンド名対応表に基づく命令の全体像。MicroScript 英語キーワードとプログラミング言語T和名を 1:1 で示します。両言語でどちらのキーワードも有効です。分類は機能圏での整理用。<br>
+        <span style="font-size:0.9em; opacity:0.85;">"The complete 80-command table: MicroScript (EN) keyword mapped to Programming Language T (JP) name; both forms are valid keywords."</span>
+      </p>
+
+      <p style="margin-top:0.6rem;"><b>3.1 制御・分岐 (Control &amp; Branching)</b></p>
+      <table class="market-table">
+        <thead><tr><th>MicroScript (EN)</th><th>プログラミング言語T (JP)</th><th>意味論</th></tr></thead>
+        <tbody>
+          <tr><td><code>IF</code></td><td>もしも</td><td>条件分岐の開始。</td></tr>
+          <tr><td><code>ELSEIF</code></td><td>そうでなくもし</td><td>追加条件。</td></tr>
+          <tr><td><code>ELSE</code></td><td>そうでなければ</td><td>else 節。</td></tr>
+          <tr><td><code>ENDIF</code></td><td>もしもおわり</td><td>分岐終端。</td></tr>
+          <tr><td><code>SWITCH</code></td><td>切替</td><td>多重選択の開始。</td></tr>
+          <tr><td><code>CASE</code></td><td>等しければ</td><td>一致値節。</td></tr>
+          <tr><td><code>DEFAULT</code></td><td>デフォルト</td><td>既定節。</td></tr>
+          <tr><td><code>ENDCASE</code></td><td>切替おわり</td><td>選択終端。</td></tr>
+          <tr><td><code>REPEAT</code></td><td>繰り返し実行</td><td>無条件ループ。</td></tr>
+          <tr><td><code>ENDREPEAT</code></td><td>繰り返しおわり</td><td>ループ終端。</td></tr>
+          <tr><td><code>WHILE</code></td><td>条件付繰り返し</td><td>前判定ループ。</td></tr>
+          <tr><td><code>ENDWHILE</code></td><td>条件付繰り返しおわり</td><td>ループ終端。</td></tr>
+          <tr><td><code>BREAK</code></td><td>中断</td><td>ループ脱出。</td></tr>
+          <tr><td><code>CONTINUE</code></td><td>続行</td><td>次反復へ。</td></tr>
+          <tr><td><code>EXIT</code></td><td>返り値</td><td>手続きからの返値。</td></tr>
+          <tr><td><code>SET</code></td><td>代入</td><td>変数への値バインド。</td></tr>
+        </tbody>
+      </table>
+
+      <p style="margin-top:0.8rem;"><b>3.2 手続き・構造 (Procedures &amp; Structure)</b></p>
+      <table class="market-table">
+        <thead><tr><th>MicroScript (EN)</th><th>T (JP)</th><th>意味論</th></tr></thead>
+        <tbody>
+          <tr><td><code>SCRIPT</code></td><td>手続き定義</td><td>手続き／関数の定義。</td></tr>
+          <tr><td><code>FUNC</code></td><td>サブルーチン</td><td>サブルーチン。</td></tr>
+          <tr><td><code>ACTION</code></td><td>プログラム</td><td>実行可能プログラブロック。</td></tr>
+          <tr><td><code>CALL</code></td><td>呼出</td><td>手続き呼び出し。</td></tr>
+          <tr><td><code>DEFINE</code></td><td>マクロ</td><td>マクロ定義。</td></tr>
+          <tr><td><code>PROLOGUE</code></td><td>初期プログラム</td><td>起動時処理。</td></tr>
+          <tr><td><code>EPILOGUE</code></td><td>終了プログラム</td><td>終了時処理。</td></tr>
+          <tr><td><code>END</code></td><td>おわり</td><td>汎用ブロック終端。</td></tr>
+          <tr><td><code>FINISH</code></td><td>プログラム終了</td><td>プログラム終了。</td></tr>
+          <tr><td><code>VARIABLE</code></td><td>変数</td><td>グローバル宣言。</td></tr>
+          <tr><td><code>LOCAL</code></td><td>局所変数</td><td>ローカル宣言。</td></tr>
+          <tr><td><code>COMMENT</code></td><td>注釈</td><td>注釈。</td></tr>
+          <tr><td><code>DEBUG</code></td><td>デバッグ</td><td>デバッグ制御。</td></tr>
+          <tr><td><code>VERSION</code></td><td>バージョン</td><td>バージョン照会。</td></tr>
+        </tbody>
+      </table>
+
+      <p style="margin-top:0.8rem;"><b>3.3 役者・表示 (Actors / SEGMENT &amp; Display)</b></p>
+      <table class="market-table">
+        <thead><tr><th>MicroScript (EN)</th><th>T (JP)</th><th>意味論</th></tr></thead>
+        <tbody>
+          <tr><td><code>SEGMENT</code></td><td>役者定義</td><td>アクター（役者）の定義。</td></tr>
+          <tr><td><code>COPYSEG</code></td><td>役者複写</td><td>役者の複製生成。</td></tr>
+          <tr><td><code>SETSEG</code></td><td>役者代入</td><td>役者への属性設定。</td></tr>
+          <tr><td><code>MOVE</code></td><td>役者移動</td><td>役者の移動。</td></tr>
+          <tr><td><code>APPEAR</code></td><td>画像表示</td><td>画像／役者の表示。</td></tr>
+          <tr><td><code>DISAPPEAR</code></td><td>役者消去</td><td>役者の消去。</td></tr>
+          <tr><td><code>SCENE</code></td><td>シーン表示</td><td>場面（シーン）の表示。</td></tr>
+          <tr><td><code>TEXT</code></td><td>文字列</td><td>文字列表示。</td></tr>
+          <tr><td><code>UPDATE</code></td><td>表示画面更新</td><td>画面の更新。</td></tr>
+          <tr><td><code>FULLWIND</code></td><td>フルスクリーン</td><td>フルスクリーン化。</td></tr>
+        </tbody>
+      </table>
+
+      <p style="margin-top:0.8rem;"><b>3.4 並列・メッセージング (Concurrency &amp; Messaging)</b></p>
+      <table class="market-table">
+        <thead><tr><th>MicroScript (EN)</th><th>T (JP)</th><th>意味論</th></tr></thead>
+        <tbody>
+          <tr><td><code>PROCESS</code></td><td>プロセス起動</td><td>プロセス起動。</td></tr>
+          <tr><td><code>EXECUTE</code></td><td>並列実行</td><td>並列実行。</td></tr>
+          <tr><td><code>MACTION</code></td><td>多重起動プログラム</td><td>多重起動プログラブロック。</td></tr>
+          <tr><td><code>MESG</code></td><td>メッセージ</td><td>メッセージ定義／生成。</td></tr>
+          <tr><td><code>MSEND</code></td><td>メッセージ送信</td><td>メッセージ送信。</td></tr>
+          <tr><td><code>MRECV</code></td><td>メッセージ受取</td><td>メッセージ受取。</td></tr>
+          <tr><td><code>EVENT</code></td><td>イベント</td><td>イベント定義／待受。</td></tr>
+          <tr><td><code>PWAIT</code></td><td>プロセス終了待ち</td><td>プロセス終了待ち。</td></tr>
+          <tr><td><code>SUSPEND</code></td><td>手続き終了待ち</td><td>手続き終了待ち。</td></tr>
+          <tr><td><code>TERMINATE</code></td><td>手続き強制終了</td><td>強制終了。</td></tr>
+          <tr><td><code>SLEEP</code></td><td>休止</td><td>スレッド休止。</td></tr>
+          <tr><td><code>WAIT</code></td><td>条件待ち</td><td>条件待ち。</td></tr>
+          <tr><td><code>BREAK</code></td><td>中断</td><td>（再掲）処理中断。</td></tr>
+        </tbody>
+      </table>
+
+      <p style="margin-top:0.8rem;"><b>3.5 ウィンドウ・入出力 (Window &amp; I/O)</b></p>
+      <table class="market-table">
+        <thead><tr><th>MicroScript (EN)</th><th>T (JP)</th><th>意味論</th></tr></thead>
+        <tbody>
+          <tr><td><code>WMOVE</code></td><td>ウィンドウ移動</td><td>ウィンドウ移動。</td></tr>
+          <tr><td><code>WSIZE</code></td><td>ウィンドウサイズ</td><td>ウィンドウサイズ変更。</td></tr>
+          <tr><td><code>WSAVE</code></td><td>ウィンドウ位置保存</td><td>位置保存。</td></tr>
+          <tr><td><code>BEEP</code></td><td>音発生</td><td>音発生。</td></tr>
+          <tr><td><code>LOG</code></td><td>コンソール書込み</td><td>コンソール書込み。</td></tr>
+          <tr><td><code>INPUT</code></td><td>数値入力</td><td>数値入力。</td></tr>
+          <tr><td><code>KINPUT</code></td><td>日本語入力</td><td>日本語入力。</td></tr>
+          <tr><td><code>PRPUT</code></td><td>プリンタ制御</td><td>プリンタ制御。</td></tr>
+          <tr><td><code>FOPEN</code></td><td>ファイル開く</td><td>ファイル_open。</td></tr>
+          <tr><td><code>FCLOSE</code></td><td>ファイル閉じる</td><td>ファイル_close。</td></tr>
+          <tr><td><code>FREAD</code></td><td>ファイル読込</td><td>ファイル読込。</td></tr>
+          <tr><td><code>FWRITE</code></td><td>ファイル書込み</td><td>ファイル書込み。</td></tr>
+          <tr><td><code>DOPEN</code></td><td>デバイス開く</td><td>デバイス_open。</td></tr>
+          <tr><td><code>DCLOSE</code></td><td>デバイス閉じる</td><td>デバイス_close。</td></tr>
+          <tr><td><code>DREAD</code></td><td>デバイス読込</td><td>デバイス読込。</td></tr>
+          <tr><td><code>DWRITE</code></td><td>デバイス書込み</td><td>デバイス書込み。</td></tr>
+        </tbody>
+      </table>
+
+      <p style="margin-top:0.8rem;"><b>3.6 仮身・シリアル (Vobj &amp; RS-Serial)</b></p>
+      <table class="market-table">
+        <thead><tr><th>MicroScript (EN)</th><th>T (JP)</th><th>意味論</th></tr></thead>
+        <tbody>
+          <tr><td><code>VOPEN</code></td><td>仮身開く</td><td>仮身（VObject）開く。</td></tr>
+          <tr><td><code>VCLOSE</code></td><td>仮身閉じる</td><td>仮身閉じる。</td></tr>
+          <tr><td><code>VWAIT</code></td><td>仮身終了待ち</td><td>仮身終了待ち。</td></tr>
+          <tr><td><code>RSINIT</code></td><td>RSポート初期化</td><td>RSポート初期化。</td></tr>
+          <tr><td><code>RSCNTL</code></td><td>RSポート制御</td><td>RSポート制御。</td></tr>
+          <tr><td><code>RSPUT</code></td><td>RSポート送信</td><td>RS送信。</td></tr>
+          <tr><td><code>RSPUTC</code></td><td>RSポート送信C</td><td>RS送信（文字）。</td></tr>
+          <tr><td><code>RSPUTN</code></td><td>RSポート送信N</td><td>RS送信（数値）。</td></tr>
+          <tr><td><code>RSGET</code></td><td>RSポート受取</td><td>RS受取。</td></tr>
+          <tr><td><code>RSGETC</code></td><td>RSポート受取C</td><td>RS受取（文字）。</td></tr>
+          <tr><td><code>RSGETN</code></td><td>RSポート受取N</td><td>RS受取（数値）。</td></tr>
+          <tr><td><code>RSWAIT</code></td><td>RSポート待ち</td><td>RSポート待ち。</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="section">
+      <h2>4. 組み込み関数 (Built-in Functions — 公式 34関数)</h2>
+      <p>
+        数値・配列・文字列・時刻・グローバル名の組込み演算。<br>
+        <span style="font-size:0.9em; opacity:0.85;">"Arithmetic, array, string, time and global-name built-ins from the official table."</span>
+      </p>
+      <table class="market-table">
+        <thead><tr><th>関数 (EN)</th><th>T (JP)</th><th>分類</th><th>用途</th></tr></thead>
+        <tbody>
+          <tr><td><code>fabs</code></td><td>絶対値</td><td>算術</td><td>絶対値。</td></tr>
+          <tr><td><code>sqrt</code></td><td>平方根</td><td>算術</td><td>平方根。</td></tr>
+          <tr><td><code>pow</code></td><td>べき乗</td><td>算術</td><td>べき乗。</td></tr>
+          <tr><td><code>exp</code></td><td>exp</td><td>算術</td><td>自然指数。</td></tr>
+          <tr><td><code>log</code></td><td>自然対数</td><td>算術</td><td>自然対数。</td></tr>
+          <tr><td><code>log10</code></td><td>常用対数</td><td>算術</td><td>常用対数。</td></tr>
+          <tr><td><code>sin</code></td><td>正弦</td><td>三角</td><td>正弦。</td></tr>
+          <tr><td><code>cos</code></td><td>余弦</td><td>三角</td><td>余弦。</td></tr>
+          <tr><td><code>tan</code></td><td>正接</td><td>三角</td><td>正接。</td></tr>
+          <tr><td><code>asin</code></td><td>逆正弦</td><td>三角</td><td>逆正弦。</td></tr>
+          <tr><td><code>acos</code></td><td>逆余弦</td><td>三角</td><td>逆余弦。</td></tr>
+          <tr><td><code>atan</code></td><td>逆正接</td><td>三角</td><td>逆正接。</td></tr>
+          <tr><td><code>ceil</code></td><td>切上げ</td><td>丸め</td><td>切り上げ。</td></tr>
+          <tr><td><code>floor</code></td><td>切捨て</td><td>丸め</td><td>切り下げ。</td></tr>
+          <tr><td><code>round</code></td><td>四捨五入</td><td>丸め</td><td>丸め。</td></tr>
+          <tr><td><code>max</code></td><td>最大値</td><td>数値</td><td>最大値。</td></tr>
+          <tr><td><code>min</code></td><td>最小値</td><td>数値</td><td>最小値。</td></tr>
+          <tr><td><code>number</code></td><td>数値判定</td><td>変換</td><td>数値可否判定。</td></tr>
+          <tr><td><code>strnum</code></td><td>数値変換</td><td>変換</td><td>文字列→数値。</td></tr>
+          <tr><td><code>slen</code></td><td>配列長さ</td><td>配列/文字列</td><td>長さ。</td></tr>
+          <tr><td><code>acmp</code></td><td>配列比較</td><td>配列</td><td>配列比較。</td></tr>
+          <tr><td><code>scmp</code></td><td>配列比較</td><td>配列</td><td>文字列比較。</td></tr>
+          <tr><td><code>acopy</code></td><td>配列複写</td><td>配列</td><td>配列複写。</td></tr>
+          <tr><td><code>asrch</code></td><td>配列検索</td><td>配列</td><td>配列検索。</td></tr>
+          <tr><td><code>valid</code></td><td>式不正判定</td><td>判定</td><td>式の妥当性判定。</td></tr>
+          <tr><td><code>sconv</code></td><td>TRONコード変換</td><td>変換</td><td>TRONコード変換。</td></tr>
+          <tr><td><code>srconv</code></td><td>TRONコード逆変換</td><td>変換</td><td>逆変換。</td></tr>
+          <tr><td><code>datetm</code></td><td>システム時刻変換</td><td>時刻</td><td>日付→時刻値。</td></tr>
+          <tr><td><code>tmdate</code></td><td>システム時刻逆変換</td><td>時刻</td><td>時刻値→日付。</td></tr>
+          <tr><td><code>filelist</code></td><td>ファイルリスト</td><td>ファイル</td><td>ファイル一覧。</td></tr>
+          <tr><td><code>nweimgseg</code></td><td>画像役者生成</td><td>役者</td><td>画像役者を生成。</td></tr>
+          <tr><td><code>getgnm</code></td><td>グローバル名取得</td><td>共有</td><td>グローバル名取得。</td></tr>
+          <tr><td><code>setgnm</code></td><td>グローバル名設定</td><td>共有</td><td>グローバル名設定。</td></tr>
+          <tr><td><code>delgnm</code></td><td>グローバル名削除</td><td>共有</td><td>グローバル名削除。</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="section">
+      <h2>5. システム変数・状態・予約語 (System Variables, States &amp; Reserved Words)</h2>
+      <p>
+        実行系が自動的に维护する読み取り変数、役者属性の「状態名」、およびイベント／効果の「予約語」。<br>
+        <span style="font-size:0.9em; opacity:0.85;">"Runtime-managed system variables, per-actor state names, and event/effect reserved words."</span>
+      </p>
+
+      <p style="margin-top:0.6rem;"><b>5.1 システム変数 (System Variables)</b></p>
+      <table class="market-table">
+        <thead><tr><th>変数</th><th>T (JP)</th><th>意味</th></tr></thead>
+        <tbody>
+          <tr><td><code>ARG</code></td><td>引数</td><td>起動引数。</td></tr>
+          <tr><td><code>CNT</code></td><td>繰り返しカウンタ</td><td>ループカウンタ。</td></tr>
+          <tr><td><code>DATE</code></td><td>現在日付</td><td>現在日付。</td></tr>
+          <tr><td><code>TIME</code></td><td>現在時刻</td><td>現在時刻。</td></tr>
+          <tr><td><code>MSEC</code></td><td>ミリ秒</td><td>ミリ秒。</td></tr>
+          <tr><td><code>SYSTM</code></td><td>システム時刻</td><td>システム時刻値。</td></tr>
+          <tr><td><code>ERR</code></td><td>エラー状態</td><td>直近エラー。</td></tr>
+          <tr><td><code>GV</code></td><td>共有変数</td><td>グローバル共有変数。</td></tr>
+          <tr><td><code>SV</code></td><td>保存変数</td><td>保存変数。</td></tr>
+          <tr><td><code>RAND</code></td><td>乱数</td><td>乱数値。</td></tr>
+          <tr><td><code>VERS</code></td><td>バージョン</td><td>バージョン。</td></tr>
+          <tr><td><code>KEY</code></td><td>キーコード</td><td>直近キーコード。</td></tr>
+          <tr><td><code>KMODE</code></td><td>かな漢字変換モード</td><td>変換モード。</td></tr>
+          <tr><td><code>KSTAT</code></td><td>メタキー状態</td><td>メタキー状態。</td></tr>
+          <tr><td><code>METAKEY</code></td><td>—</td><td>メタキー。</td></tr>
+          <tr><td><code>MMASK</code></td><td>メッセージマスク</td><td>メッセージマスク。</td></tr>
+          <tr><td><code>PID</code></td><td>プロセスID</td><td>プロセスID。</td></tr>
+          <tr><td><code>PPID</code></td><td>親プロセスID</td><td>親プロセスID。</td></tr>
+          <tr><td><code>TID</code></td><td>手続き番号</td><td>手続き番号。</td></tr>
+          <tr><td><code>WID / PWID</code></td><td>—</td><td>ウィンドウID／親ウィンドウID。</td></tr>
+          <tr><td><code>SCRW / SCRH</code></td><td>画面幅 / 画面高さ</td><td>画面寸法。</td></tr>
+          <tr><td><code>WDX / WDY</code></td><td>ウィンドウX / Y座標</td><td>ウィンドウ位置。</td></tr>
+          <tr><td><code>WDW / WDH</code></td><td>ウィンドウ幅 / 高さ</td><td>ウィンドウ寸法。</td></tr>
+          <tr><td><code>WACT</code></td><td>ウィンドウ状態</td><td>ウィンドウ状態。</td></tr>
+          <tr><td><code>PDX / PDY</code></td><td>PDX / PDY座標</td><td>ペン入力座標。</td></tr>
+          <tr><td><code>PDB</code></td><td>PDボタン</td><td>ペン入力ボタン。</td></tr>
+          <tr><td><code>PDS</code></td><td>PD形状</td><td>ペン入力形状。</td></tr>
+          <tr><td><code>DSKINS</code></td><td>ディスク自動接続</td><td>ディスク自動接続。</td></tr>
+          <tr><td><code>RS / RSCNT</code></td><td>RSポートデータ / カウンタ</td><td>シリアル状態。</td></tr>
+          <tr><td><code>CPULOAD</code></td><td>—</td><td>CPU負荷。</td></tr>
+        </tbody>
+      </table>
+
+      <p style="margin-top:0.8rem;"><b>5.2 状態名（役者属性）(State Names — Actor Attributes)</b></p>
+      <table class="market-table">
+        <thead><tr><th>状態名</th><th>T (JP)</th><th>意味</th></tr></thead>
+        <tbody>
+          <tr><td><code>X / Y</code></td><td>X座標 / Y座標</td><td>役者の位置。</td></tr>
+          <tr><td><code>X0 / Y0</code></td><td>元X座標 / 元Y座標</td><td>移動開始位置。</td></tr>
+          <tr><td><code>W / H</code></td><td>幅 / 高さ</td><td>役者の寸法。</td></tr>
+          <tr><td><code>V</code></td><td>数値変換</td><td>数値表現。</td></tr>
+          <tr><td><code>S</code></td><td>表示状態</td><td>表示可否。</td></tr>
+          <tr><td><code>PID</code></td><td>プロセスID</td><td>所属プロセス。</td></tr>
+          <tr><td><code>TFCOL</code></td><td>文字色</td><td>文字 foreground 色。</td></tr>
+          <tr><td><code>TBCOL</code></td><td>文字背景色</td><td>文字背景色。</td></tr>
+          <tr><td><code>TFONT</code></td><td>文字フォント</td><td>フォント。</td></tr>
+          <tr><td><code>TSIZE</code></td><td>文字サイズ</td><td>サイズ。</td></tr>
+          <tr><td><code>TSTYL</code></td><td>文字修飾</td><td>スタイル。</td></tr>
+          <tr><td><code>TCGAP</code></td><td>文字間隔</td><td>文字間隔。</td></tr>
+          <tr><td><code>TLGAP</code></td><td>文字行間隔</td><td>行間隔。</td></tr>
+          <tr><td><code>TL</code></td><td>文字数</td><td>文字数。</td></tr>
+          <tr><td><code>TX</code></td><td>—</td><td>文字X座標。</td></tr>
+        </tbody>
+      </table>
+
+      <p style="margin-top:0.8rem;"><b>5.3 予約語（イベント／効果）(Reserved Words — Events &amp; Effects)</b></p>
+      <table class="market-table">
+        <thead><tr><th>分類</th><th>予約語 (EN)</th><th>T (JP)</th></tr></thead>
+        <tbody>
+          <tr><td>入力イベント</td><td><code>CLICK</code> <code>DCLICK</code> <code>KEY</code> <code>MENU</code> <code>PRESS</code> <code>QPRESS</code></td><td>クリック / ダブルクリック / キー / メニュー / プレス / クイックプレス</td></tr>
+          <tr><td>PDイベント</td><td><code>BUTC</code> <code>BUTD</code> <code>BUTU</code> <code>KEYC</code> <code>KEYD</code> <code>KEYU</code></td><td>PDクリック / PDプレス / PDリリース / キークリック / キープレス / キーリリース</td></tr>
+          <tr><td>画面効果</td><td><code>MOSAIC</code> <code>STRP_H</code> <code>STRP_V</code> <code>SCRL_U</code> <code>SCRL_D</code> <code>SCRL_L</code> <code>SCRL_R</code></td><td>モザイク / 水平分割 / 垂直分割 / 上・下・左・右スクロール</td></tr>
+          <tr><td>ワイプ効果</td><td><code>WIPE_U</code> <code>WIPE_D</code> <code>WIPE_L</code> <code>WIPE_R</code> <code>WIPE_H</code> <code>WIPE_V</code> <code>WIPE_C</code> <code>DUP</code></td><td>上・下・左・右・水平・垂直・中心ワイプ / 複製</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="section">
+      <h2>6. ライブラリ関数 (Display Library Functions)</h2>
+      <p>
+        表示・入力のライブラリ関数（公式仕様）。<br>
+        <span style="font-size:0.9em; opacity:0.85;">"Console display and input library routines per the official specification."</span>
+      </p>
+      <table class="market-table">
+        <thead><tr><th>関数</th><th>T (JP) / 書式</th><th>仕様</th></tr></thead>
+        <tbody>
+          <tr><td><code>表示</code></td><td><code>表示(fmt, 引数…)</code></td><td>書式文字列に <code>%d %x %f %c %s</code>、引数最大16個、溢れ分は自動折返し。</td></tr>
+          <tr><td><code>数値読込</code></td><td><code>数値読込()</code></td><td>端末入力欄へフォーカスし <code>&gt;</code> を前置、入力完了まで停止し数値を返す。</td></tr>
+          <tr><td><code>文字列読み込み</code></td><td><code>文字列読み込み()</code></td><td>入力完了まで停止、最大64文字を保持。複数欄は不可。</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="section">
+      <h2>7. 組込みC API (Embedded C API)</h2>
+      <p>
+        現行の試作エンジンがホストアプリ／描画層へ公開する関数群。<br>
+        <span style="font-size:0.9em; opacity:0.85;">"Functions the current prototype interpreter exposes to the window, renderer and event layer."</span>
+      </p>
+      <table class="market-table">
+        <thead><tr><th>関数シグネチャ</th><th>責務 (Responsibility)</th><th>分類</th></tr></thead>
+        <tbody>
+          <tr><td><code>void ms_app_init(void)</code></td><td>デフォルト・スタックをロードし、タイトル520×400のウィンドウを開く。既起動時は最前面化。</td><td>起動</td></tr>
+          <tr><td><code>void ms_eval_script(const char *script)</code></td><td>スクリプト文字列を文単位で解釈し、キーワードをディスパッチ。</td><td>解釈</td></tr>
+          <tr><td><code>void ms_go_card(int card_idx)</code></td><td>現在カードを切替、ログへ反映し <code>inval_wnd()</code> で再描画要求。</td><td>遷移</td></tr>
+          <tr><td><code>void ms_set_var(const char*, int, const char*)</code></td><td>既存変数を更新、無ければ新規登録（上限32）。整数・文字列を同時設定可。</td><td>状態</td></tr>
+          <tr><td><code>int ms_get_var(const char *name)</code></td><td>名前付き変数の整数値を返す。未定義は 0。</td><td>状態</td></tr>
+          <tr><td><code>void ms_paint(WND*, GDEV*)</code></td><td>背景→ステージ台紙→フィギュア→コンソールバーの順で描画。<code>FIG_BUTTON</code> は <code>pmc_draw_switch()</code>。</td><td>描画</td></tr>
+          <tr><td><code>void ms_handle_click(H x, H y)</code></td><td>クライアント相対座標をフィギュア矩形と照合、命中ボタンの <code>target_card</code> へ遷移。</td><td>入力</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="section">
+      <h2>8. 使用例 (Usage Example)</h2>
+      <p>
+        公式構文（プログラミング言語T 相当の英語キーワード）で記述した手続きと役者の例。<br>
+        <span style="font-size:0.9em; opacity:0.85;">"A representative procedure and actor written in the official grammar (English keywords, ENDxxx terminators)."</span>
+      </p>
+      <pre style="background:#faf7fc; border:1px solid rgba(255,93,162,0.3); border-radius:6px; padding:0.8rem 1rem; overflow-x:auto; font-family:ui-monospace, monospace; font-size:0.82rem; line-height:1.5; color:#3a2540;">
+<span style="color:#6b4f7e;"># グローバル変数と手続きの定義（公式構文）</span>
+VARIABLE count:I
+VARIABLE label:S
+
+SCRIPT show_count(n:I)
+    表示("count = %d", n)
+    IF n &gt; 0 THEN
+        SET count = n
+    ELSE
+        SET count = 0
+    ENDIF
+    EXIT count
+END
+
+<span style="color:#6b4f7e;"># 役者（アクター）定義と並列起動</span>
+SEGMENT actor1
+    MOVE 120, 80
+    APPEAR "stage1.img"
+END
+PROCESS actor1
+WAIT
+</pre>
+      <p style="margin-top:0.6rem; font-size:0.88rem; color:#8a2540;">
+        <b>実装注記：</b> 上記が本来の言語構文です。一方、現行のクリーンルーム試作エンジンが現在解釈するのは簡略化した <code>go card &lt;N&gt;</code>／<code>say &lt;msg&gt;</code>／<code>set &lt;var&gt; = &lt;n&gt;</code> の3語のみで、これらは公式キーワードではありません。公式コマンド群（セクション3〜6）の完全な字句解析・評価・ディスパッチを実装するのがタスク #20 です。
+      </p>
+    </div>
+
+    <div class="section">
+      <h2>9. 設計原則 (Design Principles — Power of 10)</h2>
+      <p>
+        本エンジンは NASA JPL「Power of 10」安全クリティカル規則を C99 アプリケーション層で適用しています。<br>
+        <span style="font-size:0.9em; opacity:0.85;">"Safety-critical coding rules applied to the application layer in strict C99."</span>
+      </p>
+      <table class="market-table">
+        <thead><tr><th>原則</th><th>適用方法 (Enforcement)</th></tr></thead>
+        <tbody>
+          <tr><td><b>固定メモリフットプリント</b></td><td>初期化後の動的確保ゼロ。全状態を静的配列 <code>g_ms</code> 内で保持。</td></tr>
+          <tr><td><b>有界ループ</b></td><td>字句・評価・描画の全走査に <code>MS_LOOP_BOUND</code> 等の上限を適用。</td></tr>
+          <tr><td><b>クライアント局所座標</b></td><td>描画・命中判定は <code>(0,0)</code>〜<code>(w,h)</code> のウィンドウ内空間に限定。</td></tr>
+          <tr><td><b>確定論的解釈</b></td><td>行指向の逐次評価と範囲ガードにより、入力に対する挙動が再現可能。</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="section">
+      <h2>関連コンポーネント (Related Components)</h2>
+      <div class="related-apps">
+        <a href="Workbench.html">🗄️ ワークベンチ</a>
+        <a href="Cabinet.html">📁 キャビネット</a>
+        <a href="Editor.html">✍️ 文書編集</a>
+        <a href="Browser.html">🌐 ブラウザ</a>
+      </div>
+    </div>
+  </div>
+
+  <footer class="app-footer">
+    <div class="app-footer-top">
+      <a href="../../b-system.html">← B-System</a>
+      <span class="site-name">Applications</span>
+    </div>
+    <div class="app-footer-grid">
+      <div class="app-footer-col">
+        <h4>System</h4>
+        <ul>
+            <li><a href="Workbench.html">Workbench</a></li>
+            <li><a href="Terminal.html">Terminal</a></li>
+            <li><a href="Commander.html">Commander</a></li>
+            <li><a href="Calculator.html">Calculator</a></li>
+            <li><a href="Clock.html">Clock</a></li>
+            <li><a href="Mail.html">Mail</a></li>
+            <li><a href="Preferences.html">Preferences</a></li>
+            <li><a href="Boot.html">Boot</a></li>
+            <li><a href="Volumes.html">Volumes</a></li>
+        </ul>
+      </div>
+      <div class="app-footer-col">
+        <h4>TAD</h4>
+        <ul>
+            <li><a href="Cabinet.html">Cabinet</a></li>
+            <li><a href="Editor.html">Editor</a></li>
+            <li><a href="Matrix.html">Matrix</a></li>
+            <li><a href="Clarity.html">Clarity</a></li>
+            <li><a href="Browser.html">Browser</a></li>
+            <li><a href="Notebook.html">Notebook</a></li>
+            <li><a href="Review.html">Review</a></li>
+            <li><a href="Chat.html">Chat</a></li>
+        </ul>
+      </div>
+      <div class="app-footer-col">
+        <h4>Hypermedia</h4>
+        <ul>
+            <li><a href="MicroScript.html" class="active">MicroScript</a></li>
+        </ul>
+      </div>
+      <div class="app-footer-col">
+        <h4>Media</h4>
+        <ul>
+            <li><a href="Cassette.html">Cassette</a></li>
+            <li><a href="Paint.html">Paint</a></li>
+            <li><a href="Orchestra.html">Orchestra</a></li>
+        </ul>
+      </div>
+      <div class="app-footer-col">
+        <h4>Settings</h4>
+        <ul>
+            <li><a href="../settings/Appearance.html">Appearance</a></li>
+            <li><a href="../settings/Desktop.html">Desktop</a></li>
+            <li><a href="../settings/Input.html">Input</a></li>
+            <li><a href="../settings/Language.html">Language</a></li>
+            <li><a href="../settings/Sound.html">Sound</a></li>
+            <li><a href="../settings/Network.html">Network</a></li>
+            <li><a href="../settings/Display.html">Display</a></li>
+            <li><a href="../settings/Media.html">Media</a></li>
+            <li><a href="../settings/System.html">System</a></li>
+            <li><a href="../settings/Security.html">Security</a></li>
+            <li><a href="../settings/Terminal.html">Terminal</a></li>
+        </ul>
+      </div>
+    </div>
+    <div class="app-footer-bottom">B-System &nbsp;·&nbsp; Synrc VE OS.1 &nbsp;·&nbsp; Technical Specification</div>
+  </footer>
+</body>
+</html>

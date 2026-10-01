@@ -179,10 +179,9 @@ Proof.
   intros target_id ws.
   unfold close_wnd.
   induction ws as [| w rest IH]; cbn; [reflexivity |].
-  destruct (Nat.eqb (w_id w) target_id) eqn:Heq.
-  - cbn. exact IH.
-  - cbn. rewrite Heq. cbn.
-    rewrite Heq. exact IH.
+  destruct (Nat.eqb (w_id w) target_id) eqn:Heq; cbn.
+  - exact IH.
+  - rewrite Heq. exact IH.
 Qed.
 
 Theorem count_focused_filter_le : forall f ws,
@@ -294,7 +293,7 @@ Proof.
   unfold eq_enqueue in Henq.
   destruct (Nat.ltb_spec (length q) EVENT_QUEUE_SIZE); [| discriminate].
   injection Henq as Heq. subst q'.
-  rewrite app_length. cbn. lia.
+  rewrite length_app. cbn. lia.
 Qed.
 
 Theorem event_queue_overflow_rejects : forall ev q,

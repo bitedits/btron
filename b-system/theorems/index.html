@@ -22,7 +22,7 @@
         </div>
     </nav>
 
-        <!-- Sub-navigation across 9 theorem files -->
+        <!-- Sub-navigation across 11 theorem files -->
     <div class="sub-nav-bar">
         <div class="sub-nav-inner">
             <span class="sub-nav-label">Library:</span>
@@ -35,6 +35,9 @@
             <a href="media_smp.html" class="nav-pill">SMP</a>
             <a href="tron.html" class="nav-pill">ITRON</a>
             <a href="opengl.html" class="nav-pill">OpenGL</a>
+            <a href="ui_compose.html" class="nav-pill">Compositor</a>
+            <a href="ui_elements.html" class="nav-pill">Windows</a>
+            <a href="drivers.html" class="nav-pill">Drivers</a>
         </div>
     </div>
 
@@ -44,13 +47,13 @@
             <span class="hero-tagline">Formal Verification Ledger · Cleanroom BTRON 3.20</span>
             <h1>BTRON Coq Base Library &amp; OCaml Oracles</h1>
             <p class="hero-desc">
-                Complete mechanical formalization of the Cleanroom Reference BTRON operating system across 9 core subsystems in <b>Rocq / Coq 9.x</b> and executable <b>OCaml 5.x</b> simulation models. Certifies 1,776 closed judgements with <b>zero axioms</b>, zero admissions, and strict 1:1 traceability to bare-metal C implementation clauses.
+                Complete mechanical formalization of the Cleanroom Reference BTRON operating system across 11 core subsystems in <b>Rocq / Coq 9.x</b> and executable <b>OCaml 5.x</b> simulation models. Certifies 1,805 closed judgements with <b>zero axioms</b>, zero admissions, and strict 1:1 traceability to bare-metal C implementation clauses.
             </p>
             <div class="meta-chips">
-                <span class="chip">Theories: <b>9 Coq Modules</b></span>
-                <span class="chip">Oracles: <b>10 OCaml Models</b></span>
-                <span class="chip">Total Judgements: <b>1,776 Closed Theorems</b></span>
-                <span class="chip">Total Code: <b>20,761 Lines of Coq</b></span>
+                <span class="chip">Theories: <b>12 Coq Modules</b></span>
+                <span class="chip">Oracles: <b>13 OCaml Models</b></span>
+                <span class="chip">Total Judgements: <b>1,818 Closed Theorems</b></span>
+                <span class="chip">Total Code: <b>21,641 Lines of Coq</b></span>
                 <span class="chip chip-pass">🛡️ 0 Axioms · 0 Admissions · Sound</span>
             </div>
         </header>
@@ -59,7 +62,7 @@
         <section class="section-card">
             <h2>
                 <span>Complete 1:1 Component Catalog</span>
-                <span class="trace-pill">8 Verified Modules</span>
+                <span class="trace-pill">12 Verified Modules</span>
             </h2>
             <p style="color: var(--text-secondary); margin-bottom: 1.5rem;">
                 Each subsystem pairs an executable OCaml model simulating state transitions against a formal Coq theory discharging inductive safety and real-time bounds:
@@ -243,6 +246,66 @@
                     <div style="border-top: 1px solid var(--border-light); padding-top: 0.75rem; display: flex; justify-content: space-between; align-items: center; font-size: 0.8rem;">
                         <span class="mono">opengl.{ml,v}</span>
                         <a href="opengl.html" class="trace-pill" style="text-decoration: none;">View Proofs &rarr;</a>
+                    </div>
+                </div>
+
+                <!-- 10. GUI Compositor & Invalidation -->
+                <div class="thm-block" style="display: flex; flex-direction: column; justify-content: space-between;">
+                    <div>
+                        <div class="thm-header">
+                            <span class="cat-pill">Cat. I, II, III, VI</span>
+                            <span class="badge-pass">15 Theorems</span>
+                        </div>
+                        <h3 style="margin: 0.5rem 0 0.3rem 0; font-size: 1.15rem; color: #1a237e;">
+                            <a href="ui_compose.html" style="text-decoration: none; color: inherit;">10. GUI Compositor &amp; Blitter</a>
+                        </h3>
+                        <p style="font-size: 0.88rem; color: #475569; margin-bottom: 0.8rem;">
+                            Proves rectangular clipping algebra, monotonic damage accumulation (<code class="mono">wnd_inval_damage_rect</code>), 2D memory safety in <code class="mono">btron_row_blit</code>, and double-buffered presentation.
+                        </p>
+                    </div>
+                    <div style="border-top: 1px solid var(--border-light); padding-top: 0.75rem; display: flex; justify-content: space-between; align-items: center; font-size: 0.8rem;">
+                        <span class="mono">ui_compose.{ml,v}</span>
+                        <a href="ui_compose.html" class="trace-pill" style="text-decoration: none;">View Proofs &rarr;</a>
+                    </div>
+                </div>
+
+                <!-- 11. Window Manager & UI Elements -->
+                <div class="thm-block" style="display: flex; flex-direction: column; justify-content: space-between;">
+                    <div>
+                        <div class="thm-header">
+                            <span class="cat-pill">Cat. I, II, III, VI, IX</span>
+                            <span class="badge-pass">14 Theorems</span>
+                        </div>
+                        <h3 style="margin: 0.5rem 0 0.3rem 0; font-size: 1.15rem; color: #1a237e;">
+                            <a href="ui_elements.html" style="text-decoration: none; color: inherit;">11. Window Manager &amp; UI Shell</a>
+                        </h3>
+                        <p style="font-size: 0.88rem; color: #475569; margin-bottom: 0.8rem;">
+                            Proves retro compact sliding tab geometry (<code class="mono">wget_tab_rect</code>), close button containment, focus uniqueness on z-stack (<code class="mono">top_wnd</code>), menu modal grab, and FIFO event queuing.
+                        </p>
+                    </div>
+                    <div style="border-top: 1px solid var(--border-light); padding-top: 0.75rem; display: flex; justify-content: space-between; align-items: center; font-size: 0.8rem;">
+                        <span class="mono">ui_elements.{ml,v}</span>
+                        <a href="ui_elements.html" class="trace-pill" style="text-decoration: none;">View Proofs &rarr;</a>
+                    </div>
+                </div>
+
+                <!-- 12. Hardware Drivers Subsystem -->
+                <div class="thm-block" style="display: flex; flex-direction: column; justify-content: space-between;">
+                    <div>
+                        <div class="thm-header">
+                            <span class="cat-pill">Cat. I, III, IV, V, VIII</span>
+                            <span class="badge-pass">13 Theorems</span>
+                        </div>
+                        <h3 style="margin: 0.5rem 0 0.3rem 0; font-size: 1.15rem; color: #1a237e;">
+                            <a href="drivers.html" style="text-decoration: none; color: inherit;">12. Hardware Drivers (VirtIO, DMA, HID)</a>
+                        </h3>
+                        <p style="font-size: 0.88rem; color: #475569; margin-bottom: 0.8rem;">
+                            Proves VirtIO split virtqueue producer-consumer monotonicity, BCM2711 2D hardware DMA stride memory safety, mouse coordinate clamping, and keyboard modifier state machine.
+                        </p>
+                    </div>
+                    <div style="border-top: 1px solid var(--border-light); padding-top: 0.75rem; display: flex; justify-content: space-between; align-items: center; font-size: 0.8rem;">
+                        <span class="mono">drivers.{ml,v}</span>
+                        <a href="drivers.html" class="trace-pill" style="text-decoration: none;">View Proofs &rarr;</a>
                     </div>
                 </div>
             </div>

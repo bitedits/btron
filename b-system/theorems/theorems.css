@@ -361,7 +361,8 @@ nav.sticky {
 }
 
 /* Footer */
-footer.page-footer {
+footer.page-footer,
+footer.footer {
     text-align: center;
     padding: 2.5rem 1rem;
     color: #64748b;

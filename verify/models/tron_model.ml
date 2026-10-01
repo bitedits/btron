@@ -481,7 +481,7 @@ let sem_take need c =
 
 let sem_block who c = { c with sc_wait = sem_enqueue c.sc_tpri who c.sc_wait }
 
-(* ── 14.4 The wait-disable guard, and 14.6 wai_sem as a step ─────── *)
+(* ── 14.4 The wait-disable guard, then the claim: wai_sem ───────── *)
 
 (* wai_sem, semaphore.c:308-325, in the C's branch order.  The failure branch
  * pre-writes through §12.4 (wait.c:166-177), which is where its E_TMOUT comes
@@ -959,7 +959,7 @@ let check_states () =
        tstat_all &&
      api_of true S_READY <> api_of false S_READY && bit_all (bits S_READY) ts_ready)
 
-(* ── §12.1 and §12.2: the wait-specification table, the state arithmetic ── *)
+(* ── §12.1 The wait-specification table, and §12.2 entering and leaving the wait state ── *)
 
 let wspec_rows =
   [ (w_slp, WO_SLP, false, false); (w_dly, WO_DLY, false, false);
@@ -1014,7 +1014,7 @@ let check_wait_spec_table () =
      make_non_wait S_WAIT = S_READY && make_non_wait S_READY = S_SUSPEND &&
      make_non_wait S_DORMANT = S_SUSPEND)
 
-(* ── §12.3 and §12.4: the release matrix, the two-phase write, the guard ── *)
+(* ── §12.3 The release matrix, and §12.4 the two-phase write and the guard ── *)
 
 let relkinds = [ RK_release; RK_ok; RK_oke E_PAR; RK_ng E_RLWAI; RK_tmout; RK_del ]
 
@@ -1082,7 +1082,7 @@ let check_release_matrix () =
      first_bad [ (false, E_ID); (false, E_PAR) ] = Some E_ID &&
      List.for_all (fun e -> first_bad [ (false, e) ] = Some e) er_all)
 
-(* ── §14: the semaphore ───────────────────────────────────────────── *)
+(* ── §14: the semaphore (mirrors 14.1-14.8) ───────────────────────── *)
 
 let sem_who_pool =
   [ mk_who 7 1 3; mk_who 8 1 2; mk_who 8 2 4; mk_who 9 2 1; mk_who 10 3 5 ]
@@ -1132,7 +1132,11 @@ let sem_wai_space =
 let qsum q = List.fold_left (fun a x -> a + x.w_need) 0 q
 let in_queue x q = List.mem x q
 
+(* ── 14.8 The two services, computed (the Examples this section fixes) *)
+
 let check_semaphore_fixtures () =
+
+
   expect_eq "S14 a_fifo_wait_takes_then_queues: the taking half" show_sem_step
     (sem_wai 0 TMO_REL (mk_who 7 1 3) (mk_semcb 1 4 false false false 1 []))
     (mk_semcb 1 4 false false false 0 [], E_OK);
@@ -1194,7 +1198,11 @@ let check_semaphore_fixtures () =
     (sem_view (mk_semcb 0 1 false false false 0 []))
     (mk_sem 0 0 [])
 
+(* ── 14.1-14.7 The walk, the orders and the guards, exhaustively *)
+
 let check_semaphore_invariants () =
+
+
   let walks = triples all_bools (range 0 8) sem_queues in
   expect "S14 the signal walk conserves units (sig_walk_conserves)"
     (List.for_all (fun (gran, count, q) ->
@@ -1346,7 +1354,7 @@ let check_semaphore_invariants () =
        (List.map (fun (a, (b, (c, d))) -> (a, b, c, d))
           (pairs (range 0 8) (pairs all_bools (pairs all_bools all_bools)))))
 
-(* ── §16: the event flag ──────────────────────────────────────────── *)
+(* ── §16: the event flag (mirrors 16.1-16.10) ─────────────────────── *)
 
 let flg_who_pool =
   [ mk_flg_who 7 1 0 1; mk_flg_who 8 2 0 1; mk_flg_who 9 4 0 1;
@@ -1384,7 +1392,11 @@ let flg_step_space = pairs flg_patterns flg_cells
 let flg_wai_space =
   triples [ 0; ttw_flg; ttw_sem ] tmo_all (pairs flg_who_pool flg_cells)
 
+(* ── 16.9 The family, computed (the Examples this section fixes) *)
+
 let check_flag_fixtures () =
+
+
   expect "S16 fixture_the_two_wait_modes_separate_on_one_pair"
     (flg_cond 6 4 1 && flg_cond 6 5 1 && not (flg_cond 6 5 0) && flg_cond 7 5 0 &&
      flg_cond 2 3 1);
@@ -1536,7 +1548,11 @@ let check_flag_fixtures () =
  * disagrees with the shipped C wherever a clearing head consumes a later bit. *)
 let flg_naive_walk p q = List.filter (fun x -> flg_cond p x.fw_waiptn x.fw_wfmode) q
 
+(* ── 16.1-16.8 The pattern word, the modes, the orders and the walk, exhaustively *)
+
 let check_flag_invariants () =
+
+
   let q = [ mk_flg_who 7 1 16 1; mk_flg_who 8 2 0 1 ] in
   let w = flg_set_walk 3 q in
   expect "S16 the naive order-free reading is NOT the shipped walk: it wakes a task the model leaves queued, and leaves the object non-empty (the_release_order_is_observable)"

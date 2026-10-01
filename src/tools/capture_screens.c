@@ -21,6 +21,7 @@
 #include <btron/settings.h>
 #include <btron/language_settings.h>
 #include <btron/app_menu.h>
+#include <btron/pmc.h>
 #include <btron/tip.h>
 #include <btron/t_editor.h>
 
@@ -55,6 +56,9 @@ extern WND* open_drivesetup_window(void);
 extern WND* open_drivesetup_about_window(void);
 extern WND* open_t_editor_window_with_file(const char *filepath);
 extern WND* open_clarity_window(void);
+extern WND* open_paint_window(void);
+extern WND* open_paint_window_with_file(const char *filepath);
+extern WND* open_paint_about_window(void);
 extern H    tip_get_caret_x(void);
 extern H    tip_get_caret_y(void);
 
@@ -102,6 +106,18 @@ ER    wr_vobj_data(ROBJ *robj, const void *buf, UW len) { (void)robj; (void)buf;
 ER    rd_vobj_data(ROBJ *robj, void *buf, UW len, UW *rb) { (void)robj; (void)buf; (void)len; if (rb) *rb = 0; return E_OK; }
 VOBJ_LINK* cre_vobj_link(ID t, const char *l, H x, H y) { (void)t; (void)l; (void)x; (void)y; return NULL; }
 ROBJ* find_robj_by_path(const char *path) { (void)path; return NULL; }
+
+/* The Cho-Kanji launcher entry points referenced by the global menu's execute
+ * switch arrive as hard undefined symbols on macOS when chokanji.c isn't linked.
+ * The capture pipeline never opens those windows, so provide null entry points. */
+static WND* cab_no_win(void) { return NULL; }
+WND* open_chokanji_cabinet_window(void)     { return cab_no_win(); }
+WND* open_chokanji_doc_window(void)         { return cab_no_win(); }
+WND* open_chokanji_microscript_window(void) { return cab_no_win(); }
+WND* open_chokanji_clock_window(void)       { return cab_no_win(); }
+WND* open_chokanji_kconv_window(void)       { return cab_no_win(); }
+WND* open_chokanji_xfconv_window(void)      { return cab_no_win(); }
+WND* open_chokanji_unpack_window(void)      { return cab_no_win(); }
 
 /* Helper to dump raw ARGB rectangle to file */
 static void dump_window_rect(GDEV *dev, WND *wnd, const char *out_filename) {
@@ -392,6 +408,22 @@ int main(int argc, char **argv) {
             redraw_all_windows();
             dump_window_rect(dev, w_clarity, "/tmp/btron_raw_screens/Clarity_Application.raw");
         }
+
+        /* Paint Image Viewer Application Window (Isolated, live decoded image) */
+        reset_isolation_state(dev);
+        WND *w_paint = open_paint_window();
+        if (w_paint) {
+            redraw_all_windows();
+            dump_window_rect(dev, w_paint, "/tmp/btron_raw_screens/Paint_Application.raw");
+        }
+
+        /* Paint About Box (Isolated) */
+        reset_isolation_state(dev);
+        WND *w_abt_paint = open_paint_about_window();
+        if (w_abt_paint) {
+            redraw_all_windows();
+            dump_window_rect(dev, w_abt_paint, "/tmp/btron_raw_screens/Paint_About.raw");
+        }
     }
 
     /* 3. In-App Opened Menu Screenshots (_Menu_Opened suffix) */
@@ -466,6 +498,16 @@ int main(int argc, char **argv) {
             simulate_menu_click(w_clr_m, 4); /* Arrange menu (配置(A)) */
             redraw_all_windows();
             dump_window_rect(dev, w_clr_m, "/tmp/btron_raw_screens/Clarity_Menu_Opened.raw");
+        }
+
+        /* Paint File Menu Opened (ファイル: 開く cascade) with Live Image */
+        reset_isolation_state(dev);
+        WND *w_paint_m = open_paint_window();
+        if (w_paint_m) {
+            redraw_all_windows();
+            simulate_menu_click(w_paint_m, 0); /* File Menu (ファイル) */
+            redraw_all_windows();
+            dump_window_rect(dev, w_paint_m, "/tmp/btron_raw_screens/Paint_Menu_Opened.raw");
         }
     }
 
@@ -585,6 +627,72 @@ int main(int argc, char **argv) {
             dump_window_rect(dev, w_jp,
                 "/tmp/btron_raw_screens/Language_TIP_Japanese.raw");
         }
+    }
+
+    /* 7. Cho-Kanji (PMC 3D-Bevel) styled chrome of representative windows.
+     *    Flipping g_wm_style re-chromes ANY window via the PMC branch in
+     *    draw_retro_window_frame() â no dedicated chokanji app modules needed. */
+    {
+        pmc_set_style(WM_STYLE_CHOKANJI);
+
+        reset_isolation_state(dev);
+        WND *ck_paint = open_paint_window();
+        if (ck_paint) {
+            redraw_all_windows();
+            dump_window_rect(dev, ck_paint, "/tmp/btron_raw_screens/Paint_Chokanji.raw");
+        }
+
+        reset_isolation_state(dev);
+        WND *ck_cab = open_vobj_manager_window();
+        if (ck_cab) {
+            redraw_all_windows();
+            dump_window_rect(dev, ck_cab, "/tmp/btron_raw_screens/Cabinet_Chokanji.raw");
+        }
+
+        reset_isolation_state(dev);
+        WND *ck_ed = open_t_editor_window();
+        if (ck_ed) {
+            redraw_all_windows();
+            dump_window_rect(dev, ck_ed, "/tmp/btron_raw_screens/Editor_Chokanji.raw");
+        }
+
+        reset_isolation_state(dev);
+        WND *ck_term = open_gterm_window();
+        if (ck_term) {
+            GTermState *st = (GTermState*)(uintptr_t)ck_term->user_data;
+            if (st) {
+                gterm_append_line(st, "btron:/> uname -a", COLOR_WHITE);
+                gterm_append_line(st, "B-System 3.20 (Cho-Kanji PMC)", COLOR_GREEN);
+            }
+            redraw_all_windows();
+            dump_window_rect(dev, ck_term, "/tmp/btron_raw_screens/Terminal_Chokanji.raw");
+        }
+
+        reset_isolation_state(dev);
+        WND *ck_appearance = open_appearance_settings_window();
+        if (ck_appearance) {
+            redraw_all_windows();
+            dump_window_rect(dev, ck_appearance, "/tmp/btron_raw_screens/Appearance_Chokanji.raw");
+        }
+
+        reset_isolation_state(dev);
+        WND *ck_about = open_about_window();
+        if (ck_about) {
+            redraw_all_windows();
+            dump_window_rect(dev, ck_about, "/tmp/btron_raw_screens/About_Chokanji.raw");
+        }
+
+        /* Paint File menu opened, in Cho-Kanji chrome */
+        reset_isolation_state(dev);
+        WND *ck_paint_m = open_paint_window();
+        if (ck_paint_m) {
+            redraw_all_windows();
+            simulate_menu_click(ck_paint_m, 0); /* File menu */
+            redraw_all_windows();
+            dump_window_rect(dev, ck_paint_m, "/tmp/btron_raw_screens/Paint_Menu_Opened_Chokanji.raw");
+        }
+
+        pmc_set_style(WM_STYLE_BEOS);
     }
 
     cls_dev(dev);

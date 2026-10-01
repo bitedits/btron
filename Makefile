@@ -1841,6 +1841,7 @@ CAPTURE_SCREENS_BIN = ./.build/capture_screens
 CAPTURE_SCREENS_SRCS = src/tools/capture_screens.c \
                        src/window/dnd.c \
                        src/graphics/image_decode.c \
+                       src/chokanji/pmc.c \
                        src/desktop/desktop.c \
                        src/settings/language.c \
                        src/settings/control_panel.c \
@@ -1860,6 +1861,7 @@ CAPTURE_SCREENS_SRCS = src/tools/capture_screens.c \
                        src/apps/vobj_manager.c \
                        src/apps/t_editor.c \
                        src/apps/tad_browser.c \
+                       src/apps/paint.c \
                        src/apps/gterm.c \
                        src/apps/audio_player.c \
                        src/apps/orchestra.c \

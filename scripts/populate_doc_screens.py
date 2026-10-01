@@ -210,6 +210,23 @@ APPS_MAP = {
             "caption": "実機描画フレームバッファより自動抽出されたClarity表示メニュー展開画面 (View/Zoom Menu Opened: 拡大・縮小・等倍・全体表示)",
             "alt": "電子帳票 Clarity – 表示/拡大縮小メニュー展開 (View Menu Opened)"
         }
+    ],
+    "Paint.html": [
+        {
+            "screen": "../img/screens/Paint_Application.png",
+            "caption": "実機描画フレームバッファより自動抽出されたペイント画像ビューア (GIF/PNG復元表示・水平/垂直スクロールバー・市松キャンバス)",
+            "alt": "ペイント 画像ビューア (Paint Application - Native Headless GDEV Capture)"
+        },
+        {
+            "screen": "../img/screens/Paint_Menu_Opened.png",
+            "caption": "実機描画フレームバッファより自動抽出されたペイント表示メニュー展開画面 (ファイル/表示メニュー: 拡大・縮小・原寸大・ウィンドウに合わせる)",
+            "alt": "ペイント – メニュー展開 (Paint File/View Menu Opened)"
+        },
+        {
+            "screen": "../img/screens/Paint_About.png",
+            "caption": "実機描画フレームバッファより自動抽出された透過バージョン情報ダイアログ (About Paint)",
+            "alt": "ペイント バージョン情報 (About Paint)"
+        }
     ]
 }
 

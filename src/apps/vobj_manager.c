@@ -55,10 +55,38 @@ __attribute__((weak)) WND* open_t_editor_window_with_file(const char *filepath) 
     (void)filepath;
     return (void*)0;
 }
+__attribute__((weak)) WND* open_paint_window(void) {
+    return (void*)0;
+}
+__attribute__((weak)) WND* open_paint_window_with_file(const char *filepath) {
+    (void)filepath;
+    return (void*)0;
+}
 #else
 extern WND* open_t_editor_window(void);
 extern WND* open_t_editor_window_with_file(const char *filepath);
+extern WND* open_paint_window(void);
+extern WND* open_paint_window_with_file(const char *filepath);
 #endif
+
+/* Open a cabinet item in the app suited to its type: GIF/PNG to the Paint
+ * viewer, TXT/MD to the text editor, everything else to the TAD browser —
+ * the same rule the double-click and menu-open paths already follow. */
+static void cab_open_path(const char *path, const char *name) {
+    int len = strlen(path);
+    BOOL is_image = (len > 4 &&
+                     (strcmp(path + len - 4, ".gif") == 0 ||
+                      strcmp(path + len - 4, ".png") == 0));
+    BOOL is_text  = (len > 3 && strcmp(path + len - 3, ".md") == 0) ||
+                    (len > 4 && strcmp(path + len - 4, ".txt") == 0);
+    if (is_image) {
+        open_paint_window_with_file(path);
+    } else if (is_text) {
+        open_t_editor_window_with_file(path);
+    } else {
+        open_tad_browser_window(path, name);
+    }
+}
 
 #define MAX_CABINET_ITEMS 2048
 
@@ -1075,13 +1103,7 @@ static void handle_vobj_manager_event(WND *wnd, const EVT *evt) {
                     case CCMD_FILE_VIEW_TAD:
                         if (g_cabinet.selected_idx >= 0 && g_cabinet.selected_idx < g_cabinet.item_count) {
                             CABINET_ITEM *it = &g_cabinet.items[g_cabinet.selected_idx];
-                            int path_len = strlen(it->path);
-                            if ((path_len > 3 && strcmp(it->path + path_len - 3, ".md") == 0) ||
-                                (path_len > 4 && strcmp(it->path + path_len - 4, ".txt") == 0)) {
-                                open_t_editor_window_with_file(it->path);
-                            } else {
-                                open_tad_browser_window(it->path, it->name);
-                            }
+                            cab_open_path(it->path, it->name);
                         }
                         return;
                     case CCMD_FILE_NEW:
@@ -1204,18 +1226,13 @@ static void handle_vobj_manager_event(WND *wnd, const EVT *evt) {
                 s_last_click_time = 0;
                 CABINET_ITEM *it = &g_cabinet.items[idx];
                 int path_len = strlen(it->path);
-                if ((path_len > 4 && strcmp(it->path + path_len - 4, ".tad") == 0) ||
-                    (path_len > 4 && strcmp(it->path + path_len - 4, ".TAD") == 0)) {
+                BOOL is_tad = (path_len > 4 &&
+                               (strcmp(it->path + path_len - 4, ".tad") == 0 ||
+                                strcmp(it->path + path_len - 4, ".TAD") == 0));
+                if (is_tad) {
                     open_tad_browser_window(it->path, it->name);
-                } else if ((path_len > 3 && strcmp(it->path + path_len - 3, ".md") == 0) ||
-                           (path_len > 4 && strcmp(it->path + path_len - 4, ".txt") == 0)) {
-                    open_t_editor_window_with_file(it->path);
                 } else {
-                    if (it->type == VOBJ_TYPE_TEXT) {
-                        open_t_editor_window_with_file(it->path);
-                    } else {
-                        open_tad_browser_window(it->path, it->name);
-                    }
+                    cab_open_path(it->path, it->name);
                 }
             } else {
                 s_last_click_idx = idx;
@@ -1247,8 +1264,8 @@ static void handle_vobj_manager_event(WND *wnd, const EVT *evt) {
 
         if (key == '\n' || key == '\r' || key == ' ' || key == BTRON_KEY_KP_ENTER) {
             if (g_cabinet.selected_idx >= 0 && g_cabinet.selected_idx < g_cabinet.item_count) {
-                open_tad_browser_window(g_cabinet.items[g_cabinet.selected_idx].path,
-                                       g_cabinet.items[g_cabinet.selected_idx].name);
+                cab_open_path(g_cabinet.items[g_cabinet.selected_idx].path,
+                              g_cabinet.items[g_cabinet.selected_idx].name);
             }
             return;
         }
@@ -1324,7 +1341,7 @@ BOOL cabinet_handle_click(int mouse_x, int mouse_y, BOOL is_double_click, ID *ou
         if (out_path) strncpy(out_path, g_cabinet.items[idx].path, 127);
 
         if (is_double_click) {
-            open_tad_browser_window(g_cabinet.items[idx].path, g_cabinet.items[idx].name);
+            cab_open_path(g_cabinet.items[idx].path, g_cabinet.items[idx].name);
             return TRUE;
         }
     }

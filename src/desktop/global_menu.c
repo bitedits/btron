@@ -49,6 +49,8 @@ __attribute__((weak, weak_import)) WND* open_orchestra_window(void);
 __attribute__((weak, weak_import)) WND* open_about_window(void);
 __attribute__((weak, weak_import)) WND* open_display_settings_window(void);
 __attribute__((weak, weak_import)) WND* open_clarity_window(void);
+__attribute__((weak, weak_import)) WND* open_paint_window(void);
+__attribute__((weak, weak_import)) WND* open_paint_about_window(void);
 __attribute__((weak, weak_import)) WND* open_chat_main_window(void *client);
 __attribute__((weak, weak_import)) WND* open_drivesetup_window(void);
 /* Cho-Kanji suite */
@@ -69,6 +71,8 @@ extern WND* open_orchestra_window(void);
 extern WND* open_about_window(void);
 extern WND* open_display_settings_window(void);
 extern WND* open_clarity_window(void);
+extern WND* open_paint_window(void);
+extern WND* open_paint_about_window(void);
 extern WND* open_chat_main_window(void *client);
 extern WND* open_drivesetup_window(void);
 extern WND* open_chokanji_cabinet_window(void);
@@ -78,6 +82,17 @@ extern WND* open_chokanji_clock_window(void);
 extern WND* open_chokanji_kconv_window(void);
 extern WND* open_chokanji_xfconv_window(void);
 extern WND* open_chokanji_unpack_window(void);
+#endif
+
+/* Paint launchers: local weak fallbacks so headless/test builds that omit
+ * src/apps/paint.c still link; the real definitions in paint.c win when linked. */
+#if defined(__GNUC__) || defined(__clang__)
+__attribute__((weak)) WND* open_paint_window(void) { return (void*)0; }
+__attribute__((weak)) WND* open_paint_window_with_file(const char *filepath) {
+    (void)filepath;
+    return (void*)0;
+}
+__attribute__((weak)) WND* open_paint_about_window(void) { return (void*)0; }
 #endif
 
 #define GMENU_DROPDOWN_WIDTH   400
@@ -139,7 +154,7 @@ static GMenuHeader g_headers[GMENU_HEADER_COUNT] = {
     {
         .title = "アプリ(A)",
         .rect = { 216, 2, 320, 23 },
-        .item_count = 18,
+        .item_count = 19,
         .items = {
             /* General B-System apps */
             { "Editor (文書編集...)",                "Ctrl+E", GMENU_CMD_APP_TEDITOR,    FALSE, FALSE, TRUE },
@@ -149,6 +164,7 @@ static GMenuHeader g_headers[GMENU_HEADER_COUNT] = {
             { "Mail & Chat (対話通信...)",            "",       GMENU_CMD_APP_CHAT,       FALSE, FALSE, TRUE },
             { "DriveSetup (ディスク管理...)",         "",       GMENU_CMD_APP_DRIVESETUP, FALSE, FALSE, TRUE },
             { "電子帳票 (Clarity DTP...)",            "",       GMENU_CMD_APP_CLARITY,    FALSE, FALSE, TRUE },
+            { "ペイント (Paint Image Viewer...)",     "",       GMENU_CMD_APP_PAINT,      FALSE, FALSE, TRUE },
             { "---", "", GMENU_CMD_NONE, TRUE, FALSE, FALSE },
             /* ── 超漢字 Cho-Kanji Suite ── */
             { "超漢字: キャビネット (Cabinet...)",       "Ctrl+K", GMENU_CMD_APP_CK_CABINET,     FALSE, FALSE, TRUE },
@@ -497,6 +513,9 @@ static void global_menu_execute_cmd(int cmd) {
             break;
         case GMENU_CMD_APP_CLARITY:
             if (open_clarity_window) open_clarity_window();
+            break;
+        case GMENU_CMD_APP_PAINT:
+            if (open_paint_window) open_paint_window();
             break;
 
         /* ── アプリ(A) — Cho-Kanji suite ── */

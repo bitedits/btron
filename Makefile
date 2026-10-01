@@ -173,6 +173,7 @@ COMMON_SRCS = src/graphics/dp_core.c   \
               src/desktop/main.c       \
               src/apps/vobj_manager.c  \
               src/apps/tad_browser.c   \
+              src/apps/paint.c         \
               src/apps/gterm.c         \
               src/apps/t_editor.c      \
               src/apps/clarity.c        \
@@ -414,6 +415,7 @@ COMMON_NO_SDL_SRCS = \
     src/desktop/global_menu.c \
     src/apps/vobj_manager.c \
     src/apps/tad_browser.c \
+    src/apps/paint.c \
     src/apps/gterm.c       \
     src/apps/t_editor.c    \
     src/apps/audio_player.c \

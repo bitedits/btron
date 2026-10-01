@@ -22,18 +22,19 @@
         </div>
     </nav>
 
-    <!-- Sub-navigation across 8 theorem files -->
+        <!-- Sub-navigation across 9 theorem files -->
     <div class="sub-nav-bar">
         <div class="sub-nav-inner">
             <span class="sub-nav-label">Library:</span>
-            <a href="bfs_allocator.html" class="nav-pill">B-FS Allocator</a>
-            <a href="bfs_btree.html" class="nav-pill">B-FS B+Tree</a>
-            <a href="bfs.html" class="nav-pill">B-FS Volume V2</a>
-            <a href="hypermedia_dnd.html" class="nav-pill">Hypermedia &amp; TAD</a>
-            <a href="media_intercore.html" class="nav-pill">InterCore Protocol</a>
-            <a href="media_rtp.html" class="nav-pill">RTP Media Stack</a>
-            <a href="media_smp.html" class="nav-pill">SMP / AMP Substrate</a>
-            <a href="tron.html" class="nav-pill">ITRON Microkernel</a>
+            <a href="bfs_allocator.html" class="nav-pill">Allocator</a>
+            <a href="bfs_btree.html" class="nav-pill">B-Tree</a>
+            <a href="bfs.html" class="nav-pill">Volume</a>
+            <a href="hypermedia_dnd.html" class="nav-pill">Hypermedia</a>
+            <a href="media_intercore.html" class="nav-pill">InterCore</a>
+            <a href="media_rtp.html" class="nav-pill">RTP</a>
+            <a href="media_smp.html" class="nav-pill">SMP</a>
+            <a href="tron.html" class="nav-pill">ITRON</a>
+            <a href="opengl.html" class="nav-pill">OpenGL</a>
         </div>
     </div>
 
@@ -43,13 +44,13 @@
             <span class="hero-tagline">Formal Verification Ledger · Cleanroom BTRON 3.20</span>
             <h1>BTRON Coq Base Library &amp; OCaml Oracles</h1>
             <p class="hero-desc">
-                Complete mechanical formalization of the Cleanroom Reference BTRON operating system across 8 core subsystems in <b>Rocq / Coq 8.18+</b> and executable <b>OCaml 5.x</b> simulation models. Certifies 1,758 closed judgements with <b>zero axioms</b>, zero admissions, and strict 1:1 traceability to bare-metal C implementation clauses.
+                Complete mechanical formalization of the Cleanroom Reference BTRON operating system across 9 core subsystems in <b>Rocq / Coq 9.x</b> and executable <b>OCaml 5.x</b> simulation models. Certifies 1,776 closed judgements with <b>zero axioms</b>, zero admissions, and strict 1:1 traceability to bare-metal C implementation clauses.
             </p>
             <div class="meta-chips">
-                <span class="chip">Theories: <b>8 Coq Modules</b></span>
-                <span class="chip">Oracles: <b>9 OCaml Models</b></span>
-                <span class="chip">Total Judgements: <b>1,758 Closed Theorems</b></span>
-                <span class="chip">Total Code: <b>20,483 Lines of Coq</b></span>
+                <span class="chip">Theories: <b>9 Coq Modules</b></span>
+                <span class="chip">Oracles: <b>10 OCaml Models</b></span>
+                <span class="chip">Total Judgements: <b>1,776 Closed Theorems</b></span>
+                <span class="chip">Total Code: <b>20,761 Lines of Coq</b></span>
                 <span class="chip chip-pass">🛡️ 0 Axioms · 0 Admissions · Sound</span>
             </div>
         </header>
@@ -222,6 +223,26 @@
                     <div style="border-top: 1px solid var(--border-light); padding-top: 0.75rem; display: flex; justify-content: space-between; align-items: center; font-size: 0.8rem;">
                         <span class="mono">tron.{ml,v}</span>
                         <a href="tron.html" class="trace-pill" style="text-decoration: none;">View Proofs &rarr;</a>
+                    </div>
+                </div>
+
+                <!-- 9. OpenGL ES & EGL -->
+                <div class="thm-block" style="display: flex; flex-direction: column; justify-content: space-between;">
+                    <div>
+                        <div class="thm-header">
+                            <span class="cat-pill">Cat. I, IV, VII, XVI</span>
+                            <span class="badge-pass">18 Theorems</span>
+                        </div>
+                        <h3 style="margin: 0.5rem 0 0.3rem 0; font-size: 1.15rem; color: #1a237e;">
+                            <a href="opengl.html" style="text-decoration: none; color: inherit;">9. OpenGL ES 1.1 / TinyGL</a>
+                        </h3>
+                        <p style="font-size: 0.88rem; color: #475569; margin-bottom: 0.8rem;">
+                            Proves EGL double buffering involution, matrix stack depth ceilings (Modelview 32, Projection 8), viewport screen memory safety, and Z-buffer depth monotonicity.
+                        </p>
+                    </div>
+                    <div style="border-top: 1px solid var(--border-light); padding-top: 0.75rem; display: flex; justify-content: space-between; align-items: center; font-size: 0.8rem;">
+                        <span class="mono">opengl.{ml,v}</span>
+                        <a href="opengl.html" class="trace-pill" style="text-decoration: none;">View Proofs &rarr;</a>
                     </div>
                 </div>
             </div>

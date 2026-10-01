@@ -1,0 +1,258 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Hypermedia &amp; DND Protocol — Model &amp; Theorems</title>
+    <link rel="stylesheet" href="theorems.css">
+</head>
+<body>
+    <nav class="sticky">
+        <div class="nav-container">
+            <a href="../../index.html" class="logo"><img src="https://n2o.dev/img/synrc.svg" alt="Synrc Logo"></a>
+            <ul class="nav-links">
+                <li><a href="../../index.html">VirtIO</a></li>
+                <li><a href="../index.html">B-System</a></li>
+                <li><a href="../../b-book/index.html">B-Book</a></li>
+                <li><a href="../../conformance.html">B-Spec / Conformance</a></li>
+                <li><a href="hypermedia_dnd.html" class="active">Theorems</a></li>
+                <li><a href="../../releases.html">Releases</a></li>
+                <li><a href="https://github.com/bitedits/btron">GitHub</a></li>
+            </ul>
+        </div>
+    </nav>
+
+        <!-- Sub-navigation across 11 theorem files -->
+    <div class="sub-nav-bar">
+        <div class="sub-nav-inner">
+            <span class="sub-nav-label">Library:</span>
+            <a href="bfs_allocator.html" class="nav-pill">Allocator</a>
+            <a href="bfs_btree.html" class="nav-pill">B-Tree</a>
+            <a href="bfs.html" class="nav-pill">Volume</a>
+            <a href="hypermedia_dnd.html" class="nav-pill active">Hypermedia</a>
+            <a href="media_intercore.html" class="nav-pill">InterCore</a>
+            <a href="media_rtp.html" class="nav-pill">RTP</a>
+            <a href="media_smp.html" class="nav-pill">SMP</a>
+            <a href="tron.html" class="nav-pill">ITRON</a>
+            <a href="opengl.html" class="nav-pill">OpenGL</a>
+            <a href="ui_compose.html" class="nav-pill">Compositor</a>
+            <a href="ui_elements.html" class="nav-pill">Windows</a>
+            <a href="drivers.html" class="nav-pill">Drivers</a>
+        </div>
+    </div>
+
+    <main class="main-content">
+        <!-- Hero Header -->
+        <header class="hero-box">
+            <span class="hero-tagline">Hypermedia &amp; Shell Subsystem · Tier 6 Formally Verified</span>
+            <h1>Real Body / Virtual Body Hypermedia &amp; DND</h1>
+            <p class="hero-desc">
+                Formal verification and executable simulation for the Sakamura BTRON 3.20 Real Object / Virtual Object hypermedia model, Clarity DTP system, and TRON Application Databus (TAD) stream persistence. Proves document graph acyclicity, drag-and-drop link integrity, and lossless TAD serialization.
+            </p>
+            <div class="meta-chips">
+                <span class="chip">OCaml: <code class="mono">hypermedia_dnd_model.ml</code> (350 lines)</span>
+                <span class="chip">Coq: <code class="mono">hypermedia_dnd_properties.v</code> (1,033 lines)</span>
+                <span class="chip">Judgements: <b>61 Closed Theorems</b></span>
+                <span class="chip chip-pass">🛡️ 0 Axioms · 0 Admissions · Sound</span>
+            </div>
+        </header>
+
+        <!-- Section 1: Executable OCaml Oracle Model -->
+        <section class="section-card">
+            <h2>
+                <span>1. Executable OCaml Oracle Model</span>
+                <span class="trace-pill">hypermedia_dnd_model.ml</span>
+            </h2>
+            <p style="color: var(--text-secondary); margin-bottom: 1.2rem;">
+                The oracle models Real Bodies (ROBJ) in persistent storage and Virtual Bodies (VOBJ) embedded across document Frames, validating drag-and-drop state machine transitions (Idle, Hover, Dropped) and TAD binary stream serialization.
+            </p>
+
+            <h3>Hypermedia Data Model Types</h3>
+            <pre class="code-snippet ocaml-style"><span class="ml-kwd">type</span> <span class="type">robj_id</span> = <span class="type">int</span>
+
+<span class="ml-kwd">type</span> <span class="type">vobj_type</span> = VObjText | VObjDraw | VObjExec
+
+<span class="ml-kwd">type</span> <span class="type">robj</span> = {
+  <span class="id">id</span> : <span class="type">robj_id</span>;
+  <span class="id">name</span> : <span class="type">string</span>;
+  <span class="id">kind</span> : <span class="type">vobj_type</span>;
+  <span class="id">path</span> : <span class="type">string</span>;
+}
+
+<span class="ml-kwd">type</span> <span class="type">vobj_link</span> = {
+  <span class="id">vid</span> : <span class="type">int</span>;
+  <span class="id">target_robj</span> : <span class="type">robj_id</span>;
+  <span class="id">label</span> : <span class="type">string</span>;
+}
+
+<span class="ml-kwd">type</span> <span class="type">frame</span> = {
+  <span class="id">fid</span> : <span class="type">int</span>;
+  <span class="id">kind</span> : <span class="type">frame_kind</span>;
+  <span class="id">bounds</span> : <span class="type">int * int * int * int</span>;
+  <span class="id">text</span> : <span class="type">string</span>;
+  <span class="id">vobjs</span> : <span class="type">vobj_link list</span>;
+  <span class="id">img_robj</span> : <span class="type">robj_id option</span>;
+}</pre>
+
+            <h3>TAD Serialization Round-Trip Verification</h3>
+            <pre class="code-snippet ocaml-style"><span class="comment">(* Encodes document frames into TAD segments, then decodes back *)</span>
+<span class="ml-kwd">let</span> <span class="id">test_tad_roundtrip</span> (<span class="id">doc</span> : <span class="type">clarity_doc</span>) : <span class="type">bool</span> =
+  <span class="ml-kwd">let</span> <span class="id">stream</span> = encode_stream <span class="id">doc</span> <span class="ml-kwd">in</span>
+  <span class="ml-kwd">let</span> <span class="id">decoded</span> = decode_stream <span class="id">stream</span> <span class="ml-kwd">in</span>
+  <span class="ml-kwd">assert</span> (<span class="id">doc</span> = <span class="id">decoded</span>);
+  <span class="ml-kwd">true</span></pre>
+        </section>
+
+        <!-- Section 2: Coq Base Library Theorems by Category -->
+        <section class="section-card">
+            <h2>
+                <span>2. Formal Coq Verification by Category</span>
+                <span class="trace-pill">hypermedia_dnd_properties.v</span>
+            </h2>
+            <p style="color: var(--text-secondary); margin-bottom: 1.5rem;">
+                The 61 theorems in <code class="mono">hypermedia_dnd_properties.v</code> prove graph acyclicity, direct manipulation conservation, kind guards, and lossless serialization across 3 smart categories.
+            </p>
+
+            <!-- Category 1 -->
+            <div style="margin-bottom: 2rem;">
+                <h3><span class="cat-pill">Cat. XVI</span> Category 1: Real / Virtual Body Referential Integrity</h3>
+                <p style="font-size: 0.92rem; color: #475569; margin-bottom: 1rem;">
+                    Proves that dropping a Virtual Body into an existing Frame or onto the desktop canvas never creates dangling references or drops existing frames.
+                </p>
+
+                <div class="thm-block">
+                    <div class="thm-header">
+                        <div class="thm-title">Theorem dnd_drop_into_preserves_integrity (Referential Graph Invariant)</div>
+                        <span class="badge-pass">[x] Proved / Qed</span>
+                    </div>
+                    <pre class="code-snippet coq-style"><span class="kwd">Theorem</span> dnd_drop_into_preserves_integrity :
+  <span class="kwd">forall</span> (c : cabinet) (f : frame) (t : nat),
+  cabinet_wf c <span class="sym">-&gt;</span> frame_norm f <span class="sym">-&gt;</span>
+  cabinet_wf (dnd_drop_into c f t).
+<span class="kwd">Proof</span>.
+  intros c f t Hc Hf. unfold cabinet_wf, dnd_drop_into in *.
+  destruct Hc as [Hnodup [Hlive [Htargets Hbounds]]].
+  repeat split; auto.
+<span class="kwd">Qed</span>.</pre>
+                    <div class="thm-motivation">
+                        <b>Why we are proving this:</b> In BTRON's open hypermedia graph, dragging an icon between windows must never introduce dangling pointers to deleted storage bodies. This theorem proves that drop actions strictly preserve cabinet well-formedness and reference validity.
+                    </div>
+                </div>
+
+                <div class="thm-block">
+                    <div class="thm-header">
+                        <div class="thm-title">Theorem dnd_drop_into_never_loses_a_virtual_body (Virtual Body Conservation)</div>
+                        <span class="badge-pass">[x] Proved / Qed</span>
+                    </div>
+                    <pre class="code-snippet coq-style"><span class="kwd">Theorem</span> dnd_drop_into_never_loses_a_virtual_body : <span class="kwd">forall</span> c f t,
+  count_vobjs (dnd_drop_into c f t) = count_vobjs c + count_frame_vobjs f.
+<span class="kwd">Proof</span>.
+  intros c f t. unfold dnd_drop_into, count_vobjs.
+  rewrite fold_left_app. lia.
+<span class="kwd">Qed</span>.</pre>
+                    <div class="thm-motivation">
+                        <b>Why we are proving this:</b> Prevents document loss during window management: moving icons between desktop folders strictly conserves the total count of virtual objects across all windows.
+                    </div>
+                </div>
+
+                <div class="thm-block">
+                    <div class="thm-header">
+                        <div class="thm-title">Theorem dnd_drop_on_an_absent_frame_is_inert (Absent Target Safety)</div>
+                        <span class="badge-pass">[x] Proved / Qed</span>
+                    </div>
+                    <pre class="code-snippet coq-style"><span class="kwd">Theorem</span> dnd_drop_on_an_absent_frame_is_inert : <span class="kwd">forall</span> doc target v,
+  find_frame doc target = None <span class="sym">-&gt;</span>
+  drop_vobj doc target v = doc.
+<span class="kwd">Proof</span>.
+  intros doc target v Hnone. unfold drop_vobj. rewrite Hnone. reflexivity.
+<span class="kwd">Qed</span>.</pre>
+                    <div class="thm-motivation">
+                        <b>Why we are proving this:</b> If a user drops an object onto a window or frame that closed in the background, the operation must cleanly abort as an inert identity rather than mutating random memory.
+                    </div>
+                </div>
+            </div>
+
+            <!-- Category 2 -->
+            <div style="margin-bottom: 2rem;">
+                <h3><span class="cat-pill">Cat. I, XIV</span> Category 2: Image Frame Payload Binding Soundness</h3>
+                <p style="font-size: 0.92rem; color: #475569; margin-bottom: 1rem;">
+                    Proves that Image Frames can only bind to genuine registered Draw Bodies (<code class="mono">VObjDraw</code>), and non-draw bodies are safely rejected.
+                </p>
+
+                <div class="thm-block">
+                    <div class="thm-header">
+                        <div class="thm-title">Theorem drop_onto_never_rebinds_to_a_non_draw_body (Kind Guard)</div>
+                        <span class="badge-pass">[x] Proved / Qed</span>
+                    </div>
+                    <pre class="code-snippet coq-style"><span class="kwd">Theorem</span> drop_onto_never_rebinds_to_a_non_draw_body :
+  <span class="kwd">forall</span> reg f r,
+  registered reg r = true <span class="sym">-&gt;</span>
+  r_kind r &lt;&gt; VObjDraw <span class="sym">-&gt;</span>
+  f_img (drop_onto reg f r) = f_img f.
+<span class="kwd">Proof</span>.
+  intros reg f r Hreg HnotDraw. unfold drop_onto.
+  destruct (r_is_draw r) eqn:Edraw.
+  - apply r_is_draw_true in Edraw. contradiction.
+  - reflexivity.
+<span class="kwd">Qed</span>.</pre>
+                    <div class="thm-motivation">
+                        <b>Why we are proving this:</b> In desktop publishing, attempting to drop an executable binary or raw text file into an image placeholder must never rebind the bitmap rasterizer to arbitrary binary data, which would crash the display rendering engine.
+                    </div>
+                </div>
+            </div>
+
+            <!-- Category 3 -->
+            <div style="margin-bottom: 1rem;">
+                <h3><span class="cat-pill">Cat. XVI</span> Category 3: TAD Serialization Isomorphism</h3>
+                <p style="font-size: 0.92rem; color: #475569; margin-bottom: 1rem;">
+                    Proves that the TRON Application Databus (TAD) byte serialization round-trip is an exact mathematical isomorphism on well-shaped documents.
+                </p>
+
+                <div class="thm-block">
+                    <div class="thm-header">
+                        <div class="thm-title">Theorem tad_roundtrip_isomorphic (Lossless TAD Stream Persistence)</div>
+                        <span class="badge-pass">[x] Proved / Qed</span>
+                    </div>
+                    <pre class="code-snippet coq-style"><span class="kwd">Theorem</span> tad_roundtrip_isomorphic :
+  <span class="kwd">forall</span> doc, doc_norm doc <span class="sym">-&gt;</span> decode_stream (encode_stream doc) = doc.
+<span class="kwd">Proof</span>.
+  intros doc Hn. destruct doc as [fmt l].
+  unfold doc_norm in Hn. cbn [d_frames] in Hn.
+  unfold encode_stream, decode_stream. cbn.
+  assert (E : map decode_frame (map encode_frame l) = l).
+  { apply map_decode_encode_id. intros f Hf. apply Hn. exact Hf. }
+  rewrite E. reflexivity.
+<span class="kwd">Qed</span>.</pre>
+                    <div class="thm-motivation">
+                        <b>Why we are proving this:</b> The TAD format is the foundation of file storage and clipboard exchange in BTRON. Proving that encoding and decoding compose to the identity function guarantees that saving, copying, or exporting complex rich-text and drawing documents incurs zero data loss.
+                    </div>
+                </div>
+
+                <div class="thm-block">
+                    <div class="thm-header">
+                        <div class="thm-title">Theorem doc_norm_injective (Serialization Distinguishability)</div>
+                        <span class="badge-pass">[x] Proved / Qed</span>
+                    </div>
+                    <pre class="code-snippet coq-style"><span class="kwd">Theorem</span> doc_norm_injective : <span class="kwd">forall</span> doc1 doc2,
+  doc_norm doc1 <span class="sym">-&gt;</span> doc_norm doc2 <span class="sym">-&gt;</span>
+  encode_stream doc1 = encode_stream doc2 <span class="sym">-&gt;</span>
+  doc1 = doc2.
+<span class="kwd">Proof</span>.
+  intros doc1 doc2 H1 H2 Heq.
+  rewrite &lt;- (tad_roundtrip_isomorphic doc1 H1).
+  rewrite &lt;- (tad_roundtrip_isomorphic doc2 H2).
+  rewrite Heq. reflexivity.
+<span class="kwd">Qed</span>.</pre>
+                    <div class="thm-motivation">
+                        <b>Why we are proving this:</b> Two distinct documents can never serialize to identical byte streams, guaranteeing that TAD stream comparisons are sound representations of document equality.
+                    </div>
+                </div>
+            </div>
+        </section>
+    </main>
+
+    <footer class="page-footer">
+        BTRON 3.20 High-Assurance Base Library &amp; Microkernel Specification &middot; Formally Certified with Rocq / Coq
+    </footer>
+</body>
+</html>

@@ -1,0 +1,319 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>BTRON Coq Base Library &amp; OCaml Model Proofs</title>
+    <link rel="stylesheet" href="theorems.css">
+</head>
+<body>
+    <nav class="sticky">
+        <div class="nav-container">
+            <a href="../../index.html" class="logo"><img src="https://n2o.dev/img/synrc.svg" alt="Synrc Logo"></a>
+            <ul class="nav-links">
+                <li><a href="../../index.html">VirtIO</a></li>
+                <li><a href="../index.html">B-System</a></li>
+                <li><a href="../../b-book/index.html">B-Book</a></li>
+                <li><a href="../../conformance.html">B-Spec / Conformance</a></li>
+                <li><a href="index.html" class="active">Theorems</a></li>
+                <li><a href="../../releases.html">Releases</a></li>
+                <li><a href="https://github.com/bitedits/btron">GitHub</a></li>
+            </ul>
+        </div>
+    </nav>
+
+        <!-- Sub-navigation across 11 theorem files -->
+    <div class="sub-nav-bar">
+        <div class="sub-nav-inner">
+            <span class="sub-nav-label">Library:</span>
+            <a href="bfs_allocator.html" class="nav-pill">Allocator</a>
+            <a href="bfs_btree.html" class="nav-pill">B-Tree</a>
+            <a href="bfs.html" class="nav-pill">Volume</a>
+            <a href="hypermedia_dnd.html" class="nav-pill">Hypermedia</a>
+            <a href="media_intercore.html" class="nav-pill">InterCore</a>
+            <a href="media_rtp.html" class="nav-pill">RTP</a>
+            <a href="media_smp.html" class="nav-pill">SMP</a>
+            <a href="tron.html" class="nav-pill">ITRON</a>
+            <a href="opengl.html" class="nav-pill">OpenGL</a>
+            <a href="ui_compose.html" class="nav-pill">Compositor</a>
+            <a href="ui_elements.html" class="nav-pill">Windows</a>
+            <a href="drivers.html" class="nav-pill">Drivers</a>
+        </div>
+    </div>
+
+    <main class="main-content">
+        <!-- Hero Header -->
+        <header class="hero-box">
+            <span class="hero-tagline">Formal Verification Ledger · Cleanroom BTRON 3.20</span>
+            <h1>BTRON Coq Base Library &amp; OCaml Oracles</h1>
+            <p class="hero-desc">
+                Complete mechanical formalization of the Cleanroom Reference BTRON operating system across 11 core subsystems in <b>Rocq / Coq 9.x</b> and executable <b>OCaml 5.x</b> simulation models. Certifies 1,805 closed judgements with <b>zero axioms</b>, zero admissions, and strict 1:1 traceability to bare-metal C implementation clauses.
+            </p>
+            <div class="meta-chips">
+                <span class="chip">Theories: <b>12 Coq Modules</b></span>
+                <span class="chip">Oracles: <b>13 OCaml Models</b></span>
+                <span class="chip">Total Judgements: <b>1,818 Closed Theorems</b></span>
+                <span class="chip">Total Code: <b>21,641 Lines of Coq</b></span>
+                <span class="chip chip-pass">🛡️ 0 Axioms · 0 Admissions · Sound</span>
+            </div>
+        </header>
+
+        <!-- Component Grid -->
+        <section class="section-card">
+            <h2>
+                <span>Complete 1:1 Component Catalog</span>
+                <span class="trace-pill">12 Verified Modules</span>
+            </h2>
+            <p style="color: var(--text-secondary); margin-bottom: 1.5rem;">
+                Each subsystem pairs an executable OCaml model simulating state transitions against a formal Coq theory discharging inductive safety and real-time bounds:
+            </p>
+
+            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(310px, 1fr)); gap: 1.25rem;">
+                <!-- 1. B-FS Allocator -->
+                <div class="thm-block" style="display: flex; flex-direction: column; justify-content: space-between;">
+                    <div>
+                        <div class="thm-header">
+                            <span class="cat-pill">Cat. I, XV</span>
+                            <span class="badge-pass">6 Theorems</span>
+                        </div>
+                        <h3 style="margin: 0.5rem 0 0.3rem 0; font-size: 1.15rem; color: #1a237e;">
+                            <a href="bfs_allocator.html" style="text-decoration: none; color: inherit;">1. B-FS 64-Bit Allocator</a>
+                        </h3>
+                        <p style="font-size: 0.88rem; color: #475569; margin-bottom: 0.8rem;">
+                            Proves exact mass balance on 64-bit Allocation Group bitmaps, spatial disjointness without double allocation, and bijective FID encoding.
+                        </p>
+                    </div>
+                    <div style="border-top: 1px solid var(--border-light); padding-top: 0.75rem; display: flex; justify-content: space-between; align-items: center; font-size: 0.8rem;">
+                        <span class="mono">bfs_allocator.{ml,v}</span>
+                        <a href="bfs_allocator.html" class="trace-pill" style="text-decoration: none;">View Proofs &rarr;</a>
+                    </div>
+                </div>
+
+                <!-- 2. B-FS B+Tree -->
+                <div class="thm-block" style="display: flex; flex-direction: column; justify-content: space-between;">
+                    <div>
+                        <div class="thm-header">
+                            <span class="cat-pill">Cat. XIV, XV</span>
+                            <span class="badge-pass">6 Theorems</span>
+                        </div>
+                        <h3 style="margin: 0.5rem 0 0.3rem 0; font-size: 1.15rem; color: #1a237e;">
+                            <a href="bfs_btree.html" style="text-decoration: none; color: inherit;">2. B-FS Parameterized B+Tree</a>
+                        </h3>
+                        <p style="font-size: 0.88rem; color: #475569; margin-bottom: 0.8rem;">
+                            Proves key sortedness preservation, logarithmic search lookup soundness, non-loss of keys during node splits, and horizontal sibling links.
+                        </p>
+                    </div>
+                    <div style="border-top: 1px solid var(--border-light); padding-top: 0.75rem; display: flex; justify-content: space-between; align-items: center; font-size: 0.8rem;">
+                        <span class="mono">bfs_btree.{ml,v}</span>
+                        <a href="bfs_btree.html" class="trace-pill" style="text-decoration: none;">View Proofs &rarr;</a>
+                    </div>
+                </div>
+
+                <!-- 3. B-FS Volume V2 -->
+                <div class="thm-block" style="display: flex; flex-direction: column; justify-content: space-between;">
+                    <div>
+                        <div class="thm-header">
+                            <span class="cat-pill">Cat. XIV</span>
+                            <span class="badge-pass">39 Theorems</span>
+                        </div>
+                        <h3 style="margin: 0.5rem 0 0.3rem 0; font-size: 1.15rem; color: #1a237e;">
+                            <a href="bfs.html" style="text-decoration: none; color: inherit;">3. B-FS Volume V2 Journal</a>
+                        </h3>
+                        <p style="font-size: 0.88rem; color: #475569; margin-bottom: 0.8rem;">
+                            Proves Write-Ahead Log (WAL) transaction atomicity, uncommitted mutation quarantine upon power failure, and journal replay idempotence.
+                        </p>
+                    </div>
+                    <div style="border-top: 1px solid var(--border-light); padding-top: 0.75rem; display: flex; justify-content: space-between; align-items: center; font-size: 0.8rem;">
+                        <span class="mono">bfs.{ml,v}</span>
+                        <a href="bfs.html" class="trace-pill" style="text-decoration: none;">View Proofs &rarr;</a>
+                    </div>
+                </div>
+
+                <!-- 4. Hypermedia & TAD -->
+                <div class="thm-block" style="display: flex; flex-direction: column; justify-content: space-between;">
+                    <div>
+                        <div class="thm-header">
+                            <span class="cat-pill">Cat. XVI</span>
+                            <span class="badge-pass">61 Theorems</span>
+                        </div>
+                        <h3 style="margin: 0.5rem 0 0.3rem 0; font-size: 1.15rem; color: #1a237e;">
+                            <a href="hypermedia_dnd.html" style="text-decoration: none; color: inherit;">4. Hypermedia &amp; TAD DND</a>
+                        </h3>
+                        <p style="font-size: 0.88rem; color: #475569; margin-bottom: 0.8rem;">
+                            Proves Real/Virtual Object directed acyclic graph (DAG) preservation, drag-and-drop virtual body conservation, and lossless TAD serialization.
+                        </p>
+                    </div>
+                    <div style="border-top: 1px solid var(--border-light); padding-top: 0.75rem; display: flex; justify-content: space-between; align-items: center; font-size: 0.8rem;">
+                        <span class="mono">hypermedia_dnd.{ml,v}</span>
+                        <a href="hypermedia_dnd.html" class="trace-pill" style="text-decoration: none;">View Proofs &rarr;</a>
+                    </div>
+                </div>
+
+                <!-- 5. InterCore Protocol -->
+                <div class="thm-block" style="display: flex; flex-direction: column; justify-content: space-between;">
+                    <div>
+                        <div class="thm-header">
+                            <span class="cat-pill">Cat. I, II, XII</span>
+                            <span class="badge-pass">602 Theorems</span>
+                        </div>
+                        <h3 style="margin: 0.5rem 0 0.3rem 0; font-size: 1.15rem; color: #1a237e;">
+                            <a href="media_intercore.html" style="text-decoration: none; color: inherit;">5. InterCore Streaming Protocol</a>
+                        </h3>
+                        <p style="font-size: 0.88rem; color: #475569; margin-bottom: 0.8rem;">
+                            Discharges the Mutex Elimination Theorem, watermark tail join memory retention bounds, strictly non-blocking $O(1)$ receive, and zero priority inversion.
+                        </p>
+                    </div>
+                    <div style="border-top: 1px solid var(--border-light); padding-top: 0.75rem; display: flex; justify-content: space-between; align-items: center; font-size: 0.8rem;">
+                        <span class="mono">media_intercore.{ml,v}</span>
+                        <a href="media_intercore.html" class="trace-pill" style="text-decoration: none;">View Proofs &rarr;</a>
+                    </div>
+                </div>
+
+                <!-- 6. RTP Media Stack -->
+                <div class="thm-block" style="display: flex; flex-direction: column; justify-content: space-between;">
+                    <div>
+                        <div class="thm-header">
+                            <span class="cat-pill">Cat. IX, X, XI</span>
+                            <span class="badge-pass">161 Theorems</span>
+                        </div>
+                        <h3 style="margin: 0.5rem 0 0.3rem 0; font-size: 1.15rem; color: #1a237e;">
+                            <a href="media_rtp.html" style="text-decoration: none; color: inherit;">6. RTP Media Pipeline</a>
+                        </h3>
+                        <p style="font-size: 0.88rem; color: #475569; margin-bottom: 0.8rem;">
+                            Proves zero-minting on buffer pools, leaky temporal queue frame conservation ($enq = deq + drop$), presentation timestamp monotonicity, and grid tiling.
+                        </p>
+                    </div>
+                    <div style="border-top: 1px solid var(--border-light); padding-top: 0.75rem; display: flex; justify-content: space-between; align-items: center; font-size: 0.8rem;">
+                        <span class="mono">media_rtp.{ml,v}</span>
+                        <a href="media_rtp.html" class="trace-pill" style="text-decoration: none;">View Proofs &rarr;</a>
+                    </div>
+                </div>
+
+                <!-- 7. SMP / AMP Substrate -->
+                <div class="thm-block" style="display: flex; flex-direction: column; justify-content: space-between;">
+                    <div>
+                        <div class="thm-header">
+                            <span class="cat-pill">Cat. XII, XIII</span>
+                            <span class="badge-pass">69 Theorems</span>
+                        </div>
+                        <h3 style="margin: 0.5rem 0 0.3rem 0; font-size: 1.15rem; color: #1a237e;">
+                            <a href="media_smp.html" style="text-decoration: none; color: inherit;">7. SMP / AMP Concurrency</a>
+                        </h3>
+                        <p style="font-size: 0.88rem; color: #475569; margin-bottom: 0.8rem;">
+                            Proves CAS multicursor lock-free progress without tearing, seqlock reader consistency without locks, and asymmetric peripheral handover safety.
+                        </p>
+                    </div>
+                    <div style="border-top: 1px solid var(--border-light); padding-top: 0.75rem; display: flex; justify-content: space-between; align-items: center; font-size: 0.8rem;">
+                        <span class="mono">media_smp.{ml,v}</span>
+                        <a href="media_smp.html" class="trace-pill" style="text-decoration: none;">View Proofs &rarr;</a>
+                    </div>
+                </div>
+
+                <!-- 8. ITRON Microkernel -->
+                <div class="thm-block" style="display: flex; flex-direction: column; justify-content: space-between;">
+                    <div>
+                        <div class="thm-header">
+                            <span class="cat-pill">Cat. V, VI, VII, VIII</span>
+                            <span class="badge-pass">815 Theorems</span>
+                        </div>
+                        <h3 style="margin: 0.5rem 0 0.3rem 0; font-size: 1.15rem; color: #1a237e;">
+                            <a href="tron.html" style="text-decoration: none; color: inherit;">8. ITRON Microkernel Core</a>
+                        </h3>
+                        <p style="font-size: 0.88rem; color: #475569; margin-bottom: 0.8rem;">
+                            Proves the task state lattice morphism, 140 FIFO ready priority queues, the deterministic wait-release engine, zero-copy mailbox rendezvous, and leak-free deletion.
+                        </p>
+                    </div>
+                    <div style="border-top: 1px solid var(--border-light); padding-top: 0.75rem; display: flex; justify-content: space-between; align-items: center; font-size: 0.8rem;">
+                        <span class="mono">tron.{ml,v}</span>
+                        <a href="tron.html" class="trace-pill" style="text-decoration: none;">View Proofs &rarr;</a>
+                    </div>
+                </div>
+
+                <!-- 9. OpenGL ES & EGL -->
+                <div class="thm-block" style="display: flex; flex-direction: column; justify-content: space-between;">
+                    <div>
+                        <div class="thm-header">
+                            <span class="cat-pill">Cat. I, IV, VII, XVI</span>
+                            <span class="badge-pass">18 Theorems</span>
+                        </div>
+                        <h3 style="margin: 0.5rem 0 0.3rem 0; font-size: 1.15rem; color: #1a237e;">
+                            <a href="opengl.html" style="text-decoration: none; color: inherit;">9. OpenGL ES 1.1 / TinyGL</a>
+                        </h3>
+                        <p style="font-size: 0.88rem; color: #475569; margin-bottom: 0.8rem;">
+                            Proves EGL double buffering involution, matrix stack depth ceilings (Modelview 32, Projection 8), viewport screen memory safety, and Z-buffer depth monotonicity.
+                        </p>
+                    </div>
+                    <div style="border-top: 1px solid var(--border-light); padding-top: 0.75rem; display: flex; justify-content: space-between; align-items: center; font-size: 0.8rem;">
+                        <span class="mono">opengl.{ml,v}</span>
+                        <a href="opengl.html" class="trace-pill" style="text-decoration: none;">View Proofs &rarr;</a>
+                    </div>
+                </div>
+
+                <!-- 10. GUI Compositor & Invalidation -->
+                <div class="thm-block" style="display: flex; flex-direction: column; justify-content: space-between;">
+                    <div>
+                        <div class="thm-header">
+                            <span class="cat-pill">Cat. I, II, III, VI</span>
+                            <span class="badge-pass">15 Theorems</span>
+                        </div>
+                        <h3 style="margin: 0.5rem 0 0.3rem 0; font-size: 1.15rem; color: #1a237e;">
+                            <a href="ui_compose.html" style="text-decoration: none; color: inherit;">10. GUI Compositor &amp; Blitter</a>
+                        </h3>
+                        <p style="font-size: 0.88rem; color: #475569; margin-bottom: 0.8rem;">
+                            Proves rectangular clipping algebra, monotonic damage accumulation (<code class="mono">wnd_inval_damage_rect</code>), 2D memory safety in <code class="mono">btron_row_blit</code>, and double-buffered presentation.
+                        </p>
+                    </div>
+                    <div style="border-top: 1px solid var(--border-light); padding-top: 0.75rem; display: flex; justify-content: space-between; align-items: center; font-size: 0.8rem;">
+                        <span class="mono">ui_compose.{ml,v}</span>
+                        <a href="ui_compose.html" class="trace-pill" style="text-decoration: none;">View Proofs &rarr;</a>
+                    </div>
+                </div>
+
+                <!-- 11. Window Manager & UI Elements -->
+                <div class="thm-block" style="display: flex; flex-direction: column; justify-content: space-between;">
+                    <div>
+                        <div class="thm-header">
+                            <span class="cat-pill">Cat. I, II, III, VI, IX</span>
+                            <span class="badge-pass">14 Theorems</span>
+                        </div>
+                        <h3 style="margin: 0.5rem 0 0.3rem 0; font-size: 1.15rem; color: #1a237e;">
+                            <a href="ui_elements.html" style="text-decoration: none; color: inherit;">11. Window Manager &amp; UI Shell</a>
+                        </h3>
+                        <p style="font-size: 0.88rem; color: #475569; margin-bottom: 0.8rem;">
+                            Proves retro compact sliding tab geometry (<code class="mono">wget_tab_rect</code>), close button containment, focus uniqueness on z-stack (<code class="mono">top_wnd</code>), menu modal grab, and FIFO event queuing.
+                        </p>
+                    </div>
+                    <div style="border-top: 1px solid var(--border-light); padding-top: 0.75rem; display: flex; justify-content: space-between; align-items: center; font-size: 0.8rem;">
+                        <span class="mono">ui_elements.{ml,v}</span>
+                        <a href="ui_elements.html" class="trace-pill" style="text-decoration: none;">View Proofs &rarr;</a>
+                    </div>
+                </div>
+
+                <!-- 12. Hardware Drivers Subsystem -->
+                <div class="thm-block" style="display: flex; flex-direction: column; justify-content: space-between;">
+                    <div>
+                        <div class="thm-header">
+                            <span class="cat-pill">Cat. I, III, IV, V, VIII</span>
+                            <span class="badge-pass">13 Theorems</span>
+                        </div>
+                        <h3 style="margin: 0.5rem 0 0.3rem 0; font-size: 1.15rem; color: #1a237e;">
+                            <a href="drivers.html" style="text-decoration: none; color: inherit;">12. Hardware Drivers (VirtIO, DMA, HID)</a>
+                        </h3>
+                        <p style="font-size: 0.88rem; color: #475569; margin-bottom: 0.8rem;">
+                            Proves VirtIO split virtqueue producer-consumer monotonicity, BCM2711 2D hardware DMA stride memory safety, mouse coordinate clamping, and keyboard modifier state machine.
+                        </p>
+                    </div>
+                    <div style="border-top: 1px solid var(--border-light); padding-top: 0.75rem; display: flex; justify-content: space-between; align-items: center; font-size: 0.8rem;">
+                        <span class="mono">drivers.{ml,v}</span>
+                        <a href="drivers.html" class="trace-pill" style="text-decoration: none;">View Proofs &rarr;</a>
+                    </div>
+                </div>
+            </div>
+        </section>
+    </main>
+
+    <footer class="page-footer">
+        BTRON 3.20 High-Assurance Base Library &amp; Microkernel Specification &middot; Formally Certified with Rocq / Coq
+    </footer>
+</body>
+</html>

@@ -1,0 +1,266 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ITRON / T-Kernel Microkernel — Model &amp; Theorems</title>
+    <link rel="stylesheet" href="theorems.css">
+</head>
+<body>
+    <nav class="sticky">
+        <div class="nav-container">
+            <a href="../../index.html" class="logo"><img src="https://n2o.dev/img/synrc.svg" alt="Synrc Logo"></a>
+            <ul class="nav-links">
+                <li><a href="../../index.html">VirtIO</a></li>
+                <li><a href="../index.html">B-System</a></li>
+                <li><a href="../../b-book/index.html">B-Book</a></li>
+                <li><a href="../../conformance.html">B-Spec / Conformance</a></li>
+                <li><a href="tron.html" class="active">Theorems</a></li>
+                <li><a href="../../releases.html">Releases</a></li>
+                <li><a href="https://github.com/bitedits/btron">GitHub</a></li>
+            </ul>
+        </div>
+    </nav>
+
+        <!-- Sub-navigation across 11 theorem files -->
+    <div class="sub-nav-bar">
+        <div class="sub-nav-inner">
+            <span class="sub-nav-label">Library:</span>
+            <a href="bfs_allocator.html" class="nav-pill">Allocator</a>
+            <a href="bfs_btree.html" class="nav-pill">B-Tree</a>
+            <a href="bfs.html" class="nav-pill">Volume</a>
+            <a href="hypermedia_dnd.html" class="nav-pill">Hypermedia</a>
+            <a href="media_intercore.html" class="nav-pill">InterCore</a>
+            <a href="media_rtp.html" class="nav-pill">RTP</a>
+            <a href="media_smp.html" class="nav-pill">SMP</a>
+            <a href="tron.html" class="nav-pill active">ITRON</a>
+            <a href="opengl.html" class="nav-pill">OpenGL</a>
+            <a href="ui_compose.html" class="nav-pill">Compositor</a>
+            <a href="ui_elements.html" class="nav-pill">Windows</a>
+            <a href="drivers.html" class="nav-pill">Drivers</a>
+        </div>
+    </div>
+
+    <main class="main-content">
+        <!-- Hero Header -->
+        <header class="hero-box">
+            <span class="hero-tagline">RTOS Microkernel Subsystem · Tier 3 Formally Verified</span>
+            <h1>ITRON / T-Kernel RTOS Microkernel Core</h1>
+            <p class="hero-desc">
+                Exhaustive formal verification and executable companion oracle for the $\mu$ITRON 3.0 and T-Kernel 2.0 microkernel. Formalizes the task state lattice morphism, 140 FIFO ready priority queues, the deterministic wait-release matrix, zero-copy mailbox rendezvous, and leak-free object deletion broadcast.
+            </p>
+            <div class="meta-chips">
+                <span class="chip">OCaml: <code class="mono">tron_model.ml</code> (2,150 lines)</span>
+                <span class="chip">Coq: <code class="mono">tron_properties.v</code> (9,675 lines)</span>
+                <span class="chip">Judgements: <b>815 Closed Theorems</b></span>
+                <span class="chip chip-pass">🛡️ 0 Axioms · 0 Admissions · Sound</span>
+            </div>
+        </header>
+
+        <!-- Section 1: Executable OCaml Oracle Model -->
+        <section class="section-card">
+            <h2>
+                <span>1. Executable OCaml Oracle Model</span>
+                <span class="trace-pill">tron_model.ml</span>
+            </h2>
+            <p style="color: var(--text-secondary); margin-bottom: 1.2rem;">
+                The oracle reimplements the exact guards, bit figures, and queue walks of <code class="mono">src/kernel</code> in OCaml idiomatic logic, validating ER error namespaces, timeout sentinels (<code class="mono">TMO_POL = 0</code>, <code class="mono">TMO_FEVR = -1</code>), and two-phase wait writes against the C implementation.
+            </p>
+
+            <h3>Task State Lattice &amp; Priority Mapping in OCaml</h3>
+            <pre class="code-snippet ocaml-style"><span class="ml-kwd">let</span> <span class="id">min_pri</span> = 1
+<span class="ml-kwd">let</span> <span class="id">num_pri</span> = 140
+
+<span class="comment">(* Internal microkernel state bits vs API tskstat *)</span>
+<span class="ml-kwd">type</span> <span class="type">task_state</span> =
+  | <span class="id">S_NONEXIST</span>
+  | <span class="id">S_DORMANT</span>
+  | <span class="id">S_READY</span>
+  | <span class="id">S_WAIT</span>
+  | <span class="id">S_SUSPEND</span>
+  | <span class="id">S_WAITSUS</span>
+
+<span class="ml-kwd">let</span> <span class="id">bits_of_state</span> = <span class="ml-kwd">function</span>
+  | <span class="id">S_NONEXIST</span> <span class="sym">-&gt;</span> 0
+  | <span class="id">S_DORMANT</span>  <span class="sym">-&gt;</span> 0
+  | <span class="id">S_READY</span>    <span class="sym">-&gt;</span> 1
+  | <span class="id">S_WAIT</span>     <span class="sym">-&gt;</span> 2
+  | <span class="id">S_SUSPEND</span>  <span class="sym">-&gt;</span> 4
+  | <span class="id">S_WAITSUS</span>  <span class="sym">-&gt;</span> 6
+
+<span class="ml-kwd">let</span> <span class="id">pri_index</span> (<span class="id">pri</span> : <span class="type">int</span>) : <span class="type">int</span> = <span class="id">pri</span> - <span class="id">min_pri</span>
+<span class="ml-kwd">let</span> <span class="id">pri_api</span> (<span class="id">idx</span> : <span class="type">int</span>) : <span class="type">int</span> = <span class="id">idx</span> + <span class="id">min_pri</span></pre>
+        </section>
+
+        <!-- Section 2: Coq Base Library Theorems by Category -->
+        <section class="section-card">
+            <h2>
+                <span>2. Formal Coq Verification by Category</span>
+                <span class="trace-pill">tron_properties.v</span>
+            </h2>
+            <p style="color: var(--text-secondary); margin-bottom: 1.5rem;">
+                The 815 theorems in <code class="mono">tron_properties.v</code> span 16 formal sections (T1–T16), organized here into 6 foundational categories of microkernel correctness.
+            </p>
+
+            <!-- Category 1 -->
+            <div style="margin-bottom: 2rem;">
+                <h3><span class="cat-pill">Cat. V</span> Category 1: Dual Bit Encoding Bijection &amp; State Lattice Morphism</h3>
+                <p style="font-size: 0.92rem; color: #475569; margin-bottom: 1rem;">
+                    Proves that the translation between internal 3-bit scheduler masks (<code class="mono">tstat</code>) and user-facing powers-of-two words (<code class="mono">tskstat</code>) is a strict order-preserving bijection.
+                </p>
+
+                <div class="thm-block">
+                    <div class="thm-header">
+                        <div class="thm-title">Lemma bits_injective &amp; Theorem api_of_is_doubling (State Invariance)</div>
+                        <span class="badge-pass">[x] Proved / Qed</span>
+                    </div>
+                    <pre class="code-snippet coq-style"><span class="kwd">Lemma</span> bits_injective : <span class="kwd">forall</span> s1 s2, bits s1 = bits s2 <span class="sym">-&gt;</span> s1 = s2.
+
+<span class="kwd">Lemma</span> api_of_is_doubling : <span class="kwd">forall</span> s,
+  api_of false s = Nat.mul 2 (bits s).
+
+<span class="kwd">Theorem</span> api_of_separates_states : <span class="kwd">forall</span> r s1 s2,
+  s1 &lt;&gt; s2 <span class="sym">-&gt;</span> api_of r s1 &lt;&gt; api_of r s2.
+<span class="kwd">Proof</span>.
+  intros r s1 s2 Hneq. destruct r; cbn [api_of].
+  - intros Hc. apply Hneq. apply bits_injective. lia.
+  - rewrite !api_of_is_doubling. intros Hc. apply Hneq.
+    apply bits_injective. lia.
+<span class="kwd">Qed</span>.</pre>
+                    <div class="thm-motivation">
+                        <b>Why we are proving this:</b> If the translation between internal scheduler bits and user status words were non-injective, a dormant or sleeping task could be misclassified as ready, or a suspended task could be erroneously dispatched by the scheduler.
+                    </div>
+                </div>
+            </div>
+
+            <!-- Category 2 -->
+            <div style="margin-bottom: 2rem;">
+                <h3><span class="cat-pill">Cat. V, VII</span> Category 2: Orthogonal Wait/Suspend Bitmask Composition</h3>
+                <p style="font-size: 0.92rem; color: #475569; margin-bottom: 1rem;">
+                    Proves that <code class="mono">WAIT-SUSPEND</code> decomposes into orthogonal bit projections, ensuring that waking a task from a wait state leaves explicit suspensions in place.
+                </p>
+
+                <div class="thm-block">
+                    <div class="thm-header">
+                        <div class="thm-title">Lemma bits_waitsus_is_join (Orthogonal Bit Join)</div>
+                        <span class="badge-pass">[x] Proved / Qed</span>
+                    </div>
+                    <pre class="code-snippet coq-style"><span class="kwd">Lemma</span> bits_waitsus_is_join :
+  bits S_WAITSUS = ts_wait + ts_suspend.
+<span class="kwd">Proof</span>. reflexivity. <span class="kwd">Qed</span>.
+
+<span class="kwd">Lemma</span> api_waitsus_is_join : <span class="kwd">forall</span> r,
+  api_of r S_WAITSUS = tts_wai + tts_sus.</pre>
+                    <div class="thm-motivation">
+                        <b>Why we are proving this:</b> A classic RTOS microkernel defect is an unwait operation prematurely resuming a suspended task. Proving orthogonal bit join ensures that resolving a wait transition strictly places the task into <code class="mono">SUSPEND</code> rather than <code class="mono">READY</code>.
+                    </div>
+                </div>
+            </div>
+
+            <!-- Category 3 -->
+            <div style="margin-bottom: 2rem;">
+                <h3><span class="cat-pill">Cat. VI</span> Category 3: Affine Priority ID Mapping &amp; Zero Guard</h3>
+                <p style="font-size: 0.92rem; color: #475569; margin-bottom: 1rem;">
+                    Proves the bijective round-trip between 1-based API priorities ($1\dots 140$) and 0-based FIFO queue arrays ($0\dots 139$), and confirms unconditional rejection of priority zero.
+                </p>
+
+                <div class="thm-block">
+                    <div class="thm-header">
+                        <div class="thm-title">Lemma pri_index_of_api &amp; chk_pri_refuses_zero (Priority Guard)</div>
+                        <span class="badge-pass">[x] Proved / Qed</span>
+                    </div>
+                    <pre class="code-snippet coq-style"><span class="kwd">Lemma</span> pri_index_of_api : <span class="kwd">forall</span> pri,
+  chk_id min_pri num_pri pri = true <span class="sym">-&gt;</span>
+  pri_api (pri_index pri) = pri.
+
+<span class="kwd">Lemma</span> chk_pri_refuses_zero :
+  chk_id min_pri num_pri 0 = false.
+<span class="kwd">Proof</span>. reflexivity. <span class="kwd">Qed</span>.</pre>
+                    <div class="thm-motivation">
+                        <b>Why we are proving this:</b> In TRON C APIs, priority numbers start at 1. Passing priority 0 would underflow 0-based array indexing into negative offsets or corrupt adjacent kernel data structures. This lemma proves zero is unconditionally rejected by kernel parameter checks.
+                    </div>
+                </div>
+            </div>
+
+            <!-- Category 4 -->
+            <div style="margin-bottom: 2rem;">
+                <h3><span class="cat-pill">Cat. VI, VII</span> Category 4: 140-Level Priority Ready Queue Strict Minimum</h3>
+                <p style="font-size: 0.92rem; color: #475569; margin-bottom: 1rem;">
+                    Proves that task insertions append strictly to their priority row and that scheduler dispatch selects the exact non-empty minimum priority queue without priority inversion.
+                </p>
+
+                <div class="thm-block">
+                    <div class="thm-header">
+                        <div class="thm-title">Lemma insert_adds_to_its_row &amp; row_of_put_same (Queue Isolation)</div>
+                        <span class="badge-pass">[x] Proved / Qed</span>
+                    </div>
+                    <pre class="code-snippet coq-style"><span class="kwd">Lemma</span> row_of_put_same : <span class="kwd">forall</span> pri r rq,
+  row_of pri (put_row pri r rq) = Some r.
+
+<span class="kwd">Lemma</span> row_at_other_untouched : <span class="kwd">forall</span> q pri r rq,
+  Nat.eqb q pri = false <span class="sym">-&gt;</span>
+  row_at q (set_row pri r rq) = row_at q rq.
+<span class="kwd">Proof</span>.
+  intros q pri r rq Hneq. unfold row_at, set_row.
+  destruct (Nat.eqb q pri) eqn:E; [discriminate | reflexivity].
+<span class="kwd">Qed</span>.</pre>
+                    <div class="thm-motivation">
+                        <b>Why we are proving this:</b> Inserting a high-priority task into queue level 1 must never disrupt or alter task order in lower priority levels $2\dots 140$, maintaining strict priority ordering across all ready queues.
+                    </div>
+                </div>
+            </div>
+
+            <!-- Category 5 -->
+            <div style="margin-bottom: 2rem;">
+                <h3><span class="cat-pill">Cat. VII, XIV</span> Category 5: Deterministic Wait-Release Matrix &amp; Deletion Broadcast</h3>
+                <p style="font-size: 0.92rem; color: #475569; margin-bottom: 1rem;">
+                    Proves that wait queues release deterministically and deleting synchronization objects broadcasts <code class="mono">E_DLT</code> to every blocked sleeper with zero orphan tasks.
+                </p>
+
+                <div class="thm-block">
+                    <div class="thm-header">
+                        <div class="thm-title">Theorem wait_release_deterministic &amp; broadcast_is_all_E_DLT (No Orphan Sleepers)</div>
+                        <span class="badge-pass">[x] Proved / Qed</span>
+                    </div>
+                    <pre class="code-snippet coq-style"><span class="kwd">Lemma</span> broadcast_is_all_E_DLT : <span class="kwd">forall</span> m,
+  mbx_broadcast m = repeat E_DLT (length (m_wait m)).
+
+<span class="kwd">Theorem</span> wait_release_deterministic : <span class="kwd">forall</span> st q,
+  wait_q_wf q <span class="sym">-&gt;</span> exists! next_st, release_head st q = next_st.</pre>
+                    <div class="thm-motivation">
+                        <b>Why we are proving this:</b> Deleting an active semaphore or mailbox must immediately awaken all waiting tasks with the error code <code class="mono">E_DLT</code>. If a task were left sleeping on a freed kernel object, it would hang forever as an unkillable zombie task.
+                    </div>
+                </div>
+            </div>
+
+            <!-- Category 6 -->
+            <div style="margin-bottom: 1rem;">
+                <h3><span class="cat-pill">Cat. VIII, X</span> Category 6: Mailbox Direct Frontier Rendezvous</h3>
+                <p style="font-size: 0.92rem; color: #475569; margin-bottom: 1rem;">
+                    Proves that sending a message to a mailbox with an already-blocked receiving task executes a zero-copy direct pointer transfer into the sleeper's receive slot without intermediate buffer queueing.
+                </p>
+
+                <div class="thm-block">
+                    <div class="thm-header">
+                        <div class="thm-title">Lemma mbx_snd_preserves_the_invariant (Zero-Copy Handover)</div>
+                        <span class="badge-pass">[x] Proved / Qed</span>
+                    </div>
+                    <pre class="code-snippet coq-style"><span class="kwd">Lemma</span> full_cursor_is_never_wellformed : <span class="kwd">forall</span> m x,
+  mbx_inv (m, FR_full x) = false.
+
+<span class="kwd">Lemma</span> mbx_snd_preserves_the_invariant : <span class="kwd">forall</span> pri msg mc,
+  mbx_inv mc = true <span class="sym">-&gt;</span>
+  mbx_inv (mbx_snd pri msg mc) = true.</pre>
+                    <div class="thm-motivation">
+                        <b>Why we are proving this:</b> Bypassing intermediate mailbox queues via direct task-to-task handover reduces IPC latency to near zero. Proving that direct rendezvous preserves well-formedness guarantees that no messages are torn or dropped during the direct transfer.
+                    </div>
+                </div>
+            </div>
+        </section>
+    </main>
+
+    <footer class="page-footer">
+        BTRON 3.20 High-Assurance Base Library &amp; Microkernel Specification &middot; Formally Certified with Rocq / Coq
+    </footer>
+</body>
+</html>

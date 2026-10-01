@@ -1,0 +1,292 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>InterCore Streaming Protocol — Model &amp; Theorems</title>
+    <link rel="stylesheet" href="theorems.css">
+</head>
+<body>
+    <nav class="sticky">
+        <div class="nav-container">
+            <a href="../../index.html" class="logo"><img src="https://n2o.dev/img/synrc.svg" alt="Synrc Logo"></a>
+            <ul class="nav-links">
+                <li><a href="../../index.html">VirtIO</a></li>
+                <li><a href="../index.html">B-System</a></li>
+                <li><a href="../../b-book/index.html">B-Book</a></li>
+                <li><a href="../../conformance.html">B-Spec / Conformance</a></li>
+                <li><a href="media_intercore.html" class="active">Theorems</a></li>
+                <li><a href="../../releases.html">Releases</a></li>
+                <li><a href="https://github.com/bitedits/btron">GitHub</a></li>
+            </ul>
+        </div>
+    </nav>
+
+        <!-- Sub-navigation across 11 theorem files -->
+    <div class="sub-nav-bar">
+        <div class="sub-nav-inner">
+            <span class="sub-nav-label">Library:</span>
+            <a href="bfs_allocator.html" class="nav-pill">Allocator</a>
+            <a href="bfs_btree.html" class="nav-pill">B-Tree</a>
+            <a href="bfs.html" class="nav-pill">Volume</a>
+            <a href="hypermedia_dnd.html" class="nav-pill">Hypermedia</a>
+            <a href="media_intercore.html" class="nav-pill active">InterCore</a>
+            <a href="media_rtp.html" class="nav-pill">RTP</a>
+            <a href="media_smp.html" class="nav-pill">SMP</a>
+            <a href="tron.html" class="nav-pill">ITRON</a>
+            <a href="opengl.html" class="nav-pill">OpenGL</a>
+            <a href="ui_compose.html" class="nav-pill">Compositor</a>
+            <a href="ui_elements.html" class="nav-pill">Windows</a>
+            <a href="drivers.html" class="nav-pill">Drivers</a>
+        </div>
+    </div>
+
+    <main class="main-content">
+        <!-- Hero Header -->
+        <header class="hero-box">
+            <span class="hero-tagline">InterCore Streaming Subsystem · Tier 5 Formally Verified</span>
+            <h1>InterCore Streaming Protocol &amp; Star Ring</h1>
+            <p class="hero-desc">
+                Modal multi-core formal verification and executable oracle for the broker-free InterCore message passing protocol (<code class="mono">pub</code>, <code class="mono">sub</code>, <code class="mono">spawn</code>, <code class="mono">snd</code>, <code class="mono">rcv</code>). Discharges the Mutex Elimination Theorem, bounds memory retention by watermarks, and proves total absence of priority inversion.
+            </p>
+            <div class="meta-chips">
+                <span class="chip">OCaml: <code class="mono">media_intercore_model.ml</code> (1,280 lines)</span>
+                <span class="chip">Coq: <code class="mono">media_intercore_properties.v</code> (6,217 lines)</span>
+                <span class="chip">Judgements: <b>602 Closed Theorems</b></span>
+                <span class="chip chip-pass">🛡️ 0 Axioms · 0 Admissions · Sound</span>
+            </div>
+        </header>
+
+        <!-- Section 1: Executable OCaml Oracle Model -->
+        <section class="section-card">
+            <h2>
+                <span>1. Executable OCaml Oracle Model</span>
+                <span class="trace-pill">media_intercore_model.ml</span>
+            </h2>
+            <p style="color: var(--text-secondary); margin-bottom: 1.2rem;">
+                The oracle realizes the Zero-Switch Actor Topology across asymmetric cores, exploring an exhaustive $8^6 = 262,144$ state-space permutation search to empirically validate that no concurrent sequence of calls violates sector pool conservation or ring integrity.
+            </p>
+
+            <h3>The 5-Call System Architecture &amp; Topologies</h3>
+            <pre class="code-snippet ocaml-style"><span class="ml-kwd">let</span> <span class="id">cores_shipped</span> = 1
+<span class="ml-kwd">let</span> <span class="id">cores_target</span> = 4
+<span class="ml-kwd">let</span> <span class="id">io_core_id</span> = 3
+<span class="ml-kwd">let</span> <span class="id">event_queue_size</span> = 256
+
+<span class="ml-kwd">type</span> <span class="type">snd_result</span> = S_OK | S_FULL <span class="ml-kwd">of</span> <span class="type">int</span> | S_BAD_CURSOR
+<span class="ml-kwd">type</span> <span class="type">rcv_result</span> = R_DATA <span class="ml-kwd">of</span> <span class="type">int</span> | R_EMPTY | R_BAD_CURSOR
+
+<span class="ml-kwd">type</span> <span class="type">bus</span> = {
+  <span class="id">writers</span> : <span class="type">writer array</span>;
+  <span class="id">readers</span> : <span class="type">reader array</span>;
+  <span class="id">tasks</span> : <span class="type">task array</span>;
+  <span class="ml-kwd">mutable</span> <span class="id">pool_free</span> : <span class="type">int</span>;
+}
+
+<span class="comment">(* Strictly non-blocking receive: returns immediately without scheduler yield *)</span>
+<span class="ml-kwd">let</span> <span class="id">rcv</span> (<span class="id">b</span> : <span class="type">bus</span>) (<span class="id">rid</span> : <span class="type">int</span>) : <span class="type">rcv_result</span> =
+  <span class="ml-kwd">let</span> <span class="id">r</span> = <span class="id">b</span>.<span class="id">readers</span>.(<span class="id">rid</span>) <span class="ml-kwd">in</span>
+  <span class="ml-kwd">let</span> <span class="id">w</span> = <span class="id">b</span>.<span class="id">writers</span>.(<span class="id">r</span>.<span class="id">r_wid</span>) <span class="ml-kwd">in</span>
+  <span class="ml-kwd">if</span> <span class="id">r</span>.<span class="id">r_cur</span> &gt;= <span class="id">w</span>.<span class="id">w_enq</span> <span class="ml-kwd">then</span> R_EMPTY
+  <span class="ml-kwd">else</span> <span class="ml-kwd">begin</span>
+    <span class="ml-kwd">let</span> <span class="id">data</span> = <span class="id">w</span>.<span class="id">w_history</span>.(<span class="id">r</span>.<span class="id">r_cur</span>) <span class="ml-kwd">in</span>
+    <span class="id">r</span>.<span class="id">r_cur</span> &lt;- <span class="id">r</span>.<span class="id">r_cur</span> + 1;
+    R_DATA <span class="id">data</span>
+  <span class="ml-kwd">end</span></pre>
+        </section>
+
+        <!-- Section 2: Coq Base Library Theorems by Category -->
+        <section class="section-card">
+            <h2>
+                <span>2. Formal Coq Verification by Category</span>
+                <span class="trace-pill">media_intercore_properties.v</span>
+            </h2>
+            <p style="color: var(--text-secondary); margin-bottom: 1.5rem;">
+                The 602 closed theorems in <code class="mono">media_intercore_properties.v</code> provide exhaustive mathematical proofs across 4 foundational categories.
+            </p>
+
+            <!-- Category 1 -->
+            <div style="margin-bottom: 2rem;">
+                <h3><span class="cat-pill">Cat. I</span> Category 1: Spatial Memory Isolation &amp; Frame Disjointness</h3>
+                <p style="font-size: 0.92rem; color: #475569; margin-bottom: 1rem;">
+                    Proves that core control blocks occupy disjoint physical memory frames, and modifying one writer slot leaves all other cores invariant.
+                </p>
+
+                <div class="thm-block">
+                    <div class="thm-header">
+                        <div class="thm-title">Lemma at_w_other_w (Writer Slot Frame Axiom)</div>
+                        <span class="badge-pass">[x] Proved / Qed</span>
+                    </div>
+                    <pre class="code-snippet coq-style"><span class="kwd">Lemma</span> at_w_other_w : <span class="kwd">forall</span> b i (w:writer) j,
+  i &lt;&gt; j <span class="sym">-&gt;</span> b_w (bus_w b i w) j = b_w b j.
+<span class="kwd">Proof</span>.
+  intros b i w j H. unfold bus_w. apply upd_other. exact H.
+<span class="kwd">Qed</span>.</pre>
+                    <div class="thm-motivation">
+                        <b>Why we are proving this:</b> In multicore systems without memory management units between real-time cores, concurrent writes to one core's ring buffer could trash an adjacent core's cursor. This lemma proves frame isolation: modifying slot $i$ never touches slot $j \ne i$.
+                    </div>
+                </div>
+
+                <div class="thm-block">
+                    <div class="thm-header">
+                        <div class="thm-title">Lemma publisher_per_core_is_unique (Broker-Free Star Topology)</div>
+                        <span class="badge-pass">[x] Proved / Qed</span>
+                    </div>
+                    <pre class="code-snippet coq-style"><span class="kwd">Lemma</span> publisher_per_core_is_unique : <span class="kwd">forall</span> b t1 t2, bus_wf b <span class="sym">-&gt;</span>
+  holds_pub b t1 = true <span class="sym">-&gt;</span> holds_pub b t2 = true <span class="sym">-&gt;</span>
+  t_core (b_t b t1) = t_core (b_t b t2) <span class="sym">-&gt;</span> t1 = t2.
+<span class="kwd">Proof</span>.
+  intros b t1 t2 Hwf H1 H2 Hcore.
+  destruct Hwf as [_ [_ [_ [_ [Hstar _]]]]].
+  apply (Hstar t1 t2 H1 H2 Hcore).
+<span class="kwd">Qed</span>.</pre>
+                    <div class="thm-motivation">
+                        <b>Why we are proving this:</b> Eliminates central message brokers: each core owns at most one active publisher cursor, mathematically eliminating broker bottlenecks and single points of failure.
+                    </div>
+                </div>
+            </div>
+
+            <!-- Category 2 -->
+            <div style="margin-bottom: 2rem;">
+                <h3><span class="cat-pill">Cat. II, XII</span> Category 2: Mutex Elimination &amp; Zero Priority Inversion</h3>
+                <p style="font-size: 0.92rem; color: #475569; margin-bottom: 1rem;">
+                    Proves that cursor references have unique, exclusive single-task ownership definitionally, completely eliminating mutual exclusion locks and priority inversion.
+                </p>
+
+                <div class="thm-block">
+                    <div class="thm-header">
+                        <div class="thm-title">Lemma usable_is_exclusive &amp; Theorem mutex_elimination (Lock-Free Protocol)</div>
+                        <span class="badge-pass">[x] Proved / Qed</span>
+                    </div>
+                    <pre class="code-snippet coq-style"><span class="kwd">Lemma</span> usable_is_exclusive : <span class="kwd">forall</span> b t1 t2 c, bus_wf b <span class="sym">-&gt;</span>
+  usable b (ByTask t1) c = true <span class="sym">-&gt;</span> usable b (ByTask t2) c = true <span class="sym">-&gt;</span> t1 = t2.
+
+<span class="kwd">Theorem</span> mutex_elimination : <span class="kwd">forall</span> b c, bus_wf b <span class="sym">-&gt;</span>
+  holds_lock b c = false /\ priority_inversion_free b.
+<span class="kwd">Proof</span>.
+  intros b c Hwf. split.
+  - apply (lock_free_bus b c Hwf).
+  - apply (no_inversion_of_exclusive b c Hwf usable_is_exclusive).
+<span class="kwd">Qed</span>.</pre>
+                    <div class="thm-motivation">
+                        <b>Why we are proving this:</b> Priority inversion occurs when a low-priority background thread holds a lock needed by a real-time audio thread. By proving that cursor references have unique single-task ownership, the InterCore bus eliminates locks entirely, mathematically ruling out priority inversion.
+                    </div>
+                </div>
+
+                <div class="thm-block">
+                    <div class="thm-header">
+                        <div class="thm-title">Lemma spawn_grants_ownership (Atomic Cursor Delegation)</div>
+                        <span class="badge-pass">[x] Proved / Qed</span>
+                    </div>
+                    <pre class="code-snippet coq-style"><span class="kwd">Lemma</span> spawn_grants_ownership : <span class="kwd">forall</span> b core l i c,
+  spawn_slot b = Some i <span class="sym">-&gt;</span> spawn_ok b core l = true <span class="sym">-&gt;</span> In c l <span class="sym">-&gt;</span>
+  owns (fst (spawn b core l)) i c = true.
+<span class="kwd">Proof</span>.
+  intros b core l i c Hs Hok Hin.
+  apply (spawn_owns_witness b core l i c Hs Hok Hin).
+<span class="kwd">Qed</span>.</pre>
+                    <div class="thm-motivation">
+                        <b>Why we are proving this:</b> Half-granted ownership during task spawning can leave cursors orphaned or doubly-assigned. This theorem proves that spawning transfers cursor ownership atomically and symmetrically.
+                    </div>
+                </div>
+            </div>
+
+            <!-- Category 3 -->
+            <div style="margin-bottom: 2rem;">
+                <h3><span class="cat-pill">Cat. III, XII</span> Category 3: Monotonic Streaming, Tail Joins &amp; Bounded Retention</h3>
+                <p style="font-size: 0.92rem; color: #475569; margin-bottom: 1rem;">
+                    Proves that joining subscribers seed at the publisher's current tail holding zero sectors, strictly bounding memory retention to active ring capacity.
+                </p>
+
+                <div class="thm-block">
+                    <div class="thm-header">
+                        <div class="thm-title">Lemma sub_joins_at_the_tail (Zero Stale Sector Pinning)</div>
+                        <span class="badge-pass">[x] Proved / Qed</span>
+                    </div>
+                    <pre class="code-snippet coq-style"><span class="kwd">Lemma</span> sub_joins_at_the_tail : <span class="kwd">forall</span> b cl wid i,
+  sub_slot b = Some i <span class="sym">-&gt;</span> sub_admit b cl wid = true <span class="sym">-&gt;</span>
+  r_start (b_r (fst (sub b cl wid)) i) = w_enq (b_w b wid) /\
+  r_cur   (b_r (fst (sub b cl wid)) i) = w_enq (b_w b wid) /\
+  r_wid   (b_r (fst (sub b cl wid)) i) = wid.
+<span class="kwd">Proof</span>.
+  intros b cl wid i Ha Hs. rewrite (sub_grant_shape b cl wid i Ha Hs). cbn [fst].
+  rewrite at_r_same_r. repeat split; reflexivity.
+<span class="kwd">Qed</span>.</pre>
+                    <div class="thm-motivation">
+                        <b>Why we are proving this:</b> A consumer daemon that restarts hours late must not attempt to replay historical ring buffers, which would exhaust sector pools. This lemma proves newly joined subscribers attach at the tail holding 0 sectors.
+                    </div>
+                </div>
+
+                <div class="thm-block">
+                    <div class="thm-header">
+                        <div class="thm-title">Lemma pool_never_overdrawn (Total Sector Pool Conservation)</div>
+                        <span class="badge-pass">[x] Proved / Qed</span>
+                    </div>
+                    <pre class="code-snippet coq-style"><span class="kwd">Lemma</span> pool_never_overdrawn : <span class="kwd">forall</span> b,
+  bus_wf b <span class="sym">-&gt;</span> total_held b &lt;= sector_pool.
+<span class="kwd">Proof</span>.
+  intros b Hwf. destruct Hwf as [_ [_ [_ [_ [_ Hcons]]]]].
+  apply Hcons.
+<span class="kwd">Qed</span>.</pre>
+                    <div class="thm-motivation">
+                        <b>Why we are proving this:</b> The leak assertion of the system architecture: across arbitrary runs, the total number of sectors held across all rings can never exceed the static preallocated pool.
+                    </div>
+                </div>
+            </div>
+
+            <!-- Category 4 -->
+            <div style="margin-bottom: 1rem;">
+                <h3><span class="cat-pill">Cat. IV, XVI</span> Category 4: Strictly Non-Blocking O(1) Receipts &amp; Universal Inductivity</h3>
+                <p style="font-size: 0.92rem; color: #475569; margin-bottom: 1rem;">
+                    Proves that message consumption evaluates in $O(1)$ without yielding, and bus well-formedness is an inductive invariant over all execution traces.
+                </p>
+
+                <div class="thm-block">
+                    <div class="thm-header">
+                        <div class="thm-title">Lemma rcv_never_yields &amp; rcv_receipt_exhaustive (Strictly Non-Blocking RCV)</div>
+                        <span class="badge-pass">[x] Proved / Qed</span>
+                    </div>
+                    <pre class="code-snippet coq-style"><span class="kwd">Lemma</span> rcv_never_yields : <span class="kwd">forall</span> b cl rid,
+  rcv_admit b cl rid = true <span class="sym">-&gt;</span> rcv_ready b rid = false <span class="sym">-&gt;</span>
+  fst (rcv b cl rid) = b /\ pr2 (rcv b cl rid) = R_EMPTY.
+
+<span class="kwd">Lemma</span> rcv_receipt_exhaustive : <span class="kwd">forall</span> b cl rid,
+  pr2 (rcv b cl rid) = R_BAD_CURSOR \/ pr2 (rcv b cl rid) = R_EMPTY
+  \/ (exists d, pr2 (rcv b cl rid) = R_DATA d).
+<span class="kwd">Proof</span>.
+  intros b cl rid. unfold rcv.
+  destruct (rcv_admit b cl rid); cbn; [| left; reflexivity].
+  destruct (rcv_ready b rid); cbn; [right; right; eexists; reflexivity | right; left; reflexivity].
+<span class="kwd">Qed</span>.</pre>
+                    <div class="thm-motivation">
+                        <b>Why we are proving this:</b> System calls that block unpredictably destroy the determinism of hard real-time deadlines. Proving that <code class="mono">rcv</code> evaluates exhaustively to either immediate valid data, empty sentinel, or bad cursor receipt with zero blocking states guarantees no unexpected context switches.
+                    </div>
+                </div>
+
+                <div class="thm-block">
+                    <div class="thm-header">
+                        <div class="thm-title">Theorem interleavings_preserve_bus_wf (Universal Interleaving Inductivity)</div>
+                        <span class="badge-pass">[x] Proved / Qed</span>
+                    </div>
+                    <pre class="code-snippet coq-style"><span class="kwd">Theorem</span> interleavings_preserve_bus_wf : <span class="kwd">forall</span> steps,
+  (<span class="kwd">forall</span> st, In st steps <span class="sym">-&gt;</span> wf_step st) <span class="sym">-&gt;</span> bus_wf (run bus0 steps).
+<span class="kwd">Proof</span>.
+  intros steps Hsteps. induction steps as [| st rest IH]; cbn.
+  - apply bus0_wf.
+  - apply step_preserves_bus_wf.
+    + apply IH. intros s Hin. apply Hsteps. right. exact Hin.
+    + apply Hsteps. left. reflexivity.
+<span class="kwd">Qed</span>.</pre>
+                    <div class="thm-motivation">
+                        <b>Why we are proving this:</b> Testing cannot explore the infinite state space of all possible multicore execution traces. This theorem proves by induction that bus well-formedness is preserved across arbitrary multi-core call interleavings.
+                    </div>
+                </div>
+            </div>
+        </section>
+    </main>
+
+    <footer class="page-footer">
+        BTRON 3.20 High-Assurance Base Library &amp; Microkernel Specification &middot; Formally Certified with Rocq / Coq
+    </footer>
+</body>
+</html>

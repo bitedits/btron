@@ -6,6 +6,8 @@
 *.out
 *.d
 .build/
+.vscode/
+.lia.cache
 bfs_allocator_model
 bfs_btree_model
 bfs_model

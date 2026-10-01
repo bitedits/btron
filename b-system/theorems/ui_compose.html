@@ -1,0 +1,265 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GUI Compositor, Invalidation &amp; Bit Blit Engine — Model &amp; Theorems</title>
+    <link rel="stylesheet" href="theorems.css">
+</head>
+<body>
+    <nav class="sticky">
+        <div class="nav-container">
+            <a href="../../index.html" class="logo"><img src="https://n2o.dev/img/synrc.svg" alt="Synrc Logo"></a>
+            <ul class="nav-links">
+                <li><a href="../../index.html">VirtIO</a></li>
+                <li><a href="../index.html">B-System</a></li>
+                <li><a href="../../b-book/index.html">B-Book</a></li>
+                <li><a href="../../conformance.html">B-Spec / Conformance</a></li>
+                <li><a href="ui_compose.html" class="active">Theorems</a></li>
+                <li><a href="../../releases.html">Releases</a></li>
+                <li><a href="https://github.com/bitedits/btron">GitHub</a></li>
+            </ul>
+        </div>
+    </nav>
+
+    <!-- Sub-navigation across 11 theorem files -->
+    <div class="sub-nav-bar">
+        <div class="sub-nav-inner">
+            <span class="sub-nav-label">Library:</span>
+            <a href="bfs_allocator.html" class="nav-pill">Allocator</a>
+            <a href="bfs_btree.html" class="nav-pill">B-Tree</a>
+            <a href="bfs.html" class="nav-pill">Volume</a>
+            <a href="hypermedia_dnd.html" class="nav-pill">Hypermedia</a>
+            <a href="media_intercore.html" class="nav-pill">InterCore</a>
+            <a href="media_rtp.html" class="nav-pill">RTP</a>
+            <a href="media_smp.html" class="nav-pill">SMP</a>
+            <a href="tron.html" class="nav-pill">ITRON</a>
+            <a href="opengl.html" class="nav-pill">OpenGL</a>
+            <a href="ui_compose.html" class="nav-pill active">Compositor</a>
+            <a href="ui_elements.html" class="nav-pill">Windows</a>
+            <a href="drivers.html" class="nav-pill">Drivers</a>
+        </div>
+    </div>
+
+    <main class="main-content">
+        <!-- Hero Header -->
+        <header class="hero-box">
+            <span class="hero-tagline">Compositor &amp; Display Primitives Subsystem · Invalidation, Bit Blit &amp; Presentation</span>
+            <h1>GUI Compositor, Invalidation &amp; Bit Blit Engine</h1>
+            <p class="hero-desc">
+                High-assurance formal verification and executable operational oracle for the B-System 2D graphics compositor and Display Primitives. Covers rectangular clipping algebra, monotonic damage accumulation (<code class="mono">wnd_inval_damage_rect</code>), bounds-safe row blitting (<code class="mono">btron_row_blit</code>), key alpha transparency, and double-buffered scanout presentation to hardware framebuffers.
+            </p>
+            <div class="meta-chips">
+                <span class="chip">OCaml: <code class="mono">ui_compose_model.ml</code> (350 lines)</span>
+                <span class="chip">Coq: <code class="mono">ui_compose_properties.v</code> (320 lines)</span>
+                <span class="chip">Judgements: <b>15 Closed Theorems</b></span>
+                <span class="chip chip-pass">🛡️ 0 Axioms · 0 Admissions · Sound</span>
+            </div>
+        </header>
+
+        <!-- Section 1: Executable OCaml Oracle Model -->
+        <section class="section-card">
+            <h2>
+                <span>1. Executable OCaml Oracle Model</span>
+                <span class="trace-pill">ui_compose_model.ml</span>
+            </h2>
+            <p style="color: var(--text-secondary); margin-bottom: 1.5rem;">
+                The executable specification models rectangular geometry intersections, damage accumulation, 2D blits with ROP logic and key transparency, Painter's algorithm multi-layer compositing, and backbuffer damage presentation.
+            </p>
+
+            <pre class="code-snippet ocaml-style"><span class="kwd">type</span> rect = { left : int; top : int; right : int; bottom : int }
+
+<span class="kwd">type</span> rop = ROP_COPY | ROP_OR | ROP_XOR | ROP_AND | ROP_INVERT
+
+<span class="kwd">type</span> surface = {
+  width : int; height : int;
+  pixels : int array; <span class="cmt">(* 32-bit ARGB: 0xAARRGGBB *)</span>
+}
+
+<span class="cmt">(* btron_row_blit operational oracle *)</span>
+<span class="kwd">let</span> btron_row_blit ~(dst : surface) ~(dst_x : int) ~(dst_y : int)
+                   ~(src : surface) ~(src_x : int) ~(src_y : int)
+                   ~(span : int) ~(rop : rop) : unit =
+  <span class="kwd">let</span> valid_span = min span (min (dst.width - dst_x) (src.width - src_x)) <span class="kwd">in</span>
+  <span class="kwd">if</span> valid_span &lt;= 0 <span class="kwd">then</span> ()
+  <span class="kwd">else</span>
+    <span class="kwd">let</span> src_offset = src_y * src.width + src_x <span class="kwd">in</span>
+    <span class="kwd">let</span> dst_offset = dst_y * dst.width + dst_x <span class="kwd">in</span>
+    <span class="kwd">for</span> i = 0 <span class="kwd">to</span> valid_span - 1 <span class="kwd">do</span>
+      <span class="kwd">let</span> sp = src.pixels.(src_offset + i) <span class="kwd">in</span>
+      <span class="kwd">if</span> sp &lt;&gt; 0 <span class="kwd">then</span> <span class="cmt">(* 0x00000000 transparent key *)</span>
+        dst.pixels.(dst_offset + i) &lt;- apply_rop rop sp dst.pixels.(dst_offset + i)
+    <span class="kwd">done</span></pre>
+        </section>
+
+        <!-- Section 2: Coq Base Library Theorems by Category -->
+        <section class="section-card">
+            <h2>
+                <span>2. Formal Coq Verification by Category</span>
+                <span class="trace-pill">ui_compose_properties.v</span>
+            </h2>
+            <p style="color: var(--text-secondary); margin-bottom: 1.5rem;">
+                Mathematical properties are categorized across 4 domains covering rectangular geometry algebra, damage tracking monotonicity, bit blitting memory safety, and double-buffered presentation.
+            </p>
+
+            <!-- Category 1 -->
+            <div style="margin-bottom: 2rem;">
+                <h3><span class="cat-pill">Cat. I, IV</span> Category 1: Rectangular Algebra &amp; Clipping Invariants</h3>
+                <p style="font-size: 0.92rem; color: #475569; margin-bottom: 1rem;">
+                    Proves commutativity of rectangular clipping intersections, bidirectional containment, and bounding box union properties.
+                </p>
+
+                <div class="thm-block">
+                    <div class="thm-header">
+                        <div class="thm-title">Theorem rect_intersect_comm &amp; point_in_intersect_iff</div>
+                        <span class="badge-pass">[x] Proved / Qed</span>
+                    </div>
+                    <pre class="code-snippet coq-style"><span class="kwd">Theorem</span> rect_intersect_comm : <span class="kwd">forall</span> a b,
+  rect_intersect a b = rect_intersect b a.
+
+<span class="kwd">Theorem</span> point_in_intersect_iff : <span class="kwd">forall</span> x y a b,
+  point_in_rect x y (rect_intersect a b) &lt;-&gt;
+  (point_in_rect x y a /\ point_in_rect x y b).</pre>
+                    <div class="thm-motivation">
+                        <b>Why we are proving this:</b> Establishes that clipping order is invariant and that a pixel is drawn if and only if it belongs to both the window viewport and the dirty damage rect.
+                    </div>
+                </div>
+
+                <div class="thm-block">
+                    <div class="thm-header">
+                        <div class="thm-title">Theorem point_in_union_bbox_or (Bounding Box Containment)</div>
+                        <span class="badge-pass">[x] Proved / Qed</span>
+                    </div>
+                    <pre class="code-snippet coq-style"><span class="kwd">Theorem</span> point_in_union_bbox_or : <span class="kwd">forall</span> x y a b,
+  point_in_rect x y a \/ point_in_rect x y b -&gt;
+  point_in_rect x y (rect_union_bbox a b).</pre>
+                    <div class="thm-motivation">
+                        <b>Why we are proving this:</b> Guarantees that union bounding box aggregation never drops or clips any damaged pixel from either sub-rectangle.
+                    </div>
+                </div>
+            </div>
+
+            <!-- Category 2 -->
+            <div style="margin-bottom: 2rem;">
+                <h3><span class="cat-pill">Cat. II, VII</span> Category 2: Invalidation Tracking &amp; Monotonic Damage Expansion</h3>
+                <p style="font-size: 0.92rem; color: #475569; margin-bottom: 1rem;">
+                    Proves that successive calls to <code class="mono">wnd_inval_damage_rect</code> monotonically accumulate damage, and draining atomically clears the pending damage state.
+                </p>
+
+                <div class="thm-block">
+                    <div class="thm-header">
+                        <div class="thm-title">Theorem damage_inval_monotonicity_prev &amp; new</div>
+                        <span class="badge-pass">[x] Proved / Qed</span>
+                    </div>
+                    <pre class="code-snippet coq-style"><span class="kwd">Theorem</span> damage_inval_monotonicity_prev : <span class="kwd">forall</span> d r x y,
+  point_in_rect x y d -&gt;
+  <span class="kwd">match</span> accumulate_damage (Some d) r <span class="kwd">with</span>
+  | Some res =&gt; point_in_rect x y res
+  | None =&gt; False
+  <span class="kwd">end</span>.
+
+<span class="kwd">Theorem</span> damage_inval_monotonicity_new : <span class="kwd">forall</span> d r x y,
+  point_in_rect x y r -&gt;
+  <span class="kwd">match</span> accumulate_damage (Some d) r <span class="kwd">with</span>
+  | Some res =&gt; point_in_rect x y res
+  | None =&gt; False
+  <span class="kwd">end</span>.</pre>
+                    <div class="thm-motivation">
+                        <b>Why we are proving this:</b> Prevents lost updates: whenever an application calls <code class="mono">inval_wnd()</code>, both the previously accumulated damage and the newly invalidated window bounds are preserved.
+                    </div>
+                </div>
+
+                <div class="thm-block">
+                    <div class="thm-header">
+                        <div class="thm-title">Theorem damage_take_clears_state &amp; screen_clipped_damage_bounded</div>
+                        <span class="badge-pass">[x] Proved / Qed</span>
+                    </div>
+                    <pre class="code-snippet coq-style"><span class="kwd">Theorem</span> damage_take_clears_state : <span class="kwd">forall</span> cur d st',
+  take_damage cur = (d, st') -&gt; st' = None.
+
+<span class="kwd">Theorem</span> screen_clipped_damage_bounded : <span class="kwd">forall</span> screen cur incoming res x y,
+  screen_clipped_damage screen cur incoming = Some res -&gt;
+  point_in_rect x y (rect_intersect screen incoming) -&gt;
+  point_in_rect x y screen.</pre>
+                    <div class="thm-motivation">
+                        <b>Why we are proving this:</b> Assures that presented damage is reset to prevent redundant composition passes, and damage is strictly bounded to the physical display resolution.
+                    </div>
+                </div>
+            </div>
+
+            <!-- Category 3 -->
+            <div style="margin-bottom: 2rem;">
+                <h3><span class="cat-pill">Cat. III, V, VIII</span> Category 3: Bit Blitting &amp; 2D Memory Safety</h3>
+                <p style="font-size: 0.92rem; color: #475569; margin-bottom: 1rem;">
+                    Proves that linear memory indices calculated during 2D blits remain strictly within buffer limits, pixels outside destination span are untouched, and ROP_COPY is idempotent.
+                </p>
+
+                <div class="thm-block">
+                    <div class="thm-header">
+                        <div class="thm-title">Theorem blit_stride_linear_bound (Memory Safety)</div>
+                        <span class="badge-pass">[x] Proved / Qed</span>
+                    </div>
+                    <pre class="code-snippet coq-style"><span class="kwd">Theorem</span> blit_stride_linear_bound : <span class="kwd">forall</span> x y w h W H,
+  x + w &lt;= W -&gt; y + h &lt;= H -&gt;
+  <span class="kwd">forall</span> dx dy, dx &lt; w -&gt; dy &lt; h -&gt;
+  pix_index W (x + dx) (y + dy) &lt; W * H.</pre>
+                    <div class="thm-motivation">
+                        <b>Why we are proving this:</b> Eliminates all potential out-of-bounds writes into VRAM or RAM backbuffers during accelerated NEON/DMA span transfers.
+                    </div>
+                </div>
+
+                <div class="thm-block">
+                    <div class="thm-header">
+                        <div class="thm-title">Theorems blit_span_outside_invariant &amp; blit_span_key_preserves_dst</div>
+                        <span class="badge-pass">[x] Proved / Qed</span>
+                    </div>
+                    <pre class="code-snippet coq-style"><span class="kwd">Theorem</span> blit_span_outside_invariant : <span class="kwd">forall</span> dst src dst_start src_start len i,
+  (i &lt; dst_start \/ i &gt;= dst_start + len) -&gt;
+  update_span dst src dst_start src_start len i = dst i.
+
+<span class="kwd">Theorem</span> blit_span_key_preserves_dst : <span class="kwd">forall</span> dst src dst_start src_start len key i,
+  dst_start &lt;= i &lt; dst_start + len -&gt;
+  src (src_start + (i - dst_start)) = key -&gt;
+  update_span_key dst src dst_start src_start len key i = dst i.</pre>
+                    <div class="thm-motivation">
+                        <b>Why we are proving this:</b> Non-interference: blitting into a window cannot corrupt adjacent desktop pixels, and key transparent pixels preserve the underlying background.
+                    </div>
+                </div>
+            </div>
+
+            <!-- Category 4 -->
+            <div style="margin-bottom: 2rem;">
+                <h3><span class="cat-pill">Cat. VI, X</span> Category 4: Double Buffering &amp; Hardware Presentation Soundness</h3>
+                <p style="font-size: 0.92rem; color: #475569; margin-bottom: 1rem;">
+                    Proves that presenting damage to the hardware scanout framebuffer updates exactly the damaged region from the RAM backbuffer while leaving non-damaged display pixels unaltered.
+                </p>
+
+                <div class="thm-block">
+                    <div class="thm-header">
+                        <div class="thm-title">Theorems presenter_inside_matches_back &amp; outside_preserves_front</div>
+                        <span class="badge-pass">[x] Proved / Qed</span>
+                    </div>
+                    <pre class="code-snippet coq-style"><span class="kwd">Theorem</span> presenter_inside_matches_back : <span class="kwd">forall</span> front back damage x y,
+  point_in_rect x y damage -&gt;
+  present_buffer_rect front back damage x y = back x y.
+
+<span class="kwd">Theorem</span> presenter_outside_preserves_front : <span class="kwd">forall</span> front back damage x y,
+  ~ point_in_rect x y damage -&gt;
+  present_buffer_rect front back damage x y = front x y.
+
+<span class="kwd">Theorem</span> presenter_idempotent : <span class="kwd">forall</span> front back damage x y,
+  present_buffer_rect (present_buffer_rect front back damage) back damage x y =
+  present_buffer_rect front back damage x y.</pre>
+                    <div class="thm-motivation">
+                        <b>Why we are proving this:</b> Presentation correctness: guarantees zero tearing or corruption outside the active damage rectangle, and ensures repeated presentations of the same damage area are stable and idempotent.
+                    </div>
+                </div>
+            </div>
+        </section>
+    </main>
+
+    <footer class="page-footer">
+        BTRON 3.20 High-Assurance Base Library &amp; Microkernel Specification &middot; Formally Certified with Rocq / Coq
+    </footer>
+</body>
+</html>

@@ -1,0 +1,283 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Window Manager, Retro Tabs, Menus &amp; TIP Events — Model &amp; Theorems</title>
+    <link rel="stylesheet" href="theorems.css">
+</head>
+
+<body>
+    <nav class="sticky">
+        <div class="nav-container">
+            <a href="../../index.html" class="logo"><img src="https://n2o.dev/img/synrc.svg" alt="Synrc Logo"></a>
+            <ul class="nav-links">
+                <li><a href="../../index.html">VirtIO</a></li>
+                <li><a href="../index.html">B-System</a></li>
+                <li><a href="../../b-book/index.html">B-Book</a></li>
+                <li><a href="../../conformance.html">B-Spec / Conformance</a></li>
+                <li><a href="ui_elements.html" class="active">Theorems</a></li>
+                <li><a href="../../releases.html">Releases</a></li>
+                <li><a href="https://github.com/bitedits/btron">GitHub</a></li>
+            </ul>
+        </div>
+    </nav>
+
+    <!-- Sub-navigation across 11 theorem files -->
+    <div class="sub-nav-bar">
+        <div class="sub-nav-inner">
+            <span class="sub-nav-label">Library:</span>
+            <a href="bfs_allocator.html" class="nav-pill">Allocator</a>
+            <a href="bfs_btree.html" class="nav-pill">B-Tree</a>
+            <a href="bfs.html" class="nav-pill">Volume</a>
+            <a href="hypermedia_dnd.html" class="nav-pill">Hypermedia</a>
+            <a href="media_intercore.html" class="nav-pill">InterCore</a>
+            <a href="media_rtp.html" class="nav-pill">RTP</a>
+            <a href="media_smp.html" class="nav-pill">SMP</a>
+            <a href="tron.html" class="nav-pill">ITRON</a>
+            <a href="opengl.html" class="nav-pill">OpenGL</a>
+            <a href="ui_compose.html" class="nav-pill">Compositor</a>
+            <a href="ui_elements.html" class="nav-pill active">Windows</a>
+            <a href="drivers.html" class="nav-pill">Drivers</a>
+        </div>
+    </div>
+
+    <main class="main-content">
+        <!-- Hero Header -->
+        <header class="hero-box">
+            <span class="hero-tagline">Window Manager &amp; UI Shell Subsystem · Sakamura Windows, Retro Tabs, Menus
+                &amp; TIP</span>
+            <h1>Window Manager, Retro Tabs, Menus &amp; TIP Events</h1>
+            <p class="hero-desc">
+                High-assurance formal verification and executable operational oracle for the B-System Window Manager
+                (<code class="mono">wnd.h</code>), HMI Shell, and TIP input event dispatcher. Covers retro sliding tab
+                layout geometry, close button hit testing, focus uniqueness in window stacking (<code
+                    class="mono">top_wnd</code>, <code class="mono">cls_wnd</code>), modal menu grab interception, and
+                bounded FIFO event queuing.
+            </p>
+            <div class="meta-chips">
+                <span class="chip">OCaml: <code class="mono">ui_elements_model.ml</code> (480 lines)</span>
+                <span class="chip">Coq: <code class="mono">ui_elements_properties.v</code> (310 lines)</span>
+                <span class="chip">Judgements: <b>14 Closed Theorems</b></span>
+                <span class="chip chip-pass">🛡️ 0 Axioms · 0 Admissions · Sound</span>
+            </div>
+        </header>
+
+        <!-- Section 1: Executable OCaml Oracle Model -->
+        <section class="section-card">
+            <h2>
+                <span>1. Executable OCaml Oracle Model</span>
+                <span class="trace-pill">ui_elements_model.ml</span>
+            </h2>
+            <p style="color: var(--text-secondary); margin-bottom: 1.5rem;">
+                The executable specification models window records (<code class="mono">WND</code>), dynamic sliding tabs
+                (<code class="mono">wget_tab_rect</code>), close button hit testing, cascading/tiling layout, menu bar
+                dropdowns, and FIFO event dispatching.
+            </p>
+
+            <pre class="code-snippet ocaml-style"><span class="kwd">type</span> wnd = {
+  id : int; title : string;
+  <span class="kwd">mutable</span> bounds : rect;
+  attr : int;
+  <span class="kwd">mutable</span> visible : bool;
+  <span class="kwd">mutable</span> focused : bool;
+  <span class="kwd">mutable</span> tab_offset_x : int;
+  <span class="kwd">mutable</span> tab_width : int;
+  <span class="kwd">mutable</span> img_valid : bool;
+}
+
+<span class="cmt">(* BTRON wget_tab_rect operational oracle *)</span>
+<span class="kwd">let</span> wget_tab_rect (wnd : wnd) : rect =
+  <span class="kwd">if</span> (wnd.attr land wnd_attr_title) = 0 <span class="kwd">then</span> rect_empty
+  <span class="kwd">else</span>
+    <span class="kwd">let</span> w = rect_width wnd.bounds <span class="kwd">in</span>
+    <span class="kwd">let</span> tw = <span class="kwd">if</span> wnd.tab_width &lt;= 0 || wnd.tab_width &gt; w || (wnd.attr land wnd_attr_compact_tab) = 0
+             <span class="kwd">then</span> w <span class="kwd">else</span> wnd.tab_width <span class="kwd">in</span>
+    <span class="kwd">let</span> off_x = <span class="kwd">if</span> wnd.tab_offset_x &lt; 0 <span class="kwd">then</span> 0
+                <span class="kwd">else if</span> wnd.tab_offset_x + tw &gt; w <span class="kwd">then</span> max 0 (w - tw)
+                <span class="kwd">else</span> wnd.tab_offset_x <span class="kwd">in</span>
+    { left = wnd.bounds.left + off_x; top = wnd.bounds.top;
+      right = wnd.bounds.left + off_x + tw; bottom = wnd.bounds.top + 28 }
+
+<span class="kwd">let</span> whit_test_close_btn (wnd : wnd) (x : int) (y : int) : bool =
+  <span class="kwd">let</span> tab_r = wget_tab_rect wnd <span class="kwd">in</span>
+  point_in_rect x y { left = tab_r.right - 24; top = tab_r.top + 6;
+                      right = tab_r.right - 6; bottom = tab_r.top + 22 }</pre>
+        </section>
+
+        <!-- Section 2: Coq Base Library Theorems by Category -->
+        <section class="section-card">
+            <h2>
+                <span>2. Formal Coq Verification by Category</span>
+                <span class="trace-pill">ui_elements_properties.v</span>
+            </h2>
+            <p style="color: var(--text-secondary); margin-bottom: 1.5rem;">
+                Mathematical properties are categorized across 4 domains covering retro tab geometry, window stacking
+                and focus invariants, menu modal grab, and FIFO event queue bounds.
+            </p>
+
+            <!-- Category 1 -->
+            <div style="margin-bottom: 2rem;">
+                <h3><span class="cat-pill">Cat. I, IV</span> Category 1: Retro Tab Geometry &amp; Control Hit Box
+                    Containment</h3>
+                <p style="font-size: 0.92rem; color: #475569; margin-bottom: 1rem;">
+                    Proves that dynamic compact sliding tabs and close buttons are strictly contained within window
+                    horizontal boundaries regardless of user sliding offsets.
+                </p>
+
+                <div class="thm-block">
+                    <div class="thm-header">
+                        <div class="thm-title">Theorems tab_width_le_window_width &amp; tab_right_le_window_right</div>
+                        <span class="badge-pass">[x] Proved / Qed</span>
+                    </div>
+                    <pre class="code-snippet coq-style"><span class="kwd">Theorem</span> tab_width_le_window_width : <span class="kwd">forall</span> w,
+  effective_tab_width w &lt;= w.(w_width).
+
+<span class="kwd">Theorem</span> tab_left_ge_window_left : <span class="kwd">forall</span> w,
+  w.(w_left) &lt;= tab_rect_left w.
+
+<span class="kwd">Theorem</span> tab_right_le_window_right : <span class="kwd">forall</span> w,
+  tab_rect_right w &lt;= w.(w_left) + w.(w_width).</pre>
+                    <div class="thm-motivation">
+                        <b>Why we are proving this:</b> Eliminates tab protrusion bugs where dragging a retro sliding
+                        tab past the window's right edge would draw tab borders outside the window decoration frame.
+                    </div>
+                </div>
+
+                <div class="thm-block">
+                    <div class="thm-header">
+                        <div class="thm-title">Theorem close_button_inside_tab (Control Containment)</div>
+                        <span class="badge-pass">[x] Proved / Qed</span>
+                    </div>
+                    <pre class="code-snippet coq-style"><span class="kwd">Theorem</span> close_button_inside_tab : <span class="kwd">forall</span> w,
+  effective_tab_width w &gt;= 24 -&gt;
+  tab_rect_left w &lt;= tab_rect_right w - 24 /\
+  tab_rect_right w - 6 &lt;= tab_rect_right w.</pre>
+                    <div class="thm-motivation">
+                        <b>Why we are proving this:</b> Ensures the close button glyph and hit testing box remain
+                        completely embedded inside the tab header for any valid window width.
+                    </div>
+                </div>
+            </div>
+
+            <!-- Category 2 -->
+            <div style="margin-bottom: 2rem;">
+                <h3><span class="cat-pill">Cat. II, V</span> Category 2: Window Stacking &amp; Focus Uniqueness</h3>
+                <p style="font-size: 0.92rem; color: #475569; margin-bottom: 1rem;">
+                    Proves that bringing a window to the top of the z-order stack establishes exclusive focus, and
+                    closing a window preserves focus uniqueness.
+                </p>
+
+                <div class="thm-block">
+                    <div class="thm-header">
+                        <div class="thm-title">Theorems bring_to_top_guarantees_focus_unique &amp; bring_to_top_head_id
+                        </div>
+                        <span class="badge-pass">[x] Proved / Qed</span>
+                    </div>
+                    <pre class="code-snippet coq-style"><span class="kwd">Theorem</span> bring_to_top_guarantees_focus_unique : <span class="kwd">forall</span> target_id ws target,
+  find (fun w =&gt; Nat.eqb w.(w_id) target_id) ws = Some target -&gt;
+  focus_unique (bring_to_top target_id ws).
+
+<span class="kwd">Theorem</span> bring_to_top_head_id : <span class="kwd">forall</span> target_id ws target,
+  find (fun w =&gt; Nat.eqb w.(w_id) target_id) ws = Some target -&gt;
+  <span class="kwd">match</span> bring_to_top target_id ws <span class="kwd">with</span>
+  | [] =&gt; False
+  | h :: _ =&gt; h.(w_id) = target.(w_id) /\ h.(w_focused) = true
+  <span class="kwd">end</span>.</pre>
+                    <div class="thm-motivation">
+                        <b>Why we are proving this:</b> HMI determinism: at most one window can be active at any given
+                        moment, and the top-most window under the pointer always receives keyboard focus.
+                    </div>
+                </div>
+
+                <div class="thm-block">
+                    <div class="thm-header">
+                        <div class="thm-title">Theorems close_wnd_removes_id &amp; close_wnd_preserves_focus_unique
+                        </div>
+                        <span class="badge-pass">[x] Proved / Qed</span>
+                    </div>
+                    <pre class="code-snippet coq-style"><span class="kwd">Theorem</span> close_wnd_removes_id : <span class="kwd">forall</span> target_id ws,
+  find (fun w =&gt; Nat.eqb w.(w_id) target_id) (close_wnd target_id ws) = None.
+
+<span class="kwd">Theorem</span> close_wnd_preserves_focus_unique : <span class="kwd">forall</span> target_id ws,
+  focus_unique ws -&gt;
+  focus_unique (close_wnd target_id ws).</pre>
+                    <div class="thm-motivation">
+                        <b>Why we are proving this:</b> Closing a window permanently removes it from the window
+                        manager's iteration list without leaking stale focus or dangling window descriptors.
+                    </div>
+                </div>
+            </div>
+
+            <!-- Category 3 -->
+            <div style="margin-bottom: 2rem;">
+                <h3><span class="cat-pill">Cat. III, VIII</span> Category 3: Menu Subsystem Modal Grab Interception</h3>
+                <p style="font-size: 0.92rem; color: #475569; margin-bottom: 1rem;">
+                    Proves that active menu dropdowns capture mouse pointer clicks with exclusive priority ahead of
+                    background windows.
+                </p>
+
+                <div class="thm-block">
+                    <div class="thm-header">
+                        <div class="thm-title">Theorems menu_modal_grab_exclusive &amp; window_routes_only_when_no_menu
+                        </div>
+                        <span class="badge-pass">[x] Proved / Qed</span>
+                    </div>
+                    <pre class="code-snippet coq-style"><span class="kwd">Theorem</span> menu_modal_grab_exclusive : <span class="kwd">forall</span> m x y top_wnd,
+  dispatch_mouse_click (Some m) x y top_wnd = RouteToMenu (point_in_menu x y m).
+
+<span class="kwd">Theorem</span> window_routes_only_when_no_menu : <span class="kwd">forall</span> wid x y,
+  dispatch_mouse_click None x y (Some wid) = RouteToWindow wid.</pre>
+                    <div class="thm-motivation">
+                        <b>Why we are proving this:</b> Prevents accidental window clicks through open menu dropdowns,
+                        strictly enforcing the Sakamura Workbench modal interaction rule.
+                    </div>
+                </div>
+            </div>
+
+            <!-- Category 4 -->
+            <div style="margin-bottom: 2rem;">
+                <h3><span class="cat-pill">Cat. VI, IX</span> Category 4: Event Queue FIFO Invariance &amp; Capacity
+                    Bounds</h3>
+                <p style="font-size: 0.92rem; color: #475569; margin-bottom: 1rem;">
+                    Proves that the TIP input event queue strictly maintains FIFO temporal ordering and never exceeds
+                    the bounded capacity of 256 events.
+                </p>
+
+                <div class="thm-block">
+                    <div class="thm-header">
+                        <div class="thm-title">Theorems event_queue_fifo_pair &amp; event_queue_bounded</div>
+                        <span class="badge-pass">[x] Proved / Qed</span>
+                    </div>
+                    <pre class="code-snippet coq-style"><span class="kwd">Theorem</span> event_queue_fifo_pair : <span class="kwd">forall</span> ev1 ev2,
+  <span class="kwd">match</span> eq_enqueue ev1 [] <span class="kwd">with</span>
+  | Some q1 =&gt; <span class="kwd">match</span> eq_enqueue ev2 q1 <span class="kwd">with</span>
+               | Some q2 =&gt; eq_dequeue q2
+               | None =&gt; None <span class="kwd">end</span>
+  | None =&gt; None
+  <span class="kwd">end</span> = Some (ev1, [ev2]).
+
+<span class="kwd">Theorem</span> event_queue_bounded : <span class="kwd">forall</span> ev q q',
+  eq_enqueue ev q = Some q' -&gt;
+  length q' &lt;= EVENT_QUEUE_SIZE.
+
+<span class="kwd">Theorem</span> event_queue_overflow_rejects : <span class="kwd">forall</span> ev q,
+  length q &gt;= EVENT_QUEUE_SIZE -&gt;
+  eq_enqueue ev q = None.</pre>
+                    <div class="thm-motivation">
+                        <b>Why we are proving this:</b> Ensures deterministic temporal event delivery from
+                        keyboard/mouse interrupts without queue inversion or ring buffer overflows.
+                    </div>
+                </div>
+            </div>
+        </section>
+    </main>
+
+    <footer class="page-footer">
+        BTRON 3.20 High-Assurance Base Library &amp; Microkernel Specification &middot; Formally Certified with Rocq /
+        Coq
+    </footer>
+</body>
+
+</html>

@@ -1,0 +1,372 @@
+/* theorems.css - Stylesheet for BTRON Coq Base Library & OCaml Model Proofs
+ * Inspired by Groupoid Infinity (christine/index.html & per/index.html)
+ */
+
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap');
+
+:root {
+    --bg-main: #fcfdfe;
+    --text-primary: #0f172a;
+    --text-secondary: #475569;
+    --tron-blue: #0057b7;
+    --tron-indigo: #1a237e;
+    --tron-green: #2e7d32;
+    --tron-gold: #f57f17;
+    --tron-red: #c62828;
+    --tron-purple: #512da8;
+    --accent: #d81b60;
+    --border: rgba(0, 87, 183, 0.16);
+    --border-light: rgba(0, 0, 0, 0.08);
+    --radius: 10px;
+}
+
+* {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+}
+
+body {
+    font-family: 'Inter', system-ui, -apple-system, sans-serif;
+    background-color: var(--bg-main);
+    color: var(--text-primary);
+    line-height: 1.65;
+    font-size: 1rem;
+    padding-bottom: 5rem;
+}
+
+/* Sticky Top Navigation Bar */
+nav.sticky {
+    position: sticky;
+    top: 0;
+    background: rgba(255, 255, 255, 0.94);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    border-bottom: 1px solid var(--border);
+    z-index: 1000;
+}
+
+.nav-container {
+    max-width: 1140px;
+    margin: 0 auto;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 0.75rem 1.5rem;
+}
+
+.logo img {
+    height: 38px;
+    width: auto;
+    display: block;
+}
+
+.nav-links {
+    display: flex;
+    list-style: none;
+    gap: 1.25rem;
+    align-items: center;
+}
+
+.nav-links a {
+    color: var(--text-secondary);
+    text-decoration: none;
+    font-weight: 600;
+    font-size: 0.92rem;
+    transition: color 0.2s ease;
+}
+
+.nav-links a:hover, .nav-links a.active {
+    color: var(--tron-blue);
+}
+
+/* Sub-nav: 8-Model Library Bar */
+.sub-nav-bar {
+    background: #f1f5f9;
+    border-bottom: 1px solid var(--border-light);
+    padding: 0.6rem 1rem;
+    overflow-x: auto;
+}
+
+.sub-nav-inner {
+    max-width: 1140px;
+    margin: 0 auto;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    white-space: nowrap;
+}
+
+.sub-nav-label {
+    font-size: 0.8rem;
+    font-weight: 800;
+    color: var(--tron-indigo);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    margin-right: 0.4rem;
+}
+
+.nav-pill {
+    display: inline-block;
+    padding: 0.28rem 0.75rem;
+    border-radius: 999px;
+    font-size: 0.82rem;
+    font-weight: 600;
+    text-decoration: none;
+    color: #334155;
+    background: #ffffff;
+    border: 1px solid rgba(0, 0, 0, 0.1);
+    transition: all 0.2s ease;
+}
+
+.nav-pill:hover {
+    border-color: var(--tron-blue);
+    color: var(--tron-blue);
+    transform: translateY(-1px);
+}
+
+.nav-pill.active {
+    background: var(--tron-blue);
+    color: #ffffff;
+    border-color: var(--tron-blue);
+    box-shadow: 0 2px 8px rgba(0, 87, 183, 0.3);
+}
+
+/* Container */
+.main-content {
+    max-width: 1040px;
+    margin: 2rem auto 0 auto;
+    padding: 0 1.5rem;
+}
+
+/* Hero Section */
+.hero-box {
+    background: linear-gradient(135deg, #ffffff 0%, #f4f7fc 100%);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 2.2rem 2.5rem;
+    margin-bottom: 2rem;
+    box-shadow: 0 6px 24px rgba(0, 87, 183, 0.05);
+}
+
+.hero-tagline {
+    display: inline-block;
+    background: rgba(0, 87, 183, 0.08);
+    color: var(--tron-blue);
+    font-size: 0.82rem;
+    font-weight: 800;
+    padding: 0.25rem 0.8rem;
+    border-radius: 999px;
+    margin-bottom: 0.75rem;
+    letter-spacing: 0.03em;
+}
+
+.hero-box h1 {
+    font-size: 2.3rem;
+    font-weight: 800;
+    color: var(--tron-indigo);
+    line-height: 1.25;
+    margin-bottom: 0.75rem;
+}
+
+.hero-desc {
+    font-size: 1.05rem;
+    color: var(--text-secondary);
+    line-height: 1.6;
+    margin-bottom: 1.4rem;
+    max-width: 860px;
+}
+
+.meta-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.7rem;
+    align-items: center;
+}
+
+.chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0.35rem 0.85rem;
+    background: #ffffff;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.82rem;
+    font-weight: 600;
+    color: #1e293b;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.03);
+}
+
+.chip-pass {
+    background: #e8f5e9;
+    border-color: rgba(46, 125, 50, 0.3);
+    color: var(--tron-green);
+    font-weight: 700;
+}
+
+/* Section Cards */
+.section-card {
+    background: #ffffff;
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 2rem;
+    margin-bottom: 2.2rem;
+    box-shadow: 0 3px 16px rgba(0, 0, 0, 0.02);
+}
+
+.section-card h2 {
+    font-size: 1.55rem;
+    font-weight: 800;
+    color: var(--tron-indigo);
+    margin-bottom: 0.6rem;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 0.75rem;
+    border-bottom: 1px solid var(--border-light);
+    padding-bottom: 0.75rem;
+}
+
+.section-card h3 {
+    font-size: 1.25rem;
+    font-weight: 700;
+    color: var(--tron-indigo);
+    margin: 1.6rem 0 0.8rem 0;
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+}
+
+/* Category Badge */
+.cat-pill {
+    display: inline-block;
+    padding: 0.2rem 0.65rem;
+    border-radius: 6px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.78rem;
+    font-weight: 800;
+    background: rgba(81, 45, 168, 0.08);
+    color: var(--tron-purple);
+    border: 1px solid rgba(81, 45, 168, 0.2);
+}
+
+.trace-pill {
+    display: inline-block;
+    padding: 0.15rem 0.55rem;
+    border-radius: 4px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.75rem;
+    font-weight: 600;
+    background: rgba(0, 87, 183, 0.08);
+    color: var(--tron-blue);
+    border: 1px solid rgba(0, 87, 183, 0.2);
+}
+
+.badge-pass {
+    background: #e8f5e9;
+    color: var(--tron-green);
+    padding: 0.2rem 0.6rem;
+    border-radius: 6px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.78rem;
+    font-weight: 700;
+    border: 1px solid rgba(46, 125, 50, 0.3);
+}
+
+/* Code Snippets (Groupoid Style) */
+.code-snippet {
+    padding: 1.25rem 1.45rem;
+    border-radius: var(--radius);
+    font-family: 'JetBrains Mono', ui-monospace, 'Cascadia Mono', monospace;
+    font-size: 0.88rem;
+    line-height: 1.55;
+    overflow-x: auto;
+    margin: 1rem 0;
+    white-space: pre;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.02);
+}
+
+.code-snippet.ocaml-style {
+    background: #fdfdfe;
+    border: 1px solid rgba(245, 127, 23, 0.3);
+    border-left: 4px solid var(--tron-gold);
+    color: #1e293b;
+}
+
+.code-snippet.coq-style {
+    background: #fafcff;
+    border: 1px solid rgba(0, 87, 183, 0.22);
+    border-left: 4px solid var(--tron-blue);
+    color: #0f172a;
+}
+
+/* Syntax Highlighting */
+.kwd { color: #0d47a1; font-weight: 700; }
+.ml-kwd { color: #d84315; font-weight: 700; }
+.type { color: #00695c; font-weight: 600; }
+.id { color: #b71c1c; font-weight: 600; }
+.sym { color: #37474f; font-weight: 700; }
+.comment { color: #546e7a; font-style: italic; }
+.str { color: #2e7d32; }
+
+/* Theorem Block */
+.thm-block {
+    background: #ffffff;
+    border: 1px solid var(--border-light);
+    border-radius: 12px;
+    padding: 1.4rem;
+    margin: 1.4rem 0;
+    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.02);
+    transition: border-color 0.2s ease;
+}
+
+.thm-block:hover {
+    border-color: rgba(0, 87, 183, 0.35);
+}
+
+.thm-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 0.6rem;
+    margin-bottom: 0.8rem;
+}
+
+.thm-title {
+    font-size: 1.1rem;
+    font-weight: 700;
+    color: #0d47a1;
+    font-family: 'JetBrains Mono', monospace;
+}
+
+/* Theorem Motivation Box */
+.thm-motivation {
+    background: linear-gradient(135deg, rgba(232, 245, 233, 0.55) 0%, rgba(241, 248, 233, 0.45) 100%);
+    border-left: 4px solid var(--tron-green);
+    border-radius: 0 8px 8px 0;
+    padding: 0.85rem 1.15rem;
+    font-size: 0.92rem;
+    line-height: 1.6;
+    color: #1b5e20;
+    margin-top: 0.85rem;
+}
+
+.thm-motivation b {
+    color: #004d40;
+    font-weight: 700;
+}
+
+/* Footer */
+footer.page-footer,
+footer.footer {
+    text-align: center;
+    padding: 2.5rem 1rem;
+    color: #64748b;
+    font-size: 0.88rem;
+    border-top: 1px solid var(--border-light);
+    margin-top: 3rem;
+}

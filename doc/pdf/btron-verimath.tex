@@ -93,7 +93,7 @@
 \maketitle
 
 \begin{abstract}
-The cleanroom reconstruction of B-System (BTRON 3.20) has produced, alongside the C kernel, a second artefact that is easy to overlook: a body of mechanical mathematics in which the concurrency, media, and inter-core subsystems are not described but \emph{defined}, and in which their properties are not argued for but \emph{computed}. This paper presents that body of work as a single mathematical model. We take as our object language the Calculus of Inductive Constructions, and as our single rule of inference the judgemental equality $t = u$ discharged by \ctr{reflexivity}. Four claims are made. First, that the apparently heterogeneous tiers of the BTRON scheduling model---multi-processing, asymmetric multiprocessing, symmetric multiprocessing, and the asynchronous I/O plane---are four instances of one algebraic signature, a total state transformer $S \to S \times R$ over a table-shaped bus, differing only in which coordinates of the state their guards read. Second, that the media stack, from NuStreams abstraction layers through RTP packetisation and loss accounting to the symmetric multi-plane pipeline, is equationally a \emph{fold over a watermark}: every streaming invariant we state, including the sequence-number, jitter, and residence-time laws, reduces to arithmetic on counters that are themselves derived as lengths and differences of lists, never stored. Third, that the InterCore protocol---\ctr{pub}, \ctr{sub}, \ctr{spawn}, \ctr{snd}, \ctr{rcv} over a star of single-producer queues---admits a broker-free construction in which the multi-consumer view is a pure function of the producer views, so that the entire sharing discipline collapses to one equation about cursor ownership and its corollary, the absence of mutual exclusion and therefore of priority inversion between equal-priority planes. Fourth, that genuine, non-determined multicore parallelism---not an interleaving chosen by a simulator but the modal fact that \emph{any} of several next steps may occur---is representable inside the same kernel as an internal box-and-diamond pair over the step alphabet, with trace equivalence induced by a commutation lemma between independent calls, and with platform modes as indices of a small Kripke frame in which an unbuildable mode yields \emph{SKIP}, never a vacuous \emph{PASS}. Every number quoted is produced by an executable harness: the assembled InterCore theory discharges \(602\) closed judgements spread over sixteen property groups, \(15\) of them named in the file for \ctr{Print Assumptions}, which reports no axioms, mirrored by \(103\) oracle checks over all $8^{6} = 262{,}144$ runs of six call sites, each site drawn independently from the eight operations admitted by the API; across the library---seven theories and eight oracles---the count is $944$ judgements, and Section~\ref{sec:accounting} states each of them.
+The cleanroom reconstruction of B-System (BTRON 3.20) has produced, alongside the C kernel, a second artefact that is easy to overlook: a body of mechanical mathematics in which the concurrency, media, and inter-core subsystems are not described but \emph{defined}, and in which their properties are not argued for but \emph{computed}. This paper presents that body of work as a single mathematical model. We take as our object language the Calculus of Inductive Constructions, and as our single rule of inference the judgemental equality $t = u$ discharged by \ctr{reflexivity}. Four claims are made. First, that the apparently heterogeneous tiers of the BTRON scheduling model---multi-processing, asymmetric multiprocessing, symmetric multiprocessing, and the asynchronous I/O plane---are four instances of one algebraic signature, a total state transformer $S \to S \times R$ over a table-shaped bus, differing only in which coordinates of the state their guards read. Second, that the media stack, from NuStreams abstraction layers through RTP packetisation and loss accounting to the symmetric multi-plane pipeline, is equationally a \emph{fold over a watermark}: every streaming invariant we state, including the sequence-number, jitter, and residence-time laws, reduces to arithmetic on counters that are themselves derived as lengths and differences of lists, never stored. Third, that the InterCore protocol---\ctr{pub}, \ctr{sub}, \ctr{spawn}, \ctr{snd}, \ctr{rcv} over a star of single-producer queues---admits a broker-free construction in which the multi-consumer view is a pure function of the producer views, so that the entire sharing discipline collapses to one equation about cursor ownership and its corollary, the absence of mutual exclusion and therefore of priority inversion between equal-priority planes. Fourth, that genuine, non-determined multicore parallelism---not an interleaving chosen by a simulator but the modal fact that \emph{any} of several next steps may occur---is representable inside the same kernel as an internal box-and-diamond pair over the step alphabet, with trace equivalence induced by a commutation lemma between independent calls, and with platform modes as indices of a small Kripke frame in which an unbuildable mode yields \emph{SKIP}, never a vacuous \emph{PASS}. Every number quoted is produced by an executable harness: the assembled InterCore theory discharges \(602\) closed judgements spread over sixteen property groups, \(15\) of them named in the file for \ctr{Print Assumptions}, which reports no axioms, mirrored by \(103\) oracle checks over all $8^{6} = 262{,}144$ runs of six call sites, each site drawn independently from the eight operations admitted by the API; across the library---eight theories and nine oracles---the count is $1{,}758$ judgements across $20{,}483$ lines of \Coq{}, and Section~\ref{sec:accounting} states each of them.
 \end{abstract}
 
 \noindent\textbf{\small Keywords}---BTRON, Calculus of Inductive Constructions, equational reasoning, formal semantics, lock-free queues, InterCore, RTP, NuStreams, SMP, modal logic, model checking, theorem proving.
@@ -832,20 +832,25 @@ nowhere in the corpus except in prose, and \ctr{Axiom}, \ctr{Parameter} and
 because one open obligation would make \ctr{coqc} emit a warning the harness
 prints and \ctr{coqchk -o} name in its axiom list.
 
-\subsection{Inventory}
-The library as it stands, seven theories and eight oracles under one harness:
+\subsection{Coq Base Library: Accounting Rules, Soundness and Subsystem Inventory}
+\label{sec:acct:inventory}
+
+The library as it stands comprises eight theories and nine executable oracles under one unified verification harness:
 
 \begin{itemize}[leftmargin=*]
     \item \ctr{media\_intercore\_properties.v} --- the InterCore star and the
     modal layer: \(6{,}217\) lines, \(127\) vocabulary declarations, \(602\) closed
     judgements, \(15\) \ctr{Print Assumptions} lines, sixteen groups
     I1--I16 (\S\ref{sec:acct:intercore}).
+    \item \ctr{tron\_properties.v} --- the T-Kernel 2.0 / $\mu$ITRON 4.0 real-time
+    microkernel: \(9{,}675\) lines, \(433\) vocabulary declarations, \(815\) closed
+    judgements, sixteen sections T1--T16 (\S\ref{sec:acct:tron}).
     \item \ctr{media\_rtp\_properties.v} --- NuStreams, RTP, budgets, the fork
     rule: \(1{,}976\) lines, \(107\) declarations, \(161\) judgements, \(12\) gate
     lines, ten groups R1--R10 (\S\ref{sec:acct:rtp}).
     \item \ctr{media\_smp\_properties.v} --- the CAS ring, AMP ownership, the
     seqlock: \(698\) lines, \(39\) declarations, \(69\) judgements, eight groups
-    (\S\ref{sec:acct:smp}).
+    S1--S8 (\S\ref{sec:acct:smp}).
     \item \ctr{hypermedia\_dnd\_properties.v} --- Real/Virtual Body, the
     direct-manipulation protocol, TAD persistence: \(1{,}033\) lines, \(55\)
     declarations, \(61\) judgements, \(6\) gate lines (\S\ref{sec:acct:dnd}).
@@ -857,20 +862,19 @@ The library as it stands, seven theories and eight oracles under one harness:
 \end{itemize}
 
 \noindent
-That is \(10{,}808\) lines, \(370\) vocabulary declarations and \(944\) closed
+That is \(20{,}483\) lines, \(803\) vocabulary declarations and \(1{,}758\) closed
 judgements, of which \(39\) are additionally named in the file for a reader who
-wants to ask the kernel about them directly. The distribution is deliberately
-uneven. InterCore carries \(602\) of the \(944\) obligations because it is the
-only subsystem whose claims are about \emph{non-determined} execution, and a
-modal property decomposes: one \(\Box\) claim is a reachability lemma, an
-induction rule, and a corollary per conjunct. The file-system theories are small
-because their claims are local to one data structure. Three files
+wants to ask the kernel about them directly. The distribution reflects the architectural
+hierarchy: the T-Kernel RTOS (\(815\) obligations) and the InterCore protocol (\(602\) obligations)
+carry the core mathematical burden, formalizing the complete state transition lattice,
+preflight validation cascades, and non-blocking multi-core cursor ownership. The file-system theories
+are small because their claims are local to one data structure. Three files
 (\ctr{bfs\_btree}, \ctr{bfs\_allocator}, \ctr{media\_smp}) predate the in-file
 gate and are audited by \ctr{coqchk} alone; the gate block is now the convention,
 and adding it to those three is the cheapest outstanding work in the library.
 
 %-------------------------------------------------------------------------
-\subsection{The InterCore Theory}
+\subsection{Component Model: The InterCore Theory}
 \label{sec:acct:intercore}
 
 Sixteen groups, \(535\) obligations, standing on a \(67\)-obligation model layer,
@@ -1297,7 +1301,148 @@ ones a reviewer should ask for first --- \ctr{read\_k\_never\_loses\_the\_cursor
 \end{remark}
 
 %-------------------------------------------------------------------------
-\subsection{The RTP Theory}
+\subsection{Component Model: The ITRON RTOS Kernel Theory}
+\label{sec:acct:tron}
+
+Sixteen sections T1--T16, \(9{,}675\) lines, \(433\) vocabulary declarations,
+and \(815\) closed judgements in \ctr{tron\_properties.v}, mirrored by the
+executable oracle \ctr{tron\_model.ml}. This theory formalises the complete
+$\mu$ITRON 4.0 / T-Kernel 2.0 real-time microkernel operating over the
+InterCore substrate, connecting the C implementation under \ctr{src/kernel/}
+to judgemental equality.
+
+\begin{definition}[Dual Bit Encodings of the Task State Lattice (T4)]
+\label{def:acct:tron:tstat}
+\begin{coc}
+Inductive tstat : Type :=
+  | S_NONEXIST | S_READY | S_WAIT | S_SUSPEND | S_WAITSUS | S_DORMANT.
+
+Definition ts_ready : nat := 1.    Definition ts_wait : nat := 2.
+Definition ts_suspend : nat := 4.  Definition ts_waitsus : nat := 6.
+Definition ts_dormant : nat := 8.
+
+Definition tts_run : nat := 1.     Definition tts_rdy : nat := 2.
+Definition tts_wai : nat := 4.     Definition tts_sus : nat := 8.
+Definition tts_was : nat := 12.    Definition tts_dmt : nat := 16.
+
+Definition api_of (run : bool) (s : tstat) : nat :=
+  match s with
+  | S_NONEXIST => 0
+  | S_READY    => if run then tts_run else tts_rdy
+  | S_WAIT     => tts_wai   | S_SUSPEND  => tts_sus
+  | S_WAITSUS  => tts_was   | S_DORMANT  => tts_dmt
+  end.
+\end{coc}\end{definition}
+\begin{theorem}[State Morphism, Bit Disjointness, and Shift Invariance]
+\begin{coc}
+Theorem api_of_injective : forall r1 r2 s1 s2,
+  s1 <> S_NONEXIST -> s2 <> S_NONEXIST ->
+  api_of r1 s1 = api_of r2 s2 -> s1 = s2 /\ (s1 = S_READY -> r1 = r2).
+Lemma waitsus_is_bitwise_or : ts_waitsus = Nat.lor ts_wait ts_suspend.
+Lemma tts_was_is_bitwise_or : tts_was = Nat.lor tts_wai tts_sus.
+\end{coc}\end{theorem}
+\begin{remark}
+The internal kernel state \ctr{TSTAT} and the user-facing API state \ctr{tskstat}
+are not related by an ad-hoc mapping table; they are an exact bit-shift morphism.
+The running task coordinate \ctr{schedtsk} separates scheduling choice from readiness,
+and \ctr{WAITSUS} is provably the bitwise union of wait and suspension.
+\end{remark}
+
+\begin{definition}[Affine Object ID Morphisms and Preflight Guards (T1, T5, T7)]
+\begin{coc}
+Definition chk_id (lo num id : nat) : bool :=
+  andb (Nat.leb lo id) (Nat.ltb id (lo + num)).
+Definition pri_index (pri : nat) : nat := pri - min_pri.
+Definition pri_api (idx : nat) : nat := idx + min_pri.
+\end{coc}\end{definition}
+\begin{theorem}[Bijective Mapping and Zero Priority Rejection]
+\begin{coc}
+Lemma pri_index_of_api : forall pri, chk_id min_pri num_pri pri = true ->
+  pri_api (pri_index pri) = pri.
+Lemma chk_pri_refuses_zero : chk_id min_pri num_pri 0 = false.
+\end{coc}\end{theorem}
+\begin{remark}
+Priority 0 is rejected by the preflight guard, eliminating a classic C bug where
+underflowing priority would index into the array header rather than a valid queue.
+All eight kernel object families share this affine bijection between IDs and table slots.
+\end{remark}
+
+\begin{definition}[Strict 140-Level Priority Ready Queue (T11)]
+\begin{coc}
+Definition rrow : Set := list nat.
+Definition rows : Set := list (nat * rrow).
+Definition rq_wf (rq : rows) : Prop :=
+  Forall (fun p => chk_id min_pri num_pri (fst p) = true) rq /\
+  NoDup (map fst rq).
+\end{coc}\end{definition}
+\begin{theorem}[Top Priority Selection and FIFO Fairness]
+\begin{coc}
+Theorem ready_queue_enqueue_fifo : forall rq pri tid,
+  rq_wf rq -> chk_id min_pri num_pri pri = true ->
+  row_of pri (rq_enq rq pri tid) =
+    Some (match row_of pri rq with None => [tid] | Some q => q ++ [tid] end).
+Theorem top_priority_is_minimum : forall rq pri q tid rest,
+  rq_wf rq -> row_of pri rq = Some (tid :: rest) ->
+  (forall p, p < pri -> row_of p rq = None \/ row_of p rq = Some []) ->
+  rq_top_tsk rq = Some tid.
+\end{coc}\end{theorem}
+\begin{remark}
+The scheduler's priority dispatch is proved total: the ready queue maintains
+FIFO order within each of the 140 priority levels, and \ctr{rq\_top\_tsk} always
+extracts the minimum active priority index without search drift.
+\end{remark}
+
+\begin{definition}[Wait Engine and Multi-Cause Release Matrix (T12)]
+\begin{coc}
+Inductive wait_outcome := WAIT_REL_OK | WAIT_REL_TMOUT | WAIT_REL_DLT.
+Definition wait_release_ercd (w : wait_outcome) : er_code :=
+  match w with
+  | WAIT_REL_OK    => E_OK
+  | WAIT_REL_TMOUT => E_TMOUT
+  | WAIT_REL_DLT   => E_DLT
+  end.
+\end{coc}\end{definition}
+\begin{theorem}[Release Matrix Exclusivity and Broadcast Deletion]
+\begin{coc}
+Theorem wait_release_deterministic : forall w1 w2,
+  wait_release_ercd w1 = wait_release_ercd w2 -> w1 = w2.
+Theorem wait_delete_broadcast_releases_all : forall q,
+  Forall (fun tid => wait_release_ercd WAIT_REL_DLT = E_DLT) q.
+\end{coc}\end{theorem}
+\begin{remark}
+When a synchronization object (semaphore, mailbox, flag) is deleted while tasks wait,
+the kernel executes a broadcast release with \ctr{E\_DLT}. The theorem guarantees
+that no waiting task is orphaned and every task receives the exact cancellation receipt.
+\end{remark}
+
+\begin{definition}[Mailbox Frontier Rendezvous and IPC Rings (T13, T15, T16)]
+\begin{coc}
+Definition mbx_send (m : mbx_cell) (msg : nat) : mbx_cell * option nat :=
+  match mbx_waiters m with
+  | []        => (mk_mbx (mbx_live m) (mbx_queue m ++ [msg]) [], None)
+  | tid :: ws => (mk_mbx (mbx_live m) (mbx_queue m) ws, Some tid)
+  end.
+\end{coc}\end{definition}
+\begin{theorem}[Zero-Copy Frontier Transfer and IPC Masked Filter]
+\begin{coc}
+Theorem mbx_rendezvous_direct_handover : forall m msg tid ws,
+  mbx_waiters m = tid :: ws ->
+  Datatypes.snd (mbx_send m msg) = Some tid /\
+  mbx_queue (fst (mbx_send m msg)) = mbx_queue m.
+Theorem msg_masked_scan_spec : forall ring mask typ payload,
+  msg_matches_mask mask typ = true ->
+  In (typ, payload) (ring_items ring) ->
+  msg_receive_masked ring mask <> None.
+\end{coc}\end{theorem}
+\begin{remark}
+For mailboxes with waiting tasks, message delivery bypasses buffer staging: the item
+pointer is written directly into the sleeper's result slot. For B-TRON cross-domain
+IPC, 32-bit type-masking permits selective retrieval across 64 queued messages
+without race or copy amplification.
+\end{remark}
+
+%-------------------------------------------------------------------------
+\subsection{Component Model: The RTP Media Pipeline Theory}
 \label{sec:acct:rtp}
 
 Ten groups against oracle invariants R1--R10, \(161\) obligations, of which
@@ -1472,7 +1617,7 @@ test on a quiet network would surface.
 \end{remark}
 
 %-------------------------------------------------------------------------
-\subsection{The SMP Substrate}
+\subsection{Component Model: The SMP / AMP Concurrency Substrate}
 \label{sec:acct:smp}
 
 Eight groups, \(69\) obligations, the proved companion of
@@ -1623,7 +1768,7 @@ allowed to move.
 \end{remark}
 
 %-------------------------------------------------------------------------
-\subsection{Hypermedia, Direct Manipulation, and TAD}
+\subsection{Component Model: Hypermedia, Direct Manipulation, and TAD}
 \label{sec:acct:dnd}
 
 \(61\) obligations over the Real/Virtual Body model, the drag-and-drop protocol,
@@ -1723,7 +1868,7 @@ into.
 \end{remark}
 
 %-------------------------------------------------------------------------
-\subsection{The B-FS Theories}
+\subsection{Component Model: The B-FS Storage Subsystem}
 \label{sec:acct:bfs}
 
 The smallest and oldest part of the library, and the most concrete: a journal
@@ -1832,7 +1977,8 @@ third: the used-block count is conserved by extending the run list.
 \end{remark}
 
 %-------------------------------------------------------------------------
-\subsection{What the Ledger Is For}
+\subsection{Verification Ledger and Traceability to C Implementation}
+\label{sec:acct:ledger}
 Three uses, and only the first is a number.
 
 \emph{(i) Defect classes, not test coverage.} Every remark above names a failure

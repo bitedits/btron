@@ -41,10 +41,10 @@
 \titlespacing*{\subsubsection}{0pt}{10pt}{6pt}
 
 \fancyhf{}
-\fancyhead[R]{\small\color{footergray} B-System / Формальна Бібліотека Coq/OCaml/C99}
+\fancyhead[R]{\small\color{footergray} B-System / Модальна формалізація BTRON}
 \fancyfoot[L]{\small\color{footergray} B-System / Модальна Багатоядерність та Відстежуваність}
 \fancyfoot[R]{\small\color{footergray}\thepage}
-\newcommand\HUGE[1]{\fontsize{34}{38}\selectfont #1}
+\newcommand\HUGE{\fontsize{32}{38}\selectfont}
 \renewcommand{\headrulewidth}{0pt}
 \renewcommand{\footrulewidth}{0.4pt}
 \renewcommand{\footrule}{\color{footergray}\hrule width\textwidth height 0.4pt}
@@ -69,7 +69,7 @@
   }}\par\medskip
 }
 
-\title{B-System: Формальна Бібліотека BTRON та Модальна Багатоядерність}
+\title{Модальна формалізація BTRON}
 \author{Synrc Research Center / B-System Project}
 \date{Жовтень 2026}
 
@@ -78,15 +78,25 @@
 
 \begin{titlepage}
   \AddToShipoutPictureBG*{\AtPageLowerLeft{\color{nato}\rule{\paperwidth}{\paperheight}}}
-  \color{white}\thispagestyle{empty}\vspace*{2.0cm}\centering
-  {\Huge \textbf{B-System} \par} \vspace{1.0cm}
-  {\HUGE \textbf{Формальна Базова Бібліотека BTRON та Модальна Багатоядерність} \par} \vspace{1.3cm}
+  \color{white}\thispagestyle{empty}\vspace*{1.8cm}\centering
+  {\Huge \textbf{B-System} \par} \vspace{0.8cm}
+  {\HUGE \textbf{Модальна формалізація BTRON} \par} \vspace{0.6cm}
   {\LARGE \textbf{Наскрізна Відстежуваність Coq / OCaml / C99} \par} \vspace{0.8cm}
-  {\LARGE \textbf{Модальні Доведення Безблокувальних Систем SMP/AMP} \par} \vspace{1.2cm}
-  {\large Теоретичне Обґрунтування, Методологія Формалізації Операційних Систем \par}
-  {\large та Повний Огляд 1,758 Доведених Теорем Бібліотеки \par} \vspace{1cm}
-  {\large Порівняльний Аналіз з Обмеженнями Одноядерних Моделей seL4 \par}
-  {\large і Практичне Застосування у Високонадійному Вбудованому ПЗ \par}
+
+  {\large \textbf{Верифіковані Компоненти Системи:} \par} \vspace{0.4cm}
+  {\normalsize \renewcommand{\arraystretch}{1.22}
+  \begin{tabular}{r@{\quad}l}
+    \textbf{I.}   & Ядро реального часу ITRON / BTRON (\texttt{tron}) \\
+    \textbf{II.}  & Багатоядерний медіа-стек SMP / AMP (\texttt{media\_smp}) \\
+    \textbf{III.} & Між'ядерна магістраль InterCore (\texttt{media\_intercore}) \\
+    \textbf{IV.}  & Потоковий мультимедійний стек RTP (\texttt{media\_rtp}) \\
+    \textbf{V.}   & Транзакційна журнальна файлова система B-FS (\texttt{bfs}) \\
+    \textbf{VI.}  & B-Tree індексація та ієрархічні структури (\texttt{bfs\_btree}) \\
+    \textbf{VII.} & Просторовий блоковий алокатор екстентів (\texttt{bfs\_allocator}) \\
+    \textbf{VIII.}& Гіпермедіа-рушій та обмін даними TAD / DND (\texttt{hypermedia\_dnd}) \\
+  \end{tabular}
+  \par} \vspace{0.8cm}
+  {\small 20,483 рядки Coq $\cdot$ 803 визначення $\cdot$ 1,758 замкнених теорем $\cdot$ 0 аксіом $\cdot$ 0 admits \par}
   \vfill
   {\large 2026 \copyright\ Synrc Research Center / B-System Formal Verification Group \par}
 \end{titlepage}
@@ -220,14 +230,14 @@
 \textbf{Компонент ОС} & \textbf{Модель Coq (.v)} & \textbf{Оракул OCaml (.ml)} & \textbf{Реалізація C99 (.c)} \\
 \midrule
 \endhead
-Ядро реального часу ITRON & \texttt{tron\_properties.v} & \texttt{tron\_model.ml} & \texttt{b-system/kernel/tron.c} \\
-Багатоядерний стек SMP/AMP & \texttt{media\_smp\_properties.v} & \texttt{media\_smp\_model.ml} & \texttt{b-system/media/media\_smp.c} \\
-Між'ядерна шина InterCore & \texttt{media\_intercore\_properties.v} & \texttt{media\_intercore\_model.ml} & \texttt{b-system/media/media\_intercore.c} \\
-Потоковий медіа-стек RTP & \texttt{media\_rtp\_properties.v} & \texttt{media\_rtp\_model.ml} & \texttt{b-system/media/media\_rtp.c} \\
-Транзакційна ФС B-FS & \texttt{bfs\_properties.v} & \texttt{bfs\_model.ml} & \texttt{b-system/fs/bfs.c} \\
-B-Tree індексація B-FS & \texttt{bfs\_btree\_properties.v} & \texttt{bfs\_btree\_model.ml} & \texttt{b-system/fs/bfs\_btree.c} \\
-Просторовий алокатор B-FS & \texttt{bfs\_allocator\_properties.v} & \texttt{bfs\_allocator\_model.ml} & \texttt{b-system/fs/bfs\_allocator.c} \\
-Гіпермедіа TAD / DND & \texttt{hypermedia\_dnd\_properties.v} & \texttt{hypermedia\_dnd\_model.ml} & \texttt{b-system/hmi/hypermedia.c} \\
+\textbf{I.} Ядро реального часу ITRON & \texttt{tron\_properties.v} & \texttt{tron\_model.ml} & \texttt{kernel/tron.c} \\
+\textbf{II.} Багатоядерний стек SMP/AMP & \texttt{media\_smp\_properties.v} & \texttt{media\_smp\_model.ml} & \texttt{media/media\_smp.c} \\
+\textbf{III.} Між'ядерна шина InterCore & \texttt{media\_intercore\_properties.v} & \texttt{media\_intercore\_model.ml} & \texttt{media/media\_intercore.c} \\
+\textbf{IV.} Потоковий медіа-стек RTP & \texttt{media\_rtp\_properties.v} & \texttt{media\_rtp\_model.ml} & \texttt{media/media\_rtp.c} \\
+\textbf{V.} Транзакційна ФС B-FS & \texttt{bfs\_properties.v} & \texttt{bfs\_model.ml} & \texttt{fs/bfs.c} \\
+\textbf{VI.} B-Tree індексація B-FS & \texttt{bfs\_btree\_properties.v} & \texttt{bfs\_btree\_model.ml} & \texttt{fs/bfs\_btree.c} \\
+\textbf{VII.} Просторовий алокатор B-FS & \texttt{bfs\_allocator\_properties.v} & \texttt{bfs\_allocator\_model.ml} & \texttt{fs/bfs\_allocator.c} \\
+\textbf{VIII.} Гіпермедіа TAD / DND & \texttt{hypermedia\_dnd\_properties.v} & \texttt{hypermedia\_dnd\_model.ml} & \texttt{hmi/hypermedia.c} \\
 \bottomrule
 \end{longtable}
 \end{center}
@@ -276,7 +286,7 @@ Cat. XVI & Epoch Fencing \& Recovery & Ідемпотентність відно
 
 Нижче наведено детальний систематичний аналіз ключових теорем для кожного з 8 компонентів базової бібліотеки із зазначенням мотивації ("Чому ми це доводимо"), їх формального запису в Coq та відповідних категорій таксономії.
 
-\subsection[Ядро Реального Часу ITRON / BTRON]{Ядро Реального Часу ITRON / BTRON (\texttt{tron})}
+\subsection[Компонент I. Ядро Реального Часу ITRON]{Компонент I. Ядро Реального Часу ITRON / BTRON (\texttt{tron})}
 
 Модуль \texttt{tron\_properties.v} formalises ґратку станів задач, багаторівневий планувальник на 140 черг пріоритетів, синхронізацію через семафори, прапорці подій (eventflags), поштові скриньки (mailboxes) та механізм рендеву (rendezvous).
 
@@ -340,7 +350,7 @@ Lemma full_cursor_is_never_wellformed : forall m x,
 \end{verbatim}
 \thmmotivation{Гарантує нуль-копіювальне передавання повідомлень без переповнення фіксованих системних буферів ядра.}
 
-\subsection[Багатоядерний Медіа-Стек SMP / AMP]{Багатоядерний Медіа-Стек SMP / AMP (\texttt{media\_smp})}
+\subsection[Компонент II. Багатоядерний Стек SMP / AMP]{Компонент II. Багатоядерний Медіа-Стек SMP / AMP (\texttt{media\_smp})}
 
 Модуль \texttt{media\_smp\_properties.v} відповідає за безблокувальні кільцеві черги мультимедіа між ядрами, асиметричну периферію AMP та захист зрізів Seqlock.
 
@@ -394,7 +404,7 @@ Lemma boot_and_io_cannot_both_drain : forall p,
 \end{verbatim}
 \thmmotivation{В асиметричних системах (AMP) конфлікт між ядром завантаження та ядром вводу-виводу за апаратні контролери призводить до зависання системної шини. Теорема доводить взаємне виключення доступу до апаратури.}
 
-\subsection[Між'ядерна Магістраль InterCore]{Між'ядерна Магістраль InterCore (\texttt{media\_intercore})}
+\subsection[Компонент III. Між'ядерна Магістраль InterCore]{Компонент III. Між'ядерна Магістраль InterCore (\texttt{media\_intercore})}
 
 Модуль \texttt{media\_intercore\_properties.v} верифікує топологію зірки без брокерів для передачі медіа-потоків між ядрами.
 
@@ -452,7 +462,7 @@ Theorem interleavings_preserve_bus_wf : forall steps,
 \end{verbatim}
 \thmmotivation{Індуктивне доведення збереження інваріантів шини за будь-якого непередбачуваного порядку перемикання потоків на всіх ядрах.}
 
-\subsection[Потоковий Медіа-Стек RTP]{Потоковий Медіа-Стек RTP (\texttt{media\_rtp})}
+\subsection[Компонент IV. Потоковий Медіа-Стек RTP]{Компонент IV. Потоковий Медіа-Стек RTP (\texttt{media\_rtp})}
 
 Модуль \texttt{media\_rtp\_properties.v} formalises керування кадровими буферами аудіо/відео, захист від переповнення та просторову мозаїку.
 
@@ -500,7 +510,7 @@ Theorem quarter_cells_never_overlap : forall q1 q2,
 \end{verbatim}
 \thmmotivation{Гарантує, що поділ екрана на 4 квадранти відео створює неперетинні прямокутники, виключаючи пошкодження графічного буфера апаратним блітером.}
 
-\subsection[Транзакційна Файлова Система B-FS]{Транзакційна Файлова Система B-FS (\texttt{bfs})}
+\subsection[Компонент V. Транзакційна Файлова Система B-FS]{Компонент V. Транзакційна Файлова Система B-FS (\texttt{bfs})}
 
 Модуль \texttt{bfs\_properties.v} formalises транзакційне журналювання, стійкість до збоїв живлення та відновлення.
 
@@ -538,7 +548,7 @@ Theorem recovery_deterministic : forall v v1 v2,
 \end{verbatim}
 \thmmotivation{Багаторазове програвання журналу після аварії дає той самий результат, що й одноразове; стан відновлення є абсолютно детермінованим.}
 
-\subsection[B-Tree Індексація та Ієрархічні Структури]{B-Tree Індексація та Ієрархічні Структури (\texttt{bfs\_btree})}
+\subsection[Компонент VI. B-Tree Індексація]{Компонент VI. B-Tree Індексація та Ієрархічні Структури (\texttt{bfs\_btree})}
 
 Модуль \texttt{bfs\_btree\_properties.v} верифікує ключові структури дискових індексів файлової системи B-FS.
 
@@ -573,7 +583,7 @@ Theorem leaf_link_consistency : forall l1 l2,
 \end{verbatim}
 \thmmotivation{Двонаправлений зв'язок між сусідніми листками B-Tree гарантує надійність послідовного лінійного сканування діапазонів ключів.}
 
-\subsection[Просторовий Алокатор Дискових Блоків]{Просторовий Алокатор Дискових Блоків (\texttt{bfs\_allocator})}
+\subsection[Компонент VII. Просторовий Алокатор]{Компонент VII. Просторовий Алокатор Дискових Блоків (\texttt{bfs\_allocator})}
 
 Модуль \texttt{bfs\_allocator\_properties.v} formalises просторову геометрію блоків та бітові операції ідентифікаторів екстентів (FID).
 
@@ -608,7 +618,7 @@ Theorem total_blocks_add : forall runs r,
 \end{verbatim}
 \thmmotivation{Закон балансу маси: сума виділених блоків завжди в точності дорівнює сумі довжин окремих зарезервованих запусків.}
 
-\subsection[Гіпермедіа-Рушій та Drag-and-Drop]{Гіпермедіа-Рушій та Drag-and-Drop (\texttt{hypermedia\_dnd})}
+\subsection[Компонент VIII. Гіпермедіа TAD / DND]{Компонент VIII. Гіпермедіа-Рушій та Drag-and-Drop (\texttt{hypermedia\_dnd})}
 
 Модуль \texttt{hypermedia\_dnd\_properties.v} верифікує модель "реальне тіло / віртуальне тіло" (real-body / pseudo-body), операції Drag-and-Drop та потоки обміну даними TAD.
 

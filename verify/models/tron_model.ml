@@ -18,8 +18,10 @@
      §3  the three timeout figures              typedef.h:55-56, check.h:185
      §4  the two bit encodings of one lattice   task.h:45-59, syscall.h:58-64
      §5  the ID <-> index affine map            config.h:23-133
-     §12 the release matrix and two-phase write wait.c:41-133, 166-177
-     §14 semaphore: the count and the drain     semaphore.c:157-352, wait.c:79-207
+     §12 the wait-spec table, the release matrix and the two-phase write
+                                                wait.c:22-133, 166-177
+     §14 semaphore: the count, the drain and the departure walk
+                                                semaphore.c:157-352, wait.c:79-207
      §16 event flag: the pattern and the walk   eventflag.c:31-359, wait.c:139-146
 
    NOT mirrored, and claimed nowhere in this file:
@@ -29,8 +31,8 @@
      §13     the mailbox frontier rendezvous
      §15     the B-TRON message ring and the T-Kernel byte buffer (their own
              executables live beside this file in the media_* models)
-     TA_DSNAME / exinf, the debugger services, flg_chg_pri, timer expiry,
-     relwai.  tron_properties.v §16.10 lists the same absences.
+     TA_DSNAME / exinf, the debugger services, flg_chg_pri, timer expiry.
+     tron_properties.v §16.10 lists the same absences.
 
    Build and run:
      ocamlc -o tron_model tron_model.ml && ./tron_model
@@ -346,7 +348,7 @@ let show_spec w =
   sprintf "{tskwait %d; chg_pri %b; rel_wai %b}"
     w.ws_tskwait w.ws_chg_pri w.ws_rel_wai
 
-(* Receipt lists: del_flg and del_sem hand one per waiter. *)
+(* Receipt lists: del_flg and del_sem hand one E_DLT per waiter. *)
 let show_er_list es = "[" ^ String.concat "; " (List.map show_er es) ^ "]"
 
 (* ── The cascade geometry shared by every service (tron_properties.v §7) ── *)
@@ -381,6 +383,12 @@ let show_bool b = string_of_bool b
 let show_er_opt = function None -> "None" | Some e -> "Some " ^ show_er e
 
 (* ── 14. Semaphore: the count, and the walk that spends it ──────── *)
+
+(* Subsection banners mirror tron_properties.v; their order follows OCaml's data
+ * dependencies, since the control block has to exist before the walk that
+ * returns one. *)
+
+(* ── 14.3 The control block, and how the table sees it ─────────── *)
 
 (* semaphore.c:35-45 (FLGCB-style seven fields), with the three attributes the
  * entry points read exposed, because each one decides a different guard:
@@ -433,6 +441,8 @@ let every_needs q = List.for_all (fun x -> 0 < x.w_need) q
 
 let sem_wf c = c.sc_cnt <= c.sc_max && every_needs c.sc_wait
 
+(* ── 14.1 Where a new waiter is written ────────────────────────── *)
+
 (* wait.c:79-97, queue_insert_tpri: walk from the head and break at the first
  * entry of STRICTLY lower priority figure (a lower figure is a higher
  * priority), so the queue stays ascending and a tie keeps the incumbent. *)
@@ -451,6 +461,8 @@ let pri_ascending q = match q with [] -> true | _ :: rest -> pri_ascending_tail 
 (* semaphore.c:321 chooses between the two orders. *)
 let sem_enqueue tpri who q = if tpri then insert_tpri who q else q @ [ who ]
 
+(* ── 14.2 Who may take the count ────────────────────────────────── *)
+
 (* wait.c:196-207, gcb_top_of_wait_queue: an empty queue admits anybody, a FIFO
  * queue admits nobody, a TPRI queue admits only a strict improvement -- and it
  * compares against the HEAD only, which is sound because insertion keeps the
@@ -468,6 +480,8 @@ let sem_take need c =
   { c with sc_cnt = if need <= c.sc_cnt then c.sc_cnt - need else 0 }
 
 let sem_block who c = { c with sc_wait = sem_enqueue c.sc_tpri who c.sc_wait }
+
+(* ── 14.4 The wait-disable guard, and 14.6 wai_sem as a step ─────── *)
 
 (* wai_sem, semaphore.c:308-325, in the C's branch order.  The failure branch
  * pre-writes through §12.4 (wait.c:166-177), which is where its E_TMOUT comes
@@ -500,15 +514,19 @@ let rec sig_walk gran count q =
         else { d_left = count; d_kept = x :: rest; d_gone = [] }
       else d_take x (sig_walk gran (count - x.w_need) rest)
 
+(* ── 14.6 The two entry points as steps on the cell ──────────────── *)
+
 let sem_after c d = { c with sc_cnt = d.d_left; sc_wait = d.d_kept }
 
 let sem_sig_step cnt c =
   let d = sig_walk c.sc_gran (c.sc_cnt + cnt) c.sc_wait in
   (sem_after c d, d.d_gone)
 
+(* ── 14.7 The departure walk, and the delete broadcast ───────────── *)
+
 (* rel_wai, wait.c:166-175: the same drain from the count alone.  A granular
  * cell steps over its unsatisfiable waiters here but a signal would hand them
- * the units, so only the FIFO branch is the zero signal (§14.6). *)
+ * the units, so only the FIFO branch is the zero signal (§14.7). *)
 let sem_rel_wai_step c =
   if c.sc_gran then (c, [])
   else
@@ -523,6 +541,8 @@ let sem_broadcast c =
 
 let sem_forget c = { c with sc_id = 0; sc_wait = [] }
 
+(* ── 14.5 The preflight cascades of this family ──────────────────── *)
+
 (* The signal cascade, semaphore.c:229-238 in order: the id range, CHECK_PAR
  * (cnt > 0), the marker, then the ceiling -- the only state-dependent test in
  * the family, and the only producer of E_QOVR. *)
@@ -534,11 +554,15 @@ let sem_sig_guards used id cnt mx count =
 
 (* ── 16. Event flags: one word, many tests ──────────────────────── *)
 
+(* ── 16.1 The pattern word ──────────────────────────────────────── *)
+
 (* Every operation on FLGCB.flgptn is bitwise.  Nat.ldiff p w in the Coq file is
  * p & ~w, which is what OCaml's land/lnot give for non-negative figures. *)
 let pat_or a b = a lor b
 let pat_and a b = a land b
 let pat_clr p w = p land lnot w
+
+(* ── 16.2 The two wait modes ────────────────────────────────────── *)
 
 (* syscall.h:123-125. *)
 let twf_orw = 1
@@ -564,6 +588,8 @@ let flg_cond p w m =
   if orw_mode m then 0 < (p land w) else (p land w) = w
 
 (* eventflag.c:31-44 plus the queue entries eventflag.c:324-326 writes. *)
+(* ── 16.4 The control block, on 16.3's waiter entry type ──────────── *)
+
 type flg_who = { fw_tid : int; fw_waiptn : int; fw_wfmode : int; fw_pri : int }
 
 type flgcb = {
@@ -640,6 +666,8 @@ let every_test_nonzero q = List.for_all (fun x -> x.fw_waiptn <> 0) q
 let every_mode_legal q = List.for_all (fun x -> wfmode_ok x.fw_wfmode) q
 let flg_wf c = every_test_nonzero c.fc_wait && every_mode_legal c.fc_wait
 
+(* ── 16.3 The two orders ────────────────────────────────────────── *)
+
 (* eventflag.c:321 and wait.c:79-97: the same insertion rule as a semaphore, on
  * the flag's own entry type. *)
 let rec flg_insert_tpri who q =
@@ -675,6 +703,8 @@ let wai_clear mode p w =
 let flg_stop_after mode p_after =
   clr_mode mode || (bitclr_mode mode && p_after = 0)
 
+(* ── 16.6 What one answer does to the pattern, and 16.7 the walk it feeds *)
+
 (* The two ways a step extends the walk it recursed into, named as in the Coq
  * so §16.7's continue law can be stated rather than only computed. *)
 let flg_walk_keeps x w = mk_flg_walk w.k_pat (x :: w.k_kept) w.k_gone
@@ -700,9 +730,13 @@ let rec flg_set_walk p q =
       end else
         flg_walk_keeps x (flg_set_walk p rest)
 
+(* ── 16.7 set_flg as a step on the cell ─────────────────────────── *)
+
 let flg_set_step setptn c =
   let w = flg_set_walk (pat_or c.fc_pat setptn) c.fc_wait in
   ({ c with fc_pat = w.k_pat; fc_wait = w.k_kept }, w.k_gone)
+
+(* ── 16.5 The preflight cascades, and 16.6 wai_flg as a step ────── *)
 
 (* The TA_WMUL guard of :296-299, on its own. *)
 let another_waiter_is_present q = q <> []
@@ -727,6 +761,8 @@ let flg_wai mask t who c =
 
 (* cre_flg (:139-154): the caller's attributes and the caller's pattern, nobody
  * queued, and the receipt is the new id (:154). *)
+(* ── 16.8 The other four entry points, as steps on the cell ──────── *)
+
 let flg_created id tpri wmul nodis initial =
   mk_flgcb id tpri wmul nodis initial []
 

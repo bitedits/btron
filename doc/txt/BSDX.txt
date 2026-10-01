@@ -1,0 +1,608 @@
+BSDX.txt — BSD Personality and zedBSD (Awe Morris) Import Contract
+================================================================
+
+B-System (BTRON 3.20)
+BSD ABI guest plane, distinct from LINX.txt
+Related: LINX.txt, VENUS.txt, GPU.txt, NOTE.md, ASYNC.txt, IO.txt, SMP.md
+
+Status: Architecture and analysis (normative for the BSD gate;
+        zedBSD analysis is evidence, not a claim that zedBSD binaries
+        boot unmodified on T-Kernel)
+Policy: B-System remains a T-Kernel / BTRON machine.
+        BSD software is a second personality, not a second nucleus.
+        LINX and BSD are sibling gates.  They MUST NOT share a syscall
+        number table.  Native BTRON APIs are never rewritten as POSIX.
+
+
+0. Scope, naming, and the one-sentence claim
+--------------------------------------------
+
+0.1 What this document covers
+
+  * A LINX-shaped personality whose ABI is BSD, not Linux:
+    syscall numbers, ELF, and a BSD libc (zedBSD libc first;
+    FreeBSD compat later).
+  * An analysis of zedBSD by Awe Morris (https://github.com/awemorris/zedBSD),
+    also branded Kei / Keiland, and what of it B-System may import.
+  * The split between (A) ABI personality, (B) driver importation
+    already specified in VENUS.txt, and (C) forbidden kernel merge.
+  * Object map, POSIX projection reuse from LINX.txt, syscall surface,
+    requirements, rejected patterns, phases.
+
+0.2 Naming hygiene
+
+  *BSD gate / bsdx*   Personality subsystem.  Not FreeBSD.  Not NetBSD.
+                      Not zedBSD running as the B-System kernel.
+  *zedBSD*            Awe Morris's redesigned BSD kernel + base
+                      (zlib License).  Kei is the product OS; Keiland
+                      is its Wayland desktop.
+  *Zero-Cost Proxy*   VENUS.txt compile-time shim.  Drivers, not the
+                      zedBSD nucleus.
+  *UAPI freeze*       include/uapi layouts copied from one named BSD
+                      (zedBSD uapi or FreeBSD amd64).  One freeze per
+                      build.
+
+0.3 One-sentence summary
+
+  B-System admits BSD userland the same way it admits Linux userland:
+  numbers + ELF + libc on T-Kernel objects; zedBSD is the preferred
+  donor for libc headers, HAL-shaped drivers, and the VENUS i915 path,
+  never a drop-in vmunix.
+
+
+1. Duality (normative) — three gates, one nucleus
+-------------------------------------------------
+
+  Gate          ABI                            Who uses it
+  ------------  -----------------------------  --------------------------------
+  tk_* / BTRON  T-Kernel 2.0 + BTRON3          Real Bodies, HMI, TAD
+  linx          Linux numbers + musl/Alpine    LINX.txt
+  bsdx          BSD numbers + zedBSD/BSD libc  THIS document
+
+  | Invariant (two POSIX personalities are still one nucleus):
+  | LINX and BSD are alternative UAPIs over the same LinxProc-class
+  | object map.  A process is born on one gate.  It does not change
+  | gates.  Mixing musl and zedBSD libc in one address space is
+  | undefined.
+
+Priority bands stay those of LINX.txt / IO.txt:
+
+  T-Kernel RT / ASYNC INPUT+UI  >  personality kernel work  >  guest user
+
+uname on the BSD gate reports a BSD-shaped sysname (see §9), not
+"Linux".  Alpine scripts will not run here; that is intentional.
+
+
+2. Why a BSD gate exists when LINX already exists
+-------------------------------------------------
+
+L1  Different numbers.  FreeBSD/zedBSD SYS_* are not Linux __NR_*.
+    A single table cannot serve both.
+
+L2  Different structs.  stat, kevent, sockaddr layouts, cmsg,
+    siginfo, and ioctl command encodings diverge.  LINX.txt AF3
+    forbids "almost Linux" padding; the same rule applies here
+    with BSD layouts.
+
+L3  Different libc and userland.  zedBSD ships its own libc under
+    src/libc and userland/base.  FreeBSD ports and zedBSD base
+    programs will not link against musl.
+
+L4  Different device grammar.  kqueue / kevent, sysctl, /dev
+    naming, and (in zedBSD) evdev-like input plus native GPU ops
+    are not Linux epoll + ioctl DRM.
+
+L5  VENUS already chose zedBSD as the GPU donor.  A BSD userland
+    is the natural client of that driver surface.  LINX Mesa/DRM
+    is a later, separate problem.
+
+The two gates share implementation files where the object map is
+identical (VMA list, fd table, FID projection).  They do not share
+abi.h.
+
+
+3. Analysis of zedBSD (Awe Morris)
+----------------------------------
+
+Evidence date: public tree github.com/awemorris/zedBSD, README and
+docs/architecture as of 2026-09.  No performance claim is copied.
+
+3.1 What zedBSD is
+
+  zedBSD is a redesigned BSD-based kernel and base aiming at
+  POSIX.1-2024 and SUSv4.  Directed by one human (Awe Morris),
+  implemented with AI coding agents.  Product wrapping: Kei OS +
+  Keiland (Wayland compositor + touch-oriented clients).
+  License: zlib.
+
+  Targets: amd64 PC (UEFI / OVMF / NVMe), Raspberry Pi series.
+  Retro demonstrations: PC-9800 i386, PC/AT i386, sun4u, X68000.
+
+  Stated non-goals in plan/master.md (paraphrase, not a quote of
+  the Japanese master board): no Linux kernel ABI, no DRM/Mesa as
+  the official stack, no claim of The Open Group UNIX brand or
+  Vulkan CTS.
+
+3.2 Layer cake (from the published README)
+
+  +--------------------------------------------------------------+
+  | Official packages (/usr)                                     |
+  +--------------------------------------------------------------+
+  | Wayland desktop (Keiland)                                    |
+  +--------------------------------------------------------------+
+  | Base programs (/bin, /lib)                                   |
+  +--------------------------------------------------------------+
+  | /sbin/networkd                                               |
+  +--------------------------------------------------------------+
+  | /sbin/init                                                   |
+  +--------------------------------------------------------------+
+  | Drivers (PCI, USB, GPU, disk, net, fs, ...)                  |
+  +--------------------------------------------------------------+
+  | Kernel (platform-neutral)          src/kern/                 |
+  +--------------------------------------------------------------+
+  | HAL (CPU + BSP)                    src/hal/                  |
+  +--------------------------------------------------------------+
+
+  This split is the load-bearing idea.  kern/ owns process, thread,
+  VM, filedesc, VFS, pipes, signals, sysctl.  HAL owns address
+  spaces, IRQ, CPU, display primitives.  Drivers sit above HAL and
+  speak kern abstractions (lock, waitq, pmem, pci), not Linux
+  kref/idr/ww_mutex.
+
+3.3 Kernel inventory (src/kern/, relevant to a personality)
+
+  process.c thread.c sched.c
+  vm.c pmem.c heap.c
+  file.c filedesc.c fd-object.c handle.c pipe.c poll.c
+  inode.c namei.c namecache.c dcache.c mount.c
+  elf.c exec.c entry.c
+  syscall.c sysctl.c signal.c clock.c
+  disk.c buf.c cache.c
+  cred.c cwdinfo.c resource.c
+  cdev.c devfs.c device-io.c
+
+  Storage path they document: file -> UFS or FAT -> cache/buf -> disk.
+  Supported fs name: ufs (consolidated 64-bit format).  Image profile
+  is zedBSD's own; it does not certify FreeBSD UFS variants.
+
+3.4 User ABI they document
+
+  Public C headers: include/libc
+  zedBSD-specific records: include/uapi/zedbsd
+  Kernel-private and HAL structs are not application contracts.
+  Build against the zedBSD sysroot, not the host's ioctl layouts.
+
+  That sentence is the same rule LINX.txt AF3 states for Linux.
+
+3.5 GPU and VENUS overlap
+
+  zedBSD GPU: native Vulkan stack, no Linux DRM/KMS, no Mesa as the
+  required path.  Intel Xe-LP iGPU first; NVIDIA/AMD planned.
+  drv_gpu_ops is their driver ops table (VENUS / plan notes cite
+  versions around v6 and a large command set).
+
+  VENUS.txt already specifies importing
+    ../zedBSD/src/drivers/gpu/i915/
+  unmodified via include-path proxy
+    <kern/lock.h> -> T-Kernel spin / event flag
+    <kern/thread.h> -> tk_cre_tsk
+    <kern/pmem.h>  -> B-System page allocator
+    <drivers/pci/pci.h> -> B-System PCI
+
+  BSDX.txt does not reopen that contract.  It only notes: a BSD
+  personality is how userspace is supposed to talk to that GPU
+  once /dev nodes exist.  LINX talking to VENUS is a translation
+  (DRM-shaped ioctls) and is out of scope here.
+
+3.6 The inverse architecture: zedBSD WS015 μITRON domain
+
+  zedBSD docs/architecture/muitron-rt-domain.md (planned, blocked,
+  no implementation claim) is the mirror image of LINX/BSD:
+
+    zedBSD thesis:  UNIX nucleus + optional μITRON guest on AMP cores
+    B-System thesis: T-Kernel nucleus + optional UNIX guest (linx/bsdx)
+
+  Confirmed zedBSD direction (their text, summarised):
+
+    * RT apps as resident user-mode ELF, not kernel-mode ITRON tasks.
+    * One RT image may hold many μITRON tasks in one AS (globals,
+      fixed pools, pointer mailboxes stay intra-image).
+    * Admission pins code/data/stacks before dispatch.  No demand
+      paging on the RT contract.
+    * MMIO granted explicitly; port I/O / IOMMU / reset stay in HAL.
+    * Filesystem is not a μITRON call; a POSIX-core broker does VFS.
+    * Hard-RT claim only for a named board + admitted image.
+
+  Consequence for B-System: do not implement BTRON by running
+  T-Kernel tasks inside zedBSD.  Do not implement zedBSD by running
+  vmunix as a T-Kernel task.  Each project already chose its nucleus.
+  Cooperation is ABI + drivers + HAL-shaped shims.
+
+3.7 What to take from zedBSD, what to refuse
+
+  Take
+    * HAL vs kern split as a documentation pattern.
+    * include/libc + include/uapi/zedbsd as the BSD UAPI freeze
+      candidate (preferred over shipping all of FreeBSD sys/sys).
+    * src/libc as the first guest libc to link against bsdx.
+    * i915 / drv_gpu via VENUS proxy (already normative).
+    * zlib licensing hygiene for imported files.
+    * Their warning: familiar Unix names are interfaces, not a
+      claim that a FreeBSD kernel binary can be substituted.
+
+  Refuse
+    * src/kern/* as B-System nucleus (process.c is their process
+      model, not T-Kernel).
+    * Their UFS as a replacement for BTRON volumes / B-FS V2.
+    * Keiland / Wayland as a replacement for Workbench / DP
+      (RENDER.txt remains authoritative for BTRON presentation).
+    * networkd / init policy daemons inside the T-Kernel image.
+    * Claiming POSIX.1-2024 or SUSv4 conformance because zedBSD aims
+      at those documents.
+
+3.8 zedBSD vs FreeBSD vs NetBSD (for the freeze)
+
+  Donor                 Why consider              Why hesitate
+  --------------------  ------------------------  --------------------------
+  zedBSD uapi + libc    Already in VENUS orbit;   Young; ABI still moving;
+                        zlib; HAL-shaped;         pin a commit like mlibc
+                        small enough to read      ports must
+  FreeBSD amd64         Huge ports collection;    GPL-adjacent kernel not
+                        stable SYS_* history      imported; heavy libc;
+                                                  linuxulator is the wrong
+                                                  lesson (they emulate
+                                                  Linux on BSD; we would
+                                                  emulate BSD on T-Kernel)
+  NetBSD rump           Components as libraries   Different UAPI again;
+                                                  rump is not a guest ABI
+
+  Normative choice for Phase 0 of THIS document:
+
+    Freeze A: zedBSD include/libc + include/uapi/zedbsd at a tagged
+              commit, recorded in bsdx/ABI_PIN.txt.
+
+    Freeze B (optional later): FreeBSD 14 amd64 syscall table as a
+              second personality (bsdx_freebsd), not mixed into
+              Freeze A.
+
+  One build, one freeze.  Same rule as LINX.txt AF1.
+
+
+4. Layer diagram
+----------------
+
+                    zedBSD libc / BSD ELF
+                           |
+                    BSD syscall gate
+                    (syscall insn; SYS_* in the
+                     architecture-defined register)
+                           |
+                 +---------v---------+
+                 |  bsdx             |
+                 |  SYS_* -> handler |
+                 |  fd / pid / mmap  |
+                 |  kqueue / sysctl  |
+                 +---------+---------+
+                           |
+           T-Kernel 2.0              BTRON volume
+           cre_tsk / sem / mpl       FID / Real Body  (LINX.txt §7)
+
+Shared with LINX (do not fork):
+
+  posix_proj.c     FID <-> path, record linearize
+  vm.c             VMA list, brk, mmap core
+  proc_core.c      LinxProc-equivalent (name: GuestProc)
+
+Not shared:
+
+  abi.h            numbers and structs
+  entry.S          may differ (FreeBSD uses INT $0x80 history on i386;
+                   amd64 is syscall but different SYS_* )
+  sysctl.c         BSD only
+  kqueue.c         BSD only
+
+
+5. Object map
+-------------
+
+Identical to LINX.txt §3 except:
+
+  Linux object          BSD object             B-System object
+  --------------------  ---------------------  --------------------------
+  epoll                 kqueue / kevent        T-Kernel event flag + interest list on GuestProc
+  futex                 _umtx_op (FreeBSD)     same wait queue keyed by user VA; wrapper differs or zedBSD equivalent
+  arch_prctl            sysarch / TLS helper   same FS / TPIDR write
+  uname "Linux"         uname BSD-shaped       personality string only
+  stat (Linux)          stat (BSD)             same inode projection, different struct store
+  clone                 rfork / thr_new        cre_tsk + GuestProc flags
+
+GuestProc is the common process block.  Field names may stay those of
+LINX.txt internally.  UAPI visible structs are copied from the freeze.
+
+
+6. Modules
+----------
+
+  bsdx/
+    ABI_PIN.txt        donor + commit + ISA
+    abi.h              SYS_* numbers, errno, structs from the pin
+    entry.S
+    proc.c             fork, rfork/thr_new, execve, wait4, exit
+    vm.c               -> shared vm core
+    fs.c               open, read, write, … wrapping posix_proj
+    time.c             clock_gettime, nanosleep, setitimer
+    kqueue.c           kevent interest list
+    sysctl.c           nametree; uname-equivalent data
+    elf.c              same PT_LOAD rules as LINX, different auxv notes
+
+Guest libc lives in user/zedbsd-root/ or is cross-built from
+../zedBSD/src/libc against bsdx.  Not in the nucleus.
+
+
+7. ABI freeze (normative)
+-------------------------
+
+BF1  One ISA per first personality (same ISA as LINX if both exist,
+     so one ELF loader).  Two number tables, one page-table code.
+
+BF2  Syscall numbers from the pinned donor.  Do not invent SYS_*.
+
+BF3  Struct layouts from the pinned donor.  No Linux stat on this gate.
+
+BF4  errno from the pinned donor.  tk ER codes translate at the gate.
+
+BF5  Unimplemented SYS_* returns the donor's ENOSYS equivalent.
+     Trace every hole.
+
+BF6  ELF ET_EXEC / ET_DYN, PT_LOAD, PT_INTERP, PT_TLS.
+     Auxv: donor's AT_* set.  Do not emit Linux-only AT_HWCAP2 bits
+     unless the donor defines them.
+
+BF7  TLS via the donor's mechanism (sysarch / set_tcb / equivalent).
+
+BF8  sysctl is part of the ABI.  A stub tree that answers
+     kern.ostype, kern.osrelease, hw.machine, hw.ncpu is Phase 3.
+     A full sysctl MIB is not Phase 1.
+
+BF9  kqueue is part of the ABI for real userland.  poll may be
+     implemented first as a subset; kevent follows in Phase 5.
+
+
+8. POSIX projection
+-------------------
+
+Reuse LINX.txt §7 verbatim (P1–P7).  The view does not care whether
+the caller arrived through linx or bsdx.
+
+Extra:
+
+P8  BSD path conventions (/dev, /etc, /usr) live only in the BSD
+    root overlay.  /SYS and /USER stay BTRON projections.
+
+P9  Do not mount zedBSD UFS as the BTRON system volume.
+    A BSD root may be a separate partition or a directory tree
+    inside the POSIX overlay.
+
+
+9. uname and identity
+---------------------
+
+  Field        LINX gate              BSD gate
+  -----------  ---------------------  ---------------------------
+  sysname      Linux                  zedBSD (or FreeBSD if Freeze B)
+  release      a frozen string        pinned donor release
+  version      "B-System LINX"        "B-System BSDX"
+  machine      ISA name               ISA name
+
+Do not report Linux on this gate.  Do not report BTRON as sysname
+if the goal is to run zedBSD/FreeBSD configure scripts.
+
+
+10. Syscall surface (ordered, Freeze A / zedBSD-shaped)
+-------------------------------------------------------
+
+Names below are logical.  Numbers come from ABI_PIN.txt.
+
+Must (static BSD hello + static sh):
+
+  read write close open openat lseek
+  mmap munmap mprotect
+  break / brk
+  exit fork wait4 execve
+  getpid getppid getuid geteuid
+  clock_gettime nanosleep
+  fcntl ioctl (TTY stub)
+  getdirentries or getdents
+  fstat stat lstat
+  chdir getcwd
+  syscall (indirect) if the donor uses it
+  sigaction sigprocmask sigreturn
+
+Next (dynamic libc + threads):
+
+  thr_new or equivalent
+  _umtx_op or zedBSD mutex helper
+  pipe2 dup2
+  poll / select
+  socket connect bind listen accept
+  kevent kqueue
+  sysctl
+  getrandom / getentropy
+
+Later:
+
+  aio_* stubs ENOSYS
+  jail / capsicum  ENOSYS unless a thesis chapter needs them
+  linuxulator      forbidden (that is LINX's job)
+
+
+11. Requirements (R-list)
+-------------------------
+
+R1   Third gate.  tk and linx callers never enter the BSD table.
+
+R2   One donor pin per build.  Record commit hash in ABI_PIN.txt.
+
+R3   BSD struct layouts and errno on this gate.
+
+R4   Shared projection and VM core with LINX.  No second FID walker.
+
+R5   zedBSD src/kern is not linked into T-Kernel.
+
+R6   zedBSD i915 stays on the VENUS proxy path.
+
+R7   Guest priority < ASYNC planes.  Same as LINX.txt R7.
+
+R8   No heap on the syscall entry path.
+
+R9   uname.sysname is BSD-shaped (§9).
+
+R10  kqueue or a documented subset before advertising "desktop
+     class" BSD userland.
+
+R11  zlib-licensed files keep their license text when copied.
+
+R12  WS015-style "run T-Kernel inside zedBSD" is out of scope
+     for B-System.
+
+
+12. Rejected patterns
+---------------------
+
+  Pattern                            Violation
+  ---------------------------------  ------------------------------------
+  One syscall table for LINX+BSD     Different numbers and structs
+  Boot zedBSD vmunix as the          Wrong nucleus
+  B-System kernel
+  Link src/kern/process.c into       Two process models
+  t-kernel
+  Replace B-FS / Real Body with UFS  NOTE.md / BFS_V2.txt own storage
+  Import Linux DRM to serve          VENUS already chose native i915
+  zedBSD libc
+  FreeBSD linuxulator on T-Kernel    Use LINX.txt instead
+  Run Keiland instead of Workbench   RENDER.txt / DP remain native
+  Copy zedBSD networkd into          Policy daemon, not a gate
+  the kernel image
+  Claim SUSv4 because the donor      Their aim is not our conformance
+  aims at SUSv4
+
+
+13. Implementation phases
+-------------------------
+
+Phase 0 — Contract
+  - Choose Freeze A (zedBSD uapi commit) or document why Freeze B.
+  - Write bsdx/ABI_PIN.txt (URL, hash, ISA, SYS_* list source file).
+  - Identify shared files with linx/ (proj, vm).
+  Exit: abi.h generated or copied from the pin.
+
+Phase 1 — Trap + hello
+  - BSD syscall entry.
+  - write, exit.
+  - Hand-written ELF using SYS_write / SYS_exit from the pin.
+  Exit: hello prints.
+
+Phase 2 — VM + ELF + static libc
+  - Reuse LINX VM.
+  - Link a static slice of zedBSD libc or a BSD-shaped tiny libc.
+  Exit: static echo / true.
+
+Phase 3 — Process + uname/sysctl stub
+  - fork, execve, wait4, GuestProc.
+  - sysctl kern.ostype / hw.machine.
+  Exit: static sh.
+
+Phase 4 — Projection
+  - Same tests as LINX.txt Phase 4, through the BSD gate.
+  Exit: cat /SYS/... ; write /USER/tmp/x.
+
+Phase 5 — threads + kqueue
+  - thr_new + user mutex helper.
+  - kqueue/kevent minimum (EVFILT_READ/WRITE).
+  Exit: dynamic zedBSD libc program with poll-equivalent.
+
+Phase 6 — zedBSD base slice
+  - Cross-build a handful of userland/base tools against bsdx.
+  - Do not import Keiland.
+  Exit: ls, cat, sh from zedBSD sources run on B-System.
+
+Phase 7 — VENUS client
+  - BSD process opens the GDefDev / gpu node published by VENUS.
+  - No Mesa requirement.
+  Exit: a zedBSD-side 2D present test, or a documented deferral if
+        the gpu node is not yet public.
+
+Phase 8 — Coexistence chapter
+  - LINX process and BSD process on the same nucleus.
+  - ASYNC jitter with both guest classes busy.
+  - TAD volumes intact.
+
+
+14. Relation to VENUS (do not duplicate)
+----------------------------------------
+
+  VENUS.txt            How unmodified zedBSD i915 compiles on
+                       T-Kernel via proxy headers.
+  BSDX.txt             How a BSD process would call the resulting
+                       device.
+  LINX.txt             How a Linux/musl process would call it
+                       (future, DRM-shaped, not this document).
+
+If VENUS is not merged yet, Phase 7 waits.  The personality does
+not block on GPU.
+
+
+15. Relation to LINX
+--------------------
+
+  Shared               Distinct
+  -------------------  --------------------------------
+  GuestProc / VMA      abi.h, entry, kqueue, sysctl
+  posix_proj.c         uname string
+  ELF PT_LOAD walker   libc (musl vs zedBSD)
+  priority bands       syscall trace tag ("linx" vs "bsdx")
+  ENOSYS growth rule
+
+A single binary is one personality for life.
+
+
+16. First artifact
+------------------
+
+  bsdx/ABI_PIN.txt
+    donor:     https://github.com/awemorris/zedBSD
+    commit:    <hash>
+    isa:       amd64 | aarch64
+    headers:   include/libc , include/uapi/zedbsd
+    note:      zlib License preserved
+
+  bsdx/abi.h     generated from that pin
+  hello.elf      SYS_write / SYS_exit only
+
+That is the acceptance test for the BSD gate.  Filling the table
+is the rest of the work.  Importing vmunix is never the work.
+
+
+17. Non-goals
+-------------
+
+  * Not running zedBSD as B-System.
+  * Not running B-System as a zedBSD μITRON domain (their WS015).
+  * Not FreeBSD linuxulator.
+  * Not Keiland instead of Workbench.
+  * Not UFS instead of Real Body / B-FS V2.
+  * Not Cosmopolitan.
+  * Not a combined LINX+BSDX number space.
+
+
+18. Status line for implementers
+--------------------------------
+
+Implement the BSD gate the way LINX.txt implements the Linux gate.
+Use zedBSD as the UAPI and libc donor, and as the VENUS driver
+donor.  Do not take their nucleus.
+
+Document version: 1.0
+Target: B-System (BTRON 3.20) BSD personality
+zedBSD reference: Awe Morris, https://github.com/awemorris/zedBSD
+Date: 2026-10-01

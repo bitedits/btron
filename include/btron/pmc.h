@@ -26,20 +26,22 @@ typedef enum {
 
 extern WmStyleMode g_wm_style;
 
-/* PMC Cho-Kanji Palette Tokens (Authentic B-right/V 4.0 & BTRON3) */
-#define PMC_COL_OUTLINE       0x00000000U  /* Black borders */
-#define PMC_COL_LIGHT         0x00FFFFFFU  /* 3D Bevel highlight */
-#define PMC_COL_SHADOW        0x00202020U  /* 3D Bevel shadow */
+/* PMC Cho-Kanji Palette Tokens (Authentic B-right/V 4.0 & BTRON3 "akarui"
+ * scheme; values taken verbatim from TessronOS outer_kernel/wm/look.c
+ * look_default[] so the frame is pixel-precise against the reference). */
+#define PMC_COL_OUTLINE       0x00000000U  /* LK_OUTLINE  : black borders */
+#define PMC_COL_LIGHT         0x00FFFFFFU  /* LK_LIGHT    : 3D Bevel highlight */
+#define PMC_COL_SHADOW        0x00000000U  /* LK_SHADOW   : 3D Bevel shadow (pure black) */
 #define PMC_COL_DARK_SHADOW   0x00000000U  /* Deep recessed shadow */
-#define PMC_COL_GROUND        0x00204050U  /* Desktop backdrop (Teal / Slate) */
-#define PMC_COL_ACT_TITLE     0x00808080U  /* Active titleband (Classic Mid-Grey) */
-#define PMC_COL_INACT_TITLE   0x00D8D8D8U  /* Inactive titleband (Pale Grey) */
-#define PMC_COL_ACT_TEXT      0x00FFFFFFU  /* Active title text */
-#define PMC_COL_INACT_TEXT    0x00606060U  /* Inactive title text */
-#define PMC_COL_BODY          0x00E0E0E0U  /* Window work area background */
-#define PMC_COL_SBAR_KNOB     0x00E0E0E0U  /* Scrollbar thumb */
-#define PMC_COL_SBAR_TRACK    0x00808080U  /* Scrollbar track */
-#define PMC_COL_SBAR_TOMBO    0x00E0E000U  /* Scrollbar registration marks (Yellow) */
+#define PMC_COL_GROUND        0x00204050U  /* LK_GROUND   : Desktop backdrop (Teal / Slate) */
+#define PMC_COL_ACT_TITLE     0x00808080U  /* LK_ACTFRAME   : Active titleband (mid-grey) */
+#define PMC_COL_INACT_TITLE   0x00E0E0E0U  /* LK_INACTFRAME : Inactive titleband (pale grey) */
+#define PMC_COL_ACT_TEXT      0x00FFFFFFU  /* LK_ACTWTFCOL  : Title text (white, both states) */
+#define PMC_COL_INACT_TEXT    0x00808080U  /* LK_INACTPARTSCOL : Disabled widget glyphs */
+#define PMC_COL_BODY          0x00FFFFFFU  /* LK_MSGWHITE : Window work area (white paper) */
+#define PMC_COL_SBAR_KNOB     0x00E0E0E0U  /* LK_SBARKNOB : Scrollbar thumb */
+#define PMC_COL_SBAR_TRACK    0x00808080U  /* LK_SBARBACK : Scrollbar track */
+#define PMC_COL_SBAR_TOMBO    0x00E0E000U  /* LK_SBARTOMBO: Registration marks (Yellow) */
 #define PMC_COL_SWITCH_SUNKEN 0x00C8C8C8U  /* Sunken switch background */
 #define PMC_COL_SWITCH_RAISED 0x00E0E0E0U  /* Raised switch background */
 

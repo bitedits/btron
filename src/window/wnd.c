@@ -628,8 +628,13 @@ WND* find_wnd_at(H x, H y) {
                 y >= curr->bounds.top + title_h && y <= curr->bounds.bottom) {
                 return curr;
             }
-            /* 2. Compact title tab area (only inside tab rect) */
-            if ((curr->attr & WND_ATTR_TITLE) && whit_test_tab(curr, x, y)) {
+            /* 2. Compact title tab area (only inside tab rect).
+             *    The PMC/Cho-Kanji close switch sits outside the titleband's
+             *    drag region (pmc_hit_test_title excludes it by contract), so
+             *    it is tested here as well; otherwise find_wnd_at returns NULL
+             *    over the close box and the click never reaches cls_wnd. */
+            if ((curr->attr & WND_ATTR_TITLE) &&
+                (whit_test_tab(curr, x, y) || whit_test_close_btn(curr, x, y))) {
                 return curr;
             }
         }

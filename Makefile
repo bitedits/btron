@@ -1345,7 +1345,7 @@ debug-gdb: $(ARM32_TARGET)
 # ═══════════════════════════════════════════════════════════════════
 TEST_MOZC_SRCS = verify/tests/test_mozc.c src/tip/mozc_kkc.c src/tip/tip_ife.c src/tip/wylie.c src/tip/tibetan_dict.c \
                  src/font/troncode.c src/font/jis_fonts.c src/font/tibetan_fonts.c src/tip/tip_vobj.c src/window/wnd.c \
-                 src/graphics/dp_core.c
+                 src/graphics/dp_core.c src/chokanji/pmc.c
 TEST_MOZC_OBJS = $(TEST_MOZC_SRCS:.c=.test.o)
 TEST_MOZC_BIN  = ./.build/test_mozc
 
@@ -1366,7 +1366,7 @@ $(TEST_MOZC_BIN): $(TEST_MOZC_OBJS)
 # ═══════════════════════════════════════════════════════════════════
 TEST_EDITOR_SRCS = verify/tests/test_editor_ui.c src/apps/t_editor.c src/window/app_menu.c src/tip/mozc_kkc.c src/tip/tip_ife.c src/tip/wylie.c src/tip/tibetan_dict.c \
                    src/font/troncode.c src/font/jis_fonts.c src/font/tibetan_fonts.c src/tip/tip_vobj.c src/window/wnd.c \
-                   src/graphics/dp_core.c src/fs/blk_mem.c src/fs/blk_file.c src/fs/vol.c src/fs/file.c
+                   src/graphics/dp_core.c src/chokanji/pmc.c src/fs/blk_mem.c src/fs/blk_file.c src/fs/vol.c src/fs/file.c
 TEST_EDITOR_OBJS = $(TEST_EDITOR_SRCS:.c=.test.o)
 TEST_EDITOR_BIN  = ./.build/test_editor
 
@@ -1385,7 +1385,7 @@ $(TEST_EDITOR_BIN): $(TEST_EDITOR_OBJS)
 TEST_HMI_SRCS = verify/tests/test_hmi.c src/hmi/hmi_core.c src/hmi/hmi_switch.c \
                 src/hmi/hmi_selector.c src/hmi/hmi_volume.c src/hmi/hmi_meter.c \
                 src/hmi/hmi_controller.c src/hmi/hmi_panel.c src/graphics/dp_core.c \
-                src/font/troncode.c src/font/jis_fonts.c src/font/tibetan_fonts.c src/window/wnd.c
+                src/font/troncode.c src/font/jis_fonts.c src/font/tibetan_fonts.c src/window/wnd.c src/chokanji/pmc.c
 TEST_HMI_OBJS = $(TEST_HMI_SRCS:.c=.test.o)
 TEST_HMI_BIN  = ./.build/test_hmi
 
@@ -1428,7 +1428,7 @@ book2tad:
 TEST_TAD_SRCS = verify/tests/test_tad_browser.c src/apps/tad_browser.c src/apps/vobj_manager.c src/window/dnd.c src/window/app_menu.c \
                 src/settings/appearance.c src/graphics/icons_bundle.c \
                 src/tip/mozc_kkc.c src/font/troncode.c src/font/jis_fonts.c src/font/tibetan_fonts.c src/tip/tip_vobj.c \
-                src/window/wnd.c src/graphics/dp_core.c
+                src/window/wnd.c src/graphics/dp_core.c src/chokanji/pmc.c
 TEST_TAD_OBJS = $(TEST_TAD_SRCS:.c=.test.o)
 TEST_TAD_BIN  = ./.build/test_tad_browser
 
@@ -1446,7 +1446,7 @@ $(TEST_TAD_BIN): $(TEST_TAD_OBJS)
 # ═══════════════════════════════════════════════════════════════════
 TEST_CHAT_SRCS = verify/tests/test_chat.c src/apps/chat.c src/apps/chat_xml.c \
                  src/tip/mozc_kkc.c src/font/troncode.c src/font/jis_fonts.c src/font/tibetan_fonts.c \
-                 src/window/wnd.c src/graphics/dp_core.c
+                 src/window/wnd.c src/graphics/dp_core.c src/chokanji/pmc.c
 TEST_CHAT_OBJS = $(TEST_CHAT_SRCS:.c=.test.o)
 TEST_CHAT_BIN  = ./.build/test_chat
 

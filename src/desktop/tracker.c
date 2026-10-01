@@ -109,7 +109,7 @@ static void tracker_add_item(TRACKER_CMD_TYPE type, const char *label, WND *targ
     H idx = g_tracker.item_count;
     g_tracker.items[idx].type = type;
     g_tracker.items[idx].target_wnd = target_wnd;
-    g_tracker.items[idx].enabled = (type != TRACKER_CMD_SEPARATOR);
+    g_tracker.items[idx].enabled = (type != TRACKER_CMD_SEPARATOR && type != TRACKER_CMD_NONE);
     
     if (label) {
         tracker_safe_copy(g_tracker.items[idx].label, label, sizeof(g_tracker.items[idx].label));
@@ -122,39 +122,33 @@ static void tracker_add_item(TRACKER_CMD_TYPE type, const char *label, WND *targ
 void tracker_refresh_windows(void) {
     g_tracker.item_count = 0;
 
-    /* 1. Core Knowledge & System Applications */
-    tracker_add_item(TRACKER_CMD_CABINET,   "実身・仮身 (Cabinet)", NULL);
-    tracker_add_item(TRACKER_CMD_SETTINGS,  "環境設定 (Control Panel)", NULL);
-    tracker_add_item(TRACKER_CMD_TEDITOR,   "Editor (文書編集)", NULL);
-    tracker_add_item(TRACKER_CMD_MATRIX,    "Matrix (表計算・APL)", NULL);
-    tracker_add_item(TRACKER_CMD_TERMINAL,  "Terminal (gterm 端末)", NULL);
-    tracker_add_item(TRACKER_CMD_AUDIODECK, "Cassette (カセットデッキ)", NULL);
-    tracker_add_item(TRACKER_CMD_ORCHESTRA, "管弦楽・MIDI (Orchestra)", NULL);
-    tracker_add_item(TRACKER_CMD_DRIVESETUP, "DriveSetup (ディスク管理)", NULL);
-    tracker_add_item(TRACKER_CMD_CLARITY,    "電子帳票 (Clarity DTP)", NULL);
-    tracker_add_item(TRACKER_CMD_CHAT,      "Mail & Chat (対話通信)", NULL);
-    tracker_add_item(TRACKER_CMD_SEPARATOR, "------------------------", NULL);
-
-    /* 2. Dynamic Active Window / Task Tracking (Haiku Deskbar window list) */
+    /* 1. Dynamic Active Window / Task Tracking (Haiku Deskbar window list) */
     WND *w = get_wnd_list();
     H tracked_wnds = 0;
-    while (w && tracked_wnds < 8 && g_tracker.item_count < TRACKER_MAX_ITEMS - 3) {
-        char item_buf[48];
-        tracker_format_wnd_title(item_buf, sizeof(item_buf), w->focused, w->title);
-        tracker_add_item(TRACKER_CMD_WND_FOCUS, item_buf, w);
-        tracked_wnds++;
+    while (w && tracked_wnds < 12 && g_tracker.item_count < TRACKER_MAX_ITEMS - 6) {
+        if (w->visible) {
+            char item_buf[48];
+            tracker_format_wnd_title(item_buf, sizeof(item_buf), w->focused, w->title);
+            tracker_add_item(TRACKER_CMD_WND_FOCUS, item_buf, w);
+            tracked_wnds++;
+        }
         w = w->next;
     }
 
-    if (tracked_wnds > 0) {
-        tracker_add_item(TRACKER_CMD_SEPARATOR, "------------------------", NULL);
+    if (tracked_wnds == 0) {
+        tracker_add_item(TRACKER_CMD_NONE, "(開いている実身・窓なし)", NULL);
     }
 
-    /* 3. System Management */
-    tracker_add_item(TRACKER_CMD_ABOUT,    "システム情報 (About BTRON)", NULL);
-    tracker_add_item(TRACKER_CMD_RESTART,  "デスクトップ再起動", NULL);
+    /* Underline / separator between Tracker window list and System Functions */
+    tracker_add_item(TRACKER_CMD_SEPARATOR, "------------------------", NULL);
 
-    /* 4. Calculate size of widest menu item before drop down so item never overflows */
+    /* 2. System Functions (Sleep, Restart, Shutdown, Quit) */
+    tracker_add_item(TRACKER_CMD_SLEEP,    "スリープ (Sleep)", NULL);
+    tracker_add_item(TRACKER_CMD_RESTART,  "デスクトップ再起動 (Restart)", NULL);
+    tracker_add_item(TRACKER_CMD_SHUTDOWN, "シャットダウン (Shutdown)", NULL);
+    tracker_add_item(TRACKER_CMD_QUIT,     "終了 (Quit)", NULL);
+
+    /* 3. Calculate size of widest menu item before drop down so item never overflows */
     H menu_w = tracker_calc_widest_item_width();
 
     /* Recalculate menu geometry dynamically */

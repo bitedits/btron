@@ -37,12 +37,21 @@ extern "C" {
  */
 typedef signed char	B;	/* Signed 8 bit integer */
 typedef signed short	H;	/* Signed 16 bit integer */
+#if defined(__LP64__) || defined(_LP64)
+typedef signed int	W;	/* Signed 32 bit integer */
+typedef signed long long D;	/* Signed 64 bit integer */
+typedef unsigned char	UB;	/* Unsigned 8 bit integer */
+typedef unsigned short  UH;	/* Unsigned 16 bit integer */
+typedef unsigned int	UW;	/* Unsigned 32 bit integer */
+typedef unsigned long long UD;	/* Unsigned 64 bit integer */
+#else
 typedef signed long	W;	/* Signed 32 bit integer */
 typedef signed long long D;	/* Signed 64 bit integer */
 typedef unsigned char	UB;	/* Unsigned 8 bit integer */
 typedef unsigned short  UH;	/* Unsigned 16 bit integer */
 typedef unsigned long	UW;	/* Unsigned 32 bit integer */
 typedef unsigned long long UD;	/* Unsigned 64 bit integer */
+#endif
 
 typedef char		VB;	/* Nonuniform type 8 bit data */
 typedef short		VH;	/* Nonuniform type 16 bit data */

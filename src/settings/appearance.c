@@ -9,6 +9,7 @@
 #include <btron/wnd.h>
 #include <btron/settings_icon.h>
 #include <btron/app_menu.h>
+#include "../window/pmc.h"
 
 #if defined(__STDC_HOSTED__) && __STDC_HOSTED__ == 1
 #include <stdio.h>
@@ -120,10 +121,10 @@ static void paint_appearance_settings(WND *wnd, GDEV *dev) {
     RECT s1 = { 10, 56, dev->width - 10, 154 };
     fill_rec(dev, &s1, COLOR_WHITE);
     drw_rec(dev, &s1);
-    drw_tc_string(dev, 16, 48, " [1. System Themes & Visual Appearance] ", COLOR_NAVY, COLOR_WHITE);
-    paint_ui_radio(dev, 18, 64, "Classic Teal & Navy (BTRON Standard 3.20)", g_state_appearance.checks[0], FALSE);
-    paint_ui_radio(dev, 18, 86, "Dark Navy High-Contrast Theme (Chapter 7)", g_state_appearance.checks[1], FALSE);
-    paint_ui_radio(dev, 18, 108, "Retro Amber Phosphor Display Palette", g_state_appearance.checks[2], FALSE);
+    drw_tc_string(dev, 16, 48, " [1. Window Manager Frame & Theme Appearance] ", COLOR_NAVY, COLOR_WHITE);
+    paint_ui_radio(dev, 18, 64, "Window Style: BeOS Sliding Gold Tab (BeOSスタイル)", g_wm_style == WM_STYLE_BEOS, FALSE);
+    paint_ui_radio(dev, 18, 86, "Window Style: Cho-Kanji 3D Bevel (超漢字・PMCスタイル)", g_wm_style == WM_STYLE_CHOKANJI, FALSE);
+    paint_ui_radio(dev, 18, 108, "Dark Navy High-Contrast Palette (Chapter 7)", g_state_appearance.checks[1], FALSE);
     paint_ui_checkbox(dev, 18, 130, "Enable 3D Double Bezel Window Frame Shadows", g_state_appearance.checks[3], FALSE);
 
     /* Section 2: Icon Size & Menu Display Styles */
@@ -168,13 +169,13 @@ static void handle_appearance_event(WND *wnd, const EVT *evt) {
 
         /* Section 1: Themes & Bezel */
         if (rel_x >= 18 && rel_x <= 480 && rel_y >= 64 && rel_y <= 82) {
-            g_state_appearance.checks[0] = !g_state_appearance.checks[0];
+            pmc_set_style(WM_STYLE_BEOS);
             g_state_appearance.is_dirty = TRUE;
             redraw_all_windows();
             return;
         }
         if (rel_x >= 18 && rel_x <= 480 && rel_y >= 86 && rel_y <= 104) {
-            g_state_appearance.checks[1] = !g_state_appearance.checks[1];
+            pmc_set_style(WM_STYLE_CHOKANJI);
             g_state_appearance.is_dirty = TRUE;
             redraw_all_windows();
             return;

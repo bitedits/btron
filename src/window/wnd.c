@@ -7,6 +7,7 @@
 #include <btron/dp.h>
 #include <btron/troncode.h>
 #include <btron/fast_blit.h>
+#include "pmc.h"
 #if defined(__STDC_HOSTED__) && __STDC_HOSTED__ == 1
 #include <stdlib.h>
 #include <string.h>
@@ -100,6 +101,9 @@ ER wget_tab_rect(const WND *wnd, RECT *tab_rect) {
 
 BOOL whit_test_tab(const WND *wnd, H x, H y) {
     if (!wnd || !(wnd->attr & WND_ATTR_TITLE)) return FALSE;
+    if (g_wm_style == WM_STYLE_CHOKANJI) {
+        return pmc_hit_test_title(wnd, x, y);
+    }
     RECT tr;
     if (wget_tab_rect(wnd, &tr) != E_OK) return FALSE;
     return (x >= tr.left && x < tr.right && y >= tr.top && y < tr.bottom);
@@ -107,6 +111,9 @@ BOOL whit_test_tab(const WND *wnd, H x, H y) {
 
 BOOL whit_test_close_btn(const WND *wnd, H x, H y) {
     if (!wnd || !(wnd->attr & WND_ATTR_TITLE) || !(wnd->attr & WND_ATTR_CLOSE)) return FALSE;
+    if (g_wm_style == WM_STYLE_CHOKANJI) {
+        return pmc_hit_test_close(wnd, x, y);
+    }
     RECT tr;
     if (wget_tab_rect(wnd, &tr) != E_OK) return FALSE;
     H btn_right = tr.right - 6;
@@ -391,6 +398,11 @@ void wnd_get_invalid_image_bounds(RECT *out) {
 static void draw_retro_window_frame(GDEV *dev, WND *wnd) {
     if (!dev || !wnd) return;
     if (!(wnd->attr & (WND_ATTR_TITLE | WND_ATTR_BORDER))) return;
+
+    if (g_wm_style == WM_STYLE_CHOKANJI) {
+        pmc_draw_window_frame(dev, wnd);
+        return;
+    }
 
     H title_h = (wnd->attr & WND_ATTR_TITLE) ? WND_TITLE_HEIGHT : 0;
 

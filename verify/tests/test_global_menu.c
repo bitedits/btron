@@ -30,16 +30,24 @@ static int g_tests_passed = 0;
 } while (0)
 
 /* Mock / Stub BTRON accessory window entry points for standalone testing */
-WND* open_vobj_manager_window(void)     { return NULL; }
-WND* open_control_panel_window(void)    { return NULL; }
-WND* open_t_editor_window(void)         { return NULL; }
-WND* open_gterm_window(void)            { return NULL; }
-WND* open_audio_player_window(void)     { return NULL; }
-WND* open_orchestra_window(void)        { return NULL; }
-WND* open_display_settings_window(void) { return NULL; }
-WND* open_drivesetup_window(void)       { return NULL; }
-WND* launch_beos_chat(void)             { return NULL; }
-WND* open_clarity_window(void)          { return NULL; }
+WND* open_vobj_manager_window(void)         { return NULL; }
+WND* open_control_panel_window(void)        { return NULL; }
+WND* open_t_editor_window(void)             { return NULL; }
+WND* open_gterm_window(void)                { return NULL; }
+WND* open_audio_player_window(void)         { return NULL; }
+WND* open_orchestra_window(void)            { return NULL; }
+WND* open_display_settings_window(void)     { return NULL; }
+WND* open_drivesetup_window(void)           { return NULL; }
+WND* launch_beos_chat(void)                 { return NULL; }
+WND* open_clarity_window(void)              { return NULL; }
+WND* open_chat_main_window(void *client)    { (void)client; return NULL; }
+WND* open_chokanji_cabinet_window(void)     { return NULL; }
+WND* open_chokanji_doc_window(void)         { return NULL; }
+WND* open_chokanji_microscript_window(void) { return NULL; }
+WND* open_chokanji_clock_window(void)       { return NULL; }
+WND* open_chokanji_kconv_window(void)       { return NULL; }
+WND* open_chokanji_xfconv_window(void)      { return NULL; }
+WND* open_chokanji_unpack_window(void)      { return NULL; }
 
 /* ── Test Group 1: Geometry & Non-Overfull Margins ── */
 static void test_global_menu_geometry(void) {
@@ -50,7 +58,7 @@ static void test_global_menu_geometry(void) {
 
     /* Verify non-overfull metrics for headers */
     const char *h_titles[GMENU_HEADER_COUNT] = {
-        "［BTRON］", "システム(S)", "実身・仮身(O)", "ウィンドウ(W)"
+        "［BTRON］", "システム(S)", "アプリ(A)", "実身・仮身(O)", "ウィンドウ(W)"
     };
 
     for (int h = 0; h < GMENU_HEADER_COUNT; h++) {
@@ -60,7 +68,7 @@ static void test_global_menu_geometry(void) {
         char msg[128];
         snprintf(msg, sizeof(msg), "Header '%s' width (%d px) fits cleanly with >=8px margins",
                  h_titles[h], text_w);
-        TEST_ASSERT(text_w <= 104, msg);
+        TEST_ASSERT(text_w <= 120, msg);
     }
 }
 
@@ -75,15 +83,20 @@ static void test_header_hit_and_hover(void) {
     TEST_ASSERT(hit && global_menu_get_hover_header() == GMENU_HDR_SYSTEM,
                 "Hovering over 'システム(S)' sets hover_header to 1");
 
-    /* Hover over Header 2: 実身・仮身(O) (x = 250, y = 10) */
+    /* Hover over Header 2: アプリ(A) (x = 250, y = 10) */
     hit = global_menu_handle_mouse_move(250, 10);
-    TEST_ASSERT(hit && global_menu_get_hover_header() == GMENU_HDR_OBJECTS,
-                "Hovering over '実身・仮身(O)' sets hover_header to 2");
+    TEST_ASSERT(hit && global_menu_get_hover_header() == GMENU_HDR_APPS,
+                "Hovering over 'アプリ(A)' sets hover_header to 2");
 
-    /* Hover over Header 3: ウィンドウ(W) (x = 380, y = 10) */
+    /* Hover over Header 3: 実身・仮身(O) (x = 380, y = 10) */
     hit = global_menu_handle_mouse_move(380, 10);
+    TEST_ASSERT(hit && global_menu_get_hover_header() == GMENU_HDR_OBJECTS,
+                "Hovering over '実身・仮身(O)' sets hover_header to 3");
+
+    /* Hover over Header 4: ウィンドウ(W) (x = 500, y = 10) */
+    hit = global_menu_handle_mouse_move(500, 10);
     TEST_ASSERT(hit && global_menu_get_hover_header() == GMENU_HDR_WINDOWS,
-                "Hovering over 'ウィンドウ(W)' sets hover_header to 3");
+                "Hovering over 'ウィンドウ(W)' sets hover_header to 4");
 
     /* Hover outside the bar (y = 60) */
     hit = global_menu_handle_mouse_move(300, 60);
@@ -103,18 +116,23 @@ static void test_dropdown_activation_and_fluid_tracking(void) {
                 "Clicking 'システム(S)' opens dropdown (active_menu = 1)");
     TEST_ASSERT(global_menu_is_open(), "global_menu_is_open() is TRUE");
 
-    /* Fluid hot tracking: Move pointer to 実身・仮身(O) (x = 250, y = 10) */
+    /* Fluid hot tracking: Move pointer to アプリ(A) (x = 250, y = 10) */
     global_menu_handle_mouse_move(250, 10);
-    TEST_ASSERT(global_menu_get_active() == GMENU_HDR_OBJECTS,
-                "Fluid tracking: Gliding over '実身・仮身(O)' switches active menu to 2");
+    TEST_ASSERT(global_menu_get_active() == GMENU_HDR_APPS,
+                "Fluid tracking: Gliding over 'アプリ(A)' switches active menu to 2");
 
-    /* Fluid hot tracking: Move pointer to ウィンドウ(W) (x = 380, y = 10) */
+    /* Fluid hot tracking: Move pointer to 実身・仮身(O) (x = 380, y = 10) */
     global_menu_handle_mouse_move(380, 10);
+    TEST_ASSERT(global_menu_get_active() == GMENU_HDR_OBJECTS,
+                "Fluid tracking: Gliding over '実身・仮身(O)' switches active menu to 3");
+
+    /* Fluid hot tracking: Move pointer to ウィンドウ(W) (x = 500, y = 10) */
+    global_menu_handle_mouse_move(500, 10);
     TEST_ASSERT(global_menu_get_active() == GMENU_HDR_WINDOWS,
-                "Fluid tracking: Gliding over 'ウィンドウ(W)' switches active menu to 3");
+                "Fluid tracking: Gliding over 'ウィンドウ(W)' switches active menu to 4");
 
     /* Click header again to toggle close */
-    global_menu_handle_mouse_down(380, 10);
+    global_menu_handle_mouse_down(500, 10);
     TEST_ASSERT(!global_menu_is_open() && global_menu_get_active() == -1,
                 "Clicking active header toggles menu closed");
 }

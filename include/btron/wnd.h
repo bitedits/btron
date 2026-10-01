@@ -23,6 +23,8 @@ extern "C" {
 #define WND_ATTR_COMPACT_TAB (1 << 5)
 #define WND_ATTR_SLIDING_TAB (1 << 6)
 
+#define WND_TITLE_HEIGHT     28
+
 typedef struct WND {
     ID    id;
     char  pad0[12];    /* 12 bytes alignment padding -> title starts at offset 16 (16-byte aligned!) */

@@ -155,6 +155,15 @@ COMMON_SRCS = src/graphics/dp_core.c   \
               src/window/wnd.c         \
               src/window/app_menu.c    \
               src/window/event.c       \
+              src/chokanji/pmc.c       \
+              src/chokanji/cab.c       \
+              src/chokanji/microscript.c \
+              src/chokanji/clock.c     \
+              src/chokanji/kconv.c     \
+              src/chokanji/xfconv.c    \
+              src/chokanji/bpk_core.c  \
+              src/chokanji/unpack.c    \
+              src/chokanji/launchers.c \
               src/vobject/vobj.c       \
               src/desktop/desktop.c    \
               src/desktop/workbench.c  \
@@ -552,6 +561,16 @@ $(TEST_CHOKANJI_BIN): verify/tests/test_chokanji.c $(FS_OBJS) src/apps/clu.host.
 test-chokanji: $(TEST_CHOKANJI_BIN)
 	./$(TEST_CHOKANJI_BIN)
 	@echo "[CHOKANJI] All Cho-Kanji tests passed."
+
+# ── Cho-Kanji Tier 1 & PMC NASA-Standard Apps verification ────────────
+TEST_CHOKANJI_APPS_BIN = ./.build/test_chokanji_apps
+$(TEST_CHOKANJI_APPS_BIN): verify/tests/test_chokanji_apps.c src/chokanji/pmc.posix.o src/chokanji/cab.posix.o src/chokanji/microscript.posix.o src/chokanji/clock.posix.o src/chokanji/kconv.posix.o src/chokanji/xfconv.posix.o src/chokanji/bpk_core.posix.o src/chokanji/unpack.posix.o src/window/wnd.posix.o src/graphics/dp_core.posix.o src/graphics/dp_sdl.posix.o src/font/troncode.posix.o src/font/jis_fonts.posix.o src/font/tibetan_fonts.posix.o src/font/font_mgr.posix.o src/window/event.posix.o src/window/app_menu.posix.o src/vobject/vobj.posix.o src/fs/vol.posix.o src/fs/file.posix.o src/fs/blk_mem.posix.o src/fs/blk_file.posix.o src/fs/blk_qcow2.posix.o src/fs/blk_part.posix.o
+	$(CC) $(CFLAGS) -Isrc -Iinclude $^ -o $@ $(LDFLAGS) $(SDL_LIBS)
+
+test-chokanji-apps: $(TEST_CHOKANJI_APPS_BIN)
+	./$(TEST_CHOKANJI_APPS_BIN)
+	@echo "[CHOKANJI APPS] All Tier 1 applications & PMC tests passed."
+
 
 # ── Clarity DTP Frame & Control tests ────────────────────────────────
 TEST_CLARITY_BIN = ./.build/test_clarity_frames
@@ -1442,7 +1461,7 @@ $(TEST_CHAT_BIN): $(TEST_CHAT_OBJS)
 # BTRON Deskbar Tracker & Task Manager Test Suite
 # ═══════════════════════════════════════════════════════════════════
 TEST_TRACKER_SRCS = verify/tests/test_tracker.c src/desktop/tracker.c src/desktop/desktop.c src/settings/appearance.c \
-                    src/vobject/vobj.c src/desktop/about.c src/window/wnd.c \
+                    src/vobject/vobj.c src/desktop/about.c src/window/wnd.c src/chokanji/pmc.c \
                     src/window/app_menu.c \
                     src/graphics/dp_core.c src/graphics/icons_bundle.c src/font/troncode.c src/font/jis_fonts.c src/font/tibetan_fonts.c
 TEST_TRACKER_OBJS = $(TEST_TRACKER_SRCS:.c=.test.o)
@@ -1485,6 +1504,7 @@ TEST_SETTINGS_SRCS = verify/tests/test_language_settings.c \
                      src/font/jis_fonts.c \
                      src/font/tibetan_fonts.c \
                      src/window/wnd.c \
+                     src/chokanji/pmc.c \
                      src/window/app_menu.c \
                      src/graphics/dp_core.c \
                      src/graphics/icons_bundle.c \
@@ -1506,7 +1526,7 @@ test-settings: $(TEST_SETTINGS_BIN)
 # ═══════════════════════════════════════════════════════════════════
 TEST_GMENU_SRCS = verify/tests/test_global_menu.c src/desktop/global_menu.c src/desktop/tracker.c \
                   src/window/app_menu.c src/graphics/icons_bundle.c \
-                  src/desktop/about.c src/window/wnd.c src/graphics/dp_core.c src/font/troncode.c \
+                  src/desktop/about.c src/window/wnd.c src/chokanji/pmc.c src/graphics/dp_core.c src/font/troncode.c \
                   src/font/jis_fonts.c src/font/tibetan_fonts.c src/tip/tip_ife.c src/tip/mozc_kkc.c \
                   src/tip/wylie.c src/tip/tibetan_dict.c src/tip/tip_vobj.c
 TEST_GMENU_OBJS = $(TEST_GMENU_SRCS:.c=.test.o)
@@ -1524,7 +1544,7 @@ $(TEST_GMENU_BIN): $(TEST_GMENU_OBJS)
 # ═══════════════════════════════════════════════════════════════════
 # Common Application Menu Subsystem Test Suite
 # ═══════════════════════════════════════════════════════════════════
-TEST_APP_MENU_SRCS = verify/tests/test_app_menu.c src/window/app_menu.c src/window/wnd.c \
+TEST_APP_MENU_SRCS = verify/tests/test_app_menu.c src/window/app_menu.c src/window/wnd.c src/chokanji/pmc.c \
                      src/graphics/dp_core.c src/font/troncode.c src/font/jis_fonts.c src/font/tibetan_fonts.c
 TEST_APP_MENU_OBJS = $(TEST_APP_MENU_SRCS:.c=.test.o)
 TEST_APP_MENU_BIN  = ./.build/test_app_menu

@@ -98,6 +98,11 @@ typedef struct {
     BOOL addr_active;
     char addr_input[TAD_MAX_PATH];
     int addr_cursor;
+
+    /* Windows 95 scrollbar drag state (vertical, right gutter) */
+    BOOL sb_dragging;        /* TRUE while the elevator thumb is held */
+    int  sb_drag_start_y;    /* pointer y when the thumb was grabbed */
+    int  sb_drag_start_scroll; /* scroll_y when the thumb was grabbed */
 } TAD_BROWSER;
 
 /* Lifecycle & Window APIs */

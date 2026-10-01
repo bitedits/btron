@@ -82,7 +82,8 @@ typedef struct {
     int item_count;
     int selected_idx;
     int hovered_idx;
-    int scroll_offset;      /* Scroll item row offset */
+    int scroll_offset;      /* Scroll item row offset (LIST view) */
+    int grid_scroll_rows;   /* First visible row index in GRID icon view */
     CAB_VIEW_MODE view_mode;
     char status_msg[128];
 
@@ -98,6 +99,245 @@ static CABINET_EXPLORER g_cabinet;
 static BOOL s_cab_mouse_down = FALSE;
 static H s_cab_down_x = 0;
 static H s_cab_down_y = 0;
+static BOOL s_sbar_dragging = FALSE;   /* vertical scrollbar thumb is held down */
+static H    s_sbar_drag_y = 0;          /* pointer y when the thumb was grabbed */
+static int  s_sbar_drag_off = 0;        /* scroll offset when the thumb was grabbed */
+
+#define CAB_GRID_TOP 26
+#define CAB_SBAR_W   16   /* reserved right gutter for the vertical scrollbar */
+
+/* Single source of truth for the icon-grid geometry so the painter, the hit
+ * tests and the keyboard caret all agree on column count and cell size.
+ * The right gutter is reserved for the scrollbar so column count never changes
+ * when the bar appears or disappears (the caret stays under the same column). */
+static void cab_grid_metrics(H dev_w, H dev_h, int *out_cols, int *out_col_w, int *out_row_h, int *out_rows_visible) {
+    BTRON_ICON_SIZE sz = appearance_get_icon_size();
+    int col_w = (sz == BTRON_ICON_SIZE_32) ? 96 : 110;
+    int row_h = (sz == BTRON_ICON_SIZE_32) ? 72 : 104;
+    int usable = (dev_w - 16 - CAB_SBAR_W);
+    if (usable < col_w) usable = col_w;
+    int cols = usable / col_w;
+    if (cols < 1) cols = 1;
+    int content_h = (dev_h > CAB_GRID_TOP + 24) ? (dev_h - CAB_GRID_TOP - 24) : row_h;
+    int rows_visible = content_h / row_h;
+    if (rows_visible < 1) rows_visible = 1;
+    if (out_cols) *out_cols = cols;
+    if (out_col_w) *out_col_w = col_w;
+    if (out_row_h) *out_row_h = row_h;
+    if (out_rows_visible) *out_rows_visible = rows_visible;
+}
+
+/* Current scroll extent for whichever view is active, in whole units.
+ * LIST scrolls by items (scroll_offset); GRID scrolls by rows (grid_scroll_rows). */
+static void cab_scroll_get(H dev_w, H dev_h, int *total_units, int *vis_units, int *off_units) {
+    if (g_cabinet.view_mode == CAB_VIEW_GRID) {
+        int cols, rows_visible;
+        cab_grid_metrics(dev_w, dev_h, &cols, NULL, NULL, &rows_visible);
+        int trows = (g_cabinet.item_count + cols - 1) / cols;
+        if (trows < 1) trows = 1;
+        *total_units = trows;
+        *vis_units = rows_visible;
+        *off_units = g_cabinet.grid_scroll_rows;
+    } else {
+        int content_h = (dev_h > CAB_GRID_TOP + 24) ? (dev_h - CAB_GRID_TOP - 24) : 22;
+        int vrows = content_h / 22;
+        if (vrows < 1) vrows = 1;
+        *total_units = g_cabinet.item_count;
+        *vis_units = vrows;
+        *off_units = g_cabinet.scroll_offset;
+    }
+}
+
+/* ── Windows 95 style vertical scrollbar ────────────────────────────────────
+ * A 16px column in the right gutter: up arrow, page track, draggable thumb,
+ * down arrow. Interaction follows the Windows 95 model:
+ *   • arrow click  -> step one unit
+ *   • track click  -> page by one viewport (thumb does NOT jump to the click)
+ *   • thumb drag   -> proportional scroll, only when the thumb is grabbed
+ *   • mouse wheel  -> scrolls the content plane, never the slider
+ * When the content already fits the thumb stretches to fill the track and the
+ * arrows render greyed (disabled) rather than the bar being hidden. */
+#define CAB_SBAR_BTN 16
+
+typedef struct {
+    RECT  bar;         /* full scrollbar column */
+    RECT  up_btn;      /* top arrow button */
+    RECT  dn_btn;      /* bottom arrow button */
+    RECT  thumb;       /* elevator / thumb */
+    int   track_top;   /* page area top (below the up arrow) */
+    int   track_bot;   /* page area bottom (above the down arrow) */
+    BOOL  overflow;    /* content taller than the viewport */
+} cab_sbar_t;
+
+static void cab_sbar_layout(H dev_w, H dev_h, cab_sbar_t *sb) {
+    int total, vis, off;
+    cab_scroll_get(dev_w, dev_h, &total, &vis, &off);
+    int max_off = total - vis;
+    if (max_off < 0) max_off = 0;
+
+    sb->bar.left = (int)dev_w - CAB_SBAR_W;
+    sb->bar.top = CAB_GRID_TOP;
+    sb->bar.right = (int)dev_w;
+    sb->bar.bottom = (int)dev_h - 24;
+
+    sb->up_btn.left = sb->bar.left; sb->up_btn.right = sb->bar.right;
+    sb->up_btn.top = sb->bar.top;   sb->up_btn.bottom = sb->bar.top + CAB_SBAR_BTN;
+
+    sb->dn_btn.left = sb->bar.left;  sb->dn_btn.right = sb->bar.right;
+    sb->dn_btn.top = sb->bar.bottom - CAB_SBAR_BTN; sb->dn_btn.bottom = sb->bar.bottom;
+
+    sb->track_top = sb->bar.top + CAB_SBAR_BTN;
+    sb->track_bot = sb->bar.bottom - CAB_SBAR_BTN;
+    int track_h = sb->track_bot - sb->track_top;
+    if (track_h < 1) track_h = 1;
+
+    sb->overflow = (max_off > 0);
+    int th_h, ty;
+    if (sb->overflow) {
+        th_h = (track_h * vis) / total;
+        if (th_h < 14) th_h = 14;
+        if (th_h > track_h) th_h = track_h;
+        if (off < 0) off = 0;
+        if (off > max_off) off = max_off;
+        ty = sb->track_top + (off * (track_h - th_h)) / max_off;
+    } else {
+        th_h = track_h;
+        ty = sb->track_top;
+    }
+    sb->thumb.left = sb->bar.left + 2; sb->thumb.right = sb->bar.right - 2;
+    sb->thumb.top = ty; sb->thumb.bottom = ty + th_h;
+}
+
+/* Move the active view's scroll offset to an absolute value, clamped to the
+ * scrollable range. Never touches the selection caret (Windows behaviour:
+ * the scrollbar/wheel scroll the viewport without changing the selection). */
+static void cab_set_offset_clamped(int ns, H dev_w, H dev_h) {
+    int total, vis, off;
+    cab_scroll_get(dev_w, dev_h, &total, &vis, &off);
+    int max_off = total - vis;
+    if (max_off < 0) max_off = 0;
+    if (ns < 0) ns = 0;
+    if (ns > max_off) ns = max_off;
+    if (g_cabinet.view_mode == CAB_VIEW_GRID) g_cabinet.grid_scroll_rows = ns;
+    else g_cabinet.scroll_offset = ns;
+}
+
+/* Scroll the icon grid so the selected cell's row is inside the viewport,
+ * like Windows Explorer keeping the caret item visible during arrow navigation. */
+static void cab_grid_keep_visible(H dev_w, H dev_h) {
+    int cols, rows_visible;
+    cab_grid_metrics(dev_w, dev_h, &cols, NULL, NULL, &rows_visible);
+    if (cols < 1) return;
+    const int row = g_cabinet.selected_idx / cols;
+    if (row < g_cabinet.grid_scroll_rows) {
+        g_cabinet.grid_scroll_rows = row;
+    } else if (row >= g_cabinet.grid_scroll_rows + rows_visible) {
+        g_cabinet.grid_scroll_rows = row - rows_visible + 1;
+    }
+    int total, vis, off;
+    cab_scroll_get(dev_w, dev_h, &total, &vis, &off);
+    if (g_cabinet.grid_scroll_rows > total - vis) {
+        g_cabinet.grid_scroll_rows = (total > vis) ? total - vis : 0;
+    }
+    if (g_cabinet.grid_scroll_rows < 0) g_cabinet.grid_scroll_rows = 0;
+}
+
+/* Windows-style 2D caret movement over the icon grid.
+ *  Left/Right step one column within the row.
+ *  Up/Down change row keeping the column, clamping into a shorter last row.
+ *  Home/End jump to the first/last item; Page Up/Down move a viewport of rows. */
+static void cab_grid_navigate(UW key, H dev_w, H dev_h) {
+    int ncols;
+    cab_grid_metrics(dev_w, dev_h, &ncols, NULL, NULL, NULL);
+    int sel = g_cabinet.selected_idx;
+
+    if (sel < 0) {
+        sel = 0;
+    } else if (key == BTRON_KEY_LEFT) {
+        const int col = sel % ncols;
+        sel = (col > 0) ? sel - 1 : sel;
+    } else if (key == BTRON_KEY_RIGHT) {
+        const int col = sel % ncols;
+        if (col < ncols - 1 && sel + 1 < g_cabinet.item_count) sel = sel + 1;
+    } else if (key == BTRON_KEY_UP || key == 'k') {
+        const int row = sel / ncols, col = sel % ncols;
+        if (row > 0) {
+            const int target = (row - 1) * ncols + col;
+            sel = (target < g_cabinet.item_count) ? target : g_cabinet.item_count - 1;
+        }
+    } else if (key == BTRON_KEY_DOWN || key == 'j') {
+        const int row = sel / ncols;
+        const int last_row = (g_cabinet.item_count - 1) / ncols;
+        if (row < last_row) {
+            const int target = (row + 1) * ncols + (sel % ncols);
+            sel = (target < g_cabinet.item_count) ? target : g_cabinet.item_count - 1;
+        }
+    } else if (key == BTRON_KEY_HOME) {
+        sel = 0;
+    } else if (key == BTRON_KEY_END) {
+        sel = g_cabinet.item_count - 1;
+    } else if (key == BTRON_KEY_PAGE_UP || key == BTRON_KEY_PAGE_DOWN) {
+        int rows_visible;
+        cab_grid_metrics(dev_w, dev_h, NULL, NULL, NULL, &rows_visible);
+        const int delta = rows_visible * ncols;
+        sel = (key == BTRON_KEY_PAGE_UP) ? (sel - delta) : (sel + delta);
+    } else {
+        return;
+    }
+
+    if (sel < 0) sel = 0;
+    if (sel > g_cabinet.item_count - 1) sel = g_cabinet.item_count - 1;
+    g_cabinet.selected_idx = sel;
+    cab_grid_keep_visible(dev_w, dev_h);
+}
+
+/* Draw the Windows 95 scrollbar: recessed track, raised arrow buttons with
+ * triangles (same style as the Terminal), and a raised elevator thumb. When
+ * nothing overflows the thumb fills the track and the arrows render greyed. */
+static void cab_draw_scrollbar(GDEV *dev, H dev_w, H dev_h) {
+    cab_sbar_t sb;
+    cab_sbar_layout(dev_w, dev_h, &sb);
+    if (sb.bar.bottom <= sb.bar.top + 2 * CAB_SBAR_BTN) return;
+
+    const int sx = sb.bar.left;
+    const int sy = sb.bar.top;
+    const int sh = sb.bar.bottom - sb.bar.top;
+    const COLOR btn_pen = sb.overflow ? COLOR_BLACK : COLOR_DKGRAY;
+
+    /* Recessed face across the whole column. */
+    fill_rec(dev, &sb.bar, COLOR_LTGRAY);
+    set_col(dev, COLOR_BLACK, COLOR_LTGRAY);
+    drw_lin(dev, sx, sy + CAB_SBAR_BTN, sx + CAB_SBAR_W - 1, sy + CAB_SBAR_BTN);
+    drw_lin(dev, sx, sy + sh - CAB_SBAR_BTN, sx + CAB_SBAR_W - 1, sy + sh - CAB_SBAR_BTN);
+
+    /* Up arrow button. */
+    fill_rec(dev, &sb.up_btn, COLOR_LTGRAY);
+    drw_rec(dev, &sb.up_btn);
+    set_col(dev, btn_pen, COLOR_LTGRAY);
+    drw_lin(dev, sx + 8, sy + 4, sx + 4, sy + 11);
+    drw_lin(dev, sx + 8, sy + 4, sx + 12, sy + 11);
+    drw_lin(dev, sx + 4, sy + 11, sx + 12, sy + 11);
+
+    /* Down arrow button. */
+    const int dy_b = sy + sh - CAB_SBAR_BTN;
+    fill_rec(dev, &sb.dn_btn, COLOR_LTGRAY);
+    set_col(dev, COLOR_BLACK, COLOR_LTGRAY);
+    drw_rec(dev, &sb.dn_btn);
+    set_col(dev, btn_pen, COLOR_LTGRAY);
+    drw_lin(dev, sx + 4, dy_b + 5, sx + 12, dy_b + 5);
+    drw_lin(dev, sx + 4, dy_b + 5, sx + 8, dy_b + 12);
+    drw_lin(dev, sx + 12, dy_b + 5, sx + 8, dy_b + 12);
+
+    /* Elevator thumb with a raised bevel. */
+    fill_rec(dev, &sb.thumb, sb.overflow ? COLOR_GRAY : COLOR_LTGRAY);
+    set_col(dev, COLOR_BLACK, COLOR_LTGRAY);
+    drw_rec(dev, &sb.thumb);
+    drw_lin(dev, sb.thumb.left, sb.thumb.top, sb.thumb.right - 1, sb.thumb.top);
+    drw_lin(dev, sb.thumb.left, sb.thumb.top, sb.thumb.left, sb.thumb.bottom - 1);
+    drw_lin(dev, sb.thumb.left, sb.thumb.bottom - 1, sb.thumb.right - 1, sb.thumb.bottom - 1);
+    drw_lin(dev, sb.thumb.right - 1, sb.thumb.top, sb.thumb.right - 1, sb.thumb.bottom - 1);
+}
+
 
 
 
@@ -631,7 +871,7 @@ static void paint_vobj_manager(WND *wnd, GDEV *dev) {
 
             CABINET_ITEM *it = &g_cabinet.items[item_idx];
             int y = start_y + r_idx * 22;
-            RECT row_r = { 4, y, dev->width - 4, y + 20 };
+            RECT row_r = { 4, y, dev->width - 6 - CAB_SBAR_W, y + 20 };
 
             BOOL is_sel = (g_cabinet.selected_idx == item_idx);
             BOOL is_hov = (g_cabinet.hovered_idx == item_idx);
@@ -655,30 +895,31 @@ static void paint_vobj_manager(WND *wnd, GDEV *dev) {
             /* Real Object ID */
             char id_str[16];
             snprintf(id_str, sizeof(id_str), "#%d", it->robj_id);
-            drw_tc_string(dev, dev->width - 150, y + 2, id_str, is_sel ? COLOR_WHITE : COLOR_DKGRAY, 0x00000000);
+            drw_tc_string(dev, dev->width - 150 - CAB_SBAR_W, y + 2, id_str, is_sel ? COLOR_WHITE : COLOR_DKGRAY, 0x00000000);
 
             /* Byte Size */
             char size_str[16];
             snprintf(size_str, sizeof(size_str), "%u B", it->size_bytes);
-            drw_tc_string(dev, dev->width - 80, y + 2, size_str, is_sel ? COLOR_WHITE : COLOR_DKGRAY, 0x00000000);
+            drw_tc_string(dev, dev->width - 80 - CAB_SBAR_W, y + 2, size_str, is_sel ? COLOR_WHITE : COLOR_DKGRAY, 0x00000000);
         }
     } else {
         /* Grid Icon View */
         BTRON_ICON_SIZE sz = appearance_get_icon_size();
         int icon_dim = (sz == BTRON_ICON_SIZE_32) ? 32 : 64;
-        int col_w = (sz == BTRON_ICON_SIZE_32) ? 96 : 110;
-        int row_h = (sz == BTRON_ICON_SIZE_32) ? 72 : 104;
-        int cols = (dev->width - 16) / col_w;
-        if (cols < 1) cols = 1;
+        int cols, col_w, row_h;
+        cab_grid_metrics(dev->width, dev->height, &cols, &col_w, &row_h, NULL);
 
         for (int i = 0; i < g_cabinet.item_count; i++) {
             CABINET_ITEM *it = &g_cabinet.items[i];
             int col = i % cols;
             int r_idx = i / cols;
+            if (r_idx < g_cabinet.grid_scroll_rows) continue;
             int x = 12 + col * col_w;
-            int y = start_y + r_idx * row_h;
+            int y = start_y + (r_idx - g_cabinet.grid_scroll_rows) * row_h;
 
-            if (y + row_h > dev->height - 24) break;
+            /* Draw the partially-visible row too and let the status bar (painted
+             * afterwards) clip it at the bottom edge, Windows desktop style. */
+            if (y > dev->height - 24) break;
 
             BOOL is_sel = (g_cabinet.selected_idx == i);
             RECT box = { x, y, x + col_w - 8, y + row_h - 4 };
@@ -714,17 +955,26 @@ static void paint_vobj_manager(WND *wnd, GDEV *dev) {
         }
     }
 
+    /* ── 3b. Natural vertical scrollbar (right gutter) ─────────────────────── */
+    cab_draw_scrollbar(dev, dev->width, dev->height);
+
     /* ── 4. Status Bar Footer (Bottom: height-22 .. height) ────────────────── */
     RECT status_r = { 0, dev->height - 22, dev->width, dev->height };
     fill_rec(dev, &status_r, COLOR_LTGRAY);
     drw_lin(dev, 0, dev->height - 22, dev->width, dev->height - 22);
 
     char foot_text[128];
-    snprintf(foot_text, sizeof(foot_text), "キャビネット: %d 実身 [tad_bin] | #%d: %s (%u B)",
-             g_cabinet.item_count,
-             g_cabinet.items[g_cabinet.selected_idx].robj_id,
-             g_cabinet.items[g_cabinet.selected_idx].name,
-             g_cabinet.items[g_cabinet.selected_idx].size_bytes);
+    const int sidx = g_cabinet.selected_idx;
+    if (sidx >= 0 && sidx < g_cabinet.item_count) {
+        snprintf(foot_text, sizeof(foot_text), "キャビネット: %d 実身 [tad_bin] | #%d: %s (%u B)",
+                 g_cabinet.item_count,
+                 g_cabinet.items[sidx].robj_id,
+                 g_cabinet.items[sidx].name,
+                 g_cabinet.items[sidx].size_bytes);
+    } else {
+        snprintf(foot_text, sizeof(foot_text), "キャビネット: %d 実身 [tad_bin] | 選択なし",
+                 g_cabinet.item_count);
+    }
     drw_tc_string(dev, 10, dev->height - 17, foot_text, COLOR_BLACK, 0x00000000);
 
     /* ── 5. Dropdown Menu Overlay ──────────────────────────────────────────── */
@@ -746,21 +996,42 @@ static void handle_vobj_manager_event(WND *wnd, const EVT *evt) {
         }
         cab_sync_menu_state();
 
+        /* Thumb drag: proportional to pointer travel. Only active when the
+         * thumb itself was grabbed (EV_BUT_DOWN inside the thumb rect). */
+        if (s_sbar_dragging) {
+            H dw = wnd->dev ? wnd->dev->width : 560;
+            H dh = wnd->dev ? wnd->dev->height : 360;
+            cab_sbar_t sb;
+            cab_sbar_layout(dw, dh, &sb);
+            int total, vis, off;
+            cab_scroll_get(dw, dh, &total, &vis, &off);
+            int max_off = total - vis;
+            if (max_off < 0) max_off = 0;
+            int track_h = sb.track_bot - sb.track_top;
+            int travel = track_h - (sb.thumb.bottom - sb.thumb.top);
+            if (travel > 0 && max_off > 0) {
+                int dy = (int)rel_y - (int)s_sbar_drag_y;
+                cab_set_offset_clamped(s_sbar_drag_off + (dy * max_off) / travel, dw, dh);
+                inval_wnd(wnd);
+            }
+            return;
+        }
+
         /* Item Hover (starts at y = 26) */
         int start_y = 26;
         int idx = -1;
         if (g_cabinet.view_mode == CAB_VIEW_GRID) {
-            BTRON_ICON_SIZE sz = appearance_get_icon_size();
-            int col_w = (sz == BTRON_ICON_SIZE_32) ? 96 : 110;
-            int row_h = (sz == BTRON_ICON_SIZE_32) ? 72 : 104;
             H dev_w = wnd->dev ? wnd->dev->width : 560;
-            int cols = (dev_w - 16) / col_w;
-            if (cols < 1) cols = 1;
-            int c = (rel_x - 12) / col_w;
-            int r = (rel_y - start_y) / row_h;
-            if (c >= 0 && c < cols && r >= 0 && rel_x >= 12 && rel_y >= start_y) {
-                int calc = r * cols + c;
-                if (calc < g_cabinet.item_count) idx = calc;
+            H dev_h = wnd->dev ? wnd->dev->height : 360;
+            int cols, col_w, row_h;
+            cab_grid_metrics(dev_w, dev_h, &cols, &col_w, &row_h, NULL);
+            if (rel_x < dev_w - CAB_SBAR_W) {   /* ignore the scrollbar gutter */
+                int c = (rel_x - 12) / col_w;
+                int r = g_cabinet.grid_scroll_rows + (rel_y - start_y) / row_h;
+                if (c >= 0 && c < cols && rel_x >= 12 && rel_y >= start_y) {
+                    int calc = r * cols + c;
+                    if (calc < g_cabinet.item_count) idx = calc;
+                }
             }
         } else {
             int row = (rel_y - start_y) / 22;
@@ -864,16 +1135,43 @@ static void handle_vobj_manager_event(WND *wnd, const EVT *evt) {
         /* C. Item Selection Click (starts at y = 26) */
         int start_y = 26;
         int idx = -1;
+        H dev_w2 = wnd->dev ? wnd->dev->width : 560;
+        H dev_h2 = wnd->dev ? wnd->dev->height : 360;
+
+        /* Windows 95 scrollbar hit-test: arrow steps, track pages, thumb drags. */
+        cab_sbar_t sb;
+        cab_sbar_layout(dev_w2, dev_h2, &sb);
+        if (rel_x >= sb.bar.left && rel_x < sb.bar.right &&
+            rel_y >= sb.bar.top && rel_y < sb.bar.bottom) {
+            if (sb.overflow) {
+                int cur_off = (g_cabinet.view_mode == CAB_VIEW_GRID)
+                                ? g_cabinet.grid_scroll_rows : g_cabinet.scroll_offset;
+                if (rel_y >= sb.up_btn.top && rel_y < sb.up_btn.bottom) {
+                    cab_set_offset_clamped(cur_off - 1, dev_w2, dev_h2);
+                } else if (rel_y >= sb.dn_btn.top && rel_y < sb.dn_btn.bottom) {
+                    cab_set_offset_clamped(cur_off + 1, dev_w2, dev_h2);
+                } else if (rel_y < sb.thumb.top || rel_y >= sb.thumb.bottom) {
+                    int total, vis, off;
+                    cab_scroll_get(dev_w2, dev_h2, &total, &vis, &off);
+                    int page = (vis > 1) ? (vis - 1) : 1;
+                    cab_set_offset_clamped(cur_off + ((rel_y < sb.thumb.top) ? -page : page),
+                                           dev_w2, dev_h2);
+                } else {
+                    s_sbar_dragging = TRUE;
+                    s_sbar_drag_y = rel_y;
+                    s_sbar_drag_off = cur_off;
+                }
+                inval_wnd(wnd);
+            }
+            return;
+        }
+
         if (g_cabinet.view_mode == CAB_VIEW_GRID) {
-            BTRON_ICON_SIZE sz = appearance_get_icon_size();
-            int col_w = (sz == BTRON_ICON_SIZE_32) ? 96 : 110;
-            int row_h = (sz == BTRON_ICON_SIZE_32) ? 72 : 104;
-            H dev_w = wnd->dev ? wnd->dev->width : 560;
-            int cols = (dev_w - 16) / col_w;
-            if (cols < 1) cols = 1;
+            int cols, col_w, row_h;
+            cab_grid_metrics(dev_w2, dev_h2, &cols, &col_w, &row_h, NULL);
             int c = (rel_x - 12) / col_w;
-            int r = (rel_y - start_y) / row_h;
-            if (c >= 0 && c < cols && r >= 0 && rel_x >= 12 && rel_y >= start_y) {
+            int r = g_cabinet.grid_scroll_rows + (rel_y - start_y) / row_h;
+            if (c >= 0 && c < cols && rel_x >= 12 && rel_y >= start_y) {
                 int calc = r * cols + c;
                 if (calc < g_cabinet.item_count) idx = calc;
             }
@@ -929,6 +1227,7 @@ static void handle_vobj_manager_event(WND *wnd, const EVT *evt) {
 
     if (evt->type == EV_BUT_UP) {
         s_cab_mouse_down = FALSE;
+        s_sbar_dragging = FALSE;
         return;
     }
 
@@ -943,35 +1242,62 @@ static void handle_vobj_manager_event(WND *wnd, const EVT *evt) {
             cab_sync_menu_state();
         }
 
-        if (key == BTRON_KEY_UP || key == 'k') {
-            if (g_cabinet.selected_idx > 0) {
-                g_cabinet.selected_idx--;
-                if (g_cabinet.selected_idx < g_cabinet.scroll_offset) {
-                    g_cabinet.scroll_offset = g_cabinet.selected_idx;
-                }
-            }
-        } else if (key == BTRON_KEY_DOWN || key == 'j') {
-            if (g_cabinet.selected_idx < g_cabinet.item_count - 1) {
-                g_cabinet.selected_idx++;
-                int visible_rows = (wnd->dev ? wnd->dev->height - 52 : 240) / 22;
-                if (g_cabinet.selected_idx >= g_cabinet.scroll_offset + visible_rows) {
-                    g_cabinet.scroll_offset = g_cabinet.selected_idx - visible_rows + 1;
-                }
-            }
-        } else if (key == BTRON_KEY_PAGE_UP) {
-            g_cabinet.scroll_offset -= 8;
-            if (g_cabinet.scroll_offset < 0) g_cabinet.scroll_offset = 0;
-            g_cabinet.selected_idx = g_cabinet.scroll_offset;
-        } else if (key == BTRON_KEY_PAGE_DOWN) {
-            g_cabinet.scroll_offset += 8;
-            if (g_cabinet.scroll_offset > g_cabinet.item_count - 1) g_cabinet.scroll_offset = g_cabinet.item_count - 1;
-            g_cabinet.selected_idx = g_cabinet.scroll_offset;
-        } else if (key == '\n' || key == '\r' || key == ' ') {
+        H dev_w = (wnd->dev) ? wnd->dev->width : 560;
+        H dev_h = (wnd->dev) ? wnd->dev->height : 360;
+
+        if (key == '\n' || key == '\r' || key == ' ' || key == BTRON_KEY_KP_ENTER) {
             if (g_cabinet.selected_idx >= 0 && g_cabinet.selected_idx < g_cabinet.item_count) {
                 open_tad_browser_window(g_cabinet.items[g_cabinet.selected_idx].path,
                                        g_cabinet.items[g_cabinet.selected_idx].name);
             }
+            return;
         }
+
+        /* Mouse wheel arrives as PAGE_UP/PAGE_DOWN: move the viewport exactly
+         * one unit per notch (no acceleration), without moving the selection. */
+        if (key == BTRON_KEY_PAGE_UP || key == BTRON_KEY_PAGE_DOWN) {
+            int cur = (g_cabinet.view_mode == CAB_VIEW_GRID)
+                        ? g_cabinet.grid_scroll_rows : g_cabinet.scroll_offset;
+            int step = (key == BTRON_KEY_PAGE_DOWN) ? 1 : -1;
+            cab_set_offset_clamped(cur + step, dev_w, dev_h);
+            inval_wnd(wnd);
+            return;
+        }
+
+        if (g_cabinet.view_mode == CAB_VIEW_GRID) {
+            cab_grid_navigate(key, dev_w, dev_h);
+        } else {
+            int visible_rows = (dev_h > CAB_GRID_TOP + 24) ? (dev_h - CAB_GRID_TOP - 24) / 22 : 1;
+            if (visible_rows < 1) visible_rows = 1;
+            int ns = (g_cabinet.selected_idx < 0) ? 0 : g_cabinet.selected_idx;
+            if (g_cabinet.selected_idx < 0) {
+                ns = 0;
+            } else if (key == BTRON_KEY_UP || key == 'k') {
+                ns = g_cabinet.selected_idx - 1;
+            } else if (key == BTRON_KEY_DOWN || key == 'j') {
+                ns = g_cabinet.selected_idx + 1;
+            } else if (key == BTRON_KEY_HOME) {
+                ns = 0;
+            } else if (key == BTRON_KEY_END) {
+                ns = g_cabinet.item_count - 1;
+            } else if (key == BTRON_KEY_PAGE_UP) {
+                ns = g_cabinet.selected_idx - visible_rows;
+            } else if (key == BTRON_KEY_PAGE_DOWN) {
+                ns = g_cabinet.selected_idx + visible_rows;
+            } else {
+                return;
+            }
+            if (ns < 0) ns = 0;
+            if (ns > g_cabinet.item_count - 1) ns = g_cabinet.item_count - 1;
+            g_cabinet.selected_idx = ns;
+            if (ns < g_cabinet.scroll_offset) {
+                g_cabinet.scroll_offset = ns;
+            } else if (ns >= g_cabinet.scroll_offset + visible_rows) {
+                g_cabinet.scroll_offset = ns - visible_rows + 1;
+            }
+            if (g_cabinet.scroll_offset < 0) g_cabinet.scroll_offset = 0;
+        }
+        inval_wnd(wnd);
     }
 }
 

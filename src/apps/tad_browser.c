@@ -1641,6 +1641,100 @@ WND* open_tad_browser_about_window(void) {
                                         260, 180);
 }
 
+/* ── Windows 95 vertical scrollbar (right gutter), Terminal-style arrows ────
+ * Arrow click steps, track click pages, thumb drag scrolls proportionally, and
+ * the mouse wheel scrolls the content. When the document fits the thumb fills
+ * the track and the arrows render greyed rather than the bar being hidden. */
+#define TAD_SB_W   16
+#define TAD_SB_BTN 16
+#define TAD_SB_TOP 48
+
+typedef struct {
+    RECT  bar, up_btn, dn_btn, thumb;
+    int   track_top, track_bot;
+    BOOL  overflow;
+} tad_sbar_t;
+
+static void tad_sbar_layout(TAD_BROWSER *tb, GDEV *dev, tad_sbar_t *sb) {
+    int bar_top = TAD_SB_TOP;
+    int bar_bot = dev->height - 22;
+    sb->bar.left = dev->width - TAD_SB_W;   sb->bar.top = bar_top;
+    sb->bar.right = dev->width;             sb->bar.bottom = bar_bot;
+    sb->up_btn.left = sb->bar.left; sb->up_btn.right = sb->bar.right;
+    sb->up_btn.top = bar_top;       sb->up_btn.bottom = bar_top + TAD_SB_BTN;
+    sb->dn_btn.left = sb->bar.left;  sb->dn_btn.right = sb->bar.right;
+    sb->dn_btn.top = bar_bot - TAD_SB_BTN; sb->dn_btn.bottom = bar_bot;
+    sb->track_top = bar_top + TAD_SB_BTN;
+    sb->track_bot = bar_bot - TAD_SB_BTN;
+    int track_h = sb->track_bot - sb->track_top;
+    if (track_h < 1) track_h = 1;
+
+    int max_scroll = tb->doc_height - tb->page_height;
+    if (max_scroll < 0) max_scroll = 0;
+    sb->overflow = (max_scroll > 0 && bar_bot > bar_top + 2 * TAD_SB_BTN);
+
+    int th_h, ty;
+    if (sb->overflow && tb->doc_height > 0) {
+        th_h = (tb->page_height * track_h) / tb->doc_height;
+        if (th_h < 15) th_h = 15;
+        if (th_h > track_h) th_h = track_h;
+        int sy = tb->scroll_y;
+        if (sy < 0) sy = 0;
+        if (sy > max_scroll) sy = max_scroll;
+        ty = sb->track_top + (sy * (track_h - th_h)) / max_scroll;
+    } else {
+        th_h = track_h;
+        ty = sb->track_top;
+    }
+    sb->thumb.left = sb->bar.left + 2; sb->thumb.right = sb->bar.right - 2;
+    sb->thumb.top = ty;                sb->thumb.bottom = ty + th_h;
+}
+
+static void tad_set_scroll_clamped(TAD_BROWSER *tb, int ns) {
+    int max_scroll = tb->doc_height - tb->page_height;
+    if (max_scroll < 0) max_scroll = 0;
+    if (ns < 0) ns = 0;
+    if (ns > max_scroll) ns = max_scroll;
+    tb->scroll_y = ns;
+}
+
+static void tad_draw_scrollbar(TAD_BROWSER *tb, GDEV *dev) {
+    if (dev->height <= 75) return;
+    tad_sbar_t sb;
+    tad_sbar_layout(tb, dev, &sb);
+    const int sx = sb.bar.left, sy = sb.bar.top, sh = sb.bar.bottom - sb.bar.top;
+    const COLOR btn_pen = sb.overflow ? COLOR_BLACK : COLOR_DKGRAY;
+
+    fill_rec(dev, &sb.bar, COLOR_LTGRAY);
+    set_col(dev, COLOR_BLACK, COLOR_LTGRAY);
+    drw_lin(dev, sx, sy + TAD_SB_BTN, sx + TAD_SB_W - 1, sy + TAD_SB_BTN);
+    drw_lin(dev, sx, sy + sh - TAD_SB_BTN, sx + TAD_SB_W - 1, sy + sh - TAD_SB_BTN);
+
+    fill_rec(dev, &sb.up_btn, COLOR_LTGRAY);
+    drw_rec(dev, &sb.up_btn);
+    set_col(dev, btn_pen, COLOR_LTGRAY);
+    drw_lin(dev, sx + 8, sy + 4, sx + 4, sy + 11);
+    drw_lin(dev, sx + 8, sy + 4, sx + 12, sy + 11);
+    drw_lin(dev, sx + 4, sy + 11, sx + 12, sy + 11);
+
+    const int dy_b = sy + sh - TAD_SB_BTN;
+    fill_rec(dev, &sb.dn_btn, COLOR_LTGRAY);
+    set_col(dev, COLOR_BLACK, COLOR_LTGRAY);
+    drw_rec(dev, &sb.dn_btn);
+    set_col(dev, btn_pen, COLOR_LTGRAY);
+    drw_lin(dev, sx + 4, dy_b + 5, sx + 12, dy_b + 5);
+    drw_lin(dev, sx + 4, dy_b + 5, sx + 8, dy_b + 12);
+    drw_lin(dev, sx + 12, dy_b + 5, sx + 8, dy_b + 12);
+
+    fill_rec(dev, &sb.thumb, sb.overflow ? COLOR_GRAY : COLOR_LTGRAY);
+    set_col(dev, COLOR_BLACK, COLOR_LTGRAY);
+    drw_rec(dev, &sb.thumb);
+    drw_lin(dev, sb.thumb.left, sb.thumb.top, sb.thumb.right - 1, sb.thumb.top);
+    drw_lin(dev, sb.thumb.left, sb.thumb.top, sb.thumb.left, sb.thumb.bottom - 1);
+    drw_lin(dev, sb.thumb.left, sb.thumb.bottom - 1, sb.thumb.right - 1, sb.thumb.bottom - 1);
+    drw_lin(dev, sb.thumb.right - 1, sb.thumb.top, sb.thumb.right - 1, sb.thumb.bottom - 1);
+}
+
 void tad_browser_paint(TAD_BROWSER *tb, GDEV *dev, const RECT *client_rect) {
     if (!tb || !dev || !client_rect) return;
 
@@ -1816,25 +1910,8 @@ void tad_browser_paint(TAD_BROWSER *tb, GDEV *dev, const RECT *client_rect) {
         drw_tc_string(dev, 278, 26, loc_text, COLOR_DKGRAY, 0x00000000);
     }
 
-    /* ── 3. Scrollbar Indicator (Right Margin) ─────────────────────────────── */
-    if (tb->doc_height > dev->height - 70 && dev->height > 75) {
-        int sb_x = dev->width - 12;
-        int track_top = 48;
-        int track_h = dev->height - 70;
-        RECT sb_track = { sb_x, track_top, dev->width - 2, track_top + track_h };
-        fill_rec(dev, &sb_track, COLOR_LTGRAY);
-        drw_rec(dev, &sb_track);
-
-        int max_scroll = tb->doc_height - tb->page_height;
-        if (max_scroll < 1) max_scroll = 1;
-        int thumb_h = (tb->page_height * track_h) / tb->doc_height;
-        if (thumb_h < 15) thumb_h = 15;
-        int thumb_y = track_top + (tb->scroll_y * (track_h - thumb_h)) / max_scroll;
-
-        RECT sb_thumb = { sb_x + 1, thumb_y, dev->width - 3, thumb_y + thumb_h };
-        fill_rec(dev, &sb_thumb, COLOR_DKGRAY);
-        drw_rec(dev, &sb_thumb);
-    }
+    /* ── 3. Windows 95 vertical scrollbar (right margin) ───────────────────── */
+    tad_draw_scrollbar(tb, dev);
 
     /* ── 4. Status Bar Footer (Bottom: height-22 .. height) ────────────────── */
     RECT status_r = { 0, dev->height - 22, dev->width, dev->height };
@@ -2105,6 +2182,21 @@ static void handle_tad_browser_event(WND *wnd, const EVT *evt) {
         }
         tad_sync_menu_state(tb);
 
+        /* Windows 95 thumb drag: proportional to pointer travel. */
+        if (tb->sb_dragging && wnd->dev) {
+            tad_sbar_t sb;
+            tad_sbar_layout(tb, wnd->dev, &sb);
+            int max_scroll = tb->doc_height - tb->page_height;
+            if (max_scroll < 0) max_scroll = 0;
+            int travel = (sb.track_bot - sb.track_top) - (sb.thumb.bottom - sb.thumb.top);
+            if (travel > 0 && max_scroll > 0) {
+                int dy = rel_y - tb->sb_drag_start_y;
+                tad_set_scroll_clamped(tb, tb->sb_drag_start_scroll + (dy * max_scroll) / travel);
+                inval_wnd(wnd);
+            }
+            return;
+        }
+
         /* Pass mouse move to content area if below chrome */
         if (rel_y >= 48) {
             tad_browser_handle_mouse(tb, rel_x, rel_y, FALSE, NULL, NULL);
@@ -2203,6 +2295,32 @@ static void handle_tad_browser_event(WND *wnd, const EVT *evt) {
             return;
         }
 
+        /* Windows 95 scrollbar: arrows step, track pages, thumb drags. */
+        if (wnd->dev) {
+            tad_sbar_t sb;
+            tad_sbar_layout(tb, wnd->dev, &sb);
+            if (rel_x >= sb.bar.left && rel_x < sb.bar.right &&
+                rel_y >= sb.bar.top && rel_y < sb.bar.bottom) {
+                if (sb.overflow) {
+                    if (rel_y >= sb.up_btn.top && rel_y < sb.up_btn.bottom) {
+                        tad_set_scroll_clamped(tb, tb->scroll_y - 24);
+                    } else if (rel_y >= sb.dn_btn.top && rel_y < sb.dn_btn.bottom) {
+                        tad_set_scroll_clamped(tb, tb->scroll_y + 24);
+                    } else if (rel_y < sb.thumb.top || rel_y >= sb.thumb.bottom) {
+                        int pg = tb->page_height - 40;
+                        if (pg < 1) pg = 1;
+                        tad_set_scroll_clamped(tb, tb->scroll_y + ((rel_y < sb.thumb.top) ? -pg : pg));
+                    } else {
+                        tb->sb_dragging = TRUE;
+                        tb->sb_drag_start_y = rel_y;
+                        tb->sb_drag_start_scroll = tb->scroll_y;
+                    }
+                    inval_wnd(wnd);
+                }
+                return;
+            }
+        }
+
         /* D. Document Content Link Clicks (y >= 48) */
         tb->addr_active = FALSE;
         ID clicked_robj = 0;
@@ -2211,6 +2329,14 @@ static void handle_tad_browser_event(WND *wnd, const EVT *evt) {
             if (clicked_path[0] != '\0') {
                 tad_browser_navigate(tb, clicked_path);
             }
+        }
+        return;
+    }
+
+    if (evt->type == EV_BUT_UP) {
+        if (tb->sb_dragging) {
+            tb->sb_dragging = FALSE;
+            inval_wnd(wnd);
         }
         return;
     }

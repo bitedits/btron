@@ -49,27 +49,11 @@ GDEV* wnd_mgr_get_screen(void) {
     return g_screen_dev;
 }
 
+/* Width of the title as it actually renders, using the same per-glyph advance
+ * as drw_tc_string so the compact tab always fits its caption text exactly. */
 static H calculate_title_display_width(const char *s) {
     if (!s) return 0;
-    H w = 0;
-    int i = 0;
-    while (s[i] != '\0') {
-        unsigned char c = (unsigned char)s[i];
-        if (c < 0x80) {
-            w += 8;
-            i += 1;
-        } else if ((c & 0xE0) == 0xC0) {
-            w += 8;
-            i += 2;
-        } else if ((c & 0xF0) == 0xE0) {
-            w += 16;
-            i += 3;
-        } else {
-            w += 8;
-            i += 1;
-        }
-    }
-    return w;
+    return tc_calc_string_width(s, 64 /* WND title buffer */);
 }
 
 #define WND_TITLE_HEIGHT 28
@@ -184,11 +168,13 @@ WND* opn_wnd(const char *title, H x, H y, H w, H h, UW attr) {
     wnd->focused = TRUE;
     wnd->tab_offset_x = 0;
 
-    /* Calculate dynamic compact tab width based on title content */
+    /* Calculate compact tab width from the title content. It is a pure
+     * function of the caption text and is deliberately NOT clamped to the
+     * window width here (wget_tab_rect clamps at draw time), so resizing a
+     * window never permanently grows or shrinks the title tab. */
     H text_w = calculate_title_display_width(wnd->title);
     H tw = text_w + 48; /* text + left margin/grip + close box + padding */
     if (tw < 100) tw = 100;
-    if (tw > w) tw = w;
     wnd->tab_width = tw;
 
     wnd->dev = opn_dev(w - border * 2, h - title_h - border * 2);
@@ -294,10 +280,9 @@ ER rsz_wnd(WND *wnd, H w, H h) {
     wnd->client.right = wnd->bounds.left + w - border;
     wnd->client.bottom = wnd->bounds.top + h - border;
 
-    /* Re-clamp tab width and sliding offset */
-    if (wnd->tab_width > w) {
-        wnd->tab_width = w;
-    }
+    /* The title tab keeps its text-derived width across resize; only the
+     * sliding offset is re-clamped into the new window width (wget_tab_rect
+     * draws the tab at full width when it exceeds the window). */
     wset_tab_offset(wnd, wnd->tab_offset_x);
 
     H new_dev_w = w - border * 2;

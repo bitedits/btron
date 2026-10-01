@@ -67,6 +67,124 @@ static inline char* local_strrchr(const char *s, int c) {
 static TEditor g_teditor;
 static char g_clipboard[2048] = "";
 
+/* ── Windows 95 vertical scrollbar ─────────────────────────────────────────
+ * The editor's viewport is driven by ed->scroll_row (first visible logical
+ * line).  The scrollbar mirrors the Cabinet/Terminal control: arrow buttons
+ * step one line, the track pages one viewport, the thumb drags, and the whole
+ * bar greys out (thumb fills the track) when nothing overflows.  The mouse
+ * wheel arrives as PAGE_UP/PAGE_DOWN and scrolls the content by one line
+ * without moving the caret. */
+#define TE_SB_W   16
+#define TE_SB_BTN 16
+#define TE_SB_TOP 24
+
+static BOOL s_sb_dragging = FALSE;
+static H    s_sb_drag_y   = 0;
+static int  s_sb_drag_off = 0;
+
+typedef struct {
+    RECT bar, up_btn, dn_btn, thumb;
+    int  track_top, track_bot;
+    BOOL overflow;
+} te_sbar_t;
+
+static int te_view_rows(H dev_h) {
+    int vr = ((int)dev_h - 60) / 18;   /* keep in sync with paint/PAGE geometry */
+    return (vr < 1) ? 1 : vr;
+}
+
+static void te_sbar_layout(const TEditor *ed, H dev_w, H dev_h, te_sbar_t *sb) {
+    int total = ed->total_lines;
+    int vis = te_view_rows(dev_h);
+    int off = ed->scroll_row;
+    int max_off = total - vis;
+    if (max_off < 0) max_off = 0;
+
+    sb->bar.left = dev_w - TE_SB_W; sb->bar.right = dev_w;
+    sb->bar.top = TE_SB_TOP;        sb->bar.bottom = dev_h - 22;
+
+    sb->up_btn.left = sb->bar.left;  sb->up_btn.right = sb->bar.right;
+    sb->up_btn.top = sb->bar.top;    sb->up_btn.bottom = sb->bar.top + TE_SB_BTN;
+    sb->dn_btn.left = sb->bar.left;  sb->dn_btn.right = sb->bar.right;
+    sb->dn_btn.top = sb->bar.bottom - TE_SB_BTN; sb->dn_btn.bottom = sb->bar.bottom;
+
+    sb->track_top = sb->bar.top + TE_SB_BTN;
+    sb->track_bot = sb->bar.bottom - TE_SB_BTN;
+    int track_h = sb->track_bot - sb->track_top;
+    if (track_h < 1) track_h = 1;
+
+    sb->overflow = (max_off > 0);
+    int th_h, ty;
+    if (sb->overflow) {
+        th_h = (track_h * vis) / total;
+        if (th_h < 14) th_h = 14;
+        if (th_h > track_h) th_h = track_h;
+        if (off < 0) off = 0;
+        if (off > max_off) off = max_off;
+        ty = sb->track_top + (off * (track_h - th_h)) / max_off;
+    } else {
+        th_h = track_h;
+        ty = sb->track_top;
+    }
+    sb->thumb.left = sb->bar.left + 2;  sb->thumb.right = sb->bar.right - 2;
+    sb->thumb.top = ty;                 sb->thumb.bottom = ty + th_h;
+}
+
+/* Move the viewport to an absolute line, clamped to the scrollable range.
+ * Never touches the caret. */
+static void te_set_scroll_clamped(TEditor *ed, int ns, H dev_h) {
+    int vis = te_view_rows(dev_h);
+    int max_off = ed->total_lines - vis;
+    if (max_off < 0) max_off = 0;
+    if (ns < 0) ns = 0;
+    if (ns > max_off) ns = max_off;
+    ed->scroll_row = ns;
+}
+
+static void te_draw_scrollbar(TEditor *ed, GDEV *dev) {
+    te_sbar_t sb;
+    te_sbar_layout(ed, dev->width, dev->height, &sb);
+    if (sb.bar.bottom <= sb.bar.top + 2 * TE_SB_BTN) return;
+
+    const int sx = sb.bar.left;
+    const int sy = sb.bar.top;
+    const int sh = sb.bar.bottom - sb.bar.top;
+    const COLOR btn_pen = sb.overflow ? COLOR_BLACK : COLOR_DKGRAY;
+
+    /* Recessed face across the whole column. */
+    fill_rec(dev, &sb.bar, COLOR_LTGRAY);
+    set_col(dev, COLOR_BLACK, COLOR_LTGRAY);
+    drw_lin(dev, sx, sy + TE_SB_BTN, sx + TE_SB_W - 1, sy + TE_SB_BTN);
+    drw_lin(dev, sx, sy + sh - TE_SB_BTN, sx + TE_SB_W - 1, sy + sh - TE_SB_BTN);
+
+    /* Up arrow button. */
+    fill_rec(dev, &sb.up_btn, COLOR_LTGRAY);
+    drw_rec(dev, &sb.up_btn);
+    set_col(dev, btn_pen, COLOR_LTGRAY);
+    drw_lin(dev, sx + 8, sy + 4, sx + 4, sy + 11);
+    drw_lin(dev, sx + 8, sy + 4, sx + 12, sy + 11);
+    drw_lin(dev, sx + 4, sy + 11, sx + 12, sy + 11);
+
+    /* Down arrow button. */
+    const int dy_b = sy + sh - TE_SB_BTN;
+    fill_rec(dev, &sb.dn_btn, COLOR_LTGRAY);
+    set_col(dev, COLOR_BLACK, COLOR_LTGRAY);
+    drw_rec(dev, &sb.dn_btn);
+    set_col(dev, btn_pen, COLOR_LTGRAY);
+    drw_lin(dev, sx + 4, dy_b + 5, sx + 12, dy_b + 5);
+    drw_lin(dev, sx + 4, dy_b + 5, sx + 8, dy_b + 12);
+    drw_lin(dev, sx + 12, dy_b + 5, sx + 8, dy_b + 12);
+
+    /* Elevator thumb with a raised bevel. */
+    fill_rec(dev, &sb.thumb, sb.overflow ? COLOR_GRAY : COLOR_LTGRAY);
+    set_col(dev, COLOR_BLACK, COLOR_LTGRAY);
+    drw_rec(dev, &sb.thumb);
+    drw_lin(dev, sb.thumb.left, sb.thumb.top, sb.thumb.right - 1, sb.thumb.top);
+    drw_lin(dev, sb.thumb.left, sb.thumb.top, sb.thumb.left, sb.thumb.bottom - 1);
+    drw_lin(dev, sb.thumb.left, sb.thumb.bottom - 1, sb.thumb.right - 1, sb.thumb.bottom - 1);
+    drw_lin(dev, sb.thumb.right - 1, sb.thumb.top, sb.thumb.right - 1, sb.thumb.bottom - 1);
+}
+
 static void teditor_init_default(TEditor *ed) {
     memset(ed, 0, sizeof(TEditor));
     strncpy(ed->filename, "BTRON3_Report.txt", sizeof(ed->filename) - 1);
@@ -1260,12 +1378,37 @@ static void handle_t_editor_event(WND *wnd, const EVT *evt) {
     if (!wnd || !evt) return;
     TEditor *ed = (wnd->user_data) ? (TEditor*)(uintptr_t)wnd->user_data : &g_teditor;
 
+    if (evt->type == EV_BUT_UP) {
+        s_sb_dragging = FALSE;
+        return;
+    }
+
     if (evt->type == EV_MOUSE_MOVE) {
         H rel_x = evt->pos.x - wnd->client.left;
         H rel_y = evt->pos.y - wnd->client.top;
+
+        /* Thumb drag: proportional to pointer travel, active only when the
+         * thumb rect was grabbed on button-down. */
+        if (s_sb_dragging) {
+            H dev_w = wnd->dev ? wnd->dev->width : (H)1;
+            H dev_h = wnd->dev ? wnd->dev->height : (H)1;
+            te_sbar_t sb;
+            te_sbar_layout(ed, dev_w, dev_h, &sb);
+            int max_off = ed->total_lines - te_view_rows(dev_h);
+            if (max_off < 0) max_off = 0;
+            int travel = (sb.track_bot - sb.track_top) - (sb.thumb.bottom - sb.thumb.top);
+            if (travel > 0 && max_off > 0) {
+                int dy = (int)rel_y - (int)s_sb_drag_y;
+                te_set_scroll_clamped(ed, s_sb_drag_off + (dy * max_off) / travel, dev_h);
+                inval_wnd(wnd);
+            }
+            return;
+        }
+
         if (teditor_handle_tree_mouse(ed, wnd, rel_x, rel_y, FALSE)) {
             return;
         }
+
         if (app_menu_handle_mouse_move(&ed->menu_bar, rel_x, rel_y)) {
             teditor_sync_menu_state(ed);
             if (ed->menu_bar.active_submenu != 1) {
@@ -1299,6 +1442,33 @@ static void handle_t_editor_event(WND *wnd, const EVT *evt) {
         teditor_sync_menu_state(ed);
         if (ed->menu_bar.active_submenu != 1) {
             for (int k = 0; k < TEDITOR_TREE_MAX_LEVELS; k++) ed->tree_hover[k] = -1;
+        }
+
+        /* Windows 95 scrollbar hit-test: arrow steps, track pages, thumb drags. */
+        H sb_w = wnd->dev ? wnd->dev->width : 560;
+        H sb_h = wnd->dev ? wnd->dev->height : 360;
+        te_sbar_t sb;
+        te_sbar_layout(ed, sb_w, sb_h, &sb);
+        if (rel_x >= sb.bar.left && rel_x < sb.bar.right &&
+            rel_y >= sb.bar.top && rel_y < sb.bar.bottom) {
+            if (sb.overflow) {
+                int cur = ed->scroll_row;
+                if (rel_y >= sb.up_btn.top && rel_y < sb.up_btn.bottom) {
+                    te_set_scroll_clamped(ed, cur - 1, sb_h);
+                } else if (rel_y >= sb.dn_btn.top && rel_y < sb.dn_btn.bottom) {
+                    te_set_scroll_clamped(ed, cur + 1, sb_h);
+                } else if (rel_y < sb.thumb.top || rel_y >= sb.thumb.bottom) {
+                    int page = te_view_rows(sb_h) - 1;
+                    if (page < 1) page = 1;
+                    te_set_scroll_clamped(ed, cur + ((rel_y < sb.thumb.top) ? -page : page), sb_h);
+                } else {
+                    s_sb_dragging = TRUE;
+                    s_sb_drag_y = rel_y;
+                    s_sb_drag_off = cur;
+                }
+                inval_wnd(wnd);
+            }
+            return;
         }
 
         /* Status Bar Footer click -> Toggle JP / EN mode */
@@ -1680,6 +1850,9 @@ static void paint_t_editor(WND *wnd, GDEV *dev) {
         }
         y += 18;
     }
+
+    /* Windows 95 vertical scrollbar in the right gutter. */
+    te_draw_scrollbar(ed, dev);
 
     /* Embedded Virtual Body Icon inside Document */
     if (ed->has_vobj) {

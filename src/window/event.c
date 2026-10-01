@@ -176,6 +176,15 @@ ER get_evt(EVT *p_evt, W timeout_ms) {
 #if defined(__STDC_HOSTED__) && __STDC_HOSTED__ == 1
     /* Poll SDL events */
     SDL_Event sdlev;
+    /* Wheel momentum accumulator.  A host trackpad/swipe delivers many
+     * sub-line float deltas per gesture (and sign-reversed rubber-band
+     * events when it settles at a scroll boundary).  Emitting on the raw
+     * float sign turned every one of those into a PAGE step, which read as
+     * scroll acceleration plus a bounce-back-down at the top edge.  Sum the
+     * travel and emit one notch per whole line instead; a direction reversal
+     * drops the leftover momentum so the settling tail can never fire a step. */
+    static float s_wheel_accum = 0.0f;
+    static int   s_wheel_sign  = 0;
     while (SDL_PollEvent(&sdlev)) {
         EVT ev;
         memset(&ev, 0, sizeof(EVT));
@@ -219,11 +228,26 @@ ER get_evt(EVT *p_evt, W timeout_ms) {
             case SDL_TEXTINPUT:
                 /* Text input is handled directly via SDL_KEYDOWN to avoid duplicate keystroke events */
                 break;
-            case SDL_MOUSEWHEEL:
-                ev.type = EV_KEY_DOWN;
-                ev.key = (sdlev.wheel.y > 0) ? BTRON_KEY_PAGE_UP : BTRON_KEY_PAGE_DOWN;
-                snd_evt(&ev);
+            case SDL_MOUSEWHEEL: {
+                float dy = sdlev.wheel.y;
+                if (sdlev.wheel.direction == SDL_MOUSEWHEEL_FLIPPED) dy = -dy;
+                int dir = (dy > 0.0f) ? 1 : ((dy < 0.0f) ? -1 : 0);
+                if (dir == 0) break;            /* null / settled event: ignore */
+                if (dir != s_wheel_sign) {       /* reversal: drop trailing momentum */
+                    s_wheel_accum = 0.0f;
+                    s_wheel_sign = dir;
+                }
+                s_wheel_accum += dy;
+                int notches = (int)s_wheel_accum;
+                if (notches != 0) {
+                    s_wheel_accum -= (float)notches;
+                    ev.type = EV_KEY_DOWN;
+                    ev.key = (notches > 0) ? BTRON_KEY_PAGE_UP : BTRON_KEY_PAGE_DOWN;
+                    int n = (notches > 0) ? notches : -notches;
+                    for (int i = 0; i < n; i++) snd_evt(&ev);
+                }
                 break;
+            }
             case SDL_KEYDOWN:
                 /* Check for ^G (Ctrl+G) or Ctrl+Alt+G release shortcut (QEMU style) */
                 if ((sdlev.key.keysym.sym == SDLK_g && (sdlev.key.keysym.mod & KMOD_CTRL)) ||

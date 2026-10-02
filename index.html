@@ -818,7 +818,7 @@
 
         /* Circular Motion Interactive Cue Badge */
         .saint-interaction-hint {
-            margin-top: 0.75rem;
+            margin-top: 2.75rem;
             display: inline-flex;
             align-items: center;
             gap: 6px;
@@ -1094,11 +1094,9 @@
             <div class="hero-banner-tag" style="margin-top: 10px;">
                 <span>🌸</span> BTRON3 × Synrc VE OS.1 次世代コンシューマOS仕様
             </div>
-            <h1 class="jp-title">B-System OS 体系構造</h1>
+            <h1 class="jp-title">B-System 体系構造</h1>
             <p class="hero-subtitle">日本のユーザー、BTRONを愛する研究者・クリエイターへ贈る——<br>実身・仮身ハイパーメディアモデルとBeOSの精神が融合した超応答型コンシューマ環境</p>
 
-            
-            
         <!-- Saint Lil Cube 64 with Low-Poly 3D & Hopf Fibration Holiness Aura -->
         <div class="saint-stage" id="saintStage">
             <!-- Perfectly Centered Radiant Aura & 3D Lil Cube (Canonical Crystalline Saint) -->
@@ -1110,6 +1108,27 @@
                 </div>
                 <div class="saint-pedestal-shadow" id="mascot3dPedestal"></div>
             </div>
+
+            <!-- BTRON Saint Controls -->
+
+            <div class="saint-interaction-hint" id="saintHint">
+                <span class="hint-icon">💫</span> マウス旋回で4次元ホップ束回転 • ドラッグで3D回転 • <b>[Space] 神聖波動 • [1] [2] [3] [4]</b>
+            </div>
+            <div class="saint-dashboard">
+                <button id="blessingBtn" class="saint-btn" onclick="triggerBlessing()">🌟 神聖波動 (Pulse)</button>
+                <button id="waddleBtn" class="saint-btn" onclick="triggerWaddle()">🐾 てくてく歩行 (Waddle)</button>
+                <button id="floatBtn" class="saint-btn" onclick="triggerFloat()">🎈 ぷかぷか飛行 (Float)</button>
+                <button id="danceBtn" class="saint-btn" onclick="triggerDance()">🕺 氷晶のダンス (Dance)</button>
+                <button id="track1Btn" class="saint-btn" onclick="playTrack(1)" style="border-color: #38bdf8; color: #38bdf8;">🎮 Track 1: 鐘のキャロル (Game Arr.)</button>
+                <button id="track2Btn" class="saint-btn" onclick="playTrack(2)" style="border-color: #f472b6; color: #f472b6;">🎷 Track 2: Caterpillar (今田勝Jazz)</button>
+                <button id="track3Btn" class="saint-btn" onclick="playTrack(3)" style="border-color: #fbbf24; color: #fbbf24;">🌅 Track 3: 朝日のあたる家 (Thomas Krüger)</button>
+                <button id="track4Btn" class="saint-btn" onclick="playTrack(4)" style="border-color: #ef4444; color: #ef4444;">💿 Track 4: TRON Init (Nine Inch Nails)</button>
+                <button id="dispersionBtn" class="saint-btn active" onclick="toggleDispersion()">🌈 分光モード: ON</button>
+                <button id="soundToggleBtn" class="saint-btn" onclick="toggleSound()" style="border-color: #00ffff; color: #00ffff;">🔊 聖なる天球音楽: ON</button>
+                <button id="densityBtn" class="saint-btn" onclick="cycleDensity()">🪐 繊維環: 18環</button>
+            </div>
+
+            <!-- BTRON Saint Speech Bubble -->
             <div class="saint-speech-bubble" id="saintBubble">
                 <div class="saint-math-badge">✨ 4次元球面 S³ ホップ束 × 3D基本動作 × 音響シム連動原理 ✨</div>
                 <div class="saint-quote-text" id="saintQuoteText">「ボクはリル・キューブ64… 低ポリゴン3D動作と音響シムが1対1に共振する聖なるゲーム主人公だキューブ！🧊✨」</div>
@@ -1133,22 +1152,6 @@
                         </div>
                     </div>
                 </div>
-            </div>
-            <div class="saint-interaction-hint" id="saintHint">
-                <span class="hint-icon">💫</span> マウス旋回で4次元ホップ束回転 • ドラッグで3D回転 • <b>[Space] 神聖波動 • [1] [2] [3] [4]</b>
-            </div>
-            <div class="saint-dashboard">
-                <button id="blessingBtn" class="saint-btn" onclick="triggerBlessing()">🌟 神聖波動 (Pulse)</button>
-                <button id="waddleBtn" class="saint-btn" onclick="triggerWaddle()">🐾 てくてく歩行 (Waddle)</button>
-                <button id="floatBtn" class="saint-btn" onclick="triggerFloat()">🎈 ぷかぷか飛行 (Float)</button>
-                <button id="danceBtn" class="saint-btn" onclick="triggerDance()">🕺 氷晶のダンス (Dance)</button>
-                <button id="track1Btn" class="saint-btn" onclick="playTrack(1)" style="border-color: #38bdf8; color: #38bdf8;">🎮 Track 1: 鐘のキャロル (Game Arr.)</button>
-                <button id="track2Btn" class="saint-btn" onclick="playTrack(2)" style="border-color: #f472b6; color: #f472b6;">🎷 Track 2: Caterpillar (今田勝Jazz)</button>
-                <button id="track3Btn" class="saint-btn" onclick="playTrack(3)" style="border-color: #fbbf24; color: #fbbf24;">🌅 Track 3: 朝日のあたる家 (Thomas Krüger)</button>
-                <button id="track4Btn" class="saint-btn" onclick="playTrack(4)" style="border-color: #ef4444; color: #ef4444;">💿 Track 4: TRON Init (Nine Inch Nails)</button>
-                <button id="dispersionBtn" class="saint-btn active" onclick="toggleDispersion()">🌈 分光モード: ON</button>
-                <button id="soundToggleBtn" class="saint-btn" onclick="toggleSound()" style="border-color: #00ffff; color: #00ffff;">🔊 聖なる天球音楽: ON</button>
-                <button id="densityBtn" class="saint-btn" onclick="cycleDensity()">🪐 繊維環: 18環</button>
             </div>
 
             <!-- BTRON Procedural Synthesizer Architecture & Instrument Statistics -->

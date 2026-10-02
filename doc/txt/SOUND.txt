@@ -1,0 +1,571 @@
+SOUND.txt — BTRON Lil Cube 64 Game Audio-Visual Architecture & Procedural Sound Engine
+=======================================================================================
+
+B-System / BTRON 3.20 & B-Game Engine Specification
+Target: Little Cube 64 (Lil Cube 64 / リル・キューブ64) Canonical First-Party Title
+Hardware Baseline: Raspberry Pi 4B / Pi 400 (BCM2711, Cortex-A72, AArch64) & WebGL / Web Audio
+Status: Active Production Specification & Reference Implementation Guide
+Related Files: index.html, RENDER.txt, GPU.txt, BSDX.txt, ASYNC.txt, fast_blit.h
+
+=======================================================================================
+TABLE OF CONTENTS
+=======================================================================================
+0.  Executive Overview & The Audio-Visual Shim Principle
+1.  Low-Poly 3D Character Models: Geometry, Budgets & Pivot Hierarchy
+2.  Character Animation State Machine & Kinematics
+3.  Sound Shims: Definition, Physics & Procedural DSP Architecture
+4.  Palette of Shim-Based Samples (Extensible Modular Sound Bank)
+5.  Audio DSP Primitives & Signal Flow Graph
+6.  Instruments & MIDI Mapping (Equal Temperament, Polyphony & Velocity)
+7.  Programs (Patches, Tracker Presets & Soundfont Schemas)
+8.  Tracks as Signal Lines, Channels, Microphones & Spatial Sound Sources
+9.  Tracks as Compositions: The Tracker Grid & Mathematical Timing
+10. Character Movement Synchronization with Sound Shims (Phase-Locking)
+11. Level Story Design Synchronization with Musical Dramaturgy
+12. Adaptive Audio & Interactive Gameplay Mechanics
+13. Detailed Level & Composition Architecture for Levels 1 to 4
+    13.1 Level 1: 氷晶雪原の疾走 (Crystalline Snowfield Speedrun) — 鐘のキャロル
+    13.2 Level 2: 夜行バイユーと蛍の沼 (Nocturnal Bayou & Neon Bog) — Green Caterpillar
+    13.3 Level 3: 黎明の天空大聖堂 (Dawn Sky Cathedral) — 朝日のあたる家
+    13.4 Level 4: 電脳要塞コア侵入 (TRON: Ares Cyber-Grid Core) — TRON Init
+14. Future Expansion Guidelines for Creators & Modders
+
+=======================================================================================
+0. EXECUTIVE OVERVIEW & THE AUDIO-VISUAL SHIM PRINCIPLE
+=======================================================================================
+
+In traditional game development, audio and 3D graphics operate as disconnected silos:
+a 3D modeler creates a mesh, an animator crafts keyframes, and an audio designer attaches
+pre-recorded WAV/OGG audio files to animation event tags.
+
+In the BTRON Lil Cube 64 game architecture, we establish a unified paradigm:
+
+                     THE AUDIO-VISUAL SHIM PRINCIPLE
+                     ==============================
+  Every fundamental 3D kinematic action of the character maps 1-to-1 to a
+  deterministic procedural DSP algorithm called a "Sound Shim". These shims
+  require ZERO external sample files (0-byte footprint) and extrapolate into
+  rich acoustic instrument palettes that assemble entire multi-track level stages.
+
+              +------------------------------------------+
+              | 3D Kinematics (Low-Poly Little Cube 64)  |
+              |  - Pulse / Squash (Volumetric Breathing) |
+              |  - Waddle / Walk  (Bipedal Phase Roll)   |
+              |  - Float / Hover  (Anti-Gravity Drift)   |
+              |  - Dance / Spin   (16th Pirouette Steps) |
+              |  - Sing / Climax  (Harmonic Radiance)    |
+              +------------------------------------------+
+                                   |
+                      Phase-Locked Direct Resonance
+                                   v
+              +------------------------------------------+
+              | Procedural Sound Shims (DSP Node Graphs) |
+              |  - shimPulseSquash / shimPulseBell       |
+              |  - shimWaddle (Acoustic Walking Bass)    |
+              |  - shimFloat (Rhodes / Modal Harmonies)  |
+              |  - shimDance (Star/Coin Arpeggio Runs)   |
+              |  - shimDing (Crystalline Ride Chimes)    |
+              +------------------------------------------+
+                                   |
+                     Extrapolated Instrument Banks
+                                   v
+              +------------------------------------------+
+              | Multi-Channel Level Soundtracks (Stages) |
+              |  - Level 1: 鐘のキャロル (168 BPM Vivace) |
+              |  - Level 2: Green Caterpillar (98 BPM)   |
+              |  - Level 3: 朝日のあたる家 (76 BPM 6/8)  |
+              |  - Level 4: TRON Init (132 BPM Cyber)    |
+              +------------------------------------------+
+
+Key Architectural Advantages:
+1. Zero Loading Latency: Instantaneous procedural instantiation at 0 bytes asset size.
+2. Perfect Synchronization: Frame-accurate phase alignment between physics and sound.
+3. Memory Footprint: Fits entirely within strict embedded RAM budgets (sub-100KB code).
+4. Procedural Expressiveness: Dynamic pitch scaling, continuous modulation, and
+   environmental filter morphing without sample stretching or artifacting.
+
+=======================================================================================
+1. LOW-POLY 3D CHARACTER MODELS: GEOMETRY, BUDGETS & PIVOT HIERARCHY
+=======================================================================================
+
+1.1 Canonical Character Profile: Little Cube 64 (リル・キューブ64)
+- Archetype: Sacred crystalline ice-cube mascot of the B-System.
+- Design Concept: A clean, hyper-responsive low-poly entity embodying geometric purity,
+  Nintendo 64 / PlayStation 1 retro aesthetic charm, and 4D Hopf Fibration holiness.
+
+1.2 Geometry & Polygon Budget
+- Total Vertex Count: 64 to 128 vertices.
+- Polycount Target: Under 180 triangles total.
+- Geometry Breakdown:
+  * Torso/Core: Low-poly chamfered box (BoxGeometry or beveled 8-corner polyhedron).
+  * Left & Right Eyes: Low-poly half-ellipsoid or hexagonal prisms with high-contrast
+    celestial pupils.
+  * Left & Right Hands: Floating detached crystalline mittens (detached low-poly cubes).
+  * Left & Right Feet: Elliptical rounded foot pods positioned at y = -1.25.
+  * Sacred Nimbus / Halo: Hopf fibration torus rings (18 fiber rings, wireframe).
+
+1.3 Material & Shading Model
+- Shading: Flat-shading with clear facet boundaries (emphasizing retro 90s console 3D).
+- Color Palette:
+  * Primary Core: Cyan / Ice White (0x80e5ff to 0xffffff) with high specularity.
+  * Accents / Hands / Feet: Celestial Sapphire Blue (0x0284c7 to 0x38bdf8).
+  * Holy Aura: Radiant Gold / Solar Amber (0xfacc15 / 0xfef08a).
+- Vertex Coloring: Ambient occlusion baked into vertex luminance to avoid costly textures.
+
+1.4 Hierarchical Pivot Structure (Scene Graph)
+To achieve non-linear squash, stretch, and bipedal walking without skeletal skinning:
+
+  rootGroup (Global World Transform, XZ translation, Y jump height)
+    │
+    ├── nimbusRings (Rotational Hopf fibration orientation)
+    │
+    └── bodyGroup (Local squash & stretch anchor: anchor at bottom y = -1.25)
+          ├── torsoMesh (Core faceted cube)
+          ├── leftEyeMesh & rightEyeMesh (Eye saccades and blinking)
+          ├── leftHandPivot & rightHandPivot (Wing/hand gesturing)
+          └── feetGroup
+                ├── leftFootPivot (Rotates around ankle pitch/roll)
+                └── rightFootPivot (Rotates around ankle pitch/roll)
+
+=======================================================================================
+2. CHARACTER ANIMATION STATE MACHINE & KINEMATICS
+=======================================================================================
+
+The character kinematics engine operates a finite state machine (FSM) running in the
+main render loop (60 FPS / 16.66ms tick):
+
+2.1 The 7 Canonical Mascot States:
+
+  1. IDLE (待機呼吸)
+     - Kinematics: Gentle sinusoidal breathing.
+       y_pos = y_base + sin(t * 2.2) * 0.05
+       scale_y = 1.0 + sin(t * 2.2) * 0.03
+       scale_xz = 1.0 / sqrt(scale_y)  [Isovolumetric conservation]
+     - Sound Shim: Ambient golden chi drone (`shimPulseBell`).
+
+  2. WADDLE / WALK (てくてく歩行)
+     - Kinematics: Bipedal walking with alternating footfall lift and lateral body roll.
+       walkPhase += delta * walkSpeed
+       leftFoot.rotX = sin(walkPhase) * 0.45
+       rightFoot.rotX = -sin(walkPhase) * 0.45
+       bodyGroup.rotZ = sin(walkPhase) * 0.08
+       bodyGroup.posY = abs(sin(walkPhase * 2)) * 0.12
+     - Sound Shim: `shimWaddle(time, freq, vol)` triggered at phase zero-crossings
+       (alternating Root and Fifth bass notes).
+
+  3. FLOAT (ぷかぷか飛行)
+     - Kinematics: Anti-gravity levitation with aerodynamic pitch tilt and buoyant drift.
+       posY = y_base + 0.8 + sin(t * 1.8) * 0.25
+       rotX = -0.15 + sin(t * 1.8) * 0.05
+       rotZ = sin(t * 0.9) * 0.10
+       feet.rotX = 0.35 (dangling legs in zero-G)
+     - Sound Shim: `shimFloat(time, 'm9', vol)` Rhodes modal rolling chords.
+
+  4. DANCE (氷晶のダンス)
+     - Kinematics: Rhythmic pirouette spinning and alternating 16th-note heel taps.
+       bodyGroup.rotY += 0.12 (Continuous celebratory spin)
+       bodyGroup.posY = abs(sin(t * 8.0)) * 0.28 (Energetic bounce)
+       hands.rotZ = sin(t * 8.0) * 0.65 (Celebratory arm waving)
+     - Sound Shim: `shimDance(time, scale, vol)` rapid 16th-note star arpeggios.
+
+  5. SQUASH / PULSE (神聖波動)
+     - Kinematics: Volumetric compression followed by explosive spring rebound.
+       Phase 0 (0-80ms): scale_y = 0.60, scale_xz = 1.30 (Pre-pulse anticipation)
+       Phase 1 (80-200ms): scale_y = 1.45, scale_xz = 0.82 (High holy elongation)
+       Phase 2 (200-450ms): Damped harmonic oscillation back to (1, 1, 1).
+     - Sound Shim: `shimPulseSquash(time, pitch, vol)` dual-phase PWM square wave pulse.
+
+  6. JUMP & LANDING (跳躍と着地)
+     - Kinematics: Ballistic parabola trajectory with landing squash absorption.
+       On Jump: Anticipation squash -> Apex float -> Fast fall -> Ground impact squash.
+     - Sound Shim: Jump whoosh -> `shimPianoHammer(time)` + `shimKick(time)` on impact.
+
+  7. SING / CLIMAX (天球の熱唱)
+     - Kinematics: Head tilts upward (+25 deg), torso expands, halo glow intensifies.
+     - Sound Shim: `shimPulseSquash` singing lead + `shimSaxFlute` high counterpoint.
+
+=======================================================================================
+3. SOUND SHIMS: DEFINITION, PHYSICS & PROCEDURAL DSP ARCHITECTURE
+=======================================================================================
+
+3.1 Definition of a "Sound Shim"
+A Sound Shim is a self-contained, stateless procedural audio synthesis function written
+in JavaScript using the W3C Web Audio API (or pure C/Assembly in native BTRON kernels).
+Unlike static audio playback (`AudioBufferSourceNode.buffer = loadedWav`), a Sound Shim
+creates and configures active DSP nodes on the fly at exact timestamps ($t = \text{currentTime} + \Delta$).
+
+3.2 Mathematical Formulation of a Sound Shim
+A shim $S(t_0, \mathbf{p})$ takes trigger time $t_0$ and parameter vector $\mathbf{p} = (f, v, d, \dots)$
+and constructs an acoustic signal $y(t)$:
+
+  y(t) = \sum_{k=1}^{K} A_k(t - t_0) \cdot W_k(2\pi f_k (t - t_0) + \phi_k) * H_k(t)
+
+where:
+- $W_k$: Oscillator waveform (sine, triangle, saw, pulse)
+- $A_k$: Non-linear ADSR gain envelope with exponential decay:
+         $A(t) = V_{\text{peak}} \cdot e^{-(t - t_{\text{attack}}) / \tau}$
+- $H_k$: Biquad filter impulse response (formant cavity, body resonance)
+- $*$ denotes time-domain convolution (filtering)
+
+3.3 Memory Lifecycle & Automatic Node Disposal
+Every node created inside a shim registers into a track garbage tracking array:
+`registerTrackOsc(osc)`
+When tracks switch or stop, `stopAllTracks()` invokes:
+1. `osc.stop(0)` on all active oscillators.
+2. `osc.disconnect()` to sever graph connections.
+3. Clears reference arrays, permitting browser V8/JSC GC to recycle node memory.
+This guarantees zero memory leaks across hours of gameplay.
+
+=======================================================================================
+4. PALETTE OF SHIM-BASED SAMPLES (EXTENSIBLE MODULAR SOUND BANK)
+=======================================================================================
+
+The BTRON sound engine contains a 20+ instrument modular sound bank generated purely
+via procedural DSP shims:
+
++--------------------+-----------------------------+------------------------------------+
+| SHIM NAME          | ACOUSTIC / SYNTH ANALOGUE   | SYNTHESIS METHOD / DSP TOPOLOGY    |
++--------------------+-----------------------------+------------------------------------+
+| shimPulseSquash    | Dual-Phase Chiptune Lead    | 2 x Detuned Pulse waves + Chorus   |
+| shimPulseFrog      | Cuíca / Frog Croak          | Bandpass filtered noise rasp + FM  |
+| shimPulseBell      | FM Spiritual Bell           | 2-Op FM Sine (Modulator 2.76x)     |
+| shimWaddle         | Acoustic Walking Bass       | Dual Triangle + Body Lowpass (180) |
+| shimFloat          | Fender Rhodes E-Piano       | Polyphonic additive sine + tines   |
+| shimDance          | Bebop / Chiptune Star Arp   | Rapid 16th sine cascades + decay   |
+| shimDing           | Crystalline High Bell/Ping  | Pure sine high A6/E7 + long decay  |
+| shimKick           | Jazz / Chiptune Bass Drum   | Fast exponential sine pitch-sweep  |
+| shimSnare          | Dual-Component Snare        | Triangle shell (175Hz) + Wire noise|
+| shimHiHat          | Metallic Cymbal Chick       | Highpass filtered noise (7.5kHz)   |
+| shimGuitar         | Gibson L-5 Jazz Hollowbody  | Dual triangle + comb resonance     |
+| shimGrandPiano     | Concert Grand Piano         | Tri-harmonic strings + hammer tap  |
+| shimPianoHammer    | Felt Hammer Impact          | Low triangle click (120Hz -> 40Hz) |
+| shimPedalSwoosh    | Damper Pedal Lift           | Resonant bandpass air friction     |
+| shimPedalBass      | Sforzando Low Sub-Bass      | 27.5Hz (A0) / 55Hz (A1) rumble     |
+| shimSaxFlute       | Breathy Woodwind / Flute    | Triangle lead + bandpass breath    |
+| shimViolin         | Bowed Solo/Section Violin   | Rosin noise burst + dual saw + LFO |
+| shimCello          | Orchestral Bowed/Pizz Cello | Deep lowpass saw + body formants   |
+| shimTimpani        | Concert Kettle Drum         | Membrane pitch glide (1,1) mode    |
+| shimIndustrialBass | Overdriven NIN Cyber Bass   | WaveShaper distortion + dual saw   |
+| shimCyberSynth     | 80s Industrial Brass Lead   | Detuned sawtooth unison + lowpass  |
+| shimSwarmatron     | 8-Voice Ribbon Glissando    | Clustered micro-detuned oscillators|
++--------------------+-----------------------------+------------------------------------+
+
+=======================================================================================
+5. AUDIO DSP PRIMITIVES & SIGNAL FLOW GRAPH
+=======================================================================================
+
+5.1 The BTRON Master Audio Graph
+
+  [Shim Generators]
+  ├── Oscillators (Sine, Tri, Saw, Custom Pulse)
+  ├── Procedural Noise Source (Deterministic 2-sec White Noise Buffer)
+  └── WaveShaper (Chebyshev Non-Linear Saturation Curve)
+        │
+        ▼
+  [Biquad Filters] (Lowpass 24dB, Highpass 12dB, Bandpass Formant Q=3.0-6.0)
+        │
+        ▼
+  [ADSR Envelope VCA] (Linear attack ramp 8ms, Exponential decay curve)
+        │
+        ▼
+  [Channel Bus] (Track 1 / 2 / 3 / 4 Attenuation Stage, e.g., t1Vol = 0.78)
+        │
+        ▼
+  [Master Compressor / Soft Clipper]
+        │
+        ▼
+  [AudioContext.destination] (Physical DAC / Hardware Speakers)
+
+5.2 WaveShaper Non-Linear Saturation Primitive
+To achieve punchy analog warmth without harsh digital clipping:
+```javascript
+function getDistortionCurve(amount = 25) {
+    const k = amount;
+    const n_samples = 44100;
+    const curve = new Float32Array(n_samples);
+    const deg = Math.PI / 180;
+    for (let i = 0; i < n_samples; ++i) {
+        const x = (i * 2) / n_samples - 1;
+        curve[i] = ((3 + k) * x * 20 * deg) / (Math.PI + k * Math.abs(x));
+    }
+    return curve;
+}
+```
+
+=======================================================================================
+6. INSTRUMENTS & MIDI MAPPING (EQUAL TEMPERAMENT, POLYPHONY & VELOCITY)
+=======================================================================================
+
+6.1 Frequency Formula
+All notes follow standard ISO 16 equal temperament (A4 = 440.00 Hz):
+  f(n) = 440.0 \times 2^{(n - 69) / 12}
+where $n$ is the standard MIDI note number (0 to 127).
+
+6.2 Canonical Pitch Reference Matrix (Hz)
+- A0: 27.50 Hz    (Grand Piano Lowest Key)
+- A1: 55.00 Hz    (Deep Sub-Bass Foundation)
+- E2: 82.41 Hz    (Guitar / Cello Low E String)
+- A2: 110.00 Hz   (Upright Bass Root)
+- E3: 164.81 Hz   (Warm Middle Harmony)
+- A3: 220.00 Hz   (Tenor Vocal Range)
+- C4: 261.63 Hz   (Middle C)
+- A4: 440.00 Hz   (Concert Tuning Pitch)
+- E5: 659.25 Hz   (Carol of the Bells / Rising Sun Lead Anchor)
+- G5: 783.99 Hz   (Carol of the Bells Theme Starting Note)
+- A5: 880.00 Hz   (High Soprano Climax)
+- E6: 1318.51 Hz  (High Virtuosic Piano & Violin Cadenza)
+- A6: 1760.00 Hz  (Crystalline Bell Starlight Ping)
+- E7: 2637.02 Hz  (Pure Morning Star Resonance)
+
+6.3 Dynamic Velocity & Gain Staging
+- Piano Pianissimo ($pp$): $v = 0.08 \dots 0.12$
+- Mezzo-Piano ($mp$):       $v = 0.14 \dots 0.18$
+- Mezzo-Forte ($mf$):       $v = 0.20 \dots 0.26$
+- Forte ($f$):              $v = 0.28 \dots 0.36$
+- Fortissimo ($ff$):         $v = 0.38 \dots 0.45$
+
+=======================================================================================
+7. PROGRAMS (PATCHES, TRACKER PRESETS & SOUNDFONT SCHEMAS)
+=======================================================================================
+
+In the BTRON sound architecture, a "Program" is an immutable parameter vector defining
+a virtual instrument. Instead of massive multi-megabyte soundbanks, programs are defined
+in concise declarative schemas:
+
+```json
+{
+  "programId": "PROG_CHIPTUNE_BELL_LEAD",
+  "baseShim": "shimDing",
+  "octaveOffset": 0,
+  "defaultVelocity": 0.24,
+  "decaySeconds": 0.70,
+  "filterType": "bandpass",
+  "filterQ": 4.5,
+  "harmonicDoubling": [
+    { "pitchRatio": 2.0, "volumeRatio": 0.65, "delayMs": 2.0 }
+  ]
+}
+```
+
+This allows game levels to load custom instrument libraries dynamically with zero
+network overhead or asset streaming delay.
+
+=======================================================================================
+8. TRACKS AS SIGNAL LINES, CHANNELS, MICROPHONES & SPATIAL SOUND SOURCES
+=======================================================================================
+
+8.1 Spatial Audio Architecture
+In Lil Cube 64, sound sources exist in 3D coordinate space $(x, y, z)$:
+- Listener: Located at the player camera position $(0, 0.08, 9.2)$ looking at $(0, 0, 0)$.
+- Stereo Panning Law:
+  We implement constant-power panning ($3\text{ dB}$ compromise):
+  $$\text{Gain}_L = \cos\left(\frac{\pi}{4} \cdot (p + 1)\right), \quad
+    \text{Gain}_R = \sin\left(\frac{\pi}{4} \cdot (p + 1)\right)$$
+  where $p \in [-1.0, +1.0]$ is the horizontal pan position.
+
+8.2 Distance Attenuation
+Sound pressure decreases with inverse distance:
+  $$\text{Gain}_{\text{dist}} = \frac{d_{\text{ref}}}{d_{\text{ref}} + \max(0, d - d_{\text{ref}})}$$
+At large distances, a 1-pole lowpass filter cuts high frequencies above 2kHz to simulate
+atmospheric air absorption.
+
+=======================================================================================
+9. TRACKS AS COMPOSITIONS: THE TRACKER GRID & MATHEMATICAL TIMING
+=======================================================================================
+
+9.1 Tracker Timing Equations
+Every track composition is governed by strict beat and subdivision formulas:
+
+  T_{\text{beat}} = \frac{60}{\text{BPM}} \text{ seconds}
+  T_{\text{bar}}  = T_{\text{beat}} \times \text{beatsPerMeasure}
+  T_{\text{8th}}  = \frac{T_{\text{beat}}}{2}
+  T_{\text{16th}} = \frac{T_{\text{beat}}}{4}
+
+9.2 Tracker Channel Matrix
+Each composition is arranged across 6 to 8 parallel procedural voice channels:
+- Channel 1: Bass / Sub Foundation (`shimWaddle`, `shimPedalBass`, `shimIndustrialBass`)
+- Channel 2: Drum / Rhythm Section (`shimKick`, `shimSnare`, `shimHiHat`, `shimDing`)
+- Channel 3: Chordal Harmony / Pad (`shimFloat`, `shimPulseBell`, Rhodes)
+- Channel 4: Primary Lead Melody (`shimPulseSquash`, `shimGrandPiano`, `shimViolin`)
+- Channel 5: Counterpoint / Woodwind (`shimSaxFlute`, `shimGuitar`)
+- Channel 6: Star Arpeggios / FX (`shimDance`, `shimSwarmatron`)
+- Channel 7: High Sparkle / Crystalline Chimes (`shimDing` high octave)
+
+=======================================================================================
+10. CHARACTER MOVEMENT SYNCHRONIZATION WITH SOUND SHIMS (PHASE-LOCKING)
+=======================================================================================
+
+10.1 Phase-Locking Architecture
+The 3D render loop and the Web Audio scheduler share the high-resolution audio clock
+`AudioContext.currentTime`.
+When an animation plays:
+
+1. Bipedal Walk (Waddle):
+   - At `walkPhase = 0` (Left foot impact): Triggers `shimWaddle(time, rootF, vol)`.
+   - At `walkPhase = \pi` (Right foot impact): Triggers `shimWaddle(time, fifthF, vol)`.
+   The character literally walks on the bassline of the music!
+
+2. Floating (Float):
+   - When reaching apex height $y_{\text{max}}$: Triggers `shimFloat(time, chord)` rolling chord.
+   - Particle bubbles emit in Three.js in exact synchrony with the Rhodes tines.
+
+3. Dancing (Dance):
+   - Every 90-degree pirouette rotation triggers a 16th-note `shimDance` arpeggio bead.
+   - The crystalline star sparkles emitting from Lil Cube match each audio ping.
+
+4. Volumetric Pulse (Squash):
+   - On impact compression ($y = 0.60$): Physical felt strike `shimPianoHammer`.
+   - On expansion release ($y = 1.45$): Radiant shockwave `shimPulseSquash` burst.
+
+=======================================================================================
+11. LEVEL STORY DESIGN SYNCHRONIZATION WITH MUSICAL DRAMATURGY
+=======================================================================================
+
+A game level's emotional narrative must strictly match the composition's structural arc:
+
+  [Intro / Awakening]   -> Atmospheric drone, solitary bell, gentle footsteps
+  [Verse 1 / Exposition]-> Main motif introduced, basic platforming mechanics
+  [Verse 2 / Expansion] -> Rhythm section drops, enemy hazards appear on beat
+  [Bridge / Tension]    -> Metric shift, harmonic minor climbing flurry, rising lava
+  [Climax / Fortissimo] -> Tutti orchestration, boss vulnerability phase, speedrun dash
+  [Coda / Resolution]   -> Level exit portal opens, starlight bells fade into silence
+
+=======================================================================================
+12. ADAPTIVE AUDIO & INTERACTIVE GAMEPLAY MECHANICS
+=======================================================================================
+
+12.1 Interactive Quantization Grid
+When the player presses Space (Holy Pulse), clicks, or touches Lil Cube 64:
+- The input event is quantized to the nearest upcoming 16th or 8th note boundary:
+  $$t_{\text{trigger}} = t_{\text{bar\_start}} + \lceil \frac{t_{\text{input}} - t_{\text{bar\_start}}}{T_{\text{16th}}} \rceil \times T_{\text{16th}}$$
+This ensures player interactions NEVER clash with the background music; player actions
+sound like intentional, virtuoso musical improvisations!
+
+12.2 Dynamic Stem Mixing
+- Player at full health: Melody, drums, bass, and harmony play at 100% volume.
+- Player taking damage: Highpass filter closes down to 800Hz, heartbeat kick drum enters.
+- Player collecting Star/Invincible: `shimDance` arpeggio channel un-mutes at $+3\text{ dB}$.
+
+=======================================================================================
+13. DETAILED LEVEL & COMPOSITION ARCHITECTURE FOR LEVELS 1 TO 4
+=======================================================================================
+
+13.1 LEVEL 1: 氷晶雪原の疾走 (Crystalline Snowfield Speedrun)
+-------------------------------------------------------------
+- Stage Theme: 鐘のキャロル (Carol of the Bells / Ukrainian Shchedryk)
+- Musical Parameters:
+  * Tempo: 168 BPM (Vivace, 3/4 Time Signature)
+  * Key: E Minor
+  * Duration: ~25.8 seconds (24 Measures)
+  * Master Level Balance: `t1Vol = 0.78` (Crisp, punchy retro presence)
+- Instrumentation:
+  1. `shimDing`: Iconic 4-note motif (G5 - F#5 - G5 - E5) in crystalline 8-bit bells.
+  2. `shimWaddle`: Bouncy 8-bit walking chiptune bass (E2 - B2 - E3).
+  3. `shimPulseSquash`: High singing chiptune lead (B5 - C6 - B5 - A5 - G5).
+  4. `shimDance`: 16-bit star arpeggios cascading over Em - D - C - B7.
+  5. `shimFloat`: Modal FM chord backing.
+  6. Retro Drum Kit: Snappy kick on beat 1, crisp snare on beats 2 & 3, hi-hat ticks.
+  7. `shimSaxFlute`: Flute counterpoint melody in the virtuoso speedrun section.
+- Gameplay & Level Narrative:
+  Lil Cube 64 awakens on the frozen slopes of Mount BTRON. The bells ring out as the
+  avalanche begins! The player slides along icy rails, jumping across glacial chasms
+  in time with the 3/4 waltz pulse. Collecting snow crystals triggers the 16th-note
+  star arpeggios, culminating in an exhilarating leap through the Winter Shrine portal.
+
+13.2 LEVEL 2: 夜行バイユーと蛍の沼 (Nocturnal Bayou & Neon Bog)
+------------------------------------------------------------
+- Stage Theme: 今田勝 "Green Caterpillar" (1975 Three Blind Mice Jazz-Fusion)
+- Musical Parameters:
+  * Tempo: 98 BPM (Swinging 4/4 Beat)
+  * Key: D Minor Blues
+  * Duration: ~26.0 seconds (10 Measures)
+  * Master Level Balance: `t2Vol = 1.0` (Peak ~0.20-0.22)
+- Instrumentation:
+  1. `shimFloat`: Masaru Imada classic Fender Rhodes electric piano & concert grand.
+  2. `shimWaddle`: Isoo Fukui acoustic upright walking bass.
+  3. `shimGuitar`: Kazumi Watanabe Gibson L-5 clean hollowbody jazz guitar leads.
+  4. Full Jazz Drum Kit: Tetsujiro Obara swinging ride cymbal, rimshot, brush snare.
+  5. `shimPulseFrog`: Yuji Imamura nocturnal frog cuíca rasp & friction croaks.
+  6. `shimSaxFlute`: Breathy nocturnal melodica / woodwind phrases.
+- Gameplay & Level Narrative:
+  A mysterious, glowing marsh under a crescent moon. Lil Cube must navigate sinking
+  lily pads and glowing neon mushrooms. The frog cuíca croak (`shimPulseFrog`) signals
+  when hidden platforms emerge from the misty water. The swinging upright bassline
+  establishes a stealthy, cool groove as the player sneaks past sleeping swamp monsters.
+
+13.3 LEVEL 3: 黎明の天空大聖堂 (Dawn Sky Cathedral)
+-------------------------------------------------
+- Stage Theme: 朝日のあたる家 (The House of the Rising Sun / Thomas Krüger Arr.)
+- Musical Parameters:
+  * Tempo: 76 BPM (Slow 6/8 Meter: 6 eighth-notes per measure, eighth = 0.24s)
+  * Key: A Minor
+  * Duration: ~26.5 seconds (18 Measures)
+  * Master Level Balance: `t3Vol = 1.0` (Peak ~0.22)
+- Instrumentation:
+  1. `shimGrandPiano`: Dual-harmonic acoustic strings + wooden felt hammer attacks.
+  2. `shimPianoHammer`: Physical felt percussion on bass strings.
+  3. `shimPedalSwoosh`: Damper pedal lift resonant air whoosh.
+  4. `shimPedalBass`: Booming sforzando A0 (27.5Hz) / A1 (55Hz) grand piano thunder.
+  5. `shimSaxFlute` & `shimPulseSquash`: Lyrical vocal cantabile overtone carrying the
+     unmistakable Eric Burdon / The Animals vocal melody:
+     "There is a house in New Orleans, they call the Rising Sun..."
+  6. Left-Hand 6/8 Rolling Arpeggio Wave: Am - C - D - F - Am - E - E7.
+  7. High Waterfall Cascade: Dazzling Thomas Krüger octave run (E6 down to G#5).
+  8. `shimDing`: Celestial morning star chimes (A6 1760Hz, E7 2637Hz).
+- Gameplay & Level Narrative:
+  Lil Cube 64 climbs the ruins of a floating gothic sky cathedral as the golden dawn
+  breaks through the stained glass. The undulating 6/8 piano arpeggio wave controls
+  the rise and fall of floating cloud platforms. In Verse 2, when Thomas Krüger's forte
+  piano octaves enter, giant marble bells swing into view. The final waterfall cascade
+  opens the golden portal into the cyber dimension.
+
+13.4 LEVEL 4: 電脳要塞コア侵入 (TRON: Ares Cyber-Grid Core)
+-----------------------------------------------------------
+- Stage Theme: Nine Inch Nails "Init" (TRON: Ares Original Soundtrack, Trent Reznor)
+- Musical Parameters:
+  * Tempo: 132 BPM (Aggressive Industrial 4/4 Beat)
+  * Key: F# Minor
+  * Duration: ~25.8 seconds (14 Measures)
+  * Master Level Balance: `t4Vol = 1.0` (Peak ~0.22)
+- Instrumentation:
+  1. `shimIndustrialBass`: WaveShaper overdriven 16th-note sawtooth bassline.
+  2. `shimCyberSynth`: 80s detuned industrial synth brass leads.
+  3. `shimSwarmatron`: 8-voice ribbon oscillator pitch-bend glissando cluster.
+  4. Industrial Drum Engine: Heavy sub-drop kick + gated metallic clang snare + cyber noise.
+  5. `shimPulseBell`: Dark ambient drone resonance.
+- Gameplay & Level Narrative:
+  The ultimate boss battle stage inside the neon vector cyber-grid. Lil Cube 64 dashes
+  across digital circuits at light-cycle speeds. The pulsing 16th-note industrial bass
+  drives moving laser defense grids. The terrifying Swarmatron glissando signals the
+  Master Control Core charging its screen-clearing particle beam. Defeating the core
+  restores harmony to the 4D Hopf Fibration celestial sphere!
+
+=======================================================================================
+14. FUTURE EXPANSION GUIDELINES FOR CREATORS & MODDERS
+=======================================================================================
+
+To add new tracks or custom game levels to the BTRON sound engine:
+
+1. Step 1: Define Timing Constants
+   Calculate `beat = 60 / BPM`, `bar = beat * beatsPerBar`, `eighth`, `sixteenth`.
+
+2. Step 2: Choose the 3D Kinematic Anchor
+   Decide which mascot state (`walk`, `float`, `dance`, `squash`) drives the level's
+   primary rhythmic identity.
+
+3. Step 3: Write the Tracker Score Function
+   Implement `else if (trackNum === N)` inside `window.playTrack()`.
+   Use the procedural shims (`shimDing`, `shimWaddle`, `shimGrandPiano`, etc.) scheduled
+   at relative bar offsets `bar * n`.
+
+4. Step 4: Register Interactive Choreography
+   Use `scheduleTrackTimeout()` to synchronize mascot state switches with dramatic
+   musical milestones (e.g., switching to 'sing' at fortissimo climaxes).
+
+5. Step 5: Validate Audio Graph Hygiene
+   Ensure all oscillators call `registerTrackOsc()` and all timeouts call
+   `scheduleTrackTimeout()` to maintain 100% garbage collection reliability.
+
+=======================================================================================
+END OF SOUND.txt — BTRON 3.20 SOUND SYSTEM SPECIFICATION
+=======================================================================================

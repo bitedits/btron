@@ -741,6 +741,81 @@
             text-shadow: 0 1px 4px rgba(0, 0, 0, 0.9);
         }
 
+        /* Saint Shim Audio-Visual Principle Bar */
+        .saint-shim-principle {
+            margin-top: 0.85rem;
+            padding-top: 0.75rem;
+            border-top: 1px dashed rgba(250, 204, 21, 0.45);
+            display: flex;
+            flex-direction: column;
+            gap: 0.45rem;
+            text-align: left;
+        }
+        .shim-principle-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 0.5rem;
+        }
+        .shim-principle-badge {
+            font-size: 0.74rem;
+            font-weight: 800;
+            background: linear-gradient(135deg, rgba(234, 179, 8, 0.25), rgba(56, 189, 248, 0.25));
+            border: 1px solid rgba(250, 204, 21, 0.7);
+            color: #fef08a;
+            padding: 2px 10px;
+            border-radius: 6px;
+            letter-spacing: 0.03em;
+        }
+        .shim-spec-link {
+            font-size: 0.72rem;
+            font-weight: 700;
+            color: #38bdf8;
+            text-decoration: none;
+            background: rgba(56, 189, 248, 0.15);
+            border: 1px solid rgba(56, 189, 248, 0.35);
+            padding: 2px 8px;
+            border-radius: 4px;
+            transition: all 0.2s ease;
+        }
+        .shim-spec-link:hover {
+            background: rgba(56, 189, 248, 0.3);
+            border-color: #38bdf8;
+            color: #ffffff;
+        }
+        .shim-principle-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+            gap: 0.5rem;
+            background: rgba(15, 23, 42, 0.6);
+            border: 1px solid rgba(148, 163, 184, 0.2);
+            border-radius: 8px;
+            padding: 0.55rem 0.75rem;
+        }
+        .shim-grid-col {
+            display: flex;
+            flex-direction: column;
+            gap: 0.15rem;
+        }
+        .shim-col-title {
+            font-size: 0.74rem;
+            font-weight: 700;
+            color: #f8fafc;
+        }
+        .shim-col-desc {
+            font-size: 0.72rem;
+            color: #94a3b8;
+            line-height: 1.4;
+        }
+        .shim-col-desc code {
+            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+            background: rgba(56, 189, 248, 0.15);
+            color: #7dd3fc;
+            padding: 1px 4px;
+            border-radius: 3px;
+            font-size: 0.68rem;
+        }
+
         /* Circular Motion Interactive Cue Badge */
         .saint-interaction-hint {
             margin-top: 0.75rem;
@@ -1036,8 +1111,28 @@
                 <div class="saint-pedestal-shadow" id="mascot3dPedestal"></div>
             </div>
             <div class="saint-speech-bubble" id="saintBubble">
-                <div class="saint-math-badge">✨ 4次元球面 S³ ホップ束 (Hopf Fibration) 顕現 ✨</div>
-                <div class="saint-quote-text" id="saintQuoteText">「ボクはリル・キューブ64… 低ポリゴン3Dで動き回る聖なる氷晶だキューブ！🧊✨」</div>
+                <div class="saint-math-badge">✨ 4次元球面 S³ ホップ束 × 3D基本動作 × 音響シム連動原理 ✨</div>
+                <div class="saint-quote-text" id="saintQuoteText">「ボクはリル・キューブ64… 低ポリゴン3D動作と音響シムが1対1に共振する聖なるゲーム主人公だキューブ！🧊✨」</div>
+                <div class="saint-shim-principle" id="saintShimPrinciple">
+                    <div class="shim-principle-header">
+                        <span class="shim-principle-badge">🎮 3D動作 × 音響シム創発原理 (Audio-Visual Shim Principle)</span>
+                        <a href="doc/txt/SOUND.txt" target="_blank" class="shim-spec-link" title="SOUND.txt 技術仕様書を開く">📖 SOUND.txt</a>
+                    </div>
+                    <div class="shim-principle-grid">
+                        <div class="shim-grid-col">
+                            <span class="shim-col-title">🏃‍♂️ 3D Kinematics</span>
+                            <span class="shim-col-desc">Pulse(波動) • Waddle(歩行) • Float(飛行) • Dance(躍動) • Sing(歌唱)</span>
+                        </div>
+                        <div class="shim-grid-col">
+                            <span class="shim-col-title" style="color:#38bdf8;">🔊 Procedural Sound Shims</span>
+                            <span class="shim-col-desc"><code>shimPulseSquash</code> • <code>shimWaddle</code> • <code>shimFloat</code> • <code>shimDance</code> • <code>shimDing</code></span>
+                        </div>
+                        <div class="shim-grid-col">
+                            <span class="shim-col-title" style="color:#fbbf24;">🎼 Extrapolated Track Palette (Stage 1–4)</span>
+                            <span class="shim-col-desc"><b>[1]</b> 鐘のキャロル(168BPM) • <b>[2]</b> 今田勝Jazz(98BPM) • <b>[3]</b> 朝日のあたる家(76BPM 6/8) • <b>[4]</b> TRON Init(132BPM)</span>
+                        </div>
+                    </div>
+                </div>
             </div>
             <div class="saint-interaction-hint" id="saintHint">
                 <span class="hint-icon">💫</span> マウス旋回で4次元ホップ束回転 • ドラッグで3D回転 • <b>[Space] 神聖波動 • [1] [2] [3] [4]</b>
@@ -5343,15 +5438,23 @@ shimDance(1.07, 0.89, 0.12); // D major retro arpeggio run</code></pre>
             if (animState === state && state !== 'poke') return;
             animState = state;
             stateTimer = 0;
+            const q = document.getElementById('saintQuoteText');
             if (state === 'walk') {
                 walkPhase = 0;
+                if (q && !window.currentActiveTrack) q.innerText = '「🐾 [Kinematics: Waddle] てくてく歩行！ 位相0.0/0.5の足踏みが音響シム shimWaddle と共振し、ベースラインへと創発するキューブ！🐾」';
             } else if (state === 'float') {
                 floatTimer = 0;
                 sfxFloatLevitate();
+                if (q && !window.currentActiveTrack) q.innerText = '「🎈 [Kinematics: Float] ぷかぷか浮遊！ 反重力の上昇振動が音響シム shimFloat の和音と連動し、天球を浮遊するキューブ！🎈」';
             } else if (state === 'dance') {
                 danceStep = 0;
                 danceTimer = 0;
                 sfxCrystalCelebration();
+                if (q && !window.currentActiveTrack) q.innerText = '「🕺 [Kinematics: Dance] 氷晶のダンス！ 16分音符のピルエット回転が音響シム shimDance の星屑アルペジオを奏でるキューブ！🕺✨」';
+            } else if (state === 'squash') {
+                if (q && !window.currentActiveTrack) q.innerText = '「🌟 [Kinematics: Squash/Pulse] 神聖波動！ 体積変形パルスが音響シム shimPulseSquash を放射し、生命の波動を解き放つキューブ！⚡️」';
+            } else if (state === 'idle') {
+                if (q && !window.currentActiveTrack) q.innerText = '「ボクはリル・キューブ64… 低ポリゴン3D動作と音響シムが1対1に共振する聖なるゲーム主人公だキューブ！🧊✨」';
             }
         }
         const setKirbyAnimation = setMascotAnimation; // Backward compatibility alias

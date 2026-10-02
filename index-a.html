@@ -877,10 +877,10 @@
                 <div class="saint-quote-text" id="saintQuoteText">「ボクはリル・キューブ64… 低ポリゴン3Dで動き回る聖なる氷晶だキューブ！🧊✨」</div>
             </div>
             <div class="saint-interaction-hint" id="saintHint">
-                <span class="hint-icon">💫</span> マウスを円状に旋回させると4次元ホップ束が回転・ドラッグでキューブを3D回転 (Swirl mouse in circles / drag cube)
+                <span class="hint-icon">💫</span> マウス旋回で4次元ホップ束回転 • ドラッグで3D回転 • <b>[Space / クリック] で『風ノ旅ビト (Journey)』神聖球状波動</b>
             </div>
             <div class="saint-dashboard">
-                <button id="blessingBtn" class="saint-btn" onclick="triggerBlessing()">🌟 神聖祈願 (Sacred Pulse)</button>
+                <button id="blessingBtn" class="saint-btn" onclick="triggerBlessing()">🌟 神聖波動 (Journey Sacred Pulse)</button>
                 <button id="waddleBtn" class="saint-btn" onclick="triggerKirbyWaddle()">🐾 てくてく歩行 (Waddle)</button>
                 <button id="floatBtn" class="saint-btn" onclick="triggerKirbyFloat()">🎈 ぷかぷか飛行 (Float)</button>
                 <button id="danceBtn" class="saint-btn" onclick="triggerKirbyDance()">🕺 勝利のダンス (Dance)</button>
@@ -2026,8 +2026,8 @@
         const quoteText = document.getElementById('saintQuoteText');
         const bubble = document.getElementById('saintBubble');
 
-        let width3d = 320;
-        let height3d = 320;
+        let width3d = 380;
+        let height3d = 460;
 
         let scene3d, camera3d, renderer3d, rootGroup, bodyGroup;
         let mainCube, coreCube, leftEye, rightEye, smileMesh, oMouthMesh;
@@ -2429,9 +2429,9 @@
         // Initialize Three.js Scene Exactly Centered
         if (container3d && canvas3d && typeof THREE !== 'undefined') {
             scene3d = new THREE.Scene();
-            camera3d = new THREE.PerspectiveCamera(36, 1.0, 0.1, 100);
-            camera3d.position.set(0, 0, 7.3);
-            camera3d.lookAt(0, 0, 0);
+            camera3d = new THREE.PerspectiveCamera(38, 380 / 460, 0.1, 100);
+            camera3d.position.set(0, 0.15, 7.8);
+            camera3d.lookAt(0, 0.15, 0);
 
             renderer3d = new THREE.WebGLRenderer({
                 canvas: canvas3d,
@@ -2439,7 +2439,7 @@
                 antialias: true,
                 powerPreference: 'high-performance'
             });
-            renderer3d.setSize(320, 320);
+            renderer3d.setSize(380, 460);
             renderer3d.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 
             // Studio Ambient & Rim Lights
@@ -2481,16 +2481,14 @@
                 }
             });
 
-            // Click / Poke
+            // Click / Poke -> Journey Sacred Pulse
             container3d.addEventListener('click', () => {
                 if (Math.abs(cubeRotVelX) > 0.04 || Math.abs(cubeRotVelY) > 0.04) return;
                 pokeTime = 1.0;
                 sfxLilCubeBoing();
-                if (typeof triggerBlessingBurst === 'function') triggerBlessingBurst();
-                if (animState === 'idle') {
-                    animState = 'poke';
-                    stateTimer = 0;
-                }
+                playJourneyChirp();
+                if (typeof triggerJourneyPulse === 'function') triggerJourneyPulse();
+                setKirbyAnimation('sing');
             });
         }
 
@@ -2504,6 +2502,9 @@
             } else if (state === 'float') {
                 floatTimer = 0;
                 sfxFloatInhale();
+                if (smileMesh) smileMesh.visible = false;
+                if (oMouthMesh) oMouthMesh.visible = true;
+            } else if (state === 'sing') {
                 if (smileMesh) smileMesh.visible = false;
                 if (oMouthMesh) oMouthMesh.visible = true;
             } else if (state === 'dance') {
@@ -2544,11 +2545,11 @@
             width = hopfCanvas.width = hopfCanvas.parentElement.offsetWidth;
             height = hopfCanvas.height = hopfCanvas.parentElement.offsetHeight;
             if (container3d && renderer3d && camera3d) {
-                width3d = 320;
-                height3d = 320;
-                camera3d.aspect = 1.0;
+                width3d = 380;
+                height3d = 460;
+                camera3d.aspect = 380 / 460;
                 camera3d.updateProjectionMatrix();
-                renderer3d.setSize(320, 320);
+                renderer3d.setSize(380, 460);
             }
         });
 
@@ -2606,15 +2607,391 @@
             }
         }
 
-        function triggerBlessingBurst() {
+        // =========================================================================
+        // Journey (PlayStation 3) Sacred Pulse Architecture: Spherical Radiant Wave
+        // =========================================================================
+
+        // 1. Procedural Journey Ancient Sacred Cloth Runes / Glyphs
+        function drawJourneyGlyph(ctx, type, size, alpha) {
+            ctx.save();
+            ctx.lineWidth = 1.8;
+            ctx.strokeStyle = `rgba(255, 245, 200, ${alpha})`;
+            ctx.fillStyle = `rgba(255, 230, 140, ${alpha * 0.85})`;
+            ctx.shadowColor = `rgba(255, 215, 0, ${alpha * 0.9})`;
+            ctx.shadowBlur = 10;
+            const s = size * 0.5;
+
+            ctx.beginPath();
+            switch (type % 8) {
+                case 0: // Diamond inside diamond
+                    ctx.moveTo(0, -s);
+                    ctx.lineTo(s, 0);
+                    ctx.lineTo(0, s);
+                    ctx.lineTo(-s, 0);
+                    ctx.closePath();
+                    ctx.stroke();
+                    ctx.beginPath();
+                    ctx.moveTo(0, -s * 0.45);
+                    ctx.lineTo(s * 0.45, 0);
+                    ctx.lineTo(0, s * 0.45);
+                    ctx.lineTo(-s * 0.45, 0);
+                    ctx.closePath();
+                    ctx.fill();
+                    break;
+                case 1: // Journey Sacred Cloth Gate
+                    ctx.moveTo(0, -s);
+                    ctx.lineTo(0, s);
+                    ctx.moveTo(-s * 0.8, -s * 0.45);
+                    ctx.lineTo(s * 0.8, -s * 0.45);
+                    ctx.moveTo(-s * 0.5, 0);
+                    ctx.lineTo(s * 0.5, 0);
+                    ctx.moveTo(-s * 0.8, s * 0.45);
+                    ctx.lineTo(s * 0.8, s * 0.45);
+                    ctx.stroke();
+                    ctx.fillRect(-s * 0.15, -s * 0.15, s * 0.3, s * 0.3);
+                    break;
+                case 2: // Celestial Triangle with Center Eye
+                    ctx.moveTo(0, -s);
+                    ctx.lineTo(s * 0.86, s * 0.6);
+                    ctx.lineTo(-s * 0.86, s * 0.6);
+                    ctx.closePath();
+                    ctx.stroke();
+                    ctx.beginPath();
+                    ctx.arc(0, s * 0.05, s * 0.22, 0, Math.PI * 2);
+                    ctx.fill();
+                    break;
+                case 3: // Radiant Four-point Star Cross
+                    ctx.moveTo(0, -s);
+                    ctx.lineTo(s * 0.22, -s * 0.22);
+                    ctx.lineTo(s, 0);
+                    ctx.lineTo(s * 0.22, s * 0.22);
+                    ctx.lineTo(0, s);
+                    ctx.lineTo(-s * 0.22, s * 0.22);
+                    ctx.lineTo(-s, 0);
+                    ctx.lineTo(-s * 0.22, -s * 0.22);
+                    ctx.closePath();
+                    ctx.fill();
+                    ctx.stroke();
+                    break;
+                case 4: // Winged Traveler Ascending
+                    ctx.arc(0, s * 0.2, s * 0.7, -Math.PI * 0.85, -Math.PI * 0.15, false);
+                    ctx.stroke();
+                    ctx.beginPath();
+                    ctx.moveTo(0, -s);
+                    ctx.lineTo(s * 0.3, 0);
+                    ctx.lineTo(0, s * 0.6);
+                    ctx.lineTo(-s * 0.3, 0);
+                    ctx.closePath();
+                    ctx.fill();
+                    break;
+                case 5: // Stepped Pyramid Shrine
+                    ctx.moveTo(-s * 0.75, s * 0.6);
+                    ctx.lineTo(-s * 0.75, s * 0.2);
+                    ctx.lineTo(-s * 0.45, s * 0.2);
+                    ctx.lineTo(-s * 0.45, -s * 0.2);
+                    ctx.lineTo(-s * 0.2, -s * 0.2);
+                    ctx.lineTo(-s * 0.2, -s * 0.6);
+                    ctx.lineTo(s * 0.2, -s * 0.6);
+                    ctx.lineTo(s * 0.2, -s * 0.2);
+                    ctx.lineTo(s * 0.45, -s * 0.2);
+                    ctx.lineTo(s * 0.45, s * 0.2);
+                    ctx.lineTo(s * 0.75, s * 0.2);
+                    ctx.lineTo(s * 0.75, s * 0.6);
+                    ctx.closePath();
+                    ctx.stroke();
+                    break;
+                case 6: // Concentric Sun Chime
+                    ctx.arc(0, 0, s * 0.7, 0, Math.PI * 2);
+                    ctx.stroke();
+                    ctx.beginPath();
+                    ctx.arc(0, 0, s * 0.28, 0, Math.PI * 2);
+                    ctx.fill();
+                    for (let a = 0; a < 6; a++) {
+                        const ang = a * Math.PI / 3;
+                        ctx.moveTo(Math.cos(ang) * s * 0.35, Math.sin(ang) * s * 0.35);
+                        ctx.lineTo(Math.cos(ang) * s * 0.65, Math.sin(ang) * s * 0.65);
+                    }
+                    ctx.stroke();
+                    break;
+                case 7: // Interlocking Hopf Ribbon
+                    ctx.arc(-s * 0.32, 0, s * 0.42, 0, Math.PI * 2);
+                    ctx.arc(s * 0.32, 0, s * 0.42, 0, Math.PI * 2);
+                    ctx.stroke();
+                    break;
+            }
+            ctx.restore();
+        }
+
+        // 2. 2D Journey Spherical Radiant Wave on Hopf Canvas
+        const activeJourneyWaves = [];
+        class JourneySphericalWave {
+            constructor(cx, cy) {
+                this.cx = cx;
+                this.cy = cy;
+                this.maxR = Math.max(width, height) * 0.76;
+                this.duration = 2.3;
+                this.time = 0;
+                this.alive = true;
+
+                // 10 floating sacred glyphs positioned radially around wavefront
+                this.glyphs = [];
+                const glyphCount = 10;
+                for (let i = 0; i < glyphCount; i++) {
+                    const baseAngle = (i / glyphCount) * Math.PI * 2 + (Math.random() - 0.5) * 0.25;
+                    this.glyphs.push({
+                        angle: baseAngle,
+                        rot: Math.random() * Math.PI * 2,
+                        rotSpeed: (Math.random() - 0.5) * 1.6,
+                        type: i % 8,
+                        size: 22 + Math.random() * 8,
+                        radOffset: (Math.random() - 0.5) * 22
+                    });
+                }
+
+                // 12 radiant light rays
+                this.rays = [];
+                const rayCount = 12;
+                for (let i = 0; i < rayCount; i++) {
+                    this.rays.push({
+                        angle: (i / rayCount) * Math.PI * 2 + (Math.random() - 0.5) * 0.15,
+                        width: 0.08 + Math.random() * 0.06,
+                        rotSpeed: (Math.random() - 0.5) * 0.45
+                    });
+                }
+            }
+
+            update(dt) {
+                this.time += dt;
+                if (this.time >= this.duration) {
+                    this.alive = false;
+                }
+                for (let i = 0; i < this.glyphs.length; i++) {
+                    this.glyphs[i].rot += this.glyphs[i].rotSpeed * dt;
+                }
+                for (let i = 0; i < this.rays.length; i++) {
+                    this.rays[i].angle += this.rays[i].rotSpeed * dt;
+                }
+            }
+
+            getCurrentRadius() {
+                const progress = Math.min(1.0, this.time / this.duration);
+                const ease = 1 - Math.pow(1 - progress, 3);
+                return 18 + ease * (this.maxR - 18);
+            }
+
+            draw(ctx) {
+                if (!this.alive) return;
+                const progress = this.time / this.duration;
+                const r = this.getCurrentRadius();
+                const globalAlpha = Math.max(0, 1 - Math.pow(progress, 1.8));
+
+                ctx.save();
+
+                // A. Radial Ethereal Light Rays
+                if (progress < 0.65) {
+                    const rayAlpha = Math.max(0, (1 - (progress / 0.65))) * 0.28;
+                    const rayLen = r * 0.96;
+                    ctx.save();
+                    for (let i = 0; i < this.rays.length; i++) {
+                        const ray = this.rays[i];
+                        ctx.beginPath();
+                        ctx.moveTo(this.cx, this.cy);
+                        ctx.arc(this.cx, this.cy, rayLen, ray.angle - ray.width * 0.5, ray.angle + ray.width * 0.5);
+                        ctx.closePath();
+                        const rayGrad = ctx.createRadialGradient(this.cx, this.cy, 0, this.cx, this.cy, rayLen);
+                        rayGrad.addColorStop(0, `rgba(255, 235, 170, ${rayAlpha * 1.5})`);
+                        rayGrad.addColorStop(0.5, `rgba(56, 189, 248, ${rayAlpha * 0.6})`);
+                        rayGrad.addColorStop(1, 'rgba(56, 189, 248, 0)');
+                        ctx.fillStyle = rayGrad;
+                        ctx.fill();
+                    }
+                    ctx.restore();
+                }
+
+                // B. Central Radiant Singing Bloom
+                if (progress < 0.45) {
+                    const bloomProgress = progress / 0.45;
+                    const bloomAlpha = (1 - bloomProgress) * 0.55;
+                    const bloomR = 40 + bloomProgress * 110;
+                    const bGrad = ctx.createRadialGradient(this.cx, this.cy, 0, this.cx, this.cy, bloomR);
+                    bGrad.addColorStop(0, `rgba(255, 255, 240, ${bloomAlpha})`);
+                    bGrad.addColorStop(0.4, `rgba(255, 215, 0, ${bloomAlpha * 0.7})`);
+                    bGrad.addColorStop(0.8, `rgba(56, 189, 248, ${bloomAlpha * 0.3})`);
+                    bGrad.addColorStop(1, 'rgba(56, 189, 248, 0)');
+                    ctx.fillStyle = bGrad;
+                    ctx.beginPath();
+                    ctx.arc(this.cx, this.cy, bloomR, 0, Math.PI * 2);
+                    ctx.fill();
+                }
+
+                // C. Spherical Translucent Dome Veil
+                const domeGrad = ctx.createRadialGradient(this.cx, this.cy, Math.max(0, r - 90), this.cx, this.cy, r);
+                domeGrad.addColorStop(0, 'rgba(255, 215, 0, 0)');
+                domeGrad.addColorStop(0.65, `rgba(56, 189, 248, ${globalAlpha * 0.14})`);
+                domeGrad.addColorStop(0.92, `rgba(255, 230, 130, ${globalAlpha * 0.22})`);
+                domeGrad.addColorStop(1, 'rgba(255, 215, 0, 0)');
+                ctx.fillStyle = domeGrad;
+                ctx.beginPath();
+                ctx.arc(this.cx, this.cy, r, 0, Math.PI * 2);
+                ctx.fill();
+
+                // D. Double Radiant Shockwave Crest (Journey Signature Rim)
+                // Secondary Turquoise Refractive Ring
+                ctx.beginPath();
+                ctx.arc(this.cx, this.cy, Math.max(1, r - 6), 0, Math.PI * 2);
+                ctx.strokeStyle = `rgba(0, 240, 255, ${globalAlpha * 0.85})`;
+                ctx.lineWidth = Math.max(1.5, 4.5 * (1 - progress * 0.6));
+                ctx.shadowColor = 'rgba(0, 255, 255, 0.8)';
+                ctx.shadowBlur = 14;
+                ctx.stroke();
+
+                // Primary Golden Sunlight Crest
+                ctx.beginPath();
+                ctx.arc(this.cx, this.cy, r, 0, Math.PI * 2);
+                ctx.strokeStyle = `rgba(255, 235, 140, ${globalAlpha * 0.95})`;
+                ctx.lineWidth = Math.max(2, 6.0 * (1 - progress * 0.6));
+                ctx.shadowColor = 'rgba(255, 215, 0, 0.95)';
+                ctx.shadowBlur = 22;
+                ctx.stroke();
+
+                // Inner Golden Highlight Ring
+                ctx.beginPath();
+                ctx.arc(this.cx, this.cy, Math.max(1, r - 12), 0, Math.PI * 2);
+                ctx.strokeStyle = `rgba(255, 248, 220, ${globalAlpha * 0.6})`;
+                ctx.lineWidth = Math.max(1, 2.5 * (1 - progress * 0.5));
+                ctx.shadowBlur = 8;
+                ctx.stroke();
+
+                // E. Floating Sacred Journey Glyphs / Ancient Cloth Runes
+                for (let i = 0; i < this.glyphs.length; i++) {
+                    const g = this.glyphs[i];
+                    const gr = r + g.radOffset;
+                    if (gr <= 15) continue;
+                    const gx = this.cx + Math.cos(g.angle) * gr;
+                    const gy = this.cy + Math.sin(g.angle) * gr;
+
+                    ctx.save();
+                    ctx.translate(gx, gy);
+                    ctx.rotate(g.rot);
+                    const glyphAlpha = Math.min(1.0, globalAlpha * 1.3);
+                    drawJourneyGlyph(ctx, g.type, g.size, glyphAlpha);
+                    ctx.restore();
+                }
+
+                ctx.restore();
+            }
+        }
+
+        // 3. 3D Journey Spherical Pulse in Three.js
+        const active3dPulses = [];
+        class JourneyPulse3D {
+            constructor(parentScene) {
+                this.parent = parentScene;
+                this.group = new THREE.Group();
+                this.group.position.set(0, 0.12, 0);
+
+                const icoGeo = new THREE.IcosahedronGeometry(1.0, 1);
+                const icoMat = new THREE.MeshBasicMaterial({
+                    color: 0xffe082,
+                    wireframe: true,
+                    transparent: true,
+                    opacity: 0.85
+                });
+                this.wireMesh = new THREE.Mesh(icoGeo, icoMat);
+                this.group.add(this.wireMesh);
+
+                const sphereGeo = new THREE.SphereGeometry(0.9, 16, 16);
+                const sphereMat = new THREE.MeshBasicMaterial({
+                    color: 0x38bdf8,
+                    transparent: true,
+                    opacity: 0.35,
+                    blending: THREE.AdditiveBlending
+                });
+                this.sphereMesh = new THREE.Mesh(sphereGeo, sphereMat);
+                this.group.add(this.sphereMesh);
+
+                const ringGeo = new THREE.RingGeometry(0.92, 1.02, 24);
+                const ringMat = new THREE.MeshBasicMaterial({
+                    color: 0xffd700,
+                    side: THREE.DoubleSide,
+                    transparent: true,
+                    opacity: 0.9,
+                    blending: THREE.AdditiveBlending
+                });
+                this.ringH = new THREE.Mesh(ringGeo, ringMat);
+                this.ringH.rotation.x = Math.PI / 2;
+                this.group.add(this.ringH);
+
+                const ringV = new THREE.Mesh(ringGeo.clone(), ringMat.clone());
+                this.group.add(ringV);
+                this.ringV = ringV;
+
+                this.parent.add(this.group);
+                this.time = 0;
+                this.duration = 1.35;
+                this.alive = true;
+            }
+
+            update(dt) {
+                this.time += dt;
+                const progress = this.time / this.duration;
+                if (progress >= 1.0) {
+                    this.alive = false;
+                    this.dispose();
+                    return;
+                }
+
+                const easeOut = 1 - Math.pow(1 - progress, 2.5);
+                const currentScale = 0.2 + easeOut * 4.8;
+                this.group.scale.set(currentScale, currentScale, currentScale);
+
+                const alpha = Math.max(0, 1 - Math.pow(progress, 1.6));
+                this.wireMesh.material.opacity = alpha * 0.85;
+                this.sphereMesh.material.opacity = alpha * 0.35;
+                this.ringH.material.opacity = alpha * 0.90;
+                this.ringV.material.opacity = alpha * 0.90;
+
+                this.group.rotation.y += dt * 1.5;
+                this.group.rotation.x += dt * 0.8;
+            }
+
+            dispose() {
+                this.parent.remove(this.group);
+                this.wireMesh.geometry.dispose();
+                this.wireMesh.material.dispose();
+                this.sphereMesh.geometry.dispose();
+                this.sphereMesh.material.dispose();
+                this.ringH.geometry.dispose();
+                this.ringH.material.dispose();
+                this.ringV.geometry.dispose();
+                this.ringV.material.dispose();
+            }
+        }
+
+        // Trigger Journey Sacred Pulse (Both 2D Wave and 3D Pulse)
+        function triggerJourneyPulse() {
             if (!figure || !hopfCanvas) return;
             const rect = figure.getBoundingClientRect();
             const canvasRect = hopfCanvas.getBoundingClientRect();
             const cx = rect.left + rect.width / 2 - canvasRect.left;
             const cy = rect.top + rect.height / 2 - canvasRect.top;
-            for (let i = 0; i < 36; i++) {
+
+            // 1. Spawn 2D Journey Spherical Wave
+            activeJourneyWaves.push(new JourneySphericalWave(cx, cy));
+
+            // 2. Spawn 3D Journey Pulse in Three.js Scene
+            if (scene3d) {
+                active3dPulses.push(new JourneyPulse3D(scene3d));
+            }
+
+            // 3. Emit Sacred Sparkles
+            for (let i = 0; i < 40; i++) {
                 holyParticles.push(new HolySparkle(cx, cy, true));
             }
+        }
+
+        function triggerBlessingBurst() {
+            triggerJourneyPulse();
         }
 
         // Hopf 4D Coordinates & Human Perception Smooth Dynamics
@@ -2742,20 +3119,20 @@
         window.triggerBlessing = function() {
             if (blessingActive) return;
             blessingActive = true;
-            playSacredChord();
-            triggerBlessingBurst();
+            playJourneyChirp(); // PlayStation 3 Journey Singing Chime Harmonic Chord
+            triggerJourneyPulse();
 
             if (rootGroup) {
-                pokeTime = 1.0;
-                sfxLilCubeBoing();
+                setKirbyAnimation('sing');
             }
 
             nextSacredQuote();
-            setTimeout(() => { blessingActive = false; }, 600);
+            setTimeout(() => { blessingActive = false; }, 400);
         };
 
         const sacredQuotes = [
             "「ボクはリル・キューブ64… 低ポリゴン3Dで動き回る聖なる氷晶だキューブ！🧊✨」",
+            "「『風ノ旅ビト (Journey)』の神聖波動… 天球に広がる金と碧の球状波がすべての魂に響き渡るキューブ！🕊️💫」",
             "「ボクの足（Steeps）もかわいいミニキューブ！ ぴょこぴょこ歩いてダンスも踊れるキューブ！🐾」",
             "「4次元球面 S³ のホップ束が、静かに優美に調和の天球を描くキューブ！🌈💫」",
             "「実身と仮身、ハイパーメディアの永遠の連鎖… TRONの調和がここに極まるキューブ！✨」",
@@ -2773,6 +3150,21 @@
                 playCelestialChime(739.99, 0.5, 0.15);
             });
         }
+
+        // Global Keybindings: [Space] or [J] triggers Journey Sacred Pulse!
+        window.addEventListener('keydown', (e) => {
+            if (e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA')) return;
+            if (e.code === 'Space' || e.key === 'j' || e.key === 'J' || e.key === 'p' || e.key === 'P') {
+                e.preventDefault();
+                window.triggerBlessing();
+            } else if (e.key === 'w' || e.key === 'W') {
+                window.triggerKirbyWaddle();
+            } else if (e.key === 'f' || e.key === 'F') {
+                window.triggerKirbyFloat();
+            } else if (e.key === 'd' || e.key === 'D') {
+                window.triggerKirbyDance();
+            }
+        });
 
         // =========================================================================
         // 4. Combined 60 FPS Render Loop (Hopf Canvas + Three.js 3D Character)
@@ -2943,7 +3335,7 @@
                     } else if (floatTimer < 3.8) {
                         bodyGroup.scale.set(1.36, 1.34, 1.36);
                         const hover = Math.sin((floatTimer - 0.4) * 3.0);
-                        rootGroup.position.y = 1.3 + hover * 0.24;
+                        rootGroup.position.y = 1.05 + hover * 0.18;
 
                         if (leftFootPivot) {
                             leftFootPivot.rotation.x = Math.sin(floatTimer * 8.5) * 0.48;
@@ -3012,6 +3404,35 @@
                         setKirbyAnimation('idle');
                     }
 
+                } else if (animState === 'sing') {
+                    // Journey Singing Chime Gesture (PlayStation 3 Exaltation)
+                    const singP = Math.min(1.0, stateTimer / 1.35);
+                    const curve = Math.sin(singP * Math.PI);
+
+                    rootGroup.rotation.x = -curve * 0.28;
+                    rootGroup.position.y = 0.08 + curve * 0.35;
+                    bodyGroup.scale.set(1.0 + curve * 0.16, 1.0 + curve * 0.18, 1.0 + curve * 0.16);
+
+                    if (leftHandPivot) {
+                        leftHandPivot.rotation.z = curve * 1.25;
+                        leftHandPivot.rotation.x = -curve * 0.35;
+                    }
+                    if (rightHandPivot) {
+                        rightHandPivot.rotation.z = -curve * 1.25;
+                        rightHandPivot.rotation.x = -curve * 0.35;
+                    }
+                    if (leftFootPivot) leftFootPivot.position.y = -0.92 + curve * 0.15;
+                    if (rightFootPivot) rightFootPivot.position.y = -0.92 + curve * 0.15;
+
+                    if (coreCube) {
+                        coreCube.rotation.x += dt * 3.5;
+                        coreCube.rotation.y += dt * 5.0;
+                    }
+
+                    if (stateTimer >= 1.35) {
+                        setKirbyAnimation('idle');
+                    }
+
                 } else if (animState === 'poke') {
                     // Jello Squash & Rebound
                     pokeTime -= dt * 1.8;
@@ -3025,6 +3446,15 @@
                     } else {
                         bodyGroup.scale.set(1, 1, 1);
                         setKirbyAnimation('idle');
+                    }
+                }
+
+                // Update 3D Journey pulses
+                for (let i = active3dPulses.length - 1; i >= 0; i--) {
+                    const pulse = active3dPulses[i];
+                    pulse.update(dt);
+                    if (!pulse.alive) {
+                        active3dPulses.splice(i, 1);
                     }
                 }
 
@@ -3153,9 +3583,21 @@
                     const fib = fiberList[f];
                     const pts = fib.pts;
 
-                    // Muted, ethereal alpha curve
-                    const depthAlpha = Math.max(0.10, Math.min(0.50, 0.28 + fib.avgZ * 0.18));
-                    const lineWidth = Math.max(1.3, (1.8 + fib.avgZ * 0.65));
+                    // Wave Resonance with passing Journey Spherical Waves
+                    let waveResonance = 0;
+                    for (let w = 0; w < activeJourneyWaves.length; w++) {
+                        const jWave = activeJourneyWaves[w];
+                        const waveR = jWave.getCurrentRadius();
+                        const midPt = pts[Math.floor(pts.length / 2)];
+                        const d = Math.hypot(midPt.x - jWave.cx, midPt.y - jWave.cy);
+                        if (Math.abs(d - waveR) < 55) {
+                            waveResonance = Math.max(waveResonance, 1 - Math.abs(d - waveR) / 55);
+                        }
+                    }
+
+                    // Muted, ethereal alpha curve with wave resonance boost
+                    const depthAlpha = Math.max(0.10, Math.min(0.85, 0.28 + fib.avgZ * 0.18 + waveResonance * 0.45));
+                    const lineWidth = Math.max(1.3, (1.8 + fib.avgZ * 0.65) + waveResonance * 2.2);
 
                     hopfCtx.beginPath();
                     hopfCtx.moveTo(pts[0].x, pts[0].y);
@@ -3163,21 +3605,38 @@
                         hopfCtx.lineTo(pts[i].x, pts[i].y);
                     }
 
-                    hopfCtx.strokeStyle = `hsla(${fib.hue}, 95%, 68%, ${depthAlpha})`;
+                    if (waveResonance > 0.3) {
+                        hopfCtx.strokeStyle = `rgba(255, 235, 140, ${depthAlpha})`;
+                        hopfCtx.shadowColor = 'rgba(255, 215, 0, 0.85)';
+                        hopfCtx.shadowBlur = 12;
+                    } else {
+                        hopfCtx.strokeStyle = `hsla(${fib.hue}, 95%, 68%, ${depthAlpha})`;
+                        hopfCtx.shadowColor = `hsla(${fib.hue}, 100%, 72%, 0.5)`;
+                        hopfCtx.shadowBlur = dispersionActive ? 5 : 3;
+                    }
+
                     hopfCtx.lineWidth = lineWidth;
-                    hopfCtx.shadowColor = `hsla(${fib.hue}, 100%, 72%, 0.5)`;
-                    hopfCtx.shadowBlur = dispersionActive ? 5 : 3;
                     hopfCtx.globalCompositeOperation = 'source-over';
                     hopfCtx.stroke();
 
-                    if (Math.random() < 0.012) {
+                    if (Math.random() < (0.012 + waveResonance * 0.08)) {
                         const midPt = pts[Math.floor(pts.length / 2)];
-                        if (midPt && holyParticles.length < 30) {
-                            holyParticles.push(new HolySparkle(midPt.x, midPt.y));
+                        if (midPt && holyParticles.length < 45) {
+                            holyParticles.push(new HolySparkle(midPt.x, midPt.y, waveResonance > 0.5));
                         }
                     }
                 }
                 hopfCtx.restore();
+
+                // Draw and Update Journey Spherical Waves on Hopf Canvas
+                for (let i = activeJourneyWaves.length - 1; i >= 0; i--) {
+                    const wave = activeJourneyWaves[i];
+                    wave.update(dt);
+                    wave.draw(hopfCtx);
+                    if (!wave.alive) {
+                        activeJourneyWaves.splice(i, 1);
+                    }
+                }
 
                 // Gentle Background Sparkles
                 if (Math.random() < 0.10 && holyParticles.length < 30) {

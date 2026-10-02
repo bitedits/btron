@@ -883,14 +883,16 @@
                 <div class="saint-quote-text" id="saintQuoteText">「ボクはリル・キューブ64… 低ポリゴン3Dで動き回る聖なる氷晶だキューブ！🧊✨」</div>
             </div>
             <div class="saint-interaction-hint" id="saintHint">
-                <span class="hint-icon">💫</span> マウス旋回で4次元ホップ束回転 • ドラッグで3D回転 • <b>[Space / クリック] 神聖波動 • [S] 8-bit交響詩</b>
+                <span class="hint-icon">💫</span> マウス旋回で4次元ホップ束回転 • ドラッグで3D回転 • <b>[Space] 神聖波動 • [1] Track 1 • [2] Track 2 • [3 / H] Track 3 朝日のあたる家</b>
             </div>
             <div class="saint-dashboard">
                 <button id="blessingBtn" class="saint-btn" onclick="triggerBlessing()">🌟 神聖波動 (Pulse)</button>
                 <button id="waddleBtn" class="saint-btn" onclick="triggerWaddle()">🐾 てくてく歩行 (Waddle)</button>
                 <button id="floatBtn" class="saint-btn" onclick="triggerFloat()">🎈 ぷかぷか飛行 (Float)</button>
                 <button id="danceBtn" class="saint-btn" onclick="triggerDance()">🕺 氷晶のダンス (Dance)</button>
-                <button id="symphonyBtn" class="saint-btn" onclick="playLilCubeSymphony()" style="border-color: #f472b6; color: #f472b6;">🎼 8-bit 交響詩 (Symphony)</button>
+                <button id="track1Btn" class="saint-btn" onclick="playTrack(1)" style="border-color: #38bdf8; color: #38bdf8;">🎼 Track 1: 聖なる交響詩</button>
+                <button id="track2Btn" class="saint-btn" onclick="playTrack(2)" style="border-color: #f472b6; color: #f472b6;">🎷 Track 2: Caterpillar (今田勝Jazz)</button>
+                <button id="track3Btn" class="saint-btn" onclick="playTrack(3)" style="border-color: #fbbf24; color: #fbbf24;">🌅 Track 3: 朝日のあたる家 (Thomas Krüger)</button>
                 <button id="dispersionBtn" class="saint-btn active" onclick="toggleDispersion()">🌈 分光モード: ON</button>
                 <button id="soundToggleBtn" class="saint-btn" onclick="toggleSound()" style="border-color: #00ffff; color: #00ffff;">🔊 聖なる天球音楽: ON</button>
                 <button id="densityBtn" class="saint-btn" onclick="cycleDensity()">🪐 繊維環: 18環</button>
@@ -1892,14 +1894,72 @@
 
         // =========================================================================
         // 8-BIT SHIM SYNTHESIZER ENGINE (5 Modular Acoustic Shims)
-        // 1) Pulse (2 samples: Squash + Bell)
-        // 2) Waddle (1 sample: Step)
-        // 3) Float (Glass-harp Levitation Triad)
-        // 4) Dance (Crystalline Celebration Flourish)
-        // 5) Ding (High Crystal Ping)
+        // 1) Pulse (2 samples: Squash [Chirp] + Bell [Chi Swell])
+        // 2) Waddle (1 sample: Walking Bass / Percussive Step Transient)
+        // 3) Float (Fender Rhodes / Glass-harp Levitation Chords)
+        // 4) Dance (Swinging Jazz-Fusion Melody Runs & Crystalline Cascade)
+        // 5) Ding (Jazz Swing Ride Cymbal & Crisp High Celestial Ping)
         // =========================================================================
 
-        // [SHIM 1A] Pulse - Sample 1: Squash / Chirp (Singing Harmonic Ascending Triad)
+        window._trackOscillators = [];
+        window._trackTimeouts = [];
+        window.currentActiveTrack = 0;
+
+        function registerTrackOsc(osc) {
+            if (window._trackOscillators) {
+                window._trackOscillators.push(osc);
+            }
+        }
+
+        function scheduleTrackTimeout(fn, delayMs) {
+            const tid = setTimeout(fn, delayMs);
+            if (window._trackTimeouts) {
+                window._trackTimeouts.push(tid);
+            }
+            return tid;
+        }
+
+        window.stopAllTracks = function(immediate = true) {
+            if (window._trackTimeouts) {
+                window._trackTimeouts.forEach(t => clearTimeout(t));
+                window._trackTimeouts = [];
+            }
+            if (immediate && window._trackOscillators) {
+                window._trackOscillators.forEach(osc => {
+                    try {
+                        osc.stop();
+                        osc.disconnect();
+                    } catch (e) {}
+                });
+                window._trackOscillators = [];
+            } else if (!immediate) {
+                // Natural track completion: allow already-scheduled reverberations to ring out gracefully to silence
+                window._trackOscillators = [];
+            }
+            const btn1 = document.getElementById('track1Btn');
+            if (btn1) {
+                btn1.classList.remove('active');
+                btn1.innerHTML = '🎼 Track 1: 聖なる交響詩';
+            }
+            const btn2 = document.getElementById('track2Btn');
+            if (btn2) {
+                btn2.classList.remove('active');
+                btn2.innerHTML = '🎷 Track 2: Caterpillar (今田勝Jazz)';
+            }
+            const btn3 = document.getElementById('track3Btn');
+            if (btn3) {
+                btn3.classList.remove('active');
+                btn3.innerHTML = '🌅 Track 3: 朝日のあたる家 (Thomas Krüger)';
+            }
+            const legacyBtn = document.getElementById('symphonyBtn');
+            if (legacyBtn) {
+                legacyBtn.classList.remove('active');
+                legacyBtn.innerHTML = '🎼 8-bit 交響詩 (Symphony)';
+            }
+            window.currentActiveTrack = 0;
+        };
+
+        // [SHIM 1A] Pulse - Sample 1: Squash / Chirp (Singing Harmonic Ascending Triad / Blues Vocal)
         function shimPulseSquash(timeOffset = 0, volMul = 1.0, pitchMul = 1.0) {
             if (!window.soundEnabled) return;
             try {
@@ -1915,6 +1975,7 @@
                 ];
                 freqs.forEach(item => {
                     const osc = c.createOscillator();
+                    registerTrackOsc(osc);
                     const gain = c.createGain();
                     osc.type = 'sine';
                     const targetF = item.f * pitchMul;
@@ -1931,14 +1992,84 @@
             } catch (e) {}
         }
 
-        // [SHIM 1B] Pulse - Sample 2: Bell / Resonant Swell (Golden Chi Celestial Overtone)
+        // [SHIM 1A-Alt] Pulse - Sample 1 (Squash Variant): Acoustic Frog Croak / Cuíca Rasp (蛙の鳴き声)
+        // Firmly detectable by humans: physically models the guttural friction rasp & hollow throat formant
+        // resonance from the opening of Masaru Imada's "Green Caterpillar" (Yuji Imamura percussion).
+        function shimFrogCroak(timeOffset = 0, pitchMul = 1.0, volMul = 1.0, isDouble = true) {
+            if (!window.soundEnabled) return;
+            try {
+                const c = getAudioContext();
+                const startT = c.currentTime + timeOffset;
+
+                const emitSingleCroak = (tOffset, baseF, duration, intensity) => {
+                    const croakStart = startT + tOffset;
+                    const osc1 = c.createOscillator(); // Throat cavity fundamental (sawtooth for rich vocal folds)
+                    const osc2 = c.createOscillator(); // Hollow mouth overtone (triangle)
+                    registerTrackOsc(osc1);
+                    registerTrackOsc(osc2);
+
+                    const gain = c.createGain();
+                    osc1.type = 'sawtooth';
+                    osc2.type = 'triangle';
+
+                    const f1 = baseF * pitchMul;
+                    const f2 = baseF * 2.45 * pitchMul;
+
+                    // Upward guttural pitch scoop ("Ribb-IT" / "Gwaa-RK")
+                    osc1.frequency.setValueAtTime(f1 * 0.88, croakStart);
+                    osc1.frequency.exponentialRampToValueAtTime(f1 * 1.25, croakStart + duration * 0.75);
+                    osc1.frequency.linearRampToValueAtTime(f1 * 0.95, croakStart + duration);
+
+                    osc2.frequency.setValueAtTime(f2 * 0.90, croakStart);
+                    osc2.frequency.exponentialRampToValueAtTime(f2 * 1.20, croakStart + duration * 0.75);
+
+                    // Bandpass throat formant filter (models the acoustic air sac resonance)
+                    const filter = c.createBiquadFilter();
+                    filter.type = 'bandpass';
+                    filter.frequency.setValueAtTime(baseF * 2.2 * pitchMul, croakStart);
+                    filter.Q.setValueAtTime(3.8, croakStart);
+
+                    // AM Tremolo pulse rasp train (generating the rhythmic frog croak clicks at ~32 Hz)
+                    const numPulses = Math.floor(duration / 0.031);
+                    gain.gain.setValueAtTime(0.0001, croakStart);
+                    for (let p = 0; p < numPulses; p++) {
+                        const pT = croakStart + p * 0.031;
+                        const pulseAmp = 0.24 * volMul * intensity * (1 - p * 0.07);
+                        gain.gain.setValueAtTime(pulseAmp * 0.2, pT);
+                        gain.gain.linearRampToValueAtTime(pulseAmp, pT + 0.009);
+                        gain.gain.linearRampToValueAtTime(pulseAmp * 0.15, pT + 0.025);
+                    }
+                    gain.gain.exponentialRampToValueAtTime(0.0001, croakStart + duration + 0.04);
+
+                    osc1.connect(filter);
+                    osc2.connect(filter);
+                    filter.connect(gain);
+                    gain.connect(c.destination);
+
+                    osc1.start(croakStart);
+                    osc2.start(croakStart);
+                    osc1.stop(croakStart + duration + 0.05);
+                    osc2.stop(croakStart + duration + 0.05);
+                };
+
+                // Call-and-response frog croak:
+                // Stroke 1: Guttural rasp ("Gwaaa-rk", 125 Hz, 190ms)
+                emitSingleCroak(0.00, 125, 0.19, 1.0);
+                // Stroke 2 (if double): Short throat gulp ("gwuk!", 155 Hz, 95ms)
+                if (isDouble) {
+                    emitSingleCroak(0.25, 155, 0.095, 0.85);
+                }
+            } catch (e) {}
+        }
+
+        // [SHIM 1B] Pulse - Sample 2: Bell / Resonant Swell (Golden Chi Celestial Overtone / Sub Drone)
         function shimPulseBell(timeOffset = 0, volMul = 1.0, pitchMul = 1.0) {
             if (!window.soundEnabled) return;
             try {
                 const c = getAudioContext();
                 const startT = c.currentTime + timeOffset;
                 const freqs = [
-                    { f: 130.81, v: 0.065, d: 3.5 }, // C3
+                    { f: 130.81, v: 0.065, d: 3.5 }, // C3 / D-pedal base
                     { f: 196.00, v: 0.050, d: 3.2 }, // G3
                     { f: 261.63, v: 0.070, d: 3.4 }, // C4
                     { f: 392.00, v: 0.055, d: 3.0 }, // G4
@@ -1949,6 +2080,7 @@
                 ];
                 freqs.forEach(item => {
                     const osc = c.createOscillator();
+                    registerTrackOsc(osc);
                     const gain = c.createGain();
                     osc.type = 'sine';
                     const targetF = item.f * pitchMul;
@@ -1965,48 +2097,65 @@
             } catch (e) {}
         }
 
-        // [SHIM 2] Waddle - Sample 1: Percussive Crystal Step Transient
-        function shimWaddle(timeOffset = 0, pitch = 430, volMul = 1.0) {
+        // [SHIM 2] Waddle - Sample 1: Percussive Crystal Step Transient / Fukui Walking Bass
+        function shimWaddle(timeOffset = 0, pitch = 430, volMul = 1.0, duration = 0.08) {
             if (!window.soundEnabled) return;
             try {
                 const ctx = getAudioContext();
                 const startT = ctx.currentTime + timeOffset;
                 const osc = ctx.createOscillator();
+                registerTrackOsc(osc);
                 const gain = ctx.createGain();
                 osc.type = 'triangle';
                 osc.frequency.setValueAtTime(pitch, startT);
-                osc.frequency.exponentialRampToValueAtTime(pitch * 0.72, startT + 0.05);
-                gain.gain.setValueAtTime(0.07 * volMul, startT);
-                gain.gain.exponentialRampToValueAtTime(0.001, startT + 0.05);
+                osc.frequency.exponentialRampToValueAtTime(pitch * 0.82, startT + duration);
+                gain.gain.setValueAtTime(0.12 * volMul, startT);
+                gain.gain.exponentialRampToValueAtTime(0.001, startT + duration);
                 osc.connect(gain);
                 gain.connect(ctx.destination);
                 osc.start(startT);
-                osc.stop(startT + 0.05);
+                osc.stop(startT + duration);
             } catch (e) {}
         }
 
-        // [SHIM 3] Float: Ethereal Levitation Glass Harp Arpeggio
-        function shimFloat(timeOffset = 0, baseFreq = 523.25, volMul = 1.0) {
+        // [SHIM 3] Float: Ethereal Levitation Glass Harp / Imada Fender Rhodes Modal Chords / Kruger Rolling Arpeggios
+        function shimFloat(timeOffset = 0, baseFreq = 523.25, volMul = 1.0, chordNotes = null, stagger = 0.035, noteDuration = 0.65) {
             if (!window.soundEnabled) return;
             try {
                 const c = getAudioContext();
                 const startT = c.currentTime + timeOffset;
                 const ratio = baseFreq / 523.25;
-                const notes = [
-                    { f: 523.25 * ratio, v: 0.12, d: 0.55 },
-                    { f: 659.25 * ratio, v: 0.10, d: 0.50 },
-                    { f: 783.99 * ratio, v: 0.11, d: 0.65 },
-                    { f: 1046.50 * ratio, v: 0.08, d: 0.75 }
+                const notes = chordNotes ? chordNotes.map((item, idx) => {
+                    if (typeof item === 'object' && item !== null) {
+                        return {
+                            f: item.f,
+                            v: (item.v !== undefined ? item.v : 0.11) * volMul,
+                            d: item.d !== undefined ? item.d : noteDuration,
+                            t: item.t !== undefined ? item.t : idx * stagger
+                        };
+                    }
+                    return {
+                        f: item,
+                        v: 0.11 * volMul,
+                        d: noteDuration,
+                        t: idx * stagger
+                    };
+                }) : [
+                    { f: 523.25 * ratio, v: 0.12 * volMul, d: 0.55, t: 0 },
+                    { f: 659.25 * ratio, v: 0.10 * volMul, d: 0.50, t: 0.06 },
+                    { f: 783.99 * ratio, v: 0.11 * volMul, d: 0.65, t: 0.12 },
+                    { f: 1046.50 * ratio, v: 0.08 * volMul, d: 0.75, t: 0.18 }
                 ];
-                notes.forEach((n, idx) => {
+                notes.forEach((n) => {
                     const osc = c.createOscillator();
+                    registerTrackOsc(osc);
                     const gain = c.createGain();
-                    const noteT = startT + idx * 0.06;
+                    const noteT = startT + n.t;
                     osc.type = 'sine';
                     osc.frequency.setValueAtTime(n.f * 0.985, noteT);
                     osc.frequency.exponentialRampToValueAtTime(n.f, noteT + 0.04);
                     gain.gain.setValueAtTime(0.0001, noteT);
-                    gain.gain.linearRampToValueAtTime(n.v * volMul, noteT + 0.03);
+                    gain.gain.linearRampToValueAtTime(n.v, noteT + 0.03);
                     gain.gain.exponentialRampToValueAtTime(0.0001, noteT + n.d);
                     osc.connect(gain);
                     gain.connect(c.destination);
@@ -2016,27 +2165,28 @@
             } catch (e) {}
         }
 
-        // [SHIM 4] Dance: Sparkling Crystalline Celebration Cascade (D-Major / A-Mixolydian)
-        function shimDance(timeOffset = 0, pitchScale = 1.0, volMul = 1.0) {
+        // [SHIM 4] Dance: Sparkling Crystalline Cascade / Masaru Imada Caterpillar Blues Runs
+        function shimDance(timeOffset = 0, pitchScale = 1.0, volMul = 1.0, phraseNotes = null) {
             if (!window.soundEnabled) return;
             try {
                 const c = getAudioContext();
                 const startT = c.currentTime + timeOffset;
-                const notes = [
-                    { f: 587.33 * pitchScale, d: 0.20, v: 0.16, t: 0 },
-                    { f: 739.99 * pitchScale, d: 0.22, v: 0.15, t: 0.085 },
-                    { f: 880.00 * pitchScale, d: 0.25, v: 0.16, t: 0.170 },
-                    { f: 1174.66 * pitchScale, d: 0.32, v: 0.18, t: 0.255 },
-                    { f: 1479.98 * pitchScale, d: 0.45, v: 0.12, t: 0.370 }
+                const notes = phraseNotes ? phraseNotes : [
+                    { f: 587.33 * pitchScale, d: 0.20, v: 0.16 * volMul, t: 0 },
+                    { f: 739.99 * pitchScale, d: 0.22, v: 0.15 * volMul, t: 0.085 },
+                    { f: 880.00 * pitchScale, d: 0.25, v: 0.16 * volMul, t: 0.170 },
+                    { f: 1174.66 * pitchScale, d: 0.32, v: 0.18 * volMul, t: 0.255 },
+                    { f: 1479.98 * pitchScale, d: 0.45, v: 0.12 * volMul, t: 0.370 }
                 ];
                 notes.forEach(n => {
                     const osc = c.createOscillator();
+                    registerTrackOsc(osc);
                     const gain = c.createGain();
                     const noteT = startT + n.t;
                     osc.type = 'sine';
                     osc.frequency.setValueAtTime(n.f, noteT);
                     gain.gain.setValueAtTime(0.0001, noteT);
-                    gain.gain.linearRampToValueAtTime(n.v * volMul, noteT + 0.02);
+                    gain.gain.linearRampToValueAtTime(n.v * (n.volMul || 1.0), noteT + 0.02);
                     gain.gain.exponentialRampToValueAtTime(0.0001, noteT + n.d);
                     osc.connect(gain);
                     gain.connect(c.destination);
@@ -2046,23 +2196,24 @@
             } catch (e) {}
         }
 
-        // [SHIM 5] Ding (Click): High Crystal Chime Ping
-        function shimDing(timeOffset = 0, freq = 1760.0, volMul = 1.0) {
+        // [SHIM 5] Ding (Click): High Crystal Chime / Tetsujiro Obara Swing Ride Cymbal & Hi-Hat
+        function shimDing(timeOffset = 0, freq = 1760.0, volMul = 1.0, decay = 0.70) {
             if (!window.soundEnabled) return;
             try {
                 const c = getAudioContext();
                 const startT = c.currentTime + timeOffset;
                 const osc = c.createOscillator();
+                registerTrackOsc(osc);
                 const gain = c.createGain();
                 osc.type = 'sine';
                 osc.frequency.setValueAtTime(freq, startT);
                 gain.gain.setValueAtTime(0.0001, startT);
-                gain.gain.linearRampToValueAtTime(0.15 * volMul, startT + 0.015);
-                gain.gain.exponentialRampToValueAtTime(0.0001, startT + 0.70);
+                gain.gain.linearRampToValueAtTime(0.15 * volMul, startT + 0.012);
+                gain.gain.exponentialRampToValueAtTime(0.0001, startT + decay);
                 osc.connect(gain);
                 gain.connect(c.destination);
                 osc.start(startT);
-                osc.stop(startT + 0.70);
+                osc.stop(startT + decay);
             } catch (e) {}
         }
 
@@ -2078,6 +2229,7 @@
             try {
                 const ctx = getAudioContext();
                 const osc = ctx.createOscillator();
+                registerTrackOsc(osc);
                 const gain = ctx.createGain();
                 osc.type = type;
                 osc.frequency.setValueAtTime(freq, ctx.currentTime);
@@ -2095,6 +2247,7 @@
             try {
                 const ctx = getAudioContext();
                 const osc = ctx.createOscillator();
+                registerTrackOsc(osc);
                 const gain = ctx.createGain();
                 osc.type = 'triangle';
                 osc.frequency.setValueAtTime(523.25, ctx.currentTime);
@@ -2110,121 +2263,764 @@
         }
 
         /* =========================================================================
-         * BTRON LIL CUBE 64 — 8-BIT SYMPHONY SYNTHESIZER PROGRAM (TRACKER SCORE)
+         * BTRON LIL CUBE 64 — 8-BIT SHIM SYNTHESIZER PROGRAM (TRACKER SCORE)
          * =========================================================================
-         * 
-         * [SHIM INVENTORY]
-         *   1A) Pulse Squash  : Dual-phase singing traveler triad (C4, C5, E5, G5, C6)
-         *   1B) Pulse Bell    : Golden Chi spiritual ambient swell (C3, G3, C4, G4, C5)
-         *   2)  Waddle        : Crystal step impulse (triangle click 420-587 Hz)
-         *   3)  Float         : Glass-harp buoyant levitation arpeggio (C5, E5, G5, C6)
-         *   4)  Dance         : Luminous 5-note crystalline celebration motif (D5-F#6)
-         *   5)  Ding (Click)  : Pure high celestial bell ping (1760 Hz / 2093 Hz)
-         * 
-         * [TRACKER SCORE PROGRAM]
-         * +------+-------+-------------------+-----------------------------------+
-         * | BAR  | TIME  | SHIM SAMPLE       | SCORE EVENT / MUSICAL FUNCTION    |
-         * +------+-------+-------------------+-----------------------------------+
-         * | B01  | 0.00s | SHIM_DING         | A6 (1760Hz) Awaking celestial bell|
-         * | B02  | 0.50s | SHIM_WADDLE       | 420Hz Footstep L (March tempo)    |
-         * |      | 0.72s | SHIM_WADDLE       | 450Hz Footstep R                  |
-         * |      | 0.95s | SHIM_WADDLE       | 420Hz Footstep L                  |
-         * |      | 1.18s | SHIM_WADDLE       | 480Hz Footstep R (Cadence accent) |
-         * | B03  | 1.45s | SHIM_FLOAT        | C5 Glass-harp levitation arpeggio |
-         * |      | 1.75s | SHIM_WADDLE       | 440Hz Flutter kick in mid-air     |
-         * |      | 2.05s | SHIM_DING         | E6 (1318Hz) Zenith sparkle        |
-         * | B04  | 2.40s | SHIM_PULSE_SQUASH | Mild singing traveler chord       |
-         * | B05  | 3.40s | SHIM_PULSE_BELL   | Deep golden Chi resonance swell   |
-         * | B06  | 4.60s | SHIM_WADDLE       | 440Hz Step (Syncopated buildup)   |
-         * |      | 4.80s | SHIM_WADDLE       | 480Hz Step                        |
-         * |      | 5.00s | SHIM_WADDLE       | 523Hz Step                        |
-         * |      | 5.15s | SHIM_WADDLE       | 587Hz Step (Cadenza crescendo)    |
-         * | B07  | 5.30s | SHIM_DANCE        | D-Major crystal celebration arpeggio
-         * |      | 5.75s | SHIM_DING         | D6 (1174Hz) Flourish accent       |
-         * | B08  | 6.50s | SHIM_FLOAT        | D5 High glass-harp counterpoint   |
-         * |      | 6.85s | SHIM_PULSE_SQUASH | Modulated pulse chirp in D-major  |
-         * | B09  | 7.50s | SHIM_DANCE        | Fortissimo grand celebratory arpeggio
-         * |      | 7.80s | SHIM_PULSE_BELL   | Deep golden Chi pedal foundation  |
-         * |      | 8.50s | SHIM_DING         | A6 (1760Hz) Pure crystal chime    |
-         * |      | 8.85s | SHIM_DING         | C7 (2093Hz) Final star resolution |
-         * +------+-------+-------------------+-----------------------------------+
+         *
+         * [SHIM INVENTORY - 5 MODULAR ACOUSTIC INSTRUMENTS]
+         *   1A) Pulse Squash  : Dual-phase singing traveler triad / vocal melody lead
+         *       Pulse Frog    : Acoustic frog croak / cuíca friction rasp (蛙の鳴き声)
+         *   1B) Pulse Bell    : Golden Chi spiritual ambient swell / sub-harmonic pedal
+         *   2)  Waddle        : Isoo Fukui acoustic walking upright bass / percussive step
+         *   3)  Float         : Masaru Imada Fender Rhodes modal chords / glass-harp levitation
+         *   4)  Dance         : Sparkling bebop runs, blues licks & crystalline celebration
+         *   5)  Ding (Click)  : Tetsujiro Obara jazz swing ride cymbal & high crystal ping
+         *
+         * -------------------------------------------------------------------------
+         * [TRACK 1: 聖なる交響詩 (SACRED SYMPHONY - EXTENDED TRANSCENDENT CODA)]
+         * +------+--------+-------------------+-----------------------------------+
+         * | BAR  | TIME   | SHIM SAMPLE       | SCORE EVENT / MUSICAL FUNCTION    |
+         * +------+--------+-------------------+-----------------------------------+
+         * | B01  | 0.00s  | SHIM_DING         | A6 (1760Hz) Awaking celestial bell|
+         * | B02  | 0.50s  | SHIM_WADDLE       | 420Hz Footstep L (March tempo)    |
+         * |      | 0.72s  | SHIM_WADDLE       | 450Hz Footstep R                  |
+         * |      | 0.95s  | SHIM_WADDLE       | 420Hz Footstep L                  |
+         * |      | 1.18s  | SHIM_WADDLE       | 480Hz Footstep R (Cadence accent) |
+         * | B03  | 1.45s  | SHIM_FLOAT        | C5 Glass-harp levitation arpeggio |
+         * |      | 1.75s  | SHIM_WADDLE       | 440Hz Flutter kick in mid-air     |
+         * |      | 2.05s  | SHIM_DING         | E6 (1318Hz) Zenith sparkle        |
+         * | B04  | 2.40s  | SHIM_PULSE_SQUASH | Mild singing traveler chord       |
+         * | B05  | 3.40s  | SHIM_PULSE_BELL   | Deep golden Chi resonance swell   |
+         * | B06  | 4.60s  | SHIM_WADDLE       | 440Hz Step (Syncopated buildup)   |
+         * |      | 4.80s  | SHIM_WADDLE       | 480Hz Step                        |
+         * |      | 5.00s  | SHIM_WADDLE       | 523Hz Step                        |
+         * |      | 5.15s  | SHIM_WADDLE       | 587Hz Step (Cadenza crescendo)    |
+         * | B07  | 5.30s  | SHIM_DANCE        | D-Major crystal celebration arpeggio
+         * |      | 5.75s  | SHIM_DING         | D6 (1174Hz) Flourish accent       |
+         * | B08  | 6.50s  | SHIM_FLOAT        | D5 High glass-harp counterpoint   |
+         * |      | 6.85s  | SHIM_PULSE_SQUASH | Modulated pulse chirp in D-major  |
+         * | B09  | 7.50s  | SHIM_DANCE        | Fortissimo grand celebratory arpeggio
+         * |      | 7.80s  | SHIM_PULSE_BELL   | Deep golden Chi pedal foundation  |
+         * |      | 8.50s  | SHIM_DING         | A6 (1760Hz) Pure crystal chime    |
+         * |      | 8.85s  | SHIM_DING         | C7 (2093Hz) Star resolution       |
+         * | B10  | 9.25s  | SHIM_FLOAT        | C5 Glass-harp peaceful resolution |
+         * | Coda | 9.60s  | SHIM_PULSE_SQUASH | Transcendent harmonic glow fade   |
+         * | Outro| 10.10s | SHIM_DING         | E7 (2637Hz) Final starlight ping  |
+         * +------+--------+-------------------+-----------------------------------+
+         *
+         * -------------------------------------------------------------------------
+         * [TRACK 2: 今田勝 "GREEN CATERPILLAR" (1975 THREE BLIND MICE TBM-39)]
+         * Tempo: 98 BPM Swing Funk-Jazz (1 Beat = ~0.612s, 1 Bar = 2.449s)
+         * Mode: D Dorian / D Minor Blues (D-F-G-G#-A-C-D) — Extended Masterpiece
+         * +------+--------+-------------------+-----------------------------------+
+         * | BAR  | TIME   | SHIM SAMPLE       | SCORE EVENT / MUSICAL FUNCTION    |
+         * +------+--------+-------------------+-----------------------------------+
+         * | M00  | 0.00s  | SHIM_PULSE_BELL   | D2 Sub-Drone Marsh Mist Resonance |
+         * | Frog | 0.15s  | SHIM_FROG_CROAK   | "Gwaaa-rk... gwuk!" (125Hz Bullfrog)
+         * | Intro| 0.95s  | SHIM_FROG_CROAK   | "Gwaaa-rk... gwuk!" (115Hz Answer)|
+         * | Call | 1.70s  | SHIM_DING         | 2640Hz Awaking Ride Cymbal Ping   |
+         * |      | 1.90s  | SHIM_FROG_CROAK   | "Gwuk!" (150Hz Single Throat Pop) |
+         * +------+--------+-------------------+-----------------------------------+
+         * | M01  | 2.45s  | SHIM_DING         | 1760Hz Beat 1 Jazz Ride Cymbal    |
+         * | Bass | 2.45s  | SHIM_WADDLE       | D3 (146.8Hz) Isoo Fukui Bass Root |
+         * | Crawl| 3.06s  | SHIM_DING+WADDLE  | Beat 2: Ride + F3 (174.6Hz) Min3rd|
+         * |      | 3.37s  | SHIM_DING+WADDLE  | Beat 2-and: Swing + G3 (196.0Hz)  |
+         * |      | 3.67s  | SHIM_DING+WADDLE  | Beat 3: Ride + G#3 (207.6Hz) Blue |
+         * |      | 3.98s  | SHIM_WADDLE       | Beat 3-and: A3 (220.0Hz) Dominant |
+         * |      | 4.28s  | SHIM_FROG_CROAK   | Syncopated Cuíca Frog Rasp Accent |
+         * |      | 4.28s  | SHIM_DING+WADDLE  | Beat 4: Ride + C4 (261.6Hz) Min7th|
+         * |      | 4.59s  | SHIM_DING+WADDLE  | Beat 4-and: Swing + D4 (293.7Hz)  |
+         * +------+--------+-------------------+-----------------------------------+
+         * | M02  | 4.90s  | SHIM_DING+WADDLE  | Bar 2 Bass Walk C4->A3->G3->F3    |
+         * | Rhodes|5.21s  | SHIM_FLOAT        | Dm9 Modal Chord Stab (F-A-C-E)    |
+         * | Comp | 6.12s  | SHIM_FLOAT        | G13 Syncopated Chop (F-B-E-A)     |
+         * |      | 7.04s  | SHIM_FLOAT        | Ebmaj7#11 Passing Chop (G-Bb-D-F#)|
+         * |      | 7.04s  | SHIM_FROG_CROAK   | Answer Frog Croak on Turnaround   |
+         * +------+--------+-------------------+-----------------------------------+
+         * | M03  | 7.35s  | SHIM_PULSE_SQUASH | Masaru Imada Blues Theme Enters   |
+         * | Theme| 7.66s  | SHIM_WADDLE       | Walking bass counter-groove       |
+         * | Head | 7.96s  | SHIM_DANCE        | D5->F5->G5->G#5 Blues Bend Motif  |
+         * |      | 8.57s  | SHIM_DANCE+FLOAT  | Descending Blues Crawl + Dm9 Chop |
+         * |      | 9.49s  | SHIM_DING         | D6 (1174Hz) Head Accent           |
+         * +------+--------+-------------------+-----------------------------------+
+         * | M04  | 9.80s  | SHIM_FLOAT        | Dm9 Arpeggiated Rhodes Chop       |
+         * | Solo | 10.41s | SHIM_DANCE        | Kazumi Watanabe Fast Bebop Run    |
+         * | Chops| 11.02s | SHIM_FLOAT        | G13 Response Chord                |
+         * |      | 11.63s | SHIM_FLOAT        | Eb9 Chromatic Step Down           |
+         * |      | 11.94s | SHIM_DING         | Starlight 2640Hz Bell Ping        |
+         * +------+--------+-------------------+-----------------------------------+
+         * | M05  | 12.25s | SHIM_PULSE_BELL   | Golden Chi Warm Drone in G        |
+         * | Double|12.56s | SHIM_WADDLE       | Fast Syncopated Ascending Walking |
+         * | Funk | 13.17s | SHIM_FLOAT        | High Dm9 Harmonic Cluster         |
+         * |      | 13.78s | SHIM_DANCE        | Ascending Blues Pentatonic Solo   |
+         * |      | 14.40s | SHIM_DING+WADDLE  | Dynamic Triplet Roll Buildup      |
+         * +------+--------+-------------------+-----------------------------------+
+         * | M06  | 14.70s | SHIM_PULSE_SQUASH | Full Unison Octave Hit D4/D5      |
+         * | Unison|15.01s | SHIM_DANCE+WADDLE | Unison F4/F5 -> G4/G5             |
+         * | Climax|15.47s | SHIM_DANCE+WADDLE | Chromatic Blue Note G#4/G#5 Peak  |
+         * |      | 15.62s | SHIM_DING         | Fortissimo A4/A5 Unison Hit       |
+         * |      | 15.93s | SHIM_DANCE        | High Octave Leap C5 -> D5         |
+         * |      | 16.23s | SHIM_DANCE+WADDLE | Unison Descending Blues Crawl     |
+         * |      | 16.85s | SHIM_DING         | Grand Crash Bell A6+D7 (1760+2349)|
+         * +------+--------+-------------------+-----------------------------------+
+         * | M07  | 17.15s | SHIM_WADDLE       | Coda Turnaround D3->C3->Bb2->A2   |
+         * | TBM  | 17.45s | SHIM_FLOAT        | Dm9 Turnaround Chord Stab         |
+         * | Vamp | 18.06s | SHIM_FLOAT        | Cmaj7 Descending Modal Color      |
+         * |      | 18.68s | SHIM_FLOAT        | Bbmaj7 Soulful Substitution       |
+         * |      | 19.29s | SHIM_FLOAT        | A7#9 Quintessential Jazz Turn     |
+         * +------+--------+-------------------+-----------------------------------+
+         * | M08  | 19.60s | SHIM_WADDLE+BELL  | Deep D2 Pedal Foundation (73.4Hz) |
+         * | Song | 19.90s | SHIM_DANCE        | Sweet Melodic Blues Motif Whisper |
+         * | Outro| 20.80s | SHIM_FROG_CROAK   | Distant Frog Farewell "Gwaa-rk!"  |
+         * |      | 21.40s | SHIM_DING         | Soft Ride Cymbal Choke Ping       |
+         * +------+--------+-------------------+-----------------------------------+
+         * | M09  | 22.05s | SHIM_FLOAT        | Grand Dm11(add9) Sustained Chord  |
+         * | Grand| 22.40s | SHIM_PULSE_BELL   | Deep Chi Sub-Harmonic Glow        |
+         * | Finale22.90s  | SHIM_PULSE_SQUASH | Mild Singing Traveler Harmonic    |
+         * |      | 23.30s | SHIM_DING         | A6 (1760Hz) Resonant Chime        |
+         * |      | 24.10s | SHIM_DING         | D7 (2349Hz) Pure Celestial Star   |
+         * +------+--------+-------------------+-----------------------------------+
          * =========================================================================
          */
 
-        let symphonyActive = false;
-        window.playLilCubeSymphony = function() {
-            if (symphonyActive) return;
-            symphonyActive = true;
+        window.playTrack = function(trackNum) {
             unlockAudio();
-
-            const btn = document.getElementById('symphonyBtn');
-            if (btn) {
-                btn.classList.add('active');
-                btn.innerHTML = '🎼 演奏中 (Playing)...';
+            if (window.currentActiveTrack === trackNum) {
+                // Clicking active track toggles it off
+                window.stopAllTracks(true);
+                return;
             }
 
-            // BAR 01: Awakening Ding
-            shimDing(0.00, 1760.0, 0.16);
+            // Stop any playing track cleanly
+            window.stopAllTracks(true);
+            window.currentActiveTrack = trackNum;
 
-            // BAR 02: Waddle Scherzando March
-            shimWaddle(0.50, 420, 0.10);
-            shimWaddle(0.72, 450, 0.10);
-            shimWaddle(0.95, 420, 0.10);
-            shimWaddle(1.18, 480, 0.12);
-
-            // BAR 03: Float Levitation & Mid-air Sparkle
-            shimFloat(1.45, 523.25, 0.13);
-            shimWaddle(1.75, 440, 0.07);
-            shimDing(2.05, 1318.5, 0.10);
-
-            // BAR 04: Sacred Pulse Squash Wave
-            shimPulseSquash(2.40, 1.05, 1.0);
-
-            // BAR 05: Golden Chi Bell Swell
-            shimPulseBell(3.40, 1.0, 1.0);
-
-            // BAR 06: Syncopated Waddle Crescendo
-            shimWaddle(4.60, 440, 0.08);
-            shimWaddle(4.80, 480, 0.10);
-            shimWaddle(5.00, 523, 0.12);
-            shimWaddle(5.15, 587, 0.14);
-
-            // BAR 07: Dance Celebration Flourish
-            shimDance(5.30, 1.0, 1.10);
-            shimDing(5.75, 1174.66, 0.12);
-
-            // BAR 08: Float & Pulse Counterpoint
-            shimFloat(6.50, 587.33, 0.12);
-            shimPulseSquash(6.85, 0.90, 1.122);
-
-            // BAR 09: Grand Finale
-            shimDance(7.50, 1.0, 1.25);
-            shimPulseBell(7.80, 1.15, 1.0);
-            shimDing(8.50, 1760.0, 0.16);
-            shimDing(8.85, 2093.0, 0.15);
-
-            // Synchronize 3D Mascot Character Choreography
-            setTimeout(() => { if (rootGroup) setMascotAnimation('walk'); }, 500);
-            setTimeout(() => { if (rootGroup) setMascotAnimation('float'); }, 1450);
-            setTimeout(() => {
-                if (rootGroup) {
-                    setMascotAnimation('sing');
-                    if (typeof triggerJourneyPulse === 'function') triggerJourneyPulse();
+            if (trackNum === 1) {
+                // =============================================================
+                // TRACK 1: 聖なる交響詩 (Sacred Symphony - Extended Transcendent Coda)
+                // Total Duration: ~11.2s (with graceful decay into celestial silence)
+                // =============================================================
+                const btn1 = document.getElementById('track1Btn');
+                if (btn1) {
+                    btn1.classList.add('active');
+                    btn1.innerHTML = '🎼 Track 1: 演奏中...';
                 }
-            }, 2400);
-            setTimeout(() => { if (rootGroup) setMascotAnimation('dance'); }, 5300);
-            setTimeout(() => {
-                triggerLandingSquash(0.20);
-                if (typeof triggerBlessingBurst === 'function') triggerBlessingBurst();
-            }, 8500);
-
-            setTimeout(() => {
-                symphonyActive = false;
-                if (btn) {
-                    btn.classList.remove('active');
-                    btn.innerHTML = '🎼 8-bit 交響詩 (Symphony)';
+                const legacyBtn = document.getElementById('symphonyBtn');
+                if (legacyBtn) {
+                    legacyBtn.classList.add('active');
+                    legacyBtn.innerHTML = '🎼 演奏中 (Track 1)...';
                 }
-            }, 9400);
+
+                const quoteText = document.getElementById('saintQuoteText');
+                if (quoteText) quoteText.innerText = '🎼 聖なる天球交響詩（Track 1）を演奏中キューブ！❄️✨';
+
+                // BAR 01: Awakening Ding
+                shimDing(0.00, 1760.0, 0.16);
+
+                // BAR 02: Waddle Scherzando March
+                shimWaddle(0.50, 420, 0.10);
+                shimWaddle(0.72, 450, 0.10);
+                shimWaddle(0.95, 420, 0.10);
+                shimWaddle(1.18, 480, 0.12);
+
+                // BAR 03: Float Levitation & Mid-air Sparkle
+                shimFloat(1.45, 523.25, 0.13);
+                shimWaddle(1.75, 440, 0.07);
+                shimDing(2.05, 1318.5, 0.10);
+
+                // BAR 04: Sacred Pulse Squash Wave
+                shimPulseSquash(2.40, 1.05, 1.0);
+
+                // BAR 05: Golden Chi Bell Swell
+                shimPulseBell(3.40, 1.0, 1.0);
+
+                // BAR 06: Syncopated Waddle Crescendo
+                shimWaddle(4.60, 440, 0.08);
+                shimWaddle(4.80, 480, 0.10);
+                shimWaddle(5.00, 523, 0.12);
+                shimWaddle(5.15, 587, 0.14);
+
+                // BAR 07: Dance Celebration Flourish
+                shimDance(5.30, 1.0, 1.10);
+                shimDing(5.75, 1174.66, 0.12);
+
+                // BAR 08: Float & Pulse Counterpoint
+                shimFloat(6.50, 587.33, 0.12);
+                shimPulseSquash(6.85, 0.90, 1.122);
+
+                // BAR 09: Grand Climax
+                shimDance(7.50, 1.0, 1.25);
+                shimPulseBell(7.80, 1.15, 1.0);
+                shimDing(8.50, 1760.0, 0.16);
+                shimDing(8.85, 2093.0, 0.15);
+
+                // BAR 10: Transcendent Peaceful Coda Resolution
+                shimFloat(9.25, 523.25, 0.10); // Ethereal glass-harp harmonic arpeggio
+                shimPulseSquash(9.60, 0.65, 1.0); // Gentle celestial fading chord
+                shimDing(10.10, 2637.0, 0.09, 1.4); // E7 pure starlight bell ringing out smoothly
+
+                // Mascot Character Choreography
+                scheduleTrackTimeout(() => { if (rootGroup) setMascotAnimation('walk'); }, 500);
+                scheduleTrackTimeout(() => { if (rootGroup) setMascotAnimation('float'); }, 1450);
+                scheduleTrackTimeout(() => {
+                    if (rootGroup) {
+                        setMascotAnimation('sing');
+                        if (typeof triggerJourneyPulse === 'function') triggerJourneyPulse();
+                    }
+                }, 2400);
+                scheduleTrackTimeout(() => { if (rootGroup) setMascotAnimation('dance'); }, 5300);
+                scheduleTrackTimeout(() => {
+                    triggerLandingSquash(0.20);
+                    if (typeof triggerBlessingBurst === 'function') triggerBlessingBurst();
+                }, 8500);
+                scheduleTrackTimeout(() => {
+                    if (rootGroup) setMascotAnimation('idle');
+                    const q = document.getElementById('saintQuoteText');
+                    if (q) q.innerText = '✨ 聖なる交響詩、天球の静寂へと美しく結実したキューブ…🕊️';
+                }, 9800);
+
+                scheduleTrackTimeout(() => {
+                    window.stopAllTracks(false);
+                }, 11200);
+
+            } else if (trackNum === 2) {
+                // =============================================================
+                // TRACK 2: 今田勝 "Green Caterpillar" (1975 TBM Jazz-Fusion)
+                // 98 BPM Swing Groove (1 Beat = ~0.612s, Total Duration: ~26.0s)
+                // Complete Masterpiece with Extended Three Blind Mice Turnaround Coda
+                // =============================================================
+                const btn2 = document.getElementById('track2Btn');
+                if (btn2) {
+                    btn2.classList.add('active');
+                    btn2.innerHTML = '🎷 Track 2: 演奏中 (🐸蛙の鳴き声)...';
+                }
+
+                const quoteText = document.getElementById('saintQuoteText');
+                if (quoteText) quoteText.innerText = '🐸 ゲコゲコ… 冒頭の神秘的な蛙の鳴き声（フロッグ・クローク/クイーカ）から始まる今田勝『Green Caterpillar』だキューブ！🌿✨';
+
+                // --- BAR 00: Atmospheric Swamp Opening — Frog Croaks (0.00s - 2.45s) ---
+                shimPulseBell(0.00, 0.75, 0.561); // D2 Sub-drone marsh mist resonance
+                // Firmly audible Bullfrog Croak 1: "Gwaaa-rk... gwuk!"
+                shimFrogCroak(0.15, 1.0, 1.30, true);
+                // Answering Frog Croak 2 across the nocturnal marsh: "Gwaaa-rk... gwuk!"
+                shimFrogCroak(0.95, 0.90, 1.15, true);
+                // Awakening Ride Cymbal tap
+                shimDing(1.70, 2640.0, 0.10, 0.35);
+                // Third short throat gulp accent: "Gwuk!"
+                shimFrogCroak(1.90, 1.15, 0.95, false);
+
+                // --- BAR 01: Isoo Fukui's Walking Bass Crawl & Swing Pocket (2.45s - 4.90s) ---
+                shimDing(2.45, 1760.0, 0.12, 0.25); // Beat 1 Ride Cymbal
+                shimWaddle(2.45, 146.83, 0.14, 0.12); // Isoo Fukui Walking Bass D3 Root
+
+                shimWaddle(3.06, 174.61, 0.13, 0.10); // Beat 2: F3 (Minor 3rd)
+                shimDing(3.06, 1760.0, 0.10, 0.20); // Beat 2 Ride
+                shimWaddle(3.37, 196.00, 0.13, 0.09); // Beat 2-and: G3 (4th)
+                shimDing(3.37, 2640.0, 0.08, 0.12); // Beat 2-and Swing offbeat tap
+
+                shimWaddle(3.67, 207.65, 0.15, 0.10); // Beat 3: G#3 (Quintessential Blue Note Step!)
+                shimDing(3.67, 1760.0, 0.10, 0.20); // Beat 3 Ride
+                shimWaddle(3.98, 220.00, 0.14, 0.09); // Beat 3-and: A3 (Dominant 5th)
+
+                // Syncopated frog cuíca rasp echoing with the walking bass
+                shimFrogCroak(4.28, 1.05, 0.90, false);
+                shimWaddle(4.28, 261.63, 0.13, 0.10); // Beat 4: C4 (Minor 7th)
+                shimDing(4.28, 1760.0, 0.11, 0.22); // Beat 4 Ride
+                shimWaddle(4.59, 293.66, 0.14, 0.09); // Beat 4-and: D4 (Octave leap)
+                shimDing(4.59, 2640.0, 0.08, 0.12); // Beat 4-and Swing offbeat tap
+
+                // --- BAR 02: Fender Rhodes Electric Piano Comping (4.90s - 7.35s) ---
+                // Walking Bass Descent: C4 -> A3 -> G3 -> F3 -> E3
+                shimWaddle(4.90, 261.63, 0.13, 0.10);
+                shimDing(4.90, 1760.0, 0.11, 0.22);
+                shimWaddle(5.51, 220.00, 0.13, 0.10);
+                shimDing(5.51, 1760.0, 0.10, 0.20);
+                shimDing(5.82, 2640.0, 0.08, 0.12);
+                shimWaddle(6.12, 196.00, 0.13, 0.10);
+                shimDing(6.12, 1760.0, 0.10, 0.20);
+                shimWaddle(6.73, 174.61, 0.13, 0.10);
+                shimDing(6.73, 1760.0, 0.11, 0.22);
+                shimWaddle(7.04, 164.81, 0.12, 0.09);
+                shimDing(7.04, 2640.0, 0.08, 0.12);
+
+                // Masaru Imada Fender Rhodes Modal Chord Chops
+                shimFloat(5.21, 523.25, 0.14, [349.23, 440.00, 523.25, 659.25]); // Dm9 offbeat chop (F4-A4-C5-E5)
+                shimFloat(6.12, 523.25, 0.13, [349.23, 493.88, 659.25, 880.00]); // G13 modal response (F4-B4-E5-A5)
+                shimFloat(7.04, 523.25, 0.12, [392.00, 466.16, 587.33, 739.99]); // Ebmaj7#11 chromatic passing chop
+                shimFrogCroak(7.04, 0.95, 0.85, true); // Answering frog croak on turnaround!
+
+                // --- BAR 03: The Caterpillar Main Theme — Head A (7.35s - 9.80s) ---
+                shimPulseSquash(7.35, 0.95, 1.122); // D-transposed vocal blues lead
+                shimWaddle(7.35, 146.83, 0.13, 0.11);
+                shimDing(7.35, 1760.0, 0.12, 0.22);
+
+                shimWaddle(7.66, 174.61, 0.12, 0.09);
+                shimWaddle(7.96, 196.00, 0.13, 0.10);
+                shimDing(7.96, 1760.0, 0.10, 0.20);
+
+                // C5 -> D5 -> F5 blues bend lick
+                shimDance(7.96, 1.0, 1.0, [
+                    { f: 523.25, d: 0.18, v: 0.14, t: 0 },
+                    { f: 587.33, d: 0.22, v: 0.16, t: 0.09 },
+                    { f: 698.46, d: 0.25, v: 0.17, t: 0.22 }
+                ]);
+
+                // Descending blues crawl lick (A5 -> G#5 -> G5 -> F5 -> D5)
+                shimDance(8.57, 1.0, 1.05, [
+                    { f: 880.00, d: 0.14, v: 0.16, t: 0 },
+                    { f: 830.61, d: 0.14, v: 0.16, t: 0.10 }, // G#5 Blue note!
+                    { f: 783.99, d: 0.14, v: 0.15, t: 0.20 },
+                    { f: 698.46, d: 0.16, v: 0.15, t: 0.30 },
+                    { f: 587.33, d: 0.24, v: 0.18, t: 0.42 }
+                ]);
+                shimFloat(8.57, 523.25, 0.10, [349.23, 440.00, 523.25, 659.25]); // Dm9 answer chop
+                shimWaddle(8.57, 220.00, 0.13, 0.10);
+                shimDing(8.57, 1760.0, 0.10, 0.20);
+                shimWaddle(9.18, 196.00, 0.12, 0.09);
+                shimDing(9.18, 2640.0, 0.08, 0.12);
+                shimWaddle(9.49, 146.83, 0.14, 0.11);
+                shimDing(9.49, 1174.66, 0.14, 0.35); // D6 Head resolution accent
+
+                // --- BAR 04: Rhodes Solo Chops & Counterpoint (9.80s - 12.25s) ---
+                shimFloat(9.80, 523.25, 0.13, [349.23, 440.00, 523.25, 659.25]); // Dm9 chop
+                shimWaddle(9.80, 146.83, 0.13, 0.10);
+                shimDing(9.80, 1760.0, 0.11, 0.20);
+
+                // Kazumi Watanabe Bebop Guitar-style run
+                shimDance(10.41, 1.0, 0.95, [
+                    { f: 440.00, d: 0.12, v: 0.14, t: 0 },
+                    { f: 523.25, d: 0.12, v: 0.15, t: 0.08 },
+                    { f: 587.33, d: 0.13, v: 0.15, t: 0.16 },
+                    { f: 698.46, d: 0.14, v: 0.16, t: 0.24 },
+                    { f: 880.00, d: 0.20, v: 0.17, t: 0.32 }
+                ]);
+                shimWaddle(10.41, 174.61, 0.12, 0.09);
+                shimWaddle(11.02, 196.00, 0.13, 0.10);
+                shimFloat(11.02, 523.25, 0.12, [349.23, 493.88, 659.25, 880.00]); // G13 chord
+                shimDing(11.02, 1760.0, 0.10, 0.20);
+                shimWaddle(11.63, 155.56, 0.13, 0.10); // Eb bass passing
+                shimFloat(11.63, 523.25, 0.11, [392.00, 466.16, 587.33, 739.99]); // Eb9 chord
+                shimDing(11.94, 2640.0, 0.10, 0.40); // Starlight bell ping
+
+                // --- BAR 05: Modal Expansion & Funk Acceleration (12.25s - 14.70s) ---
+                shimPulseBell(12.25, 0.95, 0.749); // Warm Golden Chi Drone in G
+                shimWaddle(12.25, 146.83, 0.14, 0.10);
+                shimDing(12.25, 1760.0, 0.12, 0.20);
+
+                // Ascending walking bass crescendo
+                shimWaddle(12.56, 174.61, 0.13, 0.08);
+                shimWaddle(12.86, 196.00, 0.14, 0.08);
+                shimWaddle(13.17, 207.65, 0.15, 0.08); // G#3 Blue note
+                shimFloat(13.17, 587.33, 0.12); // High Rhodes shimmer
+                shimDing(13.17, 1760.0, 0.11, 0.20);
+
+                shimWaddle(13.48, 220.00, 0.14, 0.08);
+                shimWaddle(13.78, 261.63, 0.15, 0.09);
+                // Ascending blues pentatonic flourish
+                shimDance(13.78, 1.25, 1.10);
+                shimWaddle(14.09, 293.66, 0.16, 0.09);
+
+                // Dynamic triplet roll buildup
+                shimWaddle(14.40, 349.23, 0.14, 0.06);
+                shimWaddle(14.50, 392.00, 0.15, 0.06);
+                shimWaddle(14.60, 415.30, 0.16, 0.06);
+                shimDing(14.60, 2640.0, 0.12, 0.15);
+
+                // --- BAR 06: Grand Fusion Climax (Full Unison Blues Hook) (14.70s - 17.15s) ---
+                shimPulseSquash(14.70, 1.20, 1.122); // Octave D4/D5 fortissimo unison hit
+                shimWaddle(14.70, 146.83, 0.18, 0.12);
+                shimDing(14.70, 1174.66, 0.16, 0.30);
+
+                shimWaddle(15.01, 174.61, 0.16, 0.10);
+                shimDing(15.01, 1760.0, 0.11, 0.20);
+
+                // Unison Hook Phrase: G4 -> G#4 -> A4 -> C5 -> D5
+                shimDance(15.31, 1.0, 1.20, [
+                    { f: 392.00, d: 0.12, v: 0.16, t: 0 },
+                    { f: 415.30, d: 0.14, v: 0.18, t: 0.16 }, // G#4 Blue note punch
+                    { f: 440.00, d: 0.20, v: 0.18, t: 0.31 }, // A4 Dominant resolve
+                    { f: 523.25, d: 0.16, v: 0.17, t: 0.62 }, // C5
+                    { f: 587.33, d: 0.30, v: 0.20, t: 0.93 }  // D5 Peak
+                ]);
+                shimWaddle(15.31, 196.00, 0.15, 0.09);
+                shimWaddle(15.47, 207.65, 0.17, 0.09);
+                shimWaddle(15.62, 220.00, 0.17, 0.12);
+                shimDing(15.62, 1760.0, 0.14, 0.25);
+
+                // Descending unison blues crawl (C5 -> A4 -> G4 -> F4 -> D4)
+                shimDance(16.23, 1.0, 1.15, [
+                    { f: 523.25, d: 0.14, v: 0.16, t: 0 },
+                    { f: 440.00, d: 0.14, v: 0.16, t: 0.11 },
+                    { f: 392.00, d: 0.14, v: 0.15, t: 0.22 },
+                    { f: 349.23, d: 0.16, v: 0.15, t: 0.33 },
+                    { f: 293.66, d: 0.28, v: 0.18, t: 0.45 }
+                ]);
+                shimWaddle(16.23, 261.63, 0.14, 0.09);
+                shimWaddle(16.45, 220.00, 0.14, 0.09);
+                shimWaddle(16.67, 174.61, 0.15, 0.10);
+                shimDing(16.85, 1760.0, 0.16, 0.45); // Grand crash ping
+                shimDing(16.85, 2349.32, 0.12, 0.45);
+
+                // --- BAR 07: Extended Coda — Three Blind Mice Turnaround Vamp (17.15s - 19.60s) ---
+                // Fukui Walking Bass drops down into deep modal turnaround: D3 -> C3 -> Bb2 -> A2
+                shimWaddle(17.15, 146.83, 0.14, 0.12); // D3
+                shimDing(17.15, 1760.0, 0.10, 0.20);
+                shimWaddle(17.76, 130.81, 0.13, 0.11); // C3
+                shimDing(17.76, 1760.0, 0.09, 0.18);
+                shimDing(18.06, 2640.0, 0.07, 0.12);
+                shimWaddle(18.37, 116.54, 0.13, 0.11); // Bb2
+                shimDing(18.37, 1760.0, 0.09, 0.18);
+                shimWaddle(18.98, 110.00, 0.14, 0.11); // A2 Dominant
+                shimDing(18.98, 1760.0, 0.10, 0.20);
+                shimWaddle(19.29, 103.83, 0.12, 0.08); // Ab2 passing
+                shimDing(19.29, 2640.0, 0.07, 0.12);
+
+                // Imada Rhodes Descending Jazz Substitutions (Dm9 -> Cmaj7 -> Bbmaj7 -> A7#9)
+                shimFloat(17.45, 523.25, 0.13, [349.23, 440.00, 523.25, 659.25]); // Dm9
+                shimFloat(18.06, 523.25, 0.12, [329.63, 392.00, 493.88, 587.33]); // Cmaj7
+                shimFloat(18.68, 523.25, 0.12, [293.66, 349.23, 440.00, 523.25]); // Bbmaj7
+                shimFloat(19.29, 523.25, 0.13, [277.18, 392.00, 523.25, 698.46]); // A7#9 (Hendrix/Jazz turnaround chord)
+
+                // --- BAR 08: The Caterpillar's Farewell & Distant Frog Call (19.60s - 22.05s) ---
+                shimWaddle(19.60, 73.42, 0.16, 0.16); // Deep D2 Root Bass
+                shimPulseBell(19.60, 0.85, 0.561); // Sub-drone pedal
+                // Sweet whispering blues theme callback
+                shimDance(19.90, 1.0, 0.90, [
+                    { f: 698.46, d: 0.16, v: 0.13, t: 0 },
+                    { f: 783.99, d: 0.16, v: 0.14, t: 0.14 },
+                    { f: 830.61, d: 0.18, v: 0.15, t: 0.28 },
+                    { f: 880.00, d: 0.24, v: 0.15, t: 0.44 },
+                    { f: 1174.66, d: 0.38, v: 0.17, t: 0.65 }
+                ]);
+                // Distant frog croak answering from across the tranquil marsh
+                shimFrogCroak(20.80, 0.95, 0.85, true);
+                shimDing(21.40, 1760.0, 0.10, 0.30); // Soft ride cymbal choke ping
+
+                // --- BAR 09: Grand Cadence & Masterpiece Resolution (22.05s - 26.00s) ---
+                // Full, lush Dm11(add9) Rhodes Glass-Harp Voicing with deep bass foundation
+                shimFloat(22.05, 523.25, 0.18, [146.83, 293.66, 349.23, 440.00, 523.25, 659.25, 783.99]);
+                shimPulseBell(22.40, 1.35, 0.561); // Deep Golden Chi D2/A2 sub-drone resonance
+                shimPulseSquash(22.90, 0.75, 1.122); // Mild singing traveler harmonic overtone
+                shimDing(23.30, 1760.0, 0.16, 1.30); // Pure resonant celestial chime
+                shimDing(24.10, 2349.32, 0.14, 1.90); // Final pure star resolution fading smoothly into silence
+
+                // Synchronize 3D Mascot Character Extended Jazz Choreography
+                scheduleTrackTimeout(() => { if (rootGroup) setMascotAnimation('sing'); }, 150); // Curiosity at frogs
+                scheduleTrackTimeout(() => { if (rootGroup) setMascotAnimation('walk'); }, 2450); // Bass crawl
+                scheduleTrackTimeout(() => { if (rootGroup) setMascotAnimation('float'); }, 4900); // Rhodes chords
+                scheduleTrackTimeout(() => {
+                    if (rootGroup) {
+                        setMascotAnimation('sing');
+                        if (typeof triggerJourneyPulse === 'function') triggerJourneyPulse();
+                    }
+                }, 7350); // Blues theme singing
+                scheduleTrackTimeout(() => { if (rootGroup) setMascotAnimation('walk'); }, 9800);
+                scheduleTrackTimeout(() => { if (rootGroup) setMascotAnimation('float'); }, 12250);
+                scheduleTrackTimeout(() => { if (rootGroup) setMascotAnimation('dance'); }, 14700); // Unison climax
+                scheduleTrackTimeout(() => { if (rootGroup) setMascotAnimation('walk'); }, 17150); // Turnaround vamp
+                scheduleTrackTimeout(() => { if (rootGroup) setMascotAnimation('float'); }, 19600); // Theme callback & distant frog
+                scheduleTrackTimeout(() => {
+                    triggerLandingSquash(0.22);
+                    if (typeof triggerBlessingBurst === 'function') triggerBlessingBurst();
+                    if (rootGroup) setMascotAnimation('sing');
+                }, 22300); // Grand landing
+                scheduleTrackTimeout(() => {
+                    if (rootGroup) setMascotAnimation('idle');
+                    const q = document.getElementById('saintQuoteText');
+                    if (q) q.innerText = '🎷 今田勝『Green Caterpillar』、月夜の湿原へと静かに美しく溶け込んだキューブ…🌙🌿';
+                }, 24200);
+
+                scheduleTrackTimeout(() => {
+                    window.stopAllTracks(false);
+                }, 26000);
+            } else if (trackNum === 3) {
+                // =============================================================
+                // TRACK 3: 朝日のあたる家 / The House of the Rising Sun
+                // Thomas Krüger (Mr. Pianoman) Virtuosic Piano Arrangement
+                // Moderato 4/4 -> Virtuosic 6/8 Rolling Arpeggio Wave -> Am(add9) Sunrise
+                // Total Duration: ~26.5s (Full 5-page sheet music fidelity)
+                // =============================================================
+                const btn3 = document.getElementById('track3Btn');
+                if (btn3) {
+                    btn3.classList.add('active');
+                    btn3.innerHTML = '🌅 Track 3: 演奏中 (朝日のあたる家)...';
+                }
+
+                const quoteText = document.getElementById('saintQuoteText');
+                if (quoteText) quoteText.innerText = '🌅 Thomas Krüger『House of the Rising Sun』(朝日のあたる家) を演奏中キューブ！🎹☀️';
+
+                // --- PHASE 1: Atmospheric New Orleans Sunrise & 4/4 Bass Groove (0.00s - 4.50s) ---
+                shimPulseBell(0.00, 0.85, 0.421); // A2 (110Hz) Golden Chi ambient dawn drone
+                shimDing(0.10, 1760.0, 0.12, 0.80); // A6 awakening bell ping
+
+                // Bar 1: Am Syncopated 16th Piano Groove (Sheet 1, m. 1-2)
+                shimWaddle(0.40, 110.00, 0.16, 0.14); // Low A2 Root
+                shimFloat(0.40, 523.25, 0.11, [220.00, 261.63, 329.63, 440.00]); // Am Glass-harp chord
+                shimWaddle(0.65, 164.81, 0.12, 0.09); // E3
+                shimWaddle(0.90, 220.00, 0.13, 0.09); // A3
+                shimDing(0.90, 2640.0, 0.08, 0.15);  // Offbeat ride ping
+                shimWaddle(1.15, 261.63, 0.13, 0.10); // C4
+
+                // Bar 2: C Major Ostinato (Sheet 1, m. 3-4)
+                shimWaddle(1.40, 130.81, 0.16, 0.14); // C3 Root
+                shimFloat(1.40, 523.25, 0.11, [261.63, 329.63, 392.00, 523.25]); // C chord
+                shimWaddle(1.65, 196.00, 0.12, 0.09); // G3
+                shimWaddle(1.90, 261.63, 0.13, 0.09); // C4
+                shimWaddle(2.15, 329.63, 0.13, 0.10); // E4
+                shimDing(2.15, 2640.0, 0.08, 0.15);
+
+                // Bar 3: D Major Ostinato (Sheet 1, m. 5-6)
+                shimWaddle(2.40, 146.83, 0.16, 0.14); // D3 Root
+                shimFloat(2.40, 523.25, 0.12, [293.66, 369.99, 440.00, 587.33]); // D chord (F#4)
+                shimWaddle(2.65, 220.00, 0.12, 0.09); // A3
+                shimWaddle(2.90, 293.66, 0.13, 0.09); // D4
+                shimWaddle(3.15, 369.99, 0.14, 0.10); // F#4
+                shimDing(3.15, 2640.0, 0.08, 0.15);
+
+                // Bar 4: F Major & E7 Turnaround (Sheet 1, m. 7-9)
+                shimWaddle(3.40, 174.61, 0.16, 0.14); // F3 Root
+                shimFloat(3.40, 523.25, 0.12, [261.63, 349.23, 440.00, 523.25]); // F chord
+                shimWaddle(3.65, 261.63, 0.13, 0.09); // C4
+                shimWaddle(3.90, 164.81, 0.15, 0.12); // E3 Dominant Root
+                shimFloat(3.90, 523.25, 0.12, [246.94, 329.63, 415.30, 493.88]); // E7 chord (G#)
+                shimWaddle(4.15, 207.65, 0.13, 0.09); // G#3 leading note
+                shimDing(4.15, 2640.0, 0.09, 0.20);
+
+                // --- PHASE 2: The Iconic Soul Theme Enters (mp) (4.50s - 10.80s, Sheet 2) ---
+                // Bar 10: Am Theme (A4 -> C5 -> D5 -> E5)
+                shimPulseSquash(4.50, 0.85, 0.841); // Warm singing vocal lead
+                shimDance(4.50, 1.0, 0.95, [
+                    { f: 440.00, d: 0.22, v: 0.14, t: 0 },    // A4
+                    { f: 523.25, d: 0.24, v: 0.15, t: 0.28 }, // C5
+                    { f: 587.33, d: 0.30, v: 0.16, t: 0.56 }, // D5
+                    { f: 659.25, d: 0.45, v: 0.17, t: 0.88 }  // E5
+                ]);
+                shimWaddle(4.50, 110.00, 0.14, 0.12); // A2
+                shimFloat(4.50, 523.25, 0.10, [220.00, 261.63, 329.63]);
+                shimWaddle(5.06, 164.81, 0.12, 0.09);
+                shimDing(5.06, 1760.0, 0.09, 0.18);
+                shimWaddle(5.45, 220.00, 0.12, 0.09);
+
+                // Bar 11: C Major (E5 Sustained -> D5 -> C5)
+                shimDance(5.80, 1.0, 0.95, [
+                    { f: 659.25, d: 0.40, v: 0.17, t: 0 },    // E5 holds
+                    { f: 587.33, d: 0.26, v: 0.15, t: 0.48 }, // D5
+                    { f: 523.25, d: 0.38, v: 0.16, t: 0.78 }  // C5
+                ]);
+                shimWaddle(5.80, 130.81, 0.14, 0.12); // C3
+                shimFloat(5.80, 523.25, 0.10, [261.63, 329.63, 392.00]);
+                shimWaddle(6.36, 196.00, 0.12, 0.09);
+                shimDing(6.36, 1760.0, 0.09, 0.18);
+                shimWaddle(6.75, 261.63, 0.12, 0.09);
+
+                // Bar 12: D Major (D5 -> F#5 Ascending Soul)
+                shimDance(7.10, 1.0, 1.0, [
+                    { f: 587.33, d: 0.42, v: 0.17, t: 0 },    // D5
+                    { f: 739.99, d: 0.50, v: 0.18, t: 0.48 }  // F#5 (Thomas Kruger blue expression)
+                ]);
+                shimWaddle(7.10, 146.83, 0.14, 0.12); // D3
+                shimFloat(7.10, 523.25, 0.11, [293.66, 369.99, 440.00]);
+                shimWaddle(7.66, 220.00, 0.12, 0.09);
+                shimDing(7.66, 1760.0, 0.09, 0.18);
+                shimWaddle(8.05, 293.66, 0.12, 0.09);
+
+                // Bar 13: F Major (F5 -> E5 -> D5)
+                shimDance(8.40, 1.0, 1.0, [
+                    { f: 698.46, d: 0.36, v: 0.17, t: 0 },    // F5
+                    { f: 659.25, d: 0.28, v: 0.16, t: 0.38 }, // E5
+                    { f: 587.33, d: 0.30, v: 0.15, t: 0.68 }  // D5
+                ]);
+                shimWaddle(8.40, 174.61, 0.14, 0.12); // F3
+                shimFloat(8.40, 523.25, 0.11, [261.63, 349.23, 440.00]);
+                shimDing(8.90, 1760.0, 0.09, 0.18);
+
+                // Bar 14: Am (E5 -> C5 -> A4)
+                shimDance(9.40, 1.0, 0.95, [
+                    { f: 659.25, d: 0.22, v: 0.16, t: 0 },
+                    { f: 523.25, d: 0.22, v: 0.15, t: 0.22 },
+                    { f: 440.00, d: 0.28, v: 0.16, t: 0.44 }
+                ]);
+                shimWaddle(9.40, 110.00, 0.14, 0.12); // A2
+                shimFloat(9.40, 523.25, 0.10, [220.00, 261.63, 329.63]);
+
+                // Bar 15: E7 (B4 -> G#4 -> E5 pickup into Forte)
+                shimDance(10.10, 1.0, 1.05, [
+                    { f: 493.88, d: 0.24, v: 0.16, t: 0 },
+                    { f: 415.30, d: 0.24, v: 0.16, t: 0.24 }, // G#4
+                    { f: 659.25, d: 0.30, v: 0.18, t: 0.48 }  // E5 Pickup!
+                ]);
+                shimWaddle(10.10, 164.81, 0.14, 0.12); // E3
+                shimFloat(10.10, 523.25, 0.11, [246.94, 329.63, 415.30]);
+                shimDing(10.58, 2640.0, 0.10, 0.25);
+
+                // --- PHASE 3: Passionate Forte Octave Chorus (10.80s - 16.20s, Sheet 3) ---
+                // Full f dynamics: Octave unisons, punchy bass, rolling chord accompaniment
+                shimPulseSquash(10.80, 1.15, 0.841); // Rich forte vocal resonance
+                shimDance(10.80, 1.0, 1.25, [
+                    { f: 880.00, d: 0.24, v: 0.19, t: 0 },    // A5
+                    { f: 1046.50, d: 0.26, v: 0.20, t: 0.28 }, // C6
+                    { f: 1174.66, d: 0.32, v: 0.21, t: 0.56 }, // D6
+                    { f: 1318.51, d: 0.48, v: 0.22, t: 0.88 }  // E6 Peak!
+                ]);
+                // Octave doubling below
+                shimDance(10.80, 0.5, 0.85, [
+                    { f: 880.00, d: 0.24, v: 0.14, t: 0 },
+                    { f: 1046.50, d: 0.26, v: 0.15, t: 0.28 },
+                    { f: 1174.66, d: 0.32, v: 0.16, t: 0.56 },
+                    { f: 1318.51, d: 0.48, v: 0.17, t: 0.88 }
+                ]);
+                shimWaddle(10.80, 55.00, 0.18, 0.16);  // Powerful Low A1
+                shimWaddle(10.80, 110.00, 0.16, 0.14); // A2 Octave
+                shimFloat(10.80, 523.25, 0.13, [220.00, 329.63, 440.00, 523.25]);
+                shimDing(10.80, 1760.0, 0.14, 0.30);
+                shimWaddle(11.36, 164.81, 0.14, 0.10);
+                shimDing(11.36, 1760.0, 0.11, 0.22);
+                shimWaddle(11.75, 220.00, 0.14, 0.10);
+
+                // Bar 20: C Major Octaves (E6 -> G6 -> D6 -> C6)
+                shimDance(12.10, 1.0, 1.25, [
+                    { f: 1318.51, d: 0.38, v: 0.22, t: 0 },    // E6 holds
+                    { f: 1567.98, d: 0.22, v: 0.20, t: 0.36 }, // G6 High flourish!
+                    { f: 1174.66, d: 0.26, v: 0.20, t: 0.58 }, // D6
+                    { f: 1046.50, d: 0.38, v: 0.21, t: 0.84 }  // C6
+                ]);
+                shimWaddle(12.10, 65.41, 0.18, 0.16);  // Low C2
+                shimWaddle(12.10, 130.81, 0.16, 0.14); // C3
+                shimFloat(12.10, 523.25, 0.13, [261.63, 329.63, 392.00, 523.25, 659.25]);
+                shimDing(12.10, 1760.0, 0.13, 0.28);
+                shimWaddle(12.66, 196.00, 0.14, 0.10);
+                shimDing(12.66, 2640.0, 0.10, 0.18);
+                shimWaddle(13.05, 261.63, 0.14, 0.10);
+
+                // Bar 21: D Major Octaves (D6 -> F#6 -> High A6)
+                shimDance(13.40, 1.0, 1.30, [
+                    { f: 1174.66, d: 0.34, v: 0.21, t: 0 },    // D6
+                    { f: 1479.98, d: 0.36, v: 0.22, t: 0.36 }, // F#6
+                    { f: 1760.00, d: 0.55, v: 0.24, t: 0.72 }  // High A6 Climax!
+                ]);
+                shimWaddle(13.40, 73.42, 0.18, 0.16);  // Low D2
+                shimWaddle(13.40, 146.83, 0.16, 0.14); // D3
+                shimFloat(13.40, 523.25, 0.13, [293.66, 369.99, 440.00, 587.33, 739.99]);
+                shimDing(13.40, 1760.0, 0.14, 0.30);
+                shimWaddle(13.96, 220.00, 0.14, 0.10);
+                shimDing(13.96, 2640.0, 0.10, 0.18);
+                shimWaddle(14.35, 293.66, 0.14, 0.10);
+
+                // Bar 22: F Major (High A6 -> F6 -> D6)
+                shimDance(14.70, 1.0, 1.25, [
+                    { f: 1760.00, d: 0.32, v: 0.22, t: 0 },
+                    { f: 1396.91, d: 0.32, v: 0.21, t: 0.32 }, // F6
+                    { f: 1174.66, d: 0.36, v: 0.20, t: 0.64 }  // D6
+                ]);
+                shimWaddle(14.70, 87.31, 0.18, 0.16);  // Low F2
+                shimWaddle(14.70, 174.61, 0.16, 0.14); // F3
+                shimFloat(14.70, 523.25, 0.13, [261.63, 349.23, 440.00, 523.25, 698.46]);
+                shimDing(14.70, 1760.0, 0.14, 0.30);
+
+                // Bar 23: E7 Buildup into 6/8 Meter Shift (Sheet 3, m. 23-24)
+                shimDance(15.60, 1.0, 1.20, [
+                    { f: 987.77, d: 0.18, v: 0.19, t: 0 },     // B5
+                    { f: 830.61, d: 0.18, v: 0.19, t: 0.18 },  // G#5
+                    { f: 1318.51, d: 0.24, v: 0.22, t: 0.36 }  // E6
+                ]);
+                shimWaddle(15.60, 82.41, 0.17, 0.14);  // Low E2
+                shimWaddle(15.80, 92.50, 0.17, 0.12);  // F#2 passing
+                shimWaddle(16.00, 103.83, 0.18, 0.12); // G#2 chromatic step
+                shimDing(16.00, 2640.0, 0.12, 0.25);
+
+                // --- PHASE 4: The Kruger 6/8 Rolling Arpeggio Wave (16.20s - 21.80s, Sheets 4 & 5) ---
+                // Thomas Krüger's signature move: Time signature morphs to 6/8!
+                // 6 rapid, undulating arpeggio eighth-notes per bar rolling up the piano!
+
+                // Bar 28 (Am 6/8 Arpeggio Wave):
+                shimFloat(16.20, 523.25, 0.15, [110.00, 164.81, 220.00, 261.63, 329.63, 440.00, 523.25], 0.075, 0.85);
+                shimDance(16.20, 1.0, 1.15, [
+                    { f: 659.25, d: 0.45, v: 0.18, t: 0.20 }, // E5
+                    { f: 880.00, d: 0.50, v: 0.19, t: 0.55 }  // A5
+                ]);
+                shimDing(16.20, 1760.0, 0.12, 0.35);
+
+                // Bar 30 (C Major 6/8 Wave):
+                shimFloat(17.30, 523.25, 0.15, [130.81, 196.00, 261.63, 329.63, 392.00, 523.25, 659.25], 0.075, 0.85);
+                shimDance(17.30, 1.0, 1.15, [
+                    { f: 783.99, d: 0.45, v: 0.18, t: 0.20 }, // G5
+                    { f: 659.25, d: 0.50, v: 0.19, t: 0.55 }  // E5
+                ]);
+                shimDing(17.30, 1760.0, 0.12, 0.35);
+
+                // Bar 31 (D Major 6/8 Wave):
+                shimFloat(18.40, 523.25, 0.16, [146.83, 220.00, 293.66, 369.99, 440.00, 587.33, 739.99], 0.075, 0.85);
+                shimDance(18.40, 1.0, 1.20, [
+                    { f: 739.99, d: 0.45, v: 0.19, t: 0.20 }, // F#5
+                    { f: 880.00, d: 0.50, v: 0.20, t: 0.55 }  // A5
+                ]);
+                shimDing(18.40, 1760.0, 0.13, 0.35);
+
+                // Bar 32 (F Major 6/8 Wave):
+                shimFloat(19.50, 523.25, 0.16, [87.31, 130.81, 174.61, 220.00, 261.63, 349.23, 440.00], 0.075, 0.85);
+                shimDance(19.50, 1.0, 1.20, [
+                    { f: 698.46, d: 0.45, v: 0.19, t: 0.20 }, // F5
+                    { f: 587.33, d: 0.50, v: 0.18, t: 0.55 }  // D5
+                ]);
+                shimDing(19.50, 1760.0, 0.13, 0.35);
+
+                // Bar 34 (E7 6/8 Wave & Virtuosic High Cascade):
+                shimFloat(20.60, 523.25, 0.16, [82.41, 123.47, 164.81, 207.65, 246.94, 329.63, 415.30], 0.075, 0.85);
+                // Virtuosic High Piano Cascade (Sheet 5, m. 37-41):
+                shimDance(20.60, 1.0, 1.25, [
+                    { f: 1318.51, d: 0.16, v: 0.19, t: 0 },    // E6
+                    { f: 1174.66, d: 0.16, v: 0.19, t: 0.12 }, // D6
+                    { f: 1046.50, d: 0.16, v: 0.18, t: 0.24 }, // C6
+                    { f: 987.77, d: 0.16, v: 0.18, t: 0.36 },  // B5
+                    { f: 880.00, d: 0.20, v: 0.19, t: 0.48 },  // A5
+                    { f: 830.61, d: 0.28, v: 0.18, t: 0.62 }   // G#5
+                ]);
+                shimDing(21.10, 2640.0, 0.14, 0.50);
+
+                // --- PHASE 5: Grand Sunrise Cadence & Transcendent Resolution (21.80s - 26.50s) ---
+                // Sforzando Low A1/A2 root bass strike (Sheet 5, m. 43-44)
+                shimWaddle(21.80, 55.00, 0.22, 0.22);
+                shimWaddle(21.80, 110.00, 0.20, 0.18);
+                // Grand Rolled Am(add9) Glass-Harp Chord (A - E - A - B - C - E - A - E)
+                shimFloat(21.90, 523.25, 0.18, [110.00, 164.81, 220.00, 246.94, 261.63, 329.63, 440.00, 659.25], 0.055, 2.0);
+                // Golden Chi A2 Sub-Harmonic Pedal Drone
+                shimPulseBell(22.30, 1.35, 0.421);
+                // Mild singing traveler harmonic overtone
+                shimPulseSquash(22.90, 0.75, 0.841);
+                // High celestial morning star chime
+                shimDing(23.40, 1760.0, 0.16, 1.60); // A6
+                // Final pure sunrise bell ringing out softly to complete peace
+                shimDing(24.20, 2637.0, 0.14, 2.30); // E7
+
+                // Synchronize 3D Mascot Character Choreography
+                scheduleTrackTimeout(() => { if (rootGroup) setMascotAnimation('walk'); }, 400);   // Intro groove
+                scheduleTrackTimeout(() => {
+                    if (rootGroup) {
+                        setMascotAnimation('sing');
+                        if (typeof triggerJourneyPulse === 'function') triggerJourneyPulse();
+                    }
+                }, 4500); // Theme singing
+                scheduleTrackTimeout(() => { if (rootGroup) setMascotAnimation('dance'); }, 10800); // Forte chorus
+                scheduleTrackTimeout(() => { if (rootGroup) setMascotAnimation('float'); }, 16200); // 6/8 arpeggio wave
+                scheduleTrackTimeout(() => {
+                    triggerLandingSquash(0.24);
+                    if (typeof triggerBlessingBurst === 'function') triggerBlessingBurst();
+                    if (rootGroup) setMascotAnimation('sing');
+                }, 21800); // Grand sunrise landing
+                scheduleTrackTimeout(() => {
+                    if (rootGroup) setMascotAnimation('idle');
+                    const q = document.getElementById('saintQuoteText');
+                    if (q) q.innerText = '🌅 Thomas Krüger『House of the Rising Sun』、朝日の輝きと共に天球へと美しく昇華したキューブ…☀️🎹';
+                }, 24500);
+
+                scheduleTrackTimeout(() => {
+                    window.stopAllTracks(false);
+                }, 26500);
+            }
+        };
+
+        // Legacy compatibility alias
+        window.playLilCubeSymphony = function() {
+            window.playTrack(1);
         };
 
         window.toggleSound = function() {
@@ -3457,15 +4253,24 @@
             });
         }
 
-        // Global Keybindings: [Space] or [J] triggers Journey Sacred Pulse!
+        // Global Keybindings:
+        // [Space] / [J] / [P] : Journey Sacred Pulse
+        // [1] / [S]           : Track 1 (聖なる交響詩)
+        // [2] / [C]           : Track 2 (今田勝 Caterpillar Jazz)
+        // [W]                 : Waddle
+        // [F]                 : Float
+        // [D]                 : Dance
         window.addEventListener('keydown', (e) => {
             if (e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA')) return;
             if (e.code === 'Space' || e.key === 'j' || e.key === 'J' || e.key === 'p' || e.key === 'P') {
                 e.preventDefault();
                 window.triggerBlessing();
-            } else if (e.key === 's' || e.key === 'S') {
+            } else if (e.key === '1' || e.key === 's' || e.key === 'S') {
                 e.preventDefault();
-                window.playLilCubeSymphony();
+                window.playTrack(1);
+            } else if (e.key === '2' || e.key === 'c' || e.key === 'C') {
+                e.preventDefault();
+                window.playTrack(2);
             } else if (e.key === 'w' || e.key === 'W') {
                 window.triggerWaddle();
             } else if (e.key === 'f' || e.key === 'F') {

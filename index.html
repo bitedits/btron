@@ -1832,7 +1832,7 @@
     <script>
     (function() {
         // =========================================================================
-        // 1. Audio Engine: Pythagorean Chimes & Nintendo 8-Bit SFX
+        // 1. Audio Engine: Pythagorean Chimes & Celestial Crystal SFX
         // =========================================================================
         let audioCtx = null;
         window.soundEnabled = true;
@@ -1889,19 +1889,20 @@
             });
         }
 
-        // PlayStation 3 "Journey" Singing Sacred Chirp Harmonic Chord
+        // Mild Sacred Pulse Singing Harmonic Chord
         function playJourneyChirp() {
             if (!window.soundEnabled) return;
             try {
                 const c = getAudioContext();
                 const now = c.currentTime;
+                // Mild, soothing celestial harmonic chord (pure sine acoustics)
                 const freqs = [
-                    { f: 261.63, v: 0.13, d: 2.2, type: 'sine' },      // Low warm pedal tone C4
-                    { f: 523.25, v: 0.17, d: 2.4, type: 'sine' },      // Core singing traveler tone C5
-                    { f: 659.25, v: 0.12, d: 2.0, type: 'sine' },      // Resonant third E5
-                    { f: 783.99, v: 0.14, d: 2.2, type: 'sine' },      // Harmonious fifth G5
-                    { f: 1046.50, v: 0.13, d: 1.8, type: 'triangle' }, // Shimmering octave C6
-                    { f: 1318.51, v: 0.08, d: 1.5, type: 'sine' }       // Ethereal overtone E6
+                    { f: 261.63, v: 0.055, d: 2.2, type: 'sine' },      // Gentle pedal tone C4
+                    { f: 523.25, v: 0.070, d: 2.4, type: 'sine' },      // Singing traveler core tone C5
+                    { f: 659.25, v: 0.048, d: 2.0, type: 'sine' },      // Resonant third E5
+                    { f: 783.99, v: 0.052, d: 2.1, type: 'sine' },      // Harmonious fifth G5
+                    { f: 1046.50, v: 0.040, d: 1.7, type: 'sine' },      // Pure crystal octave C6
+                    { f: 1318.51, v: 0.025, d: 1.4, type: 'sine' }       // Ethereal overtone E6
                 ];
 
                 freqs.forEach(item => {
@@ -1910,11 +1911,12 @@
                     osc.type = item.type;
 
                     // Vocal-like gentle upward swoop
-                    osc.frequency.setValueAtTime(item.f * 0.96, now);
-                    osc.frequency.exponentialRampToValueAtTime(item.f, now + 0.08);
+                    osc.frequency.setValueAtTime(item.f * 0.97, now);
+                    osc.frequency.exponentialRampToValueAtTime(item.f, now + 0.10);
 
+                    // Soft, mild attack and smooth natural decay
                     gain.gain.setValueAtTime(0.0001, now);
-                    gain.gain.linearRampToValueAtTime(item.v, now + 0.04);
+                    gain.gain.linearRampToValueAtTime(item.v, now + 0.09);
                     gain.gain.exponentialRampToValueAtTime(0.0001, now + item.d);
 
                     osc.connect(gain);
@@ -1925,21 +1927,22 @@
             } catch (e) {}
         }
 
-        // Po's Spirit Realm Golden Chi Harmonic Resonance (Kung Fu Panda Finale with Kai)
+        // Mild Golden Celestial Harmonic Resonance (Soft Ambient Swell)
         function playGoldenChiChime() {
             if (!window.soundEnabled) return;
             try {
                 const c = getAudioContext();
                 const now = c.currentTime;
+                // Mild, soothing ambient overtone series (pure sine waves)
                 const freqs = [
-                    { f: 130.81, v: 0.19, d: 3.8, type: 'sine' },      // Deep resonant spiritual pedal C3
-                    { f: 196.00, v: 0.15, d: 3.4, type: 'sine' },      // Warm harmonic fifth G3
-                    { f: 261.63, v: 0.20, d: 3.5, type: 'sine' },      // Golden core foundation C4
-                    { f: 392.00, v: 0.17, d: 3.2, type: 'sine' },      // Singing fifth G4
-                    { f: 523.25, v: 0.18, d: 3.0, type: 'sine' },      // Soaring octave C5
-                    { f: 659.25, v: 0.14, d: 2.6, type: 'triangle' },  // Golden lotus third E5
-                    { f: 783.99, v: 0.13, d: 2.4, type: 'sine' },      // Dragon overtone G5
-                    { f: 1046.50, v: 0.10, d: 2.0, type: 'sine' }      // Shimmering celestial Chi bell C6
+                    { f: 130.81, v: 0.065, d: 3.5, type: 'sine' },      // Soft spiritual pedal C3
+                    { f: 196.00, v: 0.050, d: 3.2, type: 'sine' },      // Warm harmonic fifth G3
+                    { f: 261.63, v: 0.070, d: 3.4, type: 'sine' },      // Golden core foundation C4
+                    { f: 392.00, v: 0.055, d: 3.0, type: 'sine' },      // Singing fifth G4
+                    { f: 523.25, v: 0.060, d: 2.8, type: 'sine' },      // Soaring octave C5
+                    { f: 659.25, v: 0.040, d: 2.5, type: 'sine' },      // Golden lotus third E5
+                    { f: 783.99, v: 0.035, d: 2.3, type: 'sine' },      // Ethereal overtone G5
+                    { f: 1046.50, v: 0.025, d: 1.9, type: 'sine' }      // Shimmering celestial bell C6
                 ];
 
                 freqs.forEach(item => {
@@ -1947,12 +1950,13 @@
                     const gain = c.createGain();
                     osc.type = item.type;
 
-                    // Spiritual harmonic swell with gentle rise and long majestic decay
+                    // Spiritual harmonic swell with gentle rise and smooth meditative decay
                     osc.frequency.setValueAtTime(item.f * 0.985, now);
-                    osc.frequency.exponentialRampToValueAtTime(item.f, now + 0.10);
+                    osc.frequency.exponentialRampToValueAtTime(item.f, now + 0.14);
 
+                    // Mild, gradual attack
                     gain.gain.setValueAtTime(0.0001, now);
-                    gain.gain.linearRampToValueAtTime(item.v, now + 0.08);
+                    gain.gain.linearRampToValueAtTime(item.v, now + 0.12);
                     gain.gain.exponentialRampToValueAtTime(0.0001, now + item.d);
 
                     osc.connect(gain);
@@ -2103,7 +2107,7 @@
         };
 
         // =========================================================================
-        // 2. Three.js Low Poly 3D Lil Cube 64 with Nintendo Kirby Animations
+        // 2. Three.js Low Poly 3D Lil Cube 64 Animations
         // =========================================================================
         const container3d = document.getElementById('mascot3dContainer');
         const canvas3d = document.getElementById('mascot3dCanvas');
@@ -2153,7 +2157,7 @@
             return current + diff * factor;
         }
 
-        // Nintendo & Disney Continuous Animation Pose Buffer
+        // Continuous Inertial Animation Pose Buffer
         const animPose = {
             rootX: 0, rootY: 0.08, rootZ: 0,
             rootRotX: 0, rootRotY: 0, rootRotZ: 0,
@@ -2201,7 +2205,7 @@
 
             variantExtraObjects = [];
 
-            // Shared Kirby Mouth
+            // Shared Lil Cube Mouth
             const mouthMat = new THREE.MeshBasicMaterial({ color: 0xbf1250 });
             const smileGeo = new THREE.TorusGeometry(0.16, 0.038, 5, 10, Math.PI);
             smileGeo.rotateZ(Math.PI);
@@ -2215,8 +2219,8 @@
             oMouthMesh.visible = (animState === 'float');
             bodyGroup.add(oMouthMesh);
 
-            // Kirby Anime Eyes Generator
-            function createKirbyEyes(irisColor = 0x00e5ff, hasBrows = false) {
+            // Lil Cube Anime Eyes Generator
+            function createAnimeEyes(irisColor = 0x00e5ff, hasBrows = false) {
                 function makeEye(isLeft) {
                     const eye = new THREE.Group();
                     const pupilGeo = new THREE.CylinderGeometry(0.18, 0.18, 0.48, 12);
@@ -2309,7 +2313,7 @@
 
             if (variant === 'A') {
                 // ==============================================================
-                // OPTION A: 聖晶カイザー (Crystalline Saint) - Kirby 64 Faceted Gem
+                // OPTION A: 聖晶カイザー (Crystalline Saint) - Lil Cube 64 Faceted Gem
                 // ==============================================================
                 const cubeGeoA = new THREE.BoxGeometry(2.1, 2.1, 2.1, 2, 2, 2);
                 const posAttrA = cubeGeoA.attributes.position;
@@ -2349,7 +2353,7 @@
                 bodyGroup.add(wireOcta);
                 variantExtraObjects.push({ mesh: wireOcta, rotSpeedX: -0.7, rotSpeedY: 0.5 });
 
-                createKirbyEyes(0x00e5ff, false);
+                createAnimeEyes(0x00e5ff, false);
 
                 // Little Cube Hands
                 const handGeo = new THREE.BoxGeometry(0.46, 0.46, 0.46);
@@ -2421,7 +2425,7 @@
                 bodyGroup.add(crownPivot);
                 variantExtraObjects.push({ mesh: crownPivot, bob: true, rotSpeedY: 1.8 });
 
-                createKirbyEyes(0x0284c7, true);
+                createAnimeEyes(0x0284c7, true);
 
                 // White Cartoon Power-Gloves with Thumb Cubes
                 const gloveGeo = new THREE.BoxGeometry(0.50, 0.50, 0.50);
@@ -2530,7 +2534,7 @@
                 bodyGroup.add(satGroup);
                 variantExtraObjects.push({ satGroup, satMeshes, isSatellites: true });
 
-                createKirbyEyes(0xa855f7, false);
+                createAnimeEyes(0xa855f7, false);
 
                 // Crystal Hands
                 const handGeoC = new THREE.BoxGeometry(0.44, 0.44, 0.44);
@@ -2612,7 +2616,7 @@
                 sfxLilCubeBoing();
                 playJourneyChirp();
                 if (typeof triggerJourneyPulse === 'function') triggerJourneyPulse();
-                setKirbyAnimation('sing');
+                setMascotAnimation('sing');
             });
         }
 
@@ -3287,7 +3291,7 @@
             triggerJourneyPulse();
 
             if (rootGroup) {
-                setKirbyAnimation('sing');
+                setMascotAnimation('sing');
             }
 
             nextSacredQuote();
@@ -3344,7 +3348,7 @@
             stateTimer += dt;
 
             // -------------------------------------------------------------
-            // A. Update Three.js 3D Lil Cube 64 with Nintendo Kirby Animations
+            // A. Update Three.js 3D Lil Cube 64 Animations
             // -------------------------------------------------------------
             if (rootGroup && bodyGroup) {
                 // Drag Inertia & Smooth Restoring Spring
@@ -3434,7 +3438,7 @@
                 }
 
                 // =========================================================
-                // Nintendo & Disney Reviewer-Grade Continuous Animation Engine
+                // Human-Perceptive Inertial Spring Continuous Animation Engine
                 // Target Pose Formulation with Zero-Discontinuity Inertial Springs
                 // =========================================================
                 let tRootX = 0;
@@ -3481,7 +3485,7 @@
                 let tPedestalOpacity = 0.75;
 
                 if (animState === 'idle') {
-                    // Kirby Breathing & Weight Shift
+                    // Lil Cube Breathing & Weight Shift
                     const breath = Math.sin(stateTimer * 3.2);
                     const sway = Math.sin(stateTimer * 1.6);
 
@@ -3498,7 +3502,7 @@
                     tRightHandRotZ = -0.10 - Math.sin(stateTimer * 3.2) * 0.07;
 
                 } else if (animState === 'walk') {
-                    // Kirby Waddle Walk Cycle
+                    // Lil Cube Waddle Walk Cycle
                     walkPhase += dt * 7.5;
                     const sinW = Math.sin(walkPhase);
 
@@ -3523,19 +3527,19 @@
                     tRightHandRotX = sinW * 0.60;
 
                     if (stateTimer >= 4.5) {
-                        setKirbyAnimation('idle');
+                        setMascotAnimation('idle');
                     }
 
                 } else if (animState === 'float') {
-                    // Kirby Inhale Balloon & Flutter Kick
+                    // Lil Cube Float Levitation & Flutter Kick (Comparable to Dance duration ~3.35s)
                     floatTimer += dt;
-                    if (floatTimer < 0.50) {
-                        // Phase 1: Inhale anticipation & gradual expansion (0 to 0.5s)
-                        const p = floatTimer / 0.50;
+                    if (floatTimer < 0.40) {
+                        // Phase 1: Buoyant anticipation & gradual expansion (0 to 0.40s)
+                        const p = floatTimer / 0.40;
                         const easeInhale = 0.5 - 0.5 * Math.cos(p * Math.PI);
-                        tScaleX = 1.0 + easeInhale * 0.32;
-                        tScaleY = 1.0 + easeInhale * 0.30;
-                        tScaleZ = 1.0 + easeInhale * 0.32;
+                        tScaleX = 1.0 + easeInhale * 0.30;
+                        tScaleY = 1.0 + easeInhale * 0.28;
+                        tScaleZ = 1.0 + easeInhale * 0.30;
                         tRootY = 0.08 + easeInhale * 0.18;
                         tSmileScale = 1.0 - easeInhale;
                         tOMouthScale = easeInhale * 1.25;
@@ -3545,20 +3549,20 @@
                         tLeftFootY = -0.92 - easeInhale * 0.12;
                         tRightFootY = -0.92 - easeInhale * 0.12;
 
-                    } else if (floatTimer < 3.6) {
-                        // Phase 2: Aerial float & flutter kick (0.5s to 3.6s)
-                        tScaleX = 1.32;
-                        tScaleY = 1.30;
-                        tScaleZ = 1.32;
+                    } else if (floatTimer < 2.55) {
+                        // Phase 2: Aerial float & flutter kick (0.40s to 2.55s ~2.15s hover)
+                        tScaleX = 1.30;
+                        tScaleY = 1.28;
+                        tScaleZ = 1.30;
                         tSmileScale = 0.0;
                         tOMouthScale = 1.25;
 
-                        const hover = Math.sin((floatTimer - 0.50) * 2.8);
+                        const hover = Math.sin((floatTimer - 0.40) * 3.4);
                         tRootY = 0.92 + hover * 0.15;
 
-                        tLeftFootRotX = Math.sin(floatTimer * 8.5) * 0.45;
+                        tLeftFootRotX = Math.sin(floatTimer * 9.0) * 0.45;
                         tLeftFootY = -1.04;
-                        tRightFootRotX = Math.cos(floatTimer * 8.5) * 0.45;
+                        tRightFootRotX = Math.cos(floatTimer * 9.0) * 0.45;
                         tRightFootY = -1.04;
 
                         tLeftHandRotZ = 0.40 + Math.sin(floatTimer * 13.0) * 0.35;
@@ -3567,23 +3571,23 @@
                         tPedestalScale = 0.64;
                         tPedestalOpacity = 0.32;
 
-                    } else if (floatTimer < 4.4) {
-                        // Phase 3: Smooth exhale & gradual deceleration descent (3.6s to 4.4s)
-                        const p = (floatTimer - 3.6) / 0.8;
+                    } else if (floatTimer < 3.35) {
+                        // Phase 3: Smooth exhale & gradual deceleration descent (2.55s to 3.35s = 0.8s)
+                        const p = (floatTimer - 2.55) / 0.80;
                         const easeDescend = 0.5 - 0.5 * Math.cos(p * Math.PI);
                         const flutterDamp = 1.0 - easeDescend;
 
-                        tScaleX = 1.32 - easeDescend * 0.32;
-                        tScaleY = 1.30 - easeDescend * 0.30;
-                        tScaleZ = 1.32 - easeDescend * 0.32;
+                        tScaleX = 1.30 - easeDescend * 0.30;
+                        tScaleY = 1.28 - easeDescend * 0.28;
+                        tScaleZ = 1.30 - easeDescend * 0.30;
                         tRootY = 0.92 * (1.0 - easeDescend) + 0.08;
 
                         tSmileScale = easeDescend;
                         tOMouthScale = 1.25 * (1.0 - easeDescend);
 
                         // Flutter kick smoothly glides down into ground landing
-                        tLeftFootRotX = Math.sin(floatTimer * 8.5 * flutterDamp) * 0.45 * flutterDamp;
-                        tRightFootRotX = Math.cos(floatTimer * 8.5 * flutterDamp) * 0.45 * flutterDamp;
+                        tLeftFootRotX = Math.sin(floatTimer * 9.0 * flutterDamp) * 0.45 * flutterDamp;
+                        tRightFootRotX = Math.cos(floatTimer * 9.0 * flutterDamp) * 0.45 * flutterDamp;
                         tLeftFootY = -1.04 + easeDescend * 0.12;
                         tRightFootY = -1.04 + easeDescend * 0.12;
 
@@ -3595,13 +3599,13 @@
 
                     } else {
                         // Phase 4: Gentle touchdown into idle with soft cushion squash
-                        setKirbyAnimation('idle');
+                        setMascotAnimation('idle');
                         triggerLandingSquash(0.16);
                         sfxLilCubeBoing();
                     }
 
                 } else if (animState === 'dance') {
-                    // Kirby 64 Victory Dance Sequence
+                    // Lil Cube Victory Dance Sequence
                     danceTimer += dt;
                     if (danceTimer < 0.9) {
                         // Hop 1 (Left 360 spin): 0 to 0.9s
@@ -3637,8 +3641,8 @@
                         tLeftHandRotZ = 0.35 + hop * 0.55;
                         tRightHandRotZ = -0.35 - hop * 0.55;
 
-                    } else if (danceTimer < 4.2) {
-                        // Step 4: Triumphant victory squat pose (2.7s to 4.2s)
+                    } else if (danceTimer < 3.4) {
+                        // Step 4A: Triumphant victory pose hold & sparkle (2.7s to 3.4s)
                         tRootX = 0;
                         tRootY = 0.08;
                         tBodyRotX = 0;
@@ -3656,9 +3660,31 @@
                             danceStep = 1;
                             triggerLandingSquash(0.18);
                         }
+
+                    } else if (danceTimer < 4.1) {
+                        // Step 4B: Organic smooth deceleration return to idle (3.4s to 4.1s)
+                        // Smoothly ease hand down, un-squat, and realign feet so there is zero jolt at transition
+                        const p = (danceTimer - 3.4) / 0.70;
+                        const s = 0.5 - 0.5 * Math.cos(p * Math.PI); // Cosine ease-in-out from 0 to 1
+
+                        tRootX = 0;
+                        tRootY = 0.08;
+                        tBodyRotX = 0;
+                        tBodyRotY = 0;
+
+                        tScaleX = 1.08 * (1.0 - s) + 1.0 * s;
+                        tScaleY = 0.93 * (1.0 - s) + 1.0 * s;
+                        tScaleZ = 1.08 * (1.0 - s) + 1.0 * s;
+
+                        tLeftFootRotZ = 0.32 * (1.0 - s);
+                        tRightFootRotZ = -0.32 * (1.0 - s);
+                        tLeftHandRotZ = 1.35 * (1.0 - s) + 0.10 * s;
+                        tLeftHandRotX = -0.15 * (1.0 - s);
+                        tRightHandRotZ = -0.28 * (1.0 - s) - 0.10 * s;
+
                     } else {
                         // Effortlessly ease from victory pose to idle breathing
-                        setKirbyAnimation('idle');
+                        setMascotAnimation('idle');
                     }
 
                 } else if (animState === 'sing') {
@@ -3700,7 +3726,7 @@
                     }
 
                     if (stateTimer >= 1.25) {
-                        setKirbyAnimation('idle');
+                        setMascotAnimation('idle');
                     }
 
                 } else if (animState === 'poke') {
@@ -3714,7 +3740,7 @@
                         tScaleX = 1.0 + squish * 0.52;
                         tScaleZ = 1.0 + squish * 0.52;
                     } else {
-                        setKirbyAnimation('idle');
+                        setMascotAnimation('idle');
                     }
                 }
 

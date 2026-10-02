@@ -2217,6 +2217,210 @@
             } catch (e) {}
         }
 
+        // Noise buffer helper for authentic drums (snare wires, hi-hats, brush sizzle)
+        let _noiseBuffer = null;
+        function getNoiseBuffer(ctx) {
+            if (!_noiseBuffer) {
+                const bufferSize = ctx.sampleRate * 2;
+                _noiseBuffer = ctx.createBuffer(1, bufferSize, ctx.sampleRate);
+                const data = _noiseBuffer.getChannelData(0);
+                for (let i = 0; i < bufferSize; i++) {
+                    data[i] = Math.random() * 2 - 1;
+                }
+            }
+            return _noiseBuffer;
+        }
+
+        // [SHIM 6] Jazz Kick Drum (Tetsujiro Obara Acoustic Bass Drum Punch)
+        function shimKick(timeOffset = 0, pitch = 65, volMul = 1.0, duration = 0.16) {
+            if (!window.soundEnabled) return;
+            try {
+                const ctx = getAudioContext();
+                const startT = ctx.currentTime + timeOffset;
+                const osc = ctx.createOscillator();
+                registerTrackOsc(osc);
+                const gain = ctx.createGain();
+                osc.type = 'sine';
+                osc.frequency.setValueAtTime(pitch * 2.2, startT);
+                osc.frequency.exponentialRampToValueAtTime(pitch * 0.75, startT + duration);
+                gain.gain.setValueAtTime(0.24 * volMul, startT);
+                gain.gain.exponentialRampToValueAtTime(0.001, startT + duration);
+                osc.connect(gain);
+                gain.connect(ctx.destination);
+                osc.start(startT);
+                osc.stop(startT + duration);
+            } catch (e) {}
+        }
+
+        // [SHIM 7] Jazz Snare / Rimshot / Brush Backbeat
+        function shimSnare(timeOffset = 0, volMul = 1.0, isRimshot = false) {
+            if (!window.soundEnabled) return;
+            try {
+                const ctx = getAudioContext();
+                const startT = ctx.currentTime + timeOffset;
+
+                // 1. Resonant drum shell body tone
+                const osc = ctx.createOscillator();
+                registerTrackOsc(osc);
+                const oscGain = ctx.createGain();
+                osc.type = 'triangle';
+                const baseF = isRimshot ? 220 : 175;
+                osc.frequency.setValueAtTime(baseF, startT);
+                osc.frequency.exponentialRampToValueAtTime(baseF * 0.65, startT + 0.12);
+                oscGain.gain.setValueAtTime(0.18 * volMul, startT);
+                oscGain.gain.exponentialRampToValueAtTime(0.001, startT + 0.12);
+                osc.connect(oscGain);
+                oscGain.connect(ctx.destination);
+                osc.start(startT);
+                osc.stop(startT + 0.12);
+
+                // 2. Snare wire sizzle (noise through bandpass filter)
+                const noise = ctx.createBufferSource();
+                registerTrackOsc(noise);
+                noise.buffer = getNoiseBuffer(ctx);
+                const filter = ctx.createBiquadFilter();
+                filter.type = 'bandpass';
+                filter.frequency.setValueAtTime(isRimshot ? 3200 : 2400, startT);
+                filter.Q.setValueAtTime(2.0, startT);
+                const noiseGain = ctx.createGain();
+                const noiseDur = isRimshot ? 0.09 : 0.15;
+                noiseGain.gain.setValueAtTime(0.16 * volMul, startT);
+                noiseGain.gain.exponentialRampToValueAtTime(0.001, startT + noiseDur);
+                noise.connect(filter);
+                filter.connect(noiseGain);
+                noiseGain.connect(ctx.destination);
+                noise.start(startT);
+                noise.stop(startT + noiseDur);
+            } catch (e) {}
+        }
+
+        // [SHIM 8] Jazz Hi-Hat (Chick / Sizzle)
+        function shimHiHat(timeOffset = 0, open = false, volMul = 1.0) {
+            if (!window.soundEnabled) return;
+            try {
+                const ctx = getAudioContext();
+                const startT = ctx.currentTime + timeOffset;
+                const dur = open ? 0.28 : 0.055;
+
+                // Noise through high-pass filter
+                const noise = ctx.createBufferSource();
+                registerTrackOsc(noise);
+                noise.buffer = getNoiseBuffer(ctx);
+                const filter = ctx.createBiquadFilter();
+                filter.type = 'highpass';
+                filter.frequency.setValueAtTime(7500, startT);
+                const gain = ctx.createGain();
+                gain.gain.setValueAtTime(0.08 * volMul, startT);
+                gain.gain.exponentialRampToValueAtTime(0.0005, startT + dur);
+                noise.connect(filter);
+                filter.connect(gain);
+                gain.connect(ctx.destination);
+                noise.start(startT);
+                noise.stop(startT + dur);
+
+                // Metallic ping overtone
+                const osc = ctx.createOscillator();
+                registerTrackOsc(osc);
+                const oscGain = ctx.createGain();
+                osc.type = 'sine';
+                osc.frequency.setValueAtTime(open ? 6200 : 8400, startT);
+                oscGain.gain.setValueAtTime(0.04 * volMul, startT);
+                oscGain.gain.exponentialRampToValueAtTime(0.0005, startT + dur);
+                osc.connect(oscGain);
+                oscGain.connect(ctx.destination);
+                osc.start(startT);
+                osc.stop(startT + dur);
+            } catch (e) {}
+        }
+
+        // [SHIM 9] Kazumi Watanabe Electric Jazz Guitar (Warm Gibson Hollowbody Clean Lead)
+        function shimGuitar(timeOffset = 0, notes = null, volMul = 1.0) {
+            if (!window.soundEnabled) return;
+            try {
+                const c = getAudioContext();
+                const startT = c.currentTime + timeOffset;
+                const phrase = notes || [{ f: 587.33, d: 0.28, v: 0.16, t: 0 }];
+                phrase.forEach(n => {
+                    const noteT = startT + n.t;
+                    const osc = c.createOscillator();
+                    registerTrackOsc(osc);
+                    const gain = c.createGain();
+                    // Warm jazz guitar body: triangle with warm lowpass softening
+                    osc.type = 'triangle';
+                    osc.frequency.setValueAtTime(n.f, noteT);
+                    if (n.slide) {
+                        osc.frequency.exponentialRampToValueAtTime(n.slide, noteT + n.d * 0.7);
+                    }
+                    const filter = c.createBiquadFilter();
+                    filter.type = 'lowpass';
+                    filter.frequency.setValueAtTime(2800, noteT);
+                    filter.frequency.exponentialRampToValueAtTime(1400, noteT + n.d);
+
+                    gain.gain.setValueAtTime(0.0001, noteT);
+                    gain.gain.linearRampToValueAtTime(n.v * volMul, noteT + 0.015); // gentle thumb-pick transient
+                    gain.gain.exponentialRampToValueAtTime(0.0001, noteT + n.d);
+
+                    osc.connect(filter);
+                    filter.connect(gain);
+                    gain.connect(c.destination);
+                    osc.start(noteT);
+                    osc.stop(noteT + n.d);
+                });
+            } catch (e) {}
+        }
+
+        // [SHIM 10] Acoustic Concert Grand Piano (Thomas Krüger / Masaru Imada Grand Piano)
+        function shimGrandPiano(timeOffset = 0, freq = 440, volMul = 1.0, duration = 1.2, isStaccato = false) {
+            if (!window.soundEnabled) return;
+            try {
+                const c = getAudioContext();
+                const startT = c.currentTime + timeOffset;
+                const noteDur = isStaccato ? Math.min(duration, 0.18) : duration;
+
+                // Dual-string acoustic piano model with natural inharmonicity
+                [1.0, 2.002, 3.006].forEach((harm, hIdx) => {
+                    const osc = c.createOscillator();
+                    registerTrackOsc(osc);
+                    const gain = c.createGain();
+                    osc.type = hIdx === 0 ? 'sine' : (hIdx === 1 ? 'triangle' : 'sine');
+                    osc.frequency.setValueAtTime(freq * harm, startT);
+
+                    const harmVol = hIdx === 0 ? 0.16 : (hIdx === 1 ? 0.08 : 0.035);
+                    const harmDur = hIdx === 0 ? noteDur : noteDur * (1 - hIdx * 0.25);
+
+                    gain.gain.setValueAtTime(0.0001, startT);
+                    gain.gain.linearRampToValueAtTime(harmVol * volMul, startT + 0.008); // crisp wooden felt hammer attack
+                    gain.gain.exponentialRampToValueAtTime(0.0001, startT + harmDur);
+
+                    osc.connect(gain);
+                    gain.connect(c.destination);
+                    osc.start(startT);
+                    osc.stop(startT + harmDur);
+                });
+            } catch (e) {}
+        }
+
+        // [SHIM 11] Sub-Bass Acoustic Pedal (Grand Piano Sforzando / Deep Bass Resonance)
+        function shimPedalBass(timeOffset = 0, freq = 55.0, volMul = 1.0, duration = 2.2) {
+            if (!window.soundEnabled) return;
+            try {
+                const c = getAudioContext();
+                const startT = c.currentTime + timeOffset;
+                const osc = c.createOscillator();
+                registerTrackOsc(osc);
+                const gain = c.createGain();
+                osc.type = 'triangle';
+                osc.frequency.setValueAtTime(freq, startT);
+                osc.frequency.exponentialRampToValueAtTime(freq * 0.98, startT + duration);
+                gain.gain.setValueAtTime(0.20 * volMul, startT);
+                gain.gain.exponentialRampToValueAtTime(0.0005, startT + duration);
+                osc.connect(gain);
+                gain.connect(c.destination);
+                osc.start(startT);
+                osc.stop(startT + duration);
+            } catch (e) {}
+        }
+
         // Legacy compatibility delegate wrappers
         function playJourneyChirp() { shimPulseSquash(0, 1.0, 1.0); }
         function playGoldenChiChime() { shimPulseBell(0, 1.0, 1.0); }
@@ -2460,6 +2664,7 @@
 
                 // BAR 01: Awakening Ding
                 shimDing(0.00, 1760.0, 0.16);
+                shimPedalBass(0.00, 55.0, 0.12, 2.0);
 
                 // BAR 02: Waddle Scherzando March
                 shimWaddle(0.50, 420, 0.10);
@@ -2467,16 +2672,18 @@
                 shimWaddle(0.95, 420, 0.10);
                 shimWaddle(1.18, 480, 0.12);
 
-                // BAR 03: Float Levitation & Mid-air Sparkle
+                // BAR 03: Float Levitation & Grand Piano Acoustic Chime
                 shimFloat(1.45, 523.25, 0.13);
+                shimGrandPiano(1.45, 523.25, 0.12, 0.90);
                 shimWaddle(1.75, 440, 0.07);
                 shimDing(2.05, 1318.5, 0.10);
 
                 // BAR 04: Sacred Pulse Squash Wave
                 shimPulseSquash(2.40, 1.05, 1.0);
 
-                // BAR 05: Golden Chi Bell Swell
+                // BAR 05: Golden Chi Bell Swell & Sub-Pedal
                 shimPulseBell(3.40, 1.0, 1.0);
+                shimPedalBass(3.40, 65.41, 0.16, 2.2);
 
                 // BAR 06: Syncopated Waddle Crescendo
                 shimWaddle(4.60, 440, 0.08);
@@ -2490,18 +2697,22 @@
 
                 // BAR 08: Float & Pulse Counterpoint
                 shimFloat(6.50, 587.33, 0.12);
+                shimGrandPiano(6.50, 587.33, 0.12, 0.85);
                 shimPulseSquash(6.85, 0.90, 1.122);
 
                 // BAR 09: Grand Climax
                 shimDance(7.50, 1.0, 1.25);
+                shimGrandPiano(7.50, 587.33, 0.16, 1.4);
                 shimPulseBell(7.80, 1.15, 1.0);
+                shimPedalBass(7.80, 73.42, 0.20, 2.6);
                 shimDing(8.50, 1760.0, 0.16);
                 shimDing(8.85, 2093.0, 0.15);
 
                 // BAR 10: Transcendent Peaceful Coda Resolution
-                shimFloat(9.25, 523.25, 0.10); // Ethereal glass-harp harmonic arpeggio
-                shimPulseSquash(9.60, 0.65, 1.0); // Gentle celestial fading chord
-                shimDing(10.10, 2637.0, 0.09, 1.4); // E7 pure starlight bell ringing out smoothly
+                shimFloat(9.25, 523.25, 0.10);
+                shimGrandPiano(9.25, 523.25, 0.10, 1.6);
+                shimPulseSquash(9.60, 0.65, 1.0);
+                shimDing(10.10, 2637.0, 0.09, 1.4);
 
                 // Mascot Character Choreography
                 scheduleTrackTimeout(() => { if (rootGroup) setMascotAnimation('walk'); }, 500);
@@ -2530,219 +2741,319 @@
             } else if (trackNum === 2) {
                 // =============================================================
                 // TRACK 2: 今田勝 "Green Caterpillar" (1975 TBM Jazz-Fusion)
+                // Authentic Japanese 70s Jazz-Fusion Ensemble:
+                // - Isoo Fukui Acoustic Upright Walking Bass
+                // - Tetsujiro Obara Full Jazz Drum Kit (Kick, Snare, Hi-Hat, Ride)
+                // - Kazumi Watanabe Gibson L-5 Clean Electric Guitar
+                // - Masaru Imada Fender Rhodes & Concert Grand Piano
+                // - Yuji Imamura Frog Cuíca / Nocturnal Swamp Percussion
                 // 98 BPM Swing Groove (1 Beat = ~0.612s, Total Duration: ~26.0s)
-                // Complete Masterpiece with Extended Three Blind Mice Turnaround Coda
                 // =============================================================
                 const btn2 = document.getElementById('track2Btn');
                 if (btn2) {
                     btn2.classList.add('active');
-                    btn2.innerHTML = '🎷 Track 2: 演奏中 (🐸蛙の鳴き声)...';
+                    btn2.innerHTML = '🎷 Track 2: 演奏中 (🐸今田勝Jazz)...';
                 }
 
                 const quoteText = document.getElementById('saintQuoteText');
-                if (quoteText) quoteText.innerText = '🐸 ゲコゲコ… 冒頭の神秘的な蛙の鳴き声（フロッグ・クローク/クイーカ）から始まる今田勝『Green Caterpillar』だキューブ！🌿✨';
+                if (quoteText) quoteText.innerText = '🐸 ゲコゲコ… 蛙の鳴き声（フロッグ・クローク）と渡辺香津美のジャズギター、今田勝のRhodesが織りなす『Green Caterpillar』だキューブ！🌿🎷✨';
 
-                // --- BAR 00: Atmospheric Swamp Opening — Frog Croaks (0.00s - 2.45s) ---
+                // --- BAR 00: Atmospheric Swamp Opening — Frog Croaks & Subtle Hi-Hat (0.00s - 2.45s) ---
                 shimPulseBell(0.00, 0.75, 0.561); // D2 Sub-drone marsh mist resonance
-                // Firmly audible Bullfrog Croak 1: "Gwaaa-rk... gwuk!"
+                shimPedalBass(0.00, 73.42, 0.16, 2.2); // Low D2 acoustic pedal
+                // Bullfrog Croak 1: "Gwaaa-rk... gwuk!"
                 shimFrogCroak(0.15, 1.0, 1.30, true);
-                // Answering Frog Croak 2 across the nocturnal marsh: "Gwaaa-rk... gwuk!"
+                // Answering Frog Croak 2: "Gwaaa-rk... gwuk!"
                 shimFrogCroak(0.95, 0.90, 1.15, true);
+                // Subtle hi-hat open sizzle
+                shimHiHat(1.20, true, 0.08);
                 // Awakening Ride Cymbal tap
                 shimDing(1.70, 2640.0, 0.10, 0.35);
                 // Third short throat gulp accent: "Gwuk!"
                 shimFrogCroak(1.90, 1.15, 0.95, false);
+                // Obara pickup ghost snare taps into the beat!
+                shimSnare(2.15, 0.08, false);
+                shimSnare(2.30, 0.11, false);
 
-                // --- BAR 01: Isoo Fukui's Walking Bass Crawl & Swing Pocket (2.45s - 4.90s) ---
-                shimDing(2.45, 1760.0, 0.12, 0.25); // Beat 1 Ride Cymbal
-                shimWaddle(2.45, 146.83, 0.14, 0.12); // Isoo Fukui Walking Bass D3 Root
+                // --- BAR 01: Isoo Fukui's Walking Bass Crawl & Obara's Swing Drum Kit (2.45s - 4.90s) ---
+                // Beat 1 (2.45s): Kick + Ride + Fukui Upright Bass D3 Root
+                shimKick(2.45, 65, 0.20);
+                shimDing(2.45, 1760.0, 0.12, 0.25);
+                shimWaddle(2.45, 146.83, 0.16, 0.14);
 
-                shimWaddle(3.06, 174.61, 0.13, 0.10); // Beat 2: F3 (Minor 3rd)
-                shimDing(3.06, 1760.0, 0.10, 0.20); // Beat 2 Ride
-                shimWaddle(3.37, 196.00, 0.13, 0.09); // Beat 2-and: G3 (4th)
-                shimDing(3.37, 2640.0, 0.08, 0.12); // Beat 2-and Swing offbeat tap
+                // Beat 2 (3.06s): Snare Rimshot + Hi-Hat Chick + Bass F3 + Ride
+                shimSnare(3.06, 0.18, true);
+                shimHiHat(3.06, false, 0.11);
+                shimWaddle(3.06, 174.61, 0.14, 0.10);
+                shimDing(3.06, 1760.0, 0.10, 0.20);
 
-                shimWaddle(3.67, 207.65, 0.15, 0.10); // Beat 3: G#3 (Quintessential Blue Note Step!)
-                shimDing(3.67, 1760.0, 0.10, 0.20); // Beat 3 Ride
-                shimWaddle(3.98, 220.00, 0.14, 0.09); // Beat 3-and: A3 (Dominant 5th)
+                // Beat 2-and (3.37s): Ride swing tap + Bass G3
+                shimWaddle(3.37, 196.00, 0.14, 0.09);
+                shimDing(3.37, 2640.0, 0.08, 0.12);
 
-                // Syncopated frog cuíca rasp echoing with the walking bass
+                // Beat 3 (3.67s): Kick + Bass Blue Note G#3 + Ride
+                shimKick(3.67, 65, 0.18);
+                shimWaddle(3.67, 207.65, 0.17, 0.10); // Quintessential Blue Note!
+                shimDing(3.67, 1760.0, 0.10, 0.20);
+
+                // Beat 3-and (3.98s): Ghost Snare + Bass A3 Dominant
+                shimSnare(3.98, 0.09, false);
+                shimWaddle(3.98, 220.00, 0.15, 0.09);
+
+                // Beat 4 (4.28s): Snare Rimshot + Hi-Hat + Cuíca Frog Rasp + Bass C4
+                shimSnare(4.28, 0.20, true);
+                shimHiHat(4.28, false, 0.11);
                 shimFrogCroak(4.28, 1.05, 0.90, false);
-                shimWaddle(4.28, 261.63, 0.13, 0.10); // Beat 4: C4 (Minor 7th)
-                shimDing(4.28, 1760.0, 0.11, 0.22); // Beat 4 Ride
-                shimWaddle(4.59, 293.66, 0.14, 0.09); // Beat 4-and: D4 (Octave leap)
-                shimDing(4.59, 2640.0, 0.08, 0.12); // Beat 4-and Swing offbeat tap
+                shimWaddle(4.28, 261.63, 0.14, 0.10);
+                shimDing(4.28, 1760.0, 0.11, 0.22);
 
-                // --- BAR 02: Fender Rhodes Electric Piano Comping (4.90s - 7.35s) ---
+                // Beat 4-and (4.59s): Kick syncopation + Bass D4 Octave Leap + Ride
+                shimKick(4.59, 65, 0.16);
+                shimWaddle(4.59, 293.66, 0.15, 0.09);
+                shimDing(4.59, 2640.0, 0.08, 0.12);
+
+                // --- BAR 02: Fender Rhodes & Grand Piano Comping + Full Rhythm Section (4.90s - 7.35s) ---
                 // Walking Bass Descent: C4 -> A3 -> G3 -> F3 -> E3
-                shimWaddle(4.90, 261.63, 0.13, 0.10);
+                shimKick(4.90, 65, 0.18);
+                shimWaddle(4.90, 261.63, 0.14, 0.10);
                 shimDing(4.90, 1760.0, 0.11, 0.22);
-                shimWaddle(5.51, 220.00, 0.13, 0.10);
+
+                // Imada Rhodes Dm9 offbeat chop + Grand Piano acoustic doubling
+                shimFloat(5.21, 523.25, 0.14, [349.23, 440.00, 523.25, 659.25]); // Dm9 (F4-A4-C5-E5)
+                shimGrandPiano(5.21, 523.25, 0.12, 0.45);
+
+                shimSnare(5.51, 0.18, true);
+                shimHiHat(5.51, false, 0.11);
+                shimWaddle(5.51, 220.00, 0.14, 0.10);
                 shimDing(5.51, 1760.0, 0.10, 0.20);
                 shimDing(5.82, 2640.0, 0.08, 0.12);
-                shimWaddle(6.12, 196.00, 0.13, 0.10);
-                shimDing(6.12, 1760.0, 0.10, 0.20);
-                shimWaddle(6.73, 174.61, 0.13, 0.10);
-                shimDing(6.73, 1760.0, 0.11, 0.22);
-                shimWaddle(7.04, 164.81, 0.12, 0.09);
-                shimDing(7.04, 2640.0, 0.08, 0.12);
 
-                // Masaru Imada Fender Rhodes Modal Chord Chops
-                shimFloat(5.21, 523.25, 0.14, [349.23, 440.00, 523.25, 659.25]); // Dm9 offbeat chop (F4-A4-C5-E5)
-                shimFloat(6.12, 523.25, 0.13, [349.23, 493.88, 659.25, 880.00]); // G13 modal response (F4-B4-E5-A5)
-                shimFloat(7.04, 523.25, 0.12, [392.00, 466.16, 587.33, 739.99]); // Ebmaj7#11 chromatic passing chop
-                shimFrogCroak(7.04, 0.95, 0.85, true); // Answering frog croak on turnaround!
+                // Imada G13 modal response + Kick
+                shimKick(6.12, 65, 0.18);
+                shimFloat(6.12, 523.25, 0.13, [349.23, 493.88, 659.25, 880.00]); // G13 (F4-B4-E5-A5)
+                shimGrandPiano(6.12, 659.25, 0.11, 0.40);
+                shimWaddle(6.12, 196.00, 0.14, 0.10);
+                shimDing(6.12, 1760.0, 0.10, 0.20);
+                shimSnare(6.42, 0.09, false); // Ghost snare
+
+                shimSnare(6.73, 0.18, true);
+                shimHiHat(6.73, false, 0.11);
+                shimWaddle(6.73, 174.61, 0.14, 0.10);
+                shimDing(6.73, 1760.0, 0.11, 0.22);
+
+                // Ebmaj7#11 chromatic passing chop + Kick + Open Hi-Hat + Answering Frog Croak
+                shimKick(7.04, 65, 0.16);
+                shimHiHat(7.04, true, 0.10);
+                shimFloat(7.04, 523.25, 0.12, [392.00, 466.16, 587.33, 739.99]);
+                shimWaddle(7.04, 164.81, 0.13, 0.09);
+                shimDing(7.04, 2640.0, 0.08, 0.12);
+                shimFrogCroak(7.04, 0.95, 0.85, true);
 
                 // --- BAR 03: The Caterpillar Main Theme — Head A (7.35s - 9.80s) ---
-                shimPulseSquash(7.35, 0.95, 1.122); // D-transposed vocal blues lead
-                shimWaddle(7.35, 146.83, 0.13, 0.11);
+                // Kazumi Watanabe's Electric Jazz Guitar enters with the legendary Blues Head!
+                shimGuitar(7.35, [
+                    { f: 293.66, d: 0.24, v: 0.18, t: 0 },                  // D4
+                    { f: 349.23, d: 0.22, v: 0.18, t: 0.31 },               // F4
+                    { f: 392.00, d: 0.18, v: 0.19, t: 0.61, slide: 415.30 },// G4 -> G#4 Blue Note Slide!
+                    { f: 440.00, d: 0.36, v: 0.20, t: 0.81 }                // A4 Dominant
+                ]);
+                shimPulseSquash(7.35, 0.95, 1.122); // Vocal blues unison doubling
+                shimKick(7.35, 65, 0.20);
+                shimWaddle(7.35, 146.83, 0.14, 0.11);
                 shimDing(7.35, 1760.0, 0.12, 0.22);
 
-                shimWaddle(7.66, 174.61, 0.12, 0.09);
-                shimWaddle(7.96, 196.00, 0.13, 0.10);
+                shimWaddle(7.66, 174.61, 0.13, 0.09);
+                shimSnare(7.96, 0.18, true);
+                shimHiHat(7.96, false, 0.11);
+                shimWaddle(7.96, 196.00, 0.14, 0.10);
                 shimDing(7.96, 1760.0, 0.10, 0.20);
 
-                // C5 -> D5 -> F5 blues bend lick
-                shimDance(7.96, 1.0, 1.0, [
-                    { f: 523.25, d: 0.18, v: 0.14, t: 0 },
-                    { f: 587.33, d: 0.22, v: 0.16, t: 0.09 },
-                    { f: 698.46, d: 0.25, v: 0.17, t: 0.22 }
+                // Descending blues crawl lick (A4 -> G#4 -> G4 -> F4 -> D4) on Guitar & Grand Piano
+                shimGuitar(8.57, [
+                    { f: 440.00, d: 0.14, v: 0.18, t: 0 },
+                    { f: 415.30, d: 0.14, v: 0.18, t: 0.10 }, // G#4 Blue note
+                    { f: 392.00, d: 0.14, v: 0.17, t: 0.20 }, // G4
+                    { f: 349.23, d: 0.16, v: 0.17, t: 0.30 }, // F4
+                    { f: 293.66, d: 0.28, v: 0.20, t: 0.42 }  // D4
                 ]);
-
-                // Descending blues crawl lick (A5 -> G#5 -> G5 -> F5 -> D5)
-                shimDance(8.57, 1.0, 1.05, [
-                    { f: 880.00, d: 0.14, v: 0.16, t: 0 },
-                    { f: 830.61, d: 0.14, v: 0.16, t: 0.10 }, // G#5 Blue note!
-                    { f: 783.99, d: 0.14, v: 0.15, t: 0.20 },
-                    { f: 698.46, d: 0.16, v: 0.15, t: 0.30 },
-                    { f: 587.33, d: 0.24, v: 0.18, t: 0.42 }
-                ]);
+                shimGrandPiano(8.57, 523.25, 0.11, 0.40);
                 shimFloat(8.57, 523.25, 0.10, [349.23, 440.00, 523.25, 659.25]); // Dm9 answer chop
-                shimWaddle(8.57, 220.00, 0.13, 0.10);
+                shimKick(8.57, 65, 0.18);
+                shimWaddle(8.57, 220.00, 0.14, 0.10);
                 shimDing(8.57, 1760.0, 0.10, 0.20);
-                shimWaddle(9.18, 196.00, 0.12, 0.09);
+
+                shimSnare(9.18, 0.18, true);
+                shimHiHat(9.18, false, 0.11);
+                shimWaddle(9.18, 196.00, 0.13, 0.09);
                 shimDing(9.18, 2640.0, 0.08, 0.12);
-                shimWaddle(9.49, 146.83, 0.14, 0.11);
+
+                shimKick(9.49, 65, 0.16);
+                shimWaddle(9.49, 146.83, 0.15, 0.11);
                 shimDing(9.49, 1174.66, 0.14, 0.35); // D6 Head resolution accent
 
-                // --- BAR 04: Rhodes Solo Chops & Counterpoint (9.80s - 12.25s) ---
+                // --- BAR 04: Kazumi Watanabe Bebop Guitar Solo & Rhodes Chops (9.80s - 12.25s) ---
+                shimKick(9.80, 65, 0.18);
                 shimFloat(9.80, 523.25, 0.13, [349.23, 440.00, 523.25, 659.25]); // Dm9 chop
-                shimWaddle(9.80, 146.83, 0.13, 0.10);
+                shimWaddle(9.80, 146.83, 0.14, 0.10);
                 shimDing(9.80, 1760.0, 0.11, 0.20);
 
-                // Kazumi Watanabe Bebop Guitar-style run
-                shimDance(10.41, 1.0, 0.95, [
-                    { f: 440.00, d: 0.12, v: 0.14, t: 0 },
-                    { f: 523.25, d: 0.12, v: 0.15, t: 0.08 },
-                    { f: 587.33, d: 0.13, v: 0.15, t: 0.16 },
-                    { f: 698.46, d: 0.14, v: 0.16, t: 0.24 },
-                    { f: 880.00, d: 0.20, v: 0.17, t: 0.32 }
+                // Kazumi Watanabe Bebop Guitar Solo with clean Gibson attack
+                shimGuitar(10.41, [
+                    { f: 440.00, d: 0.12, v: 0.17, t: 0 },
+                    { f: 523.25, d: 0.12, v: 0.18, t: 0.08 },
+                    { f: 587.33, d: 0.13, v: 0.18, t: 0.16 },
+                    { f: 698.46, d: 0.14, v: 0.19, t: 0.24, slide: 739.99 },
+                    { f: 880.00, d: 0.26, v: 0.20, t: 0.34 }
                 ]);
-                shimWaddle(10.41, 174.61, 0.12, 0.09);
-                shimWaddle(11.02, 196.00, 0.13, 0.10);
+                shimSnare(10.41, 0.18, true);
+                shimHiHat(10.41, false, 0.11);
+                shimWaddle(10.41, 174.61, 0.13, 0.09);
+
+                shimKick(11.02, 65, 0.18);
+                shimWaddle(11.02, 196.00, 0.14, 0.10);
                 shimFloat(11.02, 523.25, 0.12, [349.23, 493.88, 659.25, 880.00]); // G13 chord
+                shimGrandPiano(11.02, 659.25, 0.11, 0.40);
                 shimDing(11.02, 1760.0, 0.10, 0.20);
-                shimWaddle(11.63, 155.56, 0.13, 0.10); // Eb bass passing
+
+                shimSnare(11.63, 0.18, true);
+                shimHiHat(11.63, false, 0.11);
+                shimWaddle(11.63, 155.56, 0.14, 0.10); // Eb bass passing
                 shimFloat(11.63, 523.25, 0.11, [392.00, 466.16, 587.33, 739.99]); // Eb9 chord
                 shimDing(11.94, 2640.0, 0.10, 0.40); // Starlight bell ping
 
-                // --- BAR 05: Modal Expansion & Funk Acceleration (12.25s - 14.70s) ---
+                // --- BAR 05: Modal Expansion, Funk Acceleration & Triplet Drum Build (12.25s - 14.70s) ---
                 shimPulseBell(12.25, 0.95, 0.749); // Warm Golden Chi Drone in G
-                shimWaddle(12.25, 146.83, 0.14, 0.10);
+                shimKick(12.25, 65, 0.20);
+                shimWaddle(12.25, 146.83, 0.15, 0.10);
                 shimDing(12.25, 1760.0, 0.12, 0.20);
 
-                // Ascending walking bass crescendo
-                shimWaddle(12.56, 174.61, 0.13, 0.08);
-                shimWaddle(12.86, 196.00, 0.14, 0.08);
-                shimWaddle(13.17, 207.65, 0.15, 0.08); // G#3 Blue note
+                // Ascending walking bass crescendo & guitar blues lick
+                shimWaddle(12.56, 174.61, 0.14, 0.08);
+                shimSnare(12.86, 0.18, true);
+                shimHiHat(12.86, false, 0.11);
+                shimWaddle(12.86, 196.00, 0.15, 0.08);
+
+                shimKick(13.17, 65, 0.18);
+                shimWaddle(13.17, 207.65, 0.16, 0.08); // G#3 Blue note
                 shimFloat(13.17, 587.33, 0.12); // High Rhodes shimmer
+                shimGrandPiano(13.17, 587.33, 0.12, 0.50);
                 shimDing(13.17, 1760.0, 0.11, 0.20);
 
-                shimWaddle(13.48, 220.00, 0.14, 0.08);
-                shimWaddle(13.78, 261.63, 0.15, 0.09);
+                shimWaddle(13.48, 220.00, 0.15, 0.08);
+                shimWaddle(13.78, 261.63, 0.16, 0.09);
                 // Ascending blues pentatonic flourish
-                shimDance(13.78, 1.25, 1.10);
-                shimWaddle(14.09, 293.66, 0.16, 0.09);
+                shimGuitar(13.78, [
+                    { f: 587.33, d: 0.10, v: 0.17, t: 0 },
+                    { f: 698.46, d: 0.10, v: 0.18, t: 0.08 },
+                    { f: 783.99, d: 0.10, v: 0.18, t: 0.16 },
+                    { f: 880.00, d: 0.18, v: 0.20, t: 0.24 }
+                ]);
+                shimWaddle(14.09, 293.66, 0.17, 0.09);
 
-                // Dynamic triplet roll buildup
-                shimWaddle(14.40, 349.23, 0.14, 0.06);
-                shimWaddle(14.50, 392.00, 0.15, 0.06);
-                shimWaddle(14.60, 415.30, 0.16, 0.06);
-                shimDing(14.60, 2640.0, 0.12, 0.15);
+                // Dynamic Obara snare triplet roll buildup!
+                shimSnare(14.20, 0.12, false);
+                shimSnare(14.30, 0.14, false);
+                shimSnare(14.40, 0.16, false);
+                shimSnare(14.50, 0.18, false);
+                shimHiHat(14.60, true, 0.14); // Open sizzle!
+                shimDing(14.60, 2640.0, 0.14, 0.25);
 
                 // --- BAR 06: Grand Fusion Climax (Full Unison Blues Hook) (14.70s - 17.15s) ---
-                shimPulseSquash(14.70, 1.20, 1.122); // Octave D4/D5 fortissimo unison hit
-                shimWaddle(14.70, 146.83, 0.18, 0.12);
+                // Full Unison: Guitar + Grand Piano + Rhodes + Bass in fortissimo unison!
+                shimPulseSquash(14.70, 1.25, 1.122);
+                shimKick(14.70, 65, 0.22);
+                shimGrandPiano(14.70, 293.66, 0.18, 0.40); // D4 Grand Piano punch
+                shimWaddle(14.70, 146.83, 0.19, 0.12);
                 shimDing(14.70, 1174.66, 0.16, 0.30);
 
-                shimWaddle(15.01, 174.61, 0.16, 0.10);
+                shimWaddle(15.01, 174.61, 0.17, 0.10);
                 shimDing(15.01, 1760.0, 0.11, 0.20);
 
                 // Unison Hook Phrase: G4 -> G#4 -> A4 -> C5 -> D5
-                shimDance(15.31, 1.0, 1.20, [
-                    { f: 392.00, d: 0.12, v: 0.16, t: 0 },
-                    { f: 415.30, d: 0.14, v: 0.18, t: 0.16 }, // G#4 Blue note punch
-                    { f: 440.00, d: 0.20, v: 0.18, t: 0.31 }, // A4 Dominant resolve
-                    { f: 523.25, d: 0.16, v: 0.17, t: 0.62 }, // C5
-                    { f: 587.33, d: 0.30, v: 0.20, t: 0.93 }  // D5 Peak
-                ]);
-                shimWaddle(15.31, 196.00, 0.15, 0.09);
-                shimWaddle(15.47, 207.65, 0.17, 0.09);
-                shimWaddle(15.62, 220.00, 0.17, 0.12);
+                const unisonPhrase = [
+                    { f: 392.00, d: 0.12, v: 0.19, t: 0 },
+                    { f: 415.30, d: 0.14, v: 0.21, t: 0.16 }, // G#4 Blue note punch
+                    { f: 440.00, d: 0.20, v: 0.21, t: 0.31 }, // A4 Dominant resolve
+                    { f: 523.25, d: 0.16, v: 0.20, t: 0.62 }, // C5
+                    { f: 587.33, d: 0.32, v: 0.22, t: 0.93 }  // D5 Peak
+                ];
+                shimGuitar(15.31, unisonPhrase, 1.0);
+                shimDance(15.31, 1.0, 1.20, unisonPhrase);
+                shimGrandPiano(15.31, 392.00, 0.16, 0.30);
+                shimSnare(15.31, 0.20, true);
+                shimHiHat(15.31, false, 0.12);
+                shimWaddle(15.31, 196.00, 0.16, 0.09);
+
+                shimWaddle(15.47, 207.65, 0.18, 0.09);
+                shimKick(15.62, 65, 0.20);
+                shimWaddle(15.62, 220.00, 0.18, 0.12);
                 shimDing(15.62, 1760.0, 0.14, 0.25);
 
                 // Descending unison blues crawl (C5 -> A4 -> G4 -> F4 -> D4)
-                shimDance(16.23, 1.0, 1.15, [
-                    { f: 523.25, d: 0.14, v: 0.16, t: 0 },
-                    { f: 440.00, d: 0.14, v: 0.16, t: 0.11 },
-                    { f: 392.00, d: 0.14, v: 0.15, t: 0.22 },
-                    { f: 349.23, d: 0.16, v: 0.15, t: 0.33 },
-                    { f: 293.66, d: 0.28, v: 0.18, t: 0.45 }
-                ]);
-                shimWaddle(16.23, 261.63, 0.14, 0.09);
-                shimWaddle(16.45, 220.00, 0.14, 0.09);
-                shimWaddle(16.67, 174.61, 0.15, 0.10);
+                const descPhrase = [
+                    { f: 523.25, d: 0.14, v: 0.18, t: 0 },
+                    { f: 440.00, d: 0.14, v: 0.18, t: 0.11 },
+                    { f: 392.00, d: 0.14, v: 0.17, t: 0.22 },
+                    { f: 349.23, d: 0.16, v: 0.17, t: 0.33 },
+                    { f: 293.66, d: 0.28, v: 0.20, t: 0.45 }
+                ];
+                shimGuitar(16.23, descPhrase, 1.0);
+                shimDance(16.23, 1.0, 1.15, descPhrase);
+                shimGrandPiano(16.23, 523.25, 0.14, 0.50);
+                shimSnare(16.54, 0.20, true);
+                shimHiHat(16.54, false, 0.12);
+                shimWaddle(16.23, 261.63, 0.15, 0.09);
+                shimWaddle(16.45, 220.00, 0.15, 0.09);
+                shimWaddle(16.67, 174.61, 0.16, 0.10);
                 shimDing(16.85, 1760.0, 0.16, 0.45); // Grand crash ping
                 shimDing(16.85, 2349.32, 0.12, 0.45);
 
                 // --- BAR 07: Extended Coda — Three Blind Mice Turnaround Vamp (17.15s - 19.60s) ---
                 // Fukui Walking Bass drops down into deep modal turnaround: D3 -> C3 -> Bb2 -> A2
-                shimWaddle(17.15, 146.83, 0.14, 0.12); // D3
+                shimKick(17.15, 65, 0.16);
+                shimWaddle(17.15, 146.83, 0.15, 0.12); // D3
                 shimDing(17.15, 1760.0, 0.10, 0.20);
-                shimWaddle(17.76, 130.81, 0.13, 0.11); // C3
+                shimSnare(17.76, 0.13, false); // Brush snare
+                shimWaddle(17.76, 130.81, 0.14, 0.11); // C3
                 shimDing(17.76, 1760.0, 0.09, 0.18);
                 shimDing(18.06, 2640.0, 0.07, 0.12);
-                shimWaddle(18.37, 116.54, 0.13, 0.11); // Bb2
+                shimKick(18.37, 65, 0.16);
+                shimWaddle(18.37, 116.54, 0.14, 0.11); // Bb2
                 shimDing(18.37, 1760.0, 0.09, 0.18);
-                shimWaddle(18.98, 110.00, 0.14, 0.11); // A2 Dominant
+                shimSnare(18.98, 0.13, false);
+                shimWaddle(18.98, 110.00, 0.15, 0.11); // A2 Dominant
                 shimDing(18.98, 1760.0, 0.10, 0.20);
-                shimWaddle(19.29, 103.83, 0.12, 0.08); // Ab2 passing
+                shimWaddle(19.29, 103.83, 0.13, 0.08); // Ab2 passing
                 shimDing(19.29, 2640.0, 0.07, 0.12);
 
-                // Imada Rhodes Descending Jazz Substitutions (Dm9 -> Cmaj7 -> Bbmaj7 -> A7#9)
+                // Imada Rhodes & Guitar Descending Jazz Substitutions (Dm9 -> Cmaj7 -> Bbmaj7 -> A7#9)
                 shimFloat(17.45, 523.25, 0.13, [349.23, 440.00, 523.25, 659.25]); // Dm9
+                shimGrandPiano(17.45, 349.23, 0.10, 0.45);
                 shimFloat(18.06, 523.25, 0.12, [329.63, 392.00, 493.88, 587.33]); // Cmaj7
                 shimFloat(18.68, 523.25, 0.12, [293.66, 349.23, 440.00, 523.25]); // Bbmaj7
-                shimFloat(19.29, 523.25, 0.13, [277.18, 392.00, 523.25, 698.46]); // A7#9 (Hendrix/Jazz turnaround chord)
+                shimFloat(19.29, 523.25, 0.13, [277.18, 392.00, 523.25, 698.46]); // A7#9
 
                 // --- BAR 08: The Caterpillar's Farewell & Distant Frog Call (19.60s - 22.05s) ---
-                shimWaddle(19.60, 73.42, 0.16, 0.16); // Deep D2 Root Bass
+                shimWaddle(19.60, 73.42, 0.17, 0.16); // Deep D2 Root Bass
+                shimPedalBass(19.60, 73.42, 0.16, 2.0);
                 shimPulseBell(19.60, 0.85, 0.561); // Sub-drone pedal
-                // Sweet whispering blues theme callback
-                shimDance(19.90, 1.0, 0.90, [
-                    { f: 698.46, d: 0.16, v: 0.13, t: 0 },
-                    { f: 783.99, d: 0.16, v: 0.14, t: 0.14 },
-                    { f: 830.61, d: 0.18, v: 0.15, t: 0.28 },
-                    { f: 880.00, d: 0.24, v: 0.15, t: 0.44 },
-                    { f: 1174.66, d: 0.38, v: 0.17, t: 0.65 }
+                // Sweet whispering blues guitar callback
+                shimGuitar(19.90, [
+                    { f: 349.23, d: 0.18, v: 0.14, t: 0 },
+                    { f: 392.00, d: 0.18, v: 0.15, t: 0.14 },
+                    { f: 415.30, d: 0.20, v: 0.16, t: 0.28 },
+                    { f: 440.00, d: 0.26, v: 0.16, t: 0.44 },
+                    { f: 587.33, d: 0.42, v: 0.18, t: 0.65 }
                 ]);
                 // Distant frog croak answering from across the tranquil marsh
                 shimFrogCroak(20.80, 0.95, 0.85, true);
                 shimDing(21.40, 1760.0, 0.10, 0.30); // Soft ride cymbal choke ping
 
                 // --- BAR 09: Grand Cadence & Masterpiece Resolution (22.05s - 26.00s) ---
-                // Full, lush Dm11(add9) Rhodes Glass-Harp Voicing with deep bass foundation
+                // Full, lush Dm11(add9) Grand Piano & Rhodes Glass-Harp Voicing with deep bass foundation
+                shimGrandPiano(22.05, 523.25, 0.16, 2.4);
                 shimFloat(22.05, 523.25, 0.18, [146.83, 293.66, 349.23, 440.00, 523.25, 659.25, 783.99]);
+                shimPedalBass(22.05, 73.42, 0.18, 2.8);
                 shimPulseBell(22.40, 1.35, 0.561); // Deep Golden Chi D2/A2 sub-drone resonance
                 shimPulseSquash(22.90, 0.75, 1.122); // Mild singing traveler harmonic overtone
                 shimDing(23.30, 1760.0, 0.16, 1.30); // Pure resonant celestial chime
@@ -2777,11 +3088,17 @@
                 scheduleTrackTimeout(() => {
                     window.stopAllTracks(false);
                 }, 26000);
+
             } else if (trackNum === 3) {
                 // =============================================================
                 // TRACK 3: 朝日のあたる家 / The House of the Rising Sun
-                // Thomas Krüger (Mr. Pianoman) Virtuosic Piano Arrangement
-                // Moderato 4/4 -> Virtuosic 6/8 Rolling Arpeggio Wave -> Am(add9) Sunrise
+                // Thomas Krüger (Mr. Pianoman) Concert Grand Piano Arrangement
+                // Faithful acoustic piano performance:
+                // - Concert Grand Piano hammer felt strikes & physical string harmonics
+                // - Deep Sforzando Grand Piano Sub-Pedal Resonance (A0 27.5Hz / A1 55Hz)
+                // - Left-Hand Syncopated 16th Ostinato & Rolling Chords
+                // - Right-Hand Soulful Vocal Melody & Forte Octave Climax
+                // - Signature 6/8 Rolling Arpeggio Wave & High Virtuosic Cascades
                 // Total Duration: ~26.5s (Full 5-page sheet music fidelity)
                 // =============================================================
                 const btn3 = document.getElementById('track3Btn');
@@ -2791,130 +3108,180 @@
                 }
 
                 const quoteText = document.getElementById('saintQuoteText');
-                if (quoteText) quoteText.innerText = '🌅 Thomas Krüger『House of the Rising Sun』(朝日のあたる家) を演奏中キューブ！🎹☀️';
+                if (quoteText) quoteText.innerText = '🌅 Thomas Krüger『House of the Rising Sun』(朝日のあたる家) をコンサートグランドピアノで演奏中キューブ！🎹☀️';
 
-                // --- PHASE 1: Atmospheric New Orleans Sunrise & 4/4 Bass Groove (0.00s - 4.50s) ---
+                // --- PHASE 1: Atmospheric New Orleans Sunrise & 4/4 Grand Piano Groove (0.00s - 4.50s, Sheet 1) ---
                 shimPulseBell(0.00, 0.85, 0.421); // A2 (110Hz) Golden Chi ambient dawn drone
+                shimPedalBass(0.00, 55.00, 0.20, 3.0); // Deep A1 sub-pedal piano rumble
                 shimDing(0.10, 1760.0, 0.12, 0.80); // A6 awakening bell ping
 
-                // Bar 1: Am Syncopated 16th Piano Groove (Sheet 1, m. 1-2)
-                shimWaddle(0.40, 110.00, 0.16, 0.14); // Low A2 Root
-                shimFloat(0.40, 523.25, 0.11, [220.00, 261.63, 329.63, 440.00]); // Am Glass-harp chord
-                shimWaddle(0.65, 164.81, 0.12, 0.09); // E3
-                shimWaddle(0.90, 220.00, 0.13, 0.09); // A3
-                shimDing(0.90, 2640.0, 0.08, 0.15);  // Offbeat ride ping
-                shimWaddle(1.15, 261.63, 0.13, 0.10); // C4
+                // Bar 1: Am Syncopated 16th Grand Piano Groove (Sheet 1, m. 1-2)
+                shimPedalBass(0.40, 55.00, 0.16, 1.2);
+                shimGrandPiano(0.40, 110.00, 0.22, 0.45); // Low A2 Grand Piano Strike
+                shimWaddle(0.40, 110.00, 0.16, 0.14);
+                shimFloat(0.40, 523.25, 0.11, [220.00, 261.63, 329.63, 440.00]); // Am Chord
+                shimGrandPiano(0.40, 220.00, 0.14, 0.50);
+                shimGrandPiano(0.65, 164.81, 0.16, 0.25); // E3 Hammer
+                shimWaddle(0.65, 164.81, 0.12, 0.09);
+                shimGrandPiano(0.90, 220.00, 0.17, 0.25); // A3 Hammer
+                shimWaddle(0.90, 220.00, 0.13, 0.09);
+                shimDing(0.90, 2640.0, 0.08, 0.15);      // Offbeat hammer click
+                shimGrandPiano(1.15, 261.63, 0.18, 0.25); // C4 Hammer
+                shimWaddle(1.15, 261.63, 0.13, 0.10);
 
-                // Bar 2: C Major Ostinato (Sheet 1, m. 3-4)
-                shimWaddle(1.40, 130.81, 0.16, 0.14); // C3 Root
+                // Bar 2: C Major Grand Piano Ostinato (Sheet 1, m. 3-4)
+                shimPedalBass(1.40, 65.41, 0.16, 1.2);    // C2 Sub-pedal
+                shimGrandPiano(1.40, 130.81, 0.22, 0.45); // C3 Hammer
+                shimWaddle(1.40, 130.81, 0.16, 0.14);
                 shimFloat(1.40, 523.25, 0.11, [261.63, 329.63, 392.00, 523.25]); // C chord
-                shimWaddle(1.65, 196.00, 0.12, 0.09); // G3
-                shimWaddle(1.90, 261.63, 0.13, 0.09); // C4
-                shimWaddle(2.15, 329.63, 0.13, 0.10); // E4
+                shimGrandPiano(1.40, 261.63, 0.14, 0.50);
+                shimGrandPiano(1.65, 196.00, 0.16, 0.25); // G3
+                shimWaddle(1.65, 196.00, 0.12, 0.09);
+                shimGrandPiano(1.90, 261.63, 0.17, 0.25); // C4
+                shimWaddle(1.90, 261.63, 0.13, 0.09);
+                shimGrandPiano(2.15, 329.63, 0.18, 0.25); // E4
+                shimWaddle(2.15, 329.63, 0.13, 0.10);
                 shimDing(2.15, 2640.0, 0.08, 0.15);
 
-                // Bar 3: D Major Ostinato (Sheet 1, m. 5-6)
-                shimWaddle(2.40, 146.83, 0.16, 0.14); // D3 Root
+                // Bar 3: D Major Grand Piano Ostinato (Sheet 1, m. 5-6)
+                shimPedalBass(2.40, 73.42, 0.16, 1.2);    // D2 Sub-pedal
+                shimGrandPiano(2.40, 146.83, 0.22, 0.45); // D3 Hammer
+                shimWaddle(2.40, 146.83, 0.16, 0.14);
                 shimFloat(2.40, 523.25, 0.12, [293.66, 369.99, 440.00, 587.33]); // D chord (F#4)
-                shimWaddle(2.65, 220.00, 0.12, 0.09); // A3
-                shimWaddle(2.90, 293.66, 0.13, 0.09); // D4
-                shimWaddle(3.15, 369.99, 0.14, 0.10); // F#4
+                shimGrandPiano(2.40, 293.66, 0.14, 0.50);
+                shimGrandPiano(2.65, 220.00, 0.16, 0.25); // A3
+                shimWaddle(2.65, 220.00, 0.12, 0.09);
+                shimGrandPiano(2.90, 293.66, 0.17, 0.25); // D4
+                shimWaddle(2.90, 293.66, 0.13, 0.09);
+                shimGrandPiano(3.15, 369.99, 0.18, 0.25); // F#4
+                shimWaddle(3.15, 369.99, 0.14, 0.10);
                 shimDing(3.15, 2640.0, 0.08, 0.15);
 
                 // Bar 4: F Major & E7 Turnaround (Sheet 1, m. 7-9)
-                shimWaddle(3.40, 174.61, 0.16, 0.14); // F3 Root
+                shimPedalBass(3.40, 87.31, 0.16, 1.2);    // F2 Sub-pedal
+                shimGrandPiano(3.40, 174.61, 0.22, 0.45); // F3 Hammer
+                shimWaddle(3.40, 174.61, 0.16, 0.14);
                 shimFloat(3.40, 523.25, 0.12, [261.63, 349.23, 440.00, 523.25]); // F chord
-                shimWaddle(3.65, 261.63, 0.13, 0.09); // C4
-                shimWaddle(3.90, 164.81, 0.15, 0.12); // E3 Dominant Root
+                shimGrandPiano(3.40, 349.23, 0.14, 0.50);
+                shimGrandPiano(3.65, 261.63, 0.16, 0.25); // C4
+                shimWaddle(3.65, 261.63, 0.13, 0.09);
+                shimPedalBass(3.90, 82.41, 0.16, 1.2);    // E2 Dominant
+                shimGrandPiano(3.90, 164.81, 0.22, 0.45); // E3 Hammer
+                shimWaddle(3.90, 164.81, 0.15, 0.12);
                 shimFloat(3.90, 523.25, 0.12, [246.94, 329.63, 415.30, 493.88]); // E7 chord (G#)
-                shimWaddle(4.15, 207.65, 0.13, 0.09); // G#3 leading note
+                shimGrandPiano(3.90, 329.63, 0.14, 0.50);
+                shimGrandPiano(4.15, 207.65, 0.16, 0.25); // G#3 leading note
+                shimWaddle(4.15, 207.65, 0.13, 0.09);
                 shimDing(4.15, 2640.0, 0.09, 0.20);
 
                 // --- PHASE 2: The Iconic Soul Theme Enters (mp) (4.50s - 10.80s, Sheet 2) ---
+                // Thomas Krüger Concert Grand Piano sings the melody:
                 // Bar 10: Am Theme (A4 -> C5 -> D5 -> E5)
-                shimPulseSquash(4.50, 0.85, 0.841); // Warm singing vocal lead
+                shimGrandPiano(4.50, 440.00, 0.18, 0.26);
+                shimGrandPiano(4.78, 523.25, 0.19, 0.26);
+                shimGrandPiano(5.06, 587.33, 0.20, 0.32);
+                shimGrandPiano(5.38, 659.25, 0.22, 0.50);
+                shimPulseSquash(4.50, 0.85, 0.841); // Vocal tone overtone
                 shimDance(4.50, 1.0, 0.95, [
-                    { f: 440.00, d: 0.22, v: 0.14, t: 0 },    // A4
-                    { f: 523.25, d: 0.24, v: 0.15, t: 0.28 }, // C5
-                    { f: 587.33, d: 0.30, v: 0.16, t: 0.56 }, // D5
-                    { f: 659.25, d: 0.45, v: 0.17, t: 0.88 }  // E5
+                    { f: 440.00, d: 0.22, v: 0.14, t: 0 },
+                    { f: 523.25, d: 0.24, v: 0.15, t: 0.28 },
+                    { f: 587.33, d: 0.30, v: 0.16, t: 0.56 },
+                    { f: 659.25, d: 0.45, v: 0.17, t: 0.88 }
                 ]);
-                shimWaddle(4.50, 110.00, 0.14, 0.12); // A2
+                shimWaddle(4.50, 110.00, 0.14, 0.12);
                 shimFloat(4.50, 523.25, 0.10, [220.00, 261.63, 329.63]);
+                shimGrandPiano(5.06, 164.81, 0.14, 0.25);
                 shimWaddle(5.06, 164.81, 0.12, 0.09);
                 shimDing(5.06, 1760.0, 0.09, 0.18);
                 shimWaddle(5.45, 220.00, 0.12, 0.09);
 
                 // Bar 11: C Major (E5 Sustained -> D5 -> C5)
+                shimGrandPiano(5.80, 659.25, 0.20, 0.45);
+                shimGrandPiano(6.28, 587.33, 0.18, 0.28);
+                shimGrandPiano(6.58, 523.25, 0.19, 0.40);
                 shimDance(5.80, 1.0, 0.95, [
-                    { f: 659.25, d: 0.40, v: 0.17, t: 0 },    // E5 holds
-                    { f: 587.33, d: 0.26, v: 0.15, t: 0.48 }, // D5
-                    { f: 523.25, d: 0.38, v: 0.16, t: 0.78 }  // C5
+                    { f: 659.25, d: 0.40, v: 0.17, t: 0 },
+                    { f: 587.33, d: 0.26, v: 0.15, t: 0.48 },
+                    { f: 523.25, d: 0.38, v: 0.16, t: 0.78 }
                 ]);
-                shimWaddle(5.80, 130.81, 0.14, 0.12); // C3
+                shimWaddle(5.80, 130.81, 0.14, 0.12);
                 shimFloat(5.80, 523.25, 0.10, [261.63, 329.63, 392.00]);
+                shimGrandPiano(6.36, 196.00, 0.14, 0.25);
                 shimWaddle(6.36, 196.00, 0.12, 0.09);
                 shimDing(6.36, 1760.0, 0.09, 0.18);
                 shimWaddle(6.75, 261.63, 0.12, 0.09);
 
                 // Bar 12: D Major (D5 -> F#5 Ascending Soul)
+                shimGrandPiano(7.10, 587.33, 0.20, 0.45);
+                shimGrandPiano(7.58, 739.99, 0.22, 0.55); // F#5 Kruger blue tone
                 shimDance(7.10, 1.0, 1.0, [
-                    { f: 587.33, d: 0.42, v: 0.17, t: 0 },    // D5
-                    { f: 739.99, d: 0.50, v: 0.18, t: 0.48 }  // F#5 (Thomas Kruger blue expression)
+                    { f: 587.33, d: 0.42, v: 0.17, t: 0 },
+                    { f: 739.99, d: 0.50, v: 0.18, t: 0.48 }
                 ]);
-                shimWaddle(7.10, 146.83, 0.14, 0.12); // D3
+                shimWaddle(7.10, 146.83, 0.14, 0.12);
                 shimFloat(7.10, 523.25, 0.11, [293.66, 369.99, 440.00]);
+                shimGrandPiano(7.66, 220.00, 0.14, 0.25);
                 shimWaddle(7.66, 220.00, 0.12, 0.09);
                 shimDing(7.66, 1760.0, 0.09, 0.18);
                 shimWaddle(8.05, 293.66, 0.12, 0.09);
 
                 // Bar 13: F Major (F5 -> E5 -> D5)
+                shimGrandPiano(8.40, 698.46, 0.20, 0.38);
+                shimGrandPiano(8.78, 659.25, 0.18, 0.30);
+                shimGrandPiano(9.08, 587.33, 0.18, 0.32);
                 shimDance(8.40, 1.0, 1.0, [
-                    { f: 698.46, d: 0.36, v: 0.17, t: 0 },    // F5
-                    { f: 659.25, d: 0.28, v: 0.16, t: 0.38 }, // E5
-                    { f: 587.33, d: 0.30, v: 0.15, t: 0.68 }  // D5
+                    { f: 698.46, d: 0.36, v: 0.17, t: 0 },
+                    { f: 659.25, d: 0.28, v: 0.16, t: 0.38 },
+                    { f: 587.33, d: 0.30, v: 0.15, t: 0.68 }
                 ]);
-                shimWaddle(8.40, 174.61, 0.14, 0.12); // F3
+                shimWaddle(8.40, 174.61, 0.14, 0.12);
                 shimFloat(8.40, 523.25, 0.11, [261.63, 349.23, 440.00]);
                 shimDing(8.90, 1760.0, 0.09, 0.18);
 
                 // Bar 14: Am (E5 -> C5 -> A4)
+                shimGrandPiano(9.40, 659.25, 0.18, 0.24);
+                shimGrandPiano(9.62, 523.25, 0.18, 0.24);
+                shimGrandPiano(9.84, 440.00, 0.19, 0.30);
                 shimDance(9.40, 1.0, 0.95, [
                     { f: 659.25, d: 0.22, v: 0.16, t: 0 },
                     { f: 523.25, d: 0.22, v: 0.15, t: 0.22 },
                     { f: 440.00, d: 0.28, v: 0.16, t: 0.44 }
                 ]);
-                shimWaddle(9.40, 110.00, 0.14, 0.12); // A2
+                shimWaddle(9.40, 110.00, 0.14, 0.12);
                 shimFloat(9.40, 523.25, 0.10, [220.00, 261.63, 329.63]);
 
                 // Bar 15: E7 (B4 -> G#4 -> E5 pickup into Forte)
+                shimGrandPiano(10.10, 493.88, 0.18, 0.25);
+                shimGrandPiano(10.34, 415.30, 0.18, 0.25); // G#4
+                shimGrandPiano(10.58, 659.25, 0.22, 0.32); // E5 Pickup
                 shimDance(10.10, 1.0, 1.05, [
                     { f: 493.88, d: 0.24, v: 0.16, t: 0 },
-                    { f: 415.30, d: 0.24, v: 0.16, t: 0.24 }, // G#4
-                    { f: 659.25, d: 0.30, v: 0.18, t: 0.48 }  // E5 Pickup!
+                    { f: 415.30, d: 0.24, v: 0.16, t: 0.24 },
+                    { f: 659.25, d: 0.30, v: 0.18, t: 0.48 }
                 ]);
-                shimWaddle(10.10, 164.81, 0.14, 0.12); // E3
+                shimWaddle(10.10, 164.81, 0.14, 0.12);
                 shimFloat(10.10, 523.25, 0.11, [246.94, 329.63, 415.30]);
                 shimDing(10.58, 2640.0, 0.10, 0.25);
 
                 // --- PHASE 3: Passionate Forte Octave Chorus (10.80s - 16.20s, Sheet 3) ---
-                // Full f dynamics: Octave unisons, punchy bass, rolling chord accompaniment
-                shimPulseSquash(10.80, 1.15, 0.841); // Rich forte vocal resonance
+                // Full f dynamics: Grand Concert Piano Octaves & Booming Sub-Pedal
+                shimPedalBass(10.80, 55.00, 0.24, 2.4);  // Low A1 Grand Piano Thunder!
+                shimGrandPiano(10.80, 880.00, 0.24, 0.30);  // A5
+                shimGrandPiano(10.80, 440.00, 0.20, 0.30);  // A4 Octave
+                shimGrandPiano(11.08, 1046.50, 0.25, 0.30); // C6
+                shimGrandPiano(11.08, 523.25, 0.20, 0.30);  // C5 Octave
+                shimGrandPiano(11.36, 1174.66, 0.26, 0.35); // D6
+                shimGrandPiano(11.36, 587.33, 0.21, 0.35);  // D5 Octave
+                shimGrandPiano(11.68, 1318.51, 0.28, 0.55); // E6 Peak!
+                shimGrandPiano(11.68, 659.25, 0.22, 0.55);  // E5 Octave
+                shimPulseSquash(10.80, 1.15, 0.841);
                 shimDance(10.80, 1.0, 1.25, [
-                    { f: 880.00, d: 0.24, v: 0.19, t: 0 },    // A5
-                    { f: 1046.50, d: 0.26, v: 0.20, t: 0.28 }, // C6
-                    { f: 1174.66, d: 0.32, v: 0.21, t: 0.56 }, // D6
-                    { f: 1318.51, d: 0.48, v: 0.22, t: 0.88 }  // E6 Peak!
+                    { f: 880.00, d: 0.24, v: 0.19, t: 0 },
+                    { f: 1046.50, d: 0.26, v: 0.20, t: 0.28 },
+                    { f: 1174.66, d: 0.32, v: 0.21, t: 0.56 },
+                    { f: 1318.51, d: 0.48, v: 0.22, t: 0.88 }
                 ]);
-                // Octave doubling below
-                shimDance(10.80, 0.5, 0.85, [
-                    { f: 880.00, d: 0.24, v: 0.14, t: 0 },
-                    { f: 1046.50, d: 0.26, v: 0.15, t: 0.28 },
-                    { f: 1174.66, d: 0.32, v: 0.16, t: 0.56 },
-                    { f: 1318.51, d: 0.48, v: 0.17, t: 0.88 }
-                ]);
-                shimWaddle(10.80, 55.00, 0.18, 0.16);  // Powerful Low A1
-                shimWaddle(10.80, 110.00, 0.16, 0.14); // A2 Octave
+                shimWaddle(10.80, 55.00, 0.18, 0.16);
                 shimFloat(10.80, 523.25, 0.13, [220.00, 329.63, 440.00, 523.25]);
                 shimDing(10.80, 1760.0, 0.14, 0.30);
                 shimWaddle(11.36, 164.81, 0.14, 0.10);
@@ -2922,14 +3289,19 @@
                 shimWaddle(11.75, 220.00, 0.14, 0.10);
 
                 // Bar 20: C Major Octaves (E6 -> G6 -> D6 -> C6)
+                shimPedalBass(12.10, 65.41, 0.22, 2.2); // Low C2
+                shimGrandPiano(12.10, 1318.51, 0.26, 0.40);
+                shimGrandPiano(12.10, 659.25, 0.20, 0.40);
+                shimGrandPiano(12.46, 1567.98, 0.24, 0.25); // G6 High flourish!
+                shimGrandPiano(12.68, 1174.66, 0.24, 0.28);
+                shimGrandPiano(12.94, 1046.50, 0.25, 0.40);
                 shimDance(12.10, 1.0, 1.25, [
-                    { f: 1318.51, d: 0.38, v: 0.22, t: 0 },    // E6 holds
-                    { f: 1567.98, d: 0.22, v: 0.20, t: 0.36 }, // G6 High flourish!
-                    { f: 1174.66, d: 0.26, v: 0.20, t: 0.58 }, // D6
-                    { f: 1046.50, d: 0.38, v: 0.21, t: 0.84 }  // C6
+                    { f: 1318.51, d: 0.38, v: 0.22, t: 0 },
+                    { f: 1567.98, d: 0.22, v: 0.20, t: 0.36 },
+                    { f: 1174.66, d: 0.26, v: 0.20, t: 0.58 },
+                    { f: 1046.50, d: 0.38, v: 0.21, t: 0.84 }
                 ]);
-                shimWaddle(12.10, 65.41, 0.18, 0.16);  // Low C2
-                shimWaddle(12.10, 130.81, 0.16, 0.14); // C3
+                shimWaddle(12.10, 65.41, 0.18, 0.16);
                 shimFloat(12.10, 523.25, 0.13, [261.63, 329.63, 392.00, 523.25, 659.25]);
                 shimDing(12.10, 1760.0, 0.13, 0.28);
                 shimWaddle(12.66, 196.00, 0.14, 0.10);
@@ -2937,13 +3309,16 @@
                 shimWaddle(13.05, 261.63, 0.14, 0.10);
 
                 // Bar 21: D Major Octaves (D6 -> F#6 -> High A6)
+                shimPedalBass(13.40, 73.42, 0.22, 2.2); // Low D2
+                shimGrandPiano(13.40, 1174.66, 0.25, 0.36);
+                shimGrandPiano(13.76, 1479.98, 0.26, 0.38); // F#6
+                shimGrandPiano(14.12, 1760.00, 0.28, 0.58); // High A6 Climax!
                 shimDance(13.40, 1.0, 1.30, [
-                    { f: 1174.66, d: 0.34, v: 0.21, t: 0 },    // D6
-                    { f: 1479.98, d: 0.36, v: 0.22, t: 0.36 }, // F#6
-                    { f: 1760.00, d: 0.55, v: 0.24, t: 0.72 }  // High A6 Climax!
+                    { f: 1174.66, d: 0.34, v: 0.21, t: 0 },
+                    { f: 1479.98, d: 0.36, v: 0.22, t: 0.36 },
+                    { f: 1760.00, d: 0.55, v: 0.24, t: 0.72 }
                 ]);
-                shimWaddle(13.40, 73.42, 0.18, 0.16);  // Low D2
-                shimWaddle(13.40, 146.83, 0.16, 0.14); // D3
+                shimWaddle(13.40, 73.42, 0.18, 0.16);
                 shimFloat(13.40, 523.25, 0.13, [293.66, 369.99, 440.00, 587.33, 739.99]);
                 shimDing(13.40, 1760.0, 0.14, 0.30);
                 shimWaddle(13.96, 220.00, 0.14, 0.10);
@@ -2951,81 +3326,112 @@
                 shimWaddle(14.35, 293.66, 0.14, 0.10);
 
                 // Bar 22: F Major (High A6 -> F6 -> D6)
+                shimPedalBass(14.70, 87.31, 0.22, 2.0); // Low F2
+                shimGrandPiano(14.70, 1760.00, 0.26, 0.34);
+                shimGrandPiano(15.02, 1396.91, 0.25, 0.34); // F6
+                shimGrandPiano(15.34, 1174.66, 0.24, 0.38); // D6
                 shimDance(14.70, 1.0, 1.25, [
                     { f: 1760.00, d: 0.32, v: 0.22, t: 0 },
-                    { f: 1396.91, d: 0.32, v: 0.21, t: 0.32 }, // F6
-                    { f: 1174.66, d: 0.36, v: 0.20, t: 0.64 }  // D6
+                    { f: 1396.91, d: 0.32, v: 0.21, t: 0.32 },
+                    { f: 1174.66, d: 0.36, v: 0.20, t: 0.64 }
                 ]);
-                shimWaddle(14.70, 87.31, 0.18, 0.16);  // Low F2
-                shimWaddle(14.70, 174.61, 0.16, 0.14); // F3
+                shimWaddle(14.70, 87.31, 0.18, 0.16);
                 shimFloat(14.70, 523.25, 0.13, [261.63, 349.23, 440.00, 523.25, 698.46]);
                 shimDing(14.70, 1760.0, 0.14, 0.30);
 
                 // Bar 23: E7 Buildup into 6/8 Meter Shift (Sheet 3, m. 23-24)
+                shimPedalBass(15.60, 82.41, 0.22, 2.0);
+                shimGrandPiano(15.60, 987.77, 0.24, 0.20);  // B5
+                shimGrandPiano(15.78, 830.61, 0.24, 0.20);  // G#5
+                shimGrandPiano(15.96, 1318.51, 0.26, 0.28); // E6
                 shimDance(15.60, 1.0, 1.20, [
-                    { f: 987.77, d: 0.18, v: 0.19, t: 0 },     // B5
-                    { f: 830.61, d: 0.18, v: 0.19, t: 0.18 },  // G#5
-                    { f: 1318.51, d: 0.24, v: 0.22, t: 0.36 }  // E6
+                    { f: 987.77, d: 0.18, v: 0.19, t: 0 },
+                    { f: 830.61, d: 0.18, v: 0.19, t: 0.18 },
+                    { f: 1318.51, d: 0.24, v: 0.22, t: 0.36 }
                 ]);
-                shimWaddle(15.60, 82.41, 0.17, 0.14);  // Low E2
-                shimWaddle(15.80, 92.50, 0.17, 0.12);  // F#2 passing
-                shimWaddle(16.00, 103.83, 0.18, 0.12); // G#2 chromatic step
+                shimWaddle(15.60, 82.41, 0.17, 0.14);
+                shimWaddle(15.80, 92.50, 0.17, 0.12);
+                shimWaddle(16.00, 103.83, 0.18, 0.12);
                 shimDing(16.00, 2640.0, 0.12, 0.25);
 
                 // --- PHASE 4: The Kruger 6/8 Rolling Arpeggio Wave (16.20s - 21.80s, Sheets 4 & 5) ---
-                // Thomas Krüger's signature move: Time signature morphs to 6/8!
-                // 6 rapid, undulating arpeggio eighth-notes per bar rolling up the piano!
+                // Concert Grand Piano rolling arpeggios: 6 undulating eighth-notes per measure!
 
                 // Bar 28 (Am 6/8 Arpeggio Wave):
+                shimPedalBass(16.20, 55.00, 0.20, 2.2);
                 shimFloat(16.20, 523.25, 0.15, [110.00, 164.81, 220.00, 261.63, 329.63, 440.00, 523.25], 0.075, 0.85);
+                shimGrandPiano(16.20, 440.00, 0.18, 0.70);
+                shimGrandPiano(16.50, 659.25, 0.20, 0.50);
+                shimGrandPiano(16.85, 880.00, 0.22, 0.55);
                 shimDance(16.20, 1.0, 1.15, [
-                    { f: 659.25, d: 0.45, v: 0.18, t: 0.20 }, // E5
-                    { f: 880.00, d: 0.50, v: 0.19, t: 0.55 }  // A5
+                    { f: 659.25, d: 0.45, v: 0.18, t: 0.20 },
+                    { f: 880.00, d: 0.50, v: 0.19, t: 0.55 }
                 ]);
                 shimDing(16.20, 1760.0, 0.12, 0.35);
 
                 // Bar 30 (C Major 6/8 Wave):
+                shimPedalBass(17.30, 65.41, 0.20, 2.2);
                 shimFloat(17.30, 523.25, 0.15, [130.81, 196.00, 261.63, 329.63, 392.00, 523.25, 659.25], 0.075, 0.85);
+                shimGrandPiano(17.50, 783.99, 0.20, 0.50);
+                shimGrandPiano(17.85, 659.25, 0.22, 0.55);
                 shimDance(17.30, 1.0, 1.15, [
-                    { f: 783.99, d: 0.45, v: 0.18, t: 0.20 }, // G5
-                    { f: 659.25, d: 0.50, v: 0.19, t: 0.55 }  // E5
+                    { f: 783.99, d: 0.45, v: 0.18, t: 0.20 },
+                    { f: 659.25, d: 0.50, v: 0.19, t: 0.55 }
                 ]);
                 shimDing(17.30, 1760.0, 0.12, 0.35);
 
                 // Bar 31 (D Major 6/8 Wave):
+                shimPedalBass(18.40, 73.42, 0.20, 2.2);
                 shimFloat(18.40, 523.25, 0.16, [146.83, 220.00, 293.66, 369.99, 440.00, 587.33, 739.99], 0.075, 0.85);
+                shimGrandPiano(18.60, 739.99, 0.21, 0.50);
+                shimGrandPiano(18.95, 880.00, 0.22, 0.55);
                 shimDance(18.40, 1.0, 1.20, [
-                    { f: 739.99, d: 0.45, v: 0.19, t: 0.20 }, // F#5
-                    { f: 880.00, d: 0.50, v: 0.20, t: 0.55 }  // A5
+                    { f: 739.99, d: 0.45, v: 0.19, t: 0.20 },
+                    { f: 880.00, d: 0.50, v: 0.20, t: 0.55 }
                 ]);
                 shimDing(18.40, 1760.0, 0.13, 0.35);
 
                 // Bar 32 (F Major 6/8 Wave):
+                shimPedalBass(19.50, 87.31, 0.20, 2.2);
                 shimFloat(19.50, 523.25, 0.16, [87.31, 130.81, 174.61, 220.00, 261.63, 349.23, 440.00], 0.075, 0.85);
+                shimGrandPiano(19.70, 698.46, 0.20, 0.50);
+                shimGrandPiano(20.05, 587.33, 0.20, 0.55);
                 shimDance(19.50, 1.0, 1.20, [
-                    { f: 698.46, d: 0.45, v: 0.19, t: 0.20 }, // F5
-                    { f: 587.33, d: 0.50, v: 0.18, t: 0.55 }  // D5
+                    { f: 698.46, d: 0.45, v: 0.19, t: 0.20 },
+                    { f: 587.33, d: 0.50, v: 0.18, t: 0.55 }
                 ]);
                 shimDing(19.50, 1760.0, 0.13, 0.35);
 
-                // Bar 34 (E7 6/8 Wave & Virtuosic High Cascade):
+                // Bar 34 (E7 6/8 Wave & Virtuosic High Piano Cascade):
+                shimPedalBass(20.60, 82.41, 0.20, 2.2);
                 shimFloat(20.60, 523.25, 0.16, [82.41, 123.47, 164.81, 207.65, 246.94, 329.63, 415.30], 0.075, 0.85);
-                // Virtuosic High Piano Cascade (Sheet 5, m. 37-41):
+                // Concert Grand High Piano Cascade (Sheet 5, m. 37-41):
+                shimGrandPiano(20.60, 1318.51, 0.22, 0.18); // E6
+                shimGrandPiano(20.72, 1174.66, 0.22, 0.18); // D6
+                shimGrandPiano(20.84, 1046.50, 0.21, 0.18); // C6
+                shimGrandPiano(20.96, 987.77, 0.21, 0.18);  // B5
+                shimGrandPiano(21.08, 880.00, 0.22, 0.22);  // A5
+                shimGrandPiano(21.22, 830.61, 0.21, 0.30);  // G#5
                 shimDance(20.60, 1.0, 1.25, [
-                    { f: 1318.51, d: 0.16, v: 0.19, t: 0 },    // E6
-                    { f: 1174.66, d: 0.16, v: 0.19, t: 0.12 }, // D6
-                    { f: 1046.50, d: 0.16, v: 0.18, t: 0.24 }, // C6
-                    { f: 987.77, d: 0.16, v: 0.18, t: 0.36 },  // B5
-                    { f: 880.00, d: 0.20, v: 0.19, t: 0.48 },  // A5
-                    { f: 830.61, d: 0.28, v: 0.18, t: 0.62 }   // G#5
+                    { f: 1318.51, d: 0.16, v: 0.19, t: 0 },
+                    { f: 1174.66, d: 0.16, v: 0.19, t: 0.12 },
+                    { f: 1046.50, d: 0.16, v: 0.18, t: 0.24 },
+                    { f: 987.77, d: 0.16, v: 0.18, t: 0.36 },
+                    { f: 880.00, d: 0.20, v: 0.19, t: 0.48 },
+                    { f: 830.61, d: 0.28, v: 0.18, t: 0.62 }
                 ]);
                 shimDing(21.10, 2640.0, 0.14, 0.50);
 
                 // --- PHASE 5: Grand Sunrise Cadence & Transcendent Resolution (21.80s - 26.50s) ---
-                // Sforzando Low A1/A2 root bass strike (Sheet 5, m. 43-44)
+                // Sforzando Low A0/A1 Concert Grand Piano strike (Sheet 5, m. 43-44)
+                shimPedalBass(21.80, 27.50, 0.25, 3.5); // Booming A0 Grand Piano Thunder!
+                shimPedalBass(21.80, 55.00, 0.24, 3.2); // A1 Resonance
+                shimGrandPiano(21.80, 110.00, 0.24, 1.8);
                 shimWaddle(21.80, 55.00, 0.22, 0.22);
                 shimWaddle(21.80, 110.00, 0.20, 0.18);
-                // Grand Rolled Am(add9) Glass-Harp Chord (A - E - A - B - C - E - A - E)
+
+                // Grand Rolled Am(add9) Acoustic Concert Grand Chord (A - E - A - B - C - E - A - E)
+                shimGrandPiano(21.90, 440.00, 0.22, 2.5);
                 shimFloat(21.90, 523.25, 0.18, [110.00, 164.81, 220.00, 246.94, 261.63, 329.63, 440.00, 659.25], 0.055, 2.0);
                 // Golden Chi A2 Sub-Harmonic Pedal Drone
                 shimPulseBell(22.30, 1.35, 0.421);

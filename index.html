@@ -886,10 +886,10 @@
                 <span class="hint-icon">💫</span> マウス旋回で4次元ホップ束回転 • ドラッグで3D回転 • <b>[Space / クリック] で『風ノ旅ビト (Journey)』神聖球状波動</b>
             </div>
             <div class="saint-dashboard">
-                <button id="blessingBtn" class="saint-btn" onclick="triggerBlessing()">🌟 神聖波動 (Journey Sacred Pulse)</button>
-                <button id="waddleBtn" class="saint-btn" onclick="triggerKirbyWaddle()">🐾 てくてく歩行 (Waddle)</button>
-                <button id="floatBtn" class="saint-btn" onclick="triggerKirbyFloat()">🎈 ぷかぷか飛行 (Float)</button>
-                <button id="danceBtn" class="saint-btn" onclick="triggerKirbyDance()">🕺 勝利のダンス (Dance)</button>
+                <button id="blessingBtn" class="saint-btn" onclick="triggerBlessing()">🌟 神聖波動 (Pulse)</button>
+                <button id="waddleBtn" class="saint-btn" onclick="triggerWaddle()">🐾 てくてく歩行 (Waddle)</button>
+                <button id="floatBtn" class="saint-btn" onclick="triggerFloat()">🎈 ぷかぷか飛行 (Float)</button>
+                <button id="danceBtn" class="saint-btn" onclick="triggerDance()">🕺 氷晶のダンス (Dance)</button>
                 <button id="dispersionBtn" class="saint-btn active" onclick="toggleDispersion()">🌈 分光モード: ON</button>
                 <button id="soundToggleBtn" class="saint-btn" onclick="toggleSound()" style="border-color: #00ffff; color: #00ffff;">🔊 聖なる天球音楽: ON</button>
                 <button id="densityBtn" class="saint-btn" onclick="cycleDensity()">🪐 繊維環: 18環</button>
@@ -1849,11 +1849,17 @@
         }
 
         function unlockAudio() {
-            if (window.soundEnabled) getAudioContext();
+            if (!audioCtx) {
+                const AudioContext = window.AudioContext || window.webkitAudioContext;
+                if (AudioContext) audioCtx = new AudioContext();
+            }
+            if (audioCtx && audioCtx.state === 'suspended') {
+                audioCtx.resume();
+            }
         }
-        window.addEventListener('click', unlockAudio, { once: true });
-        window.addEventListener('keydown', unlockAudio, { once: true });
-        window.addEventListener('touchstart', unlockAudio, { once: true });
+        ['click', 'pointerdown', 'mousedown', 'keydown', 'touchstart'].forEach(evt => {
+            window.addEventListener(evt, unlockAudio, { passive: true });
+        });
 
         function playCelestialChime(freq, duration = 0.8, vol = 0.16) {
             if (!window.soundEnabled) return;
@@ -2012,37 +2018,72 @@
             } catch (e) {}
         }
 
-        function sfxFloatInhale() {
+        // Ethereal Levitation Chimes for Float (100% Original Acoustic Harmonics)
+        function sfxFloatLevitate() {
             if (!window.soundEnabled) return;
             try {
-                const ctx = getAudioContext();
-                const osc = ctx.createOscillator();
-                const gain = ctx.createGain();
-                osc.type = 'sine';
-                osc.frequency.setValueAtTime(320, ctx.currentTime);
-                osc.frequency.exponentialRampToValueAtTime(840, ctx.currentTime + 0.35);
-                gain.gain.setValueAtTime(0.18, ctx.currentTime);
-                gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.4);
-                osc.connect(gain);
-                gain.connect(ctx.destination);
-                osc.start();
-                osc.stop(ctx.currentTime + 0.4);
+                const c = getAudioContext();
+                const notes = [
+                    { f: 523.25, v: 0.12, d: 0.55 }, // C5
+                    { f: 659.25, v: 0.10, d: 0.50 }, // E5
+                    { f: 783.99, v: 0.11, d: 0.65 }, // G5
+                    { f: 1046.50, v: 0.08, d: 0.75 } // C6
+                ];
+                notes.forEach((n, idx) => {
+                    setTimeout(() => {
+                        try {
+                            const ctx = getAudioContext();
+                            const osc = ctx.createOscillator();
+                            const gain = ctx.createGain();
+                            const t = ctx.currentTime;
+                            osc.type = 'sine';
+                            osc.frequency.setValueAtTime(n.f * 0.985, t);
+                            osc.frequency.exponentialRampToValueAtTime(n.f, t + 0.04);
+                            gain.gain.setValueAtTime(0.0001, t);
+                            gain.gain.linearRampToValueAtTime(n.v, t + 0.03);
+                            gain.gain.exponentialRampToValueAtTime(0.0001, t + n.d);
+                            osc.connect(gain);
+                            gain.connect(ctx.destination);
+                            osc.start(t);
+                            osc.stop(t + n.d);
+                        } catch (e) {}
+                    }, idx * 60);
+                });
             } catch (e) {}
         }
 
-        function sfxVictoryFanfare() {
-            const notes = [
-                { f: 659.25, d: 0.12, t: 0 },
-                { f: 659.25, d: 0.12, t: 110 },
-                { f: 659.25, d: 0.12, t: 220 },
-                { f: 880.00, d: 0.25, t: 330 },
-                { f: 783.99, d: 0.15, t: 520 },
-                { f: 880.00, d: 0.15, t: 640 },
-                { f: 1046.50, d: 0.45, t: 760 }
-            ];
-            notes.forEach(n => {
-                setTimeout(() => play8BitNote(n.f, 'square', n.d, 0.20), n.t);
-            });
+        // Original BTRON Crystal Celebration Chimes for Dance (100% Original Sparkling Arpeggio)
+        function sfxCrystalCelebration() {
+            if (!window.soundEnabled) return;
+            try {
+                // Sparkling crystalline cascade in pure D-Major / A-Mixolydian (Original Acoustic Bell Motif)
+                const notes = [
+                    { f: 587.33, d: 0.20, v: 0.16, t: 0 },    // D5 crystal tap
+                    { f: 739.99, d: 0.22, v: 0.15, t: 85 },   // F#5 bright facet
+                    { f: 880.00, d: 0.25, v: 0.16, t: 170 },  // A5 celestial ring
+                    { f: 1174.66, d: 0.32, v: 0.18, t: 255 }, // D6 soaring flourish
+                    { f: 1479.98, d: 0.45, v: 0.12, t: 370 }  // F#6 prism overtone
+                ];
+                notes.forEach(n => {
+                    setTimeout(() => {
+                        try {
+                            const ctx = getAudioContext();
+                            const osc = ctx.createOscillator();
+                            const gain = ctx.createGain();
+                            const t = ctx.currentTime;
+                            osc.type = 'sine';
+                            osc.frequency.setValueAtTime(n.f, t);
+                            gain.gain.setValueAtTime(0.0001, t);
+                            gain.gain.linearRampToValueAtTime(n.v, t + 0.02);
+                            gain.gain.exponentialRampToValueAtTime(0.0001, t + n.d);
+                            osc.connect(gain);
+                            gain.connect(ctx.destination);
+                            osc.start(t);
+                            osc.stop(t + n.d);
+                        } catch (e) {}
+                    }, n.t);
+                });
+            } catch (e) {}
         }
 
         window.toggleSound = function() {
@@ -2577,7 +2618,7 @@
 
         // Canonical Option A: Crystalline Saint (BTRON Lil Cube 64)
 
-        function setKirbyAnimation(state) {
+        function setMascotAnimation(state) {
             if (animState === state && state !== 'poke') return;
             animState = state;
             stateTimer = 0;
@@ -2585,25 +2626,29 @@
                 walkPhase = 0;
             } else if (state === 'float') {
                 floatTimer = 0;
-                sfxFloatInhale();
+                sfxFloatLevitate();
             } else if (state === 'dance') {
                 danceStep = 0;
                 danceTimer = 0;
-                sfxVictoryFanfare();
+                sfxCrystalCelebration();
             }
         }
+        const setKirbyAnimation = setMascotAnimation; // Backward compatibility alias
 
-        window.triggerKirbyWaddle = function() {
-            setKirbyAnimation('walk');
+        window.triggerWaddle = function() {
+            setMascotAnimation('walk');
         };
+        window.triggerKirbyWaddle = window.triggerWaddle;
 
-        window.triggerKirbyFloat = function() {
-            setKirbyAnimation('float');
+        window.triggerFloat = function() {
+            setMascotAnimation('float');
         };
+        window.triggerKirbyFloat = window.triggerFloat;
 
-        window.triggerKirbyDance = function() {
-            setKirbyAnimation('dance');
+        window.triggerDance = function() {
+            setMascotAnimation('dance');
         };
+        window.triggerKirbyDance = window.triggerDance;
 
         // =========================================================================
         // 3. Mathematical Hopf Fibration 4D Engine (Human-Perceptive Smoothing)
@@ -3278,11 +3323,11 @@
                 e.preventDefault();
                 window.triggerBlessing();
             } else if (e.key === 'w' || e.key === 'W') {
-                window.triggerKirbyWaddle();
+                window.triggerWaddle();
             } else if (e.key === 'f' || e.key === 'F') {
-                window.triggerKirbyFloat();
+                window.triggerFloat();
             } else if (e.key === 'd' || e.key === 'D') {
-                window.triggerKirbyDance();
+                window.triggerDance();
             }
         });
 

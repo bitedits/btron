@@ -2379,6 +2379,51 @@
          * |      | 23.30s | SHIM_DING         | A6 (1760Hz) Resonant Chime        |
          * |      | 24.10s | SHIM_DING         | D7 (2349Hz) Pure Celestial Star   |
          * +------+--------+-------------------+-----------------------------------+
+         * -------------------------------------------------------------------------
+         * [TRACK 3: 朝日のあたる家 / THE HOUSE OF THE RISING SUN (THOMAS KRÜGER PIANO)]
+         * Key: A Minor (Am - C - D - F - Am - E7)
+         * Meter: 4/4 Moderato (~108 BPM) -> 6/8 Virtuosic Rolling Arpeggios (Bars 28-44)
+         * Total Duration: ~26.5s (Full sheet music fidelity across all 5 pages)
+         * +------+--------+-------------------+-----------------------------------+
+         * | SEC  | TIME   | SHIM SAMPLE       | SCORE EVENT / MUSICAL FUNCTION    |
+         * +------+--------+-------------------+-----------------------------------+
+         * | P01  | 0.00s  | SHIM_PULSE_BELL   | A2 (110Hz) Golden Chi Dawn Swell  |
+         * | Dawn | 0.10s  | SHIM_DING         | A6 (1760Hz) Awakening Bell       |
+         * | Intro| 0.40s  | SHIM_WADDLE+FLOAT | Bar 1: Am Syncopated Ostinato     |
+         * | 4/4  | 1.40s  | SHIM_WADDLE+FLOAT | Bar 2: C Major Bass & Chord       |
+         * | Groov| 2.40s  | SHIM_WADDLE+FLOAT | Bar 3: D Major Bass & Chord       |
+         * |      | 3.40s  | SHIM_WADDLE+FLOAT | Bar 4: F Major Bass & Chord       |
+         * |      | 3.90s  | SHIM_WADDLE+FLOAT | Bar 8: E7 Turnaround & Rest Pickup|
+         * +------+--------+-------------------+-----------------------------------+
+         * | P02  | 4.50s  | SHIM_PULSE_SQUASH | Bars 10-18: Theme Enters (mp)     |
+         * | Theme| 4.50s  | SHIM_DANCE        | A4->C5->D5->E5 Iconic Soul Lead   |
+         * | Head | 5.80s  | SHIM_DANCE+FLOAT  | Bar 11: C Maj (E5 sustained->D5->C5)
+         * |      | 7.10s  | SHIM_DANCE+FLOAT  | Bar 12: D Maj (D5->F#5 Ascend)    |
+         * |      | 8.40s  | SHIM_DANCE+FLOAT  | Bar 13: F Maj (F5->E5->D5)        |
+         * |      | 9.40s  | SHIM_DANCE+FLOAT  | Bar 14: Am (E5->C5->A4)           |
+         * |      | 10.10s | SHIM_DANCE+FLOAT  | Bar 15: E7 (B4->G#4->E5 pickup)   |
+         * +------+--------+-------------------+-----------------------------------+
+         * | P03  | 10.80s | SHIM_PULSE_SQUASH | Bars 19-27: Passionate Forte (f)  |
+         * | Forte| 10.80s | SHIM_DANCE        | Full Octave Lead A4/A5->C5/C6->D5/D6
+         * | Peak | 12.10s | SHIM_DANCE+FLOAT  | C Maj Climax (E5/E6->G5/G6->D5/D6)|
+         * |      | 13.40s | SHIM_DANCE+FLOAT  | D Maj Leap (F#5/F#6->High A5/A6)  |
+         * |      | 14.70s | SHIM_DANCE+FLOAT  | F Maj Cry (A5/A6->F5/F6->D5/D6)   |
+         * |      | 15.60s | SHIM_DANCE+WADDLE | E7 Buildup into 6/8 Meter Shift   |
+         * +------+--------+-------------------+-----------------------------------+
+         * | P04  | 16.20s | SHIM_FLOAT        | Bars 28-42: Kruger 6/8 Wave!      |
+         * | 6/8  | 16.20s | SHIM_DANCE        | Am Rolling Wave (A2-E3-A3-C4-E4-A4)
+         * | Wave | 17.30s | SHIM_FLOAT+DANCE  | C Maj 6/8 Wave + Soaring High G5  |
+         * |      | 18.40s | SHIM_FLOAT+DANCE  | D Maj 6/8 Wave + F#5/A5 Arpeggio  |
+         * |      | 19.50s | SHIM_FLOAT+DANCE  | F Maj 6/8 Wave + Crystalline Highs|
+         * |      | 20.60s | SHIM_DANCE        | E7 Virtuosic Cascade (E6->G#5 Run)|
+         * +------+--------+-------------------+-----------------------------------+
+         * | P05  | 21.80s | SHIM_WADDLE       | Low A1/A2 Sforzando Root Bass Hit |
+         * | Grand| 21.90s | SHIM_FLOAT        | Grand Am(add9) Rolled Glass-Harp  |
+         * | Cad  | 22.30s | SHIM_PULSE_BELL   | Golden Chi A2 Sub-Harmonic Glow   |
+         * | ence | 22.90s | SHIM_PULSE_SQUASH | Mild Singing Traveler Harmonic    |
+         * |      | 23.40s | SHIM_DING         | A6 (1760Hz) Resonant Chime        |
+         * |      | 24.20s | SHIM_DING         | E7 (2637Hz) Pure Sunrise Starlight|
+         * +------+--------+-------------------+-----------------------------------+
          * =========================================================================
          */
 
@@ -4257,6 +4302,7 @@
         // [Space] / [J] / [P] : Journey Sacred Pulse
         // [1] / [S]           : Track 1 (聖なる交響詩)
         // [2] / [C]           : Track 2 (今田勝 Caterpillar Jazz)
+        // [3] / [H] / [R]     : Track 3 (朝日のあたる家 / House of the Rising Sun)
         // [W]                 : Waddle
         // [F]                 : Float
         // [D]                 : Dance
@@ -4271,6 +4317,9 @@
             } else if (e.key === '2' || e.key === 'c' || e.key === 'C') {
                 e.preventDefault();
                 window.playTrack(2);
+            } else if (e.key === '3' || e.key === 'h' || e.key === 'H' || e.key === 'r' || e.key === 'R') {
+                e.preventDefault();
+                window.playTrack(3);
             } else if (e.key === 'w' || e.key === 'W') {
                 window.triggerWaddle();
             } else if (e.key === 'f' || e.key === 'F') {

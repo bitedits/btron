@@ -2844,7 +2844,7 @@
                 this.isSecondWave = isSecondWave;
                 // Second wave expands far outer bounds of Lil Cube 64 across the whole universe
                 this.maxR = isSecondWave ? Math.max(width, height) * 1.65 : Math.max(width, height) * 0.76;
-                this.duration = isSecondWave ? 3.6 : 2.3;
+                this.duration = isSecondWave ? 3.6 : 2.4; // Exactly synchronized with 3D pulse
                 this.time = 0;
                 this.alive = true;
 
@@ -2904,7 +2904,11 @@
                 if (!this.alive) return;
                 const progress = this.time / this.duration;
                 const r = this.getCurrentRadius();
-                const globalAlpha = Math.max(0, 1 - Math.pow(progress, this.isSecondWave ? 1.6 : 1.8));
+
+                // Synchronized cosine dissolve: both the blue sphere and the golden stripes reach zero simultaneously at progress = 1.0
+                const fadeT = Math.max(0, (progress - 0.35) / 0.65);
+                const syncAlpha = progress < 0.35 ? 1.0 : 0.5 * (1 + Math.cos(Math.PI * fadeT));
+                const globalAlpha = syncAlpha;
 
                 ctx.save();
 
@@ -2962,33 +2966,25 @@
                     ctx.fill();
                 }
 
-                // C. Spherical Translucent Dome Veil
-                const domeGrad = ctx.createRadialGradient(this.cx, this.cy, Math.max(0, r - (this.isSecondWave ? 200 : 90)), this.cx, this.cy, r);
-                if (this.isSecondWave) {
-                    // Po's Spirit Realm Golden Chi Canopy
-                    domeGrad.addColorStop(0, 'rgba(255, 215, 0, 0)');
-                    domeGrad.addColorStop(0.35, `rgba(251, 191, 36, ${globalAlpha * 0.09})`);
-                    domeGrad.addColorStop(0.75, `rgba(245, 158, 11, ${globalAlpha * 0.18})`);
-                    domeGrad.addColorStop(0.94, `rgba(255, 235, 120, ${globalAlpha * 0.32})`);
-                    domeGrad.addColorStop(1, 'rgba(255, 200, 0, 0)');
-                } else {
-                    domeGrad.addColorStop(0, 'rgba(255, 215, 0, 0)');
-                    domeGrad.addColorStop(0.65, `rgba(56, 189, 248, ${globalAlpha * 0.14})`);
-                    domeGrad.addColorStop(0.92, `rgba(255, 230, 130, ${globalAlpha * 0.22})`);
-                    domeGrad.addColorStop(1, 'rgba(255, 215, 0, 0)');
-                }
+                // C. Spherical Translucent Dome Veil (Blue Sphere Body Synchronized with Golden Rings)
+                const domeGrad = ctx.createRadialGradient(this.cx, this.cy, Math.max(0, r - (this.isSecondWave ? 220 : 100)), this.cx, this.cy, r);
+                domeGrad.addColorStop(0, 'rgba(56, 189, 248, 0)');
+                domeGrad.addColorStop(0.45, `rgba(14, 165, 233, ${syncAlpha * (this.isSecondWave ? 0.28 : 0.18)})`);
+                domeGrad.addColorStop(0.80, `rgba(56, 189, 248, ${syncAlpha * (this.isSecondWave ? 0.36 : 0.26)})`);
+                domeGrad.addColorStop(0.95, `rgba(255, 230, 130, ${syncAlpha * (this.isSecondWave ? 0.38 : 0.28)})`);
+                domeGrad.addColorStop(1, 'rgba(255, 215, 0, 0)');
                 ctx.fillStyle = domeGrad;
                 ctx.beginPath();
                 ctx.arc(this.cx, this.cy, r, 0, Math.PI * 2);
                 ctx.fill();
 
-                // D. Radiant Shockwave Crest
+                // D. Radiant Shockwave Crest (Golden Stripes & Harmonic Rings)
                 if (this.isSecondWave) {
                     // --- Po's Grand Chi Aura Wavefront ---
                     // 1. Broad Golden Chi Flame Corona
                     ctx.beginPath();
                     ctx.arc(this.cx, this.cy, r, 0, Math.PI * 2);
-                    ctx.strokeStyle = `rgba(245, 158, 11, ${globalAlpha * 0.85})`;
+                    ctx.strokeStyle = `rgba(245, 158, 11, ${globalAlpha * 0.88})`;
                     ctx.lineWidth = Math.max(3, 9.5 * (1 - progress * 0.55));
                     ctx.shadowColor = 'rgba(255, 180, 0, 0.95)';
                     ctx.shadowBlur = 32;
@@ -3072,7 +3068,7 @@
             }
         }
 
-        // 3. 3D Journey Spherical Pulse in Three.js
+        // 3. 3D Journey Spherical Pulse in Three.js (Luminous Blue Sphere & Golden Stripes)
         const active3dPulses = [];
         class JourneyPulse3D {
             constructor(parentScene, isSecondWave = false) {
@@ -3081,32 +3077,35 @@
                 this.group = new THREE.Group();
                 this.group.position.set(0, 0.12, 0);
 
+                // Golden Icosahedron Wireframe Stripes
                 const icoGeo = new THREE.IcosahedronGeometry(1.0, 1);
                 const icoMat = new THREE.MeshBasicMaterial({
                     color: isSecondWave ? 0xffea00 : 0xffe082,
                     wireframe: true,
                     transparent: true,
-                    opacity: 0.85
+                    opacity: 0.80
                 });
                 this.wireMesh = new THREE.Mesh(icoGeo, icoMat);
                 this.group.add(this.wireMesh);
 
-                const sphereGeo = new THREE.SphereGeometry(0.9, 16, 16);
+                // Luminous Celestial Blue Sphere
+                const sphereGeo = new THREE.SphereGeometry(0.96, 24, 24);
                 const sphereMat = new THREE.MeshBasicMaterial({
-                    color: isSecondWave ? 0xf59e0b : 0x38bdf8,
+                    color: isSecondWave ? 0x0ea5e9 : 0x38bdf8,
                     transparent: true,
-                    opacity: isSecondWave ? 0.42 : 0.35,
+                    opacity: isSecondWave ? 0.55 : 0.48,
                     blending: THREE.AdditiveBlending
                 });
                 this.sphereMesh = new THREE.Mesh(sphereGeo, sphereMat);
                 this.group.add(this.sphereMesh);
 
-                const ringGeo = new THREE.RingGeometry(0.92, 1.02, 24);
+                // Golden Stripes (Equatorial & Meridian Celestial Hoops)
+                const ringGeo = new THREE.RingGeometry(0.95, 1.05, 32);
                 const ringMat = new THREE.MeshBasicMaterial({
-                    color: isSecondWave ? 0xffd700 : 0xffd700,
+                    color: 0xffd700,
                     side: THREE.DoubleSide,
                     transparent: true,
-                    opacity: 0.9,
+                    opacity: 0.90,
                     blending: THREE.AdditiveBlending
                 });
                 this.ringH = new THREE.Mesh(ringGeo, ringMat);
@@ -3127,7 +3126,8 @@
 
                 this.parent.add(this.group);
                 this.time = 0;
-                this.duration = isSecondWave ? 2.4 : 1.35;
+                // Synchronized duration with 2D wave
+                this.duration = isSecondWave ? 3.6 : 2.4;
                 this.alive = true;
             }
 
@@ -3140,20 +3140,25 @@
                     return;
                 }
 
-                const easeOut = 1 - Math.pow(1 - progress, 2.5);
-                const maxScale = this.isSecondWave ? 7.6 : 2.8;
-                const currentScale = 0.2 + easeOut * maxScale;
+                // Spatial expansion curve
+                const easeOut = 1 - Math.pow(1 - progress, this.isSecondWave ? 2.6 : 2.5);
+                const maxScale = this.isSecondWave ? 7.8 : 3.2;
+                const currentScale = 0.22 + easeOut * maxScale;
                 this.group.scale.set(currentScale, currentScale, currentScale);
 
-                const alpha = Math.max(0, 1 - Math.pow(progress, 1.4));
-                this.wireMesh.material.opacity = alpha * 0.85;
-                this.sphereMesh.material.opacity = alpha * (this.isSecondWave ? 0.45 : 0.35);
-                this.ringH.material.opacity = alpha * 0.90;
-                this.ringV.material.opacity = alpha * 0.90;
-                if (this.ringD) this.ringD.material.opacity = alpha * 0.90;
+                // Synchronized cosine dissolve: both the blue sphere and the golden stripes reach zero simultaneously at progress = 1.0
+                const fadeT = Math.max(0, (progress - 0.35) / 0.65);
+                const syncAlpha = progress < 0.35 ? 1.0 : 0.5 * (1 + Math.cos(Math.PI * fadeT));
 
-                this.group.rotation.y += dt * (this.isSecondWave ? 2.0 : 1.5);
-                this.group.rotation.x += dt * (this.isSecondWave ? 1.2 : 0.8);
+                const sphereMaxOpacity = this.isSecondWave ? 0.55 : 0.48;
+                this.sphereMesh.material.opacity = syncAlpha * sphereMaxOpacity;
+                this.wireMesh.material.opacity = syncAlpha * 0.80;
+                this.ringH.material.opacity = syncAlpha * 0.90;
+                this.ringV.material.opacity = syncAlpha * 0.90;
+                if (this.ringD) this.ringD.material.opacity = syncAlpha * 0.90;
+
+                this.group.rotation.y += dt * (this.isSecondWave ? 1.8 : 1.4);
+                this.group.rotation.x += dt * (this.isSecondWave ? 1.0 : 0.7);
             }
 
             dispose() {

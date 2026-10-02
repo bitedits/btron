@@ -4192,14 +4192,13 @@ shimDance(1.07, 0.89, 0.12); // D major retro arpeggio run</code></pre>
             } else if (trackNum === 3) {
                 // =============================================================
                 // TRACK 3: 朝日のあたる家 / The House of the Rising Sun
-                // Thomas Krüger (Mr. Pianoman) Concert Grand Piano Arrangement
-                // Faithful acoustic piano performance:
-                // - Concert Grand Piano hammer felt strikes & physical string harmonics
-                // - Deep Sforzando Grand Piano Sub-Pedal Resonance (A0 27.5Hz / A1 55Hz)
-                // - Left-Hand Syncopated 16th Ostinato & Rolling Chords
-                // - Right-Hand Soulful Vocal Melody & Forte Octave Climax
-                // - Signature 6/8 Rolling Arpeggio Wave & High Virtuosic Cascades
-                // Total Duration: ~26.5s (Full 5-page sheet music fidelity)
+                // Traditional Folk / The Animals (1964) & Thomas Krüger Piano Arrangement
+                // Key: A Minor | 6/8 Slow Soul Ballad (eighth = 0.24s, bar = 1.44s)
+                // - Left Hand: Iconic 6/8 Undulating Arpeggio Wave (Am - C - D - F - Am - E - E7)
+                // - Right Hand: Unmistakable Singing Vocal Melody ("There is a house in New Orleans...")
+                // - Phase 2: Thomas Krüger Forte Octave Chorus & Booming Sforzando Sub-Bass
+                // - Phase 3: Virtuosic High Piano Waterfall Cascade into Rolled Am(add9) Grand Coda
+                // Duration: ~26.5s
                 // =============================================================
                 const btn3 = document.getElementById('track3Btn');
                 if (btn3) {
@@ -4208,372 +4207,246 @@ shimDance(1.07, 0.89, 0.12); // D major retro arpeggio run</code></pre>
                 }
 
                 const quoteText = document.getElementById('saintQuoteText');
-                if (quoteText) quoteText.innerText = '🌅 Thomas Krüger『House of the Rising Sun』(朝日のあたる家) をコンサートグランドピアノで演奏中キューブ！🎹☀️';
+                if (quoteText) quoteText.innerText = '🌅✨『There is a house in New Orleans, they call the Rising Sun...』朝日のあたる家の歌唱メロディをコンサートグランドピアノが熱唱中キューブ！🎹☀️';
 
-                // --- PHASE 1: Atmospheric New Orleans Sunrise & 4/4 Grand Piano Groove (0.00s - 4.50s, Sheet 1) ---
-                shimPedalSwoosh(0.00, 1.2, 0.50); // Thomas Krüger damper pedal lift off all 88 strings!
-                shimPulseBell(0.00, 0.85, 0.421); // A2 (110Hz) Golden Chi ambient dawn drone
-                shimPedalBass(0.00, 55.00, 0.20, 3.0); // Deep A1 sub-pedal piano rumble
-                shimDing(0.10, 1760.0, 0.12, 0.80); // A6 awakening bell ping
+                // Timing Constants (6/8 Meter: 6 eighth-notes per bar)
+                const eighth = 0.24;          // ~0.24s per eighth note (~125 BPM 8th-note pulse)
+                const bar = eighth * 6;       // ~1.44s per 6/8 measure
 
-                // Bar 1: Am Syncopated 16th Grand Piano Groove (Sheet 1, m. 1-2)
-                shimPianoHammer(0.40, 1.2); // Felt hammer impact on bass string
-                shimPedalBass(0.40, 55.00, 0.16, 1.2);
-                shimGrandPiano(0.40, 110.00, 0.22, 0.45); // Low A2 Grand Piano Strike
-                shimWaddle(0.40, 110.00, 0.16, 0.14);
-                shimFloat(0.40, 523.25, 0.11, [220.00, 261.63, 329.63, 440.00]); // Am Chord
-                shimGrandPiano(0.40, 220.00, 0.14, 0.50);
-                shimGrandPiano(0.65, 164.81, 0.16, 0.25); // E3 Hammer
-                shimWaddle(0.65, 164.81, 0.12, 0.09);
-                shimGrandPiano(0.90, 220.00, 0.17, 0.25); // A3 Hammer
-                shimWaddle(0.90, 220.00, 0.13, 0.09);
-                shimDing(0.90, 2640.0, 0.08, 0.15);      // Offbeat hammer click
-                shimGrandPiano(1.15, 261.63, 0.18, 0.25); // C4 Hammer
-                shimWaddle(1.15, 261.63, 0.13, 0.10);
+                // --- Helper 1: Left-Hand 6/8 Rolling Acoustic Arpeggio Wave ---
+                function playArpeggioBar(startTime, rootF, thirdF, fifthF, octF, bassVol = 0.12) {
+                    // 6 undulating eighth notes: root -> 5th -> octave -> 3rd -> 5th -> 3rd
+                    const notes = [
+                        { t: 0,              f: rootF,  d: eighth * 2.5, v: bassVol * 1.1 },
+                        { t: eighth,         f: fifthF, d: eighth * 2.0, v: bassVol * 0.9 },
+                        { t: eighth * 2,     f: octF,   d: eighth * 2.0, v: bassVol * 0.95 },
+                        { t: eighth * 3,     f: thirdF, d: eighth * 2.0, v: bassVol * 0.9 },
+                        { t: eighth * 4,     f: fifthF, d: eighth * 2.0, v: bassVol * 0.95 },
+                        { t: eighth * 5,     f: thirdF, d: eighth * 2.0, v: bassVol * 0.85 }
+                    ];
+                    notes.forEach(n => {
+                        shimGrandPiano(startTime + n.t, n.f, n.v, n.d);
+                    });
+                }
 
-                // Bar 2: C Major Grand Piano Ostinato (Sheet 1, m. 3-4)
-                shimPedalBass(1.40, 65.41, 0.16, 1.2);    // C2 Sub-pedal
-                shimGrandPiano(1.40, 130.81, 0.22, 0.45); // C3 Hammer
-                shimWaddle(1.40, 130.81, 0.16, 0.14);
-                shimFloat(1.40, 523.25, 0.11, [261.63, 329.63, 392.00, 523.25]); // C chord
-                shimGrandPiano(1.40, 261.63, 0.14, 0.50);
-                shimGrandPiano(1.65, 196.00, 0.16, 0.25); // G3
-                shimWaddle(1.65, 196.00, 0.12, 0.09);
-                shimGrandPiano(1.90, 261.63, 0.17, 0.25); // C4
-                shimWaddle(1.90, 261.63, 0.13, 0.09);
-                shimGrandPiano(2.15, 329.63, 0.18, 0.25); // E4
-                shimWaddle(2.15, 329.63, 0.13, 0.10);
-                shimDing(2.15, 2640.0, 0.08, 0.15);
+                // --- Helper 2: Right-Hand Iconic Vocal Melody (Front & Center) ---
+                function playMelodyNote(startTime, freq, durationBeats, vol = 0.30, isOctave = false) {
+                    const dur = durationBeats * eighth;
+                    // 1. Acoustic Concert Grand Piano Singing Hammer Attack
+                    shimGrandPiano(startTime, freq, vol, dur * 1.6);
+                    shimPianoHammer(startTime, vol * 1.4);
 
-                // Bar 3: D Major Grand Piano Ostinato (Sheet 1, m. 5-6)
-                shimPedalBass(2.40, 73.42, 0.16, 1.2);    // D2 Sub-pedal
-                shimGrandPiano(2.40, 146.83, 0.22, 0.45); // D3 Hammer
-                shimWaddle(2.40, 146.83, 0.16, 0.14);
-                shimFloat(2.40, 523.25, 0.12, [293.66, 369.99, 440.00, 587.33]); // D chord (F#4)
-                shimGrandPiano(2.40, 293.66, 0.14, 0.50);
-                shimGrandPiano(2.65, 220.00, 0.16, 0.25); // A3
-                shimWaddle(2.65, 220.00, 0.12, 0.09);
-                shimGrandPiano(2.90, 293.66, 0.17, 0.25); // D4
-                shimWaddle(2.90, 293.66, 0.13, 0.09);
-                shimGrandPiano(3.15, 369.99, 0.18, 0.25); // F#4
-                shimWaddle(3.15, 369.99, 0.14, 0.10);
-                shimDing(3.15, 2640.0, 0.08, 0.15);
+                    // 2. High Octave Piano Resonance (Thomas Krüger Forte dynamics)
+                    if (isOctave) {
+                        shimGrandPiano(startTime, freq * 2, vol * 0.72, dur * 1.3);
+                    }
 
-                // Bar 4: F Major & E7 Turnaround (Sheet 1, m. 7-9)
-                shimPedalBass(3.40, 87.31, 0.16, 1.2);    // F2 Sub-pedal
-                shimGrandPiano(3.40, 174.61, 0.22, 0.45); // F3 Hammer
-                shimWaddle(3.40, 174.61, 0.16, 0.14);
-                shimFloat(3.40, 523.25, 0.12, [261.63, 349.23, 440.00, 523.25]); // F chord
-                shimGrandPiano(3.40, 349.23, 0.14, 0.50);
-                shimGrandPiano(3.65, 261.63, 0.16, 0.25); // C4
-                shimWaddle(3.65, 261.63, 0.13, 0.09);
-                shimPedalBass(3.90, 82.41, 0.16, 1.2);    // E2 Dominant
-                shimGrandPiano(3.90, 164.81, 0.22, 0.45); // E3 Hammer
-                shimWaddle(3.90, 164.81, 0.15, 0.12);
-                shimFloat(3.90, 523.25, 0.12, [246.94, 329.63, 415.30, 493.88]); // E7 chord (G#)
-                shimGrandPiano(3.90, 329.63, 0.14, 0.50);
-                shimGrandPiano(4.15, 207.65, 0.16, 0.25); // G#3 leading note
-                shimWaddle(4.15, 207.65, 0.13, 0.09);
-                shimDing(4.15, 2640.0, 0.09, 0.20);
+                    // 3. Cantabile Vocal Lead Overtone (Ensures the Animals melody is crystal-clear)
+                    shimSaxFlute(startTime, [{ f: freq, d: dur * 0.95, v: 0.14, t: 0 }], 1.0);
+                }
 
-                // --- PHASE 2: The Iconic Soul Theme Enters (mp) (4.50s - 10.80s, Sheet 2) ---
-                // Thomas Krüger Concert Grand Piano sings the melody:
-                // Bar 10: Am Theme (A4 -> C5 -> D5 -> E5)
-                shimGrandPiano(4.50, 440.00, 0.18, 0.26);
-                shimGrandPiano(4.78, 523.25, 0.19, 0.26);
-                shimGrandPiano(5.06, 587.33, 0.20, 0.32);
-                shimGrandPiano(5.38, 659.25, 0.22, 0.50);
-                shimPulseSquash(4.50, 0.85, 0.841); // Vocal tone overtone
-                shimDance(4.50, 1.0, 0.95, [
-                    { f: 440.00, d: 0.22, v: 0.14, t: 0 },
-                    { f: 523.25, d: 0.24, v: 0.15, t: 0.28 },
-                    { f: 587.33, d: 0.30, v: 0.16, t: 0.56 },
-                    { f: 659.25, d: 0.45, v: 0.17, t: 0.88 }
-                ]);
-                shimWaddle(4.50, 110.00, 0.14, 0.12);
-                shimFloat(4.50, 523.25, 0.10, [220.00, 261.63, 329.63]);
-                shimGrandPiano(5.06, 164.81, 0.14, 0.25);
-                shimWaddle(5.06, 164.81, 0.12, 0.09);
-                shimDing(5.06, 1760.0, 0.09, 0.18);
-                shimWaddle(5.45, 220.00, 0.12, 0.09);
+                // -------------------------------------------------------------
+                // INTRO: ATMOSPHERIC NEW ORLEANS SUNRISE (0.00s - 2.88s)
+                // -------------------------------------------------------------
+                shimPedalSwoosh(0.00, 1.2, 0.60); // Damper pedal lift
+                shimPulseBell(0.00, 0.85, 0.35); // A2 ambient dawn glow
+                shimPedalBass(0.00, 55.00, 0.18, 2.8); // Deep A1 sub-pedal rumble
 
-                // Bar 11: C Major (E5 Sustained -> D5 -> C5)
-                shimGrandPiano(5.80, 659.25, 0.20, 0.45);
-                shimGrandPiano(6.28, 587.33, 0.18, 0.28);
-                shimGrandPiano(6.58, 523.25, 0.19, 0.40);
-                shimDance(5.80, 1.0, 0.95, [
-                    { f: 659.25, d: 0.40, v: 0.17, t: 0 },
-                    { f: 587.33, d: 0.26, v: 0.15, t: 0.48 },
-                    { f: 523.25, d: 0.38, v: 0.16, t: 0.78 }
-                ]);
-                shimWaddle(5.80, 130.81, 0.14, 0.12);
-                shimFloat(5.80, 523.25, 0.10, [261.63, 329.63, 392.00]);
-                shimGrandPiano(6.36, 196.00, 0.14, 0.25);
-                shimWaddle(6.36, 196.00, 0.12, 0.09);
-                shimDing(6.36, 1760.0, 0.09, 0.18);
-                shimWaddle(6.75, 261.63, 0.12, 0.09);
+                // Bar 0 (0.00s, Am): Rolling Arpeggio Awakening
+                playArpeggioBar(0.000, 110.00, 261.63, 164.81, 220.00, 0.11); // A2 - C4 - E3 - A3
+                shimDing(0.00, 1760.0, 0.10, 0.80);
 
-                // Bar 12: D Major (D5 -> F#5 Ascending Soul)
-                shimGrandPiano(7.10, 587.33, 0.20, 0.45);
-                shimGrandPiano(7.58, 739.99, 0.22, 0.55); // F#5 Kruger blue tone
-                shimDance(7.10, 1.0, 1.0, [
-                    { f: 587.33, d: 0.42, v: 0.17, t: 0 },
-                    { f: 739.99, d: 0.50, v: 0.18, t: 0.48 }
-                ]);
-                shimWaddle(7.10, 146.83, 0.14, 0.12);
-                shimFloat(7.10, 523.25, 0.11, [293.66, 369.99, 440.00]);
-                shimGrandPiano(7.66, 220.00, 0.14, 0.25);
-                shimWaddle(7.66, 220.00, 0.12, 0.09);
-                shimDing(7.66, 1760.0, 0.09, 0.18);
-                shimWaddle(8.05, 293.66, 0.12, 0.09);
+                // Bar 1 (1.44s, C): C Major Rolling Wave + Starlight Bell
+                playArpeggioBar(bar * 1, 130.81, 329.63, 196.00, 261.63, 0.11); // C3 - E4 - G3 - C4
+                shimDing(bar * 1, 2637.0, 0.08, 0.90);
 
-                // Bar 13: F Major (F5 -> E5 -> D5)
-                shimGrandPiano(8.40, 698.46, 0.20, 0.38);
-                shimGrandPiano(8.78, 659.25, 0.18, 0.30);
-                shimGrandPiano(9.08, 587.33, 0.18, 0.32);
-                shimDance(8.40, 1.0, 1.0, [
-                    { f: 698.46, d: 0.36, v: 0.17, t: 0 },
-                    { f: 659.25, d: 0.28, v: 0.16, t: 0.38 },
-                    { f: 587.33, d: 0.30, v: 0.15, t: 0.68 }
-                ]);
-                shimWaddle(8.40, 174.61, 0.14, 0.12);
-                shimFloat(8.40, 523.25, 0.11, [261.63, 349.23, 440.00]);
-                shimDing(8.90, 1760.0, 0.09, 0.18);
+                // -------------------------------------------------------------
+                // VERSE 1: ICONIC VOCAL MELODY (2.88s - 14.40s)
+                // "There is a house in New Orleans, they call the Rising Sun..."
+                // -------------------------------------------------------------
 
-                // Bar 14: Am (E5 -> C5 -> A4)
-                shimGrandPiano(9.40, 659.25, 0.18, 0.24);
-                shimGrandPiano(9.62, 523.25, 0.18, 0.24);
-                shimGrandPiano(9.84, 440.00, 0.19, 0.30);
-                shimDance(9.40, 1.0, 0.95, [
-                    { f: 659.25, d: 0.22, v: 0.16, t: 0 },
-                    { f: 523.25, d: 0.22, v: 0.15, t: 0.22 },
-                    { f: 440.00, d: 0.28, v: 0.16, t: 0.44 }
-                ]);
-                shimWaddle(9.40, 110.00, 0.14, 0.12);
-                shimFloat(9.40, 523.25, 0.10, [220.00, 261.63, 329.63]);
+                // Bar 2 (2.88s, Am): "There is a..."
+                const b2 = bar * 2;
+                shimPedalBass(b2, 55.00, 0.16, 1.6);
+                playArpeggioBar(b2, 110.00, 261.63, 164.81, 220.00, 0.10);
+                playMelodyNote(b2 + 0.000,      440.00, 2.0, 0.32); // "There" (A4)
+                playMelodyNote(b2 + eighth * 2, 523.25, 2.0, 0.32); // "is"    (C5)
+                playMelodyNote(b2 + eighth * 4, 587.33, 2.0, 0.34); // "a"     (D5)
 
-                // Bar 15: E7 (B4 -> G#4 -> E5 pickup into Forte)
-                shimGrandPiano(10.10, 493.88, 0.18, 0.25);
-                shimGrandPiano(10.34, 415.30, 0.18, 0.25); // G#4
-                shimGrandPiano(10.58, 659.25, 0.22, 0.32); // E5 Pickup
-                shimDance(10.10, 1.0, 1.05, [
-                    { f: 493.88, d: 0.24, v: 0.16, t: 0 },
-                    { f: 415.30, d: 0.24, v: 0.16, t: 0.24 },
-                    { f: 659.25, d: 0.30, v: 0.18, t: 0.48 }
-                ]);
-                shimWaddle(10.10, 164.81, 0.14, 0.12);
-                shimFloat(10.10, 523.25, 0.11, [246.94, 329.63, 415.30]);
-                shimDing(10.58, 2640.0, 0.10, 0.25);
+                // Bar 3 (4.32s, C): "...house in New..."
+                const b3 = bar * 3;
+                shimPedalBass(b3, 65.41, 0.16, 1.6);
+                playArpeggioBar(b3, 130.81, 329.63, 196.00, 261.63, 0.10);
+                playMelodyNote(b3 + 0.000,      659.25, 3.0, 0.36); // "house" (E5 sustained)
+                playMelodyNote(b3 + eighth * 3, 659.25, 1.0, 0.30); // "in"    (E5)
+                playMelodyNote(b3 + eighth * 4, 587.33, 2.0, 0.34); // "New"   (D5)
 
-                // --- PHASE 3: Passionate Forte Octave Chorus (10.80s - 16.20s, Sheet 3) ---
-                // Full f dynamics: Grand Concert Piano Octaves & Booming Sub-Pedal
-                shimPedalSwoosh(10.75, 1.3, 0.50); // Deep damper pedal swoosh
-                shimPianoHammer(10.80, 1.4);       // Fortissimo wooden felt hammer strike!
-                shimPedalBass(10.80, 55.00, 0.24, 2.4);  // Low A1 Grand Piano Thunder!
-                shimGrandPiano(10.80, 880.00, 0.24, 0.30);  // A5
-                shimGrandPiano(10.80, 440.00, 0.20, 0.30);  // A4 Octave
-                shimGrandPiano(11.08, 1046.50, 0.25, 0.30); // C6
-                shimGrandPiano(11.08, 523.25, 0.20, 0.30);  // C5 Octave
-                shimGrandPiano(11.36, 1174.66, 0.26, 0.35); // D6
-                shimGrandPiano(11.36, 587.33, 0.21, 0.35);  // D5 Octave
-                shimGrandPiano(11.68, 1318.51, 0.28, 0.55); // E6 Peak!
-                shimGrandPiano(11.68, 659.25, 0.22, 0.55);  // E5 Octave
-                shimPulseSquash(10.80, 1.15, 0.841);
-                shimDance(10.80, 1.0, 1.25, [
-                    { f: 880.00, d: 0.24, v: 0.19, t: 0 },
-                    { f: 1046.50, d: 0.26, v: 0.20, t: 0.28 },
-                    { f: 1174.66, d: 0.32, v: 0.21, t: 0.56 },
-                    { f: 1318.51, d: 0.48, v: 0.22, t: 0.88 }
-                ]);
-                shimWaddle(10.80, 55.00, 0.18, 0.16);
-                shimFloat(10.80, 523.25, 0.13, [220.00, 329.63, 440.00, 523.25]);
-                shimDing(10.80, 1760.0, 0.14, 0.30);
-                shimWaddle(11.36, 164.81, 0.14, 0.10);
-                shimDing(11.36, 1760.0, 0.11, 0.22);
-                shimWaddle(11.75, 220.00, 0.14, 0.10);
+                // Bar 4 (5.76s, D): "...Or-leans..."
+                const b4 = bar * 4;
+                shimPedalBass(b4, 73.42, 0.16, 1.6);
+                playArpeggioBar(b4, 146.83, 369.99, 220.00, 293.66, 0.10); // D3 - F#4 - A3 - D4
+                playMelodyNote(b4 + 0.000,      587.33, 3.0, 0.34); // "Or-"   (D5)
+                playMelodyNote(b4 + eighth * 3, 369.99, 3.0, 0.32); // "-leans"(F#4 blue note)
 
-                // Bar 20: C Major Octaves (E6 -> G6 -> D6 -> C6)
-                shimPedalBass(12.10, 65.41, 0.22, 2.2); // Low C2
-                shimGrandPiano(12.10, 1318.51, 0.26, 0.40);
-                shimGrandPiano(12.10, 659.25, 0.20, 0.40);
-                shimGrandPiano(12.46, 1567.98, 0.24, 0.25); // G6 High flourish!
-                shimGrandPiano(12.68, 1174.66, 0.24, 0.28);
-                shimGrandPiano(12.94, 1046.50, 0.25, 0.40);
-                shimDance(12.10, 1.0, 1.25, [
-                    { f: 1318.51, d: 0.38, v: 0.22, t: 0 },
-                    { f: 1567.98, d: 0.22, v: 0.20, t: 0.36 },
-                    { f: 1174.66, d: 0.26, v: 0.20, t: 0.58 },
-                    { f: 1046.50, d: 0.38, v: 0.21, t: 0.84 }
-                ]);
-                shimWaddle(12.10, 65.41, 0.18, 0.16);
-                shimFloat(12.10, 523.25, 0.13, [261.63, 329.63, 392.00, 523.25, 659.25]);
-                shimDing(12.10, 1760.0, 0.13, 0.28);
-                shimWaddle(12.66, 196.00, 0.14, 0.10);
-                shimDing(12.66, 2640.0, 0.10, 0.18);
-                shimWaddle(13.05, 261.63, 0.14, 0.10);
+                // Bar 5 (7.20s, F): "...and it's..."
+                const b5 = bar * 5;
+                shimPedalBass(b5, 87.31, 0.16, 1.6);
+                playArpeggioBar(b5, 174.61, 349.23, 261.63, 349.23, 0.10); // F3 - A3 - C4 - F4
+                playMelodyNote(b5 + 0.000,      349.23, 2.0, 0.30); // (F4)
+                playMelodyNote(b5 + eighth * 2, 440.00, 2.0, 0.32); // (A4)
+                playMelodyNote(b5 + eighth * 4, 523.25, 2.0, 0.34); // (C5)
 
-                // Bar 21: D Major Octaves (D6 -> F#6 -> High A6)
-                shimPedalBass(13.40, 73.42, 0.22, 2.2); // Low D2
-                shimGrandPiano(13.40, 1174.66, 0.25, 0.36);
-                shimGrandPiano(13.76, 1479.98, 0.26, 0.38); // F#6
-                shimGrandPiano(14.12, 1760.00, 0.28, 0.58); // High A6 Climax!
-                shimDance(13.40, 1.0, 1.30, [
-                    { f: 1174.66, d: 0.34, v: 0.21, t: 0 },
-                    { f: 1479.98, d: 0.36, v: 0.22, t: 0.36 },
-                    { f: 1760.00, d: 0.55, v: 0.24, t: 0.72 }
-                ]);
-                shimWaddle(13.40, 73.42, 0.18, 0.16);
-                shimFloat(13.40, 523.25, 0.13, [293.66, 369.99, 440.00, 587.33, 739.99]);
-                shimDing(13.40, 1760.0, 0.14, 0.30);
-                shimWaddle(13.96, 220.00, 0.14, 0.10);
-                shimDing(13.96, 2640.0, 0.10, 0.18);
-                shimWaddle(14.35, 293.66, 0.14, 0.10);
+                // Bar 6 (8.64s, Am): "They call the..."
+                const b6 = bar * 6;
+                shimPedalBass(b6, 55.00, 0.16, 1.6);
+                playArpeggioBar(b6, 110.00, 261.63, 164.81, 220.00, 0.10);
+                playMelodyNote(b6 + 0.000,      440.00, 2.0, 0.32); // "They" (A4)
+                playMelodyNote(b6 + eighth * 2, 523.25, 2.0, 0.32); // "call" (C5)
+                playMelodyNote(b6 + eighth * 4, 587.33, 2.0, 0.34); // "the"  (D5)
 
-                // Bar 22: F Major (High A6 -> F6 -> D6)
-                shimPedalBass(14.70, 87.31, 0.22, 2.0); // Low F2
-                shimGrandPiano(14.70, 1760.00, 0.26, 0.34);
-                shimGrandPiano(15.02, 1396.91, 0.25, 0.34); // F6
-                shimGrandPiano(15.34, 1174.66, 0.24, 0.38); // D6
-                shimDance(14.70, 1.0, 1.25, [
-                    { f: 1760.00, d: 0.32, v: 0.22, t: 0 },
-                    { f: 1396.91, d: 0.32, v: 0.21, t: 0.32 },
-                    { f: 1174.66, d: 0.36, v: 0.20, t: 0.64 }
-                ]);
-                shimWaddle(14.70, 87.31, 0.18, 0.16);
-                shimFloat(14.70, 523.25, 0.13, [261.63, 349.23, 440.00, 523.25, 698.46]);
-                shimDing(14.70, 1760.0, 0.14, 0.30);
+                // Bar 7 (10.08s, C): "...Ri-sing..."
+                const b7 = bar * 7;
+                shimPedalBass(b7, 65.41, 0.16, 1.6);
+                playArpeggioBar(b7, 130.81, 329.63, 196.00, 261.63, 0.10);
+                playMelodyNote(b7 + 0.000,      659.25, 3.0, 0.36); // "Ri-"  (E5)
+                playMelodyNote(b7 + eighth * 3, 659.25, 3.0, 0.34); // "-sing"(E5)
 
-                // Bar 23: E7 Buildup into 6/8 Meter Shift (Sheet 3, m. 23-24)
-                shimPedalBass(15.60, 82.41, 0.22, 2.0);
-                shimGrandPiano(15.60, 987.77, 0.24, 0.20);  // B5
-                shimGrandPiano(15.78, 830.61, 0.24, 0.20);  // G#5
-                shimGrandPiano(15.96, 1318.51, 0.26, 0.28); // E6
-                shimDance(15.60, 1.0, 1.20, [
-                    { f: 987.77, d: 0.18, v: 0.19, t: 0 },
-                    { f: 830.61, d: 0.18, v: 0.19, t: 0.18 },
-                    { f: 1318.51, d: 0.24, v: 0.22, t: 0.36 }
-                ]);
-                shimWaddle(15.60, 82.41, 0.17, 0.14);
-                shimWaddle(15.80, 92.50, 0.17, 0.12);
-                shimWaddle(16.00, 103.83, 0.18, 0.12);
-                shimDing(16.00, 2640.0, 0.12, 0.25);
+                // Bar 8 (11.52s, E): "...Sun..."
+                const b8 = bar * 8;
+                shimPedalBass(b8, 82.41, 0.18, 2.0);
+                playArpeggioBar(b8, 164.81, 415.30, 246.94, 329.63, 0.11); // E3 - G#4 - B3 - E4
+                playMelodyNote(b8 + 0.000,      493.88, 3.5, 0.35); // "Sun..." (B4)
+                playMelodyNote(b8 + eighth * 4, 415.30, 2.0, 0.32); // (G#4)
 
-                // --- PHASE 4: The Kruger 6/8 Rolling Arpeggio Wave (16.20s - 21.80s, Sheets 4 & 5) ---
-                // Concert Grand Piano rolling arpeggios: 6 undulating eighth-notes per measure!
-                shimPedalSwoosh(16.15, 1.2, 0.45); // Damper pedal catch for the 6/8 cascade
-                shimPianoHammer(16.20, 1.2);
+                // Bar 9 (12.96s, E7): Turnaround & Piano Crescendo into Forte Octave Chorus!
+                const b9 = bar * 9;
+                shimPedalSwoosh(b9, 1.2, 0.50);
+                playArpeggioBar(b9, 164.81, 415.30, 293.66, 329.63, 0.12); // E7 (with D4)
+                playMelodyNote(b9 + 0.000,      493.88, 2.0, 0.33); // B4
+                playMelodyNote(b9 + eighth * 2, 587.33, 2.0, 0.34); // D5
+                playMelodyNote(b9 + eighth * 4, 659.25, 2.0, 0.36); // E5 pickup into forte!
+                shimDing(b9 + eighth * 4, 2637.0, 0.10, 0.30);
 
-                // Bar 28 (Am 6/8 Arpeggio Wave):
-                shimPedalBass(16.20, 55.00, 0.20, 2.2);
-                shimFloat(16.20, 523.25, 0.15, [110.00, 164.81, 220.00, 261.63, 329.63, 440.00, 523.25], 0.075, 0.85);
-                shimGrandPiano(16.20, 440.00, 0.18, 0.70);
-                shimGrandPiano(16.50, 659.25, 0.20, 0.50);
-                shimGrandPiano(16.85, 880.00, 0.22, 0.55);
-                shimDance(16.20, 1.0, 1.15, [
-                    { f: 659.25, d: 0.45, v: 0.18, t: 0.20 },
-                    { f: 880.00, d: 0.50, v: 0.19, t: 0.55 }
-                ]);
-                shimDing(16.20, 1760.0, 0.12, 0.35);
+                // -------------------------------------------------------------
+                // VERSE 2: THOMAS KRÜGER FORTE OCTAVE CHORUS (14.40s - 23.04s)
+                // "And it's been the ruin of many a poor boy, and God I know I'm one..."
+                // Grand Piano Octaves (isOctave = true) & Sforzando Bass Rumble!
+                // -------------------------------------------------------------
 
-                // Bar 30 (C Major 6/8 Wave):
-                shimPedalBass(17.30, 65.41, 0.20, 2.2);
-                shimFloat(17.30, 523.25, 0.15, [130.81, 196.00, 261.63, 329.63, 392.00, 523.25, 659.25], 0.075, 0.85);
-                shimGrandPiano(17.50, 783.99, 0.20, 0.50);
-                shimGrandPiano(17.85, 659.25, 0.22, 0.55);
-                shimDance(17.30, 1.0, 1.15, [
-                    { f: 783.99, d: 0.45, v: 0.18, t: 0.20 },
-                    { f: 659.25, d: 0.50, v: 0.19, t: 0.55 }
-                ]);
-                shimDing(17.30, 1760.0, 0.12, 0.35);
+                // Bar 10 (14.40s, Am): "And it's been the..." (Octaves!)
+                const b10 = bar * 10;
+                shimPianoHammer(b10, 1.4);
+                shimPedalBass(b10, 55.00, 0.24, 2.4); // Booming A1 Sforzando!
+                playArpeggioBar(b10, 110.00, 261.63, 164.81, 220.00, 0.12);
+                playMelodyNote(b10 + 0.000,      659.25, 2.0, 0.38, true); // "And it's"  (E5/E6 octave)
+                playMelodyNote(b10 + eighth * 2, 659.25, 2.0, 0.38, true); // "been the" (E5/E6 octave)
+                playMelodyNote(b10 + eighth * 4, 587.33, 2.0, 0.36, true); // "ru-"      (D5/D6 octave)
 
-                // Bar 31 (D Major 6/8 Wave):
-                shimPedalBass(18.40, 73.42, 0.20, 2.2);
-                shimFloat(18.40, 523.25, 0.16, [146.83, 220.00, 293.66, 369.99, 440.00, 587.33, 739.99], 0.075, 0.85);
-                shimGrandPiano(18.60, 739.99, 0.21, 0.50);
-                shimGrandPiano(18.95, 880.00, 0.22, 0.55);
-                shimDance(18.40, 1.0, 1.20, [
-                    { f: 739.99, d: 0.45, v: 0.19, t: 0.20 },
-                    { f: 880.00, d: 0.50, v: 0.20, t: 0.55 }
-                ]);
-                shimDing(18.40, 1760.0, 0.13, 0.35);
+                // Bar 11 (15.84s, C): "...in of ma-ny a poor..."
+                const b11 = bar * 11;
+                shimPedalBass(b11, 65.41, 0.22, 2.2);
+                playArpeggioBar(b11, 130.81, 329.63, 196.00, 261.63, 0.12);
+                playMelodyNote(b11 + 0.000,      523.25, 2.0, 0.36, true); // "-in"      (C5/C6 octave)
+                playMelodyNote(b11 + eighth * 2, 587.33, 2.0, 0.36, true); // "of"       (D5/D6 octave)
+                playMelodyNote(b11 + eighth * 4, 659.25, 2.0, 0.38, true); // "ma-ny a"  (E5/E6 octave)
 
-                // Bar 32 (F Major 6/8 Wave):
-                shimPedalBass(19.50, 87.31, 0.20, 2.2);
-                shimFloat(19.50, 523.25, 0.16, [87.31, 130.81, 174.61, 220.00, 261.63, 349.23, 440.00], 0.075, 0.85);
-                shimGrandPiano(19.70, 698.46, 0.20, 0.50);
-                shimGrandPiano(20.05, 587.33, 0.20, 0.55);
-                shimDance(19.50, 1.0, 1.20, [
-                    { f: 698.46, d: 0.45, v: 0.19, t: 0.20 },
-                    { f: 587.33, d: 0.50, v: 0.18, t: 0.55 }
-                ]);
-                shimDing(19.50, 1760.0, 0.13, 0.35);
+                // Bar 12 (17.28s, D): "...boy..."
+                const b12 = bar * 12;
+                shimPedalBass(b12, 73.42, 0.22, 2.2);
+                playArpeggioBar(b12, 146.83, 369.99, 220.00, 293.66, 0.12);
+                playMelodyNote(b12 + 0.000,      587.33, 3.0, 0.38, true); // "boy..."   (D5/D6 octave)
+                playMelodyNote(b12 + eighth * 3, 739.99, 1.5, 0.36, true); // (F#5/F#6)
+                playMelodyNote(b12 + eighth * 4.5, 880.00, 1.5, 0.40, true); // High A5/A6 leap!
 
-                // Bar 34 (E7 6/8 Wave & Virtuosic High Piano Cascade):
-                shimPedalBass(20.60, 82.41, 0.20, 2.2);
-                shimFloat(20.60, 523.25, 0.16, [82.41, 123.47, 164.81, 207.65, 246.94, 329.63, 415.30], 0.075, 0.85);
-                // Concert Grand High Piano Cascade (Sheet 5, m. 37-41):
-                shimGrandPiano(20.60, 1318.51, 0.22, 0.18); // E6
-                shimGrandPiano(20.72, 1174.66, 0.22, 0.18); // D6
-                shimGrandPiano(20.84, 1046.50, 0.21, 0.18); // C6
-                shimGrandPiano(20.96, 987.77, 0.21, 0.18);  // B5
-                shimGrandPiano(21.08, 880.00, 0.22, 0.22);  // A5
-                shimGrandPiano(21.22, 830.61, 0.21, 0.30);  // G#5
-                shimDance(20.60, 1.0, 1.25, [
-                    { f: 1318.51, d: 0.16, v: 0.19, t: 0 },
-                    { f: 1174.66, d: 0.16, v: 0.19, t: 0.12 },
-                    { f: 1046.50, d: 0.16, v: 0.18, t: 0.24 },
-                    { f: 987.77, d: 0.16, v: 0.18, t: 0.36 },
-                    { f: 880.00, d: 0.20, v: 0.19, t: 0.48 },
-                    { f: 830.61, d: 0.28, v: 0.18, t: 0.62 }
-                ]);
-                shimDing(21.10, 2640.0, 0.14, 0.50);
+                // Bar 13 (18.72s, F): "...and..."
+                const b13 = bar * 13;
+                shimPedalBass(b13, 87.31, 0.22, 2.0);
+                playArpeggioBar(b13, 174.61, 349.23, 261.63, 349.23, 0.12);
+                playMelodyNote(b13 + 0.000,      880.00, 2.0, 0.38, true); // High A5/A6
+                playMelodyNote(b13 + eighth * 2, 698.46, 2.0, 0.36, true); // F5/F6
+                playMelodyNote(b13 + eighth * 4, 587.33, 2.0, 0.35, true); // D5/D6
 
-                // --- PHASE 5: Grand Sunrise Cadence & Transcendent Resolution (21.80s - 26.50s) ---
-                // Sforzando Low A0/A1 Concert Grand Piano strike (Sheet 5, m. 43-44)
-                shimPedalSwoosh(21.75, 1.5, 0.60); // Final deep pedal swoosh
-                shimPianoHammer(21.80, 1.5);       // Sforzando hammer strike!
-                shimPedalBass(21.80, 27.50, 0.25, 3.5); // Booming A0 Grand Piano Thunder!
-                shimPedalBass(21.80, 55.00, 0.24, 3.2); // A1 Resonance
-                shimGrandPiano(21.80, 110.00, 0.24, 1.8);
-                shimWaddle(21.80, 55.00, 0.22, 0.22);
-                shimWaddle(21.80, 110.00, 0.20, 0.18);
+                // Bar 14 (20.16s, Am): "And God, I know..."
+                const b14 = bar * 14;
+                shimPedalBass(b14, 55.00, 0.22, 2.2);
+                playArpeggioBar(b14, 110.00, 261.63, 164.81, 220.00, 0.12);
+                playMelodyNote(b14 + 0.000,      659.25, 2.0, 0.36, true); // "And"   (E5/E6)
+                playMelodyNote(b14 + eighth * 2, 523.25, 2.0, 0.35, true); // "God," (C5/C6)
+                playMelodyNote(b14 + eighth * 4, 440.00, 2.0, 0.36, true); // "I"    (A4/A5)
 
-                // Grand Rolled Am(add9) Acoustic Concert Grand Chord (A - E - A - B - C - E - A - E)
-                shimGrandPiano(21.90, 440.00, 0.22, 2.5);
-                shimFloat(21.90, 523.25, 0.18, [110.00, 164.81, 220.00, 246.94, 261.63, 329.63, 440.00, 659.25], 0.055, 2.0);
-                // Golden Chi A2 Sub-Harmonic Pedal Drone
-                shimPulseBell(22.30, 1.35, 0.421);
-                // Mild singing traveler harmonic overtone
-                shimPulseSquash(22.90, 0.75, 0.841);
-                // High celestial morning star chime
-                shimDing(23.40, 1760.0, 0.16, 1.60); // A6
-                // Final pure sunrise bell ringing out softly to complete peace
-                shimDing(24.20, 2637.0, 0.14, 2.30); // E7
+                // Bar 15 (21.60s, E7): "...I'm..."
+                const b15 = bar * 15;
+                shimPedalBass(b15, 82.41, 0.22, 2.0);
+                playArpeggioBar(b15, 164.81, 415.30, 293.66, 329.63, 0.12);
+                playMelodyNote(b15 + 0.000,      493.88, 3.0, 0.36, true); // "know" (B4/B5)
+                playMelodyNote(b15 + eighth * 3, 415.30, 3.0, 0.36, true); // "I'm"  (G#4/G#5)
+
+                // -------------------------------------------------------------
+                // CLIMAX: "...ONE!" & THOMAS KRÜGER HIGH WATERFALL CASCADE (23.04s - 26.50s)
+                // -------------------------------------------------------------
+                // Bar 16 (23.04s, Am): "one!" Climax Resolution + Dazzling High Piano Waterfall
+                const b16 = bar * 16;
+                shimPianoHammer(b16, 1.5);
+                shimPedalBass(b16, 55.00, 0.25, 2.5);
+                playMelodyNote(b16 + 0.000, 440.00, 2.0, 0.40, true); // "ONE!" (A4/A5 fortissimo!)
+
+                // Thomas Krüger Signature High-Octave Waterfall Cascade (Sheet 5, m. 37-41):
+                const cascade = [
+                    { t: eighth * 1.5, f: 1318.51 }, // E6
+                    { t: eighth * 2.2, f: 1174.66 }, // D6
+                    { t: eighth * 2.9, f: 1046.50 }, // C6
+                    { t: eighth * 3.6, f: 987.77 },  // B5
+                    { t: eighth * 4.3, f: 880.00 },  // A5
+                    { t: eighth * 5.0, f: 830.61 },  // G#5
+                    { t: eighth * 5.6, f: 880.00 }   // A5 resolution
+                ];
+                cascade.forEach(c => {
+                    shimGrandPiano(b16 + c.t, c.f, 0.22, 0.35);
+                });
+                shimDing(b16 + eighth * 1.5, 2637.0, 0.12, 0.8);
+
+                // Bar 17 (24.48s - 26.50s): Grand Sunrise Cadence & Sforzando Resolution
+                const b17 = bar * 17;
+                shimPedalSwoosh(b17, 1.5, 0.80); // Final deep damper pedal swoosh
+                shimPianoHammer(b17, 1.5);       // Sforzando hammer strike!
+                shimPedalBass(b17, 27.50, 0.25, 3.5); // Booming A0 Grand Piano Thunder!
+                shimPedalBass(b17, 55.00, 0.24, 3.2); // A1 Resonance
+                shimGrandPiano(b17, 110.00, 0.24, 1.8);
+                shimWaddle(b17, 55.00, 0.20, 0.22);
+                shimWaddle(b17, 110.00, 0.18, 0.18);
+
+                // Grand Rolled Am(add9) Acoustic Concert Grand Chord (A - E - A - B - C - E - A)
+                shimGrandPiano(b17 + 0.10, 440.00, 0.24, 2.5);
+                shimFloat(b17 + 0.10, 523.25, 0.18, [110.00, 164.81, 220.00, 246.94, 261.63, 329.63, 440.00, 659.25], 0.055, 2.0);
+                shimPulseBell(b17 + 0.40, 1.35, 0.421); // Golden Chi A2 Sub-Harmonic Pedal Drone
+                shimPulseSquash(b17 + 0.90, 0.75, 0.841); // Mild singing traveler harmonic overtone
+                shimDing(b17 + 1.20, 1760.0, 0.16, 1.60); // A6
+                shimDing(b17 + 1.80, 2637.0, 0.14, 2.20); // E7 starlight bell
 
                 // Synchronize 3D Mascot Character Choreography
-                scheduleTrackTimeout(() => { if (rootGroup) setMascotAnimation('walk'); }, 400);   // Intro groove
+                scheduleTrackTimeout(() => { if (rootGroup) setMascotAnimation('walk'); }, 400);   // Intro arpeggio groove
                 scheduleTrackTimeout(() => {
                     if (rootGroup) {
                         setMascotAnimation('sing');
                         if (typeof triggerJourneyPulse === 'function') triggerJourneyPulse();
                     }
-                }, 4500); // Theme singing
-                scheduleTrackTimeout(() => { if (rootGroup) setMascotAnimation('dance'); }, 10800); // Forte chorus
-                scheduleTrackTimeout(() => { if (rootGroup) setMascotAnimation('float'); }, 16200); // 6/8 arpeggio wave
+                }, 2880); // Singing "There is a house in New Orleans..."
+                scheduleTrackTimeout(() => { if (rootGroup) setMascotAnimation('dance'); }, 14400); // Forte Octave Chorus
+                scheduleTrackTimeout(() => { if (rootGroup) setMascotAnimation('float'); }, 23040); // High waterfall cascade
                 scheduleTrackTimeout(() => {
                     triggerLandingSquash(0.24);
                     if (typeof triggerBlessingBurst === 'function') triggerBlessingBurst();
                     if (rootGroup) setMascotAnimation('sing');
-                }, 21800); // Grand sunrise landing
+                }, 24480); // Grand sunrise landing
                 scheduleTrackTimeout(() => {
                     if (rootGroup) setMascotAnimation('idle');
                     const q = document.getElementById('saintQuoteText');
-                    if (q) q.innerText = '🌅 Thomas Krüger『House of the Rising Sun』、朝日の輝きと共に天球へと美しく昇華したキューブ…☀️🎹';
-                }, 24500);
+                    if (q) q.innerText = '🌅 Thomas Krüger『House of the Rising Sun』(朝日のあたる家)、魂の旋律が天球へと感動的に響き渡ったキューブ…☀️🎹✨';
+                }, 25800);
 
                 scheduleTrackTimeout(() => {
                     window.stopAllTracks(false);
-                }, 26500);
+                }, 26800);
             } else if (trackNum === 4) {
                 // =============================================================
                 // TRACK 4: Nine Inch Nails "Init" (TRON: Ares Original Motion Picture Soundtrack)

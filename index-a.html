@@ -681,11 +681,11 @@
 
         .saint-pedestal-shadow {
             position: absolute;
-            bottom: 20px;
+            bottom: 48px;
             left: 50%;
-            margin-left: -66px;
-            width: 132px;
-            height: 18px;
+            margin-left: -52px;
+            width: 104px;
+            height: 14px;
             background: radial-gradient(ellipse at center, rgba(0, 255, 255, 0.6) 0%, rgba(255, 215, 0, 0.35) 50%, transparent 80%);
             border-radius: 50%;
             filter: blur(5px);
@@ -2540,7 +2540,7 @@
 
             rootGroup = new THREE.Group();
             rootGroup.position.set(0, 0.08, 0); // Balances optical center at (0, 0, 0)
-//            rootGroup.scale.set(0.60, 0.60, 0.60);
+            rootGroup.scale.set(0.60, 0.60, 0.60);
             scene3d.add(rootGroup);
 
             bodyGroup = new THREE.Group();
@@ -3026,10 +3026,10 @@
                     return;
                 }
 
-                // Smooth expansion: Wave 1 expands to 2.2x (dissolves in space), Wave 2 reaches clear 3.0x outer bound
+                // Smooth expansion: Wave 1 expands to 1.8x (dissolves in space), Wave 2 reaches clear 2.6x outer bound
                 const easeOut = 1 - Math.pow(1 - progress, 2.6);
-                const maxScale = this.isSecondWave ? 3.0 : 2.2;
-                const currentScale = 0.18 + easeOut * maxScale;
+                const maxScale = this.isSecondWave ? 2.6 : 1.8;
+                const currentScale = 0.14 + easeOut * maxScale;
                 this.group.scale.set(currentScale, currentScale, currentScale);
 
                 // 1. Blue Sphere finishes first (dissolves by ~62% of lifespan)
@@ -3746,7 +3746,7 @@
                     animPose.rootRotY + cubeCurRotY + (targetLookX * 0.45),
                     animPose.rootRotZ
                 );
-                rootGroup.scale.set(0.80, 0.80, 0.80);
+                rootGroup.scale.set(0.60, 0.60, 0.60);
 
                 bodyGroup.position.set(animPose.bodyX, animPose.bodyY, animPose.bodyZ);
                 bodyGroup.rotation.set(animPose.bodyRotX, animPose.bodyRotY, animPose.bodyRotZ);

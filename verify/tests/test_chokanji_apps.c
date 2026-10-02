@@ -124,18 +124,83 @@ static void test_clock_app(void) {
 static void test_microscript_engine(void) {
     ms_app_init();
 
-    /* Variable set / get */
+    /* Variable set / get (public C API) */
     ms_set_var("alpha", 42, "forty-two");
     TEST_ASSERT(ms_get_var("alpha") == 42, "Variable 'alpha' must evaluate to 42");
 
     ms_set_var("beta", 100, NULL);
     TEST_ASSERT(ms_get_var("beta") == 100, "Variable 'beta' must evaluate to 100");
 
-    /* Script evaluation */
-    ms_eval_script("set gamma = 77; say Hello MicroScript; go card 2");
-    TEST_ASSERT(ms_get_var("gamma") == 77, "Script executed variable assignment 'gamma = 77'");
+    /* Authentic command table: VARIABLE declaration + SET assignment + LOG + SCENE */
+    ms_eval_script("VARIABLE gamma:I; SET gamma = 77; LOG \"Hello MicroScript\"; SCENE 2");
+    TEST_ASSERT(ms_get_var("gamma") == 77, "SET assigned variable 'gamma = 77'");
 
-    /* Card navigation */
+    /* Arithmetic expression evaluation (operators + precedence) */
+    ms_eval_script("VARIABLE z:I; SET z = (2 + 3) * 4 - 6");
+    TEST_ASSERT(ms_get_var("z") == 14, "Expression '(2+3)*4-6' == 14");
+
+    /* WHILE / ENDWHILE bounded loop with BREAK */
+    ms_eval_script(
+        "VARIABLE s:I\n"
+        "SET s = 0\n"
+        "WHILE s < 100\n"
+        "  SET s = s + 1\n"
+        "  IF s == 5\n"
+        "    BREAK\n"
+        "  ENDIF\n"
+        "ENDWHILE\n");
+    TEST_ASSERT(ms_get_var("s") == 5, "WHILE + BREAK stopped at s == 5");
+
+    /* IF / ELSEIF / ELSE / ENDIF chain */
+    ms_eval_script(
+        "VARIABLE k:I\n"
+        "VARIABLE out:I\n"
+        "SET k = 2\n"
+        "IF k == 1\n"
+        "  SET out = 10\n"
+        "ELSEIF k == 2\n"
+        "  SET out = 20\n"
+        "ELSE\n"
+        "  SET out = 30\n"
+        "ENDIF\n");
+    TEST_ASSERT(ms_get_var("out") == 20, "ELSEIF branch selected out = 20");
+
+    /* SWITCH / CASE / DEFAULT */
+    ms_eval_script(
+        "VARIABLE sel:I\n"
+        "VARIABLE hit:I\n"
+        "SET sel = 3\n"
+        "SWITCH sel\n"
+        "CASE 1\n"
+        "  SET hit = 1\n"
+        "CASE 3\n"
+        "  SET hit = 3\n"
+        "DEFAULT\n"
+        "  SET hit = 0\n"
+        "ENDCASE\n");
+    TEST_ASSERT(ms_get_var("hit") == 3, "SWITCH matched CASE 3");
+
+    /* SCRIPT procedure with parameters, mutation of a global, EXIT */
+    ms_eval_script(
+        "VARIABLE total:I\n"
+        "SCRIPT bump(n)\n"
+        "  SET total = total + n\n"
+        "END\n"
+        "SET total = 1\n"
+        "CALL bump(4)\n"
+        "CALL bump(3)\n");
+    TEST_ASSERT(ms_get_var("total") == 8, "Procedures accumulate total = 1+4+3 = 8");
+
+    /* Built-in math functions from the official table */
+    ms_eval_script("VARIABLE rt:I; SET rt = sqrt(144); VARIABLE mx:I; SET mx = max(7, 9)");
+    TEST_ASSERT(ms_get_var("rt") == 12, "sqrt(144) == 12");
+    TEST_ASSERT(ms_get_var("mx") == 9,  "max(7,9) == 9");
+
+    /* Arrow assignment alias (← normalized to =) */
+    ms_eval_script("VARIABLE av:I; SET av ← 99");
+    TEST_ASSERT(ms_get_var("av") == 99, "Arrow '←' assignment == 99");
+
+    /* Card navigation (public C API) */
     ms_go_card(1);
     ms_go_card(0);
 

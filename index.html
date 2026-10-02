@@ -883,7 +883,7 @@
                 <div class="saint-quote-text" id="saintQuoteText">「ボクはリル・キューブ64… 低ポリゴン3Dで動き回る聖なる氷晶だキューブ！🧊✨」</div>
             </div>
             <div class="saint-interaction-hint" id="saintHint">
-                <span class="hint-icon">💫</span> マウス旋回で4次元ホップ束回転 • ドラッグで3D回転 • <b>[Space] 神聖波動 • [1] Track 1 • [2] Track 2 • [3 / H] Track 3 朝日のあたる家</b>
+                <span class="hint-icon">💫</span> マウス旋回で4次元ホップ束回転 • ドラッグで3D回転 • <b>[Space] 神聖波動 • [1] Track 1 • [2] Track 2 • [3] Track 3 • [4 / N] Track 4 TRON Init</b>
             </div>
             <div class="saint-dashboard">
                 <button id="blessingBtn" class="saint-btn" onclick="triggerBlessing()">🌟 神聖波動 (Pulse)</button>
@@ -893,6 +893,7 @@
                 <button id="track1Btn" class="saint-btn" onclick="playTrack(1)" style="border-color: #38bdf8; color: #38bdf8;">🎼 Track 1: 聖なる交響詩</button>
                 <button id="track2Btn" class="saint-btn" onclick="playTrack(2)" style="border-color: #f472b6; color: #f472b6;">🎷 Track 2: Caterpillar (今田勝Jazz)</button>
                 <button id="track3Btn" class="saint-btn" onclick="playTrack(3)" style="border-color: #fbbf24; color: #fbbf24;">🌅 Track 3: 朝日のあたる家 (Thomas Krüger)</button>
+                <button id="track4Btn" class="saint-btn" onclick="playTrack(4)" style="border-color: #ef4444; color: #ef4444;">💿 Track 4: TRON Init (Nine Inch Nails)</button>
                 <button id="dispersionBtn" class="saint-btn active" onclick="toggleDispersion()">🌈 分光モード: ON</button>
                 <button id="soundToggleBtn" class="saint-btn" onclick="toggleSound()" style="border-color: #00ffff; color: #00ffff;">🔊 聖なる天球音楽: ON</button>
                 <button id="densityBtn" class="saint-btn" onclick="cycleDensity()">🪐 繊維環: 18環</button>
@@ -1951,6 +1952,11 @@
                 btn3.classList.remove('active');
                 btn3.innerHTML = '🌅 Track 3: 朝日のあたる家 (Thomas Krüger)';
             }
+            const btn4 = document.getElementById('track4Btn');
+            if (btn4) {
+                btn4.classList.remove('active');
+                btn4.innerHTML = '💿 Track 4: TRON Init (Nine Inch Nails)';
+            }
             const legacyBtn = document.getElementById('symphonyBtn');
             if (legacyBtn) {
                 legacyBtn.classList.remove('active');
@@ -2421,6 +2427,398 @@
             } catch (e) {}
         }
 
+        // =========================================================================
+        // NINE INCH NAILS TRON SYNTHESIZER INSTRUMENT SUITE & ACOUSTIC EXPANSION
+        // =========================================================================
+
+        let _distCurve = null;
+        function getDistortionCurve(amount = 25) {
+            if (!_distCurve) {
+                const n = 44100;
+                _distCurve = new Float32Array(n);
+                const deg = Math.PI / 180;
+                const maxVal = ((3 + amount) * 20 * deg) / (Math.PI + amount);
+                for (let i = 0; i < n; ++i) {
+                    const x = (i * 2) / n - 1;
+                    _distCurve[i] = (((3 + amount) * x * 20 * deg) / (Math.PI + amount * Math.abs(x))) / maxVal;
+                }
+            }
+            return _distCurve;
+        }
+
+        // [SHIM 12] Industrial Cyber Kick (Trent Reznor / Nine Inch Nails Heavy Distorted Sub-Punch)
+        function shimIndustrialKick(timeOffset = 0, volMul = 1.0, duration = 0.22) {
+            if (!window.soundEnabled) return;
+            try {
+                const ctx = getAudioContext();
+                const startT = ctx.currentTime + timeOffset;
+
+                // 1. Sub Bass Body
+                const subOsc = ctx.createOscillator();
+                registerTrackOsc(subOsc);
+                const subGain = ctx.createGain();
+                subOsc.type = 'sine';
+                subOsc.frequency.setValueAtTime(160, startT);
+                subOsc.frequency.exponentialRampToValueAtTime(42, startT + duration);
+                subGain.gain.setValueAtTime(0.32 * volMul, startT);
+                subGain.gain.exponentialRampToValueAtTime(0.001, startT + duration);
+                subOsc.connect(subGain);
+                subGain.connect(ctx.destination);
+                subOsc.start(startT);
+                subOsc.stop(startT + duration);
+
+                // 2. Distorted Click & Overdrive Transient
+                const clickOsc = ctx.createOscillator();
+                registerTrackOsc(clickOsc);
+                clickOsc.type = 'triangle';
+                clickOsc.frequency.setValueAtTime(380, startT);
+                clickOsc.frequency.exponentialRampToValueAtTime(55, startT + 0.05);
+
+                const filter = ctx.createBiquadFilter();
+                filter.type = 'lowpass';
+                filter.frequency.setValueAtTime(1800, startT);
+
+                const shaper = ctx.createWaveShaper();
+                shaper.curve = getDistortionCurve(25);
+
+                const clickGain = ctx.createGain();
+                clickGain.gain.setValueAtTime(0.24 * volMul, startT);
+                clickGain.gain.exponentialRampToValueAtTime(0.001, startT + 0.055);
+
+                clickOsc.connect(filter);
+                filter.connect(shaper);
+                shaper.connect(clickGain);
+                clickGain.connect(ctx.destination);
+                clickOsc.start(startT);
+                clickOsc.stop(startT + 0.055);
+            } catch (e) {}
+        }
+
+        // [SHIM 13] Industrial Metallic Snare / Cyber Clank (Harsh Reznor Overdriven Backbeat)
+        function shimIndustrialSnare(timeOffset = 0, volMul = 1.0, isClank = false) {
+            if (!window.soundEnabled) return;
+            try {
+                const ctx = getAudioContext();
+                const startT = ctx.currentTime + timeOffset;
+
+                // 1. Harsh Gated Noise Burst through Distortion
+                const noise = ctx.createBufferSource();
+                registerTrackOsc(noise);
+                noise.buffer = getNoiseBuffer(ctx);
+
+                const filter = ctx.createBiquadFilter();
+                filter.type = 'bandpass';
+                filter.frequency.setValueAtTime(isClank ? 3600 : 2600, startT);
+                filter.Q.setValueAtTime(2.2, startT);
+
+                const shaper = ctx.createWaveShaper();
+                shaper.curve = getDistortionCurve(30);
+
+                const noiseGain = ctx.createGain();
+                const dur = isClank ? 0.08 : 0.17;
+                noiseGain.gain.setValueAtTime(0.24 * volMul, startT);
+                noiseGain.gain.exponentialRampToValueAtTime(0.001, startT + dur);
+
+                noise.connect(filter);
+                filter.connect(shaper);
+                shaper.connect(noiseGain);
+                noiseGain.connect(ctx.destination);
+                noise.start(startT);
+                noise.stop(startT + dur);
+
+                // 2. Metallic Dissonant Trash-Can Ring
+                [220, 352].forEach((freq, fIdx) => {
+                    const osc = ctx.createOscillator();
+                    registerTrackOsc(osc);
+                    const gain = ctx.createGain();
+                    osc.type = fIdx === 0 ? 'square' : 'triangle';
+                    osc.frequency.setValueAtTime(freq, startT);
+                    gain.gain.setValueAtTime(0.12 * volMul, startT);
+                    gain.gain.exponentialRampToValueAtTime(0.001, startT + 0.11);
+                    osc.connect(gain);
+                    gain.connect(ctx.destination);
+                    osc.start(startT);
+                    osc.stop(startT + 0.11);
+                });
+            } catch (e) {}
+        }
+
+        // [SHIM 14] Industrial Sawtooth Synth Bass (Trent Reznor 16th-Note Analog Overdrive Ostinato)
+        function shimIndustrialBass(timeOffset = 0, freq = 55.0, duration = 0.16, volMul = 1.0, slideFreq = 0) {
+            if (!window.soundEnabled) return;
+            try {
+                const ctx = getAudioContext();
+                const startT = ctx.currentTime + timeOffset;
+
+                // Dual Detuned Oscillators (Sawtooth + Pulse)
+                const osc1 = ctx.createOscillator();
+                const osc2 = ctx.createOscillator();
+                registerTrackOsc(osc1);
+                registerTrackOsc(osc2);
+                osc1.type = 'sawtooth';
+                osc2.type = 'square';
+                osc1.frequency.setValueAtTime(freq, startT);
+                osc2.frequency.setValueAtTime(freq * 1.005, startT);
+
+                if (slideFreq > 0) {
+                    osc1.frequency.exponentialRampToValueAtTime(slideFreq, startT + duration * 0.8);
+                    osc2.frequency.exponentialRampToValueAtTime(slideFreq * 1.005, startT + duration * 0.8);
+                }
+
+                // Moog-Style Resonant Lowpass Filter with Cutoff Sweep
+                const filter = ctx.createBiquadFilter();
+                filter.type = 'lowpass';
+                filter.frequency.setValueAtTime(2600, startT);
+                filter.frequency.exponentialRampToValueAtTime(420, startT + duration);
+                filter.Q.setValueAtTime(4.5, startT);
+
+                // WaveShaper Overdrive
+                const shaper = ctx.createWaveShaper();
+                shaper.curve = getDistortionCurve(20);
+
+                const gain = ctx.createGain();
+                gain.gain.setValueAtTime(0.0001, startT);
+                gain.gain.linearRampToValueAtTime(0.22 * volMul, startT + 0.008);
+                gain.gain.exponentialRampToValueAtTime(0.0005, startT + duration);
+
+                osc1.connect(filter);
+                osc2.connect(filter);
+                filter.connect(shaper);
+                shaper.connect(gain);
+                gain.connect(ctx.destination);
+
+                osc1.start(startT);
+                osc2.start(startT);
+                osc1.stop(startT + duration);
+                osc2.stop(startT + duration);
+            } catch (e) {}
+        }
+
+        // [SHIM 15] Dewan Swarmatron Drone (Trent Reznor & Atticus Ross Signature 8-Voice Ribbon Cluster)
+        function shimSwarmatron(timeOffset = 0, centerFreq = 55.0, duration = 4.0, volMul = 1.0, spreadCents = 24) {
+            if (!window.soundEnabled) return;
+            try {
+                const ctx = getAudioContext();
+                const startT = ctx.currentTime + timeOffset;
+
+                // 8 detuned saw oscillators spreading symmetrically around centerFreq
+                const detunes = [-spreadCents, -spreadCents * 0.65, -spreadCents * 0.35, -spreadCents * 0.12,
+                                  spreadCents * 0.12,  spreadCents * 0.35,  spreadCents * 0.65,  spreadCents];
+
+                const masterGain = ctx.createGain();
+                masterGain.gain.setValueAtTime(0.0001, startT);
+                masterGain.gain.linearRampToValueAtTime(0.18 * volMul, startT + 0.40);
+                masterGain.gain.setValueAtTime(0.18 * volMul, startT + duration - 0.50);
+                masterGain.gain.exponentialRampToValueAtTime(0.0001, startT + duration);
+
+                const filter = ctx.createBiquadFilter();
+                filter.type = 'lowpass';
+                filter.frequency.setValueAtTime(950, startT);
+                filter.frequency.linearRampToValueAtTime(1450, startT + duration * 0.6);
+                filter.frequency.linearRampToValueAtTime(800, startT + duration);
+                filter.Q.setValueAtTime(2.5, startT);
+
+                detunes.forEach((cents) => {
+                    const osc = ctx.createOscillator();
+                    registerTrackOsc(osc);
+                    osc.type = 'sawtooth';
+                    osc.frequency.setValueAtTime(centerFreq, startT);
+                    osc.detune.setValueAtTime(cents, startT);
+                    // Slow undulating pitch micro-drift
+                    osc.detune.linearRampToValueAtTime(cents * 1.5, startT + duration * 0.5);
+                    osc.detune.linearRampToValueAtTime(cents * 0.8, startT + duration);
+                    osc.connect(filter);
+                    osc.start(startT);
+                    osc.stop(startT + duration);
+                });
+
+                filter.connect(masterGain);
+                masterGain.connect(ctx.destination);
+            } catch (e) {}
+        }
+
+        // [SHIM 16] Cyber Glitch Zap / Terminal Data Pulse (# ./start_ares_program Data Burst)
+        function shimGlitchZap(timeOffset = 0, baseFreq = 2400, volMul = 1.0, duration = 0.08) {
+            if (!window.soundEnabled) return;
+            try {
+                const ctx = getAudioContext();
+                const startT = ctx.currentTime + timeOffset;
+
+                // FM zap pitch drop
+                const osc = ctx.createOscillator();
+                registerTrackOsc(osc);
+                osc.type = 'sawtooth';
+                osc.frequency.setValueAtTime(baseFreq * 2.5, startT);
+                osc.frequency.exponentialRampToValueAtTime(80, startT + duration);
+
+                // High-pass filter for crisp digital crackle
+                const filter = ctx.createBiquadFilter();
+                filter.type = 'highpass';
+                filter.frequency.setValueAtTime(1800, startT);
+
+                const gain = ctx.createGain();
+                gain.gain.setValueAtTime(0.18 * volMul, startT);
+                gain.gain.exponentialRampToValueAtTime(0.001, startT + duration);
+
+                osc.connect(filter);
+                filter.connect(gain);
+                gain.connect(ctx.destination);
+                osc.start(startT);
+                osc.stop(startT + duration);
+            } catch (e) {}
+        }
+
+        // [SHIM 17] Nine Inch Nails TRON Cyber Lead (Searing Overdriven Sync Lead)
+        function shimCyberLead(timeOffset = 0, notes = null, volMul = 1.0) {
+            if (!window.soundEnabled) return;
+            try {
+                const c = getAudioContext();
+                const startT = c.currentTime + timeOffset;
+                const phrase = notes || [{ f: 440, d: 0.40, v: 0.18, t: 0 }];
+                phrase.forEach(n => {
+                    const noteT = startT + n.t;
+                    const osc1 = c.createOscillator();
+                    const osc2 = c.createOscillator();
+                    registerTrackOsc(osc1);
+                    registerTrackOsc(osc2);
+                    osc1.type = 'sawtooth';
+                    osc2.type = 'square';
+                    osc1.frequency.setValueAtTime(n.f, noteT);
+                    osc2.frequency.setValueAtTime(n.f * 1.004, noteT);
+
+                    if (n.slide) {
+                        osc1.frequency.exponentialRampToValueAtTime(n.slide, noteT + n.d * 0.7);
+                        osc2.frequency.exponentialRampToValueAtTime(n.slide * 1.004, noteT + n.d * 0.7);
+                    }
+
+                    const filter = c.createBiquadFilter();
+                    filter.type = 'lowpass';
+                    filter.frequency.setValueAtTime(3800, noteT);
+                    filter.frequency.exponentialRampToValueAtTime(1600, noteT + n.d);
+                    filter.Q.setValueAtTime(4.0, noteT);
+
+                    const shaper = c.createWaveShaper();
+                    shaper.curve = getDistortionCurve(25);
+
+                    const gain = c.createGain();
+                    gain.gain.setValueAtTime(0.0001, noteT);
+                    gain.gain.linearRampToValueAtTime(n.v * volMul, noteT + 0.012);
+                    gain.gain.exponentialRampToValueAtTime(0.0001, noteT + n.d);
+
+                    osc1.connect(filter);
+                    osc2.connect(filter);
+                    filter.connect(shaper);
+                    shaper.connect(gain);
+                    gain.connect(c.destination);
+
+                    osc1.start(noteT);
+                    osc2.start(noteT);
+                    osc1.stop(noteT + n.d);
+                    osc2.stop(noteT + n.d);
+                });
+            } catch (e) {}
+        }
+
+        // [SHIM 18] Masaru Imada Expressive Jazz Flute / Melodica (Breathy Woodwind Countermelody)
+        function shimSaxFlute(timeOffset = 0, notes = null, volMul = 1.0) {
+            if (!window.soundEnabled) return;
+            try {
+                const c = getAudioContext();
+                const startT = c.currentTime + timeOffset;
+                const phrase = notes || [{ f: 587.33, d: 0.35, v: 0.16, t: 0 }];
+                phrase.forEach(n => {
+                    const noteT = startT + n.t;
+                    const osc = c.createOscillator();
+                    registerTrackOsc(osc);
+                    osc.type = 'triangle';
+                    osc.frequency.setValueAtTime(n.f, noteT);
+                    if (n.slide) {
+                        osc.frequency.exponentialRampToValueAtTime(n.slide, noteT + n.d * 0.75);
+                    }
+
+                    // Breath noise component
+                    const noise = c.createBufferSource();
+                    registerTrackOsc(noise);
+                    noise.buffer = getNoiseBuffer(c);
+                    const noiseFilter = c.createBiquadFilter();
+                    noiseFilter.type = 'bandpass';
+                    noiseFilter.frequency.setValueAtTime(n.f * 1.8, noteT);
+                    noiseFilter.Q.setValueAtTime(5.0, noteT);
+                    const noiseGain = c.createGain();
+                    noiseGain.gain.setValueAtTime(0.025 * volMul, noteT);
+                    noiseGain.gain.exponentialRampToValueAtTime(0.0005, noteT + n.d);
+                    noise.connect(noiseFilter);
+                    noiseFilter.connect(noiseGain);
+                    noiseGain.connect(c.destination);
+                    noise.start(noteT);
+                    noise.stop(noteT + n.d);
+
+                    const filter = c.createBiquadFilter();
+                    filter.type = 'lowpass';
+                    filter.frequency.setValueAtTime(2400, noteT);
+                    filter.Q.setValueAtTime(2.0, noteT);
+
+                    const gain = c.createGain();
+                    gain.gain.setValueAtTime(0.0001, noteT);
+                    gain.gain.linearRampToValueAtTime(n.v * volMul, noteT + 0.025);
+                    gain.gain.exponentialRampToValueAtTime(0.0001, noteT + n.d);
+
+                    osc.connect(filter);
+                    filter.connect(gain);
+                    gain.connect(c.destination);
+                    osc.start(noteT);
+                    osc.stop(noteT + n.d);
+                });
+            } catch (e) {}
+        }
+
+        // [SHIM 19] Concert Grand Piano Wooden Felt Hammer Impact (Thomas Krüger Acoustic Key Attack)
+        function shimPianoHammer(timeOffset = 0, volMul = 1.0) {
+            if (!window.soundEnabled) return;
+            try {
+                const ctx = getAudioContext();
+                const startT = ctx.currentTime + timeOffset;
+                const osc = ctx.createOscillator();
+                registerTrackOsc(osc);
+                osc.type = 'triangle';
+                osc.frequency.setValueAtTime(120, startT);
+                osc.frequency.exponentialRampToValueAtTime(40, startT + 0.035);
+                const gain = ctx.createGain();
+                gain.gain.setValueAtTime(0.12 * volMul, startT);
+                gain.gain.exponentialRampToValueAtTime(0.0005, startT + 0.035);
+                osc.connect(gain);
+                gain.connect(ctx.destination);
+                osc.start(startT);
+                osc.stop(startT + 0.035);
+            } catch (e) {}
+        }
+
+        // [SHIM 20] Concert Grand Damper Pedal Lift & String Sympathetic Resonance
+        function shimPedalSwoosh(timeOffset = 0, volMul = 1.0, duration = 0.40) {
+            if (!window.soundEnabled) return;
+            try {
+                const ctx = getAudioContext();
+                const startT = ctx.currentTime + timeOffset;
+                const noise = ctx.createBufferSource();
+                registerTrackOsc(noise);
+                noise.buffer = getNoiseBuffer(ctx);
+                const filter = ctx.createBiquadFilter();
+                filter.type = 'bandpass';
+                filter.frequency.setValueAtTime(450, startT);
+                filter.frequency.exponentialRampToValueAtTime(280, startT + duration);
+                filter.Q.setValueAtTime(3.5, startT);
+                const gain = ctx.createGain();
+                gain.gain.setValueAtTime(0.0001, startT);
+                gain.gain.linearRampToValueAtTime(0.05 * volMul, startT + 0.08);
+                gain.gain.exponentialRampToValueAtTime(0.0001, startT + duration);
+                noise.connect(filter);
+                filter.connect(gain);
+                gain.connect(ctx.destination);
+                noise.start(startT);
+                noise.stop(startT + duration);
+            } catch (e) {}
+        }
+
         // Legacy compatibility delegate wrappers
         function playJourneyChirp() { shimPulseSquash(0, 1.0, 1.0); }
         function playGoldenChiChime() { shimPulseBell(0, 1.0, 1.0); }
@@ -2851,11 +3249,18 @@
 
                 // --- BAR 03: The Caterpillar Main Theme — Head A (7.35s - 9.80s) ---
                 // Kazumi Watanabe's Electric Jazz Guitar enters with the legendary Blues Head!
+                // Masaru Imada's breathy jazz woodwind/melodica harmonizes in octaves!
                 shimGuitar(7.35, [
                     { f: 293.66, d: 0.24, v: 0.18, t: 0 },                  // D4
                     { f: 349.23, d: 0.22, v: 0.18, t: 0.31 },               // F4
                     { f: 392.00, d: 0.18, v: 0.19, t: 0.61, slide: 415.30 },// G4 -> G#4 Blue Note Slide!
                     { f: 440.00, d: 0.36, v: 0.20, t: 0.81 }                // A4 Dominant
+                ]);
+                shimSaxFlute(7.35, [
+                    { f: 587.33, d: 0.24, v: 0.14, t: 0 },                  // D5
+                    { f: 698.46, d: 0.22, v: 0.14, t: 0.31 },               // F5
+                    { f: 783.99, d: 0.18, v: 0.15, t: 0.61, slide: 830.61 },// G5 -> G#5
+                    { f: 880.00, d: 0.36, v: 0.16, t: 0.81 }                // A5
                 ]);
                 shimPulseSquash(7.35, 0.95, 1.122); // Vocal blues unison doubling
                 shimKick(7.35, 65, 0.20);
@@ -2868,13 +3273,20 @@
                 shimWaddle(7.96, 196.00, 0.14, 0.10);
                 shimDing(7.96, 1760.0, 0.10, 0.20);
 
-                // Descending blues crawl lick (A4 -> G#4 -> G4 -> F4 -> D4) on Guitar & Grand Piano
+                // Descending blues crawl lick (A4 -> G#4 -> G4 -> F4 -> D4) on Guitar & Grand Piano & Flute
                 shimGuitar(8.57, [
                     { f: 440.00, d: 0.14, v: 0.18, t: 0 },
                     { f: 415.30, d: 0.14, v: 0.18, t: 0.10 }, // G#4 Blue note
                     { f: 392.00, d: 0.14, v: 0.17, t: 0.20 }, // G4
                     { f: 349.23, d: 0.16, v: 0.17, t: 0.30 }, // F4
                     { f: 293.66, d: 0.28, v: 0.20, t: 0.42 }  // D4
+                ]);
+                shimSaxFlute(8.57, [
+                    { f: 880.00, d: 0.14, v: 0.13, t: 0 },
+                    { f: 830.61, d: 0.14, v: 0.13, t: 0.10 },
+                    { f: 783.99, d: 0.14, v: 0.13, t: 0.20 },
+                    { f: 698.46, d: 0.16, v: 0.13, t: 0.30 },
+                    { f: 587.33, d: 0.28, v: 0.14, t: 0.42 }
                 ]);
                 shimGrandPiano(8.57, 523.25, 0.11, 0.40);
                 shimFloat(8.57, 523.25, 0.10, [349.23, 440.00, 523.25, 659.25]); // Dm9 answer chop
@@ -2897,13 +3309,20 @@
                 shimWaddle(9.80, 146.83, 0.14, 0.10);
                 shimDing(9.80, 1760.0, 0.11, 0.20);
 
-                // Kazumi Watanabe Bebop Guitar Solo with clean Gibson attack
+                // Kazumi Watanabe Bebop Guitar Solo with clean Gibson attack & Flute accents
                 shimGuitar(10.41, [
                     { f: 440.00, d: 0.12, v: 0.17, t: 0 },
                     { f: 523.25, d: 0.12, v: 0.18, t: 0.08 },
                     { f: 587.33, d: 0.13, v: 0.18, t: 0.16 },
                     { f: 698.46, d: 0.14, v: 0.19, t: 0.24, slide: 739.99 },
                     { f: 880.00, d: 0.26, v: 0.20, t: 0.34 }
+                ]);
+                shimSaxFlute(10.41, [
+                    { f: 880.00, d: 0.12, v: 0.13, t: 0 },
+                    { f: 1046.50, d: 0.12, v: 0.14, t: 0.08 },
+                    { f: 1174.66, d: 0.13, v: 0.14, t: 0.16 },
+                    { f: 1396.91, d: 0.14, v: 0.15, t: 0.24, slide: 1479.98 },
+                    { f: 1760.00, d: 0.26, v: 0.16, t: 0.34 }
                 ]);
                 shimSnare(10.41, 0.18, true);
                 shimHiHat(10.41, false, 0.11);
@@ -3111,11 +3530,13 @@
                 if (quoteText) quoteText.innerText = '🌅 Thomas Krüger『House of the Rising Sun』(朝日のあたる家) をコンサートグランドピアノで演奏中キューブ！🎹☀️';
 
                 // --- PHASE 1: Atmospheric New Orleans Sunrise & 4/4 Grand Piano Groove (0.00s - 4.50s, Sheet 1) ---
+                shimPedalSwoosh(0.00, 1.2, 0.50); // Thomas Krüger damper pedal lift off all 88 strings!
                 shimPulseBell(0.00, 0.85, 0.421); // A2 (110Hz) Golden Chi ambient dawn drone
                 shimPedalBass(0.00, 55.00, 0.20, 3.0); // Deep A1 sub-pedal piano rumble
                 shimDing(0.10, 1760.0, 0.12, 0.80); // A6 awakening bell ping
 
                 // Bar 1: Am Syncopated 16th Grand Piano Groove (Sheet 1, m. 1-2)
+                shimPianoHammer(0.40, 1.2); // Felt hammer impact on bass string
                 shimPedalBass(0.40, 55.00, 0.16, 1.2);
                 shimGrandPiano(0.40, 110.00, 0.22, 0.45); // Low A2 Grand Piano Strike
                 shimWaddle(0.40, 110.00, 0.16, 0.14);
@@ -3265,6 +3686,8 @@
 
                 // --- PHASE 3: Passionate Forte Octave Chorus (10.80s - 16.20s, Sheet 3) ---
                 // Full f dynamics: Grand Concert Piano Octaves & Booming Sub-Pedal
+                shimPedalSwoosh(10.75, 1.3, 0.50); // Deep damper pedal swoosh
+                shimPianoHammer(10.80, 1.4);       // Fortissimo wooden felt hammer strike!
                 shimPedalBass(10.80, 55.00, 0.24, 2.4);  // Low A1 Grand Piano Thunder!
                 shimGrandPiano(10.80, 880.00, 0.24, 0.30);  // A5
                 shimGrandPiano(10.80, 440.00, 0.20, 0.30);  // A4 Octave
@@ -3356,6 +3779,8 @@
 
                 // --- PHASE 4: The Kruger 6/8 Rolling Arpeggio Wave (16.20s - 21.80s, Sheets 4 & 5) ---
                 // Concert Grand Piano rolling arpeggios: 6 undulating eighth-notes per measure!
+                shimPedalSwoosh(16.15, 1.2, 0.45); // Damper pedal catch for the 6/8 cascade
+                shimPianoHammer(16.20, 1.2);
 
                 // Bar 28 (Am 6/8 Arpeggio Wave):
                 shimPedalBass(16.20, 55.00, 0.20, 2.2);
@@ -3424,6 +3849,8 @@
 
                 // --- PHASE 5: Grand Sunrise Cadence & Transcendent Resolution (21.80s - 26.50s) ---
                 // Sforzando Low A0/A1 Concert Grand Piano strike (Sheet 5, m. 43-44)
+                shimPedalSwoosh(21.75, 1.5, 0.60); // Final deep pedal swoosh
+                shimPianoHammer(21.80, 1.5);       // Sforzando hammer strike!
                 shimPedalBass(21.80, 27.50, 0.25, 3.5); // Booming A0 Grand Piano Thunder!
                 shimPedalBass(21.80, 55.00, 0.24, 3.2); // A1 Resonance
                 shimGrandPiano(21.80, 110.00, 0.24, 1.8);
@@ -3466,6 +3893,358 @@
                 scheduleTrackTimeout(() => {
                     window.stopAllTracks(false);
                 }, 26500);
+            } else if (trackNum === 4) {
+                // =============================================================
+                // TRACK 4: Nine Inch Nails "Init" (TRON: Ares Original Motion Picture Soundtrack)
+                // Composed by Trent Reznor and Atticus Ross (2025)
+                // - 93 BPM Industrial Electro-Rock / Cyber-Grid Beat
+                // - Dewan Swarmatron 8-Voice Detuned Ribbon Cluster Drone
+                // - Analog WaveShaper Overdriven 16th-Note Sawtooth Bass Ostinato
+                // - Industrial Cyber Kick (Transient Click + Sub Drop)
+                // - Harsh Gated Metallic Snare & Cyber Trash-Can Rimshot
+                // - Searing Overdriven Cyber Lead Synced Theme
+                // - High-Frequency Digital Glitch Zaps & Terminal Execution Pulses
+                // Total Duration: ~25.8s (10 Measures of Dystopian Cyber-Energy)
+                // =============================================================
+                const btn4 = document.getElementById('track4Btn');
+                if (btn4) {
+                    btn4.classList.add('active');
+                    btn4.innerHTML = '💿 Track 4: 演奏中 (TRON Init)...';
+                }
+
+                const quoteText = document.getElementById('saintQuoteText');
+                if (quoteText) quoteText.innerText = '💻 # ./start_ares_program — Nine Inch Nails『TRON: Ares - Init』グリッド合成中！⚡️🤖';
+
+                // --- MEASURE 01: System Init & Harsh Distorted Shockwave (0.00s - 2.58s) ---
+                // Terminal Command Entered: # ./start_ares_program
+                shimGlitchZap(0.00, 3200, 1.3, 0.12);
+                shimIndustrialKick(0.00, 1.4, 0.35); // Violent sub impact
+                shimSwarmatron(0.05, 55.0, 3.8, 0.22, 32); // Ominous A1 Swarmatron drone starts!
+                shimPedalBass(0.00, 55.0, 0.20, 2.5);
+
+                shimGlitchZap(0.64, 4200, 0.8, 0.06);
+                shimPulseSquash(0.64, 0.6, 0.5);
+
+                shimGlitchZap(1.29, 2800, 0.9, 0.07);
+                shimPulseBell(1.29, 0.8, 0.5);
+
+                shimGlitchZap(1.93, 4800, 1.0, 0.08);
+                // Obara/Industrial pickup snare clank flams into the groove!
+                shimIndustrialSnare(2.25, 0.14, true);
+                shimIndustrialSnare(2.41, 0.20, true);
+
+                // --- MEASURE 02: 93 BPM Industrial Groove Ignites (2.58s - 5.16s) ---
+                // Beat 1 (2.58s): Kick + Ding + 16th Bass Ostinato in A minor
+                shimIndustrialKick(2.58, 1.1);
+                shimDing(2.58, 1760.0, 0.10, 0.15);
+                shimIndustrialBass(2.58, 55.00, 0.15, 0.22); // A1
+                shimIndustrialBass(2.74, 55.00, 0.15, 0.18); // A1
+                shimHiHat(2.74, false, 0.10);
+                shimIndustrialBass(2.90, 65.41, 0.15, 0.20); // C2
+                shimIndustrialBass(3.06, 55.00, 0.15, 0.18); // A1
+                shimHiHat(3.06, false, 0.10);
+
+                // Beat 2 (3.22s): Industrial Snare Clank + D2
+                shimIndustrialSnare(3.22, 0.24, true);
+                shimIndustrialBass(3.22, 73.42, 0.15, 0.22); // D2
+                shimIndustrialBass(3.38, 65.41, 0.15, 0.20); // C2
+                shimHiHat(3.38, false, 0.10);
+                shimIndustrialBass(3.55, 55.00, 0.15, 0.18); // A1
+                shimIndustrialBass(3.71, 49.00, 0.15, 0.18); // G1
+                shimHiHat(3.71, false, 0.10);
+
+                // Beat 3 (3.87s): Industrial Kick + A1
+                shimIndustrialKick(3.87, 1.0);
+                shimIndustrialBass(3.87, 55.00, 0.15, 0.22); // A1
+                shimIndustrialBass(4.03, 55.00, 0.15, 0.18); // A1
+                shimHiHat(4.03, false, 0.10);
+                shimIndustrialBass(4.19, 65.41, 0.15, 0.20); // C2
+                shimIndustrialBass(4.35, 55.00, 0.15, 0.18); // A1
+                shimHiHat(4.35, false, 0.10);
+
+                // Beat 4 (4.51s): Industrial Snare Clank + F1 -> G1 -> A1 turnaround
+                shimIndustrialSnare(4.51, 0.24, true);
+                shimIndustrialBass(4.51, 43.65, 0.15, 0.22); // F1
+                shimIndustrialBass(4.67, 49.00, 0.15, 0.20); // G1
+                shimHiHat(4.67, false, 0.10);
+                shimIndustrialBass(4.84, 55.00, 0.15, 0.22); // A1
+                shimIndustrialBass(5.00, 55.00, 0.15, 0.24, 65.41); // A1 -> C2 slide!
+                shimHiHat(5.00, true, 0.12);
+
+                // --- MEASURE 03: Driving Industrial Acceleration & Glitch Data Fills (5.16s - 7.74s) ---
+                shimIndustrialKick(5.16, 1.1);
+                shimDing(5.16, 1760.0, 0.10, 0.15);
+                shimIndustrialBass(5.16, 55.00, 0.15, 0.22);
+                shimIndustrialBass(5.32, 55.00, 0.15, 0.18);
+                shimHiHat(5.32, false, 0.10);
+                shimIndustrialBass(5.48, 65.41, 0.15, 0.20);
+                shimIndustrialBass(5.64, 55.00, 0.15, 0.18);
+
+                shimIndustrialSnare(5.80, 0.24, true);
+                shimGlitchZap(5.80, 2400, 0.16, 0.06);
+                shimIndustrialBass(5.80, 73.42, 0.15, 0.22);
+                shimIndustrialBass(5.96, 65.41, 0.15, 0.20);
+                shimHiHat(5.96, false, 0.10);
+
+                // Syncopated Double Kick at 6.13s and 6.45s!
+                shimIndustrialKick(6.13, 0.95);
+                shimIndustrialBass(6.13, 55.00, 0.15, 0.20);
+                shimIndustrialBass(6.29, 49.00, 0.15, 0.18);
+
+                shimIndustrialKick(6.45, 1.1);
+                shimIndustrialBass(6.45, 55.00, 0.15, 0.22);
+                shimIndustrialBass(6.61, 55.00, 0.15, 0.18);
+                shimHiHat(6.61, false, 0.10);
+                shimGlitchZap(6.77, 3600, 0.16, 0.07);
+                shimIndustrialBass(6.77, 65.41, 0.15, 0.20);
+                shimIndustrialBass(6.93, 55.00, 0.15, 0.18);
+
+                shimIndustrialSnare(7.10, 0.24, true);
+                shimIndustrialBass(7.10, 43.65, 0.15, 0.22);
+                shimIndustrialBass(7.26, 49.00, 0.15, 0.20);
+                shimGlitchZap(7.42, 4800, 0.18, 0.08);
+                shimIndustrialBass(7.42, 55.00, 0.15, 0.22);
+                shimIndustrialBass(7.58, 55.00, 0.15, 0.24, 73.42);
+                shimHiHat(7.58, true, 0.12);
+
+                // --- MEASURE 04: Swarmatron Ascension & Cyber Lead Teaser (7.74s - 10.32s) ---
+                shimSwarmatron(7.74, 110.0, 3.2, 0.22, 28); // Swarmatron rises to A2 harmonic cluster!
+                shimIndustrialKick(7.74, 1.1);
+                shimDing(7.74, 1760.0, 0.11, 0.20);
+                shimIndustrialBass(7.74, 55.00, 0.15, 0.22);
+                shimIndustrialBass(7.90, 55.00, 0.15, 0.18);
+                shimHiHat(7.90, false, 0.10);
+                shimIndustrialBass(8.06, 65.41, 0.15, 0.20);
+                shimIndustrialBass(8.22, 55.00, 0.15, 0.18);
+
+                shimIndustrialSnare(8.38, 0.24, true);
+                shimIndustrialBass(8.38, 73.42, 0.15, 0.22);
+                shimIndustrialBass(8.54, 65.41, 0.15, 0.20);
+                shimHiHat(8.54, false, 0.10);
+                shimIndustrialBass(8.70, 55.00, 0.15, 0.18);
+                shimIndustrialBass(8.86, 49.00, 0.15, 0.18);
+
+                shimIndustrialKick(9.03, 1.05);
+                shimIndustrialBass(9.03, 55.00, 0.15, 0.22);
+                shimIndustrialBass(9.19, 55.00, 0.15, 0.18);
+                // Cyber Lead teaser motif!
+                shimCyberLead(9.35, [
+                    { f: 440.00, d: 0.18, v: 0.16, t: 0 },
+                    { f: 523.25, d: 0.22, v: 0.18, t: 0.16 }
+                ]);
+                shimIndustrialBass(9.35, 65.41, 0.15, 0.20);
+                shimIndustrialBass(9.51, 55.00, 0.15, 0.18);
+
+                shimIndustrialSnare(9.68, 0.24, true);
+                shimIndustrialBass(9.68, 43.65, 0.15, 0.22);
+                shimIndustrialBass(9.84, 49.00, 0.15, 0.20);
+                // Pre-drop Snare Flams!
+                shimIndustrialSnare(10.00, 0.16, false);
+                shimIndustrialSnare(10.16, 0.22, true);
+                shimHiHat(10.16, true, 0.14);
+
+                // --- MEASURE 05: The Searing TRON: Ares Cyber Lead Drops! (10.32s - 12.90s) ---
+                // Full Industrial Ensemble: Kick + Snare + 16th Bass + Searing Overdriven Lead!
+                shimIndustrialKick(10.32, 1.2);
+                shimDing(10.32, 1760.0, 0.12, 0.25);
+                shimCyberLead(10.32, [
+                    { f: 440.00, d: 0.60, v: 0.22, t: 0 },                  // A4 Searing sustain scream
+                    { f: 523.25, d: 0.30, v: 0.20, t: 0.64 },               // C5
+                    { f: 493.88, d: 0.30, v: 0.20, t: 0.96 },               // B4
+                    { f: 392.00, d: 0.30, v: 0.20, t: 1.29 },               // G4
+                    { f: 440.00, d: 0.30, v: 0.22, t: 1.61 },               // A4
+                    { f: 659.25, d: 0.55, v: 0.24, t: 1.93, slide: 698.46 } // E5 -> F5 High cry!
+                ]);
+
+                // 16th Bass and Beat accompaniment for Measure 5
+                shimIndustrialBass(10.32, 55.00, 0.15, 0.22);
+                shimIndustrialBass(10.48, 55.00, 0.15, 0.18);
+                shimHiHat(10.48, false, 0.10);
+                shimIndustrialBass(10.64, 65.41, 0.15, 0.20);
+                shimIndustrialBass(10.80, 55.00, 0.15, 0.18);
+
+                shimIndustrialSnare(10.96, 0.24, true);
+                shimIndustrialBass(10.96, 73.42, 0.15, 0.22);
+                shimIndustrialBass(11.12, 65.41, 0.15, 0.20);
+                shimHiHat(11.12, false, 0.10);
+                shimIndustrialBass(11.28, 55.00, 0.15, 0.18);
+                shimIndustrialBass(11.44, 49.00, 0.15, 0.18);
+
+                shimIndustrialKick(11.61, 1.1);
+                shimIndustrialBass(11.61, 55.00, 0.15, 0.22);
+                shimIndustrialBass(11.77, 55.00, 0.15, 0.18);
+                shimHiHat(11.77, false, 0.10);
+                shimIndustrialBass(11.93, 65.41, 0.15, 0.20);
+                shimIndustrialBass(12.09, 55.00, 0.15, 0.18);
+
+                shimIndustrialSnare(12.25, 0.24, true);
+                shimIndustrialBass(12.25, 43.65, 0.15, 0.22);
+                shimIndustrialBass(12.41, 49.00, 0.15, 0.20);
+                shimHiHat(12.41, false, 0.10);
+                shimIndustrialBass(12.57, 55.00, 0.15, 0.22);
+                shimIndustrialBass(12.73, 55.00, 0.15, 0.24, 65.41);
+                shimHiHat(12.73, true, 0.12);
+
+                // --- MEASURE 06: Theme Resolution & Harmonic Expansion (12.90s - 15.48s) ---
+                shimSwarmatron(12.90, 165.0, 3.2, 0.20, 30); // Swarmatron drone E3
+                shimIndustrialKick(12.90, 1.15);
+                shimDing(12.90, 1760.0, 0.11, 0.20);
+                shimCyberLead(12.90, [
+                    { f: 587.33, d: 0.60, v: 0.22, t: 0 },                  // D5
+                    { f: 523.25, d: 0.60, v: 0.20, t: 0.64 },               // C5
+                    { f: 587.33, d: 0.60, v: 0.22, t: 1.29 },               // D5
+                    { f: 659.25, d: 0.60, v: 0.24, t: 1.93, slide: 880.00 } // E5 -> A5 Power slide!
+                ]);
+
+                // 16th Bass and Beat accompaniment for Measure 6
+                shimIndustrialBass(12.90, 73.42, 0.15, 0.22); // D2
+                shimIndustrialBass(13.06, 73.42, 0.15, 0.18);
+                shimHiHat(13.06, false, 0.10);
+                shimIndustrialBass(13.22, 65.41, 0.15, 0.20);
+                shimIndustrialBass(13.38, 55.00, 0.15, 0.18);
+
+                shimIndustrialSnare(13.54, 0.24, true);
+                shimIndustrialBass(13.54, 65.41, 0.15, 0.22); // C2
+                shimIndustrialBass(13.70, 55.00, 0.15, 0.20);
+                shimHiHat(13.70, false, 0.10);
+                shimIndustrialBass(13.86, 49.00, 0.15, 0.18);
+                shimIndustrialBass(14.02, 55.00, 0.15, 0.18);
+
+                shimIndustrialKick(14.19, 1.1);
+                shimIndustrialBass(14.19, 73.42, 0.15, 0.22); // D2
+                shimIndustrialBass(14.35, 73.42, 0.15, 0.18);
+                shimHiHat(14.35, false, 0.10);
+                shimIndustrialBass(14.51, 82.41, 0.15, 0.20); // E2
+                shimIndustrialBass(14.67, 73.42, 0.15, 0.18);
+
+                shimIndustrialSnare(14.83, 0.26, true);
+                shimIndustrialBass(14.83, 82.41, 0.15, 0.22); // E2
+                shimIndustrialBass(14.99, 98.00, 0.15, 0.20); // G2
+                shimHiHat(14.99, false, 0.10);
+                shimIndustrialSnare(15.15, 0.16, false);
+                shimIndustrialSnare(15.31, 0.22, true);
+                shimHiHat(15.31, true, 0.14);
+
+                // --- MEASURE 07: Full Industrial Climax / Fortissimo Octaves (15.48s - 18.06s) ---
+                // Searing Octave Lead Screaming Across the Cybernetic Grid!
+                shimSwarmatron(15.48, 220.0, 3.4, 0.25, 36); // Full Swarmatron at 220Hz!
+                shimIndustrialKick(15.48, 1.3);
+                shimDing(15.48, 2640.0, 0.14, 0.30);
+                shimPedalBass(15.48, 55.0, 0.24, 2.5); // Deep sub thunder
+                shimCyberLead(15.48, [
+                    // Thunderous Octaves (A4/A5 -> C5/C6 -> D5/D6 -> E5/E6)
+                    { f: 880.00, d: 0.60, v: 0.26, t: 0 },
+                    { f: 440.00, d: 0.60, v: 0.20, t: 0 },
+                    { f: 1046.50, d: 0.60, v: 0.26, t: 0.64 },
+                    { f: 523.25, d: 0.60, v: 0.20, t: 0.64 },
+                    { f: 1174.66, d: 0.60, v: 0.28, t: 1.29 },
+                    { f: 587.33, d: 0.60, v: 0.21, t: 1.29 },
+                    { f: 1318.51, d: 0.60, v: 0.30, t: 1.93 },
+                    { f: 659.25, d: 0.60, v: 0.22, t: 1.93 }
+                ]);
+
+                // Climax Double-Kick Pattern & Driving 16th Bass
+                shimIndustrialBass(15.48, 55.00, 0.15, 0.26);
+                shimIndustrialKick(15.80, 1.0);
+                shimIndustrialBass(15.80, 55.00, 0.15, 0.22);
+                shimHiHat(15.80, false, 0.12);
+
+                shimIndustrialSnare(16.12, 0.26, true);
+                shimIndustrialBass(16.12, 65.41, 0.15, 0.24);
+                shimHiHat(16.44, false, 0.12);
+                shimIndustrialBass(16.44, 55.00, 0.15, 0.22);
+
+                shimIndustrialKick(16.77, 1.25);
+                shimIndustrialKick(17.10, 1.0);
+                shimIndustrialBass(16.77, 73.42, 0.15, 0.24);
+                shimIndustrialBass(17.10, 65.41, 0.15, 0.22);
+                shimHiHat(17.10, false, 0.12);
+
+                shimIndustrialSnare(17.42, 0.28, true);
+                shimIndustrialBass(17.42, 82.41, 0.15, 0.26);
+                shimHiHat(17.74, true, 0.14);
+                shimIndustrialBass(17.74, 98.00, 0.15, 0.24);
+
+                // --- MEASURE 08: Climax Cascade & Digital Stutter Fills (18.06s - 20.64s) ---
+                shimIndustrialKick(18.06, 1.2);
+                shimDing(18.06, 2640.0, 0.12, 0.25);
+                shimCyberLead(18.06, [
+                    { f: 1567.98, d: 0.60, v: 0.28, t: 0 },                  // G6 High peak!
+                    { f: 783.99, d: 0.60, v: 0.20, t: 0 },
+                    { f: 1318.51, d: 0.60, v: 0.26, t: 0.64 },               // E6
+                    { f: 659.25, d: 0.60, v: 0.20, t: 0.64 },
+                    { f: 1174.66, d: 0.60, v: 0.24, t: 1.29 },               // D6
+                    { f: 587.33, d: 0.60, v: 0.19, t: 1.29 },
+                    { f: 1046.50, d: 0.60, v: 0.24, t: 1.93, slide: 880.00 },// C6 -> A5
+                    { f: 523.25, d: 0.60, v: 0.18, t: 1.93, slide: 440.00 }
+                ]);
+
+                // 16th Bass and Beat accompaniment for Measure 8
+                shimIndustrialBass(18.06, 98.00, 0.15, 0.24);
+                shimIndustrialBass(18.22, 98.00, 0.15, 0.20);
+                shimHiHat(18.22, false, 0.12);
+                shimIndustrialBass(18.38, 82.41, 0.15, 0.22);
+                shimIndustrialBass(18.54, 73.42, 0.15, 0.20);
+
+                shimIndustrialSnare(18.70, 0.26, true);
+                shimIndustrialBass(18.70, 82.41, 0.15, 0.24);
+                shimIndustrialBass(18.86, 73.42, 0.15, 0.20);
+                shimHiHat(18.86, false, 0.12);
+                shimIndustrialBass(19.02, 65.41, 0.15, 0.20);
+                shimIndustrialBass(19.18, 55.00, 0.15, 0.20);
+
+                shimIndustrialKick(19.35, 1.15);
+                shimIndustrialBass(19.35, 73.42, 0.15, 0.22);
+                shimIndustrialBass(19.51, 65.41, 0.15, 0.20);
+                shimHiHat(19.51, false, 0.12);
+                shimIndustrialBass(19.67, 55.00, 0.15, 0.20);
+                shimIndustrialBass(19.83, 49.00, 0.15, 0.20);
+
+                // Digital Stutter Glitch Bursts (19.99s - 20.64s)
+                shimGlitchZap(19.99, 4800, 0.20, 0.04);
+                shimGlitchZap(20.15, 3600, 0.20, 0.04);
+                shimGlitchZap(20.31, 2400, 0.22, 0.04);
+                shimGlitchZap(20.47, 5200, 0.25, 0.06);
+                shimIndustrialSnare(20.47, 0.26, true);
+
+                // --- MEASURE 09: Ares Terminal Execution & Sub-Bass Breakdown (20.64s - 23.22s) ---
+                // Beats abruptly cut off: Low A0 (27.5Hz) Earthquake Rumble & Pure Swarm Ribbon
+                shimPedalBass(20.64, 27.50, 0.30, 4.5); // Booming A0 Sub-Bass Drone
+                shimPedalBass(20.64, 55.00, 0.26, 4.0); // A1 Resonance
+                shimSwarmatron(20.70, 55.0, 3.8, 0.18, 6); // Swarmatron converges to tight unison!
+                shimPulseBell(20.64, 1.4, 0.50); // Ethereal grid chime
+
+                shimGlitchZap(21.28, 1600, 0.14, 0.07);
+                shimGlitchZap(21.93, 2400, 0.12, 0.06);
+                shimGlitchZap(22.57, 3200, 0.10, 0.05);
+
+                // --- MEASURE 10: Grid Convergence, Pure Silence & Resolution (23.22s - 25.80s) ---
+                // Terminal Status Confirmed: # ./start_ares_program [COMPLETE]
+                shimGlitchZap(23.22, 4800, 0.10, 0.04);
+                shimDing(23.80, 1760.0, 0.12, 1.80); // Final pure high harmonic chime
+                shimDing(24.45, 2637.0, 0.09, 1.40); // E7 Starlight fade
+
+                // Mascot 3D Character Synchronized Cyber-Choreography
+                scheduleTrackTimeout(() => {
+                    triggerLandingSquash(0.35); // Violent glitch landing!
+                    if (rootGroup) setMascotAnimation('squash');
+                }, 50);
+                scheduleTrackTimeout(() => { if (rootGroup) setMascotAnimation('walk'); }, 2580);  // 93 BPM 16th groove
+                scheduleTrackTimeout(() => { if (rootGroup) setMascotAnimation('float'); }, 7740); // Swarmatron ascension
+                scheduleTrackTimeout(() => { if (rootGroup) setMascotAnimation('dance'); }, 10320); // Cyber lead drop
+                scheduleTrackTimeout(() => {
+                    if (rootGroup) setMascotAnimation('sing');
+                    if (typeof triggerBlessingBurst === 'function') triggerBlessingBurst();
+                }, 15480); // Fortissimo climax!
+                scheduleTrackTimeout(() => {
+                    if (rootGroup) setMascotAnimation('idle');
+                    const q = document.getElementById('saintQuoteText');
+                    if (q) q.innerText = '💻 # ./start_ares_program [COMPLETE] — Nine Inch Nailsの重厚なインダストリアル世界が天球に刻印されたキューブ！⚡️✨';
+                }, 21000);
+
+                scheduleTrackTimeout(() => {
+                    window.stopAllTracks(false);
+                }, 25800);
             }
         };
 
@@ -4726,6 +5505,9 @@
             } else if (e.key === '3' || e.key === 'h' || e.key === 'H' || e.key === 'r' || e.key === 'R') {
                 e.preventDefault();
                 window.playTrack(3);
+            } else if (e.key === '4' || e.key === 'n' || e.key === 'N' || e.key === 't' || e.key === 'T') {
+                e.preventDefault();
+                window.playTrack(4);
             } else if (e.key === 'w' || e.key === 'W') {
                 window.triggerWaddle();
             } else if (e.key === 'f' || e.key === 'F') {

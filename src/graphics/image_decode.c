@@ -426,10 +426,41 @@ gif_done_frame:
     return img_read ? 0 : -1;
 }
 
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wunused-function"
+#pragma GCC diagnostic ignored "-Wunused-parameter"
+#define STB_IMAGE_IMPLEMENTATION
+#define STBI_ONLY_JPEG
+#define STBI_NO_SIMD
+#define STBI_NO_FAILURE_STRINGS
+#include "../../third_party/vkQuake/Quake/stb_image.h"
+#pragma GCC diagnostic pop
+
+int decode_jpeg_rgba(const char *filepath, UB **out_pixels, H *out_w, H *out_h) {
+    if (!filepath || !out_pixels || !out_w || !out_h) return -1;
+    *out_pixels = NULL;
+    *out_w = 0;
+    *out_h = 0;
+    int w = 0, h = 0, comp = 0;
+    unsigned char *data = stbi_load(filepath, &w, &h, &comp, 4);
+    if (!data || w <= 0 || h <= 0) {
+        if (data) free(data);
+        return -1;
+    }
+    *out_pixels = (UB*)data;
+    *out_w = (H)w;
+    *out_h = (H)h;
+    return 0;
+}
+
 int decode_image_rgba(const char *filepath, UB **out_pixels, H *out_w, H *out_h) {
     if (!filepath) return -1;
     if (strstr(filepath, ".png") || strstr(filepath, ".PNG")) {
         return decode_png_rgba(filepath, out_pixels, out_w, out_h);
+    }
+    if (strstr(filepath, ".jpg") || strstr(filepath, ".JPG") ||
+        strstr(filepath, ".jpeg") || strstr(filepath, ".JPEG")) {
+        return decode_jpeg_rgba(filepath, out_pixels, out_w, out_h);
     }
     return decode_gif_rgba(filepath, out_pixels, out_w, out_h);
 }
@@ -442,6 +473,11 @@ int decode_png_rgba(const char *filepath, UB **out_pixels, H *out_w, H *out_h) {
 }
 
 int decode_gif_rgba(const char *filepath, UB **out_pixels, H *out_w, H *out_h) {
+    (void)filepath; (void)out_pixels; (void)out_w; (void)out_h;
+    return -1;
+}
+
+int decode_jpeg_rgba(const char *filepath, UB **out_pixels, H *out_w, H *out_h) {
     (void)filepath; (void)out_pixels; (void)out_w; (void)out_h;
     return -1;
 }

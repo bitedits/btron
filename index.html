@@ -769,7 +769,7 @@
                 </div>
             </div>
             <div class="companion-dashboard">
-                <button id="soundToggleBtn" class="companion-btn" onclick="toggleSound()">🔈 8-bit サウンド: OFF</button>
+                <button id="soundToggleBtn" class="companion-btn" onclick="toggleSound()" style="border-color: #008080; color: #008080;">🔊 8-bit サウンド: ON</button>
                 <button id="overdriveBtn" class="companion-btn rainbow-btn" onclick="toggleRainbowOverdrive()">🌈 虹色オーバードライブ</button>
                 <button class="companion-btn" onclick="nextMascotTip()">🐾 次のヒント ➔</button>
             </div>
@@ -1709,7 +1709,7 @@
     (function() {
         // 1. Nintendo-style 8-Bit Web Audio Synthesizer (Zero External Dependencies)
         let audioCtx = null;
-        let soundEnabled = false;
+        let soundEnabled = true;
 
         function getAudioContext() {
             if (!audioCtx) {
@@ -1721,6 +1721,16 @@
             }
             return audioCtx;
         }
+
+        // Unlock Web Audio context upon first user gesture
+        function unlockAudioOnGesture() {
+            if (soundEnabled) {
+                getAudioContext();
+            }
+        }
+        window.addEventListener('click', unlockAudioOnGesture, { once: true });
+        window.addEventListener('keydown', unlockAudioOnGesture, { once: true });
+        window.addEventListener('touchstart', unlockAudioOnGesture, { once: true });
 
         function play8BitNote(freq, type = 'square', duration = 0.12, volume = 0.16) {
             if (!soundEnabled) return;

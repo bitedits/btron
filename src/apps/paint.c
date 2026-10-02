@@ -240,8 +240,25 @@ static void paint_load(PaintViewer *pv, const char *path) {
 
 static int paint_scan_images(PaintViewer *pv) {
     pv->img_count = 0;
-    const char *dirs[] = { "assets/pixart", "assets/icons" };
-    for (int d = 0; d < 2 && pv->img_count < PAINT_MAX_IMGS; d++) {
+    /* Put default 64x64 transparent pixel art Lil Cube 64 first if available */
+    const char *default_img = "assets/pixart/lil-cube-64.png";
+    FILE *f_def = fopen(default_img, "rb");
+    if (!f_def) {
+        default_img = "assets/mascot/lil-cube-64.png";
+        f_def = fopen(default_img, "rb");
+    }
+    if (!f_def) {
+        default_img = "assets/mascot/lil-cube-n64.jpg";
+        f_def = fopen(default_img, "rb");
+    }
+    if (f_def) {
+        fclose(f_def);
+        strncpy(pv->imgs[0], default_img, PAINT_IMG_NAME - 1);
+        pv->imgs[0][PAINT_IMG_NAME - 1] = '\0';
+        pv->img_count = 1;
+    }
+    const char *dirs[] = { "assets/pixart", "assets/mascot", "assets/icons" };
+    for (int d = 0; d < 3 && pv->img_count < PAINT_MAX_IMGS; d++) {
         DIR *dir = opendir(dirs[d]);
         if (!dir) continue;
         struct dirent *de;
@@ -251,14 +268,20 @@ static int paint_scan_images(PaintViewer *pv) {
             if (l < 5) continue;
             BOOL is_gif = (l > 4 && strcmp(de->d_name + l - 4, ".gif") == 0);
             BOOL is_png = (l > 4 && strcmp(de->d_name + l - 4, ".png") == 0);
-            if (!is_gif && !is_png) continue;
-            snprintf(pv->imgs[pv->img_count], PAINT_IMG_NAME, "%s/%s", dirs[d], de->d_name);
+            BOOL is_jpg = (l > 4 && strcmp(de->d_name + l - 4, ".jpg") == 0);
+            BOOL is_jpeg = (l > 5 && strcmp(de->d_name + l - 5, ".jpeg") == 0);
+            if (!is_gif && !is_png && !is_jpg && !is_jpeg) continue;
+            char path[PAINT_IMG_NAME];
+            snprintf(path, sizeof(path), "%s/%s", dirs[d], de->d_name);
+            if (pv->img_count > 0 && strcmp(pv->imgs[0], path) == 0) continue;
+            strncpy(pv->imgs[pv->img_count], path, PAINT_IMG_NAME - 1);
+            pv->imgs[pv->img_count][PAINT_IMG_NAME - 1] = '\0';
             pv->img_count++;
         }
         closedir(dir);
     }
     if (pv->img_count == 0) {
-        strncpy(pv->imgs[0], "assets/pixart/nyan-cat.gif", PAINT_IMG_NAME - 1);
+        strncpy(pv->imgs[0], "assets/pixart/lil-cube-64.png", PAINT_IMG_NAME - 1);
         pv->imgs[0][PAINT_IMG_NAME - 1] = '\0';
         pv->img_count = 1;
     }
@@ -475,7 +498,19 @@ static void paint_draw_image(PaintViewer *pv, GDEV *dev) {
             if (sx >= pv->img_w) sx = pv->img_w - 1;
             const UB *p = src_row + (size_t)sx * 4;
             if (p[3] == 0) continue;   /* transparent: show canvas */
-            row[dx] = ((COLOR)p[3] << 24) | ((COLOR)p[0] << 16) | ((COLOR)p[1] << 8) | (COLOR)p[2];
+            if (p[3] == 255) {
+                row[dx] = 0xFF000000 | ((COLOR)p[0] << 16) | ((COLOR)p[1] << 8) | (COLOR)p[2];
+            } else {
+                COLOR bg = row[dx];
+                UB bg_r = (bg >> 16) & 0xFF;
+                UB bg_g = (bg >> 8) & 0xFF;
+                UB bg_b = bg & 0xFF;
+                UB a = p[3];
+                UB r = (UB)((p[0] * a + bg_r * (255 - a)) / 255);
+                UB g = (UB)((p[1] * a + bg_g * (255 - a)) / 255);
+                UB b = (UB)((p[2] * a + bg_b * (255 - a)) / 255);
+                row[dx] = 0xFF000000 | ((COLOR)r << 16) | ((COLOR)g << 8) | (COLOR)b;
+            }
         }
     }
 }
@@ -594,6 +629,9 @@ static void paint_apply_cmd(WND *wnd, PaintViewer *pv, int cmd, int sub_idx, GDE
 #if defined(__STDC_HOSTED__) && __STDC_HOSTED__ == 1
             if (sub_idx >= 0 && sub_idx < pv->img_count) {
                 paint_load(pv, pv->imgs[sub_idx]);
+                if (strstr(pv->imgs[sub_idx], "lil-cube-64") || strstr(pv->imgs[sub_idx], "lil-cube-n64")) {
+                    pv->zoom = 450;
+                }
                 if (dev) paint_clamp_scroll(pv, dev);
                 if (wnd) {
                     strncpy(wnd->title, pv->title[0] ? pv->title : "Paint 画像ビューア",
@@ -870,10 +908,24 @@ static WND* open_paint_wnd(const char *filepath) {
     if (filepath && filepath[0]) {
         paint_load(pv, filepath);
     } else {
-        paint_load(pv, "assets/pixart/nyan-cat.gif");
+        paint_load(pv, "assets/pixart/lil-cube-64.png");
+        if (pv->pixels == NULL) {
+            paint_load(pv, "assets/mascot/lil-cube-64.png");
+        }
+        if (pv->pixels == NULL) {
+            paint_load(pv, "assets/mascot/lil-cube-n64.jpg");
+        }
+        if (pv->pixels == NULL) {
+            paint_load(pv, "assets/pixart/nyan-cat.gif");
+        }
         if (pv->pixels == NULL && pv->img_count > 0) {
             paint_load(pv, pv->imgs[0]);
         }
+    }
+    if (pv->path[0] && (strstr(pv->path, "lil-cube-64") || strstr(pv->path, "lil-cube-n64"))) {
+        pv->zoom = 450;
+    } else if (!filepath || !filepath[0]) {
+        pv->zoom = 450;
     }
 #else
     (void)filepath;

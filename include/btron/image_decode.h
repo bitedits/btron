@@ -20,6 +20,7 @@ extern "C" {
 int decode_image_rgba(const char *filepath, UB **out_pixels, H *out_w, H *out_h);
 int decode_png_rgba(const char *filepath, UB **out_pixels, H *out_w, H *out_h);
 int decode_gif_rgba(const char *filepath, UB **out_pixels, H *out_w, H *out_h);
+int decode_jpeg_rgba(const char *filepath, UB **out_pixels, H *out_w, H *out_h);
 
 #ifdef __cplusplus
 }

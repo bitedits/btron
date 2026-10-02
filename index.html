@@ -883,13 +883,14 @@
                 <div class="saint-quote-text" id="saintQuoteText">「ボクはリル・キューブ64… 低ポリゴン3Dで動き回る聖なる氷晶だキューブ！🧊✨」</div>
             </div>
             <div class="saint-interaction-hint" id="saintHint">
-                <span class="hint-icon">💫</span> マウス旋回で4次元ホップ束回転 • ドラッグで3D回転 • <b>[Space / クリック] で『風ノ旅ビト (Journey)』神聖球状波動</b>
+                <span class="hint-icon">💫</span> マウス旋回で4次元ホップ束回転 • ドラッグで3D回転 • <b>[Space / クリック] 神聖波動 • [S] 8-bit交響詩</b>
             </div>
             <div class="saint-dashboard">
                 <button id="blessingBtn" class="saint-btn" onclick="triggerBlessing()">🌟 神聖波動 (Pulse)</button>
                 <button id="waddleBtn" class="saint-btn" onclick="triggerWaddle()">🐾 てくてく歩行 (Waddle)</button>
                 <button id="floatBtn" class="saint-btn" onclick="triggerFloat()">🎈 ぷかぷか飛行 (Float)</button>
                 <button id="danceBtn" class="saint-btn" onclick="triggerDance()">🕺 氷晶のダンス (Dance)</button>
+                <button id="symphonyBtn" class="saint-btn" onclick="playLilCubeSymphony()" style="border-color: #f472b6; color: #f472b6;">🎼 8-bit 交響詩 (Symphony)</button>
                 <button id="dispersionBtn" class="saint-btn active" onclick="toggleDispersion()">🌈 分光モード: ON</button>
                 <button id="soundToggleBtn" class="saint-btn" onclick="toggleSound()" style="border-color: #00ffff; color: #00ffff;">🔊 聖なる天球音楽: ON</button>
                 <button id="densityBtn" class="saint-btn" onclick="cycleDensity()">🪐 繊維環: 18環</button>
@@ -1889,83 +1890,188 @@
             });
         }
 
-        // Mild Sacred Pulse Singing Harmonic Chord
-        function playJourneyChirp() {
+        // =========================================================================
+        // 8-BIT SHIM SYNTHESIZER ENGINE (5 Modular Acoustic Shims)
+        // 1) Pulse (2 samples: Squash + Bell)
+        // 2) Waddle (1 sample: Step)
+        // 3) Float (Glass-harp Levitation Triad)
+        // 4) Dance (Crystalline Celebration Flourish)
+        // 5) Ding (High Crystal Ping)
+        // =========================================================================
+
+        // [SHIM 1A] Pulse - Sample 1: Squash / Chirp (Singing Harmonic Ascending Triad)
+        function shimPulseSquash(timeOffset = 0, volMul = 1.0, pitchMul = 1.0) {
             if (!window.soundEnabled) return;
             try {
                 const c = getAudioContext();
-                const now = c.currentTime;
-                // Mild, soothing celestial harmonic chord (pure sine acoustics)
+                const startT = c.currentTime + timeOffset;
                 const freqs = [
-                    { f: 261.63, v: 0.055, d: 2.2, type: 'sine' },      // Gentle pedal tone C4
-                    { f: 523.25, v: 0.070, d: 2.4, type: 'sine' },      // Singing traveler core tone C5
-                    { f: 659.25, v: 0.048, d: 2.0, type: 'sine' },      // Resonant third E5
-                    { f: 783.99, v: 0.052, d: 2.1, type: 'sine' },      // Harmonious fifth G5
-                    { f: 1046.50, v: 0.040, d: 1.7, type: 'sine' },      // Pure crystal octave C6
-                    { f: 1318.51, v: 0.025, d: 1.4, type: 'sine' }       // Ethereal overtone E6
+                    { f: 261.63, v: 0.055, d: 2.2 }, // C4
+                    { f: 523.25, v: 0.070, d: 2.4 }, // C5
+                    { f: 659.25, v: 0.048, d: 2.0 }, // E5
+                    { f: 783.99, v: 0.052, d: 2.1 }, // G5
+                    { f: 1046.50, v: 0.040, d: 1.7 }, // C6
+                    { f: 1318.51, v: 0.025, d: 1.4 }  // E6
                 ];
-
                 freqs.forEach(item => {
                     const osc = c.createOscillator();
                     const gain = c.createGain();
-                    osc.type = item.type;
-
-                    // Vocal-like gentle upward swoop
-                    osc.frequency.setValueAtTime(item.f * 0.97, now);
-                    osc.frequency.exponentialRampToValueAtTime(item.f, now + 0.10);
-
-                    // Soft, mild attack and smooth natural decay
-                    gain.gain.setValueAtTime(0.0001, now);
-                    gain.gain.linearRampToValueAtTime(item.v, now + 0.09);
-                    gain.gain.exponentialRampToValueAtTime(0.0001, now + item.d);
-
+                    osc.type = 'sine';
+                    const targetF = item.f * pitchMul;
+                    osc.frequency.setValueAtTime(targetF * 0.97, startT);
+                    osc.frequency.exponentialRampToValueAtTime(targetF, startT + 0.10);
+                    gain.gain.setValueAtTime(0.0001, startT);
+                    gain.gain.linearRampToValueAtTime(item.v * volMul, startT + 0.09);
+                    gain.gain.exponentialRampToValueAtTime(0.0001, startT + item.d);
                     osc.connect(gain);
                     gain.connect(c.destination);
-                    osc.start(now);
-                    osc.stop(now + item.d);
+                    osc.start(startT);
+                    osc.stop(startT + item.d);
                 });
             } catch (e) {}
         }
 
-        // Mild Golden Celestial Harmonic Resonance (Soft Ambient Swell)
-        function playGoldenChiChime() {
+        // [SHIM 1B] Pulse - Sample 2: Bell / Resonant Swell (Golden Chi Celestial Overtone)
+        function shimPulseBell(timeOffset = 0, volMul = 1.0, pitchMul = 1.0) {
             if (!window.soundEnabled) return;
             try {
                 const c = getAudioContext();
-                const now = c.currentTime;
-                // Mild, soothing ambient overtone series (pure sine waves)
+                const startT = c.currentTime + timeOffset;
                 const freqs = [
-                    { f: 130.81, v: 0.065, d: 3.5, type: 'sine' },      // Soft spiritual pedal C3
-                    { f: 196.00, v: 0.050, d: 3.2, type: 'sine' },      // Warm harmonic fifth G3
-                    { f: 261.63, v: 0.070, d: 3.4, type: 'sine' },      // Golden core foundation C4
-                    { f: 392.00, v: 0.055, d: 3.0, type: 'sine' },      // Singing fifth G4
-                    { f: 523.25, v: 0.060, d: 2.8, type: 'sine' },      // Soaring octave C5
-                    { f: 659.25, v: 0.040, d: 2.5, type: 'sine' },      // Golden lotus third E5
-                    { f: 783.99, v: 0.035, d: 2.3, type: 'sine' },      // Ethereal overtone G5
-                    { f: 1046.50, v: 0.025, d: 1.9, type: 'sine' }      // Shimmering celestial bell C6
+                    { f: 130.81, v: 0.065, d: 3.5 }, // C3
+                    { f: 196.00, v: 0.050, d: 3.2 }, // G3
+                    { f: 261.63, v: 0.070, d: 3.4 }, // C4
+                    { f: 392.00, v: 0.055, d: 3.0 }, // G4
+                    { f: 523.25, v: 0.060, d: 2.8 }, // C5
+                    { f: 659.25, v: 0.040, d: 2.5 }, // E5
+                    { f: 783.99, v: 0.035, d: 2.3 }, // G5
+                    { f: 1046.50, v: 0.025, d: 1.9 }  // C6
                 ];
-
                 freqs.forEach(item => {
                     const osc = c.createOscillator();
                     const gain = c.createGain();
-                    osc.type = item.type;
-
-                    // Spiritual harmonic swell with gentle rise and smooth meditative decay
-                    osc.frequency.setValueAtTime(item.f * 0.985, now);
-                    osc.frequency.exponentialRampToValueAtTime(item.f, now + 0.14);
-
-                    // Mild, gradual attack
-                    gain.gain.setValueAtTime(0.0001, now);
-                    gain.gain.linearRampToValueAtTime(item.v, now + 0.12);
-                    gain.gain.exponentialRampToValueAtTime(0.0001, now + item.d);
-
+                    osc.type = 'sine';
+                    const targetF = item.f * pitchMul;
+                    osc.frequency.setValueAtTime(targetF * 0.985, startT);
+                    osc.frequency.exponentialRampToValueAtTime(targetF, startT + 0.14);
+                    gain.gain.setValueAtTime(0.0001, startT);
+                    gain.gain.linearRampToValueAtTime(item.v * volMul, startT + 0.12);
+                    gain.gain.exponentialRampToValueAtTime(0.0001, startT + item.d);
                     osc.connect(gain);
                     gain.connect(c.destination);
-                    osc.start(now);
-                    osc.stop(now + item.d);
+                    osc.start(startT);
+                    osc.stop(startT + item.d);
                 });
             } catch (e) {}
         }
+
+        // [SHIM 2] Waddle - Sample 1: Percussive Crystal Step Transient
+        function shimWaddle(timeOffset = 0, pitch = 430, volMul = 1.0) {
+            if (!window.soundEnabled) return;
+            try {
+                const ctx = getAudioContext();
+                const startT = ctx.currentTime + timeOffset;
+                const osc = ctx.createOscillator();
+                const gain = ctx.createGain();
+                osc.type = 'triangle';
+                osc.frequency.setValueAtTime(pitch, startT);
+                osc.frequency.exponentialRampToValueAtTime(pitch * 0.72, startT + 0.05);
+                gain.gain.setValueAtTime(0.07 * volMul, startT);
+                gain.gain.exponentialRampToValueAtTime(0.001, startT + 0.05);
+                osc.connect(gain);
+                gain.connect(ctx.destination);
+                osc.start(startT);
+                osc.stop(startT + 0.05);
+            } catch (e) {}
+        }
+
+        // [SHIM 3] Float: Ethereal Levitation Glass Harp Arpeggio
+        function shimFloat(timeOffset = 0, baseFreq = 523.25, volMul = 1.0) {
+            if (!window.soundEnabled) return;
+            try {
+                const c = getAudioContext();
+                const startT = c.currentTime + timeOffset;
+                const ratio = baseFreq / 523.25;
+                const notes = [
+                    { f: 523.25 * ratio, v: 0.12, d: 0.55 },
+                    { f: 659.25 * ratio, v: 0.10, d: 0.50 },
+                    { f: 783.99 * ratio, v: 0.11, d: 0.65 },
+                    { f: 1046.50 * ratio, v: 0.08, d: 0.75 }
+                ];
+                notes.forEach((n, idx) => {
+                    const osc = c.createOscillator();
+                    const gain = c.createGain();
+                    const noteT = startT + idx * 0.06;
+                    osc.type = 'sine';
+                    osc.frequency.setValueAtTime(n.f * 0.985, noteT);
+                    osc.frequency.exponentialRampToValueAtTime(n.f, noteT + 0.04);
+                    gain.gain.setValueAtTime(0.0001, noteT);
+                    gain.gain.linearRampToValueAtTime(n.v * volMul, noteT + 0.03);
+                    gain.gain.exponentialRampToValueAtTime(0.0001, noteT + n.d);
+                    osc.connect(gain);
+                    gain.connect(c.destination);
+                    osc.start(noteT);
+                    osc.stop(noteT + n.d);
+                });
+            } catch (e) {}
+        }
+
+        // [SHIM 4] Dance: Sparkling Crystalline Celebration Cascade (D-Major / A-Mixolydian)
+        function shimDance(timeOffset = 0, pitchScale = 1.0, volMul = 1.0) {
+            if (!window.soundEnabled) return;
+            try {
+                const c = getAudioContext();
+                const startT = c.currentTime + timeOffset;
+                const notes = [
+                    { f: 587.33 * pitchScale, d: 0.20, v: 0.16, t: 0 },
+                    { f: 739.99 * pitchScale, d: 0.22, v: 0.15, t: 0.085 },
+                    { f: 880.00 * pitchScale, d: 0.25, v: 0.16, t: 0.170 },
+                    { f: 1174.66 * pitchScale, d: 0.32, v: 0.18, t: 0.255 },
+                    { f: 1479.98 * pitchScale, d: 0.45, v: 0.12, t: 0.370 }
+                ];
+                notes.forEach(n => {
+                    const osc = c.createOscillator();
+                    const gain = c.createGain();
+                    const noteT = startT + n.t;
+                    osc.type = 'sine';
+                    osc.frequency.setValueAtTime(n.f, noteT);
+                    gain.gain.setValueAtTime(0.0001, noteT);
+                    gain.gain.linearRampToValueAtTime(n.v * volMul, noteT + 0.02);
+                    gain.gain.exponentialRampToValueAtTime(0.0001, noteT + n.d);
+                    osc.connect(gain);
+                    gain.connect(c.destination);
+                    osc.start(noteT);
+                    osc.stop(noteT + n.d);
+                });
+            } catch (e) {}
+        }
+
+        // [SHIM 5] Ding (Click): High Crystal Chime Ping
+        function shimDing(timeOffset = 0, freq = 1760.0, volMul = 1.0) {
+            if (!window.soundEnabled) return;
+            try {
+                const c = getAudioContext();
+                const startT = c.currentTime + timeOffset;
+                const osc = c.createOscillator();
+                const gain = c.createGain();
+                osc.type = 'sine';
+                osc.frequency.setValueAtTime(freq, startT);
+                gain.gain.setValueAtTime(0.0001, startT);
+                gain.gain.linearRampToValueAtTime(0.15 * volMul, startT + 0.015);
+                gain.gain.exponentialRampToValueAtTime(0.0001, startT + 0.70);
+                osc.connect(gain);
+                gain.connect(c.destination);
+                osc.start(startT);
+                osc.stop(startT + 0.70);
+            } catch (e) {}
+        }
+
+        // Legacy compatibility delegate wrappers
+        function playJourneyChirp() { shimPulseSquash(0, 1.0, 1.0); }
+        function playGoldenChiChime() { shimPulseBell(0, 1.0, 1.0); }
+        function sfxFootstep() { shimWaddle(0, 420 + Math.random() * 35, 1.0); }
+        function sfxFloatLevitate() { shimFloat(0, 523.25, 1.0); }
+        function sfxCrystalCelebration() { shimDance(0, 1.0, 1.0); }
 
         function play8BitNote(freq, type = 'square', duration = 0.12, volume = 0.16) {
             if (!window.soundEnabled) return;
@@ -1981,25 +2087,6 @@
                 gain.connect(ctx.destination);
                 osc.start();
                 osc.stop(ctx.currentTime + duration);
-            } catch (e) {}
-        }
-
-        function sfxFootstep() {
-            if (!window.soundEnabled) return;
-            try {
-                const ctx = getAudioContext();
-                const osc = ctx.createOscillator();
-                const gain = ctx.createGain();
-                osc.type = 'triangle';
-                const f = 420 + Math.random() * 35;
-                osc.frequency.setValueAtTime(f, ctx.currentTime);
-                osc.frequency.exponentialRampToValueAtTime(f * 0.72, ctx.currentTime + 0.05);
-                gain.gain.setValueAtTime(0.07, ctx.currentTime);
-                gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.05);
-                osc.connect(gain);
-                gain.connect(ctx.destination);
-                osc.start();
-                osc.stop(ctx.currentTime + 0.05);
             } catch (e) {}
         }
 
@@ -2022,73 +2109,123 @@
             } catch (e) {}
         }
 
-        // Ethereal Levitation Chimes for Float (100% Original Acoustic Harmonics)
-        function sfxFloatLevitate() {
-            if (!window.soundEnabled) return;
-            try {
-                const c = getAudioContext();
-                const notes = [
-                    { f: 523.25, v: 0.12, d: 0.55 }, // C5
-                    { f: 659.25, v: 0.10, d: 0.50 }, // E5
-                    { f: 783.99, v: 0.11, d: 0.65 }, // G5
-                    { f: 1046.50, v: 0.08, d: 0.75 } // C6
-                ];
-                notes.forEach((n, idx) => {
-                    setTimeout(() => {
-                        try {
-                            const ctx = getAudioContext();
-                            const osc = ctx.createOscillator();
-                            const gain = ctx.createGain();
-                            const t = ctx.currentTime;
-                            osc.type = 'sine';
-                            osc.frequency.setValueAtTime(n.f * 0.985, t);
-                            osc.frequency.exponentialRampToValueAtTime(n.f, t + 0.04);
-                            gain.gain.setValueAtTime(0.0001, t);
-                            gain.gain.linearRampToValueAtTime(n.v, t + 0.03);
-                            gain.gain.exponentialRampToValueAtTime(0.0001, t + n.d);
-                            osc.connect(gain);
-                            gain.connect(ctx.destination);
-                            osc.start(t);
-                            osc.stop(t + n.d);
-                        } catch (e) {}
-                    }, idx * 60);
-                });
-            } catch (e) {}
-        }
+        /* =========================================================================
+         * BTRON LIL CUBE 64 — 8-BIT SYMPHONY SYNTHESIZER PROGRAM (TRACKER SCORE)
+         * =========================================================================
+         * 
+         * [SHIM INVENTORY]
+         *   1A) Pulse Squash  : Dual-phase singing traveler triad (C4, C5, E5, G5, C6)
+         *   1B) Pulse Bell    : Golden Chi spiritual ambient swell (C3, G3, C4, G4, C5)
+         *   2)  Waddle        : Crystal step impulse (triangle click 420-587 Hz)
+         *   3)  Float         : Glass-harp buoyant levitation arpeggio (C5, E5, G5, C6)
+         *   4)  Dance         : Luminous 5-note crystalline celebration motif (D5-F#6)
+         *   5)  Ding (Click)  : Pure high celestial bell ping (1760 Hz / 2093 Hz)
+         * 
+         * [TRACKER SCORE PROGRAM]
+         * +------+-------+-------------------+-----------------------------------+
+         * | BAR  | TIME  | SHIM SAMPLE       | SCORE EVENT / MUSICAL FUNCTION    |
+         * +------+-------+-------------------+-----------------------------------+
+         * | B01  | 0.00s | SHIM_DING         | A6 (1760Hz) Awaking celestial bell|
+         * | B02  | 0.50s | SHIM_WADDLE       | 420Hz Footstep L (March tempo)    |
+         * |      | 0.72s | SHIM_WADDLE       | 450Hz Footstep R                  |
+         * |      | 0.95s | SHIM_WADDLE       | 420Hz Footstep L                  |
+         * |      | 1.18s | SHIM_WADDLE       | 480Hz Footstep R (Cadence accent) |
+         * | B03  | 1.45s | SHIM_FLOAT        | C5 Glass-harp levitation arpeggio |
+         * |      | 1.75s | SHIM_WADDLE       | 440Hz Flutter kick in mid-air     |
+         * |      | 2.05s | SHIM_DING         | E6 (1318Hz) Zenith sparkle        |
+         * | B04  | 2.40s | SHIM_PULSE_SQUASH | Mild singing traveler chord       |
+         * | B05  | 3.40s | SHIM_PULSE_BELL   | Deep golden Chi resonance swell   |
+         * | B06  | 4.60s | SHIM_WADDLE       | 440Hz Step (Syncopated buildup)   |
+         * |      | 4.80s | SHIM_WADDLE       | 480Hz Step                        |
+         * |      | 5.00s | SHIM_WADDLE       | 523Hz Step                        |
+         * |      | 5.15s | SHIM_WADDLE       | 587Hz Step (Cadenza crescendo)    |
+         * | B07  | 5.30s | SHIM_DANCE        | D-Major crystal celebration arpeggio
+         * |      | 5.75s | SHIM_DING         | D6 (1174Hz) Flourish accent       |
+         * | B08  | 6.50s | SHIM_FLOAT        | D5 High glass-harp counterpoint   |
+         * |      | 6.85s | SHIM_PULSE_SQUASH | Modulated pulse chirp in D-major  |
+         * | B09  | 7.50s | SHIM_DANCE        | Fortissimo grand celebratory arpeggio
+         * |      | 7.80s | SHIM_PULSE_BELL   | Deep golden Chi pedal foundation  |
+         * |      | 8.50s | SHIM_DING         | A6 (1760Hz) Pure crystal chime    |
+         * |      | 8.85s | SHIM_DING         | C7 (2093Hz) Final star resolution |
+         * +------+-------+-------------------+-----------------------------------+
+         * =========================================================================
+         */
 
-        // Original BTRON Crystal Celebration Chimes for Dance (100% Original Sparkling Arpeggio)
-        function sfxCrystalCelebration() {
-            if (!window.soundEnabled) return;
-            try {
-                // Sparkling crystalline cascade in pure D-Major / A-Mixolydian (Original Acoustic Bell Motif)
-                const notes = [
-                    { f: 587.33, d: 0.20, v: 0.16, t: 0 },    // D5 crystal tap
-                    { f: 739.99, d: 0.22, v: 0.15, t: 85 },   // F#5 bright facet
-                    { f: 880.00, d: 0.25, v: 0.16, t: 170 },  // A5 celestial ring
-                    { f: 1174.66, d: 0.32, v: 0.18, t: 255 }, // D6 soaring flourish
-                    { f: 1479.98, d: 0.45, v: 0.12, t: 370 }  // F#6 prism overtone
-                ];
-                notes.forEach(n => {
-                    setTimeout(() => {
-                        try {
-                            const ctx = getAudioContext();
-                            const osc = ctx.createOscillator();
-                            const gain = ctx.createGain();
-                            const t = ctx.currentTime;
-                            osc.type = 'sine';
-                            osc.frequency.setValueAtTime(n.f, t);
-                            gain.gain.setValueAtTime(0.0001, t);
-                            gain.gain.linearRampToValueAtTime(n.v, t + 0.02);
-                            gain.gain.exponentialRampToValueAtTime(0.0001, t + n.d);
-                            osc.connect(gain);
-                            gain.connect(ctx.destination);
-                            osc.start(t);
-                            osc.stop(t + n.d);
-                        } catch (e) {}
-                    }, n.t);
-                });
-            } catch (e) {}
-        }
+        let symphonyActive = false;
+        window.playLilCubeSymphony = function() {
+            if (symphonyActive) return;
+            symphonyActive = true;
+            unlockAudio();
+
+            const btn = document.getElementById('symphonyBtn');
+            if (btn) {
+                btn.classList.add('active');
+                btn.innerHTML = '🎼 演奏中 (Playing)...';
+            }
+
+            // BAR 01: Awakening Ding
+            shimDing(0.00, 1760.0, 0.16);
+
+            // BAR 02: Waddle Scherzando March
+            shimWaddle(0.50, 420, 0.10);
+            shimWaddle(0.72, 450, 0.10);
+            shimWaddle(0.95, 420, 0.10);
+            shimWaddle(1.18, 480, 0.12);
+
+            // BAR 03: Float Levitation & Mid-air Sparkle
+            shimFloat(1.45, 523.25, 0.13);
+            shimWaddle(1.75, 440, 0.07);
+            shimDing(2.05, 1318.5, 0.10);
+
+            // BAR 04: Sacred Pulse Squash Wave
+            shimPulseSquash(2.40, 1.05, 1.0);
+
+            // BAR 05: Golden Chi Bell Swell
+            shimPulseBell(3.40, 1.0, 1.0);
+
+            // BAR 06: Syncopated Waddle Crescendo
+            shimWaddle(4.60, 440, 0.08);
+            shimWaddle(4.80, 480, 0.10);
+            shimWaddle(5.00, 523, 0.12);
+            shimWaddle(5.15, 587, 0.14);
+
+            // BAR 07: Dance Celebration Flourish
+            shimDance(5.30, 1.0, 1.10);
+            shimDing(5.75, 1174.66, 0.12);
+
+            // BAR 08: Float & Pulse Counterpoint
+            shimFloat(6.50, 587.33, 0.12);
+            shimPulseSquash(6.85, 0.90, 1.122);
+
+            // BAR 09: Grand Finale
+            shimDance(7.50, 1.0, 1.25);
+            shimPulseBell(7.80, 1.15, 1.0);
+            shimDing(8.50, 1760.0, 0.16);
+            shimDing(8.85, 2093.0, 0.15);
+
+            // Synchronize 3D Mascot Character Choreography
+            setTimeout(() => { if (rootGroup) setMascotAnimation('walk'); }, 500);
+            setTimeout(() => { if (rootGroup) setMascotAnimation('float'); }, 1450);
+            setTimeout(() => {
+                if (rootGroup) {
+                    setMascotAnimation('sing');
+                    if (typeof triggerJourneyPulse === 'function') triggerJourneyPulse();
+                }
+            }, 2400);
+            setTimeout(() => { if (rootGroup) setMascotAnimation('dance'); }, 5300);
+            setTimeout(() => {
+                triggerLandingSquash(0.20);
+                if (typeof triggerBlessingBurst === 'function') triggerBlessingBurst();
+            }, 8500);
+
+            setTimeout(() => {
+                symphonyActive = false;
+                if (btn) {
+                    btn.classList.remove('active');
+                    btn.innerHTML = '🎼 8-bit 交響詩 (Symphony)';
+                }
+            }, 9400);
+        };
 
         window.toggleSound = function() {
             window.soundEnabled = !window.soundEnabled;
@@ -3326,6 +3463,9 @@
             if (e.code === 'Space' || e.key === 'j' || e.key === 'J' || e.key === 'p' || e.key === 'P') {
                 e.preventDefault();
                 window.triggerBlessing();
+            } else if (e.key === 's' || e.key === 'S') {
+                e.preventDefault();
+                window.playLilCubeSymphony();
             } else if (e.key === 'w' || e.key === 'W') {
                 window.triggerWaddle();
             } else if (e.key === 'f' || e.key === 'F') {

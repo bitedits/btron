@@ -1,0 +1,2851 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>B-System (BTRON) — 日本のユーザー・研究者のための次世代コンシューマOS環境 | Synrc VE OS.1</title>
+    <meta name="description" content="BTRON3仕様に準拠したB-SystemコンシューマOS構造。実身・仮身ハイパーメディアモデル、TAD文書エンジン、BeOS Media Kitの精神を継承したリアルタイムメディア環境とMozc TIP日本語入力。">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&family=Noto+Sans+JP:wght@400;500;600;700;800&family=Shippori+Mincho:wght@600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="index.css?v=2">
+    <script src="assets/vendor/three.min.js"></script>
+    <script>
+        if (typeof THREE === 'undefined') {
+            document.write('<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"><\/script>');
+        }
+    </script>
+    <style>
+        :root {
+            --jp-font: 'Noto Sans JP', 'Inter', system-ui, -apple-system, sans-serif;
+            --mincho-font: 'Shippori Mincho', 'Noto Sans JP', serif;
+            --tron-teal: #008080;
+            --tron-teal-light: #e0f2f1;
+            --tron-blue: #0057b7;
+            --tron-indigo: #283593;
+            --tron-gold: #c59b27;
+            --card-border-glow: rgba(0, 128, 128, 0.25);
+        }
+
+        body {
+            font-family: var(--jp-font);
+            letter-spacing: 0.015em;
+        }
+
+        .jp-title {
+            font-family: var(--mincho-font);
+            letter-spacing: -0.01em;
+        }
+
+        /* Hero Japanese Accents */
+        .hero-banner-tag {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.5rem;
+            background: linear-gradient(135deg, rgba(0, 87, 183, 0.12), rgba(0, 128, 128, 0.15));
+            border: 1px solid rgba(0, 128, 128, 0.35);
+            color: #0057b7;
+            padding: 0.4rem 1.1rem;
+            border-radius: 999px;
+            font-size: 0.88rem;
+            font-weight: 700;
+            margin-bottom: 1.2rem;
+            backdrop-filter: blur(8px);
+        }
+
+        .hero-lead-box {
+            max-width: 960px;
+            margin: 1.8rem auto 0 auto;
+            background: rgba(255, 255, 255, 0.85);
+            backdrop-filter: blur(14px);
+            border: 1px solid rgba(255, 93, 162, 0.25);
+            border-radius: 18px;
+            padding: 1.6rem 2.2rem;
+            text-align: left;
+            box-shadow: 0 10px 30px rgba(107, 79, 126, 0.08);
+        }
+
+        .hero-lead-box p {
+            color: #334155;
+            font-size: 1.05rem;
+            line-height: 1.85;
+            margin-bottom: 0.8rem;
+        }
+
+        .hero-lead-box p:last-child {
+            margin-bottom: 0;
+        }
+
+        /* Search & Filter Bar */
+        .filter-container {
+            max-width: 1200px;
+            margin: 2.5rem auto 1.5rem auto;
+            display: flex;
+            flex-wrap: wrap;
+            gap: 1rem;
+            justify-content: space-between;
+            align-items: center;
+            background: rgba(255, 255, 255, 0.75);
+            padding: 1rem 1.5rem;
+            border-radius: 16px;
+            border: 1px solid var(--border);
+            backdrop-filter: blur(12px);
+        }
+
+        .search-input-wrapper {
+            position: relative;
+            flex: 1;
+            min-width: 260px;
+        }
+
+        .search-input {
+            width: 100%;
+            padding: 0.65rem 1rem 0.65rem 2.4rem;
+            border-radius: 10px;
+            border: 1.5px solid rgba(107, 79, 126, 0.25);
+            background: #ffffff;
+            font-family: var(--jp-font);
+            font-size: 0.95rem;
+            color: #1e293b;
+            transition: all 0.25s ease;
+        }
+
+        .search-input:focus {
+            outline: none;
+            border-color: #ff2d95;
+            box-shadow: 0 0 0 3px rgba(255, 45, 149, 0.15);
+        }
+
+        .search-icon {
+            position: absolute;
+            left: 0.8rem;
+            top: 50%;
+            transform: translateY(-50%);
+            color: #94a3b8;
+            pointer-events: none;
+        }
+
+        .filter-buttons {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.5rem;
+        }
+
+        .filter-btn {
+            background: #ffffff;
+            border: 1px solid rgba(107, 79, 126, 0.2);
+            color: #475569;
+            padding: 0.5rem 0.95rem;
+            border-radius: 8px;
+            font-size: 0.88rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            font-family: var(--jp-font);
+        }
+
+        .filter-btn:hover {
+            border-color: #ff2d95;
+            color: #d90b72;
+            background: #fff5fa;
+        }
+
+        .filter-btn.active {
+            background: linear-gradient(135deg, #ff2d95, #c026d3);
+            color: #ffffff;
+            border-color: transparent;
+            box-shadow: 0 4px 12px rgba(255, 45, 149, 0.25);
+        }
+
+        /* Enhanced App Card */
+        .app-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(360px, 1fr));
+            gap: 1.6rem;
+            margin-top: 1.5rem;
+        }
+
+        @media (max-width: 640px) {
+            .app-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        .app-card {
+            background: #ffffff;
+            border: 1.5px solid rgba(255, 93, 162, 0.2);
+            border-radius: 18px;
+            padding: 1.6rem;
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+            box-shadow: 0 6px 20px rgba(107, 79, 126, 0.05);
+            transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .app-card::before {
+            content: "";
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 4px;
+            background: linear-gradient(90deg, #ff2d95, #008080, #0057b7);
+            opacity: 0.85;
+        }
+
+        .app-card:hover {
+            transform: translateY(-3px);
+            box-shadow: 0 12px 28px rgba(107, 79, 126, 0.12);
+            border-color: rgba(255, 45, 149, 0.45);
+        }
+
+        .app-header {
+            display: flex;
+            align-items: flex-start;
+            gap: 1rem;
+            margin-bottom: 0.9rem;
+        }
+
+        .app-icon-wrapper {
+            width: 52px;
+            height: 52px;
+            border-radius: 12px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.7rem;
+            flex-shrink: 0;
+            background: linear-gradient(135deg, #fff0f8, #f0e8ff);
+            border: 1px solid rgba(255, 93, 162, 0.3);
+            box-shadow: 0 4px 10px rgba(255, 93, 162, 0.12);
+        }
+        .app-icon-wrapper img {
+            width: 34px;
+            height: 34px;
+            display: block;
+        }
+
+        .app-title-area {
+            flex: 1;
+        }
+
+        .app-title {
+            font-size: 1.25rem;
+            font-weight: 700;
+            color: #1e293b;
+            margin: 0;
+            display: flex;
+            align-items: center;
+            gap: 0.45rem;
+            flex-wrap: wrap;
+        }
+
+        .app-subtitle-en {
+            font-size: 0.82rem;
+            font-weight: 600;
+            color: #64748b;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            margin-top: 0.15rem;
+        }
+
+        .app-badge {
+            font-size: 0.72rem;
+            font-weight: 700;
+            padding: 0.2rem 0.55rem;
+            border-radius: 6px;
+            background: #e0f2fe;
+            color: #0369a1;
+            border: 1px solid #bae6fd;
+            display: inline-block;
+        }
+
+        .app-badge.teal {
+            background: #e0f2f1;
+            color: #00695c;
+            border-color: #b2dfdb;
+        }
+
+        .app-badge.pink {
+            background: #fdf2f8;
+            color: #be185d;
+            border-color: #fbcfe8;
+        }
+
+        .app-badge.gold {
+            background: #fefce8;
+            color: #a16207;
+            border-color: #fef08a;
+        }
+
+        .app-desc-en {
+            font-size: 0.94rem;
+            color: #475569;
+            line-height: 1.6;
+            margin-bottom: 0.85rem;
+            font-weight: 500;
+        }
+
+        .app-desc-jp {
+            font-size: 0.92rem;
+            color: #1e293b;
+            line-height: 1.75;
+            background: #f8fafc;
+            border-left: 3px solid #008080;
+            padding: 0.75rem 0.9rem;
+            border-radius: 0 8px 8px 0;
+            margin-bottom: 1rem;
+        }
+
+        .app-features-list {
+            list-style: none;
+            padding: 0;
+            margin: 0;
+            display: flex;
+            flex-direction: column;
+            gap: 0.4rem;
+        }
+
+        .app-features-list li {
+            font-size: 0.86rem;
+            color: #334155;
+            display: flex;
+            align-items: center;
+            gap: 0.45rem;
+        }
+
+        .app-features-list li::before {
+            content: "◆";
+            color: #008080;
+            font-size: 0.68rem;
+        }
+
+        /* Settings Folder Section */
+        .settings-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+            gap: 1.4rem;
+            margin-top: 1.5rem;
+        }
+
+        .setting-card {
+            background: #ffffff;
+            border: 1.5px solid rgba(0, 87, 183, 0.18);
+            border-radius: 16px;
+            padding: 1.35rem 1.5rem;
+            box-shadow: 0 4px 16px rgba(0, 87, 183, 0.05);
+            transition: all 0.2s ease;
+        }
+
+        .setting-card:hover {
+            transform: translateY(-2px);
+            border-color: rgba(0, 87, 183, 0.45);
+            box-shadow: 0 8px 24px rgba(0, 87, 183, 0.12);
+        }
+
+        .setting-top {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            margin-bottom: 0.65rem;
+        }
+
+        .setting-icon {
+            background: #eff6ff;
+            width: 42px;
+            height: 42px;
+            border-radius: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border: 1px solid #bfdbfe;
+            flex-shrink: 0;
+        }
+        .setting-icon img {
+            width: 32px;
+            height: 32px;
+            display: block;
+        }
+
+        .setting-title {
+            font-size: 1.12rem;
+            font-weight: 700;
+            color: #0f172a;
+            margin: 0;
+        }
+
+        .setting-content-en {
+            font-size: 0.9rem;
+            color: #475569;
+            line-height: 1.55;
+            margin-bottom: 0.5rem;
+            font-weight: 500;
+        }
+
+        .setting-content-jp {
+            font-size: 0.88rem;
+            color: #334155;
+            line-height: 1.65;
+            background: #f1f5f9;
+            padding: 0.55rem 0.8rem;
+            border-radius: 6px;
+        }
+
+        /* Interactive Virtual Body / Real Body Simulation */
+        .vobj-demo-box {
+            background: #ffffff;
+            border: 2px solid #008080;
+            border-radius: 18px;
+            padding: 2rem;
+            margin: 2.5rem 0;
+            box-shadow: 0 10px 30px rgba(0, 128, 128, 0.1);
+        }
+
+        .vobj-diagram {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 1.5rem;
+            margin-top: 1.5rem;
+        }
+
+        @media (max-width: 800px) {
+            .vobj-diagram {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        .diagram-block {
+            background: #f8fafc;
+            border: 1px solid #e2e8f0;
+            border-radius: 12px;
+            padding: 1.25rem;
+        }
+
+        .diagram-block h4 {
+            font-size: 1.05rem;
+            color: #0f172a;
+            margin-bottom: 0.6rem;
+            display: flex;
+            align-items: center;
+            gap: 0.4rem;
+        }
+
+        /* Screenshots Strip */
+        .screens-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 1.4rem;
+            margin-top: 1.5rem;
+        }
+
+        .screen-thumb {
+            background: #ffffff;
+            border: 1px solid rgba(0,0,0,0.1);
+            border-radius: 12px;
+            overflow: hidden;
+            box-shadow: 0 4px 14px rgba(0,0,0,0.06);
+            transition: transform 0.2s ease;
+        }
+
+        .screen-thumb:hover {
+            transform: scale(1.02);
+        }
+
+        .screen-thumb img {
+            width: 100%;
+            height: auto;
+            display: block;
+            border-bottom: 1px solid #e2e8f0;
+        }
+
+        .screen-thumb-caption {
+            padding: 0.75rem 1rem;
+            font-size: 0.88rem;
+            color: #334155;
+            font-weight: 600;
+        }
+    
+        
+
+
+        
+        /* Option A: Lil Cube 64 Hopf Fibration Saint Aura Styles */
+        header {
+            position: relative;
+            overflow: hidden;
+            min-height: 98vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: radial-gradient(circle at 50% 36%, #0d122b 0%, #060817 55%, #02030a 100%);
+            color: #f8fafc;
+        }
+
+        #hopfCanvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 1;
+            pointer-events: none;
+            opacity: 0.60; /* Faded for ethereal backdrop harmony & peak text readability */
+        }
+
+        .hero-content {
+            position: relative;
+            z-index: 5;
+            width: 100%;
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 2.2rem 1.5rem;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+
+        /* High-contrast Celestial Banner Tag */
+        header .hero-banner-tag {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.5rem;
+            background: rgba(14, 165, 233, 0.18) !important;
+            border: 1.5px solid rgba(56, 189, 248, 0.65) !important;
+            color: #7dd3fc !important;
+            padding: 0.45rem 1.25rem !important;
+            border-radius: 999px !important;
+            font-size: 0.90rem !important;
+            font-weight: 700 !important;
+            letter-spacing: 0.04em !important;
+            margin-bottom: 1.2rem !important;
+            backdrop-filter: blur(12px) !important;
+            box-shadow: 0 4px 18px rgba(0, 0, 0, 0.5), 0 0 16px rgba(56, 189, 248, 0.25) !important;
+        }
+
+        header h1.jp-title {
+            color: #ffffff !important;
+            font-size: clamp(2.3rem, 5.4vw, 3.6rem) !important;
+            font-weight: 800 !important;
+            letter-spacing: -0.015em !important;
+            line-height: 1.2 !important;
+            margin: 0.2rem 0 1rem 0 !important;
+            text-shadow: 0 2px 24px rgba(0, 0, 0, 0.95), 0 0 35px rgba(14, 165, 233, 0.4) !important;
+        }
+
+        header .hero-subtitle {
+            color: #f8fafc !important;
+            font-size: 1.14rem !important;
+            line-height: 1.85 !important;
+            font-weight: 500 !important;
+            max-width: 880px !important;
+            margin: 0 auto 1.4rem auto !important;
+            text-shadow: 0 2px 14px rgba(0, 0, 0, 0.95), 0 1px 4px rgba(0, 0, 0, 0.9) !important;
+        }
+
+        /* Sacred Sanctuary Stage */
+        .saint-stage {
+            position: relative;
+            z-index: 10;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            margin: 1.2rem 0 2rem 0;
+        }
+
+        .saint-figure-wrapper {
+            position: relative;
+            width: 320px;
+            height: 320px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            user-select: none;
+        }
+
+        /* Luminous Holy Nimbus (Saint Halo) */
+        .saint-nimbus {
+            position: absolute;
+            width: 290px;
+            height: 290px;
+            border-radius: 50%;
+            background: radial-gradient(circle,
+                rgba(255, 245, 180, 0.45) 0%,
+                rgba(255, 140, 220, 0.35) 30%,
+                rgba(80, 240, 255, 0.25) 55%,
+                rgba(160, 100, 255, 0.12) 75%,
+                transparent 100%);
+            filter: blur(14px);
+            animation: saintNimbusGlow 4s ease-in-out infinite alternate;
+            pointer-events: none;
+        }
+
+        .saint-nimbus-rings {
+            position: absolute;
+            width: 260px;
+            height: 260px;
+            border-radius: 50%;
+            border: 2px dashed rgba(255, 230, 140, 0.7);
+            box-shadow: 0 0 25px rgba(255, 215, 80, 0.4), inset 0 0 20px rgba(80, 240, 255, 0.3);
+            animation: saintRingRotate 22s linear infinite;
+            pointer-events: none;
+        }
+
+        .saint-nimbus-rings::before {
+            content: '';
+            position: absolute;
+            inset: -14px;
+            border-radius: 50%;
+            border: 1.5px solid rgba(255, 160, 230, 0.5);
+            box-shadow: 0 0 14px rgba(255, 120, 220, 0.35);
+            animation: saintRingRotateRev 16s linear infinite;
+        }
+
+        .saint-nimbus-rings::after {
+            content: '';
+            position: absolute;
+            inset: 14px;
+            border-radius: 50%;
+            border: 1px dotted rgba(100, 255, 255, 0.75);
+        }
+
+        @keyframes saintNimbusGlow {
+            0%   { transform: scale(0.94); filter: blur(12px) brightness(1.0); }
+            100% { transform: scale(1.10); filter: blur(18px) brightness(1.3); }
+        }
+
+        @keyframes saintRingRotate {
+            from { transform: rotate(0deg); }
+            to   { transform: rotate(360deg); }
+        }
+
+        @keyframes saintRingRotateRev {
+            from { transform: rotate(360deg); }
+            to   { transform: rotate(0deg); }
+        }
+
+        /* Low-Poly 3D Lil Cube 64 Body Stage */
+        .saint-3d-box {
+            position: relative;
+            z-index: 6;
+            width: 280px;
+            height: 260px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: grab;
+            touch-action: none;
+        }
+
+        .saint-3d-box:active {
+            cursor: grabbing;
+        }
+
+        #mascot3dCanvas {
+            width: 100% !important;
+            height: 100% !important;
+            display: block;
+            outline: none;
+            filter: drop-shadow(0 14px 28px rgba(0, 255, 255, 0.55)) drop-shadow(0 0 24px rgba(255, 215, 0, 0.45));
+        }
+
+        .saint-pedestal-shadow {
+            position: absolute;
+            bottom: 20px;
+            width: 155px;
+            height: 20px;
+            background: radial-gradient(ellipse at center, rgba(0, 255, 255, 0.6) 0%, rgba(255, 215, 0, 0.35) 50%, transparent 80%);
+            border-radius: 50%;
+            filter: blur(5px);
+            z-index: 4;
+            transition: transform 0.12s ease-out, opacity 0.12s ease-out;
+            pointer-events: none;
+        }
+
+        /* Sacred Dialogue Bubble */
+        .saint-speech-bubble {
+            background: rgba(8, 12, 32, 0.95);
+            border: 2px solid rgba(250, 204, 21, 0.88);
+            border-radius: 20px;
+            padding: 1.25rem 2rem;
+            max-width: 660px;
+            margin-top: 1.2rem;
+            color: #ffffff;
+            box-shadow: 0 14px 45px rgba(0, 0, 0, 0.8), 0 0 30px rgba(250, 204, 21, 0.25);
+            backdrop-filter: blur(20px);
+            text-align: center;
+            user-select: none;
+            cursor: pointer;
+            transition: all 0.25s ease;
+        }
+
+        .saint-speech-bubble:hover {
+            border-color: #38bdf8;
+            box-shadow: 0 16px 50px rgba(56, 189, 248, 0.4);
+            transform: translateY(-2px);
+        }
+
+        .saint-math-badge {
+            display: inline-block;
+            background: linear-gradient(135deg, rgba(234, 179, 8, 0.3), rgba(6, 182, 212, 0.3));
+            border: 1.5px solid rgba(250, 204, 21, 0.85);
+            border-radius: 999px;
+            padding: 4px 18px;
+            font-size: 0.82rem;
+            font-weight: 800;
+            letter-spacing: 0.08em;
+            color: #fef08a;
+            margin-bottom: 0.65rem;
+            text-shadow: 0 0 12px rgba(234, 179, 8, 0.7);
+        }
+
+        .saint-quote-text {
+            font-size: 1.08rem;
+            line-height: 1.7;
+            color: #ffffff;
+            font-weight: 600;
+            text-shadow: 0 1px 4px rgba(0, 0, 0, 0.9);
+        }
+
+        /* Circular Motion Interactive Cue Badge */
+        .saint-interaction-hint {
+            margin-top: 0.75rem;
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 0.82rem;
+            font-weight: 600;
+            color: #7dd3fc;
+            background: rgba(14, 165, 233, 0.15);
+            border: 1px solid rgba(56, 189, 248, 0.45);
+            border-radius: 999px;
+            padding: 4px 16px;
+            backdrop-filter: blur(8px);
+            text-shadow: 0 1px 4px rgba(0, 0, 0, 0.85);
+            animation: hintPulse 3s ease-in-out infinite;
+        }
+
+        @keyframes hintPulse {
+            0%, 100% { opacity: 0.85; transform: scale(1); }
+            50% { opacity: 1; transform: scale(1.02); }
+        }
+
+        /* Holiness Dashboard Controls */
+        .saint-dashboard {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            justify-content: center;
+            gap: 0.75rem;
+            margin-top: 1.3rem;
+            z-index: 10;
+        }
+
+        .saint-btn {
+            background: rgba(15, 23, 42, 0.92);
+            border: 1.5px solid rgba(148, 163, 184, 0.55);
+            color: #f8fafc;
+            padding: 9px 18px;
+            border-radius: 999px;
+            font-size: 0.88rem;
+            font-weight: 600;
+            cursor: pointer;
+            box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5);
+            backdrop-filter: blur(12px);
+            transition: all 0.2s cubic-bezier(0.25, 1, 0.5, 1);
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            text-shadow: 0 1px 2px rgba(0, 0, 0, 0.8);
+        }
+
+        .saint-btn:hover {
+            background: rgba(30, 41, 59, 0.98);
+            border-color: #38bdf8;
+            color: #ffffff;
+            transform: translateY(-2px);
+            box-shadow: 0 6px 24px rgba(56, 189, 248, 0.35);
+        }
+
+        .saint-btn.active {
+            background: linear-gradient(135deg, rgba(236, 72, 153, 0.45), rgba(6, 182, 212, 0.45));
+            border-color: #38bdf8;
+            color: #ffffff;
+            box-shadow: 0 0 20px rgba(56, 189, 248, 0.5);
+        }
+
+        header .pdf-badge {
+            font-weight: 700 !important;
+            color: #ffffff !important;
+            border: 1px solid rgba(255, 255, 255, 0.3) !important;
+            box-shadow: 0 4px 14px rgba(0, 0, 0, 0.5) !important;
+            backdrop-filter: blur(8px) !important;
+        }
+
+        /* Glassmorphic lead box styling for Option A */
+        .hero-lead-box {
+            background: rgba(14, 18, 42, 0.85) !important;
+            border: 1px solid rgba(255, 255, 255, 0.2) !important;
+            backdrop-filter: blur(20px) !important;
+            box-shadow: 0 16px 40px rgba(0, 0, 0, 0.5) !important;
+            color: #f1f5f9 !important;
+        }
+        .hero-lead-box h2, .hero-lead-box p, .hero-lead-box li {
+            color: #f8fafc !important;
+        }
+
+        </style>
+</head>
+<body>
+
+
+
+
+
+    <nav class="sticky">
+        <div class="nav-container">
+            <a href="index.html" class="logo"><img width="48" src="https://n2o.dev/img/synrc.svg" alt="Synrc Logo"></a>
+            <button class="nav-toggle" aria-label="Toggle navigation" onclick="document.querySelector('.nav-links').classList.toggle('open'); this.classList.toggle('open');">
+                <span class="hamburger"></span>
+            </button>
+            <ul class="nav-links">
+                <li><a href="index.html" class="active" style="color: var(--accent); font-weight:700;">B-System</a></li>
+                <li><a href="b-book/index.html">B-Book</a></li>
+                <li><a href="conformance.html">B-Spec</a></li>
+                <li><a href="virtio.html">VirtIO</a></li>
+                <li><a href="mobile.html">FOMA</a></li>
+                <li><a href="releases.html">Releases</a></li>
+                <li><a href="https://github.com/bitedits/btron">GitHub</a></li>
+            </ul>
+        </div>
+    </nav>
+
+    <header>
+        <!-- Celestial Hopf Fibration Canvas Layer -->
+        <canvas id="hopfCanvas"></canvas>
+        <div class="hero-content">
+            <div class="hero-banner-tag" style="margin-top: 10px;">
+                <span>🌸</span> BTRON3 × Synrc VE OS.1 次世代コンシューマOS仕様
+            </div>
+            <h1 class="jp-title">B-System OS 体系構造</h1>
+            <p class="hero-subtitle">日本のユーザー、BTRONを愛する研究者・クリエイターへ贈る——<br>実身・仮身ハイパーメディアモデルとBeOSの精神が融合した超応答型コンシューマ環境</p>
+
+            
+            
+        <!-- Option A: Saint Lil Cube 64 with Low-Poly 3D & Hopf Fibration Holiness Aura -->
+        <div class="saint-stage" id="saintStage">
+            <div class="saint-figure-wrapper" id="saintFigure" title="聖なるリル・キューブ64をつつく・ドラッグして3D回転！ (Poke or drag 3D Saint Lil Cube 64!)">
+                <div class="saint-nimbus" id="saintNimbus"></div>
+                <div class="saint-nimbus-rings"></div>
+                <div class="saint-3d-box" id="mascot3dContainer">
+                    <canvas id="mascot3dCanvas"></canvas>
+                </div>
+                <div class="saint-pedestal-shadow" id="mascot3dPedestal"></div>
+            </div>
+            <div class="saint-speech-bubble" id="saintBubble">
+                <div class="saint-math-badge">✨ 4次元球面 S³ ホップ束 (Hopf Fibration) 顕現 ✨</div>
+                <div class="saint-quote-text" id="saintQuoteText">「ボクはリル・キューブ64… 低ポリゴン3Dで動き回る聖なる氷晶だキューブ！🧊✨」</div>
+            </div>
+            <div class="saint-interaction-hint" id="saintHint">
+                <span class="hint-icon">💫</span> マウスを円状に旋回させると4次元ホップ束が回転・ドラッグでキューブを3D回転 (Swirl mouse in circles / drag cube)
+            </div>
+            <div class="saint-dashboard">
+                <button id="blessingBtn" class="saint-btn" onclick="triggerBlessing()">🌟 神聖祈願 (Sacred Pulse)</button>
+                <button id="waddleBtn" class="saint-btn" onclick="triggerKirbyWaddle()">🐾 てくてく歩行 (Waddle)</button>
+                <button id="floatBtn" class="saint-btn" onclick="triggerKirbyFloat()">🎈 ぷかぷか飛行 (Float)</button>
+                <button id="danceBtn" class="saint-btn" onclick="triggerKirbyDance()">🕺 勝利のダンス (Dance)</button>
+                <button id="dispersionBtn" class="saint-btn active" onclick="toggleDispersion()">🌈 分光モード: ON</button>
+                <button id="soundToggleBtn" class="saint-btn" onclick="toggleSound()" style="border-color: #00ffff; color: #00ffff;">🔊 聖なる天球音楽: ON</button>
+                <button id="densityBtn" class="saint-btn" onclick="cycleDensity()">🪐 繊維環: 36環</button>
+            </div>
+        </div>
+
+
+
+            <div style="margin-top: 1.8rem; display: flex; flex-wrap: wrap; gap: 0.8rem; justify-content: center;">
+                <a href="index.html" class="pdf-badge" style="background:#475569;">← System Plane (Main)</a>
+                <a href="b-system/index.html" class="pdf-badge" style="background:#008080;">📖 開発者仕様書</a>
+                <a href="b-spec/index.html" class="pdf-badge" style="background:#008080;">📖 BTRON3 3.20 SPEC</a>
+                <a href="conformance.html" class="pdf-badge" style="background: linear-gradient(135deg, #0057b7, #283593); color:white;">📊 準拠性監査 (Conformance Audit)</a>
+            </div>
+        </div>
+    </header>
+
+    <main>
+        <!-- Application Architecture Section -->
+        <section id="applications-section">
+            <div style="text-align: center; max-width: 900px; margin: 0 auto 1.5rem auto;">
+                <span class="app-badge teal" style="font-size:0.85rem; padding: 0.35rem 0.8rem; margin-bottom: 0.5rem;">CORE SUITE</span>
+                <h2 class="jp-title" style="font-size: 2.1rem; margin-top: 0.3rem;">B-System アプリケーション体系 (Applications)</h2>
+                <p style="color: #334155; font-weight: 500; font-size: 1.05rem;">すべてのツールが実身（Real Body）を共有し、仮身（Virtual Body）として相互に埋め込み可能な19のネイティブ環境</p>
+            </div>
+
+            <!-- Search & Category Filters -->
+            <div class="filter-container">
+                <div class="search-input-wrapper">
+                    <span class="search-icon">🔍</span>
+                    <input type="text" id="appSearchInput" class="search-input" placeholder="アプリケーションや機能（例: TAD, メディア, 仮想オブジェクト）を検索..." onkeyup="filterApps()">
+                </div>
+                <div class="filter-buttons">
+                    <button class="filter-btn active" onclick="setAppFilter('all', this)">すべて表示 (19)</button>
+                    <button class="filter-btn" onclick="setAppFilter('system', this)">システム (System)</button>
+                    <button class="filter-btn" onclick="setAppFilter('tad', this)">TAD (知識・文書)</button>
+                    <button class="filter-btn" onclick="setAppFilter('media', this)">メディア (Media)</button>
+                </div>
+            </div>
+
+                        <div class="app-grid" id="appsContainer">
+                
+                <!-- 1. Cassette -->
+                <div class="app-card" data-category="media" data-keywords="cassette カセット deck audio player mediapulse sony tape dolby vu meter Real Body tad Virtual Body">
+                    <div>
+                        <div class="app-header">
+                            <div class="app-icon-wrapper"><img src="https://openmoji.org/data/color/svg/1F4FC.svg" alt="📼" width="34" height="34"></div>
+                            <div class="app-title-area">
+                                <h3 class="app-title"><a href="b-system/apps/Cassette.html" style="color:inherit;text-decoration:none;">Cassette</a> <span class="app-badge teal">リアルタイム音響</span></h3>
+                                <div class="app-subtitle-en">Stereo Cassette Deck</div>
+                            </div>
+                        </div>
+                        <div class="app-desc-en">
+                            Precision Hi-Fi stereo cassette deck and real-time audio player implemented in <code>src/apps/audio_player.c</code>. Features Type I-IV cassette tape selector, Dolby B-C NR, HX Pro headroom extension, animated rotating tape spools, and 16-segment dual-channel peak VU meters.
+                        </div>
+                        <div class="app-desc-jp">
+                            <b>カセット（Cassette Deck）：</b> の設計思想を忠実に再現したBTRONネイティブの高精度ステレオカセットデッキ（<code>src/apps/audio_player.c</code>）。チタンスレートとグラファイトのSONYワークステーション意匠、磁気テープ巻取りアニメーション、4種カセットテープ対応（Type I-IV）、ドルビーB-C NR / HX Pro、および16セグメント高精度デジタルピークVUメーターを完全装備。
+                        </div>
+                    </div>
+                    <ul class="app-features-list">
+                        <li>カセットデッキ＆4種テープセレクター（Type I-IV）</li>
+                        <li>ドルビーB-C NR ＆ HX Proヘッドルーム拡張、16セグメントVUメーター</li>
+                        <li>磁気テープ巻取り物理シミュレーションとリアルタイムTAD音声埋め込み</li>
+                    </ul>
+                </div>
+
+                <!-- 2. Workbench -->
+                <div class="app-card" data-category="system" data-keywords="workbench ワークベンチ spatial desktop ctwm haiku deskbar root menu pure c99 workspace launcher">
+                    <div>
+                        <div class="app-header">
+                            <div class="app-icon-wrapper"><img src="https://openmoji.org/data/color/svg/1F5A5.svg" alt="🗄️" width="34" height="34"></div>
+                            <div class="app-title-area">
+                                <h3 class="app-title"><a href="b-system/apps/Workbench.html" style="color:inherit;text-decoration:none;">Workbench</a> <span class="app-badge pink">空間デスクトップ＆メニュー</span></h3>
+                                <div class="app-subtitle-en">Spatial Desktop &amp; System Menu (BeOS-like / CTWM)</div>
+                            </div>
+                        </div>
+                        <div class="app-desc-en">
+                            Spatial desktop canvas and central root menu inspired by CTWM and Haiku Deskbar. Implemented in pure C99 (<code>src/apps/workbench.c</code>, <code>src/desktop/main.c</code>, <code>tracker.c</code>) for instant workspace and task switching.
+                        </div>
+                        <div class="app-desc-jp">
+                            <b>ワークベンチ：</b> CTWMやHaiku Deskbarの軽快さを継承した純粋C99製デスクトップ＆システムメニュー。実体コード（<code>src/apps/workbench.c</code>, <code>src/desktop/desktop.c</code>, <code>tracker.c</code>）により、空間キャンバス、仮想ワークスペース、タスク管理、STARTボタン階層型ルートランチャーを提供。
+                        </div>
+                    </div>
+                    <ul class="app-features-list">
+                        <li>実体実装：<code>workbench.c</code> ＆ <code>desktop.c</code>（コンポジタ）</li>
+                        <li>Haiku流 STARTボタン＆タスク追跡：<code>src/desktop/tracker.c</code></li>
+                        <li>純粋C99システム設計（仮想ワークスペース・タスク切り替え）</li>
+                    </ul>
+                </div>
+
+                <!-- 3. Cabinet Explorer -->
+                <div class="app-card" data-category="tad" data-keywords="cabinet explorer キャビネット エクスプローラー real virtual body vobj tad api hypermedia fusen links">
+                    <div>
+                        <div class="app-header">
+                            <div class="app-icon-wrapper"><img src="https://openmoji.org/data/color/svg/1F4C1.svg" alt="📁" width="34" height="34"></div>
+                            <div class="app-title-area">
+                                <h3 class="app-title"><a href="b-system/apps/Cabinet.html" style="color:inherit;text-decoration:none;">Cabinet</a> <span class="app-badge teal">実身・仮身キャビネット</span></h3>
+                                <div class="app-subtitle-en">Real Body Cabinet &amp; Virtual Body Explorer (TAD API)</div>
+                            </div>
+                        </div>
+                        <div class="app-desc-en">
+                            Official hypermedia object navigator implemented in <code>src/apps/cabinet.c</code> and <code>src/apps/vobj_manager.c</code>. Browse Real Body cabinets, inspect Virtual Body fusen links, and manage hypermedia networks across the OS.
+                        </div>
+                        <div class="app-desc-jp">
+                            <b>キャビネット・エクスプローラー：</b> BTRON TAD APIに直結した公式ハイパーメディア・オブジェクトマネージャ（<code>src/apps/cabinet.c</code>, <code>vobj_manager.c</code>）。実身（Real Body）と仮身（Virtual Body）のリンク網を可視化し、グリッド・リスト両表示でキャビネット構造を管理。
+                        </div>
+                    </div>
+                    <ul class="app-features-list">
+                        <li>TAD API直結による実身・仮身リレーションの双方向ブラウジング</li>
+                        <li>グリッド表示・詳細リスト表示の瞬時切り替え（CAB_VIEW_MODE）</li>
+                        <li>EditorおよびTAD Browserへのシームレスなドキュメント展開</li>
+                    </ul>
+                </div>
+
+                <!-- 4. Editor -->
+                <div class="app-card" data-category="tad" data-keywords="Editor Editor tエディタ wordpad ワープロ rich text word processor styles margins auto layout tad fusen mozc">
+                    <div>
+                        <div class="app-header">
+                            <div class="app-icon-wrapper"><img src="https://openmoji.org/data/color/svg/270D.svg" alt="✍️" width="34" height="34"></div>
+                            <div class="app-title-area">
+                                <h3 class="app-title"><a href="b-system/apps/Editor.html" style="color:inherit;text-decoration:none;">Editor</a> <span class="app-badge pink">汎用ワードプロセッサ</span></h3>
+                                <div class="app-subtitle-en">Wordpad-Class Word Processor with Basic Auto TAD Layout</div>
+                            </div>
+                        </div>
+                        <div class="app-desc-en">
+                            Clean, lightweight Wordpad-class word processor for everyday writing and memos. Implemented in <code>src/apps/t_editor.c</code> with a basic automatic TAD layouter, paragraph styles, margins, and inline Real Body / Fusen embedding.
+                        </div>
+                        <div class="app-desc-jp">
+                            <b>Tエディタ：</b> Windows Wordpadのような超軽快さと直感性を誇る日常業務・執筆用汎用ワードプロセッサ（<code>src/apps/t_editor.c</code>）。基本自動TADレイアウトエンジン（自動行折り返し・余白揃え）、見出しスタイル、ルーラーを完備し、画像・音声・Matrix表計算を実身としてインライン直接挿入。
+                        </div>
+                    </div>
+                    <ul class="app-features-list">
+                        <li>基本自動TADレイアウト（行幅に応じた高速自動行折り返し・余白揃え）</li>
+                        <li>実身インライン埋め込み（画像・音声・Matrix表計算の直接挿入）</li>
+                        <li>Mozc TIP 日本語入力完全統合（F6〜F10ファンクションキー変換）</li>
+                    </ul>
+                </div>
+
+                <!-- 5. Matrix -->
+                <div class="app-card" data-category="tad" data-keywords="matrix マトリクス 表計算 spreadsheet apl iverson vector financial timeseries nyse nasdaq tick analytics">
+                    <div>
+                        <div class="app-header">
+                            <div class="app-icon-wrapper"><img src="https://openmoji.org/data/color/svg/1F4CA.svg" alt="📊" width="34" height="34"></div>
+                            <div class="app-title-area">
+                                <h3 class="app-title"><a href="b-system/apps/Matrix.html" style="color:inherit;text-decoration:none;">Matrix</a> <span class="app-badge teal">表計算・APL数理解析</span></h3>
+                                <div class="app-subtitle-en">2D Calculation Grid &amp; APL Vector Processor (TAD API)</div>
+                            </div>
+                        </div>
+                        <div class="app-desc-en">
+                            High-throughput calculation spreadsheet with native Iverson APL vector math engine (<code>src/apps/matrix.c</code>, <code>matrix_apl.c</code>). Process NYSE/Nasdaq tick streams, matrix inversions, and live TAD cell embeddings.
+                        </div>
+                        <div class="app-desc-jp">
+                            <b>マトリクス：</b> 2次元計算グリッドにIverson APLベクトル配列演算エンジンを統合した超高速表計算環境（<code>src/apps/matrix.c</code>, <code>matrix_apl.c</code>）。NYSE/Nasdaq金融ティック時系列処理、SIMD並列計算、およびEditor/Clarityへのセル埋め込み連動に対応。
+                        </div>
+                    </div>
+                    <ul class="app-features-list">
+                        <li>ネイティブAPLベクトル配列計算プロセッサ（Iverson記法完全対応）</li>
+                        <li>NYSE/Nasdaqティックデータおよび金融数理モデルの高速解析</li>
+                        <li>セル内TAD実身埋め込み＆Editor/Clarityへの連動更新埋め込み</li>
+                    </ul>
+                </div>
+
+                                <!-- 6. Clarity -->
+                <div class="app-card" data-category="tad" data-keywords="clarity クラリティ quark xpress dtp publishing layout frames master pages baseline grid pecha tibetan 和装本 縦書き 美濃判 四六判 菊判 文庫判 live tad source linking">
+                    <div>
+                        <div class="app-header">
+                            <div class="app-icon-wrapper"><img src="https://openmoji.org/data/color/svg/1F4D6.svg" alt="📖" width="34" height="34"></div>
+                            <div class="app-title-area">
+                                <h3 class="app-title"><a href="b-system/apps/Clarity.html" style="color:inherit;text-decoration:none;">Clarity</a> <span class="app-badge gold">DTP組版出版＆伝統文化保全</span></h3>
+                                <div class="app-subtitle-en">QuarkXPress-Class DTP, Native Horizontal Pecha (དཔེ་ཆ་) &amp; Japanese Legacy Formats (和装本・和式伝統判型)</div>
+                            </div>
+                        </div>
+                        <div class="app-desc-en">
+                            QuarkXPress-class professional publishing system (<code>src/apps/clarity.c</code>) with dynamic Cabinet source gathering, <strong>Horizontal Tibetan Pecha (དཔེ་ཆ་)</strong> loose-leaf formatting, and full <strong>Japanese Legacy Paper Formats (美濃判, 半紙, 四六判, 菊判, 文庫判, 短冊, 和装本袋綴じ)</strong> with vertical right-to-left typography.
+                        </div>
+                        <div class="app-desc-jp">
+                            <b>クラリティ（Clarity）：</b> QuarkXPress 4.0を凌駕するDTP組版出版環境（<code>src/apps/clarity.c</code>）。<b>チベット伝統Pecha横長判型（དཔེ་ཆ་）</b>および<b>日本固有伝統判型（美濃判・半紙・四六判・菊判・新書判・文庫判・大奉書・短冊・色紙・和装本袋綴じ等）</b>を第一級文化保全機能として完全宣言・実装。ルビ、割注、禁則処理、縦中横の精密縦書き組版に対応。
+                        </div>
+                    </div>
+                    <ul class="app-features-list">
+                        <li>チベットPecha横長判型（デルゲ版・大蔵経判・朱黒二重枠・余白葉番号・割注）</li>
+                        <li>日本固有伝統判型14種＆高精度縦書き組版（ルビ・割注・禁則処理・行取り）</li>
+                        <li>キャビネットTADソース動的集約（原稿更新が紙面組版へ自動リアルタイム連動）</li>
+                    </ul>
+                </div>
+
+                <!-- 7. Notebook -->
+                <div class="app-card" data-category="tad" data-keywords="notebook ノートブック mathematica jupyter interactive cell scientist scientific lab matrix apl scheme python wasm vm">
+                    <div>
+                        <div class="app-header">
+                            <div class="app-icon-wrapper"><img src="https://openmoji.org/data/color/svg/1F4D3.svg" alt="📓" width="34" height="34"></div>
+                            <div class="app-title-area">
+                                <h3 class="app-title"><a href="b-system/apps/Notebook.html" style="color:inherit;text-decoration:none;">Notebook</a> <span class="app-badge teal">科学計算ノートブック</span></h3>
+                                <div class="app-subtitle-en">Interactive Mathematica &amp; Jupyter-Style Scientific Notebook (TAD + Language VMs)</div>
+                            </div>
+                        </div>
+                        <div class="app-desc-en">
+                            Interactive computational laboratory for scientists (<code>src/apps/notebook.c</code>, <code>notebook_vm.c</code>). Features live reactive cells, direct Matrix TAD dataset inputs, and multi-language VMs (APL, Scheme/Lisp, Python/Wasm, Micro-VMs).
+                        </div>
+                        <div class="app-desc-jp">
+                            <b>ノートブック：</b> MathematicaやJupyterスタイルの科学者向け対話型計算ノートブック（<code>src/apps/notebook.c</code>, <code>notebook_vm.c</code>）。実行可能セル、Matrix生データ直結、多言語VM（APL, Lisp, Python/Wasm）による数理シミュレーションとインライン作図を提供。
+                        </div>
+                    </div>
+                    <ul class="app-features-list">
+                        <li>対話型セル実行＆Matrix TADデータソース直結</li>
+                        <li>マルチ言語VMディスパッチャー（APL、Scheme/Lisp、Python/Wasm、C Micro-VM）</li>
+                        <li>Review査読注釈からの数式・パラメータ直接引用と実験再現性保証</li>
+                    </ul>
+                </div>
+
+                                <!-- 8. Review -->
+                <div class="app-card" data-category="tad" data-keywords="review レビュー 査読 学術査読 科学pdfリーダー ocr annotation paper citations tad real body cabinet clarity notebook">
+                    <div>
+                        <div class="app-header">
+                            <div class="app-icon-wrapper"><img src="https://openmoji.org/data/color/svg/1F50D.svg" alt="🔍" width="34" height="34"></div>
+                            <div class="app-title-area">
+                                <h3 class="app-title"><a href="b-system/apps/Review.html" style="color:inherit;text-decoration:none;">Review</a> <span class="app-badge teal">学術査読＆科学PDF</span></h3>
+                                <div class="app-subtitle-en">High-Performance Scientific Review &amp; TAD Peer-Review Annotation Engine</div>
+                            </div>
+                        </div>
+                        <div class="app-desc-en">
+                            Vector scientific PDF reader and peer-review workspace (<code>src/apps/review.c</code>) equipped with the <strong>PDF TAD Annotation Engine</strong> (<code>src/apps/pdf_tad_anno.c</code>). Saves peer-review marginalia and extracted equations directly as TAD Real Bodies in Cabinet for Notebook &amp; Clarity.
+                        </div>
+                        <div class="app-desc-jp">
+                            <b>レビュー（Review）：</b> 学術論文・技術仕様書の精読と査読に特化した高速科学PDFリーダー＆査読ワークスペース（<code>src/apps/review.c</code>）。TAD注釈エンジン（<code>pdf_tad_anno.c</code>）により、欄外メモや抽出数式を独立したTAD実身としてキャビネットへ永続保存し、NotebookやClarityへ即時引用。
+                        </div>
+                    </div>
+                    <ul class="app-features-list">
+                        <li>高精細ベクターPDF描画とミリ秒単位の超高速ページ送り</li>
+                        <li>TAD査読注釈エンジン（<code>pdf_tad_anno.c</code>）によるキャビネット実身自動永続化</li>
+                        <li>Notebook（計算検証引用）およびClarity（学術文献引用）へのシームレス知識連携</li>
+                    </ul>
+                </div>
+
+                <!-- 9. Browser -->
+                <div class="app-card" data-category="tad" data-keywords="browser ブラウザ tad browser html plugin html2tad netsurf web conversion filter real body">
+                    <div>
+                        <div class="app-header">
+                            <div class="app-icon-wrapper"><img src="https://openmoji.org/data/color/svg/1F310.svg" alt="🌐" width="34" height="34"></div>
+                            <div class="app-title-area">
+                                <h3 class="app-title"><a href="b-system/apps/Browser.html" style="color:inherit;text-decoration:none;">Browser</a> <span class="app-badge teal">ネイティブTADブラウザ</span></h3>
+                                <div class="app-subtitle-en">Native TAD Document Browser with Modular HTML-to-TAD Plugin (TAD API)</div>
+                            </div>
+                        </div>
+                        <div class="app-desc-en">
+                            High-performance native TAD document browser (<code>src/apps/tad_browser.c</code>) focused on pure TAD hypermedia. Web (HTML4/CSS) support is modularized as an extensible <strong>HTML-to-TAD Plugin Filter</strong> (<code>src/apps/browser_html_plugin.c</code>) for deterministic speed and security.
+                        </div>
+                        <div class="app-desc-jp">
+                            <b>ブラウザ：</b> BTRON3 TAD文書の超高速閲覧に特化したネイティブブラウザ（<code>src/apps/tad_browser.c</code>）。Webページ閲覧は「HTML→TAD変換プラグイン（<code>src/apps/browser_html_plugin.c</code>）」として分離され、Web知識を安全かつ永続的なTAD実身へとコンパイルして取り込みます。
+                        </div>
+                    </div>
+                    <ul class="app-features-list">
+                        <li>ネイティブTADハイパーメディア文書の超高速・高精細レンダリング</li>
+                        <li>モジュール型HTMLプラグインによるWebページのワンクリックTAD実身化</li>
+                        <li>Web脆弱性を排除した決定論的かつ安全なクリーンルームC99設計</li>
+                    </ul>
+                </div>
+
+                <!-- 10. Chat -->
+                <div class="app-card" data-category="tad" data-keywords="chat チャット xmpp tad layouter Editor simplified wordpad messaging realtime fusen stickers">
+                    <div>
+                        <div class="app-header">
+                            <div class="app-icon-wrapper"><img src="https://openmoji.org/data/color/svg/1F4AC.svg" alt="💬" width="34" height="34"></div>
+                            <div class="app-title-area">
+                                <h3 class="app-title"><a href="b-system/apps/Chat.html" style="color:inherit;text-decoration:none;">Chat</a> <span class="app-badge pink">リアルタイムTAD対話</span></h3>
+                                <div class="app-subtitle-en">Native TAD Real-Time Messaging with Simplified Editor Layouter (XMPP)</div>
+                            </div>
+                        </div>
+                        <div class="app-desc-en">
+                            Native TAD real-time messaging application (<code>src/apps/chat.c</code>, <code>chat_xml.c</code>). Features a simplified Wordpad-class TAD layouter from Editor for rich formatting, inline Fusen stickers, live Real Body drops, and chat transcript archiving.
+                        </div>
+                        <div class="app-desc-jp">
+                            <b>チャット：</b> XMPPプロトコル基盤に、Editorから継承された「簡易TADレイアウター」を搭載したリアルタイム対話クライアント（<code>src/apps/chat.c</code>, <code>chat_xml.c</code>）。発言バブル内でのリッチテキスト・仮身付箋表示、画像・計算式の直接ドロップ共有に対応。
+                        </div>
+                    </div>
+                    <ul class="app-features-list">
+                        <li>Editor派生の簡易自動TADレイアウターによるリッチ発言バブル描画</li>
+                        <li>インライン仮身付箋（Fusen）および実身（画像・数式・コード）の即時ドロップ送信</li>
+                        <li>対話ログのワンクリックTAD実身化とキャビネット永続アーカイブ</li>
+                    </ul>
+                </div>
+
+                <!-- MicroScript -->
+                <div class="app-card" data-category="tad" data-keywords="microscript マイクロスクリプト 超漢字 cho-kanji hypermedia card stage figure interpreter script event driven power of 10 pure c99">
+                    <div>
+                        <div class="app-header">
+                            <div class="app-icon-wrapper"><img src="https://openmoji.org/data/color/svg/1F4DC.svg" alt="📜" width="34" height="34"></div>
+                            <div class="app-title-area">
+                                <h3 class="app-title"><a href="b-system/apps/MicroScript.html" style="color:inherit;text-decoration:none;">MicroScript</a> <span class="app-badge teal">超漢字ハイパーメディア</span></h3>
+                                <div class="app-subtitle-en">Event-Driven Cho-Kanji Hypermedia Stage Interpreter (Cards · Figures · Script)</div>
+                            </div>
+                        </div>
+                        <div class="app-desc-en">
+                            Clean-room recreation (<code>src/chokanji/microscript.c</code>) of the Cho-Kanji / MicroEngine event-driven hypermedia language. Interprets card-based stages, figure-button navigation and scriptable integer/string state on a fixed-footprint, loop-bounded C99 runtime adhering to NASA JPL Power of 10 rules.
+                        </div>
+                        <div class="app-desc-jp">
+                            <b>マイクロスクリプト：</b> 超漢字／MicroEngine由来のイベント駆動ハイパーメディア言語をクリーンルーム再現した組込み解釈系（<code>src/chokanji/microscript.c</code>）。カード（ステージ）間のリンク、図形ボタンの押下イベント、<code>go card</code>／<code>say</code>／<code>set</code> による状態制御を、初期化後の動的確保ゼロ・全ループ有界の確定論的C99ランタイムで実行。
+                        </div>
+                    </div>
+                    <ul class="app-features-list">
+                        <li>カード（ステージ）とフィギュア（図形ボタン）による非線形ハイパーメディア遷移</li>
+                        <li><code>go card</code> / <code>say</code> / <code>set</code> の確定論的行指向スクリプト解釈系</li>
+                        <li>Power of 10準拠：静的データモデル・有界ループ・クライアント局所座標描画</li>
+                    </ul>
+                </div>
+
+                <!-- 11. Mail -->
+                <div class="app-card" data-category="system" data-keywords="mail メール imap smtp maildir email inbox system application deskbar notification">
+                    <div>
+                        <div class="app-header">
+                            <div class="app-icon-wrapper"><img src="https://openmoji.org/data/color/svg/2709.svg" alt="📧" width="34" height="34"></div>
+                            <div class="app-title-area">
+                                <h3 class="app-title"><a href="b-system/apps/Mail.html" style="color:inherit;text-decoration:none;">Mail</a> <span class="app-badge teal">システム電子メール</span></h3>
+                                <div class="app-subtitle-en">Native System Email, IMAP/SMTP Client &amp; Mailbox Manager (System Plane)</div>
+                            </div>
+                        </div>
+                        <div class="app-desc-en">
+                            Official system-level email client (<code>src/apps/mail.c</code>, <code>mail_client.c</code>). Handles high-throughput IMAP4/SMTP mailboxes, multi-account inboxes, threaded messages, and Deskbar notifications without bloated web runtimes.
+                        </div>
+                        <div class="app-desc-jp">
+                            <b>メール：</b> B-System基本システム層（System Plane）に位置する公式電子メールクライアント（<code>src/apps/mail.c</code>, <code>mail_client.c</code>）。IMAP4/SMTP/Maildir完全対応、マルチアカウント受信箱、スレッド表示、Deskbar新着通知を軽快なC99設計で提供。
+                        </div>
+                    </div>
+                    <ul class="app-features-list">
+                        <li>純粋C99製高速IMAP4/SMTP通信＆マルチアカウント受信箱管理</li>
+                        <li>システム基本アプリ（System App）としての確実なバックグラウンド常駐</li>
+                        <li>Deskbarタスクトレイ連動の新着メール即時通知と未読バッジ</li>
+                    </ul>
+                </div>
+
+                <!-- 12. Terminal -->
+                <div class="app-card" data-category="system" data-keywords="terminal gterm tron terminal ansi xterm posix cli system plane pure c99">
+                    <div>
+                        <div class="app-header">
+                            <div class="app-icon-wrapper"><img src="https://openmoji.org/data/color/svg/1F4BB.svg" alt="💻" width="34" height="34"></div>
+                            <div class="app-title-area">
+                                <h3 class="app-title"><a href="b-system/apps/Terminal.html" style="color:inherit;text-decoration:none;">Terminal</a> <span class="app-badge teal">TRON端末</span></h3>
+                                <div class="app-subtitle-en">POSIX ANSI Terminal Emulator (System Plane · gterm)</div>
+                            </div>
+                        </div>
+                        <div class="app-desc-en">
+                            High-performance, pure C99 ANSI terminal emulator (<code>src/apps/gterm.c</code>) executing directly on the System Plane. Zero TAD dependencies for guaranteed sub-millisecond CLI response.
+                        </div>
+                        <div class="app-desc-jp">
+                            <b>TRON端末（gterm）：</b> システム基本層で直接動作する純粋C99製ANSIターミナルエミュレータ（<code>src/apps/gterm.c</code>）。TAD非依存設計により、ミリ秒以下の極小遅延CLI応答と高い信頼性を保証。
+                        </div>
+                    </div>
+                    <ul class="app-features-list">
+                        <li>実体コード実装：<code>src/apps/gterm.c</code>（C99 ANSI/VT100エミュレータ）</li>
+                        <li>TAD非依存の純粋システムアプリ（超低遅延CLI）</li>
+                        <li>Mozc TIP 日本語入力および英語直接入力の自動切替</li>
+                    </ul>
+                </div>
+
+                <!-- 13. Commander -->
+                <div class="app-card" data-category="system" data-keywords="commander コマンダー midnight commander dual pane posix file manager pure c99">
+                    <div>
+                        <div class="app-header">
+                            <div class="app-icon-wrapper"><img src="https://openmoji.org/data/color/svg/1F5C4.svg" alt="🗄️" width="34" height="34"></div>
+                            <div class="app-title-area">
+                                <h3 class="app-title"><a href="b-system/apps/Commander.html" style="color:inherit;text-decoration:none;">Commander</a> <span class="app-badge gold">2画面ファイラー</span></h3>
+                                <div class="app-subtitle-en">Dual-Pane POSIX File Manager (System Plane)</div>
+                            </div>
+                        </div>
+                        <div class="app-desc-en">
+                            High-speed 2-pane file manager inspired by Norton / Midnight Commander (<code>src/apps/commander.c</code>). Directly manages raw POSIX/VirtIO block storage files without TAD database overhead.
+                        </div>
+                        <div class="app-desc-jp">
+                            <b>コマンダー：</b> Norton/Midnight Commanderの操作性を継承した2画面高速ファイラー（<code>src/apps/commander.c</code>）。生ストレージ上のPOSIXファイルをキーボードショートカットで瞬時に操作。
+                        </div>
+                    </div>
+                    <ul class="app-features-list">
+                        <li>伝統の左右2画面分割UIによる高速ファイル操作（コピー・移動・削除）</li>
+                        <li>生POSIX/VirtIOブロックストレージ直接操作（TAD非依存）</li>
+                        <li>1キーアーカイブ展開・プレビュー表示</li>
+                    </ul>
+                </div>
+
+                <!-- 14. Paint -->
+                <div class="app-card" data-category="media" data-keywords="paint ペイント vector bitmap drawing sketch tad graphics segments pure c99">
+                    <div>
+                        <div class="app-header">
+                            <div class="app-icon-wrapper"><img src="https://openmoji.org/data/color/svg/1F3A8.svg" alt="🎨" width="34" height="34"></div>
+                            <div class="app-title-area">
+                                <h3 class="app-title"><a href="b-system/apps/Paint.html" style="color:inherit;text-decoration:none;">Paint</a> <span class="app-badge gold">作図・スケッチ</span></h3>
+                                <div class="app-subtitle-en">Geometric Vector &amp; Pixel Drawing Studio (TAD DP)</div>
+                            </div>
+                        </div>
+                        <div class="app-desc-en">
+                            Geometric vector drawing and sketching tool (<code>src/apps/paint.c</code>) integrated with BTRON Display Primitives. Exports drawings directly as native TAD Graphic Segments for insertion into Editor or Clarity.
+                        </div>
+                        <div class="app-desc-jp">
+                            <b>ペイント：</b> BTRON Display Primitives描画パイプラインと直結したベクター作図＆ピクセルスケッチ環境（<code>src/apps/paint.c</code>）。作成した図面をネイティブTADグラフィックセグメントとして即座に出力し、EditorやClarityへ直接埋め込み可能。
+                        </div>
+                    </div>
+                    <ul class="app-features-list">
+                        <li>ベクター図形（直線、矩形、楕円、多角形、ベジェ曲線）の精密描画</li>
+                        <li>ネイティブTAD図形セグメントとしてのワンクリック出力</li>
+                        <li>Clarity出版枠への任意形状回り込み図形としての連動連携</li>
+                    </ul>
+                </div>
+
+                <!-- 15. Orchestra -->
+                <div class="app-card" data-category="media" data-keywords="orchestra music 管弦楽 音楽 audio midi server daw tracker synthesis live concert sound pure c99">
+                    <div>
+                        <div class="app-header">
+                            <div class="app-icon-wrapper"><img src="https://openmoji.org/data/color/svg/1F3BB.svg" alt="🎻" width="34" height="34"></div>
+                            <div class="app-title-area">
+                                <h3 class="app-title"><a href="b-system/apps/Orchestra.html" style="color:inherit;text-decoration:none;">Orchestra</a> <span class="app-badge teal">管弦楽・MIDI</span></h3>
+                                <div class="app-subtitle-en">Live Concert Main MIDI Server &amp; Workstation (Media Kit)</div>
+                            </div>
+                        </div>
+                        <div class="app-desc-en">
+                            Live concert Main MIDI Server and DAW workstation (<code>src/apps/orchestra.c</code>, <code>audio_player.c</code>) rivaling Apple GarageBand and Avid Pro Tools with zero-jitter μITRON deterministic routing, SMPTE/MTC master timecode, and VirtIO-Sound DSP synthesis.
+                        </div>
+                        <div class="app-desc-jp">
+                            <b>管弦楽：</b> バンドコンサート用メインMIDIサーバー＆音響制作ワークステーション（<code>src/apps/orchestra.c</code>, <code>audio_player.c</code>）。GarageBandやAvid Pro Toolsに匹敵する多重トラック制御、SMPTE/MTCタイムコード同期、およびμITRON確定論的サブミリ秒ディスパッチを統合。
+                        </div>
+                    </div>
+                    <ul class="app-features-list">
+                        <li>バンドコンサート用メインMIDIサーバー（最大32ポート統合ルーティング）</li>
+                        <li>SMPTE / MTCマスター同期・ステージスナップショット切替</li>
+                        <li>μITRON確定論的ディスパッチによる極小ジッター（&lt; 0.2ms）</li>
+                    </ul>
+                </div>
+
+                <!-- 16. Calculator -->
+                <div class="app-card" data-category="system" data-keywords="calculator 電卓 scientific programmer math paper roll history pure c99">
+                    <div>
+                        <div class="app-header">
+                            <div class="app-icon-wrapper"><img src="https://openmoji.org/data/color/svg/1F522.svg" alt="🔢" width="34" height="34"></div>
+                            <div class="app-title-area">
+                                <h3 class="app-title"><a href="b-system/apps/Calculator.html" style="color:inherit;text-decoration:none;">Calculator</a> <span class="app-badge gold">高精度電卓</span></h3>
+                                <div class="app-subtitle-en">Scientific &amp; Programmer Desktop Calculator</div>
+                            </div>
+                        </div>
+                        <div class="app-desc-en">
+                            Pure C99 scientific and programmer calculator (<code>src/apps/calculator.c</code>) with arbitrary precision, bitwise operations, paper roll history, and system clipboard integration.
+                        </div>
+                        <div class="app-desc-jp">
+                            <b>電卓：</b> 任意桁整数、倍精度浮動小数点、科学関数、プログラマー向け基数変換（HEX/DEC/OCT/BIN）とビット演算を備えた純粋C99製計算機（<code>src/apps/calculator.c</code>）。ロールペーパー履歴とOSクリップボード連携に対応。
+                        </div>
+                    </div>
+                    <ul class="app-features-list">
+                        <li>任意精度演算と包括的な計算履歴ペーパーロール</li>
+                        <li>純粋C99システム設計（TAD API非依存・超低遅延起動）</li>
+                        <li>プログラマー向け基数変換（HEX/BIN）とビット演算</li>
+                    </ul>
+                </div>
+
+                <!-- 17. Clock -->
+                <div class="app-card" data-category="system" data-keywords="clock 時計 rtc hpet itron timers alarms world clocks pure c99 time">
+                    <div>
+                        <div class="app-header">
+                            <div class="app-icon-wrapper"><img src="https://openmoji.org/data/color/svg/1F551.svg" alt="🕒" width="34" height="34"></div>
+                            <div class="app-title-area">
+                                <h3 class="app-title"><a href="b-system/apps/Clock.html" style="color:inherit;text-decoration:none;">Clock</a> <span class="app-badge pink">時刻・タイマー</span></h3>
+                                <div class="app-subtitle-en">System Clock, Timers &amp; World Time (RTC / μITRON)</div>
+                            </div>
+                        </div>
+                        <div class="app-desc-en">
+                            Pure C99 system clock and timekeeping utility (<code>src/apps/clock.c</code>) interfacing directly with hardware RTC, HPET, and μITRON timers with zero TAD dependencies.
+                        </div>
+                        <div class="app-desc-jp">
+                            <b>時計：</b> ハードウェアRTC、HPET、およびμITRONカーネルタイマーAPIに直結した純粋C99製システム時計（<code>src/apps/clock.c</code>）。高品位アナログ・デジタル表示、世界時計、ミリ秒タイマーを搭載。
+                        </div>
+                    </div>
+                    <ul class="app-features-list">
+                        <li>ハードウェアRTCおよびμITRON高精度タイマー直結</li>
+                        <li>純粋C99システム設計（TAD API非依存・低負荷常駐）</li>
+                        <li>世界各国のタイムゾーン表示とミリ秒タイマー・アラーム</li>
+                    </ul>
+                </div>
+
+                <!-- 18. Preferences -->
+                <div class="app-card" data-category="system" data-keywords="preferences 環境設定 quick access panel system settings control panel pure c99 kernel">
+                    <div>
+                        <div class="app-header">
+                            <div class="app-icon-wrapper"><img src="https://openmoji.org/data/color/svg/2699.svg" alt="⚙️" width="34" height="34"></div>
+                            <div class="app-title-area">
+                                <h3 class="app-title"><a href="b-system/apps/Preferences.html" style="color:inherit;text-decoration:none;">Preferences</a> <span class="app-badge teal">環境設定</span></h3>
+                                <div class="app-subtitle-en">Central System Settings &amp; Hardware Control Panel</div>
+                            </div>
+                        </div>
+                        <div class="app-desc-en">
+                            Pure C99 system control panel (<code>src/apps/preferences.c</code>) for kernel sysctl, display resolutions, Mozc TIP input method, network, and audio settings applied live without rebooting.
+                        </div>
+                        <div class="app-desc-jp">
+                            <b>環境設定パネル：</b> カーネル設定、画面解像度、Mozc TIP日本語入力、VirtIOネットワーク、音量を一元管理する純粋C99製設定パネル（<code>src/apps/preferences.c</code>）。OS再起動不要で即時反映。
+                        </div>
+                    </div>
+                    <ul class="app-features-list">
+                        <li>ワンクリックで主要カーネルパラメータへアクセス</li>
+                        <li>純粋C99システム設計（TAD API非依存・即時反映）</li>
+                        <li>設定フォルダの各専門モジュールへのハブ機能</li>
+                    </ul>
+                </div>
+
+                <!-- 19. Ski Bootloader -->
+                <div class="app-card" data-category="system" data-keywords="boot bootloader ski スキー ブートマネージャ uefi smp arm mmio rpi5 pc98">
+                    <div>
+                        <div class="app-header">
+                            <div class="app-icon-wrapper"><img src="https://openmoji.org/data/color/svg/1F680.svg" alt="🚀" width="34" height="34"></div>
+                            <div class="app-title-area">
+                                <h3 class="app-title"><a href="b-system/apps/Boot.html" style="color:inherit;text-decoration:none;">Boot</a> <span class="app-badge pink">ブートマネージャ</span></h3>
+                                <div class="app-subtitle-en">Haiku-Quality BTRON Boot Manager · Multi-Arch</div>
+                            </div>
+                        </div>
+                        <div class="app-desc-en">
+                            Haiku-quality graphical &amp; ANSI boot manager for B-System (<code>src/kernel/ski.c</code>, <code>src/apps/test_ski.c</code>). Supports Raspberry Pi 1–5 (ARM MMIO), x86_64 UEFI SMP (ACPI MADT AP bring-up), and authentic NEC PC-98 real-mode boot.
+                        </div>
+                        <div class="app-desc-jp">
+                            <b>スキー・ブートローダー：</b> Haiku流の洗練されたUIとNetBSD水準の信頼性を併せ持つB-System公式ブートマネージャ。ARM MMIO（Raspberry Pi 1〜5）、x86_64 UEFI SMP、NEC PC-98リアルモードを統合サポート。
+                        </div>
+                    </div>
+                    <ul class="app-features-list">
+                        <li>グラフィカル／ANSI両対応の対話型OS選択・引数編集</li>
+                        <li>x86_64 UEFI SMPにおけるACPI MADT APコア自動起動</li>
+                        <li>Raspberry Pi 1〜5およびNEC PC-98実機ブートドライバ統合</li>
+                    </ul>
+                </div>
+
+                <!-- 20. Volumes -->
+                <div class="app-card" data-category="system" data-keywords="volumes drivesetup storage disk partition format bfs ボリューム ドライブ設定">
+                    <div>
+                        <div class="app-header">
+                            <div class="app-icon-wrapper"><img src="https://openmoji.org/data/color/svg/1F4BD.svg" alt="💽" width="34" height="34"></div>
+                            <div class="app-title-area">
+                                <h3 class="app-title"><a href="b-system/apps/Volumes.html" style="color:inherit;text-decoration:none;">Volumes</a> <span class="app-badge teal">ストレージ管理</span></h3>
+                                <div class="app-subtitle-en">Storage Volume &amp; B-FS Partition Manager</div>
+                            </div>
+                        </div>
+                        <div class="app-desc-en">
+                            Comprehensive storage volume and partition manager (<code>src/apps/b_drivesetup.c</code>). Orchestrates physical/virtual block storage, MBR/GPT partitioning, B-FS V1/V2 formatting, and non-blocking volume mount lifecycle.
+                        </div>
+                        <div class="app-desc-jp">
+                            <b>ボリューム（Volumes / ドライブ設定）：</b> 生ストレージデバイス、MBR/GPT区画テーブル、およびB-FS V1/V2ファイルシステムを一元管理する純粋C99製ユーティリティ（<code>src/apps/b_drivesetup.c</code>）。視覚的区画マップと詳細インスペクタを搭載。
+                        </div>
+                    </div>
+                    <ul class="app-features-list">
+                        <li>視覚的区画スライスマップとプロポーショナル動的幾何学</li>
+                        <li>B-FS V2（64-bit FID・WALログ・AG割当）完全フォーマッタ</li>
+                        <li>NASA/JPL Rule 3 準拠・静的メモリ確定論的アーキテクチャ</li>
+                    </ul>
+                </div>
+
+
+            </div>
+        </section>
+
+        <!-- Real Body / Virtual Body Interactive Philosophy Section -->
+        <section style="margin-top: 4rem;">
+            <div class="vobj-demo-box">
+                <span class="app-badge teal" style="font-size:0.85rem; padding: 0.35rem 0.8rem;">CORE ARCHITECTURE</span>
+                <h2 class="jp-title" style="font-size: 1.85rem; margin-top: 0.4rem; color: #0057b7;">実身・仮身モデルとTADハイパーメディアの神髄</h2>
+                <p style="color: #334155; line-height: 1.8; margin-top: 0.8rem;">
+                    BTRONの最大の発明は、1980年代に坂村健博士が提唱した「<b>実身・仮身（Real Body / Virtual Body）モデル</b>」です。現代のファイルシステム（Unix階層やWindowsフォルダ）が「ファイルへのポインタ」と「ディレクトリの木構造」に拘束されているのに対し、B-Systemではデータの実体（実身）は唯一無二の永続オブジェクトとして格納され、あらゆる文書・ウィンドウ・タイムラインの中に無制限に参照（仮身）として配置できます。
+                </p>
+
+                <div class="vobj-diagram">
+                    <div class="diagram-block" style="border-left: 4px solid #008080;">
+                        <h4>📦 実身（Real Body / 実体）</h4>
+                        <p style="font-size: 0.92rem; color: #475569; line-height: 1.7;">
+                            データの実体そのもの。テキスト本文、録音音声、高解像度動画、実行可能バイナリ、描画ベクターデータなど。実身はシステム全体で一意のオブジェクトIDを持ち、自律的な暗号化・メタデータ・版管理が施されます。
+                        </p>
+                    </div>
+                    <div class="diagram-block" style="border-left: 4px solid #ff2d95;">
+                        <h4>🔗 仮身（Virtual Body / 投影）</h4>
+                        <p style="font-size: 0.92rem; color: #475569; line-height: 1.7;">
+                            文書や画面内に配置された実身への「生きた窓」。仮身をダブルクリックすればその場で開き、編集内容は実身にリアルタイム反映されます。1つの実身を100個の異なるTAD文書へ仮身として埋め込んでもデータは重複しません。
+                        </p>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Settings Folder Section (10 Control Domains) -->
+        <section id="settings-section" style="margin-top: 4rem;">
+            <div style="text-align: center; max-width: 900px; margin: 0 auto 1.5rem auto;">
+                <span class="app-badge pink" style="font-size:0.85rem; padding: 0.35rem 0.8rem; margin-bottom: 0.5rem;">CONTROL CENTER</span>
+                <h2 class="jp-title" style="font-size: 2.1rem; margin-top: 0.3rem;">設定フォルダ (Settings Folder)</h2>
+                <p style="color: #64748b; font-size: 1.05rem;">システムのあらゆる挙動を精密に司る10の独立設定ドメイン</p>
+            </div>
+
+            <div class="settings-grid">
+                
+                <!-- 1. Appearance -->
+                <div class="setting-card">
+                    <div class="setting-top">
+                        <div class="setting-icon"><img src="https://openmoji.org/data/color/svg/1F3A8.svg" alt="🎨" width="32" height="32"></div>
+                        <div>
+                            <h3 class="setting-title"><a href="b-system/settings/Appearance.html" style="color:inherit;text-decoration:none;">Appearance（外観）</a></h3>
+                        </div>
+                    </div>
+                    <div class="setting-content-en">
+                        <b>Appearance</b> — Themes, colours, window style, icons, fonts and animation level.
+                    </div>
+                    <div class="setting-content-jp">
+                        デスクトップテーマ、配色パレット、坂村クラシックスタイル／モダンウィンドウスタイル、アイコンセット、明朝・ゴシックフォント指定、UIアニメーション速度の調整。
+                    </div>
+                </div>
+
+                <!-- 2. Desktop -->
+                <div class="setting-card">
+                    <div class="setting-top">
+                        <div class="setting-icon"><img src="https://openmoji.org/data/color/svg/1F5A5.svg" alt="🖥️" width="32" height="32"></div>
+                        <div>
+                            <h3 class="setting-title"><a href="b-system/settings/Desktop.html" style="color:inherit;text-decoration:none;">Desktop（デスクトップ）</a></h3>
+                        </div>
+                    </div>
+                    <div class="setting-content-en">
+                        <b>Desktop</b> — Workbench behaviour, icon layout, navigation mode and backgrounds.
+                    </div>
+                    <div class="setting-content-jp">
+                        ワークベンチ（Workbench）の空間挙動、実身アイコンの自動整列グリッド、ナビゲーションモード（空間型／リスト型）、壁紙および作業スペースの設定。
+                    </div>
+                </div>
+
+                <!-- 3. Input (Keyboard & MOZC) -->
+                <div class="setting-card">
+                    <div class="setting-top">
+                        <div class="setting-icon"><img src="https://openmoji.org/data/color/svg/2328.svg" alt="⌨️" width="32" height="32"></div>
+                        <div>
+                            <h3 class="setting-title"><a href="b-system/settings/Input.html" style="color:inherit;text-decoration:none;">Input (Keyboard &amp; MOZC)（入力環境）</a></h3>
+                        </div>
+                    </div>
+                    <div class="setting-content-en">
+                        <b>Input (Keyboard &amp; MOZC)</b> — Layouts, key repeat and full MOZC + TRON Code configuration.
+                    </div>
+                    <div class="setting-content-jp">
+                        TRONキーボード配列・親指シフト・JIS/US配列切替、キーリピート速度、Mozc TIPかな漢字変換エンジン統計モデル、TRONコード直接入力モードの完全カスタマイズ。
+                    </div>
+                </div>
+
+                <!-- 4. Language & TRON Code -->
+                <div class="setting-card">
+                    <div class="setting-top">
+                        <div class="setting-icon"><img src="https://openmoji.org/data/color/svg/1F234.svg" alt="🈴" width="32" height="32"></div>
+                        <div>
+                            <h3 class="setting-title"><a href="b-system/settings/Language.html" style="color:inherit;text-decoration:none;">Language &amp; TRON Code（言語・文字コード）</a></h3>
+                        </div>
+                    </div>
+                    <div class="setting-content-en">
+                        <b>Language &amp; TRON Code</b> — System language, character planes and font rules.
+                    </div>
+                    <div class="setting-content-jp">
+                        多言語システム言語、TRON文字コード面（第1面〜第16面・超漢字収容18万文字）、古代文字・異体字プレーン、文字フォント優先順位（フォールバック）規則。
+                    </div>
+                </div>
+
+                <!-- 5. Sound -->
+                <div class="setting-card">
+                    <div class="setting-top">
+                        <div class="setting-icon"><img src="https://openmoji.org/data/color/svg/1F50A.svg" alt="🔊" width="32" height="32"></div>
+                        <div>
+                            <h3 class="setting-title"><a href="b-system/settings/Sound.html" style="color:inherit;text-decoration:none;">Sound（サウンド）</a></h3>
+                        </div>
+                    </div>
+                    <div class="setting-content-en">
+                        <b>Sound</b> — Devices, per-app volume and Cassette audio routing.
+                    </div>
+                    <div class="setting-content-jp">
+                        オーディオ入出力デバイス切替、アプリ個別音量バランス、Cassette低遅延パイプラインのリアルタイム・オーディオルーター設定。
+                    </div>
+                </div>
+
+                <!-- 6. Network -->
+                <div class="setting-card">
+                    <div class="setting-top">
+                        <div class="setting-icon"><img src="https://openmoji.org/data/color/svg/1F310.svg" alt="🌐" width="32" height="32"></div>
+                        <div>
+                            <h3 class="setting-title"><a href="b-system/settings/Network.html" style="color:inherit;text-decoration:none;">Network（ネットワーク）</a></h3>
+                        </div>
+                    </div>
+                    <div class="setting-content-en">
+                        <b>Network</b> — Interfaces, XMPP accounts and basic connectivity.
+                    </div>
+                    <div class="setting-content-jp">
+                        VirtIO-Netネットワークインターフェース、XMPP分散通信アカウント、IP/DNS設定、ローカルピアツーピア連携。
+                    </div>
+                </div>
+
+                <!-- 7. Display -->
+                <div class="setting-card">
+                    <div class="setting-top">
+                        <div class="setting-icon"><img src="https://openmoji.org/data/color/svg/1F5A5.svg" alt="🖥️" width="32" height="32"></div>
+                        <div>
+                            <h3 class="setting-title"><a href="b-system/settings/Display.html" style="color:inherit;text-decoration:none;">Display（ディスプレイ）</a></h3>
+                        </div>
+                    </div>
+                    <div class="setting-content-en">
+                        <b>Display</b> — Resolution, scaling, multi-monitor and colour management.
+                    </div>
+                    <div class="setting-content-jp">
+                        画面解像度、高DPI（HiDPI）Retinaスケーリング、マルチモニタ空間配置、ICCカラーマネジメントプロファイル。
+                    </div>
+                </div>
+
+                <!-- 8. Media -->
+                <div class="setting-card">
+                    <div class="setting-top">
+                        <div class="setting-icon"><img src="https://openmoji.org/data/color/svg/1F4FC.svg" alt="📼" width="32" height="32"></div>
+                        <div>
+                            <h3 class="setting-title"><a href="b-system/settings/Media.html" style="color:inherit;text-decoration:none;">Media（メディア）</a></h3>
+                        </div>
+                    </div>
+                    <div class="setting-content-en">
+                        <b>Media</b> — Default handlers, quality settings and capture devices.
+                    </div>
+                    <div class="setting-content-jp">
+                        メディア形式別デフォルトアプリケーション関連付け、ビデオ/オーディオエンコード品質、外部キャプチャデバイス設定。
+                    </div>
+                </div>
+
+                <!-- 9. System -->
+                <div class="setting-card">
+                    <div class="setting-top">
+                        <div class="setting-icon"><img src="https://openmoji.org/data/color/svg/2699.svg" alt="⚙️" width="32" height="32"></div>
+                        <div>
+                            <h3 class="setting-title"><a href="b-system/settings/System.html" style="color:inherit;text-decoration:none;">System（システム）</a></h3>
+                        </div>
+                    </div>
+                    <div class="setting-content-en">
+                        <b>System</b> — System Plane info, real-time status and light maintenance.
+                    </div>
+                    <div class="setting-content-jp">
+                        System Planeカーネルバージョン情報、μITRONリアルタイムタスク負荷監視、メモリヒープおよびオブジェクトストレージ簡易メンテナンス。
+                    </div>
+                </div>
+
+                <!-- 10. Security -->
+                <div class="setting-card">
+                    <div class="setting-top">
+                        <div class="setting-icon"><img src="https://openmoji.org/data/color/svg/1F512.svg" alt="🔒" width="32" height="32"></div>
+                        <div>
+                            <h3 class="setting-title"><a href="b-system/settings/Security.html" style="color:inherit;text-decoration:none;">Security（セキュリティ）</a></h3>
+                        </div>
+                    </div>
+                    <div class="setting-content-en">
+                        <b>Security</b> — Permissions, capability overview and access controls.
+                    </div>
+                    <div class="setting-content-jp">
+                        seL4ケイパビリティアクセス権限一覧、実身・仮身の改ざん防止アクセス制御、VirtIOサンドボックス隔離レベル設定。
+                    </div>
+                </div>
+
+            </div>
+        </section>
+
+        <!-- Live Screenshots Section -->
+        <section style="margin-top: 4.5rem;">
+            <div style="text-align: center; max-width: 900px; margin: 0 auto 1.5rem auto;">
+                <span class="app-badge teal" style="font-size:0.85rem; padding: 0.35rem 0.8rem; margin-bottom: 0.5rem;">GALLERY</span>
+                <h2 class="jp-title" style="font-size: 2.1rem; margin-top: 0.3rem;">B-System 実行環境ギャラリー</h2>
+                <p style="color: #64748b; font-size: 1.05rem;">C99 Cleanroom &amp; SDL2 / VirtIO上で稼働する実機スクリーンショット</p>
+            </div>
+
+            <div class="screens-grid">
+                <div class="screen-thumb">
+                    <a href="b-system/img/screen1.png" target="_blank">
+                        <img src="b-system/img/screen1.png" alt="スクリーン 1: B-Systemワークベンチ、メニューとシステムパネル">
+                    </a>
+                    <div class="screen-thumb-caption"><b>スクリーン 1</b> — B-Systemワークベンチ、メニューとシステムパネル</div>
+                </div>
+                <div class="screen-thumb">
+                    <a href="b-system/img/screen2.png" target="_blank">
+                        <img src="b-system/img/screen2.png" alt="スクリーン 2: EditorとMozc TIP日本語入力">
+                    </a>
+                    <div class="screen-thumb-caption"><b>スクリーン 2</b> — Editor &amp; Mozc TIP かな漢字変換</div>
+                </div>
+                <div class="screen-thumb">
+                    <a href="b-system/img/screen3.jpeg" target="_blank">
+                        <img src="b-system/img/screen3.jpeg" alt="スクリーン 3: gterm端末エミュレータとキャビネット">
+                    </a>
+                    <div class="screen-thumb-caption"><b>スクリーン 3</b> — gterm端末エミュレータ &amp; キャビネット</div>
+                </div>
+                <div class="screen-thumb">
+                    <a href="b-system/img/screen4.jpeg" target="_blank">
+                        <img src="b-system/img/screen4.jpeg" alt="スクリーン 4: 多窓CUAワークステーション環境">
+                    </a>
+                    <div class="screen-thumb-caption"><b>スクリーン 4</b> — 多窓CUAワークステーション環境</div>
+                </div>
+                <div class="screen-thumb">
+                    <a href="b-system/img/screen5.png" target="_blank">
+                        <img src="b-system/img/screen5.png" alt="スクリーン 5: 実身キャビネットとリンク体系ナビゲーション">
+                    </a>
+                    <div class="screen-thumb-caption"><b>スクリーン 5</b> — 実身キャビネット &amp; リンク体系ナビゲーション</div>
+                </div>
+                <div class="screen-thumb">
+                    <a href="b-system/img/screen6.png" target="_blank">
+                        <img src="b-system/img/screen6.png" alt="スクリーン 6: ネイティブTAD文書ブラウザ">
+                    </a>
+                    <div class="screen-thumb-caption"><b>スクリーン 6</b> — ネイティブTAD文書ブラウザ</div>
+                </div>
+                <div class="screen-thumb">
+                    <a href="b-system/img/screen7.png" target="_blank">
+                        <img src="b-system/img/screen7.png" alt="スクリーン 7: TADハイパーテキストナビゲーションと閲覧履歴スタック">
+                    </a>
+                    <div class="screen-thumb-caption"><b>スクリーン 7</b> — TADハイパーテキスト閲覧履歴スタック</div>
+                </div>
+                <div class="screen-thumb">
+                    <a href="b-system/img/screen8.png" target="_blank">
+                        <img src="b-system/img/screen8.png" alt="スクリーン 8: Sakamura DP 2Dベクターグラフィックス &amp; Fusen図形セグメント">
+                    </a>
+                    <div class="screen-thumb-caption"><b>スクリーン 8</b> — Sakamura DP 2Dベクターグラフィックス &amp; 付箋（Fusen）</div>
+                </div>
+                <div class="screen-thumb">
+                    <a href="b-system/img/screen9.png" target="_blank">
+                        <img src="b-system/img/screen9.png" alt="スクリーン 9: VirtIO System PlaneとTRONコードフォントエンジン">
+                    </a>
+                    <div class="screen-thumb-caption"><b>スクリーン 9</b> — VirtIO System Plane &amp; TRONコードフォントエンジン</div>
+                </div>
+                <div class="screen-thumb">
+                    <a href="b-system/img/screen10.png" target="_blank">
+                        <img src="b-system/img/screen10.png" alt="スクリーン 10: B-System SDL2フレームバッファレンダリング">
+                    </a>
+                    <div class="screen-thumb-caption"><b>スクリーン 10</b> — SDL2フレームバッファ &amp; VirtIO-GPUレンダリング</div>
+                </div>
+                <div class="screen-thumb">
+                    <a href="b-system/img/screen11.png" target="_blank">
+                        <img src="b-system/img/screen11.png" alt="スクリーン 11: B-Systemリアルタイムタスクスケジューラ">
+                    </a>
+                    <div class="screen-thumb-caption"><b>スクリーン 11</b> — μITRONリアルタイムタスクスケジューラ &amp; システムダッシュボード</div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Technical Deep Dive for Senior Researchers -->
+        <section style="margin-top: 4.5rem; margin-bottom: 3rem;">
+            <div style="background: #ffffff; border: 1.5px solid rgba(0, 87, 183, 0.25); border-radius: 20px; padding: 2.2rem; box-shadow: 0 10px 30px rgba(0, 87, 183, 0.08);">
+                <div style="display: flex; align-items: center; gap: 0.8rem; margin-bottom: 1.2rem;">
+                    <span style="font-size: 2rem;">🎓</span>
+                    <div>
+                        <h3 class="jp-title" style="font-size: 1.6rem; color: #0057b7; margin: 0;">研究者・技術者向け技術総括</h3>
+                        <p style="font-size: 0.9rem; color: #64748b; margin: 0;">Formal Foundations &amp; Modern Virtualization Implementation (2026)</p>
+                    </div>
+                </div>
+
+                <div style="color: #334155; line-height: 1.85; font-size: 0.98rem;">
+                    <p>
+                        B-Systemは、歴史的なBTRON3仕様（μITRON 3.0 / DP / WND / VOBJ / TAD）を完全に網羅しつつ、1980〜1990年代のレガシーなハードウェア依存（FDC、16ビットセグメンテーション、ISAバス等）を完全に排除しています。
+                    </p>
+                    <ul style="margin: 1rem 0 1.2rem 1.5rem; display: flex; flex-direction: column; gap: 0.6rem;">
+                        <li><b>VirtIO 1.4 ネイティブ対応:</b> Virtqueue（Split / Packed Ring）を介した超高速ゼロコピー・フレームバッファ転送および仮想ストレージ通信。</li>
+                        <li><b>seL4 Microkit &amp; ハイパーバイザ統合:</b> 各タスクおよびReal Bodyストレージをケイパビリティベースの厳格なセキュリティ境界で保護。</li>
+                        <li><b>標準C99 クリーンルーム実装:</b> 移植性に優れ、RISC-V 64、ARM64、x86_64の全主要アーキテクチャ上でネイティブバイナリとしてコンパイル・実行可能。</li>
+                        <li><b>Mozc TIP 日本語入力フロントエンド:</b> Google Mozcの広大な現代統計辞書モデルとTRONコード多言語文字面を完全融合。</li>
+                    </ul>
+                    <p>
+                        学術論文および詳細な仕様書については、上部のPDFリンク（BTRON3 Spec, TAD Browser, Mozc TIP, HMI Standards）をご参照ください。
+                    </p>
+                </div>
+            </div>
+        </section>
+    </main>
+
+    <footer>
+        <div class="footer-columns">
+            <div>
+                <h4>Synrc VE OS.1</h4>
+                <p>High-Assurance VirtIO Hypervisor</p>
+                <p>Deployment Platform for Unikernels</p>
+                <p>By <a rel="me" href="https://mathstodon.xyz/@5ht">5HT</a> in C99 &amp; Erlang/OTP</p>
+            </div>
+
+            <div>
+                <h4>Planes Architecture</h4>
+                <ul>
+                    <li><b>0. Bedrock:</b> Hypervision (seL4)</li>
+                    <li><b>1. Control:</b> CHIMERA, LAND, NET</li>
+                    <li><b>2. Security:</b> TPM 2.0, CA, AU, CM</li>
+                    <li><b>3. Service:</b> X11, WM, CHAT, MQTT</li>
+                    <li><b>4. Applications:</b> BPE, KVS, N2O</li>
+                    <li><b>5. Products:</b> Enterprise Suites</li>
+                </ul>
+            </div>
+
+            <div>
+                <h4>System Images</h4>
+                <ul>
+                    <li><a href="https://hv.synrc.com/system_alpine.html"><b>Alpine:</b> Musl, OpenRC, Landlock</a></li>
+                    <li><a href="https://hv.synrc.com/system_netbsd.html"><b>NetBSD:</b> Veriexec, Kauth, NPF</a></li>
+                    <li><a href="system_freebsd.html"><b>FreeBSD:</b> Capsicum, OpenZFS, Jails</a></li>
+                    <li><a href="index.html"><b>B-System:</b> Consumer OS Architecture</a></li>
+                    <li><a href="https://hv.synrc.com/system_nuttx.html"><b>NuttX:</b> Skynet RT, POSIX, HAL</a></li>
+                    <li><a href="system_lk.html"><b>LK:</b> Little Kernel, BeOS, Zircon</a></li>
+                </ul>
+            </div>
+
+            <div>
+                <h4>Whitepapers</h4>
+                <ul>
+                    <li><a href="doc/pdf/btron-article.pdf" target="_blank">2026 BTRON Article</a></li>
+                    <li><a href="doc/pdf/btron-tessron.pdf" target="_blank">2026 TessronOS vs. B-System</a></li>
+                    <li><a href="doc/pdf/btron-smp.pdf" target="_blank">2026 BTRON SMP Microkernel</a></li>
+                    <li><a href="doc/pdf/btron-verimath.pdf" target="_blank">2026 VeriMath Coq Proofs</a></li>
+                    <li><a href="doc/pdf/btron-tad.pdf" target="_blank">2026 BTRON TAD Browser &amp; Cabinet</a></li>
+                    <li><a href="doc/pdf/btron-tip.pdf" target="_blank">2026 BTRON TIP IME Mozc</a></li>
+                    <li><a href="doc/pdf/btron-hmi.pdf" target="_blank">2026 BTRON HMI Standards</a></li>
+                    <li><a href="doc/pdf/btron-history.pdf" target="_blank">2026 BTRON History &amp; Heritage</a></li>
+                </ul>
+            </div>
+        </div>
+    </footer>
+
+    <script>
+        function filterApps() {
+            const query = document.getElementById('appSearchInput').value.toLowerCase().trim();
+            const cards = document.querySelectorAll('.app-card');
+            
+            cards.forEach(card => {
+                const keywords = card.getAttribute('data-keywords') || '';
+                const text = card.innerText.toLowerCase();
+                if (keywords.includes(query) || text.includes(query)) {
+                    card.style.display = 'flex';
+                } else {
+                    card.style.display = 'none';
+                }
+            });
+        }
+
+        function setAppFilter(category, btn) {
+            document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
+            if (btn) btn.classList.add('active');
+            
+            const cards = document.querySelectorAll('.app-card');
+            cards.forEach(card => {
+                const cardCat = card.getAttribute('data-category');
+                if (category === 'all' || cardCat === category) {
+                    card.style.display = 'flex';
+                } else {
+                    card.style.display = 'none';
+                }
+            });
+        }
+    </script>
+
+    
+    <!-- Script for Option A: Hopf Fibration 4D Projection, Spectral Dispersion & Sacred Audio -->
+    <script>
+    (function() {
+        // =========================================================================
+        // 1. Audio Engine: Pythagorean Chimes & Nintendo 8-Bit SFX
+        // =========================================================================
+        let audioCtx = null;
+        window.soundEnabled = true;
+
+        function getAudioContext() {
+            if (!audioCtx) {
+                const AudioContext = window.AudioContext || window.webkitAudioContext;
+                audioCtx = new AudioContext();
+            }
+            if (audioCtx.state === 'suspended') {
+                audioCtx.resume();
+            }
+            return audioCtx;
+        }
+
+        function unlockAudio() {
+            if (window.soundEnabled) getAudioContext();
+        }
+        window.addEventListener('click', unlockAudio, { once: true });
+        window.addEventListener('keydown', unlockAudio, { once: true });
+        window.addEventListener('touchstart', unlockAudio, { once: true });
+
+        function playCelestialChime(freq, duration = 0.8, vol = 0.16) {
+            if (!window.soundEnabled) return;
+            try {
+                const c = getAudioContext();
+                const osc = c.createOscillator();
+                const gain = c.createGain();
+
+                osc.type = 'sine';
+                osc.frequency.setValueAtTime(freq, c.currentTime);
+
+                gain.gain.setValueAtTime(vol, c.currentTime);
+                gain.gain.exponentialRampToValueAtTime(0.0001, c.currentTime + duration);
+
+                osc.connect(gain);
+                gain.connect(c.destination);
+
+                osc.start();
+                osc.stop(c.currentTime + duration);
+            } catch (e) {}
+        }
+
+        function playSacredChord() {
+            const freqs = [587.33, 659.25, 739.99, 880.00, 1174.66, 1318.51];
+            freqs.forEach((f, idx) => {
+                setTimeout(() => playCelestialChime(f, 1.4 + idx * 0.15, 0.12), idx * 65);
+            });
+        }
+
+        function play8BitNote(freq, type = 'square', duration = 0.12, volume = 0.16) {
+            if (!window.soundEnabled) return;
+            try {
+                const ctx = getAudioContext();
+                const osc = ctx.createOscillator();
+                const gain = ctx.createGain();
+                osc.type = type;
+                osc.frequency.setValueAtTime(freq, ctx.currentTime);
+                gain.gain.setValueAtTime(volume, ctx.currentTime);
+                gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + duration);
+                osc.connect(gain);
+                gain.connect(ctx.destination);
+                osc.start();
+                osc.stop(ctx.currentTime + duration);
+            } catch (e) {}
+        }
+
+        function sfxFootstep() {
+            if (!window.soundEnabled) return;
+            try {
+                const ctx = getAudioContext();
+                const osc = ctx.createOscillator();
+                const gain = ctx.createGain();
+                osc.type = 'triangle';
+                const f = 420 + Math.random() * 35;
+                osc.frequency.setValueAtTime(f, ctx.currentTime);
+                osc.frequency.exponentialRampToValueAtTime(f * 0.72, ctx.currentTime + 0.05);
+                gain.gain.setValueAtTime(0.07, ctx.currentTime);
+                gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.05);
+                osc.connect(gain);
+                gain.connect(ctx.destination);
+                osc.start();
+                osc.stop(ctx.currentTime + 0.05);
+            } catch (e) {}
+        }
+
+        function sfxLilCubeBoing() {
+            if (!window.soundEnabled) return;
+            try {
+                const ctx = getAudioContext();
+                const osc = ctx.createOscillator();
+                const gain = ctx.createGain();
+                osc.type = 'triangle';
+                osc.frequency.setValueAtTime(523.25, ctx.currentTime);
+                osc.frequency.exponentialRampToValueAtTime(1174.66, ctx.currentTime + 0.14);
+                osc.frequency.exponentialRampToValueAtTime(783.99, ctx.currentTime + 0.28);
+                gain.gain.setValueAtTime(0.20, ctx.currentTime);
+                gain.gain.exponentialRampToValueAtTime(0.005, ctx.currentTime + 0.28);
+                osc.connect(gain);
+                gain.connect(ctx.destination);
+                osc.start();
+                osc.stop(ctx.currentTime + 0.28);
+            } catch (e) {}
+        }
+
+        function sfxFloatInhale() {
+            if (!window.soundEnabled) return;
+            try {
+                const ctx = getAudioContext();
+                const osc = ctx.createOscillator();
+                const gain = ctx.createGain();
+                osc.type = 'sine';
+                osc.frequency.setValueAtTime(320, ctx.currentTime);
+                osc.frequency.exponentialRampToValueAtTime(840, ctx.currentTime + 0.35);
+                gain.gain.setValueAtTime(0.18, ctx.currentTime);
+                gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.4);
+                osc.connect(gain);
+                gain.connect(ctx.destination);
+                osc.start();
+                osc.stop(ctx.currentTime + 0.4);
+            } catch (e) {}
+        }
+
+        function sfxVictoryFanfare() {
+            const notes = [
+                { f: 659.25, d: 0.12, t: 0 },
+                { f: 659.25, d: 0.12, t: 110 },
+                { f: 659.25, d: 0.12, t: 220 },
+                { f: 880.00, d: 0.25, t: 330 },
+                { f: 783.99, d: 0.15, t: 520 },
+                { f: 880.00, d: 0.15, t: 640 },
+                { f: 1046.50, d: 0.45, t: 760 }
+            ];
+            notes.forEach(n => {
+                setTimeout(() => play8BitNote(n.f, 'square', n.d, 0.20), n.t);
+            });
+        }
+
+        window.toggleSound = function() {
+            window.soundEnabled = !window.soundEnabled;
+            const btn = document.getElementById('soundToggleBtn');
+            if (window.soundEnabled) {
+                getAudioContext();
+                playSacredChord();
+                btn.innerHTML = '🔊 聖なる天球音楽: ON';
+                btn.style.borderColor = '#00ffff';
+                btn.style.color = '#00ffff';
+            } else {
+                btn.innerHTML = '🔈 聖なる天球音楽: OFF';
+                btn.style.borderColor = 'rgba(120, 220, 255, 0.5)';
+                btn.style.color = '#94a3b8';
+            }
+        };
+
+        // =========================================================================
+        // 2. Three.js Low Poly 3D Lil Cube 64 with Nintendo Kirby Animations
+        // =========================================================================
+        const container3d = document.getElementById('mascot3dContainer');
+        const canvas3d = document.getElementById('mascot3dCanvas');
+        const pedestal = document.getElementById('mascot3dPedestal');
+        const quoteText = document.getElementById('saintQuoteText');
+        const bubble = document.getElementById('saintBubble');
+
+        let width3d = container3d ? (container3d.clientWidth || 280) : 280;
+        let height3d = container3d ? (container3d.clientHeight || 260) : 260;
+
+        let scene3d, camera3d, renderer3d, rootGroup, bodyGroup;
+        let mainCube, coreCube, leftEye, rightEye, smileMesh, oMouthMesh;
+        let leftHandPivot, rightHandPivot, leftFootPivot, rightFootPivot;
+        let cubeMat, footMat;
+
+        let animState = 'idle'; // 'idle', 'walk', 'float', 'dance', 'poke'
+        let stateTimer = 0;
+        let walkPhase = 0;
+        let lastStepSign = 0;
+        let blinkTimer = 2.5;
+        let isBlinking = false;
+        let pokeTime = 0;
+        let danceStep = 0;
+        let danceTimer = 0;
+        let floatTimer = 0;
+
+        let isDraggingCube = false;
+        let prevDragX = 0, prevDragY = 0;
+        let cubeRotVelX = 0, cubeRotVelY = 0;
+        let cubeCurRotX = 0, cubeCurRotY = 0;
+        let targetLookX = 0, targetLookY = 0;
+
+        if (container3d && canvas3d && typeof THREE !== 'undefined') {
+            scene3d = new THREE.Scene();
+            camera3d = new THREE.PerspectiveCamera(38, width3d / height3d, 0.1, 100);
+            camera3d.position.set(0, 0.32, 7.2);
+
+            renderer3d = new THREE.WebGLRenderer({
+                canvas: canvas3d,
+                alpha: true,
+                antialias: true,
+                powerPreference: 'high-performance'
+            });
+            renderer3d.setSize(width3d, height3d);
+            renderer3d.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+
+            // Ambient & Studio Rim Lights
+            scene3d.add(new THREE.AmbientLight(0xffffff, 0.85));
+            const dirL = new THREE.DirectionalLight(0xffffff, 0.95);
+            dirL.position.set(4, 8, 6);
+            scene3d.add(dirL);
+
+            const fillL = new THREE.DirectionalLight(0x80e5ff, 0.65);
+            fillL.position.set(-6, 2, 4);
+            scene3d.add(fillL);
+
+            const rimL = new THREE.DirectionalLight(0xffd54f, 0.65);
+            rimL.position.set(0, -5, -6);
+            scene3d.add(rimL);
+
+            // Hierarchy
+            rootGroup = new THREE.Group();
+            scene3d.add(rootGroup);
+
+            bodyGroup = new THREE.Group();
+            rootGroup.add(bodyGroup);
+
+            // Main Beveled Low-Poly Crystalline Ice Cube
+            const cubeGeo = new THREE.BoxGeometry(2.1, 2.1, 2.1, 2, 2, 2);
+            const posAttr = cubeGeo.attributes.position;
+            for (let i = 0; i < posAttr.count; i++) {
+                const vx = posAttr.getX(i), vy = posAttr.getY(i), vz = posAttr.getZ(i);
+                const d = Math.sqrt(vx * vx + vy * vy + vz * vz);
+                if (d > 1.65) {
+                    const factor = 1.65 / d;
+                    posAttr.setXYZ(i, vx * factor, vy * factor, vz * factor);
+                }
+            }
+            cubeGeo.computeVertexNormals();
+
+            cubeMat = new THREE.MeshStandardMaterial({
+                color: 0x85e8ff,
+                roughness: 0.16,
+                metalness: 0.12,
+                flatShading: true,
+                transparent: true,
+                opacity: 0.94
+            });
+            mainCube = new THREE.Mesh(cubeGeo, cubeMat);
+            bodyGroup.add(mainCube);
+
+            // Glowing Inner Core
+            const coreGeo = new THREE.BoxGeometry(1.15, 1.15, 1.15);
+            const coreMat = new THREE.MeshBasicMaterial({ color: 0xe0f7fa });
+            coreCube = new THREE.Mesh(coreGeo, coreMat);
+            bodyGroup.add(coreCube);
+
+            // Kirby Eyes
+            function createKirbyEye(isLeft) {
+                const eye = new THREE.Group();
+                const pupilGeo = new THREE.CylinderGeometry(0.18, 0.18, 0.48, 12);
+                pupilGeo.rotateX(Math.PI / 2);
+                const pupilMesh = new THREE.Mesh(pupilGeo, new THREE.MeshBasicMaterial({ color: 0x081226 }));
+                eye.add(pupilMesh);
+
+                const irisGeo = new THREE.CylinderGeometry(0.15, 0.15, 0.22, 10);
+                irisGeo.rotateX(Math.PI / 2);
+                const irisMesh = new THREE.Mesh(irisGeo, new THREE.MeshBasicMaterial({ color: 0x00e5ff }));
+                irisMesh.position.set(0, -0.11, 0.015);
+                eye.add(irisMesh);
+
+                const specGeo = new THREE.CircleGeometry(0.09, 8);
+                const specMesh = new THREE.Mesh(specGeo, new THREE.MeshBasicMaterial({ color: 0xffffff }));
+                specMesh.position.set(isLeft ? -0.05 : -0.05, 0.11, 0.025);
+                eye.add(specMesh);
+                return eye;
+            }
+
+            leftEye = createKirbyEye(true);
+            leftEye.position.set(-0.46, 0.22, 1.08);
+            bodyGroup.add(leftEye);
+
+            rightEye = createKirbyEye(false);
+            rightEye.position.set(0.46, 0.22, 1.08);
+            bodyGroup.add(rightEye);
+
+            // Blush Cheeks
+            const cheekGeo = new THREE.CylinderGeometry(0.24, 0.24, 0.04, 10);
+            cheekGeo.rotateX(Math.PI / 2);
+            const cheekMat = new THREE.MeshBasicMaterial({ color: 0xff4081 });
+            const leftCheek = new THREE.Mesh(cheekGeo, cheekMat);
+            leftCheek.position.set(-0.76, -0.16, 1.07);
+            bodyGroup.add(leftCheek);
+
+            const rightCheek = new THREE.Mesh(cheekGeo, cheekMat);
+            rightCheek.position.set(0.76, -0.16, 1.07);
+            bodyGroup.add(rightCheek);
+
+            // Mouth (Smile & Inhale 'O')
+            const mouthMat = new THREE.MeshBasicMaterial({ color: 0xbf1250 });
+            const smileGeo = new THREE.TorusGeometry(0.16, 0.038, 5, 10, Math.PI);
+            smileGeo.rotateZ(Math.PI);
+            smileMesh = new THREE.Mesh(smileGeo, mouthMat);
+            smileMesh.position.set(0, -0.16, 1.08);
+            bodyGroup.add(smileMesh);
+
+            const oMouthGeo = new THREE.TorusGeometry(0.15, 0.05, 6, 12);
+            oMouthMesh = new THREE.Mesh(oMouthGeo, mouthMat);
+            oMouthMesh.position.set(0, -0.16, 1.08);
+            oMouthMesh.visible = false;
+            bodyGroup.add(oMouthMesh);
+
+            // Little Cube Hands
+            const handGeo = new THREE.BoxGeometry(0.46, 0.46, 0.46);
+            const handMat = new THREE.MeshStandardMaterial({
+                color: 0x90edff,
+                roughness: 0.18,
+                metalness: 0.1,
+                flatShading: true
+            });
+
+            leftHandPivot = new THREE.Group();
+            leftHandPivot.position.set(-1.26, -0.1, 0.1);
+            leftHandPivot.add(new THREE.Mesh(handGeo, handMat));
+            bodyGroup.add(leftHandPivot);
+
+            rightHandPivot = new THREE.Group();
+            rightHandPivot.position.set(1.26, -0.1, 0.1);
+            rightHandPivot.add(new THREE.Mesh(handGeo, handMat));
+            bodyGroup.add(rightHandPivot);
+
+            // Little Cube Feet ("steeps little cubes also" - Kirby coral red shoes)
+            const footGeo = new THREE.BoxGeometry(0.72, 0.50, 0.88);
+            footMat = new THREE.MeshStandardMaterial({
+                color: 0xff4d8d,
+                roughness: 0.22,
+                metalness: 0.08,
+                flatShading: true
+            });
+
+            leftFootPivot = new THREE.Group();
+            leftFootPivot.position.set(-0.66, -1.05, 0.08);
+            const leftFootM = new THREE.Mesh(footGeo, footMat);
+            leftFootM.position.set(0, -0.22, 0.06);
+            leftFootPivot.add(leftFootM);
+            rootGroup.add(leftFootPivot);
+
+            rightFootPivot = new THREE.Group();
+            rightFootPivot.position.set(0.66, -1.05, 0.08);
+            const rightFootM = new THREE.Mesh(footGeo, footMat);
+            rightFootM.position.set(0, -0.22, 0.06);
+            rightFootPivot.add(rightFootM);
+            rootGroup.add(rightFootPivot);
+
+            // Interactive Drag Controls for 3D Cube
+            container3d.addEventListener('pointerdown', (e) => {
+                isDraggingCube = true;
+                prevDragX = e.clientX;
+                prevDragY = e.clientY;
+                container3d.setPointerCapture(e.pointerId);
+            });
+
+            window.addEventListener('pointerup', (e) => {
+                if (isDraggingCube) {
+                    isDraggingCube = false;
+                    try { container3d.releasePointerCapture(e.pointerId); } catch(err) {}
+                }
+            });
+
+            // Click / Poke
+            container3d.addEventListener('click', () => {
+                if (Math.abs(cubeRotVelX) > 0.04 || Math.abs(cubeRotVelY) > 0.04) return;
+                pokeTime = 1.0;
+                sfxLilCubeBoing();
+                if (typeof triggerBlessingBurst === 'function') triggerBlessingBurst();
+                if (animState === 'idle') {
+                    animState = 'poke';
+                    stateTimer = 0;
+                }
+            });
+        }
+
+        function setKirbyAnimation(state) {
+            animState = state;
+            stateTimer = 0;
+            if (state === 'walk') {
+                walkPhase = 0;
+            } else if (state === 'float') {
+                floatTimer = 0;
+                sfxFloatInhale();
+                if (smileMesh) smileMesh.visible = false;
+                if (oMouthMesh) oMouthMesh.visible = true;
+            } else if (state === 'dance') {
+                danceStep = 0;
+                danceTimer = 0;
+                sfxVictoryFanfare();
+            } else {
+                if (smileMesh) smileMesh.visible = true;
+                if (oMouthMesh) oMouthMesh.visible = false;
+            }
+        }
+
+        window.triggerKirbyWaddle = function() {
+            setKirbyAnimation('walk');
+            setTimeout(() => { if (animState === 'walk') setKirbyAnimation('idle'); }, 4500);
+        };
+
+        window.triggerKirbyFloat = function() {
+            setKirbyAnimation('float');
+        };
+
+        window.triggerKirbyDance = function() {
+            setKirbyAnimation('dance');
+        };
+
+        // =========================================================================
+        // 3. Mathematical Hopf Fibration 4D Engine (Human-Perceptive Smoothing)
+        // =========================================================================
+        const hopfCanvas = document.getElementById('hopfCanvas');
+        const hopfCtx = hopfCanvas ? hopfCanvas.getContext('2d') : null;
+        const figure = document.getElementById('saintFigure');
+
+        let width = hopfCanvas.width = hopfCanvas.parentElement.offsetWidth;
+        let height = hopfCanvas.height = hopfCanvas.parentElement.offsetHeight;
+
+        window.addEventListener('resize', () => {
+            if (!hopfCanvas.parentElement) return;
+            width = hopfCanvas.width = hopfCanvas.parentElement.offsetWidth;
+            height = hopfCanvas.height = hopfCanvas.parentElement.offsetHeight;
+            if (container3d && renderer3d && camera3d) {
+                width3d = container3d.clientWidth || 280;
+                height3d = container3d.clientHeight || 260;
+                camera3d.aspect = width3d / height3d;
+                camera3d.updateProjectionMatrix();
+                renderer3d.setSize(width3d, height3d);
+            }
+        });
+
+        // Sacred Holy Particles (Sparkles & Stars)
+        const holyParticles = [];
+        class HolySparkle {
+            constructor(x, y, isBurst = false) {
+                this.x = x;
+                this.y = y;
+                this.size = Math.random() * (isBurst ? 10 : 5) + 2.5;
+                const speed = isBurst ? 4.5 : 0.9;
+                const angle = Math.random() * Math.PI * 2;
+                this.vx = Math.cos(angle) * speed * (Math.random() + 0.4);
+                this.vy = Math.sin(angle) * speed * (Math.random() + 0.4) - (isBurst ? 0.8 : 0.9);
+                this.alpha = 1.0;
+                this.decay = Math.random() * 0.012 + (isBurst ? 0.020 : 0.007);
+                this.hue = Math.random() * 360;
+                this.rot = Math.random() * Math.PI * 2;
+                this.rotSpeed = (Math.random() - 0.5) * 0.08;
+                this.isCross = Math.random() > 0.45;
+            }
+            update() {
+                this.x += this.vx;
+                this.y += this.vy;
+                this.alpha -= this.decay;
+                this.rot += this.rotSpeed;
+            }
+            draw(ctx) {
+                if (this.alpha <= 0) return;
+                ctx.save();
+                ctx.globalAlpha = Math.max(0, this.alpha * 0.75); // Softened for text readability
+                ctx.translate(this.x, this.y);
+                ctx.rotate(this.rot);
+                ctx.fillStyle = `hsla(${this.hue}, 95%, 75%, 1)`;
+                ctx.shadowColor = `hsla(${this.hue}, 100%, 70%, 0.5)`;
+                ctx.shadowBlur = 6;
+
+                const r = this.size;
+                ctx.beginPath();
+                if (this.isCross) {
+                    ctx.moveTo(0, -r);
+                    ctx.lineTo(r * 0.25, -r * 0.25);
+                    ctx.lineTo(r, 0);
+                    ctx.lineTo(r * 0.25, r * 0.25);
+                    ctx.lineTo(0, r);
+                    ctx.lineTo(-r * 0.25, r * 0.25);
+                    ctx.lineTo(-r, 0);
+                    ctx.lineTo(-r * 0.25, -r * 0.25);
+                } else {
+                    ctx.arc(0, 0, r * 0.4, 0, Math.PI * 2);
+                }
+                ctx.closePath();
+                ctx.fill();
+                ctx.restore();
+            }
+        }
+
+        function triggerBlessingBurst() {
+            if (!figure || !hopfCanvas) return;
+            const rect = figure.getBoundingClientRect();
+            const canvasRect = hopfCanvas.getBoundingClientRect();
+            const cx = rect.left + rect.width / 2 - canvasRect.left;
+            const cy = rect.top + rect.height / 2 - canvasRect.top;
+            for (let i = 0; i < 36; i++) {
+                holyParticles.push(new HolySparkle(cx, cy, true));
+            }
+        }
+
+        // Hopf 4D Coordinates & Human Perception Smooth Dynamics
+        let time = 0;
+        let targetRotX = 0.22;
+        let targetRotY = 0;
+        let curRotX = 0.22;
+        let curRotY = 0;
+
+        // Ergonomically tuned circular motion smoothing (Weber-Fechner & Critically Damped Inertia)
+        let lastPointerAngle = null;
+        let circularVelocity = 0;
+        let circularPhase = 0;
+
+        let dispersionActive = true;
+        let densityMode = 1; // 0: 18, 1: 36, 2: 54
+        const densityConfigs = [
+            { tori: 2, fibersPerTorus: 9, pts: 40, label: "18環" },
+            { tori: 3, fibersPerTorus: 12, pts: 46, label: "36環" },
+            { tori: 3, fibersPerTorus: 18, pts: 52, label: "54環" }
+        ];
+
+        // Smooth Pointer Handler with Tremor Filtering & Clamped Acceleration
+        function handlePointer(clientX, clientY) {
+            const rect = hopfCanvas.getBoundingClientRect();
+            if (clientY < rect.top || clientY > rect.bottom || clientX < rect.left || clientX > rect.right) {
+                lastPointerAngle = null;
+                return;
+            }
+
+            let cx = width * 0.5;
+            let cy = height * 0.38;
+            if (figure && hopfCanvas.parentElement) {
+                const fRect = figure.getBoundingClientRect();
+                const parentRect = hopfCanvas.parentElement.getBoundingClientRect();
+                cx = (fRect.left + fRect.width * 0.5) - parentRect.left;
+                cy = (fRect.top + fRect.height * 0.5) - parentRect.top;
+            }
+
+            const curX = clientX - rect.left;
+            const curY = clientY - rect.top;
+            const dx = curX - cx;
+            const dy = curY - cy;
+            const dist = Math.sqrt(dx * dx + dy * dy);
+            const angle = Math.atan2(dy, dx);
+
+            // Gaze tracking for Lil Cube
+            targetLookX = Math.max(-0.45, Math.min(0.45, (dx / 320)));
+            targetLookY = Math.max(-0.35, Math.min(0.35, -(dy / 320)));
+
+            // 3D Tilt: gentle, human-friendly range (+-0.22 rad max) to prevent visual disorientation
+            const maxRadius = Math.min(width, height) * 0.45;
+            const normDist = Math.min(1.0, dist / Math.max(80, maxRadius));
+            targetRotX = (dy / (height * 0.5)) * 0.22 + 0.22;
+            targetRotY = (dx / (width * 0.5)) * 0.35;
+
+            // Handle 3D Drag if active
+            if (isDraggingCube) {
+                const dragDeltaX = clientX - prevDragX;
+                const dragDeltaY = clientY - prevDragY;
+                cubeRotVelY = dragDeltaX * 0.012;
+                cubeRotVelX = dragDeltaY * 0.010;
+                cubeCurRotY += cubeRotVelY;
+                cubeCurRotX += cubeRotVelX;
+                prevDragX = clientX;
+                prevDragY = clientY;
+            }
+
+            // Circular Swirl Detection with Deadband & Gentle Gain (HCI Standard)
+            if (lastPointerAngle !== null) {
+                let dTheta = angle - lastPointerAngle;
+                while (dTheta > Math.PI) dTheta -= Math.PI * 2;
+                while (dTheta < -Math.PI) dTheta += Math.PI * 2;
+
+                // Deadband threshold: filter out hand tremors / sensor noise (< 0.008 rad)
+                if (Math.abs(dTheta) > 0.008) {
+                    // Clamped gentle transfer (0.35 factor) so it glides serenely rather than whipping abruptly
+                    const clampedDelta = Math.max(-0.045, Math.min(0.045, dTheta * 0.35));
+                    circularVelocity += clampedDelta;
+                    circularPhase += clampedDelta * 1.2;
+
+                    // Delicate sparkling along circular cursor orbit
+                    if (Math.random() < 0.25 && holyParticles.length < 32) {
+                        holyParticles.push(new HolySparkle(curX, curY, false));
+                    }
+                }
+            }
+            lastPointerAngle = angle;
+        }
+
+        window.addEventListener('mousemove', (e) => {
+            handlePointer(e.clientX, e.clientY);
+        });
+
+        window.addEventListener('touchmove', (e) => {
+            if (e.touches.length > 0) {
+                handlePointer(e.touches[0].clientX, e.touches[0].clientY);
+            }
+        }, { passive: true });
+
+        window.addEventListener('touchend', () => {
+            lastPointerAngle = null;
+        });
+
+        window.toggleDispersion = function() {
+            dispersionActive = !dispersionActive;
+            const btn = document.getElementById('dispersionBtn');
+            if (dispersionActive) {
+                btn.classList.add('active');
+                btn.innerHTML = '🌈 分光モード: ON';
+            } else {
+                btn.classList.remove('active');
+                btn.innerHTML = '✨ 単色光モード: OFF';
+            }
+        };
+
+        window.cycleDensity = function() {
+            densityMode = (densityMode + 1) % densityConfigs.length;
+            const btn = document.getElementById('densityBtn');
+            btn.innerHTML = `🪐 繊維環: ${densityConfigs[densityMode].label}`;
+            playCelestialChime(880.00, 0.4, 0.15);
+        };
+
+        let blessingActive = false;
+        window.triggerBlessing = function() {
+            if (blessingActive) return;
+            blessingActive = true;
+            playSacredChord();
+            triggerBlessingBurst();
+
+            if (rootGroup) {
+                pokeTime = 1.0;
+                sfxLilCubeBoing();
+            }
+
+            nextSacredQuote();
+            setTimeout(() => { blessingActive = false; }, 600);
+        };
+
+        const sacredQuotes = [
+            "「ボクはリル・キューブ64… 低ポリゴン3Dで動き回る聖なる氷晶だキューブ！🧊✨」",
+            "「ボクの足（Steeps）もかわいいミニキューブ！ ぴょこぴょこ歩いてダンスも踊れるキューブ！🐾」",
+            "「4次元球面 S³ のホップ束が、静かに優美に調和の天球を描くキューブ！🌈💫」",
+            "「実身と仮身、ハイパーメディアの永遠の連鎖… TRONの調和がここに極まるキューブ！✨」",
+            "「マウスを円状に回すと、ホップ束が滑らかな慣性で優美に回るキューブ〜⭐🔔」",
+            "「ホップ不変量（Hopf Invariant）は常に1！ この絆は絶対に解けないキューブ！🧊💫」"
+        ];
+        let quoteIdx = 0;
+        function nextSacredQuote() {
+            quoteIdx = (quoteIdx + 1) % sacredQuotes.length;
+            if (quoteText) quoteText.innerText = sacredQuotes[quoteIdx];
+        }
+        if (bubble) {
+            bubble.addEventListener('click', () => {
+                nextSacredQuote();
+                playCelestialChime(739.99, 0.5, 0.15);
+            });
+        }
+
+        // =========================================================================
+        // 4. Combined 60 FPS Render Loop (Hopf Canvas + Three.js 3D Character)
+        // =========================================================================
+        let clock = typeof THREE !== 'undefined' ? new THREE.Clock() : null;
+
+        function animate() {
+            requestAnimationFrame(animate);
+
+            const dt = clock ? Math.min(clock.getDelta(), 0.05) : 0.016;
+            time += dt;
+            stateTimer += dt;
+
+            // -------------------------------------------------------------
+            // A. Update Three.js 3D Lil Cube 64 with Nintendo Kirby Animations
+            // -------------------------------------------------------------
+            if (rootGroup && bodyGroup) {
+                // Drag Inertia & Smooth Restoring Spring
+                if (!isDraggingCube) {
+                    cubeRotVelX *= 0.90;
+                    cubeRotVelY *= 0.90;
+                    cubeCurRotX += cubeRotVelX;
+                    cubeCurRotY += cubeRotVelY;
+                    // Gently spring back toward facing forward
+                    cubeCurRotX += (0 - cubeCurRotX) * 0.04;
+                    cubeCurRotY += (0 - cubeCurRotY) * 0.04;
+                }
+
+                rootGroup.rotation.x = cubeCurRotX + (targetLookY * 0.35);
+                rootGroup.rotation.y = cubeCurRotY + (targetLookX * 0.45);
+
+                // Eye Tracking
+                if (leftEye && rightEye) {
+                    leftEye.position.x = -0.46 + targetLookX * 0.08;
+                    leftEye.position.y = 0.22 + targetLookY * 0.06;
+                    rightEye.position.x = 0.46 + targetLookX * 0.08;
+                    rightEye.position.y = 0.22 + targetLookY * 0.06;
+
+                    // Eye Blinking Animation
+                    blinkTimer -= dt;
+                    if (blinkTimer <= 0) {
+                        isBlinking = true;
+                        blinkTimer = 3.0 + Math.random() * 2.5;
+                    }
+                    if (isBlinking) {
+                        leftEye.scale.y = 0.08;
+                        rightEye.scale.y = 0.08;
+                        if (blinkTimer < (3.0 + Math.random() * 2.5) - 0.15) {
+                            leftEye.scale.y = 1.0;
+                            rightEye.scale.y = 1.0;
+                            isBlinking = false;
+                        }
+                    } else {
+                        leftEye.scale.y = 1.0;
+                        rightEye.scale.y = 1.0;
+                    }
+                }
+
+                // Inner core gem rotation
+                if (coreCube) {
+                    coreCube.rotation.x += dt * 0.5;
+                    coreCube.rotation.y += dt * 0.7;
+                }
+
+                // Animation State Machine
+                if (animState === 'idle') {
+                    // Kirby Breathing & Weight Shift
+                    const breath = Math.sin(stateTimer * 3.2);
+                    bodyGroup.scale.y = 1.0 + breath * 0.04;
+                    bodyGroup.scale.x = 1.0 - breath * 0.02;
+                    bodyGroup.scale.z = 1.0 - breath * 0.02;
+                    bodyGroup.position.y = breath * 0.03;
+
+                    const sway = Math.sin(stateTimer * 1.6);
+                    bodyGroup.rotation.z = sway * 0.035;
+                    if (leftFootPivot) leftFootPivot.rotation.z = sway * 0.03;
+                    if (rightFootPivot) rightFootPivot.rotation.z = -sway * 0.03;
+                    if (leftFootPivot) leftFootPivot.position.y = -1.05;
+                    if (rightFootPivot) rightFootPivot.position.y = -1.05;
+                    if (leftFootPivot) leftFootPivot.rotation.x = 0;
+                    if (rightFootPivot) rightFootPivot.rotation.x = 0;
+
+                    if (leftHandPivot) leftHandPivot.rotation.z = 0.1 + Math.sin(stateTimer * 3.2) * 0.08;
+                    if (rightHandPivot) rightHandPivot.rotation.z = -0.1 - Math.sin(stateTimer * 3.2) * 0.08;
+                    if (leftHandPivot) leftHandPivot.rotation.x = 0;
+                    if (rightHandPivot) rightHandPivot.rotation.x = 0;
+
+                    rootGroup.position.y = 0;
+                    if (pedestal) {
+                        pedestal.style.transform = `scale(1)`;
+                        pedestal.style.opacity = '0.75';
+                    }
+
+                } else if (animState === 'walk') {
+                    // Kirby Waddle Walk Cycle!
+                    walkPhase += dt * 7.5;
+                    const sinW = Math.sin(walkPhase);
+
+                    const currentSign = sinW > 0 ? 1 : -1;
+                    if (currentSign !== lastStepSign) {
+                        lastStepSign = currentSign;
+                        sfxFootstep();
+                    }
+
+                    if (leftFootPivot) {
+                        leftFootPivot.position.y = -1.05 + Math.max(0, sinW) * 0.42;
+                        leftFootPivot.rotation.x = sinW * 0.46;
+                        leftFootPivot.rotation.z = 0.08;
+                    }
+                    if (rightFootPivot) {
+                        rightFootPivot.position.y = -1.05 + Math.max(0, -sinW) * 0.42;
+                        rightFootPivot.rotation.x = -sinW * 0.46;
+                        rightFootPivot.rotation.z = -0.08;
+                    }
+
+                    bodyGroup.rotation.z = sinW * 0.16;
+                    bodyGroup.position.y = Math.abs(Math.sin(walkPhase * 2)) * 0.13;
+                    bodyGroup.scale.set(1.0, 1.0, 1.0);
+
+                    if (leftHandPivot) leftHandPivot.rotation.x = -sinW * 0.65;
+                    if (rightHandPivot) rightHandPivot.rotation.x = sinW * 0.65;
+
+                    rootGroup.position.y = 0;
+
+                } else if (animState === 'float') {
+                    // Kirby Inhale, Puffy Cube Balloon & Flutter Kick
+                    floatTimer += dt;
+                    if (floatTimer < 0.4) {
+                        const p = floatTimer / 0.4;
+                        bodyGroup.scale.set(1.0 + p * 0.36, 1.0 + p * 0.34, 1.0 + p * 0.36);
+                    } else if (floatTimer < 3.8) {
+                        bodyGroup.scale.set(1.36, 1.34, 1.36);
+                        const hover = Math.sin((floatTimer - 0.4) * 3.0);
+                        rootGroup.position.y = 1.4 + hover * 0.26;
+
+                        if (leftFootPivot) {
+                            leftFootPivot.rotation.x = Math.sin(floatTimer * 8.5) * 0.48;
+                            leftFootPivot.position.y = -1.25;
+                        }
+                        if (rightFootPivot) {
+                            rightFootPivot.rotation.x = Math.cos(floatTimer * 8.5) * 0.48;
+                            rightFootPivot.position.y = -1.25;
+                        }
+
+                        if (leftHandPivot) leftHandPivot.rotation.z = 0.4 + Math.sin(floatTimer * 14.0) * 0.40;
+                        if (rightHandPivot) rightHandPivot.rotation.z = -0.4 - Math.sin(floatTimer * 14.0) * 0.40;
+
+                        if (pedestal) {
+                            const hNorm = (rootGroup.position.y) / 1.66;
+                            pedestal.style.transform = `scale(${Math.max(0.45, 1.0 - hNorm * 0.45)})`;
+                            pedestal.style.opacity = `${Math.max(0.25, 0.75 - hNorm * 0.45)}`;
+                        }
+                    } else if (floatTimer < 4.4) {
+                        const ex = (floatTimer - 3.8) / 0.6;
+                        bodyGroup.scale.set(1.36 - ex * 0.36, 1.34 - ex * 0.34, 1.36 - ex * 0.36);
+                        rootGroup.position.y = Math.max(0, 1.4 * (1.0 - ex));
+                        if (smileMesh) smileMesh.visible = true;
+                        if (oMouthMesh) oMouthMesh.visible = false;
+                    } else {
+                        setKirbyAnimation('idle');
+                        sfxLilCubeBoing();
+                        triggerBlessingBurst();
+                    }
+
+                } else if (animState === 'dance') {
+                    // Kirby 64 Victory Dance Sequence
+                    danceTimer += dt;
+                    if (danceTimer < 0.9) {
+                        const p = danceTimer / 0.9;
+                        rootGroup.position.y = Math.sin(p * Math.PI) * 0.82;
+                        rootGroup.position.x = -0.55 * Math.sin(p * Math.PI);
+                        bodyGroup.rotation.y = p * Math.PI * 2;
+                        if (leftFootPivot) leftFootPivot.position.y = -1.05;
+                        if (rightFootPivot) rightFootPivot.position.y = -0.7;
+                    } else if (danceTimer < 1.8) {
+                        const p = (danceTimer - 0.9) / 0.9;
+                        rootGroup.position.y = Math.sin(p * Math.PI) * 0.82;
+                        rootGroup.position.x = 0.55 * Math.sin(p * Math.PI);
+                        bodyGroup.rotation.y = -p * Math.PI * 2;
+                        if (leftFootPivot) leftFootPivot.position.y = -0.7;
+                        if (rightFootPivot) rightFootPivot.position.y = -1.05;
+                    } else if (danceTimer < 2.8) {
+                        const p = (danceTimer - 1.8) / 1.0;
+                        rootGroup.position.x = 0;
+                        rootGroup.position.y = Math.sin(p * Math.PI) * 1.4;
+                        bodyGroup.rotation.x = -p * Math.PI * 2;
+                    } else if (danceTimer < 4.2) {
+                        rootGroup.position.set(0, 0, 0);
+                        bodyGroup.rotation.set(0, 0, 0);
+                        bodyGroup.scale.set(1.10, 0.92, 1.08); // Victory squat pose
+                        if (leftFootPivot) leftFootPivot.rotation.z = 0.42;
+                        if (rightFootPivot) rightFootPivot.rotation.z = -0.42;
+                        if (leftHandPivot) leftHandPivot.rotation.z = 1.35; // Hand raised high!
+                        if (rightHandPivot) rightHandPivot.rotation.z = -0.3;
+                        if (danceTimer > 2.8 && danceStep === 0) {
+                            danceStep = 1;
+                            triggerBlessingBurst();
+                        }
+                    } else {
+                        setKirbyAnimation('idle');
+                    }
+
+                } else if (animState === 'poke') {
+                    // Jello Squash & Rebound
+                    pokeTime -= dt * 1.8;
+                    if (pokeTime > 0) {
+                        const damp = Math.exp(-4.5 * (1.0 - pokeTime));
+                        const osc = Math.cos(22 * (1.0 - pokeTime));
+                        const squish = 0.38 * damp * osc;
+                        bodyGroup.scale.y = 1.0 - squish;
+                        bodyGroup.scale.x = 1.0 + squish * 0.55;
+                        bodyGroup.scale.z = 1.0 + squish * 0.55;
+                    } else {
+                        bodyGroup.scale.set(1, 1, 1);
+                        setKirbyAnimation('idle');
+                    }
+                }
+
+                renderer3d.render(scene3d, camera3d);
+            }
+
+            // -------------------------------------------------------------
+            // B. Update Hopf Fibration 4D Engine with Human-Centered Smoothing
+            // -------------------------------------------------------------
+            if (hopfCtx) {
+                // Silky, critically damped flywheel inertia (standard of human motion perception)
+                circularVelocity *= 0.968;
+                circularPhase += circularVelocity;
+
+                // Low-pass filter for tilt angles to eliminate camera jitter
+                curRotX += (targetRotX - curRotX) * 0.028;
+                curRotY += (targetRotY - curRotY) * 0.028;
+
+                hopfCtx.clearRect(0, 0, width, height);
+
+                let cx = width * 0.5;
+                let cy = height * 0.38;
+                if (figure && hopfCanvas.parentElement) {
+                    const rect = figure.getBoundingClientRect();
+                    const parentRect = hopfCanvas.parentElement.getBoundingClientRect();
+                    cx = (rect.left + rect.width * 0.5) - parentRect.left;
+                    cy = (rect.top + rect.height * 0.5) - parentRect.top;
+                }
+
+                const cfg = densityConfigs[densityMode];
+                const numTori = cfg.tori;
+                const fibersPerTorus = cfg.fibersPerTorus;
+                const numPts = cfg.pts;
+                const totalFibers = numTori * fibersPerTorus;
+
+                const hopfScale = Math.min(width, height) * 0.28;
+
+                // Serene, majestic motion speeds
+                const cosX = Math.cos(curRotX), sinX = Math.sin(curRotX);
+                const cosY = Math.cos(curRotY + time * 0.06 + circularPhase * 0.25), sinY = Math.sin(curRotY + time * 0.06 + circularPhase * 0.25);
+                const cosZ = Math.cos(time * 0.04), sinZ = Math.sin(time * 0.04);
+
+                // 4D isoclinic rotation phases - smoothly guided by circular mouse swirling
+                const psi = time * 0.12 + circularPhase;
+                const omega = time * 0.08 + circularPhase * 0.40;
+
+                const fiberList = [];
+
+                for (let t = 0; t < numTori; t++) {
+                    const eta = (Math.PI / 7) + (t + 0.6) * (Math.PI / (numTori * 2.8));
+                    const cosEta = Math.cos(eta);
+                    const sinEta = Math.sin(eta);
+
+                    for (let f = 0; f < fibersPerTorus; f++) {
+                        const fiberIdx = t * fibersPerTorus + f;
+                        const beta = (f * 2 * Math.PI / fibersPerTorus) + omega;
+
+                        const pts2d = [];
+                        let avgZ = 0;
+
+                        for (let p = 0; p <= numPts; p++) {
+                            const xi = (p * 2 * Math.PI / numPts);
+
+                            // 4D Coordinates on S^3
+                            const x0 = cosEta * Math.cos(xi + beta * 0.5 + psi);
+                            const x1 = cosEta * Math.sin(xi + beta * 0.5 + psi);
+                            const x2 = sinEta * Math.cos(xi - beta * 0.5 + psi * 0.8);
+                            const x3 = sinEta * Math.sin(xi - beta * 0.5 + psi * 0.8);
+
+                            // Stereographic projection S^3 -> R^3 from (0,0,0,1)
+                            const denom = 1.08 - x3;
+                            const X3d = x0 / denom;
+                            const Y3d = x1 / denom;
+                            const Z3d = x2 / denom;
+
+                            // 3D Rotation
+                            const x_yaw = X3d * cosY + Z3d * sinY;
+                            const y_yaw = Y3d;
+                            const z_yaw = -X3d * sinY + Z3d * cosY;
+
+                            const x_pitch = x_yaw;
+                            const y_pitch = y_yaw * cosX - z_yaw * sinX;
+                            const z_pitch = y_yaw * sinX + z_yaw * cosX;
+
+                            const x_rot = x_pitch * cosZ - y_pitch * sinZ;
+                            const y_rot = x_pitch * sinZ + y_pitch * cosZ;
+                            const z_rot = z_pitch;
+
+                            // Camera perspective
+                            const camDist = 3.6;
+                            const pers = camDist / (camDist + z_rot);
+                            const scrX = cx + x_rot * hopfScale * pers;
+                            const scrY = cy + y_rot * hopfScale * pers;
+
+                            pts2d.push({ x: scrX, y: scrY, z: z_rot });
+                            avgZ += z_rot;
+                        }
+
+                        avgZ /= (numPts + 1);
+
+                        let hue;
+                        if (dispersionActive) {
+                            hue = ((fiberIdx / totalFibers) * 360 + time * 24) % 360;
+                        } else {
+                            hue = 180 + Math.sin(time * 0.8 + fiberIdx) * 28;
+                        }
+
+                        fiberList.push({
+                            pts: pts2d,
+                            avgZ: avgZ,
+                            hue: hue,
+                            torusIdx: t
+                        });
+                    }
+                }
+
+                // Depth Sorting
+                fiberList.sort((a, b) => a.avgZ - b.avgZ);
+
+                // Draw Faded 3D Hopf Fibers for background harmony & text readability
+                hopfCtx.save();
+                hopfCtx.lineCap = 'round';
+                hopfCtx.lineJoin = 'round';
+
+                for (let f = 0; f < fiberList.length; f++) {
+                    const fib = fiberList[f];
+                    const pts = fib.pts;
+
+                    // Muted, ethereal alpha curve
+                    const depthAlpha = Math.max(0.10, Math.min(0.50, 0.28 + fib.avgZ * 0.18));
+                    const lineWidth = Math.max(1.3, (1.8 + fib.avgZ * 0.65));
+
+                    hopfCtx.beginPath();
+                    hopfCtx.moveTo(pts[0].x, pts[0].y);
+                    for (let i = 1; i < pts.length; i++) {
+                        hopfCtx.lineTo(pts[i].x, pts[i].y);
+                    }
+
+                    hopfCtx.strokeStyle = `hsla(${fib.hue}, 95%, 68%, ${depthAlpha})`;
+                    hopfCtx.lineWidth = lineWidth;
+                    hopfCtx.shadowColor = `hsla(${fib.hue}, 100%, 72%, 0.5)`;
+                    hopfCtx.shadowBlur = dispersionActive ? 5 : 3;
+                    hopfCtx.globalCompositeOperation = 'source-over';
+                    hopfCtx.stroke();
+
+                    if (Math.random() < 0.012) {
+                        const midPt = pts[Math.floor(pts.length / 2)];
+                        if (midPt && holyParticles.length < 30) {
+                            holyParticles.push(new HolySparkle(midPt.x, midPt.y));
+                        }
+                    }
+                }
+                hopfCtx.restore();
+
+                // Gentle Background Sparkles
+                if (Math.random() < 0.10 && holyParticles.length < 30) {
+                    const rx = cx + (Math.random() - 0.5) * 220;
+                    const ry = cy + (Math.random() - 0.5) * 180;
+                    holyParticles.push(new HolySparkle(rx, ry));
+                }
+
+                for (let i = holyParticles.length - 1; i >= 0; i--) {
+                    const p = holyParticles[i];
+                    p.update();
+                    p.draw(hopfCtx);
+                    if (p.alpha <= 0) {
+                        holyParticles.splice(i, 1);
+                    }
+                }
+            }
+        }
+
+        animate();
+    })();
+    </script>
+
+</body>
+</html>

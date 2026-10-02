@@ -646,22 +646,25 @@
             to   { transform: rotate(0deg); }
         }
 
-        /* Low-Poly 3D Lil Cube 64 Body Stage - Elevated z-index & Headroom to Prevent Clipping */
+        /* Low-Poly 3D Lil Cube 64 Body Stage - Unbounded Scalar Space with Transparent Alpha Fog */
         .saint-3d-box {
             position: absolute;
             top: 50%;
             left: 50%;
-            width: 380px;
-            height: 460px;
-            margin-top: -230px;
-            margin-left: -190px;
-            z-index: 60; /* Elevated z-index: floats on top of all upper blocks & text */
+            width: 640px;
+            height: 560px;
+            margin-top: -280px;
+            margin-left: -320px;
+            z-index: 50;
             display: flex;
             align-items: center;
             justify-content: center;
             cursor: grab;
             touch-action: none;
             overflow: visible;
+            /* Transparent Alpha Fog: smooth radial feathering dissolving into infinite scalar space */
+            -webkit-mask-image: radial-gradient(ellipse 48% 48% at 50% 50%, rgba(0,0,0,1) 50%, rgba(0,0,0,0.82) 72%, rgba(0,0,0,0.18) 90%, transparent 100%);
+            mask-image: radial-gradient(ellipse 48% 48% at 50% 50%, rgba(0,0,0,1) 50%, rgba(0,0,0,0.82) 72%, rgba(0,0,0,0.18) 90%, transparent 100%);
         }
 
         .saint-3d-box:active {
@@ -669,11 +672,11 @@
         }
 
         #mascot3dCanvas {
-            width: 380px !important;
-            height: 460px !important;
+            width: 640px !important;
+            height: 560px !important;
             display: block;
             outline: none;
-            filter: drop-shadow(0 14px 28px rgba(0, 255, 255, 0.45)) drop-shadow(0 0 20px rgba(255, 215, 0, 0.35));
+            /* Drop shadow removed from canvas to eliminate all rectangular box boundary artifacts */
         }
 
         .saint-pedestal-shadow {
@@ -693,6 +696,8 @@
 
         /* Sacred Dialogue Bubble */
         .saint-speech-bubble {
+            position: relative;
+            z-index: 70;
             background: rgba(8, 12, 32, 0.95);
             border: 2px solid rgba(250, 204, 21, 0.88);
             border-radius: 20px;
@@ -761,13 +766,14 @@
 
         /* Holiness Dashboard Controls */
         .saint-dashboard {
+            position: relative;
+            z-index: 70;
             display: flex;
             flex-wrap: wrap;
             align-items: center;
             justify-content: center;
             gap: 0.75rem;
             margin-top: 1.3rem;
-            z-index: 10;
         }
 
         .saint-btn {
@@ -2026,8 +2032,8 @@
         const quoteText = document.getElementById('saintQuoteText');
         const bubble = document.getElementById('saintBubble');
 
-        let width3d = 380;
-        let height3d = 460;
+        let width3d = 640;
+        let height3d = 560;
 
         let scene3d, camera3d, renderer3d, rootGroup, bodyGroup;
         let mainCube, coreCube, leftEye, rightEye, smileMesh, oMouthMesh;
@@ -2429,9 +2435,9 @@
         // Initialize Three.js Scene Exactly Centered
         if (container3d && canvas3d && typeof THREE !== 'undefined') {
             scene3d = new THREE.Scene();
-            camera3d = new THREE.PerspectiveCamera(38, 380 / 460, 0.1, 100);
-            camera3d.position.set(0, 0.15, 7.8);
-            camera3d.lookAt(0, 0.15, 0);
+            camera3d = new THREE.PerspectiveCamera(36, 640 / 560, 0.1, 100);
+            camera3d.position.set(0, 0.08, 9.2);
+            camera3d.lookAt(0, 0.08, 0);
 
             renderer3d = new THREE.WebGLRenderer({
                 canvas: canvas3d,
@@ -2439,7 +2445,7 @@
                 antialias: true,
                 powerPreference: 'high-performance'
             });
-            renderer3d.setSize(380, 460);
+            renderer3d.setSize(640, 560);
             renderer3d.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 
             // Studio Ambient & Rim Lights
@@ -2545,11 +2551,11 @@
             width = hopfCanvas.width = hopfCanvas.parentElement.offsetWidth;
             height = hopfCanvas.height = hopfCanvas.parentElement.offsetHeight;
             if (container3d && renderer3d && camera3d) {
-                width3d = 380;
-                height3d = 460;
-                camera3d.aspect = 380 / 460;
+                width3d = 640;
+                height3d = 560;
+                camera3d.aspect = 640 / 560;
                 camera3d.updateProjectionMatrix();
-                renderer3d.setSize(380, 460);
+                renderer3d.setSize(640, 560);
             }
         });
 
@@ -2942,10 +2948,10 @@
                 }
 
                 const easeOut = 1 - Math.pow(1 - progress, 2.5);
-                const currentScale = 0.2 + easeOut * 4.8;
+                const currentScale = 0.2 + easeOut * 2.8;
                 this.group.scale.set(currentScale, currentScale, currentScale);
 
-                const alpha = Math.max(0, 1 - Math.pow(progress, 1.6));
+                const alpha = Math.max(0, 1 - Math.pow(progress, 1.4));
                 this.wireMesh.material.opacity = alpha * 0.85;
                 this.sphereMesh.material.opacity = alpha * 0.35;
                 this.ringH.material.opacity = alpha * 0.90;
@@ -3335,7 +3341,7 @@
                     } else if (floatTimer < 3.8) {
                         bodyGroup.scale.set(1.36, 1.34, 1.36);
                         const hover = Math.sin((floatTimer - 0.4) * 3.0);
-                        rootGroup.position.y = 1.05 + hover * 0.18;
+                        rootGroup.position.y = 0.95 + hover * 0.16;
 
                         if (leftFootPivot) {
                             leftFootPivot.rotation.x = Math.sin(floatTimer * 8.5) * 0.48;
@@ -3386,7 +3392,7 @@
                     } else if (danceTimer < 2.8) {
                         const p = (danceTimer - 1.8) / 1.0;
                         rootGroup.position.x = 0;
-                        rootGroup.position.y = 0.08 + Math.sin(p * Math.PI) * 1.35;
+                        rootGroup.position.y = 0.08 + Math.sin(p * Math.PI) * 0.95;
                         bodyGroup.rotation.x = -p * Math.PI * 2;
                     } else if (danceTimer < 4.2) {
                         rootGroup.position.set(0, 0.08, 0);

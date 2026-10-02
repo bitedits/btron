@@ -9,6 +9,12 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&family=Noto+Sans+JP:wght@400;500;600;700;800&family=Shippori+Mincho:wght@600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="index.css?v=2">
+    <script src="assets/vendor/three.min.js"></script>
+    <script>
+        if (typeof THREE === 'undefined') {
+            document.write('<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"><\/script>');
+        }
+    </script>
     <style>
         :root {
             --jp-font: 'Noto Sans JP', 'Inter', system-ui, -apple-system, sans-serif;
@@ -465,235 +471,368 @@
         
 
 
-        /* Option C: Lil Cube Interactive Companion Styles */
+        
+        /* Option A: Lil Cube 64 Hopf Fibration Saint Aura Styles */
         header {
             position: relative;
-            overflow: visible;
-            min-height: 94vh;
+            overflow: hidden;
+            min-height: 98vh;
             display: flex;
             align-items: center;
-            background: radial-gradient(circle at 50% 20%, rgba(255, 240, 248, 0.7) 0%, rgba(240, 232, 255, 0.4) 60%, transparent 100%);
+            justify-content: center;
+            background: radial-gradient(circle at 50% 36%, #1c284a 0%, #131c36 48%, #0d1427 82%, #080d1a 100%);
+            color: #f8fafc;
         }
 
-        /* Mascot Stage Perched on Lead Box */
-        .companion-stage {
-            display: flex;
-            align-items: flex-end;
-            justify-content: flex-end;
-            gap: 1.5rem;
-            margin-bottom: -18px;
-            padding-right: 2rem;
-            position: relative;
-            z-index: 15;
-        }
-
-        @media (max-width: 820px) {
-            .companion-stage {
-                flex-direction: column-reverse;
-                align-items: center;
-                justify-content: center;
-                padding-right: 0;
-                margin-bottom: 0.8rem;
-                gap: 0.8rem;
-            }
-        }
-
-        /* Nintendo-style Dynamic Speech Bubble */
-        .companion-dialogue-bubble {
-            background: #ffffff;
-            border: 2.5px solid #008080;
-            border-radius: 20px;
-            padding: 1.1rem 1.5rem;
-            max-width: 480px;
-            position: relative;
-            box-shadow: 0 14px 35px rgba(0, 128, 128, 0.18), 0 4px 12px rgba(255, 45, 149, 0.15);
-            cursor: pointer;
-            transition: all 0.28s cubic-bezier(0.34, 1.56, 0.64, 1);
-            user-select: none;
-        }
-
-        .companion-dialogue-bubble:hover {
-            transform: translateY(-4px) scale(1.02);
-            border-color: #ff2d95;
-            box-shadow: 0 18px 40px rgba(255, 45, 149, 0.25);
-        }
-
-        .companion-dialogue-bubble::after {
-            content: '';
+        #hopfCanvas {
             position: absolute;
-            bottom: 22px;
-            right: -14px;
-            border-width: 10px 0 10px 14px;
-            border-style: solid;
-            border-color: transparent transparent transparent #ffffff;
-            filter: drop-shadow(2px 0 0 #008080);
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 1;
+            pointer-events: none;
+            opacity: 0.68; /* Faded for ethereal backdrop harmony & peak text readability */
         }
 
-        @media (max-width: 820px) {
-            .companion-dialogue-bubble::after {
-                bottom: -14px;
-                right: 50%;
-                transform: translateX(50%);
-                border-width: 14px 10px 0 10px;
-                border-color: #ffffff transparent transparent transparent;
-                filter: drop-shadow(0 2px 0 #008080);
-            }
-        }
-
-        .bubble-header {
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            font-size: 0.78rem;
-            font-weight: 800;
-            color: #008080;
-            text-transform: uppercase;
-            letter-spacing: 0.05em;
-            margin-bottom: 0.4rem;
-        }
-
-        .bubble-content {
-            font-size: 1.02rem;
-            font-weight: 700;
-            color: #1e293b;
-            line-height: 1.55;
-            min-height: 3em;
-            transition: opacity 0.15s ease, transform 0.15s ease;
-        }
-
-        .bubble-hint {
-            font-size: 0.74rem;
-            color: #d90b72;
-            margin-top: 0.5rem;
-            text-align: right;
-            font-weight: 700;
-        }
-
-        /* Mascot Sprite Figure */
-        .companion-cat-figure {
+        .hero-content {
             position: relative;
-            cursor: pointer;
-            user-select: none;
-            transition: transform 0.25s cubic-bezier(0.34, 1.56, 0.64, 1);
+            z-index: 5;
+            width: 100%;
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 2.2rem 1.5rem;
             display: flex;
             flex-direction: column;
             align-items: center;
         }
 
-        .companion-cat-figure:hover {
-            transform: translateY(-8px) scale(1.08);
+        /* High-contrast Celestial Banner Tag */
+        header .hero-banner-tag {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.5rem;
+            background: rgba(14, 165, 233, 0.18) !important;
+            border: 1.5px solid rgba(56, 189, 248, 0.65) !important;
+            color: #7dd3fc !important;
+            padding: 0.45rem 1.25rem !important;
+            border-radius: 999px !important;
+            font-size: 0.90rem !important;
+            font-weight: 700 !important;
+            letter-spacing: 0.04em !important;
+            margin-bottom: 1.2rem !important;
+            backdrop-filter: blur(12px) !important;
+            box-shadow: 0 4px 18px rgba(0, 0, 0, 0.5), 0 0 16px rgba(56, 189, 248, 0.25) !important;
         }
 
-        .companion-cat-figure:active {
-            transform: translateY(2px) scale(0.95);
+        header h1.jp-title {
+            color: #ffffff !important;
+            font-size: clamp(2.3rem, 5.4vw, 3.6rem) !important;
+            font-weight: 800 !important;
+            letter-spacing: -0.015em !important;
+            line-height: 1.2 !important;
+            margin: 0.2rem 0 1rem 0 !important;
+            text-shadow: 0 2px 24px rgba(0, 0, 0, 0.95), 0 0 35px rgba(14, 165, 233, 0.4) !important;
         }
 
-        /* Lil Cube Character Display */
-        .companion-cat-img {
-            width: 155px;
-            height: 155px;
-            object-fit: contain;
-            display: block;
-            filter: drop-shadow(0 14px 28px rgba(0, 128, 128, 0.35)) drop-shadow(0 4px 12px rgba(255, 45, 149, 0.3));
-            animation: cubeBobbing 3.2s ease-in-out infinite alternate;
-            transform-origin: center bottom;
+        header .hero-subtitle {
+            color: #f8fafc !important;
+            font-size: 1.14rem !important;
+            line-height: 1.85 !important;
+            font-weight: 500 !important;
+            max-width: 880px !important;
+            margin: 0 auto 1.4rem auto !important;
+            text-shadow: 0 2px 14px rgba(0, 0, 0, 0.95), 0 1px 4px rgba(0, 0, 0, 0.9) !important;
         }
 
-        @keyframes cubeBobbing {
-            0% { transform: translateY(0) scale(1, 1); }
-            50% { transform: translateY(-8px) scale(0.98, 1.02); }
-            100% { transform: translateY(0) scale(1, 1); }
+        /* Sacred Sanctuary Stage */
+        .saint-stage {
+            position: relative;
+            z-index: 30;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            margin: 1.8rem 0 2rem 0;
+            width: 100%;
+            overflow: visible;
         }
 
-        .companion-cat-pedestal {
-            width: 130px;
-            height: 16px;
-            background: radial-gradient(ellipse at center, rgba(0, 128, 128, 0.4) 0%, rgba(255, 45, 149, 0.2) 50%, transparent 80%);
-            margin: -8px auto 0 auto;
-            border-radius: 50%;
-            filter: blur(3px);
-            animation: pedestalPulse 3.2s ease-in-out infinite alternate;
-        }
-
-        @keyframes pedestalPulse {
-            0% { transform: scale(1); opacity: 0.8; }
-            100% { transform: scale(0.85); opacity: 0.5; }
-        }
-
-        /* Companion Control Dashboard */
-        .companion-dashboard {
+        /* Perfectly Geometrically Centered Sacred Figure Stage */
+        .saint-figure-wrapper {
+            position: relative;
+            width: 320px;
+            height: 320px;
+            margin: 0 auto;
             display: flex;
             align-items: center;
             justify-content: center;
-            gap: 12px;
-            flex-wrap: wrap;
-            margin-top: 1.4rem;
-            padding: 8px 18px;
-            background: rgba(255, 255, 255, 0.92);
-            border-radius: 999px;
-            border: 1.5px solid rgba(0, 128, 128, 0.3);
-            width: fit-content;
-            margin-left: auto;
-            margin-right: auto;
-            box-shadow: 0 8px 24px rgba(107, 79, 126, 0.1);
+            cursor: grab;
+            user-select: none;
+            overflow: visible; /* Prevent clipping of high-floating character */
+            z-index: 35;
         }
 
-        .companion-btn {
-            background: #ffffff;
-            border: 1.5px solid rgba(0, 128, 128, 0.35);
-            color: #334155;
-            padding: 6px 18px;
-            border-radius: 999px;
-            font-size: 0.88rem;
-            font-weight: 700;
+        /* Luminous Holy Nimbus (Saint Halo) - Exactly Centered */
+        .saint-nimbus {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            width: 290px;
+            height: 290px;
+            margin-top: -145px;
+            margin-left: -145px;
+            border-radius: 50%;
+            background: radial-gradient(circle,
+                rgba(255, 245, 180, 0.45) 0%,
+                rgba(255, 140, 220, 0.35) 30%,
+                rgba(80, 240, 255, 0.25) 55%,
+                rgba(160, 100, 255, 0.12) 75%,
+                transparent 100%);
+            filter: blur(14px);
+            animation: saintNimbusGlow 4s ease-in-out infinite alternate;
+            transform-origin: center center;
+            pointer-events: none;
+        }
+
+        /* Rotating Saint Rings - Exactly Centered */
+        .saint-nimbus-rings {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            width: 260px;
+            height: 260px;
+            margin-top: -130px;
+            margin-left: -130px;
+            border-radius: 50%;
+            border: 2px dashed rgba(255, 230, 140, 0.75);
+            box-shadow: 0 0 25px rgba(255, 215, 80, 0.4), inset 0 0 20px rgba(80, 240, 255, 0.3);
+            animation: saintRingRotate 22s linear infinite;
+            transform-origin: center center;
+            pointer-events: none;
+        }
+
+        .saint-nimbus-rings::before {
+            content: '';
+            position: absolute;
+            inset: -14px;
+            border-radius: 50%;
+            border: 1.5px solid rgba(255, 160, 230, 0.5);
+            box-shadow: 0 0 14px rgba(255, 120, 220, 0.35);
+            animation: saintRingRotateRev 16s linear infinite;
+            transform-origin: center center;
+        }
+
+        .saint-nimbus-rings::after {
+            content: '';
+            position: absolute;
+            inset: 14px;
+            border-radius: 50%;
+            border: 1px dotted rgba(100, 255, 255, 0.75);
+        }
+
+        @keyframes saintNimbusGlow {
+            0%   { transform: scale(0.95); filter: blur(12px) brightness(1.0); }
+            100% { transform: scale(1.08); filter: blur(18px) brightness(1.25); }
+        }
+
+        @keyframes saintRingRotate {
+            from { transform: rotate(0deg); }
+            to   { transform: rotate(360deg); }
+        }
+
+        @keyframes saintRingRotateRev {
+            from { transform: rotate(360deg); }
+            to   { transform: rotate(0deg); }
+        }
+
+        /* Low-Poly 3D Lil Cube 64 Body Stage - Unbounded Scalar Space with Transparent Alpha Fog */
+        .saint-3d-box {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            width: 640px;
+            height: 560px;
+            margin-top: -280px;
+            margin-left: -320px;
+            z-index: 50;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: grab;
+            touch-action: none;
+            overflow: visible;
+            /* Transparent Alpha Fog: smooth radial feathering dissolving into infinite scalar space */
+            -webkit-mask-image: radial-gradient(ellipse 48% 48% at 50% 50%, rgba(0,0,0,1) 50%, rgba(0,0,0,0.82) 72%, rgba(0,0,0,0.18) 90%, transparent 100%);
+            mask-image: radial-gradient(ellipse 48% 48% at 50% 50%, rgba(0,0,0,1) 50%, rgba(0,0,0,0.82) 72%, rgba(0,0,0,0.18) 90%, transparent 100%);
+        }
+
+        .saint-3d-box:active {
+            cursor: grabbing;
+        }
+
+        #mascot3dCanvas {
+            width: 640px !important;
+            height: 560px !important;
+            display: block;
+            outline: none;
+            /* Drop shadow removed from canvas to eliminate all rectangular box boundary artifacts */
+        }
+
+        .saint-pedestal-shadow {
+            position: absolute;
+            bottom: 48px;
+            left: 50%;
+            margin-left: -52px;
+            width: 104px;
+            height: 14px;
+            background: radial-gradient(ellipse at center, rgba(0, 255, 255, 0.6) 0%, rgba(255, 215, 0, 0.35) 50%, transparent 80%);
+            border-radius: 50%;
+            filter: blur(5px);
+            z-index: 4;
+            transition: transform 0.12s ease-out, opacity 0.12s ease-out;
+            pointer-events: none;
+        }
+
+        /* Sacred Dialogue Bubble */
+        .saint-speech-bubble {
+            position: relative;
+            z-index: 70;
+            background: rgba(8, 12, 32, 0.95);
+            border: 2px solid rgba(250, 204, 21, 0.88);
+            border-radius: 20px;
+            padding: 1.25rem 2rem;
+            max-width: 660px;
+            margin-top: 1.2rem;
+            color: #ffffff;
+            box-shadow: 0 14px 45px rgba(0, 0, 0, 0.8), 0 0 30px rgba(250, 204, 21, 0.25);
+            backdrop-filter: blur(20px);
+            text-align: center;
+            user-select: none;
             cursor: pointer;
+            transition: all 0.25s ease;
+        }
+
+        .saint-speech-bubble:hover {
+            border-color: #38bdf8;
+            box-shadow: 0 16px 50px rgba(56, 189, 248, 0.4);
+            transform: translateY(-2px);
+        }
+
+        .saint-math-badge {
+            display: inline-block;
+            background: linear-gradient(135deg, rgba(234, 179, 8, 0.3), rgba(6, 182, 212, 0.3));
+            border: 1.5px solid rgba(250, 204, 21, 0.85);
+            border-radius: 999px;
+            padding: 4px 18px;
+            font-size: 0.82rem;
+            font-weight: 800;
+            letter-spacing: 0.08em;
+            color: #fef08a;
+            margin-bottom: 0.65rem;
+            text-shadow: 0 0 12px rgba(234, 179, 8, 0.7);
+        }
+
+        .saint-quote-text {
+            font-size: 1.08rem;
+            line-height: 1.7;
+            color: #ffffff;
+            font-weight: 600;
+            text-shadow: 0 1px 4px rgba(0, 0, 0, 0.9);
+        }
+
+        /* Circular Motion Interactive Cue Badge */
+        .saint-interaction-hint {
+            margin-top: 0.75rem;
             display: inline-flex;
             align-items: center;
             gap: 6px;
-            transition: all 0.2s cubic-bezier(0.34, 1.56, 0.64, 1);
+            font-size: 0.82rem;
+            font-weight: 600;
+            color: #7dd3fc;
+            background: rgba(14, 165, 233, 0.15);
+            border: 1px solid rgba(56, 189, 248, 0.45);
+            border-radius: 999px;
+            padding: 4px 16px;
+            backdrop-filter: blur(8px);
+            text-shadow: 0 1px 4px rgba(0, 0, 0, 0.85);
+            animation: hintPulse 3s ease-in-out infinite;
         }
 
-        .companion-btn:hover {
-            border-color: #ff2d95;
-            color: #d90b72;
-            transform: translateY(-2px);
-            box-shadow: 0 4px 14px rgba(255, 45, 149, 0.25);
+        @keyframes hintPulse {
+            0%, 100% { opacity: 0.85; transform: scale(1); }
+            50% { opacity: 1; transform: scale(1.02); }
         }
 
-        .companion-btn.rainbow-btn {
-            background: linear-gradient(135deg, #ff2d95, #c026d3, #008080);
+        /* Holiness Dashboard Controls */
+        .saint-dashboard {
+            position: relative;
+            z-index: 70;
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            justify-content: center;
+            gap: 0.75rem;
+            margin-top: 1.3rem;
+        }
+
+        .saint-btn {
+            background: rgba(15, 23, 42, 0.92);
+            border: 1.5px solid rgba(148, 163, 184, 0.55);
+            color: #f8fafc;
+            padding: 9px 18px;
+            border-radius: 999px;
+            font-size: 0.88rem;
+            font-weight: 600;
+            cursor: pointer;
+            box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5);
+            backdrop-filter: blur(12px);
+            transition: all 0.2s cubic-bezier(0.25, 1, 0.5, 1);
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            text-shadow: 0 1px 2px rgba(0, 0, 0, 0.8);
+        }
+
+        .saint-btn:hover {
+            background: rgba(30, 41, 59, 0.98);
+            border-color: #38bdf8;
             color: #ffffff;
-            border-color: transparent;
-            box-shadow: 0 4px 16px rgba(255, 45, 149, 0.35);
+            transform: translateY(-2px);
+            box-shadow: 0 6px 24px rgba(56, 189, 248, 0.35);
         }
 
-        .companion-btn.rainbow-btn:hover {
-            transform: translateY(-2px) scale(1.06);
-            box-shadow: 0 8px 25px rgba(255, 45, 149, 0.6);
+        .saint-btn.active {
+            background: linear-gradient(135deg, rgba(236, 72, 153, 0.45), rgba(6, 182, 212, 0.45));
+            border-color: #38bdf8;
+            color: #ffffff;
+            box-shadow: 0 0 20px rgba(56, 189, 248, 0.5);
         }
 
-        /* Rainbow Overdrive Active State */
-        body.rainbow-overdrive header {
-            background: linear-gradient(135deg, rgba(255, 159, 214, 0.3), rgba(162, 237, 255, 0.3), rgba(255, 243, 173, 0.3));
-            animation: rainbowAuraShift 4s ease infinite alternate;
+        header .pdf-badge {
+            font-weight: 700 !important;
+            color: #ffffff !important;
+            border: 1px solid rgba(255, 255, 255, 0.3) !important;
+            box-shadow: 0 4px 14px rgba(0, 0, 0, 0.5) !important;
+            backdrop-filter: blur(8px) !important;
         }
 
-        @keyframes rainbowAuraShift {
-            0% { filter: hue-rotate(0deg); }
-            100% { filter: hue-rotate(360deg); }
+        /* Glassmorphic lead box styling for Option A */
+        .hero-lead-box {
+            background: rgba(14, 18, 42, 0.85) !important;
+            border: 1px solid rgba(255, 255, 255, 0.2) !important;
+            backdrop-filter: blur(20px) !important;
+            box-shadow: 0 16px 40px rgba(0, 0, 0, 0.5) !important;
+            color: #f1f5f9 !important;
+        }
+        .hero-lead-box h2, .hero-lead-box p, .hero-lead-box li {
+            color: #f8fafc !important;
         }
 
-        /* Frost & Star Particles */
-        .frost-star-particle {
-            position: fixed;
-            pointer-events: none;
-            z-index: 9999;
-            will-change: transform, opacity;
-        }
-
-    </style>
+        </style>
 </head>
 <body>
+
 
 
 
@@ -717,6 +856,8 @@
     </nav>
 
     <header>
+        <!-- Celestial Hopf Fibration Canvas Layer -->
+        <canvas id="hopfCanvas"></canvas>
         <div class="hero-content">
             <div class="hero-banner-tag" style="margin-top: 10px;">
                 <span>🌸</span> BTRON3 × Synrc VE OS.1 次世代コンシューマOS仕様
@@ -725,54 +866,36 @@
             <p class="hero-subtitle">日本のユーザー、BTRONを愛する研究者・クリエイターへ贈る——<br>実身・仮身ハイパーメディアモデルとBeOSの精神が融合した超応答型コンシューマ環境</p>
 
             
-            <!-- Option C: Interactive Lil Cube Mascot Companion Stage -->
-            <div class="companion-stage">
-                <div class="companion-dialogue-bubble" id="companionBubble" title="クリックして別の豆知識を聞く！ (Click for next tip!)">
-                    <div class="bubble-header">
-                        <span>🧊 B-System 氷晶マスコット「リル・キューブ」</span>
-                        <span id="tipCounter">TIP 1/8</span>
-                    </div>
-                    <div class="bubble-content" id="bubbleText">
-                        ボクはリル・キューブ！ B-Systemの氷晶プリミティブ・マスコットだキューブ！🧊✨
-                    </div>
-                    <div class="bubble-hint">💬 クリックで次のシステム豆知識 ➔</div>
+            
+        <!-- Saint Lil Cube 64 with Low-Poly 3D & Hopf Fibration Holiness Aura -->
+        <div class="saint-stage" id="saintStage">
+            <!-- Perfectly Centered Radiant Aura & 3D Lil Cube (Canonical Crystalline Saint) -->
+            <div class="saint-figure-wrapper" id="saintFigure" title="聖なるリル・キューブ64をつつく・ドラッグして3D回転！ (Poke or drag 3D Saint Lil Cube 64!)">
+                <div class="saint-nimbus" id="saintNimbus"></div>
+                <div class="saint-nimbus-rings"></div>
+                <div class="saint-3d-box" id="mascot3dContainer">
+                    <canvas id="mascot3dCanvas"></canvas>
                 </div>
-
-                <div class="companion-cat-figure" id="companionCatFigure" title="リル・キューブをつつく / なでる (Tap or pet Lil Cube!)">
-                    <img src="assets/mascot/lil-cube.png" alt="Lil Cube Mascot" class="companion-cat-img" id="companionCatImg">
-                    <div class="companion-cat-pedestal"></div>
-                </div>
+                <div class="saint-pedestal-shadow" id="mascot3dPedestal"></div>
             </div>
-
-            <div class="hero-lead-box">
-                <p>
-                    <b>B-System</b>は、東京大学名誉教授・坂村健博士が提唱した<b>TRONプロジェクト（BTRON / μITRON）</b>の誇り高き遺産である「実身・仮身モデル（Real Body / Virtual Body Architecture）」および「TAD（TRON Application Databus）」を、2026年の最先端仮想化基盤（VirtIO 1.4 / seL4 Microkit / C99 Cleanroom）上で再構築したコンシューマOSです。
-                </p>
-                <p>
-                    従来のファイル階層の束縛を解き放ち、テキスト・音声・映像・コード・ウィンドウそのものを自律的な「実身」として扱い、ドキュメントやメディアタイムラインへ自由に「生きた仮身」として埋め込めます。BeOSのMedia Kitに匹敵する極低遅延マルチスレッド応答性と、超漢字の膨大な多言語文字コード体系を、直感的かつ優美なデスクトップ体験として提供します。
-                </p>
-
-                <div style="margin-top: 1.4rem; padding-top: 1.2rem; border-top: 1px solid rgba(226, 232, 240, 0.9);">
-                    <div style="font-size: 0.82rem; font-weight: 700; color: #475569; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 0.75rem; display: flex; align-items: center; gap: 0.4rem;">
-                        <span>📚 研究論文・技術仕様書 (Research Papers &amp; Specifications PDF):</span>
-                    </div>
-                    <div style="display: flex; flex-wrap: wrap; gap: 0.6rem;">
-                        <a href="doc/pdf/btron-article.pdf" class="pdf-badge" target="_blank">📄 BTRON3 Spec</a>
-                        <a href="doc/pdf/btron-tessron.pdf" class="pdf-badge" target="_blank">📄 TessronOS vs. B-System</a>
-                        <a href="doc/pdf/btron-smp.pdf" class="pdf-badge" target="_blank">📄 BTRON SMP</a>
-                        <a href="doc/pdf/btron-verimath.pdf" class="pdf-badge" target="_blank">📄 VeriMath Proofs</a>
-                        <a href="doc/pdf/btron-tad.pdf" class="pdf-badge" target="_blank">📄 TAD Cabinet</a>
-                        <a href="doc/pdf/btron-tip.pdf" class="pdf-badge" target="_blank">📄 Mozc TIP IME</a>
-                        <a href="doc/pdf/btron-hmi.pdf" class="pdf-badge" target="_blank">📄 HMI Standards</a>
-                        <a href="doc/pdf/btron-history.pdf" class="pdf-badge" target="_blank">📄 BTRON History</a>
-                    </div>
-                </div>
+            <div class="saint-speech-bubble" id="saintBubble">
+                <div class="saint-math-badge">✨ 4次元球面 S³ ホップ束 (Hopf Fibration) 顕現 ✨</div>
+                <div class="saint-quote-text" id="saintQuoteText">「ボクはリル・キューブ64… 低ポリゴン3Dで動き回る聖なる氷晶だキューブ！🧊✨」</div>
             </div>
-            <div class="companion-dashboard">
-                <button id="soundToggleBtn" class="companion-btn" onclick="toggleSound()" style="border-color: #008080; color: #008080;">🔊 8-bit サウンド: ON</button>
-                <button id="overdriveBtn" class="companion-btn rainbow-btn" onclick="toggleRainbowOverdrive()">🌈 虹色オーバードライブ</button>
-                <button class="companion-btn" onclick="nextMascotTip()">🐾 次のヒント ➔</button>
+            <div class="saint-interaction-hint" id="saintHint">
+                <span class="hint-icon">💫</span> マウス旋回で4次元ホップ束回転 • ドラッグで3D回転 • <b>[Space / クリック] で『風ノ旅ビト (Journey)』神聖球状波動</b>
             </div>
+            <div class="saint-dashboard">
+                <button id="blessingBtn" class="saint-btn" onclick="triggerBlessing()">🌟 神聖波動 (Journey Sacred Pulse)</button>
+                <button id="waddleBtn" class="saint-btn" onclick="triggerKirbyWaddle()">🐾 てくてく歩行 (Waddle)</button>
+                <button id="floatBtn" class="saint-btn" onclick="triggerKirbyFloat()">🎈 ぷかぷか飛行 (Float)</button>
+                <button id="danceBtn" class="saint-btn" onclick="triggerKirbyDance()">🕺 勝利のダンス (Dance)</button>
+                <button id="dispersionBtn" class="saint-btn active" onclick="toggleDispersion()">🌈 分光モード: ON</button>
+                <button id="soundToggleBtn" class="saint-btn" onclick="toggleSound()" style="border-color: #00ffff; color: #00ffff;">🔊 聖なる天球音楽: ON</button>
+                <button id="densityBtn" class="saint-btn" onclick="cycleDensity()">🪐 繊維環: 18環</button>
+            </div>
+        </div>
+
 
 
             <div style="margin-top: 1.8rem; display: flex; flex-wrap: wrap; gap: 0.8rem; justify-content: center;">
@@ -790,7 +913,7 @@
             <div style="text-align: center; max-width: 900px; margin: 0 auto 1.5rem auto;">
                 <span class="app-badge teal" style="font-size:0.85rem; padding: 0.35rem 0.8rem; margin-bottom: 0.5rem;">CORE SUITE</span>
                 <h2 class="jp-title" style="font-size: 2.1rem; margin-top: 0.3rem;">B-System アプリケーション体系 (Applications)</h2>
-                <p style="color: #64748b; font-size: 1.05rem;">すべてのツールが実身（Real Body）を共有し、仮身（Virtual Body）として相互に埋め込み可能な19のネイティブ環境</p>
+                <p style="color: #334155; font-weight: 500; font-size: 1.05rem;">すべてのツールが実身（Real Body）を共有し、仮身（Virtual Body）として相互に埋め込み可能な19のネイティブ環境</p>
             </div>
 
             <!-- Search & Category Filters -->
@@ -1704,12 +1827,15 @@
         }
     </script>
 
-    <!-- Script for Option C: Lil Cube Interactive Mascot & Nintendo Web Audio Synthesizer -->
+    
+    <!-- Script for Option A: Hopf Fibration 4D Projection, Spectral Dispersion & Sacred Audio -->
     <script>
     (function() {
-        // 1. Nintendo-style 8-Bit Web Audio Synthesizer (Zero External Dependencies)
+        // =========================================================================
+        // 1. Audio Engine: Pythagorean Chimes & Nintendo 8-Bit SFX
+        // =========================================================================
         let audioCtx = null;
-        let soundEnabled = true;
+        window.soundEnabled = true;
 
         function getAudioContext() {
             if (!audioCtx) {
@@ -1722,192 +1848,2164 @@
             return audioCtx;
         }
 
-        // Unlock Web Audio context upon first user gesture
-        function unlockAudioOnGesture() {
-            if (soundEnabled) {
-                getAudioContext();
-            }
+        function unlockAudio() {
+            if (window.soundEnabled) getAudioContext();
         }
-        window.addEventListener('click', unlockAudioOnGesture, { once: true });
-        window.addEventListener('keydown', unlockAudioOnGesture, { once: true });
-        window.addEventListener('touchstart', unlockAudioOnGesture, { once: true });
+        window.addEventListener('click', unlockAudio, { once: true });
+        window.addEventListener('keydown', unlockAudio, { once: true });
+        window.addEventListener('touchstart', unlockAudio, { once: true });
+
+        function playCelestialChime(freq, duration = 0.8, vol = 0.16) {
+            if (!window.soundEnabled) return;
+            try {
+                const c = getAudioContext();
+                const osc = c.createOscillator();
+                const gain = c.createGain();
+
+                osc.type = 'sine';
+                osc.frequency.setValueAtTime(freq, c.currentTime);
+
+                gain.gain.setValueAtTime(vol, c.currentTime);
+                gain.gain.exponentialRampToValueAtTime(0.0001, c.currentTime + duration);
+
+                osc.connect(gain);
+                gain.connect(c.destination);
+
+                osc.start();
+                osc.stop(c.currentTime + duration);
+            } catch (e) {}
+        }
+
+        function playSacredChord() {
+            const freqs = [587.33, 659.25, 739.99, 880.00, 1174.66, 1318.51];
+            freqs.forEach((f, idx) => {
+                setTimeout(() => playCelestialChime(f, 1.4 + idx * 0.15, 0.12), idx * 65);
+            });
+        }
+
+        // PlayStation 3 "Journey" Singing Sacred Chirp Harmonic Chord
+        function playJourneyChirp() {
+            if (!window.soundEnabled) return;
+            try {
+                const c = getAudioContext();
+                const now = c.currentTime;
+                const freqs = [
+                    { f: 261.63, v: 0.13, d: 2.2, type: 'sine' },      // Low warm pedal tone C4
+                    { f: 523.25, v: 0.17, d: 2.4, type: 'sine' },      // Core singing traveler tone C5
+                    { f: 659.25, v: 0.12, d: 2.0, type: 'sine' },      // Resonant third E5
+                    { f: 783.99, v: 0.14, d: 2.2, type: 'sine' },      // Harmonious fifth G5
+                    { f: 1046.50, v: 0.13, d: 1.8, type: 'triangle' }, // Shimmering octave C6
+                    { f: 1318.51, v: 0.08, d: 1.5, type: 'sine' }       // Ethereal overtone E6
+                ];
+
+                freqs.forEach(item => {
+                    const osc = c.createOscillator();
+                    const gain = c.createGain();
+                    osc.type = item.type;
+
+                    // Vocal-like gentle upward swoop
+                    osc.frequency.setValueAtTime(item.f * 0.96, now);
+                    osc.frequency.exponentialRampToValueAtTime(item.f, now + 0.08);
+
+                    gain.gain.setValueAtTime(0.0001, now);
+                    gain.gain.linearRampToValueAtTime(item.v, now + 0.04);
+                    gain.gain.exponentialRampToValueAtTime(0.0001, now + item.d);
+
+                    osc.connect(gain);
+                    gain.connect(c.destination);
+                    osc.start(now);
+                    osc.stop(now + item.d);
+                });
+            } catch (e) {}
+        }
+
+        // Po's Spirit Realm Golden Chi Harmonic Resonance (Kung Fu Panda Finale with Kai)
+        function playGoldenChiChime() {
+            if (!window.soundEnabled) return;
+            try {
+                const c = getAudioContext();
+                const now = c.currentTime;
+                const freqs = [
+                    { f: 130.81, v: 0.19, d: 3.8, type: 'sine' },      // Deep resonant spiritual pedal C3
+                    { f: 196.00, v: 0.15, d: 3.4, type: 'sine' },      // Warm harmonic fifth G3
+                    { f: 261.63, v: 0.20, d: 3.5, type: 'sine' },      // Golden core foundation C4
+                    { f: 392.00, v: 0.17, d: 3.2, type: 'sine' },      // Singing fifth G4
+                    { f: 523.25, v: 0.18, d: 3.0, type: 'sine' },      // Soaring octave C5
+                    { f: 659.25, v: 0.14, d: 2.6, type: 'triangle' },  // Golden lotus third E5
+                    { f: 783.99, v: 0.13, d: 2.4, type: 'sine' },      // Dragon overtone G5
+                    { f: 1046.50, v: 0.10, d: 2.0, type: 'sine' }      // Shimmering celestial Chi bell C6
+                ];
+
+                freqs.forEach(item => {
+                    const osc = c.createOscillator();
+                    const gain = c.createGain();
+                    osc.type = item.type;
+
+                    // Spiritual harmonic swell with gentle rise and long majestic decay
+                    osc.frequency.setValueAtTime(item.f * 0.985, now);
+                    osc.frequency.exponentialRampToValueAtTime(item.f, now + 0.10);
+
+                    gain.gain.setValueAtTime(0.0001, now);
+                    gain.gain.linearRampToValueAtTime(item.v, now + 0.08);
+                    gain.gain.exponentialRampToValueAtTime(0.0001, now + item.d);
+
+                    osc.connect(gain);
+                    gain.connect(c.destination);
+                    osc.start(now);
+                    osc.stop(now + item.d);
+                });
+            } catch (e) {}
+        }
 
         function play8BitNote(freq, type = 'square', duration = 0.12, volume = 0.16) {
-            if (!soundEnabled) return;
+            if (!window.soundEnabled) return;
             try {
                 const ctx = getAudioContext();
                 const osc = ctx.createOscillator();
                 const gain = ctx.createGain();
-
                 osc.type = type;
                 osc.frequency.setValueAtTime(freq, ctx.currentTime);
-
                 gain.gain.setValueAtTime(volume, ctx.currentTime);
                 gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + duration);
-
                 osc.connect(gain);
                 gain.connect(ctx.destination);
-
                 osc.start();
                 osc.stop(ctx.currentTime + duration);
-            } catch (e) {
-                console.error(e);
-            }
+            } catch (e) {}
         }
 
-        // Nintendo Crystal & Coin Chimes
-        function sfxCrystalCoin() {
-            play8BitNote(1318.51, 'square', 0.08, 0.18); // E6
-            setTimeout(() => play8BitNote(1760.00, 'square', 0.24, 0.18), 70); // A6
+        function sfxFootstep() {
+            if (!window.soundEnabled) return;
+            try {
+                const ctx = getAudioContext();
+                const osc = ctx.createOscillator();
+                const gain = ctx.createGain();
+                osc.type = 'triangle';
+                const f = 420 + Math.random() * 35;
+                osc.frequency.setValueAtTime(f, ctx.currentTime);
+                osc.frequency.exponentialRampToValueAtTime(f * 0.72, ctx.currentTime + 0.05);
+                gain.gain.setValueAtTime(0.07, ctx.currentTime);
+                gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.05);
+                osc.connect(gain);
+                gain.connect(ctx.destination);
+                osc.start();
+                osc.stop(ctx.currentTime + 0.05);
+            } catch (e) {}
         }
 
         function sfxLilCubeBoing() {
-            if (!soundEnabled) return;
-            const ctx = getAudioContext();
-            const osc = ctx.createOscillator();
-            const gain = ctx.createGain();
-            osc.type = 'triangle';
-            osc.frequency.setValueAtTime(523.25, ctx.currentTime);
-            osc.frequency.exponentialRampToValueAtTime(1046.50, ctx.currentTime + 0.16);
-            osc.frequency.exponentialRampToValueAtTime(783.99, ctx.currentTime + 0.32);
-            gain.gain.setValueAtTime(0.22, ctx.currentTime);
-            gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.32);
-            osc.connect(gain);
-            gain.connect(ctx.destination);
-            osc.start();
-            osc.stop(ctx.currentTime + 0.32);
+            if (!window.soundEnabled) return;
+            try {
+                const ctx = getAudioContext();
+                const osc = ctx.createOscillator();
+                const gain = ctx.createGain();
+                osc.type = 'triangle';
+                osc.frequency.setValueAtTime(523.25, ctx.currentTime);
+                osc.frequency.exponentialRampToValueAtTime(1174.66, ctx.currentTime + 0.14);
+                osc.frequency.exponentialRampToValueAtTime(783.99, ctx.currentTime + 0.28);
+                gain.gain.setValueAtTime(0.20, ctx.currentTime);
+                gain.gain.exponentialRampToValueAtTime(0.005, ctx.currentTime + 0.28);
+                osc.connect(gain);
+                gain.connect(ctx.destination);
+                osc.start();
+                osc.stop(ctx.currentTime + 0.28);
+            } catch (e) {}
         }
 
-        function sfxFanfare() {
-            const notes = [659.25, 783.99, 987.77, 1318.51];
-            notes.forEach((f, idx) => {
-                setTimeout(() => play8BitNote(f, 'square', 0.15, 0.2), idx * 80);
+        function sfxFloatInhale() {
+            if (!window.soundEnabled) return;
+            try {
+                const ctx = getAudioContext();
+                const osc = ctx.createOscillator();
+                const gain = ctx.createGain();
+                osc.type = 'sine';
+                osc.frequency.setValueAtTime(320, ctx.currentTime);
+                osc.frequency.exponentialRampToValueAtTime(840, ctx.currentTime + 0.35);
+                gain.gain.setValueAtTime(0.18, ctx.currentTime);
+                gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.4);
+                osc.connect(gain);
+                gain.connect(ctx.destination);
+                osc.start();
+                osc.stop(ctx.currentTime + 0.4);
+            } catch (e) {}
+        }
+
+        function sfxVictoryFanfare() {
+            const notes = [
+                { f: 659.25, d: 0.12, t: 0 },
+                { f: 659.25, d: 0.12, t: 110 },
+                { f: 659.25, d: 0.12, t: 220 },
+                { f: 880.00, d: 0.25, t: 330 },
+                { f: 783.99, d: 0.15, t: 520 },
+                { f: 880.00, d: 0.15, t: 640 },
+                { f: 1046.50, d: 0.45, t: 760 }
+            ];
+            notes.forEach(n => {
+                setTimeout(() => play8BitNote(n.f, 'square', n.d, 0.20), n.t);
             });
         }
 
-        // Sound Toggle Button
         window.toggleSound = function() {
-            soundEnabled = !soundEnabled;
+            window.soundEnabled = !window.soundEnabled;
             const btn = document.getElementById('soundToggleBtn');
-            if (soundEnabled) {
+            if (window.soundEnabled) {
                 getAudioContext();
-                sfxCrystalCoin();
-                btn.innerHTML = '🔊 8-bit サウンド: ON';
-                btn.style.borderColor = '#008080';
-                btn.style.color = '#008080';
+                playSacredChord();
+                btn.innerHTML = '🔊 聖なる天球音楽: ON';
+                btn.style.borderColor = '#00ffff';
+                btn.style.color = '#00ffff';
             } else {
-                btn.innerHTML = '🔈 8-bit サウンド: OFF';
-                btn.style.borderColor = 'rgba(0, 128, 128, 0.35)';
-                btn.style.color = '#334155';
+                btn.innerHTML = '🔈 聖なる天球音楽: OFF';
+                btn.style.borderColor = 'rgba(120, 220, 255, 0.5)';
+                btn.style.color = '#94a3b8';
             }
         };
 
-        // 2. Lore & Trivia System (Lil Cube Voice)
-        const tips = [
-            "ボクはリル・キューブ！ B-Systemの氷晶プリミティブ・マスコットだキューブ！🧊✨",
-            "実身（Real Body）と仮身（Virtual Body）のハイパーリンク構造でファイル階層から自由だキューブ！",
-            "TAD仕様なら、文章・グラフィック・音声が1つのストリームでシームレスに交差するキューブ！",
-            "BeOS Media Kitの精神を受け継ぐ極低遅延マルチスレッド！音がカチッと響くキューブ♪",
-            "東京大学・坂村健名誉教授のTRON思想を2026年のVirtIO / seL4基盤で再構築したんだキューブ！",
-            "超漢字の17万文字多言語コード体系とMozc日本語入力で、どんな文字でもスラスラ打てるキューブ！",
-            "ボクをつつくと（クリックすると）ピョコッと跳ねて氷晶の星が舞うキューブ〜⭐",
-            "虹色オーバードライブでヘッダーをキラキラのオーロラにするキューブ！🌈✨"
-        ];
+        // =========================================================================
+        // 2. Three.js Low Poly 3D Lil Cube 64 with Nintendo Kirby Animations
+        // =========================================================================
+        const container3d = document.getElementById('mascot3dContainer');
+        const canvas3d = document.getElementById('mascot3dCanvas');
+        const pedestal = document.getElementById('mascot3dPedestal');
+        const quoteText = document.getElementById('saintQuoteText');
+        const bubble = document.getElementById('saintBubble');
 
-        let currentTipIdx = 0;
-        const bubble = document.getElementById('companionBubble');
-        const bubbleText = document.getElementById('bubbleText');
-        const tipCounter = document.getElementById('tipCounter');
-        const catFigure = document.getElementById('companionCatFigure');
+        let width3d = 640;
+        let height3d = 560;
 
-        function nextTip() {
-            currentTipIdx = (currentTipIdx + 1) % tips.length;
-            bubbleText.style.opacity = '0';
-            bubbleText.style.transform = 'translateY(4px)';
-            
-            sfxCrystalCoin();
+        let scene3d, camera3d, renderer3d, rootGroup, bodyGroup;
+        let mainCube, coreCube, leftEye, rightEye, smileMesh, oMouthMesh;
+        let leftHandPivot, rightHandPivot, leftFootPivot, rightFootPivot;
+        let cubeMat, footMat;
+        let currentVariant = 'A';
+        let variantExtraObjects = [];
 
-            setTimeout(() => {
-                bubbleText.innerText = tips[currentTipIdx];
-                tipCounter.innerText = `TIP ${currentTipIdx + 1}/${tips.length}`;
-                bubbleText.style.opacity = '1';
-                bubbleText.style.transform = 'translateY(0)';
-            }, 150);
+        let animState = 'idle'; // 'idle', 'walk', 'float', 'dance', 'sing', 'poke'
+        let stateTimer = 0;
+        let walkPhase = 0;
+        let lastStepSign = 0;
+        let blinkTimer = 2.5;
+        let isBlinking = false;
+        let blinkProgress = 0;
+        let pokeTime = 0;
+        let danceStep = 0;
+        let danceTimer = 0;
+        let floatTimer = 0;
+        let impactSquash = 0;
+
+        function triggerLandingSquash(amount = 0.22) {
+            impactSquash = amount;
         }
 
-        bubble.addEventListener('click', nextTip);
-        window.nextMascotTip = nextTip;
+        // Critically Damped Exponential Smoothing (Frame-rate Independent, C-infinity Continuity)
+        function smoothDamp(current, target, speed, dt) {
+            const factor = 1.0 - Math.exp(-speed * dt);
+            return current + (target - current) * factor;
+        }
 
-        // Lil Cube Click Interaction
-        catFigure.addEventListener('click', () => {
-            sfxLilCubeBoing();
-            catFigure.style.transform = 'translateY(-24px) scale(1.22) rotate(-8deg)';
-            spawnIceStars(catFigure);
-            setTimeout(() => {
-                catFigure.style.transform = '';
-            }, 300);
+        // Angular Damping with Shortest Path Modular Wrapping (Zero-Unwind C-infinity Continuity)
+        function smoothDampAngle(current, target, speed, dt) {
+            let diff = (target - current) % (Math.PI * 2);
+            if (diff > Math.PI) diff -= Math.PI * 2;
+            if (diff < -Math.PI) diff += Math.PI * 2;
+            const factor = 1.0 - Math.exp(-speed * dt);
+            return current + diff * factor;
+        }
+
+        // Nintendo & Disney Continuous Animation Pose Buffer
+        const animPose = {
+            rootX: 0, rootY: 0.08, rootZ: 0,
+            rootRotX: 0, rootRotY: 0, rootRotZ: 0,
+            bodyX: 0, bodyY: 0, bodyZ: 0,
+            bodyRotX: 0, bodyRotY: 0, bodyRotZ: 0,
+            scaleX: 1.0, scaleY: 1.0, scaleZ: 1.0,
+            leftHandRotX: 0, leftHandRotY: 0, leftHandRotZ: 0.1,
+            rightHandRotX: 0, rightHandRotY: 0, rightHandRotZ: -0.1,
+            leftFootX: -0.64, leftFootY: -0.92, leftFootZ: 0.08,
+            leftFootRotX: 0, leftFootRotY: 0, leftFootRotZ: 0,
+            rightFootX: 0.64, rightFootY: -0.92, rightFootZ: 0.08,
+            rightFootRotX: 0, rightFootRotY: 0, rightFootRotZ: 0,
+            smileScale: 1.0, oMouthScale: 0.0,
+            pedestalScale: 1.0, pedestalOpacity: 0.75
+        };
+
+        let isDraggingCube = false;
+        let prevDragX = 0, prevDragY = 0;
+        let cubeRotVelX = 0, cubeRotVelY = 0;
+        let cubeCurRotX = 0, cubeCurRotY = 0;
+        let targetLookX = 0, targetLookY = 0;
+
+        // Build Lil Cube 64 with 3 Options to lift Low Poly Quality
+        function buildLilCubeModel(variant = 'A') {
+            currentVariant = variant;
+            if (!scene3d || !bodyGroup || !rootGroup) return;
+
+            // Clear previous meshes from bodyGroup
+            while (bodyGroup.children.length > 0) {
+                const child = bodyGroup.children[0];
+                bodyGroup.remove(child);
+                if (child.geometry) child.geometry.dispose();
+            }
+
+            // Clear previous foot pivots from rootGroup
+            const toRemove = [];
+            for (let i = 0; i < rootGroup.children.length; i++) {
+                const child = rootGroup.children[i];
+                if (child !== bodyGroup) toRemove.push(child);
+            }
+            toRemove.forEach(c => {
+                rootGroup.remove(c);
+                if (c.geometry) c.geometry.dispose();
+            });
+
+            variantExtraObjects = [];
+
+            // Shared Kirby Mouth
+            const mouthMat = new THREE.MeshBasicMaterial({ color: 0xbf1250 });
+            const smileGeo = new THREE.TorusGeometry(0.16, 0.038, 5, 10, Math.PI);
+            smileGeo.rotateZ(Math.PI);
+            smileMesh = new THREE.Mesh(smileGeo, mouthMat);
+            smileMesh.position.set(0, -0.06, 1.08);
+            bodyGroup.add(smileMesh);
+
+            const oMouthGeo = new THREE.TorusGeometry(0.15, 0.05, 6, 12);
+            oMouthMesh = new THREE.Mesh(oMouthGeo, mouthMat);
+            oMouthMesh.position.set(0, -0.06, 1.08);
+            oMouthMesh.visible = (animState === 'float');
+            bodyGroup.add(oMouthMesh);
+
+            // Kirby Anime Eyes Generator
+            function createKirbyEyes(irisColor = 0x00e5ff, hasBrows = false) {
+                function makeEye(isLeft) {
+                    const eye = new THREE.Group();
+                    const pupilGeo = new THREE.CylinderGeometry(0.18, 0.18, 0.48, 12);
+                    pupilGeo.rotateX(Math.PI / 2);
+                    const pupilMesh = new THREE.Mesh(pupilGeo, new THREE.MeshBasicMaterial({ color: 0x081226 }));
+                    eye.add(pupilMesh);
+
+                    const irisGeo = new THREE.CylinderGeometry(0.15, 0.15, 0.22, 10);
+                    irisGeo.rotateX(Math.PI / 2);
+                    const irisMesh = new THREE.Mesh(irisGeo, new THREE.MeshBasicMaterial({ color: irisColor }));
+                    irisMesh.position.set(0, -0.11, 0.015);
+                    eye.add(irisMesh);
+
+                    const specGeo = new THREE.CircleGeometry(0.09, 8);
+                    const specMesh = new THREE.Mesh(specGeo, new THREE.MeshBasicMaterial({ color: 0xffffff }));
+                    specMesh.position.set(-0.04, 0.11, 0.025);
+                    eye.add(specMesh);
+
+                    if (hasBrows) {
+                        const browGeo = new THREE.BoxGeometry(0.28, 0.06, 0.06);
+                        const browMesh = new THREE.Mesh(browGeo, new THREE.MeshBasicMaterial({ color: 0x081226 }));
+                        browMesh.position.set(0, 0.35, 0.02);
+                        browMesh.rotation.z = isLeft ? 0.16 : -0.16;
+                        eye.add(browMesh);
+                    }
+                    return eye;
+                }
+
+                leftEye = makeEye(true);
+                leftEye.position.set(-0.46, 0.32, 1.08);
+                bodyGroup.add(leftEye);
+
+                rightEye = makeEye(false);
+                rightEye.position.set(0.46, 0.32, 1.08);
+                bodyGroup.add(rightEye);
+
+                // Cheeks
+                const cheekGeo = new THREE.CylinderGeometry(0.22, 0.22, 0.04, 10);
+                cheekGeo.rotateX(Math.PI / 2);
+                const cheekMat = new THREE.MeshBasicMaterial({ color: 0xff4081 });
+                const leftCheek = new THREE.Mesh(cheekGeo, cheekMat);
+                leftCheek.position.set(-0.76, -0.06, 1.07);
+                bodyGroup.add(leftCheek);
+
+                const rightCheek = new THREE.Mesh(cheekGeo, cheekMat);
+                rightCheek.position.set(0.76, -0.06, 1.07);
+                bodyGroup.add(rightCheek);
+            }
+
+            // Little Cube Feet Generator ("steeps little cubes also")
+            function createLittleCubeFeet(footColor = 0xff4d8d, soleColor = null) {
+                const footGeo = new THREE.BoxGeometry(0.72, 0.48, 0.88);
+                footMat = new THREE.MeshStandardMaterial({
+                    color: footColor,
+                    roughness: 0.20,
+                    metalness: 0.10,
+                    flatShading: true
+                });
+
+                leftFootPivot = new THREE.Group();
+                leftFootPivot.position.set(-0.64, -0.92, 0.08);
+                const leftFootM = new THREE.Mesh(footGeo, footMat);
+                leftFootM.position.set(0, -0.20, 0.06);
+                leftFootPivot.add(leftFootM);
+
+                if (soleColor) {
+                    const soleGeo = new THREE.BoxGeometry(0.76, 0.10, 0.92);
+                    const soleMat = new THREE.MeshStandardMaterial({ color: soleColor, roughness: 0.15, metalness: 0.5, flatShading: true });
+                    const leftSole = new THREE.Mesh(soleGeo, soleMat);
+                    leftSole.position.set(0, -0.42, 0.06);
+                    leftFootPivot.add(leftSole);
+                }
+                rootGroup.add(leftFootPivot);
+
+                rightFootPivot = new THREE.Group();
+                rightFootPivot.position.set(0.64, -0.92, 0.08);
+                const rightFootM = new THREE.Mesh(footGeo, footMat);
+                rightFootM.position.set(0, -0.20, 0.06);
+                rightFootPivot.add(rightFootM);
+
+                if (soleColor) {
+                    const soleGeo = new THREE.BoxGeometry(0.76, 0.10, 0.92);
+                    const soleMat = new THREE.MeshStandardMaterial({ color: soleColor, roughness: 0.15, metalness: 0.5, flatShading: true });
+                    const rightSole = new THREE.Mesh(soleGeo, soleMat);
+                    rightSole.position.set(0, -0.42, 0.06);
+                    rightFootPivot.add(rightSole);
+                }
+                rootGroup.add(rightFootPivot);
+            }
+
+            if (variant === 'A') {
+                // ==============================================================
+                // OPTION A: 聖晶カイザー (Crystalline Saint) - Kirby 64 Faceted Gem
+                // ==============================================================
+                const cubeGeoA = new THREE.BoxGeometry(2.1, 2.1, 2.1, 2, 2, 2);
+                const posAttrA = cubeGeoA.attributes.position;
+                for (let i = 0; i < posAttrA.count; i++) {
+                    const vx = posAttrA.getX(i), vy = posAttrA.getY(i), vz = posAttrA.getZ(i);
+                    const d = Math.sqrt(vx * vx + vy * vy + vz * vz);
+                    if (d > 1.65) {
+                        const factor = 1.65 / d;
+                        posAttrA.setXYZ(i, vx * factor, vy * factor, vz * factor);
+                    }
+                }
+                cubeGeoA.computeVertexNormals();
+
+                const cubeMatA = new THREE.MeshStandardMaterial({
+                    color: 0x85e8ff,
+                    roughness: 0.14,
+                    metalness: 0.15,
+                    flatShading: true,
+                    transparent: true,
+                    opacity: 0.94
+                });
+                mainCube = new THREE.Mesh(cubeGeoA, cubeMatA);
+                mainCube.position.set(0, 0.12, 0);
+                bodyGroup.add(mainCube);
+
+                // Rotating Internal Octahedron Core
+                const coreOctaGeo = new THREE.OctahedronGeometry(0.78, 0);
+                const coreOctaMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
+                coreCube = new THREE.Mesh(coreOctaGeo, coreOctaMat);
+                coreCube.position.set(0, 0.12, 0);
+                bodyGroup.add(coreCube);
+
+                const wireOctaGeo = new THREE.OctahedronGeometry(1.02, 0);
+                const wireOctaMat = new THREE.MeshBasicMaterial({ color: 0x38bdf8, wireframe: true });
+                const wireOcta = new THREE.Mesh(wireOctaGeo, wireOctaMat);
+                wireOcta.position.set(0, 0.12, 0);
+                bodyGroup.add(wireOcta);
+                variantExtraObjects.push({ mesh: wireOcta, rotSpeedX: -0.7, rotSpeedY: 0.5 });
+
+                createKirbyEyes(0x00e5ff, false);
+
+                // Little Cube Hands
+                const handGeo = new THREE.BoxGeometry(0.46, 0.46, 0.46);
+                const handMat = new THREE.MeshStandardMaterial({ color: 0x90edff, roughness: 0.18, metalness: 0.1, flatShading: true });
+                leftHandPivot = new THREE.Group();
+                leftHandPivot.position.set(-1.26, 0.05, 0.1);
+                leftHandPivot.add(new THREE.Mesh(handGeo, handMat));
+                bodyGroup.add(leftHandPivot);
+
+                rightHandPivot = new THREE.Group();
+                rightHandPivot.position.set(1.26, 0.05, 0.1);
+                rightHandPivot.add(new THREE.Mesh(handGeo, handMat));
+                bodyGroup.add(rightHandPivot);
+
+                createLittleCubeFeet(0xff4d8d, null);
+
+            } else if (variant === 'B') {
+                // ==============================================================
+                // OPTION B: レトロチビメカ (Retro Chibi Mecha) - N64 Toy Era
+                // ==============================================================
+                const cubeGeoB = new THREE.BoxGeometry(2.1, 2.1, 2.1, 3, 3, 3);
+                const posAttrB = cubeGeoB.attributes.position;
+                for (let i = 0; i < posAttrB.count; i++) {
+                    const vx = posAttrB.getX(i), vy = posAttrB.getY(i), vz = posAttrB.getZ(i);
+                    const d = Math.sqrt(vx * vx + vy * vy + vz * vz);
+                    if (d > 1.60) {
+                        const factor = 1.60 / d;
+                        posAttrB.setXYZ(i, vx * factor, vy * factor, vz * factor);
+                    }
+                }
+                cubeGeoB.computeVertexNormals();
+
+                const cubeMatB = new THREE.MeshStandardMaterial({
+                    color: 0x38bdf8,
+                    roughness: 0.32,
+                    metalness: 0.10,
+                    flatShading: true
+                });
+                mainCube = new THREE.Mesh(cubeGeoB, cubeMatB);
+                mainCube.position.set(0, 0.12, 0);
+                bodyGroup.add(mainCube);
+
+                // Chest Power Emblem (Gold Hexagon)
+                const chestGeo = new THREE.CylinderGeometry(0.32, 0.32, 0.06, 6);
+                chestGeo.rotateX(Math.PI / 2);
+                const chestMat = new THREE.MeshStandardMaterial({ color: 0xfbbf24, roughness: 0.15, metalness: 0.7, flatShading: true });
+                const chestEmblem = new THREE.Mesh(chestGeo, chestMat);
+                chestEmblem.position.set(0, -0.42, 1.06);
+                bodyGroup.add(chestEmblem);
+
+                // Floating Golden Star Crown / Halo
+                const crownPivot = new THREE.Group();
+                crownPivot.position.set(0, 1.48, 0);
+                const starGeo = new THREE.OctahedronGeometry(0.42, 0);
+                const starMat = new THREE.MeshStandardMaterial({
+                    color: 0xfacc15,
+                    roughness: 0.12,
+                    metalness: 0.8,
+                    emissive: 0x854d0e,
+                    emissiveIntensity: 0.5,
+                    flatShading: true
+                });
+                crownPivot.add(new THREE.Mesh(starGeo, starMat));
+
+                const haloRingGeo = new THREE.TorusGeometry(0.55, 0.045, 6, 16);
+                haloRingGeo.rotateX(Math.PI / 2);
+                const haloRingMat = new THREE.MeshStandardMaterial({ color: 0xffe082, roughness: 0.1, metalness: 0.8 });
+                crownPivot.add(new THREE.Mesh(haloRingGeo, haloRingMat));
+                bodyGroup.add(crownPivot);
+                variantExtraObjects.push({ mesh: crownPivot, bob: true, rotSpeedY: 1.8 });
+
+                createKirbyEyes(0x0284c7, true);
+
+                // White Cartoon Power-Gloves with Thumb Cubes
+                const gloveGeo = new THREE.BoxGeometry(0.50, 0.50, 0.50);
+                const gloveMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.25, metalness: 0.05, flatShading: true });
+                const thumbGeo = new THREE.BoxGeometry(0.18, 0.20, 0.22);
+
+                leftHandPivot = new THREE.Group();
+                leftHandPivot.position.set(-1.28, 0.05, 0.1);
+                leftHandPivot.add(new THREE.Mesh(gloveGeo, gloveMat));
+                const leftThumb = new THREE.Mesh(thumbGeo, gloveMat);
+                leftThumb.position.set(0.18, 0.18, 0.15);
+                leftHandPivot.add(leftThumb);
+                bodyGroup.add(leftHandPivot);
+
+                rightHandPivot = new THREE.Group();
+                rightHandPivot.position.set(1.28, 0.05, 0.1);
+                rightHandPivot.add(new THREE.Mesh(gloveGeo, gloveMat));
+                const rightThumb = new THREE.Mesh(thumbGeo, gloveMat);
+                rightThumb.position.set(-0.18, 0.18, 0.15);
+                rightHandPivot.add(rightThumb);
+                bodyGroup.add(rightHandPivot);
+
+                createLittleCubeFeet(0xe11d48, 0xfbbf24);
+
+            } else if (variant === 'C') {
+                // ==============================================================
+                // OPTION C: 天球プリズム (Celestial Hyper-Prism) - Refractive Glass & Satellites
+                // ==============================================================
+                const prismGeo = new THREE.IcosahedronGeometry(1.35, 0);
+                const prismMat = new THREE.MeshStandardMaterial({
+                    color: 0xa5f3fc,
+                    roughness: 0.08,
+                    metalness: 0.25,
+                    transparent: true,
+                    opacity: 0.82,
+                    flatShading: true
+                });
+                mainCube = new THREE.Mesh(prismGeo, prismMat);
+                mainCube.position.set(0, 0.12, 0);
+                bodyGroup.add(mainCube);
+
+                // Radiant Jewel Heart
+                const heartGeo = new THREE.OctahedronGeometry(0.68, 0);
+                const heartMat = new THREE.MeshBasicMaterial({ color: 0xffe4e6 });
+                coreCube = new THREE.Mesh(heartGeo, heartMat);
+                coreCube.position.set(0, 0.12, 0);
+                bodyGroup.add(coreCube);
+
+                // Low-Poly Angelic Ice Wings on Back
+                const wingMat = new THREE.MeshStandardMaterial({
+                    color: 0xe0f2fe,
+                    roughness: 0.12,
+                    metalness: 0.2,
+                    transparent: true,
+                    opacity: 0.88,
+                    flatShading: true
+                });
+
+                function makeWing(isLeft) {
+                    const wingGroup = new THREE.Group();
+                    const f1 = new THREE.Mesh(new THREE.BoxGeometry(0.75, 0.22, 0.08), wingMat);
+                    f1.position.set(isLeft ? -0.4 : 0.4, 0.2, 0);
+                    f1.rotation.z = isLeft ? 0.35 : -0.35;
+                    wingGroup.add(f1);
+
+                    const f2 = new THREE.Mesh(new THREE.BoxGeometry(0.65, 0.18, 0.08), wingMat);
+                    f2.position.set(isLeft ? -0.35 : 0.35, 0, 0);
+                    f2.rotation.z = isLeft ? 0.15 : -0.15;
+                    wingGroup.add(f2);
+
+                    const f3 = new THREE.Mesh(new THREE.BoxGeometry(0.48, 0.15, 0.08), wingMat);
+                    f3.position.set(isLeft ? -0.28 : 0.28, -0.16, 0);
+                    f3.rotation.z = isLeft ? -0.1 : 0.1;
+                    wingGroup.add(f3);
+                    return wingGroup;
+                }
+
+                const leftWing = makeWing(true);
+                leftWing.position.set(-0.75, 0.45, -0.95);
+                bodyGroup.add(leftWing);
+
+                const rightWing = makeWing(false);
+                rightWing.position.set(0.75, 0.45, -0.95);
+                bodyGroup.add(rightWing);
+
+                variantExtraObjects.push({ leftWing, rightWing, isWings: true });
+
+                // 4 Orbiting Satellite Micro-Cubes (μITRON, DP, WND, TAD)
+                const satGroup = new THREE.Group();
+                satGroup.position.set(0, 0.12, 0);
+                const satColors = [0xff4d8d, 0x00f0ff, 0xfacc15, 0xa855f7];
+                const satMeshes = [];
+
+                for (let i = 0; i < 4; i++) {
+                    const satGeo = new THREE.BoxGeometry(0.28, 0.28, 0.28);
+                    const satMat = new THREE.MeshStandardMaterial({
+                        color: satColors[i],
+                        roughness: 0.15,
+                        metalness: 0.3,
+                        flatShading: true
+                    });
+                    const sm = new THREE.Mesh(satGeo, satMat);
+                    satGroup.add(sm);
+                    satMeshes.push(sm);
+                }
+                bodyGroup.add(satGroup);
+                variantExtraObjects.push({ satGroup, satMeshes, isSatellites: true });
+
+                createKirbyEyes(0xa855f7, false);
+
+                // Crystal Hands
+                const handGeoC = new THREE.BoxGeometry(0.44, 0.44, 0.44);
+                const handMatC = new THREE.MeshStandardMaterial({ color: 0xbae6fd, roughness: 0.15, metalness: 0.2, transparent: true, opacity: 0.9, flatShading: true });
+                leftHandPivot = new THREE.Group();
+                leftHandPivot.position.set(-1.26, 0.05, 0.1);
+                leftHandPivot.add(new THREE.Mesh(handGeoC, handMatC));
+                bodyGroup.add(leftHandPivot);
+
+                rightHandPivot = new THREE.Group();
+                rightHandPivot.position.set(1.26, 0.05, 0.1);
+                rightHandPivot.add(new THREE.Mesh(handGeoC, handMatC));
+                bodyGroup.add(rightHandPivot);
+
+                createLittleCubeFeet(0x0284c7, 0x38bdf8);
+            }
+        }
+
+        // Initialize Three.js Scene Exactly Centered
+        if (container3d && canvas3d && typeof THREE !== 'undefined') {
+            scene3d = new THREE.Scene();
+            camera3d = new THREE.PerspectiveCamera(36, 640 / 560, 0.1, 100);
+            camera3d.position.set(0, 0.08, 9.2);
+            camera3d.lookAt(0, 0.08, 0);
+
+            renderer3d = new THREE.WebGLRenderer({
+                canvas: canvas3d,
+                alpha: true,
+                antialias: true,
+                powerPreference: 'high-performance'
+            });
+            renderer3d.setSize(640, 560);
+            renderer3d.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+
+            // Studio Ambient & Rim Lights
+            scene3d.add(new THREE.AmbientLight(0xffffff, 0.85));
+            const dirL = new THREE.DirectionalLight(0xffffff, 0.95);
+            dirL.position.set(4, 8, 6);
+            scene3d.add(dirL);
+
+            const fillL = new THREE.DirectionalLight(0x80e5ff, 0.65);
+            fillL.position.set(-6, 2, 4);
+            scene3d.add(fillL);
+
+            const rimL = new THREE.DirectionalLight(0xffd54f, 0.65);
+            rimL.position.set(0, -5, -6);
+            scene3d.add(rimL);
+
+            rootGroup = new THREE.Group();
+            rootGroup.position.set(0, 0.08, 0); // Balances optical center at (0, 0, 0)
+            rootGroup.scale.set(0.60, 0.60, 0.60);
+            scene3d.add(rootGroup);
+
+            bodyGroup = new THREE.Group();
+            rootGroup.add(bodyGroup);
+
+            // Build initial Option A
+            buildLilCubeModel('A');
+
+            // Interactive Drag Controls for 3D Cube
+            container3d.addEventListener('pointerdown', (e) => {
+                isDraggingCube = true;
+                prevDragX = e.clientX;
+                prevDragY = e.clientY;
+                container3d.setPointerCapture(e.pointerId);
+            });
+
+            window.addEventListener('pointerup', (e) => {
+                if (isDraggingCube) {
+                    isDraggingCube = false;
+                    try { container3d.releasePointerCapture(e.pointerId); } catch(err) {}
+                }
+            });
+
+            // Click / Poke -> Journey Sacred Pulse
+            container3d.addEventListener('click', () => {
+                if (Math.abs(cubeRotVelX) > 0.04 || Math.abs(cubeRotVelY) > 0.04) return;
+                pokeTime = 1.0;
+                sfxLilCubeBoing();
+                playJourneyChirp();
+                if (typeof triggerJourneyPulse === 'function') triggerJourneyPulse();
+                setKirbyAnimation('sing');
+            });
+        }
+
+        // Canonical Option A: Crystalline Saint (BTRON Lil Cube 64)
+
+        function setKirbyAnimation(state) {
+            if (animState === state && state !== 'poke') return;
+            animState = state;
+            stateTimer = 0;
+            if (state === 'walk') {
+                walkPhase = 0;
+            } else if (state === 'float') {
+                floatTimer = 0;
+                sfxFloatInhale();
+            } else if (state === 'dance') {
+                danceStep = 0;
+                danceTimer = 0;
+                sfxVictoryFanfare();
+            }
+        }
+
+        window.triggerKirbyWaddle = function() {
+            setKirbyAnimation('walk');
+        };
+
+        window.triggerKirbyFloat = function() {
+            setKirbyAnimation('float');
+        };
+
+        window.triggerKirbyDance = function() {
+            setKirbyAnimation('dance');
+        };
+
+        // =========================================================================
+        // 3. Mathematical Hopf Fibration 4D Engine (Human-Perceptive Smoothing)
+        // =========================================================================
+        const hopfCanvas = document.getElementById('hopfCanvas');
+        const hopfCtx = hopfCanvas ? hopfCanvas.getContext('2d') : null;
+        const figure = document.getElementById('saintFigure');
+
+        let width = hopfCanvas.width = hopfCanvas.parentElement.offsetWidth;
+        let height = hopfCanvas.height = hopfCanvas.parentElement.offsetHeight;
+
+        window.addEventListener('resize', () => {
+            if (!hopfCanvas.parentElement) return;
+            width = hopfCanvas.width = hopfCanvas.parentElement.offsetWidth;
+            height = hopfCanvas.height = hopfCanvas.parentElement.offsetHeight;
+            if (container3d && renderer3d && camera3d) {
+                width3d = 640;
+                height3d = 560;
+                camera3d.aspect = 640 / 560;
+                camera3d.updateProjectionMatrix();
+                renderer3d.setSize(640, 560);
+            }
         });
 
-        // 3. Celebratory Ice Crystal Stars
-        function spawnIceStars(element) {
-            const rect = element.getBoundingClientRect();
-            const cx = rect.left + rect.width / 2;
-            const cy = rect.top + rect.height / 2;
-            const colors = ['#a2edff', '#ff9fd6', '#fff3ad', '#bcffbc', '#c9b1ff', '#00f5c4'];
-
-            for (let i = 0; i < 24; i++) {
-                const star = document.createElement('div');
-                star.className = 'frost-star-particle';
-                const size = Math.random() * 9 + 6;
-                star.style.width = size + 'px';
-                star.style.height = size + 'px';
-                star.style.backgroundColor = colors[Math.floor(Math.random() * colors.length)];
-                star.style.left = cx + 'px';
-                star.style.top = cy + 'px';
-                star.style.clipPath = 'polygon(50% 0%, 65% 35%, 100% 50%, 65% 65%, 50% 100%, 35% 65%, 0% 50%, 35% 35%)';
-                document.body.appendChild(star);
-
+        // Sacred Holy Particles (Sparkles & Stars)
+        const holyParticles = [];
+        class HolySparkle {
+            constructor(x, y, isBurst = false, isGoldChi = false) {
+                this.x = x;
+                this.y = y;
+                this.isGoldChi = isGoldChi;
+                this.size = Math.random() * (isGoldChi ? 13 : (isBurst ? 10 : 5)) + 2.5;
+                const speed = isGoldChi ? (4.8 + Math.random() * 4.2) : (isBurst ? 4.5 : 0.9);
                 const angle = Math.random() * Math.PI * 2;
-                const dist = Math.random() * 95 + 40;
-                const destX = cx + Math.cos(angle) * dist;
-                const destY = cy + Math.sin(angle) * dist;
+                this.vx = Math.cos(angle) * speed * (Math.random() + 0.4);
+                this.vy = Math.sin(angle) * speed * (Math.random() + 0.4) - (isGoldChi ? 1.2 : (isBurst ? 0.8 : 0.9));
+                this.alpha = 1.0;
+                this.decay = Math.random() * 0.010 + (isGoldChi ? 0.011 : (isBurst ? 0.020 : 0.007));
+                this.hue = isGoldChi ? (44 + Math.random() * 14) : (Math.random() * 360);
+                this.rot = Math.random() * Math.PI * 2;
+                this.rotSpeed = (Math.random() - 0.5) * (isGoldChi ? 0.16 : 0.08);
+                this.isCross = isGoldChi || Math.random() > 0.45;
+            }
+            update() {
+                this.x += this.vx;
+                this.y += this.vy;
+                this.alpha -= this.decay;
+                this.rot += this.rotSpeed;
+            }
+            draw(ctx) {
+                if (this.alpha <= 0) return;
+                ctx.save();
+                ctx.globalAlpha = Math.max(0, this.alpha * (this.isGoldChi ? 0.92 : 0.75));
+                ctx.translate(this.x, this.y);
+                ctx.rotate(this.rot);
+                if (this.isGoldChi) {
+                    ctx.fillStyle = (Math.random() > 0.35) ? 'rgba(255, 245, 180, 1)' : 'rgba(251, 191, 36, 1)';
+                    ctx.shadowColor = 'rgba(255, 215, 0, 0.95)';
+                    ctx.shadowBlur = 10;
+                } else {
+                    ctx.fillStyle = `hsla(${this.hue}, 95%, 75%, 1)`;
+                    ctx.shadowColor = `hsla(${this.hue}, 100%, 70%, 0.5)`;
+                    ctx.shadowBlur = 6;
+                }
 
-                star.animate([
-                    { transform: 'translate(0, 0) scale(1) rotate(0deg)', opacity: 1 },
-                    { transform: `translate(${destX - cx}px, ${destY - cy}px) scale(0) rotate(${Math.random() * 360}deg)`, opacity: 0 }
-                ], {
-                    duration: 650 + Math.random() * 350,
-                    easing: 'cubic-bezier(0.25, 1, 0.5, 1)'
-                }).onfinish = () => star.remove();
+                const r = this.size;
+                ctx.beginPath();
+                if (this.isCross) {
+                    ctx.moveTo(0, -r);
+                    ctx.lineTo(r * 0.22, -r * 0.22);
+                    ctx.lineTo(r, 0);
+                    ctx.lineTo(r * 0.22, r * 0.22);
+                    ctx.lineTo(0, r);
+                    ctx.lineTo(-r * 0.22, r * 0.22);
+                    ctx.lineTo(-r, 0);
+                    ctx.lineTo(-r * 0.22, -r * 0.22);
+                } else {
+                    ctx.arc(0, 0, r * 0.4, 0, Math.PI * 2);
+                }
+                ctx.closePath();
+                ctx.fill();
+                ctx.restore();
             }
         }
 
-        // 4. Rainbow Overdrive Mode
-        let overdriveActive = false;
-        window.toggleRainbowOverdrive = function() {
-            overdriveActive = !overdriveActive;
-            document.body.classList.toggle('rainbow-overdrive', overdriveActive);
-            const btn = document.getElementById('overdriveBtn');
+        // =========================================================================
+        // Journey (PlayStation 3) Sacred Pulse Architecture: Spherical Radiant Wave
+        // =========================================================================
 
-            if (overdriveActive) {
-                sfxFanfare();
-                btn.innerHTML = '✨ 虹色オーバードライブ: ACTIVE!';
-                btn.style.filter = 'brightness(1.2)';
-                spawnIceStars(btn);
+        // 1. Procedural Journey Ancient Sacred Cloth Runes / Glyphs
+        function drawJourneyGlyph(ctx, type, size, alpha) {
+            ctx.save();
+            ctx.lineWidth = 1.8;
+            ctx.strokeStyle = `rgba(255, 245, 200, ${alpha})`;
+            ctx.fillStyle = `rgba(255, 230, 140, ${alpha * 0.85})`;
+            ctx.shadowColor = `rgba(255, 215, 0, ${alpha * 0.9})`;
+            ctx.shadowBlur = 10;
+            const s = size * 0.5;
+
+            ctx.beginPath();
+            switch (type % 8) {
+                case 0: // Diamond inside diamond
+                    ctx.moveTo(0, -s);
+                    ctx.lineTo(s, 0);
+                    ctx.lineTo(0, s);
+                    ctx.lineTo(-s, 0);
+                    ctx.closePath();
+                    ctx.stroke();
+                    ctx.beginPath();
+                    ctx.moveTo(0, -s * 0.45);
+                    ctx.lineTo(s * 0.45, 0);
+                    ctx.lineTo(0, s * 0.45);
+                    ctx.lineTo(-s * 0.45, 0);
+                    ctx.closePath();
+                    ctx.fill();
+                    break;
+                case 1: // Journey Sacred Cloth Gate
+                    ctx.moveTo(0, -s);
+                    ctx.lineTo(0, s);
+                    ctx.moveTo(-s * 0.8, -s * 0.45);
+                    ctx.lineTo(s * 0.8, -s * 0.45);
+                    ctx.moveTo(-s * 0.5, 0);
+                    ctx.lineTo(s * 0.5, 0);
+                    ctx.moveTo(-s * 0.8, s * 0.45);
+                    ctx.lineTo(s * 0.8, s * 0.45);
+                    ctx.stroke();
+                    ctx.fillRect(-s * 0.15, -s * 0.15, s * 0.3, s * 0.3);
+                    break;
+                case 2: // Celestial Triangle with Center Eye
+                    ctx.moveTo(0, -s);
+                    ctx.lineTo(s * 0.86, s * 0.6);
+                    ctx.lineTo(-s * 0.86, s * 0.6);
+                    ctx.closePath();
+                    ctx.stroke();
+                    ctx.beginPath();
+                    ctx.arc(0, s * 0.05, s * 0.22, 0, Math.PI * 2);
+                    ctx.fill();
+                    break;
+                case 3: // Radiant Four-point Star Cross
+                    ctx.moveTo(0, -s);
+                    ctx.lineTo(s * 0.22, -s * 0.22);
+                    ctx.lineTo(s, 0);
+                    ctx.lineTo(s * 0.22, s * 0.22);
+                    ctx.lineTo(0, s);
+                    ctx.lineTo(-s * 0.22, s * 0.22);
+                    ctx.lineTo(-s, 0);
+                    ctx.lineTo(-s * 0.22, -s * 0.22);
+                    ctx.closePath();
+                    ctx.fill();
+                    ctx.stroke();
+                    break;
+                case 4: // Winged Traveler Ascending
+                    ctx.arc(0, s * 0.2, s * 0.7, -Math.PI * 0.85, -Math.PI * 0.15, false);
+                    ctx.stroke();
+                    ctx.beginPath();
+                    ctx.moveTo(0, -s);
+                    ctx.lineTo(s * 0.3, 0);
+                    ctx.lineTo(0, s * 0.6);
+                    ctx.lineTo(-s * 0.3, 0);
+                    ctx.closePath();
+                    ctx.fill();
+                    break;
+                case 5: // Stepped Pyramid Shrine
+                    ctx.moveTo(-s * 0.75, s * 0.6);
+                    ctx.lineTo(-s * 0.75, s * 0.2);
+                    ctx.lineTo(-s * 0.45, s * 0.2);
+                    ctx.lineTo(-s * 0.45, -s * 0.2);
+                    ctx.lineTo(-s * 0.2, -s * 0.2);
+                    ctx.lineTo(-s * 0.2, -s * 0.6);
+                    ctx.lineTo(s * 0.2, -s * 0.6);
+                    ctx.lineTo(s * 0.2, -s * 0.2);
+                    ctx.lineTo(s * 0.45, -s * 0.2);
+                    ctx.lineTo(s * 0.45, s * 0.2);
+                    ctx.lineTo(s * 0.75, s * 0.2);
+                    ctx.lineTo(s * 0.75, s * 0.6);
+                    ctx.closePath();
+                    ctx.stroke();
+                    break;
+                case 6: // Concentric Sun Chime
+                    ctx.arc(0, 0, s * 0.7, 0, Math.PI * 2);
+                    ctx.stroke();
+                    ctx.beginPath();
+                    ctx.arc(0, 0, s * 0.28, 0, Math.PI * 2);
+                    ctx.fill();
+                    for (let a = 0; a < 6; a++) {
+                        const ang = a * Math.PI / 3;
+                        ctx.moveTo(Math.cos(ang) * s * 0.35, Math.sin(ang) * s * 0.35);
+                        ctx.lineTo(Math.cos(ang) * s * 0.65, Math.sin(ang) * s * 0.65);
+                    }
+                    ctx.stroke();
+                    break;
+                case 7: // Interlocking Hopf Ribbon
+                    ctx.arc(-s * 0.32, 0, s * 0.42, 0, Math.PI * 2);
+                    ctx.arc(s * 0.32, 0, s * 0.42, 0, Math.PI * 2);
+                    ctx.stroke();
+                    break;
+            }
+            ctx.restore();
+        }
+
+        // Procedural Sacred Golden Lotus Petal / Chi Blossom (Kung Fu Panda Spirit Realm Lore)
+        function drawPoLotusGlyph(ctx, size, alpha) {
+            ctx.save();
+            ctx.lineWidth = 1.9;
+            ctx.strokeStyle = `rgba(255, 245, 180, ${alpha})`;
+            ctx.fillStyle = `rgba(251, 191, 36, ${alpha * 0.72})`;
+            ctx.shadowColor = `rgba(255, 200, 0, ${alpha * 0.95})`;
+            ctx.shadowBlur = 14;
+            const s = size * 0.5;
+
+            // Sacred Golden Chi Lotus Petals (6 radial petals)
+            for (let p = 0; p < 6; p++) {
+                ctx.save();
+                ctx.rotate((p * Math.PI) / 3);
+                ctx.beginPath();
+                ctx.moveTo(0, 0);
+                ctx.quadraticCurveTo(s * 0.35, -s * 0.5, 0, -s);
+                ctx.quadraticCurveTo(-s * 0.35, -s * 0.5, 0, 0);
+                ctx.closePath();
+                ctx.fill();
+                ctx.stroke();
+                ctx.restore();
+            }
+            // Radiant Golden Core
+            ctx.beginPath();
+            ctx.arc(0, 0, s * 0.28, 0, Math.PI * 2);
+            ctx.fillStyle = `rgba(255, 255, 230, ${alpha * 0.95})`;
+            ctx.fill();
+            ctx.stroke();
+            ctx.restore();
+        }
+
+        // 2. 2D Journey Spherical Radiant Wave on Hopf Canvas (Clean, Uncluttered, Pure Light)
+        const activeJourneyWaves = [];
+        class JourneySphericalWave {
+            constructor(cx, cy, isSecondWave = false) {
+                this.cx = cx;
+                this.cy = cy;
+                this.isSecondWave = isSecondWave;
+                // Wave 1 dissolves in space (maxR = 240px); Wave 2 finishes at clear outer boundary (maxR = 360px)
+                this.maxR = isSecondWave ? 360 : 240;
+                this.duration = isSecondWave ? 1.8 : 1.6;
+                this.time = 0;
+                this.alive = true;
+            }
+
+            update(dt) {
+                this.time += dt;
+                if (this.time >= this.duration) {
+                    this.alive = false;
+                }
+            }
+
+            getCurrentRadius() {
+                const progress = Math.min(1.0, this.time / this.duration);
+                // Cubic ease-out: expands gracefully and decelerates to a gentle stop at maxR
+                const ease = 1 - Math.pow(1 - progress, 2.8);
+                return 18 + ease * (this.maxR - 18);
+            }
+
+            draw(ctx) {
+                if (!this.alive) return;
+                const progress = this.time / this.duration;
+                const r = this.getCurrentRadius();
+
+                ctx.save();
+
+                // A. Central Gentle Radiant Glow (Dissolves by 45%)
+                if (progress < 0.45) {
+                    const bloomP = progress / 0.45;
+                    const bAlpha = (1 - bloomP) * (this.isSecondWave ? 0.50 : 0.40);
+                    const bR = 30 + bloomP * (this.isSecondWave ? 90 : 70);
+                    const bGrad = ctx.createRadialGradient(this.cx, this.cy, 0, this.cx, this.cy, bR);
+                    bGrad.addColorStop(0, `rgba(255, 255, 250, ${bAlpha})`);
+                    bGrad.addColorStop(0.5, `rgba(56, 189, 248, ${bAlpha * 0.4})`);
+                    bGrad.addColorStop(1, 'rgba(56, 189, 248, 0)');
+                    ctx.fillStyle = bGrad;
+                    ctx.beginPath();
+                    ctx.arc(this.cx, this.cy, bR, 0, Math.PI * 2);
+                    ctx.fill();
+                }
+
+                // B. Luminous Blue Sphere Veil (Dissolves earlier at ~62% of wave lifespan)
+                const sphereLifeRatio = 0.62;
+                const sphereProgress = Math.min(1.0, progress / sphereLifeRatio);
+                const sphereFadeT = Math.max(0, (sphereProgress - 0.20) / 0.80);
+                const sphereAlpha = sphereProgress < 0.20 ? 1.0 : 0.5 * (1 + Math.cos(Math.PI * sphereFadeT));
+                if (sphereProgress < 1.0) {
+                    const domeGrad = ctx.createRadialGradient(this.cx, this.cy, Math.max(0, r - (this.isSecondWave ? 110 : 80)), this.cx, this.cy, r);
+                    domeGrad.addColorStop(0, 'rgba(56, 189, 248, 0)');
+                    domeGrad.addColorStop(0.55, `rgba(14, 165, 233, ${sphereAlpha * (this.isSecondWave ? 0.24 : 0.18)})`);
+                    domeGrad.addColorStop(0.90, `rgba(56, 189, 248, ${sphereAlpha * (this.isSecondWave ? 0.32 : 0.24)})`);
+                    domeGrad.addColorStop(1, 'rgba(56, 189, 248, 0)');
+                    ctx.fillStyle = domeGrad;
+                    ctx.beginPath();
+                    ctx.arc(this.cx, this.cy, r, 0, Math.PI * 2);
+                    ctx.fill();
+                }
+
+                // C. Golden Orbits / Radiant Crest (Clean, crisp, clear ending!)
+                // Crest lasts longer than blue sphere; for second wave, it clearly reaches maxR and completes
+                const crestFadeT = Math.max(0, (progress - 0.40) / 0.60);
+                const crestAlpha = progress < 0.40 ? 1.0 : 0.5 * (1 + Math.cos(Math.PI * crestFadeT));
+
+                // 1. Primary Radiant Golden Crest Ring
+                ctx.beginPath();
+                ctx.arc(this.cx, this.cy, r, 0, Math.PI * 2);
+                ctx.strokeStyle = `rgba(255, 215, 0, ${crestAlpha * (this.isSecondWave ? 0.95 : 0.90)})`;
+                ctx.lineWidth = Math.max(2.0, (this.isSecondWave ? 4.8 : 4.0) * (1 - progress * 0.45));
+                ctx.shadowColor = 'rgba(255, 200, 0, 0.90)';
+                ctx.shadowBlur = this.isSecondWave ? 20 : 14;
+                ctx.stroke();
+
+                // 2. Solar Core Highlight Line
+                ctx.beginPath();
+                ctx.arc(this.cx, this.cy, Math.max(1, r - 5), 0, Math.PI * 2);
+                ctx.strokeStyle = `rgba(255, 250, 210, ${crestAlpha * 0.92})`;
+                ctx.lineWidth = Math.max(1.2, 2.5 * (1 - progress * 0.45));
+                ctx.shadowColor = 'rgba(255, 235, 120, 0.8)';
+                ctx.shadowBlur = 10;
+                ctx.stroke();
+
+                // 3. Turquoise Resonance Rim
+                ctx.beginPath();
+                ctx.arc(this.cx, this.cy, Math.max(1, r - 10), 0, Math.PI * 2);
+                ctx.strokeStyle = `rgba(0, 240, 255, ${crestAlpha * 0.60})`;
+                ctx.lineWidth = Math.max(1.0, 1.8 * (1 - progress * 0.45));
+                ctx.shadowBlur = 6;
+                ctx.stroke();
+
+                // Clear ending punctuation for Second Miniwave:
+                // As the second miniwave reaches maxR (progress > 0.60), 8 golden stardust markers clearly mark the boundary
+                if (this.isSecondWave && progress > 0.60) {
+                    const markAlpha = Math.sin(((progress - 0.60) / 0.40) * Math.PI) * 0.85;
+                    ctx.fillStyle = `rgba(255, 240, 160, ${markAlpha})`;
+                    ctx.shadowColor = 'rgba(255, 215, 0, 1)';
+                    ctx.shadowBlur = 12;
+                    for (let m = 0; m < 8; m++) {
+                        const mAng = (m / 8) * Math.PI * 2;
+                        const mx = this.cx + Math.cos(mAng) * r;
+                        const my = this.cy + Math.sin(mAng) * r;
+                        ctx.beginPath();
+                        ctx.arc(mx, my, 2.8, 0, Math.PI * 2);
+                        ctx.fill();
+                    }
+                }
+
+                ctx.restore();
+            }
+        }
+
+        // 3. 3D Journey Spherical Pulse in Three.js (Luminous Blue Sphere & Volumetric Golden Orbits)
+        const active3dPulses = [];
+        class JourneyPulse3D {
+            constructor(parentScene, isSecondWave = false) {
+                this.parent = parentScene;
+                this.isSecondWave = isSecondWave;
+                this.group = new THREE.Group();
+                this.group.position.set(0, 0.08, 0);
+
+                // Golden Icosahedron Star Wireframe
+                const icoGeo = new THREE.IcosahedronGeometry(1.0, 1);
+                const icoMat = new THREE.MeshBasicMaterial({
+                    color: 0xffe082,
+                    wireframe: true,
+                    transparent: true,
+                    opacity: 0.75,
+                    depthWrite: false
+                });
+                this.wireMesh = new THREE.Mesh(icoGeo, icoMat);
+                this.group.add(this.wireMesh);
+
+                // Luminous Celestial Blue Sphere
+                const sphereGeo = new THREE.SphereGeometry(0.96, 24, 24);
+                const sphereMat = new THREE.MeshBasicMaterial({
+                    color: isSecondWave ? 0x0ea5e9 : 0x38bdf8,
+                    transparent: true,
+                    opacity: isSecondWave ? 0.55 : 0.48,
+                    blending: THREE.AdditiveBlending,
+                    depthWrite: false
+                });
+                this.sphereMesh = new THREE.Mesh(sphereGeo, sphereMat);
+                this.group.add(this.sphereMesh);
+
+                // Volumetric 3D Golden Orbits (Torus Geometry - clearly visible from every 3D angle!)
+                const orbitTube = isSecondWave ? 0.050 : 0.044;
+                const orbitGeo = new THREE.TorusGeometry(1.08, orbitTube, 16, 48);
+                const orbitMat = new THREE.MeshBasicMaterial({
+                    color: 0xffd700,
+                    transparent: true,
+                    opacity: 0.95,
+                    blending: THREE.AdditiveBlending,
+                    depthWrite: false
+                });
+
+                // Orbit 1: Equatorial Golden Orbit
+                this.orbitH = new THREE.Mesh(orbitGeo, orbitMat);
+                this.orbitH.rotation.x = Math.PI / 2;
+                this.group.add(this.orbitH);
+
+                // Orbit 2: Inclined Golden Orbit
+                this.orbitV = new THREE.Mesh(orbitGeo.clone(), orbitMat.clone());
+                this.orbitV.rotation.x = Math.PI / 3;
+                this.orbitV.rotation.y = Math.PI / 4;
+                this.group.add(this.orbitV);
+
+                this.parent.add(this.group);
+                this.time = 0;
+                // Wave 1: 1.6s, Wave 2: 1.8s
+                this.duration = isSecondWave ? 1.8 : 1.6;
+                this.alive = true;
+            }
+
+            update(dt) {
+                this.time += dt;
+                const progress = this.time / this.duration;
+                if (progress >= 1.0) {
+                    this.alive = false;
+                    this.dispose();
+                    return;
+                }
+
+                // Smooth expansion: Wave 1 expands to 1.8x (dissolves in space), Wave 2 reaches clear 2.6x outer bound
+                const easeOut = 1 - Math.pow(1 - progress, 2.6);
+                const maxScale = this.isSecondWave ? 2.6 : 1.8;
+                const currentScale = 0.14 + easeOut * maxScale;
+                this.group.scale.set(currentScale, currentScale, currentScale);
+
+                // 1. Blue Sphere finishes first (dissolves by ~62% of lifespan)
+                const sphereLifeRatio = 0.62;
+                const sphereProgress = Math.min(1.0, this.time / (this.duration * sphereLifeRatio));
+                const sphereFadeT = Math.max(0, (sphereProgress - 0.20) / 0.80);
+                const sphereAlpha = sphereProgress < 0.20 ? 1.0 : 0.5 * (1 + Math.cos(Math.PI * sphereFadeT));
+                const sphereBaseOp = this.isSecondWave ? 0.55 : 0.48;
+                this.sphereMesh.material.opacity = (sphereProgress < 1.0 ? sphereAlpha : 0) * sphereBaseOp;
+
+                // 2. Golden Orbits stay visible longer, clearly finishing at outer bound
+                const orbitFadeT = Math.max(0, (progress - 0.40) / 0.60);
+                const orbitAlpha = progress < 0.40 ? 1.0 : 0.5 * (1 + Math.cos(Math.PI * orbitFadeT));
+                this.orbitH.material.opacity = orbitAlpha * 0.95;
+                this.orbitV.material.opacity = orbitAlpha * 0.95;
+                this.wireMesh.material.opacity = orbitAlpha * 0.75;
+
+                // Smooth rotation of Golden Orbits
+                this.group.rotation.y += dt * (this.isSecondWave ? 1.8 : 1.4);
+                this.group.rotation.x += dt * (this.isSecondWave ? 1.0 : 0.7);
+            }
+
+            dispose() {
+                this.parent.remove(this.group);
+                this.wireMesh.geometry.dispose();
+                this.wireMesh.material.dispose();
+                this.sphereMesh.geometry.dispose();
+                this.sphereMesh.material.dispose();
+                this.orbitH.geometry.dispose();
+                this.orbitH.material.dispose();
+                this.orbitV.geometry.dispose();
+                this.orbitV.material.dispose();
+            }
+        }
+
+        // Trigger Journey Sacred Pulse (Two-Stage: 1. Journey Singing Wave -> 2. Second Miniwave)
+        function triggerJourneyPulse() {
+            if (!figure || !hopfCanvas) return;
+            const rect = figure.getBoundingClientRect();
+            const canvasRect = hopfCanvas.getBoundingClientRect();
+            const cx = rect.left + rect.width / 2 - canvasRect.left;
+            const cy = rect.top + rect.height / 2 - canvasRect.top;
+
+            // --- Wave 1: First miniwave (chirp, mouth sings & closes by 0.44s, wave dissolves in space) ---
+            activeJourneyWaves.push(new JourneySphericalWave(cx, cy, false));
+            if (scene3d) {
+                active3dPulses.push(new JourneyPulse3D(scene3d, false));
+            }
+            for (let i = 0; i < 14; i++) {
+                holyParticles.push(new HolySparkle(cx, cy, true, false));
+            }
+
+            // --- Wave 2: Second miniwave (starts at +680ms, well AFTER mouth has closed at 0.44s!) ---
+            // Clear, visible ending at outer bound
+            setTimeout(() => {
+                if (!figure || !hopfCanvas) return;
+                const rRect = figure.getBoundingClientRect();
+                const cRect = hopfCanvas.getBoundingClientRect();
+                const curCx = rRect.left + rRect.width / 2 - cRect.left;
+                const curCy = rRect.top + rRect.height / 2 - cRect.top;
+
+                // Harmonious Golden Chi Chime
+                playGoldenChiChime();
+
+                // 2D Second Miniwave (clean, crisp, clear visible outer boundary ending at 360px)
+                activeJourneyWaves.push(new JourneySphericalWave(curCx, curCy, true));
+
+                // 3D Second Miniwave (volumetric Golden Orbits finishing at clear 3.5x outer bound)
+                if (scene3d) {
+                    active3dPulses.push(new JourneyPulse3D(scene3d, true));
+                }
+
+                // Delicate ring of golden stardust
+                for (let i = 0; i < 18; i++) {
+                    holyParticles.push(new HolySparkle(curCx, curCy, true, true));
+                }
+            }, 680);
+        }
+
+        function triggerBlessingBurst() {
+            triggerJourneyPulse();
+        }
+
+        // Hopf 4D Coordinates & Human Perception Smooth Dynamics
+        let time = 0;
+        let targetRotX = 0.22;
+        let targetRotY = 0;
+        let curRotX = 0.22;
+        let curRotY = 0;
+
+        // Ergonomically tuned circular motion smoothing (Weber-Fechner & Critically Damped Inertia)
+        let lastPointerAngle = null;
+        let circularVelocity = 0;
+        let circularPhase = 0;
+
+        let dispersionActive = true;
+        let densityMode = 0; // 0: 18, 1: 36, 2: 54 (starts with lowest 18 size wireframed fibrations)
+        const densityConfigs = [
+            { tori: 2, fibersPerTorus: 9, pts: 40, label: "18環" },
+            { tori: 3, fibersPerTorus: 12, pts: 46, label: "36環" },
+            { tori: 3, fibersPerTorus: 18, pts: 52, label: "54環" }
+        ];
+
+        // Smooth Pointer Handler with Tremor Filtering & Clamped Acceleration
+        function handlePointer(clientX, clientY) {
+            const rect = hopfCanvas.getBoundingClientRect();
+            if (clientY < rect.top || clientY > rect.bottom || clientX < rect.left || clientX > rect.right) {
+                lastPointerAngle = null;
+                return;
+            }
+
+            let cx = width * 0.5;
+            let cy = height * 0.38;
+            if (figure && hopfCanvas.parentElement) {
+                const fRect = figure.getBoundingClientRect();
+                const parentRect = hopfCanvas.parentElement.getBoundingClientRect();
+                cx = (fRect.left + fRect.width * 0.5) - parentRect.left;
+                cy = (fRect.top + fRect.height * 0.5) - parentRect.top;
+            }
+
+            const curX = clientX - rect.left;
+            const curY = clientY - rect.top;
+            const dx = curX - cx;
+            const dy = curY - cy;
+            const dist = Math.sqrt(dx * dx + dy * dy);
+            const angle = Math.atan2(dy, dx);
+
+            // Gaze tracking for Lil Cube
+            targetLookX = Math.max(-0.45, Math.min(0.45, (dx / 320)));
+            targetLookY = Math.max(-0.35, Math.min(0.35, -(dy / 320)));
+
+            // 3D Tilt: gentle, human-friendly range (+-0.22 rad max) to prevent visual disorientation
+            const maxRadius = Math.min(width, height) * 0.45;
+            const normDist = Math.min(1.0, dist / Math.max(80, maxRadius));
+            targetRotX = (dy / (height * 0.5)) * 0.22 + 0.22;
+            targetRotY = (dx / (width * 0.5)) * 0.35;
+
+            // Handle 3D Drag if active
+            if (isDraggingCube) {
+                const dragDeltaX = clientX - prevDragX;
+                const dragDeltaY = clientY - prevDragY;
+                cubeRotVelY = dragDeltaX * 0.012;
+                cubeRotVelX = dragDeltaY * 0.010;
+                cubeCurRotY += cubeRotVelY;
+                cubeCurRotX += cubeRotVelX;
+                prevDragX = clientX;
+                prevDragY = clientY;
+            }
+
+            // Circular Swirl Detection with Deadband & Gentle Gain (HCI Standard)
+            if (lastPointerAngle !== null) {
+                let dTheta = angle - lastPointerAngle;
+                while (dTheta > Math.PI) dTheta -= Math.PI * 2;
+                while (dTheta < -Math.PI) dTheta += Math.PI * 2;
+
+                // Deadband threshold: filter out hand tremors / sensor noise (< 0.008 rad)
+                if (Math.abs(dTheta) > 0.008) {
+                    // Clamped gentle transfer (0.35 factor) so it glides serenely rather than whipping abruptly
+                    const clampedDelta = Math.max(-0.045, Math.min(0.045, dTheta * 0.35));
+                    circularVelocity += clampedDelta;
+                    circularPhase += clampedDelta * 1.2;
+
+                    // Delicate sparkling along circular cursor orbit
+                    if (Math.random() < 0.25 && holyParticles.length < 32) {
+                        holyParticles.push(new HolySparkle(curX, curY, false));
+                    }
+                }
+            }
+            lastPointerAngle = angle;
+        }
+
+        window.addEventListener('mousemove', (e) => {
+            handlePointer(e.clientX, e.clientY);
+        });
+
+        window.addEventListener('touchmove', (e) => {
+            if (e.touches.length > 0) {
+                handlePointer(e.touches[0].clientX, e.touches[0].clientY);
+            }
+        }, { passive: true });
+
+        window.addEventListener('touchend', () => {
+            lastPointerAngle = null;
+        });
+
+        window.toggleDispersion = function() {
+            dispersionActive = !dispersionActive;
+            const btn = document.getElementById('dispersionBtn');
+            if (dispersionActive) {
+                btn.classList.add('active');
+                btn.innerHTML = '🌈 分光モード: ON';
             } else {
-                btn.innerHTML = '🌈 虹色オーバードライブ';
-                btn.style.filter = '';
+                btn.classList.remove('active');
+                btn.innerHTML = '✨ 単色光モード: OFF';
             }
         };
 
-        // Auto Cycle Tip Every 10s
-        setInterval(() => {
-            if (!document.hidden) {
-                currentTipIdx = (currentTipIdx + 1) % tips.length;
-                bubbleText.innerText = tips[currentTipIdx];
-                tipCounter.innerText = `TIP ${currentTipIdx + 1}/${tips.length}`;
+        window.cycleDensity = function() {
+            densityMode = (densityMode + 1) % densityConfigs.length;
+            const btn = document.getElementById('densityBtn');
+            btn.innerHTML = `🪐 繊維環: ${densityConfigs[densityMode].label}`;
+            playCelestialChime(880.00, 0.4, 0.15);
+        };
+
+        let blessingActive = false;
+        window.triggerBlessing = function() {
+            if (blessingActive) return;
+            blessingActive = true;
+            playJourneyChirp(); // PlayStation 3 Journey Singing Chime Harmonic Chord
+            triggerJourneyPulse();
+
+            if (rootGroup) {
+                setKirbyAnimation('sing');
             }
-        }, 10000);
+
+            nextSacredQuote();
+            setTimeout(() => { blessingActive = false; }, 400);
+        };
+
+        const sacredQuotes = [
+            "「ボクはリル・キューブ64… 低ポリゴン3Dで動き回る聖なる氷晶だキューブ！🧊✨」",
+            "「『風ノ旅ビト (Journey)』の神聖波動… 天球に広がる金と碧の球状波がすべての魂に響き渡るキューブ！🕊️💫」",
+            "「第2波の黄金気功（Chi）波動！ ポーの黄金龍オーラのように、天球の無限の彼方まで広がるキューブ！🐉✨」",
+            "「ボクの足（Steeps）もかわいいミニキューブ！ ぴょこぴょこ歩いてダンスも踊れるキューブ！🐾」",
+            "「4次元球面 S³ のホップ束が、静かに優美に調和の天球を描くキューブ！🌈💫」",
+            "「実身と仮身、ハイパーメディアの永遠の連鎖… TRONの調和がここに極まるキューブ！✨」",
+            "「マウスを円状に回すと、ホップ束が滑らかな慣性で優美に回るキューブ〜⭐🔔」",
+            "「ホップ不変量（Hopf Invariant）は常に1！ この絆は絶対に解けないキューブ！🧊💫」"
+        ];
+        let quoteIdx = 0;
+        function nextSacredQuote() {
+            quoteIdx = (quoteIdx + 1) % sacredQuotes.length;
+            if (quoteText) quoteText.innerText = sacredQuotes[quoteIdx];
+        }
+        if (bubble) {
+            bubble.addEventListener('click', () => {
+                nextSacredQuote();
+                playCelestialChime(739.99, 0.5, 0.15);
+            });
+        }
+
+        // Global Keybindings: [Space] or [J] triggers Journey Sacred Pulse!
+        window.addEventListener('keydown', (e) => {
+            if (e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA')) return;
+            if (e.code === 'Space' || e.key === 'j' || e.key === 'J' || e.key === 'p' || e.key === 'P') {
+                e.preventDefault();
+                window.triggerBlessing();
+            } else if (e.key === 'w' || e.key === 'W') {
+                window.triggerKirbyWaddle();
+            } else if (e.key === 'f' || e.key === 'F') {
+                window.triggerKirbyFloat();
+            } else if (e.key === 'd' || e.key === 'D') {
+                window.triggerKirbyDance();
+            }
+        });
+
+        // =========================================================================
+        // 4. Combined 60 FPS Render Loop (Hopf Canvas + Three.js 3D Character)
+        // =========================================================================
+        let clock = typeof THREE !== 'undefined' ? new THREE.Clock() : null;
+
+        function animate() {
+            requestAnimationFrame(animate);
+
+            const dt = clock ? Math.min(clock.getDelta(), 0.05) : 0.016;
+            time += dt;
+            stateTimer += dt;
+
+            // -------------------------------------------------------------
+            // A. Update Three.js 3D Lil Cube 64 with Nintendo Kirby Animations
+            // -------------------------------------------------------------
+            if (rootGroup && bodyGroup) {
+                // Drag Inertia & Smooth Restoring Spring
+                if (!isDraggingCube) {
+                    cubeRotVelX *= 0.90;
+                    cubeRotVelY *= 0.90;
+                    cubeCurRotX += cubeRotVelX;
+                    cubeCurRotY += cubeRotVelY;
+                    // Gently spring back toward facing forward
+                    cubeCurRotX += (0 - cubeCurRotX) * 0.04;
+                    cubeCurRotY += (0 - cubeCurRotY) * 0.04;
+                }
+
+                // Update Variant-Specific Extra Animated Meshes
+                for (let i = 0; i < variantExtraObjects.length; i++) {
+                    const extra = variantExtraObjects[i];
+                    if (extra.rotSpeedY && extra.mesh) {
+                        extra.mesh.rotation.y += dt * extra.rotSpeedY;
+                    }
+                    if (extra.rotSpeedX && extra.mesh) {
+                        extra.mesh.rotation.x += dt * extra.rotSpeedX;
+                    }
+                    if (extra.bob && extra.mesh) {
+                        extra.mesh.position.y = 1.48 + Math.sin(stateTimer * 4.0) * 0.08;
+                    }
+                    if (extra.isWings) {
+                        const flapSpeed = (animState === 'float') ? 16.0 : 3.5;
+                        const flapAmp = (animState === 'float') ? 0.45 : 0.16;
+                        const flap = Math.sin(stateTimer * flapSpeed) * flapAmp;
+                        extra.leftWing.rotation.y = flap;
+                        extra.rightWing.rotation.y = -flap;
+                    }
+                    if (extra.isSatellites) {
+                        extra.satGroup.rotation.y += dt * 0.85;
+                        extra.satGroup.rotation.x = Math.sin(stateTimer * 0.8) * 0.30;
+                        const orbitR = 1.75 + Math.sin(stateTimer * 2.0) * 0.12;
+                        for (let s = 0; s < extra.satMeshes.length; s++) {
+                            const ang = (s * Math.PI / 2) + stateTimer * 1.1;
+                            const sm = extra.satMeshes[s];
+                            sm.position.set(
+                                Math.cos(ang) * orbitR,
+                                Math.sin(ang * 2) * 0.32,
+                                Math.sin(ang) * orbitR
+                            );
+                            sm.rotation.x += dt * 2.2;
+                            sm.rotation.y += dt * 2.6;
+                        }
+                    }
+                }
+
+                // Eye Tracking
+                if (leftEye && rightEye) {
+                    leftEye.position.x = -0.46 + targetLookX * 0.08;
+                    leftEye.position.y = 0.32 + targetLookY * 0.06;
+                    rightEye.position.x = 0.46 + targetLookX * 0.08;
+                    rightEye.position.y = 0.32 + targetLookY * 0.06;
+
+                    // Eye Blinking Animation with Smooth S-Curve Eyelid Pulse
+                    blinkTimer -= dt;
+                    if (blinkTimer <= 0) {
+                        isBlinking = true;
+                        blinkProgress = 0;
+                        blinkTimer = 2.8 + Math.random() * 2.5;
+                    }
+                    if (isBlinking) {
+                        blinkProgress += dt * 8.5; // ~0.12s blink duration
+                        if (blinkProgress >= 1.0) {
+                            blinkProgress = 0;
+                            isBlinking = false;
+                            leftEye.scale.y = 1.0;
+                            rightEye.scale.y = 1.0;
+                        } else {
+                            const eyeSquish = 1.0 - Math.sin(blinkProgress * Math.PI) * 0.90;
+                            leftEye.scale.y = eyeSquish;
+                            rightEye.scale.y = eyeSquish;
+                        }
+                    } else {
+                        leftEye.scale.y = 1.0;
+                        rightEye.scale.y = 1.0;
+                    }
+                }
+
+                // Inner core gem rotation
+                if (coreCube) {
+                    coreCube.rotation.x += dt * 0.5;
+                    coreCube.rotation.y += dt * 0.7;
+                }
+
+                // =========================================================
+                // Nintendo & Disney Reviewer-Grade Continuous Animation Engine
+                // Target Pose Formulation with Zero-Discontinuity Inertial Springs
+                // =========================================================
+                let tRootX = 0;
+                let tRootY = 0.08;
+                let tRootZ = 0;
+                let tRootRotX = 0;
+                let tRootRotY = 0;
+                let tRootRotZ = 0;
+
+                let tBodyX = 0;
+                let tBodyY = 0;
+                let tBodyZ = 0;
+                let tBodyRotX = 0;
+                let tBodyRotY = 0;
+                let tBodyRotZ = 0;
+                let tScaleX = 1.0;
+                let tScaleY = 1.0;
+                let tScaleZ = 1.0;
+
+                let tLeftHandRotX = 0;
+                let tLeftHandRotY = 0;
+                let tLeftHandRotZ = 0.10;
+                let tRightHandRotX = 0;
+                let tRightHandRotY = 0;
+                let tRightHandRotZ = -0.10;
+
+                let tLeftFootX = -0.64;
+                let tLeftFootY = -0.92;
+                let tLeftFootZ = 0.08;
+                let tLeftFootRotX = 0;
+                let tLeftFootRotY = 0;
+                let tLeftFootRotZ = 0;
+
+                let tRightFootX = 0.64;
+                let tRightFootY = -0.92;
+                let tRightFootZ = 0.08;
+                let tRightFootRotX = 0;
+                let tRightFootRotY = 0;
+                let tRightFootRotZ = 0;
+
+                let tSmileScale = 1.0;
+                let tOMouthScale = 0.0;
+                let tPedestalScale = 1.0;
+                let tPedestalOpacity = 0.75;
+
+                if (animState === 'idle') {
+                    // Kirby Breathing & Weight Shift
+                    const breath = Math.sin(stateTimer * 3.2);
+                    const sway = Math.sin(stateTimer * 1.6);
+
+                    tScaleY = 1.0 + breath * 0.04;
+                    tScaleX = 1.0 - breath * 0.02;
+                    tScaleZ = 1.0 - breath * 0.02;
+                    tBodyY = breath * 0.03;
+
+                    tBodyRotZ = sway * 0.035;
+                    tLeftFootRotZ = sway * 0.03;
+                    tRightFootRotZ = -sway * 0.03;
+
+                    tLeftHandRotZ = 0.10 + Math.sin(stateTimer * 3.2) * 0.07;
+                    tRightHandRotZ = -0.10 - Math.sin(stateTimer * 3.2) * 0.07;
+
+                } else if (animState === 'walk') {
+                    // Kirby Waddle Walk Cycle
+                    walkPhase += dt * 7.5;
+                    const sinW = Math.sin(walkPhase);
+
+                    const currentSign = sinW > 0 ? 1 : -1;
+                    if (currentSign !== lastStepSign) {
+                        lastStepSign = currentSign;
+                        sfxFootstep();
+                    }
+
+                    tLeftFootY = -0.92 + Math.max(0, sinW) * 0.36;
+                    tLeftFootRotX = sinW * 0.44;
+                    tLeftFootRotZ = 0.06;
+
+                    tRightFootY = -0.92 + Math.max(0, -sinW) * 0.36;
+                    tRightFootRotX = -sinW * 0.44;
+                    tRightFootRotZ = -0.06;
+
+                    tBodyRotZ = sinW * 0.16;
+                    tBodyY = Math.abs(Math.sin(walkPhase * 2)) * 0.12;
+
+                    tLeftHandRotX = -sinW * 0.60;
+                    tRightHandRotX = sinW * 0.60;
+
+                    if (stateTimer >= 4.5) {
+                        setKirbyAnimation('idle');
+                    }
+
+                } else if (animState === 'float') {
+                    // Kirby Inhale Balloon & Flutter Kick
+                    floatTimer += dt;
+                    if (floatTimer < 0.50) {
+                        // Phase 1: Inhale anticipation & gradual expansion (0 to 0.5s)
+                        const p = floatTimer / 0.50;
+                        const easeInhale = 0.5 - 0.5 * Math.cos(p * Math.PI);
+                        tScaleX = 1.0 + easeInhale * 0.32;
+                        tScaleY = 1.0 + easeInhale * 0.30;
+                        tScaleZ = 1.0 + easeInhale * 0.32;
+                        tRootY = 0.08 + easeInhale * 0.18;
+                        tSmileScale = 1.0 - easeInhale;
+                        tOMouthScale = easeInhale * 1.25;
+
+                        tLeftHandRotZ = 0.10 + easeInhale * 0.30;
+                        tRightHandRotZ = -0.10 - easeInhale * 0.30;
+                        tLeftFootY = -0.92 - easeInhale * 0.12;
+                        tRightFootY = -0.92 - easeInhale * 0.12;
+
+                    } else if (floatTimer < 3.6) {
+                        // Phase 2: Aerial float & flutter kick (0.5s to 3.6s)
+                        tScaleX = 1.32;
+                        tScaleY = 1.30;
+                        tScaleZ = 1.32;
+                        tSmileScale = 0.0;
+                        tOMouthScale = 1.25;
+
+                        const hover = Math.sin((floatTimer - 0.50) * 2.8);
+                        tRootY = 0.92 + hover * 0.15;
+
+                        tLeftFootRotX = Math.sin(floatTimer * 8.5) * 0.45;
+                        tLeftFootY = -1.04;
+                        tRightFootRotX = Math.cos(floatTimer * 8.5) * 0.45;
+                        tRightFootY = -1.04;
+
+                        tLeftHandRotZ = 0.40 + Math.sin(floatTimer * 13.0) * 0.35;
+                        tRightHandRotZ = -0.40 - Math.sin(floatTimer * 13.0) * 0.35;
+
+                        tPedestalScale = 0.64;
+                        tPedestalOpacity = 0.32;
+
+                    } else if (floatTimer < 4.4) {
+                        // Phase 3: Smooth exhale & gradual deceleration descent (3.6s to 4.4s)
+                        const p = (floatTimer - 3.6) / 0.8;
+                        const easeDescend = 0.5 - 0.5 * Math.cos(p * Math.PI);
+                        const flutterDamp = 1.0 - easeDescend;
+
+                        tScaleX = 1.32 - easeDescend * 0.32;
+                        tScaleY = 1.30 - easeDescend * 0.30;
+                        tScaleZ = 1.32 - easeDescend * 0.32;
+                        tRootY = 0.92 * (1.0 - easeDescend) + 0.08;
+
+                        tSmileScale = easeDescend;
+                        tOMouthScale = 1.25 * (1.0 - easeDescend);
+
+                        // Flutter kick smoothly glides down into ground landing
+                        tLeftFootRotX = Math.sin(floatTimer * 8.5 * flutterDamp) * 0.45 * flutterDamp;
+                        tRightFootRotX = Math.cos(floatTimer * 8.5 * flutterDamp) * 0.45 * flutterDamp;
+                        tLeftFootY = -1.04 + easeDescend * 0.12;
+                        tRightFootY = -1.04 + easeDescend * 0.12;
+
+                        tLeftHandRotZ = 0.40 * flutterDamp + 0.10;
+                        tRightHandRotZ = -0.40 * flutterDamp - 0.10;
+
+                        tPedestalScale = 0.64 + easeDescend * 0.36;
+                        tPedestalOpacity = 0.32 + easeDescend * 0.43;
+
+                    } else {
+                        // Phase 4: Gentle touchdown into idle with soft cushion squash
+                        setKirbyAnimation('idle');
+                        triggerLandingSquash(0.16);
+                        sfxLilCubeBoing();
+                    }
+
+                } else if (animState === 'dance') {
+                    // Kirby 64 Victory Dance Sequence
+                    danceTimer += dt;
+                    if (danceTimer < 0.9) {
+                        // Hop 1 (Left 360 spin): 0 to 0.9s
+                        const p = danceTimer / 0.9;
+                        const hop = Math.sin(p * Math.PI);
+                        tRootY = 0.08 + hop * 0.78;
+                        tRootX = -0.42 * hop;
+                        tBodyRotY = p * Math.PI * 2;
+                        tLeftFootY = -0.92 + hop * 0.22;
+                        tRightFootY = -0.68;
+                        tLeftHandRotZ = 0.75 * hop;
+                        tRightHandRotZ = -0.75 * hop;
+
+                    } else if (danceTimer < 1.8) {
+                        // Hop 2 (Right 360 reverse spin): 0.9 to 1.8s
+                        const p = (danceTimer - 0.9) / 0.9;
+                        const hop = Math.sin(p * Math.PI);
+                        tRootY = 0.08 + hop * 0.78;
+                        tRootX = 0.42 * hop;
+                        tBodyRotY = -p * Math.PI * 2;
+                        tLeftFootY = -0.68;
+                        tRightFootY = -0.92 + hop * 0.22;
+                        tLeftHandRotZ = -0.75 * hop;
+                        tRightHandRotZ = 0.75 * hop;
+
+                    } else if (danceTimer < 2.7) {
+                        // Hop 3 (Celebratory backflip): 1.8 to 2.7s
+                        const p = (danceTimer - 1.8) / 0.9;
+                        const hop = Math.sin(p * Math.PI);
+                        tRootX = 0;
+                        tRootY = 0.08 + hop * 0.88;
+                        tBodyRotX = -p * Math.PI * 2;
+                        tLeftHandRotZ = 0.35 + hop * 0.55;
+                        tRightHandRotZ = -0.35 - hop * 0.55;
+
+                    } else if (danceTimer < 4.2) {
+                        // Step 4: Triumphant victory squat pose (2.7s to 4.2s)
+                        tRootX = 0;
+                        tRootY = 0.08;
+                        tBodyRotX = 0;
+                        tBodyRotY = 0;
+                        tScaleX = 1.08;
+                        tScaleY = 0.93;
+                        tScaleZ = 1.08;
+                        tLeftFootRotZ = 0.32;
+                        tRightFootRotZ = -0.32;
+                        tLeftHandRotZ = 1.35; // Left hand raised high in victory!
+                        tLeftHandRotX = -0.15;
+                        tRightHandRotZ = -0.28;
+
+                        if (danceTimer > 2.7 && danceStep === 0) {
+                            danceStep = 1;
+                            triggerLandingSquash(0.18);
+                        }
+                    } else {
+                        // Effortlessly ease from victory pose to idle breathing
+                        setKirbyAnimation('idle');
+                    }
+
+                } else if (animState === 'sing') {
+                    // Two-phase singing chime:
+                    // Phase 1 (0.0s - 0.44s): Chirp 1 with First Wave, mouth opens and fully closes by 0.44s
+                    // Inter-wave pause (0.44s - 0.68s): Mouth is completely closed BEFORE second miniwave starts!
+                    // Phase 2 (0.68s - 1.15s): Second miniwave chime
+                    let curve = 0;
+                    if (stateTimer < 0.44) {
+                        const p = stateTimer / 0.44;
+                        curve = Math.sin(p * Math.PI); // Peaks at 0.22s, reaches 0 at 0.44s
+                    } else if (stateTimer >= 0.68 && stateTimer < 1.15) {
+                        const p = (stateTimer - 0.68) / 0.47;
+                        curve = Math.sin(p * Math.PI) * 0.85; // Second miniwave chime
+                    } else {
+                        curve = 0; // Mouth completely closed before second miniwave!
+                    }
+
+                    tRootRotX = -curve * 0.25;
+                    tRootY = 0.08 + curve * 0.26;
+                    tScaleX = 1.0 + curve * 0.14;
+                    tScaleY = 1.0 + curve * 0.16;
+                    tScaleZ = 1.0 + curve * 0.14;
+
+                    tLeftHandRotZ = curve * 1.15;
+                    tLeftHandRotX = -curve * 0.30;
+                    tRightHandRotZ = -curve * 1.15;
+                    tRightHandRotX = -curve * 0.30;
+
+                    tLeftFootY = -0.92 + curve * 0.10;
+                    tRightFootY = -0.92 + curve * 0.10;
+
+                    tSmileScale = 1.0 - curve;
+                    tOMouthScale = curve * 1.25;
+
+                    if (coreCube) {
+                        coreCube.rotation.x += dt * 3.5;
+                        coreCube.rotation.y += dt * 5.0;
+                    }
+
+                    if (stateTimer >= 1.25) {
+                        setKirbyAnimation('idle');
+                    }
+
+                } else if (animState === 'poke') {
+                    // Jello Squash & Rebound
+                    pokeTime -= dt * 1.8;
+                    if (pokeTime > 0) {
+                        const damp = Math.exp(-4.5 * (1.0 - pokeTime));
+                        const osc = Math.cos(22 * (1.0 - pokeTime));
+                        const squish = 0.36 * damp * osc;
+                        tScaleY = 1.0 - squish;
+                        tScaleX = 1.0 + squish * 0.52;
+                        tScaleZ = 1.0 + squish * 0.52;
+                    } else {
+                        setKirbyAnimation('idle');
+                    }
+                }
+
+                // Apply Landing Squash & Stretch (Disney Principle #1)
+                impactSquash *= Math.exp(-12.0 * dt);
+                tScaleY -= impactSquash;
+                tScaleX += impactSquash * 0.5;
+                tScaleZ += impactSquash * 0.5;
+
+                // =========================================================
+                // Critically Damped Exponential Blend toward Target Pose
+                // Zero Pops • C-infinity Smooth Transitions on All States
+                // =========================================================
+                const posSpeed = 18.0;
+                const rotSpeed = 16.0;
+                const scaleSpeed = 22.0;
+                const handSpeed = 15.0;
+                const footSpeed = 20.0;
+                const mouthSpeed = 24.0;
+                const pedestalSpeed = 16.0;
+
+                animPose.rootX = smoothDamp(animPose.rootX, tRootX, posSpeed, dt);
+                animPose.rootY = smoothDamp(animPose.rootY, tRootY, posSpeed, dt);
+                animPose.rootZ = smoothDamp(animPose.rootZ, tRootZ, posSpeed, dt);
+
+                animPose.rootRotX = smoothDampAngle(animPose.rootRotX, tRootRotX, rotSpeed, dt);
+                animPose.rootRotY = smoothDampAngle(animPose.rootRotY, tRootRotY, rotSpeed, dt);
+                animPose.rootRotZ = smoothDampAngle(animPose.rootRotZ, tRootRotZ, rotSpeed, dt);
+
+                animPose.bodyX = smoothDamp(animPose.bodyX, tBodyX, posSpeed, dt);
+                animPose.bodyY = smoothDamp(animPose.bodyY, tBodyY, posSpeed, dt);
+                animPose.bodyZ = smoothDamp(animPose.bodyZ, tBodyZ, posSpeed, dt);
+
+                animPose.bodyRotX = smoothDampAngle(animPose.bodyRotX, tBodyRotX, rotSpeed, dt);
+                animPose.bodyRotY = smoothDampAngle(animPose.bodyRotY, tBodyRotY, rotSpeed, dt);
+                animPose.bodyRotZ = smoothDampAngle(animPose.bodyRotZ, tBodyRotZ, rotSpeed, dt);
+
+                animPose.scaleX = smoothDamp(animPose.scaleX, tScaleX, scaleSpeed, dt);
+                animPose.scaleY = smoothDamp(animPose.scaleY, tScaleY, scaleSpeed, dt);
+                animPose.scaleZ = smoothDamp(animPose.scaleZ, tScaleZ, scaleSpeed, dt);
+
+                animPose.leftHandRotX = smoothDampAngle(animPose.leftHandRotX, tLeftHandRotX, handSpeed, dt);
+                animPose.leftHandRotY = smoothDampAngle(animPose.leftHandRotY, tLeftHandRotY, handSpeed, dt);
+                animPose.leftHandRotZ = smoothDampAngle(animPose.leftHandRotZ, tLeftHandRotZ, handSpeed, dt);
+
+                animPose.rightHandRotX = smoothDampAngle(animPose.rightHandRotX, tRightHandRotX, handSpeed, dt);
+                animPose.rightHandRotY = smoothDampAngle(animPose.rightHandRotY, tRightHandRotY, handSpeed, dt);
+                animPose.rightHandRotZ = smoothDampAngle(animPose.rightHandRotZ, tRightHandRotZ, handSpeed, dt);
+
+                animPose.leftFootX = smoothDamp(animPose.leftFootX, tLeftFootX, footSpeed, dt);
+                animPose.leftFootY = smoothDamp(animPose.leftFootY, tLeftFootY, footSpeed, dt);
+                animPose.leftFootZ = smoothDamp(animPose.leftFootZ, tLeftFootZ, footSpeed, dt);
+                animPose.leftFootRotX = smoothDampAngle(animPose.leftFootRotX, tLeftFootRotX, footSpeed, dt);
+                animPose.leftFootRotY = smoothDampAngle(animPose.leftFootRotY, tLeftFootRotY, footSpeed, dt);
+                animPose.leftFootRotZ = smoothDampAngle(animPose.leftFootRotZ, tLeftFootRotZ, footSpeed, dt);
+
+                animPose.rightFootX = smoothDamp(animPose.rightFootX, tRightFootX, footSpeed, dt);
+                animPose.rightFootY = smoothDamp(animPose.rightFootY, tRightFootY, footSpeed, dt);
+                animPose.rightFootZ = smoothDamp(animPose.rightFootZ, tRightFootZ, footSpeed, dt);
+                animPose.rightFootRotX = smoothDampAngle(animPose.rightFootRotX, tRightFootRotX, footSpeed, dt);
+                animPose.rightFootRotY = smoothDampAngle(animPose.rightFootRotY, tRightFootRotY, footSpeed, dt);
+                animPose.rightFootRotZ = smoothDampAngle(animPose.rightFootRotZ, tRightFootRotZ, footSpeed, dt);
+
+                animPose.smileScale = smoothDamp(animPose.smileScale, tSmileScale, mouthSpeed, dt);
+                animPose.oMouthScale = smoothDamp(animPose.oMouthScale, tOMouthScale, mouthSpeed, dt);
+
+                animPose.pedestalScale = smoothDamp(animPose.pedestalScale, tPedestalScale, pedestalSpeed, dt);
+                animPose.pedestalOpacity = smoothDamp(animPose.pedestalOpacity, tPedestalOpacity, pedestalSpeed, dt);
+
+                // Commit Blended Transforms to Three.js Scene
+                rootGroup.position.set(animPose.rootX, animPose.rootY, animPose.rootZ);
+                rootGroup.rotation.set(
+                    animPose.rootRotX + cubeCurRotX + (targetLookY * 0.35),
+                    animPose.rootRotY + cubeCurRotY + (targetLookX * 0.45),
+                    animPose.rootRotZ
+                );
+                rootGroup.scale.set(0.60, 0.60, 0.60);
+
+                bodyGroup.position.set(animPose.bodyX, animPose.bodyY, animPose.bodyZ);
+                bodyGroup.rotation.set(animPose.bodyRotX, animPose.bodyRotY, animPose.bodyRotZ);
+                bodyGroup.scale.set(animPose.scaleX, animPose.scaleY, animPose.scaleZ);
+
+                if (leftHandPivot) {
+                    leftHandPivot.rotation.set(animPose.leftHandRotX, animPose.leftHandRotY, animPose.leftHandRotZ);
+                }
+                if (rightHandPivot) {
+                    rightHandPivot.rotation.set(animPose.rightHandRotX, animPose.rightHandRotY, animPose.rightHandRotZ);
+                }
+
+                if (leftFootPivot) {
+                    leftFootPivot.position.set(animPose.leftFootX, animPose.leftFootY, animPose.leftFootZ);
+                    leftFootPivot.rotation.set(animPose.leftFootRotX, animPose.leftFootRotY, animPose.leftFootRotZ);
+                }
+                if (rightFootPivot) {
+                    rightFootPivot.position.set(animPose.rightFootX, animPose.rightFootY, animPose.rightFootZ);
+                    rightFootPivot.rotation.set(animPose.rightFootRotX, animPose.rightFootRotY, animPose.rightFootRotZ);
+                }
+
+                if (smileMesh) {
+                    smileMesh.visible = animPose.smileScale > 0.03;
+                    smileMesh.scale.set(animPose.smileScale, animPose.smileScale, animPose.smileScale);
+                }
+                if (oMouthMesh) {
+                    oMouthMesh.visible = animPose.oMouthScale > 0.03;
+                    oMouthMesh.scale.set(animPose.oMouthScale, animPose.oMouthScale, animPose.oMouthScale);
+                }
+
+                if (pedestal) {
+                    pedestal.style.transform = `scale(${animPose.pedestalScale})`;
+                    pedestal.style.opacity = animPose.pedestalOpacity.toFixed(3);
+                }
+
+                // Update 3D Journey pulses
+                for (let i = active3dPulses.length - 1; i >= 0; i--) {
+                    const pulse = active3dPulses[i];
+                    pulse.update(dt);
+                    if (!pulse.alive) {
+                        active3dPulses.splice(i, 1);
+                    }
+                }
+
+                renderer3d.render(scene3d, camera3d);
+            }
+
+            // -------------------------------------------------------------
+            // B. Update Hopf Fibration 4D Engine with Human-Centered Smoothing
+            // -------------------------------------------------------------
+            if (hopfCtx) {
+                // Silky, critically damped flywheel inertia (standard of human motion perception)
+                circularVelocity *= 0.968;
+                circularPhase += circularVelocity;
+
+                // Low-pass filter for tilt angles to eliminate camera jitter
+                curRotX += (targetRotX - curRotX) * 0.028;
+                curRotY += (targetRotY - curRotY) * 0.028;
+
+                hopfCtx.clearRect(0, 0, width, height);
+
+                let cx = width * 0.5;
+                let cy = height * 0.38;
+                if (figure && hopfCanvas.parentElement) {
+                    const rect = figure.getBoundingClientRect();
+                    const parentRect = hopfCanvas.parentElement.getBoundingClientRect();
+                    cx = (rect.left + rect.width * 0.5) - parentRect.left;
+                    cy = (rect.top + rect.height * 0.5) - parentRect.top;
+                }
+
+                const cfg = densityConfigs[densityMode];
+                const numTori = cfg.tori;
+                const fibersPerTorus = cfg.fibersPerTorus;
+                const numPts = cfg.pts;
+                const totalFibers = numTori * fibersPerTorus;
+
+                const hopfScale = Math.min(width, height) * 0.28;
+
+                // Serene, majestic motion speeds
+                const cosX = Math.cos(curRotX), sinX = Math.sin(curRotX);
+                const cosY = Math.cos(curRotY + time * 0.06 + circularPhase * 0.25), sinY = Math.sin(curRotY + time * 0.06 + circularPhase * 0.25);
+                const cosZ = Math.cos(time * 0.04), sinZ = Math.sin(time * 0.04);
+
+                // 4D isoclinic rotation phases - smoothly guided by circular mouse swirling
+                const psi = time * 0.12 + circularPhase;
+                const omega = time * 0.08 + circularPhase * 0.40;
+
+                const fiberList = [];
+
+                for (let t = 0; t < numTori; t++) {
+                    const eta = (Math.PI / 7) + (t + 0.6) * (Math.PI / (numTori * 2.8));
+                    const cosEta = Math.cos(eta);
+                    const sinEta = Math.sin(eta);
+
+                    for (let f = 0; f < fibersPerTorus; f++) {
+                        const fiberIdx = t * fibersPerTorus + f;
+                        const beta = (f * 2 * Math.PI / fibersPerTorus) + omega;
+
+                        const pts2d = [];
+                        let avgZ = 0;
+
+                        for (let p = 0; p <= numPts; p++) {
+                            const xi = (p * 2 * Math.PI / numPts);
+
+                            // 4D Coordinates on S^3
+                            const x0 = cosEta * Math.cos(xi + beta * 0.5 + psi);
+                            const x1 = cosEta * Math.sin(xi + beta * 0.5 + psi);
+                            const x2 = sinEta * Math.cos(xi - beta * 0.5 + psi * 0.8);
+                            const x3 = sinEta * Math.sin(xi - beta * 0.5 + psi * 0.8);
+
+                            // Stereographic projection S^3 -> R^3 from (0,0,0,1)
+                            const denom = 1.08 - x3;
+                            const X3d = x0 / denom;
+                            const Y3d = x1 / denom;
+                            const Z3d = x2 / denom;
+
+                            // 3D Rotation
+                            const x_yaw = X3d * cosY + Z3d * sinY;
+                            const y_yaw = Y3d;
+                            const z_yaw = -X3d * sinY + Z3d * cosY;
+
+                            const x_pitch = x_yaw;
+                            const y_pitch = y_yaw * cosX - z_yaw * sinX;
+                            const z_pitch = y_yaw * sinX + z_yaw * cosX;
+
+                            const x_rot = x_pitch * cosZ - y_pitch * sinZ;
+                            const y_rot = x_pitch * sinZ + y_pitch * cosZ;
+                            const z_rot = z_pitch;
+
+                            // Camera perspective
+                            const camDist = 3.6;
+                            const pers = camDist / (camDist + z_rot);
+                            const scrX = cx + x_rot * hopfScale * pers;
+                            const scrY = cy + y_rot * hopfScale * pers;
+
+                            pts2d.push({ x: scrX, y: scrY, z: z_rot });
+                            avgZ += z_rot;
+                        }
+
+                        avgZ /= (numPts + 1);
+
+                        let hue;
+                        if (dispersionActive) {
+                            hue = ((fiberIdx / totalFibers) * 360 + time * 24) % 360;
+                        } else {
+                            hue = 180 + Math.sin(time * 0.8 + fiberIdx) * 28;
+                        }
+
+                        fiberList.push({
+                            pts: pts2d,
+                            avgZ: avgZ,
+                            hue: hue,
+                            torusIdx: t
+                        });
+                    }
+                }
+
+                // Depth Sorting
+                fiberList.sort((a, b) => a.avgZ - b.avgZ);
+
+                // Draw Faded 3D Hopf Fibers for background harmony & text readability
+                hopfCtx.save();
+                hopfCtx.lineCap = 'round';
+                hopfCtx.lineJoin = 'round';
+
+                for (let f = 0; f < fiberList.length; f++) {
+                    const fib = fiberList[f];
+                    const pts = fib.pts;
+
+                    // Wave Resonance with passing Journey Spherical Waves & Po's Golden Chi Aura
+                    let waveResonance = 0;
+                    let isChiWave = false;
+                    for (let w = 0; w < activeJourneyWaves.length; w++) {
+                        const jWave = activeJourneyWaves[w];
+                        const waveR = jWave.getCurrentRadius();
+                        const midPt = pts[Math.floor(pts.length / 2)];
+                        const d = Math.hypot(midPt.x - jWave.cx, midPt.y - jWave.cy);
+                        const band = jWave.isSecondWave ? 90 : 55;
+                        if (Math.abs(d - waveR) < band) {
+                            const res = 1 - Math.abs(d - waveR) / band;
+                            if (jWave.isSecondWave) {
+                                if (res > waveResonance) {
+                                    waveResonance = res;
+                                    isChiWave = true;
+                                }
+                            } else if (!isChiWave) {
+                                waveResonance = Math.max(waveResonance, res);
+                            }
+                        }
+                    }
+
+                    // Muted, ethereal alpha curve with wave resonance boost
+                    const depthAlpha = Math.max(0.10, Math.min(0.92, 0.28 + fib.avgZ * 0.18 + waveResonance * (isChiWave ? 0.60 : 0.45)));
+                    const lineWidth = Math.max(1.3, (1.8 + fib.avgZ * 0.65) + waveResonance * (isChiWave ? 3.0 : 2.2));
+
+                    hopfCtx.beginPath();
+                    hopfCtx.moveTo(pts[0].x, pts[0].y);
+                    for (let i = 1; i < pts.length; i++) {
+                        hopfCtx.lineTo(pts[i].x, pts[i].y);
+                    }
+
+                    if (waveResonance > 0.25) {
+                        if (isChiWave) {
+                            hopfCtx.strokeStyle = `rgba(255, 235, 110, ${depthAlpha})`;
+                            hopfCtx.shadowColor = 'rgba(251, 191, 36, 0.95)';
+                            hopfCtx.shadowBlur = 18;
+                        } else {
+                            hopfCtx.strokeStyle = `rgba(255, 235, 140, ${depthAlpha})`;
+                            hopfCtx.shadowColor = 'rgba(255, 215, 0, 0.85)';
+                            hopfCtx.shadowBlur = 12;
+                        }
+                    } else {
+                        hopfCtx.strokeStyle = `hsla(${fib.hue}, 95%, 68%, ${depthAlpha})`;
+                        hopfCtx.shadowColor = `hsla(${fib.hue}, 100%, 72%, 0.5)`;
+                        hopfCtx.shadowBlur = dispersionActive ? 5 : 3;
+                    }
+
+                    hopfCtx.lineWidth = lineWidth;
+                    hopfCtx.globalCompositeOperation = 'source-over';
+                    hopfCtx.stroke();
+
+                    if (Math.random() < (0.012 + waveResonance * 0.08)) {
+                        const midPt = pts[Math.floor(pts.length / 2)];
+                        if (midPt && holyParticles.length < 65) {
+                            holyParticles.push(new HolySparkle(midPt.x, midPt.y, waveResonance > 0.5, isChiWave));
+                        }
+                    }
+                }
+                hopfCtx.restore();
+
+                // Draw and Update Journey Spherical Waves on Hopf Canvas
+                for (let i = activeJourneyWaves.length - 1; i >= 0; i--) {
+                    const wave = activeJourneyWaves[i];
+                    wave.update(dt);
+                    wave.draw(hopfCtx);
+                    if (!wave.alive) {
+                        activeJourneyWaves.splice(i, 1);
+                    }
+                }
+
+                // Gentle Background Sparkles
+                if (Math.random() < 0.10 && holyParticles.length < 30) {
+                    const rx = cx + (Math.random() - 0.5) * 220;
+                    const ry = cy + (Math.random() - 0.5) * 180;
+                    holyParticles.push(new HolySparkle(rx, ry));
+                }
+
+                for (let i = holyParticles.length - 1; i >= 0; i--) {
+                    const p = holyParticles[i];
+                    p.update();
+                    p.draw(hopfCtx);
+                    if (p.alpha <= 0) {
+                        holyParticles.splice(i, 1);
+                    }
+                }
+            }
+        }
+
+        animate();
     })();
     </script>
 

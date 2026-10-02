@@ -461,9 +461,242 @@
             color: #334155;
             font-weight: 600;
         }
+    
+        
+
+
+        /* Option C: Lil Cube Interactive Companion Styles */
+        header {
+            position: relative;
+            overflow: visible;
+            min-height: 94vh;
+            display: flex;
+            align-items: center;
+            background: radial-gradient(circle at 50% 20%, rgba(255, 240, 248, 0.7) 0%, rgba(240, 232, 255, 0.4) 60%, transparent 100%);
+        }
+
+        /* Mascot Stage Perched on Lead Box */
+        .companion-stage {
+            display: flex;
+            align-items: flex-end;
+            justify-content: flex-end;
+            gap: 1.5rem;
+            margin-bottom: -18px;
+            padding-right: 2rem;
+            position: relative;
+            z-index: 15;
+        }
+
+        @media (max-width: 820px) {
+            .companion-stage {
+                flex-direction: column-reverse;
+                align-items: center;
+                justify-content: center;
+                padding-right: 0;
+                margin-bottom: 0.8rem;
+                gap: 0.8rem;
+            }
+        }
+
+        /* Nintendo-style Dynamic Speech Bubble */
+        .companion-dialogue-bubble {
+            background: #ffffff;
+            border: 2.5px solid #008080;
+            border-radius: 20px;
+            padding: 1.1rem 1.5rem;
+            max-width: 480px;
+            position: relative;
+            box-shadow: 0 14px 35px rgba(0, 128, 128, 0.18), 0 4px 12px rgba(255, 45, 149, 0.15);
+            cursor: pointer;
+            transition: all 0.28s cubic-bezier(0.34, 1.56, 0.64, 1);
+            user-select: none;
+        }
+
+        .companion-dialogue-bubble:hover {
+            transform: translateY(-4px) scale(1.02);
+            border-color: #ff2d95;
+            box-shadow: 0 18px 40px rgba(255, 45, 149, 0.25);
+        }
+
+        .companion-dialogue-bubble::after {
+            content: '';
+            position: absolute;
+            bottom: 22px;
+            right: -14px;
+            border-width: 10px 0 10px 14px;
+            border-style: solid;
+            border-color: transparent transparent transparent #ffffff;
+            filter: drop-shadow(2px 0 0 #008080);
+        }
+
+        @media (max-width: 820px) {
+            .companion-dialogue-bubble::after {
+                bottom: -14px;
+                right: 50%;
+                transform: translateX(50%);
+                border-width: 14px 10px 0 10px;
+                border-color: #ffffff transparent transparent transparent;
+                filter: drop-shadow(0 2px 0 #008080);
+            }
+        }
+
+        .bubble-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            font-size: 0.78rem;
+            font-weight: 800;
+            color: #008080;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            margin-bottom: 0.4rem;
+        }
+
+        .bubble-content {
+            font-size: 1.02rem;
+            font-weight: 700;
+            color: #1e293b;
+            line-height: 1.55;
+            min-height: 3em;
+            transition: opacity 0.15s ease, transform 0.15s ease;
+        }
+
+        .bubble-hint {
+            font-size: 0.74rem;
+            color: #d90b72;
+            margin-top: 0.5rem;
+            text-align: right;
+            font-weight: 700;
+        }
+
+        /* Mascot Sprite Figure */
+        .companion-cat-figure {
+            position: relative;
+            cursor: pointer;
+            user-select: none;
+            transition: transform 0.25s cubic-bezier(0.34, 1.56, 0.64, 1);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+
+        .companion-cat-figure:hover {
+            transform: translateY(-8px) scale(1.08);
+        }
+
+        .companion-cat-figure:active {
+            transform: translateY(2px) scale(0.95);
+        }
+
+        /* Lil Cube Character Display */
+        .companion-cat-img {
+            width: 155px;
+            height: 155px;
+            object-fit: contain;
+            display: block;
+            filter: drop-shadow(0 14px 28px rgba(0, 128, 128, 0.35)) drop-shadow(0 4px 12px rgba(255, 45, 149, 0.3));
+            animation: cubeBobbing 3.2s ease-in-out infinite alternate;
+            transform-origin: center bottom;
+        }
+
+        @keyframes cubeBobbing {
+            0% { transform: translateY(0) scale(1, 1); }
+            50% { transform: translateY(-8px) scale(0.98, 1.02); }
+            100% { transform: translateY(0) scale(1, 1); }
+        }
+
+        .companion-cat-pedestal {
+            width: 130px;
+            height: 16px;
+            background: radial-gradient(ellipse at center, rgba(0, 128, 128, 0.4) 0%, rgba(255, 45, 149, 0.2) 50%, transparent 80%);
+            margin: -8px auto 0 auto;
+            border-radius: 50%;
+            filter: blur(3px);
+            animation: pedestalPulse 3.2s ease-in-out infinite alternate;
+        }
+
+        @keyframes pedestalPulse {
+            0% { transform: scale(1); opacity: 0.8; }
+            100% { transform: scale(0.85); opacity: 0.5; }
+        }
+
+        /* Companion Control Dashboard */
+        .companion-dashboard {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 12px;
+            flex-wrap: wrap;
+            margin-top: 1.4rem;
+            padding: 8px 18px;
+            background: rgba(255, 255, 255, 0.92);
+            border-radius: 999px;
+            border: 1.5px solid rgba(0, 128, 128, 0.3);
+            width: fit-content;
+            margin-left: auto;
+            margin-right: auto;
+            box-shadow: 0 8px 24px rgba(107, 79, 126, 0.1);
+        }
+
+        .companion-btn {
+            background: #ffffff;
+            border: 1.5px solid rgba(0, 128, 128, 0.35);
+            color: #334155;
+            padding: 6px 18px;
+            border-radius: 999px;
+            font-size: 0.88rem;
+            font-weight: 700;
+            cursor: pointer;
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            transition: all 0.2s cubic-bezier(0.34, 1.56, 0.64, 1);
+        }
+
+        .companion-btn:hover {
+            border-color: #ff2d95;
+            color: #d90b72;
+            transform: translateY(-2px);
+            box-shadow: 0 4px 14px rgba(255, 45, 149, 0.25);
+        }
+
+        .companion-btn.rainbow-btn {
+            background: linear-gradient(135deg, #ff2d95, #c026d3, #008080);
+            color: #ffffff;
+            border-color: transparent;
+            box-shadow: 0 4px 16px rgba(255, 45, 149, 0.35);
+        }
+
+        .companion-btn.rainbow-btn:hover {
+            transform: translateY(-2px) scale(1.06);
+            box-shadow: 0 8px 25px rgba(255, 45, 149, 0.6);
+        }
+
+        /* Rainbow Overdrive Active State */
+        body.rainbow-overdrive header {
+            background: linear-gradient(135deg, rgba(255, 159, 214, 0.3), rgba(162, 237, 255, 0.3), rgba(255, 243, 173, 0.3));
+            animation: rainbowAuraShift 4s ease infinite alternate;
+        }
+
+        @keyframes rainbowAuraShift {
+            0% { filter: hue-rotate(0deg); }
+            100% { filter: hue-rotate(360deg); }
+        }
+
+        /* Frost & Star Particles */
+        .frost-star-particle {
+            position: fixed;
+            pointer-events: none;
+            z-index: 9999;
+            will-change: transform, opacity;
+        }
+
     </style>
 </head>
 <body>
+
+
+
 
     <nav class="sticky">
         <div class="nav-container">
@@ -491,6 +724,26 @@
             <h1 class="jp-title">B-System OS 体系構造</h1>
             <p class="hero-subtitle">日本のユーザー、BTRONを愛する研究者・クリエイターへ贈る——<br>実身・仮身ハイパーメディアモデルとBeOSの精神が融合した超応答型コンシューマ環境</p>
 
+            
+            <!-- Option C: Interactive Lil Cube Mascot Companion Stage -->
+            <div class="companion-stage">
+                <div class="companion-dialogue-bubble" id="companionBubble" title="クリックして別の豆知識を聞く！ (Click for next tip!)">
+                    <div class="bubble-header">
+                        <span>🧊 B-System 氷晶マスコット「リル・キューブ」</span>
+                        <span id="tipCounter">TIP 1/8</span>
+                    </div>
+                    <div class="bubble-content" id="bubbleText">
+                        ボクはリル・キューブ！ B-Systemの氷晶プリミティブ・マスコットだキューブ！🧊✨
+                    </div>
+                    <div class="bubble-hint">💬 クリックで次のシステム豆知識 ➔</div>
+                </div>
+
+                <div class="companion-cat-figure" id="companionCatFigure" title="リル・キューブをつつく / なでる (Tap or pet Lil Cube!)">
+                    <img src="assets/mascot/lil-cube.png" alt="Lil Cube Mascot" class="companion-cat-img" id="companionCatImg">
+                    <div class="companion-cat-pedestal"></div>
+                </div>
+            </div>
+
             <div class="hero-lead-box">
                 <p>
                     <b>B-System</b>は、東京大学名誉教授・坂村健博士が提唱した<b>TRONプロジェクト（BTRON / μITRON）</b>の誇り高き遺産である「実身・仮身モデル（Real Body / Virtual Body Architecture）」および「TAD（TRON Application Databus）」を、2026年の最先端仮想化基盤（VirtIO 1.4 / seL4 Microkit / C99 Cleanroom）上で再構築したコンシューマOSです。
@@ -515,6 +768,12 @@
                     </div>
                 </div>
             </div>
+            <div class="companion-dashboard">
+                <button id="soundToggleBtn" class="companion-btn" onclick="toggleSound()">🔈 8-bit サウンド: OFF</button>
+                <button id="overdriveBtn" class="companion-btn rainbow-btn" onclick="toggleRainbowOverdrive()">🌈 虹色オーバードライブ</button>
+                <button class="companion-btn" onclick="nextMascotTip()">🐾 次のヒント ➔</button>
+            </div>
+
 
             <div style="margin-top: 1.8rem; display: flex; flex-wrap: wrap; gap: 0.8rem; justify-content: center;">
                 <a href="index.html" class="pdf-badge" style="background:#475569;">← System Plane (Main)</a>
@@ -1444,5 +1703,203 @@
             });
         }
     </script>
+
+    <!-- Script for Option C: Lil Cube Interactive Mascot & Nintendo Web Audio Synthesizer -->
+    <script>
+    (function() {
+        // 1. Nintendo-style 8-Bit Web Audio Synthesizer (Zero External Dependencies)
+        let audioCtx = null;
+        let soundEnabled = false;
+
+        function getAudioContext() {
+            if (!audioCtx) {
+                const AudioContext = window.AudioContext || window.webkitAudioContext;
+                audioCtx = new AudioContext();
+            }
+            if (audioCtx.state === 'suspended') {
+                audioCtx.resume();
+            }
+            return audioCtx;
+        }
+
+        function play8BitNote(freq, type = 'square', duration = 0.12, volume = 0.16) {
+            if (!soundEnabled) return;
+            try {
+                const ctx = getAudioContext();
+                const osc = ctx.createOscillator();
+                const gain = ctx.createGain();
+
+                osc.type = type;
+                osc.frequency.setValueAtTime(freq, ctx.currentTime);
+
+                gain.gain.setValueAtTime(volume, ctx.currentTime);
+                gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + duration);
+
+                osc.connect(gain);
+                gain.connect(ctx.destination);
+
+                osc.start();
+                osc.stop(ctx.currentTime + duration);
+            } catch (e) {
+                console.error(e);
+            }
+        }
+
+        // Nintendo Crystal & Coin Chimes
+        function sfxCrystalCoin() {
+            play8BitNote(1318.51, 'square', 0.08, 0.18); // E6
+            setTimeout(() => play8BitNote(1760.00, 'square', 0.24, 0.18), 70); // A6
+        }
+
+        function sfxLilCubeBoing() {
+            if (!soundEnabled) return;
+            const ctx = getAudioContext();
+            const osc = ctx.createOscillator();
+            const gain = ctx.createGain();
+            osc.type = 'triangle';
+            osc.frequency.setValueAtTime(523.25, ctx.currentTime);
+            osc.frequency.exponentialRampToValueAtTime(1046.50, ctx.currentTime + 0.16);
+            osc.frequency.exponentialRampToValueAtTime(783.99, ctx.currentTime + 0.32);
+            gain.gain.setValueAtTime(0.22, ctx.currentTime);
+            gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.32);
+            osc.connect(gain);
+            gain.connect(ctx.destination);
+            osc.start();
+            osc.stop(ctx.currentTime + 0.32);
+        }
+
+        function sfxFanfare() {
+            const notes = [659.25, 783.99, 987.77, 1318.51];
+            notes.forEach((f, idx) => {
+                setTimeout(() => play8BitNote(f, 'square', 0.15, 0.2), idx * 80);
+            });
+        }
+
+        // Sound Toggle Button
+        window.toggleSound = function() {
+            soundEnabled = !soundEnabled;
+            const btn = document.getElementById('soundToggleBtn');
+            if (soundEnabled) {
+                getAudioContext();
+                sfxCrystalCoin();
+                btn.innerHTML = '🔊 8-bit サウンド: ON';
+                btn.style.borderColor = '#008080';
+                btn.style.color = '#008080';
+            } else {
+                btn.innerHTML = '🔈 8-bit サウンド: OFF';
+                btn.style.borderColor = 'rgba(0, 128, 128, 0.35)';
+                btn.style.color = '#334155';
+            }
+        };
+
+        // 2. Lore & Trivia System (Lil Cube Voice)
+        const tips = [
+            "ボクはリル・キューブ！ B-Systemの氷晶プリミティブ・マスコットだキューブ！🧊✨",
+            "実身（Real Body）と仮身（Virtual Body）のハイパーリンク構造でファイル階層から自由だキューブ！",
+            "TAD仕様なら、文章・グラフィック・音声が1つのストリームでシームレスに交差するキューブ！",
+            "BeOS Media Kitの精神を受け継ぐ極低遅延マルチスレッド！音がカチッと響くキューブ♪",
+            "東京大学・坂村健名誉教授のTRON思想を2026年のVirtIO / seL4基盤で再構築したんだキューブ！",
+            "超漢字の17万文字多言語コード体系とMozc日本語入力で、どんな文字でもスラスラ打てるキューブ！",
+            "ボクをつつくと（クリックすると）ピョコッと跳ねて氷晶の星が舞うキューブ〜⭐",
+            "虹色オーバードライブでヘッダーをキラキラのオーロラにするキューブ！🌈✨"
+        ];
+
+        let currentTipIdx = 0;
+        const bubble = document.getElementById('companionBubble');
+        const bubbleText = document.getElementById('bubbleText');
+        const tipCounter = document.getElementById('tipCounter');
+        const catFigure = document.getElementById('companionCatFigure');
+
+        function nextTip() {
+            currentTipIdx = (currentTipIdx + 1) % tips.length;
+            bubbleText.style.opacity = '0';
+            bubbleText.style.transform = 'translateY(4px)';
+            
+            sfxCrystalCoin();
+
+            setTimeout(() => {
+                bubbleText.innerText = tips[currentTipIdx];
+                tipCounter.innerText = `TIP ${currentTipIdx + 1}/${tips.length}`;
+                bubbleText.style.opacity = '1';
+                bubbleText.style.transform = 'translateY(0)';
+            }, 150);
+        }
+
+        bubble.addEventListener('click', nextTip);
+        window.nextMascotTip = nextTip;
+
+        // Lil Cube Click Interaction
+        catFigure.addEventListener('click', () => {
+            sfxLilCubeBoing();
+            catFigure.style.transform = 'translateY(-24px) scale(1.22) rotate(-8deg)';
+            spawnIceStars(catFigure);
+            setTimeout(() => {
+                catFigure.style.transform = '';
+            }, 300);
+        });
+
+        // 3. Celebratory Ice Crystal Stars
+        function spawnIceStars(element) {
+            const rect = element.getBoundingClientRect();
+            const cx = rect.left + rect.width / 2;
+            const cy = rect.top + rect.height / 2;
+            const colors = ['#a2edff', '#ff9fd6', '#fff3ad', '#bcffbc', '#c9b1ff', '#00f5c4'];
+
+            for (let i = 0; i < 24; i++) {
+                const star = document.createElement('div');
+                star.className = 'frost-star-particle';
+                const size = Math.random() * 9 + 6;
+                star.style.width = size + 'px';
+                star.style.height = size + 'px';
+                star.style.backgroundColor = colors[Math.floor(Math.random() * colors.length)];
+                star.style.left = cx + 'px';
+                star.style.top = cy + 'px';
+                star.style.clipPath = 'polygon(50% 0%, 65% 35%, 100% 50%, 65% 65%, 50% 100%, 35% 65%, 0% 50%, 35% 35%)';
+                document.body.appendChild(star);
+
+                const angle = Math.random() * Math.PI * 2;
+                const dist = Math.random() * 95 + 40;
+                const destX = cx + Math.cos(angle) * dist;
+                const destY = cy + Math.sin(angle) * dist;
+
+                star.animate([
+                    { transform: 'translate(0, 0) scale(1) rotate(0deg)', opacity: 1 },
+                    { transform: `translate(${destX - cx}px, ${destY - cy}px) scale(0) rotate(${Math.random() * 360}deg)`, opacity: 0 }
+                ], {
+                    duration: 650 + Math.random() * 350,
+                    easing: 'cubic-bezier(0.25, 1, 0.5, 1)'
+                }).onfinish = () => star.remove();
+            }
+        }
+
+        // 4. Rainbow Overdrive Mode
+        let overdriveActive = false;
+        window.toggleRainbowOverdrive = function() {
+            overdriveActive = !overdriveActive;
+            document.body.classList.toggle('rainbow-overdrive', overdriveActive);
+            const btn = document.getElementById('overdriveBtn');
+
+            if (overdriveActive) {
+                sfxFanfare();
+                btn.innerHTML = '✨ 虹色オーバードライブ: ACTIVE!';
+                btn.style.filter = 'brightness(1.2)';
+                spawnIceStars(btn);
+            } else {
+                btn.innerHTML = '🌈 虹色オーバードライブ';
+                btn.style.filter = '';
+            }
+        };
+
+        // Auto Cycle Tip Every 10s
+        setInterval(() => {
+            if (!document.hidden) {
+                currentTipIdx = (currentTipIdx + 1) % tips.length;
+                bubbleText.innerText = tips[currentTipIdx];
+                tipCounter.innerText = `TIP ${currentTipIdx + 1}/${tips.length}`;
+            }
+        }, 10000);
+    })();
+    </script>
+
 </body>
 </html>

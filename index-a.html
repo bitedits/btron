@@ -1919,6 +1919,44 @@
             } catch (e) {}
         }
 
+        // Po's Spirit Realm Golden Chi Harmonic Resonance (Kung Fu Panda Finale with Kai)
+        function playGoldenChiChime() {
+            if (!window.soundEnabled) return;
+            try {
+                const c = getAudioContext();
+                const now = c.currentTime;
+                const freqs = [
+                    { f: 130.81, v: 0.19, d: 3.8, type: 'sine' },      // Deep resonant spiritual pedal C3
+                    { f: 196.00, v: 0.15, d: 3.4, type: 'sine' },      // Warm harmonic fifth G3
+                    { f: 261.63, v: 0.20, d: 3.5, type: 'sine' },      // Golden core foundation C4
+                    { f: 392.00, v: 0.17, d: 3.2, type: 'sine' },      // Singing fifth G4
+                    { f: 523.25, v: 0.18, d: 3.0, type: 'sine' },      // Soaring octave C5
+                    { f: 659.25, v: 0.14, d: 2.6, type: 'triangle' },  // Golden lotus third E5
+                    { f: 783.99, v: 0.13, d: 2.4, type: 'sine' },      // Dragon overtone G5
+                    { f: 1046.50, v: 0.10, d: 2.0, type: 'sine' }      // Shimmering celestial Chi bell C6
+                ];
+
+                freqs.forEach(item => {
+                    const osc = c.createOscillator();
+                    const gain = c.createGain();
+                    osc.type = item.type;
+
+                    // Spiritual harmonic swell with gentle rise and long majestic decay
+                    osc.frequency.setValueAtTime(item.f * 0.985, now);
+                    osc.frequency.exponentialRampToValueAtTime(item.f, now + 0.10);
+
+                    gain.gain.setValueAtTime(0.0001, now);
+                    gain.gain.linearRampToValueAtTime(item.v, now + 0.08);
+                    gain.gain.exponentialRampToValueAtTime(0.0001, now + item.d);
+
+                    osc.connect(gain);
+                    gain.connect(c.destination);
+                    osc.start(now);
+                    osc.stop(now + item.d);
+                });
+            } catch (e) {}
+        }
+
         function play8BitNote(freq, type = 'square', duration = 0.12, volume = 0.16) {
             if (!window.soundEnabled) return;
             try {
@@ -2042,16 +2080,54 @@
         let currentVariant = 'A';
         let variantExtraObjects = [];
 
-        let animState = 'idle'; // 'idle', 'walk', 'float', 'dance', 'poke'
+        let animState = 'idle'; // 'idle', 'walk', 'float', 'dance', 'sing', 'poke'
         let stateTimer = 0;
         let walkPhase = 0;
         let lastStepSign = 0;
         let blinkTimer = 2.5;
         let isBlinking = false;
+        let blinkProgress = 0;
         let pokeTime = 0;
         let danceStep = 0;
         let danceTimer = 0;
         let floatTimer = 0;
+        let impactSquash = 0;
+
+        function triggerLandingSquash(amount = 0.22) {
+            impactSquash = amount;
+        }
+
+        // Critically Damped Exponential Smoothing (Frame-rate Independent, C-infinity Continuity)
+        function smoothDamp(current, target, speed, dt) {
+            const factor = 1.0 - Math.exp(-speed * dt);
+            return current + (target - current) * factor;
+        }
+
+        // Angular Damping with Shortest Path Modular Wrapping (Zero-Unwind C-infinity Continuity)
+        function smoothDampAngle(current, target, speed, dt) {
+            let diff = (target - current) % (Math.PI * 2);
+            if (diff > Math.PI) diff -= Math.PI * 2;
+            if (diff < -Math.PI) diff += Math.PI * 2;
+            const factor = 1.0 - Math.exp(-speed * dt);
+            return current + diff * factor;
+        }
+
+        // Nintendo & Disney Continuous Animation Pose Buffer
+        const animPose = {
+            rootX: 0, rootY: 0.08, rootZ: 0,
+            rootRotX: 0, rootRotY: 0, rootRotZ: 0,
+            bodyX: 0, bodyY: 0, bodyZ: 0,
+            bodyRotX: 0, bodyRotY: 0, bodyRotZ: 0,
+            scaleX: 1.0, scaleY: 1.0, scaleZ: 1.0,
+            leftHandRotX: 0, leftHandRotY: 0, leftHandRotZ: 0.1,
+            rightHandRotX: 0, rightHandRotY: 0, rightHandRotZ: -0.1,
+            leftFootX: -0.64, leftFootY: -0.92, leftFootZ: 0.08,
+            leftFootRotX: 0, leftFootRotY: 0, leftFootRotZ: 0,
+            rightFootX: 0.64, rightFootY: -0.92, rightFootZ: 0.08,
+            rightFootRotX: 0, rightFootRotY: 0, rightFootRotZ: 0,
+            smileScale: 1.0, oMouthScale: 0.0,
+            pedestalScale: 1.0, pedestalOpacity: 0.75
+        };
 
         let isDraggingCube = false;
         let prevDragX = 0, prevDragY = 0;
@@ -2501,6 +2577,7 @@
         // Canonical Option A: Crystalline Saint (BTRON Lil Cube 64)
 
         function setKirbyAnimation(state) {
+            if (animState === state && state !== 'poke') return;
             animState = state;
             stateTimer = 0;
             if (state === 'walk') {
@@ -2508,24 +2585,15 @@
             } else if (state === 'float') {
                 floatTimer = 0;
                 sfxFloatInhale();
-                if (smileMesh) smileMesh.visible = false;
-                if (oMouthMesh) oMouthMesh.visible = true;
-            } else if (state === 'sing') {
-                if (smileMesh) smileMesh.visible = false;
-                if (oMouthMesh) oMouthMesh.visible = true;
             } else if (state === 'dance') {
                 danceStep = 0;
                 danceTimer = 0;
                 sfxVictoryFanfare();
-            } else {
-                if (smileMesh) smileMesh.visible = true;
-                if (oMouthMesh) oMouthMesh.visible = false;
             }
         }
 
         window.triggerKirbyWaddle = function() {
             setKirbyAnimation('walk');
-            setTimeout(() => { if (animState === 'walk') setKirbyAnimation('idle'); }, 4500);
         };
 
         window.triggerKirbyFloat = function() {
@@ -2562,20 +2630,21 @@
         // Sacred Holy Particles (Sparkles & Stars)
         const holyParticles = [];
         class HolySparkle {
-            constructor(x, y, isBurst = false) {
+            constructor(x, y, isBurst = false, isGoldChi = false) {
                 this.x = x;
                 this.y = y;
-                this.size = Math.random() * (isBurst ? 10 : 5) + 2.5;
-                const speed = isBurst ? 4.5 : 0.9;
+                this.isGoldChi = isGoldChi;
+                this.size = Math.random() * (isGoldChi ? 13 : (isBurst ? 10 : 5)) + 2.5;
+                const speed = isGoldChi ? (4.8 + Math.random() * 4.2) : (isBurst ? 4.5 : 0.9);
                 const angle = Math.random() * Math.PI * 2;
                 this.vx = Math.cos(angle) * speed * (Math.random() + 0.4);
-                this.vy = Math.sin(angle) * speed * (Math.random() + 0.4) - (isBurst ? 0.8 : 0.9);
+                this.vy = Math.sin(angle) * speed * (Math.random() + 0.4) - (isGoldChi ? 1.2 : (isBurst ? 0.8 : 0.9));
                 this.alpha = 1.0;
-                this.decay = Math.random() * 0.012 + (isBurst ? 0.020 : 0.007);
-                this.hue = Math.random() * 360;
+                this.decay = Math.random() * 0.010 + (isGoldChi ? 0.011 : (isBurst ? 0.020 : 0.007));
+                this.hue = isGoldChi ? (44 + Math.random() * 14) : (Math.random() * 360);
                 this.rot = Math.random() * Math.PI * 2;
-                this.rotSpeed = (Math.random() - 0.5) * 0.08;
-                this.isCross = Math.random() > 0.45;
+                this.rotSpeed = (Math.random() - 0.5) * (isGoldChi ? 0.16 : 0.08);
+                this.isCross = isGoldChi || Math.random() > 0.45;
             }
             update() {
                 this.x += this.vx;
@@ -2586,24 +2655,30 @@
             draw(ctx) {
                 if (this.alpha <= 0) return;
                 ctx.save();
-                ctx.globalAlpha = Math.max(0, this.alpha * 0.75); // Softened for text readability
+                ctx.globalAlpha = Math.max(0, this.alpha * (this.isGoldChi ? 0.92 : 0.75));
                 ctx.translate(this.x, this.y);
                 ctx.rotate(this.rot);
-                ctx.fillStyle = `hsla(${this.hue}, 95%, 75%, 1)`;
-                ctx.shadowColor = `hsla(${this.hue}, 100%, 70%, 0.5)`;
-                ctx.shadowBlur = 6;
+                if (this.isGoldChi) {
+                    ctx.fillStyle = (Math.random() > 0.35) ? 'rgba(255, 245, 180, 1)' : 'rgba(251, 191, 36, 1)';
+                    ctx.shadowColor = 'rgba(255, 215, 0, 0.95)';
+                    ctx.shadowBlur = 10;
+                } else {
+                    ctx.fillStyle = `hsla(${this.hue}, 95%, 75%, 1)`;
+                    ctx.shadowColor = `hsla(${this.hue}, 100%, 70%, 0.5)`;
+                    ctx.shadowBlur = 6;
+                }
 
                 const r = this.size;
                 ctx.beginPath();
                 if (this.isCross) {
                     ctx.moveTo(0, -r);
-                    ctx.lineTo(r * 0.25, -r * 0.25);
+                    ctx.lineTo(r * 0.22, -r * 0.22);
                     ctx.lineTo(r, 0);
-                    ctx.lineTo(r * 0.25, r * 0.25);
+                    ctx.lineTo(r * 0.22, r * 0.22);
                     ctx.lineTo(0, r);
-                    ctx.lineTo(-r * 0.25, r * 0.25);
+                    ctx.lineTo(-r * 0.22, r * 0.22);
                     ctx.lineTo(-r, 0);
-                    ctx.lineTo(-r * 0.25, -r * 0.25);
+                    ctx.lineTo(-r * 0.22, -r * 0.22);
                 } else {
                     ctx.arc(0, 0, r * 0.4, 0, Math.PI * 2);
                 }
@@ -2728,40 +2803,75 @@
             ctx.restore();
         }
 
-        // 2. 2D Journey Spherical Radiant Wave on Hopf Canvas
+        // Procedural Sacred Golden Lotus Petal / Chi Blossom (Kung Fu Panda Spirit Realm Lore)
+        function drawPoLotusGlyph(ctx, size, alpha) {
+            ctx.save();
+            ctx.lineWidth = 1.9;
+            ctx.strokeStyle = `rgba(255, 245, 180, ${alpha})`;
+            ctx.fillStyle = `rgba(251, 191, 36, ${alpha * 0.72})`;
+            ctx.shadowColor = `rgba(255, 200, 0, ${alpha * 0.95})`;
+            ctx.shadowBlur = 14;
+            const s = size * 0.5;
+
+            // Sacred Golden Chi Lotus Petals (6 radial petals)
+            for (let p = 0; p < 6; p++) {
+                ctx.save();
+                ctx.rotate((p * Math.PI) / 3);
+                ctx.beginPath();
+                ctx.moveTo(0, 0);
+                ctx.quadraticCurveTo(s * 0.35, -s * 0.5, 0, -s);
+                ctx.quadraticCurveTo(-s * 0.35, -s * 0.5, 0, 0);
+                ctx.closePath();
+                ctx.fill();
+                ctx.stroke();
+                ctx.restore();
+            }
+            // Radiant Golden Core
+            ctx.beginPath();
+            ctx.arc(0, 0, s * 0.28, 0, Math.PI * 2);
+            ctx.fillStyle = `rgba(255, 255, 230, ${alpha * 0.95})`;
+            ctx.fill();
+            ctx.stroke();
+            ctx.restore();
+        }
+
+        // 2. 2D Journey & Po's Chi Spherical Radiant Wave on Hopf Canvas
         const activeJourneyWaves = [];
         class JourneySphericalWave {
-            constructor(cx, cy) {
+            constructor(cx, cy, isSecondWave = false) {
                 this.cx = cx;
                 this.cy = cy;
-                this.maxR = Math.max(width, height) * 0.76;
-                this.duration = 2.3;
+                this.isSecondWave = isSecondWave;
+                // Second wave expands far outer bounds of Lil Cube 64 across the whole universe
+                this.maxR = isSecondWave ? Math.max(width, height) * 1.65 : Math.max(width, height) * 0.76;
+                this.duration = isSecondWave ? 3.6 : 2.3;
                 this.time = 0;
                 this.alive = true;
 
-                // 10 floating sacred glyphs positioned radially around wavefront
+                // Sacred Glyphs & Golden Lotus Petals positioned radially around wavefront
                 this.glyphs = [];
-                const glyphCount = 10;
+                const glyphCount = isSecondWave ? 16 : 10;
                 for (let i = 0; i < glyphCount; i++) {
                     const baseAngle = (i / glyphCount) * Math.PI * 2 + (Math.random() - 0.5) * 0.25;
                     this.glyphs.push({
                         angle: baseAngle,
                         rot: Math.random() * Math.PI * 2,
-                        rotSpeed: (Math.random() - 0.5) * 1.6,
+                        rotSpeed: (Math.random() - 0.5) * (isSecondWave ? 2.0 : 1.6),
                         type: i % 8,
-                        size: 22 + Math.random() * 8,
-                        radOffset: (Math.random() - 0.5) * 22
+                        size: isSecondWave ? (26 + Math.random() * 10) : (22 + Math.random() * 8),
+                        radOffset: (Math.random() - 0.5) * (isSecondWave ? 36 : 22),
+                        isLotus: isSecondWave && (i % 2 === 0)
                     });
                 }
 
-                // 12 radiant light rays
+                // Radiant Light Rays (Golden Chi shafts for Second Wave)
                 this.rays = [];
-                const rayCount = 12;
+                const rayCount = isSecondWave ? 18 : 12;
                 for (let i = 0; i < rayCount; i++) {
                     this.rays.push({
                         angle: (i / rayCount) * Math.PI * 2 + (Math.random() - 0.5) * 0.15,
-                        width: 0.08 + Math.random() * 0.06,
-                        rotSpeed: (Math.random() - 0.5) * 0.45
+                        width: (isSecondWave ? 0.11 : 0.08) + Math.random() * 0.06,
+                        rotSpeed: (Math.random() - 0.5) * (isSecondWave ? 0.35 : 0.45)
                     });
                 }
             }
@@ -2781,6 +2891,11 @@
 
             getCurrentRadius() {
                 const progress = Math.min(1.0, this.time / this.duration);
+                if (this.isSecondWave) {
+                    // Po's Chi Aura: Powerful surging burst then unstoppable rolling expansion far outward
+                    const ease = 1 - Math.pow(1 - progress, 2.7);
+                    return 24 + ease * (this.maxR - 24);
+                }
                 const ease = 1 - Math.pow(1 - progress, 3);
                 return 18 + ease * (this.maxR - 18);
             }
@@ -2789,13 +2904,14 @@
                 if (!this.alive) return;
                 const progress = this.time / this.duration;
                 const r = this.getCurrentRadius();
-                const globalAlpha = Math.max(0, 1 - Math.pow(progress, 1.8));
+                const globalAlpha = Math.max(0, 1 - Math.pow(progress, this.isSecondWave ? 1.6 : 1.8));
 
                 ctx.save();
 
                 // A. Radial Ethereal Light Rays
-                if (progress < 0.65) {
-                    const rayAlpha = Math.max(0, (1 - (progress / 0.65))) * 0.28;
+                const rayLimit = this.isSecondWave ? 0.72 : 0.65;
+                if (progress < rayLimit) {
+                    const rayAlpha = Math.max(0, (1 - (progress / rayLimit))) * (this.isSecondWave ? 0.38 : 0.28);
                     const rayLen = r * 0.96;
                     ctx.save();
                     for (let i = 0; i < this.rays.length; i++) {
@@ -2805,9 +2921,17 @@
                         ctx.arc(this.cx, this.cy, rayLen, ray.angle - ray.width * 0.5, ray.angle + ray.width * 0.5);
                         ctx.closePath();
                         const rayGrad = ctx.createRadialGradient(this.cx, this.cy, 0, this.cx, this.cy, rayLen);
-                        rayGrad.addColorStop(0, `rgba(255, 235, 170, ${rayAlpha * 1.5})`);
-                        rayGrad.addColorStop(0.5, `rgba(56, 189, 248, ${rayAlpha * 0.6})`);
-                        rayGrad.addColorStop(1, 'rgba(56, 189, 248, 0)');
+                        if (this.isSecondWave) {
+                            // Po's Golden Chi Light Beams
+                            rayGrad.addColorStop(0, `rgba(255, 250, 220, ${rayAlpha * 1.6})`);
+                            rayGrad.addColorStop(0.4, `rgba(251, 191, 36, ${rayAlpha * 1.1})`);
+                            rayGrad.addColorStop(0.85, `rgba(245, 158, 11, ${rayAlpha * 0.3})`);
+                            rayGrad.addColorStop(1, 'rgba(245, 158, 11, 0)');
+                        } else {
+                            rayGrad.addColorStop(0, `rgba(255, 235, 170, ${rayAlpha * 1.5})`);
+                            rayGrad.addColorStop(0.5, `rgba(56, 189, 248, ${rayAlpha * 0.6})`);
+                            rayGrad.addColorStop(1, 'rgba(56, 189, 248, 0)');
+                        }
                         ctx.fillStyle = rayGrad;
                         ctx.fill();
                     }
@@ -2815,15 +2939,23 @@
                 }
 
                 // B. Central Radiant Singing Bloom
-                if (progress < 0.45) {
-                    const bloomProgress = progress / 0.45;
-                    const bloomAlpha = (1 - bloomProgress) * 0.55;
-                    const bloomR = 40 + bloomProgress * 110;
+                const bloomLimit = this.isSecondWave ? 0.60 : 0.45;
+                if (progress < bloomLimit) {
+                    const bloomProgress = progress / bloomLimit;
+                    const bloomAlpha = (1 - bloomProgress) * (this.isSecondWave ? 0.65 : 0.55);
+                    const bloomR = (this.isSecondWave ? 55 : 40) + bloomProgress * (this.isSecondWave ? 260 : 110);
                     const bGrad = ctx.createRadialGradient(this.cx, this.cy, 0, this.cx, this.cy, bloomR);
-                    bGrad.addColorStop(0, `rgba(255, 255, 240, ${bloomAlpha})`);
-                    bGrad.addColorStop(0.4, `rgba(255, 215, 0, ${bloomAlpha * 0.7})`);
-                    bGrad.addColorStop(0.8, `rgba(56, 189, 248, ${bloomAlpha * 0.3})`);
-                    bGrad.addColorStop(1, 'rgba(56, 189, 248, 0)');
+                    if (this.isSecondWave) {
+                        bGrad.addColorStop(0, `rgba(255, 255, 250, ${bloomAlpha})`);
+                        bGrad.addColorStop(0.3, `rgba(255, 235, 120, ${bloomAlpha * 0.85})`);
+                        bGrad.addColorStop(0.65, `rgba(251, 191, 36, ${bloomAlpha * 0.45})`);
+                        bGrad.addColorStop(1, 'rgba(245, 158, 11, 0)');
+                    } else {
+                        bGrad.addColorStop(0, `rgba(255, 255, 240, ${bloomAlpha})`);
+                        bGrad.addColorStop(0.4, `rgba(255, 215, 0, ${bloomAlpha * 0.7})`);
+                        bGrad.addColorStop(0.8, `rgba(56, 189, 248, ${bloomAlpha * 0.3})`);
+                        bGrad.addColorStop(1, 'rgba(56, 189, 248, 0)');
+                    }
                     ctx.fillStyle = bGrad;
                     ctx.beginPath();
                     ctx.arc(this.cx, this.cy, bloomR, 0, Math.PI * 2);
@@ -2831,44 +2963,92 @@
                 }
 
                 // C. Spherical Translucent Dome Veil
-                const domeGrad = ctx.createRadialGradient(this.cx, this.cy, Math.max(0, r - 90), this.cx, this.cy, r);
-                domeGrad.addColorStop(0, 'rgba(255, 215, 0, 0)');
-                domeGrad.addColorStop(0.65, `rgba(56, 189, 248, ${globalAlpha * 0.14})`);
-                domeGrad.addColorStop(0.92, `rgba(255, 230, 130, ${globalAlpha * 0.22})`);
-                domeGrad.addColorStop(1, 'rgba(255, 215, 0, 0)');
+                const domeGrad = ctx.createRadialGradient(this.cx, this.cy, Math.max(0, r - (this.isSecondWave ? 200 : 90)), this.cx, this.cy, r);
+                if (this.isSecondWave) {
+                    // Po's Spirit Realm Golden Chi Canopy
+                    domeGrad.addColorStop(0, 'rgba(255, 215, 0, 0)');
+                    domeGrad.addColorStop(0.35, `rgba(251, 191, 36, ${globalAlpha * 0.09})`);
+                    domeGrad.addColorStop(0.75, `rgba(245, 158, 11, ${globalAlpha * 0.18})`);
+                    domeGrad.addColorStop(0.94, `rgba(255, 235, 120, ${globalAlpha * 0.32})`);
+                    domeGrad.addColorStop(1, 'rgba(255, 200, 0, 0)');
+                } else {
+                    domeGrad.addColorStop(0, 'rgba(255, 215, 0, 0)');
+                    domeGrad.addColorStop(0.65, `rgba(56, 189, 248, ${globalAlpha * 0.14})`);
+                    domeGrad.addColorStop(0.92, `rgba(255, 230, 130, ${globalAlpha * 0.22})`);
+                    domeGrad.addColorStop(1, 'rgba(255, 215, 0, 0)');
+                }
                 ctx.fillStyle = domeGrad;
                 ctx.beginPath();
                 ctx.arc(this.cx, this.cy, r, 0, Math.PI * 2);
                 ctx.fill();
 
-                // D. Double Radiant Shockwave Crest (Journey Signature Rim)
-                // Secondary Turquoise Refractive Ring
-                ctx.beginPath();
-                ctx.arc(this.cx, this.cy, Math.max(1, r - 6), 0, Math.PI * 2);
-                ctx.strokeStyle = `rgba(0, 240, 255, ${globalAlpha * 0.85})`;
-                ctx.lineWidth = Math.max(1.5, 4.5 * (1 - progress * 0.6));
-                ctx.shadowColor = 'rgba(0, 255, 255, 0.8)';
-                ctx.shadowBlur = 14;
-                ctx.stroke();
+                // D. Radiant Shockwave Crest
+                if (this.isSecondWave) {
+                    // --- Po's Grand Chi Aura Wavefront ---
+                    // 1. Broad Golden Chi Flame Corona
+                    ctx.beginPath();
+                    ctx.arc(this.cx, this.cy, r, 0, Math.PI * 2);
+                    ctx.strokeStyle = `rgba(245, 158, 11, ${globalAlpha * 0.85})`;
+                    ctx.lineWidth = Math.max(3, 9.5 * (1 - progress * 0.55));
+                    ctx.shadowColor = 'rgba(255, 180, 0, 0.95)';
+                    ctx.shadowBlur = 32;
+                    ctx.stroke();
 
-                // Primary Golden Sunlight Crest
-                ctx.beginPath();
-                ctx.arc(this.cx, this.cy, r, 0, Math.PI * 2);
-                ctx.strokeStyle = `rgba(255, 235, 140, ${globalAlpha * 0.95})`;
-                ctx.lineWidth = Math.max(2, 6.0 * (1 - progress * 0.6));
-                ctx.shadowColor = 'rgba(255, 215, 0, 0.95)';
-                ctx.shadowBlur = 22;
-                ctx.stroke();
+                    // 2. Solar Dragon Incandescent Core Ring
+                    ctx.beginPath();
+                    ctx.arc(this.cx, this.cy, Math.max(1, r - 8), 0, Math.PI * 2);
+                    ctx.strokeStyle = `rgba(255, 250, 200, ${globalAlpha * 0.98})`;
+                    ctx.lineWidth = Math.max(2.5, 6.0 * (1 - progress * 0.5));
+                    ctx.shadowColor = 'rgba(255, 235, 120, 1)';
+                    ctx.shadowBlur = 24;
+                    ctx.stroke();
 
-                // Inner Golden Highlight Ring
-                ctx.beginPath();
-                ctx.arc(this.cx, this.cy, Math.max(1, r - 12), 0, Math.PI * 2);
-                ctx.strokeStyle = `rgba(255, 248, 220, ${globalAlpha * 0.6})`;
-                ctx.lineWidth = Math.max(1, 2.5 * (1 - progress * 0.5));
-                ctx.shadowBlur = 8;
-                ctx.stroke();
+                    // 3. Inner Chi Resonance Ring
+                    ctx.beginPath();
+                    ctx.arc(this.cx, this.cy, Math.max(1, r - 18), 0, Math.PI * 2);
+                    ctx.strokeStyle = `rgba(255, 255, 255, ${globalAlpha * 0.85})`;
+                    ctx.lineWidth = Math.max(1.5, 3.2 * (1 - progress * 0.4));
+                    ctx.shadowBlur = 14;
+                    ctx.stroke();
 
-                // E. Floating Sacred Journey Glyphs / Ancient Cloth Runes
+                    // 4. Kai Spirit Realm Jade Dissolution Accent Ring
+                    ctx.beginPath();
+                    ctx.arc(this.cx, this.cy, Math.max(1, r - 28), 0, Math.PI * 2);
+                    ctx.strokeStyle = `rgba(52, 211, 153, ${globalAlpha * 0.45})`;
+                    ctx.lineWidth = 2.2;
+                    ctx.shadowColor = 'rgba(16, 185, 129, 0.4)';
+                    ctx.shadowBlur = 10;
+                    ctx.stroke();
+                } else {
+                    // --- First Wave: Journey Signature Rim ---
+                    // Secondary Turquoise Refractive Ring
+                    ctx.beginPath();
+                    ctx.arc(this.cx, this.cy, Math.max(1, r - 6), 0, Math.PI * 2);
+                    ctx.strokeStyle = `rgba(0, 240, 255, ${globalAlpha * 0.85})`;
+                    ctx.lineWidth = Math.max(1.5, 4.5 * (1 - progress * 0.6));
+                    ctx.shadowColor = 'rgba(0, 255, 255, 0.8)';
+                    ctx.shadowBlur = 14;
+                    ctx.stroke();
+
+                    // Primary Golden Sunlight Crest
+                    ctx.beginPath();
+                    ctx.arc(this.cx, this.cy, r, 0, Math.PI * 2);
+                    ctx.strokeStyle = `rgba(255, 235, 140, ${globalAlpha * 0.95})`;
+                    ctx.lineWidth = Math.max(2, 6.0 * (1 - progress * 0.6));
+                    ctx.shadowColor = 'rgba(255, 215, 0, 0.95)';
+                    ctx.shadowBlur = 22;
+                    ctx.stroke();
+
+                    // Inner Golden Highlight Ring
+                    ctx.beginPath();
+                    ctx.arc(this.cx, this.cy, Math.max(1, r - 12), 0, Math.PI * 2);
+                    ctx.strokeStyle = `rgba(255, 248, 220, ${globalAlpha * 0.6})`;
+                    ctx.lineWidth = Math.max(1, 2.5 * (1 - progress * 0.5));
+                    ctx.shadowBlur = 8;
+                    ctx.stroke();
+                }
+
+                // E. Floating Sacred Journey Glyphs / Golden Lotus Petals
                 for (let i = 0; i < this.glyphs.length; i++) {
                     const g = this.glyphs[i];
                     const gr = r + g.radOffset;
@@ -2879,8 +3059,12 @@
                     ctx.save();
                     ctx.translate(gx, gy);
                     ctx.rotate(g.rot);
-                    const glyphAlpha = Math.min(1.0, globalAlpha * 1.3);
-                    drawJourneyGlyph(ctx, g.type, g.size, glyphAlpha);
+                    const glyphAlpha = Math.min(1.0, globalAlpha * (this.isSecondWave ? 1.4 : 1.3));
+                    if (g.isLotus) {
+                        drawPoLotusGlyph(ctx, g.size, glyphAlpha);
+                    } else {
+                        drawJourneyGlyph(ctx, g.type, g.size, glyphAlpha);
+                    }
                     ctx.restore();
                 }
 
@@ -2891,14 +3075,15 @@
         // 3. 3D Journey Spherical Pulse in Three.js
         const active3dPulses = [];
         class JourneyPulse3D {
-            constructor(parentScene) {
+            constructor(parentScene, isSecondWave = false) {
                 this.parent = parentScene;
+                this.isSecondWave = isSecondWave;
                 this.group = new THREE.Group();
                 this.group.position.set(0, 0.12, 0);
 
                 const icoGeo = new THREE.IcosahedronGeometry(1.0, 1);
                 const icoMat = new THREE.MeshBasicMaterial({
-                    color: 0xffe082,
+                    color: isSecondWave ? 0xffea00 : 0xffe082,
                     wireframe: true,
                     transparent: true,
                     opacity: 0.85
@@ -2908,9 +3093,9 @@
 
                 const sphereGeo = new THREE.SphereGeometry(0.9, 16, 16);
                 const sphereMat = new THREE.MeshBasicMaterial({
-                    color: 0x38bdf8,
+                    color: isSecondWave ? 0xf59e0b : 0x38bdf8,
                     transparent: true,
-                    opacity: 0.35,
+                    opacity: isSecondWave ? 0.42 : 0.35,
                     blending: THREE.AdditiveBlending
                 });
                 this.sphereMesh = new THREE.Mesh(sphereGeo, sphereMat);
@@ -2918,7 +3103,7 @@
 
                 const ringGeo = new THREE.RingGeometry(0.92, 1.02, 24);
                 const ringMat = new THREE.MeshBasicMaterial({
-                    color: 0xffd700,
+                    color: isSecondWave ? 0xffd700 : 0xffd700,
                     side: THREE.DoubleSide,
                     transparent: true,
                     opacity: 0.9,
@@ -2932,9 +3117,17 @@
                 this.group.add(ringV);
                 this.ringV = ringV;
 
+                if (isSecondWave) {
+                    const ringD = new THREE.Mesh(ringGeo.clone(), ringMat.clone());
+                    ringD.rotation.x = Math.PI / 4;
+                    ringD.rotation.y = Math.PI / 4;
+                    this.group.add(ringD);
+                    this.ringD = ringD;
+                }
+
                 this.parent.add(this.group);
                 this.time = 0;
-                this.duration = 1.35;
+                this.duration = isSecondWave ? 2.4 : 1.35;
                 this.alive = true;
             }
 
@@ -2948,17 +3141,19 @@
                 }
 
                 const easeOut = 1 - Math.pow(1 - progress, 2.5);
-                const currentScale = 0.2 + easeOut * 2.8;
+                const maxScale = this.isSecondWave ? 7.6 : 2.8;
+                const currentScale = 0.2 + easeOut * maxScale;
                 this.group.scale.set(currentScale, currentScale, currentScale);
 
                 const alpha = Math.max(0, 1 - Math.pow(progress, 1.4));
                 this.wireMesh.material.opacity = alpha * 0.85;
-                this.sphereMesh.material.opacity = alpha * 0.35;
+                this.sphereMesh.material.opacity = alpha * (this.isSecondWave ? 0.45 : 0.35);
                 this.ringH.material.opacity = alpha * 0.90;
                 this.ringV.material.opacity = alpha * 0.90;
+                if (this.ringD) this.ringD.material.opacity = alpha * 0.90;
 
-                this.group.rotation.y += dt * 1.5;
-                this.group.rotation.x += dt * 0.8;
+                this.group.rotation.y += dt * (this.isSecondWave ? 2.0 : 1.5);
+                this.group.rotation.x += dt * (this.isSecondWave ? 1.2 : 0.8);
             }
 
             dispose() {
@@ -2971,10 +3166,14 @@
                 this.ringH.material.dispose();
                 this.ringV.geometry.dispose();
                 this.ringV.material.dispose();
+                if (this.ringD) {
+                    this.ringD.geometry.dispose();
+                    this.ringD.material.dispose();
+                }
             }
         }
 
-        // Trigger Journey Sacred Pulse (Both 2D Wave and 3D Pulse)
+        // Trigger Journey Sacred Pulse (Two-Stage: 1. Journey Singing Wave -> 2. Po's Grand Golden Chi Aura)
         function triggerJourneyPulse() {
             if (!figure || !hopfCanvas) return;
             const rect = figure.getBoundingClientRect();
@@ -2982,18 +3181,40 @@
             const cx = rect.left + rect.width / 2 - canvasRect.left;
             const cy = rect.top + rect.height / 2 - canvasRect.top;
 
-            // 1. Spawn 2D Journey Spherical Wave
-            activeJourneyWaves.push(new JourneySphericalWave(cx, cy));
-
-            // 2. Spawn 3D Journey Pulse in Three.js Scene
+            // --- Stage 1: Journey PS3 Spherical Singing Wave ---
+            activeJourneyWaves.push(new JourneySphericalWave(cx, cy, false));
             if (scene3d) {
-                active3dPulses.push(new JourneyPulse3D(scene3d));
+                active3dPulses.push(new JourneyPulse3D(scene3d, false));
+            }
+            for (let i = 0; i < 35; i++) {
+                holyParticles.push(new HolySparkle(cx, cy, true, false));
             }
 
-            // 3. Emit Sacred Sparkles
-            for (let i = 0; i < 40; i++) {
-                holyParticles.push(new HolySparkle(cx, cy, true));
-            }
+            // --- Stage 2: Po's Grand Golden Chi Aura (Kung Fu Panda Finale with Kai) ---
+            // Cascades outward shortly after, reaching far beyond the outer bounds of Lil Cube 64
+            setTimeout(() => {
+                if (!figure || !hopfCanvas) return;
+                const rRect = figure.getBoundingClientRect();
+                const cRect = hopfCanvas.getBoundingClientRect();
+                const curCx = rRect.left + rRect.width / 2 - cRect.left;
+                const curCy = rRect.top + rRect.height / 2 - cRect.top;
+
+                // Spiritual Gong & Harmonic Golden Chi Chime
+                playGoldenChiChime();
+
+                // Vast 2D Golden Chi Shockwave extending far outer bounds across cosmos
+                activeJourneyWaves.push(new JourneySphericalWave(curCx, curCy, true));
+
+                // 3D Vast Expanding Chi Sphere in Three.js
+                if (scene3d) {
+                    active3dPulses.push(new JourneyPulse3D(scene3d, true));
+                }
+
+                // Burst of radiant Golden Chi sparkles
+                for (let i = 0; i < 55; i++) {
+                    holyParticles.push(new HolySparkle(curCx, curCy, true, true));
+                }
+            }, 380);
         }
 
         function triggerBlessingBurst() {
@@ -3139,6 +3360,7 @@
         const sacredQuotes = [
             "「ボクはリル・キューブ64… 低ポリゴン3Dで動き回る聖なる氷晶だキューブ！🧊✨」",
             "「『風ノ旅ビト (Journey)』の神聖波動… 天球に広がる金と碧の球状波がすべての魂に響き渡るキューブ！🕊️💫」",
+            "「第2波の黄金気功（Chi）波動！ ポーの黄金龍オーラのように、天球の無限の彼方まで広がるキューブ！🐉✨」",
             "「ボクの足（Steeps）もかわいいミニキューブ！ ぴょこぴょこ歩いてダンスも踊れるキューブ！🐾」",
             "「4次元球面 S³ のホップ束が、静かに優美に調和の天球を描くキューブ！🌈💫」",
             "「実身と仮身、ハイパーメディアの永遠の連鎖… TRONの調和がここに極まるキューブ！✨」",
@@ -3199,9 +3421,6 @@
                     cubeCurRotY += (0 - cubeCurRotY) * 0.04;
                 }
 
-                rootGroup.rotation.x = cubeCurRotX + (targetLookY * 0.35);
-                rootGroup.rotation.y = cubeCurRotY + (targetLookX * 0.45);
-
                 // Update Variant-Specific Extra Animated Meshes
                 for (let i = 0; i < variantExtraObjects.length; i++) {
                     const extra = variantExtraObjects[i];
@@ -3246,19 +3465,24 @@
                     rightEye.position.x = 0.46 + targetLookX * 0.08;
                     rightEye.position.y = 0.32 + targetLookY * 0.06;
 
-                    // Eye Blinking Animation
+                    // Eye Blinking Animation with Smooth S-Curve Eyelid Pulse
                     blinkTimer -= dt;
                     if (blinkTimer <= 0) {
                         isBlinking = true;
-                        blinkTimer = 3.0 + Math.random() * 2.5;
+                        blinkProgress = 0;
+                        blinkTimer = 2.8 + Math.random() * 2.5;
                     }
                     if (isBlinking) {
-                        leftEye.scale.y = 0.08;
-                        rightEye.scale.y = 0.08;
-                        if (blinkTimer < (3.0 + Math.random() * 2.5) - 0.15) {
+                        blinkProgress += dt * 8.5; // ~0.12s blink duration
+                        if (blinkProgress >= 1.0) {
+                            blinkProgress = 0;
+                            isBlinking = false;
                             leftEye.scale.y = 1.0;
                             rightEye.scale.y = 1.0;
-                            isBlinking = false;
+                        } else {
+                            const eyeSquish = 1.0 - Math.sin(blinkProgress * Math.PI) * 0.90;
+                            leftEye.scale.y = eyeSquish;
+                            rightEye.scale.y = eyeSquish;
                         }
                     } else {
                         leftEye.scale.y = 1.0;
@@ -3272,37 +3496,72 @@
                     coreCube.rotation.y += dt * 0.7;
                 }
 
-                // Animation State Machine
+                // =========================================================
+                // Nintendo & Disney Reviewer-Grade Continuous Animation Engine
+                // Target Pose Formulation with Zero-Discontinuity Inertial Springs
+                // =========================================================
+                let tRootX = 0;
+                let tRootY = 0.08;
+                let tRootZ = 0;
+                let tRootRotX = 0;
+                let tRootRotY = 0;
+                let tRootRotZ = 0;
+
+                let tBodyX = 0;
+                let tBodyY = 0;
+                let tBodyZ = 0;
+                let tBodyRotX = 0;
+                let tBodyRotY = 0;
+                let tBodyRotZ = 0;
+                let tScaleX = 1.0;
+                let tScaleY = 1.0;
+                let tScaleZ = 1.0;
+
+                let tLeftHandRotX = 0;
+                let tLeftHandRotY = 0;
+                let tLeftHandRotZ = 0.10;
+                let tRightHandRotX = 0;
+                let tRightHandRotY = 0;
+                let tRightHandRotZ = -0.10;
+
+                let tLeftFootX = -0.64;
+                let tLeftFootY = -0.92;
+                let tLeftFootZ = 0.08;
+                let tLeftFootRotX = 0;
+                let tLeftFootRotY = 0;
+                let tLeftFootRotZ = 0;
+
+                let tRightFootX = 0.64;
+                let tRightFootY = -0.92;
+                let tRightFootZ = 0.08;
+                let tRightFootRotX = 0;
+                let tRightFootRotY = 0;
+                let tRightFootRotZ = 0;
+
+                let tSmileScale = 1.0;
+                let tOMouthScale = 0.0;
+                let tPedestalScale = 1.0;
+                let tPedestalOpacity = 0.75;
+
                 if (animState === 'idle') {
                     // Kirby Breathing & Weight Shift
                     const breath = Math.sin(stateTimer * 3.2);
-                    bodyGroup.scale.y = 1.0 + breath * 0.04;
-                    bodyGroup.scale.x = 1.0 - breath * 0.02;
-                    bodyGroup.scale.z = 1.0 - breath * 0.02;
-                    bodyGroup.position.y = breath * 0.03;
-
                     const sway = Math.sin(stateTimer * 1.6);
-                    bodyGroup.rotation.z = sway * 0.035;
-                    if (leftFootPivot) leftFootPivot.rotation.z = sway * 0.03;
-                    if (rightFootPivot) rightFootPivot.rotation.z = -sway * 0.03;
-                    if (leftFootPivot) leftFootPivot.position.y = -0.92;
-                    if (rightFootPivot) rightFootPivot.position.y = -0.92;
-                    if (leftFootPivot) leftFootPivot.rotation.x = 0;
-                    if (rightFootPivot) rightFootPivot.rotation.x = 0;
 
-                    if (leftHandPivot) leftHandPivot.rotation.z = 0.1 + Math.sin(stateTimer * 3.2) * 0.08;
-                    if (rightHandPivot) rightHandPivot.rotation.z = -0.1 - Math.sin(stateTimer * 3.2) * 0.08;
-                    if (leftHandPivot) leftHandPivot.rotation.x = 0;
-                    if (rightHandPivot) rightHandPivot.rotation.x = 0;
+                    tScaleY = 1.0 + breath * 0.04;
+                    tScaleX = 1.0 - breath * 0.02;
+                    tScaleZ = 1.0 - breath * 0.02;
+                    tBodyY = breath * 0.03;
 
-                    rootGroup.position.y = 0.08; // Optical center balance
-                    if (pedestal) {
-                        pedestal.style.transform = `scale(1)`;
-                        pedestal.style.opacity = '0.75';
-                    }
+                    tBodyRotZ = sway * 0.035;
+                    tLeftFootRotZ = sway * 0.03;
+                    tRightFootRotZ = -sway * 0.03;
+
+                    tLeftHandRotZ = 0.10 + Math.sin(stateTimer * 3.2) * 0.07;
+                    tRightHandRotZ = -0.10 - Math.sin(stateTimer * 3.2) * 0.07;
 
                 } else if (animState === 'walk') {
-                    // Kirby Waddle Walk Cycle!
+                    // Kirby Waddle Walk Cycle
                     walkPhase += dt * 7.5;
                     const sinW = Math.sin(walkPhase);
 
@@ -3312,101 +3571,156 @@
                         sfxFootstep();
                     }
 
-                    if (leftFootPivot) {
-                        leftFootPivot.position.y = -0.92 + Math.max(0, sinW) * 0.38;
-                        leftFootPivot.rotation.x = sinW * 0.46;
-                        leftFootPivot.rotation.z = 0.08;
+                    tLeftFootY = -0.92 + Math.max(0, sinW) * 0.36;
+                    tLeftFootRotX = sinW * 0.44;
+                    tLeftFootRotZ = 0.06;
+
+                    tRightFootY = -0.92 + Math.max(0, -sinW) * 0.36;
+                    tRightFootRotX = -sinW * 0.44;
+                    tRightFootRotZ = -0.06;
+
+                    tBodyRotZ = sinW * 0.16;
+                    tBodyY = Math.abs(Math.sin(walkPhase * 2)) * 0.12;
+
+                    tLeftHandRotX = -sinW * 0.60;
+                    tRightHandRotX = sinW * 0.60;
+
+                    if (stateTimer >= 4.5) {
+                        setKirbyAnimation('idle');
                     }
-                    if (rightFootPivot) {
-                        rightFootPivot.position.y = -0.92 + Math.max(0, -sinW) * 0.38;
-                        rightFootPivot.rotation.x = -sinW * 0.46;
-                        rightFootPivot.rotation.z = -0.08;
-                    }
-
-                    bodyGroup.rotation.z = sinW * 0.16;
-                    bodyGroup.position.y = Math.abs(Math.sin(walkPhase * 2)) * 0.13;
-                    bodyGroup.scale.set(1.0, 1.0, 1.0);
-
-                    if (leftHandPivot) leftHandPivot.rotation.x = -sinW * 0.65;
-                    if (rightHandPivot) rightHandPivot.rotation.x = sinW * 0.65;
-
-                    rootGroup.position.y = 0.08;
 
                 } else if (animState === 'float') {
-                    // Kirby Inhale, Puffy Cube Balloon & Flutter Kick
+                    // Kirby Inhale Balloon & Flutter Kick
                     floatTimer += dt;
-                    if (floatTimer < 0.4) {
-                        const p = floatTimer / 0.4;
-                        bodyGroup.scale.set(1.0 + p * 0.36, 1.0 + p * 0.34, 1.0 + p * 0.36);
-                    } else if (floatTimer < 3.8) {
-                        bodyGroup.scale.set(1.36, 1.34, 1.36);
-                        const hover = Math.sin((floatTimer - 0.4) * 3.0);
-                        rootGroup.position.y = 0.95 + hover * 0.16;
+                    if (floatTimer < 0.50) {
+                        // Phase 1: Inhale anticipation & gradual expansion (0 to 0.5s)
+                        const p = floatTimer / 0.50;
+                        const easeInhale = 0.5 - 0.5 * Math.cos(p * Math.PI);
+                        tScaleX = 1.0 + easeInhale * 0.32;
+                        tScaleY = 1.0 + easeInhale * 0.30;
+                        tScaleZ = 1.0 + easeInhale * 0.32;
+                        tRootY = 0.08 + easeInhale * 0.18;
+                        tSmileScale = 1.0 - easeInhale;
+                        tOMouthScale = easeInhale * 1.25;
 
-                        if (leftFootPivot) {
-                            leftFootPivot.rotation.x = Math.sin(floatTimer * 8.5) * 0.48;
-                            leftFootPivot.position.y = -1.12;
-                        }
-                        if (rightFootPivot) {
-                            rightFootPivot.rotation.x = Math.cos(floatTimer * 8.5) * 0.48;
-                            rightFootPivot.position.y = -1.12;
-                        }
+                        tLeftHandRotZ = 0.10 + easeInhale * 0.30;
+                        tRightHandRotZ = -0.10 - easeInhale * 0.30;
+                        tLeftFootY = -0.92 - easeInhale * 0.12;
+                        tRightFootY = -0.92 - easeInhale * 0.12;
 
-                        if (leftHandPivot) leftHandPivot.rotation.z = 0.4 + Math.sin(floatTimer * 14.0) * 0.40;
-                        if (rightHandPivot) rightHandPivot.rotation.z = -0.4 - Math.sin(floatTimer * 14.0) * 0.40;
+                    } else if (floatTimer < 3.6) {
+                        // Phase 2: Aerial float & flutter kick (0.5s to 3.6s)
+                        tScaleX = 1.32;
+                        tScaleY = 1.30;
+                        tScaleZ = 1.32;
+                        tSmileScale = 0.0;
+                        tOMouthScale = 1.25;
 
-                        if (pedestal) {
-                            const hNorm = (rootGroup.position.y) / 1.54;
-                            pedestal.style.transform = `scale(${Math.max(0.45, 1.0 - hNorm * 0.45)})`;
-                            pedestal.style.opacity = `${Math.max(0.25, 0.75 - hNorm * 0.45)}`;
-                        }
+                        const hover = Math.sin((floatTimer - 0.50) * 2.8);
+                        tRootY = 0.92 + hover * 0.15;
+
+                        tLeftFootRotX = Math.sin(floatTimer * 8.5) * 0.45;
+                        tLeftFootY = -1.04;
+                        tRightFootRotX = Math.cos(floatTimer * 8.5) * 0.45;
+                        tRightFootY = -1.04;
+
+                        tLeftHandRotZ = 0.40 + Math.sin(floatTimer * 13.0) * 0.35;
+                        tRightHandRotZ = -0.40 - Math.sin(floatTimer * 13.0) * 0.35;
+
+                        tPedestalScale = 0.64;
+                        tPedestalOpacity = 0.32;
+
                     } else if (floatTimer < 4.4) {
-                        const ex = (floatTimer - 3.8) / 0.6;
-                        bodyGroup.scale.set(1.36 - ex * 0.36, 1.34 - ex * 0.34, 1.36 - ex * 0.36);
-                        rootGroup.position.y = Math.max(0.08, 1.3 * (1.0 - ex));
-                        if (smileMesh) smileMesh.visible = true;
-                        if (oMouthMesh) oMouthMesh.visible = false;
+                        // Phase 3: Smooth exhale & gradual deceleration descent (3.6s to 4.4s)
+                        const p = (floatTimer - 3.6) / 0.8;
+                        const easeDescend = 0.5 - 0.5 * Math.cos(p * Math.PI);
+                        const flutterDamp = 1.0 - easeDescend;
+
+                        tScaleX = 1.32 - easeDescend * 0.32;
+                        tScaleY = 1.30 - easeDescend * 0.30;
+                        tScaleZ = 1.32 - easeDescend * 0.32;
+                        tRootY = 0.92 * (1.0 - easeDescend) + 0.08;
+
+                        tSmileScale = easeDescend;
+                        tOMouthScale = 1.25 * (1.0 - easeDescend);
+
+                        // Flutter kick smoothly glides down into ground landing
+                        tLeftFootRotX = Math.sin(floatTimer * 8.5 * flutterDamp) * 0.45 * flutterDamp;
+                        tRightFootRotX = Math.cos(floatTimer * 8.5 * flutterDamp) * 0.45 * flutterDamp;
+                        tLeftFootY = -1.04 + easeDescend * 0.12;
+                        tRightFootY = -1.04 + easeDescend * 0.12;
+
+                        tLeftHandRotZ = 0.40 * flutterDamp + 0.10;
+                        tRightHandRotZ = -0.40 * flutterDamp - 0.10;
+
+                        tPedestalScale = 0.64 + easeDescend * 0.36;
+                        tPedestalOpacity = 0.32 + easeDescend * 0.43;
+
                     } else {
+                        // Phase 4: Gentle touchdown into idle with soft cushion squash
                         setKirbyAnimation('idle');
+                        triggerLandingSquash(0.16);
                         sfxLilCubeBoing();
-                        triggerBlessingBurst();
                     }
 
                 } else if (animState === 'dance') {
                     // Kirby 64 Victory Dance Sequence
                     danceTimer += dt;
                     if (danceTimer < 0.9) {
+                        // Hop 1 (Left 360 spin): 0 to 0.9s
                         const p = danceTimer / 0.9;
-                        rootGroup.position.y = 0.08 + Math.sin(p * Math.PI) * 0.82;
-                        rootGroup.position.x = -0.55 * Math.sin(p * Math.PI);
-                        bodyGroup.rotation.y = p * Math.PI * 2;
-                        if (leftFootPivot) leftFootPivot.position.y = -0.92;
-                        if (rightFootPivot) rightFootPivot.position.y = -0.62;
+                        const hop = Math.sin(p * Math.PI);
+                        tRootY = 0.08 + hop * 0.78;
+                        tRootX = -0.42 * hop;
+                        tBodyRotY = p * Math.PI * 2;
+                        tLeftFootY = -0.92 + hop * 0.22;
+                        tRightFootY = -0.68;
+                        tLeftHandRotZ = 0.75 * hop;
+                        tRightHandRotZ = -0.75 * hop;
+
                     } else if (danceTimer < 1.8) {
+                        // Hop 2 (Right 360 reverse spin): 0.9 to 1.8s
                         const p = (danceTimer - 0.9) / 0.9;
-                        rootGroup.position.y = 0.08 + Math.sin(p * Math.PI) * 0.82;
-                        rootGroup.position.x = 0.55 * Math.sin(p * Math.PI);
-                        bodyGroup.rotation.y = -p * Math.PI * 2;
-                        if (leftFootPivot) leftFootPivot.position.y = -0.62;
-                        if (rightFootPivot) rightFootPivot.position.y = -0.92;
-                    } else if (danceTimer < 2.8) {
-                        const p = (danceTimer - 1.8) / 1.0;
-                        rootGroup.position.x = 0;
-                        rootGroup.position.y = 0.08 + Math.sin(p * Math.PI) * 0.95;
-                        bodyGroup.rotation.x = -p * Math.PI * 2;
+                        const hop = Math.sin(p * Math.PI);
+                        tRootY = 0.08 + hop * 0.78;
+                        tRootX = 0.42 * hop;
+                        tBodyRotY = -p * Math.PI * 2;
+                        tLeftFootY = -0.68;
+                        tRightFootY = -0.92 + hop * 0.22;
+                        tLeftHandRotZ = -0.75 * hop;
+                        tRightHandRotZ = 0.75 * hop;
+
+                    } else if (danceTimer < 2.7) {
+                        // Hop 3 (Celebratory backflip): 1.8 to 2.7s
+                        const p = (danceTimer - 1.8) / 0.9;
+                        const hop = Math.sin(p * Math.PI);
+                        tRootX = 0;
+                        tRootY = 0.08 + hop * 0.88;
+                        tBodyRotX = -p * Math.PI * 2;
+                        tLeftHandRotZ = 0.35 + hop * 0.55;
+                        tRightHandRotZ = -0.35 - hop * 0.55;
+
                     } else if (danceTimer < 4.2) {
-                        rootGroup.position.set(0, 0.08, 0);
-                        bodyGroup.rotation.set(0, 0, 0);
-                        bodyGroup.scale.set(1.10, 0.92, 1.08); // Victory squat pose
-                        if (leftFootPivot) leftFootPivot.rotation.z = 0.42;
-                        if (rightFootPivot) rightFootPivot.rotation.z = -0.42;
-                        if (leftHandPivot) leftHandPivot.rotation.z = 1.35; // Hand raised high!
-                        if (rightHandPivot) rightHandPivot.rotation.z = -0.3;
-                        if (danceTimer > 2.8 && danceStep === 0) {
+                        // Step 4: Triumphant victory squat pose (2.7s to 4.2s)
+                        tRootX = 0;
+                        tRootY = 0.08;
+                        tBodyRotX = 0;
+                        tBodyRotY = 0;
+                        tScaleX = 1.08;
+                        tScaleY = 0.93;
+                        tScaleZ = 1.08;
+                        tLeftFootRotZ = 0.32;
+                        tRightFootRotZ = -0.32;
+                        tLeftHandRotZ = 1.35; // Left hand raised high in victory!
+                        tLeftHandRotX = -0.15;
+                        tRightHandRotZ = -0.28;
+
+                        if (danceTimer > 2.7 && danceStep === 0) {
                             danceStep = 1;
-                            triggerBlessingBurst();
+                            triggerLandingSquash(0.18);
                         }
                     } else {
+                        // Effortlessly ease from victory pose to idle breathing
                         setKirbyAnimation('idle');
                     }
 
@@ -3415,20 +3729,22 @@
                     const singP = Math.min(1.0, stateTimer / 1.35);
                     const curve = Math.sin(singP * Math.PI);
 
-                    rootGroup.rotation.x = -curve * 0.28;
-                    rootGroup.position.y = 0.08 + curve * 0.35;
-                    bodyGroup.scale.set(1.0 + curve * 0.16, 1.0 + curve * 0.18, 1.0 + curve * 0.16);
+                    tRootRotX = -curve * 0.28;
+                    tRootY = 0.08 + curve * 0.30;
+                    tScaleX = 1.0 + curve * 0.16;
+                    tScaleY = 1.0 + curve * 0.18;
+                    tScaleZ = 1.0 + curve * 0.16;
 
-                    if (leftHandPivot) {
-                        leftHandPivot.rotation.z = curve * 1.25;
-                        leftHandPivot.rotation.x = -curve * 0.35;
-                    }
-                    if (rightHandPivot) {
-                        rightHandPivot.rotation.z = -curve * 1.25;
-                        rightHandPivot.rotation.x = -curve * 0.35;
-                    }
-                    if (leftFootPivot) leftFootPivot.position.y = -0.92 + curve * 0.15;
-                    if (rightFootPivot) rightFootPivot.position.y = -0.92 + curve * 0.15;
+                    tLeftHandRotZ = curve * 1.25;
+                    tLeftHandRotX = -curve * 0.35;
+                    tRightHandRotZ = -curve * 1.25;
+                    tRightHandRotX = -curve * 0.35;
+
+                    tLeftFootY = -0.92 + curve * 0.12;
+                    tRightFootY = -0.92 + curve * 0.12;
+
+                    tSmileScale = 1.0 - curve;
+                    tOMouthScale = curve * 1.30;
 
                     if (coreCube) {
                         coreCube.rotation.x += dt * 3.5;
@@ -3445,14 +3761,121 @@
                     if (pokeTime > 0) {
                         const damp = Math.exp(-4.5 * (1.0 - pokeTime));
                         const osc = Math.cos(22 * (1.0 - pokeTime));
-                        const squish = 0.38 * damp * osc;
-                        bodyGroup.scale.y = 1.0 - squish;
-                        bodyGroup.scale.x = 1.0 + squish * 0.55;
-                        bodyGroup.scale.z = 1.0 + squish * 0.55;
+                        const squish = 0.36 * damp * osc;
+                        tScaleY = 1.0 - squish;
+                        tScaleX = 1.0 + squish * 0.52;
+                        tScaleZ = 1.0 + squish * 0.52;
                     } else {
-                        bodyGroup.scale.set(1, 1, 1);
                         setKirbyAnimation('idle');
                     }
+                }
+
+                // Apply Landing Squash & Stretch (Disney Principle #1)
+                impactSquash *= Math.exp(-12.0 * dt);
+                tScaleY -= impactSquash;
+                tScaleX += impactSquash * 0.5;
+                tScaleZ += impactSquash * 0.5;
+
+                // =========================================================
+                // Critically Damped Exponential Blend toward Target Pose
+                // Zero Pops • C-infinity Smooth Transitions on All States
+                // =========================================================
+                const posSpeed = 18.0;
+                const rotSpeed = 16.0;
+                const scaleSpeed = 22.0;
+                const handSpeed = 15.0;
+                const footSpeed = 20.0;
+                const mouthSpeed = 24.0;
+                const pedestalSpeed = 16.0;
+
+                animPose.rootX = smoothDamp(animPose.rootX, tRootX, posSpeed, dt);
+                animPose.rootY = smoothDamp(animPose.rootY, tRootY, posSpeed, dt);
+                animPose.rootZ = smoothDamp(animPose.rootZ, tRootZ, posSpeed, dt);
+
+                animPose.rootRotX = smoothDampAngle(animPose.rootRotX, tRootRotX, rotSpeed, dt);
+                animPose.rootRotY = smoothDampAngle(animPose.rootRotY, tRootRotY, rotSpeed, dt);
+                animPose.rootRotZ = smoothDampAngle(animPose.rootRotZ, tRootRotZ, rotSpeed, dt);
+
+                animPose.bodyX = smoothDamp(animPose.bodyX, tBodyX, posSpeed, dt);
+                animPose.bodyY = smoothDamp(animPose.bodyY, tBodyY, posSpeed, dt);
+                animPose.bodyZ = smoothDamp(animPose.bodyZ, tBodyZ, posSpeed, dt);
+
+                animPose.bodyRotX = smoothDampAngle(animPose.bodyRotX, tBodyRotX, rotSpeed, dt);
+                animPose.bodyRotY = smoothDampAngle(animPose.bodyRotY, tBodyRotY, rotSpeed, dt);
+                animPose.bodyRotZ = smoothDampAngle(animPose.bodyRotZ, tBodyRotZ, rotSpeed, dt);
+
+                animPose.scaleX = smoothDamp(animPose.scaleX, tScaleX, scaleSpeed, dt);
+                animPose.scaleY = smoothDamp(animPose.scaleY, tScaleY, scaleSpeed, dt);
+                animPose.scaleZ = smoothDamp(animPose.scaleZ, tScaleZ, scaleSpeed, dt);
+
+                animPose.leftHandRotX = smoothDampAngle(animPose.leftHandRotX, tLeftHandRotX, handSpeed, dt);
+                animPose.leftHandRotY = smoothDampAngle(animPose.leftHandRotY, tLeftHandRotY, handSpeed, dt);
+                animPose.leftHandRotZ = smoothDampAngle(animPose.leftHandRotZ, tLeftHandRotZ, handSpeed, dt);
+
+                animPose.rightHandRotX = smoothDampAngle(animPose.rightHandRotX, tRightHandRotX, handSpeed, dt);
+                animPose.rightHandRotY = smoothDampAngle(animPose.rightHandRotY, tRightHandRotY, handSpeed, dt);
+                animPose.rightHandRotZ = smoothDampAngle(animPose.rightHandRotZ, tRightHandRotZ, handSpeed, dt);
+
+                animPose.leftFootX = smoothDamp(animPose.leftFootX, tLeftFootX, footSpeed, dt);
+                animPose.leftFootY = smoothDamp(animPose.leftFootY, tLeftFootY, footSpeed, dt);
+                animPose.leftFootZ = smoothDamp(animPose.leftFootZ, tLeftFootZ, footSpeed, dt);
+                animPose.leftFootRotX = smoothDampAngle(animPose.leftFootRotX, tLeftFootRotX, footSpeed, dt);
+                animPose.leftFootRotY = smoothDampAngle(animPose.leftFootRotY, tLeftFootRotY, footSpeed, dt);
+                animPose.leftFootRotZ = smoothDampAngle(animPose.leftFootRotZ, tLeftFootRotZ, footSpeed, dt);
+
+                animPose.rightFootX = smoothDamp(animPose.rightFootX, tRightFootX, footSpeed, dt);
+                animPose.rightFootY = smoothDamp(animPose.rightFootY, tRightFootY, footSpeed, dt);
+                animPose.rightFootZ = smoothDamp(animPose.rightFootZ, tRightFootZ, footSpeed, dt);
+                animPose.rightFootRotX = smoothDampAngle(animPose.rightFootRotX, tRightFootRotX, footSpeed, dt);
+                animPose.rightFootRotY = smoothDampAngle(animPose.rightFootRotY, tRightFootRotY, footSpeed, dt);
+                animPose.rightFootRotZ = smoothDampAngle(animPose.rightFootRotZ, tRightFootRotZ, footSpeed, dt);
+
+                animPose.smileScale = smoothDamp(animPose.smileScale, tSmileScale, mouthSpeed, dt);
+                animPose.oMouthScale = smoothDamp(animPose.oMouthScale, tOMouthScale, mouthSpeed, dt);
+
+                animPose.pedestalScale = smoothDamp(animPose.pedestalScale, tPedestalScale, pedestalSpeed, dt);
+                animPose.pedestalOpacity = smoothDamp(animPose.pedestalOpacity, tPedestalOpacity, pedestalSpeed, dt);
+
+                // Commit Blended Transforms to Three.js Scene
+                rootGroup.position.set(animPose.rootX, animPose.rootY, animPose.rootZ);
+                rootGroup.rotation.set(
+                    animPose.rootRotX + cubeCurRotX + (targetLookY * 0.35),
+                    animPose.rootRotY + cubeCurRotY + (targetLookX * 0.45),
+                    animPose.rootRotZ
+                );
+
+                bodyGroup.position.set(animPose.bodyX, animPose.bodyY, animPose.bodyZ);
+                bodyGroup.rotation.set(animPose.bodyRotX, animPose.bodyRotY, animPose.bodyRotZ);
+                bodyGroup.scale.set(animPose.scaleX, animPose.scaleY, animPose.scaleZ);
+
+                if (leftHandPivot) {
+                    leftHandPivot.rotation.set(animPose.leftHandRotX, animPose.leftHandRotY, animPose.leftHandRotZ);
+                }
+                if (rightHandPivot) {
+                    rightHandPivot.rotation.set(animPose.rightHandRotX, animPose.rightHandRotY, animPose.rightHandRotZ);
+                }
+
+                if (leftFootPivot) {
+                    leftFootPivot.position.set(animPose.leftFootX, animPose.leftFootY, animPose.leftFootZ);
+                    leftFootPivot.rotation.set(animPose.leftFootRotX, animPose.leftFootRotY, animPose.leftFootRotZ);
+                }
+                if (rightFootPivot) {
+                    rightFootPivot.position.set(animPose.rightFootX, animPose.rightFootY, animPose.rightFootZ);
+                    rightFootPivot.rotation.set(animPose.rightFootRotX, animPose.rightFootRotY, animPose.rightFootRotZ);
+                }
+
+                if (smileMesh) {
+                    smileMesh.visible = animPose.smileScale > 0.03;
+                    smileMesh.scale.set(animPose.smileScale, animPose.smileScale, animPose.smileScale);
+                }
+                if (oMouthMesh) {
+                    oMouthMesh.visible = animPose.oMouthScale > 0.03;
+                    oMouthMesh.scale.set(animPose.oMouthScale, animPose.oMouthScale, animPose.oMouthScale);
+                }
+
+                if (pedestal) {
+                    pedestal.style.transform = `scale(${animPose.pedestalScale})`;
+                    pedestal.style.opacity = animPose.pedestalOpacity.toFixed(3);
                 }
 
                 // Update 3D Journey pulses
@@ -3589,21 +4012,31 @@
                     const fib = fiberList[f];
                     const pts = fib.pts;
 
-                    // Wave Resonance with passing Journey Spherical Waves
+                    // Wave Resonance with passing Journey Spherical Waves & Po's Golden Chi Aura
                     let waveResonance = 0;
+                    let isChiWave = false;
                     for (let w = 0; w < activeJourneyWaves.length; w++) {
                         const jWave = activeJourneyWaves[w];
                         const waveR = jWave.getCurrentRadius();
                         const midPt = pts[Math.floor(pts.length / 2)];
                         const d = Math.hypot(midPt.x - jWave.cx, midPt.y - jWave.cy);
-                        if (Math.abs(d - waveR) < 55) {
-                            waveResonance = Math.max(waveResonance, 1 - Math.abs(d - waveR) / 55);
+                        const band = jWave.isSecondWave ? 90 : 55;
+                        if (Math.abs(d - waveR) < band) {
+                            const res = 1 - Math.abs(d - waveR) / band;
+                            if (jWave.isSecondWave) {
+                                if (res > waveResonance) {
+                                    waveResonance = res;
+                                    isChiWave = true;
+                                }
+                            } else if (!isChiWave) {
+                                waveResonance = Math.max(waveResonance, res);
+                            }
                         }
                     }
 
                     // Muted, ethereal alpha curve with wave resonance boost
-                    const depthAlpha = Math.max(0.10, Math.min(0.85, 0.28 + fib.avgZ * 0.18 + waveResonance * 0.45));
-                    const lineWidth = Math.max(1.3, (1.8 + fib.avgZ * 0.65) + waveResonance * 2.2);
+                    const depthAlpha = Math.max(0.10, Math.min(0.92, 0.28 + fib.avgZ * 0.18 + waveResonance * (isChiWave ? 0.60 : 0.45)));
+                    const lineWidth = Math.max(1.3, (1.8 + fib.avgZ * 0.65) + waveResonance * (isChiWave ? 3.0 : 2.2));
 
                     hopfCtx.beginPath();
                     hopfCtx.moveTo(pts[0].x, pts[0].y);
@@ -3611,10 +4044,16 @@
                         hopfCtx.lineTo(pts[i].x, pts[i].y);
                     }
 
-                    if (waveResonance > 0.3) {
-                        hopfCtx.strokeStyle = `rgba(255, 235, 140, ${depthAlpha})`;
-                        hopfCtx.shadowColor = 'rgba(255, 215, 0, 0.85)';
-                        hopfCtx.shadowBlur = 12;
+                    if (waveResonance > 0.25) {
+                        if (isChiWave) {
+                            hopfCtx.strokeStyle = `rgba(255, 235, 110, ${depthAlpha})`;
+                            hopfCtx.shadowColor = 'rgba(251, 191, 36, 0.95)';
+                            hopfCtx.shadowBlur = 18;
+                        } else {
+                            hopfCtx.strokeStyle = `rgba(255, 235, 140, ${depthAlpha})`;
+                            hopfCtx.shadowColor = 'rgba(255, 215, 0, 0.85)';
+                            hopfCtx.shadowBlur = 12;
+                        }
                     } else {
                         hopfCtx.strokeStyle = `hsla(${fib.hue}, 95%, 68%, ${depthAlpha})`;
                         hopfCtx.shadowColor = `hsla(${fib.hue}, 100%, 72%, 0.5)`;
@@ -3627,8 +4066,8 @@
 
                     if (Math.random() < (0.012 + waveResonance * 0.08)) {
                         const midPt = pts[Math.floor(pts.length / 2)];
-                        if (midPt && holyParticles.length < 45) {
-                            holyParticles.push(new HolySparkle(midPt.x, midPt.y, waveResonance > 0.5));
+                        if (midPt && holyParticles.length < 65) {
+                            holyParticles.push(new HolySparkle(midPt.x, midPt.y, waveResonance > 0.5, isChiWave));
                         }
                     }
                 }

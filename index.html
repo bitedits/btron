@@ -3098,7 +3098,27 @@ shimDance(1.07, 0.89, 0.12); // D major retro arpeggio run</code></pre>
             // 1. Audio Engine: Pythagorean Chimes & Celestial Crystal SFX
             // =========================================================================
             let audioCtx = null;
-            window.soundEnabled = true;
+            // Mute state stored in localStorage (outlives page refreshes)
+            let isMuted = false;
+            try {
+                isMuted = localStorage.getItem('btron_sound_muted') === 'true';
+            } catch (e) { }
+            window.soundEnabled = !isMuted;
+
+            function updateSoundButtonUI() {
+                const btn = document.getElementById('soundToggleBtn');
+                if (!btn) return;
+                if (window.soundEnabled) {
+                    btn.innerHTML = '🔊 聖なる天球音楽: ON';
+                    btn.style.borderColor = '#00ffff';
+                    btn.style.color = '#00ffff';
+                } else {
+                    btn.innerHTML = '🔈 聖なる天球音楽: OFF';
+                    btn.style.borderColor = 'rgba(120, 220, 255, 0.5)';
+                    btn.style.color = '#94a3b8';
+                }
+            }
+            updateSoundButtonUI();
 
             function getAudioContext() {
                 if (!audioCtx) {
@@ -3179,7 +3199,7 @@ shimDance(1.07, 0.89, 0.12); // D major retro arpeggio run</code></pre>
                 return tid;
             }
 
-            window.stopAllTracks = function (immediate = true) {
+            window.stopAllTracks = function (immediate = true, isLoop = false) {
                 if (window._trackTimeouts) {
                     window._trackTimeouts.forEach(t => clearTimeout(t));
                     window._trackTimeouts = [];
@@ -3192,36 +3212,37 @@ shimDance(1.07, 0.89, 0.12); // D major retro arpeggio run</code></pre>
                         } catch (e) { }
                     });
                     window._trackOscillators = [];
-                } else if (!immediate) {
-                    // Natural track completion: allow already-scheduled reverberations to ring out gracefully to silence
+                } else {
                     window._trackOscillators = [];
                 }
-                const btn1 = document.getElementById('track1Btn');
-                if (btn1) {
-                    btn1.classList.remove('active');
-                    btn1.innerHTML = '🎻 Track 1: 鐘のキャロル (Carol of the Bells)';
+                if (!isLoop) {
+                    const btn1 = document.getElementById('track1Btn');
+                    if (btn1) {
+                        btn1.classList.remove('active');
+                        btn1.innerHTML = '🎮 Track 1: 鐘のキャロル (Game Arr.)';
+                    }
+                    const btn2 = document.getElementById('track2Btn');
+                    if (btn2) {
+                        btn2.classList.remove('active');
+                        btn2.innerHTML = '🎷 Track 2: Caterpillar (今田勝Jazz)';
+                    }
+                    const btn3 = document.getElementById('track3Btn');
+                    if (btn3) {
+                        btn3.classList.remove('active');
+                        btn3.innerHTML = '🌅 Track 3: 朝日のあたる家 (Thomas Krüger)';
+                    }
+                    const btn4 = document.getElementById('track4Btn');
+                    if (btn4) {
+                        btn4.classList.remove('active');
+                        btn4.innerHTML = '💿 Track 4: TRON Init (Nine Inch Nails)';
+                    }
+                    const legacyBtn = document.getElementById('symphonyBtn');
+                    if (legacyBtn) {
+                        legacyBtn.classList.remove('active');
+                        legacyBtn.innerHTML = '🎼 8-bit 交響詩 (Symphony)';
+                    }
+                    window.currentActiveTrack = 0;
                 }
-                const btn2 = document.getElementById('track2Btn');
-                if (btn2) {
-                    btn2.classList.remove('active');
-                    btn2.innerHTML = '🎷 Track 2: Caterpillar (今田勝Jazz)';
-                }
-                const btn3 = document.getElementById('track3Btn');
-                if (btn3) {
-                    btn3.classList.remove('active');
-                    btn3.innerHTML = '🌅 Track 3: 朝日のあたる家 (Thomas Krüger)';
-                }
-                const btn4 = document.getElementById('track4Btn');
-                if (btn4) {
-                    btn4.classList.remove('active');
-                    btn4.innerHTML = '💿 Track 4: TRON Init (Nine Inch Nails)';
-                }
-                const legacyBtn = document.getElementById('symphonyBtn');
-                if (legacyBtn) {
-                    legacyBtn.classList.remove('active');
-                    legacyBtn.innerHTML = '🎼 8-bit 交響詩 (Symphony)';
-                }
-                window.currentActiveTrack = 0;
             };
 
             // [SHIM 1A] Pulse - Sample 1: Squash / Chirp (Singing Harmonic Ascending Triad / Blues Vocal)
@@ -4364,16 +4385,25 @@ shimDance(1.07, 0.89, 0.12); // D major retro arpeggio run</code></pre>
              * =========================================================================
              */
 
-            window.playTrack = function (trackNum) {
+            window.playTrack = function (trackNum, isLoop = false) {
                 getAudioContext();
-                if (window.currentActiveTrack === trackNum) {
+                if (!isLoop && window.currentActiveTrack === trackNum) {
                     // Clicking active track toggles it off
                     window.stopAllTracks(true);
                     return;
                 }
 
-                // Stop any playing track cleanly
-                window.stopAllTracks(true);
+                // If sound was muted, un-mute when explicitly selecting a track
+                if (!window.soundEnabled) {
+                    window.soundEnabled = true;
+                    try {
+                        localStorage.setItem('btron_sound_muted', 'false');
+                    } catch (e) { }
+                    updateSoundButtonUI();
+                }
+
+                // Stop any playing track cleanly (clears existing track timeouts & oscillators)
+                window.stopAllTracks(true, isLoop);
                 window.currentActiveTrack = trackNum;
 
                 if (trackNum === 1) {
@@ -4660,9 +4690,13 @@ shimDance(1.07, 0.89, 0.12); // D major retro arpeggio run</code></pre>
                         if (q) q.innerText = '✨ 鐘のキャロルのゲームサウンドが、聖なる天球へと軽快に響き渡ったキューブ！🎮👾🕊️';
                     }, 24200);
 
-                    // Natural track completion at ~25.8s
+                    // Natural track completion at ~25.8s -> Loop on end until Pulse, Waddle, Float, Dance, or Mute
                     scheduleTrackTimeout(() => {
-                        window.stopAllTracks(false);
+                        if (window.currentActiveTrack === 1 && window.soundEnabled) {
+                            window.playTrack(1, true);
+                        } else {
+                            window.stopAllTracks(false);
+                        }
                     }, 25800);
 
                 } else if (trackNum === 2) {
@@ -5154,8 +5188,13 @@ shimDance(1.07, 0.89, 0.12); // D major retro arpeggio run</code></pre>
                         if (q) q.innerText = '🎷 今田勝『Green Caterpillar』、月夜の湿原へと静かに美しく溶け込んだキューブ…🌙🌿';
                     }, 26500);
 
+                    // Natural track completion at ~28.0s -> Loop on end until Pulse, Waddle, Float, Dance, or Mute
                     scheduleTrackTimeout(() => {
-                        window.stopAllTracks(false);
+                        if (window.currentActiveTrack === 2 && window.soundEnabled) {
+                            window.playTrack(2, true);
+                        } else {
+                            window.stopAllTracks(false);
+                        }
                     }, 28000);
 
                 } else if (trackNum === 3) {
@@ -5413,8 +5452,13 @@ shimDance(1.07, 0.89, 0.12); // D major retro arpeggio run</code></pre>
                         if (q) q.innerText = '🌅 Thomas Krüger『House of the Rising Sun』(朝日のあたる家)、魂の旋律が天球へと感動的に響き渡ったキューブ…☀️🎹✨';
                     }, 25800);
 
+                    // Natural track completion at ~26.8s -> Loop on end until Pulse, Waddle, Float, Dance, or Mute
                     scheduleTrackTimeout(() => {
-                        window.stopAllTracks(false);
+                        if (window.currentActiveTrack === 3 && window.soundEnabled) {
+                            window.playTrack(3, true);
+                        } else {
+                            window.stopAllTracks(false);
+                        }
                     }, 26800);
                 } else if (trackNum === 4) {
                     // =============================================================
@@ -5765,8 +5809,13 @@ shimDance(1.07, 0.89, 0.12); // D major retro arpeggio run</code></pre>
                         if (q) q.innerText = '💻 # ./start_ares_program [COMPLETE] — Nine Inch Nailsの重厚なインダストリアル世界が天球に刻印されたキューブ！⚡️✨';
                     }, 21000);
 
+                    // Natural track completion at ~25.8s -> Loop on end until Pulse, Waddle, Float, Dance, or Mute
                     scheduleTrackTimeout(() => {
-                        window.stopAllTracks(false);
+                        if (window.currentActiveTrack === 4 && window.soundEnabled) {
+                            window.playTrack(4, true);
+                        } else {
+                            window.stopAllTracks(false);
+                        }
                     }, 25800);
                 }
             };
@@ -5776,19 +5825,25 @@ shimDance(1.07, 0.89, 0.12); // D major retro arpeggio run</code></pre>
                 window.playTrack(1);
             };
 
-            window.toggleSound = function () {
-                window.soundEnabled = !window.soundEnabled;
-                const btn = document.getElementById('soundToggleBtn');
+            window.toggleSound = function (forceState) {
+                if (typeof forceState === 'boolean') {
+                    window.soundEnabled = forceState;
+                } else {
+                    window.soundEnabled = !window.soundEnabled;
+                }
+
+                try {
+                    localStorage.setItem('btron_sound_muted', (!window.soundEnabled).toString());
+                } catch (e) { }
+
+                updateSoundButtonUI();
+
                 if (window.soundEnabled) {
                     getAudioContext();
                     playSacredChord();
-                    btn.innerHTML = '🔊 聖なる天球音楽: ON';
-                    btn.style.borderColor = '#00ffff';
-                    btn.style.color = '#00ffff';
                 } else {
-                    btn.innerHTML = '🔈 聖なる天球音楽: OFF';
-                    btn.style.borderColor = 'rgba(120, 220, 255, 0.5)';
-                    btn.style.color = '#94a3b8';
+                    // Selecting Mute stops any playing/looping track immediately
+                    window.stopAllTracks(true);
                 }
             };
 
@@ -6298,6 +6353,9 @@ shimDance(1.07, 0.89, 0.12); // D major retro arpeggio run</code></pre>
                 // Click / Poke -> Journey Sacred Pulse
                 container3d.addEventListener('click', () => {
                     if (Math.abs(cubeRotVelX) > 0.04 || Math.abs(cubeRotVelY) > 0.04) return;
+                    if (window.currentActiveTrack) {
+                        window.stopAllTracks(true);
+                    }
                     pokeTime = 1.0;
                     sfxLilCubeBoing();
                     playJourneyChirp();
@@ -6334,16 +6392,25 @@ shimDance(1.07, 0.89, 0.12); // D major retro arpeggio run</code></pre>
             const setKirbyAnimation = setMascotAnimation; // Backward compatibility alias
 
             window.triggerWaddle = function () {
+                if (window.currentActiveTrack) {
+                    window.stopAllTracks(true);
+                }
                 setMascotAnimation('walk');
             };
             window.triggerKirbyWaddle = window.triggerWaddle;
 
             window.triggerFloat = function () {
+                if (window.currentActiveTrack) {
+                    window.stopAllTracks(true);
+                }
                 setMascotAnimation('float');
             };
             window.triggerKirbyFloat = window.triggerFloat;
 
             window.triggerDance = function () {
+                if (window.currentActiveTrack) {
+                    window.stopAllTracks(true);
+                }
                 setMascotAnimation('dance');
             };
             window.triggerKirbyDance = window.triggerDance;
@@ -6979,6 +7046,9 @@ shimDance(1.07, 0.89, 0.12); // D major retro arpeggio run</code></pre>
 
             let blessingActive = false;
             window.triggerBlessing = function () {
+                if (window.currentActiveTrack) {
+                    window.stopAllTracks(true);
+                }
                 if (blessingActive) return;
                 blessingActive = true;
                 playJourneyChirp(); // PlayStation 3 Journey Singing Chime Harmonic Chord
@@ -7045,6 +7115,8 @@ shimDance(1.07, 0.89, 0.12); // D major retro arpeggio run</code></pre>
                     window.triggerFloat();
                 } else if (e.key === 'd' || e.key === 'D') {
                     window.triggerDance();
+                } else if (e.key === 'm' || e.key === 'M') {
+                    window.toggleSound();
                 } else if (e.key === 'o' || e.key === 'O') {
                     window.toggleOrbitScreens();
                 } else if (e.key === 'ArrowLeft') {
@@ -8278,7 +8350,12 @@ shimDance(1.07, 0.89, 0.12); // D major retro arpeggio run</code></pre>
             let currentCategory = 'core';
             let orbitScreenshots = screenshotsDB.core;
             let orbitCards = [];
-            let isOrbitActive = false; // Disabled by default as requested!
+            let isOrbitActive = false; // Always OFF on refresh (hard default)
+            try {
+                // Ensure orbit state is never restored from storage; clear any legacy keys
+                localStorage.removeItem('btron_orbit');
+                localStorage.removeItem('btron_orbit_active');
+            } catch (e) { }
             let isOrbitHovered = false;
             let orbitAngle = 0;
             let targetOrbitAngle = 0;
@@ -8499,8 +8576,8 @@ shimDance(1.07, 0.89, 0.12); // D major retro arpeggio run</code></pre>
             window.toggleOrbitScreens = function (forceState) {
                 isOrbitActive = (typeof forceState === 'boolean') ? forceState : !isOrbitActive;
 
-                // Ensure cards exist
-                if (!cardsBuilt) {
+                // Ensure cards exist only when actively turned ON
+                if (isOrbitActive && !cardsBuilt) {
                     initOrbitScreens(currentCategory);
                 }
 
@@ -8544,6 +8621,9 @@ shimDance(1.07, 0.89, 0.12); // D major retro arpeggio run</code></pre>
                     }
                 }
             };
+
+            // Enforce hard default: Orbits are ALWAYS OFF on refresh
+            window.toggleOrbitScreens(false);
 
             window.orbitStepScreenshot = function (direction) {
                 if (!isOrbitActive) {

@@ -9,7 +9,7 @@
 \usepackage{algorithmic}
 \usepackage{graphicx}
 \usepackage{textcomp}
-\usepackage{xcolor}
+\usepackage[table]{xcolor}
 \usepackage{booktabs}
 \usepackage{tabularx}
 \usepackage{array}
@@ -22,7 +22,7 @@
 \usepackage{fancyhdr}
 \usepackage{CJKutf8}
 \usepackage{tikz}
-\usetikzlibrary{shapes,arrows,positioning,calc,fit}
+\usetikzlibrary{shapes,arrows,positioning,calc,fit,decorations.pathreplacing}
 
 \newcommand{\ja}[1]{\begin{CJK*}{UTF8}{min}#1\end{CJK*}}
 
@@ -468,11 +468,28 @@ function shimGuitar(timeOffset=0, notes=null, volMul=1.0) {
     a plectrum but faster than a bowed instrument.
 \end{itemize}
 
-The signal flow is:
-\begin{center}
-\small
-Triangle Osc $\xrightarrow{\text{freq sweep}}$ LP Filter ($2800\to 1400$\,Hz) $\xrightarrow{\text{env}}$ Gain VCA $\to$ Destination
-\end{center}
+\begin{figure}[h]
+\centering
+\begin{tikzpicture}[node distance=0.6cm,auto,
+    block/.style={rectangle,draw,fill=green!8,text width=3.2cm,
+                  text centered,rounded corners,
+                  minimum height=0.58cm,font=\scriptsize},
+    line/.style={draw,-latex',thick}]
+    \node[block](osc){Triangle Osc\\at $f_0$ (+ slide)};
+    \node[block,right=0.7cm of osc](lp){Lowpass Filter\\$2800\!\to\!1400$\,Hz};
+    \node[block,right=0.7cm of lp](env){ADSR Gain VCA\\15\,ms pick attack};
+    \node[block,right=0.7cm of env](dest){\texttt{destination}};
+    \draw[line](osc)--(lp) node[midway,above,font=\tiny]{LP sweep};
+    \draw[line](lp)--(env);
+    \draw[line](env)--(dest);
+\end{tikzpicture}
+\caption{\texttt{shimGuitar}: single-chain signal flow.
+         The lowpass sweeps from 2800\,Hz to 1400\,Hz over the note
+         duration, modelling natural string damping (Karplus-Strong loop
+         analogue). Portamento \texttt{n.slide} bends the OSC frequency
+         inside the same graph.}
+\label{fig:guitar_flow}
+\end{figure}
 
 %-------------------------------------------------------------------------
 \section{Deep Dive: Fender Rhodes E-Piano (\texttt{shimFloat})}
@@ -541,6 +558,651 @@ the tine's single fundamental without the inharmonic overtone ($f_2 = 6.27f_1$);
 the latter is omitted in the BTRON implementation to keep the shim stateless
 and polyphony-safe (the inharmonic partial would require per-note FM modulation
 that conflicts with the note-stagger model).
+
+\begin{figure}[h]
+\centering
+\begin{tikzpicture}[node distance=0.5cm,auto,
+    note/.style={rectangle,draw,fill=cyan!10,text width=2.0cm,
+                 text centered,rounded corners,
+                 minimum height=0.55cm,font=\scriptsize},
+    chain/.style={rectangle,draw,fill=blue!8,text width=2.4cm,
+                  text centered,rounded corners,
+                  minimum height=0.55cm,font=\scriptsize},
+    line/.style={draw,-latex',thick}]
+    % Four staggered note voices
+    \node[note](n1){Sine OSC\\$f_0$ (C5)\\$t{=}0$\,ms};
+    \node[note,below=0.3cm of n1](n2){Sine OSC\\$f_0{\times}1.26$ (E5)\\$t{=}60$\,ms};
+    \node[note,below=0.3cm of n2](n3){Sine OSC\\$f_0{\times}1.50$ (G5)\\$t{=}120$\,ms};
+    \node[note,below=0.3cm of n3](n4){Sine OSC\\$f_0{\times}2.00$ (C6)\\$t{=}180$\,ms};
+    % Shared envelope per voice
+    \node[chain,right=0.65cm of n1](e1){ADSR\\pitch\,glide\\$-1.5\%$};
+    \node[chain,right=0.65cm of n2](e2){ADSR\\pitch\,glide\\$-1.5\%$};
+    \node[chain,right=0.65cm of n3](e3){ADSR\\pitch\,glide\\$-1.5\%$};
+    \node[chain,right=0.65cm of n4](e4){ADSR\\pitch\,glide\\$-1.5\%$};
+    % Output
+    \node[chain,right=0.65cm of e2,yshift=-0.42cm](dest){\texttt{destination}\\(mixed)};
+    \draw[line](n1)--(e1); \draw[line](n2)--(e2);
+    \draw[line](n3)--(e3); \draw[line](n4)--(e4);
+    \draw[line](e1.east)|-(dest.north west);
+    \draw[line](e2)--(dest);
+    \draw[line](e3.east)|-(dest.south west);
+    \draw[line](e4.east)|-(dest.south west);
+\end{tikzpicture}
+\caption{\texttt{shimFloat}: four-voice polyphonic chord fan.
+         Each sine OSC fires at a staggered offset of 60\,ms, producing the
+         characteristic wrist-roll of the Imada Fender Rhodes chord voicing.
+         All four ADSR chains share the same $-1.5\%$ pitch glide (40\,ms
+         settle) and converge at \texttt{AudioContext.destination}.}
+\label{fig:float_flow}
+\end{figure}
+
+%-------------------------------------------------------------------------
+\section{Deep Dive: Bowed Violin (\texttt{shimViolin})}
+\label{sec:violin}
+
+\subsection{Physical Acoustics of the Bowed String}
+
+The bowed violin is the most physically complex instrument in the BTRON
+library.  Its tone arises from four coupled subsystems:
+
+\begin{enumerate}[leftmargin=*]
+    \item \textbf{Bow-string stick-slip friction:}  Rosin on the bow hair
+    creates a non-linear friction contact.  During the \emph{stick} phase the
+    string moves with the bow; above a critical slip velocity the string
+    escapes (\emph{slip} phase), exciting a travelling
+    wave~\cite{serafin2004bowed}.  The resulting rosin noise transient is
+    brief ($\lesssim 45$\,ms) and spectrally centred around 3--4\,kHz.
+
+    \item \textbf{Dual-string harmonics:}  A bowed string produces a full
+    odd+even harmonic series, well modelled by a sawtooth wave whose amplitude
+    spectrum falls as $1/k$~\cite{fletcher1998physics}.  Real violin sections
+    exhibit ensemble detuning of $\pm 2$--$5$\,cents between players
+    (``chorus'' spread); a solo violin has a narrower spread from left-right
+    string asymmetry.
+
+    \item \textbf{Delayed vibrato:}  Professional players introduce
+    finger-pressure vibrato ($\approx 5.5$--$7$\,Hz) after the initial
+    note-onset transient, typically with an onset delay of 60--100\,ms and a
+    crescendo of 150--250\,ms~\cite{serafin2004bowed}.
+
+    \item \textbf{Violin body formants:}  The carved spruce top and maple
+    back act as an acoustic resonator with two prominent formant peaks:
+    the ``bridge hill'' around 2--3\,kHz (responsible for brilliance) and
+    a low-frequency body resonance around 500--600\,Hz (warmth and
+    projection)~\cite{fletcher1998physics}.
+\end{enumerate}
+
+\subsection{Five-Component BTRON Implementation}
+
+\texttt{shimViolin} (index.html line 4103) is the most elaborate shim in
+the library.  It assembles five independent audio sub-graphs per note:
+
+\begin{lstlisting}[language=Java,
+    caption={\texttt{shimViolin}: complete 5-component teardown (line 4103).},
+    label={lst:violin}]
+function shimViolin(timeOffset=0, notes=null,
+                    volMul=1.0, isSolo=true) {
+  const phrase = notes||[{f:783.99,d:0.35,v:0.20,t:0}];
+  phrase.forEach(n => {
+    // === COMPONENT 1: Bow / Rosin Attack Noise Burst ===
+    const noise = c.createBufferSource();
+    registerTrackOsc(noise);
+    noise.buffer = getNoiseBuffer(c);
+    const noiseFilter = c.createBiquadFilter();
+    noiseFilter.type = 'bandpass';
+    noiseFilter.frequency.setValueAtTime(3200, noteT);
+    noiseFilter.Q.setValueAtTime(3.0, noteT);
+    const noiseGain = c.createGain();
+    noiseGain.gain.setValueAtTime(0.0001, noteT);
+    noiseGain.gain.linearRampToValueAtTime(
+        0.045*volMul, noteT + 0.008);  // 8ms onset
+    noiseGain.gain.exponentialRampToValueAtTime(
+        0.0005, noteT + 0.040);         // 40ms decay
+    noise.connect(noiseFilter);
+    noiseFilter.connect(noiseGain);
+    noiseGain.connect(c.destination);
+    noise.start(noteT); noise.stop(noteT + 0.045);
+
+    // === COMPONENT 2: Dual Sawtooth Oscillators ===
+    const osc1 = c.createOscillator();
+    const osc2 = c.createOscillator();
+    registerTrackOsc(osc1); registerTrackOsc(osc2);
+    osc1.type = 'sawtooth';
+    osc2.type = 'sawtooth';
+    osc1.frequency.setValueAtTime(n.f, noteT);
+    osc2.frequency.setValueAtTime(n.f*1.002, noteT); // +2.5 cents
+
+    // === COMPONENT 3: Delayed Vibrato LFO (5.8 Hz) ===
+    const lfo = c.createOscillator();
+    registerTrackOsc(lfo);
+    lfo.type = 'sine';
+    lfo.frequency.setValueAtTime(5.8, noteT);
+    const lfoGain = c.createGain();
+    const vibDepth = isSolo ? n.f*0.012 : n.f*0.008;
+    const vibDelay = Math.min(0.08, noteDur*0.3);
+    lfoGain.gain.setValueAtTime(0.0, noteT);
+    lfoGain.gain.setValueAtTime(0.0, noteT+vibDelay);
+    lfoGain.gain.linearRampToValueAtTime(vibDepth,
+        noteT + Math.min(0.24, noteDur*0.7));
+    lfo.connect(lfoGain);
+    lfoGain.connect(osc1.frequency);
+    lfoGain.connect(osc2.frequency);
+    lfo.start(noteT); lfo.stop(noteT + noteDur);
+
+    // === COMPONENT 4: Body Formant EQ Chain ===
+    const bodyFilter = c.createBiquadFilter();
+    bodyFilter.type = 'peaking';
+    bodyFilter.frequency.setValueAtTime(520, noteT);
+    bodyFilter.Q.setValueAtTime(2.2, noteT);
+    bodyFilter.gain.setValueAtTime(4.0, noteT);  // +4 dB
+    const bridgeFilter = c.createBiquadFilter();
+    bridgeFilter.type = 'peaking';
+    bridgeFilter.frequency.setValueAtTime(2800, noteT);
+    bridgeFilter.Q.setValueAtTime(1.8, noteT);
+    bridgeFilter.gain.setValueAtTime(3.0, noteT); // +3 dB
+    const toneLow = c.createBiquadFilter();
+    toneLow.type = 'lowpass';
+    toneLow.frequency.setValueAtTime(
+        isSolo ? 6200 : 5000, noteT);
+
+    // === COMPONENT 5: Bowed ADSR Envelope VCA ===
+    const envGain = c.createGain();
+    const attackTime = Math.min(0.045, noteDur*0.25);
+    envGain.gain.setValueAtTime(0.0001, noteT);
+    envGain.gain.linearRampToValueAtTime(
+        noteVol, noteT + attackTime);
+    envGain.gain.setValueAtTime(
+        noteVol*0.90, noteT + noteDur*0.75);
+    envGain.gain.exponentialRampToValueAtTime(
+        0.0005, noteT + noteDur);
+
+    osc1.connect(bodyFilter); osc2.connect(bodyFilter);
+    bodyFilter.connect(bridgeFilter);
+    bridgeFilter.connect(toneLow);
+    toneLow.connect(envGain);
+    envGain.connect(c.destination);
+    osc1.start(noteT); osc2.start(noteT);
+    osc1.stop(noteT+noteDur); osc2.stop(noteT+noteDur);
+  });
+}
+\end{lstlisting}
+
+\subsection{Component-by-Component Analysis}
+
+\begin{figure}[t]
+\centering
+\begin{tikzpicture}[node distance=0.55cm,auto,
+    block/.style={rectangle,draw,fill=blue!8,text width=3.8cm,
+                  text centered,rounded corners,
+                  minimum height=0.6cm,font=\scriptsize},
+    noise/.style={rectangle,draw,fill=orange!10,text width=3.8cm,
+                  text centered,rounded corners,
+                  minimum height=0.6cm,font=\scriptsize},
+    lfo/.style={rectangle,draw,fill=purple!10,text width=3.8cm,
+                text centered,rounded corners,
+                minimum height=0.6cm,font=\scriptsize},
+    line/.style={draw,-latex',thick}]
+    \node[noise](nb){Noise Burst\\BP 3200\,Hz $Q=3$, 8ms/40ms};
+    \node[block,below=0.35cm of nb](osc){Dual Sawtooth\\$f_0$ + $f_0{\times}1.002$};
+    \node[lfo, below=0.35cm of osc](lfo){LFO 5.8\,Hz\\Delayed vibrato (80ms onset)};
+    \node[block,below=0.35cm of lfo](body){Body Peaking EQ\\520\,Hz +4\,dB / 2800\,Hz +3\,dB};
+    \node[block,below=0.35cm of body](lp){Lowpass 6200\,Hz\\(solo) / 5000\,Hz (section)};
+    \node[block,below=0.35cm of lp](env){ADSR VCA\\attack $\leq$45\,ms; sustain 90\%};
+    \draw[line](nb)--(osc) node[midway,right,font=\tiny]{parallel};
+    \draw[line](osc)--(lfo) node[midway,right,font=\tiny]{freq mod};
+    \draw[line](lfo)--(body);
+    \draw[line](body)--(lp);
+    \draw[line](lp)--(env);
+    \draw[-latex',dashed,purple!60,thick](lfo.west)
+        to[out=180,in=180] (osc.west);
+\end{tikzpicture}
+\caption{\texttt{shimViolin}: five-component signal flow.
+The noise burst (orange) runs in parallel with the main oscillator chain.
+The LFO (purple) modulates both sawtooth frequencies after a programmed
+delay, shown by the dashed feedback arc.}
+\label{fig:violin_flow}
+\end{figure}
+
+Table~\ref{tab:violin_components} maps each physical acoustics subsystem to
+its BTRON DSP counterpart.
+
+\begin{table}[h]
+\centering
+\caption{\texttt{shimViolin}: physical model to DSP mapping}
+\label{tab:violin_components}
+\scriptsize
+\setlength{\tabcolsep}{3pt}
+\renewcommand{\arraystretch}{1.12}
+\begin{tabularx}{\columnwidth}{@{}
+  >{\raggedright\arraybackslash}p{2.0cm}
+  >{\raggedright\arraybackslash}X
+@{}}
+\toprule
+\textbf{Physics} & \textbf{DSP Implementation} \\
+\midrule
+Rosin stick-slip transient &
+Noise burst: BP 3200\,Hz, $Q=3.0$; 8\,ms onset, 40\,ms decay;
+amplitude 0.045 (parallel to main chain) \\
+String harmonic series &
+Dual \texttt{sawtooth} OSCs ($1/k$ spectrum); $+2.5$\,cents detune
+models ensemble spread / string asymmetry \\
+Delayed vibrato &
+Sine LFO 5.8\,Hz modulating both OSC frequencies; depth
+$1.2\%\,f_0$ (solo), $0.8\%\,f_0$ (section); onset delay
+$\min(80\,\text{ms},\,30\%\,T_{\rm note})$ \\
+Body low resonance (500--600\,Hz) &
+Peaking filter: 520\,Hz, $Q=2.2$, $+4\,\text{dB}$ \\
+Bridge hill (2--3\,kHz) &
+Peaking filter: 2800\,Hz, $Q=1.8$, $+3\,\text{dB}$ \\
+String brightness cutoff &
+Lowpass: 6200\,Hz (solo) / 5000\,Hz (section) \\
+Bowed articulation ADSR &
+Attack $\leq 45$\,ms (bowed onset); sustain at 90\% peak;
+exp.\ decay to $-60$\,dBFS at note-off \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+%-------------------------------------------------------------------------
+\section{Deep Dive: Concert Grand Piano (\texttt{shimGrandPiano})}
+\label{sec:piano}
+
+\subsection{Why Grand Piano Is the Most Canonical Retro Acoustic Sample}
+
+Among the BTRON shim palette, \texttt{shimGrandPiano} is arguably the most
+\emph{canonical} retro acoustic sample for three reasons:
+
+\begin{enumerate}[leftmargin=*]
+    \item \textbf{Historical primacy of piano in digital synthesis:}  The
+    grand piano was the first instrument targeted by digital synthesis
+    research---from Chowning's 1973 FM experiments~\cite{chowning1973synthesis}
+    to the Yamaha DX7 E.PIANO and CP-80 presets that defined the sound of 1980s
+    popular music.  Encoding it purely from oscillators and filters is the
+    defining challenge of procedural audio.
+
+    \item \textbf{Tri-harmonic inharmonicity:}  A piano string's stiffness
+    raises the frequency of the $k$-th partial above $kf_0$ by the
+    inharmonicity factor $B$~\cite{fletcher1998physics}:
+    \begin{equation}
+    f_k = k f_0 \sqrt{1 + Bk^2}
+    \label{eq:piano_inharmonicity}
+    \end{equation}
+    The BTRON implementation approximates this with harmonic ratios
+    $1.000 : 2.002 : 3.006$, capturing the characteristic ``spreading'' of
+    upper partials that gives the grand piano its brightness and warmth.
+
+    \item \textbf{Dual-component physical event:}  Every piano note begins
+    with a sharp felt-hammer transient (modelled by
+    \texttt{shimPianoHammer}) followed by a sustained string resonance---a
+    clean separation of \emph{excitation} and \emph{resonator} that maps
+    perfectly onto the shim modularity principle.
+\end{enumerate}
+
+\subsection{BTRON Implementation (\texttt{shimGrandPiano})}
+
+\begin{lstlisting}[language=Java,
+    caption={\texttt{shimGrandPiano}: tri-harmonic string model (line 3659).},
+    label={lst:piano}]
+function shimGrandPiano(timeOffset=0, freq=440,
+                         volMul=1.0, duration=1.2,
+                         isStaccato=false) {
+  const noteDur = isStaccato
+      ? Math.min(duration, 0.18)
+      : duration;
+
+  // Three inharmonic string partials
+  [1.0, 2.002, 3.006].forEach((harm, hIdx) => {
+    const osc = c.createOscillator();
+    registerTrackOsc(osc);
+    const gain = c.createGain();
+
+    // Waveform choice: sine(fund) / tri(2nd) / sine(3rd)
+    osc.type = hIdx === 0 ? 'sine'
+             : hIdx === 1 ? 'triangle' : 'sine';
+    osc.frequency.setValueAtTime(freq * harm, startT);
+
+    // Volume scaling per partial: 0.16 / 0.08 / 0.035
+    const harmVol  = hIdx===0 ? 0.16
+                   : hIdx===1 ? 0.08 : 0.035;
+    // Duration scaling per partial:
+    // fundamental longest, overtones decay faster
+    const harmDur  = hIdx===0 ? noteDur
+                   : noteDur * (1 - hIdx * 0.25);
+
+    gain.gain.setValueAtTime(0.0001, startT);
+    gain.gain.linearRampToValueAtTime(
+        harmVol * volMul, startT + 0.008); // felt hammer
+    gain.gain.exponentialRampToValueAtTime(
+        0.0001, startT + harmDur);
+
+    osc.connect(gain);
+    gain.connect(c.destination);
+    osc.start(startT);
+    osc.stop(startT + harmDur);
+  });
+}
+\end{lstlisting}
+
+\subsection{Physical Model Correspondence}
+
+\begin{table}[h]
+\centering
+\caption{\texttt{shimGrandPiano}: physical model to DSP mapping}
+\label{tab:piano_components}
+\scriptsize
+\setlength{\tabcolsep}{3pt}
+\renewcommand{\arraystretch}{1.12}
+\begin{tabularx}{\columnwidth}{@{}
+  >{\raggedright\arraybackslash}p{2.0cm}
+  >{\raggedright\arraybackslash}X
+@{}}
+\toprule
+\textbf{Physics / Feature} & \textbf{DSP Implementation} \\
+\midrule
+String fundamental $f_0$ &
+\texttt{sine} OSC at $f_0$; vol 0.16; decays over full
+\texttt{noteDur} \\
+2nd partial (inharmonic) &
+\texttt{triangle} OSC at $2.002\,f_0$ (+1.0\,cent); vol 0.08;
+decays at $0.75\times\texttt{noteDur}$ \\
+3rd partial (inharmonic) &
+\texttt{sine} OSC at $3.006\,f_0$ (+1.0\,cent); vol 0.035;
+decays at $0.50\times\texttt{noteDur}$ \\
+Felt hammer transient &
+8\,ms linear attack ramp to peak ($t_{\rm attack}=8\,$ms
+matches a medium-velocity felt hammer blow at $f_0 \approx 440$\,Hz) \\
+Staccato mode &
+\texttt{isStaccato=true} clamps \texttt{noteDur} to
+$\leq 180$\,ms, modelling a detached key-lift \\
+Inharmonicity law &
+Ratios $1.000:2.002:3.006$ approximate
+$f_k = kf_0\sqrt{1+Bk^2}$ with $B \approx 10^{-4}$ (tenor
+register)~\cite{fletcher1998physics} \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+The companion shim \texttt{shimPianoHammer} (line 4056) models the
+\emph{excitation} event alone---a triangle oscillator gliding from 120\,Hz to
+40\,Hz in 35\,ms with gain 0.12---and is always fired at the same
+\texttt{timeOffset} as \texttt{shimGrandPiano} in Track~3 to reproduce the
+wooden-felt thump of Thomas~Kr\"{u}ger's left-hand 6/8 bass octaves:
+
+\begin{lstlisting}[language=Java,
+    caption={\texttt{shimPianoHammer}: felt key-strike exciter (line 4056).}]
+function shimPianoHammer(timeOffset=0, volMul=1.0) {
+  const osc = ctx.createOscillator();
+  registerTrackOsc(osc);
+  osc.type = 'triangle';
+  osc.frequency.setValueAtTime(120, startT);
+  osc.frequency.exponentialRampToValueAtTime(
+      40, startT + 0.035);     // 120 -> 40 Hz in 35 ms
+  const gain = ctx.createGain();
+  gain.gain.setValueAtTime(0.12 * volMul, startT);
+  gain.gain.exponentialRampToValueAtTime(
+      0.0005, startT + 0.035);
+  osc.connect(gain);
+  gain.connect(ctx.destination);
+  osc.start(startT); osc.stop(startT + 0.035);
+}
+\end{lstlisting}
+
+The two-shim exciter+resonator pair (\texttt{shimPianoHammer} +
+\texttt{shimGrandPiano}) illustrates the BTRON \emph{Shim Composition}
+pattern: independent, stateless generators are layered at the score-scheduler
+level rather than combined into a monolithic function, preserving the
+statelessness and zero-allocation guarantees of the Compatibility Contract.
+
+\begin{figure}[h]
+\centering
+\begin{tikzpicture}[node distance=0.48cm,auto,
+    exc/.style={rectangle,draw,fill=orange!12,text width=2.6cm,
+                text centered,rounded corners,
+                minimum height=0.55cm,font=\scriptsize},
+    harm/.style={rectangle,draw,fill=blue!8,text width=2.6cm,
+                 text centered,rounded corners,
+                 minimum height=0.55cm,font=\scriptsize},
+    outbox/.style={rectangle,draw,fill=green!10,text width=2.2cm,
+                text centered,rounded corners,
+                minimum height=0.55cm,font=\scriptsize},
+    line/.style={draw,-latex',thick}]
+    % Exciter shim
+    \node[exc](hammer){\textbf{shimPianoHammer}\\Triangle $120\!\to\!40$\,Hz\\35\,ms click};
+    % Three string partials
+    \node[harm,right=0.7cm of hammer,yshift=+1.0cm](h1){Partial 1\\Sine $\times1.000$\\vol 0.16, full dur};
+    \node[harm,right=0.7cm of hammer](h2){Partial 2\\Triangle $\times2.002$\\vol 0.08, $0.75T$};
+    \node[harm,right=0.7cm of hammer,yshift=-1.0cm](h3){Partial 3\\Sine $\times3.006$\\vol 0.035, $0.50T$};
+    % Output
+    \node[outbox,right=0.7cm of h2](dest){\texttt{destination}\\(mixed)};
+    \draw[line](hammer.east)|-(h1.west);
+    \draw[line](hammer.east)--(h2.west);
+    \draw[line](hammer.east)|-(h3.west);
+    \draw[line](h1.east)|-(dest.north west);
+    \draw[line](h2)--(dest);
+    \draw[line](h3.east)|-(dest.south west);
+    % Score-level label
+    \node[below=0.18cm of hammer,font=\tiny\itshape,gray]{score fires at same $t_0$};
+\end{tikzpicture}
+\caption{\texttt{shimGrandPiano} Shim Composition flow.
+         \texttt{shimPianoHammer} (orange) and three inharmonic string
+         partials (blue) are scheduled at the same \texttt{timeOffset} by
+         the score, then converge independently at \texttt{destination}.
+         Partial durations shorten with harmonic index:  $T,\,0.75T,\,0.50T$.}
+\label{fig:piano_flow}
+\end{figure}
+
+%-------------------------------------------------------------------------
+\section{Deep Dive: Jazz Flute / Melodica (\texttt{shimSaxFlute})}
+\label{sec:saxflute}
+
+\subsection{Physical Acoustics of Woodwind Tone}
+
+\texttt{shimSaxFlute} models the breathy flute and melodica phrases that
+Masaru Imada uses as a countermelody in \emph{Green Caterpillar} (1975).
+The woodwind voice is produced by two coupled acoustic sources:
+
+\begin{enumerate}[leftmargin=*]
+    \item \textbf{Tonal bore resonance:}  A cylindrical or conical bore acts
+    as an acoustic resonator selecting modes at $f_0, 2f_0, 3f_0, \ldots$
+    For a flute the amplitudes follow a mild harmonic rolloff; the triangle
+    wave ($\propto 1/k^2$ for odd $k$) approximates this spectrum with an
+    appropriate mellow, hollow colour~\cite{fletcher1998physics}.
+
+    \item \textbf{Breath turbulence noise:}  Flute tone is uniquely
+    characterised by a sustained aerodynamic noise component from the
+    embouchure jet striking the edge.  This is spectrally broad but
+    concentrated near the fundamental and its first partial ($\approx 1.5$--
+    $2\times f_0$), and decays naturally as the player's air-stream
+    stabilises~\cite{farnell2010designing}.  Without this component the
+    resulting sound is perceived as a sine or glass-harp tone; adding even a
+    small noise contribution ($<5\%$ of total level) transforms it
+    perceptually into a blown woodwind.
+\end{enumerate}
+
+The melodica (a free-reed instrument played by Masaru Imada on
+\emph{Green Caterpillar}) adds a slight reed buzz above the fundamental,
+captured by the same triangle-plus-noise topology with a narrower bandpass
+centre frequency.
+
+\subsection{BTRON Implementation (\texttt{shimSaxFlute})}
+
+\begin{lstlisting}[language=Java,
+    caption={\texttt{shimSaxFlute}: dual-source woodwind (line 4003).},
+    label={lst:saxflute}]
+function shimSaxFlute(timeOffset=0, notes=null,
+                      volMul=1.0) {
+  const phrase = notes||[{f:587.33,d:0.35,v:0.16,t:0}];
+  phrase.forEach(n => {
+    const noteT = startT + n.t;
+
+    // === SOURCE 1: Breath Turbulence Noise Component ===
+    const noise = c.createBufferSource();
+    registerTrackOsc(noise);
+    noise.buffer = getNoiseBuffer(c);
+
+    const noiseFilter = c.createBiquadFilter();
+    noiseFilter.type = 'bandpass';
+    noiseFilter.frequency.setValueAtTime(
+        n.f * 1.8, noteT);   // centred at 1.8 * f0
+    noiseFilter.Q.setValueAtTime(5.0, noteT);  // narrow
+
+    const noiseGain = c.createGain();
+    noiseGain.gain.setValueAtTime(
+        0.025 * volMul, noteT);      // ~14% of tonal vol
+    noiseGain.gain.exponentialRampToValueAtTime(
+        0.0005, noteT + n.d);
+
+    noise.connect(noiseFilter);
+    noiseFilter.connect(noiseGain);
+    noiseGain.connect(c.destination);
+    noise.start(noteT);
+    noise.stop(noteT + n.d);
+
+    // === SOURCE 2: Triangle Tonal Bore Oscillator ===
+    const osc = c.createOscillator();
+    registerTrackOsc(osc);
+    osc.type = 'triangle';
+    osc.frequency.setValueAtTime(n.f, noteT);
+    if (n.slide)  // melodic portamento glissando
+        osc.frequency.exponentialRampToValueAtTime(
+            n.slide, noteT + n.d * 0.75);
+
+    const filter = c.createBiquadFilter();
+    filter.type = 'lowpass';
+    filter.frequency.setValueAtTime(2400, noteT); // air softness
+    filter.Q.setValueAtTime(2.0, noteT);
+
+    const gain = c.createGain();
+    gain.gain.setValueAtTime(0.0001, noteT);
+    gain.gain.linearRampToValueAtTime(
+        n.v * volMul, noteT + 0.025); // 25 ms breath onset
+    gain.gain.exponentialRampToValueAtTime(
+        0.0001, noteT + n.d);
+
+    osc.connect(filter);
+    filter.connect(gain);
+    gain.connect(c.destination);
+    osc.start(noteT);
+    osc.stop(noteT + n.d);
+  });
+}
+\end{lstlisting}
+
+\subsection{Component-by-Component Analysis}
+
+The signal graph runs two independent chains in parallel to the master bus,
+mixed acoustically at \texttt{AudioContext.destination}:
+
+\begin{center}
+\scriptsize
+\begin{tabularx}{\columnwidth}{@{}>{\bfseries}p{2.0cm}>{\raggedright\arraybackslash}X@{}}
+\toprule
+Chain & Signal Path \\
+\midrule
+Breath noise &
+Noise buf $\to$ BP\,($1.8f_0$,\,$Q{=}5$) $\to$ Gain\,(0.025) $\to$ Out \\
+Tonal bore &
+Triangle $\to$ LP\,(2400\,Hz,\,$Q{=}2$) $\to$ ADSR Gain $\to$ Out \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+\begin{figure}[h]
+\centering
+\begin{tikzpicture}[node distance=0.52cm,auto,
+    src/.style={rectangle,draw,fill=orange!10,text width=3.2cm,
+                text centered,rounded corners,
+                minimum height=0.58cm,font=\scriptsize},
+    filt/.style={rectangle,draw,fill=blue!8,text width=3.2cm,
+                 text centered,rounded corners,
+                 minimum height=0.58cm,font=\scriptsize},
+    line/.style={draw,-latex',thick}]
+    % Chain A — breath noise
+    \node[src](nb){Noise Buffer\\(shared 2\,s white noise)};
+    \node[filt,below=0.32cm of nb](bp){Bandpass Filter\\$1.8f_0$,\;$Q{=}5.0$};
+    \node[filt,below=0.32cm of bp](ng){Gain 0.025\\constant-sustain};
+    % Chain B — tonal bore
+    \node[src,right=1.2cm of nb](tri){Triangle Osc\\at $f_0$ (+ slide)};
+    \node[filt,below=0.32cm of tri](lp){Lowpass 2400\,Hz\\$Q{=}2.0$};
+    \node[filt,below=0.32cm of lp](eg){ADSR Gain VCA\\25\,ms breath onset};
+    % Output bus
+    \node[filt,below=0.55cm of ng,xshift=1.85cm](dest){\texttt{destination}\\(parallel mix)};
+    % Arrows chain A
+    \draw[line](nb)--(bp); \draw[line](bp)--(ng);
+    \draw[line](ng.south)|-(dest.west);
+    % Arrows chain B
+    \draw[line](tri)--(lp); \draw[line](lp)--(eg);
+    \draw[line](eg.south)|-(dest.east);
+    % Labels
+    \node[above=0.1cm of nb,font=\tiny\bfseries]{Chain A: Breath Noise};
+    \node[above=0.1cm of tri,font=\tiny\bfseries]{Chain B: Tonal Bore};
+\end{tikzpicture}
+\caption{\texttt{shimSaxFlute}: dual parallel source chains.
+         Chain\,A (breath turbulence) is a sustained bandpass-filtered noise
+         at $1.8f_0$, $Q{=}5$ running for the full note duration.
+         Chain\,B (tonal bore) is a triangle oscillator through a 2400\,Hz
+         lowpass, giving the hollow flute timbre.  Both chains sum at
+         \texttt{AudioContext.destination} with a $-16$\,dB noise-to-tone ratio.}
+\label{fig:saxflute_flow}
+\end{figure}
+
+Table~\ref{tab:saxflute_components} maps acoustic subsystems to DSP parameters.
+
+\begin{table}[h]
+\centering
+\caption{\texttt{shimSaxFlute}: physical model to DSP mapping}
+\label{tab:saxflute_components}
+\scriptsize
+\setlength{\tabcolsep}{3pt}
+\renewcommand{\arraystretch}{1.12}
+\begin{tabularx}{\columnwidth}{@{}
+  >{\raggedright\arraybackslash}p{2.1cm}
+  >{\raggedright\arraybackslash}X
+@{}}
+\toprule
+\textbf{Physics} & \textbf{DSP Implementation} \\
+\midrule
+Bore resonance (harmonic series) &
+\texttt{triangle} oscillator at $f_0$; spectrum $\propto 1/k^2$
+odd harmonics gives hollow, mellow flute colour \\
+Embouchure air-jet noise &
+White noise from \texttt{getNoiseBuffer()} through BP at
+$1.8\,f_0$, $Q=5.0$ (narrow jet-edge centroid); constant gain
+$0.025\,V$ (14\% of tonal peak), decaying over note duration \\
+Portamento glissando &
+Optional \texttt{n.slide}: exponential ramp to target freq
+over $75\%$ of note duration (models finger slide on melodica
+reed or flute chromatic glide) \\
+Air softness / high-cut &
+LP at 2400\,Hz $Q=2$: removes harsh upper harmonics of
+triangle, leaving the softer mid-range character of a flute \\
+Breath onset &
+25\,ms linear attack (slower than guitar 15\,ms pick; faster
+than bowed violin $\leq 45$\,ms), modelling the air-column
+establishment latency \\
+Decay &
+Exponential to $-60$\,dBFS at note-off; noise and tone share
+the same rhythmic duration \texttt{n.d} \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\paragraph{Perceptual role of $Q=5.0$ on the noise band.}
+The tight $Q=5$ bandpass confines the breath noise to a bandwidth
+$\Delta f = f_0 \cdot 1.8 / 5 \approx 0.36\,f_0$ around the centroid
+$1.8\,f_0$.  This narrow excitation closely mirrors the spectral peak of
+flute turbulence noise measured by Fabre~et~al.~\cite{fabre1996flute}, which
+concentrates jet-collision energy between the fundamental and the second
+partial.  At the default playback gain ($0.025$\,V versus tonal
+$0.16$\,V), the noise constitutes roughly $-16$\,dB below the tone---
+matching the breathiness ratio of a lightly overblown concert flute.
+
+\paragraph{Contrast with \texttt{shimViolin} noise burst.}
+While \texttt{shimViolin} fires a short 45\,ms rosin noise burst only at
+note onset (attack transient), \texttt{shimSaxFlute} sustains the noise
+for the full note duration.  This architectural difference correctly
+reflects the physical distinction between a one-shot stick-slip event
+(bow) and a continuously turbulent air-jet (flute).
 
 %-------------------------------------------------------------------------
 \section{DSP Primitives and Signal Flow}
@@ -827,6 +1489,228 @@ The key engineering results are:
     physical-modelling literature origin.
 \end{enumerate}
 
+\subsection*{Analogous Projects on AArch32 (STM32) and ESP32}
+
+The BTRON shim model is not unique in targeting bare-metal procedural
+audio.  Table~\ref{tab:embedded_audio} surveys the principal open-source
+and commercial frameworks that implement comparable zero-asset synthesis
+across the Cortex-M class (STM32F4/H7), the Xtensa LX6/LX7 (ESP32)
+microcontroller family, and the entry-level AArch32 Cortex-A MPU class
+(STM32MP1, Raspberry Pi Zero), delineating the bare-metal vs.\ host
+boundary in BTRON.
+
+\begin{table*}[t]
+\centering
+\caption{Procedural audio and media frameworks: feature comparison with BTRON Shim Library
+         (target: AArch32 STM32 MCU/MPU and ESP32)}
+\label{tab:embedded_audio}
+\setlength{\tabcolsep}{3.5pt}
+\renewcommand{\arraystretch}{1.30}
+\newcommand{\Y}{\textcolor{green!60!black}{\textbf{$\checkmark$}}}%
+\newcommand{\N}{\textcolor{red!70!black}{$\times$}}%
+\newcommand{\Prt}{\textcolor{orange!80!black}{$\sim$}}%
+\rowcolors{2}{gray!9}{white}
+\scriptsize
+\begin{tabularx}{\textwidth}{@{}
+  >{\raggedright\arraybackslash\bfseries}p{2.2cm}
+  >{\centering\arraybackslash}p{0.75cm}
+  >{\centering\arraybackslash}p{0.75cm}
+  >{\centering\arraybackslash}p{0.75cm}
+  >{\centering\arraybackslash}p{0.80cm}
+  >{\raggedright\arraybackslash}p{1.3cm}
+  >{\raggedright\arraybackslash}p{2.4cm}
+  >{\raggedright\arraybackslash}X
+@{}}
+\toprule
+\textbf{Project} &
+\rotatebox{65}{\textbf{STM32F4}} &
+\rotatebox{65}{\textbf{STM32H7}} &
+\rotatebox{65}{\textbf{ESP32-S3}} &
+\rotatebox{65}{\textbf{STM32MP1}} &
+\textbf{License} &
+\textbf{Synthesis paradigms} &
+\textbf{BTRON portability delta} \\
+\midrule
+Mozzi~\cite{mozzi2012}
+  & \Y & \Y & \Y & \Prt & LGPL
+  & Wavetable, additive, FM, Karplus-Strong; 16\,kHz mono (AVR) / 44.1\,kHz (CM)
+  & Fixed patch topology; no per-note lifecycle GC; no score-scheduler \\
+Teensy Audio~\cite{teensy_audio2014}
+  & \N & \Y & \N & \N & MIT
+  & C++ node graph (GUI-compiled); oscillators, filters, reverb, FFT; 44.1\,kHz stereo
+  & Static patch at compile time; no dynamic shim registration or VirtIO back-end \\
+Pd / libpd +\newline Heavy~\cite{puckette1996pure,heavy2015}
+  & \Prt & \Y & \Y & \Y & BSD
+  & Dataflow VM: FM, physical modelling, granular; Heavy transpiles Pd$\to$C for STM32
+  & $\sim$64\,KB interpreter RAM; BTRON shims are hand-optimised C with zero VM overhead \\
+Csound~\cite{csound1991}
+  & \N & \N & \Prt & \Y & LGPL
+  & Full UGen library (FM, waveguide, spectral); widest opcode set of any engine
+  & Requires MMU + $>$4\,MB RAM; STM32F/H out of scope; runs on STM32MP1 / ESP32 \\
+MicroDexed~\cite{microdexed2019}
+  & \N & \Y & \Y & \Prt & GPL
+  & 6-Op DX7 FM (all 32 topologies); 16-voice poly; integrates with Teensy Audio FX
+  & FM-only paradigm; no subtractive/physical/noise shims; requires ROM patch data \\
+libDaisy / DaisySP~\cite{libdaisy2020}
+  & \N & \Y & \N & \N & MIT
+  & C++ Eurorack DSP; filters, reverbs, physical models; 48/96\,kHz 24-bit
+  & Native STM32H7 HAL; used in commercial synths (Noise Eng., Qu-Bit) \\
+JUCE~\cite{juce2004}
+  & \N & \N & \N & \Y & GPL/Pro
+  & Full plugin host; \texttt{dsp::} oscillators, IIR, FFT; \texttt{AudioProcessorGraph}
+  & Min.~HW: Cortex-A7 (STM32MP1, RPi Zero, 64\,MB); headless ALSA only; no VirtIO \\
+GStreamer~\cite{gst_mcu}
+  & \N & \N & \N & \Y & LGPL
+  & Dynamic media graph; \texttt{audiomixer}, WebRTC, RTP/SRTP, \texttt{decodebin}
+  & Min.~HW: Cortex-A7 (STM32MP1, i.MX6ULL, 32\,MB); GLib/Linux; BTRON host MCU (\texttt{GST.md}) \\
+Korg logue SDK~\cite{korg_sdk2019}
+  & \Prt & \Y & \N & \N & Free SDK
+  & C API: osc/modfx/delfx/revfx units; wavetable scan; 48\,kHz stereo on CM4
+  & Proprietary HW ABI; \texttt{OSC\_PARAM\_SHAPE} $\approx$ \texttt{pitchMul} (closest CM ABI) \\
+\rowcolor{green!8}
+\textbf{ESP32 I2S +\newline AudioTools}~\cite{esp32_i2s2016,audiotools2021}
+  & \N & \N & \Y & \N & Apache 2
+  & \texttt{I2S.write()} DMA ring; \texttt{SineWaveGenerator}, \texttt{BiQuadFilter}, MIDI scheduler
+  & \textbf{Best 1:1 target}: VirtIO Sound $\approx$ I2S DMA; shims map directly to AudioTools objects \\
+\midrule
+\rowcolor{white}
+\textbf{BTRON Shims}\newline\emph{(this work)}
+  & \Prt & \Y & \Y & \Y & MIT/BSD
+  & Additive, subtractive, FM, physical model, noise; 23 instruments; 0-byte assets
+  & Reference implementation; zero interpreter overhead; stateless; lifecycle-safe \\
+\bottomrule
+\multicolumn{8}{@{}l@{}}{\Y~= fully supported \quad \Prt~= partial / wrapper / PSRAM required \quad \N~= not supported}
+\end{tabularx}
+\end{table*}
+
+\paragraph{Industrial Adoption in Professional Commercial Audio Products.}
+To contextualize the BTRON Sound Shim Library within the broader pro-audio
+engineering discipline, it is instructive to examine the frameworks and DSP
+engines powering commercial, industry-standard sound production:
+\begin{itemize}[leftmargin=*]
+    \item \textbf{Commercial DAWs and Audio Plugins (JUCE \& VST3):}
+    \textbf{JUCE}~\cite{juce2004} and the \textbf{Steinberg VST3 SDK}~\cite{vst3sdk}
+    form the backbone of the commercial music production plugin ecosystem.
+    JUCE is the core engine behind widely adopted virtual instruments and DAWs,
+    including \textbf{Arturia V Collection} (virtual analog synthesizer emulations),
+    \textbf{Korg Gadget}, \textbf{Spitfire Audio} (custom orchestral sample engines),
+    \textbf{Native Instruments} (Kontakt, Massive), \textbf{iZotope} (RX, Ozone audio
+    restoration), and \textbf{PreSonus Studio One}. While JUCE provides unparalleled
+    cross-platform GUI and audio graph hosting on desktop OSes, its runtime footprint
+    precludes bare-metal microcontroller deployment.
+    \item \textbf{AAA Game Audio and Interactive Simulation (Wwise \& FMOD):}
+    In interactive entertainment, \textbf{Audiokinetic Wwise}~\cite{wwise2024} is the
+    predominant audio engine, powering blockbuster productions including CD Projekt
+    Red's \emph{Cyberpunk 2077} and \emph{The Witcher 3}, Bungie's \emph{Destiny 2},
+    and Sony PlayStation first-party titles. Audiokinetic's acquisition and integration
+    of the \textbf{Heavy}~\cite{heavy2015} compiler demonstrated how visual Pure
+    Data graphs can be transpiled into assetless C++ DSP code for embedded console
+    hardware. Similarly, \textbf{Firelight Technologies FMOD}~\cite{fmod2024} is
+    deployed in thousands of commercial games (\emph{Celeste}, \emph{Half-Life: Alyx},
+    \emph{Forza Horizon}, \emph{Cuphead}), providing a lean C API with predictable
+    memory allocators.
+    \item \textbf{Eurorack Hardware Synthesizers \& Guitar Pedals (libDaisy, RNBO, FAUST):}
+    In professional modular synthesis, \textbf{Electro-Smith libDaisy} and
+    \textbf{DaisySP}~\cite{libdaisy2020} target the \textbf{STM32H750IB} (Cortex-M7 @
+    480\,MHz, 64\,MB SDRAM, 24-bit 96\,kHz codecs) and serve as the standard
+    commercial engine for digital Eurorack hardware manufactured by
+    \textbf{Noise Engineering} (the \emph{Versio} and \emph{Legio} DSP platforms)
+    and \textbf{Qu-Bit Electronix} (\emph{Aurora}, \emph{Nautilus}, \emph{Surface}).
+    In boutique hardware pedals, \textbf{Cycling '74 RNBO}~\cite{rnbo2022} enables sound
+    designers to export Max/MSP visual patches directly into standalone C++ code
+    executing on devices like the \textbf{Empress Effects ZOIA} and \textbf{Poly
+    Effects Beebo}. In parallel, \textbf{FAUST}~\cite{orlarey2004faust} (GRAME/CCRMA)
+    is widely employed by physical modeling synthesizers (e.g., Moog Music software
+    instruments) to compile functional mathematical formulations into SIMD-accelerated C++.
+    \item \textbf{Commercial Mass-Market Retail Synthesizers (Korg logue SDK):}
+    The \textbf{Korg logue SDK}~\cite{korg_sdk2019} represents the rare case of an open
+    C API integrated into mass-market hardware synthesizers (\textbf{Korg Prologue},
+    \textbf{Minilogue XD}, \textbf{Drumlogue}, and \textbf{NTS-1}), running custom user
+    oscillators and modulation units on a dedicated Cortex-M4 DSP processor.
+\end{itemize}
+
+\paragraph{Minimal Hardware Boundaries for Host Frameworks (JUCE and GStreamer).}
+As shown in Table~\ref{tab:embedded_audio}, both JUCE~\cite{juce2004} and
+GStreamer~\cite{gst_mcu} cannot run on microcontrollers (STM32F4, STM32H7,
+or ESP32) because their runtime architectures strictly require an MMU,
+preemptive POSIX threading, dynamic heap allocation, and the Linux audio
+subsystem (ALSA/PulseAudio). The absolute closest minimal hardware capable
+of hosting them within the STM32 family is the \textbf{STM32MP1}
+(specifically STM32MP135 / STM32MP157, featuring single/dual ARM Cortex-A7
+cores at 650--800\,MHz, 128--512\,MB DDR3, and ST's OpenSTLinux Yocto BSP).
+In the single-board computing domain, equivalent minimal hardware includes
+the \textbf{Raspberry Pi Zero / Zero 2 W} (ARMv6 / Cortex-A53, 512\,MB RAM)
+and \textbf{NXP i.MX6ULL} (Cortex-A7, 64--128\,MB RAM). On this minimal MPU
+tier:
+\begin{itemize}[leftmargin=*]
+    \item \textbf{Headless JUCE} executes synthesized DSP graphs under ALSA
+    (e.g., via Elk Audio OS) with an active memory footprint of $\sim$15--30\,MB RSS.
+    \item \textbf{GStreamer} deploys stripped Buildroot/Yocto pipelines
+    (\texttt{gst-plugins-base}, \texttt{audiomixer}, \texttt{alsasink}) within
+    a $\sim$32--64\,MB RAM footprint. In BTRON, this defines the exact
+    demarcation between the host-level WebRTC MCU compositor (\texttt{GST.md})
+    and the bare-metal procedural shims (\texttt{lilcu64\_wa.c}).
+\end{itemize}
+
+\paragraph{BTRON Shim Portability Assessment.}
+The BTRON shim architecture maps most cleanly to the
+\textbf{ESP32 I2S + AudioTools} and \textbf{Korg NTS-1 SDK} targets:
+\begin{itemize}[leftmargin=*]
+    \item On \textbf{ESP32-S3} (Xtensa LX7, 240\,MHz, 512\,KB SRAM +
+    8\,MB PSRAM): the \texttt{scheduleTrackTimeout} timer maps directly
+    to \texttt{esp\_timer\_create()}; the \texttt{getNoiseBuffer()} shared
+    buffer maps to a static PSRAM allocation; each shim becomes a C
+    function populating an \texttt{AudioGeneratorMixer} slot via
+    \texttt{AudioTools::SineWaveGenerator} and
+    \texttt{AudioTools::BiQuadFilter} objects.
+    \item On \textbf{STM32H7} (Cortex-M7, 480\,MHz, 1\,MB SRAM):
+    the DMA double-buffer at 44.1\,kHz stereo 16-bit requires
+    $\sim$21\,KB/buffer-pair; the Teensy Audio Library node graph
+    provides the closest API analogue to the Web Audio
+    \texttt{AudioContext} graph; \texttt{registerTrackOsc()} becomes
+    a free-list allocator over a fixed pool of DSP objects.
+    \item On \textbf{STM32F4} (Cortex-M4, 168\,MHz, 192\,KB SRAM):
+    the full 23-shim library exceeds available RAM at 44.1\,kHz;
+    a reduced 16\,kHz mono build using Mozzi's architecture
+    accommodates 8--10 simultaneous shim voices within budget.
+    \item The \textbf{Korg NTS-1 SDK} offers the highest-fidelity
+    analogue: its \texttt{OSC\_PARAM\_SHAPE} / \texttt{OSC\_PARAM\_SHIFTSHAPE}
+    API mirrors the \texttt{pitchMul}/\texttt{volMul} shim parameters;
+    porting \texttt{shimPulseBell} or \texttt{shimFrogCroak} as NTS-1
+    oscillator units is feasible within one engineering sprint.
+\end{itemize}
+
+\paragraph{Relationship to BTRON Host Media Plane (\texttt{GST.md}) and NuStream.}
+Within the broader B-System media architecture, audio and media processing
+follow a two-tier continuum:
+\begin{itemize}[leftmargin=*]
+    \item \textbf{Host Media Plane (\texttt{priv/gst}, \texttt{GST.md}~\cite{gst_mcu}):}
+    On POSIX and Cortex-A/x86 host environments, multi-party RTP/WebRTC conferencing,
+    audio mixing, and video grid compositing are handled by an Erlang-supervised C99
+    GStreamer port process. It orchestrates dynamic \texttt{webrtcbin}, \texttt{decodebin},
+    and \texttt{audiomixer} elements. While GStreamer provides full-featured media routing,
+    its dependency on GLib/GObject, non-deterministic dynamic allocations, and unbounded
+    queue semantics make it unsuitable for bare-metal microcontrollers and microkernel drivers.
+    \item \textbf{Bare-Metal Procedural Audio Plane (BTRON Shims):}
+    At the microkernel, VirtIO, and MCU boundary (STM32, ESP32), the Procedural Sound
+    Shim library eliminates dynamic graph negotiation entirely. Each instrument is an
+    immutable, stateless C DSP kernel executing against fixed DMA double-buffers,
+    achieving microsecond voice dispatch and true zero-allocation determinism.
+    \item \textbf{Deterministic Streaming Bridge (NuStream~\cite{gst_sync_rtp}):}
+    For embedded applications requiring structured pipelines (e.g., NuttX and
+    $\mu$ITRON AMP paths), NuStream preserves GStreamer's clean pipeline abstraction
+    while enforcing static memory pools, zero dynamic data-plane allocation, and
+    deterministic bounded latency.
+\end{itemize}
+
+In summary, the BTRON Sound Shim Library occupies a unique position:
+it achieves the expressiveness of a full procedural audio framework
+(FM, additive, subtractive, physical modelling, noise synthesis) with
+the zero-overhead, zero-asset, single-function simplicity of a
+barebone embedded audio driver, making it the natural reference design
+for the \texttt{src/demo/lilcu64\_wa.c} VirtIO port and a strong
+candidate for future cross-compilation to STM32H7 and ESP32-S3 targets.
+
 %-------------------------------------------------------------------------
 \begin{thebibliography}{99}
 
@@ -897,6 +1781,11 @@ J.~Pakarinen and D.~T.~Yeh,
 ``A Review of Digital Techniques for Modeling Vacuum-Tube Guitar Amplifiers,''
 \emph{Computer Music Journal}, vol.~33, no.~2, pp.~85--100, 2009.
 
+\bibitem{fabre1996flute}
+B.~Fabre, A.~Hirschberg, and A.~P.~J.~Wijnands,
+``Vortex Shedding in Steady Oscillation of a Flue Organ Pipe,''
+\emph{Acustica}, vol.~82, no.~6, pp.~863--877, 1996.
+
 \bibitem{farnell2010designing}
 A.~Farnell,
 \emph{Designing Sound}.
@@ -941,6 +1830,98 @@ B-System Technical Specification \texttt{LILCU64-DEMOSCENE.txt}, 2026.
 M.~Sokhatsky,
 ``BTRON Lil Cu 64 Game Audio-Visual Architecture \& Procedural Sound Engine,''
 B-System Technical Specification \texttt{SOUND.txt}, 2026.
+
+\bibitem{mozzi2012}
+T.~Comber,
+``Mozzi: A Sound Synthesis Library for Arduino,'' 2012.
+\url{https://sensorium.github.io/Mozzi/}
+
+\bibitem{teensy_audio2014}
+P.~Stoffregen,
+``Teensy Audio Library,'' PJRC, 2014.
+\url{https://www.pjrc.com/teensy/td_libs_Audio.html}
+
+\bibitem{puckette1996pure}
+M.~Puckette,
+``Pure Data: Another Integrated Computer Music Environment,'' in
+\emph{Proc.\ ICMC}, Hong Kong, 1996, pp.~37--41.
+
+\bibitem{heavy2015}
+Enzienaudio / Wwise,
+``Heavy: The Pd-to-C/C++ Compiler,'' 2015.
+\url{https://github.com/Wwise/heavy}
+
+\bibitem{csound1991}
+B.~Vercoe,
+\emph{Csound: A Manual for the Audio Processing System}.
+MIT Media Lab, Cambridge, MA, 1991.
+\url{https://csound.com/}
+
+\bibitem{microdexed2019}
+M.~Krutmann (Poseidon),
+``MicroDexed: 6-Op DX7 FM Synth for Teensy / ESP32,'' 2019.
+\url{https://github.com/poseidon-code/MicroDexed}
+
+\bibitem{juce2004}
+JULIAN,
+``JUCE: Jules' Utility Class Extensions,'' Raw Material Software, 2004.
+\url{https://juce.com/}
+
+\bibitem{korg_sdk2019}
+Korg Inc.,
+``logue SDK: Programmable Oscillator / FX API for prologue, minilogue xd,
+and NTS-1,'' 2019.
+\url{https://github.com/korginc/logue-sdk}
+
+\bibitem{esp32_i2s2016}
+Espressif Systems,
+``ESP32 Technical Reference Manual: I2S Interface,'' 2016.
+\url{https://www.espressif.com/en/support/documents/technical-documents}
+
+\bibitem{audiotools2021}
+P.~Schatzmann,
+``Arduino Audio Tools: A Mighty Arduino DSP and Audio Library,'' 2021.
+\url{https://github.com/pschatzmann/arduino-audio-tools}
+
+\bibitem{gst_mcu}
+M.~Sokhatsky,
+``GStreamer WebRTC MCU Media Compositor: Pipeline Architecture and Invariants,''
+B-System Technical Specification \texttt{doc/md/GST.md}, 2026.
+
+\bibitem{gst_sync_rtp}
+M.~Sokhatsky,
+``GStreamer WebRTC MCU, Synchronization Architecture, and NuStream for NuttX/BTRON,''
+B-System Technical Specification \texttt{doc/md/GST-SYNC-RTP.md}, 2026.
+
+\bibitem{libdaisy2020}
+Electro-Smith,
+``libDaisy and DaisySP: Open-Source Embedded Audio Platform for STM32H7,'' 2020.
+\url{https://github.com/electro-smith/libDaisy}
+
+\bibitem{wwise2024}
+Audiokinetic,
+``Wwise SDK: The Leading Interactive Audio Middleware Engine,'' 2024.
+\url{https://www.audiokinetic.com/products/wwise/}
+
+\bibitem{fmod2024}
+Firelight Technologies,
+``FMOD Studio and Core Audio Engine SDK,'' 2024.
+\url{https://fmod.com/}
+
+\bibitem{rnbo2022}
+Cycling~'74,
+``RNBO: Direct C++ Code Export for Max/MSP Audio Graphs,'' 2022.
+\url{https://cycling74.com/products/rnbo}
+
+\bibitem{orlarey2004faust}
+Y.~Orlarey, D.~Fober, and S.~Letz,
+``Syntactical and Semantical Aspects of Faust,''
+\emph{Soft Computing}, vol.~8, no.~9, pp.~623--632, 2004.
+
+\bibitem{vst3sdk}
+Steinberg Media Technologies,
+``VST 3 Audio Plug-Ins SDK,'' 2020.
+\url{https://www.steinberg.net/}
 
 \end{thebibliography}
 

@@ -34,6 +34,8 @@ kernel certification:
      convoying, and deadlocks between real-time input planes and UI tasks.
   3. Ad-hoc script semantics lack a formal mathematical standard against which
      an implementation can claim conformance.
+  4. Memory buffer copies (memcpy) across process/actor boundaries create non-deterministic
+     latency spikes and cache thrashing that degrade sub-millisecond audio/GUI responsiveness.
 
 Thesis:
   A verified interpreter for BTRON is NOT a language compiler or an imperative
@@ -44,6 +46,14 @@ Thesis:
     - ISO/IEC 15437 (E-LOTOS) for the commutation lemma and trace equivalence;
     - ISO/IEC 15909 (High-Level Petri Nets) for the watermark token conservation invariants;
     - Calculus of Inductive Constructions (CIC) as the sole mechanical proof kernel.
+
+  Target Baseline — "Like Verified Erlang (Not Worse Than)":
+    The Verifiable Interpreter must be AT LEAST AS RIGOROUS AS A VERIFIED ERLANG
+    (and in key real-time dimensions, strictly superior). It realizes the Erlang/OTP
+    actor ideal—shared-nothing memory, discrete message mailboxes, reduction-based
+    preemptive execution budgets, and isolated fault boundaries—while eliminating
+    Erlang's historical weaknesses for hard real-time systems (unbounded mailbox
+    accumulation, unpredictable garbage collection pauses, and dynamic heap growth).
 
 
 1. Standards Conformance Landscape: Why Standards, Not Languages
@@ -196,16 +206,16 @@ concurrency standards rather than specific programming language specifications.
        of computing exact minimal fuel polynomials (`fuel_top`) ensures that fuel
        exhaustion is impossible for all compliant script inputs.
 
-  1.6.1 Methodological Directive for Future Researchers: Do NOT Conflate POSIX sh and Interpreter Formalizations
+  1.6.1 Methodological Directive for Future Researchers: Do NOT Conflate POSIX sh and Verifiable Interpreter Formalizations
     Future researchers, verification engineers, and kernel architects MUST NOT confuse or
-    co-mingle the POSIX Shell formalization (../sh/) and the Formal Interpreter formalization
+    co-mingle the POSIX Shell formalization (../sh/) and the Verifiable Interpreter formalization
     (INTERPRETER.txt):
 
     1. Fundamentally Distinct Computational Domains:
        - The POSIX Shell (../sh/) formalizes an imperative, text-stream-oriented, command-list
          execution language (POSIX IEEE Std 1003.1). Its domain deals with parameter expansions,
          glob patterns, field splitting, integer exit codes (0-255), and sequential list pipelines.
-       - The BTRON Formal Interpreter (INTERPRETER.txt) formalizes a concurrent reactive
+       - The BTRON Verifiable Interpreter (INTERPRETER.txt) formalizes a concurrent reactive
          hypermedia actor runtime (MicroScript / Language T / ITU-T Z.100 Annex F). Its domain
          deals with card/scene workflows, visual TAD figure elements, discrete typed signals,
          and non-blocking SPSC/MPSC event queues.
@@ -229,6 +239,78 @@ concurrency standards rather than specific programming language specifications.
        - The correct architectural relationship is: keep both formalizations strictly separate in
          syntax and semantics, but UNIFIED at the runtime substrate by hosting both on the
          InterCore Protocol Bus (The Heart of BTRON).
+
+1.7 The Erlang Actor Benchmark: Like Verified Erlang (Not Worse Than)
+  Historically, the Erlang/OTP runtime (BEAM) established the industry gold standard for
+  concurrent, fault-tolerant actor architectures:
+    - Shared-nothing process isolation;
+    - Asynchronous message passing via mailboxes (`!` and `receive`);
+    - Reduction-based preemptive timeslicing (fuel counting);
+    - Crash isolation and supervision trees ("let it crash").
+
+  The BTRON Verifiable Interpreter takes Verified Erlang as its benchmark floor:
+  it must provide ALL formal properties of an axiomatic Erlang actor calculus,
+  while eliminating the non-real-time vulnerabilities of the classical BEAM VM:
+
+  +-----------------------+----------------------------------+----------------------------------+
+  | Dimension             | Classical Erlang / BEAM          | BTRON Verifiable Interpreter     |
+  +-----------------------+----------------------------------+----------------------------------+
+  | Memory Architecture   | Dynamic per-process heaps + GC   | Zero heap allocation after init; |
+  |                       | pauses (unbounded growth risk)   | fixed BSS frames (JPL Rule 3)    |
+  | Mailbox / Queue       | Unbounded FIFO mailbox           | Bounded SPSC ring with explicit  |
+  | Capacity              | (memory exhaustion on flood)     | refusal / drop receipt (ISO 15909)|
+  | Scheduling / Fuel     | 4000 reductions per timeslice    | Mechanically fuel-bounded step   |
+  |                       | in C runtime (heuristic)         | with well-founded rank in Rocq   |
+  | Message Transport     | Heap-to-heap copy or global refc | Zero-copy InterCore CAS sectors  |
+  |                       | binary allocator mutex           | on lock-free Star Ring bus       |
+  | Concurrency Proof     | Empirical runtime testing        | Closed Coq/Rocq theorems:        |
+  |                       | & modal QuickCheck models        | commutation & mutex elimination  |
+  +-----------------------+----------------------------------+----------------------------------+
+
+  Architectural Standard:
+    The Verifiable Interpreter is "Verified Erlang hardened for Certified Real-Time":
+    it matches Erlang's expressive actor model, pattern matching, and fault containment,
+    while proving total state transitions, bounded watermarks, and zero priority inversion.
+
+  1.7.1 Normative Requirements from btron-smp.tex (§2 Unikernels vs. Erlang Actor Paradigm)
+    The BTRON SMP architecture paper (doc/pdf/btron-smp.tex §2) derives four concrete
+    hardware and runtime requirements from the Erlang/BEAM telecommunications model:
+
+    1. Theorem 1 (Zero-Switch Actor Topology — btron-smp.tex §2.2):
+       "Given an SMP machine with N symmetric execution cores C_1, C_2, ... C_N,
+       maximum message dispatch throughput with zero kernel context switches is
+       achieved by dedicating exactly N worker threads pinned to C_1 ... C_N, each
+       draining a dedicated Lock-Free Multi-Producer Single-Consumer (MPSC) task queue
+       in a continuous C loop."
+       - T_trap = 0 (no syscall kernel boundary transitions);
+       - T_MMU  = 0 (no TLB invalidation or page-table flushes on message dispatch);
+       - T_switch = 0 (no preemptive OS scheduler thread switching on message delivery).
+
+    2. CMPXCHG8 / Atomic Swap Fast Path (btron-smp.tex §2.3):
+       Inter-core actor messaging avoids mutexes, semaphores, and kernel traps:
+       - Producer: atomic pointer swap (__atomic_exchange_n(&q->tail, node)) linking
+         the message into the target queue in 12–25 CPU cycles.
+       - Consumer: non-blocking dequeue from head in 1–3 CPU cycles without contention,
+         as only the designated core worker pops from head.
+
+    3. Preemptive Reduction Accounting (Fuel Discipline):
+       Following Erlang's reduction counter (which preempts execution every 4,000 operations),
+       every interpreter step consumes execution fuel. Unbounded loops or recursive
+       evaluations cannot monopolize a core worker loop or starve the UI plane.
+
+    4. Avoidance of the Microkernel IPC Collapse (btron-smp.tex §3):
+       Learning from the historical failure of Windows NT 3.51 (where placing GDI/USER
+       behind user-space LPC IPC barriers caused a catastrophic performance collapse),
+       the graphical hypermedia runtime must not sit behind blocking IPC server hops.
+       Instead, it runs directly over the lock-free Zero-Switch InterCore actor fabric.
+
+    5. Zero-Copy Frontier Transfer (btron-verimath.tex §5 & btron-smp.tex §3):
+       Unlike traditional UNIX IPC (where write/read causes double-buffering and memory copies)
+       or BEAM (which copies message terms between process heaps), the InterCore bus transfers
+       large payloads (strings, TAD figure streams, raw audio/video frames) strictly via
+       zero-copy sector pool tokens. The producer populates the sector once in-place;
+       ownership is transferred via single-word CAS cursor indices in 12–25 CPU cycles
+       with zero bytes copied across cores.
 
 
 2. System Architecture: The Dual-Layer MicroScript Engine
@@ -353,6 +435,30 @@ Z.101 input ports over the InterCore lock-free star topology.
         rcv(rid) -> (bus', R_EMPTY)       if port empty
       The receiver never blocks. Soft real-time determinism is preserved.
 
+3.3 Zero-Copy Frontier Transfer & Sector Pool Invariant
+  To satisfy the NASA JPL Power of 10 discipline (Rule 3: zero heap allocation after init)
+  and 1 ms audio/GUI deadlines, the Verifiable Interpreter mandates a strict
+  ZERO-COPY invariant across all actor communication:
+
+  1. In-Place Sector Allocation:
+     When an agent constructs a signal with a large payload (e.g. TAD segment, figure vector,
+     or text buffer), it acquires an immutable sector index `sec_id` from the pre-allocated
+     InterCore sector pool (`b_pool_free`). Data is written in-place directly into the sector.
+
+  2. Token Index Transfer (Zero Memcpy):
+     The signal `sig_val` transmitted via `snd(wid, sig)` carries the scalar `sec_id` token index.
+     Zero bytes of payload memory are copied across cores or queue buffers.
+
+  3. Single-Consumer Exclusive Ownership:
+     By the Mutex-Elimination Theorem, only the current cursor holder has read access to the
+     sector. When the receiver consumes the signal via `rcv(rid)`, ownership of the sector token
+     passes to the receiving agent.
+
+  4. Mass Balance Conservation (ISO/IEC 15909):
+     Every allocated sector token must be returned to `b_pool_free` upon processing, satisfying
+     the universal conservation law:
+       total_held(b) + pool_free(b) = sector_pool
+
 
 4. Formal Calculus in CIC: State & Step Signatures
 --------------------------------------------------
@@ -448,7 +554,8 @@ To satisfy high-integrity mission-critical standards (JPL D-60410 / SP-800):
   Rule 2 (Fixed Loop Bounds): Every loop in the lexer, compiler, and evaluator
          has a hard compile-time upper bound: MS_LOOP_BOUND = 512.
   Rule 3 (Zero Heap Allocation After Init): No malloc, calloc, realloc, or free
-         during execution. The interpreter footprint is fixed in BSS:
+         during execution. All signal payloads, TAD segments, and scene buffers use
+         zero-copy token passing over fixed pre-allocated BSS sector pools:
            - MS_MAX_AGENTS   = 8
            - MS_MAX_CARDS    = 8
            - MS_MAX_FIGS     = 16
@@ -461,8 +568,8 @@ To satisfy high-integrity mission-critical standards (JPL D-60410 / SP-800):
   Rule 6 (Minimal Scope): Agent variables are private to their execution frame.
   Rule 7 (Check Return Values): Every InterCore primitive returns an explicit receipt.
   Rule 8 (Restricted Preprocessor): Limited to simple header inclusions and constants.
-  Rule 9 (Pointer Discipline): Zero dereference of raw cross-agent pointers; communication
-         is strictly by cursor value indices.
+  Rule 9 (Pointer Discipline): Zero dereference of raw cross-agent pointers; zero-copy
+         communication is strictly by cursor and sector token indices.
   Rule 10 (Strict Compiler Warnings): Built with -Wall -Wextra -Werror -Wpedantic.
 
 

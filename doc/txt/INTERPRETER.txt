@@ -1,0 +1,41 @@
+Veirified Interpreter Research best fit for BTRON
+=================================================
+
+The choice is among published concurrency standards, not languages.
+I’ll check which ISO and ITU texts actually define send, receive,
+and a conformance notion.The best document to verify against is ITU-T Z.100,
+SDL-2010. IETF has no language semantics you can conform to. POSIX is already
+the shell standard, ISO/IEC 9945, and it does not describe this machine.
+
+SDL is the only current Recommendation whose user model is the one
+in btron-verimath.pdf. An agent is a process. Communication is a signal,
+output by one agent and input by another. Each process has one input port,
+and signals are queued there. A process can create another. Z.101 is the
+basic language, Z.102 the full one, and Annex F is the formal definition:
+abstract grammar plus an interpretation model. Conformance is defined
+against those grammars, not against a compiler. The current text is
+the 2021 edition. The meta-model in Annex F is CSP-shaped underneath
+the queue. That does not change the surface you implement: spawn, snd, rcv,
+one queue per process, refusal when the port is full.
+
+ISO/IEC 15437, E-LOTOS, is a process algebra with a standard semantics.
+It is the right document for the commutation lemma and for trace equivalence
+of independent calls. It is not a script language, and it has no input port.
+
+ISO/IEC 15909 is high-level Petri nets. It matches the conservation and
+watermark arithmetic, items and capacities as markings. It is a modelling
+language, not an interpreter.
+
+ISO/IEC 8652 with the Ravenscar profile, guidance in ISO/IEC TS 24718:2025,
+is the strongest ISO programming language for high-integrity code.
+Its communication is protected objects and rendezvous, which is the
+lock the mutex-elimination theorem removes. Use it only if a contract
+demands an ISO language for the static Tier-1 tasks.
+
+Conclusion
+
+So the profile is Z.100 for the interpreter, 15437 for the modal equivalence,
+15909 for the pool invariant. MicroScript names are a concrete syntax in front
+of Z.101 agents and signals. The Coq bus remains the proof; Annex F is the
+standard it has to agree with.
+

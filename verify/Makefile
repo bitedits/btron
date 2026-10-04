@@ -42,6 +42,7 @@ VERIFY_SRCS = btron_verify.c \
               ../src/window/event.c \
               ../src/graphics/dp_core.c \
               ../src/window/wnd.c \
+              ../src/chokanji/pmc.c \
               ../src/vobject/vobj.c \
               ../src/vobject/omgr.c \
               ../src/hmi/hmi_core.c \

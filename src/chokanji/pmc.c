@@ -20,8 +20,14 @@
 #include <btron/troncode.h>
 #include <stdint.h>
 #include <stdbool.h>
+#if defined(__STDC_HOSTED__) && __STDC_HOSTED__ == 1 && !defined(BTRON_UEFI_TARGET)
 #include <assert.h>
 #include <string.h>
+#else
+#ifndef assert
+#define assert(expr) ((void)(expr))
+#endif
+#endif
 
 #define PMC_MAX_LOOP_BOUND  256
 #define PMC_MIN_TITLE_H     16

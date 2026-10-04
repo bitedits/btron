@@ -238,6 +238,8 @@ QUAKE_SRCS = \
     src/quake/app/quake_app.c
 
 DEMO_SRCS = \
+    src/demo/lilcu64_wa.c \
+    src/demo/lilcu64_score.c \
     src/demo/lilcu64_synth.c \
     src/demo/lilcu64_demo.c
 

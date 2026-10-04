@@ -8,6 +8,8 @@
  */
 
 #include "lilcu64_synth.h"
+#include "lilcu64_wa.h"
+#include "lilcu64_score.h"
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
@@ -62,6 +64,13 @@ static float      s_track_time = 0.0f;
 static float      s_next_step_time = 0.0f;
 static int        s_track_step = 0;
 static bool       s_virtio_opened = false;
+
+/* Timeline (1:1 index.html) track state. The UI thread only bumps
+ * s_track_gen; the audio thread applies it in timeline_tick(). */
+static volatile int    s_track_gen = 0;
+static int             s_applied_gen = 0;
+static volatile int    s_tl_track = 0;
+static volatile double s_tl_base = 0.0;
 
 /* PCM double buffer for VirtIO pump */
 #define PUMP_CHUNK_FRAMES 1024
@@ -268,272 +277,6 @@ static void drum_hihat(float vol) {
 
 /* ── Tracker Score Sequencer ──────────────────────────────────────── */
 
-/* Helper 1: Iconic 4-Note Chiptune Bell Motif (G5 - F#5 - G5 - E5) */
-static void bell_motif(int s, float vol_scale, float octave) {
-    if (s == 0) lilcu64_shim_ding(783.99f * octave, 0.95f * vol_scale, 0.70f);      /* G5 */
-    else if (s == 4) lilcu64_shim_ding(739.99f * octave, 0.85f * vol_scale, 0.60f); /* F#5 */
-    else if (s == 6) lilcu64_shim_ding(783.99f * octave, 0.85f * vol_scale, 0.60f); /* G5 */
-    else if (s == 8) lilcu64_shim_ding(659.25f * octave, 1.05f * vol_scale, 0.90f); /* E5 */
-}
-
-/* Helper 2: Bouncy BTRON Chiptune Walking Bass */
-static void bass_bar(int s, float root, float fifth, float oct, float vol_scale) {
-    if (s == 0) lilcu64_shim_waddle(root, 1.0f * vol_scale);
-    else if (s == 4) lilcu64_shim_waddle(fifth, 0.85f * vol_scale);
-    else if (s == 8) lilcu64_shim_waddle(oct, 0.95f * vol_scale);
-}
-
-/* Helper 3: Retro Chiptune Drum Groove */
-static void drum_groove(int s, bool has_kick, bool has_snare) {
-    if (s == 0) {
-        if (has_kick) drum_kick(0.85f);
-        drum_hihat(0.55f);
-    } else if (s == 4) {
-        drum_hihat(0.50f);
-        if (has_snare) drum_snare(0.80f);
-    } else if (s == 8) {
-        drum_hihat(0.55f);
-        if (has_snare) drum_snare(0.70f);
-    }
-}
-
-static void step_track_1(int step) {
-    /* Track 1: 鐘のキャロル (Carol of the Bells / Shchedryk)
-     * 168 BPM (3/4 Vivace) — 24 Measures, 288 Sixteenth Steps (~25.8s)
-     * 1:1 Parity with index.html lines 4410-4695
-     */
-    int pat = step % 288;
-    int bar = pat / 12;
-    int s   = pat % 12;
-
-    switch (bar) {
-        /* ── SECTION 1: STAGE INTRO & BELL OSTINATO (Bars 1-4, 0.00s - 4.28s) ── */
-        case 0:
-            bell_motif(s, 0.95f, 1.0f);
-            if (s == 0) lilcu64_shim_pulse_bell(0.65f, 0.30f * 0.78f);
-            break;
-        case 1:
-            bell_motif(s, 1.0f, 1.0f);
-            if (s == 4) drum_hihat(0.40f);
-            if (s == 8) drum_hihat(0.45f);
-            break;
-        case 2:
-            bell_motif(s, 1.05f, 1.0f);
-            bell_motif(s, 0.70f, 2.0f);
-            drum_groove(s, true, false);
-            break;
-        case 3:
-            bell_motif(s, 1.10f, 1.0f);
-            bell_motif(s, 0.75f, 2.0f);
-            drum_groove(s, true, true);
-            if (s == 8) lilcu64_shim_waddle(82.41f, 0.85f); /* E2 pickup */
-            break;
-
-        /* ── SECTION 2: THE BTRON GAME GROOVE (Bars 5-8, 4.28s - 8.57s) ── */
-        case 4: /* Em */
-            bell_motif(s, 1.0f, 1.0f);
-            bass_bar(s, 82.41f, 123.47f, 164.81f, 1.0f);
-            drum_groove(s, true, true);
-            break;
-        case 5: /* D */
-            bell_motif(s, 1.0f, 1.0f);
-            bass_bar(s, 73.42f, 110.00f, 146.83f, 1.0f);
-            drum_groove(s, true, true);
-            break;
-        case 6: /* C */
-            bell_motif(s, 1.0f, 1.0f);
-            bass_bar(s, 65.41f, 98.00f, 130.81f, 1.0f);
-            drum_groove(s, true, true);
-            break;
-        case 7: /* B */
-            bell_motif(s, 1.10f, 1.0f);
-            bass_bar(s, 61.74f, 92.50f, 123.47f, 1.0f);
-            drum_groove(s, true, true);
-            if (s == 9) drum_snare(0.65f);
-            if (s == 10) drum_snare(0.80f);
-            break;
-
-        /* ── SECTION 3: CHIPTUNE MELODIC COUNTERPOINT (Bars 9-12, 8.57s - 12.86s) ── */
-        case 8: /* Em */
-            bell_motif(s, 0.85f, 1.0f);
-            bass_bar(s, 82.41f, 123.47f, 164.81f, 1.0f);
-            drum_groove(s, true, true);
-            if (s == 0) {
-                lilcu64_shim_float(523.25f, 0.75f);
-                lilcu64_shim_pulse_squash(0.95f, 1.25f); /* High B5 */
-                lilcu64_shim_ding(987.77f, 0.80f, 0.80f);
-            }
-            break;
-        case 9: /* D */
-            bell_motif(s, 0.85f, 1.0f);
-            bass_bar(s, 73.42f, 110.00f, 146.83f, 1.0f);
-            drum_groove(s, true, true);
-            if (s == 0) { lilcu64_shim_float(493.88f, 0.75f); lilcu64_shim_ding(1046.50f, 0.80f, 0.50f); }
-            else if (s == 4) { lilcu64_shim_ding(987.77f, 0.80f, 0.50f); }
-            else if (s == 8) { lilcu64_shim_ding(880.00f, 0.90f, 0.60f); }
-            break;
-        case 10: /* C */
-            bell_motif(s, 0.85f, 1.0f);
-            bass_bar(s, 65.41f, 98.00f, 130.81f, 1.0f);
-            drum_groove(s, true, true);
-            if (s == 0) { lilcu64_shim_float(440.00f, 0.75f); lilcu64_shim_ding(783.99f, 0.80f, 0.50f); }
-            else if (s == 4) { lilcu64_shim_ding(880.00f, 0.80f, 0.50f); }
-            else if (s == 8) { lilcu64_shim_ding(987.77f, 0.90f, 0.60f); }
-            break;
-        case 11: /* B */
-            bell_motif(s, 0.90f, 1.0f);
-            bass_bar(s, 61.74f, 92.50f, 123.47f, 1.0f);
-            drum_groove(s, true, true);
-            if (s == 0) {
-                lilcu64_shim_ding(659.25f, 0.95f, 0.80f); /* E5 */
-                lilcu64_shim_pulse_squash(0.90f, 1.0f);
-            }
-            break;
-
-        /* ── SECTION 4: CHIPTUNE COIN & STAR ARPEGGIOS (Bars 13-16, 12.86s - 17.14s) ── */
-        case 12: /* Em */
-            bass_bar(s, 82.41f, 123.47f, 164.81f, 1.0f);
-            drum_groove(s, true, true);
-            if (s == 0) lilcu64_shim_dance(1.0f, 0.85f);
-            bell_motif(s, 0.80f, 1.0f);
-            break;
-        case 13: /* D */
-            bass_bar(s, 73.42f, 110.00f, 146.83f, 1.0f);
-            drum_groove(s, true, true);
-            if (s == 0) lilcu64_shim_dance(0.89f, 0.85f);
-            bell_motif(s, 0.80f, 1.0f);
-            break;
-        case 14: /* C */
-            bass_bar(s, 65.41f, 98.00f, 130.81f, 1.0f);
-            drum_groove(s, true, true);
-            if (s == 0) lilcu64_shim_dance(0.79f, 0.85f);
-            bell_motif(s, 0.80f, 1.0f);
-            break;
-        case 15: /* B climbing trill */
-            bass_bar(s, 61.74f, 92.50f, 123.47f, 1.0f);
-            if (s == 0) { drum_kick(0.80f); drum_hihat(0.55f); lilcu64_shim_ding(987.77f, 0.80f, 0.40f); }
-            else if (s == 1) { lilcu64_shim_ding(1046.50f, 0.80f, 0.40f); }
-            else if (s == 2) { lilcu64_shim_ding(1174.66f, 0.85f, 0.40f); }
-            else if (s == 3) { lilcu64_shim_ding(1244.51f, 0.95f, 0.50f); }
-            else if (s == 4) { drum_hihat(0.50f); }
-            else if (s == 8) { drum_snare(0.95f); drum_hihat(0.55f); }
-            break;
-
-        /* ── SECTION 5: VIRTUOSO SPEEDRUN & CHIPTUNE FLURRY (Bars 17-20, 17.14s - 21.43s) ── */
-        case 16: {
-            bass_bar(s, 82.41f, 82.41f, 164.81f, 1.0f);
-            drum_groove(s, true, true);
-            static const float r17[12] = {
-                659.25f, 783.99f, 987.77f, 1318.51f, 1567.98f, 1479.98f,
-                1318.51f, 1174.66f, 1046.50f, 987.77f, 880.00f, 783.99f
-            };
-            lilcu64_shim_ding(r17[s], 0.55f, 0.22f);
-            if (s == 0) lilcu64_shim_pulse_squash(0.80f, 1318.51f / 880.0f);
-            else if (s == 4) lilcu64_shim_pulse_squash(0.80f, 1567.98f / 880.0f);
-            else if (s == 8) lilcu64_shim_pulse_squash(0.80f, 1046.50f / 880.0f);
-            break;
-        }
-        case 17: {
-            bass_bar(s, 65.41f, 61.74f, 123.47f, 1.0f);
-            drum_groove(s, true, true);
-            static const float r18[12] = {
-                739.99f, 783.99f, 880.00f, 987.77f, 1046.50f, 1174.66f,
-                1318.51f, 1479.98f, 1567.98f, 1760.00f, 1567.98f, 1479.98f
-            };
-            lilcu64_shim_ding(r18[s], 0.55f, 0.22f);
-            break;
-        }
-        case 18: {
-            bass_bar(s, 82.41f, 123.47f, 164.81f, 1.0f);
-            drum_groove(s, true, true);
-            static const float r19[12] = {
-                1318.51f, 987.77f, 783.99f, 659.25f, 783.99f, 987.77f,
-                1318.51f, 1567.98f, 1975.53f, 1567.98f, 1318.51f, 987.77f
-            };
-            lilcu64_shim_ding(r19[s], 0.60f, 0.25f);
-            break;
-        }
-        case 19:
-            bass_bar(s, 61.74f, 92.50f, 123.47f, 1.0f);
-            if (s == 0) { drum_kick(0.80f); drum_hihat(0.55f); lilcu64_shim_ding(1244.51f, 0.70f, 0.30f); }
-            else if (s == 1) { lilcu64_shim_ding(1479.98f, 0.70f, 0.30f); }
-            else if (s == 2) { lilcu64_shim_ding(1760.00f, 0.75f, 0.30f); }
-            else if (s == 3) { lilcu64_shim_ding(1975.53f, 0.85f, 0.40f); }
-            else if (s == 4) { drum_hihat(0.50f); }
-            else if (s == 8) {
-                drum_snare(0.95f); drum_hihat(0.55f);
-                lilcu64_shim_ding(1567.98f, 1.10f, 0.80f); /* High G6 resolution! */
-            }
-            break;
-
-        /* ── SECTION 6: VICTORY FANFARE & TRANSCENDENT CODA (Bars 21-24, 21.43s - 25.8s) ── */
-        case 20: /* Em Fanfare */
-            if (s == 0) {
-                drum_kick(1.10f);
-                drum_snare(0.95f);
-                lilcu64_shim_pulse_squash(0.95f, 1.0f);
-                lilcu64_shim_float(523.25f, 0.85f);
-            }
-            bass_bar(s, 82.41f, 123.47f, 164.81f, 1.1f);
-            bell_motif(s, 1.25f, 1.0f);
-            bell_motif(s, 0.85f, 2.0f);
-            break;
-        case 21:
-            bass_bar(s, 65.41f, 61.74f, 82.41f, 1.1f);
-            drum_groove(s, true, true);
-            bell_motif(s, 1.15f, 1.0f);
-            if (s == 0) lilcu64_shim_dance(1.0f, 0.75f);
-            break;
-        case 22:
-            if (s == 0) {
-                lilcu64_shim_waddle(82.41f, 0.85f);
-                lilcu64_shim_float(523.25f, 0.75f);
-                lilcu64_shim_ding(1318.51f, 0.85f, 1.60f); /* E6 */
-            } else if (s == 8) {
-                lilcu64_shim_ding(2637.02f, 0.80f, 2.00f); /* Celestial E7 */
-            }
-            break;
-        case 23:
-            if (s == 0) lilcu64_shim_ding(1318.51f, 0.75f, 1.20f);       /* E6 */
-            else if (s == 4) lilcu64_shim_ding(987.77f, 0.65f, 1.20f);  /* B5 */
-            else if (s == 8) lilcu64_shim_ding(2637.02f, 0.75f, 2.00f); /* Celestial E7 */
-            break;
-    }
-}
-
-static void step_track_2(int step) {
-    /* Track 2: Green Caterpillar (今田勝 1975 Three Blind Mice Jazz) — 98 BPM 4/4
-     * Step = 1 16th note (~0.153s)
-     */
-    int bar_step = step % 16;
-
-    /* Upright acoustic bass waddle */
-    if (bar_step == 0) {
-        lilcu64_shim_waddle(73.42f, 0.95f); /* D2 */
-        drum_kick(0.7f);
-    } else if (bar_step == 4) {
-        lilcu64_shim_waddle(87.31f, 0.85f); /* F2 */
-    } else if (bar_step == 8) {
-        lilcu64_shim_waddle(98.00f, 0.90f); /* G2 */
-        drum_snare(0.65f);
-    } else if (bar_step == 12) {
-        lilcu64_shim_waddle(110.00f, 0.80f); /* A2 */
-    }
-
-    /* Masaru Imada Rhodes Chords & Tines */
-    if (bar_step == 0 || bar_step == 6 || bar_step == 10) {
-        lilcu64_shim_float(293.66f, 0.85f); /* Dm9 */
-    }
-
-    /* Ride cymbal on swinging 8ths */
-    if (bar_step % 2 == 0) drum_hihat(0.5f);
-
-    /* Frog croak rasp accent on bar 2 & 4 */
-    if ((step % 32) == 14) {
-        lilcu64_shim_frog_croak(1.0f, 0.85f);
-    }
-}
-
 static void step_track_3(int step) {
     /* Track 3: 朝日のあたる家 (The House of the Rising Sun / Thomas Krüger) — 76 BPM 6/8
      * Step = 1 eighth note (~0.2368s)
@@ -604,47 +347,61 @@ static void step_track_4(int step) {
     }
 }
 
-/* Advance sequencer by delta time */
+/* Advance legacy step sequencer (tracks 3/4) by delta time */
 static void update_sequencer(float dt) {
-    if (s_active_track <= 0 || s_muted) return;
+    if (s_active_track < 3 || s_muted) return;
 
     s_track_time += dt;
 
-    float step_interval = 0.0892857f; /* Track 1: 168 BPM 16th note (~0.0893s, 1:1 with index.html) */
-    if (s_active_track == 2) step_interval = 0.1530f;      /* 98 BPM 16th */
-    else if (s_active_track == 3) step_interval = 0.2368f; /* 76 BPM 8th */
-    else if (s_active_track == 4) step_interval = 0.1136f; /* 132 BPM 16th */
+    float step_interval = 0.2368f;                         /* 76 BPM 8th */
+    if (s_active_track == 4) step_interval = 0.1136f;      /* 132 BPM 16th */
 
     while (s_track_time >= s_next_step_time) {
-        if (s_active_track == 1) {
-            step_track_1(s_track_step);
-            s_track_step++;
-            if (s_track_step >= 288) {
-                /* Loop Track 1 cleanly after 24 measures (~25.8s) */
-                s_track_step = 0;
-                s_track_time = 0.0f;
-                s_next_step_time = step_interval;
-                break;
-            }
-        } else if (s_active_track == 2) {
-            step_track_2(s_track_step);
-            s_track_step++;
-        } else if (s_active_track == 3) {
-            step_track_3(s_track_step);
-            s_track_step++;
-        } else if (s_active_track == 4) {
-            step_track_4(s_track_step);
-            s_track_step++;
-        }
-
+        if (s_active_track == 3) step_track_3(s_track_step);
+        else if (s_active_track == 4) step_track_4(s_track_step);
+        s_track_step++;
         s_next_step_time += step_interval;
+    }
+}
+
+/* ── Timeline (1:1 index.html) Tracks ─────────────────────────────── */
+
+/* Runs on the audio thread at every 32-frame block: applies play/stop requests
+ * from the UI thread and loops the score exactly like scheduleTrackTimeout(). */
+static void timeline_tick(void) {
+    int gen = s_track_gen;
+    if (gen != s_applied_gen) {
+        s_applied_gen = gen;
+        wa_stop_all();                         /* stopAllTracks(true) */
+        int trk = s_active_track;
+        s_tl_track = (lc_score_length(trk) > 0.0) ? trk : 0;
+        if (s_tl_track) {
+            s_tl_base = wa_time();
+            lc_score_schedule(s_tl_track, s_tl_base);
+        }
+        return;
+    }
+    if (s_tl_track) {
+        double len = lc_score_length(s_tl_track);
+        if (wa_time() >= s_tl_base + len) {    /* playTrack(n, true) */
+            wa_stop_all();
+            s_tl_base += len;
+            lc_score_schedule(s_tl_track, s_tl_base);
+        }
     }
 }
 
 /* ── Master Render Frames ─────────────────────────────────────────── */
 
-void lilcu64_synth_render_frames(int16_t *out_pcm, size_t frames) {
-    if (!out_pcm || frames == 0) return;
+#define RENDER_BLOCK 32
+
+static void render_block(int16_t *out_pcm, size_t frames) {
+    float wa_mix[RENDER_BLOCK];
+    memset(wa_mix, 0, sizeof(wa_mix));
+
+    timeline_tick();
+    wa_render(wa_mix, frames);                 /* advances the audio clock */
+    if (s_muted) memset(wa_mix, 0, sizeof(wa_mix));
 
     float dt = (float)frames / (float)s_sample_rate;
     update_sequencer(dt);
@@ -732,14 +489,28 @@ void lilcu64_synth_render_frames(int16_t *out_pcm, size_t frames) {
             }
         }
 
-        /* Master soft clipper / saturator */
-        if (sample_l > 0.95f) sample_l = 0.95f;
-        else if (sample_l < -0.95f) sample_l = -0.95f;
-        if (sample_r > 0.95f) sample_r = 0.95f;
-        else if (sample_r < -0.95f) sample_r = -0.95f;
+        /* Legacy voices keep their previous level (x30000); the WebAudio
+         * graph goes straight to ctx.destination, which clamps at +/-1. */
+        sample_l = sample_l * (30000.0f / 32767.0f) + wa_mix[f];
+        sample_r = sample_r * (30000.0f / 32767.0f) + wa_mix[f];
+        if (sample_l > 1.0f) sample_l = 1.0f;
+        else if (sample_l < -1.0f) sample_l = -1.0f;
+        if (sample_r > 1.0f) sample_r = 1.0f;
+        else if (sample_r < -1.0f) sample_r = -1.0f;
 
-        out_pcm[f * 2]     = (int16_t)(sample_l * 30000.0f);
-        out_pcm[f * 2 + 1] = (int16_t)(sample_r * 30000.0f);
+        out_pcm[f * 2]     = (int16_t)(sample_l * 32767.0f);
+        out_pcm[f * 2 + 1] = (int16_t)(sample_r * 32767.0f);
+    }
+}
+
+void lilcu64_synth_render_frames(int16_t *out_pcm, size_t frames) {
+    if (!out_pcm || frames == 0) return;
+    size_t off = 0;
+    while (off < frames) {
+        size_t n = frames - off;
+        if (n > RENDER_BLOCK) n = RENDER_BLOCK;
+        render_block(out_pcm + off * 2, n);
+        off += n;
     }
 }
 
@@ -803,6 +574,12 @@ int lilcu64_synth_init(uint32_t sample_rate) {
     s_next_step_time = 0.0f;
     s_track_step = 0;
     s_muted = false;
+    s_track_gen = 0;
+    s_applied_gen = 0;
+    s_tl_track = 0;
+    s_tl_base = 0.0;
+
+    wa_init(s_sample_rate);
 
     if (virtio_sound_open(s_sample_rate, LILCU64_AUDIO_CHANNELS) == 0) {
         s_virtio_opened = true;
@@ -830,10 +607,13 @@ void lilcu64_synth_play_track(int track_num) {
         return;
     }
     s_active_track = track_num;
+    /* Reset legacy sequencer state */
     s_track_time = 0.0f;
     s_next_step_time = 0.0f;
     s_track_step = 0;
     s_muted = false;
+    /* Tell audio thread to reschedule the score on next render block */
+    __sync_fetch_and_add(&s_track_gen, 1);
 }
 
 void lilcu64_synth_stop_track(void) {
@@ -844,6 +624,8 @@ void lilcu64_synth_stop_track(void) {
     for (int i = 0; i < MAX_VOICES; i++) {
         s_voices[i].active = false;
     }
+    /* Tell audio thread to clear WA nodes too */
+    __sync_fetch_and_add(&s_track_gen, 1);
 }
 
 void lilcu64_synth_toggle_mute(void) {
@@ -864,5 +646,14 @@ int lilcu64_synth_get_active_track(void) {
 }
 
 float lilcu64_synth_get_track_time(void) {
+    /* For timeline tracks 1 & 2, return seconds elapsed within the current
+     * loop iteration so the mascot choreography aligns with the music. */
+    if (s_tl_track && lc_score_length(s_tl_track) > 0.0) {
+        double t = wa_time() - s_tl_base;
+        double len = lc_score_length(s_tl_track);
+        while (t < 0.0) t += len;
+        while (t >= len) t -= len;
+        return (float)t;
+    }
     return s_track_time;
 }

@@ -923,6 +923,59 @@ static void update_kinematics(float dt) {
         }
     }
 
+    /* Synchronized 3D Mascot Choreography for Track 2 (1:1 with index.html lines 5165-5189)
+     * Key: F Major | 98 BPM (4/4 Jazz Swing) | Duration: ~28.0s — Masaru Imada "Green Caterpillar" */
+    if (lilcu64_synth_get_active_track() == 2) {
+        float t = lilcu64_synth_get_track_time();
+        if (t < 0.15f) {
+            /* pre-roll: idle until frogs croak */
+            if (s_anim_state != ANIM_IDLE) set_animation(ANIM_IDLE);
+        } else if (t < 2.45f) {
+            if (s_anim_state != ANIM_SING) {        /* Curiosity at frogs */
+                set_animation(ANIM_SING);
+                trigger_radiant_wave(false);
+            }
+        } else if (t < 4.90f) {
+            if (s_anim_state != ANIM_WALK)          /* Bass crawl */
+                set_animation(ANIM_WALK);
+        } else if (t < 7.35f) {
+            if (s_anim_state != ANIM_FLOAT)         /* Rhodes chords */
+                set_animation(ANIM_FLOAT);
+        } else if (t < 9.80f) {
+            if (s_anim_state != ANIM_SING) {        /* Blues theme Head A */
+                set_animation(ANIM_SING);
+                trigger_radiant_wave(false);
+            }
+        } else if (t < 12.25f) {
+            if (s_anim_state != ANIM_DANCE)         /* Climbing lyrical cry */
+                set_animation(ANIM_DANCE);
+        } else if (t < 14.70f) {
+            if (s_anim_state != ANIM_SING)          /* Harmonized thirds */
+                set_animation(ANIM_SING);
+        } else if (t < 17.15f) {
+            if (s_anim_state != ANIM_FLOAT)         /* Imada Rhodes solo */
+                set_animation(ANIM_FLOAT);
+        } else if (t < 19.60f) {
+            if (s_anim_state != ANIM_DANCE)         /* Unison climax */
+                set_animation(ANIM_DANCE);
+        } else if (t < 22.05f) {
+            if (s_anim_state != ANIM_WALK)          /* Turnaround vamp */
+                set_animation(ANIM_WALK);
+        } else if (t < 24.50f) {
+            if (s_anim_state != ANIM_FLOAT)         /* Theme callback & distant frog */
+                set_animation(ANIM_FLOAT);
+        } else if (t < 26.50f) {
+            if (s_anim_state != ANIM_SING) {        /* Grand landing */
+                set_animation(ANIM_SING);
+                s_impact_squash = 0.22f;
+                trigger_radiant_wave(true);
+            }
+        } else {
+            if (s_anim_state != ANIM_IDLE)          /* 月夜の湿原へ */
+                set_animation(ANIM_IDLE);
+        }
+    }
+
     /* Target pose goals */
     float t_root_x = 0.0f, t_root_y = 0.08f, t_root_z = 0.0f;
     float t_root_rot_x = 0.0f, t_root_rot_y = 0.0f, t_root_rot_z = 0.0f;

@@ -27,6 +27,8 @@ Visuals: Standard Rosy color swap bug (Red and Blue channels swapped; wallpaper 
 static SDL_Window   *g_sdl_window = NULL;
 static SDL_Renderer *g_sdl_renderer = NULL;
 static SDL_Texture  *g_sdl_texture = NULL;
+static int           g_logical_w = 0;
+static int           g_logical_h = 0;
 
 #ifdef __APPLE__
 #include <ApplicationServices/ApplicationServices.h>
@@ -160,6 +162,14 @@ BOOL init_sdl_backend(H width, H height, const char *title) {
 
     if (!g_sdl_renderer) {
         g_sdl_renderer = SDL_CreateRenderer(g_sdl_window, -1, 0);
+    }
+
+    /* Lock logical resolution so SDL remaps mouse coords to framebuffer space
+     * automatically — fixes mouse misalignment in fullscreen / resized modes. */
+    g_logical_w = (int)width;
+    g_logical_h = (int)height;
+    if (g_sdl_renderer) {
+        SDL_RenderSetLogicalSize(g_sdl_renderer, g_logical_w, g_logical_h);
     }
 
     /* Authentic BTRON3 palette across all virtualized targets (Teal, Navy, Gray) */

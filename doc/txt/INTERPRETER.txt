@@ -3,15 +3,17 @@ Verified Interpreter Architecture for BTRON & MicroScript
 Symmetric Actor Runtime · ITU-T Z.100 (SDL-2010) Annex F · ISO/IEC 15437 (E-LOTOS) · ISO/IEC 15909
 Equational Calculus of Inductive Constructions · Zero-Switch Star Topology · NASA JPL Power of 10
 
-Status: Research & Formal Specification — rev 2 (2026-10-04)
+Status: Research & Formal Specification — rev 3 (2026-10-04)
 Author: Cleanroom Working Group (Namdak Tonpa / Maxim Sokhatsky)
 Related:
   - doc/pdf/btron-verimath.tex / btron-verimath.pdf (§5 InterCore, §6 Modal Extensions)
   - doc/txt/ASYNC.txt (§0.1 Zero-Switch Actor Topology & InterCore Protocol)
   - doc/txt/SMP-AMP-SYNC-IO-HARDENING.txt (§7.3 InterCore Primitives)
   - src/chokanji/microscript.c (MicroScript / Language T runtime for B-System)
-  - verify/models/media_intercore_properties.v (Coq Bus Specification)
-  - verify/models/media_intercore_model.ml (OCaml Executable Oracle)
+  - verify/models/interpreter_properties.v (Coq Interpreter Specification)
+  - verify/models/interpreter_model.ml (OCaml Executable Oracle)
+  - ../sh/verify/models/AXIOTACK.md (Comparative: POSIX Shell 8-Layer Refinement Stack)
+  - ../sh/verify/models/JPL.md (Comparative: POSIX Shell JPL D-60411 Extraction Architecture)
 
 
 0. Problem Statement & Research Thesis
@@ -113,6 +115,39 @@ concurrency standards rather than specific programming language specifications.
     ISO/IEC 15909 provides the formal standard for modeling the resource invariant,
     ensuring that no signal or memory token is created or destroyed without accounting.
 
+1.4.1 ISO/IEC 19510 (BPMN 2.0) vs ISO/IEC 15909: Layer Separation Analysis
+  An architectural question arises whether ISO/IEC 19510 (Business Process Model
+  and Notation - BPMN 2.0) could replace ISO/IEC 15909 (High-Level Petri Nets) as
+  a "better alternative" for MicroScript and the BTRON interpreter:
+
+  1. Layer B (Verifiable Kernel & Bus Conservation): Petri Nets Win Decisively
+     - Mathematical Foundation: ISO/IEC 15909 is grounded in linear algebra. Places,
+       transitions, incidence matrices C, and marking state equations M_k = M_0 + C * σ
+       provide exact, closed algebraic invariants. Place invariants (P-invariants, where
+       C^T * y = 0) yield immediate, axiom-free proofs in Rocq/Coq using `lia`/`ring`.
+     - ISO/IEC 19510 Deficiencies at Layer B: BPMN 2.0 is an informal, 500+ page OMG/ISO
+       metamodel without native closed-form state equations. In formal methods literature,
+       BPMN execution semantics are notoriously ambiguous; verifying BPMN workflows
+       traditionally requires *compiling them into Petri nets* (Workflow Nets / YAWL).
+     - Semantic Domain Mismatch: BPMN 2.0 is built for enterprise workflows (human tasks,
+       compensation events, inclusive OR-joins, web-service choreographies). Attempting
+       to model hardware-adjacent lock-free SPSC rings or InterCore sector pools using
+       BPMN introduces severe impedance mismatch.
+
+  2. Layer A (Hypermedia Choreography & Scene Flow): BPMN 2.0 is Superior
+     - MicroScript hypermedia authoring operates over visual cards, scenes, dialogs,
+       figure triggers, and user interaction sequences.
+     - At this human-facing scenario level (Layer A), BPMN 2.0 provides an internationally
+       standardized, visually intuitive workflow notation:
+         * BPMN Pools & Lanes    -> MicroScript Tasks & Agents
+         * BPMN Sequence Flow    -> Hypermedia Card/Scene Transitions (SCENE, CARD)
+         * BPMN Gateways (XOR)   -> Conditional Scene Branches (IF, CASE)
+         * BPMN Signal Events    -> ITU-T Z.101 AS2 Signals (SIGNAL, SEND, RECEIVE)
+     - Architectural Verdict: Retain ISO/IEC 15909 at Layer B for mechanical proof
+       of watermark and memory conservation; adopt ISO/IEC 19510 optionally at Layer A
+       as a visual hypermedia authoring metamodel that compiles down into Z.101 AS2 agents
+       and ISO 15909 token nets.
+
 1.5 ISO/IEC 8652 & ISO/IEC TS 24718:2025 (Ada Ravenscar Profile)
   The Ravenscar profile of Ada represents the highest ISO standard for static,
   high-integrity real-time systems. Ravenscar relies on protected objects, ceiling
@@ -122,6 +157,45 @@ concurrency standards rather than specific programming language specifications.
   contended for because there is no lock. Ravenscar profile conformance is retained as
   an optional compliance mapping for static Tier-1 tasks if mandated by contract.
 
+1.6 Comparative Formalization: BTRON Actor Bus vs. POSIX Shell (../sh/)
+  Both the BTRON interpreter formalization and the POSIX shell formalization in
+  `../sh/` share the foundational discipline of zero-axiom Rocq/Coq mechanical
+  verification (reporting 4 <none> lines under `coqchk`) and NASA JPL D-60411 safety.
+  However, they address fundamentally different execution domains and employ divergent
+  formalization strategies:
+
+  +-----------------------+----------------------------------+----------------------------------+
+  | Dimension             | BTRON Interpreter (INTERPRETER)  | POSIX Shell Kernel (../sh/)      |
+  +-----------------------+----------------------------------+----------------------------------+
+  | Execution Paradigm    | Concurrent Reactive Actor Bus    | Imperative Sequential / Pipeline |
+  | Target Standard       | ITU-T Z.100 Annex F, ISO 15437,  | POSIX IEEE Std 1003.1,           |
+  |                       | ISO 15909, ISO 19510 (Layer A)   | NASA JPL D-60411 (LOC-1...LOC-4) |
+  | Machine Signature     | Total State Transformer          | Small-step CEK / Abstract Mach.  |
+  |                       | S -> S * R over Star Topology    | step / mloop + cont stack        |
+  | Verification Stack    | 2-Tier Coq Bus + OCaml Schedule  | 8-Layer Refinement (L0 - L8) +   |
+  | Depth                 | Explorer (interpreter_*.v/.ml)   | 5 Derived Rungs (AXIOTACK.md)    |
+  | Liveness / Rank       | Total by construction (dense nat | Proved by well-founded ranking   |
+  |                       | arrays, bounded fuels)           | induction (sh_jpl_run_phase2.v)  |
+  | JPL Fuel Minimality   | Static capacity constants        | Proven minimal & attained bounds |
+  |                       | (MS_MAX_AGENTS, MS_RING_CAP)     | (GLOB_FUEL = fuel_top; least)    |
+  | Side-Effect Boundary  | Internal lock-free SPSC / MPSC   | phi-as-data effect leaf (dres:   |
+  |                       | ring message exchange            | DDone / DEff / DLim) + C host    |
+  | Concurrency Invariant | Mutex-Elimination Theorem &      | Deterministic sequential kernel; |
+  |                       | Mazurkiewicz trace commutation   | concurrency delegated to OS host |
+  +-----------------------+----------------------------------+----------------------------------+
+
+  Key Formalization Lessons from `../sh/` for BTRON Interpreter Refinement:
+    1. Multi-tier Refinement: BTRON's current model directly couples the actor step
+       to the bus representation. Adopting `sh`'s AXIOTACK discipline (relational spec
+       -> concrete functional model -> bounded array layer -> small-step tail loop)
+       provides a clear path for refining high-level Z.101 ASTs down to C99.
+    2. Mechanical Extraction: `sh` establishes mechanized extraction (D1-D5) with
+       `ExtrOcamlNatInt` and anti-rot diff checks against vendored C/OCaml sources,
+       eliminating manual translation gaps into `src/chokanji/microscript.c`.
+    3. Proof-Carrying Fuel Bounds: Rather than arbitrary fuel constants, `sh`'s method
+       of computing exact minimal fuel polynomials (`fuel_top`) ensures that fuel
+       exhaustion is impossible for all compliant script inputs.
+
 
 2. System Architecture: The Dual-Layer MicroScript Engine
 ---------------------------------------------------------
@@ -129,6 +203,13 @@ concurrency standards rather than specific programming language specifications.
 The verified interpreter architecture decouples the user-facing hypermedia surface
 from the underlying verifiable concurrency kernel.
 
+                    +------------------------------------------+
+                    |  ISO/IEC 19510 (BPMN 2.0) Choreography   |
+                    |  Visual Hypermedia Scenarios / Workflows |
+                    +------------------------------------------+
+                                         |
+                                         | Visual Metamodel Mapping
+                                         v
                     +------------------------------------------+
                     |  MicroScript Concrete Surface (AS0)      |
                     |  PMC Chokanji Keywords: SCRIPT, SCENE,  |
@@ -145,18 +226,20 @@ from the underlying verifiable concurrency kernel.
                                          | Equational Mapping
                                          v
                     +------------------------------------------+
-                    |  Verified InterCore Star Bus             |
-                    |  pub / sub / spawn / snd / rcv           |
+                    |        INTERCORE PROTOCOL BUS            |
+                    |      (The Heart of BTRON System)         |
+                    |   pub / sub / spawn / snd / rcv Star     |
+                    |  ISO/IEC 15909 Petri Net Token Invariant |
                     |  Total State Transformer (S -> S * R)    |
                     +------------------------------------------+
                                          |
                       +------------------+------------------+
                       |                                     |
                       v                                     v
-            +-------------------+                 +-------------------+
-            | Rocq/Coq Base Thm |                 | Executable OCaml  |
-            | media_intercore.v |                 | Oracle / Test Harness
-            +-------------------+                 +-------------------+
+            +--------------------+                +--------------------+
+            | Rocq/Coq Base Thm  |                | Executable OCaml   |
+            | interpreter_*.v    |                | Oracle / Scheduler |
+            +--------------------+                +--------------------+
 
 2.1 Concrete Syntax vs Abstract Machine
   Layer A: The Concrete Hypermedia Surface (src/chokanji/microscript.c)
@@ -177,6 +260,34 @@ from the underlying verifiable concurrency kernel.
 
 3. InterCore Bus Mapping: Bridging Z.101 to the Star Topology
 -------------------------------------------------------------
+
+3.0 InterCore Protocol: The Universal System Nexus (Heart of BTRON)
+  The InterCore protocol (originating in platform.rs / o83 lineage) is not merely a
+  specialized message transport for MicroScript; it is the NORMATIVE HEART of the
+  entire BTRON operating system. It unifies all system planes into a single,
+  coherent, mathematically verified concurrency fabric:
+
+    1. Hardware & IRQ Plane (Tier 1):
+       xHCI, timer, keyboard/mouse ISRs do not invoke GUI or allocator functions;
+       they obtain a publisher cursor via `pub` and non-blockingly emit raw event
+       snapshots into the bus with `snd`.
+    2. Real-Time Media & Streaming Plane:
+       NuStream audio/video engines (doc/txt/ASYNC.txt, media_smp/rtp models) utilize
+       InterCore CAS multicursor ring sectors for zero-copy frame pipeline routing.
+    3. Windowing & Presentation Plane:
+       Clarity frames, Cabinet drag-and-drop, and TAD display engines drain input
+       events through InterCore `rcv` reader cursors under strict frame time budgets.
+    4. Hypermedia Scripting Plane (MicroScript / Language T):
+       High-level user agents and BPMN/Z.101 workflows compile down to identical
+       InterCore `pub`/`sub`/`spawn`/`snd`/`rcv` primitives.
+
+  By establishing the InterCore protocol as the immutable heart of BTRON:
+    - The Mutex-Elimination Theorem applies uniformly from ISR to user script:
+      no locks, no mutexes, and zero priority inversion across cores.
+    - Watermark Token Conservation (ISO/IEC 15909) accounts for every sector,
+      signal, and packet without leak or unbounded accumulation.
+    - Total state transformations guarantee deterministic, soft- and hard-real-time
+      predictability across the symmetric multi-core architecture.
 
 In standard ITU-T Z.100, an agent's input port is an unbounded FIFO queue. In a certified
 real-time OS, unbounded queues are strictly forbidden. The BTRON architecture realizes

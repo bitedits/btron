@@ -42,6 +42,8 @@ static GLfloat s_cube_velx = 0.0f;
 static GLfloat s_cube_vely = 0.0f;
 static int     s_dragging = 0;
 static H       s_prev_drag_x = 0, s_prev_drag_y = 0;
+static float   s_drag_dist = 0.0f;
+static ID      s_audio_tskid = 0;
 
 /* Hopf Background Tilt & Swirl Dynamics (1:1 with index.html lines 6926-6936) */
 static float   s_target_rot_x = 0.22f;
@@ -487,30 +489,30 @@ static void draw_anime_eye(float squish_y, bool is_left) {
     (void)is_left;
     glPushMatrix();
 
-    /* 1. Pupil: Cylinder/disc radius 0.18, height 0.48 in 0x081226 (0.03, 0.07, 0.15) */
+    /* 1. Pupil: Disc radius 0.18, height 0.24 in 0x081226 (0.031, 0.070, 0.149) */
     glColor3f(0.031f, 0.070f, 0.149f);
     glBegin(GL_POLYGON);
-    for (int a = 0; a < 12; a++) {
-        float rad = (float)a * 2.0f * (float)M_PI / 12.0f;
+    for (int a = 0; a < 16; a++) {
+        float rad = (float)a * 2.0f * (float)M_PI / 16.0f;
         glVertex3f(cosf(rad) * 0.18f, sinf(rad) * 0.24f * squish_y, 0.0f);
     }
     glEnd();
 
-    /* 2. Iris: Cylinder/disc radius 0.15 at (0, -0.11, 0.015) in 0x00e5ff (0.0, 0.898, 1.0) */
+    /* 2. Iris: Disc radius 0.15 at (0, -0.11, 0.005) in 0x00e5ff (0.0, 0.898, 1.0) */
     glColor3f(0.0f, 0.898f, 1.0f);
     glBegin(GL_POLYGON);
-    for (int a = 0; a < 10; a++) {
-        float rad = (float)a * 2.0f * (float)M_PI / 10.0f;
-        glVertex3f(cosf(rad) * 0.15f, (-0.11f + sinf(rad) * 0.11f) * squish_y, 0.015f);
+    for (int a = 0; a < 14; a++) {
+        float rad = (float)a * 2.0f * (float)M_PI / 14.0f;
+        glVertex3f(cosf(rad) * 0.15f, -0.11f * squish_y + sinf(rad) * 0.15f * squish_y, 0.005f);
     }
     glEnd();
 
-    /* 3. Specular highlight: Circle radius 0.09 at (-0.04, 0.11, 0.025) in 0xffffff */
+    /* 3. Specular highlight: Circle radius 0.09 at (-0.04, 0.11, 0.010) in 0xffffff */
     glColor3f(1.0f, 1.0f, 1.0f);
     glBegin(GL_POLYGON);
-    for (int a = 0; a < 8; a++) {
-        float rad = (float)a * 2.0f * (float)M_PI / 8.0f;
-        glVertex3f(-0.04f + cosf(rad) * 0.09f, (0.11f + sinf(rad) * 0.09f) * squish_y, 0.025f);
+    for (int a = 0; a < 10; a++) {
+        float rad = (float)a * 2.0f * (float)M_PI / 10.0f;
+        glVertex3f(-0.04f + cosf(rad) * 0.09f, 0.11f * squish_y + sinf(rad) * 0.09f * squish_y, 0.010f);
     }
     glEnd();
 
@@ -521,8 +523,8 @@ static void draw_anime_eye(float squish_y, bool is_left) {
 static void draw_cheek_blush(void) {
     glColor3f(1.0f, 0.251f, 0.506f);
     glBegin(GL_POLYGON);
-    for (int a = 0; a < 10; a++) {
-        float rad = (float)a * 2.0f * (float)M_PI / 10.0f;
+    for (int a = 0; a < 14; a++) {
+        float rad = (float)a * 2.0f * (float)M_PI / 14.0f;
         glVertex3f(cosf(rad) * 0.22f, sinf(rad) * 0.22f, 0.0f);
     }
     glEnd();
@@ -533,20 +535,26 @@ static void draw_mouth(float smile_scale, float omouth_scale) {
     glColor3f(0.749f, 0.071f, 0.314f);
 
     if (smile_scale > 0.05f) {
-        /* Torus arc R=0.16, r=0.038 */
-        glBegin(GL_LINE_STRIP);
-        for (int a = 0; a <= 10; a++) {
-            float ang = (float)M_PI + (float)a * (float)M_PI / 10.0f;
-            glVertex3f(cosf(ang) * 0.16f * smile_scale, sinf(ang) * 0.09f * smile_scale, 1.08f);
+        /* Torus arc R=0.16, r=0.038 rendered as a solid ribbon */
+        glBegin(GL_TRIANGLE_STRIP);
+        for (int a = 0; a <= 12; a++) {
+            float ang = (float)M_PI + (float)a * (float)M_PI / 12.0f;
+            float r_in = (0.16f - 0.038f) * smile_scale;
+            float r_out = (0.16f + 0.038f) * smile_scale;
+            glVertex3f(cosf(ang) * r_out, sinf(ang) * (r_out * 0.70f), 0.0f);
+            glVertex3f(cosf(ang) * r_in,  sinf(ang) * (r_in  * 0.70f), 0.0f);
         }
         glEnd();
     }
     if (omouth_scale > 0.05f) {
-        /* Torus ring R=0.15, r=0.05 */
-        glBegin(GL_LINE_LOOP);
-        for (int a = 0; a < 12; a++) {
-            float ang = (float)a * 2.0f * (float)M_PI / 12.0f;
-            glVertex3f(cosf(ang) * 0.15f * omouth_scale, sinf(ang) * 0.15f * omouth_scale, 1.08f);
+        /* Torus ring R=0.15, r=0.05 rendered as a solid filled ring */
+        glBegin(GL_TRIANGLE_STRIP);
+        for (int a = 0; a <= 16; a++) {
+            float ang = (float)a * 2.0f * (float)M_PI / 16.0f;
+            float r_in = (0.15f - 0.05f) * omouth_scale;
+            float r_out = (0.15f + 0.05f) * omouth_scale;
+            glVertex3f(cosf(ang) * r_out, sinf(ang) * r_out, 0.0f);
+            glVertex3f(cosf(ang) * r_in,  sinf(ang) * r_in,  0.0f);
         }
         glEnd();
     }
@@ -725,19 +733,22 @@ static void render_lilcu64(const AnimPose *pose, float time) {
     glRotatef(pose->body_rot_z * 57.29578f, 0.0f, 0.0f, 1.0f);
     glScalef(pose->scale_x, pose->scale_y, pose->scale_z);
 
-    /* 1. Main Faceted Gem Cube at (0, 0.12, 0), color 0x85e8ff (0.522, 0.910, 1.0) */
+    /* 1. Main Faceted Gem Cube at (0, 0.12, 0), color 0x85e8ff (0.522, 0.910, 1.0) — Lit */
+    glEnable(GL_LIGHTING);
+    glEnable(GL_COLOR_MATERIAL);
     glPushMatrix();
     glTranslatef(0.0f, 0.12f, 0.0f);
     draw_faceted_gem_cube(0.522f, 0.910f, 1.0f);
 
-    /* 2. Internal rotating Octahedron Core at (0, 0.12, 0), radius 0.78, solid white */
+    /* 2. Internal rotating Octahedron Core at (0, 0.12, 0), radius 0.78, solid white — Unlit */
+    glDisable(GL_LIGHTING);
     glPushMatrix();
     glRotatef(s_core_rot_x * 57.29578f, 1.0f, 0.0f, 0.0f);
     glRotatef(s_core_rot_y * 57.29578f, 0.0f, 1.0f, 0.0f);
     draw_octahedron(0.78f, false, 1.0f, 1.0f, 1.0f);
     glPopMatrix();
 
-    /* 3. Wireframe Octahedron at (0, 0.12, 0), radius 1.02, cyan 0x38bdf8 */
+    /* 3. Wireframe Octahedron at (0, 0.12, 0), radius 1.02, cyan 0x38bdf8 — Unlit */
     glPushMatrix();
     glRotatef(s_wire_rot_x * 57.29578f, 1.0f, 0.0f, 0.0f);
     glRotatef(s_wire_rot_y * 57.29578f, 0.0f, 1.0f, 0.0f);
@@ -746,41 +757,45 @@ static void render_lilcu64(const AnimPose *pose, float time) {
 
     glPopMatrix(); /* End main cube & octahedra */
 
+    /* 4. Facial Features (Unlit for pure anime brilliance, matching Three.js MeshBasicMaterial) */
+    glDisable(GL_LIGHTING);
 
-
-    /* 5. Mouth at (0, -0.06, 1.08) */
+    /* Mouth at (0, -0.06, 1.085) */
     glPushMatrix();
-    glTranslatef(0.0f, -0.06f, 1.08f);
+    glTranslatef(0.0f, -0.06f, 1.085f);
     draw_mouth(pose->smile_scale, pose->omouth_scale);
     glPopMatrix();
 
-    /* 6. Anime Eyes */
+    /* Anime Eyes with dynamic gaze tracking (1:1 with index.html lines 7202-7205) */
     float blink_squish = 1.0f;
     if (s_is_blinking) {
         blink_squish = 1.0f - sinf(s_blink_progress * (float)M_PI) * 0.90f;
     }
     glPushMatrix();
-    glTranslatef(-0.46f, 0.32f, 1.08f);
+    glTranslatef(-0.46f + s_target_look_x * 0.08f, 0.32f + s_target_look_y * 0.06f, 1.080f);
     draw_anime_eye(blink_squish, true);
     glPopMatrix();
 
     glPushMatrix();
-    glTranslatef(0.46f, 0.32f, 1.08f);
+    glTranslatef(0.46f + s_target_look_x * 0.08f, 0.32f + s_target_look_y * 0.06f, 1.080f);
     draw_anime_eye(blink_squish, false);
     glPopMatrix();
 
-    /* 7. Blush Cheeks at (-0.76, -0.06, 1.07) and (0.76, -0.06, 1.07) */
+    /* Blush Cheeks at (-0.76, -0.06, 1.075) and (0.76, -0.06, 1.075) */
     glPushMatrix();
-    glTranslatef(-0.76f, -0.06f, 1.07f);
+    glTranslatef(-0.76f, -0.06f, 1.075f);
     draw_cheek_blush();
     glPopMatrix();
 
     glPushMatrix();
-    glTranslatef(0.76f, -0.06f, 1.07f);
+    glTranslatef(0.76f, -0.06f, 1.075f);
     draw_cheek_blush();
     glPopMatrix();
 
-    /* 8. Little Cube Hands at pivots (-1.26, 0.05, 0.1) and (1.26, 0.05, 0.1) */
+    /* 5. Little Cube Hands at pivots (-1.26, 0.05, 0.1) and (1.26, 0.05, 0.1) — Lit */
+    glEnable(GL_LIGHTING);
+    glEnable(GL_COLOR_MATERIAL);
+
     /* Left Hand */
     glPushMatrix();
     glTranslatef(-1.26f, 0.05f, 0.1f);
@@ -801,7 +816,10 @@ static void render_lilcu64(const AnimPose *pose, float time) {
 
     glPopMatrix(); /* End Body Group */
 
-    /* 9. Little Cube Feet (Direct children of rootGroup at pivots (-0.64, -0.92, 0.08)) */
+    /* 6. Little Cube Feet (Direct children of rootGroup at pivots (-0.64, -0.92, 0.08)) — Lit */
+    glEnable(GL_LIGHTING);
+    glEnable(GL_COLOR_MATERIAL);
+
     /* Left Foot */
     glPushMatrix();
     glTranslatef(pose->left_foot_x, pose->lfoot_y, pose->left_foot_z);
@@ -878,14 +896,31 @@ static void update_kinematics(float dt) {
     s_wire_rot_x += dt * -0.7f;
     s_wire_rot_y += dt * 0.5f;
 
-    /* Autonomous animation progression: cycle smoothly when mascot is idle */
-    if (s_anim_state == ANIM_IDLE && s_state_timer >= 3.8f) {
-        static int s_auto_anim = 0;
-        s_auto_anim = (s_auto_anim + 1) % 4;
-        if (s_auto_anim == 0) set_animation(ANIM_WALK);
-        else if (s_auto_anim == 1) set_animation(ANIM_FLOAT);
-        else if (s_auto_anim == 2) set_animation(ANIM_DANCE);
-        else set_animation(ANIM_SING);
+    /* Synchronized 3D Mascot Choreography for Track 1 (1:1 with index.html lines 4670-4692) */
+    if (lilcu64_synth_get_active_track() == 1) {
+        float t = lilcu64_synth_get_track_time();
+        if (t < 4.28f) {
+            if (s_anim_state != ANIM_FLOAT) set_animation(ANIM_FLOAT);
+        } else if (t < 8.57f) {
+            if (s_anim_state != ANIM_WALK) set_animation(ANIM_WALK);
+        } else if (t < 12.85f) {
+            if (s_anim_state != ANIM_SING) {
+                set_animation(ANIM_SING);
+                trigger_radiant_wave(false);
+            }
+        } else if (t < 17.14f) {
+            if (s_anim_state != ANIM_DANCE) set_animation(ANIM_DANCE);
+        } else if (t < 21.42f) {
+            if (s_anim_state != ANIM_FLOAT) set_animation(ANIM_FLOAT);
+        } else if (t < 24.20f) {
+            if (s_anim_state != ANIM_SING) {
+                set_animation(ANIM_SING);
+                s_impact_squash = 0.24f;
+                trigger_radiant_wave(true);
+            }
+        } else {
+            if (s_anim_state != ANIM_IDLE) set_animation(ANIM_IDLE);
+        }
     }
 
     /* Target pose goals */
@@ -1214,12 +1249,17 @@ static void render_2d_dashboard(GDEV *dev) {
     drw_rec(dev, &bubble_r);
     drw_tc_string(dev, 32, dev->height - 52, s_quote_text, COLOR_GOLD, 0);
 
-    /* Control hints */
-    char hint_buf[160];
+    /* Compact control hint conforming to user request */
+    char hint_buf[80];
     int active_t = lilcu64_synth_get_active_track();
-    snprintf(hint_buf, sizeof(hint_buf),
-             "[Space/P] Sacred Pulse & Sing  [W] Waddle  [F] Float  [D] Dance  [1/S] Trk 1 (%s)  [2/C] Trk 2  [3/H] Trk 3  [4/T] Trk 4  [M] Mute",
-             active_t > 0 ? "ON" : "OFF");
+    if (active_t > 0) {
+        snprintf(hint_buf, sizeof(hint_buf),
+                 "[Space/P] Pulse  [W] Walk  [F] Float  [D] Dance  [1-4] Trk %d  [M] Mute",
+                 active_t);
+    } else {
+        snprintf(hint_buf, sizeof(hint_buf),
+                 "[Space/P] Pulse  [W] Walk  [F] Float  [D] Dance  [1-4] Trk  [M] Mute");
+    }
     drw_tc_string(dev, 32, dev->height - 32, hint_buf, COLOR_WHITE, 0);
 }
 
@@ -1315,18 +1355,22 @@ static void demo_event(WND *wnd, const EVT *evt) {
         s_dragging = 1;
         s_prev_drag_x = evt->pos.x;
         s_prev_drag_y = evt->pos.y;
+        s_drag_dist = 0.0f;
         s_cube_velx = 0.0f;
         s_cube_vely = 0.0f;
-
-        /* Click on mascot triggers poke reaction */
-        if (evt->pos.y > 100 && evt->pos.y < wnd->client.bottom - 100) {
-            set_animation(ANIM_POKE);
-        }
     } else if (evt->type == EV_BUT_UP) {
         s_dragging = 0;
         s_cube_velx *= 0.5f;
         s_cube_vely *= 0.5f;
         s_last_pointer_angle = -999.0f;
+
+        /* Click on mascot triggers Journey Sacred Pulse & Sing (index.html lines 6353-6364) */
+        if (s_drag_dist < 6.0f) {
+            lilcu64_shim_boing();
+            lilcu64_shim_chirp();
+            trigger_radiant_wave(false);
+            set_animation(ANIM_SING);
+        }
     } else if (evt->type == EV_MOUSE_MOVE) {
         float cx = (float)wnd->client.left + (float)(wnd->client.right - wnd->client.left) * 0.5f;
         float cy = (float)wnd->client.top + (float)(wnd->client.bottom - wnd->client.top) * 0.38f;
@@ -1377,18 +1421,17 @@ static void demo_event(WND *wnd, const EVT *evt) {
         if (s_dragging) {
             float dragDeltaX = (float)(evt->pos.x - s_prev_drag_x);
             float dragDeltaY = (float)(evt->pos.y - s_prev_drag_y);
+            s_drag_dist += fabsf(dragDeltaX) + fabsf(dragDeltaY);
 
-            /* Ergonomically calibrated drag sensitivities */
-            s_cube_vely = dragDeltaX * 0.005f;
-            s_cube_velx = dragDeltaY * 0.004f;
-
-            if (s_cube_vely > 0.04f) s_cube_vely = 0.04f;
-            if (s_cube_vely < -0.04f) s_cube_vely = -0.04f;
-            if (s_cube_velx > 0.04f) s_cube_velx = 0.04f;
-            if (s_cube_velx < -0.04f) s_cube_velx = -0.04f;
+            /* 1:1 with index.html lines 6982-6987 */
+            s_cube_vely = dragDeltaX * 0.012f;
+            s_cube_velx = dragDeltaY * 0.010f;
 
             s_cube_roty += s_cube_vely;
             s_cube_rotx += s_cube_velx;
+
+            if (s_cube_rotx > 1.25f) s_cube_rotx = 1.25f;
+            if (s_cube_rotx < -1.25f) s_cube_rotx = -1.25f;
 
             s_prev_drag_x = evt->pos.x;
             s_prev_drag_y = evt->pos.y;
@@ -1410,9 +1453,21 @@ static void demo_destroy(WND *wnd) {
     if (s_demo_tskid > 0) {
         wup_tsk(s_demo_tskid);
     }
+    if (s_audio_tskid > 0) {
+        wup_tsk(s_audio_tskid);
+    }
 }
 
-/* ── 60 FPS Scheduler Task ─────────────────────────────────────────── */
+/* ── 60 FPS Scheduler Task & Real-Time Audio Task ───────────────────── */
+
+static void demo_audio_task_fn(VW exinf) {
+    (void)exinf;
+    while (s_demo_wnd) {
+        lilcu64_synth_pump_virtio(0);
+        dly_tsk(10); /* 100Hz real-time VirtIO sound buffer refill */
+    }
+    s_audio_tskid = 0;
+}
 
 static void demo_task_fn(VW exinf) {
     (void)exinf;
@@ -1459,16 +1514,32 @@ WND* open_lilcu64_demo_window(void) {
     glEnable(GL_CULL_FACE);
     glShadeModel(GL_SMOOTH);
 
-    static const GLfloat light_pos[4]   = { 4.0f, 8.0f, 6.0f, 1.0f };
-    static const GLfloat light_white[4] = { 0.95f, 0.95f, 0.95f, 1.0f };
+    static const GLfloat light_pos[4]     = { 4.0f, 8.0f, 6.0f, 1.0f };
+    static const GLfloat light_white[4]   = { 0.95f, 0.95f, 0.95f, 1.0f };
+    static const GLfloat ambient_light[4] = { 0.75f, 0.75f, 0.75f, 1.0f };
 
-    glLightfv(GL_LIGHT0, GL_POSITION, light_pos);
-    glLightfv(GL_LIGHT0, GL_DIFFUSE, light_white);
-    glLightfv(GL_LIGHT0, GL_SPECULAR, light_white);
+    glLightfv(GL_LIGHT0, GL_AMBIENT, (GLfloat *)ambient_light);
+    glLightfv(GL_LIGHT0, GL_POSITION, (GLfloat *)light_pos);
+    glLightfv(GL_LIGHT0, GL_DIFFUSE, (GLfloat *)light_white);
+    glLightfv(GL_LIGHT0, GL_SPECULAR, (GLfloat *)light_white);
+    glEnable(GL_COLOR_MATERIAL);
     glEnable(GL_LIGHTING);
     glEnable(GL_LIGHT0);
 
-    /* Register animation task */
+    /* Register real-time audio pump task (high priority, 100Hz) */
+    T_CTSK ctsk_audio;
+    ctsk_audio.exinf = 0;
+    ctsk_audio.tskatr = TA_HLNG;
+    ctsk_audio.task = demo_audio_task_fn;
+    ctsk_audio.itskpri = 6;
+    ctsk_audio.stksz = 32768;
+    s_audio_tskid = cre_tsk(&ctsk_audio);
+    if (s_audio_tskid > 0) {
+        sta_tsk(s_audio_tskid, 0);
+        uart_puts_raw("[DEMO] Lil Cu 64 Audio Task: 100Hz real-time VirtIO pump started\n");
+    }
+
+    /* Register animation task (60 FPS) */
     T_CTSK ctsk;
     ctsk.exinf = 0;
     ctsk.tskatr = TA_HLNG;

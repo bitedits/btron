@@ -268,34 +268,236 @@ static void drum_hihat(float vol) {
 
 /* ── Tracker Score Sequencer ──────────────────────────────────────── */
 
-static void step_track_1(int step) {
-    /* Track 1: 鐘のキャロル (Carol of the Bells) — 168 BPM 3/4 Vivace
-     * 1 bar = 3 beats = 6 eighth notes. Each step = 1 eighth note (~0.1786s)
-     * 4-note motif: G5, F#5, G5, E5
-     */
-    int pattern_step = step % 48;
-    int beat_in_bar = (pattern_step % 6);
+/* Helper 1: Iconic 4-Note Chiptune Bell Motif (G5 - F#5 - G5 - E5) */
+static void bell_motif(int s, float vol_scale, float octave) {
+    if (s == 0) lilcu64_shim_ding(783.99f * octave, 0.95f * vol_scale, 0.70f);      /* G5 */
+    else if (s == 4) lilcu64_shim_ding(739.99f * octave, 0.85f * vol_scale, 0.60f); /* F#5 */
+    else if (s == 6) lilcu64_shim_ding(783.99f * octave, 0.85f * vol_scale, 0.60f); /* G5 */
+    else if (s == 8) lilcu64_shim_ding(659.25f * octave, 1.05f * vol_scale, 0.90f); /* E5 */
+}
 
-    /* Bells */
-    if (beat_in_bar == 0) lilcu64_shim_ding(783.99f, 0.85f, 0.65f);      /* G5 */
-    else if (beat_in_bar == 2) lilcu64_shim_ding(739.99f, 0.75f, 0.55f); /* F#5 */
-    else if (beat_in_bar == 3) lilcu64_shim_ding(783.99f, 0.75f, 0.55f); /* G5 */
-    else if (beat_in_bar == 4) lilcu64_shim_ding(659.25f, 0.95f, 0.80f); /* E5 */
+/* Helper 2: Bouncy BTRON Chiptune Walking Bass */
+static void bass_bar(int s, float root, float fifth, float oct, float vol_scale) {
+    if (s == 0) lilcu64_shim_waddle(root, 1.0f * vol_scale);
+    else if (s == 4) lilcu64_shim_waddle(fifth, 0.85f * vol_scale);
+    else if (s == 8) lilcu64_shim_waddle(oct, 0.95f * vol_scale);
+}
 
-    /* Walking bass on beat 1 and beat 3 */
-    if (beat_in_bar == 0) {
-        float bass_note = (pattern_step < 24) ? 82.41f : 110.00f; /* E2 or A2 */
-        lilcu64_shim_waddle(bass_note, 0.9f);
-        drum_kick(0.85f);
-    } else if (beat_in_bar == 2 || beat_in_bar == 4) {
-        drum_hihat(0.6f);
-        if (pattern_step >= 12 && beat_in_bar == 4) drum_snare(0.7f);
+/* Helper 3: Retro Chiptune Drum Groove */
+static void drum_groove(int s, bool has_kick, bool has_snare) {
+    if (s == 0) {
+        if (has_kick) drum_kick(0.85f);
+        drum_hihat(0.55f);
+    } else if (s == 4) {
+        drum_hihat(0.50f);
+        if (has_snare) drum_snare(0.80f);
+    } else if (s == 8) {
+        drum_hihat(0.55f);
+        if (has_snare) drum_snare(0.70f);
     }
+}
 
-    /* Chiptune Lead melody in second section */
-    if (pattern_step >= 24) {
-        if (beat_in_bar == 0) lilcu64_shim_dance(1.189f, 0.7f);
-        else if (beat_in_bar == 3) lilcu64_shim_dance(1.334f, 0.7f);
+static void step_track_1(int step) {
+    /* Track 1: 鐘のキャロル (Carol of the Bells / Shchedryk)
+     * 168 BPM (3/4 Vivace) — 24 Measures, 288 Sixteenth Steps (~25.8s)
+     * 1:1 Parity with index.html lines 4410-4695
+     */
+    int pat = step % 288;
+    int bar = pat / 12;
+    int s   = pat % 12;
+
+    switch (bar) {
+        /* ── SECTION 1: STAGE INTRO & BELL OSTINATO (Bars 1-4, 0.00s - 4.28s) ── */
+        case 0:
+            bell_motif(s, 0.95f, 1.0f);
+            if (s == 0) lilcu64_shim_pulse_bell(0.65f, 0.30f * 0.78f);
+            break;
+        case 1:
+            bell_motif(s, 1.0f, 1.0f);
+            if (s == 4) drum_hihat(0.40f);
+            if (s == 8) drum_hihat(0.45f);
+            break;
+        case 2:
+            bell_motif(s, 1.05f, 1.0f);
+            bell_motif(s, 0.70f, 2.0f);
+            drum_groove(s, true, false);
+            break;
+        case 3:
+            bell_motif(s, 1.10f, 1.0f);
+            bell_motif(s, 0.75f, 2.0f);
+            drum_groove(s, true, true);
+            if (s == 8) lilcu64_shim_waddle(82.41f, 0.85f); /* E2 pickup */
+            break;
+
+        /* ── SECTION 2: THE BTRON GAME GROOVE (Bars 5-8, 4.28s - 8.57s) ── */
+        case 4: /* Em */
+            bell_motif(s, 1.0f, 1.0f);
+            bass_bar(s, 82.41f, 123.47f, 164.81f, 1.0f);
+            drum_groove(s, true, true);
+            break;
+        case 5: /* D */
+            bell_motif(s, 1.0f, 1.0f);
+            bass_bar(s, 73.42f, 110.00f, 146.83f, 1.0f);
+            drum_groove(s, true, true);
+            break;
+        case 6: /* C */
+            bell_motif(s, 1.0f, 1.0f);
+            bass_bar(s, 65.41f, 98.00f, 130.81f, 1.0f);
+            drum_groove(s, true, true);
+            break;
+        case 7: /* B */
+            bell_motif(s, 1.10f, 1.0f);
+            bass_bar(s, 61.74f, 92.50f, 123.47f, 1.0f);
+            drum_groove(s, true, true);
+            if (s == 9) drum_snare(0.65f);
+            if (s == 10) drum_snare(0.80f);
+            break;
+
+        /* ── SECTION 3: CHIPTUNE MELODIC COUNTERPOINT (Bars 9-12, 8.57s - 12.86s) ── */
+        case 8: /* Em */
+            bell_motif(s, 0.85f, 1.0f);
+            bass_bar(s, 82.41f, 123.47f, 164.81f, 1.0f);
+            drum_groove(s, true, true);
+            if (s == 0) {
+                lilcu64_shim_float(523.25f, 0.75f);
+                lilcu64_shim_pulse_squash(0.95f, 1.25f); /* High B5 */
+                lilcu64_shim_ding(987.77f, 0.80f, 0.80f);
+            }
+            break;
+        case 9: /* D */
+            bell_motif(s, 0.85f, 1.0f);
+            bass_bar(s, 73.42f, 110.00f, 146.83f, 1.0f);
+            drum_groove(s, true, true);
+            if (s == 0) { lilcu64_shim_float(493.88f, 0.75f); lilcu64_shim_ding(1046.50f, 0.80f, 0.50f); }
+            else if (s == 4) { lilcu64_shim_ding(987.77f, 0.80f, 0.50f); }
+            else if (s == 8) { lilcu64_shim_ding(880.00f, 0.90f, 0.60f); }
+            break;
+        case 10: /* C */
+            bell_motif(s, 0.85f, 1.0f);
+            bass_bar(s, 65.41f, 98.00f, 130.81f, 1.0f);
+            drum_groove(s, true, true);
+            if (s == 0) { lilcu64_shim_float(440.00f, 0.75f); lilcu64_shim_ding(783.99f, 0.80f, 0.50f); }
+            else if (s == 4) { lilcu64_shim_ding(880.00f, 0.80f, 0.50f); }
+            else if (s == 8) { lilcu64_shim_ding(987.77f, 0.90f, 0.60f); }
+            break;
+        case 11: /* B */
+            bell_motif(s, 0.90f, 1.0f);
+            bass_bar(s, 61.74f, 92.50f, 123.47f, 1.0f);
+            drum_groove(s, true, true);
+            if (s == 0) {
+                lilcu64_shim_ding(659.25f, 0.95f, 0.80f); /* E5 */
+                lilcu64_shim_pulse_squash(0.90f, 1.0f);
+            }
+            break;
+
+        /* ── SECTION 4: CHIPTUNE COIN & STAR ARPEGGIOS (Bars 13-16, 12.86s - 17.14s) ── */
+        case 12: /* Em */
+            bass_bar(s, 82.41f, 123.47f, 164.81f, 1.0f);
+            drum_groove(s, true, true);
+            if (s == 0) lilcu64_shim_dance(1.0f, 0.85f);
+            bell_motif(s, 0.80f, 1.0f);
+            break;
+        case 13: /* D */
+            bass_bar(s, 73.42f, 110.00f, 146.83f, 1.0f);
+            drum_groove(s, true, true);
+            if (s == 0) lilcu64_shim_dance(0.89f, 0.85f);
+            bell_motif(s, 0.80f, 1.0f);
+            break;
+        case 14: /* C */
+            bass_bar(s, 65.41f, 98.00f, 130.81f, 1.0f);
+            drum_groove(s, true, true);
+            if (s == 0) lilcu64_shim_dance(0.79f, 0.85f);
+            bell_motif(s, 0.80f, 1.0f);
+            break;
+        case 15: /* B climbing trill */
+            bass_bar(s, 61.74f, 92.50f, 123.47f, 1.0f);
+            if (s == 0) { drum_kick(0.80f); drum_hihat(0.55f); lilcu64_shim_ding(987.77f, 0.80f, 0.40f); }
+            else if (s == 1) { lilcu64_shim_ding(1046.50f, 0.80f, 0.40f); }
+            else if (s == 2) { lilcu64_shim_ding(1174.66f, 0.85f, 0.40f); }
+            else if (s == 3) { lilcu64_shim_ding(1244.51f, 0.95f, 0.50f); }
+            else if (s == 4) { drum_hihat(0.50f); }
+            else if (s == 8) { drum_snare(0.95f); drum_hihat(0.55f); }
+            break;
+
+        /* ── SECTION 5: VIRTUOSO SPEEDRUN & CHIPTUNE FLURRY (Bars 17-20, 17.14s - 21.43s) ── */
+        case 16: {
+            bass_bar(s, 82.41f, 82.41f, 164.81f, 1.0f);
+            drum_groove(s, true, true);
+            static const float r17[12] = {
+                659.25f, 783.99f, 987.77f, 1318.51f, 1567.98f, 1479.98f,
+                1318.51f, 1174.66f, 1046.50f, 987.77f, 880.00f, 783.99f
+            };
+            lilcu64_shim_ding(r17[s], 0.55f, 0.22f);
+            if (s == 0) lilcu64_shim_pulse_squash(0.80f, 1318.51f / 880.0f);
+            else if (s == 4) lilcu64_shim_pulse_squash(0.80f, 1567.98f / 880.0f);
+            else if (s == 8) lilcu64_shim_pulse_squash(0.80f, 1046.50f / 880.0f);
+            break;
+        }
+        case 17: {
+            bass_bar(s, 65.41f, 61.74f, 123.47f, 1.0f);
+            drum_groove(s, true, true);
+            static const float r18[12] = {
+                739.99f, 783.99f, 880.00f, 987.77f, 1046.50f, 1174.66f,
+                1318.51f, 1479.98f, 1567.98f, 1760.00f, 1567.98f, 1479.98f
+            };
+            lilcu64_shim_ding(r18[s], 0.55f, 0.22f);
+            break;
+        }
+        case 18: {
+            bass_bar(s, 82.41f, 123.47f, 164.81f, 1.0f);
+            drum_groove(s, true, true);
+            static const float r19[12] = {
+                1318.51f, 987.77f, 783.99f, 659.25f, 783.99f, 987.77f,
+                1318.51f, 1567.98f, 1975.53f, 1567.98f, 1318.51f, 987.77f
+            };
+            lilcu64_shim_ding(r19[s], 0.60f, 0.25f);
+            break;
+        }
+        case 19:
+            bass_bar(s, 61.74f, 92.50f, 123.47f, 1.0f);
+            if (s == 0) { drum_kick(0.80f); drum_hihat(0.55f); lilcu64_shim_ding(1244.51f, 0.70f, 0.30f); }
+            else if (s == 1) { lilcu64_shim_ding(1479.98f, 0.70f, 0.30f); }
+            else if (s == 2) { lilcu64_shim_ding(1760.00f, 0.75f, 0.30f); }
+            else if (s == 3) { lilcu64_shim_ding(1975.53f, 0.85f, 0.40f); }
+            else if (s == 4) { drum_hihat(0.50f); }
+            else if (s == 8) {
+                drum_snare(0.95f); drum_hihat(0.55f);
+                lilcu64_shim_ding(1567.98f, 1.10f, 0.80f); /* High G6 resolution! */
+            }
+            break;
+
+        /* ── SECTION 6: VICTORY FANFARE & TRANSCENDENT CODA (Bars 21-24, 21.43s - 25.8s) ── */
+        case 20: /* Em Fanfare */
+            if (s == 0) {
+                drum_kick(1.10f);
+                drum_snare(0.95f);
+                lilcu64_shim_pulse_squash(0.95f, 1.0f);
+                lilcu64_shim_float(523.25f, 0.85f);
+            }
+            bass_bar(s, 82.41f, 123.47f, 164.81f, 1.1f);
+            bell_motif(s, 1.25f, 1.0f);
+            bell_motif(s, 0.85f, 2.0f);
+            break;
+        case 21:
+            bass_bar(s, 65.41f, 61.74f, 82.41f, 1.1f);
+            drum_groove(s, true, true);
+            bell_motif(s, 1.15f, 1.0f);
+            if (s == 0) lilcu64_shim_dance(1.0f, 0.75f);
+            break;
+        case 22:
+            if (s == 0) {
+                lilcu64_shim_waddle(82.41f, 0.85f);
+                lilcu64_shim_float(523.25f, 0.75f);
+                lilcu64_shim_ding(1318.51f, 0.85f, 1.60f); /* E6 */
+            } else if (s == 8) {
+                lilcu64_shim_ding(2637.02f, 0.80f, 2.00f); /* Celestial E7 */
+            }
+            break;
+        case 23:
+            if (s == 0) lilcu64_shim_ding(1318.51f, 0.75f, 1.20f);       /* E6 */
+            else if (s == 4) lilcu64_shim_ding(987.77f, 0.65f, 1.20f);  /* B5 */
+            else if (s == 8) lilcu64_shim_ding(2637.02f, 0.75f, 2.00f); /* Celestial E7 */
+            break;
     }
 }
 
@@ -408,18 +610,33 @@ static void update_sequencer(float dt) {
 
     s_track_time += dt;
 
-    float step_interval = 0.1786f; /* Track 1 default: 168 BPM 8th note */
+    float step_interval = 0.0892857f; /* Track 1: 168 BPM 16th note (~0.0893s, 1:1 with index.html) */
     if (s_active_track == 2) step_interval = 0.1530f;      /* 98 BPM 16th */
     else if (s_active_track == 3) step_interval = 0.2368f; /* 76 BPM 8th */
     else if (s_active_track == 4) step_interval = 0.1136f; /* 132 BPM 16th */
 
     while (s_track_time >= s_next_step_time) {
-        if (s_active_track == 1) step_track_1(s_track_step);
-        else if (s_active_track == 2) step_track_2(s_track_step);
-        else if (s_active_track == 3) step_track_3(s_track_step);
-        else if (s_active_track == 4) step_track_4(s_track_step);
+        if (s_active_track == 1) {
+            step_track_1(s_track_step);
+            s_track_step++;
+            if (s_track_step >= 288) {
+                /* Loop Track 1 cleanly after 24 measures (~25.8s) */
+                s_track_step = 0;
+                s_track_time = 0.0f;
+                s_next_step_time = step_interval;
+                break;
+            }
+        } else if (s_active_track == 2) {
+            step_track_2(s_track_step);
+            s_track_step++;
+        } else if (s_active_track == 3) {
+            step_track_3(s_track_step);
+            s_track_step++;
+        } else if (s_active_track == 4) {
+            step_track_4(s_track_step);
+            s_track_step++;
+        }
 
-        s_track_step++;
         s_next_step_time += step_interval;
     }
 }
@@ -529,6 +746,11 @@ void lilcu64_synth_render_frames(int16_t *out_pcm, size_t frames) {
 /* ── VirtIO Pump ──────────────────────────────────────────────────── */
 
 int lilcu64_synth_pump_virtio(size_t frames) {
+    static volatile int s_pumping = 0;
+    if (__sync_lock_test_and_set(&s_pumping, 1)) {
+        return 0; /* Already pumping on another thread */
+    }
+
     if (!virtio_sound_is_ready()) {
         /* Attempt to open VirtIO sound if not yet ready */
         if (!s_virtio_opened) {
@@ -536,24 +758,38 @@ int lilcu64_synth_pump_virtio(size_t frames) {
                 s_virtio_opened = true;
             }
         }
-        if (!virtio_sound_is_ready()) return -1;
+        if (!virtio_sound_is_ready()) {
+            __sync_lock_release(&s_pumping);
+            return -1;
+        }
     }
 
-    /* Target audio buffer: ~80ms = 3528 frames = ~14112 bytes at 44.1kHz stereo S16.
-     * If SDL already has enough audio queued ahead, don't generate more now so
-     * sequencer time stays locked to real-time playback. */
+    /* Target audio buffer: ~100ms = 4410 frames = 17640 bytes at 44.1kHz stereo S16.
+     * We refill whatever VirtIO sound has consumed so playback stays 100% locked to real time. */
+    const uint32_t TARGET_BYTES = 17640;
     uint32_t queued = virtio_sound_get_queued_bytes();
-    if (queued > 14112) {
+    if (queued >= TARGET_BYTES) {
+        __sync_lock_release(&s_pumping);
         return 0;
     }
 
-    size_t remaining = frames;
+    uint32_t missing_bytes = TARGET_BYTES - queued;
+    size_t missing_frames = missing_bytes / (sizeof(int16_t) * LILCU64_AUDIO_CHANNELS);
+    if (frames > missing_frames) {
+        missing_frames = frames;
+    }
+    /* Cap single pump burst to at most 120ms (5292 frames) */
+    if (missing_frames > 5292) missing_frames = 5292;
+
+    size_t remaining = missing_frames;
     while (remaining > 0) {
         size_t chunk = (remaining > PUMP_CHUNK_FRAMES) ? PUMP_CHUNK_FRAMES : remaining;
         lilcu64_synth_render_frames(s_pcm_chunk, chunk);
         virtio_sound_write(s_pcm_chunk, chunk);
         remaining -= chunk;
     }
+
+    __sync_lock_release(&s_pumping);
     return 0;
 }
 

@@ -33,6 +33,8 @@ EGL_SURFACE* egl_create_window_surface(WND *wnd) {
 
 #if !defined(BTRON_UEFI_TARGET)
 #include "backend_virgl.h"
+#else
+#include "backend_tinygl.h"
 #endif
 
 void egl_make_current(EGL_SURFACE *surf) {
@@ -40,6 +42,8 @@ void egl_make_current(EGL_SURFACE *surf) {
     surf->pixels = surf->wnd->dev->pixels;
 #if !defined(BTRON_UEFI_TARGET)
     virgl_backend_make_current(surf->width, surf->height, surf->pixels);
+#else
+    tinygl_backend_resize(surf->width, surf->height, surf->pixels);
 #endif
 }
 

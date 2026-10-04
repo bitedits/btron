@@ -22,6 +22,7 @@ extern WND* open_gterm_window(void);
 extern WND* open_audio_player_window(void);
 extern WND* launch_beos_chat(void);
 extern WND* open_glgears_window(void);
+__attribute__((weak)) extern WND* open_lilcu64_demo_window(void);
 
 extern BOOL init_sdl_backend(H width, H height, const char *title);
 extern void flush_gdev_to_sdl(GDEV *dev);
@@ -122,6 +123,9 @@ int main(int argc, char **argv) {
         open_quake_window(80, 40, 560, 420);
     } else {
         open_glgears_window();
+    }
+    if (open_lilcu64_demo_window) {
+        open_lilcu64_demo_window();
     }
 
     while (running) {

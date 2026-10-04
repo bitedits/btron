@@ -1,0 +1,618 @@
+LILCU64-DEMOSCENE.txt — BTRON Lil Cu 64 Demoscene: Native OpenGL & VirtIO Sound Architecture
+===================================================================================================
+
+B-System / BTRON 3.20 Demoscene Specification & Technical Architecture
+Target: Lil Cu 64 (リル・キューブ64 / Little Cube 64) Native OpenGL B-System Alpha 1 [Ceremony]
+Display Subsystem: OpenGL ES 1.1 / VirGL 3D (VirtIO-GPU) / TinyGL Software Rasterizer
+Audio Subsystem: VirtIO Sound (PCM S16_LE 44.1kHz Stereo) & Procedural DSP Synthesis Engine
+Status: Phase 1 & Phase 2 Complete (Production Reference Implementation)
+Related Specifications: index.html, SOUND.txt, RENDER.txt, GPU.txt, glgears.c, virtio.c
+
+===================================================================================================
+TABLE OF CONTENTS
+===================================================================================================
+0. Executive Summary & The 1:1 Port Objective
+1. Functional & Technical Requirements
+   1.1 Visual & Rendering Requirements (Phase 1)
+   1.2 Audio & Music Requirements (Phase 2)
+   1.3 Character Personage Carousel Requirements
+2. System Architecture & Component Topology
+   2.1 Scene Graph & Optical Centering
+   2.2 BTRON Window Lifecycle & Scheduler Integration
+   2.3 Single-Pass OpenGL Rendering Pipeline
+3. Background 4D Hopf Fibration Engine (Mathematical Formalization)
+   3.1 4D Hyperspherical Coordinate Mapping on S³
+   3.2 Stereographic Projection S³ → ℝ³
+   3.3 Flywheel Angular Damping & Rainbow Spectral Dispersion
+   3.4 Spherical Radiant Pulse Wave (Journey Sacred Wave Dynamics)
+4. Lil Cu 64 3D Character Models & Kinematics
+   4.1 Chamfered Core Box & Internal Octahedron Mechanics
+   4.2 Anime Eyes, Specular Highlights & S-Curve Blinking
+   4.3 Rainbow Halo / Nimbus Rings
+   4.4 The 7 Canonical Kinematic Animation States & Springs
+5. Personage Carousel Architecture (The 4 Characters)
+   5.1 Personage A: 聖晶カイザー (Crystalline Saint)
+   5.2 Personage B: レトロチビメカ (Retro Chibi Mecha)
+   5.3 Personage C: 天球プリズム (Celestial Hyper-Prism)
+   5.4 Personage D: 電脳ニンジャ (Cyber Shinobi / Ares Variant)
+6. Procedural DSP Audio Engine & VirtIO Sound Stack
+   6.1 0-Byte Footprint Audio Philosophy
+   6.2 The Sound Shim Library (Pulse, Waddle, Float, Dance, Ding, etc.)
+   6.3 4-Track Score Sequencer (Carol, Caterpillar, Rising Sun, TRON Init)
+   6.4 VirtIO Sound Buffer Management & Ring Queueing
+7. User Controls & Input Matrix (1:1 Replica)
+8. Implementation Status & Verification Roadmap
+
+===================================================================================================
+0. EXECUTIVE SUMMARY & THE 1:1 PORT OBJECTIVE
+===================================================================================================
+
+The Lil Cu 64 Demoscene application ports the interactive 3D hero stage of `index.html` into a
+first-class, native BTRON application (`src/demo/`). It serves as the ceremonial presentation of
+B-System Alpha 1, proving the integration of:
+1. High-performance OpenGL rendering (TinyGL software rasterizer or VirGL hardware acceleration).
+2. Procedural 4D non-Euclidean geometry (Hopf fibration).
+3. 60 FPS bipedal mascot kinematics with critically damped inertial springs.
+4. An autonomous, assetless procedural sound engine streaming 16-bit 44.1kHz stereo PCM directly to
+   VirtIO sound hardware.
+
+By adhering to the "Audio-Visual Shim Principle" established in `SOUND.txt`, every visual action of
+Lil Cu 64 phase-locks directly into synthetic acoustic waves, eliminating external asset dependencies.
+
+===================================================================================================
+1. FUNCTIONAL & TECHNICAL REQUIREMENTS
+===================================================================================================
+
+1.1 Visual & Rendering Requirements (Phase 1)
+- R1.1: 4D Hopf Fibration Background: Render nested fiber tori using stereographic projection from
+        the 3-sphere (S³) into ℝ³, with 9, 18, or 27 fiber rings and dynamic rainbow dispersion.
+- R1.2: Spherical Radiant Wave: On trigger (Space / Pulse), emit an expanding multi-tier spherical
+        wave (golden crest ring, turquoise rim, and luminous blue veil).
+- R1.3: Low-Poly 3D Mascot: Render Lil Cu 64 at the exact optical center (0, 0.08, 0) with
+        chamfered box geometry, counter-rotating inner octahedron gem, detached floating hands,
+        and animated foot pivots.
+- R1.4: Rainbow Halo: Multi-segment torus hovering above and around the character, rotating
+        continuously with a flowing HSV spectrum.
+- R1.5: 7-State Kinematics: Real-time C-infinity smooth state transitions across IDLE, WADDLE, FLOAT,
+        DANCE, SQUASH, SING, and POKE.
+
+1.2 Audio & Music Requirements (Phase 2)
+- R2.1: 0-Byte Asset Dependency: All sound effects and music tracks must be synthesized purely via
+        algorithmic procedural DSP (sine, triangle, sawtooth, noise, biquad filters).
+- R2.2: Sound Shims: Provide real-time procedural generators for `shimPulseSquash`, `shimFrogCroak`,
+        `shimPulseBell`, `shimWaddle`, `shimFloat`, `shimDance`, `shimDing`, and percussion.
+- R2.3: 4 Multi-Channel Tracks:
+        - Track 1: 鐘のキャロル (Carol of the Bells, 168 BPM 3/4 Vivace, E minor)
+        - Track 2: Green Caterpillar (Masaru Imada 1975, 98 BPM 4/4 Jazz, D minor)
+        - Track 3: 朝日のあたる家 (The House of the Rising Sun / Thomas Krüger, 76 BPM 6/8, A minor)
+        - Track 4: TRON Init (Nine Inch Nails / Trent Reznor, 132 BPM 4/4 Industrial, F# minor)
+- R2.4: VirtIO Sound Output: Stream synthesized PCM samples (44.1 kHz, stereo, 16-bit signed) into
+        `virtio_sound_write()` on POSIX (`$ make run-posix`) and QEMU (`$ make run-qemu`).
+
+1.3 Character Personage Carousel Requirements
+- R3.1: 3D Turntable Carousel: Support 4 distinct mascot archetypes with smooth horizontal
+        rotational transitions between selections.
+- R3.2: Personage A (Crystalline Saint): Crystalline ice cube with cyan eyes and pink boots.
+- R3.3: Personage B (Retro Chibi Mecha): N64 toy mecha with chest power emblem, star crown, and gloves.
+- R3.4: Personage C (Celestial Hyper-Prism): Icosahedral glass prism, articulated wings, and 4 orbiting satellites.
+- R3.5: Personage D (Cyber Shinobi): Dark graphite chassis with glowing neon visor and orbiting shuriken.
+
+===================================================================================================
+2. SYSTEM ARCHITECTURE & COMPONENT TOPOLOGY
+===================================================================================================
+
+2.1 Scene Graph & Optical Centering
+The 3D coordinate system matches the HTML5 camera configuration:
+- Camera: Positioned at (0, 0.08, 9.2) looking down the -Z axis at (0, 0.08, 0).
+- Perspective: Field of view 36° (vertical), near plane = 1.0, far plane = 100.0.
+- Optical Alignment: The mascot root pivot sits at (0, 0.08, 0) with base scale = 0.60.
+
+  Scene Root
+  ├── Background 4D Hopf Fibration (Line strips, Depth test on, Depth write off)
+  ├── Spherical Radiant Pulse Waves (Expanding rings & sphere veil)
+  ├── Personage Carousel Root (Yaw rotated by carousel angle)
+  │     ├── Personage A (Crystalline Saint)
+  │     ├── Personage B (Retro Chibi Mecha)
+  │     ├── Personage C (Celestial Hyper-Prism)
+  │     └── Personage D (Cyber Shinobi)
+  └── Contact Shadow Pedestal (Soft alpha ellipse at y = -1.25)
+
+2.2 BTRON Window Lifecycle & Scheduler Integration
+- Window Creation: `opn_wnd("Lil Cu 64 — B-System Alpha 1 [Ceremony]", ...)`
+- Surface Creation: `egl_create_window_surface(wnd)` wrapping the window's client pixmap.
+- Task Creation: Registered via `cre_tsk` and `sta_tsk`, sleeping 16ms (`dly_tsk(16)`) for a rock-solid
+  60 FPS render cadence driven by the Local APIC / POSIX timer tick.
+- Event Dispatch: Window callbacks handle mouse dragging (3D orbit with flywheel inertia),
+  keyboard accelerators, and UI button clicks.
+
+2.3 Single-Pass OpenGL Rendering Pipeline
+Unlike HTML5 which composited two separate canvas elements (Canvas2D + WebGL), the native BTRON
+implementation performs single-pass rendering in pure OpenGL:
+1. `glViewport(0, 0, width, height)`
+2. `glClearColor(0.04, 0.05, 0.09, 1.0)` & `glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)`
+3. Set Projection & ModelView matrices.
+4. Render 4D Hopf Fibration lines with smooth depth testing.
+5. Render Spherical Radiant Waves.
+6. Render Active Mascot with current Kinematic Pose (chamfered box, eyes, mouth, limbs, halo).
+7. Render 2D UI Dashboard and Speech Bubble overlay directly into the window canvas.
+8. `egl_swap_buffers(surf)`.
+
+===================================================================================================
+3. BACKGROUND 4D HOPF FIBRATION ENGINE (MATHEMATICAL FORMALIZATION)
+===================================================================================================
+
+3.1 4D Hyperspherical Coordinate Mapping on S³
+The Hopf fibration maps the 3-sphere S³ ⊂ ℝ⁴ to the 2-sphere S² ⊂ ℝ³.
+Each fiber is a great circle on S³. A family of nested flat tori in S³ is parameterized by:
+
+  η = π/7 + (t + 0.6) * (π / (numTori * 2.8))     for t ∈ [0, numTori - 1]
+  β = (f * 2π / fibersPerTorus) + ω               for f ∈ [0, fibersPerTorus - 1]
+  ξ = p * 2π / numPts                             for p ∈ [0, numPts]
+
+where:
+  ω = time * 0.08 + circularPhase * 0.40
+  ψ = time * 0.12 + circularPhase
+
+The 4D coordinates (x₀, x₁, x₂, x₃) on S³ are:
+  x₀ = cos(η) * cos(ξ + β/2 + ψ)
+  x₁ = cos(η) * sin(ξ + β/2 + ψ)
+  x₂ = sin(η) * cos(ξ - β/2 + 0.8 * ψ)
+  x₃ = sin(η) * sin(ξ - β/2 + 0.8 * ψ)
+
+3.2 Stereographic Projection S³ → ℝ³
+Projecting from the pole (0, 0, 0, 1) into 3-dimensional Euclidean space ℝ³:
+
+  denom = 1.08 - x₃
+  X = x₀ / denom
+  Y = x₁ / denom
+  Z = x₂ / denom
+
+In native OpenGL, (X, Y, Z) are passed directly to `glVertex3f(X, Y, Z)` inside a `GL_LINE_STRIP`,
+letting the GPU or TinyGL perform hardware perspective projection and clipping.
+
+3.3 Flywheel Angular Damping & Rainbow Spectral Dispersion
+- Inertial Flywheel:
+    circularVelocity *= 0.968
+    circularPhase += circularVelocity
+- Rainbow Dispersion:
+  Each fiber loop calculates its hue dynamically:
+    hue = ((fiberIdx / totalFibers) * 360.0 + time * 24.0) % 360.0
+  and converts HSV (hue, 0.95, 0.85) to standard OpenGL RGB via `glColor3f(r, g, b)`.
+
+3.4 Spherical Radiant Wave (Journey Sacred Wave Dynamics)
+When triggered, a dual-tier radiant wave expands outward:
+- Radius: r(t) = 0.5 + (1 - (1 - t/T)^2.8) * (R_max - 0.5)
+- Tier 1: Inner luminous celestial blue dome veil.
+- Tier 2: Outer golden crest ring + turquoise resonance rim with stardust markers.
+
+===================================================================================================
+4. LIL CU 64 3D CHARACTER MODELS & KINEMATICS (MATHEMATICAL SPECIFICATION)
+===================================================================================================
+
+4.1 Mathematical Model of Vertices, Edges, Faces & Normals
+
+The mascot torso geometry is an authentic 90s-era low-poly chamfered cube defined in local
+coordinates centered at (0, 0, 0) with unchamfered bounding extents [-1.05, +1.05]³.
+To produce beveled facet chamfers, every vertex on the 3x3x3 grid whose Euclidean norm
+d = √(x² + y² + z²) exceeds the critical sphere radius R_bevel = 1.65 is radially clamped:
+  V' = V · (R_bevel / ||V||)   for ||V|| > R_bevel
+
+4.1.1 Torso Primary Vertex Table (26 Vertices in ℝ³)
++----+--------------------------------+-----------------------------------------------------+
+| ID | Nominal Grid (X, Y, Z)         | Clamped Coordinate (X, Y, Z) [R_bevel = 1.65]       |
++----+--------------------------------+-----------------------------------------------------+
+| V00| (-1.05, -1.05, -1.05) [Corner] | (-0.9526, -0.9526, -0.9526) (d = 1.6500)            |
+| V01| ( 0.00, -1.05, -1.05) [Edge]   | ( 0.0000, -1.0500, -1.0500) (d = 1.4849 <= 1.65)   |
+| V02| (+1.05, -1.05, -1.05) [Corner] | (+0.9526, -0.9526, -0.9526) (d = 1.6500)            |
+| V03| (-1.05,  0.00, -1.05) [Edge]   | (-1.0500,  0.0000, -1.0500) (d = 1.4849 <= 1.65)   |
+| V04| ( 0.00,  0.00, -1.05) [Center] | ( 0.0000,  0.0000, -1.0500) (d = 1.0500 <= 1.65)   |
+| V05| (+1.05,  0.00, -1.05) [Edge]   | (+1.0500,  0.0000, -1.0500) (d = 1.4849 <= 1.65)   |
+| V06| (-1.05, +1.05, -1.05) [Corner] | (-0.9526, +0.9526, -0.9526) (d = 1.6500)            |
+| V07| ( 0.00, +1.05, -1.05) [Edge]   | ( 0.0000, +1.0500, -1.0500) (d = 1.4849 <= 1.65)   |
+| V08| (+1.05, +1.05, -1.05) [Corner] | (+0.9526, +0.9526, -0.9526) (d = 1.6500)            |
+| V09| (-1.05, -1.05,  0.00) [Edge]   | (-1.0500, -1.0500,  0.0000) (d = 1.4849 <= 1.65)   |
+| V10| ( 0.00, -1.05,  0.00) [Center] | ( 0.0000, -1.0500,  0.0000) (d = 1.0500 <= 1.65)   |
+| V11| (+1.05, -1.05,  0.00) [Edge]   | (+1.0500, -1.0500,  0.0000) (d = 1.4849 <= 1.65)   |
+| V12| (-1.05,  0.00,  0.00) [Center] | (-1.0500,  0.0000,  0.0000) (d = 1.0500 <= 1.65)   |
+| V13| (+1.05,  0.00,  0.00) [Center] | (+1.0500,  0.0000,  0.0000) (d = 1.0500 <= 1.65)   |
+| V14| (-1.05, +1.05,  0.00) [Edge]   | (-1.0500, +1.0500,  0.0000) (d = 1.4849 <= 1.65)   |
+| V15| ( 0.00, +1.05,  0.00) [Center] | ( 0.0000, +1.0500,  0.0000) (d = 1.0500 <= 1.65)   |
+| V16| (+1.05, +1.05,  0.00) [Edge]   | (+1.0500, +1.0500,  0.0000) (d = 1.4849 <= 1.65)   |
+| V17| (-1.05, -1.05, +1.05) [Corner] | (-0.9526, -0.9526, +0.9526) (d = 1.6500)            |
+| V18| ( 0.00, -1.05, +1.05) [Edge]   | ( 0.0000, -1.0500, +1.0500) (d = 1.4849 <= 1.65)   |
+| V19| (+1.05, -1.05, +1.05) [Corner] | (+0.9526, -0.9526, +0.9526) (d = 1.6500)            |
+| V20| (-1.05,  0.00, +1.05) [Edge]   | (-1.0500,  0.0000, +1.0500) (d = 1.4849 <= 1.65)   |
+| V21| ( 0.00,  0.00, +1.05) [Center] | ( 0.0000,  0.0000, +1.0500) (d = 1.0500 <= 1.65)   |
+| V22| (+1.05,  0.00, +1.05) [Edge]   | (+1.0500,  0.0000, +1.0500) (d = 1.4849 <= 1.65)   |
+| V23| (-1.05, +1.05, +1.05) [Corner] | (-0.9526, +0.9526, +0.9526) (d = 1.6500)            |
+| V24| ( 0.00, +1.05, +1.05) [Edge]   | ( 0.0000, +1.0500, +1.0500) (d = 1.4849 <= 1.65)   |
+| V25| (+1.05, +1.05, +1.05) [Corner] | (+0.9526, +0.9526, +0.9526) (d = 1.6500)            |
++----+--------------------------------+-----------------------------------------------------+
+
+4.1.2 Face Topology, Index Buffers & Unit Normal Vectors
+The chamfered cube comprises 26 polygonal facets: 6 planar axial faces (each decomposed into 4 quads),
+12 beveled edge quads, and 8 corner triangular facets:
+- Front Planar Face (+Z):
+    Quad F1: (V21, V22, V25, V24), Normal = (0.0, 0.0, +1.0)
+    Quad F2: (V20, V21, V24, V23), Normal = (0.0, 0.0, +1.0)
+    Quad F3: (V17, V18, V21, V20), Normal = (0.0, 0.0, +1.0)
+    Quad F4: (V18, V19, V22, V21), Normal = (0.0, 0.0, +1.0)
+- Back Planar Face (-Z):
+    Quad B1: (V04, V03, V06, V07), Normal = (0.0, 0.0, -1.0)
+    Quad B2: (V05, V04, V07, V08), Normal = (0.0, 0.0, -1.0)
+    Quad B3: (V01, V00, V03, V04), Normal = (0.0, 0.0, -1.0)
+    Quad B4: (V02, V01, V04, V05), Normal = (0.0, 0.0, -1.0)
+- Top Planar Face (+Y):
+    Quad T1: (V15, V14, V06, V07), Normal = (0.0, +1.0, 0.0)
+    Quad T2: (V16, V15, V07, V08), Normal = (0.0, +1.0, 0.0)
+    Quad T3: (V24, V23, V14, V15), Normal = (0.0, +1.0, 0.0)
+    Quad T4: (V25, V24, V15, V16), Normal = (0.0, +1.0, 0.0)
+- Bottom Planar Face (-Y):
+    Quad D1: (V10, V09, V00, V01), Normal = (0.0, -1.0, 0.0)
+    Quad D2: (V11, V10, V01, V02), Normal = (0.0, -1.0, 0.0)
+    Quad D3: (V18, V17, V09, V10), Normal = (0.0, -1.0, 0.0)
+    Quad D4: (V19, V18, V10, V11), Normal = (0.0, -1.0, 0.0)
+- Left Planar Face (-X):
+    Quad L1: (V12, V03, V06, V14), Normal = (-1.0, 0.0, 0.0)
+    Quad L2: (V20, V12, V14, V23), Normal = (-1.0, 0.0, 0.0)
+    Quad L3: (V09, V00, V03, V12), Normal = (-1.0, 0.0, 0.0)
+    Quad L4: (V17, V09, V12, V20), Normal = (-1.0, 0.0, 0.0)
+- Right Planar Face (+X):
+    Quad R1: (V05, V13, V16, V08), Normal = (+1.0, 0.0, 0.0)
+    Quad R2: (V13, V22, V25, V16), Normal = (+1.0, 0.0, 0.0)
+    Quad R3: (V02, V11, V13, V05), Normal = (+1.0, 0.0, 0.0)
+    Quad R4: (V11, V19, V22, V13), Normal = (+1.0, 0.0, 0.0)
+- 8 Corner Chamfer Triangles:
+    C_top_front_left:   (V14, V24, V20), Normal = (-1/√3, +1/√3, +1/√3) = (-0.577, +0.577, +0.577)
+    C_top_front_right:  (V24, V16, V22), Normal = (+1/√3, +1/√3, +1/√3) = (+0.577, +0.577, +0.577)
+    C_top_back_left:    (V06, V14, V07), Normal = (-1/√3, +1/√3, -1/√3) = (-0.577, +0.577, -0.577)
+    C_top_back_right:   (V07, V16, V08), Normal = (+1/√3, +1/√3, -1/√3) = (+0.577, +0.577, -0.577)
+    C_bot_front_left:   (V17, V18, V20), Normal = (-1/√3, -1/√3, +1/√3) = (-0.577, -0.577, +0.577)
+    C_bot_front_right:  (V18, V19, V22), Normal = (+1/√3, -1/√3, +1/√3) = (+0.577, -0.577, +0.577)
+    C_bot_back_left:    (V00, V03, V09), Normal = (-1/√3, -1/√3, -1/√3) = (-0.577, -0.577, -0.577)
+    C_bot_back_right:   (V01, V02, V11), Normal = (+1/√3, -1/√3, -1/√3) = (+0.577, -0.577, -0.577)
+
+4.1.3 Internal Rotating Octahedron Gem Geometry
+The interior crystalline heart is a regular octahedron centered at (0, 0.12, 0) with radius R_gem = 0.78:
+  O0 = (+R_gem,  0.0,   0.0)
+  O1 = (-R_gem,  0.0,   0.0)
+  O2 = ( 0.0,  +R_gem,  0.0)
+  O3 = ( 0.0,  -R_gem,  0.0)
+  O4 = ( 0.0,   0.0,  +R_gem)
+  O5 = ( 0.0,   0.0,  -R_gem)
+Faces (CCW winding):
+  (O0, O2, O4), (O2, O1, O4), (O1, O3, O4), (O3, O0, O4)  [Front 4 facets]
+  (O2, O0, O5), (O1, O2, O5), (O3, O1, O5), (O0, O3, O5)  [Back 4 facets]
+
+Outer wireframe octahedron has radius R_wire = 1.02 and rotates with opposite angular velocity:
+  Ω_inner = (+0.5, +0.7, 0.0) rad/s
+  Ω_outer = (-0.7, +0.5, 0.0) rad/s
+
+4.1.4 Rainbow Halo (Nimbus) Torus Discretization
+Hovering at y = +1.48 around the head, the halo is an algebraic 2-torus embedded in ℝ³:
+  T²(u, v) = ( (R + r cos v) cos u,  r sin v,  (R + r cos v) sin u )
+where:
+  Major Radius R = 0.95, Minor Tube Radius r = 0.05
+  Discretization grid: Nu = 24 toroidal slices, Nv = 8 poloidal divisions
+  Step angles: Δu = 2π / 24 = 15.0°, Δv = 2π / 8 = 45.0°
+  Color mapping per slice i ∈ [0, 23]:
+    hue(i, t) = ( (i / 24.0) * 360.0 + t * 60.0 ) mod 360.0
+    (R, G, B) = HSV_to_RGB(hue, 0.90, 0.95)
+
+4.1.5 Detached Limbs Kinematic Chain
+- Left Hand:  Detached faceted box (0.46 x 0.46 x 0.46) at nominal pivot (-1.26, 0.05, 0.10).
+- Right Hand: Detached faceted box (0.46 x 0.46 x 0.46) at nominal pivot (+1.26, 0.05, 0.10).
+- Left Foot:  Foot pod cuboid (0.72 x 0.48 x 0.88) at nominal pivot (-0.64, -0.92, 0.08).
+- Right Foot: Foot pod cuboid (0.72 x 0.48 x 0.88) at nominal pivot (+0.64, -0.92, 0.08).
+
+---------------------------------------------------------------------------------------------------
+4.2 Mathematical State Space Vector & Kinematic Dynamics
+---------------------------------------------------------------------------------------------------
+
+The complete kinematic pose of Lil Cu 64 is governed by a 24-dimensional continuous state vector
+x(t) ∈ ℝ²⁴ defined as:
+
+  x(t) = [
+    P_root:   (X_r, Y_r, Z_r)                 — Global world root position [m]
+    Θ_root:   (θ_rx, θ_ry, θ_rz)              — Global world root orientation [rad]
+    P_body:   (X_b, Y_b, Z_b)                 — Torso local offset relative to root [m]
+    Θ_body:   (φ_bx, φ_by, φ_bz)              — Torso local rotation angles [rad]
+    S:        (S_x, S_y, S_z)                 — Volumetric scale (isovolumetric conservation)
+    Θ_lhand:  (θ_lhx, θ_lhz)                  — Left hand pitch and roll [rad]
+    Θ_rhand:  (θ_rhx, θ_rhz)                  — Right hand pitch and roll [rad]
+    L_foot:   (Y_lf, θ_lfx, θ_lfz)            — Left foot vertical lift [m] & ankle pitch/roll [rad]
+    R_foot:   (Y_rf, θ_rfx, θ_rfz)            — Right foot vertical lift [m] & ankle pitch/roll [rad]
+    Morph:    (w_smile, w_omouth)             — Facial mouth morph weights [0.0 to 1.25]
+  ]ᵀ
+
+4.2.1 Critically Damped Harmonic Oscillator Differential Equations
+Between any animation state transitions, every state parameter x_i(t) evolves toward its target
+pose goal x*_i(t) governed by the 2nd-order non-linear differential equation:
+
+  d²x_i/dt² + 2·ζ·ω_i · (dx_i/dt) + ω_i² · (x_i(t) - x*_i(t)) = 0
+
+where:
+  ζ = 1.0 (Exact Critical Damping — zero overshoot, zero mechanical jerk, C∞ continuity)
+  ω_i = Natural angular frequency [rad/s]
+
+In discrete real-time simulation (dt = 0.0166s / 60 FPS), this integrates into the frame-rate
+independent exponential relaxation formula:
+
+  x_i(t + dt) = x*_i(t) + (x_i(t) - x*_i(t)) · e^(-k_i · dt)
+
+with tuned stiffness constants:
+  k_pos   = 18.0 s⁻¹  (Root & body translations)
+  k_rot   = 16.0 s⁻¹  (Torso & root angular rotations)
+  k_scale = 22.0 s⁻¹  (Volumetric squash & stretch response)
+  k_hand  = 15.0 s⁻¹  (Limb gestures)
+  k_foot  = 20.0 s⁻¹  (Bipedal footfalls)
+  k_mouth = 24.0 s⁻¹  (Facial expression morphs)
+
+---------------------------------------------------------------------------------------------------
+4.3 Exhaustive Keyframe Trajectories & State Equations
+---------------------------------------------------------------------------------------------------
+
+4.3.1 STATE 1: IDLE (待機呼吸 — Sinusoidal Isovolumetric Breathing)
+Governed by infinite harmonic oscillators maintaining volumetric air mass conservation:
+  Frequency: ω_breath = 3.2 rad/s (~0.51 Hz), ω_sway = 1.6 rad/s (~0.25 Hz)
+  Equations:
+    S_y(t)    = 1.00 + 0.04 · sin(3.2 · t)
+    S_x(t)    = 1.00 - 0.02 · sin(3.2 · t)    [Transverse conservation]
+    S_z(t)    = 1.00 - 0.02 · sin(3.2 · t)
+    Y_b(t)    = 0.03 · sin(3.2 · t)
+    φ_bz(t)   = 0.035 · sin(1.6 · t)          [Gentle lateral weight shift]
+    θ_lhz(t)  = +0.10 + 0.07 · sin(3.2 · t)
+    θ_rhz(t)  = -0.10 - 0.07 · sin(3.2 · t)
+    w_smile   = 1.00,  w_omouth = 0.00
+    L_foot    = (-0.64, -0.92, 0.08),  R_foot = (+0.64, -0.92, 0.08)
+
+4.3.2 STATE 2: WADDLE / WALK (てくてく歩行 — Bipedal Phase-Locked Locomotion)
+A continuous periodic stride cycle driven by phase variable Φ_w(t) = ∫ 7.5 dt:
+  Stride Angular Velocity: ω_stride = 7.5 rad/s (~1.19 Hz, ~143 steps/min)
+  Equations:
+    s_w(t)    = sin(Φ_w)
+    Y_lf(t)   = -0.92 + max(0, +s_w(t)) · 0.36   [Left foot lifts during positive half-cycle]
+    θ_lfx(t)  = +0.44 · s_w(t)
+    Y_rf(t)   = -0.92 + max(0, -s_w(t)) · 0.36   [Right foot lifts during negative half-cycle]
+    θ_rfx(t)  = -0.44 · s_w(t)
+    φ_bz(t)   = +0.16 · s_w(t)                   [Pelvic roll over planted foot]
+    Y_b(t)    = +0.12 · |sin(2 · Φ_w)|           [Double-frequency vertical bounce]
+    θ_lhx(t)  = -0.60 · s_w(t)                   [Counter-phase arm swings]
+    θ_rhx(t)  = +0.60 · s_w(t)
+  Phase-Locked Acoustic Resonances:
+    At s_w(t) zero-crossings (sign transitions):
+    - Left foot touchdown  (s_w = 0, ds_w/dt > 0): Triggers `shimWaddle(Root_F, vol)` + `drum_kick`
+    - Right foot touchdown (s_w = 0, ds_w/dt < 0): Triggers `shimWaddle(Fifth_F, vol)` + `drum_snare`
+
+4.3.3 STATE 3: FLOAT (ぷかぷか飛行 — Anti-Gravity Spline Levitation)
+Total duration: T_float = 3.35 seconds. Governed by a 4-phase piecewise trajectory:
++-------------------+---------------+-------------------------------------------------------------+
+| Phase             | Time Interval | Mathematical Trajectory & Pose Equations                    |
++-------------------+---------------+-------------------------------------------------------------+
+| 1. Inhale Pre-Lift| [0.00, 0.40s] | p = t / 0.40;  e = 0.5 - 0.5·cos(π·p) [Cosine Ease-In]      |
+|                   |               | S_x = S_z = 1.0 + 0.30·e;  S_y = 1.0 + 0.28·e               |
+|                   |               | Y_r = 0.08 + 0.18·e;  w_smile = 1.0 - e;  w_omouth = 1.25·e |
+|                   |               | θ_lhz = +0.10 + 0.30·e;  θ_rhz = -0.10 - 0.30·e             |
++-------------------+---------------+-------------------------------------------------------------+
+| 2. Aerial Hover   | [0.40, 2.55s] | t_h = t - 0.40                                              |
+|    & Flutter Kick |               | Y_r = 0.92 + 0.15·sin(3.4 · t_h)    [Buoyant levitation]     |
+|                   |               | S_x = S_z = 1.30;  S_y = 1.28                               |
+|                   |               | θ_lfx = +0.45·sin(9.0 · t_h);  θ_rfx = +0.45·cos(9.0 · t_h)  |
+|                   |               | θ_lhz = +0.40 + 0.35·sin(13.0·t_h); θ_rhz = -0.40 - 0.35·sin|
+|                   |               | w_smile = 0.00;  w_omouth = 1.25                             |
++-------------------+---------------+-------------------------------------------------------------+
+| 3. Exhale Descent | [2.55, 3.35s] | p = (t - 2.55) / 0.80;  e = 0.5 - 0.5·cos(π·p)              |
+|                   |               | Y_r = 0.92·(1.0 - e) + 0.08                                 |
+|                   |               | S_x = S_z = 1.30 - 0.30·e;  S_y = 1.28 - 0.28·e             |
+|                   |               | w_smile = e;  w_omouth = 1.25·(1.0 - e)                     |
+|                   |               | Flutter kick damps: θ_lfx *= (1 - e); θ_rfx *= (1 - e)      |
++-------------------+---------------+-------------------------------------------------------------+
+| 4. Touchdown      | [3.35, 3.70s] | Transition to IDLE with impact squash impulse:              |
+|    Cushion Impact |               | S_impact(t) = 0.18 · e^(-12.0 · (t - 3.35))                 |
+|                   |               | S_y -= S_impact;  S_xz += 0.5 · S_impact                    |
+|                   |               | Triggers `shimBoing()` audio shim                           |
++-------------------+---------------+-------------------------------------------------------------+
+
+4.3.4 STATE 4: DANCE (氷晶のダンス — Celebratory Pirouette Keyframes)
+Total duration: T_dance = 4.10 seconds. Governed by 5 virtuosic pirouette milestones:
++-------------------+---------------+-------------------------------------------------------------+
+| Milestone         | Time Interval | Mathematical Kinematic Formulations                         |
++-------------------+---------------+-------------------------------------------------------------+
+| 1. Left 360° Spin | [0.00, 0.90s] | p = t / 0.90;  hop = sin(π·p)                               |
+|    Hop            |               | Y_r = 0.08 + 0.78·hop;  X_r = -0.42·hop                     |
+|                   |               | φ_by = p · 2π  (Full 360° CCW pirouette)                    |
+|                   |               | θ_lhz = +0.75·hop;  θ_rhz = -0.75·hop                       |
++-------------------+---------------+-------------------------------------------------------------+
+| 2. Right 360°     | [0.90, 1.80s] | p = (t - 0.90) / 0.90;  hop = sin(π·p)                      |
+|    Reverse Spin   |               | Y_r = 0.08 + 0.78·hop;  X_r = +0.42·hop                     |
+|                   |               | φ_by = -p · 2π  (Full 360° CW reverse pirouette)            |
+|                   |               | θ_lhz = -0.75·hop;  θ_rhz = +0.75·hop                       |
++-------------------+---------------+-------------------------------------------------------------+
+| 3. Celebratory    | [1.80, 2.70s] | p = (t - 1.80) / 0.90;  hop = sin(π·p)                      |
+|    Backflip Hop   |               | Y_r = 0.08 + 0.88·hop;  X_r = 0.00                          |
+|                   |               | θ_rx = -p · 2π  (Full 360° backwards pitch somersault)      |
+|                   |               | θ_lhz = +0.35 + 0.55·hop;  θ_rhz = -0.35 - 0.55·hop         |
++-------------------+---------------+-------------------------------------------------------------+
+| 4. Victory Pose   | [2.70, 3.40s] | Ground landing with stance squat:                           |
+|    Hold & Sparkle |               | S_x = S_z = 1.08;  S_y = 0.93;  Y_r = 0.08                  |
+|                   |               | Left hand thrust high in victory: θ_lhz = +1.35 rad (77.3°) |
+|                   |               | Right hand anchored at hip:       θ_rhz = -0.28 rad         |
+|                   |               | Feet splayed wide: θ_lfz = +0.32, θ_rfz = -0.32             |
+|                   |               | Landing cushion squash: S_impact = 0.18                     |
++-------------------+---------------+-------------------------------------------------------------+
+| 5. Smooth Return  | [3.40, 4.10s] | p = (t - 3.40) / 0.70;  s = 0.5 - 0.5·cos(π·p)              |
+|    to Idle        |               | Smoothly interpolate pose to IDLE baseline; no popping      |
++-------------------+---------------+-------------------------------------------------------------+
+
+4.3.5 STATE 5: SQUASH / BLESSING (神聖波動 — Volumetric Holy Shockwave)
+- Phase 0 (0 to 80ms): Anticipation compression:
+    S_y = 0.60, S_xz = 1.30 (Isovolumetric mass constant: 0.60 · 1.30² ≈ 1.014)
+- Phase 1 (80 to 200ms): High holy release:
+    S_y = 1.45, S_xz = 0.82 (Elongation spike: 1.45 · 0.82² ≈ 0.975)
+    Triggers `shimPulseSquash()` ascending triad.
+    Emits Journey Spherical Radiant Wave:
+      R_crest(t) = 0.30 + (1 - (1 - t/1.6)^2.8) · 3.30
+- Phase 2 (200 to 500ms): Exponentially damped harmonic restitution back to (1, 1, 1).
+
+4.3.6 STATE 6: SING (天球の熱唱 — Ascending Cantabile Climax)
+- Head and torso tilt upward: θ_rx = -0.25 · sin(π · t / 0.44)
+- Chest expands: S_x = S_y = S_z = 1.0 + 0.15 · sin(π · t / 0.44)
+- Mouth opens to wide resonant O-shape (w_omouth = 1.25)
+- Internal octahedron gem spins at 5x acceleration: Ω = (3.5, 5.0, 0.0) rad/s
+- Halo iridescence surges by +50% luminance.
+
+4.3.7 STATE 7: POKE / JELLO (つつきリアクション — Damped Viscoelastic Oscillation)
+Triggered upon direct mouse pointer contact:
+  squish(t) = 0.36 · e^(-4.5 · t) · cos(22.0 · t)
+  S_y(t)    = 1.00 - squish(t)
+  S_x(t)    = 1.00 + 0.52 · squish(t)
+  S_z(t)    = 1.00 + 0.52 · squish(t)
+Decays to steady-state baseline within t_poke = 0.55 seconds.
+
+---------------------------------------------------------------------------------------------------
+4.4 Native OpenGL C Data Structures
+---------------------------------------------------------------------------------------------------
+
+The above mathematical models map directly to native C struct layouts in `src/demo/lilcu64_demo.c`:
+
+```c
+typedef struct {
+    GLfloat pos[3];
+    GLfloat norm[3];
+    GLfloat color[4];
+} DemoVertex;
+
+typedef struct {
+    GLuint v0, v1, v2;
+} DemoTriangle;
+
+typedef struct {
+    GLuint v0, v1, v2, v3;
+} DemoQuad;
+
+typedef struct {
+    float root_x, root_y, root_z;
+    float root_rot_x, root_rot_y, root_rot_z;
+    float body_x, body_y, body_z;
+    float body_rot_x, body_rot_y, body_rot_z;
+    float scale_x, scale_y, scale_z;
+    float lhand_rot_x, lhand_rot_z;
+    float rhand_rot_x, rhand_rot_z;
+    float lfoot_y, lfoot_rot_x, lfoot_rot_z;
+    float rfoot_y, rfoot_rot_x, rfoot_rot_z;
+    float smile_scale, omouth_scale;
+    float pedestal_scale, pedestal_opacity;
+} AnimPose;
+```
+
+===================================================================================================
+5. PERSONAGE CAROUSEL ARCHITECTURE (THE 4 CHARACTERS)
+===================================================================================================
+
+The carousel arranges 4 personages along a 3D turntable circle of radius R_carousel = 4.5:
+
+5.1 Personage A: 聖晶カイザー (Crystalline Saint)
+- Profile: The canonical B-System mascot. Crystalline ice-cube torso with flat facets, rotating inner
+  octahedron, celestial cyan anime eyes, pink boots.
+
+5.2 Personage B: レトロチビメカ (Retro Chibi Mecha)
+- Profile: N64 toy aesthetic. Sky-blue chassis, golden hexagonal chest power emblem, floating golden
+  star crown & halo ring, white cartoon power-gloves with thumb blocks, red boots with gold soles.
+
+5.3 Personage C: 天球プリズム (Celestial Hyper-Prism)
+- Profile: High-transparency refractive icosahedron glass gem with radiant jewel heart. Articulated
+  ice wings fluttering on its back, purple anime eyes, and 4 orbiting satellite micro-cubes
+  representing μITRON, DP, WND, and TAD.
+
+5.4 Personage D: 電脳ニンジャ (Cyber Shinobi / Ares Variant)
+- Profile: TRON: Ares inspired dark vector armor. Matte charcoal polyhedron chassis, glowing orange
+  and cyan visor lines, floating shuriken energy shields, and high-frequency thruster wake.
+
+===================================================================================================
+6. PROCEDURAL DSP AUDIO ENGINE & VIRTIO SOUND STACK
+===================================================================================================
+
+6.1 0-Byte Footprint Audio Philosophy
+In compliance with `SOUND.txt`, no sample files (WAV, AIFF, OGG) exist in the repository. Audio is
+computed entirely in software at 44,100 Hz stereo 16-bit PCM.
+
+6.2 The Sound Shim Library
+Each shim is an analytical DSP function:
+- `shimPulseSquash`: 6-harmonic ascending additive sine wave with fast attack and exponential decay.
+- `shimFrogCroak`: Dual-oscillator (sawtooth + triangle) pitch scoop passed through a 2.2x formant
+  bandpass filter with a 32 Hz amplitude modulation pulse train.
+- `shimPulseBell`: 2-operator frequency modulation: carrier = f, modulator = 2.76 * f, index = 1.8.
+- `shimWaddle`: Dual triangle bass oscillators with 180 Hz 2-pole lowpass filter and body decay.
+- `shimFloat`: 4-note rolling chord additive Fender Rhodes synthesis with resonant tine pings.
+- `shimDance`: Rapid 16th-note star arpeggios cascading over modal scales.
+- `shimDing`: Pure high sine chime (A6 1760 Hz / E7 2637 Hz) with 0.70s exponential decay.
+- `shimKick`: Exponential pitch drop (120 Hz -> 45 Hz) in 160ms with punch envelope.
+- `shimSnare`: Triangle tone burst (175 Hz) blended with bandpass-filtered white noise.
+- `shimHiHat`: Highpass filtered (7.5 kHz) white noise with 40ms decay.
+- `shimGrandPiano`: Triple detuned harmonic sines with physical felt hammer transient.
+- `shimIndustrialBass`: Overdriven 16th-note sawtooth waves with soft saturation clipping.
+- `shimSwarmatron`: Clustered 8-voice micro-detuned oscillators with continuous ribbon pitch glissando.
+
+6.3 4-Track Score Sequencer
+- Track 1: 鐘のキャロル (Carol of the Bells / Ukrainian Shchedryk)
+  - 168 BPM, 3/4 Vivace, E minor. Iconic 4-note bell motif (G5 - F#5 - G5 - E5) over bouncy walking
+    bass, chiptune lead, and star arpeggio counterpoint.
+- Track 2: Green Caterpillar (Masaru Imada / Three Blind Mice 1975)
+  - 98 BPM, 4/4 Jazz, D minor. Masaru Imada Rhodes piano, Isoo Fukui acoustic walking bass,
+    swinging ride cymbals, Kazumi Watanabe hollowbody guitar, and nocturnal frog cuíca rasps.
+- Track 3: 朝日のあたる家 (The House of the Rising Sun / Thomas Krüger)
+  - 76 BPM, 6/8 Meter, A minor. Sweeping 6/8 concert grand piano arpeggios, felt hammer impacts,
+    sub-bass pedal rumble, and soaring Eric Burdon vocal melody line.
+- Track 4: TRON Init (Nine Inch Nails / Trent Reznor)
+  - 132 BPM, 4/4 Industrial, F# minor. Heavy overdriven 16th bassline, industrial kick/snare clang,
+    gated cyber leads, and terrifying 8-voice Swarmatron ribbon glissando.
+
+6.4 VirtIO Sound Buffer Management & Ring Queueing
+The synthesis engine maintains an internal double-buffered PCM ring. Every 16ms render tick, the
+sequencer advances its time cursor and fills ready audio frames directly into `virtio_sound_write()`.
+
+===================================================================================================
+7. USER CONTROLS & INPUT MATRIX (1:1 REPLICA)
+===================================================================================================
+
++-------------------------+-----------------------------------------------------------------------+
+| INPUT TRIGGER           | ASSOCIATED ACTION & KINEMATIC RESONANCE                               |
++-------------------------+-----------------------------------------------------------------------+
+| [Space] / [P] / Click   | 神聖波動 (Pulse / Blessing): Volumetric squash & Journey radiant wave  |
+| [W]                     | てくてく歩行 (Waddle): Bipedal walk cycle with `shimWaddle` bass sync |
+| [F]                     | ぷかぷか飛行 (Float): Anti-gravity hover & flutter kick with Rhodes   |
+| [D]                     | 氷晶のダンス (Dance): Victory pirouette hops & star arpeggios         |
+| [1] / [S]               | Track 1: 鐘のキャロル (168 BPM Vivace Chiptune)                       |
+| [2] / [C]               | Track 2: Green Caterpillar (98 BPM Masaru Imada Jazz)                 |
+| [3] / [H] / [R]         | Track 3: 朝日のあたる家 (76 BPM 6/8 Thomas Krüger Piano)              |
+| [4] / [T] / [N]         | Track 4: TRON Init (132 BPM Trent Reznor Industrial)                  |
+| [M]                     | 音響トグル (Sound Mute / Unmute Toggle)                               |
+| [ArrowLeft] / [‹]       | Carousel Prev: Rotate turntable to previous personage                 |
+| [ArrowRight] / [›]      | Carousel Next: Rotate turntable to next personage                     |
+| Mouse Left Drag         | 3D Camera Orbit: Smooth rotation with flywheel angular inertia        |
+| [ESC] / [Q]             | クローズ (Close Window)                                               |
++-------------------------+-----------------------------------------------------------------------+
+
+===================================================================================================
+8. IMPLEMENTATION STATUS & VERIFICATION ROADMAP
+===================================================================================================
+
+- Phase 1 (OpenGL Visuals & Mascot Kinematics):
+  [x] 4D Hopf fibration mathematical parameterization and stereographic projection in OpenGL.
+  [x] Chamfered low-poly mascot core, rotating internal octahedron gem, detached hands and feet.
+  [x] Anime eye shaders with pupils, irises, specular dots, cheeks, and S-curve blinking.
+  [x] Rainbow halo torus ring with rotating HSV spectral coloring.
+  [x] Journey spherical radiant wave rendering with golden crest ring and turquoise rim.
+  [x] 7-state kinematic animation engine with critically damped exponential springs.
+
+- Phase 2 (VirtIO Procedural Sound & Carousel Menu):
+  [x] Pure C procedural DSP oscillator engine (Sine, Tri, Saw, Pulse, Noise, Biquad filter).
+  [x] Sound Shim library implementing all 12 canonical shims from SOUND.txt.
+  [x] 4-track tracker sequencer for Tracks 1..4 with exact BPM, measure, and note timings.
+  [x] VirtIO sound buffer integration feeding `virtio_sound_write()` at 44.1 kHz stereo S16.
+  [x] 4-personage 3D turntable carousel (Saint, Chibi Mecha, Hyper-Prism, Cyber Shinobi).
+  [x] Unified BTRON window interface and control dashboard matching index.html.
+
+===================================================================================================
+END OF LILCU64-DEMOSCENE.txt
+===================================================================================================

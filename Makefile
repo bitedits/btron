@@ -237,12 +237,17 @@ QUAKE_SRCS = \
     src/quake/app/quake_ui.c \
     src/quake/app/quake_app.c
 
+DEMO_SRCS = \
+    src/demo/lilcu64_synth.c \
+    src/demo/lilcu64_demo.c
+
 VIRGL_SRCS = \
     src/gl/gl_dispatch.c \
     src/gl/egl_surface.c \
     src/gl/backend_virgl.c \
     src/apps/glgears.c \
-    $(QUAKE_SRCS)
+    $(QUAKE_SRCS) \
+    $(DEMO_SRCS)
 
 # ── POSIX build (Target 0) ────────────────────────────────────────
 POSIX_STARTUP = src/cores/core_posix.c
@@ -293,7 +298,8 @@ GL_SRCS = \
     src/gl/backend_tinygl.c \
     src/gl/backend_virgl.c \
     src/apps/glgears.c \
-    $(QUAKE_SRCS)
+    $(QUAKE_SRCS) \
+    $(DEMO_SRCS)
 
 # ── X86_64 / EMT64 UEFI build (Target 4) ────────────────────────
 UEFI_STARTUP = src/cores/core_boot.c src/cores/core_smp.c

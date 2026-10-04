@@ -53,6 +53,8 @@ __attribute__((weak, weak_import)) WND* open_paint_window(void);
 __attribute__((weak, weak_import)) WND* open_paint_about_window(void);
 __attribute__((weak, weak_import)) WND* open_chat_main_window(void *client);
 __attribute__((weak, weak_import)) WND* open_drivesetup_window(void);
+__attribute__((weak, weak_import)) WND* open_quake_window(int x, int y, int width, int height);
+__attribute__((weak, weak_import)) WND* open_lilcu64_demo_window(void);
 /* Cho-Kanji suite */
 __attribute__((weak, weak_import)) WND* open_chokanji_cabinet_window(void);
 __attribute__((weak, weak_import)) WND* open_chokanji_doc_window(void);
@@ -62,6 +64,8 @@ __attribute__((weak, weak_import)) WND* open_chokanji_kconv_window(void);
 __attribute__((weak, weak_import)) WND* open_chokanji_xfconv_window(void);
 __attribute__((weak, weak_import)) WND* open_chokanji_unpack_window(void);
 #else
+extern WND* open_quake_window(int x, int y, int width, int height);
+extern WND* open_lilcu64_demo_window(void);
 extern WND* open_vobj_manager_window(void);
 extern WND* open_control_panel_window(void);
 extern WND* open_t_editor_window(void);
@@ -154,7 +158,7 @@ static GMenuHeader g_headers[GMENU_HEADER_COUNT] = {
     {
         .title = "アプリ(A)",
         .rect = { 216, 2, 320, 23 },
-        .item_count = 19,
+        .item_count = 21,
         .items = {
             /* General B-System apps */
             { "Editor (文書編集...)",                "Ctrl+E", GMENU_CMD_APP_TEDITOR,    FALSE, FALSE, TRUE },
@@ -165,6 +169,8 @@ static GMenuHeader g_headers[GMENU_HEADER_COUNT] = {
             { "DriveSetup (ディスク管理...)",         "",       GMENU_CMD_APP_DRIVESETUP, FALSE, FALSE, TRUE },
             { "電子帳票 (Clarity DTP...)",            "",       GMENU_CMD_APP_CLARITY,    FALSE, FALSE, TRUE },
             { "ペイント (Paint Image Viewer...)",     "",       GMENU_CMD_APP_PAINT,      FALSE, FALSE, TRUE },
+            { "Quake (3D FPS Game...)",              "Ctrl+Q", GMENU_CMD_APP_QUAKE,      FALSE, FALSE, TRUE },
+            { "Lil Cu 64 Demo (3D Demoscene...)",    "Ctrl+L", GMENU_CMD_APP_DEMO,       FALSE, FALSE, TRUE },
             { "---", "", GMENU_CMD_NONE, TRUE, FALSE, FALSE },
             /* ── 超漢字 Cho-Kanji Suite ── */
             { "超漢字: キャビネット (Cabinet...)",       "Ctrl+K", GMENU_CMD_APP_CK_CABINET,     FALSE, FALSE, TRUE },
@@ -516,6 +522,12 @@ static void global_menu_execute_cmd(int cmd) {
             break;
         case GMENU_CMD_APP_PAINT:
             if (open_paint_window) open_paint_window();
+            break;
+        case GMENU_CMD_APP_QUAKE:
+            if (open_quake_window) open_quake_window(80, 40, 560, 420);
+            break;
+        case GMENU_CMD_APP_DEMO:
+            if (open_lilcu64_demo_window) open_lilcu64_demo_window();
             break;
 
         /* ── アプリ(A) — Cho-Kanji suite ── */

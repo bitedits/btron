@@ -30,19 +30,14 @@ TABLE OF CONTENTS
    4.2 Anime Eyes, Specular Highlights & S-Curve Blinking
    4.3 Rainbow Halo / Nimbus Rings
    4.4 The 7 Canonical Kinematic Animation States & Springs
-5. Personage Carousel Architecture (The 4 Characters)
-   5.1 Personage A: 聖晶カイザー (Crystalline Saint)
-   5.2 Personage B: レトロチビメカ (Retro Chibi Mecha)
-   5.3 Personage C: 天球プリズム (Celestial Hyper-Prism)
-   5.4 Personage D: 電脳ニンジャ (Cyber Shinobi / Ares Variant)
-6. Procedural DSP Audio Engine & VirtIO Sound Stack
-   6.1 0-Byte Footprint Audio Philosophy
-   6.2 The Sound Shim Library (Pulse, Waddle, Float, Dance, Ding, etc.)
-   6.3 4-Track Score Sequencer & Mascot Choreography
-   6.4 VirtIO Sound Buffer Management & Ring Queueing
-7. User Controls & Input Matrix (1:1 Replica)
-8. Implementation Status & Verification Roadmap
-9. Choreography Reference & BPM Timing Constants
+5. Procedural DSP Audio Engine & VirtIO Sound Stack
+   5.1 0-Byte Footprint Audio Philosophy
+   5.2 The Sound Shim Library (Pulse, Waddle, Float, Dance, Ding, etc.)
+   5.3 4-Track Score Sequencer & Mascot Choreography
+   5.4 VirtIO Sound Buffer Management & Ring Queueing
+6. User Controls & Input Matrix (1:1 Replica)
+7. Implementation Status & Verification Roadmap
+8. Choreography Reference & BPM Timing Constants
 
 ===================================================================================================
 0. EXECUTIVE SUMMARY & THE 1:1 PORT OBJECTIVE
@@ -507,37 +502,14 @@ typedef struct {
 ```
 
 ===================================================================================================
-5. PERSONAGE CAROUSEL ARCHITECTURE (THE 4 CHARACTERS)
+5. PROCEDURAL DSP AUDIO ENGINE & VIRTIO SOUND STACK
 ===================================================================================================
 
-The carousel arranges 4 personages along a 3D turntable circle of radius R_carousel = 4.5:
-
-5.1 Personage A: 聖晶カイザー (Crystalline Saint)
-- Profile: The canonical B-System mascot. Crystalline ice-cube torso with flat facets, rotating inner
-  octahedron, celestial cyan anime eyes, pink boots.
-
-5.2 Personage B: レトロチビメカ (Retro Chibi Mecha)
-- Profile: N64 toy aesthetic. Sky-blue chassis, golden hexagonal chest power emblem, floating golden
-  star crown & halo ring, white cartoon power-gloves with thumb blocks, red boots with gold soles.
-
-5.3 Personage C: 天球プリズム (Celestial Hyper-Prism)
-- Profile: High-transparency refractive icosahedron glass gem with radiant jewel heart. Articulated
-  ice wings fluttering on its back, purple anime eyes, and 4 orbiting satellite micro-cubes
-  representing μITRON, DP, WND, and TAD.
-
-5.4 Personage D: 電脳ニンジャ (Cyber Shinobi / Ares Variant)
-- Profile: TRON: Ares inspired dark vector armor. Matte charcoal polyhedron chassis, glowing orange
-  and cyan visor lines, floating shuriken energy shields, and high-frequency thruster wake.
-
-===================================================================================================
-6. PROCEDURAL DSP AUDIO ENGINE & VIRTIO SOUND STACK
-===================================================================================================
-
-6.1 0-Byte Footprint Audio Philosophy
+5.1 0-Byte Footprint Audio Philosophy
 In compliance with `SOUND.txt`, no sample files (WAV, AIFF, OGG) exist in the repository. Audio is
 computed entirely in software at 44,100 Hz stereo 16-bit PCM.
 
-6.2 The Sound Shim Library
+5.2 The Sound Shim Library
 Each shim is an analytical DSP function:
 - `shimPulseSquash`: 6-harmonic ascending additive sine wave with fast attack and exponential decay.
 - `shimFrogCroak`: Dual-oscillator (sawtooth + triangle) pitch scoop passed through a 2.2x formant
@@ -554,7 +526,7 @@ Each shim is an analytical DSP function:
 - `shimIndustrialBass`: Overdriven 16th-note sawtooth waves with soft saturation clipping.
 - `shimSwarmatron`: Clustered 8-voice micro-detuned oscillators with continuous ribbon pitch glissando.
 
-6.3 4-Track Score Sequencer & Mascot Choreography
+5.3 4-Track Score Sequencer & Mascot Choreography
 
 Source of truth: index.html (window.playTrack / scheduleTrackTimeout blocks)
 C implementation: src/demo/lilcu64_demo.c  (update_mascot / set_animation)
@@ -680,12 +652,12 @@ TRACK 4 — TRON Init  (Nine Inch Nails / Trent Reznor, 2025)
   Loop: at 25.800 s -> playTrack(4) restarts from t=0
   Status: Music engine legacy step sequencer. Choreography TODO (C block pending).
 
-6.4 VirtIO Sound Buffer Management & Ring Queueing
+5.4 VirtIO Sound Buffer Management & Ring Queueing
 The synthesis engine maintains an internal double-buffered PCM ring. Every 16ms render tick, the
 sequencer advances its time cursor and fills ready audio frames directly into `virtio_sound_write()`.
 
 ===================================================================================================
-7. USER CONTROLS & INPUT MATRIX (1:1 REPLICA)
+6. USER CONTROLS & INPUT MATRIX (1:1 REPLICA)
 ===================================================================================================
 
 +-------------------------+-----------------------------------------------------------------------+
@@ -707,7 +679,7 @@ sequencer advances its time cursor and fills ready audio frames directly into `v
 +-------------------------+-----------------------------------------------------------------------+
 
 ===================================================================================================
-8. IMPLEMENTATION STATUS & VERIFICATION ROADMAP
+7. IMPLEMENTATION STATUS & VERIFICATION ROADMAP
 ===================================================================================================
 
 - Sole Sacred Personage Directive:
@@ -746,7 +718,7 @@ sequencer advances its time cursor and fills ready audio frames directly into `v
    [ ] Tracks 3-4 audio migration to lilcu64_wa / lilcu64_score (currently legacy step sequencer).
 
 ===================================================================================================
-9. CHOREOGRAPHY REFERENCE & BPM TIMING CONSTANTS
+8. CHOREOGRAPHY REFERENCE & BPM TIMING CONSTANTS
 ===================================================================================================
 
 C dispatch pattern in update_mascot() — src/demo/lilcu64_demo.c:

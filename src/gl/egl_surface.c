@@ -41,7 +41,7 @@ void egl_make_current(EGL_SURFACE *surf) {
     if (!surf || !surf->wnd || !surf->wnd->dev) return;
     surf->pixels = surf->wnd->dev->pixels;
 #if !defined(BTRON_UEFI_TARGET)
-    virgl_backend_make_current(surf->width, surf->height, surf->pixels);
+    virgl_backend_make_current_ctx(&surf->gl_ctx, surf->width, surf->height, surf->pixels);
 #else
     tinygl_backend_resize(surf->width, surf->height, surf->pixels);
 #endif
@@ -67,6 +67,13 @@ void egl_swap_buffers(EGL_SURFACE *surf) {
 
 void egl_destroy_surface(EGL_SURFACE *surf) {
     if (!surf) return;
+#if !defined(BTRON_UEFI_TARGET)
+    if (surf->gl_ctx) {
+        virgl_backend_destroy_ctx(surf->gl_ctx);
+        surf->gl_ctx = NULL;
+    }
+#else
     gl_shutdown();
+#endif
     free(surf);
 }

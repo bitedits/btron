@@ -309,6 +309,7 @@ void R_BeginFrame(void) {
     glClearColor(0.08f, 0.06f, 0.05f, 1.0f);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
     glEnable(GL_DEPTH_TEST);
+    glDisable(GL_LIGHTING);
 
     /* Advance lightstyle animation and turbulent surface time (~60 FPS) */
     static const float dt = 1.0f / 60.0f;

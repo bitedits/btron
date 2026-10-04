@@ -33,26 +33,37 @@ static WND         *s_demo_wnd = NULL;
 static EGL_SURFACE *s_surf     = NULL;
 static ID           s_demo_tskid = 0;
 
-/* Camera & Drag state */
-static GLfloat s_view_rotx = 0.0f;
-static GLfloat s_view_roty = 0.0f;
-static GLfloat s_target_rotx = 0.0f;
-static GLfloat s_target_roty = 0.0f;
+/* Gaze Tracking & Drag state (1:1 with index.html lines 5921, 6970-6990) */
+static GLfloat s_target_look_x = 0.0f;
+static GLfloat s_target_look_y = 0.0f;
 static GLfloat s_cube_rotx = 0.0f;
 static GLfloat s_cube_roty = 0.0f;
 static GLfloat s_cube_velx = 0.0f;
 static GLfloat s_cube_vely = 0.0f;
 static int     s_dragging = 0;
-static H       s_last_mx = 0, s_last_my = 0;
+static H       s_prev_drag_x = 0, s_prev_drag_y = 0;
+
+/* Hopf Background Tilt & Swirl Dynamics (1:1 with index.html lines 6926-6936) */
+static float   s_target_rot_x = 0.22f;
+static float   s_target_rot_y = 0.0f;
+static float   s_cur_rot_x    = 0.22f;
+static float   s_cur_rot_y    = 0.0f;
+static float   s_last_pointer_angle = -999.0f;
+static float   s_circular_vel = 0.0f;
+static float   s_circular_phase = 0.0f;
 
 /* Timing & Clock */
 static float   s_time = 0.0f;
 static float   s_dt   = 0.0166f;
-static float   s_circular_phase = 0.0f;
-static float   s_circular_vel = 0.0f;
 
-/* Density modes: 0 = 9 rings, 1 = 18 rings (canonical), 2 = 27 rings */
-static int     s_density_mode = 1;
+/* Density modes: 0 = 18 rings (canonical), 1 = 36 rings, 2 = 54 rings (index.html line 6940) */
+static int     s_density_mode = 0;
+
+/* Core gem and wireframe octahedron rotations (index.html lines 6095, 7234-7235) */
+static float   s_core_rot_x = 0.0f;
+static float   s_core_rot_y = 0.0f;
+static float   s_wire_rot_x = 0.0f;
+static float   s_wire_rot_y = 0.0f;
 
 /* Animation State Machine */
 typedef enum {
@@ -74,6 +85,7 @@ static float     s_dance_timer = 0.0f;
 static int       s_dance_step = 0;
 static float     s_poke_timer = 0.0f;
 static float     s_impact_squash = 0.0f;
+static float     s_sing_halo_curve = 0.0f;
 
 /* Blinking */
 static float     s_blink_timer = 2.5f;
@@ -92,17 +104,19 @@ typedef struct {
 #define MAX_WAVES 4
 static RadiantWave s_waves[MAX_WAVES];
 
-/* Continuous Inertial Pose Buffer */
+/* Continuous Inertial Pose Buffer (1:1 with index.html animPose) */
 typedef struct {
     float root_x, root_y, root_z;
     float root_rot_x, root_rot_y, root_rot_z;
     float body_x, body_y, body_z;
     float body_rot_x, body_rot_y, body_rot_z;
     float scale_x, scale_y, scale_z;
-    float lhand_rot_x, lhand_rot_z;
-    float rhand_rot_x, rhand_rot_z;
-    float lfoot_y, lfoot_rot_x, lfoot_rot_z;
-    float rfoot_y, rfoot_rot_x, rfoot_rot_z;
+    float lhand_rot_x, lhand_rot_y, lhand_rot_z;
+    float rhand_rot_x, rhand_rot_y, rhand_rot_z;
+    float left_foot_x, lfoot_y, left_foot_z;
+    float lfoot_rot_x, lfoot_rot_y, lfoot_rot_z;
+    float right_foot_x, rfoot_y, right_foot_z;
+    float rfoot_rot_x, rfoot_rot_y, rfoot_rot_z;
     float smile_scale, omouth_scale;
     float pedestal_scale, pedestal_opacity;
 } AnimPose;
@@ -113,10 +127,12 @@ static AnimPose s_pose = {
     0.0f, 0.0f, 0.0f,
     0.0f, 0.0f, 0.0f,
     1.0f, 1.0f, 1.0f,
-    0.0f, 0.10f,
-    0.0f, -0.10f,
-    -0.92f, 0.0f, 0.0f,
-    -0.92f, 0.0f, 0.0f,
+    0.0f, 0.0f, 0.10f,
+    0.0f, 0.0f, -0.10f,
+    -0.64f, -0.92f, 0.08f,
+    0.0f, 0.0f, 0.0f,
+    0.64f, -0.92f, 0.08f,
+    0.0f, 0.0f, 0.0f,
     1.0f, 0.0f,
     1.0f, 0.75f
 };
@@ -129,6 +145,14 @@ static char s_quote_text[256] = "ボクはリル・キューブ64… 低ポリ�
 static inline float smooth_damp(float cur, float target, float speed, float dt) {
     float factor = 1.0f - expf(-speed * dt);
     return cur + (target - cur) * factor;
+}
+
+static inline float smooth_damp_angle(float cur, float target, float speed, float dt) {
+    float diff = fmodf(target - cur, (float)(2.0 * M_PI));
+    if (diff > (float)M_PI) diff -= (float)(2.0 * M_PI);
+    if (diff < (float)-M_PI) diff += (float)(2.0 * M_PI);
+    float factor = 1.0f - expf(-speed * dt);
+    return cur + diff * factor;
 }
 
 static void hsv_to_rgb(float h, float s, float v, float *r, float *g, float *b) {
@@ -226,66 +250,116 @@ static void set_animation(AnimState state) {
     }
 }
 
-/* ── 3D Geometry Builders ─────────────────────────────────────────── */
+/* ── 3D Geometry Builders (1:1 with index.html Three.js Models) ───── */
 
-/* Chamfered cube with spherical corner clamping (r <= 1.65) */
-static void draw_chamfered_cube(float sx, float sy, float sz, float r, float g, float b) {
-    float hx = sx * 0.5f;
-    float hy = sy * 0.5f;
-    float hz = sz * 0.5f;
+/* Faceted gem cube: BoxGeometry(2.1, 2.1, 2.1, 2, 2, 2) clamped at R = 1.65 */
+static void draw_faceted_gem_cube(float r, float g, float b) {
     glColor3f(r, g, b);
 
-    /* 6 faces of the cube */
+    /* 6 faces with 2x2 grid subdivisions (24 quads total) */
+    static const int face_axes[6][3] = {
+        { 0, 1, 2 }, /* +Z Front */
+        { 0, 1, 2 }, /* -Z Back */
+        { 0, 2, 1 }, /* +Y Top */
+        { 0, 2, 1 }, /* -Y Bottom */
+        { 2, 1, 0 }, /* +X Right */
+        { 2, 1, 0 }  /* -X Left */
+    };
+    static const float face_signs[6] = { 1.0f, -1.0f, 1.0f, -1.0f, 1.0f, -1.0f };
+
     glBegin(GL_QUADS);
-    /* Front */
-    glNormal3f(0.0f, 0.0f, 1.0f);
-    glVertex3f(-hx, -hy,  hz);
-    glVertex3f( hx, -hy,  hz);
-    glVertex3f( hx,  hy,  hz);
-    glVertex3f(-hx,  hy,  hz);
+    for (int f = 0; f < 6; f++) {
+        int u_ax = face_axes[f][0];
+        int v_ax = face_axes[f][1];
+        int w_ax = face_axes[f][2];
+        float w_val = face_signs[f] * 1.05f;
 
-    /* Back */
-    glNormal3f(0.0f, 0.0f, -1.0f);
-    glVertex3f( hx, -hy, -hz);
-    glVertex3f(-hx, -hy, -hz);
-    glVertex3f(-hx,  hy, -hz);
-    glVertex3f( hx,  hy, -hz);
+        for (int u = 0; u < 2; u++) {
+            float u0 = (u == 0) ? -1.05f : 0.0f;
+            float u1 = (u == 0) ? 0.0f : 1.05f;
 
-    /* Top */
-    glNormal3f(0.0f, 1.0f, 0.0f);
-    glVertex3f(-hx,  hy,  hz);
-    glVertex3f( hx,  hy,  hz);
-    glVertex3f( hx,  hy, -hz);
-    glVertex3f(-hx,  hy, -hz);
+            for (int v = 0; v < 2; v++) {
+                float v0 = (v == 0) ? -1.05f : 0.0f;
+                float v1 = (v == 0) ? 0.0f : 1.05f;
 
-    /* Bottom */
-    glNormal3f(0.0f, -1.0f, 0.0f);
-    glVertex3f(-hx, -hy, -hz);
-    glVertex3f( hx, -hy, -hz);
-    glVertex3f( hx, -hy,  hz);
-    glVertex3f(-hx, -hy,  hz);
+                float quad[4][3];
+                quad[0][u_ax] = u0; quad[0][v_ax] = v0; quad[0][w_ax] = w_val;
+                quad[1][u_ax] = u1; quad[1][v_ax] = v0; quad[1][w_ax] = w_val;
+                quad[2][u_ax] = u1; quad[2][v_ax] = v1; quad[2][w_ax] = w_val;
+                quad[3][u_ax] = u0; quad[3][v_ax] = v1; quad[3][w_ax] = w_val;
 
-    /* Right */
-    glNormal3f(1.0f, 0.0f, 0.0f);
-    glVertex3f( hx, -hy,  hz);
-    glVertex3f( hx, -hy, -hz);
-    glVertex3f( hx,  hy, -hz);
-    glVertex3f( hx,  hy,  hz);
+                /* Apply exact R = 1.65 spherical corner clamp (index.html line 6064) */
+                for (int k = 0; k < 4; k++) {
+                    float d = sqrtf(quad[k][0]*quad[k][0] + quad[k][1]*quad[k][1] + quad[k][2]*quad[k][2]);
+                    if (d > 1.65f) {
+                        float factor = 1.65f / d;
+                        quad[k][0] *= factor;
+                        quad[k][1] *= factor;
+                        quad[k][2] *= factor;
+                    }
+                }
 
-    /* Left */
-    glNormal3f(-1.0f, 0.0f, 0.0f);
-    glVertex3f(-hx, -hy, -hz);
-    glVertex3f(-hx, -hy,  hz);
-    glVertex3f(-hx,  hy,  hz);
-    glVertex3f(-hx,  hy, -hz);
+                /* Compute normal */
+                float e1x = quad[1][0] - quad[0][0], e1y = quad[1][1] - quad[0][1], e1z = quad[1][2] - quad[0][2];
+                float e2x = quad[3][0] - quad[0][0], e2y = quad[3][1] - quad[0][1], e2z = quad[3][2] - quad[0][2];
+                float nx = (f % 2 == 0) ? (e1y * e2z - e1z * e2y) : (e2y * e1z - e2z * e1y);
+                float ny = (f % 2 == 0) ? (e1z * e2x - e1x * e2z) : (e2z * e1x - e2x * e1z);
+                float nz = (f % 2 == 0) ? (e1x * e2y - e1y * e2x) : (e2x * e1y - e2y * e1x);
+                float nlen = sqrtf(nx*nx + ny*ny + nz*nz);
+                if (nlen > 0.0001f) { nx /= nlen; ny /= nlen; nz /= nlen; }
+                glNormal3f(nx, ny, nz);
+
+                if (f % 2 == 0) {
+                    glVertex3f(quad[0][0], quad[0][1], quad[0][2]);
+                    glVertex3f(quad[1][0], quad[1][1], quad[1][2]);
+                    glVertex3f(quad[2][0], quad[2][1], quad[2][2]);
+                    glVertex3f(quad[3][0], quad[3][1], quad[3][2]);
+                } else {
+                    glVertex3f(quad[3][0], quad[3][1], quad[3][2]);
+                    glVertex3f(quad[2][0], quad[2][1], quad[2][2]);
+                    glVertex3f(quad[1][0], quad[1][1], quad[1][2]);
+                    glVertex3f(quad[0][0], quad[0][1], quad[0][2]);
+                }
+            }
+        }
+    }
     glEnd();
 }
 
-static inline void draw_chamfered_cube_uniform(float size, float r, float g, float b) {
-    draw_chamfered_cube(size, size, size, r, g, b);
+/* Axis-aligned Box Geometry */
+static void draw_box(float wx, float wy, float wz, float r, float g, float b) {
+    float hx = wx * 0.5f, hy = wy * 0.5f, hz = wz * 0.5f;
+    glColor3f(r, g, b);
+
+    glBegin(GL_QUADS);
+    /* Front */
+    glNormal3f(0.0f, 0.0f, 1.0f);
+    glVertex3f(-hx, -hy,  hz); glVertex3f( hx, -hy,  hz);
+    glVertex3f( hx,  hy,  hz); glVertex3f(-hx,  hy,  hz);
+    /* Back */
+    glNormal3f(0.0f, 0.0f, -1.0f);
+    glVertex3f( hx, -hy, -hz); glVertex3f(-hx, -hy, -hz);
+    glVertex3f(-hx,  hy, -hz); glVertex3f( hx,  hy, -hz);
+    /* Top */
+    glNormal3f(0.0f, 1.0f, 0.0f);
+    glVertex3f(-hx,  hy,  hz); glVertex3f( hx,  hy,  hz);
+    glVertex3f( hx,  hy, -hz); glVertex3f(-hx,  hy, -hz);
+    /* Bottom */
+    glNormal3f(0.0f, -1.0f, 0.0f);
+    glVertex3f(-hx, -hy, -hz); glVertex3f( hx, -hy, -hz);
+    glVertex3f( hx, -hy,  hz); glVertex3f(-hx, -hy,  hz);
+    /* Right */
+    glNormal3f(1.0f, 0.0f, 0.0f);
+    glVertex3f( hx, -hy,  hz); glVertex3f( hx, -hy, -hz);
+    glVertex3f( hx,  hy, -hz); glVertex3f( hx,  hy,  hz);
+    /* Left */
+    glNormal3f(-1.0f, 0.0f, 0.0f);
+    glVertex3f(-hx, -hy, -hz); glVertex3f(-hx, -hy,  hz);
+    glVertex3f(-hx,  hy,  hz); glVertex3f(-hx,  hy, -hz);
+    glEnd();
 }
 
-/* Octahedron core */
+/* Octahedron core (solid or wireframe) */
 static void draw_octahedron(float radius, bool wireframe, float r, float g, float b) {
     static const float vertices[6][3] = {
         {  1.0f,  0.0f,  0.0f },
@@ -314,56 +388,107 @@ static void draw_octahedron(float radius, bool wireframe, float r, float g, floa
     } else {
         glBegin(GL_TRIANGLES);
         for (int i = 0; i < 8; i++) {
-            for (int j = 0; j < 3; j++) {
-                int vi = faces[i][j];
-                glVertex3f(vertices[vi][0] * radius, vertices[vi][1] * radius, vertices[vi][2] * radius);
-            }
+            /* Face normal */
+            int v0 = faces[i][0], v1 = faces[i][1], v2 = faces[i][2];
+            float e1x = vertices[v1][0] - vertices[v0][0], e1y = vertices[v1][1] - vertices[v0][1], e1z = vertices[v1][2] - vertices[v0][2];
+            float e2x = vertices[v2][0] - vertices[v0][0], e2y = vertices[v2][1] - vertices[v0][1], e2z = vertices[v2][2] - vertices[v0][2];
+            float nx = e1y * e2z - e1z * e2y, ny = e1z * e2x - e1x * e2z, nz = e1x * e2y - e1y * e2x;
+            float nlen = sqrtf(nx*nx + ny*ny + nz*nz);
+            if (nlen > 0.0001f) { nx /= nlen; ny /= nlen; nz /= nlen; }
+            glNormal3f(nx, ny, nz);
+
+            glVertex3f(vertices[v0][0] * radius, vertices[v0][1] * radius, vertices[v0][2] * radius);
+            glVertex3f(vertices[v1][0] * radius, vertices[v1][1] * radius, vertices[v1][2] * radius);
+            glVertex3f(vertices[v2][0] * radius, vertices[v2][1] * radius, vertices[v2][2] * radius);
         }
         glEnd();
     }
 }
 
-/* Rainbow Torus Halo / Nimbus */
-static void draw_rainbow_halo(float R, float r_tube, float time) {
-    int segments_u = 24;
-    int segments_v = 8;
+/* ── Golden Hexagon Saint Halo (Kung-Fu Panda Spirit Realm Finale) ───── */
+/* Radiates behind character ONLY during Sing / Sacred Pulse animation   */
 
-    for (int i = 0; i < segments_u; i++) {
-        float u1 = (float)i * 2.0f * (float)M_PI / (float)segments_u;
-        float u2 = (float)(i + 1) * 2.0f * (float)M_PI / (float)segments_u;
+static void draw_saint_hex_halo(float time, float intensity) {
+    if (intensity <= 0.001f) return;
+    glDisable(GL_LIGHTING);
 
-        float hue = fmodf(((float)i / (float)segments_u) * 360.0f + time * 60.0f, 360.0f);
-        float cr, cg, cb;
-        hsv_to_rgb(hue, 0.90f, 0.95f, &cr, &cg, &cb);
-        glColor3f(cr, cg, cb);
+    float rot1 = time * 0.35f;
+    float rot2 = -time * 0.28f;
+    float rot3 = time * 0.50f;
 
-        glBegin(GL_QUAD_STRIP);
-        for (int j = 0; j <= segments_v; j++) {
-            float v = (float)j * 2.0f * (float)M_PI / (float)segments_v;
-            float cos_v = cosf(v);
-            float sin_v = sinf(v);
+    float sc = 0.82f + 0.18f * intensity;
 
-            float x1 = (R + r_tube * cos_v) * cosf(u1);
-            float y1 = r_tube * sin_v;
-            float z1 = (R + r_tube * cos_v) * sinf(u1);
-
-            float x2 = (R + r_tube * cos_v) * cosf(u2);
-            float y2 = r_tube * sin_v;
-            float z2 = (R + r_tube * cos_v) * sinf(u2);
-
-            glVertex3f(x1, y1, z1);
-            glVertex3f(x2, y2, z2);
-        }
-        glEnd();
+    /* 1. Outer Golden Hexagon Ring (R = 2.50 * sc, frames the full character body) */
+    glColor3f(1.0f * intensity, 0.84f * intensity, 0.0f * intensity); /* Pure Gold */
+    glBegin(GL_LINE_LOOP);
+    for (int i = 0; i < 6; i++) {
+        float a = (float)i * (float)(M_PI / 3.0) + rot1;
+        glVertex3f(cosf(a) * (2.50f * sc), sinf(a) * (2.50f * sc), 0.0f);
     }
+    glEnd();
+
+    /* 2. Concentric Interlocking Hexagon (R = 2.35 * sc, rotated 30 deg / Sacred Hexagram) */
+    glColor3f(1.0f * intensity, 0.93f * intensity, 0.45f * intensity); /* Luminous Chi Gold */
+    glBegin(GL_LINE_LOOP);
+    for (int i = 0; i < 6; i++) {
+        float a = (float)i * (float)(M_PI / 3.0) + (float)(M_PI / 6.0) + rot2;
+        glVertex3f(cosf(a) * (2.35f * sc), sinf(a) * (2.35f * sc), 0.0f);
+    }
+    glEnd();
+
+    /* 3. Mid Sacred Hexagon (R = 1.85 * sc) */
+    glColor3f(0.98f * intensity, 0.75f * intensity, 0.12f * intensity); /* Deep Amber Gold */
+    glBegin(GL_LINE_LOOP);
+    for (int i = 0; i < 6; i++) {
+        float a = (float)i * (float)(M_PI / 3.0) + rot3;
+        glVertex3f(cosf(a) * (1.85f * sc), sinf(a) * (1.85f * sc), 0.0f);
+    }
+    glEnd();
+
+    /* 4. Inner Concentric Hexagon (R = 1.40 * sc) */
+    glColor3f(1.0f * intensity, 0.96f * intensity, 0.70f * intensity); /* Brilliant White-Gold */
+    glBegin(GL_LINE_LOOP);
+    for (int i = 0; i < 6; i++) {
+        float a = (float)i * (float)(M_PI / 3.0) + rot1 * 1.4f;
+        glVertex3f(cosf(a) * (1.40f * sc), sinf(a) * (1.40f * sc), 0.0f);
+    }
+    glEnd();
+
+    /* 5. 6 Sacred Chi Rays connecting inner and outer vertices */
+    glColor3f(1.0f * intensity, 0.88f * intensity, 0.35f * intensity);
+    glBegin(GL_LINES);
+    for (int i = 0; i < 6; i++) {
+        float a1 = (float)i * (float)(M_PI / 3.0) + rot1;
+        float a2 = (float)i * (float)(M_PI / 3.0) + rot3;
+        glVertex3f(cosf(a2) * (1.40f * sc), sinf(a2) * (1.40f * sc), 0.0f);
+        glVertex3f(cosf(a1) * (2.50f * sc), sinf(a1) * (2.50f * sc), 0.0f);
+    }
+    glEnd();
+
+    /* 6. Twelve Star-Points at outer vertices */
+    glColor3f(1.0f * intensity, 1.0f * intensity, 0.88f * intensity);
+    glBegin(GL_LINES);
+    for (int i = 0; i < 6; i++) {
+        float a = (float)i * (float)(M_PI / 3.0) + rot1;
+        float x = cosf(a) * (2.50f * sc);
+        float y = sinf(a) * (2.50f * sc);
+        glVertex3f(x - 0.08f * sc, y, 0.0f);
+        glVertex3f(x + 0.08f * sc, y, 0.0f);
+        glVertex3f(x, y - 0.08f * sc, 0.0f);
+        glVertex3f(x, y + 0.08f * sc, 0.0f);
+    }
+    glEnd();
+
+    glEnable(GL_LIGHTING);
 }
 
-/* Anime Eye */
-static void draw_anime_eye(float squish_y, bool is_left, float pupil_r, float pupil_g, float pupil_b) {
+/* Lil Cube Anime Eyes (1:1 with index.html lines 5964-6000) */
+static void draw_anime_eye(float squish_y, bool is_left) {
+    (void)is_left;
     glPushMatrix();
 
-    /* Pupil (Dark Navy) */
-    glColor3f(pupil_r * 0.1f, pupil_g * 0.1f, pupil_b * 0.1f);
+    /* 1. Pupil: Cylinder/disc radius 0.18, height 0.48 in 0x081226 (0.03, 0.07, 0.15) */
+    glColor3f(0.031f, 0.070f, 0.149f);
     glBegin(GL_POLYGON);
     for (int a = 0; a < 12; a++) {
         float rad = (float)a * 2.0f * (float)M_PI / 12.0f;
@@ -371,31 +496,44 @@ static void draw_anime_eye(float squish_y, bool is_left, float pupil_r, float pu
     }
     glEnd();
 
-    /* Iris */
-    glColor3f(pupil_r, pupil_g, pupil_b);
+    /* 2. Iris: Cylinder/disc radius 0.15 at (0, -0.11, 0.015) in 0x00e5ff (0.0, 0.898, 1.0) */
+    glColor3f(0.0f, 0.898f, 1.0f);
     glBegin(GL_POLYGON);
     for (int a = 0; a < 10; a++) {
         float rad = (float)a * 2.0f * (float)M_PI / 10.0f;
-        glVertex3f(cosf(rad) * 0.14f, (-0.06f + sinf(rad) * 0.12f) * squish_y, 0.01f);
+        glVertex3f(cosf(rad) * 0.15f, (-0.11f + sinf(rad) * 0.11f) * squish_y, 0.015f);
     }
     glEnd();
 
-    /* Specular White Dot */
+    /* 3. Specular highlight: Circle radius 0.09 at (-0.04, 0.11, 0.025) in 0xffffff */
     glColor3f(1.0f, 1.0f, 1.0f);
     glBegin(GL_POLYGON);
     for (int a = 0; a < 8; a++) {
         float rad = (float)a * 2.0f * (float)M_PI / 8.0f;
-        glVertex3f((is_left ? -0.05f : 0.05f) + cosf(rad) * 0.06f, (0.08f + sinf(rad) * 0.06f) * squish_y, 0.02f);
+        glVertex3f(-0.04f + cosf(rad) * 0.09f, (0.11f + sinf(rad) * 0.09f) * squish_y, 0.025f);
     }
     glEnd();
 
     glPopMatrix();
 }
 
-/* Mouth Smile / O-Mouth */
+/* Cheeks: Blush discs radius 0.22 in 0xff4081 (1:1 with index.html lines 6002-6012) */
+static void draw_cheek_blush(void) {
+    glColor3f(1.0f, 0.251f, 0.506f);
+    glBegin(GL_POLYGON);
+    for (int a = 0; a < 10; a++) {
+        float rad = (float)a * 2.0f * (float)M_PI / 10.0f;
+        glVertex3f(cosf(rad) * 0.22f, sinf(rad) * 0.22f, 0.0f);
+    }
+    glEnd();
+}
+
+/* Mouth Smile / O-Mouth: 0xbf1250 (1:1 with index.html lines 5950-5961) */
 static void draw_mouth(float smile_scale, float omouth_scale) {
+    glColor3f(0.749f, 0.071f, 0.314f);
+
     if (smile_scale > 0.05f) {
-        glColor3f(0.75f, 0.07f, 0.31f);
+        /* Torus arc R=0.16, r=0.038 */
         glBegin(GL_LINE_STRIP);
         for (int a = 0; a <= 10; a++) {
             float ang = (float)M_PI + (float)a * (float)M_PI / 10.0f;
@@ -404,11 +542,11 @@ static void draw_mouth(float smile_scale, float omouth_scale) {
         glEnd();
     }
     if (omouth_scale > 0.05f) {
-        glColor3f(0.75f, 0.07f, 0.31f);
+        /* Torus ring R=0.15, r=0.05 */
         glBegin(GL_LINE_LOOP);
         for (int a = 0; a < 12; a++) {
             float ang = (float)a * 2.0f * (float)M_PI / 12.0f;
-            glVertex3f(cosf(ang) * 0.12f * omouth_scale, sinf(ang) * 0.14f * omouth_scale, 1.08f);
+            glVertex3f(cosf(ang) * 0.15f * omouth_scale, sinf(ang) * 0.15f * omouth_scale, 1.08f);
         }
         glEnd();
     }
@@ -417,23 +555,49 @@ static void draw_mouth(float smile_scale, float omouth_scale) {
 /* ── 4D Hopf Fibration Background Renderer ─────────────────────────── */
 
 static void render_hopf_fibration(float time, int density_mode) {
-    int num_tori = 3;
-    int fibers_per_torus = 6; /* Default: 18 rings */
-    int num_pts = 36;
+    /* 1:1 with densityConfigs in index.html line 6940:
+     * Mode 0: tori=2, fibersPerTorus=9,  pts=40 (18 rings)
+     * Mode 1: tori=3, fibersPerTorus=12, pts=46 (36 rings)
+     * Mode 2: tori=3, fibersPerTorus=18, pts=52 (54 rings)
+     */
+    int num_tori = 2;
+    int fibers_per_torus = 9;
+    int num_pts = 40;
 
-    if (density_mode == 0) {
-        fibers_per_torus = 3;  /* 9 rings */
+    if (density_mode == 1) {
+        num_tori = 3;
+        fibers_per_torus = 12;
+        num_pts = 46;
     } else if (density_mode == 2) {
-        fibers_per_torus = 9;  /* 27 rings */
+        num_tori = 3;
+        fibers_per_torus = 18;
+        num_pts = 52;
     }
 
     int total_fibers = num_tori * fibers_per_torus;
+
+    /* Serene, majestic motion speeds & 4D isoclinic rotation (index.html lines 7698-7705) */
+    float cosX = cosf(s_cur_rot_x);
+    float sinX = sinf(s_cur_rot_x);
+    float cosY = cosf(s_cur_rot_y + time * 0.06f + s_circular_phase * 0.25f);
+    float sinY = sinf(s_cur_rot_y + time * 0.06f + s_circular_phase * 0.25f);
+    float cosZ = cosf(time * 0.04f);
+    float sinZ = sinf(time * 0.04f);
 
     float psi = time * 0.12f + s_circular_phase;
     float omega = time * 0.08f + s_circular_phase * 0.40f;
 
     glDisable(GL_LIGHTING);
     glDisable(GL_DEPTH_TEST);
+
+    /* Check wave resonance from radiant waves */
+    float wave_resonance = 0.0f;
+    for (int w = 0; w < MAX_WAVES; w++) {
+        if (!s_waves[w].active) continue;
+        float p = s_waves[w].time / s_waves[w].duration;
+        wave_resonance += (1.0f - p) * 0.7f;
+    }
+    if (wave_resonance > 1.0f) wave_resonance = 1.0f;
 
     for (int t = 0; t < num_tori; t++) {
         float eta = ((float)M_PI / 7.0f) + ((float)t + 0.6f) * ((float)M_PI / ((float)num_tori * 2.8f));
@@ -444,10 +608,16 @@ static void render_hopf_fibration(float time, int density_mode) {
             int fiber_idx = t * fibers_per_torus + f;
             float beta = ((float)f * 2.0f * (float)M_PI / (float)fibers_per_torus) + omega;
 
+            /* Spectral rainbow dispersion */
             float hue = fmodf(((float)fiber_idx / (float)total_fibers) * 360.0f + time * 24.0f, 360.0f);
             float cr, cg, cb;
-            hsv_to_rgb(hue, 0.90f, 0.85f, &cr, &cg, &cb);
-            glColor3f(cr * 0.65f, cg * 0.65f, cb * 0.65f);
+            hsv_to_rgb(hue, 0.95f, 0.78f, &cr, &cg, &cb);
+
+            float r = cr * (1.0f - wave_resonance) + 1.0f * wave_resonance;
+            float g = cg * (1.0f - wave_resonance) + 0.92f * wave_resonance;
+            float b = cb * (1.0f - wave_resonance) + 0.43f * wave_resonance;
+
+            glColor3f(r * 0.75f, g * 0.75f, b * 0.75f);
 
             glBegin(GL_LINE_STRIP);
             for (int p = 0; p <= num_pts; p++) {
@@ -459,14 +629,27 @@ static void render_hopf_fibration(float time, int density_mode) {
                 float x2 = sin_eta * cosf(xi - beta * 0.5f + psi * 0.8f);
                 float x3 = sin_eta * sinf(xi - beta * 0.5f + psi * 0.8f);
 
-                /* Stereographic Projection S³ → ℝ³ */
+                /* Stereographic Projection S³ → ℝ³ from (0,0,0,1) */
                 float denom = 1.08f - x3;
                 if (denom < 0.08f) denom = 0.08f;
-                float X = x0 / denom * 1.8f;
-                float Y = x1 / denom * 1.8f;
-                float Z = x2 / denom * 1.8f - 1.2f;
+                float X3d = x0 / denom;
+                float Y3d = x1 / denom;
+                float Z3d = x2 / denom;
 
-                glVertex3f(X, Y, Z);
+                /* 3D Rotations (Yaw -> Pitch -> Roll) 1:1 with index.html lines 7736-7747 */
+                float x_yaw = X3d * cosY + Z3d * sinY;
+                float y_yaw = Y3d;
+                float z_yaw = -X3d * sinY + Z3d * cosY;
+
+                float x_pitch = x_yaw;
+                float y_pitch = y_yaw * cosX - z_yaw * sinX;
+                float z_pitch = y_yaw * sinX + z_yaw * cosX;
+
+                float x_rot = x_pitch * cosZ - y_pitch * sinZ;
+                float y_rot = x_pitch * sinZ + y_pitch * cosZ;
+                float z_rot = z_pitch;
+
+                glVertex3f(x_rot * 1.8f, y_rot * 1.8f, z_rot * 1.8f - 1.2f);
             }
             glEnd();
         }
@@ -513,96 +696,133 @@ static void render_radiant_waves(void) {
     glEnable(GL_LIGHTING);
 }
 
-/* ── Lil Cu 64 Mascot Renderer (Sole Sacred Personage) ─────────────── */
+/* ── Lil Cu 64 Mascot Renderer (1:1 with index.html lines 6055-6113) ─ */
 
 static void render_lilcu64(const AnimPose *pose, float time) {
+    (void)time;
     glPushMatrix();
 
-    /* Apply continuous animation root transform */
+    /* Root Group (balances optical center at (0, 0, 0), scale (0.60, 0.60, 0.60)) */
     glTranslatef(pose->root_x, pose->root_y, pose->root_z);
-    glRotatef(pose->root_rot_x * 57.295f, 1.0f, 0.0f, 0.0f);
-    glRotatef(pose->root_rot_y * 57.295f, 0.0f, 1.0f, 0.0f);
-    glRotatef(pose->root_rot_z * 57.295f, 0.0f, 0.0f, 1.0f);
+    glRotatef((pose->root_rot_x + s_cube_rotx + s_target_look_y * 0.35f) * 57.29578f, 1.0f, 0.0f, 0.0f);
+    glRotatef((pose->root_rot_y + s_cube_roty + s_target_look_x * 0.45f) * 57.29578f, 0.0f, 1.0f, 0.0f);
+    glRotatef(pose->root_rot_z * 57.29578f, 0.0f, 0.0f, 1.0f);
+    glScalef(0.60f, 0.60f, 0.60f);
 
-    /* Body group (squash and stretch) */
+    /* 0. Golden Hexagon Saint Halo: appears ONLY during Sing animation (framing character body on back layer) */
+    if (s_sing_halo_curve > 0.001f) {
+        glPushMatrix();
+        glTranslatef(0.0f, 0.12f, -0.60f);
+        draw_saint_hex_halo(time, s_sing_halo_curve);
+        glPopMatrix();
+    }
+
+    /* Body Group (child of rootGroup) */
     glPushMatrix();
     glTranslatef(pose->body_x, pose->body_y, pose->body_z);
-    glRotatef(pose->body_rot_x * 57.295f, 1.0f, 0.0f, 0.0f);
-    glRotatef(pose->body_rot_y * 57.295f, 0.0f, 1.0f, 0.0f);
-    glRotatef(pose->body_rot_z * 57.295f, 0.0f, 0.0f, 1.0f);
+    glRotatef(pose->body_rot_x * 57.29578f, 1.0f, 0.0f, 0.0f);
+    glRotatef(pose->body_rot_y * 57.29578f, 0.0f, 1.0f, 0.0f);
+    glRotatef(pose->body_rot_z * 57.29578f, 0.0f, 0.0f, 1.0f);
+    glScalef(pose->scale_x, pose->scale_y, pose->scale_z);
 
-    /* Rainbow Halo floating above head */
+    /* 1. Main Faceted Gem Cube at (0, 0.12, 0), color 0x85e8ff (0.522, 0.910, 1.0) */
     glPushMatrix();
-    glTranslatef(0.0f, 1.55f, 0.0f);
-    glRotatef(time * 40.0f, 0.0f, 1.0f, 0.0f);
-    draw_rainbow_halo(0.95f, 0.05f, time);
-    glPopMatrix();
+    glTranslatef(0.0f, 0.12f, 0.0f);
+    draw_faceted_gem_cube(0.522f, 0.910f, 1.0f);
 
-    /* Internal rotating octahedron core / gem */
+    /* 2. Internal rotating Octahedron Core at (0, 0.12, 0), radius 0.78, solid white */
     glPushMatrix();
-    glRotatef(time * 60.0f, 0.0f, 1.0f, 0.0f);
+    glRotatef(s_core_rot_x * 57.29578f, 1.0f, 0.0f, 0.0f);
+    glRotatef(s_core_rot_y * 57.29578f, 0.0f, 1.0f, 0.0f);
     draw_octahedron(0.78f, false, 1.0f, 1.0f, 1.0f);
-    glRotatef(-time * 90.0f, 1.0f, 0.0f, 0.0f);
-    draw_octahedron(1.02f, true, 0.22f, 0.74f, 0.97f);
     glPopMatrix();
 
-    /* Mouth */
-    draw_mouth(pose->smile_scale, pose->omouth_scale);
+    /* 3. Wireframe Octahedron at (0, 0.12, 0), radius 1.02, cyan 0x38bdf8 */
+    glPushMatrix();
+    glRotatef(s_wire_rot_x * 57.29578f, 1.0f, 0.0f, 0.0f);
+    glRotatef(s_wire_rot_y * 57.29578f, 0.0f, 1.0f, 0.0f);
+    draw_octahedron(1.02f, true, 0.220f, 0.741f, 0.973f);
+    glPopMatrix();
 
-    /* Eyes */
+    glPopMatrix(); /* End main cube & octahedra */
+
+
+
+    /* 5. Mouth at (0, -0.06, 1.08) */
+    glPushMatrix();
+    glTranslatef(0.0f, -0.06f, 1.08f);
+    draw_mouth(pose->smile_scale, pose->omouth_scale);
+    glPopMatrix();
+
+    /* 6. Anime Eyes */
     float blink_squish = 1.0f;
     if (s_is_blinking) {
         blink_squish = 1.0f - sinf(s_blink_progress * (float)M_PI) * 0.90f;
     }
-
     glPushMatrix();
     glTranslatef(-0.46f, 0.32f, 1.08f);
-    draw_anime_eye(blink_squish, true, 0.0f, 0.90f, 1.0f);
+    draw_anime_eye(blink_squish, true);
     glPopMatrix();
 
     glPushMatrix();
     glTranslatef(0.46f, 0.32f, 1.08f);
-    draw_anime_eye(blink_squish, false, 0.0f, 0.90f, 1.0f);
+    draw_anime_eye(blink_squish, false);
     glPopMatrix();
 
-    /* Main Chamfered Cube Body: Lil Cu 64 Sky-Cyan (0.52, 0.91, 1.00) */
-    draw_chamfered_cube(2.1f * pose->scale_x, 2.1f * pose->scale_y, 2.1f * pose->scale_z, 0.52f, 0.91f, 1.0f);
+    /* 7. Blush Cheeks at (-0.76, -0.06, 1.07) and (0.76, -0.06, 1.07) */
+    glPushMatrix();
+    glTranslatef(-0.76f, -0.06f, 1.07f);
+    draw_cheek_blush();
+    glPopMatrix();
 
-    /* Floating Hands */
+    glPushMatrix();
+    glTranslatef(0.76f, -0.06f, 1.07f);
+    draw_cheek_blush();
+    glPopMatrix();
+
+    /* 8. Little Cube Hands at pivots (-1.26, 0.05, 0.1) and (1.26, 0.05, 0.1) */
+    /* Left Hand */
     glPushMatrix();
     glTranslatef(-1.26f, 0.05f, 0.1f);
-    glRotatef(pose->lhand_rot_x * 57.295f, 1.0f, 0.0f, 0.0f);
-    glRotatef(pose->lhand_rot_z * 57.295f, 0.0f, 0.0f, 1.0f);
-    draw_chamfered_cube_uniform(0.46f, 0.56f, 0.93f, 1.0f);
+    glRotatef(pose->lhand_rot_x * 57.29578f, 1.0f, 0.0f, 0.0f);
+    glRotatef(pose->lhand_rot_y * 57.29578f, 0.0f, 1.0f, 0.0f);
+    glRotatef(pose->lhand_rot_z * 57.29578f, 0.0f, 0.0f, 1.0f);
+    draw_box(0.46f, 0.46f, 0.46f, 0.565f, 0.929f, 1.0f);
     glPopMatrix();
 
+    /* Right Hand */
     glPushMatrix();
     glTranslatef(1.26f, 0.05f, 0.1f);
-    glRotatef(pose->rhand_rot_x * 57.295f, 1.0f, 0.0f, 0.0f);
-    glRotatef(pose->rhand_rot_z * 57.295f, 0.0f, 0.0f, 1.0f);
-    draw_chamfered_cube_uniform(0.46f, 0.56f, 0.93f, 1.0f);
+    glRotatef(pose->rhand_rot_x * 57.29578f, 1.0f, 0.0f, 0.0f);
+    glRotatef(pose->rhand_rot_y * 57.29578f, 0.0f, 1.0f, 0.0f);
+    glRotatef(pose->rhand_rot_z * 57.29578f, 0.0f, 0.0f, 1.0f);
+    draw_box(0.46f, 0.46f, 0.46f, 0.565f, 0.929f, 1.0f);
     glPopMatrix();
 
-    glPopMatrix(); /* End body group */
+    glPopMatrix(); /* End Body Group */
 
-    /* Cute feet pods (attached to root) */
+    /* 9. Little Cube Feet (Direct children of rootGroup at pivots (-0.64, -0.92, 0.08)) */
     /* Left Foot */
     glPushMatrix();
-    glTranslatef(-0.64f, pose->lfoot_y, 0.08f);
-    glRotatef(pose->lfoot_rot_x * 57.295f, 1.0f, 0.0f, 0.0f);
-    glRotatef(pose->lfoot_rot_z * 57.295f, 0.0f, 0.0f, 1.0f);
-    draw_chamfered_cube_uniform(0.55f, 1.0f, 0.30f, 0.55f);
+    glTranslatef(pose->left_foot_x, pose->lfoot_y, pose->left_foot_z);
+    glRotatef(pose->lfoot_rot_x * 57.29578f, 1.0f, 0.0f, 0.0f);
+    glRotatef(pose->lfoot_rot_y * 57.29578f, 0.0f, 1.0f, 0.0f);
+    glRotatef(pose->lfoot_rot_z * 57.29578f, 0.0f, 0.0f, 1.0f);
+    glTranslatef(0.0f, -0.20f, 0.06f);
+    draw_box(0.72f, 0.48f, 0.88f, 1.0f, 0.302f, 0.553f);
     glPopMatrix();
 
     /* Right Foot */
     glPushMatrix();
-    glTranslatef(0.64f, pose->rfoot_y, 0.08f);
-    glRotatef(pose->rfoot_rot_x * 57.295f, 1.0f, 0.0f, 0.0f);
-    glRotatef(pose->rfoot_rot_z * 57.295f, 0.0f, 0.0f, 1.0f);
-    draw_chamfered_cube_uniform(0.55f, 1.0f, 0.30f, 0.55f);
+    glTranslatef(pose->right_foot_x, pose->rfoot_y, pose->right_foot_z);
+    glRotatef(pose->rfoot_rot_x * 57.29578f, 1.0f, 0.0f, 0.0f);
+    glRotatef(pose->rfoot_rot_y * 57.29578f, 0.0f, 1.0f, 0.0f);
+    glRotatef(pose->rfoot_rot_z * 57.29578f, 0.0f, 0.0f, 1.0f);
+    glTranslatef(0.0f, -0.20f, 0.06f);
+    draw_box(0.72f, 0.48f, 0.88f, 1.0f, 0.302f, 0.553f);
     glPopMatrix();
 
-    glPopMatrix(); /* End root */
+    glPopMatrix(); /* End Root Group */
 }
 
 /* ── Kinematics & Pose Update Loop ─────────────────────────────────── */
@@ -611,11 +831,14 @@ static void update_kinematics(float dt) {
     s_time += dt;
     s_state_timer += dt;
 
-    /* Flywheel inertia */
+    /* Silky, critically damped flywheel inertia & tilt low-pass filter (index.html lines 7671-7676) */
     s_circular_vel *= 0.968f;
     s_circular_phase += s_circular_vel;
 
-    /* Drag inertia spring back to front */
+    s_cur_rot_x += (s_target_rot_x - s_cur_rot_x) * 0.028f;
+    s_cur_rot_y += (s_target_rot_y - s_cur_rot_y) * 0.028f;
+
+    /* Drag inertia spring back to front (index.html lines 7153-7161) */
     if (!s_dragging) {
         s_cube_velx *= 0.90f;
         s_cube_vely *= 0.90f;
@@ -623,6 +846,10 @@ static void update_kinematics(float dt) {
         s_cube_roty += s_cube_vely;
         s_cube_rotx += (0.0f - s_cube_rotx) * 0.04f;
         s_cube_roty += (0.0f - s_cube_roty) * 0.04f;
+    } else {
+        /* While holding mouse button still, gently damp residual velocity */
+        s_cube_velx *= 0.80f;
+        s_cube_vely *= 0.80f;
     }
 
     /* Eye Blinking */
@@ -640,16 +867,39 @@ static void update_kinematics(float dt) {
         }
     }
 
+    /* Inner core and wireframe octahedron rotation (1:1 with index.html lines 6095, 7234) */
+    if (s_anim_state == ANIM_SING) {
+        s_core_rot_x += dt * 3.5f;
+        s_core_rot_y += dt * 5.0f;
+    } else {
+        s_core_rot_x += dt * 0.5f;
+        s_core_rot_y += dt * 0.7f;
+    }
+    s_wire_rot_x += dt * -0.7f;
+    s_wire_rot_y += dt * 0.5f;
+
+    /* Autonomous animation progression: cycle smoothly when mascot is idle */
+    if (s_anim_state == ANIM_IDLE && s_state_timer >= 3.8f) {
+        static int s_auto_anim = 0;
+        s_auto_anim = (s_auto_anim + 1) % 4;
+        if (s_auto_anim == 0) set_animation(ANIM_WALK);
+        else if (s_auto_anim == 1) set_animation(ANIM_FLOAT);
+        else if (s_auto_anim == 2) set_animation(ANIM_DANCE);
+        else set_animation(ANIM_SING);
+    }
+
     /* Target pose goals */
     float t_root_x = 0.0f, t_root_y = 0.08f, t_root_z = 0.0f;
     float t_root_rot_x = 0.0f, t_root_rot_y = 0.0f, t_root_rot_z = 0.0f;
     float t_body_x = 0.0f, t_body_y = 0.0f, t_body_z = 0.0f;
     float t_body_rot_x = 0.0f, t_body_rot_y = 0.0f, t_body_rot_z = 0.0f;
     float t_scale_x = 1.0f, t_scale_y = 1.0f, t_scale_z = 1.0f;
-    float t_lhand_rot_x = 0.0f, t_lhand_rot_z = 0.10f;
-    float t_rhand_rot_x = 0.0f, t_rhand_rot_z = -0.10f;
-    float t_lfoot_y = -0.92f, t_lfoot_rot_x = 0.0f, t_lfoot_rot_z = 0.0f;
-    float t_rfoot_y = -0.92f, t_rfoot_rot_x = 0.0f, t_rfoot_rot_z = 0.0f;
+    float t_lhand_rot_x = 0.0f, t_lhand_rot_y = 0.0f, t_lhand_rot_z = 0.10f;
+    float t_rhand_rot_x = 0.0f, t_rhand_rot_y = 0.0f, t_rhand_rot_z = -0.10f;
+    float t_left_foot_x = -0.64f, t_lfoot_y = -0.92f, t_left_foot_z = 0.08f;
+    float t_lfoot_rot_x = 0.0f, t_lfoot_rot_y = 0.0f, t_lfoot_rot_z = 0.0f;
+    float t_right_foot_x = 0.64f, t_rfoot_y = -0.92f, t_right_foot_z = 0.08f;
+    float t_rfoot_rot_x = 0.0f, t_rfoot_rot_y = 0.0f, t_rfoot_rot_z = 0.0f;
     float t_smile_scale = 1.0f, t_omouth_scale = 0.0f;
 
     switch (s_anim_state) {
@@ -661,6 +911,8 @@ static void update_kinematics(float dt) {
             t_scale_z = 1.0f - breath * 0.02f;
             t_body_y = breath * 0.03f;
             t_body_rot_z = sway * 0.035f;
+            t_lfoot_rot_z = sway * 0.03f;
+            t_rfoot_rot_z = -sway * 0.03f;
             t_lhand_rot_z = 0.10f + breath * 0.07f;
             t_rhand_rot_z = -0.10f - breath * 0.07f;
             break;
@@ -677,8 +929,11 @@ static void update_kinematics(float dt) {
 
             t_lfoot_y = -0.92f + (sin_w > 0.0f ? sin_w : 0.0f) * 0.36f;
             t_lfoot_rot_x = sin_w * 0.44f;
+            t_lfoot_rot_z = 0.06f;
+
             t_rfoot_y = -0.92f + (-sin_w > 0.0f ? -sin_w : 0.0f) * 0.36f;
             t_rfoot_rot_x = -sin_w * 0.44f;
+            t_rfoot_rot_z = -0.06f;
 
             t_body_rot_z = sin_w * 0.16f;
             t_body_y = fabsf(sinf(s_walk_phase * 2.0f)) * 0.12f;
@@ -691,38 +946,62 @@ static void update_kinematics(float dt) {
         case ANIM_FLOAT: {
             s_float_timer += dt;
             if (s_float_timer < 0.40f) {
+                /* Phase 1: Buoyant anticipation & gradual expansion (0 to 0.40s) */
                 float p = s_float_timer / 0.40f;
-                float ease = 0.5f - 0.5f * cosf(p * (float)M_PI);
-                t_scale_x = 1.0f + ease * 0.30f;
-                t_scale_y = 1.0f + ease * 0.28f;
-                t_scale_z = 1.0f + ease * 0.30f;
-                t_root_y = 0.08f + ease * 0.18f;
-                t_smile_scale = 1.0f - ease;
-                t_omouth_scale = ease * 1.25f;
+                float ease_inhale = 0.5f - 0.5f * cosf(p * (float)M_PI);
+                t_scale_x = 1.0f + ease_inhale * 0.30f;
+                t_scale_y = 1.0f + ease_inhale * 0.28f;
+                t_scale_z = 1.0f + ease_inhale * 0.30f;
+                t_root_y = 0.08f + ease_inhale * 0.18f;
+                t_smile_scale = 1.0f - ease_inhale;
+                t_omouth_scale = ease_inhale * 1.25f;
+
+                t_lhand_rot_z = 0.10f + ease_inhale * 0.30f;
+                t_rhand_rot_z = -0.10f - ease_inhale * 0.30f;
+                t_lfoot_y = -0.92f - ease_inhale * 0.12f;
+                t_rfoot_y = -0.92f - ease_inhale * 0.12f;
             } else if (s_float_timer < 2.55f) {
+                /* Phase 2: Aerial float & flutter kick (0.40s to 2.55s) */
                 t_scale_x = 1.30f;
                 t_scale_y = 1.28f;
                 t_scale_z = 1.30f;
                 t_smile_scale = 0.0f;
                 t_omouth_scale = 1.25f;
+
                 float hover = sinf((s_float_timer - 0.40f) * 3.4f);
                 t_root_y = 0.92f + hover * 0.15f;
+
                 t_lfoot_rot_x = sinf(s_float_timer * 9.0f) * 0.45f;
+                t_lfoot_y = -1.04f;
                 t_rfoot_rot_x = cosf(s_float_timer * 9.0f) * 0.45f;
+                t_rfoot_y = -1.04f;
+
                 t_lhand_rot_z = 0.40f + sinf(s_float_timer * 13.0f) * 0.35f;
                 t_rhand_rot_z = -0.40f - sinf(s_float_timer * 13.0f) * 0.35f;
             } else if (s_float_timer < 3.35f) {
+                /* Phase 3: Smooth exhale & gradual deceleration descent (2.55s to 3.35s) */
                 float p = (s_float_timer - 2.55f) / 0.80f;
-                float ease = 0.5f - 0.5f * cosf(p * (float)M_PI);
-                t_scale_x = 1.30f - ease * 0.30f;
-                t_scale_y = 1.28f - ease * 0.28f;
-                t_scale_z = 1.30f - ease * 0.30f;
-                t_root_y = 0.92f * (1.0f - ease) + 0.08f;
-                t_smile_scale = ease;
-                t_omouth_scale = 1.25f * (1.0f - ease);
+                float ease_descend = 0.5f - 0.5f * cosf(p * (float)M_PI);
+                float flutter_damp = 1.0f - ease_descend;
+
+                t_scale_x = 1.30f - ease_descend * 0.30f;
+                t_scale_y = 1.28f - ease_descend * 0.28f;
+                t_scale_z = 1.30f - ease_descend * 0.30f;
+                t_root_y = 0.92f * (1.0f - ease_descend) + 0.08f;
+
+                t_smile_scale = ease_descend;
+                t_omouth_scale = 1.25f * (1.0f - ease_descend);
+
+                t_lfoot_rot_x = sinf(s_float_timer * 9.0f * flutter_damp) * 0.45f * flutter_damp;
+                t_rfoot_rot_x = cosf(s_float_timer * 9.0f * flutter_damp) * 0.45f * flutter_damp;
+                t_lfoot_y = -1.04f + ease_descend * 0.12f;
+                t_rfoot_y = -1.04f + ease_descend * 0.12f;
+
+                t_lhand_rot_z = 0.40f * flutter_damp + 0.10f;
+                t_rhand_rot_z = -0.40f * flutter_damp - 0.10f;
             } else {
                 set_animation(ANIM_IDLE);
-                s_impact_squash = 0.18f;
+                s_impact_squash = 0.16f;
                 lilcu64_shim_boing();
             }
             break;
@@ -730,49 +1009,110 @@ static void update_kinematics(float dt) {
         case ANIM_DANCE: {
             s_dance_timer += dt;
             if (s_dance_timer < 0.9f) {
+                /* Hop 1 (Left 360 spin): 0 to 0.9s */
                 float p = s_dance_timer / 0.9f;
                 float hop = sinf(p * (float)M_PI);
                 t_root_y = 0.08f + hop * 0.78f;
                 t_root_x = -0.42f * hop;
                 t_body_rot_y = p * (float)M_PI * 2.0f;
+                t_lfoot_y = -0.92f + hop * 0.22f;
+                t_rfoot_y = -0.68f;
                 t_lhand_rot_z = 0.75f * hop;
                 t_rhand_rot_z = -0.75f * hop;
             } else if (s_dance_timer < 1.8f) {
+                /* Hop 2 (Right 360 reverse spin): 0.9 to 1.8s */
                 float p = (s_dance_timer - 0.9f) / 0.9f;
                 float hop = sinf(p * (float)M_PI);
                 t_root_y = 0.08f + hop * 0.78f;
                 t_root_x = 0.42f * hop;
                 t_body_rot_y = -p * (float)M_PI * 2.0f;
+                t_lfoot_y = -0.68f;
+                t_rfoot_y = -0.92f + hop * 0.22f;
                 t_lhand_rot_z = -0.75f * hop;
                 t_rhand_rot_z = 0.75f * hop;
             } else if (s_dance_timer < 2.7f) {
+                /* Hop 3 (Celebratory backflip): 1.8 to 2.7s */
                 float p = (s_dance_timer - 1.8f) / 0.9f;
                 float hop = sinf(p * (float)M_PI);
+                t_root_x = 0.0f;
                 t_root_y = 0.08f + hop * 0.88f;
                 t_body_rot_x = -p * (float)M_PI * 2.0f;
+                t_lhand_rot_z = 0.35f + hop * 0.55f;
+                t_rhand_rot_z = -0.35f - hop * 0.55f;
             } else if (s_dance_timer < 3.4f) {
+                /* Triumphant victory pose hold & sparkle (2.7s to 3.4s) */
+                t_root_x = 0.0f;
+                t_root_y = 0.08f;
+                t_body_rot_x = 0.0f;
+                t_body_rot_y = 0.0f;
                 t_scale_x = 1.08f;
                 t_scale_y = 0.93f;
                 t_scale_z = 1.08f;
-                t_lhand_rot_z = 1.35f; /* Victory hand raised high! */
+                t_lfoot_rot_z = 0.32f;
+                t_rfoot_rot_z = -0.32f;
+                t_lhand_rot_z = 1.35f; /* Left hand raised high in victory! */
+                t_lhand_rot_x = -0.15f;
+                t_rhand_rot_z = -0.28f;
+
                 if (s_dance_step == 0) {
                     s_dance_step = 1;
                     s_impact_squash = 0.18f;
                 }
+            } else if (s_dance_timer < 4.1f) {
+                /* Organic smooth deceleration return to idle (3.4s to 4.1s) */
+                float p = (s_dance_timer - 3.4f) / 0.70f;
+                float s = 0.5f - 0.5f * cosf(p * (float)M_PI);
+
+                t_root_x = 0.0f;
+                t_root_y = 0.08f;
+                t_body_rot_x = 0.0f;
+                t_body_rot_y = 0.0f;
+
+                t_scale_x = 1.08f * (1.0f - s) + 1.0f * s;
+                t_scale_y = 0.93f * (1.0f - s) + 1.0f * s;
+                t_scale_z = 1.08f * (1.0f - s) + 1.0f * s;
+
+                t_lfoot_rot_z = 0.32f * (1.0f - s);
+                t_rfoot_rot_z = -0.32f * (1.0f - s);
+                t_lhand_rot_z = 1.35f * (1.0f - s) + 0.10f * s;
+                t_lhand_rot_x = -0.15f * (1.0f - s);
+                t_rhand_rot_z = -0.28f * (1.0f - s) - 0.10f * s;
             } else {
                 set_animation(ANIM_IDLE);
             }
             break;
         }
         case ANIM_SING: {
-            float curve = sinf((s_state_timer < 0.44f ? s_state_timer / 0.44f : 0.0f) * (float)M_PI);
+            /* Two-phase singing chime (index.html lines 7488-7528) */
+            float curve = 0.0f;
+            if (s_state_timer < 0.44f) {
+                float p = s_state_timer / 0.44f;
+                curve = sinf(p * (float)M_PI);
+            } else if (s_state_timer >= 0.68f && s_state_timer < 1.15f) {
+                float p = (s_state_timer - 0.68f) / 0.47f;
+                curve = sinf(p * (float)M_PI) * 0.85f;
+            } else {
+                curve = 0.0f;
+            }
+
             t_root_rot_x = -curve * 0.25f;
             t_root_y = 0.08f + curve * 0.26f;
             t_scale_x = 1.0f + curve * 0.14f;
             t_scale_y = 1.0f + curve * 0.16f;
             t_scale_z = 1.0f + curve * 0.14f;
+
+            t_lhand_rot_z = curve * 1.15f;
+            t_lhand_rot_x = -curve * 0.30f;
+            t_rhand_rot_z = -curve * 1.15f;
+            t_rhand_rot_x = -curve * 0.30f;
+
+            t_lfoot_y = -0.92f + curve * 0.10f;
+            t_rfoot_y = -0.92f + curve * 0.10f;
+
             t_smile_scale = 1.0f - curve;
             t_omouth_scale = curve * 1.25f;
+            s_sing_halo_curve = curve;
+
             if (s_state_timer >= 1.25f) set_animation(ANIM_IDLE);
             break;
         }
@@ -790,6 +1130,12 @@ static void update_kinematics(float dt) {
             }
             break;
         }
+        case ANIM_SQUASH:
+            s_impact_squash = 0.25f;
+            lilcu64_shim_pulse_squash(1.0f, 1.0f);
+            trigger_radiant_wave(false);
+            set_animation(ANIM_IDLE);
+            break;
         default:
             break;
     }
@@ -800,39 +1146,54 @@ static void update_kinematics(float dt) {
     t_scale_x += s_impact_squash * 0.5f;
     t_scale_z += s_impact_squash * 0.5f;
 
-    /* Blend continuous pose toward target */
+    /* Critically Damped Exponential Blend toward Target Pose (Zero Pops) */
     s_pose.root_x = smooth_damp(s_pose.root_x, t_root_x, 18.0f, dt);
     s_pose.root_y = smooth_damp(s_pose.root_y, t_root_y, 18.0f, dt);
     s_pose.root_z = smooth_damp(s_pose.root_z, t_root_z, 18.0f, dt);
-    s_pose.root_rot_x = smooth_damp(s_pose.root_rot_x, t_root_rot_x, 16.0f, dt);
-    s_pose.root_rot_y = smooth_damp(s_pose.root_rot_y, t_root_rot_y, 16.0f, dt);
-    s_pose.root_rot_z = smooth_damp(s_pose.root_rot_z, t_root_rot_z, 16.0f, dt);
+    s_pose.root_rot_x = smooth_damp_angle(s_pose.root_rot_x, t_root_rot_x, 16.0f, dt);
+    s_pose.root_rot_y = smooth_damp_angle(s_pose.root_rot_y, t_root_rot_y, 16.0f, dt);
+    s_pose.root_rot_z = smooth_damp_angle(s_pose.root_rot_z, t_root_rot_z, 16.0f, dt);
 
     s_pose.body_x = smooth_damp(s_pose.body_x, t_body_x, 18.0f, dt);
     s_pose.body_y = smooth_damp(s_pose.body_y, t_body_y, 18.0f, dt);
     s_pose.body_z = smooth_damp(s_pose.body_z, t_body_z, 18.0f, dt);
-    s_pose.body_rot_x = smooth_damp(s_pose.body_rot_x, t_body_rot_x, 16.0f, dt);
-    s_pose.body_rot_y = smooth_damp(s_pose.body_rot_y, t_body_rot_y, 16.0f, dt);
-    s_pose.body_rot_z = smooth_damp(s_pose.body_rot_z, t_body_rot_z, 16.0f, dt);
+    s_pose.body_rot_x = smooth_damp_angle(s_pose.body_rot_x, t_body_rot_x, 16.0f, dt);
+    s_pose.body_rot_y = smooth_damp_angle(s_pose.body_rot_y, t_body_rot_y, 16.0f, dt);
+    s_pose.body_rot_z = smooth_damp_angle(s_pose.body_rot_z, t_body_rot_z, 16.0f, dt);
 
     s_pose.scale_x = smooth_damp(s_pose.scale_x, t_scale_x, 22.0f, dt);
     s_pose.scale_y = smooth_damp(s_pose.scale_y, t_scale_y, 22.0f, dt);
     s_pose.scale_z = smooth_damp(s_pose.scale_z, t_scale_z, 22.0f, dt);
 
-    s_pose.lhand_rot_x = smooth_damp(s_pose.lhand_rot_x, t_lhand_rot_x, 15.0f, dt);
-    s_pose.lhand_rot_z = smooth_damp(s_pose.lhand_rot_z, t_lhand_rot_z, 15.0f, dt);
-    s_pose.rhand_rot_x = smooth_damp(s_pose.rhand_rot_x, t_rhand_rot_x, 15.0f, dt);
-    s_pose.rhand_rot_z = smooth_damp(s_pose.rhand_rot_z, t_rhand_rot_z, 15.0f, dt);
+    s_pose.lhand_rot_x = smooth_damp_angle(s_pose.lhand_rot_x, t_lhand_rot_x, 15.0f, dt);
+    s_pose.lhand_rot_y = smooth_damp_angle(s_pose.lhand_rot_y, t_lhand_rot_y, 15.0f, dt);
+    s_pose.lhand_rot_z = smooth_damp_angle(s_pose.lhand_rot_z, t_lhand_rot_z, 15.0f, dt);
 
+    s_pose.rhand_rot_x = smooth_damp_angle(s_pose.rhand_rot_x, t_rhand_rot_x, 15.0f, dt);
+    s_pose.rhand_rot_y = smooth_damp_angle(s_pose.rhand_rot_y, t_rhand_rot_y, 15.0f, dt);
+    s_pose.rhand_rot_z = smooth_damp_angle(s_pose.rhand_rot_z, t_rhand_rot_z, 15.0f, dt);
+
+    s_pose.left_foot_x = smooth_damp(s_pose.left_foot_x, t_left_foot_x, 20.0f, dt);
     s_pose.lfoot_y = smooth_damp(s_pose.lfoot_y, t_lfoot_y, 20.0f, dt);
-    s_pose.lfoot_rot_x = smooth_damp(s_pose.lfoot_rot_x, t_lfoot_rot_x, 20.0f, dt);
-    s_pose.lfoot_rot_z = smooth_damp(s_pose.lfoot_rot_z, t_lfoot_rot_z, 20.0f, dt);
+    s_pose.left_foot_z = smooth_damp(s_pose.left_foot_z, t_left_foot_z, 20.0f, dt);
+    s_pose.lfoot_rot_x = smooth_damp_angle(s_pose.lfoot_rot_x, t_lfoot_rot_x, 20.0f, dt);
+    s_pose.lfoot_rot_y = smooth_damp_angle(s_pose.lfoot_rot_y, t_lfoot_rot_y, 20.0f, dt);
+    s_pose.lfoot_rot_z = smooth_damp_angle(s_pose.lfoot_rot_z, t_lfoot_rot_z, 20.0f, dt);
+
+    s_pose.right_foot_x = smooth_damp(s_pose.right_foot_x, t_right_foot_x, 20.0f, dt);
     s_pose.rfoot_y = smooth_damp(s_pose.rfoot_y, t_rfoot_y, 20.0f, dt);
-    s_pose.rfoot_rot_x = smooth_damp(s_pose.rfoot_rot_x, t_rfoot_rot_x, 20.0f, dt);
-    s_pose.rfoot_rot_z = smooth_damp(s_pose.rfoot_rot_z, t_rfoot_rot_z, 20.0f, dt);
+    s_pose.right_foot_z = smooth_damp(s_pose.right_foot_z, t_right_foot_z, 20.0f, dt);
+    s_pose.rfoot_rot_x = smooth_damp_angle(s_pose.rfoot_rot_x, t_rfoot_rot_x, 20.0f, dt);
+    s_pose.rfoot_rot_y = smooth_damp_angle(s_pose.rfoot_rot_y, t_rfoot_rot_y, 20.0f, dt);
+    s_pose.rfoot_rot_z = smooth_damp_angle(s_pose.rfoot_rot_z, t_rfoot_rot_z, 20.0f, dt);
 
     s_pose.smile_scale = smooth_damp(s_pose.smile_scale, t_smile_scale, 24.0f, dt);
     s_pose.omouth_scale = smooth_damp(s_pose.omouth_scale, t_omouth_scale, 24.0f, dt);
+
+    if (s_anim_state != ANIM_SING) {
+        s_sing_halo_curve *= expf(-10.0f * dt);
+        if (s_sing_halo_curve < 0.001f) s_sing_halo_curve = 0.0f;
+    }
 
     update_waves(dt);
 }
@@ -854,10 +1215,10 @@ static void render_2d_dashboard(GDEV *dev) {
     drw_tc_string(dev, 32, dev->height - 52, s_quote_text, COLOR_GOLD, 0);
 
     /* Control hints */
-    char hint_buf[128];
+    char hint_buf[160];
     int active_t = lilcu64_synth_get_active_track();
     snprintf(hint_buf, sizeof(hint_buf),
-             "[Space] Pulse  [W] Waddle  [F] Float  [D] Dance  [1-4] Track (%s)  [M] Sound  [‹/›] Carousel",
+             "[Space/P] Sacred Pulse & Sing  [W] Waddle  [F] Float  [D] Dance  [1/S] Trk 1 (%s)  [2/C] Trk 2  [3/H] Trk 3  [4/T] Trk 4  [M] Mute",
              active_t > 0 ? "ON" : "OFF");
     drw_tc_string(dev, 32, dev->height - 32, hint_buf, COLOR_WHITE, 0);
 }
@@ -866,6 +1227,9 @@ static void render_2d_dashboard(GDEV *dev) {
 
 static void demo_paint(WND *wnd, GDEV *dev) {
     if (!wnd || !dev || !s_surf) return;
+
+    /* CRITICAL: restore EGL surface so OpenGL operations target this window's buffer */
+    egl_make_current(s_surf);
 
     if (s_surf->width != dev->width || s_surf->height != dev->height) {
         egl_surface_resize(s_surf, dev->width, dev->height);
@@ -879,21 +1243,20 @@ static void demo_paint(WND *wnd, GDEV *dev) {
     glViewport(0, 0, dev->width, dev->height);
     glMatrixMode(GL_PROJECTION);
     glLoadIdentity();
+
+    /* 1:1 PerspectiveCamera(36, w/h, 0.1, 100) from index.html line 6300 */
     double aspect = (double)dev->width / (double)(dev->height > 0 ? dev->height : 1);
-    glFrustum(-aspect * 0.32, aspect * 0.32, -0.32, 0.32, 1.0, 100.0);
+    glFrustum(-aspect * 0.3249, aspect * 0.3249, -0.3249, 0.3249, 1.0, 100.0);
 
     glMatrixMode(GL_MODELVIEW);
     glLoadIdentity();
-    glTranslatef(0.0f, -0.08f, -9.2f); /* Camera at (0, 0.08, 9.2) looking at (0, 0.08, 0) */
+    /* Camera at (0, 0.08, 9.2) looking at (0, 0.08, 0) */
+    glTranslatef(0.0f, -0.08f, -9.2f);
 
     glClearColor(0.035f, 0.045f, 0.085f, 1.0f);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
     glPushMatrix();
-
-    /* Apply camera drag rotation */
-    glRotatef(s_view_rotx + s_cube_rotx, 1.0f, 0.0f, 0.0f);
-    glRotatef(s_view_roty + s_cube_roty, 0.0f, 1.0f, 0.0f);
 
     /* 1. Render 4D Hopf Fibration Background */
     render_hopf_fibration(s_time, s_density_mode);
@@ -901,8 +1264,8 @@ static void demo_paint(WND *wnd, GDEV *dev) {
     /* 2. Render Spherical Radiant Pulse Waves */
     render_radiant_waves();
 
-    /* 3. Render Personage Carousel */
-    render_carousel(s_time);
+    /* 3. Render Lil Cu 64 Mascot (1:1 with index.html) */
+    render_lilcu64(&s_pose, s_time);
 
     glPopMatrix();
 
@@ -922,7 +1285,7 @@ static void demo_event(WND *wnd, const EVT *evt) {
         if (evt->key == 0x1B || evt->key == 'q' || evt->key == 'Q') {
             cls_wnd(wnd);
         } else if (evt->key == ' ' || evt->key == 'p' || evt->key == 'P' || evt->key == 'j' || evt->key == 'J') {
-            set_animation(ANIM_SQUASH);
+            set_animation(ANIM_SING);
         } else if (evt->key == 'w' || evt->key == 'W') {
             set_animation(ANIM_WALK);
         } else if (evt->key == 'f' || evt->key == 'F') {
@@ -939,21 +1302,21 @@ static void demo_event(WND *wnd, const EVT *evt) {
             lilcu64_synth_play_track(4);
         } else if (evt->key == 'm' || evt->key == 'M') {
             lilcu64_synth_toggle_mute();
-        } else if (evt->key == 0x1C || evt->key == '<' || evt->key == ',') { /* Left arrow / prev */
-            s_current_personage = (s_current_personage + 3) % 4;
-            s_target_carousel_rot -= 90.0f;
+        } else if (evt->key == 0x1C || evt->key == '<' || evt->key == ',') { /* Prev density mode */
+            s_density_mode = (s_density_mode + 2) % 3;
             lilcu64_shim_ding(1318.51f, 0.7f, 0.4f);
-        } else if (evt->key == 0x1D || evt->key == '>' || evt->key == '.') { /* Right arrow / next */
-            s_current_personage = (s_current_personage + 1) % 4;
-            s_target_carousel_rot += 90.0f;
+        } else if (evt->key == 0x1D || evt->key == '>' || evt->key == '.') { /* Next density mode */
+            s_density_mode = (s_density_mode + 1) % 3;
             lilcu64_shim_ding(1760.0f, 0.7f, 0.4f);
         }
         inval_wnd(wnd);
 
     } else if (evt->type == EV_BUT_DOWN) {
         s_dragging = 1;
-        s_last_mx = evt->pos.x;
-        s_last_my = evt->pos.y;
+        s_prev_drag_x = evt->pos.x;
+        s_prev_drag_y = evt->pos.y;
+        s_cube_velx = 0.0f;
+        s_cube_vely = 0.0f;
 
         /* Click on mascot triggers poke reaction */
         if (evt->pos.y > 100 && evt->pos.y < wnd->client.bottom - 100) {
@@ -961,17 +1324,75 @@ static void demo_event(WND *wnd, const EVT *evt) {
         }
     } else if (evt->type == EV_BUT_UP) {
         s_dragging = 0;
-    } else if (evt->type == EV_MOUSE_MOVE && s_dragging) {
-        float dx = (float)(evt->pos.x - s_last_mx);
-        float dy = (float)(evt->pos.y - s_last_my);
+        s_cube_velx *= 0.5f;
+        s_cube_vely *= 0.5f;
+        s_last_pointer_angle = -999.0f;
+    } else if (evt->type == EV_MOUSE_MOVE) {
+        float cx = (float)wnd->client.left + (float)(wnd->client.right - wnd->client.left) * 0.5f;
+        float cy = (float)wnd->client.top + (float)(wnd->client.bottom - wnd->client.top) * 0.38f;
+        float width = (float)(wnd->client.right - wnd->client.left);
+        float height = (float)(wnd->client.bottom - wnd->client.top);
+        if (width <= 0.0f) width = 720.0f;
+        if (height <= 0.0f) height = 540.0f;
 
-        s_cube_vely += dx * 0.4f;
-        s_cube_velx += dy * 0.4f;
+        float dx = (float)evt->pos.x - cx;
+        float dy = (float)evt->pos.y - cy;
+        float dist = sqrtf(dx * dx + dy * dy);
+        float angle = atan2f(dy, dx);
 
-        s_circular_vel += (fabsf(dx) + fabsf(dy)) * 0.002f;
+        /* 1. Gaze tracking for Lil Cube (index.html lines 6971-6972) */
+        s_target_look_x = dx / 320.0f;
+        if (s_target_look_x < -0.45f) s_target_look_x = -0.45f;
+        if (s_target_look_x >  0.45f) s_target_look_x =  0.45f;
+        s_target_look_y = -(dy / 320.0f);
+        if (s_target_look_y < -0.35f) s_target_look_y = -0.35f;
+        if (s_target_look_y >  0.35f) s_target_look_y =  0.35f;
 
-        s_last_mx = evt->pos.x;
-        s_last_my = evt->pos.y;
+        /* 2. 3D Tilt for Hopf Fibration Background (index.html lines 6975-6978) */
+        float max_radius = (width < height ? width : height) * 0.45f;
+        float norm_dist = dist / (max_radius > 80.0f ? max_radius : 80.0f);
+        if (norm_dist > 1.0f) norm_dist = 1.0f;
+
+        s_target_rot_x = (dy / (height * 0.5f)) * 0.22f + 0.22f;
+        s_target_rot_y = (dx / (width * 0.5f)) * 0.35f;
+
+        /* 3. Circular Swirl Detection for 4D Hopf Acceleration (index.html lines 6993-7011) */
+        if (s_last_pointer_angle > -900.0f) {
+            float d_theta = angle - s_last_pointer_angle;
+            while (d_theta > (float)M_PI) d_theta -= (float)(M_PI * 2.0);
+            while (d_theta < -(float)M_PI) d_theta += (float)(M_PI * 2.0);
+
+            if (fabsf(d_theta) > 0.008f) {
+                float clamped_d_theta = d_theta;
+                if (clamped_d_theta > 0.25f) clamped_d_theta = 0.25f;
+                if (clamped_d_theta < -0.25f) clamped_d_theta = -0.25f;
+                s_circular_vel += clamped_d_theta * 0.35f * norm_dist;
+                if (s_circular_vel > 0.12f) s_circular_vel = 0.12f;
+                if (s_circular_vel < -0.12f) s_circular_vel = -0.12f;
+            }
+        }
+        s_last_pointer_angle = angle;
+
+        /* 4. Smooth 3D Drag if mascot is grabbed (index.html lines 6981-6990) */
+        if (s_dragging) {
+            float dragDeltaX = (float)(evt->pos.x - s_prev_drag_x);
+            float dragDeltaY = (float)(evt->pos.y - s_prev_drag_y);
+
+            /* Ergonomically calibrated drag sensitivities */
+            s_cube_vely = dragDeltaX * 0.005f;
+            s_cube_velx = dragDeltaY * 0.004f;
+
+            if (s_cube_vely > 0.04f) s_cube_vely = 0.04f;
+            if (s_cube_vely < -0.04f) s_cube_vely = -0.04f;
+            if (s_cube_velx > 0.04f) s_cube_velx = 0.04f;
+            if (s_cube_velx < -0.04f) s_cube_velx = -0.04f;
+
+            s_cube_roty += s_cube_vely;
+            s_cube_rotx += s_cube_velx;
+
+            s_prev_drag_x = evt->pos.x;
+            s_prev_drag_y = evt->pos.y;
+        }
         inval_wnd(wnd);
     }
 }
@@ -1029,8 +1450,9 @@ WND* open_lilcu64_demo_window(void) {
         return NULL;
     }
 
-    /* Initialize procedural synthesizer */
+    /* Initialize procedural synthesizer & start Track 1 */
     lilcu64_synth_init(LILCU64_AUDIO_RATE);
+    lilcu64_synth_play_track(1);
 
     /* OpenGL initial state */
     glEnable(GL_DEPTH_TEST);

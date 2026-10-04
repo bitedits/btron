@@ -138,6 +138,7 @@ int virtio_sound_open(uint32_t sample_rate, uint8_t channels);
 int virtio_sound_write(const int16_t *samples, size_t frames);
 void virtio_sound_close(void);
 bool virtio_sound_is_ready(void);
+uint32_t virtio_sound_get_queued_bytes(void);
 
 bool virtio_is_initialized(void);
 

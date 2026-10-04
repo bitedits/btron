@@ -578,17 +578,17 @@ sequencer advances its time cursor and fills ready audio frames directly into `v
 +-------------------------+-----------------------------------------------------------------------+
 | INPUT TRIGGER           | ASSOCIATED ACTION & KINEMATIC RESONANCE                               |
 +-------------------------+-----------------------------------------------------------------------+
-| [Space] / [P] / Click   | 神聖波動 (Pulse / Blessing): Volumetric squash & Journey radiant wave  |
+| [Space] / [P] / [J]     | 神聖波動・天球熱唱 (Journey Sacred Pulse & Sing): Chi Hexagon Halo    |
 | [W]                     | てくてく歩行 (Waddle): Bipedal walk cycle with `shimWaddle` bass sync |
 | [F]                     | ぷかぷか飛行 (Float): Anti-gravity hover & flutter kick with Rhodes   |
 | [D]                     | 氷晶のダンス (Dance): Victory pirouette hops & star arpeggios         |
-| [1] / [S]               | Track 1: 鐘のキャロル (168 BPM Vivace Chiptune)                       |
+| [1] / [S]               | Track 1: 鐘のキャロル (168 BPM Vivace Chiptune / Symphony)            |
 | [2] / [C]               | Track 2: Green Caterpillar (98 BPM Masaru Imada Jazz)                 |
 | [3] / [H] / [R]         | Track 3: 朝日のあたる家 (76 BPM 6/8 Thomas Krüger Piano)              |
 | [4] / [T] / [N]         | Track 4: TRON Init (132 BPM Trent Reznor Industrial)                  |
 | [M]                     | 音響トグル (Sound Mute / Unmute Toggle)                               |
-| [ArrowLeft] / [‹]       | Carousel Prev: Rotate turntable to previous personage                 |
-| [ArrowRight] / [›]      | Carousel Next: Rotate turntable to next personage                     |
+| [‹] / [,]               | Hopf Density Prev: Cycle 18 rings, 36 rings, 54 rings (Ding chime)   |
+| [›] / [.]               | Hopf Density Next: Cycle 18 rings, 36 rings, 54 rings (Ding chime)   |
 | Mouse Left Drag         | 3D Camera Orbit: Smooth rotation with flywheel angular inertia        |
 | [ESC] / [Q]             | クローズ (Close Window)                                               |
 +-------------------------+-----------------------------------------------------------------------+
@@ -597,21 +597,35 @@ sequencer advances its time cursor and fills ready audio frames directly into `v
 8. IMPLEMENTATION STATUS & VERIFICATION ROADMAP
 ===================================================================================================
 
-- Phase 1 (OpenGL Visuals & Mascot Kinematics):
-  [x] 4D Hopf fibration mathematical parameterization and stereographic projection in OpenGL.
-  [x] Chamfered low-poly mascot core, rotating internal octahedron gem, detached hands and feet.
-  [x] Anime eye shaders with pupils, irises, specular dots, cheeks, and S-curve blinking.
-  [x] Rainbow halo torus ring with rotating HSV spectral coloring.
-  [x] Journey spherical radiant wave rendering with golden crest ring and turquoise rim.
-  [x] 7-state kinematic animation engine with critically damped exponential springs.
-
-- Phase 2 (VirtIO Procedural Sound & Carousel Menu):
-  [x] Pure C procedural DSP oscillator engine (Sine, Tri, Saw, Pulse, Noise, Biquad filter).
-  [x] Sound Shim library implementing all 12 canonical shims from SOUND.txt.
-  [x] 4-track tracker sequencer for Tracks 1..4 with exact BPM, measure, and note timings.
-  [x] VirtIO sound buffer integration feeding `virtio_sound_write()` at 44.1 kHz stereo S16.
-  [x] 4-personage 3D turntable carousel (Saint, Chibi Mecha, Hyper-Prism, Cyber Shinobi).
-  [x] Unified BTRON window interface and control dashboard matching index.html.
+- Sole Sacred Personage Directive:
+  [x] Removed all extraneous carousel personages; Lil Cu 64 is the sole canonical mascot.
+  [x] 1:1 parity with index.html hero-content Three.js specifications:
+      - PerspectiveCamera(36, w/h, 0.1, 100) at (0, 0.08, 9.2) looking at (0, 0.08, 0).
+      - rootGroup at (0, 0.08, 0) with scale (0.60, 0.60, 0.60).
+      - mainCube: BoxGeometry(2.1, 2.1, 2.1, 2, 2, 2) with R=1.65 spherical corner clamp, color 0x85e8ff.
+      - coreCube: OctahedronGeometry(0.78, 0) solid white, rotating X += 0.5 dt, Y += 0.7 dt (3.5/5.0 dt in Sing).
+      - wireOcta: OctahedronGeometry(1.02, 0) cyan wireframe 0x38bdf8, rotating X += -0.7 dt, Y += 0.5 dt.
+      - Holy Nimbus Halo: Torus R=0.95, r=0.05 at (0, 1.55, 0).
+      - Anime eyes: Pupil 0x081226, Iris 0x00e5ff at (0, -0.11, 0.015), Specular dot at (-0.04, 0.11, 0.025).
+      - Blush cheeks: Discs radius 0.22 in 0xff4081 at (±0.76, -0.06, 1.07).
+      - Mouth: Smile arc R=0.16 and O-mouth ring R=0.15 in 0xbf1250.
+      - Hands: Box 0.46^3 in 0x90edff at pivots (±1.26, 0.05, 0.1) in bodyGroup.
+      - Feet: Box 0.72x0.48x0.88 in 0xff4d8d at pivots (±0.64, -0.92, 0.08) in rootGroup.
+  [x] 4D Hopf Fibration Engine:
+      - 3 density modes: 18 rings (2 tori x 9 fibers), 36 rings (3x12), 54 rings (3x18).
+      - Stereographic projection S³ -> ℝ³ from (0,0,0,1) with denom = 1.08 - x3.
+      - Full 3D Yaw, Pitch, Roll coordinate transforms matching index.html lines 7736-7747.
+      - Spectral rainbow dispersion HSV->RGB with wave resonance bloom.
+  [x] Kinematics Engine:
+      - Continuous critically damped harmonic springs (zeta = 1.0) with zero pop transitions.
+      - Autonomous state progression cycling Walk -> Float -> Dance -> Sing during idle.
+  [x] Audio & VirtIO Streaming:
+      - Assetless procedural DSP engine streaming 44.1kHz S16 stereo directly to virtio_sound_write().
+      - Automatic start of Track 1 on window launch with audio buffer priming.
+  [x] Build & ABI Stability:
+      - Preserved gl_ops_t ABI binary layout by appending extensions at struct end.
+      - Correct multi-window egl_make_current() surface restoration before rendering.
+      - Clean compilation on $ make run-posix and 100% test pass on $ make test.
 
 ===================================================================================================
 END OF LILCU64-DEMOSCENE.txt

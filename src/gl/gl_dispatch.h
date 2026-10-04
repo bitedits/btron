@@ -70,6 +70,9 @@ typedef struct {
 
     /* Present */
     void   (*swap_buffers)    (void);
+
+    /* Scale (added at end to preserve ABI offsets of previous members) */
+    void   (*gl_scale_f)      (GLfloat x, GLfloat y, GLfloat z);
 } gl_ops_t;
 
 /* ── Active backend pointer (set by gl_init) ─────────────────────── */
@@ -94,6 +97,7 @@ void gl_shutdown (void);
 #define glPopMatrix()           g_gl->gl_pop_matrix()
 #define glRotatef(a,x,y,z)      g_gl->gl_rotate_f(a,x,y,z)
 #define glTranslatef(x,y,z)     g_gl->gl_translate_f(x,y,z)
+#define glScalef(x,y,z)         g_gl->gl_scale_f(x,y,z)
 #define glFrustum(l,r,b,t,n,f)  g_gl->gl_frustum(l,r,b,t,n,f)
 #define glViewport(x,y,w,h)     g_gl->gl_viewport(x,y,w,h)
 #define glClear(m)              g_gl->gl_clear(m)

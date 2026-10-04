@@ -18,6 +18,7 @@ typedef struct {
     int     width;
     int     height;
     COLOR  *pixels;
+    void   *gl_ctx;
 } EGL_SURFACE;
 
 /* Bind or create GL surface for window */

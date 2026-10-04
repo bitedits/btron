@@ -94,6 +94,7 @@ gl_ops_t g_tinygl_ops = {
     .gl_pop_matrix   = tgl_pop_matrix,
     .gl_rotate_f     = tgl_rotate_f,
     .gl_translate_f  = tgl_translate_f,
+    .gl_scale_f      = glScalef,
     .gl_frustum      = tgl_frustum,
     .gl_viewport     = tgl_viewport,
     .gl_clear        = tgl_clear,

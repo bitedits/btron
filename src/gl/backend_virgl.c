@@ -74,6 +74,15 @@ static inline void mat4_translate(mat4_t *m, float x, float y, float z) {
     mat4_multiply(m, m, &t);
 }
 
+static inline void mat4_scale(mat4_t *m, float x, float y, float z) {
+    mat4_t s;
+    mat4_identity(&s);
+    s.m[0][0] = x;
+    s.m[1][1] = y;
+    s.m[2][2] = z;
+    mat4_multiply(m, m, &s);
+}
+
 static inline void mat4_rotate(mat4_t *m, float angle_deg, float x, float y, float z) {
     float rad = angle_deg * (float)M_PI / 180.0f;
     float c = (float)cos(rad);
@@ -162,45 +171,103 @@ typedef struct {
 
 #define MAX_DLISTS 32
 
-/* ── Backend State ───────────────────────────────────────────────── */
+/* ── Backend State & Context Isolation ───────────────────────────── */
 
-static int       s_width        = 0;
-static int       s_height       = 0;
-static uint32_t *s_pixel_buf    = NULL;
-static float    *s_depth_buf    = NULL;
-static uint32_t  s_clear_color  = 0xFF000000;
-
-/* Viewport */
-static int s_vp_x = 0, s_vp_y = 0, s_vp_w = 0, s_vp_h = 0;
-
-/* Matrix Stacks */
 #define MATRIX_STACK_MAX 16
-static mat4_t s_modelview_stack[MATRIX_STACK_MAX];
-static int    s_mv_top = 0;
 
-static mat4_t s_projection_stack[MATRIX_STACK_MAX];
-static int    s_proj_top = 0;
+typedef struct virgl_context_s {
+    int       width;
+    int       height;
+    uint32_t *pixel_buf;
+    float    *depth_buf;
+    uint32_t  clear_color;
 
-static GLenum s_matrix_mode = GL_MODELVIEW;
+    /* Viewport */
+    int vp_x, vp_y, vp_w, vp_h;
 
-/* Current Vertex Attributes */
-static float s_cur_nx = 0.0f, s_cur_ny = 0.0f, s_cur_nz = 1.0f;
-static float s_cur_r = 1.0f, s_cur_g = 1.0f, s_cur_b = 1.0f;
+    /* Matrix Stacks */
+    mat4_t modelview_stack[MATRIX_STACK_MAX];
+    int    mv_top;
 
-/* Material Attributes */
-static float s_mat_diffuse[4] = {0.8f, 0.8f, 0.8f, 1.0f};
-static float s_mat_ambient[4] = {0.2f, 0.2f, 0.2f, 1.0f};
+    mat4_t projection_stack[MATRIX_STACK_MAX];
+    int    proj_top;
 
-/* Light 0 */
-static float s_light0_pos[4]     = {5.0f, 5.0f, 10.0f, 0.0f};
-static float s_light0_diffuse[4] = {1.0f, 1.0f, 1.0f, 1.0f};
-static float s_light0_ambient[4] = {0.2f, 0.2f, 0.2f, 1.0f};
+    GLenum matrix_mode;
 
-/* GL Flags */
-static int s_lighting_enabled   = 0;
-static int s_light0_enabled     = 1;
-static int s_depth_test_enabled = 1;
-static int s_cull_face_enabled  = 0;
+    /* Current Vertex Attributes */
+    float cur_nx, cur_ny, cur_nz;
+    float cur_r, cur_g, cur_b;
+
+    /* Material Attributes */
+    float mat_diffuse[4];
+    float mat_ambient[4];
+
+    /* Light 0 */
+    float light0_pos[4];
+    float light0_diffuse[4];
+    float light0_ambient[4];
+
+    /* GL Flags */
+    int lighting_enabled;
+    int light0_enabled;
+    int depth_test_enabled;
+    int cull_face_enabled;
+} virgl_context_t;
+
+static virgl_context_t s_default_ctx = {
+    .width = 0,
+    .height = 0,
+    .pixel_buf = NULL,
+    .depth_buf = NULL,
+    .clear_color = 0xFF000000,
+    .vp_x = 0, .vp_y = 0, .vp_w = 0, .vp_h = 0,
+    .mv_top = 0,
+    .proj_top = 0,
+    .matrix_mode = GL_MODELVIEW,
+    .cur_nx = 0.0f, .cur_ny = 0.0f, .cur_nz = 1.0f,
+    .cur_r = 1.0f, .cur_g = 1.0f, .cur_b = 1.0f,
+    .mat_diffuse = {1.0f, 1.0f, 1.0f, 1.0f},
+    .mat_ambient = {0.2f, 0.2f, 0.2f, 1.0f},
+    .light0_pos = {5.0f, 5.0f, 10.0f, 0.0f},
+    .light0_diffuse = {1.0f, 1.0f, 1.0f, 1.0f},
+    .light0_ambient = {0.2f, 0.2f, 0.2f, 1.0f},
+    .lighting_enabled = 0,
+    .light0_enabled = 1,
+    .depth_test_enabled = 0,
+    .cull_face_enabled = 0,
+};
+
+static virgl_context_t *s_ctx = &s_default_ctx;
+
+#define s_width              (s_ctx->width)
+#define s_height             (s_ctx->height)
+#define s_pixel_buf          (s_ctx->pixel_buf)
+#define s_depth_buf          (s_ctx->depth_buf)
+#define s_clear_color        (s_ctx->clear_color)
+#define s_vp_x               (s_ctx->vp_x)
+#define s_vp_y               (s_ctx->vp_y)
+#define s_vp_w               (s_ctx->vp_w)
+#define s_vp_h               (s_ctx->vp_h)
+#define s_modelview_stack    (s_ctx->modelview_stack)
+#define s_mv_top             (s_ctx->mv_top)
+#define s_projection_stack   (s_ctx->projection_stack)
+#define s_proj_top           (s_ctx->proj_top)
+#define s_matrix_mode        (s_ctx->matrix_mode)
+#define s_cur_nx             (s_ctx->cur_nx)
+#define s_cur_ny             (s_ctx->cur_ny)
+#define s_cur_nz             (s_ctx->cur_nz)
+#define s_cur_r              (s_ctx->cur_r)
+#define s_cur_g              (s_ctx->cur_g)
+#define s_cur_b              (s_ctx->cur_b)
+#define s_mat_diffuse        (s_ctx->mat_diffuse)
+#define s_mat_ambient        (s_ctx->mat_ambient)
+#define s_light0_pos         (s_ctx->light0_pos)
+#define s_light0_diffuse     (s_ctx->light0_diffuse)
+#define s_light0_ambient     (s_ctx->light0_ambient)
+#define s_lighting_enabled   (s_ctx->lighting_enabled)
+#define s_light0_enabled     (s_ctx->light0_enabled)
+#define s_depth_test_enabled (s_ctx->depth_test_enabled)
+#define s_cull_face_enabled  (s_ctx->cull_face_enabled)
 
 /* Primitive assembly: a bounded sliding window that closes each primitive the
  * moment its last vertex arrives, so one glBegin block can be as long as the
@@ -214,6 +281,7 @@ static virgl_vert_t s_win[PRIM_WINDOW];
 static int          s_win_n = 0;        /* vertices held, incomplete primitive */
 static int          s_win_i = 0;        /* vertices seen in this block */
 static virgl_vert_t s_fan_base;         /* v0 for GL_POLYGON / GL_TRIANGLE_FAN */
+static virgl_vert_t s_loop_first;       /* v0 for GL_LINE_LOOP closing */
 
 /* Display Lists */
 static virgl_dlist_t s_dlists[MAX_DLISTS];
@@ -435,13 +503,18 @@ static void rasterize_tri(const virgl_tri_t *tri, const mat4_t *mv, const mat4_t
             float n_dot_l = tnx * lx + tny * ly + tnz * lz;
             if (n_dot_l < 0.0f) n_dot_l = 0.0f;
 
-            float amb_r = (tri->mat_diffuse[0] > 0.0f) ? tri->mat_diffuse[0] * 0.2f : tri->mat_ambient[0] * s_light0_ambient[0];
-            float amb_g = (tri->mat_diffuse[1] > 0.0f) ? tri->mat_diffuse[1] * 0.2f : tri->mat_ambient[1] * s_light0_ambient[1];
-            float amb_b = (tri->mat_diffuse[2] > 0.0f) ? tri->mat_diffuse[2] * 0.2f : tri->mat_ambient[2] * s_light0_ambient[2];
+            /* Material diffuse comes from vertex color modulated with material diffuse */
+            float mat_r = tri->v[i].r * tri->mat_diffuse[0];
+            float mat_g = tri->v[i].g * tri->mat_diffuse[1];
+            float mat_b = tri->v[i].b * tri->mat_diffuse[2];
 
-            lr = amb_r + tri->mat_diffuse[0] * s_light0_diffuse[0] * n_dot_l;
-            lg = amb_g + tri->mat_diffuse[1] * s_light0_diffuse[1] * n_dot_l;
-            lb = amb_b + tri->mat_diffuse[2] * s_light0_diffuse[2] * n_dot_l;
+            float amb_r = mat_r * 0.25f;
+            float amb_g = mat_g * 0.25f;
+            float amb_b = mat_b * 0.25f;
+
+            lr = amb_r + mat_r * s_light0_diffuse[0] * n_dot_l;
+            lg = amb_g + mat_g * s_light0_diffuse[1] * n_dot_l;
+            lb = amb_b + mat_b * s_light0_diffuse[2] * n_dot_l;
 
             if (lr > 1.0f) lr = 1.0f;
             if (lg > 1.0f) lg = 1.0f;
@@ -490,6 +563,135 @@ static void rasterize_tri(const virgl_tri_t *tri, const mat4_t *mv, const mat4_t
     }
 }
 
+/* Rasterize one line segment in clip space with depth test & 3D lighting/color */
+static void rasterize_line(const virgl_vert_t *v0, const virgl_vert_t *v1, const mat4_t *mv, const mat4_t *proj) {
+    if (!s_pixel_buf || s_width <= 0 || s_height <= 0) return;
+
+    /* Transform to eye space */
+    float e0x, e0y, e0z, e0w;
+    mat4_transform_vec4(mv, v0->x, v0->y, v0->z, &e0x, &e0y, &e0z, &e0w);
+
+    float e1x, e1y, e1z, e1w;
+    mat4_transform_vec4(mv, v1->x, v1->y, v1->z, &e1x, &e1y, &e1z, &e1w);
+
+    /* Project to clip space */
+    clip_v_t c0, c1;
+    mat4_transform_vec4(proj, e0x, e0y, e0z, &c0.x, &c0.y, &c0.z, &c0.w);
+    c0.r = v0->r; c0.g = v0->g; c0.b = v0->b;
+
+    mat4_transform_vec4(proj, e1x, e1y, e1z, &c1.x, &c1.y, &c1.z, &c1.w);
+    c1.r = v1->r; c1.g = v1->g; c1.b = v1->b;
+
+    /* Frustum clipping against 5 planes */
+    static const float planes[5][4] = {
+        {  1.0f,  0.0f, 0.0f, 1.0f },   /* left   w + x >= 0 */
+        { -1.0f,  0.0f, 0.0f, 1.0f },   /* right  w - x >= 0 */
+        {  0.0f,  1.0f, 0.0f, 1.0f },   /* bottom w + y >= 0 */
+        {  0.0f, -1.0f, 0.0f, 1.0f },   /* top    w - y >= 0 */
+        {  0.0f,  0.0f, 1.0f, 1.0f },   /* near   w + z >= 0 */
+    };
+
+    for (int p = 0; p < 5; p++) {
+        float d0 = planes[p][0] * c0.x + planes[p][1] * c0.y + planes[p][2] * c0.z + planes[p][3] * c0.w;
+        float d1 = planes[p][0] * c1.x + planes[p][1] * c1.y + planes[p][2] * c1.z + planes[p][3] * c1.w;
+
+        if (d0 < 0.0f && d1 < 0.0f) {
+            return; /* Both endpoints outside plane */
+        }
+        if (d0 < 0.0f && d1 >= 0.0f) {
+            float t = d0 / (d0 - d1);
+            c0.x += t * (c1.x - c0.x);
+            c0.y += t * (c1.y - c0.y);
+            c0.z += t * (c1.z - c0.z);
+            c0.w += t * (c1.w - c0.w);
+            c0.r += t * (c1.r - c0.r);
+            c0.g += t * (c1.g - c0.g);
+            c0.b += t * (c1.b - c0.b);
+        } else if (d0 >= 0.0f && d1 < 0.0f) {
+            float t = d0 / (d0 - d1);
+            c1.x = c0.x + t * (c1.x - c0.x);
+            c1.y = c0.y + t * (c1.y - c0.y);
+            c1.z = c0.z + t * (c1.z - c0.z);
+            c1.w = c0.w + t * (c1.w - c0.w);
+            c1.r = c0.r + t * (c1.r - c0.r);
+            c1.g = c0.g + t * (c1.g - c0.g);
+            c1.b = c0.b + t * (c1.b - c0.b);
+        }
+    }
+
+    if (c0.w <= 0.0001f || c1.w <= 0.0001f) return;
+
+    /* Screen projection */
+    float inv_w0 = 1.0f / c0.w;
+    float sx0 = (c0.x * inv_w0 + 1.0f) * 0.5f * (float)s_vp_w + (float)s_vp_x;
+    float sy0 = (1.0f - c0.y * inv_w0) * 0.5f * (float)s_vp_h + (float)s_vp_y;
+    float sz0 = (c0.z * inv_w0 + 1.0f) * 0.5f;
+
+    float inv_w1 = 1.0f / c1.w;
+    float sx1 = (c1.x * inv_w1 + 1.0f) * 0.5f * (float)s_vp_w + (float)s_vp_x;
+    float sy1 = (1.0f - c1.y * inv_w1) * 0.5f * (float)s_vp_h + (float)s_vp_y;
+    float sz1 = (c1.z * inv_w1 + 1.0f) * 0.5f;
+
+    /* DDA Line rasterization */
+    float dx = sx1 - sx0;
+    float dy = sy1 - sy0;
+    float adx = v_abs(dx);
+    float ady = v_abs(dy);
+    int steps = (int)(adx > ady ? adx : ady);
+
+    if (steps <= 0) {
+        int px = (int)(sx0 + 0.5f);
+        int py = (int)(sy0 + 0.5f);
+        if (px >= 0 && px < s_width && py >= 0 && py < s_height) {
+            int idx = py * s_width + px;
+            if (!s_depth_test_enabled || (s_depth_buf && sz0 <= s_depth_buf[idx] + 0.0001f)) {
+                if (s_depth_test_enabled && s_depth_buf) s_depth_buf[idx] = sz0;
+                uint32_t ir = (uint32_t)(c0.r < 0.0f ? 0.0f : (c0.r > 1.0f ? 255.0f : c0.r * 255.0f));
+                uint32_t ig = (uint32_t)(c0.g < 0.0f ? 0.0f : (c0.g > 1.0f ? 255.0f : c0.g * 255.0f));
+                uint32_t ib = (uint32_t)(c0.b < 0.0f ? 0.0f : (c0.b > 1.0f ? 255.0f : c0.b * 255.0f));
+                s_pixel_buf[idx] = virgl_pack_color(ir, ig, ib);
+            }
+        }
+        return;
+    }
+
+    float inv_steps = 1.0f / (float)steps;
+    float x_inc = dx * inv_steps;
+    float y_inc = dy * inv_steps;
+    float z_inc = (sz1 - sz0) * inv_steps;
+    float r_inc = (c1.r - c0.r) * inv_steps;
+    float g_inc = (c1.g - c0.g) * inv_steps;
+    float b_inc = (c1.b - c0.b) * inv_steps;
+
+    float cx = sx0;
+    float cy = sy0;
+    float cz = sz0;
+    float cr = c0.r;
+    float cg = c0.g;
+    float cb = c0.b;
+
+    for (int s = 0; s <= steps; s++) {
+        int px = (int)(cx + 0.5f);
+        int py = (int)(cy + 0.5f);
+        if (px >= 0 && px < s_width && py >= 0 && py < s_height) {
+            int idx = py * s_width + px;
+            if (!s_depth_test_enabled || (s_depth_buf && cz <= s_depth_buf[idx] + 0.0001f)) {
+                if (s_depth_test_enabled && s_depth_buf) s_depth_buf[idx] = cz;
+                uint32_t ir = (uint32_t)(cr < 0.0f ? 0.0f : (cr > 1.0f ? 255.0f : cr * 255.0f));
+                uint32_t ig = (uint32_t)(cg < 0.0f ? 0.0f : (cg > 1.0f ? 255.0f : cg * 255.0f));
+                uint32_t ib = (uint32_t)(cb < 0.0f ? 0.0f : (cb > 1.0f ? 255.0f : cb * 255.0f));
+                s_pixel_buf[idx] = virgl_pack_color(ir, ig, ib);
+            }
+        }
+        cx += x_inc;
+        cy += y_inc;
+        cz += z_inc;
+        cr += r_inc;
+        cg += g_inc;
+        cb += b_inc;
+    }
+}
+
 /* ── gl_ops_t Implementations ─────────────────────────────────────── */
 
 static void virgl_begin(GLenum mode) {
@@ -501,6 +703,9 @@ static void virgl_begin(GLenum mode) {
 
 static void virgl_end(void) {
     if (!s_in_begin) return;
+    if (s_prim_mode == GL_LINE_LOOP && s_win_i > 1) {
+        rasterize_line(&s_win[0], &s_loop_first, &s_modelview_stack[s_mv_top], &s_projection_stack[s_proj_top]);
+    }
     /* A primitive left incomplete by the last glVertex is discarded, as GL says. */
     s_win_n = 0;
     s_win_i = 0;
@@ -556,9 +761,35 @@ static void virgl_prim_vertex(const virgl_vert_t *v) {
         s_win[0] = *v;
         s_win_n = 1;
         break;
+    case GL_LINES:
+        if (s_win_n == 0) {
+            s_win[0] = *v;
+            s_win_n = 1;
+        } else {
+            rasterize_line(&s_win[0], v, &s_modelview_stack[s_mv_top], &s_projection_stack[s_proj_top]);
+            s_win_n = 0;
+        }
+        break;
+    case GL_LINE_STRIP:
+        if (s_win_i == 0) {
+            s_win[0] = *v;
+            s_win_n = 1;
+        } else {
+            rasterize_line(&s_win[0], v, &s_modelview_stack[s_mv_top], &s_projection_stack[s_proj_top]);
+            s_win[0] = *v;
+        }
+        break;
+    case GL_LINE_LOOP:
+        if (s_win_i == 0) {
+            s_loop_first = *v;
+            s_win[0] = *v;
+            s_win_n = 1;
+        } else {
+            rasterize_line(&s_win[0], v, &s_modelview_stack[s_mv_top], &s_projection_stack[s_proj_top]);
+            s_win[0] = *v;
+        }
+        break;
     default:
-        /* GL_LINES and friends have no assembly here; the vertex is dropped as
-         * before rather than filling the window with something unrasterizable. */
         break;
     }
     s_win_i++;
@@ -632,6 +863,14 @@ static void virgl_translate_f(GLfloat x, GLfloat y, GLfloat z) {
         mat4_translate(&s_projection_stack[s_proj_top], x, y, z);
     } else {
         mat4_translate(&s_modelview_stack[s_mv_top], x, y, z);
+    }
+}
+
+static void virgl_scale_f(GLfloat x, GLfloat y, GLfloat z) {
+    if (s_matrix_mode == GL_PROJECTION) {
+        mat4_scale(&s_projection_stack[s_proj_top], x, y, z);
+    } else {
+        mat4_scale(&s_modelview_stack[s_mv_top], x, y, z);
     }
 }
 
@@ -803,6 +1042,7 @@ gl_ops_t g_virgl_ops = {
     .gl_pop_matrix    = virgl_pop_matrix,
     .gl_rotate_f      = virgl_rotate_f,
     .gl_translate_f   = virgl_translate_f,
+    .gl_scale_f       = virgl_scale_f,
     .gl_frustum       = virgl_frustum,
     .gl_viewport      = virgl_viewport,
     .gl_clear         = virgl_clear,
@@ -861,6 +1101,7 @@ void virgl_backend_init(int w, int h, void *pixel_buf) {
 }
 
 void virgl_backend_make_current(int w, int h, void *pixel_buf) {
+    s_ctx = &s_default_ctx;
     if (s_width != w || s_height != h || !s_depth_buf) {
         virgl_backend_resize(w, h, pixel_buf);
     } else {
@@ -868,6 +1109,75 @@ void virgl_backend_make_current(int w, int h, void *pixel_buf) {
         s_vp_w = w;
         s_vp_h = h;
     }
+}
+
+void virgl_backend_make_current_ctx(void **p_ctx, int w, int h, void *pixel_buf) {
+    if (!p_ctx) {
+        virgl_backend_make_current(w, h, pixel_buf);
+        return;
+    }
+
+    virgl_context_t *ctx = (virgl_context_t *)(*p_ctx);
+    if (!ctx) {
+        ctx = (virgl_context_t *)calloc(1, sizeof(virgl_context_t));
+        if (!ctx) {
+            virgl_backend_make_current(w, h, pixel_buf);
+            return;
+        }
+        ctx->width = w;
+        ctx->height = h;
+        ctx->pixel_buf = (uint32_t *)pixel_buf;
+        ctx->clear_color = virgl_pack_color(0, 0, 0);
+        ctx->vp_x = 0; ctx->vp_y = 0; ctx->vp_w = w; ctx->vp_h = h;
+        mat4_identity(&ctx->modelview_stack[0]);
+        mat4_identity(&ctx->projection_stack[0]);
+        ctx->matrix_mode = GL_MODELVIEW;
+        ctx->cur_nx = 0.0f; ctx->cur_ny = 0.0f; ctx->cur_nz = 1.0f;
+        ctx->cur_r = 1.0f; ctx->cur_g = 1.0f; ctx->cur_b = 1.0f;
+        ctx->mat_diffuse[0] = 1.0f; ctx->mat_diffuse[1] = 1.0f; ctx->mat_diffuse[2] = 1.0f; ctx->mat_diffuse[3] = 1.0f;
+        ctx->mat_ambient[0] = 0.2f; ctx->mat_ambient[1] = 0.2f; ctx->mat_ambient[2] = 0.2f; ctx->mat_ambient[3] = 1.0f;
+        ctx->light0_pos[0] = 5.0f; ctx->light0_pos[1] = 5.0f; ctx->light0_pos[2] = 10.0f; ctx->light0_pos[3] = 0.0f;
+        ctx->light0_diffuse[0] = 1.0f; ctx->light0_diffuse[1] = 1.0f; ctx->light0_diffuse[2] = 1.0f; ctx->light0_diffuse[3] = 1.0f;
+        ctx->light0_ambient[0] = 0.2f; ctx->light0_ambient[1] = 0.2f; ctx->light0_ambient[2] = 0.2f; ctx->light0_ambient[3] = 1.0f;
+        ctx->lighting_enabled = 0;
+        ctx->light0_enabled = 1;
+        ctx->depth_test_enabled = 0;
+        ctx->cull_face_enabled = 0;
+        ctx->depth_buf = (float *)malloc((size_t)w * h * sizeof(float));
+        if (ctx->depth_buf) {
+            for (int i = 0; i < w * h; i++) ctx->depth_buf[i] = 1.0e10f;
+        }
+        *p_ctx = ctx;
+    }
+
+    s_ctx = ctx;
+    if (s_ctx->width != w || s_ctx->height != h || !s_ctx->depth_buf) {
+        s_ctx->width = w;
+        s_ctx->height = h;
+        s_ctx->pixel_buf = (uint32_t *)pixel_buf;
+        s_ctx->vp_w = w;
+        s_ctx->vp_h = h;
+        if (s_ctx->depth_buf) free(s_ctx->depth_buf);
+        s_ctx->depth_buf = (float *)malloc((size_t)w * h * sizeof(float));
+        if (s_ctx->depth_buf) {
+            for (int i = 0; i < w * h; i++) s_ctx->depth_buf[i] = 1.0e10f;
+        }
+    } else {
+        s_ctx->pixel_buf = (uint32_t *)pixel_buf;
+    }
+}
+
+void virgl_backend_destroy_ctx(void *ctx_ptr) {
+    if (!ctx_ptr) return;
+    virgl_context_t *ctx = (virgl_context_t *)ctx_ptr;
+    if (s_ctx == ctx) {
+        s_ctx = &s_default_ctx;
+    }
+    if (ctx->depth_buf) {
+        free(ctx->depth_buf);
+        ctx->depth_buf = NULL;
+    }
+    free(ctx);
 }
 
 void virgl_backend_resize(int w, int h, void *pixel_buf) {

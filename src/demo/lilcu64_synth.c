@@ -19,8 +19,9 @@
 /* External VirtIO sound drivers */
 extern int  virtio_sound_open(uint32_t sample_rate, uint8_t channels);
 extern int  virtio_sound_write(const int16_t *samples, size_t frames);
-extern void virtio_sound_close(void);
-extern bool virtio_sound_is_ready(void);
+extern void     virtio_sound_close(void);
+extern bool     virtio_sound_is_ready(void);
+extern uint32_t virtio_sound_get_queued_bytes(void);
 
 #define MAX_VOICES 48
 #define VOICE_WAVE_SINE     0
@@ -536,6 +537,14 @@ int lilcu64_synth_pump_virtio(size_t frames) {
             }
         }
         if (!virtio_sound_is_ready()) return -1;
+    }
+
+    /* Target audio buffer: ~80ms = 3528 frames = ~14112 bytes at 44.1kHz stereo S16.
+     * If SDL already has enough audio queued ahead, don't generate more now so
+     * sequencer time stays locked to real-time playback. */
+    uint32_t queued = virtio_sound_get_queued_bytes();
+    if (queued > 14112) {
+        return 0;
     }
 
     size_t remaining = frames;

@@ -218,3 +218,12 @@ bool virtio_sound_is_ready(void) {
     return false;
 #endif
 }
+
+uint32_t virtio_sound_get_queued_bytes(void) {
+#if !defined(BTRON_UEFI_TARGET)
+    if (g_sound_device == 0) return 0;
+    return SDL_GetQueuedAudioSize(g_sound_device);
+#else
+    return 0;
+#endif
+}

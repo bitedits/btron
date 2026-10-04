@@ -196,6 +196,40 @@ concurrency standards rather than specific programming language specifications.
        of computing exact minimal fuel polynomials (`fuel_top`) ensures that fuel
        exhaustion is impossible for all compliant script inputs.
 
+  1.6.1 Methodological Directive for Future Researchers: Do NOT Conflate POSIX sh and Interpreter Formalizations
+    Future researchers, verification engineers, and kernel architects MUST NOT confuse or
+    co-mingle the POSIX Shell formalization (../sh/) and the Formal Interpreter formalization
+    (INTERPRETER.txt):
+
+    1. Fundamentally Distinct Computational Domains:
+       - The POSIX Shell (../sh/) formalizes an imperative, text-stream-oriented, command-list
+         execution language (POSIX IEEE Std 1003.1). Its domain deals with parameter expansions,
+         glob patterns, field splitting, integer exit codes (0-255), and sequential list pipelines.
+       - The BTRON Formal Interpreter (INTERPRETER.txt) formalizes a concurrent reactive
+         hypermedia actor runtime (MicroScript / Language T / ITU-T Z.100 Annex F). Its domain
+         deals with card/scene workflows, visual TAD figure elements, discrete typed signals,
+         and non-blocking SPSC/MPSC event queues.
+
+    2. Contrasting Concurrency & Machine Models:
+       - In `../sh/`, the machine is a single-threaded sequential small-step continuation engine
+         (mloop). Concurrency is NOT inside the shell kernel; it is an external side-effect
+         yielded at the `DEff` host seam. When `sh` executes inside BTRON, this host seam connects
+         to the InterCore protocol so that pipelines (`cmd1 | cmd2`) map to multi-core actors.
+       - In `INTERPRETER.txt`, concurrency IS the primary mathematical object. The interpreter
+         is a Total State Transformer over the multi-core InterCore star bus. Agent steps commute
+         definitionally (Mazurkiewicz trace equivalence), and reader cursors have exclusive
+         ownership under the Mutex-Elimination Theorem.
+
+    3. Anti-Pattern Warning:
+       - Attempting to force POSIX shell semantics into MicroScript (e.g. stringly-typed variables,
+         untyped exit codes, field splitting) destroys the real-time determinism and hypermedia
+         semantics of BTRON.
+       - Conversely, attempting to run POSIX shell pipelines via traditional UNIX fork() and
+         blocking pipe() re-introduces priority inversion and heap unpredictability into BTRON.
+       - The correct architectural relationship is: keep both formalizations strictly separate in
+         syntax and semantics, but UNIFIED at the runtime substrate by hosting both on the
+         InterCore Protocol Bus (The Heart of BTRON).
+
 
 2. System Architecture: The Dual-Layer MicroScript Engine
 ---------------------------------------------------------

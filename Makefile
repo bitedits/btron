@@ -1932,6 +1932,7 @@ CAPTURE_FOMA_SRCS = src/tools/capture_foma.c \
                     src/desktop/desktop_mobile.c \
                     src/desktop/workbench_mobile.c \
                     src/window/wnd.c \
+                    src/chokanji/pmc.c \
                     src/window/app_menu.c \
                     src/apps/gterm.c \
                     src/apps/t_editor.c \

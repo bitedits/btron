@@ -433,7 +433,7 @@ gif_done_frame:
 #define STBI_ONLY_JPEG
 #define STBI_NO_SIMD
 #define STBI_NO_FAILURE_STRINGS
-#include "../../third_party/vkQuake/Quake/stb_image.h"
+#include "stb_image.h"
 #pragma GCC diagnostic pop
 
 int decode_jpeg_rgba(const char *filepath, UB **out_pixels, H *out_w, H *out_h) {

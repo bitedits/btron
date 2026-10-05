@@ -360,7 +360,7 @@ static void shimIndustrialBass(double t, float freq, float duration, float volMu
 static void shimSwarmatron(double t, float centerFreq, float duration, float volMul, float spreadCents) {
     double S = s_T + t;
     static const float mults[8] = { -1.0f, -0.65f, -0.35f, -0.12f, 0.12f, 0.35f, 0.65f, 1.0f };
-    float perOscAmp = (0.18f * volMul) / 4.0f;
+    float perOscAmp = (0.18f * volMul) / 8.0f;
     for (int i = 0; i < 8; i++) {
         WaNode *o = wa_osc(WA_SAWTOOTH, S, S + duration);
         if (!o) continue;

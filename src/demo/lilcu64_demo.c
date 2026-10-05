@@ -212,37 +212,49 @@ static void set_animation(AnimState state) {
     s_anim_state = state;
     s_state_timer = 0.0f;
 
+    int in_track = (lilcu64_synth_get_active_track() != 0);
+
     switch (state) {
         case ANIM_WALK:
             s_walk_phase = 0.0f;
             s_last_step_sign = 0;
-            snprintf(s_quote_text, sizeof(s_quote_text),
-                     "🐾 [Waddle] てくてく歩行！ 足踏みが shimWaddle と共振しベースラインへ！");
+            if (!in_track) {
+                snprintf(s_quote_text, sizeof(s_quote_text),
+                         "🐾 [Waddle] てくてく歩行！ 足踏みが shimWaddle と共振しベースラインへ！");
+            }
             break;
         case ANIM_FLOAT:
             s_float_timer = 0.0f;
-            lilcu64_shim_float(523.25f, 1.0f);
-            snprintf(s_quote_text, sizeof(s_quote_text),
-                     "🎈 [Float] ぷかぷか浮遊！ 反重力の上昇が shimFloat の和音と連動！");
+            if (!in_track) {
+                lilcu64_shim_float(523.25f, 1.0f);
+                snprintf(s_quote_text, sizeof(s_quote_text),
+                         "🎈 [Float] ぷかぷか浮遊！ 反重力の上昇が shimFloat の和音と連動！");
+            }
             break;
         case ANIM_DANCE:
             s_dance_timer = 0.0f;
             s_dance_step = 0;
-            lilcu64_shim_dance(1.0f, 1.0f);
-            snprintf(s_quote_text, sizeof(s_quote_text),
-                     "🕺 [Dance] 氷晶のダンス！ 16分のピルエット回転が星屑アルペジオを奏でる！");
+            if (!in_track) {
+                lilcu64_shim_dance(1.0f, 1.0f);
+                snprintf(s_quote_text, sizeof(s_quote_text),
+                         "🕺 [Dance] 氷晶のダンス！ 16分のピルエット回転が星屑アルペジオを奏でる！");
+            }
             break;
         case ANIM_SQUASH:
-            lilcu64_shim_pulse_squash(1.0f, 1.0f);
-            trigger_radiant_wave(false);
-            snprintf(s_quote_text, sizeof(s_quote_text),
-                     "🌟 [Pulse] 神聖波動！ 体積変形パルスが shimPulseSquash を放射！");
+            if (!in_track) {
+                lilcu64_shim_pulse_squash(1.0f, 1.0f);
+                trigger_radiant_wave(false);
+                snprintf(s_quote_text, sizeof(s_quote_text),
+                         "🌟 [Pulse] 神聖波動！ 体積変形パルスが shimPulseSquash を放射！");
+            }
             break;
         case ANIM_SING:
-            lilcu64_shim_pulse_squash(1.2f, 1.25f);
-            trigger_radiant_wave(true);
-            snprintf(s_quote_text, sizeof(s_quote_text),
-                     "✨ [Sing] 天球の熱唱！ 聖なるカンタービレが全宇宙に響き渡る！");
+            if (!in_track) {
+                lilcu64_shim_pulse_squash(1.2f, 1.25f);
+                trigger_radiant_wave(true);
+                snprintf(s_quote_text, sizeof(s_quote_text),
+                         "✨ [Sing] 天球の熱唱！ 聖なるカンタービレが全宇宙に響き渡る！");
+            }
             break;
         case ANIM_POKE:
             s_poke_timer = 1.0f;
@@ -250,8 +262,10 @@ static void set_animation(AnimState state) {
             break;
         case ANIM_IDLE:
         default:
-            snprintf(s_quote_text, sizeof(s_quote_text),
-                     "ボクはリル・キューブ64… 低ポリゴン3D動作と音響シムが1対1に共振する聖なるゲーム主人公だキューブ！");
+            if (!in_track) {
+                snprintf(s_quote_text, sizeof(s_quote_text),
+                         "ボクはリル・キューブ64… 低ポリゴン3D動作と音響シムが1対1に共振する聖なるゲーム主人公だキューブ！");
+            }
             break;
     }
 }
@@ -1284,10 +1298,9 @@ static void update_kinematics(float dt) {
             break;
         }
         case ANIM_SQUASH:
-            s_impact_squash = 0.25f;
-            lilcu64_shim_pulse_squash(1.0f, 1.0f);
-            trigger_radiant_wave(false);
-            set_animation(ANIM_IDLE);
+            if (!lilcu64_synth_get_active_track()) {
+                if (s_state_timer >= 0.40f) set_animation(ANIM_IDLE);
+            }
             break;
         default:
             break;

@@ -321,6 +321,20 @@ static void timeline_tick(void) {
 
 #define RENDER_BLOCK 32
 
+static inline float master_soft_clamp(float x) {
+    if (x > 1.25f) return 1.0f;
+    if (x < -1.25f) return -1.0f;
+    if (x > 0.85f) {
+        float d = x - 0.85f;
+        return 0.85f + d / (1.0f + d * 2.5f);
+    }
+    if (x < -0.85f) {
+        float d = -x - 0.85f;
+        return -(0.85f + d / (1.0f + d * 2.5f));
+    }
+    return x;
+}
+
 static void render_block(int16_t *out_pcm, size_t frames) {
     float wa_mix[RENDER_BLOCK];
     memset(wa_mix, 0, sizeof(wa_mix));
@@ -419,10 +433,8 @@ static void render_block(int16_t *out_pcm, size_t frames) {
          * graph goes straight to ctx.destination, which clamps at +/-1. */
         sample_l = sample_l * (30000.0f / 32767.0f) + wa_mix[f];
         sample_r = sample_r * (30000.0f / 32767.0f) + wa_mix[f];
-        if (sample_l > 1.0f) sample_l = 1.0f;
-        else if (sample_l < -1.0f) sample_l = -1.0f;
-        if (sample_r > 1.0f) sample_r = 1.0f;
-        else if (sample_r < -1.0f) sample_r = -1.0f;
+        sample_l = master_soft_clamp(sample_l);
+        sample_r = master_soft_clamp(sample_r);
 
         out_pcm[f * 2]     = (int16_t)(sample_l * 32767.0f);
         out_pcm[f * 2 + 1] = (int16_t)(sample_r * 32767.0f);
@@ -533,6 +545,9 @@ void lilcu64_synth_play_track(int track_num) {
         return;
     }
     s_active_track = track_num;
+    for (int i = 0; i < MAX_VOICES; i++) {
+        s_voices[i].active = false;
+    }
     /* Reset legacy sequencer state */
     s_track_time = 0.0f;
     s_next_step_time = 0.0f;

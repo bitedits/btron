@@ -1293,18 +1293,52 @@ int fil_is_stream(ID fd)
     return (int)of->is_stream;
 }
 
+/*
+ * Is this RecordIndex entry a link (Virtual Body) entry?
+ *
+ * FS.md 7.1 defines the entry kind by its first two bytes: a link index entry
+ * is byte0==0, byte1==0x80, a normal index entry is byte0==0 with byte1 holding
+ * the packed record type. Read little-endian (B-right/V) that is kind==0x8000
+ * for links versus 0x8100/0x8a00/0x8f00... for TAD data records; big-endian,
+ * kind==0x0080. Reading a Cho-Kanji type byte as `type` therefore yields 0 for
+ * ordinary records, so `type == RT_LINK` alone must not decide anything on that
+ * format — it would present every data file as a drawer full of dead links.
+ */
+static int ridx_is_link_entry(const Volume *v, const RecordIndex *ri)
+{
+    if (ri->size == 0 && ri->kind == 0 && ri->type == 0) return 0;
+    if (vol_is_le(v)) return ri->kind == 0x8000;
+    if (ri->kind == 0x0080) return 1;
+    return ri->type == RT_LINK && ri->size >= 16;
+}
+
+/* Does this FID name a Real Body that exists in this volume? */
+static int fid_exists(Volume *v, FID fid)
+{
+    if (fid == FID_INVALID) return 0;
+    if (fid == FID_ROOT) return 1;
+    return fid < vol_nfmax(v) && vol_fid_refcount(v, fid) != 0;
+}
+
 /* ── fil_rec_is_link ─────────────────────────────────────────────── */
 int fil_rec_is_link(ID fd, W rec_idx)
 {
     if (fd < 0 || fd >= MAX_OPEN_FILES) return 0;
     OpenFile *of = &g_open_files[(int)fd];
     if (!of->used || rec_idx < 0 || (UW)rec_idx >= of->nrec) return 0;
-    RecordIndex *ri = &of->ridx[rec_idx];
-    if (ri->size == 0 && ri->kind == 0 && ri->type == 0) return 0;
-    if (ri->kind == 0x8000) return 1;
-    if (ri->type == RT_LINK && ri->size >= 16) return 1;
-    if (ri->type == 0x0080 && ri->size >= 16) return 1;
-    return 0;
+    Volume *v = of_vol(of);
+    if (!v) return 0;
+
+    const RecordIndex *ri = &of->ridx[rec_idx];
+    if (!ridx_is_link_entry(v, ri)) return 0;
+    if (!vol_is_le(v)) return 1;
+
+    /*
+     * B-right/V carries the target FID in the entry's offset field with no
+     * payload of its own. Requiring that FID to exist rejects the misparsed
+     * entries whose field is really a block address or file content.
+     */
+    return ri->size == 0 && fid_exists(v, (FID)ri->offset);
 }
 
 /* ── fil_get_rec_link_info ───────────────────────────────────────── */
@@ -1366,12 +1400,14 @@ ER fil_get_rec_link_info(ID fd, W rec_idx, FID *out_fid, char *out_name, size_t 
         }
     }
 
-    if (link_fid == FID_INVALID && (ri->kind == 0x8000 || ri->type == 0x0080) && ri->offset > 0) {
-        UW nfmax = vol_nfmax(v);
-        link_fid = (ri->offset < nfmax) ? (FID)ri->offset : (FID)(ri->offset & 0xFFFF);
-    }
+    /*
+     * B-right/V keeps the target FID in the entry itself. Masking a field that
+     * is not an FID into range only manufactures links that lead nowhere.
+     */
+    if (link_fid == FID_INVALID && ri->offset > 0 && ri->offset < vol_nfmax(v))
+        link_fid = (FID)ri->offset;
 
-    if (link_fid == FID_INVALID) return (ER)-1;
+    if (link_fid == FID_INVALID || !fid_exists(v, link_fid)) return (ER)-1;
 
     /* Fallback: if link_name is empty, query target Real Body's header name */
     if (link_name[0] == '\0' && link_fid != (FID)0) {

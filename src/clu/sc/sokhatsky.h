@@ -65,8 +65,16 @@ enum {
 #define MAX_HISTORY     64
 #define MAX_DIR_HISTORY 32
 
+/*
+ * name is what the pane shows; fid is the Real Body that listing named, and is
+ * what a path built from this row must carry.  On Cho-Kanji's top level four
+ * drawers share the name "src", so a name-only path opens whichever one the
+ * volume's flat name index reaches first -- the same folder again under four
+ * different rows.
+ */
 typedef struct {
     char     name[VFS_MAX_NAME];
+    uint32_t fid;
     uint32_t size;
     uint32_t mtime;
     uint8_t  is_dir;

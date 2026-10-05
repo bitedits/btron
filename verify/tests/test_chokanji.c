@@ -23,6 +23,7 @@
 
 static int g_pass = 0;
 static int g_fail = 0;
+static int g_skip = 0;
 
 #define TEST_ASSERT(cond, msg) do { \
     if (!(cond)) { \
@@ -37,6 +38,12 @@ static int g_fail = 0;
     g_pass++; \
 } while (0)
 
+#define TEST_SKIP(why) do { \
+    printf("SKIP: %s: %s\n", __func__, why); \
+    g_skip++; \
+    return; \
+} while (0)
+
 static const char *find_qcow2_image(void) {
     static const char *candidates[] = {
         "hda.qcow2",
@@ -45,6 +52,11 @@ static const char *find_qcow2_image(void) {
         "../PMC/chokanji_4_qemu/hda.qcow2",
         NULL
     };
+    const char *env = getenv("BTRON_CHOKANJI_IMAGE");
+    if (env && *env) {
+        FILE *fp = fopen(env, "rb");
+        if (fp) { fclose(fp); return env; }
+    }
     for (int i = 0; candidates[i]; i++) {
         FILE *fp = fopen(candidates[i], "rb");
         if (fp) {
@@ -53,6 +65,23 @@ static const char *find_qcow2_image(void) {
         }
     }
     return NULL;
+}
+
+/*
+ * The image the read-write tests may modify.  BTRON_CHOKANJI_IMAGE is set by
+ * `make test-chokanji` to a scratch clone of the golden disk, because these
+ * tests allocate real blocks and a failed run must never damage the reference
+ * image.  Without it the read-only tests still run against ./hda.qcow2, and the
+ * write test reports SKIP rather than writing to that image.
+ */
+static const char *find_writable_image(void)
+{
+    const char *env = getenv("BTRON_CHOKANJI_IMAGE");
+    if (!env || !*env) return NULL;
+    FILE *fp = fopen(env, "r+b");
+    if (!fp) return NULL;
+    fclose(fp);
+    return env;
 }
 
 /* ── Test 1: QCOW2 direct block driver ──────────────────────────── */
@@ -147,34 +176,60 @@ static void test_directory_enumeration(void)
 
     g_chokanji_vol = v;
 
+    /*
+     * The root of a B-right/V volume is not a drawer (FS.md 3.2), so its listing
+     * is derived: the drawers no link row in the volume reaches, judged by header
+     * block.  That is what rd_dir() hands sc and the VFS, and what clu's fs tree
+     * prints -- the two must agree.
+     *
+     * The assertions below therefore name both halves of the rule: the drawers
+     * with no parent must be here, and bodies a real drawer does name --
+     * Template Box, Drawing Pad, Text Pad, English, vesainf, SBOOT (which is
+     * FID 0, the root file itself rather than an entry of it) -- must not be,
+     * because listing them at the root next to their parent is the duplication
+     * this rule exists to remove.
+     */
     ID dir = opn_dir("/B-right/V");
     TEST_ASSERT(dir >= 0, "opn_dir(/B-right/V) failed");
 
-    DIR_ENTRY ent;
+    enum { MAXE = 256 };
+    static DIR_ENTRY ent[MAXE];
     int count = 0;
-    int found_sboot = 0;
-    int found_template = 0;
-    int found_drawing = 0;
-    int found_text = 0;
-    int found_vesainf = 0;
-    int found_english = 0;
-
-    while (rd_dir(dir, &ent) == 0) {
+    int all_dirs = 1;
+    int dup_fid = 0;
+    while (count < MAXE && rd_dir(dir, &ent[count]) == 0) {
+        if (!(ent[count].attr & OBJ_DIRECTORY)) all_dirs = 0;
+        for (int i = 0; i < count; i++) {
+            if (ent[i].robj_id == ent[count].robj_id) dup_fid++;
+        }
         count++;
-        if (strcasecmp(ent.name, "SBOOT") == 0) found_sboot = 1;
-        if (strcasecmp(ent.name, "Template Box") == 0) found_template = 1;
-        if (strcasecmp(ent.name, "Drawing Pad") == 0) found_drawing = 1;
-        if (strcasecmp(ent.name, "Text Pad") == 0) found_text = 1;
-        if (strcasecmp(ent.name, "vesainf") == 0) found_vesainf = 1;
-        if (strcasecmp(ent.name, "English") == 0) found_english = 1;
     }
-    TEST_ASSERT(count > 10, "expected >10 directory entries");
-    TEST_ASSERT(found_sboot, "did not find 'SBOOT'");
-    TEST_ASSERT(found_template, "did not find 'Template Box'");
-    TEST_ASSERT(found_drawing, "did not find 'Drawing Pad'");
-    TEST_ASSERT(found_text, "did not find 'Text Pad'");
-    TEST_ASSERT(found_vesainf, "did not find 'vesainf'");
-    TEST_ASSERT(found_english, "did not find 'English'");
+    cls_dir(dir);
+
+    TEST_ASSERT(count > 10 && count < 100, "root listing must be the derived drawer set");
+    TEST_ASSERT(dup_fid == 0, "a root entry FID may not appear twice");
+    TEST_ASSERT(all_dirs, "every root entry is a drawer");
+
+    int nroot = fil_hier_nroot(v);
+    TEST_ASSERT(nroot == count, "rd_dir's root must equal the hierarchy snapshot");
+
+    static const char *must_have[] = { "bin", "lib", "unix", "mnt", "locale",
+                                       "Installation", "__PROGRAM.BOX", NULL };
+    static const char *must_not[]  = { "SBOOT", "Template Box", "Drawing Pad", "Text Pad",
+                                       "English", "vesainf", "etc", "LC_TIME",
+                                       "Mail Manager", "Makefile", "makerules", NULL };
+    for (int k = 0; must_have[k]; k++) {
+        int found = 0;
+        for (int i = 0; i < count; i++) if (strcasecmp(ent[i].name, must_have[k]) == 0) found = 1;
+        TEST_ASSERT(found, "root listing is missing an unreached drawer");
+    }
+    for (int k = 0; must_not[k]; k++) {
+        int found = 0;
+        for (int i = 0; i < count; i++) if (strcasecmp(ent[i].name, must_not[k]) == 0) found = 1;
+        /* RUN() unmounts v if this returns, so the failure cannot cascade. */
+        if (found) printf("  '%s' has a parent drawer and must not be at the root\n", must_not[k]);
+        TEST_ASSERT(!found, "a parented body appeared at the root");
+    }
 
     /* Verify plugins directory entry exists and can be opened */
     ID pfd = opn_fil("/B-right/V/plugins", 0x0001);
@@ -204,18 +259,41 @@ static void test_read_tad_document(void)
     ID fd = opn_fil("/B-right/V/English", 0x0001 /* F_READ */);
     TEST_ASSERT(fd >= 0, "opn_fil(/B-right/V/English) failed");
 
-    for (int r = 0; r < 5; r++) {
-        ID rec = opn_rec(fd, r, 0x0001);
-        if (rec < 0) {
-            break;
+    /*
+     * English is a drawer: four of its records are RT_LINK Virtual Bodies that
+     * carry no payload of their own (FS.md 7.4), the rest are data rows.  The
+     * old "every record returns bytes" loop passed only because the pre-fix
+     * engine decoded no records at all, so opn_rec failed on record 0 and the
+     * loop broke out immediately.
+     */
+    OpenFile *eo = &g_open_files[fd];
+    TEST_ASSERT(eo->nrec >= 5, "English must decode both its link and its data records");
+    int n_link = 0, n_data = 0;
+    static unsigned char ebuf[4096];
+    for (unsigned int i = 0; i < eo->nrec; i++) {
+        ID rec = opn_rec(fd, (W)i, 0x0001);
+        TEST_ASSERT(rec >= 0, "opn_rec on an English record failed");
+        if (fil_rec_is_link(fd, (W)i)) {
+            FID tfid = FID_INVALID;
+            char tname[64] = "";
+            ER lerr = fil_get_rec_link_info(fd, (W)i, &tfid, tname, sizeof(tname), NULL);
+            TEST_ASSERT(lerr == 0, "English's link record must resolve");
+            TEST_ASSERT(tfid != FID_INVALID && tname[0] != '\0',
+                        "link record must name a live child");
+            n_link++;
+            cls_rec(rec);
+            continue;
         }
-        unsigned char buf[256];
         W read_sz = 0;
-        ER err = rd_rec(rec, buf, sizeof(buf), &read_sz);
+        ER err = rd_rec(rec, ebuf, sizeof(ebuf), &read_sz);
         TEST_ASSERT(err == 0, "rd_rec failed");
-        TEST_ASSERT(read_sz > 0, "no data read from record");
+        TEST_ASSERT(read_sz == (W)eo->ridx[i].size,
+                    "a data record must return exactly its indexed size");
+        n_data++;
         cls_rec(rec);
     }
+    TEST_ASSERT(n_link == 4, "English must expose its four drawer children");
+    TEST_ASSERT(n_data >= 1, "English must expose its own data records");
     cls_fil(fd);
 
     /* Open Text Pad */
@@ -276,8 +354,10 @@ static void test_read_driver_binary(void)
 /* ── Test 7: Read-Write Creation, Sync, Re-Read, & Deletion ──────── */
 static void test_read_write_operations(void)
 {
-    const char *path = find_qcow2_image();
-    TEST_ASSERT(path != NULL, "hda.qcow2 not found");
+    const char *path = find_writable_image();
+    if (!path)
+        TEST_SKIP("no scratch image: run `make test-chokanji`, which sets "
+                  "BTRON_CHOKANJI_IMAGE to a clone of the golden disk");
 
     /* Open in read-write mode (read_only = 0) */
     BlkDev *dev = blk_qcow2_create(path, 0);
@@ -294,13 +374,23 @@ static void test_read_write_operations(void)
     /* Create new file on Cho-Kanji volume (cleanup previous if needed) */
     const char *test_path = "/B-right/V/BTRON_TEST.TXT";
     del_fil(test_path);
-    ID wfd = cre_fil(test_path, 0x0002 | 0x0008 /* F_WRITE | F_CREATE */);
+    ID wfd = cre_fil(test_path, F_WRITE | F_APPEND | F_CREATE);
     TEST_ASSERT(wfd >= 0, "cre_fil on Cho-Kanji volume failed");
 
-    const char *payload = "Hello from B-System native Cho-Kanji 4.02 read-write driver!";
-    W payload_len = (W)strlen(payload);
-    ER err = ins_rec(wfd, 0, payload, payload_len);
-    TEST_ASSERT(err == 0, "ins_rec failed on Cho-Kanji volume");
+    /*
+     * Two records, not one: a single record cannot show whether the row array
+     * written by write_header_block() comes back in the same record order the
+     * reader assigns (FS.md 7.4 consequence 6).
+     */
+    const char payload_a[] = "Hello from B-System native Cho-Kanji 4.02 read-write driver!";
+    const char payload_b[] = "Second record: pins record numbering across a write/read round trip.";
+    ER err = ins_rec(wfd, 0, payload_a, (W)sizeof(payload_a) - 1);
+    TEST_ASSERT(err == 0, "ins_rec(record 0) failed");
+    err = ins_rec(wfd, 1, payload_b, (W)sizeof(payload_b) - 1);
+    TEST_ASSERT(err == 0, "ins_rec(record 1) failed");
+
+    W len_a = (W)strlen(payload_a), len_b = (W)strlen(payload_b);
+    unsigned int hdr_blk = (unsigned int)g_open_files[wfd].hdr_blk;
     cls_fil(wfd);
 
     /* Flush all changes to disk */
@@ -309,19 +399,32 @@ static void test_read_write_operations(void)
     /* Re-open and verify */
     ID rfd = opn_fil(test_path, 0x0001);
     TEST_ASSERT(rfd >= 0, "re-opening newly created file failed");
+    OpenFile *ro = &g_open_files[rfd];
+    TEST_ASSERT(ro->nrec == 2, "created file must carry two records after re-open");
+    TEST_ASSERT(ro->hdr.total_size == (UW)(len_a + len_b), "total size must be the two payloads");
 
-    ID rrec = opn_rec(rfd, 0, 0x0001);
-    TEST_ASSERT(rrec >= 0, "opn_rec on new file failed");
+    /* The header's own row count must agree with what the reader decoded. */
+    unsigned char hbuf[8192];
+    TEST_ASSERT(vol_read_blk(v, (BLK)hdr_blk, hbuf) == 0, "reading the created header failed");
+    unsigned int decl = hbuf[0x50] | (hbuf[0x51] << 8) | (hbuf[0x52] << 16) | ((unsigned int)hbuf[0x53] << 24);
+    TEST_ASSERT(decl == 2, "+0x50 row count must be written for a created file");
 
-    char readback[128];
-    memset(readback, 0, sizeof(readback));
-    W read_sz = 0;
-    err = rd_rec(rrec, readback, sizeof(readback) - 1, &read_sz);
-    TEST_ASSERT(err == 0, "rd_rec on newly created file failed");
-    TEST_ASSERT(read_sz == payload_len, "read size mismatch");
-    TEST_ASSERT(strcmp(readback, payload) == 0, "content mismatch on readback");
-
-    cls_rec(rrec);
+    struct { W want; const char *text; } expect[2] = {
+        { len_a, payload_a }, { len_b, payload_b },
+    };
+    for (int i = 0; i < 2; i++) {
+        ID rrec = opn_rec(rfd, (W)i, 0x0001);
+        TEST_ASSERT(rrec >= 0, "opn_rec on new file failed");
+        char readback[128];
+        memset(readback, 0, sizeof(readback));
+        W read_sz = 0;
+        err = rd_rec(rrec, readback, sizeof(readback) - 1, &read_sz);
+        TEST_ASSERT(err == 0, "rd_rec on newly created file failed");
+        TEST_ASSERT(read_sz == expect[i].want, "read size mismatch");
+        TEST_ASSERT(strcmp(readback, expect[i].text) == 0,
+                    "record content mismatch (wrong record order?)");
+        cls_rec(rrec);
+    }
     cls_fil(rfd);
 
     /* Delete the test file and sync */
@@ -349,6 +452,24 @@ static void clu_buf_out(const char *msg, COLOR color, void *ud) {
     if (cur < 500000) {
         snprintf(buf + cur, 524288 - cur, "%s\n", msg);
     }
+}
+
+/*
+ * Count the non-empty lines a clu listing wrote into the buffer: one line per
+ * entry. Blank names on the volume print empty lines and are not counted.
+ */
+static int count_listing_lines(const char *buf)
+{
+    int n = 0;
+    const char *p = buf;
+    while (*p) {
+        const char *e = strchr(p, '\n');
+        size_t len = e ? (size_t)(e - p) : strlen(p);
+        if (len > 0) n++;
+        if (!e) break;
+        p = e + 1;
+    }
+    return n;
 }
 
 static void test_clu_integration(void)
@@ -385,11 +506,64 @@ static void test_clu_integration(void)
     clu_cd("/B-right/V", clu_buf_out, out_buf);
     TEST_ASSERT(strcmp(g_cwd_path, "/B-right/V") == 0, "g_cwd_path must be /B-right/V");
 
-    /* Test clu_ls inside /B-right/V (plain ls) */
+    /*
+     * ls at the volume root must list the drawers nobody reaches, which is what
+     * rd_dir() and therefore sc show (FS.md 3.2).  The flat FID-table dump used
+     * to print an entry per live body here -- 307 with the magic check, 4457
+     * without -- so etc, LC_TIME, Mail Manager, Makefile and makerules sat at
+     * the root beside the drawers that actually name them, once per alias FID.
+     */
     memset(out_buf, 0, sizeof(out_buf));
     clu_ls("", clu_buf_out, out_buf);
-    TEST_ASSERT(strstr(out_buf, "SBOOT") != NULL, "clu_ls output missing SBOOT");
-    TEST_ASSERT(strstr(out_buf, "English") != NULL, "clu_ls output missing English");
+    const int n_entries = count_listing_lines(out_buf);
+    TEST_ASSERT(n_entries > 10, "root listing must show the volume's drawers");
+    TEST_ASSERT(n_entries == fil_hier_nroot(g_chokanji_vol),
+                "clu ls at the root must equal the hierarchy snapshot sc lists");
+    TEST_ASSERT(strstr(out_buf, "bin") != NULL, "clu_ls output missing drawer 'bin'");
+    TEST_ASSERT(strstr(out_buf, "lib") != NULL, "clu_ls output missing drawer 'lib'");
+    /* Bodies that exist on the volume but are not top-level drawers: */
+    TEST_ASSERT(strstr(out_buf, "SBOOT") == NULL, "root ls must not list FID 0's body (SBOOT)");
+    TEST_ASSERT(strstr(out_buf, "vesainf") == NULL, "root ls must not list 'vesainf'");
+    TEST_ASSERT(strstr(out_buf, "Makefile") == NULL, "root ls must not list 'Makefile'");
+    TEST_ASSERT(strstr(out_buf, "LC_TIME") == NULL, "root ls must not list 'LC_TIME'");
+    TEST_ASSERT(strstr(out_buf, "Template Box") == NULL, "root ls must not list 'Template Box'");
+
+    /*
+     * And they are not lost, just listed where they belong: each was measured
+     * against the drawer whose link record names it.
+     */
+    memset(out_buf, 0, sizeof(out_buf));
+    clu_cd("/B-right/V/bin", clu_buf_out, out_buf);
+    clu_ls("", clu_buf_out, out_buf);
+    TEST_ASSERT(strstr(out_buf, "vesainf") != NULL, "'vesainf' must list under bin");
+    clu_cd("/B-right/V", clu_buf_out, out_buf);
+
+    memset(out_buf, 0, sizeof(out_buf));
+    clu_cd("/B-right/V/brightv", clu_buf_out, out_buf);
+    clu_ls("", clu_buf_out, out_buf);
+    TEST_ASSERT(strstr(out_buf, "etc") != NULL, "'etc' must list under brightv");
+    clu_cd("/B-right/V", clu_buf_out, out_buf);
+
+    memset(out_buf, 0, sizeof(out_buf));
+    clu_cd("/B-right/V/locale", clu_buf_out, out_buf);
+    clu_ls("", clu_buf_out, out_buf);
+    TEST_ASSERT(strstr(out_buf, "LC_TIME") != NULL, "'LC_TIME' must list under locale");
+    clu_cd("/B-right/V", clu_buf_out, out_buf);
+
+    /*
+     * A body whose index has a hole in it: 'English' keeps four child links and
+     * a 2084-byte record below a run of five unused row slots (FS.md 7.4
+     * consequence 5), so the scan that stopped at the first hole listed nothing.
+     */
+    memset(out_buf, 0, sizeof(out_buf));
+    clu_cd("/B-right/V/English", clu_buf_out, out_buf);
+    clu_ls("", clu_buf_out, out_buf);
+    TEST_ASSERT(strstr(out_buf, "Template Box") != NULL,
+                "English's four link records must enumerate as children");
+    const int english_children = count_listing_lines(out_buf);
+    TEST_ASSERT(english_children >= 4 && english_children <= 8,
+                "English must list its own children only, a few at most");
+    clu_cd("/B-right/V", clu_buf_out, out_buf);
 
     /* Test clu_ls -l inside /B-right/V */
     memset(out_buf, 0, sizeof(out_buf));
@@ -792,17 +966,38 @@ int main(void)
 {
     printf("=== B-System BTRON3 Cho-Kanji (B-right/V 4.02) Mount Tests ===\n\n");
 
-    test_qcow2_driver();
-    test_mbr_partition();
-    test_volume_mount();
-    test_directory_enumeration();
-    test_read_tad_document();
-    test_read_driver_binary();
-    test_read_write_operations();
-    test_clu_integration();
-    test_clu_tp_chokanji_streams_and_binaries();
-    test_volume_isolation_security();
+    /*
+     * TEST_ASSERT returns, so a test that fails after vol_mount() leaves the
+     * volume mounted -- and vol_find_by_prefix() answers a "/B-right/V/..." path
+     * with the first mount whose name matches, so a leaked read-only mount
+     * silently redirects every later test's writes and one defect reports as
+     * three. Reaping between tests keeps each failure its own.
+     */
+#define RUN(test) do {                                                    \
+        int before_ = vol_mounted_count();                                \
+        test();                                                           \
+        for (int i_ = vol_mounted_count() - 1; i_ >= before_; i_--) {     \
+            Volume *leaked_ = vol_get_mounted(i_);                        \
+            if (leaked_) {                                                \
+                vol_umount(leaked_);                                      \
+                printf("  [cleanup] %s left a volume mounted; unmounted\n", #test); \
+            }                                                             \
+        }                                                                 \
+    } while (0)
 
-    printf("\n=== Results: %d PASS  %d FAIL ===\n", g_pass, g_fail);
+    RUN(test_qcow2_driver);
+    RUN(test_mbr_partition);
+    RUN(test_volume_mount);
+    RUN(test_directory_enumeration);
+    RUN(test_read_tad_document);
+    RUN(test_read_driver_binary);
+    RUN(test_read_write_operations);
+    RUN(test_clu_integration);
+    RUN(test_clu_tp_chokanji_streams_and_binaries);
+    RUN(test_volume_isolation_security);
+
+#undef RUN
+
+    printf("\n=== Results: %d PASS  %d FAIL  %d SKIP ===\n", g_pass, g_fail, g_skip);
     return (g_fail == 0) ? 0 : 1;
 }

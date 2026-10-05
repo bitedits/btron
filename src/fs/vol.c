@@ -172,6 +172,9 @@ struct Volume {
     UW             bmp_start;     /* start block of bitmap                      */
     UW             fid_start;     /* start block of FID table                   */
     UW             htbl_start;    /* start block of short-name hash table       */
+    UW             mount_seq;     /* monotonic, unique per vol_mount; lets
+                                   * cached derived state notice a Volume that
+                                   * was freed and whose address was reused     */
 };
 
 /* ── Globals ────────────────────────────────────────────────────── */
@@ -183,6 +186,9 @@ char    g_cwd_path[128] = "/SYS";
 #define MAX_MOUNTED_VOLUMES 16
 static Volume *s_mounted_vols[MAX_MOUNTED_VOLUMES];
 static int     s_mounted_vol_count = 0;
+
+/* Identifies each mount instance for caches keyed by Volume pointer. */
+static UW s_mount_seq = 0;
 
 static int vol_strcasecmp(const char *s1, const char *s2)
 {
@@ -355,6 +361,11 @@ UW vol_block_size(const Volume *v)
 UH vol_fs_type(const Volume *v)
 {
     return v ? v->hdr.fs_type : 0;
+}
+
+UW vol_mount_seq(const Volume *v)
+{
+    return v ? v->mount_seq : 0;
 }
 
 int vol_is_le(const Volume *v)
@@ -821,6 +832,7 @@ Volume *vol_mount(BlkDev *dev)
 
     v->dev        = dev;
     v->is_le      = is_le;
+    v->mount_seq  = ++s_mount_seq;
 
     if (fs_type == FS_TYPE_BRIGHTV) {
         v->block_size       = rd_u16(1, blk_buf + 0x18);

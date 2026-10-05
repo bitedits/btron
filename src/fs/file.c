@@ -41,7 +41,27 @@ OpenRec  g_open_recs [MAX_OPEN_RECS ];
 
 /* ── Block layout constants ─────────────────────────────────────── */
 #define HDR_RIDX_OFFSET  192   /* RecordIndex array starts at byte 192 in hdr block */
-#define HDR_RIDX_MAXBYTES (REC_IDX_LEVEL0_MAX * BTRON_REC_IDX_SIZE)
+/*
+ * A B-right/V Real Body header keeps its fixed fields in the first 0x100 bytes
+ * (measured: 0x6C..0x7F is the name, and 0xB0/0xC0 hold further per-body data),
+ * and the record rows live above that.  No body on the golden volume has a row
+ * below 0x1100, so everything from 0x100 up is the row area.
+ */
+#define BVR_RIDX_AREA_START 0x100
+
+/*
+ * How many 16-byte index rows a header block can really hold.  The in-core
+ * array is sized for the largest measured case (a B-right/V 8 KiB header,
+ * FS.md 7.4), which is far more than a cleanroom 1 KiB block stores, so every
+ * read and write of the row area is clamped by the block, not by the array.
+ */
+static UW hdr_row_capacity(UW bsize, int brightv)
+{
+    UW head = brightv ? BVR_RIDX_AREA_START : HDR_RIDX_OFFSET;
+    if (bsize < head + BTRON_REC_IDX_SIZE) return 0;
+    UW room = (bsize - head) / BTRON_REC_IDX_SIZE;
+    return room < REC_IDX_LEVEL0_MAX ? room : REC_IDX_LEVEL0_MAX;
+}
 
 /* ── Timestamp helper ───────────────────────────────────────────── */
 static UW now_ts(void) {
@@ -167,8 +187,14 @@ static int read_header_block(Volume *v, BLK blk, OpenFile *of)
         of->hdr.ctime      = rd_u32_le(buf + 0x60);
         of->hdr.mtime      = rd_u32_le(buf + 0x64);
         of->hdr.atime      = rd_u32_le(buf + 0x68);
-        of->hdr.did        = rd_u32_le(buf + 0x64);
-        of->hdr.pdid       = rd_u32_le(buf + 0x68);
+        /*
+         * B-right/V encodes no drawer id / parent drawer id in the Real Body
+         * header: +0x64 and +0x68 are the modify and access timestamps above,
+         * so they must not be mirrored into did/pdid.  Hierarchy comes from
+         * RT_LINK records alone (FS.md 5.1, 7.4).
+         */
+        of->hdr.did        = 0;
+        of->hdr.pdid       = 0;
         of->is_stream      = found_hdr_m1 ? 1 : 0;
         of->hdr.owner      = 0;
         of->hdr.group      = 0;
@@ -185,64 +211,81 @@ static int read_header_block(Volume *v, BLK blk, OpenFile *of)
         btr_tcode_to_utf8(tc, 16, (char *)of->hdr.name, sizeof(of->hdr.name));
 
         /*
-         * B-right/V record index: 16-byte entries packed into the tail of the
-         * header block, ascending address == ascending record number.  A
-         * continuation entry (byte0 != 0) only says that the record before it
-         * carries on into the next block, so it is not a record of its own
-         * (FS.md 7.1; LINX P2 says the same for read()/lseek()).
+         * B-right/V record index: 16-byte rows in the tail area of the header
+         * block, ascending address == ascending record number.  A continuation
+         * row (byte0 != 0) sits directly after the row it extends and is not a
+         * record of its own, so the header's +0x50 count leaves it out (FS.md
+         * 7.1, 7.4; LINX P2 says the same for read()/lseek()).
          *
-         * The entry fields, measured against golden B-right/V bodies:
+         * The row fields, measured against golden B-right/V bodies:
          *   +0  byte0 kind, byte1 packed record type (0x80 = link)
          *   +2  UH subtype / attribute
          *   +4  UW record body position: UH block offset, UH byte offset
          *   +8  UW payload size
          *   +12 UB block count of this record's body
          *   +13 UB[3] block address (allocation hint; not used to seek)
+         *
+         * The area is an array with holes: a row freed by a deleted record
+         * leaves its slot zeroed, so the rows are not one contiguous run at the
+         * end of the block.  Measured over all 4457 bodies of the golden
+         * volume, taking every non-empty row-shaped slot from BVR_RIDX_AREA_START
+         * upward recovers exactly the +0x50 count for 4456 of them (the
+         * exception is the two-level index body, FS.md 7.3), while stopping at
+         * the first hole drops 27 rows across 6 bodies -- records that never
+         * open and drawer children that never list.  BTRON.SYS's "English" body
+         * is one: it keeps 4 child links and a 2084-byte record below the hole.
          */
-        unsigned int found[128];
+        unsigned int found[REC_IDX_LEVEL0_MAX];
         int nfound = 0;
-        int running = 0;
-        for (unsigned int off = bsize - 16; off >= 16 && nfound < 128; off -= 16) {
+        for (unsigned int off = BVR_RIDX_AREA_START;
+             off + BTRON_REC_IDX_SIZE <= bsize && nfound < REC_IDX_LEVEL0_MAX;
+             off += BTRON_REC_IDX_SIZE) {
             const unsigned char *rp = buf + off;
-            UB b0 = rp[0], b1 = rp[1];
-            int any = 0;
-            for (int j = 0; j < 16; j++) if (rp[j]) { any = 1; break; }
-            if (!any) {
-                /* Trailing unused slots precede the run; once inside it, a
-                 * zero slot ends the run. */
-                if (running) break;
-                continue;
-            }
-            if (b0 == 0 && b1 == 0) break;          /* unused slot: end of run */
-            running = 1;
-            UW esz = rd_u32_le(rp + 8);
-            if (b0 == 0 && of->hdr.total_size > 0 && esz > of->hdr.total_size)
-                break;                              /* size cannot exceed body */
+            if (rp[0] == 0 && rp[1] == 0) continue;   /* unused slot or hole */
             found[nfound++] = off;
         }
 
         unsigned int n = 0;
         BLK hint0 = 0;                     /* block named by the first entry */
-        for (int j = nfound - 1; j >= 0 && n < REC_IDX_LEVEL0_MAX; j--) {
+        for (int j = 0; j < nfound && n < REC_IDX_LEVEL0_MAX; j++) {
             const unsigned char *rp = buf + found[j];
             if (rp[0] != 0) continue;                 /* continuation entry */
             UW pos = rd_u32_le(rp + 4);
             BLK hint = (BLK)rd_u24_le(rp + 13);
             of->ridx[n].kind   = rd_u16_le(rp + 0);
             of->ridx[n].type   = rd_u16_le(rp + 2);
-            of->ridx[n].size   = rd_u32_le(rp + 8);
+            /*
+             * A link row has no payload of its own: +8 carries the target's
+             * location data, not a size.  The engine's link convention is
+             * size 0 with offset == target FID.
+             */
+            of->ridx[n].size   = (of->ridx[n].kind == 0x8000)
+                               ? 0 : rd_u32_le(rp + 8);
             of->ridx[n].flags  = (UW)rp[12];
             /*
-             * Link records carry the target FID in the position field; data
-             * records give their body position as (block, byte) inside the
-             * extent named at +13.
+             * Link records carry the target FID in the low half of the position
+             * word, exactly as a data record carries its block index there (the
+             * high half is the record's other location half).  Reading the
+             * whole word as an FID loses every link whose high half is non-zero:
+             * measured on the golden volume, 1695 of 1695 such rows name a live
+             * FID in the low half, and masking raises resolved links from 7224
+             * to 8871 of 8919 rows (FS.md 7.4).
              */
             of->ridx[n].offset = (of->ridx[n].kind == 0x8000)
-                               ? pos
+                               ? (pos & 0xFFFFu)
                                : (pos & 0xFFFFu) * bsize + (pos >> 16);
-            if (n == 0) hint0 = hint;
+            if (hint0 == 0 && of->ridx[n].kind != 0x8000) hint0 = hint;
             n++;
         }
+        /*
+         * +0x50 is the header's own count of rows, continuation rows excluded,
+         * and it agrees with the scan for every body but the two-level-indexed
+         * one; use it to bound the count if the area ever holds more row-shaped
+         * slots than the body declares.
+         */
+        UW decl50 = rd_u32_le(buf + 0x50);
+        if (decl50 > 0 && decl50 <= REC_IDX_LEVEL0_MAX && n > decl50) n = (unsigned int)decl50;
+
         of->hdr.nrec = n;
         of->nrec     = n;
         of->data_used = of->hdr.total_size;
@@ -279,9 +322,10 @@ static int read_header_block(Volume *v, BLK blk, OpenFile *of)
          * their record payloads in record order (FS.md 8), and the entry's
          * block/byte fields are stale allocation data.
          */
-        if (n > 0 && hint0 != of->data_blk) {
+        if (n > 0 && hint0 != 0 && hint0 != of->data_blk) {
             UW cum = 0;
             for (unsigned int i = 0; i < n; i++) {
+                if (of->ridx[i].kind == 0x8000) continue;   /* keeps target FID */
                 of->ridx[i].offset = cum;
                 cum += of->ridx[i].size;
             }
@@ -322,9 +366,15 @@ static int read_header_block(Volume *v, BLK blk, OpenFile *of)
     of->hdr.did        = rd_u32_be(p + 100);
     of->hdr.pdid       = rd_u32_be(p + 104);
 
-    /* Cap nrec defensively (NASA Rule 5) */
-    if (of->hdr.nrec > REC_IDX_LEVEL0_MAX) {
-        of->hdr.nrec = REC_IDX_LEVEL0_MAX;
+    /*
+     * Cap nrec defensively (NASA Rule 5), and to the rows that actually fit
+     * between the 192-byte header and the end of this block: the in-core array
+     * is larger than a cleanroom header, so a corrupt count must not read past
+     * the block buffer.
+     */
+    UW cr_room = hdr_row_capacity(bsize, 0);
+    if (of->hdr.nrec > cr_room) {
+        of->hdr.nrec = cr_room;
     }
     of->nrec      = of->hdr.nrec;
     of->data_blk  = of->hdr.data_blk;
@@ -359,7 +409,8 @@ static int write_header_block(Volume *v, BLK blk, const OpenFile *of)
         }
         wr_u16_le(buf + 4, of->hdr.flags);
         wr_u32_le(buf + 0x48, of->hdr.total_size);
-        wr_u32_le(buf + 0x4C, of->nrec);
+        /* +0x4C is the number of blocks the body claims for record payloads. */
+        wr_u32_le(buf + 0x4C, (of->hdr.total_size + bsize - 1) / bsize);
         wr_u32_le(buf + 0x64, of->hdr.mtime);
 
         UH tc[20];
@@ -368,12 +419,54 @@ static int write_header_block(Volume *v, BLK blk, const OpenFile *of)
             wr_u16_le(buf + 0x6C + k * 2, tc[k]);
         }
 
-        unsigned int cnt = (of->nrec < REC_IDX_LEVEL0_MAX) ? of->nrec : REC_IDX_LEVEL0_MAX;
+        unsigned int crm = hdr_row_capacity(bsize, 1);
+        unsigned int cnt = (of->nrec < crm) ? of->nrec : crm;
+        UW nlink = 0;
+        for (unsigned int i = 0; i < cnt; i++)
+            if (of->ridx[i].kind == 0x8000) nlink++;
+        /* +0x44 counts link rows, +0x50 counts every row but continuations. */
+        wr_u32_le(buf + 0x44, nlink);
+        wr_u32_le(buf + 0x50, cnt);
+
+        /*
+         * Clear the row area first: read_header_block() walks the whole area
+         * and tolerates the zero holes a golden volume's deleted records leave
+         * behind, so a row left over from a longer version of this file would
+         * otherwise be read back as a record.
+         */
+        memset(buf + BVR_RIDX_AREA_START, 0, bsize - BVR_RIDX_AREA_START);
         for (unsigned int i = 0; i < cnt; i++) {
-            unsigned char *rp = buf + bsize - (i + 1) * 16;
-            wr_u16_le(rp + 0, of->ridx[i].kind);
+            /*
+             * Ascending address == ascending record number, with the newest row
+             * in the last slot of the block; that is how Cho-Kanji packs the
+             * area, and the reverse of it silently reorders a file's records
+             * across a write/read round trip.
+             */
+            unsigned char *rp = buf + bsize - (cnt - i) * BTRON_REC_IDX_SIZE;
+            UW pos;
+            if (of->ridx[i].kind == 0x8000) {
+                pos = of->ridx[i].offset;            /* the target FID, low half */
+            } else {
+                /* read_header_block() decodes +4 as UH block, UH byte offset. */
+                pos = of->ridx[i].offset / bsize
+                    + ((of->ridx[i].offset % bsize) << 16);
+            }
+            /*
+             * +0 is two bytes, not a word: byte0 is 0 and byte1 is the packed
+             * record type with bit7 marking the row in use -- 0x80 for a link
+             * (RT_LINK), 0x81 for a TAD data row (RT_TADDATA).  Rows the engine
+             * creates carry kind 0 and keep their RT in `type`, so that byte has
+             * to be packed here; writing the raw 16-bit kind leaves both bytes
+             * zero, which read_header_block() reads back as an unused slot, and a
+             * created file then comes home with no records at all.
+             */
+            rp[0] = (unsigned char)(of->ridx[i].kind & 0xFF);
+            rp[1] = (unsigned char)(of->ridx[i].kind >> 8);
+            if (rp[1] == 0) {
+                rp[1] = (unsigned char)((of->ridx[i].type & 0x1F) | 0x80);
+            }
             wr_u16_le(rp + 2, of->ridx[i].type);
-            wr_u32_le(rp + 4, of->ridx[i].offset);
+            wr_u32_le(rp + 4, pos);
             wr_u32_le(rp + 8, of->ridx[i].size);
             rp[12] = (unsigned char)(of->ridx[i].flags & 0xFF);
             BLK rblk = of->data_blk;
@@ -383,6 +476,7 @@ static int write_header_block(Volume *v, BLK blk, const OpenFile *of)
         }
         int ret = vol_write_blk(v, blk, buf);
         free(buf);
+        if (ret == 0) fil_hier_invalidate(v);
         return ret;
     }
 
@@ -407,7 +501,8 @@ static int write_header_block(Volume *v, BLK blk, const OpenFile *of)
     wr_u32_be(p + 104, of->hdr.pdid);
 
     /* Encode RecordIndex entries */
-    unsigned int cnt = (of->nrec < REC_IDX_LEVEL0_MAX) ? of->nrec : REC_IDX_LEVEL0_MAX;
+    UW crm = hdr_row_capacity(bsize, 0);
+    unsigned int cnt = (of->nrec < crm) ? of->nrec : crm;
     for (unsigned int i = 0; i < cnt; i++) {
         unsigned char *rp = buf + HDR_RIDX_OFFSET + i * BTRON_REC_IDX_SIZE;
         wr_u16_be(rp +  0, of->ridx[i].kind);
@@ -416,8 +511,13 @@ static int write_header_block(Volume *v, BLK blk, const OpenFile *of)
         wr_u32_be(rp +  8, of->ridx[i].offset);
         wr_u32_be(rp + 12, of->ridx[i].flags);
     }
+    /*
+     * Every row the volume holds has just been rewritten, so any derived
+     * parentage for this volume is now stale (FS.md 7.4 consequence 8).
+     */
     int ret = vol_write_blk(v, blk, buf);
     free(buf);
+    if (ret == 0) fil_hier_invalidate(v);
     return ret;
 }
 
@@ -595,23 +695,26 @@ static FID container_lookup(Volume *v, FID dir_fid, const char *seg)
     return found;
 }
 
-/* Resolve `name` (the volume-relative remainder of a path) to a FID. */
+/*
+ * Resolve `name` (the volume-relative remainder of a path) to a FID.
+ *
+ * Each segment may carry a "#<fid>" anchor, which addresses that Real Body
+ * directly and outranks the segment's text.  Listings hand the anchor out
+ * (DIR_ENTRY.robj_id, which src/clu/vfs.c copies into VfsEntry.fid), so a path
+ * assembled from a listing re-opens exactly the body that listing named.
+ *
+ * Names alone cannot promise that: a volume may hold several bodies with the
+ * same name, and the flat name index returns the first of them.  On Cho-Kanji's
+ * top level four drawers are called "src" and two "pcat", and "locale" names a
+ * non-container too, so a name-only path onto any of them silently opened the
+ * wrong body -- which is what sc's panes showed as the same folder repeating.
+ * An anchor whose FID is no longer alive falls back to the segment's name, so a
+ * remembered path still works after the body it pointed at was deleted.
+ */
 static FID resolve_obj_fid(Volume *v, const char *name)
 {
     if (!v) return FID_INVALID;
     if (name[0] == '\0' || strcmp(name, ".") == 0) return FID_ROOT;
-
-    /* "#<fid>" addresses a Real Body directly, as CLU's fs/ls do. */
-    const char *hash = strchr(name, '#');
-    if (hash) {
-        const char *np = hash + 1;
-        while (*np == ' ') np++;
-        if (*np >= '0' && *np <= '9') {
-            FID fid = 0;
-            while (*np >= '0' && *np <= '9') fid = fid * 10 + (FID)(*np++ - '0');
-            return (vol_fid_refcount(v, fid) || fid == FID_ROOT) ? fid : FID_INVALID;
-        }
-    }
 
     FID cur = FID_ROOT;
     const char *p = name;
@@ -623,9 +726,22 @@ static FID resolve_obj_fid(Volume *v, const char *name)
         while (*p && *p != '/' && *p != '#' && n < sizeof(seg) - 1) seg[n++] = *p++;
         seg[n] = '\0';
 
-        FID next = container_lookup(v, cur, seg);
-        if (next == FID_INVALID) next = find_fid_by_name(v, seg);
-        if (next == FID_INVALID) return FID_INVALID;
+        FID next = FID_INVALID;
+        if (*p == '#') {
+            const char *np = p + 1;
+            if (*np >= '0' && *np <= '9') {
+                FID fid = 0;
+                while (*np >= '0' && *np <= '9') fid = fid * 10 + (FID)(*np++ - '0');
+                if (vol_fid_refcount(v, fid) || fid == FID_ROOT) next = fid;
+                p = np;
+            }
+            while (*p && *p != '/') p++;   /* rest of this segment: already used or dead */
+        }
+        if (next == FID_INVALID) {
+            next = container_lookup(v, cur, seg);
+            if (next == FID_INVALID) next = find_fid_by_name(v, seg);
+            if (next == FID_INVALID) return FID_INVALID;
+        }
         cur = next;
     }
     if (cur != FID_ROOT) return cur;
@@ -742,6 +858,7 @@ ID cre_fil(const char *path, UW mode)
     vol_fid_set(v, fid, hblk, 1);
     vol_hash_set(v, fid, vol_name_hash(name));
     vol_mark_dirty(v);
+    fil_hier_invalidate(v);   /* the table gained a body after the header write */
 
     return (ID)slot;
 }
@@ -798,6 +915,7 @@ ER del_fil(const char *path)
 
     cls_fil(fd);
     vol_mark_dirty(v);
+    fil_hier_invalidate(v);   /* the FID and its blocks are gone from the tables */
     return (ER)0;
 }
 
@@ -1053,16 +1171,231 @@ ER trn_rec(ID rec_id, W sz)
     return (ER)0;
 }
 
+/* ── Cached hierarchy ─────────────────────────────────────────────── */
+/*
+ * FS.md 3.2 "Root namespace", 7.4 consequence 8.
+ *
+ * A B-right/V Real Body header encodes no parent, so the only provable parentage
+ * in the volume is other bodies' RT_LINK rows -- and a row that names FID T
+ * reaches every FID sharing T's header block, because those are the same body
+ * (hard links). Judging edges by FID alone put 42 drawers at the root of the
+ * golden volume including etc, LC_TIME, Mail Manager, Makefile and makerules,
+ * each of which a real drawer already names; judging by header block leaves 38
+ * FIDs on 37 bodies, which is that volume's genuine top level.
+ *
+ * Deriving that per listing means re-reading every one of the 4457 bodies again,
+ * and doing it separately in two consumers is how clu's tree and sc's pane came
+ * to disagree. So the engine derives it once per volume and keeps it until a
+ * mutation could have changed it.
+ *
+ * Built for B-right/V volumes only; a cleanroom volume has a real root drawer at
+ * FID 0 and needs no derivation.
+ */
+typedef struct {
+    Volume         *vol;
+    UW              seq;         /* vol_mount_seq() this snapshot describes */
+    UW              nfmax;
+    UW              nblk;
+    BLK            *hdr;         /* [nfmax] header block, 0 = not a live body */
+    FID            *parent;      /* [nfmax] drawer naming it, FID_INVALID = none */
+    unsigned char  *is_dir;      /* [nfmax] carries at least one link row */
+    unsigned char  *blk_claimed; /* [nblk] block named by a row, then root-listed */
+    FID            *root;        /* [nroot] drawers no link row reaches */
+    UW              nroot;
+} FilHier;
+
+/* Volumes browsed at once are counted, and a listing touches one or two. */
+#define FIL_HIER_SLOTS 4
+static FilHier s_hier[FIL_HIER_SLOTS];
+
+static void hier_release(FilHier *h)
+{
+    free(h->hdr);
+    free(h->parent);
+    free(h->is_dir);
+    free(h->blk_claimed);
+    free(h->root);
+    memset(h, 0, sizeof(*h));
+}
+
+void fil_hier_invalidate(Volume *v)
+{
+    for (int i = 0; i < FIL_HIER_SLOTS; i++) {
+        if (!s_hier[i].vol) continue;
+        if (!v || s_hier[i].vol == v) hier_release(&s_hier[i]);
+    }
+}
+
+/*
+ * One pass over the live FIDs: read each body's header block, take its link rows,
+ * and remember the target.  Then propagate every edge across the FIDs that share
+ * the target's header block, and the drawers left unclaimed are the root list.
+ */
+static FilHier *hier_build(Volume *v)
+{
+    UW nfmax = vol_nfmax(v);
+    UW bsize = vol_block_size(v);
+    UW nblk  = vol_total_blocks(v);
+    if (!v || nfmax == 0 || nblk == 0) return (FilHier *)0;
+
+    int slot = -1;
+    for (int i = 0; i < FIL_HIER_SLOTS; i++) {
+        if (!s_hier[i].vol) { slot = i; break; }
+    }
+    if (slot < 0) {
+        /* All slots busy: reuse the one for a volume that is no longer mounted. */
+        for (int i = 0; i < FIL_HIER_SLOTS; i++) {
+            if (s_hier[i].seq != vol_mount_seq(s_hier[i].vol)) { slot = i; break; }
+        }
+    }
+    if (slot < 0) slot = 0;
+    FilHier *h = &s_hier[slot];
+    hier_release(h);
+
+    h->vol  = v;
+    h->seq  = vol_mount_seq(v);
+    h->nfmax = nfmax;
+    h->nblk  = nblk;
+    h->hdr         = (BLK *)calloc(nfmax, sizeof(BLK));
+    h->parent      = (FID *)calloc(nfmax, sizeof(FID));
+    h->is_dir      = (unsigned char *)calloc(nfmax, 1);
+    h->blk_claimed = (unsigned char *)calloc(nblk, 1);
+    h->root        = (FID *)calloc(nfmax, sizeof(FID));
+    if (!h->hdr || !h->parent || !h->is_dir || !h->blk_claimed || !h->root) {
+        hier_release(h);
+        return (FilHier *)0;
+    }
+    for (UW f = 0; f < nfmax; f++) h->parent[f] = FID_INVALID;
+
+    unsigned char *buf = (unsigned char *)malloc(bsize);
+    if (!buf) { hier_release(h); return (FilHier *)0; }
+
+    for (UW f = 0; f < nfmax; f++) {
+        FID fid = (FID)f;
+        if (vol_fid_refcount(v, fid) == 0 && fid != FID_ROOT) continue;
+        BLK b = vol_fid_get_blk(v, fid);
+        if (b == 0 || b >= nblk) continue;
+        if (vol_read_blk(v, b, buf) != 0) continue;
+
+        BLK hdr_blk;
+        if (memcmp(buf, "Tron", 4) == 0 || memcmp(buf, "norT", 4) == 0) {
+            hdr_blk = b;
+        } else if (b > 0 && vol_read_blk(v, b - 1, buf) == 0 &&
+                   (memcmp(buf, "Tron", 4) == 0 || memcmp(buf, "norT", 4) == 0)) {
+            hdr_blk = b - 1;   /* FS.md 7.4 consequence 4 */
+        } else {
+            continue;           /* not a Real Body header at all */
+        }
+        h->hdr[fid] = hdr_blk;
+
+        /*
+         * Link rows only: byte0 == 0 keeps continuation rows out (FS.md 7.4), and
+         * byte1 == 0x80 is RT_LINK with the in-use bit. The target FID is the low
+         * half of +4 -- reading the whole word names nothing (consequence 1).
+         */
+        for (UW off = BVR_RIDX_AREA_START; off + BTRON_REC_IDX_SIZE <= bsize; off += BTRON_REC_IDX_SIZE) {
+            const unsigned char *rp = buf + off;
+            if (rp[0] != 0 || rp[1] != 0x80) continue;
+            FID tf = (FID)(rd_u32_le(rp + 4) & 0xFFFFu);
+            if (tf == fid || tf >= nfmax) continue;
+            if (vol_fid_refcount(v, tf) == 0 && tf != FID_ROOT) continue;
+            h->is_dir[fid] = 1;
+            if (h->parent[tf] == FID_INVALID) h->parent[tf] = fid;
+        }
+    }
+    free(buf);
+
+    /*
+     * An edge reaches the target's body, not just the target's FID: a row that
+     * names FID T also reaches every FID sharing T's header block.  Claiming the
+     * block is what turns 42 apparent root drawers into 38, because etc, LC_TIME,
+     * Mail Manager, Makefile and makerules each have an alias FID that a real
+     * drawer does name.
+     */
+    for (UW f = 0; f < nfmax; f++) {
+        if (h->parent[f] == FID_INVALID || h->hdr[f] == 0 || h->hdr[f] >= nblk) continue;
+        h->blk_claimed[h->hdr[f]] = 1;
+    }
+
+    /* Root children: drawers on a block no row claimed, one entry per block. */
+    for (UW f = 1; f < nfmax; f++) {
+        if (!h->is_dir[f] || h->hdr[f] == 0 || h->hdr[f] >= nblk) continue;
+        if (h->blk_claimed[h->hdr[f]]) continue;
+        h->blk_claimed[h->hdr[f]] = 1;      /* dedups alias FIDs of the same body */
+        h->root[h->nroot++] = (FID)f;
+    }
+    return h;
+}
+
+/* The current snapshot for v, built if absent or stale. */
+static const FilHier *hier_get(Volume *v)
+{
+    if (!v || vol_fs_type(v) != FS_TYPE_BRIGHTV) return (FilHier *)0;
+    UW seq = vol_mount_seq(v);
+    for (int i = 0; i < FIL_HIER_SLOTS; i++) {
+        if (s_hier[i].vol == v && s_hier[i].seq == seq) return &s_hier[i];
+    }
+    return hier_build(v);
+}
+
+int fil_hier_nroot(Volume *v)
+{
+    const FilHier *h = hier_get(v);
+    return h ? (int)h->nroot : -1;
+}
+
+FID fil_hier_root_fid(Volume *v, int i)
+{
+    const FilHier *h = hier_get(v);
+    if (!h || i < 0 || (UW)i >= h->nroot) return FID_INVALID;
+    return h->root[i];
+}
+
+BLK fil_hier_hdr_blk(Volume *v, FID fid)
+{
+    const FilHier *h = hier_get(v);
+    if (!h || fid >= h->nfmax) return 0;
+    return h->hdr[fid];
+}
+
+int fil_hier_is_dir(Volume *v, FID fid)
+{
+    const FilHier *h = hier_get(v);
+    if (!h || fid >= h->nfmax) return 0;
+    return h->is_dir[fid];
+}
+
+FID fil_hier_parent(Volume *v, FID fid)
+{
+    const FilHier *h = hier_get(v);
+    if (!h || fid >= h->nfmax) return FID_INVALID;
+    return h->parent[fid];
+}
+
+int fil_hier_is_root(Volume *v, FID fid)
+{
+    const FilHier *h = hier_get(v);
+    if (!h) return 0;
+    for (UW i = 0; i < h->nroot; i++) {
+        if (h->root[i] == fid) return 1;
+    }
+    return 0;
+}
+
 /* ── opn_dir / rd_dir / cls_dir ──────────────────────────────────── */
 /*
  * BTRON's directory model: a directory is a container Real Body whose records
- * are RT_LINK Virtual Bodies. So opn_dir() resolves the path to that container
- * and rd_dir() replays its link records. A volume root that carries no links
- * (B-right/V boots from a Real Body, not a drawer) falls back to a volume-wide
- * FID-table scan, which is the closest thing that namespace has to a root list.
+ * are RT_LINK Virtual Bodies, so opn_dir() resolves the path to that container
+ * and rd_dir() replays its link records.
+ *
+ * A B-right/V volume has no root drawer (FS.md 3.2), so its root has no records
+ * to replay and rd_dir() answers from the hierarchy snapshot instead -- the same
+ * list clu's fs views print, and the only one that proves parentage. The
+ * volume-wide FID-table scan below survives only for a cleanroom volume whose
+ * FID 0 holds no links.
  */
 typedef struct {
-    UW next_fid;      /* FID cursor for the volume-wide scan mode      */
+    UW next_fid;      /* root-list cursor, or FID cursor in scan mode   */
     UW next_rec;      /* record cursor for the scoped (link) mode      */
     UW nrec;          /* record count of the scoped container          */
     BOOL scoped;      /* TRUE = walk dir_fid's link records            */
@@ -1170,12 +1503,44 @@ ER rd_dir(ID dir_id, DIR_ENTRY *entry)
         return (ER)1; /* E_EOF / end of directory */
     }
 
-    /* ── Volume-wide scan: the root of a volume without a link drawer ── */
+    /*
+     * ── Root of a B-right/V volume: the cached drawer list ────────────
+     * This namespace has no root container to replay (FS.md 3.2), so the answer
+     * is the snapshot's root list: the drawers no link row reaches, deduped by
+     * header block.  The volume-wide FID dump below is what `sc` used to show
+     * here -- 307 entries that proved no parentage and printed every alias FID
+     * of a body, which is how etc, Mail Manager, Makefile and LC_TIME appeared
+     * at the root, twice each.
+     */
+    if (vol_fs_type(v) == FS_TYPE_BRIGHTV) {
+        int nroot = fil_hier_nroot(v);
+        if (nroot < 0) return (ER)-1;
+        while ((int)g_dirs[slot].next_fid < nroot) {
+            FID fid = fil_hier_root_fid(v, (int)g_dirs[slot].next_fid++);
+            ID cfd = opn_fil_fid(v, fid, F_READ);
+            if (cfd < 0) continue;
+            OpenFile *co = &g_open_files[(int)cfd];
+            memset(entry, 0, sizeof(*entry));
+            entry->robj_id = (ID)fid;
+            entry->attr    = co->hdr.flags;
+            entry->size    = co->hdr.total_size;
+            size_t nlen = strlen((const char *)co->hdr.name);
+            if (nlen >= sizeof(entry->name)) nlen = sizeof(entry->name) - 1;
+            memcpy(entry->name, co->hdr.name, nlen);
+            entry->name[nlen] = '\0';
+            cls_fil(cfd);
+            if (!entry->name[0]) continue;
+            entry->attr |= OBJ_DIRECTORY;    /* a root child is a drawer by rule */
+            return (ER)0;
+        }
+        return (ER)1; /* E_EOF / end of directory */
+    }
+
+    /* ── Volume-wide scan: a cleanroom root with no link records ───── */
     UW nfmax = vol_nfmax(v);
     UW bsize = vol_block_size(v);
     unsigned char *buf = (unsigned char *)malloc(bsize);
     if (!buf) return (ER)-1;
-    int is_bv = (vol_fs_type(v) == FS_TYPE_BRIGHTV);
 
     while (g_dirs[slot].next_fid < nfmax) {
         FID fid = g_dirs[slot].next_fid++;
@@ -1186,36 +1551,16 @@ ER rd_dir(ID dir_id, DIR_ENTRY *entry)
         if (vol_read_blk(v, hblk, buf) != 0) continue;
 
         entry->robj_id = (ID)fid;
-        if (is_bv) {
-            if (memcmp(buf, "Tron", 4) != 0 && memcmp(buf, "norT", 4) != 0)
-                continue;
-            entry->attr = rd_u16_le(buf + 4);
-            entry->size = rd_u32_le(buf + 0x48);
-            UH tc[20];
-            for (int k = 0; k < 16; k++) {
-                tc[k] = rd_u16_le(buf + 0x6C + k * 2);
-            }
-            tc[16] = 0;
-            char nm[64];
-            btr_tcode_to_utf8(tc, 16, nm, sizeof(nm));
-            if (!nm[0]) continue;
-            int ni = 0;
-            while (nm[ni] && ni < 63) { entry->name[ni] = nm[ni]; ni++; }
-            entry->name[ni] = '\0';
-        } else {
-            entry->attr = ((UW)buf[0] << 8) | buf[1]; /* flags BE */
-            entry->size = ((UW)buf[28] << 24) | ((UW)buf[29] << 16) |
-                          ((UW)buf[30] << 8)  | buf[31];
-            char nm[41];
-            memcpy(nm, buf + 32, 40);
-            nm[40] = '\0';
-            int ni = 0;
-            while (nm[ni] && ni < 63) { entry->name[ni] = nm[ni]; ni++; }
-            entry->name[ni] = '\0';
-        }
-        /* The root Real Body is the drawer itself, not an entry of it.
-         * B-right/V FID 0 is a genuine object (SBOOT), so only skip when the
-         * decoded name is the volume's own label. */
+        entry->attr = ((UW)buf[0] << 8) | buf[1]; /* flags BE */
+        entry->size = ((UW)buf[28] << 24) | ((UW)buf[29] << 16) |
+                      ((UW)buf[30] << 8)  | buf[31];
+        char nm[41];
+        memcpy(nm, buf + 32, 40);
+        nm[40] = '\0';
+        int ni = 0;
+        while (nm[ni] && ni < 63) { entry->name[ni] = nm[ni]; ni++; }
+        entry->name[ni] = '\0';
+        /* The root Real Body is the drawer itself, not an entry of it. */
         if (fid == FID_ROOT && vol_name(v) && strcmp(entry->name, vol_name(v)) == 0)
             continue;
         if (fid_is_container(v, fid)) entry->attr |= OBJ_DIRECTORY;

@@ -85,8 +85,8 @@ void normalize(Panel *p)
     }
 
     char combined[VFS_MAX_PATH];
-    snprintf(combined, sizeof(combined), "%s/%s", p->path, f->name);
-    vfs_normalize_path(combined, p->path, sizeof(p->path));
+    vfs_child_path(combined, sizeof(combined), p->path, f->name, f->fid);
+    snprintf(p->path, sizeof(p->path), "%s", combined);
 
     p->cursor = 0;
     p->scroll_offset = 0;
@@ -101,21 +101,38 @@ void left_navigation(Panel *p)
     char dir_name[VFS_MAX_NAME];
     dir_name[0] = '\0';
 
-    char *last_slash = strrchr(p->path, '/');
-    if (last_slash != NULL) {
-        if (last_slash == p->path) {
-            /* Parent is root "/" */
-            size_t nlen = strlen(last_slash + 1);
-            if (nlen >= sizeof(dir_name)) nlen = sizeof(dir_name) - 1;
-            memcpy(dir_name, last_slash + 1, nlen);
-            dir_name[nlen] = '\0';
-            p->path[1] = '\0';
-        } else {
-            size_t nlen = strlen(last_slash + 1);
-            if (nlen >= sizeof(dir_name)) nlen = sizeof(dir_name) - 1;
-            memcpy(dir_name, last_slash + 1, nlen);
-            dir_name[nlen] = '\0';
-            *last_slash = '\0';
+    if (vfs_is_volume_root(p->path)) {
+        /*
+         * A volume's own root is the top of this pane.  Cutting it at the slash
+         * inside its label ("/B-right/V" -> "/B-right") resolves to the very
+         * same volume, so the pane reloaded the folder it was already showing --
+         * an up-arrow that looked like a loop.  Above a volume root sits the
+         * volume list "/".
+         */
+        const char *label = p->path + 1;
+        size_t llen = strlen(label);
+        if (llen >= sizeof(dir_name)) llen = sizeof(dir_name) - 1;
+        memcpy(dir_name, label, llen);
+        dir_name[llen] = '\0';
+        p->path[0] = '/';
+        p->path[1] = '\0';
+    } else {
+        char *last_slash = strrchr(p->path, '/');
+        if (last_slash != NULL) {
+            const char *child = last_slash + 1;
+            size_t clen = strlen(child);
+            if (clen >= sizeof(dir_name)) clen = sizeof(dir_name) - 1;
+            memcpy(dir_name, child, clen);
+            dir_name[clen] = '\0';
+            /* dir_history stores the name as shown, without the Real Body anchor */
+            char *anchor = strchr(dir_name, '#');
+            if (anchor) *anchor = '\0';
+
+            if (last_slash == p->path) {
+                p->path[1] = '\0';            /* parent is root "/" */
+            } else {
+                *last_slash = '\0';
+            }
         }
     }
 

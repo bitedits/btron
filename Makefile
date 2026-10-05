@@ -536,7 +536,7 @@ posix: $(POSIX_TARGET) btron_sys.vol btron_anders.vol
 	  else echo "Note: tad_bin skipped (no python3 or elixir found) - desktop still runs."; fi
 
 %.posix.o: %.c
-	$(CC) $(CFLAGS) $(SDL_CFLAGS) -DBTRON_TARGET=0 -c $< -o $@
+	$(CC) $(CFLAGS) $(SDL_CFLAGS) -DBTRON_TARGET=0 -MMD -MP -c $< -o $@
 
 $(POSIX_TARGET): $(POSIX_OBJS)
 	$(CC) $(POSIX_OBJS) -o $@ $(LDFLAGS) $(SDL_LIBS)
@@ -553,11 +553,22 @@ run-sakamura: $(SAKAMURA_TARGET) btron_sys.vol btron_anders.vol
 FS_SRCS  = src/fs/blk_mem.c src/fs/blk_file.c src/fs/blk_qcow2.c src/fs/blk_part.c src/fs/vol.c src/fs/file.c
 FS_OBJS  = $(FS_SRCS:.c=.host.o)
 
+# -MMD is not optional here.  Host objects are linked straight from .o files, so
+# without a header dependency an edit to e.g. src/clu/vfs.h or
+# src/clu/sc/sokhatsky.h rebuilds only the .c files a target happens to name, and
+# the link mixes objects that disagree on struct layout -- sc then reads a File's
+# is_dir from where size used to be and draws an empty pane that looks like an
+# empty directory.
 %.host.o: %.c
-	$(CC) $(CFLAGS) -DBTRON_TARGET=0 -c $< -o $@
+	$(CC) $(CFLAGS) -DBTRON_TARGET=0 -MMD -MP -c $< -o $@
 
 src/apps/clu.host.o: src/apps/clu.c
-	$(CC) $(CFLAGS) -DBTRON_TARGET=0 -c $< -o $@
+	$(CC) $(CFLAGS) -DBTRON_TARGET=0 -MMD -MP -c $< -o $@
+
+# Header dependencies recorded by the -MMD flags above: editing src/clu/vfs.h or
+# src/clu/sc/sokhatsky.h must rebuild every object that included it, or a link
+# mixes objects that disagree on struct layout.
+-include $(shell find src -name '*.host.d' -o -name '*.posix.d' 2>/dev/null)
 
 # ── mkbtronfs — host image builder ────────────────────────────────────
 mkbtronfs: src/tools/mkbtronfs.c $(FS_OBJS)
@@ -584,12 +595,25 @@ test-fs: $(TEST_FS_BIN) btron_sys.vol
 	@echo "[FS] All FS tests passed."
 
 # ── Cho-Kanji (B-right/V 4.02) QCOW2 tests ───────────────────────────
+# The read-write tests create, append to and delete records, so they must never
+# open the golden disk. Each run clones a fresh scratch image and the suite points
+# every test at it through BTRON_CHOKANJI_IMAGE. The clone is made in the recipe,
+# not as a file target, because a file target keeps an old scratch disk once it
+# exists -- and a disk a previous run already wrote to is exactly what hides a
+# read/write regression.
+CHOKANJI_GOLDEN   ?= $(if $(wildcard hda.golden),hda.golden,hda.qcow2)
+CHOKANJI_RW_IMAGE  = ./.build/hda.rw.qcow2
+
 TEST_CHOKANJI_BIN = ./.build/test_chokanji
 $(TEST_CHOKANJI_BIN): verify/tests/test_chokanji.c $(FS_OBJS) src/apps/clu.host.o
 	$(CC) $(CFLAGS) -Isrc $^ -o $@
 
 test-chokanji: $(TEST_CHOKANJI_BIN)
-	./$(TEST_CHOKANJI_BIN)
+	@mkdir -p $(dir $(CHOKANJI_RW_IMAGE))
+	@rm -f $(CHOKANJI_RW_IMAGE)
+	@cp -c $(CHOKANJI_GOLDEN) $(CHOKANJI_RW_IMAGE) 2>/dev/null || cp $(CHOKANJI_GOLDEN) $(CHOKANJI_RW_IMAGE)
+	@echo "[CHOKANJI] scratch image $(CHOKANJI_RW_IMAGE) cloned from $(CHOKANJI_GOLDEN)"
+	BTRON_CHOKANJI_IMAGE=$(CHOKANJI_RW_IMAGE) ./$(TEST_CHOKANJI_BIN)
 	@echo "[CHOKANJI] All Cho-Kanji tests passed."
 
 # ── Cho-Kanji Tier 1 & PMC NASA-Standard Apps verification ────────────
@@ -610,10 +634,10 @@ SC_OBJS = $(SC_SRCS:.c=.host.o)
 
 # sc.c is a library everywhere; only the standalone bin/sc binary links its main().
 src/clu/sc/sc.standalone.o: src/clu/sc/sc.c
-	$(CC) $(CFLAGS) -DBTRON_TARGET=0 -DSC_STANDALONE -c $< -o $@
+	$(CC) $(CFLAGS) -DBTRON_TARGET=0 -DSC_STANDALONE -MMD -MP -c $< -o $@
 
 src/clu/tv/tv.host.o: src/clu/tv/tv.c
-	$(CC) $(CFLAGS) -DBTRON_TARGET=0 -c $< -o $@
+	$(CC) $(CFLAGS) -DBTRON_TARGET=0 -MMD -MP -c $< -o $@
 
 bin/tv: src/clu/tv/tv.c $(CLU_CORE_OBJS) $(FS_OBJS)
 	@mkdir -p bin

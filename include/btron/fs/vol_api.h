@@ -116,6 +116,13 @@ UW vol_block_size(const Volume *v);
 UH vol_fs_type(const Volume *v);
 
 /*
+ * vol_mount_seq — return this mount's sequence number, unique for the process
+ * even when a freed Volume's address is reused. Caches of derived state keyed by
+ * the pointer use it to recognise a stale snapshot.
+ */
+UW vol_mount_seq(const Volume *v);
+
+/*
  * vol_is_le — return 1 if volume layout is little-endian, 0 if big-endian.
  */
 int vol_is_le(const Volume *v);

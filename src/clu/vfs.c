@@ -89,6 +89,58 @@ void vfs_normalize_path(const char *in_path, char *out_path, size_t out_max)
     }
 }
 
+void vfs_child_path(char *out, size_t out_max, const char *dir_path,
+                    const char *name, uint32_t fid)
+{
+    if (out == NULL || out_max < 2) return;
+    if (name == NULL || name[0] == '\0') {
+        vfs_normalize_path(dir_path, out, out_max);
+        return;
+    }
+
+    char raw[VFS_MAX_PATH];
+    if (dir_path == NULL || dir_path[0] == '\0' || strcmp(dir_path, "/") == 0) {
+        snprintf(raw, sizeof(raw), "/%s", name);
+    } else {
+        snprintf(raw, sizeof(raw), "%s/%s", dir_path, name);
+    }
+    if (fid != VFS_NO_FID) {
+        size_t n = strlen(raw);
+        if (n + 1 < sizeof(raw)) {
+            snprintf(raw + n, sizeof(raw) - n, "#%u", (unsigned)fid);
+        }
+    }
+    vfs_normalize_path(raw, out, out_max);
+}
+
+void vfs_display_path(const char *path, char *out, size_t out_max)
+{
+    if (out == NULL || out_max == 0) return;
+    if (path == NULL || path[0] == '\0') {
+        out[0] = '\0';
+        return;
+    }
+    size_t o = 0;
+    const char *p = path;
+    while (*p != '\0' && o + 1 < out_max) {
+        if (*p == '#') {                 /* Real Body anchor: not part of the name */
+            while (*p != '\0' && *p != '/') p++;
+            continue;
+        }
+        out[o++] = *p++;
+    }
+    out[o] = '\0';
+}
+
+int vfs_is_volume_root(const char *path)
+{
+    if (path == NULL || path[0] == '\0' || strcmp(path, "/") == 0) return 0;
+    const char *suffix = NULL;
+    Volume *v = vol_find_by_prefix(path, &suffix);
+    if (v == NULL) return 0;
+    return (suffix == NULL || suffix[0] == '\0' || strcmp(suffix, "/") == 0) ? 1 : 0;
+}
+
 int vfs_list_dir(const char *path, VfsEntry *entries, int max_entries)
 {
     (void)vfs_init();
@@ -114,6 +166,7 @@ int vfs_list_dir(const char *path, VfsEntry *entries, int max_entries)
             memcpy(e->name, vname, nlen);
             e->name[nlen] = '\0';
             e->size = (uint32_t)(vol_total_blocks(v) * vol_block_size(v));
+            e->fid = VFS_NO_FID;      /* a volume is not a Real Body */
             e->mtime = 0;
             e->mode = 0777;
             e->is_dir = 1;
@@ -139,6 +192,7 @@ int vfs_list_dir(const char *path, VfsEntry *entries, int max_entries)
         memcpy(e->name, de.name, nlen);
         e->name[nlen] = '\0';
         e->size = de.size;
+        e->fid = (uint32_t)de.robj_id;   /* which body this very row named */
         e->mtime = 0;
         e->is_dir = (de.attr & OBJ_DIRECTORY) ? 1 : 0;
         e->is_link = 0;

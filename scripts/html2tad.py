@@ -497,10 +497,10 @@ def compile_foundational_books(target_dir: str = 'tad_bin'):
     tkernel_elements = [
         ('h1', 'T-Kernel 2.0 リアルタイムOS仕様書及び開発ガイド'),
         ('image', 'b-spec/os_spec/kernel/gif/processtask.gif', '図 2: μITRON リアルタイムタスク状態遷移図 (Task State Machine)'),
-        ('link', 't-kernel/tkernel_spec.tad', '第1章 T-Kernel 2.0 コアアーキテクチャ (Core Architecture)'),
-        ('link', 't-kernel/tkernel_startup.tad', '第2章 ブート及び初期化シーケンス (Startup Sequence)'),
-        ('link', 't-kernel/tkernel_qemu.tad', '第3章 QEMU仮想環境とボード展開 (QEMU & Board Deployment)'),
-        ('link', 't-kernel/index.tad', '第4章 T-Kernel 2.0 開発者ドキュメント索引 (Developer Index)'),
+        ('link', 'b-core/tkernel_spec.tad', '第1章 T-Kernel 2.0 コアアーキテクチャ (Core Architecture)'),
+        ('link', 'b-core/tkernel_startup.tad', '第2章 ブート及び初期化シーケンス (Startup Sequence)'),
+        ('link', 'b-core/tkernel_qemu.tad', '第3章 QEMU仮想環境とボード展開 (QEMU & Board Deployment)'),
+        ('link', 'b-core/index.tad', '第4章 T-Kernel 2.0 開発者ドキュメント索引 (Developer Index)'),
         ('h2', 'タスク状態遷移モデル (Task State Model)'),
         ('ol', [
             '実行状態 (RUN: CPU実行権を保持)',

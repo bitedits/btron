@@ -94,6 +94,37 @@ There are typically **two** bitmaps:
 - Max refcount on standard format: **255**.
 - **FID 0** = root file (always exists after format). Root name equals the file-system / volume name; initial refcount = 1.
 
+**Measured on B-right/V** `[measured]`: the table starts at block `nbmp`
+(41 on the golden volume), one 4-byte entry per FID read as **LE24 block
+address in bytes 0–2 plus a 1-byte reference count in byte 3**, 2048 entries
+per 8 KiB block, `nfmax = sfidt × (block_size/4)` = 65 536. That parse scores
+better than every LE32/BE24/LE16 alternative tested against the volume, and
+gives 4457 live FIDs.
+
+**Root namespace** `[measured]`: **FID 0 is not the root drawer** — it decodes
+to `SBOOT`, a body with one data record and no link rows, and no field in block
+0 names a root drawer. Root listing is therefore derived from link records
+(§7.4), never assumed from FID 0.
+
+The derivation is one rule: **a drawer is a root child iff no link row in the
+volume names any FID whose header block is its own.** Propagating the edge across
+FIDs that share a header block (hard links, §7.4 consequence 4 aliases them too)
+is what makes the rule correct: judged by FID alone **42** of the 1232 drawers
+look like nobody's child, judged by header block **38** do, and those 38 FIDs sit
+on **37** distinct bodies (`__SCRSAVER.BOX` is reachable under two FIDs). Listing
+the 42 showed `etc`, `LC_TIME`, `Mail Manager`, `Makefile` and `makerules` at the
+root next to their real parent drawers; the 37 are the volume's genuine top level
+(`bin`, `lib`, `unix`, `mnt`, `locale`, `Installation`, `UBNDIC`, `brightv`,
+`__PROGRAM.BOX`, …).
+
+A link row's `+8` target-location data cannot rescue the remaining 37: it is
+`0x8000xxxx`/`0x00000000` on all 8919 rows and names no block, so the unreached
+drawers are unreached, not orphaned by a decoder gap.
+
+This one rule is the single source of truth for both consumers — the engine's
+`rd_dir()` root enumeration (what `sc` and the VFS list) and clu's `fs -t/-l/-g`
+tree — so the two cannot disagree; see §7.4 consequence 8.
+
 ### 3.3 Short-name (hash) table
 
 - One **4-byte hash per FID**, same order as FID table.
@@ -124,7 +155,8 @@ Real Body (FID)
 ├── Header block(s)
 │   ├── File Header          (192 bytes)
 │   ├── Fragment table       (or location data if link-file)
-│   └── Record index         (level 0: up to 40 × 16-byte entries in header)
+│   └── Record index         (level 0: up to 40 × 16-byte entries in header;
+│                            up to 496 slots in a B-right/V 8 KiB row area, §7.4)
 ├── Index blocks             (if index level 1 or 2)
 ├── Indirect blocks          (level 2)
 └── Data blocks              (concatenated record payloads)
@@ -134,7 +166,7 @@ Real Body (FID)
 
 | Level | Max record index entries (approx.) | Where index lives |
 |-------|-------------------------------------|-------------------|
-| 0 | 40 | Header block |
+| 0 | 40 (clean-room 1 KiB header) · **496** slots in a B-right/V 8 KiB row area, 246 in use, see §7.4 | Header block |
 | 1 | 5120 (64 × 80) | Index blocks + indirect in header |
 | 2 | 655360 (64 × 128 × 80) | Two-level indirection |
 
@@ -172,6 +204,35 @@ Other header content (logical; pack into 192 bytes):
 
 Implementation tip: keep a `FileHeader` struct of exactly 192 bytes; fill unknown trailing bytes with 0 until byte-exact Cho-Kanji dumps are matched.
 
+### 5.1 Measured: B-right/V Real Body header
+
+Source of truth: the golden `/B-right/V` volume in `hda.qcow2` (little-endian,
+8192-byte logical blocks). Each field below is labelled **[measured]** (decoded
+byte-exactly against that volume) or **[inferred]** (interpretation not yet
+proved). This layout *replaces* the §5 clean-room field list for
+`FS_TYPE_BRIGHTV` volumes; the two encodings are not both authoritative.
+
+| Offset | Field | Label |
+|--------|-------|-------|
+| +0x00 | Magic `"norT"` / `"Tron"` | measured |
+| +0x04 | UH flags | measured |
+| +0x40 | Constant `0x0FFF0000` | measured (never decoded as meaning) |
+| +0x44 | UW number of `RT_LINK` rows in the level-0 index | measured (§7.4: matches the row scan for 4456 of 4457 bodies) |
+| +0x48 | UW total payload size | measured |
+| +0x4C | UW block count claimed by the body | measured |
+| +0x50 | UW index row count, **continuation rows excluded** | measured (§7.4) |
+| +0x5C | Constant `0xFFFFFFFF` | measured |
+| +0x60 / +0x64 / +0x68 | STIME create / modify / access | measured |
+| +0x6C | 16 × UH T-code file name | measured |
+| +0x80 … +0xFF | further per-body words, never decoded | measured **not** index rows: no body on the volume has an index row below `+0x1100` |
+
+**No drawer-ID / parent-DID encoding was found.** `+0x64` / `+0x68` are the
+modify and access timestamps, not identity fields — matching a body's `did` /
+`pdid` against them reproduces at most 3–7 % of the parent edges that the real
+link records give, and the only 100 % "agreements" were the two constant words
+at `+0x40` and `+0x5C`. Directory hierarchy on B-right/V is carried **only** by
+`RT_LINK` records (§7.4, §9).
+
 ## 6. Fragment table
 
 - Tracks free fragments **inside** blocks already allocated to this file (after deletes / shrinks).
@@ -197,6 +258,16 @@ Record index maps **record number → type/size/location** inside the file’s d
 
 Continuation entries immediately follow a normal entry when one record spans multiple logical blocks. They are **not** counted in the user-visible record count.
 
+**Confirmed on B-right/V [measured]:** the `escp_raster` body (fid 41) has four
+data rows at `+0x1F90`, `+0x1FB0`, `+0x1FC0`, `+0x1FF0` and exactly one
+continuation row, at `+0x1F90`'s immediate successor `+0x1FA0` — the one row
+whose size (43 128 bytes) exceeds a single 8 KiB block. Reading the area in the
+other direction would attach that continuation to a 2166-byte single-block
+record, so the area is ordered with ascending record numbers at ascending
+addresses. Continuation rows add **no** payload bytes: the sizes on the four
+data rows already sum to the header's `+0x48` total, and that identity holds for
+4457 of 4457 bodies on the volume (§7.4).
+
 ### 7.2 Normal entry (conceptual)
 
 ```c
@@ -214,6 +285,106 @@ Official type nibble form includes `100T TTTT` style packing for record type in 
 ### 7.3 Indirect index (8-byte entries)
 
 Used when index level > 0. Points at index blocks; carries count of valid records under that branch for seeking. Unused entries have logical block address 0.
+
+**Not yet implemented for B-right/V.** Bodies whose header carries no level-0
+rows (e.g. fid 139 `index`: 1442 declared records, 536 398 payload bytes, 71
+blocks) are currently streamed as one record instead of being indexed.
+
+### 7.4 Measured: B-right/V level-0 rows
+
+On a B-right/V volume the level-0 index is an **array in the tail area of the
+header block**: 16-byte slots from `+0x100` to `block_size`, ordered with
+ascending record numbers at ascending addresses. It is **not** one contiguous
+run — a row freed by a deleted record leaves its slot zeroed, so holes sit
+inside the array, and the run does not necessarily end at the last slot. A
+newly written body packs its rows to the end of the area (newest row in the last
+slot), which is why a hole-free file reads back as a run.
+
+An 8 KiB header block therefore holds up to **496 rows** in that area — not the
+40 rows the clean-room 1024-byte layout allows. Measured maximum in use: 246
+rows (fid 1091 `SI`), and no body on the volume exceeds the array's 512-row
+in-core capacity.
+
+Two header words describe the same array, and both hold for 4456 of the 4457
+bodies (the exception is the §7.3 indirect-index body):
+
+| Header word | Equals | Census over all 4457 bodies |
+|-------------|--------|------------------------------|
+| `+0x50` | rows in the area, continuation rows excluded | 4456 match; fid 139 declares 1442 |
+| `+0x44` | of those, the rows with `byte1 == 0x80` (link rows) | 4456 match |
+| `+0x48` | **sum of the data rows' `+8` sizes** | **4457 match, 0 exceptions** |
+
+Row fields, measured against golden bodies:
+
+| Offset | Data rows | Link (`RT_LINK`) rows | Label |
+|--------|-----------|------------------------|-------|
+| +0 byte0 | 0 | 0 | measured |
+| +0 byte1 | packed record type, bit 7 always set on an in-use row, `RT = byte1 & 0x1F` | `0x80` (`RT_LINK` + bit 7) | measured |
+| +2 | UH subtype / attribute | UH subtype | measured |
+| +4 | UW position: **low half = block index**, high half = byte offset | **UW target: low half = target FID**, high half = further location data | measured |
+| +8 | UW payload size | **target location data — not a size** (e.g. `0x800F0000`) | measured |
+| +12 | UB block count for this record | UB(0) | measured |
+| +13 | UB[3] LE24 block address (allocation hint) | same | measured |
+
+Consequences the engine must honour:
+
+1. A link row's `+8` word is larger than any body, so a size sanity check used
+   to end the row scan at the first link row — that is what made drawers read
+   as empty. Link rows take **size 0** and the **low half of `+4`** as the
+   target FID. Measured on the golden volume: 1695 of 1695 rows whose full `+4`
+   word exceeds the FID space name a live FID once masked. With both this mask
+   and consequence 5 in place, all **8919** link rows name a live FID and **8871**
+   of them open as a Real Body; the bodies with ≥ 1 link row number **1232**,
+   **2838** distinct bodies are named by a link, and **38** of those drawers (on
+   **37** distinct header blocks) are nobody's child once parentage is judged by
+   header block — that set is §3.2's root namespace.
+2. Only data rows contribute to the concatenated payload (§8), so rewriting
+   offsets cumulatively must skip link rows or it destroys the target FID.
+3. The data extent defaults to the header's successor block (or to the block the
+   FID table named when the header was found at `blk-1`). Only when that
+   successor block starts another body's Real Header does the engine take the
+   row's `+13` hint as the extent instead.
+4. A body's Real Header sits at `blk-1` for files that were created with data:
+   the FID table names the *data* block, so the header is read one block
+   earlier. Both cases occur on the golden volume.
+5. **The scan must tolerate holes.** Stopping at the first zero slot loses rows
+   that live below the hole: measured on the golden volume, 6 bodies lost 27
+   rows in total. `English` (fid 223) is the clearest case — its rows are 4 link
+   rows at `+0x1F40…+0x1F70`, a data row at `+0x1F80`, five zero slots, then two
+   data rows at `+0x1FE0`/`+0x1FF0`, so the truncating scan reported 2 records,
+   no children, and 242 of its 2326 payload bytes. Scanning the whole area
+   restores all 7 declared rows and every body's size sum then equals `+0x48`.
+6. A writer must keep that contract: place row *i* so the newest row lands in
+   the last slot (the reverse order silently re-numbers records across a
+   write/read round trip), clear the area before writing so a stale row from a
+   longer version of the file is not read back as a record, and write `+0x44`
+   and `+0x50`, which readers take as the row counts.
+7. **`+0` is two separate bytes, and byte 1 is what makes a row visible.** Byte
+   0 is 0 (or a continuation code) and byte 1 is the packed record type with bit
+   7 set: `0x80` for a link (`RT_LINK`), `0x81` for a TAD data row
+   (`RT_TADDATA`), `0x88` for a fusen row (`RT_MFUSEN`). Readers treat
+   `byte0 == 0 && byte1 == 0` as an empty slot, so writing the record type only
+   at `+2` leaves a row area that reads back entirely as holes — the body then
+   opens with no index and its whole payload streams as one record. Measured on
+   a created body: with `+0 = 00 81` both rows round-trip in record order with
+   their exact sizes; with `+0 = 00 00` neither row is seen.
+8. **Hierarchy is derived once, by header block, and shared.** Computing
+   parentage per listing run means re-reading every body's header block, and two
+   independent implementations drift: clu's tree judged edges by FID (42 root
+   children) while `rd_dir()`'s root fallback judged nothing at all and dumped
+   every FID whose own block carries a magic (307 entries, alias duplicates
+   included), which is how the same drawer appeared twice in `sc`. The engine
+   therefore builds one cached snapshot per mounted volume — a single pass over
+   the live FIDs that records each body's header block, its link-row targets, and
+   the block-reached set — and both `rd_dir()` and clu's `fs` views read their
+   parent/child structure from it. The snapshot is invalidated by the volume's
+   mount sequence plus a generation counter bumped on every mutation that can add
+   or remove a row (`cre_fil`, `cls_fil` of a dirty body, `del_fil`, `ins_rec`,
+   `del_rec`, `cre_lnk`, `del_lnk`, `mov_fil`), so listings stay correct without
+   re-deriving the volume per keystroke. Measured census backing the `+8` column:
+   of 8919 link rows, 6339 are zero and 2580 have only the high half set
+   (`0x8000xxxx`), none of them a block address, so no edge is recoverable from
+   that field and the 37 unreached drawers are the true top level.
 
 ## 8. Data blocks
 
@@ -424,7 +595,13 @@ include/btron/
 #define FS_TYPE_EXT           0x6401
 
 #define FID_ROOT                 0
-#define REC_IDX_LEVEL0_MAX      40
+#define REC_IDX_LEVEL0_MAX     512   /* rows a level-0 index can hold in core;
+                                        above the 496 slots a B-right/V 8 KiB
+                                        row area (from +0x100) can ever
+                                        contain (§7.4). The clean-room 1 KiB
+                                        header still fits only (1024-192)/16
+                                        = 52 rows; writers clamp per volume. */
+#define BVR_RIDX_AREA_START  0x100   /* B-right/V: first byte of the row area */
 ```
 
 ## 16. Mental model (for implementers)

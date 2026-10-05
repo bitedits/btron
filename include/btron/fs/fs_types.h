@@ -26,7 +26,13 @@ extern "C" {
 #define BTRON_NAME_HASH_SIZE       4   /* short-name hash entry (bytes)     */
 #define BTRON_MAX_NAME_BYTES      40   /* max UTF-8 file name length        */
 #define BTRON_FRAG_TABLE_MAX      32   /* max fragment entries per file     */
-#define REC_IDX_LEVEL0_MAX        40   /* max RecordIndex entries at level 0 */
+#define REC_IDX_LEVEL0_MAX       512  /* in-core level-0 index capacity. Sized
+                                       * from the measured B-right/V header
+                                       * block: 16-byte rows packed into the
+                                       * tail of an 8 KiB block hold up to 511
+                                       * (FS.md 7.4).  A cleanroom 1 KiB header
+                                       * only ever fits (1024-192)/16 rows --
+                                       * read/write paths clamp per volume. */
 
 /* ── Volume magic / format IDs ─────────────────────────────────── */
 #define VOL_MAGIC_BE            0x42FE  /* classic big-endian (standard)    */

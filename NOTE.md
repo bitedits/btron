@@ -124,7 +124,8 @@ Real Body (FID)
 ├── Header block(s)
 │   ├── File Header          (192 bytes)
 │   ├── Fragment table       (or location data if link-file)
-│   └── Record index         (level 0: up to 40 × 16-byte entries in header)
+│   └── Record index         (level 0: up to 40 × 16-byte entries in a clean-room
+│                            1 KiB header; 496 row slots in a B-right/V 8 KiB header)
 ├── Index blocks             (if index level 1 or 2)
 ├── Indirect blocks          (level 2)
 └── Data blocks              (concatenated record payloads)
@@ -134,7 +135,7 @@ Real Body (FID)
 
 | Level | Max record index entries (approx.) | Where index lives |
 |-------|-------------------------------------|-------------------|
-| 0 | 40 | Header block |
+| 0 | 40 clean-room · 496 row slots on B-right/V (246 in use) | Header block |
 | 1 | 5120 (64 × 80) | Index blocks + indirect in header |
 | 2 | 655360 (64 × 128 × 80) | Two-level indirection |
 
@@ -424,7 +425,7 @@ include/btron/
 #define FS_TYPE_EXT           0x6401
 
 #define FID_ROOT                 0
-#define REC_IDX_LEVEL0_MAX      40
+#define REC_IDX_LEVEL0_MAX     512   /* see FS.md §15 / §7.4 */
 ```
 
 ## 16. Mental model (for implementers)

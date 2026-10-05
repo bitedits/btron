@@ -53,6 +53,7 @@ void load_files(Panel *panel)
         File *up = &panel->files[panel->file_count++];
         memset(up, 0, sizeof(*up));
         strcpy(up->name, "..");
+        up->fid = VFS_NO_FID;      /* FID 0 is a real body; this row is not one */
         up->is_dir = 1;
         up->mode = 0777;
     }
@@ -67,6 +68,7 @@ void load_files(Panel *panel)
         if (nlen >= sizeof(f->name)) nlen = sizeof(f->name) - 1;
         memcpy(f->name, ve->name, nlen);
         f->name[nlen] = '\0';
+        f->fid = ve->fid;
         f->size = ve->size;
         f->mtime = ve->mtime;
         f->is_dir = ve->is_dir;

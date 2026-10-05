@@ -312,6 +312,96 @@ static UW clu_kind_color(int kind, int is_link) {
 }
 
 /* ── clu_ls ──────────────────────────────────────────────────────── */
+/*
+ * One entry per FID, built from the volume's drawer link records; shared by the
+ * root listing in clu_ls and the whole-volume views in clu_fs_cmd.
+ */
+typedef struct CluFsNode {
+    FID parent_fid;
+    FID first_child;
+    FID next_sibling;
+    FID last_child;
+    BLK blk;
+    BLK hdr_blk;
+    UW sz;
+    uint32_t did;
+    uint32_t pdid;
+    UH flags;
+    UB refc;
+    UB is_dir;
+    UB is_elf;
+    UB is_stream;
+    UB visited;
+    char name[48];
+} CluFsNode;
+
+static CluFsNode *clu_fs_build_graph(Volume *v, UW *pnfmax, unsigned int *pcount);
+
+/* Print one ls entry: bare name, or the -l / -t / -l -t column forms. */
+static void clu_ls_emit_entry(Volume *v, FID fid, const char *name,
+                              int flag_l, int flag_t, ShellOutputFn out, void *ud)
+{
+    if (!name || !name[0]) return;
+    /* A body whose T-code name field holds only blanks has no listable name. */
+    {
+        const char *np = name;
+        while (*np == ' ') np++;
+        if (!*np) return;
+    }
+
+    if (!flag_l && !flag_t) {
+        int ek = clu_probe_kind(v, (unsigned int)fid);
+        out(name, clu_kind_color(ek, 0), ud);
+        return;
+    }
+
+    ID lfd = opn_fil_fid(v, fid, 0x0001);
+    if (lfd < 0) return;
+    OpenFile *lof = &g_open_files[(int)lfd];
+
+    unsigned short flags = lof->hdr.flags;
+    unsigned short atype = lof->hdr.atype;
+    unsigned int ctime = lof->hdr.ctime;
+    unsigned int mtime = lof->hdr.mtime;
+    unsigned int atime = lof->hdr.atime;
+    unsigned int nrec  = lof->nrec;
+    unsigned int tsz   = lof->hdr.total_size;
+    int is_exec = (flags & (0x0001 | OBJ_EXEC)) ? 1 : 0;
+    cls_fil(lfd);
+
+    UW entry_color = is_exec ? COLOR_GREEN : COLOR_LTGRAY;
+    char line[256];
+    if (flag_l && flag_t) {
+        char ct[24], mt[24];
+        fmt_ts(ctime, ct, sizeof(ct));
+        fmt_ts(mtime, mt, sizeof(mt));
+        char atr[4] = "---";
+        if (flags & 0x0020) atr[0] = 'P';
+        if (flags & 0x0010) atr[1] = 'O';
+        snprintf(line, sizeof(line),
+                 "%04X  %s %-4u 1    %-5u %-18s %-18s %s",
+                 atype, atr, nrec, tsz, ct, mt, name);
+        out(line, entry_color, ud);
+    } else if (flag_l) {
+        char mt[24]; fmt_ts(mtime, mt, sizeof(mt));
+        char atr[4] = "---";
+        if (flags & 0x0020) atr[0] = 'P';
+        if (flags & 0x0010) atr[1] = 'O';
+        snprintf(line, sizeof(line),
+                 "%04X  %s %-4u 1    %-5u %s %s",
+                 atype, atr, nrec, tsz, mt, name);
+        out(line, entry_color, ud);
+    } else {
+        char ct[24], at[24], mt[24];
+        fmt_ts(ctime, ct, sizeof(ct));
+        fmt_ts(atime, at, sizeof(at));
+        fmt_ts(mtime, mt, sizeof(mt));
+        snprintf(line, sizeof(line), "%-18s %-18s %-18s %s",
+                 ct, at, mt, name);
+        out(line, entry_color, ud);
+    }
+}
+
 void clu_ls(const char *args, ShellOutputFn out, void *ud)
 {
     char target[80];
@@ -404,6 +494,32 @@ void clu_ls(const char *args, ShellOutputFn out, void *ud)
         }
     }
 
+    /*
+     * The container's own records listed nothing.
+     *
+     * A B-right/V volume names no root drawer (FS.md 3.2): FID 0 is a body with
+     * data, not a drawer.  Its root namespace is therefore the drawers that no
+     * link record reaches, which is what clu_fs_build_graph proves from the
+     * link records alone.  Scanning the whole FID table here instead -- what this
+     * used to do -- printed every object in the volume at the root, once per FID
+     * aliasing its header block, which is how "etc", "Makefile", "Mail Manager"
+     * and the locale drawers appeared here doubled up.
+     */
+    if (vol_fs_type(v) == FS_TYPE_BRIGHTV) {
+        UW nfmax = 0;
+        unsigned int nlive = 0;
+        CluFsNode *nodes = clu_fs_build_graph(v, &nfmax, &nlive);
+        if (!nodes) { out("ls: out of memory", COLOR_RED, ud); return; }
+        int n = 0;
+        for (FID c = nodes[FID_ROOT].first_child; c != FID_INVALID; c = nodes[c].next_sibling) {
+            clu_ls_emit_entry(v, c, nodes[c].name, flag_l, flag_t, out, ud);
+            n++;
+        }
+        free(nodes);
+        if (n == 0) out("(no drawer at the root of this volume)", COLOR_LTGRAY, ud);
+        return;
+    }
+
     /* Fallback: flat directory scan for volume root containers */
     ID dir = opn_dir(dir_path);
     if (dir < 0) { out("ls: opn_dir failed", COLOR_RED, ud); return; }
@@ -411,59 +527,7 @@ void clu_ls(const char *args, ShellOutputFn out, void *ud)
     DIR_ENTRY entry;
     while (rd_dir(dir, &entry) == 0) {
         if (!entry.name[0]) continue;
-        FID fid = (FID)entry.robj_id;
-
-        if (!flag_l && !flag_t) {
-            int ek = clu_probe_kind(v, (unsigned int)fid);
-            out(entry.name, clu_kind_color(ek, 0), ud);
-            continue;
-        }
-
-        ID lfd = opn_fil_fid(v, fid, 0x0001);
-        if (lfd < 0) continue;
-        OpenFile *lof = &g_open_files[(int)lfd];
-
-        unsigned short flags = lof->hdr.flags;
-        unsigned short atype = lof->hdr.atype;
-        unsigned int ctime = lof->hdr.ctime;
-        unsigned int mtime = lof->hdr.mtime;
-        unsigned int atime = lof->hdr.atime;
-        unsigned int nrec  = lof->nrec;
-        unsigned int tsz   = lof->hdr.total_size;
-        int is_exec = (flags & (0x0001 | OBJ_EXEC)) ? 1 : 0;
-        cls_fil(lfd);
-
-        UW entry_color = is_exec ? COLOR_GREEN : COLOR_LTGRAY;
-        char line[256];
-        if (flag_l && flag_t) {
-            char ct[24], mt[24];
-            fmt_ts(ctime, ct, sizeof(ct));
-            fmt_ts(mtime, mt, sizeof(mt));
-            char atr[4] = "---";
-            if (flags & 0x0020) atr[0] = 'P';
-            if (flags & 0x0010) atr[1] = 'O';
-            snprintf(line, sizeof(line),
-                     "%04X  %s %-4u 1    %-5u %-18s %-18s %s",
-                     atype, atr, nrec, tsz, ct, mt, entry.name);
-            out(line, entry_color, ud);
-        } else if (flag_l) {
-            char mt[24]; fmt_ts(mtime, mt, sizeof(mt));
-            char atr[4] = "---";
-            if (flags & 0x0020) atr[0] = 'P';
-            if (flags & 0x0010) atr[1] = 'O';
-            snprintf(line, sizeof(line),
-                     "%04X  %s %-4u 1    %-5u %s %s",
-                     atype, atr, nrec, tsz, mt, entry.name);
-            out(line, entry_color, ud);
-        } else if (flag_t) {
-            char ct[24], at[24], mt[24];
-            fmt_ts(ctime, ct, sizeof(ct));
-            fmt_ts(atime, at, sizeof(at));
-            fmt_ts(mtime, mt, sizeof(mt));
-            snprintf(line, sizeof(line), "%-18s %-18s %-18s %s",
-                     ct, at, mt, entry.name);
-            out(line, entry_color, ud);
-        }
+        clu_ls_emit_entry(v, (FID)entry.robj_id, entry.name, flag_l, flag_t, out, ud);
     }
     cls_dir(dir);
 }
@@ -627,25 +691,6 @@ static void clu_fs_dump_records(Volume *v, ID fd, FID parent_fid, const char *pa
 
 /* ── clu_fs_cmd ──────────────────────────────────────────────────── */
 
-typedef struct {
-    FID parent_fid;
-    FID first_child;
-    FID next_sibling;
-    FID last_child;
-    BLK blk;
-    BLK hdr_blk;
-    UW sz;
-    uint32_t did;
-    uint32_t pdid;
-    UH flags;
-    UB refc;
-    UB is_dir;
-    UB is_elf;
-    UB is_stream;
-    UB visited;
-    char name[48];
-} CluFsNode;
-
 static void clu_fs_node_add_child(CluFsNode *nodes, FID parent, FID child, UW nfmax)
 {
     if (parent == FID_INVALID || child == FID_INVALID || parent == child) return;
@@ -690,6 +735,120 @@ static void clu_fs_node_add_child(CluFsNode *nodes, FID parent, FID child, UW nf
     }
 }
 
+/*
+ * clu_fs_build_graph — the volume's object graph from drawer link records.
+ *
+ * A B-right/V Real Body header carries no parent pointer (FS.md 5.1): the only
+ * provable parentage in the volume is a container's RT_LINK records.  So the
+ * top level is defined as the drawers that no link record names — they cannot
+ * be reached from inside the tree — and a body whose header block is already
+ * claimed by a lower FID (a hard link, measured: 168 of them) is listed where a
+ * drawer names it rather than as a second root entry.
+ *
+ * Returns a calloc'd node array indexed by FID, *pnfmax its length, and *pcount
+ * the number of live bodies, or NULL on allocation failure.
+ */
+static CluFsNode *clu_fs_build_graph(Volume *v, UW *pnfmax, unsigned int *pcount)
+{
+    UW nfmax = vol_nfmax(v);
+    if (nfmax < 256) nfmax = 256;
+    CluFsNode *nodes = (CluFsNode *)calloc(nfmax, sizeof(CluFsNode));
+    if (!nodes) return NULL;
+
+    for (FID f = 0; f < nfmax; f++) {
+        nodes[f].parent_fid   = FID_INVALID;
+        nodes[f].first_child  = FID_INVALID;
+        nodes[f].last_child   = FID_INVALID;
+        nodes[f].next_sibling = FID_INVALID;
+    }
+
+    unsigned int count = 0;
+    for (FID fid = 0; fid < nfmax; fid++) {
+        UB refc = vol_fid_refcount(v, fid);
+        BLK blk = vol_fid_get_blk(v, fid);
+        if (refc == 0 && fid != FID_ROOT) continue;
+        if (blk == 0 || blk == FID_INVALID) continue;
+
+        ID fd = opn_fil_fid(v, fid, 0x0001);
+        if (fd < 0) continue;
+        OpenFile *of = &g_open_files[(int)fd];
+        count++;
+
+        nodes[fid].blk       = blk;
+        nodes[fid].hdr_blk   = of->hdr_blk ? of->hdr_blk : blk;
+        nodes[fid].refc      = refc;
+        nodes[fid].flags     = of->hdr.flags;
+        nodes[fid].sz        = of->hdr.total_size;
+        nodes[fid].did       = of->hdr.did;
+        nodes[fid].pdid      = of->hdr.pdid;
+        nodes[fid].is_stream = of->is_stream;
+        nodes[fid].is_elf    = (of->hdr.flags & 0x0001) != 0;
+
+        /*
+         * Keep the name exactly as the Real Body carries it.  The stream marker
+         * is a display concern of the fs views, which add it from is_stream; a
+         * name decorated here would leak into ls and into target matching.
+         */
+        snprintf(nodes[fid].name, sizeof(nodes[fid].name), "%s",
+                 (const char *)of->hdr.name);
+
+        /*
+         * Scan the rows whether or not the body also reads as a stream: a
+         * B-right/V body whose header sits one block before the FID table's
+         * block is flagged is_stream, yet its link records are real drawer
+         * entries (bin, lib), and hiding them would drop those drawers from
+         * the tree.
+         */
+        if (of->nrec > 0) {
+            for (unsigned int i = 0; i < of->nrec; i++) {
+                if (!fil_rec_is_link(fd, (W)i)) continue;
+                nodes[fid].is_dir = 1;
+                FID cfid = FID_INVALID;
+                char cname[48] = "";
+                if (fil_get_rec_link_info(fd, (W)i, &cfid, cname, sizeof(cname), NULL) == 0 &&
+                    cfid != FID_INVALID && cfid != fid && cfid < nfmax) {
+                    clu_fs_node_add_child(nodes, fid, cfid, nfmax);
+                }
+            }
+        }
+        cls_fil(fd);
+    }
+
+    /*
+     * The top level comes from the engine's snapshot, not from a second opinion
+     * here: it judges parentage by header block, so an alias FID of a drawer a
+     * real drawer already names is not a root entry (FS.md 3.2).  Judging it by
+     * FID, as this loop used to, put etc, LC_TIME, Mail Manager, Makefile and
+     * makerules at the root of Cho-Kanji next to the drawers that name them.
+     *
+     * A cleanroom volume has a genuine root drawer at FID 0 and no snapshot, so
+     * there its own unparented containers remain the top level.
+     */
+    int nroot = fil_hier_nroot(v);
+    if (nroot >= 0) {
+        for (int i = 0; i < nroot; i++) {
+            FID f = fil_hier_root_fid(v, i);
+            if (f == FID_INVALID || f >= nfmax || !nodes[f].blk) continue;
+            if (nodes[f].parent_fid != FID_INVALID) continue;  /* named by a drawer */
+            clu_fs_node_add_child(nodes, FID_ROOT, f, nfmax);
+        }
+    } else {
+        for (FID f = 1; f < nfmax; f++) {
+            if (!nodes[f].blk || !nodes[f].is_dir) continue;
+            if (nodes[f].parent_fid != FID_INVALID) continue;
+            int dup = 0;
+            for (FID r = nodes[FID_ROOT].first_child; r != FID_INVALID; r = nodes[r].next_sibling) {
+                if (nodes[r].hdr_blk == nodes[f].hdr_blk) { dup = 1; break; }
+            }
+            if (!dup) clu_fs_node_add_child(nodes, FID_ROOT, f, nfmax);
+        }
+    }
+
+    *pnfmax = nfmax;
+    *pcount = count;
+    return nodes;
+}
+
 static void clu_fs_print_node_line(const CluFsNode *nodes, FID fid, int indent_spaces,
                                    int flag_l, int is_tree, ShellOutputFn out, void *ud)
 {
@@ -701,15 +860,21 @@ static void clu_fs_print_node_line(const CluFsNode *nodes, FID fid, int indent_s
     UW color = clu_kind_color(kind, (kind == 3));
 
     char name_buf[64];
+    const char *base = nodes[fid].name[0] ? nodes[fid].name : "-";
     if (is_tree && nodes[fid].is_dir && nodes[fid].name[0]) {
-        size_t len = strlen(nodes[fid].name);
-        if (len > 0 && nodes[fid].name[len - 1] != '/') {
-            snprintf(name_buf, sizeof(name_buf), "%s/", nodes[fid].name);
+        size_t len = strlen(base);
+        if (len > 0 && base[len - 1] != '/') {
+            snprintf(name_buf, sizeof(name_buf), "%s/", base);
         } else {
-            snprintf(name_buf, sizeof(name_buf), "%s", nodes[fid].name);
+            snprintf(name_buf, sizeof(name_buf), "%s", base);
         }
     } else {
-        snprintf(name_buf, sizeof(name_buf), "%s", nodes[fid].name);
+        snprintf(name_buf, sizeof(name_buf), "%s", base);
+    }
+    if (nodes[fid].is_stream) {
+        char marked[64];
+        snprintf(marked, sizeof(marked), "[*] %s", name_buf);
+        snprintf(name_buf, sizeof(name_buf), "%s", marked);
     }
 
     char line[256];
@@ -896,88 +1061,10 @@ void clu_fs_cmd(const char *args, ShellOutputFn out, void *ud)
     if (!v) { out("fs: no volume mounted", COLOR_RED, ud); return; }
 
     if (flag_a || flag_g || flag_t) {
-        UW nfmax = vol_nfmax(v);
-        if (nfmax < 256) nfmax = 256;
-        CluFsNode *nodes = (CluFsNode *)calloc(nfmax, sizeof(CluFsNode));
-        if (!nodes) { out("fs: memory allocation failed", COLOR_RED, ud); return; }
-
-        for (FID f = 0; f < nfmax; f++) {
-            nodes[f].parent_fid = FID_INVALID;
-            nodes[f].first_child = FID_INVALID;
-            nodes[f].last_child = FID_INVALID;
-            nodes[f].next_sibling = FID_INVALID;
-        }
-
+        UW nfmax = 0;
         unsigned int count = 0;
-        for (FID fid = 0; fid < nfmax; fid++) {
-            UB refc = vol_fid_refcount(v, fid);
-            BLK blk = vol_fid_get_blk(v, fid);
-            if (refc == 0 && fid != FID_ROOT) continue;
-            if (blk == 0 || blk == FID_INVALID) continue;
-
-            ID fd = opn_fil_fid(v, fid, 0x0001);
-            if (fd < 0) continue;
-            OpenFile *of = &g_open_files[(int)fd];
-            count++;
-
-            nodes[fid].blk = blk;
-            nodes[fid].refc = refc;
-            nodes[fid].hdr_blk = of->hdr_blk ? of->hdr_blk : blk;
-            nodes[fid].flags = of->hdr.flags;
-            nodes[fid].sz = of->hdr.total_size;
-            nodes[fid].did = of->hdr.did;
-            nodes[fid].pdid = of->hdr.pdid;
-            nodes[fid].is_stream = of->is_stream;
-            nodes[fid].is_elf = (of->hdr.flags & 0x0001) != 0;
-
-            if (of->is_stream) {
-                snprintf(nodes[fid].name, sizeof(nodes[fid].name), "[*] %s",
-                         of->hdr.name[0] ? (const char *)of->hdr.name : "stream");
-            } else {
-                snprintf(nodes[fid].name, sizeof(nodes[fid].name), "%s",
-                         of->hdr.name[0] ? (const char *)of->hdr.name : "-");
-            }
-
-            if (!of->is_stream && of->nrec > 0) {
-                for (unsigned int i = 0; i < of->nrec; i++) {
-                    if (fil_rec_is_link(fd, i)) {
-                        nodes[fid].is_dir = 1;
-                        FID cfid = FID_INVALID;
-                        char cname[48] = "";
-                        if (fil_get_rec_link_info(fd, i, &cfid, cname, sizeof(cname), NULL) == 0) {
-                            if (cfid < nfmax && cfid != fid && cfid != FID_INVALID) {
-                                clu_fs_node_add_child(nodes, fid, cfid, nfmax);
-                            }
-                        }
-                    }
-                }
-            }
-            cls_fil(fd);
-        }
-
-        /* Pass 2: Connect parent-child linkages (unified in-memory resolution via pdid -> did) */
-        for (FID f = 0; f < nfmax; f++) {
-            if (nodes[f].blk == 0 || f == FID_ROOT) continue;
-            if (nodes[f].parent_fid == FID_INVALID && nodes[f].pdid != 0) {
-                for (FID p = 0; p < nfmax; p++) {
-                    if (nodes[p].blk == 0 || p == f) continue;
-                    if (nodes[p].did == nodes[f].pdid) {
-                        clu_fs_node_add_child(nodes, p, f, nfmax);
-                        nodes[p].is_dir = 1;
-                        break;
-                    }
-                }
-            }
-        }
-
-        /* Fallback: attach any unparented bodies directly to root */
-        if (nodes[FID_ROOT].blk) {
-            for (FID f = 1; f < nfmax; f++) {
-                if (nodes[f].blk && nodes[f].parent_fid == FID_INVALID && nodes[f].pdid == 0) {
-                    clu_fs_node_add_child(nodes, FID_ROOT, f, nfmax);
-                }
-            }
-        }
+        CluFsNode *nodes = clu_fs_build_graph(v, &nfmax, &count);
+        if (!nodes) { out("fs: memory allocation failed", COLOR_RED, ud); return; }
 
         /* Check if a specific target FID or container was requested */
         FID start_fid = FID_INVALID;

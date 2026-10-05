@@ -18,12 +18,20 @@
 #define M_PI 3.1415926535897932384626433832795
 #endif
 
-/* External VirtIO sound drivers */
-extern int  virtio_sound_open(uint32_t sample_rate, uint8_t channels);
-extern int  virtio_sound_write(const int16_t *samples, size_t frames);
-extern void     virtio_sound_close(void);
-extern bool     virtio_sound_is_ready(void);
-extern uint32_t virtio_sound_get_queued_bytes(void);
+#ifndef RAND_MAX
+#define RAND_MAX 2147483647
+#endif
+
+/* External VirtIO sound drivers (weak stubs for targets without virtio.c) */
+__attribute__((weak)) int  virtio_sound_open(uint32_t sample_rate, uint8_t channels) {
+    (void)sample_rate; (void)channels; return -1;
+}
+__attribute__((weak)) int  virtio_sound_write(const int16_t *samples, size_t frames) {
+    (void)samples; (void)frames; return -1;
+}
+__attribute__((weak)) void     virtio_sound_close(void) {}
+__attribute__((weak)) bool     virtio_sound_is_ready(void) { return false; }
+__attribute__((weak)) uint32_t virtio_sound_get_queued_bytes(void) { return 0; }
 
 #define MAX_VOICES 48
 #define VOICE_WAVE_SINE     0

@@ -295,12 +295,12 @@ void exchdr_startup(void) {}
 void inthdr_startup(void) {}
 int no_support(void) { return -70; /* E_NOSPT */ }
 
-void *hook_dsp = NULL;
-void *unhook_dsp = NULL;
-void *hook_int = NULL;
-void *unhook_int = NULL;
-void *hook_svc = NULL;
-void *unhook_svc = NULL;
+void hook_dsp(void) {}
+void unhook_dsp(void) {}
+void hook_int(void) {}
+void unhook_int(void) {}
+void hook_svc(void) {}
+void unhook_svc(void) {}
 
 /* 64-bit integer division runtime helpers for 32-bit ARM (EABI) */
 #if !defined(__aarch64__)

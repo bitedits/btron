@@ -189,12 +189,12 @@ void ClearInt(UINT vec) { (void)vec; }
 BOOL CheckInt(INTVEC intvec) { (void)intvec; return FALSE; }
 
 ATR available_cop = 0;
-void *hook_dsp = NULL;
-void *unhook_dsp = NULL;
-void *hook_int = NULL;
-void *unhook_int = NULL;
-void *hook_svc = NULL;
-void *unhook_svc = NULL;
+void hook_dsp(void) {}
+void unhook_dsp(void) {}
+void hook_int(void) {}
+void unhook_int(void) {}
+void hook_svc(void) {}
+void unhook_svc(void) {}
 
 ER no_support(void) { return -70; /* E_NOSPT */ }
 void timer_handler_startup(void) {}

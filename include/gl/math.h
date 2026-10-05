@@ -109,6 +109,22 @@ static inline double pow(double x, double y) {
     return res;
 }
 
+static inline float floorf(float x) { return (float)floor((double)x); }
+static inline float powf(float x, float y) { return (float)pow((double)x, (double)y); }
+static inline long long llround(double x) { return (long long)(x >= 0.0 ? x + 0.5 : x - 0.5); }
+
+#ifndef M_E
+#define M_E 2.71828182845904523536
+#endif
+
+static inline double exp(double x) { return pow(M_E, x); }
+static inline float expf(float x) { return (float)exp((double)x); }
+static inline double fmod(double x, double y) {
+    if (y == 0.0) return 0.0;
+    return x - (double)((long long)(x / y)) * y;
+}
+static inline float fmodf(float x, float y) { return (float)fmod((double)x, (double)y); }
+
 #endif /* _GL_MATH_H_ */
 #endif /* HOSTED */
 

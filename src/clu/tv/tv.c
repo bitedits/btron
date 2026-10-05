@@ -26,17 +26,64 @@ typedef struct {
     size_t len;
 } TvLine;
 
-static TvLine g_lines[TV_MAX_LINES];
-static size_t g_line_count = 0;
-static char   g_filename[VFS_MAX_PATH];
-static int    g_view_mode = 0;
-static int    g_insert_mode = 1;
-static int    g_modified = 0;
-static int    g_wrap_mode = LANG_WRAP_WORD;
-static size_t g_cur_line = 0;
-static size_t g_cur_byte = 0;
-static int    g_scroll_y = 0;
-static int    g_scroll_x = 0;
+struct TvContext {
+    TvLine lines[TV_MAX_LINES];
+    size_t line_count;
+    char   filename[VFS_MAX_PATH];
+    int    view_mode;
+    int    insert_mode;
+    int    modified;
+    int    wrap_mode;
+    size_t cur_line;
+    size_t cur_byte;
+    int    scroll_y;
+    int    scroll_x;
+};
+
+static TvContext g_default_tv = {
+    .insert_mode = 1,
+    .wrap_mode = LANG_WRAP_WORD
+};
+static TvContext *g_tv = &g_default_tv;
+
+#define g_lines       (g_tv->lines)
+#define g_line_count  (g_tv->line_count)
+#define g_filename    (g_tv->filename)
+#define g_view_mode   (g_tv->view_mode)
+#define g_insert_mode (g_tv->insert_mode)
+#define g_modified    (g_tv->modified)
+#define g_wrap_mode   (g_tv->wrap_mode)
+#define g_cur_line    (g_tv->cur_line)
+#define g_cur_byte    (g_tv->cur_byte)
+#define g_scroll_y    (g_tv->scroll_y)
+#define g_scroll_x    (g_tv->scroll_x)
+
+TvContext *tv_context_create(void)
+{
+    TvContext *tv = (TvContext *)calloc(1, sizeof(TvContext));
+    if (!tv) return NULL;
+    tv->insert_mode = 1;
+    tv->wrap_mode = LANG_WRAP_WORD;
+    return tv;
+}
+
+void tv_context_destroy(TvContext *tv)
+{
+    if (tv && tv != &g_default_tv) {
+        if (g_tv == tv) g_tv = &g_default_tv;
+        free(tv);
+    }
+}
+
+void tv_set_context(TvContext *tv)
+{
+    g_tv = tv ? tv : &g_default_tv;
+}
+
+TvContext *tv_get_context(void)
+{
+    return g_tv;
+}
 
 static void tv_setup_styles(void)
 {

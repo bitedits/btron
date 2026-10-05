@@ -26,7 +26,18 @@ __attribute__((weak)) int term_get_cell(int r, int c, uint32_t *cp, int *style) 
 __attribute__((weak)) void term_get_style_colors(int style, uint32_t *fg, uint32_t *bg) { (void)style; if (fg) *fg = 0xFFFFFFFF; if (bg) *bg = 0xFF000000; }
 __attribute__((weak)) void term_get_cursor(int *row, int *col, int *visible) { if (row) *row = -1; if (col) *col = -1; if (visible) *visible = 0; }
 __attribute__((weak)) size_t lang_encode(uint32_t cp, char *out) { if (out) { out[0] = (char)(cp < 128 ? cp : '?'); out[1] = '\0'; } return 1; }
-__attribute__((weak)) int lang_width(uint32_t cp) { (void)cp; return 1; }
+__attribute__((weak)) TermContext *term_context_create(void) { return NULL; }
+__attribute__((weak)) void term_context_destroy(TermContext *tc) { (void)tc; }
+__attribute__((weak)) void term_set_context(TermContext *tc) { (void)tc; }
+__attribute__((weak)) TermContext *term_get_context(void) { return NULL; }
+__attribute__((weak)) ScContext *sc_context_create(void) { return NULL; }
+__attribute__((weak)) void sc_context_destroy(ScContext *sc) { (void)sc; }
+__attribute__((weak)) void sc_set_context(ScContext *sc) { (void)sc; }
+__attribute__((weak)) ScContext *sc_get_context(void) { return NULL; }
+__attribute__((weak)) TvContext *tv_context_create(void) { return NULL; }
+__attribute__((weak)) void tv_context_destroy(TvContext *tv) { (void)tv; }
+__attribute__((weak)) void tv_set_context(TvContext *tv) { (void)tv; }
+__attribute__((weak)) TvContext *tv_get_context(void) { return NULL; }
 #endif
 
 
@@ -164,6 +175,9 @@ typedef struct {
     GTermAppMode app_mode;
     int          app_rows;
     int          app_cols;
+    TermContext *term_ctx;
+    ScContext   *sc_ctx;
+    TvContext   *tv_ctx;
 } GTermState;
 
 
@@ -404,6 +418,10 @@ void shell_execute_cmd(const char *cmd_line, ShellOutputFn out_fn, void *user_da
             int rows = (cli_h - (APP_MENU_BAR_HEIGHT + 4)) / row_h;
             if (cols < 30) cols = 30;
             if (rows < 8) rows = 8;
+            if (!st_sc->term_ctx) st_sc->term_ctx = term_context_create();
+            if (!st_sc->sc_ctx) st_sc->sc_ctx = sc_context_create();
+            term_set_context(st_sc->term_ctx);
+            sc_set_context(st_sc->sc_ctx);
             const char *start_p = (arg[0] != '\0') ? arg : (g_cwd_path[0] ? g_cwd_path : "/SYS");
             if (sc_session_init(start_p, rows, cols) == 0) {
                 st_sc->app_mode = GTERM_MODE_SC;
@@ -411,6 +429,15 @@ void shell_execute_cmd(const char *cmd_line, ShellOutputFn out_fn, void *user_da
                 st_sc->app_cols = cols;
                 inval_wnd(wnd);
                 return;
+            } else {
+                if (st_sc->sc_ctx) {
+                    sc_context_destroy(st_sc->sc_ctx);
+                    st_sc->sc_ctx = NULL;
+                }
+                if (st_sc->term_ctx) {
+                    term_context_destroy(st_sc->term_ctx);
+                    st_sc->term_ctx = NULL;
+                }
             }
         }
         clu_sc(arg, out_fn, user_data);
@@ -448,12 +475,25 @@ void shell_execute_cmd(const char *cmd_line, ShellOutputFn out_fn, void *user_da
                 snprintf(file_path, sizeof(file_path), "%s/%s", g_cwd_path[0] ? g_cwd_path : "/SYS", p);
             }
 
+            if (!st_tv->term_ctx) st_tv->term_ctx = term_context_create();
+            if (!st_tv->tv_ctx) st_tv->tv_ctx = tv_context_create();
+            term_set_context(st_tv->term_ctx);
+            tv_set_context(st_tv->tv_ctx);
             if (tv_session_init(file_path, view_only, rows, cols) == 0) {
                 st_tv->app_mode = GTERM_MODE_TV;
                 st_tv->app_rows = rows;
                 st_tv->app_cols = cols;
                 inval_wnd(wnd);
                 return;
+            } else {
+                if (st_tv->tv_ctx) {
+                    tv_context_destroy(st_tv->tv_ctx);
+                    st_tv->tv_ctx = NULL;
+                }
+                if (st_tv->term_ctx) {
+                    term_context_destroy(st_tv->term_ctx);
+                    st_tv->term_ctx = NULL;
+                }
             }
         }
         clu_tv(arg, out_fn, user_data);
@@ -981,6 +1021,10 @@ static void handle_gterm_event(WND *wnd, const EVT *evt) {
     GTermState *st = (GTermState*)(uintptr_t)wnd->user_data;
     if (!st) return;
 
+    if (st->term_ctx) term_set_context(st->term_ctx);
+    if (st->sc_ctx)   sc_set_context(st->sc_ctx);
+    if (st->tv_ctx)   tv_set_context(st->tv_ctx);
+
     /* Compute relative coordinates (inside client, accounting for border+title) */
     H rel_x = evt->pos.x - wnd->client.left;
     H rel_y = evt->pos.y - wnd->client.top;
@@ -1137,6 +1181,14 @@ static void handle_gterm_event(WND *wnd, const EVT *evt) {
                     running = sc_session_step(tk);
                     if (!running) {
                         sc_session_close();
+                        if (st->sc_ctx) {
+                            sc_context_destroy(st->sc_ctx);
+                            st->sc_ctx = NULL;
+                        }
+                        if (st->term_ctx) {
+                            term_context_destroy(st->term_ctx);
+                            st->term_ctx = NULL;
+                        }
                         st->app_mode = GTERM_MODE_SHELL;
                         gterm_append_line(st, "Sokhatsky Commander session closed.", COLOR_GREEN);
                     }
@@ -1144,6 +1196,14 @@ static void handle_gterm_event(WND *wnd, const EVT *evt) {
                     running = tv_session_step(tk);
                     if (!running) {
                         tv_session_close();
+                        if (st->tv_ctx) {
+                            tv_context_destroy(st->tv_ctx);
+                            st->tv_ctx = NULL;
+                        }
+                        if (st->term_ctx) {
+                            term_context_destroy(st->term_ctx);
+                            st->term_ctx = NULL;
+                        }
                         st->app_mode = GTERM_MODE_SHELL;
                         gterm_append_line(st, "Terminal Vision session closed.", COLOR_GREEN);
                     }
@@ -1337,6 +1397,10 @@ static void paint_gterm(WND *wnd, GDEV *dev) {
     if (!wnd || !dev) return;
     GTermState *st = (GTermState*)(uintptr_t)wnd->user_data;
     if (!st) return;
+
+    if (st->term_ctx) term_set_context(st->term_ctx);
+    if (st->sc_ctx)   sc_set_context(st->sc_ctx);
+    if (st->tv_ctx)   tv_set_context(st->tv_ctx);
 
     /* Initialise menu bar on first paint */
     if (st->menu_bar.header_count == 0) {
@@ -1594,11 +1658,29 @@ static void destroy_gterm(WND *wnd) {
     if (!wnd) return;
     GTermState *st = (GTermState*)(uintptr_t)wnd->user_data;
     if (st) {
+        if (st->term_ctx) term_set_context(st->term_ctx);
+        if (st->sc_ctx)   sc_set_context(st->sc_ctx);
+        if (st->tv_ctx)   tv_set_context(st->tv_ctx);
+
         if (st->app_mode == GTERM_MODE_SC) {
             sc_session_close();
         } else if (st->app_mode == GTERM_MODE_TV) {
             tv_session_close();
         }
+
+        if (st->sc_ctx) {
+            sc_context_destroy(st->sc_ctx);
+            st->sc_ctx = NULL;
+        }
+        if (st->tv_ctx) {
+            tv_context_destroy(st->tv_ctx);
+            st->tv_ctx = NULL;
+        }
+        if (st->term_ctx) {
+            term_context_destroy(st->term_ctx);
+            st->term_ctx = NULL;
+        }
+
         free(st);
         wnd->user_data = 0;
     }

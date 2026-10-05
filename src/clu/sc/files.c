@@ -3,6 +3,7 @@
  * Sokhatsky Commander file listing and sorting via B-System VFS.
  * Completely self-contained within B-System (no host OS calls).
  */
+#define SC_INTERNAL 1
 #include "sokhatsky.h"
 
 #if CLU_HOSTED

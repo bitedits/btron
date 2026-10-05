@@ -3,6 +3,7 @@
  * Sokhatsky Commander input dispatcher and internal B-System command executor.
  * Completely self-contained; NEVER portals commands to host OS.
  */
+#define SC_INTERNAL 1
 #include "sokhatsky.h"
 #include "../../apps/clu.h"
 

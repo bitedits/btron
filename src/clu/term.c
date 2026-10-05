@@ -175,16 +175,98 @@ int term_key(void)
     return K_NONE;
 }
 
-/* ── Screen buffers ────────────────────────────────────────────────── */
+/* ── Screen buffers & Context Management ───────────────────────────── */
 
 typedef struct { uint32_t cp, m1, m2; uint8_t at; } Cell;
 
 #define CELLS ((size_t)TERM_MAXR * TERM_MAXC)
-static Cell g_front[CELLS], g_back[CELLS];
-static char g_sgr[TERM_STYLES][32] = { "0" };
-static int  g_cur_r = -1, g_cur_c = -1, g_cur_at = -1;
-static int  g_want_r, g_want_c, g_want_vis, g_cur_vis;
-static int  g_need_clear = 1;
+
+struct TermContext {
+    int rows;
+    int cols;
+    Cell front[CELLS];
+    Cell back[CELLS];
+    char sgr[TERM_STYLES][32];
+    int cur_r;
+    int cur_c;
+    int cur_at;
+    int want_r;
+    int want_c;
+    int want_vis;
+    int cur_vis;
+    int need_clear;
+    int custom_size;
+};
+
+static TermContext g_default_term = {
+    .rows = 24,
+    .cols = 80,
+    .cur_r = -1,
+    .cur_c = -1,
+    .cur_at = -1,
+    .need_clear = 1,
+    .custom_size = 0
+};
+static TermContext *g_term = &g_default_term;
+
+#define g_front (g_term->front)
+#define g_back (g_term->back)
+#define g_sgr (g_term->sgr)
+#define g_cur_r (g_term->cur_r)
+#define g_cur_c (g_term->cur_c)
+#define g_cur_at (g_term->cur_at)
+#define g_want_r (g_term->want_r)
+#define g_want_c (g_term->want_c)
+#define g_want_vis (g_term->want_vis)
+#define g_cur_vis (g_term->cur_vis)
+#define g_need_clear (g_term->need_clear)
+#define g_custom_size (g_term->custom_size)
+
+TermContext *term_context_create(void)
+{
+    TermContext *tc = (TermContext *)calloc(1, sizeof(TermContext));
+    if (!tc) return NULL;
+    tc->rows = 24;
+    tc->cols = 80;
+    tc->cur_r = -1;
+    tc->cur_c = -1;
+    tc->cur_at = -1;
+    tc->need_clear = 1;
+    tc->custom_size = 1;
+    for (size_t i = 0; i < CELLS; i++) {
+        tc->front[i].cp = ' ';
+        tc->back[i].cp = ' ';
+    }
+    return tc;
+}
+
+void term_context_destroy(TermContext *tc)
+{
+    if (tc && tc != &g_default_term) {
+        if (g_term == tc) {
+            g_term = &g_default_term;
+            term_rows = g_term->rows ? g_term->rows : 24;
+            term_cols = g_term->cols ? g_term->cols : 80;
+        }
+        free(tc);
+    }
+}
+
+void term_set_context(TermContext *tc)
+{
+    if (g_term) {
+        g_term->rows = term_rows;
+        g_term->cols = term_cols;
+    }
+    g_term = tc ? tc : &g_default_term;
+    term_rows = g_term->rows ? g_term->rows : 24;
+    term_cols = g_term->cols ? g_term->cols : 80;
+}
+
+TermContext *term_get_context(void)
+{
+    return g_term;
+}
 
 #define CELL(buf, r, c) ((buf)[(size_t)(r) * TERM_MAXC + (size_t)(c)])
 
@@ -404,7 +486,6 @@ unsigned long scr_bytes(void) { return g_bytes; }
 
 static int       g_depth;
 static BtTermios g_orig;
-static int       g_custom_size = 0;
 
 int term_resize(void)
 {

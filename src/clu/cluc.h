@@ -19,9 +19,16 @@
 #if defined(__STDC_HOSTED__) && __STDC_HOSTED__ == 1
 #  include <string.h>
 #  include <stdio.h>
+#  include <stdlib.h>
 #  define CLU_HOSTED 1
 #else
 #  define CLU_HOSTED 0
+extern void *Imalloc(size_t sz);
+extern void  Ifree(void *ptr);
+extern void *Icalloc(size_t nmemb, size_t sz);
+#  define malloc  Imalloc
+#  define free    Ifree
+#  define calloc  Icalloc
 extern void  *tkl_memset(void *, int, size_t);
 extern void  *tkl_memcpy(void *, const void *, size_t);
 extern void  *tkl_memmove(void *, const void *, size_t);

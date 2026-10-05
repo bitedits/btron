@@ -76,5 +76,12 @@ void term_set_size(int rows, int cols);
 void term_get_style_colors(int style, uint32_t *fg, uint32_t *bg);
 void term_get_cursor(int *row, int *col, int *visible);
 
+/* Context management for multi-instance terminal hosting */
+typedef struct TermContext TermContext;
+TermContext *term_context_create(void);
+void         term_context_destroy(TermContext *tc);
+void         term_set_context(TermContext *tc);
+TermContext *term_get_context(void);
+
 #endif /* CLU_TERM_H */
 

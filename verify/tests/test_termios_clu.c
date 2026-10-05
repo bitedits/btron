@@ -17,6 +17,7 @@
 #include "clu/term.h"
 #include "clu/vfs.h"
 #include "clu/tv/tv.h"
+#define SC_INTERNAL 1
 #include "clu/sc/sokhatsky.h"
 #include "apps/clu.h"
 
@@ -392,6 +393,102 @@ static void test_in_window_sc_and_tv_sessions(void)
     TEST_PASS();
 }
 
+/* ── 9. Multi-Instance SC & TV Context Isolation ─────────────────── */
+static void test_multi_instance_isolation(void)
+{
+    /* Instance 1: SC at 20x40 on /SYS */
+    TermContext *term1 = term_context_create();
+    ScContext *sc1 = sc_context_create();
+    CHECK(term1 != NULL, "term1 context creation should succeed");
+    CHECK(sc1 != NULL, "sc1 context creation should succeed");
+
+    term_set_context(term1);
+    sc_set_context(sc1);
+    CHECK(sc_session_init("/SYS", 20, 40) == 0, "sc1 init on /SYS should succeed");
+    CHECK(term_rows == 20 && term_cols == 40, "term1 dimensions should be 20x40");
+    CHECK(strcmp(left_panel.path, "/SYS") == 0, "sc1 left panel should be on /SYS");
+
+    /* Instance 2: SC at 35x90 on / */
+    TermContext *term2 = term_context_create();
+    ScContext *sc2 = sc_context_create();
+    CHECK(term2 != NULL, "term2 context creation should succeed");
+    CHECK(sc2 != NULL, "sc2 context creation should succeed");
+
+    term_set_context(term2);
+    sc_set_context(sc2);
+    CHECK(sc_session_init("/", 35, 90) == 0, "sc2 init on / should succeed");
+    CHECK(term_rows == 35 && term_cols == 90, "term2 dimensions should be 35x90");
+    CHECK(strcmp(left_panel.path, "/") == 0, "sc2 left panel should be on /");
+
+    /* Verify Instance 1 is preserved when switching back */
+    term_set_context(term1);
+    sc_set_context(sc1);
+    CHECK(term_rows == 20 && term_cols == 40, "term1 should preserve 20x40 dimensions");
+    CHECK(strcmp(left_panel.path, "/SYS") == 0, "sc1 should preserve /SYS path");
+
+    /* Verify Instance 2 is preserved when switching back */
+    term_set_context(term2);
+    sc_set_context(sc2);
+    CHECK(term_rows == 35 && term_cols == 90, "term2 should preserve 35x90 dimensions");
+    CHECK(strcmp(left_panel.path, "/") == 0, "sc2 should preserve / path");
+
+    /* Instance 3 & 4: Independent TV instances */
+    TvContext *tv1 = tv_context_create();
+    TvContext *tv2 = tv_context_create();
+    CHECK(tv1 != NULL, "tv1 context creation should succeed");
+    CHECK(tv2 != NULL, "tv2 context creation should succeed");
+
+    term_set_context(term1);
+    tv_set_context(tv1);
+    CHECK(tv_session_init("/SYS/README.md", 1, 20, 40) == 0, "tv1 init should succeed");
+
+    term_set_context(term2);
+    tv_set_context(tv2);
+    CHECK(tv_session_init("/SYS/CLU.md", 0, 35, 90) == 0, "tv2 init should succeed");
+
+    /* Move cursor down in tv1 */
+    term_set_context(term1);
+    tv_set_context(tv1);
+    tv_session_step(K_DOWN);
+    tv_session_step(K_DOWN);
+    tv_session_step(K_DOWN);
+
+    /* Move cursor down in tv2 */
+    term_set_context(term2);
+    tv_set_context(tv2);
+    tv_session_step(K_DOWN);
+
+    /* Verify independent screen cells */
+    uint32_t cp1 = 0, cp2 = 0;
+    int st1 = 0, st2 = 0;
+    term_set_context(term1);
+    term_get_cell(0, 1, &cp1, &st1);
+    term_set_context(term2);
+    term_get_cell(0, 1, &cp2, &st2);
+    CHECK(term_get_context() == term2, "term_get_context should return term2");
+
+    /* Clean up all instances */
+    term_set_context(term1);
+    tv_set_context(tv1);
+    tv_session_close();
+    sc_set_context(sc1);
+    sc_session_close();
+
+    term_set_context(term2);
+    tv_set_context(tv2);
+    tv_session_close();
+    sc_set_context(sc2);
+    sc_session_close();
+
+    tv_context_destroy(tv1);
+    tv_context_destroy(tv2);
+    sc_context_destroy(sc1);
+    sc_context_destroy(sc2);
+    term_context_destroy(term1);
+    term_context_destroy(term2);
+
+    TEST_PASS();
+}
 
 /* ── Main Test Runner ─────────────────────────────────────────────── */
 int main(void)
@@ -409,6 +506,7 @@ int main(void)
     test_sc_panel_navigation_and_dispatch();
     test_gterm_clu_command_set_wiring();
     test_in_window_sc_and_tv_sessions();
+    test_multi_instance_isolation();
 
     printf("========================================================\n");
 

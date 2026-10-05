@@ -14,6 +14,13 @@
 #define TV_MAX_LINES 2048
 #define TV_MAX_LINE_BYTES 1024
 
+typedef struct TvContext TvContext;
+
+TvContext *tv_context_create(void);
+void       tv_context_destroy(TvContext *tv);
+void       tv_set_context(TvContext *tv);
+TvContext *tv_get_context(void);
+
 /*
  * Run TV in-process on the given file path.
  * view_only: 1 for view mode (F3), 0 for edit mode (F4).

@@ -97,20 +97,57 @@ typedef struct {
     char output[4096];
 } CommandEntry;
 
-/* Global state */
-extern Panel left_panel, right_panel;
-extern Panel *active_panel;
-extern CommandEntry history[MAX_HISTORY];
-extern int history_count, history_pos, history_start;
-extern char command_buffer[512];
-extern int show_command_buffer;
-extern int history_scroll_pos;
-extern int history_display_offset;
-extern int total_lines;
-extern int max_display;
-extern int insert_mode;
-extern int cmd_cursor_pos;
-extern int cmd_display_offset;
+/* Context Management for Multi-Instance SC */
+typedef struct ScContext ScContext;
+
+struct ScContext {
+    Panel _left_panel;
+    Panel _right_panel;
+    Panel *_active_panel;
+    CommandEntry _history[MAX_HISTORY];
+    int _history_count;
+    int _history_pos;
+    int _history_start;
+    char _command_buffer[512];
+    int _show_command_buffer;
+    int _history_scroll_pos;
+    int _history_display_offset;
+    int _total_lines;
+    int _max_display;
+    int _insert_mode;
+    int _cmd_cursor_pos;
+    int _cmd_display_offset;
+    int _sc_tv_active;
+    TermContext *term_ctx;
+    TvContext   *tv_ctx;
+};
+
+#ifdef SC_INTERNAL
+extern ScContext *g_sc;
+
+#define left_panel (g_sc->_left_panel)
+#define right_panel (g_sc->_right_panel)
+#define active_panel (g_sc->_active_panel)
+#define history (g_sc->_history)
+#define history_count (g_sc->_history_count)
+#define history_pos (g_sc->_history_pos)
+#define history_start (g_sc->_history_start)
+#define command_buffer (g_sc->_command_buffer)
+#define show_command_buffer (g_sc->_show_command_buffer)
+#define history_scroll_pos (g_sc->_history_scroll_pos)
+#define history_display_offset (g_sc->_history_display_offset)
+#define total_lines (g_sc->_total_lines)
+#define max_display (g_sc->_max_display)
+#define insert_mode (g_sc->_insert_mode)
+#define cmd_cursor_pos (g_sc->_cmd_cursor_pos)
+#define cmd_display_offset (g_sc->_cmd_display_offset)
+#define g_sc_tv_active (g_sc->_sc_tv_active)
+#endif
+
+ScContext *sc_context_create(void);
+void       sc_context_destroy(ScContext *sc);
+void       sc_set_context(ScContext *sc);
+ScContext *sc_get_context(void);
 
 /* Functions in input.c */
 int  get_input(void);

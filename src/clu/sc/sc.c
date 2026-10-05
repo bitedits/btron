@@ -4,27 +4,46 @@
  * NASA JPL Power of Ten compliant, pure C99, universal portable code.
  * Zero host OS dependencies; cell diffing via term.h, VFS via vfs.h.
  */
+#define SC_INTERNAL 1
 #include "sokhatsky.h"
 
-/* Global State */
-Panel left_panel;
-Panel right_panel;
-Panel *active_panel = &left_panel;
+/* Global Context */
+static ScContext g_default_sc = {
+    ._insert_mode = 1
+};
+ScContext *g_sc = &g_default_sc;
 
-CommandEntry history[MAX_HISTORY];
-int history_count = 0;
-int history_pos = 0;
-int history_start = 0;
+ScContext *sc_context_create(void)
+{
+    ScContext *sc = (ScContext *)calloc(1, sizeof(ScContext));
+    if (!sc) return NULL;
+    sc->_active_panel = &sc->_left_panel;
+    sc->_insert_mode = 1;
+    return sc;
+}
 
-char command_buffer[512];
-int show_command_buffer = 0;
-int history_scroll_pos = 0;
-int history_display_offset = 0;
-int total_lines = 0;
-int max_display = 0;
-int insert_mode = 1;
-int cmd_cursor_pos = 0;
-int cmd_display_offset = 0;
+void sc_context_destroy(ScContext *sc)
+{
+    if (sc && sc != &g_default_sc) {
+        if (g_sc == sc) g_sc = &g_default_sc;
+        if (sc->tv_ctx) {
+            tv_context_destroy(sc->tv_ctx);
+            sc->tv_ctx = NULL;
+        }
+        free(sc);
+    }
+}
+
+void sc_set_context(ScContext *sc)
+{
+    g_sc = sc ? sc : &g_default_sc;
+    if (!g_sc->_active_panel) g_sc->_active_panel = &g_sc->_left_panel;
+}
+
+ScContext *sc_get_context(void)
+{
+    return g_sc;
+}
 
 static void sc_init_styles(void)
 {
@@ -115,8 +134,6 @@ void left_navigation(Panel *p)
     }
 }
 
-static int g_sc_tv_active = 0;
-
 int sc_is_tv_active(void)
 {
     return g_sc_tv_active;
@@ -124,6 +141,10 @@ int sc_is_tv_active(void)
 
 int sc_launch_tv(const char *filepath, int view_only)
 {
+    if (!g_sc->tv_ctx) {
+        g_sc->tv_ctx = tv_context_create();
+    }
+    tv_set_context(g_sc->tv_ctx);
     if (tv_session_init(filepath, view_only, term_rows, term_cols) == 0) {
         g_sc_tv_active = 1;
         return 0;
@@ -168,6 +189,7 @@ int sc_session_init(const char *start_path, int rows, int cols)
 void sc_session_close(void)
 {
     if (g_sc_tv_active) {
+        if (g_sc->tv_ctx) tv_set_context(g_sc->tv_ctx);
         tv_session_close();
         g_sc_tv_active = 0;
     }
@@ -180,6 +202,7 @@ int sc_session_step(int c)
     if (c == K_EOF) return 0;
 
     if (g_sc_tv_active) {
+        if (g_sc->tv_ctx) tv_set_context(g_sc->tv_ctx);
         int running = tv_session_step(c);
         if (!running) {
             tv_session_close();

@@ -4,6 +4,7 @@
  * NASA JPL Power of Ten compliant, pure C99, universal portable code.
  * Zero host OS dependencies; cell diffing via term.h.
  */
+#define SC_INTERNAL 1
 #include "sokhatsky.h"
 
 void draw_panel_border(int start_col, int start_row, int width, int height, int style)

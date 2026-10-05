@@ -245,7 +245,7 @@ void lilcu64_shim_chirp(void) {
 }
 
 /* Drum shims */
-static void drum_kick(float vol) {
+__attribute__((unused)) static void drum_kick(float vol) {
     if (s_muted) return;
     SynthVoice *v = alloc_voice();
     v->wave_type = VOICE_WAVE_SINE;
@@ -257,7 +257,7 @@ static void drum_kick(float vol) {
     v->decay_rate = 1.0f / (0.16f * (float)s_sample_rate);
 }
 
-static void drum_snare(float vol) {
+__attribute__((unused)) static void drum_snare(float vol) {
     if (s_muted) return;
     /* Tone burst + noise */
     SynthVoice *v1 = alloc_voice();
@@ -274,7 +274,7 @@ static void drum_snare(float vol) {
     v2->filter_coeff = 0.6f;
 }
 
-static void drum_hihat(float vol) {
+__attribute__((unused)) static void drum_hihat(float vol) {
     if (s_muted) return;
     SynthVoice *v = alloc_voice();
     v->wave_type = VOICE_WAVE_NOISE;

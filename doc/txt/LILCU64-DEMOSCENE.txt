@@ -624,16 +624,16 @@ TRACK 3 — 朝日のあたる家  (House of the Rising Sun — Thomas Kruger Ar
                                    radiant_wave(true) + blessing burst
  25.800    25 800     idle         Soul melody ascends to celestial sphere
 
-  Loop: at 25.800 s -> playTrack(3) restarts from t=0
-  Status: Music engine legacy step sequencer. Choreography TODO (C block pending).
+  Loop: at 26.800 s -> playTrack(3) restarts from t=0
+  Status: COMPLETE — 1:1 WebAudio transcription (lilcu64_score / lilcu64_wa) & 3D mascot choreography.
 
 ---------------------------------------------------------------------------------------------------
 TRACK 4 — TRON Init  (Nine Inch Nails / Trent Reznor, 2025)
 ---------------------------------------------------------------------------------------------------
-  Key: E Minor (industrial modal)  |  Meter: 4/4 Industrial  |  BPM: 132
+  Key: A Minor (A1 = 55.00 Hz)  |  Meter: 4/4 Industrial Electro-Rock  |  BPM: 93
   Duration: ~25.8 s  (loop at 25 800 ms)
-  Shims: shimGlitchZap, shimIndustrialBass, shimSwarmatron, shimCyberLead,
-         shimMetallicSnare, shimHiHat, shimKick, shimDing, shimPulseSquash
+  Shims: shimGlitchZap, shimIndustrialKick, shimIndustrialSnare, shimIndustrialBass,
+         shimIndustrialBassSlide, shimSwarmatron, shimCyberLead, shimPedalBass, shimDing
          Heavy overdriven 16th bassline, industrial kick/snare clang,
          gated cyber leads, terrifying 8-voice Swarmatron ribbon glissando.
   HTML ref: index.html lines 5463-5819
@@ -650,7 +650,7 @@ TRACK 4 — TRON Init  (Nine Inch Nails / Trent Reznor, 2025)
  21.000    21 000     idle         # ./start_ares_program [COMPLETE]
 
   Loop: at 25.800 s -> playTrack(4) restarts from t=0
-  Status: Music engine legacy step sequencer. Choreography TODO (C block pending).
+  Status: COMPLETE — 1:1 WebAudio transcription (lilcu64_score / lilcu64_wa) & 3D mascot choreography.
 
 5.4 VirtIO Sound Buffer Management & Ring Queueing
 The synthesis engine maintains an internal double-buffered PCM ring. Every 16ms render tick, the
@@ -713,9 +713,9 @@ sequencer advances its time cursor and fills ready audio frames directly into `v
       - Clean compilation on $ make run-posix and 100% test pass on $ make test.
    [x] Track 1 choreography synced 1:1 with index.html (verified against scheduleTrackTimeout ms values).
    [x] Track 2 choreography synced 1:1 with index.html (added 2026-10-04, 12 cue points).
-   [ ] Track 3 choreography C block pending (tables in section 6.3 above).
-   [ ] Track 4 choreography C block pending (tables in section 6.3 above).
-   [ ] Tracks 3-4 audio migration to lilcu64_wa / lilcu64_score (currently legacy step sequencer).
+   [x] Track 3 choreography synced 1:1 with index.html (added 2026-10-05, Thomas Krüger).
+   [x] Track 4 choreography synced 1:1 with index.html (added 2026-10-05, Trent Reznor TRON Init).
+   [x] Tracks 3-4 audio migration to lilcu64_wa / lilcu64_score (WebAudio node engine complete).
 
 ===================================================================================================
 8. CHOREOGRAPHY REFERENCE & BPM TIMING CONSTANTS
@@ -732,9 +732,7 @@ C dispatch pattern in update_mascot() — src/demo/lilcu64_demo.c:
    }
 
 Track time source:
-  Tracks 1-2: wa_time() - s_tl_base  (audio clock, sample-accurate, ~0.7 ms granularity)
-  Tracks 3-4: s_track_time           (legacy step sequencer, frame-rate granular ~16 ms)
-  Migrate tracks 3-4 to wa_time() path for sub-ms choreography precision.
+  Tracks 1-4: wa_time() - s_tl_base  (audio clock, sample-accurate, ~0.7 ms granularity)
 
 ---------------------------------------------------------------------------------------------------
 BPM Derivations (breakpoint alignment verification)
@@ -760,13 +758,13 @@ Track 2 — 98 BPM, 4/4 Jazz Swing:
   8 bar = 19.592 s              => walk  cue 19 600 ms  (19.600 s)
   9 bar = 22.041 s              => float cue 22 050 ms  (22.050 s)
 
-Track 3 — 72 BPM, 6/8 Arpeggio:
-  dotted-qtr = 60 / 72 = 0.83333 s
-  bar   = dotted-qtr * 2 = 1.66667 s  (2 beats per bar in 6/8)
+Track 3 — 76 BPM, 6/8 Arpeggio:
+  eighth = 60 / (76 * 2) = 0.39474 s
+  bar    = eighth * 6 = 2.36842 s
 
-Track 4 — 132 BPM, 4/4 Industrial:
-  beat  = 60 / 132 = 0.45455 s
-  bar   = beat * 4  = 1.81818 s
+Track 4 — 93 BPM, 4/4 Industrial Electro-Rock:
+  beat  = 60 / 93 = 0.64516 s
+  bar   = beat * 4  = 2.58065 s
 
 ---------------------------------------------------------------------------------------------------
 Status Matrix
@@ -775,9 +773,10 @@ Status Matrix
   Track   Music engine        Choreography in C     Notes
   ------  ------------------  --------------------  ----------------------------
   1       lilcu64_wa (WA)     COMPLETE (verified)   1:1 with index.html
-  2       lilcu64_wa (WA)     COMPLETE (added)      1:1 with index.html
-  3       legacy step seq.    TODO                  Add block matching section 6.3
-  4       legacy step seq.    TODO                  Add block matching section 6.3
+  2       lilcu64_wa (WA)     COMPLETE (verified)   1:1 with index.html
+  3       lilcu64_wa (WA)     COMPLETE (verified)   1:1 with index.html (Thomas Krüger)
+  4       lilcu64_wa (WA)     COMPLETE (verified)   1:1 with index.html (Trent Reznor TRON Init)
+
 
 ===================================================================================================
 END OF LILCU64-DEMOSCENE.txt

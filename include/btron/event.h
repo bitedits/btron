@@ -54,6 +54,10 @@ typedef struct {
 #define BTRON_KMOD_CTRL   0x00C0
 #define BTRON_KMOD_LALT   0x0100
 #define BTRON_KMOD_RALT   0x0200
+#define BTRON_KMOD_ALT    0x0300
+#define BTRON_KMOD_LGUI   0x0400
+#define BTRON_KMOD_RGUI   0x0800
+#define BTRON_KMOD_GUI    0x0C00
 #define BTRON_KMOD_CAPS   0x2000
 
 /* Standard Functional Keys (SDL Scancode compatible) */

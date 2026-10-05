@@ -63,10 +63,10 @@ static int parse_csi(const uint8_t *b, size_t n, size_t *used)
             int mod = (have && np >= 1) ? p[1] : 1;
             *used = i + 1;
             switch (ch) {
-            case 'A': return K_UP;
-            case 'B': return K_DOWN;
-            case 'C': return mod == 5 ? K_CTRL_RIGHT : mod == 2 ? K_SHIFT_RIGHT : K_RIGHT;
-            case 'D': return mod == 5 ? K_CTRL_LEFT : mod == 2 ? K_SHIFT_LEFT : K_LEFT;
+            case 'A': return mod == 5 ? K_CTRL_UP : K_UP;
+            case 'B': return mod == 5 ? K_CTRL_DOWN : K_DOWN;
+            case 'C': return (mod == 5 || mod == 3) ? K_CTRL_RIGHT : mod == 2 ? K_SHIFT_RIGHT : K_RIGHT;
+            case 'D': return (mod == 5 || mod == 3) ? K_CTRL_LEFT : mod == 2 ? K_SHIFT_LEFT : K_LEFT;
             case 'H': return K_HOME;
             case 'F': return K_END;
             case 'Z': return K_BTAB;

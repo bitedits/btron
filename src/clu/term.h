@@ -29,7 +29,7 @@ enum {
     K_INSERT, K_DELETE,
     K_F1, K_F2, K_F3, K_F4, K_F5, K_F6, K_F7, K_F8, K_F9, K_F10,
     K_ENTER, K_TAB, K_BTAB, K_BACKSPACE,
-    K_CTRL_LEFT, K_CTRL_RIGHT, K_SHIFT_LEFT, K_SHIFT_RIGHT,
+    K_CTRL_LEFT, K_CTRL_RIGHT, K_CTRL_UP, K_CTRL_DOWN, K_SHIFT_LEFT, K_SHIFT_RIGHT,
     K_CTRLB = K_BASE + 0x100        /* K_CTRL(n): Ctrl-A..Ctrl-Z = 1..26 */
 };
 #define K_CTRL(n) (K_CTRLB + (((n) >= 0x40) ? ((n) & 0x1F) : (n)))

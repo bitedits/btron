@@ -43,37 +43,14 @@ __attribute__((weak)) TvContext *tv_get_context(void) { return NULL; }
 #endif
 
 
-#if defined(__STDC_HOSTED__) && __STDC_HOSTED__ == 1
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <ctype.h>
+#include <btron/libc_shim.h>
+#if BTRON_HOSTED
 #include <unistd.h>
 #include <dirent.h>
 #include <time.h>
-#else
-#include <stddef.h>
-#include <stdint.h>
-#include <libstr.h>
-extern void* Imalloc(size_t sz);
-extern void Ifree(void *ptr);
-extern void* Icalloc(size_t nmemb, size_t sz);
-extern int snprintf(char *str, size_t size, const char *format, ...);
-extern void* tkl_memmove(void *dest, const void *src, size_t n);
-#define malloc  Imalloc
-#define free    Ifree
-#define calloc  Icalloc
-#define strncpy tkl_strncpy
-#define strncat tkl_strncat
-#define strcat  tkl_strcat
-#define strcmp  tkl_strcmp
-#define strncmp tkl_strncmp
-#define memset  tkl_memset
-#define memcpy  tkl_memcpy
-#define memmove tkl_memmove
-#define strlen  tkl_strlen
-#define isspace(c) ((c) == ' ' || (c) == '\t' || (c) == '\n' || (c) == '\r' || (c) == '\f' || (c) == '\v')
+#endif
 
+/* strstr() hardened against NULL arguments; the kernel's tkl_strstr is not. */
 static inline char* gterm_strstr(const char *haystack, const char *needle) {
     if (!haystack || !needle) return NULL;
     if (!*needle) return (char*)haystack;
@@ -89,7 +66,6 @@ static inline char* gterm_strstr(const char *haystack, const char *needle) {
     return NULL;
 }
 #define strstr  gterm_strstr
-#endif
 
 #define GTERM_MAX_COLS     256
 #define GTERM_MAX_ROWS     32
@@ -626,7 +602,7 @@ void shell_execute_cmd(const char *cmd_line, ShellOutputFn out_fn, void *user_da
         clu_ls(arg, out_fn, user_data);
         return;
     } else if (strcmp(cmd, "ls") == 0 || strcmp(cmd, "dir") == 0) {
-#if defined(__STDC_HOSTED__) && __STDC_HOSTED__ == 1
+#if BTRON_HOSTED
         const char *dir_path = (n > 1 && arg[0]) ? arg : ".";
         DIR *dir = opendir(dir_path);
         if (!dir) {
@@ -663,7 +639,7 @@ void shell_execute_cmd(const char *cmd_line, ShellOutputFn out_fn, void *user_da
         if (n <= 1 || !arg[0]) {
             out_fn("cat: missing file argument", COLOR_RED, user_data);
         } else {
-#if defined(__STDC_HOSTED__) && __STDC_HOSTED__ == 1
+#if BTRON_HOSTED
             FILE *f = fopen(arg, "r");
             if (!f) {
                 char err[280];
@@ -770,14 +746,14 @@ void shell_execute_cmd(const char *cmd_line, ShellOutputFn out_fn, void *user_da
         open_tad_browser_window("tad_bin/01_btron3_spec.tad", "【仕様書】BTRON3 3.20");
         out_fn("Started new TAD Browser instance", COLOR_GREEN, user_data);
     } else if (strcmp(cmd, "chat") == 0) {
-#if defined(__STDC_HOSTED__) && __STDC_HOSTED__ == 1
+#if BTRON_HOSTED
         launch_beos_chat();
         out_fn("Started new BeOS Chat instance", COLOR_GREEN, user_data);
 #else
         out_fn("BeOS Chat is supported in POSIX / Hosted mode", COLOR_YELLOW, user_data);
 #endif
     } else if (strcmp(cmd, "audio") == 0 || strcmp(cmd, "player") == 0 || strcmp(cmd, "cassette") == 0) {
-#if defined(__STDC_HOSTED__) && __STDC_HOSTED__ == 1
+#if BTRON_HOSTED
         open_audio_player_window();
         out_fn("Started SONY Cassette Deck instance", COLOR_GREEN, user_data);
 #else
@@ -790,7 +766,7 @@ void shell_execute_cmd(const char *cmd_line, ShellOutputFn out_fn, void *user_da
         open_gterm_window();
         out_fn("Started new Terminal instance", COLOR_GREEN, user_data);
     } else if (strcmp(cmd, "vobj") == 0) {
-#if defined(__STDC_HOSTED__) && __STDC_HOSTED__ == 1
+#if BTRON_HOSTED
         DIR *dir = opendir("./btron_store");
         if (!dir) {
             out_fn("vobj: btron_store directory not found", COLOR_RED, user_data);
@@ -813,7 +789,7 @@ void shell_execute_cmd(const char *cmd_line, ShellOutputFn out_fn, void *user_da
         out_fn("  [VOBJ] TKernel_Subsystem.sys (RealObject #103)", COLOR_GREEN, user_data);
 #endif
     } else if (strcmp(cmd, "date") == 0) {
-#if defined(__STDC_HOSTED__) && __STDC_HOSTED__ == 1
+#if BTRON_HOSTED
         time_t t = time(NULL);
         struct tm *tm_info = localtime(&t);
         char tbuf[128];

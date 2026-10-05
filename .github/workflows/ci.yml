@@ -51,10 +51,14 @@ jobs:
           python3 scripts/html2tad.py --test
           python3 scripts/book2tad.py --test
 
+      - name: Tree Structure Checks
+        run: |
+          make check-structure
+
       - name: Build Host Desktop & T-Kernel Engines
         run: |
           make clean
-          make all
+          make -k all
 
       - name: Build Bare-Metal ARM Targets (BCM283x Pi 2B & Pi 4B)
         run: |

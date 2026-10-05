@@ -9,43 +9,9 @@
  * No SDL dependency; pure C99.
  */
 
-#include <stddef.h>
-#include <stdint.h>
-
-#if defined(__STDC_HOSTED__) && __STDC_HOSTED__ == 1
-#  include <stdio.h>
-#  include <stdlib.h>
-#  include <string.h>
+#include <btron/libc_shim.h>
+#if BTRON_HOSTED
 #  include <time.h>
-#  include <ctype.h>
-#else
-   extern void *Imalloc(size_t);
-   extern void *Icalloc(size_t, size_t);
-   extern void  Ifree(void *);
-   extern int snprintf(char *, size_t, const char *, ...);
-   extern void *tkl_memset(void *, int, size_t);
-   extern void *tkl_memcpy(void *, const void *, size_t);
-   extern int   tkl_memcmp(const void *, const void *, size_t);
-   extern int   tkl_strcmp(const char *, const char *);
-   extern int   tkl_strncmp(const char *, const char *, size_t);
-   extern size_t tkl_strlen(const char *);
-   extern char  *tkl_strcpy(char *, const char *);
-   extern char  *tkl_strncpy(char *, const char *, size_t);
-   extern unsigned long int tkl_strtoul(const char *, char **, int);
-#  define malloc   Imalloc
-#  define calloc   Icalloc
-#  define free     Ifree
-#  define memset   tkl_memset
-#  define memcpy   tkl_memcpy
-#  define memcmp   tkl_memcmp
-#  define strcmp   tkl_strcmp
-#  define strncmp  tkl_strncmp
-#  define strlen   tkl_strlen
-#  define strcpy   tkl_strcpy
-#  define strncpy  tkl_strncpy
-#  define strtoul  tkl_strtoul
-#  define isspace(c) ((c)==' '||(c)=='\t'||(c)=='\n'||(c)=='\r')
-#  define isdigit(c) ((c)>='0'&&(c)<='9')
 #endif
 
 #include "clu.h"
@@ -130,7 +96,7 @@ static void get_target(const char *args, char *out, int maxlen) {
 
 /* ── Timestamp formatter ─────────────────────────────────────────── */
 static void fmt_ts(UW ts, char *buf, int bufsz) {
-#if defined(__STDC_HOSTED__) && __STDC_HOSTED__ == 1
+#if BTRON_HOSTED
     time_t t = (time_t)ts + 946684800L; /* BTRON epoch → Unix epoch */
     struct tm *tm_info = localtime(&t);
     if (tm_info)
@@ -1766,7 +1732,7 @@ void clu_touch(const char *args, ShellOutputFn out, void *ud)
     }
     OpenFile *of = &g_open_files[(int)fd];
     UW ts = (UW)(
-#if defined(__STDC_HOSTED__) && __STDC_HOSTED__ == 1
+#if BTRON_HOSTED
         time(NULL) - 946684800L
 #else
         0
@@ -1792,7 +1758,7 @@ void clu_chtime(const char *args, ShellOutputFn out, void *ud)
     if (fd < 0) { out("chtime: file not found", COLOR_RED, ud); return; }
     OpenFile *of = &g_open_files[(int)fd];
     UW ts = (UW)(
-#if defined(__STDC_HOSTED__) && __STDC_HOSTED__ == 1
+#if BTRON_HOSTED
         time(NULL) - 946684800L
 #else
         0

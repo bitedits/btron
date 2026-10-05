@@ -114,19 +114,14 @@ int main(int argc, char **argv) {
     tracker_init();
     global_menu_init();
 
-    /* Open initial BTRON desktop accessories */
-    open_vobj_manager_window();
-    open_clarity_window();
-    open_t_editor_window();
-    open_gterm_window();
-//    if (open_quake_window) {
-//        open_quake_window(80, 40, 560, 420);
-//    } else {
-//        open_glgears_window();
-//    }
-    if (open_lilcu64_demo_window) {
-        open_lilcu64_demo_window();
-    }
+/*  Open initial BTRON desktop accessories */
+//  open_vobj_manager_window();
+//  open_clarity_window();
+//  open_t_editor_window();
+//  open_gterm_window();
+//  open_quake_window(80, 40, 560, 420);
+//  open_glgears_window();
+//  open_lilcu64_demo_window();
 
     while (running) {
         /* Poll and process all pending system events */

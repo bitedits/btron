@@ -34,6 +34,7 @@ CC ?= gcc
 CFLAGS ?= -O2 -Wall -Wextra -std=c99 -Iinclude -Iinclude/gl -Isrc/gl -Iinclude/drivers -Isrc/kernel -Isrc/cores -Isrc/quake/include
 
 .PHONY: all posix qemu kernel tkernel sakamura foma uefi pc98 arm-elf arm64-elf m68k ps2 mips \
+        check-structure \
         html2tad book2tad tad_bin test test-kernel test-yoko test-yoko4 test-m68k test-mips test-ps2 test-foma test-foma-ui foma-screens \
         segui-screens \
         test-mozc test-editor test-hmi test-tad test-chat test-wylie verify test-fs test-chokanji test-quake test-replay \
@@ -512,6 +513,14 @@ TKERNEL_INC = -D_RPI_BCM283x_ -DTYPE_RPI=2 \
               -Iinclude -Iinclude/arch/bcm283x -Isrc/kernel -Isrc/cores
 
 all: posix qemu kernel sakamura foma uefi pc98
+
+# ── Tree structure invariants (see scripts/check_structure.sh) ──────────────
+check-structure:
+	@sh scripts/check_structure.sh
+
+# Emit one source path per line for a *_SRCS variable, for the check above.
+list-%:
+	@for f in $($*); do echo $$f; done
 
 # ═══════════════════════════════════════════════════════════════════
 # POSIX Desktop

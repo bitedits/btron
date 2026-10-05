@@ -17,8 +17,7 @@
 #include <drivers/virtio_gpu.h>
 #include <drivers/ps2_mouse.h>
 #include <drivers/pc98_mouse.h>
-#include <libstr.h>
-#define memcpy tkl_memcpy
+#include <btron/libc_shim.h>
 
 #define MULTIBOOT_HEADER_MAGIC 0x1BADB002
 #define MULTIBOOT_HEADER_FLAGS 0x00000003

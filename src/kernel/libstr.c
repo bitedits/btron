@@ -219,6 +219,7 @@ int tkl_strncmp(const char *s1, const char *s2, size_t n) {
 }
 
 char* tkl_strchr(const char *s, int c) {
+    if (!s) return NULL;
     while (*s) {
         if (*s == (char)c) return (char *)s;
         s++;
@@ -226,7 +227,32 @@ char* tkl_strchr(const char *s, int c) {
     return (c == 0) ? (char *)s : NULL;
 }
 
+char* tkl_strrchr(const char *s, int c) {
+    const char *last = NULL;
+    if (!s) return NULL;
+    while (*s) {
+        if (*s == (char)c) last = s;
+        s++;
+    }
+    return (c == 0) ? (char *)s : (char *)last;
+}
+
+char* tkl_strpbrk(const char *s, const char *accept) {
+    if (!s || !accept) return NULL;
+    for (; *s != '\0'; s++) {
+        for (const char *a = accept; *a != '\0'; a++) {
+            if (*s == *a) return (char *)s;
+        }
+    }
+    return NULL;
+}
+
+int tkl_atoi(const char *nptr) {
+    return (int)tkl_strtoul(nptr, NULL, 10);
+}
+
 char* tkl_strstr(const char *haystack, const char *needle) {
+    if (!haystack || !needle) return NULL;
     if (!*needle) return (char *)haystack;
     for (; *haystack; haystack++) {
         if (*haystack == *needle) {
@@ -388,7 +414,10 @@ char* tkl_strncat(char *dst, const char *src, size_t n) {
 char* strcat(char *dst, const char *src) __attribute__((weak, alias("tkl_strcat")));
 char* strncat(char *dst, const char *src, size_t n) __attribute__((weak, alias("tkl_strncat")));
 char* strchr(const char *s, int c) __attribute__((weak, alias("tkl_strchr")));
+char* strrchr(const char *s, int c) __attribute__((weak, alias("tkl_strrchr")));
+char* strpbrk(const char *s, const char *accept) __attribute__((weak, alias("tkl_strpbrk")));
 char* strstr(const char *haystack, const char *needle) __attribute__((weak, alias("tkl_strstr")));
+int     atoi(const char *nptr) __attribute__((weak, alias("tkl_atoi")));
 #endif
 
 /* Minimal standalone vsnprintf / snprintf */

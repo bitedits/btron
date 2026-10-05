@@ -11,18 +11,7 @@
 #include <btron/app_menu.h>
 #include "../window/pmc.h"
 
-#if defined(__STDC_HOSTED__) && __STDC_HOSTED__ == 1
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#else
-#include <stddef.h>
-#include <stdint.h>
-#include <libstr.h>
-#define memset tkl_memset
-#define strlen tkl_strlen
-#define snprintf tkl_snprintf
-#endif
+#include <btron/libc_shim.h>
 
 /* Global Icon Display Size Preference: Defaults to 64x64 */
 static BTRON_ICON_SIZE g_global_icon_size = BTRON_ICON_SIZE_64;

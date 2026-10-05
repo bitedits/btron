@@ -5,14 +5,9 @@
 
 #include <btron/event.h>
 #include <btron/dp.h>
-#if defined(__STDC_HOSTED__) && __STDC_HOSTED__ == 1
-#include <stdio.h>
+#include <btron/libc_shim.h>
+#if BTRON_HOSTED
 #include <SDL.h>
-#include <stdlib.h>
-#include <string.h>
-#else
-#include <stddef.h>
-#include <stdint.h>
 #endif
 
 #ifndef EVENT_QUEUE_SIZE
@@ -31,7 +26,7 @@ ER init_evt_sys(void) {
     return E_OK;
 }
 
-#if defined(__STDC_HOSTED__) && __STDC_HOSTED__ == 1 && !defined(_WIN32)
+#if BTRON_HOSTED && !defined(_WIN32)
 #include <stdio.h>
 #include <unistd.h>
 #include <fcntl.h>
@@ -145,7 +140,7 @@ ER snd_evt(const EVT *p_evt) {
     g_q_count++;
 
     if (p_evt->type == EV_KEY_DOWN || p_evt->type == EV_BUT_DOWN) {
-#if defined(__STDC_HOSTED__) && __STDC_HOSTED__ == 1
+#if BTRON_HOSTED
         printf("[TRACE-EVT] Enqueued type=%d key=%u ('%c') data=%ld (q_count=%d)\n",
                p_evt->type, (unsigned)p_evt->key,
                (p_evt->key >= 32 && p_evt->key <= 126) ? (char)p_evt->key : '?',
@@ -160,7 +155,7 @@ ER get_evt(EVT *p_evt, W timeout_ms) {
     if (!p_evt) return E_PAR;
     (void)timeout_ms;
 
-#if defined(__STDC_HOSTED__) && __STDC_HOSTED__ == 1 && !defined(_WIN32)
+#if BTRON_HOSTED && !defined(_WIN32)
     /* Poll TTY stdin for terminal input */
     poll_tty_stdin();
 #endif
@@ -173,7 +168,7 @@ ER get_evt(EVT *p_evt, W timeout_ms) {
         return E_OK;
     }
 
-#if defined(__STDC_HOSTED__) && __STDC_HOSTED__ == 1
+#if BTRON_HOSTED
     /* Poll SDL events */
     SDL_Event sdlev;
     /* Wheel momentum accumulator.  A host trackpad/swipe delivers many

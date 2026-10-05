@@ -50,22 +50,6 @@ __attribute__((weak)) TvContext *tv_get_context(void) { return NULL; }
 #include <time.h>
 #endif
 
-/* strstr() hardened against NULL arguments; the kernel's tkl_strstr is not. */
-static inline char* gterm_strstr(const char *haystack, const char *needle) {
-    if (!haystack || !needle) return NULL;
-    if (!*needle) return (char*)haystack;
-    for (; *haystack; haystack++) {
-        const char *h = haystack;
-        const char *n = needle;
-        while (*h && *n && *h == *n) {
-            h++;
-            n++;
-        }
-        if (!*n) return (char*)haystack;
-    }
-    return NULL;
-}
-#define strstr  gterm_strstr
 
 #define GTERM_MAX_COLS     256
 #define GTERM_MAX_ROWS     32

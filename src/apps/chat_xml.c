@@ -5,44 +5,7 @@
  */
 
 #include <btron/chat.h>
-#if defined(__STDC_HOSTED__) && __STDC_HOSTED__ == 1
-#include <stdio.h>
-#include <string.h>
-#include <stdlib.h>
-#else
-#include <stddef.h>
-#include <stdint.h>
-#include <libstr.h>
-#define strlen tkl_strlen
-#define strcmp tkl_strcmp
-#define strncmp tkl_strncmp
-#define strncpy tkl_strncpy
-#define strncat tkl_strncat
-#define strstr tkl_strstr
-#define memset tkl_memset
-#define memcpy tkl_memcpy
-#define snprintf tkl_snprintf
-static inline char* chat_strpbrk(const char *s, const char *accept) {
-    if (!s || !accept) return NULL;
-    for (; *s != '\0'; s++) {
-        for (const char *a = accept; *a != '\0'; a++) {
-            if (*s == *a) return (char*)s;
-        }
-    }
-    return NULL;
-}
-#define strpbrk chat_strpbrk
-extern void* Imalloc(size_t size);
-extern void  Ifree(void *ptr);
-static inline void* chat_xml_calloc(size_t n, size_t sz) {
-    size_t total = n * sz;
-    void *p = Imalloc(total);
-    if (p) tkl_memset(p, 0, total);
-    return p;
-}
-#define calloc chat_xml_calloc
-#define free Ifree
-#endif
+#include <btron/libc_shim.h>
 
 #define MAX_XML_ATTRS    8
 #define MAX_XML_CHILDREN 16

@@ -5,39 +5,19 @@
 
 #include <btron/vobj.h>
 
-#if defined(__STDC_HOSTED__) && __STDC_HOSTED__ == 1
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
+#include <btron/libc_shim.h>
+#if BTRON_HOSTED
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <dirent.h>
 #else
-#include <stddef.h>
-#include <stdint.h>
-#include <libstr.h>
-extern void* Imalloc(size_t sz);
-extern void Ifree(void *ptr);
-extern void* Icalloc(size_t nmemb, size_t sz);
-#define malloc Imalloc
-#define free Ifree
-#define calloc Icalloc
-#define strncpy tkl_strncpy
-#define memset tkl_memset
-#define memcpy tkl_memcpy
-#define strcmp tkl_strcmp
-#define strncat tkl_strncat
-#define snprintf tkl_snprintf
-#define strlen tkl_strlen
-static inline char* local_strchr(const char *s, int c) {
-    while (s && *s) {
-        if (*s == (char)c) return (char*)s;
-        s++;
-    }
-    return (c == 0 && s) ? (char*)s : (void*)0;
+/* The kernel has no rand(); same 24-bit LCG as include/gl/stdlib.h so link ids
+ * jitter alike on every target. */
+static inline int rand(void) {
+    static unsigned s_rand_state = 0xDEADBEEFu;
+    s_rand_state = s_rand_state * 1664525u + 1013904223u;
+    return (int)(s_rand_state >> 8);
 }
-#define strchr local_strchr
-static inline int rand(void) { return 42; }
 #endif
 
 #define MAX_ROBJS 2048
@@ -72,7 +52,7 @@ static void register_file_as_robj(const char *path, const char *name, VOBJ_TYPE 
             g_robj_table[i].type = type;
             strncpy(g_robj_table[i].name, name ? name : "Object", sizeof(g_robj_table[i].name) - 1);
             strncpy(g_robj_table[i].path, path, sizeof(g_robj_table[i].path) - 1);
-#if defined(__STDC_HOSTED__) && __STDC_HOSTED__ == 1
+#if BTRON_HOSTED
             struct stat st;
             if (stat(path, &st) == 0) {
                 g_robj_table[i].size = (UW)st.st_size;
@@ -87,7 +67,7 @@ static void register_file_as_robj(const char *path, const char *name, VOBJ_TYPE 
     }
 }
 
-#if defined(__STDC_HOSTED__) && __STDC_HOSTED__ == 1
+#if BTRON_HOSTED
 static void scan_dir_and_register(const char *dir_path, VOBJ_TYPE def_type) {
     DIR *d = opendir(dir_path);
     if (!d) return;
@@ -117,7 +97,7 @@ ER init_vobj_sys(const char *storage_root) {
     memset(g_robj_table, 0, sizeof(g_robj_table));
     g_next_robj_id = 100;
 
-#if defined(__STDC_HOSTED__) && __STDC_HOSTED__ == 1
+#if BTRON_HOSTED
     /* Ensure storage root directory exists */
     struct stat st;
     if (stat(g_storage_root, &st) != 0) {
@@ -234,7 +214,7 @@ VOBJ_LINK* cre_vobj_link(ID target_robj_id, const char *label, H x, H y) {
 ER rd_vobj_data(ROBJ *robj, void *buf, UW len, UW *read_bytes) {
     if (!robj || !buf || len == 0) return E_PAR;
 
-#if defined(__STDC_HOSTED__) && __STDC_HOSTED__ == 1
+#if BTRON_HOSTED
     FILE *fp = fopen(robj->path, "rb");
     if (!fp) {
         /* Fallback: if not found, return empty */
@@ -254,7 +234,7 @@ ER rd_vobj_data(ROBJ *robj, void *buf, UW len, UW *read_bytes) {
 ER wr_vobj_data(ROBJ *robj, const void *buf, UW len) {
     if (!robj || !buf) return E_PAR;
 
-#if defined(__STDC_HOSTED__) && __STDC_HOSTED__ == 1
+#if BTRON_HOSTED
     FILE *fp = fopen(robj->path, "wb");
     if (!fp) return ER_IO;
 

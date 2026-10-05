@@ -5,23 +5,7 @@
  */
 
 #include <btron/wylie.h>
-#if defined(__STDC_HOSTED__) && __STDC_HOSTED__ == 1
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <stdbool.h>
-#else
-#include <stddef.h>
-#include <stdint.h>
-#include <libstr.h>
-#define memset tkl_memset
-#define strlen tkl_strlen
-#define strncmp tkl_strncmp
-#define strcmp tkl_strcmp
-#define bool int
-#define true 1
-#define false 0
-#endif
+#include <btron/libc_shim.h>
 
 typedef enum {
     VAL_TYPE_NONE = 0,
@@ -419,7 +403,7 @@ int wylie_to_tibetan(const char *wylie_in, char *utf8_out, size_t max_out) {
     return (int)out_pos;
 }
 
-#if defined(__STDC_HOSTED__) && __STDC_HOSTED__ == 1
+#if BTRON_HOSTED
 int wylie_run_tests(void) {
     char buf[512];
     int failed = 0;

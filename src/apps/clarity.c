@@ -22,33 +22,9 @@ extern WND* open_t_editor_window(void);
 #include <btron/tip.h>
 #include <btron/event.h>
 
-#if defined(__STDC_HOSTED__) && __STDC_HOSTED__ == 1
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
+#include <btron/libc_shim.h>
+#if BTRON_HOSTED
 #include <sys/time.h>
-#else
-#include <stddef.h>
-#include <stdint.h>
-#include <libstr.h>
-extern void* Imalloc(size_t sz);
-extern void Ifree(void *ptr);
-extern void* Icalloc(size_t nmemb, size_t sz);
-extern int snprintf(char *str, size_t size, const char *format, ...);
-extern void* tkl_memmove(void *dest, const void *src, size_t n);
-#define malloc  Imalloc
-#define free    Ifree
-#define calloc  Icalloc
-#define strncpy tkl_strncpy
-#define strncat tkl_strncat
-#define strcat  tkl_strcat
-#define strcmp  tkl_strcmp
-#define strncmp tkl_strncmp
-#define memset  tkl_memset
-#define memcpy  tkl_memcpy
-#define memmove tkl_memmove
-#define strlen  tkl_strlen
-#define strcpy  tkl_strcpy
 #endif
 
 #if defined(__APPLE__) || defined(__linux__)
@@ -884,7 +860,7 @@ static void clarity_event(WND *wnd, const EVT *evt)
                 static UW s_last_clarity_click = 0;
                 UW cur_time = (UW)(uintptr_t)evt->data;
                 if (cur_time == 0) {
-#if defined(__STDC_HOSTED__) && __STDC_HOSTED__ == 1
+#if BTRON_HOSTED
                     struct timeval tv;
                     gettimeofday(&tv, NULL);
                     cur_time = (UW)(tv.tv_sec * 1000 + tv.tv_usec / 1000);

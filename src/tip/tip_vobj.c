@@ -7,19 +7,13 @@
 #include <btron/mozc_engine.h>
 #include <btron/vobj.h>
 
-#if defined(__STDC_HOSTED__) && __STDC_HOSTED__ == 1
-#include <stdio.h>
-#include <string.h>
-#include <stdlib.h>
-#else
-#include <stddef.h>
-#endif
+#include <btron/libc_shim.h>
 
 #define USER_DIC_FILE "./btron_store/jisshin_user_dic.dat"
 
 ER mozc_load_user_dictionary(const char *filepath) {
     const char *path = filepath ? filepath : USER_DIC_FILE;
-#if defined(__STDC_HOSTED__) && __STDC_HOSTED__ == 1
+#if BTRON_HOSTED
     FILE *fp = fopen(path, "r");
     if (!fp) return E_NOEXS;
 
@@ -40,7 +34,7 @@ ER mozc_load_user_dictionary(const char *filepath) {
 
 ER mozc_save_user_dictionary(const char *filepath) {
     const char *path = filepath ? filepath : USER_DIC_FILE;
-#if defined(__STDC_HOSTED__) && __STDC_HOSTED__ == 1
+#if BTRON_HOSTED
     FILE *fp = fopen(path, "w");
     if (!fp) return E_SYS;
 

@@ -13,57 +13,7 @@
 #include <btron/wnd.h>
 #include <btron/troncode.h>
 
-#if defined(__STDC_HOSTED__) && __STDC_HOSTED__ == 1
-#include <stdlib.h>
-#include <stdio.h>
-#include <string.h>
-#include <stddef.h>
-#include <stdint.h>
-#else
-#include <stddef.h>
-#include <stdint.h>
-#include <libstr.h>
-extern void* Imalloc(size_t sz);
-extern void Ifree(void *ptr);
-extern void* Icalloc(size_t nmemb, size_t sz);
-extern int snprintf(char *str, size_t size, const char *format, ...);
-extern void* tkl_memmove(void *dest, const void *src, size_t n);
-#define malloc  Imalloc
-#define free    Ifree
-#define calloc  Icalloc
-#define memset  tkl_memset
-#define memcpy  tkl_memcpy
-#define memmove tkl_memmove
-#define strlen  tkl_strlen
-#define strncpy tkl_strncpy
-#define strncmp tkl_strncmp
-#define strcmp  tkl_strcmp
-static inline int abs(int x) { return (x < 0) ? -x : x; }
-static inline char* strrchr(const char *s, int c) {
-    const char *last = NULL;
-    if (!s) return NULL;
-    while (*s) {
-        if (*s == (char)c) last = s;
-        s++;
-    }
-    if (c == '\0') return (char *)s;
-    return (char *)last;
-}
-static inline char* strstr(const char *haystack, const char *needle) {
-    if (!haystack || !needle) return NULL;
-    if (!*needle) return (char*)haystack;
-    for (; *haystack; haystack++) {
-        const char *h = haystack;
-        const char *n = needle;
-        while (*h && *n && *h == *n) {
-            h++;
-            n++;
-        }
-        if (!*n) return (char*)haystack;
-    }
-    return NULL;
-}
-#endif
+#include <btron/libc_shim.h>
 
 /* ------------------------------------------------------------------ */
 /* Unit conversion with Zoom                                            */
@@ -756,7 +706,7 @@ int clarity_frame_load_text(ClarityFrame *f, const char *path, ID robj_id, const
 
     /* 2. Fall back to reading from file system */
     if (!read_ok) {
-#if defined(__STDC_HOSTED__) && __STDC_HOSTED__ == 1
+#if BTRON_HOSTED
         FILE *fp = NULL;
         for (int i = 0; i < n_try; i++) {
             fp = fopen(try_paths[i], "rb");

@@ -3,20 +3,7 @@
  */
 
 #include <btron/dp.h>
-#if defined(__STDC_HOSTED__) && __STDC_HOSTED__ == 1
-#include <stdlib.h>
-#include <string.h>
-#else
-#include <stddef.h>
-#include <stdint.h>
-extern void* Imalloc(size_t sz);
-extern void Ifree(void *ptr);
-extern void* Icalloc(size_t nmemb, size_t sz);
-#define malloc Imalloc
-#define free Ifree
-#define calloc Icalloc
-static inline int abs(int n) { return n < 0 ? -n : n; }
-#endif
+#include <btron/libc_shim.h>
 
 GDEV* opn_dev(H w, H h) {
     if (w <= 0 || h <= 0) return NULL;

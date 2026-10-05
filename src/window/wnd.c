@@ -8,22 +8,7 @@
 #include <btron/troncode.h>
 #include <btron/fast_blit.h>
 #include "pmc.h"
-#if defined(__STDC_HOSTED__) && __STDC_HOSTED__ == 1
-#include <stdlib.h>
-#include <string.h>
-#include <stdio.h>
-#else
-#include <stddef.h>
-#include <stdint.h>
-extern void* Imalloc(size_t sz);
-extern void Ifree(void *ptr);
-extern void* Icalloc(size_t nmemb, size_t sz);
-extern char* tkl_strncpy(char *dst, const char *src, size_t n);
-#define malloc Imalloc
-#define free Ifree
-#define calloc Icalloc
-#define strncpy tkl_strncpy
-#endif
+#include <btron/libc_shim.h>
 
 static WND *g_wnd_head = NULL;
 static ID g_next_wnd_id = 1;

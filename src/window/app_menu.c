@@ -6,26 +6,7 @@
 #include <btron/app_menu.h>
 #include <btron/troncode.h>
 
-#if defined(__STDC_HOSTED__) && __STDC_HOSTED__ == 1
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#else
-#include <stddef.h>
-#include <stdint.h>
-#include <libstr.h>
-extern void* Icalloc(size_t nmemb, size_t sz);
-extern void  Ifree(void *ptr);
-#define calloc   Icalloc
-#define free     Ifree
-#define memset   tkl_memset
-#define memcpy   tkl_memcpy
-#define strlen   tkl_strlen
-#define strcmp   tkl_strcmp
-#define strncpy  tkl_strncpy
-#define strstr   tkl_strstr
-#define snprintf tkl_snprintf
-#endif
+#include <btron/libc_shim.h>
 
 static APP_MENU_STYLE s_global_menu_style = APP_MENU_STYLE_CLASSIC_3D;
 
@@ -639,7 +620,7 @@ typedef struct {
 } AboutDialogData;
 
 static int decode_and_draw_about_gif(GDEV *dev, const char *filepath, int dst_x, int dst_y) {
-#if defined(__STDC_HOSTED__) && __STDC_HOSTED__ == 1
+#if BTRON_HOSTED
 #define ABOUT_ICON_LZW_DICT   4096
 #define ABOUT_ICON_MAX_PIXELS (64 * 64)
 

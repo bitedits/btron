@@ -5,17 +5,7 @@
 #include <btron/dnd.h>
 #include <btron/troncode.h>
 
-#if defined(__STDC_HOSTED__) && __STDC_HOSTED__ == 1
-#include <string.h>
-#include <stdio.h>
-#else
-#include <stddef.h>
-#include <libstr.h>
-#define memset tkl_memset
-#define memcpy tkl_memcpy
-#define strlen tkl_strlen
-#define strncpy tkl_strncpy
-#endif
+#include <btron/libc_shim.h>
 
 static BTRON_DND g_dnd;
 

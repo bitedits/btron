@@ -3,15 +3,9 @@
  * Iverson Vector Array Expressions & SIMD Evaluation
  */
 
-#if defined(__STDC_HOSTED__) && __STDC_HOSTED__ == 1
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
+#include <btron/libc_shim.h>
+#if BTRON_HOSTED
 #include <math.h>
-#else
-#include <stddef.h>
-#include <stdint.h>
-#include <libstr.h>
 #endif
 
 int matrix_apl_eval(const char *expr, double *out_res) {

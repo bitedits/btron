@@ -5,22 +5,7 @@
 
 #include <btron/mozc_engine.h>
 #include <btron/tip.h>
-#if defined(__STDC_HOSTED__) && __STDC_HOSTED__ == 1
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#else
-#include <stddef.h>
-#include <stdint.h>
-#include <libstr.h>
-#define strlen   tkl_strlen
-#define strcmp   tkl_strcmp
-#define strncmp(s1, s2, n) tkl_memcmp(s1, s2, n)
-#define strncpy  tkl_strncpy
-#define memcpy   tkl_memcpy
-#define memmove  tkl_memmove
-#define memset   tkl_memset
-#endif
+#include <btron/libc_shim.h>
 
 /* ── Complete B-System Mozc Romanji-to-Hiragana Conversion Table ── */
 typedef struct {

@@ -7,11 +7,7 @@
 #include <btron/mozc_engine.h>
 #include <btron/itron.h>
 
-#if defined(__STDC_HOSTED__) && __STDC_HOSTED__ == 1
-#include <stdio.h>
-#else
-#include <stddef.h>
-#endif
+#include <btron/libc_shim.h>
 
 /*
  * TIP Asynchronous Conversion Task Lifecycle (btron-tip.tex Section 5.2)

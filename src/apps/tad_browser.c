@@ -8,90 +8,10 @@
 #include <btron/event.h>
 #include <btron/error.h>
 
-#if defined(__STDC_HOSTED__) && __STDC_HOSTED__ == 1
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
+#include <btron/libc_shim.h>
+#if BTRON_HOSTED
 #include <zlib.h>
-#if defined(__STDC_HOSTED__) && __STDC_HOSTED__ == 1
 #include <dirent.h>
-#endif
-#else
-#include <stddef.h>
-#include <stdint.h>
-#include <libstr.h>
-extern void* Imalloc(size_t sz);
-extern void Ifree(void *ptr);
-extern void* Icalloc(size_t nmemb, size_t sz);
-#define malloc   Imalloc
-#define free     Ifree
-#define calloc   Icalloc
-#define memset   tkl_memset
-#define memcpy   tkl_memcpy
-#define memcmp   tkl_memcmp
-#define strlen   tkl_strlen
-#define strcmp   tkl_strcmp
-#define strcpy   tkl_strcpy
-#define strncpy  tkl_strncpy
-extern int tkl_snprintf(char *str, size_t size, const char *format, ...);
-#define snprintf tkl_snprintf
-
-static inline int local_strncmp(const char *s1, const char *s2, size_t n) {
-    if (!s1 || !s2 || n == 0) return 0;
-    while (n && *s1 && *s2) {
-        if (*s1 != *s2) return (unsigned char)*s1 - (unsigned char)*s2;
-        s1++;
-        s2++;
-        n--;
-    }
-    return (n == 0) ? 0 : ((unsigned char)*s1 - (unsigned char)*s2);
-}
-#define strncmp local_strncmp
-
-static inline char* local_strchr(const char *s, int c) {
-    if (!s) return (void*)0;
-    while (*s) {
-        if (*s == (char)c) return (char*)s;
-        s++;
-    }
-    return (c == 0) ? (char*)s : (void*)0;
-}
-#define strchr local_strchr
-
-static inline char* local_strrchr(const char *s, int c) {
-    if (!s) return (void*)0;
-    const char *last = (void*)0;
-    while (*s) {
-        if (*s == (char)c) last = s;
-        s++;
-    }
-    if (c == 0) return (char*)s;
-    return (char*)last;
-}
-#define strrchr local_strrchr
-
-static inline int local_atoi(const char *s) {
-    if (!s) return 0;
-    int res = 0;
-    while (*s >= '0' && *s <= '9') {
-        res = res * 10 + (*s - '0');
-        s++;
-    }
-    return res;
-}
-#define atoi local_atoi
-
-static inline char* local_strstr(const char *haystack, const char *needle) {
-    if (!haystack || !needle) return (void*)0;
-    size_t nlen = tkl_strlen(needle);
-    if (nlen == 0) return (char*)haystack;
-    while (*haystack) {
-        if (tkl_memcmp(haystack, needle, nlen) == 0) return (char*)haystack;
-        haystack++;
-    }
-    return (void*)0;
-}
-#define strstr local_strstr
 #endif
 
 /* Weak linkage declarations */
@@ -508,7 +428,7 @@ ER tad_browser_load_file(TAD_BROWSER *tb, const char *filepath) {
     if (!tb || !filepath) return E_PAR;
     strncpy(tb->file_path, filepath, sizeof(tb->file_path) - 1);
 
-#if defined(__STDC_HOSTED__) && __STDC_HOSTED__ == 1
+#if BTRON_HOSTED
     FILE *f = fopen(filepath, "rb");
     if (!f) return E_NOEXS;
     fseek(f, 0, SEEK_END);
@@ -1019,7 +939,7 @@ static void render_figure_diagram(GDEV *dev, const TAD_SPAN *s, const RECT *cvs)
     }
 }
 
-#if defined(__STDC_HOSTED__) && __STDC_HOSTED__ == 1
+#if BTRON_HOSTED
 
 #define MAX_GIF_PIXELS (2048 * 3000)
 #define MAX_LZW_DICT 4096
@@ -1599,7 +1519,7 @@ static void tad_init_menu_bar(TAD_BROWSER *tb) {
 
 static int tad_scan_available_files(char files[MAX_TAD_FILES][64]) {
     int count = 0;
-#if defined(__STDC_HOSTED__) && __STDC_HOSTED__ == 1
+#if BTRON_HOSTED
     const char *dirs[] = { "tad_bin", "tad_bin/shared_data", "tad_bin/os_spec/kernel", "assets" };
     for (int d = 0; d < 4 && count < MAX_TAD_FILES; d++) {
         DIR *dir = opendir(dirs[d]);
@@ -1944,7 +1864,7 @@ void tad_browser_paint(TAD_BROWSER *tb, GDEV *dev, const RECT *client_rect) {
 }
 
 static int file_exists(const char *path) {
-#if defined(__STDC_HOSTED__) && __STDC_HOSTED__ == 1
+#if BTRON_HOSTED
     if (!path) return 0;
     FILE *f = fopen(path, "rb");
     if (f) {

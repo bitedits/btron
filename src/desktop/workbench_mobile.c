@@ -42,17 +42,7 @@
 #ifndef KMOD_CTRL
 #define KMOD_CTRL      0x0040
 #endif
-#if defined(__STDC_HOSTED__) && __STDC_HOSTED__ == 1
-#include <stdio.h>
-#include <string.h>
-#include <stdlib.h>
-#else
-#include <libstr.h>
-#define snprintf tkl_snprintf
-#define strlen   tkl_strlen
-#define strncpy  tkl_strncpy
-#define strcmp   tkl_strcmp
-#endif
+#include <btron/libc_shim.h>
 
 /* Forward declarations for screen constructors */
 static void show_home_cabinet_screen(void);

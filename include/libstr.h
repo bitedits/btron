@@ -62,11 +62,14 @@ extern char* tkl_strncpy( char *dst, const char *src, size_t n );
 extern char* tkl_strcat( char *dst, const char *src );
 extern char* tkl_strncat( char *dst, const char *src, size_t n );
 extern char* tkl_strstr( const char *haystack, const char *needle );
+extern char* tkl_strrchr( const char *s, int c );
+extern char* tkl_strpbrk( const char *s, const char *accept );
 extern int tkl_snprintf( char *str, size_t size, const char *format, ... );
 #include <stdarg.h>
 extern int tkl_vsnprintf( char *str, size_t size, const char *format, va_list ap );
 
 extern unsigned long int tkl_strtoul( const char *nptr, char **endptr, int base );
+extern int tkl_atoi( const char *nptr );
 
 #define	MEMSET	tkl_memset
 #define	MEMCMP	tkl_memcmp

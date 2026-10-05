@@ -6,14 +6,7 @@
 #include <btron/wnd.h>
 #include <btron/dp.h>
 #include <btron/event.h>
-#if defined(__STDC_HOSTED__) && __STDC_HOSTED__ == 1
-#include <stdio.h>
-#include <string.h>
-#else
-#include <stddef.h>
-#include <stdint.h>
-#include <libstr.h>
-#endif
+#include <btron/libc_shim.h>
 
 void workbench_launch_app(const char *app_name) {
     if (!app_name) return;

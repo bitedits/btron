@@ -13,15 +13,9 @@
 #include <btron/settings_icon.h>
 #include <btron/apps.h>
 #include <btron/fast_blit.h>
-#if defined(__STDC_HOSTED__) && __STDC_HOSTED__ == 1
-#include <stdio.h>
+#include <btron/libc_shim.h>
+#if BTRON_HOSTED
 #include <time.h>
-#include <string.h>
-#else
-#include <stddef.h>
-#include <stdint.h>
-#include <libstr.h>
-#define strlen tkl_strlen
 #endif
 
 typedef struct {
@@ -167,7 +161,7 @@ void render_desktop_background(GDEV *dev) {
         /* Scaled Pictogram Icon (32x32 or 64x64 according to Appearance settings) */
         BOOL icon_drawn = draw_setting_gif_icon_scaled(dev, s_desktop_icons[i].id_str, icon_x, icon_y, icon_dim, icon_dim);
 
-#if !defined(__STDC_HOSTED__) || __STDC_HOSTED__ != 1
+#if !BTRON_HOSTED
         if (!icon_drawn) {
             /* Fallback kanji glyph for freestanding baremetal mode if icon not available */
             drw_tc_string(dev, plate.left + (plate.right - plate.left - 24) / 2,

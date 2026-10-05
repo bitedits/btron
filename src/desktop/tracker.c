@@ -11,10 +11,7 @@
 #include <btron/about.h>
 #include <btron/app_menu.h>
 
-#if defined(__STDC_HOSTED__) && __STDC_HOSTED__ == 1
-#include <stdio.h>
-#include <string.h>
-#endif
+#include <btron/libc_shim.h>
 
 /* Freestanding-safe string helpers */
 static void tracker_safe_copy(char *dst, const char *src, int max_len) {

@@ -15,36 +15,11 @@
 #include <btron/settings_icon.h>
 #include <btron/dnd.h>
 
-#if defined(__STDC_HOSTED__) && __STDC_HOSTED__ == 1
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
+#include <btron/libc_shim.h>
+#if BTRON_HOSTED
 #include <dirent.h>
 #include <sys/stat.h>
 #include <sys/time.h>
-#else
-#include <stddef.h>
-#include <stdint.h>
-#include <libstr.h>
-#define memset   tkl_memset
-#define memcpy   tkl_memcpy
-#define strlen   tkl_strlen
-#define strcmp   tkl_strcmp
-#define strncpy  tkl_strncpy
-extern int tkl_snprintf(char *str, size_t size, const char *format, ...);
-#define snprintf tkl_snprintf
-
-static inline char* local_strstr(const char *haystack, const char *needle) {
-    if (!haystack || !needle) return (void*)0;
-    size_t nlen = tkl_strlen(needle);
-    if (nlen == 0) return (char*)haystack;
-    while (*haystack) {
-        if (tkl_memcmp(haystack, needle, nlen) == 0) return (char*)haystack;
-        haystack++;
-    }
-    return (void*)0;
-}
-#define strstr local_strstr
 #endif
 
 #if defined(__GNUC__) || defined(__clang__)
@@ -543,7 +518,7 @@ static void cabinet_sort_items(CABINET_EXPLORER *cab) {
     }
 }
 
-#if defined(__STDC_HOSTED__) && __STDC_HOSTED__ == 1
+#if BTRON_HOSTED
 
 static ID deduce_robj_id(const char *path) {
     if (strstr(path, "01_btron3_spec")) return 101;
@@ -739,7 +714,7 @@ static void cabinet_init_defaults(CABINET_EXPLORER *cab) {
     cab->scroll_offset = 0;
     cab->view_mode = CAB_VIEW_LIST;
 
-#if defined(__STDC_HOSTED__) && __STDC_HOSTED__ == 1
+#if BTRON_HOSTED
     /* Dynamic discovery: canonical books in tad_bin, plus SYS, doc/md, assets */
     cabinet_discover_dir(cab, "tad_bin");
     cabinet_discover_dir(cab, "SYS");
@@ -1211,7 +1186,7 @@ static void handle_vobj_manager_event(WND *wnd, const EVT *evt) {
             static UW s_last_click_time = 0;
             UW cur_time = (UW)(uintptr_t)evt->data;
             if (cur_time == 0) {
-#if defined(__STDC_HOSTED__) && __STDC_HOSTED__ == 1
+#if BTRON_HOSTED
                 struct timeval tv;
                 gettimeofday(&tv, NULL);
                 cur_time = (UW)(tv.tv_sec * 1000 + tv.tv_usec / 1000);

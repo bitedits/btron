@@ -18,23 +18,7 @@
 #include <btron/troncode.h>
 #include <btron/apps.h>
 
-#if defined(__STDC_HOSTED__) && __STDC_HOSTED__ == 1
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#else
-#include <stddef.h>
-#include <stdint.h>
-#include <libstr.h>
-#define strlen tkl_strlen
-#define strcmp tkl_strcmp
-#define strncpy tkl_strncpy
-#define memset tkl_memset
-#define memcpy tkl_memcpy
-#define memmove tkl_memmove
-#define memcmp tkl_memcmp
-#define snprintf tkl_snprintf
-#endif
+#include <btron/libc_shim.h>
 
 #define ORCHESTRA_MAX_PORTS     32
 #define ORCHESTRA_MAX_TRACKS    64

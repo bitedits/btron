@@ -15,18 +15,7 @@
 
 #include <btron/fs/block.h>
 
-#if defined(__STDC_HOSTED__) && __STDC_HOSTED__ == 1
-#  include <stdlib.h>
-#  include <string.h>
-#else
-   /* Bare-metal: rely on kernel malloc/memcpy aliases */
-   extern void *Imalloc(size_t sz);
-   extern void  Ifree(void *ptr);
-   extern void *tkl_memcpy(void *d, const void *s, size_t n);
-#  define malloc  Imalloc
-#  define free    Ifree
-#  define memcpy  tkl_memcpy
-#endif
+#include <btron/libc_shim.h>
 
 /* ── Private context ───────────────────────────────────────────── */
 typedef struct {

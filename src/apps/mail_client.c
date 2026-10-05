@@ -3,15 +3,7 @@
  * IMAP4, SMTP, and Local Maildir Dispatch
  */
 
-#if defined(__STDC_HOSTED__) && __STDC_HOSTED__ == 1
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#else
-#include <stddef.h>
-#include <stdint.h>
-#include <libstr.h>
-#endif
+#include <btron/libc_shim.h>
 
 int mail_client_connect(const char *server, int port, const char *user, const char *pass) {
     (void)port;

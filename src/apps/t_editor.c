@@ -20,46 +20,10 @@
  * it as the WND menu_open hook. */
 BOOL t_editor_is_menu_open(WND *wnd);
 
-#if defined(__STDC_HOSTED__) && __STDC_HOSTED__ == 1
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <ctype.h>
+#include <btron/libc_shim.h>
+#if BTRON_HOSTED
 #include <dirent.h>
 #include <sys/stat.h>
-#else
-#include <stddef.h>
-#include <stdint.h>
-#include <libstr.h>
-extern void* Imalloc(size_t sz);
-extern void Ifree(void *ptr);
-extern void* Icalloc(size_t nmemb, size_t sz);
-extern int snprintf(char *str, size_t size, const char *format, ...);
-extern void* tkl_memmove(void *dest, const void *src, size_t n);
-#define malloc  Imalloc
-#define free    Ifree
-#define calloc  Icalloc
-#define strncpy tkl_strncpy
-#define strncat tkl_strncat
-#define memset  tkl_memset
-#define memcpy  tkl_memcpy
-#define memmove tkl_memmove
-#define strlen  tkl_strlen
-#define strstr  tkl_strstr
-#define strcmp  tkl_strcmp
-#define strncmp tkl_strncmp
-
-static inline char* local_strrchr(const char *s, int c) {
-    if (!s) return NULL;
-    const char *last = NULL;
-    while (*s) {
-        if (*s == (char)c) last = s;
-        s++;
-    }
-    if (c == 0) return (char*)s;
-    return (char*)last;
-}
-#define strrchr local_strrchr
 #endif
 
 /* TEditor struct is defined in <btron/t_editor.h> */
@@ -826,7 +790,7 @@ int teditor_scan_fs_dir(const char *dir_path, TMenuTreeItem *out_items, int max_
                 cls_dir(dir);
             }
         }
-#if defined(__STDC_HOSTED__) && __STDC_HOSTED__ == 1
+#if BTRON_HOSTED
         if (count == 0) {
             DIR *d = opendir("doc/md");
             if (d) {
@@ -907,7 +871,7 @@ int teditor_scan_fs_dir(const char *dir_path, TMenuTreeItem *out_items, int max_
         }
     }
 
-#if defined(__STDC_HOSTED__) && __STDC_HOSTED__ == 1
+#if BTRON_HOSTED
     if (count == 0) {
         /* Map /ANDERS to assets/anders on host */
         const char *host_path = dir_path;
@@ -1239,7 +1203,7 @@ int teditor_get_asset_files(char files[][64], int max_files) {
         count++;
     }
 
-#if defined(__STDC_HOSTED__) && __STDC_HOSTED__ == 1
+#if BTRON_HOSTED
     /* Discover .txt files from host directory assets/texts ONLY.
        MD files are mounted inside SYS System Docs, NOT duplicated in root! */
     DIR *d = opendir("assets/texts");
@@ -2020,7 +1984,7 @@ int teditor_load_file(TEditor *ed, const char *filepath) {
         }
     }
 
-#if defined(__STDC_HOSTED__) && __STDC_HOSTED__ == 1
+#if BTRON_HOSTED
     /* 2. Fall back to host filesystem */
     FILE *fp = fopen(filepath, "r");
     if (!fp) {
@@ -2119,7 +2083,7 @@ int teditor_save_file(TEditor *ed, const char *filepath) {
         }
     }
 
-#if defined(__STDC_HOSTED__) && __STDC_HOSTED__ == 1
+#if BTRON_HOSTED
     /* 2. Also save to host filesystem if hosted */
     FILE *fp = fopen(target, "w");
     if (!fp) {

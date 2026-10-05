@@ -7,15 +7,7 @@
 #include <btron/dp.h>
 #include <btron/vobj.h>
 #include <btron/event.h>
-#if defined(__STDC_HOSTED__) && __STDC_HOSTED__ == 1
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#else
-#include <stddef.h>
-#include <stdint.h>
-#include <libstr.h>
-#endif
+#include <btron/libc_shim.h>
 
 typedef struct {
     WND *wnd;

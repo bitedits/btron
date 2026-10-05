@@ -12,17 +12,7 @@
 #include <btron/wnd.h>
 #include <btron/settings_icon.h>
 
-#if defined(__STDC_HOSTED__) && __STDC_HOSTED__ == 1
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#else
-#include <stddef.h>
-#include <stdint.h>
-#include <libstr.h>
-#define strlen tkl_strlen
-#define snprintf tkl_snprintf
-#endif
+#include <btron/libc_shim.h>
 
 /* SONY Industrial Color Palette (Conforming to About Box) */
 #define SONY_COL_CANVAS       0xFF16191E  /* Deep Titanium Slate */

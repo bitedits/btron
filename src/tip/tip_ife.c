@@ -11,25 +11,7 @@
 #include <btron/troncode.h>
 #include <btron/wnd.h>
 
-#if defined(__STDC_HOSTED__) && __STDC_HOSTED__ == 1
-#include <stdio.h>
-#include <string.h>
-#include <stdlib.h>
-#else
-#include <stddef.h>
-#include <stdint.h>
-#include <libstr.h>
-#define strlen   tkl_strlen
-#define strcmp   tkl_strcmp
-#define strncpy  tkl_strncpy
-#define memcpy   tkl_memcpy
-#define memset   tkl_memset
-static inline int snprintf(char *str, size_t size, const char *format, ...) {
-    (void)format;
-    if (size > 0) str[0] = '\0';
-    return 0;
-}
-#endif
+#include <btron/libc_shim.h>
 
 
 static TIP_KEY_SETTINGS g_tip_key_settings = {

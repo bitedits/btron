@@ -23,29 +23,9 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#if defined(__STDC_HOSTED__) && __STDC_HOSTED__ == 1
-#  include <stdlib.h>
-#  include <string.h>
-#  include <time.h>
-#else
-   extern void *Imalloc(size_t);
-   extern void *Icalloc(size_t, size_t);
-   extern void  Ifree(void *);
-   extern void *tkl_memcpy(void *, const void *, size_t);
-   extern void *tkl_memset(void *, int, size_t);
-   extern int   tkl_strcmp(const char *, const char *);
-   extern int   tkl_strncmp(const char *, const char *, size_t);
-   extern size_t tkl_strlen(const char *);
-   extern char *tkl_strncpy(char *, const char *, size_t);
-#  define malloc   Imalloc
-#  define calloc   Icalloc
-#  define free     Ifree
-#  define memcpy   tkl_memcpy
-#  define memset   tkl_memset
-#  define strcmp   tkl_strcmp
-#  define strncmp  tkl_strncmp
-#  define strlen   tkl_strlen
-#  define strncpy  tkl_strncpy
+#include <btron/libc_shim.h>
+#if BTRON_HOSTED
+#include <time.h>
 #endif
 
 #include <btron/fs/vol_api.h>
@@ -762,7 +742,7 @@ int vol_format(BlkDev *dev, UW nfmax, UW nlb, const char *name)
         UH flags = (UH)((FTYPE_NORMAL << 12) | FFLG_READ | FFLG_WRITE);
         wr_u16_be(blk_buf +  0, flags);
         wr_u16_be(blk_buf +  2, 0);     /* atype */
-#if defined(__STDC_HOSTED__) && __STDC_HOSTED__ == 1
+#if BTRON_HOSTED
         UW ts = (UW)(time(NULL) - 946684800UL); /* secs since 2000-01-01 */
 #else
         UW ts = 0;

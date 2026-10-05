@@ -11,36 +11,9 @@
 #include <btron/file.h>
 #include <btron/fs/vol_api.h>
 #include <btron/fs/fs_internal.h>
-#if defined(__STDC_HOSTED__) && __STDC_HOSTED__ == 1
+#include <btron/libc_shim.h>
+#if BTRON_HOSTED
 #include <sys/stat.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#else
-#include <stddef.h>
-#include <stdint.h>
-#include <libstr.h>
-extern void *Imalloc(size_t sz);
-extern void  Ifree(void *ptr);
-extern void *tkl_memset(void *s, int c, size_t n);
-extern void *tkl_memcpy(void *dst, const void *src, size_t n);
-extern int snprintf(char *str, size_t size, const char *format, ...);
-#define malloc  Imalloc
-#define free    Ifree
-#define memset  tkl_memset
-#define memcpy  tkl_memcpy
-#define strlen  tkl_strlen
-#define strncmp tkl_strncmp
-static inline char* strrchr(const char *s, int c) {
-    const char *last = NULL;
-    if (!s) return NULL;
-    while (*s) {
-        if (*s == (char)c) last = s;
-        s++;
-    }
-    if (c == '\0') return (char *)s;
-    return (char *)last;
-}
 #endif
 
 /* ── Little-Endian 16-bit and 32-bit helpers ────────────────────────── */
@@ -445,7 +418,7 @@ ER clarity_export_save_file(const ClarityDoc *doc, const char *filepath)
         }
     }
 
-#if defined(__STDC_HOSTED__) && __STDC_HOSTED__ == 1
+#if BTRON_HOSTED
     /* 2. Save to host files */
     mkdir("SYS", 0755);
     mkdir("btron_store", 0755);
@@ -531,7 +504,7 @@ ER clarity_export_load_file(ClarityDoc *doc, const char *filepath)
         }
     }
 
-#if defined(__STDC_HOSTED__) && __STDC_HOSTED__ == 1
+#if BTRON_HOSTED
     const char *try_paths[6];
     int n_paths = 0;
     try_paths[n_paths++] = filepath;

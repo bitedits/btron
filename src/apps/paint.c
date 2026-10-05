@@ -12,57 +12,9 @@
 #include <btron/image_decode.h>
 #include <stdint.h>
 
-#if defined(__STDC_HOSTED__) && __STDC_HOSTED__ == 1
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
+#include <btron/libc_shim.h>
+#if BTRON_HOSTED
 #include <dirent.h>
-#else
-#include <stddef.h>
-#include <libstr.h>
-extern void* Imalloc(size_t sz);
-extern void  Ifree(void *ptr);
-#define malloc Imalloc
-#define free   Ifree
-#define memset tkl_memset
-#define memcpy tkl_memcpy
-#define strlen tkl_strlen
-#define strcmp tkl_strcmp
-#define strcpy tkl_strcpy
-#define strncpy tkl_strncpy
-#define strstr tkl_strstr
-extern int tkl_snprintf(char *str, size_t size, const char *format, ...);
-#define snprintf tkl_snprintf
-
-static inline void* local_calloc(size_t nmemb, size_t sz) {
-    size_t bytes = nmemb * sz;
-    void *p = Imalloc(bytes);
-    if (p) tkl_memset(p, 0, bytes);
-    return p;
-}
-#define calloc local_calloc
-
-static inline char* local_strchr(const char *s, int c) {
-    if (!s) return (void*)0;
-    while (*s) {
-        if (*s == (char)c) return (char*)s;
-        s++;
-    }
-    return (c == 0) ? (char*)s : (void*)0;
-}
-#define strchr local_strchr
-
-static inline char* local_strrchr(const char *s, int c) {
-    if (!s) return (void*)0;
-    const char *last = (void*)0;
-    while (*s) {
-        if (*s == (char)c) last = s;
-        s++;
-    }
-    if (c == 0) return (char*)s;
-    return (char*)last;
-}
-#define strrchr local_strrchr
 #endif
 
 /* Weak app launchers shared with the widget library */
@@ -199,7 +151,7 @@ static void paint_zoom_fit(PaintViewer *pv, GDEV *dev) {
 }
 
 /* ── Image loading (hosted only) ─────────────────────────────────────────── */
-#if defined(__STDC_HOSTED__) && __STDC_HOSTED__ == 1
+#if BTRON_HOSTED
 static void paint_free_image(PaintViewer *pv) {
     if (pv->pixels) {
         free(pv->pixels);
@@ -522,7 +474,7 @@ static void paint_draw_status(PaintViewer *pv, GDEV *dev) {
     drw_lin(dev, 0, dev->height - PAINT_STATUS_H, dev->width, dev->height - PAINT_STATUS_H);
 
     char msg[256];
-#if defined(__STDC_HOSTED__) && __STDC_HOSTED__ == 1
+#if BTRON_HOSTED
     if (pv->pixels) {
         snprintf(msg, sizeof(msg), "Paint | %s %dx%d | ズーム %d%% | 位置 (%d,%d)",
                  pv->title, (int)pv->img_w, (int)pv->img_h, pv->zoom,
@@ -626,7 +578,7 @@ WND* open_paint_about_window(void) {
 static void paint_apply_cmd(WND *wnd, PaintViewer *pv, int cmd, int sub_idx, GDEV *dev) {
     switch (cmd) {
         case PCMD_FILE_OPEN_CASCADE:
-#if defined(__STDC_HOSTED__) && __STDC_HOSTED__ == 1
+#if BTRON_HOSTED
             if (sub_idx >= 0 && sub_idx < pv->img_count) {
                 paint_load(pv, pv->imgs[sub_idx]);
                 if (strstr(pv->imgs[sub_idx], "lil-cube-64") || strstr(pv->imgs[sub_idx], "lil-cube-n64")) {
@@ -643,7 +595,7 @@ static void paint_apply_cmd(WND *wnd, PaintViewer *pv, int cmd, int sub_idx, GDE
 #endif
             break;
         case PCMD_FILE_RELOAD:
-#if defined(__STDC_HOSTED__) && __STDC_HOSTED__ == 1
+#if BTRON_HOSTED
             if (pv->path[0]) paint_load(pv, pv->path);
             if (wnd) inval_wnd(wnd);
 #endif
@@ -903,7 +855,7 @@ static WND* open_paint_wnd(const char *filepath) {
     pv->menu_bar.hover_subitem = -1;
     paint_init_menu_bar(pv);
 
-#if defined(__STDC_HOSTED__) && __STDC_HOSTED__ == 1
+#if BTRON_HOSTED
     paint_scan_images(pv);
     if (filepath && filepath[0]) {
         paint_load(pv, filepath);

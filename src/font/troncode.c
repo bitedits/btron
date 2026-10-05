@@ -6,16 +6,7 @@
 
 #include <btron/troncode.h>
 #include <btron/dp.h>
-#if defined(__STDC_HOSTED__) && __STDC_HOSTED__ == 1
-#include <stdio.h>
-#include <string.h>
-#include <stdlib.h>
-#else
-#include <stddef.h>
-#include <stdint.h>
-#include <libstr.h>
-#define memset tkl_memset
-#endif
+#include <btron/libc_shim.h>
 
 /* Embedded 8x16 ASCII & Latin-1 Font Matrix (256 glyphs) */
 static const UB font_ascii_8x16[256][16] = {

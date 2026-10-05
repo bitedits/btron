@@ -5,15 +5,7 @@
 
 #include <btron/tad_browser.h>
 #include <btron/vobj.h>
-#if defined(__STDC_HOSTED__) && __STDC_HOSTED__ == 1
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#else
-#include <stddef.h>
-#include <stdint.h>
-#include <libstr.h>
-#endif
+#include <btron/libc_shim.h>
 
 int tad_browser_plugin_html_import(const char *html_buf, size_t len, UW *out_robj_id) {
     if (!html_buf || len == 0 || !out_robj_id) return -1;

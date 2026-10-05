@@ -5,14 +5,7 @@
  */
 
 #include <btron/tibetan_fonts.h>
-#if defined(__STDC_HOSTED__) && __STDC_HOSTED__ == 1
-#include <string.h>
-#else
-#include <stddef.h>
-#include <stdint.h>
-#include <libstr.h>
-#define memset tkl_memset
-#endif
+#include <btron/libc_shim.h>
 
 typedef struct {
     UW codepoint;

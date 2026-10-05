@@ -15,21 +15,7 @@
 #include <btron/app_menu.h>
 #include <btron/troncode.h>
 
-#if defined(__STDC_HOSTED__) && __STDC_HOSTED__ == 1
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#else
-#include <stddef.h>
-#include <stdint.h>
-#include <libstr.h>
-#define strlen tkl_strlen
-#define snprintf tkl_snprintf
-#define memset tkl_memset
-#define memcpy tkl_memcpy
-#define memmove tkl_memmove
-#define memcmp tkl_memcmp
-#endif
+#include <btron/libc_shim.h>
 
 #define CASSETTE_WND_W 660
 #define CASSETTE_WND_H 430

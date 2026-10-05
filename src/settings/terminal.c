@@ -10,18 +10,7 @@
 #include <btron/wnd.h>
 #include <btron/settings_icon.h>
 
-#if defined(__STDC_HOSTED__) && __STDC_HOSTED__ == 1
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#else
-#include <stddef.h>
-#include <stdint.h>
-#include <libstr.h>
-#define memset tkl_memset
-#define strlen tkl_strlen
-#define snprintf tkl_snprintf
-#endif
+#include <btron/libc_shim.h>
 
 static TERMINAL_SETTINGS g_term_settings = {
     .theme            = TERM_THEME_WHITE,

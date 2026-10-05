@@ -5,21 +5,7 @@
  */
 
 #include <btron/tibetan_dict.h>
-#if defined(__STDC_HOSTED__) && __STDC_HOSTED__ == 1
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#else
-#include <stddef.h>
-#include <stdint.h>
-#include <libstr.h>
-#define memset tkl_memset
-#define strlen tkl_strlen
-#define strncpy tkl_strncpy
-#define strcmp tkl_strcmp
-#define strncmp tkl_strncmp
-#define snprintf tkl_snprintf
-#endif
+#include <btron/libc_shim.h>
 
 static const TibetanDictEntry g_tibetan_lexicon[] = {
     /* ── Prajnaparamita & Heart Sutra Core Terminology ── */

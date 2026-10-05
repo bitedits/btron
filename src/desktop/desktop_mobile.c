@@ -9,15 +9,9 @@
 #include <btron/troncode.h>
 #include <btron/dp.h>
 #include <btron/app_menu.h>
-#if defined(__STDC_HOSTED__) && __STDC_HOSTED__ == 1
-#include <stdio.h>
-#include <string.h>
+#include <btron/libc_shim.h>
+#if BTRON_HOSTED
 #include <time.h>
-#else
-#include <libstr.h>
-#define snprintf tkl_snprintf
-#define strlen   tkl_strlen
-#define strncpy  tkl_strncpy
 #endif
 
 /* ── Bounded Screen Navigation Stack ── */
@@ -332,7 +326,7 @@ void foma_render_status_bar(GDEV *dev, const char *carrier, const char *clock_st
     if (clock_str && clock_str[0]) {
         strncpy(time_buf, clock_str, sizeof(time_buf) - 1);
     } else {
-#if defined(__STDC_HOSTED__) && __STDC_HOSTED__ == 1
+#if BTRON_HOSTED
         time_t now = time(NULL);
         struct tm *tm = localtime(&now);
         if (tm) {

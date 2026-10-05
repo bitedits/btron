@@ -5,15 +5,7 @@
 
 #include <btron/vobj.h>
 #include <btron/omgr.h>
-#if defined(__STDC_HOSTED__) && __STDC_HOSTED__ == 1
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#else
-#include <stddef.h>
-#include <stdint.h>
-#include <libstr.h>
-#endif
+#include <btron/libc_shim.h>
 
 int pdf_tad_anno_save_to_cabinet(UW pdf_robj_id, int page, const char *anno_text, UW *out_anno_robj) {
     (void)pdf_robj_id;

@@ -24,17 +24,6 @@
 #include <btron/dp.h>   /* COLOR_* constants */
 #include <btron/wnd.h>
 
-static char *fs_strrchr(const char *s, int c) {
-    if (!s) return NULL;
-    const char *last = NULL;
-    while (*s) {
-        if (*s == (char)c) last = s;
-        s++;
-    }
-    if ((char)c == '\0') return (char *)s;
-    return (char *)last;
-}
-
 
 /* ── Arg parsing helpers ─────────────────────────────────────────── */
 /* Skip leading whitespace */
@@ -241,7 +230,7 @@ void clu_cd(const char *args, ShellOutputFn out, void *ud)
     }
 
     if (strcmp(target, "..") == 0) {
-        char *last_slash = fs_strrchr(g_cwd_path, '/');
+        char *last_slash = strrchr(g_cwd_path, '/');
         if (last_slash && last_slash != g_cwd_path) {
             *last_slash = '\0';
         } else {
@@ -1569,7 +1558,7 @@ void clu_cp(const char *args, ShellOutputFn out, void *ud)
     int is_dir = (dlen > 0 && targets[1][dlen - 1] == '/') || clu_is_root_path(dst_vol, targets[1]);
 
     if (is_dir) {
-        const char *src_base = fs_strrchr(targets[0], '/');
+        const char *src_base = strrchr(targets[0], '/');
         src_base = (src_base && *(src_base + 1)) ? src_base + 1 : targets[0];
         if (dlen > 0 && targets[1][dlen - 1] == '/') {
             snprintf(dst_path, sizeof(dst_path), "%s%s", targets[1], src_base);

@@ -8,32 +8,9 @@
 #include <btron/dp.h>
 #include <btron/troncode.h>
 #include <btron/event.h>
-#if defined(__STDC_HOSTED__) && __STDC_HOSTED__ == 1
-#include <stdio.h>
-#include <string.h>
-#include <stdlib.h>
+#include <btron/libc_shim.h>
+#if BTRON_HOSTED
 #include <time.h>
-#else
-#include <stddef.h>
-#include <stdint.h>
-#include <libstr.h>
-#define strlen tkl_strlen
-#define strcmp tkl_strcmp
-#define strncpy tkl_strncpy
-#define strstr tkl_strstr
-#define memset tkl_memset
-#define memcpy tkl_memcpy
-#define snprintf tkl_snprintf
-extern void* Imalloc(size_t size);
-extern void  Ifree(void *ptr);
-static inline void* chat_calloc(size_t n, size_t sz) {
-    size_t total = n * sz;
-    void *p = Imalloc(total);
-    if (p) tkl_memset(p, 0, total);
-    return p;
-}
-#define calloc chat_calloc
-#define free Ifree
 #endif
 
 /* Forward Declarations for XML Helpers in chat_xml.c */
@@ -66,7 +43,7 @@ static const char *k_nick_roles[] = {
 void chat_generate_random_nick(char *out_nick, int max_len) {
     if (!out_nick || max_len <= 0) return;
     if (g_nick_counter == 0) {
-#if defined(__STDC_HOSTED__) && __STDC_HOSTED__ == 1
+#if BTRON_HOSTED
         g_nick_counter = (unsigned int)time(NULL) ^ 0x5A5A;
 #else
         g_nick_counter = 0x5A5A;
@@ -81,7 +58,7 @@ void chat_generate_random_nick(char *out_nick, int max_len) {
 
 /* Helper to get current timestamp "HH:MM:SS" */
 static void get_current_time_str(char *out_time, int max_len) {
-#if defined(__STDC_HOSTED__) && __STDC_HOSTED__ == 1
+#if BTRON_HOSTED
     time_t t = time(NULL);
     struct tm *tm_info = localtime(&t);
     if (tm_info) {

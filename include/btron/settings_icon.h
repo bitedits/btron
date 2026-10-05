@@ -19,18 +19,13 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#if defined(__STDC_HOSTED__) && __STDC_HOSTED__ == 1
-#include <stdio.h>
-#include <string.h>
+#include <btron/libc_shim.h>
+
+/* One name for the memory ops in both modes: the shim gives memset/memcpy/
+ * memcmp from libc when hosted and from the kernel aliases when not. */
 #define _si_memset memset
 #define _si_memcpy memcpy
 #define _si_memcmp memcmp
-#else
-#include <libstr.h>
-#define _si_memset tkl_memset
-#define _si_memcpy tkl_memcpy
-#define _si_memcmp tkl_memcmp
-#endif
 
 #define SI_LZW_DICT    4096
 #define SI_MAX_PIXELS  4096  /* 64x64 = 4096 pixels max */
@@ -45,7 +40,7 @@ typedef struct {
     const uint8_t *data;
     size_t size;
     size_t pos;
-#if defined(__STDC_HOSTED__) && __STDC_HOSTED__ == 1
+#if BTRON_HOSTED
     FILE *fp;
 #endif
 } IconStream;
@@ -55,7 +50,7 @@ static inline int icon_stream_getc(IconStream *s) {
         if (s->pos < s->size) return (int)s->data[s->pos++];
         return -1;
     }
-#if defined(__STDC_HOSTED__) && __STDC_HOSTED__ == 1
+#if BTRON_HOSTED
     if (s->fp) return fgetc(s->fp);
 #endif
     return -1;
@@ -71,7 +66,7 @@ static inline size_t icon_stream_read(IconStream *s, void *buf, size_t n) {
         }
         return n;
     }
-#if defined(__STDC_HOSTED__) && __STDC_HOSTED__ == 1
+#if BTRON_HOSTED
     if (s->fp) return fread(buf, 1, n, s->fp);
 #endif
     return 0;
@@ -88,13 +83,13 @@ static inline void icon_stream_skip(IconStream *s, long offset) {
         }
         return;
     }
-#if defined(__STDC_HOSTED__) && __STDC_HOSTED__ == 1
+#if BTRON_HOSTED
     if (s->fp) fseek(s->fp, offset, SEEK_CUR);
 #endif
 }
 
 static inline void icon_stream_close(IconStream *s) {
-#if defined(__STDC_HOSTED__) && __STDC_HOSTED__ == 1
+#if BTRON_HOSTED
     if (s->fp) {
         fclose(s->fp);
         s->fp = NULL;
@@ -126,7 +121,7 @@ static inline BOOL draw_setting_gif_icon_scaled(GDEV *dev, const char *id_str, i
         st.pos  = 0;
     }
 
-#if defined(__STDC_HOSTED__) && __STDC_HOSTED__ == 1
+#if BTRON_HOSTED
     /* 2. On hosted builds, fall back to filesystem if not in embedded bundle */
     if (!st.data) {
         static const char *prefixes[] = {
@@ -155,7 +150,7 @@ static inline BOOL draw_setting_gif_icon_scaled(GDEV *dev, const char *id_str, i
 #endif
 
     if (!st.data
-#if defined(__STDC_HOSTED__) && __STDC_HOSTED__ == 1
+#if BTRON_HOSTED
         && !st.fp
 #endif
     ) {

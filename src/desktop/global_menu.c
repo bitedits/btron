@@ -22,15 +22,9 @@
 #include <btron/app_menu.h>
 #include <btron/chokanji.h>
 
-#if defined(__STDC_HOSTED__) && __STDC_HOSTED__ == 1
-#include <stdio.h>
-#include <string.h>
+#include <btron/libc_shim.h>
+#if BTRON_HOSTED
 #include <time.h>
-#else
-#include <libstr.h>
-#define snprintf tkl_snprintf
-#define strlen   tkl_strlen
-#define strncpy  tkl_strncpy
 #endif
 
 #if defined(BTRON_TARGET) && BTRON_TARGET == 6
@@ -279,7 +273,7 @@ static void refresh_window_menu(void) {
 /* ── Japanese calendar clock string ──────────────────────────── */
 static void get_japanese_calendar_string(char *buf, size_t max_len) {
     if (!buf || max_len < 32) return;
-#if defined(__STDC_HOSTED__) && __STDC_HOSTED__ == 1
+#if BTRON_HOSTED
     time_t now = time(NULL);
     struct tm *tm_now = localtime(&now);
     if (!tm_now) { snprintf(buf, max_len, "9月4日(金) 00:00:00"); return; }

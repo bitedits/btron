@@ -65,6 +65,9 @@ static inline UH rd_u16_le(const unsigned char *p) {
 static inline UW rd_u32_le(const unsigned char *p) {
     return (UW)p[0] | ((UW)p[1] << 8) | ((UW)p[2] << 16) | ((UW)p[3] << 24);
 }
+static inline UW rd_u24_le(const unsigned char *p) {
+    return (UW)p[0] | ((UW)p[1] << 8) | ((UW)p[2] << 16);
+}
 static inline void wr_u16_be(unsigned char *p, UH val) {
     p[0] = (unsigned char)((val >> 8) & 0xFF);
     p[1] = (unsigned char)(val & 0xFF);
@@ -224,7 +227,7 @@ static int read_header_block(Volume *v, BLK blk, OpenFile *of)
             const unsigned char *rp = buf + found[j];
             if (rp[0] != 0) continue;                 /* continuation entry */
             UW pos = rd_u32_le(rp + 4);
-            BLK hint = (BLK)rd24le(rp + 13);
+            BLK hint = (BLK)rd_u24_le(rp + 13);
             of->ridx[n].kind   = rd_u16_le(rp + 0);
             of->ridx[n].type   = rd_u16_le(rp + 2);
             of->ridx[n].size   = rd_u32_le(rp + 8);

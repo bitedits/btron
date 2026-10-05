@@ -51,6 +51,8 @@ static int64_t  s_clock = 0;
 /* Shared 2-second white noise buffer (getNoiseBuffer() in index.html) */
 #define WA_NOISE_LEN (44100 * 2)
 static float s_noise[WA_NOISE_LEN];
+static void reverb_init(void);
+static void reverb_clear(void);
 
 void wa_init(uint32_t sample_rate) {
     s_sr = sample_rate ? sample_rate : 44100;

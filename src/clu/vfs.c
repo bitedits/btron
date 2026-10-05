@@ -122,7 +122,7 @@ int vfs_list_dir(const char *path, VfsEntry *entries, int max_entries)
         return count;
     }
 
-    /* ── Volume directory (e.g. "/SYS" or "/ANDERS"): list volume contents ── */
+    /* ── Any directory: the volume root (/SYS) or a drawer inside it ── */
     ID dir = opn_dir(norm_path);
     if (dir < 0) return 0;
 
@@ -140,7 +140,7 @@ int vfs_list_dir(const char *path, VfsEntry *entries, int max_entries)
         e->name[nlen] = '\0';
         e->size = de.size;
         e->mtime = 0;
-        e->is_dir = (de.attr & 0x8000) ? 0 : 0; /* regular record / stream */
+        e->is_dir = (de.attr & OBJ_DIRECTORY) ? 1 : 0;
         e->is_link = 0;
         e->mode = (de.attr & OBJ_EXEC) ? 0755 : 0644;
     }

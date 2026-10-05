@@ -54,6 +54,7 @@ extern "C" {
 #define FFLG_EXEC             0x0001    /* E: owner execute                */
 
 /* ── Real-Body / OBJ flags (stored in FileHeader.flags high bits) ─ */
+#define OBJ_DIRECTORY         0x4000    /* container: Real Body holds links */
 #define OBJ_EXEC              0x8000    /* executable Real Body            */
 #define OBJ_DEV               0x2000    /* device Real Body                */
 #define OBJ_EJECT             0x1000    /* removable device                */

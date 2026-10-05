@@ -479,20 +479,102 @@ static Volume *resolve_volume_from_path(const char *path)
     return NULL;
 }
 
+/* ── Path resolution ─────────────────────────────────────────────── */
+/*
+ * A BTRON path names a Virtual Body inside a container: a drawer is a Real
+ * Body whose records are RT_LINKs, and each link carries the child's name and
+ * target FID. So a path is resolved by walking those links from FID_ROOT.
+ *
+ * Volumes written before that model was implemented (and B-right/V Real Bodies,
+ * which the FID table addresses directly) are reachable by bare name, so every
+ * step falls back to the volume's flat name index rather than failing.
+ */
+
+/* Does this Real Body hold link records, i.e. is it a container? */
+static int fid_is_container(Volume *v, FID fid)
+{
+    ID fd = opn_fil_fid(v, fid, F_READ);
+    if (fd < 0) return 0;
+    OpenFile *of = &g_open_files[(int)fd];
+    int is_dir = 0;
+    for (unsigned int i = 0; i < of->nrec; i++) {
+        if (fil_rec_is_link(fd, (W)i)) { is_dir = 1; break; }
+    }
+    cls_fil(fd);
+    return is_dir;
+}
+
+/* Look up one path segment among a container's link records. */
+static FID container_lookup(Volume *v, FID dir_fid, const char *seg)
+{
+    ID fd = opn_fil_fid(v, dir_fid, F_READ);
+    if (fd < 0) return FID_INVALID;
+    OpenFile *of = &g_open_files[(int)fd];
+    FID found = FID_INVALID;
+    for (unsigned int i = 0; i < of->nrec && found == FID_INVALID; i++) {
+        if (!fil_rec_is_link(fd, (W)i)) continue;
+        FID cfid = FID_INVALID;
+        char cname[64] = "";
+        if (fil_get_rec_link_info(fd, (W)i, &cfid, cname, sizeof(cname), NULL) != 0) continue;
+        if (cfid != FID_INVALID && fs_strcasecmp(cname, seg) == 0) found = cfid;
+    }
+    cls_fil(fd);
+    return found;
+}
+
+/* Resolve `name` (the volume-relative remainder of a path) to a FID. */
+static FID resolve_obj_fid(Volume *v, const char *name)
+{
+    if (!v) return FID_INVALID;
+    if (name[0] == '\0' || strcmp(name, ".") == 0) return FID_ROOT;
+
+    /* "#<fid>" addresses a Real Body directly, as CLU's fs/ls do. */
+    const char *hash = strchr(name, '#');
+    if (hash) {
+        const char *np = hash + 1;
+        while (*np == ' ') np++;
+        if (*np >= '0' && *np <= '9') {
+            FID fid = 0;
+            while (*np >= '0' && *np <= '9') fid = fid * 10 + (FID)(*np++ - '0');
+            return (vol_fid_refcount(v, fid) || fid == FID_ROOT) ? fid : FID_INVALID;
+        }
+    }
+
+    FID cur = FID_ROOT;
+    const char *p = name;
+    while (*p) {
+        while (*p == '/') p++;
+        if (*p == '\0') break;
+        char seg[64];
+        size_t n = 0;
+        while (*p && *p != '/' && *p != '#' && n < sizeof(seg) - 1) seg[n++] = *p++;
+        seg[n] = '\0';
+
+        FID next = container_lookup(v, cur, seg);
+        if (next == FID_INVALID) next = find_fid_by_name(v, seg);
+        if (next == FID_INVALID) return FID_INVALID;
+        cur = next;
+    }
+    if (cur != FID_ROOT) return cur;
+
+    /* Nothing matched segment by segment: try the whole string as one name. */
+    return find_fid_by_name(v, name);
+}
+
+static FID resolve_path_fid(const char *path)
+{
+    Volume *v = resolve_volume_from_path(path);
+    if (!v) return FID_INVALID;
+    return resolve_obj_fid(v, strip_volume_prefix(v, path));
+}
+
 /* ── opn_fil ─────────────────────────────────────────────────────── */
 ID opn_fil(const char *path, UW mode)
 {
     Volume *v = resolve_volume_from_path(path);
     if (!v) return (ID)-1;
 
-    const char *name = strip_volume_prefix(v, path);
-
-    FID fid = FID_INVALID;
-    if (name[0] == '\0' || strcmp(name, ".") == 0) {
-        fid = FID_ROOT;
-    } else {
-        fid = find_fid_by_name(v, name);
-    }
+    FID fid = resolve_obj_fid(v, strip_volume_prefix(v, path));
     if (fid == FID_INVALID) return (ID)-1;
     return opn_fil_fid(v, fid, mode);
 }
@@ -617,7 +699,7 @@ ER del_fil(const char *path)
 
     const char *name = strip_volume_prefix(v, path);
 
-    FID fid = find_fid_by_name(v, name);
+    FID fid = resolve_obj_fid(v, name);
     if (fid == FID_INVALID || fid == FID_ROOT) return (ER)-1;
 
     /* Open to read header and record index */
@@ -899,8 +981,19 @@ ER trn_rec(ID rec_id, W sz)
 }
 
 /* ── opn_dir / rd_dir / cls_dir ──────────────────────────────────── */
+/*
+ * BTRON's directory model: a directory is a container Real Body whose records
+ * are RT_LINK Virtual Bodies. So opn_dir() resolves the path to that container
+ * and rd_dir() replays its link records. A volume root that carries no links
+ * (B-right/V boots from a Real Body, not a drawer) falls back to a volume-wide
+ * FID-table scan, which is the closest thing that namespace has to a root list.
+ */
 typedef struct {
-    UW next_fid;
+    UW next_fid;      /* FID cursor for the volume-wide scan mode      */
+    UW next_rec;      /* record cursor for the scoped (link) mode      */
+    UW nrec;          /* record count of the scoped container          */
+    BOOL scoped;      /* TRUE = walk dir_fid's link records            */
+    FID dir_fid;      /* container this directory was opened for       */
     Volume *vol;
 } DirState;
 static DirState g_dirs[16];
@@ -910,15 +1003,51 @@ ID opn_dir(const char *path)
 {
     Volume *v = resolve_volume_from_path(path);
     if (!v) return (ID)-1;
+
+    FID dir_fid = resolve_path_fid(path);
+    if (dir_fid == FID_INVALID) return (ID)-1;
+
+    ID fd = opn_fil_fid(v, dir_fid, F_READ);
+    if (fd < 0) return (ID)-1;
+    OpenFile *of = &g_open_files[(int)fd];
+    UW nrec = of->nrec;
+    int scoped = 0;
+    for (unsigned int i = 0; i < nrec; i++) {
+        if (fil_rec_is_link(fd, (W)i)) { scoped = 1; break; }
+    }
+    cls_fil(fd);
+    if (!scoped && dir_fid != FID_ROOT) return (ID)-1; /* not a directory */
+
     for (int i = 0; i < 16; i++) {
         if (!g_dir_used[i]) {
             g_dir_used[i] = 1;
             g_dirs[i].next_fid = 0;
-            g_dirs[i].vol = v;
+            g_dirs[i].next_rec = 0;
+            g_dirs[i].nrec     = nrec;
+            g_dirs[i].scoped   = scoped;
+            g_dirs[i].dir_fid  = dir_fid;
+            g_dirs[i].vol      = v;
             return (ID)(0x1000 + i);
         }
     }
     return (ID)-1;
+}
+
+/* Fill size/attr for one entry from its Real Body header. */
+static void dir_entry_stat(Volume *v, DIR_ENTRY *entry)
+{
+    FID fid = (FID)entry->robj_id;
+    ID cfd = opn_fil_fid(v, fid, F_READ);
+    if (cfd < 0) { entry->attr = 0; entry->size = 0; return; }
+    OpenFile *co = &g_open_files[(int)cfd];
+    entry->size = co->hdr.total_size;
+    entry->attr = co->hdr.flags;
+    int is_dir = 0;
+    for (unsigned int k = 0; k < co->nrec; k++) {
+        if (fil_rec_is_link(cfd, (W)k)) { is_dir = 1; break; }
+    }
+    cls_fil(cfd);
+    if (is_dir) entry->attr |= OBJ_DIRECTORY;
 }
 
 ER rd_dir(ID dir_id, DIR_ENTRY *entry)
@@ -928,6 +1057,47 @@ ER rd_dir(ID dir_id, DIR_ENTRY *entry)
     Volume *v = g_dirs[slot].vol ? g_dirs[slot].vol : g_sys_vol;
     if (!v) return (ER)-1;
 
+    /* ── Scoped: replay the container's link records ─────────────── */
+    if (g_dirs[slot].scoped) {
+        FID dir_fid = g_dirs[slot].dir_fid;
+        while (g_dirs[slot].next_rec < g_dirs[slot].nrec) {
+            UW i = g_dirs[slot].next_rec++;
+            ID fd = opn_fil_fid(v, dir_fid, F_READ);
+            if (fd < 0) return (ER)1;
+            if (!fil_rec_is_link(fd, (W)i)) { cls_fil(fd); continue; }
+
+            FID cfid = FID_INVALID;
+            char cname[64] = "";
+            ER er = fil_get_rec_link_info(fd, (W)i, &cfid, cname, sizeof(cname), NULL);
+            cls_fil(fd);
+            if (er != 0 || cfid == FID_INVALID) continue;
+
+            memset(entry, 0, sizeof(*entry));
+            entry->robj_id = (ID)cfid;
+            size_t nlen = strlen(cname);
+            if (nlen == 0) {
+                /* Undecodable link name: show the Real Body's own name. */
+                ID cfd2 = opn_fil_fid(v, cfid, F_READ);
+                if (cfd2 >= 0) {
+                    char hn[41];
+                    memcpy(hn, g_open_files[(int)cfd2].hdr.name, 40);
+                    hn[40] = '\0';
+                    snprintf(cname, sizeof(cname), "%s", hn);
+                    cls_fil(cfd2);
+                    nlen = strlen(cname);
+                }
+            }
+            if (nlen >= sizeof(entry->name)) nlen = sizeof(entry->name) - 1;
+            memcpy(entry->name, cname, nlen);
+            entry->name[nlen] = '\0';
+            if (!entry->name[0]) continue;
+            dir_entry_stat(v, entry);
+            return (ER)0;
+        }
+        return (ER)1; /* E_EOF / end of directory */
+    }
+
+    /* ── Volume-wide scan: the root of a volume without a link drawer ── */
     UW nfmax = vol_nfmax(v);
     UW bsize = vol_block_size(v);
     unsigned char *buf = (unsigned char *)malloc(bsize);
@@ -970,6 +1140,12 @@ ER rd_dir(ID dir_id, DIR_ENTRY *entry)
             while (nm[ni] && ni < 63) { entry->name[ni] = nm[ni]; ni++; }
             entry->name[ni] = '\0';
         }
+        /* The root Real Body is the drawer itself, not an entry of it.
+         * B-right/V FID 0 is a genuine object (SBOOT), so only skip when the
+         * decoded name is the volume's own label. */
+        if (fid == FID_ROOT && vol_name(v) && strcmp(entry->name, vol_name(v)) == 0)
+            continue;
+        if (fid_is_container(v, fid)) entry->attr |= OBJ_DIRECTORY;
         free(buf);
         return (ER)0;
     }

@@ -62,6 +62,7 @@ extern "C" {
 
 #define OBJ_EJECT    0x1000   /* Removable device Real Body       */
 #define OBJ_DEV      0x2000   /* Device Real Body                 */
+#define OBJ_DIRECTORY 0x4000  /* Container: Real Body holds links */
 #define OBJ_EXEC     0x8000   /* Executable Real Body             */
 
 /* ================================================================

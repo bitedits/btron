@@ -30,6 +30,8 @@ extern "C" {
 #define REC_POS_END  2   /* From end of record */
 
 /* ── Directory Entry Structure ─────────────────────────────────── */
+/* attr is the target Real Body's FileHeader.flags, plus OBJ_DIRECTORY
+ * when that Real Body is itself a container (holds link records). */
 typedef struct {
     char name[64];
     UW   attr;

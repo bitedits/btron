@@ -57,6 +57,12 @@ void    wa_gain(WaNode *n, int ev, float value, double t);        /* gain.gain.*
 void    wa_filter(WaNode *n, int type, float freq, float q);      /* createBiquadFilter() */
 void    wa_filter_freq(WaNode *n, int ev, float value, double t); /* filter.frequency.* */
 
+/* Reverb & spatial feedback delay controls (deep industrial cavern model) */
+void    wa_set_reverb(int enabled, float room_size, float damping, float feedback, float wet_mix);
+
+/* Stereo rendering with optional deep reverb and spatial feedback delay */
+void    wa_render_stereo(float *out_l, float *out_r, size_t frames);
+
 /* Adds `frames` mono samples of all scheduled nodes into `mono` and advances the clock. */
 void    wa_render(float *mono, size_t frames);
 

@@ -1,0 +1,5 @@
+# Ratchet for scripts/check_structure.sh Rule 2: files that still #define a
+# stdio/stdlib name onto tkl_*/Imalloc instead of including
+# <btron/libc_shim.h>. Empty as of the tree-wide conversion - add nothing here;
+# if a new app needs a libc call on a freestanding target, declare it in
+# include/btron/libc_shim.h and implement it in src/kernel/libstr.c once.

@@ -38,7 +38,14 @@ struct TvContext {
     size_t cur_byte;
     int    scroll_y;
     int    scroll_x;
+    int    modal_mode;
+    int    modal_sel;
 };
+
+typedef enum {
+    TV_MODAL_NONE = 0,
+    TV_MODAL_EXIT
+} TvModalMode;
 
 static TvContext g_default_tv = {
     .insert_mode = 1,
@@ -57,6 +64,8 @@ static TvContext *g_tv = &g_default_tv;
 #define g_cur_byte    (g_tv->cur_byte)
 #define g_scroll_y    (g_tv->scroll_y)
 #define g_scroll_x    (g_tv->scroll_x)
+#define g_modal_mode  (g_tv->modal_mode)
+#define g_modal_sel   (g_tv->modal_sel)
 
 TvContext *tv_context_create(void)
 {
@@ -107,6 +116,8 @@ static void tv_reset_buffer(void)
     g_scroll_y = 0;
     g_scroll_x = 0;
     g_modified = 0;
+    g_modal_mode = TV_MODAL_NONE;
+    g_modal_sel = 0;
 }
 
 static void tv_load_file(const char *path)
@@ -418,45 +429,29 @@ static void tv_move_word(int forward)
     }
 }
 
-static int tv_exit_dialog(void)
+static void tv_draw_exit_dialog(int sel)
 {
-    if (!g_modified) return 1;
-
     int dw = 46, dh = 5;
     int dr = (term_rows - dh) / 2;
     int dc = (term_cols - dw) / 2;
-    int sel = 0; /* 0: Save & Exit, 1: Discard, 2: Cancel */
+    if (dr < 0) dr = 0;
+    if (dc < 0) dc = 0;
 
-    while (1) {
-        for (int i = 0; i < dh; i++) {
-            scr_fill(dr + i, dc, dw, ' ', STYLE_MENU);
-        }
-        scr_str(dr + 1, dc + 4, "File modified. Save before exiting?", STYLE_MENU);
-
-        const char *b0 = "[ Save & Exit ]";
-        const char *b1 = "[ Discard ]";
-        const char *b2 = "[ Cancel ]";
-
-        scr_str(dr + 3, dc + 3,  b0, sel == 0 ? STYLE_MENU_SEL : STYLE_MENU);
-        scr_str(dr + 3, dc + 20, b1, sel == 1 ? STYLE_MENU_SEL : STYLE_MENU);
-        scr_str(dr + 3, dc + 33, b2, sel == 2 ? STYLE_MENU_SEL : STYLE_MENU);
-
-        scr_cursor(dr + 3, dc + (sel == 0 ? 4 : (sel == 1 ? 21 : 34)), 1);
-        scr_flush();
-
-        int k = term_key();
-        if (k == K_LEFT || k == K_BTAB) {
-            sel = (sel + 2) % 3;
-        } else if (k == K_RIGHT || k == K_TAB) {
-            sel = (sel + 1) % 3;
-        } else if (k == K_ENTER) {
-            if (sel == 0) { (void)tv_save_file(); return 1; }
-            if (sel == 1) return 1;
-            return 0;
-        } else if (k == K_ESC) {
-            return 0;
-        }
+    for (int i = 0; i < dh; i++) {
+        scr_fill(dr + i, dc, dw, ' ', STYLE_MENU);
     }
+    scr_str(dr + 1, dc + 4, "File modified. Save before exiting?", STYLE_MENU);
+
+    const char *b0 = "[ Save & Exit ]";
+    const char *b1 = "[ Discard ]";
+    const char *b2 = "[ Cancel ]";
+
+    scr_str(dr + 3, dc + 3,  b0, sel == 0 ? STYLE_MENU_SEL : STYLE_MENU);
+    scr_str(dr + 3, dc + 20, b1, sel == 1 ? STYLE_MENU_SEL : STYLE_MENU);
+    scr_str(dr + 3, dc + 33, b2, sel == 2 ? STYLE_MENU_SEL : STYLE_MENU);
+
+    scr_cursor(dr + 3, dc + (sel == 0 ? 4 : (sel == 1 ? 21 : 34)), 1);
+    scr_flush();
 }
 
 int tv_session_init(const char *filepath, int view_only, int rows, int cols)
@@ -486,6 +481,54 @@ void tv_session_close(void)
 int tv_session_step(int k)
 {
     if (k == K_NONE) return 1;
+
+    if (g_modal_mode == TV_MODAL_EXIT) {
+        if (k == K_RESIZE) {
+            scr_invalidate();
+            tv_draw_header();
+            tv_draw_text();
+            tv_draw_footer();
+            tv_draw_exit_dialog(g_modal_sel);
+            return 1;
+        }
+        if (k == K_LEFT || k == K_BTAB || k == K_UP) {
+            g_modal_sel = (g_modal_sel + 2) % 3;
+            tv_draw_exit_dialog(g_modal_sel);
+            return 1;
+        }
+        if (k == K_RIGHT || k == K_TAB || k == K_DOWN) {
+            g_modal_sel = (g_modal_sel + 1) % 3;
+            tv_draw_exit_dialog(g_modal_sel);
+            return 1;
+        }
+        if (k == K_ESC) {
+            g_modal_mode = TV_MODAL_NONE;
+            tv_draw_header();
+            tv_draw_text();
+            tv_draw_footer();
+            tv_update_cursor();
+            scr_flush();
+            return 1;
+        }
+        if (k == K_ENTER) {
+            if (g_modal_sel == 0) {
+                (void)tv_save_file();
+                return 0; /* Save & Exit */
+            } else if (g_modal_sel == 1) {
+                return 0; /* Discard & Exit */
+            } else {
+                g_modal_mode = TV_MODAL_NONE;
+                tv_draw_header();
+                tv_draw_text();
+                tv_draw_footer();
+                tv_update_cursor();
+                scr_flush();
+                return 1;
+            }
+        }
+        return 1;
+    }
+
     if (k == K_RESIZE) {
         scr_invalidate();
         tv_draw_header();
@@ -512,8 +555,13 @@ int tv_session_step(int k)
         break;
     case K_F10:
     case K_ESC:
-        if (tv_exit_dialog()) return 0;
-        break;
+        if (!g_modified) {
+            return 0;
+        }
+        g_modal_mode = TV_MODAL_EXIT;
+        g_modal_sel = 0; /* default Save & Exit */
+        tv_draw_exit_dialog(g_modal_sel);
+        return 1;
     case K_UP:
         if (g_cur_line > 0) {
             g_cur_line--;

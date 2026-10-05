@@ -490,6 +490,93 @@ static void test_multi_instance_isolation(void)
     TEST_PASS();
 }
 
+/* ── 10. Reactive Modal Dialogs & Menus (No Host TTY Blocking) ────── */
+static void test_reactive_modal_dialogs(void)
+{
+    TermContext *term = term_context_create();
+    ScContext *sc = sc_context_create();
+    TvContext *tv = tv_context_create();
+    CHECK(term && sc && tv, "Context creation should succeed");
+
+    term_set_context(term);
+    sc_set_context(sc);
+
+    /* 1. SC Modal Exit Dialog */
+    CHECK(sc_session_init("/SYS", 25, 80) == 0, "SC init should succeed");
+    CHECK(modal_mode == SC_MODAL_NONE, "SC modal_mode should initially be NONE");
+
+    /* Trigger F10 */
+    int running = sc_session_step(KEY_F10);
+    CHECK(running == 1, "F10 should not immediately exit; should open dialog");
+    CHECK(modal_mode == SC_MODAL_EXIT, "modal_mode should transition to SC_MODAL_EXIT");
+    CHECK(modal_sel == 1, "Default button should be No (1)");
+
+    /* Tab toggles button */
+    sc_session_step(KEY_TAB);
+    CHECK(modal_sel == 0, "Tab should toggle button to Yes (0)");
+    sc_session_step(KEY_TAB);
+    CHECK(modal_sel == 1, "Tab should toggle button back to No (1)");
+
+    /* Esc cancels dialog */
+    running = sc_session_step(KEY_ESC);
+    CHECK(running == 1, "Esc should keep session running");
+    CHECK(modal_mode == SC_MODAL_NONE, "Esc should dismiss modal dialog");
+
+    /* 2. SC F9 Menu Navigation */
+    running = sc_session_step(KEY_F9);
+    CHECK(running == 1, "F9 should keep session running");
+    CHECK(modal_mode == SC_MODAL_MENU, "modal_mode should transition to SC_MODAL_MENU");
+    CHECK(menu_tab == 0, "Initial tab should be Left (0)");
+
+    sc_session_step(KEY_RIGHT);
+    CHECK(menu_tab == 1, "Right should advance to File tab (1)");
+    sc_session_step(KEY_DOWN);
+    CHECK(menu_item == 1, "Down should advance menu item");
+
+    sc_session_step(KEY_ESC);
+    CHECK(modal_mode == SC_MODAL_NONE, "Esc should dismiss menu");
+
+    /* Reopen F10 and confirm exit with 'y' */
+    sc_session_step(KEY_F10);
+    CHECK(modal_mode == SC_MODAL_EXIT, "modal_mode should be SC_MODAL_EXIT");
+    running = sc_session_step('y');
+    CHECK(running == 0, "Typing 'y' in exit dialog should confirm exit (return 0)");
+    sc_session_close();
+
+    /* 3. TV Modal Exit Dialog on Modified Buffer */
+    tv_set_context(tv);
+    CHECK(tv_session_init("/SYS/README.md", 0, 25, 80) == 0, "TV init should succeed");
+
+    /* If not modified, F10 exits immediately */
+    running = tv_session_step(K_F10);
+    CHECK(running == 0, "Unmodified TV should exit immediately on F10");
+    tv_session_close();
+
+    /* Re-init and modify */
+    CHECK(tv_session_init("/SYS/README.md", 0, 25, 80) == 0, "TV re-init should succeed");
+    tv_session_step('X'); /* Insert character to mark modified */
+
+    running = tv_session_step(K_F10);
+    CHECK(running == 1, "Modified TV should not exit immediately; should open dialog");
+
+    /* Arrow right cycles through Save & Exit (0) -> Discard (1) -> Cancel (2) */
+    tv_session_step(K_RIGHT);
+    tv_session_step(K_ESC); /* Cancel dialog */
+
+    /* Trigger F10 again and select Discard & Exit */
+    tv_session_step(K_F10);
+    tv_session_step(K_RIGHT); /* Select Discard */
+    running = tv_session_step(K_ENTER);
+    CHECK(running == 0, "Enter on Discard should confirm exit (return 0)");
+    tv_session_close();
+
+    tv_context_destroy(tv);
+    sc_context_destroy(sc);
+    term_context_destroy(term);
+
+    TEST_PASS();
+}
+
 /* ── Main Test Runner ─────────────────────────────────────────────── */
 int main(void)
 {
@@ -507,6 +594,7 @@ int main(void)
     test_gterm_clu_command_set_wiring();
     test_in_window_sc_and_tv_sessions();
     test_multi_instance_isolation();
+    test_reactive_modal_dialogs();
 
     printf("========================================================\n");
 

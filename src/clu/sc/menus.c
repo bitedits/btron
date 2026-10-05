@@ -290,158 +290,65 @@ static void draw_submenu(const char *items[], int item_count, int start_row, int
     }
 }
 
-int handle_menu(void)
+static const char *s_menu_tabs[] = {"Left", "File", "Command", "Options", "Right"};
+#define SC_TAB_COUNT 5
+
+static const char *s_left_items[] = {
+    "Listing format...",
+    "Sort by name",
+    "Sort by size",
+    "Sort by date",
+    "Reload         C-r"
+};
+static const char *s_file_items[] = {
+    "User Manual        F1",
+    "Applications       F2",
+    "View               F3",
+    "Edit               F4",
+    "Copy               F5",
+    "Rename/Move        F6",
+    "Mkdir              F7",
+    "Delete             F8",
+    "Exit               F10"
+};
+static const char *s_command_items[] = {
+    "Command history   C-o",
+    "Swap panels       Tab",
+    "Clear history"
+};
+static const char *s_options_items[] = {
+    "Volume statistics",
+    "Mounted volumes",
+    "About BTRON3 SC"
+};
+static const char *s_right_items[] = {
+    "Listing format...",
+    "Sort by name",
+    "Sort by size",
+    "Sort by date",
+    "Reload         C-r"
+};
+
+static const int s_item_counts[] = {5, 9, 3, 3, 5};
+static const char **s_submenus[] = {s_left_items, s_file_items, s_command_items, s_options_items, s_right_items};
+
+void draw_menu_overlay(int selected_tab, int submenu_active, int selected_item)
 {
-    const char *menu_tabs[] = {"Left", "File", "Command", "Options", "Right"};
-    int tab_count = 5;
-    int selected_tab = 0;
-    int submenu_active = 0;
-    int selected_item = 0;
+    draw_menu();
 
-    const char *left_items[] = {
-        "Listing format...",
-        "Sort by name",
-        "Sort by size",
-        "Sort by date",
-        "Reload         C-r"
-    };
-    const char *file_items[] = {
-        "User Manual        F1",
-        "Applications       F2",
-        "View               F3",
-        "Edit               F4",
-        "Copy               F5",
-        "Rename/Move        F6",
-        "Mkdir              F7",
-        "Delete             F8",
-        "Exit               F10"
-    };
-    const char *command_items[] = {
-        "Command history   C-o",
-        "Swap panels       Tab",
-        "Clear history"
-    };
-    const char *options_items[] = {
-        "Volume statistics",
-        "Mounted volumes",
-        "About BTRON3 SC"
-    };
-    const char *right_items[] = {
-        "Listing format...",
-        "Sort by name",
-        "Sort by size",
-        "Sort by date",
-        "Reload         C-r"
-    };
-
-    int item_counts[] = {5, 9, 3, 3, 5};
-    const char **submenus[] = {left_items, file_items, command_items, options_items, right_items};
-
-    draw_interface();
-
-    while (1) {
-        draw_menu();
-
-        /* Highlight tab */
-        int tab_col = 12;
-        for (int i = 0; i < selected_tab; i++) {
-            tab_col += (int)strlen(menu_tabs[i]) + 3;
-        }
-        scr_str(0, tab_col, menu_tabs[selected_tab], SC_STYLE_MENU_SEL);
-
-        if (submenu_active) {
-            draw_submenu(submenus[selected_tab], item_counts[selected_tab], 1, tab_col, selected_item);
-        }
-
-        scr_flush();
-
-        int c = term_key();
-        if (submenu_active) {
-            if (c == KEY_UP && selected_item > 0) {
-                selected_item--;
-            } else if (c == KEY_DOWN && selected_item < item_counts[selected_tab] - 1) {
-                selected_item++;
-            } else if (c == KEY_LEFT) {
-                if (selected_tab > 0) {
-                    selected_tab--;
-                    selected_item = 0;
-                    draw_interface();
-                }
-            } else if (c == KEY_RIGHT) {
-                if (selected_tab < tab_count - 1) {
-                    selected_tab++;
-                    selected_item = 0;
-                    draw_interface();
-                }
-            } else if (c == KEY_ESC) {
-                submenu_active = 0;
-                draw_interface();
-            } else if (c == KEY_ENTER) {
-                if (selected_tab == 0) { /* Left panel */
-                    if (selected_item >= 1 && selected_item <= 3) {
-                        left_panel.sort_type = selected_item - 1;
-                        load_files(&left_panel);
-                    } else if (selected_item == 4) {
-                        load_files(&left_panel);
-                    }
-                } else if (selected_tab == 1) { /* File */
-                    if (selected_item == 2) { /* View F3 */
-                        if (active_panel->file_count > 0 && !active_panel->files[active_panel->cursor].is_dir) {
-                            char fpath[VFS_MAX_PATH];
-                            snprintf(fpath, sizeof(fpath), "%s/%s", active_panel->path, active_panel->files[active_panel->cursor].name);
-                            vfs_normalize_path(fpath, fpath, sizeof(fpath));
-                            (void)sc_launch_tv(fpath, 1);
-                            return 0;
-                        }
-                    } else if (selected_item == 3) { /* Edit F4 */
-                        if (active_panel->file_count > 0 && !active_panel->files[active_panel->cursor].is_dir) {
-                            char fpath[VFS_MAX_PATH];
-                            snprintf(fpath, sizeof(fpath), "%s/%s", active_panel->path, active_panel->files[active_panel->cursor].name);
-                            vfs_normalize_path(fpath, fpath, sizeof(fpath));
-                            (void)sc_launch_tv(fpath, 0);
-                            return 0;
-                        }
-                    } else if (selected_item == 8) { /* Exit F10 */
-                        if (handle_exit_dialog()) {
-                            return 1;
-                        }
-                    }
-                } else if (selected_tab == 2) { /* Command */
-                    if (selected_item == 0) {
-                        show_command_buffer ^= 1;
-                    } else if (selected_item == 1) {
-                        active_panel = (active_panel == &left_panel) ? &right_panel : &left_panel;
-                    } else if (selected_item == 2) {
-                        history_count = 0;
-                        history_start = 0;
-                    }
-                } else if (selected_tab == 4) { /* Right panel */
-                    if (selected_item >= 1 && selected_item <= 3) {
-                        right_panel.sort_type = selected_item - 1;
-                        load_files(&right_panel);
-                    } else if (selected_item == 4) {
-                        load_files(&right_panel);
-                    }
-                }
-                submenu_active = 0;
-                draw_interface();
-                break;
-            }
-        } else {
-            if (c == KEY_LEFT && selected_tab > 0) {
-                selected_tab--;
-            } else if (c == KEY_RIGHT && selected_tab < tab_count - 1) {
-                selected_tab++;
-            } else if (c == KEY_ENTER || c == KEY_DOWN) {
-                submenu_active = 1;
-                selected_item = 0;
-            } else if (c == KEY_ESC) {
-                draw_interface();
-                break;
-            }
-        }
+    int tab_col = 12;
+    for (int i = 0; i < selected_tab && i < SC_TAB_COUNT; i++) {
+        tab_col += (int)strlen(s_menu_tabs[i]) + 3;
     }
-    return 0;
+    if (selected_tab >= 0 && selected_tab < SC_TAB_COUNT) {
+        scr_str(0, tab_col, s_menu_tabs[selected_tab], SC_STYLE_MENU_SEL);
+    }
+
+    if (submenu_active && selected_tab >= 0 && selected_tab < SC_TAB_COUNT) {
+        draw_submenu(s_submenus[selected_tab], s_item_counts[selected_tab], 1, tab_col, selected_item);
+    }
+
+    scr_flush();
 }
 
 void draw_exit_dialog(int selected)
@@ -472,22 +379,143 @@ void draw_exit_dialog(int selected)
     scr_flush();
 }
 
-int handle_exit_dialog(void)
+int sc_modal_step(int c)
 {
-    int selected = 1;
-    draw_exit_dialog(selected);
-
-    while (1) {
-        int c = term_key();
+    if (modal_mode == SC_MODAL_EXIT) {
         if (c == 'y' || c == 'Y') {
-            return 1;
-        } else if (c == 'n' || c == 'N' || c == KEY_ESC) {
             return 0;
-        } else if (c == KEY_TAB || c == KEY_LEFT || c == KEY_RIGHT) {
-            selected ^= 1;
-            draw_exit_dialog(selected);
+        } else if (c == 'n' || c == 'N' || c == KEY_ESC) {
+            modal_mode = SC_MODAL_NONE;
+            draw_interface();
+            scr_flush();
+            return 1;
+        } else if (c == KEY_TAB || c == KEY_LEFT || c == KEY_RIGHT || c == KEY_UP || c == KEY_DOWN) {
+            modal_sel ^= 1;
+            draw_exit_dialog(modal_sel);
+            return 1;
         } else if (c == KEY_ENTER) {
-            return (selected == 0) ? 1 : 0;
+            if (modal_sel == 0) {
+                return 0;
+            } else {
+                modal_mode = SC_MODAL_NONE;
+                draw_interface();
+                scr_flush();
+                return 1;
+            }
         }
+        return 1;
     }
+
+    if (modal_mode == SC_MODAL_MENU) {
+        if (c == KEY_ESC || c == KEY_F9) {
+            modal_mode = SC_MODAL_NONE;
+            draw_interface();
+            scr_flush();
+            return 1;
+        }
+        if (menu_submenu_active) {
+            if (c == KEY_UP && menu_item > 0) {
+                menu_item--;
+                draw_menu_overlay(menu_tab, menu_submenu_active, menu_item);
+                return 1;
+            } else if (c == KEY_DOWN && menu_item < s_item_counts[menu_tab] - 1) {
+                menu_item++;
+                draw_menu_overlay(menu_tab, menu_submenu_active, menu_item);
+                return 1;
+            } else if (c == KEY_LEFT) {
+                if (menu_tab > 0) {
+                    menu_tab--;
+                    menu_item = 0;
+                    draw_interface();
+                    draw_menu_overlay(menu_tab, menu_submenu_active, menu_item);
+                }
+                return 1;
+            } else if (c == KEY_RIGHT) {
+                if (menu_tab < SC_TAB_COUNT - 1) {
+                    menu_tab++;
+                    menu_item = 0;
+                    draw_interface();
+                    draw_menu_overlay(menu_tab, menu_submenu_active, menu_item);
+                }
+                return 1;
+            } else if (c == KEY_ENTER) {
+                int stab = menu_tab;
+                int sitem = menu_item;
+                modal_mode = SC_MODAL_NONE;
+                draw_interface();
+
+                if (stab == 0) { /* Left panel */
+                    if (sitem >= 1 && sitem <= 3) {
+                        left_panel.sort_type = sitem - 1;
+                        load_files(&left_panel);
+                    } else if (sitem == 4) {
+                        load_files(&left_panel);
+                    }
+                    draw_interface();
+                } else if (stab == 1) { /* File */
+                    if (sitem == 2) { /* View F3 */
+                        if (active_panel->file_count > 0 && !active_panel->files[active_panel->cursor].is_dir) {
+                            char fpath[VFS_MAX_PATH];
+                            snprintf(fpath, sizeof(fpath), "%s/%s", active_panel->path, active_panel->files[active_panel->cursor].name);
+                            vfs_normalize_path(fpath, fpath, sizeof(fpath));
+                            (void)sc_launch_tv(fpath, 1);
+                            return 1;
+                        }
+                    } else if (sitem == 3) { /* Edit F4 */
+                        if (active_panel->file_count > 0 && !active_panel->files[active_panel->cursor].is_dir) {
+                            char fpath[VFS_MAX_PATH];
+                            snprintf(fpath, sizeof(fpath), "%s/%s", active_panel->path, active_panel->files[active_panel->cursor].name);
+                            vfs_normalize_path(fpath, fpath, sizeof(fpath));
+                            (void)sc_launch_tv(fpath, 0);
+                            return 1;
+                        }
+                    } else if (sitem == 8) { /* Exit F10 */
+                        modal_mode = SC_MODAL_EXIT;
+                        modal_sel = 1;
+                        draw_exit_dialog(modal_sel);
+                        return 1;
+                    }
+                } else if (stab == 2) { /* Command */
+                    if (sitem == 0) {
+                        show_command_buffer ^= 1;
+                    } else if (sitem == 1) {
+                        active_panel = (active_panel == &left_panel) ? &right_panel : &left_panel;
+                    } else if (sitem == 2) {
+                        history_count = 0;
+                        history_start = 0;
+                    }
+                    draw_interface();
+                } else if (stab == 4) { /* Right panel */
+                    if (sitem >= 1 && sitem <= 3) {
+                        right_panel.sort_type = sitem - 1;
+                        load_files(&right_panel);
+                    } else if (sitem == 4) {
+                        load_files(&right_panel);
+                    }
+                    draw_interface();
+                }
+                return 1;
+            }
+        } else {
+            if (c == KEY_LEFT && menu_tab > 0) {
+                menu_tab--;
+                draw_interface();
+                draw_menu_overlay(menu_tab, menu_submenu_active, menu_item);
+                return 1;
+            } else if (c == KEY_RIGHT && menu_tab < SC_TAB_COUNT - 1) {
+                menu_tab++;
+                draw_interface();
+                draw_menu_overlay(menu_tab, menu_submenu_active, menu_item);
+                return 1;
+            } else if (c == KEY_ENTER || c == KEY_DOWN) {
+                menu_submenu_active = 1;
+                menu_item = 0;
+                draw_menu_overlay(menu_tab, menu_submenu_active, menu_item);
+                return 1;
+            }
+        }
+        return 1;
+    }
+
+    return 1;
 }

@@ -118,9 +118,20 @@ struct ScContext {
     int _cmd_cursor_pos;
     int _cmd_display_offset;
     int _sc_tv_active;
+    int _modal_mode;
+    int _modal_sel;
+    int _menu_tab;
+    int _menu_item;
+    int _menu_submenu_active;
     TermContext *term_ctx;
     TvContext   *tv_ctx;
 };
+
+typedef enum {
+    SC_MODAL_NONE = 0,
+    SC_MODAL_MENU,
+    SC_MODAL_EXIT
+} ScModalMode;
 
 #ifdef SC_INTERNAL
 extern ScContext *g_sc;
@@ -142,6 +153,11 @@ extern ScContext *g_sc;
 #define cmd_cursor_pos (g_sc->_cmd_cursor_pos)
 #define cmd_display_offset (g_sc->_cmd_display_offset)
 #define g_sc_tv_active (g_sc->_sc_tv_active)
+#define modal_mode (g_sc->_modal_mode)
+#define modal_sel (g_sc->_modal_sel)
+#define menu_tab (g_sc->_menu_tab)
+#define menu_item (g_sc->_menu_item)
+#define menu_submenu_active (g_sc->_menu_submenu_active)
 #endif
 
 ScContext *sc_context_create(void);
@@ -162,8 +178,8 @@ void draw_menu(void);
 void draw_command_line(void);
 void draw_bottom_bar(void);
 void draw_exit_dialog(int selected);
-int  handle_menu(void);
-int  handle_exit_dialog(void);
+void draw_menu_overlay(int selected_tab, int submenu_active, int selected_item);
+int  sc_modal_step(int c);
 void append_to_history_display(const char *command, const char *output);
 
 /* Functions in files.c */

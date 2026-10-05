@@ -180,6 +180,8 @@ int sc_session_init(const char *start_path, int rows, int cols)
     cmd_cursor_pos = 0;
     cmd_display_offset = 0;
     show_command_buffer = 0;
+    modal_mode = SC_MODAL_NONE;
+    modal_sel = 0;
 
     draw_interface();
     scr_flush();
@@ -214,6 +216,20 @@ int sc_session_step(int c)
             scr_flush();
         }
         return 1;
+    }
+
+    if (modal_mode != SC_MODAL_NONE) {
+        if (c == K_RESIZE) {
+            (void)term_resize();
+            draw_interface();
+            if (modal_mode == SC_MODAL_EXIT) {
+                draw_exit_dialog(modal_sel);
+            } else if (modal_mode == SC_MODAL_MENU) {
+                draw_menu_overlay(menu_tab, menu_submenu_active, menu_item);
+            }
+            return 1;
+        }
+        return sc_modal_step(c);
     }
 
     if (c == K_RESIZE) {
@@ -437,11 +453,18 @@ int sc_session_step(int c)
                 draw_interface();
             }
         } else if (c == KEY_F9) {
-            if (handle_menu()) return 0;
+            modal_mode = SC_MODAL_MENU;
+            menu_tab = 0;
+            menu_item = 0;
+            menu_submenu_active = 1;
             draw_interface();
+            draw_menu_overlay(menu_tab, menu_submenu_active, menu_item);
+            return 1;
         } else if (c == KEY_F10 || c == K_CTRL('Q')) {
-            if (handle_exit_dialog()) return 0;
-            draw_interface();
+            modal_mode = SC_MODAL_EXIT;
+            modal_sel = 1;
+            draw_exit_dialog(modal_sel);
+            return 1;
         }
 
     scr_flush();

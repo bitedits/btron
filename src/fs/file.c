@@ -172,9 +172,7 @@ static int read_header_block(Volume *v, BLK blk, OpenFile *of)
         of->hdr.nlnk       = 1;
         of->hdr.idxlv      = 0;
         of->hdr.total_size = rd_u32_le(buf + 0x48);
-        UW nrec_4c         = rd_u32_le(buf + 0x4C);
-        UW nrec_44         = rd_u32_le(buf + 0x44);
-        of->hdr.nrec       = (of->hdr.total_size == 0 && nrec_44 > nrec_4c) ? nrec_44 : nrec_4c;
+        UW nblk_4c = rd_u32_le(buf + 0x4C);   /* blocks claimed by this body */
 
         UH tc[20];
         for (int k = 0; k < 16; k++) {
@@ -183,47 +181,119 @@ static int read_header_block(Volume *v, BLK blk, OpenFile *of)
         tc[16] = 0;
         btr_tcode_to_utf8(tc, 16, (char *)of->hdr.name, sizeof(of->hdr.name));
 
-        if (of->hdr.nrec > REC_IDX_LEVEL0_MAX) {
-            of->hdr.nrec = REC_IDX_LEVEL0_MAX;
+        /*
+         * B-right/V record index: 16-byte entries packed into the tail of the
+         * header block, ascending address == ascending record number.  A
+         * continuation entry (byte0 != 0) only says that the record before it
+         * carries on into the next block, so it is not a record of its own
+         * (FS.md 7.1; LINX P2 says the same for read()/lseek()).
+         *
+         * The entry fields, measured against golden B-right/V bodies:
+         *   +0  byte0 kind, byte1 packed record type (0x80 = link)
+         *   +2  UH subtype / attribute
+         *   +4  UW record body position: UH block offset, UH byte offset
+         *   +8  UW payload size
+         *   +12 UB block count of this record's body
+         *   +13 UB[3] block address (allocation hint; not used to seek)
+         */
+        unsigned int found[128];
+        int nfound = 0;
+        int running = 0;
+        for (unsigned int off = bsize - 16; off >= 16 && nfound < 128; off -= 16) {
+            const unsigned char *rp = buf + off;
+            UB b0 = rp[0], b1 = rp[1];
+            int any = 0;
+            for (int j = 0; j < 16; j++) if (rp[j]) { any = 1; break; }
+            if (!any) {
+                /* Trailing unused slots precede the run; once inside it, a
+                 * zero slot ends the run. */
+                if (running) break;
+                continue;
+            }
+            if (b0 == 0 && b1 == 0) break;          /* unused slot: end of run */
+            running = 1;
+            UW esz = rd_u32_le(rp + 8);
+            if (b0 == 0 && of->hdr.total_size > 0 && esz > of->hdr.total_size)
+                break;                              /* size cannot exceed body */
+            found[nfound++] = off;
         }
-        of->nrec      = of->hdr.nrec;
+
+        unsigned int n = 0;
+        BLK hint0 = 0;                     /* block named by the first entry */
+        for (int j = nfound - 1; j >= 0 && n < REC_IDX_LEVEL0_MAX; j--) {
+            const unsigned char *rp = buf + found[j];
+            if (rp[0] != 0) continue;                 /* continuation entry */
+            UW pos = rd_u32_le(rp + 4);
+            BLK hint = (BLK)rd24le(rp + 13);
+            of->ridx[n].kind   = rd_u16_le(rp + 0);
+            of->ridx[n].type   = rd_u16_le(rp + 2);
+            of->ridx[n].size   = rd_u32_le(rp + 8);
+            of->ridx[n].flags  = (UW)rp[12];
+            /*
+             * Link records carry the target FID in the position field; data
+             * records give their body position as (block, byte) inside the
+             * extent named at +13.
+             */
+            of->ridx[n].offset = (of->ridx[n].kind == 0x8000)
+                               ? pos
+                               : (pos & 0xFFFFu) * bsize + (pos >> 16);
+            if (n == 0) hint0 = hint;
+            n++;
+        }
+        of->hdr.nrec = n;
+        of->nrec     = n;
         of->data_used = of->hdr.total_size;
+        (void)nblk_4c;
 
-        for (unsigned int i = 0; i < of->nrec; i++) {
-            unsigned char *rp = buf + bsize - (i + 1) * 16;
-            of->ridx[i].kind   = rd_u16_le(rp + 0);
-            of->ridx[i].type   = rd_u16_le(rp + 2);
-            of->ridx[i].offset = rd_u32_le(rp + 4);
-            of->ridx[i].size   = rd_u32_le(rp + 8);
-            uint8_t nblocks    = rp[12];
-            of->ridx[i].flags  = (UW)nblocks;
-        }
-
+        /*
+         * Data extent: normally the blocks immediately after the Real Body
+         * header, which is what the FID table names for a body opened through
+         * blk-1.  Some bodies are allocated away from their header (measured:
+         * BTRON.SYS at 111, Drawing Pad at 112 -- in both cases the header's
+         * successor is another body's Real Header); for those the block named
+         * by the index entry is the extent.
+         */
+        of->data_blk = 0;
         if (found_hdr_m1) {
             of->data_blk = blk;
             if (blk_is_elf) of->hdr.flags |= 0x0001;
-            if (of->nrec == 0 && (of->hdr.total_size > 0 || of->data_blk > 0)) {
-                of->nrec = 1;
-                of->hdr.nrec = 1;
-                of->ridx[0].kind = blk_is_elf ? 0x9F00 : 0x0000;
-                of->ridx[0].type = 0;
-                of->ridx[0].offset = 0;
-                of->ridx[0].size = of->hdr.total_size ? of->hdr.total_size : bsize;
-                of->ridx[0].flags = 1;
+        } else if (of->hdr.total_size > 0) {
+            of->data_blk = blk + 1;
+            if (hint0 && hint0 != of->data_blk) {
+                unsigned char *probe = (unsigned char *)malloc(bsize);
+                int successor_is_header = 0;
+                if (probe && vol_read_blk(v, blk + 1, probe) == 0 &&
+                    (memcmp(probe, "norT", 4) == 0 || memcmp(probe, "Tron", 4) == 0))
+                    successor_is_header = 1;
+                free(probe);
+                if (successor_is_header) of->data_blk = hint0;
             }
-        } else {
-            BLK rblk = 0;
-            if (of->nrec > 0) {
-                unsigned char *rp0 = buf + bsize - 16;
-                rblk = (BLK)(rp0[13] | (rp0[14] << 8) | (rp0[15] << 16));
+        }
+
+        /*
+         * Record positions from the index are only meaningful when the entry
+         * names the extent we settled on.  Otherwise the bodies concatenate
+         * their record payloads in record order (FS.md 8), and the entry's
+         * block/byte fields are stale allocation data.
+         */
+        if (n > 0 && hint0 != of->data_blk) {
+            UW cum = 0;
+            for (unsigned int i = 0; i < n; i++) {
+                of->ridx[i].offset = cum;
+                cum += of->ridx[i].size;
             }
-            if (rblk > 0 && rblk != blk) {
-                of->data_blk = rblk;
-            } else if (of->hdr.total_size > 0) {
-                of->data_blk = blk + 1;
-            } else {
-                of->data_blk = 0;
-            }
+        }
+
+        if (n == 0 && of->hdr.total_size > 0) {
+            /* Index not in this block (indirect/2-level body): stream it whole. */
+            of->hdr.nrec  = 1;
+            of->nrec      = 1;
+            of->ridx[0].kind   = 0;
+            of->ridx[0].type   = 0;
+            of->ridx[0].size   = of->hdr.total_size;
+            of->ridx[0].offset = 0;
+            of->ridx[0].flags  = 1;
+            of->is_stream = 1;
         }
         of->hdr.data_blk = of->data_blk;
         free(buf);

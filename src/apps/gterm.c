@@ -1142,17 +1142,26 @@ static void handle_gterm_event(WND *wnd, const EVT *evt) {
         if (evt->type == EV_KEY_DOWN) {
             UW sym = evt->key;
             uint16_t mod = (uint16_t)(uintptr_t)evt->data;
-            BOOL ctrl = (mod & BTRON_KMOD_CTRL) != 0;
+            BOOL ctrl = ((mod & (BTRON_KMOD_CTRL | BTRON_KMOD_GUI)) != 0);
+            BOOL opt  = ((mod & BTRON_KMOD_ALT) != 0);
             int tk = K_NONE;
 
-            if (sym == BTRON_KEY_UP) tk = K_UP;
-            else if (sym == BTRON_KEY_DOWN) tk = K_DOWN;
-            else if (sym == BTRON_KEY_LEFT) tk = K_LEFT;
-            else if (sym == BTRON_KEY_RIGHT) tk = K_RIGHT;
-            else if (sym == BTRON_KEY_PAGE_UP) tk = K_PGUP;
+            if (sym == BTRON_KEY_UP) {
+                tk = ctrl ? K_CTRL_UP : K_UP;
+            } else if (sym == BTRON_KEY_DOWN) {
+                tk = ctrl ? K_CTRL_DOWN : K_DOWN;
+            } else if (sym == BTRON_KEY_LEFT) {
+                if (opt || (ctrl && (mod & BTRON_KMOD_CTRL))) tk = K_CTRL_LEFT;
+                else if (ctrl && (mod & BTRON_KMOD_GUI)) tk = K_HOME;
+                else tk = K_LEFT;
+            } else if (sym == BTRON_KEY_RIGHT) {
+                if (opt || (ctrl && (mod & BTRON_KMOD_CTRL))) tk = K_CTRL_RIGHT;
+                else if (ctrl && (mod & BTRON_KMOD_GUI)) tk = K_END;
+                else tk = K_RIGHT;
+            } else if (sym == BTRON_KEY_PAGE_UP) tk = K_PGUP;
             else if (sym == BTRON_KEY_PAGE_DOWN) tk = K_PGDOWN;
-            else if (sym == BTRON_KEY_HOME) tk = K_HOME;
-            else if (sym == BTRON_KEY_END) tk = K_END;
+            else if (sym == BTRON_KEY_HOME) tk = ctrl ? K_CTRL_UP : K_HOME;
+            else if (sym == BTRON_KEY_END) tk = ctrl ? K_CTRL_DOWN : K_END;
             else if (sym == BTRON_KEY_RETURN || sym == BTRON_KEY_KP_ENTER || sym == '\r' || sym == '\n') tk = K_ENTER;
             else if (sym == BTRON_KEY_TAB || sym == '\t') tk = K_TAB;
             else if (sym == BTRON_KEY_BACKSPACE || sym == 0x08) tk = K_BACKSPACE;
@@ -1168,7 +1177,11 @@ static void handle_gterm_event(WND *wnd, const EVT *evt) {
             else if (sym == BTRON_KEY_F8) tk = K_F8;
             else if (sym == BTRON_KEY_F9) tk = K_F9;
             else if (sym == BTRON_KEY_F10) tk = K_F10;
-            else if (ctrl && ((sym >= 'a' && sym <= 'z') || (sym >= 'A' && sym <= 'Z'))) {
+            else if (opt && (sym == 'b' || sym == 'B')) {
+                tk = K_CTRL_LEFT;
+            } else if (opt && (sym == 'f' || sym == 'F')) {
+                tk = K_CTRL_RIGHT;
+            } else if (ctrl && ((sym >= 'a' && sym <= 'z') || (sym >= 'A' && sym <= 'Z'))) {
                 int cval = (sym >= 'a' && sym <= 'z') ? (sym - 'a' + 1) : (sym - 'A' + 1);
                 tk = K_CTRL(cval);
             } else if (!ctrl && sym >= 32 && sym <= 126) {

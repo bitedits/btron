@@ -10,11 +10,36 @@
 #include "../lang.h"
 #include "../term.h"
 #include "../vfs.h"
-
 #define TV_MAX_LINES 2048
 #define TV_MAX_LINE_BYTES 1024
 
-typedef struct TvContext TvContext;
+typedef struct {
+    char   data[TV_MAX_LINE_BYTES];
+    size_t len;
+} TvLine;
+
+typedef enum {
+    TV_MODAL_NONE = 0,
+    TV_MODAL_EXIT,
+    TV_MODAL_HELP
+} TvModalMode;
+
+typedef struct TvContext {
+    TvLine lines[TV_MAX_LINES];
+    size_t line_count;
+    char   filename[VFS_MAX_PATH];
+    int    view_mode;
+    int    insert_mode;
+    int    modified;
+    int    wrap_mode;
+    size_t cur_line;
+    size_t cur_byte;
+    int    scroll_y;
+    int    scroll_sub;
+    int    scroll_x;
+    int    modal_mode;
+    int    modal_sel;
+} TvContext;
 
 TvContext *tv_context_create(void);
 void       tv_context_destroy(TvContext *tv);

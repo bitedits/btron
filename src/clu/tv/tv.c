@@ -21,32 +21,6 @@ enum {
     STYLE_ACCENT
 };
 
-typedef struct {
-    char   data[TV_MAX_LINE_BYTES];
-    size_t len;
-} TvLine;
-
-struct TvContext {
-    TvLine lines[TV_MAX_LINES];
-    size_t line_count;
-    char   filename[VFS_MAX_PATH];
-    int    view_mode;
-    int    insert_mode;
-    int    modified;
-    int    wrap_mode;
-    size_t cur_line;
-    size_t cur_byte;
-    int    scroll_y;
-    int    scroll_x;
-    int    modal_mode;
-    int    modal_sel;
-};
-
-typedef enum {
-    TV_MODAL_NONE = 0,
-    TV_MODAL_EXIT
-} TvModalMode;
-
 static TvContext g_default_tv = {
     .insert_mode = 1,
     .wrap_mode = LANG_WRAP_WORD
@@ -63,9 +37,12 @@ static TvContext *g_tv = &g_default_tv;
 #define g_cur_line    (g_tv->cur_line)
 #define g_cur_byte    (g_tv->cur_byte)
 #define g_scroll_y    (g_tv->scroll_y)
+#define g_scroll_sub  (g_tv->scroll_sub)
 #define g_scroll_x    (g_tv->scroll_x)
 #define g_modal_mode  (g_tv->modal_mode)
 #define g_modal_sel   (g_tv->modal_sel)
+
+static char g_tv_clipboard[TV_MAX_LINE_BYTES * 2] = {0};
 
 TvContext *tv_context_create(void)
 {
@@ -114,6 +91,7 @@ static void tv_reset_buffer(void)
     g_cur_line = 0;
     g_cur_byte = 0;
     g_scroll_y = 0;
+    g_scroll_sub = 0;
     g_scroll_x = 0;
     g_modified = 0;
     g_modal_mode = TV_MODAL_NONE;
@@ -207,11 +185,141 @@ static void tv_draw_header(void)
     scr_str(0, 5, title, STYLE_HEADER);
 }
 
+typedef struct {
+    size_t byte_off;
+    size_t byte_len;
+} TvSubline;
+
+static int tv_get_line_sublines(size_t line_idx, int width, int wrap_mode, TvSubline *subs, int max_subs)
+{
+    if (line_idx >= g_line_count || max_subs <= 0) return 0;
+    TvLine *l = &g_lines[line_idx];
+    if (wrap_mode == LANG_WRAP_NONE || l->len == 0 || width <= 4) {
+        subs[0].byte_off = 0;
+        subs[0].byte_len = l->len;
+        return 1;
+    }
+    int count = 0;
+    size_t off = 0;
+    while (off < l->len && count < max_subs) {
+        size_t wlen = lang_wrap(l->data + off, l->len - off, width, wrap_mode);
+        if (wlen == 0) {
+            size_t nxt = lang_cl_next(l->data + off, l->len - off, 0);
+            wlen = (nxt > 0) ? nxt : 1;
+        }
+        subs[count].byte_off = off;
+        subs[count].byte_len = wlen;
+        count++;
+        off += wlen;
+    }
+    if (count == 0) {
+        subs[0].byte_off = 0;
+        subs[0].byte_len = 0;
+        count = 1;
+    }
+    return count;
+}
+
+static int tv_count_remaining_visual_rows(int from_line, int from_sub)
+{
+    if (from_line >= (int)g_line_count) return 0;
+    int count = 0;
+    int limit = term_rows;
+    for (int l = from_line; l < (int)g_line_count && count <= limit; l++) {
+        TvSubline subs[64];
+        int nsubs = tv_get_line_sublines((size_t)l, term_cols, g_wrap_mode, subs, 64);
+        int start = (l == from_line) ? from_sub : 0;
+        if (start < nsubs) {
+            count += (nsubs - start);
+        }
+    }
+    return count;
+}
+
+static void tv_scroll_down(int count)
+{
+    int text_rows = term_rows - 2;
+    if (text_rows < 1) text_rows = 1;
+
+    while (count-- > 0) {
+        if (tv_count_remaining_visual_rows(g_scroll_y, g_scroll_sub) <= text_rows) {
+            break;
+        }
+        TvSubline subs[64];
+        int nsubs = tv_get_line_sublines((size_t)g_scroll_y, term_cols, g_wrap_mode, subs, 64);
+        if (g_scroll_sub + 1 < nsubs) {
+            g_scroll_sub++;
+        } else if (g_scroll_y + 1 < (int)g_line_count) {
+            g_scroll_y++;
+            g_scroll_sub = 0;
+        } else {
+            break;
+        }
+    }
+    if (g_view_mode) {
+        g_cur_line = (size_t)g_scroll_y;
+    }
+}
+
+static void tv_scroll_up(int count)
+{
+    while (count-- > 0) {
+        if (g_scroll_sub > 0) {
+            g_scroll_sub--;
+        } else if (g_scroll_y > 0) {
+            g_scroll_y--;
+            TvSubline subs[64];
+            int nsubs = tv_get_line_sublines((size_t)g_scroll_y, term_cols, g_wrap_mode, subs, 64);
+            g_scroll_sub = (nsubs > 0) ? (nsubs - 1) : 0;
+        } else {
+            g_scroll_sub = 0;
+            break;
+        }
+    }
+    if (g_view_mode) {
+        g_cur_line = (size_t)g_scroll_y;
+    }
+}
+
 static void tv_draw_footer(void)
 {
     int r = term_rows - 1;
     scr_fill(r, 0, term_cols, ' ', STYLE_FOOTER);
-    scr_str(r, 0, " F1 Help  F3 View  F4 Edit  F5 Wrap  F10 Exit", STYLE_FOOTER);
+
+    char left_str[80];
+    if (g_view_mode) {
+        (void)snprintf(left_str, sizeof(left_str), " [VIEW] F1 Help  F4 Edit  F5 Wrap  ^Q/q Exit");
+    } else {
+        (void)snprintf(left_str, sizeof(left_str), " [EDIT] F1 Help  F3 View  F5 Wrap  ^S Save  ^Q Exit");
+    }
+    scr_str(r, 0, left_str, STYLE_FOOTER);
+
+    char right_str[64];
+    size_t cur_l = g_view_mode ? (size_t)g_scroll_y + 1 : g_cur_line + 1;
+    if (cur_l > g_line_count) cur_l = g_line_count;
+    if (g_line_count == 0) cur_l = 0;
+
+    int pct = (g_line_count > 0) ? (int)((cur_l * 100) / g_line_count) : 100;
+    const char *pos_tag = "";
+    if (g_scroll_y == 0 && g_scroll_sub == 0) {
+        pos_tag = "Top";
+    } else if (tv_count_remaining_visual_rows(g_scroll_y, g_scroll_sub) <= (term_rows - 2)) {
+        pos_tag = "End";
+    }
+
+    if (pos_tag[0] != '\0') {
+        (void)snprintf(right_str, sizeof(right_str), "L:%zu/%zu  C:%zu  [%s] ",
+                       cur_l, g_line_count, g_cur_byte, pos_tag);
+    } else {
+        (void)snprintf(right_str, sizeof(right_str), "L:%zu/%zu  C:%zu  [%d%%] ",
+                       cur_l, g_line_count, g_cur_byte, pct);
+    }
+
+    int rlen = (int)strlen(right_str);
+    int col = term_cols - rlen;
+    if (col > (int)strlen(left_str) + 1) {
+        scr_str(r, col, right_str, STYLE_FOOTER);
+    }
 }
 
 static void tv_draw_text(void)
@@ -219,19 +327,33 @@ static void tv_draw_text(void)
     int text_rows = term_rows - 2;
     if (text_rows < 1) text_rows = 1;
 
+    size_t line_idx = (size_t)g_scroll_y;
+    int sub_idx = g_scroll_sub;
+
     for (int row = 0; row < text_rows; row++) {
         int screen_r = row + 1;
-        size_t line_idx = (size_t)(g_scroll_y + row);
-
         scr_fill(screen_r, 0, term_cols, ' ', STYLE_TEXT);
 
         if (line_idx < g_line_count) {
-            TvLine *l = &g_lines[line_idx];
-            if (g_wrap_mode == LANG_WRAP_NONE) {
-                (void)scr_text(screen_r, 0, term_cols, l->data, l->len, STYLE_TEXT, g_scroll_x);
+            TvSubline subs[64];
+            int nsubs = tv_get_line_sublines(line_idx, term_cols, g_wrap_mode, subs, 64);
+            if (sub_idx < nsubs) {
+                TvLine *l = &g_lines[line_idx];
+                size_t off = subs[sub_idx].byte_off;
+                size_t len = subs[sub_idx].byte_len;
+                if (g_wrap_mode == LANG_WRAP_NONE) {
+                    (void)scr_text(screen_r, 0, term_cols, l->data + off, len, STYLE_TEXT, g_scroll_x);
+                } else {
+                    (void)scr_text(screen_r, 0, term_cols, l->data + off, len, STYLE_TEXT, 0);
+                }
+                sub_idx++;
+                if (sub_idx >= nsubs) {
+                    line_idx++;
+                    sub_idx = 0;
+                }
             } else {
-                size_t wlen = lang_wrap(l->data, l->len, term_cols, g_wrap_mode);
-                (void)scr_text(screen_r, 0, term_cols, l->data, wlen, STYLE_TEXT, 0);
+                line_idx++;
+                sub_idx = 0;
             }
         }
     }
@@ -239,25 +361,70 @@ static void tv_draw_text(void)
 
 static void tv_update_cursor(void)
 {
-    if (g_view_mode) {
-        scr_cursor(1, 0, 0);
+    if (g_line_count == 0) {
+        g_cur_line = 0;
+        g_cur_byte = 0;
+        g_scroll_y = 0;
+        g_scroll_sub = 0;
+        scr_cursor(1, 0, g_view_mode ? 0 : 1);
         return;
     }
 
-    if (g_cur_line >= g_line_count) g_cur_line = g_line_count > 0 ? g_line_count - 1 : 0;
+    if (g_cur_line >= g_line_count) g_cur_line = g_line_count - 1;
     TvLine *l = &g_lines[g_cur_line];
     if (g_cur_byte > l->len) g_cur_byte = l->len;
 
     int text_rows = term_rows - 2;
     if (text_rows < 1) text_rows = 1;
 
-    if ((int)g_cur_line < g_scroll_y) {
-        g_scroll_y = (int)g_cur_line;
-    } else if ((int)g_cur_line >= g_scroll_y + text_rows) {
-        g_scroll_y = (int)g_cur_line - text_rows + 1;
+    if (g_view_mode) {
+        if (g_scroll_y < 0) g_scroll_y = 0;
+        if (g_scroll_y >= (int)g_line_count) g_scroll_y = (int)g_line_count - 1;
+        g_cur_line = (size_t)g_scroll_y;
+        scr_cursor(1, 0, 0);
+        return;
     }
 
-    int disp_col = lang_cols(l->data, g_cur_byte);
+    TvSubline subs[64];
+    int nsubs = tv_get_line_sublines(g_cur_line, term_cols, g_wrap_mode, subs, 64);
+    int cur_sub = 0;
+    for (int i = 0; i < nsubs; i++) {
+        if (g_cur_byte >= subs[i].byte_off && (g_cur_byte <= subs[i].byte_off + subs[i].byte_len || i == nsubs - 1)) {
+            cur_sub = i;
+            break;
+        }
+    }
+
+    if ((int)g_cur_line < g_scroll_y || ((int)g_cur_line == g_scroll_y && cur_sub < g_scroll_sub)) {
+        g_scroll_y = (int)g_cur_line;
+        g_scroll_sub = cur_sub;
+    }
+
+    int vdist = 0;
+    for (int line = g_scroll_y; line < (int)g_cur_line; line++) {
+        TvSubline ls[64];
+        int ns = tv_get_line_sublines((size_t)line, term_cols, g_wrap_mode, ls, 64);
+        int start = (line == g_scroll_y) ? g_scroll_sub : 0;
+        if (start < ns) vdist += (ns - start);
+    }
+    vdist += (cur_sub - ((int)g_cur_line == g_scroll_y ? g_scroll_sub : 0));
+
+    if (vdist >= text_rows) {
+        tv_scroll_down(vdist - text_rows + 1);
+        vdist = 0;
+        for (int line = g_scroll_y; line < (int)g_cur_line; line++) {
+            TvSubline ls[64];
+            int ns = tv_get_line_sublines((size_t)line, term_cols, g_wrap_mode, ls, 64);
+            int start = (line == g_scroll_y) ? g_scroll_sub : 0;
+            if (start < ns) vdist += (ns - start);
+        }
+        vdist += (cur_sub - ((int)g_cur_line == g_scroll_y ? g_scroll_sub : 0));
+    }
+
+    int screen_r = vdist + 1;
+    size_t sub_byte_off = subs[cur_sub].byte_off;
+    size_t byte_in_sub = (g_cur_byte >= sub_byte_off) ? (g_cur_byte - sub_byte_off) : 0;
+    int disp_col = lang_cols(l->data + sub_byte_off, byte_in_sub);
 
     if (g_wrap_mode == LANG_WRAP_NONE) {
         if (disp_col < g_scroll_x) {
@@ -269,7 +436,6 @@ static void tv_update_cursor(void)
         g_scroll_x = 0;
     }
 
-    int screen_r = (int)(g_cur_line - g_scroll_y) + 1;
     int screen_c = disp_col - g_scroll_x;
     if (screen_c < 0) screen_c = 0;
     if (screen_c >= term_cols) screen_c = term_cols - 1;
@@ -386,8 +552,17 @@ static void tv_backspace(void)
 
 static void tv_move_word(int forward)
 {
+    if (g_line_count == 0) return;
+    if (g_cur_line >= g_line_count) g_cur_line = g_line_count - 1;
     TvLine *l = &g_lines[g_cur_line];
     if (forward) {
+        if (g_cur_byte >= l->len) {
+            if (g_cur_line + 1 < g_line_count) {
+                g_cur_line++;
+                g_cur_byte = 0;
+            }
+            return;
+        }
         while (g_cur_byte < l->len) {
             uint32_t cp;
             (void)lang_decode(l->data + g_cur_byte, l->len - g_cur_byte, &cp);
@@ -406,6 +581,13 @@ static void tv_move_word(int forward)
             }
         }
     } else {
+        if (g_cur_byte == 0) {
+            if (g_cur_line > 0) {
+                g_cur_line--;
+                g_cur_byte = g_lines[g_cur_line].len;
+            }
+            return;
+        }
         while (g_cur_byte > 0) {
             size_t prv = lang_cl_prev(l->data, l->len, g_cur_byte);
             uint32_t cp;
@@ -427,6 +609,104 @@ static void tv_move_word(int forward)
             }
         }
     }
+}
+
+static void tv_copy_current_line(void)
+{
+    if (g_line_count == 0 || g_cur_line >= g_line_count) return;
+    TvLine *l = &g_lines[g_cur_line];
+    size_t copy_len = l->len;
+    if (copy_len >= sizeof(g_tv_clipboard)) copy_len = sizeof(g_tv_clipboard) - 1;
+    memcpy(g_tv_clipboard, l->data, copy_len);
+    g_tv_clipboard[copy_len] = '\0';
+}
+
+static void tv_cut_current_line(void)
+{
+    if (g_view_mode || g_line_count == 0 || g_cur_line >= g_line_count) return;
+    tv_copy_current_line();
+    if (g_line_count == 1) {
+        g_lines[0].data[0] = '\0';
+        g_lines[0].len = 0;
+        g_cur_byte = 0;
+        g_modified = 1;
+        return;
+    }
+    for (size_t i = g_cur_line; i + 1 < g_line_count; i++) {
+        g_lines[i] = g_lines[i + 1];
+    }
+    g_line_count--;
+    if (g_cur_line >= g_line_count) g_cur_line = g_line_count - 1;
+    TvLine *l = &g_lines[g_cur_line];
+    if (g_cur_byte > l->len) g_cur_byte = l->len;
+    g_modified = 1;
+}
+
+static void tv_paste_clipboard(void)
+{
+    if (g_view_mode || g_tv_clipboard[0] == '\0') return;
+    const char *p = g_tv_clipboard;
+    while (*p) {
+        uint32_t cp;
+        size_t n = lang_decode(p, strlen(p), &cp);
+        if (n == 0) break;
+        tv_insert_char(cp);
+        p += n;
+    }
+}
+
+static void tv_kill_to_eol(void)
+{
+    if (g_view_mode || g_cur_line >= g_line_count) return;
+    TvLine *l = &g_lines[g_cur_line];
+    if (g_cur_byte < l->len) {
+        size_t kill_len = l->len - g_cur_byte;
+        if (kill_len >= sizeof(g_tv_clipboard)) kill_len = sizeof(g_tv_clipboard) - 1;
+        memcpy(g_tv_clipboard, l->data + g_cur_byte, kill_len);
+        g_tv_clipboard[kill_len] = '\0';
+        l->data[g_cur_byte] = '\0';
+        l->len = g_cur_byte;
+        g_modified = 1;
+    } else if (g_cur_line + 1 < g_line_count) {
+        tv_delete_char();
+    }
+}
+
+static void tv_kill_to_sol(void)
+{
+    if (g_view_mode || g_cur_line >= g_line_count || g_cur_byte == 0) return;
+    TvLine *l = &g_lines[g_cur_line];
+    size_t kill_len = g_cur_byte;
+    if (kill_len >= sizeof(g_tv_clipboard)) kill_len = sizeof(g_tv_clipboard) - 1;
+    memcpy(g_tv_clipboard, l->data, kill_len);
+    g_tv_clipboard[kill_len] = '\0';
+    memmove(l->data, l->data + g_cur_byte, l->len - g_cur_byte + 1);
+    l->len -= g_cur_byte;
+    g_cur_byte = 0;
+    g_modified = 1;
+}
+
+static void tv_draw_help_dialog(void)
+{
+    int dw = 52, dh = 11;
+    int dr = (term_rows - dh) / 2;
+    int dc = (term_cols - dw) / 2;
+    if (dr < 0) dr = 0;
+    if (dc < 0) dc = 0;
+
+    for (int i = 0; i < dh; i++) {
+        scr_fill(dr + i, dc, dw, ' ', STYLE_MENU);
+    }
+    scr_str(dr + 1, dc + 14, "TV - Terminal Vision Help", STYLE_MENU_SEL);
+    scr_str(dr + 3, dc + 3, "^S / Cmd+S : Save       ^Q / Cmd+Q : Quit", STYLE_MENU);
+    scr_str(dr + 4, dc + 3, "^W / Cmd+W : Wrap Mode  ^N / Cmd+N : New File", STYLE_MENU);
+    scr_str(dr + 5, dc + 3, "^O / Cmd+O : Reload     ^C/^X/^V   : Copy/Cut/Paste", STYLE_MENU);
+    scr_str(dr + 6, dc + 3, "Opt+Left/Right: Word    Cmd+Up/Dn  : File Top/End", STYLE_MENU);
+    scr_str(dr + 7, dc + 3, "F1: Help   F3: View     F4: Edit   F5: Wrap Mode", STYLE_MENU);
+    scr_str(dr + 9, dc + 12, "[ Press ESC or ENTER to Close ]", STYLE_MENU_SEL);
+
+    scr_cursor(dr + 9, dc + 13, 1);
+    scr_flush();
 }
 
 static void tv_draw_exit_dialog(int sel)
@@ -529,6 +809,27 @@ int tv_session_step(int k)
         return 1;
     }
 
+    if (g_modal_mode == TV_MODAL_HELP) {
+        if (k == K_RESIZE) {
+            scr_invalidate();
+            tv_draw_header();
+            tv_draw_text();
+            tv_draw_footer();
+            tv_draw_help_dialog();
+            return 1;
+        }
+        if (k == K_ESC || k == K_ENTER || k == K_F1 || k == 'q' || k == ' ') {
+            g_modal_mode = TV_MODAL_NONE;
+            tv_draw_header();
+            tv_draw_text();
+            tv_draw_footer();
+            tv_update_cursor();
+            scr_flush();
+            return 1;
+        }
+        return 1;
+    }
+
     if (k == K_RESIZE) {
         scr_invalidate();
         tv_draw_header();
@@ -542,99 +843,289 @@ int tv_session_step(int k)
 
     switch (k) {
     case K_F1:
-        /* Help */
-        break;
+        g_modal_mode = TV_MODAL_HELP;
+        tv_draw_help_dialog();
+        return 1;
+
     case K_F3:
         g_view_mode = 1;
         break;
+
     case K_F4:
         g_view_mode = 0;
         break;
+
     case K_F5:
+    case K_CTRL('W'):
         g_wrap_mode = (g_wrap_mode + 1) % LANG_WRAP_MODES;
+        g_scroll_sub = 0;
         break;
+
     case K_F10:
+    case K_CTRL('Q'):
+        if (!g_modified || g_view_mode) {
+            return 0;
+        }
+        g_modal_mode = TV_MODAL_EXIT;
+        g_modal_sel = 0;
+        tv_draw_exit_dialog(g_modal_sel);
+        return 1;
+
     case K_ESC:
+        if (g_view_mode) {
+            return 0;
+        }
         if (!g_modified) {
             return 0;
         }
         g_modal_mode = TV_MODAL_EXIT;
-        g_modal_sel = 0; /* default Save & Exit */
+        g_modal_sel = 0;
         tv_draw_exit_dialog(g_modal_sel);
         return 1;
-    case K_UP:
-        if (g_cur_line > 0) {
-            g_cur_line--;
-            TvLine *l = &g_lines[g_cur_line];
-            if (g_cur_byte > l->len) g_cur_byte = l->len;
+
+    case K_CTRL('S'):
+        (void)tv_save_file();
+        break;
+
+    case K_CTRL('N'):
+        if (!g_view_mode) {
+            tv_reset_buffer();
         }
         break;
-    case K_DOWN:
-        if (g_cur_line + 1 < g_line_count) {
-            g_cur_line++;
-            TvLine *l = &g_lines[g_cur_line];
-            if (g_cur_byte > l->len) g_cur_byte = l->len;
+
+    case K_CTRL('O'):
+        if (g_filename[0] != '\0') {
+            tv_load_file(g_filename);
         }
         break;
-    case K_LEFT:
-        if (g_cur_byte > 0) {
-            TvLine *l = &g_lines[g_cur_line];
-            g_cur_byte = lang_cl_prev(l->data, l->len, g_cur_byte);
-        } else if (g_cur_line > 0) {
-            g_cur_line--;
-            g_cur_byte = g_lines[g_cur_line].len;
+
+    case K_CTRL('C'):
+        tv_copy_current_line();
+        break;
+
+    case K_CTRL('X'):
+        tv_cut_current_line();
+        break;
+
+    case K_CTRL('V'):
+        tv_paste_clipboard();
+        break;
+
+    case K_CTRL('K'):
+        tv_kill_to_eol();
+        break;
+
+    case K_CTRL('U'):
+        if (g_view_mode) {
+            int text_rows = term_rows - 2;
+            tv_scroll_up(text_rows > 2 ? text_rows / 2 : 1);
+        } else {
+            tv_kill_to_sol();
         }
         break;
-    case K_RIGHT: {
-        TvLine *l = &g_lines[g_cur_line];
-        if (g_cur_byte < l->len) {
-            g_cur_byte = lang_cl_next(l->data, l->len, g_cur_byte);
-        } else if (g_cur_line + 1 < g_line_count) {
-            g_cur_line++;
+
+    case K_CTRL('D'):
+        if (g_view_mode) {
+            int text_rows = term_rows - 2;
+            tv_scroll_down(text_rows > 2 ? text_rows / 2 : 1);
+        } else {
+            tv_delete_char();
+        }
+        break;
+
+    case K_CTRL('A'):
+        if (g_view_mode) {
+            g_scroll_y = 0;
+            g_scroll_sub = 0;
+            g_cur_line = 0;
+            g_cur_byte = 0;
+        } else {
             g_cur_byte = 0;
         }
         break;
-    }
+
+    case K_CTRL('E'):
+        if (g_view_mode) {
+            tv_scroll_down(TV_MAX_LINES * 2);
+        } else {
+            g_cur_byte = g_lines[g_cur_line].len;
+        }
+        break;
+
     case K_CTRL_LEFT:
         tv_move_word(0);
         break;
+
     case K_CTRL_RIGHT:
         tv_move_word(1);
         break;
-    case K_HOME:
+
+    case K_CTRL_UP:
+        g_scroll_y = 0;
+        g_scroll_sub = 0;
+        g_cur_line = 0;
         g_cur_byte = 0;
         break;
-    case K_END:
-        g_cur_byte = g_lines[g_cur_line].len;
-        break;
-    case K_PGUP:
-        if (g_cur_line > (size_t)(term_rows - 2)) {
-            g_cur_line -= (term_rows - 2);
+
+    case K_CTRL_DOWN:
+        if (g_view_mode) {
+            tv_scroll_down(TV_MAX_LINES * 2);
         } else {
-            g_cur_line = 0;
+            g_cur_line = (g_line_count > 0) ? (g_line_count - 1) : 0;
+            g_cur_byte = g_lines[g_cur_line].len;
         }
         break;
-    case K_PGDOWN:
-        g_cur_line += (term_rows - 2);
-        if (g_cur_line >= g_line_count) g_cur_line = g_line_count - 1;
+
+    case K_HOME:
+        if (g_view_mode) {
+            g_scroll_y = 0;
+            g_scroll_sub = 0;
+            g_cur_line = 0;
+            g_cur_byte = 0;
+        } else {
+            g_cur_byte = 0;
+        }
         break;
+
+    case K_END:
+        if (g_view_mode) {
+            tv_scroll_down(TV_MAX_LINES * 2);
+        } else {
+            g_cur_byte = g_lines[g_cur_line].len;
+        }
+        break;
+
+    case K_UP:
+        if (g_view_mode) {
+            tv_scroll_up(1);
+        } else {
+            if (g_cur_line > 0) {
+                g_cur_line--;
+                TvLine *l = &g_lines[g_cur_line];
+                if (g_cur_byte > l->len) g_cur_byte = l->len;
+            }
+        }
+        break;
+
+    case K_DOWN:
+        if (g_view_mode) {
+            tv_scroll_down(1);
+        } else {
+            if (g_cur_line + 1 < g_line_count) {
+                g_cur_line++;
+                TvLine *l = &g_lines[g_cur_line];
+                if (g_cur_byte > l->len) g_cur_byte = l->len;
+            }
+        }
+        break;
+
+    case K_LEFT:
+        if (g_view_mode) {
+            if (g_wrap_mode == LANG_WRAP_NONE) {
+                g_scroll_x = (g_scroll_x > 4) ? g_scroll_x - 4 : 0;
+            }
+        } else {
+            if (g_cur_byte > 0) {
+                TvLine *l = &g_lines[g_cur_line];
+                g_cur_byte = lang_cl_prev(l->data, l->len, g_cur_byte);
+            } else if (g_cur_line > 0) {
+                g_cur_line--;
+                g_cur_byte = g_lines[g_cur_line].len;
+            }
+        }
+        break;
+
+    case K_RIGHT:
+        if (g_view_mode) {
+            if (g_wrap_mode == LANG_WRAP_NONE) {
+                g_scroll_x += 4;
+            }
+        } else {
+            TvLine *l = &g_lines[g_cur_line];
+            if (g_cur_byte < l->len) {
+                g_cur_byte = lang_cl_next(l->data, l->len, g_cur_byte);
+            } else if (g_cur_line + 1 < g_line_count) {
+                g_cur_line++;
+                g_cur_byte = 0;
+            }
+        }
+        break;
+
+    case K_PGUP: {
+        int text_rows = term_rows - 2;
+        int step = (text_rows > 3) ? (text_rows - 3) : 1;
+        tv_scroll_up(step);
+        if (!g_view_mode) {
+            if (g_cur_line > (size_t)step) g_cur_line -= step;
+            else g_cur_line = 0;
+        }
+        break;
+    }
+
+    case K_PGDOWN: {
+        int text_rows = term_rows - 2;
+        int step = (text_rows > 3) ? (text_rows - 3) : 1;
+        tv_scroll_down(step);
+        if (!g_view_mode) {
+            g_cur_line += step;
+            if (g_cur_line >= g_line_count) g_cur_line = (g_line_count > 0) ? (g_line_count - 1) : 0;
+        }
+        break;
+    }
+
     case K_INSERT:
-        g_insert_mode = !g_insert_mode;
+        if (!g_view_mode) g_insert_mode = !g_insert_mode;
         break;
+
     case K_DELETE:
-        tv_delete_char();
+        if (!g_view_mode) tv_delete_char();
         break;
+
     case K_BACKSPACE:
-        tv_backspace();
+        if (!g_view_mode) tv_backspace();
         break;
+
     case K_ENTER:
-        tv_insert_char('\n');
+        if (g_view_mode) {
+            tv_scroll_down(1);
+        } else {
+            tv_insert_char('\n');
+        }
         break;
+
     case K_TAB:
-        tv_insert_char('\t');
+        if (!g_view_mode) tv_insert_char('\t');
         break;
+
     default:
-        if (k >= 32 && k < K_BASE) {
+        if (g_view_mode) {
+            if (k == 'j') tv_scroll_down(1);
+            else if (k == 'k') tv_scroll_up(1);
+            else if (k == ' ' || k == 'f') {
+                int text_rows = term_rows - 2;
+                tv_scroll_down(text_rows > 3 ? text_rows - 3 : 1);
+            } else if (k == 'b') {
+                int text_rows = term_rows - 2;
+                tv_scroll_up(text_rows > 3 ? text_rows - 3 : 1);
+            } else if (k == 'd') {
+                int text_rows = term_rows - 2;
+                tv_scroll_down(text_rows > 2 ? text_rows / 2 : 1);
+            } else if (k == 'u') {
+                int text_rows = term_rows - 2;
+                tv_scroll_up(text_rows > 2 ? text_rows / 2 : 1);
+            } else if (k == 'g') {
+                g_scroll_y = 0;
+                g_scroll_sub = 0;
+                g_cur_line = 0;
+                g_cur_byte = 0;
+            } else if (k == 'G') {
+                tv_scroll_down(TV_MAX_LINES * 2);
+            } else if (k == 'q') {
+                return 0;
+            } else if (k == 'i' || k == 'e') {
+                g_view_mode = 0;
+            }
+        } else if (k >= 32 && k < K_BASE) {
             tv_insert_char((uint32_t)k);
         }
         break;

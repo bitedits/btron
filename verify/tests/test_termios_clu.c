@@ -577,6 +577,127 @@ static void test_reactive_modal_dialogs(void)
     TEST_PASS();
 }
 
+#undef modal_mode
+
+/* ── 11. TV Natural View-Mode Scrolling and Shortcuts Consistency ── */
+static void test_tv_view_mode_scrolling_and_shortcuts(void)
+{
+    TermContext *term = term_context_create();
+    TvContext *tv = tv_context_create();
+    CHECK(term && tv, "Context creation should succeed");
+
+    term_set_context(term);
+    tv_set_context(tv);
+
+    /* 1. Create a multi-line test file in VFS */
+    char content[4096] = "";
+    for (int i = 1; i <= 60; i++) {
+        char line[80];
+        snprintf(line, sizeof(line), "Line %d: The quick brown fox jumps over the lazy dog.\n", i);
+        strcat(content, line);
+    }
+    vfs_write_file("/SYS/scroll_test.txt", content, strlen(content));
+
+    /* Initialize TV in VIEW mode (view_only = 1) */
+    CHECK(tv_session_init("/SYS/scroll_test.txt", 1, 24, 80) == 0, "TV session init in view mode");
+    CHECK(tv->view_mode == 1, "Should be in view mode");
+    CHECK(tv->scroll_y == 0, "Initial scroll_y must be 0");
+    CHECK(tv->scroll_sub == 0, "Initial scroll_sub must be 0");
+
+    /* Test natural scrolling: Down arrow steps scroll_y down */
+    tv_session_step(K_DOWN);
+    CHECK(tv->scroll_y == 1, "Down arrow in view mode should advance scroll_y to 1");
+
+    /* 'j' pager key steps down */
+    tv_session_step('j');
+    CHECK(tv->scroll_y == 2, "'j' in view mode should advance scroll_y to 2");
+
+    /* Up arrow steps scroll_y up */
+    tv_session_step(K_UP);
+    CHECK(tv->scroll_y == 1, "Up arrow in view mode should decrement scroll_y to 1");
+
+    /* 'k' pager key steps up */
+    tv_session_step('k');
+    CHECK(tv->scroll_y == 0, "'k' in view mode should decrement scroll_y to 0");
+
+    /* PgDown steps by page */
+    tv_session_step(K_PGDOWN);
+    CHECK(tv->scroll_y > 10, "PgDown in view mode should advance viewport by a page");
+    int prev_scroll = tv->scroll_y;
+
+    /* Space steps by page */
+    tv_session_step(' ');
+    CHECK(tv->scroll_y > prev_scroll, "Space in view mode should advance viewport by a page");
+
+    /* Home or 'g' or Ctrl+Up jumps to top */
+    tv_session_step('g');
+    CHECK(tv->scroll_y == 0, "'g' should jump to top of file");
+
+    tv_session_step(K_PGDOWN);
+    tv_session_step(K_HOME);
+    CHECK(tv->scroll_y == 0, "Home should jump to top of file");
+
+    /* End or 'G' jumps to end */
+    tv_session_step('G');
+    CHECK(tv->scroll_y > 30, "'G' should scroll to bottom of file");
+
+    /* 2. Test Word Wrap Mode Toggling */
+    CHECK(tv->wrap_mode == LANG_WRAP_WORD, "Default wrap mode should be WORD");
+    tv_session_step(K_CTRL('W'));
+    CHECK(tv->wrap_mode == LANG_WRAP_NONE, "Ctrl+W should cycle wrap mode to NONE");
+    tv_session_step(K_F5);
+    CHECK(tv->wrap_mode == LANG_WRAP_CHAR, "F5 should cycle wrap mode to CHAR");
+    tv_session_step(K_CTRL('W'));
+    CHECK(tv->wrap_mode == LANG_WRAP_WORD, "Ctrl+W should cycle back to WORD");
+
+    /* 3. Switch to EDIT Mode (F4) and test t_editor consistent commands */
+    tv_session_step(K_F4);
+    CHECK(tv->view_mode == 0, "F4 should switch to EDIT mode");
+
+    /* Help Dialog Modal (F1) */
+    tv_session_step(K_F1);
+    CHECK(tv->modal_mode == TV_MODAL_HELP, "F1 should open TV Help dialog");
+    tv_session_step(K_ESC);
+    CHECK(tv->modal_mode == TV_MODAL_NONE, "ESC should close Help dialog");
+
+    /* Navigation: Home / End / Word Jump */
+    tv->cur_line = 0;
+    tv->cur_byte = 0;
+    tv_session_step(K_CTRL_RIGHT);
+    CHECK(tv->cur_byte > 0, "Ctrl+Right / Opt+Right should jump forward by word");
+    tv_session_step(K_CTRL_LEFT);
+    CHECK(tv->cur_byte == 0, "Ctrl+Left / Opt+Left should jump back to word start");
+    tv_session_step(K_END);
+    CHECK(tv->cur_byte == tv->lines[0].len, "End should jump to end of line");
+    tv_session_step(K_HOME);
+    CHECK(tv->cur_byte == 0, "Home should jump to beginning of line");
+
+    /* Clipboard: Copy, Cut, Paste */
+    tv->cur_line = 0;
+    tv_session_step(K_CTRL('C')); /* Copy Line 1 */
+    size_t orig_lines = tv->line_count;
+    tv_session_step(K_CTRL('X')); /* Cut Line 1 */
+    CHECK(tv->line_count == orig_lines - 1, "Ctrl+X should cut line");
+
+    tv_session_step(K_CTRL('V')); /* Paste */
+    CHECK(tv->modified == 1, "Paste should mark buffer as modified");
+
+    /* Save (Ctrl+S) */
+    tv_session_step(K_CTRL('S'));
+    CHECK(tv->modified == 0, "Ctrl+S should save file and clear modified flag");
+
+    /* Quit in view mode or clean edit mode exits immediately */
+    tv_session_step(K_F3); /* Switch back to view */
+    int running = tv_session_step(K_CTRL('Q'));
+    CHECK(running == 0, "Ctrl+Q in view mode should exit cleanly (return 0)");
+    tv_session_close();
+
+    tv_context_destroy(tv);
+    term_context_destroy(term);
+
+    TEST_PASS();
+}
+
 /* ── Main Test Runner ─────────────────────────────────────────────── */
 int main(void)
 {
@@ -595,6 +716,7 @@ int main(void)
     test_in_window_sc_and_tv_sessions();
     test_multi_instance_isolation();
     test_reactive_modal_dialogs();
+    test_tv_view_mode_scrolling_and_shortcuts();
 
     printf("========================================================\n");
 

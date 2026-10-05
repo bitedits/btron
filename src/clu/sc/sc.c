@@ -491,7 +491,7 @@ int sc_main(int argc, char *argv[])
 }
 
 
-#ifndef SC_NO_MAIN
+#ifdef SC_STANDALONE
 int main(int argc, char *argv[])
 {
     return sc_main(argc, argv);

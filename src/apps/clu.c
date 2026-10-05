@@ -29,6 +29,7 @@
    extern int   tkl_strcmp(const char *, const char *);
    extern int   tkl_strncmp(const char *, const char *, size_t);
    extern size_t tkl_strlen(const char *);
+   extern char  *tkl_strcpy(char *, const char *);
    extern char  *tkl_strncpy(char *, const char *, size_t);
    extern unsigned long int tkl_strtoul(const char *, char **, int);
 #  define malloc   Imalloc
@@ -40,6 +41,7 @@
 #  define strcmp   tkl_strcmp
 #  define strncmp  tkl_strncmp
 #  define strlen   tkl_strlen
+#  define strcpy   tkl_strcpy
 #  define strncpy  tkl_strncpy
 #  define strtoul  tkl_strtoul
 #  define isspace(c) ((c)==' '||(c)=='\t'||(c)=='\n'||(c)=='\r')
@@ -1706,7 +1708,7 @@ void clu_apd(const char *args, ShellOutputFn out, void *ud)
         if (fd < 0) { out("apd: cannot open file", COLOR_RED, ud); return; }
         for (int i = 0; i < count; i++) del_rec(fd, (W)start);
         cls_fil(fd);
-        char msg[80]; snprintf(msg, sizeof(msg), "Deleted %d record(s) from '%s'", count, targets[0]);
+        char msg[128]; snprintf(msg, sizeof(msg), "Deleted %d record(s) from '%s'", count, targets[0]);
         out(msg, COLOR_GREEN, ud);
         return;
     }

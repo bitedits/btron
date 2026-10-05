@@ -529,9 +529,6 @@ posix: $(POSIX_TARGET) btron_sys.vol btron_anders.vol
 %.posix.o: %.c
 	$(CC) $(CFLAGS) $(SDL_CFLAGS) -DBTRON_TARGET=0 -c $< -o $@
 
-src/clu/sc/sc.posix.o: src/clu/sc/sc.c
-	$(CC) $(CFLAGS) $(SDL_CFLAGS) -DBTRON_TARGET=0 -DSC_NO_MAIN -c $< -o $@
-
 $(POSIX_TARGET): $(POSIX_OBJS)
 	$(CC) $(POSIX_OBJS) -o $@ $(LDFLAGS) $(SDL_LIBS)
 
@@ -599,11 +596,12 @@ test-chokanji-apps: $(TEST_CHOKANJI_APPS_BIN)
 CLU_CORE_SRCS = src/clu/lang.c src/clu/term.c src/clu/tty.c src/clu/vfs.c
 CLU_CORE_OBJS = $(CLU_CORE_SRCS:.c=.host.o)
 
-SC_SRCS = src/clu/sc/files.c src/clu/sc/input.c src/clu/sc/menus.c src/clu/sc/sc.c
+SC_SRCS = src/clu/sc/files.c src/clu/sc/input.c src/clu/sc/menus.c
 SC_OBJS = $(SC_SRCS:.c=.host.o)
 
-src/clu/sc/sc.test.o: src/clu/sc/sc.c
-	$(CC) $(CFLAGS) -DBTRON_TARGET=0 -DSC_NO_MAIN -c $< -o $@
+# sc.c is a library everywhere; only the standalone bin/sc binary links its main().
+src/clu/sc/sc.standalone.o: src/clu/sc/sc.c
+	$(CC) $(CFLAGS) -DBTRON_TARGET=0 -DSC_STANDALONE -c $< -o $@
 
 src/clu/tv/tv.host.o: src/clu/tv/tv.c
 	$(CC) $(CFLAGS) -DBTRON_TARGET=0 -c $< -o $@
@@ -612,12 +610,12 @@ bin/tv: src/clu/tv/tv.c $(CLU_CORE_OBJS) $(FS_OBJS)
 	@mkdir -p bin
 	$(CC) $(CFLAGS) -DTV_STANDALONE -Isrc -Iinclude $^ -o $@
 
-bin/sc: $(SC_OBJS) src/clu/tv/tv.host.o $(CLU_CORE_OBJS) src/apps/clu.host.o $(FS_OBJS)
+bin/sc: $(SC_OBJS) src/clu/sc/sc.standalone.o src/clu/tv/tv.host.o $(CLU_CORE_OBJS) src/apps/clu.host.o $(FS_OBJS)
 	@mkdir -p bin
 	$(CC) $(CFLAGS) -Isrc -Iinclude $^ -o $@
 
 TEST_TERMIOS_BIN = ./.build/test_termios
-$(TEST_TERMIOS_BIN): verify/tests/test_termios_clu.c $(CLU_CORE_OBJS) src/clu/sc/files.host.o src/clu/sc/input.host.o src/clu/sc/menus.host.o src/clu/sc/sc.test.o src/clu/tv/tv.host.o src/apps/clu.host.o $(FS_OBJS)
+$(TEST_TERMIOS_BIN): verify/tests/test_termios_clu.c $(CLU_CORE_OBJS) src/clu/sc/files.host.o src/clu/sc/input.host.o src/clu/sc/menus.host.o src/clu/sc/sc.host.o src/clu/tv/tv.host.o src/apps/clu.host.o $(FS_OBJS)
 	@mkdir -p .build
 	$(CC) $(CFLAGS) -Isrc -Iinclude $^ -o $@
 

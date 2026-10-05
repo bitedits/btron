@@ -1191,6 +1191,8 @@ static void handle_gterm_event(WND *wnd, const EVT *evt) {
             if (tk != K_NONE) {
                 int running = 1;
                 if (st->app_mode == GTERM_MODE_SC) {
+                    if (st->sc_ctx) sc_set_context(st->sc_ctx);
+                    if (st->term_ctx) term_set_context(st->term_ctx);
                     running = sc_session_step(tk);
                     if (!running) {
                         sc_session_close();
@@ -1206,6 +1208,8 @@ static void handle_gterm_event(WND *wnd, const EVT *evt) {
                         gterm_append_line(st, "Sokhatsky Commander session closed.", COLOR_GREEN);
                     }
                 } else if (st->app_mode == GTERM_MODE_TV) {
+                    if (st->tv_ctx) tv_set_context(st->tv_ctx);
+                    if (st->term_ctx) term_set_context(st->term_ctx);
                     running = tv_session_step(tk);
                     if (!running) {
                         tv_session_close();
@@ -1525,15 +1529,25 @@ static void paint_gterm(WND *wnd, GDEV *dev) {
             }
         }
 
-        /* Draw optional cursor */
+        /* Draw optional cursor (XORed block cursor in edit mode) */
         int cur_r = -1, cur_c = -1, cur_vis = 0;
         term_get_cursor(&cur_r, &cur_c, &cur_vis);
         if (cur_vis && cur_r >= 0 && cur_r < st->app_rows && cur_c >= 0 && cur_c < st->app_cols) {
+            uint32_t c_cp = 0;
+            int c_style = 0;
+            int c_w = term_get_cell(cur_r, cur_c, &c_cp, &c_style);
+            int cell_w = (c_w > 1) ? (c_w * 8) : 8;
+
             int cx = cur_c * 8;
             int cy = canvas_top + cur_r * row_h;
-            if (cx < dev->width && cy + row_h <= dev->height) {
-                drw_lin(dev, cx, cy, cx, cy + row_h - 1);
-                drw_lin(dev, cx + 1, cy, cx + 1, cy + row_h - 1);
+            if (dev->pixels && cx < dev->width && cy < dev->height) {
+                int max_y = (cy + row_h <= dev->height) ? (cy + row_h) : dev->height;
+                int max_x = (cx + cell_w <= dev->width) ? (cx + cell_w) : dev->width;
+                for (int py = cy; py < max_y; py++) {
+                    for (int px = cx; px < max_x; px++) {
+                        dev->pixels[py * dev->width + px] ^= 0x00FFFFFF;
+                    }
+                }
             }
         }
 

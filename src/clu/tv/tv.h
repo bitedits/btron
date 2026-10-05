@@ -39,6 +39,9 @@ typedef struct TvContext {
     int    scroll_x;
     int    modal_mode;
     int    modal_sel;
+    int    sel_active;
+    size_t sel_anchor_line;
+    size_t sel_anchor_byte;
 } TvContext;
 
 TvContext *tv_context_create(void);

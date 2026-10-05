@@ -37,10 +37,13 @@ static TvContext *g_tv = &g_default_tv;
 #define g_cur_line    (g_tv->cur_line)
 #define g_cur_byte    (g_tv->cur_byte)
 #define g_scroll_y    (g_tv->scroll_y)
-#define g_scroll_sub  (g_tv->scroll_sub)
-#define g_scroll_x    (g_tv->scroll_x)
-#define g_modal_mode  (g_tv->modal_mode)
-#define g_modal_sel   (g_tv->modal_sel)
+#define g_scroll_sub      (g_tv->scroll_sub)
+#define g_scroll_x        (g_tv->scroll_x)
+#define g_modal_mode      (g_tv->modal_mode)
+#define g_modal_sel       (g_tv->modal_sel)
+#define g_sel_active      (g_tv->sel_active)
+#define g_sel_anchor_line (g_tv->sel_anchor_line)
+#define g_sel_anchor_byte (g_tv->sel_anchor_byte)
 
 static char g_tv_clipboard[TV_MAX_LINE_BYTES * 2] = {0};
 
@@ -96,6 +99,9 @@ static void tv_reset_buffer(void)
     g_modified = 0;
     g_modal_mode = TV_MODAL_NONE;
     g_modal_sel = 0;
+    g_sel_active = 0;
+    g_sel_anchor_line = 0;
+    g_sel_anchor_byte = 0;
 }
 
 static void tv_load_file(const char *path)
@@ -176,7 +182,7 @@ static void tv_draw_header(void)
 
     char title[128];
     const char *fname = (g_filename[0] != '\0') ? g_filename : "[New File]";
-    const char *vstr = g_view_mode ? "[VIEW]" : (g_insert_mode ? "[INS]" : "[REP]");
+    const char *vstr = g_view_mode ? "[VIEW]" : (g_sel_active ? "[SEL]" : (g_insert_mode ? "[INS]" : "[REP]"));
     const char *wstr = (g_wrap_mode == LANG_WRAP_WORD) ? "WORD" :
                        ((g_wrap_mode == LANG_WRAP_CHAR) ? "CHAR" : "OFF");
 
@@ -281,6 +287,18 @@ static void tv_scroll_up(int count)
     }
 }
 
+static void tv_get_selection_range(size_t *r1, size_t *b1, size_t *r2, size_t *b2)
+{
+    if (g_sel_anchor_line < g_cur_line ||
+        (g_sel_anchor_line == g_cur_line && g_sel_anchor_byte <= g_cur_byte)) {
+        *r1 = g_sel_anchor_line; *b1 = g_sel_anchor_byte;
+        *r2 = g_cur_line;        *b2 = g_cur_byte;
+    } else {
+        *r1 = g_cur_line;        *b1 = g_cur_byte;
+        *r2 = g_sel_anchor_line; *b2 = g_sel_anchor_byte;
+    }
+}
+
 static void tv_draw_footer(void)
 {
     int r = term_rows - 1;
@@ -289,8 +307,10 @@ static void tv_draw_footer(void)
     char left_str[80];
     if (g_view_mode) {
         (void)snprintf(left_str, sizeof(left_str), " [VIEW] F1 Help  F4 Edit  F5 Wrap  ^Q/q Exit");
+    } else if (g_sel_active) {
+        (void)snprintf(left_str, sizeof(left_str), " [SEL] F1 Help  F3 Unmark  ^C Copy  ^X Cut  ^V Paste");
     } else {
-        (void)snprintf(left_str, sizeof(left_str), " [EDIT] F1 Help  F3 View  F5 Wrap  ^S Save  ^Q Exit");
+        (void)snprintf(left_str, sizeof(left_str), " [EDIT] F1 Help  F3 Mark  F5 Wrap  ^S Save  ^Q Exit");
     }
     scr_str(r, 0, left_str, STYLE_FOOTER);
 
@@ -330,6 +350,11 @@ static void tv_draw_text(void)
     size_t line_idx = (size_t)g_scroll_y;
     int sub_idx = g_scroll_sub;
 
+    size_t sr1 = 0, sb1 = 0, sr2 = 0, sb2 = 0;
+    if (g_sel_active && !g_view_mode) {
+        tv_get_selection_range(&sr1, &sb1, &sr2, &sb2);
+    }
+
     for (int row = 0; row < text_rows; row++) {
         int screen_r = row + 1;
         scr_fill(screen_r, 0, term_cols, ' ', STYLE_TEXT);
@@ -341,11 +366,44 @@ static void tv_draw_text(void)
                 TvLine *l = &g_lines[line_idx];
                 size_t off = subs[sub_idx].byte_off;
                 size_t len = subs[sub_idx].byte_len;
-                if (g_wrap_mode == LANG_WRAP_NONE) {
-                    (void)scr_text(screen_r, 0, term_cols, l->data + off, len, STYLE_TEXT, g_scroll_x);
-                } else {
-                    (void)scr_text(screen_r, 0, term_cols, l->data + off, len, STYLE_TEXT, 0);
+
+                int line_has_sel = 0;
+                size_t sel_b_start = 0, sel_b_end = 0;
+                if (g_sel_active && !g_view_mode && line_idx >= sr1 && line_idx <= sr2) {
+                    line_has_sel = 1;
+                    sel_b_start = (line_idx == sr1) ? sb1 : 0;
+                    sel_b_end   = (line_idx == sr2) ? sb2 : l->len;
                 }
+
+                if (!line_has_sel || sel_b_start >= sel_b_end || sel_b_start >= off + len || sel_b_end <= off) {
+                    if (g_wrap_mode == LANG_WRAP_NONE) {
+                        (void)scr_text(screen_r, 0, term_cols, l->data + off, len, STYLE_TEXT, g_scroll_x);
+                    } else {
+                        (void)scr_text(screen_r, 0, term_cols, l->data + off, len, STYLE_TEXT, 0);
+                    }
+                } else if (sel_b_start <= off && sel_b_end >= off + len) {
+                    if (g_wrap_mode == LANG_WRAP_NONE) {
+                        (void)scr_text(screen_r, 0, term_cols, l->data + off, len, STYLE_HIGHLIGHT, g_scroll_x);
+                    } else {
+                        (void)scr_text(screen_r, 0, term_cols, l->data + off, len, STYLE_HIGHLIGHT, 0);
+                    }
+                } else {
+                    size_t s1 = (sel_b_start > off) ? sel_b_start : off;
+                    size_t s2 = (sel_b_end < off + len) ? sel_b_end : (off + len);
+                    int col_cur = 0;
+                    int skip = (g_wrap_mode == LANG_WRAP_NONE) ? g_scroll_x : 0;
+
+                    if (s1 > off) {
+                        col_cur += scr_text(screen_r, col_cur, term_cols - col_cur, l->data + off, s1 - off, STYLE_TEXT, skip);
+                    }
+                    if (s2 > s1) {
+                        col_cur += scr_text(screen_r, col_cur, term_cols - col_cur, l->data + s1, s2 - s1, STYLE_HIGHLIGHT, 0);
+                    }
+                    if (off + len > s2) {
+                        (void)scr_text(screen_r, col_cur, term_cols - col_cur, l->data + s2, (off + len) - s2, STYLE_TEXT, 0);
+                    }
+                }
+
                 sub_idx++;
                 if (sub_idx >= nsubs) {
                     line_idx++;
@@ -621,6 +679,99 @@ static void tv_copy_current_line(void)
     g_tv_clipboard[copy_len] = '\0';
 }
 
+static void tv_copy_selection(void)
+{
+    if (g_line_count == 0) return;
+    if (!g_sel_active) {
+        tv_copy_current_line();
+        return;
+    }
+
+    size_t r1, b1, r2, b2;
+    tv_get_selection_range(&r1, &b1, &r2, &b2);
+
+    if (r1 == r2 && b1 == b2) {
+        tv_copy_current_line();
+        return;
+    }
+
+    g_tv_clipboard[0] = '\0';
+    size_t pos = 0;
+
+    if (r1 == r2) {
+        TvLine *l = &g_lines[r1];
+        size_t end_b = (b2 <= l->len) ? b2 : l->len;
+        if (b1 < end_b) {
+            size_t count = end_b - b1;
+            if (count >= sizeof(g_tv_clipboard)) count = sizeof(g_tv_clipboard) - 1;
+            memcpy(g_tv_clipboard, l->data + b1, count);
+            g_tv_clipboard[count] = '\0';
+        }
+    } else {
+        for (size_t r = r1; r <= r2 && r < g_line_count; r++) {
+            TvLine *l = &g_lines[r];
+            size_t start = (r == r1) ? b1 : 0;
+            size_t end   = (r == r2) ? ((b2 <= l->len) ? b2 : l->len) : l->len;
+            if (start < end) {
+                size_t count = end - start;
+                if (pos + count < sizeof(g_tv_clipboard) - 2) {
+                    memcpy(g_tv_clipboard + pos, l->data + start, count);
+                    pos += count;
+                }
+            }
+            if (r < r2 && pos < sizeof(g_tv_clipboard) - 2) {
+                g_tv_clipboard[pos++] = '\n';
+                g_tv_clipboard[pos] = '\0';
+            }
+        }
+    }
+}
+
+static void tv_delete_selection(void)
+{
+    if (g_view_mode || !g_sel_active || g_line_count == 0) return;
+
+    size_t r1, b1, r2, b2;
+    tv_get_selection_range(&r1, &b1, &r2, &b2);
+
+    if (r1 == r2 && b1 == b2) {
+        g_sel_active = 0;
+        return;
+    }
+
+    if (r1 >= g_line_count) r1 = g_line_count - 1;
+    if (r2 >= g_line_count) r2 = g_line_count - 1;
+
+    if (r1 == r2) {
+        TvLine *l = &g_lines[r1];
+        if (b2 > l->len) b2 = l->len;
+        if (b1 < b2) {
+            size_t del_len = b2 - b1;
+            memmove(l->data + b1, l->data + b2, l->len - b2 + 1);
+            l->len -= del_len;
+        }
+        g_cur_line = r1;
+        g_cur_byte = b1;
+    } else {
+        size_t tail_len = (b2 < g_lines[r2].len) ? (g_lines[r2].len - b2) : 0;
+        if (b1 + tail_len >= TV_MAX_LINE_BYTES) tail_len = TV_MAX_LINE_BYTES - b1 - 1;
+        memcpy(g_lines[r1].data + b1, g_lines[r2].data + b2, tail_len);
+        g_lines[r1].len = b1 + tail_len;
+        g_lines[r1].data[g_lines[r1].len] = '\0';
+
+        size_t num_del = r2 - r1;
+        for (size_t i = r1 + 1; i + num_del < g_line_count; i++) {
+            g_lines[i] = g_lines[i + num_del];
+        }
+        g_line_count -= num_del;
+        g_cur_line = r1;
+        g_cur_byte = b1;
+    }
+
+    g_sel_active = 0;
+    g_modified = 1;
+}
+
 static void tv_cut_current_line(void)
 {
     if (g_view_mode || g_line_count == 0 || g_cur_line >= g_line_count) return;
@@ -642,9 +793,23 @@ static void tv_cut_current_line(void)
     g_modified = 1;
 }
 
+static void tv_cut_selection(void)
+{
+    if (g_view_mode || g_line_count == 0) return;
+    if (g_sel_active) {
+        tv_copy_selection();
+        tv_delete_selection();
+    } else {
+        tv_cut_current_line();
+    }
+}
+
 static void tv_paste_clipboard(void)
 {
     if (g_view_mode || g_tv_clipboard[0] == '\0') return;
+    if (g_sel_active) {
+        tv_delete_selection();
+    }
     const char *p = g_tv_clipboard;
     while (*p) {
         uint32_t cp;
@@ -702,7 +867,7 @@ static void tv_draw_help_dialog(void)
     scr_str(dr + 4, dc + 3, "^W / Cmd+W : Wrap Mode  ^N / Cmd+N : New File", STYLE_MENU);
     scr_str(dr + 5, dc + 3, "^O / Cmd+O : Reload     ^C/^X/^V   : Copy/Cut/Paste", STYLE_MENU);
     scr_str(dr + 6, dc + 3, "Opt+Left/Right: Word    Cmd+Up/Dn  : File Top/End", STYLE_MENU);
-    scr_str(dr + 7, dc + 3, "F1: Help   F3: View     F4: Edit   F5: Wrap Mode", STYLE_MENU);
+    scr_str(dr + 7, dc + 3, "F1: Help   F3: Select   F4: Edit   F5: Wrap Mode", STYLE_MENU);
     scr_str(dr + 9, dc + 12, "[ Press ESC or ENTER to Close ]", STYLE_MENU_SEL);
 
     scr_cursor(dr + 9, dc + 13, 1);
@@ -848,7 +1013,17 @@ int tv_session_step(int k)
         return 1;
 
     case K_F3:
-        g_view_mode = 1;
+        if (g_view_mode) {
+            g_view_mode = 0;
+        } else {
+            if (!g_sel_active) {
+                g_sel_active = 1;
+                g_sel_anchor_line = g_cur_line;
+                g_sel_anchor_byte = g_cur_byte;
+            } else {
+                g_sel_active = 0;
+            }
+        }
         break;
 
     case K_F4:
@@ -875,6 +1050,10 @@ int tv_session_step(int k)
         if (g_view_mode) {
             return 0;
         }
+        if (g_sel_active) {
+            g_sel_active = 0;
+            break;
+        }
         if (!g_modified) {
             return 0;
         }
@@ -900,11 +1079,11 @@ int tv_session_step(int k)
         break;
 
     case K_CTRL('C'):
-        tv_copy_current_line();
+        tv_copy_selection();
         break;
 
     case K_CTRL('X'):
-        tv_cut_current_line();
+        tv_cut_selection();
         break;
 
     case K_CTRL('V'):
@@ -1078,23 +1257,33 @@ int tv_session_step(int k)
         break;
 
     case K_DELETE:
-        if (!g_view_mode) tv_delete_char();
+        if (!g_view_mode) {
+            if (g_sel_active) tv_delete_selection();
+            else tv_delete_char();
+        }
         break;
 
     case K_BACKSPACE:
-        if (!g_view_mode) tv_backspace();
+        if (!g_view_mode) {
+            if (g_sel_active) tv_delete_selection();
+            else tv_backspace();
+        }
         break;
 
     case K_ENTER:
         if (g_view_mode) {
             tv_scroll_down(1);
         } else {
+            if (g_sel_active) tv_delete_selection();
             tv_insert_char('\n');
         }
         break;
 
     case K_TAB:
-        if (!g_view_mode) tv_insert_char('\t');
+        if (!g_view_mode) {
+            if (g_sel_active) tv_delete_selection();
+            tv_insert_char('\t');
+        }
         break;
 
     default:
@@ -1126,6 +1315,7 @@ int tv_session_step(int k)
                 g_view_mode = 0;
             }
         } else if (k >= 32 && k < K_BASE) {
+            if (g_sel_active) tv_delete_selection();
             tv_insert_char((uint32_t)k);
         }
         break;

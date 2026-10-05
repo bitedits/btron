@@ -1005,6 +1005,7 @@ static void schedule_track3(void) {
 
 static void schedule_track4(void) {
     /* MEASURE 01: System Init & Harsh Distorted Shockwave (0.00s - 2.58s) */
+/*
     shimGlitchZap(0.00, 3200.0f, 1.3f, 0.12f);
     shimIndustrialKickEx(0.00, 1.4f, 0.35f);
     shimSwarmatron(0.05, 55.0f, 3.8f, 0.22f, 32.0f);
@@ -1019,8 +1020,8 @@ static void schedule_track4(void) {
     shimGlitchZap(1.93, 4800.0f, 1.0f, 0.08f);
     shimIndustrialSnare(2.25, 0.14f, 1);
     shimIndustrialSnare(2.41, 0.20f, 1);
-
-    /* MEASURE 02: 93 BPM Industrial Groove Ignites (2.58s - 5.16s) */
+*/  
+    // MEASURE 02: 93 BPM Industrial Groove Ignites (2.58s - 5.16s) 
     shimIndustrialKick(2.58, 1.1f);
     shimDing(2.58, 1760.0f, 0.10f, 0.15f);
     shimIndustrialBass(2.58, 55.00f, 1.0f, 0.22f);

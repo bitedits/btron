@@ -119,11 +119,11 @@ int main(int argc, char **argv) {
     open_clarity_window();
     open_t_editor_window();
     open_gterm_window();
-    if (open_quake_window) {
-        open_quake_window(80, 40, 560, 420);
-    } else {
-        open_glgears_window();
-    }
+//    if (open_quake_window) {
+//        open_quake_window(80, 40, 560, 420);
+//    } else {
+//        open_glgears_window();
+//    }
     if (open_lilcu64_demo_window) {
         open_lilcu64_demo_window();
     }

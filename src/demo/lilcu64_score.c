@@ -14,6 +14,7 @@
 #include "lilcu64_score.h"
 #include "lilcu64_wa.h"
 #include <stddef.h>
+#include <math.h>
 
 /* ctx.currentTime at the moment playTrack() scheduled the score */
 static double s_T = 0.0;
@@ -283,6 +284,168 @@ static void shimSaxFlute(double t, const Note *ph, int np, float volMul) {
         wa_gain(b, WA_SET, 0.025f * volMul, nT);
         wa_gain(b, WA_EXP, 0.0005f, nT + n->d);
     }
+}
+
+/* [SHIM 12] Industrial Cyber Kick (Trent Reznor / Nine Inch Nails Heavy Distorted Sub-Punch) */
+static void shimIndustrialKickEx(double t, float volMul, float duration) {
+    double S = s_T + t;
+    WaNode *sub = wa_osc(WA_SINE, S, S + duration);
+    if (sub) {
+        wa_freq(sub, WA_SET, 160.0f, S);
+        wa_freq(sub, WA_EXP, 42.0f, S + duration);
+        wa_gain(sub, WA_SET, 0.32f * volMul, S);
+        wa_gain(sub, WA_EXP, 0.001f, S + duration);
+    }
+    WaNode *clk = wa_osc(WA_TRIANGLE, S, S + 0.055);
+    if (clk) {
+        wa_freq(clk, WA_SET, 380.0f, S);
+        wa_freq(clk, WA_EXP, 55.0f, S + 0.05);
+        wa_filter(clk, WA_FILT_LOWPASS, 1800.0f, 1.0f);
+        wa_gain(clk, WA_SET, 0.24f * volMul, S);
+        wa_gain(clk, WA_EXP, 0.001f, S + 0.055);
+    }
+}
+static void shimIndustrialKick(double t, float volMul) {
+    shimIndustrialKickEx(t, volMul, 0.22f);
+}
+
+/* [SHIM 13] Industrial Metallic Snare / Cyber Clank */
+static void shimIndustrialSnare(double t, float volMul, int isClank) {
+    double S = s_T + t;
+    float dur = isClank ? 0.08f : 0.17f;
+    float bpF = isClank ? 3600.0f : 2600.0f;
+    WaNode *n = wa_osc(WA_NOISE, S, S + dur);
+    if (n) {
+        wa_filter(n, WA_FILT_BANDPASS, bpF, 2.2f);
+        wa_gain(n, WA_SET, 0.24f * volMul, S);
+        wa_gain(n, WA_EXP, 0.001f, S + dur);
+    }
+    static const float fq[2] = { 220.0f, 352.0f };
+    static const int wt[2] = { WA_SQUARE, WA_TRIANGLE };
+    for (int i = 0; i < 2; i++) {
+        WaNode *m = wa_osc(wt[i], S, S + 0.11);
+        if (!m) continue;
+        wa_freq(m, WA_SET, fq[i], S);
+        wa_gain(m, WA_SET, 0.12f * volMul, S);
+        wa_gain(m, WA_EXP, 0.001f, S + 0.11);
+    }
+}
+
+/* [SHIM 14] Industrial Sawtooth Synth Bass (Trent Reznor 16th-Note Analog Overdrive Ostinato) */
+static void shimIndustrialBassSlide(double t, float freq, float volMul, float duration, float slideFreq) {
+    double S = s_T + t;
+    static const int types[2] = { WA_SAWTOOTH, WA_SQUARE };
+    static const float fmul[2] = { 1.0f, 1.005f };
+    for (int k = 0; k < 2; k++) {
+        WaNode *o = wa_osc(types[k], S, S + duration);
+        if (!o) continue;
+        float f0 = freq * fmul[k];
+        wa_freq(o, WA_SET, f0, S);
+        if (slideFreq > 0.0f) {
+            wa_freq(o, WA_EXP, slideFreq * fmul[k], S + duration * 0.8);
+        }
+        wa_filter(o, WA_FILT_LOWPASS, 2600.0f, 4.5f);
+        wa_filter_freq(o, WA_SET, 2600.0f, S);
+        wa_filter_freq(o, WA_EXP, 420.0f, S + duration);
+        wa_gain(o, WA_SET, 0.0001f, S);
+        wa_gain(o, WA_LIN, 0.11f * volMul, S + 0.008);
+        wa_gain(o, WA_EXP, 0.0005f, S + duration);
+    }
+}
+static void shimIndustrialBass(double t, float freq, float volMul, float duration) {
+    shimIndustrialBassSlide(t, freq, volMul, duration, 0.0f);
+}
+
+/* [SHIM 15] Dewan Swarmatron Drone (Trent Reznor & Atticus Ross Signature 8-Voice Ribbon Cluster) */
+static void shimSwarmatron(double t, float centerFreq, float duration, float volMul, float spreadCents) {
+    double S = s_T + t;
+    static const float mults[8] = { -1.0f, -0.65f, -0.35f, -0.12f, 0.12f, 0.35f, 0.65f, 1.0f };
+    float perOscAmp = (0.18f * volMul) / 4.0f;
+    for (int i = 0; i < 8; i++) {
+        WaNode *o = wa_osc(WA_SAWTOOTH, S, S + duration);
+        if (!o) continue;
+        float c0 = spreadCents * mults[i];
+        float c1 = c0 * 1.5f;
+        float c2 = c0 * 0.8f;
+        float f0 = centerFreq * powf(2.0f, c0 / 1200.0f);
+        float f1 = centerFreq * powf(2.0f, c1 / 1200.0f);
+        float f2 = centerFreq * powf(2.0f, c2 / 1200.0f);
+        wa_freq(o, WA_SET, f0, S);
+        wa_freq(o, WA_LIN, f1, S + duration * 0.5);
+        wa_freq(o, WA_LIN, f2, S + duration);
+
+        wa_filter(o, WA_FILT_LOWPASS, 950.0f, 2.5f);
+        wa_filter_freq(o, WA_SET, 950.0f, S);
+        wa_filter_freq(o, WA_LIN, 1450.0f, S + duration * 0.6);
+        wa_filter_freq(o, WA_LIN, 800.0f, S + duration);
+
+        wa_gain(o, WA_SET, 0.0001f, S);
+        wa_gain(o, WA_LIN, perOscAmp, S + 0.40);
+        wa_gain(o, WA_SET, perOscAmp, S + duration - 0.50);
+        wa_gain(o, WA_EXP, 0.0001f, S + duration);
+    }
+}
+
+/* [SHIM 16] Cyber Glitch Zap / Terminal Data Pulse */
+static void shimGlitchZap(double t, float baseFreq, float volMul, float duration) {
+    double S = s_T + t;
+    WaNode *o = wa_osc(WA_SAWTOOTH, S, S + duration);
+    if (!o) return;
+    wa_freq(o, WA_SET, baseFreq * 2.5f, S);
+    wa_freq(o, WA_EXP, 80.0f, S + duration);
+    wa_filter(o, WA_FILT_HIGHPASS, 1800.0f, 1.0f);
+    wa_gain(o, WA_SET, 0.18f * volMul, S);
+    wa_gain(o, WA_EXP, 0.001f, S + duration);
+}
+
+/* [SHIM 17] Nine Inch Nails TRON Cyber Lead */
+static void shimCyberLead(double t, const Note *ph, int np, float volMul) {
+    double S = s_T + t;
+    for (int i = 0; i < np; i++) {
+        const Note *n = &ph[i];
+        double nT = S + n->t;
+        static const int wt[2] = { WA_SAWTOOTH, WA_SQUARE };
+        static const float fm[2] = { 1.0f, 1.004f };
+        for (int k = 0; k < 2; k++) {
+            WaNode *o = wa_osc(wt[k], nT, nT + n->d);
+            if (!o) continue;
+            float f0 = n->f * fm[k];
+            wa_freq(o, WA_SET, f0, nT);
+            if (n->slide > 0.0f) {
+                wa_freq(o, WA_EXP, n->slide * fm[k], nT + n->d * 0.7);
+            }
+            wa_filter(o, WA_FILT_LOWPASS, 3800.0f, 4.0f);
+            wa_filter_freq(o, WA_SET, 3800.0f, nT);
+            wa_filter_freq(o, WA_EXP, 1600.0f, nT + n->d);
+            wa_gain(o, WA_SET, 0.0001f, nT);
+            wa_gain(o, WA_LIN, n->v * volMul * 0.55f, nT + 0.012);
+            wa_gain(o, WA_EXP, 0.0001f, nT + n->d);
+        }
+    }
+}
+
+/* [SHIM 19] Concert Grand Piano Wooden Felt Hammer Impact */
+static void shimPianoHammer(double t, float volMul) {
+    double S = s_T + t;
+    WaNode *o = wa_osc(WA_TRIANGLE, S, S + 0.035);
+    if (!o) return;
+    wa_freq(o, WA_SET, 120.0f, S);
+    wa_freq(o, WA_EXP, 40.0f, S + 0.035);
+    wa_gain(o, WA_SET, 0.12f * volMul, S);
+    wa_gain(o, WA_EXP, 0.0005f, S + 0.035);
+}
+
+/* [SHIM 20] Concert Grand Damper Pedal Lift & String Sympathetic Resonance */
+static void shimPedalSwoosh(double t, float volMul, float duration) {
+    double S = s_T + t;
+    WaNode *n = wa_osc(WA_NOISE, S, S + duration);
+    if (!n) return;
+    wa_filter(n, WA_FILT_BANDPASS, 450.0f, 3.5f);
+    wa_filter_freq(n, WA_SET, 450.0f, S);
+    wa_filter_freq(n, WA_EXP, 280.0f, S + duration);
+    wa_gain(n, WA_SET, 0.0001f, S);
+    wa_gain(n, WA_LIN, 0.05f * volMul, S + 0.08);
+    wa_gain(n, WA_EXP, 0.0001f, S + duration);
 }
 
 /* ── TRACK 1: 鐘のキャロル (Carol of the Bells) — index.html 4410–4700 ── */
@@ -650,12 +813,493 @@ static void schedule_track2(void) {
     shimDing(26.55, 2349.32f, 0.14f, 2.00f);
 }
 
+/* ── TRACK 3: 朝日のあたる家 (House of the Rising Sun) — index.html 5200–5462 ── */
+
+static void playArpeggioBar(double startTime, float rootF, float thirdF, float fifthF, float octF, float bassVol) {
+    const double eighth = 0.24;
+    shimGrandPiano(startTime + 0.000, rootF, bassVol * 1.1f, (float)(eighth * 2.5));
+    shimGrandPiano(startTime + eighth, fifthF, bassVol * 0.9f, (float)(eighth * 2.0));
+    shimGrandPiano(startTime + eighth * 2.0, octF, bassVol * 0.95f, (float)(eighth * 2.0));
+    shimGrandPiano(startTime + eighth * 3.0, thirdF, bassVol * 0.9f, (float)(eighth * 2.0));
+    shimGrandPiano(startTime + eighth * 4.0, fifthF, bassVol * 0.95f, (float)(eighth * 2.0));
+    shimGrandPiano(startTime + eighth * 5.0, thirdF, bassVol * 0.85f, (float)(eighth * 2.0));
+}
+
+static void playMelodyNote(double startTime, float freq, float durationBeats, float vol, int isOctave) {
+    const double eighth = 0.24;
+    float dur = (float)(durationBeats * eighth);
+    shimGrandPiano(startTime, freq, vol, dur * 1.6f);
+    shimPianoHammer(startTime, vol * 1.4f);
+    if (isOctave) {
+        shimGrandPiano(startTime, freq * 2.0f, vol * 0.72f, dur * 1.3f);
+    }
+    shimSaxFlute(startTime, NOTES(N(freq, dur * 0.95f, 0.14f, 0.0f)), 1.0f);
+}
+
+static void schedule_track3(void) {
+    const double eighth = 0.24;
+    const double bar = eighth * 6.0;
+
+    /* INTRO: Atmospheric New Orleans Sunrise (0.00s - 2.88s) */
+    shimPedalSwoosh(0.00, 1.2f, 0.60f);
+    shimPulseBell(0.00, 0.85f, 0.35f);
+    shimPedalBass(0.00, 55.00f, 0.18f, 2.8f);
+
+    /* Bar 0 (0.00s, Am) */
+    playArpeggioBar(0.000, 110.00f, 261.63f, 164.81f, 220.00f, 0.11f);
+    shimDing(0.00, 1760.0f, 0.10f, 0.80f);
+
+    /* Bar 1 (1.44s, C) */
+    playArpeggioBar(bar * 1.0, 130.81f, 329.63f, 196.00f, 261.63f, 0.11f);
+    shimDing(bar * 1.0, 2637.0f, 0.08f, 0.90f);
+
+    /* VERSE 1: Iconic Vocal Melody (2.88s - 14.40s) */
+    /* Bar 2 (2.88s, Am) */
+    double b2 = bar * 2.0;
+    shimPedalBass(b2, 55.00f, 0.16f, 1.6f);
+    playArpeggioBar(b2, 110.00f, 261.63f, 164.81f, 220.00f, 0.10f);
+    playMelodyNote(b2 + 0.000, 440.00f, 2.0f, 0.32f, 0);
+    playMelodyNote(b2 + eighth * 2.0, 523.25f, 2.0f, 0.32f, 0);
+    playMelodyNote(b2 + eighth * 4.0, 587.33f, 2.0f, 0.34f, 0);
+
+    /* Bar 3 (4.32s, C) */
+    double b3 = bar * 3.0;
+    shimPedalBass(b3, 65.41f, 0.16f, 1.6f);
+    playArpeggioBar(b3, 130.81f, 329.63f, 196.00f, 261.63f, 0.10f);
+    playMelodyNote(b3 + 0.000, 659.25f, 3.0f, 0.36f, 0);
+    playMelodyNote(b3 + eighth * 3.0, 659.25f, 1.0f, 0.30f, 0);
+    playMelodyNote(b3 + eighth * 4.0, 587.33f, 2.0f, 0.34f, 0);
+
+    /* Bar 4 (5.76s, D) */
+    double b4 = bar * 4.0;
+    shimPedalBass(b4, 73.42f, 0.16f, 1.6f);
+    playArpeggioBar(b4, 146.83f, 369.99f, 220.00f, 293.66f, 0.10f);
+    playMelodyNote(b4 + 0.000, 587.33f, 3.0f, 0.34f, 0);
+    playMelodyNote(b4 + eighth * 3.0, 369.99f, 3.0f, 0.32f, 0);
+
+    /* Bar 5 (7.20s, F) */
+    double b5 = bar * 5.0;
+    shimPedalBass(b5, 87.31f, 0.16f, 1.6f);
+    playArpeggioBar(b5, 174.61f, 349.23f, 261.63f, 349.23f, 0.10f);
+    playMelodyNote(b5 + 0.000, 349.23f, 2.0f, 0.30f, 0);
+    playMelodyNote(b5 + eighth * 2.0, 440.00f, 2.0f, 0.32f, 0);
+    playMelodyNote(b5 + eighth * 4.0, 523.25f, 2.0f, 0.34f, 0);
+
+    /* Bar 6 (8.64s, Am) */
+    double b6 = bar * 6.0;
+    shimPedalBass(b6, 55.00f, 0.16f, 1.6f);
+    playArpeggioBar(b6, 110.00f, 261.63f, 164.81f, 220.00f, 0.10f);
+    playMelodyNote(b6 + 0.000, 440.00f, 2.0f, 0.32f, 0);
+    playMelodyNote(b6 + eighth * 2.0, 523.25f, 2.0f, 0.32f, 0);
+    playMelodyNote(b6 + eighth * 4.0, 587.33f, 2.0f, 0.34f, 0);
+
+    /* Bar 7 (10.08s, C) */
+    double b7 = bar * 7.0;
+    shimPedalBass(b7, 65.41f, 0.16f, 1.6f);
+    playArpeggioBar(b7, 130.81f, 329.63f, 196.00f, 261.63f, 0.10f);
+    playMelodyNote(b7 + 0.000, 659.25f, 3.0f, 0.36f, 0);
+    playMelodyNote(b7 + eighth * 3.0, 659.25f, 3.0f, 0.34f, 0);
+
+    /* Bar 8 (11.52s, E) */
+    double b8 = bar * 8.0;
+    shimPedalBass(b8, 82.41f, 0.18f, 2.0f);
+    playArpeggioBar(b8, 164.81f, 415.30f, 246.94f, 329.63f, 0.11f);
+    playMelodyNote(b8 + 0.000, 493.88f, 3.5f, 0.35f, 0);
+    playMelodyNote(b8 + eighth * 4.0, 415.30f, 2.0f, 0.32f, 0);
+
+    /* Bar 9 (12.96s, E7) */
+    double b9 = bar * 9.0;
+    shimPedalSwoosh(b9, 1.2f, 0.50f);
+    playArpeggioBar(b9, 164.81f, 415.30f, 293.66f, 329.63f, 0.12f);
+    playMelodyNote(b9 + 0.000, 493.88f, 2.0f, 0.33f, 0);
+    playMelodyNote(b9 + eighth * 2.0, 587.33f, 2.0f, 0.34f, 0);
+    playMelodyNote(b9 + eighth * 4.0, 659.25f, 2.0f, 0.36f, 0);
+    shimDing(b9 + eighth * 4.0, 2637.0f, 0.10f, 0.30f);
+
+    /* VERSE 2: Thomas Krüger Forte Octave Chorus (14.40s - 23.04s) */
+    /* Bar 10 (14.40s, Am) */
+    double b10 = bar * 10.0;
+    shimPianoHammer(b10, 1.4f);
+    shimPedalBass(b10, 55.00f, 0.24f, 2.4f);
+    playArpeggioBar(b10, 110.00f, 261.63f, 164.81f, 220.00f, 0.12f);
+    playMelodyNote(b10 + 0.000, 659.25f, 2.0f, 0.38f, 1);
+    playMelodyNote(b10 + eighth * 2.0, 659.25f, 2.0f, 0.38f, 1);
+    playMelodyNote(b10 + eighth * 4.0, 587.33f, 2.0f, 0.36f, 1);
+
+    /* Bar 11 (15.84s, C) */
+    double b11 = bar * 11.0;
+    shimPedalBass(b11, 65.41f, 0.22f, 2.2f);
+    playArpeggioBar(b11, 130.81f, 329.63f, 196.00f, 261.63f, 0.12f);
+    playMelodyNote(b11 + 0.000, 523.25f, 2.0f, 0.36f, 1);
+    playMelodyNote(b11 + eighth * 2.0, 587.33f, 2.0f, 0.36f, 1);
+    playMelodyNote(b11 + eighth * 4.0, 659.25f, 2.0f, 0.38f, 1);
+
+    /* Bar 12 (17.28s, D) */
+    double b12 = bar * 12.0;
+    shimPedalBass(b12, 73.42f, 0.22f, 2.2f);
+    playArpeggioBar(b12, 146.83f, 369.99f, 220.00f, 293.66f, 0.12f);
+    playMelodyNote(b12 + 0.000, 587.33f, 3.0f, 0.38f, 1);
+    playMelodyNote(b12 + eighth * 3.0, 739.99f, 1.5f, 0.36f, 1);
+    playMelodyNote(b12 + eighth * 4.5, 880.00f, 1.5f, 0.40f, 1);
+
+    /* Bar 13 (18.72s, F) */
+    double b13 = bar * 13.0;
+    shimPedalBass(b13, 87.31f, 0.22f, 2.0f);
+    playArpeggioBar(b13, 174.61f, 349.23f, 261.63f, 349.23f, 0.12f);
+    playMelodyNote(b13 + 0.000, 880.00f, 2.0f, 0.38f, 1);
+    playMelodyNote(b13 + eighth * 2.0, 698.46f, 2.0f, 0.36f, 1);
+    playMelodyNote(b13 + eighth * 4.0, 587.33f, 2.0f, 0.35f, 1);
+
+    /* Bar 14 (20.16s, Am) */
+    double b14 = bar * 14.0;
+    shimPedalBass(b14, 55.00f, 0.22f, 2.2f);
+    playArpeggioBar(b14, 110.00f, 261.63f, 164.81f, 220.00f, 0.12f);
+    playMelodyNote(b14 + 0.000, 659.25f, 2.0f, 0.36f, 1);
+    playMelodyNote(b14 + eighth * 2.0, 523.25f, 2.0f, 0.35f, 1);
+    playMelodyNote(b14 + eighth * 4.0, 440.00f, 2.0f, 0.36f, 1);
+
+    /* Bar 15 (21.60s, E7) */
+    double b15 = bar * 15.0;
+    shimPedalBass(b15, 82.41f, 0.22f, 2.0f);
+    playArpeggioBar(b15, 164.81f, 415.30f, 293.66f, 329.63f, 0.12f);
+    playMelodyNote(b15 + 0.000, 493.88f, 3.0f, 0.36f, 1);
+    playMelodyNote(b15 + eighth * 3.0, 415.30f, 3.0f, 0.36f, 1);
+
+    /* CLIMAX: "...ONE!" & High Waterfall Cascade (23.04s - 26.50s) */
+    /* Bar 16 (23.04s, Am) */
+    double b16 = bar * 16.0;
+    shimPianoHammer(b16, 1.5f);
+    shimPedalBass(b16, 55.00f, 0.25f, 2.5f);
+    playMelodyNote(b16 + 0.000, 440.00f, 2.0f, 0.40f, 1);
+
+    shimGrandPiano(b16 + eighth * 1.5, 1318.51f, 0.22f, 0.35f);
+    shimGrandPiano(b16 + eighth * 2.2, 1174.66f, 0.22f, 0.35f);
+    shimGrandPiano(b16 + eighth * 2.9, 1046.50f, 0.22f, 0.35f);
+    shimGrandPiano(b16 + eighth * 3.6,  987.77f, 0.22f, 0.35f);
+    shimGrandPiano(b16 + eighth * 4.3,  880.00f, 0.22f, 0.35f);
+    shimGrandPiano(b16 + eighth * 5.0,  830.61f, 0.22f, 0.35f);
+    shimGrandPiano(b16 + eighth * 5.6,  880.00f, 0.22f, 0.35f);
+    shimDing(b16 + eighth * 1.5, 2637.0f, 0.12f, 0.80f);
+
+    /* Bar 17 (24.48s - 26.50s) Grand Sunrise Cadence */
+    double b17 = bar * 17.0;
+    shimPedalSwoosh(b17, 1.5f, 0.80f);
+    shimPianoHammer(b17, 1.5f);
+    shimPedalBass(b17, 27.50f, 0.25f, 3.5f);
+    shimPedalBass(b17, 55.00f, 0.24f, 3.2f);
+    shimGrandPiano(b17, 110.00f, 0.24f, 1.8f);
+    shimWaddleD(b17, 55.00f, 0.20f, 0.22f);
+    shimWaddleD(b17, 110.00f, 0.18f, 0.18f);
+
+    shimGrandPiano(b17 + 0.10, 440.00f, 0.24f, 2.5f);
+    shimFloatEx(b17 + 0.10, 523.25f, 0.18f,
+                CHORD(110.00f, 164.81f, 220.00f, 246.94f, 261.63f, 329.63f, 440.00f, 659.25f),
+                0.055f, 2.0f);
+    shimPulseBell(b17 + 0.40, 1.35f, 0.421f);
+    shimPulseSquash(b17 + 0.90, 0.75f, 0.841f);
+    shimDing(b17 + 1.20, 1760.0f, 0.16f, 1.60f);
+    shimDing(b17 + 1.80, 2637.0f, 0.14f, 2.20f);
+}
+
+/* ── TRACK 4: TRON Init (Nine Inch Nails / Trent Reznor) — index.html 5463–5819 ── */
+
+static void schedule_track4(void) {
+    /* MEASURE 01: System Init & Harsh Distorted Shockwave (0.00s - 2.58s) */
+    shimGlitchZap(0.00, 3200.0f, 1.3f, 0.12f);
+    shimIndustrialKickEx(0.00, 1.4f, 0.35f);
+    shimSwarmatron(0.05, 55.0f, 3.8f, 0.22f, 32.0f);
+    shimPedalBass(0.00, 55.00f, 0.20f, 2.5f);
+
+    shimGlitchZap(0.64, 4200.0f, 0.8f, 0.06f);
+    shimPulseSquash(0.64, 0.6f, 0.5f);
+
+    shimGlitchZap(1.29, 2800.0f, 0.9f, 0.07f);
+    shimPulseBell(1.29, 0.8f, 0.5f);
+
+    shimGlitchZap(1.93, 4800.0f, 1.0f, 0.08f);
+    shimIndustrialSnare(2.25, 0.14f, 1);
+    shimIndustrialSnare(2.41, 0.20f, 1);
+
+    /* MEASURE 02: 93 BPM Industrial Groove Ignites (2.58s - 5.16s) */
+    shimIndustrialKick(2.58, 1.1f);
+    shimDing(2.58, 1760.0f, 0.10f, 0.15f);
+    shimIndustrialBass(2.58, 55.00f, 1.0f, 0.22f);
+    shimIndustrialBass(2.74, 55.00f, 1.0f, 0.18f);
+    shimHiHat(2.74, 0, 0.10f);
+    shimIndustrialBass(2.90, 65.41f, 1.0f, 0.20f);
+    shimIndustrialBass(3.06, 55.00f, 1.0f, 0.18f);
+    shimHiHat(3.06, 0, 0.10f);
+
+    shimIndustrialSnare(3.22, 0.24f, 1);
+    shimIndustrialBass(3.22, 73.42f, 1.0f, 0.22f);
+    shimIndustrialBass(3.38, 65.41f, 1.0f, 0.20f);
+    shimHiHat(3.38, 0, 0.10f);
+    shimIndustrialBass(3.55, 55.00f, 1.0f, 0.18f);
+    shimIndustrialBass(3.71, 49.00f, 1.0f, 0.18f);
+    shimHiHat(3.71, 0, 0.10f);
+
+    shimIndustrialKick(3.87, 1.0f);
+    shimIndustrialBass(3.87, 55.00f, 1.0f, 0.22f);
+    shimIndustrialBass(4.03, 55.00f, 1.0f, 0.18f);
+    shimHiHat(4.03, 0, 0.10f);
+    shimIndustrialBass(4.19, 65.41f, 1.0f, 0.20f);
+    shimIndustrialBass(4.35, 55.00f, 1.0f, 0.18f);
+    shimHiHat(4.35, 0, 0.10f);
+
+    shimIndustrialSnare(4.51, 0.24f, 1);
+    shimIndustrialBass(4.51, 43.65f, 1.0f, 0.22f);
+    shimIndustrialBass(4.67, 49.00f, 1.0f, 0.20f);
+    shimHiHat(4.67, 0, 0.10f);
+    shimIndustrialBass(4.84, 55.00f, 1.0f, 0.22f);
+    shimIndustrialBassSlide(5.00, 55.00f, 1.0f, 0.24f, 65.41f);
+    shimHiHat(5.00, 1, 0.12f);
+
+    /* MEASURE 03: Driving Industrial Acceleration & Glitch Data Fills (5.16s - 7.74s) */
+    shimIndustrialKick(5.16, 1.1f);
+    shimDing(5.16, 1760.0f, 0.10f, 0.15f);
+    shimIndustrialBass(5.16, 55.00f, 1.0f, 0.22f);
+    shimIndustrialBass(5.32, 55.00f, 1.0f, 0.18f);
+    shimHiHat(5.32, 0, 0.10f);
+    shimIndustrialBass(5.48, 65.41f, 1.0f, 0.20f);
+    shimIndustrialBass(5.64, 55.00f, 1.0f, 0.18f);
+
+    shimIndustrialSnare(5.80, 0.24f, 1);
+    shimGlitchZap(5.80, 2400.0f, 0.16f, 0.06f);
+    shimIndustrialBass(5.80, 73.42f, 1.0f, 0.22f);
+    shimIndustrialBass(5.96, 65.41f, 1.0f, 0.20f);
+    shimHiHat(5.96, 0, 0.10f);
+
+    shimIndustrialKick(6.13, 0.95f);
+    shimIndustrialBass(6.13, 55.00f, 1.0f, 0.20f);
+    shimIndustrialBass(6.29, 49.00f, 1.0f, 0.18f);
+
+    shimIndustrialKick(6.45, 1.1f);
+    shimIndustrialBass(6.45, 55.00f, 1.0f, 0.22f);
+    shimIndustrialBass(6.61, 55.00f, 1.0f, 0.18f);
+    shimHiHat(6.61, 0, 0.10f);
+    shimGlitchZap(6.77, 3600.0f, 0.16f, 0.07f);
+    shimIndustrialBass(6.77, 65.41f, 1.0f, 0.20f);
+    shimIndustrialBass(6.93, 55.00f, 1.0f, 0.18f);
+
+    shimIndustrialSnare(7.10, 0.24f, 1);
+    shimIndustrialBass(7.10, 43.65f, 1.0f, 0.22f);
+    shimIndustrialBass(7.26, 49.00f, 1.0f, 0.20f);
+    shimGlitchZap(7.42, 4800.0f, 0.18f, 0.08f);
+    shimIndustrialBass(7.42, 55.00f, 1.0f, 0.22f);
+    shimIndustrialBassSlide(7.58, 55.00f, 1.0f, 0.24f, 73.42f);
+    shimHiHat(7.58, 1, 0.12f);
+
+    /* MEASURE 04: Swarmatron Ascension & Cyber Lead Teaser (7.74s - 10.32s) */
+    shimSwarmatron(7.74, 110.0f, 3.2f, 0.22f, 28.0f);
+    shimIndustrialKick(7.74, 1.1f);
+    shimDing(7.74, 1760.0f, 0.11f, 0.20f);
+    shimIndustrialBass(7.74, 55.00f, 1.0f, 0.22f);
+    shimIndustrialBass(7.90, 55.00f, 1.0f, 0.18f);
+    shimHiHat(7.90, 0, 0.10f);
+    shimIndustrialBass(8.06, 65.41f, 1.0f, 0.20f);
+    shimIndustrialBass(8.22, 55.00f, 1.0f, 0.18f);
+
+    shimIndustrialSnare(8.38, 0.24f, 1);
+    shimIndustrialBass(8.38, 73.42f, 1.0f, 0.22f);
+    shimIndustrialBass(8.54, 65.41f, 1.0f, 0.20f);
+    shimHiHat(8.54, 0, 0.10f);
+    shimIndustrialBass(8.70, 55.00f, 1.0f, 0.18f);
+    shimIndustrialBass(8.86, 49.00f, 1.0f, 0.18f);
+
+    shimIndustrialKick(9.03, 1.05f);
+    shimIndustrialBass(9.03, 55.00f, 1.0f, 0.22f);
+    shimIndustrialBass(9.19, 55.00f, 1.0f, 0.18f);
+    shimCyberLead(9.35, NOTES(N(440.00f, 0.18f, 0.16f, 0.0f), N(523.25f, 0.22f, 0.18f, 0.16f)), 1.0f);
+    shimIndustrialBass(9.35, 65.41f, 1.0f, 0.20f);
+    shimIndustrialBass(9.51, 55.00f, 1.0f, 0.18f);
+
+    shimIndustrialSnare(9.68, 0.24f, 1);
+    shimIndustrialBass(9.68, 43.65f, 1.0f, 0.22f);
+    shimIndustrialBass(9.84, 49.00f, 1.0f, 0.20f);
+    shimIndustrialSnare(10.00, 0.16f, 0);
+    shimIndustrialSnare(10.16, 0.22f, 1);
+    shimHiHat(10.16, 1, 0.14f);
+
+    /* MEASURE 05: The Searing TRON: Ares Cyber Lead Drops! (10.32s - 12.90s) */
+    shimIndustrialKick(10.32, 1.2f);
+    shimDing(10.32, 1760.0f, 0.12f, 0.25f);
+    shimCyberLead(10.32, NOTES(
+        N(440.00f, 0.60f, 0.22f, 0.00f),
+        N(523.25f, 0.30f, 0.20f, 0.64f),
+        N(493.88f, 0.30f, 0.20f, 0.96f),
+        N(392.00f, 0.30f, 0.20f, 1.29f),
+        N(440.00f, 0.30f, 0.22f, 1.61f),
+        NS(659.25f, 0.55f, 0.24f, 1.93f, 698.46f)
+    ), 1.0f);
+
+    shimIndustrialBass(10.32, 55.00f, 1.0f, 0.22f);
+    shimIndustrialBass(10.48, 55.00f, 1.0f, 0.18f);
+    shimHiHat(10.48, 0, 0.10f);
+    shimIndustrialBass(10.64, 65.41f, 1.0f, 0.20f);
+    shimIndustrialBass(10.80, 55.00f, 1.0f, 0.18f);
+
+    shimIndustrialSnare(10.96, 0.24f, 1);
+    shimIndustrialBass(10.96, 73.42f, 1.0f, 0.22f);
+    shimIndustrialBass(11.12, 65.41f, 1.0f, 0.20f);
+    shimHiHat(11.12, 0, 0.10f);
+    shimIndustrialBass(11.28, 55.00f, 1.0f, 0.18f);
+    shimIndustrialBass(11.44, 49.00f, 1.0f, 0.18f);
+
+    shimIndustrialKick(11.61, 1.1f);
+    shimIndustrialBass(11.61, 55.00f, 1.0f, 0.22f);
+    shimIndustrialBass(11.77, 55.00f, 1.0f, 0.18f);
+    shimHiHat(11.77, 0, 0.10f);
+    shimIndustrialBass(11.93, 65.41f, 1.0f, 0.20f);
+    shimIndustrialBass(12.09, 55.00f, 1.0f, 0.18f);
+
+    shimIndustrialSnare(12.25, 0.24f, 1);
+    shimIndustrialBass(12.25, 43.65f, 1.0f, 0.22f);
+    shimIndustrialBass(12.41, 49.00f, 1.0f, 0.20f);
+    shimHiHat(12.41, 0, 0.10f);
+    shimIndustrialBass(12.57, 55.00f, 1.0f, 0.22f);
+    shimIndustrialBassSlide(12.73, 55.00f, 1.0f, 0.24f, 65.41f);
+    shimHiHat(12.73, 1, 0.12f);
+
+    /* MEASURE 06: Theme Resolution & Harmonic Expansion (12.90s - 15.48s) */
+    shimSwarmatron(12.90, 165.0f, 3.2f, 0.20f, 30.0f);
+    shimIndustrialKick(12.90, 1.15f);
+    shimDing(12.90, 1760.0f, 0.11f, 0.20f);
+    shimCyberLead(12.90, NOTES(
+        N(587.33f, 0.60f, 0.22f, 0.00f),
+        N(523.25f, 0.60f, 0.20f, 0.64f),
+        N(587.33f, 0.60f, 0.22f, 1.29f),
+        NS(659.25f, 0.60f, 0.24f, 1.93f, 880.00f)
+    ), 1.0f);
+
+    shimIndustrialBass(12.90, 73.42f, 1.0f, 0.22f);
+    shimIndustrialBass(13.06, 73.42f, 1.0f, 0.18f);
+    shimHiHat(13.06, 0, 0.10f);
+    shimIndustrialBass(13.22, 65.41f, 1.0f, 0.20f);
+    shimIndustrialBass(13.38, 55.00f, 1.0f, 0.18f);
+
+    shimIndustrialSnare(13.54, 0.24f, 1);
+    shimIndustrialBass(13.54, 65.41f, 1.0f, 0.20f);
+    shimHiHat(13.70, 0, 0.10f);
+    shimIndustrialBass(13.86, 49.00f, 1.0f, 0.18f);
+    shimIndustrialBass(14.02, 55.00f, 1.0f, 0.18f);
+
+    shimIndustrialKick(14.19, 1.1f);
+    shimIndustrialBass(14.19, 73.42f, 1.0f, 0.22f);
+    shimIndustrialBass(14.35, 73.42f, 1.0f, 0.18f);
+    shimHiHat(14.35, 0, 0.10f);
+    shimIndustrialBass(14.51, 82.41f, 1.0f, 0.20f);
+    shimIndustrialBass(14.67, 73.42f, 1.0f, 0.18f);
+
+    shimIndustrialSnare(14.83, 0.26f, 1);
+    shimIndustrialBass(14.83, 82.41f, 1.0f, 0.22f);
+    shimIndustrialBass(14.99, 98.00f, 1.0f, 0.20f);
+    shimHiHat(14.99, 0, 0.10f);
+    shimIndustrialSnare(15.15, 0.16f, 0);
+    shimIndustrialSnare(15.31, 0.22f, 1);
+    shimHiHat(15.31, 1, 0.14f);
+
+    /* MEASURE 07: Full Industrial Climax / Fortissimo Octaves (15.48s - 18.06s) */
+    shimSwarmatron(15.48, 220.0f, 3.4f, 0.25f, 36.0f);
+    shimIndustrialKick(15.48, 1.3f);
+    shimDing(15.48, 2640.0f, 0.14f, 0.30f);
+    shimPedalBass(15.48, 55.00f, 0.24f, 2.5f);
+    shimCyberLead(15.48, NOTES(
+        N(880.00f, 0.60f, 0.26f, 0.00f),
+        N(440.00f, 0.60f, 0.20f, 0.00f),
+        N(1046.50f, 0.60f, 0.26f, 0.64f),
+        N(523.25f, 0.60f, 0.20f, 0.64f),
+        N(1174.66f, 0.60f, 0.28f, 1.29f),
+        N(587.33f, 0.60f, 0.21f, 1.29f),
+        N(1318.51f, 0.60f, 0.30f, 1.93f),
+        N(659.25f, 0.60f, 0.22f, 1.93f)
+    ), 1.0f);
+
+    shimIndustrialBass(15.48, 55.00f, 1.0f, 0.26f);
+    shimIndustrialKick(15.80, 1.0f);
+    shimIndustrialBass(15.80, 55.00f, 1.0f, 0.22f);
+    shimHiHat(15.80, 0, 0.12f);
+
+    shimIndustrialSnare(16.12, 0.26f, 1);
+    shimIndustrialBass(16.12, 65.41f, 1.0f, 0.24f);
+    shimHiHat(16.44, 0, 0.12f);
+    shimIndustrialBass(16.44, 55.00f, 1.0f, 0.22f);
+
+    shimIndustrialKick(16.77, 1.25f);
+    shimIndustrialKick(17.10, 1.0f);
+    shimIndustrialBass(16.77, 73.42f, 1.0f, 0.24f);
+    shimIndustrialBass(17.10, 65.41f, 1.0f, 0.22f);
+    shimHiHat(17.10, 0, 0.12f);
+
+    shimIndustrialSnare(17.42, 0.28f, 1);
+    shimIndustrialBass(17.42, 82.41f, 1.0f, 0.26f);
+    shimHiHat(17.74, 1, 0.14f);
+    shimIndustrialBass(17.74, 98.00f, 1.0f, 0.24f);
+
+    /* MEASURE 08: Climax Cascade & Digital Stutter Fills (18.06s - 20.64s) */
+    shimIndustrialKick(18.06, 1.2f);
+    shimDing(18.06, 2640.0f, 0.12f, 0.25f);
+    shimCyberLead(18.06, NOTES(
+        N(1567.98f, 0.60f, 0.28f, 0.00f),
+        N(783.99f, 0.60f, 0.20f, 0.00f),
+        N(1318.51f, 0.60f, 0.26f, 0.64f),
+        N(659.25f, 0.60f, 0.20f, 0.64f),
+        N(1174.66f, 0.60f, 0.24f, 1.29f),
+        N(587.33f, 0.60f, 0.19f, 1.29f),
+        NS(1046.50f, 0.60f, 0.24f, 1.93f, 880.00f),
+        NS(523.25f, 0.60f, 0.18f, 1.93f, 440.00f)
+    ), 1.0f);
+
+    shimIndustrialBass(18.06, 98.00f, 1.0f, 0.24f);
+    shimIndustrialBass(18.22, 98.00f, 1.0f, 0.20f);
+    shimHiHat(18.22, 0, 0.12f);
+    shimIndustrialBass(18.38, 82.41f, 1.0f, 0.22f);
+    shimIndustrialBass(18.54, 73.42f, 1.0f, 0.20f);
+
+    shimIndustrialSnare(18.70, 0.26f, 1);
+    shimIndustrialBass(18.70, 82.41f, 1.0f, 0.24f);
+    shimIndustrialBass(18.86, 73.42f, 1.0f, 0.20f);
+    shimHiHat(18.86, 0, 0.12f);
+    shimIndustrialBass(19.02, 65.41f, 1.0f, 0.20f);
+    shimIndustrialBass(19.18, 55.00f, 1.0f, 0.20f);
+
+    shimIndustrialKick(19.35, 1.15f);
+    shimIndustrialBass(19.35, 73.42f, 1.0f, 0.22f);
+    shimIndustrialBass(19.51, 65.41f, 1.0f, 0.20f);
+    shimHiHat(19.51, 0, 0.12f);
+    shimIndustrialBass(19.67, 55.00f, 1.0f, 0.20f);
+    shimIndustrialBass(19.83, 49.00f, 1.0f, 0.20f);
+
+    /* Digital Stutter Glitch Bursts (19.99s - 20.64s) */
+    shimGlitchZap(19.99, 4800.0f, 0.20f, 0.04f);
+    shimGlitchZap(20.15, 3600.0f, 0.20f, 0.04f);
+    shimGlitchZap(20.31, 2400.0f, 0.22f, 0.04f);
+    shimGlitchZap(20.47, 5200.0f, 0.25f, 0.06f);
+    shimIndustrialSnare(20.47, 0.26f, 1);
+
+    /* MEASURE 09: Ares Terminal Execution & Sub-Bass Breakdown (20.64s - 23.22s) */
+    shimPedalBass(20.64, 27.50f, 0.30f, 4.5f);
+    shimPedalBass(20.64, 55.00f, 0.26f, 4.0f);
+    shimSwarmatron(20.70, 55.0f, 3.8f, 0.18f, 6.0f);
+    shimPulseBell(20.64, 1.4f, 0.50f);
+
+    shimGlitchZap(21.28, 1600.0f, 0.14f, 0.07f);
+    shimGlitchZap(21.93, 2400.0f, 0.12f, 0.06f);
+    shimGlitchZap(22.57, 3200.0f, 0.10f, 0.05f);
+
+    /* MEASURE 10: Grid Convergence, Pure Silence & Resolution (23.22s - 25.80s) */
+    shimGlitchZap(23.22, 4800.0f, 0.10f, 0.04f);
+    shimDing(23.80, 1760.0f, 0.12f, 1.80f);
+    shimDing(24.45, 2637.0f, 0.09f, 1.40f);
+}
+
 /* ── Public API ───────────────────────────────────────────────────── */
 
 double lc_score_length(int track) {
     switch (track) {
         case 1: return 25.8;   /* scheduleTrackTimeout(loop, 25800) */
         case 2: return 28.0;   /* scheduleTrackTimeout(loop, 28000) */
+        case 3: return 26.8;   /* scheduleTrackTimeout(loop, 26800) */
+        case 4: return 25.8;   /* scheduleTrackTimeout(loop, 25800) */
         default: return 0.0;
     }
 }
@@ -664,4 +1308,6 @@ void lc_score_schedule(int track, double t0) {
     s_T = t0;
     if (track == 1) schedule_track1();
     else if (track == 2) schedule_track2();
+    else if (track == 3) schedule_track3();
+    else if (track == 4) schedule_track4();
 }

@@ -16,10 +16,10 @@
 #define M_PI 3.1415926535897932384626433832795
 #endif
 
-#define WA_MAX_NODES 1536
+#define WA_MAX_NODES 4096
 #define WA_MAX_GEV   24   /* frog croak pulse train needs 20 gain events */
-#define WA_MAX_FEV   4
-#define WA_MAX_QEV   2
+#define WA_MAX_FEV   8
+#define WA_MAX_QEV   8
 #define WA_CTRL      32   /* control-rate block (samples) */
 
 typedef struct {

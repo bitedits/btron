@@ -980,6 +980,67 @@ static void update_kinematics(float dt) {
         }
     }
 
+    /* Synchronized 3D Mascot Choreography for Track 3 (1:1 with index.html lines 5434-5454)
+     * Key: A minor | 76 BPM (6/8 Grand Piano Arpeggio) | Duration: ~26.8s — Thomas Krüger "House of the Rising Sun" */
+    if (lilcu64_synth_get_active_track() == 3) {
+        float t = lilcu64_synth_get_track_time();
+        if (t < 0.40f) {
+            if (s_anim_state != ANIM_IDLE) set_animation(ANIM_IDLE);
+        } else if (t < 2.88f) {
+            if (s_anim_state != ANIM_WALK) set_animation(ANIM_WALK);     /* Intro arpeggio groove */
+        } else if (t < 14.40f) {
+            if (s_anim_state != ANIM_SING) {                            /* Singing "There is a house..." */
+                set_animation(ANIM_SING);
+                trigger_radiant_wave(false);
+            }
+        } else if (t < 23.04f) {
+            if (s_anim_state != ANIM_DANCE) set_animation(ANIM_DANCE);   /* Forte Octave Chorus */
+        } else if (t < 24.48f) {
+            if (s_anim_state != ANIM_FLOAT) set_animation(ANIM_FLOAT);   /* High waterfall cascade */
+        } else if (t < 25.80f) {
+            if (s_anim_state != ANIM_SING) {                            /* Grand sunrise landing */
+                set_animation(ANIM_SING);
+                s_impact_squash = 0.24f;
+                trigger_radiant_wave(true);
+            }
+        } else {
+            if (s_anim_state != ANIM_IDLE) {
+                set_animation(ANIM_IDLE);
+                snprintf(s_quote_text, sizeof(s_quote_text), "Thomas Krüger『House of the Rising Sun』(朝日のあたる家)、魂の旋律が天球へと感動的に響き渡ったキューブ…☀️🎹✨");
+            }
+        }
+    }
+
+    /* Synchronized 3D Mascot Choreography for Track 4 (1:1 with index.html lines 5794-5811)
+     * Key: A minor | 93 BPM (4/4 Industrial Electro-Rock) | Duration: ~25.8s — Trent Reznor "TRON Init" */
+    if (lilcu64_synth_get_active_track() == 4) {
+        float t = lilcu64_synth_get_track_time();
+        if (t < 0.05f) {
+            if (s_anim_state != ANIM_IDLE) set_animation(ANIM_IDLE);
+        } else if (t < 2.58f) {
+            if (s_anim_state != ANIM_SQUASH) {
+                s_impact_squash = 0.35f;                                /* Violent glitch landing! */
+                set_animation(ANIM_SQUASH);
+            }
+        } else if (t < 7.74f) {
+            if (s_anim_state != ANIM_WALK) set_animation(ANIM_WALK);     /* 93 BPM 16th groove */
+        } else if (t < 10.32f) {
+            if (s_anim_state != ANIM_FLOAT) set_animation(ANIM_FLOAT);   /* Swarmatron ascension */
+        } else if (t < 15.48f) {
+            if (s_anim_state != ANIM_DANCE) set_animation(ANIM_DANCE);   /* Cyber lead drop */
+        } else if (t < 21.00f) {
+            if (s_anim_state != ANIM_SING) {                            /* Fortissimo climax! */
+                set_animation(ANIM_SING);
+                trigger_radiant_wave(true);
+            }
+        } else {
+            if (s_anim_state != ANIM_IDLE) {
+                set_animation(ANIM_IDLE);
+                snprintf(s_quote_text, sizeof(s_quote_text), "Nine Inch Nails『Init』(TRON: Ares)、重厚なインダストリアル世界が天球に刻印されたキューブ！⚡️✨");
+            }
+        }
+    }
+
     /* Target pose goals */
     float t_root_x = 0.0f, t_root_y = 0.08f, t_root_z = 0.0f;
     float t_root_rot_x = 0.0f, t_root_rot_y = 0.0f, t_root_rot_z = 0.0f;

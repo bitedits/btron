@@ -283,93 +283,11 @@ static void drum_hihat(float vol) {
     v->filter_coeff = 0.85f;
 }
 
-/* ── Tracker Score Sequencer ──────────────────────────────────────── */
+/* ── Tracker Score Sequencer (Legacy, all tracks now WebAudio scores) ── */
 
-static void step_track_3(int step) {
-    /* Track 3: 朝日のあたる家 (The House of the Rising Sun / Thomas Krüger) — 76 BPM 6/8
-     * Step = 1 eighth note (~0.2368s)
-     * Chords: Am - C - D - F - Am - E
-     */
-    int phrase_step = step % 36;
-    int beat_in_bar = phrase_step % 6;
-    int bar = phrase_step / 6;
-
-    float root_f = 220.0f;
-    if (bar == 0 || bar == 4) root_f = 220.0f;      /* Am */
-    else if (bar == 1) root_f = 261.63f;            /* C */
-    else if (bar == 2) root_f = 293.66f;            /* D */
-    else if (bar == 3) root_f = 174.61f;            /* F */
-    else if (bar == 5) root_f = 164.81f;            /* E */
-
-    /* Left-hand rolling grand piano arpeggio */
-    float arp_note = root_f;
-    if (beat_in_bar == 0) {
-        arp_note = root_f * 0.5f;
-        /* Low felt hammer bass strike on beat 1 */
-        trigger_voice_basic(VOICE_WAVE_SINE, arp_note * 0.5f, 0.35f, 1.2f, -0.4f);
-    } else if (beat_in_bar == 1) arp_note = root_f;
-    else if (beat_in_bar == 2) arp_note = root_f * 1.189f;
-    else if (beat_in_bar == 3) arp_note = root_f * 1.498f;
-    else if (beat_in_bar == 4) arp_note = root_f * 2.0f;
-    else if (beat_in_bar == 5) arp_note = root_f * 1.498f;
-
-    trigger_voice_basic(VOICE_WAVE_TRIANGLE, arp_note, 0.16f, 0.85f, -0.2f + beat_in_bar * 0.08f);
-
-    /* Singing vocal lead entering */
-    if (bar >= 2 && beat_in_bar == 0) {
-        lilcu64_shim_pulse_squash(0.85f, root_f / 220.0f);
-    }
-}
-
-static void step_track_4(int step) {
-    /* Track 4: TRON Init (Nine Inch Nails / Trent Reznor) — 132 BPM 4/4
-     * Step = 1 16th note (~0.1136s), Key: F# minor (92.50 Hz)
-     */
-    int bar_step = step % 16;
-
-    /* Aggressive overdriven sawtooth bassline */
-    float bass_freq = (bar_step < 12) ? 92.50f : 82.41f; /* F#2 to E2 */
-    SynthVoice *v = alloc_voice();
-    v->wave_type = VOICE_WAVE_SAW;
-    v->freq = bass_freq;
-    v->phase_inc = (float)(2.0 * M_PI * bass_freq / (double)s_sample_rate);
-    v->amp = 0.26f;
-    v->decay_rate = 1.0f / (0.12f * (float)s_sample_rate);
-    v->filter_coeff = 0.55f;
-
-    /* Heavy industrial drums */
-    if (bar_step == 0 || bar_step == 6 || bar_step == 10) drum_kick(0.95f);
-    if (bar_step == 4 || bar_step == 12) drum_snare(0.85f);
-    if (bar_step % 2 == 0) drum_hihat(0.45f);
-
-    /* Swarmatron Ribbon Glissando at bar transitions */
-    if (bar_step == 0 && (step % 64) == 0) {
-        SynthVoice *sw = alloc_voice();
-        sw->wave_type = VOICE_WAVE_SAW;
-        sw->freq = 185.0f;
-        sw->target_freq = 370.0f;
-        sw->freq_ramp_rate = 0.0003f;
-        sw->phase_inc = (float)(2.0 * M_PI * sw->freq / (double)s_sample_rate);
-        sw->amp = 0.18f;
-        sw->decay_rate = 1.0f / (3.2f * (float)s_sample_rate);
-    }
-}
-
-/* Advance legacy step sequencer (tracks 3/4) by delta time */
 static void update_sequencer(float dt) {
-    if (s_active_track < 3 || s_muted) return;
-
-    s_track_time += dt;
-
-    float step_interval = 0.2368f;                         /* 76 BPM 8th */
-    if (s_active_track == 4) step_interval = 0.1136f;      /* 132 BPM 16th */
-
-    while (s_track_time >= s_next_step_time) {
-        if (s_active_track == 3) step_track_3(s_track_step);
-        else if (s_active_track == 4) step_track_4(s_track_step);
-        s_track_step++;
-        s_next_step_time += step_interval;
-    }
+    (void)dt;
+    /* Tracks 1–4 are all scheduled via lilcu64_score / lilcu64_wa */
 }
 
 /* ── Timeline (1:1 index.html) Tracks ─────────────────────────────── */

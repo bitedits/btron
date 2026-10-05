@@ -25,7 +25,9 @@ __attribute__((weak)) void tv_session_close(void) {}
 __attribute__((weak)) int term_get_cell(int r, int c, uint32_t *cp, int *style) { (void)r; (void)c; (void)cp; (void)style; return 0; }
 __attribute__((weak)) void term_get_style_colors(int style, uint32_t *fg, uint32_t *bg) { (void)style; if (fg) *fg = 0xFFFFFFFF; if (bg) *bg = 0xFF000000; }
 __attribute__((weak)) void term_get_cursor(int *row, int *col, int *visible) { if (row) *row = -1; if (col) *col = -1; if (visible) *visible = 0; }
+__attribute__((weak)) void term_set_size(int rows, int cols) { (void)rows; (void)cols; }
 __attribute__((weak)) size_t lang_encode(uint32_t cp, char *out) { if (out) { out[0] = (char)(cp < 128 ? cp : '?'); out[1] = '\0'; } return 1; }
+__attribute__((weak)) int lang_width(uint32_t cp) { (void)cp; return 1; }
 __attribute__((weak)) TermContext *term_context_create(void) { return NULL; }
 __attribute__((weak)) void term_context_destroy(TermContext *tc) { (void)tc; }
 __attribute__((weak)) void term_set_context(TermContext *tc) { (void)tc; }

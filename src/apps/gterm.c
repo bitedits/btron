@@ -9,6 +9,26 @@
 #include <btron/settings.h>
 #include <btron/fs/vol_api.h>
 #include "clu.h"
+#include "../clu/term.h"
+#include "../clu/lang.h"
+#include "../clu/sc/sokhatsky.h"
+#include "../clu/tv/tv.h"
+
+#if defined(__GNUC__) || defined(__clang__)
+__attribute__((weak)) int sc_session_init(const char *start_path, int rows, int cols) { (void)start_path; (void)rows; (void)cols; return -1; }
+__attribute__((weak)) int sc_session_step(int c) { (void)c; return 0; }
+__attribute__((weak)) void sc_session_close(void) {}
+__attribute__((weak)) int sc_is_tv_active(void) { return 0; }
+__attribute__((weak)) int tv_session_init(const char *filepath, int view_only, int rows, int cols) { (void)filepath; (void)view_only; (void)rows; (void)cols; return -1; }
+__attribute__((weak)) int tv_session_step(int key) { (void)key; return 0; }
+__attribute__((weak)) void tv_session_close(void) {}
+__attribute__((weak)) int term_get_cell(int r, int c, uint32_t *cp, int *style) { (void)r; (void)c; (void)cp; (void)style; return 0; }
+__attribute__((weak)) void term_get_style_colors(int style, uint32_t *fg, uint32_t *bg) { (void)style; if (fg) *fg = 0xFFFFFFFF; if (bg) *bg = 0xFF000000; }
+__attribute__((weak)) void term_get_cursor(int *row, int *col, int *visible) { if (row) *row = -1; if (col) *col = -1; if (visible) *visible = 0; }
+__attribute__((weak)) size_t lang_encode(uint32_t cp, char *out) { if (out) { out[0] = (char)(cp < 128 ? cp : '?'); out[1] = '\0'; } return 1; }
+__attribute__((weak)) int lang_width(uint32_t cp) { (void)cp; return 1; }
+#endif
+
 
 #if defined(__STDC_HOSTED__) && __STDC_HOSTED__ == 1
 #include <stdio.h>
@@ -105,6 +125,12 @@ typedef enum {
     TCMD_HELP_ABOUT     = 51
 } GTERM_CMD;
 
+typedef enum {
+    GTERM_MODE_SHELL = 0,
+    GTERM_MODE_SC,
+    GTERM_MODE_TV
+} GTermAppMode;
+
 typedef struct {
     char lines[GTERM_HIST_MAX][GTERM_MAX_COLS + 1];
     COLOR line_cols[GTERM_HIST_MAX];
@@ -133,7 +159,13 @@ typedef struct {
     BOOL  sb_dragging;     /* True while dragging scrollbar thumb */
     int   sb_drag_start_y; /* Initial mouse Y when dragging thumb */
     int   sb_drag_start_offset; /* Initial scroll_offset when dragging */
+
+    /* In-window termios app mode (SC, TV) */
+    GTermAppMode app_mode;
+    int          app_rows;
+    int          app_cols;
 } GTermState;
+
 
 void gterm_append_line(GTermState *st, const char *text, COLOR col);
 static void gterm_init_menu_bar(GTermState *st);
@@ -324,6 +356,10 @@ void shell_execute_cmd(const char *cmd_line, ShellOutputFn out_fn, void *user_da
         arg[arg_i++] = *p++;
     }
     arg[arg_i] = '\0';
+    if ((cmd[0] == '\'' || cmd[0] == '"') && cmd_i >= 2 && cmd[cmd_i - 1] == cmd[0]) {
+        memmove(cmd, cmd + 1, cmd_i - 2);
+        cmd[cmd_i - 2] = '\0';
+    }
     int n = (cmd_i > 0) ? (arg_i > 0 ? 2 : 1) : 0;
 
     /* ── Cho-Kanji CLU Filesystem Builtins ─────────────────────────────────── */
@@ -356,6 +392,74 @@ void shell_execute_cmd(const char *cmd_line, ShellOutputFn out_fn, void *user_da
         clu_quake(arg, out_fn, user_data);
         return;
     }
+    if (strcmp(cmd, "sc") == 0 || strcmp(cmd, "mc") == 0 ||
+        strcmp(cmd, "commander") == 0 || strcmp(cmd, "bin/sc") == 0 ||
+        strcmp(cmd, "./bin/sc") == 0) {
+        GTermState *st_sc = (GTermState *)user_data;
+        if (st_sc && wnd) {
+            int row_h = (st_sc->font_size >= 12 && st_sc->font_size <= 20) ? st_sc->font_size : 16;
+            int cli_w = wnd->client.right - wnd->client.left;
+            int cli_h = wnd->client.bottom - wnd->client.top;
+            int cols = (cli_w - 16) / 8;
+            int rows = (cli_h - (APP_MENU_BAR_HEIGHT + 4)) / row_h;
+            if (cols < 30) cols = 30;
+            if (rows < 8) rows = 8;
+            const char *start_p = (arg[0] != '\0') ? arg : (g_cwd_path[0] ? g_cwd_path : "/SYS");
+            if (sc_session_init(start_p, rows, cols) == 0) {
+                st_sc->app_mode = GTERM_MODE_SC;
+                st_sc->app_rows = rows;
+                st_sc->app_cols = cols;
+                inval_wnd(wnd);
+                return;
+            }
+        }
+        clu_sc(arg, out_fn, user_data);
+        return;
+    }
+    if (strcmp(cmd, "tv") == 0 || strcmp(cmd, "edit") == 0 ||
+        strcmp(cmd, "tv-edit") == 0 || strcmp(cmd, "tv-view") == 0 ||
+        strcmp(cmd, "view") == 0 || strcmp(cmd, "bin/tv") == 0 ||
+        strcmp(cmd, "./bin/tv") == 0) {
+        GTermState *st_tv = (GTermState *)user_data;
+        if (st_tv && wnd) {
+            int row_h = (st_tv->font_size >= 12 && st_tv->font_size <= 20) ? st_tv->font_size : 16;
+            int cli_w = wnd->client.right - wnd->client.left;
+            int cli_h = wnd->client.bottom - wnd->client.top;
+            int cols = (cli_w - 16) / 8;
+            int rows = (cli_h - (APP_MENU_BAR_HEIGHT + 4)) / row_h;
+            if (cols < 30) cols = 30;
+            if (rows < 8) rows = 8;
+
+            int view_only = (strcmp(cmd, "view") == 0 || strcmp(cmd, "tv-view") == 0);
+            const char *p = (arg[0] != '\0') ? arg : "";
+            while (*p == ' ' || *p == '\t') p++;
+            if (strncmp(p, "-v", 2) == 0 && (p[2] == ' ' || p[2] == '\0')) {
+                view_only = 1;
+                p += 2;
+                while (*p == ' ' || *p == '\t') p++;
+            }
+            char file_path[256];
+            if (*p == '\0') {
+                snprintf(file_path, sizeof(file_path), "%s/new.txt", g_cwd_path[0] ? g_cwd_path : "/SYS");
+            } else if (*p == '/') {
+                strncpy(file_path, p, sizeof(file_path) - 1);
+                file_path[sizeof(file_path) - 1] = '\0';
+            } else {
+                snprintf(file_path, sizeof(file_path), "%s/%s", g_cwd_path[0] ? g_cwd_path : "/SYS", p);
+            }
+
+            if (tv_session_init(file_path, view_only, rows, cols) == 0) {
+                st_tv->app_mode = GTERM_MODE_TV;
+                st_tv->app_rows = rows;
+                st_tv->app_cols = cols;
+                inval_wnd(wnd);
+                return;
+            }
+        }
+        clu_tv(arg, out_fn, user_data);
+        return;
+    }
+
     /* ── END CLU Builtins ────────────────────────────────────────────────── */
 
     if (strcmp(cmd, "help") == 0 || strcmp(cmd, "?") == 0) {
@@ -387,6 +491,9 @@ void shell_execute_cmd(const char *cmd_line, ShellOutputFn out_fn, void *user_da
         out_fn("  mem                 - Memory pool allocation statistics", COLOR_LTGRAY, user_data);
         out_fn("  mouse status|move|click - Cursor control", COLOR_LTGRAY, user_data);
         out_fn("── Applications ──────────────────────────────────", COLOR_CYAN, user_data);
+        out_fn("  sc, mc       - Launch Sokhatsky Commander (Dual-Pane File Manager)", COLOR_YELLOW, user_data);
+        out_fn("  tv, edit <file>  - Launch Terminal Vision Editor", COLOR_YELLOW, user_data);
+        out_fn("  tv-view, view <file>- View file with Terminal Vision", COLOR_LTGRAY, user_data);
         out_fn("  quake               - Launch Quake 3D (OpenGL ES 1.1)", COLOR_YELLOW, user_data);
         out_fn("  edit, editor        - Launch Editor instance", COLOR_LTGRAY, user_data);
         out_fn("  tad, browser        - Launch TAD Browser instance", COLOR_LTGRAY, user_data);
@@ -680,27 +787,12 @@ void shell_execute_cmd(const char *cmd_line, ShellOutputFn out_fn, void *user_da
             cls_wnd(wnd);
         }
     } else {
-#if defined(__STDC_HOSTED__) && __STDC_HOSTED__ == 1
-        /* Fallback: Execute external shell command via popen */
-        FILE *pipe = popen(cmd_line, "r");
-        if (!pipe) {
-            char err[280];
-            snprintf(err, sizeof(err), "gterm: command not found: %s", cmd);
-            out_fn(err, COLOR_RED, user_data);
-        } else {
-            char linebuf[256];
-            int max_lines = 40;
-            while (fgets(linebuf, sizeof(linebuf), pipe) && max_lines-- > 0) {
-                out_fn(linebuf, COLOR_LTGRAY, user_data);
-            }
-            pclose(pipe);
-        }
-#else
         char err[280];
         snprintf(err, sizeof(err), "gterm: command not found: %s", cmd);
         out_fn(err, COLOR_RED, user_data);
-#endif
+        out_fn("Type 'help' or '?' for available system commands.", COLOR_YELLOW, user_data);
     }
+
 }
 
 static void gterm_execute_cmd(WND *wnd, GTermState *st, const char *cmd_line) {
@@ -1001,8 +1093,71 @@ static void handle_gterm_event(WND *wnd, const EVT *evt) {
         return;
     }
 
+    /* ── Forward input to active termios app session (SC, TV) ────────────── */
+    if (st->app_mode == GTERM_MODE_SC || st->app_mode == GTERM_MODE_TV) {
+        if (evt->type == EV_KEY_DOWN) {
+            UW sym = evt->key;
+            uint16_t mod = (uint16_t)(uintptr_t)evt->data;
+            BOOL ctrl = (mod & BTRON_KMOD_CTRL) != 0;
+            int tk = K_NONE;
+
+            if (sym == BTRON_KEY_UP) tk = K_UP;
+            else if (sym == BTRON_KEY_DOWN) tk = K_DOWN;
+            else if (sym == BTRON_KEY_LEFT) tk = K_LEFT;
+            else if (sym == BTRON_KEY_RIGHT) tk = K_RIGHT;
+            else if (sym == BTRON_KEY_PAGE_UP) tk = K_PGUP;
+            else if (sym == BTRON_KEY_PAGE_DOWN) tk = K_PGDOWN;
+            else if (sym == BTRON_KEY_HOME) tk = K_HOME;
+            else if (sym == BTRON_KEY_END) tk = K_END;
+            else if (sym == BTRON_KEY_RETURN || sym == BTRON_KEY_KP_ENTER || sym == '\r' || sym == '\n') tk = K_ENTER;
+            else if (sym == BTRON_KEY_TAB || sym == '\t') tk = K_TAB;
+            else if (sym == BTRON_KEY_BACKSPACE || sym == 0x08) tk = K_BACKSPACE;
+            else if (sym == BTRON_KEY_DELETE || sym == 0x7F) tk = K_DELETE;
+            else if (sym == 0x1B) tk = K_ESC;
+            else if (sym == BTRON_KEY_F1) tk = K_F1;
+            else if (sym == BTRON_KEY_F2) tk = K_F2;
+            else if (sym == BTRON_KEY_F3) tk = K_F3;
+            else if (sym == BTRON_KEY_F4) tk = K_F4;
+            else if (sym == BTRON_KEY_F5) tk = K_F5;
+            else if (sym == BTRON_KEY_F6) tk = K_F6;
+            else if (sym == BTRON_KEY_F7) tk = K_F7;
+            else if (sym == BTRON_KEY_F8) tk = K_F8;
+            else if (sym == BTRON_KEY_F9) tk = K_F9;
+            else if (sym == BTRON_KEY_F10) tk = K_F10;
+            else if (ctrl && ((sym >= 'a' && sym <= 'z') || (sym >= 'A' && sym <= 'Z'))) {
+                int cval = (sym >= 'a' && sym <= 'z') ? (sym - 'a' + 1) : (sym - 'A' + 1);
+                tk = K_CTRL(cval);
+            } else if (!ctrl && sym >= 32 && sym <= 126) {
+                tk = (int)get_ascii_char_with_shift(sym, mod);
+            }
+
+            if (tk != K_NONE) {
+                int running = 1;
+                if (st->app_mode == GTERM_MODE_SC) {
+                    running = sc_session_step(tk);
+                    if (!running) {
+                        sc_session_close();
+                        st->app_mode = GTERM_MODE_SHELL;
+                        gterm_append_line(st, "Sokhatsky Commander session closed.", COLOR_GREEN);
+                    }
+                } else if (st->app_mode == GTERM_MODE_TV) {
+                    running = tv_session_step(tk);
+                    if (!running) {
+                        tv_session_close();
+                        st->app_mode = GTERM_MODE_SHELL;
+                        gterm_append_line(st, "Terminal Vision session closed.", COLOR_GREEN);
+                    }
+                }
+                inval_wnd(wnd);
+                return;
+            }
+        }
+        return;
+    }
+
     if (evt->type == EV_KEY_DOWN) {
         UW key_code = evt->key;
+
         uint16_t mod = (uint16_t)(uintptr_t)evt->data;
 
         /* Forward to in-window menu bar shortcuts & keyboard navigation */
@@ -1194,6 +1349,123 @@ static void paint_gterm(WND *wnd, GDEV *dev) {
     COLOR eff_fg = st->fg_color ? st->fg_color : 0xFFFFFFFF;
     int   row_h  = (st->font_size >= 12 && st->font_size <= 20) ? st->font_size : 16;
 
+    /* ── In-Window Termios Application Rendering (SC, TV) ─────────────── */
+    if (st->app_mode == GTERM_MODE_SC || st->app_mode == GTERM_MODE_TV) {
+        BOOL is_tv = (st->app_mode == GTERM_MODE_TV) || (st->app_mode == GTERM_MODE_SC && sc_is_tv_active());
+        if (is_tv) {
+            app_menu_set_right_text(&st->menu_bar, "[Terminal Vision (tv) | F10: 終了]");
+        } else {
+            app_menu_set_right_text(&st->menu_bar, "[Sokhatsky Commander (sc) | F10: 終了]");
+        }
+        app_menu_paint_bar(&st->menu_bar, dev);
+
+        int canvas_top = APP_MENU_BAR_HEIGHT + 2;
+
+        /* Check if window dimensions changed and resize termios screen buffer */
+        int new_cols = dev->width / 8;
+        int new_rows = (dev->height - canvas_top) / row_h;
+        if (new_cols < 20) new_cols = 20;
+        if (new_rows < 4) new_rows = 4;
+        if (new_rows != st->app_rows || new_cols != st->app_cols) {
+            st->app_rows = new_rows;
+            st->app_cols = new_cols;
+            term_set_size(new_rows, new_cols);
+            if (st->app_mode == GTERM_MODE_SC) {
+                sc_session_step(K_RESIZE);
+            } else if (st->app_mode == GTERM_MODE_TV) {
+                tv_session_step(K_RESIZE);
+            }
+        }
+
+        COLOR app_bg = is_tv ? 0xFF000000 : 0xFF001A4E;
+        RECT full_r = { 0, canvas_top, dev->width, dev->height };
+        fill_rec(dev, &full_r, app_bg);
+
+        /* Render 2D screen cell grid from term.c */
+        for (int r = 0; r < st->app_rows; r++) {
+            int y = canvas_top + r * row_h;
+            if (y + row_h > dev->height) break;
+
+            int c = 0;
+            while (c < st->app_cols) {
+                uint32_t cp = 0;
+                int style = 0;
+                if (!term_get_cell(r, c, &cp, &style)) {
+                    c++;
+                    continue;
+                }
+                if (cp == 0) {
+                    c++;
+                    continue;
+                }
+                uint32_t fg = 0xFFFFFFFF, bg = app_bg;
+                term_get_style_colors(style, &fg, &bg);
+
+                char span_str[1024];
+                int span_len = 0;
+                int start_c = c;
+
+                while (c < st->app_cols) {
+                    uint32_t cur_cp = 0;
+                    int cur_style = 0;
+                    if (!term_get_cell(r, c, &cur_cp, &cur_style)) break;
+                    if (cur_cp == 0) {
+                        c++;
+                        continue;
+                    }
+                    uint32_t cur_fg = 0, cur_bg = 0;
+                    term_get_style_colors(cur_style, &cur_fg, &cur_bg);
+                    if (cur_fg != fg || cur_bg != bg) {
+                        break;
+                    }
+
+                    char u[5];
+                    size_t ulen = lang_encode(cur_cp, u);
+                    if (span_len + (int)ulen >= (int)sizeof(span_str) - 1) break;
+                    memcpy(&span_str[span_len], u, ulen);
+                    span_len += (int)ulen;
+
+                    int w = lang_width(cur_cp);
+                    if (w == 2) {
+                        c += 2;
+                    } else {
+                        c++;
+                    }
+                }
+                span_str[span_len] = '\0';
+
+                int run_cells = c - start_c;
+                int rx = start_c * 8;
+                int rw = run_cells * 8;
+                if (rx + rw > dev->width) rw = dev->width - rx;
+                if (rw > 0) {
+                    RECT cr = { rx, y, rx + rw, y + row_h };
+                    fill_rec(dev, &cr, bg);
+                    if (span_len > 0) {
+                        drw_tc_string(dev, rx, y, span_str, fg, 0x00000000);
+                    }
+                }
+            }
+        }
+
+        /* Draw optional cursor */
+        int cur_r = -1, cur_c = -1, cur_vis = 0;
+        term_get_cursor(&cur_r, &cur_c, &cur_vis);
+        if (cur_vis && cur_r >= 0 && cur_r < st->app_rows && cur_c >= 0 && cur_c < st->app_cols) {
+            int cx = cur_c * 8;
+            int cy = canvas_top + cur_r * row_h;
+            if (cx < dev->width && cy + row_h <= dev->height) {
+                drw_lin(dev, cx, cy, cx, cy + row_h - 1);
+                drw_lin(dev, cx + 1, cy, cx + 1, cy + row_h - 1);
+            }
+        }
+
+        if (st->menu_bar.active_menu >= 0) {
+            app_menu_paint_dropdown(&st->menu_bar, dev);
+        }
+        return;
+    }
+
     /* ── 1. Full-window background ─────────────────────────────────────── */
     RECT r = { 0, 0, dev->width, dev->height };
     fill_rec(dev, &r, eff_bg);
@@ -1322,6 +1594,11 @@ static void destroy_gterm(WND *wnd) {
     if (!wnd) return;
     GTermState *st = (GTermState*)(uintptr_t)wnd->user_data;
     if (st) {
+        if (st->app_mode == GTERM_MODE_SC) {
+            sc_session_close();
+        } else if (st->app_mode == GTERM_MODE_TV) {
+            tv_session_close();
+        }
         free(st);
         wnd->user_data = 0;
     }

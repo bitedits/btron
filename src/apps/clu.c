@@ -1913,3 +1913,72 @@ void clu_quake(const char *args, ShellOutputFn out, void *ud)
         out("quake: GUI subsystem not linked in headless/test build", COLOR_YELLOW, ud);
     }
 }
+
+/* ── clu_sc ──────────────────────────────────────────────────────── */
+__attribute__((weak)) int sc_main(int argc, char *argv[])
+{
+    (void)argc; (void)argv;
+    return -1;
+}
+
+void clu_sc(const char *args, ShellOutputFn out, void *ud)
+{
+    char path_buf[256];
+    if (args && args[0]) {
+        const char *p = args;
+        while (*p == ' ' || *p == '\t') p++;
+        strncpy(path_buf, p, sizeof(path_buf) - 1);
+        path_buf[sizeof(path_buf) - 1] = '\0';
+    } else {
+        strcpy(path_buf, g_cwd_path[0] ? g_cwd_path : "/SYS");
+    }
+
+    out("Sokhatsky Commander (sc) — Dual-Pane File Manager", COLOR_CYAN, ud);
+    out("  Source   : src/clu/sc/sc.c (NASA JPL Power of Ten, BTRON3 VFS)", COLOR_LTGRAY, ud);
+    char msg[320];
+    snprintf(msg, sizeof(msg), "  Target   : %s", path_buf);
+    out(msg, COLOR_YELLOW, ud);
+    out("  Status   : In-window termios apps (sc, tv) inside gterm not available yet.", COLOR_YELLOW, ud);
+    out("             Run 'sc' in terminal console for full-screen TUI.", COLOR_LTGRAY, ud);
+}
+
+/* ── clu_tv ──────────────────────────────────────────────────────── */
+__attribute__((weak)) int tv_run(const char *filepath, int view_only)
+{
+    (void)filepath; (void)view_only;
+    return -1;
+}
+
+void clu_tv(const char *args, ShellOutputFn out, void *ud)
+{
+    int view_only = 0;
+    const char *p = args ? args : "";
+    while (*p == ' ' || *p == '\t') p++;
+    if (strncmp(p, "-v", 2) == 0 && (p[2] == ' ' || p[2] == '\0')) {
+        view_only = 1;
+        p += 2;
+        while (*p == ' ' || *p == '\t') p++;
+    }
+    char file_path[256];
+    if (*p == '\0') {
+        snprintf(file_path, sizeof(file_path), "%s/new.txt", g_cwd_path[0] ? g_cwd_path : "/SYS");
+    } else if (*p == '/') {
+        strncpy(file_path, p, sizeof(file_path) - 1);
+        file_path[sizeof(file_path) - 1] = '\0';
+    } else {
+        snprintf(file_path, sizeof(file_path), "%s/%s", g_cwd_path[0] ? g_cwd_path : "/SYS", p);
+    }
+
+    out("Terminal Vision (tv) — Multilingual Asian & Kinsoku Editor", COLOR_CYAN, ud);
+    out("  Source   : src/clu/tv/tv.c (CJK double-width, Tibetan combining, Kinsoku)", COLOR_LTGRAY, ud);
+    char msg[320];
+    snprintf(msg, sizeof(msg), "  File     : %s (%s mode)", file_path, view_only ? "View" : "Edit");
+    out(msg, COLOR_YELLOW, ud);
+    out("  Status   : In-window termios apps (sc, tv) inside gterm not available yet.", COLOR_YELLOW, ud);
+    out("             Run 'tv <file>' in terminal console for full-screen TUI.", COLOR_LTGRAY, ud);
+}
+
+
+
+
+

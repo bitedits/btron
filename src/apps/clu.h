@@ -16,13 +16,11 @@
 #define _CLU_H_
 
 #include <btron/types.h>
+#include <btron/core.h>
 
 #ifdef __cplusplus
 extern "C" {
 #endif
-
-/* Shell output callback type (matches gterm's ShellOutputFn) */
-typedef void (*ShellOutputFn)(const char *line, COLOR col, void *ud);
 
 /* ── Volume navigation ──────────────────────────────────────────── */
 void clu_cd   (const char *args, ShellOutputFn out, void *ud);
@@ -59,6 +57,8 @@ void clu_sync_cmd (const char *args, ShellOutputFn out, void *ud);
 
 /* ── 3D Gaming & Applications ───────────────────────────────────── */
 void clu_quake    (const char *args, ShellOutputFn out, void *ud);
+void clu_sc       (const char *args, ShellOutputFn out, void *ud);
+void clu_tv       (const char *args, ShellOutputFn out, void *ud);
 
 #ifdef __cplusplus
 }

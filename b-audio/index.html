@@ -1,0 +1,372 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>B-Audio – PCM Output Stack: VirtIO-Sound, Planes &amp; Applications | B-Book</title>
+  <meta name="description" content="Developer specification for B-Audio: the B-System PCM audio output stack — the VirtIO-Sound compatible five-call driver surface, host-backed QEMU/POSIX implementation, BCM2835 PWM target, control-panel audio semantics, and the application-side consumers (Cassette deck, Orchestra sink, lilcu64 pump).">
+  <link rel="stylesheet" href="../b-book/b-book.css">
+</head>
+<body>
+
+  <nav class="book-global-nav" aria-label="Site navigation">
+    <div class="book-global-nav-container">
+      <a href="../index.html" class="book-global-logo"><img width="48" src="https://n2o.dev/img/synrc.svg" alt="Synrc Logo"></a>
+      <button class="book-nav-toggle" aria-label="Toggle navigation" aria-expanded="false" onclick="const links = this.nextElementSibling; const sidebar = document.querySelector('.book-sidebar'); const open = links.classList.toggle('open'); sidebar.classList.toggle('open', open); this.classList.toggle('open', open); this.setAttribute('aria-expanded', open);">
+        <span class="hamburger"></span>
+      </button>
+      <ul class="book-global-links">
+    <li><a href="../index.html">B-System</a></li>
+    <li><a href="../b-book/index.html">B-Book</a></li>
+    <li><a href="../b-core/index.html">B-Core</a></li>
+    <li><a href="index.html" class="active">B-Audio</a></li>
+    <li><a href="../conformance.html">B-Spec</a></li>
+    <li><a href="../releases.html">Releases</a></li>
+    <li><a href="https://github.com/bitedits/btron">GitHub</a></li>
+      </ul>
+    </div>
+  </nav>
+
+  <nav class="book-sidebar">
+    <div class="sidebar-brand">
+      <div class="brand-title">B-Audio <span class="badge">Rev 1.00</span></div>
+      <div class="brand-sub">PCM Output Stack</div>
+    </div>
+    <div class="sidebar-nav">
+      <div class="nav-heading">Overview</div>
+      <a href="#scope" class="nav-link">Scope &amp; Output Path</a>
+
+      <div class="nav-heading">Part 1: Architecture</div>
+      <div class="nav-sublinks">
+        <a href="#path" class="nav-sublink">Signal &amp; Control Path</a>
+        <a href="#lifecycle" class="nav-sublink">Device Lifecycle</a>
+        <a href="#ports" class="nav-sublink">Port Behaviour Matrix</a>
+        <a href="#backpressure" class="nav-sublink">Queue Telemetry</a>
+      </div>
+
+      <div class="nav-heading">Part 2: Data Structures</div>
+      <div class="nav-sublinks">
+        <a href="#formats" class="nav-sublink">Sample Format &amp; Status Codes</a>
+        <a href="#deck" class="nav-sublink">Deck &amp; Panel State</a>
+      </div>
+
+      <div class="nav-heading">Part 3: API Reference</div>
+      <div class="nav-sublinks">
+        <a href="#open" class="nav-sublink">virtio_sound_open</a>
+        <a href="#write" class="nav-sublink">virtio_sound_write</a>
+        <a href="#close" class="nav-sublink">virtio_sound_close</a>
+        <a href="#ready" class="nav-sublink">virtio_sound_is_ready</a>
+        <a href="#queued" class="nav-sublink">virtio_sound_get_queued_bytes</a>
+      </div>
+
+      <div class="nav-heading">Part 4: Practice</div>
+      <div class="nav-sublinks">
+        <a href="#examples" class="nav-sublink">Canonical Examples</a>
+        <a href="#consumers" class="nav-sublink">Consumers &amp; Settings</a>
+        <a href="#verified" class="nav-sublink">Verification Status</a>
+      </div>
+
+      <div class="nav-heading">Companion Books</div>
+      <a href="../b-sound/index.html" class="nav-link">B-Sound (lilcu64 Synth)</a>
+      <a href="../b-media/index.html" class="nav-link">B-Media (Pipes &amp; Budgets)</a>
+      <a href="../b-core/index.html" class="nav-link">B-Core (InterCore Nexus)</a>
+      <a href="../b-rtp/index.html" class="nav-link">B-RTP (WebRTC Core)</a>
+      <a href="../b-video/index.html" class="nav-link">B-Video (Display Path)</a>
+    </div>
+  </nav>
+
+  <main class="book-content">
+    <header class="book-header">
+      <div class="breadcrumb">
+        <a href="../b-book/index.html">B-Book</a> / <span>B-Audio</span>
+      </div>
+      <h1 class="page-title">B-Audio: PCM Output Stack</h1>
+      <p class="page-lead">The audio egress of the B-System: a five-call VirtIO-Sound-compatible driver
+      surface, host-backed on QEMU/POSIX builds, with PWM hardware target on Pi-class ports and a
+      bounded, telemetry-paced queue discipline.</p>
+    </header>
+
+    <article>
+
+      <section id="scope">
+        <h2>Scope</h2>
+        <p>
+          B-Audio specifies the PCM output path from application or synthesizer to audible samples: the
+          driver surface in <code>src/drivers/virtio/virtio.c</code> declared by
+          <code>include/device/virtio.h</code> (device id <code>VIRTIO_ID_SOUND 25</code>), the weak-stub
+          fallbacks that let every port link, the Control Panel semantics in <code>src/settings/sound.c</code>,
+          and the shipping consumers: the Cassette Hi-Fi deck (<code>src/apps/audio_player.c</code>), the
+          Orchestra pipeline sink (<code>virtiosndsink</code>, see <a href="../b-media/index.html">B-Media</a>),
+          the lilcu64 synthesizer pump (<a href="../b-sound/index.html">B-Sound</a>), and terminal/event
+          chimes (<code>src/apps/kagee.c</code>).
+        </p>
+        <p>
+          On non-UEFI targets the "device" is host-backed (SDL2 <code>QueueAudio</code>, wire format
+          <code>AUDIO_S16LSB</code>, 1024-frame period), which keeps the BTRON build matrix honest: the same
+          five calls run on QEMU, POSIX, and bare-metal alike. Audio is explicitly <em>optional</em>: driver
+          init prints whether PCM output is active and the system boots normally without it.
+        </p>
+      </section>
+
+      <!-- ═══════ Part 1 ═══════ -->
+      <section id="path">
+        <h2>Part 1 — Architecture &amp; Conceptual Model</h2>
+        <h3>1.1 Signal &amp; Control Path</h3>
+        <pre><code> producer (synth / deck / pipeline sink)
+   │  int16 interleaved PCM frames
+   ▼
+virtio_sound_write(samples, frames)          src/drivers/virtio/virtio.c
+   │  bytes = frames × channels × 2   (bound-checked to UINT32_MAX)
+   ▼
+device queue  ── SDL_QueueAudio (QEMU/POSIX host-backed)
+            └─ VirtIO-Sound / HDA or BCM2835 PWM (target hardware)
+   ▲
+   │  virtio_sound_get_queued_bytes()  — depth telemetry for pacing
+   │
+ Control Panel (settings/sound.c): master output, event chimes/bell,
+ driver select, sample rate, low-latency buffer size</code></pre>
+      </section>
+
+      <section id="lifecycle">
+        <h3>1.2 Device Lifecycle</h3>
+        <ol>
+          <li><strong>Probe</strong> — <code>virtio_driver_init_all()</code> attempts
+            <code>virtio_sound_open(44100, 2)</code> at boot; failure prints
+            <code>PCM output unavailable (audio is optional)</code> and the system continues.</li>
+          <li><strong>Reconfigure</strong> — a second <code>open</code> on a busy device closes the current
+            one first: open is total and idempotent-by-replacement, never a leak.</li>
+          <li><strong>Stream</strong> — repeated <code>write</code> calls queue PCM; each accepted call
+            returns the frame count written. Writes on a closed device are rejected, not buffered.</li>
+          <li><strong>Close</strong> — <code>close</code> clears the queue, releases the device, and drops
+            the audio subsystem; safe to call when already closed.</li>
+        </ol>
+      </section>
+
+      <section id="ports">
+        <h3>1.3 Port Behaviour Matrix</h3>
+        <table class="api-table">
+          <thead><tr><th>Port</th><th>Backend</th><th><code>open</code> result</th></tr></thead>
+          <tbody>
+            <tr><td>QEMU / VirtIO, POSIX desktop</td><td>SDL2 QueueAudio, <code>AUDIO_S16LSB</code>, period 1024</td><td>live device; rate/channels as requested</td></tr>
+            <tr><td>ARM bare-metal (Pi 400 / arm64)</td><td>BCM2835 PWM audio path (Control Panel radio)</td><td>live via PWM backend where wired</td></tr>
+            <tr><td>x86_64 UEFI SMP</td><td>VirtIO-Sound / Intel HDA labelled backend</td><td><code>VIO_ERR_INVAL</code> until the HDA register driver lands; callers fall back silently</td></tr>
+            <tr><td>Ports without <code>virtio.c</code></td><td>weak stubs in <code>src/demo/lilcu64_synth.c</code></td><td><code>−1</code> / <code>false</code> / <code>0</code> — link-compatible no-ops</td></tr>
+          </tbody>
+        </table>
+        <div class="callout">
+          <strong>Naming caution.</strong> In this repository the tokens <code>hda.qcow2</code> /
+          <code>hda.golden</code> at the tree root mean <em>hard disk A</em> (the Chokanji B-right/V volume
+          images), not Intel High Definition Audio. The only HDA reference in code is the Control Panel
+          driver label; there is no register-level HDA driver yet, and this book does not claim one.
+        </div>
+      </section>
+
+      <section id="backpressure">
+        <h3>1.4 Queue Depth &amp; Pacing</h3>
+        <p>
+          The driver surface is fire-and-forget at the call boundary (writes never block), so pacing is the
+          consumer's contract: poll <code>virtio_sound_get_queued_bytes()</code> and keep the queue near one
+          period (2–4 periods is the comfortable band on the host backend). This is the audio-side twin of
+          B-Core's counted-drop discipline: an unpaced writer does not corrupt the stream, it just grows the
+          latency, and telemetry makes that visible. The Control Panel's real-time target is a 128-sample
+          low-latency buffer (2.6 ms at 48 kHz); the DAW requirement in <code>doc/md/DAW.md</code> is a
+          round-trip of ≤ 5–8 ms with 44.1/48/96 kHz at 16/24/32-bit, direct (bypass) VirtIO-Sound access.
+        </p>
+      </section>
+
+      <!-- ═══════ Part 2 ═══════ -->
+      <section id="formats">
+        <h2>Part 2 — Data Structures, Types &amp; Enumerations</h2>
+        <pre><code>/* include/device/virtio.h */
+#define VIRTIO_ID_SOUND  25
+typedef int vio_status_t;
+#define VIO_OK          0
+#define VIO_ERR_INVAL  -1
+#define VIO_ERR_NOMEM  -2
+
+/* wire format, all ports: int16_t samples, little-endian signed 16-bit
+ * (AUDIO_S16LSB), interleaved stereo or mono, period size 1024 frames
+ * on the host backend; default open 44100 Hz × 2 channels.            */</code></pre>
+        <table class="api-table">
+          <thead><tr><th>Parameter</th><th>Valid range</th><th>Default</th><th>Note</th></tr></thead>
+          <tbody>
+            <tr><td><code>sample_rate</code></td><td>&gt; 0 Hz</td><td>44100</td><td>Panel advertises 48000 Hz / 16-bit stereo operation.</td></tr>
+            <tr><td><code>channels</code></td><td>1 … 2</td><td>2</td><td>0 or &gt; 2 → <code>VIO_ERR_INVAL</code>.</td></tr>
+            <tr><td><code>frames</code></td><td>1 … UINT32_MAX/(ch·2)</td><td>—</td><td>Overflow-checked before queueing.</td></tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section id="deck">
+        <h3>2.2 Deck &amp; Panel State (application contract)</h3>
+        <pre><code>/* src/apps/audio_player.c — the Cassette Hi-Fi deck */
+typedef enum { TAPE_TYPE_I_NORM, TAPE_TYPE_II_CRO2,
+               TAPE_TYPE_III_FECR, TAPE_TYPE_IV_METAL } CASSETTE_TAPE_TYPE;  /* 120 µs / 70 µs EQ */
+typedef enum { DOLBY_OFF, DOLBY_B, DOLBY_C } DOLBY_MODE;
+typedef enum { TAPE_STOP, TAPE_PLAY, TAPE_REV_PLAY, TAPE_FF,
+               TAPE_REW, TAPE_PAUSE, TAPE_REC } TAPE_STATE;
+
+typedef struct { TAPE_STATE state; CASSETTE_TAPE_TYPE tape_type;
+    DOLBY_MODE dolby_mode; BOOL hx_pro, power_on, tape_loaded, mpx_filter;
+    int source_idx;          /* 0 TAPE · 1 LINE · 2 CD · 3 TUNER */
+    int track_num, seconds_elapsed;
+    int vu_left, vu_right;   /* segmented meters 0..100          */
+    int vu_peak_l, vu_peak_r;         /* peak-hold               */
+    int reel_angle;                   /* 0..359 animation        */
+    int bias_fine;                    /* ±20 %                   */
+    int rec_level; }                  /* 0..10                   */
+    CassetteDeck;</code></pre>
+        <p>
+          The Control Panel (<code>src/settings/sound.c</code>) holds the system-side mirror: Master Audio
+          Output (with dB headroom), System Event Chimes &amp; Terminal Bell, driver radio
+          (VirtIO-Sound/HDA vs BCM2835 PWM), sample-rate selection, and the low-latency buffer switch — the
+          single place where audio policy is decided, then consumed through the five driver calls.
+        </p>
+      </section>
+
+      <!-- ═══════ Part 3 ═══════ -->
+      <section id="apiref">
+        <h2>Part 3 — API Reference (the five driver calls)</h2>
+
+        <h3 id="open">3.1 <code>virtio_sound_open</code></h3>
+        <div class="api-card">
+          <div class="api-header"><span class="api-name">virtio_sound_open</span><span class="ret-badge">int</span></div>
+          <p>Opens (or reconfigures) the PCM output device. A busy device is closed first, so repeated opens
+             never leak handles. The device starts unpaused on success.</p>
+          <div class="api-signature">int virtio_sound_open(uint32_t sample_rate, uint8_t channels);</div>
+          <table class="api-table">
+            <thead><tr><th>Name</th><th>Type</th><th>Dir</th><th>Description</th></tr></thead>
+            <tbody>
+              <tr><td><code>sample_rate</code></td><td><code>uint32_t</code></td><td>[in]</td><td>Hz; must be non-zero (44100 default, 48000 panel target).</td></tr>
+              <tr><td><code>channels</code></td><td><code>uint8_t</code></td><td>[in]</td><td>1 or 2; more than 2 is invalid.</td></tr>
+            </tbody>
+          </table>
+          <table class="api-table">
+            <thead><tr><th>Return</th><th>Condition</th></tr></thead>
+            <tbody>
+              <tr><td><code>VIO_OK</code></td><td>Device live; obtained channel count latched internally.</td></tr>
+              <tr><td><code>VIO_ERR_INVAL</code></td><td>Rate 0, channels 0 or &gt; 2, backend init failure, or UEFI target (no backend yet).</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h3 id="write">3.2 <code>virtio_sound_write</code></h3>
+        <div class="api-card">
+          <div class="api-header"><span class="api-name">virtio_sound_write</span><span class="ret-badge">int</span></div>
+          <p>Queues interleaved S16 PCM frames. Never blocks; never partially accepts: the whole request is
+             queued or the call fails. Overflow of the 32-bit queue byte field is checked before submission.</p>
+          <div class="api-signature">int virtio_sound_write(const int16_t *samples, size_t frames);</div>
+          <table class="api-table">
+            <thead><tr><th>Name</th><th>Type</th><th>Dir</th><th>Description</th></tr></thead>
+            <tbody>
+              <tr><td><code>samples</code></td><td><code>const int16_t*</code></td><td>[in]</td><td>frames × channels × 2 bytes of little-endian S16.</td></tr>
+              <tr><td><code>frames</code></td><td><code>size_t</code></td><td>[in]</td><td>Per-channel frame count; non-zero.</td></tr>
+            </tbody>
+          </table>
+          <table class="api-table">
+            <thead><tr><th>Return</th><th>Condition</th></tr></thead>
+            <tbody>
+              <tr><td><code>(int)frames</code></td><td>Queued successfully.</td></tr>
+              <tr><td><code>VIO_ERR_INVAL</code></td><td>Device closed, null buffer, zero frames, or byte overflow.</td></tr>
+            </tbody>
+          </table>
+          <h4>Postconditions</h4>
+          <p>Caller may immediately reuse its buffer (copy-in semantics); playback latency is bounded by queue
+             depth observed via <a href="#queued">virtio_sound_get_queued_bytes</a>.</p>
+        </div>
+
+        <h3 id="close">3.3 <code>virtio_sound_close</code></h3>
+        <div class="api-card">
+          <div class="api-header"><span class="api-name">virtio_sound_close</span><span class="ret-badge">void</span></div>
+          <p>Clears queued audio, closes the device, and releases the audio subsystem. Idempotent: safe on an
+             already-closed device.</p>
+          <div class="api-signature">void virtio_sound_close(void);</div>
+        </div>
+
+        <h3 id="ready">3.4 <code>virtio_sound_is_ready</code></h3>
+        <div class="api-card">
+          <div class="api-header"><span class="api-name">virtio_sound_is_ready</span><span class="ret-badge">bool</span></div>
+          <p>Non-destructive probe: exactly whether a write would reach a live device. Consumers render UI
+             ("speaker lit / muted") from this instead of speculating.</p>
+          <div class="api-signature">bool virtio_sound_is_ready(void);</div>
+        </div>
+
+        <h3 id="queued">3.5 <code>virtio_sound_get_queued_bytes</code></h3>
+        <div class="api-card">
+          <div class="api-header"><span class="api-name">virtio_sound_get_queued_bytes</span><span class="ret-badge">uint32_t</span></div>
+          <p>Current queue depth in bytes — the pacing telemetry that turns latency into a measured quantity.
+             Returns 0 when the device is closed.</p>
+          <div class="api-signature">uint32_t virtio_sound_get_queued_bytes(void);</div>
+          <table class="api-table">
+            <thead><tr><th>Derived quantity</th><th>Formula</th><th>Target</th></tr></thead>
+            <tbody>
+              <tr><td>queued frames</td><td>bytes / (channels × 2)</td><td>2–4 periods (~2048 frames)</td></tr>
+              <tr><td>queued latency</td><td>frames / sample_rate</td><td>≤ DAW bound 5–8 ms round-trip</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- ═══════ Part 4 ═══════ -->
+      <section id="examples">
+        <h2>Part 4 — Canonical Code Examples</h2>
+        <h3>4.1 A paced render loop (synth pump pattern)</h3>
+        <pre><code>if (virtio_sound_open(44100, 2) != VIO_OK) return;     /* audio optional   */
+
+int16_t block[2048];                                    /* 512 stereo frames */
+for (;;) {
+    /* keep ~2 periods queued: render only when the device is starving */
+    while (virtio_sound_get_queued_bytes() &lt; 2 * 512 * 2 * sizeof(int16_t)) {
+        lilcu64_synth_render_frames(block, 512);        /* fill interleaved */
+        if (virtio_sound_write(block, 512) &lt; 0) break;  /* device vanished  */
+    }
+    sleep_until_next_period();                          /* UI-plane budget  */
+}
+virtio_sound_close();</code></pre>
+        <h3>4.2 Pipeline sink (Orchestra)</h3>
+        <pre><code>/* the virtiosndsink element's chain() is exactly: */
+int n = virtio_sound_write((const int16_t *)buf-&gt;data,
+                           buf-&gt;size / (2 * channels));
+return (n == VIO_ERR_INVAL) ? -1 : 0;   /* counted refusal, never blocking */</code></pre>
+      </section>
+
+      <section id="consumers">
+        <h2>Consumers &amp; Settings Map</h2>
+        <table class="api-table">
+          <thead><tr><th>Consumer</th><th>Uses</th><th>Contract</th></tr></thead>
+          <tbody>
+            <tr><td>Cassette deck (<code>audio_player.c</code>)</td><td>open/write/close + deck state</td><td>sources TAPE/LINE/CD/TUNER; tape-type EQ; Dolby B/C; VU with peak-hold</td></tr>
+            <tr><td>Orchestra sink</td><td>write inside <code>chain()</code></td><td>runs on the IOD plane budget (B-Media)</td></tr>
+            <tr><td>lilcu64 synth</td><td><code>lilcu64_synth_pump_virtio()</code>; provides weak stubs</td><td>44.1 kHz stereo; see B-Sound</td></tr>
+            <tr><td>Kagee / terminal</td><td>event chimes, bell</td><td>gated by Control Panel checkbox</td></tr>
+            <tr><td>Control Panel (<code>settings/sound.c</code>)</td><td>policy only — never writes PCM</td><td>driver select, rate, buffer, master volume</td></tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section id="verified">
+        <h2>Verification Status (honest account)</h2>
+        <p>
+          B-Audio currently ships <strong>as C code without a companion Coq/OCaml model</strong>. There is no
+          <code>audio_*</code> entry in <code>verify/models/</code> and this book deliberately cites none.
+          Related verified material nearby: the audio <em>plane budgeting</em> is covered by the SMP/AMP and
+          InterCore proofs (<a href="../b-media/theorems/media_smp.html">media_smp</a>,
+          <a href="../b-core/theorems/media_intercore.html">media_intercore</a>), and the buffer/refcount and
+          queue laws a PCM stack needs are already specified in the NuStream pool and leaky-queue layer
+          (<a href="../b-rtp/theorems/media_rtp.html">media_rtp</a>). The planned AV-sync proof pair
+          (<code>media_avsync_*</code>, see <a href="../b-video/index.html">B-Video</a> and
+          <code>doc/md/VIDEO.md</code>) will bind the audio and video clocks; until then, treat audio
+          correctness claims as tested-code evidence, not theorem evidence.
+        </p>
+      </section>
+
+    </article>
+
+    <footer class="page-footer">
+      BTRON 3.20 · B-Audio: PCM Output Stack · Clean-room implementation · VirtIO-Sound compatible surface ·
+      Synrc / bitedits
+    </footer>
+  </main>
+
+</body>
+</html>

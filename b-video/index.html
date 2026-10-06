@@ -1,0 +1,370 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>B-Video – Display Path, Framebuffers &amp; the Video Playback Contract | B-Book</title>
+  <meta name="description" content="Developer specification for B-Video: the B-System display and picture path — VirtIO-GPU 2D resources, VESA framebuffer, GDEV video modes, unified image decoders, present/damage discipline, and the demux/decode/present video contract with its planned verification tract.">
+  <link rel="stylesheet" href="../b-book/b-book.css">
+</head>
+<body>
+
+  <nav class="book-global-nav" aria-label="Site navigation">
+    <div class="book-global-nav-container">
+      <a href="../index.html" class="book-global-logo"><img width="48" src="https://n2o.dev/img/synrc.svg" alt="Synrc Logo"></a>
+      <button class="book-nav-toggle" aria-label="Toggle navigation" aria-expanded="false" onclick="const links = this.nextElementSibling; const sidebar = document.querySelector('.book-sidebar'); const open = links.classList.toggle('open'); sidebar.classList.toggle('open', open); this.classList.toggle('open', open); this.setAttribute('aria-expanded', open);">
+        <span class="hamburger"></span>
+      </button>
+      <ul class="book-global-links">
+    <li><a href="../index.html">B-System</a></li>
+    <li><a href="../b-book/index.html">B-Book</a></li>
+    <li><a href="../b-core/index.html">B-Core</a></li>
+    <li><a href="index.html" class="active">B-Video</a></li>
+    <li><a href="../conformance.html">B-Spec</a></li>
+    <li><a href="../releases.html">Releases</a></li>
+    <li><a href="https://github.com/bitedits/btron">GitHub</a></li>
+      </ul>
+    </div>
+  </nav>
+
+  <nav class="book-sidebar">
+    <div class="sidebar-brand">
+      <div class="brand-title">B-Video <span class="badge">Rev 1.00</span></div>
+      <div class="brand-sub">Display &amp; Picture Path</div>
+    </div>
+    <div class="sidebar-nav">
+      <div class="nav-heading">Overview</div>
+      <a href="#scope" class="nav-link">Scope &amp; Display Path</a>
+
+      <div class="nav-heading">Part 1: Architecture</div>
+      <div class="nav-sublinks">
+        <a href="#present" class="nav-sublink">Resource → Host → Screen</a>
+        <a href="#frames" class="nav-sublink">Frame Lifecycle Contract</a>
+        <a href="#planes" class="nav-sublink">VPU vs CPU Plane Claims</a>
+        <a href="#capture" class="nav-sublink">Capture &amp; Image Intake</a>
+      </div>
+
+      <div class="nav-heading">Part 2: Data Structures</div>
+      <div class="nav-sublinks">
+        <a href="#gpustructs" class="nav-sublink">GPU / VESA / GDEV Types</a>
+        <a href="#videolaws" class="nav-sublink">Picture Records &amp; Laws</a>
+        <a href="#constants" class="nav-sublink">Mode &amp; Budget Constants</a>
+      </div>
+
+      <div class="nav-heading">Part 3: API Reference</div>
+      <div class="nav-sublinks">
+        <a href="#gpuapi" class="nav-sublink">VirtIO-GPU calls</a>
+        <a href="#vesaapi" class="nav-sublink">VESA calls</a>
+        <a href="#decodeapi" class="nav-sublink">Image decoders</a>
+      </div>
+
+      <div class="nav-heading">Part 4: Practice</div>
+      <div class="nav-sublinks">
+        <a href="#examples" class="nav-sublink">Canonical Examples</a>
+        <a href="#verified" class="nav-sublink">Verification Status &amp; Roadmap</a>
+      </div>
+
+      <div class="nav-heading">Companion Books</div>
+      <a href="../b-media/index.html" class="nav-link">B-Media (Pipes &amp; Budgets)</a>
+      <a href="../b-rtp/index.html" class="nav-link">B-RTP (WebRTC Core)</a>
+      <a href="../b-audio/index.html" class="nav-link">B-Audio (PCM Stack)</a>
+      <a href="../b-core/index.html" class="nav-link">B-Core (InterCore Nexus)</a>
+      <a href="../b-sound/index.html" class="nav-link">B-Sound (lilcu64 Synth)</a>
+    </div>
+  </nav>
+
+  <main class="book-content">
+    <header class="book-header">
+      <div class="breadcrumb">
+        <a href="../b-book/index.html">B-Book</a> / <span>B-Video</span>
+      </div>
+      <h1 class="page-title">B-Video: Display Path &amp; Video Playback Contract</h1>
+      <p class="page-lead">From a painted pixel to a presented picture: the VirtIO-GPU / VESA / GDEV display
+      stack, the unified image intake, and the demux–decode–present contract that keeps video on the proven
+      media plane without ever touching a bitstream theory.</p>
+    </header>
+
+    <article>
+
+      <section id="scope">
+        <h2>Scope</h2>
+        <p>
+          B-Video specifies two things that share one word. First, the <strong>shipped display path</strong>:
+          Display-Primitives output going through VirtIO-GPU 2D resources
+          (<code>src/drivers/virtio/virtio.c</code>, <code>include/device/virtio.h</code>,
+          <code>include/drivers/virtio_gpu.h</code>), the x86 VESA framebuffer
+          (<code>include/drivers/vesa.h</code>, <code>src/drivers/vesa/</code>), the BTRON GDEV video-mode
+          tables (<code>include/device/videomode.h</code>, <code>screen.h</code>), NEON fast blit
+          (<code>include/btron/fast_blit.h</code>), and the clean-room image decoders
+          (<code>src/graphics/image_decode.c</code>). Second, the <strong>video playback architecture</strong>
+          defined by <code>doc/md/VIDEO.md</code>: a frame is a NuStream buffer with a clock — a picture, a
+          PTS, a slot from a static pool — and never a second bus.
+        </p>
+        <p>
+          The substrate is already proven: damage and blit live in
+          <a href="../b-system/theorems/ui_compose.html">ui_compose</a>, the VideoCore mailbox and framebuffer
+          pitch in <a href="../b-system/theorems/drivers.html">drivers</a>, pool/refcount and queue laws in
+          <a href="../b-rtp/theorems/media_rtp.html">media_rtp</a>, claim/publish/drain in
+          <a href="../b-media/theorems/media_smp.html">media_smp</a>. What video adds is only the frame
+          algebra on top — and its five model pairs are, as of this revision, <em>specified but not yet
+          proven</em>; §Verification says exactly which.
+        </p>
+      </section>
+
+      <!-- ═══════ Part 1 ═══════ -->
+      <section id="present">
+        <h2>Part 1 — Architecture &amp; Conceptual Model</h2>
+        <h3>1.1 Resource → Host → Screen (the present path)</h3>
+        <pre><code>DP surface (ARGB32)
+   │  vio_gpu_create_resource_2d(dev, id, FMT_B8G8R8A8_UNORM, w, h)
+   ▼
+guest resource ── vio_gpu_transfer_to_host_2d(offset) ──► host copy
+   │
+   ├─ vio_gpu_resource_flush(x,y,w,h)      damage rect → scanout
+   ├─ vio_gpu_set_scanout(scanout,id,w,h)  modeset once at init
+   └─ vio_gpu_sdl2_blit_frame()            host-backed ports
+VESA ports: direct framebuffer writes (vesa_fill_rect / draw_window), 0x105-style init.
+Pi bare-metal: BCM2711 VC4/HVS composition — GPU.txt/RENDER.txt are authoritative.</code></pre>
+        <p>
+          Presentation is damage-driven, and that discipline is already a theorem: outside the claimed damage
+          rectangle the front buffer is unchanged (<code>presenter_outside_preserves_front</code> family in
+          the compositor proof). The stats half of <code>async_rt.h</code> separates
+          <code>blit_us / present_us / composite_us</code> so the UI plane can account for the pixel work as
+          one budget charge, never three invisible ones.
+        </p>
+        <div class="callout">
+          <strong>Zero-copy present (R3).</strong> A YUV overlay plane that accepts NV12 makes the present a
+          pointer swap; only RGB paths pay a blit, and that blit is charged to the UI plane budget. Video must
+          never resize the surface: swap remains an involution on surface dimensions.
+        </div>
+      </section>
+
+      <section id="frames">
+        <h3>1.2 Frame Lifecycle: Demux → Decode → Present</h3>
+        <pre><code>container (tag: AVI | MP4 | MPEG_PS | ASF)
+   │  demux cursor: one step yields ≤ 1 packet or a stuttering refusal
+   ▼
+bounded packet queue          queued + dropped + decoded = demuxed   (V2)
+   │  access unit in  →  E_OK | E_AGAIN | E_DEC ; no partial picture presentable (D2)
+   ▼
+picture slot pool (refcounted)  ref_cap bound; last release recycles  (D1)
+   │  PTS monotone; late picture dropped, never reordered             (V3)
+   ▼
+present clock ± slip budget     PTS ≤ clock + slip, else wait or counted drop (R1)</code></pre>
+        <ul>
+          <li><strong>Containers are tags, not parsers.</strong> <code>mdat</code> offsets, AVI indexes and
+            MPEG-PS pack headers are opaque spans; the only law is <code>cursor' = cursor + consumed</code>.</li>
+          <li><strong>One in-flight decode</strong> (V5): a second access unit is refused or queued — never a
+            second implicit task.</li>
+          <li><strong>Seek is a segment rebasing</strong> (V6): after a seek the pool is empty and the next
+            PTS is the new base — the same <code>start</code>-versus-<code>cur</code> algebra as the RTP
+            theory.</li>
+          <li><strong>Bitstreams are out of scope by design</strong>: no Coq model of CABAC, VC-1 bitplanes,
+            or MPEG-2 IDCT. The theory sees access-unit receipts only.</li>
+        </ul>
+      </section>
+
+      <section id="planes">
+        <h3>1.3 VPU vs CPU Plane Claims</h3>
+        <p>
+          A decode is a budget claim, and the codec determines which lane may be claimed (D3/D4): H.264 may
+          charge the VPU lane on Pi-class hardware; VC-1 and MPEG-2 are software-plane residents (720p ceiling),
+          and a VPU claim for them is a legal refusal, not a fallback. Both paths end in the same picture
+          record — output stride and crop in range, pitch ≥ width × bpp (the lifted
+          <code>vc4_fb_pitch_ge_width</code> law). On the transport side, a stalled video plane cannot raise
+          <code>held</code> on the audio ring, nor the converse (P8/S3): video overruns drop video frames and
+          never steal the audio tail. Audio is the master clock; video slip is
+          <code>pts_video − pts_audio</code>, bounded by <code>slip_cap</code>, resolved by dropping or
+          repeating pictures — audio is never stretched to chase video (S1/S2).
+        </p>
+      </section>
+
+      <section id="capture">
+        <h3>1.4 Capture &amp; Image Intake</h3>
+        <p>
+          Intake has one shape: files and streams become RGBA8 buffers or NuStream pictures. The clean-room
+          decoders (<code>decode_image_rgba</code> family) turn PNG/GIF/JPEG into caller-owned RGBA pixel
+          arrays; frame-grab tooling (<code>src/tools/capture_*.c</code>) exercises the same flush path the
+          compositor uses; the WebRTC ingest path (per-peer decodebin → I420 caps → jitter window) is
+          specified in <a href="../b-rtp/index.html">B-RTP</a>, whose packetization laws (P1–P7) are the
+          network-side twin of the frame algebra above.
+        </p>
+      </section>
+
+      <!-- ═══════ Part 2 ═══════ -->
+      <section id="gpustructs">
+        <h2>Part 2 — Data Structures, Types &amp; Enumerations</h2>
+        <pre><code>/* include/device/virtio.h — device ids and GPU state */
+#define VIRTIO_ID_SOUND 25    /* audio egress (B-Audio) */
+typedef int vio_status_t;     /* VIO_OK 0 · VIO_ERR_INVAL -1 · VIO_ERR_NOMEM -2 */
+struct vio_gpu_device { …
+    uint32_t active_scanout;
+    uint32_t current_resource_id;
+    struct vio_gpu_sdl2_blitter blitter; };
+
+/* include/drivers/vesa.h — x86 mode block */
+struct { uint16_t width, height, bpp; uint32_t *framebuffer; uint8_t is_active; };
+
+/* include/device/videomode.h — GDEV tables */
+VideoHsize / VideoVsize / VideoPixBits / VideoCmapEnt … MAX_VIDEO_MODE
+
+/* include/btron/image_decode.h */
+int decode_image_rgba(const char *filepath, UB **out_pixels, H *out_w, H *out_h);
+int decode_png_rgba (…); int decode_gif_rgba(…); int decode_jpeg_rgba(…);</code></pre>
+        <h3>2.2 Picture Records &amp; Law Identifiers (video contract)</h3>
+        <table class="api-table">
+          <thead><tr><th>Law</th><th>Statement (operational)</th><th>Home (planned)</th></tr></thead>
+          <tbody>
+            <tr><td>V1</td><td>Demux step yields ≤ 1 packet or a refusal that stutters.</td><td><code>media_video_*</code></td></tr>
+            <tr><td>V2</td><td>queued + dropped + decoded = demuxed.</td><td><code>media_video_*</code></td></tr>
+            <tr><td>V3</td><td>Monotone output PTS; late pictures drop, never reorder.</td><td><code>media_video_*</code></td></tr>
+            <tr><td>V4</td><td>Codec tag never changes the budget law; the plane charged is recorded.</td><td><code>media_video_*</code></td></tr>
+            <tr><td>V5/V6</td><td>One in-flight decode; seek rebases the segment and empties the pool.</td><td><code>media_video_*</code></td></tr>
+            <tr><td>D1–D4</td><td>Reference budget; E_OK/E_AGAIN/E_DEC receipts; VPU-vs-CPU claim legality; stride/crop range.</td><td><code>media_vdec_*</code></td></tr>
+            <tr><td>P1–P8</td><td>Frame = 1..N same-TS packets; diff16 holes inside window are loss; depacketizer conservation; picture-jitter watermarks 15%/90%; bounded NACK/RTX, idempotent double delivery; payload tag changes nothing; RTCP binds RTP↔NTP and lip-sync is a pure difference; plane isolation of held/watermarks.</td><td><code>media_vrtp_*</code></td></tr>
+            <tr><td>R1–R4</td><td>PTS ≤ clock + slip else counted drop; damage-rect preservation; NV12 pointer swap; surface-dimension involution.</td><td><code>media_vpresent_*</code></td></tr>
+            <tr><td>S1–S4</td><td>Audio master clock; repeat/drop cursor algebra; budgets add and video never steals the audio tail; teardown returns pool to <code>pool0</code>.</td><td><code>media_avsync_*</code></td></tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section id="constants">
+        <h3>2.3 Mode &amp; Budget Constants</h3>
+        <table class="api-table">
+          <thead><tr><th>Item</th><th>Value</th><th>Source</th></tr></thead>
+          <tbody>
+            <tr><td>Default VirtIO-GPU display</td><td>1024×768, B8G8R8A8_UNORM, res id 1, scanout 0</td><td><code>virtio.c</code> init</td></tr>
+            <tr><td>MCU canvas / grid</td><td>1920×1080, 16 slots (2×2 or 4×4)</td><td>B-RTP / oracle</td></tr>
+            <tr><td>Shipped decode targets</td><td>1080p60 H.264 on VPU; 720p software ceiling VC-1/MPEG-2</td><td>VIDEO.md</td></tr>
+            <tr><td>Period ceilings</td><td>UI 8333 µs budget 4000 µs; 30 fps = 33 333 µs</td><td>async_rt.h</td></tr>
+            <tr><td>Packet pool (NuStream)</td><td>24 slots fixed</td><td>media_rtp model</td></tr>
+            <tr><td>Container tags</td><td>AVI · MP4 · MPEG_PS · ASF</td><td>VIDEO.md</td></tr>
+          </tbody>
+        </table>
+      </section>
+
+      <!-- ═══════ Part 3 ═══════ -->
+      <section id="gpuapi">
+        <h2>Part 3 — API Reference</h2>
+
+        <h3>3.1 VirtIO-GPU (2D present surface)</h3>
+        <div class="api-card">
+          <div class="api-header"><span class="api-name">vio_gpu_*</span><span class="ret-badge">vio_status_t</span></div>
+          <p>The five-call resource lifecycle: init, mint a 2D resource, copy guest pixels up, flush a damage
+             rectangle to the scanout, and (host-backed ports) blit a whole frame.</p>
+          <div class="api-signature">vio_status_t vio_gpu_init(struct vio_gpu_device **out_dev);
+vio_status_t vio_gpu_create_resource_2d(dev, uint32_t resource_id, uint32_t format,
+                                        uint32_t width, uint32_t height);
+vio_status_t vio_gpu_transfer_to_host_2d(dev, resource_id, x, y, w, h, uint64_t offset);
+vio_status_t vio_gpu_resource_flush(dev, resource_id, x, y, w, h);
+vio_status_t vio_gpu_set_scanout(dev, scanout_id, resource_id, width, height);
+vio_status_t vio_gpu_sdl2_blit_frame(dev, const void *src_buf, size_t buf_size);</div>
+          <table class="api-table">
+            <thead><tr><th>Call</th><th>Precondition</th><th>Postcondition</th></tr></thead>
+            <tbody>
+              <tr><td><code>create_resource_2d</code></td><td>id unused; w,h ≤ max mode.</td><td>Resource exists in NULL state; no pixels valid yet.</td></tr>
+              <tr><td><code>transfer_to_host_2d</code></td><td>Resource live; rect inside extent.</td><td>Host copy of the rect; resource UNCOMMITTED.</td></tr>
+              <tr><td><code>resource_flush</code></td><td>Transfer completed for that rect.</td><td>Scanout pixels inside rect updated; outside untouched (damage law).</td></tr>
+              <tr><td><code>set_scanout</code></td><td>Resource sized to scanout.</td><td>Modeset: the resource is the display's source for future flushes.</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h3 id="vesaapi">3.2 VESA (x86 / PC-98 era ports)</h3>
+        <div class="api-card">
+          <div class="api-header"><span class="api-name">vesa_*</span><span class="ret-badge">int / void</span></div>
+          <p>Direct-linear-framebuffer drawing used before/behind the GPU stack: mode set, primitives, text,
+             window chrome, and the desktop stamp used by early boot.</p>
+          <div class="api-signature">int  vesa_init(uint16_t width, uint16_t height, uint16_t bpp);   /* 0 = ok   */
+void vesa_probe_log(void);
+void vesa_restore_text(void);
+void vesa_put_pixel(int x, int y, uint32_t color);
+void vesa_fill_rect(int x, int y, int w, int h, uint32_t color);
+void vesa_draw_rect(…), vesa_draw_bevel_rect(…, int raised);
+void vesa_draw_char(…), vesa_draw_string(…, uint32_t fg, uint32_t bg);
+void vesa_draw_window(int x, int y, int w, int h, const char *title, int focused);
+void vesa_render_desktop(int num_cores);</div>
+          <table class="api-table">
+            <thead><tr><th>Result</th><th>Condition</th></tr></thead>
+            <tbody>
+              <tr><td><code>vesa_init → 0</code></td><td>LFB active; <code>is_active</code> latched; geometry exported.</td></tr>
+              <tr><td><code>vesa_init → −1</code></td><td>Mode unsupported; text mode left in place, restore path available.</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h3 id="decodeapi">3.3 Image decoders</h3>
+        <div class="api-card">
+          <div class="api-header"><span class="api-name">decode_image_rgba</span><span class="ret-badge">int</span></div>
+          <p>Format-sniffing entry (PNG/GIF/JPEG) into a freshly allocated RGBA8 buffer. Per-format variants
+             skip sniffing. Ownership is explicit: the caller frees <code>*out_pixels</code>.</p>
+          <div class="api-signature">int decode_image_rgba(const char *filepath, UB **out_pixels, H *out_w, H *out_h);
+int decode_png_rgba  (…);  int decode_gif_rgba(…);  int decode_jpeg_rgba(…);</div>
+          <table class="api-table">
+            <thead><tr><th>Return</th><th>Meaning</th></tr></thead>
+            <tbody>
+              <tr><td><code>0</code></td><td>Decoded; <code>*out_pixels</code> is <code>w×h×4</code> bytes, top-left origin.</td></tr>
+              <tr><td><code>&lt; 0</code></td><td>Unreadable/unsupported; <code>*out_pixels</code> untouched (no half-allocated buffer).</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- ═══════ Part 4 ═══════ -->
+      <section id="examples">
+        <h2>Part 4 — Canonical Code Examples</h2>
+        <h3>4.1 Boot-time display bring-up (as shipped)</h3>
+        <pre><code>struct vio_gpu_device *dev;
+vio_gpu_init(&amp;dev);
+vio_gpu_create_resource_2d(dev, 1, VIRTIO_GPU_FORMAT_B8G8R8A8_UNORM, 1024, 768);
+vio_gpu_set_scanout(dev, 0, 1, 1024, 768);
+/* per frame, UI plane: */
+vio_gpu_transfer_to_host_2d(dev, 1, 0, 0, 1024, 768, 0);
+vio_gpu_resource_flush(dev, 1, dirty_x, dirty_y, dirty_w, dirty_h);</code></pre>
+        <h3>4.2 Intake: file to surface</h3>
+        <pre><code>UB *px; H w, h;
+if (decode_image_rgba("logo.png", &amp;px, &amp;w, &amp;h) == 0) {
+    blit_rgba_to_argb32(surface, px, w, h);   /* fast_blit NEON path */
+    free(px);                                  /* caller owns it    */
+}</code></pre>
+        <h3>4.3 Present-clock discipline (contract sketch)</h3>
+        <pre><code>picture_t *p = decode_receipt();               /* E_OK only          */
+if (!p) return;                                /* E_AGAIN / E_DEC    */
+if (pts(p) &gt; present_clock() + SLIP_US) { slot_hold(p); return; }
+if (pts(p) &lt; present_clock() - SLIP_US) { slot_release(p); counted_drop++; return; }
+damage = intersect(p->rect, surface_rect);     /* R2: outside intact */
+slot_release(p);                               /* last ref recycles  */</code></pre>
+      </section>
+
+      <section id="verified">
+        <h2>Verification Status &amp; Roadmap (honest account)</h2>
+        <p><strong>Already proven, reusable today:</strong></p>
+        <ul>
+          <li>Compositor damage &amp; blit algebra — <a href="../b-system/theorems/ui_compose.html">ui_compose_properties.v</a>.</li>
+          <li>VideoCore mailbox + <code>vc4_fb_pitch_ge_width</code> — <a href="../b-system/theorems/drivers.html">drivers_properties.v</a>.</li>
+          <li>Static pool/refcount/queue/PTS laws video inherits — <a href="../b-rtp/theorems/media_rtp.html">media_rtp_properties.v</a>.</li>
+          <li>Claim/publish/drain, non-blocking rcv, single drain owner — <a href="../b-media/theorems/media_smp.html">media_smp_properties.v</a>.</li>
+          <li>GL surface behaviour — <a href="../b-system/theorems/opengl.html">opengl_properties.v</a>.</li>
+        </ul>
+        <p>
+          <strong>Specified, not yet proven:</strong> the five video model pairs of <code>doc/md/VIDEO.md</code>
+          — <code>media_video</code>, <code>media_vrtp</code>, <code>media_vdec</code>,
+          <code>media_vpresent</code>, <code>media_avsync</code> (<code>.ml</code> oracle + <code>.v</code>
+          proof each). None of these files exist in <code>verify/models/</code> at this revision, and no law
+          in §2.2 above should be cited as Coq-closed until its pair lands. The planned oracles follow the
+          InterCore pattern: instantiate the shipped numbers (1080p60 H.264 on VPU, 720p software ceiling,
+          jitter depth, slip cap) and exhaustively search the small interleavings. When each pair is
+          verified, its dossier belongs on this shelf at <code>b-video/theorems/</code>.
+        </p>
+      </section>
+
+    </article>
+
+    <footer class="page-footer">
+      BTRON 3.20 · B-Video: Display Path &amp; Video Playback Contract · Clean-room implementation ·
+      Synrc / bitedits
+    </footer>
+  </main>
+
+</body>
+</html>

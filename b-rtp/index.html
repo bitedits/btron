@@ -1,0 +1,495 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>B-RTP – WebRTC Core: MCU/SFU Compositor, Deterministic Sync &amp; NuStream | B-Book</title>
+  <meta name="description" content="Developer specification for B-RTP: the WebRTC multipoint core of the B-System — SRTP ingest, grid compositor MCU, leaky temporal queues, absolute drop policy, timestamp-dilation correction, isochronous interpolation, stdio JSON signalling, and the NuStream zero-allocation static pipeline model.">
+  <link rel="stylesheet" href="../b-book/b-book.css">
+</head>
+<body>
+
+  <nav class="book-global-nav" aria-label="Site navigation">
+    <div class="book-global-nav-container">
+      <a href="../index.html" class="book-global-logo"><img width="48" src="https://n2o.dev/img/synrc.svg" alt="Synrc Logo"></a>
+      <button class="book-nav-toggle" aria-label="Toggle navigation" aria-expanded="false" onclick="const links = this.nextElementSibling; const sidebar = document.querySelector('.book-sidebar'); const open = links.classList.toggle('open'); sidebar.classList.toggle('open', open); this.classList.toggle('open', open); this.setAttribute('aria-expanded', open);">
+        <span class="hamburger"></span>
+      </button>
+      <ul class="book-global-links">
+    <li><a href="../index.html">B-System</a></li>
+    <li><a href="../b-book/index.html">B-Book</a></li>
+    <li><a href="../b-core/index.html">B-Core</a></li>
+    <li><a href="index.html" class="active">B-RTP</a></li>
+    <li><a href="../conformance.html">B-Spec</a></li>
+    <li><a href="../releases.html">Releases</a></li>
+    <li><a href="https://github.com/bitedits/btron">GitHub</a></li>
+      </ul>
+    </div>
+  </nav>
+
+  <nav class="book-sidebar">
+    <div class="sidebar-brand">
+      <div class="brand-title">B-RTP <span class="badge">Rev 1.00</span></div>
+      <div class="brand-sub">WebRTC Core · MCU/SFU</div>
+    </div>
+    <div class="sidebar-nav">
+      <div class="nav-heading">Overview</div>
+      <a href="#scope" class="nav-link">Scope &amp; Continuum</a>
+
+      <div class="nav-heading">Part 1: Architecture</div>
+      <div class="nav-sublinks">
+        <a href="#topology" class="nav-sublink">MCU Pipeline Topology</a>
+        <a href="#lifecycle" class="nav-sublink">Peer Join / Teardown</a>
+        <a href="#signalling" class="nav-sublink">stdio JSON Signalling</a>
+        <a href="#sync" class="nav-sublink">Leaky Queues &amp; Drop Policy</a>
+        <a href="#timestamps" class="nav-sublink">Dilation &amp; Interpolation</a>
+        <a href="#nustream" class="nav-sublink">NuStream Determinism</a>
+      </div>
+
+      <div class="nav-heading">Part 2: Data Structures</div>
+      <div class="nav-sublinks">
+        <a href="#mcustructs" class="nav-sublink">PeerInfo / RecorderState</a>
+        <a href="#rtobjects" class="nav-sublink">NuStream rt_* Objects</a>
+        <a href="#constants" class="nav-sublink">Latency &amp; Capacity Constants</a>
+      </div>
+
+      <div class="nav-heading">Part 3: API Reference</div>
+      <div class="nav-sublinks">
+        <a href="#setup_peer" class="nav-sublink">setup_peer / cleanup_peer</a>
+        <a href="#signaling_api" class="nav-sublink">Signalling handlers</a>
+        <a href="#rt_api" class="nav-sublink">NuStream rt_* API</a>
+      </div>
+
+      <div class="nav-heading">Part 4: Practice</div>
+      <div class="nav-sublinks">
+        <a href="#examples" class="nav-sublink">Canonical Examples</a>
+        <a href="#verified" class="nav-sublink">Verification Cross-Reference</a>
+      </div>
+
+      <div class="nav-heading">Companion Books</div>
+      <a href="../b-core/index.html" class="nav-link">B-Core (InterCore Nexus)</a>
+      <a href="../b-media/index.html" class="nav-link">B-Media (Pipes &amp; Budgets)</a>
+      <a href="../b-audio/index.html" class="nav-link">B-Audio (PCM Stack)</a>
+      <a href="../b-video/index.html" class="nav-link">B-Video (Display Path)</a>
+      <a href="../b-sound/index.html" class="nav-link">B-Sound (lilcu64 Synth)</a>
+    </div>
+  </nav>
+
+  <main class="book-content">
+    <header class="book-header">
+      <div class="breadcrumb">
+        <a href="../b-book/index.html">B-Book</a> / <span>B-RTP</span>
+      </div>
+      <h1 class="page-title">B-RTP: WebRTC Core, MCU/SFU</h1>
+      <p class="page-lead">The multipoint real-time media plane: SRTP ingest per peer, a 16-slot grid
+      compositor, deterministic temporal queues, and the NuStream zero-allocation pipeline model that lands
+      this discipline on the verified <a href="../b-core/index.html">B-Core</a> transport.</p>
+    </header>
+
+    <article>
+
+      <section id="scope">
+        <h2>Scope &amp; the Determinism Continuum</h2>
+        <p>
+          B-RTP specifies three layers of one continuum, unified in
+          <code>doc/md/GST-SYNC-RTP.md</code>: the production <strong>WebRTC MCU compositor</strong>
+          (ingest → mix → broadcast + record), the <strong>deterministic synchronization discipline</strong>
+          (thread-isolated leaky queues, absolute temporal drop, timestamp monotonicity), and
+          <strong>NuStream</strong>, the same pipeline philosophy stripped to a hard real-time,
+          zero-allocation C99 object model for RTOS deployment — the intended resident media shape on the
+          B-System µITRON / AMP / InterCore substrate.
+        </p>
+        <p>
+          In-tree realization: <code>src/nus/nus_gst.c</code> — the self-contained signaling peer process
+          (Erlang <code>rtp_broker</code>-supervised, newline-delimited JSON over stdio) driving
+          <code>webrtcbin</code> per participant; and the oracle/proof pair
+          <code>verify/models/media_rtp_model.ml</code> ↔ <code>media_rtp_properties.v</code> which
+          specifies the media-plane laws (pools, leaky queues, dilation, budgets, lifecycle, grid geometry,
+          tier gating, RTP sequence arithmetic) independent of any host library.
+        </p>
+        <p>
+          MCU vs SFU: the shipped topology is an <strong>MCU</strong> — mixing is server-side (video grid +
+          additive audio mix) and every participant receives one composite. The SFU posture (forwarding
+          per-peer streams without decode) is a downstream-branch choice: the tee points after parse and
+          before pay preserve PTS/DTS per stream, so per-peer passthrough branches can be added without
+          touching the ingest path.
+        </p>
+      </section>
+
+      <!-- ═══════ Part 1 ═══════ -->
+      <section id="topology">
+        <h2>Part 1 — Architecture &amp; Conceptual Model</h2>
+        <h3>1.1 MCU Pipeline Topology</h3>
+        <pre><code>Peer ⇄ webrtcbin (SRTP/SRTCP, 50 ms budget)
+        │
+   ┌────┴──── Ingest (per peer) ────────┐
+   │ decodebin → videoconvert →        │
+   │ videoscale → videorate →          │   isochronous feed
+   │ capsfilter (I420 30/1) →          │
+   │ v_jitter (leaky 500 ms) ──────────┼──► compositor "mix" (grid 2×2 of 16)
+   │ a_convert → a_resample →          │        │
+   │ a_jitter (leaky 250 ms) ──────────┼──► audiomixer "amix"
+   └───────────────────────────────────┘        │
+                            vtee / atee ◄── tees after h264parse, before rtp pay
+                              │
+             ┌────────────────┼────────────────┐
+             ▼                ▼                ▼
+        per-peer rtp sink   HLS / fMP4      crash-resilient disk branch
+        (leaky 1 s queues)  (30 s leaky      (fragment-duration=1000,
+                            storage queues)   streamable=true)</code></pre>
+        <p>Three simultaneous roles: <strong>upstream ingest</strong> (independent <code>webrtcbin</code> +
+        <code>decodebin</code> chains per peer), <strong>mixing/compositing</strong> (spatial grid 1920×1080,
+        additive audio), and <strong>downstream broadcast + recording</strong> (re-encode to every participant
+        while writing HLS or fragmented MP4).</p>
+      </section>
+
+      <section id="lifecycle">
+        <h3>1.2 Peer Join &amp; Ordered Teardown</h3>
+        <p><strong>Join (<code>setup_peer</code>) — six ordered steps:</strong></p>
+        <ol>
+          <li>Allocate the first free grid slot (0…15).</li>
+          <li>Create <code>webrtcbin</code> with the 50 ms latency budget.</li>
+          <li>Create leaky broadcast queues (<code>leaky=2</code>, <code>max-size-time=1 s</code>).</li>
+          <li>Link <code>vtee → v_queue → webrtcbin.sink_0</code> and the audio counterpart.</li>
+          <li><code>gst_element_sync_state_with_parent</code>.</li>
+          <li>Asynchronous SDP offer generation.</li>
+        </ol>
+        <p><strong>Departure (<code>cleanup_peer</code>) — six-stage reverse-conserving release:</strong>
+        unlink queues → release compositor/audiomixer pads → remove decode chains → free webrtcbin → free
+        grid slot. The oracle checks that join and leave are exact resource inverses
+        (<code>join_resources</code> vs <code>leave_releases</code>): a departure always restores the pool
+        and slot table, which is what makes long sessions leak-free by construction.</p>
+        <p>Decoded-pad routing places video in its quadrant:</p>
+        <pre><code>gint w = WIDTH/2, h = HEIGHT/2;
+gint x = (idx % 2) * w, y = (idx / 2) * h;
+g_object_set(comp_pad, "xpos", x, "ypos", y, "width", w, "height", h,
+             "zorder", (guint)(idx + 10), "sizing-policy", 1, NULL);</code></pre>
+      </section>
+
+      <section id="signalling">
+        <h3>1.3 Signalling Protocol (stdio JSON)</h3>
+        <table class="api-table">
+          <thead><tr><th>Direction</th><th>Type</th><th>Effect</th></tr></thead>
+          <tbody>
+            <tr><td>In</td><td><code>peer_joined</code></td><td><code>setup_peer</code> (six steps)</td></tr>
+            <tr><td>In</td><td><code>sdp_answer</code></td><td>set remote description</td></tr>
+            <tr><td>In</td><td><code>ice_candidate</code></td><td>add ICE candidate (bundled handling in <code>add_remote_ice_candidate_impl</code>)</td></tr>
+            <tr><td>In</td><td><code>peer_left</code></td><td>six-stage cleanup</td></tr>
+            <tr><td>In</td><td><code>exit</code></td><td>EOS → finalize recording → graceful shutdown watchdog</td></tr>
+            <tr><td>Out</td><td><code>sdp_offer</code></td><td>forward to browser</td></tr>
+            <tr><td>Out</td><td><code>ice_candidate</code></td><td>forward to browser</td></tr>
+            <tr><td>Out</td><td><code>recording_started</code></td><td>pipeline reached PLAYING</td></tr>
+          </tbody>
+        </table>
+        <p>The media process never talks to the broker except through this line protocol; supervisory
+        liveness is the Erlang <code>gen_server</code>'s job (<code>rtp_broker</code>).</p>
+      </section>
+
+      <section id="sync">
+        <h3>1.4 Temporal Queuing &amp; the Absolute Drop Policy</h3>
+        <p>
+          Buffer-count and byte limits are semantically poor for variable-size video; the discipline is
+          <strong>pure temporal bounds</strong>:
+        </p>
+        <pre><code>max-size-time    = 300000000   /* 300 ms window   */
+max-size-buffers = 0
+max-size-bytes   = 0
+leaky            = downstream   /* jettison the oldest, instantly */</code></pre>
+        <ul>
+          <li>Older frames are dropped the instant the window is exceeded — trading recording fidelity for
+            live continuity is non-negotiable.</li>
+          <li>Queues are asynchronous thread boundaries; they are injected aggressively before encoders,
+            sinks, and test sources, and I/O-bound sinks run <code>async=false sync=false</code>. A blocking
+            <code>filesink</code> can therefore never stall the compositor or bend the master clock.</li>
+          <li>Micro-queues on generators (<code>videotestsrc</code> = 1 buffer, <code>audiotestsrc</code> = 5)
+            give decoupling without semantic delay.</li>
+          <li>Timestamp regression at a queue push is <em>refused</em>, not dropped — the ascending PTS
+            invariant of the queue is part of the contract, checked in the oracle's
+            <code>check_q</code>.</li>
+        </ul>
+      </section>
+
+      <section id="timestamps">
+        <h3>1.5 Timestamp Monotonicity: Dilation &amp; Interpolation</h3>
+        <p>
+          <strong>Dilation</strong> ("slow motion") happens when a CPU-bound compositor cannot sustain the
+          declared framerate while downstream still stamps theoretical times. The remedy is capacity
+          matching: request the framerate the hardware can guarantee (30 → 15 fps: period 33.3 ms → 66.6 ms)
+          so stamps equal wall-clock time; the oracle models this as
+          <code>corrected_stamp capacity i = i * capacity</code> with
+          <code>dilation_ratio = capacity / declared</code>.
+        </p>
+        <p>
+          <strong>Isochronous interpolation:</strong> WebRTC senders throttle; the compositor demands a
+          constant feed. <code>videorate</code> plus a strict capsfilter immediately post-decode duplicates
+          frames (<code>interpolate src_pts dst_period</code>) so the grid never starves, without adding
+          latency. The proofs: <code>accum_is_monotone</code>, <code>dilate_preserves_monotone</code>,
+          <code>outputs_never_ahead</code> — interpolated output is monotone and never stamped ahead of
+          arrival.
+        </p>
+        <p>Telemetry closes the loop: <code>rtprecv</code> jitter/late/sequence-gap stats,
+        <code>timestamping-mode=skew</code>, and RTCP SR/RR, NACK, PLI under the <code>avpf</code> profile.
+        RTP sequence arithmetic is 16-bit modular (<code>seq_next</code>, <code>diff16</code>) with the
+        wrap-boundary rule <code>jb_full</code> at span ≥ 32765.</p>
+      </section>
+
+      <section id="nustream">
+        <h3>1.6 NuStream: the Hard Real-Time End of the Continuum</h3>
+        <p>
+          NuStream keeps the pipeline abstraction and deletes every non-deterministic element of GStreamer —
+          dynamic plugins, GObject, runtime allocation, caps negotiation. Its eight hard requirements:
+          static WCET analysis on critical paths, <strong>zero runtime allocation in the data plane</strong>,
+          fixed memory footprint, static topology, RTOS priority/deadline integration, pure C99, zero-copy
+          buffer references, and auditability for formal methods. Every element carries its real-time
+          contract as first-class data (<code>rt_attrs_t</code>) visible to the scheduler and to analysis
+          tools — the same discipline that made B-Core's static tables provable.
+        </p>
+      </section>
+
+      <!-- ═══════ Part 2 ═══════ -->
+      <section id="mcustructs">
+        <h2>Part 2 — Data Structures, Types &amp; Enumerations</h2>
+        <h3>2.1 MCU Plane (verbatim, <code>GST-SYNC-RTP.md</code> §2.3 / <code>src/nus/nus_gst.c</code>)</h3>
+        <pre><code>typedef struct {                       /* one per participant */
+    gchar      *peer_id;
+    GstElement *webrtc;                /* webrtcbin, SRTP in/out       */
+    GstElement *v_queue, *a_queue;     /* leaky broadcast queues       */
+    GstPad     *comp_pad, *amix_pad;   /* grid + mixer attachment      */
+    GstElement *v_decodebin, *a_decodebin;
+    GstElement *v_convert, *v_scale, *v_rate, *v_caps, *v_jitter;
+    GstElement *a_convert, *a_resample, *a_jitter;
+    gint        grid_idx;              /* 0..15 slot                   */
+    gboolean    remote_desc_set, bundled;
+    GArray     *pending_ice_candidates;
+} PeerInfo;
+
+typedef struct {                       /* singleton process state      */
+    GstElement  *pipeline, *compositor;   /* "mix"                     */
+    GstElement  *audiomixer;              /* "amix"                    */
+    GstElement  *video_tee, *audio_tee;   /* "vtee" / "atee"           */
+    GHashTable  *webrtcbins;              /* peer_id → PeerInfo*       */
+    GMainLoop   *loop;
+    gboolean     grid_slots[16];
+    gint         pad_index;
+} RecorderState;</code></pre>
+      </section>
+
+      <section id="rtobjects">
+        <h3>2.2 NuStream Objects (C99)</h3>
+        <pre><code>typedef struct {
+    const char* name;
+    uint32_t    wcet_us;       /* worst-case execution time      */
+    uint32_t    period_us;     /* recommended invocation period  */
+    uint32_t    deadline_us;   /* relative deadline from release */
+    uint8_t     priority;      /* NuttX / µITRON priority        */
+    bool        zero_copy;     /* DMA / reference passing        */
+    bool        is_critical;   /* must not be preempted in path  */
+} rt_attrs_t;
+
+typedef struct rt_buffer { uint8_t* data; size_t size, capacity;
+    uint64_t pts_us; uint32_t flags, refcount; void* priv; } rt_buffer_t;
+
+typedef struct rt_pad { const char* name; bool is_source;
+    rt_element_t* element; struct rt_pad* peer;
+    rt_buffer_t*  buffer_pool;      /* fixed pool for this pad  */ } rt_pad_t;
+
+typedef struct rt_element { const char* name; rt_attrs_t rt_attrs;
+    rt_pad_t** src_pads; rt_pad_t** sink_pads;
+    size_t num_src_pads, num_sink_pads;
+    int (*init)(struct rt_element*, void* config);
+    int (*start)(struct rt_element*);
+    int (*stop)(struct rt_element*);
+    int (*deinit)(struct rt_element*);
+    int (*chain)(struct rt_element*, rt_pad_t*, rt_buffer_t*); /* core */
+    void* priv; } rt_element_t;
+
+typedef struct rt_pipeline { rt_element_t** elements; size_t num_elements;
+    rt_buffer_t* shared_pool; bool running; } rt_pipeline_t;</code></pre>
+        <h4>Oracle summaries (media plane laws, host-library independent)</h4>
+        <pre><code>type active = { id : int; rc : int }              (* buffer + refcount        *)
+type pool   = …                                    (* 24-slot static pool      *)
+type leakq  = { window_us; pts; pushed; dropped; refused_regress }
+type plane_state = { debt_us; peak_debt_us; starved_periods }
+type session = …                                   (* join/leave resource trail *)
+type cell    = { x : int; y : int; w : int; h : int }   (* grid geometry        *)
+type gst_mode = GST_ON | GST_OFF                  (* additive-only tier gate   *)</code></pre>
+      </section>
+
+      <section id="constants">
+        <h3>2.3 Latency &amp; Capacity Constants</h3>
+        <table class="api-table">
+          <thead><tr><th>Constant</th><th>Value</th><th>Meaning</th></tr></thead>
+          <tbody>
+            <tr><td><code>jitter_window_us</code></td><td>500 ms</td><td>ingest video jitter buffer</td></tr>
+            <tr><td>audio jitter</td><td>250 ms</td><td>per-peer a_jitter</td></tr>
+            <tr><td>pre-encoder queue</td><td>300 ms</td><td><code>preencode_window_us</code></td></tr>
+            <tr><td>webrtcbin latency</td><td>100 ms (Pi-class) / 50 ms budget</td><td>stack pacing knob</td></tr>
+            <tr><td>outgoing v/a queues</td><td>400 / 450 ms; leaky=2, 1 s cap</td><td>broadcast branches</td></tr>
+            <tr><td>storage branch</td><td>30 s leaky</td><td>disk never back-pressures live path</td></tr>
+            <tr><td><code>pool_capacity</code></td><td>24</td><td>NuStream buffer ids, fixed at init</td></tr>
+            <tr><td><code>grid_slots</code> × canvas</td><td>16 × 1920×1080</td><td>compositor capacity; 2×2 or 4×4 layouts proven disjoint</td></tr>
+            <tr><td><code>period_30fps / period_15fps</code></td><td>33 333 / 66 666 µs</td><td>capacity-matched stamps</td></tr>
+            <tr><td>plane budgets</td><td>INPUT 1000/500, UI 8333/4000 µs</td><td>shared with B-Core / B-Media</td></tr>
+            <tr><td><code>seq_mod</code></td><td>2¹⁶</td><td>RTP sequence space, modular arithmetic</td></tr>
+          </tbody>
+        </table>
+      </section>
+
+      <!-- ═══════ Part 3 ═══════ -->
+      <section id="apiref">
+        <h2>Part 3 — API Reference</h2>
+
+        <h3 id="setup_peer">3.1 <code>setup_peer</code> / <code>cleanup_peer</code></h3>
+        <div class="api-card">
+          <div class="api-header"><span class="api-name">setup_peer</span><span class="ret-badge">void</span></div>
+          <p>Executes the six ordered join steps for a new peer id; every intermediate failure unwinds to the
+             pre-join state (no half-held grid slots). The inverse <code>cleanup_peer</code> performs the
+             six-stage teardown and releases the slot.</p>
+          <div class="api-signature">static void setup_peer(const gchar *peer_id);
+static void cleanup_peer(const gchar *peer_id);</div>
+          <table class="api-table">
+            <thead><tr><th>Precondition</th><th>Postcondition</th></tr></thead>
+            <tbody>
+              <tr><td>Free grid slot exists (≤ 16 live peers); <code>peer_id</code> unknown.</td><td>Peer table entry with linked broadcast branches; offer pending on the out queue.</td></tr>
+              <tr><td>Live peer; no in-flight offer promise.</td><td>All six resource classes returned; <code>pool_free</code>/slot table restored exactly.</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h3 id="signaling_api">3.2 Signalling handlers</h3>
+        <div class="api-card">
+          <div class="api-header"><span class="api-name">handle_signaling_message</span><span class="ret-badge">void</span></div>
+          <p>Decodes one newline-delimited JSON object from the broker port and dispatches it. Unknown types
+             are ignored, never fatal — the media plane cannot be wedged by a malformed control line.</p>
+          <div class="api-signature">static void handle_signaling_message(const gchar *json_str);
+/* types: peer_joined | sdp_answer | ice_candidate | peer_left | exit      */
+static void on_ice_candidate(GstElement*, guint mline, gchar*, gpointer);
+static void on_offer_created(GstPromise*, gpointer);   /* → send sdp_offer  */
+static void trigger_graceful_shutdown(void);           /* watchdog-guarded  */</div>
+          <table class="api-table">
+            <thead><tr><th>Input type</th><th>Handler effect</th><th>Emitted</th></tr></thead>
+            <tbody>
+              <tr><td><code>peer_joined</code></td><td><code>setup_peer</code></td><td><code>sdp_offer</code></td></tr>
+              <tr><td><code>sdp_answer</code></td><td>set remote description → ICE starts</td><td><code>ice_candidate</code> ( trickle )</td></tr>
+              <tr><td><code>ice_candidate</code></td><td>add (or queue if pre-remote)</td><td>—</td></tr>
+              <tr><td><code>peer_left</code></td><td><code>cleanup_peer</code></td><td>—</td></tr>
+              <tr><td><code>exit</code></td><td>EOS, finalize recording, shutdown</td><td><code>recording_started</code> earlier, at PLAYING</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h3 id="rt_api">3.3 NuStream rt_* API</h3>
+        <div class="api-card">
+          <div class="api-header"><span class="api-name">rt_pipeline_*</span><span class="ret-badge">int</span></div>
+          <p>Static pipeline construction and lifecycle. All objects come from init-time pools; linking is a
+             one-time wire of pre-declared pads; <code>start</code> only flips <code>running</code>.</p>
+          <div class="api-signature">rt_pipeline_t *rt_pipeline_create(void);
+int rt_pipeline_add(rt_pipeline_t*, rt_element_t*);
+int rt_pipeline_link_pads(rt_element_t *src, const char *srcpad,
+                          rt_element_t *sink, const char *sinkpad);
+int rt_pipeline_start(rt_pipeline_t*);
+int rt_pipeline_stop(rt_pipeline_t*);</div>
+          <table class="api-table">
+            <thead><tr><th>Return</th><th>Meaning</th></tr></thead>
+            <tbody>
+              <tr><td><code>0</code></td><td>Accepted.</td></tr>
+              <tr><td><code>-1</code></td><td>Bad name / pad busy / pool exhausted — inert refusal, topology unchanged.</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="api-card">
+          <div class="api-header"><span class="api-name">rt_buffer_* &amp; factories</span><span class="ret-badge">rt_buffer_t*</span></div>
+          <p>Zero-copy buffer references with refcount conservation, and the static element factory set.
+             <code>acquire</code> never mints a new id — ids are fixed at init, which makes
+             zero-runtime-allocation mechanically checkable (<code>no_id_drift</code>).</p>
+          <div class="api-signature">rt_buffer_t *rt_buffer_new(size_t capacity);
+void rt_buffer_ref(rt_buffer_t*);
+void rt_buffer_unref(rt_buffer_t*);      /* last release recycles to pool   */
+
+rt_element_t *rt_element_camera_create(void);
+rt_element_t *rt_element_h264_encoder_create(void);
+rt_element_t *rt_element_opus_encoder_create(void);
+rt_element_t *rt_element_rtp_pay_create(void);
+rt_element_t *rt_element_network_sink_create(void);
+rt_element_t *rt_element_display_sink_create(void);</div>
+          <table class="api-table">
+            <thead><tr><th>Law</th><th>Statement</th></tr></thead>
+            <tbody>
+              <tr><td><code>pool0_wf</code> / <code>acquire_preserves_wf</code></td><td>The pool starts well-formed and every operation keeps it so.</td></tr>
+              <tr><td><code>unref_last_release_recycles</code></td><td>rc 1→0 returns the buffer; refcounts never go negative.</td></tr>
+              <tr><td><code>buffer_ref_absent_is_flagged</code></td><td>Referencing an unknown id is a counted refusal, not corruption.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- ═══════ Part 4 ═══════ -->
+      <section id="examples">
+        <h2>Part 4 — Canonical Code Examples</h2>
+        <h3>4.1 A signalling transcript (broker side)</h3>
+        <pre><code>→ {"type":"peer_joined","peer_id":"7f2a"}
+← {"type":"sdp_offer","peer_id":"7f2a","sdp":"v=0…"}
+→ {"type":"sdp_answer","peer_id":"7f2a","sdp":"v=0…"}
+→ {"type":"ice_candidate","peer_id":"7f2a","mline":0,"candidate":"candidate:1 1 udp 2113937151 …"}
+← {"type":"ice_candidate","peer_id":"7f2a","mline":0,"candidate":"…"}
+← {"type":"recording_started"}
+→ {"type":"peer_left","peer_id":"7f2a"}        /* six-stage teardown, pool restored */
+→ {"type":"exit"}</code></pre>
+        <h3>4.2 A NuStream element with its RT contract</h3>
+        <pre><code>static int pay_chain(rt_element_t *e, rt_pad_t *in, rt_buffer_t *b) {
+    /* deterministic core: fixed pool, drop policy inside chain() */
+    if (pool_free(&amp;out_pool) == 0) { e->dropped++; return 0; }  /* counted */
+    rt_packetize(b, &amp;out_pool);
+    rt_buffer_unref(b);                 /* last release recycles — always  */
+    return 0;
+}
+static rt_attrs_t pay_rt = { "rtp_pay",
+    .wcet_us = 120, .period_us = 33333, .deadline_us = 30000,
+    .priority = 100, .zero_copy = true, .is_critical = true };
+
+rt_element_t *rt_element_rtp_pay_create(void) { /* static factory, init-time pool */ }</code></pre>
+        <h3>4.3 Capacity-matched framerate (anti-dilation)</h3>
+        <pre><code>/* If measured sustained compositing capacity is 15 fps, declare 15/1 —
+   stamps then equal wall clock; videorate+capsfilter keep the grid fed. */
+framerate = 15/1  ·  capsfilter: video/x-raw,framerate=30/1 (post-videorate)
+videotestsrc num-buffers … async=false sync=false  ·  queue leaky=downstream</code></pre>
+      </section>
+
+      <section id="verified">
+        <h2>Verification Cross-Reference</h2>
+        <p>
+          The media-plane laws above are closed in <code>verify/models/media_rtp_properties.v</code>
+          (161 judgements) against the oracle <code>media_rtp_model.ml</code>. Full dossier:
+          <a href="theorems/media_rtp.html">b-rtp/theorems/media_rtp.html</a>. Highlights by category:
+        </p>
+        <table class="api-table">
+          <thead><tr><th>Category</th><th>Results</th><th>Certifies</th></tr></thead>
+          <tbody>
+            <tr><td>Buffer pool &amp; refcounts</td><td><code>pool0_wf</code>, <code>acquire_preserves_wf</code>, <code>unref_last_release_recycles</code>, <code>no_id_drift</code></td><td>§2.2, §3.3 — zero runtime allocation made checkable</td></tr>
+            <tr><td>Leaky temporal queue</td><td><code>feed_conserves_every_frame</code>, <code>feed_stays_within_capacity</code></td><td>§1.4 — every frame accounted as pushed, delivered, or dropped</td></tr>
+            <tr><td>Timestamp monotonicity</td><td><code>accum_is_monotone</code>, <code>dilate_preserves_monotone</code>, <code>outputs_never_ahead</code></td><td>§1.5 — interpolation and dilation never bend the clock</td></tr>
+            <tr><td>Plane budgets</td><td><code>no_overrun_leaves_no_debt</code>, <code>debt_never_drains_without_tail</code></td><td>§2.3 — UI plane non-interference under INPUT overrun</td></tr>
+            <tr><td>Session lifecycle</td><td>join/leave six-step conservation checks</td><td>§1.2 — departures always restore the pool and slot table</td></tr>
+            <tr><td>Grid geometry</td><td>disjointness over 2×2 and 4×4 layouts</td><td>§1.2 — quadrants tile the canvas without overlap</td></tr>
+            <tr><td>Tier gating</td><td><code>strip_fork_reproduces_upstream</code>, <code>gate_orthogonality</code></td><td>§1.6 — the NuStream shim is additive-only: stripping it returns pristine upstream sources</td></tr>
+          </tbody>
+        </table>
+        <p>
+          Transport below this plane is B-Core's proven ground: cursors never block, sectors are conserved,
+          and drops are counted — see <a href="../b-core/theorems/media_intercore.html">B-Core theorems</a>.
+          The hardening plan puts NuStream porting <em>after</em> the ASYN/SMP/AMP foundation, onto the
+          InterCore substrate; until that port lands, <code>nus_gst.c</code> runs the host-GStreamer
+          discipline above unchanged.
+        </p>
+      </section>
+
+    </article>
+
+    <footer class="page-footer">
+      BTRON 3.20 · B-RTP: WebRTC Core, MCU/SFU &amp; NuStream · Clean-room implementation ·
+      Rocq/Coq verified media plane · Synrc / bitedits
+    </footer>
+  </main>
+
+</body>
+</html>

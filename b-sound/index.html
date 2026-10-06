@@ -1,0 +1,573 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>B-Sound – Lil Cu 64 Procedural Synthesizer &amp; WebAudio Node Engine | B-Book</title>
+  <meta name="description" content="Developer specification for B-Sound: the lilcu64 procedural DSP engine — 0-byte-footprint sound shims, the WebAudio-equivalent scheduled node graph, the 4-track score sequencer locked to the audio clock, and the VirtIO PCM pump.">
+  <link rel="stylesheet" href="../b-book/b-book.css">
+</head>
+<body>
+
+  <nav class="book-global-nav" aria-label="Site navigation">
+    <div class="book-global-nav-container">
+      <a href="../index.html" class="book-global-logo"><img width="48" src="https://n2o.dev/img/synrc.svg" alt="Synrc Logo"></a>
+      <button class="book-nav-toggle" aria-label="Toggle navigation" aria-expanded="false" onclick="const links = this.nextElementSibling; const sidebar = document.querySelector('.book-sidebar'); const open = links.classList.toggle('open'); sidebar.classList.toggle('open', open); this.classList.toggle('open', open); this.setAttribute('aria-expanded', open);">
+        <span class="hamburger"></span>
+      </button>
+      <ul class="book-global-links">
+    <li><a href="../index.html">B-System</a></li>
+    <li><a href="../b-book/index.html">B-Book</a></li>
+    <li><a href="../b-core/index.html">B-Core</a></li>
+    <li><a href="index.html" class="active">B-Sound</a></li>
+    <li><a href="../conformance.html">B-Spec</a></li>
+    <li><a href="../releases.html">Releases</a></li>
+    <li><a href="https://github.com/bitedits/btron">GitHub</a></li>
+      </ul>
+    </div>
+  </nav>
+
+  <nav class="book-sidebar">
+    <div class="sidebar-brand">
+      <div class="brand-title">B-Sound <span class="badge">Rev 1.00</span></div>
+      <div class="brand-sub">Lil Cu 64 Synth Engine</div>
+    </div>
+    <div class="sidebar-nav">
+      <div class="nav-heading">Overview</div>
+      <a href="#scope" class="nav-link">Scope &amp; 0-Byte Doctrine</a>
+
+      <div class="nav-heading">Part 1: Architecture</div>
+      <div class="nav-sublinks">
+        <a href="#shim" class="nav-sublink">Audio-Visual Shim Principle</a>
+        <a href="#topology" class="nav-sublink">Dual Synthesis Topology</a>
+        <a href="#clock" class="nav-sublink">Clock &amp; Thread Model</a>
+        <a href="#tracklifecycle" class="nav-sublink">Track Lifecycle</a>
+      </div>
+
+      <div class="nav-heading">Part 2: Data Structures</div>
+      <div class="nav-sublinks">
+        <a href="#constants" class="nav-sublink">Constants &amp; Bounds</a>
+        <a href="#voice" class="nav-sublink">SynthVoice</a>
+        <a href="#wanode" class="nav-sublink">WaNode &amp; Events</a>
+        <a href="#clamp" class="nav-sublink">Master Soft Clamp</a>
+      </div>
+
+      <div class="nav-heading">Part 3: API Reference</div>
+      <div class="nav-sublinks">
+        <a href="#init" class="nav-sublink">lilcu64_synth_init</a>
+        <a href="#play" class="nav-sublink">play / stop / mute</a>
+        <a href="#time" class="nav-sublink">get_active_track / get_track_time</a>
+        <a href="#render" class="nav-sublink">render_frames / pump_virtio</a>
+        <a href="#shims" class="nav-sublink">Sound Shims</a>
+        <a href="#waapi" class="nav-sublink">WebAudio Engine</a>
+        <a href="#scoreapi" class="nav-sublink">Score API</a>
+      </div>
+
+      <div class="nav-heading">Part 4: Practice</div>
+      <div class="nav-sublinks">
+        <a href="#tracks" class="nav-sublink">The 4 Canonical Tracks</a>
+        <a href="#choreo" class="nav-sublink">Choreography Dispatch</a>
+        <a href="#examples" class="nav-sublink">Canonical Examples</a>
+        <a href="#inputs" class="nav-sublink">Input Matrix</a>
+        <a href="#verified" class="nav-sublink">Verification Status</a>
+      </div>
+
+      <div class="nav-heading">Companion Books</div>
+      <a href="../b-audio/index.html" class="nav-link">B-Audio (PCM Output Stack)</a>
+      <a href="../b-video/index.html" class="nav-link">B-Video (Display Path)</a>
+      <a href="../b-media/index.html" class="nav-link">B-Media (Pipes &amp; Budgets)</a>
+      <a href="../b-core/index.html" class="nav-link">B-Core (InterCore Nexus)</a>
+      <a href="../b-rtp/index.html" class="nav-link">B-RTP (WebRTC Core)</a>
+    </div>
+  </nav>
+
+  <main class="book-content">
+    <header class="book-header">
+      <div class="breadcrumb">
+        <a href="../b-book/index.html">B-Book</a> / <span>B-Sound</span>
+      </div>
+      <h1 class="page-title">B-Sound: Lil Cu 64 Procedural Synthesizer</h1>
+      <p class="page-lead">The sound processor of the B-System ceremony: an assetless, deterministic DSP
+      engine — 48-voice legacy pool plus a 4096-node scheduled WebAudio-equivalent graph — that renders
+      44.1 kHz stereo S16 PCM directly onto the B-Audio driver surface, with every mascot gesture
+      phase-locked to a procedural sound shim.</p>
+    </header>
+
+    <article>
+
+      <section id="scope">
+        <h2>Scope &amp; the 0-Byte Doctrine</h2>
+        <p>
+          B-Sound specifies the synthesis side of audio: <code>src/demo/lilcu64_synth.c/.h</code>
+          (lifecycle, voice pool, shims, VirtIO pump), <code>src/demo/lilcu64_wa.c/.h</code>
+          (scheduled node engine), <code>src/demo/lilcu64_score.c</code> (1:1 transcriptions of the
+          four <code>index.html</code> track scores), and <code>src/demo/lilcu64_demo.c/.h</code>
+          (the demoscene window that consumes them). Normative prose: <code>doc/txt/SOUND.txt</code>
+          (shim physics, DSP primitives, timing equations) and <code>doc/txt/LILCU64-DEMOSCENE.txt</code>
+          (kinematics ↔ shim wiring, track cue tables).
+        </p>
+        <div class="callout">
+          <strong>Zero-byte footprint.</strong> No sample files (WAV, AIFF, OGG) exist in this repository.
+          Every sound — bell, Rhodes, frog croak, industrial bass — is computed at runtime by analytical
+          DSP at 44,100 Hz. Consequences: zero load latency, sub-100 KB code budget, pitch/filter morphing
+          without sample-artifacting, and perfect frame-accuracy against the 60 FPS render tick.
+        </div>
+        <p>
+          B-Sound never touches hardware: it renders into an <code>int16_t</code> buffer and hands it to the
+          five B-Audio driver calls (<a href="../b-audio/index.html">virtio_sound_write and friends</a>),
+          whose weak stubs — declared right here in <code>lilcu64_synth.c</code> — keep every port of the
+          build matrix linkable with no audio device at all.
+        </p>
+      </section>
+
+      <!-- ═══════ Part 1 ═══════ -->
+      <section id="shim">
+        <h2>Part 1 — Architecture &amp; Conceptual Model</h2>
+        <h3>1.1 The Audio-Visual Shim Principle</h3>
+        <p>
+          From <code>SOUND.txt</code> §0: <em>every fundamental 3D kinematic action of the character maps
+          1-to-1 to a deterministic procedural DSP algorithm called a Sound Shim.</em> A shim
+          <code>S(t₀, p)</code> takes a trigger time and a parameter vector (pitch, volume, decay) and
+          builds <code>y(t) = Σₖ Aₖ(t−t₀) · Wₖ(2πfₖ(t−t₀) + φₖ) * Hₖ(t)</code> — waveforms × exponential
+          ADSR envelopes convolved through biquad bodies — then self-disposes when its envelope reaches
+          zero. Shims are stateless at call time; state lives only in the voice pool.
+        </p>
+        <pre><code> 3D kinematics (lilcu64_demo.c)          procedural DSP (lilcu64_synth.c)
+ ┌────────────────────────────┐   phase-locked   ┌────────────────────────────┐
+ │ IDLE   isovolumetric breath │ ───────────────▶ │ shimPulseBell  (chi drone)  │
+ │ WADDLE zero-crossings       │ ───────────────▶ │ shimWaddle root/fifth +kick │
+ │ FLOAT  apex / touchdown     │ ───────────────▶ │ shimFloat / shimBoing       │
+ │ DANCE  every 90° pirouette  │ ───────────────▶ │ shimDance 16th arpeggio     │
+ │ SQUASH holy release y=1.45  │ ───────────────▶ │ shimPulseSquash 6-harm triad│
+ │ SING   gem spin ×5          │ ───────────────▶ │ lead + shimSaxFlute         │
+ │ POKE   damped squish        │ ───────────────▶ │ shimDing                      │
+ └────────────────────────────┘                   └────────────────────────────┘
+            the mascot literally walks, floats and dances on the bassline</code></pre>
+      </section>
+
+      <section id="topology">
+        <h3>1.2 Dual Synthesis Topology</h3>
+        <p>
+          The engine mixes two independent synthesis domains into one stream every 32-frame block
+          (<code>RENDER_BLOCK</code>):
+        </p>
+        <pre><code> UI thread                    audio-render tick (32 frames ≈ 0.73 ms)
+   │                            ┌───────────────────────────────────────────┐
+ play_track(n) ──gen bump──▶    │ timeline_tick()   loop/apply score change │
+                               │ wa_render(mix)    WA graph → float mono,  │
+                               │                   advances audio clock    │
+                               │ update_sequencer  (legacy, idle)          │
+                               │ for each SynthVoice: wave, 1-pole LP,     │
+                               │   AM trem, freq glide, const-power pan    │
+                               │ legacy×(30000/32767) + wa_mix             │
+                               │ master_soft_clamp → int16 interleaved     │
+                               └───────────────────────────────────────────┘
+   legacy domain: 48 SynthVoice slots (one-shot shims, drums, chimes)
+   WA domain:     up to 4096 scheduled WaNodes (the 4 full track scores)</code></pre>
+        <p>
+          The two domains keep different headroom conventions, made explicit in
+          <code>render_block()</code>: legacy voices are scaled as if they were already int16
+          (<code>× 30000.0f/32767.0f</code>), while the WebAudio graph targets the ±1.0 range that
+          <code>ctx.destination</code> clamps in the JS original. The shared <code>master_soft_clamp</code>
+          (§2.4) reconciles them before int16 conversion.
+        </p>
+      </section>
+
+      <section id="clock">
+        <h3>1.3 Clock &amp; Thread Model</h3>
+        <p>
+          The single source of truth is the <strong>audio clock</strong> — <code>wa_time()</code>, seconds of
+          rendered samples, the exact analogue of <code>AudioContext.currentTime</code>. The UI/scheduler
+          clock is never consulted for musical time. This is the demoscene twin of B-Core's ruling
+          <a href="../b-core/index.html">R7</a>: producers never block on consumers, and consumers read a
+          monotonically advanced clock they alone drive.
+        </p>
+        <ul>
+          <li>UI → audio handoff is a single <code>volatile int s_track_gen</code> counter bumped with
+            <code>__sync_fetch_and_add</code>; the audio thread notices the delta inside
+            <code>timeline_tick()</code> and applies it. No mutex, no queue, no lost update.</li>
+          <li>The pump guards re-entrancy with <code>__sync_lock_test_and_set(&amp;s_pumping, 1)</code> —
+            a second concurrent <a href="#render"><code>pump_virtio</code></a> returns 0 immediately instead
+            of double-writing PCM.</li>
+          <li>Track time for choreography is <code>wa_time() − s_tl_base</code> wrapped into the loop length,
+            so mascot cues are sample-accurate (~0.7 ms granularity), not timer-accurate.</li>
+          <li>Looping re-schedules with <code>s_tl_base += len</code> (not <code>= wa_time()</code>), so drift
+            cannot accumulate across hours of playback — the same absolute-scheduling discipline as
+            <code>ctx.currentTime + offset</code> in JS.</li>
+        </ul>
+      </section>
+
+      <section id="tracklifecycle">
+        <h3>1.4 Track Lifecycle</h3>
+        <ol>
+          <li><strong>Play</strong> — <code>lilcu64_synth_play_track(n)</code>: deactivate all 48 legacy
+            voices, reset sequencer state, bump the generation counter. Returns immediately.</li>
+          <li><strong>Apply</strong> — within one render block, <code>timeline_tick()</code> sees
+            <code>gen != applied_gen</code>: <code>wa_stop_all()</code> (the C twin of <code>stopAllTracks</code>),
+            looks up <code>lc_score_length(n)</code>, latches the timeline track, sets
+            <code>s_tl_base = wa_time()</code>, and schedules the whole score ahead on the audio clock.</li>
+          <li><strong>Loop</strong> — when <code>wa_time() ≥ s_tl_base + len</code>: stop all, advance the base
+            by exactly one loop length, reschedule. (JS reference: <code>playTrack(n, true)</code> at
+            25 800 / 28 000 / 26 800 / 25 800 ms.)</li>
+          <li><strong>Stop / toggle</strong> — the same track number again, or an out-of-range number, stops:
+            generation bump, voices cleared, timeline track 0. Mute additionally zeroes the WA mix and
+            kills legacy voices, while the clock keeps advancing.</li>
+        </ol>
+      </section>
+
+      <!-- ═══════ Part 2 ═══════ -->
+      <section id="constants">
+        <h2>Part 2 — Data Structures, Types &amp; Enumerations</h2>
+        <h3>2.1 Constants &amp; Hard Bounds</h3>
+        <table class="api-table">
+          <thead><tr><th>Constant</th><th>Value</th><th>Meaning / invariant</th></tr></thead>
+          <tbody>
+            <tr><td><code>LILCU64_AUDIO_RATE</code></td><td>44100</td><td>Boot default sample rate (Hz).</td></tr>
+            <tr><td><code>LILCU64_AUDIO_CHANNELS</code></td><td>2</td><td>Stereo, interleaved L,R per frame.</td></tr>
+            <tr><td><code>MAX_VOICES</code></td><td>48</td><td>Legacy pool size; never grows. On exhaustion the <em>lowest-amplitude</em> voice is stolen (bounded polyphony, zero runtime allocation).</td></tr>
+            <tr><td><code>WA_MAX_NODES</code></td><td>4096</td><td>WA node pool; <code>wa_osc</code> returns NULL when full (score overflow is a visible refusal, not corruption).</td></tr>
+            <tr><td><code>WA_MAX_GEV / FEV / QEV</code></td><td>24 / 8 / 8</td><td>Automation events per node (gain / freq / Q). 24 because the frog-croak pulse train needs 20 gain events.</td></tr>
+            <tr><td><code>WA_CTRL</code>, <code>RENDER_BLOCK</code></td><td>32</td><td>Control-rate block in samples; one audio-clock tick.</td></tr>
+            <tr><td><code>PUMP_CHUNK_FRAMES</code></td><td>1024</td><td>PCM chunk per <code>virtio_sound_write</code> (matches the B-Audio host period).</td></tr>
+            <tr><td>queue target</td><td>17 640 B</td><td>≈100 ms at 44.1 kHz stereo S16; pump refills only the shortfall, burst capped at 5 292 frames (120 ms).</td></tr>
+            <tr><td><code>WA_NOISE_LEN</code></td><td>44100 × 2</td><td>Shared deterministic 2-second white-noise buffer (the AudioBufferSource twin).</td></tr>
+            <tr><td>reverb</td><td>4 combs + 4 allpass, per channel; 1 s feedback delay</td><td>Freeverb-style hall ("deep industrial cavern model").</td></tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section id="voice">
+        <h3>2.2 Legacy Voice (<code>lilcu64_synth.c</code>)</h3>
+        <pre><code>typedef struct {
+    bool   active;
+    int    wave_type;      /* 0 SINE, 1 TRIANGLE, 2 SAW, 3 PULSE, 4 NOISE, 5 FM_BELL */
+    float  phase;          /* radians, wrapped at 2π                                  */
+    float  phase_inc;      /* 2π·freq/sample_rate, re-derived on glide                */
+    float  freq, target_freq, freq_ramp_rate;  /* exponential pitch glide            */
+    float  amp;            /* linear decay envelope: amp -= decay_rate each sample    */
+    float  decay_rate;     /* 1/(decay_time·sample_rate); voice dies at amp ≤ 1e-4    */
+    float  pan;            /* −1.0 … +1.0, constant-power cosine/sine law             */
+    float  fm_ratio, fm_index, fm_phase;       /* 2-op FM (shimPulseBell: 2.76 × 1.8) */
+    float  filter_lp, filter_coeff;            /* 1-pole lowpass body/formant         */
+    float  am_freq, am_phase, am_depth;        /* AM tremolo (frog croak 32 Hz)       */
+} SynthVoice;               /* 48 slots, static array — no heap, no post-boot alloc */</code></pre>
+        <p>
+          Invariants: every field is written by the audio thread only between render blocks; allocation is
+          first-fit then lowest-amplitude steal, so <em>a trigger never fails and never blocks</em> — the
+          audible worst case is a quiet voice cut short. This is refusal-as-stuttering again, in the audio
+          plane (see <a href="../b-core/index.html">B-Core §1.4</a>).
+        </p>
+      </section>
+
+      <section id="wanode">
+        <h3>2.3 Scheduled Node &amp; Automation Events (<code>lilcu64_wa.h</code>)</h3>
+        <pre><code>/* Oscillator waveforms */
+#define WA_SINE 0 · WA_TRIANGLE 1 · WA_SAWTOOTH 2 · WA_SQUARE 3 · WA_NOISE 4
+/* BiquadFilterNode types */
+#define WA_FILT_NONE 0 · WA_FILT_LOWPASS 1 · WA_FILT_HIGHPASS 2 · WA_FILT_BANDPASS 3
+/* AudioParam automation */
+#define WA_SET 0  /* setValueAtTime              */
+#define WA_LIN 1  /* linearRampToValueAtTime     */
+#define WA_EXP 2  /* exponentialRampToValueAtTime */
+
+typedef struct WaNode WaNode;   /* opaque: wave type, start/stop times, three
+                                 * event lists (freq 8, gain 24, Q 8), biquad
+                                 * state, used flag — pooled in s_nodes[4096] */</code></pre>
+        <p>
+          Event values are stored relative to <code>t − node-&gt;t_start</code>, mirroring the JS
+          scheduler exactly; <code>wa_time()</code> is <code>ctx.currentTime</code>. The engine header
+          states the contract: <em>"Every node is scheduled ahead on an absolute audio clock (seconds),
+          … so the scores play 1:1 and are locked to the VirtIO sound sample clock, not to the
+          UI/scheduler."</em>
+        </p>
+      </section>
+
+      <section id="clamp">
+        <h3>2.4 Master Soft Clamp (verbatim)</h3>
+        <pre><code>static inline float master_soft_clamp(float x) {
+    if (x &gt; 1.25f)  return 1.0f;
+    if (x &lt; -1.25f) return -1.0f;
+    if (x &gt; 0.85f) { float d = x - 0.85f;  return 0.85f + d / (1.0f + d * 2.5f); }
+    if (x &lt; -0.85f){ float d = -x - 0.85f; return -(0.85f + d / (1.0f + d * 2.5f)); }
+    return x;
+}</code></pre>
+        <p>
+          Linear below ±0.85, saturating rational knee to ±1.0, hard cut above ±1.25: the WaveShaper
+          warmth of <code>SOUND.txt</code> §5.2 distilled to three branches, guaranteeing int16
+          convertibility of every frame.
+        </p>
+      </section>
+
+      <!-- ═══════ Part 3 ═══════ -->
+      <section id="apiref">
+        <h2>Part 3 — C99 API &amp; System Call Reference</h2>
+
+        <h3 id="init">3.1 <code>lilcu64_synth_init</code></h3>
+        <div class="api-card">
+          <div class="api-header"><span class="api-name">lilcu64_synth_init</span><span class="ret-badge">int</span></div>
+          <p>Resets both synthesis domains, seeds the noise buffer and reverb, initialises the WA engine at
+             <code>sample_rate</code> (0 selects 44100), and makes a best-effort
+             <code>virtio_sound_open(sample_rate, 2)</code>. Audio absence is never an error.</p>
+          <div class="api-signature">int lilcu64_synth_init(uint32_t sample_rate);</div>
+          <table class="api-table">
+            <thead><tr><th>Name</th><th>Type</th><th>Dir</th><th>Description</th></tr></thead>
+            <tbody>
+              <tr><td><code>sample_rate</code></td><td><code>uint32_t</code></td><td>[in]</td><td>Hz; 0 falls back to <code>LILCU64_AUDIO_RATE</code>.</td></tr>
+            </tbody>
+          </table>
+          <h4>Postconditions</h4>
+          <p>All 48 voices inactive; WA pool empty; clock at 0; mute off; track 0; VirtIO latched open iff
+             the backend accepted it (<code>s_virtio_opened</code>).</p>
+        </div>
+
+        <h3 id="play">3.2 <code>lilcu64_synth_play_track</code> / <code>stop_track</code> / <code>toggle_mute</code></h3>
+        <div class="api-card">
+          <div class="api-header"><span class="api-name">play / stop / mute</span><span class="ret-badge">void / bool</span></div>
+          <p>UI-thread controls. Each is O(MAX_VOICES) bookkeeping plus one atomic bump — the musical work
+             happens later, on the audio thread, inside one render block.</p>
+          <div class="api-signature">void lilcu64_synth_play_track(int track_num);   /* 1..4; same-or-invalid → stop */
+void lilcu64_synth_stop_track(void);
+void lilcu64_synth_toggle_mute(void);
+bool lilcu64_synth_is_muted(void);
+void lilcu64_synth_close(void);</div>
+          <table class="api-table">
+            <thead><tr><th>Call</th><th>Effect</th></tr></thead>
+            <tbody>
+              <tr><td><code>play_track(n)</code>, n∈1..4, n≠active</td><td>Kills legacy voices, bumps generation; audio thread stops all WA nodes and schedules score <code>n</code> from <code>wa_time()</code>.</td></tr>
+              <tr><td><code>play_track(n)</code>, n==active or ∉1..4</td><td>Toggle-off — behaves exactly as <code>stop_track()</code>.</td></tr>
+              <tr><td><code>stop_track()</code></td><td>Track 0, voices cleared, generation bumped (WA graph emptied on next tick).</td></tr>
+              <tr><td><code>toggle_mute()</code></td><td>Mute clears legacy voices and zeroes WA mix each block; clock and timeline keep running, so unmuting mid-track resumes in perfect tempo.</td></tr>
+              <tr><td><code>close()</code></td><td>Track 0, voices cleared, <code>virtio_sound_close()</code> iff this engine opened it.</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h3 id="time">3.3 <code>lilcu64_synth_get_active_track</code> / <code>get_track_time</code></h3>
+        <div class="api-card">
+          <div class="api-header"><span class="api-name">track read-back</span><span class="ret-badge">int / float</span></div>
+          <p>The choreography interface. <code>get_track_time()</code> returns seconds elapsed inside the
+             current loop iteration: <code>(wa_time() − s_tl_base) mod loop_length</code>, for timeline tracks
+             only; legacy tracks return the sequencer cursor.</p>
+          <div class="api-signature">int   lilcu64_synth_get_active_track(void);   /* 0..4 */
+float lilcu64_synth_get_track_time(void);   /* seconds within loop */</div>
+          <h4>Preconditions / invariants</h4>
+          <p>Safe from any thread (reads plain state; worst case a one-block-stale value). Value never
+             exceeds the loop length and never goes backwards within an iteration — cues may be evaluated
+             once per 16 ms frame with no monotonically-violating surprise.</p>
+        </div>
+
+        <h3 id="render">3.4 <code>lilcu64_synth_render_frames</code> &amp; <code>lilcu64_synth_pump_virtio</code></h3>
+        <div class="api-card">
+          <div class="api-header"><span class="api-name">render / pump</span><span class="ret-badge">void / int</span></div>
+          <p><code>render_frames</code> fills interleaved stereo S16 exactly — host backends, WAV-less
+             capture, tests. <code>pump_virtio</code> is the realtime pacing loop against the B-Audio queue
+             telemetry.</p>
+          <div class="api-signature">void lilcu64_synth_render_frames(int16_t *out_pcm, size_t frames);
+int  lilcu64_synth_pump_virtio(size_t frames);</div>
+          <table class="api-table">
+            <thead><tr><th>Return</th><th>Condition (<code>pump_virtio</code>)</th></tr></thead>
+            <tbody>
+              <tr><td><code>0</code></td><td>Another thread is pumping (re-entrancy gate); queue already at target; or the refill was written.</td></tr>
+              <tr><td><code>−1</code></td><td>Device not ready even after one opportunistic <code>open(44100,2)</code>.</td></tr>
+            </tbody>
+          </table>
+          <h4>Pump algorithm</h4>
+          <pre><code>target = 17640 B ≈ 100 ms of S16 stereo
+missing_frames = (target − virtio_sound_get_queued_bytes()) / 4
+                clamped to [requested frames, 5292 frames = 120 ms]
+loop: render ≤1024 frames → virtio_sound_write(chunk) until shortfall closed</pre></code>
+          <p>No blocking, no unbounded buffering: playback stays locked to real time and worst-case added
+             latency is one 100 ms target window — the audio twin of B-Media's plane budgets
+             (<a href="../b-media/index.html">B-Media</a>).</p>
+        </div>
+
+        <h3 id="shims">3.5 Sound Shims (trigger surface)</h3>
+        <div class="api-card">
+          <div class="api-header"><span class="api-name">lilcu64_shim_*</span><span class="ret-badge">void</span></div>
+          <p>Ten exported one-shot triggers; each expands into 1–6 voices with the DSP topology of
+             <code>SOUND.txt</code> §4. All are mute-aware (immediate no-op) and never allocate.</p>
+          <div class="api-signature">void lilcu64_shim_pulse_squash(float vol_mul, float pitch_mul);
+void lilcu64_shim_frog_croak  (float pitch_mul, float vol_mul);
+void lilcu64_shim_pulse_bell  (float vol_mul, float pitch_mul);
+void lilcu64_shim_waddle      (float pitch, float vol_mul);
+void lilcu64_shim_float       (float base_freq, float vol_mul);
+void lilcu64_shim_dance       (float pitch_scale, float vol_mul);
+void lilcu64_shim_ding        (float freq, float vol_mul, float decay);
+void lilcu64_shim_boing(void);  void lilcu64_shim_footstep(void);
+void lilcu64_shim_chirp(void);   /* chirp == pulse_squash(1.0, 1.0) */</div>
+          <table class="api-table">
+            <thead><tr><th>Shim</th><th>Timbre</th><th>Synthesis (from code &amp; SOUND.txt)</th></tr></thead>
+            <tbody>
+              <tr><td><code>pulse_squash</code></td><td>Ascending holy triad</td><td>6 sine harmonics C5→E6 (261.63…1318.51 Hz), each gliding from ×0.97 to target, ±0.15 alternating pan, decays 1.1–1.9 s.</td></tr>
+              <tr><td><code>frog_croak</code></td><td>Cuíca / frog</td><td>Saw 96.8→137.5 Hz scoop, 32 Hz AM tremolo at depth 0.85, 0.28 s decay.</td></tr>
+              <tr><td><code>pulse_bell</code></td><td>FM spiritual bell</td><td>2-op FM: modulator 2.76 × carrier, index 1.8 (<code>VOICE_WAVE_FM_BELL</code>).</td></tr>
+              <tr><td><code>waddle</code></td><td>Acoustic walking bass</td><td>Dual triangle body tones through 180 Hz 1-pole lowpass with body decay.</td></tr>
+              <tr><td><code>float</code></td><td>Fender Rhodes wash</td><td>4-note additive chord, detuned pan spread (i−1.5)×0.35, staggered 0.9–1.35 s tines.</td></tr>
+              <tr><td><code>dance</code></td><td>Star arpeggio bead</td><td>A5 sine + E6 triangle pair, 0.25/0.18 s decay, opposite pans.</td></tr>
+              <tr><td><code>ding</code></td><td>Crystalline ping</td><td>Pure sine (A6 1760 / E7 2637 Hz typical), amp 0.16·vol, caller-chosen decay (0.70 s canonical).</td></tr>
+              <tr><td><code>boing</code></td><td>Touchdown spring</td><td>Sine glide 140→420 Hz (ramp 0.003), 0.35 s — fires on Float phase-4 cushion.</td></tr>
+              <tr><td><code>footstep</code></td><td>Soft scuff</td><td>95 Hz triangle, 0.06 s decay.</td></tr>
+              <tr><td>drums (internal)</td><td>kick / snare / hi-hat</td><td>Kick: 120→45 Hz pitch drop in 160 ms. Snare: 175 Hz triangle + LP-filtered noise. Hi-hat: noise through coeff-0.85 filter, 40 ms.</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h3 id="waapi">3.6 WebAudio Engine (<code>lilcu64_wa.h</code>)</h3>
+        <div class="api-card">
+          <div class="api-header"><span class="api-name">wa_* graph surface</span><span class="ret-badge">WaNode* / void</span></div>
+          <p>The score-authoring API — a re-implementation of exactly the WebAudio subset
+             <code>index.html</code> uses.</p>
+          <div class="api-signature">void    wa_init(uint32_t sample_rate);
+void    wa_stop_all(void);              /* osc.stop(0)+disconnect on everything */
+double  wa_time(void);                  /* ctx.currentTime equivalent           */
+int     wa_active_count(void);
+WaNode *wa_osc(int type, double t_start, double t_stop);  /* NULL if pool full */
+void    wa_freq      (WaNode *n, int ev, float value, double t);
+void    wa_gain      (WaNode *n, int ev, float value, double t);
+void    wa_filter    (WaNode *n, int type, float freq, float q);
+void    wa_filter_freq(WaNode *n, int ev, float value, double t);
+void    wa_set_reverb(int enabled, float room_size, float damping,
+                      float feedback, float wet_mix);
+void    wa_render_stereo(float *out_l, float *out_r, size_t frames);
+void    wa_render(float *mono, size_t frames);   /* advances the clock */</div>
+          <table class="api-table">
+            <thead><tr><th>Guard</th><th>Behaviour</th></tr></thead>
+            <tbody>
+              <tr><td>pool exhausted</td><td><code>wa_osc → NULL</code>; every setter accepts NULL silently (no-op) — a score that overflows drops voices, never corrupts the graph.</td></tr>
+              <tr><td>event lists full</td><td><code>ev_insert</code> refuses the event (24 gain / 8 freq / 8 Q per node).</td></tr>
+              <tr><td>reverb</td><td>4 comb + 4 allpass per channel plus a 1 s stereo feedback delay; <code>room_size/damping/feedback/wet_mix</code> are the continuous knobs Track 4 rides.</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h3 id="scoreapi">3.7 Score API (<code>lilcu64_score.h</code>) &amp; demo window</h3>
+        <div class="api-card">
+          <div class="api-header"><span class="api-name">lc_score_*</span><span class="ret-badge">double / void</span></div>
+          <div class="api-signature">double lc_score_length(int track);        /* loop seconds; 0.0 = not a score */
+void   lc_score_schedule(int track, double t0); /* whole track, absolute t0 */
+WND   *open_lilcu64_demo_window(void);          /* demo.h; NULL on failure */</div>
+          <table class="api-table">
+            <thead><tr><th>track</th><th><code>lc_score_length</code></th><th>Javascript twin</th></tr></thead>
+            <tbody>
+              <tr><td>1</td><td>25.8 s</td><td><code>scheduleTrackTimeout(loop, 25800)</code></td></tr>
+              <tr><td>2</td><td>28.0 s</td><td>loop 28000 ms</td></tr>
+              <tr><td>3</td><td>26.8 s</td><td>loop 26800 ms</td></tr>
+              <tr><td>4</td><td>25.8 s</td><td>loop 25800 ms</td></tr>
+              <tr><td>other</td><td>0.0</td><td>no timeline track is latched.</td></tr>
+            </tbody>
+          </table>
+          <h4>Contract</h4>
+          <p><code>schedule</code> is pure ahead-of-time graph construction (exactly like
+             <code>window.playTrack(n)</code> with <code>ctx.currentTime + offset</code>); it never blocks, and
+             its only failure mode is pool-full voice dropping (§3.6).</p>
+        </div>
+      </section>
+
+      <!-- ═══════ Part 4 ═══════ -->
+      <section id="tracks">
+        <h2>Part 4 — Canonical Code Examples &amp; Practice</h2>
+        <h3>4.1 The four canonical tracks</h3>
+        <table class="api-table">
+          <thead><tr><th>#</th><th>Theme</th><th>Key · Meter · BPM</th><th>Loop</th><th>Signature shims</th></tr></thead>
+          <tbody>
+            <tr><td>1</td><td>鐘のキャロル — Carol of the Bells</td><td>E minor · 3/4 Vivace · 168</td><td>25.8 s</td><td>ding motif (G5–F#5–G5–E5), waddle bass E2–B2–E3, pulse_squash lead, dance arpeggios</td></tr>
+            <tr><td>2</td><td>今田勝 Green Caterpillar (1975)</td><td>D minor blues · 4/4 swing · 98</td><td>28.0 s</td><td>float (Rhodes), waddle (upright bass), guitar, frog_croak cuíca, swung ride</td></tr>
+            <tr><td>3</td><td>朝日のあたる家 — Rising Sun (Krüger arr.)</td><td>A minor · 6/8 · 76 (DEMOSCENE §8: eighth = 60/(76·2) = 0.394 s)</td><td>26.8 s</td><td>grand-piano 6/8 rolling arpeggio Am–C–D–F–Am–E–E7, pedal bass A0/A1, E6 waterfall, ding chimes</td></tr>
+            <tr><td>4</td><td>TRON Init — Nine Inch Nails / Reznor</td><td>A minor (A1 = 55 Hz) · 4/4 industrial · 93</td><td>25.8 s</td><td>industrial 16th saw bass, Swarmatron 8-voice glissando, gated cyber snare, reverb cavern</td></tr>
+          </tbody>
+        </table>
+        <p>
+          Timing everywhere derives from <code>SOUND.txt</code> §9:
+          <code>beat = 60/BPM</code>, <code>bar = beat × beatsPerMeasure</code>, <code>16th = beat/4</code>.
+          Verified breakpoint examples: Track 1 at 168 BPM → 8 bar = 8.571 s ≈ sing cue at 8 570 ms;
+          Track 2 at 98 BPM → 1 bar = 2.449 s ≈ walk cue at 2 450 ms.
+        </p>
+      </section>
+
+      <section id="choreo">
+        <h3>4.2 Choreography dispatch (audio clock drives animation)</h3>
+        <pre><code>/* src/demo/lilcu64_demo.c — update_mascot() pattern, LILCU64-DEMOSCENE §8 */
+if (lilcu64_synth_get_active_track() == 1) {
+    float t = lilcu64_synth_get_track_time();     /* sample-accurate, 0..25.8 */
+    if      (t &lt;  4.280f) { set_animation(ANIM_FLOAT); }
+    else if (t &lt;  8.570f) { set_animation(ANIM_WADDLE); }
+    else if (t &lt; 12.850f) { set_animation(ANIM_SING);  trigger_radiant_wave(false); }
+    else if (t &lt; 17.140f) { set_animation(ANIM_DANCE); }
+    else if (t &lt; 21.420f) { set_animation(ANIM_FLOAT); }
+    else if (t &lt; 24.200f) { set_animation(ANIM_SING);  s_impact_squash = 0.24;
+                            trigger_radiant_wave(true); }
+    else                  { set_animation(ANIM_IDLE); }
+} else { if (s_anim_state != ANIM_IDLE) set_animation(ANIM_IDLE); }</code></pre>
+        <h3>4.3 Phase-locked shim trigger (walk zero-crossings)</h3>
+        <pre><code>/* left foot touchdown: s_w crosses 0 upward  → root note + kick
+   right foot touchdown: s_w crosses 0 downward → fifth + snare
+   ("The character literally walks on the bassline." — SOUND.txt §10.1) */
+if (prev_s &lt;= 0.0f &amp;&amp; s_w &gt; 0.0f) {
+    lilcu64_shim_waddle(root_f, vol);    /* E2-class 82.41 Hz  */
+    drum_kick(vol);
+} else if (prev_s &gt;= 0.0f &amp;&amp; s_w &lt; 0.0f) {
+    lilcu64_shim_waddle(fifth_f, vol);   /* B2-class 123.47 Hz */
+    drum_snare(vol);
+}</code></pre>
+        <h3>4.4 Boot-to-sound end-to-end</h3>
+        <pre><code>lilcu64_synth_init(44100);              /* WA engine + best-effort device open   */
+WND *w = open_lilcu64_demo_window();    /* ceremony window; Track 1 auto-starts  */
+lilcu64_synth_play_track(1);            /* returns instantly; audio thread applies */
+for (;;) {                              /* 16 ms render cadence (dly_tsk(16))     */
+    render_gl_frame();                  /* mascot cues read get_track_time()     */
+    lilcu64_synth_pump_virtio(706);     /* ≈16 ms of frames; paced to 100 ms     */
+}</code></pre>
+        <p class="api-note">
+          On ports without a VirtIO backend the weak stubs (<code>write → −1</code>,
+          <code>is_ready → false</code>) keep the whole demo linkable and runnable silently — the POSIX
+          host path substitutes SDL <code>QueueAudio</code> inside B-Audio proper
+          (<a href="../b-audio/index.html">B-Audio §1.3</a>).
+        </p>
+      </section>
+
+      <section id="inputs">
+        <h3>4.5 Input matrix (1:1 with the ceremony)</h3>
+        <table class="api-table">
+          <thead><tr><th>Input</th><th>Action</th></tr></thead>
+          <tbody>
+            <tr><td><code>Space / P / J</code></td><td>Sacred pulse &amp; sing — shimPulseSquash + radiant wave</td></tr>
+            <tr><td><code>W / F / D</code></td><td>Waddle / Float / Dance gesture + phase-locked shim</td></tr>
+            <tr><td><code>1–4</code> (+ S, C, H/R, T/N)</td><td>Play/stop Track 1–4 (toggle semantics, §3.2)</td></tr>
+            <tr><td><code>M</code></td><td>Mute toggle — clock keeps running, mix is zeroed</td></tr>
+            <tr><td><code>‹ , / › .</code></td><td>Hopf density 18/36/54 rings — one <code>shim_ding</code> per step</td></tr>
+            <tr><td>Mouse click on mascot</td><td>Poke — damped squish + chime</td></tr>
+            <tr><td><code>Esc / Q</code></td><td>Close window</td></tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section id="verified">
+        <h2>Verification Status (honest account)</h2>
+        <p>
+          B-Sound currently ships <strong>as C code without a companion Coq/OCaml model</strong>. There is
+          no <code>sound_*</code> or <code>lilcu64_*</code> entry under <code>verify/models/</code> and this
+          book cites none. The engine's <em>structural</em> disciplines are individually verified in other
+          books' models — bounded pools (B-RTP's NuStream object model, 24-slot buffer pool
+          <a href="../b-rtp/theorems/media_rtp.html">media_rtp</a>), never-blocking counted refusals
+          (<a href="../b-core/theorems/media_intercore.html">media_intercore</a> I-series), plane budget
+          execution (<a href="../b-media/theorems/media_smp.html">media_smp</a>) — and the 1:1 JS↔C score
+          transcription is held by the cue tables of <code>LILCU64-DEMOSCENE.txt</code> §5.3/§8, verified
+          per-track against <code>index.html</code> millisecond values. What is <em>not</em> yet proven:
+          sample-level determinism of the shim DSP, pool-steal continuity, and the audio↔video clock
+          binding — the last is the planned <code>media_avsync</code> pair shared with
+          <a href="../b-video/index.html">B-Video</a> and <a href="../b-audio/index.html">B-Audio</a>.
+          Until a model lands, treat every B-Sound correctness claim as tested-code evidence, not theorem
+          evidence.
+        </p>
+      </section>
+
+    </article>
+
+    <footer class="page-footer">
+      BTRON 3.20 · B-Sound: Lil Cu 64 Procedural Synthesizer · Clean-room implementation · 0-byte asset
+      footprint · 44.1 kHz S16 stereo · Synrc / bitedits
+    </footer>
+  </main>
+
+</body>
+</html>

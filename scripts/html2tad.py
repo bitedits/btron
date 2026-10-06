@@ -627,6 +627,11 @@ if __name__ == '__main__':
         ('b-spec',   os.path.join(out_dir, 'b-spec')),
         ('b-system', os.path.join(out_dir, 'b-system')),
         ('b-core',   os.path.join(out_dir, 'b-core')),
+        ('b-audio',  os.path.join(out_dir, 'b-audio')),
+        ('b-media',  os.path.join(out_dir, 'b-media')),
+        ('b-video',  os.path.join(out_dir, 'b-video')),
+        ('b-sound',  os.path.join(out_dir, 'b-sound')),
+        ('b-rtp',    os.path.join(out_dir, 'b-rtp')),
     ]
     if os.path.isdir('b-hmi'):
         source_trees.append(('b-hmi', os.path.join(out_dir, 'b-hmi')))

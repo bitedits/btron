@@ -1,0 +1,477 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>B-Media – Abstract Media Pipes, Plane Budgets &amp; the SMP/AMP Substrate | B-Book</title>
+  <meta name="description" content="Developer specification for B-Media: the GStreamer-style abstract media pipeline graph built into the B-System kernel, per-plane CPU/buffer budgeting (async_rt.h), the CAS multicursor ring, AMP I/O-core heartbeat takeover, and the wait-free seqlock pointer path.">
+  <link rel="stylesheet" href="../b-book/b-book.css">
+</head>
+<body>
+
+  <nav class="book-global-nav" aria-label="Site navigation">
+    <div class="book-global-nav-container">
+      <a href="../index.html" class="book-global-logo"><img width="48" src="https://n2o.dev/img/synrc.svg" alt="Synrc Logo"></a>
+      <button class="book-nav-toggle" aria-label="Toggle navigation" aria-expanded="false" onclick="const links = this.nextElementSibling; const sidebar = document.querySelector('.book-sidebar'); const open = links.classList.toggle('open'); sidebar.classList.toggle('open', open); this.classList.toggle('open', open); this.setAttribute('aria-expanded', open);">
+        <span class="hamburger"></span>
+      </button>
+      <ul class="book-global-links">
+    <li><a href="../index.html">B-System</a></li>
+    <li><a href="../b-book/index.html">B-Book</a></li>
+    <li><a href="../b-core/index.html">B-Core</a></li>
+    <li><a href="index.html" class="active">B-Media</a></li>
+    <li><a href="../conformance.html">B-Spec</a></li>
+    <li><a href="../releases.html">Releases</a></li>
+    <li><a href="https://github.com/bitedits/btron">GitHub</a></li>
+      </ul>
+    </div>
+  </nav>
+
+  <nav class="book-sidebar">
+    <div class="sidebar-brand">
+      <div class="brand-title">B-Media <span class="badge">Rev 1.00</span></div>
+      <div class="brand-sub">Pipes, Budgets &amp; SMP Substrate</div>
+    </div>
+    <div class="sidebar-nav">
+      <div class="nav-heading">Overview</div>
+      <a href="#scope" class="nav-link">Scope &amp; Layering</a>
+
+      <div class="nav-heading">Part 1: Architecture</div>
+      <div class="nav-sublinks">
+        <a href="#graph" class="nav-sublink">Abstract Pipe Graph</a>
+        <a href="#states" class="nav-sublink">Pipeline State Machine</a>
+        <a href="#budgets" class="nav-sublink">Plane Periods &amp; Budgets</a>
+        <a href="#ring" class="nav-sublink">CAS Multicursor Ring</a>
+        <a href="#amp" class="nav-sublink">AMP Heartbeat &amp; Takeover</a>
+        <a href="#seqlock" class="nav-sublink">Wait-Free Pointer Path</a>
+      </div>
+
+      <div class="nav-heading">Part 2: Data Structures</div>
+      <div class="nav-sublinks">
+        <a href="#gsttypes" class="nav-sublink">Gst Types &amp; Enums</a>
+        <a href="#substrate" class="nav-sublink">Ring / AMP / Seqlock Records</a>
+        <a href="#constants" class="nav-sublink">Contract Constants</a>
+      </div>
+
+      <div class="nav-heading">Part 3: API Reference</div>
+      <div class="nav-sublinks">
+        <a href="#gst_init" class="nav-sublink">gst_init</a>
+        <a href="#gst_element_factory_make" class="nav-sublink">gst_element_factory_make</a>
+        <a href="#gst_element_link" class="nav-sublink">gst_element_link</a>
+        <a href="#gst_pipeline_set_state" class="nav-sublink">gst_pipeline_set_state</a>
+        <a href="#orchestra" class="nav-sublink">Orchestra Server API</a>
+        <a href="#ringapi" class="nav-sublink">claim / publish / rcv</a>
+      </div>
+
+      <div class="nav-heading">Part 4: Practice</div>
+      <div class="nav-sublinks">
+        <a href="#examples" class="nav-sublink">Canonical Examples</a>
+        <a href="#passtable" class="nav-sublink">Schedule Pass Table</a>
+        <a href="#verified" class="nav-sublink">Verification Cross-Reference</a>
+      </div>
+
+      <div class="nav-heading">Companion Books</div>
+      <a href="../b-core/index.html" class="nav-link">B-Core (InterCore Nexus)</a>
+      <a href="../b-rtp/index.html" class="nav-link">B-RTP (WebRTC Core)</a>
+      <a href="../b-audio/index.html" class="nav-link">B-Audio (PCM Stack)</a>
+      <a href="../b-video/index.html" class="nav-link">B-Video (Display Path)</a>
+      <a href="../b-sound/index.html" class="nav-link">B-Sound (lilcu64 Synth)</a>
+    </div>
+  </nav>
+
+  <main class="book-content">
+    <header class="book-header">
+      <div class="breadcrumb">
+        <a href="../b-book/index.html">B-Book</a> / <span>B-Media</span>
+      </div>
+      <h1 class="page-title">B-Media: Abstract Pipes, Budgets &amp; the SMP Substrate</h1>
+      <p class="page-lead">The media scheduling layer of the B-System: a GStreamer-shaped pipe graph with
+      per-plane CPU budgets, running on the verified CAS multicursor ring and the AMP I/O-core protocol.</p>
+    </header>
+
+    <article>
+
+      <section id="scope">
+        <h2>Scope &amp; Layering</h2>
+        <p>
+          B-Media specifies the <strong>abstract media pipes</strong>: a pipeline/graph subsystem in the
+          shape of GStreamer, built into the kernel tree with zero external dependencies
+          (<code>src/apps/orchestra.c</code>), and the <strong>real-time substrate</strong> those pipes are
+          budgeted on — plane periods and WCET budgets (<code>include/btron/async_rt.h</code>), the CAS
+          multicursor ring with per-producer lanes (<code>src/cores/core_smp.c</code>), the AMP I/O-core
+          heartbeat/takeover handshake, and the wait-free seqlock pointer snapshot.
+        </p>
+        <p>The stack, from the application graph down to the proven nexus:</p>
+        <pre><code>┌──────────────────────────────────────────────────────────────┐
+│ media graphs: midisrc → midiroute → fluidsynth → … (B-Media) │  this book, Part 3
+├──────────────────────────────────────────────────────────────┤
+│ scheduling layer: 4 budgeted actors, pass table (ASYNC.txt §10)│ media_model.ml
+├──────────────────────────────────────────────────────────────┤
+│ InterCore cursors: pub/sub/spawn/snd/rcv  (B-Core)             │ verified nexus
+├──────────────────────────────────────────────────────────────┤
+│ CAS multicursor ring · AMP heartbeat · seqlock pointer         │ media_smp model + proofs
+└──────────────────────────────────────────────────────────────┘</code></pre>
+        <p>
+          Normative sources: <code>doc/txt/ASYNC.txt</code> §0.1/§9/§10 (planes, budgets, pass table),
+          <code>doc/txt/SMP-AMP-SYNC-IO-HARDENING.txt</code> §6.5/§7.2–§7.4 (ring geometry, heartbeat bars,
+          the <code>BTRON_MP</code> gate), <code>doc/md/SMP.md</code> (address space, actor runtime,
+          <code>core_smp.c</code> plan), <code>src/apps/orchestra.c</code> (the shipped C graph), and the
+          oracles <code>verify/models/media_model.ml</code> / <code>media_smp_model.ml</code>.
+        </p>
+      </section>
+
+      <!-- ═══════ Part 1 ═══════ -->
+      <section id="graph">
+        <h2>Part 1 — Architecture &amp; Conceptual Model</h2>
+        <h3>1.1 The Abstract Pipe Graph</h3>
+        <p>
+          A pipeline is a linear array of up to 16 elements; each element exposes exactly one source pad and
+          one sink pad; linking peers the two pads and chains buffers src→sink. Pads carry fixed 512-byte
+          buffers with PTS/DTS timestamps; an in-band bus records the last message and a count. Elements are
+          minted by a factory from a small static type set — there is no runtime plugin loader, matching the
+          zero-post-boot-allocation rule inherited from <a href="../b-core/index.html">B-Core</a>.
+        </p>
+        <pre><code>[midisrc] ─► [midiroute] ─► [fluidsynth] ─► [audioconvert] ─► [virtiosndsink]
+   src→sink pad chain; GstBuffer{data,pts,dts}; bus message per state change</code></pre>
+      </section>
+
+      <section id="states">
+        <h3>1.2 Pipeline State Machine</h3>
+        <p>Every element and the pipeline itself move through the same five states:</p>
+        <pre><code>VOID_PENDING → NULL → READY → PAUSED ⇄ PLAYING</code></pre>
+        <ul>
+          <li><code>NULL</code> — resources released; the only state safe to free/abandon a pipeline from.</li>
+          <li><code>READY</code> — resources acquired, no data flow.</li>
+          <li><code>PAUSED</code> — sinks primed, one buffer may drain (the preroll position).</li>
+          <li><code>PLAYING</code> — chain functions run and timestamps advance from the pipeline base time.</li>
+        </ul>
+        <p>Transitions return <code>SUCCESS</code>, <code>ASYNC</code> (preroll pending), or <code>FAILURE</code>;
+        a failure leaves the prior state intact — the same "refusal is inert" discipline as the InterCore calls.</p>
+      </section>
+
+      <section id="budgets">
+        <h3>1.3 Plane Periods &amp; Budgets</h3>
+        <p>
+          Each pipe runs inside an actor pinned to a plane with a fixed period and a WCET budget
+          (<code>async_rt.h</code>): the input plane every 1000&nbsp;µs with a 500&nbsp;µs budget, the UI/presentation
+          plane every 8333&nbsp;µs with 4000&nbsp;µs, the I/O defer actor on the AMP core free-running at
+          250&nbsp;µs with 500&nbsp;µs, and the media decoder on a spare core. All four actor priorities are
+          <em>equal</em> (100): ordering comes from budgets and cursor backpressure, not from a priority ladder.
+        </p>
+        <table class="api-table">
+          <thead><tr><th>Plane / actor</th><th>Period</th><th>Budget</th><th>Drop mechanism</th></tr></thead>
+          <tbody>
+            <tr><td>INPUT (input plane)</td><td>1000 µs</td><td>500 µs</td><td>ISR TRB budget 32 drains/period; overflow counted as drop</td></tr>
+            <tr><td>UI (presentation plane)</td><td>8333 µs</td><td>4000 µs</td><td>bounded catch-up <code>read_k</code>; late items skipped, never replayed</td></tr>
+            <tr><td>IOD (I/O defer, AMP core 3)</td><td>250 µs</td><td>500 µs</td><td>EVT queue full refuses producer</td></tr>
+            <tr><td>DEC (media decoder)</td><td>per-buffer</td><td>below UI budget</td><td>ring window full → claim refused</td></tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section id="ring">
+        <h3>1.4 The CAS Multicursor Ring</h3>
+        <p>
+          The Tier-2 message path is a byte ring of capacity <code>ring_cap</code> with one lane per producer.
+          A producer <em>claims</em> a byte range with a single CAS on the packed cursor word (the multicursor
+          commit of platform.rs lineage), fills it, then <em>publishes</em>. Readers may consume only published
+          bytes, which is exactly the tearing hazard the packed word closes. Claims that would exceed capacity
+          or the unpublished window (<code>inflight_max</code>) are refused — never blocked, never wrapped.
+          The invariants are byte-level conservation: accepted + dropped is what producers asked for, delivered
+          + in-commit-window is what is readable, and an over-capacity read is <code>BAD_CURSOR</code>, refused
+          and counted.
+        </p>
+      </section>
+
+      <section id="amp">
+        <h3>1.5 AMP I/O-Core Handshake &amp; Takeover</h3>
+        <p>
+          Before the I/O core (core 3) runs the drain loop alone, boot hands it over with a release/ack
+          handshake; afterwards the core beats a heartbeat every period. Two bars govern ownership
+          (hardening plan §6.5, rev-2 ruling): at <strong>50&nbsp;ms</strong> of missed beats the UI logs a
+          warning; at <strong>100&nbsp;ms</strong> the UI takes over draining. At most one drain owner exists
+          at any time, and a stolen drain is visible in telemetry rather than silently duplicated.
+        </p>
+      </section>
+
+      <section id="seqlock">
+        <h3>1.6 Wait-Free Pointer Path (Seqlock)</h3>
+        <p>
+          The pointer plane never takes a lock: producers accumulate into a seqlock word
+          (<code>seq, acc_dx, acc_dy, acc_wheel, buttons</code>); readers snapshot before/after and accept the
+          sample only when the sequence number is unchanged and even. A torn read is retried, so the UI plane
+          can never observe a half-applied motion batch — and the accumulated deltas are monotone between
+          accepted snapshots. This is the batching that satisfies the ≤2&nbsp;ms pointer-gap row of the pass table.
+        </p>
+      </section>
+
+      <!-- ═══════ Part 2 ═══════ -->
+      <section id="gsttypes">
+        <h2>Part 2 — Data Structures, Types &amp; Enumerations</h2>
+        <h3>2.1 Graph Types (verbatim from <code>src/apps/orchestra.c</code>)</h3>
+        <pre><code>typedef enum { GST_STATE_VOID_PENDING, GST_STATE_NULL, GST_STATE_READY,
+               GST_STATE_PAUSED, GST_STATE_PLAYING } GstState;
+typedef enum { GST_STATE_CHANGE_FAILURE, GST_STATE_CHANGE_SUCCESS,
+               GST_STATE_CHANGE_ASYNC } GstStateChangeReturn;
+typedef enum { GST_PAD_SRC, GST_PAD_SINK } GstPadDirection;
+
+typedef uint64_t GstClockTime;                    /* nanoseconds */
+#define GST_SECOND          1000000000ULL
+#define GST_MSECOND         1000000ULL
+#define GST_CLOCK_TIME_NONE ((GstClockTime)-1)
+
+typedef struct GstBuffer {
+    uint8_t      data[512];      /* fixed payload, zero runtime allocation */
+    size_t       size;
+    GstClockTime pts;            /* presentation timestamp                 */
+    GstClockTime dts;            /* decode timestamp                       */
+    GstClockTime duration;
+} GstBuffer;
+
+typedef int (*GstPadChainFunction)(GstPad *pad, GstBuffer *buf);
+
+struct GstPad      { char name[32]; GstPadDirection direction;
+                     GstElement *parent; GstPad *peer;
+                     GstPadChainFunction chain_func; };
+struct GstBus      { char last_message[64]; uint32_t msg_count; };
+struct GstElement  { char name[32]; char type[32]; GstState state;
+                     GstPad sink_pad, src_pad; GstBus *bus;
+                     void *element_data;
+                     int (*change_state)(GstElement *, GstState); };
+typedef struct { char name[32]; GstElement elements[16];
+                 uint32_t element_count; GstBus bus;
+                 GstClockTime base_time; GstState state; } GstPipeline;</code></pre>
+      </section>
+
+      <section id="substrate">
+        <h3>2.2 Substrate Records (oracle <code>media_smp_model.ml</code>)</h3>
+        <pre><code>type lane = { reserved : int; published : int; read : int }   (* one per producer *)
+type ring = { cap : int; lanes : lane list;
+              accepted : int;   (* bytes successfully claimed *)
+              dropped  : int;   (* bytes refused at admission *)
+              delivered: int;   (* bytes handed to readers    *)
+              refused  : int }  (* BAD_CURSOR rcv attempts    *)
+
+type amp_state = A_BOOT | A_RELEASED | A_ACKED | A_RUNNING | A_STALLED | A_TAKEN
+type seqlock  = { seq : int; acc_dx : int; acc_dy : int;
+                  acc_wheel : int; buttons : int }
+type snapshot = { s_seq : int; dx : int; dy : int; wheel : int; buttons : int }</code></pre>
+      </section>
+
+      <section id="constants">
+        <h3>2.3 Contract Constants</h3>
+        <table class="api-table">
+          <thead><tr><th>Constant</th><th>Value</th><th>Source</th></tr></thead>
+          <tbody>
+            <tr><td><code>input_period_us / input_budget_us</code></td><td>1000 / 500</td><td>async_rt.h</td></tr>
+            <tr><td><code>ui_period_us / ui_budget_us</code></td><td>8333 / 4000</td><td>async_rt.h</td></tr>
+            <tr><td><code>isr_trb_budget</code></td><td>32</td><td>async_rt.h <code>ASYNC_ISR_TRB_BUDGET</code></td></tr>
+            <tr><td><code>io_period_us / io_budget_us</code></td><td>250 / 500</td><td>IO.txt §6 SR1/SR2</td></tr>
+            <tr><td><code>io_heartbeat_warn_ms / _timeout_ms</code></td><td>50 / 100</td><td>plan §6.5 rev 2</td></tr>
+            <tr><td><code>ring_cap / inflight_max / lane_count</code></td><td>4 / 2 / 2</td><td>plan §7.2 geometry</td></tr>
+            <tr><td><code>pri(input) == pri(ui)</code></td><td>100 == 100</td><td>ASYNC.txt §9</td></tr>
+            <tr><td><code>GstBuffer.data</code></td><td>512 B fixed</td><td>orchestra.c</td></tr>
+            <tr><td><code>GstPipeline.elements</code></td><td>16 max</td><td>orchestra.c</td></tr>
+            <tr><td><code>ORCHESTRA_MAX_PORTS / MAX_TRACKS / MAX_SCENES</code></td><td>32 / 64 / 16</td><td>orchestra.c</td></tr>
+          </tbody>
+        </table>
+      </section>
+
+      <!-- ═══════ Part 3 ═══════ -->
+      <section id="apiref">
+        <h2>Part 3 — API Reference</h2>
+
+        <h3 id="gst_init">3.1 <code>gst_init</code></h3>
+        <div class="api-card">
+          <div class="api-header"><span class="api-name">gst_init</span><span class="ret-badge">void</span></div>
+          <p>Initializes the built-in graph subsystem: clock base, static factory registry, bus defaults.
+             Idempotent; must precede any factory call.</p>
+          <div class="api-signature">void gst_init(int *argc, char ***argv);</div>
+          <table class="api-table">
+            <thead><tr><th>Name</th><th>Type</th><th>Dir</th><th>Description</th></tr></thead>
+            <tbody><tr><td><code>argc/argv</code></td><td><code>int*, char***</code></td><td>[in,out]</td><td>Standard GStreamer shape; accepted and ignored (no option parsing in-tree).</td></tr></tbody>
+          </table>
+        </div>
+
+        <h3 id="gst_element_factory_make">3.2 <code>gst_element_factory_make</code></h3>
+        <div class="api-card">
+          <div class="api-header"><span class="api-name">gst_element_factory_make</span><span class="ret-badge">GstElement*</span></div>
+          <p>Mints an element of a registered factory type into the pipeline's static element array and
+             names it. Returns <code>NULL</code> for an unknown type or a full array (16 elements) — inert refusal.</p>
+          <div class="api-signature">GstElement *gst_element_factory_make(GstPipeline *pipe,
+                                 const char *type, const char *name);</div>
+          <table class="api-table">
+            <thead><tr><th>Factory type</th><th>Role</th><th>Plane</th></tr></thead>
+            <tbody>
+              <tr><td><code>midisrc</code></td><td>MIDI event source (kernel server input)</td><td>INPUT</td></tr>
+              <tr><td><code>midiroute</code></td><td>channel/port router over 32 ports</td><td>INPUT</td></tr>
+              <tr><td><code>fluidsynth</code></td><td>GM synthesis render (see <a href="../b-sound/index.html">B-Sound</a>)</td><td>DEC</td></tr>
+              <tr><td><code>audioconvert</code></td><td>format/rate normalization</td><td>DEC</td></tr>
+              <tr><td><code>virtiosndsink</code></td><td>PCM sink onto VirtIO-Sound (see <a href="../b-audio/index.html">B-Audio</a>)</td><td>IOD</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h3 id="gst_element_link">3.3 <code>gst_element_link</code></h3>
+        <div class="api-card">
+          <div class="api-header"><span class="api-name">gst_element_link</span><span class="ret-badge">BOOL</span></div>
+          <p>Peers the source pad of <code>src</code> to the sink pad of <code>sink</code> and installs the
+             sink element's chain function on the pad. Refuses (FALSE) if either pad is already peer-connected.</p>
+          <div class="api-signature">BOOL gst_element_link(GstElement *src, GstElement *sink);</div>
+          <table class="api-table">
+            <thead><tr><th>Return</th><th>Meaning</th></tr></thead>
+            <tbody>
+              <tr><td><code>TRUE</code></td><td>Pad pair connected; buffers now flow src→sink on state <code>PLAYING</code>.</td></tr>
+              <tr><td><code>FALSE</code></td><td>Pad busy / element state forbids linking. No partial peer installed.</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h3 id="gst_pipeline_set_state">3.4 <code>gst_pipeline_set_state</code></h3>
+        <div class="api-card">
+          <div class="api-header"><span class="api-name">gst_pipeline_set_state</span><span class="ret-badge">GstStateChangeReturn</span></div>
+          <p>Drives every element's <code>change_state</code> in chain order toward the target state and
+             records the transition on the pipeline bus.</p>
+          <div class="api-signature">GstStateChangeReturn gst_pipeline_set_state(GstPipeline *pipe, GstState target);</div>
+          <table class="api-table">
+            <thead><tr><th>Return</th><th>Condition</th><th>Effect</th></tr></thead>
+            <tbody>
+              <tr><td><code>…_SUCCESS</code></td><td>All elements accepted.</td><td><code>pipe-&gt;state = target</code>; base time stamped on →PLAYING.</td></tr>
+              <tr><td><code>…_ASYNC</code></td><td>A sink requires preroll (target PLAYING via PAUSED).</td><td>Partial state retained; bus carries the ASYNC message.</td></tr>
+              <tr><td><code>…_FAILURE</code></td><td>Any element rejected.</td><td>Prior state kept; refusal inert.</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h3 id="orchestra">3.5 Orchestra server API</h3>
+        <div class="api-card">
+          <div class="api-header"><span class="api-name">orchestra_init_server</span><span class="ret-badge">ER</span></div>
+          <p>Registers the MIDI server object, opens the 32 input port table, and builds the shipped topology
+             <code>midisrc → midiroute → fluidsynth → audioconvert → virtiosndsink</code>.</p>
+          <div class="api-signature">ER orchestra_init_server(void);
+ER orchestra_dispatch_midi_event(int in_port, uint8_t status, uint8_t d1, uint8_t d2);
+ER orchestra_switch_scene(int scene_idx);        /* 0 .. 15           */
+ER orchestra_set_playback(BOOL on);              /* drives pipeline state */</div>
+          <table class="api-table">
+            <thead><tr><th>Code</th><th>Meaning</th></tr></thead>
+            <tbody>
+              <tr><td><code>ER_OK</code></td><td>Event routed / scene live.</td></tr>
+              <tr><td><code>ER_PAR</code></td><td>Unknown port, scene index ≥ 16, malformed status byte.</td></tr>
+              <tr><td><code>ER_OBJ</code></td><td>Server not initialized.</td></tr>
+              <tr><td><code>ER_BUSY</code></td><td>64-track table full; event counted as drop, never queued unboundedly.</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h3 id="ringapi">3.6 Ring &amp; seqlock operations (substrate contract)</h3>
+        <div class="api-card">
+          <div class="api-header"><span class="api-name">claim / publish / rcv / steal</span><span class="ret-badge">ring</span></div>
+          <p>The producer path is two-step — <code>claim</code> reserves bytes on the lane with one CAS,
+             <code>publish</code> makes them readable. <code>rcv</code> consumes only published bytes;
+             <code>steal</code> is the takeover drain. Names below are the oracle surface that the
+             <code>src/mp</code> C header must preserve.</p>
+          <div class="api-signature">ring  claim   i n r      (* refuse if lane would exceed cap or inflight window *)
+ring  publish i r        (* lane.published := lane.reserved                    *)
+rcv   rcv     i want r   (* DATA | EMPTY | BAD_CURSOR — total, non-blocking    *)
+ring  steal   i want r   (* drain under takeover; owner switch is explicit     *)
+int   subscribe r i      (* current read position of lane i                    *)</div>
+          <table class="api-table">
+            <thead><tr><th>Result kind</th><th>Condition</th><th>Effect</th></tr></thead>
+            <tbody>
+              <tr><td><code>DATA bytes</code></td><td>Published, unread bytes available.</td><td><code>read</code> advances; delivered counted.</td></tr>
+              <tr><td><code>EMPTY</code></td><td>Read position at published watermark.</td><td>Ring unchanged; caller keeps timeslice.</td></tr>
+              <tr><td><code>BAD_CURSOR</code></td><td><code>want</code> exceeds readable window.</td><td>Refused and counted in <code>refused</code>; never partial.</td></tr>
+            </tbody>
+          </table>
+          <div class="api-signature">seqlock sl_publish seq dx dy wheel btn   (* bump seq odd→even on commit *)
+snapshot sl_read_raw s
+bool    sl_try before after              (* accept only seq stable &amp; even *)</div>
+        </div>
+      </section>
+
+      <!-- ═══════ Part 4 ═══════ -->
+      <section id="examples">
+        <h2>Part 4 — Canonical Code Examples</h2>
+        <h3>4.1 The shipped MIDI pipeline</h3>
+        <pre><code>GstPipeline sym;
+gst_init(NULL, NULL);
+gst_element_factory_make(&amp;sym, "midisrc",      "keys")  -&gt; sink_pad;
+GstElement *route = gst_element_factory_make(&amp;sym, "midiroute",  "route");
+GstElement *synth = gst_element_factory_make(&amp;sym, "fluidsynth", "gm");
+GstElement *conv  = gst_element_factory_make(&amp;sym, "audioconvert","cvt");
+GstElement *sink  = gst_element_factory_make(&amp;sym, "virtiosndsink","out");
+gst_element_link(src, route); gst_element_link(route, synth);
+gst_element_link(synth, conv); gst_element_link(conv, sink);
+gst_pipeline_set_state(&amp;sym, GST_STATE_PLAYING);   /* ASYNC until preroll  */</code></pre>
+        <h3>4.2 Budgeted drain with takeover</h3>
+        <pre><code>/* UI plane: bounded catch-up per period; IOD actor on AMP core 3. */
+for (;;) {
+    period_wait(UI_PERIOD_US);                       /* 8333 µs           */
+    unsigned k = 0;
+    rcv r;
+    while (k &lt; UI_TRB_BUDGET &amp;&amp; (r = rcv(lane_i, want)).kind != EMPTY) {
+        consume(r.bytes);                             /* DATA only         */
+        if (r.kind == BAD_CURSOR) telemetry_refused++;
+        k++;
+    }
+    /* heartbeat: stall 50 ms = warn, 100 ms = UI drains via steal() */
+    if (io_heartbeat_age_ms() &gt; IO_WARN_MS)  log_warn();
+    if (io_heartbeat_age_ms() &gt; IO_TIMEOUT_MS) steal(io_lane, backlog);
+}</code></pre>
+      </section>
+
+      <section id="passtable">
+        <h2>Schedule Pass Table (ASYNC.txt §10)</h2>
+        <p>The global media oracle checks a schedule of app steps against all of these rows at once:</p>
+        <table class="api-table">
+          <thead><tr><th>Row</th><th>Contract</th></tr></thead>
+          <tbody>
+            <tr><td>ISR WCET</td><td>Input ISR work completes inside the 500 µs budget at 1 kHz.</td></tr>
+            <tr><td>Release jitter</td><td>Input release jitter ≤ 10% of the period Ti.</td></tr>
+            <tr><td>Pointer gap</td><td>≤ 2 ms between accepted pointer updates under redraw.</td></tr>
+            <tr><td>EVT overflow</td><td>Zero EVT queue overflow in the stress soak.</td></tr>
+            <tr><td>Priority equality</td><td>pri(input) == pri(ui) == 100 — budgets, not priorities, arbitrate.</td></tr>
+            <tr><td>No in-blit drain</td><td>USB/input draining is forbidden inside the blit path.</td></tr>
+            <tr><td>Tier-2 path</td><td>Message transport uses only the CMPXCHG16B multicursor ring.</td></tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section id="verified">
+        <h2>Verification Cross-Reference</h2>
+        <p>
+          The substrate layer is proved in <code>verify/models/media_smp_properties.v</code>
+          (69 closed judgements) against the oracle <code>media_smp_model.ml</code>; the theorem dossier
+          lives at <a href="theorems/media_smp.html">b-media/theorems/media_smp.html</a>. Headline results:
+        </p>
+        <ul>
+          <li><code>rcv_is_never_blocking</code> — the ring <code>rcv</code> is total over its three contract
+              states; no implicit yield exists.</li>
+          <li><code>mp_zero_refines_legacy</code> — with <code>BTRON_MP=0</code> the gated build steps
+              identically to the legacy path (the gate is additive, never a rewrite).</li>
+          <li><code>mp_gate_is_additive</code>, <code>gate_does_not_change_observed_delta</code>,
+              <code>gate_off_cannot_observe_ring</code> — disabling the gate is unobservable, so a shipped
+              one-core port cannot be fooled into claiming ring behaviour.</li>
+          <li>Byte conservation of the ring (inflight = readable + in-commit), no-tearing reads, single AMP
+              drain owner with the 50/100 ms bars, and monotone seqlock accumulators.</li>
+        </ul>
+        <p>
+          The cursor layer above is verified in B-Core
+          (<a href="../b-core/theorems/media_intercore.html">602 judgements</a>). The global scheduling layer
+          (<code>media_model.ml</code>, the pass table itself) currently ships <em>as the oracle only</em>:
+          its header names <code>media_properties.v</code> as companion proof, and that file does not exist
+          yet — an honest gap, tracked here rather than papered over. Do not cite global-layer results as
+          Coq-proven until that file lands.
+        </p>
+      </section>
+
+    </article>
+
+    <footer class="page-footer">
+      BTRON 3.20 · B-Media: Abstract Pipes, Plane Budgets &amp; SMP/AMP Substrate · Clean-room implementation ·
+      Rocq/Coq verified substrate · Synrc / bitedits
+    </footer>
+  </main>
+
+</body>
+</html>

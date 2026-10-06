@@ -18,42 +18,39 @@ All documentation, specifications, and foundational books in B-System are packag
 btron/
 └── tad_bin/                      # ◄ Unified Canonical TAD Real Bodys Ecosystem
     ├── 01_btron3_spec.tad        # Book 1: BTRON3 3.20 共通仕様書 (Canonical Book)
-    ├── 02_tkernel_book.tad       # Book 2: T-Kernel 2.0 リアルタイムOS完全解説
-    ├── 03_tron_hmi_book.tad      # Book 3: TRON HMI 意匠設計指針と部品カタログ
-    ├── 04_bfree_os_book.tad      # Book 4: B-Free 自由OS読本とマニフェスト
+    ├── 02_bcore_book.tad         # Book 2: B-Core InterCore Streaming Protocol Book
+    ├── 03_bfree_os_book.tad      # Book 3: B-Free 自由OS読本とマニフェスト
+    ├── 04_tron_hmi_book.tad      # Book 4, emitted only when a b-hmi/ source tree exists
     ├── index.tad                 # Головний портал документації B-System
+    ├── releases.tad              # Release-notes portal
+    ├── B-System_Portal.tad       # B-System portal real body
     │
-    ├── shared_data/              # [tad_bin][Специфікація] Загальні специфікації даних
-    │   ├── data_type.tad         # Типи даних, коди помилок та C99 межі
-    │   ├── tron_code.tad         # Багатомовне кодування TRON Code
-    │   ├── tad1.tad              # Специфікація структури TAD сегментів
-    │   ├── tad2.tad              # Текстові фусени (Text Fusen)
-    │   ├── tad3.tad              # Графічні фусени (Figure Fusen)
-    │   ├── fd_format.tad         # Файлова система реальних та віртуальних об'єктів
-    │   └── gif/*.gif             # 218 Genuine Specification GIF Diagrams
+    ├── b-spec/                   # BTRON3 specification books
+    │   ├── shared_data/          # [tad_bin][Специфікація] Загальні специфікації даних
+    │   │   ├── data_type.tad     # Типи даних, коди помилок та C99 межі
+    │   │   ├── tron_code.tad     # Багатомовне кодування TRON Code
+    │   │   ├── tad1.tad          # Специфікація структури TAD сегментів
+    │   │   ├── tad2.tad          # Текстові фусени (Text Fusen)
+    │   │   ├── tad3.tad          # Графічні фусени (Figure Fusen)
+    │   │   ├── fd_format.tad     # Файлова система реальних та віртуальних об'єктів
+    │   │   └── gif/*.gif         # Part of the 218 Genuine Specification GIF Diagrams
+    │   │
+    │   └── os_spec/              # Специфікації операційної системи BTRON3
+    │       ├── kernel/*.tad      # [tad_bin][Ядро] Ядро μITRON 3.0, Задачі, Пам'ять, IPC, Таймери
+    │       ├── dp/*.tad          # [tad_bin][Графіка] Графічні примітиви DP (2D Display Primitives)
+    │       ├── shell/*.tad       # [tad_bin][Оболонка] Графічна оболонка, Вікна, Меню, Панелі, TIP/IME
+    │       └── indexfig.tad      # [tad_bin][Надійність] Статичний аналіз пам'яті (NASA JPL Rule 3)
     │
-    ├── os_spec/                  # Специфікації операційної системи BTRON3
-    │   ├── kernel/*.tad          # [tad_bin][Ядро] Ядро μITRON 3.0, Задачі, Пам'ять, IPC, Таймери
-    │   ├── dp/*.tad              # [tad_bin][Графіка] Графічні примітиви DP (2D Display Primitives)
-    │   ├── shell/*.tad           # [tad_bin][Оболонка] Графічна оболонка, Вікна, Меню, Панелі, TIP/IME
-    │   └── indexfig.tad          # [tad_bin][Надійність] Статичний аналіз пам'яті (NASA JPL Rule 3)
-    │
-    ├── b-hmi/                    # TRON Human-Machine Interface Guidelines & 220+ Parts
-    │   ├── part1/*.tad           # SUI, GUI, Panels, Display Standards
-    │   ├── part2/*.tad           # Layout, Procedures, Multipanel, Safety Standards
-    │   ├── part_book/*.tad       # Switches, Volumes, Selectors Catalog
-    │   └── img/*.png             # 220+ PNG High-Resolution Technical Illustrations
-    │
-    ├── b-free/                   # Free Software BTRON3 Implementation
-    │   ├── manifest.tad          # B-Free Manifesto
-    │   ├── kernel.tad            # Microkernel Architecture
-    │   └── posix.tad             # POSIX Compatibility Layer
+    ├── b-book/                   # B-Book: 14 compiled C99 systems-reference pages
+    │   └── *.tad                 # kernel, drivers, fs, graphics, window, hmi, font, tip,
+    │                             # apps, cores, desktop, settings, vobject, plus B-Book + index
     │
     ├── b-system/                 # B-System POSIX & VirtIO Specs
     │   ├── virtio.tad            # VirtIO Core Architecture & System Specifications
-    │   └── btron_spec.tad        # System Call Matrix
+    │   ├── btron_spec.tad        # System Call Matrix
+    │   └── kernel.tad, license.tad, apps/, settings/, theorems/, img/
     │
-    ├── b-media/                  # B-Media book: one catalog, seven pages + proofs
+    ├── b-media/                  # B-Media book: one catalog, eight pages + proofs
     │   ├── B-Media.tad           # Pipes, plane budgets & the SMP substrate
     │   ├── B-Core.tad            # InterCore streaming protocol
     │   ├── B-Audio.tad           # VirtIO-Sound PCM stack
@@ -64,8 +61,11 @@ btron/
     │   ├── B-GL.tad              # OpenGL 3D subsystem & backends
     │   └── theorems/*.tad        # media_intercore, media_smp, media_rtp
     │
+    ├── img/                      # Boot, desktop, IME and POSIX illustrations (182 PNG/JPEG)
+    │
     └── *.tad.txt                 # Companion human-readable symbolic TAD files
 ```
+
 
 ## 3. Binary TAD Segment Structure (BTRON3 SPEC 3.20)
 
@@ -101,7 +101,7 @@ Every `.tad` file in `./tad_bin/` begins with the 16-bit **TAD Main Record Heade
 | `TS_TCHAR` | `0xFFA3` | Character Fusen | Font size (10..24pt), bold w### Build Commands
 
 ```bash
-# Compile all documentation trees and 4 canonical books into ./tad_bin/:
+# Compile all documentation trees and the canonical books into ./tad_bin/:
 make tad_bin
 
 # Run the complete C-level unit test harness (95 tests):
@@ -112,7 +112,8 @@ make test-tad
 
 ### 1. Cabinet Explorer (実身キャビネット - `src/apps/vobj_manager.c`)
 - **Central Real Body Library:**
-  - **Canonical Books:** Tagged with `[TAD Spec]`, `[T-Kernel]`, `[HMI Guide]`, `[B-Free OS]`.
+  - **Canonical Books:** Tagged by `deduce_icon_tag()` in `src/apps/vobj_manager.c`: `[doc]` for book 1,
+    `[b-core]` for book 2, `[b-free]` for book 3 and `[b-hmi]` for book 4.
   - **System Specifications:** Tagged with `[tad_bin][Ядро]`, `[tad_bin][Специфікація]`, `[tad_bin][Графіка]`, `[tad_bin][Оболонка]`, and `[tad_bin][Надійність]`.
 - **Interactive Navigation:**
   - **Single Click / Key Arrow:** Selects an object, highlighting it in BTRON Navy Blue (`COLOR_NAVY`) and displaying metadata (Real Body ID, category, size in bytes) in the status bar.
@@ -123,7 +124,7 @@ make test-tad
 
 ```
 ┌──────────────────────────────────────────────────────────────────────────────────────────┐
-│ [◄ Назад] [► Вперед] [⌂ Дім] [↻ Оновити]  [ 📄 tad_bin/os_spec/kernel/kernel.tad      ] │ ◄ Fixed Toolbar (0..30px)
+│ [◄ Назад] [► Вперед] [⌂ Дім] [↻ Оновити] [ 📄 tad_bin/b-spec/os_spec/kernel/kernel.tad ] │ ◄ Fixed Toolbar (0..30px)
 ├──────────────────────────────────────────────────────────────────────────────────────────┤
 │ ■ 第5章 μITRON リアルタイムカーネル (Real-Time Kernel & Tasking)                         │ │
 │ ────────────────────────────────────────────────────────────────────────                 │ │

@@ -662,23 +662,21 @@ defmodule BtronTAD.Compiler do
       {:p, "BTRON3仕様では、ブート完了後の動的ヒープ確保 (malloc/free) を完全禁止し、全てのメモリ領域を有界化します。"}
     ]
 
-    tkernel_elements = [
-      {:h1, "T-Kernel 2.0 リアルタイムOS仕様書及び開発ガイド"},
-      {:image, "b-spec/os_spec/kernel/gif/processtask.gif", "図 2: μITRON リアルタイムタスク状態遷移図 (Task State Machine)"},
-      {:link, "b-core/tkernel_spec.tad", "第1章 T-Kernel 2.0 コアアーキテクチャ (Core Architecture)"},
-      {:link, "b-core/tkernel_startup.tad", "第2章 ブート及び初期化シーケンス (Startup Sequence)"},
-      {:link, "b-core/tkernel_qemu.tad", "第3章 QEMU仮想環境とボード展開 (QEMU & Board Deployment)"},
-      {:link, "b-core/index.tad", "第4章 T-Kernel 2.0 開発者ドキュメント索引 (Developer Index)"},
-      {:h2, "タスク状態遷移モデル (Task State Model)"},
-      {:ul, [
-        "DORMANT   : 休止状態 (タスク生成後未起動、または終了後)",
-        "READY     : 実行可能状態 (CPU割り当て待ちキューに待機)",
-        "RUNNING   : 実行状態 (CPU上で実行中)",
-        "WAITING   : 待ち状態 (セマフォ、タイマー、メッセージ待ち)",
-        "SUSPENDED : 強制待ち状態 (他タスクからのsus_tsk要求)"
+    bcore_elements = [
+      {:h1, "B-Core インターコア・ストリーミングプロトコル仕様書 (InterCore Streaming Protocol)"},
+      {:image, "b-spec/os_spec/kernel/gif/processtask.gif", "図 2: 五呼出プロトコル状態モデル (pub/sub/spawn/snd/rcv State Model)"},
+      {:link, "b-media/B-Core.tad", "第1章 InterCore ストリーミングプロトコル開発者仕様 (Protocol Developer Spec)"},
+      {:link, "b-media/theorems/media_intercore.tad", "第2章 Star Ring 形式検証台帳 (602 Coq判定・公理ゼロ)"},
+      {:h2, "五呼出アルファベット (The Five-Call Alphabet)"},
+      {:ol, [
+        "pub  — 発信カーソル生成 (bounded publisher cursor)",
+        "sub  — 受信カーソル末尾結合 (late joiner never replays)",
+        "spawn — コア指定とカーソル排他所有権移転 (ownership replaces the mutex)",
+        "snd  — 非ブロック送信 FULL(drop) 付き (non-blocking, says why)",
+        "rcv  — 厳密非ブロック O(1) 受信 EMPTY (no scheduler yield, ruling R7)"
       ]},
-      {:h2, "コアシステムコール (Core APIs)"},
-      {:pre, "ER tk_cre_tsk(T_CTSK *pk_ctsk);\nER tk_sta_tsk(ID tskid, INT stacd);\nER tk_ext_tsk(void);\nER tk_dly_tsk(TMO dlytim);\nER tk_wai_sem(ID semid, INT cnt, TMO tmout);"}
+      {:h2, "セクタプール保存則 (Sector Pool Conservation)"},
+      {:p, "pool_free + Σ resident = 64 および enq = deq + drop により、Clean-room BTRONマイクロカーネルの通信心臓部は実行時ヒープ確保ゼロで動作する。"}
     ]
 
     bfree_elements = [
@@ -717,7 +715,7 @@ defmodule BtronTAD.Compiler do
 
     base_books = [
       {"01_btron3_spec", "BTRON3 3.20 Specification Book", btron3_elements},
-      {"02_tkernel_book", "T-Kernel 2.0 Real-Time OS Book", tkernel_elements},
+      {"02_bcore_book", "B-Core InterCore Streaming Protocol Book", bcore_elements},
       {"03_bfree_os_book", "B-Free Operating System Book", bfree_elements}
     ]
 

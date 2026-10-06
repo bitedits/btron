@@ -161,6 +161,8 @@
           sentence that defines it. No other qualification of a number appears in the text.
         </p>
         <table class="api-table">
+          <caption>The three basis labels, their meanings and the rule for changing a value that carries
+          each. <span class="basis basis-norm">Normative</span>.</caption>
           <thead><tr><th>Label</th><th>Meaning</th><th>Change rule</th></tr></thead>
           <tbody>
             <tr><td><span class="basis basis-hw">Hardware</span></td><td>Fixed by the MSX standard, the Z80, V9958 or AY-3-8910 documentation, or observed C-BIOS behaviour.</td><td>MUST NOT change when a later step is added.</td></tr>
@@ -645,7 +647,8 @@
           <li><code>msx_reset</code> establishes the machine's reset state: PC = <code>0x0000</code>,
             SP = <code>0xFFFC</code>, AF = BC = DE = HL = IX = IY = <code>0xFFFF</code>, I = <code>0xFF</code>,
             R = 0, IM = 0, IFF1 = IFF2 = 0, not halted, every slot and port latch at its idle value, and RAM
-            initialized per D1 … D7 of 8.1. The Z80 leaves these registers undefined on hardware, so this list
+            initialized to <code>0x00</code> per D3 of 8.1. The Z80 leaves these registers undefined on
+            hardware, so this list
             is <span class="basis basis-norm">Normative</span>: it is the emulator reset convention, and the
             golden checkpoints of 8.2 pin it.</li>
           <li>C-BIOS initializes the VDP registers, selects SCREEN 0 and clears VRAM.</li>
@@ -689,7 +692,7 @@
             <tr><td><code>12</code></td><td>4</td><td><code>entry</code></td><td><code>0x4000</code> for <code>kind=1</code>, <code>0x0100</code> for <code>kind=2</code>, otherwise 0.</td></tr>
             <tr><td><code>16</code></td><td>4</td><td><code>size</code></td><td>Payload bytes, 1 … 1,048,576.</td></tr>
             <tr><td><code>20</code></td><td>16</td><td><code>bios_key</code></td><td>Settings key, for example <code>"bios.msx2p"</code>; empty selects the default C-BIOS.</td></tr>
-            <tr><td><code>36</code></td><td>32</td><td><code>name</code></td><td>UTF-8, NUL-terminated, 31 characters maximum.</td></tr>
+            <tr><td><code>36</code></td><td>28</td><td><code>name</code></td><td>UTF-8, NUL-terminated, 27 characters maximum.</td></tr>
             <tr><td><code>64</code></td><td><code>size</code></td><td><code>payload</code></td><td>The <code>.rom</code>, <code>.com</code>, BLOAD-wrapped, or <code>.cas</code> bytes verbatim.</td></tr>
           </tbody>
         </table>
@@ -701,8 +704,8 @@
     uint16_t flags;         /* bit0 pause, bit1 kb-hook */
     uint32_t entry;
     uint32_t size;
-    char     bios_key[16];  /* settings key, not a path */
-    char     name[32];
+    char     bios_key[16];  /* settings key, not a path; offset 20 */
+    char     name[28];      /* offset 36; ends the 64-byte header */
 } b_msx_body;               /* sizeof == 64; static assert in msx_body.h */</code></pre>
         <table class="api-table">
           <caption>Validation law by <code>kind</code>. Each row is one AV-1 negative test; the first core
@@ -854,12 +857,12 @@ const char *msx_version_string(void);           /* "tronMSX 1.04 (C99-only core)
           The MSX_CORE loop paces itself on <code>msx_run_frame</code> wall time against 16.67 ms. It MAY
           skip the presentation of a frame. A step with a cycle count other than <code>T_PER_FRAME</code>
           MUST NOT exist: catching up is two consecutive steps of exactly <code>T_PER_FRAME</code> T, each
-          with its own input snapshot (<a href="#tt-law">8.1</a> D1). Sleeping mid-frame is prohibited.
+          with its own input snapshot (D1 of <a href="#tt-law">8.1</a>). Sleeping mid-frame is prohibited.
           PCM back-pressure follows the B-Audio telemetry law: write while
           <code>virtio_sound_get_queued_bytes() &lt; 2 × PUMP_CHUNK</code>; drops are counted and never
           blocked. A full <code>cmd_ring</code> is a counted drop under B-Core rcv EMPTY semantics, and a
           dropped <code>KBD_SYNC</code> is recorded in the input log instead of retried
-          (D5, <a href="#tt-log">8.2</a>).
+          (D5 of <a href="#tt-law">8.1</a>, <a href="#tt-log">8.2</a>).
         </p>
       </section>
 
@@ -881,9 +884,9 @@ const char *msx_version_string(void);           /* "tronMSX 1.04 (C99-only core)
             <tr><td>Z80 registers, PSG state, LFSR, tables</td><td>≤ 16,384 B</td><td><span class="basis basis-norm">Normative</span></td><td>VOL16, the 8 × 10 key matrix, envelope counters.</td></tr>
             <tr><td>Core statics, arithmetic sum</td><td>262,296 B</td><td><span class="basis basis-norm">Normative</span></td><td>131,072 + 65,536 + 32,768 + 16,536 + 16,384.</td></tr>
             <tr><td>Bound</td><td>≤ 393,216 B (384 KiB)</td><td><span class="basis basis-norm">Normative</span></td><td>Holds on the POSIX and Pi-class targets alike. The 130,920 B headroom is reserved for the later steps named in Part 0; adding one MUST NOT breach the bound.</td></tr>
-            <tr><td>BIOS / C-BIOS image</td><td>≤ 65,536 B</td><td><span class="basis basis-hw">Hardware</span></td><td>Outside core statics: settings-loaded, read-only, hashed at load (8.2 D7).</td></tr>
+            <tr><td>BIOS / C-BIOS image</td><td>≤ 65,536 B</td><td><span class="basis basis-hw">Hardware</span></td><td>Outside core statics: settings-loaded, read-only, hashed at load (D7 of 8.1).</td></tr>
             <tr><td>Display planes</td><td>325,632 B</td><td><span class="basis basis-norm">Normative</span></td><td>Outside core statics: 3 × 108,544 B inside the B-Media IOD plane budget (Part 6), counted there once.</td></tr>
-            <tr><td>Time-travel debug shape</td><td>+13,920,464 B (13.3 MiB)</td><td><span class="basis basis-norm">Normative</span></td><td>Outside the shipping bound: input log, checkpoint ring, symbol table, debugger windows and log ring. Present only under <code>TT=1</code>, 8.5.</td></tr>
+            <tr><td>Time-travel debug shape</td><td>+13,918,464 B (13.3 MiB)</td><td><span class="basis basis-norm">Normative</span></td><td>Outside the shipping bound: input log, checkpoint ring, symbol table, debugger windows and log ring. Present only under <code>TT=1</code>, 8.5.</td></tr>
           </tbody>
         </table>
         <p>
@@ -1214,21 +1217,28 @@ tools/mssym.c   (C99, single file)
           C++ symbol and no foreign license text in the module.
         </div>
         <p>
-          Required module shape, one file pair per chip, C99 only — no C++, no plugin system, no machine XML:
+          The required module shape is one file pair per chip, C99 only, with no C++, no plugin system and no
+          machine XML:
         </p>
-        <pre><code>tronmsx.c   tronMSX top level: msx_init/reset/run_frame/blit; owns cycle counter and rings
-z80.c     superzazu-core shape, memory callbacks to slots.c
-slots.c   page map 1.2, ports 0xF7-0xFC, primary=BIOS/RAM/RAM/RAM fixed first core
-vdp.c     ports 0x88-0x8B, R0-R25, 128K VRAM, renderer 2.3, IRQ/NMI generators
-psg.c     register file, LFSR x^17+x^14+1, envelope shapes, PCM accumulator
-ppi.c     8255 decode 0x10-0x13 &amp; 0xA8-0xAB, keyboard matrix array, joystick bits
-bios.c    settings-key loader (bios.msx2p / msx2pext / disk / kanji), C-BIOS fallback
-kbd.c     matrix table (one generated array), KBD_SYNC snapshot per frame
-tronmsx_tt.c   time-travel instrument (Part 8): input log, checkpoint ring, restore and
-              headless replay, PC/page watch matching. The whole file is inside
-              #ifdef MSX_TT_DEBUG, so the shipping shape does not contain it and 5.3 holds
-tronmsx_tt_wnd.c  debugger windows (8.4.1): opn_wnd panels, menus and repaints. Also inside
-              #ifdef MSX_TT_DEBUG; depends on btron/wnd.h and on no other emulator unit</code></pre>
+        <table class="api-table">
+          <caption>The ten translation units of <code>src/emulators/msx/</code>. Names and responsibilities
+          are <span class="basis basis-norm">Normative</span>; <code>include/emulators/tronmsx.h</code>
+          (<a href="#coreapi">Part 5</a>) and <code>include/emulators/tronmsx_tt.h</code> (8.3) are the only
+          public headers, and AV-8 asserts the C99-only rule over this list.</caption>
+          <thead><tr><th>Unit</th><th>Responsibility</th><th>Specified in</th></tr></thead>
+          <tbody>
+            <tr><td><code>tronmsx.c</code></td><td>Top level: <code>msx_init</code>, <code>msx_reset</code>, <code>msx_run_frame</code>, <code>msx_blit_rgb565</code>; owns the cycle counter and the rings.</td><td><a href="#coreapi">Part 5</a></td></tr>
+            <tr><td><code>z80.c</code></td><td>Superzazu-shaped core; memory callbacks into <code>slots.c</code>.</td><td>2.1</td></tr>
+            <tr><td><code>slots.c</code></td><td>Page map, ports <code>0xF7</code>–<code>0xFC</code>, primary BIOS/RAM/RAM/RAM on the first core.</td><td>1.2, 1.3</td></tr>
+            <tr><td><code>vdp.c</code></td><td>Ports <code>0x88</code>–<code>0x8B</code>, R0–R25, 128 KiB VRAM, renderer, IRQ and NMI generators.</td><td>2.2, 2.3</td></tr>
+            <tr><td><code>psg.c</code></td><td>Register file, <code>x^17 + x^14 + 1</code> LFSR, envelope shapes, PCM accumulator.</td><td>2.4</td></tr>
+            <tr><td><code>ppi.c</code></td><td>8255 decode <code>0x10</code>–<code>0x13</code> and <code>0xA8</code>–<code>0xAB</code>, keyboard matrix array, joystick bits.</td><td>2.5</td></tr>
+            <tr><td><code>bios.c</code></td><td>Settings-key loader (<code>bios.msx2p</code>, <code>bios.msx2pext</code>, <code>bios.disk</code>, <code>bios.kanji</code>) with C-BIOS fallback.</td><td>4.2</td></tr>
+            <tr><td><code>kbd.c</code></td><td>Matrix table, one generated array, and the <code>KBD_SYNC</code> snapshot per frame.</td><td>2.5, 5.2</td></tr>
+            <tr><td><code>tronmsx_tt.c</code></td><td>Time-travel instrument: input log, checkpoint ring, restore, headless replay, PC and page watch matching. The whole file is inside <code>#ifdef MSX_TT_DEBUG</code>, so the shipping shape contains no part of it and the 5.3 bound holds.</td><td>Part 8</td></tr>
+            <tr><td><code>tronmsx_tt_wnd.c</code></td><td>Debugger windows: <code>opn_wnd()</code> panels, their menus and repaints. Also inside <code>#ifdef MSX_TT_DEBUG</code>, and depends on <code>btron/wnd.h</code> and on no other emulator unit.</td><td>8.4.1</td></tr>
+          </tbody>
+        </table>
       </section>
 
       <!-- ═══════ Part 8 ═══════ -->
@@ -1503,9 +1513,9 @@ const tt_log_t *tt_log_window(uint32_t *count);  /* read-only view of the log ri
     int16_t   caret;             /* selected row, -1 when none */
     uint16_t  page;              /* memory and VRAM views: selected page or table base */
     uint16_t  offset;
-    WND      *wnd;               /* the opn_wnd() handle */
+    WND      *wnd;               /* the opn_wnd() handle; 6 B of alignment hole precede it */
     uint8_t   dirty;
-    uint8_t   pad[13];
+    uint8_t   pad[7];
 } tt_view_t;                     /* sizeof == 32; static assert in tronmsx_tt_wnd.c */
 
 typedef struct {                 /* one log line, written by the step-path hook */
@@ -1517,8 +1527,11 @@ typedef struct {                 /* one log line, written by the step-path hook 
 } tt_log_t;                      /* sizeof == 32; ring of 256 records == 8,192 B */</code></pre>
         <p>
           Debugger-window storage inside the module is 8 × 32 B for the <code>tt_view_t</code> records
-          (256 B) plus the 8,192 B log ring: 8,448 B of static <code>.bss</code>, counted in 8.5. Each open
-          open: 1,853,440 B of client RGB565 pixmaps plus 8 × 184 B of descriptors. That memory belongs to the
+          (256 B) plus the 8,192 B log ring: 8,448 B of static <code>.bss</code>, counted in 8.5. Outside the
+          module, each open panel costs the window layer one <code>WND</code> descriptor
+          (<code>sizeof(WND)</code>, 184 B on the 64-bit host) and a client pixmap of 2 bytes per pixel —
+          1,853,440 B of pixmaps plus 1,472 B of descriptors, 1,854,912 B with all eight panels open. That
+          memory belongs to the
           window manager exactly as it does for the emulator window and for every application window, and it
           sits outside the module's static bound. No panel holds a copy of machine memory; each repaints
           through the accessors of 8.3. Inside the module the log ring is the structure that accumulates
@@ -1534,7 +1547,7 @@ typedef struct {                 /* one log line, written by the step-path hook 
           <thead><tr><th>Shape</th><th>Build</th><th>Static memory</th><th>Contains</th></tr></thead>
           <tbody>
             <tr><td>Shipping window</td><td><code>make msx-emu</code></td><td>262,296 B core statics against the 393,216 B bound (5.3)</td><td>No <code>tronmsx_tt.o</code>, no <code>tronmsx_tt_wnd.o</code>, no hook, no rings.</td></tr>
-            <tr><td>Debug harness</td><td><code>make msx-tt</code> (<code>TT=1</code>)</td><td>262,296 + 1,048,576 + 12,599,296 + 262,144 + 8,448 = 14,182,760 B (13.5 MiB), ceiling ≤ 16 MiB</td><td>Input log, checkpoint ring, symbol table, the eight debugger windows and their log ring. The instruction hook is code in the step path and adds no statics.</td></tr>
+            <tr><td>Debug harness</td><td><code>make msx-tt</code> (<code>TT=1</code>)</td><td>262,296 + 1,048,576 + 12,599,296 + 262,144 + 8,448 = 14,180,760 B (13.5 MiB), ceiling ≤ 16 MiB</td><td>Input log, checkpoint ring, symbol table, the eight debugger windows and their log ring. The instruction hook is code in the step path and adds no statics.</td></tr>
           </tbody>
         </table>
         <p>
@@ -1606,9 +1619,9 @@ typedef struct {                 /* one log line, written by the step-path hook 
             <tr><td>AV-6</td><td>AV sync</td><td>300-frame run: submitted PCM frames equal <code>44100/60 × executed frames</code> within ±1; the queue never exceeds 4 periods under the B-Audio pacing law, from the telemetry counter.</td></tr>
             <tr><td>AV-7</td><td>Input</td><td><code>msx_kbd_down(0,0)</code> followed by BIOS <code>SNSMAT()</code> with A = 0 returns column bit 0 cleared, which is SPACE; the whole 2.5 matrix set and released round-trips through the <code>KBD_SYNC</code> snapshot; joystick TRGA reads through BIOS <code>GTTRIG()</code> and the directions through <code>GTSTCK()</code>; a debugger-window key press leaves the matrix unchanged.</td></tr>
             <tr><td>AV-8</td><td>Real-time, boundedness, language law</td><td>On the smallest shipping target: 60 s continuous run with ≥ 99.5 % of frames inside 16.67 ms ± 2 ms; <code>nm</code> of the module objects shows zero <code>malloc</code> and <code>free</code> references (the window layer's own allocations are outside this check); <code>nm</code> and the link map show zero C++ symbols and zero C++ translation units in the module; the 5.3 footprint table holds within 5 %.</td></tr>
-            <tr><td>AV-9</td><td>Determinism law D1 … D7 (8.1)</td><td>Three runs of one 32 KiB fixture ROM. (a) and (b) replay the identical input log on the same host ⇒ final checkpoint CRC32 equal, and frame 300's 256×212 RGB565 byte-identical to the golden file. (c) runs with injected host jitter — an artificial 0…3 ms pacing delay and an over-filled <code>cmd_ring</code> ⇒ hardware state at every frame still equals (a), and only the pcm-drop and cmd-drop counters differ, which is D5 measured. Hygiene grep and <code>nm</code> on step-path units: zero <code>rand*</code> and <code>arc4random*</code>, zero <code>clock_gettime</code> and <code>gettimeofday</code>, zero libm references (D1, D2, D4), plus the first-step full-state diff proving D3.</td></tr>
+            <tr><td>AV-9</td><td>Determinism law D1 … D7 (8.1)</td><td>Three runs of one 32 KiB fixture ROM. (a) and (b) replay the identical input log on the same host ⇒ final checkpoint CRC32 equal, and frame 300's 256×212 RGB565 byte-identical to the golden file. (c) runs with injected host jitter — an artificial 0…3 ms pacing delay and an over-filled <code>cmd_ring</code> ⇒ hardware state at every frame still equals (a), and only the pcm-drop and cmd-drop counters differ, which is D5 measured. Hygiene grep and <code>nm</code> on step-path units: zero <code>rand*</code> and <code>arc4random*</code>, zero <code>clock_gettime</code> and <code>gettimeofday</code>, zero libm references (D1, D2, D4), plus the first-step full-state diff, which is D3 measured.</td></tr>
             <tr><td>AV-10</td><td>Reverse, seek, stale guard</td><td><code>TT_STEP</code>: 1,000 consecutive single-frame step-backs from frame 2,000 ⇒ every restored checkpoint byte-equal to the capture taken on the forward run, each step ≤ 8 ms wall. <code>TT_WINDOW</code>: 100 random seeks inside the 32 s window ⇒ byte-equal restores, ≤ 50 ms on desktop and ≤ 250 ms on the Pi-class target. Staleness: restoring a valid checkpoint against a different ROM ⇒ <code>MSX_ERR_TT_STALE</code> with the machine CRC identical before and after; seeking below the ring head ⇒ <code>MSX_ERR_TT_RANGE</code>. Static asserts: <code>sizeof(tt_input_t) == 16</code>, <code>TT_CHECKPOINT_SIZE == 196864</code>, profile coverage 38,400 ≤ <code>TT_LOG_FRAMES</code>. After any rewind the first submitted PCM block equals the historical block captured at that frame (8.2 step 3).</td></tr>
-            <tr><td>AV-11</td><td>Kit and build-shape hygiene (7.2, 8.5)</td><td>Program side: <code>nm</code> and the link map of every built BMSX program show zero reference to the z88dk classic-library <code>malloc</code> and <code>free</code> symbols (the 7.2 ban) and zero stdio calls from <code>crt0_btron.asm</code>. Shape side: <code>nm</code> of the shipping binary shows zero <code>tt_*</code> symbols and no instruction-hook reference, and its static size is measured against 5.3; a <code>TT=1</code> build is measured against the 14,182,760 B arithmetic and the 16 MiB ceiling of 8.5. Symbol side: re-reading <code>mssym</code> output yields the same pc→name table as the Rasm and z88dk artifacts it normalized (8.4).</td></tr>
+            <tr><td>AV-11</td><td>Kit and build-shape hygiene (7.2, 8.5)</td><td>Program side: <code>nm</code> and the link map of every built BMSX program show zero reference to the z88dk classic-library <code>malloc</code> and <code>free</code> symbols (the 7.2 ban) and zero stdio calls from <code>crt0_btron.asm</code>. Shape side: <code>nm</code> of the shipping binary shows zero <code>tt_*</code> symbols and no instruction-hook reference, and its static size is measured against 5.3; a <code>TT=1</code> build is measured against the 14,180,760 B arithmetic and the 16 MiB ceiling of 8.5. Symbol side: re-reading <code>mssym</code> output yields the same pc→name table as the Rasm and z88dk artifacts it normalized (8.4).</td></tr>
             <tr><td>AV-12</td><td>Debugger windows (8.4.1)</td><td>Each of the eight panels opens and closes with <code>tt_window_open()</code> and <code>tt_window_close()</code> as an independent top-level window with a non-empty <code>WND</code> title, sliding tab and close box, and closing any panel leaves the machine CRC unchanged. One seek issued from any panel produces exactly one <code>cmd_ring</code> entry and exactly one repaint pass per open panel (<code>inval_wnd</code> counter asserted). With the Disassembly window focused, pressing its navigation keys leaves the 2.5 keyboard matrix and BIOS <code>SNSMAT()</code> unchanged. Selecting a log line seeks to the frame in that line's <code>frame</code> field. Static asserts: <code>sizeof(tt_view_t) == 32</code>, <code>sizeof(tt_log_t) == 32</code>, log ring 256 records, debugger-window statics <code>8 × 32 + 8,192 == 8,448 B</code>.</td></tr>
           </tbody>
         </table>
@@ -1679,11 +1692,15 @@ typedef struct {                 /* one log line, written by the step-path hook 
           keyboard-isolation and one-repaint laws, 8,448 B of debugger-window statics and the AV-12 vector; it
           separates the page 2 slot view from the 64 KiB RAM pool so a 32 KiB cartridge's second block is
           reachable (1.2); it replaces the earlier proven/inferred provenance wording with the three basis
-          labels of Part 0,
-          and completes the tables that were previously prose or monospace listings: BIOS entry points, the
-          cartridge header, the BMSX validation rules, the error-code ownership, the tasks and channels, the
-          checkpoint header, the profiles, the instruments, the build shapes and the latency budget. Where the
-          design note and this book disagree, this book is normative.
+          labels of Part 0, and completes the tables that were previously prose or monospace listings: BIOS
+          entry points, the cartridge header, the BMSX validation rules, the error-code ownership, the tasks
+          and channels, the checkpoint header, the profiles, the instruments, the module units of 7.7, the
+          build shapes and the latency budget. Every BIOS address and calling convention in 3.1 and 3.2 was
+          re-checked against the MSX Assembly Page BIOS reference, and the VDP address model of 2.2 against its
+          V9958 programming article; both are cited in the captions. The two logging structures are named
+          distinctly from here: the input log is the 65,536 × 16 B per-step history of 8.2, and the log ring is
+          the 256 × 32 B debugger line ring of 8.4.1. Where the design note and this book disagree, this
+          book is normative.
         </p>
       </section>
 

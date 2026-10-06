@@ -340,7 +340,7 @@ return (n == VIO_ERR_INVAL) ? -1 : 0;   /* counted refusal, never blocking */</c
             <tr><td>Cassette deck (<code>audio_player.c</code>)</td><td>open/write/close + deck state</td><td>sources TAPE/LINE/CD/TUNER; tape-type EQ; Dolby B/C; VU with peak-hold</td></tr>
             <tr><td>Orchestra sink</td><td>write inside <code>chain()</code></td><td>runs on the IOD plane budget (B-Media)</td></tr>
             <tr><td>lilcu64 synth</td><td><code>lilcu64_synth_pump_virtio()</code>; provides weak stubs</td><td>44.1 kHz stereo; see B-Sound</td></tr>
-            <tr><td>tronMSX PSG</td><td>plan: accumulator-resampled AY mix into <code>virtio_sound_write</code></td><td>paced by queue telemetry, counted drops when device absent; see B-MSX Part 6</td></tr>
+            <tr><td>tronMSX PSG</td><td>plan: accumulator-resampled AY mix into <code>virtio_sound_write</code></td><td>paced by queue telemetry, counted drops when device absent; its time-travel debugger flushes the producer's pending PCM on a rewind and never touches the device (see B-MSX Part 6, 8.2)</td></tr>
             <tr><td>Kagee / terminal</td><td>event chimes, bell</td><td>gated by Control Panel checkbox</td></tr>
             <tr><td>Control Panel (<code>settings/sound.c</code>)</td><td>policy only — never writes PCM</td><td>driver select, rate, buffer, master volume</td></tr>
           </tbody>

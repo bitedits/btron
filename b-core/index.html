@@ -1,68 +1,643 @@
-<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 3.2 Final//EN">
-<HTML>
-<HEAD>
-<META CHARSET="UTF-8">
-<META NAME="viewport" CONTENT="width=device-width, initial-scale=1.0">
-<TITLE>T-Kernel 2.0 Specification & Technical Guides</TITLE>
-<LINK REL="stylesheet" HREF="doc.css">
-</HEAD>
-<BODY>
-    <DIV CLASS="doc-header-banner">
-      T-Kernel Specification | Real-Time Operating System Kernel Architecture
-    </DIV>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>B-Core – InterCore Streaming Protocol: The Verified Microkernel Nexus | B-Book</title>
+  <meta name="description" content="Developer specification for B-Core: the formally verified InterCore pub/sub streaming protocol (pub, sub, spawn, snd, rcv) that forms the heart and microkernel of the clean-room BTRON B-System. Star ring topology, cursor ownership, sector-pool conservation, non-blocking receipts, and real-time plane budgeting.">
+  <link rel="stylesheet" href="../b-book/b-book.css">
+</head>
+<body>
 
-    <A href="../index.html">← Return to Root Specification</A><BR><BR>
-    
-    <H1>T-Kernel 2.0 Technical Documentation</H1>
-    
-    <P>
-      <B>T-Kernel 2.0</B> is a standardized, highly-efficient Real-Time Operating System (RTOS) kernel designed for embedded systems and multi-core processors. It provides fine-grained task management, priority-based preemptive scheduling, synchronization primitives, memory management, and hardware abstraction stubs.
-    </P>
-    
-    <DIV STYLE='background:#e0f2fe; border: 1px solid #bae6fd; padding:15px; border-radius:6px; margin: 20px 0;'>
-      <H3 STYLE='margin-top:0; color:#0369a1;'>Documentation Index Overview</H3>
-      Adapted from the official T-Kernel 2.0 specification sources (`tkernel_source/doc/T-Kernel2.0/doc/en/`). All sections are formatted using clean HTML syntax with single-line titles and modern typography.
-    </DIV>
+  <nav class="book-global-nav" aria-label="Site navigation">
+    <div class="book-global-nav-container">
+      <a href="../index.html" class="book-global-logo"><img width="48" src="https://n2o.dev/img/synrc.svg" alt="Synrc Logo"></a>
+      <button class="book-nav-toggle" aria-label="Toggle navigation" aria-expanded="false" onclick="const links = this.nextElementSibling; const sidebar = document.querySelector('.book-sidebar'); const open = links.classList.toggle('open'); sidebar.classList.toggle('open', open); this.classList.toggle('open', open); this.setAttribute('aria-expanded', open);">
+        <span class="hamburger"></span>
+      </button>
+      <ul class="book-global-links">
+    <li><a href="../index.html">B-System</a></li>
+    <li><a href="../b-book/index.html">B-Book</a></li>
+    <li><a href="index.html" class="active">B-Core</a></li>
+    <li><a href="../conformance.html">B-Spec</a></li>
+    <li><a href="../releases.html">Releases</a></li>
+    <li><a href="https://github.com/bitedits/btron">GitHub</a></li>
+      </ul>
+    </div>
+  </nav>
 
-    <HR>
+  <!-- Navigation Sidebar -->
+  <nav class="book-sidebar">
+    <div class="sidebar-brand">
+      <div class="brand-title">B-Core <span class="badge">Rev 1.00</span></div>
+      <div class="brand-sub">InterCore Protocol Reference</div>
+    </div>
+    <div class="sidebar-nav">
+      <div class="nav-heading">Overview</div>
+      <a href="#scope" class="nav-link">Scope &amp; Nexus Model</a>
+      <a href="../b-book/index.html" class="nav-link">B-Book Master Index</a>
 
-    <H2>Documentation Sections</H2>
-    
-    <UL STYLE="list-style-type: none; padding-left: 0;">
-      <LI STYLE="margin-bottom: 1.2rem;">
-        <H3><A href="tkernel_spec.html">1. T-Kernel 2.0 Core Kernel Specification</A></H3>
-        <P STYLE="margin-top: 0.2rem; color: #475569;">
-          Detailed architecture of Task Control Blocks (TCB), Task State Transitions, Priority Scheduling, Semaphores, Eventflags, Mailboxes, Mutexes, Memory Pools, Timers, and Subsystems.
-        </P>
-      </LI>
+      <div class="nav-heading">Part 1: Architecture</div>
+      <div class="nav-sublinks">
+        <a href="#topology" class="nav-sublink">Star Topology, No Broker</a>
+        <a href="#taxonomy" class="nav-sublink">The Five-Call Taxonomy</a>
+        <a href="#lifecycle" class="nav-sublink">Cursor &amp; Task Lifecycle</a>
+        <a href="#concurrency" class="nav-sublink">Concurrency &amp; Safety</a>
+        <a href="#planes" class="nav-sublink">Real-Time Planes &amp; Gate</a>
+      </div>
 
-      <LI STYLE="margin-bottom: 1.2rem;">
-        <H3><A href="tkernel_startup.html">2. T-Kernel Startup & Initialization Sequence</A></H3>
-        <P STYLE="margin-top: 0.2rem; color: #475569;">
-          Hardware boot sequence, early system memory layout, interrupt vector configuration, `tkstart` entry point, and handover to the `sysmain` entry task.
-        </P>
-      </LI>
+      <div class="nav-heading">Part 2: Data Structures</div>
+      <div class="nav-sublinks">
+        <a href="#types" class="nav-sublink">Identity &amp; Result Types</a>
+        <a href="#records" class="nav-sublink">Writer / Reader / Task / Bus</a>
+        <a href="#constants" class="nav-sublink">Contract Constants</a>
+        <a href="#evt" class="nav-sublink">EVT Bounded Queue</a>
+      </div>
 
-      <LI STYLE="margin-bottom: 1.2rem;">
-        <H3><A href="tkernel_qemu.html">3. QEMU Emulation & Hardware Reference Deployment</A></H3>
-        <P STYLE="margin-top: 0.2rem; color: #475569;">
-          Setting up QEMU emulation targets (`TEF_EM1D`, Raspberry Pi, ARM virt), VirtIO MMIO device bus binding, serial console output, and bare-metal debugging.
-        </P>
-      </LI>
-    </UL>
+      <div class="nav-heading">Part 3: API Reference</div>
+      <div class="nav-sublinks">
+        <a href="#pub" class="nav-sublink">pub</a>
+        <a href="#sub" class="nav-sublink">sub</a>
+        <a href="#spawn" class="nav-sublink">spawn</a>
+        <a href="#snd" class="nav-sublink">snd</a>
+        <a href="#rcv" class="nav-sublink">rcv</a>
+      </div>
 
-    <HR>
-    <footer class="doc-footer">
-        <div class="doc-footer-container">
-            <div>T-Kernel 2.0 Open Specification (TRON Forum)</div>
-            <ul class="doc-footer-links">
-                <li><a href="../index.html">Root Index</a></li>
-                <li><a href="index.html">T-Kernel Home</a></li>
-                <li><a href="tkernel_spec.html">Core Spec</a></li>
-                <li><a href="tkernel_startup.html">Startup</a></li>
-                <li><a href="tkernel_qemu.html">QEMU & Board</a></li>
-            </ul>
+      <div class="nav-heading">Part 4: Practice</div>
+      <div class="nav-sublinks">
+        <a href="#examples" class="nav-sublink">Canonical Examples</a>
+        <a href="#metrics" class="nav-sublink">Metrics &amp; Pass Criteria</a>
+        <a href="#verified" class="nav-sublink">Verification Cross-Reference</a>
+      </div>
+
+      <div class="nav-heading">Companion Books</div>
+      <a href="../b-media/index.html" class="nav-link">B-Media (Pipes &amp; Budgets)</a>
+      <a href="../b-rtp/index.html" class="nav-link">B-RTP (WebRTC Core)</a>
+      <a href="../b-audio/index.html" class="nav-link">B-Audio (PCM Stack)</a>
+      <a href="../b-video/index.html" class="nav-link">B-Video (Display Path)</a>
+      <a href="../b-sound/index.html" class="nav-link">B-Sound (lilcu64 Synth)</a>
+    </div>
+  </nav>
+
+  <!-- Main Content Canvas -->
+  <main class="book-content">
+    <header class="book-header">
+      <div class="breadcrumb">
+        <a href="../b-book/index.html">B-Book</a> / <span>B-Core</span>
+      </div>
+      <h1 class="page-title">B-Core: InterCore Streaming Protocol</h1>
+      <p class="page-lead">The verified heart of the clean-room BTRON microkernel — a five-call, brokerless,
+      non-blocking pub/sub nexus formalized in Rocq/Coq and executable as an OCaml oracle:
+      <code>pub · sub · spawn · snd · rcv</code>.</p>
+    </header>
+
+    <article>
+
+      <!-- ═══════════════════════ Scope ═══════════════════════ -->
+      <section id="scope">
+        <h2>Scope: Why the Nexus Is the Kernel</h2>
+        <p>
+          B-Core specifies the <strong>InterCore protocol</strong>, the message fabric on which every other
+          B-System plane is built: input, UI, I/O, and decode actors exchange data exclusively through
+          publisher and reader cursors, never through locks, blocking mailboxes, or a broker daemon. The
+          protocol is the microkernel in the minimal sense: five calls, static tables, one bounded sector
+          pool, and a small closed set of invariants that no sequence of calls can escape.
+        </p>
+        <p>
+          The normative sources are <code>doc/txt/ASYNC.txt</code> §0.1 (taxonomy),
+          <code>doc/txt/SMP-AMP-SYNC-IO-HARDENING.txt</code> §7.3–§7.4 (the shipped C contract and its pass
+          criteria, whose ruling R7 supersedes the older blocking-receive text),
+          <code>doc/txt/INTERPRETER.txt</code> §3 (system-nexus model), and
+          <code>doc/txt/IO.txt</code> §5 (the EVT queue). The executable ground truth is the OCaml oracle
+          <code>verify/models/media_intercore_model.ml</code>; the proofs are the Rocq theory
+          <code>verify/models/media_intercore_properties.v</code>. This book documents the
+          <em>operational</em> contract; theorem statements and their proofs are catalogued on the
+          <a href="theorems/media_intercore.html">B-Core theorems page</a> and are not re-derived here.
+        </p>
+        <div class="callout">
+          <strong>Implementation status.</strong> The five calls are a frozen contract destined for
+          <code>src/mp/async_core.h</code> (multiprocessing home, per hardening document decision D3).
+          Until that header lands, the OCaml oracle <em>is</em> the executable specification, and the
+          classical T-Kernel message surface in <code>src/kernel/ipc_msg.c</code> keeps its current
+          behaviour: it is <strong>not</strong> rerouted onto InterCore until the surface passes the §7.4
+          metrics on two ports.
         </div>
+      </section>
+
+      <!-- ═══════════════════════ Part 1 ═══════════════════════ -->
+      <section id="topology">
+        <h2>Part 1 — Architecture &amp; Conceptual Model</h2>
+        <h3>1.1 Star Topology, No Broker</h3>
+        <p>
+          Each publisher owns one bounded ring. Subscribers attach directly to the publisher's history; there
+          is no intermediary queue, router, or daemon between them. One publisher per core is admitted, which
+          makes the star a per-core structure and removes any shared mutable broker state from the data path.
+        </p>
+        <pre><code>                    ┌─────────────────────────┐
+   producer task    │  publisher cursor  w_id │  w_cap ring sectors
+   (snd w data) ───►│  w_hist  w_enq  w_drop  │◄── one publisher per core
+                    └────┬────────┬───────┬───┘
+                         │        │       │      (direct attach, no broker)
+                    ┌────▼───┐ ┌──▼────┐ ┌▼─────┐
+                    │ reader │ │ reader│ │reader│  each pins r_start at sub-time
+                    │ r_cur  │ │ r_cur │ │r_cur │  each drains with rcv, O(1)
+                    └────────┘ └───────┘ └──────┘
+                       core 0      core 1     core 3 (AMP I/O)</code></pre>
+        <p>
+          A subscriber's position is a cursor into the publisher's absolute sequence space
+          (<code>w_hist[seq]</code>), not a slot in a shared consumer ring. Receipt is therefore a pure read:
+          <code>O(1)</code>, never a memmove, and never a wait. Transport is zero-copy at the sector
+          granularity: a sent item charges the static sector pool exactly while some live subscriber can
+          still be handed it, and an unread publisher holds <strong>zero</strong> sectors — there is no
+          broker that stores traffic for an absent consumer.
+        </p>
+      </section>
+
+      <section id="taxonomy">
+        <h3>1.2 The Five-Call Taxonomy</h3>
+        <p>The complete protocol alphabet. Everything an actor may do to another actor's data is one of these five.</p>
+        <table class="api-table">
+          <thead><tr><th>Call</th><th>Intent</th><th>Blocks?</th><th>Fails how?</th></tr></thead>
+          <tbody>
+            <tr><td><code>pub [capacity]</code></td><td>Create a publisher cursor; return its system-wide writer id.</td><td>Never</td><td>Inert refusal: table full.</td></tr>
+            <tr><td><code>sub [publisher]</code></td><td>Bind a reader cursor to one live publisher, pinned to its current tail.</td><td>Never</td><td>Inert refusal: publisher dead, owned by another task, or reader table full.</td></tr>
+            <tr><td><code>spawn [core; program; cursors]</code></td><td>Create a Task on the named core with exclusive ownership of the listed cursors (SPN).</td><td>Never</td><td>Typed refusal: bad core, bad/taken cursor, shared publisher, no task slot. Every refusal is inert.</td></tr>
+            <tr><td><code>snd [writer; data]</code></td><td>Non-blocking append into the publisher's ring.</td><td>Never</td><td><code>BAD_CURSOR</code> or <code>FULL(n)</code> — and FULL carries the running drop count.</td></tr>
+            <tr><td><code>rcv [reader]</code></td><td>Non-blocking receipt of the next item at the reader's cursor.</td><td>Never</td><td><code>BAD_CURSOR</code> or <code>EMPTY</code>. There is no fourth, blocking case (ruling R7).</td></tr>
+          </tbody>
+        </table>
+        <p>
+          Ruling R7 of the hardening document is explicit: an earlier text allowed <code>rcv</code> on an
+          empty queue to "yield to the scheduler". That is superseded — a scheduler yield on the drain path
+          reintroduces exactly the sleep/wake transition the Zero-Switch Actor Topology exists to eliminate.
+          <code>rcv</code> returns <code>EMPTY</code> to the caller and the actor keeps its timeslice.
+        </p>
+      </section>
+
+      <section id="lifecycle">
+        <h3>1.3 Cursor &amp; Task Lifecycle</h3>
+        <h4>Writer cursor</h4>
+        <ol>
+          <li><strong>Dead slot</strong> — present in the static table, <code>w_live = false</code>.</li>
+          <li><strong>Live, unowned</strong> — after <code>pub(cap)</code> revives the first dead slot; only pre-spawn calls may touch it.</li>
+          <li><strong>Live, owned</strong> — after <code>spawn</code> grants it to exactly one task; only that task may <code>snd</code>, and fan-out via <code>sub</code> needs that owner.</li>
+        </ol>
+        <h4>Reader cursor</h4>
+        <ol>
+          <li><strong>Dead slot</strong> in the static table.</li>
+          <li><strong>Joined at the tail</strong> — <code>sub(w)</code> pins <code>r_start = r_cursor = w_enq</code>: a late joiner can never replay history.</li>
+          <li><strong>Draining</strong> — <code>rcv</code> advances <code>r_cursor</code> one absolute sequence step per receipt, bounded by the publisher watermark.</li>
+        </ol>
+        <h4>Task</h4>
+        <ol>
+          <li><strong>Admission</strong> — <code>spawn</code> validates in fixed order: core id <code>0 … cores-1</code>; non-empty, live cursor list; no cursor already owned; at most one publisher in the grant; the target core hosts no other publisher; a free task slot exists.</li>
+          <li><strong>Ownership by value</strong> — granted cursors live in <code>t_cursors</code>; ids are dense small integers, so ownership transfers with no handle and no pointer escape.</li>
+          <li><strong>Exclusion</strong> — an owned cursor may be touched only by its owning task. This is the mutex that is not there: no lock object, no wait order, no priority inversion, and nothing to release — ownership ends with the task.</li>
+        </ol>
+      </section>
+
+      <section id="concurrency">
+        <h3>1.4 Concurrency &amp; Safety Model</h3>
+        <ul>
+          <li><strong>Zero post-boot allocation</strong> (NASA JPL Rule 3 compliance): writer, reader and
+            task tables and the 64-sector pool exist before the first call; <code>bus0</code> is a static value.</li>
+          <li><strong>Refusal is stuttering.</strong> Every refusal (<code>pub</code>/<code>sub</code>
+            returning no id, or an error result of <code>snd</code>/<code>rcv</code>/<code>spawn</code>)
+            leaves the bus state <em>unchanged</em>. A rejected call is indistinguishable from a no-op.</li>
+          <li><strong>Retention floor.</strong> A publisher's retained span is
+            <code>resident = w_enq − min(w_enq, cursors of live subscribers)</code> and never exceeds
+            <code>w_cap</code>. Absent readers do not force retention: the watermark is a floor, not a debt.</li>
+          <li><strong>Conservation.</strong> At every reachable state
+            <code>pool_free + Σ resident = sector_pool</code>. <code>rcv</code> is what returns sectors; a
+            drain to quiescence restores the full pool. The bookkeeping identity
+            <code>enq = deq + drop</code> holds per publisher.</li>
+          <li><strong>Commutation law.</strong> Calls on disjoint cursors commute; the relative order of
+            <em>dependent</em> calls (a <code>sub</code> before or after a <code>snd</code>) is an observable
+            difference — the early subscriber reads the item, the late subscriber reads empty. This is the
+            deliberate, specified freedom of a schedule, not a race.</li>
+          <li><strong>Closed class.</strong> No word over the five-call alphabet, in any interleaving on any
+            number of cores, escapes the well-formedness class <code>bus_wf</code> (theorems page, group I9).</li>
+        </ul>
+      </section>
+
+      <section id="planes">
+        <h3>1.5 Real-Time Planes &amp; the Gate</h3>
+        <p>
+          InterCore carries the ASYNC plane contracts of <code>include/btron/async_rt.h</code>:
+          the input plane at a 1000&nbsp;µs period with a 500&nbsp;µs WCET budget, the UI plane at
+          8333&nbsp;µs with 4000&nbsp;µs, and the AMP I/O core (core 3) free-running at 250&nbsp;µs with a
+          500&nbsp;µs budget. Cursor drains are budgeted inside these periods; the pointer path uses the
+          wait-free seqlock snapshot (<code>pointer_slot_t</code>) rather than a lock.
+        </p>
+        <p>
+          Conformance is reported as five rows — <code>planes</code>, <code>ring</code>,
+          <code>intercore</code>, <code>amp</code>, <code>io_wcet</code> — behind the <code>BTRON_MP</code>
+          compile flag. The gate is honest: a shipped one-core port prints <code>PASS(4/5, 1 SKIP)</code>
+          because <code>amp</code> cannot be observed there; with the flag off only <code>planes</code>
+          passes; <code>--require=amp</code> on a one-core port is a FAIL, never a quiet migration to core 0.
+          SKIP is never reported as PASS.
+        </p>
+      </section>
+
+      <!-- ═══════════════════════ Part 2 ═══════════════════════ -->
+      <section id="types">
+        <h2>Part 2 — Data Structures, Types &amp; Enumerations</h2>
+        <h3>2.1 Contract Types (C99 surface, §7.3)</h3>
+        <p>
+          Cursor identities are dense small integers indexing static tables — no handles, no pointer escape.
+          The shipped table widths (§7.4 row <code>pub=4 sub=8</code>) fix the address space.
+        </p>
+        <pre><code>/* src/mp/async_core.h (contract; oracle in media_intercore_model.ml) */
+typedef int writer_id_t;   /* 0 .. max_writers-1 (4)  */
+typedef int reader_id_t;   /* 0 .. max_readers-1 (8)  */
+typedef int task_id_t;     /* 0 .. max_tasks-1   (8)  */
+typedef int core_id_t;     /* 0 .. bus.cores-1        */
+
+typedef enum {
+    SNDR_OK,          /* item appended, pool charged          */
+    SNDR_FULL         /* ring or pool exhausted; item dropped */
+} snd_status_t;
+
+typedef struct { snd_status_t kind; int drop_count; } snd_result_t;
+
+typedef enum {
+    RCVR_DATA,        /* payload written to *out              */
+    RCVR_EMPTY,       /* nothing pending; never a yield        */
+    RCVR_BAD_CURSOR   /* dead, foreign, or unowned cursor      */
+} rcv_status_t;</code></pre>
+        <h4>Result alphabets in the oracle</h4>
+        <pre><code>type snd_result   = S_OK | S_FULL of int | S_BAD_CURSOR                      (* model.ml:236 *)
+type rcv_result   = R_DATA of int | R_EMPTY | R_BAD_CURSOR                   (* model.ml:257 *)
+type spawn_result = T_SPAWNED of int | T_BAD_CORE | T_BAD_CURSOR
+                  | T_CURSOR_TAKEN | T_SHARED_PUBLISHER | T_NO_TASK_SLOT     (* model.ml:208 *)
+(* pub / sub return (bus * id option): None = inert refusal, bus unchanged  *)</code></pre>
+      </section>
+
+      <section id="records">
+        <h3>2.2 Records &amp; Field Invariants</h3>
+        <p>Executable oracle records (<code>media_intercore_model.ml</code> §2):</p>
+        <pre><code>type cursor_ref = CPub of int | CSub of int
+
+type writer = { w_id : int; w_live : bool; w_cap : int;
+                w_enq  : int;      (* accepted sends; also next sequence number *)
+                w_drop : int;      (* refused because the ring or pool was full *)
+                w_hist : int list; }   (* payload at absolute seq, oldest first *)
+
+type reader = { r_id : int; r_live : bool; r_writer : int;
+                r_start  : int;    (* watermark pinned by sub: no replay     *)
+                r_cursor : int;    (* absolute sequence position             *)
+                r_deq    : int;    (* receipts                               *)
+                r_log : int list; };  (* everything received, in order       *)
+
+type task = { t_id : int; t_live : bool; t_core : int; t_prog : int;
+              t_cursors : cursor_ref list; };   (* ownership, by value       *)
+
+type bus  = { cores : int; writers : writer list; readers : reader list;
+              tasks : task list; pool_free : int; };</code></pre>
+        <p>The Rocq theory derives the two counters that the oracle stores, eliminating a second bookkeeping
+        model that could disagree with itself:</p>
+        <pre><code>Record writer : Type := mk_writer { w_live : bool; w_cap : nat;
+                                    w_hist : list nat; w_drop : nat }.
+Record reader : Type := mk_reader { r_live : bool; r_wid : nat;
+                                    r_start : nat; r_cur : nat }.
+(* in Coq:  w_enq := length w_hist   and   r_deq := r_cur - r_start  *)</code></pre>
+        <h4>Field invariant table</h4>
+        <table class="api-table">
+          <thead><tr><th>Field</th><th>Type</th><th>Valid range</th><th>Invariant</th></tr></thead>
+          <tbody>
+            <tr><td><code>w_cap</code></td><td><code>int / nat</code></td><td>free choice at <code>pub</code></td><td><code>resident w ≤ w_cap</code>; the cap is a policy knob, not a safety bound.</td></tr>
+            <tr><td><code>w_enq</code></td><td><code>int</code></td><td><code>≥ 0</code></td><td>equals <code>length w_hist</code>; the publisher watermark every reader is bounded by.</td></tr>
+            <tr><td><code>w_hist</code></td><td><code>int list</code></td><td>—</td><td>indexed by absolute sequence number; only the span above the retention floor is held.</td></tr>
+            <tr><td><code>r_start</code></td><td><code>int</code></td><td>set once at <code>sub</code></td><td><code>r_start = w_enq</code> at join; never mutated afterwards.</td></tr>
+            <tr><td><code>r_cursor</code></td><td><code>int</code></td><td><code>r_start ≤ r_cursor ≤ w_enq</code></td><td>no subscriber is ever ahead of the watermark; <code>rcv</code> reads exactly <code>w_hist[r_cursor]</code>.</td></tr>
+            <tr><td><code>t_cursors</code></td><td><code>cursor_ref list</code></td><td>live, unowned at grant</td><td>pairwise exclusive ownership across tasks; at most one publisher per task and per core.</td></tr>
+            <tr><td><code>pool_free</code></td><td><code>int</code></td><td><code>0 ≤ pool_free ≤ sector_pool</code></td><td><code>pool_free + Σ resident = sector_pool</code> at every reachable state.</td></tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section id="constants">
+        <h3>2.3 Contract Constants</h3>
+        <table class="api-table">
+          <thead><tr><th>Constant</th><th>Value</th><th>Source</th><th>Meaning</th></tr></thead>
+          <tbody>
+            <tr><td><code>cores_shipped</code></td><td>1</td><td>model.ml §1</td><td>Core count of today's ports; drives the honest SKIP of the <code>amp</code> row.</td></tr>
+            <tr><td><code>cores_target</code></td><td>4</td><td>model.ml §1</td><td>Tier-2 target topology; all five gate rows pass there.</td></tr>
+            <tr><td><code>io_core_id</code></td><td>3</td><td>model.ml §1</td><td>The AMP I/O core.</td></tr>
+            <tr><td><code>max_writers / max_readers / max_tasks</code></td><td>4 / 8 / 8</td><td>§7.3</td><td>Static table widths; admission is bounded by them.</td></tr>
+            <tr><td><code>writer_capacity</code></td><td>4</td><td>decision D1</td><td>Default bounded ring depth: refuse when full, never wrap.</td></tr>
+            <tr><td><code>sector_pool</code></td><td>64</td><td>decision D1</td><td>Reserved at init; never grows; conserved by every call.</td></tr>
+            <tr><td><code>event_queue_size</code></td><td>256</td><td>IO.txt §5.1</td><td>EVT SPSC ring depth, a power of two, indexed by mask.</td></tr>
+            <tr><td><code>input_period_us / input_budget_us</code></td><td>1000 / 500</td><td>async_rt.h</td><td>Input plane period and WCET budget.</td></tr>
+            <tr><td><code>ui_period_us / ui_budget_us</code></td><td>8333 / 4000</td><td>async_rt.h</td><td>UI plane period and WCET budget.</td></tr>
+            <tr><td><code>io_period_us / io_budget_us</code></td><td>250 / 500</td><td>IO.txt §6 SR1/SR2</td><td>I/O core free-run and budget.</td></tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section id="evt">
+        <h3>2.4 The EVT Bounded Queue (I/O Plane Projection)</h3>
+        <p>
+          The event transport onto the AMP I/O core is a single-producer / single-consumer ring of 256 slots.
+          Index arithmetic is masking, never modulo; head is consumer-owned, tail is producer-owned; and
+          publication is two-phase — store the item invisibly, then advance the tail — so a consumer can
+          never observe a half-written slot.
+        </p>
+        <pre><code>type evt = { buf : int list; head : int; tail : int }
+let evt_idx i = i land (event_queue_size - 1)       (* masked index              *)
+let evt_store   e v = (* write buf[tail-slot] only; invisible to consumer        *)
+let evt_publish e   = { e with tail = e.tail + 1 }  (* the single visible step   *)
+let evt_put   e v   = if full then refuse else evt_publish (evt_store e v)</code></pre>
+        <p>
+          A full queue refuses the producer rather than evicting the consumer's unread item: overflow is a
+          counted drop, and the §7.4 acceptance row requires zero EVT overflow on the shipped soak.
+        </p>
+      </section>
+
+      <!-- ═══════════════════════ Part 3 ═══════════════════════ -->
+      <section id="api">
+        <h2>Part 3 — API Reference (the Five Calls)</h2>
+
+        <h3 id="pub">3.1 <code>pub</code> — create a publisher cursor</h3>
+        <div class="api-card">
+          <div class="api-header"><span class="api-name">pub</span><span class="ret-badge">writer_id_t</span></div>
+          <p>Revives the first dead writer slot, marks it live with the requested ring capacity, and returns
+             its dense id. The tables exist before the first call: <code>pub</code> allocates nothing.</p>
+          <div class="api-signature">writer_id_t pub(size_t capacity);                  /* C contract §7.3 */
+bus * writer_id_t option pub bus capacity;             /* oracle: None = inert refusal */</div>
+          <h4>Parameters</h4>
+          <table class="api-table">
+            <thead><tr><th>Name</th><th>Type</th><th>Dir</th><th>Description</th></tr></thead>
+            <tbody>
+              <tr><td><code>capacity</code></td><td><code>size_t</code></td><td>[in]</td><td>Ring depth for this publisher; a free policy choice (default <code>writer_capacity = 4</code>).</td></tr>
+            </tbody>
+          </table>
+          <h4>Return</h4>
+          <table class="api-table">
+            <thead><tr><th>Result</th><th>Condition</th><th>Effect on bus</th></tr></thead>
+            <tbody>
+              <tr><td><code>Some w_id</code></td><td>A dead writer slot exists (&lt; 4 live).</td><td>Slot revived with <code>w_cap = capacity</code>.</td></tr>
+              <tr><td><code>None</code></td><td>Writer table full.</td><td><strong>Inert</strong> — state unchanged (stuttering).</td></tr>
+            </tbody>
+          </table>
+          <h4>Postconditions</h4>
+          <p>Granted ids are distinct; ids never drift; a revived slot reuses its table position cleanly.</p>
+        </div>
+
+        <h3 id="sub">3.2 <code>sub</code> — join a reader at the tail</h3>
+        <div class="api-card">
+          <div class="api-header"><span class="api-name">sub</span><span class="ret-badge">reader_id_t</span></div>
+          <p>Binds a reader cursor to exactly one live, usable publisher and pins it to the publisher's
+             current watermark. A late joiner sees only what is sent after it joins: history is never replayed.</p>
+          <div class="api-signature">reader_id_t sub(writer_id_t pub);                    /* C contract §7.3 */
+bus * reader_id_t option sub ?(by) bus wid;           /* oracle */</div>
+          <h4>Parameters</h4>
+          <table class="api-table">
+            <thead><tr><th>Name</th><th>Type</th><th>Dir</th><th>Description</th></tr></thead>
+            <tbody>
+              <tr><td><code>pub</code> / <code>wid</code></td><td><code>writer_id_t</code></td><td>[in]</td><td>Target publisher. Must be live and, if already spawned to a task, addressed by that task.</td></tr>
+            </tbody>
+          </table>
+          <h4>Return</h4>
+          <table class="api-table">
+            <thead><tr><th>Result</th><th>Condition</th><th>Effect on bus</th></tr></thead>
+            <tbody>
+              <tr><td><code>Some r_id</code></td><td>Publisher live &amp; usable; a dead reader slot exists.</td><td><code>r_start = r_cursor = w_enq</code>, <code>r_deq = 0</code>.</td></tr>
+              <tr><td><code>None</code></td><td>Publisher dead or owned by another task; reader table full.</td><td><strong>Inert.</strong></td></tr>
+            </tbody>
+          </table>
+          <h4>Preconditions / Postconditions</h4>
+          <p>Fan-out to a publisher already owned by a task requires that owner to call: an unowned publisher
+             is subable only before any spawn. Each live subscriber becomes part of the publisher's
+             retention floor until it is drained.</p>
+        </div>
+
+        <h3 id="spawn">3.3 <code>spawn</code> — ownership without a mutex</h3>
+        <div class="api-card">
+          <div class="api-header"><span class="api-name">spawn</span><span class="ret-badge">spawn_result</span></div>
+          <p>Creates a Task on the named core and transfers <em>exclusive ownership</em> of the listed cursors
+             by value. The guard order below is normative; every refusal is inert — a rejected spawn never
+             leaves half-granted ownership behind.</p>
+          <div class="api-signature">task_id_t spawn(core_id_t, program, cursors[]);      /* C contract §7.3 */
+bus * spawn_result spawn bus core prog cursors;       /* oracle */</div>
+          <h4>Parameters</h4>
+          <table class="api-table">
+            <thead><tr><th>Name</th><th>Type</th><th>Dir</th><th>Description</th></tr></thead>
+            <tbody>
+              <tr><td><code>core</code></td><td><code>core_id_t</code></td><td>[in]</td><td>Must satisfy <code>0 ≤ core &lt; bus.cores</code>. Requesting a core that does not exist is an error, never a silent migration to core 0.</td></tr>
+              <tr><td><code>program</code></td><td><code>actor entry</code></td><td>[in]</td><td>Entry point the task runs (opaque payload <code>t_prog</code> in the oracle).</td></tr>
+              <tr><td><code>cursors</code></td><td><code>cursor_ref[]</code></td><td>[in]</td><td>Non-empty list of live, currently unowned <code>CPub</code>/<code>CSub</code> ids.</td></tr>
+            </tbody>
+          </table>
+          <h4>Return &amp; refusal codes</h4>
+          <table class="api-table">
+            <thead><tr><th>Result</th><th>Guard (evaluated in this order)</th></tr></thead>
+            <tbody>
+              <tr><td><code>T_BAD_CORE</code></td><td>Core id outside <code>0 … cores-1</code>.</td></tr>
+              <tr><td><code>T_BAD_CURSOR</code></td><td>Cursor list empty, or any listed cursor dead.</td></tr>
+              <tr><td><code>T_CURSOR_TAKEN</code></td><td>Any listed cursor already owned by a live task.</td></tr>
+              <tr><td><code>T_SHARED_PUBLISHER</code></td><td>More than one publisher in the grant, or the target core already hosts a publisher.</td></tr>
+              <tr><td><code>T_NO_TASK_SLOT</code></td><td>All 8 task slots live.</td></tr>
+              <tr><td><code>T_SPAWNED t_id</code></td><td>Admitted: exactly the request — <code>t_core</code>, <code>t_prog</code>, <code>t_cursors</code> set; nothing more.</td></tr>
+            </tbody>
+          </table>
+          <h4>Postconditions</h4>
+          <p>The granted cursors become usable only by this task. Ownership is the exclusion mechanism that
+             replaces the mutex: no lock object, no wait order, therefore no priority inversion.</p>
+        </div>
+
+        <h3 id="snd">3.4 <code>snd</code> — non-blocking send that says why</h3>
+        <div class="api-card">
+          <div class="api-header"><span class="api-name">snd</span><span class="ret-badge">snd_result</span></div>
+          <p>Appends one payload item to the publisher's ring. A full publisher refuses with
+             <code>FULL(drop_count)</code> rather than blocking or wrapping: the drop count is required
+             evidence for the §7.4 acceptance identity, and a bare boolean could not be told apart from a
+             policy drop.</p>
+          <div class="api-signature">snd_result_t snd(writer_id_t, const void *data);     /* C contract §7.3 */
+bus * snd_result snd ?(by) bus wid data;              /* oracle */</div>
+          <h4>Parameters</h4>
+          <table class="api-table">
+            <thead><tr><th>Name</th><th>Type</th><th>Dir</th><th>Description</th></tr></thead>
+            <tbody>
+              <tr><td><code>writer</code></td><td><code>writer_id_t</code></td><td>[in]</td><td>Live publisher, usable by the caller (owned by the calling task, or unowned pre-spawn).</td></tr>
+              <tr><td><code>data</code></td><td><code>const void *</code></td><td>[in]</td><td>Payload. Copied into sequence-indexed history; the caller retains ownership of its buffer.</td></tr>
+            </tbody>
+          </table>
+          <h4>Return</h4>
+          <table class="api-table">
+            <thead><tr><th>Result</th><th>Condition</th><th>Effect</th></tr></thead>
+            <tbody>
+              <tr><td><code>S_OK</code></td><td><code>resident &lt; w_cap</code> and the pool has room.</td><td>Item appended at <code>w_enq</code>; pool charged only for sectors a live subscriber can still reach.</td></tr>
+              <tr><td><code>S_FULL n</code></td><td>Ring full or pool exhausted.</td><td>Item not appended; <code>w_drop</code> incremented to <code>n</code>. Nothing else changes.</td></tr>
+              <tr><td><code>S_BAD_CURSOR</code></td><td>Writer dead or caller is not the owner.</td><td><strong>Inert.</strong></td></tr>
+            </tbody>
+          </table>
+          <h4>Postconditions</h4>
+          <p><code>enq = deq + drop</code> is preserved per publisher; the watermark advances by exactly one
+             only on <code>S_OK</code>.</p>
+        </div>
+
+        <h3 id="rcv">3.5 <code>rcv</code> — strictly non-blocking O(1) receipt</h3>
+        <div class="api-card">
+          <div class="api-header"><span class="api-name">rcv</span><span class="ret-badge">rcv_result</span></div>
+          <p>Reads the item at the reader's absolute cursor, advances the cursor, and — because advancing is
+             what releases retention — hands sectors back to the pool. Exactly three results exist; there
+             is no blocking fourth case.</p>
+          <div class="api-signature">rcv_result_t rcv(reader_id_t, void *out);            /* C contract §7.3 */
+bus * rcv_result rcv ?(by) bus rid;                   /* oracle */</div>
+          <h4>Parameters</h4>
+          <table class="api-table">
+            <thead><tr><th>Name</th><th>Type</th><th>Dir</th><th>Description</th></tr></thead>
+            <tbody>
+              <tr><td><code>reader</code></td><td><code>reader_id_t</code></td><td>[in]</td><td>Live reader whose publisher is live, and usable by the calling task.</td></tr>
+              <tr><td><code>out</code></td><td><code>void *</code></td><td>[out]</td><td>Destination for the payload when the result is <code>DATA</code>.</td></tr>
+            </tbody>
+          </table>
+          <h4>Return</h4>
+          <table class="api-table">
+            <thead><tr><th>Result</th><th>Condition</th><th>Effect</th></tr></thead>
+            <tbody>
+              <tr><td><code>R_DATA v</code></td><td><code>r_cursor &lt; w_enq</code>.</td><td><code>v = w_hist[r_cursor]</code>; cursor and <code>r_deq</code> advance; released sectors return to <code>pool_free</code>.</td></tr>
+              <tr><td><code>R_EMPTY</code></td><td><code>r_cursor ≥ w_enq</code> (cursor at the watermark).</td><td><strong>Inert.</strong> The caller keeps running; no scheduler yield (R7).</td></tr>
+              <tr><td><code>R_BAD_CURSOR</code></td><td>Reader or its publisher dead; caller not the owner.</td><td><strong>Inert.</strong></td></tr>
+            </tbody>
+          </table>
+          <h4>Postconditions</h4>
+          <p>A reader's receipts are always the exact contiguous slice of the publisher's history from
+             <code>r_start</code> to <code>r_cursor</code> — values cross the star intact, in order, exactly once.
+             Catch-up is bounded: draining <code>k</code> times reduces the pending gap by exactly
+             <code>min(k, pending)</code> and never widens it.</p>
+        </div>
+      </section>
+
+      <!-- ═══════════════════════ Part 4 ═══════════════════════ -->
+      <section id="examples">
+        <h2>Part 4 — Canonical Code Examples</h2>
+        <h3>4.1 Producer &amp; consumer actors on the star</h3>
+        <p>The idiomatic lifecycle: publish, fan out subscribers, hand ownership to budgeted tasks, then run
+        the non-blocking send and drain loops.</p>
+        <pre><code>/* #include &lt;mp/async_core.h&gt; once the contract header lands. */
+#include &lt;btron/async_rt.h&gt;
+
+static writer_id_t g_bus_w;
+
+void input_driver_init(void) {
+    g_bus_w = pub(INPUT_RING_CAPACITY);          /* refuse-when-full ring      */
+
+    reader_id_t ui  = sub(g_bus_w);              /* pinned to tail, no replay  */
+    reader_id_t iod = sub(g_bus_w);
+
+    spawn(CORE_UI, ui_drain_actor,  (cursor_t[]){ CSub(ui)  });
+    spawn(CORE_IO, iod_drain_actor, (cursor_t[]){ CSub(iod) });
+    spawn(CORE_UI, input_driver_actor, (cursor_t[]){ CPub(g_bus_w) });
+    /* any T_BAD_CURSOR / T_CURSOR_TAKEN / T_SHARED_PUBLISHER is inert:
+       nothing was half-granted, so a corrected spawn is always safe.         */
+}
+
+/* Producer tick: never blocks, never wraps, always says why. */
+void input_driver_actor(void) {
+    for (;;) {
+        period_wait(INPUT_PERIOD_US);
+        item_t evt = poll_bus();                 /* drain hardware into items  */
+        snd_result_t r = snd(g_bus_w, &amp;evt);
+        switch (r.kind) {
+        case SNDR_OK:   break;
+        case SNDR_FULL: telemetry_note_drop(r.drop_count); break;  /* counted  */
+        }
+    }
+}
+
+/* Consumer budget: drain what exists; EMPTY is progress; no yield. */
+void ui_drain_actor(void) {
+    for (;;) {
+        period_wait(INPUT_PERIOD_US);
+        item_t out;
+        unsigned drained = 0;
+        while (drained &lt; ASYNC_ISR_TRB_BUDGET) { /* bounded catch-up, I16      */
+            rcv_result_t r = rcv(g_ui_reader, &amp;out);
+            if (r == RCVR_EMPTY) break;          /* at the watermark: done     */
+            if (r == RCVR_BAD_CURSOR) break;     /* contract violation: log    */
+            handle(&amp;out);
+            drained++;
+        }
+    }
+}</code></pre>
+        <h3>4.2 EVT publish — two phases, one writer per field</h3>
+        <pre><code>/* I/O core producer side (IO.txt §5): store, then publish — never swapped. */
+evt_store(&amp;e, sample);           /* writes buf[tail &amp; 255]; invisible         */
+evt_publish(&amp;e);                 /* tail++ is the single visible step         */
+
+/* UI core consumer side */
+if (evt_get(&amp;e, &amp;v) == EVT_DATA) use(v);  /* head++ only; never reads an
+                                             unpublished slot                */</code></pre>
+      </section>
+
+      <section id="metrics">
+        <h2>Metrics &amp; Acceptance (§7.4)</h2>
+        <p>
+          The ring row the shipped build must print, and the identity that makes the three numbers evidence
+          rather than decoration:
+        </p>
+        <pre><code>[ASYNC] ring: enq=1000000 deq=998412 drop=1588
+        enq == deq + drop            -- conservation identity (I8)
+        pool_free == sector_pool     -- after drain to quiescence (no leak)</code></pre>
+        <ul>
+          <li>Every accepted item was either delivered or counted as a drop; a third outcome is impossible.</li>
+          <li>Drain-to-quiescence must restore the whole 64-sector pool — the assertion that catches leaks.</li>
+          <li>Rows that were not compiled in report <code>SKIP</code>, never <code>PASS</code>; a required row
+              missing on the current port is a <code>FAIL</code>.</li>
+        </ul>
+      </section>
+
+      <section id="verified">
+        <h2>Verification Cross-Reference</h2>
+        <p>
+          The operational contract above is closed under 602 Qed judgements with zero axioms in
+          <code>verify/models/media_intercore_properties.v</code>, machine-checked against the OCaml oracle
+          (103 invariant checks over 8⁶ = 262,144 interleavings). Full statements, snippets and proof
+          structure live on the <a href="theorems/media_intercore.html">B-Core theorems page</a>;
+          the table maps each invariant group to the operational claim in this book that it certifies.
+        </p>
+        <table class="api-table">
+          <thead><tr><th>Group</th><th>Certifies (book section)</th><th>Headline results</th></tr></thead>
+          <tbody>
+            <tr><td>I1 Admission</td><td>§3.1–§3.3 static tables</td><td><code>pub_full_refuses</code>, table-bounded ids</td></tr>
+            <tr><td>I2a/I2b Topology &amp; snd states</td><td>§1.3 tail joins; §3.4 three-state send</td><td><code>sub_joins_at_the_tail</code>, <code>snd_full_keeps_the_history</code></td></tr>
+            <tr><td>I3/I4 Receipt integrity</td><td>§3.5 totality, exact slices</td><td><code>rcv_never_yields</code>, <code>rcv_receipt_exhaustive</code></td></tr>
+            <tr><td>I5 Star, no broker</td><td>§1.1 one publisher per core</td><td><code>publisher_per_core_is_unique</code></td></tr>
+            <tr><td>I6/I7 spawn &amp; ownership</td><td>§3.3 guards; mutex elimination</td><td><code>usable_is_exclusive</code>, <code>mutex_elimination</code></td></tr>
+            <tr><td>I8 Conservation</td><td>§1.4, §5 identities</td><td><code>pool_never_overdrawn</code>, drain restores pool</td></tr>
+            <tr><td>I9 Closure</td><td>§1.4 no interleaving escapes bus_wf</td><td><code>interleavings_preserve_bus_wf</code></td></tr>
+            <tr><td>I10 Modes &amp; gate</td><td>§1.5 honest SKIP</td><td><code>shipped_port_four_pass_one_skip</code></td></tr>
+            <tr><td>I11 EVT queue</td><td>§2.4 masking, two-phase, FIFO soak</td><td><code>evt_get_never_moves_tail</code>, <code>soak_of_six_hundred_is_fifo</code></td></tr>
+            <tr><td>I12 Commutation</td><td>§1.4 disjoint calls commute</td><td><code>independent_grants_are_interchangeable</code></td></tr>
+            <tr><td>I13 Modal layer</td><td>§1.4 necessity of bus_wf</td><td><code>bus_wf_is_always</code>, <code>always_within_the_pool</code></td></tr>
+            <tr><td>I14 Schedule freedom</td><td>§1.4 order is observable, not racy</td><td><code>the_order_is_observable</code></td></tr>
+            <tr><td>I15 Visibility gap</td><td>§2.4 store vs publish phases</td><td><code>an_unpublished_store_is_invisible</code></td></tr>
+            <tr><td>I16 Bounded catch-up</td><td>§3.5, §4.1 drain budget</td><td><code>i16_bounded_catch_up</code>, <code>read_k_never_widens_the_gap</code></td></tr>
+          </tbody>
+        </table>
+        <h3>Adjacent surfaces</h3>
+        <ul>
+          <li><strong>Agent-port variant of the same algebra</strong>: <code>verify/models/interpreter_model.ml</code>
+              (<code>snd_signal</code>/<code>rcv_signal</code>/<code>spawn_agent</code> over circular rings) —
+              the interpreter nexus, same contract shape, distinct proofs in <code>interpreter_properties.v</code>.</li>
+          <li><strong>Substrate</strong>: the CAS multicursor ring that InterCore maps onto is
+              <a href="../b-media/index.html">B-Media</a>'s SMP fabric (<code>src/cores/core_smp.c</code>,
+              <code>media_smp</code> proofs).</li>
+          <li><strong>Classical IPC</strong>: <code>src/kernel/ipc_msg.c</code>
+              (<code>snd_msg</code>/<code>rcv_msg</code>) remains T-Kernel semantics until the §7.4 two-port
+              gate passes; do not mix it into a cursor's data path.</li>
+        </ul>
+      </section>
+
+    </article>
+
+    <footer class="page-footer">
+      BTRON 3.20 · B-Core: InterCore Streaming Protocol · Clean-room implementation ·
+      Verified with Rocq/Coq (602 judgements, 0 axioms) · Synrc / bitedits
     </footer>
-</BODY>
-</HTML>
+  </main>
+
+</body>
+</html>

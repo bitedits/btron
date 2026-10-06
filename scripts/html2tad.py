@@ -493,21 +493,20 @@ def compile_foundational_books(target_dir: str = 'tad_bin'):
         ('pre', 'typedef char            B;   /* 符号付き 8ビット整数 */\ntypedef short           H;   /* 符号付き 16ビット整数 */\ntypedef int             W;   /* 符号付き 32ビット整数 */\ntypedef unsigned char   UB;  /* 符号なし 8ビット整数 */\ntypedef unsigned short  UH;  /* 符号なし 16ビット整数 */\ntypedef unsigned int    UW;  /* 符号なし 32ビット整数 */\ntypedef void           *VP;  /* 汎用ポインタ */'),
         ('p', 'BTRON3仕様では、ブート完了後の動的ヒープ確保 (malloc/free) を完全禁止し、全てのメモリ領域を有界化します。'),
     ]
-    tkernel_elements = [
-        ('h1', 'T-Kernel 2.0 リアルタイムOS仕様書及び開発ガイド'),
-        ('image', 'b-spec/os_spec/kernel/gif/processtask.gif', '図 2: μITRON リアルタイムタスク状態遷移図 (Task State Machine)'),
-        ('link', 'b-core/tkernel_spec.tad', '第1章 T-Kernel 2.0 コアアーキテクチャ (Core Architecture)'),
-        ('link', 'b-core/tkernel_startup.tad', '第2章 ブート及び初期化シーケンス (Startup Sequence)'),
-        ('link', 'b-core/tkernel_qemu.tad', '第3章 QEMU仮想環境とボード展開 (QEMU & Board Deployment)'),
-        ('link', 'b-core/index.tad', '第4章 T-Kernel 2.0 開発者ドキュメント索引 (Developer Index)'),
-        ('h2', 'タスク状態遷移モデル (Task State Model)'),
+    bcore_elements = [
+        ('h1', 'B-Core インターコア・ストリーミングプロトコル仕様書 (InterCore Streaming Protocol)'),
+        ('image', 'b-spec/os_spec/kernel/gif/processtask.gif', '図 2: 五呼出プロトコル状態モデル (pub/sub/spawn/snd/rcv State Model)'),
+        ('link', 'b-core/B-Core.tad', '第1章 InterCore ストリーミングプロトコル開発者仕様 (Protocol Developer Spec)'),
+        ('link', 'b-core/theorems/media_intercore.tad', '第2章 Star Ring 形式検証台帳 (602 Coq判定・公理ゼロ)'),
+        ('h2', '五呼出アルファベット (The Five-Call Alphabet)'),
         ('ol', [
-            '実行状態 (RUN: CPU実行権を保持)',
-            '実行可能状態 (READY: ディスパッチ待機)',
-            '待ち状態 (WAIT: イベント・セマフォ契機同期)',
-            '休止状態 (DORMANT: 未起動または終了)',
+            'pub  — 発信カーソル生成 (bounded publisher cursor)',
+            'sub  — 受信カーソル末尾結合 (late joiner never replays)',
+            'spawn — コア指定とカーソル排他所有権移転 (ownership replaces the mutex)',
+            'snd  — 非ブロック送信 FULL(drop) 付き (non-blocking, says why)',
+            'rcv  — 厳密非ブロック O(1) 受信 EMPTY (no scheduler yield, ruling R7)',
         ]),
-        ('p', 'T-Kernel 2.0 では、時間決定論的応答性を保証するために、プライオリティベース・プリエンプティブ・スケジューリングを採用しています。'),
+        ('p', 'セクタプール保存則 pool_free + Σ resident = 64 と enq = deq + drop により、Clean-room BTRONマイクロカーネルの通信心臓部は実行時ヒープ確保ゼロで動作する。'),
     ]
     bfree_elements = [
         ('h1', 'B-Free 自由なBTRON3オペレーティングシステム技術解説書'),
@@ -537,7 +536,7 @@ def compile_foundational_books(target_dir: str = 'tad_bin'):
     ]
     books = [
         ('01_btron3_spec','BTRON3 3.20 Specification Book', btron3_elements),
-        ('02_tkernel_book','T-Kernel 2.0 Real-Time OS Book', tkernel_elements),
+        ('02_bcore_book','B-Core InterCore Streaming Protocol Book', bcore_elements),
         ('03_bfree_os_book','B-Free Operating System Book', bfree_elements),
     ]
     if os.path.isdir('b-hmi'):

@@ -101,7 +101,9 @@ void execute_command(const char *cmd)
                  "  sync             Flush volume buffers to storage\n"
                  "  clear            Clear command history\n");
     } else if (strcmp(cmd_name, "pwd") == 0) {
-        snprintf(out_buf, sizeof(out_buf), "%s\n", active_panel ? active_panel->path : "/");
+        char shown[VFS_MAX_PATH];
+        vfs_display_path(active_panel ? active_panel->path : "/", shown, sizeof(shown));
+        snprintf(out_buf, sizeof(out_buf), "%s\n", shown);
     } else if (strcmp(cmd_name, "cd") == 0) {
         if (arg[0] == '\0' || strcmp(arg, "~") == 0) {
             strcpy(active_panel->path, "/SYS");
@@ -113,7 +115,9 @@ void execute_command(const char *cmd)
             vfs_normalize_path(combined, active_panel->path, sizeof(active_panel->path));
         }
         load_files(active_panel);
-        snprintf(out_buf, sizeof(out_buf), "%s\n", active_panel->path);
+        char shown[VFS_MAX_PATH];
+        vfs_display_path(active_panel->path, shown, sizeof(shown));
+        snprintf(out_buf, sizeof(out_buf), "%s\n", shown);
     } else if (strcmp(cmd_name, "tv") == 0 || strcmp(cmd_name, "edit") == 0) {
         char fpath[VFS_MAX_PATH];
         if (arg[0] == '/') {
@@ -123,7 +127,9 @@ void execute_command(const char *cmd)
             vfs_normalize_path(fpath, fpath, sizeof(fpath));
         }
         (void)sc_launch_tv(fpath, 0);
-        snprintf(out_buf, sizeof(out_buf), "Edited: %s\n", fpath);
+        char shown[VFS_MAX_PATH];
+        vfs_display_path(fpath, shown, sizeof(shown));
+        snprintf(out_buf, sizeof(out_buf), "Edited: %s\n", shown);
     } else if (strcmp(cmd_name, "view") == 0) {
         char fpath[VFS_MAX_PATH];
         if (arg[0] == '/') {
@@ -133,7 +139,9 @@ void execute_command(const char *cmd)
             vfs_normalize_path(fpath, fpath, sizeof(fpath));
         }
         (void)sc_launch_tv(fpath, 1);
-        snprintf(out_buf, sizeof(out_buf), "Viewed: %s\n", fpath);
+        char shown[VFS_MAX_PATH];
+        vfs_display_path(fpath, shown, sizeof(shown));
+        snprintf(out_buf, sizeof(out_buf), "Viewed: %s\n", shown);
     } else if (strcmp(cmd_name, "clear") == 0) {
         history_count = 0;
         history_start = 0;

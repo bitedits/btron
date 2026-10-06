@@ -138,6 +138,7 @@ void btr_utf8_to_tcode(const char *utf8, UH *tc, int max_tcs);
 
 /* ── Internal helpers (used by file.c; not for application code) ── */
 BLK  vol_alloc_block(Volume *v);
+int  vol_alloc_block_pair(Volume *v, BLK *hdr, BLK *data);
 void vol_free_block(Volume *v, BLK blk);
 FID  vol_fid_alloc(Volume *v);
 void vol_fid_free(Volume *v, FID fid);

@@ -48,9 +48,12 @@ void draw_panel(Panel *panel, int start_col, int width, int is_active)
     /* Draw outer border */
     draw_panel_border(start_col, 1, width, panel_h, SC_STYLE_BORDER);
 
-    /* Panel header: directory path */
+    /* Panel header: directory path, without the Real Body anchors the panel
+     * carries internally to re-open the very body a row named. */
+    char path_shown[VFS_MAX_PATH];
     char path_hdr[VFS_MAX_PATH + 4];
-    snprintf(path_hdr, sizeof(path_hdr), " %s ", panel->path);
+    vfs_display_path(panel->path, path_shown, sizeof(path_shown));
+    snprintf(path_hdr, sizeof(path_hdr), " %s ", path_shown);
     scr_text(1, start_col + 2, width - 4, path_hdr, strlen(path_hdr),
              is_active ? SC_STYLE_HEADER : SC_STYLE_TEXT, 0);
 
@@ -170,7 +173,9 @@ void draw_command_line(void)
     scr_fill(row, 0, term_cols, ' ', SC_STYLE_TEXT);
 
     char prompt[VFS_MAX_PATH + 4];
-    snprintf(prompt, sizeof(prompt), "%s> ", active_panel ? active_panel->path : "/");
+    char prompt_path[VFS_MAX_PATH];
+    vfs_display_path(active_panel ? active_panel->path : "/", prompt_path, sizeof(prompt_path));
+    snprintf(prompt, sizeof(prompt), "%s> ", prompt_path);
     int plen = scr_str(row, 0, prompt, SC_STYLE_HEADER);
 
     int visible_cols = term_cols - plen - 2;
@@ -456,16 +461,16 @@ int sc_modal_step(int c)
                     if (sitem == 2) { /* View F3 */
                         if (active_panel->file_count > 0 && !active_panel->files[active_panel->cursor].is_dir) {
                             char fpath[VFS_MAX_PATH];
-                            snprintf(fpath, sizeof(fpath), "%s/%s", active_panel->path, active_panel->files[active_panel->cursor].name);
-                            vfs_normalize_path(fpath, fpath, sizeof(fpath));
+                            const File *cf = &active_panel->files[active_panel->cursor];
+                            vfs_child_path(fpath, sizeof(fpath), active_panel->path, cf->name, cf->fid);
                             (void)sc_launch_tv(fpath, 1);
                             return 1;
                         }
                     } else if (sitem == 3) { /* Edit F4 */
                         if (active_panel->file_count > 0 && !active_panel->files[active_panel->cursor].is_dir) {
                             char fpath[VFS_MAX_PATH];
-                            snprintf(fpath, sizeof(fpath), "%s/%s", active_panel->path, active_panel->files[active_panel->cursor].name);
-                            vfs_normalize_path(fpath, fpath, sizeof(fpath));
+                            const File *cf = &active_panel->files[active_panel->cursor];
+                            vfs_child_path(fpath, sizeof(fpath), active_panel->path, cf->name, cf->fid);
                             (void)sc_launch_tv(fpath, 0);
                             return 1;
                         }

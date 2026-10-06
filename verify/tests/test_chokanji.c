@@ -177,17 +177,18 @@ static void test_directory_enumeration(void)
     g_chokanji_vol = v;
 
     /*
-     * The root of a B-right/V volume is not a drawer (FS.md 3.2), so its listing
-     * is derived: the drawers no link row in the volume reaches, judged by header
-     * block.  That is what rd_dir() hands sc and the VFS, and what clu's fs tree
-     * prints -- the two must agree.
+     * FID 0 of a B-right/V volume IS its root drawer: its header is the body
+     * named after the volume label (block 105 on the golden volume) and its 52
+     * link rows are the top level (FS.md 3.2).  rd_dir() replays those rows, and
+     * clu's fs tree takes the same list from the hierarchy snapshot -- the two
+     * must agree.
      *
-     * The assertions below therefore name both halves of the rule: the drawers
-     * with no parent must be here, and bodies a real drawer does name --
-     * Template Box, Drawing Pad, Text Pad, English, vesainf, SBOOT (which is
-     * FID 0, the root file itself rather than an entry of it) -- must not be,
-     * because listing them at the root next to their parent is the duplication
-     * this rule exists to remove.
+     * So the root mixes drawers and plain bodies, and the assertions name both
+     * halves: bodies the root drawer names must be here, and bodies a *different*
+     * drawer names -- Template Box, Drawing Pad, Text Pad, English, vesainf, etc,
+     * LC_TIME, Mail Manager, Makefile, makerules -- must not be, because listing
+     * them at the root beside their parent is the duplication this rule exists to
+     * remove.
      */
     ID dir = opn_dir("/B-right/V");
     TEST_ASSERT(dir >= 0, "opn_dir(/B-right/V) failed");
@@ -195,10 +196,12 @@ static void test_directory_enumeration(void)
     enum { MAXE = 256 };
     static DIR_ENTRY ent[MAXE];
     int count = 0;
-    int all_dirs = 1;
+    int n_dirs = 0, n_files = 0;
     int dup_fid = 0;
+    int self_entry = 0;
     while (count < MAXE && rd_dir(dir, &ent[count]) == 0) {
-        if (!(ent[count].attr & OBJ_DIRECTORY)) all_dirs = 0;
+        if (ent[count].attr & OBJ_DIRECTORY) n_dirs++; else n_files++;
+        if (strcasecmp(ent[count].name, vol_name(v)) == 0) self_entry = 1;
         for (int i = 0; i < count; i++) {
             if (ent[i].robj_id == ent[count].robj_id) dup_fid++;
         }
@@ -206,22 +209,24 @@ static void test_directory_enumeration(void)
     }
     cls_dir(dir);
 
-    TEST_ASSERT(count > 10 && count < 100, "root listing must be the derived drawer set");
+    TEST_ASSERT(count == fil_hier_nroot(v), "root listing must be the root drawer's rows");
+    TEST_ASSERT(count > 10 && count < 100, "root listing is not the root drawer's row count");
     TEST_ASSERT(dup_fid == 0, "a root entry FID may not appear twice");
-    TEST_ASSERT(all_dirs, "every root entry is a drawer");
+    TEST_ASSERT(!self_entry, "the root drawer must not list itself");
+    TEST_ASSERT(n_dirs > 0 && n_files > 0, "root must mix drawers and plain bodies");
 
     int nroot = fil_hier_nroot(v);
     TEST_ASSERT(nroot == count, "rd_dir's root must equal the hierarchy snapshot");
 
-    static const char *must_have[] = { "bin", "lib", "unix", "mnt", "locale",
-                                       "Installation", "__PROGRAM.BOX", NULL };
-    static const char *must_not[]  = { "SBOOT", "Template Box", "Drawing Pad", "Text Pad",
+    static const char *must_have[] = { "bin", "lib", "unix", "DIC", "FONT",
+                                       "USR", "__PROGRAM.BOX", "SBOOT", NULL };
+    static const char *must_not[]  = { "Template Box", "Drawing Pad", "Text Pad",
                                        "English", "vesainf", "etc", "LC_TIME",
                                        "Mail Manager", "Makefile", "makerules", NULL };
     for (int k = 0; must_have[k]; k++) {
         int found = 0;
         for (int i = 0; i < count; i++) if (strcasecmp(ent[i].name, must_have[k]) == 0) found = 1;
-        TEST_ASSERT(found, "root listing is missing an unreached drawer");
+        TEST_ASSERT(found, "root listing is missing a body the root drawer names");
     }
     for (int k = 0; must_not[k]; k++) {
         int found = 0;
@@ -230,6 +235,36 @@ static void test_directory_enumeration(void)
         if (found) printf("  '%s' has a parent drawer and must not be at the root\n", must_not[k]);
         TEST_ASSERT(!found, "a parented body appeared at the root");
     }
+
+    /*
+     * The continuation index (FS.md 7.3).  fid 139 `index`, at
+     * /B-right/V/__PROGRAM.BOX/MANUAL/index, declares 1442 rows but its header
+     * area holds none of them -- they are filed in the four level-1 index blocks
+     * its header points at, and 1440 of those rows are RT_LINK.  Until those
+     * entries were followed, 573 bodies -- the whole Japanese B-Book tree -- were
+     * named by no drawer the root could walk, so sc could neither list nor open
+     * them.  Measured now: `index` is a drawer, its deduped child list is those
+     * 573 bodies, and no live body is left without a parent.
+     */
+    TEST_ASSERT(fil_hier_is_dir(v, 139) == 1, "`index` must be a drawer once its index rows decode");
+    TEST_ASSERT(fil_hier_nchild(v, 139) == 573, "`index` must name all 573 B-Book drawers");
+
+    ID bbook = opn_dir("/B-right/V/__PROGRAM.BOX/MANUAL/index");
+    TEST_ASSERT(bbook >= 0, "the B-Book tree must open as a directory");
+    int bbook_count = 0;
+    if (bbook >= 0) {
+        DIR_ENTRY be;
+        while (rd_dir(bbook, &be) == 0 && bbook_count < 2048) bbook_count++;
+        cls_dir(bbook);
+    }
+    TEST_ASSERT(bbook_count == 573, "rd_dir must hand out `index`'s 573 children");
+
+    int unreached = 0;
+    for (UW f = 0; f < vol_nfmax(v); f++) {
+        if (f == FID_ROOT || fil_hier_hdr_blk(v, (FID)f) == 0) continue;
+        if (fil_hier_parent(v, (FID)f) == FID_INVALID) unreached++;
+    }
+    TEST_ASSERT(unreached == 0, "every live body must be reachable from the root drawer");
 
     /* Verify plugins directory entry exists and can be opened */
     ID pfd = opn_fil("/B-right/V/plugins", 0x0001);
@@ -454,6 +489,15 @@ static void clu_buf_out(const char *msg, COLOR color, void *ud) {
     }
 }
 
+/* Count occurrences of a literal, e.g. how many lines a view tagged [STR]. */
+static int count_marker(const char *buf, const char *needle)
+{
+    int n = 0;
+    const char *p = buf;
+    while ((p = strstr(p, needle)) != NULL) { n++; p++; }
+    return n;
+}
+
 /*
  * Count the non-empty lines a clu listing wrote into the buffer: one line per
  * entry. Blank names on the volume print empty lines and are not counted.
@@ -507,7 +551,7 @@ static void test_clu_integration(void)
     TEST_ASSERT(strcmp(g_cwd_path, "/B-right/V") == 0, "g_cwd_path must be /B-right/V");
 
     /*
-     * ls at the volume root must list the drawers nobody reaches, which is what
+     * ls at the volume root lists the root drawer's own link rows, which is what
      * rd_dir() and therefore sc show (FS.md 3.2).  The flat FID-table dump used
      * to print an entry per live body here -- 307 with the magic check, 4457
      * without -- so etc, LC_TIME, Mail Manager, Makefile and makerules sat at
@@ -516,53 +560,83 @@ static void test_clu_integration(void)
     memset(out_buf, 0, sizeof(out_buf));
     clu_ls("", clu_buf_out, out_buf);
     const int n_entries = count_listing_lines(out_buf);
-    TEST_ASSERT(n_entries > 10, "root listing must show the volume's drawers");
+    TEST_ASSERT(n_entries > 10, "root listing must show the volume's top level");
     TEST_ASSERT(n_entries == fil_hier_nroot(g_chokanji_vol),
                 "clu ls at the root must equal the hierarchy snapshot sc lists");
     TEST_ASSERT(strstr(out_buf, "bin") != NULL, "clu_ls output missing drawer 'bin'");
     TEST_ASSERT(strstr(out_buf, "lib") != NULL, "clu_ls output missing drawer 'lib'");
-    /* Bodies that exist on the volume but are not top-level drawers: */
-    TEST_ASSERT(strstr(out_buf, "SBOOT") == NULL, "root ls must not list FID 0's body (SBOOT)");
+    /* SBOOT is named by the root drawer's first row, so it belongs here; the
+     * drawer itself, named after the volume, must not be listed in it. */
+    TEST_ASSERT(strstr(out_buf, "SBOOT") != NULL, "root ls must list 'SBOOT', a root child");
+    TEST_ASSERT(strstr(out_buf, "B-right/V") == NULL, "root ls must not list the root drawer itself");
+    /* Bodies that exist on the volume but are named by some other drawer: */
     TEST_ASSERT(strstr(out_buf, "vesainf") == NULL, "root ls must not list 'vesainf'");
     TEST_ASSERT(strstr(out_buf, "Makefile") == NULL, "root ls must not list 'Makefile'");
     TEST_ASSERT(strstr(out_buf, "LC_TIME") == NULL, "root ls must not list 'LC_TIME'");
     TEST_ASSERT(strstr(out_buf, "Template Box") == NULL, "root ls must not list 'Template Box'");
 
     /*
-     * And they are not lost, just listed where they belong: each was measured
-     * against the drawer whose link record names it.
+     * And they are not lost, just listed where they belong.  Each path below was
+     * measured against the drawer whose link record names the body, walking the
+     * corrected tree from the root (FS.md 3.2): the Unix hierarchy hangs off the
+     * root drawer's `unix` child, not off a top-level `usr`/`locale`/`mnt`.
      */
     memset(out_buf, 0, sizeof(out_buf));
-    clu_cd("/B-right/V/bin", clu_buf_out, out_buf);
+    clu_cd("/B-right/V/bin/hwtool", clu_buf_out, out_buf);
     clu_ls("", clu_buf_out, out_buf);
-    TEST_ASSERT(strstr(out_buf, "vesainf") != NULL, "'vesainf' must list under bin");
+    TEST_ASSERT(strstr(out_buf, "vesainf") != NULL, "'vesainf' must list under bin/hwtool");
     clu_cd("/B-right/V", clu_buf_out, out_buf);
 
     memset(out_buf, 0, sizeof(out_buf));
-    clu_cd("/B-right/V/brightv", clu_buf_out, out_buf);
+    clu_cd("/B-right/V/unix/usr/local/brightv", clu_buf_out, out_buf);
     clu_ls("", clu_buf_out, out_buf);
-    TEST_ASSERT(strstr(out_buf, "etc") != NULL, "'etc' must list under brightv");
+    TEST_ASSERT(strstr(out_buf, "etc") != NULL, "'etc' must list under unix/usr/local/brightv");
     clu_cd("/B-right/V", clu_buf_out, out_buf);
 
     memset(out_buf, 0, sizeof(out_buf));
-    clu_cd("/B-right/V/locale", clu_buf_out, out_buf);
+    clu_cd("/B-right/V/unix/usr/share/locale", clu_buf_out, out_buf);
     clu_ls("", clu_buf_out, out_buf);
-    TEST_ASSERT(strstr(out_buf, "LC_TIME") != NULL, "'LC_TIME' must list under locale");
+    TEST_ASSERT(strstr(out_buf, "en_AU.ISO_8859-1") != NULL,
+                "the locale drawer must list its locales");
+    clu_cd("/B-right/V/unix/usr/share/locale/en_AU.ISO_8859-1", clu_buf_out, out_buf);
+    clu_ls("", clu_buf_out, out_buf);
+    TEST_ASSERT(strstr(out_buf, "LC_TIME") != NULL, "'LC_TIME' must list under its locale");
     clu_cd("/B-right/V", clu_buf_out, out_buf);
 
     /*
-     * A body whose index has a hole in it: 'English' keeps four child links and
-     * a 2084-byte record below a run of five unused row slots (FS.md 7.4
-     * consequence 5), so the scan that stopped at the first hole listed nothing.
+     * Two defects meet in this one drawer.  'English' keeps four child links and a
+     * 2084-byte record below a run of five unused row slots (FS.md 7.4
+     * consequence 5), so the scan that stopped at the first hole listed nothing;
+     * and its child 'Limitations on Use' is 18 characters, which the 16-unit name
+     * decode cut to 'Limitations on U' -- a segment no later lookup could resolve
+     * (FS.md 5.1).  'Template Box' is not English's own child, it hangs one level
+     * below, measured against the drawer whose link record names it.
      */
     memset(out_buf, 0, sizeof(out_buf));
     clu_cd("/B-right/V/English", clu_buf_out, out_buf);
+    TEST_ASSERT(strcmp(g_cwd_path, "/B-right/V/English") == 0,
+                "cd must land on the English drawer");
+    memset(out_buf, 0, sizeof(out_buf));
+    clu_ls("", clu_buf_out, out_buf);
+    TEST_ASSERT(strstr(out_buf, "Installation") != NULL,
+                "English's four link records must enumerate as children");
+    TEST_ASSERT(strstr(out_buf, "Limitations on Use") != NULL,
+                "a body's full name must be listed, not cut at 16 characters");
+    TEST_ASSERT(count_listing_lines(out_buf) == 4,
+                "English must list its own four children only");
+
+    /*
+     * Quoted, the way clu's own argument parser wants a name with spaces in it
+     * (get_targets(), src/apps/clu.c).
+     */
+    memset(out_buf, 0, sizeof(out_buf));
+    clu_cd("\"/B-right/V/English/Limitations on Use\"", clu_buf_out, out_buf);
+    TEST_ASSERT(strcmp(g_cwd_path, "/B-right/V/English/Limitations on Use") == 0,
+                "cd must resolve a path segment longer than 16 characters");
+    memset(out_buf, 0, sizeof(out_buf));
     clu_ls("", clu_buf_out, out_buf);
     TEST_ASSERT(strstr(out_buf, "Template Box") != NULL,
-                "English's four link records must enumerate as children");
-    const int english_children = count_listing_lines(out_buf);
-    TEST_ASSERT(english_children >= 4 && english_children <= 8,
-                "English must list its own children only, a few at most");
+                "'Template Box' must list under its own drawer");
     clu_cd("/B-right/V", clu_buf_out, out_buf);
 
     /* Test clu_ls -l inside /B-right/V */
@@ -609,7 +683,19 @@ static void test_clu_integration(void)
     TEST_ASSERT(strstr(fs_a_buf, "grep") != NULL, "fs -a must find true name grep");
     TEST_ASSERT(strstr(fs_a_buf, "bumount") != NULL, "fs -a must find true name bumount");
     TEST_ASSERT(strstr(fs_a_buf, "bmount") != NULL, "fs -a must find true name bmount");
-    TEST_ASSERT(strstr(fs_a_buf, "[*]") != NULL, "fs -a must mark real body streams with [*]");
+    /*
+     * The flat FID-table view prints the class as a tag and keeps names
+     * undecorated, so the stream census is what belongs here -- and it has to be
+     * a split: a direct stream is one record of type 0x1F (1925 bodies), not
+     * "every body whose header precedes the FID entry" (all 4457), which left
+     * nothing to read as a document (FS.md 7.1).
+     */
+    TEST_ASSERT(strstr(fs_a_buf, "[STR]") != NULL, "fs -a must tag direct-stream bodies");
+    TEST_ASSERT(strstr(fs_a_buf, "[TAD]") != NULL, "fs -a must tag multi-record documents");
+    const int n_str = count_marker(fs_a_buf, "[STR]");
+    const int n_tad = count_marker(fs_a_buf, "[TAD]");
+    TEST_ASSERT(n_str > 1000 && n_str < 2500, "the stream census must count one-record stream bodies");
+    TEST_ASSERT(n_tad > 1000, "documents with several records must not read as streams");
 
     /* Test fs -g (Group by directory structure) */
     static char fs_g_buf[524288];
@@ -625,6 +711,8 @@ static void test_clu_integration(void)
     clu_fs_cmd("-t", clu_buf_out, fs_t_buf);
     TEST_ASSERT(strstr(fs_t_buf, "Tree Structure") != NULL, "fs -t must have Tree Structure title");
     TEST_ASSERT(strstr(fs_t_buf, "Template Box") != NULL, "fs -t must contain Template Box");
+    /* The stream marker belongs to the tree and group views, not the flat table. */
+    TEST_ASSERT(strstr(fs_t_buf, "[*]") != NULL, "fs -t must mark direct-stream bodies with [*]");
 
     /* Test fs -t 3938 (Tree rooted at container 3938 with children 3940-3944 sorted) */
     static char fs_t_3938[16384];
@@ -648,13 +736,33 @@ static void test_clu_integration(void)
     TEST_ASSERT(p40 && p41 && p42 && p43 && p44 && p40 < p41 && p41 < p42 && p42 < p43 && p43 < p44,
                 "fs -t 3938 children must be sorted in ascending order (3940..3944)");
 
-    /* Test fs -g 3938 (Grouped container 3938 with 2-space indented direct children) */
+    /*
+     * Test fs -g 3938 (Grouped container 3938 with 2-space indented direct children)
+     *
+     * Measured against the corrected tree: 'sample' (3938) carries three rows --
+     * the drawers 'src' (3939) and 'pcat' (3945) and the body 'ReadMe' -- and
+     * Makefile is a child of 'src', not of 'sample'.  'src' appearing once here is
+     * the whole of the user's "multiple src in root" report: the old flat dump
+     * listed it at the root as well, next to the drawer that names it.  'pcat'
+     * holds a second body named Makefile, a different FID, which is why the views
+     * print the FID and the VFS carries it (FS.md 3.2).
+     */
     static char fs_g_3938[16384];
     memset(fs_g_3938, 0, sizeof(fs_g_3938));
     clu_fs_cmd("-g 3938", clu_buf_out, fs_g_3938);
     TEST_ASSERT(strstr(fs_g_3938, "Grouped by [DIR]") != NULL, "fs -g 3938 must have Grouped by [DIR] title");
     TEST_ASSERT(strstr(fs_g_3938, "3938") != NULL, "fs -g 3938 missing parent 3938");
-    TEST_ASSERT(strstr(fs_g_3938, "  [*] Makefile") != NULL, "fs -g 3938 must indent direct child Makefile under 3938");
+    TEST_ASSERT(strstr(fs_g_3938, "  src") != NULL, "fs -g 3938 must indent its own child src");
+    TEST_ASSERT(strstr(fs_g_3938, "  pcat") != NULL, "fs -g 3938 must indent its own child pcat");
+    TEST_ASSERT(strstr(fs_g_3938, "[*] ReadMe") != NULL, "fs -g 3938 must indent its stream child ReadMe");
+    TEST_ASSERT(strstr(fs_g_3938, "Makefile") == NULL, "fs -g 3938 must not reach past its own rows to Makefile");
+
+    static char fs_g_3939[16384];
+    memset(fs_g_3939, 0, sizeof(fs_g_3939));
+    clu_fs_cmd("-g 3939", clu_buf_out, fs_g_3939);
+    TEST_ASSERT(strstr(fs_g_3939, "  [*] Makefile") != NULL, "fs -g 3939 must indent direct child Makefile under src");
+    TEST_ASSERT(strstr(fs_g_3939, "accept.c") != NULL, "fs -g 3939 must list accept.c");
+    TEST_ASSERT(strstr(fs_g_3939, "rsdrv.h") != NULL, "fs -g 3939 must list rsdrv.h");
 
     /* Test fs -l -t and fs -l -g (Attributes included) */
     static char fs_lt_buf[16384];
@@ -676,8 +784,21 @@ static void test_clu_integration(void)
     TEST_ASSERT(strstr(fs_r_buf, "PARENT") != NULL, "fs -r header must contain PARENT column");
     TEST_ASSERT(strstr(fs_l_buf, "PARENT") != NULL, "fs -l header must contain PARENT column");
 
-    TEST_ASSERT(strstr(fs_buf, "English") != NULL, "clu_fs_cmd on /B-right/V missing English");
+    /*
+     * The no-flag view replays the current drawer's rows, so at the root it shows
+     * the root drawer's 52 entries and nothing else.  'English' is not one of
+     * them -- measured, it is fid 226, a row of fid 223, three levels down inside
+     * 'USR' -- so it belongs to that drawer's listing, asserted below.
+     */
+    TEST_ASSERT(strstr(fs_buf, "USR") != NULL, "clu_fs_cmd on /B-right/V must list the root drawer's USR row");
+    TEST_ASSERT(strstr(fs_buf, "bin") != NULL, "clu_fs_cmd on /B-right/V must list the root drawer's bin row");
+    TEST_ASSERT(strstr(fs_buf, "English") == NULL, "root fs output must not reach past the root drawer's rows");
     TEST_ASSERT(strstr(fs_buf, "foundations") == NULL, "clu_fs_cmd on /B-right/V should not show ANDERS entries");
+
+    static char fs_g_223[16384];
+    memset(fs_g_223, 0, sizeof(fs_g_223));
+    clu_fs_cmd("-g 223", clu_buf_out, fs_g_223);
+    TEST_ASSERT(strstr(fs_g_223, "English") != NULL, "fs -g 223 must list English, the row it carries");
 
     if (strstr(fs_r_buf, "[Template Box]") == NULL && strstr(fs_r_buf, "[English]") == NULL) {
         char *p = fs_r_buf;

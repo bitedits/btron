@@ -376,8 +376,7 @@ int sc_session_step(int c)
                 } else {
                     /* View file */
                     char fpath[VFS_MAX_PATH];
-                    snprintf(fpath, sizeof(fpath), "%s/%s", active_panel->path, f->name);
-                    vfs_normalize_path(fpath, fpath, sizeof(fpath));
+                    vfs_child_path(fpath, sizeof(fpath), active_panel->path, f->name, f->fid);
                     if (sc_launch_tv(fpath, 1) == 0) return 1;
                     draw_interface();
                 }
@@ -424,16 +423,16 @@ int sc_session_step(int c)
         } else if (c == KEY_F3) {
             if (active_panel->file_count > 0 && !active_panel->files[active_panel->cursor].is_dir) {
                 char fpath[VFS_MAX_PATH];
-                snprintf(fpath, sizeof(fpath), "%s/%s", active_panel->path, active_panel->files[active_panel->cursor].name);
-                vfs_normalize_path(fpath, fpath, sizeof(fpath));
+                const File *cf = &active_panel->files[active_panel->cursor];
+                vfs_child_path(fpath, sizeof(fpath), active_panel->path, cf->name, cf->fid);
                 if (sc_launch_tv(fpath, 1) == 0) return 1;
                 draw_interface();
             }
         } else if (c == KEY_F4) {
             if (active_panel->file_count > 0 && !active_panel->files[active_panel->cursor].is_dir) {
                 char fpath[VFS_MAX_PATH];
-                snprintf(fpath, sizeof(fpath), "%s/%s", active_panel->path, active_panel->files[active_panel->cursor].name);
-                vfs_normalize_path(fpath, fpath, sizeof(fpath));
+                const File *cf = &active_panel->files[active_panel->cursor];
+                vfs_child_path(fpath, sizeof(fpath), active_panel->path, cf->name, cf->fid);
                 if (sc_launch_tv(fpath, 0) == 0) return 1;
                 load_files(active_panel);
                 draw_interface();
@@ -443,9 +442,12 @@ int sc_session_step(int c)
             Panel *other = (active_panel == &left_panel) ? &right_panel : &left_panel;
             if (active_panel->file_count > 0 && !active_panel->files[active_panel->cursor].is_dir) {
                 char src[VFS_MAX_PATH], dst[VFS_MAX_PATH];
-                snprintf(src, sizeof(src), "%s/%s", active_panel->path, active_panel->files[active_panel->cursor].name);
-                snprintf(dst, sizeof(dst), "%s/%s", other->path, active_panel->files[active_panel->cursor].name);
-                vfs_normalize_path(src, src, sizeof(src));
+                const File *cf = &active_panel->files[active_panel->cursor];
+                /* The source is anchored to the body this row named; the
+                 * destination is a new body in the other drawer, so it takes
+                 * only the name. */
+                vfs_child_path(src, sizeof(src), active_panel->path, cf->name, cf->fid);
+                snprintf(dst, sizeof(dst), "%s/%s", other->path, cf->name);
                 vfs_normalize_path(dst, dst, sizeof(dst));
                 (void)vfs_copy(src, dst);
                 load_files(other);
@@ -463,8 +465,8 @@ int sc_session_step(int c)
             /* Delete current file */
             if (active_panel->file_count > 0 && !active_panel->files[active_panel->cursor].is_dir) {
                 char fpath[VFS_MAX_PATH];
-                snprintf(fpath, sizeof(fpath), "%s/%s", active_panel->path, active_panel->files[active_panel->cursor].name);
-                vfs_normalize_path(fpath, fpath, sizeof(fpath));
+                const File *cf = &active_panel->files[active_panel->cursor];
+                vfs_child_path(fpath, sizeof(fpath), active_panel->path, cf->name, cf->fid);
                 (void)vfs_delete(fpath);
                 load_files(active_panel);
                 draw_interface();

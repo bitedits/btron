@@ -440,6 +440,39 @@ BLK vol_alloc_block(Volume *v)
     return FID_INVALID; /* no free block */
 }
 
+/*
+ * Allocate a Real Body's header block and its first data block as one adjacent
+ * pair. B-right/V packs bodies contiguously and the FID table names the *data*
+ * block, so a created body has to be laid out the same way or the reader that
+ * resolves `hdr = ptr - 1` (FS.md 3.2) finds its predecessor's header instead.
+ * Returns 0 and sets the two out params on success.
+ */
+int vol_alloc_block_pair(Volume *v, BLK *hdr, BLK *data)
+{
+    if (!v || !hdr || !data) return -1;
+    UW data_start = v->hdr.data_start;
+    UW nlb        = v->hdr.nlb;
+    for (UW b = data_start; b + 1 < nlb; b++) {
+        unsigned int byte = b >> 3;
+        unsigned int bit  = b & 7;
+        if (byte >= v->ubmp_bytes) break;
+        unsigned int mask = 1u << bit;
+        unsigned int byte2 = (b + 1) >> 3;
+        unsigned int bit2  = (b + 1) & 7;
+        if (byte2 >= v->ubmp_bytes) break;
+        unsigned int mask2 = 1u << bit2;
+        if ((v->ubmp[byte] & mask) || (v->ubmp[byte2] & mask2)) continue;
+        v->ubmp[byte]  |= (unsigned char)mask;
+        v->ubmp[byte2] |= (unsigned char)mask2;
+        if (v->hdr.free_blocks >= 2) v->hdr.free_blocks -= 2;
+        v->dirty = 1;
+        *hdr   = (BLK)b;
+        *data  = (BLK)(b + 1);
+        return 0;
+    }
+    return -1;
+}
+
 void vol_free_block(Volume *v, BLK blk)
 {
     if (!v || blk == FID_INVALID || blk >= v->hdr.nlb) return;

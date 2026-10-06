@@ -30,9 +30,12 @@
  * per-vertex UV, RGBA textures, orthographic projection and blending that the
  * menu layer needs (glBlendFunc/glColor4f/glVertex2f/glOrtho).
  *
- * Invented B-System content: the Applications / Settings / Volume / Commands
- * categories.  Applications really launch B-System windows, Commands really
- * run B-System shell builtins through shell_execute_cmd().
+ * Invented B-System content: the Applications, Settings and Commands categories.
+ * Applications really launch B-System windows, Commands really run B-System shell
+ * builtins through shell_execute_cmd(), and the Settings rows edit the B-System's
+ * own state in place - icon size, window frame style, keyboard and mouse kernel
+ * variables, terminal settings, input method - rather than opening its Settings
+ * applications.
  *
  * Copyright 2026 Synrc Research Center. MIT License.
  */
@@ -43,6 +46,9 @@
 #include <btron/btron.h>
 #include <btron/core.h>
 #include <btron/apps.h>
+#include <btron/settings.h>   /* icon size, terminal settings */
+#include <btron/pmc.h>        /* window frame style           */
+#include <btron/tip.h>        /* input method                 */
 #include <btron/libc_shim.h>
 #include <math.h>
 
@@ -51,6 +57,18 @@
 #endif
 
 extern void uart_puts_raw(const char *s);
+
+/* The kernel's live input configuration, defined in src/settings/input.c - which
+ * every target that builds this file builds too.  The bar writes these, the input
+ * applet reads them, and the pointer and repeat drivers of the bare-metal cores
+ * take their timings from the same six variables, so a row of the menu changes the
+ * machine rather than a copy of it kept by the menu. */
+extern uint32_t g_kbd_repeat_delay_us;
+extern uint32_t g_kbd_repeat_interval_us;
+extern int      g_kbd_repeat_enabled;
+extern int      g_mouse_step_mult;
+extern int      g_mouse_swap_select_adjust;
+extern int      g_mouse_accel_profile;
 
 /* ── Constants taken from xmb.c ───────────────────────────────────────
  * XMB_RIBBON_ROWS/COLS and XMB_DELAY are the driver's own; so are the two
@@ -250,6 +268,7 @@ typedef struct xb_item_s {
     const char   *label;
     const char   *sub;
     int           kind;
+    int           bind;           /* XMB_BIND_*: whose value this row holds */
     int           launch;         /* XB_APP */
     int           value, max;     /* XB_TOGGLE / XB_RANGE / XB_ENUM index */
     const char   *opts;           /* XB_ENUM, '|' separated */
@@ -274,88 +293,303 @@ typedef struct {
 
 /* Rows the renderer reads back, named for the menu that holds them */
 enum { THEME_COLOUR = 0, THEME_WAVE, THEME_PARTICLES };
-enum { LANG_SYS = 0 };
 enum { SCR_BRIGHT = 0, SCR_FADE, SCR_SHADOWS };
 
+/* The rows in the Settings band, by their order there.  A test walks the band by
+ * these rather than by numbers, because the band is the thing being tested. */
+enum { SET_APPEARANCE = 0, SET_THEME, SET_SCREEN, SET_KEYBOARD,
+       SET_MOUSE, SET_TERMINAL, SET_LANGUAGE, SET_SYSDATA };
+
 static xb_item_t s_items_apps[] = {
-    {"Terminal",       "Console access to the B-System shell",     XB_APP, L_GTERM,     0,0,NULL,NULL,IC_APP_TERM,   0,0,0,0,{0}},
-    {"Text Editor",    "Edit plain text and TRON Code documents",  XB_APP, L_TEDITOR,   0,0,NULL,NULL,IC_APP_EDITOR, 0,0,0,0,{0}},
-    {"Paint",          "Draw bitmaps into the memory card",        XB_APP, L_PAINT,     0,0,NULL,NULL,IC_APP_PAINT,  0,0,0,0,{0}},
-    {"Audio Player",   "Play back music from a volume",            XB_APP, L_AUDIO,     0,0,NULL,NULL,IC_APP_MUSIC,  0,0,0,0,{0}},
-    {"Orchestra",      "Sequencer for the sound synthesis unit",   XB_APP, L_ORCHESTRA, 0,0,NULL,NULL,IC_APP_ORCHESTRA,0,0,0,0,{0}},
-    {"Object Manager", "Browse the virtual object database",       XB_APP, L_VOBJ,      0,0,NULL,NULL,IC_APP_VOBJ,   0,0,0,0,{0}},
-    {"TAD Browser",    "Look inside TAD archives",                 XB_APP, L_TAD,       0,0,NULL,NULL,IC_APP_TAD,    0,0,0,0,{0}},
-    {"DriveSetup",     "Partition and format storage devices",     XB_APP, L_DRIVE,     0,0,NULL,NULL,IC_APP_DRIVE,  0,0,0,0,{0}},
-    {"Chat",           "Open a BeOS-style chat session",           XB_APP, L_CHAT,      0,0,NULL,NULL,IC_APP_CHAT,   0,0,0,0,{0}},
-    {"Photo Viewer",   "Display saved Kagee images",               XB_APP, L_KAGEE,     0,0,NULL,NULL,IC_APP_PHOTO,  0,0,0,0,{0}},
-    {"Quake",          "Software-rendered OpenGL demo game",       XB_APP, L_QUAKE,     0,0,NULL,NULL,IC_APP_QUAKE,  0,0,0,0,{0}},
+    {"Terminal",       "Console access to the B-System shell",     XB_APP, XMB_BIND_NONE, L_GTERM,     0,0,NULL,NULL,IC_APP_TERM,   0,0,0,0,{0}},
+    {"Text Editor",    "Edit plain text and TRON Code documents",  XB_APP, XMB_BIND_NONE, L_TEDITOR,   0,0,NULL,NULL,IC_APP_EDITOR, 0,0,0,0,{0}},
+    {"Paint",          "Draw bitmaps into the memory card",        XB_APP, XMB_BIND_NONE, L_PAINT,     0,0,NULL,NULL,IC_APP_PAINT,  0,0,0,0,{0}},
+    {"Audio Player",   "Play back music from a volume",            XB_APP, XMB_BIND_NONE, L_AUDIO,     0,0,NULL,NULL,IC_APP_MUSIC,  0,0,0,0,{0}},
+    {"Orchestra",      "Sequencer for the sound synthesis unit",   XB_APP, XMB_BIND_NONE, L_ORCHESTRA, 0,0,NULL,NULL,IC_APP_ORCHESTRA,0,0,0,0,{0}},
+    {"Object Manager", "Browse the virtual object database",       XB_APP, XMB_BIND_NONE, L_VOBJ,      0,0,NULL,NULL,IC_APP_VOBJ,   0,0,0,0,{0}},
+    {"TAD Browser",    "Look inside TAD archives",                 XB_APP, XMB_BIND_NONE, L_TAD,       0,0,NULL,NULL,IC_APP_TAD,    0,0,0,0,{0}},
+    {"DriveSetup",     "Partition and format storage devices",     XB_APP, XMB_BIND_NONE, L_DRIVE,     0,0,NULL,NULL,IC_APP_DRIVE,  0,0,0,0,{0}},
+    {"Chat",           "Open a BeOS-style chat session",           XB_APP, XMB_BIND_NONE, L_CHAT,      0,0,NULL,NULL,IC_APP_CHAT,   0,0,0,0,{0}},
+    {"Photo Viewer",   "Display saved Kagee images",               XB_APP, XMB_BIND_NONE, L_KAGEE,     0,0,NULL,NULL,IC_APP_PHOTO,  0,0,0,0,{0}},
+    {"Quake",          "Software-rendered OpenGL demo game",       XB_APP, XMB_BIND_NONE, L_QUAKE,     0,0,NULL,NULL,IC_APP_QUAKE,  0,0,0,0,{0}},
 };
 
 static char s_sys_lines[XB_MAX_SUB][XB_MSG_LINE_LEN];
 static const char *s_sys_live[XB_MAX_SUB];
 
 static xb_item_t s_items_sysdata[] = {
-    {"", "", XB_TEXT, L_NONE, 0,0,NULL,NULL,IC_INFO, 0,0,0,0,{0}},
-    {"", "", XB_TEXT, L_NONE, 0,0,NULL,NULL,IC_INFO, 0,0,0,0,{0}},
-    {"", "", XB_TEXT, L_NONE, 0,0,NULL,NULL,IC_INFO, 0,0,0,0,{0}},
-    {"", "", XB_TEXT, L_NONE, 0,0,NULL,NULL,IC_INFO, 0,0,0,0,{0}},
-    {"", "", XB_TEXT, L_NONE, 0,0,NULL,NULL,IC_INFO, 0,0,0,0,{0}},
-    {"", "", XB_TEXT, L_NONE, 0,0,NULL,NULL,IC_INFO, 0,0,0,0,{0}},
+    {"", "", XB_TEXT, XMB_BIND_NONE, L_NONE, 0,0,NULL,NULL,IC_INFO, 0,0,0,0,{0}},
+    {"", "", XB_TEXT, XMB_BIND_NONE, L_NONE, 0,0,NULL,NULL,IC_INFO, 0,0,0,0,{0}},
+    {"", "", XB_TEXT, XMB_BIND_NONE, L_NONE, 0,0,NULL,NULL,IC_INFO, 0,0,0,0,{0}},
+    {"", "", XB_TEXT, XMB_BIND_NONE, L_NONE, 0,0,NULL,NULL,IC_INFO, 0,0,0,0,{0}},
+    {"", "", XB_TEXT, XMB_BIND_NONE, L_NONE, 0,0,NULL,NULL,IC_INFO, 0,0,0,0,{0}},
+    {"", "", XB_TEXT, XMB_BIND_NONE, L_NONE, 0,0,NULL,NULL,IC_INFO, 0,0,0,0,{0}},
 };
 
 /* The Settings band holds menus, not widgets: as on the console, a row of the
  * band opens the list beneath it, and the values change in there.  That is what
- * keeps LEFT/RIGHT on the band a move between bands rather than an edit. */
-static xb_item_t s_items_theme[] = {
-    {"Colour",           "Background gradient colour",           XB_ENUM,   L_NONE, 0, 2, "Deep Blue|Graphite|Gold", NULL, IC_GEAR, 0,0,0,0,{0}},
-    {"Wave Background",  "Animated waving surface behind the bar",XB_TOGGLE,L_NONE, 1, 0, NULL, NULL, IC_DROPLET, 0,0,0,0,{0}},
-    {"Wave Particles",   "Sparkles rising off the waving surface",XB_TOGGLE, L_NONE, 1, 0, NULL, NULL, IC_DROPLET, 0,0,0,0,{0}},
+ * keeps LEFT/RIGHT on the band a move between bands rather than an edit.
+ *
+ * The menus follow the B-System's own Settings Cabinet, one row per applet that
+ * holds real state, and a row with a bind edits that state where it lives rather
+ * than opening the applet.  Both are then views of one variable: change the
+ * pointer step here and the Input applet shows it, change it there and this row
+ * shows it the next time the menu is opened.  The Cabinet's Desktop, Display,
+ * Sound, Network, Media and Security applets hold nothing but their own checkbox
+ * state, so there is no value for a row to edit and no row for them. */
+static xb_item_t s_items_appearance[] = {
+    {"Icon Size",      "Size of the desktop and cabinet icons",  XB_ENUM,  XMB_BIND_ICON_SIZE, L_NONE, 1,1, "32 px|64 px",          NULL, IC_GEAR,  0,0,0,0,{0}},
+    {"Window Style",   "Frame drawn around every window",        XB_ENUM,  XMB_BIND_WM_STYLE,  L_NONE, 0,1, "BeOS Tab|Cho-Kanji",   NULL, IC_GEAR,  0,0,0,0,{0}},
 };
 
-static xb_item_t s_items_language[] = {
-    {"System Language",  "Language of the B-System text",        XB_ENUM,   L_NONE, 0, 2, "en-US|ja-JP|zh-CN",      NULL, IC_GEAR, 0,0,0,0,{0}},
+static xb_item_t s_items_theme[] = {
+    {"Colour",         "Background gradient colour",             XB_ENUM,  XMB_BIND_NONE, L_NONE, 0,2, "Deep Blue|Graphite|Gold",  NULL, IC_GEAR,     0,0,0,0,{0}},
+    {"Wave Background","Animated waving surface behind the bar", XB_TOGGLE,XMB_BIND_NONE, L_NONE, 1,0, NULL,                       NULL, IC_DROPLET,  0,0,0,0,{0}},
+    {"Wave Particles", "Sparkles rising off the waving surface", XB_TOGGLE,XMB_BIND_NONE, L_NONE, 1,0, NULL,                       NULL, IC_DROPLET,  0,0,0,0,{0}},
 };
 
 static xb_item_t s_items_screen[] = {
-    {"Screen Brightness","Backlight level of the display",       XB_RANGE,  L_NONE, 90,100, NULL, NULL, IC_SLIDER, 0,0,0,0,{0}},
-    {"Edge Fade",        "Fade of list rows near the screen edge",XB_RANGE, L_NONE, 100,100,NULL, NULL, IC_SLIDER, 0,0,0,0,{0}},
-    {"Icon Shadows",     "Drop shadow under icons and text",     XB_TOGGLE, L_NONE, 1, 0, NULL, NULL, IC_SLIDER, 0,0,0,0,{0}},
+    {"Screen Brightness","Backlight level of the display",       XB_RANGE, XMB_BIND_NONE, L_NONE, 90,100,NULL,                    NULL, IC_SLIDER,   0,0,0,0,{0}},
+    {"Edge Fade",        "Fade of list rows near the screen edge",XB_RANGE,XMB_BIND_NONE, L_NONE, 100,100,NULL,                   NULL, IC_SLIDER,   0,0,0,0,{0}},
+    {"Icon Shadows",     "Drop shadow under icons and text",     XB_TOGGLE,XMB_BIND_NONE, L_NONE, 1,0, NULL,                       NULL, IC_SLIDER,   0,0,0,0,{0}},
+};
+
+static xb_item_t s_items_keyboard[] = {
+    {"Auto-Repeat",    "A held key repeats itself",              XB_TOGGLE,XMB_BIND_KBD_REPEAT,L_NONE,1,0,NULL,                   NULL, IC_GEAR,     0,0,0,0,{0}},
+    {"Repeat Delay",   "Pause before a held key repeats",        XB_ENUM,  XMB_BIND_KBD_DELAY, L_NONE,0,2,"160 ms|320 ms|500 ms", NULL, IC_GEAR,     0,0,0,0,{0}},
+    {"Repeat Rate",    "Speed of a held key's repeat",           XB_ENUM,  XMB_BIND_KBD_RATE,  L_NONE,0,2,"40 cps|25 cps|12 cps", NULL, IC_GEAR,     0,0,0,0,{0}},
+};
+
+static xb_item_t s_items_mouse[] = {
+    {"Pointer Step",   "How far the pointer travels per move",   XB_ENUM,  XMB_BIND_MOUSE_STEP,   L_NONE,1,3,"1x|2x|3x|4x",           NULL, IC_SLIDER, 0,0,0,0,{0}},
+    {"Pointer Curve",  "Acceleration of the pointer",            XB_ENUM,  XMB_BIND_MOUSE_PROFILE,L_NONE,1,1,"Stepped|Continuous",    NULL, IC_SLIDER, 0,0,0,0,{0}},
+    {"Lead Hand",      "Which button selects and which adjusts", XB_ENUM,  XMB_BIND_MOUSE_BUTTONS,L_NONE,0,0,"Right|Left",            NULL, IC_SLIDER, 0,0,0,0,{0}},
+};
+
+static xb_item_t s_items_terminal[] = {
+    {"Console Colours","Ink and paper of the terminal",          XB_ENUM,  XMB_BIND_TERM_THEME,  L_NONE,2,4,"Green|Amber|White|Cyan|Light", NULL, IC_PROMPT, 0,0,0,0,{0}},
+    {"Console Font",   "Cell height of terminal text",           XB_ENUM,  XMB_BIND_TERM_FONT,   L_NONE,1,2,"12 pt|16 pt|20 pt",      NULL, IC_PROMPT, 0,0,0,0,{0}},
+    {"Console Cursor", "Shape of the terminal cursor",           XB_ENUM,  XMB_BIND_TERM_CURSOR, L_NONE,0,2,"Underline|Block|Bar",    NULL, IC_PROMPT, 0,0,0,0,{0}},
+    {"Console Ground", "How much the terminal shows through",    XB_ENUM,  XMB_BIND_TERM_TRANSP, L_NONE,1,2,"Opaque|Dimmed|See-through", NULL, IC_PROMPT, 0,0,0,0,{0}},
+};
+
+static xb_item_t s_items_language[] = {
+    {"Input Method",   "Script the keyboard types in",           XB_ENUM,  XMB_BIND_TIP_MODE, L_NONE,0,3,"ASCII|Hiragana|Katakana|Tibetan", NULL, IC_GEAR, 0,0,0,0,{0}},
+    {"Kana Conversion","Space converts kana into kanji",         XB_TOGGLE,XMB_BIND_TIP_KANA, L_NONE,1,0,NULL,                      NULL, IC_GEAR, 0,0,0,0,{0}},
+    {"Kana Popup",     "Tab opens the candidate list",           XB_TOGGLE,XMB_BIND_TIP_TAB,  L_NONE,1,0,NULL,                      NULL, IC_GEAR, 0,0,0,0,{0}},
+    {"Arrow Browses",  "Up and Down move through candidates",    XB_TOGGLE,XMB_BIND_TIP_ARROW,L_NONE,1,0,NULL,                      NULL, IC_GEAR, 0,0,0,0,{0}},
+    {"Number Picks",   "1 to 9 pick a candidate directly",       XB_TOGGLE,XMB_BIND_TIP_NUMBER,L_NONE,1,0,NULL,                     NULL, IC_GEAR, 0,0,0,0,{0}},
 };
 
 static xb_item_t s_items_settings[] = {
-    {"Theme",            "Colour of the background gradient",    XB_SUB,    L_NONE, 0, 0, NULL, NULL, IC_GEAR,
-        0, 0, s_items_theme,    0, {0}},
-    {"Language System",  "Display language of the system",       XB_SUB,    L_NONE, 0, 0, NULL, NULL, IC_GEAR,
-        0, 0, s_items_language, 0, {0}},
-    {"Screen",           "Brightness, edge fade and shadows",    XB_SUB,    L_NONE, 0, 0, NULL, NULL, IC_SLIDER,
-        0, 0, s_items_screen,   0, {0}},
-    {"System Data",      "Version, memory and volume details",   XB_SUB,    L_NONE, 0, 0, NULL, NULL, IC_INFO,
-        0, 0, s_items_sysdata,  0, {0}},
-};
-
-static xb_item_t s_items_volume[] = {
-    {"Master Volume","Overall output level",      XB_RANGE, L_NONE, 70,100,NULL,NULL,IC_SPEAKER,0,0,0,0,{0}},
-    {"Music",       "Background music channel",  XB_RANGE, L_NONE, 60,100,NULL,NULL,IC_SPEAKER,0,0,0,0,{0}},
-    {"Effect",      "Sound effects and bling",   XB_RANGE, L_NONE, 80,100,NULL,NULL,IC_SPEAKER,0,0,0,0,{0}},
-    {"Voice Alert", "System voice alert level",  XB_RANGE, L_NONE, 50,100,NULL,NULL,IC_SPEAKER,0,0,0,0,{0}},
-    {"Microphone",  "Input gain",                XB_RANGE, L_NONE, 30,100,NULL,NULL,IC_SPEAKER,0,0,0,0,{0}},
+    {"Appearance",     "Icon size and window frame style",       XB_SUB,   XMB_BIND_NONE, L_NONE, 0, 0, NULL, NULL, IC_GEAR,
+        0, 0, s_items_appearance, 0, {0}},
+    {"Theme",          "Colour of the background gradient",      XB_SUB,   XMB_BIND_NONE, L_NONE, 0, 0, NULL, NULL, IC_GEAR,
+        0, 0, s_items_theme,      0, {0}},
+    {"Screen",         "Brightness, edge fade and shadows",      XB_SUB,   XMB_BIND_NONE, L_NONE, 0, 0, NULL, NULL, IC_SLIDER,
+        0, 0, s_items_screen,     0, {0}},
+    {"Keyboard",       "Repeat of a held key",                   XB_SUB,   XMB_BIND_NONE, L_NONE, 0, 0, NULL, NULL, IC_GEAR,
+        0, 0, s_items_keyboard,   0, {0}},
+    {"Mouse",          "Pointer travel, curve and buttons",      XB_SUB,   XMB_BIND_NONE, L_NONE, 0, 0, NULL, NULL, IC_SLIDER,
+        0, 0, s_items_mouse,      0, {0}},
+    {"Terminal",       "Colours and metrics of the console",     XB_SUB,   XMB_BIND_NONE, L_NONE, 0, 0, NULL, NULL, IC_PROMPT,
+        0, 0, s_items_terminal,   0, {0}},
+    {"Language",       "Input method and candidate keys",        XB_SUB,   XMB_BIND_NONE, L_NONE, 0, 0, NULL, NULL, IC_GEAR,
+        0, 0, s_items_language,   0, {0}},
+    {"System Data",    "Version, memory and volume details",     XB_SUB,   XMB_BIND_NONE, L_NONE, 0, 0, NULL, NULL, IC_INFO,
+        0, 0, s_items_sysdata,    0, {0}},
 };
 
 static xb_item_t s_items_commands[] = {
-    {"List root directory",  "Run the shell builtin: ls /",      XB_CMD, L_NONE, 0,0,NULL, "ls /",  IC_PROMPT,0,0,0,0,{0}},
-    {"Volume table",         "Run the shell builtin: fs",        XB_CMD, L_NONE, 0,0,NULL, "fs",    IC_PROMPT,0,0,0,0,{0}},
-    {"Storage usage",        "Run the shell builtin: df",        XB_CMD, L_NONE, 0,0,NULL, "df",    IC_PROMPT,0,0,0,0,{0}},
-    {"Kernel information",   "Run the shell builtin: info",      XB_CMD, L_NONE, 0,0,NULL, "info",  IC_PROMPT,0,0,0,0,{0}},
-    {"Sync all volumes",     "Run the shell builtin: sync",      XB_CMD, L_NONE, 0,0,NULL, "sync",  IC_PROMPT,0,0,0,0,{0}},
+    {"List root directory",  "Run the shell builtin: ls /",      XB_CMD, XMB_BIND_NONE, L_NONE, 0,0,NULL, "ls /",  IC_PROMPT,0,0,0,0,{0}},
+    {"Volume table",         "Run the shell builtin: fs",        XB_CMD, XMB_BIND_NONE, L_NONE, 0,0,NULL, "fs",    IC_PROMPT,0,0,0,0,{0}},
+    {"Storage usage",        "Run the shell builtin: df",        XB_CMD, XMB_BIND_NONE, L_NONE, 0,0,NULL, "df",    IC_PROMPT,0,0,0,0,{0}},
+    {"Kernel information",   "Run the shell builtin: info",      XB_CMD, XMB_BIND_NONE, L_NONE, 0,0,NULL, "info",  IC_PROMPT,0,0,0,0,{0}},
+    {"Sync all volumes",     "Run the shell builtin: sync",      XB_CMD, XMB_BIND_NONE, L_NONE, 0,0,NULL, "sync",  IC_PROMPT,0,0,0,0,{0}},
 };
 
 static xb_cat_t s_cats[] = {
     {"Applications","Launch B-System applications", IC_CAT_APPS,     s_items_apps,     0, 0, {0}},
     {"Settings",    "Configure the B-System",       IC_CAT_SETTINGS, s_items_settings, 0, 0, {0}},
-    {"Volume",      "Audio output and input levels",IC_CAT_VOLUME,   s_items_volume,   0, 0, {0}},
     {"Commands",    "Run B-System shell commands",  IC_CAT_COMMANDS, s_items_commands, 0, 0, {0}},
 };
-static int s_cat_count = 4;
+static int s_cat_count = XB_NEL(s_cats);
+
+/* ── Bindings ──────────────────────────────────────────────────────────
+ * A bound row holds nothing of its own: its value is read out of the system it
+ * names and written straight back.  The two functions below are the whole of that
+ * translation, and they are the only place in this file that touches another
+ * module's state, so what a row can say is exactly what that module can hold.
+ *
+ * Where the system stores a value in its own units - the repeat delay in
+ * microseconds, the icon size in pixels, the font in points - the row shows the
+ * legal choices as an enum, and the pair maps index to unit and back.  Where the
+ * system stores a number a row can be stepped through - the pointer's step
+ * multiplier - the row clamps to the system's own range and the read-back is what
+ * stays on screen, so a value the system refuses never shows as if it took. */
+
+/* The Input applet's own index-to-microsecond tables, repeated here because that
+ * applet keeps them inside its static state.  Both write the same six kernel
+ * variables, so the two stay in step by reading the same numbers back. */
+static const uint32_t s_kbd_delay_us[3]  = { 160000U, 320000U, 500000U };
+static const uint32_t s_kbd_rate_us[3]   = {  25000U,  40000U,  80000U };
+
+/* A row can only be walked off the end of its list by a race, never by a key, so
+ * this is a belt for the array indexes rather than a clamp the user can reach. */
+static int xb_index_clamp(int v, int hi)
+{
+    if (v < 0)  return 0;
+    if (v > hi) return hi;
+    return v;
+}
+
+static int xb_term_read(int bind)
+{
+    TERMINAL_SETTINGS ts;
+
+    terminal_get_settings(&ts);
+    switch (bind) {
+    case XMB_BIND_TERM_THEME:  return (int)ts.theme;
+    case XMB_BIND_TERM_FONT:   return ((int)ts.font_size - 12) / 4;
+    case XMB_BIND_TERM_CURSOR: return (int)ts.cursor_style;
+    case XMB_BIND_TERM_TRANSP: return (int)ts.transparency;
+    default:                   return 0;
+    }
+}
+
+static void xb_term_write(int bind, int value)
+{
+    TERMINAL_SETTINGS ts;
+
+    terminal_get_settings(&ts);
+    switch (bind) {
+    case XMB_BIND_TERM_THEME:  ts.theme        = (TERM_COLOR_THEME)value; break;
+    case XMB_BIND_TERM_FONT:   ts.font_size    = (TERM_FONT_SIZE)(12 + 4 * value); break;
+    case XMB_BIND_TERM_CURSOR: ts.cursor_style = (TERM_CURSOR_STYLE)value; break;
+    case XMB_BIND_TERM_TRANSP: ts.transparency = (TERM_TRANSPARENCY)value; break;
+    default: return;
+    }
+    terminal_set_settings(&ts);
+}
+
+static int xb_tip_read(int bind)
+{
+    TIP_KEY_SETTINGS ks;
+
+    if (bind == XMB_BIND_TIP_MODE)
+        return (int)tip_get_mode();
+    tip_get_key_settings(&ks);
+    switch (bind) {
+    case XMB_BIND_TIP_KANA:   return ks.jp_space_is_convert  ? 1 : 0;
+    case XMB_BIND_TIP_TAB:    return ks.jp_tab_is_popup      ? 1 : 0;
+    case XMB_BIND_TIP_ARROW:  return ks.arrow_nav_enabled    ? 1 : 0;
+    case XMB_BIND_TIP_NUMBER: return ks.num_select_enabled   ? 1 : 0;
+    default:                  return 0;
+    }
+}
+
+static void xb_tip_write(int bind, int value)
+{
+    TIP_KEY_SETTINGS ks;
+
+    if (bind == XMB_BIND_TIP_MODE) {
+        tip_set_mode((TIP_INPUT_MODE)value);
+        return;
+    }
+    tip_get_key_settings(&ks);
+    switch (bind) {
+    case XMB_BIND_TIP_KANA:   ks.jp_space_is_convert = value ? TRUE : FALSE; break;
+    case XMB_BIND_TIP_TAB:    ks.jp_tab_is_popup     = value ? TRUE : FALSE; break;
+    case XMB_BIND_TIP_ARROW:  ks.arrow_nav_enabled   = value ? TRUE : FALSE; break;
+    case XMB_BIND_TIP_NUMBER: ks.num_select_enabled  = value ? TRUE : FALSE; break;
+    default: return;
+    }
+    tip_set_key_settings(&ks);
+}
+
+static int xb_bind_read(int bind)
+{
+    switch (bind) {
+    case XMB_BIND_ICON_SIZE:
+        return appearance_get_icon_size() == BTRON_ICON_SIZE_64 ? 1 : 0;
+    case XMB_BIND_WM_STYLE:
+        return pmc_get_style() == WM_STYLE_CHOKANJI ? 1 : 0;
+    case XMB_BIND_KBD_REPEAT:
+        return g_kbd_repeat_enabled ? 1 : 0;
+    case XMB_BIND_KBD_DELAY:
+        return g_kbd_repeat_delay_us <= s_kbd_delay_us[0] ? 0
+             : (g_kbd_repeat_delay_us <= s_kbd_delay_us[1] ? 1 : 2);
+    case XMB_BIND_KBD_RATE:
+        return g_kbd_repeat_interval_us <= s_kbd_rate_us[0] ? 0
+             : (g_kbd_repeat_interval_us <= s_kbd_rate_us[1] ? 1 : 2);
+    case XMB_BIND_MOUSE_STEP:
+        if (g_mouse_step_mult < 1) return 0;
+        if (g_mouse_step_mult > 4) return 3;
+        return g_mouse_step_mult - 1;
+    case XMB_BIND_MOUSE_PROFILE:
+        return g_mouse_accel_profile ? 1 : 0;
+    case XMB_BIND_MOUSE_BUTTONS:
+        return g_mouse_swap_select_adjust ? 1 : 0;
+    case XMB_BIND_TERM_THEME:
+    case XMB_BIND_TERM_FONT:
+    case XMB_BIND_TERM_CURSOR:
+    case XMB_BIND_TERM_TRANSP:
+        return xb_term_read(bind);
+    case XMB_BIND_TIP_MODE:
+    case XMB_BIND_TIP_KANA:
+    case XMB_BIND_TIP_TAB:
+    case XMB_BIND_TIP_ARROW:
+    case XMB_BIND_TIP_NUMBER:
+        return xb_tip_read(bind);
+    default:
+        return 0;
+    }
+}
+
+static void xb_bind_write(int bind, int value)
+{
+    switch (bind) {
+    case XMB_BIND_ICON_SIZE:
+        appearance_set_icon_size(value ? BTRON_ICON_SIZE_64 : BTRON_ICON_SIZE_32);
+        break;
+    case XMB_BIND_WM_STYLE:
+        pmc_set_style(value ? WM_STYLE_CHOKANJI : WM_STYLE_BEOS);
+        break;
+    case XMB_BIND_KBD_REPEAT:
+        g_kbd_repeat_enabled = value ? 1 : 0;
+        break;
+    case XMB_BIND_KBD_DELAY:
+        g_kbd_repeat_delay_us = s_kbd_delay_us[xb_index_clamp(value, 2)];
+        break;
+    case XMB_BIND_KBD_RATE:
+        g_kbd_repeat_interval_us = s_kbd_rate_us[xb_index_clamp(value, 2)];
+        break;
+    case XMB_BIND_MOUSE_STEP:
+        g_mouse_step_mult = 1 + xb_index_clamp(value, 3);
+        break;
+    case XMB_BIND_MOUSE_PROFILE:
+        g_mouse_accel_profile = value ? 1 : 0;
+        break;
+    case XMB_BIND_MOUSE_BUTTONS:
+        g_mouse_swap_select_adjust = value ? 1 : 0;
+        break;
+    case XMB_BIND_TERM_THEME:
+    case XMB_BIND_TERM_FONT:
+    case XMB_BIND_TERM_CURSOR:
+    case XMB_BIND_TERM_TRANSP:
+        xb_term_write(bind, value);
+        break;
+    case XMB_BIND_TIP_MODE:
+    case XMB_BIND_TIP_KANA:
+    case XMB_BIND_TIP_TAB:
+    case XMB_BIND_TIP_ARROW:
+    case XMB_BIND_TIP_NUMBER:
+        xb_tip_write(bind, value);
+        break;
+    default:
+        break;
+    }
+}
 
 /* ── Menu state (xmb_handle_t members we port) ──────────────────────── */
 
@@ -1556,8 +1790,9 @@ static int xb_draw_item(int i, int current)
              s_margin_top + n->y + s_label_top * 3.5f, s_font2,
              n->label_alpha * 0.7f * s_alpha_list, 1);
 
-    /* The value shows wherever the row is: on the band for the Volume sliders,
-     * inside the opened menu for everything the menu holds. */
+    /* The value of the row the list holds, set a field's width after its label:
+     * a toggle, a percentage or one of an enum's choices, never a second copy of
+     * what the system already keeps. */
     value[0] = '\0';
     xb_value_text(it, value, sizeof(value));
     if (value[0])
@@ -1818,6 +2053,32 @@ static void xb_refresh_settings(void)
     s_fade      = s_items_screen[SCR_FADE].value;
 }
 
+/* The rows of the list under the cursor show the system as it is now, so a value
+ * changed elsewhere - in an applet, by a driver, by the previous test - is on
+ * screen the moment the menu opens.  Called wherever the list changes. */
+static void xb_sync_list(void)
+{
+    int count = 0, i;
+    xb_item_t *items = xb_cur_items(&count);
+
+    for (i = 0; i < count && items; i++)
+        if (items[i].bind != XMB_BIND_NONE)
+            items[i].value = xb_bind_read(items[i].bind);
+}
+
+/* A row's value goes to the system first, and what the system kept is what the row
+ * shows: a value it refuses is not remembered by the menu either. */
+static void xb_set_value(xb_item_t *it, int value)
+{
+    if (it->bind != XMB_BIND_NONE) {
+        xb_bind_write(it->bind, value);
+        it->value = xb_bind_read(it->bind);
+        return;
+    }
+    it->value = value;
+    xb_refresh_settings();
+}
+
 static void xb_sysdata_fill(void)
 {
     uint32_t base = 0, limit = 0, used = 0;
@@ -1885,8 +2146,7 @@ static void xb_activate(xb_item_t *it)
         xb_launch(it->launch);
         break;
     case XB_TOGGLE:
-        it->value = !it->value;
-        xb_refresh_settings();
+        xb_set_value(it, it->value ? 0 : 1);
         break;
     case XB_CMD:
         xb_message_begin();
@@ -1901,6 +2161,7 @@ static void xb_activate(xb_item_t *it)
                 xb_sysdata_fill();
             s_depth    = 2;
             s_sub_sel  = 0;
+            xb_sync_list();
             xb_anim_list_open(1);
         }
         break;
@@ -1911,33 +2172,42 @@ static void xb_activate(xb_item_t *it)
 
 static void xb_adjust(xb_item_t *it, int dir)
 {
+    int value;
+
+    /* A bound row steps from the system's value, not from whatever the menu last
+     * showed, so an edit made elsewhere is never overwritten by this one. */
+    if (it->bind != XMB_BIND_NONE)
+        it->value = xb_bind_read(it->bind);
+
     switch (it->kind) {
     case XB_TOGGLE:
-        it->value = dir > 0 ? 1 : 0;
+        value = dir > 0 ? 1 : 0;
         break;
     case XB_RANGE:
-        it->value += dir * 5;
-        if (it->value < 0) it->value = 0;
-        if (it->max && it->value > it->max) it->value = it->max;
+        /* One level at a time: the console's sliders move by a single step, and a
+         * value the system keeps is what the row reads back. */
+        value = it->value + dir;
+        if (value < 0) value = 0;
+        if (it->max && value > it->max) value = it->max;
         break;
     case XB_ENUM: {
         int count = 1, i;
         const char *p;
         for (p = it->opts; p && *p; p++)
             if (*p == '|') count++;
-        it->value += dir;
-        if (it->value < 0) it->value = count - 1;
-        if (it->value >= count) it->value = 0;
+        value = it->value + dir;
+        if (value < 0) value = count - 1;
+        if (value >= count) value = 0;
         (void)i;
         break;
     }
     default:
         return;
     }
+    xb_set_value(it, value);
     /* xmb.c: adjusting a value fades the list back in */
     s_alpha_list = 0.0f;
     xb_anim_list_alpha(1);
-    xb_refresh_settings();
 }
 
 static void xb_move_row(int dir)
@@ -1977,6 +2247,7 @@ static void xb_move_cat(int dir)
         s_depth = 1;
         s_x     = 0.0f;
     }
+    xb_sync_list();
     xb_anim_band_move(dir);
     xb_anim_list_switch(dir);
 }
@@ -1984,7 +2255,7 @@ static void xb_move_cat(int dir)
 /* LEFT/RIGHT.  The console's own rule, and the one the rest of this port
  * assumes: at the band level these keys always switch bands, and a row's value
  * is adjusted only once a menu is open beneath it.  Adjusting at the band level
- * would trap the cursor wherever a band is made of sliders - the Volume rows. */
+ * would trap the cursor wherever a band is made of sliders. */
 static void xb_side(int dir)
 {
     int count = 0;
@@ -2008,6 +2279,7 @@ static void xb_go_back(void)
     if (s_depth > 1) {
         s_depth   = 1;
         s_sub_sel = 0;
+        xb_sync_list();
         xb_anim_list_open(-1);
         return;
     }
@@ -2218,13 +2490,20 @@ static void xb_init_state(void)
      * the content above can be edited without keeping a count in sync. */
     s_cats[0].count = XB_NEL(s_items_apps);
     s_cats[1].count = XB_NEL(s_items_settings);
-    s_cats[2].count = XB_NEL(s_items_volume);
-    s_cats[3].count = XB_NEL(s_items_commands);
+    s_cats[2].count = XB_NEL(s_items_commands);
 
-    s_items_settings[0].sub_count = XB_NEL(s_items_theme);
-    s_items_settings[1].sub_count = XB_NEL(s_items_language);
-    s_items_settings[2].sub_count = XB_NEL(s_items_screen);
-    s_items_settings[3].sub_count = XB_NEL(s_items_sysdata);
+    s_items_settings[SET_APPEARANCE].sub_count = XB_NEL(s_items_appearance);
+    s_items_settings[SET_THEME].sub_count      = XB_NEL(s_items_theme);
+    s_items_settings[SET_SCREEN].sub_count     = XB_NEL(s_items_screen);
+    s_items_settings[SET_KEYBOARD].sub_count   = XB_NEL(s_items_keyboard);
+    s_items_settings[SET_MOUSE].sub_count      = XB_NEL(s_items_mouse);
+    s_items_settings[SET_TERMINAL].sub_count   = XB_NEL(s_items_terminal);
+    s_items_settings[SET_LANGUAGE].sub_count   = XB_NEL(s_items_language);
+    s_items_settings[SET_SYSDATA].sub_count    = XB_NEL(s_items_sysdata);
+
+    /* Every value the bar can show starts as the system's, not as the number the
+     * table happened to be written with. */
+    xb_sync_list();
 
     for (c = 0; c < s_cat_count; c++) {
         for (i = 0; i < s_cats[c].count; i++) {
@@ -2274,6 +2553,16 @@ int xmb_setting(int which)
  * that last count, because UP on the first row of an open menu closes it. */
 int xmb_band(void)  { return s_cat; }
 int xmb_depth(void) { return s_depth; }
+int xmb_bands(void) { return s_cat_count; }
+
+/* What a bound row shows right now, which for those rows is simply what the
+ * system holds: the same read the row itself goes through. */
+int xmb_bound(int bind)
+{
+    if (bind <= XMB_BIND_NONE || bind >= XMB_BIND_COUNT)
+        return -1;
+    return xb_bind_read(bind);
+}
 
 int xmb_rows(void)
 {

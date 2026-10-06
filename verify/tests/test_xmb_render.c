@@ -41,6 +41,9 @@
 #include <btron/itron.h>
 #include <btron/desktop.h>
 #include <btron/core.h>
+#include <btron/settings.h>
+#include <btron/pmc.h>
+#include <btron/tip.h>
 #include "../../src/apps/xmb.h"
 
 #define XW 960
@@ -128,6 +131,65 @@ WND* open_quake_window(int x, int y, int w, int h)
     g_launch++; g_last_launch = "quake"; return NULL;
 }
 WND* launch_beos_chat(void)          { g_launch++; g_last_launch = "chat";      return NULL; }
+
+/* ── The B-System side of the Settings rows ───────────────────────────────
+ * Most rows of the Settings band hold a value of the system itself, and the bar
+ * reaches them through the same getters and setters the Settings Cabinet's applets
+ * use.  Here those are plain variables the test owns, so an assertion can read
+ * "the row changed the machine's setting" off the machine's own variable rather
+ * than off a copy the menu keeps - which is the whole claim being tested.
+ *
+ * The six kernel input numbers are data, not functions, and src/settings/input.c
+ * is not linked here, so the test defines them as that file does. */
+uint32_t g_kbd_repeat_delay_us    = 160000U;
+uint32_t g_kbd_repeat_interval_us = 25000U;
+int      g_kbd_repeat_enabled     = 1;
+int      g_mouse_step_mult        = 2;
+int      g_mouse_swap_select_adjust = 0;
+int      g_mouse_accel_profile    = 1;
+
+static BTRON_ICON_SIZE     g_icon_size = BTRON_ICON_SIZE_64;
+static WmStyleMode         g_wm_style_seen = WM_STYLE_BEOS;
+static int                 g_wm_repaints;
+static TERMINAL_SETTINGS   g_term = {
+    .theme = TERM_THEME_WHITE, .fg_color = 0xFFFFFFFF, .bg_color = 0xCC000000,
+    .font_size = TERM_FONT_16, .scrollback_lines = 300,
+    .cursor_style = TERM_CURSOR_UNDERLINE, .transparency = TERM_TRANSPARENCY_80
+};
+static TIP_INPUT_MODE      g_tip_mode = TIP_MODE_ASCII;
+static TIP_KEY_SETTINGS    g_tip_keys;
+
+BTRON_ICON_SIZE appearance_get_icon_size(void) { return g_icon_size; }
+void appearance_set_icon_size(BTRON_ICON_SIZE size)
+{
+    if (size == BTRON_ICON_SIZE_32 || size == BTRON_ICON_SIZE_64)
+        g_icon_size = size;
+}
+
+WmStyleMode pmc_get_style(void)        { return g_wm_style_seen; }
+void pmc_set_style(WmStyleMode style)  { g_wm_style_seen = style; g_wm_repaints++; }
+
+void terminal_get_settings(TERMINAL_SETTINGS *out) { if (out) *out = g_term; }
+void terminal_set_settings(const TERMINAL_SETTINGS *in) { if (in) g_term = *in; }
+
+TIP_INPUT_MODE tip_get_mode(void)      { return g_tip_mode; }
+void tip_set_mode(TIP_INPUT_MODE mode) { g_tip_mode = mode; }
+void tip_get_key_settings(TIP_KEY_SETTINGS *out) { if (out) *out = g_tip_keys; }
+void tip_set_key_settings(const TIP_KEY_SETTINGS *in) { if (in) g_tip_keys = *in; }
+
+/* The IME boots with every candidate-window behaviour on; the test starts there so
+ * a row that reads its default is not reading a zeroed struct. */
+static void system_state_init(void)
+{
+    g_tip_keys.jp_space_is_convert = TRUE;
+    g_tip_keys.jp_tab_is_popup     = TRUE;
+    g_tip_keys.tb_space_is_tsheg   = TRUE;
+    g_tip_keys.tb_tab_is_popup     = TRUE;
+    g_tip_keys.tb_shift_space_popup= TRUE;
+    g_tip_keys.arrow_nav_enabled   = TRUE;
+    g_tip_keys.num_select_enabled  = TRUE;
+}
+
 
 /* The real GL stack */
 #include "../../src/gl/gl_dispatch.h"
@@ -342,18 +404,31 @@ static void press(unsigned key)
 /* The Settings band holds menus, not widgets (as on the console), so a control
  * is reached by opening its menu first:
  *   band 0 Applications -> the launchers
- *   band 1 Settings     -> 0 Theme, 1 Language System, 2 Screen, 3 System Data
- *     band 0 Theme        -> 0 Colour, 1 Wave Background, 2 Wave Particles
- *     band 1 Language     -> 0 System Language
- *     band 2 Screen       -> 0 Screen Brightness, 1 Edge Fade, 2 Icon Shadows
- *     band 3 System Data  -> six read-only lines
- *   band 2 Volume       -> five sliders (which the console only lets you reach
- *                          once a menu is open: at the band level LEFT/RIGHT
- *                          always switch bands)
- *   band 3 Commands     -> shell builtins, in a message box */
+ *   band 1 Settings     -> 0 Appearance, 1 Theme, 2 Screen, 3 Keyboard,
+ *                          4 Mouse, 5 Terminal, 6 Language, 7 System Data
+ *     Appearance -> 0 Icon Size, 1 Window Style             (the system's values)
+ *     Theme      -> 0 Colour, 1 Wave Background, 2 Wave Particles
+ *     Screen     -> 0 Screen Brightness, 1 Edge Fade, 2 Icon Shadows
+ *     Keyboard   -> 0 Auto-Repeat, 1 Repeat Delay, 2 Repeat Rate
+ *     Mouse      -> 0 Pointer Step, 1 Pointer Curve, 2 Lead Hand
+ *     Terminal   -> 0 Console Colours, 1 Console Font, 2 Console Cursor,
+ *                   3 Console Ground
+ *     Language   -> 0 Input Method, 1 Kana Conversion, 2 Kana Popup,
+ *                   3 Arrow Browses, 4 Number Picks
+ *     System Data-> six read-only lines
+ *   band 2 Commands     -> shell builtins, in a message box
+ * The rows with a bind hold the B-System's own state, so they are checked against
+ * the variables at the top of this file, not against xmb_setting(). */
 /* The bands, by their order in s_cats */
 #define BAND_APPS     0
 #define BAND_SETTINGS 1
+#define BAND_COMMANDS 2
+
+/* The Settings band's menus */
+#define MENU_APPEARANCE 0
+#define MENU_THEME      1
+#define MENU_SCREEN     2
+#define MENU_SYSDATA    7
 
 /* Move the cursor to row `row` of the list under it.  DOWN clamps at the last
  * row, but UP on the first row of an open menu closes it - the console's own way

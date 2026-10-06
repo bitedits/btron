@@ -25,10 +25,42 @@ int  xmb_setting(int which);
 
 /* Where the cursor is: the band index, 0 the leftmost, and the depth of the
  * stacked lists, 1 at the band level and 2 once a row's menu is open.  xmb_rows
- * is how many rows the list under the cursor holds. */
+ * is how many rows the list under the cursor holds, xmb_bands how many bands
+ * the bar has. */
 int  xmb_band(void);
 int  xmb_depth(void);
 int  xmb_rows(void);
+int  xmb_bands(void);
+
+/* The rows of the Settings band that hold a value of the B-System itself, rather
+ * than a value of the bar: their values are read from and written to the system's
+ * own state - the appearance settings' icon size, the PMC's window frame style,
+ * the kernel's keyboard and mouse constants, the terminal settings, the input
+ * method's.  These ids name those values, so that a test can ask the bar what such
+ * a row shows right now - xmb_bound() reads it out of the system, exactly as the
+ * row does - without copying the menu's tables or keeping a second value. */
+enum {
+    XMB_BIND_NONE = 0,
+    XMB_BIND_ICON_SIZE,      /* appearance_get/set_icon_size()          */
+    XMB_BIND_WM_STYLE,       /* pmc_get/set_style()                     */
+    XMB_BIND_KBD_REPEAT,     /* g_kbd_repeat_enabled                    */
+    XMB_BIND_KBD_DELAY,      /* g_kbd_repeat_delay_us                   */
+    XMB_BIND_KBD_RATE,       /* g_kbd_repeat_interval_us                */
+    XMB_BIND_MOUSE_STEP,     /* g_mouse_step_mult                       */
+    XMB_BIND_MOUSE_PROFILE,  /* g_mouse_accel_profile                   */
+    XMB_BIND_MOUSE_BUTTONS,  /* g_mouse_swap_select_adjust              */
+    XMB_BIND_TERM_THEME,     /* terminal_get/set_settings(): theme      */
+    XMB_BIND_TERM_FONT,      /*                               font_size */
+    XMB_BIND_TERM_CURSOR,    /*                               cursor    */
+    XMB_BIND_TERM_TRANSP,    /*                               transparency */
+    XMB_BIND_TIP_MODE,       /* tip_get/set_mode()                      */
+    XMB_BIND_TIP_KANA,       /* TIP_KEY_SETTINGS.jp_space_is_convert    */
+    XMB_BIND_TIP_TAB,        /* TIP_KEY_SETTINGS.jp_tab_is_popup        */
+    XMB_BIND_TIP_ARROW,      /* TIP_KEY_SETTINGS.arrow_nav_enabled      */
+    XMB_BIND_TIP_NUMBER,     /* TIP_KEY_SETTINGS.num_select_enabled     */
+    XMB_BIND_COUNT
+};
+int  xmb_bound(int bind);
 
 /* The waving sheet's own brightness field, as computed for the last frame: the
  * extremes and mean over the grid, and the number of samples.  Pass NULL for

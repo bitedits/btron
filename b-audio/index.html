@@ -68,6 +68,7 @@
 
       <div class="nav-heading">Companion Books</div>
       <a href="../b-sound/index.html" class="nav-link">B-Sound (lilcu64 Synth)</a>
+      <a href="../b-msx/index.html" class="nav-link">B-MSX (MSX2+ Home · tronMSX)</a>
       <a href="../b-media/index.html" class="nav-link">B-Media (Pipes &amp; Budgets)</a>
       <a href="../b-core/index.html" class="nav-link">B-Core (InterCore Nexus)</a>
       <a href="../b-rtp/index.html" class="nav-link">B-RTP (WebRTC Core)</a>
@@ -97,7 +98,8 @@
           fallbacks that let every port link, the Control Panel semantics in <code>src/settings/sound.c</code>,
           and the shipping consumers: the Cassette Hi-Fi deck (<code>src/apps/audio_player.c</code>), the
           Orchestra pipeline sink (<code>virtiosndsink</code>, see <a href="../b-media/index.html">B-Media</a>),
-          the lilcu64 synthesizer pump (<a href="../b-sound/index.html">B-Sound</a>), and terminal/event
+          the lilcu64 synthesizer pump (<a href="../b-sound/index.html">B-Sound</a>), the tronMSX PSG
+          mixer (<a href="../b-msx/index.html">B-MSX</a>), and terminal/event
           chimes (<code>src/apps/kagee.c</code>).
         </p>
         <p>
@@ -338,6 +340,7 @@ return (n == VIO_ERR_INVAL) ? -1 : 0;   /* counted refusal, never blocking */</c
             <tr><td>Cassette deck (<code>audio_player.c</code>)</td><td>open/write/close + deck state</td><td>sources TAPE/LINE/CD/TUNER; tape-type EQ; Dolby B/C; VU with peak-hold</td></tr>
             <tr><td>Orchestra sink</td><td>write inside <code>chain()</code></td><td>runs on the IOD plane budget (B-Media)</td></tr>
             <tr><td>lilcu64 synth</td><td><code>lilcu64_synth_pump_virtio()</code>; provides weak stubs</td><td>44.1 kHz stereo; see B-Sound</td></tr>
+            <tr><td>tronMSX PSG</td><td>plan: accumulator-resampled AY mix into <code>virtio_sound_write</code></td><td>paced by queue telemetry, counted drops when device absent; see B-MSX Part 6</td></tr>
             <tr><td>Kagee / terminal</td><td>event chimes, bell</td><td>gated by Control Panel checkbox</td></tr>
             <tr><td>Control Panel (<code>settings/sound.c</code>)</td><td>policy only — never writes PCM</td><td>driver select, rate, buffer, master volume</td></tr>
           </tbody>

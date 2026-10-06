@@ -429,6 +429,7 @@ def _doc_title_name(base_name: str, html_path: str, source_root: str) -> str:
         m = {'part1':'Part1','part2':'Part2','part_book':'Part_Book'}
         return m.get(sub.lower(), sub.lower().capitalize())
     if catalog == 'b-core':   return 'B-Core'
+    if catalog == 'b-msx':    return 'B-MSX'
     if catalog == 'b-system': return 'B-System'
     if catalog == 'b-hmi':    return 'B-HMI'
     if catalog == 'b-spec':   return 'B-Spec'
@@ -632,6 +633,7 @@ if __name__ == '__main__':
         ('b-video',  os.path.join(out_dir, 'b-video')),
         ('b-sound',  os.path.join(out_dir, 'b-sound')),
         ('b-rtp',    os.path.join(out_dir, 'b-rtp')),
+        ('b-msx',    os.path.join(out_dir, 'b-msx')),
     ]
     if os.path.isdir('b-hmi'):
         source_trees.append(('b-hmi', os.path.join(out_dir, 'b-hmi')))

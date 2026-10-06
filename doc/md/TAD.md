@@ -53,7 +53,7 @@ btron/
     │   ├── virtio.tad            # VirtIO Core Architecture & System Specifications
     │   └── btron_spec.tad        # System Call Matrix
     │
-    ├── t-kernel/                 # T-Kernel 2.0 Deployment Manuals
+    ├── b-core/                   # T-Kernel 2.0 Deployment Manuals
     │   ├── tkernel_spec.tad      # T-Kernel Core Specifications
     │   ├── tkernel_startup.tad   # Startup & Boot Sequence
     │   └── tkernel_qemu.tad      # QEMU Virtual Machine Manual

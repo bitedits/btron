@@ -568,7 +568,7 @@ src/apps/clu.host.o: src/apps/clu.c
 # Header dependencies recorded by the -MMD flags above: editing src/clu/vfs.h or
 # src/clu/sc/sokhatsky.h must rebuild every object that included it, or a link
 # mixes objects that disagree on struct layout.
--include $(shell find src -name '*.host.d' -o -name '*.posix.d' 2>/dev/null)
+-include $(shell find src verify -name '*.host.d' -o -name '*.posix.d' -o -name '*.test.d' 2>/dev/null)
 
 # ── mkbtronfs — host image builder ────────────────────────────────────
 mkbtronfs: src/tools/mkbtronfs.c $(FS_OBJS)
@@ -1435,7 +1435,7 @@ TEST_MOZC_OBJS = $(TEST_MOZC_SRCS:.c=.test.o)
 TEST_MOZC_BIN  = ./.build/test_mozc
 
 %.test.o: %.c
-	$(CC) $(CFLAGS) $(SDL_CFLAGS) -c $< -o $@
+	$(CC) $(CFLAGS) $(SDL_CFLAGS) -MMD -MP -c $< -o $@
 
 test-mozc: $(TEST_MOZC_BIN)
 	@echo "=========================================================="

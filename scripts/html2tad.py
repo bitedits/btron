@@ -428,10 +428,9 @@ def _doc_title_name(base_name: str, html_path: str, source_root: str) -> str:
     if sub and sub != '.':
         m = {'part1':'Part1','part2':'Part2','part_book':'Part_Book'}
         return m.get(sub.lower(), sub.lower().capitalize())
-    if catalog == 't-kernel': return 'T-Kernel'
+    if catalog == 'b-core':   return 'T-Kernel'
     if catalog == 'b-system': return 'B-System'
     if catalog == 'b-hmi':    return 'B-HMI'
-    if catalog == 'b-free':   return 'B-Free'
     if catalog == 'b-spec':   return 'B-Spec'
     if html_path == 'index.html': return 'B-System_Portal'
     return 'Index'
@@ -513,12 +512,6 @@ def compile_foundational_books(target_dir: str = 'tad_bin'):
     bfree_elements = [
         ('h1', 'B-Free 自由なBTRON3オペレーティングシステム技術解説書'),
         ('image', 'b-spec/os_spec/kernel/gif/filesystem.gif', '図 3: BTRON ファイルシステム構造仕様 (Filesystem Structure)'),
-        ('link', 'b-free/manifest.tad', '第1章 B-Free マニフェストと自由ソフトウェアの理念'),
-        ('link', 'b-free/kernel.tad', '第2章 μITRON 3.0 マイクロカーネルアーキテクチャ'),
-        ('link', 'b-free/posix.tad', '第3章 POSIXエミュレーション層とシステムコール'),
-        ('link', 'b-free/btron.tad', '第4章 B-Free OS 統合デスクトップ環境'),
-        ('link', 'b-free/boot_arch.tad', '第5章 ブート機構とソースツリー構造'),
-        ('link', 'b-free/source_tree.tad', '第6章 B-Free ソースツリー構成とビルド体系'),
         ('h2', '設計理念と自由ソフトウェアの精神'),
         ('p', 'Ken Sakamura教授が提唱した「万人に開かれた標準」をGPL (GNU General Public License) の下で実現するクリーンルーム実装。'),
     ]
@@ -633,9 +626,8 @@ if __name__ == '__main__':
 
     source_trees = [
         ('b-spec',   os.path.join(out_dir, 'b-spec')),
-        ('b-free',   os.path.join(out_dir, 'b-free')),
         ('b-system', os.path.join(out_dir, 'b-system')),
-        ('t-kernel', os.path.join(out_dir, 't-kernel')),
+        ('b-core',   os.path.join(out_dir, 'b-core')),
     ]
     if os.path.isdir('b-hmi'):
         source_trees.append(('b-hmi', os.path.join(out_dir, 'b-hmi')))

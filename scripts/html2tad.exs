@@ -546,10 +546,9 @@ defmodule BtronTAD.Compiler do
               "part_book" -> "Part_Book"
               other -> String.capitalize(other)
             end
-          catalog == "t-kernel" -> "T-Kernel"
+          catalog == "b-core" -> "T-Kernel"
           catalog == "b-system" -> "B-System"
           catalog == "b-hmi" -> "B-HMI"
-          catalog == "b-free" -> "B-Free"
           catalog == "b-spec" -> "B-Spec"
           html_path == "index.html" -> "B-System_Portal"
           true -> "Index"
@@ -666,10 +665,10 @@ defmodule BtronTAD.Compiler do
     tkernel_elements = [
       {:h1, "T-Kernel 2.0 リアルタイムOS仕様書及び開発ガイド"},
       {:image, "b-spec/os_spec/kernel/gif/processtask.gif", "図 2: μITRON リアルタイムタスク状態遷移図 (Task State Machine)"},
-      {:link, "t-kernel/tkernel_spec.tad", "第1章 T-Kernel 2.0 コアアーキテクチャ (Core Architecture)"},
-      {:link, "t-kernel/tkernel_startup.tad", "第2章 ブート及び初期化シーケンス (Startup Sequence)"},
-      {:link, "t-kernel/tkernel_qemu.tad", "第3章 QEMU仮想環境とボード展開 (QEMU & Board Deployment)"},
-      {:link, "t-kernel/index.tad", "第4章 T-Kernel 2.0 開発者ドキュメント索引 (Developer Index)"},
+      {:link, "b-core/tkernel_spec.tad", "第1章 T-Kernel 2.0 コアアーキテクチャ (Core Architecture)"},
+      {:link, "b-core/tkernel_startup.tad", "第2章 ブート及び初期化シーケンス (Startup Sequence)"},
+      {:link, "b-core/tkernel_qemu.tad", "第3章 QEMU仮想環境とボード展開 (QEMU & Board Deployment)"},
+      {:link, "b-core/index.tad", "第4章 T-Kernel 2.0 開発者ドキュメント索引 (Developer Index)"},
       {:h2, "タスク状態遷移モデル (Task State Model)"},
       {:ul, [
         "DORMANT   : 休止状態 (タスク生成後未起動、または終了後)",
@@ -685,12 +684,6 @@ defmodule BtronTAD.Compiler do
     bfree_elements = [
       {:h1, "B-Free 自由なBTRON3オペレーティングシステム技術解説書"},
       {:image, "b-spec/os_spec/kernel/gif/filesystem.gif", "図 3: BTRON ファイルシステム構造仕様 (Filesystem Structure)"},
-      {:link, "b-free/manifest.tad", "第1章 B-Free マニフェストと自由ソフトウェアの理念"},
-      {:link, "b-free/kernel.tad", "第2章 μITRON 3.0 マイクロカーネルアーキテクチャ"},
-      {:link, "b-free/posix.tad", "第3章 POSIXエミュレーション層とシステムコール"},
-      {:link, "b-free/btron.tad", "第4章 B-Free OS 統合デスクトップ環境"},
-      {:link, "b-free/boot_arch.tad", "第5章 ブート機構とソースツリー構造"},
-      {:link, "b-free/source_tree.tad", "第6章 B-Free ソースツリー構成とビルド体系"},
       {:h2, "設計理念と自由ソフトウェアの精神"},
       {:p, "Ken Sakamura教授が提唱した「万人に開かれた標準」をGPL (GNU General Public License) の下で実現するクリーンルーム実装。"}
     ]
@@ -781,15 +774,13 @@ BtronTAD.Compiler.compile_foundational_books(out_dir)
 # 2. Unified HTML -> TAD Conversion for Local Source Catalogs
 # Catalog Profiles:
 #   - b-spec/   : BTRON3 Standard Specification (Shared Data, μITRON Kernel, DP Graphics, Shell)
-#   - b-free/   : Free Software BTRON3 Architecture Manifesto & Cleanroom Kernel
 #   - b-system/ : B-System Posix & VirtIO Core Architecture & System Specifications
-#   - t-kernel/ : T-Kernel 2.0 Real-Time OS & Board Deployment Manuals
+#   - b-core/   : T-Kernel 2.0 Real-Time OS & Board Deployment Manuals
 #   - b-hmi/    : TRON Human-Machine Interface Guidelines (if present locally)
 source_trees = [
   {"b-spec", Path.join(out_dir, "b-spec")},
-  {"b-free", Path.join(out_dir, "b-free")},
   {"b-system", Path.join(out_dir, "b-system")},
-  {"t-kernel", Path.join(out_dir, "t-kernel")}
+  {"b-core", Path.join(out_dir, "b-core")}
 ] ++ (if File.dir?("b-hmi"), do: [{"b-hmi", Path.join(out_dir, "b-hmi")}], else: [])
 
 IO.puts("======================================================================")

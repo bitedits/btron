@@ -102,7 +102,7 @@ lower T-Kernel priority class than TASK_INPUT / TASK_UI.
 Tree sketch:
 
   b-system/
-    t-kernel/                 unchanged nucleus
+    b-core/                   unchanged nucleus
     fs/                       BTRON volume (NOTE.md)
     linx/                     THIS document
       include/linux-abi/      numbers, errno, struct layouts

@@ -1312,10 +1312,15 @@ static void edgevec_add(EdgeVec *ev, FID src, const unsigned char *rp)
     if (ev->last_src[tf] == (UW)src + 1) return;
     ev->last_src[tf] = (UW)src + 1;
     if (ev->n == ev->cap) {
-        FID *grown = (FID *)realloc(ev->edges, ev->cap * 4 * sizeof(FID));
+        /* No realloc on a freestanding target -- the kernel heap is
+         * Imalloc/Icalloc/Ifree (libc_shim.h), so grow by copy. */
+        UW newcap = ev->cap * 2;
+        FID *grown = (FID *)malloc((size_t)newcap * 2 * sizeof(FID));
         if (!grown) { ev->failed = 1; return; }
+        memcpy(grown, ev->edges, (size_t)ev->n * 2 * sizeof(FID));
+        free(ev->edges);
         ev->edges = grown;
-        ev->cap  *= 2;
+        ev->cap   = newcap;
     }
     ev->edges[ev->n * 2]     = src;
     ev->edges[ev->n * 2 + 1] = tf;

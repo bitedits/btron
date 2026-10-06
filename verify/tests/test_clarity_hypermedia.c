@@ -229,14 +229,14 @@ static void test_tad_placeholder_and_sys_persistence(void) {
     TEST_ASSERT(strstr(loaded.frames[2].tad_path, "01_btron3_spec.tad") != NULL, "Restored Frame 2 preserved tad_path");
 
     /* Test Drag & Drop creating FRAME_TAD */
-    btron_dnd_begin(1, 401, VOBJ_TYPE_TEXT, "02_tkernel_book.tad", "tad_bin/02_tkernel_book.tad", 50, 50);
+    btron_dnd_begin(1, 401, VOBJ_TYPE_TEXT, "02_bcore_book.tad", "tad_bin/02_bcore_book.tad", 50, 50);
     clarity_handle_dnd_drop(&loaded, btron_dnd_get(), 200, 550, 24, 24);
     btron_dnd_end();
 
     TEST_ASSERT(loaded.frame_count == doc.frame_count + 1, "Dropping TAD file created new frame");
     ClarityFrame *new_tad = &loaded.frames[loaded.frame_count - 1];
     TEST_ASSERT(new_tad->type == FRAME_TAD, "New frame is FRAME_TAD placeholder");
-    TEST_ASSERT(strstr(new_tad->tad_path, "02_tkernel_book.tad") != NULL, "New FRAME_TAD recorded tad_path");
+    TEST_ASSERT(strstr(new_tad->tad_path, "02_bcore_book.tad") != NULL, "New FRAME_TAD recorded tad_path");
 
     /* Cleanup */
     for (int i = 0; i < doc.frame_count; i++) {

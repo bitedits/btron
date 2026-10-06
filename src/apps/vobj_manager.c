@@ -378,7 +378,7 @@ static int get_toc_order(const char *path, const char *name) {
 
     /* 1. Canonical Foundational Books & Main Portals */
     if (strstr(path, "01_btron3_spec")) return 10;
-    if (strstr(path, "02_tkernel_book")) return 20;
+    if (strstr(path, "02_bcore_book")) return 20;
     if (strstr(path, "03_bfree_os_book")) return 30;
     if (strstr(path, "04_tron_hmi_book")) return 35;
 
@@ -458,11 +458,9 @@ static int get_toc_order(const char *path, const char *name) {
     if (strstr(path, "b-system/license"))    return 830;
     if (strstr(path, "b-system/index"))      return 840;
 
-    /* 11. [t-kernel] T-Kernel 2.0 Real-Time OS Specs */
-    if (strstr(path, "t-kernel/tkernel_spec"))    return 900;
-    if (strstr(path, "t-kernel/tkernel_startup")) return 910;
-    if (strstr(path, "t-kernel/tkernel_qemu"))    return 920;
-    if (strstr(path, "t-kernel/index") || strstr(path, "t-kernel/T-Kernel")) return 930;
+    /* 11. [b-core] B-Core InterCore Protocol Specs */
+    if (strstr(path, "b-core/theorems"))                return 900;
+    if (strstr(path, "b-core/index") || strstr(path, "b-core/B-Core")) return 910;
 
     /* 12. [b-book] B-Book Developer's Manual (12 Subsystems) */
     if (strstr(path, "b-book/B-Book") || strstr(path, "b-book/index")) return 940;
@@ -522,7 +520,7 @@ static void cabinet_sort_items(CABINET_EXPLORER *cab) {
 
 static ID deduce_robj_id(const char *path) {
     if (strstr(path, "01_btron3_spec")) return 101;
-    if (strstr(path, "02_tkernel_book")) return 102;
+    if (strstr(path, "02_bcore_book")) return 102;
     if (strstr(path, "03_bfree_os_book")) return 103;
     if (strstr(path, "04_tron_hmi_book")) return 104;
     if (strstr(path, "b-hmi/index.tad") || strstr(path, "b-hmi/B-HMI.tad")) return 105;
@@ -552,7 +550,7 @@ static ID deduce_robj_id(const char *path) {
 }
 
 static const char* deduce_toc_path(const char *path) {
-    if (strstr(path, "01_btron3_spec") || strstr(path, "02_tkernel_book") ||
+    if (strstr(path, "01_btron3_spec") || strstr(path, "02_bcore_book") ||
         strstr(path, "03_bfree_os_book") || strstr(path, "04_tron_hmi_book")) {
         return "books/";
     }
@@ -568,7 +566,7 @@ static const char* deduce_toc_path(const char *path) {
     if (strstr(path, "b-hmi/")) return "b-hmi/";
     if (strstr(path, "b-free/")) return "b-free/";
     if (strstr(path, "b-system/")) return "b-system/";
-    if (strstr(path, "t-kernel/")) return "t-kernel/";
+    if (strstr(path, "b-core/")) return "b-core/";
     return "root/";
 }
 
@@ -576,7 +574,7 @@ static const char* deduce_icon_tag(const char *path) {
     if (strstr(path, "04_tron_hmi") || strstr(path, "b-hmi")) return "[b-hmi]";
     if (strstr(path, "03_bfree") || strstr(path, "b-free")) return "[b-free]";
     if (strstr(path, "b-system")) return "[b-system]";
-    if (strstr(path, "02_tkernel") || strstr(path, "t-kernel")) return "[t-kernel]";
+    if (strstr(path, "02_bcore") || strstr(path, "b-core")) return "[b-core]";
     if (strstr(path, "b-book")) return "[doc]";
     if (strstr(path, "01_btron3") || strstr(path, "shared_data") || strstr(path, "os_spec") || strstr(path, "doc")) return "[doc]";
     return "[doc]";
@@ -626,7 +624,7 @@ static void get_friendly_title(const char *sub_path, const char *filename, char 
     else if (strstr(sub_path, "b-hmi/part2")) strncpy(out_name, "Part2.tad", max_len - 1);
     else if (strstr(sub_path, "b-hmi/part_book")) strncpy(out_name, "Part_Book.tad", max_len - 1);
     else if (strstr(sub_path, "b-hmi")) strncpy(out_name, "B-HMI.tad", max_len - 1);
-    else if (strstr(sub_path, "t-kernel")) strncpy(out_name, "T-Kernel.tad", max_len - 1);
+    else if (strstr(sub_path, "b-core")) strncpy(out_name, "B-Core.tad", max_len - 1);
     else if (strstr(sub_path, "b-system")) strncpy(out_name, "B-System.tad", max_len - 1);
     else if (strstr(sub_path, "b-free")) strncpy(out_name, "B-Free.tad", max_len - 1);
     else if (strstr(sub_path, "shared_data")) strncpy(out_name, "Shared_Data.tad", max_len - 1);
@@ -702,7 +700,7 @@ static const char* deduce_gif_icon(const CABINET_ITEM *it) {
     if (it->type == VOBJ_TYPE_DRAW) return "paint";
     if (strstr(it->path, "shared_data")) return "notebook";
     if (strstr(it->path, "b-hmi")) return "appearance";
-    if (strstr(it->path, "t-kernel") || strstr(it->path, "kernel")) return "system";
+    if (strstr(it->path, "b-core") || strstr(it->path, "kernel")) return "system";
     if (strstr(it->path, "b-free")) return "workbench";
     return "tad_browser";
 }
@@ -735,7 +733,7 @@ static void cabinet_init_defaults(CABINET_EXPLORER *cab) {
     /* Fallback static list for freestanding embedded environments */
     int n = 0;
     cab->items[n++] = (CABINET_ITEM){ 101, VOBJ_TYPE_TEXT, "01_btron3_spec.tad", "tad_bin/01_btron3_spec.tad", 3996, "[doc]", "books/" };
-    cab->items[n++] = (CABINET_ITEM){ 102, VOBJ_TYPE_TEXT, "02_tkernel_book.tad", "tad_bin/02_tkernel_book.tad", 1745, "[t-kernel]", "books/" };
+    cab->items[n++] = (CABINET_ITEM){ 102, VOBJ_TYPE_TEXT, "02_bcore_book.tad", "tad_bin/02_bcore_book.tad", 1377, "[b-core]", "books/" };
     cab->items[n++] = (CABINET_ITEM){ 103, VOBJ_TYPE_TEXT, "03_bfree_os_book.tad", "tad_bin/03_bfree_os_book.tad", 1472, "[b-free]", "books/" };
     cab->items[n++] = (CABINET_ITEM){ 111, VOBJ_TYPE_TEXT, "01_data_type.tad", "tad_bin/shared_data/data_type.tad", 10022, "[doc]", "shared_data/" };
     cab->item_count = n;

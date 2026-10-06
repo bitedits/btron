@@ -220,7 +220,19 @@ static void test_cabinet_explorer_selection(void) {
     char path[128] = "";
     BOOL handled = cabinet_handle_click(50, 31, FALSE, &robj, path);
     TEST_ASSERT(handled == FALSE, "Single click updates selection without modal block");
-    TEST_ASSERT(robj == 103, "Selected Real Body #103 (03_bfree_os_book.tad)");
+
+    /* Row order depends on icon-tag grouping ("[b-core]" precedes "[b-free]"),
+     * so locate #103 with the same dynamic scan used for manifest.tad below. */
+    int bfree_row = -1;
+    for (int row = 0; row < 256; row++) {
+        int y = 26 + row * 22 + 5;
+        cabinet_handle_click(50, y, FALSE, &robj, path);
+        if (robj == 103 && strcmp(path, "tad_bin/03_bfree_os_book.tad") == 0) {
+            bfree_row = row;
+            break;
+        }
+    }
+    TEST_ASSERT(bfree_row >= 0, "Selected Real Body #103 (03_bfree_os_book.tad)");
     TEST_ASSERT(strcmp(path, "tad_bin/03_bfree_os_book.tad") == 0, "Resolved path for #103");
 
     /* Cabinet contents are discovered dynamically; locate manifest.tad through the
@@ -265,8 +277,8 @@ static void test_browser_history_and_path_resolution(void) {
     tad_browser_resolve_path("tad_bin/b-spec/os_spec/dp/dp.tad", "b-spec/os_spec/dp/dp.html", resolved, sizeof(resolved));
     TEST_ASSERT(strcmp(resolved, "tad_bin/b-spec/os_spec/dp/dp.tad") == 0, "Resolved sibling path ../dp/dp.html -> tad_bin/os_spec/dp/dp.tad");
 
-    tad_browser_resolve_path("tad_bin/01_btron3_spec.tad", "02_tkernel_book.tad", resolved, sizeof(resolved));
-    TEST_ASSERT(strcmp(resolved, "tad_bin/02_tkernel_book.tad") == 0, "Resolved neighbor canonical book");
+    tad_browser_resolve_path("tad_bin/01_btron3_spec.tad", "02_bcore_book.tad", resolved, sizeof(resolved));
+    TEST_ASSERT(strcmp(resolved, "tad_bin/02_bcore_book.tad") == 0, "Resolved neighbor canonical book");
 
     /* 2. Test In-place Browser History Navigation */
     TAD_BROWSER tb;
@@ -276,7 +288,7 @@ static void test_browser_history_and_path_resolution(void) {
     TEST_ASSERT(tb.history_idx == 0, "Initial page at history_idx = 0");
     TEST_ASSERT(tad_browser_can_go_back(&tb) == FALSE, "Cannot go back from first page");
 
-    tad_browser_navigate(&tb, "tad_bin/02_tkernel_book.tad");
+    tad_browser_navigate(&tb, "tad_bin/02_bcore_book.tad");
     TEST_ASSERT(tb.history_idx == 1, "Navigated to page 2 (history_idx = 1)");
     TEST_ASSERT(tad_browser_can_go_back(&tb) == TRUE, "Can go back to page 1");
     TEST_ASSERT(tad_browser_can_go_forward(&tb) == FALSE, "Cannot go forward past current head");
@@ -290,7 +302,7 @@ static void test_browser_history_and_path_resolution(void) {
     /* Navigate forward */
     tad_browser_go_forward(&tb);
     TEST_ASSERT(tb.history_idx == 1, "Went forward to history_idx = 1");
-    TEST_ASSERT(strcmp(tb.file_path, "tad_bin/02_tkernel_book.tad") == 0, "Current document restored to page 2");
+    TEST_ASSERT(strcmp(tb.file_path, "tad_bin/02_bcore_book.tad") == 0, "Current document restored to page 2");
 
     /* Test Toolbar Button Click in handle_mouse */
     BOOL nav_hit = tad_browser_handle_mouse(&tb, 20, 15, TRUE, NULL, NULL);
@@ -489,7 +501,7 @@ static void test_canonical_books_links_resolution(void) {
 
     const char *book_files[] = {
         "tad_bin/01_btron3_spec.tad",
-        "tad_bin/02_tkernel_book.tad",
+        "tad_bin/02_bcore_book.tad",
         "tad_bin/03_bfree_os_book.tad"
     };
 
@@ -533,7 +545,7 @@ static void test_multi_window_context_isolation(void) {
     printf("\n[TEST GROUP 12] Multi-Window Immutable Document Context Isolation (SPEC 3.20)\n");
 
     WND *w1 = open_tad_browser_window("tad_bin/01_btron3_spec.tad", "Spec Book Window");
-    WND *w2 = open_tad_browser_window("tad_bin/02_tkernel_book.tad", "T-Kernel Book Window");
+    WND *w2 = open_tad_browser_window("tad_bin/02_bcore_book.tad", "B-Core Book Window");
 
     TEST_ASSERT(w1 != NULL && w2 != NULL, "Opened two independent TAD Browser windows");
     TEST_ASSERT(w1->user_data != 0 && w2->user_data != 0, "Both windows have allocated user_data document contexts");
@@ -543,7 +555,7 @@ static void test_multi_window_context_isolation(void) {
     TAD_BROWSER *tb2 = (TAD_BROWSER*)(uintptr_t)w2->user_data;
 
     TEST_ASSERT(strstr(tb1->file_path, "01_btron3_spec") != NULL, "Window 1 holds private state for 01_btron3_spec.tad");
-    TEST_ASSERT(strstr(tb2->file_path, "02_tkernel_book") != NULL, "Window 2 holds private state for 02_tkernel_book.tad");
+    TEST_ASSERT(strstr(tb2->file_path, "02_bcore_book") != NULL, "Window 2 holds private state for 02_bcore_book.tad");
 
     /* Mutate Window 1 scroll position and verify Window 2 immutability */
     tad_browser_scroll(tb1, 80);
@@ -552,7 +564,7 @@ static void test_multi_window_context_isolation(void) {
 
     /* Close Window 1 and verify Window 2 remains intact */
     cls_wnd(w1);
-    TEST_ASSERT(tb2->scroll_y == 0 && strstr(tb2->file_path, "02_tkernel_book") != NULL,
+    TEST_ASSERT(tb2->scroll_y == 0 && strstr(tb2->file_path, "02_bcore_book") != NULL,
                 "Window 2 document context remains valid and intact after Window 1 closure");
 
     cls_wnd(w2);

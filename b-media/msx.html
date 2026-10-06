@@ -1217,8 +1217,9 @@ tools/mssym.c   (C99, single file)
           C++ symbol and no foreign license text in the module.
         </div>
         <p>
-          The required module shape is one file pair per chip, C99 only, with no C++, no plugin system and no
-          machine XML:
+          The required module shape is one unit per chip (<code>z80</code>, <code>vdp</code>,
+          <code>psg</code>, <code>ppi</code>) with slot, BIOS and keyboard glue, one top level, and two debug
+          units — ten in all. C99 only, with no C++, no plugin system and no machine XML:
         </p>
         <table class="api-table">
           <caption>The ten translation units of <code>src/emulators/msx/</code>. Names and responsibilities
@@ -1699,7 +1700,12 @@ typedef struct {                 /* one log line, written by the step-path hook 
           re-checked against the MSX Assembly Page BIOS reference, and the VDP address model of 2.2 against its
           V9958 programming article; both are cited in the captions. The two logging structures are named
           distinctly from here: the input log is the 65,536 × 16 B per-step history of 8.2, and the log ring is
-          the 256 × 32 B debugger line ring of 8.4.1. Where the design note and this book disagree, this
+          the 256 × 32 B debugger line ring of 8.4.1. Every byte layout in the book was re-measured with the
+          C99 compiler on the 64-bit host: <code>sizeof(b_msx_body) == 64</code> requires
+          <code>name[28]</code> at offset 36, <code>sizeof(tt_view_t) == 32</code> requires the 7-byte tail
+          after the 6-byte alignment hole at 10..15, the checkpoint header fields land at 0, 4, 6, 8, 16, 24,
+          32, 96, 136, 184, 200, 224, 248 and 252, and the debug-shape sum is 13,918,464 B over the 262,296 B
+          core, 14,180,760 B in total. Where the design note and this book disagree, this
           book is normative.
         </p>
       </section>

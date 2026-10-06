@@ -258,6 +258,7 @@ VIRGL_SRCS = \
     src/gl/egl_surface.c \
     src/gl/backend_virgl.c \
     src/apps/glgears.c \
+    src/apps/xmb.c \
     $(QUAKE_SRCS) \
     $(DEMO_SRCS)
 
@@ -310,6 +311,7 @@ GL_SRCS = \
     src/gl/backend_tinygl.c \
     src/gl/backend_virgl.c \
     src/apps/glgears.c \
+    src/apps/xmb.c \
     $(QUAKE_SRCS) \
     $(DEMO_SRCS)
 
@@ -1627,6 +1629,25 @@ test-global-menu: $(TEST_GMENU_BIN)
 
 $(TEST_GMENU_BIN): $(TEST_GMENU_OBJS)
 	$(CC) $(TEST_GMENU_OBJS) -o $@ $(LDFLAGS) -lm
+
+# ═══════════════════════════════════════════════════════════════════
+# XMB (XrossMediaBar) OpenGL Render Verification — pixels, not promises
+# ═══════════════════════════════════════════════════════════════════
+TEST_XMB_SRCS = verify/tests/test_xmb_render.c src/apps/xmb.c \
+                src/gl/gl_dispatch.c src/gl/egl_surface.c src/gl/backend_virgl.c \
+                src/font/troncode.c src/font/jis_fonts.c src/font/tibetan_fonts.c
+TEST_XMB_OBJS = $(TEST_XMB_SRCS:.c=.test.o)
+TEST_XMB_BIN  = ./.build/test_xmb_render
+
+test-xmb-render: $(TEST_XMB_BIN)
+	@echo "=========================================================="
+	@echo " Running XMB OpenGL Render Verification..."
+	@echo "=========================================================="
+	@./$(TEST_XMB_BIN)
+
+$(TEST_XMB_BIN): $(TEST_XMB_OBJS)
+	@mkdir -p ./.build
+	$(CC) $(TEST_XMB_OBJS) -o $@ $(LDFLAGS) -lm
 
 # ═══════════════════════════════════════════════════════════════════
 # Common Application Menu Subsystem Test Suite

@@ -61,6 +61,7 @@ extern void uart_puts_raw(const char *s);
 #define XB_DELAY            166.66667f
 #define XB_SHADOW_ALPHA     1.00f
 #define XB_DRAW_ENTRY_MS    500          /* MENU_DRAW_ENTRY_DELAY (500000 us) */
+#define XB_BAR_OFFSET       1.1f         /* xmb.c:3503, the ps3 layout's value */
 
 #define XB_EASE_LINEAR      0
 #define XB_EASE_OUT_QUAD    1
@@ -1441,7 +1442,6 @@ static int xb_draw_item(int i, int current)
     xb_item_t *items = NULL;
     xb_item_t *it;
     xb_node_t *n;
-    xb_cat_t *cat = &s_cats[s_cat];
     float half = s_icon_size / 2.0f;
     float icon_y, icon_x, label_offset, a;
     int count = 0;
@@ -1462,29 +1462,35 @@ static int xb_draw_item(int i, int current)
     if (icon_x < -half || icon_x > (float)s_w)
         return 0;
 
-    /* xmb.c:6205 - vertical fade of rows approaching the screen edges */
-    a = n->alpha * s_alpha_list;
-    a = xb_minf(a, s_alpha);
-    if (s_fade > 0 && n->x == 0.0f) {
+    /* xmb.c:6155 - vertical fade of rows approaching the screen edges */
+    if (s_fade > 0) {
         float icon_space = s_spacing_v;
         float icon_ratio = icon_space / (float)s_h / icon_space * 4.0f;
         float scr_margin = s_margin_top + (icon_space / icon_ratio / 400.0f);
         float factor     = (float)s_fade / 100.0f / icon_ratio;
         float min_alpha  = 0.01f;
         float max_alpha  = (i == current) ? 1.0f : 0.75f;
-        float new_alpha  = (i < current)
-             ? (n->y + scr_margin) / factor
-             : ((float)s_h - n->y - scr_margin + icon_space) / factor;
+        float new_alpha  = n->alpha;
+
+        if (i < current)
+            new_alpha = (n->y + scr_margin) / factor;
+        else if (i > current)
+            new_alpha = ((float)s_h - n->y - scr_margin + icon_space) / factor;
+
         new_alpha = xb_clampf(new_alpha, min_alpha, max_alpha);
-        if (new_alpha < n->alpha) {
-            a = xb_minf(new_alpha * s_alpha_list, s_alpha);
-            n->alpha = new_alpha;
+        /* xmb.c:6181 - a row that is still sliding owns its own alpha */
+        if (new_alpha < n->alpha || n->x == 0.0f) {
+            n->alpha      = new_alpha;
             n->label_alpha = new_alpha;
         }
     }
 
+    /* xmb.c:6270 - the icon colour, after the fade has settled node->alpha.
+     * Passive rows are dimmed by 1/1.25 straight off node->alpha, which is
+     * how the original differentiates the active entry. */
+    a = xb_minf(n->alpha * s_alpha_list, s_alpha);
     if (i != current)
-       a *= 1.0f / 1.25f;   /* passive entry icons are dimmed */
+        a = xb_minf(n->alpha / 1.25f, s_alpha);
 
     xb_draw_icon(it->icon, icon_x + half, icon_y, s_icon_size, n->zoom, a);
 
@@ -1513,14 +1519,14 @@ static int xb_draw_item(int i, int current)
              s_margin_top + n->y + s_label_top, s_font,
              n->label_alpha * s_alpha_list, 1);
 
+    /* An arrow after the value marks a row that opens a sub-list */
     if (i == current && it->kind == XB_SUB)
         xb_draw_icon(IC_ARROW,
-             n->x + s_margin_left + s_spacing_h + s_label_left
-             + s_setting_left + xb_text_w(">", s_font) * 0.0f + s_font,
+             n->x + s_margin_left + s_spacing_h + s_label_left + s_setting_left
+             + xb_text_w(value, s_font) + s_font,
              s_margin_top + n->y + s_label_top + s_font * 0.5f,
              s_font, 0.6f, n->label_alpha * s_alpha_list);
 
-    (void)cat;
     return 1;
 }
 
@@ -1539,16 +1545,20 @@ static void xb_draw_items(void)
 static void xb_draw_footer(void)
 {
     char buf[64];
-    xb_item_t *items = xb_cur_items(&(int){0});
+    int count = 0;
+    xb_item_t *items = xb_cur_items(&count);
     int current = xb_cur_selection();
-    int kind = items && items[current].kind ? items[current].kind : XB_APP;
+    int kind = (items && current >= 0 && current < count)
+             ? items[current].kind : XB_APP;
 
+    /* The bitmap font atlas carries codes 32-126 only, so the separator
+     * between hints is an ASCII bar rather than a middle dot */
     snprintf(buf, sizeof(buf), "%s",
              s_msg_open ? "ESC Close" :
-             (kind == XB_APP)     ? "ENTER Launch  \xC2\xB7  ESC Quit" :
-             (kind == XB_CMD)     ? "ENTER Run  \xC2\xB7  ESC Quit" :
-             (kind == XB_SUB)     ? "ENTER Open  \xC2\xB7  ESC Back" :
-                                    "LEFT/RIGHT Adjust  \xC2\xB7  ENTER Set");
+             (kind == XB_APP)     ? "ENTER Launch  |  ESC Quit" :
+             (kind == XB_CMD)     ? "ENTER Run  |  ESC Quit" :
+             (kind == XB_SUB)     ? "ENTER Open  |  ESC Back" :
+                                    "LEFT/RIGHT Adjust  |  ENTER Set");
     xb_draw_text(buf, s_margin_left, (float)s_h - s_font * 1.4f, s_font2,
                  0.55f * s_alpha, 0);
 }
@@ -1683,13 +1693,10 @@ static void xb_anim_list_open(int dir)
     }
 
     /* xmb_list_open(): the whole bar slides aside by one icon per depth */
-    target_x = s_icon_size * 0.7f * -(float)(s_depth * 2 - 2);
-    if (s_depth <= 2) {
-        static int once;
+    target_x = s_icon_size * XB_BAR_OFFSET * -(float)(s_depth * 2 - 2);
+    if (s_depth <= 2)
         xb_tween_push(&s_x, target_x, XB_DELAY, XB_EASE_OUT_QUAD,
                       (uintptr_t)&s_x);
-        (void)once;
-    }
 }
 
 /* xmb_animation_list_alpha() */
@@ -1710,7 +1717,7 @@ static void xb_layout_nodes(void)
         n->y = xb_item_y(i, current);
     }
     s_band_x = -s_spacing_h * (float)s_cat;
-    s_x      = s_icon_size * 0.7f * -(float)(s_depth * 2 - 2);
+    s_x      = s_icon_size * XB_BAR_OFFSET * -(float)(s_depth * 2 - 2);
 }
 
 /* ── Actions ────────────────────────────────────────────────────────── */
@@ -1758,6 +1765,12 @@ static void xb_sysdata_fill(void)
 /* The menu clock, in milliseconds, as of the last tick.  xb_activate() runs
  * from the event handler and needs it to set the launch hold's deadline. */
 static unsigned s_now_ms = 0;
+
+/* Kagee's launcher: a local weak fallback, as src/apps/kagee.c is not in every
+ * target's source list.  The real definition in kagee.c wins when linked. */
+#if defined(__GNUC__) || defined(__clang__)
+__attribute__((weak)) WND* open_kagee_window(void) { return (void*)0; }
+#endif
 
 static void xb_launch(int id)
 {

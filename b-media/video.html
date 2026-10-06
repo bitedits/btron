@@ -16,13 +16,14 @@
         <span class="hamburger"></span>
       </button>
       <ul class="book-global-links">
-    <li><a href="../index.html">B-System</a></li>
-    <li><a href="../b-book/index.html">B-Book</a></li>
-    <li><a href="../b-core/index.html">B-Core</a></li>
-    <li><a href="index.html" class="active">B-Video</a></li>
-    <li><a href="../conformance.html">B-Spec</a></li>
-    <li><a href="../releases.html">Releases</a></li>
-    <li><a href="https://github.com/bitedits/btron">GitHub</a></li>
+        <li><a href="index.html">B-Media</a></li>
+        <li><a href="../index.html">B-System</a></li>
+        <li><a href="../b-book/index.html">B-Book</a></li>
+        <li><a href="../conformance.html">B-Spec</a></li>
+        <li><a href="../virtio.html">VirtIO</a></li>
+        <li><a href="../mobile.html">FOMA</a></li>
+        <li><a href="../releases.html">Releases</a></li>
+        <li><a href="https://github.com/bitedits/btron">GitHub</a></li>
       </ul>
     </div>
   </nav>
@@ -64,13 +65,14 @@
         <a href="#verified" class="nav-sublink">Verification Status &amp; Roadmap</a>
       </div>
 
-      <div class="nav-heading">Companion Books</div>
-      <a href="../b-media/index.html" class="nav-link">B-Media (Pipes &amp; Budgets)</a>
-      <a href="../b-rtp/index.html" class="nav-link">B-RTP (WebRTC Core)</a>
-      <a href="../b-audio/index.html" class="nav-link">B-Audio (PCM Stack)</a>
-      <a href="../b-core/index.html" class="nav-link">B-Core (InterCore Nexus)</a>
-      <a href="../b-sound/index.html" class="nav-link">B-Sound (lilcu64 Synth)</a>
-      <a href="../b-msx/index.html" class="nav-link">B-MSX (MSX2+ Home · tronMSX)</a>
+      <div class="nav-heading">B-Media Pages</div>
+      <a href="index.html" class="nav-link">B-Media (Pipes &amp; Budgets)</a>
+      <a href="rtp.html" class="nav-link">B-RTP (WebRTC Core)</a>
+      <a href="audio.html" class="nav-link">B-Audio (PCM Stack)</a>
+      <a href="core.html" class="nav-link">B-Core (InterCore Nexus)</a>
+      <a href="sound.html" class="nav-link">B-Sound (lilcu64 Synth)</a>
+      <a href="msx.html" class="nav-link">B-MSX (MSX2+ Home · tronMSX)</a>
+      <a href="gl.html" class="nav-link">B-GL (3D OpenGL)</a>
     </div>
   </nav>
 
@@ -105,8 +107,8 @@
           The substrate is already proven: damage and blit live in
           <a href="../b-system/theorems/ui_compose.html">ui_compose</a>, the VideoCore mailbox and framebuffer
           pitch in <a href="../b-system/theorems/drivers.html">drivers</a>, pool/refcount and queue laws in
-          <a href="../b-rtp/theorems/media_rtp.html">media_rtp</a>, claim/publish/drain in
-          <a href="../b-media/theorems/media_smp.html">media_smp</a>. What video adds is only the frame
+          <a href="theorems/media_rtp.html">media_rtp</a>, claim/publish/drain in
+          <a href="theorems/media_smp.html">media_smp</a>. What video adds is only the frame
           algebra on top — and its five model pairs are, as of this revision, <em>specified but not yet
           proven</em>; §Verification says exactly which.
         </p>
@@ -187,7 +189,7 @@ present clock ± slip budget     PTS ≤ clock + slip, else wait or counted drop
           decoders (<code>decode_image_rgba</code> family) turn PNG/GIF/JPEG into caller-owned RGBA pixel
           arrays; frame-grab tooling (<code>src/tools/capture_*.c</code>) exercises the same flush path the
           compositor uses; the WebRTC ingest path (per-peer decodebin → I420 caps → jitter window) is
-          specified in <a href="../b-rtp/index.html">B-RTP</a>, whose packetization laws (P1–P7) are the
+          specified in <a href="rtp.html">B-RTP</a>, whose packetization laws (P1–P7) are the
           network-side twin of the frame algebra above.
         </p>
       </section>
@@ -343,8 +345,8 @@ slot_release(p);                               /* last ref recycles  */</code></
         <ul>
           <li>Compositor damage &amp; blit algebra — <a href="../b-system/theorems/ui_compose.html">ui_compose_properties.v</a>.</li>
           <li>VideoCore mailbox + <code>vc4_fb_pitch_ge_width</code> — <a href="../b-system/theorems/drivers.html">drivers_properties.v</a>.</li>
-          <li>Static pool/refcount/queue/PTS laws video inherits — <a href="../b-rtp/theorems/media_rtp.html">media_rtp_properties.v</a>.</li>
-          <li>Claim/publish/drain, non-blocking rcv, single drain owner — <a href="../b-media/theorems/media_smp.html">media_smp_properties.v</a>.</li>
+          <li>Static pool/refcount/queue/PTS laws video inherits — <a href="theorems/media_rtp.html">media_rtp_properties.v</a>.</li>
+          <li>Claim/publish/drain, non-blocking rcv, single drain owner — <a href="theorems/media_smp.html">media_smp_properties.v</a>.</li>
           <li>GL surface behaviour — <a href="../b-system/theorems/opengl.html">opengl_properties.v</a>.</li>
         </ul>
         <p>
@@ -355,7 +357,7 @@ slot_release(p);                               /* last ref recycles  */</code></
           in §2.2 above should be cited as Coq-closed until its pair lands. The planned oracles follow the
           InterCore pattern: instantiate the shipped numbers (1080p60 H.264 on VPU, 720p software ceiling,
           jitter depth, slip cap) and exhaustively search the small interleavings. When each pair is
-          verified, its dossier belongs on this shelf at <code>b-video/theorems/</code>.
+          verified, its dossier belongs on this shelf at <code>b-media/theorems/</code>.
         </p>
       </section>
 

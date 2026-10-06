@@ -458,9 +458,9 @@ static int get_toc_order(const char *path, const char *name) {
     if (strstr(path, "b-system/license"))    return 830;
     if (strstr(path, "b-system/index"))      return 840;
 
-    /* 11. [b-core] B-Core InterCore Protocol Specs */
-    if (strstr(path, "b-core/theorems"))                return 900;
-    if (strstr(path, "b-core/index") || strstr(path, "b-core/B-Core")) return 910;
+    /* 11. [b-media] B-Media book: InterCore nexus + media pipes */
+    if (strstr(path, "b-media/theorems"))   return 900;
+    if (strstr(path, "b-media/B-Core"))     return 910;
 
     /* 12. [b-book] B-Book Developer's Manual (12 Subsystems) */
     if (strstr(path, "b-book/B-Book") || strstr(path, "b-book/index")) return 940;
@@ -566,7 +566,7 @@ static const char* deduce_toc_path(const char *path) {
     if (strstr(path, "b-hmi/")) return "b-hmi/";
     if (strstr(path, "b-free/")) return "b-free/";
     if (strstr(path, "b-system/")) return "b-system/";
-    if (strstr(path, "b-core/")) return "b-core/";
+    if (strstr(path, "b-media/")) return "b-media/";
     return "root/";
 }
 
@@ -574,7 +574,8 @@ static const char* deduce_icon_tag(const char *path) {
     if (strstr(path, "04_tron_hmi") || strstr(path, "b-hmi")) return "[b-hmi]";
     if (strstr(path, "03_bfree") || strstr(path, "b-free")) return "[b-free]";
     if (strstr(path, "b-system")) return "[b-system]";
-    if (strstr(path, "02_bcore") || strstr(path, "b-core")) return "[b-core]";
+    if (strstr(path, "02_bcore") || strstr(path, "b-media/B-Core")) return "[b-core]";
+    if (strstr(path, "b-media")) return "[b-media]";
     if (strstr(path, "b-book")) return "[doc]";
     if (strstr(path, "01_btron3") || strstr(path, "shared_data") || strstr(path, "os_spec") || strstr(path, "doc")) return "[doc]";
     return "[doc]";
@@ -624,7 +625,7 @@ static void get_friendly_title(const char *sub_path, const char *filename, char 
     else if (strstr(sub_path, "b-hmi/part2")) strncpy(out_name, "Part2.tad", max_len - 1);
     else if (strstr(sub_path, "b-hmi/part_book")) strncpy(out_name, "Part_Book.tad", max_len - 1);
     else if (strstr(sub_path, "b-hmi")) strncpy(out_name, "B-HMI.tad", max_len - 1);
-    else if (strstr(sub_path, "b-core")) strncpy(out_name, "B-Core.tad", max_len - 1);
+    else if (strstr(sub_path, "b-media")) strncpy(out_name, "B-Media.tad", max_len - 1);
     else if (strstr(sub_path, "b-system")) strncpy(out_name, "B-System.tad", max_len - 1);
     else if (strstr(sub_path, "b-free")) strncpy(out_name, "B-Free.tad", max_len - 1);
     else if (strstr(sub_path, "shared_data")) strncpy(out_name, "Shared_Data.tad", max_len - 1);
@@ -700,7 +701,7 @@ static const char* deduce_gif_icon(const CABINET_ITEM *it) {
     if (it->type == VOBJ_TYPE_DRAW) return "paint";
     if (strstr(it->path, "shared_data")) return "notebook";
     if (strstr(it->path, "b-hmi")) return "appearance";
-    if (strstr(it->path, "b-core") || strstr(it->path, "kernel")) return "system";
+    if (strstr(it->path, "B-Core") || strstr(it->path, "kernel")) return "system";
     if (strstr(it->path, "b-free")) return "workbench";
     return "tad_browser";
 }

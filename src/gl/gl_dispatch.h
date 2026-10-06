@@ -73,6 +73,14 @@ typedef struct {
 
     /* Scale (added at end to preserve ABI offsets of previous members) */
     void   (*gl_scale_f)      (GLfloat x, GLfloat y, GLfloat z);
+
+    /* Alpha compositing, 2D projection and 4-component colour, added at the
+     * end for the same reason: the members above keep their offsets. */
+    void   (*gl_blend_func)   (GLenum src, GLenum dst);
+    void   (*gl_color4f)      (GLfloat r, GLfloat g, GLfloat b, GLfloat a);
+    void   (*gl_vertex2f)     (GLfloat x, GLfloat y);
+    void   (*gl_ortho)        (double l, double r, double b,
+                               double t, double n, double f);
 } gl_ops_t;
 
 /* ── Active backend pointer (set by gl_init) ─────────────────────── */
@@ -98,6 +106,10 @@ void gl_shutdown (void);
 #define glRotatef(a,x,y,z)      g_gl->gl_rotate_f(a,x,y,z)
 #define glTranslatef(x,y,z)     g_gl->gl_translate_f(x,y,z)
 #define glScalef(x,y,z)         g_gl->gl_scale_f(x,y,z)
+#define glBlendFunc(s,d)        g_gl->gl_blend_func(s,d)
+#define glColor4f(r,g,b,a)      g_gl->gl_color4f(r,g,b,a)
+#define glVertex2f(x,y)         g_gl->gl_vertex2f(x,y)
+#define glOrtho(l,r,b,t,n,f)    g_gl->gl_ortho(l,r,b,t,n,f)
 #define glFrustum(l,r,b,t,n,f)  g_gl->gl_frustum(l,r,b,t,n,f)
 #define glViewport(x,y,w,h)     g_gl->gl_viewport(x,y,w,h)
 #define glClear(m)              g_gl->gl_clear(m)

@@ -165,7 +165,7 @@ in the same commit as a behaviour change.
 
 **Excluded from review entirely:** `third_party/haiku`,
 `third_party/stellux-xhci-tutorial`, `third_party/pi400`,
-`include/arch/bcm283x/**`, `include/{tk,sys,tm}`, `b-core/`,
+`include/arch/bcm283x/**`, `include/{tk,sys,tm}`, `b-media/`,
 `b-book/ b-free/ b-spec/ b-system/`, `assets/`, `tad_bin/`, `licenses/`,
 root `*.img/*.elf/*.vol`, and the in-tree `*.arm64 N.o` strays (those strays
 deserve their own `gitignore` + cleanup pass).

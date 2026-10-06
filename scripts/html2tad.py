@@ -420,16 +420,22 @@ def compile_to_symbolic_tad(elements: list, doc_title: str = 'BTRON Document',
 
 # ── Doc title name helper ─────────────────────────────────────────────────────
 def _doc_title_name(base_name: str, html_path: str, source_root: str) -> str:
+    catalog = os.path.basename(source_root) if source_root else ''
+    # The media books are pages of one b-media catalog; their stems are the
+    # canonical document names the Cabinet Explorer and 02_bcore_book link to.
+    media_docs = {'index': 'B-Media', 'core': 'B-Core', 'audio': 'B-Audio',
+                  'video': 'B-Video', 'sound': 'B-Sound', 'rtp': 'B-RTP',
+                  'msx': 'B-MSX', 'gl': 'B-GL'}
+    if (catalog == 'b-media' and base_name in media_docs
+            and os.path.dirname(html_path) == source_root):
+        return media_docs[base_name]
     if base_name != 'index':
         return base_name
     rel = os.path.relpath(html_path, source_root) if source_root else html_path
     sub = os.path.dirname(rel)
-    catalog = os.path.basename(source_root) if source_root else ''
     if sub and sub != '.':
         m = {'part1':'Part1','part2':'Part2','part_book':'Part_Book'}
         return m.get(sub.lower(), sub.lower().capitalize())
-    if catalog == 'b-core':   return 'B-Core'
-    if catalog == 'b-msx':    return 'B-MSX'
     if catalog == 'b-system': return 'B-System'
     if catalog == 'b-hmi':    return 'B-HMI'
     if catalog == 'b-spec':   return 'B-Spec'
@@ -497,8 +503,8 @@ def compile_foundational_books(target_dir: str = 'tad_bin'):
     bcore_elements = [
         ('h1', 'B-Core インターコア・ストリーミングプロトコル仕様書 (InterCore Streaming Protocol)'),
         ('image', 'b-spec/os_spec/kernel/gif/processtask.gif', '図 2: 五呼出プロトコル状態モデル (pub/sub/spawn/snd/rcv State Model)'),
-        ('link', 'b-core/B-Core.tad', '第1章 InterCore ストリーミングプロトコル開発者仕様 (Protocol Developer Spec)'),
-        ('link', 'b-core/theorems/media_intercore.tad', '第2章 Star Ring 形式検証台帳 (602 Coq判定・公理ゼロ)'),
+        ('link', 'b-media/B-Core.tad', '第1章 InterCore ストリーミングプロトコル開発者仕様 (Protocol Developer Spec)'),
+        ('link', 'b-media/theorems/media_intercore.tad', '第2章 Star Ring 形式検証台帳 (602 Coq判定・公理ゼロ)'),
         ('h2', '五呼出アルファベット (The Five-Call Alphabet)'),
         ('ol', [
             'pub  — 発信カーソル生成 (bounded publisher cursor)',
@@ -627,13 +633,7 @@ if __name__ == '__main__':
     source_trees = [
         ('b-spec',   os.path.join(out_dir, 'b-spec')),
         ('b-system', os.path.join(out_dir, 'b-system')),
-        ('b-core',   os.path.join(out_dir, 'b-core')),
-        ('b-audio',  os.path.join(out_dir, 'b-audio')),
         ('b-media',  os.path.join(out_dir, 'b-media')),
-        ('b-video',  os.path.join(out_dir, 'b-video')),
-        ('b-sound',  os.path.join(out_dir, 'b-sound')),
-        ('b-rtp',    os.path.join(out_dir, 'b-rtp')),
-        ('b-msx',    os.path.join(out_dir, 'b-msx')),
     ]
     if os.path.isdir('b-hmi'):
         source_trees.append(('b-hmi', os.path.join(out_dir, 'b-hmi')))

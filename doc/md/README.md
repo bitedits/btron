@@ -12,7 +12,7 @@ TRON Trace Distribution uCode: https://trace.tron.org/tk/00001C00000000000000000
 * [B-Free OS 1994](https://bitedits.github.io/btron/b-free/)
 * [B-System 2026](https://bitedits.github.io/btron/b-system/)
 * [TRON HMI](https://bitedits.github.io/btron/b-hmi/)
-* [T-Kernel 2.0](https://bitedits.github.io/btron/b-core/)
+* [B-Media book](https://bitedits.github.io/btron/b-media/) — InterCore nexus, pipes, audio, video, sound, RTP, MSX, GL
 
 NOTE: I can't include TRON HMI TAD book to build as it is copyright protected.
 You need to ask PMC to give me non-commercial permission to Ukrainian translation (that's only language I ask, but anyway you'll have pictures).

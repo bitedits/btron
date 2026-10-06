@@ -267,3 +267,19 @@ footer.doc-footer {
         margin-left: 0;
     }
 }
+
+/* Global top menu for the legacy doc.css specification pages. */
+.global-top-menu {
+    background: #0f172a;
+    color: #e2e8f0;
+    padding: 10px 15px;
+    margin: 0 0 15px 0;
+    border-radius: 4px;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    font-size: 0.95rem;
+    font-weight: bold;
+}
+.global-top-menu a { color: #ffd700; text-decoration: none; }
+.global-top-menu a:hover { text-decoration: underline; }
+.global-top-menu a.active { color: #ffffff; }
+.global-top-menu .sep { color: #475569; margin: 0 6px; }

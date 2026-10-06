@@ -16,13 +16,14 @@
         <span class="hamburger"></span>
       </button>
       <ul class="book-global-links">
-    <li><a href="../index.html">B-System</a></li>
-    <li><a href="../b-book/index.html">B-Book</a></li>
-    <li><a href="../b-core/index.html">B-Core</a></li>
-    <li><a href="index.html" class="active">B-Sound</a></li>
-    <li><a href="../conformance.html">B-Spec</a></li>
-    <li><a href="../releases.html">Releases</a></li>
-    <li><a href="https://github.com/bitedits/btron">GitHub</a></li>
+        <li><a href="index.html">B-Media</a></li>
+        <li><a href="../index.html">B-System</a></li>
+        <li><a href="../b-book/index.html">B-Book</a></li>
+        <li><a href="../conformance.html">B-Spec</a></li>
+        <li><a href="../virtio.html">VirtIO</a></li>
+        <li><a href="../mobile.html">FOMA</a></li>
+        <li><a href="../releases.html">Releases</a></li>
+        <li><a href="https://github.com/bitedits/btron">GitHub</a></li>
       </ul>
     </div>
   </nav>
@@ -72,13 +73,14 @@
         <a href="#verified" class="nav-sublink">Verification Status</a>
       </div>
 
-      <div class="nav-heading">Companion Books</div>
-      <a href="../b-audio/index.html" class="nav-link">B-Audio (PCM Output Stack)</a>
-      <a href="../b-video/index.html" class="nav-link">B-Video (Display Path)</a>
-      <a href="../b-media/index.html" class="nav-link">B-Media (Pipes &amp; Budgets)</a>
-      <a href="../b-core/index.html" class="nav-link">B-Core (InterCore Nexus)</a>
-      <a href="../b-rtp/index.html" class="nav-link">B-RTP (WebRTC Core)</a>
-      <a href="../b-msx/index.html" class="nav-link">B-MSX (MSX2+ Home · tronMSX)</a>
+      <div class="nav-heading">B-Media Pages</div>
+      <a href="audio.html" class="nav-link">B-Audio (PCM Output Stack)</a>
+      <a href="video.html" class="nav-link">B-Video (Display Path)</a>
+      <a href="index.html" class="nav-link">B-Media (Pipes &amp; Budgets)</a>
+      <a href="core.html" class="nav-link">B-Core (InterCore Nexus)</a>
+      <a href="rtp.html" class="nav-link">B-RTP (WebRTC Core)</a>
+      <a href="msx.html" class="nav-link">B-MSX (MSX2+ Home · tronMSX)</a>
+      <a href="gl.html" class="nav-link">B-GL (3D OpenGL)</a>
     </div>
   </nav>
 
@@ -115,7 +117,7 @@
         </div>
         <p>
           B-Sound never touches hardware: it renders into an <code>int16_t</code> buffer and hands it to the
-          five B-Audio driver calls (<a href="../b-audio/index.html">virtio_sound_write and friends</a>),
+          five B-Audio driver calls (<a href="audio.html">virtio_sound_write and friends</a>),
           whose weak stubs — declared right here in <code>lilcu64_synth.c</code> — keep every port of the
           build matrix linkable with no audio device at all.
         </p>
@@ -180,7 +182,7 @@
           The single source of truth is the <strong>audio clock</strong> — <code>wa_time()</code>, seconds of
           rendered samples, the exact analogue of <code>AudioContext.currentTime</code>. The UI/scheduler
           clock is never consulted for musical time. This is the demoscene twin of B-Core's ruling
-          <a href="../b-core/index.html">R7</a>: producers never block on consumers, and consumers read a
+          <a href="core.html">R7</a>: producers never block on consumers, and consumers read a
           monotonically advanced clock they alone drive.
         </p>
         <ul>
@@ -256,7 +258,7 @@
           Invariants: every field is written by the audio thread only between render blocks; allocation is
           first-fit then lowest-amplitude steal, so <em>a trigger never fails and never blocks</em> — the
           audible worst case is a quiet voice cut short. This is refusal-as-stuttering again, in the audio
-          plane (see <a href="../b-core/index.html">B-Core §1.4</a>).
+          plane (see <a href="core.html">B-Core §1.4</a>).
         </p>
       </section>
 
@@ -379,7 +381,7 @@ missing_frames = (target − virtio_sound_get_queued_bytes()) / 4
 loop: render ≤1024 frames → virtio_sound_write(chunk) until shortfall closed</pre></code>
           <p>No blocking, no unbounded buffering: playback stays locked to real time and worst-case added
              latency is one 100 ms target window — the audio twin of B-Media's plane budgets
-             (<a href="../b-media/index.html">B-Media</a>).</p>
+             (<a href="index.html">B-Media</a>).</p>
         </div>
 
         <h3 id="shims">3.5 Sound Shims (trigger surface)</h3>
@@ -522,7 +524,7 @@ for (;;) {                              /* 16 ms render cadence (dly_tsk(16))   
           On ports without a VirtIO backend the weak stubs (<code>write → −1</code>,
           <code>is_ready → false</code>) keep the whole demo linkable and runnable silently — the POSIX
           host path substitutes SDL <code>QueueAudio</code> inside B-Audio proper
-          (<a href="../b-audio/index.html">B-Audio §1.3</a>).
+          (<a href="audio.html">B-Audio §1.3</a>).
         </p>
       </section>
 
@@ -549,14 +551,14 @@ for (;;) {                              /* 16 ms render cadence (dly_tsk(16))   
           no <code>sound_*</code> or <code>lilcu64_*</code> entry under <code>verify/models/</code> and this
           book cites none. The engine's <em>structural</em> disciplines are individually verified in other
           books' models — bounded pools (B-RTP's NuStream object model, 24-slot buffer pool
-          <a href="../b-rtp/theorems/media_rtp.html">media_rtp</a>), never-blocking counted refusals
-          (<a href="../b-core/theorems/media_intercore.html">media_intercore</a> I-series), plane budget
-          execution (<a href="../b-media/theorems/media_smp.html">media_smp</a>) — and the 1:1 JS↔C score
+          <a href="theorems/media_rtp.html">media_rtp</a>), never-blocking counted refusals
+          (<a href="theorems/media_intercore.html">media_intercore</a> I-series), plane budget
+          execution (<a href="theorems/media_smp.html">media_smp</a>) — and the 1:1 JS↔C score
           transcription is held by the cue tables of <code>LILCU64-DEMOSCENE.txt</code> §5.3/§8, verified
           per-track against <code>index.html</code> millisecond values. What is <em>not</em> yet proven:
           sample-level determinism of the shim DSP, pool-steal continuity, and the audio↔video clock
           binding — the last is the planned <code>media_avsync</code> pair shared with
-          <a href="../b-video/index.html">B-Video</a> and <a href="../b-audio/index.html">B-Audio</a>.
+          <a href="video.html">B-Video</a> and <a href="audio.html">B-Audio</a>.
           Until a model lands, treat every B-Sound correctness claim as tested-code evidence, not theorem
           evidence.
         </p>

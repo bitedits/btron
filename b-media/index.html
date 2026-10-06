@@ -16,13 +16,14 @@
         <span class="hamburger"></span>
       </button>
       <ul class="book-global-links">
-    <li><a href="../index.html">B-System</a></li>
-    <li><a href="../b-book/index.html">B-Book</a></li>
-    <li><a href="../b-core/index.html">B-Core</a></li>
-    <li><a href="index.html" class="active">B-Media</a></li>
-    <li><a href="../conformance.html">B-Spec</a></li>
-    <li><a href="../releases.html">Releases</a></li>
-    <li><a href="https://github.com/bitedits/btron">GitHub</a></li>
+        <li><a href="index.html" class="active">B-Media</a></li>
+        <li><a href="../index.html">B-System</a></li>
+        <li><a href="../b-book/index.html">B-Book</a></li>
+        <li><a href="../conformance.html">B-Spec</a></li>
+        <li><a href="../virtio.html">VirtIO</a></li>
+        <li><a href="../mobile.html">FOMA</a></li>
+        <li><a href="../releases.html">Releases</a></li>
+        <li><a href="https://github.com/bitedits/btron">GitHub</a></li>
       </ul>
     </div>
   </nav>
@@ -70,13 +71,14 @@
         <a href="#verified" class="nav-sublink">Verification Cross-Reference</a>
       </div>
 
-      <div class="nav-heading">Companion Books</div>
-      <a href="../b-core/index.html" class="nav-link">B-Core (InterCore Nexus)</a>
-      <a href="../b-rtp/index.html" class="nav-link">B-RTP (WebRTC Core)</a>
-      <a href="../b-audio/index.html" class="nav-link">B-Audio (PCM Stack)</a>
-      <a href="../b-video/index.html" class="nav-link">B-Video (Display Path)</a>
-      <a href="../b-sound/index.html" class="nav-link">B-Sound (lilcu64 Synth)</a>
-      <a href="../b-msx/index.html" class="nav-link">B-MSX (MSX2+ Home · tronMSX)</a>
+      <div class="nav-heading">B-Media Pages</div>
+      <a href="core.html" class="nav-link">B-Core (InterCore Nexus)</a>
+      <a href="rtp.html" class="nav-link">B-RTP (WebRTC Core)</a>
+      <a href="audio.html" class="nav-link">B-Audio (PCM Stack)</a>
+      <a href="video.html" class="nav-link">B-Video (Display Path)</a>
+      <a href="sound.html" class="nav-link">B-Sound (lilcu64 Synth)</a>
+      <a href="msx.html" class="nav-link">B-MSX (MSX2+ Home · tronMSX)</a>
+      <a href="gl.html" class="nav-link">B-GL (3D OpenGL)</a>
     </div>
   </nav>
 
@@ -130,7 +132,7 @@
           one sink pad; linking peers the two pads and chains buffers src→sink. Pads carry fixed 512-byte
           buffers with PTS/DTS timestamps; an in-band bus records the last message and a count. Elements are
           minted by a factory from a small static type set — there is no runtime plugin loader, matching the
-          zero-post-boot-allocation rule inherited from <a href="../b-core/index.html">B-Core</a>.
+          zero-post-boot-allocation rule inherited from <a href="core.html">B-Core</a>.
         </p>
         <pre><code>[midisrc] ─► [midiroute] ─► [fluidsynth] ─► [audioconvert] ─► [virtiosndsink]
    src→sink pad chain; GstBuffer{data,pts,dts}; bus message per state change</code></pre>
@@ -306,9 +308,9 @@ type snapshot = { s_seq : int; dx : int; dy : int; wheel : int; buttons : int }<
             <tbody>
               <tr><td><code>midisrc</code></td><td>MIDI event source (kernel server input)</td><td>INPUT</td></tr>
               <tr><td><code>midiroute</code></td><td>channel/port router over 32 ports</td><td>INPUT</td></tr>
-              <tr><td><code>fluidsynth</code></td><td>GM synthesis render (see <a href="../b-sound/index.html">B-Sound</a>)</td><td>DEC</td></tr>
+              <tr><td><code>fluidsynth</code></td><td>GM synthesis render (see <a href="sound.html">B-Sound</a>)</td><td>DEC</td></tr>
               <tr><td><code>audioconvert</code></td><td>format/rate normalization</td><td>DEC</td></tr>
-              <tr><td><code>virtiosndsink</code></td><td>PCM sink onto VirtIO-Sound (see <a href="../b-audio/index.html">B-Audio</a>)</td><td>IOD</td></tr>
+              <tr><td><code>virtiosndsink</code></td><td>PCM sink onto VirtIO-Sound (see <a href="audio.html">B-Audio</a>)</td><td>IOD</td></tr>
             </tbody>
           </table>
         </div>
@@ -458,7 +460,7 @@ for (;;) {
         </ul>
         <p>
           The cursor layer above is verified in B-Core
-          (<a href="../b-core/theorems/media_intercore.html">602 judgements</a>). The global scheduling layer
+          (<a href="theorems/media_intercore.html">602 judgements</a>). The global scheduling layer
           (<code>media_model.ml</code>, the pass table itself) currently ships <em>as the oracle only</em>:
           its header names <code>media_properties.v</code> as companion proof, and that file does not exist
           yet — an honest gap, tracked here rather than papered over. Do not cite global-layer results as

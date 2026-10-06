@@ -16,13 +16,14 @@
         <span class="hamburger"></span>
       </button>
       <ul class="book-global-links">
-    <li><a href="../index.html">B-System</a></li>
-    <li><a href="../b-book/index.html">B-Book</a></li>
-    <li><a href="../b-core/index.html">B-Core</a></li>
-    <li><a href="index.html" class="active">B-Audio</a></li>
-    <li><a href="../conformance.html">B-Spec</a></li>
-    <li><a href="../releases.html">Releases</a></li>
-    <li><a href="https://github.com/bitedits/btron">GitHub</a></li>
+        <li><a href="index.html">B-Media</a></li>
+        <li><a href="../index.html">B-System</a></li>
+        <li><a href="../b-book/index.html">B-Book</a></li>
+        <li><a href="../conformance.html">B-Spec</a></li>
+        <li><a href="../virtio.html">VirtIO</a></li>
+        <li><a href="../mobile.html">FOMA</a></li>
+        <li><a href="../releases.html">Releases</a></li>
+        <li><a href="https://github.com/bitedits/btron">GitHub</a></li>
       </ul>
     </div>
   </nav>
@@ -66,13 +67,14 @@
         <a href="#verified" class="nav-sublink">Verification Status</a>
       </div>
 
-      <div class="nav-heading">Companion Books</div>
-      <a href="../b-sound/index.html" class="nav-link">B-Sound (lilcu64 Synth)</a>
-      <a href="../b-msx/index.html" class="nav-link">B-MSX (MSX2+ Home · tronMSX)</a>
-      <a href="../b-media/index.html" class="nav-link">B-Media (Pipes &amp; Budgets)</a>
-      <a href="../b-core/index.html" class="nav-link">B-Core (InterCore Nexus)</a>
-      <a href="../b-rtp/index.html" class="nav-link">B-RTP (WebRTC Core)</a>
-      <a href="../b-video/index.html" class="nav-link">B-Video (Display Path)</a>
+      <div class="nav-heading">B-Media Pages</div>
+      <a href="sound.html" class="nav-link">B-Sound (lilcu64 Synth)</a>
+      <a href="msx.html" class="nav-link">B-MSX (MSX2+ Home · tronMSX)</a>
+      <a href="index.html" class="nav-link">B-Media (Pipes &amp; Budgets)</a>
+      <a href="core.html" class="nav-link">B-Core (InterCore Nexus)</a>
+      <a href="rtp.html" class="nav-link">B-RTP (WebRTC Core)</a>
+      <a href="video.html" class="nav-link">B-Video (Display Path)</a>
+      <a href="gl.html" class="nav-link">B-GL (3D OpenGL)</a>
     </div>
   </nav>
 
@@ -97,9 +99,9 @@
           <code>include/device/virtio.h</code> (device id <code>VIRTIO_ID_SOUND 25</code>), the weak-stub
           fallbacks that let every port link, the Control Panel semantics in <code>src/settings/sound.c</code>,
           and the shipping consumers: the Cassette Hi-Fi deck (<code>src/apps/audio_player.c</code>), the
-          Orchestra pipeline sink (<code>virtiosndsink</code>, see <a href="../b-media/index.html">B-Media</a>),
-          the lilcu64 synthesizer pump (<a href="../b-sound/index.html">B-Sound</a>), the tronMSX PSG
-          mixer (<a href="../b-msx/index.html">B-MSX</a>), and terminal/event
+          Orchestra pipeline sink (<code>virtiosndsink</code>, see <a href="index.html">B-Media</a>),
+          the lilcu64 synthesizer pump (<a href="sound.html">B-Sound</a>), the tronMSX PSG
+          mixer (<a href="msx.html">B-MSX</a>), and terminal/event
           chimes (<code>src/apps/kagee.c</code>).
         </p>
         <p>
@@ -353,11 +355,11 @@ return (n == VIO_ERR_INVAL) ? -1 : 0;   /* counted refusal, never blocking */</c
           B-Audio currently ships <strong>as C code without a companion Coq/OCaml model</strong>. There is no
           <code>audio_*</code> entry in <code>verify/models/</code> and this book deliberately cites none.
           Related verified material nearby: the audio <em>plane budgeting</em> is covered by the SMP/AMP and
-          InterCore proofs (<a href="../b-media/theorems/media_smp.html">media_smp</a>,
-          <a href="../b-core/theorems/media_intercore.html">media_intercore</a>), and the buffer/refcount and
+          InterCore proofs (<a href="theorems/media_smp.html">media_smp</a>,
+          <a href="theorems/media_intercore.html">media_intercore</a>), and the buffer/refcount and
           queue laws a PCM stack needs are already specified in the NuStream pool and leaky-queue layer
-          (<a href="../b-rtp/theorems/media_rtp.html">media_rtp</a>). The planned AV-sync proof pair
-          (<code>media_avsync_*</code>, see <a href="../b-video/index.html">B-Video</a> and
+          (<a href="theorems/media_rtp.html">media_rtp</a>). The planned AV-sync proof pair
+          (<code>media_avsync_*</code>, see <a href="video.html">B-Video</a> and
           <code>doc/md/VIDEO.md</code>) will bind the audio and video clocks; until then, treat audio
           correctness claims as tested-code evidence, not theorem evidence.
         </p>

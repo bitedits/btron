@@ -1,0 +1,1700 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>tronMSX – B-MSX: MSX2+ Home, Machine Model, Silicon Contracts &amp; Real Body | B-Book</title>
+  <meta name="description" content="Normative developer specification for B-MSX and its embedded core tronMSX: the B-System's primary MSX2+ home with openMSX and blueMSX as transition instruments. Complete machine model (Z80 timing, slots, V9958, PSG, PPI), the BMSX first-class real-body record with byte offsets, launch algorithm and error codes, the C99-only core API and threading contract, PSG-to-PCM and VDP-to-plane media integration with B-Audio/B-Sound/B-Video/B-Media, the toolchainMSX kit (Rasm assembler + z88dk compiler/linker, BSD/MIT/Clarified-Artistic only), a deterministic time-travel debugger goal, and acceptance tests sufficient to implement without external references.">
+  <link rel="stylesheet" href="../b-book/b-book.css">
+</head>
+<body>
+
+  <nav class="book-global-nav" aria-label="Site navigation">
+    <div class="book-global-nav-container">
+      <a href="../index.html" class="book-global-logo"><img width="48" src="https://n2o.dev/img/synrc.svg" alt="Synrc Logo"></a>
+      <button class="book-nav-toggle" aria-label="Toggle navigation" aria-expanded="false" onclick="const links = this.nextElementSibling; const sidebar = document.querySelector('.book-sidebar'); const open = links.classList.toggle('open'); sidebar.classList.toggle('open', open); this.classList.toggle('open', open); this.setAttribute('aria-expanded', open);">
+        <span class="hamburger"></span>
+      </button>
+      <ul class="book-global-links">
+        <li><a href="index.html">B-Media</a></li>
+        <li><a href="../index.html">B-System</a></li>
+        <li><a href="../b-book/index.html">B-Book</a></li>
+        <li><a href="../conformance.html">B-Spec</a></li>
+        <li><a href="../virtio.html">VirtIO</a></li>
+        <li><a href="../mobile.html">FOMA</a></li>
+        <li><a href="../releases.html">Releases</a></li>
+        <li><a href="https://github.com/bitedits/btron">GitHub</a></li>
+      </ul>
+    </div>
+  </nav>
+
+  <nav class="book-sidebar">
+    <div class="sidebar-brand">
+      <div class="brand-title">B-MSX <span class="badge">Rev 1.04</span></div>
+      <div class="brand-sub">MSX2+ Home · core: tronMSX</div>
+    </div>
+    <div class="sidebar-nav">
+      <div class="nav-heading">Overview</div>
+      <a href="#scope" class="nav-link">Scope &amp; Normative Rules</a>
+
+      <div class="nav-heading">Part 1: Machine Model</div>
+      <div class="nav-sublinks">
+        <a href="#constants" class="nav-sublink">Clock &amp; Frame Constants</a>
+        <a href="#memmap" class="nav-sublink">Canonical Memory Map</a>
+        <a href="#slots" class="nav-sublink">Slot System &amp; Ports</a>
+      </div>
+
+      <div class="nav-heading">Part 2: Silicon Contracts</div>
+      <div class="nav-sublinks">
+        <a href="#cpu" class="nav-sublink">Z80 Core &amp; Interrupts</a>
+        <a href="#vdp" class="nav-sublink">V9958: Ports &amp; Registers</a>
+        <a href="#vdpdraw" class="nav-sublink">VDP Renderer</a>
+        <a href="#psg" class="nav-sublink">PSG: Modes, Mixer, Envelope</a>
+        <a href="#ppi" class="nav-sublink">PPI, Keyboard, Joystick</a>
+      </div>
+
+      <div class="nav-heading">Part 3: BIOS &amp; Boot</div>
+      <div class="nav-sublinks">
+        <a href="#bios" class="nav-sublink">BIOS Contract &amp; CALSLT</a>
+        <a href="#romheader" class="nav-sublink">ROM Header &amp; Boot Trace</a>
+      </div>
+
+      <div class="nav-heading">Part 4: Real Body &amp; Launch</div>
+      <div class="nav-sublinks">
+        <a href="#realbody" class="nav-sublink">BMSX Record (offsets)</a>
+        <a href="#launch" class="nav-sublink">Launch Algorithm</a>
+        <a href="#errors" class="nav-sublink">Error Codes</a>
+      </div>
+
+      <div class="nav-heading">Part 5: tronMSX Core API</div>
+      <div class="nav-sublinks">
+        <a href="#coreapi" class="nav-sublink">tronmsx.h Surface</a>
+        <a href="#threads" class="nav-sublink">Threading &amp; Rings</a>
+        <a href="#bounds" class="nav-sublink">Memory &amp; Speed Bounds</a>
+      </div>
+
+      <div class="nav-heading">Part 6: Media Integration</div>
+      <div class="nav-sublinks">
+        <a href="#media" class="nav-sublink">Cross-Map &amp; Contracts</a>
+      </div>
+
+      <div class="nav-heading">Part 7: B-MSX as Home</div>
+      <div class="nav-sublinks">
+        <a href="#emulators" class="nav-sublink">openMSX / blueMSX as Transition</a>
+        <a href="#toolchain" class="nav-sublink">toolchainMSX (Rasm + z88dk)</a>
+        <a href="#kit-compare" class="nav-sublink">Z80 Kit Comparison</a>
+        <a href="#surface" class="nav-sublink">btron_msx.inc</a>
+        <a href="#onebinary" class="nav-sublink">One Binary, Three Emulators</a>
+        <a href="#packer" class="nav-sublink">Packer &amp; Make Targets</a>
+        <a href="#chips" class="nav-sublink">Rewrite Sources &amp; Licenses</a>
+      </div>
+
+      <div class="nav-heading">Part 8: Time-Travel Debugger</div>
+      <div class="nav-sublinks">
+        <a href="#tt-law" class="nav-sublink">Determinism Law D1 … D7</a>
+        <a href="#tt-log" class="nav-sublink">Input Log &amp; Checkpoints</a>
+        <a href="#ttapi" class="nav-sublink">tronmsx_tt.h Surface</a>
+        <a href="#ttdebug" class="nav-sublink">Breakpoints, Watchpoints, Symbols</a>
+        <a href="#ttwindow" class="nav-sublink">Debugger Windows (SDI)</a>
+        <a href="#ttbudget" class="nav-sublink">Build Shapes &amp; Latency</a>
+        <a href="#ttnongoals" class="nav-sublink">Non-goals</a>
+      </div>
+
+      <div class="nav-heading">Part 9: Acceptance Tests</div>
+      <a href="#tests" class="nav-link">Test Vectors AV-0 … AV-12</a>
+      <a href="#verified" class="nav-link">Verification Status</a>
+      <a href="#history" class="nav-link">History &amp; Provenance</a>
+
+      <div class="nav-heading">B-Media Pages</div>
+      <a href="audio.html" class="nav-link">B-Audio (PCM Output Stack)</a>
+      <a href="sound.html" class="nav-link">B-Sound (lilcu64 Synth)</a>
+      <a href="video.html" class="nav-link">B-Video (Display Path)</a>
+      <a href="index.html" class="nav-link">B-Media (Pipes &amp; Budgets)</a>
+      <a href="core.html" class="nav-link">B-Core (InterCore Nexus)</a>
+      <a href="rtp.html" class="nav-link">B-RTP (WebRTC Core)</a>
+      <a href="gl.html" class="nav-link">B-GL (3D OpenGL)</a>
+    </div>
+  </nav>
+
+  <main class="book-content">
+    <header class="book-header">
+      <div class="breadcrumb">
+        <a href="../b-book/index.html">B-Book</a> / <span>B-MSX</span>
+      </div>
+      <h1 class="page-title">tronMSX — B-MSX: The MSX2+ Home of the B-System</h1>
+      <p class="page-lead">B-MSX specifies the MSX2+ home of the B-System: an MSX program is a first-class
+      real-body and the embedded core tronMSX boots it in a native BTRON window. The book contains the
+      machine model (Part 1), the silicon contracts (Part 2), the BIOS and boot trace (Part 3), the BMSX
+      record and launch algorithm (Part 4), the core API and threading contract (Part 5), the media
+      integration contracts (Part 6), the toolchainMSX kit (Part 7), the frame-granular time-travel
+      debugger (Part 8) and the acceptance vectors (Part 9). openMSX and blueMSX are transition
+      instruments for existing users; B-MSX is the destination. Every constant, byte offset, signature,
+      error code and acceptance measurement needed to implement the first core, the debugger and their
+      tests is stated in this book.</p>
+    </header>
+
+    <article>
+
+      <section id="scope">
+        <h2>0. Scope &amp; Normative Rules</h2>
+        <p>
+          B-MSX specifies the B-System's MSX2+ home: a cross-dev kit plus the embedded core tronMSX. It is
+          not a BTRON 3.20 port to the MSX machine. Current B-System is a C99 clean-room of BTRON3 3.20
+          aimed at ARM64, x86_64 UEFI, PS2 MIPS, PC-98, 68000 and POSIX; MSX is a banked Z80 (or R800)
+          machine with a 64 KiB address space and a VDP. This book defines the subset that hosts it:
+          real and virtual body records, a bounded emulator core, and TAD-renderable documentation.
+        </p>
+        <p>
+          C++ MUST NOT appear inside the BTRON boundary. Everything this book builds — tronMSX,
+          <code>tronmsx_tt</code>, <code>msxpak</code>, <code>mssym</code> and the test harness — is C99 and
+          MUST link with zero C++ translation units and zero runtime heap. Host tools outside the boundary
+          (the toolchainMSX assembler, compiler and linker, and the reference emulators) keep their own
+          languages. The boundary is enforced by the acceptance vectors AV-8 and AV-11.
+        </p>
+        <p>
+          Normative vocabulary: <code>MUST</code> and <code>MUST NOT</code> mark hard requirements — a build
+          that violates one fails acceptance. <code>SHOULD</code> marks a default that may be varied with a
+          written justification. <code>MAY</code> marks optional behaviour.
+        </p>
+        <p>
+          Every numeric constant in this book carries one of the three basis labels below, in the table row or
+          sentence that defines it. No other qualification of a number appears in the text.
+        </p>
+        <table class="api-table">
+          <thead><tr><th>Label</th><th>Meaning</th><th>Change rule</th></tr></thead>
+          <tbody>
+            <tr><td><span class="basis basis-hw">Hardware</span></td><td>Fixed by the MSX standard, the Z80, V9958 or AY-3-8910 documentation, or observed C-BIOS behaviour.</td><td>MUST NOT change when a later step is added.</td></tr>
+            <tr><td><span class="basis basis-norm">Normative</span></td><td>Fixed by this book. The value is closed by the acceptance vector named in its row.</td><td>Changes only by a revision of this book, with its vectors in the same commit.</td></tr>
+            <tr><td><span class="basis basis-cal">Calibrable</span></td><td>A first-core value chosen here and open to measurement-driven recalibration.</td><td>May change without invalidating any other section of this book.</td></tr>
+          </tbody>
+        </table>
+        <p>
+          First core scope: MSX2, 64 KiB main RAM, one 32 KiB cartridge, SCREEN 0–5 rendering, PSG audio,
+          keyboard matrix, C-BIOS fallback. Outside the first core: disk drive, Kanji ROM, FM
+          (YM2413/OPLL), R800, MegaROM mappers beyond a single 32 KiB page pair, SCC, MIDI. Each of those is
+          a later step with its own acceptance delta.
+        </p>
+        <p>
+          The time-travel debugger is inside B-MSX scope (<a href="#timetravel">Part 8</a>): frame-granular
+          reverse, seek, instruction-boundary breaks, and register, memory, VRAM, PSG, symbol, breakpoint and
+          log panels shown in eight independent top-level BTRON windows
+          (<a href="#ttwindow">8.4.1</a>). It follows from the machine model rather than from an added layer,
+          and two of its requirements bind the first core from its first commit: the determinism law
+          (<a href="#tt-law">8.1</a>) constrains <code>msx_run_frame</code>, and the per-frame input log
+          (<a href="#tt-log">8.2</a>) reuses the level-driven <code>KBD_SYNC</code> snapshot that 5.2 already
+          requires. The debugger's own storage — the checkpoint ring, the symbol table, the windows and their
+          log ring — is compiled out of the shipping build, so the <a href="#bounds">5.3</a> static bound is
+          unchanged; it exists only in the <code>make msx-tt</code> harness
+          (<a href="#ttbudget">8.5</a>).
+        </p>
+        <div class="callout callout-jpl">
+          <div class="callout-title">Implementation status</div>
+          B-MSX is a specification. The tree contains no <code>src/emulators/msx/</code>, no
+          <code>include/emulators/tronmsx.h</code>, no <code>include/emulators/tronmsx_tt.h</code> and no
+          <code>msx-*</code> make targets. The file names in <a href="#coreapi">Part 5</a>,
+          <a href="#ttapi">8.3</a> and <a href="#ttwindow">8.4.1</a> are the required shape of the module to
+          implement. Every vector in Part 9 is labelled NOT BUILT and reports SKIP, not PASS, until the
+          module lands. See <a href="#verified">Verification Status</a>.
+        </div>
+      </section>
+
+      <!-- ═══════ Part 1 ═══════ -->
+      <section id="constants">
+        <h2>Part 1 — Machine Model</h2>
+        <h3>1.1 Clock &amp; Frame Constants</h3>
+        <table class="api-table">
+          <caption>All rows <span class="basis basis-hw">Hardware</span>: fixed by the NTSC MSX2+ standard and the V9958 timing laws.</caption>
+          <thead><tr><th>Constant</th><th>Value</th><th>Derivation</th></tr></thead>
+          <tbody>
+            <tr><td><code>MSX_XTAL</code></td><td>10.738635 MHz</td><td>Master crystal of NTSC machines.</td></tr>
+            <tr><td><code>Z80_HZ</code></td><td>3,579,545 Hz</td><td><code>MSX_XTAL ÷ 3</code>. Z80 and VDP share this clock.</td></tr>
+            <tr><td><code>PSG_HZ</code></td><td>1,789,772 Hz</td><td><code>MSX_XTAL ÷ 6 = Z80_HZ ÷ 2</code>. PSG tone, noise and envelope tick.</td></tr>
+            <tr><td><code>T_PER_LINE</code></td><td>228 T</td><td>512 display dots plus 16 blanking dots; <code>512 ÷ 8 × 3.4857…</code></td></tr>
+            <tr><td><code>T_PER_FRAME</code></td><td>59,664 T</td><td><code>228 × 262</code> (NTSC: 212 display lines plus 50 blanking lines).</td></tr>
+            <tr><td><code>DISPLAY_LINES</code></td><td>212</td><td>VDP lines visible on screen.</td></tr>
+            <tr><td><code>NMI_PERIOD_T</code></td><td>4,800 T (1.34 ms)</td><td>BIOS periodic NMI; drives cursor blink and key repeat.</td></tr>
+            <tr><td><code>INT_PERIOD_US</code></td><td>64 µs (228 T)</td><td>V9958 line interrupt (register 10), when enabled.</td></tr>
+            <tr><td><code>CYC_PER_SAMPLE</code></td><td>2.0</td><td>Z80 cycles per PSG step, <a href="#psg">2.4</a>.</td></tr>
+            <tr><td><code>PSG_TO_PCM</code></td><td>40.583</td><td><code>PSG_HZ ÷ 44,100</code>; PSG ticks per PCM output frame at the NTSC target rate.</td></tr>
+          </tbody>
+        </table>
+        <p>
+          The first core runs NTSC timing unconditionally (60 Hz, 262 lines). PAL timing (312 lines,
+          70,908 T/frame) is a later machine option selected by <code>b_msx_body.machine</code> semantics,
+          not by host locale — the emulator MUST NOT read the host clock for phase.
+        </p>
+      </section>
+
+      <section id="memmap">
+        <h3>1.2 Canonical Memory Map</h3>
+        <table class="api-table">
+          <caption>The 64 KiB Z80 address space as the first core maps it. Ranges and contents are
+          <span class="basis basis-hw">Hardware</span>; the select port for each page is
+          <span class="basis basis-norm">Normative</span> and closed by the boot trace of AV-3.</caption>
+          <thead><tr><th>Page</th><th>Select</th><th>Range</th><th>Contents</th><th>Size in view</th></tr></thead>
+          <tbody>
+            <tr><td>0</td><td>fixed, primary slot 0</td><td><code>0x0000–0x3FFF</code></td><td>BIOS or C-BIOS ROM</td><td>16 KiB</td></tr>
+            <tr><td>1</td><td><code>0xF8</code> bits 2–3, <code>0xF9</code></td><td><code>0x4000–0x7FFF</code></td><td>Cartridge ROM, block 0</td><td>16 KiB</td></tr>
+            <tr><td>2</td><td><code>0xF8</code> bits 4–5, <code>0xFA</code></td><td><code>0x8000–0xBFFF</code></td><td>EXRAM low, or cartridge ROM block 1</td><td>16 KiB</td></tr>
+            <tr><td>3</td><td><code>0xF8</code> bits 6–7, <code>0xFB</code></td><td><code>0xC000–0xFFFF</code></td><td>EXRAM high</td><td>16 KiB</td></tr>
+          </tbody>
+        </table>
+        <p>
+          Primary RAM is one 64 KiB pool, presented as the page 2 and page 3 views, so the machine value in a
+          BMSX record and the size field of the checkpoint header (8.2) always describe the same pool.
+          A 128 KiB machine value MUST be accepted and run as 64 KiB, with <code>MSX_ERR_RAM</code> reported as
+          an advisory window rather than as a hard failure: no first-core program addresses more than 64 KiB.
+        </p>
+        <ul>
+          <li>Pool addressing: a store to page 2 or page 3 MUST land at
+            <code>(page == 2 ? off : 0x4000 + off)</code> inside the 64 KiB pool.</li>
+          <li>View and pool are distinct: selecting the cartridge slot for page 2 with <code>0xF8</code> bits 4–5
+            makes the page 2 view ROM block 1 of a 32 KiB cartridge, while the pool keeps all 64 KiB of RAM
+            addressable and page 3 remains RAM in every combination. Without that select, page 2 is EXRAM low.</li>
+          <li>ROM regions are read-only at the bus level: a Z80 write to a page currently mapped as ROM MUST be
+            discarded, never faulted.</li>
+        </ul>
+      </section>
+
+      <section id="slots">
+        <h3>1.3 Slot System &amp; I/O Port Map</h3>
+        <p>
+          Port <code>0xF8</code> selects the primary slot per page: bits 0–1 select page 0, bits 2–3 page 1,
+          bits 4–5 page 2, bits 6–7 page 3. Ports <code>0xF9–0xFC</code> select the secondary slot for pages
+          1–3 respectively, and take effect only where the primary slot of that page is 0. Port
+          <code>0xF7</code> selects the upper-64 KiB EXRAM page (0–3) on a 128 KiB machine; the first core
+          pins it to 0. The first core powers up with page 0 on primary slot 0 (BIOS), page 1 on the cartridge
+          and pages 2–3 on EXRAM; a stored page-2 select of slot 1 re-points the page 2 view at cartridge ROM
+          block 1, as 1.2 requires, and any other stored value keeps EXRAM. The core MUST accept and store
+          writes to <code>0xF8–0xFC</code>: C-BIOS and games poke these ports, and a dropped store breaks the
+          C-BIOS boot trace.
+        </p>
+        <table class="api-table">
+          <caption>Bus port map. Every row is <span class="basis basis-hw">Hardware</span>; the first-core
+          behaviours are stated in the Read and Write columns.</caption>
+          <thead><tr><th>Port</th><th>Device</th><th>Read</th><th>Write</th></tr></thead>
+          <tbody>
+            <tr><td><code>0x10</code></td><td>PPI A (8255)</td><td>Joystick A on bits 0–5; bits 6–7 as pin levels.</td><td>Returns <code>0xFF</code>; port A is an input.</td></tr>
+            <tr><td><code>0x11</code></td><td>PPI B</td><td>Undefined.</td><td>Speaker and RRS latch; the core MAY no-op.</td></tr>
+            <tr><td><code>0x12</code></td><td>PPI C</td><td>Cassette digital input; <code>0</code> in the first core.</td><td>Cassette motor and tape out; <code>0</code> in the first core.</td></tr>
+            <tr><td><code>0x13</code></td><td>PPI control</td><td>None.</td><td>Mode word; C-BIOS writes <code>0x82</code> (ports A and C inputs, port B output).</td></tr>
+            <tr><td><code>0x88</code></td><td>VDP status</td><td>FIFO state and flags; reading clears FG2, FG1, FG0 and the pending NMI.</td><td>None.</td></tr>
+            <tr><td><code>0x89</code></td><td>VDP data</td><td><code>VRAM[read-address]</code>, then auto-increment.</td><td><code>VRAM[write-address]</code>, then auto-increment.</td></tr>
+            <tr><td><code>0x8A</code></td><td>VDP control</td><td>Register index, auto-incrementing; <code>0xC0</code> is read-only.</td><td>Two-byte sequence: <code>reg | 0x80</code>, then the value; the index increments.</td></tr>
+            <tr><td><code>0x8B</code></td><td>VDP data, second pair</td><td>As <code>0x89</code>, with an independent read address bit 14.</td><td>As <code>0x89</code>, with an independent write address bit 14.</td></tr>
+            <tr><td><code>0xA0</code></td><td>PSG port A and B</td><td>The last register number written.</td><td>PSG register latch, masked to 5 bits.</td></tr>
+            <tr><td><code>0xA1</code></td><td>PSG port C</td><td>Unused on MSX2+.</td><td>PSG data write to the latched register.</td></tr>
+            <tr><td><code>0xA2</code></td><td>PPI A, alternate decode</td><td>Keyboard row data for the row latched at <code>0xFE</code>.</td><td>None.</td></tr>
+            <tr><td><code>0xA8–0xAB</code></td><td>PPI, MSX2 alternate decode</td><td>The devices of <code>0x10–0x13</code> in order.</td><td>The ports <code>0x10–0x13</code> in order.</td></tr>
+            <tr><td><code>0xDC</code></td><td>MegaSCC and mapper (later step)</td><td><code>0xFF</code> in the first core.</td><td>No effect in the first core.</td></tr>
+            <tr><td><code>0xFE</code></td><td>PSG latch and keyboard row</td><td>Joystick and pin levels.</td><td>Bits 0–2 latch the keyboard row (0–7); the high bits drive the PSG latch and tape out.</td></tr>
+            <tr><td><code>0xFF</code></td><td>Slot select and RAM page</td><td>Pin sense; bit 6 reports the cassette/EXTS line.</td><td>Bits 0–5 as the <code>0xF8</code> write; bits 6–7 select the EXRAM page.</td></tr>
+          </tbody>
+        </table>
+        <p>
+          Incomplete decode MUST be honoured: <code>0x10</code>, <code>0x50</code>, <code>0x90</code> and
+          <code>0xD0</code> address the same PPI A device, so the core MUST decode the low nibble rather than
+          the full byte, or C-BIOS joystick reads break. An unhandled port MUST return <code>0xC0</code> on
+          read and MUST discard writes; <code>0xC0</code> is the floating-bus value the reference emulators
+          default to.
+        </p>
+      </section>
+
+      <!-- ═══════ Part 2 ═══════ -->
+      <section id="cpu">
+        <h2>Part 2 — Silicon Contracts</h2>
+        <h3>2.1 Z80 Core &amp; Interrupts</h3>
+        <p>
+          The CPU MUST be a cycle-accurate-at-instruction-boundary Z80 core (superzazu/z80 shape —
+          instruction cycles, not per-T-state interleaving; <a href="#chips">7.7</a>). Required
+          semantics, each of which is an acceptance-testable claim:
+        </p>
+        <ul>
+          <li>DI/EI delay: an interrupt MUST NOT be accepted by the instruction that executes
+            <code>DI</code> or <code>EI</code>; acceptance resumes at the next instruction boundary.</li>
+          <li>IM 0 / IM 1 / IM 2: MSX uses IM 2 for the VDP IRQ. The IM 2 vector is
+            <code>(I &lt;&lt; 8) | 0xFF</code>, and the acknowledge cycle MUST cost 280 T in total with the
+            standard prologue.</li>
+          <li>NMI: edge-triggered. The periodic 1.34 ms generator raises it, and reading VDP status at
+            <code>0x88</code> inside the handler clears the source. NMI entry costs 256 T.</li>
+          <li>HALT: the core MUST consume idle T in the <code>T_PER_FRAME/6</code> pattern while halted —
+            100 T per iteration is the accepted emulator convention — and MUST still service interrupts; a
+            busy-spin substitute fails BIOS timing tests.</li>
+          <li>I/O timing: every <code>IN</code> and <code>OUT</code> MUST take at least 4 T, and the device
+            MUST observe the transfer at the end of the instruction. No port MAY be modelled as
+            zero-latency memory.</li>
+        </ul>
+        <p>
+          Cycle costs for the instructions the boot trace uses, from the Z80 documentation
+          (<span class="basis basis-hw">Hardware</span>): <code>NOP</code> 4 T ·
+          <code>LD A,(nn)</code> 13 T · <code>LD HL,(nn)</code> 16 T · <code>JP (HL)</code> 5 T ·
+          <code>CALL nn</code> 17 T · <code>CALSLT</code> prefix sequence
+          <code>DI/POP×6/EI/JP</code> 53 T plus the callee · <code>RET</code> 10 T · <code>IM 2</code> 8 T ·
+          <code>OUT (n),A</code> 11 T · <code>IN A,(n)</code> 11 T · <code>HALT</code> 4 T per exit.
+        </p>
+      </section>
+
+      <section id="vdp">
+        <h3>2.2 V9958: Ports, Addressing, Registers</h3>
+        <p>
+          VRAM is 128 KiB, addressed as a 17-bit logical space. The two-byte sequences below set the write
+          and the read address independently, register 14 bits 0–2 supply the top three bits of the read
+          address, and a write address reaches bits 14–16 through register 14 when register 14 bit 7 is set.
+        </p>
+        <pre><code>VDP address model:
+  set write address: OUT 0x8A, addr &amp; 0x7F
+                     OUT 0x8A, 0x40 | ((addr &gt;&gt; 7) &amp; 0x7F)
+  set read address:  OUT 0x8A, addr &amp; 0xFF        ; low byte
+                     OUT 0x8A, 0xC0 | (addr &gt;&gt; 8) ; high byte, read mode
+  write address bits 0-6 = R13[6:0], bits 7-13 = R15[6:0], bit 14 = R15[7]
+  read address bits 14-16 = R14[2:0]; with R14[7] set the second address byte
+                           writes R14, which carries write bits 14-16
+  auto-increment after every access on 0x89 or 0x8B: address += R7[3:0], or += 1 when R7[3:0] == 0
+  register write:    OUT 0x8A, R | 0x80 ; OUT 0x8A, value
+  status at 0x88:    FG2 end-of-transfer | FG1 light pen | SC5-SC0 sprite collision |
+                     TRG touch | ST V9938 flag | GA1-GA0 FIFO state</code></pre>
+        <table class="api-table">
+          <caption>V9958 register file. Every row is <span class="basis basis-hw">Hardware</span>, from the
+          V9938 technical data book and the V9958 application manual; the register list is published in the
+          <a href="https://map.grauw.nl/articles/vdp_tut.php">MSX Assembly Page VDP tutorial</a>. AV-4
+          exercises the addressing and the palette path.</caption>
+          <thead><tr><th>Reg</th><th>Name</th><th>Bits and meaning</th></tr></thead>
+          <tbody>
+            <tr><td>R0</td><td>Mode</td><td>bit4 GR1, bit3 GR2, bit2 BIG, bit1 MPPC (V9958), bit0 MASK</td></tr>
+            <tr><td>R1</td><td>Setup</td><td>bit5 MAG (×2 magnify), bit4 INT (line-int enable), bit3 EES (external sync), bit2 SPR.SZ (1 = 16×16), bit1 SPR.SH (V9958 256-px wide sprites), bit0 DISP</td></tr>
+            <tr><td>R2</td><td>Name table</td><td>NTB = bits[3:0]; base = NTB × 2048 (page granularity 2 KiB)</td></tr>
+            <tr><td>R3</td><td>Colour table</td><td>CTB = bits[6:0]; base = CTB × 128 on V9938, CTB × 8192 on V9958 (bit 13 semantics differ; V9958 mode 5+ uses the V9958 law)</td></tr>
+            <tr><td>R4</td><td>Pattern generator</td><td>PTB = bits[2:0]; base = PTB × 8192 (V9958: × 16384 when R25 MGAB path active)</td></tr>
+            <tr><td>R5</td><td>Sprite pattern</td><td>SPRB = bits[6:3]; base = SPRB × 256</td></tr>
+            <tr><td>R6</td><td>Sprite attribute</td><td>SATB = bits[6:0]; base = SATB × 256 (8 bytes per sprite, 32 max)</td></tr>
+            <tr><td>R7</td><td>Colour and increment</td><td>INCR = bits[3:0] read/write auto-increment step, 0 means +1; EC = bits[7:4] backdrop colour</td></tr>
+            <tr><td>R8</td><td>H-inter</td><td>horizontal interrupt counter (line delay 0-255)</td></tr>
+            <tr><td>R9</td><td>V-inter</td><td>RA=bit7 (repeat/autoreload), lines 0-31 → interrupt line in display</td></tr>
+            <tr><td>R10</td><td>Control</td><td>LC=bit7 light-pen enable, EQ=bit6 equalizer, KT=bit3 keyboard-tone flag read by BIOS, EXR=bit2 RAM refresh, MSTR=bit1 master background, SP=bit0 sprite enable</td></tr>
+            <tr><td>R11</td><td>RRC / VSA</td><td>line-int reload value; when DISP=0 the vertical scroll start address</td></tr>
+            <tr><td>R12</td><td>Colour resolution</td><td>CRC bits[3:2] (0-3 → palette dot clock ÷ 1/2/4/8)</td></tr>
+            <tr><td>R13</td><td>Address low</td><td>RA0–RA6 = read/write address bits 0–6</td></tr>
+            <tr><td>R15</td><td>Address mid</td><td>WA7–WA13 = write address bits 7–13; bit 7 = write address bit 14</td></tr>
+            <tr><td>R14</td><td>SC, RA and colour extension</td><td>bits[2:0] RA14–RA16 = read address bits 14–16; bits[5:3] CT = colour-table base high bits (V9958); bit6 SC = 16-colour sprite mode; bit7 REG14 = with 1 the second address byte writes register 14 instead of register 15, which is how a write address reaches bits 14–16</td></tr>
+            <tr><td>R25</td><td>V9958 extra</td><td>bit7/6 REG14/MAGA, bits[3:2] INT0 (adjustable dot-clock IRQ), bits[1:0] MGAB (8/12/16-bit VRAM bus)</td></tr>
+          </tbody>
+        </table>
+        <p>
+          Screen mode decode: the bits <code>GR1 GR2 BIG</code> select 000 SCREEN 0 (text 40×24), 010
+          SCREEN 1 (graphics 32×248), 100 SCREEN 2 (semi-graphic 256×192, V9958 half-index), 110 SCREEN 3
+          (multi-colour 64×212 with CRU), and 001 SCREEN 4/5 (bit 7 bitmap, 256×212, or 512×212 with MAG).
+          Any other combination is an undefined display in the first core: the renderer MUST emit black and
+          MUST NOT fail.
+        </p>
+      </section>
+
+      <section id="vdpdraw">
+        <h3>2.3 VDP Renderer, SCREEN 0–5</h3>
+        <pre><code>per frame, after T_PER_LINE × 262 T have run:
+  for line y in 0..211:
+    if DISP == 0: emit EC background row; continue
+    if y &lt; SPT + 1 (scroll): apply R9 vertical scroll to table line index
+    mode = GR1,GR2,BIG
+    case text (000):
+      f = VRAM[NTB_base + x]; p = VRAM[PTB_base + f*8 + (y%8)]
+      colour: foreground = palette[ R25-based 8-col lookup ] (first core: fixed pair
+              ink=paper inversion per MSX text law), ink bit7 == flash (invert with R12)
+    case g1 (010):
+      col = VRAM[NTB_base + (y/8)*32 + x/8]; pat = VRAM[PTB_base + col*8 + y%8]
+      bit = pat &gt;&gt; (7 - x%8); rgb = palette[ bit ? FG(palette reg of (y/8)%16, x/8) : BG ]
+    case g2/g3 (100/110): same pattern fetch, 4-bit CR from CTB per 8-dot group
+      (g3 CRU is per-dot on hardware; the first core applies the g2 group law to g3 CRU)
+    case g4/g5 (001):
+      256: bit = VRAM[PTB + y*32 + x/8] bit(7-x%8); CR from NTB line (y/8)*32 + x/8,
+           16-pixel colour-unit; RGB565 = pal[(CR&gt;&gt;4 or CR&amp;0x0F)&amp;0xF]
+      512 (bit7 of R0 with MAG): two 256 halves per dot-pair as in V9958 §17
+    sprites (if SP): read SATB entries in draw order, x&gt;=256 stops the line for
+      that sprite (overflow), 32 per frame cap, collision SC5 set when opaque bits overlap;
+      16-colour law when R14.SC else 3-colour law (FG from own CR, EC when bit 0)</code></pre>
+        <p>
+          Palette: sixteen 16-bit colour registers in VRAM, written through auto-increment as
+          <code>RRRRGGGG GGBBBB00</code>, low byte then high byte. The RGB565 conversion law is duplication:
+          each 4-bit channel <code>c</code> maps to 5 or 6 bits as
+          <code>R5 = c&gt;&gt;1</code>, <code>G6 = c&lt;&lt;2 | c&gt;&gt;2</code>,
+          <code>B5 = c&gt;&gt;1</code>. The palette table MUST be a single static array; runtime writes
+          overlay it and reset restores it.
+        </p>
+        <table class="api-table">
+          <caption>Boot palette. Names and order are <span class="basis basis-hw">Hardware</span> (MSX
+          standard colour chart); the 4-bit channel values are pinned by AV-4's golden file.</caption>
+          <thead><tr><th>Index</th><th>Colour</th><th>Index</th><th>Colour</th></tr></thead>
+          <tbody>
+            <tr><td>0</td><td>TRANSPARENT (rendered as black)</td><td>8</td><td>MEDIUM RED</td></tr>
+            <tr><td>1</td><td>BLACK</td><td>9</td><td>LIGHT RED</td></tr>
+            <tr><td>2</td><td>MEDIUM GREEN</td><td>10</td><td>DARK YELLOW</td></tr>
+            <tr><td>3</td><td>LIGHT GREEN</td><td>11</td><td>LIGHT YELLOW</td></tr>
+            <tr><td>4</td><td>DARK BLUE</td><td>12</td><td>MEDIUM GREEN</td></tr>
+            <tr><td>5</td><td>LIGHT BLUE</td><td>13</td><td>VIOLET</td></tr>
+            <tr><td>6</td><td>DARK RED</td><td>14</td><td>DARK CYAN</td></tr>
+            <tr><td>7</td><td>CYAN</td><td>15</td><td>WHITE</td></tr>
+          </tbody>
+        </table>
+        <p>
+          Flash: when bit 7 of a colour or pattern cell is set, the pixel alternates foreground and
+          background. The hardware period is <code>floor(15/2 + R12CRC) × 16 ms</code> (V9958 formula). The
+          first core MAY drive the toggle from the NMI counter at a fixed period of its choosing
+          (<span class="basis basis-cal">Calibrable</span>); AV-4 pins the period it ships with. Light pen
+          MUST NOT be emulated beyond reporting <code>FG1 = 0</code> at all times.
+        </p>
+      </section>
+
+      <section id="psg">
+        <h3>2.4 PSG (AY-3-8910): Modes, Mixer, Envelope</h3>
+        <p>
+          The register file is 16 registers, latched through <code>0xA0</code> (number) and written through
+          <code>0xA1</code> or <code>0xFE</code>; reads return the last written value through
+          <code>0xA0</code> and BIOS <code>RDPSG</code> (<code>0x0096</code>). Reset state: every register 0,
+          row latch 0.
+        </p>
+        <table class="api-table">
+          <caption>AY-3-8910 register file. Every row is <span class="basis basis-hw">Hardware</span>, from
+          the AY-3-8910 datasheet.</caption>
+          <thead><tr><th>Reg</th><th>Field</th><th>Bits</th><th>Meaning</th></tr></thead>
+          <tbody>
+            <tr><td>0, 2, 4</td><td>Tone A, B, C fine</td><td><code>d7–d0</code></td><td>Period low byte; the 12-bit period is <code>coarse × 256 + fine</code>.</td></tr>
+            <tr><td>1, 3, 5</td><td>Tone A, B, C coarse</td><td><code>d3–d0</code></td><td>Period high nibble; <code>f = PSG_HZ ÷ (16 × period)</code>; a period of 0 or 1 behaves as 1.</td></tr>
+            <tr><td>6</td><td>Noise period</td><td><code>d4–d0</code></td><td><code>f_noise = PSG_HZ ÷ (16 × period)</code>.</td></tr>
+            <tr><td>7</td><td>Mixer and I/O</td><td><code>d0–d5</code> enables, <code>d6</code> port B direction, <code>d7</code> port A direction</td><td>Enable bits are inverted: 0 enables the generator on its channel. Bit 0 tone A, 1 noise A, 2 tone B, 3 noise B, 4 tone C, 5 noise C.</td></tr>
+            <tr><td>8, 9, 10</td><td>Volume A, B, C</td><td><code>d3–d0</code></td><td>Manual volume when the value is below 16; envelope volume when the value is 16 or above.</td></tr>
+            <tr><td>11, 12</td><td>Envelope coarse, fine</td><td><code>d7–d0</code>, <code>d3–d0</code></td><td>Period is <code>(coarse &lt;&lt; 8 | fine) × 256</code> PSG ticks.</td></tr>
+            <tr><td>13</td><td>Envelope shape</td><td><code>d3–d0</code></td><td>See the shape table below.</td></tr>
+            <tr><td>14, 15</td><td>Port A, Port B</td><td><code>d7–d0</code></td><td>I/O ports; MSX uses them for keyboard and joystick, not for audio.</td></tr>
+          </tbody>
+        </table>
+        <table class="api-table">
+          <caption>Envelope shapes. Shape bits are <code>continue · attack · alternate · hold</code>; every
+          row is <span class="basis basis-hw">Hardware</span> (AY-3-8910 datasheet, Table 4).</caption>
+          <thead><tr><th>Shape</th><th>Behaviour</th></tr></thead>
+          <tbody>
+            <tr><td><code>0, 4, 8, C</code></td><td>Decay, then repeat.</td></tr>
+            <tr><td><code>1</code></td><td>Decay.</td></tr>
+            <tr><td><code>2</code></td><td>Ramp up, then repeat.</td></tr>
+            <tr><td><code>3</code></td><td>Ramp up, then hold at maximum.</td></tr>
+            <tr><td><code>5</code></td><td>Saw-tooth up.</td></tr>
+            <tr><td><code>6</code></td><td>Ramp down, then repeat.</td></tr>
+            <tr><td><code>7</code></td><td>Ramp down, then hold at zero.</td></tr>
+            <tr><td><code>9</code></td><td>Pulse per cycle.</td></tr>
+            <tr><td>others</td><td>Mirror of the listed patterns per datasheet Table 4.</td></tr>
+          </tbody>
+        </table>
+        <p>
+          The first core MUST implement the MSX-common set 0, 1, 2 and 7, and SHOULD implement all sixteen.
+          A shape the core does not implement MUST fall back to decay; silence is not a permitted fallback.
+        </p>
+        <pre><code>generator model:
+  tone:  12-bit down-counter reload; output toggles on zero; square ±1
+  noise: 17-bit LFSR, feedback = bit0 ^ bit3 (x^17 + x^14 + 1), PSG_HZ/16 rate,
+         output = bit0; reset state 0x0ACE (non-zero required by the datasheet)
+  envelope: counter at PSG_HZ/256; shape controls 4-bit amplitude 0..15
+  channel amplitude = manual vol (when regV &lt; 16) or envelope vol (when regV &gt;= 16)
+  DAC: amp index 0..15 -> volume table VOL16 (Calibrable: monotonic, -2 dB/step):
+       {0, 379, 536, 676, 854, 1076, 1356, 1710, 2156, 2716, 3418, 4302, 5412, 6810, 8574, 10796}
+       (scaled ×2 toward full 16-bit when three channels sum; clip at 32767)
+  mix: mono PCM = (A + B + C) clamped; each channel gated by mixer reg bits
+  output: resample PSG_HZ -&gt; 44100 Hz by accumulator (PSG_TO_PCM, fixed-point 32.32);
+          duplicate to stereo L=R; the PSG is one producer into the B-Audio path, Part 6.</code></pre>
+        <p>
+          The DAC curve and the VOL16 table are the only <span class="basis basis-cal">Calibrable</span>
+          numbers in Part 2; AV-5 measures tone ratios, not absolute loudness. No section of Parts 3–8
+          depends on a VOL16 value, so recalibrating the curve cannot invalidate the real-body contract.
+        </p>
+      </section>
+
+      <section id="ppi">
+        <h3>2.5 PPI, Keyboard Matrix, Joystick</h3>
+        <p>
+          8255 PPI at <code>0x10–0x13</code> and <code>0xA8–0xAB</code>: port A is the joystick and pin
+          input, port B is an output, port C is cassette and mixed. The control word MUST be honoured to the
+          extent that configuring ports A and C as inputs returns all-ones when idle.
+        </p>
+        <p>
+          Keyboard: <code>OUT 0xFE, row</code> with row 0–7, then read the 10 columns as active-low bits from
+          PPI A (the <code>0xFE</code> read or the INROW path). The core MUST present the matrix as one 8×10
+          bit array with the setter <code>msx_kbd_down(row, col)</code> used by the window event layer.
+          Debouncing belongs to the host UI, not to the core. The required first-core keys:
+        </p>
+        <table class="api-table">
+          <caption>Required keys. Row and column are 0-based matrix positions. The strobe/column convention
+          is <span class="basis basis-hw">Hardware</span>; each position below is
+          <span class="basis basis-norm">Normative</span> and AV-7 verifies the whole table against BIOS
+          <code>KROW</code> reads.</caption>
+          <thead><tr><th>Key</th><th>Row</th><th>Column</th><th>Key</th><th>Row</th><th>Column</th></tr></thead>
+          <tbody>
+            <tr><td>SPACE</td><td>0</td><td>0</td><td>SHIFT</td><td>1</td><td>0</td></tr>
+            <tr><td>ENTER</td><td>0</td><td>1</td><td>CTRL</td><td>1</td><td>1</td></tr>
+            <tr><td>STOP</td><td>0</td><td>2</td><td>CAPS</td><td>1</td><td>2</td></tr>
+            <tr><td>BOS (SELECT)</td><td>0</td><td>3</td><td>GRAPH</td><td>1</td><td>3</td></tr>
+            <tr><td>F1</td><td>0</td><td>6</td><td>CODE/KANA</td><td>1</td><td>4</td></tr>
+            <tr><td>F2</td><td>0</td><td>7</td><td>CLR</td><td>2</td><td>0</td></tr>
+            <tr><td>F3</td><td>0</td><td>8</td><td>BS</td><td>5</td><td>0</td></tr>
+            <tr><td>UP</td><td>3</td><td>0</td><td>TAB</td><td>5</td><td>1</td></tr>
+            <tr><td>DOWN</td><td>3</td><td>1</td><td>LEFT</td><td>3</td><td>2</td></tr>
+            <tr><td>RIGHT</td><td>3</td><td>3</td><td>—</td><td>—</td><td>—</td></tr>
+          </tbody>
+        </table>
+        <p>
+          The complete 8×10 matrix lives in <code>msx_kbd.h</code> as one generated array; no other table of
+          key positions exists in the module, and the table above is generated from it.
+        </p>
+        <table class="api-table">
+          <caption>Joystick pins as read on PPI A. Idle level is high: a released pin reads 1.</caption>
+          <thead><tr><th>Signal</th><th>PPI A bit</th><th>Basis</th></tr></thead>
+          <tbody>
+            <tr><td>TRGA</td><td>0</td><td><span class="basis basis-hw">Hardware</span></td></tr>
+            <tr><td>Port A up, down, left, right</td><td>1, 2, 3, 4</td><td><span class="basis basis-hw">Hardware</span></td></tr>
+            <tr><td>TRGB</td><td>6</td><td><span class="basis basis-hw">Hardware</span></td></tr>
+            <tr><td>Port B up, down, left, right</td><td>1, 2, 3, 4, latched under TRGB</td><td><span class="basis basis-norm">Normative</span>; named in <code>tronmsx.h</code> and read back by AV-7 through BIOS <code>GTSTCK()</code> and <code>GTTRIG()</code></td></tr>
+          </tbody>
+        </table>
+      </section>
+
+      <!-- ═══════ Part 3 ═══════ -->
+      <section id="bios">
+        <h2>Part 3 — BIOS &amp; Boot</h2>
+        <h3>3.1 BIOS Contract</h3>
+        <p>
+          The emulator core MUST NOT reimplement BIOS routines: it loads C-BIOS (or the user's real BIOS
+          from settings) into page 0 and the game runs against it. The core owes the BIOS exactly four
+          things: a correct Z80 (2.1), a correct slot and port decode (1.3), 64 KiB RAM (1.2), and the
+          NMI/IRQ generators (2.1).
+        </p>
+        <table class="api-table">
+          <caption>MSX BIOS entry points used by the first-core test suite. Addresses and register
+          conventions are <span class="basis basis-hw">Hardware</span>: they are the canonical MSX BIOS call
+          table, published in the <a href="https://map.grauw.nl/resources/msxbios.php">MSX BIOS calls
+          reference</a>, and C-BIOS ships them at those locations. The choice of routine per vector is
+          <span class="basis basis-norm">Normative</span> and asserted by AV-3, AV-4, AV-5 and AV-7.</caption>
+          <thead><tr><th>Routine</th><th>Address</th><th>Calling convention</th></tr></thead>
+          <tbody>
+            <tr><td><code>CALSLT</code></td><td><code>0x001C</code></td><td>IY = slot ID, IX = address called; the inter-slot call every game uses.</td></tr>
+            <tr><td><code>ENASLT</code></td><td><code>0x0024</code></td><td>A = slot ID, H bits 6–7 = page number (00–11).</td></tr>
+            <tr><td><code>WRTVDP</code></td><td><code>0x0047</code></td><td>C = VDP register number, B = value.</td></tr>
+            <tr><td><code>WRTVRM</code></td><td><code>0x004D</code></td><td>HL = VRAM address, A = byte written.</td></tr>
+            <tr><td><code>SETRD</code></td><td><code>0x0050</code></td><td>HL = VRAM read address.</td></tr>
+            <tr><td><code>SETWRT</code></td><td><code>0x0053</code></td><td>HL = VRAM write address.</td></tr>
+            <tr><td><code>FILVRM</code></td><td><code>0x0056</code></td><td>HL = VRAM start address, BC = length, A = byte.</td></tr>
+            <tr><td><code>LDIRMV</code></td><td><code>0x0059</code></td><td>DE = main-RAM source, HL = VRAM destination, BC = length.</td></tr>
+            <tr><td><code>LDIRVM</code></td><td><code>0x005C</code></td><td>DE = VRAM source, HL = main-RAM destination, BC = length.</td></tr>
+            <tr><td><code>CHGMOD</code></td><td><code>0x005F</code></td><td>A = screen mode; selects the renderer path of 2.3.</td></tr>
+            <tr><td><code>CALPAT</code></td><td><code>0x0084</code></td><td>A = sprite pattern number, returns HL = its VRAM address.</td></tr>
+            <tr><td><code>GSPSIZ</code></td><td><code>0x008A</code></td><td>Returns A = sprite pattern size in bytes, carry set for 16×16.</td></tr>
+            <tr><td><code>WRTPSG</code></td><td><code>0x0093</code></td><td>A = PSG register number, E = value.</td></tr>
+            <tr><td><code>RDPSG</code></td><td><code>0x0096</code></td><td>A = PSG register number, returns A = value.</td></tr>
+            <tr><td><code>CHGET</code></td><td><code>0x009F</code></td><td>Returns A = ASCII code of the next key.</td></tr>
+            <tr><td><code>CHPUT</code></td><td><code>0x00A2</code></td><td>A = ASCII code to display.</td></tr>
+            <tr><td><code>GTSTCK</code></td><td><code>0x00D5</code></td><td>A = 0 cursor keys, 1 port 1, 2 port 2; returns A = direction code.</td></tr>
+            <tr><td><code>GTTRIG</code></td><td><code>0x00D8</code></td><td>A = 0 space, 1 and 2 button A on ports 1 and 2, 3 and 4 button B; returns A = 0x00 released, 0xFF pressed.</td></tr>
+            <tr><td><code>SNSMAT</code></td><td><code>0x0141</code></td><td>A = keyboard row strobe, returns A = that row's column bits with a pressed key as 0.</td></tr>
+          </tbody>
+        </table>
+        <p>
+          The two inter-slot call forms, both shipped by every MSX BIOS and used by every game:
+        </p>
+        <pre><code>        ; CALSLT (0x001C): CALL with the destination in IY and IX.
+        ; The slot byte is (EXPTBL + slot) | page, the page in bits 6-7.
+        ; Arguments travel in ordinary registers: a routine called across a
+        ; slot boundary MUST NOT be given them in IX, IY or the alternate set.
+                ld      a,(EXPTBL + slot)
+                or      page
+                ld      iyl,a
+                ld      ix,CHPUT
+                call    0x001C
+        ; CALLF (0x0030): RST 0x30 with the operands inline after it, which the
+        ; BIOS reads, maps and calls.
+                rst     0x30
+                db      0x81            ; destination slot ID
+                dw      CHPUT           ; destination address</code></pre>
+        <p>
+          The first core MUST map RST vectors <code>0x00</code>–<code>0x38</code> to the BIOS handlers at
+          those page-0 locations as C-BIOS ships them, and no core code may special-case an RST. The
+          <code>IM 2</code> interrupt vector table lives in RAM at <code>I × 256</code>; the core MUST NOT
+          prefill it, because C-BIOS does.
+        </p>
+      </section>
+
+      <section id="romheader">
+        <h3>3.2 ROM Header &amp; Boot Trace</h3>
+        <p>The cartridge header is the 16 bytes at <code>0x4000</code>:</p>
+        <table class="api-table">
+          <caption>Cartridge-header fields. Every row is <span class="basis basis-hw">Hardware</span>:
+          the layout and the version-bit set are fixed by the MSX standard, and AV-2 exercises each rule
+          against the codec of 4.1.</caption>
+          <thead><tr><th>Offset</th><th>Size</th><th>Field</th><th>Law</th></tr></thead>
+          <tbody>
+            <tr><td><code>0x4000</code></td><td>2</td><td><code>magic</code></td><td>Must be <code>'A' 'B'</code>; otherwise the ROM is rejected with <code>MSX_ERR_HDR</code>.</td></tr>
+            <tr><td><code>0x4002</code></td><td>2</td><td><code>INIT80</code></td><td>Entry address, <code>0</code> when absent.</td></tr>
+            <tr><td><code>0x4004</code></td><td>2</td><td><code>INIT19</code></td><td>Entry address, <code>0</code> when absent.</td></tr>
+            <tr><td><code>0x4006</code></td><td>2</td><td><code>SHELL</code></td><td>Entry address, <code>0</code> when absent.</td></tr>
+            <tr><td><code>0x4008</code></td><td>2</td><td><code>BOOT</code></td><td>Entry address, <code>0</code> when absent; skipped on MSX2 disk boot.</td></tr>
+            <tr><td><code>0x400A</code></td><td>2</td><td><code>HOOK</code></td><td>NMI/keyboard hook address, <code>0</code> when absent.</td></tr>
+            <tr><td><code>0x400C</code></td><td>2</td><td><code>reserved</code></td><td><code>00 00</code>.</td></tr>
+            <tr><td><code>0x400E</code></td><td>1</td><td><code>version</code></td><td>Bit 7 = ASCII statement present; bit 5 = MSX2 and bit 4 = MSX2+ machine flags; bits 0–3 select the machine: 0 = MSX1, 3 = MSX1+JP, 4 = MSX2, 5 = MSX2+JP.</td></tr>
+            <tr><td><code>0x400F</code></td><td>1</td><td><code>rom_blocks</code></td><td>ROM size in 16 KiB blocks; <code>2</code> for a 32 KiB cartridge. The first core requires <code>rom_blocks ≤ 2</code>; a larger value is a MegaROM, and 4.1 rejects it with <code>MSX_ERR_SIZE</code> at load.</td></tr>
+          </tbody>
+        </table>
+        <p>
+          The boot trace, asserted by AV-3. Steps 2 to 5 are C-BIOS behaviour the core only has to permit,
+          because 3.1 forbids it from reimplementing any of them:
+        </p>
+        <ol>
+          <li><code>msx_reset</code> establishes the machine's reset state: PC = <code>0x0000</code>,
+            SP = <code>0xFFFC</code>, AF = BC = DE = HL = IX = IY = <code>0xFFFF</code>, I = <code>0xFF</code>,
+            R = 0, IM = 0, IFF1 = IFF2 = 0, not halted, every slot and port latch at its idle value, and RAM
+            initialized per D1 … D7 of 8.1. The Z80 leaves these registers undefined on hardware, so this list
+            is <span class="basis basis-norm">Normative</span>: it is the emulator reset convention, and the
+            golden checkpoints of 8.2 pin it.</li>
+          <li>C-BIOS initializes the VDP registers, selects SCREEN 0 and clears VRAM.</li>
+          <li>C-BIOS scans the cartridge pages for the <code>AB</code> signature at <code>0x4000</code> and
+            validates the header table above. A 32 KiB ROM takes the INIT80 path with block 1 reached through
+            the page 2 select of 1.2.</li>
+          <li>C-BIOS calls INIT80, then INIT19 and SHELL at their header addresses. The cartridge's INIT80
+            return value decides whether the cartridge keeps control, the search continues in the next slot, or
+            BASIC runs; an ASCII-only statement is skipped per the version byte.</li>
+          <li>With the cartridge in control, the game loop runs against the VDP and PSG contracts of Part 2.
+            With no cartridge, the window presents the C-BIOS BASIC banner.</li>
+        </ol>
+        <p>
+          A cartridge installs its NMI and keyboard hooks through the BIOS, which keeps the hook addresses in
+          its own system variables and calls them from its NMI and keyboard chains. The core supplies the NMI
+          edge and executes whatever address that chain reaches; it MUST NOT call cartridge code directly.
+        </p>
+      </section>
+
+      <!-- ═══════ Part 4 ═══════ -->
+      <section id="realbody">
+        <h2>Part 4 — Real Body &amp; Launch</h2>
+        <h3>4.1 BMSX Record Layout</h3>
+        <p>
+          An MSX program is a first-class real-body, not a side folder (hypermedia discipline,
+          <a href="../b-system/theorems/hypermedia_dnd.html">hypermedia_dnd</a>). The record is fixed and
+          versionless so host C99 can read it without a parser framework. All fields are little-endian; the
+          header is 64 bytes, followed immediately by <code>size</code> payload bytes.
+        </p>
+        <table class="api-table">
+          <caption>BMSX record layout, <code>b_msx_body</code>. The whole table is
+          <span class="basis basis-norm">Normative</span> and static-asserted
+          (<code>sizeof(b_msx_body) == 64</code>); AV-1 round-trips every field.</caption>
+          <thead><tr><th>Offset</th><th>Size</th><th>Field</th><th>Law</th></tr></thead>
+          <tbody>
+            <tr><td><code>0</code></td><td>4</td><td><code>magic</code></td><td><code>'BMSX'</code> exactly (<code>42 4D 53 58</code>).</td></tr>
+            <tr><td><code>4</code></td><td>2</td><td><code>version</code></td><td>1. Any other value ⇒ <code>MSX_ERR_MAGIC</code>.</td></tr>
+            <tr><td><code>6</code></td><td>2</td><td><code>kind</code></td><td>1 = rom, 2 = com, 3 = bload, 4 = cas.</td></tr>
+            <tr><td><code>8</code></td><td>2</td><td><code>machine</code></td><td>1 = MSX, 2 = MSX2, 3 = MSX2+.</td></tr>
+            <tr><td><code>10</code></td><td>2</td><td><code>flags</code></td><td>bit 0 = pause at first frame, bit 1 = force keyboard hook. Reserved bits are 0.</td></tr>
+            <tr><td><code>12</code></td><td>4</td><td><code>entry</code></td><td><code>0x4000</code> for <code>kind=1</code>, <code>0x0100</code> for <code>kind=2</code>, otherwise 0.</td></tr>
+            <tr><td><code>16</code></td><td>4</td><td><code>size</code></td><td>Payload bytes, 1 … 1,048,576.</td></tr>
+            <tr><td><code>20</code></td><td>16</td><td><code>bios_key</code></td><td>Settings key, for example <code>"bios.msx2p"</code>; empty selects the default C-BIOS.</td></tr>
+            <tr><td><code>36</code></td><td>32</td><td><code>name</code></td><td>UTF-8, NUL-terminated, 31 characters maximum.</td></tr>
+            <tr><td><code>64</code></td><td><code>size</code></td><td><code>payload</code></td><td>The <code>.rom</code>, <code>.com</code>, BLOAD-wrapped, or <code>.cas</code> bytes verbatim.</td></tr>
+          </tbody>
+        </table>
+        <pre><code>typedef struct {
+    char     magic[4];      /* "BMSX" */
+    uint16_t version;       /* == 1 */
+    uint16_t kind;          /* 1=rom 2=com 3=bload 4=cas */
+    uint16_t machine;       /* 1=MSX 2=MSX2 3=MSX2+ */
+    uint16_t flags;         /* bit0 pause, bit1 kb-hook */
+    uint32_t entry;
+    uint32_t size;
+    char     bios_key[16];  /* settings key, not a path */
+    char     name[32];
+} b_msx_body;               /* sizeof == 64; static assert in msx_body.h */</code></pre>
+        <table class="api-table">
+          <caption>Validation law by <code>kind</code>. Each row is one AV-1 negative test; the first core
+          accepts <code>kind=1</code> and returns <code>MSX_ERR_KIND</code> for 2, 3 and 4.</caption>
+          <thead><tr><th>kind</th><th>Payload law</th><th>Failure code</th></tr></thead>
+          <tbody>
+            <tr><td><code>1</code> rom</td><td>First two payload bytes are <code>'A' 'B'</code>; <code>size == rom_blocks × 16,384</code> with <code>rom_blocks ≤ 2</code> on the first core.</td><td><code>MSX_ERR_HDR</code> for the header bytes, <code>MSX_ERR_SIZE</code> for the block count.</td></tr>
+            <tr><td><code>2</code> com</td><td><code>entry == 0x0100</code>.</td><td><code>MSX_ERR_ENTRY</code></td></tr>
+            <tr><td><code>3</code> bload</td><td>First payload byte is the BLOAD header marker 0xFE.</td><td><code>MSX_ERR_HDR</code></td></tr>
+            <tr><td><code>4</code> cas</td><td>Legal TACS block records: 0x00 header, 0x01 data, 0x02 end of file.</td><td><code>MSX_ERR_HDR</code></td></tr>
+          </tbody>
+        </table>
+        <p>
+          Disk and cassette images are child real-bodies referenced by their own records, never strings
+          baked into a ROM. A virtual-body in a document or on the workbench points at the real-body by path
+          exactly like every TAD body; opening it is the launch path below.
+        </p>
+      </section>
+
+      <section id="launch">
+        <h3>4.2 Launch Algorithm</h3>
+        <p>Opening the virtual-body creates one BTRON window and starts the machine. No separate emulator
+        process, no “pick a file” step. Normative sequence:</p>
+        <ol>
+          <li>Read + validate the BMSX record (4.1 law). Fail ⇒ error window, never a silent hang.</li>
+          <li>Resolve settings: <code>bios.msx2p</code>, <code>bios.msx2pext</code>, <code>bios.disk</code>,
+            <code>bios.kanji</code>, <code>machine</code> (default MSX2+). Record's <code>bios_key</code>
+            overrides the default key name (not its value). Missing BIOS ⇒ window naming the key.</li>
+          <li>Create the BTRON window: title = <code>name</code>, client area 512×424 (MSX2+ ×2) or
+            256×212 (×1), <code>WND_ATTR_TITLE | WND_ATTR_BORDER | WND_ATTR_SLIDING_TAB</code>. The menu
+            bar carries reset, pause, disk slot and quit as BTRON menu parts
+            (<a href="../b-book/window.html">window</a>), and the debugger opens its own windows as
+            specified in <a href="#ttwindow">8.4.1</a>.</li>
+          <li>Build the machine: Z80 at <code>Z80_HZ</code>, 64 KiB RAM, V9958, PSG, PPI; map BIOS into
+            page 0; insert the program per <code>kind</code> — rom to page 1, com to drive A when the disk
+            step lands. The first core accepts rom only and returns <code>MSX_ERR_KIND</code> for 2, 3
+            and 4 with the record's <code>name</code> in the message.</li>
+          <li>Reset and run. The first presented frame follows the BIOS handoff (INIT80 trace, 3.2). The
+            window MUST NOT show a firmware menu unless <code>flags</code> bit 0 (pause at first frame) is
+            set.</li>
+        </ol>
+      </section>
+
+      <section id="errors">
+        <h3>4.3 Error Codes</h3>
+        <pre><code>#define MSX_OK            0
+#define MSX_ERR_BIOS      1   /* settings key set but file unreadable */
+#define MSX_ERR_BIOS_MISS 2   /* settings key absent (use C-BIOS)     */
+#define MSX_ERR_MAGIC     3   /* record magic/version                 */
+#define MSX_ERR_HDR       4   /* AB header or kind payload law        */
+#define MSX_ERR_ENTRY     5   /* entry vector zero or wrong page      */
+#define MSX_ERR_SIZE      6   /* size == 0 or &gt; limit                 */
+#define MSX_ERR_RAM       7   /* machine RAM beyond the first core    */
+#define MSX_ERR_KIND      8   /* kind not loadable on this core       */
+#define MSX_ERR_MACHINE   9   /* machine value unknown                */
+#define MSX_ERR_TT_STALE  10  /* checkpoint from another ROM/BIOS pair (8.2) */
+#define MSX_ERR_TT_RANGE  11  /* requested frame outside the input log (8.2) */
+#define MSX_ERR_TT_STATE  12  /* no machine instance, or mid-frame call (8.3) */</code></pre>
+        <table class="api-table">
+          <caption>Error code ownership. The enumeration is a stable ABI:
+          <span class="basis basis-norm">Normative</span> — later cores add values above 12, and MUST NOT
+          renumber or reuse an existing value.</caption>
+          <thead><tr><th>Range</th><th>Returned by</th><th>Rendered as</th></tr></thead>
+          <tbody>
+            <tr><td>0 … 9</td><td><code>msx_init</code>, <code>msx_load_rom</code>, the launch algorithm of 4.2.</td><td>The string table in <code>msx_err.h</code>, inside the window that failed to open.</td></tr>
+            <tr><td>10 … 12</td><td>The debugger API of <a href="#timetravel">Part 8</a> only. Launch MUST NOT return them.</td><td>The debugger log panel, 8.4.1.</td></tr>
+          </tbody>
+        </table>
+        <p>
+          The window layer MUST render the string table; a numeric dialog is not a permitted presentation.
+        </p>
+      </section>
+
+      <!-- ═══════ Part 5 ═══════ -->
+      <section id="coreapi">
+        <h2>Part 5 — tronMSX Core API &amp; Threading</h2>
+        <p>
+          tronMSX is the normative name of the embedded C99 core, the machine that boots inside the B-MSX
+          window. The module keeps the name: one public header, one translation-unit family, no aliases. The
+          MSX2+ machine it implements covers V9958 as V9938 plus the MSX2+ I/O bit, one cartridge, and PSG
+          square waves, which is the set that fits the bounded, heap-free envelope of 5.3.
+        </p>
+        <h3>5.1 <code>include/emulators/tronmsx.h</code></h3>
+        <pre><code>/* all state static, bounded; NO malloc/free inside this module */
+typedef struct {
+    const char *bios_key;      /* "bios.msx2p" | NULL = C-BIOS */
+    uint16_t    machine;       /* b_msx_body.machine */
+    uint16_t    frame_hz;      /* 60 for first core; PAL 50 later */
+} msx_cfg_t;
+
+int  msx_init(const msx_cfg_t *cfg);            /* -&gt; MSX_* codes */
+void msx_shutdown(void);                        /* idempotent */
+int  msx_load_rom(const uint8_t *rom, uint32_t size, uint32_t entry);
+void msx_reset(void);
+void msx_pause(BOOL on);
+void msx_run_frame(void);                       /* exactly T_PER_FRAME T; the deterministic step (8.1) */
+void msx_blit_rgb565(uint16_t *fb);             /* 256x212, caller-owned buffer */
+void msx_kbd_down(uint8_t row, uint8_t col);
+void msx_kbd_up(uint8_t row, uint8_t col);
+void msx_psg_submit_pcm(int16_t *buf, uint32_t *frames_out); /* Part 6 pacing contract */
+uint64_t msx_total_cycles(void);
+uint64_t msx_body_hash(void);                   /* FNV-1a 64 over ROM+BIOS, fixed at load (8.2) */
+const char *msx_version_string(void);           /* "tronMSX 1.04 (C99-only core)" */</code></pre>
+        <p>
+          Invariants: every function is total — an invalid size returns an <code>MSX_ERR_*</code> code and
+          produces no undefined behaviour. <code>msx_run_frame</code> MUST complete in a bounded, measurable
+          time (AV-8). The first core holds exactly one machine instance per process: a second
+          <code>msx_init</code> shuts the first down, the open-by-replacement law of
+          <a href="audio.html">B-Audio</a>.
+        </p>
+      </section>
+
+      <section id="threads">
+        <h3>5.2 Threading &amp; Rings</h3>
+        <table class="api-table">
+          <caption>Tasks. Three static tasks, one machine instance. The split is
+          <span class="basis basis-norm">Normative</span>; the plane budgets they obey are stated in
+          <a href="theorems/media_smp.html">media_smp</a>.</caption>
+          <thead><tr><th>Task</th><th>Responsibility</th><th>Blocking</th></tr></thead>
+          <tbody>
+            <tr><td><code>MSX_UI</code></td><td>Window events; keyboard setters; command enqueue; framebuffer blit.</td><td>Never on MSX_CORE. Post-and-forget.</td></tr>
+            <tr><td><code>MSX_CORE</code></td><td>The <code>msx_run_frame</code> loop and the PSG drain; owns the IOD plane.</td><td>On the frame period only, never mid-frame.</td></tr>
+            <tr><td><code>MSX_AUDIO</code></td><td>The <code>virtio_sound_write</code> pump; B-Audio consumer.</td><td>On the PCM ring, counted drop when full.</td></tr>
+          </tbody>
+        </table>
+        <table class="api-table">
+          <caption>Channels between the tasks. All storage is static and single-producer /
+          single-consumer.</caption>
+          <thead><tr><th>Channel</th><th>Capacity</th><th>Element</th><th>Producer → consumer</th></tr></thead>
+          <tbody>
+            <tr><td><code>cmd_ring</code></td><td>16 entries</td><td><code>{ uint8_t cmd; uint32_t a0; }</code>, commands RESET, PAUSE, RESUME, KBD_SYNC, QUIT</td><td>MSX_UI → MSX_CORE</td></tr>
+            <tr><td><code>input slot</code></td><td>24 B, one snapshot</td><td><code>{ uint32_t seq; uint8_t kbd[10]; uint8_t joy; uint8_t rsv[7]; }</code></td><td>MSX_UI → MSX_CORE. The only host-to-machine data channel.</td></tr>
+            <tr><td><code>pcm_ring</code></td><td>4,096 entries</td><td><code>int16_t</code> stereo frame</td><td>MSX_CORE → MSX_AUDIO</td></tr>
+            <tr><td><code>fb</code></td><td>3 planes × 108,544 B</td><td>RGB565 frame</td><td>MSX_CORE → MSX_UI. B-Media IOD plane budget (Part 6); not a core static (5.3).</td></tr>
+          </tbody>
+        </table>
+        <p>
+          Input travels through the slot, not through the ring: an 8-byte command entry cannot carry an
+          80-bit matrix. <code>KBD_SYNC</code> is the per-step tick marker whose <code>a0</code> is the
+          slot's sequence number, and the matrix itself is the one published snapshot (8 rows × 10 columns
+          plus joystick, 2.5). MSX_UI writes the payload then <code>seq</code>; MSX_CORE reads
+          <code>seq</code>, the payload, then <code>seq</code> again and re-reads on mismatch — a seqlock,
+          no mutex, the ownership-moves-by-message discipline of
+          <a href="core.html#api">B-Core</a>. The channel is level-driven and single-slot, so a dropped tick
+          cannot desynchronize state: the next step reads the newer matrix, and the input log records the
+          matrix the machine saw (<a href="#tt-log">8.2</a>).
+        </p>
+        <p>
+          The MSX_CORE loop paces itself on <code>msx_run_frame</code> wall time against 16.67 ms. It MAY
+          skip the presentation of a frame. A step with a cycle count other than <code>T_PER_FRAME</code>
+          MUST NOT exist: catching up is two consecutive steps of exactly <code>T_PER_FRAME</code> T, each
+          with its own input snapshot (<a href="#tt-law">8.1</a> D1). Sleeping mid-frame is prohibited.
+          PCM back-pressure follows the B-Audio telemetry law: write while
+          <code>virtio_sound_get_queued_bytes() &lt; 2 × PUMP_CHUNK</code>; drops are counted and never
+          blocked. A full <code>cmd_ring</code> is a counted drop under B-Core rcv EMPTY semantics, and a
+          dropped <code>KBD_SYNC</code> is recorded in the input log instead of retried
+          (D5, <a href="#tt-log">8.2</a>).
+        </p>
+      </section>
+
+      <section id="bounds">
+        <h3>5.3 Memory &amp; Speed Bounds</h3>
+        <p>
+          BTRON law: every quantity below is bounded and static; the module performs no runtime heap
+          allocation.
+        </p>
+        <table class="api-table">
+          <caption>Core statics. The Basis column uses the labels of Part 0. Rows are additive; the sum is
+          the only quantity AV-8 measures against the bound.</caption>
+          <thead><tr><th>Region</th><th>Size</th><th>Basis</th><th>Note</th></tr></thead>
+          <tbody>
+            <tr><td>VRAM</td><td>131,072 B</td><td><span class="basis basis-hw">Hardware</span></td><td>V9958 128 KiB, 2.2.</td></tr>
+            <tr><td>Main RAM</td><td>65,536 B</td><td><span class="basis basis-hw">Hardware</span></td><td>The canonical MSX2+ main-RAM configuration, 1.2.</td></tr>
+            <tr><td>Cartridge ROM</td><td>32,768 B</td><td><span class="basis basis-cal">Calibrable</span></td><td>First-core cap; MegaROM mapping raises it without touching any other row.</td></tr>
+            <tr><td><code>pcm_ring</code>, <code>cmd_ring</code>, input slot</td><td>16,536 B</td><td><span class="basis basis-norm">Normative</span></td><td>4096 × 4 + 16 × 8 + 24, 5.2.</td></tr>
+            <tr><td>Z80 registers, PSG state, LFSR, tables</td><td>≤ 16,384 B</td><td><span class="basis basis-norm">Normative</span></td><td>VOL16, the 8 × 10 key matrix, envelope counters.</td></tr>
+            <tr><td>Core statics, arithmetic sum</td><td>262,296 B</td><td><span class="basis basis-norm">Normative</span></td><td>131,072 + 65,536 + 32,768 + 16,536 + 16,384.</td></tr>
+            <tr><td>Bound</td><td>≤ 393,216 B (384 KiB)</td><td><span class="basis basis-norm">Normative</span></td><td>Holds on the POSIX and Pi-class targets alike. The 130,920 B headroom is reserved for the later steps named in Part 0; adding one MUST NOT breach the bound.</td></tr>
+            <tr><td>BIOS / C-BIOS image</td><td>≤ 65,536 B</td><td><span class="basis basis-hw">Hardware</span></td><td>Outside core statics: settings-loaded, read-only, hashed at load (8.2 D7).</td></tr>
+            <tr><td>Display planes</td><td>325,632 B</td><td><span class="basis basis-norm">Normative</span></td><td>Outside core statics: 3 × 108,544 B inside the B-Media IOD plane budget (Part 6), counted there once.</td></tr>
+            <tr><td>Time-travel debug shape</td><td>+13,920,464 B (13.3 MiB)</td><td><span class="basis basis-norm">Normative</span></td><td>Outside the shipping bound: input log, checkpoint ring, symbol table, debugger windows and log ring. Present only under <code>TT=1</code>, 8.5.</td></tr>
+          </tbody>
+        </table>
+        <p>
+          The three outside rows appear here so the accounting is complete in one place; the shipping core's
+          bound is 262,296 B against 393,216 B, and no other section re-derives it. Planes are not core
+          statics because B-Video composites them (Part 6): the core writes a plane it does not own.
+        </p>
+        <table class="api-table">
+          <caption>Speed budget. The MIPS figures are <span class="basis basis-cal">Calibrable</span> and
+          become <span class="basis basis-norm">Normative</span> once AV-8 pins them on the smallest shipping
+          target.</caption>
+          <thead><tr><th>Quantity</th><th>Value</th><th>Law</th></tr></thead>
+          <tbody>
+            <tr><td>Z80 workload</td><td>≤ 3.58 MIPS</td><td><code>Z80_HZ / 4 × 4 cycles-per-instruction</code> average, 1.1.</td></tr>
+            <tr><td>Emulated instructions per second</td><td>≥ 215 MIPS equivalent on a Pi 400 class target at <code>-O2</code></td><td>60 × the workload, the real-time floor AV-8 measures over 60 s.</td></tr>
+            <tr><td>Renderer granularity</td><td>228 T per text line</td><td>Mid-frame VRAM writes reflect on the correct line, 1.1 and AV-4.</td></tr>
+            <tr><td>Heap</td><td>0 B</td><td>All tables are <code>static const</code> or static mutable arrays; the module performs no runtime allocation and <code>nm</code> of its objects shows no <code>malloc</code> or <code>free</code> reference (AV-8).</td></tr>
+          </tbody>
+        </table>
+      </section>
+
+      <!-- ═══════ Part 6 ═══════ -->
+      <section id="media">
+        <h2>Part 6 — Media Integration Contracts</h2>
+        <p>
+          The MSX window is a client of the four media books, consuming published surfaces only. The mapping
+          below is the integration contract the core implements.
+        </p>
+        <table class="api-table">
+          <caption>Media contracts by MSX unit. Every row is <span class="basis basis-norm">Normative</span>
+          and cites the book that owns the contract.</caption>
+          <thead><tr><th>MSX unit</th><th>Produces or needs</th><th>B-System contract</th><th>Book</th></tr></thead>
+          <tbody>
+            <tr><td><code>psg.c</code></td><td>S16 mono PCM at 44.1 kHz, duplicated to stereo</td><td>Producer into <code>virtio_sound_write(samples, frames)</code>, paced by <code>virtio_sound_get_queued_bytes() &lt; 2 × 512 × 2 × 2</code>, the synth-pump pattern of B-Audio. An absent device is a counted drop, never a block.</td><td><a href="audio.html#write">B-Audio</a></td></tr>
+            <tr><td>Score and chiptune authoring</td><td>3-voice envelope timeline</td><td>The AY envelope and mixer model maps onto the lilcu64 generator-event surface. A <code>lc_score_*</code> timeline MUST be able to drive the PSG; the PSG register file is the single timeline truth.</td><td><a href="sound.html#apiref">B-Sound</a></td></tr>
+            <tr><td><code>vdp.c</code></td><td>256×212 RGB565 plane</td><td><code>msx_blit_rgb565</code> output is composited by the B-Video plane path at the window's ×2 magnify (×1 on 256-wide geometry). The emulator does not touch the framebuffer device.</td><td><a href="video.html#planes">B-Video</a></td></tr>
+            <tr><td><code>tronmsx.c</code> loop</td><td>16.67 ms period, bounded WCET</td><td>MSX_CORE runs on the IOD plane budget; frame pacing is a plane-budget problem and not an OS-timer problem. The pcm and cmd rings are NuStream-shaped buffers with counted drops.</td><td><a href="index.html#budgets">B-Media</a></td></tr>
+            <tr><td>Deck, disk and cassette IO</td><td>Child real-bodies (<code>.dsk</code>, <code>.cas</code>)</td><td>Streamed through the five-call InterCore alphabet pub/sub/spawn/snd/rcv with counted drops. No shared mutable buffer crosses threads; command ownership moves by spawn.</td><td><a href="core.html#api">B-Core</a></td></tr>
+          </tbody>
+        </table>
+        <p>
+          PSG and VDP share one clock: <code>msx_total_cycles</code>, and audio is submitted once per
+          executed frame from that counter, so core-side drift cannot occur by construction. Host-side drift
+          belongs to the B-Audio queue. AV-6 measures the pair; the <code>media_avsync_*</code> proof pair
+          named in B-Video and B-Audio binds it formally when it lands.
+        </p>
+      </section>
+
+      <!-- ═══════ Part 7 ═══════ -->
+      <section id="emulators">
+        <h2>Part 7 — Home &amp; Toolchain: B-MSX Is the Home</h2>
+        <h3>7.1 B-MSX as Home; openMSX and blueMSX as Transition Instruments</h3>
+        <table class="api-table">
+          <caption>The three emulators in this specification. The openMSX and blueMSX columns describe those
+          programs as shipped; the tronMSX column is <span class="basis basis-norm">Normative</span>.</caption>
+          <thead><tr><th>Property</th><th>openMSX</th><th>blueMSX (and forks)</th><th>tronMSX (B-MSX)</th></tr></thead>
+          <tbody>
+            <tr><td>Role here</td><td>Independent oracle</td><td>Independent oracle</td><td>Home: real-body launch, BTRON windows, media books</td></tr>
+            <tr><td>Status</td><td>Active, cross-platform</td><td>Frozen at 2.8.2 (2009), Windows; lives on as libretro and blueMSX Live</td><td>This specification; C99, bounded, heap-free</td></tr>
+            <tr><td>Accuracy model</td><td>XML machine definitions, cycle-aware VDP</td><td>Compatibility-first, GUI-driven</td><td>Instruction-cycle Z80, line-granular renderer (2.3)</td></tr>
+            <tr><td>Debugger</td><td>Separate Qt debugger: breakpoints, watchpoints, slot and segment-selective breaks, VDP tile/bitmap/sprite viewers, symbol manager</td><td>Built into the emulator window: disassembly, CPU, stack, call stack, memory, peripheral registers, I/O</td><td>Separate top-level BTRON windows in SDI style — register, disassembly, memory, VRAM, PSG, symbol, breakpoint and log panels on one machine, with PC breakpoints, (page, offset) watchpoints and <code>DBG_STR</code>/<code>DBG_BRK</code> lines stamped with their frame (<a href="#ttwindow">8.4.1</a>)</td></tr>
+            <tr><td>Time travel</td><td>Reverse and step-back, snapshot-based</td><td>None</td><td>Frame-granular reverse, seek and instruction-boundary breaks, built on the determinism law (<a href="#timetravel">Part 8</a>)</td></tr>
+            <tr><td>Host link</td><td>Tcl, socket and pipe control, <code>debugdevice</code> I/O log, dir-as-disk</td><td>BiFi <code>ld b,b</code>/<code>ld d,d</code> trace; plugin SDK</td><td>BTRON window events, <code>cmd_ring</code>, settings keys</td></tr>
+            <tr><td>Iteration</td><td>Scripted reset plus dir-as-disk</td><td>Leave it running, rebuild, F12</td><td>Reopen the real-body; the window is replaced by open-by-replacement (5.1)</td></tr>
+            <tr><td>Hardware lab</td><td>Best for real machines</td><td>Machine editor is the slot-config sandbox</td><td>Fixed first-core machine (Part 0)</td></tr>
+          </tbody>
+        </table>
+        <p>
+          B-MSX is the home. A program is a real-body, the windows are BTRON, audio and video leave through
+          the media books, and the toolchain is the kit in this Part; the daily loop requires no external
+          process. openMSX and blueMSX stay in the workflow for two purposes: they carry users arriving from
+          the MSX scene, and they act as independent oracles — openMSX for a cycle-accurate second opinion
+          when a game misbehaves and debugger evidence must be shown, blueMSX for the quick look where one
+          opcode step changes the VDP immediately. "blueMSX+" denotes 2.8.2 plus the debugger and plugin
+          tree (the ducasp tree is a later packaging of the same code); it is a compatibility reference, not
+          a platform to build on.
+        </p>
+        <p>
+          The migration path is mechanical, which is why the external tools stay secondary: one binary boots
+          in all three emulators (7.5), the debug idioms <code>ld d,d</code>, <code>ld b,b</code> and
+          <code>out (DBGPORT),a</code> are honoured by the embedded core itself, and the same
+          <code>.rom</code> with its <code>AB</code> header drops into openMSX through dir-as-disk or into
+          blueMSX through F12 whenever a measurement must be taken against a reference implementation. The
+          standardized cross-check hooks are: openMSX <code>-ext debugdevice</code> plus a Z80
+          <code>out</code> to a reserved port plus a Symbol Manager map; blueMSX <code>ld b,b</code> /
+          <code>jr $+2</code> for a break and <code>ld d,d</code> plus a length-prefixed string for a trace.
+        </p>
+      </section>
+
+      <section id="toolchain">
+        <h3>7.2 toolchainMSX: Rasm as assembler, z88dk as compiler and linker</h3>
+        <p>
+          toolchainMSX is the shipped Z80 build kit: <code>rasm</code> as the assembler, z88dk
+          (<code>zcc</code>, <code>z80asm</code>, <code>appmake</code>) as the compiler driver, linker and
+          packager, and <code>msxpak</code> as the thin C99 real-body wrapper. C++ stays prohibited inside
+          the BTRON boundary (Part 0): tronMSX, <code>msxpak</code> and the harness are C99 with zero runtime
+          heap, and Z80-side C is C99 (front-end rule below).
+        </p>
+        <p>
+          This Part supersedes the design note's Pasmo-only policy on three architectural grounds:
+        </p>
+        <ul>
+          <li>License. Pasmo is GPL; Rasm is MIT and z88dk is Clarified Artistic. The kit vendors into the
+            B-System tree with no copyleft exposure, and Rasm is C, so it sits inside the boundary.</li>
+          <li>Linking. Pasmo emits no relocatable objects, which limits a build to one <code>ORG</code>, one
+            invocation and one target. <code>z80asm</code> links sections and libraries, so multi-file C plus
+            assembly, sections, and library code are produced by the linker; <code>appmake</code> emits the
+            emulator artifacts (<code>.cas</code>, <code>.dsk</code> carrying a <code>.com</code>, ROM image)
+            that 7.5 requires.</li>
+          <li>Debug surface. Rasm exports symbol and breakpoint files plus makefile dependencies. The symbol
+            file is the input the openMSX Symbol Manager reads and the input the time-travel debugger
+            consumes (<a href="#timetravel">Part 8</a>): one symbol artifact serves both tools.</li>
+        </ul>
+        <p>
+          The one thing z88dk must not be allowed to keep is its own C startup. z88dk's <code>+msx</code>
+          target is the classic library and its BIOS-shaped CRT owns the first bytes, which collides with
+          the BMSX contract in Parts 3 and 4. Normative resolution: toolchainMSX ships its own startup,
+          <code>toolchainMSX/crt0_btron.asm</code> in Rasm syntax, written into the cartridge header at
+          <code>0x4000</code>, linked with <code>-crt0=crt0_btron.asm</code> and built
+          <code>-Ostandard</code> (never <code>-Omax</code>), so the CRT obeys the boot trace of 3.2.
+          Front-end rule: C99 conformance comes from <code>-compiler=sdcc -clib=sdcc_iy</code>;
+          <code>sccz80</code> (near-C90) is not approved for new C sources. Library rule: the classic library
+          supplies I/O and memory-move helpers over the fixed 16-byte-pointer BIOS conventions only. A BMSX
+          program MUST NOT link the classic library's <code>malloc</code> (AV-11 asserts the absence of the
+          symbol). A program that wants a heap declares a static pool: bounded, inside its own
+          <code>.DATA</code>/<code>.BSS</code>. The BMSX record (4.1) carries no heap field and MUST NOT gain
+          one. Inline BIOS calls stay in Rasm assembly.
+        </p>
+        <table class="api-table">
+          <caption>Build targets. Each row is one <code>kind</code> of 4.1; the invocations are
+          <span class="basis basis-norm">Normative</span> and exercised by 7.5.</caption>
+          <thead><tr><th>Target</th><th>toolchainMSX invocation</th><th>Load</th></tr></thead>
+          <tbody>
+            <tr><td>Cartridge</td><td><code>rasm --bin crt0_btron.asm game.rom -org 0x4000 --symbols-out game.sym --deps game.d</code> (16-byte <code>AB</code> header emitted by the crt0)</td><td>slot cartridge (BMSX kind=1)</td></tr>
+            <tr><td>C + asm program</td><td><code>zcc +msx -subtype=rom -compiler=sdcc -clib=sdcc_iy -crt0=crt0_btron.asm -Ostandard game.c -o game.rom</code></td><td>same; <code>appmake +msx</code> for the disk/tape variants</td></tr>
+            <tr><td>MSX-DOS</td><td><code>zcc +msx -subtype=cpm.com</code> (or <code>-subtype=dotcom</code>) → <code>.com</code> at <code>0x0100</code></td><td>dir-as-disk / <code>.dsk</code> (kind=2, later)</td></tr>
+            <tr><td>BLOAD</td><td><code>appmake +msx --type=bload</code>, or <code>rasm --bin</code> + <code>msxpak bload</code></td><td><code>BLOAD "name",R</code> (kind=3)</td></tr>
+            <tr><td>Tape</td><td><code>appmake +msx --type=cas</code>, or <code>msxpak cas</code> for a hand-built TACS stream</td><td>cassette (kind=4)</td></tr>
+          </tbody>
+        </table>
+        <p>
+          Every one of these outputs is one of the four BMSX payloads of 4.1, and the same binary boots in
+          tronMSX, openMSX and blueMSX (7.5). Changing the kit MUST NOT change that law. Parts 1–6 are
+          toolchain-blind: the machine model, the record and the core API carry no kit assumption.
+        </p>
+      </section>
+
+      <section id="kit-compare">
+        <h3>7.3 Z80 Kit Comparison</h3>
+        <p>
+          All five kits emit a raw binary that tronMSX, openMSX and blueMSX run; they do not replace each
+          other. The table is the decision record for 7.2.
+        </p>
+        <table class="api-table">
+          <caption>Kit comparison, surveyed 2026. Non-normative facts about third-party tools; the Verdict
+          row is <span class="basis basis-norm">Normative</span>.</caption>
+          <thead><tr><th>Property</th><th>Pasmo 0.5.5</th><th>sjasmplus 1.24.0</th><th>Rasm</th><th>z88dk</th><th>SDCC 4.5 / 4.6</th></tr></thead>
+          <tbody>
+            <tr><td>Verdict</td><td>Rejected</td><td>Rejected</td><td>Chosen: assembler</td><td>Chosen: compiler driver, linker, packager</td><td>Kept as the C99 front-end inside z88dk</td></tr>
+            <tr><td>Role</td><td>Fixed-address assembler</td><td>Assembler with modules and exports</td><td>Fast assembler, crunch, banks</td><td>C, assembler, linker, CRT, packager</td><td>C compiler, <code>sdasz80</code>, <code>sdldz80</code></td></tr>
+            <tr><td>License</td><td>GPL</td><td>BSD-3-Clause</td><td>MIT</td><td>Clarified Artistic</td><td>GPLv2+ with runtime linking exception</td></tr>
+            <tr><td>Written in</td><td>C++</td><td>C++17, Lua 5.4</td><td>C</td><td>C and assembly</td><td>C</td></tr>
+            <tr><td>CPU</td><td>Z80</td><td>Z80, R800, Z80N, i8080, LR35902</td><td>Z80, undocumented opcodes included</td><td>8080, Z80, R800 through the MSX target</td><td>Z80, Z180, eZ80, Z80N, GBZ80, others</td></tr>
+            <tr><td>C</td><td>None</td><td>None</td><td>None</td><td>sccz80 (near-C90), patched SDCC</td><td>C99, some C11/C23</td></tr>
+            <tr><td>Linker</td><td>No</td><td>No; <code>INCLUDE</code> and modules</td><td>No; workspaces and banks</td><td><code>z80asm</code>, sections and libraries</td><td>Relocatable <code>.rel</code>, areas, banked calls</td></tr>
+            <tr><td>MSX support</td><td><code>--msx</code> BLOAD; <code>--bin</code> with <code>ORG 100h</code> yields <code>.COM</code></td><td>None; the author emits <code>AB</code> plus <code>SAVEBIN</code></td><td>Topic-tagged MSX; raw bin, tape, snapshot</td><td><code>zcc +msx</code>: <code>.cas</code>, <code>.wav</code>, <code>.com</code>, <code>.dsk</code>, <code>-subtype=rom</code>, DOS1/DOS2</td><td>None; the author supplies <code>crt0</code></td></tr>
+            <tr><td>Symbols</td><td><code>EQU</code> dump</td><td><code>LABELSLIST</code>, breakpoint lists</td><td>Symbol and breakpoint export</td><td>Linker map</td><td><code>.sym</code>, <code>.map</code>, <code>.noi</code></td></tr>
+            <tr><td>Structures</td><td>No</td><td><code>STRUCT</code></td><td>Yes, shared labels</td><td>In C; assembly sections</td><td>In C; assembly areas</td></tr>
+            <tr><td>Notable features</td><td>Legacy syntax, 8-bit headers</td><td>3-pass, fake ops, virtual <code>DEVICE</code></td><td>LZ/ZX0/Exomizer, floats, Pasmo compatibility mode</td><td>BIOS-shaped CRT, <code>appmake</code></td><td>Optimizer, <code>--std-c99</code>, <code>__sdcccall(1)</code> from 4.2</td></tr>
+            <tr><td>Maintenance</td><td>Docs March 2022</td><td>August 2026, 512+ tests</td><td>Active v3.3 (September 2025), CPC-centered</td><td>Active; MSX wiki October 2026</td><td>Active; 4.6 recommended by MSXgl</td></tr>
+          </tbody>
+        </table>
+        <table class="api-table">
+          <caption>Decision record, one row per kit. The grounds are those of 7.2: license, linker, and
+          debug export.</caption>
+          <thead><tr><th>Kit</th><th>Verdict</th><th>Grounds</th></tr></thead>
+          <tbody>
+            <tr><td>Rasm</td><td>Chosen as assembler</td><td>MIT license, written in C, banks and on-the-fly LZ/ZX0/Exomizer crunch, symbol and breakpoint export with makefile dependencies, and a Pasmo compatibility mode that carries legacy sources over.</td></tr>
+            <tr><td>z88dk</td><td>Chosen as compiler driver, linker and packager</td><td>The only kit that speaks MSX end to end (<code>zcc +msx</code> emits <code>.cas</code>, <code>.dsk</code>, <code>.com</code>, ROM); <code>z80asm</code> supplies the linker Pasmo lacks, and <code>-crt0=</code> replaces the BIOS-shaped default CRT with <code>crt0_btron.asm</code>.</td></tr>
+            <tr><td>Pasmo</td><td>Rejected</td><td>GPL license cannot be vendored, no linker, no debugger-loadable symbol list, C++ host.</td></tr>
+            <tr><td>sjasmplus</td><td>Rejected</td><td>Strong <code>STRUCT</code> and <code>LABELSLIST</code>, but no MSX header flag and no linker, so it still requires <code>z80asm</code> beside it; Rasm removes one tool.</td></tr>
+            <tr><td>SDCC standalone</td><td>Rejected as the kit, kept as the front-end</td><td>A compiler rather than an MSX system: no MSX target, the author supplies <code>crt0</code>, and <code>sdasz80</code> is ASxxxx syntax. Its C99 conformance is required, and it is used through z88dk as <code>-compiler=sdcc -clib=sdcc_iy</code>.</td></tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section id="surface">
+        <h3>7.4 <code>btron_msx.inc</code>: the Compatibility Surface</h3>
+        <pre><code>        org     0x4000
+        db      "AB"
+        dw      start
+        dw      0,0,0,0,0,0
+
+        include "btron_msx.inc"
+start:
+        ld      hl,title
+        call    print          ; CHPUT loop
+        DBG_STR "b-system msx2+"
+        ret
+title:  db      "BTRON",0</code></pre>
+        <p>
+          <code>btron_msx.inc</code> is the only emulator-aware source in the kit, written once in Rasm
+          syntax. Pasmo-style <code>4000h</code> literals assemble under Rasm's Pasmo compatibility mode, so
+          legacy sources carry over without translation. The required macro contract:
+        </p>
+        <table class="api-table">
+          <caption>Macro contract. <span class="basis basis-norm">Normative</span>: the expansions are the
+          byte patterns tronMSX recognises, asserted by AV-3 and AV-7.</caption>
+          <thead><tr><th>Macro</th><th>Expansion</th><th>Recognised by</th></tr></thead>
+          <tbody>
+            <tr><td><code>print</code></td><td>BIOS <code>CHPUT</code> (0x00A2) loop through <code>CALSLT</code> when the program is not in page 0.</td><td>All three emulators, as ordinary BIOS calls.</td></tr>
+            <tr><td><code>DBG_STR s</code></td><td><code>ld d,d</code>, <code>jr $+2+len</code>, <code>db s,0</code>; optionally followed by <code>out (DBGPORT),a</code> with <code>DBGPORT equ 0xDC</code>.</td><td>blueMSX trace logger; openMSX <code>debugdevice</code> on port 0xDC; tronMSX debugger log, 8.4.1.</td></tr>
+            <tr><td><code>DBG_BRK</code></td><td><code>ld b,b</code>, <code>jr $+2</code>.</td><td>blueMSX debugger break; tronMSX instruction-boundary break (8.3).</td></tr>
+          </tbody>
+        </table>
+        <p>
+          The macro set uses only <code>org</code>, <code>equ</code>, <code>db</code>, <code>dw</code> and
+          plain Z80 mnemonics, so one file is valid under Rasm, under Pasmo compatibility mode, and in an
+          openMSX disassembly.
+        </p>
+      </section>
+
+      <section id="onebinary">
+        <h3>7.5 One Binary, Three Emulators</h3>
+        <table class="api-table">
+          <caption>The law applied to each artifact and debug idiom. Every column is a program as shipped;
+          the B-System column is <span class="basis basis-norm">Normative</span>.</caption>
+          <thead><tr><th>Artifact or idiom</th><th>openMSX</th><th>blueMSX</th><th>B-System window</th></tr></thead>
+          <tbody>
+            <tr><td>16 KiB or 32 KiB ROM with <code>AB</code> header</td><td>Cartridge</td><td>Cartridge</td><td>Primary slot, page 1</td></tr>
+            <tr><td><code>.com</code> on a directory or DSK</td><td>dir-as-disk</td><td>Disk image</td><td>Disk ROM from settings, drive A (later step)</td></tr>
+            <tr><td><code>--msx</code> BLOAD image</td><td>Disk or cassette</td><td>Disk or cassette</td><td>Cassette or disk child real-body</td></tr>
+            <tr><td><code>ld d,d</code> debug string</td><td>Ignored, unless paired with the port write</td><td>Trace logger</td><td>Debugger log window, 8.4.1</td></tr>
+            <tr><td><code>ld b,b</code> breakpoint</td><td>Ignored</td><td>Debugger break</td><td>Break at that PC, 8.3</td></tr>
+            <tr><td><code>out</code> to the debug port</td><td><code>-ext debugdevice</code></td><td>Ignored</td><td>Debugger log window, 8.4.1</td></tr>
+          </tbody>
+        </table>
+        <p>
+          A program includes no emulator-specific source. Only <code>btron_msx.inc</code> does, and every one
+          of its expansions is legal Z80 on all three targets.
+        </p>
+      </section>
+
+      <section id="packer">
+        <h3>7.6 toolchainMSX Layout, <code>msxpak</code>, Make Targets</h3>
+        <pre><code>toolchainMSX/                     (vendored: MIT + Clarified Artistic — no GPL in the tree)
+  rasm/            assembler, C, MIT; pasmo_compat mode
+  z88dk/           zcc driver, z80asm linker, appmake packager, MSX classic library
+  crt0_btron.asm   our startup: AB header at 0x4000, INIT80/INIT19/SHELL vectors,
+                   BIOS stub entry, static .DATA/.BSS load, no heap, no stdio
+  btron_msx.inc    7.4 macros (Rasm syntax; every expansion is legal Z80)
+  msxpak.c         B-System-authored tool: BMSX real-body wrapper
+  mssym.c          B-System-authored tool: Rasm/z88dk symbol artifacts -&gt; game.ttsym (8.4)</code></pre>
+        <p>
+          <code>appmake</code> writes the emulator formats, so <code>msxpak</code> does not duplicate them: it
+          wraps an existing artifact into the 64-byte BMSX header of Part 4 and nothing else. The record
+          format has one hand-written truth; the packaging formats are inherited from the kit.
+          <code>mssym</code> applies the same rule to symbols: it defines no symbol model of its own and
+          collapses the kit's two spellings — Rasm's symbol export and z88dk's link map — into the single
+          32-byte <code>tt_sym_t</code> record of <a href="#ttdebug">8.4</a>, which the debugger loads and
+          which openMSX's Symbol Manager can still read natively.
+        </p>
+        <pre><code>tools/msxpak.c  (C99, single file, no deps beyond libc)
+  msxpak rom   --in game.rom --out game.bmsx --name "Game" [--bios bios.msx2p]
+               ; verifies the AB header (entry 0x4000); writes the 64-byte BMSX header
+  msxpak com   --in game.com --out game.bmsx ... ; entry must be 0x0100 (kind=2)
+  msxpak cas   --in game.cas --out game.bmsx     ; validates TACS records (kind=4)
+  msxpak dump  --in game.bmsx                    ; prints the record; round-trip test input
+
+tools/mssym.c   (C99, single file)
+  mssym --rasm game.sym --z88dk game.map --out game.ttsym
+               ; 8,192-entry cap, sorted by pc, rejects duplicate pc+name, AV-11 input</code></pre>
+        <pre><code>Makefile (MSX section; TC = toolchainMSX):
+  msx-asm:    $(TC)/rasm msx/game.asm -o msx/game.bin -org 0x4000 \
+                  --symbols-out msx/game.sym --breakpoints-out msx/game.bp \
+                  --make-deps msx/game.d
+  msx-c:      $(TC)/zcc +msx -subtype=rom -compiler=sdcc -clib=sdcc_iy -Ostandard \
+                  -crt0=$(TC)/crt0_btron.asm -I$(TC) msx/game.c -o msx/game.rom
+  msx-rom:    msx-asm (or msx-c) && ../tools/msxpak rom --in msx/game.rom --out msx/game.bmsx
+  msx-dsk:    $(TC)/appmake +msx --type=dsk -b msx/game.com   # kind=2, later core
+  msx-sym:    ../tools/mssym --rasm msx/game.sym --z88dk msx/game.map --out msx/game.ttsym
+              # one symbol truth: game.ttsym feeds the tronMSX debugger (Part 8), the raw
+              # game.sym still loads into the openMSX Symbol Manager for cross-checks
+  msx-emu:    $(CC) -std=c99 src/emulators/msx/*.c ... -lSDL2 (POSIX host run, shipping shape)
+  msx-tt:     $(CC) -std=c99 -DMSX_TT_DEBUG src/emulators/msx/*.c \
+                  src/emulators/msx/tronmsx_tt.c src/emulators/msx/tronmsx_tt_wnd.c ...
+              # 8.5 debug shape: input log + checkpoint ring + symbol table + instruction hook,
+              # plus the 8.4.1 debugger windows and their log ring
+  msx-test:   build test_msx_body (AV-1/AV-2) + test_msx (AV-0/3..8) +
+              test_msx_tt (AV-9/AV-10/AV-12, needs msx-tt) + nm hygiene checks (AV-11) && run
+  msx-openmsx: openmsx -machine NV_MSX2PLUS -ext debugdevice -symbol msx/game.sym msx/game.rom
+  msx-clean:  rm msx/*.bin msx/*.rom msx/*.bmsx msx/*.sym msx/*.bp msx/*.d msx/*.ttsym</code></pre>
+        <p>
+          Flag spelling follows the installed Rasm and z88dk version. The normative contract is the artifact
+          each target emits: a file that satisfies the record law of 4.1 and boots under 3.2. When a future
+          version renames a flag, the recipe changes and the law does not.
+        </p>
+      </section>
+
+      <section id="chips">
+        <h3>7.7 Rewrite Sources &amp; License Fence</h3>
+        <p>
+          Rewrite sources are chosen so each unit can be expressed in C99 without importing a framework:
+          small C cores and the chip manuals are the sources to rewrite, and openMSX and blueMSX are
+          behaviour references. Their code does not enter the tree: openMSX is GPL, fMSX is non-commercial,
+          and blueMSX mixes BSD with GPL sound chips and a GPL disassembler.
+        </p>
+        <table class="api-table">
+          <caption>Rewrite sources by unit, with the license fact that decides each choice.</caption>
+          <thead><tr><th>Unit</th><th>Source</th><th>License</th><th>Use</th></tr></thead>
+          <tbody>
+            <tr><td>Z80</td><td><a href="https://github.com/superzazu/z80">superzazu/z80</a></td><td>MIT</td><td>One C99 core; passes zexdoc and zexall unmodified (AV-0). Instruction-cycle timing, which is the accuracy level 2.1 specifies.</td></tr>
+            <tr><td>Slot map</td><td><a href="https://github.com/libretro/blueMSX-libretro">libretro/blueMSX-libretro</a>, <code>Src/Board/MSX.c</code>, <code>Src/Memory/SlotManager.c</code></td><td>BSD for blueMSX-authored files; <code>V9938.c</code> is Alex Wulms freeware and <code>R800Dasm.c</code> originates in GPL openMSX</td><td>Layout reference for 1.2 and 1.3. Those two files are not copied.</td></tr>
+            <tr><td>Boot ROM</td><td><a href="https://cbios.sourceforge.io/">C-BIOS</a></td><td>BSD, redistributable</td><td>Default BIOS, so a cartridge boots without a copyrighted ROM. Settings still load <code>MSX2P.ROM</code> and <code>MSX2PEXT.ROM</code> when present.</td></tr>
+            <tr><td>VDP</td><td>Yamaha V9938 Technical Data Book, V9958 application manual, MSX Red Book chapter 2</td><td>Documentation</td><td>Register map (2.2), the 0x98/0x99 VRAM port family, modes 0–8 (2.3), sprites and palette. The renderer is written from these.</td></tr>
+            <tr><td>PSG</td><td>AY-3-8910 datasheet, optionally a short MIT or BSD AY core</td><td>Datasheet, or MIT/BSD</td><td>Three tones plus noise (2.4). MSX2+ FM is outside the first core.</td></tr>
+            <tr><td>PPI and keyboard</td><td>MSX Red Book, ports <code>0xA8</code>–<code>0xAB</code></td><td>Documentation</td><td>Slot select and keyboard matrix; the fixed matrix of 2.5 is sufficient.</td></tr>
+            <tr><td>Z80 fallback</td><td><a href="https://github.com/ggambetta/libz80">ggambetta/libz80</a></td><td>MIT</td><td>Used only if the superzazu generated tables conflict with the module shape; same library-not-application property.</td></tr>
+          </tbody>
+        </table>
+        <div class="callout callout-jpl">
+          <div class="callout-title">License fence</div>
+          These are references, not sources: openMSX (C++, Tcl, GPL — its VDP timing notes are consulted when
+          a game renders wrong), fMSX <code>MSX.c</code> and EMULib (the smallest full MSX2+ in C, a license
+          that cannot be relicensed into the B-System), blueMSX sound files that originate in openMSX
+          (<code>YM2413</code>, <code>YMF262</code>) or fMSX (<code>Fmopl.c</code>,
+          <code>Ymdeltat.c</code>), and brMSX (assembly, no C99 base). AV-8 and AV-11 assert the result: no
+          C++ symbol and no foreign license text in the module.
+        </div>
+        <p>
+          Required module shape, one file pair per chip, C99 only — no C++, no plugin system, no machine XML:
+        </p>
+        <pre><code>tronmsx.c   tronMSX top level: msx_init/reset/run_frame/blit; owns cycle counter and rings
+z80.c     superzazu-core shape, memory callbacks to slots.c
+slots.c   page map 1.2, ports 0xF7-0xFC, primary=BIOS/RAM/RAM/RAM fixed first core
+vdp.c     ports 0x88-0x8B, R0-R25, 128K VRAM, renderer 2.3, IRQ/NMI generators
+psg.c     register file, LFSR x^17+x^14+1, envelope shapes, PCM accumulator
+ppi.c     8255 decode 0x10-0x13 &amp; 0xA8-0xAB, keyboard matrix array, joystick bits
+bios.c    settings-key loader (bios.msx2p / msx2pext / disk / kanji), C-BIOS fallback
+kbd.c     matrix table (one generated array), KBD_SYNC snapshot per frame
+tronmsx_tt.c   time-travel instrument (Part 8): input log, checkpoint ring, restore and
+              headless replay, PC/page watch matching. The whole file is inside
+              #ifdef MSX_TT_DEBUG, so the shipping shape does not contain it and 5.3 holds
+tronmsx_tt_wnd.c  debugger windows (8.4.1): opn_wnd panels, menus and repaints. Also inside
+              #ifdef MSX_TT_DEBUG; depends on btron/wnd.h and on no other emulator unit</code></pre>
+      </section>
+
+      <!-- ═══════ Part 8 ═══════ -->
+      <section id="timetravel">
+        <h2>Part 8 — Time-Travel Debugger</h2>
+        <p>
+          B-MSX ships a frame-granular time-travel debugger: step backwards frame by frame, jump to any
+          frame inside the rewind window, stop on a PC breakpoint or a page watchpoint, and read the Z80,
+          VDP and PSG state at the historical instant. It runs on the same machine instance as the emulator,
+          in its own top-level BTRON windows (8.4.1), opened from the same real-body. Reverse execution is a
+          consequence of the machine model of Part 2 and the determinism law below, not a layer added on top
+          of it. Everything in this Part is normative for the debug shape;
+          <a href="#ttbudget">8.5</a> states what the shipping shape excludes.
+        </p>
+
+        <h3 id="tt-law">8.1 The Determinism Law (D1 … D7)</h3>
+        <p>The equation the debugger stands on:</p>
+        <pre><code>state(N+1) = step( state(N), input(N) )
+
+  step   == msx_run_frame()   — exactly T_PER_FRAME T, nothing else (5.1, 5.2)
+  input  == the published snapshot in the input slot (5.2), logged as 16 B per step (8.2)
+  state  == RAM + VRAM + Z80 + VDP + PSG + PPI + slot map + timers: the checkpoint of 8.2</code></pre>
+        <table class="api-table">
+          <caption>The seven laws. All are <span class="basis basis-norm">Normative</span> and bind the core
+          from its first commit; the measurement column names the AV-9 check that attacks each one.</caption>
+          <thead><tr><th>ID</th><th>Law</th><th>Statement</th><th>Measured by</th></tr></thead>
+          <tbody>
+            <tr><td>D1</td><td>No host clock inside <code>step</code></td><td>The pacing loop MAY read wall time to decide when to run the next frame; that reading MUST NOT change how many T the frame runs. Catch-up is two consecutive steps of <code>T_PER_FRAME</code> (5.2).</td><td>Grep and <code>nm</code> on step-path units for <code>clock_gettime</code> and <code>gettimeofday</code>; run (c) of AV-9 with injected pacing jitter.</td></tr>
+            <tr><td>D2</td><td>No randomness</td><td><code>rand</code>, <code>random</code>, <code>arc4random</code> and time-seeded state MUST NOT appear in a step-path translation unit. The only pseudo-random source in the machine is the PSG noise LFSR, which starts at 0x0ACE (2.4).</td><td>Same hygiene grep; AV-5 compares the LFSR state after 10⁶ ticks against the reference sequence.</td></tr>
+            <tr><td>D3</td><td>No undefined state</td><td><code>msx_init</code> zeroes every array it owns before the first step, and <code>msx_reset</code> re-establishes the complete reset state of 3.2. First-core RAM initializes to 0x00; the byte used is recorded in the checkpoint header (8.2), so a golden file names its own initialization. Unmapped bus reads return 0xC0 (1.3).</td><td>The RAM-init field of every captured header, and AV-9's first-step full-state diff.</td></tr>
+            <tr><td>D4</td><td>Integer-only step</td><td>No <code>float</code>, <code>double</code> or libm call may appear on a path that reaches machine state. The PSG resampler is 32.32 fixed-point (2.4) and the renderer is integer (2.3). Host floating-point environment is invisible state, and it would leak into samples and pixels and defeat replay equality.</td><td><code>nm</code> and link map: zero libm references in the module (AV-9).</td></tr>
+            <tr><td>D5</td><td>Back-pressure never reaches hardware</td><td>B-Audio telemetry MAY change how many PCM frames are handed to the host; it MUST NOT change a PSG register, a phase accumulator or the LFSR. A <code>cmd_ring</code> overflow is a host-timed event, so it is recorded in the input log and replay sees what the live run saw. The log, not the queue, is the truth.</td><td>The <code>drops</code> byte of each input record; AV-9 run (c) asserts only the drop counters differ.</td></tr>
+            <tr><td>D6</td><td>Inputs are level snapshots</td><td>Keyboard and joystick enter the machine only through the published input slot, read once per step and ticked by <code>KBD_SYNC</code> (2.5, 5.2). UI events mutate the slot; <code>step</code> reads it, and the read is what gets logged. Host-timed edges are not inputs.</td><td>AV-7 matrix round-trip through <code>SNSMAT()</code>; the replayed input log of AV-9.</td></tr>
+            <tr><td>D7</td><td>ROM and BIOS are hashed, read-only inputs</td><td><code>msx_load_rom</code> and the BIOS loader compute FNV-1a 64 over the exact bytes mapped into the machine (offset basis <code>14695981039346656037ULL</code>, prime <code>1099511628211ULL</code>, byte at a time) and expose it as <code>msx_body_hash()</code> (5.1). Writes to ROM are discarded (1.2), so the hash cannot drift inside a run.</td><td>The header hash of 8.2 compared on restore; AV-10's stale-checkpoint test returns <code>MSX_ERR_TT_STALE</code>.</td></tr>
+          </tbody>
+        </table>
+        <p>
+          A frame MUST be steppable headless: no window, no SDL, no plane write, PCM discarded. That is what
+          replay is. Presentation stays outside <code>step</code> by construction, which 5.1 guarantees by
+          keeping blit and PCM submission as separate calls.
+        </p>
+      </section>
+
+      <section id="tt-log">
+        <h3>8.2 Input Log, Checkpoints and the Replay Algorithm</h3>
+        <p>
+          Two static structures make the law rewinding. The input log records the machine's entire
+          host-visible history in 16 bytes per frame; the checkpoint ring stores full machine snapshots, so
+          rewind is a restore and not a re-simulation from power-on.
+        </p>
+        <pre><code>typedef struct {            /* one record per EXECUTED step (not per presented frame) */
+    uint8_t  kbd[10];       /* the whole 8x10 matrix as the step sees it (2.5), 80 bits */
+    uint8_t  joy;           /* TRGA / TRGB / steering bits, level snapshot (2.5) */
+    uint8_t  cmd;           /* cmd_ring byte consumed this step: RESET|PAUSE|RESUME|QUIT|none */
+    uint8_t  drops;         /* bit0 pcm drop, bit1 cmd drop — D5: host-timed events are data */
+    uint8_t  pad[3];        /* zero; keeps the record 16 B and the row math a shift */
+} tt_input_t;               /* sizeof == 16; static assert in tronmsx_tt.h */
+
+input log: 65,536 records × 16 B = 1,048,576 B (exactly 1 MiB)
+coverage:  65,536 frames / 60 Hz = 1,092 s = 18 min 12 s of inputs</code></pre>
+        <p>
+          A checkpoint is the whole machine, fixed-size, and its header is as normative as the BMSX record of
+          4.1: byte offsets pinned by <code>tt_state.h</code> static asserts, all fields little-endian, a
+          256-byte header followed by RAM and then VRAM.
+        </p>
+        <table class="api-table">
+          <caption>Checkpoint header, 256 B, followed by the RAM and VRAM images.
+          <span class="basis basis-norm">Normative</span>: every offset, size and field is static-asserted,
+          and <code>TT_CHECKPOINT_SIZE == 256 + 65,536 + 131,072 == 196,864 B</code>.</caption>
+          <thead><tr><th>Offset</th><th>Size</th><th>Field</th><th>Contents</th></tr></thead>
+          <tbody>
+            <tr><td><code>0</code></td><td>4</td><td><code>magic</code></td><td><code>'BTTC'</code>.</td></tr>
+            <tr><td><code>4</code></td><td>2</td><td><code>version</code></td><td>1.</td></tr>
+            <tr><td><code>6</code></td><td>2</td><td><code>flags</code></td><td>Bits 0–7 hold the RAM init byte used by D3 (<code>0x00</code> on the first core); the rest are reserved and 0.</td></tr>
+            <tr><td><code>8</code></td><td>8</td><td><code>frame</code></td><td>Frame index the snapshot belongs to.</td></tr>
+            <tr><td><code>16</code></td><td>8</td><td><code>cycles</code></td><td><code>msx_total_cycles()</code> at capture.</td></tr>
+            <tr><td><code>24</code></td><td>8</td><td><code>body_hash</code></td><td><code>msx_body_hash()</code>, the D7 staleness guard.</td></tr>
+            <tr><td><code>32</code></td><td>64</td><td><code>z80</code></td><td>AF, AF′, BC, DE, HL, BC′, DE′, HL′, IX, IY, SP, PC (12 × <code>u16</code>); I, R, IM, IFF1, IFF2, halted (6 × <code>u8</code>); 34 B zero pad.</td></tr>
+            <tr><td><code>96</code></td><td>40</td><td><code>vdp</code></td><td>R0–R25 (26 B), status (1 B), write and read 17-bit addresses (2 × <code>u32</code>), data latch (1 B), read/write toggle (1 B), line counter (<code>u16</code>), 1 B pad.</td></tr>
+            <tr><td><code>136</code></td><td>48</td><td><code>psg</code></td><td>R0–R15 (16 B), tone A/B/C, noise and envelope phase accumulators (5 × <code>u32</code>), LFSR (<code>u32</code>), envelope counter and shape (2 × <code>u16</code>), 4 B reserved.</td></tr>
+            <tr><td><code>184</code></td><td>16</td><td><code>slots_ppi</code></td><td>0xF8–0xFC latches, port B and C direction and value, row select, joystick bits.</td></tr>
+            <tr><td><code>200</code></td><td>24</td><td><code>timers</code></td><td>NMI countdown, IRQ state and line, VDP flag latch, reserved.</td></tr>
+            <tr><td><code>224</code></td><td>24</td><td><code>reserved</code></td><td>Zero.</td></tr>
+            <tr><td><code>248</code></td><td>4</td><td><code>crc32</code></td><td>CRC32 over <code>header[0..247]</code> with this field zero, plus the RAM and VRAM images.</td></tr>
+            <tr><td><code>252</code></td><td>4</td><td><code>seq</code></td><td>Checkpoint sequence number.</td></tr>
+            <tr><td><code>256</code></td><td>65,536</td><td><code>ram</code></td><td>RAM image, 64 KiB (1.2).</td></tr>
+            <tr><td><code>65,792</code></td><td>131,072</td><td><code>vram</code></td><td>VRAM image, 128 KiB (2.2).</td></tr>
+          </tbody>
+        </table>
+        <p>
+          ROM and BIOS bytes are not in the snapshot: D7 makes them inputs identified by hash, so a restore
+          against a different body is refused rather than silently wrong. Everything a game can observe is
+          inside — the palette and the sprite attribute and name tables live in VRAM (2.3), so the 131,072-byte
+          block carries them with no extra header fields. The ring holds
+          <code>TT_RING_DEPTH == 64</code> checkpoints, <code>64 × 196,864 == 12,599,296 B</code> (12.0 MiB).
+          Three interval profiles trade coverage against seek distance; the memory is identical in all three
+          and only the arithmetic of the rewind window changes.
+        </p>
+        <table class="api-table">
+          <caption>Interval profiles, set with <code>tt_set_profile()</code>.
+          <span class="basis basis-norm">Normative</span>; coverage against the log is the AV-10 static
+          assert.</caption>
+          <thead><tr><th>Profile</th><th>Interval</th><th>Coverage</th><th>Worst seek cost</th><th>Purpose</th></tr></thead>
+          <tbody>
+            <tr><td><code>TT_STEP</code></td><td>1 frame</td><td>64 frames = 1.07 s</td><td>Restore only, 0 replayed frames</td><td>Interactive step-back, the default key binding.</td></tr>
+            <tr><td><code>TT_WINDOW</code></td><td>30 frames</td><td>1,920 frames = 32.0 s</td><td>Restore plus 29 headless frames</td><td>Default profile of the debug harness.</td></tr>
+            <tr><td><code>TT_SESSION</code></td><td>600 frames</td><td>38,400 frames = 640 s</td><td>Restore plus 599 headless frames</td><td>Long sessions; MAY be selected, seeks cost seconds.</td></tr>
+          </tbody>
+        </table>
+        <p>
+          Invariant, static-asserted and measured by AV-10: the deepest profile stays inside the input log,
+          38,400 ≤ 65,536 frames, so a seek inside the rewind window always has its inputs available. A later
+          revision that widens an interval widens the log in the same commit.
+        </p>
+        <p>Restore and replay, in order:</p>
+        <ol>
+          <li>Pick the newest checkpoint <code>K ≤ target</code>; verify header magic, version,
+            <code>CRC32</code> and <code>msx_body_hash()</code> before touching the machine.
+            A failed verify leaves the machine exactly as it was and returns
+            <code>MSX_ERR_TT_STALE</code>; a target older than the ring head returns
+            <code>MSX_ERR_TT_RANGE</code>. A partial application is not a permitted outcome.</li>
+          <li>Copy the 65,536-byte and 131,072-byte blocks back, then the 256-byte header fields into their
+            live variables. This runs on MSX_CORE at a frame boundary, the pause rule of 8.3.</li>
+          <li>Flush <code>pcm_ring</code> and reset the PSG phase accumulators to the restored values, so no
+            sound from the discarded future plays and the next frame's PCM is the historical one.</li>
+          <li>Replay forward from <code>K</code> to the target: for each frame feed
+            <code>tt_input_log[frame]</code> into the machine and run exactly one
+            <code>msx_run_frame</code>-equivalent step, headless: no blit, no PCM submit, no pacing sleep.</li>
+          <li>Render once from the restored VRAM to present the target frame. Rendering is derived from VRAM
+            state and not from CPU execution, so a single-frame <code>TT_STEP</code> back needs no replay;
+            that is the 8 ms budget of 8.5.</li>
+        </ol>
+      </section>
+
+      <section id="ttapi">
+        <h3>8.3 <code>include/emulators/tronmsx_tt.h</code></h3>
+        <pre><code>#define TT_INPUT_SIZE        16
+#define TT_CHECKPOINT_SIZE   196864u
+#define TT_RING_DEPTH        64
+#define TT_LOG_FRAMES        65536u
+#define TT_MAX_BREAKPOINTS   16
+#define TT_MAX_WATCHPOINTS   16
+#define TT_MAX_SYMBOLS       8192
+
+typedef struct { uint64_t frame; uint32_t seq; uint8_t hash_ok; uint8_t present; } tt_mark_t;
+
+typedef struct {
+    uint8_t  z80[64];       /* checkpoint header block 32..95, 8.2 */
+    uint8_t  vdp[40];       /* block 96..135: R0-R25, status, addresses, latch, line */
+    uint8_t  psg[48];       /* block 136..183: R0-R15, accumulators, LFSR, envelope */
+    uint8_t  slots_ppi[16]; /* block 184..199: 0xF8-0xFC latches, PPI B/C, row select, joystick */
+    uint64_t frame;         /* header offset 8 */
+    uint64_t cycles;        /* header offset 16 */
+} tt_state_t;              /* 184 B == header blocks 32..199 as one contiguous span (168 B) plus
+                              frame and cycles re-read from header offsets 8 and 16. Block 200..223
+                              is not exposed here; no panel reads it. */
+
+int      tt_attach(void);                          /* MSX_OK | MSX_ERR_TT_STATE (no instance) */
+void     tt_detach(void);
+int      tt_set_profile(int profile);              /* TT_STEP | TT_WINDOW | TT_SESSION */
+int      tt_step_back(uint32_t frames);            /* frames == 1 is the interactive case */
+int      tt_goto_frame(uint64_t frame);            /* oldest logged .. current, else MSX_ERR_TT_RANGE */
+int      tt_step_forward(void);                    /* re-run the next logged frame */
+uint64_t tt_current_frame(void);
+int      tt_capture(uint8_t *dst, uint32_t cap);   /* cap &gt;= TT_CHECKPOINT_SIZE; golden files */
+int      tt_restore(const uint8_t *src, uint32_t len); /* validate-then-apply, 8.2 step 1 */
+int      tt_state(tt_state_t *out);                /* Z80 + VDP R0-R25 + PSG R0-R15 + ports */
+int      tt_breakpoint_add(uint16_t pc);           /* host-side PC match, &lt;= 16 */
+int      tt_breakpoint_del(int index);
+int      tt_watchpoint_add(uint8_t page, uint16_t offset, uint8_t rw); /* 1=read 2=write */
+const tt_input_t *tt_input_window(uint64_t first, uint64_t *count);    /* read-only view */
+
+typedef enum { TT_WIN_REGISTERS, TT_WIN_DISASM, TT_WIN_MEMORY, TT_WIN_VRAM,
+               TT_WIN_PSG, TT_WIN_SYMBOLS, TT_WIN_BREAKPOINTS, TT_WIN_LOG,
+               TT_WIN_COUNT } tt_win_t;                               /* 8.4.1 */
+
+int   tt_window_open(tt_win_t which);        /* opn_wnd(), idempotent */
+int   tt_window_close(tt_win_t which);       /* cls_wnd(), never touches the machine */
+BOOL  tt_window_is_open(tt_win_t which);
+const tt_log_t *tt_log_window(uint32_t *count);  /* read-only view of the log ring, 8.4.1 */</code></pre>
+        <p>
+          Rules: the file compiles to nothing without <code>MSX_TT_DEBUG</code>, so the shipping bound of 5.3
+          is untouched and AV-11 checks the absence of the symbols. Every mutating call runs on MSX_CORE at a
+          frame boundary: the caller sets <code>msx_pause(TRUE)</code> and the restore executes on the core
+          task, because a debugger that inspects a half-stepped machine yields unreadable state. A call that
+          arrives mid-frame returns <code>MSX_ERR_TT_STATE</code> instead of queueing. Functions are total,
+          arrays bounded, heap zero, as in Part 0: a call mutates machine state only when it returns
+          <code>MSX_OK</code>.
+        </p>
+      </section>
+
+      <section id="ttdebug">
+        <h3>8.4 Breakpoints, Watchpoints, Symbols</h3>
+        <p>
+          toolchainMSX (7.2) emits a symbol artifact per build: Rasm's symbol export for assembly and z88dk's
+          map for C. Because the two file spellings differ, <code>mssym</code> (7.6) normalizes both into one
+          fixed record, and the debugger reads only that record.
+        </p>
+        <pre><code>typedef struct {            /* 32 B, one hand-written truth for label -&gt; address */
+    uint16_t pc;            /* Z80 address */
+    uint8_t  page;          /* 16 KiB page index 0..3; 0 for the first core, MegaROM later */
+    uint8_t  kind;          /* 0=label 1=code 2=data */
+    char     name[28];      /* NUL-terminated */
+} tt_sym_t;                 /* table: 8,192 × 32 B = 262,144 B, static, sorted by pc */</code></pre>
+        <table class="api-table">
+          <caption>The three debugger instruments and their laws.
+          <span class="basis basis-norm">Normative</span>; each row is asserted by the named vector.</caption>
+          <thead><tr><th>Instrument</th><th>Law</th><th>Why</th></tr></thead>
+          <tbody>
+            <tr><td>Breakpoints</td><td>Match, never patch. The debug shape exposes an instruction-boundary hook inside the step loop; the hook's PC is compared against at most 16 entries. Writing <code>0xFF</code> into a ROM page to trap a PC, and <code>ld b,b</code> patching, are prohibited.</td><td>Patching violates D7 and corrupts the history under examination. The hook costs a bounded number of compares per instruction, which is why it exists only in the debug shape (8.5).</td></tr>
+            <tr><td>Watchpoints</td><td>Keyed by <code>(page, offset)</code>, never by absolute address, and matched on the bus access against the mapped page index.</td><td>In MSX an address is a slot decision (1.2, 1.3): <code>0x8000</code> is whatever page 2 currently maps. Matching the mapped page keeps a watch valid across bank switching.</td></tr>
+            <tr><td>Symbols</td><td><code>game.ttsym</code> is the one artifact; the same file loads into the openMSX Symbol Manager for cross-checks.</td><td>A disputed address means the same thing in both tools (AV-11 re-reads the table and compares against the Rasm and z88dk artifacts).</td></tr>
+            <tr><td>In-program instruments</td><td><code>DBG_STR</code> and <code>DBG_BRK</code> (7.4) emit log records into the log ring of 8.4.1, stamped with the frame number that executed them.</td><td>Every log line names a frame, so a line is a seek request: the log window rewinds the machine to the instant a line was emitted.</td></tr>
+          </tbody>
+        </table>
+
+        <h4 id="ttwindow">8.4.1 Debugger Windows (SDI)</h4>
+        <p>
+          Each debugger panel is an independent top-level BTRON window, created with
+          <code>opn_wnd()</code> (<a href="../b-book/window.html">window</a>) and never a pane inside the
+          emulator window. This is the SDI shape of the CodeWarrior class: the emulator window shows the
+          machine, and the register, disassembly, memory, VRAM, PSG, symbol, breakpoint and log panels are
+          separate windows the developer opens, moves, stacks and closes on their own. All of them address
+          the same machine instance.
+        </p>
+        <table class="api-table">
+          <caption>The eight panels, listed in opening order. Titles, client sizes and contents are
+          <span class="basis basis-norm">Normative</span>. Every window is created with
+          <code>WND_ATTR_TITLE | WND_ATTR_BORDER | WND_ATTR_SLIDING_TAB | WND_ATTR_CLOSE</code> by
+          <code>tronmsx_tt_wnd.c</code>.</caption>
+          <thead><tr><th>Window</th><th>Title</th><th>Client</th><th>Contents</th><th>Data source</th></tr></thead>
+          <tbody>
+            <tr><td>Registers</td><td><code>MSX Registers</code></td><td>256×232</td><td>Z80 AF, AF′, BC, DE, HL, BC′, DE′, HL′, IX, IY, SP, PC, I, R, IM, IFF1, IFF2, halted; VDP R0–R25; PSG R0–R15.</td><td><code>tt_state()</code></td></tr>
+            <tr><td>Disassembly</td><td><code>MSX Disassembly</code></td><td>512×320</td><td>32 lines from the current PC, opcode bytes and mnemonic from the static table, symbol name when the address is in <code>tt_sym_t</code>, the active PC marked.</td><td>ROM and RAM through the slot map, <code>tt_state()</code></td></tr>
+            <tr><td>CPU memory</td><td><code>MSX Memory</code></td><td>384×320</td><td>20 lines of 16 bytes, hex and single-quote text, page and offset selector, watchpoint hits marked.</td><td><code>tt_state()</code>, slot map</td></tr>
+            <tr><td>VRAM viewer</td><td><code>MSX VRAM</code></td><td>512×424</td><td>Pattern table as a tile grid, name and attribute tables as colour cells, and the bitmap screens through the 2.3 renderer.</td><td>VRAM, palette</td></tr>
+            <tr><td>PSG</td><td><code>MSX PSG</code></td><td>256×160</td><td>Register table with tone period, noise, mixer bits and the envelope shape decoded as in 2.4.</td><td><code>tt_state()</code></td></tr>
+            <tr><td>Symbols</td><td><code>MSX Symbols</code></td><td>384×320</td><td><code>tt_sym_t</code> rows sorted by pc, filtered by page and kind; selecting a row moves the disassembly window to that address.</td><td><code>tt_sym_t</code></td></tr>
+            <tr><td>Breakpoints</td><td><code>MSX Breakpoints</code></td><td>384×200</td><td>16 breakpoint rows and 16 watchpoint rows with symbol names, add, clear, and the hit counter.</td><td><code>tt_breakpoint_*()</code>, <code>tt_watchpoint_add()</code></td></tr>
+            <tr><td>Log</td><td><code>MSX Log</code></td><td>512×240</td><td>Log ring lines with their frame number, emitting PC resolved through the symbol table; selecting a line seeks to that frame.</td><td>Log ring, <code>tt_goto_frame()</code></td></tr>
+          </tbody>
+        </table>
+        <p>
+          Opening and closing: the emulator window's Debug menu lists the eight panels and marks the open
+          ones; choosing an entry calls <code>tt_window_open()</code>, which calls <code>opn_wnd()</code> and
+          places the window in the manager's z-order like any other window. Closing a panel calls
+          <code>cls_wnd()</code> and changes nothing in the machine. There is no modal dialog in the debugger
+          and no panel is a child of another: overlap, stacking and the compact sliding tab behave exactly as
+          they do for application windows. <code>opn_wnd()</code> takes the outer frame, so each call passes its
+          Client size plus 8 px in width and plus 36 px in height (the 28 px title band of
+          <code>WND_TITLE_HEIGHT</code> plus the 4 px border on each side), and the window manager recomputes
+          the client rectangle from those attributes.
+        </p>
+        <table class="api-table">
+          <caption>Window laws. <span class="basis basis-norm">Normative</span>, and the subject of the
+          AV-7 and AV-10 observer steps.</caption>
+          <thead><tr><th>Law</th><th>Statement</th></tr></thead>
+          <tbody>
+            <tr><td>One timeline</td><td>A seek, step, run, breakpoint or watchpoint request issued from any panel becomes one <code>cmd_ring</code> entry. The debug shape adds the command bytes <code>TT_SEEK</code>, <code>TT_STEP_BACK</code>, <code>TT_STEP_FWD</code>, <code>TT_GOTO</code>, <code>TT_BP_ADD</code>, <code>TT_BP_DEL</code> and <code>TT_WP_ADD</code> above the core set of 5.2, at values 0x10 and up. They execute on MSX_CORE at a frame boundary (8.3).</td></tr>
+            <tr><td>One repaint per step</td><td>After a step, seek or restore completes, MSX_UI marks every open panel dirty and repaints it with <code>inval_wnd()</code>. A panel never reads machine memory directly; it renders from <code>tt_state()</code>, <code>tt_input_window()</code> and the VRAM view of the 2.3 renderer.</td></tr>
+            <tr><td>Snapshot only</td><td><code>tt_state()</code> returns the state at the last completed step, so an open panel cannot observe a half-stepped machine, whether the core is running or paused.</td></tr>
+            <tr><td>Pause on manipulate</td><td>A step or seek command pauses the machine before it restores (8.3). Closing panels never resumes or pauses the machine; the Run and Pause menu items own that state.</td></tr>
+            <tr><td>Keyboard isolation</td><td>Debugger windows consume host keys for their own navigation and MUST NOT write the input slot. The MSX keyboard matrix (2.5) is fed only while the emulator window is focused, so scrolling the disassembly never moves a sprite.</td></tr>
+            <tr><td>No new channel</td><td>The panels use the existing UI task, command ring and input slot. No panel introduces a second control port, socket or thread, and the module allocates nothing for a panel: the window itself comes from the window layer, as it does for every window.</td></tr>
+            <tr><td>Bounded paint</td><td>A panel paints at most its visible rows: 32 disassembly lines, 20 memory lines, 128 tiles, 256 log lines. Its repaint budget is 2 ms, measured separately from the 8 ms restore budget of 8.5.</td></tr>
+          </tbody>
+        </table>
+        <pre><code>typedef struct {                 /* one static record per open panel, tronmsx_tt_wnd.c */
+    uint8_t   which;             /* TT_WIN_REGISTERS .. TT_WIN_LOG, 0..7 */
+    uint8_t   open;              /* 0 after cls_wnd, never freed */
+    int16_t   scroll;            /* first visible row in the panel's own units */
+    int16_t   caret;             /* selected row, -1 when none */
+    uint16_t  page;              /* memory and VRAM views: selected page or table base */
+    uint16_t  offset;
+    WND      *wnd;               /* the opn_wnd() handle */
+    uint8_t   dirty;
+    uint8_t   pad[13];
+} tt_view_t;                     /* sizeof == 32; static assert in tronmsx_tt_wnd.c */
+
+typedef struct {                 /* one log line, written by the step-path hook */
+    uint64_t frame;              /* the step that emitted it */
+    uint16_t pc;                 /* emitting PC, resolved through tt_sym_t on paint */
+    uint8_t  kind;               /* 0=DBG_STR 1=DBG_BRK 2=pcm drop 3=cmd drop 4=bp hit */
+    uint8_t  len;                /* text bytes, 0..20 */
+    char     text[20];
+} tt_log_t;                      /* sizeof == 32; ring of 256 records == 8,192 B */</code></pre>
+        <p>
+          Debugger-window storage inside the module is 8 × 32 B for the <code>tt_view_t</code> records
+          (256 B) plus the 8,192 B log ring: 8,448 B of static <code>.bss</code>, counted in 8.5. Each open
+          panel also costs the window layer one <code>WND</code> descriptor (<code>sizeof(WND)</code>, 184 B
+          on the 64-bit host) and a client pixmap of 2 bytes per pixel — 1,854,912 B with all eight panels
+          open. That memory belongs to the window
+          manager exactly as it does for the emulator window and for every application window, and it sits
+          outside the module's static bound. No panel holds a copy of machine memory, and the log ring is the
+          only debugger structure that outlives a repaint; it wraps at 256 lines.
+        </p>
+      </section>
+
+      <section id="ttbudget">
+        <h3>8.5 Build Shapes and the Rewind Latency Budget</h3>
+        <table class="api-table">
+          <caption>The two shapes. Static sizes are <span class="basis basis-norm">Normative</span> and
+          asserted by AV-11; the 16 MiB ceiling is <span class="basis basis-cal">Calibrable</span>.</caption>
+          <thead><tr><th>Shape</th><th>Build</th><th>Static memory</th><th>Contains</th></tr></thead>
+          <tbody>
+            <tr><td>Shipping window</td><td><code>make msx-emu</code></td><td>262,296 B core statics against the 393,216 B bound (5.3)</td><td>No <code>tronmsx_tt.o</code>, no <code>tronmsx_tt_wnd.o</code>, no hook, no rings.</td></tr>
+            <tr><td>Debug harness</td><td><code>make msx-tt</code> (<code>TT=1</code>)</td><td>262,296 + 1,048,576 + 12,599,296 + 262,144 + 8,448 = 14,182,760 B (13.5 MiB), ceiling ≤ 16 MiB</td><td>Input log, checkpoint ring, symbol table, the eight debugger windows and their log ring. The instruction hook is code in the step path and adds no statics.</td></tr>
+          </tbody>
+        </table>
+        <p>
+          The arithmetic AV-11 asserts: input log <code>65,536 × 16 = 1,048,576</code>; checkpoint ring
+          <code>64 × 196,864 = 12,599,296</code>; symbol table <code>8,192 × 32 = 262,144</code>; debugger
+          windows <code>8 × 32 + 8,192 = 8,448</code>; and the unchanged 262,296 B core. Every byte of that
+          total is compile-size static: the debugger takes no exemption from the no-heap law, it has a larger
+          <code>.bss</code>. The window layer's own cost for the panels, one <code>WND</code> descriptor and a
+          client pixmap per open window, is the heap any window already takes and sits outside this bound
+          (8.4.1). The harness is a host-side instrument of the cross-dev kit, so it consumes no B-Media plane
+          budget and the Part 6 accounting is unaffected.
+        </p>
+        <table class="api-table">
+          <caption>Rewind latency budget. The throughput figures are
+          <span class="basis basis-cal">Calibrable</span> measurements pinned by AV-10; the budgets are
+          <span class="basis basis-norm">Normative</span>. Step-back of one frame in <code>TT_STEP</code> is
+          validate (CRC32 over 196,864 B plus an 8-byte hash compare) + restore (memcpy 196,864 B) + one
+          render pass from VRAM.</caption>
+          <thead><tr><th>Quantity</th><th>Value</th><th>Basis of the number</th></tr></thead>
+          <tbody>
+            <tr><td>Desktop restore work</td><td>≈ 0.55 ms</td><td>At ≥ 1.5 GB/s copy and ≥ 500 MB/s CRC on the POSIX host.</td></tr>
+            <tr><td>Step-back budget</td><td>≤ 8 ms end-to-end</td><td>Includes the Registers panel repaint. This is what keeps stepping responsive.</td></tr>
+            <tr><td>Panel repaint budget</td><td>≤ 2 ms</td><td>Visible rows only, 8.4.1; measured separately from the restore budget.</td></tr>
+            <tr><td>Headless replay floor</td><td>≥ 2,000 frames/s desktop, ≥ 600 frames/s on a Pi 400 class target</td><td>20× the AV-8 real-time requirement, on the same instruction-cost model.</td></tr>
+            <tr><td><code>TT_WINDOW</code> worst seek</td><td>29 replayed frames ≈ 15 ms desktop, ≈ 48 ms small target</td><td>Restore plus replay at the floor above.</td></tr>
+            <tr><td><code>TT_SESSION</code> worst seek</td><td>599 frames ≈ 0.3 s desktop, ≈ 1 s small target</td><td>599 replayed frames at the headless floor above; one <code>tt_goto_frame</code> call, not a keystroke-rate operation.</td></tr>
+          </tbody>
+        </table>
+        <p>
+          If a target cannot reach the replay floor, its interval profile is narrowed. The budgets and the
+          snapshot format do not change.
+        </p>
+      </section>
+
+      <section id="ttnongoals">
+        <h3>8.6 Non-goals</h3>
+        <table class="api-table">
+          <caption>What the debugger excludes, and the reason. <span class="basis basis-norm">Normative</span>.</caption>
+          <thead><tr><th>Excluded</th><th>Reason</th></tr></thead>
+          <tbody>
+            <tr><td>Instruction-granular reverse</td><td>The unit of history is the frame. Per-instruction pause exists (8.4); per-instruction undo does not. 60 snapshots per second of 196,864 B is 11.8 MB/s of ring traffic, so the memory arithmetic rules it out at every revision.</td></tr>
+            <tr><td>Rewind of host-visible effects</td><td>PCM already in the B-Audio queue is flushed and not reversed; plane history beyond the triple buffer is gone; window state — menus and other windows — is not machine state and is never restored.</td></tr>
+            <tr><td>Persistence into the real-body</td><td>A BMSX record is a program (4.1), not a save state. Checkpoint files live in the kit's build directory, are not child real-bodies, and are not shipped with a program. A save-state feature would need its own AV vector and its own rule about the D7 hash.</td></tr>
+            <tr><td>A second machine or an external protocol</td><td>One machine instance per process (5.1), and no gdb stub or remote wire protocol: the debugger is the B-MSX window set of 8.4.1. A cycle-level dispute goes to openMSX as the oracle (7.1), which the one-binary law (7.5) makes possible with the same ROM.</td></tr>
+            <tr><td>R800, MSX-Audio, MegaROM banks and disk state in the snapshot</td><td>Those units are outside the first core (Part 0). Adding one adds header fields and its own AV delta; the reserved runs at 200 and 224 exist so the change is additive and never a renumbering.</td></tr>
+          </tbody>
+        </table>
+      </section>
+
+      <!-- ═══════ Part 9 ═══════ -->
+      <section id="tests">
+        <h2>Part 9 — Acceptance Tests</h2>
+        <p>Each vector is automated host-side
+        (<code>verify/tests/test_msx.c</code> with <code>make msx-test</code>, and
+        <code>verify/tests/test_msx_tt.c</code> for the debug shape) or names its observer step. AV-0 … AV-8
+        gate the core; AV-9 … AV-12 gate the time-travel shape, the debugger windows, and kit and build-shape
+        hygiene. A vector MUST NOT be waived by declaring its feature out of scope: scope lives in Part 0.</p>
+        <table class="api-table">
+          <caption>Acceptance vectors. The measurement column names the one decisive observation for each
+          vector.</caption>
+          <thead><tr><th>ID</th><th>Vector</th><th>Decisive measurement</th></tr></thead>
+          <tbody>
+            <tr><td>AV-0</td><td>CPU</td><td>The superzazu-shaped core passes <code>zexdoc</code> and <code>zexall</code> unmodified, 0 failures.</td></tr>
+            <tr><td>AV-1</td><td>BMSX codec</td><td>Static assert <code>sizeof(b_msx_body) == 64</code>; <code>msxpak</code> round-trip writes and reads every field of the 4.1 table; each validation rule returns exactly its error code, table-driven over 12 negatives.</td></tr>
+            <tr><td>AV-2</td><td>Kind law</td><td><code>kind=1</code> with a corrupt <code>'AB'</code> ⇒ <code>MSX_ERR_HDR</code>; <code>kind=2</code> with <code>entry ≠ 0x0100</code> ⇒ <code>MSX_ERR_ENTRY</code>; <code>kind=4</code> non-TACS ⇒ <code>MSX_ERR_HDR</code>; a first-core load of <code>kind=2/3/4</code> ⇒ <code>MSX_ERR_KIND</code> with a rendered message and no hang.</td></tr>
+            <tr><td>AV-3</td><td>Boot trace</td><td>32 KiB test ROM: <code>INIT80</code> is called through vector 4002h and PC reaches its entry within 120,000 T; the RST/<code>CALSLT</code> path to <code>CHPUT</code> executes; with a valid header the window's first presented frame is the game's and not the C-BIOS banner.</td></tr>
+            <tr><td>AV-4</td><td>VDP golden</td><td>A SCREEN 2 gradient ROM renders byte-exact RGB565 against the golden file generated from the 2.3 pipeline (fixture committed under <code>verify/msx/</code>); a palette write through the two-byte sequence is visible on the next frame; the sprite 32-cap and the x ≥ 256 overflow are asserted by fixture ROMs.</td></tr>
+            <tr><td>AV-5</td><td>PSG pitch</td><td>Tone A at period 100, volume 15, mixer tone-only ⇒ the zero-crossing count over 40 ms of PCM lies in [3302, 3366] Hz around the 3334 Hz centre ±1 %; the noise LFSR state after 10⁶ ticks equals the reference sequence generated from the datasheet polynomial.</td></tr>
+            <tr><td>AV-6</td><td>AV sync</td><td>300-frame run: submitted PCM frames equal <code>44100/60 × executed frames</code> within ±1; the queue never exceeds 4 periods under the B-Audio pacing law, from the telemetry counter.</td></tr>
+            <tr><td>AV-7</td><td>Input</td><td><code>msx_kbd_down(0,0)</code> followed by BIOS <code>SNSMAT()</code> with A = 0 returns column bit 0 cleared, which is SPACE; the whole 2.5 matrix set and released round-trips through the <code>KBD_SYNC</code> snapshot; joystick TRGA reads through BIOS <code>GTTRIG()</code> and the directions through <code>GTSTCK()</code>; a debugger-window key press leaves the matrix unchanged.</td></tr>
+            <tr><td>AV-8</td><td>Real-time, boundedness, language law</td><td>On the smallest shipping target: 60 s continuous run with ≥ 99.5 % of frames inside 16.67 ms ± 2 ms; <code>nm</code> of the module objects shows zero <code>malloc</code> and <code>free</code> references (the window layer's own allocations are outside this check); <code>nm</code> and the link map show zero C++ symbols and zero C++ translation units in the module; the 5.3 footprint table holds within 5 %.</td></tr>
+            <tr><td>AV-9</td><td>Determinism law D1 … D7 (8.1)</td><td>Three runs of one 32 KiB fixture ROM. (a) and (b) replay the identical input log on the same host ⇒ final checkpoint CRC32 equal, and frame 300's 256×212 RGB565 byte-identical to the golden file. (c) runs with injected host jitter — an artificial 0…3 ms pacing delay and an over-filled <code>cmd_ring</code> ⇒ hardware state at every frame still equals (a), and only the pcm-drop and cmd-drop counters differ, which is D5 measured. Hygiene grep and <code>nm</code> on step-path units: zero <code>rand*</code> and <code>arc4random*</code>, zero <code>clock_gettime</code> and <code>gettimeofday</code>, zero libm references (D1, D2, D4), plus the first-step full-state diff proving D3.</td></tr>
+            <tr><td>AV-10</td><td>Reverse, seek, stale guard</td><td><code>TT_STEP</code>: 1,000 consecutive single-frame step-backs from frame 2,000 ⇒ every restored checkpoint byte-equal to the capture taken on the forward run, each step ≤ 8 ms wall. <code>TT_WINDOW</code>: 100 random seeks inside the 32 s window ⇒ byte-equal restores, ≤ 50 ms on desktop and ≤ 250 ms on the Pi-class target. Staleness: restoring a valid checkpoint against a different ROM ⇒ <code>MSX_ERR_TT_STALE</code> with the machine CRC identical before and after; seeking below the ring head ⇒ <code>MSX_ERR_TT_RANGE</code>. Static asserts: <code>sizeof(tt_input_t) == 16</code>, <code>TT_CHECKPOINT_SIZE == 196864</code>, profile coverage 38,400 ≤ <code>TT_LOG_FRAMES</code>. After any rewind the first submitted PCM block equals the historical block captured at that frame (8.2 step 3).</td></tr>
+            <tr><td>AV-11</td><td>Kit and build-shape hygiene (7.2, 8.5)</td><td>Program side: <code>nm</code> and the link map of every built BMSX program show zero reference to the z88dk classic-library <code>malloc</code> and <code>free</code> symbols (the 7.2 ban) and zero stdio calls from <code>crt0_btron.asm</code>. Shape side: <code>nm</code> of the shipping binary shows zero <code>tt_*</code> symbols and no instruction-hook reference, and its static size is measured against 5.3; a <code>TT=1</code> build is measured against the 14,182,760 B arithmetic and the 16 MiB ceiling of 8.5. Symbol side: re-reading <code>mssym</code> output yields the same pc→name table as the Rasm and z88dk artifacts it normalized (8.4).</td></tr>
+            <tr><td>AV-12</td><td>Debugger windows (8.4.1)</td><td>Each of the eight panels opens and closes with <code>tt_window_open()</code> and <code>tt_window_close()</code> as an independent top-level window with a non-empty <code>WND</code> title, sliding tab and close box, and closing any panel leaves the machine CRC unchanged. One seek issued from any panel produces exactly one <code>cmd_ring</code> entry and exactly one repaint pass per open panel (<code>inval_wnd</code> counter asserted). With the Disassembly window focused, pressing its navigation keys leaves the 2.5 keyboard matrix and BIOS <code>SNSMAT()</code> unchanged. Selecting a log line seeks to the frame in that line's <code>frame</code> field. Static asserts: <code>sizeof(tt_view_t) == 32</code>, <code>sizeof(tt_log_t) == 32</code>, log ring 256 records, debugger-window statics <code>8 × 32 + 8,192 == 8,448 B</code>.</td></tr>
+          </tbody>
+        </table>
+        <p>
+          The ROMs used by AV-3 and AV-4 MUST also start in openMSX (scripted reset, dir-as-disk) and blueMSX
+          (F12). That is the one-binary-three-emulators law, verified by the named observer step with the
+          screenshot diff committed as evidence.
+        </p>
+      </section>
+
+      <section id="verified">
+        <h2>Verification Status</h2>
+        <p>
+          B-MSX is a specification. <code>doc/md/MSX.md</code> is the origin note and this book is the
+          normative shape. The tree contains no <code>src/emulators/msx/</code>, so every vector in Part 9 is
+          labeled NOT BUILT and reports SKIP until the module lands; <code>msx-test</code>,
+          <code>msx-emu</code> and <code>msx-tt</code> do not yet exist as make targets. Part 8 is in the same
+          state as the rest: the determinism law is a requirement the core MUST satisfy from its first commit,
+          written here before <code>tronmsx.c</code> exists. No Coq or OCaml model covers the emulator core,
+          and this book cites none.
+        </p>
+        <table class="api-table">
+          <caption>Inherited requirements, each already verified in the book that owns it.</caption>
+          <thead><tr><th>Requirement</th><th>Source</th></tr></thead>
+          <tbody>
+            <tr><td>Five-call alphabet and the counted-drop laws</td><td><a href="theorems/media_intercore.html">media_intercore</a></td></tr>
+            <tr><td>SMP/AMP plane budgets the frame loop obeys</td><td><a href="theorems/media_smp.html">media_smp</a></td></tr>
+            <tr><td>Buffer and refcount discipline for streams</td><td><a href="theorems/media_rtp.html">media_rtp</a></td></tr>
+            <tr><td>Real-body and virtual-body semantics of a launchable program</td><td><a href="../b-system/theorems/hypermedia_dnd.html">hypermedia_dnd</a></td></tr>
+            <tr><td>Window descriptor, attributes and the sliding tab</td><td><a href="../b-book/window.html">b-book / window</a></td></tr>
+          </tbody>
+        </table>
+        <p>
+          Every constant in this book carries one of the three Part 0 basis labels.
+          <span class="basis basis-hw">Hardware</span> values are fixed by the MSX standard, the Z80, V9958
+          and AY documentation, or by C-BIOS behaviour, and become testable at build time.
+          <span class="basis basis-norm">Normative</span> values are fixed here and closed by the named AV
+          vector. <span class="basis basis-cal">Calibrable</span> values are first-core choices open to
+          recalibration without invalidating anything else: the VOL16 curve, the flash period
+          simplification, the 32 KiB ROM cap, the speed budget, the RAM init byte, the 8 ms step-back and
+          2 ms repaint budgets, the 600 and 2,000 frames/s replay floors, and the 16 MiB debug ceiling. The
+          arithmetic of Part 8 is not calibratable: 196,864 B per checkpoint, 16 B per input record and the
+          64-deep ring are static-asserted, because a snapshot format that drifts is a debugger that reports
+          a machine that never existed.
+        </p>
+      </section>
+
+      <section id="history">
+        <h2>History &amp; Provenance (non-normative)</h2>
+        <p>
+          Origin design note: <code>doc/md/MSX.md</code> (2026), written from the openMSX and blueMSX feature
+          survey, the Pasmo/sjasmplus/Rasm/z88dk/SDCC comparison, and the license audit of 7.7. Rev 1.00
+          restated the note in B-Book form. Rev 1.01 made the book self-describing: machine constants, port
+          map, register bit laws, renderer pipeline, PSG math, record offsets, API signatures, ring sizes,
+          the bound table and the AV-vector suite were added here. Rev 1.02 set the architecture: the
+          embedded core named tronMSX (<code>tronmsx.h</code>, <code>tronmsx.c</code>), B-MSX as the home with
+          openMSX and blueMSX as transition instruments and independent oracles, the kit as toolchainMSX
+          (Rasm, z88dk, <code>crt0_btron.asm</code>) replacing the note's Pasmo-only policy, and the C99-only
+          rule as a BTRON boundary law enforced by AV-8. Rev 1.03 added Part 8: the determinism law D1–D7,
+          the 16-byte-per-frame input log, the 196,864-byte checkpoint and three interval profiles,
+          <code>tronmsx_tt.h</code>, symbol and breakpoint parity with the kit's exports, the two build
+          shapes, and the non-goals; AV-9 … AV-11 joined the vector table, error codes 10–12 were reserved in
+          4.3, <code>mssym</code> joined the tools, and the 5.3 accounting was corrected so the arithmetic
+          closes with display planes in the B-Media IOD budget rather than in core statics. Rev 1.04 states
+          the debugger as a set of eight independent top-level BTRON windows in the SDI style (8.4.1), adds
+          <code>tt_window_open()</code>, <code>tt_window_close()</code>, <code>tt_view_t</code> and the log
+          ring, the <code>tronmsx_tt_wnd.c</code> unit and the debug <code>cmd_ring</code> command bytes, the
+          keyboard-isolation and one-repaint laws, 8,448 B of debugger-window statics and the AV-12 vector; it
+          separates the page 2 slot view from the 64 KiB RAM pool so a 32 KiB cartridge's second block is
+          reachable (1.2); it replaces the earlier proven/inferred provenance wording with the three basis
+          labels of Part 0,
+          and completes the tables that were previously prose or monospace listings: BIOS entry points, the
+          cartridge header, the BMSX validation rules, the error-code ownership, the tasks and channels, the
+          checkpoint header, the profiles, the instruments, the build shapes and the latency budget. Where the
+          design note and this book disagree, this book is normative.
+        </p>
+      </section>
+
+    </article>
+
+    <footer class="page-footer">
+      BTRON 3.20 · B-MSX: the MSX2+ home · core: tronMSX · kit: toolchainMSX · C99-only clean-room
+      implementation · One binary, three emulators · Frame-granular time travel · Synrc / bitedits
+    </footer>
+  </main>
+
+</body>
+</html>

@@ -1,7 +1,7 @@
 I'll look up BTRON B-System, the MSX emulators openMSX and blueMSX, and the usual C/Z80 toolchain so we can map a practical developer setup.The B-System repo and both emulators are clearer now. Checking whether MSX is already a target and what the practical Z80 C/assembly path looks like.A B-System home for MSX developers should be a cross-dev kit and a tiny BTRON-shaped runtime, not a full BTRON 3.20 port. Current B-System (btron.pro, github.com/bitedits/btron) is a C99 cleanroom of BTRON3 3.20 aimed at ARM64, x86_64 UEFI, PS2 MIPS, PC-98, 68000, and POSIX. MSX is a banked Z80 (or R800) machine with a 64 KiB address space and a VDP. That can host a teaching subset — real/virtual body records, a small µITRON-like task queue, TAD text — not the workstation.
 
 > **Status (2026-10-06): superseded as the specification.** This note is the origin, and
-> `b-msx/index.html` (B-MSX, Rev 1.03) is normative. Two decisions here have been overturned by the book:
+> `b-media/msx.html` (B-MSX, Rev 1.03) is normative. Two decisions here have been overturned by the book:
 > the toolchain is **toolchainMSX** — Rasm as assembler, z88dk (`zcc`/`z80asm`/`appmake`) as compiler and
 > linker, with our own `crt0_btron.asm` — not "C99 plus Pasmo only"; and the time-travel debugger listed
 > below as an openMSX advantage is now a **stated goal** of B-MSX (book Part 8), built on a determinism
@@ -29,7 +29,7 @@ Developer hooks worth standardizing on:
 
 ## What to ship: C and Z80, not real C++
 
-The MSX home is C99 plus Pasmo only. Launching it opens a BTRON window, boots an MSX2+ with the BIOS from settings, and runs the game. The same binary must also run in openMSX and blueMSX. *(Superseded: the kit is **toolchainMSX** — Rasm + z88dk + our own crt0; C99-only and one-binary still hold. See `b-msx/index.html` 7.2.)*
+The MSX home is C99 plus Pasmo only. Launching it opens a BTRON window, boots an MSX2+ with the BIOS from settings, and runs the game. The same binary must also run in openMSX and blueMSX. *(Superseded: the kit is **toolchainMSX** — Rasm + z88dk + our own crt0; C99-only and one-binary still hold. See `b-media/msx.html` 7.2.)*
 
 ## Toolchain
 

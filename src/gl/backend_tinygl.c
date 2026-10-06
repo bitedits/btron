@@ -24,6 +24,10 @@ extern void uart_puts_raw(const char *s);
 #include "tinygl/zbuffer.h"
 #include "tinygl/zgl.h"
 
+/* TinyGL's own entry points that <GL/gl.h> leaves undeclared. */
+extern void glColor4f(GLfloat r, GLfloat g, GLfloat b, GLfloat a);
+extern void glVertex2f(GLfloat x, GLfloat y);
+
 #ifdef W
 #undef W
 #endif
@@ -79,6 +83,11 @@ static void   tgl_tex_image_2d(GLenum target, GLint level, GLint components,
                                GLenum format, GLenum type, const void *pixels);
 static void   tgl_tex_parameteri(GLenum target, GLenum pname, GLint param);
 static void   tgl_swap_buffers(void);
+static void   tgl_blend_func   (GLenum src, GLenum dst);
+static void   tgl_color4f      (GLfloat r, GLfloat g, GLfloat b, GLfloat a);
+static void   tgl_vertex2f     (GLfloat x, GLfloat y);
+static void   tgl_ortho        (double l, double r, double b,
+                                double t, double n, double f);
 
 /* ── Dispatch table ──────────────────────────────────────────────── */
 gl_ops_t g_tinygl_ops = {
@@ -115,6 +124,10 @@ gl_ops_t g_tinygl_ops = {
     .gl_tex_image_2d = tgl_tex_image_2d,
     .gl_tex_parameteri= tgl_tex_parameteri,
     .swap_buffers    = tgl_swap_buffers,
+    .gl_blend_func   = tgl_blend_func,
+    .gl_color4f      = tgl_color4f,
+    .gl_vertex2f     = tgl_vertex2f,
+    .gl_ortho        = tgl_ortho,
 };
 
 /* ── Init / resize / shutdown ────────────────────────────────────── */
@@ -196,6 +209,33 @@ static void tgl_tex_image_2d(GLenum target, GLint level, GLint components,
 }
 static void tgl_tex_parameteri(GLenum target, GLenum pname, GLint param) {
     glTexParameteri((GLint)target, (GLint)pname, param);
+}
+
+/*
+ * Alpha compositing is TinyGL's own: glEnable(GL_BLEND) plus glBlendFunc set the
+ * ZBuffer's source/destination factors, so the wrappers stay thin.
+ */
+static void tgl_blend_func(GLenum src, GLenum dst)              { glBlendFunc((GLint)src, (GLint)dst); }
+static void tgl_color4f(GLfloat r, GLfloat g,
+                        GLfloat b, GLfloat a)                   { glColor4f(r, g, b, a); }
+static void tgl_vertex2f(GLfloat x, GLfloat y)                  { glVertex2f(x, y); }
+
+/* TinyGL has no glOrtho; the projection is an ordinary matrix multiply, so the
+ * row-major mat4 layout <GL/gl.h> apps expect is transcribed here. */
+static void tgl_ortho(double l, double r, double b,
+                      double t, double n, double f) {
+    GLfloat m[16];
+    double rl = r - l, tb = t - b, fn = f - n;
+    if (rl == 0.0 || tb == 0.0 || fn == 0.0) return;
+    memset(m, 0, sizeof(m));
+    m[0]  = (GLfloat)(2.0 / rl);
+    m[5]  = (GLfloat)(2.0 / tb);
+    m[10] = (GLfloat)(-2.0 / fn);
+    m[12] = (GLfloat)(-(r + l) / rl);
+    m[13] = (GLfloat)(-(t + b) / tb);
+    m[14] = (GLfloat)(-(f + n) / fn);
+    m[15] = 1.0f;
+    glMultMatrixf(m);
 }
 
 /*

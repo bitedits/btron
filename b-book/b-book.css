@@ -385,6 +385,57 @@ pre code {
   background-color: #f8fafc;
 }
 
+/* ── Spec matrix refinements: table typography and basis labels ─────────── */
+.api-table th {
+  font-size: 12.5px;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: #475569;
+  background-color: #eef2f7;
+  border-bottom: 2px solid var(--border-light);
+}
+
+.api-table tbody tr:nth-child(even) {
+  background-color: #fbfcfe;
+}
+
+.api-table tbody tr:nth-child(even):hover {
+  background-color: #f8fafc;
+}
+
+.api-table td:first-child {
+  font-weight: 600;
+  color: #0f172a;
+  white-space: nowrap;
+}
+
+.api-table td {
+  line-height: 1.55;
+}
+
+.api-table caption {
+  caption-side: top;
+  text-align: left;
+  font-size: 13px;
+  color: var(--text-muted);
+  padding-bottom: 8px;
+}
+
+.basis {
+  display: inline-block;
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  padding: 1px 8px;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+
+.basis-hw   { background-color: #eff6ff; color: #1d4ed8; border: 1px solid #dbeafe; }
+.basis-norm { background-color: #f0fdf4; color: #15803d; border: 1px solid #dcfce7; }
+.basis-cal  { background-color: #fffbeb; color: #92500b; border: 1px solid #fef3c7; }
+
 /* ── API Card & Function Reference ──────────────────────────────────────── */
 .api-card {
   background-color: var(--bg-card);

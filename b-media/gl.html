@@ -3,9 +3,9 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>OpenGL: 3D Graphics Subsystem &amp; Hardware Backends | B-Book</title>
+  <title>B-GL – 3D Graphics Subsystem &amp; Hardware Backends | B-Media</title>
   <meta name="description" content="Formal developer documentation for the B-System OpenGL ES 1.1 3D Graphics Subsystem: dispatch table, EGL-lite surface bridge, and existing &amp; future backends (TinyGL, VirtIO-GPU, Intel i915 Venus, N64 LibDragon, PS2 ps2gl, Raspberry Pi VC4).">
-  <link rel="stylesheet" href="b-book.css">
+  <link rel="stylesheet" href="../b-book/b-book.css">
 </head>
 <body>
 
@@ -16,13 +16,14 @@
         <span class="hamburger"></span>
       </button>
       <ul class="book-global-links">
-    <li><a href="../index.html">B-System</a></li>
-    <li><a href="index.html" class="active">B-Book</a></li>
-    <li><a href="../conformance.html">B-Spec</a></li>
-    <li><a href="../virtio.html">VirtIO</a></li>
-    <li><a href="../mobile.html">FOMA</a></li>
-    <li><a href="../releases.html">Releases</a></li>
-    <li><a href="https://github.com/bitedits/btron">GitHub</a></li>
+        <li><a href="index.html">B-Media</a></li>
+        <li><a href="../index.html">B-System</a></li>
+        <li><a href="../b-book/index.html">B-Book</a></li>
+        <li><a href="../conformance.html">B-Spec</a></li>
+        <li><a href="../virtio.html">VirtIO</a></li>
+        <li><a href="../mobile.html">FOMA</a></li>
+        <li><a href="../releases.html">Releases</a></li>
+        <li><a href="https://github.com/bitedits/btron">GitHub</a></li>
       </ul>
     </div>
   </nav>
@@ -30,42 +31,46 @@
   <!-- Navigation Sidebar -->
   <nav class="book-sidebar">
     <div class="sidebar-brand">
-      <div class="brand-title">B-Book <span class="badge">Rev 3.20</span></div>
-      <div class="brand-sub">OpenGL 3D Graphics Reference</div>
+      <div class="brand-title">B-GL <span class="badge">Rev 1.00</span></div>
+      <div class="brand-sub">3D Graphics Subsystem</div>
     </div>
     <div class="sidebar-nav">
       <div class="nav-heading">Overview</div>
-      <a href="index.html" class="nav-link">Master Index</a>
-      
-      <div class="nav-heading">Core Subsystems</div>
-      <a href="kernel.html" class="nav-link">Kernel (T-Kernel 2.0)</a>
-      <a href="cores.html" class="nav-link">Cores (Kernel &amp; SMP)</a>
-      <a href="graphics.html" class="nav-link">Graphics (DP &amp; 2D)</a>
-      <a href="gl.html" class="nav-link active">OpenGL (3D Graphics)</a>
+      <a href="index.html" class="nav-link">B-Media Home</a>
+
+      <div class="nav-heading">Part 1: Architecture</div>
       <div class="nav-sublinks">
         <a href="#arch" class="nav-sublink">3D Architecture &amp; Pipeline</a>
         <a href="#dispatch" class="nav-sublink">Dispatch Table (gl_ops_t)</a>
         <a href="#egl" class="nav-sublink">EGL-lite Window Bridge</a>
+      </div>
+
+      <div class="nav-heading">Part 2: Production Backends</div>
+      <div class="nav-sublinks">
         <a href="#tinygl" class="nav-sublink">1. TinyGL Software Backend</a>
         <a href="#virtio" class="nav-sublink">2. VirtIO-GPU 3D Backend</a>
+      </div>
+
+      <div class="nav-heading">Part 3: Roadmap Backends</div>
+      <div class="nav-sublinks">
         <a href="#venus" class="nav-sublink">3. Awe Morris i915 (Venus)</a>
         <a href="#libdragon" class="nav-sublink">4. LibDragon OpenGL (N64)</a>
         <a href="#ps2gl" class="nav-sublink">5. ps2dev ps2gl (PlayStation 2)</a>
         <a href="#vc4" class="nav-sublink">6. Broadcom VC4 (Raspberry Pi)</a>
+      </div>
+
+      <div class="nav-heading">Part 4: Credits</div>
+      <div class="nav-sublinks">
         <a href="#credits" class="nav-sublink">Credits &amp; Acknowledgements</a>
       </div>
-      <a href="tip.html" class="nav-link">Tip (Input &amp; IME)</a>
-      <a href="vobject.html" class="nav-link">VObject (Hyper-Data)</a>
-      <a href="window.html" class="nav-link">Window (WM &amp; Menus)</a>
 
-      <div class="nav-heading">Extended Subsystems</div>
-      <a href="desktop.html" class="nav-link">Desktop (Shell &amp; Mobile)</a>
-      <a href="hmi.html" class="nav-link">HMI (Human-Machine Interface)</a>
-      <a href="font.html" class="nav-link">Font (Typography Engine)</a>
-      <a href="settings.html" class="nav-link">Settings (Control Panel)</a>
-      <a href="drivers.html" class="nav-link">Drivers (Hardware &amp; VirtIO)</a>
-      <a href="fs.html" class="nav-link">File System (B-FS &amp; Volumes)</a>
-      <a href="apps.html" class="nav-link">Apps (Application Suite)</a>
+      <div class="nav-heading">B-Media Pages</div>
+      <a href="core.html" class="nav-link">B-Core (InterCore Nexus)</a>
+      <a href="rtp.html" class="nav-link">B-RTP (WebRTC Core)</a>
+      <a href="audio.html" class="nav-link">B-Audio (PCM Stack)</a>
+      <a href="video.html" class="nav-link">B-Video (Display Path)</a>
+      <a href="sound.html" class="nav-link">B-Sound (lilcu64 Synth)</a>
+      <a href="msx.html" class="nav-link">B-MSX (MSX2+ Home · tronMSX)</a>
     </div>
   </nav>
 
@@ -73,9 +78,9 @@
   <main class="book-content">
     <header class="book-header">
       <div class="breadcrumb">
-        <a href="index.html">B-Book</a> / <span>OpenGL</span>
+        <a href="index.html">B-Media</a> / <span>B-GL · OpenGL</span>
       </div>
-      <h1 class="page-title">OpenGL: 3D Graphics Subsystem, Architecture &amp; Backends</h1>
+      <h1 class="page-title">B-GL: 3D Graphics Subsystem, Architecture &amp; Backends</h1>
       <p class="page-lead">
         Formal C99 developer manual and architectural specification for the B-System OpenGL ES 1.1 3D graphics pipeline. Documents the uniform function pointer dispatch engine, EGL-lite window surface compositor bridge, and the six production and roadmap backends: TinyGL, VirtIO-GPU, Intel Gen12 i915 (Venus), Nintendo 64 (LibDragon), Sony PlayStation 2 (ps2gl), and Broadcom VideoCore IV.
       </p>
@@ -310,14 +315,14 @@ void egl_swap_buffers(EGL_SURFACE *surf) {
   <footer class="book-footer">
     <div class="footer-container">
       <div class="footer-links">
-        <a href="index.html">Master Index</a>
-        <a href="graphics.html">2D Graphics</a>
-        <a href="window.html">Window System</a>
-        <a href="drivers.html">Drivers HAL</a>
+        <a href="index.html">B-Media Home</a>
+        <a href="../b-book/graphics.html">2D Graphics</a>
+        <a href="../b-book/window.html">Window System</a>
+        <a href="../b-book/drivers.html">Drivers HAL</a>
         <a href="../releases.html">Release Log</a>
       </div>
       <div class="footer-copy">
-        B-Book Systems Reference &nbsp;·&nbsp; B-System 3.20 &nbsp;·&nbsp; Synrc Research Center
+        B-Media · 3D Graphics Subsystem &nbsp;·&nbsp; B-System 3.20 &nbsp;·&nbsp; Synrc Research Center
       </div>
     </div>
   </footer>

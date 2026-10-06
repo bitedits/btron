@@ -53,10 +53,16 @@ btron/
     │   ├── virtio.tad            # VirtIO Core Architecture & System Specifications
     │   └── btron_spec.tad        # System Call Matrix
     │
-    ├── b-core/                   # T-Kernel 2.0 Deployment Manuals
-    │   ├── tkernel_spec.tad      # T-Kernel Core Specifications
-    │   ├── tkernel_startup.tad   # Startup & Boot Sequence
-    │   └── tkernel_qemu.tad      # QEMU Virtual Machine Manual
+    ├── b-media/                  # B-Media book: one catalog, seven pages + proofs
+    │   ├── B-Media.tad           # Pipes, plane budgets & the SMP substrate
+    │   ├── B-Core.tad            # InterCore streaming protocol
+    │   ├── B-Audio.tad           # VirtIO-Sound PCM stack
+    │   ├── B-Video.tad           # Display path, capture, codecs
+    │   ├── B-Sound.tad           # lilcu64 processor / synth
+    │   ├── B-RTP.tad             # WebRTC MCU/SFU core
+    │   ├── B-MSX.tad             # MSX2+ home · tronMSX
+    │   ├── B-GL.tad              # OpenGL 3D subsystem & backends
+    │   └── theorems/*.tad        # media_intercore, media_smp, media_rtp
     │
     └── *.tad.txt                 # Companion human-readable symbolic TAD files
 ```

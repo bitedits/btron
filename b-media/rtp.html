@@ -16,13 +16,14 @@
         <span class="hamburger"></span>
       </button>
       <ul class="book-global-links">
-    <li><a href="../index.html">B-System</a></li>
-    <li><a href="../b-book/index.html">B-Book</a></li>
-    <li><a href="../b-core/index.html">B-Core</a></li>
-    <li><a href="index.html" class="active">B-RTP</a></li>
-    <li><a href="../conformance.html">B-Spec</a></li>
-    <li><a href="../releases.html">Releases</a></li>
-    <li><a href="https://github.com/bitedits/btron">GitHub</a></li>
+        <li><a href="index.html">B-Media</a></li>
+        <li><a href="../index.html">B-System</a></li>
+        <li><a href="../b-book/index.html">B-Book</a></li>
+        <li><a href="../conformance.html">B-Spec</a></li>
+        <li><a href="../virtio.html">VirtIO</a></li>
+        <li><a href="../mobile.html">FOMA</a></li>
+        <li><a href="../releases.html">Releases</a></li>
+        <li><a href="https://github.com/bitedits/btron">GitHub</a></li>
       </ul>
     </div>
   </nav>
@@ -66,13 +67,14 @@
         <a href="#verified" class="nav-sublink">Verification Cross-Reference</a>
       </div>
 
-      <div class="nav-heading">Companion Books</div>
-      <a href="../b-core/index.html" class="nav-link">B-Core (InterCore Nexus)</a>
-      <a href="../b-media/index.html" class="nav-link">B-Media (Pipes &amp; Budgets)</a>
-      <a href="../b-audio/index.html" class="nav-link">B-Audio (PCM Stack)</a>
-      <a href="../b-video/index.html" class="nav-link">B-Video (Display Path)</a>
-      <a href="../b-sound/index.html" class="nav-link">B-Sound (lilcu64 Synth)</a>
-      <a href="../b-msx/index.html" class="nav-link">B-MSX (MSX2+ Home · tronMSX)</a>
+      <div class="nav-heading">B-Media Pages</div>
+      <a href="core.html" class="nav-link">B-Core (InterCore Nexus)</a>
+      <a href="index.html" class="nav-link">B-Media (Pipes &amp; Budgets)</a>
+      <a href="audio.html" class="nav-link">B-Audio (PCM Stack)</a>
+      <a href="video.html" class="nav-link">B-Video (Display Path)</a>
+      <a href="sound.html" class="nav-link">B-Sound (lilcu64 Synth)</a>
+      <a href="msx.html" class="nav-link">B-MSX (MSX2+ Home · tronMSX)</a>
+      <a href="gl.html" class="nav-link">B-GL (3D OpenGL)</a>
     </div>
   </nav>
 
@@ -84,7 +86,7 @@
       <h1 class="page-title">B-RTP: WebRTC Core, MCU/SFU</h1>
       <p class="page-lead">The multipoint real-time media plane: SRTP ingest per peer, a 16-slot grid
       compositor, deterministic temporal queues, and the NuStream zero-allocation pipeline model that lands
-      this discipline on the verified <a href="../b-core/index.html">B-Core</a> transport.</p>
+      this discipline on the verified <a href="core.html">B-Core</a> transport.</p>
     </header>
 
     <article>
@@ -461,7 +463,7 @@ videotestsrc num-buffers … async=false sync=false  ·  queue leaky=downstream<
         <p>
           The media-plane laws above are closed in <code>verify/models/media_rtp_properties.v</code>
           (161 judgements) against the oracle <code>media_rtp_model.ml</code>. Full dossier:
-          <a href="theorems/media_rtp.html">b-rtp/theorems/media_rtp.html</a>. Highlights by category:
+          <a href="theorems/media_rtp.html">b-media/theorems/media_rtp.html</a>. Highlights by category:
         </p>
         <table class="api-table">
           <thead><tr><th>Category</th><th>Results</th><th>Certifies</th></tr></thead>
@@ -477,7 +479,7 @@ videotestsrc num-buffers … async=false sync=false  ·  queue leaky=downstream<
         </table>
         <p>
           Transport below this plane is B-Core's proven ground: cursors never block, sectors are conserved,
-          and drops are counted — see <a href="../b-core/theorems/media_intercore.html">B-Core theorems</a>.
+          and drops are counted — see <a href="theorems/media_intercore.html">B-Core theorems</a>.
           The hardening plan puts NuStream porting <em>after</em> the ASYN/SMP/AMP foundation, onto the
           InterCore substrate; until that port lands, <code>nus_gst.c</code> runs the host-GStreamer
           discipline above unchanged.

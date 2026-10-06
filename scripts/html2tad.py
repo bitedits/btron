@@ -428,7 +428,7 @@ def _doc_title_name(base_name: str, html_path: str, source_root: str) -> str:
     if sub and sub != '.':
         m = {'part1':'Part1','part2':'Part2','part_book':'Part_Book'}
         return m.get(sub.lower(), sub.lower().capitalize())
-    if catalog == 'b-core':   return 'T-Kernel'
+    if catalog == 'b-core':   return 'B-Core'
     if catalog == 'b-system': return 'B-System'
     if catalog == 'b-hmi':    return 'B-HMI'
     if catalog == 'b-spec':   return 'B-Spec'

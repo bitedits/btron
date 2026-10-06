@@ -1382,9 +1382,9 @@ typedef struct {
     uint8_t  slots_ppi[16]; /* block 184..199: 0xF8-0xFC latches, PPI B/C, row select, joystick */
     uint64_t frame;         /* header offset 8 */
     uint64_t cycles;        /* header offset 16 */
-} tt_state_t;              /* 184 B == header blocks 32..199 as one contiguous span (168 B) plus
-                              frame and cycles re-read from header offsets 8 and 16. Block 200..223
-                              is not exposed here; no panel reads it. */
+} tt_state_t;              /* 184 B. The first 168 B are the contiguous header span 32..199,
+                              copied as one block; the timers block 200..223 is not exposed
+                              because no panel reads it. */
 
 int      tt_attach(void);                          /* MSX_OK | MSX_ERR_TT_STATE (no instance) */
 void     tt_detach(void);
@@ -1395,7 +1395,7 @@ int      tt_step_forward(void);                    /* re-run the next logged fra
 uint64_t tt_current_frame(void);
 int      tt_capture(uint8_t *dst, uint32_t cap);   /* cap &gt;= TT_CHECKPOINT_SIZE; golden files */
 int      tt_restore(const uint8_t *src, uint32_t len); /* validate-then-apply, 8.2 step 1 */
-int      tt_state(tt_state_t *out);                /* Z80 + VDP R0-R25 + PSG R0-R15 + ports */
+int      tt_state(tt_state_t *out);                /* Z80 + VDP R0-R25 + PSG R0-R15 + slot/PPI */
 int      tt_breakpoint_add(uint16_t pc);           /* host-side PC match, &lt;= 16 */
 int      tt_breakpoint_del(int index);
 int      tt_watchpoint_add(uint8_t page, uint16_t offset, uint8_t rw); /* 1=read 2=write */
@@ -1518,12 +1518,11 @@ typedef struct {                 /* one log line, written by the step-path hook 
         <p>
           Debugger-window storage inside the module is 8 × 32 B for the <code>tt_view_t</code> records
           (256 B) plus the 8,192 B log ring: 8,448 B of static <code>.bss</code>, counted in 8.5. Each open
-          panel also costs the window layer one <code>WND</code> descriptor (<code>sizeof(WND)</code>, 184 B
-          on the 64-bit host) and a client pixmap of 2 bytes per pixel — 1,854,912 B with all eight panels
-          open. That memory belongs to the window
-          manager exactly as it does for the emulator window and for every application window, and it sits
-          outside the module's static bound. No panel holds a copy of machine memory, and the log ring is the
-          only debugger structure that outlives a repaint; it wraps at 256 lines.
+          open: 1,853,440 B of client RGB565 pixmaps plus 8 × 184 B of descriptors. That memory belongs to the
+          window manager exactly as it does for the emulator window and for every application window, and it
+          sits outside the module's static bound. No panel holds a copy of machine memory; each repaints
+          through the accessors of 8.3. Inside the module the log ring is the structure that accumulates
+          history, and it wraps at 256 lines.
         </p>
       </section>
 

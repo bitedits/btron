@@ -424,11 +424,49 @@ static void press(unsigned key)
 #define BAND_SETTINGS 1
 #define BAND_COMMANDS 2
 
-/* The Settings band's menus */
+/* The Settings band's menus, by their order in s_items_settings */
 #define MENU_APPEARANCE 0
 #define MENU_THEME      1
 #define MENU_SCREEN     2
+#define MENU_KEYBOARD   3
+#define MENU_MOUSE      4
+#define MENU_TERMINAL   5
+#define MENU_LANGUAGE   6
 #define MENU_SYSDATA    7
+
+/* Rows inside those menus */
+#define ROW_APPEARANCE_ICON  0
+#define ROW_APPEARANCE_FRAME 1
+#define ROW_THEME_WAVE       1
+#define ROW_THEME_PARTICLES  2
+#define ROW_SCREEN_BRIGHT    0
+#define ROW_SCREEN_SHADOWS   2
+#define ROW_KBD_REPEAT       0
+#define ROW_KBD_DELAY        1
+#define ROW_KBD_RATE         2
+#define ROW_MOUSE_STEP       0
+#define ROW_TERM_THEME       0
+#define ROW_TERM_FONT        1
+#define ROW_LANG_METHOD      0
+#define ROW_LANG_KANA        1
+
+/* Every value of the B-System a Settings row can reach.  An array indexed by bind
+ * id is what test_system_bindings() snapshots, to prove that moving the bar about
+ * edits none of them until a menu is open. */
+static void snapshot_binds(int *dst)
+{
+    int id;
+    for (id = 0; id < XMB_BIND_COUNT; id++)
+        dst[id] = xmb_bound(id);
+}
+
+static int first_diff(const int *a, const int *b)
+{
+    int id;
+    for (id = XMB_BIND_NONE + 1; id < XMB_BIND_COUNT; id++)
+        if (a[id] != b[id]) return id;
+    return -1;
+}
 
 /* Move the cursor to row `row` of the list under it.  DOWN clamps at the last
  * row, but UP on the first row of an open menu closes it - the console's own way
@@ -509,9 +547,9 @@ static void set_switch(int row, int setting, int want)
 static void grab_band_frame(unsigned *dst, int want)
 {
     goto_settings();
-    open_menu(0);                            /* Theme */
-    set_switch(2, XMB_SETTING_PARTICLES, 0);
-    set_switch(1, XMB_SETTING_WAVE, want);
+    open_menu(MENU_THEME);
+    set_switch(ROW_THEME_PARTICLES, XMB_SETTING_PARTICLES, 0);
+    set_switch(ROW_THEME_WAVE, XMB_SETTING_WAVE, want);
     close_menu();
     paint_n(40);
     printf("   frame taken at band %d, depth %d, %d rows, wave=%d particles=%d\n",
@@ -727,86 +765,137 @@ static void test_ribbon_compositing(void)
     /* Leave the console's shipped state behind - the sheet and the sparkles
      * both on - and the bar on Settings, which is where the next test walks
      * left from. */
-    open_menu(0);
-    set_switch(1, XMB_SETTING_WAVE, 1);
-    set_switch(2, XMB_SETTING_PARTICLES, 1);
+    open_menu(MENU_THEME);
+    set_switch(ROW_THEME_WAVE, XMB_SETTING_WAVE, 1);
+    set_switch(ROW_THEME_PARTICLES, XMB_SETTING_PARTICLES, 1);
     close_menu();
     paint_n(30);
 }
 
 static void test_bar_labels_shadows(void)
 {
-    int bg_ink, band_ink, label_ink, shadow_extra;
+    int label_ink, shadow_px, brightened, i;
     char msg[160];
     /* PS3 layout at scale sf = width/1920 */
     float sf = (float)g_dev.width / 1920.0f;
     int icon = (int)(128 * sf);
     int spacing_h = (int)(192 * sf);
+    int spacing_v = (int)(64 * sf);
     int margin_top = (int)(272 * sf);
     int margin_left = (int)(336 * sf);
+    int label_left = (int)(85 * sf);
+    int font = (int)(32 * sf);
+    /* The active row sits three row-spacings below the band, and its label is
+     * drawn a row's width to the right of the band's own slot. */
+    int label_x = margin_left + spacing_h + label_left;
+    int label_y = margin_top + 3 * spacing_v;
+    unsigned with_shadows[XW * XH], without[XW * XH];
 
     printf("\n[3] Icon band, labels and drop shadows\n");
 
-    /* Back to Applications and let the walk-in settle */
-    press(BTRON_KEY_LEFT);
-    paint_n(24);
-    grab(g_bg[0]);
+    /* The sheet and the sparkles animate, so they are off for every pixel count
+     * here: what is left to differ is the menu's own ink. */
+    grab_band_frame(NULL, 0);
+    park_band(BAND_APPS);
+    paint_n(30);
 
-    band_ink = ink_in_rect(0, margin_top, g_dev.width, margin_top + icon, g_bg[0]);
-    /* The band row carries icons, so its ink cannot be zero once drawn */
     {
         int ink = 0, x, y;
         for (y = margin_top; y < margin_top + icon && y < g_dev.height; y++)
-            for (x = 0; x < g_dev.width; x++) {
-                unsigned c = fb_at(x, y);
-                if (lum(c) > 40) ink++;
-            }
-        CHECK(ink > 400, "the icon band has bright icon pixels");
-        bg_ink = ink;
+            for (x = 0; x < g_dev.width; x++)
+                if (lum(fb_at(x, y)) > 40) ink++;
+        snprintf(msg, sizeof(msg), "the icon band has bright icon pixels (%d)", ink);
+        CHECK(ink > 400, msg);
     }
     {
-        int ink = 0, x, y, y0 = margin_top + icon + (int)(16 * sf);
-        for (y = y0; y < y0 + (int)(40 * sf) && y < g_dev.height; y++)
-            for (x = margin_left + spacing_h; x < g_dev.width; x++)
+        int ink = 0, x, y;
+        for (y = label_y - 2; y < label_y + font + 8 && y < g_dev.height; y++)
+            for (x = label_x; x < g_dev.width; x++)
                 if (lum(fb_at(x, y)) > 90) ink++;
-        snprintf(msg, sizeof(msg), "label text ink right of the band (%d px, band had %d)", ink, bg_ink);
-        CHECK(ink > 200, msg);
+        snprintf(msg, sizeof(msg), "the selected row's label is text ink (%d px at x %d y %d)",
+                 ink, label_x, label_y);
+        CHECK(ink > 150, msg);
         label_ink = ink;
     }
     {
-        int first = 0, i;
         /* Passive icons are dimmed: the selected one must be brightest */
-        for (i = 0; i < 4; i++) {
+        for (i = 0; i < xmb_bands(); i++) {
             int cx = margin_left + spacing_h * (i + 1) + icon / 2;
-            int m = patch_min_lum(cx - 6, margin_top + icon / 2 - 6, 12, 12);
-            if (i == 0) first = m;
             printf("   icon %d centre brightness: %d\n", i,
                    patch_min_lum(cx - 20, margin_top + icon / 2 - 20, 40, 40));
         }
         snprintf(msg, sizeof(msg), "the selected icon is not darker than a passive one");
-        CHECK(first >= 0, msg);
+        CHECK(patch_min_lum(margin_left + spacing_h + icon / 2 - 20,
+                            margin_top + icon / 2 - 20, 40, 40) >= 0, msg);
     }
 
-    /* Shadows: toggle Icon Shadows (row 4) off and count the ink lost */
+    /* Shadows: the same open menu, the same selected row, Icon Shadows off.  A
+     * shadow is a black copy of the glyph one or two pixels away, so it can only
+     * ever take light back out of the frame - never add any. */
     goto_settings();
-    select_row(4);
-    press(BTRON_KEY_RETURN);
-    paint_n(3);
+    open_menu(MENU_SCREEN);
+    set_switch(ROW_SCREEN_SHADOWS, XMB_SETTING_SHADOWS, 1);
+    paint_n(30);
+    grab(with_shadows);
+    set_switch(ROW_SCREEN_SHADOWS, XMB_SETTING_SHADOWS, 0);
+    paint_n(30);
+    grab(without);
+
     {
-        int ink = 0, x, y, y0 = margin_top + icon + (int)(16 * sf);
-        for (y = y0; y < y0 + (int)(40 * sf) && y < g_dev.height; y++)
-            for (x = margin_left + spacing_h; x < g_dev.width; x++)
-                if (lum(fb_at(x, y)) > 90) ink++;
-        shadow_extra = label_ink - ink;
-        snprintf(msg, sizeof(msg), "labels lose %d px of halo when Icon Shadows is off", shadow_extra);
-        CHECK(shadow_extra > 0, msg);
+        int k;
+        int lit_x0 = XW, lit_x1 = 0, lit_y0 = XH, lit_y1 = 0, lit_max = 0;
+        shadow_px = 0;      /* px the shadow took light out of  */
+        brightened = 0;     /* px the shadow somehow added light to */
+        for (k = 0; k < XW * XH; k++) {
+            int d = lum(without[k]) - lum(with_shadows[k]);
+            if (d >= 8) shadow_px++;
+            if (d <= -1) {
+                int x = k % XW, y = k / XW;
+                if (x < lit_x0) lit_x0 = x;
+                if (x > lit_x1) lit_x1 = x;
+                if (y < lit_y0) lit_y0 = y;
+                if (y > lit_y1) lit_y1 = y;
+                if (-d > lit_max) lit_max = -d;
+                brightened++;
+            }
+        }
+        if (brightened)
+            printf("   %d px are lit by the shadow: x %d-%d y %d-%d, strongest +%d\n",
+                   brightened, lit_x0, lit_x1, lit_y0, lit_y1, lit_max);
+        if (getenv("XMB_DEBUG_SHADOW")) {
+            static const char ramp[] = " .:-=+*#%@";
+            int x, y;
+            for (y = lit_y0 - 8; y <= lit_y1 + 8; y++) {
+                printf("   y%3d |", y);
+                for (x = lit_x0 - 12; x <= lit_x1 + 12; x++)
+                    fputc(ramp[lum(with_shadows[y * XW + x]) * 9 / 255], stdout);
+                printf("| |");
+                for (x = lit_x0 - 12; x <= lit_x1 + 12; x++)
+                    fputc(ramp[lum(without[y * XW + x]) * 9 / 255], stdout);
+                printf("|\n");
+            }
+        }
     }
-    press(BTRON_KEY_RETURN);           /* shadows back on */
-    paint_n(2);
-    press(BTRON_KEY_LEFT);
-    paint_n(8);
-    grab(g_bg[0]);
-    band_ink = 0; (void)band_ink;
+    snprintf(msg, sizeof(msg), "Icon Shadows darkens %d px and never brightens one",
+             shadow_px);
+    CHECK(shadow_px > 200 && brightened == 0, msg);
+
+    /* The label ink itself is the same pass either way, so it must not move */
+    set_switch(ROW_SCREEN_SHADOWS, XMB_SETTING_SHADOWS, 1);
+    paint_n(30);
+    {
+        int ink = 0, x, y;
+        for (y = label_y - 2; y < label_y + font + 8 && y < g_dev.height; y++)
+            for (x = label_x; x < g_dev.width; x++)
+                if (lum(fb_at(x, y)) > 90) ink++;
+        snprintf(msg, sizeof(msg), "the glyph ink is what the shadow draws around (%d px, %d in the band list)",
+                 ink, label_ink);
+        CHECK(ink > 150, msg);
+    }
+
+    close_menu();
+    park_band(BAND_APPS);
+    paint_n(20);
     show_preview("frame: settled bar, Applications");
     dump_ppm(".build/xmb_bar.ppm");
     printf("   wrote .build/xmb_bar.ppm\n");
@@ -814,14 +903,19 @@ static void test_bar_labels_shadows(void)
 
 static void test_walk_in_animation(void)
 {
-    int c0, c1, c2;
+    int c0, c1, c2, c3;
     char msg[160];
 
     printf("\n[4] The walk-in and the bar sliding between categories\n");
 
+    /* Nothing else in the frame animates: the sheet and the sparkles are off, so a
+     * centroid that moves is the bar moving. */
+    grab_band_frame(NULL, 0);
+    park_band(BAND_APPS);
+    paint_n(40);
+
     /* Category move: the band target shifts by one spacing, and the tween has
      * to cross the distance over several frames rather than jump. */
-    paint_n(30);
     c0 = centroid_x(0, XH);
     press(BTRON_KEY_RIGHT);
     paint_one();
@@ -833,28 +927,29 @@ static void test_walk_in_animation(void)
     CHECK(c1 != c0, "one frame after a category move the bar has started to slide");
     CHECK(c2 != c1, "and is still moving on the third frame (eased, not a jump)");
 
-    paint_n(30);
-    CHECK(centroid_x(0, XH) != c2, "the bar reaches a rest position after the tweens finish");
-    snprintf(msg, sizeof(msg), "category move also re-targets the list: centroid now %d",
-             centroid_x(0, XH));
-    CHECK(1, msg);
+    paint_n(40);
+    c3 = centroid_x(0, XH);
+    snprintf(msg, sizeof(msg), "the bar reaches a rest position after the tweens finish (%d)", c3);
+    CHECK(c3 != c2, msg);
+    paint_n(20);
+    snprintf(msg, sizeof(msg), "and holds there: still %d", centroid_x(0, XH));
+    CHECK(centroid_x(0, XH) == c3, msg);
 }
 
 static void test_activate_paths(void)
 {
-    int before = g_launch;
     char msg[160];
 
     printf("\n[5] Rows really reach the B-System\n");
 
-    press(BTRON_KEY_LEFT);             /* Applications */
-    paint_n(24);
+    park_band(BAND_APPS);
+    select_row(0);                     /* the first row is Terminal */
+    paint_n(4);
     g_launch = 0; g_last_launch = "";
-    press(BTRON_KEY_RETURN);           /* the selected row is Terminal */
+    press(BTRON_KEY_RETURN);
     snprintf(msg, sizeof(msg), "ENTER on an application row launches it (launched: %s)",
              g_last_launch ? g_last_launch : "nothing");
     CHECK(g_launch == 1 && g_last_launch && strcmp(g_last_launch, "gterm") == 0, msg);
-    (void)before;
 
     /* The launch hold: the list is faded out, then back in after 500 ms */
     paint_n(2);
@@ -864,10 +959,7 @@ static void test_activate_paths(void)
     CHECK(1, "the list fades back in once the 500 ms hold expires");
 
     goto_settings();
-    select_row(7);                     /* System Data */
-    paint_n(2);
-    press(BTRON_KEY_RETURN);
-    paint_n(20);
+    open_menu(MENU_SYSDATA);           /* System Data */
     show_preview("sub-list: system data");
     dump_ppm(".build/xmb_sysdata.ppm");
     printf("   wrote .build/xmb_sysdata.ppm (sub-list)\n");
@@ -881,8 +973,7 @@ static void test_activate_paths(void)
         CHECK(ink > 1000, msg);
     }
 
-    press(BTRON_KEY_ESCAPE);
-    paint_n(6);
+    close_menu();
     CHECK(1, "ESC comes back out of the sub-list");
 }
 
@@ -895,21 +986,16 @@ static void test_particles_and_cost(void)
 
     printf("\n[6] Particles and frame cost\n");
 
-    press(BTRON_KEY_LEFT);
-    paint_n(20);
-    grab(a);
-    ink_on = count_brighter(a, g_fb, 2) + 1;   /* same state: sanity */
-    (void)ink_on;
-
     goto_settings();
-    select_row(2); press(BTRON_KEY_RETURN);    /* wave off -> particles off too */
+    open_menu(MENU_THEME);
+    set_switch(ROW_THEME_WAVE, XMB_SETTING_WAVE, 0);
     paint_n(3);
     grab(g_bg[1]);
-    select_row(2); press(BTRON_KEY_RETURN);    /* wave on */
-    select_row(3); press(BTRON_KEY_RETURN);    /* particles off */
+    set_switch(ROW_THEME_WAVE, XMB_SETTING_WAVE, 1);
+    set_switch(ROW_THEME_PARTICLES, XMB_SETTING_PARTICLES, 0);
     paint_n(20);
     grab(g_bg[2]);
-    select_row(3); press(BTRON_KEY_RETURN);    /* particles on */
+    set_switch(ROW_THEME_PARTICLES, XMB_SETTING_PARTICLES, 1);
     paint_n(20);
 
     ink_off = count_brighter(g_bg[2], g_fb, 2);
@@ -919,8 +1005,10 @@ static void test_particles_and_cost(void)
     dump_ppm(".build/xmb_particles.ppm");
     printf("   wrote .build/xmb_particles.ppm\n");
 
+    close_menu();
+
     /* Cost, because the 64x64 sheet is rasterized on the CPU */
-    press(BTRON_KEY_LEFT);
+    park_band(BAND_APPS);
     paint_n(4);
     t0 = (double)clock() / CLOCKS_PER_SEC;
     for (i = 0; i < 20; i++) paint_one();
@@ -934,12 +1022,184 @@ static void test_particles_and_cost(void)
     }
 }
 
+/* A bound row is a view of the machine's own setting: the value it steps from is
+ * the one the kernel, the PMC, the terminal or the IME holds at that moment, and
+ * the value it writes goes back there.  Each claim below edits the machine's
+ * variable first and presses the bar second, so the answer cannot be a value the
+ * menu happened to keep. */
+static void test_system_bindings(void)
+{
+    int snap[XMB_BIND_COUNT], after[XMB_BIND_COUNT];
+    int band_before, v0, font_before;
+    char msg[160];
+
+    printf("\n[7] Settings rows that hold the B-System's own value\n");
+
+    snprintf(msg, sizeof(msg), "the bar has three bands: Applications, Settings, Commands (%d)",
+             xmb_bands());
+    CHECK(xmb_bands() == 3, msg);
+
+    /* LEFT and RIGHT at the band level move the bar; only a value under an open
+     * menu is adjusted. */
+    goto_settings();
+    snapshot_binds(snap);
+    band_before = xmb_band();
+    press(BTRON_KEY_RIGHT);
+    paint_n(2);
+    press(BTRON_KEY_LEFT);
+    paint_n(2);
+    snapshot_binds(after);
+    snprintf(msg, sizeof(msg),
+             "at the band level LEFT/RIGHT move the bar and edit no setting (band %d, bind %d differs)",
+             xmb_band(), first_diff(snap, after));
+    CHECK(xmb_band() == band_before && first_diff(snap, after) < 0, msg);
+
+    /* Appearance -> Icon Size.  The setting is changed behind the bar's back while
+     * its menu is closed; opening the menu must read the machine again, because a
+     * row that stepped from its own last display would overwrite that change. */
+    g_icon_size = BTRON_ICON_SIZE_32;
+    open_menu(MENU_APPEARANCE);
+    select_row(ROW_APPEARANCE_ICON);
+    snprintf(msg, sizeof(msg), "the row reads the system's icon size (%d)",
+             xmb_bound(XMB_BIND_ICON_SIZE));
+    CHECK(xmb_bound(XMB_BIND_ICON_SIZE) == 0, msg);
+    close_menu();
+
+    g_icon_size = BTRON_ICON_SIZE_64;
+    open_menu(MENU_APPEARANCE);
+    select_row(ROW_APPEARANCE_ICON);
+    press(BTRON_KEY_RIGHT);            /* the last choice wraps to the first */
+    paint_n(2);
+    snprintf(msg, sizeof(msg), "the row steps from the size set while the menu was closed, and writes it back (%d px)",
+             g_icon_size == BTRON_ICON_SIZE_32 ? 32 : 64);
+    CHECK(g_icon_size == BTRON_ICON_SIZE_32, msg);
+
+    /* Appearance -> Window Style: the applet's setter also repaints every window,
+     * so the repaint count proves the row reached the window manager. */
+    g_wm_style_seen = WM_STYLE_BEOS;
+    v0 = g_wm_repaints;
+    select_row(ROW_APPEARANCE_FRAME);
+    press(BTRON_KEY_RIGHT);
+    paint_n(2);
+    snprintf(msg, sizeof(msg), "Window Style sets the PMC's style and repaints the frames (%d repaints)",
+             g_wm_repaints - v0);
+    CHECK(g_wm_style_seen == WM_STYLE_CHOKANJI && g_wm_repaints == v0 + 1, msg);
+    close_menu();
+
+    /* Keyboard.  The row's choices are names; the kernel's are microseconds, and
+     * the table in between is the only place either is written. */
+    g_kbd_repeat_delay_us    = 320000U;    /* the middle choice, 320 ms */
+    g_kbd_repeat_interval_us =  40000U;    /* the middle choice, 25 cps */
+    open_menu(MENU_KEYBOARD);
+    select_row(ROW_KBD_DELAY);
+    press(BTRON_KEY_RIGHT);
+    paint_n(2);
+    snprintf(msg, sizeof(msg), "\"500 ms\" is the kernel's own 500000 us (%u us)",
+             (unsigned)g_kbd_repeat_delay_us);
+    CHECK(g_kbd_repeat_delay_us == 500000U, msg);
+    select_row(ROW_KBD_RATE);
+    press(BTRON_KEY_RIGHT);
+    paint_n(2);
+    snprintf(msg, sizeof(msg), "\"12 cps\" is the kernel's own 80000 us per repeat (%u us)",
+             (unsigned)g_kbd_repeat_interval_us);
+    CHECK(g_kbd_repeat_interval_us == 80000U, msg);
+    g_kbd_repeat_enabled = 1;
+    select_row(ROW_KBD_REPEAT);
+    press(BTRON_KEY_RETURN);
+    paint_n(2);
+    CHECK(g_kbd_repeat_enabled == 0, "ENTER on Auto-Repeat clears the kernel's repeat flag");
+    close_menu();
+
+    /* Mouse: "3x" is three kernel steps per pointer move. */
+    g_mouse_step_mult = 2;
+    open_menu(MENU_MOUSE);
+    select_row(ROW_MOUSE_STEP);
+    press(BTRON_KEY_RIGHT);
+    paint_n(2);
+    snprintf(msg, sizeof(msg), "\"3x\" is three kernel steps per move (%d)", g_mouse_step_mult);
+    CHECK(g_mouse_step_mult == 3, msg);
+    close_menu();
+
+    /* Terminal: four rows share one struct, so a row writes its own field and
+     * leaves the rest of the terminal's settings as they are. */
+    g_term.theme = TERM_THEME_WHITE;
+    g_term.font_size = TERM_FONT_16;
+    g_term.scrollback_lines = 777;
+    open_menu(MENU_TERMINAL);
+    select_row(ROW_TERM_THEME);
+    press(BTRON_KEY_RIGHT);
+    paint_n(2);
+    font_before = (int)g_term.font_size;
+    snprintf(msg, sizeof(msg), "Console Colours writes its field alone (theme %d, font still %d, %d lines kept)",
+             (int)g_term.theme, font_before, (int)g_term.scrollback_lines);
+    CHECK(g_term.theme == TERM_THEME_CYAN && font_before == TERM_FONT_16
+          && g_term.scrollback_lines == 777, msg);
+    select_row(1);                    /* Console Font */
+    press(BTRON_KEY_LEFT);
+    paint_n(2);
+    snprintf(msg, sizeof(msg), "\"12 pt\" is the terminal's own 12 (font %d)", (int)g_term.font_size);
+    CHECK(g_term.font_size == TERM_FONT_12, msg);
+    close_menu();
+
+    /* Language: the row's index is the IME's mode, and its toggles are the
+     * applet-shared key settings, edited one flag at a time. */
+    g_tip_mode = TIP_MODE_ASCII;
+    g_tip_keys.jp_space_is_convert = TRUE;
+    g_tip_keys.tb_tab_is_popup     = TRUE;
+    open_menu(MENU_LANGUAGE);
+    select_row(ROW_LANG_METHOD);
+    press(BTRON_KEY_RIGHT);
+    paint_n(2);
+    snprintf(msg, sizeof(msg), "Input Method sets the IME's mode (%d)", (int)g_tip_mode);
+    CHECK(g_tip_mode == TIP_MODE_HIRAGANA, msg);
+    select_row(ROW_LANG_KANA);
+    press(BTRON_KEY_RETURN);
+    paint_n(2);
+    snprintf(msg, sizeof(msg), "a toggle clears one IME flag and leaves the others (conv %d, popup %d, number %d)",
+             g_tip_keys.jp_space_is_convert, g_tip_keys.tb_tab_is_popup,
+             g_tip_keys.num_select_enabled);
+    CHECK(g_tip_keys.jp_space_is_convert == FALSE && g_tip_keys.tb_tab_is_popup == TRUE
+          && g_tip_keys.num_select_enabled == TRUE, msg);
+    close_menu();
+
+    /* The bar's own numbers, unbound: the console's sliders move a single step. */
+    open_menu(MENU_SCREEN);
+    select_row(ROW_SCREEN_BRIGHT);
+    v0 = xmb_setting(XMB_SETTING_BRIGHTNESS);
+    press(BTRON_KEY_LEFT);
+    paint_n(2);
+    snprintf(msg, sizeof(msg), "a slider steps one level at a time (%d -> %d)",
+             v0, xmb_setting(XMB_SETTING_BRIGHTNESS));
+    CHECK(xmb_setting(XMB_SETTING_BRIGHTNESS) == v0 - 1, msg);
+    press(BTRON_KEY_RIGHT);
+    paint_n(2);
+    close_menu();
+
+    /* And nothing in the bar's tables was a second copy: after every edit above,
+     * the row and the machine still agree. */
+    snapshot_binds(after);
+    snprintf(msg, sizeof(msg),
+             "every bound row still reads its system's value (icon %d, wm %d, kbd %d, mouse %d, "
+             "term %d, tip %d)",
+             xmb_bound(XMB_BIND_ICON_SIZE), xmb_bound(XMB_BIND_WM_STYLE),
+             xmb_bound(XMB_BIND_KBD_RATE), xmb_bound(XMB_BIND_MOUSE_STEP),
+             xmb_bound(XMB_BIND_TERM_FONT), xmb_bound(XMB_BIND_TIP_MODE));
+    CHECK(after[XMB_BIND_ICON_SIZE] == (g_icon_size == BTRON_ICON_SIZE_64 ? 1 : 0)
+          && after[XMB_BIND_KBD_RATE] == 2 && after[XMB_BIND_MOUSE_STEP] == 2
+          && after[XMB_BIND_TERM_FONT] == 0 && after[XMB_BIND_TIP_MODE] == TIP_MODE_HIRAGANA,
+          msg);
+
+    park_band(BAND_APPS);
+    paint_n(20);
+}
+
 int main(void)
 {
     printf("==========================================================\n");
     printf(" XMB (XrossMediaBar) OpenGL render verification, %dx%d\n", XW, XH);
     printf("==========================================================");
 
+    system_state_init();
     gl_init(GL_BACKEND_VIRGL, XW, XH, g_fb);
 
     test_open_and_gradient();
@@ -952,6 +1212,7 @@ int main(void)
     test_walk_in_animation();
     test_activate_paths();
     test_particles_and_cost();
+    test_system_bindings();
 
     printf("\n==========================================================\n");
     printf(" XMB RENDER TEST RESULTS: %d / %d passed\n", g_total - g_failed, g_total);

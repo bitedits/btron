@@ -72,12 +72,30 @@ extern void uart_puts_raw(const char *s);
 #define XB_EASING_ALPHA     XB_EASE_OUT_CIRC
 #define XB_EASING_XY        XB_EASE_OUT_QUAD
 
+/* xmb_layout_common() (xmb.c:7182-7190). Categories and items happen to carry
+ * the same four numbers; xmb_list_open_new() reads the categories_* pair for
+ * the vertical rows, which is why both names are kept here. */
+#define XB_CATEGORIES_ACTIVE_ALPHA   1.0f
+#define XB_CATEGORIES_PASSIVE_ALPHA  0.75f
+#define XB_CATEGORIES_ACTIVE_ZOOM    1.0f
+#define XB_CATEGORIES_PASSIVE_ZOOM   0.5f
+#define XB_ITEMS_ACTIVE_ALPHA        1.0f
+#define XB_ITEMS_PASSIVE_ALPHA       0.75f
+#define XB_ITEMS_ACTIVE_ZOOM         1.0f
+#define XB_ITEMS_PASSIVE_ZOOM        0.5f
+
+/* xmb->icon_size * 10 in both xmb_selection_pointer_changed() and
+ * xmb_list_open_new(): a row further off than this is placed, not tweened. */
+#define XB_ANIM_THRESHOLD            (s_icon_size * 10.0f)
+
 #define XB_MAX_CATS         6
 #define XB_MAX_ITEMS        14
 #define XB_MAX_SUB          12
 #define XB_MAX_TWEENS       320
 #define XB_MAX_MSG_LINES    10
 #define XB_MSG_LINE_LEN     72
+
+#define XB_NEL(a)           ((int)(sizeof(a) / sizeof((a)[0])))
 
 #define XB_ATLAS_GRID       5            /* 5x5 icon cells */
 #define XB_ICON_CELL        64
@@ -254,11 +272,10 @@ typedef struct {
     xb_node_t   node;             /* the band icon */
 } xb_cat_t;
 
-/* Settings rows that the renderer itself reads back */
-enum {
-    S_THEME = 0, S_LANG, S_WAVE, S_PARTICLES, S_SHADOWS, S_BRIGHT,
-    S_FADE
-};
+/* Rows the renderer reads back, named for the menu that holds them */
+enum { THEME_COLOUR = 0, THEME_WAVE, THEME_PARTICLES };
+enum { LANG_SYS = 0 };
+enum { SCR_BRIGHT = 0, SCR_FADE, SCR_SHADOWS };
 
 static xb_item_t s_items_apps[] = {
     {"Terminal",       "Console access to the B-System shell",     XB_APP, L_GTERM,     0,0,NULL,NULL,IC_APP_TERM,   0,0,0,0,{0}},
@@ -284,19 +301,36 @@ static xb_item_t s_items_sysdata[] = {
     {"", "", XB_TEXT, L_NONE, 0,0,NULL,NULL,IC_INFO, 0,0,0,0,{0}},
     {"", "", XB_TEXT, L_NONE, 0,0,NULL,NULL,IC_INFO, 0,0,0,0,{0}},
     {"", "", XB_TEXT, L_NONE, 0,0,NULL,NULL,IC_INFO, 0,0,0,0,{0}},
-    {"", "", XB_TEXT, L_NONE, 0,0,NULL,NULL,IC_INFO, 0,0,0,0,{0}},
+};
+
+/* The Settings band holds menus, not widgets: as on the console, a row of the
+ * band opens the list beneath it, and the values change in there.  That is what
+ * keeps LEFT/RIGHT on the band a move between bands rather than an edit. */
+static xb_item_t s_items_theme[] = {
+    {"Colour",           "Background gradient colour",           XB_ENUM,   L_NONE, 0, 2, "Deep Blue|Graphite|Gold", NULL, IC_GEAR, 0,0,0,0,{0}},
+    {"Wave Background",  "Animated waving surface behind the bar",XB_TOGGLE,L_NONE, 1, 0, NULL, NULL, IC_DROPLET, 0,0,0,0,{0}},
+    {"Wave Particles",   "Sparkles rising off the waving surface",XB_TOGGLE, L_NONE, 1, 0, NULL, NULL, IC_DROPLET, 0,0,0,0,{0}},
+};
+
+static xb_item_t s_items_language[] = {
+    {"System Language",  "Language of the B-System text",        XB_ENUM,   L_NONE, 0, 2, "en-US|ja-JP|zh-CN",      NULL, IC_GEAR, 0,0,0,0,{0}},
+};
+
+static xb_item_t s_items_screen[] = {
+    {"Screen Brightness","Backlight level of the display",       XB_RANGE,  L_NONE, 90,100, NULL, NULL, IC_SLIDER, 0,0,0,0,{0}},
+    {"Edge Fade",        "Fade of list rows near the screen edge",XB_RANGE, L_NONE, 100,100,NULL, NULL, IC_SLIDER, 0,0,0,0,{0}},
+    {"Icon Shadows",     "Drop shadow under icons and text",     XB_TOGGLE, L_NONE, 1, 0, NULL, NULL, IC_SLIDER, 0,0,0,0,{0}},
 };
 
 static xb_item_t s_items_settings[] = {
-    {"Theme",            "Colour of the background gradient",    XB_ENUM,   L_NONE, 0, 2, "Deep Blue|Graphite|Gold", NULL, IC_GEAR,   0,0,0,0,{0}},
-    {"Language",         "System display language",              XB_ENUM,   L_NONE, 0, 2, "en-US|ja-JP|zh-CN",       NULL, IC_GEAR,   0,0,0,0,{0}},
-    {"Wave Background",  "Animated waving surface behind the bar",XB_TOGGLE,L_NONE, 1, 0, NULL, NULL, IC_SLIDER, 0,0,0,0,{0}},
-    {"Wave Particles",   "Sparkles rising off the waving surface",XB_TOGGLE, L_NONE, 1, 0, NULL, NULL, IC_SLIDER, 0,0,0,0,{0}},
-    {"Icon Shadows",     "Drop shadow under icons and text",     XB_TOGGLE, L_NONE, 1, 0, NULL, NULL, IC_SLIDER, 0,0,0,0,{0}},
-    {"Screen Brightness","Backlight level of the display",       XB_RANGE,  L_NONE, 90,100, NULL, NULL, IC_SLIDER, 0,0,0,0,{0}},
-    {"Edge Fade",        "Fade of list rows near the screen edge",XB_RANGE, L_NONE, 100,100,NULL, NULL, IC_SLIDER, 0,0,0,0,{0}},
-    {"System Data",      "Version, memory and volume details",   XB_SUB,    L_NONE, 0, 0,  NULL, NULL, IC_INFO,
-        0, 0, s_items_sysdata, 0, {0}},
+    {"Theme",            "Colour of the background gradient",    XB_SUB,    L_NONE, 0, 0, NULL, NULL, IC_GEAR,
+        0, 0, s_items_theme,    0, {0}},
+    {"Language System",  "Display language of the system",       XB_SUB,    L_NONE, 0, 0, NULL, NULL, IC_GEAR,
+        0, 0, s_items_language, 0, {0}},
+    {"Screen",           "Brightness, edge fade and shadows",    XB_SUB,    L_NONE, 0, 0, NULL, NULL, IC_SLIDER,
+        0, 0, s_items_screen,   0, {0}},
+    {"System Data",      "Version, memory and volume details",   XB_SUB,    L_NONE, 0, 0, NULL, NULL, IC_INFO,
+        0, 0, s_items_sysdata,  0, {0}},
 };
 
 static xb_item_t s_items_volume[] = {
@@ -897,11 +931,21 @@ static void xb_ribbon_step(float t)
         }
     }
 
-    /* Fragment stage: normal = cross(ddx(vEC), -ddy(vEC)); the sheet is
-     * parameterised by the grid, so the screen-space derivatives are the grid
-     * derivatives mapped through the (gx, ey) -> (sx, sy) Jacobian.  That
-     * mapping divides by d(ey)/d(row), which leaves the normal's z component
-     * positive everywhere, i.e. |cross|.z of the grid differences. */
+    /* Fragment stage of pipeline_xmb_ribbon.cg.h:
+     *   X = ddx(vEC);  Y = -ddy(vEC);  normal = normalize(cross(X, Y));
+     *   c = 1 - dot(normal, up), up = (0,0,1);   bright = (1 - cos(c*c)) / 13.
+     * ddx/ddy are per *screen* pixel, not per grid step.  Screen x tracks the
+     * column index alone (ex = gx) and screen y tracks ey, so inverting the
+     * (column,row) -> (x,y) Jacobian gives
+     *   X = (1, 0, (az - ay*n) / ax)   with n = bz / by
+     *   Y = (0, 1, bz / by)
+     * (ex does not change along a row, which is what kills the x-component of
+     * X's partner).  cross(X, -Y) then has z = -1, so
+     *   dot(normal, up) = -1 / sqrt(M*M + n*n + 1)
+     * and c = 1 + 1/len lies in [1, 2], so the sheet can never darken the
+     * background and its lift runs from (1-cos 1)/13 = 3.5% at its flattest to
+     * the expression's peak, 2/13 = 15.4%, where cc*cc reaches pi on a steep
+     * fold (it falls back to (1-cos 4)/13 = 12.7% at the steepest cc of 2). */
     for (r = 0; r < XB_RIBBON_ROWS; r++) {
         int r0 = r > 0 ? r - 1 : r;
         int r1 = r < XB_RIBBON_ROWS - 1 ? r + 1 : r;
@@ -911,19 +955,21 @@ static void xb_ribbon_step(float t)
             float ax = ex[r][c1] - ex[r][c0];
             float ay = ey[r][c1] - ey[r][c0];
             float az = ez[r][c1] - ez[r][c0];
-            float bx = ex[r1][c] - ex[r0][c];
             float by = ey[r1][c] - ey[r0][c];
             float bz = ez[r1][c] - ez[r0][c];
-            float nx = ay * bz - az * by;
-            float ny = az * bx - ax * bz;
-            float nz = ax * by - ay * bx;
-            float len = sqrtf(nx * nx + ny * ny + nz * nz);
-            float dot_up, cc, bright;
-            if (len < 1e-6f)
-                len = 1e-6f;
-            dot_up = fabsf(nz) / len;
-            cc     = 1.0f - dot_up;
-            bright = (1.0f - cosf(cc * cc)) / 13.0f;
+            float bright;
+
+            if (fabsf(ax) < 1e-6f || fabsf(by) < 1e-6f) {
+                /* Flat in screen y, or the last column: the screen derivatives
+                 * blow up and the normal tends to (0,0,-1) - the shader's
+                 * minimum lift. */
+                bright = (1.0f - cosf(1.0f)) / 13.0f;
+            } else {
+                float n  = bz / by;
+                float m  = (az - ay * n) / ax;
+                float cc = 1.0f + 1.0f / sqrtf(m * m + n * n + 1.0f);
+                bright   = (1.0f - cosf(cc * cc)) / 13.0f;
+            }
             s_rib_bri[r][c] = bright;
         }
     }
@@ -1510,9 +1556,10 @@ static int xb_draw_item(int i, int current)
              s_margin_top + n->y + s_label_top * 3.5f, s_font2,
              n->label_alpha * 0.7f * s_alpha_list, 1);
 
+    /* The value shows wherever the row is: on the band for the Volume sliders,
+     * inside the opened menu for everything the menu holds. */
     value[0] = '\0';
-    if (s_depth == 1)
-        xb_value_text(it, value, sizeof(value));
+    xb_value_text(it, value, sizeof(value));
     if (value[0])
         xb_draw_text(value,
              n->x + s_margin_left + s_spacing_h + s_label_left + s_setting_left,
@@ -1565,30 +1612,43 @@ static void xb_draw_footer(void)
 
 /* ── Animations ─────────────────────────────────────────────────────── */
 
+/* xmb_selection_pointer_changed() and xmb_list_open_new() do not use the drawn
+ * window to decide what animates: a row more than ten icons off the screen is
+ * placed at its target instead of tweened to it. */
+static int xb_row_off_screen(float iy)
+{
+    float real_iy = iy + s_margin_top;
+    return (real_iy < -XB_ANIM_THRESHOLD || real_iy > (float)s_h + XB_ANIM_THRESHOLD)
+           ? 1 : 0;
+}
+
+/* xmb_selection_pointer_changed(): the row walk */
 static void xb_anim_row_move(void)
 {
-    int count = 0, first = 0, last = 0, i;
+    int count = 0, i;
     int current = xb_cur_selection();
     xb_item_t *items = xb_cur_items(&count);
     uintptr_t tag = (uintptr_t)items;
 
     if (!items)
         return;
-    xb_visible_range(count, current, &first, &last);
 
     for (i = 0; i < count; i++) {
         xb_node_t *n = &items[i].node;
-        float ia = (i == current) ? 1.0f : 0.75f;   /* active / passive alpha */
-        float iz = (i == current) ? 1.0f : 0.5f;    /* active / passive zoom  */
+        float ia = (i == current) ? XB_ITEMS_ACTIVE_ALPHA
+                                  : XB_ITEMS_PASSIVE_ALPHA;
+        float iz = (i == current) ? XB_ITEMS_ACTIVE_ZOOM
+                                  : XB_ITEMS_PASSIVE_ZOOM;
         float iy = xb_item_y(i, current);
 
-        if (i < first || i > last) {
+        if (xb_row_off_screen(iy)) {
             n->y     = iy;
             n->alpha = ia;
             n->label_alpha = ia;
             n->zoom  = iz;
             continue;
         }
+        /* anim_move_up_down == 0: XMB_DELAY with EASING_OUT_QUAD */
         xb_tween_push(&n->alpha,       ia, XB_DELAY, XB_EASE_OUT_QUAD, tag);
         xb_tween_push(&n->label_alpha, ia, XB_DELAY, XB_EASE_OUT_QUAD, tag);
         xb_tween_push(&n->zoom,        iz, XB_DELAY, XB_EASE_OUT_QUAD, tag);
@@ -1605,8 +1665,10 @@ static void xb_anim_band_move(int dir)
     xb_tween_kill(tag_pos);
     for (i = 0; i < s_cat_count; i++) {
         xb_node_t *n = &s_cats[i].node;
-        float ia = (i == s_cat) ? 1.0f : 0.75f;
-        float iz = (i == s_cat) ? 1.0f : 0.5f;
+        float ia = (i == s_cat) ? XB_CATEGORIES_ACTIVE_ALPHA
+                                : XB_CATEGORIES_PASSIVE_ALPHA;
+        float iz = (i == s_cat) ? XB_CATEGORIES_ACTIVE_ZOOM
+                                : XB_CATEGORIES_PASSIVE_ZOOM;
         xb_tween_push(&n->alpha, ia, XB_DELAY, XB_EASE_OUT_QUAD,
                       (uintptr_t)&s_cats[i]);
         xb_tween_push(&n->zoom,  iz, XB_DELAY, XB_EASE_OUT_QUAD,
@@ -1633,13 +1695,15 @@ static void xb_anim_list_switch(int dir)
 
     for (i = 0; i < count; i++) {
         xb_node_t *n = &items[i].node;
-        float ia = (i == current) ? 1.0f : 0.75f;
+        float ia = (i == current) ? XB_ITEMS_ACTIVE_ALPHA
+                                  : XB_ITEMS_PASSIVE_ALPHA;
 
         n->x           = s_spacing_h * (float)dir;
         n->alpha       = 0.0f;
         n->label_alpha = 0.0f;
         n->y           = xb_item_y(i, current);
-        n->zoom        = (i == current) ? 1.0f : 0.5f;
+        n->zoom        = (i == current) ? XB_ITEMS_ACTIVE_ZOOM
+                                        : XB_ITEMS_PASSIVE_ZOOM;
 
         if (i >= first && i <= last) {
             /* xmb_push_animations(): the fading-in row is divided by 5 */
@@ -1655,10 +1719,13 @@ static void xb_anim_list_switch(int dir)
     }
 }
 
-/* xmb_list_open_new() + xmb_list_open(): entering or leaving a sub list */
+/* xmb_list_open_new(): every row is placed at its target y and zoom, and only
+ * the fading rows get their alpha and x tweened. dir is +1 going in and -1
+ * coming back, which decides where the rows start off to the side and which of
+ * them keep an alpha to fade from. */
 static void xb_anim_list_open(int dir)
 {
-    int count = 0, first = 0, last = 0, i;
+    int count = 0, i;
     int current = xb_cur_selection();
     xb_item_t *items = xb_cur_items(&count);
     uintptr_t tag;
@@ -1667,29 +1734,45 @@ static void xb_anim_list_open(int dir)
     if (!items)
         return;
     tag = (uintptr_t)items;
-    xb_visible_range(count, current, &first, &last);
 
     for (i = 0; i < count; i++) {
         xb_node_t *n = &items[i].node;
-        float ia = (i == current) ? 1.0f : 0.75f;
+        float ia;
 
-        n->alpha = (dir > 0 || i == current) ? 0.0f : ia;
-        if (dir > 0)
-           n->alpha /= 5.0f;
-        n->label_alpha = 0.0f;
+        if (dir > 0) {
+            n->alpha       = 0.0f;
+            n->label_alpha = 0.0f;
+        } else {
+            /* Coming back: the row the cursor is on keeps whatever alpha it
+             * already had, so it carries on instead of blinking. */
+            if (i != current)
+                n->alpha = 0.0f;
+            n->label_alpha = 0.0f;
+        }
+
         n->x    = s_icon_size * (float)dir * 2.0f;
         n->y    = xb_item_y(i, current);
-        n->zoom = (i == current) ? 1.0f : 0.5f;
+        n->zoom = XB_CATEGORIES_PASSIVE_ZOOM;
 
-        if (i >= first && i <= last) {
-            xb_tween_push(&n->alpha,       ia, XB_DELAY, XB_EASING_ALPHA, tag);
-            xb_tween_push(&n->label_alpha, ia, XB_DELAY, XB_EASING_ALPHA, tag);
-            xb_tween_push(&n->x,        0.0f, XB_DELAY, XB_EASING_XY, tag);
+        if (i == current) {
+            n->zoom = XB_CATEGORIES_ACTIVE_ZOOM;
+            ia      = XB_ITEMS_ACTIVE_ALPHA;
         } else {
-            n->x           = 0.0f;
+            ia      = XB_ITEMS_PASSIVE_ALPHA;
+        }
+
+        if (xb_row_off_screen(n->y)) {
             n->alpha       = ia;
             n->label_alpha = ia;
+            n->x           = 0.0f;
+            continue;
         }
+
+        /* The fading-in rows start a fifth of wherever they were */
+        n->alpha /= 5.0f;
+        xb_tween_push(&n->alpha,       ia, XB_DELAY, XB_EASING_ALPHA, tag);
+        xb_tween_push(&n->label_alpha, ia, XB_DELAY, XB_EASING_ALPHA, tag);
+        xb_tween_push(&n->x,        0.0f, XB_DELAY, XB_EASING_XY, tag);
     }
 
     /* xmb_list_open(): the whole bar slides aside by one icon per depth */
@@ -1722,15 +1805,17 @@ static void xb_layout_nodes(void)
 
 /* ── Actions ────────────────────────────────────────────────────────── */
 
+/* xb_move_row() walks off the top of an opened menu to close it */
+static void xb_go_back(void);
+
 static void xb_refresh_settings(void)
 {
-    xb_item_t *items = s_cats[1].items;
-    s_theme     = items[S_THEME].value;
-    s_wave      = items[S_WAVE].value;
-    s_particles = items[S_PARTICLES].value;
-    s_shadows   = items[S_SHADOWS].value;
-    s_brightness= (float)items[S_BRIGHT].value / 100.0f;
-    s_fade      = items[S_FADE].value;
+    s_theme     = s_items_theme[THEME_COLOUR].value;
+    s_wave      = s_items_theme[THEME_WAVE].value;
+    s_particles = s_items_theme[THEME_PARTICLES].value;
+    s_shadows   = s_items_screen[SCR_SHADOWS].value;
+    s_brightness= (float)s_items_screen[SCR_BRIGHT].value / 100.0f;
+    s_fade      = s_items_screen[SCR_FADE].value;
 }
 
 static void xb_sysdata_fill(void)
@@ -1811,12 +1896,9 @@ static void xb_activate(xb_item_t *it)
         xb_message_show();
         break;
     case XB_SUB:
-        if (it->sub_items && it->sub_count == 0) {
-            it->sub_items = s_items_sysdata;
-            it->sub_count = 6;
-        }
         if (it->sub_items && it->sub_count) {
-            xb_sysdata_fill();
+            if (it->sub_items == s_items_sysdata)
+                xb_sysdata_fill();
             s_depth    = 2;
             s_sub_sel  = 0;
             xb_anim_list_open(1);
@@ -1867,8 +1949,12 @@ static void xb_move_row(int dir)
     if (!items || count <= 0)
         return;
     sel += dir;
-    if (sel < 0)
-        sel = 0;
+    if (sel < 0) {
+        /* Walking off the top of an opened menu closes it again */
+        if (s_depth > 1)
+            xb_go_back();
+        return;
+    }
     if (sel >= count)
         sel = count - 1;
     if (sel == xb_cur_selection())
@@ -1893,6 +1979,24 @@ static void xb_move_cat(int dir)
     }
     xb_anim_band_move(dir);
     xb_anim_list_switch(dir);
+}
+
+/* LEFT/RIGHT.  The console's own rule, and the one the rest of this port
+ * assumes: at the band level these keys always switch bands, and a row's value
+ * is adjusted only once a menu is open beneath it.  Adjusting at the band level
+ * would trap the cursor wherever a band is made of sliders - the Volume rows. */
+static void xb_side(int dir)
+{
+    int count = 0;
+    xb_item_t *items = s_depth > 1 ? xb_cur_items(&count) : NULL;
+    xb_item_t *cur   = items ? &items[xb_cur_selection()] : NULL;
+
+    if (cur && (cur->kind == XB_TOGGLE || cur->kind == XB_RANGE ||
+                cur->kind == XB_ENUM)) {
+        xb_adjust(cur, dir);
+        return;
+    }
+    xb_move_cat(dir);
 }
 
 static void xb_go_back(void)
@@ -2015,23 +2119,19 @@ static void xb_event(WND *wnd, const EVT *evt)
         case BTRON_KEY_DOWN:
             xb_move_row(1);
             break;
+        /* MENU_ACTION_SCROLL_UP/DOWN: the host's wheel and trackpad arrive as
+         * page keys, because src/window/event.c turns notches into them. */
+        case BTRON_KEY_PAGE_UP:
+            xb_move_row(-1);
+            break;
+        case BTRON_KEY_PAGE_DOWN:
+            xb_move_row(1);
+            break;
         case BTRON_KEY_LEFT:
-            items = xb_cur_items(&count);
-            cur   = items ? &items[xb_cur_selection()] : NULL;
-            if (cur && (cur->kind == XB_TOGGLE || cur->kind == XB_RANGE ||
-                        cur->kind == XB_ENUM))
-               xb_adjust(cur, -1);
-            else
-               xb_move_cat(-1);
+            xb_side(-1);
             break;
         case BTRON_KEY_RIGHT:
-            items = xb_cur_items(&count);
-            cur   = items ? &items[xb_cur_selection()] : NULL;
-            if (cur && (cur->kind == XB_TOGGLE || cur->kind == XB_RANGE ||
-                        cur->kind == XB_ENUM))
-               xb_adjust(cur, 1);
-            else
-               xb_move_cat(1);
+            xb_side(1);
             break;
         case BTRON_KEY_RETURN:
         case BTRON_KEY_KP_ENTER:
@@ -2082,13 +2182,11 @@ static void xb_destroy(WND *wnd)
         egl_destroy_surface(s_surf);
         s_surf = NULL;
     }
-    if (s_tex_icons) {
-        glBindTexture(GL_TEXTURE_2D, 0);
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 1, 1, 0, GL_RGBA,
-                     GL_UNSIGNED_BYTE, NULL);
-        s_tex_icons = 0;
-    }
-    s_tex_font = 0;
+    /* The two atlases belong to this window's GL context, which
+     * egl_destroy_surface() above has just freed along with every texture
+     * image it held; only the names need dropping. */
+    s_tex_icons = 0;
+    s_tex_font  = 0;
     s_wnd      = NULL;
     if (s_tsk > 0)
         wup_tsk(s_tsk);
@@ -2112,15 +2210,21 @@ static void xb_init_state(void)
         node->y = 0.0f;
         node->alpha = 0.0f;
         node->label_alpha = 0.0f;
-        node->zoom = (c == s_cat) ? 1.0f : 0.5f;
+        node->zoom = (c == s_cat) ? XB_CATEGORIES_ACTIVE_ZOOM
+                                  : XB_CATEGORIES_PASSIVE_ZOOM;
     }
 
     /* Item tables carry their own counts in the array sizes; set them here so
      * the content above can be edited without keeping a count in sync. */
-    s_cats[0].count = (int)(sizeof(s_items_apps)     / sizeof(xb_item_t));
-    s_cats[1].count = (int)(sizeof(s_items_settings) / sizeof(xb_item_t));
-    s_cats[2].count = (int)(sizeof(s_items_volume)   / sizeof(xb_item_t));
-    s_cats[3].count = (int)(sizeof(s_items_commands) / sizeof(xb_item_t));
+    s_cats[0].count = XB_NEL(s_items_apps);
+    s_cats[1].count = XB_NEL(s_items_settings);
+    s_cats[2].count = XB_NEL(s_items_volume);
+    s_cats[3].count = XB_NEL(s_items_commands);
+
+    s_items_settings[0].sub_count = XB_NEL(s_items_theme);
+    s_items_settings[1].sub_count = XB_NEL(s_items_language);
+    s_items_settings[2].sub_count = XB_NEL(s_items_screen);
+    s_items_settings[3].sub_count = XB_NEL(s_items_sysdata);
 
     for (c = 0; c < s_cat_count; c++) {
         for (i = 0; i < s_cats[c].count; i++) {
@@ -2139,9 +2243,70 @@ static void xb_init_state(void)
 
     /* First-frame walk-in */
     for (i = 0; i < s_cat_count; i++)
-        xb_tween_push(&s_cats[i].node.alpha, (i == s_cat) ? 1.0f : 0.75f,
+        xb_tween_push(&s_cats[i].node.alpha,
+                      (i == s_cat) ? XB_CATEGORIES_ACTIVE_ALPHA
+                                   : XB_CATEGORIES_PASSIVE_ALPHA,
                       XB_DELAY, XB_EASING_ALPHA, (uintptr_t)&s_cats[i]);
     xb_anim_list_switch(1);
+}
+
+/* ── Calibration hooks ────────────────────────────────────────────────
+ * verify/tests/test_xmb_render.c cannot see the SDL window, so it measures
+ * pixels instead.  These read back what the bar is actually drawing and where
+ * its cursor actually is, so the test never has to mirror the menu's state. */
+
+int xmb_setting(int which)
+{
+    switch (which) {
+    case XMB_SETTING_THEME:      return s_items_theme[THEME_COLOUR].value;
+    case XMB_SETTING_WAVE:       return s_items_theme[THEME_WAVE].value;
+    case XMB_SETTING_PARTICLES:  return s_items_theme[THEME_PARTICLES].value;
+    case XMB_SETTING_BRIGHTNESS: return s_items_screen[SCR_BRIGHT].value;
+    case XMB_SETTING_FADE:       return s_items_screen[SCR_FADE].value;
+    case XMB_SETTING_SHADOWS:    return s_items_screen[SCR_SHADOWS].value;
+    default:                     return -1;
+    }
+}
+
+/* Where the cursor actually is: the band index, with 0 the leftmost, the depth
+ * of the stacked lists - 1 at the band level, 2 once a row's menu is open - and
+ * how many rows the list under the cursor holds.  A walk to a row has to know
+ * that last count, because UP on the first row of an open menu closes it. */
+int xmb_band(void)  { return s_cat; }
+int xmb_depth(void) { return s_depth; }
+
+int xmb_rows(void)
+{
+    int count = 0;
+    xb_cur_items(&count);
+    return count;
+}
+
+/* The ribbon's per-vertex brightness for the sheet as it currently stands.
+ * pipeline_xmb_ribbon's c = (1 - cos(cc*cc))/13 reads cc as the slope of the
+ * surface normal, which for this sheet is always in [1, 2]: cc = 1 over
+ * sqrt(m*m + n*n + 1), and that root is at least 1.  Over that range c peaks
+ * where cc*cc reaches pi, at 2/13, and bottoms out at (1 - cos 1)/13, so a
+ * field outside that pair is a modelling error in xb_ribbon_step() rather than
+ * a compositing accident. */
+void xmb_ribbon_calibrate(float *min_b, float *max_b, float *mean_b, int *samples)
+{
+    int r, c, n = 0;
+    float lo = 0.0f, hi = 0.0f, sum = 0.0f;
+
+    for (r = 0; r < XB_RIBBON_ROWS; r++)
+        for (c = 0; c < XB_RIBBON_COLS; c++) {
+            float b = s_rib_bri[r][c];
+            if (n == 0 || b < lo) lo = b;
+            if (n == 0 || b > hi) hi = b;
+            sum += b;
+            n++;
+        }
+
+    if (min_b)  *min_b  = lo;
+    if (max_b)  *max_b  = hi;
+    if (mean_b) *mean_b = n ? sum / (float)n : 0.0f;
+    if (samples) *samples = n;
 }
 
 WND* open_xmb_window(void)

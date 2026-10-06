@@ -13,9 +13,10 @@
  *      upside-down ortho map puts the 254-blue corner at the bottom.
  *   2. the waving surface — the driver composites it as dst*(1+c) with
  *      c = (1-cos(c^2))/13 from the sheet's surface normal (gl2.c:707 and the
- *      ribbon fragment stage).  Measured as the frame difference between the
- *      surface on and off: it must brighten, never darken, and by at most the
- *      analytic ceiling of the shader's own expression.
+ *      ribbon fragment stage).  Checked twice: against the shader's own bounds
+ *      on the field xb_ribbon_step() produces, and against the frame
+ *      difference of the same settled UI with the surface on and off, which
+ *      must lift the background and never darken it.
  *   3. the bar, the labels and the shadows — pixel ink where the PS3 layout
  *      geometry says they belong, and the ink growth that shadows add.
  *   4. the walk-in — the band's bright-pixel centroid over successive frames,
@@ -196,22 +197,6 @@ static int count_brighter(const unsigned *a, const unsigned *b, int t)
     return n;
 }
 
-/* Largest per-channel rise and fall between two frames */
-static void frame_delta(const unsigned *a, const unsigned *b, int *up, int *down)
-{
-    int i, mx = -(1 << 20), mn = 1 << 20;
-    for (i = 0; i < XW * XH; i++) {
-        int dr = (int)((b[i] >> 16) & 0xFF) - (int)((a[i] >> 16) & 0xFF);
-        int dg = (int)((b[i] >> 8)  & 0xFF) - (int)((a[i] >> 8)  & 0xFF);
-        int db = (int)( b[i]        & 0xFF) - (int)( a[i]        & 0xFF);
-        int d = dr > dg ? (dr > db ? dr : db) : (dg > db ? dg : db);
-        if (d > mx) mx = d;
-        if (d < mn) mn = d;
-    }
-    *up = mx;
-    *down = mn;
-}
-
 static void grab(unsigned *dst) { memcpy(dst, g_fb, sizeof(g_fb)); }
 
 /* Number of pixels that differ from the local background: any drawn ink */
@@ -241,18 +226,73 @@ static int centroid_x(int y0, int y1)
     return sum > 0 ? (int)(wsum / sum) : -1;
 }
 
-static void dump_ppm(const char *path)
+static void dump_region(const char *path, int w, int h)
 {
     FILE *f = fopen(path, "wb");
     int x, y;
     if (!f) return;
-    fprintf(f, "P6\n%d %d\n255\n", g_dev.width, g_dev.height);
-    for (y = 0; y < g_dev.height; y++)
-        for (x = 0; x < g_dev.width; x++) {
+    fprintf(f, "P6\n%d %d\n255\n", w, h);
+    for (y = 0; y < h; y++)
+        for (x = 0; x < w; x++) {
             unsigned c = fb_at(x, y);
             fputc(ch_r(c), f); fputc(ch_g(c), f); fputc(ch_b(c), f);
         }
     fclose(f);
+}
+
+static void dump_ppm(const char *path)
+{
+    dump_region(path, g_dev.width, g_dev.height);
+}
+
+/* Blit one bound texture across the frame so a baked atlas can be looked at
+ * directly: ids 1 and 2 are the icon and font atlases, in bake order. */
+static void dump_atlas(unsigned id, int w, int h, const char *path)
+{
+    int x, y;
+    unsigned *save = (unsigned *)malloc(sizeof(g_fb));
+    glViewport(0, 0, w, h);
+    glMatrixMode(GL_PROJECTION);
+    glLoadIdentity();
+    glOrtho(0.0, (double)w, (double)h, 0.0, -1.0, 1.0);
+    glMatrixMode(GL_MODELVIEW);
+    glLoadIdentity();
+    glDisable(GL_DEPTH_TEST);
+    glDisable(GL_BLEND);
+    glEnable(GL_TEXTURE_2D);
+    glBindTexture(GL_TEXTURE_2D, id);
+    glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+    glClear(GL_COLOR_BUFFER_BIT);
+    glColor4f(1.0f, 1.0f, 1.0f, 1.0f);
+    glBegin(GL_QUADS);
+    glTexCoord2f(0.0f, 0.0f); glVertex2f(0.0f, 0.0f);
+    glTexCoord2f(1.0f, 0.0f); glVertex2f((float)w, 0.0f);
+    glTexCoord2f(1.0f, 1.0f); glVertex2f((float)w, (float)h);
+    glTexCoord2f(0.0f, 1.0f); glVertex2f(0.0f, (float)h);
+    glEnd();
+    glDisable(GL_TEXTURE_2D);
+    glBindTexture(GL_TEXTURE_2D, 0);
+    if (save) {
+        for (y = 0; y < h; y++)
+            for (x = 0; x < w; x++)
+                save[y * w + x] = g_fb[y * XW + x];
+        {
+            FILE *f = fopen(path, "wb");
+            if (f) {
+                fprintf(f, "P6\n%d %d\n255\n", w, h);
+                for (y = 0; y < h; y++)
+                    for (x = 0; x < w; x++) {
+                        unsigned c = save[y * w + x];
+                        fputc((c >> 16) & 0xFF, f);
+                        fputc((c >> 8) & 0xFF, f);
+                        fputc(c & 0xFF, f);
+                    }
+                fclose(f);
+            }
+        }
+        free(save);
+    }
+    memset(g_fb, 0, sizeof(g_fb));
 }
 
 static void show_preview(const char *caption)
@@ -266,7 +306,7 @@ static void show_preview(const char *caption)
         for (x = 0; x < bx; x++) {
             int sx = x * g_dev.width  / bx;
             int sy = y * g_dev.height / by;
-            int l = lum(fb_at(sx, sy)) * 4 / (255 * 4);
+            int l = lum(fb_at(sx, sy)) * 9 / 255;
             if (l > 9) l = 9;
             fputc(ramp[l], stdout);
         }
@@ -299,19 +339,143 @@ static void press(unsigned key)
     if (g_wnd.event_handler) g_wnd.event_handler(&g_wnd, &e);
 }
 
-/* Settings rows, by their order in s_items_settings:
- * 0 Theme, 1 Language, 2 Wave Background, 3 Wave Particles,
- * 4 Icon Shadows, 5 Screen Brightness, 6 Edge Fade, 7 System Data */
-static void goto_settings(void)
-{
-    press(BTRON_KEY_RIGHT);
-}
+/* The Settings band holds menus, not widgets (as on the console), so a control
+ * is reached by opening its menu first:
+ *   band 0 Applications -> the launchers
+ *   band 1 Settings     -> 0 Theme, 1 Language System, 2 Screen, 3 System Data
+ *     band 0 Theme        -> 0 Colour, 1 Wave Background, 2 Wave Particles
+ *     band 1 Language     -> 0 System Language
+ *     band 2 Screen       -> 0 Screen Brightness, 1 Edge Fade, 2 Icon Shadows
+ *     band 3 System Data  -> six read-only lines
+ *   band 2 Volume       -> five sliders (which the console only lets you reach
+ *                          once a menu is open: at the band level LEFT/RIGHT
+ *                          always switch bands)
+ *   band 3 Commands     -> shell builtins, in a message box */
+/* The bands, by their order in s_cats */
+#define BAND_APPS     0
+#define BAND_SETTINGS 1
 
+/* Move the cursor to row `row` of the list under it.  DOWN clamps at the last
+ * row, but UP on the first row of an open menu closes it - the console's own way
+ * back - so the walk saturates at the bottom first and then counts back up,
+ * which never presses UP while the cursor is already at the top. */
 static void select_row(int row)
 {
-    int i;
-    for (i = 0; i < row; i++)
+    int i, last = xmb_rows() - 1;
+    if (row > last)
+        row = last;
+    for (i = 0; i <= last; i++)
         press(BTRON_KEY_DOWN);
+    for (i = last; i > row; i--)
+        press(BTRON_KEY_UP);
+    paint_n(1);
+}
+
+/* Park the bar on band `want`, at its first row and depth 1, from wherever the
+ * previous step left it.  The bar's own position is read back through
+ * xmb_band()/xmb_depth(), so no test has to remember what it pressed last -
+ * and the bands wrap, which makes guessing them useless anyway. */
+static void park_band(int want)
+{
+    int guard;
+    for (guard = 0; guard < 8; guard++) {
+        while (xmb_depth() > 1) {
+            press(BTRON_KEY_ESCAPE);
+            paint_n(2);
+        }
+        if (xmb_band() == want)
+            break;
+        press(xmb_band() < want ? BTRON_KEY_RIGHT : BTRON_KEY_LEFT);
+        paint_n(2);
+    }
+    select_row(0);
+    paint_n(2);
+}
+
+/* Settings is where every switch lives, so it is the frame both halves of an
+ * A/B are taken at. */
+static void goto_settings(void)
+{
+    park_band(BAND_SETTINGS);
+}
+
+/* Walk the band to `band_row` and open the menu under it */
+static void open_menu(int band_row)
+{
+    select_row(band_row);
+    press(BTRON_KEY_RETURN);
+    paint_n(20);
+}
+
+static void close_menu(void)
+{
+    press(BTRON_KEY_ESCAPE);
+    paint_n(20);
+}
+
+/* Walk the open menu to row `row` and press ENTER until switch `setting` reads
+ * `want`.  The state comes back from xmb_setting(), so the test never has to
+ * guess - or copy - where the switch started. */
+static void set_switch(int row, int setting, int want)
+{
+    int guard;
+    select_row(row);
+    for (guard = 0; guard < 3 && xmb_setting(setting) != want; guard++) {
+        press(BTRON_KEY_RETURN);
+        paint_n(2);
+    }
+}
+
+/* Settle the bar at the Settings band with the waving surface in state `want`,
+ * and grab that frame into `dst` (NULL: only leave the state set).  Both frames
+ * of the A/B go through this, so they are depth 1, same category, same row, and
+ * with the sparkles off because they animate: the menu draws byte-identical ink
+ * in each and the sheet is the only thing that can differ. */
+static void grab_band_frame(unsigned *dst, int want)
+{
+    goto_settings();
+    open_menu(0);                            /* Theme */
+    set_switch(2, XMB_SETTING_PARTICLES, 0);
+    set_switch(1, XMB_SETTING_WAVE, want);
+    close_menu();
+    paint_n(40);
+    printf("   frame taken at band %d, depth %d, %d rows, wave=%d particles=%d\n",
+           xmb_band(), xmb_depth(), xmb_rows(),
+           xmb_setting(XMB_SETTING_WAVE), xmb_setting(XMB_SETTING_PARTICLES));
+    if (dst)
+        grab(dst);
+}
+
+/* A grabbed frame, and the lift one frame has over another amplified into
+ * greys, so the sheet's shape can be looked at instead of only counted. */
+static void dump_frame(const unsigned *frame, const char *path)
+{
+    int x, y;
+    FILE *f = fopen(path, "wb");
+    if (!f) return;
+    fprintf(f, "P6\n%d %d\n255\n", g_dev.width, g_dev.height);
+    for (y = 0; y < g_dev.height; y++)
+        for (x = 0; x < g_dev.width; x++) {
+            unsigned c = frame[y * XW + x];
+            fputc(ch_r(c), f); fputc(ch_g(c), f); fputc(ch_b(c), f);
+        }
+    fclose(f);
+}
+
+static void dump_lift(const unsigned *a, const unsigned *b, int scale, const char *path)
+{
+    int x, y;
+    FILE *f = fopen(path, "wb");
+    if (!f) return;
+    fprintf(f, "P6\n%d %d\n255\n", g_dev.width, g_dev.height);
+    for (y = 0; y < g_dev.height; y++)
+        for (x = 0; x < g_dev.width; x++) {
+            int v = (lum(b[y * XW + x]) - lum(a[y * XW + x])) * scale;
+            if (v < 0) v = 0;
+            if (v > 255) v = 255;
+            fputc(v, f); fputc(v, f); fputc(v, f);
+        }
+    fclose(f);
 }
 
 /* ── Tests ───────────────────────────────────────────────────────────── */
@@ -368,64 +532,131 @@ static void test_open_and_gradient(void)
 
 static void test_ribbon_compositing(void)
 {
-    int up = 0, down = 0, lit = 0, i;
+    int x, y, xmin = 0, xmax = 0, ymin = 0, ymax = 0, strength_x0 = 0;
+    int lifted = 0, flat = 0, darkened = 0, samples = 0;
+    int ratio_n = 0, single_layer = 0, folded_over = 0, below_floor = 0, clipped = 0;
+    double ratio_sum = 0.0, min_frac = 0.0, max_frac = 0.0;
     char msg[160];
+    const unsigned *off = g_bg[1];   /* same UI, sheet off */
+    const unsigned *on  = g_bg[2];   /* same UI, sheet on  */
 
     printf("\n[2] The waving surface, composited the driver's way\n");
 
-    /* Turn the surface off through the menu itself, so the settings read-back
-     * path is exercised on the way, and compare whole frames. */
-    goto_settings();
-    paint_n(2);
-    select_row(2);                    /* Wave Background */
-    press(BTRON_KEY_RETURN);          /* -> off */
-    paint_n(2);
-    grab(g_bg[1]);                    /* no sheet: the plain frame */
+    grab_band_frame(g_bg[2], 1);     /* sheet on */
 
-    select_row(2);                    /* back onto the same row from its twin? */
-    paint_n(1);
-
-    /* Re-enable by pressing ENTER again after navigating back to the row */
-    press(BTRON_KEY_RETURN);
-    paint_n(2);
-    grab(g_bg[2]);                    /* sheet on */
-
+    /* The decisive measurement first, of the sheet's own fragment field:
+     * pipeline_xmb_ribbon's c = (1 - cos(cc*cc))/13 reads cc as the slope of the
+     * surface normal, and for this sheet cc is always in [1, 2].  Over that
+     * range the expression runs from (1-cos 1)/13 = 0.0354 at the flattest to
+     * its peak of 2/13 = 0.1538 where cc*cc reaches pi on a steep fold.  A field
+     * outside that pair is xb_ribbon_step() modelling the wrong thing - which is
+     * how the sheet ended up ~50x too weak. */
     {
-        int changed = 0;
-        for (i = 0; i < XW * XH; i++)
-            if (g_bg[1][i] != g_bg[2][i]) changed++;
-        snprintf(msg, sizeof(msg), "the sheet changes %d of %d pixels (%.1f%%)",
-                 changed, XW * XH, 100.0 * changed / (XW * XH));
-        CHECK(changed > XW * XH / 20, msg);
+        float lo = 0.0f, hi = 0.0f, mean = 0.0f;
+        int n = 0;
+        xmb_ribbon_calibrate(&lo, &hi, &mean, &n);
+        snprintf(msg, sizeof(msg),
+                 "the sheet's fragment field is the shader's: %.4f..%.4f, mean %.4f over %d vertices",
+                 lo, hi, mean, n);
+        CHECK(n == 64 * 64 && lo >= 0.0340f && lo <= hi && hi <= 0.1560f, msg);
     }
 
-    frame_delta(g_bg[1], g_bg[2], &up, &down);
-    printf("   measured per-channel delta: max rise %+d, max fall %+d\n", up, down);
-    CHECK(down >= -1, "dst*(1+c) never darkens the background");
-    /* gl2.c's fragment expression: c = (1 - cos(c*c))/13, whose ceiling with
-     * c -> 1 is (1-cos 1)/13 = 0.0354, i.e. at most +9 on a 255 scale */
-    CHECK(up <= 12, "the rise stays inside the shader's own (1-cos 1)/13 ceiling");
+    dump_frame(g_bg[2], ".build/xmb_sheet_on.ppm");
+    grab_band_frame(g_bg[1], 0);     /* sheet off, same UI */
+    dump_frame(g_bg[1], ".build/xmb_sheet_off.ppm");
+    dump_lift(g_bg[1], g_bg[2], 40, ".build/xmb_sheet_lift.ppm");
 
-    lit = count_brighter(g_bg[1], g_bg[2], 1);
-    snprintf(msg, sizeof(msg), "%d pixels lifted by the embossed sheet", lit);
-    CHECK(lit > 0, msg);
+    /* GL_DST_COLOR, GL_ONE means dst*(1+c): the sheet lifts the gradient and
+     * never darkens it.  The two frames are the same settled UI, so menu ink
+     * cancels out pixel for pixel and the whole frame is fair game for the
+     * direction and the coverage.  The strength is read from the right third
+     * only: at the band level the bar's labels and descriptions sit over the
+     * same rows as the sheet, and ink laid over a lifted background with
+     * GL_SRC_ALPHA shows only the part of the lift that its own alpha lets
+     * through - an attenuated lift, not a miscalibrated one. */
+    strength_x0 = g_dev.width * 3 / 5;
+    for (y = 1; y < g_dev.height - 1; y++) {
+        for (x = 1; x < g_dev.width - 1; x++) {
+            unsigned a = off[y * XW + x], b = on[y * XW + x];
+            int dr = (int)((b >> 16) & 0xFF) - (int)((a >> 16) & 0xFF);
+            int dg = (int)((b >> 8)  & 0xFF) - (int)((a >> 8)  & 0xFF);
+            int db = (int)( b        & 0xFF) - (int)( a        & 0xFF);
+            int d  = dr > dg ? (dr > db ? dr : db) : (dg > db ? dg : db);
+            int dst = (int)((a >> 16) & 0xFF);
+            double frac;
 
-    /* The sheet must be a surface, not noise: adjacent rows of the 64x64 grid
-     * are within a couple of levels of each other. */
-    {
-        int rough = 0, x;
-        for (x = 0; x < g_dev.width; x += 7) {
-            int y;
-            for (y = 10; y < g_dev.height - 20; y += 13) {
-                int a = lum(g_fb[y * XW + x]), b = lum(g_fb[(y + 1) * XW + x]);
-                int d = a - b;
-                if (d < 0) d = -d;
-                if (d > 14) rough++;
-            }
+            samples++;
+            if (d < 0) { darkened++; continue; }
+            if (d == 0) { flat++; continue; }
+            if ((int)((a >> 8) & 0xFF) > dst) dst = (int)((a >> 8) & 0xFF);
+            if ((int)(a & 0xFF) > dst)        dst = (int)(a & 0xFF);
+            lifted++;
+            if (lifted == 1) { xmin = xmax = x; ymin = ymax = y; }
+            if (x < xmin) xmin = x;
+            if (x > xmax) xmax = x;
+            if (y < ymin) ymin = y;
+            if (y > ymax) ymax = y;
+            if (x < strength_x0)
+                continue;
+
+            /* Below this the whole lift is one or two levels and rounding
+             * decides the answer, so the strength is measured on the half of the
+             * gradient that is bright enough to carry it.  And a pixel that the
+             * folds have already driven to 255 cannot show its full lift, so it
+             * is counted separately rather than as a shortfall. */
+            if (dst < 120)
+                continue;
+            if ((int)((b >> 16) & 0xFF) >= 255 || (int)((b >> 8) & 0xFF) >= 255 ||
+                (int)(b & 0xFF) >= 255) { clipped++; continue; }
+            frac = (double)d / (double)dst;
+            ratio_sum += frac;
+            ratio_n++;
+            if (ratio_n == 1 || frac < min_frac) min_frac = frac;
+            if (ratio_n == 1 || frac > max_frac) max_frac = frac;
+            if ((double)d + 0.5 < 0.0354 * dst) below_floor++;
+            if (frac <= 0.1610) single_layer++;   /* the shader's peak + 1 LSB */
+            else folded_over++;                   /* a fold of the curtain */
         }
-        snprintf(msg, sizeof(msg), "sheet is smooth across rows (%d hard steps)", rough);
-        CHECK(rough < 40, msg);
     }
+
+    printf("   covered %d of %d px (%.1f%%), x %d-%d y %d-%d, untouched %d\n",
+           lifted, samples, 100.0 * lifted / samples, xmin, xmax, ymin, ymax, flat);
+    printf("   over the %d covered px of clear background right of x %d: mean lift "
+           "%.4f of the background, weakest %.4f, strongest %.4f\n",
+           ratio_n, strength_x0, ratio_n ? ratio_sum / ratio_n : 0.0,
+           min_frac, max_frac);
+    printf("   %d single layer, %d folded over, %d below one flattest layer, "
+           "%d already at full scale\n",
+           single_layer, folded_over, below_floor, clipped);
+    printf("   wrote .build/xmb_sheet_on.ppm, _off.ppm and _lift.ppm (lift x40)\n");
+
+    snprintf(msg, sizeof(msg), "dst*(1+c) never darkens the background (%d px did)", darkened);
+    CHECK(darkened == 0, msg);
+    snprintf(msg, sizeof(msg), "the sheet covers the frame as a band (%d px)", lifted);
+    CHECK(lifted > samples / 20, msg);
+    snprintf(msg, sizeof(msg),
+             "the lift that reaches the pixels is the shader's, not a whisper (mean %.4f)",
+             ratio_n ? ratio_sum / ratio_n : 0.0);
+    CHECK(ratio_n > 200 && ratio_sum / ratio_n >= 0.0354
+          && ratio_sum / ratio_n <= 2.0 * 0.1538, msg);
+    /* The sheet is a folded curtain - its rows are displaced by far more than the
+     * 1/64 of the screen between them, exactly as the shader's vertex stage
+     * does - so a pixel may carry several layers and the strongest lift is not
+     * bounded.  The weakest one is: no covered pixel may fall below a single
+     * layer at the flattest the shader can be, half a level of rounding allowed. */
+    snprintf(msg, sizeof(msg),
+             "every covered pixel lifts by at least one flattest layer (%d fell short)",
+             below_floor);
+    CHECK(ratio_n > 200 && below_floor == 0, msg);
+
+    /* Leave the console's shipped state behind - the sheet and the sparkles
+     * both on - and the bar on Settings, which is where the next test walks
+     * left from. */
+    open_menu(0);
+    set_switch(1, XMB_SETTING_WAVE, 1);
+    set_switch(2, XMB_SETTING_PARTICLES, 1);
+    close_menu();
+    paint_n(30);
 }
 
 static void test_bar_labels_shadows(void)
@@ -637,6 +868,10 @@ int main(void)
     gl_init(GL_BACKEND_VIRGL, XW, XH, g_fb);
 
     test_open_and_gradient();
+    /* the two baked atlases, looked at directly */
+    dump_atlas(1, 320, 320, ".build/xmb_atlas_icons.ppm");
+    dump_atlas(2, 128, 96, ".build/xmb_atlas_font.ppm");
+    printf("   wrote .build/xmb_atlas_icons.ppm and .build/xmb_atlas_font.ppm\n");
     test_ribbon_compositing();
     test_bar_labels_shadows();
     test_walk_in_animation();

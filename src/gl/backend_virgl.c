@@ -1257,14 +1257,23 @@ static void virgl_tex_coord2f(GLfloat s, GLfloat t) {
 static void virgl_tex_coord2fv(const GLfloat *v) {
     if (v) { s_cur_u = v[0]; s_cur_v = v[1]; }
 }
+/* Hand out the lowest slot that holds no image yet.  A slot only gets its image
+ * at glTexImage2D, so a batch request would otherwise return the same name for
+ * every entry and the last upload would overwrite the rest; names already
+ * granted by this call are skipped to keep them distinct. */
 static void virgl_gen_textures(GLsizei n, GLuint *textures) {
     for (GLsizei i = 0; i < n; i++) {
         textures[i] = 0;
         for (int k = 1; k < VIRGL_MAX_TEXTURES; k++) {
-            if (!s_tex_table[k].argb) {
-                textures[i] = (GLuint)k;
-                break;
+            int granted = 0;
+            int j;
+            if (s_tex_table[k].argb) continue;
+            for (j = 0; j < i; j++) {
+                if (textures[j] == (GLuint)k) { granted = 1; break; }
             }
+            if (granted) continue;
+            textures[i] = (GLuint)k;
+            break;
         }
     }
 }

@@ -30,12 +30,15 @@
  * per-vertex UV, RGBA textures, orthographic projection and blending that the
  * menu layer needs (glBlendFunc/glColor4f/glVertex2f/glOrtho).
  *
- * Invented B-System content: the Applications, Settings and Commands categories.
+ * Invented B-System content: the Applications, Settings, Discs and Commands
+ * categories.
  * Applications really launch B-System windows, Commands really run B-System shell
  * builtins through shell_execute_cmd(), and the Settings rows edit the B-System's
  * own state in place - icon size, window frame style, keyboard and mouse kernel
  * variables, terminal settings, input method - rather than opening its Settings
- * applications.
+ * applications.  The Discs band is not content at all: its rows are the mounted
+ * volumes and their drawers, read from the same virtual file system the "sc" file
+ * manager reads (src/clu/vfs.c), one folder at a time and as deep as the volumes go.
  *
  * Copyright 2026 Synrc Research Center. MIT License.
  */
@@ -43,12 +46,14 @@
 #include "xmb.h"
 #include "../gl/gl_dispatch.h"
 #include "../gl/egl_surface.h"
+#include "../clu/vfs.h"          /* the VFS that "sc" walks: src/clu/vfs.c */
 #include <btron/btron.h>
 #include <btron/core.h>
 #include <btron/apps.h>
 #include <btron/settings.h>   /* icon size, terminal settings */
 #include <btron/pmc.h>        /* window frame style           */
 #include <btron/tip.h>        /* input method                 */
+#include <btron/fs/vol_api.h> /* mounted volumes: names, sizes, free blocks */
 #include <btron/libc_shim.h>
 #include <math.h>
 
@@ -113,9 +118,19 @@ extern int      g_mouse_accel_profile;
 #define XB_MAX_MSG_LINES    10
 #define XB_MSG_LINE_LEN     72
 
+/* The Discs band's list is not a table but a folder, so its rows are made as the
+ * folder is read.  XB_DISC_ROWS is how many entries of one folder the bar can show
+ * at a time and XB_DISC_HISTORY how many levels it remembers a cursor for; both are
+ * reached only by a folder bigger or deeper than any volume in this system holds,
+ * and the bar then stops at the last row it has room for rather than running off
+ * the end of a static array. */
+#define XB_DISC_ROWS        128
+#define XB_DISC_HISTORY     64
+#define XB_DISC_SUB         48   /* a volume's description line, in bytes */
+
 #define XB_NEL(a)           ((int)(sizeof(a) / sizeof((a)[0])))
 
-#define XB_ATLAS_GRID       5            /* 5x5 icon cells */
+#define XB_ATLAS_GRID       6            /* 6x6 icon cells */
 #define XB_ICON_CELL        64
 #define XB_ICON_TEX         (XB_ATLAS_GRID * XB_ICON_CELL)
 
@@ -242,7 +257,9 @@ enum {
     XB_ENUM,
     XB_CMD,          /* runs a shell builtin                */
     XB_SUB,          /* opens a nested list (menu depth 2)  */
-    XB_TEXT          /* a line inside a nested list         */
+    XB_TEXT,         /* a line inside a nested list         */
+    XB_DIR,          /* a folder: opens one level deeper    */
+    XB_FILE          /* a body: read and shown as text      */
 };
 
 /* Launch ids for XB_APP rows */
@@ -253,11 +270,12 @@ enum {
 
 /* Icon atlas cells */
 enum {
-    IC_CAT_APPS = 0, IC_CAT_SETTINGS, IC_CAT_VOLUME, IC_CAT_COMMANDS, IC_ARROW,
+    IC_CAT_APPS = 0, IC_CAT_SETTINGS, IC_CAT_COMMANDS, IC_ARROW,
     IC_APP_TERM, IC_APP_EDITOR, IC_APP_PAINT, IC_APP_MUSIC, IC_APP_ORCHESTRA,
     IC_APP_VOBJ, IC_APP_TAD, IC_APP_DRIVE, IC_APP_CHAT, IC_APP_PHOTO,
     IC_GEAR, IC_SLIDER, IC_SPEAKER, IC_INFO, IC_PROMPT,
-    IC_DROPLET, IC_FOLDER, IC_APP_QUAKE, IC_CLOCK, IC_BLANK
+    IC_DROPLET, IC_FOLDER, IC_APP_QUAKE, IC_CLOCK, IC_BLANK,
+    IC_MINIDISC, IC_FILE
 };
 
 typedef struct {
@@ -288,6 +306,7 @@ typedef struct {
     xb_item_t  *items;
     int         count;
     int         selection;
+    int         files;            /* the list is a folder, not a table   */
     xb_node_t   node;             /* the band icon */
 } xb_cat_t;
 
@@ -408,12 +427,56 @@ static xb_item_t s_items_commands[] = {
     {"Sync all volumes",     "Run the shell builtin: sync",      XB_CMD, XMB_BIND_NONE, L_NONE, 0,0,NULL, "sync",  IC_PROMPT,0,0,0,0,{0}},
 };
 
+/* ── The Discs band: the mounted volumes, through the CLU's own VFS ──────
+ *
+ * The bar keeps no model of the storage.  It asks the same virtual file system the
+ * "sc" file manager asks - src/clu/vfs.c, over opn_dir/rd_dir - for one folder at a
+ * time, and every row of the list is one entry of that listing.  A folder's contents
+ * are therefore never a copy the menu holds: they are read on the way in and read
+ * again on the way back, which is what makes the traversal endless.  There is no
+ * fixed tree to run out of, only the tree the volumes hold, at whatever depth they
+ * hold it.
+ *
+ * What is remembered per level is only the part a listing cannot give back: which
+ * row the cursor was on and the name it was on, exactly as sc's DirHistory does.
+ * Going up one level is the append undone - the last path segment dropped, the
+ * folder listed again, the cursor put back where it came from.
+ */
+
+typedef struct {
+    char name[VFS_MAX_NAME];   /* the row that was opened, for the title   */
+    int  cursor;               /* its index in the parent's list           */
+} xb_disc_mark_t;
+
+typedef struct {
+    char      path[VFS_MAX_PATH];               /* the folder on screen */
+    xb_item_t items[XB_DISC_ROWS];
+    char      names[XB_DISC_ROWS][VFS_MAX_NAME];/* the entry, as the volume spells it */
+    char      shown[XB_DISC_ROWS][VFS_MAX_NAME];/* its ASCII face, what the row labels */
+    char      subs[XB_DISC_ROWS][XB_DISC_SUB];  /* a volume's own description line */
+    uint32_t  fid[XB_DISC_ROWS];                /* the Real Body the row named */
+    uint32_t  size[XB_DISC_ROWS];               /* and how much of it it holds */
+    int       count;
+    int       sel;
+} xb_disc_t;
+
+static xb_disc_t         s_disc;
+static xb_disc_mark_t    s_disc_marks[XB_DISC_HISTORY];
+static int               s_disc_marks_n;   /* levels below the volume list */
+static VfsEntry          s_disc_scan[XB_DISC_ROWS];
+
 static xb_cat_t s_cats[] = {
-    {"Applications","Launch B-System applications", IC_CAT_APPS,     s_items_apps,     0, 0, {0}},
-    {"Settings",    "Configure the B-System",       IC_CAT_SETTINGS, s_items_settings, 0, 0, {0}},
-    {"Commands",    "Run B-System shell commands",  IC_CAT_COMMANDS, s_items_commands, 0, 0, {0}},
+    {"Applications","Launch B-System applications", IC_CAT_APPS,     s_items_apps,     0, 0, 0, {0}},
+    {"Settings",    "Configure the B-System",       IC_CAT_SETTINGS, s_items_settings, 0, 0, 0, {0}},
+    /* The Discs band has no table of its own: its rows are the folder it holds,
+     * so items points at the list buffer and files says the level functions are
+     * the ones that answer for it. */
+    {"Discs",       "Browse the mounted volumes",   IC_MINIDISC,     s_disc.items,     0, 0, 1, {0}},
+    {"Commands",    "Run B-System shell commands",  IC_CAT_COMMANDS, s_items_commands, 0, 0, 0, {0}},
 };
 static int s_cat_count = XB_NEL(s_cats);
+
+enum { BAND_APPS = 0, BAND_SETTINGS, BAND_DISCS, BAND_COMMANDS };
 
 /* ── Bindings ──────────────────────────────────────────────────────────
  * A bound row holds nothing of its own: its value is read out of the system it
@@ -660,6 +723,33 @@ static float xb_clampf(float v, float lo, float hi)
 static float xb_minf(float a, float b) { return a < b ? a : b; }
 static float xb_maxf(float a, float b) { return a > b ? a : b; }
 
+/* The bar's bitmap font carries ASCII 32..126, so a name the atlas cannot show is
+ * drawn one underscore per character.  Only the face of the name is changed here:
+ * the volume's own spelling is kept whole, because the paths walked from it have to
+ * name the entry the listing gave and not a rendering of it. */
+static void xb_disc_ascii(char *out, size_t out_max, const char *name)
+{
+    size_t o = 0;
+    const unsigned char *p = (const unsigned char *)name;
+
+    if (out_max == 0)
+        return;
+    while (*p && o + 1 < out_max) {
+        if (*p >= 32 && *p <= 126) {
+            out[o++] = (char)*p++;
+        } else if (*p >= 0xC0) {           /* the lead byte of a UTF-8 sequence */
+            p++;
+            while ((*p & 0xC0) == 0x80)
+                p++;
+            out[o++] = '_';
+        } else {
+            out[o++] = '_';                /* a control byte, or a stray continuation */
+            p++;
+        }
+    }
+    out[o] = '\0';
+}
+
 /* ── Layout ─────────────────────────────────────────────────────────── */
 
 static void xb_layout(int width, int height)
@@ -743,8 +833,15 @@ static void xb_visible_range(int count, int current, int *first, int *last)
     }
 }
 
+/* The three functions below are the whole of the bar's idea of where its cursor
+ * is, so a band whose list is a folder rather than a table only has to say so here
+ * and every walk, animation and drawing pass follows. */
 static xb_item_t *xb_cur_items(int *count)
 {
+    if (s_cats[s_cat].files) {
+        *count = s_disc.count;
+        return s_disc.items;
+    }
     if (s_depth > 1) {
         xb_item_t *it = &s_cats[s_cat].items[s_cats[s_cat].selection];
         *count = it->sub_count;
@@ -756,11 +853,21 @@ static xb_item_t *xb_cur_items(int *count)
 
 static int xb_cur_selection(void)
 {
+    if (s_cats[s_cat].files)
+        return s_disc.sel;
     return s_depth > 1 ? s_sub_sel : s_cats[s_cat].selection;
 }
 
 static void xb_set_selection(int v)
 {
+    if (s_cats[s_cat].files) {
+        s_disc.sel = v;
+        /* The band's own cursor is the volume list's, and it survives a trip to
+         * another band and back, as every other band's does. */
+        if (s_disc_marks_n == 0)
+            s_cats[s_cat].selection = v;
+        return;
+    }
     if (s_depth > 1)
         s_sub_sel = v;
     else
@@ -876,7 +983,6 @@ static float xb_icon_cov(int cell, float x, float y)
         d = UN(d, xb_sd_disc(x, y, 0.0f, 0.0f, 0.12f));
         break;
 
-    case IC_CAT_VOLUME:
     case IC_SPEAKER:
         /* Throat, cone and two sound arcs on the right */
         d = xb_sd_rbox(x, y, -0.30f, 0.0f, 0.07f, 0.14f, 0.03f);
@@ -954,6 +1060,28 @@ static float xb_icon_cov(int cell, float x, float y)
         d = UN(d, xb_sd_rbox(x, y, -0.18f, -0.18f, 0.16f, 0.08f, 0.03f));
         break;
 
+    case IC_MINIDISC:
+        /* The MiniDisc case the Discs band carries: a shell with its corner cut,
+         * the hub window in the middle and the two notches a drive reads. */
+        d = STROKE(SUB(xb_sd_rbox(x, y, 0.0f, 0.0f, 0.28f, 0.34f, 0.06f),
+                       xb_sd_tri(x, y, -0.10f, -0.30f,
+                                    -0.30f, -0.10f,
+                                    -0.62f, -0.62f)), XB_W * 0.8f);
+        d = UN(d, xb_sd_ring(x, y, 0.0f, 0.06f, 0.13f, XB_W * 0.8f));
+        d = UN(d, xb_sd_disc(x, y, 0.0f, 0.06f, 0.045f));
+        d = UN(d, xb_sd_rbox(x, y, -0.17f, 0.28f, 0.05f, 0.025f, 0.015f));
+        d = UN(d, xb_sd_rbox(x, y,  0.17f, 0.28f, 0.05f, 0.025f, 0.015f));
+        break;
+
+    case IC_FILE:
+        /* A body: a page with its top-right corner turned back */
+        d = STROKE(SUB(xb_sd_rbox(x, y, 0.0f, 0.02f, 0.24f, 0.32f, 0.03f),
+                       xb_sd_tri(x, y,  0.10f, -0.34f,
+                                    0.30f, -0.14f,
+                                    0.62f, -0.62f)), XB_W * 0.7f);
+        d = UN(d, xb_sd_capsule(x, y, -0.12f, 0.12f, 0.12f, 0.12f, 0.032f));
+        break;
+
     case IC_APP_DRIVE:
         d = xb_sd_ring(x, y, 0.0f, 0.0f, 0.32f, 0.10f);
         d = UN(d, xb_sd_disc(x, y, 0.0f, 0.0f, 0.09f));
@@ -1029,7 +1157,7 @@ static void xb_put_rgba(UB *px, int texw, int cx, int cy,
     px[o + 3] = a;
 }
 
-/* Bake the 5x5 icon atlas and the 8x16 bitmap-font atlas, then upload both.
+/* Bake the icon atlas and the 8x16 bitmap-font atlas, then upload both.
  * Row 0 of the uploaded image is texture row 0 (v = 0), the convention
  * backend_virgl.c documents.  glTexImage2D copies what it is given, so the two
  * bake buffers are freed as soon as the upload is done rather than kept in
@@ -1051,7 +1179,7 @@ static void xb_bake_textures(void)
     }
 
     memset(icons, 0, icon_bytes);
-    for (cell = 0; cell < IC_BLANK; cell++) {
+    for (cell = 0; cell < XB_ATLAS_GRID * XB_ATLAS_GRID; cell++) {
         int ox = (cell % XB_ATLAS_GRID) * XB_ICON_CELL;
         int oy = (cell / XB_ATLAS_GRID) * XB_ICON_CELL;
         for (py = 0; py < XB_ICON_CELL; py++) {
@@ -1648,13 +1776,23 @@ static void xb_draw_title(void)
                  icon_size, 1.0f, s_alpha * s_alpha_list);
 
     /* ... and the title text, offset past the icon (xmb.c:10237).  Below the
-     * category level the PS3 shows "Category > Item" on the same line. */
+     * category level the PS3 shows "Category > Item" on the same line.  For the
+     * Discs band the item named is the row the level below was opened from, which
+     * is what the mark for this level holds - the list under the cursor has moved
+     * on into that row's folder by now. */
     {
         float tx = s_title_left
                  + (s_depth > 1 ? s_icon_size * 0.45f : s_icon_size / 2.5f);
         xb_draw_text(cat->label, tx, s_title_top, s_font, 1.0f, 1);
         if (s_depth > 1) {
-            const char *item = cat->items[cat->selection].label;
+            char nm[64];
+            const char *item;
+            if (cat->files) {
+                xb_disc_ascii(nm, sizeof(nm), s_disc_marks[s_depth - 2].name);
+                item = nm;
+            } else {
+                item = cat->items[cat->selection].label;
+            }
             tx += xb_text_w(cat->label, s_font) + xb_text_w("> ", s_font);
             xb_draw_text(item, tx, s_title_top, s_font, 1.0f, 1);
         }
@@ -1801,8 +1939,9 @@ static int xb_draw_item(int i, int current)
              s_margin_top + n->y + s_label_top, s_font,
              n->label_alpha * s_alpha_list, 1);
 
-    /* An arrow after the value marks a row that opens a sub-list */
-    if (i == current && it->kind == XB_SUB)
+    /* An arrow after the value marks a row that opens a list of its own - a menu
+     * in the Settings band, a drawer or volume in the Discs band */
+    if (i == current && (it->kind == XB_SUB || it->kind == XB_DIR))
         xb_draw_icon(IC_ARROW,
              n->x + s_margin_left + s_spacing_h + s_label_left + s_setting_left
              + xb_text_w(value, s_font) + s_font,
@@ -1840,7 +1979,41 @@ static void xb_draw_footer(void)
              (kind == XB_APP)     ? "ENTER Launch  |  ESC Quit" :
              (kind == XB_CMD)     ? "ENTER Run  |  ESC Quit" :
              (kind == XB_SUB)     ? "ENTER Open  |  ESC Back" :
+             (kind == XB_DIR)     ? "ENTER Open  |  ESC Back" :
+             (kind == XB_FILE)    ? "ENTER View  |  ESC Back" :
                                     "LEFT/RIGHT Adjust  |  ENTER Set");
+
+    /* A folder is a long way from the volume list by the time the bar has gone
+     * down several levels, and the levels above the cursor have scrolled off the
+     * top of the list, so the path the rows came from is said outright. */
+    if (s_cats[s_cat].files) {
+        char where[VFS_MAX_PATH / 4];
+        char full[128];
+        char shown[64];
+        size_t len;
+
+        vfs_display_path(s_disc.path, where, sizeof(where));
+        xb_disc_ascii(full, sizeof(full), where);
+        len = strlen(full);
+        if (len + 1 <= sizeof(shown)) {
+            memcpy(shown, full, len + 1);
+        } else {
+            /* A folder nine levels down is a long way from the volume list, and the
+             * levels above the cursor are the ones already read: the path is kept
+             * from its deep end, at a whole segment, with the front left off. */
+            const char *tail = full + len - (sizeof(shown) - 3);
+            const char *slash = strchr(tail, '/');
+            if (slash)
+                tail = slash;
+            shown[0] = '.';
+            shown[1] = '.';
+            snprintf(shown + 2, sizeof(shown) - 2, "%s", tail);
+        }
+        xb_draw_text(shown, s_margin_left,
+                     (float)s_h - s_font * 1.4f - s_font2 * 1.8f, s_font2,
+                     0.45f * s_alpha, 0);
+    }
+
     xb_draw_text(buf, s_margin_left, (float)s_h - s_font * 1.4f, s_font2,
                  0.55f * s_alpha, 0);
 }
@@ -2010,11 +2183,13 @@ static void xb_anim_list_open(int dir)
         xb_tween_push(&n->x,        0.0f, XB_DELAY, XB_EASING_XY, tag);
     }
 
-    /* xmb_list_open(): the whole bar slides aside by one icon per depth */
+    /* xmb_list_open(): the whole bar slides aside by one icon per depth, with no
+     * ceiling - xmb.c:3906 tweens to icon_size * 1.1 * -(depth * 2 - 2) for the
+     * depth the menu is actually at, which is how a DLNA browser carries you off
+     * the categories and into the folder stack. */
     target_x = s_icon_size * XB_BAR_OFFSET * -(float)(s_depth * 2 - 2);
-    if (s_depth <= 2)
-        xb_tween_push(&s_x, target_x, XB_DELAY, XB_EASE_OUT_QUAD,
-                      (uintptr_t)&s_x);
+    xb_tween_push(&s_x, target_x, XB_DELAY, XB_EASE_OUT_QUAD,
+                  (uintptr_t)&s_x);
 }
 
 /* xmb_animation_list_alpha() */
@@ -2108,6 +2283,230 @@ static void xb_sysdata_fill(void)
     s_items_sysdata[0].sub_count = 0;
 }
 
+/* ── Discs: one folder at a time ────────────────────────────────────────
+ * The whole of the band's content comes from vfs_list_dir(), which is the same
+ * call "sc" makes: the volume list at "/", and below it a folder's entries with
+ * each one's Real Body id carried along so that the row opens the body it names.
+ * Nothing here keeps a second model of the storage: leaving and re-entering a
+ * folder re-reads it, so the rows are what the volume holds at that moment. */
+
+static char s_disc_text[720];   /* the head of one body, for the message box */
+
+/* Drawers before bodies, then each class in the order sc's compare_files() gives
+ * it - by name.  An insertion sort over one folder's listing, bounded by the
+ * number of rows the band can show rather than by recursion. */
+static int xb_disc_before(const VfsEntry *a, const VfsEntry *b)
+{
+    if (a->is_dir != b->is_dir)
+        return a->is_dir ? -1 : 1;
+    return strcmp(a->name, b->name);
+}
+
+static void xb_disc_sort(int n)
+{
+    int i;
+
+    for (i = 1; i < n; i++) {
+        VfsEntry keep = s_disc_scan[i];
+        int j = i - 1;
+        while (j >= 0 && xb_disc_before(&s_disc_scan[j], &keep) > 0) {
+            s_disc_scan[j + 1] = s_disc_scan[j];
+            j--;
+        }
+        s_disc_scan[j + 1] = keep;
+    }
+}
+
+/* One listing into the rows the bar will draw */
+static void xb_disc_fill(int n)
+{
+    int rows = 0, i;
+    int at_root = (s_disc.path[0] == '/' && s_disc.path[1] == '\0') ? 1 : 0;
+
+    for (i = 0; i < n && rows < XB_DISC_ROWS; i++) {
+        const VfsEntry *e = &s_disc_scan[i];
+        xb_item_t *it;
+
+        if (e->name[0] == '\0')
+            continue;
+
+        snprintf(s_disc.names[rows], VFS_MAX_NAME, "%s", e->name);
+        xb_disc_ascii(s_disc.shown[rows], VFS_MAX_NAME, e->name);
+        s_disc.subs[rows][0] = '\0';
+        s_disc.fid[rows]  = e->fid;
+        s_disc.size[rows] = e->size;
+
+        it = &s_disc.items[rows];
+        if (at_root && e->is_dir) {
+            /* A mounted volume: the MiniDisc, and the description line the console
+             * shows under the row the cursor rests on. */
+            Volume *v = vol_find_by_name(e->name);
+            it->icon = IC_MINIDISC;
+            if (v)
+                snprintf(s_disc.subs[rows], XB_DISC_SUB, "%s, %u KiB, %u free",
+                         vol_description(v), (unsigned)(e->size / 1024u),
+                         (unsigned)vol_free_blocks(v));
+            else
+                snprintf(s_disc.subs[rows], XB_DISC_SUB, "Mounted volume, %u KiB",
+                         (unsigned)(e->size / 1024u));
+        } else {
+            it->icon = e->is_dir ? IC_FOLDER : IC_FILE;
+        }
+        it->label = s_disc.shown[rows];
+        it->sub   = s_disc.subs[rows];
+        it->kind  = e->is_dir ? XB_DIR : XB_FILE;
+        it->bind  = XMB_BIND_NONE;
+        it->value = 0;
+        rows++;
+    }
+
+    s_disc.count = rows;
+}
+
+static void xb_disc_reload(void)
+{
+    int n = vfs_list_dir(s_disc.path, s_disc_scan, XB_DISC_ROWS);
+    if (n < 0)
+        n = 0;
+    xb_disc_sort(n);
+    xb_disc_fill(n);
+}
+
+/* The top of the band: the list of mounted volumes.  Reached on the way in and on
+ * every band switch, and the row the band was left on is the row it comes back to. */
+static void xb_disc_restart(void)
+{
+    snprintf(s_disc.path, sizeof(s_disc.path), "%s", "/");
+    s_disc_marks_n = 0;
+    xb_disc_reload();
+    s_disc.sel = s_cats[BAND_DISCS].selection;
+    if (s_disc.sel >= s_disc.count)
+        s_disc.sel = s_disc.count > 0 ? s_disc.count - 1 : 0;
+    s_cats[BAND_DISCS].selection = s_disc.sel;
+}
+
+/* ENTER on a drawer: the level below is the entry's own Real Body, reached through
+ * vfs_child_path() so that a folder holding two bodies of one name cannot send the
+ * cursor into the first of them. */
+static void xb_disc_enter(int row)
+{
+    char child[VFS_MAX_PATH];
+    xb_disc_mark_t *m;
+
+    if (row < 0 || row >= s_disc.count || s_disc_marks_n >= XB_DISC_HISTORY)
+        return;
+
+    m = &s_disc_marks[s_disc_marks_n];
+    snprintf(m->name, sizeof(m->name), "%s", s_disc.names[row]);
+    m->cursor = row;
+    s_disc_marks_n++;
+
+    vfs_child_path(child, sizeof(child), s_disc.path,
+                   s_disc.names[row], s_disc.fid[row]);
+    snprintf(s_disc.path, sizeof(s_disc.path), "%s", child);
+    xb_disc_reload();
+    s_disc.sel = 0;
+    s_depth    = 1 + s_disc_marks_n;
+    xb_sync_list();
+    xb_anim_list_open(1);
+}
+
+/* Up one level: the append undone by dropping the last path segment, which is the
+ * volume root at the top of a volume and the volume list above that.  The folder is
+ * read again, so its rows are the volume's rather than the bar's, and the cursor
+ * goes back to the row it came from - by name first, because that row may have
+ * moved, and by the remembered index if the name is gone. */
+static void xb_disc_up(void)
+{
+    char *slash;
+    const char *want;
+    int i, sel;
+
+    if (s_disc_marks_n <= 0)
+        return;                     /* the volume list is the top of the band */
+
+    want = s_disc_marks[s_disc_marks_n - 1].name;
+    sel  = s_disc_marks[s_disc_marks_n - 1].cursor;
+    s_disc_marks_n--;
+
+    slash = strrchr(s_disc.path, '/');
+    if (slash)
+        *slash = '\0';
+    if (s_disc.path[0] == '\0')
+        snprintf(s_disc.path, sizeof(s_disc.path), "%s", "/");
+
+    xb_disc_reload();
+
+    for (i = 0; i < s_disc.count; i++)
+        if (strcmp(s_disc.names[i], want) == 0) {
+            sel = i;
+            break;
+        }
+    if (sel >= s_disc.count)
+        sel = s_disc.count > 0 ? s_disc.count - 1 : 0;
+    if (sel < 0)
+        sel = 0;
+
+    s_disc.sel = sel;
+    s_depth    = 1 + s_disc_marks_n;
+    if (s_disc_marks_n == 0)
+        s_cats[s_cat].selection = sel;
+}
+
+/* ENTER on a body: the bar reads it through the same VFS and shows its head in the
+ * message box, which is as far as a menu with no text window can take a file. */
+static void xb_disc_view(int row)
+{
+    char file[VFS_MAX_PATH];
+    char head[XB_MSG_LINE_LEN];
+    size_t got = 0;
+    int i, n = 0;
+
+    if (row < 0 || row >= s_disc.count)
+        return;
+
+    vfs_child_path(file, sizeof(file), s_disc.path,
+                   s_disc.names[row], s_disc.fid[row]);
+    xb_message_begin();
+    snprintf(head, sizeof(head), "%s, %u bytes",
+             s_disc.shown[row], (unsigned)s_disc.size[row]);
+    xb_message_add(head);
+
+    if (vfs_read_file(file, s_disc_text, sizeof(s_disc_text) - 1, &got) != 0) {
+        xb_message_add("Nothing here can be read as text.");
+        xb_message_show();
+        return;
+    }
+    s_disc_text[got] = '\0';
+    for (i = 0; i < (int)got; i++) {
+        unsigned char u = (unsigned char)s_disc_text[i];
+
+        if (u == '\n' || u == '\r') {
+            head[n] = '\0';
+            xb_message_add(head);
+            n = 0;
+            continue;
+        }
+        if (u == '\t')
+            u = ' ';
+        if (u < 32 || u > 126)
+            u = '_';
+        head[n++] = (char)u;
+        if (n == XB_MSG_LINE_LEN - 1) {
+            head[n] = '\0';
+            xb_message_add(head);
+            n = 0;
+        }
+    }
+    if (n) {
+        head[n] = '\0';
+        xb_message_add(head);
+    }
+    if (s_msg_lines <= 1)
+        xb_message_add("(no text to show)");
+    xb_message_show();
+}
+
 /* The menu clock, in milliseconds, as of the last tick.  xb_activate() runs
  * from the event handler and needs it to set the launch hold's deadline. */
 static unsigned s_now_ms = 0;
@@ -2154,6 +2553,14 @@ static void xb_activate(xb_item_t *it)
         if (!s_msg_lines)
             xb_message_add("(no output)");
         xb_message_show();
+        break;
+    case XB_DIR:
+        if (s_cats[s_cat].files)
+            xb_disc_enter((int)(it - s_disc.items));
+        break;
+    case XB_FILE:
+        if (s_cats[s_cat].files)
+            xb_disc_view((int)(it - s_disc.items));
         break;
     case XB_SUB:
         if (it->sub_items && it->sub_count) {
@@ -2247,6 +2654,11 @@ static void xb_move_cat(int dir)
         s_depth = 1;
         s_x     = 0.0f;
     }
+    /* A band whose list is a folder is re-read on the way in, and always starts
+     * again at the volume list: the console does not park you inside a drawer when
+     * you leave for another category and come back. */
+    if (s_cats[s_cat].files)
+        xb_disc_restart();
     xb_sync_list();
     xb_anim_band_move(dir);
     xb_anim_list_switch(dir);
@@ -2277,6 +2689,12 @@ static void xb_go_back(void)
         return;
     }
     if (s_depth > 1) {
+        if (s_cats[s_cat].files) {
+            xb_disc_up();
+            xb_sync_list();
+            xb_anim_list_open(-1);
+            return;
+        }
         s_depth   = 1;
         s_sub_sel = 0;
         xb_sync_list();
@@ -2413,7 +2831,18 @@ static void xb_event(WND *wnd, const EVT *evt)
                break;
             }
             items = xb_cur_items(&count);
-            cur   = items ? &items[xb_cur_selection()] : NULL;
+            cur   = NULL;
+            /* An empty folder is a listing the volume can hand out - a freshly
+             * formatted disc has no rows at all - so the row ENTER acts on is
+             * clamped into the list rather than read at an index it may not have. */
+            if (items && count > 0) {
+                int sel = xb_cur_selection();
+                if (sel < 0)
+                    sel = 0;
+                if (sel >= count)
+                    sel = count - 1;
+                cur = &items[sel];
+            }
             if (cur)
                xb_activate(cur);
             break;
@@ -2487,10 +2916,11 @@ static void xb_init_state(void)
     }
 
     /* Item tables carry their own counts in the array sizes; set them here so
-     * the content above can be edited without keeping a count in sync. */
-    s_cats[0].count = XB_NEL(s_items_apps);
-    s_cats[1].count = XB_NEL(s_items_settings);
-    s_cats[2].count = XB_NEL(s_items_commands);
+     * the content above can be edited without keeping a count in sync.  The Discs
+     * band is the exception: its rows are a listing, not a table. */
+    s_cats[BAND_APPS].count     = XB_NEL(s_items_apps);
+    s_cats[BAND_SETTINGS].count = XB_NEL(s_items_settings);
+    s_cats[BAND_COMMANDS].count = XB_NEL(s_items_commands);
 
     s_items_settings[SET_APPEARANCE].sub_count = XB_NEL(s_items_appearance);
     s_items_settings[SET_THEME].sub_count      = XB_NEL(s_items_theme);
@@ -2502,12 +2932,16 @@ static void xb_init_state(void)
     s_items_settings[SET_SYSDATA].sub_count    = XB_NEL(s_items_sysdata);
 
     /* Every value the bar can show starts as the system's, not as the number the
-     * table happened to be written with. */
+     * table happened to be written with.  For the Discs band that means the volume
+     * list, read from the machine before the first frame is drawn. */
+    xb_disc_restart();
     xb_sync_list();
 
     for (c = 0; c < s_cat_count; c++) {
-        for (i = 0; i < s_cats[c].count; i++) {
-            xb_node_t *n = &s_cats[c].items[i].node;
+        int rows  = s_cats[c].files ? s_disc.count : s_cats[c].count;
+        xb_item_t *items = s_cats[c].files ? s_disc.items : s_cats[c].items;
+        for (i = 0; i < rows; i++) {
+            xb_node_t *n = &items[i].node;
             n->x = 0.0f;
             n->y = 0.0f;
             n->alpha = 0.0f;
@@ -2548,12 +2982,63 @@ int xmb_setting(int which)
 }
 
 /* Where the cursor actually is: the band index, with 0 the leftmost, the depth
- * of the stacked lists - 1 at the band level, 2 once a row's menu is open - and
- * how many rows the list under the cursor holds.  A walk to a row has to know
- * that last count, because UP on the first row of an open menu closes it. */
+ * of the stacked lists - 1 at the band level, and one deeper for every menu,
+ * volume or drawer opened from it - and how many rows the list under the cursor
+ * holds.  A walk to a row has to know that last count, because UP on the first row
+ * of an open menu closes it. */
 int xmb_band(void)  { return s_cat; }
 int xmb_depth(void) { return s_depth; }
 int xmb_bands(void) { return s_cat_count; }
+
+/* The row the cursor rests on, and its label: a walk through the folders is
+ * proved by which row the bar ended up on, not by how many it drew. */
+int xmb_row(void) { return xb_cur_selection(); }
+
+const char *xmb_label(int row)
+{
+    int count = 0;
+    xb_item_t *items = xb_cur_items(&count);
+
+    if (!items || row < 0 || row >= count)
+        return "";
+    return items[row].label ? items[row].label : "";
+}
+
+/* Which glyph of the icon atlas a row will be drawn with, as its cell in the
+ * atlas's grid.  A row's icon is chosen from the storage it came from - a mounted
+ * volume, a drawer, a body - so this is how a check can name the glyph it is
+ * looking at instead of guessing it from the picture.  -1 for no such row. */
+int xmb_row_icon(int row)
+{
+    int count = 0;
+    xb_item_t *items = xb_cur_items(&count);
+
+    if (!items || row < 0 || row >= count)
+        return -1;
+    return items[row].icon;
+}
+
+/* The folder the Discs band is showing, without the Real Body anchors the VFS
+ * carries in its paths, and how deep below the volume list it sits.  A test that
+ * walks the bar needs the second one to know which level it is looking at, because
+ * the list itself only ever holds the folder that is on screen. */
+const char *xmb_path(void)
+{
+    static char shown[128];
+    char raw[VFS_MAX_PATH / 4];
+
+    vfs_display_path(s_disc.path, raw, sizeof(raw));
+    xb_disc_ascii(shown, sizeof(shown), raw);
+    return shown;
+}
+
+int xmb_levels(void) { return s_disc_marks_n; }
+
+/* How far the category bar has been pushed sideways, in pixels, once its tween has
+ * settled: one icon width and a bit per level of the stack, with no ceiling - which
+ * is what makes the categories slide out of the frame as a folder tree goes down,
+ * the way the console's own browsers do. */
+int xmb_bar_x(void) { return (int)s_x; }
 
 /* What a bound row shows right now, which for those rows is simply what the
  * system holds: the same read the row itself goes through. */

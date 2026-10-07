@@ -22,11 +22,19 @@
  *   4. the walk-in — the band's bright-pixel centroid over successive frames,
  *      which must move and then settle.
  *   5. frame cost, because the sheet is rasterized on the CPU.
+ *   6. the Settings rows that hold a value of the B-System itself, read from and
+ *      written back to the kernel, the PMC, the terminal and the input method.
+ *   7. the Discs band — the mounted volumes and their drawers, walked through the
+ *      real VFS and the real Record-Stream FS: the row list against the VFS's own
+ *      listing, the MiniDisc glyph compared pixel-wise with the drawer's, the
+ *      category bar's sideways push at every level of a nine-level tree, and the
+ *      cursor coming back to the row it came from.
  *
  * Everything under test is linked for real (xmb.c, gl_dispatch.c, egl_surface.c,
- * backend_virgl.c, troncode.c); only the window system, the ITRON task layer and
- * the app launchers are stubbed, and the clock is advanced one 16 ms frame per
- * paint so the animation timeline is reproducible.
+ * backend_virgl.c, troncode.c, and for the Discs band src/clu/vfs.c with the FS
+ * engine src/fs files, on RAM volumes the test formats itself); only the window
+ * system, the ITRON task layer and the app launchers are stubbed, and the clock is
+ * advanced one 16 ms frame per paint so the animation timeline is reproducible.
  */
 
 #include <stdio.h>
@@ -44,7 +52,13 @@
 #include <btron/settings.h>
 #include <btron/pmc.h>
 #include <btron/tip.h>
+#include <btron/file.h>
+#include <btron/fs/block.h>
+#include <btron/fs/vol_api.h>
+#include <btron/fs/fs_internal.h>
+#include <btron/tad.h>
 #include "../../src/apps/xmb.h"
+#include "../../src/clu/vfs.h"
 
 #define XW 960
 #define XH 600
@@ -261,20 +275,6 @@ static int count_brighter(const unsigned *a, const unsigned *b, int t)
 
 static void grab(unsigned *dst) { memcpy(dst, g_fb, sizeof(g_fb)); }
 
-/* Number of pixels that differ from the local background: any drawn ink */
-static int ink_in_rect(int x0, int y0, int x1, int y1, const unsigned *bg)
-{
-    int x, y, n = 0;
-    for (y = y0; y < y1; y++)
-        for (x = x0; x < x1; x++) {
-            unsigned c = fb_at(x, y), b = bg[y * XW + x];
-            int d = (int)((c >> 16) & 0xFF) - (int)((b >> 16) & 0xFF);
-            if (d < 0) d = -(d);
-            if (d > 24) n++;
-        }
-    return n;
-}
-
 /* Bright-pixel centroid of a horizontal strip, used to follow the bar sliding */
 static int centroid_x(int y0, int y1)
 {
@@ -309,10 +309,8 @@ static void dump_ppm(const char *path)
 
 /* Blit one bound texture across the frame so a baked atlas can be looked at
  * directly: ids 1 and 2 are the icon and font atlases, in bake order. */
-static void dump_atlas(unsigned id, int w, int h, const char *path)
+static void blit_texture(unsigned id, int w, int h)
 {
-    int x, y;
-    unsigned *save = (unsigned *)malloc(sizeof(g_fb));
     glViewport(0, 0, w, h);
     glMatrixMode(GL_PROJECTION);
     glLoadIdentity();
@@ -334,6 +332,14 @@ static void dump_atlas(unsigned id, int w, int h, const char *path)
     glEnd();
     glDisable(GL_TEXTURE_2D);
     glBindTexture(GL_TEXTURE_2D, 0);
+}
+
+static void dump_atlas(unsigned id, int w, int h, const char *path)
+{
+    int x, y;
+    unsigned *save = (unsigned *)malloc(sizeof(g_fb));
+
+    blit_texture(id, w, h);
     if (save) {
         for (y = 0; y < h; y++)
             for (x = 0; x < w; x++)
@@ -355,6 +361,36 @@ static void dump_atlas(unsigned id, int w, int h, const char *path)
         free(save);
     }
     memset(g_fb, 0, sizeof(g_fb));
+}
+
+/* Look at one cell of the icon atlas: its ink count and a grey raster of it, so
+ * the glyph a row is drawn with can be recognised as well as counted.  The frame
+ * buffer is left cleared, as dump_atlas does; the bar repaints every frame. */
+static int atlas_cell_look(int cell, const char *caption)
+{
+    static const char ramp[] = " .:-=+*#%@";
+    const int grid = 6, tex = 384, cw = tex / grid;      /* xmb.c's own atlas */
+    int x, y, ink = 0;
+    int ox = (cell % grid) * cw, oy = (cell / grid) * cw;
+
+    if (cell < 0) return -1;
+    blit_texture(1, tex, tex);
+    for (y = 0; y < cw; y++)
+        for (x = 0; x < cw; x++)
+            if (lum(fb_at(ox + x, oy + y)) > 40) ink++;
+
+    printf("   atlas cell %d (x %d y %d), %d ink px -- %s\n", cell, ox, oy, ink, caption);
+    for (y = 0; y < cw; y += 2) {
+        printf("   |");
+        for (x = 0; x < cw; x++) {
+            int l = lum(fb_at(ox + x, oy + y)) * 9 / 255;
+            if (l > 9) l = 9;
+            fputc(ramp[l], stdout);
+        }
+        printf("|\n");
+    }
+    memset(g_fb, 0, sizeof(g_fb));
+    return ink;
 }
 
 static void show_preview(const char *caption)
@@ -416,13 +452,15 @@ static void press(unsigned key)
  *     Language   -> 0 Input Method, 1 Kana Conversion, 2 Kana Popup,
  *                   3 Arrow Browses, 4 Number Picks
  *     System Data-> six read-only lines
- *   band 2 Commands     -> shell builtins, in a message box
+ *   band 2 Discs        -> the mounted volumes, and below them their drawers
+ *   band 3 Commands     -> shell builtins, in a message box
  * The rows with a bind hold the B-System's own state, so they are checked against
  * the variables at the top of this file, not against xmb_setting(). */
 /* The bands, by their order in s_cats */
 #define BAND_APPS     0
 #define BAND_SETTINGS 1
-#define BAND_COMMANDS 2
+#define BAND_DISCS    2
+#define BAND_COMMANDS 3
 
 /* The Settings band's menus, by their order in s_items_settings */
 #define MENU_APPEARANCE 0
@@ -555,6 +593,23 @@ static void grab_band_frame(unsigned *dst, int want)
     printf("   frame taken at band %d, depth %d, %d rows, wave=%d particles=%d\n",
            xmb_band(), xmb_depth(), xmb_rows(),
            xmb_setting(XMB_SETTING_WAVE), xmb_setting(XMB_SETTING_PARTICLES));
+    if (dst)
+        grab(dst);
+}
+
+/* Icon Shadows is the only switch that changes how much ink the bar puts down, so
+ * its A/B is taken twice through here: set the switch, close the menu, and park
+ * the bar on the Applications band.  With the menu shut the switch's own "On" or
+ * "Off" word is not drawn anywhere in either frame, which leaves the shadow as the
+ * only thing that can differ between them. */
+static void set_shadows_and_park(unsigned *dst, int want)
+{
+    goto_settings();
+    open_menu(MENU_SCREEN);
+    set_switch(ROW_SCREEN_SHADOWS, XMB_SETTING_SHADOWS, want);
+    close_menu();
+    park_band(BAND_APPS);
+    paint_n(30);
     if (dst)
         grab(dst);
 }
@@ -829,25 +884,29 @@ static void test_bar_labels_shadows(void)
                             margin_top + icon / 2 - 20, 40, 40) >= 0, msg);
     }
 
-    /* Shadows: the same open menu, the same selected row, Icon Shadows off.  A
-     * shadow is a black copy of the glyph one or two pixels away, so it can only
-     * ever take light back out of the frame - never add any. */
-    goto_settings();
-    open_menu(MENU_SCREEN);
-    set_switch(ROW_SCREEN_SHADOWS, XMB_SETTING_SHADOWS, 1);
-    paint_n(30);
-    grab(with_shadows);
-    set_switch(ROW_SCREEN_SHADOWS, XMB_SETTING_SHADOWS, 0);
-    paint_n(30);
-    grab(without);
+    /* Shadows: a shadow is a black copy of the glyph one or two pixels away, so it
+     * can only ever take light back out of the frame - never add any.
+     *
+     * Both frames are taken with the menu closed, on the Applications band: the
+     * row that switches shadows has a word of its own, "On" in one state and "Off"
+     * in the other, and while its menu is open the two frames would be pictures of
+     * different text rather than of the shadow. */
+    set_shadows_and_park(with_shadows, 1);
+    set_shadows_and_park(without, 0);
 
     {
         int k;
         int lit_x0 = XW, lit_x1 = 0, lit_y0 = XH, lit_y1 = 0, lit_max = 0;
+        int ink_with = 0, ink_without = 0;
         shadow_px = 0;      /* px the shadow took light out of  */
         brightened = 0;     /* px the shadow somehow added light to */
         for (k = 0; k < XW * XH; k++) {
             int d = lum(without[k]) - lum(with_shadows[k]);
+            /* Counted at the brightness the bar paints its glyphs and icons at, so
+             * that the count is the ink itself rather than the background the
+             * shadow is allowed to darken. */
+            if (lum(with_shadows[k]) >= 200) ink_with++;
+            if (lum(without[k])        >= 200) ink_without++;
             if (d >= 8) shadow_px++;
             if (d <= -1) {
                 int x = k % XW, y = k / XW;
@@ -862,39 +921,23 @@ static void test_bar_labels_shadows(void)
         if (brightened)
             printf("   %d px are lit by the shadow: x %d-%d y %d-%d, strongest +%d\n",
                    brightened, lit_x0, lit_x1, lit_y0, lit_y1, lit_max);
-        if (getenv("XMB_DEBUG_SHADOW")) {
-            static const char ramp[] = " .:-=+*#%@";
-            int x, y;
-            for (y = lit_y0 - 8; y <= lit_y1 + 8; y++) {
-                printf("   y%3d |", y);
-                for (x = lit_x0 - 12; x <= lit_x1 + 12; x++)
-                    fputc(ramp[lum(with_shadows[y * XW + x]) * 9 / 255], stdout);
-                printf("| |");
-                for (x = lit_x0 - 12; x <= lit_x1 + 12; x++)
-                    fputc(ramp[lum(without[y * XW + x]) * 9 / 255], stdout);
-                printf("|\n");
-            }
-        }
-    }
-    snprintf(msg, sizeof(msg), "Icon Shadows darkens %d px and never brightens one",
-             shadow_px);
-    CHECK(shadow_px > 200 && brightened == 0, msg);
-
-    /* The label ink itself is the same pass either way, so it must not move */
-    set_switch(ROW_SCREEN_SHADOWS, XMB_SETTING_SHADOWS, 1);
-    paint_n(30);
-    {
-        int ink = 0, x, y;
-        for (y = label_y - 2; y < label_y + font + 8 && y < g_dev.height; y++)
-            for (x = label_x; x < g_dev.width; x++)
-                if (lum(fb_at(x, y)) > 90) ink++;
-        snprintf(msg, sizeof(msg), "the glyph ink is what the shadow draws around (%d px, %d in the band list)",
-                 ink, label_ink);
-        CHECK(ink > 150, msg);
+        printf("   the shadow darkens %d px by 8 or more; full-brightness ink counts"
+               " %d with, %d without (the band's own label holds %d)\n",
+               shadow_px, ink_with, ink_without, label_ink);
+        snprintf(msg, sizeof(msg), "Icon Shadows darkens %d px and never brightens one",
+                 shadow_px);
+        CHECK(shadow_px > 200 && brightened == 0, msg);
+        /* What the shadow costs the ink itself: a glyph's outermost coverage is
+         * only partly opaque, so the black run under it can take a pixel or two
+         * back below full brightness.  It can never lift one, and the count of
+         * full-brightness pixels moves by well under a percent. */
+        snprintf(msg, sizeof(msg), "the ink it is drawn under is all but untouched: %d px at"
+                 " full brightness with the shadow, %d without", ink_with, ink_without);
+        CHECK(ink_with <= ink_without && (ink_without - ink_with) * 100 < ink_without
+              && ink_with > 500, msg);
     }
 
-    close_menu();
-    park_band(BAND_APPS);
+    set_shadows_and_park(NULL, 1);      /* the shipped state, bar back on Applications */
     paint_n(20);
     show_preview("frame: settled bar, Applications");
     dump_ppm(".build/xmb_bar.ppm");
@@ -980,9 +1023,8 @@ static void test_activate_paths(void)
 static void test_particles_and_cost(void)
 {
     double t0, t1;
-    int i, ink_on, ink_off;
+    int i, lit_by_sparkles;
     char msg[160];
-    unsigned a[XW * XH];
 
     printf("\n[6] Particles and frame cost\n");
 
@@ -998,10 +1040,10 @@ static void test_particles_and_cost(void)
     set_switch(ROW_THEME_PARTICLES, XMB_SETTING_PARTICLES, 1);
     paint_n(20);
 
-    ink_off = count_brighter(g_bg[2], g_fb, 2);
+    lit_by_sparkles = count_brighter(g_bg[2], g_fb, 2);
     snprintf(msg, sizeof(msg), "particles add %d brighter pixels over the same frame without them",
-             ink_off);
-    CHECK(ink_off > 200, msg);
+             lit_by_sparkles);
+    CHECK(lit_by_sparkles > 200, msg);
     dump_ppm(".build/xmb_particles.ppm");
     printf("   wrote .build/xmb_particles.ppm\n");
 
@@ -1035,9 +1077,9 @@ static void test_system_bindings(void)
 
     printf("\n[7] Settings rows that hold the B-System's own value\n");
 
-    snprintf(msg, sizeof(msg), "the bar has three bands: Applications, Settings, Commands (%d)",
+    snprintf(msg, sizeof(msg), "the bar has four bands: Applications, Settings, Discs, Commands (%d)",
              xmb_bands());
-    CHECK(xmb_bands() == 3, msg);
+    CHECK(xmb_bands() == 4, msg);
 
     /* LEFT and RIGHT at the band level move the bar; only a value under an open
      * menu is adjusted. */
@@ -1193,6 +1235,449 @@ static void test_system_bindings(void)
     paint_n(20);
 }
 
+/* How different two cells of the atlas are, in pixels.  A row's icon being another
+ * *number* is not the claim - two cells could hold the same glyph - so the two
+ * silhouettes are compared where they are drawn. */
+static int atlas_cell_diff(int a, int b)
+{
+    const int grid = 6, tex = 384, cw = tex / grid;
+    int x, y, diff = 0;
+
+    if (a < 0 || b < 0)
+        return -1;
+    blit_texture(1, tex, tex);
+    for (y = 0; y < cw; y++)
+        for (x = 0; x < cw; x++) {
+            int pa = lum(fb_at((a % grid) * cw + x, (a / grid) * cw + y)) / 16;
+            int pb = lum(fb_at((b % grid) * cw + x, (b / grid) * cw + y)) / 16;
+            if (pa != pb)
+                diff++;
+        }
+    memset(g_fb, 0, sizeof(g_fb));
+    return diff;
+}
+
+/* ── The Discs band's storage: real volumes, real drawers ─────────────────
+ * The band's rows are whatever src/clu/vfs.c lists, so the test does not stub the
+ * VFS or describe the storage a second time: it formats two RAM volumes, files
+ * bodies in the Cho-Kanji one, and gives them parentage with the same 16-byte link
+ * records the FS engine reads (verify/tests/test_fs.c builds those bytes).  Then
+ * every claim below is about what the bar shows while walking that volume. */
+
+#define DISC_IMG_BLOCKS 256                      /* 256 KiB, 1 KiB blocks */
+#define DISC_IMG_BYTES  (DISC_IMG_BLOCKS * 1024)
+#define DISC_DEPTH      8                        /* drawers the bar is walked down */
+
+static unsigned char s_disc_img[DISC_IMG_BYTES];
+static unsigned char s_sys_img[DISC_IMG_BYTES];
+
+static Volume *disc_vol_make(unsigned char *img, const char *name)
+{
+    BlkDev *dev;
+
+    memset(img, 0, DISC_IMG_BYTES);
+    dev = blk_mem_create(img, DISC_IMG_BYTES, 0);
+    if (!dev)
+        return NULL;
+    if (vol_format(dev, 64, DISC_IMG_BLOCKS, name) != 0)
+        return NULL;
+    return vol_mount(dev);
+}
+
+/* One Virtual Body: the target's FID big-endian, the name's length at [14..15],
+ * then the name itself.  The record's type is what makes it a link. */
+static int link_rec(ID dir_fd, unsigned int idx, FID target, const char *name)
+{
+    unsigned char buf[16 + 64];
+    size_t n = strlen(name);
+
+    if (n > sizeof(buf) - 16)
+        return -1;
+    memset(buf, 0, sizeof(buf));
+    buf[0] = (unsigned char)(target >> 24);
+    buf[1] = (unsigned char)(target >> 16);
+    buf[2] = (unsigned char)(target >> 8);
+    buf[3] = (unsigned char)(target);
+    buf[14] = (unsigned char)(n >> 8);
+    buf[15] = (unsigned char)(n);
+    memcpy(buf + 16, name, n);
+    if (ins_rec(dir_fd, (W)idx, buf, (W)(16 + n)) != 0)
+        return -1;
+    fil_set_rec_type(dir_fd, (W)idx, (UH)RT_LINK);
+    return 0;
+}
+
+/* Bodies are created flat, by name, and get their parentage from whoever links to
+ * them - which is the whole of the 2-level Record-Stream model. */
+static FID body_make(const char *path, const char *text)
+{
+    ID fd = cre_fil(path, 0x0002);
+    FID fid;
+
+    if (fd < 0)
+        return FID_INVALID;
+    if (text) {
+        ins_rec(fd, 0, text, (W)strlen(text));
+        fil_set_rec_type(fd, 0, (UH)RT_TADDATA);
+    }
+    fid = g_open_files[(int)fd].fid;
+    cls_fil(fd);
+    return fid;
+}
+
+static FID drawer_make(const char *path, const char *child_name, FID child)
+{
+    ID fd = cre_fil(path, 0x0002);
+    FID fid;
+
+    if (fd < 0)
+        return FID_INVALID;
+    if (link_rec(fd, 0, child, child_name) != 0) {
+        cls_fil(fd);
+        return FID_INVALID;
+    }
+    fid = g_open_files[(int)fd].fid;
+    cls_fil(fd);
+    return fid;
+}
+
+/* The volume's own top drawer, which is the folder "/" names once the volume is
+ * chosen: FID 0, addressed by the volume name alone. */
+static int root_link(const char *volpath, unsigned int idx, const char *name, FID target)
+{
+    ID fd = opn_fil(volpath, 0x0002);
+    int r;
+
+    if (fd < 0)
+        return -1;
+    r = link_rec(fd, idx, target, name);
+    cls_fil(fd);
+    return r;
+}
+
+/* The text a body is filed with, and the Japanese name one link carries: the
+ * atlas has no glyph past '~', so the bar must show that row as underscores while
+ * still opening the body it names. */
+static const char DISC_TEXT[] =
+    "The Discs band reads this body through src/clu/vfs.c.\r\n"
+    "Its head is what the message box shows.\r\n"
+    "Third line, for the wrapping of a long one into the box.";
+static const char DISC_JP_NAME[] = "\xE8\xB6\x85\xE6\xBC\xA2\xE5\xAD\x97";   /* Cho-Kanji */
+
+/* Returns 1 when the storage was built, 0 when the FS itself refuses, so the
+ * section can say SKIP rather than fail on a machine problem. */
+static int disc_storage_build(void)
+{
+    FID notes, xmbc, todo, src, docs, chain[DISC_DEPTH + 1];
+    char path[48], link[48];
+    int k;
+
+    /* Whatever the earlier sections left mounted is not this test's business; the
+     * volume list is its own, so the machine starts from two volumes only. */
+    while (vol_mounted_count() > 0) {
+        Volume *v = vol_get_mounted(0);
+        if (!v)
+            break;
+        vol_umount(v);
+    }
+    g_sys_vol = NULL;
+
+    if (!disc_vol_make(s_sys_img, "SYS") || !disc_vol_make(s_disc_img, "CHOKANJI"))
+        return 0;
+
+    notes = body_make("/CHOKANJI/Notes", DISC_TEXT);
+    xmbc  = body_make("/CHOKANJI/xmb.c", "void xb_paint(void) { /* the bar itself */ }");
+    todo  = body_make("/CHOKANJI/todo.txt", "- keep the band honest");
+    if (notes == FID_INVALID || xmbc == FID_INVALID || todo == FID_INVALID)
+        return 0;
+
+    src  = drawer_make("/CHOKANJI/src", "xmb.c", xmbc);
+    docs = drawer_make("/CHOKANJI/Documents", "todo.txt", todo);
+
+    /* A chain DISC_DEPTH drawers deep, the last of them holding the Notes body */
+    snprintf(path, sizeof(path), "/CHOKANJI/Drawer %d", DISC_DEPTH);
+    chain[DISC_DEPTH] = drawer_make(path, "Notes", notes);
+    for (k = DISC_DEPTH - 1; k >= 1; k--) {
+        snprintf(path, sizeof(path), "/CHOKANJI/Drawer %d", k);
+        snprintf(link, sizeof(link), "Drawer %d", k + 1);
+        chain[k] = drawer_make(path, link, chain[k + 1]);
+    }
+    if (src == FID_INVALID || docs == FID_INVALID || chain[1] == FID_INVALID)
+        return 0;
+
+    /* The top level: three drawers, the body, and the same body under a Japanese
+     * name - which is exactly the aliasing a name-only path cannot tell apart. */
+    if (root_link("/CHOKANJI", 0, "src", src) != 0
+        || root_link("/CHOKANJI", 1, "Documents", docs) != 0
+        || root_link("/CHOKANJI", 2, "Drawer 1", chain[1]) != 0
+        || root_link("/CHOKANJI", 3, "Notes", notes) != 0
+        || root_link("/CHOKANJI", 4, DISC_JP_NAME, notes) != 0)
+        return 0;
+
+    return 1;
+}
+
+/* The row whose label is `want`, or -1 */
+static int row_of(const char *want)
+{
+    int i;
+
+    for (i = 0; i < xmb_rows(); i++)
+        if (strcmp(xmb_label(i), want) == 0)
+            return i;
+    return -1;
+}
+
+/* How many entries the VFS itself lists for a folder.  The band is checked against
+ * this, because both are the same call on the same folder: if the bar ever kept a
+ * copy of a listing, the two numbers would part. */
+static int vfs_rows(const char *path)
+{
+    VfsEntry ent[32];
+
+    return vfs_list_dir(path, ent, 32);
+}
+
+static void test_discs_band(void)
+{
+    char msg[200];
+    int row, k, rows;
+    unsigned before[XW * XH];
+
+    printf("\n[8] The Discs band: the mounted volumes, walked as far as they go\n");
+
+    if (!disc_storage_build()) {
+        printf("   SKIP: the FS itself would not build the volumes and drawers\n");
+        CHECK(1, "Discs section skipped because no storage could be formatted");
+        return;
+    }
+
+    /* The band is where the user put it: Applications, Settings, Discs, Commands */
+    grab_band_frame(NULL, 0);
+    park_band(BAND_DISCS);
+    snprintf(msg, sizeof(msg), "the third band is the Discs one, and it is showing the "
+             "mounted volumes (%d rows, path \"%s\")", xmb_rows(), xmb_path());
+    CHECK(xmb_band() == BAND_DISCS && xmb_depth() == 1 && xmb_levels() == 0
+          && xmb_rows() == 2 && strcmp(xmb_path(), "/") == 0, msg);
+
+    /* The rows are the VFS's own listing, in the order sc gives a folder: drawers
+     * before bodies, each class by name.  Both volumes are drawers, so the two rows
+     * are the two names sorted. */
+    snprintf(msg, sizeof(msg), "the volume list is the VFS listing, ordered as sc orders a "
+             "folder (0 \"%s\", 1 \"%s\")", xmb_label(0), xmb_label(1));
+    CHECK(strcmp(xmb_label(0), "CHOKANJI") == 0 && strcmp(xmb_label(1), "SYS") == 0, msg);
+
+    /* Each volume carries the MiniDisc, not the folder glyph a drawer gets. */
+    {
+        int disc_cell = xmb_row_icon(0);
+        int drawer_cell, minidisc_ink, cell_diff;
+
+        /* Down into CHOKANJI once and back, so a drawer row can be read: the same
+         * band, a different kind of row. */
+        select_row(0);
+        press(BTRON_KEY_RETURN);
+        paint_n(20);
+        drawer_cell = xmb_rows() > 0 ? xmb_row_icon(0) : -1;
+        press(BTRON_KEY_ESCAPE);
+        paint_n(20);
+        snprintf(msg, sizeof(msg), "a volume is drawn with its own glyph, and a drawer with "
+                 "another (volume cell %d, drawer cell %d)", disc_cell, drawer_cell);
+        CHECK(disc_cell >= 0 && drawer_cell >= 0 && disc_cell != drawer_cell, msg);
+        minidisc_ink = atlas_cell_look(disc_cell,
+                                       "the MiniDisc a mounted volume is drawn with");
+        snprintf(msg, sizeof(msg), "the MiniDisc is baked into the atlas, not blank "
+                 "(%d ink px)", minidisc_ink);
+        CHECK(minidisc_ink > 60, msg);
+        cell_diff = atlas_cell_diff(disc_cell, drawer_cell);
+        snprintf(msg, sizeof(msg), "the volume's glyph is a different silhouette from a "
+                 "drawer's, not the same picture twice (%d px differ)", cell_diff);
+        CHECK(cell_diff > 300, msg);
+    }
+
+    /* Into the Cho-Kanji volume: the band's rows become that volume's top drawer. */
+    select_row(0);
+    press(BTRON_KEY_RETURN);
+    paint_n(20);
+    rows = xmb_rows();
+    snprintf(msg, sizeof(msg), "ENTER opens the volume: depth %d, levels %d, path \"%s\", "
+             "%d rows", xmb_depth(), xmb_levels(), xmb_path(), rows);
+    CHECK(xmb_depth() == 2 && xmb_levels() == 1 && strcmp(xmb_path(), "/CHOKANJI") == 0
+          && rows == 5, msg);
+
+    snprintf(msg, sizeof(msg), "the folder's rows are the VFS's own listing of the same "
+             "folder, not a copy (bar %d, VFS %d)", xmb_rows(), vfs_rows(xmb_path()));
+    CHECK(xmb_rows() == vfs_rows(xmb_path()) && xmb_rows() == 5, msg);
+
+    snprintf(msg, sizeof(msg), "drawers come before bodies and each class is sorted by name "
+             "(0 \"%s\" 1 \"%s\" 2 \"%s\" 3 \"%s\" 4 \"%s\")",
+             xmb_label(0), xmb_label(1), xmb_label(2), xmb_label(3), xmb_label(4));
+    CHECK(strcmp(xmb_label(0), "Documents") == 0
+          && strcmp(xmb_label(1), "Drawer 1") == 0
+          && strcmp(xmb_label(2), "src") == 0
+          && strcmp(xmb_label(3), "Notes") == 0
+          && strcmp(xmb_label(4), "___") == 0, msg);
+
+    /* The console's way back, by name: the cursor returns to the row it came from,
+     * wherever that row is in the re-read listing. */
+    row = row_of("src");
+    select_row(row);
+    press(BTRON_KEY_RETURN);
+    paint_n(20);
+    snprintf(msg, sizeof(msg), "a drawer opens onto its own child (\"%s\", %d row(s), "
+             "\"%s\")", xmb_label(0), xmb_rows(), xmb_path());
+    CHECK(xmb_depth() == 3 && xmb_levels() == 2 && strcmp(xmb_label(0), "xmb.c") == 0
+          && xmb_rows() == 1, msg);
+    press(BTRON_KEY_ESCAPE);
+    paint_n(20);
+    snprintf(msg, sizeof(msg), "ESC re-reads the parent and puts the cursor back on the row "
+             "it came from (row %d \"%s\", depth %d)", xmb_row(), xmb_label(xmb_row()),
+             xmb_depth());
+    CHECK(xmb_depth() == 2 && xmb_row() == row && strcmp(xmb_label(xmb_row()), "src") == 0,
+          msg);
+
+    /* A row whose name the bitmap font has no glyph for is shown as underscores, and
+     * it is the same body the ASCII row names - which the anchor in the path is what
+     * makes certain, since the volume holds two links to one Real Body here. */
+    {
+        char alias[VFS_MAX_PATH];
+        char head[96];
+        size_t got = 0;
+
+        snprintf(alias, sizeof(alias), "/CHOKANJI/%s", DISC_JP_NAME);
+        snprintf(msg, sizeof(msg), "the Japanese-named row and \"Notes\" name one body "
+                 "(its head reads back: %.24s)",
+                 vfs_read_file(alias, head, sizeof(head), &got) == 0 ? head : "(unreadable)");
+        CHECK(strncmp(head, DISC_TEXT, 24) == 0, msg);
+    }
+    row = row_of("___");
+    select_row(row);
+    grab(before);
+    press(BTRON_KEY_RETURN);
+    paint_n(6);
+    {
+        int lit = count_brighter(before, g_fb, 8);
+        snprintf(msg, sizeof(msg), "the underscore row opens that body rather than the first "
+                 "of its name (%d px of message ink, depth still %d)", lit, xmb_depth());
+        CHECK(lit > 300 && xmb_depth() == 2 && xmb_row() == row, msg);
+    }
+    press(BTRON_KEY_ESCAPE);
+    paint_n(6);
+
+    /* ENTER on a body fills the message box with its head - the bar has no text
+     * window, so that is as far as a menu can take a file. */
+    row = row_of("Notes");
+    select_row(row);
+    paint_n(20);
+    grab(before);
+    press(BTRON_KEY_RETURN);
+    paint_n(6);
+    {
+        int lit = count_brighter(before, g_fb, 8);
+        snprintf(msg, sizeof(msg), "ENTER on a body opens its head in the message box "
+                 "(%d px added, depth still %d)", lit, xmb_depth());
+        CHECK(lit > 300 && xmb_depth() == 2, msg);
+    }
+    show_preview("frame: a body's head in the message box");
+    dump_ppm(".build/xmb_disc_notes.ppm");
+    press(BTRON_KEY_ESCAPE);
+    paint_n(4);
+
+    /* Infinity: the bar goes down as many levels as the volume has, and the category
+     * bar keeps sliding one icon width per level with no ceiling - the divergence
+     * from menu/drivers/xmb.c:3906 that used to stop the indent at depth 2. */
+    select_row(row_of("Drawer 1"));
+    press(BTRON_KEY_RETURN);
+    paint_n(24);
+    {
+        int x_first = xmb_bar_x();
+        int deep_ok = 1;
+        int last_x = x_first;
+
+        for (k = 2; k <= DISC_DEPTH; k++) {
+            select_row(0);
+            press(BTRON_KEY_RETURN);
+            paint_n(24);
+            if (xmb_depth() != k + 2 || xmb_levels() != k + 1)
+                deep_ok = 0;
+            if (xmb_bar_x() >= last_x)
+                deep_ok = 0;
+            last_x = xmb_bar_x();
+        }
+        snprintf(msg, sizeof(msg), "%d drawers below the volume: depth %d, levels %d, "
+                 "\"%s\", bar pushed to x %d px from its stop at x %d, one step further "
+                 "at every level", DISC_DEPTH, xmb_depth(), xmb_levels(), xmb_path(),
+                 xmb_bar_x(), x_first);
+        CHECK(deep_ok && xmb_depth() == DISC_DEPTH + 2 && xmb_levels() == DISC_DEPTH + 1
+              && xmb_bar_x() < x_first, msg);
+    }
+    snprintf(msg, sizeof(msg), "the deepest folder is still the volume's own row list "
+             "(\"%s\", %d row(s), VFS %d)", xmb_label(0), xmb_rows(), vfs_rows(xmb_path()));
+    CHECK(xmb_rows() == 1 && strcmp(xmb_label(0), "Notes") == 0
+          && xmb_rows() == vfs_rows(xmb_path()), msg);
+    show_preview("frame: the deepest drawer of the volume");
+    dump_ppm(".build/xmb_disc_deep.ppm");
+
+    /* And the way out, level by level: ESC pops one folder at a time, all the way
+     * from the bottom of the tree back to the mounted-volume list. */
+    for (k = DISC_DEPTH; k >= 1; k--) {
+        press(BTRON_KEY_ESCAPE);
+        paint_n(3);
+    }
+    paint_n(20);
+    snprintf(msg, sizeof(msg), "ESC pops every drawer back to the volume itself "
+             "(depth %d, levels %d, path \"%s\", %d rows)", xmb_depth(), xmb_levels(),
+             xmb_path(), xmb_rows());
+    CHECK(xmb_depth() == 2 && xmb_levels() == 1 && strcmp(xmb_path(), "/CHOKANJI") == 0
+          && xmb_rows() == 5, msg);
+    press(BTRON_KEY_ESCAPE);
+    paint_n(40);
+    snprintf(msg, sizeof(msg), "one more ESC is the mounted-volume list itself "
+             "(depth %d, path \"%s\", %d rows)", xmb_depth(), xmb_path(), xmb_rows());
+    CHECK(xmb_depth() == 1 && strcmp(xmb_path(), "/") == 0 && xmb_rows() == 2, msg);
+    snprintf(msg, sizeof(msg), "the categories are back at their own stop as the stack "
+             "closes (x %d px)", xmb_bar_x());
+    CHECK(xmb_bar_x() == 0, msg);
+
+    /* An empty volume is a listing the machine can hand out, and the bar has to
+     * survive it: no rows, so ENTER opens nothing. */
+    select_row(row_of("SYS"));
+    press(BTRON_KEY_RETURN);
+    paint_n(20);
+    g_launch = 0;
+    g_last_launch = "";
+    press(BTRON_KEY_RETURN);
+    paint_n(4);
+    snprintf(msg, sizeof(msg), "an empty volume opens to no rows and ENTER acts on none of "
+             "them (%d rows, launched %s)", xmb_rows(),
+             g_last_launch[0] ? g_last_launch : "nothing");
+    CHECK(xmb_depth() == 2 && xmb_rows() == 0 && g_launch == 0, msg);
+    press(BTRON_KEY_ESCAPE);
+    paint_n(10);
+
+    /* LEFT/RIGHT on a band that is a folder leave it, and the console does not park
+     * you inside a drawer when you come back. */
+    select_row(0);
+    press(BTRON_KEY_RETURN);
+    paint_n(20);
+    press(BTRON_KEY_RIGHT);
+    paint_n(20);
+    snprintf(msg, sizeof(msg), "a value key on a folder row switches the band instead "
+             "(band %d, depth %d)", xmb_band(), xmb_depth());
+    CHECK(xmb_band() == BAND_COMMANDS && xmb_depth() == 1, msg);
+    press(BTRON_KEY_LEFT);
+    paint_n(20);
+    snprintf(msg, sizeof(msg), "and the band restarts at the volume list (path \"%s\", "
+             "%d rows, depth %d)", xmb_path(), xmb_rows(), xmb_depth());
+    CHECK(strcmp(xmb_path(), "/") == 0 && xmb_rows() == 2 && xmb_depth() == 1, msg);
+
+    /* The frame the user described: the volume list, MiniDisc and all. */
+    park_band(BAND_DISCS);
+    paint_n(30);
+    show_preview("frame: the Discs band, mounted volumes");
+    dump_ppm(".build/xmb_disc_volumes.ppm");
+    printf("   wrote .build/xmb_disc_volumes.ppm, xmb_disc_notes.ppm, xmb_disc_deep.ppm\n");
+}
+
 int main(void)
 {
     printf("==========================================================\n");
@@ -1204,7 +1689,8 @@ int main(void)
 
     test_open_and_gradient();
     /* the two baked atlases, looked at directly */
-    dump_atlas(1, 320, 320, ".build/xmb_atlas_icons.ppm");
+    /* 384 = the atlas's own 6x6 grid of 64 px cells (XB_ATLAS_GRID in xmb.c) */
+    dump_atlas(1, 384, 384, ".build/xmb_atlas_icons.ppm");
     dump_atlas(2, 128, 96, ".build/xmb_atlas_font.ppm");
     printf("   wrote .build/xmb_atlas_icons.ppm and .build/xmb_atlas_font.ppm\n");
     test_ribbon_compositing();
@@ -1213,6 +1699,7 @@ int main(void)
     test_activate_paths();
     test_particles_and_cost();
     test_system_bindings();
+    test_discs_band();
 
     printf("\n==========================================================\n");
     printf(" XMB RENDER TEST RESULTS: %d / %d passed\n", g_total - g_failed, g_total);

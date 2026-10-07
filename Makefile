@@ -458,6 +458,7 @@ COMMON_NO_SDL_SRCS = \
     src/fs/blk_mem.c       \
     src/fs/vol.c           \
     src/fs/file.c          \
+    src/clu/vfs.c          \
     src/apps/clu.c
 
 BAREMETAL_STARTUP  = src/drivers/bcm283x/cpu/startup_arm.c
@@ -1635,7 +1636,9 @@ $(TEST_GMENU_BIN): $(TEST_GMENU_OBJS)
 # ═══════════════════════════════════════════════════════════════════
 TEST_XMB_SRCS = verify/tests/test_xmb_render.c src/apps/xmb.c \
                 src/gl/gl_dispatch.c src/gl/egl_surface.c src/gl/backend_virgl.c \
-                src/font/troncode.c src/font/jis_fonts.c src/font/tibetan_fonts.c
+                src/font/troncode.c src/font/jis_fonts.c src/font/tibetan_fonts.c \
+                src/clu/vfs.c src/fs/blk_mem.c src/fs/blk_file.c \
+                src/fs/vol.c src/fs/file.c
 TEST_XMB_OBJS = $(TEST_XMB_SRCS:.c=.test.o)
 TEST_XMB_BIN  = ./.build/test_xmb_render
 

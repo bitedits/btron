@@ -32,6 +32,29 @@ int  xmb_depth(void);
 int  xmb_rows(void);
 int  xmb_bands(void);
 
+/* The row the cursor rests on within that list, and the label of any row of it
+ * ("" when the row is out of range).  A walk through folders is proved by which
+ * row the bar ends up on, not by how many rows it drew. */
+int  xmb_row(void);
+const char *xmb_label(int row);
+
+/* The glyph a row is drawn with, as its cell in the icon atlas's grid: a mounted
+ * volume, a drawer and a body each carry their own, so a check can name the icon
+ * it looked at instead of guessing it from the picture.  -1 for no such row. */
+int  xmb_row_icon(int row);
+
+/* The folder the Discs band is showing, with the VFS's "#<fid>" Real Body anchors
+ * taken back out, and how many levels below the mounted-volume list that folder
+ * sits - xmb_levels() is xmb_depth() - 1 for that band, where a Settings menu
+ * would be one level too. */
+const char *xmb_path(void);
+int  xmb_levels(void);
+
+/* How far the category bar has been pushed sideways by the depth of the stack, in
+ * pixels: the animation's target is one icon width and a tenth per level below the
+ * band, with no ceiling.  0 at the band level. */
+int  xmb_bar_x(void);
+
 /* The rows of the Settings band that hold a value of the B-System itself, rather
  * than a value of the bar: their values are read from and written to the system's
  * own state - the appearance settings' icon size, the PMC's window frame style,

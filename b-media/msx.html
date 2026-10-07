@@ -362,14 +362,14 @@
           exercises the addressing and the palette path.</caption>
           <thead><tr><th>Reg</th><th>Name</th><th>Bits and meaning</th></tr></thead>
           <tbody>
-            <tr><td>R0</td><td>Mode</td><td>bit4 GR1, bit3 GR2, bit2 BIG, bit1 MPPC (V9958), bit0 MASK</td></tr>
-            <tr><td>R1</td><td>Setup</td><td>bit5 MAG (×2 magnify), bit4 INT (line-int enable), bit3 EES (external sync), bit2 SPR.SZ (1 = 16×16), bit1 SPR.SH (V9958 256-px wide sprites), bit0 DISP</td></tr>
-            <tr><td>R2</td><td>Name table</td><td>NTB = bits[3:0]; base = NTB × 2048 (page granularity 2 KiB)</td></tr>
-            <tr><td>R3</td><td>Colour table</td><td>CTB = bits[6:0]; base = CTB × 128 on V9938, CTB × 8192 on V9958 (bit 13 semantics differ; V9958 mode 5+ uses the V9958 law)</td></tr>
-            <tr><td>R4</td><td>Pattern generator</td><td>PTB = bits[2:0]; base = PTB × 8192 (V9958: × 16384 when R25 MGAB path active)</td></tr>
-            <tr><td>R5</td><td>Sprite pattern</td><td>SPRB = bits[6:3]; base = SPRB × 256</td></tr>
-            <tr><td>R6</td><td>Sprite attribute</td><td>SATB = bits[6:0]; base = SATB × 256 (8 bytes per sprite, 32 max)</td></tr>
-            <tr><td>R7</td><td>Colour and increment</td><td>INCR = bits[3:0] read/write auto-increment step, 0 means +1; EC = bits[7:4] backdrop colour</td></tr>
+            <tr><td>R0</td><td>Mode</td><td>bit1 GR1 = M3, bit2 GR2 = M4, bit3 BIG = M5 (the three mode bits 2.2 reads; GR1 alone is SCREEN 2, GR1+GR2 is SCREEN 5); bit4 line-interrupt enable, bit5 light-pen interrupt enable, bit6 digitize enable, bit0 and bit7 unread by the first core</td></tr>
+            <tr><td>R1</td><td>Setup</td><td>bit0 sprite magnification (×2 dots), bit1 sprite size (1 = 16×16), bit2 fast blink, bit3 M2, bit4 M1, bit5 frame-interrupt enable, bit6 display enable, bit7 unread</td></tr>
+            <tr><td>R2</td><td>Name table</td><td>base = R2 × 1024, so MSX1 uses bits[3:0] (SCREEN 0 and 1 read a 1 KiB window) and the V9958 bitmap screens use bits[5:0] with a 2 KiB step</td></tr>
+            <tr><td>R3</td><td>Colour table</td><td>base = R3 × 64, page-rounded to the mode's window: Graphics 1 reads a 768 B window at any 64-byte alignment, Graphics 2 and 3 an 8 KiB window, so on MSX1 Graphics 2 the only effective bit is R3[7] (base 0x0000 or 0x2000)</td></tr>
+            <tr><td>R4</td><td>Pattern generator</td><td>base = R4 × 2048, page-rounded the same way: text and Graphics 1 use a 2 KiB window, Graphics 2 and 3 an 8 KiB window, so on MSX1 Graphics 2 the effective bit is R4[2] (0x0000 or 0x2000)</td></tr>
+            <tr><td>R5</td><td>Sprite attribute</td><td>SAT base = R5 × 128, with the V9958 high bits from R11[1:0] × 32768; 32 entries of four bytes, 8×8 or 16×16 (4 bytes per sprite on MSX1, 8 on MSX2)</td></tr>
+            <tr><td>R6</td><td>Sprite pattern</td><td>SPT base = R6 × 2048 (MSX1 reads bits[2:0]); 256 tiles of 8 bytes, and a 16×16 sprite is four tiles numbered down the left column then the right</td></tr>
+            <tr><td>R7</td><td>Backdrop and increment</td><td>EC = bits[3:0] backdrop colour; bits[6:4] blink rate on V9938; INCR = bits[3:0] on MSX1 is the same field as EC, so the first core reads the increment from R15 on MSX2 and treats R7 as colour only</td></tr>
             <tr><td>R8</td><td>H-inter</td><td>horizontal interrupt counter (line delay 0-255)</td></tr>
             <tr><td>R9</td><td>V-inter</td><td>RA=bit7 (repeat/autoreload), lines 0-31 → interrupt line in display</td></tr>
             <tr><td>R10</td><td>Control</td><td>LC=bit7 light-pen enable, EQ=bit6 equalizer, KT=bit3 keyboard-tone flag read by BIOS, EXR=bit2 RAM refresh, MSTR=bit1 master background, SP=bit0 sprite enable</td></tr>
@@ -382,11 +382,19 @@
           </tbody>
         </table>
         <p>
-          Screen mode decode: the bits <code>GR1 GR2 BIG</code> select 000 SCREEN 0 (text 40×24), 010
-          SCREEN 1 (graphics 32×248), 100 SCREEN 2 (semi-graphic 256×192, V9958 half-index), 110 SCREEN 3
-          (multi-colour 64×212 with CRU), and 001 SCREEN 4/5 (bit 7 bitmap, 256×212, or 512×212 with MAG).
-          Any other combination is an undefined display in the first core: the renderer MUST emit black and
-          MUST NOT fail.
+          Screen mode decode <span class="basis basis-hw">Hardware</span>: five mode bits
+          <code>M5 M4 M3 M2 M1</code> form the index, with
+          <code>M1 = R1[4]</code>, <code>M2 = R1[3]</code>, <code>M3 = R0[1]</code>,
+          <code>M4 = R0[2]</code>, <code>M5 = R0[3]</code>, i.e.
+          <code>mode = ((R0 &amp; 0x0E) &lt;&lt; 1) | ((R1 &amp; 0x08) &gt;&gt; 2) | ((R1 &amp; 0x10) &gt;&gt; 4)</code>.
+          The MSX1 subset is 0x00 SCREEN 1 (GRAPHIC 1), 0x01 SCREEN 0 (TEXT 1, 40 columns),
+          0x02 SCREEN 3 (MULTICOLOUR), 0x04 SCREEN 2 (GRAPHIC 2); 0x05 and 0x06 are their
+          magnified TMS9918 variants. <strong>R0[1] selects SCREEN 2, not a magnification
+          bit</strong>: a game that boots SCREEN 1 and then switches to SCREEN 2 is recognised
+          by that single bit, and the three MSX1 bitmap screens share one name-table law but
+          differ in where the colour byte comes from (2.3). SCREEN 4 and up are V9938 modes
+          reached through M4/M5. Any other combination is an undefined display in the first
+          core: the renderer MUST emit black and MUST NOT fail.
         </p>
       </section>
 
@@ -396,23 +404,47 @@
   for line y in 0..211:
     if DISP == 0: emit EC background row; continue
     if y &lt; SPT + 1 (scroll): apply R9 vertical scroll to table line index
-    mode = GR1,GR2,BIG
-    case text (000):
+    mode = M5M4M3M2M1 (2.2)
+    case text 0x01 (SCREEN 0):
       f = VRAM[NTB_base + x]; p = VRAM[PTB_base + f*8 + (y%8)]
       colour: foreground = palette[ R25-based 8-col lookup ] (first core: fixed pair
               ink=paper inversion per MSX text law), ink bit7 == flash (invert with R12)
-    case g1 (010):
-      col = VRAM[NTB_base + (y/8)*32 + x/8]; pat = VRAM[PTB_base + col*8 + y%8]
-      bit = pat &gt;&gt; (7 - x%8); rgb = palette[ bit ? FG(palette reg of (y/8)%16, x/8) : BG ]
-    case g2/g3 (100/110): same pattern fetch, 4-bit CR from CTB per 8-dot group
+    case g1 0x00 (SCREEN 1):
+      cell = (y/8)*32 + x/8; name = VRAM[NTB + cell]
+      pat  = VRAM[PT + name*8 + y%8]            PT = (R4 &amp; 0x07) &lt;&lt; 11, 4 KiB
+      cr   = VRAM[CT + name &gt;&gt; 3]               CT = (R3 &amp; 0xFF) &lt;&lt; 6,   768 B
+      bit = pat &gt;&gt; (7 - x%8); rgb = palette[ bit ? cr&gt;&gt;4 : cr&amp;0x0F ]
+      colour groups are 8 PIXEL columns: one CR byte covers the eight dots of one cell row
+    case g2 0x04 (SCREEN 2) and g3 0x08 (SCREEN 4, MSX2):
+      code = name + 256*(y/64)                  three 256-entry name chunks, 8 rows each
+      idx  = code*8 + y%8
+      pat  = VRAM[PT + idx]   PT = (R4 &amp; 0x04) &lt;&lt; 11 for g2, 6 KiB
+      cr   = VRAM[CT + idx]   CT = (R3 &amp; 0x80) &lt;&lt; 6 for g2, 6 KiB   ← SAME INDEX as PT
+      bit = pat &gt;&gt; (7 - x%8); rgb = palette[ bit ? cr&gt;&gt;4 : cr&amp;0x0F ]
+      colour groups are 4 BIT-PLANES: one CR byte covers the eight dots of one pattern row
       (g3 CRU is per-dot on hardware; the first core applies the g2 group law to g3 CRU)
-    case g4/g5 (001):
+    case mc 0x02 (SCREEN 3, multicolour):
+      pat read from the sprite-pattern area; colour byte read at the same index as pat;
+      high nibble drives dots 0-3, low nibble drives dots 4-7, a zero nibble is EC
+    case g4/g5 0x0C/0x10 (SCREEN 5/6, MSX2):
       256: bit = VRAM[PTB + y*32 + x/8] bit(7-x%8); CR from NTB line (y/8)*32 + x/8,
            16-pixel colour-unit; RGB565 = pal[(CR&gt;&gt;4 or CR&amp;0x0F)&amp;0xF]
-      512 (bit7 of R0 with MAG): two 256 halves per dot-pair as in V9958 §17
-    sprites (if SP): read SATB entries in draw order, x&gt;=256 stops the line for
-      that sprite (overflow), 32 per frame cap, collision SC5 set when opaque bits overlap;
+      512 (R3.CMM with MAG): two 256 halves per dot-pair as in V9958 §17
+    sprites (if SP): scan SAT entries 0..31 in order, stop at Y == 0xD0, skip X == 0,
+      max 4 per line (a fifth sets status bit1), 32 per frame cap, collision SC5 set when
+      opaque bits overlap; size 16x16 when R1[1] on MSX1 else R8[1] or the per-sprite bit;
       16-colour law when R14.SC else 3-colour law (FG from own CR, EC when bit 0)</code></pre>
+        <p>
+          The SCREEN 2 colour law <span class="basis basis-hw">Hardware</span> is the one that is easy to
+          get wrong, so it is stated normatively here: <strong>Graphics 2 has a 6 KiB colour table, not a
+          768-byte one, and the colour byte lives at the same address inside it as the pattern byte does
+          inside the 6 KiB pattern table</strong> — <code>index = 8*code + y%8</code> with
+          <code>code = name + 256*(y/64)</code>. Reading the colour at <code>CT + code</code>, as the
+          Graphics 1 law would suggest, collapses every eight pattern rows onto one CR byte and makes a
+          SCREEN 2 game that paints per-row ink/paper pairs (Lode Runner is the reference case) render
+          almost entirely black. Graphics 1 keeps the 768-byte table with <code>name &gt;&gt; 3</code>;
+          the two laws are NOT interchangeable.
+        </p>
         <p>
           Palette: sixteen 16-bit colour registers in VRAM, written through auto-increment as
           <code>RRRRGGGG GGBBBB00</code>, low byte then high byte. The RGB565 conversion law is duplication:
@@ -442,6 +474,19 @@
           first core MAY drive the toggle from the NMI counter at a fixed period of its choosing
           (<span class="basis basis-cal">Calibrable</span>); AV-4 pins the period it ships with. Light pen
           MUST NOT be emulated beyond reporting <code>FG1 = 0</code> at all times.
+        </p>
+        <p>
+          The MSX1 sprite law <span class="basis basis-hw">Hardware</span>: the attribute table is 32
+          entries of four bytes — Y, X, pattern, colour — at base <code>R5 × 128</code> (2.2), scanned in
+          entry order. The scan stops at the first entry whose Y is <code>0xD0</code>; an entry with
+          <code>X = 0</code> is not drawn; a fifth sprite on any line sets status bit1 and the remaining
+          entries of that line are dropped. A 16×16 sprite is selected by <code>R1[1]</code> and takes its
+          pattern number masked to <code>0xFC</code>: its four 8×8 tiles are numbered down the left column
+          (<code>p</code>, <code>p+1</code>) and then down the right (<code>p+2</code>, <code>p+3</code>),
+          so sprite pixel <code>(px, py)</code> comes from bit <code>7 − px</code> of
+          <code>VRAM[SPT + 8·(p + 2·(px/8) + py/8) + py%8]</code>. Colour bit7 means <em>behind</em>: the
+          sprite is hidden wherever the background pixel is non-transparent. <code>R1[0]</code> magnifies
+          sprites to double width; the first core reads it as a no-op.
         </p>
       </section>
 
@@ -510,42 +555,69 @@
       <section id="ppi">
         <h3>2.5 PPI, Keyboard Matrix, Joystick</h3>
         <p>
-          8255 PPI at <code>0x10–0x13</code> and <code>0xA8–0xAB</code>: port A is the joystick and pin
-          input, port B is an output, port C is cassette and mixed. The control word MUST be honoured to the
-          extent that configuring ports A and C as inputs returns all-ones when idle.
+          8255 PPI at <code>0x10–0x13</code> and <code>0xA8–0xAB</code>, with the roles the MSX standard
+          gives its ports: port A (<code>0xA8</code>) is the primary slot-select latch — write it and the
+          page map changes, read it and the latch comes back; port B (<code>0xA9</code>) is the keyboard
+          column data for the row currently selected, active low; port C (<code>0xAA</code>) holds the
+          keyboard row select in its low nibble and the cassette lines in its high one;
+          <code>0xAB</code> is the mode-set word, and a value with bit 7 clear is an 8255 bit-set/reset
+          command against port C. C-BIOS writes <code>0x82</code> there at start-up. The joystick pins are
+          not on the PPI: they are read on the PSG ports, 2.5's joystick table.
         </p>
         <p>
-          Keyboard: <code>OUT 0xFE, row</code> with row 0–7, then read the 10 columns as active-low bits from
-          PPI A (the <code>0xFE</code> read or the INROW path). The core MUST present the matrix as one 8×10
-          bit array with the setter <code>msx_kbd_down(row, col)</code> used by the window event layer.
-          Debouncing belongs to the host UI, not to the core. The required first-core keys:
+          Keyboard: the row select is the low nibble written to port C at <code>0xAA</code>, so sixteen
+          row addresses exist, and the eight column bits are read back active-low from port B at
+          <code>0xA9</code>. C-BIOS' own scan does exactly this and nothing else: over a 500-frame boot
+          the tracer records 230 selects apiece for rows 0 through 9 at <code>0xAA</code>, and 230 reads
+          apiece at <code>0xA9</code> from <code>PC=177F</code>. The matrix is therefore the ten rows the
+          BIOS strobes, each of eight column bits — 80 cells, with rows 10 through 15 reading all-released
+          because no key is wired to them. The "8 rows × 10 columns" of earlier drafts counted those same
+          80 cells the other way round and is retired here; the core MUST present them through the setter
+          <code>msx_kbd_down(row, col)</code> used by the window event layer, with <code>row</code> the
+          value written to <code>0xAA</code>. Debouncing belongs to the host UI, not to the core. The
+          required first-core keys:
         </p>
         <table class="api-table">
-          <caption>Required keys. Row and column are 0-based matrix positions. The strobe/column convention
-          is <span class="basis basis-hw">Hardware</span>; each position below is
-          <span class="basis basis-norm">Normative</span> and AV-7 verifies the whole table against BIOS
+          <caption>Required keys. Row and column are 0-based matrix positions, the row being the
+          <code>0xAA</code> select value and the column the bit read at <code>0xA9</code>. The strobe
+          ports, the ten selected rows and each position below are
+          <span class="basis basis-hw">Hardware</span> — the C-BIOS scan quoted above for the ports, the
+          published MSX matrix for the positions — and AV-7 verifies the whole table against BIOS
           <code>KROW</code> reads.</caption>
           <thead><tr><th>Key</th><th>Row</th><th>Column</th><th>Key</th><th>Row</th><th>Column</th></tr></thead>
           <tbody>
-            <tr><td>SPACE</td><td>0</td><td>0</td><td>SHIFT</td><td>1</td><td>0</td></tr>
-            <tr><td>ENTER</td><td>0</td><td>1</td><td>CTRL</td><td>1</td><td>1</td></tr>
-            <tr><td>STOP</td><td>0</td><td>2</td><td>CAPS</td><td>1</td><td>2</td></tr>
-            <tr><td>BOS (SELECT)</td><td>0</td><td>3</td><td>GRAPH</td><td>1</td><td>3</td></tr>
-            <tr><td>F1</td><td>0</td><td>6</td><td>CODE/KANA</td><td>1</td><td>4</td></tr>
-            <tr><td>F2</td><td>0</td><td>7</td><td>CLR</td><td>2</td><td>0</td></tr>
-            <tr><td>F3</td><td>0</td><td>8</td><td>BS</td><td>5</td><td>0</td></tr>
-            <tr><td>UP</td><td>3</td><td>0</td><td>TAB</td><td>5</td><td>1</td></tr>
-            <tr><td>DOWN</td><td>3</td><td>1</td><td>LEFT</td><td>3</td><td>2</td></tr>
-            <tr><td>RIGHT</td><td>3</td><td>3</td><td>—</td><td>—</td><td>—</td></tr>
+            <tr><td>SHIFT</td><td>6</td><td>0</td><td>SPACE</td><td>8</td><td>0</td></tr>
+            <tr><td>CTRL</td><td>6</td><td>1</td><td>HOME / CLS</td><td>8</td><td>1</td></tr>
+            <tr><td>GRAPH</td><td>6</td><td>2</td><td>INSERT</td><td>8</td><td>2</td></tr>
+            <tr><td>CAPS LOCK</td><td>6</td><td>3</td><td>DELETE / SUP</td><td>8</td><td>3</td></tr>
+            <tr><td>CODE / KANA</td><td>6</td><td>4</td><td>LEFT</td><td>8</td><td>4</td></tr>
+            <tr><td>F1</td><td>6</td><td>5</td><td>UP</td><td>8</td><td>5</td></tr>
+            <tr><td>F2</td><td>6</td><td>6</td><td>DOWN</td><td>8</td><td>6</td></tr>
+            <tr><td>F3</td><td>6</td><td>7</td><td>RIGHT</td><td>8</td><td>7</td></tr>
+            <tr><td>F4</td><td>7</td><td>0</td><td>STOP</td><td>7</td><td>4</td></tr>
+            <tr><td>F5</td><td>7</td><td>1</td><td>BS</td><td>7</td><td>5</td></tr>
+            <tr><td>ESC</td><td>7</td><td>2</td><td>BOS (SELECT)</td><td>7</td><td>6</td></tr>
+            <tr><td>TAB</td><td>7</td><td>3</td><td>RETURN</td><td>7</td><td>7</td></tr>
           </tbody>
         </table>
         <p>
-          The complete 8×10 matrix lives in <code>msx_kbd.h</code> as one generated array; no other table of
-          key positions exists in the module, and the table above is generated from it.
+          The whole matrix lives in <code>src/emulators/msx/msx_kbd.h</code> and nowhere else: the
+          <code>MSX_KEY_*</code> names above, and one <code>ASCII → {row, column}</code> pair of generated
+          arrays for the printable half, read through <code>msx_kbd_position()</code>. Both halves are 96
+          entries for the 96 characters <code>0x20…0x7F</code>, <code>0xFF</code> where a character has no
+          key of its own; a shifted character is named at the same cell as its unshifted partner, and
+          SHIFT is the caller's to press.
+          <span class="basis basis-cal">Calibrable</span> — the printable positions follow the published
+          matrix but have not yet been read off a booted screen: typing a name at the C-BIOS prompt and
+          dumping the name table is the measurement that closes it, and until then the row and column of
+          the letter keys are inferred, not proven.
         </p>
         <table class="api-table">
-          <caption>Joystick pins as read on PPI A. Idle level is high: a released pin reads 1.</caption>
-          <thead><tr><th>Signal</th><th>PPI A bit</th><th>Basis</th></tr></thead>
+          <caption>Joystick pins as read on the PSG's port A input, not on the PPI: C-BIOS reads them at
+          <code>0xA2</code> with register 14 selected (230 such reads in the 500-frame boot above, from
+          <code>PC=1760</code>), and <code>ppi.c</code> therefore owns no joystick state. Idle level is
+          high: a released pin reads 1.</caption>
+          <thead><tr><th>Signal</th><th>Socket bit</th><th>Basis</th></tr></thead>
           <tbody>
             <tr><td>TRGA</td><td>0</td><td><span class="basis basis-hw">Hardware</span></td></tr>
             <tr><td>Port A up, down, left, right</td><td>1, 2, 3, 4</td><td><span class="basis basis-hw">Hardware</span></td></tr>
@@ -848,8 +920,8 @@ const char *msx_version_string(void);           /* "tronMSX 1.05 (C99-only core)
         <p>
           Input travels through the slot, not through the ring: an 8-byte command entry cannot carry an
           80-bit matrix. <code>KBD_SYNC</code> is the per-step tick marker whose <code>a0</code> is the
-          slot's sequence number, and the matrix itself is the one published snapshot (8 rows × 10 columns
-          plus joystick, 2.5). MSX_UI writes the payload then <code>seq</code>; MSX_CORE reads
+          slot's sequence number, and the matrix itself is the one published snapshot (the ten row bytes
+          of 2.5, one byte per strobe row, plus joystick). MSX_UI writes the payload then <code>seq</code>; MSX_CORE reads
           <code>seq</code>, the payload, then <code>seq</code> again and re-reads on mismatch — a seqlock,
           no mutex, the ownership-moves-by-message discipline of
           <a href="core.html#api">B-Core</a>. The channel is level-driven and single-slot, so a dropped tick
@@ -884,7 +956,7 @@ const char *msx_version_string(void);           /* "tronMSX 1.05 (C99-only core)
             <tr><td>Main RAM</td><td>65,536 B</td><td><span class="basis basis-hw">Hardware</span></td><td>The canonical MSX2+ main-RAM configuration, 1.2.</td></tr>
             <tr><td>Cartridge ROM</td><td>32,768 B</td><td><span class="basis basis-cal">Calibrable</span></td><td>First-core cap; MegaROM mapping raises it without touching any other row.</td></tr>
             <tr><td><code>pcm_ring</code>, <code>cmd_ring</code>, input slot</td><td>16,536 B</td><td><span class="basis basis-norm">Normative</span></td><td>4096 × 4 + 16 × 8 + 24, 5.2.</td></tr>
-            <tr><td>Z80 registers, PSG state, LFSR, tables</td><td>≤ 16,384 B</td><td><span class="basis basis-norm">Normative</span></td><td>VOL16, the 8 × 10 key matrix, envelope counters.</td></tr>
+            <tr><td>Z80 registers, PSG state, LFSR, tables</td><td>≤ 16,384 B</td><td><span class="basis basis-norm">Normative</span></td><td>VOL16, the 10 × 8 key matrix, envelope counters.</td></tr>
             <tr><td>Core statics, arithmetic sum</td><td>262,296 B</td><td><span class="basis basis-norm">Normative</span></td><td>131,072 + 65,536 + 32,768 + 16,536 + 16,384.</td></tr>
             <tr><td>Bound</td><td>≤ 393,216 B (384 KiB)</td><td><span class="basis basis-norm">Normative</span></td><td>Holds on the POSIX and Pi-class targets alike. The 130,920 B headroom is reserved for the later steps named in Part 0; adding one MUST NOT breach the bound.</td></tr>
             <tr><td>BIOS / C-BIOS image</td><td>≤ 65,536 B</td><td><span class="basis basis-hw">Hardware</span></td><td>Outside core statics: settings-loaded, read-only, hashed at load (D7 of 8.1).</td></tr>
@@ -1239,8 +1311,8 @@ src/tools/mssym.c   (C99, single file)
             <tr><td><code>psg.c</code></td><td>Register file, <code>x^17 + x^14 + 1</code> LFSR, envelope shapes, PCM accumulator.</td><td>2.4</td></tr>
             <tr><td><code>ppi.c</code></td><td>8255 decode <code>0x10</code>–<code>0x13</code> and <code>0xA8</code>–<code>0xAB</code>, keyboard matrix array, joystick bits.</td><td>2.5</td></tr>
             <tr><td><code>bios.c</code></td><td>Settings-key loader (<code>bios.msx2p</code>, <code>bios.msx2pext</code>, <code>bios.disk</code>, <code>bios.kanji</code>) with C-BIOS fallback.</td><td>4.2</td></tr>
-            <tr><td><code>kbd.c</code></td><td>Matrix table, one generated array, and the <code>KBD_SYNC</code> snapshot per frame.</td><td>2.5, 5.2</td></tr>
-            <tr><td><code>msx_app.c</code></td><td>The MSX2+ home window itself: the 4.2 launch sequence, <code>opn_wnd()</code> with the BTRON menu bar, the <code>MSX_UI</code>/<code>MSX_CORE</code>/<code>MSX_AUDIO</code> tasks, host key and joystick events into the input slot, and the <code>msx_blit_rgb565</code> blit at the window's magnify. The only unit that depends on <code>btron/wnd.h</code>, <code>btron/dp.h</code> and <code>device/virtio.h</code>; the ten units above it stay host-independent so they remain steppable headless per D1 of 8.1.</td><td>4.2, 5.2, 7.7</td></tr>
+            <tr><td><code>kbd.c</code></td><td>The matrix itself — ten strobed row bytes plus the two joystick latches — and the <code>KBD_SYNC</code> snapshot per frame. The key-position tables live in <code>msx_kbd.h</code>, which is the single source of them (2.5).</td><td>2.5, 5.2</td></tr>
+            <tr><td><code>msx_app.c</code></td><td>The B-MSX home window itself: the 4.2 launch sequence, <code>opn_wnd()</code> with the BTRON menu bar, host key and joystick events into the input slot, and the <code>msx_blit_rgb565</code> blit at the window's magnify. It also owns the cartridge catalogue the window's <code>ファイル(F)</code> menu and the XMB's Games band read: <code>assets/msx</code> listed once, one row per image, ENTER handing that name to <code>open_msx_window_with_rom()</code>. A cartridge above 5.3's 32 KiB cap is refused at load with <code>MSX_ERR_SIZE</code> and the window says so instead of painting black. First-core shape: the machine is stepped only where the frame is presented, and a 60 Hz tick task says when a frame is due, so one thread touches the core's statics and no lock exists; the separate <code>MSX_CORE</code> and <code>MSX_AUDIO</code> tasks of 5.2 are the shape a later step takes on, and <code>msx_psg_submit_pcm()</code> has no host output path yet. The only unit that depends on <code>btron/wnd.h</code>, <code>btron/dp.h</code> and <code>device/virtio.h</code>; the ten units above it stay host-independent so they remain steppable headless per D1 of 8.1.</td><td>4.2, 5.2, 7.7</td></tr>
             <tr><td><code>tronmsx_tt.c</code></td><td>Time-travel instrument: input log, checkpoint ring, restore, headless replay, PC and page watch matching. The whole file is inside <code>#ifdef MSX_TT_DEBUG</code>, so the shipping shape contains no part of it and the 5.3 bound holds.</td><td>Part 8</td></tr>
             <tr><td><code>tronmsx_tt_wnd.c</code></td><td>Debugger windows: <code>opn_wnd()</code> panels, their menus and repaints. Also inside <code>#ifdef MSX_TT_DEBUG</code>, and depends on <code>btron/wnd.h</code> and on no other emulator unit.</td><td>8.4.1</td></tr>
           </tbody>
@@ -1296,7 +1368,7 @@ src/tools/mssym.c   (C99, single file)
           rewind is a restore and not a re-simulation from power-on.
         </p>
         <pre><code>typedef struct {            /* one record per EXECUTED step (not per presented frame) */
-    uint8_t  kbd[10];       /* the whole 8x10 matrix as the step sees it (2.5), 80 bits */
+    uint8_t  kbd[10];       /* the whole 10x8 matrix as the step sees it (2.5), 80 bits */
     uint8_t  joy;           /* TRGA / TRGB / steering bits, level snapshot (2.5) */
     uint8_t  cmd;           /* cmd_ring byte consumed this step: RESET|PAUSE|RESUME|QUIT|none */
     uint8_t  drops;         /* bit0 pcm drop, bit1 cmd drop — D5: host-timed events are data */

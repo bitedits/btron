@@ -1,6 +1,14 @@
 /*
  * B-System (BTRON 3.20) Mail Application (src/apps/mail.c)
- * System Category: Native Email, IMAP/SMTP Client & Mailbox Manager
+ * System Category: Native Email, MHS X.420 (ISO 10021-6) Client & MTA
+
+ Z.180         | Zen Crypted Dharma Test Atomation Language Z.180 / MSC Z.120 Extension
+ X.422-2026    | Zen Crypted Buddha Protocol: Introduction
+ X.422.1-2026  | Zen Crypted Buddha Protocol: Layer 1: Skynet Serverless Multicast
+ X.422.2-2026  | Zen Crypted Buddha Protocol: Layer 2: Brokered TLS & PKI
+ X.422.3-2026  | Zen Crypted Buddha Protocol: Layer 3: MHS/IPMS Mail Delivery System
+                 https://protocol.zencrypted.uk
+
  */
 
 #include <btron/wnd.h>

@@ -76,7 +76,7 @@
  * caller presses separately; the position is the same either way. */
 static const uint8_t msx_kbd_ascii_row[96] = {
     /*  ' '  !    "    #    $    %    &    '  */
-    8, 0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF, 2,
+    8, 0xFF,0xFF,0xFF,0xFF,0xFF,0xFF, 2,
     /*  (    )    *    +    ,    -    .    /  */
     0xFF,0xFF, 9, 9, 2, 1, 2, 2,
     /*  0    1    2    3    4    5    6    7   */
@@ -103,7 +103,7 @@ static const uint8_t msx_kbd_ascii_row[96] = {
 
 static const uint8_t msx_kbd_ascii_col[96] = {
     /*  ' '  !    "    #    $    %    &    '  */
-    0, 0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF, 0,
+    0, 0xFF,0xFF,0xFF,0xFF,0xFF,0xFF, 0,
     /*  (    )    *    +    ,    -    .    /  */
     0xFF,0xFF, 1, 3, 2, 2, 3, 4,
     /*  0    1    2    3    4    5    6    7   */

@@ -38,7 +38,7 @@ CFLAGS ?= -O2 -Wall -Wextra -std=c99 -Iinclude -Iinclude/gl -Isrc/gl -Iinclude/d
         html2tad book2tad tad_bin test test-kernel test-yoko test-yoko4 test-m68k test-mips test-ps2 test-foma test-foma-ui foma-screens \
         segui-screens \
         test-mozc test-editor test-hmi test-tad test-chat test-wylie verify test-fs test-chokanji test-quake test-replay \
-        test-hull test-view test-secret test-render test-drone test-drone-all test-zexall \
+        test-hull test-view test-secret test-render test-drone test-drone-all test-zexall msx-trace \
         mkbtronfs btron_sys.vol \
         run-posix run-qemu run-kernel run-yoko run-yoko4 run-sakamura run-foma run-uefi run-eufi run-uefu run-pc98 run-m68k run-ps2 run-mips debug-virtio debug-gdb clean \
         ps2-cfg \
@@ -143,6 +143,16 @@ IME_SRCS    = src/tip/mozc_kkc.c       \
               src/tip/wylie.c          \
               src/tip/tibetan_dict.c
 
+# ── tronMSX core: the machine src/apps/msx_app.c drives ───────────────────
+MSX_SRCS = src/emulators/msx/z80.c        \
+           src/emulators/msx/slots.c      \
+           src/emulators/msx/bios.c       \
+           src/emulators/msx/vdp.c        \
+           src/emulators/msx/psg.c        \
+           src/emulators/msx/ppi.c        \
+           src/emulators/msx/kbd.c        \
+           src/emulators/msx/tronmsx.c
+
 # ── Common SDL2-hosted app sources ────────────────────────────────
 COMMON_SRCS = src/graphics/dp_core.c   \
               src/graphics/image_decode.c \
@@ -186,6 +196,8 @@ COMMON_SRCS = src/graphics/dp_core.c   \
               src/apps/orchestra.c     \
               src/apps/chat.c          \
               src/apps/chat_xml.c      \
+              src/apps/msx_app.c       \
+              $(MSX_SRCS)              \
               src/settings/language.c  \
               src/settings/control_panel.c \
               src/settings/appearance.c \
@@ -1722,6 +1734,24 @@ test-zexall: $(TEST_ZEXALL_BIN)
 
 $(TEST_ZEXALL_BIN): $(TEST_ZEXALL_OBJS)
 	$(CC) $(TEST_ZEXALL_OBJS) -o $@ $(LDFLAGS)
+
+# ═══════════════════════════════════════════════════════════════════
+# tronMSX boot tracer — headless ROM frames and P/VDP/PSG traffic
+# Dev tool: msx-trace ROM=assets/msx/xxx.rom FRAMES=1300
+# ═══════════════════════════════════════════════════════════════════
+TEST_MSX_TRACE_SRCS = verify/tests/msx_trace.c $(MSX_SRCS)
+TEST_MSX_TRACE_OBJS = $(TEST_MSX_TRACE_SRCS:.c=.test.o)
+TEST_MSX_TRACE_BIN  = ./.build/msx_trace
+
+msx-trace: $(TEST_MSX_TRACE_BIN)
+	@echo "=========================================================="
+	@echo " tronMSX boot trace: $(or $(ROM),assets/msx/Lode Runner (1984)(Sony)[a].rom)"
+	@echo "=========================================================="
+	@./$(TEST_MSX_TRACE_BIN) "$(or $(ROM),assets/msx/Lode Runner (1984)(Sony)[a].rom)" $(or $(FRAMES),300)
+
+$(TEST_MSX_TRACE_BIN): $(TEST_MSX_TRACE_OBJS)
+	@mkdir -p ./.build
+	$(CC) $(TEST_MSX_TRACE_OBJS) -o $@ $(LDFLAGS)
 
 test: test-tad test-editor test-chat test-mozc test-wylie test-hmi test-ski test-tracker test-settings test-global-menu test-app-menu test-drivesetup test-fs test-quake
 	@echo "=========================================================="

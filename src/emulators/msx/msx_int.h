@@ -44,14 +44,6 @@
 #define MSX_CMD_KBD    4u
 #define MSX_CMD_QUIT   5u
 
-/* Joystick level bits as the window publishes them (§2.5). */
-#define MSX_JOY_TRGA   0x01u
-#define MSX_JOY_UP     0x02u
-#define MSX_JOY_DOWN   0x04u
-#define MSX_JOY_LEFT   0x08u
-#define MSX_JOY_RIGHT  0x10u
-#define MSX_JOY_TRGB   0x40u
-
 /* ---- slots.c: canonical map, slot selects, port dispatch -------------- */
 void    slots_init(void);
 void    slots_reset(void);
@@ -73,12 +65,22 @@ void    vdp_advance(uint32_t t_states);
 int     vdp_vblank_taken(void);                   /* 1 once per frame      */
 void    vdp_render(uint16_t *fb);                 /* 256x212 RGB565        */
 uint8_t *vdp_vram(uint32_t *size);
+/* Debug hooks for the headless boot tracer (not used on the step path). */
+uint8_t vdp_debug_reg(uint8_t reg);
+uint8_t vdp_debug_status(void);
+uint8_t vdp_debug_irq_pending(void);
+uint32_t vdp_debug_write_addr(void);
 
 /* ---- psg.c: AY-3-8910 at #A0-#A3; #A0 select, #A1 write, #A2 read ------ */
 void    psg_init(void);
 void    psg_reset(void);
 uint8_t psg_read(uint8_t port);
 void    psg_write(uint8_t port, uint8_t value);
+uint8_t psg_debug_select(void);
+uint8_t psg_debug_r7(void);
+uint8_t psg_debug_r14(void);
+uint8_t psg_debug_r15(void);
+uint8_t psg_debug_pb(void);
 /* The chip moves only while sampled: psg_render() advances exactly
  * T_PER_FRAME/2 T-states worth of ticks per 735-sample frame. */
 uint32_t psg_render(int16_t *out, uint32_t frames);   /* L=R pairs          */

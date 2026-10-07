@@ -34,7 +34,7 @@
 #define ST_FG           0x80u        /* status0 bit7: end of display        */
 #define ST_NO           0x02u        /* status0 bit1: more than four sprites*/
 
-#define R1_SZ           0x01u        /* 1 = 16x16 sprites                   */
+#define R1_SZ           0x02u        /* R1 bit1: 1 = 16x16 sprites          */
 #define R1_M2           0x08u
 #define R1_M1           0x10u
 #define R1_IE0          0x20u
@@ -174,9 +174,10 @@ static uint16_t display_end(void)
 
 static uint32_t nt_base(void)
 {
-    uint8_t bits = s_msx1 ? (uint8_t)(s_reg[2] & 0x0Fu)
-                          : (uint8_t)(s_reg[2] & 0x3Fu);
-    return (uint32_t)bits * 2048u;
+    /* TMS9918: R2 bits 0-3 select address bits 13-10 (<<10).  V9958: bits 0-5
+     * select bits 16-11 (<<11). */
+    if (s_msx1) return (uint32_t)(s_reg[2] & 0x0Fu) << 10;
+    return (uint32_t)(s_reg[2] & 0x3Fu) << 11;
 }
 
 static uint32_t ct_base(void)
@@ -193,9 +194,11 @@ static uint32_t pt_base(void)
 
 static uint32_t sat_base(void)
 {
-    if (s_msx1) return (uint32_t)(s_reg[5] & 0x7Fu) * 256u;
+    /* 128-byte granularity: the attribute table base is (R11 & 3) << 15 |
+     * R5 << 7, so on MSX1 all eight low bits of R5 are address bits. */
+    if (s_msx1) return (uint32_t)(s_reg[5] & 0x7Fu) << 7;
     return (uint32_t)(s_reg[11] & 0x03u) * 32768u +
-           (uint32_t)(s_reg[5]  & 0x7Fu) * 256u;
+           ((uint32_t)(s_reg[5] & 0x7Fu) << 7);
 }
 
 static uint32_t spt_base(void)
@@ -286,6 +289,27 @@ uint8_t *vdp_vram(uint32_t *size)
 {
     if (size != 0) *size = MSX_VRAM_SIZE;
     return s_vram;
+}
+
+/* Debug hook: the live register file, for the headless boot tracer. */
+uint8_t vdp_debug_reg(uint8_t reg)
+{
+    return (reg < VDP_NR) ? s_reg[reg] : 0u;
+}
+
+uint8_t vdp_debug_status(void)
+{
+    return s_status;
+}
+
+uint8_t vdp_debug_irq_pending(void)
+{
+    return s_irq_pending;
+}
+
+uint32_t vdp_debug_write_addr(void)
+{
+    return cpu_addr() & (MSX_VRAM_SIZE - 1u);
 }
 
 /* ---- ports -------------------------------------------------------------- */
@@ -421,23 +445,43 @@ static void line_text(uint16_t y)
     }
 }
 
-/* SCREEN 1 and SCREEN 3 share the fetch law; SCREEN 3 mirrors its pattern
- * table inside 2 KiB and its colour table inside 256 bytes.
+/* SCREEN 1 and SCREEN 2 share the fetch law but differ in table addressing.
+ * SCREEN 1: colour table is 32 bytes, one byte per 8 character codes
+ *           (index = name >> 3); pattern base = (R4 & 7) << 11.
+ * SCREEN 2: the 768-entry name table is split into three 256-byte chunks of
+ *           eight text rows each, so the effective character code is
+ *           name + 256*(y/64).  The 6 KiB pattern table at (R4 & 4) << 11 and
+ *           the 6 KiB colour table at (R3 & 0x80) << 6 are then read at the
+ *           same index, 8*code + y%8, which is what lets every SCREEN 2 tile
+ *           row carry its own ink/paper pair.
  */
 static void line_tiles(uint16_t y, uint8_t g2)
 {
-    uint32_t nt = nt_base(), ct = ct_base(), pt = pt_base();
+    uint32_t nt = nt_base();
+    uint32_t ct, pt;
     uint16_t row = (uint16_t)(y % 8u), band = (uint16_t)(y / 8u);
+    uint32_t chunk = (uint32_t)(y / 64u);
     uint16_t x;
+
+    if (g2) {
+        ct = (uint32_t)(s_reg[3] & 0x80u) << 6;
+        pt = (uint32_t)(s_reg[4] & 0x04u) << 11;
+    } else {
+        ct = (uint32_t)(s_reg[3] & 0xFFu) << 6;
+        pt = (uint32_t)(s_reg[4] & 0x07u) << 11;
+    }
 
     for (x = 0; x < MSX_SCREEN_W; x++) {
         uint32_t cell = (uint32_t)band * 32u + (uint32_t)(x / 8u);
         uint8_t  name = VR(nt + cell);
-        uint8_t  cb   = g2 ? VR((ct + (cell & 0xFFu)) ) : VR(ct + cell);
-        uint32_t pa   = g2 ? pt + (((uint32_t)name * 8u + row) & 0x7FFu)
-                           : pt + (uint32_t)name * 8u + row;
-        uint8_t  bit  = (uint8_t)((VR(pa) >> (7u - (x % 8u))) & 1u);
-        uint8_t  c    = bit ? (uint8_t)(cb & 0x0Fu) : (uint8_t)(cb >> 4);
+        uint32_t code = g2 ? (uint32_t)name + chunk * 256u
+                           : (uint32_t)name;
+        uint8_t  cb   = g2 ? VR(ct + code * 8u + row) : VR(ct + (name >> 3));
+        uint8_t  bit  = (uint8_t)((VR(pt + code * 8u + row) >>
+                                   (7u - (x % 8u))) & 1u);
+        /* Colour byte: high nibble = foreground (pattern bit 1),
+         * low nibble = background (pattern bit 0). */
+        uint8_t  c    = bit ? (uint8_t)(cb >> 4) : (uint8_t)(cb & 0x0Fu);
         s_px[x] = (uint8_t)(c & 0x0Fu);
     }
 }
@@ -517,9 +561,8 @@ static void sprites_mode1(uint16_t y)
     for (n = 0u; n < 32u; n++) {
         uint32_t a  = sat + (uint32_t)n * 4u;
         uint16_t sy = VR(a);
-        uint16_t sx, i;
+        uint16_t sx, i, row;
         uint8_t  tile, col, behind;
-        uint32_t pa;
 
         if (sy == 0xD0u) break;
         if (drawn == 4u) { s_status |= ST_NO; break; }
@@ -531,11 +574,13 @@ static void sprites_mode1(uint16_t y)
         tile = (uint8_t)(VR(a + 2u) & (h == 16u ? 0xFCu : 0xFFu));
         col  = VR(a + 3u);
         behind = (uint8_t)((col & 0x80u) ? 1u : 0u);
-        pa = spt + (uint32_t)tile * (uint32_t)h + (uint16_t)(y - sy) *
-             (uint32_t)(h == 16u ? 2u : 1u);
+        row  = (uint16_t)(y - sy);
 
         for (i = 0u; i < h; i++) {
-            uint8_t pat = VR(pa + (uint32_t)(i >> 3));
+            /* A 16x16 sprite is four 8x8 tiles numbered down the left column
+             * (p, p+1) and then down the right (p+2, p+3). */
+            uint16_t t   = (uint16_t)(tile + (i >> 3) * 2u + (row >> 3));
+            uint8_t  pat = VR(spt + (uint32_t)t * 8u + (row & 7u));
             if (pat & (uint8_t)(0x80u >> (i & 7u))) {
                 sprite_put((uint16_t)(sx + i), (uint8_t)(col & 0x0Fu), behind);
             }

@@ -30,7 +30,7 @@
  * per-vertex UV, RGBA textures, orthographic projection and blending that the
  * menu layer needs (glBlendFunc/glColor4f/glVertex2f/glOrtho).
  *
- * Invented B-System content: the Applications, Settings, Discs and Commands
+ * Invented B-System content: the Applications, Settings, Discs, Games and Commands
  * categories.
  * Applications really launch B-System windows, Commands really run B-System shell
  * builtins through shell_execute_cmd(), and the Settings rows edit the B-System's
@@ -39,6 +39,8 @@
  * applications.  The Discs band is not content at all: its rows are the mounted
  * volumes and their drawers, read from the same virtual file system the "sc" file
  * manager reads (src/clu/vfs.c), one folder at a time and as deep as the volumes go.
+ * The Games band is a listing too, of the host's assets/msx folder: one row per
+ * cartridge image, each of which opens the B-MSX window with that ROM loaded.
  *
  * Copyright 2026 Synrc Research Center. MIT License.
  */
@@ -56,6 +58,10 @@
 #include <btron/fs/vol_api.h> /* mounted volumes: names, sizes, free blocks */
 #include <btron/libc_shim.h>
 #include <math.h>
+
+#if BTRON_HOSTED
+#include <dirent.h>      /* the Games band lists the host's assets/msx */
+#endif
 
 #ifndef M_PI
 #define M_PI 3.1415926535897932384626433832795
@@ -265,7 +271,7 @@ enum {
 /* Launch ids for XB_APP rows */
 enum {
     L_NONE = 0, L_GTERM, L_TEDITOR, L_PAINT, L_AUDIO, L_ORCHESTRA,
-    L_VOBJ, L_TAD, L_DRIVE, L_CHAT, L_KAGEE, L_QUAKE
+    L_VOBJ, L_TAD, L_DRIVE, L_CHAT, L_KAGEE, L_QUAKE, L_MSX
 };
 
 /* Icon atlas cells */
@@ -275,7 +281,7 @@ enum {
     IC_APP_VOBJ, IC_APP_TAD, IC_APP_DRIVE, IC_APP_CHAT, IC_APP_PHOTO,
     IC_GEAR, IC_SLIDER, IC_SPEAKER, IC_INFO, IC_PROMPT,
     IC_DROPLET, IC_FOLDER, IC_APP_QUAKE, IC_CLOCK, IC_BLANK,
-    IC_MINIDISC, IC_FILE
+    IC_MINIDISC, IC_FILE, IC_CAT_GAMES
 };
 
 typedef struct {
@@ -427,6 +433,23 @@ static xb_item_t s_items_commands[] = {
     {"Sync all volumes",     "Run the shell builtin: sync",      XB_CMD, XMB_BIND_NONE, L_NONE, 0,0,NULL, "sync",  IC_PROMPT,0,0,0,0,{0}},
 };
 
+/* ── The Games band: the cartridge images in the host's assets/msx ─────────
+ *
+ * One row per ROM, made by reading that folder on the way in, and each row opens
+ * the B-MSX window with its own cartridge loaded.  The list is the folder: nothing
+ * here copies what a ROM is called, and a machine built without a host file system
+ * simply has no rows, the way an empty volume has none.
+ */
+
+#define XB_GAME_ROWS   16
+#define XB_GAME_NAME   64
+#define XB_GAME_DIR    "assets/msx"
+#define XB_GAME_SUB    "MSX cartridge: opens in B-MSX"
+
+static char      s_game_names[XB_GAME_ROWS][XB_GAME_NAME];
+static xb_item_t s_items_games[XB_GAME_ROWS];   /* filled by xb_games_scan() */
+static int       s_game_count;
+
 /* ── The Discs band: the mounted volumes, through the CLU's own VFS ──────
  *
  * The bar keeps no model of the storage.  It asks the same virtual file system the
@@ -472,11 +495,14 @@ static xb_cat_t s_cats[] = {
      * so items points at the list buffer and files says the level functions are
      * the ones that answer for it. */
     {"Discs",       "Browse the mounted volumes",   IC_MINIDISC,     s_disc.items,     0, 0, 1, {0}},
+    /* The Games band is a listing too, but a flat one: xb_games_scan() makes its
+     * rows from assets/msx once, before the first frame. */
+    {"Games",       "Play MSX cartridge images",    IC_CAT_GAMES,    s_items_games,    0, 0, 0, {0}},
     {"Commands",    "Run B-System shell commands",  IC_CAT_COMMANDS, s_items_commands, 0, 0, 0, {0}},
 };
 static int s_cat_count = XB_NEL(s_cats);
 
-enum { BAND_APPS = 0, BAND_SETTINGS, BAND_DISCS, BAND_COMMANDS };
+enum { BAND_APPS = 0, BAND_SETTINGS, BAND_DISCS, BAND_GAMES, BAND_COMMANDS };
 
 /* ── Bindings ──────────────────────────────────────────────────────────
  * A bound row holds nothing of its own: its value is read out of the system it
@@ -1000,6 +1026,17 @@ static float xb_icon_cov(int cell, float x, float y)
         d = UN(d, xb_sd_capsule(x, y, -0.20f, -0.12f, -0.05f, 0.0f, 0.04f));
         d = UN(d, xb_sd_capsule(x, y, -0.05f,  0.0f, -0.20f, 0.12f, 0.04f));
         d = UN(d, xb_sd_capsule(x, y,  0.03f,  0.14f,  0.22f, 0.14f, 0.04f));
+        break;
+
+    case IC_CAT_GAMES:
+        /* The Games band: a cartridge shell with its label rules and the two
+         * slots a reader grips. */
+        d = STROKE(xb_sd_rbox(x, y, 0.0f, 0.02f, 0.28f, 0.36f, 0.05f), XB_W * 0.8f);
+        d = UN(d, xb_sd_capsule(x, y, -0.15f, -0.20f, 0.15f, -0.20f, 0.032f));
+        d = UN(d, xb_sd_capsule(x, y, -0.15f, -0.06f, 0.15f, -0.06f, 0.032f));
+        d = UN(d, xb_sd_capsule(x, y, -0.15f,  0.08f, 0.02f,  0.08f, 0.032f));
+        d = UN(d, xb_sd_rbox(x, y, -0.13f, 0.30f, 0.07f, 0.028f, 0.014f));
+        d = UN(d, xb_sd_rbox(x, y,  0.13f, 0.30f, 0.07f, 0.028f, 0.014f));
         break;
 
     case IC_ARROW:
@@ -2385,6 +2422,82 @@ static void xb_disc_restart(void)
     s_cats[BAND_DISCS].selection = s_disc.sel;
 }
 
+/* ── The Games band's listing ─────────────────────────────────────────── */
+
+#if BTRON_HOSTED
+/* A cartridge image is a .rom, whatever case its folder spells it in. */
+static BOOL xb_game_is_rom(const char *name)
+{
+    size_t n = strlen(name);
+
+    if (n < 5 || n >= XB_GAME_NAME || name[n - 4] != '.')
+        return FALSE;
+    return (name[n - 3] == 'r' || name[n - 3] == 'R')
+        && (name[n - 2] == 'o' || name[n - 2] == 'O')
+        && (name[n - 1] == 'm' || name[n - 1] == 'M');
+}
+#endif
+
+/* Read the folder once and make one XB_APP row per ROM, in name order so the bar
+ * lands on the same row from one run to the next.  The rows carry the folder's
+ * index, which is how xb_launch() names the cartridge to B-MSX with. */
+static void xb_games_scan(void)
+{
+    int rows = 0;
+
+#if BTRON_HOSTED
+    DIR *dir = opendir(XB_GAME_DIR);
+    struct dirent *de;
+
+    if (dir) {
+        while ((de = readdir(dir)) != NULL && rows < XB_GAME_ROWS) {
+            if (de->d_name[0] == '.')
+                continue;
+            if (!xb_game_is_rom(de->d_name))
+                continue;
+            snprintf(s_game_names[rows], XB_GAME_NAME, "%s", de->d_name);
+            rows++;
+        }
+        closedir(dir);
+    }
+
+    for (int i = 1; i < rows; i++) {
+        char name[XB_GAME_NAME];
+        int j = i - 1;
+
+        snprintf(name, XB_GAME_NAME, "%s", s_game_names[i]);
+        while (j >= 0 && strcmp(s_game_names[j], name) > 0) {
+            snprintf(s_game_names[j + 1], XB_GAME_NAME, "%s", s_game_names[j]);
+            j--;
+        }
+        snprintf(s_game_names[j + 1], XB_GAME_NAME, "%s", name);
+    }
+#endif
+
+    for (int i = 0; i < rows; i++) {
+        xb_item_t *it = &s_items_games[i];
+
+        memset(it, 0, sizeof(*it));
+        it->label  = s_game_names[i];
+        it->sub    = XB_GAME_SUB;
+        it->kind   = XB_APP;
+        it->bind   = XMB_BIND_NONE;
+        it->launch = L_MSX;
+        it->value  = i;
+        it->icon   = IC_CAT_GAMES;
+    }
+    s_game_count = rows;
+}
+
+/* ENTER on a Games row: the cartridge the row names, by the index it carries. */
+static void xb_game_launch(const xb_item_t *it)
+{
+    if (it->value < 0 || it->value >= s_game_count)
+        return;
+    if (open_msx_window_with_rom)
+        open_msx_window_with_rom(s_game_names[it->value]);
+}
+
 /* ENTER on a drawer: the level below is the entry's own Real Body, reached through
  * vfs_child_path() so that a folder holding two bodies of one name cannot send the
  * cursor into the first of them. */
@@ -2515,11 +2628,21 @@ static unsigned s_now_ms = 0;
  * target's source list.  The real definition in kagee.c wins when linked. */
 #if defined(__GNUC__) || defined(__clang__)
 __attribute__((weak)) WND* open_kagee_window(void) { return (void*)0; }
+/* Same for B-MSX: src/apps/msx_app.c is a hosted-core app and not in the
+ * bare-metal lists, where these keep the launcher linking. */
+__attribute__((weak)) WND* open_msx_window(void) { return (void*)0; }
+__attribute__((weak)) WND* open_msx_window_with_rom(const char *path)
+{
+    (void)path;
+    return (void*)0;
+}
 #endif
 
-static void xb_launch(int id)
+/* The row is what launches: a Games row carries the cartridge to load in its
+ * value, so the item travels with the id. */
+static void xb_launch(const xb_item_t *it)
 {
-    switch (id) {
+    switch (it->launch) {
     case L_GTERM:     if (open_gterm_window)     open_gterm_window(); break;
     case L_TEDITOR:   if (open_t_editor_window)  open_t_editor_window(); break;
     case L_PAINT:     if (open_paint_window)     open_paint_window(); break;
@@ -2531,6 +2654,7 @@ static void xb_launch(int id)
     case L_CHAT:      if (launch_beos_chat)        launch_beos_chat(); break;
     case L_KAGEE:     if (open_kagee_window)       open_kagee_window(); break;
     case L_QUAKE:     if (open_quake_window)       open_quake_window(120, 60, 640, 480); break;
+    case L_MSX:       xb_game_launch(it); break;
     default: break;
     }
 }
@@ -2542,7 +2666,7 @@ static void xb_activate(xb_item_t *it)
         /* xmb.c:7046 - single-click launching holds the list out for 500 ms */
         s_alpha_list = 0.0f;
         s_draw_entry_until = (int)(s_now_ms + XB_DRAW_ENTRY_MS);
-        xb_launch(it->launch);
+        xb_launch(it);
         break;
     case XB_TOGGLE:
         xb_set_value(it, it->value ? 0 : 1);
@@ -2917,9 +3041,12 @@ static void xb_init_state(void)
 
     /* Item tables carry their own counts in the array sizes; set them here so
      * the content above can be edited without keeping a count in sync.  The Discs
-     * band is the exception: its rows are a listing, not a table. */
+     * band is the exception: its rows are a listing, not a table.  The Games band
+     * is a listing too, read once here rather than on every level change. */
+    xb_games_scan();
     s_cats[BAND_APPS].count     = XB_NEL(s_items_apps);
     s_cats[BAND_SETTINGS].count = XB_NEL(s_items_settings);
+    s_cats[BAND_GAMES].count    = s_game_count;
     s_cats[BAND_COMMANDS].count = XB_NEL(s_items_commands);
 
     s_items_settings[SET_APPEARANCE].sub_count = XB_NEL(s_items_appearance);

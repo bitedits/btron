@@ -23,7 +23,7 @@
 /* Bit set (1) = released, cleared (0) = pressed.  Idle is all-released. */
 static uint8_t s_matrix[MSX_INPUT_ROWS];
 
-/* Pressed-level bits per socket in the MSX_JOY_* layout of msx_int.h. */
+/* Pressed-level bits per socket in the MSX_JOY_* layout of tronmsx.h. */
 static uint8_t s_joy[2];
 
 void kbd_init(void)
@@ -65,7 +65,7 @@ uint8_t kbd_joy_pins(uint8_t sel)
 {
     /* Return the six pin levels the PSG publishes on port A: a pressed pin
      * reads 0, idle reads 1.  psg.c masks this to bits 0-5 and forces 6-7
-     * high, so only the MSX_JOY_* field below matters. */
+     * high, so only the MSX_JOY_* bits under 0x40 matter. */
     uint8_t pressed = (uint8_t)(s_joy[sel ? 1u : 0u] & 0x3Fu);
     return (uint8_t)(~pressed & 0x3Fu);
 }

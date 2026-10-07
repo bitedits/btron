@@ -35,8 +35,17 @@ void msx_blit_rgb565(uint16_t *fb);       /* 256x212, caller-owned   */
 void msx_kbd_down(uint8_t row, uint8_t col);
 void msx_kbd_up(uint8_t row, uint8_t col);
 
-/* Joystick: bits as read on PPI A (§2.5) — TRGA bit0, up/down/left/right
- * 1..4, TRGB bit6, port-B steering latched under TRGB.  Level, not edge. */
+/* Joystick socket A pin levels, as the BIOS reads them on the PSG's port A
+ * input (2.5): TRGA bit0, up/down/left/right bits 1..4, TRGB bit6; port-B
+ * steering is latched under TRGB.  Level, not edge.
+ * The same bits are what a caller hands to msx_joy_set() below. */
+#define MSX_JOY_TRGA   0x01u
+#define MSX_JOY_UP     0x02u
+#define MSX_JOY_DOWN   0x04u
+#define MSX_JOY_LEFT   0x08u
+#define MSX_JOY_RIGHT  0x10u
+#define MSX_JOY_TRGB   0x40u
+
 void msx_joy_set(uint8_t bits);
 
 void msx_psg_submit_pcm(int16_t *buf, uint32_t *frames_out); /* §5.2, Part 6 */

@@ -29,6 +29,9 @@
  *      listing, the MiniDisc glyph compared pixel-wise with the drawer's, the
  *      category bar's sideways push at every level of a nine-level tree, and the
  *      cursor coming back to the row it came from.
+ *   8. the Games band — the host's assets/msx folder listed as one row per
+ *      cartridge image, the row list counted against the folder itself, and ENTER
+ *      handing the chosen ROM to the B-MSX launcher.
  *
  * Everything under test is linked for real (xmb.c, gl_dispatch.c, egl_surface.c,
  * backend_virgl.c, troncode.c, and for the Discs band src/clu/vfs.c with the FS
@@ -41,6 +44,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <dirent.h>     /* the Games band lists the host's assets/msx */
 
 #include <btron/types.h>
 #include <btron/wnd.h>
@@ -145,6 +149,18 @@ WND* open_quake_window(int x, int y, int w, int h)
     g_launch++; g_last_launch = "quake"; return NULL;
 }
 WND* launch_beos_chat(void)          { g_launch++; g_last_launch = "chat";      return NULL; }
+
+/* B-MSX is reached with the cartridge's name, so the Games band's rows are
+ * checked on that name: the stub below records which ROM it was handed. */
+static char g_launch_rom[160];
+WND* open_msx_window(void)           { g_launch++; g_last_launch = "msx";
+                                       g_launch_rom[0] = '\0'; return NULL; }
+WND* open_msx_window_with_rom(const char *path)
+{
+    g_launch++; g_last_launch = "msx";
+    snprintf(g_launch_rom, sizeof(g_launch_rom), "%s", path ? path : "");
+    return NULL;
+}
 
 /* ── The B-System side of the Settings rows ───────────────────────────────
  * Most rows of the Settings band hold a value of the system itself, and the bar
@@ -453,14 +469,16 @@ static void press(unsigned key)
  *                   3 Arrow Browses, 4 Number Picks
  *     System Data-> six read-only lines
  *   band 2 Discs        -> the mounted volumes, and below them their drawers
- *   band 3 Commands     -> shell builtins, in a message box
+ *   band 3 Games        -> the host's assets/msx folder, one row per cartridge
+ *   band 4 Commands     -> shell builtins, in a message box
  * The rows with a bind hold the B-System's own state, so they are checked against
  * the variables at the top of this file, not against xmb_setting(). */
 /* The bands, by their order in s_cats */
 #define BAND_APPS     0
 #define BAND_SETTINGS 1
 #define BAND_DISCS    2
-#define BAND_COMMANDS 3
+#define BAND_GAMES    3
+#define BAND_COMMANDS 4
 
 /* The Settings band's menus, by their order in s_items_settings */
 #define MENU_APPEARANCE 0
@@ -1077,9 +1095,9 @@ static void test_system_bindings(void)
 
     printf("\n[7] Settings rows that hold the B-System's own value\n");
 
-    snprintf(msg, sizeof(msg), "the bar has four bands: Applications, Settings, Discs, Commands (%d)",
-             xmb_bands());
-    CHECK(xmb_bands() == 4, msg);
+    snprintf(msg, sizeof(msg), "the bar has five bands: Applications, Settings, Discs, Games, "
+             "Commands (%d)", xmb_bands());
+    CHECK(xmb_bands() == 5, msg);
 
     /* LEFT and RIGHT at the band level move the bar; only a value under an open
      * menu is adjusted. */
@@ -1452,7 +1470,7 @@ static void test_discs_band(void)
         return;
     }
 
-    /* The band is where the user put it: Applications, Settings, Discs, Commands */
+    /* The band is where the user put it: Applications, Settings, Discs, Games, Commands */
     grab_band_frame(NULL, 0);
     park_band(BAND_DISCS);
     snprintf(msg, sizeof(msg), "the third band is the Discs one, and it is showing the "
@@ -1663,7 +1681,7 @@ static void test_discs_band(void)
     paint_n(20);
     snprintf(msg, sizeof(msg), "a value key on a folder row switches the band instead "
              "(band %d, depth %d)", xmb_band(), xmb_depth());
-    CHECK(xmb_band() == BAND_COMMANDS && xmb_depth() == 1, msg);
+    CHECK(xmb_band() == BAND_GAMES && xmb_depth() == 1, msg);
     press(BTRON_KEY_LEFT);
     paint_n(20);
     snprintf(msg, sizeof(msg), "and the band restarts at the volume list (path \"%s\", "
@@ -1676,6 +1694,145 @@ static void test_discs_band(void)
     show_preview("frame: the Discs band, mounted volumes");
     dump_ppm(".build/xmb_disc_volumes.ppm");
     printf("   wrote .build/xmb_disc_volumes.ppm, xmb_disc_notes.ppm, xmb_disc_deep.ppm\n");
+}
+
+/* ── The Games band: the host's cartridge folder ─────────────────────────
+ * The band is assets/msx read once before the first frame, so the claim worth
+ * checking is that the rows are the folder's own names in the folder's own order,
+ * and that a row hands its own cartridge down to B-MSX.  The folder is counted
+ * here the way the band counts it - same suffix test, same order - because a
+ * hand-written list of six names would prove nothing about the listing. */
+#define GAME_NAME      64        /* XB_GAME_NAME in xmb.c */
+#define GAME_ROWS_MAX  16        /* XB_GAME_ROWS in xmb.c */
+
+static BOOL game_is_rom(const char *name)
+{
+    size_t n = strlen(name);
+
+    if (n < 5 || n >= GAME_NAME || name[n - 4] != '.')
+        return FALSE;
+    return (name[n - 3] == 'r' || name[n - 3] == 'R')
+        && (name[n - 2] == 'o' || name[n - 2] == 'O')
+        && (name[n - 1] == 'm' || name[n - 1] == 'M');
+}
+
+/* -> the number of cartridge images in assets/msx, names sorted; -1 when the
+ * folder cannot be opened. */
+static int games_host_roms(char names[][GAME_NAME], int max)
+{
+    DIR *dir = opendir("assets/msx");
+    struct dirent *de;
+    int n = 0, i;
+
+    if (!dir)
+        return -1;
+    while (n < max && (de = readdir(dir)) != NULL) {
+        if (de->d_name[0] == '.' || !game_is_rom(de->d_name))
+            continue;
+        snprintf(names[n], GAME_NAME, "%s", de->d_name);
+        n++;
+    }
+    closedir(dir);
+
+    for (i = 1; i < n; i++) {
+        char keep[GAME_NAME];
+        int j = i - 1;
+
+        snprintf(keep, GAME_NAME, "%s", names[i]);
+        while (j >= 0 && strcmp(names[j], keep) > 0) {
+            snprintf(names[j + 1], GAME_NAME, "%s", names[j]);
+            j--;
+        }
+        snprintf(names[j + 1], GAME_NAME, "%s", keep);
+    }
+    return n;
+}
+
+static void test_games_band(void)
+{
+    char names[GAME_ROWS_MAX][GAME_NAME];
+    char msg[240];
+    int n, i, mismatch, row, ink, cell, disc_cell, diff;
+
+    printf("\n[9] The Games band: the cartridges in assets/msx, opened in B-MSX\n");
+
+    n = games_host_roms(names, GAME_ROWS_MAX);
+    if (n < 0) {
+        printf("   SKIP: assets/msx cannot be opened from here\n");
+        CHECK(1, "Games section skipped because assets/msx is not readable");
+        return;
+    }
+
+    /* The MiniDisc glyph is the neighbouring band's own row, read on the way past. */
+    park_band(BAND_DISCS);
+    disc_cell = xmb_rows() > 0 ? xmb_row_icon(0) : -1;
+
+    park_band(BAND_GAMES);
+    snprintf(msg, sizeof(msg), "the fourth band is the Games one, and it is showing the "
+             "folder as it stands (%d rows, folder holds %d cartridge%s)",
+             xmb_rows(), n, n == 1 ? "" : "s");
+    CHECK(xmb_band() == BAND_GAMES && xmb_depth() == 1 && xmb_rows() == n, msg);
+
+    if (n == 0) {
+        printf("   SKIP: assets/msx holds no cartridge image, so there is no row to open\n");
+        CHECK(1, "Games section has no ROM to launch");
+        return;
+    }
+
+    /* Row for row, the bar's labels are the folder's own names, in its own order. */
+    mismatch = -1;
+    for (i = 0; i < n; i++) {
+        if (strcmp(xmb_label(i), names[i]) != 0) {
+            mismatch = i;
+            break;
+        }
+    }
+    snprintf(msg, sizeof(msg), "every Games row is one file of assets/msx, ordered as the "
+             "folder sorts it (row %d is \"%s\", folder says \"%s\")",
+             mismatch < 0 ? n - 1 : mismatch,
+             xmb_label(mismatch < 0 ? n - 1 : mismatch),
+             names[mismatch < 0 ? n - 1 : mismatch]);
+    CHECK(mismatch < 0, msg);
+
+    /* ENTER hands the row's own cartridge to B-MSX, not always the first one. */
+    row = n > 1 ? 1 : 0;
+    select_row(row);
+    g_launch = 0;
+    g_last_launch = "";
+    g_launch_rom[0] = '\0';
+    press(BTRON_KEY_RETURN);
+    paint_n(4);
+    snprintf(msg, sizeof(msg), "ENTER on a Games row opens B-MSX with that row's ROM "
+             "(launched %s, ROM \"%s\", wanted \"%s\")",
+             g_last_launch[0] ? g_last_launch : "nothing", g_launch_rom, names[row]);
+    CHECK(g_launch == 1 && strcmp(g_last_launch, "msx") == 0
+          && strcmp(g_launch_rom, names[row]) == 0, msg);
+
+    /* The first row too, so the index a row carries is shown to move. */
+    select_row(0);
+    g_launch = 0;
+    g_launch_rom[0] = '\0';
+    press(BTRON_KEY_RETURN);
+    paint_n(4);
+    snprintf(msg, sizeof(msg), "the first row opens its own ROM (\"%s\")", g_launch_rom);
+    CHECK(g_launch == 1 && strcmp(g_launch_rom, names[0]) == 0, msg);
+
+    /* The band's glyph is a cartridge of its own: baked into the atlas, and a
+     * different silhouette from the MiniDisc the band above it draws with. */
+    cell = xmb_row_icon(0);
+    ink = atlas_cell_look(cell, "the cartridge a Games row is drawn with");
+    snprintf(msg, sizeof(msg), "the Games glyph is baked into the icon atlas, not blank "
+             "(cell %d, %d ink px)", cell, ink);
+    CHECK(cell >= 0 && ink > 60, msg);
+    diff = cell >= 0 && disc_cell >= 0 ? atlas_cell_diff(cell, disc_cell) : -1;
+    snprintf(msg, sizeof(msg), "a cartridge is drawn as something else than a mounted "
+             "volume (%d px differ)", diff);
+    CHECK(diff > 300, msg);
+
+    paint_n(30);
+    show_preview("frame: the Games band, cartridges in assets/msx");
+    dump_ppm(".build/xmb_games_band.ppm");
+    printf("   wrote .build/xmb_games_band.ppm\n");
 }
 
 int main(void)
@@ -1700,6 +1857,7 @@ int main(void)
     test_particles_and_cost();
     test_system_bindings();
     test_discs_band();
+    test_games_band();
 
     printf("\n==========================================================\n");
     printf(" XMB RENDER TEST RESULTS: %d / %d passed\n", g_total - g_failed, g_total);

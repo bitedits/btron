@@ -191,7 +191,11 @@ static uint8_t port_a_pins(void)
 {
     uint8_t sel;
 
-    if (!(s_reg[7] & 0x40u)) return s_pa_out;              /* output: echo     */
+    /* AY-3-8910 R7 bit 6 is the Port A direction, active for OUTPUT: a set bit
+     * drives the pins from the R14 latch (a read echoes it); a clear bit lets
+     * Port A float, so the read returns the socket pins.  On MSX Port A is the
+     * joystick, so the idle case (bit 6 = 0) is what games poll. */
+    if (s_reg[7] & 0x40u) return s_pa_out;                 /* output: echo     */
     sel = (uint8_t)((s_pb_out & 0x40u) ? 1u : 0u);
     return (uint8_t)((kbd_joy_pins(sel) & 0x3Fu) | 0xC0u);
 }
@@ -211,6 +215,13 @@ uint8_t psg_read(uint8_t port)
     default:  return s_reg[s_select];
     }
 }
+
+/* Introspection for the headless tracer: the joystick-relevant PSG state. */
+uint8_t psg_debug_select(void) { return s_select; }
+uint8_t psg_debug_r7(void)     { return s_reg[7]; }
+uint8_t psg_debug_r14(void)    { return s_reg[14]; }
+uint8_t psg_debug_r15(void)    { return s_reg[15]; }
+uint8_t psg_debug_pb(void)     { return s_pb_out; }
 
 void psg_write(uint8_t port, uint8_t value)
 {

@@ -1295,8 +1295,15 @@ static void virgl_tex_image_2d(GLenum target, GLint level, GLint components,
 
     size_t npix = (size_t)width * (size_t)height;
     int    bpp  = (format == GL_RGB) ? 3 : 4;
-    uint32_t *argb = (uint32_t *)realloc(s_tex_table[s_tex_bound].argb,
-                                         npix * sizeof(uint32_t));
+    /* No realloc on a freestanding target -- the kernel heap is
+     * Imalloc/Icalloc/Ifree (libc_shim.h).  Nothing of the old image would
+     * survive here anyway, every texel below is written from `pixels`, so the
+     * buffer is released and a fresh one taken at the new size.  A failed
+     * upload leaves argb NULL, which is what the sampler already treats as
+     * "texture bound but empty". */
+    free(s_tex_table[s_tex_bound].argb);
+    s_tex_table[s_tex_bound].argb = NULL;
+    uint32_t *argb = (uint32_t *)malloc(npix * sizeof(uint32_t));
     if (!argb) return;
 
     const uint8_t *src = (const uint8_t *)pixels;

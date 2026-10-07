@@ -120,17 +120,41 @@ static void get_desktop_icon_layout(int idx, int *out_dim, RECT *out_plate, int 
 
 static COLOR s_cached_bg[1024 * 768] __attribute__((aligned(64)));
 static BOOL  s_bg_cached = FALSE;
+static H     s_bg_w;   /* the canvas s_cached_bg currently holds */
+static H     s_bg_h;
+static BTRON_ICON_SIZE s_bg_icon_size;  /* the icon size it was painted at */
 
-void desktop_invalidate_background(void) {
-    s_bg_cached = FALSE;
+/* The capacity is the largest screen in the tree, so a 1024x768 device fills the
+ * array exactly and an 800x600 one leaves the tail unused.
+ *
+ * This used to be a pair of literals -- `dev->width == 1024 && dev->height == 768`
+ * -- which meant the cache could only ever latch on a 1024x768 canvas.  On the
+ * PS2's 800x600 it never did, so every banded present fell through to the
+ * procedural rebuild below: a whole-canvas fill, some fifteen thousand grid dots
+ * and five scaled LZW icon decodes, once per band.  Keying by the device instead
+ * of by one resolution is what makes the rect path a rect path there. */
+#define BTRON_BG_CAP_PX (1024u * 768u)
+
+/* What the cached plates depend on: the canvas they were painted into, and the
+ * icon size `get_desktop_icon_layout()` was reading while painting them.  The
+ * second is why the applet does not have to tell this module that the setting
+ * changed -- the cache notices the same getter the art does, so the dependency
+ * lives in one place and a settings applet that links without desktop.c still
+ * builds. */
+static BOOL bg_cache_holds(const GDEV *dev)
+{
+    return s_bg_cached && dev->width == s_bg_w && dev->height == s_bg_h &&
+           s_bg_icon_size == appearance_get_icon_size() &&
+           (uint32_t)dev->width * (uint32_t)dev->height <= BTRON_BG_CAP_PX;
 }
 
 void render_desktop_background(GDEV *dev) {
     if (!dev) return;
 
-    if (s_bg_cached && dev->width == 1024 && dev->height == 768) {
+    if (bg_cache_holds(dev)) {
         /* Instant restore from cached buffer — 0.3 ms instead of 35 ms of LZW decodes */
-        for (int i = 0; i < 1024 * 768; i++) {
+        const uint32_t n = (uint32_t)dev->width * (uint32_t)dev->height;
+        for (uint32_t i = 0; i < n; i++) {
             dev->pixels[i] = s_cached_bg[i];
         }
         return;
@@ -177,10 +201,14 @@ void render_desktop_background(GDEV *dev) {
         drw_tc_string(dev, lbl_x, lbl_y, s_desktop_icons[i].label, COLOR_WHITE, 0x00000000);
     }
 
-    if (dev->width == 1024 && dev->height == 768) {
-        for (int i = 0; i < 1024 * 768; i++) {
+    if ((uint32_t)dev->width * (uint32_t)dev->height <= BTRON_BG_CAP_PX) {
+        const uint32_t n = (uint32_t)dev->width * (uint32_t)dev->height;
+        for (uint32_t i = 0; i < n; i++) {
             s_cached_bg[i] = dev->pixels[i];
         }
+        s_bg_w = dev->width;
+        s_bg_h = dev->height;
+        s_bg_icon_size = appearance_get_icon_size();
         s_bg_cached = TRUE;
     }
 }
@@ -189,7 +217,7 @@ void render_desktop_background_rect(GDEV *dev, const RECT *damage) {
     if (!dev || !damage) return;
     uint32_t t0 = btron_render_perf_us();
 
-    if (!(s_bg_cached && dev->width == 1024 && dev->height == 768)) {
+    if (!bg_cache_holds(dev)) {
         /* The procedural rebuild: teal fill, dot grid and five LZW icon
          * decodes.  Nothing in the tree invalidates the cache, so a non-zero
          * count here means the cache is not latching and the rect path is not
@@ -204,14 +232,14 @@ void render_desktop_background_rect(GDEV *dev, const RECT *damage) {
 
     H x0 = damage->left < 0 ? 0 : damage->left;
     H y0 = damage->top < 0 ? 0 : damage->top;
-    H x1 = damage->right > 1024 ? 1024 : damage->right;
-    H y1 = damage->bottom > 768 ? 768 : damage->bottom;
+    H x1 = damage->right > dev->width ? dev->width : damage->right;
+    H y1 = damage->bottom > dev->height ? dev->height : damage->bottom;
     if (x1 <= x0 || y1 <= y0) return;
 
     H width = x1 - x0;
     for (H y = y0; y < y1; y++) {
-        COLOR *dst = &dev->pixels[y * 1024 + x0];
-        const COLOR *src = &s_cached_bg[y * 1024 + x0];
+        COLOR *dst = &dev->pixels[y * dev->width + x0];
+        const COLOR *src = &s_cached_bg[y * dev->width + x0];
         btron_row_blit(dst, src, (size_t)width * sizeof(COLOR));
     }
     /* Paired with the pixel count so the band can print a byte rate: this
@@ -234,8 +262,13 @@ BOOL desktop_handle_click(H x, H y) {
                 RECT plate;
                 get_desktop_icon_layout(i, NULL, &plate, NULL, NULL, NULL, NULL, NULL);
                 wnd_inval_damage_rect(&plate);
-                RECT whole = { 0, 0, 1024, 768 };
-                wnd_inval_damage_rect(&whole);
+                /* The whole canvas, not a literal one: an icon opens a window, and
+                 * restacking is not something a band can be trusted to catch. */
+                const GDEV *scr = wnd_mgr_get_screen();
+                if (scr) {
+                    RECT whole = { 0, 0, scr->width, scr->height };
+                    wnd_inval_damage_rect(&whole);
+                }
                 s_desktop_icons[i].action();
             }
             return TRUE;

@@ -396,6 +396,30 @@ static uint32_t ps2_us_since(uint32_t start)
     return (uint32_t)(ps2_count_read() - start) / EE_TICKS_PER_US;
 }
 
+/* dp_core.c answers this with a weak stub that returns zero, and this port never
+ * overrode it -- which is why every stage of the shared compositor reads 0 in the
+ * Pi 400's HUD-style split while the PS2 had only the three numbers measured above.
+ * Answering it from the CP0 Count turns the compositor's own attribution on here:
+ * background restore, window decoration, application paint, client blit, panel and
+ * bars, each of which has a different cure.
+ *
+ * Count is 32 bits and wraps every 29 seconds at 147 ticks/us, and callers take an
+ * absolute difference, so the wrap is folded into a high word rather than leaking a
+ * four-billion microsecond maximum into a stage counter.  The fold is 32-bit
+ * arithmetic on purpose -- 2^32/147 is 29155706 us, and the residue below one
+ * microsecond per wrap costs nothing a 1 ms budget can see -- because this target
+ * links no runtime for wider division. */
+uint32_t btron_render_perf_us(void)
+{
+    static uint32_t s_ticks_hi;
+    static uint32_t s_ticks_last;
+    const uint32_t now = ps2_count_read();
+
+    if (now < s_ticks_last) s_ticks_hi++;
+    s_ticks_last = now;
+    return s_timebase_ok ? s_ticks_hi * 29155706u + now / EE_TICKS_PER_US : 0u;
+}
+
 /* One repaint of a present band, timed by stage.  The three have different cures,
  * so they are never folded into one number: the render walks the damaged part of
  * the desktop, the swap touches one word per pixel of it, and only the upload has
@@ -821,6 +845,30 @@ static void ps2_ptrst_pass(int32_t ask_x, int32_t ask_y, int32_t spent_x, int32_
  * port does not control, and no guest constant can be right for both runs. */
 static uint32_t s_prev_sum_ax, s_prev_sum_ay;
 
+/* One axis's chain, in the one unit a hand can supply on purpose: total counts
+ * against total pixels, so a slide of known host cursor travel divides to the gain
+ * without any of the intermediate constants being trusted.  Whole-and-remainder
+ * rather than a pre-multiplied numerator because this formatter has no fractional
+ * conversion of its own and the multiply would have had to be trusted not to
+ * overflow on a long window.
+ *
+ * Both axes get the row because the complaint that opened this was that the two
+ * feel different, and the emulator's gain is one setting per axis in its ini
+ * ([Pad] PointerXScale and PointerYScale), so an asymmetry introduced upstream of
+ * this port shows up here and nowhere else in the log. */
+static void ps2_chain_print(const char *axis, uint32_t counts, uint32_t spent)
+{
+    const uint32_t hostv = spent * PS2_EMU_POINTER_SCALE;
+
+    ps2_kprintf("[PSTAT] chain %s: counts=%u spent=%u -> %u.%02u px/count = %u.%02u px/host px @scale%d\n",
+                axis, (unsigned int)counts, (unsigned int)spent,
+                counts ? (unsigned int)(spent / counts) : 0u,
+                counts ? (unsigned int)((spent % counts) * 100u / counts) : 0u,
+                counts ? (unsigned int)(hostv / counts) : 0u,
+                counts ? (unsigned int)((hostv % counts) * 100u / counts) : 0u,
+                PS2_EMU_POINTER_SCALE);
+}
+
 static void ps2_ptrst_print(const char *label)
 {
     const ps2_ptrst_t *s = &s_ptrst;
@@ -829,8 +877,6 @@ static void ps2_ptrst_print(const char *label)
      * too low.  Masking keeps the row trustworthy for any window a person can
      * hold a mouse still or slide in one go. */
     const uint32_t frames = (s->f_last - s->f_first) & 0xFFFFu;
-    const uint32_t c = s->sum_ax;         /* the chain row's denominator */
-    const uint32_t hostv = s->spent_x * PS2_EMU_POINTER_SCALE;
     int b;
 
     ps2_kprintf("[PSTAT] %s: reports=%u still=%u over=%u frames -> %u/s\n",
@@ -867,22 +913,12 @@ static void ps2_ptrst_print(const char *label)
                 (unsigned int)s->passes, (unsigned int)frames,
                 (unsigned int)(frames ? s->passes * 1000u / frames : 0u),
                 (unsigned int)(frames ? s->passes * 10000u / frames % 10u : 0u));
-    /* The calibration itself, in the one unit a hand can supply on purpose: total
-     * counts against total pixels, so a slide of known host cursor travel divides
-     * to the gain without any of the intermediate constants being trusted.  The
-     * `@scale` figure is what the gain is *if* the emulator really spends
-     * PS2_EMU_POINTER_SCALE counts per host pixel -- the row exists so that
-     * assumption can be checked rather than carried.  Whole-and-remainder rather
-     * than a pre-multiplied numerator because this formatter has no fractional
-     * conversion of its own and the multiply would have had to be trusted not to
-     * overflow on a long window. */
-    ps2_kprintf("[PSTAT] chain x: counts=%u spent=%u -> %u.%02u px/count = %u.%02u px/host px @scale%d\n",
-                (unsigned int)c, (unsigned int)s->spent_x,
-                c ? (unsigned int)(s->spent_x / c) : 0u,
-                c ? (unsigned int)((s->spent_x % c) * 100u / c) : 0u,
-                c ? (unsigned int)(hostv / c) : 0u,
-                c ? (unsigned int)((hostv % c) * 100u / c) : 0u,
-                PS2_EMU_POINTER_SCALE);
+    /* Both axes, from ps2_chain_print() above.  The pair is the answer to a
+     * difference in feel that is a difference in gain rather than in paint cost:
+     * the two rows should read the same px/count for the same host slide, and the
+     * [PSTAT] axis rows in ps2_paint_print() are what says so when they do not. */
+    ps2_chain_print("x", s->sum_ax, s->spent_x);
+    ps2_chain_print("y", s->sum_ay, s->spent_y);
     /* Tenths, because this formatter has no fractional conversion of its own.  A
      * window with nothing in it is not a comparison, so `ptrstat boot` closes
      * silently and the first real slide is the first row here. */
@@ -916,34 +952,66 @@ typedef struct {
     uint32_t n;                              /* passes timed */
     uint32_t full_n;                         /* ... of which repainted the canvas */
     uint32_t rows_sum, rows_max;             /* band height of each present, in rows */
+    uint32_t bands_sum, bands_max;           /* separate presents inside one pass */
     uint32_t render_sum, render_max;
     uint32_t swap_sum,   swap_max;
     uint32_t upload_sum, upload_max;
     uint32_t lat_n;                          /* painted moves, a subset of n */
     uint32_t lat_sum, lat_max;               /* ms, OHCI frames */
+    /* The same two totals split by which axis the pass spent most of its pixels
+     * on: [0] sideways, [1] up-or-down.
+     *
+     * This exists because the band model is not symmetric between the axes, and
+     * the complaint about the cursor was axis-specific.  A band is a full-width row
+     * range, so its cost is rows x 800 px: sideways travel never changes the rows,
+     * because the old and new sprite share one band however far the cursor slid,
+     * while vertical travel adds rows for as long as the two positions overlap and,
+     * past sixteen pixels of it, splits into two bands -- two composites, two
+     * swaps and two GIF streams.  A sweep up the screen therefore dirties more
+     * pixels than the same sweep across it, which is an asymmetry in this port's
+     * present rather than in the counts the bus carried.  Rows, cost and age per
+     * axis are what says how much of the complaint that is, and the `chain` rows
+     * in ps2_ptrst_print() say how much of it is the gain instead. */
+    uint32_t ax_n[2], ax_rows[2], ax_us[2];
+    uint32_t ax_lat_n[2], ax_lat_sum[2], ax_lat_max[2];
 } ps2_paint_t;
 
 static ps2_paint_t s_paint;
+/* The axis of the move the current pass owes its paint for, -1 for a pass that
+ * painted without spending a move (a keystroke, an app's invalidate, a timer net).
+ * Set by ps2_ptr_service(), which is where the pass's spent pixels are known. */
+static int s_paint_dom = -1;
 /* Set by ps2_ptr_service() when the pass spent pointer distance, and consumed by
  * the paint that renders it, so the age spans from the oldest report the pass
  * spent to the flush that made it visible. */
 static uint32_t s_paint_age_f0;
 static int s_paint_owed;
 
-static void ps2_paint_note(uint32_t rows, int full,
+static void ps2_paint_note(uint32_t rows, uint32_t bands, int full, int dom,
                            uint32_t render_us, uint32_t swap_us, uint32_t upload_us,
                            uint32_t lat_ms, int lat_valid)
 {
     s_paint.n++;
     if (full) s_paint.full_n++;
     s_paint.rows_sum += rows;  if (rows > s_paint.rows_max) s_paint.rows_max = rows;
+    s_paint.bands_sum += bands; if (bands > s_paint.bands_max) s_paint.bands_max = bands;
     s_paint.render_sum += render_us;  if (render_us > s_paint.render_max) s_paint.render_max = render_us;
     s_paint.swap_sum   += swap_us;    if (swap_us   > s_paint.swap_max)   s_paint.swap_max   = swap_us;
     s_paint.upload_sum += upload_us;  if (upload_us > s_paint.upload_max) s_paint.upload_max = upload_us;
+    if (dom == 0 || dom == 1) {
+        s_paint.ax_n[dom]++;
+        s_paint.ax_rows[dom] += rows;
+        s_paint.ax_us[dom]   += render_us + swap_us + upload_us;
+    }
     if (!lat_valid) return;
     s_paint.lat_n++;
     s_paint.lat_sum += lat_ms;
     if (lat_ms > s_paint.lat_max) s_paint.lat_max = lat_ms;
+    if (dom == 0 || dom == 1) {
+        s_paint.ax_lat_n[dom]++;
+        s_paint.ax_lat_sum[dom] += lat_ms;
+        if (lat_ms > s_paint.ax_lat_max[dom]) s_paint.ax_lat_max[dom] = lat_ms;
+    }
 }
 
 /* Averaged over the window's passes, with the worst pass beside it: an average
@@ -964,6 +1032,14 @@ static void ps2_paint_print(void)
                 (unsigned int)(p->n - p->full_n),
                 (unsigned int)p->rows_max, (unsigned int)(p->rows_sum / p->n),
                 (unsigned int)PS2_SCREEN_HEIGHT);
+    /* Two bands in one pass is the vertical case: the sprite's old rows and its new
+     * ones no longer touch, so the present pays a composite, a swap and a GIF stream
+     * for each.  Sideways travel cannot produce it, which is why this column is read
+     * beside the axis rows below. */
+    ps2_kprintf("[PSTAT] paint: bands/pass %u.%02u avg, %u max\n",
+                (unsigned int)(p->bands_sum / p->n),
+                (unsigned int)(p->bands_sum * 100u / p->n % 100u),
+                (unsigned int)p->bands_max);
     ps2_kprintf("[PSTAT] paint: n=%u us/pass  render %u/%u  swap %u/%u  upload %u/%u  (max/avg)\n",
                 (unsigned int)p->n,
                 (unsigned int)p->render_max, (unsigned int)(p->render_sum / p->n),
@@ -976,6 +1052,50 @@ static void ps2_paint_print(void)
     } else {
         ps2_kprintf("[PSTAT] lat: no move was painted in this window\n");
     }
+    /* The two halves of the same window, one per axis, from the pass's dominant
+     * travel.  This is the row set that reads "vertical feels different from
+     * horizontal" as a number: if `rows` and `us` rise together on the vertical row
+     * while the horizontal row stays at one sixteen-row band, the band model is
+     * charging for the axis and the cure is here in the present.  If the two rows
+     * cost the same but the hand still reports a difference, the counts themselves
+     * did not match the distance, which is the `chain` pair in ps2_ptrst_print()
+     * instead.  A window with only one direction in it reads zero passes on the
+     * other, so sweep one axis at a time and this tells the two apart by itself. */
+    {
+        int k;
+        static const char *const names[2] = { "horiz", "vert " };
+
+        for (k = 0; k < 2; k++) {
+            if (!p->ax_n[k]) continue;
+            ps2_kprintf("[PSTAT] axis %s: n=%u rows/avg=%u us/pass=%u lat %u/%u ms over %u\n",
+                        names[k], (unsigned int)p->ax_n[k],
+                        (unsigned int)(p->ax_rows[k] / p->ax_n[k]),
+                        (unsigned int)(p->ax_us[k] / p->ax_n[k]),
+                        (unsigned int)(p->ax_lat_n[k] ? p->ax_lat_sum[k] / p->ax_lat_n[k] : 0u),
+                        (unsigned int)p->ax_lat_max[k],
+                        (unsigned int)p->ax_lat_n[k]);
+        }
+    }
+    /* `bfn` is the Pi 400 HUD's name for the same counter, and it is the row that
+     * says whether a band was a band: the compositor clips only out of its cached
+     * background, and a miss rebuilds the whole desktop -- fill, grid, five LZW icon
+     * decodes -- before clipping anything.  The cold paint latches the cache, so a
+     * healthy session reads zero; every count above that is a band that cost a whole
+     * canvas, and the `render` column above is where it shows up. */
+    ps2_kprintf("[PSTAT] compositor: bfn=%u background cache misses (0 = every band clipped)\n",
+                (unsigned int)g_render_stats.bg_full_calls);
+    /* The pass above is timed in three stages that are this port's own; these are
+     * the stages the shared compositor times inside itself, and they are the ones
+     * that say what a still-expensive band was doing.  `bg` is the one that moves
+     * when the cache latches, `wins` is how much of the stack the walk drew out of
+     * how long it is, and a `blit` that dominates with few windows is a different
+     * bug from a `frame` that dominates with many. */
+    ps2_kprintf("[PSTAT] compositor: worst us  bg=%u (%u px)  frame=%u  paint=%u  blit=%u  panel=%u  bars=%u  comp=%u  wins=%u/%u\n",
+                (unsigned int)g_render_stats.bg_us, (unsigned int)g_render_stats.bg_worst_px,
+                (unsigned int)g_render_stats.frame_us, (unsigned int)g_render_stats.paint_us,
+                (unsigned int)g_render_stats.blit_us, (unsigned int)g_render_stats.panel_us,
+                (unsigned int)g_render_stats.bars_us, (unsigned int)g_render_stats.comp_us,
+                (unsigned int)g_render_stats.wins_drawn, (unsigned int)g_render_stats.wins_walked);
     s_paint = (ps2_paint_t){ 0 };
 }
 
@@ -1189,6 +1309,11 @@ static void ps2_ptr_service(void)
      * taken by the border. */
     ps2_ptrst_pass(ask_x, ask_y, s_mouse_x - x0, s_mouse_y - y0);
     if (!px && !py) return;
+    /* Which way this pass went, in the pixels it actually spent rather than the
+     * counts that asked for them: the border can take one axis away entirely, and
+     * what the present then dirties is what the pixels did, not what the hand
+     * wanted.  Consumed by ps2_paint_note() through the pass that follows. */
+    s_paint_dom = ((py < 0 ? -py : py) > (px < 0 ? -px : px)) ? 1 : 0;
     /* This pass owes a paint, and the age of the movement is only finished when
      * that paint reaches the GS.  Only the desktop loop reads and clears it; a
      * pass that never paints leaves the stamp alone, so the age then spans the
@@ -1913,6 +2038,14 @@ void launch_ps2_desktop_session(void)
      * the cold paint above would otherwise be folded into the first measurement. */
     s_ptrst = (ps2_ptrst_t){ 0 };
     s_paint = (ps2_paint_t){ 0 };
+    /* The compositor's own counters are shared with the boot log's paints, and
+     * `bfn` below only means something for this desktop: a miss during the cold
+     * paint is the cache latching, not a band that failed to clip.  take() is the
+     * only clear the shared profiler offers, and this drops the snapshot with it. */
+    {
+        RENDER_STATS discard;
+        btron_render_stats_take(&discard);
+    }
 
     while (s_gui_active) {
         ps2_bandset_t set = { { { 0, 0 } }, 0, 0 };
@@ -2024,6 +2157,7 @@ void launch_ps2_desktop_session(void)
             uint32_t r_us, s_us, u_us, rows;
             uint32_t lat = 0;
             int lat_ok = 0;
+            const int dom = s_paint_owed ? s_paint_dom : -1;
 
             ps2_paint_bands(screen, &set, &r_us, &s_us, &u_us, &rows);
 
@@ -2037,7 +2171,7 @@ void launch_ps2_desktop_session(void)
                 s_paint_age_f0 = 0;
                 s_paint_owed = 0;
             }
-            ps2_paint_note(rows, ps2_band_is_full(&set.b[0]),
+            ps2_paint_note(rows, set.n, ps2_band_is_full(&set.b[0]), dom,
                            r_us, s_us, u_us, lat, lat_ok);
             if (ps2_band_is_full(&set.b[0])) full_due = ps2_count_read();
         }

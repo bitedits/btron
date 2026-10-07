@@ -1593,6 +1593,26 @@ test-tracker: $(TEST_TRACKER_BIN)
 $(TEST_TRACKER_BIN): $(TEST_TRACKER_OBJS)
 	$(CC) $(TEST_TRACKER_OBJS) -o $@ $(LDFLAGS) -lm
 
+# ═══════════════════════════════════════════════════════════════════
+# Desktop Banded-Present Losslessness (the PS2 present's contract, headless)
+# ═══════════════════════════════════════════════════════════════════
+TEST_CLIP_SRCS = verify/tests/test_desktop_clip.c src/desktop/tracker.c src/desktop/desktop.c src/settings/appearance.c \
+                 src/vobject/vobj.c src/desktop/about.c src/window/wnd.c src/chokanji/pmc.c \
+                 src/window/app_menu.c \
+                 src/graphics/dp_core.c src/graphics/icons_bundle.c src/font/troncode.c src/font/jis_fonts.c src/font/tibetan_fonts.c
+TEST_CLIP_OBJS = $(TEST_CLIP_SRCS:.c=.test.o)
+TEST_CLIP_BIN  = ./.build/test_desktop_clip
+
+test-deskclip: $(TEST_CLIP_BIN)
+	@echo "=========================================================="
+	@echo " Running Desktop Banded-Present Losslessness Tests..."
+	@echo "=========================================================="
+	@./$(TEST_CLIP_BIN)
+
+$(TEST_CLIP_BIN): $(TEST_CLIP_OBJS)
+	@mkdir -p ./.build
+	$(CC) $(TEST_CLIP_OBJS) -o $@ $(LDFLAGS) -lm
+
 verify:
 	@$(MAKE) -C verify run
 # ═══════════════════════════════════════════════════════════════════
@@ -1768,7 +1788,7 @@ $(TEST_MSX_TRACE_BIN): $(TEST_MSX_TRACE_OBJS)
 	@mkdir -p ./.build
 	$(CC) $(TEST_MSX_TRACE_OBJS) -o $@ $(LDFLAGS)
 
-test: test-tad test-editor test-chat test-mozc test-wylie test-hmi test-ski test-tracker test-settings test-global-menu test-app-menu test-drivesetup test-fs test-quake
+test: test-tad test-editor test-chat test-mozc test-wylie test-hmi test-ski test-tracker test-deskclip test-settings test-global-menu test-app-menu test-drivesetup test-fs test-quake
 	@echo "=========================================================="
 	@echo " ALL B-SYSTEM TEST SUITES PASSED (100% SUCCESS)!"
 	@echo "=========================================================="

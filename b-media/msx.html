@@ -30,7 +30,7 @@
 
   <nav class="book-sidebar">
     <div class="sidebar-brand">
-      <div class="brand-title">B-MSX <span class="badge">Rev 1.04</span></div>
+      <div class="brand-title">B-MSX <span class="badge">Rev 1.05</span></div>
       <div class="brand-sub">MSX2+ Home · core: tronMSX</div>
     </div>
     <div class="sidebar-nav">
@@ -623,9 +623,12 @@
         <h3>3.2 ROM Header &amp; Boot Trace</h3>
         <p>The cartridge header is the 16 bytes at <code>0x4000</code>:</p>
         <table class="api-table">
-          <caption>Cartridge-header fields. Every row is <span class="basis basis-hw">Hardware</span>:
-          the layout and the version-bit set are fixed by the MSX standard, and AV-2 exercises each rule
-          against the codec of 4.1.</caption>
+          <caption>Cartridge-header fields. The layout and the version-bit set are
+          <span class="basis basis-hw">Hardware</span>, fixed by the MSX standard. The three
+          tolerance rules added to <code>reserved</code>, <code>version</code> and
+          <code>rom_blocks</code> are <span class="basis basis-norm">Normative</span>: they exist
+          because MSX1-era software overwrote the last six header bytes with code before that
+          region was reserved, and AV-2 exercises each rule against the codec of 4.1.</caption>
           <thead><tr><th>Offset</th><th>Size</th><th>Field</th><th>Law</th></tr></thead>
           <tbody>
             <tr><td><code>0x4000</code></td><td>2</td><td><code>magic</code></td><td>Must be <code>'A' 'B'</code>; otherwise the ROM is rejected with <code>MSX_ERR_HDR</code>.</td></tr>
@@ -634,9 +637,9 @@
             <tr><td><code>0x4006</code></td><td>2</td><td><code>SHELL</code></td><td>Entry address, <code>0</code> when absent.</td></tr>
             <tr><td><code>0x4008</code></td><td>2</td><td><code>BOOT</code></td><td>Entry address, <code>0</code> when absent; skipped on MSX2 disk boot.</td></tr>
             <tr><td><code>0x400A</code></td><td>2</td><td><code>HOOK</code></td><td>NMI/keyboard hook address, <code>0</code> when absent.</td></tr>
-            <tr><td><code>0x400C</code></td><td>2</td><td><code>reserved</code></td><td><code>00 00</code>.</td></tr>
-            <tr><td><code>0x400E</code></td><td>1</td><td><code>version</code></td><td>Bit 7 = ASCII statement present; bit 5 = MSX2 and bit 4 = MSX2+ machine flags; bits 0–3 select the machine: 0 = MSX1, 3 = MSX1+JP, 4 = MSX2, 5 = MSX2+JP.</td></tr>
-            <tr><td><code>0x400F</code></td><td>1</td><td><code>rom_blocks</code></td><td>ROM size in 16 KiB blocks; <code>2</code> for a 32 KiB cartridge. The first core requires <code>rom_blocks ≤ 2</code>; a larger value is a MegaROM, and 4.1 rejects it with <code>MSX_ERR_SIZE</code> at load.</td></tr>
+            <tr><td><code>0x400C</code></td><td>2</td><td><code>reserved</code></td><td><code>00 00</code> in headers written after the cartridge-header layout settled. MSX1-era cartridges overwrite these bytes with code, so a non-zero value is <strong>advisory only</strong> and MUST NOT reject the ROM. <span class="basis basis-norm">Normative</span>, closed by AV-2.</td></tr>
+            <tr><td><code>0x400E</code></td><td>1</td><td><code>version</code></td><td>Bit 7 = ASCII statement present; bit 5 = MSX2 and bit 4 = MSX2+ machine flags; bits 0–3 select the machine: 0 = MSX1, 3 = MSX1+JP, 4 = MSX2, 5 = MSX2+JP. A machine code outside that set means the byte is code, not a version byte: the loader MUST then fall back to <code>b_msx_body.machine</code> from the record header of 4.1 and MUST NOT reject the ROM. <span class="basis basis-norm">Normative</span>, closed by AV-2.</td></tr>
+            <tr><td><code>0x400F</code></td><td>1</td><td><code>rom_blocks</code></td><td>ROM size in 16 KiB blocks; <code>2</code> for a 32 KiB cartridge. <strong>The payload size is authoritative.</strong> When <code>rom_blocks</code> disagrees with <code>size ÷ 16,384</code> — normal for MSX1-era carts, which reuse this byte as code — <code>rom_blocks</code> MUST be ignored and the block count derived from <code>size</code>. The first core requires a derived <code>blocks ≤ 2</code>; a larger derived value is a MegaROM, and 4.1 rejects it with <code>MSX_ERR_SIZE</code> at load. <span class="basis basis-norm">Normative</span>, closed by AV-2.</td></tr>
           </tbody>
         </table>
         <p>
@@ -712,7 +715,7 @@
           accepts <code>kind=1</code> and returns <code>MSX_ERR_KIND</code> for 2, 3 and 4.</caption>
           <thead><tr><th>kind</th><th>Payload law</th><th>Failure code</th></tr></thead>
           <tbody>
-            <tr><td><code>1</code> rom</td><td>First two payload bytes are <code>'A' 'B'</code>; <code>size == rom_blocks × 16,384</code> with <code>rom_blocks ≤ 2</code> on the first core.</td><td><code>MSX_ERR_HDR</code> for the header bytes, <code>MSX_ERR_SIZE</code> for the block count.</td></tr>
+            <tr><td><code>1</code> rom</td><td>First two payload bytes are <code>'A' 'B'</code>; derived block count <code>size ÷ 16,384 ≤ 2</code> on the first core, with the header's <code>rom_blocks</code> byte advisory per 3.2.</td><td><code>MSX_ERR_HDR</code> for the header bytes, <code>MSX_ERR_SIZE</code> for a derived block count above 2.</td></tr>
             <tr><td><code>2</code> com</td><td><code>entry == 0x0100</code>.</td><td><code>MSX_ERR_ENTRY</code></td></tr>
             <tr><td><code>3</code> bload</td><td>First payload byte is the BLOAD header marker 0xFE.</td><td><code>MSX_ERR_HDR</code></td></tr>
             <tr><td><code>4</code> cas</td><td>Legal TACS block records: 0x00 header, 0x01 data, 0x02 end of file.</td><td><code>MSX_ERR_HDR</code></td></tr>
@@ -808,7 +811,7 @@ void msx_kbd_up(uint8_t row, uint8_t col);
 void msx_psg_submit_pcm(int16_t *buf, uint32_t *frames_out); /* Part 6 pacing contract */
 uint64_t msx_total_cycles(void);
 uint64_t msx_body_hash(void);                   /* FNV-1a 64 over ROM+BIOS, fixed at load (8.2) */
-const char *msx_version_string(void);           /* "tronMSX 1.04 (C99-only core)" */</code></pre>
+const char *msx_version_string(void);           /* "tronMSX 1.05 (C99-only core)" */</code></pre>
         <p>
           Invariants: every function is total — an invalid size returns an <code>MSX_ERR_*</code> code and
           produces no undefined behaviour. <code>msx_run_frame</code> MUST complete in a bounded, measurable
@@ -1149,14 +1152,14 @@ title:  db      "BTRON",0</code></pre>
           32-byte <code>tt_sym_t</code> record of <a href="#ttdebug">8.4</a>, which the debugger loads and
           which openMSX's Symbol Manager can still read natively.
         </p>
-        <pre><code>tools/msxpak.c  (C99, single file, no deps beyond libc)
+        <pre><code>src/tools/msxpak.c  (C99, single file, no deps beyond libc)
   msxpak rom   --in game.rom --out game.bmsx --name "Game" [--bios bios.msx2p]
                ; verifies the AB header (entry 0x4000); writes the 64-byte BMSX header
   msxpak com   --in game.com --out game.bmsx ... ; entry must be 0x0100 (kind=2)
   msxpak cas   --in game.cas --out game.bmsx     ; validates TACS records (kind=4)
   msxpak dump  --in game.bmsx                    ; prints the record; round-trip test input
 
-tools/mssym.c   (C99, single file)
+src/tools/mssym.c   (C99, single file)
   mssym --rasm game.sym --z88dk game.map --out game.ttsym
                ; 8,192-entry cap, sorted by pc, rejects duplicate pc+name, AV-11 input</code></pre>
         <pre><code>Makefile (MSX section; TC = toolchainMSX):
@@ -1218,11 +1221,12 @@ tools/mssym.c   (C99, single file)
         </div>
         <p>
           The required module shape is one unit per chip (<code>z80</code>, <code>vdp</code>,
-          <code>psg</code>, <code>ppi</code>) with slot, BIOS and keyboard glue, one top level, and two debug
-          units — ten in all. C99 only, with no C++, no plugin system and no machine XML:
+          <code>psg</code>, <code>ppi</code>) with slot, BIOS and keyboard glue, one top level, one
+          window unit, and two debug units — eleven in all. C99 only, with no C++, no plugin system
+          and no machine XML:
         </p>
         <table class="api-table">
-          <caption>The ten translation units of <code>src/emulators/msx/</code>. Names and responsibilities
+          <caption>The eleven translation units of <code>src/emulators/msx/</code>. Names and responsibilities
           are <span class="basis basis-norm">Normative</span>; <code>include/emulators/tronmsx.h</code>
           (<a href="#coreapi">Part 5</a>) and <code>include/emulators/tronmsx_tt.h</code> (8.3) are the only
           public headers, and AV-8 asserts the C99-only rule over this list.</caption>
@@ -1236,6 +1240,7 @@ tools/mssym.c   (C99, single file)
             <tr><td><code>ppi.c</code></td><td>8255 decode <code>0x10</code>–<code>0x13</code> and <code>0xA8</code>–<code>0xAB</code>, keyboard matrix array, joystick bits.</td><td>2.5</td></tr>
             <tr><td><code>bios.c</code></td><td>Settings-key loader (<code>bios.msx2p</code>, <code>bios.msx2pext</code>, <code>bios.disk</code>, <code>bios.kanji</code>) with C-BIOS fallback.</td><td>4.2</td></tr>
             <tr><td><code>kbd.c</code></td><td>Matrix table, one generated array, and the <code>KBD_SYNC</code> snapshot per frame.</td><td>2.5, 5.2</td></tr>
+            <tr><td><code>msx_app.c</code></td><td>The MSX2+ home window itself: the 4.2 launch sequence, <code>opn_wnd()</code> with the BTRON menu bar, the <code>MSX_UI</code>/<code>MSX_CORE</code>/<code>MSX_AUDIO</code> tasks, host key and joystick events into the input slot, and the <code>msx_blit_rgb565</code> blit at the window's magnify. The only unit that depends on <code>btron/wnd.h</code>, <code>btron/dp.h</code> and <code>device/virtio.h</code>; the ten units above it stay host-independent so they remain steppable headless per D1 of 8.1.</td><td>4.2, 5.2, 7.7</td></tr>
             <tr><td><code>tronmsx_tt.c</code></td><td>Time-travel instrument: input log, checkpoint ring, restore, headless replay, PC and page watch matching. The whole file is inside <code>#ifdef MSX_TT_DEBUG</code>, so the shipping shape contains no part of it and the 5.3 bound holds.</td><td>Part 8</td></tr>
             <tr><td><code>tronmsx_tt_wnd.c</code></td><td>Debugger windows: <code>opn_wnd()</code> panels, their menus and repaints. Also inside <code>#ifdef MSX_TT_DEBUG</code>, and depends on <code>btron/wnd.h</code> and on no other emulator unit.</td><td>8.4.1</td></tr>
           </tbody>
@@ -1705,7 +1710,25 @@ typedef struct {                 /* one log line, written by the step-path hook 
           <code>name[28]</code> at offset 36, <code>sizeof(tt_view_t) == 32</code> requires the 7-byte tail
           after the 6-byte alignment hole at 10..15, the checkpoint header fields land at 0, 4, 6, 8, 16, 24,
           32, 96, 136, 184, 200, 224, 248 and 252, and the debug-shape sum is 13,918,464 B over the 262,296 B
-          core, 14,180,760 B in total. Where the design note and this book disagree, this
+          core, 14,180,760 B in total.
+          <strong>Rev 1.05</strong> relaxes the cartridge-header law of 3.2 and 4.1. The rule
+          <code>size == rom_blocks × 16,384</code>, the <code>00 00</code> requirement on
+          <code>reserved</code>, and the closed machine-code set in <code>version</code> were written
+          against carts built after the header layout settled; MSX1-era software shipped before those
+          six bytes were reserved and overwrote them with code. Measured against the 1984 Sony MSX1
+          carts held in <code>assets/msx/</code>, which carry <code>version = 0xCF, rom_blocks = 0x4F</code>
+          and <code>version = 0xE9, rom_blocks = 0xCD</code> respectively, the Rev 1.04 law rejects
+          both with <code>MSX_ERR_SIZE</code> at load — a cart that boots on real hardware cannot be
+          refused by a loader rule derived from its own header. The payload size is authoritative from
+          here, <code>rom_blocks</code> is derived from it and the header byte is advisory, and a
+          disagreeing <code>version</code> or non-zero <code>reserved</code> falls back to
+          <code>b_msx_body.machine</code> instead of failing. The AV-2 negative set is unchanged: a bad
+          <code>'AB' 'B'</code> magic still returns <code>MSX_ERR_HDR</code>, and a MegaROM derived
+          above two blocks still returns <code>MSX_ERR_SIZE</code>. Rev 1.05 also names
+          <code>msx_app.c</code> as the eleventh unit of 7.7 — the window, task and blit owner the
+          launch algorithm of 4.2 and the task table of 5.2 both required but never assigned a home —
+          and places <code>msxpak</code> and <code>mssym</code> in <code>src/tools/</code>, which is
+          where this tree keeps host tools. Where the design note and this book disagree, this
           book is normative.
         </p>
       </section>

@@ -88,9 +88,10 @@ static void remap(void)
         case SLOT_BIOS:   r = bios_view(page);              break;
         case SLOT_CART_A: r = rom_view(page);               break;
         case SLOT_RAM: {
-            /* One 64 KiB pool: page 2 is its low half, page 3 the high half
-             * (§1.2 pool law). */
-            uint32_t off = (page == 2u) ? 0u : 0x4000u;
+            /* Slot 3 is one full 64 KiB pool (C-BIOS_MSX1.xml: base 0x0000,
+             * size 0x10000), so page N of slot 3 views ram[N*0x4000].  This
+             * keeps every page a distinct, non-overlapping 16 KiB window. */
+            uint32_t off = (uint32_t)page << 14;
             r = ram + off;
             w = ram + off;
             break;
@@ -110,8 +111,13 @@ void slots_init(void)
 
 void slots_reset(void)
 {
-    /* Power-up: BIOS in page 0, cartridge in page 1, RAM in pages 2 and 3. */
-    ppi_a = (uint8_t)((0u << 0) | (1u << 2) | (3u << 4) | (3u << 6));
+    /* Power-up: the primary slot register is 0, so all four pages select
+     * slot 0.  This is what C-BIOS expects: its 32 KiB main ROM must be
+     * visible across pages 0 and 1 (0x0000-0x7FFF) before it probes the
+     * cartridge slots and ENASLTs RAM (slot 3) and the cart (slot 1/2) in.
+     * A non-zero reset here shadows the upper BIOS half with the cartridge
+     * and the boot trace never reaches INIT80. */
+    ppi_a = 0x00u;
     sub[0] = sub[1] = sub[2] = sub[3] = 0u;
     extsls = 0u;
     map_seg[0] = map_seg[1] = map_seg[2] = 0u;
@@ -151,7 +157,7 @@ uint8_t *slots_ram_ptr(uint32_t *size)
 
 void slots_primary_select(uint8_t value)
 {
-    sel_prim = value;
+    ppi_a = value;
     remap();
 }
 
@@ -229,4 +235,4 @@ void msx_bus_out(uint8_t port, uint8_t value)
     }
 }
 
-uint8_t slots_ppi_a(void) { return ppi_a_latch; }
+uint8_t slots_ppi_a(void) { return ppi_a; }

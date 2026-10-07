@@ -38,7 +38,7 @@ CFLAGS ?= -O2 -Wall -Wextra -std=c99 -Iinclude -Iinclude/gl -Isrc/gl -Iinclude/d
         html2tad book2tad tad_bin test test-kernel test-yoko test-yoko4 test-m68k test-mips test-ps2 test-foma test-foma-ui foma-screens \
         segui-screens \
         test-mozc test-editor test-hmi test-tad test-chat test-wylie verify test-fs test-chokanji test-quake test-replay \
-        test-hull test-view test-secret test-render test-drone test-drone-all \
+        test-hull test-view test-secret test-render test-drone test-drone-all test-zexall \
         mkbtronfs btron_sys.vol \
         run-posix run-qemu run-kernel run-yoko run-yoko4 run-sakamura run-foma run-uefi run-eufi run-uefu run-pc98 run-m68k run-ps2 run-mips debug-virtio debug-gdb clean \
         ps2-cfg \
@@ -1705,6 +1705,23 @@ test-drivesetup: $(TEST_DRIVESETUP_BIN)
 
 $(TEST_DRIVESETUP_BIN): $(TEST_DRIVESETUP_OBJS) $(FS_OBJS) src/apps/clu.host.o
 	$(CC) $(TEST_DRIVESETUP_OBJS) $(FS_OBJS) src/apps/clu.host.o -o $@ $(LDFLAGS) -lm
+
+# ═══════════════════════════════════════════════════════════════════
+# ZEXALL — Z80 instruction exerciser against the vendored MSX core
+# ═══════════════════════════════════════════════════════════════════
+TEST_ZEXALL_SRCS = src/emulators/msx/zexall.c \
+                   src/emulators/msx/z80.c
+TEST_ZEXALL_OBJS = $(TEST_ZEXALL_SRCS:.c=.test.o)
+TEST_ZEXALL_BIN  = ./.build/test_zexall
+
+test-zexall: $(TEST_ZEXALL_BIN)
+	@echo "=========================================================="
+	@echo " Running ZEXALL against src/emulators/msx/z80.c..."
+	@echo "=========================================================="
+	@./$(TEST_ZEXALL_BIN)
+
+$(TEST_ZEXALL_BIN): $(TEST_ZEXALL_OBJS)
+	$(CC) $(TEST_ZEXALL_OBJS) -o $@ $(LDFLAGS)
 
 test: test-tad test-editor test-chat test-mozc test-wylie test-hmi test-ski test-tracker test-settings test-global-menu test-app-menu test-drivesetup test-fs test-quake
 	@echo "=========================================================="

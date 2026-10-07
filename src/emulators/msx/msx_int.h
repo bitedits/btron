@@ -62,6 +62,7 @@ void    slots_primary_select(uint8_t value);      /* PPI port A alias      */
 uint8_t slots_read(uint16_t addr);
 void    slots_write(uint16_t addr, uint8_t value);
 uint8_t *slots_ram_ptr(uint32_t *size);
+uint8_t slots_ppi_a(void);                    /* primary slot-select latch, #A8 */
 
 /* ---- vdp.c: ports 0x88-0x8B and 0x98-0x9B, renderer, VBlank ----------- */
 void    vdp_init(uint8_t machine);        /* BMSX_MACHINE_* : TMS9918 or V9958 */
@@ -104,5 +105,13 @@ void    msx_bus_out(uint8_t port, uint8_t value);
 
 /* FNV-1a 64, the only hash in the module (D7). */
 uint64_t msx_fnv1a64(const void *data, uint32_t len);
+
+/* ---- bios.c: C-BIOS image loader (settings-loaded, outside the sum, §5.3) */
+/* Loads cbios_main_<tag>.rom (+ optional logo) for `machine` from `dir` into
+ * the slot 0 views.  -> MSX_OK, or MSX_ERR_BIOS when the main ROM is absent. */
+int  bios_load(uint16_t machine, const char *dir);
+
+/* ---- tronmsx.c: host-side BIOS directory override (posix build) --------- */
+void msx_set_bios_dir(const char *dir);
 
 #endif /* _BTRON_EMULATOR_MSX_INT_H_ */

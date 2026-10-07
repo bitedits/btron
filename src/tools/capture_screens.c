@@ -18,6 +18,7 @@
 #include <btron/dp.h>
 #include <btron/wnd.h>
 #include <btron/event.h>
+#include <btron/itron.h>
 #include <btron/settings.h>
 #include <btron/language_settings.h>
 #include <btron/app_menu.h>
@@ -59,6 +60,7 @@ extern WND* open_clarity_window(void);
 extern WND* open_paint_window(void);
 extern WND* open_paint_window_with_file(const char *filepath);
 extern WND* open_paint_about_window(void);
+extern WND* open_msx_window_with_rom(const char *path);
 extern H    tip_get_caret_x(void);
 extern H    tip_get_caret_y(void);
 
@@ -118,6 +120,18 @@ WND* open_chokanji_clock_window(void)       { return cab_no_win(); }
 WND* open_chokanji_kconv_window(void)       { return cab_no_win(); }
 WND* open_chokanji_xfconv_window(void)      { return cab_no_win(); }
 WND* open_chokanji_unpack_window(void)      { return cab_no_win(); }
+
+/* The same for the OpenGL bar and the demo, whose units are not in this link. */
+WND* open_xmb_window(void)                  { return cab_no_win(); }
+WND* open_lilcu64_demo_window(void)         { return cab_no_win(); }
+
+/* B-MSX paces its emulator with a 60 Hz task.  There is no task layer in this
+ * link, so cre_tsk() fails the way it does on a target with no task slots left,
+ * and the window falls back to one machine frame per repaint — which is exactly
+ * what lets the loop below boot a cartridge to its title screen. */
+ID cre_tsk(const T_CTSK *pk_ctsk) { (void)pk_ctsk; return -1; }
+ER sta_tsk(ID tskid, VW exinf)    { (void)tskid; (void)exinf; return E_OK; }
+void dly_tsk(W dlytim)            { (void)dlytim; }
 
 /* Helper to dump raw ARGB rectangle to file */
 static void dump_window_rect(GDEV *dev, WND *wnd, const char *out_filename) {
@@ -508,6 +522,22 @@ int main(int argc, char **argv) {
             simulate_menu_click(w_paint_m, 0); /* File Menu (ファイル) */
             redraw_all_windows();
             dump_window_rect(dev, w_paint_m, "/tmp/btron_raw_screens/Paint_Menu_Opened.raw");
+        }
+
+        /* B-MSX with a cartridge in the slot.  One repaint is one machine frame
+         * here (see the cre_tsk stub above), so the walk boots C-BIOS far enough
+         * to hand control to the cartridge and draw its own screen. */
+        reset_isolation_state(dev);
+        WND *w_msx = open_msx_window_with_rom("Lode Runner (1984)(Sony)[a].rom");
+        if (w_msx) {
+            int msx_f;
+            for (msx_f = 0; msx_f < 400; msx_f++)
+                redraw_all_windows();
+            dump_window_rect(dev, w_msx, "/tmp/btron_raw_screens/B_MSX_Application.raw");
+
+            simulate_menu_click(w_msx, 0);      /* ファイル(F): the ROM cascade */
+            redraw_all_windows();
+            dump_window_rect(dev, w_msx, "/tmp/btron_raw_screens/B_MSX_Menu_Opened.raw");
         }
     }
 

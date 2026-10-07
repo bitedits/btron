@@ -11,8 +11,11 @@
 #include "ps2_usb.h"
 #include "ps2_iopram.h"
 
-/* External hooks implemented in core_ps2.c */
-extern void ps2_usb_on_key(uint32_t btron_key, int down);
+/* External hooks implemented in core_ps2.c.  The key hook takes the report's
+ * modifier byte as well as the decoded key: which modifiers were held is part of
+ * what the hand did, and the desktop's own session-exit binding needs it to tell
+ * Ctrl+Q from a Q typed into a terminal. */
+extern void ps2_usb_on_key(uint32_t btron_key, int down, uint8_t mod);
 extern void ps2_usb_on_mouse(int dx, int dy, uint8_t buttons);
 
 /* EE wall clock helpers, implemented in boot_ps2.s */
@@ -1264,7 +1267,7 @@ void ps2_usb_process_keyboard_report(const uint8_t report[8])
              * nothing on screen cannot say which of the two lost it. */
             ps2_usb_log_kbd(mod, code, key, s_kbd_reports);
             if (key != 0) {
-                ps2_usb_on_key(key, 1);
+                ps2_usb_on_key(key, 1, mod);
             }
         }
     }
@@ -1285,7 +1288,7 @@ void ps2_usb_process_keyboard_report(const uint8_t report[8])
         if (!is_down) {
             uint32_t key = ps2_usb_hid_to_btron_key(mod, prev);
             if (key != 0) {
-                ps2_usb_on_key(key, 0);
+                ps2_usb_on_key(key, 0, mod);
             }
         }
     }

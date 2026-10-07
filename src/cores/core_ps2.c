@@ -103,6 +103,13 @@ static void ps2_kprintf(const char *fmt, ...);
 /* Global Mouse Coordinates */
 static int s_mouse_x = 400;
 static int s_mouse_y = 300;
+/* The position the sprite was last *presented* at, which is not the same as
+ * s_mouse_x/y as soon as a pass spends distance without painting.  The damage a
+ * cursor step leaves behind is the span between these two rows and the new ones,
+ * because the old sprite is still on the screen until the band that covers it is
+ * sent. */
+static int s_shown_x = 400;
+static int s_shown_y = 300;
 static int s_gui_active = 0;
 
 /* The guest's own px-per-count gain, 8.8 fixed point where 256 is verbatim.  Each
@@ -282,12 +289,88 @@ void launch_ps2_desktop_session(void);
 static void ps2_log_ohci_probe(const ps2_ohci_probe_t *p);
 static int ps2_log_host(void);
 
+/* ── Present Bands ───────────────────────────────────────────── */
+
+/* The rows of the canvas the GS is owed after a pass.  Everything a present does
+ * is linear in this range: the composite clips to it, the colour shuffle walks one
+ * word per pixel of it, and the GIF IMAGE stream sends it.  So the rows presented
+ * are what set how soon the loop looks at the USB ring again -- which is the
+ * pointer's frame rate, and also the difference between the device still holding a
+ * report and having dropped it: the interrupt ring absorbs seven of them and an HID
+ * pointer holds fewer still.
+ *
+ * Ranges, plural, and merged when they touch: the union of the panel's 28 rows and
+ * a cursor at y=300 is a band of 316 rows, half a canvas, which is exactly the cost
+ * this is here to avoid.  Two bands that do not overlap are two setup packets and
+ * two streams, and 44 rows between them.
+ *
+ * A band is a row range and not a rectangle on purpose: the canvas rows are
+ * contiguous, so a full-width band is one stream, while a narrow rectangle has to be
+ * uploaded a row at a time (see ps2_gs_upload()).  One DMA per band rather than one
+ * per row is why the span is chosen this way. */
+#define PS2_CURSOR_ROWS 16          /* draw_baremetal_cursor_raw() is a 16x16 sprite */
+#define PS2_PANEL_ROWS  28          /* system panel plus the gold accent bar */
+#define PS2_BAND_MAX    4u
+
+typedef struct { int top, end; } ps2_band_t;
+typedef struct { ps2_band_t b[PS2_BAND_MAX]; unsigned n; int overflow; } ps2_bandset_t;
+
+static int ps2_band_is_full(const ps2_band_t *b)
+{
+    return b->top == 0 && b->end == PS2_SCREEN_HEIGHT;
+}
+
+static void ps2_bandset_full(ps2_bandset_t *set)
+{
+    set->b[0].top = 0;
+    set->b[0].end = PS2_SCREEN_HEIGHT;
+    set->n = 1u;
+    set->overflow = 0;
+}
+
+/* Widen an existing band, or insert a new one.  The set stays ordered by `top`, so
+ * the loop below stops at the first band that does not lie wholly above the range
+ * being added, and a range that bridges two existing bands leaves one band behind
+ * rather than painting the same rows twice. */
+static void ps2_bandset_add(ps2_bandset_t *set, int y0, int y1)
+{
+    unsigned i, k;
+
+    if (y0 < 0) y0 = 0;
+    if (y1 > PS2_SCREEN_HEIGHT) y1 = PS2_SCREEN_HEIGHT;
+    if (y1 <= y0) return;
+
+    for (i = 0; i < set->n; i++) {
+        if (y0 > set->b[i].end) continue;      /* lies wholly below this band */
+        if (y1 < set->b[i].top) break;         /* wholly above it: insert here */
+        if (y0 < set->b[i].top) set->b[i].top = y0;
+        if (y1 > set->b[i].end) set->b[i].end = y1;
+        while (i + 1u < set->n && set->b[i + 1u].top <= set->b[i].end) {
+            if (set->b[i + 1u].end > set->b[i].end) set->b[i].end = set->b[i + 1u].end;
+            for (k = i + 1u; k + 1u < set->n; k++) set->b[k] = set->b[k + 1u];
+            set->n--;
+        }
+        return;
+    }
+    if (set->n >= PS2_BAND_MAX) {
+        set->overflow = 1;         /* present the canvas rather than drop damage */
+        return;
+    }
+    for (k = set->n; k > i; k--) set->b[k] = set->b[k - 1u];
+    set->b[i].top = y0;
+    set->b[i].end = y1;
+    set->n++;
+}
+
 /* Translates BTRON ARGB (0xAARRGGBB) to PS2 GS CT32 RGBA (Byte 0=R, 1=G, 2=B, 3=A) */
-static void blit_backbuffer_to_ps2fb(void)
+static void blit_backbuffer_rows_to_ps2fb(const ps2_band_t *band)
 {
     uint32_t *dst = ps2_gs_get_framebuffer();
     const uint32_t *src = (const uint32_t *)s_desktop_backbuffer;
-    for (int i = 0; i < PS2_SCREEN_WIDTH * PS2_SCREEN_HEIGHT; i++) {
+    const uint32_t i0 = (uint32_t)band->top * PS2_SCREEN_WIDTH;
+    const uint32_t i1 = (uint32_t)band->end * PS2_SCREEN_WIDTH;
+
+    for (uint32_t i = i0; i < i1; i++) {
         uint32_t c = src[i];
         dst[i] = ((c & 0x00FF0000) >> 16) | (c & 0x0000FF00) | ((c & 0x000000FF) << 16) | (c & 0xFF000000);
     }
@@ -313,28 +396,61 @@ static uint32_t ps2_us_since(uint32_t start)
     return (uint32_t)(ps2_count_read() - start) / EE_TICKS_PER_US;
 }
 
-/* One whole-canvas repaint, timed by stage.  The three have different cures, so
- * they are never folded into one number: the render walks every window on the
- * desktop for a change the size of a cursor, the swap touches 480000 words for the
- * same reason, and only the upload has ever been measured here (1638 us at boot).
- * Both callers use it -- the loop, and the cold paint that 'startx' performs on its
- * own, which is the attribution that needs no hand protocol at all. */
-static void ps2_paint_screen(GDEV *screen, uint32_t *r_us, uint32_t *s_us, uint32_t *u_us)
+/* One repaint of a present band, timed by stage.  The three have different cures,
+ * so they are never folded into one number: the render walks the damaged part of
+ * the desktop, the swap touches one word per pixel of it, and only the upload has
+ * ever been measured here (1638 us for the whole canvas at boot).  Both callers use
+ * it -- the loop, and the cold paint that 'startx' performs on its own, which is the
+ * attribution that needs no hand protocol at all. */
+static void ps2_paint_bands(GDEV *screen, const ps2_bandset_t *set,
+                            uint32_t *r_us, uint32_t *s_us, uint32_t *u_us,
+                            uint32_t *rows_out)
 {
-    const uint32_t t0 = ps2_count_read();
-    uint32_t t1, t2, t3;
+    uint32_t t0, t1, t2, t3;
+    uint32_t acc_r = 0u, acc_s = 0u, acc_u = 0u, rows = 0u;
 
-    workbench_render(screen, PS2_SCREEN_WIDTH, PS2_SCREEN_HEIGHT);
-    t1 = ps2_count_read();
-    blit_backbuffer_to_ps2fb();
-    t2 = ps2_count_read();
-    ps2_gs_flush();
-    t3 = ps2_count_read();
+    for (unsigned i = 0; i < set->n; i++) {
+        const ps2_band_t *band = &set->b[i];
 
-    if (!s_timebase_ok) { *r_us = *s_us = *u_us = 0u; return; }
-    *r_us = (t1 - t0) / EE_TICKS_PER_US;
-    *s_us = (t2 - t1) / EE_TICKS_PER_US;
-    *u_us = (t3 - t2) / EE_TICKS_PER_US;
+        rows += (uint32_t)(band->end - band->top);
+        t0 = ps2_count_read();
+        if (ps2_band_is_full(band)) {
+            workbench_render(screen, PS2_SCREEN_WIDTH, PS2_SCREEN_HEIGHT);
+        } else {
+            /* The same composite clipped to the band.  workbench_render_damage()
+             * leaves out the menu overlays and the sprite by design, and a banded
+             * pass is only ever taken with every overlay closed -- so the cursor is
+             * put back here, unconditionally: where the band does not cross the
+             * sprite the write is a no-op, and where it does, the composite has just
+             * erased it and this is what draws it again. */
+            RECT d = { 0, (H)band->top, PS2_SCREEN_WIDTH, (H)band->end };
+
+            if (wnd_damage_needs_paint(&d)) workbench_render_damage_paint(screen, &d);
+            else                            workbench_render_damage(screen, &d);
+            if (g_cursor_in_backbuffer) {
+                H mx = 0, my = 0;
+                get_baremetal_mouse_pos(&mx, &my);
+                draw_baremetal_mouse_cursor(screen, mx, my, PS2_SCREEN_WIDTH, PS2_SCREEN_HEIGHT);
+            }
+        }
+        t1 = ps2_count_read();
+        blit_backbuffer_rows_to_ps2fb(band);
+        t2 = ps2_count_read();
+        ps2_gs_upload(0, band->top, PS2_SCREEN_WIDTH, band->end - band->top);
+        t3 = ps2_count_read();
+
+        if (s_timebase_ok) {
+            acc_r += (t1 - t0) / EE_TICKS_PER_US;
+            acc_s += (t2 - t1) / EE_TICKS_PER_US;
+            acc_u += (t3 - t2) / EE_TICKS_PER_US;
+        }
+    }
+
+    /* Timed per band and totalled for the pass, because the pass is the thing whose
+     * cost decides the loop rate and the bands of one pass are one cost.  With no
+     * Count to read, all three are zero and only the rows mean anything. */
+    *r_us = acc_r; *s_us = acc_s; *u_us = acc_u;
+    *rows_out = rows;
 }
 
 static void ps2_console_flush(void)
@@ -552,20 +668,32 @@ void ps2_pad_on_button(uint16_t newly_pressed, uint16_t newly_released)
  * inside the SIO read. */
 static void ps2_shell_char(int c);
 
-void ps2_usb_on_key(uint32_t btron_key, int down)
+/* HID modifier byte: left and right Control.  Only Control is named here because
+ * only Control is used to qualify a binding; Shift is already folded into the
+ * decoded key by ps2_usb_hid_to_btron_key(). */
+#define PS2_MOD_CTRL 0x11u
+
+void ps2_usb_on_key(uint32_t btron_key, int down, uint8_t mod)
 {
 #if BTRON_HID_TRACE
     /* The decoder already ran, so this row says the router heard the key and
      * which of its three exits it took: quit the GUI, queue an event, or feed
      * the prompt.  A [KBD] row with no [KEY] row after it is a build whose
      * decoder is not this one. */
-    ps2_kprintf("[KEY] k=%x d=%d gui=%d\n", btron_key, down, s_gui_active);
+    ps2_kprintf("[KEY] k=%x m=%x d=%d gui=%d\n", btron_key, (unsigned int)mod,
+                down, s_gui_active);
 #endif
-    if (s_gui_active && down) {
-        if (btron_key == BTRON_KEY_ESCAPE || btron_key == 'q' || btron_key == 'Q') {
-            s_gui_active = 0;
-            return;
-        }
+    /* Ctrl+Q is the only thing that gives up the desktop session.
+     *
+     * A bare 'q' used to be the binding, and that is why a terminal window on this
+     * port cannot type the letter: the test ran before the key was routed, so the
+     * keystroke was spent by the compositor instead of reaching the window under
+     * the pointer.  Escape was in the same condition and cost any application that
+     * wants it.  Both now travel on to the windows like any other key, and the way
+     * out is a chord no text editor binds. */
+    if (s_gui_active && down && btron_key == 'q' && (mod & PS2_MOD_CTRL) != 0u) {
+        s_gui_active = 0;
+        return;
     }
     if (s_gui_active) {
         ps2_inject_key((UW)btron_key, down);
@@ -774,7 +902,8 @@ static void ps2_ptrst_print(const char *label)
 
 /* "Too much latency" is two different complaints and they need different fixes,
  * so both are measured here rather than inferred: how long a pass takes, split
- * across the three whole-canvas sweeps it makes (ps2_paint_screen() times them),
+ * across the three sweeps it makes over the band set (ps2_paint_bands() times
+ * them),
  * and how long a hand movement waits between arriving on the bus and being on the
  * screen.
  *
@@ -785,6 +914,8 @@ static void ps2_ptrst_print(const char *label)
  * maximum on a small average is one stall in the loop. */
 typedef struct {
     uint32_t n;                              /* passes timed */
+    uint32_t full_n;                         /* ... of which repainted the canvas */
+    uint32_t rows_sum, rows_max;             /* band height of each present, in rows */
     uint32_t render_sum, render_max;
     uint32_t swap_sum,   swap_max;
     uint32_t upload_sum, upload_max;
@@ -799,10 +930,13 @@ static ps2_paint_t s_paint;
 static uint32_t s_paint_age_f0;
 static int s_paint_owed;
 
-static void ps2_paint_note(uint32_t render_us, uint32_t swap_us, uint32_t upload_us,
+static void ps2_paint_note(uint32_t rows, int full,
+                           uint32_t render_us, uint32_t swap_us, uint32_t upload_us,
                            uint32_t lat_ms, int lat_valid)
 {
     s_paint.n++;
+    if (full) s_paint.full_n++;
+    s_paint.rows_sum += rows;  if (rows > s_paint.rows_max) s_paint.rows_max = rows;
     s_paint.render_sum += render_us;  if (render_us > s_paint.render_max) s_paint.render_max = render_us;
     s_paint.swap_sum   += swap_us;    if (swap_us   > s_paint.swap_max)   s_paint.swap_max   = swap_us;
     s_paint.upload_sum += upload_us;  if (upload_us > s_paint.upload_max) s_paint.upload_max = upload_us;
@@ -814,7 +948,9 @@ static void ps2_paint_note(uint32_t render_us, uint32_t swap_us, uint32_t upload
 
 /* Averaged over the window's passes, with the worst pass beside it: an average
  * alone cannot tell a uniformly slow repaint from an occasional 40 ms stall, and
- * those are different bugs. */
+ * those are different bugs.  The band column is what makes the two present paths
+ * attributable: `swap`/`upload` scale with `rows`, so a pass rate that is still
+ * low with a small average band is the composite or the bus, not the flush. */
 static void ps2_paint_print(void)
 {
     const ps2_paint_t *p = &s_paint;
@@ -823,6 +959,11 @@ static void ps2_paint_print(void)
         ps2_kprintf("[PSTAT] paint: no pass timed -- 'startx' first, then move the mouse\n");
         return;
     }
+    ps2_kprintf("[PSTAT] paint: n=%u passes presented (%u whole canvas, %u banded) rows %u/%u of %u (max/avg)\n",
+                (unsigned int)p->n, (unsigned int)p->full_n,
+                (unsigned int)(p->n - p->full_n),
+                (unsigned int)p->rows_max, (unsigned int)(p->rows_sum / p->n),
+                (unsigned int)PS2_SCREEN_HEIGHT);
     ps2_kprintf("[PSTAT] paint: n=%u us/pass  render %u/%u  swap %u/%u  upload %u/%u  (max/avg)\n",
                 (unsigned int)p->n,
                 (unsigned int)p->render_max, (unsigned int)(p->render_sum / p->n),
@@ -1740,36 +1881,51 @@ void launch_ps2_desktop_session(void)
     workbench_init(PS2_SCREEN_WIDTH);
 
     /* Initial paint & blit to GS eDRAM.  Timed and printed, because this is the
-     * cost every later pass pays and it needs no protocol to observe: whatever the
-     * cursor's latency turns out to be, this row says how much of it the paint
-     * already owns before a single mouse report is considered. */
+     * cost a whole-canvas pass pays and it needs no protocol to observe: whatever
+     * the cursor's latency turns out to be, this row is the denominator for every
+     * banded pass below it. */
     {
-        uint32_t r_us, s_us, u_us;
-        ps2_paint_screen(screen, &r_us, &s_us, &u_us);
-        ps2_kprintf("[PS2] paint cost: render=%u us  swap=%u us  upload=%u us  total=%u.%03u ms/pass\n",
+        ps2_bandset_t whole = { { { 0, 0 } }, 0, 0 };
+        uint32_t r_us, s_us, u_us, rows;
+        ps2_bandset_full(&whole);
+        ps2_paint_bands(screen, &whole, &r_us, &s_us, &u_us, &rows);
+        s_shown_x = s_mouse_x;
+        s_shown_y = s_mouse_y;
+        ps2_kprintf("[PS2] whole-canvas paint cost: render=%u us  swap=%u us  upload=%u us  total=%u.%03u ms\n",
                     (unsigned int)r_us, (unsigned int)s_us, (unsigned int)u_us,
                     (unsigned int)((r_us + s_us + u_us) / 1000u),
                     (unsigned int)((r_us + s_us + u_us) % 1000u));
     }
 
     ps2_kprintf("[PS2] Real B-System Workbench rendered via Host->Local GIF DMA (800x600).\n");
-    ps2_kprintf("[PS2] Controls: Mouse/Pad/Kbd. Type 'exit' in shell or press [Esc]/[Q] to return.\n");
+    ps2_kprintf("[PS2] Controls: Mouse/Pad/Kbd.  [Ctrl]+[Q] returns to this console.\n");
+    ps2_kprintf("[PS2] 'ptrstat' prints the pointer and paint numbers, and runs at the\n");
+    ps2_kprintf("[PS2] Stage 1 prompt only -- so the session's own totals print on the way out.\n");
     ps2_kprintf("btron-ps2> ");
 
     /* Interactive Event Loop */
-    uint32_t ticks = 0;
+    uint32_t panel_due = ps2_count_read();
+    uint32_t full_due  = ps2_count_read();
     EVT ev;
 
+    /* Both counters start the session empty, so the rows printed on the way out
+     * describe this desktop and nothing before it: the boot log's enumeration and
+     * the cold paint above would otherwise be folded into the first measurement. */
+    s_ptrst = (ps2_ptrst_t){ 0 };
+    s_paint = (ps2_paint_t){ 0 };
+
     while (s_gui_active) {
-        int need_redraw = 0;
+        ps2_bandset_t set = { { { 0, 0 } }, 0, 0 };
+        RECT dmg;
+        int force_full = 0;
 
         ps2_pad_poll();
         ps2_usb_poll();
         /* After the poll and before the dispatch: the reports the drain just
          * turned into queued distance become one frame's movement here, and the
-         * move event this raises is what sets need_redraw below, so a pass that
-         * spends pointer distance is also a pass that repaints it.  That is what
-         * makes "px per pass" the speed the hand sees. */
+         * move event this raises is what puts the cursor's rows in the set below,
+         * so a pass that spends pointer distance is also a pass that repaints it.
+         * That is what makes "px per pass" the speed the hand sees. */
         ps2_ptr_service();
         ps2_shell_poll();
 
@@ -1787,24 +1943,89 @@ void launch_ps2_desktop_session(void)
             }
 #endif
             workbench_process_event(screen, &ev);
-            need_redraw = 1;
+            /* Only a move leaves the desktop's own art alone: the sprite is the
+             * whole change, and it is where the band says it is.  Any other event
+             * can restack a window, hand a key to an app that paints without
+             * invalidating, or open a menu -- all of which are cheaper to get right
+             * by repainting everything than to enumerate. */
+            if (ev.type != EV_MOUSE_MOVE) force_full = 1;
         }
 
 #if BTRON_HID_TRACE
         ps2_log_usb_state('G');
 #endif
 
-        ticks++;
-        if ((ticks % 60) == 0) {
-            need_redraw = 1;
+        /* The rows the sprite was on, and the rows it is on now.  Both, always:
+         * sending only the new ones leaves the old cursor printed under the new
+         * one, which is a trail, and a trail reads as the pointer being slower
+         * than it is. */
+        if (s_mouse_x != s_shown_x || s_mouse_y != s_shown_y) {
+            ps2_bandset_add(&set, s_shown_y, s_shown_y + PS2_CURSOR_ROWS);
+            ps2_bandset_add(&set, s_mouse_y, s_mouse_y + PS2_CURSOR_ROWS);
+            /* Hovering the top bar is the one motion that repaints somewhere the
+             * sprite is not: global_menu_handle_mouse_move() moves the highlight.
+             * Twenty-eight rows is the honest price of that, and it is a separate
+             * band rather than a union with the cursor's, so a sweep across the
+             * middle of the screen still costs thirty-two rows and not three
+             * hundred. */
+            if (s_shown_y < PS2_PANEL_ROWS || s_mouse_y < PS2_PANEL_ROWS)
+                ps2_bandset_add(&set, 0, PS2_PANEL_ROWS);
         }
 
-        if (need_redraw) {
-            uint32_t r_us, s_us, u_us;
+        /* Whatever an app or the window manager invalidated since the last present.
+         * Taken every pass, including one that is going to repaint the canvas
+         * anyway: the accumulator is consumed on read, and a pass that skipped
+         * taking it would drop the rect. */
+        if (wnd_take_inval_damage(&dmg)) ps2_bandset_add(&set, dmg.top, dmg.bottom);
+
+        /* Two timers, because two different things go stale on their own.
+         *
+         * The panel's clock changes with no event and no damage at all, and it owns
+         * 28 rows, so it is owed those rows every 200 ms.  Whole canvas is owed to
+         * anything a banded present could have got wrong -- an app that paints
+         * without invalidating, a hover highlight inside a window -- and it is
+         * convergence, not animation, so two seconds of it is invisible.
+         *
+         * Paced on the clock and not on a pass count because a banded pass is cheap
+         * enough that the loop now makes very many of them a second, and every
+         * sixtieth pass would be a repaint several times over.  With no Count to
+         * read, both nets are skipped: the present is then driven purely by damage,
+         * which is correct for anything that invalidates, and the only loss is a
+         * clock that stops advancing. */
+        if (s_timebase_ok) {
+            const uint32_t now = ps2_count_read();
+            if ((uint32_t)(now - panel_due) >= (uint32_t)(200u * EE_TICKS_PER_US)) {
+                ps2_bandset_add(&set, 0, PS2_PANEL_ROWS);
+                panel_due = now;
+            }
+            if ((uint32_t)(now - full_due) >= (uint32_t)(2000u * EE_TICKS_PER_US)) {
+                force_full = 1;
+                full_due = now;
+            }
+        }
+
+        /* An overlay -- the global menu, a tracker dropdown, the IME candidate
+         * window -- is drawn by the whole-canvas composite only, and the IME's is
+         * drawn at the caret rather than at a rect anyone tracks.  With any of them
+         * up there is no band worth arguing about, so paint the canvas. */
+        if (force_full || set.overflow || global_menu_is_open() ||
+            tracker_is_menu_open() || wnd_mgr_is_interacting() ||
+            tip_get_state() == TIP_STATE_CONVERTING ||
+            tip_get_state() == TIP_STATE_CANDIDATE_SELECT) {
+            ps2_bandset_full(&set);
+        }
+
+        if (!set.n) {
+            ps2_delay_cycles(1000);
+            continue;                        /* nothing for the GS to be told */
+        }
+
+        {
+            uint32_t r_us, s_us, u_us, rows;
             uint32_t lat = 0;
             int lat_ok = 0;
 
-            ps2_paint_screen(screen, &r_us, &s_us, &u_us);
+            ps2_paint_bands(screen, &set, &r_us, &s_us, &u_us, &rows);
 
             if (s_paint_owed && s_paint_age_f0) {
                 /* Frames, not cycles: an OHCI frame is a millisecond and it is the
@@ -1816,8 +2037,12 @@ void launch_ps2_desktop_session(void)
                 s_paint_age_f0 = 0;
                 s_paint_owed = 0;
             }
-            ps2_paint_note(r_us, s_us, u_us, lat, lat_ok);
+            ps2_paint_note(rows, ps2_band_is_full(&set.b[0]),
+                           r_us, s_us, u_us, lat, lat_ok);
+            if (ps2_band_is_full(&set.b[0])) full_due = ps2_count_read();
         }
+        s_shown_x = s_mouse_x;
+        s_shown_y = s_mouse_y;
 
         ps2_delay_cycles(1000);
     }
@@ -1825,6 +2050,16 @@ void launch_ps2_desktop_session(void)
     /* Clean return to Stage 1 text console */
     ps2_gs_text_clear();
     ps2_kprintf("[DESK] Exited 800x600 workbench, back to the Stage 1 console. 'startx' again anytime.\n");
+
+    /* The session's own pointer and paint totals, printed where they can be read.
+     * `ptrstat` is a Stage 1 prompt command and the prompt takes no keystrokes
+     * while the desktop owns them, so a run that wants its numbers has to be
+     * measured by leaving it.  This is the row set that separates the two
+     * complaints about the cursor: a low `loop:` Hz with a large `upload` average
+     * is the whole-canvas repaint costing the frame rate, and a healthy loop rate
+     * with the same low `loop:`-relative report count is the source itself. */
+    ps2_ptrst_print("session");
+    ps2_paint_print();
     ps2_kprintf("btron-ps2# ");
 }
 

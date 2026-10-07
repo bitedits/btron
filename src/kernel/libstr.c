@@ -577,3 +577,97 @@ __attribute__((weak)) unsigned long int tkl_strtoul(const char *nptr, char **end
 #if !defined(__STDC_HOSTED__) || __STDC_HOSTED__ == 0
 unsigned long int strtoul(const char *nptr, char **endptr, int base) __attribute__((weak, alias("tkl_strtoul")));
 #endif
+
+/* ── qsort ──────────────────────────────────────────────────────── */
+
+/* Swapped a byte at a time: the element width is the caller's business, and this
+ * needs no scratch buffer, so nothing here can fail on a large `width`. */
+static void tkl_qswap(unsigned char *x, unsigned char *y, size_t width)
+{
+    size_t i;
+    for (i = 0; i < width; i++) {
+        unsigned char t = x[i];
+        x[i] = y[i];
+        y[i] = t;
+    }
+}
+
+static void tkl_qinsert(unsigned char *a, size_t lo, size_t hi, size_t width,
+                        int (*compar)(const void *, const void *))
+{
+    size_t i, j;
+    for (i = lo + 1u; i < hi; i++)
+        for (j = i; j > lo && compar(a + (j - 1u) * width, a + j * width) > 0; j--)
+            tkl_qswap(a + (j - 1u) * width, a + j * width, width);
+}
+
+#define TKL_QSORT_SMALL 12u
+#define TKL_QSORT_SLOTS 64u
+
+/* Iterative, and deliberately so.  The ranges still to order are held in two
+ * arrays rather than in the call frames, and the larger half is always the one
+ * saved, so the number of saved ranges never exceeds log2(nel) -- at most 32 for
+ * any size_t this kernel addresses, against the 64 slots below.  A recursive
+ * quicksort on a kernel stack would have to be given a depth limit to survive
+ * the same input, and a limit that fires loses elements. */
+__attribute__((weak)) void tkl_qsort(void *base, size_t nel, size_t width,
+                                     int (*compar)(const void *, const void *))
+{
+    unsigned char *a = (unsigned char *)base;
+    size_t lo_s[TKL_QSORT_SLOTS], hi_s[TKL_QSORT_SLOTS];
+    unsigned int sp = 0u;
+    size_t lo = 0u, hi = nel;            /* hi is exclusive */
+
+    if (a == NULL || compar == NULL || width == 0u || nel < 2u) return;
+
+    for (;;) {
+        size_t mid, last, i, j, pivot_at;
+
+        if (hi - lo <= TKL_QSORT_SMALL) {
+            tkl_qinsert(a, lo, hi, width, compar);
+            if (sp == 0u) return;
+            lo = lo_s[--sp];
+            hi = hi_s[sp];
+            continue;
+        }
+
+        /* Median of three, then the pivot is moved to `lo` where the partition
+         * can leave it until its final place is known.  The middle element is
+         * the pivot rather than the first because a file listing arrives in
+         * name order more often than not, and a first-element pivot makes that
+         * case quadratic -- which is the same input this loop exists to survive. */
+        mid  = lo + (hi - lo) / 2u;
+        last = hi - 1u;
+        if (compar(a + mid  * width, a + lo   * width) < 0)
+            tkl_qswap(a + mid * width, a + lo * width, width);
+        if (compar(a + last * width, a + lo   * width) < 0)
+            tkl_qswap(a + last * width, a + lo * width, width);
+        if (compar(a + mid  * width, a + last * width) < 0)
+            tkl_qswap(a + mid * width, a + last * width, width);
+        tkl_qswap(a + lo * width, a + mid * width, width);
+        pivot_at = lo;
+
+        i = lo + 1u;
+        j = hi;
+        for (;;) {
+            while (i < j && compar(a + i * width, a + pivot_at * width) <= 0) i++;
+            do { j--; } while (j > lo && compar(a + j * width, a + pivot_at * width) > 0);
+            if (i >= j) break;
+            tkl_qswap(a + i * width, a + j * width, width);
+        }
+        tkl_qswap(a + pivot_at * width, a + j * width, width);
+
+        if (j - lo > hi - (j + 1u)) {
+            lo_s[sp] = j + 1u; hi_s[sp] = hi; sp++;
+            hi = j;
+        } else {
+            lo_s[sp] = lo;     hi_s[sp] = j;  sp++;
+            lo = j + 1u;
+        }
+    }
+}
+
+#if !defined(__STDC_HOSTED__) || __STDC_HOSTED__ == 0
+void qsort(void *base, size_t nel, size_t width,
+           int (*compar)(const void *, const void *)) __attribute__((weak, alias("tkl_qsort")));
+#endif

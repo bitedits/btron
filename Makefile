@@ -968,6 +968,20 @@ PS2_CFLAGS     = -O2 -Wall -Wextra -std=c99 -ffreestanding -nostdlib \
                  -DBTRON_HID_TRACE=$(HIDTRACE) \
                  -Iinclude -Iinclude/drivers -Isrc/kernel -Isrc/cores -Isrc/drivers/ps2
 PS2_STARTUP    = src/cores/core_ps2.c
+# The termios-scope applications gterm hosts: Sokhatsky Commander and Terminal
+# Vision.  They sit in COMMON_SRCS, so the hosted targets have always had them and
+# a bare-metal link has not -- without which gterm.c's weak sc_session_init() is
+# the definition that wins, returns -1, and leaves the terminal window in its shell
+# forever.  Named here rather than folded into COMMON_NO_SDL_SRCS because the other
+# bare-metal targets have not been measured against it.
+CLU_TERMIO_SRCS = src/clu/lang.c           \
+                  src/clu/term.c           \
+                  src/clu/tty.c            \
+                  src/clu/sc/files.c       \
+                  src/clu/sc/input.c       \
+                  src/clu/sc/menus.c       \
+                  src/clu/sc/sc.c          \
+                  src/clu/tv/tv.c
 PS2_SRCS       = $(PS2_STARTUP)           \
                  src/cores/core_init.c    \
                  src/drivers/ps2/ps2_gs.c \
@@ -975,6 +989,7 @@ PS2_SRCS       = $(PS2_STARTUP)           \
                  src/drivers/ps2/ps2_pad.c \
                  src/drivers/ps2/ps2_iopram.c \
                  src/drivers/ps2/ps2_usb.c \
+                 $(CLU_TERMIO_SRCS)       \
                  src/kernel/libstr.c      \
                  $(COMMON_NO_SDL_SRCS)
 PS2_OBJS       = src/drivers/ps2/boot_ps2.ps2.o $(PS2_SRCS:.c=.ps2.o)
@@ -1993,6 +2008,8 @@ clean:
 # ===================================================================
 CAPTURE_SCREENS_BIN = ./.build/capture_screens
 CAPTURE_SCREENS_SRCS = src/tools/capture_screens.c \
+                       src/apps/msx_app.c \
+                       $(MSX_SRCS) \
                        src/window/dnd.c \
                        src/graphics/image_decode.c \
                        src/chokanji/pmc.c \

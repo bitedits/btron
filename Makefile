@@ -966,7 +966,7 @@ PS2_LD_SCRIPT  = src/drivers/ps2/ps2.ld
 PS2_CFLAGS     = -O2 -Wall -Wextra -std=c99 -ffreestanding -nostdlib \
                  -DBTRON_TARGET=8 -DBTRON_PS2_TARGET -DBTRON_AUTO_GUI=$(AUTO_GUI) \
                  -DBTRON_HID_TRACE=$(HIDTRACE) \
-                 -Iinclude -Iinclude/drivers -Isrc/kernel -Isrc/cores -Isrc/drivers/ps2
+                 -Iinclude -Iinclude/gl -Iinclude/drivers -Isrc/kernel -Isrc/cores -Isrc/drivers/ps2
 PS2_STARTUP    = src/cores/core_ps2.c
 # The termios-scope applications gterm hosts: Sokhatsky Commander and Terminal
 # Vision.  They sit in COMMON_SRCS, so the hosted targets have always had them and
@@ -982,6 +982,21 @@ CLU_TERMIO_SRCS = src/clu/lang.c           \
                   src/clu/sc/menus.c       \
                   src/clu/sc/sc.c          \
                   src/clu/tv/tv.c
+# The GL layer this port links, minus the app bundle GL_SRCS also carries.  Quake's
+# hunk arena alone is a 64 MiB static array and the Lil Cu demo's node table 3 MiB
+# more, against an Emotion Engine with 32 MB of RDRAM: an image that big does not
+# fail to build, it simply puts every later .bss object -- the event queue, the
+# deskbar, the tracker -- past the end of memory, where a write to them is accepted
+# and a read of them comes back zero.  The desktop noticed as input going dead
+# (2026-10-09, see the [BENCH] echo row); ps2.ld now refuses the link instead.
+# The launcher reaches its apps through weak open_*_window() externs, so an app that
+# is not linked here is a menu row that does nothing rather than a link error.
+PS2_GL_SRCS    = src/gl/gl_dispatch.c     \
+                 src/gl/egl_surface.c     \
+                 src/gl/backend_tinygl.c  \
+                 src/gl/backend_virgl.c   \
+                 src/apps/xmb.c           \
+                 src/apps/glgears.c
 PS2_SRCS       = $(PS2_STARTUP)           \
                  src/cores/core_init.c    \
                  src/drivers/ps2/ps2_gs.c \
@@ -990,6 +1005,8 @@ PS2_SRCS       = $(PS2_STARTUP)           \
                  src/drivers/ps2/ps2_iopram.c \
                  src/drivers/ps2/ps2_usb.c \
                  $(CLU_TERMIO_SRCS)       \
+                 $(TINYGL_SRCS)           \
+                 $(PS2_GL_SRCS)           \
                  src/kernel/libstr.c      \
                  $(COMMON_NO_SDL_SRCS)
 PS2_OBJS       = src/drivers/ps2/boot_ps2.ps2.o $(PS2_SRCS:.c=.ps2.o)
@@ -1010,6 +1027,32 @@ $(PS2_VARARG_OBJS): PS2_CC := $(patsubst -march=mips3,-march=mips2,$(PS2_CC))
 
 %.ps2.o: %.c
 	$(PS2_CC) $(PS2_CFLAGS) -MMD -MP -c $< -o $@
+
+# PS2 measurement build: the present/pointer bench lives only in core_ps2.c, so one
+# object is rebuilt with the define and the shipped btron-ps2.elf keeps its own
+# flags -- the artifact measured is not the artifact flashed.  It is built for a
+# 32-bit-GPR MIPS for the same va_list reason as above, and scripts/ps2_bench.sh
+# runs it under PCSX2 -nogui, so the table needs no window and no hand.
+PS2_BENCH_OBJ  = src/cores/core_ps2.pbench.o
+PS2_BENCH_OBJS = $(PS2_BENCH_OBJ) $(filter-out src/cores/core_ps2.ps2.o,$(PS2_OBJS))
+PS2_BENCH_TARGET = btron-ps2-bench.elf
+$(PS2_BENCH_OBJ): PS2_CC := $(patsubst -march=mips3,-march=mips2,$(PS2_CC))
+# BENCH_APP=1 scripts/ps2_bench.sh additionally opens xmb.c and counts the frames the
+# task shim gives it.  Off by default: the app it opens does not reach its own exit yet
+# (see the phase's note in core_ps2.c), so the phase would end the run at its timeout
+# rather than at its sentinel.
+BENCH_APP      ?= 0
+$(PS2_BENCH_OBJ): PS2_CFLAGS += -DBTRON_PS2_BENCH=1 -DBTRON_PS2_BENCH_APP=$(BENCH_APP)
+
+%.pbench.o: %.c
+	$(PS2_CC) $(PS2_CFLAGS) -MMD -MP -c $< -o $@
+
+ps2-bench: $(PS2_BENCH_TARGET)
+
+$(PS2_BENCH_TARGET): $(PS2_BENCH_OBJS) $(PS2_LD_SCRIPT)
+	$(MIPS_LD) -T $(PS2_LD_SCRIPT) $(PS2_BENCH_OBJS) -o $@
+	@echo "[PS2-BENCH] Built: $@"
+	@file $@
 
 # ps2_usb.h changes the layout of ps2_ohci_probe_t, which core_ps2.c reads by
 # offset.  Without generated header dependencies the two objects are built from

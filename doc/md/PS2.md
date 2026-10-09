@@ -45,12 +45,33 @@ Like all B-System workstation ports, the PS2 and MIPS targets adhere strictly to
 - **GUI Loading Modes**: Automatic direct Graphical Desktop (`AUTO_GUI=1`, default) or Two-Stage boot with Stage 1 text console (`AUTO_GUI=0`).
 - **Input Channels**: DualShock 2 Pad, Sony / OHCI USB Keyboard & Mouse (`HID Keyboard` / `HID Mouse`), and EE SIO0 UART console.
 
+### The Image Budget (Normative)
+
+The whole image -- `.text`, `.data`, `.bss` -- must end below `0x01FF0000`, the stack
+pointer `boot_ps2.s` installs.  That is the real limit rather than the `0x02000000` RAM
+end, because `.bss` grows upward into the stack.
+
+Statics the link places past it are not an error at runtime: RDRAM simply is not there,
+so a store to one is swallowed and the load returns garbage.  This fails silently and
+per-object -- `snd_evt()` keeps returning `E_OK` while its `g_q_count++` goes nowhere,
+and `get_evt()` answers `E_TMOUT` forever -- which is why the symptom reads as "the
+event system is broken" rather than as an out-of-memory condition.  A `.bss` that
+overruns also takes the deskbar (`g_gmenu`), the start menu (`g_tracker`), the
+compositor's background cache and the fs/vobj tables with it, while pointer-path
+statics that section order happened to place low keep working.
+
+`src/drivers/ps2/ps2.ld` enforces the budget with a link-time `ASSERT`, so a source
+list that grows the image past RAM fails at the link instead of on the guest.  The
+budget is why `PS2_SRCS` carries `PS2_GL_SRCS` (the GL layer plus `xmb.c`/`glgears.c`)
+rather than `GL_SRCS`, whose `$(QUAKE_SRCS)` and `$(DEMO_SRCS)` alone account for
+roughly 82 MB of `.bss` -- the 64 MB Quake hunk arena and the demo pack's arrays.
+
 ### Driver Files
 
 | File | Role |
 |:---|:---|
 | [`src/drivers/ps2/boot_ps2.s`](file:///Users/tonpa/depot/bitedits/btron/src/drivers/ps2/boot_ps2.s) | EE reset vector, `$gp` and `$sp` setup, unrolled BSS wipe, BIOS syscall wrappers (`SetGsCrt`, `PutIMR`), jumps to `ps2_kernel_main`. |
-| [`src/drivers/ps2/ps2.ld`](file:///Users/tonpa/depot/bitedits/btron/src/drivers/ps2/ps2.ld) | Memory layout script linking `.text` at `0x00100000`. |
+| [`src/drivers/ps2/ps2.ld`](file:///Users/tonpa/depot/bitedits/btron/src/drivers/ps2/ps2.ld) | Memory layout script linking `.text` at `0x00100000`, and the `ASSERT` that fails the link when `_end` reaches the stack or the 32 MB RDRAM end. |
 | [`src/drivers/ps2/ps2_gs.h`](file:///Users/tonpa/depot/bitedits/btron/src/drivers/ps2/ps2_gs.h) | Privileged GS registers (`0x12000000`: `PMODE`, `SMODE2`, `DISPFB1`, `DISPLAY1`, `CSR`) and GIF DMA registers (`0x1000A000`). |
 | [`src/drivers/ps2/ps2_gs.c`](file:///Users/tonpa/depot/bitedits/btron/src/drivers/ps2/ps2_gs.c) | Hardware display initialization, VSync synchronization (`ps2_gs_vsync`), Host-to-Local GIF DMA blitter (`ps2_gs_flush`), uncached KSEG1 RDRAM framebuffer, and non-destructive cursor restoration. |
 | [`src/drivers/ps2/ps2_font.h`](file:///Users/tonpa/depot/bitedits/btron/src/drivers/ps2/ps2_font.h) | 8x8 ASCII bitmap font table (128 characters) for crisp, authentic BTRON UI text rendering. |
@@ -181,14 +202,31 @@ The PS2 cleanroom port integrates the **full, authentic B-System Graphical Workb
 
 4. **Tracker Start Menu** ([`src/desktop/tracker.c`](file:///Users/tonpa/depot/bitedits/btron/src/desktop/tracker.c)):
    - Haiku-style root application and window tracker menu toggled via gamepad `Start` button or clicking `［BTRON］`.
+   - Three blocks, in this order: the live visible-window list, the application rows
+     `端末 (Terminal)` and `横断メディアメニュー (XMB)`, and the system rows (Sleep,
+     Restart, Shutdown, Quit).  The openers are the weak declarations in
+     [`include/btron/apps.h`](file:///Users/tonpa/depot/bitedits/btron/include/btron/apps.h),
+     so a target that links without an app renders the row and does nothing on click.
+     `scripts/ps2_bench.sh` proves the rows on the target: `[BENCH] launch: terminal
+     row=… wins 3->4 terminal 1->2` is the gterm window arriving in the table.
 
 5. **Real BTRON Applications**:
    - VObject Manager (`src/apps/vobj_manager.c`), T-Editor (`src/apps/t_editor.c`), GTerm (`src/apps/gterm.c`), and Control Panel (`src/settings/control_panel.c`).
 
 6. **Double-Buffered GIF DMA Blitter**:
    - Renders directly to a 32-bit ARGB backbuffer (`s_desktop_backbuffer`).
-   - `blit_backbuffer_to_ps2fb()` translates ARGB to native GS CT32 RGBA little-endian format.
-   - `ps2_gs_flush()` streams the full 640x448 display to GS 4MB eDRAM via DMAC Channel 2.
+   - `blit_backbuffer_rect_to_ps2fb()` translates ARGB to native GS CT32 RGBA
+     little-endian format **for the damaged rectangle only**, and `ps2_gs_upload(x, y,
+     w, h)` streams that rectangle to the GS's local framebuffer over DMAC channel 2.
+     The rectangle comes from a set of up to `PS2_BAND_MAX` merged boxes (y-touching
+     damage unions its x span; overflow falls back to the whole canvas), and it is a
+     *box* rather than a full-width row band because the render and byte-swap passes
+     cost ~0.3 us per pixel: 16 rows at full width is 5370 us, the same 16 rows
+     clipped to the cursor sprite's own 16 columns is 528 us.  See
+     [Why the cursor lags](#why-the-cursor-lags-and-which-row-says-so) for the table.
+   - The full-canvas path (`blit_backbuffer_to_ps2fb()`, 480000 px, 265.8 ms) still
+     exists and is what the Stage 1 console and the cold `startx` paint use; it is no
+     longer what a moving pointer costs.
 
 ### 2.5 SIO0 Interactive Shell Commands
 
@@ -267,7 +305,9 @@ Read the `vs previous window` row:
   cursor lands a function of hand *speed* rather than hand *distance* -- the same
   non-proportionality, moved. What this port does instead is take the ratio as
   evidence that the wrong source profile is live, and the gain belongs to the layer
-  above (`macOS` acceleration, then `PointerXScale`).
+  above: macOS's own cursor curve, which is the only multiplier in this chain that
+  acts on distance.  (`PointerXScale` would have been the other candidate, and v2.8.2
+  source says it is not read for this device.)
 - **`still`** — a real mouse that is not moving answers IN tokens with NAKs, not
   with `00 00 00` reports, so a large `still` count says a synthetic source is
   producing reports whether or not anything moved. Cross-check the `e0/e1` error
@@ -312,23 +352,28 @@ identity at boot rather than from where the code happened to be built:
 
 | Profile | Selected when | Gain applied | Curve | Cap |
 |:---|:---|:---|:---|:---|
-| `emu` | the pointer on the bus answers as PCSX2's HID Mouse, device `0627:0001` (`desc_id == 0x00010627`) | `256 * 3 / 8 = 96` per count: the emulator's own `PointerXScale` divided out, then **3 guest px per host cursor px** | none | off |
+| `emu` | the pointer on the bus answers as PCSX2's HID Mouse, device `0627:0001` (`desc_id == 0x00010627`) | `PS2_EMU_MULT_FP` = **96/256 = 0.375 guest px per count**, and since a count is one host cursor px (see the profile's constants in `core_ps2.c`), 0.375 px per px the hand travelled | none | off |
 | `hw` | anything else answers -- a mouse somebody sells | verbatim `256`, modified by `sens` | `dp_ptr_riscos()` at `g_mouse_step_mult`, the same curve the arm64 / Pi 400 port uses | off |
 
-Why the emulator stub sits *above* 1:1, when the temptation with an already-
-accelerated source is to slow it down: this source is bounded in a way a mouse on a
-desk is not. The host cursor stops at the edge of the Mac's display, so a 1:1
-mapping can never carry the guest cursor further than the desktop it sits on, and
-one stroke cannot cross an 800 px canvas. A real mouse has unlimited travel and
-only ever needs slowing. Both stay a single constant, so where the cursor lands
-still depends only on how far the hand moved -- which is what separates this from
-the velocity cap, whose per-paint bound made the destination depend on *speed*.
+Where 96 comes from is a hand, not arithmetic: at 32/256 a stroke could not cross the
+800 px canvas, at 256/256 the cursor sat pinned against a wall, and 96/256 is what has
+shipped between those two reports. Those observations were taken against counts, so
+they survive the correction above unchanged; what does not survive is reading them as
+"3 px per host px", which was eight times too flattering -- the shipped pointer has
+been tracking the hand at a third of its travel all along.
+
+That is the half of "not usable" no present could fix, and it is left to the same hand
+that set the bounds: `sens 100` is 1:1 and `sens 300` is the 3 px per host px the
+constant used to claim, neither needing a rebuild. Trying them is only worth doing now
+because the price of a fast stroke changed: a gain reads as too fast when 27 painted
+positions a second make it overshoot into a trail, and the rectangle the present makes
+now runs 137-267 of them.
 
 Detection runs once at boot after the host engine has enumerated, and again after
 `usb probe`; the boot log says which one it picked, in both units:
 
 ```
-[PS2] Pointer source emu (detected): 96/256 px per count = 3 px per host cursor px, no curve, cap off
+[PS2] Pointer source emu (detected): 96/256 px per count = 0.37 px per host cursor px, no curve, cap off
 ```
 
 `ptrsrc hw` / `ptrsrc emu` override that for a session, which is the only way to
@@ -340,39 +385,50 @@ old source's half-pixel tail to be paid out by the new one.
 
 ### Dialing the emulator's gain without a rebuild
 
-`PS2_EMU_POINTER_SCALE` (8) and `PointerXScale` in the emulator's ini are two
-copies of one number, and the second is outside this repository -- so before
-tuning anything, check they agree. The gain has two human reports bounding it:
-**1 px per host px could not cross the canvas**, **8 px per host px (= a verbatim
-count) sat pinned against a wall**. Everything between them is a keystroke:
+There is one gain constant in this stack: `PS2_EMU_MULT_FP`. `PointerXScale` and
+`PointerYScale` look like a second copy of it -- both are in the repo's ini, set to 8 --
+but neither name exists anywhere in PCSX2 v2.8.2's source, a USB `Type::Pointer` binding
+has no scale factor at all (`InputManager.cpp:1043-1057`), and its callback is handed the
+raw delta (`:1398-1403`). Editing them changes nothing, so `sens` is the whole dial and
+the guest constant is the whole truth.
+
+The gain has two human reports bounding it, restated here in the unit a hand actually
+moved in (the column below multiplied every one of them by a scale of 8 that is never
+applied): **0.125 px per host px could not cross the canvas**, **1 px per host px (= a
+verbatim count) sat pinned against a wall**. Everything between them is a keystroke:
 
 | `sens` | px per count | guest px per host cursor px |
 |:---|:---|:---|
-| 25 | 64/256 | 2.0 |
-| **38** | **97/256** | **3.0 -- the shipped default** |
-| 51 | 130/256 | 4.0 |
-| 64 | 163/256 | 5.0 |
-| 77 | 197/256 | 6.1 |
-| 89 | 227/256 | 7.1 |
-| 100 | 256/256 | 8.0 -- the too-fast bound, counts verbatim |
+| 25 | 64/256 | 0.25 |
+| **38** | **97/256** | **0.38 -- the shipped default** |
+| 51 | 130/256 | 0.51 |
+| 64 | 163/256 | 0.64 |
+| 77 | 197/256 | 0.77 |
+| 89 | 227/256 | 0.89 |
+| 100 | 256/256 | 1.0 -- the too-fast bound, counts verbatim |
 
-Roughly **13 `sens` per guest px per host px**. `sens` with no argument prints the
-current value in both units, and `ptrsrc` on its own does the same for the live
-profile's default, so either can be read while the hand is still moving. A dial
-settled this way belongs in `PS2_EMU_GUEST_PX_PER_HOST_PX` afterwards -- the prompt
-value does not survive a reboot, and the two units are printed on every row so a
-session is never ambiguous about which one was set.
+Roughly **one `sens` per hundredth of a guest px per host px**, since a count is a host
+px: a dial settled this way ships as `PS2_EMU_MULT_FP = 256 x percent / 100`. `sens`
+with no argument prints the current value in both units, and `ptrsrc` on its own does
+the same for the live profile's default, so either can be read while the hand is still
+moving. The prompt value does not survive a reboot, so what a dial settles belongs in
+`PS2_EMU_MULT_FP` afterwards -- the one constant, because nothing in the emulator reads
+the two ini keys that used to look like its partner.
 
 ### Calibrating against a host movement you already know
 
-Everything above assumes `PS2_EMU_POINTER_SCALE == 8`. That assumption is load
-bearing -- it is the difference between a pointer that is 3 times too slow and one
-that is right -- and the 2026-09-24 run says it may be false: across 460 reports the
-largest count seen on any axis was **27** and the median was **2**, against a byte
-ceiling of 127. Eight counts per host pixel would make that a cursor crawling at
-under 10 px/s, which no hand does. So check it rather than carry it, with a movement
-whose length is not in doubt. **`ptgain`** is that check, and it is the only
-instrument here whose denominator comes from a hand rather than from a file.
+`PS2_EMU_POINTER_SCALE == 8` used to be an assumption, and the 2026-09-24 run said it
+might be false: across 460 reports the largest count seen on any axis was **27** and the
+median was **2**, against a byte ceiling of 127. Eight counts per host pixel would make
+that a cursor crawling at under 10 px/s, which no hand does. It is now settled from the
+emulator's own source instead of by that inference: one count per host cursor pixel, with
+no scale applied to a `Type::Pointer` binding (`InputManager.cpp:1043-1057`,
+`DisplayWidget.cpp:321-326`), so the constant reads 1.
+
+What `ptgain` still measures is what the source cannot say: what one of those counts is
+worth on this Mac, whose own acceleration curve sits in front of every delta PCSX2 reads
+off `QCursor::pos()`. It remains the only instrument here whose denominator comes from a
+hand rather than from a file.
 
 1. `ptgain 0` -- clear the counters, which have been running since boot.
 2. Park the **Mac** cursor hard against the left edge of the Mac's display, then slide
@@ -382,12 +438,13 @@ instrument here whose denominator comes from a hand rather than from a file.
 3. `ptgain <width>` -- e.g. `ptgain 1440`. Reads out the measured counts-per-host-px
    next to the constant it is checking, and the current gain in that unit.
 4. `ptgain <width> <percent>` -- the same sweep again, now setting the gain so the
-   cursor moves `percent`/100 guest px per host px. `300` is the shipped target.
+   cursor moves `percent`/100 guest px per host px. `38` is the shipped default and
+   `100` is 1:1; the sweep says which of the two the hand wants.
 
 | measured counts per host px | what it means | what changes |
 |:---|:---|:---|
-| ~8.00 | `PointerXScale` is applied to this device, as assumed | nothing; `sens` is the whole dial |
-| ~1.00 | the scale does **not** reach the `hidmouse` binding | `PS2_EMU_POINTER_SCALE` to 1; the gain `ptgain` just installed is the same 3 px per host px, so the shipped default becomes 768/256 |
+| ~8.00 | `PointerXScale` is applied to this device, as the old comment assumed | would put the constant back to 8. **Ruled out from PCSX2's source, not from a sweep**: no code in v2.8.2 reads those two keys |
+| **~1.00** | the scale does **not** reach the `hidmouse` binding | **confirmed**, and already installed: `PS2_EMU_POINTER_SCALE` is 1. Note the shipped gain stayed at 96/256 rather than moving to the 768/256 this row used to prescribe -- the hand's two bounds were taken against counts, so keeping them means keeping 96, and 768 would have been 8x the speed the user has actually been judging |
 | anything else | the scale is applied in a unit this port has not identified | that number *is* the constant; put it in `PS2_EMU_POINTER_SCALE` |
 
 `ptgain` takes its counts from the same report handler `ptrstat` tallies, so a
@@ -401,9 +458,11 @@ The same window answers the two other open questions without another keystroke.
 **`loop:`** is the pass rate, and the pass rate is the pointer's frame rate -- the
 cursor can only be moved once per pass, so a low number here is steppiness and no
 gain constant will smooth it. **`chain x: ... px/count`** is the mapping measured
-end to end, which should read `0.37` at the shipped default; if `counts` came out
-8 times smaller than expected, this column goes up 8 times with no change to the
-code, and that is the whole of "not close enough".
+end to end, which should read `0.37` at the shipped default, and whose second column
+is that number in host cursor pixels once the scale is known -- which it now is, from
+the emulator's source rather than from this row, so the row is a check on the guest's
+own spending (counts vs `spent`, including border clipping) and no longer a way to
+discover the emulator's gain.
 
 ### What the 2026-09-24 run already settled
 
@@ -425,28 +484,32 @@ desktop, gain 96/256):
   reluctance.
 - **`[MOVE]` rows are 135 ms apart, and 265 ms later in the run.** That is the
   interval between passes that *moved* the cursor, which is a bound on the loop
-  rate and not the rate itself; the `loop:` row above is what settles it. If it
-  comes back near 7 Hz the binding constraint is the repaint, not the pointer: a
-  pass that moves the cursor calls `workbench_render()` plus a full 800x600
-  byte-swapping `blit_backbuffer_to_ps2fb()`, which is the rect-limited-upload work
-  in `doc/md/STABILIZATION.md`, and not a pointer constant at all.
+  rate and not the rate itself; the `loop:` row above is what settles it. The
+  inference drawn from it was correct and became the next task: a pass that moved
+  the cursor was calling `workbench_render()` plus a full 800x600 byte-swapping
+  `blit_backbuffer_to_ps2fb()`, which is the rect-limited-upload work in
+  `doc/md/STABILIZATION.md` and not a pointer constant at all.  The 7 Hz is gone --
+  with the present clipped to a rectangle, `startx` plus a moving pointer runs
+  137-267 passes a second, priced in the table below.
 
 ### Why the cursor lags, and which row says so
 
 A relative pointer's screen position is only ever updated when the screen is
 repainted, so **the cursor's frame rate is the paint pass's frame rate** -- 7.4 Hz
-at the 135 ms spacing above, and no gain, scale or accelerator changes it. That is
+at the 135 ms spacing above (that is the 2026-09-24 run; a cursor pass costs 536-1050 us
+now, and the table further down is what it buys), and no gain, scale or accelerator
+changes it. That is
 the whole of "too much latency", and it lives in the compositor rather than in the
 USB port.
 
-Two facts already bound it without any hand protocol:
+Two facts bound it without any hand protocol:
 
 - The full-canvas GIF upload costs **1638 us** (`[GS] ... full canvas upload 120000
   QW 1638 us`, with a 16-row console band at 45 us -- linear, ~2.7 us per row).
-- Each pass that moves the cursor makes **three whole-canvas sweeps**: the render
-  itself, which repaints every window for a change the size of a cursor; the
-  byte-swap in `blit_backbuffer_to_ps2fb()`, which touches 480000 words for the same
-  reason; and that 1.6 ms upload. So ~133 ms of the pass is CPU work in the first
+- Each pass that moves the cursor used to make **three whole-canvas sweeps**: the
+  render itself, which rebuilt every window for a change the size of a cursor; the
+  byte-swap in `blit_backbuffer_to_ps2fb()`, which touched 480000 words for the same
+  reason; and that 1.6 ms upload. So ~133 ms of the pass was CPU work in the first
   two, and nothing in this tree ever writes CP0 `Config`, which means the EE's
   caches are off and every one of those words is an uncached bus access.
 
@@ -469,28 +532,67 @@ swap and upload is instruction counts, and that is what picks the fix: `swap`
 dominating means the byte-order pass should not exist per frame (render in
 GS-native order, or swap only the damaged rectangle) and the caches are the other
 order of magnitude; `render` dominating means the damage rectangle is the fix, and
-`ps2_gs_upload(x, y, w, h)` already takes one -- the text console has used that path
-for row-bands all along.
+`ps2_gs_upload(x, y, w, h)` already takes one.
 
-Note what a gain cannot fix: the emulator truncates its float delta toward zero
-and clamps each event at `|127|`, so distance is lost at both ends of the speed
-range before the byte is on the wire. `ptrstat`'s `sat=` and the zero bucket of
-its histogram are what those two look like from the guest.
+It does, and the measured cost of taking it is the reason the present is now clipped
+in **both** dimensions rather than to a full-width row band:
 
-The two ceilings sit at numbers worth writing down, because they are the reason
-`PointerXScale` is not free to leave at 8. With that scale, one event can only
-carry `127 / 8` = **15.9 host cursor px** before it saturates, so any brisk drag
-loses distance on the wire no guest constant can get back; the same scale makes
-the dead zone anything under `1/8` of a host px, which is harmless. Lowering the
-ini's scale and raising `PS2_EMU_GUEST_PX_PER_HOST_PX` by the same factor keeps
-the travel identical while moving both ceilings -- `sat=` at scale 1 does not
-bite until 127 px in one event. **The two numbers are one knob split across a
-boundary**, which is also why editing the ini is *not* a shortcut around `sens`.
+| region presented | pixels | us/pass | of which render | swap | upload |
+|:---|---:|---:|---:|---:|---:|
+| whole canvas 800x600 | 480000 | 265782 | 215049 | 49094 | 1637 |
+| one 16-row band, full width | 12800 | 5370 | 4015 | 1309 | 45 |
+| 64-row band, full width | 51200 | 20378 | 14964 | 5237 | 175 |
+| cursor sprite 16x16 | 256 | 528 | 486 | 29 | 10 |
+| 80x16 | 1280 | 1033 | 883 | 133 | 14 |
+| 16x80 | 1280 | 1204 | 1006 | 146 | 50 |
+
+The upload column was never the problem -- 45 us for a 16-row band, 1638 us for the
+canvas.  `render` and `swap` are, and they scale with **pixels**, not rows, which is
+the thing this document used to get backwards: it argued that a narrow region "has to
+be uploaded a row at a time" and therefore that bands must be full-width to be cheap.
+The per-row GIF setup is real -- 16 rows cost 10 us of upload, 32 rows 20 us, so about
+0.6 us a row -- and it is nothing next to the 528 us the same 16x16 region costs to
+render and swap.  Clipping columns is what buys the speed, so a cursor pass now
+presents the union of the old and new sprite boxes and costs 536-1050 us instead of
+5370.  Against the emulator's ~60 reports a second, that is the difference between 27
+painted positions per second (one screen update per four hand movements) and 137-267,
+which is why the supply finally shows.
+
+Note what a gain cannot fix, and note which of the two candidates is real. The
+emulator keeps a cursor delta in a 16.16 accumulator, exchanges it whole at each poll
+(`InputManager.cpp:1434`, `:1367`) and truncates the float on the way into the device
+(`usb-hid.cpp:731`), so sub-count fractions are dropped at that boundary. The `|127|`
+byte ceiling is not one of them: `hid.cpp:632-635` clamps with
+`dx = int_clamp(xdx, -127, 127); xdx -= dx;`, so a report's overflow is carried into the
+next one and no distance is lost at speed. `ptrstat`'s `sat=` therefore counts a
+saturated report, not a missing stroke.
+
+The ceiling that does bite is cadence, not width. New motion is published once per
+emulated EE frame (`Counters.cpp:500` VSyncStart -> `PollSources`), so at 60 fps the host
+makes at most ~60 distinct reports a second however often OHCI polls at its 1 ms frame,
+button-unchanged motion coalesces into a single slot of a 16-slot queue
+(`hid.cpp:404-418`), and a full queue drops (`:383-389`). That 60 is the rate the guest's
+paint loop has to clear to show every position the hand made, which is why the present's
+cost was measured before any gain constant was touched -- the painted-positions figure in
+the table above is what says the supply is now the limiter rather than the repaint.
+
+The old arithmetic on those ceilings -- `127 / 8` = 15.9 host px per event before
+saturation, and a dead zone under 1/8 of a pixel -- was division by a scale that is never
+applied. At one count per host px, `sat=` cannot bite until 127 px of cursor travel
+inside one event, and a brisk drag on a Mac reaches that only as a flick, which the
+carry-over above spends harmlessly on the next report. So the ini's scale is not a knob
+worth reaching for: editing it moves nothing, and `sens` (or `PS2_EMU_MULT_FP`, which is
+the same number in the tree) is the whole transfer function. **One constant, one
+boundary** -- which is also why editing the ini is *not* a shortcut around `sens`.
 The emulator's other pointer sliders (`PointerXSpeed`, `PointerYSpeed`,
-`PointerInertia`, `PointerXDeadZone`, `PointerYDeadZone`) are all `0` in this
-machine's Mouse Mapping Settings panel, i.e. no curve, no smoothing and no dead
-zone in the chain; what each one means numerically is still **unverified**, and
-they are deliberately left at zero rather than reasoned about.
+`PointerInertia`, `PointerXDeadZone`, `PointerYDeadZone`) are all `0` in this machine's
+Mouse Mapping Settings panel, and that turns out not to matter: they are read
+(`InputManager.cpp:1645-1653`) and applied (`:1372-1381`) to the *scaled* `value` on the
+`ProcessEvent` path -- pad and lightgun bindings -- while the `hidmouse` callback is
+handed the unscaled `delta` (`:1398-1403`). No value of any of them can reach this
+device, so they are inert rather than neutral, and the only live control on this row is
+`[USB1] hidmouse_Pointer = Pointer-0`, which is what registers the callback and makes the
+host grab and warp the cursor (`InputManager.cpp:1669`, `:1681`).
 
 #### Which layer owns the pointer
 
@@ -504,7 +606,7 @@ confirmed, and therefore still a candidate.
 | Layer | Timing / behaviour | The setting that belongs to it | Status |
 |:---|:---|:---|:---|
 | macOS | pointer acceleration and inertia applied to the host cursor before any byte exists | `defaults write -g com.apple.mouse.scaling -1` disables it | inferred (no raw mode exists in PCSX2 to bypass it) |
-| PCSX2 `hidmouse` | one HID event per IN token; publishes byte 0 = 3 buttons + pad, then X, Y, wheel as three 8-bit signed fields; reports **the Mac cursor's own deltas**, not device counts | `PointerXScale` / `PointerYScale` in the **[repo-local ini](#running-with-pcsx2)**, both present and **= 8** | **proven** accelerated-cursor source; **proven** gain of 8 in the config this repo runs |
+| PCSX2 `hidmouse` | one HID event per IN token; publishes byte 0 = 3 buttons + pad, then X, Y, wheel as three 8-bit signed fields; reports **the Mac cursor's own deltas**, not device counts | nothing. `PointerXScale` / `PointerYScale` exist in the **[repo-local ini](#running-with-pcsx2)** and in no v2.8.2 code | **proven from PCSX2 v2.8.2 source**: the callback is handed the raw `delta` (`InputManager.cpp:1398-1403`) and a `Type::Pointer` USB binding carries no scale factor (`:1043-1057`); `int_clamp` carries the `|127|` remainder (`hid.cpp:632-635`); motion is published once per emulated EE frame (`Counters.cpp:500`), so the wire ceiling is **~60 reports/s** |
 | OHCI frame | `HcFmInterval = 0x27782EDF` -> 11999 bit times at 12 Mbit/s = **1 ms**, and the periodic list is walked once per frame, so a device polls at 1/2/4/8/16/32 ms | `bInterval` at enumerate time | **proven**: the same word real PS2 firmware programs |
 | Real PS2 hardware | one OHCI interface shared with the IOP at IOP physical `0x1F801600`, **Full Speed + Low Speed only**, IOP interrupt 22, DMA structures confined to the IOP's reachable 2 MB; the host stack is an IOP-side module and the EE is a client of it over SIF | nothing in this port | spec-derived (secondary but well-corroborated); note that our probe reading that base only proves PCSX2 decodes it, and "the EE cannot poll it on retail hardware" is the open architectural risk |
 | This port | the live **source profile** (above) sets the starting gain and whether a curve runs at all; then `dp_ptr_scale()`'s 8.8 gain (`sens`), then `dp_ptr_limit()` px-per-paint (`maxstep`, off), then the screen borders | `ptrsrc`, `sens`, `maxstep` | **proven** by `ptrcal` |
@@ -521,12 +623,18 @@ be blamed for it, and the only real-hardware divergence that matters for pointer
 
 **`make run-ps2` does not use the emulator's own user-level configuration.** It
 passes `-datapath <repo>/pcsx2`, so every setting that changes a run -- the
-attached `[USBn]` devices, their bindings, `PointerXScale`, the BIOS path -- is
+attached `[USBn]` devices, their bindings, the BIOS path -- is
 read from **`pcsx2/PCSX2/inis/PCSX2.ini` inside this repository**, and that file
 is tracked here deliberately so a run gets these settings rather than whatever the
 user-level config has drifted to. Edit that file, not
 `~/Library/Application Support/PCSX2/inis/PCSX2.ini`, and edit it with PCSX2
 closed: the running process rewrites the file on exit.
+
+One caveat about that file, because it is the reason a pointer session was spent
+tuning nothing: it contains `[Pad] PointerXScale=8` and `PointerYScale=8`, and **no
+code in v2.8.2 reads either key**, so changing them cannot change this guest.  The
+`hidmouse` binding is set by `[USB1] hidmouse_Pointer = Pointer-0`; that line is the
+only pointer-related setting in the file with an effect.
 
 PCSX2 supports both direct ELF execution and virtual CD/DVD disc images:
 

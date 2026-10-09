@@ -118,12 +118,6 @@ static void get_desktop_icon_layout(int idx, int *out_dim, RECT *out_plate, int 
     }
 }
 
-static COLOR s_cached_bg[1024 * 768] __attribute__((aligned(64)));
-static BOOL  s_bg_cached = FALSE;
-static H     s_bg_w;   /* the canvas s_cached_bg currently holds */
-static H     s_bg_h;
-static BTRON_ICON_SIZE s_bg_icon_size;  /* the icon size it was painted at */
-
 /* The capacity is the largest screen in the tree, so a 1024x768 device fills the
  * array exactly and an 800x600 one leaves the tail unused.
  *
@@ -132,8 +126,16 @@ static BTRON_ICON_SIZE s_bg_icon_size;  /* the icon size it was painted at */
  * PS2's 800x600 it never did, so every banded present fell through to the
  * procedural rebuild below: a whole-canvas fill, some fifteen thousand grid dots
  * and five scaled LZW icon decodes, once per band.  Keying by the device instead
- * of by one resolution is what makes the rect path a rect path there. */
+ * of by one resolution is what makes the rect path a rect path there.  The array
+ * below is sized by this macro rather than by a second copy of the same literal, so
+ * the capacity the code checks is the memory the code has. */
 #define BTRON_BG_CAP_PX (1024u * 768u)
+
+static COLOR s_cached_bg[BTRON_BG_CAP_PX] __attribute__((aligned(64)));
+static BOOL  s_bg_cached = FALSE;
+static H     s_bg_w;   /* the canvas s_cached_bg currently holds */
+static H     s_bg_h;
+static BTRON_ICON_SIZE s_bg_icon_size;  /* the icon size it was painted at */
 
 /* What the cached plates depend on: the canvas they were painted into, and the
  * icon size `get_desktop_icon_layout()` was reading while painting them.  The

@@ -122,7 +122,7 @@ void tracker_refresh_windows(void) {
     /* 1. Dynamic Active Window / Task Tracking (Haiku Deskbar window list) */
     WND *w = get_wnd_list();
     H tracked_wnds = 0;
-    while (w && tracked_wnds < 12 && g_tracker.item_count < TRACKER_MAX_ITEMS - 6) {
+    while (w && tracked_wnds < 12 && g_tracker.item_count < TRACKER_MAX_ITEMS - 8) {
         if (w->visible) {
             char item_buf[48];
             tracker_format_wnd_title(item_buf, sizeof(item_buf), w->focused, w->title);
@@ -136,16 +136,26 @@ void tracker_refresh_windows(void) {
         tracker_add_item(TRACKER_CMD_NONE, "(開いている実身・窓なし)", NULL);
     }
 
-    /* Underline / separator between Tracker window list and System Functions */
+    /* Underline / separator between Tracker window list and the launched items */
     tracker_add_item(TRACKER_CMD_SEPARATOR, "------------------------", NULL);
 
-    /* 2. System Functions (Sleep, Restart, Shutdown, Quit) */
+    /* 2. Applications.  Same two entry points the アプリ(A) global menu offers, so
+     * the start menu is a launcher rather than only a window switcher.  The labels
+     * follow this menu's existing "日本語 (English)" convention.  Both open_* are
+     * weak (include/btron/apps.h), so a target that links without gterm.c or
+     * xmb.c gets an inert row instead of a link error. */
+    tracker_add_item(TRACKER_CMD_TERMINAL, "端末 (Terminal)", NULL);
+    tracker_add_item(TRACKER_CMD_XMB,      "横断メディアメニュー (XMB)", NULL);
+
+    tracker_add_item(TRACKER_CMD_SEPARATOR, "------------------------", NULL);
+
+    /* 3. System Functions (Sleep, Restart, Shutdown, Quit) */
     tracker_add_item(TRACKER_CMD_SLEEP,    "スリープ (Sleep)", NULL);
     tracker_add_item(TRACKER_CMD_RESTART,  "デスクトップ再起動 (Restart)", NULL);
     tracker_add_item(TRACKER_CMD_SHUTDOWN, "シャットダウン (Shutdown)", NULL);
     tracker_add_item(TRACKER_CMD_QUIT,     "終了 (Quit)", NULL);
 
-    /* 3. Calculate size of widest menu item before drop down so item never overflows */
+    /* 4. Calculate size of widest menu item before drop down so item never overflows */
     H menu_w = tracker_calc_widest_item_width();
 
     /* Recalculate menu geometry dynamically */
@@ -277,6 +287,9 @@ static void tracker_execute_item(H index) {
             break;
         case TRACKER_CMD_TERMINAL:
             if (open_gterm_window) open_gterm_window();
+            break;
+        case TRACKER_CMD_XMB:
+            if (open_xmb_window) open_xmb_window();
             break;
         case TRACKER_CMD_AUDIODECK:
             if (open_audio_player_window) open_audio_player_window();

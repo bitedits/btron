@@ -23,6 +23,7 @@ static int s_audio_opened = 0;
 static int s_chat_opened = 0;
 static int s_drivesetup_opened = 0;
 static int s_clarity_opened = 0;
+static int s_xmb_opened = 0;
 
 WND* open_vobj_manager_window(void) { s_vobj_opened++; return NULL; }
 WND* open_control_panel_window(void) { return NULL; }
@@ -33,6 +34,7 @@ WND* open_orchestra_window(void)    { return NULL; }
 WND* open_drivesetup_window(void)   { s_drivesetup_opened++; return NULL; }
 WND* launch_beos_chat(void)         { s_chat_opened++; return NULL; }
 WND* open_clarity_window(void)      { s_clarity_opened++; return NULL; }
+WND* open_xmb_window(void)          { s_xmb_opened++; return NULL; }
 void global_menu_render_bar(GDEV *dev) { (void)dev; }
 ER init_evt_sys(void) { return E_OK; }
 ER tip_init(void) { return E_OK; }
@@ -43,6 +45,24 @@ void tip_render_candidate_window(GDEV *dev, H x, H y) { (void)dev; (void)x; (voi
 
 static int s_tests_passed = 0;
 static int s_tests_failed = 0;
+
+/* Row index of the first launcher item of this type, or -1.  Found by type rather
+ * than by a hardcoded index: the window list above the applications block is
+ * dynamic, so a fixed index would only test whatever layout earlier groups left. */
+static H tracker_find_item(TRACKER_CMD_TYPE type) {
+    const TRACKER *st = tracker_get_state();
+    for (H i = 0; i < st->item_count; i++) {
+        if (st->items[i].type == type) return i;
+    }
+    return -1;
+}
+
+static BOOL tracker_click_item(H idx) {
+    const TRACKER *st = tracker_get_state();
+    H x = st->menu_rect.left + 20;
+    H y = st->menu_rect.top + 3 + idx * TRACKER_ITEM_HEIGHT + TRACKER_ITEM_HEIGHT / 2;
+    return tracker_handle_mouse_down(x, y);
+}
 
 #define TEST_ASSERT(cond, msg) do { \
     if (cond) { \
@@ -257,6 +277,31 @@ int main(void) {
     render_desktop_background(dsk_dev);
     TEST_ASSERT(dsk_dev->pixels[100 * 800 + 100] != 0, "Rendered desktop background with 32x32 pictogram icons");
     cls_dev(dsk_dev);
+
+    /* [TEST GROUP 10] Start menu as an application launcher */
+    printf("\n[TEST GROUP 10] Start Menu Application Launching\n");
+    tracker_open_menu();
+    H term_idx = tracker_find_item(TRACKER_CMD_TERMINAL);
+    H xmb_idx  = tracker_find_item(TRACKER_CMD_XMB);
+    TEST_ASSERT(term_idx >= 0, "端末 (Terminal) is present in the [BTRON] launcher");
+    TEST_ASSERT(xmb_idx >= 0,  "横断メディアメニュー (XMB) is present in the [BTRON] launcher");
+    TEST_ASSERT(st->item_count <= TRACKER_MAX_ITEMS, "Applications block does not overflow the item table");
+
+    s_term_opened = 0;
+    if (term_idx >= 0) {
+        TEST_ASSERT(tracker_click_item(term_idx) == TRUE, "Terminal row is inside the open menu");
+        TEST_ASSERT(s_term_opened == 1, "Clicking the Terminal row opens gterm");
+        TEST_ASSERT(tracker_is_menu_open() == FALSE, "Menu dismisses after launching");
+    }
+
+    tracker_open_menu();
+    s_xmb_opened = 0;
+    if (xmb_idx >= 0) {
+        TEST_ASSERT(tracker_click_item(xmb_idx) == TRUE, "XMB row is inside the open menu");
+        TEST_ASSERT(s_xmb_opened == 1, "Clicking the XMB row opens the media bar");
+    }
+    tracker_close_menu();
+    TEST_ASSERT(tracker_verify_invariants() == TRUE, "Invariants hold with the applications block present");
 
     printf("\n==========================================================\n");
     printf(" TRACKER TEST RESULTS: %d / %d tests passed (%.1f%%)\n",

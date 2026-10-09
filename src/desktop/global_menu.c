@@ -248,6 +248,10 @@ int global_menu_get_hover_header(void) {
     return g_gmenu.hover_header;
 }
 
+int global_menu_get_hover_item(void) {
+    return g_gmenu.hover_item;
+}
+
 /* ── Refresh ウィンドウ menu with live open-window titles ─────── */
 static void refresh_window_menu(void) {
     GMenuHeader *whdr = &g_headers[GMENU_HDR_WINDOWS];
@@ -747,6 +751,36 @@ BOOL global_menu_handle_key(UW key, VW mod) {
     if (!global_menu_is_open()) return FALSE;
 
     if (key == BTRON_KEY_ESCAPE) { global_menu_close(); return TRUE; }
+
+    /* Arrows move the highlight, so an open dropdown is operable without a pointer.
+     * Two encodings for one key for the same reason tracker_handle_key() has them: a
+     * windowed host forwards its own keysym (SDLK_UP/DOWN == 0x111/0x112) while the
+     * bare-metal HID drivers inject the BTRON code.
+     *
+     * It is consumed only when a dropdown actually took the move.  global_menu_is_open()
+     * is true whenever the launcher is open too, and workbench_process_event() asks this
+     * handler first, so claiming the arrow with no dropdown active would swallow it one
+     * stage before tracker_handle_key() -- which is exactly what the first PS2 run of
+     * this measured: 14 D-pad DOWN hops moved the launcher's highlight not at all. */
+    if (key == BTRON_KEY_DOWN || key == 0x112 ||
+        key == BTRON_KEY_UP   || key == 0x111) {
+        const GMenuHeader *hdr;
+        int dir, i, n;
+
+        if (g_gmenu.active_menu > 0 && g_gmenu.active_menu < GMENU_HEADER_COUNT) {
+            hdr = &g_headers[g_gmenu.active_menu];
+            dir = (key == BTRON_KEY_DOWN || key == 0x112) ? 1 : -1;
+            n = hdr->item_count;
+            i = g_gmenu.hover_item;
+            for (int step = 0; step < n; step++) {
+                i = (i < 0) ? (dir > 0 ? 0 : n - 1) : (i + dir + n) % n;
+                if (!hdr->items[i].is_separator && hdr->items[i].enabled) break;
+            }
+            if (i >= 0 && i < n && !hdr->items[i].is_separator && hdr->items[i].enabled)
+                g_gmenu.hover_item = i;
+            return TRUE;
+        }
+    }
 
     if (key == '\r' || key == '\n' || key == ' ') {
         if (g_gmenu.active_menu > 0 && g_gmenu.active_menu < GMENU_HEADER_COUNT) {

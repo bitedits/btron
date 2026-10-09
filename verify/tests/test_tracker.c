@@ -138,6 +138,25 @@ int main(void) {
     tracker_handle_key(0x1B);
     TEST_ASSERT(tracker_is_menu_open() == FALSE, "Escape key closes menu");
 
+    /* The same navigation in the code space the bare-metal HID drivers inject.  This
+     * half used to be dead: a gamepad D-pad sends BTRON_KEY_UP/DOWN (0x4000005x), and
+     * only the windowed host's own keysyms (0x111/0x112) were listed here, so a user
+     * with no usable pointer had no way to move the launcher's selection. */
+    tracker_handle_key(0x101);
+    TEST_ASSERT(tracker_is_menu_open() == TRUE, "F1 reopens the menu for the HID code space");
+    H before_hid_arrows = tracker_get_state()->hover_index;
+    tracker_handle_key(BTRON_KEY_DOWN);
+    TEST_ASSERT(tracker_get_state()->hover_index > before_hid_arrows,
+                "BTRON_KEY_DOWN advances hover index");
+    tracker_handle_key(BTRON_KEY_UP);
+    TEST_ASSERT(tracker_get_state()->hover_index == before_hid_arrows,
+                "BTRON_KEY_UP returns to the row it came from");
+    tracker_handle_key(BTRON_KEY_ESCAPE);
+    TEST_ASSERT(tracker_is_menu_open() == FALSE, "BTRON_KEY_ESCAPE closes menu");
+    /* With the menu closed the arrows belong to whatever window has focus. */
+    TEST_ASSERT(tracker_handle_key(BTRON_KEY_DOWN) == FALSE,
+                "arrow is not consumed while the menu is closed");
+
     /* [TEST GROUP 5] Window / Task Tracking Logic */
     printf("\n[TEST GROUP 5] Window / Task Tracking Logic\n");
     /* Mock window setup */

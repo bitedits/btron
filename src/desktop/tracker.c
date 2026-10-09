@@ -398,13 +398,16 @@ BOOL tracker_handle_key(W key_code) {
     if (!tracker_is_menu_open()) return FALSE;
 
     /* Escape closes menu */
-    if (key_code == 0x1B) {
+    if (key_code == BTRON_KEY_ESCAPE) {
         tracker_close_menu();
         return TRUE;
     }
 
-    /* Down arrow */
-    if (key_code == 0x112 || key_code == 's') {
+    /* Down arrow.  Two live encodings, not a parallel model: a windowed host forwards
+     * its own keysym (SDLK_DOWN == 0x112) while every bare-metal HID driver injects the
+     * BTRON code, and the BTRON side used to match nothing here at all -- a gamepad
+     * D-pad press moved the launcher's highlight by the pointer's new pixel only. */
+    if (key_code == BTRON_KEY_DOWN || key_code == 0x112 || key_code == 's') {
         H next = g_tracker.hover_index + 1;
         while (next < g_tracker.item_count && g_tracker.items[next].type == TRACKER_CMD_SEPARATOR) {
             next++;
@@ -416,7 +419,7 @@ BOOL tracker_handle_key(W key_code) {
     }
 
     /* Up arrow */
-    if (key_code == 0x111 || key_code == 'w') {
+    if (key_code == BTRON_KEY_UP || key_code == 0x111 || key_code == 'w') {
         H prev = g_tracker.hover_index - 1;
         while (prev >= 0 && g_tracker.items[prev].type == TRACKER_CMD_SEPARATOR) {
             prev--;
@@ -428,7 +431,7 @@ BOOL tracker_handle_key(W key_code) {
     }
 
     /* Enter activates item */
-    if (key_code == 0x0D || key_code == ' ') {
+    if (key_code == BTRON_KEY_RETURN || key_code == BTRON_KEY_SPACE) {
         if (g_tracker.hover_index >= 0 && g_tracker.hover_index < g_tracker.item_count) {
             tracker_execute_item(g_tracker.hover_index);
             tracker_close_menu();

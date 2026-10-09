@@ -233,13 +233,13 @@ The PS2 gamepad input system provides direct analog pointer manipulation and tac
 | Controller Input | B-System Action | Description |
 |:---|:---|:---|
 | **Left Analog Stick (LX, LY)** | Smooth Mouse Pointer Velocity | Integrated with a deadzone filter (`abs(axis - 128) > 16`) to steer the 16x16 desktop arrow cursor. |
-| **Cross (✕)** | Left Mouse Click | Selects icons, clicks buttons, and focuses windows. |
+| **Cross (✕)** | Left Mouse Click | Selects icons, clicks buttons, and focuses windows.  While a menu is open it is Return instead -- see [Menu Navigation Without a Pointer](#menu-navigation-without-a-pointer-normative). |
 | **Square (□)** | Right Mouse Click | Activates context menus and property dialogs. |
 | **Circle (◯)** | Cancel / ESC | Dismisses active dropdown menus and dialogs. |
 | **Triangle (△)** | Cycle TIP / IME Mode | Rotates language input: ASCII → Hiragana (`あ`) → Katakana (`ア`) → Tibetan (`བོད`). |
 | **Start** | Toggle Desktop Menu | Opens or closes the top system menu bar. |
 | **Select / L1 / R1** | Cycle Active Window | Shifts focus between open desktop windows. |
-| **D-Pad (Up, Down, Left, Right)** | Discrete Navigation Keys | Injects `BTRON_KEY_UP/DOWN/LEFT/RIGHT` events into the event queue. |
+| **D-Pad (Up, Down, Left, Right)** | Discrete Navigation Keys | Injects `BTRON_KEY_UP/DOWN/LEFT/RIGHT` events into the event queue.  It also moves the cursor by 16 px, but not while a menu is open. |
 
 Developers can simulate controller state via the serial shell using:
 
@@ -248,6 +248,88 @@ pad <btns_hex> [lx ly]
 # Example: Click Cross button with centered sticks:
 btron-ps2> pad bfff 128 128
 ```
+
+#### Menu Navigation Without a Pointer (Normative)
+
+A launcher row must be reachable with the D-pad alone.  Three rules follow from that,
+and each has a measured defect behind it.
+
+1. **Two key encodings are live, and both are accepted.** A windowed host forwards its
+   own keysyms (`SDLK_UP`/`SDLK_DOWN` are `0x111`/`0x112`, see `src/window/event.c`),
+   while every bare-metal HID driver -- the PS2 pad, the PS2 USB keyboard, the Mac
+   Quadra ports -- injects the `BTRON_KEY_*` codes from `include/btron/event.h`
+   (`RIGHT 0x4000004F`, `LEFT 0x40000050`, `DOWN 0x40000051`, `UP 0x40000052`).
+   A handler that matches only one of the two is dead on the other half of the targets;
+   `tracker_handle_key()` used to match only the keysym, which is why the D-pad moved
+   the launcher's highlight by nothing but the pointer's new pixel.
+2. **While a menu is open the D-pad must not displace the cursor, and Cross must become
+   Return.** `tracker_handle_mouse_move()` recomputes `hover_index` from the pixel it
+   lands on, and the row pitch is `TRACKER_ITEM_HEIGHT` = 20 px while one D-pad step was
+   16 px, so a move that accompanies the arrow picks whichever row the pointer reached
+   rather than the row the arrow asked for.  A click is worse still: it is delivered at
+   the pointer, not at the highlighted row.
+3. **A menu handler consumes a key only when it acted on it.**
+   `workbench_process_event()` asks `global_menu_handle_key()` before
+   `tracker_handle_key()`, and `global_menu_is_open()` answers true whenever the
+   *launcher* is open as well as when a deskbar dropdown is (`global_menu.c:239`).
+   Returning `TRUE` for an arrow while no dropdown is active therefore swallows the key
+   one stage before the launcher sees it -- the exact shape of the first on-target
+   measurement, 14 D-pad DOWN hops with the highlight fixed at row 0.
+
+The state to read is not `global_menu_is_open()` but `global_menu_get_active()`: a
+dropdown worth navigating has `active_menu > 0`.
+
+Measured on the target by `BENCH_APP=1 BENCH_TIMEOUT=460 scripts/ps2_bench.sh` (the script
+builds the bench ELF itself; `BENCH_APP=1` reaches its `make ps2-bench` through the
+environment, and the default 300 s cap stops the run before the slow phases print).  Its
+`launch XMB by key` phase presses the pad's own report bytes rather than calling the
+tracker's API (`src/cores/core_ps2.c`, `ps2_bench_launcher_key_route()` and
+`ps2_bench_launch_xmb_by_key()`); the arrow rows above come from the ordinary
+`scripts/ps2_bench.sh` run, which finishes in ~15 s:
+
+```text
+[BENCH] key: hover 0->6 in 5 DOWN hops, want row 6, selected=' (XMB)'
+[BENCH] key: launcher=1 deskbar_open=1 dropdown=-1
+[BENCH] key: the XMB row is reachable by arrow alone
+[BENCH] key: Cross on row 5 '(Terminal)' launched 1->2 menu=0 pointer 400,450->400,450
+[BENCH] xmb by key: 4 DOWN hops put the highlight on row 5, launcher=1
+[BENCH] xmb by key: heap before the press -- used=5847 of 12288 kB, largest hole 6439 kB, pool sound
+[BENCH] drain: first out type=4 (EVT is 24 bytes, move=3 but=1,2)
+[HEAP] +1500 kB -> 0xccd4c0   used=7348 kB   largest_free=4939 kB
+[HEAP] +1500 kB -> 0xe44500   used=8848 kB   largest_free=3439 kB
+[GL] VirtIO-GPU OpenGL (virgl) backend init: 768x500
+[HEAP] +576 kB  -> 0xfbb510   used=9424 kB   largest_free=2863 kB
+[BENCH] xmb surface frame 3 : 768x500 black=0 other=384000 first_colour=0xff0283cd box=0,0..767,499
+```
+
+The last row is the answer to "can't run xmb from menu": the row was reached with arrows
+only, Cross opened the application (its surface and depth buffer are the two 1,500 kB
+allocations), and its own task loop drew frames whose surface carries no black pixel.
+`pointer 400,450->400,450` is rule 2 above, and `dropdown=-1` is rule 3's condition.
+Host coverage for the same three rules is `make test-tracker` (78/78) and
+`make test-global-menu` (55/55), the latter including the fall-through assertion.
+
+Two things this run says out loud that are easy to read past:
+
+- **The GL backend is still named `virgl` on PS2.** The row is `[GL] VirtIO-GPU OpenGL
+  (virgl) backend init: 768x500` -- `src/gl/gl_dispatch.c` starts with `s_active_backend`
+  at VIRGL and nothing on this target overrides it by capability.  It now *works* because
+  the window is sized from `btron_desktop_note_size()` (768x500, not the 952x564 the
+  phantom GPU reported) and the TinyGL rasterizer answers the calls, but the label is a
+  lie: capability-based backend selection in
+  [`src/gl/gl_dispatch.c`](file:///Users/tonpa/depot/bitedits/btron/src/gl/gl_dispatch.c)
+  is the unfinished half of "enable the OpenGL downstack with the common code", and it is
+  what [`egl_surface.c`](file:///Users/tonpa/depot/bitedits/btron/src/gl/egl_surface.c)
+  currently decides by `#if defined(BTRON_UEFI_TARGET)` instead of by what the hardware
+  reports.
+- **One XMB frame costs ~78 s of emulator time** (`[BENCH] xmb frame 1/2/3` on emulator
+  timestamps 71.1, 149.1 and 227.1 s for a Cross press at 5.6 s).  No guest-side clock in
+  this port can time a single one of those frames: CP0 Count is 32-bit at 147.18 MHz, so a
+  plain delta wraps every 29.1 s, and the fold in `btron_render_perf_us()` only recovers a
+  wrap if something polls it inside the interval -- which a frame that blocks in the
+  rasterizer does not.  The heartbeat therefore prints `... ms folded` and the app phase's
+  rate prints `<= N passes/s`: both are monotonic upper bounds, and the wall cadence is read
+  from the emulator's own prefix on each line.  This is the number task 20 opens with.
 
 ### 2.3 Keyboard & USB Subsystem (`ps2_usb`)
 
@@ -321,6 +403,10 @@ The PS2 cleanroom port integrates the **full, authentic B-System Graphical Workb
      so a target that links without an app renders the row and does nothing on click.
      `scripts/ps2_bench.sh` proves the rows on the target: `[BENCH] launch: terminal
      row=… wins 3->4 terminal 1->2` is the gterm window arriving in the table.
+     Both rows are reachable and activatable with the D-pad alone -- see
+     [Menu Navigation Without a Pointer](#menu-navigation-without-a-pointer-normative)
+     for the three rules that made that true and for the `[BENCH] xmb by key:` rows that
+     prove the XMB row opens the application and paints it.
 
 5. **Real BTRON Applications**:
    - VObject Manager (`src/apps/vobj_manager.c`), T-Editor (`src/apps/t_editor.c`), GTerm (`src/apps/gterm.c`), and Control Panel (`src/settings/control_panel.c`).

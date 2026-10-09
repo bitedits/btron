@@ -1001,9 +1001,25 @@ void ps2_pad_on_move(int dx, int dy)
 
 void ps2_pad_on_button(uint16_t newly_pressed, uint16_t newly_released)
 {
-    /* Left Mouse Button (Cross) */
-    if (newly_pressed & PAD_CROSS)   ps2_click_mouse(1, 1);
-    if (newly_released & PAD_CROSS)  ps2_click_mouse(1, 0);
+    /* A menu is navigated by its selection, not by the pointer, so while one is open
+     * the D-pad must not displace the cursor: a mouse move over an open menu
+     * recomputes the highlight from the pixel it landed on (tracker_handle_mouse_move,
+     * global_menu_handle_mouse_move), and a 16 px step against a 20 px row pitch picks
+     * whichever row the pointer reached rather than the row the arrow asked for.
+     * Cross becomes Return for the same reason -- a click would be delivered at the
+     * pointer, not at the highlighted row. */
+    const int menu_nav = tracker_is_menu_open() || global_menu_is_open();
+
+    /* Left Mouse Button (Cross), or Enter while a menu is open */
+    if (menu_nav) {
+        if (newly_pressed & PAD_CROSS) {
+            ps2_inject_key(BTRON_KEY_RETURN, 1);
+            ps2_inject_key(BTRON_KEY_RETURN, 0);
+        }
+    } else {
+        if (newly_pressed & PAD_CROSS)   ps2_click_mouse(1, 1);
+        if (newly_released & PAD_CROSS)  ps2_click_mouse(1, 0);
+    }
 
     /* Right Mouse Button (Square) */
     if (newly_pressed & PAD_SQUARE)  ps2_click_mouse(2, 1);
@@ -1035,24 +1051,24 @@ void ps2_pad_on_button(uint16_t newly_pressed, uint16_t newly_released)
         wnd_cycle_focus();
     }
 
-    /* D-Pad: Discrete Navigation & Cursor displacement */
+    /* D-Pad: discrete cursor displacement, or menu navigation while a menu is open */
     if (newly_pressed & PAD_UP) {
-        ps2_move_mouse(0, -16);
+        if (!menu_nav) ps2_move_mouse(0, -16);
         ps2_inject_key(BTRON_KEY_UP, 1);
         ps2_inject_key(BTRON_KEY_UP, 0);
     }
     if (newly_pressed & PAD_DOWN) {
-        ps2_move_mouse(0, 16);
+        if (!menu_nav) ps2_move_mouse(0, 16);
         ps2_inject_key(BTRON_KEY_DOWN, 1);
         ps2_inject_key(BTRON_KEY_DOWN, 0);
     }
     if (newly_pressed & PAD_LEFT) {
-        ps2_move_mouse(-16, 0);
+        if (!menu_nav) ps2_move_mouse(-16, 0);
         ps2_inject_key(BTRON_KEY_LEFT, 1);
         ps2_inject_key(BTRON_KEY_LEFT, 0);
     }
     if (newly_pressed & PAD_RIGHT) {
-        ps2_move_mouse(16, 0);
+        if (!menu_nav) ps2_move_mouse(16, 0);
         ps2_inject_key(BTRON_KEY_RIGHT, 1);
         ps2_inject_key(BTRON_KEY_RIGHT, 0);
     }
@@ -2990,6 +3006,116 @@ static void ps2_bench_menu_ink(GDEV *screen, int picture_row_a, int picture_row_
     ps2_kprintf("[BENCH] menu ink: blank_rows=%d stale_pixels=%d\n", blank, stale_total);
 }
 
+/* ── Key route: is the launcher operable with no pointer at all? ─────────────
+ *
+ * On this target "can't run xmb from menu" and "the mouse is not usable to a human"
+ * are one complaint: the row is in the menu -- the phase above reads it out of the
+ * item table, draws it and presents it -- and the only remaining way to it is Start,
+ * arrows, Cross.  So drive the pad itself rather than the tracker's API: a press
+ * report, a release report, and the queued events dispatched between them, which is
+ * the same chain a hand moves.  The button word is active-low, hence the inversion.
+ *
+ * Activation is then demonstrated on the Terminal row, not on the XMB row, because
+ * open_xmb_window() does not return while its window is open -- that one is the app
+ * phase's job, with a frame budget and an injected Escape.  What is proved here is
+ * that Cross acts on the *selected* row, which is the thing a pointer-less user needs.
+ */
+static void ps2_bench_pad(GDEV *screen, uint16_t mask)
+{
+    int moves, buttons, bx = -1, by = -1;
+
+    ps2_pad_set_state((uint16_t)~mask, 128, 128, 128, 128);
+    ps2_pad_poll();
+    ps2_bench_drain(screen, &moves, &buttons, &bx, &by);
+    ps2_pad_set_state(0xFFFFu, 128, 128, 128, 128);
+    ps2_pad_poll();
+    ps2_bench_drain(screen, &moves, &buttons, &bx, &by);
+    ps2_gui_pass(screen);
+}
+
+static int ps2_bench_row_of(const TRACKER *t, TRACKER_CMD_TYPE type)
+{
+    for (H i = 0; i < t->item_count; i++)
+        if (t->items[i].type == type) return (int)i;
+    return -1;
+}
+
+static void ps2_bench_launcher_key_route(GDEV *screen)
+{
+    const TRACKER *t;
+    int hover0, hops = 0, want_row, term_row;
+    UW launched0, launched1;
+    H px0, py0, px1, py1;
+
+    ps2_kprintf("\n[BENCH] launch by key -- Start, arrows, Cross, pointer not used\n");
+    get_baremetal_mouse_pos(&px0, &py0);
+    ps2_bench_pad(screen, PAD_START);
+    if (!tracker_is_menu_open()) {
+        ps2_kprintf("[BENCH] key: Start did not open the launcher, route unmeasured\n");
+        return;
+    }
+
+    /* The indices are read from the table the open just rebuilt, not carried over
+     * from the mouse route: the live-window rows ahead of the application rows change
+     * when a window opens, so a number taken before gterm arrived is a different row. */
+    t = tracker_get_state();
+    want_row = ps2_bench_row_of(t, TRACKER_CMD_XMB);
+    term_row = ps2_bench_row_of(t, TRACKER_CMD_TERMINAL);
+    hover0 = (int)t->hover_index;
+    while (want_row >= 0 && (int)t->hover_index < want_row &&
+           hops <= (int)t->item_count + 1) {
+        ps2_bench_pad(screen, PAD_DOWN);
+        hops++;
+        t = tracker_get_state();
+    }
+    ps2_kprintf("[BENCH] key: hover %d->%d in %d DOWN hops, want row %d, selected='%s'\n",
+                hover0, (int)t->hover_index, hops, want_row,
+                (t->hover_index >= 0 && t->hover_index < t->item_count)
+                    ? t->items[t->hover_index].label : "(none)");
+    /* Which surface held the key: workbench_process_event() asks the deskbar first, and
+     * global_menu_is_open() answers true for the launcher as well, so a dropdown-less
+     * deskbar that claims the arrow leaves the launcher's selection where it was.  The
+     * hop count alone cannot separate "arrow not injected" from "arrow swallowed". */
+    ps2_kprintf("[BENCH] key: launcher=%d deskbar_open=%d dropdown=%d\n",
+                (int)tracker_is_menu_open(), (int)global_menu_is_open(),
+                global_menu_get_active());
+    ps2_kprintf("[BENCH] key: %s\n",
+                (int)t->hover_index == want_row
+                    ? "the XMB row is reachable by arrow alone"
+                    : "arrow did not land on the XMB row -- the selection is the defect, not the row");
+
+    while (term_row >= 0 && (int)t->hover_index > term_row &&
+           hops <= (int)t->item_count * 3) {
+        ps2_bench_pad(screen, PAD_UP);
+        hops++;
+        t = tracker_get_state();
+    }
+    launched0 = t->launch_count;
+    /* The row Cross is about to act on, recorded before the press: the activation closes
+     * the menu and hover goes to -1, so reading the table afterwards cannot say which
+     * row was chosen.  The UP hops above parked the selection back on the Terminal row
+     * deliberately -- XMB's opener does not return while its window is open, so proving
+     * the click on the blocking row would hang this phase instead of measuring it. */
+    int cross_row = (int)t->hover_index;
+    const char *cross_label = (cross_row >= 0 && cross_row < t->item_count)
+                                ? t->items[cross_row].label : "(none)";
+    ps2_bench_pad(screen, PAD_CROSS);
+    launched1 = tracker_get_state()->launch_count;
+    get_baremetal_mouse_pos(&px1, &py1);
+    ps2_kprintf("[BENCH] key: Cross on row %d '%s' launched %u->%u menu=%d pointer %d,%d->%d,%d\n",
+                cross_row, cross_label,
+                (unsigned int)launched0, (unsigned int)launched1,
+                (int)tracker_is_menu_open(), (int)px0, (int)py0, (int)px1, (int)py1);
+    ps2_kprintf("[BENCH] key: %s\n",
+                launched1 > launched0
+                    ? "Cross activated the highlighted row -- a menu is operable with no pointer"
+                    : "Cross activated nothing");
+    ps2_kprintf("[BENCH] key: %s\n",
+                (px0 == px1 && py0 == py1)
+                    ? "the arrows moved the selection only; the pointer stayed put, so nothing recomputed the highlight from a pixel"
+                    : "the arrows also displaced the pointer, which re-hovers a row by pixel");
+}
+
 static void ps2_bench_launch(GDEV *screen)
 {
     int row, hover, rx, ry;
@@ -3035,6 +3161,7 @@ static void ps2_bench_launch(GDEV *screen)
             ps2_bench_press(screen);
         }
     }
+    ps2_bench_launcher_key_route(screen);
     ps2_kprintf("[BENCH] launch: menu left %d\n", (int)tracker_is_menu_open());
 }
 
@@ -3057,7 +3184,7 @@ static void ps2_bench_launch(GDEV *screen)
 static int      s_bench_app_active; /* the phase is running, so count its passes */
 static uint32_t s_bench_app_left;   /* frames owed until the injected Escape */
 static uint32_t s_bench_app_made;
-static uint32_t s_bench_app_t0;     /* Count at the open, for the frame heartbeat */
+static uint32_t s_bench_app_t0;     /* folded µs clock at the open, for the frame heartbeat */
 
 extern WND *open_xmb_window(void);
 
@@ -3096,7 +3223,7 @@ static void ps2_bench_xmb_surface(const char *when)
 static void ps2_bench_app(GDEV *screen, uint32_t frames)
 {
     RENDER_STATS st;
-    const uint32_t t_start = ps2_count_read();
+    const uint32_t t_start = btron_render_perf_us();  /* folded: one frame exceeds a Count wrap */
     WND *w;
 
     ps2_kprintf("\n[BENCH] xmb opened through the task shim -- %u frames asked of dly_tsk()\n",
@@ -3130,8 +3257,11 @@ static void ps2_bench_app(GDEV *screen, uint32_t frames)
     {
         /* passes * 1e6 / us, and not the tick form ps2_bench_move() uses: 60 frames
          * already overflow a 32-bit numerator at 147 ticks per microsecond. */
-        const uint32_t us = ps2_us_since(t_start);
-        ps2_kprintf("[BENCH] xmb: open returned %s, %u passes in %u ms -> %u passes/s, window still %s\n",
+        const uint32_t us = btron_render_perf_us() - t_start;
+        /* `<=` because the fold loses a Count wrap for every 29.1 s of blocked time
+         * between its calls, and a frame of this app is longer than that: the elapsed
+         * column is short, so the derived rate is an upper bound, not a measurement. */
+        ps2_kprintf("[BENCH] xmb: open returned %s, %u passes in %u ms folded -> <= %u passes/s, window still %s\n",
                     w ? "with a window" : "with no window",
                     (unsigned int)s_bench_app_made,
                     (unsigned int)(us / 1000u),
@@ -3151,6 +3281,77 @@ static void ps2_bench_app(GDEV *screen, uint32_t frames)
      * 0 frames is not a comparison, so the row is labelled rather than inferred. */
     ps2_kprintf("[BENCH] xmb: %s\n", s_bench_app_made ? "task-driven frames present"
                                                       : "NO task-driven frame -- dly_tsk() gave the body nothing");
+}
+
+/* The user's own action, measured: Start, walk to the XMB row, Cross.
+ *
+ * The phase above opens the app by calling open_xmb_window() directly, which proves the
+ * GL downstack draws but says nothing about the launcher row a hand presses.  This
+ * presses it, so the surface rows below belong to this phase.  The frame budget is armed
+ * around the press because the row's opener does not return while its window is up --
+ * the injected Escape is what lets the run finish -- and the pool is read on both sides,
+ * since "no window" and "out of memory" reach the user as one complaint.
+ *
+ * It runs here rather than from the launcher phase because that phase is last and opens
+ * a second terminal first; a pool that has already refused one 2,631 kB request is not a
+ * fair place to ask whether the row works. */
+static void ps2_bench_launch_xmb_by_key(GDEV *screen)
+{
+    const TRACKER *t;
+    int xmb_row, hops = 0;
+    UW launched0;
+
+    ps2_kprintf("\n[BENCH] launch XMB by key -- the row the user presses, activated\n");
+
+    if (!tracker_is_menu_open()) ps2_bench_pad(screen, PAD_START);
+    t = tracker_get_state();
+    xmb_row = ps2_bench_row_of(t, TRACKER_CMD_XMB);
+    if (!tracker_is_menu_open() || xmb_row < 0) {
+        ps2_kprintf("[BENCH] xmb by key: launcher=%d xmb_row=%d -- there is no row to press\n",
+                    (int)tracker_is_menu_open(), xmb_row);
+        return;
+    }
+    while ((int)t->hover_index < xmb_row && hops <= xmb_row + 2) {
+        ps2_bench_pad(screen, PAD_DOWN);
+        hops++;
+        t = tracker_get_state();
+    }
+    ps2_kprintf("[BENCH] xmb by key: %d DOWN hops put the highlight on row %d, launcher=%d\n",
+                hops, (int)t->hover_index, (int)tracker_is_menu_open());
+    if ((int)t->hover_index != xmb_row || !tracker_is_menu_open()) {
+        ps2_kprintf("[BENCH] xmb by key: the highlight never reached the XMB row, Cross skipped\n");
+        return;
+    }
+
+    launched0 = t->launch_count;
+    /* The counter is this phase's own: ps2_gui_pass() raises it once per task-driven
+     * pass and samples the surface at 3, so arming a budget of 3 both prints the ink row
+     * and injects the Escape that ends the body. */
+    s_bench_app_t0 = btron_render_perf_us();
+    s_bench_app_made = 0u;
+    s_bench_app_active = 1;
+    s_bench_app_left = 3u;
+    ps2_kprintf("[BENCH] xmb by key: heap before the press -- used=%u of %u kB, largest hole %u kB, pool %s\n",
+                (unsigned int)(s_heap_used / 1024u), (unsigned int)(PS2_HEAP_SIZE / 1024u),
+                (unsigned int)(ps2_heap_largest_free() / 1024u),
+                ps2_heap_check() ? ps2_heap_check() : "sound");
+    ps2_bench_pad(screen, PAD_CROSS);
+    s_bench_app_active = 0;
+    s_bench_app_left = 0u;
+    ps2_kprintf("[BENCH] xmb by key: Cross on row %d launched %u->%u, %u task-driven frames, top window %s\n",
+                xmb_row, (unsigned int)launched0,
+                (unsigned int)tracker_get_state()->launch_count,
+                (unsigned int)s_bench_app_made,
+                get_top_wnd() ? "up" : "closed");
+    ps2_kprintf("[BENCH] xmb by key: heap after -- used=%u of %u kB, largest hole %u kB (peak %u kB), pool %s\n",
+                (unsigned int)(s_heap_used / 1024u), (unsigned int)(PS2_HEAP_SIZE / 1024u),
+                (unsigned int)(ps2_heap_largest_free() / 1024u),
+                (unsigned int)(s_heap_peak / 1024u),
+                ps2_heap_check() ? ps2_heap_check() : "sound");
+    ps2_kprintf("[BENCH] xmb by key: %s\n",
+                s_bench_app_made
+                    ? "the launcher's XMB row drove the app through its own task loop -- the row works"
+                    : "the row was activated but the app never got a frame -- this is what \"can't run xmb from menu\" is");
 }
 
 #endif /* BTRON_PS2_BENCH_APP */
@@ -3208,6 +3409,10 @@ static void ps2_bench_run(GDEV *screen)
      * dispatch's default backend is virtio (gl_dispatch.c:18) and this target has no
      * virtio GPU, so the phase is a harness waiting for the GL downstack to be
      * selected correctly -- which is exactly what it is here to measure. */
+    /* First, because a frame of this app costs tens of seconds of emulator time: the
+     * rows that answer "can the launcher actually run XMB" have to be in the log before
+     * the 60-frame phase below is cut off by the harness' timeout. */
+    ps2_bench_launch_xmb_by_key(screen);
     ps2_bench_app(screen, 60u);
 #endif
 
@@ -3264,9 +3469,15 @@ static void ps2_gui_pass(GDEV *screen)
          * column is the number that tells them apart.  Sparse on purpose: the console
          * write itself costs bus time, and this phase measures a frame. */
         if (s_bench_app_made <= 3u || (s_bench_app_made % 10u) == 0u)
-            ps2_kprintf("[BENCH] xmb frame %u at %u ms\n",
+            /* Folded clock, not ps2_us_since(): a raw Count delta is 32 bits at
+             * 147.18 MHz and wraps every 29.1 s, which made the first version of this
+             * row print 14446, 24884, 6107 ms for three equally spaced frames.  The
+             * fold is only exact while something polls between wraps, and one frame of
+             * this app outlives two of them, so the column is monotonic but short: the
+             * wall cadence is the emulator's own prefix on these lines, ~78 s a frame. */
+            ps2_kprintf("[BENCH] xmb frame %u at %u ms folded\n",
                         (unsigned int)s_bench_app_made,
-                        (unsigned int)(ps2_us_since(s_bench_app_t0) / 1000u));
+                        (unsigned int)((btron_render_perf_us() - s_bench_app_t0) / 1000u));
         /* Twice, because a surface that is black at frame 3 and full at frame 30 is a
          * renderer that needed its textures baked, and one black both times never drew. */
         if (s_bench_app_made == 3u)  ps2_bench_xmb_surface("frame 3 ");

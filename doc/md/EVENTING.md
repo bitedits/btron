@@ -120,6 +120,16 @@ The coordinator processes each queued event in the following priority order:
 
 6. **Keystroke Routing**:
    - Dispatches global accelerator keys (e.g. menu shortcuts) before forwarding `EV_KEY_DOWN` to the focused window's `event_handler`.
+   - The order is the deskbar (`global_menu_handle_key`), then the tracker launcher
+     (`tracker_handle_key`), then the window manager, and a handler returns `TRUE` only for
+     a key it acted on.  This matters because `global_menu_is_open()` reports true for the
+     launcher as well as for an open deskbar dropdown, so a deskbar handler that claims an
+     arrow key while no dropdown is active starves the launcher of it.  See
+     [PS2 § Menu Navigation Without a Pointer](PS2.md#menu-navigation-without-a-pointer-normative)
+     for the measured case.
+   - Both live key encodings are accepted by the menu handlers: the host's own keysyms
+     (a windowed SDL host forwards `SDLK_UP`/`SDLK_DOWN` = `0x111`/`0x112`) and the
+     `BTRON_KEY_*` codes every bare-metal HID driver injects.
 
 ## 5. Memory Management During Interactive Resizing
 

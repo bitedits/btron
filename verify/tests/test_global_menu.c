@@ -154,6 +154,38 @@ static void test_menu_dismissal(void) {
     BOOL handled = global_menu_handle_key(BTRON_KEY_ESCAPE, 0);
     TEST_ASSERT(handled && !global_menu_is_open(), "Escape key cleanly dismisses active menu");
 
+    /* Arrows move the highlight in the open dropdown, so the app rows -- XMB among
+     * them -- are reachable without a pointer.  An arrow must also skip the block's
+     * separator row rather than landing on it. */
+    global_menu_handle_mouse_down(250, 10);
+    TEST_ASSERT(global_menu_get_active() == GMENU_HDR_APPS, "アプリ dropdown open for arrow nav");
+    TEST_ASSERT(global_menu_get_hover_item() == -1, "opening a dropdown starts with nothing selected");
+    global_menu_handle_key(BTRON_KEY_DOWN, 0);
+    int first = global_menu_get_hover_item();
+    TEST_ASSERT(first >= 0, "BTRON_KEY_DOWN selects the first row");
+    global_menu_handle_key(BTRON_KEY_DOWN, 0);
+    global_menu_handle_key(BTRON_KEY_DOWN, 0);
+    TEST_ASSERT(global_menu_get_hover_item() > first, "repeated DOWN advances the selection");
+    handled = global_menu_handle_key(BTRON_KEY_UP, 0);
+    TEST_ASSERT(handled, "BTRON_KEY_UP is consumed while a dropdown is open");
+    global_menu_handle_key(BTRON_KEY_ESCAPE, 0);
+    TEST_ASSERT(!global_menu_is_open(), "dropdown closed again");
+    TEST_ASSERT(global_menu_handle_key(BTRON_KEY_DOWN, 0) == FALSE,
+                "arrow is not consumed while no dropdown is open");
+
+    /* The launcher is a second menu surface, and global_menu_is_open() answers for both
+     * of them, so "the deskbar is open" is not enough for this handler to claim a key:
+     * workbench_process_event() asks it first, and consuming the arrow here is one stage
+     * before tracker_handle_key() ever sees it.  This is the shape the first PS2 run of
+     * the D-pad route had -- the launcher was open, no dropdown was, and 14 DOWN presses
+     * moved nothing. */
+    tracker_open_menu();
+    TEST_ASSERT(global_menu_is_open(), "global_menu_is_open() is true while the launcher is open");
+    TEST_ASSERT(global_menu_get_active() < 0, "no deskbar dropdown is active in that state");
+    TEST_ASSERT(global_menu_handle_key(BTRON_KEY_DOWN, 0) == FALSE,
+                "arrow falls through to the launcher when only the launcher is open");
+    tracker_close_menu();
+
     /* Reopen and click outside (x = 200, y = 350) */
     global_menu_handle_mouse_down(140, 10);
     TEST_ASSERT(global_menu_is_open(), "Menu reopened");

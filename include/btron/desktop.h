@@ -30,6 +30,10 @@ void render_system_panel(GDEV *dev);
 BOOL desktop_handle_click(H x, H y);
 BTRON_DESKTOP* get_btron_desktop(void);
 GDEV* init_baremetal_desktop(uint32_t *fb, uint32_t w, uint32_t h);
+/* Record the size init_baremetal_desktop() was given, so apps that ask
+ * get_btron_desktop() size themselves from the real screen instead of falling back
+ * to their own default.  See the comment at its definition in desktop.c. */
+void btron_desktop_note_size(H width, H height);
 void redraw_baremetal_desktop(GDEV *screen, H w, H h);
 void redraw_baremetal_desktop_rect(GDEV *screen, const RECT *damage);
 /* Same, but re-runs the paint callback of every window intersecting `damage`.

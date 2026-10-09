@@ -66,20 +66,132 @@ budget is why `PS2_SRCS` carries `PS2_GL_SRCS` (the GL layer plus `xmb.c`/`glgea
 rather than `GL_SRCS`, whose `$(QUAKE_SRCS)` and `$(DEMO_SRCS)` alone account for
 roughly 82 MB of `.bss` -- the 64 MB Quake hunk arena and the demo pack's arrays.
 
+### One Calling Convention (Normative)
+
+Every C translation unit in `btron-ps2.elf` is built `-march=mips2 -mabi=32 -msoft-float`,
+and the image contains no second ISA of C and no second floating-point ABI.  This is a rule
+about the *link*, not about
+instruction speed: under O32, a 64-bit-GPR MIPS (what `-march=mips3` selects) passes
+fixed arguments 5..8 in `$t0..$t3` where a 32-bit-GPR MIPS passes them on the stack, and
+it lays its vararg save area out in 8-byte slots while `va_arg` still walks four bytes at
+a time.  Each convention is self-consistent inside one translation unit, so a mixed link
+produces no warning, no bad instruction and no crash -- only the fifth and later argument
+of a cross-file call arrives as garbage, and every `%s` in a console line printed from the
+other side of the boundary shifts the rest of the line by a word.
+
+The cursor reported this law on 2026-10-09.  `ps2_paint_region()` in `src/cores/core_ps2.c`
+appends the sprite with `draw_baremetal_mouse_cursor(screen, x, y, w, h)`, a five-argument
+call into `src/desktop/desktop.c`; the two files were compiled for different ISAs, so `h`
+-- the canvas height -- was junk, every row of the draw failed `py >= h`, and the sprite
+vanished on the first banded pass after the whole-canvas repaint that draws it from inside
+`desktop.c`, where the call stays within one ISA.  A pointer that appears only every two
+seconds, on the convergence repaint, is this failure.
+
+Why `mips2` is the side that wins, and the two exceptions it needs:
+
+* `-march=mips3` cannot be the uniform choice because its vararg layout is the one
+  `va_arg` disagrees with, and the port's console (`ps2_kprintf`, `tkl_vsnprintf`) is
+  variadic on every platform.
+* `-march=mips32r2` would be 32-bit-GPR too, but clang may reach for `ext`, `ins`, `clz`
+  and `madd`, which a R5900 does not implement.  `mips2`'s instruction set is a subset of
+  the Emotion Engine's MIPS III.
+* The GS latches a privileged register on a **single 64-bit store**, which a 32-bit-GPR
+  build cannot emit.  `src/drivers/ps2/ps2_gs_reg.s` provides `ps2_gs_poke64()` /
+  `ps2_gs_peek64()`, and C reaches them through `GS_REG_POKE` / `GS_REG_PEEK`
+  (`src/drivers/ps2/ps2_gs.h`) with three 32-bit arguments -- an interface identical under
+  either ISA, which is what makes it a safe place for an assembly-only exception.
+  `ps2_halt`'s `wait` in `boot_ps2.s` is enabled the same way, with `.set push` /
+  `.set mips3` around the one instruction.
+* Converting a `double` to or from a 64-bit integer has no instruction on this CPU either,
+  and neither has any other 64-bit FPU operation -- see [The FPU Law](#the-fpu-law-normative),
+  which is what `src/drivers/ps2/ps2_builtins.c` exists to satisfy.
+
+The measurement that says the law is holding is the cursor phase of `scripts/ps2_bench.sh`:
+a banded pass must report `sig at drawn: bb=1 fb=1` with `pre=0 post=1` per region -- the
+append ran and wrote, in the backbuffer and in the presented frame buffer.  `post=0` while
+`appended=1` is a five-argument call whose fifth argument did not arrive, and the phase's
+verdict names that case.
+
+`scripts/test_ps2.sh` holds the static side of the same law: tests 35-38 assert that the
+linked image's MIPS ABI flags read `ISA: MIPS2` / `GPR size: 32`, that **no** `*.ps2.o`
+reports 64-bit GPRs (a stale ELF can outlive a flag change), and that `ps2_gs_poke64`
+contains exactly one `sd` and `ps2_gs_peek64` exactly one `ld`.
+
+### The FPU Law (Normative)
+
+The Emotion Engine's FPU is **single-precision**.  `ldc1`, `sdc1` and every other
+double-precision COP1 instruction are not merely slow on a R5900 -- they are *illegal*, and
+PCSX2's reaction to one is to print `Unknown R5900 COP1:` and let the instruction **do
+nothing**.  Nothing is worse than a trap here: the load leaves the destination register at
+whatever it held, the store lands nowhere, and the program continues with a `double` that is
+silently a previous `double`.  Every float-heavy file in this port (`glgears.c`, `xmb.c`,
+`backend_virgl.c`, and TinyGL's `matrix.c`/`light.c`/`zmath.c`/`zbuffer.c`) is written in
+`double`, so before this law was applied the XMB reported `black=383999 other=1` out of
+384000 pixels and a single bench run printed 2,093 `Unknown R5900` rows.
+
+The rule is therefore about the **whole image**, not about the two conversions that happened
+to need libcalls: `PS2_CC` carries `-msoft-float`, so no translation unit emits a COP1
+instruction of either width and all FP arithmetic goes through function calls.  The two
+exceptions to `-march=mips2` above are *not* exceptions to this one -- `ps2_gs_reg.s` and
+`boot_ps2.s` contain no FP.
+
+Mixing is not an option either, and this is the part that makes it an ABI law rather than a
+performance note.  Under `-msoft-float`, O32 passes floating values in **integer**
+registers: a `double` occupies an even/odd GPR pair with the low word in the even register,
+so the first two doubles are `$4:$5` and `$6:$7` and a third spills to the stack; a `float`
+takes one register; a `double` returns in `$2:$3`.  Those are exactly the slots the FPU ABI
+would fill with COP1 registers, so one file built without the flag hands its arguments to a
+callee built with it in registers that stay untouched.  This was read off a disassembly of
+this toolchain, not off a manual.
+
+`src/drivers/ps2/ps2_builtins.c` supplies the 32 libcalls that link then requires, because
+`-nostdlib` provides none and this machine has no libgcc or compiler-rt for the target.  It
+is written against that measured ABI -- each is declared with `uint64_t`/`uint32_t`
+arguments, which is register-for-register identical to the `double`/`float` form clang
+expects -- and implements exact round-to-nearest-even IEEE-754 by hand.  Two details carry
+the correctness:
+
+* Every 64-bit shift and split is expressed with 32-bit variable shifts plus constant
+  64-bit shifts, so the file never references `__lshrdi3`, `__udivdi3` or `__muldi3`; it
+  must be self-contained or it defines the problem it solves.
+* A comparison libcall returns `-1/0/1` and the *caller* decides the meaning: `lt` tests
+  `< 0`, `le` tests `< 1`, `ge` tests `> -1`, `gt` tests `> 0`.  All four therefore share
+  one three-way routine, which returns the unordered case as `+1` -- the only value that
+  makes `lt`, `le`, `eq` and `ne` all behave for a NaN.  `gt` and `ge` need unordered `-1`
+  and so call the same routine with that argument.
+
+The validation is `make test-ps2-softfloat` (`.build/test_ps2_softfloat`): it includes the
+implementation textually and runs it against the host's own FPU over 15,222,125 comparisons
+-- random bit patterns mixed with special values, a power-of-two sweep, named ties,
+subnormal cancellation and overflow -- and asserts the results are **bit-identical**.  Two
+deliberate mutations of the runtime (an off-by-one exponent, an unwindowed multiply) were
+caught with 12,356 and 460,302 failures, which is what makes the passing number mean
+something rather than prove nothing.
+
+The static side lives in `scripts/test_ps2.sh` as tests 39-41: that the linked image
+contains **zero** FP instructions of either width (disassembled with a 64-bit-capable
+decoder, since GNU objdump prints MIPS III encodings as `.word`), that no *named* symbol is
+undefined, and that all 32 libcalls are present.  Test 41 reads the symbol table into a
+variable first: piping `readelf` into `grep -q` would make grep exit at the first match,
+readelf die of SIGPIPE and `set -o pipefail` report that as a miss, so a symbol that *is*
+defined would fail the test.
+
 ### Driver Files
 
 | File | Role |
 |:---|:---|
 | [`src/drivers/ps2/boot_ps2.s`](file:///Users/tonpa/depot/bitedits/btron/src/drivers/ps2/boot_ps2.s) | EE reset vector, `$gp` and `$sp` setup, unrolled BSS wipe, BIOS syscall wrappers (`SetGsCrt`, `PutIMR`), jumps to `ps2_kernel_main`. |
 | [`src/drivers/ps2/ps2.ld`](file:///Users/tonpa/depot/bitedits/btron/src/drivers/ps2/ps2.ld) | Memory layout script linking `.text` at `0x00100000`, and the `ASSERT` that fails the link when `_end` reaches the stack or the 32 MB RDRAM end. |
-| [`src/drivers/ps2/ps2_gs.h`](file:///Users/tonpa/depot/bitedits/btron/src/drivers/ps2/ps2_gs.h) | Privileged GS registers (`0x12000000`: `PMODE`, `SMODE2`, `DISPFB1`, `DISPLAY1`, `CSR`) and GIF DMA registers (`0x1000A000`). |
+| [`src/drivers/ps2/ps2_gs_reg.s`](file:///Users/tonpa/depot/bitedits/btron/src/drivers/ps2/ps2_gs_reg.s) | The image's only 64-bit-GPR instructions: `ps2_gs_poke64()`/`ps2_gs_peek64()` perform the GS's single-`sd`/single-`ld` register latch. Assembled with local `.set mips3` under the shared `-march=mips2` driver; its arguments and return halves are 32-bit, so it is O32-legal on both sides. |
+| [`src/drivers/ps2/ps2_builtins.c`](file:///Users/tonpa/depot/bitedits/btron/src/drivers/ps2/ps2_builtins.c) | The `__floatdidf` / `__fixdfdi` O32 libcalls clang emits for `double ↔ int64` at `-march=mips2` and `-nostdlib` leaves undefined, written from 32-bit pieces because the EE FPU only speaks 32-bit GPRs. |
+| [`src/drivers/ps2/ps2_gs.h`](file:///Users/tonpa/depot/bitedits/btron/src/drivers/ps2/ps2_gs.h) | Privileged GS registers (`0x12000000`: `PMODE`, `SMODE2`, `DISPFB1`, `DISPLAY1`, `CSR`) and GIF DMA registers (`0x1000A000`), reached only through `GS_REG_POKE`/`GS_REG_PEEK`. |
 | [`src/drivers/ps2/ps2_gs.c`](file:///Users/tonpa/depot/bitedits/btron/src/drivers/ps2/ps2_gs.c) | Hardware display initialization, VSync synchronization (`ps2_gs_vsync`), Host-to-Local GIF DMA blitter (`ps2_gs_flush`), uncached KSEG1 RDRAM framebuffer, and non-destructive cursor restoration. |
 | [`src/drivers/ps2/ps2_font.h`](file:///Users/tonpa/depot/bitedits/btron/src/drivers/ps2/ps2_font.h) | 8x8 ASCII bitmap font table (128 characters) for crisp, authentic BTRON UI text rendering. |
 | [`src/drivers/ps2/ps2_sio.h`](file:///Users/tonpa/depot/bitedits/btron/src/drivers/ps2/ps2_sio.h) & [`.c`](file:///Users/tonpa/depot/bitedits/btron/src/drivers/ps2/ps2_sio.c) | Cleanroom SIO0 hardware UART driver (`0x1000F180` / `KPUTCHAR`). |
 | [`src/drivers/ps2/ps2_pad.h`](file:///Users/tonpa/depot/bitedits/btron/src/drivers/ps2/ps2_pad.h) & [`.c`](file:///Users/tonpa/depot/bitedits/btron/src/drivers/ps2/ps2_pad.c) | Cleanroom DualShock 2 controller driver: analog stick velocity integration, deadband filtering, button edge detection, and event mapping. |
 | [`src/drivers/ps2/ps2_usb.h`](file:///Users/tonpa/depot/bitedits/btron/src/drivers/ps2/ps2_usb.h) & [`.c`](file:///Users/tonpa/depot/bitedits/btron/src/drivers/ps2/ps2_usb.c) | Cleanroom USB Open Host Controller Interface (OHCI) driver (`0xBF801600`) and standard USB HID Boot Protocol keyboard/mouse decoders. |
 | [`src/cores/core_ps2.c`](file:///Users/tonpa/depot/bitedits/btron/src/cores/core_ps2.c) | Platform core adapter: multi-window application suite (Workbench, B-Editor, TAD Cabinet, Settings), Japanese TIP/IME status badge, interactive SIO0 shell, event queue, and RTOS heartbeat. |
-| [`scripts/test_ps2.sh`](file:///Users/tonpa/depot/bitedits/btron/scripts/test_ps2.sh) | Automated verification suite checking ELF architecture, entry point, driver symbols, R5900 opcodes, and ISO image (19/19 tests). |
+| [`scripts/test_ps2.sh`](file:///Users/tonpa/depot/bitedits/btron/scripts/test_ps2.sh) | Automated verification suite checking ELF architecture, entry point, driver symbols, R5900 opcodes, the one-calling-convention ABI law (image *and* every object at 32-bit GPRs, the GS accessors at one `sd`/one `ld`), the FPU law (zero FP instructions of either width, no named undefined symbol, all 32 soft-float libcalls defined) and the ISO image (42/42 tests). |
 
 ### 2.1 Graphics Synthesizer (GS) Framebuffer Architecture
 
@@ -228,6 +340,29 @@ The PS2 cleanroom port integrates the **full, authentic B-System Graphical Workb
      exists and is what the Stage 1 console and the cold `startx` paint use; it is no
      longer what a moving pointer costs.
 
+7. **The kernel heap, and what a black XMB turned out to be**:
+   `src/cores/core_ps2.c` owns a 12 MB pool in `.bss`.  It used to be a bump allocator whose
+   `kfree()` returned the block to nothing, so opening one window per menu click consumed the
+   pool until a later allocation failed and the app painted nothing at all.  It is a
+   first-fit pool with real coalescing now, and `ps2_heap_check()` walks it for the
+   invariants (payload inside the pool, sizes a multiple of the 16-byte header, no cycle) on
+   both sides of the open, which is what `[BENCH] heap before/after xmb: … pool sound`
+   reports.  The header is padded to 16 bytes by a `reserve` word and a negative-size typedef
+   asserts it: with 12 MB of `.bss` the image sits ~1.66 MB under the `ASSERT` in `ps2.ld`, so
+   a header that grew by 8 bytes would quietly eat that headroom.
+   The XMB reported black for three separate measured reasons, and only the third was in the
+   app: the un-freable heap above; a window sized from a desktop record that had not been
+   filled in yet, which asked for 952x564 -- larger than the canvas -- so the surface and its
+   depth buffer were allocated beyond what the port presents (`btron_desktop_note_size()` in
+   `src/desktop/desktop.c:510`, called from the PS2 startup with the real mode, is the single
+   place the window layer now reads the canvas size from before allocating); and the
+   double-precision FPU ops described in [The FPU Law](#the-fpu-law-normative), which did
+   nothing at all and left the geometry uncomputed.  The decisive row is the surface scan in
+   `scripts/ps2_bench.sh`: `[BENCH] xmb surface frame 3 : 768x500 black=0 other=384000
+   first_colour=0xff0283cd box=0,0..767,499` -- every pixel of the window's surface has
+   reached the guest.  `black=383999 other=1` was the failure, one pixel and all the rest
+   unlit, and a count of `Unknown R5900` rows in the thousands says which cause it is.
+
 ### 2.5 SIO0 Interactive Shell Commands
 
 The SIO0 UART console (`115200 8N1`) provides an interactive debugging shell with full ANSI terminal escape sequence handling (`\e[A/B/C/D`, `\e[H`, `\e[F`, `\e[3~`, `\e[5~`, `\e[6~`):
@@ -240,7 +375,7 @@ The SIO0 UART console (`115200 8N1`) provides an interactive debugging shell wit
 | `open <app>` | Launch an application window (`cabinet`, `editor`, `terminal`, `sound`, `chat`, `settings`). |
 | `tip [mode]` | Switch TIP/IME mode (`ascii`, `hira`, `kata`, `tibetan`) or cycle if no argument. |
 | `tasks` | Dump active RTOS task table and stack pointers. |
-| `mem` | Display physical RDRAM, kernel heap (8 MB), and VRAM memory usage. |
+| `mem` | Display physical RDRAM, kernel heap (12 MB first-fit pool, now reclaimable) and VRAM memory usage. |
 | `desktop` | Force an immediate full-screen redraw of the Workbench desktop. |
 | `status` | Show mouse `(x, y)` and active TIP mode. |
 | `mouse <x> <y>` | Set absolute mouse cursor coordinates. |
@@ -649,8 +784,13 @@ make ps2
 make run-ps2
 
 # Automated verification suite:
-make test-ps2
+make test-ps2            # static laws on the linked image (42 tests)
+make test-ps2-softfloat  # the R5900 soft-float runtime, bit-exact vs the host FPU
 ```
+
+Neither `make ps2` nor `make ps2-bench` rebuilds an object because a *flag* changed --
+dependency tracking only sees sources -- so changing `PS2_CC` needs `find src -name '*.ps2.o'
+-delete` first.  Tests 36 and 39 are what catch a stale object left behind by that.
 
 ## 3. Target 9: Bare-Metal MIPS (`make run-mips`)
 
@@ -685,11 +825,14 @@ Both targets compile natively without external GCC toolchains using LLVM/Clang a
 
 1. **C Compiler (LLVM Clang)**:
    ```bash
-   /opt/homebrew/opt/llvm/bin/clang --target=mipsel-unknown-elf -march=mips3 -mabi=32 -ffreestanding -nostdlib
+   /opt/homebrew/opt/llvm/bin/clang --target=mipsel-unknown-elf -march=mips2 -mabi=32 -ffreestanding -nostdlib
    ```
    - Target: `mipsel-unknown-elf` (MIPS 32-bit little-endian).
-   - CPU Architecture: `-march=mips3` (Emotion Engine R5900 compatible, zero invalid MIPS32r2 opcodes).
+   - CPU Architecture: `-march=mips2` (a strict subset of the Emotion Engine R5900's MIPS III, and the one ISA that keeps the whole image on a single O32 calling convention -- see "One Calling Convention" in section 1; zero invalid MIPS32r2 opcodes).
    - ABI: `-mabi=32` (standard MIPS o32 ABI).
+   - Exceptions to the flag, both narrow: `src/drivers/ps2/ps2_gs_reg.s` re-enables 64-bit
+     GPR instructions locally for the GS's single-`sd` register latch, and `boot_ps2.s`
+     wraps its `wait` in `.set mips3`.
 
 2. **Linker**:
    ```bash
@@ -774,7 +917,7 @@ When running under PCSX2 (`make run-ps2`):
 |:---|:---|:---|
 | `make ps2` | Build PS2 ELF & Disc ISO | `btron-ps2.elf` and `btron-ps2.iso` |
 | `make run-ps2` | Launch Disc ISO in PCSX2 | Bootable CDVD execution (No `.elf` association) |
-| `make test-ps2` | Run PS2 automated test | 35/35 driver and ELF assertions |
+| `make test-ps2` | Run PS2 automated test | 39/39 driver, ELF and ABI assertions |
 | `make mips` | Build MIPS ELF | `btron-mips.elf` |
 | `make run-mips` | Launch in QEMU Window | Interactive console & display on Malta |
 | `make test-mips` | Run MIPS automated test | Headless validation of all 8 kernel boot markers |

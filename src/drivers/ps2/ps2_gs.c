@@ -188,16 +188,16 @@ void ps2_gs_set_mode(int mode)
         ps2_set_gs_crt(0, 0x52, 0);
 
         /* PMODE: Circuit 1 + 2 enabled, SLBG = 0 (Display Framebuffer) */
-        GS_REG(GS_PMODE_OFFSET) = 0xFF63ULL;
+        GS_REG_POKE(GS_PMODE_OFFSET, 0xFF63ULL);
 
         /* SMODE2: Non-interlaced, progressive scan */
-        GS_REG(GS_SMODE2_OFFSET) = 0x00000000ULL;
+        GS_REG_POKE(GS_SMODE2_OFFSET, 0x00000000ULL);
 
         /* DISPFB1 & DISPFB2: FBP=0, FBW=13 (832/64), PSM=0 (CT32) */
         uint32_t fbw = (PS2_SCREEN_WIDTH + 63) / 64;
         uint64_t dispfb = (0ULL << 0) | ((uint64_t)fbw << 9) | ((uint64_t)GS_PSM_CT32 << 15);
-        GS_REG(GS_DISPFB1_OFFSET) = dispfb;
-        GS_REG(GS_DISPFB2_OFFSET) = dispfb;
+        GS_REG_POKE(GS_DISPFB1_OFFSET, dispfb);
+        GS_REG_POKE(GS_DISPFB2_OFFSET, dispfb);
 
         /* DISPLAY1 & DISPLAY2: the 720p raster's active-area origin, then
          * MAGH=MAGV=0 so the read is one VRAM pixel per output dot and
@@ -205,40 +205,40 @@ void ps2_gs_set_mode(int mode)
          * The rest of the frame is filled with BGCOLOR.
          */
         uint64_t display = GS_SET_DISPLAY(420, 40, 0, 0, PS2_SCREEN_WIDTH - 1, PS2_SCREEN_HEIGHT - 1);
-        GS_REG(GS_DISPLAY1_OFFSET) = display;
-        GS_REG(GS_DISPLAY2_OFFSET) = display;
+        GS_REG_POKE(GS_DISPLAY1_OFFSET, display);
+        GS_REG_POKE(GS_DISPLAY2_OFFSET, display);
 
     } else if (mode == PS2_MODE_DTV_480P) {
         /* DTV 480p 640x480 Progressive:
          *   interlace = 0, pal_ntsc = 0x50 (480P), field = 0
          */
         ps2_set_gs_crt(0, 0x50, 0);
-        GS_REG(GS_PMODE_OFFSET) = 0xFF63ULL;
-        GS_REG(GS_SMODE2_OFFSET) = 0x00000000ULL;
+        GS_REG_POKE(GS_PMODE_OFFSET, 0xFF63ULL);
+        GS_REG_POKE(GS_SMODE2_OFFSET, 0x00000000ULL);
 
         uint64_t dispfb = (0ULL << 0) | (10ULL << 9) | ((uint64_t)GS_PSM_CT32 << 15);
-        GS_REG(GS_DISPFB1_OFFSET) = dispfb;
-        GS_REG(GS_DISPFB2_OFFSET) = dispfb;
+        GS_REG_POKE(GS_DISPFB1_OFFSET, dispfb);
+        GS_REG_POKE(GS_DISPFB2_OFFSET, dispfb);
 
         uint64_t display = GS_SET_DISPLAY(232, 35, 1, 0, 1439, 479);
-        GS_REG(GS_DISPLAY1_OFFSET) = display;
-        GS_REG(GS_DISPLAY2_OFFSET) = display;
+        GS_REG_POKE(GS_DISPLAY1_OFFSET, display);
+        GS_REG_POKE(GS_DISPLAY2_OFFSET, display);
 
     } else {
         /* NTSC 640x448 Frame Mode:
          *   interlace = 1, pal_ntsc = 2 (NTSC), field = 1 (Frame Mode)
          */
         ps2_set_gs_crt(1, 2, 1);
-        GS_REG(GS_PMODE_OFFSET) = 0xFF63ULL;
-        GS_REG(GS_SMODE2_OFFSET) = 0x00000003ULL; /* INT=1, FFMD=1 */
+        GS_REG_POKE(GS_PMODE_OFFSET, 0xFF63ULL);
+        GS_REG_POKE(GS_SMODE2_OFFSET, 0x00000003ULL); /* INT=1, FFMD=1 */
 
         uint64_t dispfb = (0ULL << 0) | (10ULL << 9) | ((uint64_t)GS_PSM_CT32 << 15);
-        GS_REG(GS_DISPFB1_OFFSET) = dispfb;
-        GS_REG(GS_DISPFB2_OFFSET) = dispfb;
+        GS_REG_POKE(GS_DISPFB1_OFFSET, dispfb);
+        GS_REG_POKE(GS_DISPFB2_OFFSET, dispfb);
 
         uint64_t display = GS_SET_DISPLAY(636, 50, 3, 0, 2559, 447);
-        GS_REG(GS_DISPLAY1_OFFSET) = display;
-        GS_REG(GS_DISPLAY2_OFFSET) = display;
+        GS_REG_POKE(GS_DISPLAY1_OFFSET, display);
+        GS_REG_POKE(GS_DISPLAY2_OFFSET, display);
     }
 
     ps2_gs_set_bgcolor(24, 48, 80);
@@ -250,7 +250,7 @@ void ps2_gs_init(uint32_t width, uint32_t height)
     (void)height;
 
     /* 1. Reset GS via CSR */
-    GS_REG(GS_CSR_OFFSET) = (1ULL << 9);
+    GS_REG_POKE(GS_CSR_OFFSET, (1ULL << 9));
     for (volatile int i = 0; i < 1000; i++) {}
 
     /* 2. Unmask GS interrupts via BIOS syscall */
@@ -278,7 +278,7 @@ void ps2_gs_init(uint32_t width, uint32_t height)
 
 void ps2_gs_set_bgcolor(uint8_t r, uint8_t g, uint8_t b)
 {
-    GS_REG(GS_BGCOLOR_OFFSET) = ((uint64_t)r << 0) | ((uint64_t)g << 8) | ((uint64_t)b << 16);
+    GS_REG_POKE(GS_BGCOLOR_OFFSET, ((uint64_t)r << 0) | ((uint64_t)g << 8) | ((uint64_t)b << 16));
 }
 
 /* ── Stage 1 Text Mode Terminal Console (100 cols x 37 rows) ───── */
@@ -421,9 +421,9 @@ void ps2_gs_text_flush(void)
 void ps2_gs_vsync(void)
 {
     /* Clear GS CSR VSync interrupt (bit 3) */
-    GS_REG(GS_CSR_OFFSET) = (1ULL << 3);
+    GS_REG_POKE(GS_CSR_OFFSET, (1ULL << 3));
     for (volatile int i = 0; i < 200000; i++) {
-        if (GS_REG(GS_CSR_OFFSET) & (1ULL << 3)) {
+        if (GS_REG_PEEK(GS_CSR_OFFSET) & (1ULL << 3)) {
             break;
         }
     }

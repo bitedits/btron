@@ -145,7 +145,82 @@ assert_check "Symbol 'ps2_gs_get_height' exists" \
 assert_check "Zero invalid MIPS32r2 opcodes (seb, seh, ins, ext)" \
     "! ($OBJDUMP -d $ELF | grep -E '\<(seb|seh|ins|ext)\>')"
 
-# 6. Check Bootable ISO Disc Packaging
+# 6. One Calling Convention (Normative -- see "One Calling Convention" in doc/md/PS2.md)
+# -march=mips3 and -march=mips2 disagree on where O32 puts a C function's 5th..8th
+# fixed argument (registers $t0..$t3 vs the stack), so in a mixed image every such
+# call that crosses the boundary receives garbage from argument 5 on.  The PS2 mouse
+# pointer disappeared because draw_baremetal_cursor_raw() -- five arguments -- was
+# exactly one of those calls.
+assert_check "PS2 image is 32-bit-GPR O32 (MIPS ABI flags: ISA MIPS2, GPR size 32)" \
+    "$READELF -A $ELF | grep -E 'ISA:[[:space:]]+MIPS2' && $READELF -A $ELF | grep -E 'GPR size:[[:space:]]+32'"
+
+# The ELF's flags are the linker's merge of the objects' and a stale ELF can outlive a
+# flag change, so check the translation units themselves: one object built for a
+# 64-bit-GPR MIPS would put the mixed-ABI bug back.
+assert_check "Every PS2 object is 32-bit-GPR (no mips3 translation unit left in the link)" \
+    "! (find src -name '*.ps2.o' -exec $READELF -A {} + | grep -E 'GPR size:[[:space:]]+64')"
+
+# The one intentional exception: the GS latches a privileged register on a single
+# 64-bit store, which 32-bit GPRs cannot express, so ps2_gs_reg.s holds the only
+# 64-bit instructions in the image.  Its two accessors take and return 32-bit pieces,
+# so they stay O32-legal across the boundary.  GNU objdump decodes MIPS32 here and
+# prints these as .word, so this needs a 64-bit-capable disassembler.
+OBJDUMP64=""
+for p in llvm-objdump /opt/homebrew/opt/llvm/bin/llvm-objdump /usr/local/opt/llvm/bin/llvm-objdump /usr/lib/llvm-*/bin/llvm-objdump; do
+    if command -v "$p" >/dev/null 2>&1; then OBJDUMP64="$p"; break; fi
+done
+if [ -n "$OBJDUMP64" ]; then
+    assert_check "GS register write is one 64-bit sd (ps2_gs_poke64)" \
+        "[ \$($OBJDUMP64 -d --triple=mips64el-unknown-elf $ELF | awk '/<ps2_gs_poke64>:/{f=1} f&&/^[[:space:]]*\$/{exit} f' | grep -cE '[[:space:]]sd[[:space:]]') -eq 1 ]"
+    assert_check "GS register read is one 64-bit ld (ps2_gs_peek64)" \
+        "[ \$($OBJDUMP64 -d --triple=mips64el-unknown-elf $ELF | awk '/<ps2_gs_peek64>:/{f=1} f&&/^[[:space:]]*\$/{exit} f' | grep -cE '[[:space:]]ld[[:space:]]') -eq 1 ]"
+else
+    echo "  [SKIP] 64-bit-GPR disassembler unavailable -- GS sd/ld accessor tests not run"
+fi
+
+# 7. The R5900 FPU is single-precision (Normative -- see "The FPU law" in doc/md/PS2.md)
+# ldc1/sdc1 and every .d COP1 op are not merely slow here, they are illegal: PCSX2
+# prints "Unknown R5900 COP1:" and the instruction does nothing at all, so every
+# double the image computes comes out as garbage.  A black XMB was exactly that:
+# 2,093 such rows per bench run and 383,999 of 384,000 surface pixels unlit.  The
+# whole image is therefore built -msoft-float and src/drivers/ps2/ps2_builtins.c
+# supplies the libcalls, so *no* FP instruction of either width may survive in the
+# link -- a leftover .s op would mean a translation unit that escaped the flag, and
+# its float arguments would arrive in registers the rest of the image does not use.
+# GNU objdump decodes MIPS3 here and can print these as .word, so use the 64-bit
+# decoder that sees every COP1 encoding.
+if [ -n "$OBJDUMP64" ]; then
+    FP_PAT='(^|[[:space:]])(ldc1|sdc1|lwc1|swc1|(add|sub|mul|div|sqrt|abs|neg|mov|cvt|trunc|round|ceil|floor)[a-z]*\.[sdfw](\.[sdfw])?|c\.(eq|neq|lt|leq|ngt|nge|un|ord|sf|t|f)\.[sdfw])([[:space:]]|$)'
+    assert_check "Zero FPU instructions of either width in the image (whole link is -msoft-float)" \
+        "[ \$($OBJDUMP64 -d --triple=mips64el-unknown-elf $ELF | grep -cE '$FP_PAT') -eq 0 ]"
+else
+    echo "  [SKIP] 64-bit-GPR disassembler unavailable -- FPU-opcode sweep not run"
+fi
+
+# A -msoft-float link needs its runtime: clang emits libcalls where the FPU would
+# have been and -nostdlib provides none of them, so an unresolved one is a silent
+# wrong answer rather than a link error.  Symbol 0 is the null local entry, which is
+# UND by definition and not a reference, so only named UND entries count.
+assert_check "Soft-float runtime resolves: no named undefined symbol in the image" \
+    "[ \$($READELF -s $ELF | awk '\$7==\"UND\" && \$8!=\"\"' | wc -l | tr -d ' ') -eq 0 ]"
+
+SOFTFLOAT_LIBCALLS="__adddf3 __subdf3 __muldf3 __divdf3 __ltdf2 __ledf2 __gtdf2 __gedf2 \
+__eqdf2 __nedf2 __unorddf2 __floatsidf __floatunsidf __fixdfsi __floatdidf __fixdfdi \
+__truncdfsf2 __extendsfdf2 __addsf3 __subsf3 __mulsf3 __divsf3 __ltsf2 __lesf2 __gtsf2 \
+__gesf2 __eqsf2 __nesf2 __floatsisf __floatunsisf __fixsfsi __fixunssfsi"
+# Read the table once into a variable: piping readelf straight into `grep -q` would
+# make grep exit on the first match, readelf then dies on SIGPIPE and `set -o
+# pipefail` reports that as the pipeline's status, so a symbol that IS present would
+# be counted as missing.
+PS2_SYMBOLS="$($READELF -s $ELF)"
+SOFTFLOAT_CHECK="missing=0;"
+for _s in $SOFTFLOAT_LIBCALLS; do
+    SOFTFLOAT_CHECK="$SOFTFLOAT_CHECK grep -qE ' $_s\$' <<<\"\$PS2_SYMBOLS\" || missing=1;"
+done
+assert_check "All 32 soft-float libcalls are defined (src/drivers/ps2/ps2_builtins.c)" \
+    "$SOFTFLOAT_CHECK [ \$missing -eq 0 ]"
+
+# 8. Check Bootable ISO Disc Packaging
 if [ -f "$ISO" ]; then
     assert_check "ISO disc image exists and is non-empty" \
         "[ -s $ISO ]"

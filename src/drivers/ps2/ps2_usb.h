@@ -300,12 +300,12 @@ uint32_t ps2_usb_intr_word(int index, int which);
 
 /* One row per control transfer, printed as the transfer finishes -- which is
  * what puts it in the same order as the host's own device-side log, so the two
- * can be read against each other.  It travels as one pointer because this
- * driver builds -march=mips3 while the console that prints it builds
- * -march=mips2, and a call of more than four arguments leaves the fifth onward
- * on the stack, which those two lay out differently; a format string across
- * that boundary is worse still.  Implemented by whichever core owns the
- * console. */
+ * can be read against each other.  It travels as one pointer rather than as
+ * twelve arguments; a record this size wants a struct on either side.  When this
+ * row was written the driver and the console were built for different MIPS ISAs,
+ * which is also why no format string crosses to the console from here -- the
+ * image is one calling convention now (see the ABI note in the Makefile), but the
+ * shape is the cheap one.  Implemented by whichever core owns the console. */
 typedef struct {
     uint32_t port;
     uint32_t tag;            /* which step of enumeration this row is, see below */
@@ -326,13 +326,11 @@ void ps2_usb_log_tx(const ps2_usb_tx_t *t);
  * log's report counters are printed less than two seconds after the polling ring
  * goes out, which is before a device has had a frame to answer in -- so without
  * this row a run that never gets input and a run whose polling ring is dead
- * print the same zero.  Two scalars, so it crosses the mips2/mips3 boundary
- * safely. */
+ * print the same zero. */
 void ps2_usb_report_landed(uint32_t kbd, uint32_t mouse);
 
 /* One row per key the keyboard decoder sees, printed with the modifiers and the
- * HID usage that produced it, before the key is posted to anyone.  Four scalars
- * for the same reason as above.  */
+ * HID usage that produced it, before the key is posted to anyone.  */
 void ps2_usb_log_kbd(uint32_t mod, uint32_t code, uint32_t key, uint32_t reports);
 
 /* One row per pointer report with the bytes as the endpoint handed them over,
@@ -340,7 +338,7 @@ void ps2_usb_log_kbd(uint32_t mod, uint32_t code, uint32_t key, uint32_t reports
  * wrong way has two possible authors -- the device, which put the columns in the
  * slots we read as rows, and the parse, which read them wrongly -- and only the
  * unopened report tells them apart.  `b3b0` is the report in memory order, low
- * byte first; two scalars, so it crosses the mips2/mips3 boundary safely. */
+ * byte first. */
 void ps2_usb_log_mouse_raw(uint32_t reports, uint32_t b3b0);
 
 /* One row per pump pass that retired anything, with how many reports that pass

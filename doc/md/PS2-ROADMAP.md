@@ -235,12 +235,16 @@ x=799 and an odd-width rect render correctly, and dragging a window shows no tra
 
 ## 6. Risks that will bite
 
-* **Toolchain.** `PS2_CC` is clang `--target=mipsel-unknown-elf -march=mips3 -mabi=32`
-  (Makefile:71). Clang has **no R5900 support**: `lq`/`sq`, `mtc3`/`cfc3` and the
+* **Toolchain.** `PS2_CC` is clang `--target=mipsel-unknown-elf -march=mips2 -mabi=32
+  -msoft-float` (Makefile:91) -- mips2, not mips3, so the whole image shares one O32 calling
+  convention (see "One Calling Convention" in `PS2.md`; a mixed link is what made the pointer
+  invisible), and soft-float because the R5900 FPU is single-precision, so a `.d` instruction
+  is illegal and does nothing at all (see "The FPU Law"). Clang has **no R5900 support**:
+  `lq`/`sq`, `mtc3`/`cfc3` and the
   MMAX/SIMD pixel ops will not assemble for a 32-bit MIPS III target. Every 128-bit path
   (2.4, and any quadword copy) needs `.word` encodings or a hand-written `.s` — the
   `boot_ps2.s` precedent already covers syscall thunks, so extend that file rather than
-  fighting the compiler.
+  fighting the compiler. `ps2_gs_reg.s` is the same precedent for the GS's 64-bit latch.
 * **No cache-coherency discipline = invisible wrong pixels.** See 0.3. A DMA source that
   is D-cache-dirty shows the previous frame; the failure looks like a blit bug.
 * **PCSX2 is not the hardware.** GIF throughput, local→local speed, STORE_IMAGE cost and

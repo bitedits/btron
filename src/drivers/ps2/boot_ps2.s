@@ -54,7 +54,10 @@ _start:
 /* Infinite halt loop if kernel ever returns */
 ps2_halt:
 3:
+    .set push
+    .set mips3                /* wait is not a mips2 mnemonic; the CPU is a R5900 */
     wait
+    .set pop
     b       3b
     nop
 

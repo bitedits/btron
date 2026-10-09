@@ -55,23 +55,165 @@ extern void  set_baremetal_mouse_pos(H x, H y);
 extern void  get_baremetal_mouse_pos(H *x, H *y);
 extern void  draw_baremetal_mouse_cursor(GDEV *screen, H mx, H my, H w, H h);
 
-/* ── Kernel Heap Allocator (8 MB RDRAM pool) ────────────────────── */
-#define PS2_HEAP_SIZE (8 * 1024 * 1024)
-static uint8_t s_ps2_heap[PS2_HEAP_SIZE] __attribute__((aligned(128)));
-static size_t  s_ps2_heap_offset = 0;
+/* ── Kernel heap: a first-fit pool that gives memory back ───────────────
+ *
+ * This was a bump pointer whose Ifree() did nothing, which stayed harmless while
+ * everything that allocated lived as long as the desktop.  The GL downstack broke
+ * that: a window surface and its depth plane are allocated when an app opens and
+ * freed when it closes, so the second open asks for bytes the first open never
+ * returned -- and xmb's icon atlas failed for want of 576 kB in an 8 MB pool that
+ * already held 5.8 MB.
+ *
+ * The pool needs no lock and must not get one: this kernel is single-stack and
+ * cooperative (see the task layer near the end of this file), but an app body does
+ * allocate while a desktop pass is in flight, so the free list has to tolerate
+ * reentrant calls rather than assume a call finishes before another begins.
+ *
+ * Declared again here because the large-allocation rows below are the pool's own
+ * diagnostics; the console driver itself is defined with the rest of this file. */
+static void ps2_kprintf(const char *fmt, ...);
 
+/* 12 MB, because the desktop's own baseline is 5.8 MB and one full-screen GL window
+ * costs its surface, the rasterizer's depth plane and the icon atlas twice over
+ * (surface + depth + atlas + upload copy) -- 8 MB held the baseline and the surface
+ * and nothing else.  The ceiling is the image budget: this array is .bss, and the
+ * ASSERT in ps2.ld keeps _end below the stack at 0x01FF0000, which 12 MB does with
+ * 2 MB to spare and 16 MB does not. */
+#define PS2_HEAP_SIZE (12 * 1024 * 1024)
+static uint8_t s_ps2_heap[PS2_HEAP_SIZE] __attribute__((aligned(64)));
+
+#define PS2_HEAP_ALIGN  16u
+#define PS2_HEAP_HDR    16u    /* the header's real size, asserted below */
+
+typedef struct ps2_blk {
+    struct ps2_blk *next;      /* address order, so neighbours can coalesce */
+    size_t          size;      /* payload bytes */
+    unsigned        used;
+    unsigned        reserve;   /* pads the header to PS2_HEAP_HDR */
+} ps2_blk;
+
+/* Every payload starts at (block + PS2_HEAP_HDR), so the header has to be exactly
+ * that wide or the 16-byte alignment of the payloads is a lie. */
+typedef char ps2_heap_header_is_16[(sizeof(ps2_blk) == PS2_HEAP_HDR) ? 1 : -1];
+
+static ps2_blk *s_heap_list;
+static size_t   s_heap_used;
+static size_t   s_heap_peak;
+
+/* core_init.c's k_heap_usage() reads this on every target; on this one the pool
+ * above is the whole heap, so the value is only a base it subtracts from. */
 uint32_t heap_ptr = 0x00200000;
+/* The row threshold is what keeps the log short: the pool's 5.8 MB baseline is made
+ * of small blocks, and only an allocation of this size can be the one a GL window
+ * cannot find room for. */
+#define PS2_HEAP_LOGLIM (96u * 1024u)
+/* The most blocks the pool can ever hold, which is what a list walk compares its
+ * step count against to tell a long list from a cyclic one. */
+#define PS2_HEAP_BLOCKS_MAX (PS2_HEAP_SIZE / (PS2_HEAP_HDR + PS2_HEAP_ALIGN))
+
+static void ps2_heap_init(void)
+{
+    s_heap_list = (ps2_blk *)s_ps2_heap;
+    s_heap_list->next = NULL;
+    s_heap_list->size = PS2_HEAP_SIZE - PS2_HEAP_HDR;
+    s_heap_list->used = 0;
+    s_heap_used = 0;
+    s_heap_peak = 0;
+}
+
+/* The biggest single hole, which is what an allocation fails against -- a pool with
+ * 3 MB free in 4 kB fragments cannot serve a 2 MB depth plane. */
+static size_t ps2_heap_largest_free(void)
+{
+    size_t largest = 0;
+    for (const ps2_blk *f = s_heap_list; f; f = f->next)
+        if (!f->used && f->size > largest) largest = f->size;
+    return largest;
+}
+
+/* Walk the pool the way the allocator's own invariants require: blocks in address
+ * order, none overlapping, no two adjacent ones free (coalescing must have merged
+ * them), and their sizes plus their headers accounting for every byte of the array.
+ * A free list that breaks is worse than a bump pointer that leaks -- it hands out
+ * one block twice -- so the bench asks this after each app open rather than trust
+ * that the run did not crash.  Returns NULL when the pool holds. */
+#if BTRON_PS2_BENCH
+static const char *ps2_heap_check(void)
+{
+    size_t covered = 0;
+    const ps2_blk *prev = NULL;
+    unsigned n = 0;
+
+    if (!s_heap_list) return NULL;
+    if ((const uint8_t *)s_heap_list != s_ps2_heap) return "first block is not the array";
+
+    for (const ps2_blk *b = s_heap_list; b; prev = b, b = b->next) {
+        const uint8_t *self = (const uint8_t *)b;
+
+        if (++n > PS2_HEAP_BLOCKS_MAX) return "more blocks than the pool can hold (cycle)";
+        /* Before the arithmetic below, whose bounds would wrap on a corrupt size. */
+        if (b->size > PS2_HEAP_SIZE) return "block larger than the whole pool";
+        if (self < s_ps2_heap || self + PS2_HEAP_HDR + b->size > s_ps2_heap + PS2_HEAP_SIZE)
+            return "block outside the array";
+        if (b->size % PS2_HEAP_ALIGN) return "block size not a multiple of the alignment";
+        if (prev) {
+            /* Equality is the normal case: a block begins where the one below it ends. */
+            if (self < (const uint8_t *)prev + PS2_HEAP_HDR + prev->size) return "blocks overlap";
+            if (!prev->used && !b->used) return "two adjacent free blocks never coalesced";
+        }
+        covered += PS2_HEAP_HDR + b->size;
+    }
+    if (covered != PS2_HEAP_SIZE) return "block sizes do not account for the pool";
+    return NULL;
+}
+
+/* The list itself, for the row after a check that says something is wrong: where
+ * each block starts, how big it is, and whether it is spoken for. */
+static void ps2_heap_dump(void)
+{
+    unsigned n = 0;
+
+    for (const ps2_blk *b = s_heap_list; b && n < 40u; b = b->next, n++)
+        ps2_kprintf("[HEAP]  b%-2d 0x%x %u B %s\n", n, (unsigned int)(uintptr_t)b,
+                    (unsigned int)b->size, b->used ? "used" : "free");
+}
+#endif
 
 void* Imalloc(size_t size)
 {
     if (size == 0) return NULL;
-    size = (size + 15) & ~15; /* 16-byte alignment */
-    if (s_ps2_heap_offset + size > PS2_HEAP_SIZE) {
-        return NULL;
+    size = (size + PS2_HEAP_ALIGN - 1u) & ~(size_t)(PS2_HEAP_ALIGN - 1u);
+    if (!s_heap_list) ps2_heap_init();
+
+    for (ps2_blk *b = s_heap_list; b; b = b->next) {
+        if (b->used || b->size < size) continue;
+
+        if (b->size >= size + PS2_HEAP_HDR + PS2_HEAP_ALIGN) {  /* split, keep the rest free */
+            ps2_blk *tail = (ps2_blk *)(void *)((uint8_t *)b + PS2_HEAP_HDR + size);
+            tail->next = b->next;
+            tail->size = b->size - size - PS2_HEAP_HDR;
+            tail->used = 0;
+            b->next = tail;
+            b->size = size;
+        }
+        b->used = 1;
+        s_heap_used += b->size;
+        if (s_heap_used > s_heap_peak) s_heap_peak = s_heap_used;
+
+        if (b->size >= PS2_HEAP_LOGLIM) {
+            ps2_kprintf("[HEAP] +%u kB -> 0x%x used=%u kB peak=%u kB largest_free=%u kB\n",
+                        (unsigned int)(b->size / 1024u), (unsigned int)(uintptr_t)(b + 1),
+                        (unsigned int)(s_heap_used / 1024u), (unsigned int)(s_heap_peak / 1024u),
+                        (unsigned int)(ps2_heap_largest_free() / 1024u));
+        }
+        return (void *)(b + 1);
     }
-    void *ptr = &s_ps2_heap[s_ps2_heap_offset];
-    s_ps2_heap_offset += size;
-    return ptr;
+
+    ps2_kprintf("[HEAP] out of memory asking %u kB: used=%u kB in %u kB, largest free hole %u kB\n",
+                (unsigned int)(size / 1024u), (unsigned int)(s_heap_used / 1024u),
+                (unsigned int)(PS2_HEAP_SIZE / 1024u),
+                (unsigned int)(ps2_heap_largest_free() / 1024u));
+    return NULL;
 }
 
 void* Icalloc(size_t nmemb, size_t size)
@@ -84,7 +226,32 @@ void* Icalloc(size_t nmemb, size_t size)
 
 void Ifree(void *ptr)
 {
-    (void)ptr;
+    if (!ptr) return;
+
+    for (ps2_blk *b = s_heap_list, *prev = NULL; b; prev = b, b = b->next) {
+        if ((void *)(b + 1) != ptr) continue;
+        if (!b->used) break;                    /* already free: do not double-return */
+
+        b->used = 0;
+        s_heap_used -= b->size;
+        if (b->size >= PS2_HEAP_LOGLIM) {
+            ps2_kprintf("[HEAP] -%u kB at 0x%x returned, used=%u kB\n",
+                        (unsigned int)(b->size / 1024u), (unsigned int)(uintptr_t)ptr,
+                        (unsigned int)(s_heap_used / 1024u));
+        }
+
+        if (b->next && !b->next->used) {        /* absorb the free block above */
+            ps2_blk *n = b->next;
+            b->size += PS2_HEAP_HDR + n->size;
+            b->next = n->next;
+        }
+        if (prev && !prev->used) {              /* and the one below, now adjacent */
+            prev->size += PS2_HEAP_HDR + b->size;
+            prev->next = b->next;
+        }
+        return;
+    }
+    ps2_kprintf("[HEAP] free(0x%x) is not a pool block\n", (unsigned int)(uintptr_t)ptr);
 }
 
 void* malloc(size_t sz) { return Imalloc(sz); }
@@ -111,6 +278,31 @@ static int s_mouse_y = 300;
 static int s_shown_x = 400;
 static int s_shown_y = 300;
 static int s_gui_active = 0;
+
+#if BTRON_PS2_BENCH
+/* What the pass's present did, per region: the rect, whether it took the whole-canvas
+ * branch, and whether the sprite append ran and where it drew.  The cursor phase needs
+ * all four to tell "no band covered the sprite" from "the band ran and the composite
+ * did not put the sprite back" -- the two look identical in the surfaces afterwards. */
+#define PS2_PAINT_TRACE_MAX 8
+static int      s_paint_union[4];
+static int      s_paint_rect[PS2_PAINT_TRACE_MAX][4];
+static int      s_paint_full[PS2_PAINT_TRACE_MAX];
+static int      s_paint_appended[PS2_PAINT_TRACE_MAX];
+static int      s_paint_appended_at[PS2_PAINT_TRACE_MAX][2];
+static unsigned s_paint_pix[PS2_PAINT_TRACE_MAX];
+/* The sprite's nine-pixel signature read out of the canvas on both sides of the append.
+ * pre=0 post=1 is the append landing.  post=0 with appended=1 is the writer not writing,
+ * which is what a broken call looks like: the append is a five-argument call, and before
+ * the whole image was given one O32 calling convention its fifth argument (the canvas
+ * height) arrived as garbage from this file, so every row failed its own clip test and
+ * the sprite appeared only on a whole-canvas pass, drawn from inside desktop.c. */
+static int      s_paint_sig[PS2_PAINT_TRACE_MAX];
+static int      s_paint_pre[PS2_PAINT_TRACE_MAX];
+static int      s_paint_post[PS2_PAINT_TRACE_MAX];
+static uint32_t s_paint_calls;
+static BOOL ps2_cursor_sig_at(const uint32_t *p, int x, int y);
+#endif
 
 /* The guest's own px-per-count gain, 8.8 fixed point where 256 is verbatim.  Each
  * source profile installs a default for it and `sens` at the prompt overrides it
@@ -493,8 +685,43 @@ static void ps2_paint_region(GDEV *screen, int x0, int y0, int x1, int y1, int f
 {
     const uint32_t t0 = ps2_count_read();
 
+#if BTRON_PS2_BENCH
+    const int s_paint_i = (int)(s_paint_calls < PS2_PAINT_TRACE_MAX ? s_paint_calls
+                                                                    : PS2_PAINT_TRACE_MAX - 1u);
+    if (s_paint_calls == 0u) {
+        s_paint_union[0] = x0;  s_paint_union[1] = y0;
+        s_paint_union[2] = x1;  s_paint_union[3] = y1;
+    } else {
+        if (x0 < s_paint_union[0]) s_paint_union[0] = x0;
+        if (y0 < s_paint_union[1]) s_paint_union[1] = y0;
+        if (x1 > s_paint_union[2]) s_paint_union[2] = x1;
+        if (y1 > s_paint_union[3]) s_paint_union[3] = y1;
+    }
+    s_paint_rect[s_paint_i][0] = x0;  s_paint_rect[s_paint_i][1] = y0;
+    s_paint_rect[s_paint_i][2] = x1;  s_paint_rect[s_paint_i][3] = y1;
+    s_paint_full[s_paint_i] = full;
+    s_paint_appended[s_paint_i] = 0;
+    s_paint_appended_at[s_paint_i][0] = s_paint_appended_at[s_paint_i][1] = -1;
+    s_paint_sig[s_paint_i] = -1;
+    s_paint_pre[s_paint_i] = s_paint_post[s_paint_i] = -1;
+    s_paint_pix[s_paint_i] = 0u;
+    s_paint_calls++;
+#endif
+
     if (full) {
         workbench_render(screen, PS2_SCREEN_WIDTH, PS2_SCREEN_HEIGHT);
+#if BTRON_PS2_BENCH
+        s_paint_appended[s_paint_i] = 2;   /* the canvas composite draws the sprite itself */
+        {
+            H fmx = 0, fmy = 0;
+            get_baremetal_mouse_pos(&fmx, &fmy);
+            s_paint_appended_at[s_paint_i][0] = (int)fmx;
+            s_paint_appended_at[s_paint_i][1] = (int)fmy;
+            s_paint_pix[s_paint_i] = (unsigned)(uintptr_t)screen->pixels;
+            s_paint_sig[s_paint_i] = ps2_cursor_sig_at((const uint32_t *)screen->pixels,
+                                                       (int)fmx, (int)fmy);
+        }
+#endif
     } else {
         /* The same composite clipped to the region.  workbench_render_damage()
          * leaves out the menu overlays and the sprite by design, and a banded pass
@@ -509,8 +736,26 @@ static void ps2_paint_region(GDEV *screen, int x0, int y0, int x1, int y1, int f
         if (g_cursor_in_backbuffer) {
             H mx = 0, my = 0;
             get_baremetal_mouse_pos(&mx, &my);
+#if BTRON_PS2_BENCH
+            /* The signature read on both sides of the append, out of the very buffer the
+             * append is given: post=0 while appended=1 means the writer did not write,
+             * and pre=1 would mean the damage composite had not erased the old copy. */
+            s_paint_pre[s_paint_i] = ps2_cursor_sig_at((const uint32_t *)screen->pixels, mx, my);
+#endif
             draw_baremetal_mouse_cursor(screen, mx, my, PS2_SCREEN_WIDTH, PS2_SCREEN_HEIGHT);
+#if BTRON_PS2_BENCH
+            s_paint_post[s_paint_i] = ps2_cursor_sig_at((const uint32_t *)screen->pixels, mx, my);
+            s_paint_appended[s_paint_i] = 1;
+            s_paint_appended_at[s_paint_i][0] = (int)mx;
+            s_paint_appended_at[s_paint_i][1] = (int)my;
+            s_paint_pix[s_paint_i] = (unsigned)(uintptr_t)screen->pixels;
+#endif
         }
+#if BTRON_PS2_BENCH
+        else {
+            s_paint_appended[s_paint_i] = 0;
+        }
+#endif
     }
     const uint32_t t1 = ps2_count_read();
     blit_backbuffer_rect_to_ps2fb(x0, y0, x1, y1);
@@ -1745,7 +1990,9 @@ static void ps2_shell_exec(const char *cmd)
         ps2_kprintf("  3  ps2_sio_shell    4  WAIT   0x01FC0000\n");
     } else if (tkl_strcmp(cmd, "mem") == 0) {
         ps2_kprintf("RDRAM Total : 33554432 bytes (32 MB)\n");
-        ps2_kprintf("Kernel Heap :  8388608 bytes (8 MB, used: %u)\n", (unsigned int)s_ps2_heap_offset);
+        ps2_kprintf("Kernel Heap :  %u bytes (%u MB, used: %u, largest hole: %u)\n",
+                    (unsigned int)PS2_HEAP_SIZE, (unsigned int)(PS2_HEAP_SIZE / (1024u * 1024u)),
+                    (unsigned int)s_heap_used, (unsigned int)ps2_heap_largest_free());
         ps2_kprintf("VRAM eDRAM  :  4194304 bytes (4 MB)\n");
     } else if (tkl_strcmp(cmd, "status") == 0) {
         ps2_kprintf("Mouse Cursor: (%d, %d)\n", s_mouse_x, s_mouse_y);
@@ -2083,8 +2330,11 @@ void btron_core_banner(void) {
 
 void btron_core_mem_log(void) {
     ps2_kprintf("[MEM] 32 MB RDRAM: 0x00000000-0x01ffffff  GS regs 0x12000000  ohci 0x1f801600\n");
-    ps2_kprintf("[MEM] 8 MB kernel heap pool, %u bytes used  canvas 0x%08x (uncached alias 0x%08x)\n",
-                (unsigned int)s_ps2_heap_offset,
+    ps2_kprintf("[MEM] %u MB kernel heap pool, %u bytes used (%u kB peak, largest hole %u kB)  canvas 0x%08x (uncached alias 0x%08x)\n",
+                (unsigned int)(PS2_HEAP_SIZE / (1024u * 1024u)),
+                (unsigned int)s_heap_used,
+                (unsigned int)(s_heap_peak / 1024u),
+                (unsigned int)(ps2_heap_largest_free() / 1024u),
                 (unsigned)(uintptr_t)s_desktop_backbuffer,
                 (unsigned)(((uintptr_t)s_desktop_backbuffer) | 0x20000000u));
 }
@@ -2390,92 +2640,174 @@ static void ps2_bench_click(GDEV *screen)
                                    : "NOT IN THE QUEUE -- the edge was accepted by snd_evt and never came back out"));
 }
 
+/* The sprite's own nine leading pixels, straight out of cur_mask[] and cur_outline[] in
+ * desktop.c: row 0 white,black; row 1 white,white,black; row 2 white,white,white,black.
+ * A single white-then-black pair is not enough to call it the cursor -- window text is
+ * exactly that pattern, and the first version of this probe reported a hit at 468,106
+ * where no cursor is.  Nine pixels over three rows in that order is nothing else this
+ * desktop composes.  COLOR_WHITE and COLOR_BLACK both survive the ARGB -> RGBA byte
+ * swap the present does, so one test reads either surface. */
+static BOOL ps2_cursor_sig_at(const uint32_t *p, int x, int y)
+{
+    const uint32_t W = (uint32_t)COLOR_WHITE, B = (uint32_t)COLOR_BLACK;
+
+    if (x + 4 >= PS2_SCREEN_WIDTH || y + 3 >= PS2_SCREEN_HEIGHT) return FALSE;
+
+    const uint32_t *r0 = p + (uint32_t)y * PS2_SCREEN_WIDTH + (uint32_t)x;
+    const uint32_t *r1 = r0 + PS2_SCREEN_WIDTH;
+    const uint32_t *r2 = r1 + PS2_SCREEN_WIDTH;
+
+    return r0[0] == W && r0[1] == B &&
+           r1[0] == W && r1[1] == W && r1[2] == B &&
+           r2[0] == W && r2[1] == W && r2[2] == W && r2[3] == B;
+}
+
+/* Every hit of that signature on a surface, up to `want`, as x,y pairs.  A whole
+ * canvas walk is 480,000 tests; the bench has no frame budget, a live pass does not. */
+static int ps2_cursor_scan(const uint32_t *p, int *out, int want)
+{
+    int n = 0;
+
+    for (int y = 0; y < PS2_SCREEN_HEIGHT && n < want; y++) {
+        for (int x = 0; x < PS2_SCREEN_WIDTH && n < want; x++) {
+            if (!ps2_cursor_sig_at(p, x, y)) continue;
+            out[2 * n] = x;  out[2 * n + 1] = y;
+            n++;
+        }
+    }
+    return n;
+}
+
 /* ── Cursor phase: does the sprite reach the screen memory at all? ───────────
  *
- * "The mouse is not even visible on move" has three authors on this target: the
- * sprite is never drawn into s_desktop_backbuffer, it is drawn but the pass's present
- * region misses it, or it reaches the GS frame buffer and the display setup does not
- * show it.  The guest can separate the first two by itself, because both surfaces are
- * plain RDRAM it owns and both are readable after the pass.
+ * "The mouse is not even visible on move" has three authors on this target: the sprite
+ * is never drawn into s_desktop_backbuffer, it is drawn but the pass's present region
+ * misses it, or it reaches the GS frame buffer and the display setup does not show it.
+ * The guest can separate the first two by itself, because both surfaces are plain RDRAM
+ * it owns and both are readable after the pass -- which is why this phase asks where the
+ * sprite is, rather than whether the user can see it.
  *
- * The pattern read is the sprite's own top row: cur_mask[] gives x=0 and cur_outline[]
- * x=1, so the pair is COLOR_WHITE then COLOR_BLACK at the parked position.  Neither
- * surface is empty of those colours -- window borders are black and their highlights
- * white -- which is why this reads two parks, not one: the pair has to leave the first
- * spot and appear at the second.  A light pixel that does not follow the cursor is not
- * the cursor. */
+ * The author it found on 2026-10-09 was none of those three and is not in this file:
+ * the banded append is a five-argument call into desktop.c, the image was linked from
+ * half -march=mips3 and half -march=mips2 objects, and those two pass argument five in
+ * different places ($t0 versus the stack), so the sprite's canvas height arrived as
+ * garbage and every row of the draw failed its own clip.  A whole-canvas pass still
+ * showed the pointer, because that branch draws it from inside desktop.c, where the call
+ * stays within one ISA.  The per-region pre=/post= pair is what distinguishes that
+ * failure from a present that misses: post=0 with the append flagged as run is the
+ * writer not writing, and the verdict says so by name.  The link is one calling
+ * convention now (see the ABI note in the Makefile), which is what the post=1 rows in a
+ * current run say. */
 static void ps2_bench_cursor(GDEV *screen)
 {
     static const int park[2][2] = { { 300, 320 }, { 420, 320 } };
-    uint32_t *fb = ps2_gs_get_framebuffer();
+    const uint32_t *bb = (const uint32_t *)s_desktop_backbuffer;
+    const uint32_t *fb = ps2_gs_get_framebuffer();
     int moves, buttons, px = -1, py = -1;
-    int found[2] = { 0, 0 };
+    int hb[8], hf[8];
+    int bare_bb = 0, bare_fb = 0, elsewhere = 0, append_failed = 0;
 
-    ps2_kprintf("\n[BENCH] cursor presence -- sprite in the backbuffer, then in the GS frame buffer\n");
+    ps2_kprintf("\n[BENCH] cursor presence -- where, if anywhere, is the sprite drawn?\n");
+    /* The two surfaces by address, so that a per-region `pixels=` below can be compared
+     * with the one this phase reads without another build. */
+    ps2_kprintf("[BENCH] cursor: surfaces bb=0x%x fb=0x%x\n",
+                (unsigned)(uintptr_t)bb, (unsigned)(uintptr_t)fb);
 
     for (int k = 0; k < 2; k++) {
         const int x = park[k][0], y = park[k][1];
-        const uint32_t base = (uint32_t)y * PS2_SCREEN_WIDTH + (uint32_t)x;
         H bmx = 0, bmy = 0;
 
-        ptr_cal_set(x, y);
+        /* Drain before parking as well as after: the queue and this port's report
+         * accumulator both still hold the earlier phases' motion, and workbench_process_event
+         * rewrites desktop.c's position from every event it pops.  Parking into that
+         * backlog is how the first run of this probe came to paint at 326,180 while
+         * testing at the 300,320 it had asked for. */
         ps2_bench_drain(screen, &moves, &buttons, &px, &py);
+        ptr_cal_set(x, y);
+        s_paint_calls = 0u;
         ps2_gui_pass(screen);
+        const uint32_t bands = s_paint_calls;
 
-        const uint32_t bb0 = s_desktop_backbuffer[base];
-        const uint32_t bb1 = s_desktop_backbuffer[base + 1];
-        const uint32_t gf0 = fb[base];
-        const uint32_t gf1 = fb[base + 1];
-        const int drawn = (bb0 == (uint32_t)COLOR_WHITE && bb1 == (uint32_t)COLOR_BLACK);
-        const int presented = (gf0 == 0xFFFFFFFFu && gf1 == 0xFF000000u);
-
-        /* Two positions in one row is the divergence that would explain a sprite
-         * missing from a band that was certainly painted: the composite draws the
-         * sprite from desktop.c's own g_mouse_x/y, while the band is computed from
-         * this file's s_mouse_x/y.  Both are printed, and so is the flag the
-         * composite tests before drawing at all. */
+        /* Tested at desktop.c's position, because that is the only coordinate either
+         * render branch uses: workbench_render() and the banded branch both ask
+         * get_baremetal_mouse_pos() for the sprite's top-left.  s_mouse (what the band
+         * math swept) and s_shown (what the port believes was last presented) are
+         * printed next to it, so a disagreement between the three is readable without
+         * another build -- and a sprite that is genuinely absent at the drawn position
+         * cannot be excused by one. */
         get_baremetal_mouse_pos(&bmx, &bmy);
-        found[k] = drawn && presented;
-        ps2_kprintf("[BENCH] cursor: park %d,%d shown=%d,%d bare=%d,%d in_bb=%d bb=%08x,%08x fb=%08x,%08x drawn=%d presented=%d\n",
-                    x, y, s_shown_x, s_shown_y, (int)bmx, (int)bmy, g_cursor_in_backbuffer,
-                    (unsigned)bb0, (unsigned)bb1, (unsigned)gf0, (unsigned)gf1,
-                    drawn, presented);
+        bare_bb = ps2_cursor_sig_at(bb, (int)bmx, (int)bmy);
+        bare_fb = ps2_cursor_sig_at(fb, (int)bmx, (int)bmy);
 
-        /* And where did the pattern go, if not here?  Scanning the swept box the pass
-         * owed this move answers that without a second build: a hit at another
-         * coordinate is a position disagreement, no hit anywhere in the box is the
-         * sprite never being drawn. */
-        if (!drawn) {
-            int hx = -1, hy = -1;
-            for (int sy = y - 24; sy <= y + 24 && hx < 0; sy++) {
-                if (sy < 0 || sy >= PS2_SCREEN_HEIGHT) continue;
-                for (int sx = x - 136; sx <= x + 16 && hx < 0; sx++) {
-                    if (sx < 0 || sx + 1 >= PS2_SCREEN_WIDTH) continue;
-                    const uint32_t i = (uint32_t)sy * PS2_SCREEN_WIDTH + (uint32_t)sx;
-                    if (s_desktop_backbuffer[i] == (uint32_t)COLOR_WHITE &&
-                        s_desktop_backbuffer[i + 1] == (uint32_t)COLOR_BLACK) {
-                        hx = sx;  hy = sy;
-                    }
-                }
-            }
-            ps2_kprintf("[BENCH] cursor: white/black pair found at %d,%d (park was %d,%d)\n",
-                        hx, hy, x, y);
+        const int nb = bare_bb ? 0 : ps2_cursor_scan(bb, hb, 4);
+        const int nf = bare_fb ? 0 : ps2_cursor_scan(fb, hf, 4);
+        elsewhere += (!bare_bb && nb > 0);
+
+        ps2_kprintf("[BENCH] cursor: park %d,%d drawn=%d,%d mouse=%d,%d shown=%d,%d in_bb=%d | sig at drawn: bb=%d fb=%d\n",
+                    x, y, (int)bmx, (int)bmy, s_mouse_x, s_mouse_y, s_shown_x, s_shown_y,
+                    g_cursor_in_backbuffer, bare_bb, bare_fb);
+        /* A whole-canvas walk is only worth its cost when the sprite is not where the
+         * port says it drew it: then the row names the places it is instead. */
+        if (!bare_bb || !bare_fb) {
+            ps2_kprintf("[BENCH] cursor: canvas hits bb=%d(%d,%d %d,%d %d,%d %d,%d) fb=%d(%d,%d %d,%d %d,%d %d,%d)\n",
+                        nb, hb[0], hb[1], hb[2], hb[3], hb[4], hb[5], hb[6], hb[7],
+                        nf, hf[0], hf[1], hf[2], hf[3], hf[4], hf[5], hf[6], hf[7]);
+        }
+        /* What the pass actually covered.  If its union does not contain the sprite's
+         * own box at the position that was drawn, the sprite is not missing because the
+         * composite forgot to draw it -- the present never went there.  If it does and
+         * the signature is still absent, the draw itself is the thing not happening.
+         * (The union is a bounding box, so with more than one region it is generous;
+         * the region count is printed beside it for exactly that reason.) */
+        const int covers = bands > 0u &&
+                           s_paint_union[0] <= (int)bmx &&
+                           s_paint_union[1] <= (int)bmy &&
+                           s_paint_union[2] >= (int)bmx + 16 &&
+                           s_paint_union[3] >= (int)bmy + 16;
+        ps2_kprintf("[BENCH] cursor: pass made %u region(s), union %d,%d..%d,%d covers sprite %s\n",
+                    (unsigned int)bands,
+                    s_paint_union[0], s_paint_union[1], s_paint_union[2], s_paint_union[3],
+                    covers ? "YES" : "no");
+        /* One row per region of this pass.  `sprite=` is the position the cursor draw
+         * used inside that region (2 = the whole-canvas composite, which draws it too),
+         * so a sprite that is missing from the surfaces has a named region that failed
+         * to draw it rather than an inference from the pass's total. */
+        for (unsigned i = 0; i < bands && i < PS2_PAINT_TRACE_MAX; i++) {
+            ps2_kprintf("[BENCH] cursor:  r%u %d,%d..%d,%d full=%d sprite=%d at %d,%d\n",
+                        i,
+                        s_paint_rect[i][0], s_paint_rect[i][1],
+                        s_paint_rect[i][2], s_paint_rect[i][3],
+                        s_paint_full[i], s_paint_appended[i],
+                        s_paint_appended_at[i][0], s_paint_appended_at[i][1]);
+            ps2_kprintf("[BENCH] cursor:     pixels=0x%x | sig pre=%d post=%d\n",
+                        s_paint_pix[i], s_paint_pre[i], s_paint_post[i]);
+            if (s_paint_appended[i] == 1 && s_paint_post[i] == 0) append_failed = 1;
         }
 
-        /* Where the sprite was on the previous park must be clean by now: the band
-         * that erases the old copy is the same band that carries the new one. */
-        if (k == 1) {
-            const uint32_t old = (uint32_t)park[0][1] * PS2_SCREEN_WIDTH + (uint32_t)park[0][0];
-            ps2_kprintf("[BENCH] cursor: old park %d,%d now bb=%08x fb=%08x (expect no white/black pair)\n",
-                        park[0][0], park[0][1],
-                        (unsigned)s_desktop_backbuffer[old], (unsigned)fb[old]);
+        /* What is actually there, as a picture rather than a hex dump: W, B or . over
+         * the sprite's own 16x16 box.  The shape is unmistakable, and its absence is
+         * too -- which is the point of reading the grid instead of more numbers. */
+        if (!bare_bb) {
+            for (int r = 0; r < 16; r++) {
+                char line[20];
+                for (int c = 0; c < 16; c++) {
+                    const uint32_t v = bb[(uint32_t)(bmy + r) * PS2_SCREEN_WIDTH + (uint32_t)(bmx + c)];
+                    line[c] = (v == (uint32_t)COLOR_WHITE) ? 'W'
+                            : (v == (uint32_t)COLOR_BLACK) ? 'B' : '.';
+                }
+                line[16] = '\0';
+                ps2_kprintf("[BENCH] cursor bb  %2d %s\n", r, line);
+            }
         }
     }
 
     ps2_kprintf("[BENCH] cursor: %s\n",
-                found[0] && found[1] ? "sprite tracks the cursor into both surfaces -- what the user does not see is the display path, not this port's paint"
-                    : (found[0] != found[1] ? "sprite is in ONE surface only -- the present region or the blit misses it"
-                                            : "sprite never forms the pattern -- it is not being drawn here"));
+                (bare_bb && bare_fb)
+                    ? "sprite is at the drawn position in BOTH surfaces -- the guest paints and presents it, so an invisible cursor is downstream of this port's paint"
+                    : (bare_bb ? "sprite is in the backbuffer but not in the GS frame buffer -- the present region or the blit misses it"
+                               : (append_failed ? "the append ran and wrote nothing -- a five-argument call into desktop.c whose fifth argument arrived corrupted, which is what a mixed-MIPS-ABI link does (see the ABI note in the Makefile)"
+                                                : (elsewhere ? "sprite is on the canvas but not at the position the append read back -- the two coordinate sources disagree"
+                                                             : "sprite is nowhere on the canvas -- it is not being drawn"))));
 }
 
 /* ── Launch phase: does a launcher row open the application it names? ────────
@@ -2564,6 +2896,100 @@ static void ps2_bench_press(GDEV *screen)
     ps2_gui_pass(screen);
 }
 
+/* The blit's own ARGB->CT32 transform, so a backbuffer pixel and the frame buffer
+ * pixel it became can be compared byte for byte. */
+static uint32_t ps2_bench_swizzle(uint32_t c)
+{
+    return ((c & 0x00FF0000u) >> 16) | (c & 0x0000FF00u) |
+           ((c & 0x000000FFu) << 16) | (c & 0xFF000000u);
+}
+
+/* ── Launcher ink: is a row drawn, and is what was drawn presented? ──────────
+ *
+ * "xmb is not added to start launch" is a claim about the screen, and the guest can
+ * test the two halves of it separately with the same method that closed the cursor
+ * thread: read the compositor's canvas and the frame buffer the GS is scanning, over
+ * each row band.  A band with ink in bb and no ink in fb is a present that missed.
+ * A band with no ink in either is a row that was never drawn -- and a band that is
+ * blank here while the item table has a label for it means the label, not the row,
+ * is what the user cannot find.
+ *
+ * The pointer is parked far outside the menu first.  Motion alone does not dismiss
+ * the launcher (only a press does, tracker_handle_mouse_down), and a hover-filled
+ * NAVY row would report ink for its fill rather than for its glyphs. */
+static void ps2_bench_menu_ink(GDEV *screen, int picture_row_a, int picture_row_b)
+{
+    const TRACKER *t = tracker_get_state();
+    const uint32_t *bb = (const uint32_t *)s_desktop_backbuffer;
+    const uint32_t *fb = ps2_gs_get_framebuffer();
+    int moves, buttons, bx = -1, by = -1;
+    int blank = 0, stale_total = 0;
+
+    if (!tracker_is_menu_open()) {
+        ps2_kprintf("[BENCH] menu ink: launcher is closed, nothing to read\n");
+        return;
+    }
+
+    ptr_cal_set(PS2_SCREEN_WIDTH - 40, PS2_SCREEN_HEIGHT - 40);
+    ps2_bench_drain(screen, &moves, &buttons, &bx, &by);
+    ps2_gui_pass(screen);
+
+    const int x0 = t->menu_rect.left + 5;
+    const int x1 = t->menu_rect.right - 2;
+
+    ps2_kprintf("[BENCH] menu ink: menu %d,%d..%d,%d, %d row(s), band x %d..%d, hover=%d\n",
+                t->menu_rect.left, t->menu_rect.top, t->menu_rect.right, t->menu_rect.bottom,
+                (int)t->item_count, x0, x1, (int)t->hover_index);
+
+    for (H i = 0; i < t->item_count; i++) {
+        const int y0 = t->menu_rect.top + 3 + i * TRACKER_ITEM_HEIGHT;
+        int ink_bb = 0, ink_fb = 0, stale = 0;
+
+        for (int y = y0; y < y0 + TRACKER_ITEM_HEIGHT && y < PS2_SCREEN_HEIGHT; y++) {
+            for (int x = x0; x < x1 && x < PS2_SCREEN_WIDTH; x++) {
+                const uint32_t b = bb[(uint32_t)y * PS2_SCREEN_WIDTH + (uint32_t)x];
+                const uint32_t f = fb[(uint32_t)y * PS2_SCREEN_WIDTH + (uint32_t)x];
+                if (b != (uint32_t)COLOR_WHITE) ink_bb++;
+                if (f != (uint32_t)COLOR_WHITE) ink_fb++;
+                if (f != ps2_bench_swizzle(b)) stale++;
+            }
+        }
+        ps2_kprintf("[BENCH] menu ink: r%-2d type=%-2d y=%-3d bb_ink=%-5d fb_ink=%-5d stale=%d\n",
+                    i, (int)t->items[i].type, y0, ink_bb, ink_fb, stale);
+        if (t->items[i].type != TRACKER_CMD_SEPARATOR && i != t->hover_index && ink_bb == 0) blank++;
+        stale_total += stale;
+
+        if (i == picture_row_a || i == picture_row_b) {
+            for (int r = 0; r < TRACKER_ITEM_HEIGHT; r += 2) {
+                char line[128];
+                int n = 0;
+
+                for (int x = x0; x < x1 && n < 120; x += 4) {
+                    int lit = 0;
+                    for (int sx = 0; sx < 4 && !lit; sx++)
+                        for (int sy = 0; sy < 2 && !lit; sy++) {
+                            const int px = x + sx, py = y0 + r + sy;
+                            if (px >= PS2_SCREEN_WIDTH || py >= PS2_SCREEN_HEIGHT) continue;
+                            if (bb[(uint32_t)py * PS2_SCREEN_WIDTH + (uint32_t)px] != (uint32_t)COLOR_WHITE)
+                                lit = 1;
+                        }
+                    line[n++] = lit ? '#' : '.';
+                }
+                line[n] = '\0';
+                ps2_kprintf("[BENCH] menu ink  r%-2d %2d %s\n", i, r, line);
+            }
+        }
+    }
+
+    ps2_kprintf("[BENCH] menu ink: %s\n",
+                blank > 0
+                    ? "a labelled row is blank in the compositor's own canvas -- the item exists but its label never reaches the screen, which is what \"not added to the launcher\" looks like from outside"
+                    : (stale_total > 0
+                        ? "every row is drawn, and some band of the frame buffer does not match the canvas -- the present misses part of the menu"
+                        : "every labelled row carries ink in the canvas and the frame buffer matches it pixel for pixel -- the launcher rows are on the display surface"));
+    ps2_kprintf("[BENCH] menu ink: blank_rows=%d stale_pixels=%d\n", blank, stale_total);
+}
+
 static void ps2_bench_launch(GDEV *screen)
 {
     int row, hover, rx, ry;
@@ -2590,7 +3016,7 @@ static void ps2_bench_launch(GDEV *screen)
                                 : "row landed and dispatched, no gterm window in the table");
 
     if (ps2_bench_launcher_open(screen)) {
-        int xmb_hover, xmb_row, xr, yr;
+        int xmb_hover, xmb_row = -1, xr, yr;
         if (ps2_bench_row(screen, TRACKER_CMD_XMB, &xmb_row, &xmb_hover, &xr, &yr)) {
             ps2_kprintf("[BENCH] launch: xmb row=%d xy=%d,%d hover=%d opener=%s\n",
                         xmb_row, xr, yr, xmb_hover,
@@ -2598,8 +3024,16 @@ static void ps2_bench_launch(GDEV *screen)
         } else {
             ps2_kprintf("[BENCH] launch: no 横断メディアメニュー (XMB) row in the launcher\n");
         }
-        ptr_cal_set(400, 450);            /* outside the menu: dismiss, as a user would */
+        /* Dismiss and reopen before reading the bands: a fresh tracker_open_menu()
+         * leaves hover on row 0 only, so an ink count is ink for the label and not for
+         * a NAVY fill on the row the pointer was last parked on. */
+        ptr_cal_set(400, 450);
         ps2_bench_press(screen);
+        if (ps2_bench_launcher_open(screen)) {
+            ps2_bench_menu_ink(screen, row, xmb_row);
+            ptr_cal_set(400, 450);            /* outside the menu: dismiss, as a user would */
+            ps2_bench_press(screen);
+        }
     }
     ps2_kprintf("[BENCH] launch: menu left %d\n", (int)tracker_is_menu_open());
 }
@@ -2623,8 +3057,41 @@ static void ps2_bench_launch(GDEV *screen)
 static int      s_bench_app_active; /* the phase is running, so count its passes */
 static uint32_t s_bench_app_left;   /* frames owed until the injected Escape */
 static uint32_t s_bench_app_made;
+static uint32_t s_bench_app_t0;     /* Count at the open, for the frame heartbeat */
 
 extern WND *open_xmb_window(void);
+
+/* "xmb still black" measured instead of reported: xb_paint() renders through the GL
+ * backend into the window's own device pixels, so a black bar means the rasterizer
+ * wrote nothing there.  open_xmb_window() is idempotent through its live handle, so
+ * asking it for the window mid-loop costs nothing but a top_wnd(). */
+static void ps2_bench_xmb_surface(const char *when)
+{
+    const WND *w = open_xmb_window();
+    const GDEV *dev = w ? w->dev : NULL;
+
+    if (!dev || !dev->pixels) {
+        ps2_kprintf("[BENCH] xmb surface %s: no window device to read\n", when);
+        return;
+    }
+
+    unsigned int black = 0, other = 0, first = 0;
+    int x0 = -1, x1 = -1, y0 = -1, y1 = -1;
+    for (int y = 0; y < dev->height; y++) {
+        for (int x = 0; x < dev->width; x++) {
+            const uint32_t v = dev->pixels[(uint32_t)y * (uint32_t)dev->width + (uint32_t)x];
+            if (v == (uint32_t)COLOR_BLACK) { black++; continue; }
+            other++;
+            if (!first) first = v;
+            if (x0 < 0 || x < x0) x0 = x;
+            if (x > x1) x1 = x;
+            if (y0 < 0 || y < y0) y0 = y;
+            if (y > y1) y1 = y;
+        }
+    }
+    ps2_kprintf("[BENCH] xmb surface %s: %dx%d black=%u other=%u first_colour=0x%08x box=%d,%d..%d,%d\n",
+                when, dev->width, dev->height, black, other, first, x0, y0, x1, y1);
+}
 
 static void ps2_bench_app(GDEV *screen, uint32_t frames)
 {
@@ -2638,11 +3105,27 @@ static void ps2_bench_app(GDEV *screen, uint32_t frames)
     s_bench_app_active = 1;
     s_bench_app_left = frames;
     s_bench_app_made = 0u;
+    s_bench_app_t0 = t_start;
     /* Blocks until the injected Escape has closed the window: the frame loop is the
-     * body's from here, not the session loop's. */
+     * body's from here, not the session loop's.  The two heap rows are the pool's
+     * state either side of open_xmb_window(), largest hole included -- a GL surface
+     * needs one contiguous block, so "bytes free" alone can be an innocent answer. */
+    const char *pool_bad = ps2_heap_check();
+    ps2_kprintf("[BENCH] heap before xmb: used=%u of %u kB, largest hole %u kB, pool %s\n",
+                (unsigned int)(s_heap_used / 1024u), (unsigned int)(PS2_HEAP_SIZE / 1024u),
+                (unsigned int)(ps2_heap_largest_free() / 1024u),
+                pool_bad ? pool_bad : "sound");
+    if (pool_bad) ps2_heap_dump();
     w = open_xmb_window();
     s_bench_app_active = 0;
     s_bench_app_left = 0u;
+    pool_bad = ps2_heap_check();
+    ps2_kprintf("[BENCH] heap after  xmb: used=%u of %u kB, largest hole %u kB (peak %u kB), pool %s\n",
+                (unsigned int)(s_heap_used / 1024u), (unsigned int)(PS2_HEAP_SIZE / 1024u),
+                (unsigned int)(ps2_heap_largest_free() / 1024u),
+                (unsigned int)(s_heap_peak / 1024u),
+                pool_bad ? pool_bad : "sound");
+    if (pool_bad) ps2_heap_dump();
 
     {
         /* passes * 1e6 / us, and not the tick form ps2_bench_move() uses: 60 frames
@@ -2774,7 +3257,21 @@ static void ps2_gui_pass(GDEV *screen)
      * because this is the only place a task-driven pass is known to have happened.
      * Injected before the dispatch below, so the key is consumed by the pass that
      * owes it and the body returns without one more frame. */
-    if (s_bench_app_active) s_bench_app_made++;
+    if (s_bench_app_active) {
+        s_bench_app_made++;
+        /* A heartbeat, because a phase that prints nothing for minutes is ambiguous
+         * between a renderer that is slow and one that is stuck, and the elapsed
+         * column is the number that tells them apart.  Sparse on purpose: the console
+         * write itself costs bus time, and this phase measures a frame. */
+        if (s_bench_app_made <= 3u || (s_bench_app_made % 10u) == 0u)
+            ps2_kprintf("[BENCH] xmb frame %u at %u ms\n",
+                        (unsigned int)s_bench_app_made,
+                        (unsigned int)(ps2_us_since(s_bench_app_t0) / 1000u));
+        /* Twice, because a surface that is black at frame 3 and full at frame 30 is a
+         * renderer that needed its textures baked, and one black both times never drew. */
+        if (s_bench_app_made == 3u)  ps2_bench_xmb_surface("frame 3 ");
+        if (s_bench_app_made == 30u) ps2_bench_xmb_surface("frame 30");
+    }
     if (s_bench_app_left && --s_bench_app_left == 0) {
         ps2_inject_key(BTRON_KEY_ESCAPE, 1);
         ps2_inject_key(BTRON_KEY_ESCAPE, 0);
@@ -3043,6 +3540,11 @@ void launch_ps2_desktop_session(void)
         s_gui_active = 0;
         return;
     }
+    /* The bare-metal init path leaves BTRON_DESKTOP zeroed, so an app that asks the
+     * desktop its size gets 0x0 and takes its own fallback -- xmb's is 960x600, which
+     * on this canvas is a window wider than the screen and 2 MB of surface and depth
+     * plane for a 1.6 MB client.  The [GL] backend row naming 952x564 was that bug. */
+    btron_desktop_note_size(PS2_SCREEN_WIDTH, PS2_SCREEN_HEIGHT);
     workbench_init(PS2_SCREEN_WIDTH);
 
     /* Initial paint & blit to GS eDRAM.  Timed and printed, because this is the
@@ -3166,10 +3668,12 @@ static void ps2_log_ohci_probe(const ps2_ohci_probe_t *p)
 }
 
 /* The USB driver's per-transfer row.  The record arrives as one pointer rather
- * than as arguments because the driver is one of the -march=mips3 objects and
- * this file is -march=mips2: those two disagree about the stack slots a call of
- * more than four arguments uses, and the first rows off this printed the fifth
- * argument as 0xffffff80.
+ * than as arguments for the reason the ABI note in the Makefile records: when
+ * this row was written the driver was a -march=mips3 object and this file a
+ * -march=mips2 one, those two disagreed about the stack slots a call of more
+ * than four arguments uses, and the first rows off this printed the fifth
+ * argument as 0xffffff80.  The image is one calling convention now, and the
+ * pointer stays because twelve fields do not travel well as arguments.
  *
  * `t` names which call of enumeration this was (0 ordinary, 1 SET_ADDRESS,
  * 2 the device descriptor read at address zero, 3 the same read at the assigned

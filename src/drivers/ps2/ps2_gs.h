@@ -15,7 +15,25 @@
 
 /* GS Privileged Registers (Direct Mapped Address: 0x12000000) */
 #define GS_BASE                 0x12000000UL
-#define GS_REG(offset)          (*(volatile uint64_t *)((uintptr_t)(GS_BASE + (offset))))
+
+/* A GS register is written and read as ONE 64-bit access: the GS latches a
+ * privileged register on a 64-bit store, so a split pair of 32-bit stores leaves
+ * the half that arrived first in the latch.  The port's C is built for a
+ * 32-bit-GPR MIPS (Makefile: the PS2 ABI note) and cannot emit an `sd`, so the
+ * access goes through ps2_gs_reg.s -- see its header for why that exception is
+ * placed there and not in a second ISA of C. */
+void ps2_gs_poke64(uint32_t addr, uint32_t lo, uint32_t hi);
+uint64_t ps2_gs_peek64(uint32_t addr);
+
+#define GS_REG_POKE(offset, value)                                    \
+    do {                                                              \
+        const uint64_t gs_reg_value_ = (uint64_t)(value);             \
+        ps2_gs_poke64((uint32_t)(GS_BASE + (offset)),                 \
+                      (uint32_t)gs_reg_value_,                        \
+                      (uint32_t)(gs_reg_value_ >> 32));               \
+    } while (0)
+#define GS_REG_PEEK(offset)                                           \
+    (ps2_gs_peek64((uint32_t)(GS_BASE + (offset))))
 
 #define GS_PMODE_OFFSET         0x0000
 #define GS_SMODE2_OFFSET        0x0020

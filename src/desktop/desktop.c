@@ -500,3 +500,15 @@ void draw_btron_pattern(uint32_t *fb, uint32_t w, uint32_t h) {
 BTRON_DESKTOP* get_btron_desktop(void) {
     return &g_desktop;
 }
+
+/* init_baremetal_desktop() builds the screen GDEV but, unlike init_desktop(), it
+ * leaves BTRON_DESKTOP zeroed -- so an app that asks the desktop how big it is gets
+ * 0x0 and falls back to its own hardcoded size.  On an 800x600 target that fallback
+ * is a 960x600 window: wider than the screen, and 2 MB of surface and depth plane
+ * for a 1.6 MB client.  A bare-metal port that wants its apps sized from the real
+ * desktop says so here. */
+void btron_desktop_note_size(H width, H height) {
+    g_desktop.width = width;
+    g_desktop.height = height;
+    g_desktop.running = TRUE;
+}

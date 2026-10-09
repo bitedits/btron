@@ -34,7 +34,7 @@ CC ?= gcc
 CFLAGS ?= -O2 -Wall -Wextra -std=c99 -Iinclude -Iinclude/gl -Isrc/gl -Iinclude/drivers -Isrc/kernel -Isrc/cores -Isrc/quake/include
 
 .PHONY: all posix qemu kernel tkernel sakamura foma uefi pc98 arm-elf arm64-elf m68k ps2 mips \
-        check-structure \
+        check-structure test-ps2-softfloat \
         html2tad book2tad tad_bin test test-kernel test-yoko test-yoko4 test-m68k test-mips test-ps2 test-foma test-foma-ui foma-screens \
         segui-screens \
         test-mozc test-editor test-hmi test-tad test-chat test-wylie verify test-fs test-chokanji test-quake test-replay \
@@ -80,7 +80,15 @@ endif
 
 # MIPS / PS2 Freestanding (Target 8: PS2 EE, Target 9: Malta / Magnum)
 MIPS_CC     ?= $(LLVM_CLANG) --target=mipsel-unknown-elf -march=mips32r2 -mabi=32 -ffreestanding -nostdlib
-PS2_CC      ?= $(LLVM_CLANG) --target=mipsel-unknown-elf -march=mips3 -mabi=32 -ffreestanding -nostdlib
+# -march=mips2, not mips3: one O32 calling convention across the whole image, and
+# still a subset of the R5900's MIPS III.  The ABI note under PS2_OBJS is the law.
+# -msoft-float, likewise for the whole image and likewise an ABI question: the
+# R5900 FPU is single-precision, so a hardware .d instruction is not merely slow, it
+# is illegal and does nothing at all.  Under this flag a floating value travels in
+# integer registers, so mixing it with a build that uses the FPU would corrupt every
+# float argument that crosses the boundary -- and src/drivers/ps2/ps2_builtins.c
+# supplies the runtime the link then needs.
+PS2_CC      ?= $(LLVM_CLANG) --target=mipsel-unknown-elf -march=mips2 -mabi=32 -msoft-float -ffreestanding -nostdlib
 MIPS_LD ?= $(if $(shell command -v mipsel-linux-gnu-ld 2>/dev/null),mipsel-linux-gnu-ld,$(LLD_BIN) -EL)
 
 # BCM283x bare-metal flags (TYPE_RPI=2 → BCM2836, Pi 2B, Cortex-A7)
@@ -1000,6 +1008,7 @@ PS2_GL_SRCS    = src/gl/gl_dispatch.c     \
 PS2_SRCS       = $(PS2_STARTUP)           \
                  src/cores/core_init.c    \
                  src/drivers/ps2/ps2_gs.c \
+                 src/drivers/ps2/ps2_builtins.c \
                  src/drivers/ps2/ps2_sio.c \
                  src/drivers/ps2/ps2_pad.c \
                  src/drivers/ps2/ps2_iopram.c \
@@ -1009,18 +1018,36 @@ PS2_SRCS       = $(PS2_STARTUP)           \
                  $(PS2_GL_SRCS)           \
                  src/kernel/libstr.c      \
                  $(COMMON_NO_SDL_SRCS)
-PS2_OBJS       = src/drivers/ps2/boot_ps2.ps2.o $(PS2_SRCS:.c=.ps2.o)
+PS2_OBJS       = src/drivers/ps2/boot_ps2.ps2.o         \
+                 src/drivers/ps2/ps2_gs_reg.ps2.o      \
+                 $(PS2_SRCS:.c=.ps2.o)
 
-# clang lays a 64-bit-GPR MIPS's O32 vararg save area out as one 8-byte slot per
-# register argument, but va_arg still walks it four bytes at a time, so every %s
-# in a format string swallows two slots and every later field on the line shifts
-# by a word.  Only the function that reads the save area has to agree with itself
-# -- passing a1..a3 and the 4-byte-spaced stack arguments is identical under both
-# ISAs -- so the two translation units that own a va_list here are built for a
-# 32-bit-GPR MIPS.  Everything else keeps -march=mips3, because the GS needs one
-# 64-bit (sd) write per privileged register and a mips2 build splits it in two.
-PS2_VARARG_OBJS = src/cores/core_ps2.ps2.o src/kernel/libstr.ps2.o
-$(PS2_VARARG_OBJS): PS2_CC := $(patsubst -march=mips3,-march=mips2,$(PS2_CC))
+# One calling convention for the whole PS2 image.  A 64-bit-GPR MIPS under O32
+# passes fixed arguments 5..8 in $t0..$t3 where a 32-bit-GPR MIPS puts them on
+# the stack, and it lays its vararg save area out in 8-byte slots while va_arg
+# still walks four bytes at a time.  Neither difference shows up inside one
+# translation unit, which is why -march=mips3 for most files and -march=mips2 for
+# the two that own a va_list looked harmless; but every fixed call of five or more
+# arguments crossing between them silently passed garbage, and so did every console
+# line printed by a mips3 file.  The cursor is what made it visible:
+# draw_baremetal_cursor_raw() takes five arguments, its fifth -- the canvas height
+# -- arrived as junk when core_ps2.c called it, `py >= h` rejected every row, and
+# the sprite vanished on the first banded pass after the whole-canvas repaint that
+# draws it from inside desktop.c, where the call stays mips3 -> mips3 (2026-10-09).
+#
+# mips2 is the side that has to win: it is the only O32 flavour whose vararg layout
+# agrees with the va_arg walk, and its instruction set is a subset of MIPS III, so
+# nothing illegal for the Emotion Engine is emitted.  (mips32r2 would be 32-bit-GPR
+# too, but clang may reach for ext/ins/clz/madd, which a R5900 does not have -- the
+# reason this port originally moved off it.)  The one thing that does need a 64-bit
+# instruction is the GS, which latches a privileged register on a single sd and
+# takes two writes if a mips2 build splits the store in half; that access lives in
+# src/drivers/ps2/ps2_gs_reg.s, whose three 32-bit arguments mean exactly the same
+# thing under either ISA, so it cannot be corrupted by a mixed link.  The other
+# thing a 32-bit-GPR MIPS cannot do is convert a double to or from a 64-bit integer
+# -- the FPU speaks 32-bit GPRs here, and so does the Emotion Engine's -- so clang
+# emits the O32 libcall names __floatdidf/__fixdfdi at the float-heavy files, and
+# src/drivers/ps2/ps2_builtins.c defines them for the -nostdlib link.
 
 %.ps2.o: %.s
 	$(PS2_CC) -c $< -o $@
@@ -1030,13 +1057,11 @@ $(PS2_VARARG_OBJS): PS2_CC := $(patsubst -march=mips3,-march=mips2,$(PS2_CC))
 
 # PS2 measurement build: the present/pointer bench lives only in core_ps2.c, so one
 # object is rebuilt with the define and the shipped btron-ps2.elf keeps its own
-# flags -- the artifact measured is not the artifact flashed.  It is built for a
-# 32-bit-GPR MIPS for the same va_list reason as above, and scripts/ps2_bench.sh
+# flags -- the artifact measured is not the artifact flashed.  scripts/ps2_bench.sh
 # runs it under PCSX2 -nogui, so the table needs no window and no hand.
 PS2_BENCH_OBJ  = src/cores/core_ps2.pbench.o
 PS2_BENCH_OBJS = $(PS2_BENCH_OBJ) $(filter-out src/cores/core_ps2.ps2.o,$(PS2_OBJS))
 PS2_BENCH_TARGET = btron-ps2-bench.elf
-$(PS2_BENCH_OBJ): PS2_CC := $(patsubst -march=mips3,-march=mips2,$(PS2_CC))
 # BENCH_APP=1 scripts/ps2_bench.sh additionally opens xmb.c and counts the frames the
 # task shim gives it.  Off by default: the app it opens does not reach its own exit yet
 # (see the phase's note in core_ps2.c), so the phase would end the run at its timeout
@@ -1139,6 +1164,28 @@ run-ps2: $(PS2_TARGET) ps2-cfg
 
 test-ps2: $(PS2_TARGET) $(PS2_ISO)
 	@./scripts/test_ps2.sh
+
+# The PS2 image is built -msoft-float (the R5900 FPU has no double-precision
+# instructions), so every floating-point operation in it runs through
+# src/drivers/ps2/ps2_builtins.c -- a file no PS2-independent test can reach,
+# because the compiler calls it by names that only exist at link time.  This
+# compiles that same source on the host and throws each of its 32 symbols at the
+# host FPU, comparing bit patterns: the only way to know the port's arithmetic is
+# right before a screen can be looked at.
+TEST_PSFLOAT_SRCS = verify/tests/test_ps2_softfloat.c
+TEST_PSFLOAT_OBJS = $(TEST_PSFLOAT_SRCS:.c=.test.o)
+TEST_PSFLOAT_BIN  = ./.build/test_ps2_softfloat
+
+test-ps2-softfloat: $(TEST_PSFLOAT_BIN)
+	@echo "=========================================================="
+	@echo " Running PS2 soft-float runtime vs the host FPU..."
+	@echo "=========================================================="
+	@./$(TEST_PSFLOAT_BIN)
+
+$(TEST_PSFLOAT_BIN): $(TEST_PSFLOAT_OBJS) src/drivers/ps2/ps2_builtins.c
+	@mkdir -p ./.build
+	$(CC) $(TEST_PSFLOAT_OBJS) -o $@ $(LDFLAGS) -lm
+
 
 # ═══════════════════════════════════════════════════════════════════
 # Bare-Metal MIPS Malta / Magnum Kernel (mips / QEMU) [Target 9]
@@ -1831,7 +1878,7 @@ $(TEST_MSX_TRACE_BIN): $(TEST_MSX_TRACE_OBJS)
 	@mkdir -p ./.build
 	$(CC) $(TEST_MSX_TRACE_OBJS) -o $@ $(LDFLAGS)
 
-test: test-tad test-editor test-chat test-mozc test-wylie test-hmi test-ski test-tracker test-deskclip test-settings test-global-menu test-app-menu test-drivesetup test-fs test-quake
+test: test-tad test-editor test-chat test-mozc test-wylie test-hmi test-ski test-tracker test-deskclip test-settings test-global-menu test-app-menu test-drivesetup test-fs test-quake test-ps2-softfloat
 	@echo "=========================================================="
 	@echo " ALL B-SYSTEM TEST SUITES PASSED (100% SUCCESS)!"
 	@echo "=========================================================="

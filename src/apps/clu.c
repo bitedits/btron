@@ -23,6 +23,7 @@
 #include <btron/tad.h>
 #include <btron/dp.h>   /* COLOR_* constants */
 #include <btron/wnd.h>
+#include <btron/apps.h> /* the weak open_*_window() entry points the shell can launch */
 
 
 /* ── Arg parsing helpers ─────────────────────────────────────────── */
@@ -1956,6 +1957,56 @@ void clu_quake(const char *args, ShellOutputFn out, void *ud)
     } else {
         out("quake: GUI subsystem not linked in headless/test build", COLOR_YELLOW, ud);
     }
+}
+
+/* ── clu_launch_app ───────────────────────────────────────────────── */
+
+/* One table and one body for the applications the shell could not launch: xmb,
+ * glgears and the Lil Cu 64 demoscene.  A copy of clu_quake() per verb is how
+ * three messages would go on disagreeing about what the same image links, and
+ * this is the answer the desktop launcher's own rows depend on too -- both reach
+ * an application through the same weak extern in include/btron/apps.h, so the
+ * shell and the menu cannot report different facts about one build.
+ *
+ * An opener that was never linked reads NULL here.  That is the difference
+ * between "this target has no demoscene" and "the demoscene opened and painted
+ * nothing": the first is a property of the image, the second is a bug. */
+typedef struct {
+    const char *verb;
+    const char *title;
+    WND       *(*open)(void);
+} CluApp;
+
+static const CluApp s_clu_apps[] = {
+    { "xmb",     "Cross Media Bar (XMB)",                    open_xmb_window },
+    { "glgears", "GLGears (OpenGL ES 1.1 / TinyGL)",         open_glgears_window },
+    { "gears",   "GLGears (OpenGL ES 1.1 / TinyGL)",         open_glgears_window },
+    { "lilcu",   "Lil Cu 64 Demoscene (Hopf field)",         open_lilcu64_demo_window },
+    { "lilcu64", "Lil Cu 64 Demoscene (Hopf field)",         open_lilcu64_demo_window },
+};
+
+BOOL clu_launch_app(const char *verb, ShellOutputFn out, void *ud)
+{
+    if (!verb || !verb[0]) return FALSE;
+
+    for (unsigned i = 0; i < sizeof(s_clu_apps) / sizeof(s_clu_apps[0]); i++) {
+        const CluApp *a = &s_clu_apps[i];
+        char line[160];
+
+        if (strcmp(verb, a->verb) != 0) continue;
+
+        snprintf(line, sizeof(line), "%s:", a->title);
+        out(line, COLOR_CYAN, ud);
+        if (!a->open) {
+            out("  Not linked into this build", COLOR_YELLOW, ud);
+            return TRUE;
+        }
+        WND *w = a->open();
+        if (w) out("  Window opened on the Workbench desktop", COLOR_GREEN, ud);
+        else   out("  Failed to open window surface", COLOR_RED, ud);
+        return TRUE;
+    }
+    return FALSE;
 }
 
 /* ── clu_sc ──────────────────────────────────────────────────────── */

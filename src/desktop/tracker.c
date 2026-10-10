@@ -122,7 +122,13 @@ void tracker_refresh_windows(void) {
     /* 1. Dynamic Active Window / Task Tracking (Haiku Deskbar window list) */
     WND *w = get_wnd_list();
     H tracked_wnds = 0;
-    while (w && tracked_wnds < 12 && g_tracker.item_count < TRACKER_MAX_ITEMS - 8) {
+    /* The window list is the only part of this menu whose length the desktop
+     * decides, so it is the part that has to leave room: everything added after
+     * it is fixed -- two separators, the four application rows below, and the four
+     * system rows -- ten in all.  A list allowed to reach TRACKER_MAX_ITEMS would
+     * push the shutdown items off the end, because tracker_add_item() drops what
+     * does not fit rather than displacing what is already there. */
+    while (w && tracked_wnds < 12 && g_tracker.item_count < TRACKER_MAX_ITEMS - 10) {
         if (w->visible) {
             char item_buf[48];
             tracker_format_wnd_title(item_buf, sizeof(item_buf), w->focused, w->title);
@@ -139,13 +145,16 @@ void tracker_refresh_windows(void) {
     /* Underline / separator between Tracker window list and the launched items */
     tracker_add_item(TRACKER_CMD_SEPARATOR, "------------------------", NULL);
 
-    /* 2. Applications.  Same two entry points the アプリ(A) global menu offers, so
+    /* 2. Applications.  The same entry points the アプリ(A) global menu offers, so
      * the start menu is a launcher rather than only a window switcher.  The labels
-     * follow this menu's existing "日本語 (English)" convention.  Both open_* are
-     * weak (include/btron/apps.h), so a target that links without gterm.c or
-     * xmb.c gets an inert row instead of a link error. */
+     * follow this menu's existing "日本語 (English)" convention.  Every open_* here
+     * is weak (include/btron/apps.h), so a target that does not link gterm.c,
+     * xmb.c, glgears.c or the demoscene gets an inert row rather than a link
+     * error -- which is what lets the same four rows ship on every port. */
     tracker_add_item(TRACKER_CMD_TERMINAL, "端末 (Terminal)", NULL);
     tracker_add_item(TRACKER_CMD_XMB,      "横断メディアメニュー (XMB)", NULL);
+    tracker_add_item(TRACKER_CMD_GEARS,    "OpenGL 歯車 (GLGears)", NULL);
+    tracker_add_item(TRACKER_CMD_DEMO,     "デモシーン (Lil Cu 64)", NULL);
 
     tracker_add_item(TRACKER_CMD_SEPARATOR, "------------------------", NULL);
 
@@ -290,6 +299,12 @@ static void tracker_execute_item(H index) {
             break;
         case TRACKER_CMD_XMB:
             if (open_xmb_window) open_xmb_window();
+            break;
+        case TRACKER_CMD_GEARS:
+            if (open_glgears_window) open_glgears_window();
+            break;
+        case TRACKER_CMD_DEMO:
+            if (open_lilcu64_demo_window) open_lilcu64_demo_window();
             break;
         case TRACKER_CMD_AUDIODECK:
             if (open_audio_player_window) open_audio_player_window();

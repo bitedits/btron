@@ -69,6 +69,74 @@
 
 extern void uart_puts_raw(const char *s);
 
+/* ── Load-phase timings ─────────────────────────────────────────────────
+ * "Opening the bar takes minutes" is a claim about one of four things -- the
+ * window, the backend's buffers, the atlas bake, or the frames -- and only a clock
+ * placed between them says which.  Two of those phases do not depend on which
+ * rasterizer is linked at all: the icon bake is 36 cells x 64x64 pixels of
+ * signed-distance arithmetic, and the font bake walks 95 glyphs, both in the CPU's
+ * software float.  So each row prints against the same counter the compositor's
+ * stage telemetry uses (btron_render_perf_us(), implemented by every bare-metal
+ * core) and the surface row names the backend that actually got installed, which
+ * makes one boot enough to attribute the wait and to compare the two rasterizers'
+ * frame cost. */
+static uint32_t s_phase_t0;
+
+static void xb_phase(const char *tag, unsigned work_px)
+{
+    char line[112];
+    const uint32_t now = btron_render_perf_us();
+    const uint32_t us  = now - s_phase_t0;
+    const uint32_t ms  = us / 1000u;
+
+    s_phase_t0 = now;
+    if (work_px) {
+        snprintf(line, sizeof(line), "[XMBT] %-13s %9u us  %8u px/ms\n",
+                 tag, (unsigned)us, (unsigned)(work_px / (ms ? ms : 1u)));
+    } else {
+        snprintf(line, sizeof(line), "[XMBT] %-13s %9u us\n", tag, (unsigned)us);
+    }
+    uart_puts_raw(line);
+}
+
+/* One drawn frame, split at the swap because the two halves answer different
+ * questions: `draw` is this file's own geometry and texture lookups, `swap` is
+ * whatever the linked backend does to hand the pixels over.  The first frames
+ * print singly -- they are the ones a cold cache makes expensive, and a load that
+ * takes minutes has to be shown not to be them -- then one row per 30 frames
+ * carries the window's average and worst so a running rate is visible without a
+ * line per frame. */
+static void xb_frame(uint32_t draw_us, uint32_t swap_us)
+{
+    static unsigned  s_n, s_win, s_sum, s_max;
+    static uint32_t  s_sum_swap;
+    const unsigned   backend_tinygl = (gl_active_backend() == GL_BACKEND_TINYGL);
+
+    s_n++;
+    s_win++;
+    s_sum += draw_us;
+    s_sum_swap += swap_us;
+    if (draw_us + swap_us > s_max) s_max = draw_us + swap_us;
+
+    if (s_n <= 3u) {
+        char line[128];
+        snprintf(line, sizeof(line),
+                 "[XMBT] frame %u (%s) draw=%u us swap=%u us\n",
+                 s_n, backend_tinygl ? "tinygl" : "virgl",
+                 (unsigned)draw_us, (unsigned)swap_us);
+        uart_puts_raw(line);
+    } else if (s_win >= 30u) {
+        char line[128];
+        snprintf(line, sizeof(line),
+                 "[XMBT] frames %u (%s) avg draw=%u swap=%u us, worst frame %u us\n",
+                 s_win, backend_tinygl ? "tinygl" : "virgl",
+                 (unsigned)(s_sum / s_win), (unsigned)(s_sum_swap / s_win),
+                 (unsigned)s_max);
+        uart_puts_raw(line);
+        s_win = s_sum = s_sum_swap = s_max = 0u;
+    }
+}
+
 /* The kernel's live input configuration, defined in src/settings/input.c - which
  * every target that builds this file builds too.  The bar writes these, the input
  * applet reads them, and the pointer and repeat drivers of the bare-metal cores
@@ -1232,6 +1300,7 @@ static void xb_bake_textures(void)
             }
         }
     }
+    xb_phase("bake_icons", XB_ATLAS_GRID * XB_ATLAS_GRID * XB_ICON_CELL * XB_ICON_CELL);
 
     memset(font, 0, font_bytes);
     for (i = 0; i < XB_FONT_COLS * XB_FONT_ROWS; i++) {
@@ -1254,6 +1323,7 @@ static void xb_bake_textures(void)
             }
         }
     }
+    xb_phase("bake_font", XB_FONT_TEX_W * XB_FONT_TEX_H);
 
     glGenTextures(2, tex);
     s_tex_icons = tex[0];
@@ -1272,6 +1342,8 @@ static void xb_bake_textures(void)
                  GL_RGBA, GL_UNSIGNED_BYTE, font);
 
     glBindTexture(GL_TEXTURE_2D, 0);
+    xb_phase("upload",
+             XB_ICON_TEX * XB_ICON_TEX + XB_FONT_TEX_W * XB_FONT_TEX_H);
 
     free(icons);
     free(font);
@@ -2844,9 +2916,12 @@ static void xb_paint(WND *wnd, GDEV *dev)
 {
     SYSTIME now = 0;
     float dt;
+    uint32_t t_draw0, t_swap;
 
     if (!wnd || !dev || !s_surf)
         return;
+
+    t_draw0 = btron_render_perf_us();
 
     if (s_surf->width != dev->width || s_surf->height != dev->height) {
         egl_surface_resize(s_surf, dev->width, dev->height);
@@ -2910,7 +2985,9 @@ static void xb_paint(WND *wnd, GDEV *dev)
     xb_draw_footer();
     xb_draw_message();
 
+    t_swap = btron_render_perf_us();
     egl_swap_buffers(s_surf);
+    xb_frame(t_swap - t_draw0, btron_render_perf_us() - t_swap);
 }
 
 static void xb_event(WND *wnd, const EVT *evt)
@@ -3231,6 +3308,8 @@ WND* open_xmb_window(void)
         if (h > 900)  h = 900;
     }
 
+    s_phase_t0 = btron_render_perf_us();
+
     s_wnd = opn_wnd("Cross Media Bar", x, y, w, h,
                     WND_ATTR_TITLE | WND_ATTR_BORDER | WND_ATTR_CLOSE |
                     WND_ATTR_RESIZE);
@@ -3238,6 +3317,7 @@ WND* open_xmb_window(void)
         uart_puts_raw("[GL] ERROR: open_xmb_window failed\n");
         return NULL;
     }
+    xb_phase("window", 0);
 
     s_w = w;
     s_h = h;
@@ -3253,9 +3333,13 @@ WND* open_xmb_window(void)
         s_wnd = NULL;
         return NULL;
     }
+    /* The backend's own buffers come with this phase: the file named virgl
+     * allocates a float of depth per pixel and fills it, TinyGL a 16-bit z. */
+    xb_phase("surface", (unsigned)(w * h));
 
     xb_bake_textures();
     xb_init_state();
+    xb_phase("init_state", 0);
 
     get_tim(&s_last_time);
 

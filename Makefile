@@ -968,13 +968,24 @@ AUTO_GUI       ?= 1
 # default because a [KBD] row costs the console a line for every keystroke, which
 # is what scrolls the prompt away while it is being typed into.
 HIDTRACE       ?= 0
+# Which of the two software rasterizers a GL window on this image gets.  The port
+# links both -- src/gl/tinygl/ and src/gl/backend_virgl.c are in the source list --
+# so this is a choice, not a capability, and it is worth choosing because the two
+# are not the same size: backend_virgl.c keeps one float per pixel for depth, which
+# at 768x500 is 1.5 MB to allocate and 384k software-float stores to fill, against
+# TinyGL's 16-bit z of half that.  PS2_GL=virgl builds the old combination, and the
+# [XMBT] rows time the same load against both.
+PS2_GL          ?= tinygl
 PS2_TARGET     = btron-ps2.elf
 PS2_ISO        = btron-ps2.iso
 PS2_LD_SCRIPT  = src/drivers/ps2/ps2.ld
 PS2_CFLAGS     = -O2 -Wall -Wextra -std=c99 -ffreestanding -nostdlib \
                  -DBTRON_TARGET=8 -DBTRON_PS2_TARGET -DBTRON_AUTO_GUI=$(AUTO_GUI) \
-                 -DBTRON_HID_TRACE=$(HIDTRACE) \
+                 -DBTRON_HID_TRACE=$(HIDTRACE) -DBTRON_GL_BACKEND_TINYGL \
                  -Iinclude -Iinclude/gl -Iinclude/drivers -Isrc/kernel -Isrc/cores -Isrc/drivers/ps2
+ifeq ($(PS2_GL),virgl)
+PS2_CFLAGS    += -DBTRON_GL_PREFER_VIRGL
+endif
 PS2_STARTUP    = src/cores/core_ps2.c
 # The termios-scope applications gterm hosts: Sokhatsky Commander and Terminal
 # Vision.  They sit in COMMON_SRCS, so the hosted targets have always had them and

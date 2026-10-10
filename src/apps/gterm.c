@@ -464,6 +464,11 @@ void shell_execute_cmd(const char *cmd_line, ShellOutputFn out_fn, void *user_da
 
     /* ── END CLU Builtins ────────────────────────────────────────────────── */
 
+    /* The application verbs -- xmb, glgears/gears, lilcu/lilcu64.  One call owns
+     * the list and reports whether the app is in this image, so adding a fourth
+     * verb is a row in clu.c's table and a line of help, not another branch here. */
+    if (clu_launch_app(cmd, out_fn, user_data)) return;
+
     if (strcmp(cmd, "help") == 0 || strcmp(cmd, "?") == 0) {
         out_fn("B-System Cho-Kanji Shell Commands:", COLOR_GREEN, user_data);
         out_fn("── Volume / Filesystem (CLU) ─────────────────────", COLOR_CYAN, user_data);
@@ -497,6 +502,9 @@ void shell_execute_cmd(const char *cmd_line, ShellOutputFn out_fn, void *user_da
         out_fn("  tv, edit <file>  - Launch Terminal Vision Editor", COLOR_YELLOW, user_data);
         out_fn("  tv-view, view <file>- View file with Terminal Vision", COLOR_LTGRAY, user_data);
         out_fn("  quake               - Launch Quake 3D (OpenGL ES 1.1)", COLOR_YELLOW, user_data);
+        out_fn("  xmb                 - Launch 横断メディアメニュー (XMB)", COLOR_YELLOW, user_data);
+        out_fn("  glgears, gears      - Launch GLGears 3D (OpenGL ES 1.1)", COLOR_YELLOW, user_data);
+        out_fn("  lilcu, lilcu64      - Launch Lil Cu 64 Demoscene (Hopf field)", COLOR_YELLOW, user_data);
         out_fn("  edit, editor        - Launch Editor instance", COLOR_LTGRAY, user_data);
         out_fn("  tad, browser        - Launch TAD Browser instance", COLOR_LTGRAY, user_data);
         out_fn("  chat                - Launch BeOS Chat instance", COLOR_LTGRAY, user_data);

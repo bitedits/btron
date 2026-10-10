@@ -60,6 +60,7 @@ enum {
     GMENU_CMD_APP_QUAKE      = 208,
     GMENU_CMD_APP_DEMO       = 209,
     GMENU_CMD_APP_XMB        = 217,
+    GMENU_CMD_APP_GEARS      = 218,
 
     /* ── アプリ(A) — 超漢字 Cho-Kanji suite ── */
     GMENU_CMD_APP_CK_CABINET     = 210,

@@ -343,12 +343,12 @@ static int32_t s_ptr_defer_x, s_ptr_defer_y;   /* pixels the cap has not spent y
  * of where it is running, and overridable at the prompt for measurement.
  *
  * EMU -- PCSX2's `hidmouse`.  Its X/Y are the host cursor's own movement, which
- * macOS has already accelerated and PCSX2 has already multiplied by [Pad]
- * PointerXScale (8 in the ini this repo runs with, so ~8 counts per host pixel),
- * clamped to +/-127 per event and truncated from a float.  Distance-proportional
- * only if the host's acceleration is off, and never in need of a second curve
- * here -- so this stub takes the emulator's gain back out and then applies a
- * guest-side one, sized below.
+ * macOS has already accelerated: one count per pixel the host cursor travelled,
+ * clamped to +/-127 per report with the remainder carried into the next (see
+ * PS2_EMU_POINTER_SCALE below, which is settled from the emulator's input path
+ * rather than from its ini).  Distance-proportional only if the host's acceleration
+ * is off, and never in need of a second curve here -- so this stub applies a
+ * guest-side gain and nothing else, sized below.
  *
  * HW -- a real mouse on a real console: counts proportional to how far the hand
  * moved, at the device's own 10-16 ms interval.  This is the case an accelerator
@@ -1085,6 +1085,9 @@ static void ps2_shell_char(int c);
  * decoded key by ps2_usb_hid_to_btron_key(). */
 #define PS2_MOD_CTRL 0x11u
 
+/* Defined with the pointer statistics it prints, below ps2_paint_print(). */
+static void ps2_ptr_chord(uint32_t key);
+
 void ps2_usb_on_key(uint32_t btron_key, int down, uint8_t mod)
 {
 #if BTRON_HID_TRACE
@@ -1105,6 +1108,22 @@ void ps2_usb_on_key(uint32_t btron_key, int down, uint8_t mod)
      * out is a chord no text editor binds. */
     if (s_gui_active && down && btron_key == 'q' && (mod & PS2_MOD_CTRL) != 0u) {
         s_gui_active = 0;
+        return;
+    }
+    /* The pointer's gain and its measurement, on three keystrokes that work inside
+     * the desktop.
+     *
+     * They are here rather than only at the prompt because every other dial this
+     * port has -- `sens`, `maxstep`, `ptrstat`, `ptgain` -- is a Stage 1 command,
+     * and a session that goes straight to the workbench cannot reach one without
+     * leaving the desktop first.  A hand that cannot put the cursor anywhere is
+     * being asked to type, which is the wrong order.
+     *
+     * Swallowed before the inject, on the same terms as Ctrl+Q: a chord the window
+     * under the pointer also acts on is a chord that changes the gain twice. */
+    if (s_gui_active && down && (mod & PS2_MOD_CTRL) != 0u &&
+        (btron_key == '[' || btron_key == ']' || btron_key == '\\')) {
+        ps2_ptr_chord(btron_key);
         return;
     }
     if (s_gui_active) {
@@ -1496,6 +1515,62 @@ static void ps2_paint_print(void)
                 (unsigned int)g_render_stats.bars_us, (unsigned int)g_render_stats.comp_us,
                 (unsigned int)g_render_stats.wins_drawn, (unsigned int)g_render_stats.wins_walked);
     s_paint = (ps2_paint_t){ 0 };
+}
+
+/* ── The Pointer's Own Chords ─────────────────────────────────────── */
+
+/* Ctrl+[ slower, Ctrl+] faster, Ctrl+\ reads the window out.
+ *
+ * A ladder rather than a free number, because the complaint these answer is "the
+ * cursor outruns the hand", and settling that is a series of tries in one session:
+ * step, move, step again.  Each of the four prompt commands that can do the same
+ * needs Ctrl+Q out of the desktop first, which throws away the very session whose
+ * feel is being judged.
+ *
+ * 16/256 per step puts the shipped 96 five steps from a quarter of a pixel per
+ * count and ten from 1:1, and 256 is the verbatim count -- the bound a hand has
+ * already called too fast, so it is the ceiling here rather than a guess at one.
+ *
+ * The carries and the unspent queue go with the gain for the reason `sens` already
+ * gives: a subpixel remainder belongs to the scale that made it, and distance the
+ * old gain had not finished spending would arrive as movement the hand no longer
+ * wants. */
+#define PS2_PTR_CHORD_STEP 16
+#define PS2_PTR_CHORD_MIN  16
+#define PS2_PTR_CHORD_MAX  PS2_MOUSE_MULT_FP
+
+static void ps2_ptr_chord(uint32_t key)
+{
+    if (key == '\\') {
+        /* The same two calls `ptrstat` makes, on the same window it closes: the
+         * histogram and the chain rows answer whether the wire carries distance or
+         * somebody else's speed, which is the question a gain cannot be set
+         * without.  Printed into the emulator's log, which is where the console
+         * rows already go. */
+        ps2_kprintf("[PS2] Pointer gain ");
+        ps2_ptr_gain_row();
+        ps2_ptrst_print("chord");
+        ps2_paint_print();
+        return;
+    }
+
+    {
+        int32_t next = s_ptr_mult_fp + (key == ']' ? PS2_PTR_CHORD_STEP
+                                                   : -PS2_PTR_CHORD_STEP);
+        if (next < PS2_PTR_CHORD_MIN) next = PS2_PTR_CHORD_MIN;
+        if (next > PS2_PTR_CHORD_MAX) next = PS2_PTR_CHORD_MAX;
+        s_ptr_mult_fp = next;
+        s_ptr_carry_x = s_ptr_carry_y = 0;
+        s_ptr_post_carry_x = s_ptr_post_carry_y = 0;
+        s_ptr_want_x = s_ptr_want_y = 0;
+        s_ptr_defer_x = s_ptr_defer_y = 0;
+    }
+    ps2_kprintf("[PS2] Pointer %s: ", key == ']' ? "faster" : "slower");
+    ps2_ptr_gain_row();
+    ps2_kprintf("[PS2] To ship this, set PS2_EMU_MULT_FP = %d  (`sens %d` for one run)\n",
+                (int)s_ptr_mult_fp,
+                (int)((s_ptr_mult_fp * 100 + PS2_MOUSE_MULT_FP / 2) / PS2_MOUSE_MULT_FP));
+    ps2_kprintf("[PS2] Ctrl+\\ prints the counts behind this gain.\n");
 }
 
 /* ── Calibration Against A Known Host Movement ───────────────────── */
@@ -3777,8 +3852,9 @@ void launch_ps2_desktop_session(void)
 
     ps2_kprintf("[PS2] Real B-System Workbench rendered via Host->Local GIF DMA (800x600).\n");
     ps2_kprintf("[PS2] Controls: Mouse/Pad/Kbd.  [Ctrl]+[Q] returns to this console.\n");
-    ps2_kprintf("[PS2] 'ptrstat' prints the pointer and paint numbers, and runs at the\n");
-    ps2_kprintf("[PS2] Stage 1 prompt only -- so the session's own totals print on the way out.\n");
+    ps2_kprintf("[PS2] [Ctrl]+[ [ ] and [Ctrl]+[ ] ] set the cursor's speed without leaving the\n");
+    ps2_kprintf("[PS2] desktop, and [Ctrl]+[ \\\\ ] prints the counts behind it.  The gain row\n");
+    ps2_kprintf("[PS2] names the constant to ship; 'ptrstat' and 'sens' at Stage 1 are the same numbers.\n");
     ps2_kprintf("btron-ps2> ");
 
     /* Interactive Event Loop */

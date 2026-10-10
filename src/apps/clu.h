@@ -57,6 +57,10 @@ void clu_sync_cmd (const char *args, ShellOutputFn out, void *ud);
 
 /* ── 3D Gaming & Applications ───────────────────────────────────── */
 void clu_quake    (const char *args, ShellOutputFn out, void *ud);
+/* One entry point for every application verb (xmb, glgears, lilcu, ...): returns
+ * TRUE when `verb` is one of them, so the shell's dispatch stays one line and the
+ * list of what can be launched lives in clu.c. */
+BOOL clu_launch_app(const char *verb, ShellOutputFn out, void *ud);
 void clu_sc       (const char *args, ShellOutputFn out, void *ud);
 void clu_tv       (const char *args, ShellOutputFn out, void *ud);
 

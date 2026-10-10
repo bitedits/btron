@@ -14,10 +14,15 @@
 #include <GL/gl.h>
 
 /* ── Backend selector ────────────────────────────────────────────── */
+/* Both of these rasterize in the guest CPU.  The name "virgl" is what src/gl/
+ * backend_virgl.c does on the QEMU target, where it also flushes the resource to
+ * the host's VirtIO-GPU — those calls are guarded by BTRON_QEMU_TARGET, so on
+ * every other image that file is a second software rasterizer rather than a
+ * driver, and PCSX2 has no virtio device for it to talk to in the first place. */
 typedef enum {
-    GL_BACKEND_TINYGL = 0,    /* Software rasterizer (Phase 1, default) */
-    GL_BACKEND_VIRGL  = 1,    /* VirtIO-GPU 3D / virgl (Phase 2)        */
-    GL_BACKEND_I915   = 2,    /* Awe Morris i915 zero-cost proxy (Ph.3) */
+    GL_BACKEND_TINYGL = 0,    /* TinyGL  (src/gl/tinygl/, ZBuffer + zgl)  */
+    GL_BACKEND_VIRGL  = 1,    /* backend_virgl.c's own triangle raster    */
+    GL_BACKEND_I915   = 2,    /* Awe Morris i915 zero-cost proxy (Ph.3)   */
 } GL_BACKEND;
 
 /* ── Dispatch table ──────────────────────────────────────────────── */
@@ -85,6 +90,11 @@ typedef struct {
 
 /* ── Active backend pointer (set by gl_init) ─────────────────────── */
 extern gl_ops_t *g_gl;
+
+/* Which backend gl_init() actually installed -- it is not necessarily the one
+ * that was asked for, and the surface layer below has to dispatch on the result
+ * rather than on the request. */
+GL_BACKEND gl_active_backend(void);
 
 /* ── Lifecycle ───────────────────────────────────────────────────── */
 void gl_init     (GL_BACKEND backend, int width, int height, void *pixel_buf);

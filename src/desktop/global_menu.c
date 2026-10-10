@@ -50,6 +50,7 @@ __attribute__((weak, weak_import)) WND* open_drivesetup_window(void);
 __attribute__((weak, weak_import)) WND* open_quake_window(int x, int y, int width, int height);
 __attribute__((weak, weak_import)) WND* open_lilcu64_demo_window(void);
 __attribute__((weak, weak_import)) WND* open_xmb_window(void);
+__attribute__((weak, weak_import)) WND* open_glgears_window(void);
 /* Cho-Kanji suite */
 __attribute__((weak, weak_import)) WND* open_chokanji_cabinet_window(void);
 __attribute__((weak, weak_import)) WND* open_chokanji_doc_window(void);
@@ -168,6 +169,7 @@ static GMenuHeader g_headers[GMENU_HEADER_COUNT] = {
             { "Quake (3D FPS Game...)",              "Ctrl+Q", GMENU_CMD_APP_QUAKE,      FALSE, FALSE, TRUE },
             { "Lil Cu 64 Demo (3D Demoscene...)",    "Ctrl+L", GMENU_CMD_APP_DEMO,       FALSE, FALSE, TRUE },
             { "XMB (横断メディアメニュー...)",        "",       GMENU_CMD_APP_XMB,        FALSE, FALSE, TRUE },
+            { "GL 歯車 (GLGears 3D...)",             "",       GMENU_CMD_APP_GEARS,      FALSE, FALSE, TRUE },
             { "---", "", GMENU_CMD_NONE, TRUE, FALSE, FALSE },
             /* ── 超漢字 Cho-Kanji Suite ── */
             { "超漢字: キャビネット (Cabinet...)",       "Ctrl+K", GMENU_CMD_APP_CK_CABINET,     FALSE, FALSE, TRUE },
@@ -532,6 +534,9 @@ static void global_menu_execute_cmd(int cmd) {
             break;
         case GMENU_CMD_APP_XMB:
             if (open_xmb_window) open_xmb_window();
+            break;
+        case GMENU_CMD_APP_GEARS:
+            if (open_glgears_window) open_glgears_window();
             break;
 
         /* ── アプリ(A) — Cho-Kanji suite ── */

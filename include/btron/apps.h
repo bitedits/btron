@@ -41,6 +41,8 @@ __WEAK_APP WND* open_drivesetup_window(void);
 __WEAK_APP WND* launch_beos_chat(void);
 __WEAK_APP WND* open_quake_window(int x, int y, int width, int height);
 __WEAK_APP WND* open_xmb_window(void);
+__WEAK_APP WND* open_glgears_window(void);
+__WEAK_APP WND* open_lilcu64_demo_window(void);
 __WEAK_APP WND* open_msx_window(void);
 __WEAK_APP WND* open_msx_window_with_rom(const char *path);
 

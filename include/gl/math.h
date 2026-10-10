@@ -109,6 +109,119 @@ static inline void btron_sincos(double x, double *s, double *c) {
 static inline double sin(double x) { double s, c; btron_sincos(x, &s, &c); return s; }
 static inline double cos(double x) { double s, c; btron_sincos(x, &s, &c); return c; }
 
+/* The three float-native ones, and why they are not the double functions with a cast
+ * around them: a target with no FPU at all (or one, like the Emotion Engine, whose
+ * single-precision unit is fast and whose double unit does not exist) pays for every
+ * operation in the series twice over -- once in the promotion, once in the software
+ * double arithmetic that follows it.  Measured on the PS2 image that turned one
+ * XMB icon cell into 14,718 CPU cycles per pixel, because a rounded-box distance calls
+ * sqrtf and the gear's eight studs call sinf and cosf per pixel.
+ *
+ * Each keeps the same shape as its double relative -- fold, then one polynomial -- and
+ * hands back the double function for the inputs where a float has no business being
+ * exact: zero, subnormal, infinite and NaN for sqrtf, and anything large enough that
+ * the reduction's integer step stops meaning one thing for the trig pair. */
+static inline float sqrtf(float x) {
+    if (x == 0.0f) return x;                        /* +-0 keeps its own sign, as libm */
+    if (!(x > 0.0f)) return (x - x) / (x - x);      /* negative and NaN both answer NaN */
+    union { float f; unsigned int u; } v;
+    v.f = x;
+    const unsigned int e = (v.u >> 23) & 0xFFu;
+    if (e == 0xFFu) return x;                       /* +inf is its own root */
+    /* A subnormal has no exponent field for the guess below to halve, and the double
+     * relative is no refuge either (its fold assumes a normal value and lands 2x out on
+     * a subnormal), so scale by 2^48 -- exact, and its root is 2^24 -- and undo that on
+     * the answer rather than on the input. */
+    float back = 1.0f;
+    if (e == 0u) { v.f = x * 281474976710656.0f; back = 5.96046448e-8f; }
+    const float s = v.f;                            /* the value whose root this is */
+    /* 0x5F3759DF - (bits >> 1) is the inverse-square-root guess: it halves the exponent
+     * and approximates the mantissa's, good to under 4% before any iteration. */
+    v.u = 0x5F3759DFu - (v.u >> 1);
+    float r = v.f;
+    /* Newton on r = 1/sqrt(s) converges by squaring the error, and each step is three
+     * multiplies and a subtract -- no division, which on a soft-float target is the
+     * most expensive thing in the file.  Three steps carry the 4% guess to under 4 ulp
+     * of a float, which is what a distance fed to a soft-edged coverage wants. */
+    const float half = s * 0.5f;
+    for (int i = 0; i < 3; i++) r = r * (1.5f - half * r * r);
+    return back * (half * (r + r));                 /* s * r, without a second multiply */
+}
+
+static inline void btron_sincosf(float x, float *s, float *c) {
+    const float pi = 3.14159274f, pi2 = 6.28318548f;
+    const float pio2 = 1.57079637f, pio4 = 0.78539819f;
+    /* float(2*pi) is 1.748e-7 too large, and folding a turn with the bare constant
+     * moves the angle by exactly that much, so the residue travels with the turn count.
+     * Without it the 2pi..4pi region measures 3.6e-7 of absolute error, six times the
+     * error of every region that needs no fold. */
+    const float pi2_lo = -1.74845553e-7f;
+    int neg_sin = 0;
+    if (x < 0.0f) { x = -x; neg_sin = 1; }                  /* sin odd, cos even */
+    if (x > pi) {
+        const float k = (float)(int)(x / pi2);
+        x -= pi2 * k;
+        x -= pi2_lo * k;                                    /* into [0,2pi) */
+    }
+    /* The residue only buys anything applied to the small result: pi2 + pi2_lo rounds
+     * straight back to pi2, since the two are closer than a float's spacing there. */
+    if (x > pi) { x = (pi2 - x) + pi2_lo; neg_sin = !neg_sin; }  /* sin(2pi-a) = -sin(a) */
+    int flip_cos = 0;
+    if (x > pio2) { x = pi - x; flip_cos = 1; }             /* now in [0,pi/2] */
+    int swap = 0;
+    if (x > pio4) { x = pio2 - x; swap = 1; }               /* now in [0,pi/4] */
+    /* At pi/4 the first dropped term is 1.7e-9, which is under a float's last place
+     * near 1.0, so these five- and four-term forms are as accurate as a float can be. */
+    const float x2 = x * x;
+    const float sn = x * (1.0f + x2 * (-1.66666667e-1f + x2 * (8.33333333e-3f +
+                        x2 * (-1.98412698e-4f + x2 * 2.75573192e-6f))));
+    const float cs = 1.0f + x2 * (-5.0e-1f + x2 * (4.16666667e-2f +
+                        x2 * (-1.38888889e-3f + x2 * 2.48015873e-5f)));
+    *s = swap ? cs : sn;
+    *c = swap ? sn : cs;
+    if (flip_cos) *c = -*c;
+    if (neg_sin)  *s = -*s;
+}
+
+/* The float reduction above subtracts a whole number of turns as a float, so its error
+ * is the rounding of that product, which grows with |x|: inside 4*pi the turn count is
+ * 0, 1 or 2 and, with the constant's residue carried, the fold costs less than a float's
+ * last place; at x = 1e7 the same three lines are off by half a radian.  So the guard is
+ * 4*pi and not "all finite values", and past it the double relative -- whose fold goes
+ * through a long long -- answers instead. */
+static inline float sinf(float x) {
+    if (!(x > -12.5663706f && x < 12.5663706f)) return (float)sin((double)x);   /* also inf, NaN */
+    float s, c; btron_sincosf(x, &s, &c); return s;
+}
+
+static inline float cosf(float x) {
+    if (!(x > -12.5663706f && x < 12.5663706f)) return (float)cos((double)x);
+    float s, c; btron_sincosf(x, &s, &c); return c;
+}
+
+/* Exact, and without asking the FPU anything: the exponent field says how many
+ * mantissa bits are fractional, and clearing them is the floor for a positive value.
+ * A negative one needs one step further away from zero, but only when bits were
+ * actually dropped -- which is why the dropped mask is kept. */
+static inline float floorf(float x) {
+    union { float f; unsigned int u; } v;
+    v.f = x;
+    const unsigned int e = (v.u >> 23) & 0xFFu;
+    if (e >= 127u + 23u) return x;                  /* integral already, or inf/NaN */
+    if (e < 127u)                                    /* |x| < 1: 0, or -1 if negative */
+        return (v.u & 0x7FFFFFu) == 0u ? x           /* +-0 keeps its own sign */
+                                       : (v.u & 0x80000000u) ? -1.0f : 0.0f;
+    const unsigned int mask = 0x007FFFFFu >> (e - 127u);
+    const unsigned int dropped = v.u & mask;
+    v.u &= ~mask;                                        /* truncate toward zero */
+    /* One whole step further from zero, and only when bits were actually dropped.  This
+     * has to be a float subtract: bumping the exponent field is a doubling, which is what
+     * the first version of this line did and why it answered -2000 for -1000.00006.
+     * Here |v.f| is below 2^23, so v.f - 1.0f is exact. */
+    if (dropped && (v.u & 0x80000000u)) return v.f - 1.0f;
+    return v.f;
+}
+
 #endif /* x87 or series */
 
 static inline double fabs(double x) {
@@ -148,11 +261,10 @@ static inline double atan2(double y, double x) {
     return a + (y >= 0.0 ? M_PI : -M_PI);
 }
 
-/* The Quake sources are float-native, so the x87 helpers above need single
- * wrappers here; the hosted branch gets them from the real math.h. */
-static inline float sinf(float x)   { return (float)sin((double)x); }
-static inline float cosf(float x)   { return (float)cos((double)x); }
-static inline float sqrtf(float x)  { return (float)sqrt((double)x); }
+/* fabsf and atan2f have no float-native form, so both branches promote.  The four
+ * wrappers that do -- sinf/cosf/sqrtf/floorf -- are single-precision polynomials in the
+ * series branch above, and only the x87 half asks the double function underneath them;
+ * those live below `floor`, which one of them calls. */
 static inline float fabsf(float x)  { return (x < 0.0f) ? -x : x; }
 static inline float atan2f(float y, float x) { return (float)atan2((double)y, (double)x); }
 
@@ -161,6 +273,13 @@ static inline double floor(double x) {
     if (x < (double)i) return (double)(i - 1);
     return (double)i;
 }
+
+#if defined(__i386__) || defined(__x86_64__)
+static inline float sinf(float x)   { return (float)sin((double)x); }
+static inline float cosf(float x)   { return (float)cos((double)x); }
+static inline float sqrtf(float x)  { return (float)sqrt((double)x); }
+static inline float floorf(float x) { return (float)floor((double)x); }
+#endif
 
 static inline double btron_log(double x) {
     int e = btron_dexp(x);
@@ -215,7 +334,6 @@ static inline double pow(double x, double y) {
 #endif
 }
 
-static inline float floorf(float x) { return (float)floor((double)x); }
 static inline float powf(float x, float y) { return (float)pow((double)x, (double)y); }
 static inline long long llround(double x) { return (long long)(x >= 0.0 ? x + 0.5 : x - 0.5); }
 

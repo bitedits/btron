@@ -34,7 +34,7 @@ CC ?= gcc
 CFLAGS ?= -O2 -Wall -Wextra -std=c99 -Iinclude -Iinclude/gl -Isrc/gl -Iinclude/drivers -Isrc/kernel -Isrc/cores -Isrc/quake/include
 
 .PHONY: all posix qemu kernel tkernel sakamura foma uefi pc98 arm-elf arm64-elf m68k ps2 mips \
-        check-structure test-ps2-softfloat \
+        check-structure test-ps2-softfloat test-gl-math \
         html2tad book2tad tad_bin test test-kernel test-yoko test-yoko4 test-m68k test-mips test-ps2 test-foma test-foma-ui foma-screens \
         segui-screens \
         test-mozc test-editor test-hmi test-tad test-chat test-wylie verify test-fs test-chokanji test-quake test-replay \
@@ -88,6 +88,10 @@ MIPS_CC     ?= $(LLVM_CLANG) --target=mipsel-unknown-elf -march=mips32r2 -mabi=3
 # integer registers, so mixing it with a build that uses the FPU would corrupt every
 # float argument that crosses the boundary -- and src/drivers/ps2/ps2_builtins.c
 # supplies the runtime the link then needs.
+# The one exception is that same file, which crosses no float argument at all and so
+# is assembled with the FPU switched back on (see PS2_FP near %.pbench.o): the EE's
+# single-precision unit has been paying for the .d law ever since, at 23.9 s an XMB
+# frame.  Nothing else in the image may take that flag.
 PS2_CC      ?= $(LLVM_CLANG) --target=mipsel-unknown-elf -march=mips2 -mabi=32 -msoft-float -ffreestanding -nostdlib
 MIPS_LD ?= $(if $(shell command -v mipsel-linux-gnu-ld 2>/dev/null),mipsel-linux-gnu-ld,$(LLD_BIN) -EL)
 
@@ -1078,10 +1082,32 @@ PS2_BENCH_TARGET = btron-ps2-bench.elf
 # (see the phase's note in core_ps2.c), so the phase would end the run at its timeout
 # rather than at its sentinel.
 BENCH_APP      ?= 0
-$(PS2_BENCH_OBJ): PS2_CFLAGS += -DBTRON_PS2_BENCH=1 -DBTRON_PS2_BENCH_APP=$(BENCH_APP)
+# Frames the app phase asks for before it injects its own Escape.  The default keeps
+# the table's resolution; scripts/ps2_smooth.sh lowers it so a run ends at its
+# sentinel instead of at a harness timeout -- 60 frames of this app is 24 minutes.
+BENCH_APP_FRAMES ?= 60
+$(PS2_BENCH_OBJ): PS2_CFLAGS += -DBTRON_PS2_BENCH=1 -DBTRON_PS2_BENCH_APP=$(BENCH_APP) \
+                                -DBTRON_PS2_BENCH_APP_FRAMES=$(BENCH_APP_FRAMES)u
 
 %.pbench.o: %.c
 	$(PS2_CC) $(PS2_CFLAGS) -MMD -MP -c $< -o $@
+
+# The one object in the image that may hold COP1 instructions.  -msoft-float is an
+# argument-passing law (the note at PS2_CC), and src/drivers/ps2/ps2_builtins.c breaks
+# none of it: every entry point there takes and returns an integer register holding
+# IEEE-754 bits, and the only float-shaped things in the file are inside __asm__
+# strings.  It still needs the flag off to assemble at all -- under -msoft-float clang
+# rejects `mtc1` with "instruction requires a CPU feature not currently enabled", which
+# is why the EE's own FPU has been unusable for single precision until now.  The link
+# keeps recording `FP ABI: Soft float` for the whole image, and mipsel-linux-gnu-ld
+# accepts the mixed .MIPS.abiflags the way it is.  PS2_FP=soft builds without it, and
+# then the bit engine answers every call exactly as it did before 2026-10-10.
+PS2_FP ?= hw
+PS2_FP_OBJ = src/drivers/ps2/ps2_builtins.ps2.o
+ifeq ($(PS2_FP),hw)
+$(PS2_FP_OBJ): PS2_CC := $(subst -msoft-float,-mhard-float,$(PS2_CC))
+$(PS2_FP_OBJ): PS2_CFLAGS += -DBTRON_PS2_FP_HW
+endif
 
 ps2-bench: $(PS2_BENCH_TARGET)
 
@@ -1196,6 +1222,43 @@ test-ps2-softfloat: $(TEST_PSFLOAT_BIN)
 $(TEST_PSFLOAT_BIN): $(TEST_PSFLOAT_OBJS) src/drivers/ps2/ps2_builtins.c
 	@mkdir -p ./.build
 	$(CC) $(TEST_PSFLOAT_OBJS) -o $@ $(LDFLAGS) -lm
+
+
+# include/gl/math.h is the freestanding math for every bare-metal target, and its
+# no-x87 half is what the PS2 and the Malta MIPS actually execute: sqrtf/sinf/cosf/
+# floorf as single-precision series, because the Emotion Engine runs single-precision
+# on COP1 in ~20 cycles and double-precision not at all.  A wrong constant factor in
+# one of them is invisible on a screen and unarguable without one, so each is measured
+# against the host's libm per binade and per reduction region.  Two TUs because the
+# shim's definitions are static inline under the names libm owns -- see
+# verify/tests/gl_math_float_port.c.
+TEST_GLMATH_BIN = ./.build/test_gl_math_float
+
+# The port TU needs the branch forced two ways (BTRON_UEFI_TARGET inside the file, the
+# ISA macros here) and needs the compiler to leave its own functions alone; at -O2, or
+# with a -march=native default, a function named sqrtf is folded back into the hardware
+# instruction and the run measures the machine it is standing on.  -fno-builtin-<name>
+# is per-name: extend it in lockstep when the header gains a float-native function.
+GLMATH_PORTFLAGS = -O1 -std=c11 -Wall -Wextra -ffreestanding \
+                   -U__x86_64__ -U__i386__ -Iinclude -Iinclude/gl \
+                   -fno-builtin-sqrt -fno-builtin-sqrtf -fno-builtin-sin -fno-builtin-sinf \
+                   -fno-builtin-cos -fno-builtin-cosf -fno-builtin-fabs -fno-builtin-fabsf \
+                   -fno-builtin-floor -fno-builtin-floorf -fno-builtin-exp -fno-builtin-expf \
+                   -fno-builtin-pow -fno-builtin-powf -fno-builtin-atan -fno-builtin-atanf \
+                   -fno-builtin-atan2 -fno-builtin-atan2f -fno-builtin-fmod -fno-builtin-fmodf
+
+verify/tests/gl_math_float_port.test.o: verify/tests/gl_math_float_port.c include/gl/math.h
+	$(CC) $(GLMATH_PORTFLAGS) -MMD -MP -c $< -o $@
+
+test-gl-math: $(TEST_GLMATH_BIN)
+	@echo "=========================================================="
+	@echo " Running gl/math.h float-native series vs the host libm..."
+	@echo "=========================================================="
+	@./$(TEST_GLMATH_BIN)
+
+$(TEST_GLMATH_BIN): verify/tests/test_gl_math_float.test.o verify/tests/gl_math_float_port.test.o
+	@mkdir -p ./.build
+	$(CC) $^ -o $@ $(LDFLAGS) -lm
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -1889,7 +1952,7 @@ $(TEST_MSX_TRACE_BIN): $(TEST_MSX_TRACE_OBJS)
 	@mkdir -p ./.build
 	$(CC) $(TEST_MSX_TRACE_OBJS) -o $@ $(LDFLAGS)
 
-test: test-tad test-editor test-chat test-mozc test-wylie test-hmi test-ski test-tracker test-deskclip test-settings test-global-menu test-app-menu test-drivesetup test-fs test-quake test-ps2-softfloat
+test: test-tad test-editor test-chat test-mozc test-wylie test-hmi test-ski test-tracker test-deskclip test-settings test-global-menu test-app-menu test-drivesetup test-fs test-quake test-ps2-softfloat test-gl-math
 	@echo "=========================================================="
 	@echo " ALL B-SYSTEM TEST SUITES PASSED (100% SUCCESS)!"
 	@echo "=========================================================="

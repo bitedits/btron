@@ -28,6 +28,31 @@
 #define ASYNC_UI_BUDGET_US      4000u   /* UI plane soft CPU budget           */
 
 
+/* ── The machine's plane table ─────────────────────────────────────────────
+ * Periods belong to the machine, never to whichever rasterizer the image
+ * happens to link.  virgl, TinyGL and a native GS backend all run the same
+ * INPUT and UI planes as the same two tasks with the same priorities; only
+ * their measured cost differs, and that cost is what a budget is charged
+ * against.  Reading the periods off the renderer instead is what makes a slow
+ * rasterizer an architecture problem: on the PS2 the pass that paints is also
+ * the pass that spends the pointer's distance, so every "px per pass" the
+ * cursor is tuned with is really the frame time in disguise.
+ *
+ * A core installs one table at boot, in its own machine units.  A core that
+ * installs nothing keeps pacing itself and is enforced by nothing. */
+typedef struct {
+    uint32_t input_period_us;      /* HID integration cadence: one USB frame   */
+    uint32_t ui_period_us;         /* one present, at the display's own rate   */
+    uint32_t panel_refresh_us;     /* the clock rows go stale on their own     */
+    uint32_t full_convergence_us;  /* whole-canvas repaint safety net         */
+    uint16_t input_slices_max;     /* periods caught up per pass, not all of   */
+                                   /* them: a long paint must not turn into a  */
+                                   /* long loop just because time passed       */
+} btron_plane_cfg_t;
+
+void btron_planes_install(const btron_plane_cfg_t *cfg);
+const btron_plane_cfg_t *btron_planes(void);
+
 /* Legacy spelling kept for existing call sites */
 #define ASYNC_XHCI_TRB_BUDGET   ASYNC_ISR_TRB_BUDGET
 #define ASYNC_HID_REPORT_BUDGET ASYNC_INPUT_EVT_BUDGET

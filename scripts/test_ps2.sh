@@ -179,20 +179,51 @@ else
 fi
 
 # 7. The R5900 FPU is single-precision (Normative -- see "The FPU law" in doc/md/PS2.md)
-# ldc1/sdc1 and every .d COP1 op are not merely slow here, they are illegal: PCSX2
-# prints "Unknown R5900 COP1:" and the instruction does nothing at all, so every
-# double the image computes comes out as garbage.  A black XMB was exactly that:
-# 2,093 such rows per bench run and 383,999 of 384,000 surface pixels unlit.  The
-# whole image is therefore built -msoft-float and src/drivers/ps2/ps2_builtins.c
-# supplies the libcalls, so *no* FP instruction of either width may survive in the
-# link -- a leftover .s op would mean a translation unit that escaped the flag, and
-# its float arguments would arrive in registers the rest of the image does not use.
+# ldc1/sdc1 and every .d COP1 op are not merely slow here, they are *illegal*: PCSX2
+# prints "Unknown R5900 COP1:" and the instruction does nothing at all, so every double
+# the image computes comes out as garbage.  A black XMB was exactly that: 2,093 such rows
+# per bench run and 383,999 of 384,000 surface pixels unlit.
+#
+# The law has two halves now and they are different assertions, so they get separate
+# tests.  The image is built -msoft-float, which is what keeps the doubles off the FPU;
+# one file, src/drivers/ps2/ps2_builtins.c, is deliberately built -mhard-float so its
+# single-precision libcalls can execute on COP1 (measured 20 cycles/op against 160 for
+# the bit engine in that same file).  "Zero FP instructions in the image" was therefore
+# replaced by:
+#
+#   (a) nothing but that one object may hold a COP1 instruction -- a leftover .s op in
+#       any other translation unit means a file that escaped -msoft-float, and its float
+#       arguments would arrive in registers the rest of the image does not use;
+#   (b) no op of double width, and none of the .s encodings this CPU does not implement
+#       (c.un.s, trunc.w.s -- both proven illegal by byte-scanning the linked image).
+#
 # GNU objdump decodes MIPS3 here and can print these as .word, so use the 64-bit
 # decoder that sees every COP1 encoding.
+FP_PAT='(^|[[:space:]])(ldc1|sdc1|lwc1|swc1|(add|sub|mul|div|sqrt|abs|neg|mov|cvt|trunc|round|ceil|floor)[a-z]*\.[sdfw](\.[sdfw])?|c\.(eq|neq|lt|leq|ngt|nge|un|ord|sf|t|f)\.[sdfw])([[:space:]]|$)'
+# What may not appear anywhere, in any object: the double-width forms and the two
+# single-precision encodings proven not to exist on this CPU.  The width class is `d`
+# alone -- writing [sd] here would flag every legal add.s and cvt.s.w, which is exactly
+# the mistake the first version of this test made.
+FORBIDDEN_PAT='(^|[[:space:]])(ldc1|sdc1|(add|sub|mul|div|sqrt|abs|neg|mov|cvt|rem)[a-z]*\.d(\.[sdw])?|c\.(eq|neq|lt|leq|ngt|nge|un|ord|sf|t|f)\.d|c\.un\.s|trunc\.w\.s|(round|ceil|floor)\.[lw]*\.s)([[:space:]]|$)'
 if [ -n "$OBJDUMP64" ]; then
-    FP_PAT='(^|[[:space:]])(ldc1|sdc1|lwc1|swc1|(add|sub|mul|div|sqrt|abs|neg|mov|cvt|trunc|round|ceil|floor)[a-z]*\.[sdfw](\.[sdfw])?|c\.(eq|neq|lt|leq|ngt|nge|un|ord|sf|t|f)\.[sdfw])([[:space:]]|$)'
-    assert_check "Zero FPU instructions of either width in the image (whole link is -msoft-float)" \
-        "[ \$($OBJDUMP64 -d --triple=mips64el-unknown-elf $ELF | grep -cE '$FP_PAT') -eq 0 ]"
+    assert_check "Only ps2_builtins.ps2.o holds COP1 instructions (every other unit is -msoft-float)" \
+        "! (find src -name '*.ps2.o' ! -name 'ps2_builtins.ps2.o' -exec $OBJDUMP64 -d --triple=mips64el-unknown-elf {} + | grep -cE '$FP_PAT')"
+    assert_check "Zero double-width or EE-illegal FPU op in the image (.d ops, c.un.s, trunc.w.s)" \
+        "! ($OBJDUMP64 -d --triple=mips64el-unknown-elf $ELF | grep -cE '$FORBIDDEN_PAT')"
+    # The same law read off the bytes rather than off a disassembler's naming, because an
+    # encoder this toolchain changes its mind about is exactly the one that would slip
+    # through a mnemonic grep: c.un.s is 0x46020031 and trunc.w.s is 0x4600010d, stored
+    # little-endian.  Scanned over the whole file, not just .text -- a section-name typo
+    # would otherwise turn this test into a silent pass.
+    ELF_HEX="$(xxd -p $ELF | tr -d '\n')"
+    # The variable reference survives to eval time -- a 4.6 MB image is a 9 MB hex string
+    # and pasting it into the command text would make every failure print it.
+    assert_check "The two illegal COP1 encodings are absent from the image byte-for-byte" \
+        "! (grep -q '31000246\|0d010046' <<<\"\$ELF_HEX\")"
+    # And the positive half of the same check: the sanctioned object really does contain
+    # them, so a stale -msoft-float build of it cannot pass by having no FPU code at all.
+    assert_check "ps2_builtins.ps2.o really emits COP1 arithmetic (the hardware path is compiled in)" \
+        "[ \$($OBJDUMP64 -d --triple=mips64el-unknown-elf src/drivers/ps2/ps2_builtins.ps2.o | grep -cE '[[:space:]](add|sub|mul|div)\.s[[:space:]]') -ge 4 ]"
 else
     echo "  [SKIP] 64-bit-GPR disassembler unavailable -- FPU-opcode sweep not run"
 fi

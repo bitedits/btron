@@ -130,10 +130,19 @@ silently a previous `double`.  Every float-heavy file in this port (`glgears.c`,
 384000 pixels and a single bench run printed 2,093 `Unknown R5900` rows.
 
 The rule is therefore about the **whole image**, not about the two conversions that happened
-to need libcalls: `PS2_CC` carries `-msoft-float`, so no translation unit emits a COP1
-instruction of either width and all FP arithmetic goes through function calls.  The two
-exceptions to `-march=mips2` above are *not* exceptions to this one -- `ps2_gs_reg.s` and
-`boot_ps2.s` contain no FP.
+to need libcalls: `PS2_CC` carries `-msoft-float`, so a translation unit emits no COP1
+instruction and FP arithmetic reaches the runtime as a function call -- with the one
+single-precision exception the next paragraph names.  The two exceptions to
+`-march=mips2` above are *not* exceptions to this one -- `ps2_gs_reg.s` and `boot_ps2.s`
+contain no FP.
+
+One unit is built with the FPU on, by design and only for single precision:
+`src/drivers/ps2/ps2_builtins.c` is compiled `-mhard-float -DBTRON_PS2_FP_HW` (Makefile
+`PS2_FP ?= hw`, and `PS2_FP=soft` builds the same file without it).  That is permitted by
+the second half of this law rather than an exception to it: the `.d` forms stay illegal
+everywhere, and the `.s` forms are only ever emitted inside a unit whose entire public
+surface is integer-typed.  Mixing remains the hazard the next paragraph describes, so the
+sanctioned unit must never let a `float` cross its boundary.
 
 Mixing is not an option either, and this is the part that makes it an ABI law rather than a
 performance note.  Under `-msoft-float`, O32 passes floating values in **integer**
@@ -168,13 +177,52 @@ deliberate mutations of the runtime (an off-by-one exponent, an unwindowed multi
 caught with 12,356 and 460,302 failures, which is what makes the passing number mean
 something rather than prove nothing.
 
-The static side lives in `scripts/test_ps2.sh` as tests 39-41: that the linked image
-contains **zero** FP instructions of either width (disassembled with a 64-bit-capable
-decoder, since GNU objdump prints MIPS III encodings as `.word`), that no *named* symbol is
-undefined, and that all 32 libcalls are present.  Test 41 reads the symbol table into a
-variable first: piping `readelf` into `grep -q` would make grep exit at the first match,
-readelf die of SIGPIPE and `set -o pipefail` report that as a miss, so a symbol that *is*
-defined would fail the test.
+The static side lives in `scripts/test_ps2.sh` as tests 39-44: that no object *except*
+`ps2_builtins.ps2.o` contains an FP instruction at all (a leftover `.s` op elsewhere means a
+translation unit that escaped `-msoft-float`, and its arguments would arrive in registers the
+rest of the image does not use), that the image contains no double-width op and neither of
+the two single-precision encodings this CPU does not implement, that those two encodings are
+absent **byte-for-byte** as well (a mnemonic grep trusts the disassembler's naming; the
+byte scan does not), that `ps2_builtins.ps2.o` really does emit COP1 arithmetic -- so a
+stale soft-float build of it cannot pass by having no FPU code at all -- that no *named*
+symbol is undefined, and that all 32 libcalls are present.  Test 44 reads the symbol table
+into a variable first: piping `readelf` into `grep -q` would make grep exit at the first
+match, readelf die of SIGPIPE and `set -o pipefail` report that as a miss, so a symbol that
+*is* defined would fail the test.
+
+### What COP1 actually is, measured (Normative)
+
+`btron_fp_init()` enables CU1 if the BIOS left it clear, masks the FPU's exception enables
+and proves the unit answers with one round trip (`1.0f + 2.0f` must come back
+`0x40400000`); the result is recorded in `btron_fp_on`, so a machine whose FPU does not
+answer falls back to the bit engine and costs cycles rather than pixels.  Doubles never go
+to the FPU at all, because it has no double-precision instruction.
+
+`btron_fp_selftest()` runs both engines over the same operand vector and prints the verdict
+as `[FPU]` rows.  These are the measured facts, and the port is designed around them:
+
+| Question | Measurement |
+|:---|:---|
+| What does one op cost? | COP1 20 cycles, bit engine 160 -- an 8x on the arithmetic itself |
+| Where does it disagree? | `add.s`, `sub.s`, `mul.s` only; `div.s`, `sqrt.s`, the five compares and `cvt.s.w` agree on every clean pair |
+| How far? | Exactly one representable step, never wider, never across zero -- 61 of the 576 clean arithmetic pair-runs (each class runs 144) |
+| Which engine is right? | The bit engine: it is host-proven exact, so each of those 61 is COP1 answering the neighbour that is *not* correctly rounded |
+| Is it a rounding mode? | No.  Those classes make a rounding decision on 60/58/42 of their clean pairs and COP1 is wrong on 28/14/19 of them, while `div.s` -- which decides on 81, more than any other op -- is wrong on none.  A mode cannot skip the op with the most decisions to make |
+| Does it flush subnormals differently? | No: that count is zero |
+
+So the gates on the arithmetic are `fpu_gap_wide == 0` and `fpu_gap_sign == 0`, not
+"agrees with the bit engine": a one-step gap is invisible in an 8-bit pixel, and a demand
+that `add.s` be IEEE-exact is a demand that this CPU be a different CPU.  `fpu_other` is
+reported as information for the same reason.
+
+What this does *not* buy: the XMB's icon bake and frame draw spend their time in
+`include/gl/math.h`'s double-precision series, which no Emotion Engine FPU can accelerate
+because the machine has no `.d` instructions to accelerate it with.  The 5x is in routing
+that work to single precision, not in the switch above.
+
+One thing no measurement in this tree can settle: every `[FPU]` number here came from
+PCSX2's Emotion Engine.  The same rows print over SIO on a real console, so the identical
+image run there says whether the one-step residue is the emulator or the silicon.
 
 ### Driver Files
 
@@ -191,7 +239,7 @@ defined would fail the test.
 | [`src/drivers/ps2/ps2_pad.h`](file:///Users/tonpa/depot/bitedits/btron/src/drivers/ps2/ps2_pad.h) & [`.c`](file:///Users/tonpa/depot/bitedits/btron/src/drivers/ps2/ps2_pad.c) | Cleanroom DualShock 2 controller driver: analog stick velocity integration, deadband filtering, button edge detection, and event mapping. |
 | [`src/drivers/ps2/ps2_usb.h`](file:///Users/tonpa/depot/bitedits/btron/src/drivers/ps2/ps2_usb.h) & [`.c`](file:///Users/tonpa/depot/bitedits/btron/src/drivers/ps2/ps2_usb.c) | Cleanroom USB Open Host Controller Interface (OHCI) driver (`0xBF801600`) and standard USB HID Boot Protocol keyboard/mouse decoders. |
 | [`src/cores/core_ps2.c`](file:///Users/tonpa/depot/bitedits/btron/src/cores/core_ps2.c) | Platform core adapter: multi-window application suite (Workbench, B-Editor, TAD Cabinet, Settings), Japanese TIP/IME status badge, interactive SIO0 shell, event queue, and RTOS heartbeat. |
-| [`scripts/test_ps2.sh`](file:///Users/tonpa/depot/bitedits/btron/scripts/test_ps2.sh) | Automated verification suite checking ELF architecture, entry point, driver symbols, R5900 opcodes, the one-calling-convention ABI law (image *and* every object at 32-bit GPRs, the GS accessors at one `sd`/one `ld`), the FPU law (zero FP instructions of either width, no named undefined symbol, all 32 soft-float libcalls defined) and the ISO image (42/42 tests). |
+| [`scripts/test_ps2.sh`](file:///Users/tonpa/depot/bitedits/btron/scripts/test_ps2.sh) | Automated verification suite checking ELF architecture, entry point, driver symbols, R5900 opcodes, the one-calling-convention ABI law (image *and* every object at 32-bit GPRs, the GS accessors at one `sd`/one `ld`), the FPU law (COP1 instructions in `ps2_builtins.ps2.o` and in no other object, no double-width op and no EE-illegal `.s` encoding either by mnemonic or by byte scan, the hardware path provably compiled in, no named undefined symbol, all 32 soft-float libcalls defined) and the ISO image (45/45 tests). |
 
 ### 2.1 Graphics Synthesizer (GS) Framebuffer Architecture
 

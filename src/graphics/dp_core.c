@@ -3,6 +3,7 @@
  */
 
 #include <btron/dp.h>
+#include <btron/async_rt.h>
 #include <btron/libc_shim.h>
 
 GDEV* opn_dev(H w, H h) {
@@ -61,6 +62,29 @@ RENDER_STATS g_render_stats;
 /* The shared build has no counter of its own; the platform core supplies a
  * strong definition (see core_arm64.c) so its stage timings are real there. */
 __attribute__((weak)) uint32_t btron_render_perf_us(void) { return 0; }
+
+/* The machine's plane table, owned here because this file is in every target's
+ * source list and no core has to be linked differently to reach it.  Copied, not
+ * aliased: a core is allowed to install from a stack-built struct.  NULL means
+ * the core paces its own planes -- which is what every core did before the PS2
+ * needed its periods read off its own clocks instead of the renderer's cost. */
+static btron_plane_cfg_t s_planes;
+static const btron_plane_cfg_t *s_planes_set;
+
+void btron_planes_install(const btron_plane_cfg_t *cfg)
+{
+    unsigned int i;
+    if (!cfg) { s_planes_set = NULL; return; }
+
+    {
+        const unsigned char *src = (const unsigned char *)cfg;
+        unsigned char *dst = (unsigned char *)&s_planes;
+        for (i = 0; i < sizeof(s_planes); i++) dst[i] = src[i];
+    }
+    s_planes_set = &s_planes;
+}
+
+const btron_plane_cfg_t *btron_planes(void) { return s_planes_set; }
 
 void btron_render_stats_take(RENDER_STATS *out) {
     if (!out) return;

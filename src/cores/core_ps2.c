@@ -20,6 +20,8 @@
 #include <stddef.h>
 #include <stdarg.h>
 
+#include <btron/async_rt.h>
+
 #include <btron/types.h>
 #include <btron/error.h>
 #include <btron/itron.h>
@@ -41,6 +43,7 @@
 #include "ps2_gs.h"
 #include "ps2_sio.h"
 #include "ps2_pad.h"
+#include "ps2_fp.h"
 #include "ps2_usb.h"
 #include "ps2_iopram.h"
 
@@ -3240,6 +3243,13 @@ static void ps2_bench_launch(GDEV *screen)
     ps2_kprintf("[BENCH] launch: menu left %d\n", (int)tracker_is_menu_open());
 }
 
+/* The closing row prints once, by whichever of the two gets there first: the app
+ * phase's frame hook, when the app outlives its frame budget, or the end of
+ * ps2_bench_run().  It sits outside the app guard below because that guard decides who
+ * may print the row, not whether the table needs one -- with the app phase compiled
+ * out, the end of the run is the only printer and still has to know nobody beat it. */
+static int s_bench_sentinel;
+
 #if BTRON_PS2_BENCH_APP
 /* ── App phase: is the common GL downstack actually driving frames here? ─────
  *
@@ -3260,8 +3270,10 @@ static int      s_bench_app_active; /* the phase is running, so count its passes
 static uint32_t s_bench_app_left;   /* frames owed until the injected Escape */
 static uint32_t s_bench_app_made;
 static uint32_t s_bench_app_t0;     /* folded µs clock at the open, for the frame heartbeat */
+static uint32_t s_bench_app_over;   /* frames made past the budget's Escape, 0 = not yet spent */
 
 extern WND *open_xmb_window(void);
+extern int  xmb_depth(void);        /* the depth xb_go_back() is standing at */
 
 /* "xmb still black" measured instead of reported: xb_paint() renders through the GL
  * backend into the window's own device pixels, so a black bar means the rasterizer
@@ -3295,7 +3307,16 @@ static void ps2_bench_xmb_surface(const char *when)
                 when, dev->width, dev->height, black, other, first, x0, y0, x1, y1);
 }
 
-static void ps2_bench_app(GDEV *screen, uint32_t frames)
+/* How many app frames the bench phase asks for before it injects its own Escape.
+ * Sixty is the right number for a table and the wrong number for a feedback loop:
+ * at the frame cost this app has, 60 frames is 24 minutes of emulator and every
+ * harness that waits for the closing sentinel gets killed at frame 3.  A loop that
+ * wants the steady-state per-frame cost only needs the third one. */
+#ifndef BTRON_PS2_BENCH_APP_FRAMES
+#define BTRON_PS2_BENCH_APP_FRAMES 60u
+#endif
+
+static void ps2_bench_app(uint32_t frames)
 {
     RENDER_STATS st;
     const uint32_t t_start = btron_render_perf_us();  /* folded: one frame exceeds a Count wrap */
@@ -3307,6 +3328,7 @@ static void ps2_bench_app(GDEV *screen, uint32_t frames)
     s_bench_app_active = 1;
     s_bench_app_left = frames;
     s_bench_app_made = 0u;
+    s_bench_app_over = 0u;
     s_bench_app_t0 = t_start;
     /* Blocks until the injected Escape has closed the window: the frame loop is the
      * body's from here, not the session loop's.  The two heap rows are the pool's
@@ -3439,6 +3461,74 @@ static void ps2_bench_run(GDEV *screen)
         { "v1",   0,   1 }, { "v4",   0,  4 }, { "v16",   0, 16 },
         { "v64",  0,  64 }, { "v127", 0, 127 },
     };
+
+    /* First phase, ahead of the present table, because every number after it is a
+     * float: the two single-precision engines are run over the same fixed vector of
+     * bit patterns, and if they disagree or the FPU is not answering, the timings
+     * below belong to the wrong engine.  The two rows are the proof and the price --
+     * worst=0 ulp with disagree=0 is the correctness half, and the cycles-per-op row
+     * is what a 24 s XMB frame is made of. */
+    {
+        uint32_t ops = 0u, bad = 0u, hw_t = 0u, soft_t = 0u;
+        const uint32_t worst_ulp = btron_fp_selftest(&ops, &bad, &hw_t, &soft_t);
+        unsigned int c;
+        ps2_kprintf("\n[BENCH] float engines -- COP1 against the bit engine, same vector\n");
+        ps2_kprintf("[FPU] checked=%u disagree=%u worst=%u ulp  path in use: %s\n",
+                    (unsigned int)ops, (unsigned int)bad, (unsigned int)worst_ulp,
+                    btron_fp_on ? "Emotion Engine COP1" : "bit engine");
+        ps2_kprintf("[FPU] 16000-op chain: COP1 %u cycles/op  bit engine %u cycles/op\n",
+                    (unsigned int)(hw_t ? hw_t / 16000u : 0u),
+                    (unsigned int)(soft_t ? soft_t / 16000u : 0u));
+        /* The same disagreement split by op and by argument class, because `bad=1910`
+         * on its own does not say whether the arithmetic is wrong (clean column, every
+         * pixel affected) or only the non-arithmetic edge law (special column, NaN
+         * payload and flags, which the rasterizer never touches).  Rows are printed
+         * whether or not they are clean: `clean=400 bad=0` is the evidence that the
+         * mtc1/op/mfc1 sequence works at all, and its absence is what left the last
+         * run's answer unverifiable. */
+        for (c = 0u; c < BTRON_FP_CLS_N; c++)
+            ps2_kprintf("[FPU] op %-6s clean=%u bad=%u  special=%u bad=%u\n",
+                        btron_fp_cls_name[c],
+                        (unsigned int)btron_fp_cls[c][0], (unsigned int)btron_fp_cls[c][1],
+                        (unsigned int)btron_fp_cls[c][2], (unsigned int)btron_fp_cls[c][3]);
+        /* And the same disagreements sorted by cause, because the causes are not one
+         * defect: daz/ftz say a unit that flushes subnormals, nonfinite says its law for
+         * infinities and NaNs (the EE has no unordered compare, so a NaN pair is one of
+         * these by construction), inexact says a conversion that has no exact answer.
+         * `other` is the bucket with no explanation, and the one the gate reads; the row
+         * after it names the op that filled it first. */
+        ps2_kprintf("[FPU] shape daz=%u ftz=%u nonfinite=%u inexact=%u other=%u\n",
+                    (unsigned int)btron_fp_shape[BTRON_FP_SHAPE_DAZ],
+                    (unsigned int)btron_fp_shape[BTRON_FP_SHAPE_FTZ],
+                    (unsigned int)btron_fp_shape[BTRON_FP_SHAPE_NONFINITE],
+                    (unsigned int)btron_fp_shape[BTRON_FP_SHAPE_INEXACT],
+                    (unsigned int)btron_fp_shape[BTRON_FP_SHAPE_OTHER]);
+        if (btron_fp_shape[BTRON_FP_SHAPE_OTHER])
+            ps2_kprintf("[FPU] unexplained first=%s\n",
+                        btron_fp_other_where ? btron_fp_other_where : "(unnamed)");
+        /* And how far off, for the clean arithmetic pairs.  This is the row that decides
+         * what an unexplained disagreement *is*: one step is the same number rounded the
+         * other way -- invisible in 8-bit pixels, and a property of the unit rather than
+         * of the port -- while a wide or sign-flipped gap is a different number and
+         * cannot be used for anything.  The bit engine's own claim to be right is the host
+         * differential in verify/tests/test_ps2_softfloat.c (15.2M checks, bit-exact), so
+         * a gap here is measured against arithmetic that has been proven, not assumed. */
+        ps2_kprintf("[FPU] clean gap");
+        for (c = 0u; c < BTRON_FP_GAP_N; c++)
+            ps2_kprintf(" %s=%u", btron_fp_gap_name[c], (unsigned int)btron_fp_gap[c]);
+        ps2_kprintf("\n");
+        /* The bytes behind the counts, for as long as the counts are unexplained: with a
+         * printed pair the question `which engine is wrong` stops being a matter of
+         * opinion, because the exact answer for a single-precision pair is computable on
+         * any host.  Nothing prints here while every disagreement has a cause. */
+        for (c = 0u; c < btron_fp_dump_n; c++)
+            ps2_kprintf("[FPU] pair %s a=0x%08x b=0x%08x cop1=0x%08x bits=0x%08x gap=%u\n",
+                        btron_fp_cls_name[btron_fp_dump[c][0]],
+                        (unsigned int)btron_fp_dump[c][1], (unsigned int)btron_fp_dump[c][2],
+                        (unsigned int)btron_fp_dump[c][3], (unsigned int)btron_fp_dump[c][4],
+                        (unsigned int)btron_fp_dump[c][5]);
+    }
+
     ps2_kprintf("\n[BENCH] present cost by region -- no input involved, 16 reps each\n");
     ps2_bench_region(screen, "full", 0, 0, PS2_SCREEN_WIDTH, PS2_SCREEN_HEIGHT, 1, 2u);
     ps2_bench_region(screen, "band16", 0, 300, PS2_SCREEN_WIDTH, 316, 0, 16u);
@@ -3488,14 +3578,17 @@ static void ps2_bench_run(GDEV *screen)
      * rows that answer "can the launcher actually run XMB" have to be in the log before
      * the 60-frame phase below is cut off by the harness' timeout. */
     ps2_bench_launch_xmb_by_key(screen);
-    ps2_bench_app(screen, 60u);
+    ps2_bench_app(BTRON_PS2_BENCH_APP_FRAMES);
 #endif
 
     /* Runs last of the phases, so nothing downstream inherits the windows it opens;
      * see the phase's own note on open_xmb_window()'s static handle. */
     ps2_bench_launch(screen);
 
-    ps2_kprintf("\n[BENCH] run complete\n");
+    /* Not twice: the app phase's frame hook prints this row when the app outlives its
+     * budget, and a second copy would tell the harness the table ended in two places. */
+    if (!s_bench_sentinel)
+        ps2_kprintf("\n[BENCH] run complete\n");
 }
 #endif /* BTRON_PS2_BENCH */
 
@@ -3559,8 +3652,28 @@ static void ps2_gui_pass(GDEV *screen)
         if (s_bench_app_made == 30u) ps2_bench_xmb_surface("frame 30");
     }
     if (s_bench_app_left && --s_bench_app_left == 0) {
-        ps2_inject_key(BTRON_KEY_ESCAPE, 1);
+        const ER injected = ps2_inject_key(BTRON_KEY_ESCAPE, 1);
         ps2_inject_key(BTRON_KEY_ESCAPE, 0);
+        /* The two numbers that decide whether the app's own quit key can close it:
+         * what the event queue answered, and the depth xb_go_back() is standing at.
+         * r!=0 means the key died in the queue; r==0 with depth>1 means it was taken
+         * as a go-back, which is not a close. */
+        ps2_kprintf("[BENCH] xmb: budget spent, escape r=%d depth=%d top=%s made=%u\n",
+                    (int)injected, xmb_depth(), get_top_wnd() ? "up" : "closed",
+                    (unsigned int)s_bench_app_made);
+        s_bench_app_over = 1u;
+    } else if (s_bench_app_active && s_bench_app_over &&
+               ++s_bench_app_over > 2u && !s_bench_sentinel) {
+        /* The frame budget ends the run when the app does not end itself.  Without
+         * this the closing sentinel is only reachable through the app's exit, and the
+         * 2026-10-10 PCSX2 run of a 3-frame ask was still printing frame 40 when the
+         * harness' own timeout killed it with nothing scored.  Two grace frames let an
+         * in-flight close land first. */
+        s_bench_sentinel = 1;
+        ps2_kprintf("[BENCH] xmb: %u frames past the budget, the app took no Escape -- "
+                    "ending the run from the frame hook\n",
+                    (unsigned int)(s_bench_app_over - 1u));
+        ps2_kprintf("\n[BENCH] run complete\n");
     }
 #endif
 
@@ -4144,6 +4257,25 @@ static void ps2_log_boot_head(void)
     ps2_kprintf("[CPU] CP0 Count %s  (%u ticks/us)\n",
                 s_timebase_ok ? "running" : "STOPPED, counted delays",
                 (unsigned int)EE_TICKS_PER_US);
+    {
+        /* The float question, answered rather than assumed: CU1 (bit 29) says whether
+         * the loader handed over the EE's FPU, btron_fp_on says whether this image
+         * then used it.  The two can disagree on purpose -- btron_fp_init() sets CU1
+         * itself when the BIOS left it clear, and falls back to the bit engine if the
+         * FPU does not answer, so a machine with no usable FPU costs time and not
+         * pixels.  FCSR is printed because its rounding field has to agree with the
+         * engine's round-nearest-even for the two to be comparable. */
+        uint32_t fcsr = 0u;
+        const uint32_t st = btron_fp_probe(&fcsr);
+        ps2_kprintf("[CPU] CP0.Status=0x%08x  CU3..CU0=%d%d%d%d  IE=%d  EXL=%d\n",
+                    (unsigned int)st,
+                    (int)((st >> 31) & 1u), (int)((st >> 30) & 1u),
+                    (int)((st >> 29) & 1u), (int)((st >> 28) & 1u),
+                    (int)(st & 1u), (int)((st >> 1) & 1u));
+        ps2_kprintf("[FPU] single precision: %s  proof add(1.0f,2.0f)=0x%08x want 0x40400000  FCSR=0x%08x\n",
+                    btron_fp_on ? "Emotion Engine COP1" : "bit engine, COP1 did not answer",
+                    (unsigned int)btron_fp_seen, (unsigned int)fcsr);
+    }
 }
 
 static void ps2_log_boot_tail(int hid_devs)
@@ -4161,6 +4293,13 @@ void ps2_kernel_main(void)
     /* 1. SIO0 first: every row below is mirrored to it, and it is also the only
      *    way to see a hang that happens before the GS console exists. */
     ps2_sio_init();
+
+    /* 1b. The FPU decision, before anything is timed or rasterised: btron_fp_init()
+     *     proves the EE's single-precision unit answers and switches to it, or leaves
+     *     the bit engine in charge.  It cannot come later than here -- the two engines
+     *     differ by an order of magnitude, so a phase timed before the call is not the
+     *     same phase timed after it, and every row below is a timing. */
+    btron_fp_init();
 
     /* 2. Establish the timebase before anything is timed. */
     uint32_t c0 = ps2_count_read();

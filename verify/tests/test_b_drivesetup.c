@@ -31,6 +31,16 @@
 #include <btron/fs/vol_api.h>
 #include "../../src/apps/b_drivesetup.h"
 
+/* clu.c's launcher table takes the address of every app the shell can open.  An
+ * opener that is not linked reads NULL there on ELF, which is what lets one table
+ * name apps a target does not build; the Mach-O linker these host tests use rejects
+ * the unresolved reference outright, so a test that links clu.host.o without linking
+ * the app supplies the inert opener itself. */
+#include <btron/apps.h>
+WND* open_xmb_window(void)          { return NULL; }
+WND* open_glgears_window(void)      { return NULL; }
+WND* open_lilcu64_demo_window(void) { return NULL; }
+
 /* Mock graphics & window manager stubs for headless unit test runner */
 static WND g_mock_wnd;
 static COLOR g_mock_vram[1024 * 768];

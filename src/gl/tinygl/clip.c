@@ -1,7 +1,11 @@
 #include "msghandling.h"
 #include "zgl.h"
-/* fill triangle profile */
-/* #define PROFILE */
+/* gl_fill_stats_t, the shape this file's counters are read through, belongs to the
+ * application's side of the backend boundary rather than to tinygl, so it is included here
+ * instead of being written twice.  The macro shims are switched off because this file defines
+ * GL-adjacent names of its own and has no use for a dispatch table. */
+#define BTRON_GL_NO_MACRO_SHIMS
+#include "../gl_dispatch.h"
 
 #define CLIP_XMIN (1 << 0)
 #define CLIP_XMAX (1 << 1)
@@ -396,15 +400,106 @@ static void gl_draw_triangle_clip(GLVertex* p0, GLVertex* p1, GLVertex* p2, GLin
 void gl_draw_triangle_select(GLVertex* p0, GLVertex* p1, GLVertex* p2) { gl_add_select1(p0->zp.z, p1->zp.z, p2->zp.z); }
 void gl_draw_triangle_feedback(GLVertex* p0, GLVertex* p1, GLVertex* p2) { gl_add_feedback(GL_POLYGON_TOKEN, p0, p1, p2, 0); }
 
-#ifdef PROFILE
-int count_triangles, count_triangles_textured, count_pixels;
-#warning "Compile with PROFILE slows down everything"
-#endif
+/* Which fill path each triangle took, and how much of the screen it was asked to cover.
+ *
+ * A fill costs its setup once and its area per pixel, so these two counts are what tells a
+ * stage bound by *pixels* from a stage bound by *triangles* -- which is the difference
+ * between making the blend cheaper and making there be fewer of them.  They are counted
+ * here, at the dispatch, rather than inside the span loops: an accumulator in ztriangle.h
+ * takes a register from the very loop it is meant to be measuring, while the area of a
+ * triangle is a handful of integer operations against a fill that is either hundreds of
+ * thousands of pixels or hundreds of cycles of setup.
+ *
+ * The coordinates are viewport-clipped by the time a triangle reaches this function, so
+ * each product is bounded by the canvas (800 x 600 = 480,000 against 2,147,483,647) and the
+ * area stays 32-bit -- which matters here because a 64-bit product would need __muldi3, and
+ * the PS2 image forbids every named undefined symbol. */
+static unsigned s_fill_tris, s_fill_covered;
+static unsigned s_fill_tex_tris, s_fill_tex_covered;
+static unsigned s_fill_blended;
+static unsigned s_fill_scanlines;
+
+/* Time is bracketed here rather than inside ztriangle.h's loops: two reads of the clock per
+ * fill is some thousands of cycles across a stage of thousands of fills, while an
+ * accumulator inside the span loop would take a register from the thing being timed.  What
+ * it measures is the fill call including its per-triangle setup and its per-scanline edge
+ * walk, so what the stage's own time leaves over is the vertex pipeline and the clipping.
+ * The clock is this boundary's service (gl_dispatch.c), and it answers 0 where the target
+ * has installed none, which leaves the sum at zero -- the absence is visible as zero, never
+ * mistaken for an instant rasterizer. */
+static unsigned s_fill_us;
+
+/* The geometry pipeline is billed by vertices, which a strip shares out and a triangle count
+ * does not see; incremented in vertex.c. */
+unsigned tgl_stat_verts;
+
+static unsigned tgl_tri_covered(const ZBufferPoint *a, const ZBufferPoint *b, const ZBufferPoint *c)
+{
+    const long cross = (long)(b->x - a->x) * (long)(c->y - a->y)
+                     - (long)(c->x - a->x) * (long)(b->y - a->y);
+
+    /* The exact covered count differs from the area by the half-pixel rules on each edge,
+     * which is at most the perimeter -- some 2,600 pixels against a full-screen quad's
+     * 384,000, and nothing the caller reads is a decision between two candidate costs. */
+    return (unsigned)(cross < 0 ? -cross : cross) / 2u;
+}
+
+/* Copy the counts into the caller's window and, when reset is non-zero, start that window
+ * again -- so the window is whatever the application brackets.  The struct is gl_fill_stats_t
+ * from src/gl/gl_dispatch.h, which is the application's side of this boundary and is included
+ * here rather than mirrored: the field names are written once. */
+void tgl_fill_stats(gl_fill_stats_t *out, int reset)
+{
+    out->tris            = s_fill_tris;
+    out->covered         = s_fill_covered;
+    out->textured_tris   = s_fill_tex_tris;
+    out->textured_covered = s_fill_tex_covered;
+    out->blended_tris    = s_fill_blended;
+    out->scanlines       = s_fill_scanlines;
+    out->fill_us         = s_fill_us;
+    out->verts           = tgl_stat_verts;
+    out->reported        = 1;
+
+    if (!reset)
+        return;
+    s_fill_tris = s_fill_covered = 0u;
+    s_fill_tex_tris = s_fill_tex_covered = 0u;
+    s_fill_blended = 0u;
+    s_fill_scanlines = 0u;
+    s_fill_us = 0u;
+    tgl_stat_verts = 0u;
+}
+
+static void tgl_count_fill(const ZBufferPoint *a, const ZBufferPoint *b, const ZBufferPoint *c,
+                           int textured, int blended)
+{
+    const unsigned cov = tgl_tri_covered(a, b, c);
+    unsigned ymin = a->y, ymax = a->y;
+
+    if (b->y < ymin) ymin = b->y;
+    if (b->y > ymax) ymax = b->y;
+    if (c->y < ymin) ymin = c->y;
+    if (c->y > ymax) ymax = c->y;
+
+    s_fill_tris++;
+    s_fill_covered += cov;
+    s_fill_scanlines += ymax - ymin + 1u;
+    if (textured) {
+        s_fill_tex_tris++;
+        s_fill_tex_covered += cov;
+    }
+    if (blended) s_fill_blended++;
+}
 
 /* see vertex.c to see how the draw functions are assigned.*/
 void gl_draw_triangle_fill(GLVertex* p0, GLVertex* p1, GLVertex* p2) { 
 	GLContext* c = gl_get_context();
 	GLImage* im = NULL;
+#if TGL_FEATURE_BLEND == 1
+	const int fill_blended = (c->zb->enable_blend != 0);
+#else
+	const int fill_blended = 0;   /* the arms below take the plain path whatever the state */
+#endif
 
 	if (c->texture_2d_enabled && c->current_texture != NULL) {
 		im = &c->current_texture->images[0];
@@ -414,6 +509,12 @@ void gl_draw_triangle_fill(GLVertex* p0, GLVertex* p1, GLVertex* p2) {
 		if (im->pixmap == NULL)
 			im = NULL;
 	}
+
+	/* Counted once, before the dispatch, with the same conditions the arms below read --
+	 * including here, where an absent plane has already been folded back to untextured. */
+	tgl_count_fill(&p0->zp, &p1->zp, &p2->zp, im != NULL, fill_blended);
+
+	const unsigned t_fill_t0 = gl_perf_us();
 
 	if (im != NULL) {
 		/* if(c->current_texture)*/
@@ -430,13 +531,31 @@ void gl_draw_triangle_fill(GLVertex* p0, GLVertex* p1, GLVertex* p2) {
 #endif
 
 		ZB_setTexture(c->zb, im);
+		/* One comparison per triangle decides which texture mapper runs.  Equal
+		 * interpolated z at the three vertices means 1/z is constant over the whole area,
+		 * and there the affine path is the same interpolation without the per-scanline
+		 * float block, not an approximation of it.  That is the ordinary case for a 2D
+		 * interface, whose projection has no w divide, and the case the [XMBT] raster rows
+		 * price: glyph rows of about five pixels each, every scanline re-deriving its own
+		 * texture steps. */
+		const int z_const = p0->zp.z == p1->zp.z && p1->zp.z == p2->zp.z;
 #if TGL_FEATURE_BLEND == 1
-		if (c->zb->enable_blend)
-			ZB_fillTriangleMappingPerspective(c->zb, &p0->zp, &p1->zp, &p2->zp);
+		if (c->zb->enable_blend) {
+			if (z_const)
+				ZB_fillTriangleMapping(c->zb, &p0->zp, &p1->zp, &p2->zp);
+			else
+				ZB_fillTriangleMappingPerspective(c->zb, &p0->zp, &p1->zp, &p2->zp);
+		} else {
+			if (z_const)
+				ZB_fillTriangleMappingNOBLEND(c->zb, &p0->zp, &p1->zp, &p2->zp);
+			else
+				ZB_fillTriangleMappingPerspectiveNOBLEND(c->zb, &p0->zp, &p1->zp, &p2->zp);
+		}
+#else
+		if (z_const)
+			ZB_fillTriangleMappingNOBLEND(c->zb, &p0->zp, &p1->zp, &p2->zp);
 		else
 			ZB_fillTriangleMappingPerspectiveNOBLEND(c->zb, &p0->zp, &p1->zp, &p2->zp);
-#else
-		ZB_fillTriangleMappingPerspectiveNOBLEND(c->zb, &p0->zp, &p1->zp, &p2->zp);
 #endif
 	} else if (c->current_shade_model == GL_SMOOTH) {
 #if TGL_FEATURE_BLEND == 1
@@ -457,6 +576,8 @@ void gl_draw_triangle_fill(GLVertex* p0, GLVertex* p1, GLVertex* p2) {
 		ZB_fillTriangleFlatNOBLEND(c->zb, &p0->zp, &p1->zp, &p2->zp);
 #endif
 	}
+
+	s_fill_us += gl_perf_us() - t_fill_t0;
 }
 
 /* Render a clipped triangle in line mode */

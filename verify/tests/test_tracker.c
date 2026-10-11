@@ -35,6 +35,10 @@ WND* open_drivesetup_window(void)   { s_drivesetup_opened++; return NULL; }
 WND* launch_beos_chat(void)         { s_chat_opened++; return NULL; }
 WND* open_clarity_window(void)      { s_clarity_opened++; return NULL; }
 WND* open_xmb_window(void)          { s_xmb_opened++; return NULL; }
+/* Inert: the two demo rows are launcher targets, not behaviour this test
+ * asserts on, but tracker_execute_item() calls them under this build. */
+WND* open_glgears_window(void)      { return NULL; }
+WND* open_lilcu64_demo_window(void) { return NULL; }
 void global_menu_render_bar(GDEV *dev) { (void)dev; }
 ER init_evt_sys(void) { return E_OK; }
 ER tip_init(void) { return E_OK; }

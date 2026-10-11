@@ -204,6 +204,7 @@ as `[FPU]` rows.  These are the measured facts, and the port is designed around 
 | Question | Measurement |
 |:---|:---|
 | What does one op cost? | COP1 20 cycles, bit engine 160 -- an 8x on the arithmetic itself |
+| ...and from a `-msoft-float` caller, which is everywhere in the image? | COP1 28 cycles, bit engine 536.  The 8 above the engine's own 20 is the `jal` and moving the operands between GPRs and COP1; the 376 above 160 is that plus the generic engine's own entry work.  28 is the price every stage table in this file bills a float operation at, and it is the one number that says whether an arithmetic change is worth making |
 | Where does it disagree? | `add.s`, `sub.s`, `mul.s` only; `div.s`, `sqrt.s`, the five compares and `cvt.s.w` agree on every clean pair |
 | How far? | Exactly one representable step, never wider, never across zero -- 61 of the 576 clean arithmetic pair-runs (each class runs 144) |
 | Which engine is right? | The bit engine: it is host-proven exact, so each of those 61 is COP1 answering the neighbour that is *not* correctly rounded |
@@ -248,9 +249,14 @@ and whole-atlas PPM were byte-identical between the runtime arithmetic and the s
 (cell 24 = 1863 ink px, cell 26 = 1889).
 
 What is left: a steady frame is 683 ms, split `f_bg 233 / f_menu 202 / f_ribbon 199 /
-f_surface 43 / f_clear 7 / f_particles 0.2` us over a 768x500 canvas.  The per-pixel blend
+f_surface 43 / f_clear 7 / f_particles 0.2` us over a 768x500 canvas.  (That canvas and that
+frame are both superseded: the shipped one is 800x480 and *What a pixel costs, measured* below
+carries its live split.  The split's *shape* -- which stages are per-pixel -- is what the rest of
+this section argues from, and that has not changed.)  The per-pixel blend
 switches are gone -- `TGL_BLEND_VARS` now recognises GL_SRC_ALPHA / GL_ONE_MINUS_SRC_ALPHA /
-GL_FUNC_ADD once per primitive and gives it a branch-free arm -- which is what moved `f_bg`
+GL_FUNC_ADD once per primitive and gives it a branch-free arm (and since 2026-10-11 it recognises
+the ribbon's GL_DST_COLOR / GL_ONE the same way; both recognitions and their measured prices are in
+*What a pixel costs, measured* below) -- which is what moved `f_bg`
 from 313 ms to 233 ms and the frame from 773 to 683.  Two further clamps (the channel
 saturate written as arithmetic, and the depth-plane store gated on the depth test per
 `ZB_DEPTH_WRITE`) bought 1% more, so the per-fragment work is now where the object code says
@@ -314,8 +320,9 @@ defects in the fork's texture path explain all three symptoms:
   still ran `switch(blendeq)` and two `switch(factor)` for every fragment, because they were
   only loop-invariant to the reader, not to the compiler: the object code for `f_bg` was an
   indirect `jr` through a jump table once per pixel.  `TGL_BLEND_VARS` now reads the three
-  parameters once per primitive and recognises the one combination the applications actually
-  ask for, handing `TGL_BLEND_ALPHA_ADD` a branch-free arm; anything else still runs the
+  parameters once per primitive and recognises the two combinations the applications actually
+  ask for, handing `TGL_BLEND_ALPHA_ADD` and `TGL_BLEND_BRIGHTEN` branch-free arms; anything else
+  still runs the
   general switches, unchanged.  The arm is bit-exact against the general one by construction
   (same terms, and its channel saturate is `min(v >> 16, 255)` written as subtract-shift-and,
   since a gradient crosses the boundary at a different column in every row).  Related, and
@@ -382,6 +389,347 @@ without changing a pixel.  Every one of those extra microseconds is integer, and
 the subject of the `f_bg` paragraph above.  They are also emulator numbers: the
 identical image over SIO on a real console is still the outstanding check.
 
+### What a pixel costs, measured (Normative)
+
+Every number in this file so far says what the image *does*; this one says what it *costs*, in
+units that can be checked against a row of log.  TinyGL reports its own counts per frame stage:
+
+```
+[XMBT] raster <stage>  <n> tris <n> verts <n> px <n> spans <n> px/span <n> us fill <n> us geom <n> px/ms
+```
+
+`px` is the area the fill paths were asked to cover, summed from the triangle vertices at the
+dispatch; `spans` is the same triangles' y extent, so `px/span` is the mean scanline length.
+`fill` is microseconds bracketing the dispatch itself and `geom` is the stage's own timing minus
+it, so the two columns separate the pipeline into the part that is billed per pixel and the part
+that is billed per vertex.  The counters live in `src/gl/tinygl/clip.c`
+(`tgl_count_fill`, `tgl_fill_stats`) and are read through `gl_fill_stats()` in
+`src/gl/gl_dispatch.c`; the clock is `gl_perf_us()`, which is `btron_render_perf_us()` and so is
+subject to *The measured microsecond (Normative)* further down this file -- 295 CP0 ticks per
+microsecond on this machine, which is the divisor between every `us` column here and every cycle
+count quoted beside it.
+
+Reproduce with `SMOOTH_APP=1 SMOOTH_FRAMES=3 SMOOTH_IDLE=20 scripts/ps2_smooth.sh` and read the
+`[XMBT] raster` rows of `build/ps2-smooth.log`; the pixels themselves are comparable frame by
+frame with `make test-xmb-render-tgl`, which writes its PPMs to `.build/tgl/`.
+
+The rows, 2026-10-11, shipped configuration (800x480 canvas, `XB_RIBBON_ROWS/COLS` 32), built
+with `PS2_FP_COUNT=0` so the microseconds are the shipped image's own, steady frame
+`draw=173750 us swap=10498 us`:
+
+| stage | tris | verts | px | spans | px/span | fill us | geom us |
+|:---|--:|--:|--:|--:|--:|--:|--:|
+| `f_bg` | 5 | 4 | 382,731 | 2,495 | 153 | 29,311 | 132 |
+| `f_ribbon` | 1,828 | 1,984 | 102,320 | 16,289 | 6 | 49,778 | 21,763 |
+| `f_menu` | 646 | 1,436 | 46,441 | 8,964 | 5 | 38,769 | 11,905 |
+| `f_clear` | – | – | 384,000 | – | – | – | 3,398 |
+| `f_surface` | – | – | – | – | – | – | 18,479 |
+
+The last two rows are stage timings rather than raster windows: neither opens a fill dispatch, so
+`xb_phase_raster()` prints nothing for them and their microseconds belong, by this file's own
+definition of the columns, entirely outside the fill.
+
+Those rows, and the same ribbon rows at `16x16` (448 tris, 480 verts, 100,378 px, 7,655 spans,
+32,843 fill, 5,530 geom, steady `draw=126833 us`), are enough to price the machine, because the two
+mesh rows cover the same pixels with four times fewer triangles.  Both are now the *same* image: the
+`16x16` row was taken by setting `XB_RIBBON_ROWS/COLS`, rebuilding, and putting them back, which is
+the condition the fit below needs -- a pair of rows from two different images prices whatever changed
+between them, not the mesh.  Solving the pair as one equation in two unknowns (setup, blended pixel),
+with each row's own span steps billed at 60 cycles, gives 10.9 us of setup and 77 cycles a pixel.  The
+older pair -- `61,328` and `43,527` fill, from the binary before `TGL_BLEND_VARS` learned
+`GL_DST_COLOR`/`GL_ONE` -- solves to the same setup (3,277 cycles) and 110 cycles a pixel, so a
+least-squares fit over all four rows is taken as the price list: **3,206 cycles = 10.9 us of triangle
+setup, 77 cycles of recognised blended pixel, worst residual 323 us (0.6% of the largest row)**.  The
+fit is sensitive in the direction of the unknowns, not in their sum: pairing a `32x32` row against the
+*other* binary's `16x16` row swings setup between 800 and 5,600 cycles, which is why the four rows are
+fitted together rather than two at a time.
+
+| what is billed | price | which rows say so |
+|:---|:---|:---|
+| an opaque smooth-shaded pixel | 22 cycles | `f_bg`: 382,731 px in 29.3 ms, whose 5 triangles and 2,495 spans leave 28.8 ms of it |
+| a blended smooth-shaded pixel, mode recognised | 77 cycles | the four-row fit above, on `f_ribbon`'s current 49.8 ms fill |
+| a blended smooth-shaded pixel, mode *not* recognised | 110 cycles | the same fit on the binary before `TGL_BLEND_VARS` knew `GL_DST_COLOR`/`GL_ONE` (61.3 ms fill) -- and the difference, 33.3 cycles, is the one price here that needs no fit: it is the 11,550 us the two 32x32 rows differ by, over 102,320 px.  That is the per-pixel switch dispatch, and it is what the recognition buys |
+| a blended *textured* pixel | 190 cycles | `f_menu`: 38.8 ms − 646 setups − 8,964 spans = 29.9 ms over 46,441 px |
+| a triangle's gradient setup | 10.9 us = 3,206 cycles | the four-row fit; 1,828 of them are 19.9 ms of `f_ribbon`'s 49.8 ms fill, so this is the third-largest line in the frame and not a rounding error on the pixels |
+| a scanline step | ≤ 60 cycles | `f_bg`'s 2,495 spans leave under 2% of its row unexplained by pixels |
+| a vertex (transform, viewport, clip) | 11.0 us = 3,240 cycles | `f_ribbon`'s `geom` over its 1,984 verts, current binary |
+| a vertex that needs no clipping | 8.3 us = 2,440 cycles | `f_menu`'s `geom` over its 1,436 verts: same pipeline, no `gl_clipEdge` lerps |
+| a cleared pixel | 2.6 cycles | `f_clear`: 128,000 px/ms |
+| a pixel copied RAM to RAM | 14.8 cycles | the compositor's own `blit=` rows: 613,440 px in 30,747 us, and 50.2 ns/px on every row from 768 px to 613,440 px -- three orders of magnitude of size at one price, so it is the DRAM, not the loop |
+| a swap | 10.5 ms | the `swap=` column of every frame row |
+
+The copied-pixel row is what closes one obvious candidate for `f_bg` before it is written.  Drawing a
+static gradient and blitting a cached copy of it back are the same order of work on this machine (22
+cycles vs 14.8), because both are limited by touching 1.5 MB of RDRAM rather than by the arithmetic in
+the middle: a write-only fill is the only one that is four times cheaper, and it is what `f_clear`
+already does.  So the background cannot be made cheaper per pixel; it can only be made to cover fewer
+of them, which is consequence 2 below.
+
+The two terms that are *not* per-pixel were both assumed to be software floating point, and the
+census says that assumption is wrong.  The EE's FPU is single-precision only, so the whole image
+is `-msoft-float` (see *The FPU Law*) and every float operation is a call into
+`src/drivers/ps2/ps2_builtins.c` -- but the calls are not the whole of the 3,206 and 3,240 cycle
+figures.  Counted per stage on the same source, a steady frame asks for 578,963 of them, and at
+the prices the `[FPU]` rows measure (see *The census: what one frame asks the float engine for*)
+that is 58.8 ms against a 173.8 ms frame -- a 34% share, and one that grows as everything else
+shrinks.  What is left of both windows is integer: the edge walk, the fixed-point span
+interpolation, the blend, and the load/store traffic of the vertex record itself.
+
+Read as a ledger, with the float term from the census and the remainder measured, the steady frame
+is:
+
+| stage | ms | soft-float calls | ms of that | ms integer |
+|:---|--:|--:|--:|--:|
+| `f_surface` (the wave's lattice) | 18.5 | 159,528 | 15.9 | 2.6 |
+| `f_clear` | 3.4 | 134 | 0.0 | 3.4 |
+| `f_bg` | 29.4 | 1,302 | 0.1 | 29.3 |
+| `f_ribbon` | 71.5 | 269,596 | 27.5 | 44.0 |
+| `f_particles` | 0.1 | 294 | 0.0 | 0.1 |
+| `f_menu` | 50.7 | 148,109 | 15.3 | 35.4 |
+| draw | 173.8 | 578,963 | 58.8 | 115.0 |
+| swap | 10.5 | – | – | 10.5 |
+
+`f_surface` is 86% floating point -- it is arithmetic that happens to be in float rather than
+rastering -- and it is the only stage where making the arithmetic cheaper is close to making the
+stage cheaper.  Of the three raster stages, `f_ribbon` is 38% float and `f_menu` 30%; `f_bg` is
+0.3% (1,302 calls in 29.4 ms), i.e. it is a pure pixel cost.
+
+Four consequences are normative for where work goes next:
+
+1. **The float layer's ceiling is 1.51x, measured, not argued.**  Delete every one of the 578,963
+   calls -- an infinite-speed FPU -- and the draw falls from 173.8 ms to 115.0 ms.  (13,902 of those
+   calls are `div.s`, billed here at an add's 28 cycles because the `[FPU]` chain prices the four
+   single-precision classes together; if a divide is dearer the float share rises by at most a
+   millisecond or two, so the ceiling moves toward 1.6x and not beyond it.)  The frame the user
+   needs is 16.7 ms, so no amount of arithmetic work on this layer reaches even a 2x, let alone the
+   5x asked for.  Every further float change must be justified against 58.8 ms, and the
+   order-of-magnitude answer is the GS, not the CPU.
+2. **The static background is the largest thing a CPU-side change can still take back, and only
+   fewer pixels count.**  `f_bg` re-rasters the same 382,731 gradient pixels every frame at 22 cycles
+   each, and `f_clear` fills the same 384,000 again, because the drawing model is "rebuild the whole
+   surface", not "repair what changed" -- 32.7 ms, 19% of the frame.  What it cannot be is a cheaper
+   representation: the copied-pixel row above (14.8 cycles) says a cached blit of the baked gradient
+   would save 7 cycles a pixel and cost 1.5 MB.  What it can be is a smaller *area*: everything that
+   moves in a steady XMB frame is inside one full-width horizontal band, measured as 28.7% of the
+   canvas from the composited PPM's bounding box (y 283..454 of 600), so a band-limited repaint of
+   these two stages is worth ~23 ms (13% of the frame).  Three facts about the mechanism, all of them
+   about this tree rather than about the idea: tinygl has no `glScissor`, and `glViewport` is the only
+   rect that clips a triangle (`clip.c`'s own comment says coordinates are viewport-clipped by the
+   time a triangle reaches the rasteriser); `glClear` is whole-plane, and the only fill cheap enough
+   to replace it is an opaque quad at the 2.6-cycle cleared-pixel price; and the surface does persist
+   across frames -- `tgl_swap_buffers()` only ORs `0xFF000000` into the plane in place, the window
+   plane is allocated once and recreated only by `rsz_wnd()`, and neither the WM's background/decor
+   fills nor the cursor's save-restore ever write it -- so not painting outside the band leaves the
+   right pixels there rather than garbage.  The part that does not exist yet is how the app is told a
+   full repaint is due (an entry fade changes the gradient's alpha, a selection change redraws the row
+   text, `inval_wnd()` currently marks the whole window every 16 ms), and `paint(WND*, GDEV*)` carries
+   no damage rect to answer with.
+3. The span loop is not a lever -- the `f_bg` row is the control that proves a scanline step is
+   noise, so a claim that short spans are what a fine mesh pays for is false and must not be spent
+   on -- and the mesh dial is not one either, because it has been priced and lost: 32x32 -> 16x16
+   is worth 47.0 ms and costs 10.81% of the sheet's pixels.  See the dial paragraph at the end of
+   this section.
+4. **A third of the fill is per-triangle, not per-pixel, and it is library-internal.**  1,828 setups
+   at the fitted 10.9 us are 19.9 ms of `f_ribbon`'s 49.8 ms fill, and `f_menu`'s 646 add 7.0 ms of
+   its 38.8 ms: ~27 ms, 15% of the frame, in `ztriangle.h`'s setup block rather than in its span
+   loop.  Two thirds of a setup is integer (the y-sort, the fixed-point deltas, the five span-init
+   values) and about 1,570 cycles is the gradient itself -- five interpolated channels, each needing
+   two float multiply-subtracts and two `float→GLint` casts, at the census prices of 28 and 47 cycles.
+   That block is bit-risky ground: its answers come from `(GLint)(fdy2*d1 - fdy1*d2)` after `fz` has
+   been *divided* through, so an integer or fixed-point rewrite would round in a different place than
+   the float path does, and the ribbon's span gradients are what the render test's PPMs compare.  This
+   is the line to attack only with the 12-PPM byte-identity gate in hand, and it is smaller than
+   consequence 2 for the same risk.
+
+The first entry in the table to move was `f_menu`: its fill was 78.3 ms until `clip.c` learned to
+route a textured triangle whose three vertices carry the same interpolated `z` to
+`ZB_fillTriangleMapping()` instead of `ZB_fillTriangleMappingPerspective()`.  There, 1/z is
+constant over the triangle's area, so the perspective path's per-scanline re-derivation of the
+texture steps has a constant answer and the integer `INTERP_ST` gradients are the same
+interpolation exactly rather than an approximation of it -- which is what a 2D interface under
+an orthographic projection always is.  78.3 → 41.7 ms for 36.7 ms of frame, at a cost of 0.02%
+of the frame's pixels (94-157 of 576,000, per frame), each of them a one-texel column on one
+vertical edge of a glyph or icon where the integer step and the truncated float tie-break
+differently; worst channel delta 102/255.  That is the trade to re-open if the type ever reads
+wrong on a real display, and the `px/span` column is the row that says which other layers would
+benefit the same way.
+
+The second is the price of `(GLint)`.  Float -> integer is the one conversion in
+`ps2_builtins.c` with no COP1 form -- the EE has no `trunc.w.s`, which is why it stayed on the
+generic bit engine after add/sub/mul/div/compare went to the hardware FPU -- and what the engine
+did with it was decode through a format descriptor and carry the significand as a `uint64_t` in
+32-bit halves, so every `(GLint)` cast cost a chain of multi-word shifts.  A binary32 truncate is
+two shifts once the exponent field says which band the value is in, and `ps2_sf_fixsfsi()` now
+reads the field and emits 32 straight-line instructions with no call at all.  The answers are the
+same: `make test-ps2-softfloat` is bit-exact over 15,225,197 comparisons, of which 3,072 are the
+sweep added with this change (every exponent field 0..0xFF, times the three mantissas that can
+land on a band boundary, times both signs, against the host's own cast), and that sweep was shown
+to discriminate rather than merely to pass by moving the 158-exponent saturation line to 159 --
+694 comparisons failed, including ones the older random pools found -- and then moved back.
+
+The frame agrees with the fit, which is the part worth keeping: 2,479 setups x 3.4 us + 3,424
+vertices x 3.7 us + `f_surface`'s lattice 3.5 ms = 24.6 ms predicted from the two prices, against
+24.4 ms measured (`draw_us` 221,857 -> 197,393 in `build/ps2-smooth-history.tsv`, and `frame1_us`
+224,475 -> 200,203).  A conversion whose result cannot differ cannot change a pixel, so this
+saving has no visual price to watch, unlike the affine one above.
+
+The third entry to move was a double that had no business being there.  `gl_clipcode()`'s guard
+band was written `w1 * (1.0 + CLIP_EPSILON)`: the literal is a double, so the GLfloat operand was
+promoted, the multiply ran on the bit engine, and the result was truncated back -- three double
+calls and one float multiply, per vertex, for a guard band whose whole purpose is to be off by one
+part in 100,000.  Writing it `w1 * (GLfloat)(1.0 + CLIP_EPSILON)` rounds the band to the operand's
+own precision and answers the clip test in single: 10,713 double calls per frame went to zero, and
+the A/B measured them (`draw_us` 210,066 -> 197,916 us on a counted build where both halves carry
+the same counters, i.e. 336 cycles per double call including its conversions; `f_ribbon`'s geometry
+window 28.9 -> 21.8 ms and `f_menu`'s 16.6 -> 11.9 ms clean).  Nothing else moved, which is the
+control: the pixel prices above are the same ones the older binary measured, and
+`make test-xmb-render-tgl` reports the same 68/70 with the same two pre-existing corner rows.  On a
+target where `GLfloat` *is* double -- the hosted and Pi 400 builds -- the cast is a no-op and the
+expression is bit-for-bit what it was.
+
+The fourth entry to move was a mode that was recognised by nobody.  `TGL_BLEND_VARS` already hands
+the alpha combination a branch-free arm, but recognition is an equality test on one specific
+triple, so the ribbon's `glBlendFunc(GL_DST_COLOR, GL_ONE)` -- 102,320 blended pixels a frame, the
+largest single pixel line in the image -- still fell to the general path, whose object code is
+`switch(sfactor)`, `switch(dfactor)` and `switch(zbblendeq)` executed *per fragment*: an indirect
+`jr` through a jump table plus three reloads of the parameters from stack slots the span loop keeps
+spilling to.  Adding the second recognition (`TGL_BLEND_BRIGHTEN`: source channel times the
+destination's own byte, plus the destination, saturating) moved `f_ribbon`'s fill from 61,328 us to
+49,778 us and the steady frame from 185,559 us to 173,750 us, while `f_bg`, `f_clear`, `f_surface`
+and the ribbon's own `geom` column did not move at all -- 34 cycles per blended pixel, which is
+exactly the difference between the two prices in the table above, and the second measured proof
+that in this rasterizer the dispatch, not the arithmetic, is what a blended fragment pays for.
+
+Nothing about the picture changed, and that was shown three ways rather than argued.  Per channel
+the fast arm and the general arm differ in two deliberate places -- the multiplier byte drops its
+`& 0xff`, because a `GET_*REDER` result is one byte already at bit 16 and can be no wider, and the
+clamp drops its `imp > 0` arm, because an unsigned sum of a shifted product and a channel is never
+negative -- so a sweep over every sum the expression can produce (33,488,895 values, 0 mismatches)
+and every (source channel, multiplier byte) pair (1,051,392 pairs, 0 mismatches) covers both.  Then
+the shipped frame itself: the twelve PPMs `make test-xmb-render-tgl` writes are byte-identical with
+the recognition on and off, and that comparison was shown to *discriminate* by adding 1/255 of red
+inside `TGL_BLEND_BRIGHTEN`, which moves exactly the three frames the ribbon appears in
+(`xmb_sheet_on`, `xmb_sheet_lift`, `xmb_particles`) and none of the other nine.
+
+The mesh dial has now been measured on both sides, and it does not ship.  16x16 is worth 47.0 ms
+of the steady frame on the shipped binary (173.8 -> 126.8, the same run that provides the control row
+of the fit above) and 53.2 ms on the one before it (197.4 -> 144.2), and the price is in the two rows
+the dial moves: `make test-xmb-render-tgl` at each setting, diffed frame by frame, gives 10.81% of
+the sheet-on frame's pixels different with a worst channel delta of 145/255 (6.40% of its bytes),
+against 0.02% for the affine trade above -- three orders of magnitude, and it is the wave itself:
+the frames with no sheet in them are byte-identical.  The surface's own field says the same thing
+from the geometry side: the shader's fragment term runs 0.0355..0.1453 over the 1,024 vertices of
+the shipped mesh and 0.0358..0.1117 over the 256 of the coarse one, so the coarse sheet loses
+23% of the light on its steepest fold while keeping the floor.  `verify/tests/test_xmb_render.c`
+already refuses `n < 32*32` as a law rather than a preference ("a sheet sampled at fewer than
+32x32 points is no longer the same surface"), and the diff is what makes that refusal a measurement
+instead of an assertion.  What is left on this layer is therefore not the arithmetic -- the ledger
+above puts the whole float layer, setups and vertices and the wave's lattice together, at 58.8 ms of
+a 173.8 ms frame, so the ceiling of that line of work is 1.51x -- and the two things with a number
+big enough to matter are the GS, which takes the 115.0 ms of pixels off the CPU, and repainting
+what changed instead of 1.39 screenfuls every frame, which is the only CPU-side change that can
+still remove tens of milliseconds.
+
+### The wave that was not moving: a stall guard that had become a frame budget
+
+"The 3D surface is not moving" is three claims, and the frame timings above answer none of them.
+`src/apps/xmb.c` now prints the row that separates them, for the first six paints of a session:
+
+```
+[XMBT] wave n=2 dt=354 ms t1024=301 mid1024=335713 dm=1383 dsum=-1262
+[XMBT] wave n=6 dt=338 ms t1024=1203 mid1024=336302 dm=1194 dsum=-5091
+```
+
+`dt` is the elapsed time the animation was stepped by, `t1024` the effect clock in 1/1024ths of a
+unit, and `dm`/`dsum` how far the sheet actually went -- the middle vertex's screen y in 1/1024ths of
+a pixel, and the same step summed over all 1,024 vertices.  Before the change the same row read
+`dt=16 t1024=+10/frame dm=49..53 dsum=+-40`, and the reason is two defects stacked:
+
+1. **A stall guard smaller than a real frame fires on every frame.**  `xb_paint` had
+   `if (dt < 0 || dt > 250) dt = 16`, and the XMB's achieved cadence on this machine is 337-398 ms
+   between paints (174 ms of it the app's own raster, the rest the desktop pass and the task's
+   `dly_tsk(16)`).  So the guard replaced the true elapsed time with a nominal 16 ms *every single
+   frame*, and everything that consumes `dt` -- `xb_tween_tick`, `xb_particles_update`, the launch
+   hold -- ran at 1/21 of real time.  A 167 ms menu tween took ten frames, i.e. 3.5 s.  The clock
+   itself was never the problem: `get_tim()` is `ps2_task_ms()`, which accumulates real CP0 `Count`
+   microseconds, and it reported 354/398/337 ms correctly while the app threw the number away.  The
+   bound is now 4,000 ms, which is a stall and not a slow frame.
+2. **The effect clock was per drawn frame, so the wave's speed *was* the frame rate.**  The original
+   advances `iTime += 0.01` once per frame (gfx_display.c:874), which is a speed only while frames
+   come at the 16 ms cadence the bar was tuned at: 0.6 clock units a second, ~3 px/s at the sheet's
+   fastest vertex.  At 2.7 frames a second the same 0.01 is 0.016 units a second -- 0.13 px/s, a
+   surface that reads as frozen.  It is now `s_effect_time += dt / 1600.0f`, which is the same
+   sequence of values at the designed cadence and real time at any other.
+
+Two things made this safe to change rather than merely plausible.  First, the increment is
+bit-identical where the cadence is as designed: `16.0f / 1600.0f` is the same float as `0.01f`, so a
+target that hits 16 ms frames gets the exact `s_effect_time` sequence it had before -- and
+`verify/tests/test_xmb_render.c` drives exactly that (`g_clock += 16` per paint), which is why 10 of
+its 12 PPMs are byte-identical across the change.  The two that differ are the two taken after the
+test's own deliberate 600 ms jump, where the new behaviour is the point: the particles frame differs
+in 62,970 px confined to `y 283..480` (the sheet's band) and the system-data frame in 7,665 px with a
+worst channel delta of 9 (a list fade that has correctly got further along).  Second, raising a clamp
+means trusting the unit of the clock underneath it, because a clamp that small had been silently
+capping any core whose `SYSTIME` was not milliseconds; the three cores that link `src/apps/xmb.c`
+were read instead of assumed -- `core_arm64.c` ticks at 1 kHz and says so, `core_posix.c` computes ms
+from `gettimeofday`, `core_ps2.c` derives ms from `Count`.
+
+After: the same six paints step the clock by 217-246 in 1/1024ths per frame instead of 10, `dm` runs
++-288..1383 (0.3-1.35 px, sign flipping as the vertex crosses its extremum), and `dsum` -1262..-5091
+against the +-40 the frozen sheet measured.  The frame costs what it cost -- 172,773 us against
+173,421 us, unchanged within run-to-run noise, for one divide per frame.  What this does *not* buy is
+smoothness: an animation whose wall-clock duration is 167 ms cannot be shown in more than one frame
+by a machine that paints every 340 ms, so the menu now snaps instead of crawling, and the only way to
+get frames back for it is the pixel work above and the GS below.  `make test-ps2` is 54/54.
+
+### The census: what one frame asks the float engine for (Normative)
+
+The stage timings say *when* a frame is slow; they cannot say whether a given window is float or
+integer, because the two interleave inside one call.  So the libcalls are counted themselves, in
+seven classes, when the image is built with `-DBTRON_PS2_FP_COUNT=1` (`make ps2-bench
+PS2_FP_COUNT=1`, or `SMOOTH_FP_COUNT=1 scripts/ps2_smooth.sh`): `ps2_builtins.c` increments
+`btron_fp_calls[class]` on the way in, and `xb_phase_census()` in `src/apps/xmb.c` prints the
+difference between two consecutive stage boundaries, which is that stage's own bill.  The row is
+self-checking -- `S=` and `D=` sum their own columns -- so a stage whose split does not add up
+(which is how a mixed `PS2_FP_COUNT` rebuild, one object compiled under a different flag than its
+neighbours, used to show up without anyone looking for it) cannot be mistaken for a measurement.
+
+```
+[XMBT] census f_ribbon  fmul=168817 fdiv=4060 fcmp=20239 fs2i=38988 fi2s=37492 S=269596 dmul=0 dgen=0 D=0
+[FPU]  16000-op soft-float caller: COP1 34 cycles/op  bit engine 542 cycles/op
+[FPU]  conversion price: float->int 53 cycles/op (4000 calls)  int->float 29 on COP1 / 229 bit engine (4000/4000)
+```
+
+Subtracting the 6.3 cycles a counted call pays for the counter itself (measured on one binary both
+ways: the same steady frame is 197,969 us counted and 185,559 us not, over 578,963 counted calls --
+the uncounted half of that pair is the frame the `TGL_BLEND_BRIGHTEN` recognition then moved to
+173,750 us, which is why the overhead is quoted from the pair rather than from the current rows)
+gives the prices the ledger uses:
+**a single add, multiply, divide or compare is 28 cycles, float -> integer is 47, integer -> float
+is 23, and a double is the bit engine's 536.**  Three consequences, each of which closes a door:
+
+1. **The two directions of conversion are not one op.**  `int -> float` is `cvt.s.w`, which COP1
+   answers, so it costs what an add costs.  `float -> int` has no EE instruction at all -- there is
+   no `trunc.w.s`, and `cvt.w.s` only under a rounding mode that would corrupt every other
+   operation -- and runs the exponent-band truncate in `ps2_sf_fixsfsi()`, which is 47 cycles of
+   straight-line integer shifting: under two float adds, and nothing like the 536 the bit engine
+   charges for arithmetic.  Handing COP1 a float -> int fixup was therefore never a win, and the
+   two columns stay apart in the census so that the question is not asked again.
+2. **A steady frame contains no double operations at all** (`dmul=0 dgen=0` in every stage), which
+   is what the clip-code row above bought.  This is also the check that catches a regression: any
+   future literal written into the hot path shows up as a non-zero `D=` before it shows up as
+   microseconds.
+3. **`fi2s` is a fingerprint for the fill setup.**  Integer -> float happens in `ztriangle.h`'s
+   gradient block and nowhere else in the raster path, so that column over the `tris` column is the
+   setup's own conversion count: 20.5 per triangle for the smooth fill (`f_ribbon`) and 23.2 for the
+   mapping fill (`f_menu`).  It is the first independent confirmation that the 12.3 us setup price
+   measures a real per-triangle cost rather than a fit between two mesh rows.
+
+The counted frame is 12.4 ms slower than the shipped one, so **no timing in this file comes from a
+counted build**: counts are read from `PS2_FP_COUNT=1`, microseconds from `PS2_FP_COUNT=0`, and
+`scripts/ps2_smooth.sh` deletes every `*.ps2.o` and `*.pbench.o` when the flag changes, so one run
+cannot mix two builds.
+
 ### Driver Files
 
 | File | Role |
@@ -389,7 +737,7 @@ identical image over SIO on a real console is still the outstanding check.
 | [`src/drivers/ps2/boot_ps2.s`](file:///Users/tonpa/depot/bitedits/btron/src/drivers/ps2/boot_ps2.s) | EE reset vector, `$gp` and `$sp` setup, unrolled BSS wipe, BIOS syscall wrappers (`SetGsCrt`, `PutIMR`), jumps to `ps2_kernel_main`. |
 | [`src/drivers/ps2/ps2.ld`](file:///Users/tonpa/depot/bitedits/btron/src/drivers/ps2/ps2.ld) | Memory layout script linking `.text` at `0x00100000`, and the `ASSERT` that fails the link when `_end` reaches the stack or the 32 MB RDRAM end. |
 | [`src/drivers/ps2/ps2_gs_reg.s`](file:///Users/tonpa/depot/bitedits/btron/src/drivers/ps2/ps2_gs_reg.s) | The image's only 64-bit-GPR instructions: `ps2_gs_poke64()`/`ps2_gs_peek64()` perform the GS's single-`sd`/single-`ld` register latch. Assembled with local `.set mips3` under the shared `-march=mips2` driver; its arguments and return halves are 32-bit, so it is O32-legal on both sides. |
-| [`src/drivers/ps2/ps2_builtins.c`](file:///Users/tonpa/depot/bitedits/btron/src/drivers/ps2/ps2_builtins.c) | The `__floatdidf` / `__fixdfdi` O32 libcalls clang emits for `double ↔ int64` at `-march=mips2` and `-nostdlib` leaves undefined, written from 32-bit pieces because the EE FPU only speaks 32-bit GPRs. |
+| [`src/drivers/ps2/ps2_builtins.c`](file:///Users/tonpa/depot/bitedits/btron/src/drivers/ps2/ps2_builtins.c) | The whole soft-float runtime the image links against: the 32 `__*sf3`/`__*df3`/conversion libcalls clang invents at `-msoft-float -nostdlib`, a bit engine that serves both IEEE formats from 32-bit pieces, and the single-precision entry points that pick COP1 at run time.  The only unit built `-mhard-float`, and the only one allowed to contain a float instruction (tests 39-44). |
 | [`src/drivers/ps2/ps2_gs.h`](file:///Users/tonpa/depot/bitedits/btron/src/drivers/ps2/ps2_gs.h) | Privileged GS registers (`0x12000000`: `PMODE`, `SMODE2`, `DISPFB1`, `DISPLAY1`, `CSR`) and GIF DMA registers (`0x1000A000`), reached only through `GS_REG_POKE`/`GS_REG_PEEK`. |
 | [`src/drivers/ps2/ps2_gs.c`](file:///Users/tonpa/depot/bitedits/btron/src/drivers/ps2/ps2_gs.c) | Hardware display initialization, VSync synchronization (`ps2_gs_vsync`), Host-to-Local GIF DMA blitter (`ps2_gs_flush`) over the desktop's own canvas, and non-destructive cursor restoration. |
 | [`src/drivers/ps2/ps2_font.h`](file:///Users/tonpa/depot/bitedits/btron/src/drivers/ps2/ps2_font.h) | 8x8 ASCII bitmap font table (128 characters) for crisp, authentic BTRON UI text rendering. |
@@ -579,7 +927,9 @@ Two things this run says out loud that are easy to read past:
   code layout, not any one fix) -- both far inside the shortest of those rotations -- so the
   `[XMBT] draw=/swap=` rows are now exact microseconds, and the
   phase breakdown that produced that attribution is still compiled in: `xb_paint` emits
-  `[XMBT] f_surface/f_clear/f_bg/f_ribbon/f_particles/f_menu` for its first two paints.
+  `[XMBT] f_surface/f_clear/f_bg/f_ribbon/f_particles/f_menu` for its first two paints,
+  `[XMBT] raster ...` for the tris/verts/px/spans split of each of those windows, and
+  `[XMBT] wave ...` for the sheet's motion over its first six paints.
 
 ### 2.3 Keyboard & USB Subsystem (`ps2_usb`)
 
@@ -698,6 +1048,115 @@ The PS2 cleanroom port integrates the **full, authentic B-System Graphical Workb
    first_colour=0xff0283cd box=0,0..767,499` -- every pixel of the window's surface has
    reached the guest.  `black=383999 other=1` was the failure, one pixel and all the rest
    unlit, and a count of `Unknown R5900` rows in the thousands says which cause it is.
+
+#### One task-driven frame, stage by stage (Normative)
+
+An application's frame on this port is not the render its own log times.  `xb_paint()`
+reports `[XMBT] frame … draw=173357 us swap=10540 us` and stops at `egl_swap_buffers()`,
+while the pixels reach the GS only after the compositor has blitted the window's surface
+onto the canvas and the port has uploaded that rectangle.  The two halves are joined by
+`[XMBT] cycle`, which `ps2_gui_pass()` fills and `ps2_task_dly()` prints once the hold has
+been spent, because the hold is part of the period the body sees and nothing else times it:
+
+```
+[XMBT] cycle <n> period=<us> pass=<us> tail=<us> hold=<spent/asked ms> | poll= hook= evt= net= paint= note= |
+        render= swap= upload= px= nb= full= why=<hex> dmg=<x0,y0,x1,y1/bands> |
+        comp bg= frame= paint= blit= panel= bars= total= bfn= wins=<drawn/walked>
+```
+
+| Column | Owner | What it decides |
+|:---|:---|:---|
+| `poll hook evt net note` | this port | the pass' own bookkeeping: HID polls, the bench frame hook, the event dispatch, the two timer nets, `[PSTAT]` accounting |
+| `render swap upload` | this port | the three stages of one present: composite, byte-order (structurally 0, see [The canvas's byte order](#21-graphics-synthesizer-gs-framebuffer-architecture)), GIF DMA |
+| `px nb full` | this port | the area, band count and whether band 0 is the canvas |
+| `why` | this port | *which rule* made it the canvas: `1` a non-move event, `2` the convergence timer, `4/8/16/32` global menu / tracker / window-manager interaction / IME, `64` band-set overflow, `128` damage that already spanned it |
+| `dmg` | shared compositor | the band set as the app and the pointer left it, before any of the rules above replaced it |
+| `comp …` | shared compositor | that composite's own split, taken from `g_render_stats` for this one pass: decorations, the apps' `paint` callbacks, the client-area blit, panel, bars |
+
+The row is not behind `BTRON_PS2_BENCH`: an unarmed profiler costs one branch per boundary,
+and gating it would make the row unavailable to whoever has the real machine.  Arming is
+`left`, which the app phase sets, so a desktop session pays for it and does not print it.
+
+**The measured frame (2026-10-11, `SMOOTH_FRAMES=8 ./scripts/ps2_smooth.sh`, cycle 1).**
+`period=350523 pass=334514 | poll=1 hook=7 evt=0 net=1 paint=334502 note=0 | render=333682
+swap=0 upload=819 px=480000 full=1 why=c dmg=0,0,800,556/1 | comp bg=0 frame=20324
+paint=238860 blit=49913 panel=0 bars=0 bfn=0 wins=4/4`, against the app's own
+`draw+swap = 183897 us` and the 16 ms the body asked for:
+
+| ms | stage | who pays |
+|--:|:---|:---|
+| 184 | the XMB's own rasterising and surface swap | the app (`f_bg`/`f_ribbon`/`f_menu`, tasks #41/#43) |
+| 55 | the *other three* windows' `paint` callbacks | the compositor: `redraw_all_windows_clip()` used to run every intersecting window's callback whenever the composite was not blit-only, and one `inval_wnd()` made the whole composite non-blit-only -- closed by the cut below |
+| 50 | the client-area blit, 613,440 px | the compositor |
+| 20 | four window decorations | the compositor |
+| 25 | desktop art that is *not* in any column (the residue of the four rows above against `render=`) | `redraw_baremetal_desktop()` (`src/desktop/desktop.c:349`) rebuilds the background procedurally and draws the panel, gold bar and eight test bars, and times none of it: hence `bg=0 panel=0 bars=0 comp=0 bfn=0` on a whole-canvas pass |
+| 10 | polls, dispatch, timer nets, `[PSTAT]` | this port, all six columns summed |
+| 0.8 | GIF upload of the 480,000 px canvas | this port |
+| 16 | the hold the body asked for | `dly_tsk()` |
+
+Three consequences are normative for the work that follows:
+
+1. There is nothing left to win in the port's own pass.  Ten microseconds of bookkeeping
+   and 0.8 ms of DMA against a 334 ms pass is not a scheduler problem; the whole gap
+   between what the app logs and what the user sees is inside the shared compositor.
+2. `bg=0 … comp=0` on a whole-canvas row is *not* those stages being free.  The damage path
+   (`redraw_baremetal_desktop_mode()`) times all of them, and where it runs the background
+   comes from the cache: every banded `[BENCH] … compositor:` row in the same log reads
+   `bg=<nonzero>(<band px>) … bfn=0`, and a cache miss would have incremented `bfn` and
+   reported the whole canvas instead of the band.  The whole-canvas path re-enters the
+   procedural builder and reports nothing at all, so its cost only appears as the residue
+   in the table above.  Any future claim about the desktop's own art has to come from that
+   arithmetic, or from timing added to that path, not from these columns.
+3. Staleness belongs to one window, never to a composite.  `WND::img_valid` is the app's
+   declaration about *its own* client GDEV (`inval_wnd()` in `src/window/wnd.c:326`), and the
+   window's `dev` persists between composites, so blitting a valid window's surface and
+   re-running its callback write the same pixels.  The walk used to read the composite's mode
+   instead of that flag: `workbench_render_damage_paint()` and the whole-canvas path asked
+   every intersecting window to re-render, so one app's `inval_wnd()` billed every other
+   window's frame to that app.  The walk now gates on `wnd->img_valid` per window
+   (`src/window/wnd.c:514`), which is what closes the 55 ms row above:
+
+   | | before | after | measured by |
+   |:---|--:|--:|:---|
+   | `comp paint=` | 238,860 | 184,260 | cycle 1, same bench, same frame |
+   | `render=` | 333,682 | 279,041 | the same row |
+   | `full_render_us` | 112,670 | 57,764 | `scripts/ps2_smooth.sh` |
+
+   `draw_us` reads 172,847 against 172,733 before it -- the app's own rasterising is
+   untouched, so the 54.6 ms fell exactly where the table attributed it.  The rule holds only
+   while the flag is honest, and it is: `img_valid` goes FALSE when `rsz_wnd()` re-opens the
+   client GDEV (`src/window/wnd.c:282,286`), when an app calls `inval_wnd()` (:330), and at
+   creation (`opn_wnd()` `calloc`s the struct), and nothing but the composite's own blit erases
+   a client GDEV -- `clo_wnd()` (:196) frees the window with it, and `draw_retro_window_frame()`
+   writes to the canvas, never to a `dev`.  Every time-driven app in the tree ticks itself
+   through `inval_wnd()` rather than relying on the composite to re-render it: the clock
+   (`src/chokanji/clock.c:174`), GLGears (`src/apps/glgears.c:177`), the demoscene
+   (`src/demo/lilcu64_demo.c:1483`), the orchestra (:839), the audio player (:610) and the XMB
+   itself (`src/apps/xmb.c:2851`).
+
+   This is a shared-compositor change, so the Pi 400 takes it too, and it is held by a
+   discriminating headless test rather than by the argument above: the `selective composite`
+   block in `verify/tests/test_desktop_clip.c` counts each window's callback separately and
+   requires that invalidating one of two overlapping windows renders exactly one -- with the
+   gate removed that block reports `A rendered 1, B rendered 1` and fails, while the pixel
+   comparison still passes, because re-rendering an idempotent callback cannot change a pixel.
+   The tally is the assertion; the pixel diff is the safety net.
+
+The band the app itself dirtied is `dmg=0,0,800,556`: `xb_task()` invalidates its whole
+window every frame, and that window is 776x536 of an 800x600 canvas, whose rect the panel
+timer widens to the canvas's full 800 columns.  So a band-limited repaint is worth the
+`~95 ms` of compositor stages only if the app also stops invalidating what it did not
+change -- which is why task #41 is written as two changes, not one.
+
+What the frame above does *not* settle is the banded case, and the row says why: it carries
+`why=c`, an open global menu and an open tracker.  That is not a stuck overlay.  The task
+body runs on the caller's stack (see the µITRON layer above), so
+`ps2_bench_launch_xmb_by_key()`'s Cross reaches `tracker_execute_item()`, which opens the
+window -- and the app's three profiled frames are painted inside that call, before the
+`tracker_close_menu()` on the line after it.  A frame with every overlay closed would take
+`workbench_render_damage*()` instead of `workbench_render()`, and the two differences it
+would show are exactly the two this table cannot separate: the ~25 ms of procedural desktop
+art, and a `dmg=` that the rules above no longer replace with the canvas.
 
 #### The plane table (Normative)
 

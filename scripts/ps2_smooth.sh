@@ -11,10 +11,12 @@
 # machine's own clocks rather than from an opinion about what feels smooth.
 #
 # The sentinel matters more than it looks.  The app phase runs before
-# `[BENCH] run complete`, and 60 frames of XMB is 24 minutes of emulator, so any
-# harness that waits for the sentinel and finds none has not measured a regression --
-# it has cut off a phase it could not wait for.  BENCH_APP_FRAMES is lowered here for
-# exactly that reason, and the run is only scored when the sentinel is present.
+# `[BENCH] run complete`, and a harness that waits for the sentinel and finds none has not
+# measured a regression -- it has cut off a phase it could not wait for.  The app phase used to
+# be the expensive one (24 minutes of emulator for 60 frames, when a frame cost 23.9 s of guest
+# CPU); on the shipped image three frames boot to sentinel in 8 s of wall clock, which is what
+# the frame gates are for now rather than the waiting.  BENCH_APP_FRAMES stays dialable here
+# because the census build (SMOOTH_FP_COUNT=1) is still an order of magnitude dearer per frame.
 #
 # Budgets are the Tier-1 plane numbers of doc/txt/ASYNC.txt, expressed in the units
 # the guest already prints (microseconds).  A budget that the current image cannot
@@ -52,6 +54,14 @@ STOP_RE="${SMOOTH_STOP:-}"
 OUT="build/ps2-smooth.log"
 HISTORY="build/ps2-smooth-history.tsv"
 STRICT="${STRICT:-0}"
+# FP_COUNT=1 builds the image with the soft-float libcalls counting themselves, which is
+# what makes the [XMBT] census rows exist.  It has to be requested here rather than by
+# calling make on the outside: this script runs its own `make ps2-bench` below, and make
+# does not track a change of a compiler flag, so an outside build is silently replaced by
+# an inside one that recompiled a few objects without the counters.  That mixed image
+# printed `[FPU] counted calls: COP1 0` next to stage rows that counted 32,000 calls, and
+# read as a finding about the ribbon's arithmetic rather than as a build artifact.
+FPC="${SMOOTH_FP_COUNT:-0}"
 
 # name:budget_us:label -- every entry is a guest row this image really prints.
 # A budget of 0 means "this must come out zero", not "this always fails".  `info` is a
@@ -167,7 +177,17 @@ if [ -n "${SMOOTH_SCORE_LOG:-}" ]; then
     elapsed=0
 else
 rm -f src/cores/core_ps2.pbench.o
-BENCH_APP="$APP" BENCH_APP_FRAMES="$FRAMES" make ps2-bench
+# make does not see a flag change, so the flag itself is the thing to track: an image
+# whose objects disagree about PS2_FP_COUNT has counters in some stages and not in
+# others, which is worse than no counters because the rows still print.
+FPC_STAMP="build/ps2-fpcount.stamp"
+if [ ! -f "$FPC_STAMP" ] || [ "$(cat "$FPC_STAMP")" != "$FPC" ]; then
+    echo "[SMOOTH] PS2_FP_COUNT is now $FPC (was $(cat "$FPC_STAMP" 2>/dev/null || echo unset)) -- rebuilding every PS2 object"
+    find src -name '*.ps2.o' -delete
+    find src -name '*.pbench.o' -delete
+fi
+echo "$FPC" >"$FPC_STAMP"
+BENCH_APP="$APP" BENCH_APP_FRAMES="$FRAMES" PS2_FP_COUNT="$FPC" make ps2-bench
 
 echo "[SMOOTH] artifact $ELF $(stat -f '%z bytes, %Sm' "$ELF") sha1=$(shasum "$ELF" | cut -c1-12)"
 

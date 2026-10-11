@@ -460,9 +460,12 @@ void redraw_baremetal_desktop_rect(GDEV *screen, const RECT *damage) {
     redraw_baremetal_desktop_mode(screen, damage, TRUE);
 }
 
-/* Damage composite that re-runs each intersecting window's paint callback.
- * Required whenever the client GDEV itself changed (resize re-opens it, so its
- * contents are gone); the blit-only variant would copy stale/off-size pixels. */
+/* Damage composite that re-runs the paint callback of every intersecting window whose
+ * client image is stale.  Required whenever a client GDEV itself changed (resize
+ * re-opens it, so its contents are gone); the blit-only variant would copy
+ * stale/off-size pixels.  Windows whose image is valid are blitted by this pass too,
+ * which is the point: one app's invalidation used to re-render every other window in
+ * the band on every frame. */
 void redraw_baremetal_desktop_rect_paint(GDEV *screen, const RECT *damage) {
     redraw_baremetal_desktop_mode(screen, damage, FALSE);
 }

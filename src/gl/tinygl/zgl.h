@@ -346,6 +346,12 @@ typedef struct GLContext {
 extern GLContext gl_ctx;
 static GLContext* gl_get_context(void) { return &gl_ctx; }
 
+/* Vertices that have been through gl_Vertex, counted where a vertex is made rather than
+ * where one is drawn: a triangle strip shares them, so this is the quantity the geometry
+ * pipeline is billed by and the triangle count is not.  Defined in clip.c, which owns the
+ * window these counts are read through, so that a single reset clears every counter in it. */
+extern unsigned tgl_stat_verts;
+
 extern void (*op_table_func[])(GLParam*);
 extern GLint op_table_size[];
 extern void gl_compile_op(GLParam* p);
@@ -378,10 +384,24 @@ void gl_add_feedback(GLfloat token, GLVertex* v1, GLVertex* v2, GLVertex* v3, GL
 
 #define CLIP_EPSILON (1E-5)
 
+/* The guard band is rounded to the operand's own precision on purpose.  Left as
+ * `w1 * (1.0 + CLIP_EPSILON)` the product is a double -- the literal is one, and C
+ * promotes the float operand to meet it -- so on a target whose floats are really floats
+ * every vertex pays an extend, a double multiply and a truncation for a quantity that is
+ * then compared against floats anyway.  That round trip is what the PS2 XMB's census
+ * measured as 3.19 double calls per vertex (one multiply and its two conversions, at
+ * 2,108 and 4,216 per frame), and a double software op costs the image about twenty times
+ * a single one.
+ *
+ * What changes is the margin, not the test: 1.00001 is not exactly representable in
+ * binary, so the nearest float moves the six planes by well under one part in 10^7.  A
+ * clip decision can flip only for a vertex that sits within that of a plane, and the
+ * clip code is a region hint that already carries a 1E-5 band by design.  On the targets
+ * where GLfloat is itself double the cast is a no-op and nothing moves at all. */
 static GLint gl_clipcode(GLfloat x, GLfloat y, GLfloat z, GLfloat w1) {
 	GLfloat w;
 
-	w = w1 * (1.0 + CLIP_EPSILON);
+	w = w1 * (GLfloat)(1.0 + CLIP_EPSILON);
 	return (x < -w) | ((x > w) << 1) | ((y < -w) << 2) | ((y > w) << 3) | ((z < -w) << 4) | ((z > w) << 5);
 }
 

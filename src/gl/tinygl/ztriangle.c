@@ -513,4 +513,175 @@ void ZB_fillTriangleMappingPerspectiveNOBLEND(ZBuffer* zb, ZBufferPoint* p0, ZBu
 #include "ztriangle.h"
 }
 
+/*
+ * Affine texture mapping: the same texel and the same blend as the two paths above, with
+ * the per-scanline float block of DRAW_LINE_TRI_TEXTURED gone.
+ *
+ * That block re-derives `1/iz` and the s/t steps for every scanline because iz can change
+ * across a triangle.  clip.c calls this instead when the three vertices carry the same
+ * interpolated z: then iz is constant over the whole area, `s = sz/iz` is linear in x and y,
+ * and the integer gradients ztriangle.h already computes for INTERP_ST are the exact value
+ * of the same interpolation rather than an approximation of it.
+ *
+ * It matters who pays for that block.  The PS2 image is built -msoft-float because the EE's
+ * FPU is single-precision (see the header of src/drivers/ps2/ps2_builtins.c), so every float
+ * operation there is a call to that file, and a textured span in a 2D interface is a glyph
+ * row: the [XMBT] raster rows measure its `px/span` at 5, so around a dozen float calls are
+ * amortised over five pixels.  The generic span loop ztriangle.h falls back to steps s/t as
+ * plain integers, so a scanline costs what its pixels cost.
+ */
+void ZB_fillTriangleMapping(ZBuffer* zb, ZBufferPoint* p0, ZBufferPoint* p1, ZBufferPoint* p2) {
+	PIXEL* texture;
+	GLuint tsmask, ttmask;
+	GLint ttshift;
+
+	GLubyte zbdw = ZB_DEPTH_WRITE(zb);
+	GLubyte zbdt = zb->depth_test;
+	TGL_BLEND_VARS
+	TGL_STIPPLEVARS
+#define INTERP_Z
+#define INTERP_RGB
+#define INTERP_A
+#define INTERP_ST
+
+#define DRAW_INIT()                                                                                                                                            \
+	{                                                                                                                                                          \
+		texture = zb->current_texture;                                                                                                                         \
+		tsmask = zb->current_smask;                                                                                                                            \
+		ttmask = zb->current_tmask;                                                                                                                            \
+		ttshift = zb->current_tshift;                                                                                                                          \
+	}
+#if TGL_FEATURE_LIT_TEXTURES == 1
+#define OR1OG1OB1DECL                                                                                                                                          \
+	register GLint or1, og1, ob1;                                                                                                                              \
+	or1 = r1;                                                                                                                                                  \
+	og1 = g1;                                                                                                                                                  \
+	ob1 = b1;
+#define OR1G1B1INCR                                                                                                                                            \
+	og1 += dgdx;                                                                                                                                               \
+	or1 += drdx;                                                                                                                                               \
+	ob1 += dbdx;                                                                                                                                               \
+	al += dadx;
+#else
+#define OR1OG1OB1DECL /*A comment*/
+#define OR1G1B1INCR   al += dadx;
+#define or1 COLOR_MULT_MASK
+#define og1 COLOR_MULT_MASK
+#define ob1 COLOR_MULT_MASK
+#endif
+#if TGL_FEATURE_NO_DRAW_COLOR != 1
+
+#define PUT_PIXEL(_a)                                                                                                                                          \
+	{                                                                                                                                                          \
+		{                                                                                                                                                      \
+			register GLuint zz = z >> ZB_POINT_Z_FRAC_BITS;                                                                                                    \
+			if (ZCMPSIMP(zz, pz[_a], _a, 0)) {                                                                                                                 \
+				PIXEL c = TEXTURE_SAMPLE(texture, s, t);                                                                                                       \
+				TGL_BLEND_FUNC(RGB_MIX_FUNC(or1, og1, ob1, c), (TGL_TEX_ALPHA(c) * TGL_ALPHA_BYTE(al)) >> 8, (pp[_a]));                                        \
+				if (zbdw)                                                                                                                                      \
+					pz[_a] = zz;                                                                                                                               \
+			}                                                                                                                                                  \
+		}                                                                                                                                                      \
+		z += dzdx;                                                                                                                                             \
+		s += dsdx;                                                                                                                                             \
+		t += dtdx;                                                                                                                                             \
+		OR1G1B1INCR                                                                                                                                            \
+	}
+#else
+#define PUT_PIXEL(_a)                                                                                                                                          \
+	{                                                                                                                                                          \
+		{                                                                                                                                                      \
+			register GLuint zz = z >> ZB_POINT_Z_FRAC_BITS;                                                                                                    \
+			PIXEL c = TEXTURE_SAMPLE(texture, s, t);                                                                                                           \
+			if (ZCMP(zz, pz[_a], _a, c)) {                                                                                                                     \
+				TGL_BLEND_FUNC(RGB_MIX_FUNC(or1, og1, ob1, c), (TGL_TEX_ALPHA(c) * TGL_ALPHA_BYTE(al)) >> 8, (pp[_a]));                                        \
+				if (zbdw)                                                                                                                                      \
+					pz[_a] = zz;                                                                                                                               \
+			}                                                                                                                                                  \
+		}                                                                                                                                                      \
+		z += dzdx;                                                                                                                                             \
+		s += dsdx;                                                                                                                                             \
+		t += dtdx;                                                                                                                                             \
+		OR1G1B1INCR                                                                                                                                            \
+	}
+#endif
+
+#include "ztriangle.h"
+}
+
+void ZB_fillTriangleMappingNOBLEND(ZBuffer* zb, ZBufferPoint* p0, ZBufferPoint* p1, ZBufferPoint* p2) {
+	PIXEL* texture;
+	GLuint tsmask, ttmask;
+	GLint ttshift;
+
+	GLubyte zbdw = ZB_DEPTH_WRITE(zb);
+	GLubyte zbdt = zb->depth_test;
+	TGL_STIPPLEVARS
+#define INTERP_Z
+#define INTERP_RGB
+#define INTERP_A
+#define INTERP_ST
+
+#define DRAW_INIT()                                                                                                                                            \
+	{                                                                                                                                                          \
+		texture = zb->current_texture;                                                                                                                         \
+		tsmask = zb->current_smask;                                                                                                                            \
+		ttmask = zb->current_tmask;                                                                                                                            \
+		ttshift = zb->current_tshift;                                                                                                                          \
+	}
+#if TGL_FEATURE_LIT_TEXTURES == 1
+#define OR1OG1OB1DECL                                                                                                                                          \
+	register GLint or1, og1, ob1;                                                                                                                              \
+	or1 = r1;                                                                                                                                                  \
+	og1 = g1;                                                                                                                                                  \
+	ob1 = b1;
+#define OR1G1B1INCR                                                                                                                                            \
+	og1 += dgdx;                                                                                                                                               \
+	or1 += drdx;                                                                                                                                               \
+	ob1 += dbdx;                                                                                                                                               \
+	al += dadx;
+#else
+#define OR1OG1OB1DECL /*A comment*/
+#define OR1G1B1INCR   al += dadx;
+#define or1 COLOR_MULT_MASK
+#define og1 COLOR_MULT_MASK
+#define ob1 COLOR_MULT_MASK
+#endif
+#if TGL_FEATURE_NO_DRAW_COLOR != 1
+#define PUT_PIXEL(_a)                                                                                                                                          \
+	{                                                                                                                                                          \
+		{                                                                                                                                                      \
+			register GLuint zz = z >> ZB_POINT_Z_FRAC_BITS;                                                                                                    \
+			if (ZCMPSIMP(zz, pz[_a], _a, 0)) {                                                                                                                 \
+				pp[_a] = RGB_MIX_FUNC(or1, og1, ob1, TEXTURE_SAMPLE(texture, s, t));                                                                           \
+				if (zbdw)                                                                                                                                      \
+					pz[_a] = zz;                                                                                                                               \
+			}                                                                                                                                                  \
+		}                                                                                                                                                      \
+		z += dzdx;                                                                                                                                             \
+		s += dsdx;                                                                                                                                             \
+		t += dtdx;                                                                                                                                             \
+		OR1G1B1INCR                                                                                                                                            \
+	}
+#else
+#define PUT_PIXEL(_a)                                                                                                                                          \
+	{                                                                                                                                                          \
+		{                                                                                                                                                      \
+			register GLuint zz = z >> ZB_POINT_Z_FRAC_BITS;                                                                                                    \
+			PIXEL c = TEXTURE_SAMPLE(texture, s, t);                                                                                                           \
+			if (ZCMP(zz, pz[_a], _a, c)) {                                                                                                                     \
+				pp[_a] = RGB_MIX_FUNC(or1, og1, ob1, c);                                                                                                       \
+				if (zbdw)                                                                                                                                      \
+					pz[_a] = zz;                                                                                                                               \
+			}                                                                                                                                                  \
+		}                                                                                                                                                      \
+		z += dzdx;                                                                                                                                             \
+		s += dsdx;                                                                                                                                             \
+		t += dtdx;                                                                                                                                             \
+		OR1G1B1INCR                                                                                                                                            \
+	}
+#endif
+#include "ztriangle.h"
+}
+
 #endif 

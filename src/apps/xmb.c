@@ -84,6 +84,91 @@ extern void uart_puts_raw(const char *s);
  * frame cost. */
 static uint32_t s_phase_t0;
 
+/* The rasterizer's own counts over the window the row below timed, printed beside it because
+ * the two only mean something together.
+ *
+ * `covered` is what the fill paths were actually asked for, summed from the triangle areas at
+ * the dispatch, against `work_px` which is what this file *believes* it drew -- the canvas, a
+ * guess made once per stage.  `fill_us` is the microseconds spent inside those fill calls and
+ * `geom_us` is the stage's time minus them, so the two together say which of the three things
+ * to attack: a stage whose time is `fill_us` is paying per pixel (cheaper blend, fewer
+ * full-screen layers), one whose time is `geom_us` is paying per vertex (the software
+ * transform, or fewer of them), and one with a small `px/span` is paying the per-scanline
+ * bookkeeping of the span loop over and over for short spans -- which is what a fine mesh
+ * does and a full-screen quad never can. */
+static void xb_phase_raster(const char *tag, uint32_t stage_us)
+{
+    gl_fill_stats_t st;
+    const uint32_t ms = stage_us / 1000u;
+
+    gl_fill_stats(&st, 1);
+    if (!st.reported || !st.tris)
+        return;
+
+    {
+        char line[168];
+        snprintf(line, sizeof(line),
+                 "[XMBT] raster %-13s %6u tris %6u verts %9u px %7u spans %5u px/span"
+                 " %8u us fill %8u us geom %6u px/ms\n",
+                 tag, (unsigned)st.tris, (unsigned)st.verts, (unsigned)st.covered,
+                 (unsigned)st.scanlines,
+                 (unsigned)(st.scanlines ? st.covered / st.scanlines : 0u),
+                 (unsigned)st.fill_us,
+                 (unsigned)(stage_us > st.fill_us ? stage_us - st.fill_us : 0u),
+                 (unsigned)(st.covered / (ms ? ms : 1u)));
+        uart_puts_raw(line);
+    }
+}
+
+#if defined(BTRON_PS2_TARGET) && BTRON_PS2_FP_COUNT
+/* Declared here rather than routed through src/drivers/ps2/ps2_fp.h, the same way
+ * gl_dispatch.c declares the rasterizer's own counters: these are telemetry out of
+ * the compiler-runtime TU, not a service this file uses. */
+extern uint32_t btron_fp_calls[7];
+
+/* Called at every stage boundary: the rows print in stage order, so the difference
+ * between two consecutive boundaries is one stage's own work.  (Attributed per tag
+ * first, and that was wrong: a tag's previous boundary is a frame old, so each row
+ * carried the whole frame's count and the numbers could not be read against the
+ * stage's own microseconds.)  Only the counts are read: a counter is a load, an add
+ * and a store on the hot side of a call the `[FPU]` chain row prices at 28 cycles, so
+ * the microseconds of an instrumented run are inflated.
+ *
+ * The columns are the two precisions split by kind -- single add/sub/mul, div, compare,
+ * the two conversion directions, then double add/sub/mul and everything else double.
+ * Read them against the cycles the `[FPU]` rows charge per class: the double columns are
+ * small in calls and large in cycles, which is a precision question rather than a
+ * call-count one, and float -> int is the one conversion this CPU has no instruction
+ * for, so it is the column whose price is a separate question from int -> float's. */
+static uint32_t s_census_last[7];
+
+static void xb_phase_census(const char *tag)
+{
+    char line[192];
+    unsigned d[7];
+    unsigned ssum, dsum;
+    int i;
+
+    for (i = 0; i < 7; i++) {
+        d[i] = (unsigned)(btron_fp_calls[i] - s_census_last[i]);
+        s_census_last[i] = btron_fp_calls[i];
+    }
+    /* The split has to add up to the total the stage was first measured with, or the
+     * columns are describing a different build than the microseconds: the first run of
+     * the six-class row put the ribbon's whole bill in `fmul` and nothing in `fdiv` or
+     * `fcvt`, which cannot be true of a stage that maps every vertex through the
+     * viewport (`1.0f / pc.W` and seven `(GLint)` casts) and is how a mixed rebuild --
+     * one object recompiled under a different PS2_FP_COUNT than its neighbours -- shows
+     * up without anyone looking for it. */
+    ssum = d[0] + d[1] + d[2] + d[3] + d[6];
+    dsum = d[4] + d[5];
+    snprintf(line, sizeof(line),
+             "[XMBT] census %-13s fmul=%u fdiv=%u fcmp=%u fs2i=%u fi2s=%u S=%u dmul=%u dgen=%u D=%u\n",
+             tag, d[0], d[1], d[2], d[3], d[6], ssum, d[4], d[5], dsum);
+    uart_puts_raw(line);
+}
+#endif
+
 static void xb_phase(const char *tag, unsigned work_px)
 {
     char line[112];
@@ -99,6 +184,13 @@ static void xb_phase(const char *tag, unsigned work_px)
         snprintf(line, sizeof(line), "[XMBT] %-13s %9u us\n", tag, (unsigned)us);
     }
     uart_puts_raw(line);
+    xb_phase_raster(tag, us);
+#if defined(BTRON_PS2_TARGET) && BTRON_PS2_FP_COUNT
+    /* After the row that carries the verdict, so the kill that ends a run at a named
+     * row cannot lose this one, and after the two reads above so the stage's own
+     * count is the one that belongs to its microseconds. */
+    xb_phase_census(tag);
+#endif
 }
 
 /* One drawn frame, split at the swap because the two halves answer different
@@ -155,16 +247,67 @@ extern int      g_mouse_accel_profile;
  * XMB_RIBBON_ROWS/COLS and XMB_DELAY are the driver's own; so are the two
  * easing ids (XMB_EASING_ALPHA = OUT_CIRC, XMB_EASING_XY = OUT_QUAD) and the
  * GFX_SHADOW_ALPHA of gfx_display.h. */
-/* The sheet's mesh, in grid points.  This is a quality/cost dial, and the cost is
- * measured rather than assumed: 88% of the sheet's frame cost is per-vertex and
- * per-triangle pipeline, not pixels -- at 64x64 `f_ribbon` is 463 ms and at 32x32 it is
- * 157 ms for the same covered area, which solves to ~408 ms of setup against ~55 ms of
- * fill.  Halving the mesh takes a steady frame from 990 ms to 556 ms.  What it costs the
- * picture is also measured: the composited frames differ in 4.7% of their bytes with a
- * worst channel delta of 27/255, and the sheet's fragment field stays inside the
- * shader's legal 0.0340..0.1560 band, so the surface is the same surface with coarser
- * facets.  The PS3 driver's own mesh is the reference for the look, so this is the row
- * to raise if the silhouette reads faceted on a real display. */
+/* The sheet's mesh, in grid points.  This is a quality/cost dial and the cost is measured,
+ * with the rasterizer's own counts beside each number (tris, verts, pixels, and the split
+ * between microseconds inside the fill and microseconds outside it).  The 32x32 row is the
+ * shipped binary, counted with PS2_FP_COUNT=0.  The 16x16 row is the control that prices a
+ * triangle setup, and it was measured on this same image by setting the defines, rebuilding, and
+ * putting them back -- which is what makes the two rows one fit rather than two:
+ *
+ *   32x32  f_ribbon  71.5 ms = 49.8 fill + 21.8 geometry, 1,828 tris, 1,984 verts, 102,320 px
+ *          f_surface 18.5 ms, f_menu 50.7 ms = 38.8 fill + 11.9 geometry, steady draw=173750 us
+ *   16x16  f_ribbon  38.4 ms = 32.8 fill +  5.5 geometry,   448 tris,   480 verts, 100,378 px
+ *          f_surface ~4.6 ms, steady draw=126833 us
+ *
+ * Four times fewer triangles buys only 1.52x on the fill, and the two rows together say why: they
+ * cover nearly the same pixels (102,320 and 100,378) with 1,380 different triangles, so the pair is
+ * one equation in two unknowns -- a triangle setup and a blended pixel.  Billed with the rows' own
+ * span steps at 60 cycles, that solves to 10.9 us = 3,200 cycles of setup and 77 cycles per blended
+ * pixel; the older pair of rows, from the binary before the recognition below, solves to the same
+ * setup (3,277) and 110 cycles, and a least-squares fit over all four rows has 3,206 and 77 with a
+ * 323 us worst residual.  So a setup is 19.9 ms of this stage's 49.8 ms of fill -- the third-largest
+ * line in the frame, and the reason a coarser mesh was never really about its pixels.  The one number
+ * here that needs no fit at all is the difference between the two binaries on the same row: 11,550 us
+ * over 102,320 blended px, i.e. 33.3 cycles a pixel of per-pixel switch dispatch, which is what
+ * `TGL_BLEND_VARS` recognising this stage's `GL_DST_COLOR`/`GL_ONE` took back -- `f_ribbon`'s fill
+ * reads 49.8 ms against the 61.3 ms it used to, and the frame 173.8 against 185.6.  The geometry term is
+ * linear in vertices, at 11.0 us each here (8.3 us in f_menu, whose vertices need no clip lerps);
+ * it was 14.5-15.3 us until `gl_clipcode` stopped computing its guard band in double.  Halving the
+ * mesh takes the wave from 71.5 to 38.4 ms and a steady frame from 173.8 to 126.8 ms.
+ *
+ * The span loop is not in this bill of costs, and the background quad is what proves it: it
+ * draws 382,731 px in 2,495 spans, so its spans are 153 px long and its 29.3 ms is the
+ * per-pixel term alone (22 cycles a px, opaque) -- a triangle setup and a scanline step are
+ * together under 2% of it.  A sheet with 6 px spans pays the same 60-cycle-per-scanline step,
+ * nine times per triangle, which is noise.
+ *
+ * And neither of the two arithmetic terms is what this file used to say it was.  The per-stage
+ * census (doc/md/PS2.md, *The census*) counts the libcalls a stage actually makes: the whole
+ * frame asks for 578,963 of them, which at the measured 28 cycles is 58.8 ms of the 173.8 ms
+ * frame -- 15.9 ms of the wave's lattice here, 27.5 in f_ribbon, 15.3 in f_menu.  So deleting
+ * every soft-float call in the image is a 1.51x change, not the 4x these comments used to
+ * imply, and the mesh dial being closed leaves the pixels, not the arithmetic: 115.0 ms of
+ * integer raster over 1.39 screenfuls, of which f_bg's 29.4 ms is a gradient that has not
+ * changed since the last frame.
+ *
+ * What a coarser mesh costs the picture is a separate measurement, and now both steps have one.
+ * 64x64 -> 32x32: the composited frames differ in 4.7% of their bytes with a worst channel delta
+ * of 27/255, and the sheet's fragment field stays inside the shader's legal 0.0340..0.1560 band,
+ * so that step is the same surface with coarser facets.  32x32 -> 16x16: 10.81% of the sheet-on
+ * frame's pixels differ, worst channel delta 145/255 (6.40% of its bytes), while every frame the
+ * sheet is not in is byte-identical -- three orders of magnitude more than the affine trade, and
+ * all of it on the wave.  The field says the same from the geometry: 0.0355..0.1453 over this
+ * mesh's 1,024 vertices against 0.0358..0.1117 over the coarse one's 256, i.e. the coarse sheet
+ * keeps the floor and loses 23% of the light on its steepest fold, which is why
+ * `verify/tests/test_xmb_render.c` refuses n < 32*32 as a law.  So the dial is closed: 47.0 ms
+ * was not for sale here, and the two things with a number large enough to chase are the GS, which
+ * takes the pixels off this CPU, and painting only what changed instead of the whole surface.
+ * The second one is the only shape that win can take: re-representing the static gradient as a
+ * bitmap and blitting it back is measured against, not guessed at, because this image already
+ * blits RAM to RAM at 14.8 cycles a pixel (the compositor's own `blit=` rows, 613,440 px in
+ * 30,747 us, and the same 50 ns/px on every smaller row) against the 22 cycles it costs to
+ * rasterise the gradient.  A copy is not much cheaper than a fill on this machine -- both are
+ * DRAM-bound -- so the only lever in `f_bg` is the number of pixels it touches. */
 #define XB_RIBBON_ROWS      32
 #define XB_RIBBON_COLS      32
 #define XB_DELAY            166.66667f
@@ -1519,7 +1662,28 @@ static void xb_gradient(float g[4][4])
     }
 }
 
-/* gfx_display_draw_bg(): the gradient quad, faded by the wallpaper opacity */
+/* gfx_display_draw_bg(): the gradient quad, faded by the wallpaper opacity.
+ *
+ * The opacity is applied by multiplying the ramp, not by blending it.  Both are the same
+ * arithmetic here because this layer is the first thing drawn on a canvas the caller has just
+ * cleared to black (see the glClear above xb_draw_bg in the frame body), so its blend
+ * destination is zero and `src*a + dst*(1-a)` is `src*a` -- but the second form reads the frame
+ * buffer, scales both terms and clamps, and this layer is 384,000 pixels of it.
+ *
+ * Measured on the Emotion EE, this one quad was 117.2 ms of a 345.9 ms frame at 86 cycles per
+ * pixel; written opaque it is 29.3 ms at 23 cycles per pixel.  The frame total around it has
+ * moved twice since, for reasons that cost this layer nothing -- it is untextured, so the menu's
+ * textured-span fix does not reach it, and it has five triangles, so the cheaper gradient setup
+ * barely does -- which is why this row quotes the quad's own two numbers rather than a total.
+ * That 63-cycle difference is the price of the read-modify-write, and it is why no other layer
+ * in this file may be made opaque on the same argument: they all have something real beneath
+ * them.
+ *
+ * The two pictures differ by 1 LSB on 50% of the canvas's bytes and 2 LSB on 3% of them -- the
+ * blend truncated `(c*255*a)>>8` per channel where the ramp rounds once at the vertex -- plus
+ * two pixels: the canvas corners, where the clipped quad's last wedge used to leave one hot
+ * texel 29/255 brighter than its neighbours and now matches them.  Compared with
+ * `make test-xmb-render-tgl`, frame by frame, in .build/tgl/. */
 static void xb_draw_bg(float alpha)
 {
     float g[4][4];
@@ -1527,12 +1691,19 @@ static void xb_draw_bg(float alpha)
 
     xb_gradient(g);
     glDisable(GL_TEXTURE_2D);
+
+    /* Local to this layer: every layer above the background is genuinely translucent and
+     * needs the blend back. */
+    glDisable(GL_BLEND);
+
     glBegin(GL_QUADS);
-    glColor4f(g[0][0], g[0][1], g[0][2], a); glVertex2f(0.0f, (float)s_h);
-    glColor4f(g[1][0], g[1][1], g[1][2], a); glVertex2f((float)s_w, (float)s_h);
-    glColor4f(g[2][0], g[2][1], g[2][2], a); glVertex2f((float)s_w, 0.0f);
-    glColor4f(g[3][0], g[3][1], g[3][2], a); glVertex2f(0.0f, 0.0f);
+    glColor4f(g[0][0] * a, g[0][1] * a, g[0][2] * a, 1.0f); glVertex2f(0.0f, (float)s_h);
+    glColor4f(g[1][0] * a, g[1][1] * a, g[1][2] * a, 1.0f); glVertex2f((float)s_w, (float)s_h);
+    glColor4f(g[2][0] * a, g[2][1] * a, g[2][2] * a, 1.0f); glVertex2f((float)s_w, 0.0f);
+    glColor4f(g[3][0] * a, g[3][1] * a, g[3][2] * a, 1.0f); glVertex2f(0.0f, 0.0f);
     glEnd();
+
+    glEnable(GL_BLEND);
 }
 
 /* ── Message box ────────────────────────────────────────────────────── */
@@ -2717,7 +2888,15 @@ static void xb_paint(WND *wnd, GDEV *dev)
 
     get_tim(&now);
     dt = (float)(unsigned)(now - s_last_time);
-    if (dt < 0.0f || dt > 250.0f)
+    /* A stall guard, not a frame budget.  The bound used to be 250 ms, which is smaller
+     * than a real PS2 frame (measured 337-398 ms between paints, of which the rasterizer
+     * alone takes 174 ms), so the clamp fired on *every* frame and handed the whole UI a
+     * nominal 16 ms instead of the time that had actually passed -- 21x dilation of every
+     * tween, particle and wave step.  The clock it reads is honest (ps2_task_ms()
+     * accumulates CP0 Count microseconds), so it is the bound that was wrong: only a gap
+     * this side of a stall is trusted, and a genuine stall restarts the timeline rather
+     * than teleporting every animation to its end. */
+    if (dt < 0.0f || dt > 4000.0f)
         dt = 16.0f;
     s_last_time = now;
     s_now_ms    = (unsigned)now;
@@ -2731,12 +2910,63 @@ static void xb_paint(WND *wnd, GDEV *dev)
 
     xb_tween_tick(dt);
 
-    /* gfx_display.c:874 - the effect clock advances once per drawn frame */
-    s_effect_time += 0.01f;
+    /* gfx_display.c:874 has the effect clock advance by a fixed 0.01 once per drawn
+     * frame, which is only a *speed* while the frame rate is the one the bar was tuned
+     * at -- 16 ms here, the app's own `dly_tsk(16)` cadence.  Drawn at that rate the
+     * sheet's phase advances 0.6 units a second and its middle vertex about 3 px a
+     * second, which is the slow drift the original looks like; at the PS2's measured
+     * 2.7 frames a second the same 0.01 per frame is 0.016 units a second, i.e. 0.13 px
+     * a second, and the surface reads as frozen.  Scaling by the elapsed time instead
+     * makes the wave's speed a property of the clock rather than of the rasterizer, and
+     * is bit-identical where the cadence is as designed: 16.0f / 1600.0f is the same
+     * float as 0.01f, so every target that hits 16 ms frames gets the same sequence of
+     * `s_effect_time` values it had before. */
+    s_effect_time += dt / 1600.0f;
     if (s_effect_time > 65536.0f)
         s_effect_time = 0.0f;
     if (s_wave)
         xb_ribbon_step(s_effect_time);
+
+    /* The sheet's motion, in the units the eye uses, for the first six paints.
+     * "The surface is not moving" is not one claim but three, and this row separates
+     * them: `dt` is the elapsed time the animation was stepped by (if it ever reads 16
+     * again on a machine whose frames cost 174 ms, the stall guard above has become a
+     * frame budget and every timing in the bar is dilated again); `t1024` is the effect
+     * clock, which must advance in proportion to `dt` and not per frame; and `dm`/`dsum`
+     * are how far the surface actually went -- `mid` is the middle vertex's screen y in
+     * 1/1024ths of a pixel, `dm` its step since the previous paint, and `dsum` the same
+     * summed over all 1,024 vertices.  Those last two are what settled the original
+     * report: at 0.01 per drawn frame and 2.7 frames a second the PS2 measured dm=49..53
+     * (0.05 px) and dsum=+-40, which is a surface that moves 0.13 px/s and therefore
+     * reads as frozen, while the same bar time-stepped measures dm=+-300..1400 and
+     * dsum=-1262..-5091 per 338 ms frame.  Fixed-point throughout because the console
+     * has no float formatter to trust. */
+    {
+        static unsigned      s_motion_left = 6u;
+        static unsigned long s_prev_sum;
+        static int           s_prev_mid;
+
+        if (s_motion_left != 0u && s_wave) {
+            char mline[112];
+            unsigned long sum = 0;
+            int mid, r, c;
+
+            s_motion_left--;
+            for (r = 0; r < XB_RIBBON_ROWS; r++)
+                for (c = 0; c < XB_RIBBON_COLS; c++)
+                    sum += (unsigned long)((int)(s_rib_e1[r][c] * 1024.0f) + 1024);
+            mid = (int)(((1.0f - s_rib_e1[XB_RIBBON_ROWS / 2][XB_RIBBON_COLS / 2])
+                          * 0.5f * (float)s_h) * 1024.0f);
+            snprintf(mline, sizeof(mline),
+                     "[XMBT] wave n=%u dt=%d ms t1024=%d mid1024=%d dm=%d dsum=%d\n",
+                     (unsigned)(6u - s_motion_left), (int)dt,
+                     (int)(s_effect_time * 1024.0f), mid,
+                     mid - s_prev_mid, (int)(sum - s_prev_sum));
+            uart_puts_raw(mline);
+            s_prev_sum = sum;
+            s_prev_mid = mid;
+        }
+    }
     if (s_particles && s_wave)
         xb_particles_update(dt, 1);
     if (probing) {

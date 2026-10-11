@@ -42,6 +42,8 @@ WND* open_drivesetup_window(void) { return NULL; }
 WND* launch_beos_chat(void) { return NULL; }
 WND* open_clarity_window(void) { return NULL; }
 WND* open_xmb_window(void) { return NULL; }
+WND* open_glgears_window(void) { return NULL; }
+WND* open_lilcu64_demo_window(void) { return NULL; }
 void global_menu_render_bar(GDEV *dev) { (void)dev; }
 ER init_evt_sys(void) { return E_OK; }
 ER tip_init(void) { return E_OK; }
@@ -132,6 +134,84 @@ static unsigned compare_banded(H w, H h, H cols, H rows, uint32_t *misses_out)
     return diff;
 }
 
+/* One client image plus a tally of how often the compositor asked for it.  The tally
+ * is the part the pixel comparison cannot see: re-rendering a window whose image is
+ * already valid produces exactly the right pixels, so on a screen it is indistinguishable
+ * from blitting it -- and on the PS2 it costs the app's whole frame again.  55 ms of
+ * every XMB frame was that ([XMBT] cycle's comp= column, doc/md/PS2.md). */
+static const WND *s_tally_a;
+static const WND *s_tally_b;
+static unsigned s_paints_a, s_paints_b;
+
+static void paint_counted(WND *wnd, GDEV *dev)
+{
+    if (wnd == s_tally_a) s_paints_a++;
+    else if (wnd == s_tally_b) s_paints_b++;
+    paint_pattern(wnd, dev);
+}
+
+/* Two windows share the band, one app invalidates.  The walk has to render the stale
+ * image and blit the valid one, which is the decision the composite used to make for
+ * the whole band rather than per window. */
+static void stale_window_selectivity(void)
+{
+    static COLOR fb[800 * 600];
+    COLOR *ref;
+    unsigned diff = 0;
+    const RECT whole = { 0, 0, 800, 600 };
+
+    GDEV *screen = opn_dev_vram(800, 600, fb);
+    if (!screen) { printf("  [FAIL] opn_dev_vram(800,600)\n"); s_fail++; return; }
+    init_wnd_mgr(screen);
+    g_cursor_in_backbuffer = 0;
+
+    WND *a = opn_wnd("Stale A", 40, 60, 300, 200, WND_ATTR_TITLE | WND_ATTR_BORDER);
+    WND *b = opn_wnd("Fresh B", 200, 150, 300, 200, WND_ATTR_TITLE | WND_ATTR_BORDER);
+    if (!a || !b) { printf("  [FAIL] opn_wnd\n"); s_fail++; return; }
+    s_tally_a = a;
+    s_tally_b = b;
+    a->paint = paint_counted;
+    b->paint = paint_counted;
+
+    /* Reference: the walk with both images declared stale, which is the only case that
+     * has to render both, and the picture the selective pass below has to reproduce
+     * pixel for pixel from one render and one blit. */
+    inval_wnd(a);
+    inval_wnd(b);
+    s_paints_a = s_paints_b = 0;
+    redraw_baremetal_desktop_rect_paint(screen, &whole);
+    CHECK(s_paints_a == 1u && s_paints_b == 1u,
+          "a composite over two stale images renders both, so the tally is wired");
+    ref = (COLOR *)malloc(sizeof fb);
+    if (!ref) { printf("  [FAIL] out of memory\n"); s_fail++; return; }
+    memcpy(ref, fb, sizeof fb);
+
+    memset(fb, 0xFF, sizeof fb);
+    inval_wnd(a);                          /* B keeps the image it already has */
+    s_paints_a = s_paints_b = 0;
+    CHECK(wnd_damage_needs_paint(&whole),
+          "one stale window is still enough to rule out a blit-only pass");
+    redraw_baremetal_desktop_rect_paint(screen, &whole);
+    CHECK(s_paints_a == 1u, "the stale window is rendered");
+    CHECK(s_paints_b == 0u, "the window with a valid image is blitted, not re-rendered");
+    for (size_t i = 0; i < sizeof fb / sizeof *ref; i++) if (ref[i] != fb[i]) diff++;
+    printf("  selective composite: %u differing pixels, A rendered %u, B rendered %u\n",
+           diff, s_paints_a, s_paints_b);
+    CHECK(diff == 0, "one render and one blit give exactly the pixels two renders give");
+
+    /* The other half of the law: rendering is what makes an image valid again, so a
+     * second pass over the same band must not ask for it a second time. */
+    s_paints_a = s_paints_b = 0;
+    redraw_baremetal_desktop_rect_paint(screen, &whole);
+    CHECK(s_paints_a == 0u && s_paints_b == 0u,
+          "and the pass after it renders neither -- the band is settled");
+
+    cls_wnd(a);
+    cls_wnd(b);
+    s_tally_a = s_tally_b = NULL;
+    free(ref);
+}
+
 int main(void)
 {
     uint32_t misses;
@@ -143,6 +223,8 @@ int main(void)
     /* Fixed before any composite: the icon plates the background draws are laid
      * out from this setting, and the reference and the bands must agree on it. */
     appearance_set_icon_size(BTRON_ICON_SIZE_32);
+
+    stale_window_selectivity();
 
     /* 800x600 is the PS2's workbench.  Both halves failing here is the bug this
      * port had: the composite rebuilt the desktop per band, and the cursor stayed

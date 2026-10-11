@@ -711,6 +711,212 @@ uint32_t btron_render_perf_us(void)
     return s_timebase_ok ? s_ticks_hi * (0xFFFFFFFFu / tpu) + now / tpu : 0u;
 }
 
+/* ── One Task-Driven Frame Cycle, Stage By Stage ─────────────────── */
+
+/* "The app paints in 184 ms and a frame arrives every 380 ms" is a question about the
+ * other 196 ms, and this file is where the answer lives: the app's own `[XMBT] frame`
+ * row stops at `egl_swap_buffers`, so everything else in the period -- the bus polls,
+ * the pointer service, the event dispatch, the composite that wraps the app's paint
+ * callback, the GIF stream, the pass' own trailing delay, and the hold the body asked
+ * for -- is invisible to it.  `ps2_paint_bands()` already splits the present into
+ * render/swap/upload; what was missing were the pass' boundaries and the hold, which is
+ * this.  The one number that decides where a cut belongs is `render=` beside the app's
+ * `draw+swap`: the remainder is the compositor's, not the app's.
+ *
+ * Stamped inside ps2_gui_pass(), printed by ps2_task_dly() after the hold has been
+ * spent, because the hold is part of the period the body sees and nothing else times it.
+ * Ticks are raw Count, not the folded clock: a cycle is far under the 14.5 s this
+ * machine's Count takes to wrap, so the fold would only add a division -- and a row that
+ * did wrap would read as a negative stage, which is loud enough to notice.
+ *
+ * Not behind the bench flag, the way ps2_paint_note() below is not either: an unarmed
+ * profiler costs one branch per boundary and 96 bytes of .bss, and gating it would buy
+ * only those cycles back while making the row unavailable to whoever has the machine.
+ * Arming is `left`, which the app phase sets. */
+typedef struct {
+    uint32_t left;        /* cycles still owed a row; armed by the app phase */
+    uint32_t rows;        /* rows printed since the arm */
+    uint32_t prof;        /* this pass is being timed */
+    uint32_t pn;          /* boundaries taken so far this pass */
+    uint32_t pc[7];       /* Count ticks at those boundaries */
+    uint32_t stage[6];    /* poll, hook, evt, net, paint, note -- µs */
+    uint32_t pass_us;     /* first tick to last, so the stages sum to it */
+    uint32_t tail_us;     /* the pass' end to the hold: its own delay and the s_shown pair */
+    uint32_t hold_us;     /* what ps2_task_hold() actually spent */
+    uint32_t t_end;       /* the pass' last tick, which the tail is measured from */
+    uint32_t r_us, s_us, u_us, px;
+    uint32_t stamped;     /* a pass has filled the fields above */
+    uint32_t why;         /* the PS2_CYCLE_WHY_* bits that were set when it presented */
+    int bands, full;
+    int bx0, by0, bx1, by1;   /* the damage band set held before it went whole-canvas */
+    int ndmg;                 /* how many bands that damage was spread over */
+    RENDER_STATS st;          /* the shared compositor's stages for this one pass */
+} ps2_cycle_t;
+
+/* Which rule made this pass a whole-canvas one.  These are the ways ps2_gui_pass() can
+ * decide to repaint everything, and they have four different cures: a stray key in the
+ * queue is a bench artefact, the convergence timer is by design, an overlay that never
+ * closed is a bug in whatever opened it, and a band set that merged into the canvas is
+ * damage the app did not ask for.  Printed as one hex field because a pass can carry
+ * more than one.
+ *
+ * The overlay test is split into its four conditions rather than one bit, because the
+ * first run of this instrument returned `why=4` on every steady frame and the four
+ * conditions have nothing in common: a menu the user opened is correct, a window
+ * manager still claiming a drag several hundred milliseconds after the button went up
+ * is the bug this row was written to find. */
+#define PS2_CYCLE_WHY_EVENT    1u    /* an event that was not a mouse move came through */
+#define PS2_CYCLE_WHY_TIMER    2u    /* full_convergence_us came due */
+#define PS2_CYCLE_WHY_GMENU    4u    /* global_menu_is_open() */
+#define PS2_CYCLE_WHY_TRACKER  8u    /* tracker_is_menu_open() */
+#define PS2_CYCLE_WHY_WM      16u    /* wnd_mgr_is_interacting(): a drag or resize in flight */
+#define PS2_CYCLE_WHY_TIP     32u    /* the IME converting or showing candidates */
+#define PS2_CYCLE_WHY_OVERFLOW 64u   /* more damage than PS2_BAND_MAX bands hold */
+#define PS2_CYCLE_WHY_MERGED  128u   /* band 0 already spanned the canvas, no rule fired */
+
+static ps2_cycle_t s_cycle;
+
+/* One stage boundary.  A function rather than an open-coded read so the six call sites
+ * read as one instrument; for a pass that owes no row it is one branch. */
+static void ps2_cycle_mark(void)
+{
+    if (!s_cycle.prof || s_cycle.pn >= 7u) return;
+    s_cycle.pc[s_cycle.pn++] = ps2_count_read();
+}
+
+/* Begin a pass.  Only a task-driven one can be an app frame: the session loop makes
+ * thousands of the other kind a second, and none of them owes a row.  The attribution
+ * fields are cleared here rather than at the print because the gate below only ever
+ * writes when this pass is being timed, so an unprofiled pass could otherwise leave a
+ * bit -- or a stale damage rect -- for the next frame to print as its own. */
+static void ps2_cycle_begin(int task_driven)
+{
+    s_cycle.prof = (s_cycle.left != 0u && task_driven) ? 1u : 0u;
+    s_cycle.pn = 0u;
+    s_cycle.why = 0u;
+    s_cycle.ndmg = 0;
+    s_cycle.bx0 = s_cycle.by0 = s_cycle.bx1 = s_cycle.by1 = 0;
+    ps2_cycle_mark();
+}
+
+/* Which rule fired.  ORed, because a frame can legitimately be owed the canvas twice
+ * (an app that keys and a convergence timer that came due in the same pass), and the
+ * row that shows two bits is the one that says so. */
+static void ps2_cycle_why(uint32_t bits)
+{
+    if (s_cycle.prof) s_cycle.why |= bits;
+}
+
+/* The damage the pass actually asked for, taken before ps2_bandset_full() overwrites
+ * it.  Beside `why` this is the pair that answers the question the row exists for:
+ * a 16x16 cursor rect plus a stray event is a dispatch problem, and a damage set that
+ * already spanned the canvas is the app invalidating more than it drew. */
+static void ps2_cycle_damage(const ps2_bandset_t *set)
+{
+    if (!s_cycle.prof || set->n == 0u) return;
+    s_cycle.bx0 = set->b[0].x0;
+    s_cycle.by0 = set->b[0].top;
+    s_cycle.bx1 = set->b[0].x1;
+    s_cycle.by1 = set->b[0].end;
+    s_cycle.ndmg = (int)set->n;
+}
+
+/* One rule is not a decision ps2_gui_pass() makes, so it cannot be marked where the
+ * others are: the band set can reach the canvas on its own, because a cursor swept
+ * across the screen unions two bands whose columns cover it.  Named here, at the point
+ * that knows the set's final shape, and only when no rule above already claimed it. */
+static void ps2_cycle_merged(const ps2_bandset_t *set)
+{
+    if (!s_cycle.prof || s_cycle.why != 0u) return;
+    if (ps2_band_is_full(&set->b[0])) s_cycle.why = PS2_CYCLE_WHY_MERGED;
+}
+
+/* Commit the ticks this pass took.  A pass that returned early reached fewer boundaries
+ * than seven, so the stages it never reached are measured against its last tick and read
+ * zero rather than whatever the array held before it.
+ *
+ * `stamped` means "this pass owes a row", which is a different question from "a pass
+ * finished": the session loop's passes reach here too, and a row for one of them would
+ * print the previous frame's stages.  So everything below is gated on the pass having
+ * been armed at its start, and ps2_cycle_hold_end() prints only what set this.
+ *
+ * The shared compositor's own stage counters are taken here, in the same breath, and
+ * only for an armed pass: they are maxima since the last take, so taking one per app
+ * frame makes them that frame's, which is the split the three stages above cannot give
+ * -- `paint=` is this port's flush, and the app's rasterising arrives inside it as the
+ * compositor's `paint` stage.  Passing on the unarmed ones is what keeps [BENCH]'s own
+ * compositor rows measuring their whole phase rather than this file's last pass. */
+static void ps2_cycle_stamp(uint32_t r_us, uint32_t s_us, uint32_t u_us, uint32_t px,
+                            int bands, int full)
+{
+    const uint32_t tpu = btron_ee_ticks_per_us();
+    const int armed = s_cycle.prof != 0u;
+    const int n = (int)s_cycle.pn;
+    int i;
+
+    s_cycle.prof = 0u;
+    s_cycle.stamped = 0u;
+    if (!armed || n < 2 || tpu == 0u) return;
+    for (i = 1; i < 7; i++) {
+        const int hi = i < n ? i : n - 1;
+        const int lo = i - 1 < n ? i - 1 : n - 1;
+        s_cycle.stage[i - 1] = (uint32_t)(s_cycle.pc[hi] - s_cycle.pc[lo]) / tpu;
+    }
+    s_cycle.t_end = s_cycle.pc[n - 1];
+    s_cycle.pass_us = (uint32_t)(s_cycle.pc[n - 1] - s_cycle.pc[0]) / tpu;
+    s_cycle.r_us = r_us;  s_cycle.s_us = s_us;  s_cycle.u_us = u_us;
+    s_cycle.px = px;  s_cycle.bands = bands;  s_cycle.full = full;
+    btron_render_stats_take(&s_cycle.st);
+    s_cycle.stamped = 1u;
+}
+
+static void ps2_cycle_print(int asked_ms)
+{
+    ps2_kprintf("[XMBT] cycle %u period=%u us pass=%u tail=%u hold=%u/%d | "
+                "poll=%u hook=%u evt=%u net=%u paint=%u note=%u | "
+                "render=%u swap=%u upload=%u px=%u nb=%d full=%d why=%x dmg=%d,%d,%d,%d/%d | "
+                "comp bg=%u frame=%u paint=%u blit=%u panel=%u bars=%u total=%u bfn=%u wins=%u/%u\n",
+                (unsigned int)s_cycle.rows,
+                (unsigned int)(s_cycle.pass_us + s_cycle.tail_us + s_cycle.hold_us),
+                (unsigned int)s_cycle.pass_us, (unsigned int)s_cycle.tail_us,
+                (unsigned int)s_cycle.hold_us, asked_ms,
+                (unsigned int)s_cycle.stage[0], (unsigned int)s_cycle.stage[1],
+                (unsigned int)s_cycle.stage[2], (unsigned int)s_cycle.stage[3],
+                (unsigned int)s_cycle.stage[4], (unsigned int)s_cycle.stage[5],
+                (unsigned int)s_cycle.r_us, (unsigned int)s_cycle.s_us,
+                (unsigned int)s_cycle.u_us, (unsigned int)s_cycle.px,
+                s_cycle.bands, s_cycle.full, (unsigned int)s_cycle.why,
+                s_cycle.bx0, s_cycle.by0, s_cycle.bx1, s_cycle.by1, s_cycle.ndmg,
+                (unsigned int)s_cycle.st.bg_us, (unsigned int)s_cycle.st.frame_us,
+                (unsigned int)s_cycle.st.paint_us, (unsigned int)s_cycle.st.blit_us,
+                (unsigned int)s_cycle.st.panel_us, (unsigned int)s_cycle.st.bars_us,
+                (unsigned int)s_cycle.st.comp_us, (unsigned int)s_cycle.st.bg_full_calls,
+                (unsigned int)s_cycle.st.wins_drawn, (unsigned int)s_cycle.st.wins_walked);
+    s_cycle.rows++;
+    s_cycle.stamped = 0u;
+    if (s_cycle.left) s_cycle.left--;
+}
+
+/* The hold the body asked for is timed across the pass it completes: begin() returns the
+ * entry tick, or 0 when nothing is owed, so an unprofiled delay costs one test.  The
+ * pass' tail -- its own closing delay and the two shown-position stores -- is the gap
+ * between the pass' last tick and that entry tick, which is why it is measured here
+ * rather than by a boundary inside ps2_gui_pass(). */
+static uint32_t ps2_cycle_hold_begin(void)
+{
+    return s_cycle.stamped ? ps2_count_read() : 0u;
+}
+
+static void ps2_cycle_hold_end(uint32_t t0, int asked_ms)
+{
+    const uint32_t tpu = btron_ee_ticks_per_us();
+
+    if (t0 == 0u || !s_cycle.stamped || tpu == 0u) return;
+    s_cycle.tail_us = (uint32_t)(t0 - s_cycle.t_end) / tpu;
+    s_cycle.hold_us = (uint32_t)(ps2_count_read() - t0) / tpu;
+    ps2_cycle_print(asked_ms);
+}
+
 /* One repaint of one present region, timed by stage.  The stages are never folded
  * into one number because they have different cures: the render walks the damaged
  * part of the desktop, the swap is the byte-order pass over it, and the upload is
@@ -3446,6 +3652,11 @@ static void ps2_bench_app(uint32_t frames)
                 (unsigned int)frames);
     btron_render_stats_take(&st);       /* the region table's counters are not this row's */
     s_bench_app_active = 1;
+    /* Six cycles.  The first of them is the app's first painted frame and is expected to
+     * carry whatever the GL backend does once (texture uploads, a lazily built table);
+     * the rows after it are the period the user would feel.  The profiler costs nothing
+     * until this is non-zero, and one branch per boundary after that. */
+    s_cycle.left = 6u;
     s_bench_app_left = frames;
     s_bench_app_made = 0u;
     s_bench_app_over = 0u;
@@ -3550,6 +3761,7 @@ static void ps2_bench_launch_xmb_by_key(GDEV *screen)
     s_bench_app_t0 = btron_render_perf_us();
     s_bench_app_made = 0u;
     s_bench_app_active = 1;
+    s_cycle.left = 3u;
     s_bench_app_left = 3u;
     ps2_kprintf("[BENCH] xmb by key: heap before the press -- used=%u of %u kB, largest hole %u kB, pool %s\n",
                 (unsigned int)(s_heap_used / 1024u), (unsigned int)(PS2_HEAP_SIZE / 1024u),
@@ -3575,6 +3787,117 @@ static void ps2_bench_launch_xmb_by_key(GDEV *screen)
 }
 
 #endif /* BTRON_PS2_BENCH_APP */
+
+/* The price a float op costs the image is not the price the `[FPU]` chain row prints.
+ * That chain runs inside ps2_builtins.c -- the one TU built -mhard-float -- so its
+ * add.s is mtc1/op/mfc1 and no call.  Every other TU here is -msoft-float, where the
+ * same source expression is a `jal __addsf3`.  This is that chain: four ops an
+ * iteration, the same four the self-test times, from a soft-float caller, with the
+ * operands behind a volatile load so nothing folds and no propagation empties the loop.
+ * The difference between the two rows is exactly what a batched kernel can reclaim,
+ * because a kernel is the arithmetic with one call instead of one call per op. */
+static volatile float s_fpcall_op[4];
+#if BTRON_PS2_FP_COUNT
+extern uint32_t btron_fp_calls[7];   /* the same census the [XMBT] rows read */
+#endif
+
+static uint32_t ps2_bench_fpcall_chain(int use_cop1, uint32_t *cls3)
+{
+    const int saved = btron_fp_on;
+    uint32_t c0, t;
+    float acc = 1.0f;
+    int j;
+#if BTRON_PS2_FP_COUNT
+    uint32_t calls0[7];
+    int i;
+
+    for (i = 0; i < 7; i++) calls0[i] = btron_fp_calls[i];
+#endif
+
+    s_fpcall_op[0] = 1.0000001f;   /* add */
+    s_fpcall_op[1] = 0.9999999f;   /* mul */
+    s_fpcall_op[2] = 1.0000002f;   /* div */
+    s_fpcall_op[3] = 2.0f;         /* compare */
+
+    btron_fp_on = use_cop1 ? 1 : 0;
+    c0 = ps2_count_read();
+    for (j = 0; j < 4000; j++) {
+        acc = acc + s_fpcall_op[0];             /* __addsf3 */
+        acc = acc * s_fpcall_op[1];             /* __mulsf3 */
+        acc = acc / s_fpcall_op[2];             /* __divsf3 */
+        if (acc < s_fpcall_op[3])               /* __ltsf2 */
+            acc = s_fpcall_op[0];               /* a load: the compare is consumed */
+    }
+    t = (uint32_t)(ps2_count_read() - c0);
+    btron_fp_on = saved;
+    if (acc == 0.0f)
+        acc = 1.0f;                             /* keep the chain live */
+#if BTRON_PS2_FP_COUNT
+    cls3[0] = btron_fp_calls[0] - calls0[0];    /* add + mul: 8000 if nothing folded */
+    cls3[1] = btron_fp_calls[1] - calls0[1];    /* div: 4000 */
+    cls3[2] = btron_fp_calls[2] - calls0[2];    /* compare: 4000 */
+#else
+    cls3[0] = cls3[1] = cls3[2] = 0u;
+#endif
+    return t;
+}
+
+/* The census' conversion column is two machines counted as one.  int -> float is
+ * `cvt.s.w`, which COP1 answers in the time of an add; float -> int has no instruction
+ * on this CPU at all, so it always runs the bit engine -- and a stage's 76,008
+ * conversions say nothing until each direction's own price is known.  Two loops, one
+ * class each: the operand comes from a volatile load and the answer goes to a volatile
+ * store, so the body is the call plus two memory ops and no arithmetic can be folded
+ * out of it or smuggled into it.  Counted calls, when the census is compiled in, are
+ * the proof that 4000 of the right libcall really ran. */
+static volatile float   s_cvt_fsrc;
+static volatile int32_t s_cvt_isrc;
+static volatile int32_t s_cvt_isink;
+static volatile float   s_cvt_fsink;
+
+#define BTRON_CVT_OPS 4000u
+
+static uint32_t ps2_bench_trunc_loop(uint32_t *calls)
+{
+    uint32_t c0;
+    unsigned long j;
+#if BTRON_PS2_FP_COUNT
+    const uint32_t before = btron_fp_calls[FP_SF_CVT];
+#endif
+
+    s_cvt_fsrc = 1234.5f;
+    c0 = ps2_count_read();
+    for (j = 0; j < BTRON_CVT_OPS; j++)
+        s_cvt_isink = (int32_t)s_cvt_fsrc;
+    c0 = (uint32_t)(ps2_count_read() - c0);
+#if BTRON_PS2_FP_COUNT
+    *calls = btron_fp_calls[FP_SF_CVT] - before;
+#else
+    (void)calls;
+#endif
+    return c0;
+}
+
+static uint32_t ps2_bench_promote_loop(uint32_t *calls)
+{
+    uint32_t c0;
+    unsigned long j;
+#if BTRON_PS2_FP_COUNT
+    const uint32_t before = btron_fp_calls[FP_SF_CVTI];
+#endif
+
+    s_cvt_isrc = 1234;
+    c0 = ps2_count_read();
+    for (j = 0; j < BTRON_CVT_OPS; j++)
+        s_cvt_fsink = (float)s_cvt_isrc;
+    c0 = (uint32_t)(ps2_count_read() - c0);
+#if BTRON_PS2_FP_COUNT
+    *calls = btron_fp_calls[FP_SF_CVTI] - before;
+#else
+    (void)calls;
+#endif
+    return c0;
+}
 
 static void ps2_bench_run(GDEV *screen)
 {
@@ -3602,6 +3925,47 @@ static void ps2_bench_run(GDEV *screen)
         ps2_kprintf("[FPU] 16000-op chain: COP1 %u cycles/op  bit engine %u cycles/op\n",
                     (unsigned int)(hw_t ? hw_t / 16000u : 0u),
                     (unsigned int)(soft_t ? soft_t / 16000u : 0u));
+        /* The same 16,000 ops asked through the ABI the rest of the image uses.
+         * `counted` is the chain read back through the libcalls' own census
+         * (FP_COUNT=1), which is what makes this row an instrument rather than an
+         * expression: 16000 says the compiled loop really holds four calls an
+         * iteration and the cycles per op is therefore the cycles per call.  Any
+         * smaller number says the arithmetic was partly folded away and the price is
+         * too high; 0 says the census is not in this build. */
+        {
+            uint32_t ch, cs, nh[3], ns[3];
+            ch = ps2_bench_fpcall_chain(1, nh);
+            cs = ps2_bench_fpcall_chain(0, ns);
+            ps2_kprintf("[FPU] 16000-op soft-float caller: COP1 %u cycles/op  bit engine %u cycles/op\n",
+                        (unsigned int)(ch / 16000u), (unsigned int)(cs / 16000u));
+            ps2_kprintf("[FPU] counted calls: COP1 arith=%u div=%u cmp=%u  bit %u/%u/%u of 16000\n",
+                        (unsigned int)nh[0], (unsigned int)nh[1], (unsigned int)nh[2],
+                        (unsigned int)ns[0], (unsigned int)ns[1], (unsigned int)ns[2]);
+            ps2_kprintf("[FPU] per-op call overhead: COP1 %u  bit engine %u cycles\n",
+                        (unsigned int)(ch / 16000u + (ch % 16000u ? 1u : 0u)
+                                       - (hw_t ? hw_t / 16000u : 0u)),
+                        (unsigned int)(cs / 16000u + (cs % 16000u ? 1u : 0u)
+                                       - (soft_t ? soft_t / 16000u : 0u)));
+        }
+        /* The two conversion directions, priced apart, because the census' conversion
+         * column is both of them added: int -> float goes to COP1 when the FPU is on and
+         * float -> int never can, so one number in that column is worth something and the
+         * other is worth about ten times it. */
+        {
+            const int saved = btron_fp_on;
+            uint32_t tsi = 0u, tis = 0u, tis_sf = 0u, n_si = 0u, n_is = 0u, n_is2 = 0u;
+            btron_fp_on = 1;
+            tsi = ps2_bench_trunc_loop(&n_si);
+            tis = ps2_bench_promote_loop(&n_is);
+            btron_fp_on = 0;
+            tis_sf = ps2_bench_promote_loop(&n_is2);
+            btron_fp_on = saved;
+            ps2_kprintf("[FPU] conversion price: float->int %u cycles/op (%u calls)  int->float %u on COP1 / %u bit engine (%u/%u)\n",
+                        (unsigned int)(tsi / BTRON_CVT_OPS), (unsigned int)n_si,
+                        (unsigned int)(tis / BTRON_CVT_OPS),
+                        (unsigned int)(tis_sf / BTRON_CVT_OPS),
+                        (unsigned int)n_is, (unsigned int)n_is2);
+        }
         /* The same disagreement split by op and by argument class, because `bad=1910`
          * on its own does not say whether the arithmetic is wrong (clean column, every
          * pixel affected) or only the non-arithmetic edge law (special column, NaN
@@ -3724,6 +4088,12 @@ static void ps2_bench_run(GDEV *screen)
 static uint32_t s_pass_panel_due, s_pass_full_due;
 static GDEV *s_gui_screen;
 
+/* The body depth, defined with the task layer below.  Declared here because the cycle
+ * profiler needs it to tell the one kind of pass that is an app frame -- the one a body
+ * asked for from inside itself -- from the session loop's, of which it makes thousands
+ * a second and none of which owes a row. */
+static int s_task_driving;
+
 /* One desktop pass: poll the bus, spend what the pointer owes, dispatch what the
  * queue holds, and present the rectangles that changed.  It is a function rather
  * than the body of the session loop because a task-driven app (xmb.c, quake_app.c,
@@ -3738,6 +4108,7 @@ static void ps2_gui_pass(GDEV *screen)
     EVT ev;
     int force_full = 0;
 
+    ps2_cycle_begin(s_task_driving);
     ps2_pad_poll();
     ps2_usb_poll();
     /* After the poll and before the dispatch: the reports the drain just
@@ -3747,6 +4118,7 @@ static void ps2_gui_pass(GDEV *screen)
      * That is what makes "px per pass" the speed the hand sees. */
     ps2_ptr_service();
     ps2_shell_poll();
+    ps2_cycle_mark();
 
 #if BTRON_PS2_BENCH_APP
     /* The app phase's frame budget, spent here rather than in the phase itself
@@ -3799,6 +4171,7 @@ static void ps2_gui_pass(GDEV *screen)
         ps2_kprintf("\n[BENCH] run complete\n");
     }
 #endif
+    ps2_cycle_mark();
 
     /* Dispatch queued BTRON events through unified workbench dispatcher */
     while (get_evt(&ev, 0) == E_OK) {
@@ -3831,12 +4204,16 @@ static void ps2_gui_pass(GDEV *screen)
          * can restack a window, hand a key to an app that paints without
          * invalidating, or open a menu -- all of which are cheaper to get right
          * by repainting everything than to enumerate. */
-        if (ev.type != EV_MOUSE_MOVE) force_full = 1;
+        if (ev.type != EV_MOUSE_MOVE) {
+            force_full = 1;
+            ps2_cycle_why(PS2_CYCLE_WHY_EVENT);
+        }
     }
 
 #if BTRON_HID_TRACE
     ps2_log_usb_state('G');
 #endif
+    ps2_cycle_mark();
 
     ps2_bands_for_pass(&set);
 
@@ -3867,6 +4244,7 @@ static void ps2_gui_pass(GDEV *screen)
         if ((uint32_t)(now - s_pass_full_due) >=
                 (uint32_t)(btron_planes()->full_convergence_us * tpu)) {
             force_full = 1;
+            ps2_cycle_why(PS2_CYCLE_WHY_TIMER);
             s_pass_full_due = now;
         }
     }
@@ -3874,18 +4252,31 @@ static void ps2_gui_pass(GDEV *screen)
     /* An overlay -- the global menu, a tracker dropdown, the IME candidate
      * window -- is drawn by the whole-canvas composite only, and the IME's is
      * drawn at the caret rather than at a rect anyone tracks.  With any of them
-     * up there is no band worth arguing about, so paint the canvas. */
-    if (force_full || set.overflow || global_menu_is_open() ||
-        tracker_is_menu_open() || wnd_mgr_is_interacting() ||
-        tip_get_state() == TIP_STATE_CONVERTING ||
-        tip_get_state() == TIP_STATE_CANDIDATE_SELECT) {
-        ps2_bandset_full(&set);
-    }
+     * up there is no band worth arguing about, so paint the canvas.  Each
+     * condition is a bit of its own so the row says which one it was. */
+    uint32_t ov = 0u;
+    if (global_menu_is_open())    ov |= PS2_CYCLE_WHY_GMENU;
+    if (tracker_is_menu_open())   ov |= PS2_CYCLE_WHY_TRACKER;
+    if (wnd_mgr_is_interacting()) ov |= PS2_CYCLE_WHY_WM;
+    if (tip_get_state() == TIP_STATE_CONVERTING ||
+        tip_get_state() == TIP_STATE_CANDIDATE_SELECT) ov |= PS2_CYCLE_WHY_TIP;
+
+    /* What the app and the pointer actually dirtied, recorded before the decision
+     * below can replace it with the canvas. */
+    ps2_cycle_why(ov);
+    if (set.overflow) ps2_cycle_why(PS2_CYCLE_WHY_OVERFLOW);
+    ps2_cycle_damage(&set);
+
+    if (force_full || set.overflow || ov) ps2_bandset_full(&set);
+    ps2_cycle_merged(&set);
 
     if (!set.n) {
-        ps2_delay_cycles(1000);
-		return;			/* nothing for the GS to be told */
+        ps2_cycle_stamp(0u, 0u, 0u, 0u, 0, 0);   /* nothing for the GS to be told */
+        ps2_delay_cycles(1000);                  /* ... and the tail is timed with it */
+        return;
     }
+
+    ps2_cycle_mark();
 
     {
         uint32_t r_us, s_us, u_us, px;
@@ -3905,9 +4296,12 @@ static void ps2_gui_pass(GDEV *screen)
             s_paint_age_f0 = 0;
             s_paint_owed = 0;
         }
+        ps2_cycle_mark();
         ps2_paint_note(px, set.n, ps2_band_is_full(&set.b[0]), dom,
                        r_us, s_us, u_us, lat, lat_ok);
         if (ps2_band_is_full(&set.b[0])) s_pass_full_due = ps2_count_read();
+        ps2_cycle_mark();
+        ps2_cycle_stamp(r_us, s_us, u_us, px, (int)set.n, ps2_band_is_full(&set.b[0]));
     }
     s_shown_x = s_mouse_x;
     s_shown_y = s_mouse_y;
@@ -3952,7 +4346,8 @@ static uint32_t  s_task_ms;          /* ms since the desktop session, folded for
 static uint32_t  s_task_us_rem;      /* µs not yet worth a millisecond, always < 1000 */
 static uint32_t  s_task_count_last;
 static int       s_task_clock_running;
-static int       s_task_driving;     /* body depth, 0 while the session loop drives */
+/* `s_task_driving` -- body depth, 0 while the session loop drives -- is declared up at
+ * ps2_gui_pass(), which is the only reader that comes before this point in the file. */
 
 ID cre_tsk(const T_CTSK *pk_ctsk)
 {
@@ -4036,8 +4431,12 @@ static void ps2_task_hold(uint32_t ms)
  * 'startx' has built the desktop, and such a body gets its delay without a screen. */
 static void ps2_task_dly(W dlytim)
 {
+    uint32_t t0;
+
     if (s_gui_screen) ps2_gui_pass(s_gui_screen);
+    t0 = ps2_cycle_hold_begin();      /* the pass' tail is timed from its last tick */
     ps2_task_hold(dlytim > 0 ? (uint32_t)dlytim : 0u);
+    ps2_cycle_hold_end(t0, dlytim > 0 ? (int)dlytim : 0);
 }
 
 void dly_tsk(W dlytim)

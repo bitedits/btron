@@ -27,6 +27,16 @@
 /* Include CLU header for test 10 */
 #include "apps/clu.h"
 
+/* clu.c's launcher table takes the address of every app the shell can open.  An
+ * opener that is not linked reads NULL there on ELF, which is what lets one table
+ * name apps a target does not build; the Mach-O linker these host tests use rejects
+ * the unresolved reference outright, so a test that links clu.host.o without linking
+ * the app supplies the inert opener itself. */
+#include <btron/apps.h>
+WND* open_xmb_window(void)          { return NULL; }
+WND* open_glgears_window(void)      { return NULL; }
+WND* open_lilcu64_demo_window(void) { return NULL; }
+
 /* ── Test helpers ────────────────────────────────────────────────── */
 static int g_pass = 0;
 static int g_fail = 0;

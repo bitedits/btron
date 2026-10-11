@@ -507,7 +507,11 @@ void redraw_all_windows_clip(const RECT *damage, BOOL blit_only) {
         draw_retro_window_frame(g_screen_dev, wnd);
         t_frame += btron_render_perf_us() - t_mark;
         if (!wnd->dev || !wnd->dev->pixels) continue;
-        if (!blit_only && wnd->paint) {
+        /* Staleness is a property of one window's image, not of the composite: the
+         * walk's caller has already decided that some window in this band has to be
+         * re-rendered, and repainting the valid ones with it cost 55 ms of every XMB
+         * frame on the PS2 ([XMBT] cycle's comp= column, doc/md/PS2.md). */
+        if (!blit_only && wnd->paint && !wnd->img_valid) {
             t_mark = btron_render_perf_us();
             wnd->paint(wnd, wnd->dev);
             t_paint += btron_render_perf_us() - t_mark;

@@ -362,6 +362,43 @@ static void known_answers(void)
     }
 }
 
+/* Every exponent field, each with the three mantissas that can land on a band boundary:
+ * zero (the bare power of two), one (the field's smallest significand) and all-ones (its
+ * largest), in both signs.  The float -> integer conversions are a decision on this field
+ * rather than a decode, so this is the sweep that sees a boundary off by one: it is what
+ * says the 127/150/158/159 lines in ps2_builtins.c are the right lines, and moving any one
+ * of them by one exponent fails here rather than silently passing. */
+static void fix_bands(void)
+{
+    static const uint32_t fracs[3] = { 0u, 1u, 0x7FFFFFu };
+    int be, k, s;
+
+    for (be = 0; be <= 0xFF; be++) {
+        for (k = 0; k < 3; k++) {
+            for (s = 0; s < 2; s++) {
+                const uint32_t a = ((uint32_t)be << 23) | fracs[k] | ((uint32_t)s << 31);
+                const float v = f_val(a);
+
+                if (v != v) {
+                    check("fixsfsi band nan", a, 0, __fixsfsi(a), 0u);
+                    check("fixunssfsi band nan", a, 0, __fixunssfsi(a), 0u);
+                } else if (v >= -2147483648.0 && v <= 2147483647.0) {
+                    check("fixsfsi band", a, 0, __fixsfsi(a), (uint32_t)(int32_t)v);
+                } else {
+                    check("fixsfsi band sat", a, 0, __fixsfsi(a),
+                          v > 0 ? 0x7FFFFFFFu : 0x80000000u);
+                }
+
+                if (v == v && v >= 0.0 && v <= 4294967295.0)
+                    check("fixunssfsi band", a, 0, __fixunssfsi(a), (uint32_t)v);
+                else if (v == v)
+                    check("fixunssfsi band sat", a, 0, __fixunssfsi(a),
+                          v < 0 ? 0u : 0xFFFFFFFFu);
+            }
+        }
+    }
+}
+
 int main(void)
 {
     int round;
@@ -373,6 +410,7 @@ int main(void)
 
     known_answers();
     conversions();
+    fix_bands();
     for (round = 0; round < 3; round++) {
         doubles_one_round(round);
         floats_one_round(round);

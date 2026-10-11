@@ -222,6 +222,7 @@ void glopVertex(GLParam* p) {
 	cnt = c->vertex_cnt;
 	cnt++;
 	c->vertex_cnt = cnt;
+	tgl_stat_verts++;
 
 	/* new vertex entry */
 	v = &c->vertex[n];

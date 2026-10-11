@@ -187,22 +187,24 @@ typedef GLushort PIXEL;
 #if TGL_FEATURE_BLEND == 1
 /*
  * The three blend parameters cannot change while a primitive is being filled, so they are
- * read once per primitive here -- and the one combination every in-tree application asks
- * for, GL_FUNC_ADD with GL_SRC_ALPHA / GL_ONE_MINUS_SRC_ALPHA, is recognised once too.
+ * read once per primitive here -- and the two combinations the in-tree applications
+ * actually draw with, GL_FUNC_ADD with GL_SRC_ALPHA / GL_ONE_MINUS_SRC_ALPHA and GL_FUNC_ADD
+ * with GL_DST_COLOR / GL_ONE, are recognised once too.
  *
- * That recognition is the whole point of `tglblend_alpha`.  Left to itself the compiler
- * puts the two factor switches and the equation switch inside the span loop: the object
- * code for a blended fill is an indirect `jr` through a jump table for every fragment,
- * plus a reload of the three parameters from stack slots the loop keeps spilling to.  On a
- * soft-float R5900 that table branch, not the arithmetic, is what a full-canvas gradient
- * is made of.  The recognised case therefore has its own branch-free spelling below, and
- * every other combination still runs the general one.
+ * That recognition is the whole point of `tglblend_alpha` and `tglblend_brighten`.  Left to
+ * itself the compiler puts the two factor switches and the equation switch inside the span
+ * loop: the object code for a blended fill is an indirect `jr` through a jump table for every
+ * fragment, plus a reload of the three parameters from stack slots the loop keeps spilling
+ * to.  On a soft-float R5900 that table branch, not the arithmetic, is what a full-canvas
+ * gradient is made of.  The recognised cases therefore have their own branch-free spellings
+ * below, and every other combination still runs the general one.
  */
 #define TGL_BLEND_VARS                                                                                                                                           \
 	GLuint zbblendeq = zb->blendeq;                                                                                                                              \
 	GLuint sfactor = zb->sfactor;                                                                                                                                \
 	GLuint dfactor = zb->dfactor;                                                                                                                                \
-	const GLuint tglblend_alpha = (zbblendeq == GL_FUNC_ADD && sfactor == GL_SRC_ALPHA && dfactor == GL_ONE_MINUS_SRC_ALPHA);
+	const GLuint tglblend_alpha = (zbblendeq == GL_FUNC_ADD && sfactor == GL_SRC_ALPHA && dfactor == GL_ONE_MINUS_SRC_ALPHA);                                     \
+	const GLuint tglblend_brighten = (zbblendeq == GL_FUNC_ADD && sfactor == GL_DST_COLOR && dfactor == GL_ONE);
 
 /*SORCERY to achieve 32 bit signed integer clamping*/
 
@@ -317,6 +319,34 @@ typedef GLushort PIXEL;
 	dest = tb_v_;
 
 /*
+ * GL_DST_COLOR / GL_ONE / GL_FUNC_ADD written out the same way: the source factor is one
+ * multiply of each channel by the destination's own byte, the destination factor is GL_ONE
+ * and so does nothing, and the equation adds them.  That is the compositor the XMB ribbon
+ * uses -- it brightens what the gradient left behind by (1 + c) -- and it is the only
+ * large-area fill in the image that is not the alpha case.
+ *
+ * Every term is the term the general path computes, in the same order, on channels in the
+ * same left-aligned domain, so the pixels are bit-identical.  Only two things are dropped,
+ * both provably no-ops here: the `& 0xff` on the multiplier byte, because a GET_*REDER result
+ * is a single byte already at bit 16 and cannot be wider, and the `imp > 0` arm of the clamp,
+ * because an unsigned sum of a shifted product and a channel is never negative and 0 clamps
+ * to 0 either way.  The remaining clamp is `min(sum, COLOR_MASK)`, written as arithmetic for
+ * the reason given above.
+ */
+#define TGL_BLEND_BRIGHTEN(sr, sg, sb, dr, dg, db, dest)                                                                                     \
+	GLint tbb_d_;                                                                                                                             \
+	sr = ((sr * (dr >> 16)) >> 8) + dr;                                                                                                       \
+	sg = ((sg * (dg >> 16)) >> 8) + dg;                                                                                                       \
+	sb = ((sb * (db >> 16)) >> 8) + db;                                                                                                       \
+	tbb_d_ = (GLint)sr - COLOR_MASK;                                                                                                          \
+	sr = (GLuint)(COLOR_MASK + (tbb_d_ & (tbb_d_ >> 31)));                                                                                     \
+	tbb_d_ = (GLint)sg - COLOR_MASK;                                                                                                          \
+	sg = (GLuint)(COLOR_MASK + (tbb_d_ & (tbb_d_ >> 31)));                                                                                     \
+	tbb_d_ = (GLint)sb - COLOR_MASK;                                                                                                          \
+	sb = (GLuint)(COLOR_MASK + (tbb_d_ & (tbb_d_ >> 31)));                                                                                     \
+	dest = RGB_TO_PIXEL(sr, sg, sb);
+
+/*
  * NOTE: in the general path below, the source factor is applied first, so a destination
  * factor that reads the source colour reads it already multiplied by its own factor.  No
  * combination the in-tree applications use depends on this.
@@ -329,6 +359,12 @@ typedef GLushort PIXEL;
 		GLuint sr_ = GET_REDDER(s_), sg_ = GET_GREENER(s_), sb_ = GET_BLUEER(s_);			\
 		GLuint dr_ = GET_REDDER(d_), dg_ = GET_GREENER(d_), db_ = GET_BLUEER(d_);			\
 		TGL_BLEND_ALPHA_ADD(sr_, sg_, sb_, dr_, dg_, db_, sa_, dest)						\
+	} else if (tglblend_brighten){														\
+		GLuint s_ = (source);																\
+		GLuint d_ = (dest);																\
+		GLuint sr_ = GET_REDDER(s_), sg_ = GET_GREENER(s_), sb_ = GET_BLUEER(s_);			\
+		GLuint dr_ = GET_REDDER(d_), dg_ = GET_GREENER(d_), db_ = GET_BLUEER(d_);			\
+		TGL_BLEND_BRIGHTEN(sr_, sg_, sb_, dr_, dg_, db_, dest)								\
 	} else {																				\
 	{																					\
 	GLuint sr, sg, sb, dr, dg, db;														\
@@ -351,6 +387,11 @@ typedef GLushort PIXEL;
 		GLuint sr_ = (rr) & COLOR_MASK, sg_ = (gg) & COLOR_MASK, sb_ = (bb) & COLOR_MASK;	\
 		GLuint dr_ = GET_REDDER(d_), dg_ = GET_GREENER(d_), db_ = GET_BLUEER(d_);			\
 		TGL_BLEND_ALPHA_ADD(sr_, sg_, sb_, dr_, dg_, db_, sa_, dest)						\
+	} else if (tglblend_brighten){														\
+		GLuint d_ = (dest);																\
+		GLuint sr_ = (rr) & COLOR_MASK, sg_ = (gg) & COLOR_MASK, sb_ = (bb) & COLOR_MASK;	\
+		GLuint dr_ = GET_REDDER(d_), dg_ = GET_GREENER(d_), db_ = GET_BLUEER(d_);			\
+		TGL_BLEND_BRIGHTEN(sr_, sg_, sb_, dr_, dg_, db_, dest)								\
 	} else {																				\
 	{																					\
 		GLuint sr = rr & COLOR_MASK, sg = gg & COLOR_MASK, sb = bb & COLOR_MASK, dr, dg, db;	\
@@ -470,10 +511,17 @@ void ZB_fillTriangleSmooth(ZBuffer *zb,
 void ZB_fillTriangleSmoothNOBLEND(ZBuffer *zb,
 		   ZBufferPoint *p1,ZBufferPoint *p2,ZBufferPoint *p3);
 /*
-This function goes unused and is removed by Gek.
+ * Affine texture mapping.  This is the case clip.c routes to when a triangle's three
+ * vertices carry the same interpolated z, because there 1/z is constant over its area and
+ * the perspective path's per-scanline re-derivation of the s/t steps has a constant answer.
+ * Removed by Gek once the perspective path was the only one left; the condition above is
+ * what makes it worth carrying again.
+ */
 void ZB_fillTriangleMapping(ZBuffer *zb,
-		    ZBufferPoint *p1,ZBufferPoint *p2,ZBufferPoint *p3);
-*/
+			   ZBufferPoint *p1,ZBufferPoint *p2,ZBufferPoint *p3);
+
+void ZB_fillTriangleMappingNOBLEND(ZBuffer *zb,
+				 ZBufferPoint *p1,ZBufferPoint *p2,ZBufferPoint *p3);
 void ZB_fillTriangleMappingPerspective(ZBuffer *zb,
                     ZBufferPoint *p0,ZBufferPoint *p1,ZBufferPoint *p2);
 

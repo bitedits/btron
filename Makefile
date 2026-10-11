@@ -991,6 +991,15 @@ PS2_CFLAGS     = -O2 -Wall -Wextra -std=c99 -ffreestanding -nostdlib \
 ifeq ($(PS2_GL),virgl)
 PS2_CFLAGS    += -DBTRON_GL_PREFER_VIRGL
 endif
+# FP_COUNT=1 makes the soft-float libcalls count themselves, and the [XMBT] rows print
+# that count per stage boundary: it is how a stage's microseconds are split between
+# arithmetic and everything else, which no disassembly reading can settle because the
+# number of calls a vertex actually executes is a property of the compiled path, not of
+# the source.  Costs a load, an add and a store on the hot side of a call worth ~28
+# cycles, so an instrumented run's microseconds are inflated and only its counts are
+# read.  0 compiles the counters away.
+PS2_FP_COUNT    ?= 0
+PS2_CFLAGS    += -DBTRON_PS2_FP_COUNT=$(PS2_FP_COUNT)
 PS2_STARTUP    = src/cores/core_ps2.c
 # The termios-scope applications gterm hosts: Sokhatsky Commander and Terminal
 # Vision.  They sit in COMMON_SRCS, so the hosted targets have always had them and
@@ -1291,6 +1300,7 @@ $(TEST_GLMATH_BIN): verify/tests/test_gl_math_float.test.o verify/tests/gl_math_
 # then say which half of the flip failed.  See verify/tests/test_fb_order.c.
 TEST_FBORDER_SRCS = verify/tests/test_fb_order.c src/graphics/dp_core.c \
                     src/font/troncode.c src/font/jis_fonts.c src/font/tibetan_fonts.c \
+                    src/gl/gl_dispatch.c src/gl/backend_virgl.c \
                     $(TINYGL_SRCS)
 TEST_FBORDER_COBJS = $(TEST_FBORDER_SRCS:.c=.fbo.o)
 TEST_FBORDER_POBJS = $(TEST_FBORDER_SRCS:.c=.fbp.o)

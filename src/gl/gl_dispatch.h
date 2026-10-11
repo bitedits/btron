@@ -25,6 +25,12 @@ typedef enum {
     GL_BACKEND_I915   = 2,    /* Awe Morris i915 zero-cost proxy (Ph.3)   */
 } GL_BACKEND;
 
+/* The image's one microsecond, reached through the surface layer rather than included
+ * from a driver header: tinygl has no business naming CP0.  Where no clock is installed
+ * this returns 0 (dp_core.c's weak default), and a caller that brackets with two of them
+ * then accumulates zero -- which reads as "no timing collected", not as "instant". */
+unsigned gl_perf_us(void);
+
 /* ── Dispatch table ──────────────────────────────────────────────── */
 typedef struct {
     /* Geometry */
@@ -95,6 +101,39 @@ extern gl_ops_t *g_gl;
  * that was asked for, and the surface layer below has to dispatch on the result
  * rather than on the request. */
 GL_BACKEND gl_active_backend(void);
+
+/* ── Fill accounting ─────────────────────────────────────────────────
+ * What the rasterizer was asked to draw, not how long it took: a filled triangle costs
+ * its setup once and its area per pixel, so the pair of counts separates a stage whose
+ * time is pixels (attack the blend and the span loop, or stop redrawing the layer) from
+ * one whose time is triangles (attack the geometry, or cache the layer).
+ *
+ * `reported` is 0 when no backend that can answer is linked, and the counters are
+ * then zeroes -- which is the difference between "this image cannot say" and "nothing was
+ * drawn", and a caller that prints one as the other has built a false negative. */
+typedef struct {
+    unsigned tris;             /* triangles handed to a fill path */
+    unsigned covered;          /* their area, in pixels: what the span loops walked */
+    unsigned textured_tris;    /* of those, sampled from a texture */
+    unsigned textured_covered;
+    unsigned blended_tris;     /* of those, taken the blending path */
+    /* A fill is a setup, then one span per scanline its triangle touches.  `scanlines` is
+     * the sum of each triangle's y extent, so `covered / scanlines` is the mean span length:
+     * 800 for a full-screen layer, and single digits for a mesh -- where the same per-span
+     * bookkeeping is amortised over a tenth as many pixels. */
+    unsigned scanlines;
+    /* Time is counted here so a stage's cost splits into the two things that can be
+     * attacked: microseconds inside the fill dispatch against `covered` is the per-pixel
+     * price, and the stage's own microseconds minus that is the per-vertex and per-triangle
+     * price, which `verts` divides. */
+    unsigned fill_us;
+    unsigned verts;            /* vertices through gl_Vertex, shared by a strip */
+    int      reported;
+} gl_fill_stats_t;
+
+/* Read the counters, and start the window again when reset is non-zero -- so the window is
+ * whatever the caller brackets, and a caller that never resets reads since-boot totals. */
+void gl_fill_stats(gl_fill_stats_t *out, int reset);
 
 /* ── Lifecycle ───────────────────────────────────────────────────── */
 void gl_init     (GL_BACKEND backend, int width, int height, void *pixel_buf);

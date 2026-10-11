@@ -440,25 +440,65 @@ uint32_t ps2_sf_floatunsisf(uint32_t v)
     return (uint32_t)fp_pack(0u, (uint64_t)v, 0, 0, &FP_F32);
 }
 
+/* float -> integer, and the one conversion in this file with no hardware form: the EE has
+ * no trunc.w.s (see the note above `fp_hw_cvt_s_w`), so unlike add/sub/mul/div/compare this
+ * is not a COP1 instruction with a software fallback -- it is whatever is written here, and
+ * what was written here was the generic engine: `fp_trunc` decodes through a format
+ * descriptor and carries a uint64 significand through 32-bit halves, which is the right
+ * shape for a runtime that serves both formats and the wrong shape for what TinyGL's
+ * `(GLint)` casts actually ask for.  The linked image has 134 call sites for these two
+ * entry points, densest in `ZB_fillTriangleMappingPerspective` (18) and in the vertex
+ * transform (9); the per-pixel paths have none, which `f_bg` proves rather than the reading
+ * -- its 382,731 px moved by 24 us over this whole change.  Measured prices: the gradient
+ * setup 15.7 -> 12.3 us (4,640 -> 3,626 EE cycles), the vertex 18.2 -> 14.5 us, and the
+ * steady XMB frame 221.9 -> 197.4 ms.  doc/md/PS2.md carries the ledger.
+ *
+ * A binary32 truncate is two shifts once the exponent field says which band the value is
+ * in, and every band below is 32-bit, so no `__lshrdi3`/`__ashldi3` reference appears -- the
+ * same self-containment law the rest of the file obeys.  With sig the 24-bit significand
+ * (implicit bit included) and value = sig * 2^(be-150):
+ *
+ *   be == 0xFF   inf (sat) or NaN (0), by the mantissa field
+ *   be <  127    |value| < 1 -- every subnormal and zero included -- so truncation is 0
+ *   be <= 149    sig >> (150-be), a shift of 1..23, which drops exactly the fraction
+ *   be <= 157    sig << (be-150), a shift of 0..7: an integer, and the largest it reaches
+ *                is 0x7FFFFF80, still inside a positive int32
+ *   be >= 158    2^31 or beyond -- saturate.  Exactly -2^31 saturates to 0x80000000, which
+ *                is also its true value, so the two laws cannot be told apart there.
+ *
+ * `make test-ps2-softfloat` checks that against the host's own (int32_t) cast over 200,000
+ * random bit patterns and over every exponent field x the three mantissas that can land on a
+ * band edge x both signs (3,072 comparisons), and the band sweep was shown to fail when one of
+ * these lines is moved by one exponent, so it is an instrument and not a formality. */
 uint32_t ps2_sf_fixsfsi(uint32_t a)
 {
-    uint32_t sign;
-    int cls;
-    const uint64_t mag = fp_trunc(a, &FP_F32, &sign, &cls);
-    if (cls == FPK_NAN) return 0;
-    if (cls == FPK_BIG || cls == FPK_INF || mag > 0x7FFFFFFFu) return sign ? 0x80000000u : 0x7FFFFFFFu;
-    return sign ? (uint32_t)0u - (uint32_t)mag : (uint32_t)mag;
+    const uint32_t sign = a >> 31;
+    const uint32_t be = (a >> 23) & 0xFFu;
+    const uint32_t frac = a & 0x7FFFFFu;
+    uint32_t mag;
+
+    if (be == 0xFFu) return frac ? 0u : (sign ? 0x80000000u : 0x7FFFFFFFu);
+    if (be < 127u) return 0u;
+    if (be >= 158u) return sign ? 0x80000000u : 0x7FFFFFFFu;
+
+    if (be >= 150u)
+        mag = (frac | 0x800000u) << (int)(be - 150u);      /* the shift is 0..7 */
+    else
+        mag = (frac | 0x800000u) >> (int)(150u - be);      /* the shift is 1..23 */
+    return sign ? (uint32_t)0u - mag : mag;
 }
 
 uint32_t ps2_sf_fixunssfsi(uint32_t a)
 {
-    uint32_t sign;
-    int cls;
-    const uint64_t mag = fp_trunc(a, &FP_F32, &sign, &cls);
-    if (cls == FPK_NAN) return 0;
-    if (sign) return 0;                                   /* negatives clamp, not wrap */
-    if (cls == FPK_BIG || cls == FPK_INF || mag > 0xFFFFFFFFu) return 0xFFFFFFFFu;
-    return (uint32_t)mag;
+    const uint32_t be = (a >> 23) & 0xFFu;
+    const uint32_t frac = a & 0x7FFFFFu;
+
+    if (a >> 31) return 0u;                            /* negatives clamp, not wrap */
+    if (be == 0xFFu) return frac ? 0u : 0xFFFFFFFFu;
+    if (be < 127u) return 0u;
+    if (be >= 159u) return 0xFFFFFFFFu;                /* 2^32 or beyond */
+    if (be >= 150u) return (frac | 0x800000u) << (int)(be - 150u);   /* shift 0..8 */
+    return (frac | 0x800000u) >> (int)(150u - be);                   /* shift 1..23 */
 }
 
 /* The Emotion Engine does have a floating-point unit, and the BIOS hands it over
@@ -1016,54 +1056,83 @@ uint32_t btron_fp_dump_n;   /* how many of those rows hold a pair */
 #define FP_PICK1(HW, SF, x)   (SF)(x)
 #endif
 
-uint32_t __addsf3(uint32_t a, uint32_t b) { return FP_PICK(fp_hw_add, ps2_sf_addsf3, a, b); }
-uint32_t __subsf3(uint32_t a, uint32_t b) { return FP_PICK(fp_hw_sub, ps2_sf_subsf3, a, b); }
-uint32_t __mulsf3(uint32_t a, uint32_t b) { return FP_PICK(fp_hw_mul, ps2_sf_mulsf3, a, b); }
-uint32_t __divsf3(uint32_t a, uint32_t b) { return FP_PICK(fp_hw_div, ps2_sf_divsf3, a, b); }
+/* BTRON_PS2_FP_COUNT turns these entry points into a census of themselves: the image
+ * then reports, per XMB stage, how many float operations its own callers asked for and
+ * of which kind.  Those counts are what the per-vertex and per-triangle bills are spent
+ * against -- 28 cycles an op from a soft-float caller and 541 for a double one, both
+ * measured by the `[FPU]` chain rows -- and whatever the product leaves over is not
+ * arithmetic at all.  Off by default and one flag away (`make ps2-bench PS2_FP_COUNT=1`):
+ * a counter is a load, an add and a store on the hot side of a call worth 28 cycles, so
+ * an instrumented run's microseconds are inflated and only its counts are read.  The
+ * six classes are the point: the two precisions are 19x apart in price, so a column
+ * that is small in calls and large in cycles is a precision question rather than a
+ * call-count one, and `double div` is also sqrt(double)'s fingerprint -- its
+ * six-iteration loop is the only thing in the image that divides in double.
+ *
+ * The seventh column exists because the two directions of conversion are not one op.
+ * int -> float is `cvt.s.w`, which COP1 answers, so it costs what an add costs; float ->
+ * int has no EE instruction at all and always runs the bit engine, whose price is a
+ * question the chain rows now answer directly.  Counting them together made a stage's
+ * conversion column unreadable -- 76,408 conversions in one XMB stage says nothing while
+ * it is not known how many of them are the expensive direction.  The column names are in
+ * ps2_fp.h, shared with the rows that print them. */
+uint32_t btron_fp_calls[7];
+#if BTRON_PS2_FP_COUNT
+#define FP_COUNT(cls) (btron_fp_calls[cls]++)
+#else
+#define FP_COUNT(cls) ((void)0)
+#endif
+
+uint32_t __addsf3(uint32_t a, uint32_t b) { FP_COUNT(FP_SF_ARITH); return FP_PICK(fp_hw_add, ps2_sf_addsf3, a, b); }
+uint32_t __subsf3(uint32_t a, uint32_t b) { FP_COUNT(FP_SF_ARITH); return FP_PICK(fp_hw_sub, ps2_sf_subsf3, a, b); }
+uint32_t __mulsf3(uint32_t a, uint32_t b) { FP_COUNT(FP_SF_ARITH); return FP_PICK(fp_hw_mul, ps2_sf_mulsf3, a, b); }
+uint32_t __divsf3(uint32_t a, uint32_t b) { FP_COUNT(FP_SF_DIV); return FP_PICK(fp_hw_div, ps2_sf_divsf3, a, b); }
 
 /* Each predicate goes to the compare whose NaN reads the way its caller's test needs:
  * lt and le are tested `< 0` and `< 1`, so unordered must not be less -- nan_gt;
  * gt and ge are tested `> 0` and `> -1`, so unordered must not be greater -- nan_lt.
  * eq and ne share one function because both are asked whether the pair is equal. */
-int32_t __ltsf2(uint32_t a, uint32_t b)  { return FP_PICK(fp_hw_cmp_nan_gt, ps2_sf_ltsf2, a, b); }
-int32_t __lesf2(uint32_t a, uint32_t b)  { return FP_PICK(fp_hw_cmp_nan_gt, ps2_sf_lesf2, a, b); }
-int32_t __gtsf2(uint32_t a, uint32_t b)  { return FP_PICK(fp_hw_cmp_nan_lt, ps2_sf_gtsf2, a, b); }
-int32_t __gesf2(uint32_t a, uint32_t b)  { return FP_PICK(fp_hw_cmp_nan_lt, ps2_sf_gesf2, a, b); }
-int32_t __eqsf2(uint32_t a, uint32_t b)  { return FP_PICK(fp_hw_cmp_eq, ps2_sf_eqsf2, a, b); }
-int32_t __nesf2(uint32_t a, uint32_t b)  { return FP_PICK(fp_hw_cmp_eq, ps2_sf_nesf2, a, b); }
+int32_t __ltsf2(uint32_t a, uint32_t b)  { FP_COUNT(FP_SF_CMP); return FP_PICK(fp_hw_cmp_nan_gt, ps2_sf_ltsf2, a, b); }
+int32_t __lesf2(uint32_t a, uint32_t b)  { FP_COUNT(FP_SF_CMP); return FP_PICK(fp_hw_cmp_nan_gt, ps2_sf_lesf2, a, b); }
+int32_t __gtsf2(uint32_t a, uint32_t b)  { FP_COUNT(FP_SF_CMP); return FP_PICK(fp_hw_cmp_nan_lt, ps2_sf_gtsf2, a, b); }
+int32_t __gesf2(uint32_t a, uint32_t b)  { FP_COUNT(FP_SF_CMP); return FP_PICK(fp_hw_cmp_nan_lt, ps2_sf_gesf2, a, b); }
+int32_t __eqsf2(uint32_t a, uint32_t b)  { FP_COUNT(FP_SF_CMP); return FP_PICK(fp_hw_cmp_eq, ps2_sf_eqsf2, a, b); }
+int32_t __nesf2(uint32_t a, uint32_t b)  { FP_COUNT(FP_SF_CMP); return FP_PICK(fp_hw_cmp_eq, ps2_sf_nesf2, a, b); }
 
-uint32_t __floatsisf(int32_t v)   { return FP_PICK1(fp_hw_cvt_s_w, ps2_sf_floatsisf, (uint32_t)v); }
-uint32_t __floatunsisf(uint32_t v){ return ps2_sf_floatunsisf(v); }   /* cvt.s.w is signed: keep the engine */
+uint32_t __floatsisf(int32_t v)   { FP_COUNT(FP_SF_CVTI); return FP_PICK1(fp_hw_cvt_s_w, ps2_sf_floatsisf, (uint32_t)v); }
+uint32_t __floatunsisf(uint32_t v){ FP_COUNT(FP_SF_CVTI); return ps2_sf_floatunsisf(v); }   /* cvt.s.w is signed: keep the engine */
 
 /* float -> int stays on the bit engine in both builds: the EE has no trunc.w.s, so
  * there is no hardware answer to compare against here (see the note above where
  * fp_hw_cvt_w_s used to be).  ps2_sf_fixsfsi's own answers for the values a hardware
  * conversion would have to saturate -- 0 for a NaN, the clamp for an out-of-range
  * exponent -- are the ones the callers get, and they are the documented ones. */
-uint32_t __fixsfsi(uint32_t a)    { return ps2_sf_fixsfsi(a); }
-uint32_t __fixunssfsi(uint32_t a) { return ps2_sf_fixunssfsi(a); }
+uint32_t __fixsfsi(uint32_t a)    { FP_COUNT(FP_SF_CVT); return ps2_sf_fixsfsi(a); }
+uint32_t __fixunssfsi(uint32_t a) { FP_COUNT(FP_SF_CVT); return ps2_sf_fixunssfsi(a); }
 
 /* ── Double precision ────────────────────────────────────────────────────── */
 
-uint64_t __adddf3(uint64_t a, uint64_t b) { return fp_addsub(a, b, 0, &FP_F64); }
-uint64_t __subdf3(uint64_t a, uint64_t b) { return fp_addsub(a, b, 1, &FP_F64); }
-uint64_t __muldf3(uint64_t a, uint64_t b) { return fp_mul(a, b, &FP_F64); }
-uint64_t __divdf3(uint64_t a, uint64_t b) { return fp_div(a, b, &FP_F64); }
+uint64_t __adddf3(uint64_t a, uint64_t b) { FP_COUNT(FP_DF_ARITH); return fp_addsub(a, b, 0, &FP_F64); }
+uint64_t __subdf3(uint64_t a, uint64_t b) { FP_COUNT(FP_DF_ARITH); return fp_addsub(a, b, 1, &FP_F64); }
+uint64_t __muldf3(uint64_t a, uint64_t b) { FP_COUNT(FP_DF_ARITH); return fp_mul(a, b, &FP_F64); }
+uint64_t __divdf3(uint64_t a, uint64_t b) { FP_COUNT(FP_DF_GEN); return fp_div(a, b, &FP_F64); }
 
-int32_t __ltdf2(uint64_t a, uint64_t b)  { return fp_order(a, b, &FP_F64, 1); }
-int32_t __ledf2(uint64_t a, uint64_t b)  { return fp_order(a, b, &FP_F64, 1); }
-int32_t __gtdf2(uint64_t a, uint64_t b)  { return fp_order(a, b, &FP_F64, -1); }
-int32_t __gedf2(uint64_t a, uint64_t b)  { return fp_order(a, b, &FP_F64, -1); }
-int32_t __eqdf2(uint64_t a, uint64_t b)  { return fp_order(a, b, &FP_F64, 1); }
-int32_t __nedf2(uint64_t a, uint64_t b)  { return fp_order(a, b, &FP_F64, 1); }
+int32_t __ltdf2(uint64_t a, uint64_t b)  { FP_COUNT(FP_DF_GEN); return fp_order(a, b, &FP_F64, 1); }
+int32_t __ledf2(uint64_t a, uint64_t b)  { FP_COUNT(FP_DF_GEN); return fp_order(a, b, &FP_F64, 1); }
+int32_t __gtdf2(uint64_t a, uint64_t b)  { FP_COUNT(FP_DF_GEN); return fp_order(a, b, &FP_F64, -1); }
+int32_t __gedf2(uint64_t a, uint64_t b)  { FP_COUNT(FP_DF_GEN); return fp_order(a, b, &FP_F64, -1); }
+int32_t __eqdf2(uint64_t a, uint64_t b)  { FP_COUNT(FP_DF_GEN); return fp_order(a, b, &FP_F64, 1); }
+int32_t __nedf2(uint64_t a, uint64_t b)  { FP_COUNT(FP_DF_GEN); return fp_order(a, b, &FP_F64, 1); }
 int32_t __unorddf2(uint64_t a, uint64_t b)
 {
+    FP_COUNT(FP_DF_GEN);
     return (fp_is_nan(a, &FP_F64) || fp_is_nan(b, &FP_F64)) ? 1 : 0;
 }
 
 uint32_t __truncdfsf2(uint64_t a)
 {
     uint32_t sign;
+    FP_COUNT(FP_DF_GEN);
     uint64_t sig;
     int32_t exp;
     const int kind = fp_decode(a, &FP_F64, &sign, &sig, &exp);
@@ -1075,6 +1144,7 @@ uint32_t __truncdfsf2(uint64_t a)
 uint64_t __extendsfdf2(uint32_t a)
 {
     uint32_t sign;
+    FP_COUNT(FP_DF_GEN);
     uint64_t sig;
     int32_t exp;
     const int kind = fp_decode(a, &FP_F32, &sign, &sig, &exp);
@@ -1085,18 +1155,21 @@ uint64_t __extendsfdf2(uint32_t a)
 
 uint64_t __floatsidf(int32_t v)
 {
+    FP_COUNT(FP_DF_GEN);
     const uint32_t sign = (v < 0) ? 1u : 0u;
     return fp_pack(sign, (v < 0) ? (uint64_t)-(int64_t)v : (uint64_t)v, 0, 0, &FP_F64);
 }
 
 uint64_t __floatunsidf(uint32_t v)
 {
+    FP_COUNT(FP_DF_GEN);
     return fp_pack(0u, (uint64_t)v, 0, 0, &FP_F64);
 }
 
 int32_t __fixdfsi(uint64_t a)
 {
     uint32_t sign;
+    FP_COUNT(FP_DF_GEN);
     int cls;
     const uint64_t mag = fp_trunc(a, &FP_F64, &sign, &cls);
     if (cls == FPK_NAN) return 0;
@@ -1109,6 +1182,7 @@ int32_t __fixdfsi(uint64_t a)
  * moved every operation off the FPU. */
 uint64_t __floatdidf(int64_t v)
 {
+    FP_COUNT(FP_DF_GEN);
     const uint32_t sign = (v < 0) ? 1u : 0u;
     const uint64_t mag = (v < 0) ? (uint64_t)0u - (uint64_t)v : (uint64_t)v;
     return fp_pack(sign, mag, 0, 0, &FP_F64);
@@ -1118,6 +1192,7 @@ uint64_t __floatdidf(int64_t v)
 int64_t __fixdfdi(uint64_t a)
 {
     uint32_t sign;
+    FP_COUNT(FP_DF_GEN);
     int cls;
     const uint64_t mag = fp_trunc(a, &FP_F64, &sign, &cls);
     const uint64_t max_i64 = 0x7FFFFFFFFFFFFFFFULL;

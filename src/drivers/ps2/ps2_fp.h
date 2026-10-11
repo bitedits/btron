@@ -52,6 +52,38 @@ int btron_fp_init(void);
  * the value it rejected instead of asserting it.  Zero before the init. */
 extern uint32_t btron_fp_seen;
 
+/* How many soft-float libcalls the image has taken, in seven classes:
+ * [0] single add/sub/mul, [1] single div, [2] single compare, [3] float -> int,
+ * [4] double add/sub/mul, [5] everything double else -- div (which is sqrt(double)'s
+ * six-iteration loop, so this column is that function's fingerprint), its compares and
+ * its conversions -- and [6] int -> float.
+ *
+ * The two conversion directions are separate columns because they are separate machines:
+ * int -> float is `cvt.s.w` and COP1 answers it, so it costs what an add costs, while
+ * float -> int has no instruction on this CPU and always runs the bit engine.  Counted
+ * together, a stage's conversion column could not be priced at all.
+ *
+ * The split is what makes a stage's bill readable: a column that is small in calls and
+ * large in cycles is a precision question, not a call count one.
+ * Counted only when the image is built with `-DBTRON_PS2_FP_COUNT=1`
+ * (`make ps2-bench PS2_FP_COUNT=1`); otherwise these stay zero, because a counter on the
+ * hot side of a 28-cycle call is not free.  See ps2_builtins.c. */
+extern uint32_t btron_fp_calls[7];
+#define BTRON_FP_CALLS_N 7
+
+/* The column names, shared by the TU that fills them and the readers that print them,
+ * so a census row cannot drift out of step with the counters -- which is the failure a
+ * six-class row that reported 267,488 adds and zero divides looked like. */
+enum {
+    FP_SF_ARITH = 0,   /* add/sub/mul in single */
+    FP_SF_DIV,         /* div.s, the one op with no short form */
+    FP_SF_CMP,         /* the six single-precision predicates */
+    FP_SF_CVT,         /* float -> int, the direction with no EE instruction */
+    FP_DF_ARITH,       /* add/sub/mul in double */
+    FP_DF_GEN,         /* double div (sqrt(double)'s fingerprint), compares, conversions */
+    FP_SF_CVTI         /* int -> float: cvt.s.w, answered by COP1 */
+};
+
 /* CP0.Status, and FCSR through fcsr (may be 0).  Reads 0/0 off the PS2 target. */
 uint32_t btron_fp_probe(uint32_t *fcsr);
 

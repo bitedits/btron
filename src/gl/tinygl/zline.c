@@ -9,7 +9,7 @@
 void ZB_plot(ZBuffer* zb, ZBufferPoint* p) {
 
 	GLint zz, y, x;
-	GLubyte zbdw = zb->depth_write;
+	GLubyte zbdw = ZB_DEPTH_WRITE(zb);
 	GLubyte zbdt = zb->depth_test;
 	GLfloat zbps = zb->pointsize;
 	TGL_BLEND_VARS
@@ -26,7 +26,7 @@ void ZB_plot(ZBuffer* zb, ZBufferPoint* p) {
 			if (!zb->enable_blend)
 				*pp = RGB_TO_PIXEL(p->r, p->g, p->b);
 			else
-				TGL_BLEND_FUNC_RGB(p->r, p->g, p->b, (*pp))
+				TGL_BLEND_FUNC_RGB(p->r, p->g, p->b, TGL_ALPHA_BYTE(p->a), (*pp))
 #else
 			*pp = RGB_TO_PIXEL(p->r, p->g, p->b);
 #endif
@@ -54,7 +54,7 @@ void ZB_plot(ZBuffer* zb, ZBufferPoint* p) {
 					if (!zb->enable_blend)
 						*pp = col;
 					else
-						TGL_BLEND_FUNC_RGB(p->r, p->g, p->b, (*pp))
+						TGL_BLEND_FUNC_RGB(p->r, p->g, p->b, TGL_ALPHA_BYTE(p->a), (*pp))
 #else
 					*pp = col;
 #endif
@@ -69,7 +69,7 @@ void ZB_plot(ZBuffer* zb, ZBufferPoint* p) {
 static void ZB_line_flat_z(ZBuffer* zb, ZBufferPoint* p1, ZBufferPoint* p2, GLint color) {
 	
 	GLubyte zbdt = zb->depth_test;
-	GLubyte zbdw = zb->depth_write;
+	GLubyte zbdw = ZB_DEPTH_WRITE(zb);
 #include "zline.h"
 }
 
@@ -79,7 +79,7 @@ static void ZB_line_flat_z(ZBuffer* zb, ZBufferPoint* p1, ZBufferPoint* p2, GLin
 static void ZB_line_interp_z(ZBuffer* zb, ZBufferPoint* p1, ZBufferPoint* p2) {
 	
 	GLubyte zbdt = zb->depth_test;
-	GLubyte zbdw = zb->depth_write;
+	GLubyte zbdw = ZB_DEPTH_WRITE(zb);
 #include "zline.h"
 }
 

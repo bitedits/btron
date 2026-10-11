@@ -34,7 +34,8 @@ CC ?= gcc
 CFLAGS ?= -O2 -Wall -Wextra -std=c99 -Iinclude -Iinclude/gl -Isrc/gl -Iinclude/drivers -Isrc/kernel -Isrc/cores -Isrc/quake/include
 
 .PHONY: all posix qemu kernel tkernel sakamura foma uefi pc98 arm-elf arm64-elf m68k ps2 mips \
-        check-structure test-ps2-softfloat test-gl-math xmb-atlas test-xmb-atlas \
+        check-structure test-ps2-softfloat test-gl-math test-ps2-fb-order xmb-atlas test-xmb-atlas \
+        test-xmb-render test-xmb-render-tgl \
         html2tad book2tad tad_bin test test-kernel test-yoko test-yoko4 test-m68k test-mips test-ps2 test-foma test-foma-ui foma-screens \
         segui-screens \
         test-mozc test-editor test-hmi test-tad test-chat test-wylie verify test-fs test-chokanji test-quake test-replay \
@@ -595,7 +596,7 @@ src/apps/clu.host.o: src/apps/clu.c
 # Header dependencies recorded by the -MMD flags above: editing src/clu/vfs.h or
 # src/clu/sc/sokhatsky.h must rebuild every object that included it, or a link
 # mixes objects that disagree on struct layout.
--include $(shell find src verify -name '*.host.d' -o -name '*.posix.d' -o -name '*.test.d' 2>/dev/null)
+-include $(shell find src verify -name '*.host.d' -o -name '*.posix.d' -o -name '*.test.d' -o -name '*.tgl.d' 2>/dev/null)
 
 # ── mkbtronfs — host image builder ────────────────────────────────────
 mkbtronfs: src/tools/mkbtronfs.c $(FS_OBJS)
@@ -1027,6 +1028,7 @@ PS2_SRCS       = $(PS2_STARTUP)           \
                  src/drivers/ps2/ps2_sio.c \
                  src/drivers/ps2/ps2_pad.c \
                  src/drivers/ps2/ps2_iopram.c \
+                 src/drivers/ps2/ps2_irq.c \
                  src/drivers/ps2/ps2_usb.c \
                  $(CLU_TERMIO_SRCS)       \
                  $(TINYGL_SRCS)           \
@@ -1199,7 +1201,20 @@ run-ps2: $(PS2_TARGET) ps2-cfg
 	    exit 1; \
 	fi
 
-test-ps2: $(PS2_TARGET) $(PS2_ISO)
+# include/gl/math.h's large-argument trig fold, read as a shape law rather than as a
+# value: past 4*pi a float angle must be folded with multiplies and no software double
+# division, and not handed to the double series (whose thirteen __divdf3 are the reason
+# the guard exists).  Needs the image's own flags -- and the image itself is no help,
+# because sinf is static inline and dissolves into its call sites.  See
+# verify/tests/ps2_farfold_probe.c; scripts/test_ps2.sh asserts the count and SKIPs, not
+# PASSes, when the probe has not been built.
+PS2_FARFOLD_OBJ = ./.build/ps2_farfold_probe.o
+
+$(PS2_FARFOLD_OBJ): verify/tests/ps2_farfold_probe.c include/gl/math.h
+	@mkdir -p ./.build
+	$(PS2_CC) $(PS2_CFLAGS) -c $< -o $@
+
+test-ps2: $(PS2_TARGET) $(PS2_ISO) $(PS2_FARFOLD_OBJ)
 	@./scripts/test_ps2.sh
 
 # The PS2 image is built -msoft-float (the R5900 FPU has no double-precision
@@ -1259,6 +1274,65 @@ test-gl-math: $(TEST_GLMATH_BIN)
 $(TEST_GLMATH_BIN): verify/tests/test_gl_math_float.test.o verify/tests/gl_math_float_port.test.o
 	@mkdir -p ./.build
 	$(CC) $^ -o $@ $(LDFLAGS) -lm
+
+
+# ═══════════════════════════════════════════════════════════════════
+# PS2 canvas byte order -- one scene, both PIXEL domains, twice built
+# ═══════════════════════════════════════════════════════════════════
+# The GS reads CT32 memory as R,G,B,A and a BTRON COLOR is 0xAARRGGBB, so every canvas word
+# the PS2 scans out has its R and B fields exchanged (include/btron/types.h), and TinyGL's
+# whole PIXEL domain is declared in that order too because its pbuf *is* the canvas
+# (src/gl/tinygl/zbuffer.h).  Both are compile-time decisions with no visible symptom until
+# a colour is on a screen, and the macro that decides them appears in exactly three files --
+# so this gate builds the same scene twice, once per domain, normalises each canvas word
+# back through BTRON_PIXEL_FB(), and requires the two dumps to be byte-identical.  A store
+# site that never converted itself, or a read of a canvas word that bypassed the macros,
+# shows up as one differing word at a known offset; the program's own raw-word assertions
+# then say which half of the flip failed.  See verify/tests/test_fb_order.c.
+TEST_FBORDER_SRCS = verify/tests/test_fb_order.c src/graphics/dp_core.c \
+                    src/font/troncode.c src/font/jis_fonts.c src/font/tibetan_fonts.c \
+                    $(TINYGL_SRCS)
+TEST_FBORDER_COBJS = $(TEST_FBORDER_SRCS:.c=.fbo.o)
+TEST_FBORDER_POBJS = $(TEST_FBORDER_SRCS:.c=.fbp.o)
+TEST_FBORDER_CBIN  = ./.build/test_fb_order
+TEST_FBORDER_PBIN  = ./.build/test_fb_order_canvas
+
+%.fbo.o: %.c
+	$(CC) $(CFLAGS) -MMD -MP -c $< -o $@
+
+# The only difference between the two builds.  Nothing else in the tree reads
+# BTRON_PS2_TARGET except src/cores/core_init.c, which is not linked here.
+%.fbp.o: %.c
+	$(CC) $(CFLAGS) -DBTRON_PS2_TARGET -MMD -MP -c $< -o $@
+
+test-ps2-fb-order: $(TEST_FBORDER_CBIN) $(TEST_FBORDER_PBIN)
+	@echo "=========================================================="
+	@echo " PS2 canvas byte order: COLOR-order build vs canvas-order build..."
+	@echo "=========================================================="
+	@mkdir -p ./.build
+	@./$(TEST_FBORDER_CBIN) ./.build/fb_order_color.u32
+	@./$(TEST_FBORDER_PBIN)  ./.build/fb_order_canvas.u32
+	@if cmp -s ./.build/fb_order_color.u32 ./.build/fb_order_canvas.u32; then \
+		echo "[FBORDER] PASS: both domains normalise to the same 31,488 words"; \
+	else \
+		echo "[FBORDER] FAIL: a word of the canvas-order build is not BTRON_PIXEL_FB()"; \
+		echo "[FBORDER]        of the same word in the COLOR-order build.  The byte offset"; \
+		echo "[FBORDER]        (1-based, from cmp -l below) / 4 gives the word index:"; \
+		echo "[FBORDER]        0..19199 the 160x120 display-primitive canvas, 19200..25343"; \
+		echo "[FBORDER]        the clear-only GL canvas, 25344..31487 the GL frame."; \
+		cmp -l ./.build/fb_order_color.u32 ./.build/fb_order_canvas.u32 | head -24; \
+		exit 1; \
+	fi
+
+$(TEST_FBORDER_CBIN): $(TEST_FBORDER_COBJS)
+	@mkdir -p ./.build
+	$(CC) $(TEST_FBORDER_COBJS) -o $@ $(LDFLAGS) -lm
+
+$(TEST_FBORDER_PBIN): $(TEST_FBORDER_POBJS)
+	@mkdir -p ./.build
+	$(CC) $(TEST_FBORDER_POBJS) -o $@ $(LDFLAGS) -lm
+
+-include $(TEST_FBORDER_COBJS:.o=.d) $(TEST_FBORDER_POBJS:.o=.d)
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -1863,6 +1937,40 @@ $(TEST_XMB_BIN): $(TEST_XMB_OBJS)
 	@mkdir -p ./.build
 	$(CC) $(TEST_XMB_OBJS) -o $@ $(LDFLAGS) -lm
 
+# The same test, against the rasterizer the PS2 actually ships.  This one exists
+# because the two backends disagree in a way no amount of reading reveals: the
+# virgl path is real GL, so it honours the RGBA the bar uploads and the alpha it
+# blends with, while src/gl/tinygl/ truncates any texture that is not exactly
+# 256x256 and drops texture alpha on the floor.  Every icon, glyph and fade in
+# the XMB goes through both of those, so a gate that only ever ran virgl could
+# not see the corruption the console shows -- which is what this harness is for.
+# backend_virgl.c is linked here as well, and not for its code: gl_dispatch's
+# GL_BACKEND_VIRGL case is unconditional in the shipped image too, so this is the
+# closer of the two, not the tidier one.
+TEST_XMB_TGL_SRCS = verify/tests/test_xmb_render.c src/apps/xmb.c \
+                    src/gl/gl_dispatch.c src/gl/egl_surface.c \
+                    src/gl/backend_tinygl.c $(TINYGL_SRCS) src/gl/backend_virgl.c \
+                    src/font/troncode.c src/font/jis_fonts.c src/font/tibetan_fonts.c \
+                    src/clu/vfs.c src/fs/blk_mem.c src/fs/blk_file.c \
+                    src/fs/vol.c src/fs/file.c
+TEST_XMB_TGL_OBJS = $(TEST_XMB_TGL_SRCS:.c=.tgl.o)
+TEST_XMB_TGL_BIN  = ./.build/test_xmb_render_tgl
+
+%.tgl.o: %.c
+	$(CC) $(CFLAGS) $(SDL_CFLAGS) -DBTRON_GL_BACKEND_TINYGL \
+	      -DXMB_OUT_DIR='"./.build/tgl/"' -MMD -MP -c $< -o $@
+
+test-xmb-render-tgl: $(TEST_XMB_TGL_BIN)
+	@echo "=========================================================="
+	@echo " Running XMB Render Verification on the PS2's TinyGL backend..."
+	@echo "=========================================================="
+	@mkdir -p ./.build/tgl
+	@./$(TEST_XMB_TGL_BIN)
+
+$(TEST_XMB_TGL_BIN): $(TEST_XMB_TGL_OBJS)
+	@mkdir -p ./.build
+	$(CC) $(TEST_XMB_TGL_OBJS) -o $@ $(LDFLAGS) -lm
+
 # ═══════════════════════════════════════════════════════════════════
 # XMB icon atlas: geometry on the host, sheet in the image
 # ═══════════════════════════════════════════════════════════════════
@@ -1978,7 +2086,7 @@ $(TEST_MSX_TRACE_BIN): $(TEST_MSX_TRACE_OBJS)
 	@mkdir -p ./.build
 	$(CC) $(TEST_MSX_TRACE_OBJS) -o $@ $(LDFLAGS)
 
-test: test-tad test-editor test-chat test-mozc test-wylie test-hmi test-ski test-tracker test-deskclip test-settings test-global-menu test-app-menu test-drivesetup test-fs test-quake test-ps2-softfloat test-gl-math test-xmb-atlas
+test: test-tad test-editor test-chat test-mozc test-wylie test-hmi test-ski test-tracker test-deskclip test-settings test-global-menu test-app-menu test-drivesetup test-fs test-quake test-ps2-softfloat test-gl-math test-ps2-fb-order test-xmb-atlas
 	@echo "=========================================================="
 	@echo " ALL B-SYSTEM TEST SUITES PASSED (100% SUCCESS)!"
 	@echo "=========================================================="

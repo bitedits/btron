@@ -128,7 +128,7 @@ ER drw_pnt(GDEV *dev, H x, H y) {
         return E_OK; /* Clipped */
     }
 
-    dev->pixels[y * dev->width + x] = COLOR_BLACK;
+    dev->pixels[y * dev->width + x] = BTRON_PIXEL_FB(COLOR_BLACK);
     return E_OK;
 }
 
@@ -148,7 +148,7 @@ ER drw_lin(GDEV *dev, H x1, H y1, H x2, H y2) {
         if (min_x > max_x) return E_OK;
         volatile COLOR *row = pix + y1 * width;
         for (H x = min_x; x <= max_x; x++) {
-            row[x] = COLOR_BLACK;
+            row[x] = BTRON_PIXEL_FB(COLOR_BLACK);
         }
         return E_OK;
     }
@@ -162,7 +162,7 @@ ER drw_lin(GDEV *dev, H x1, H y1, H x2, H y2) {
         if (max_y >= dev->clip.bottom) max_y = dev->clip.bottom - 1;
         if (min_y > max_y) return E_OK;
         for (H y = min_y; y <= max_y; y++) {
-            pix[y * width + x1] = COLOR_BLACK;
+            pix[y * width + x1] = BTRON_PIXEL_FB(COLOR_BLACK);
         }
         return E_OK;
     }
@@ -176,7 +176,7 @@ ER drw_lin(GDEV *dev, H x1, H y1, H x2, H y2) {
     while (1) {
         if (x >= dev->clip.left && x < dev->clip.right &&
             y >= dev->clip.top && y < dev->clip.bottom) {
-            pix[y * width + x] = COLOR_BLACK;
+            pix[y * width + x] = BTRON_PIXEL_FB(COLOR_BLACK);
         }
 
         if (x == x2 && y == y2) break;
@@ -212,11 +212,15 @@ ER fill_rec(GDEV *dev, const RECT *r, COLOR col) {
     volatile COLOR *pix = (volatile COLOR*)dev->pixels;
     H width = dev->width;
     H span = right - left;
+    /* Once per rectangle, not once per pixel: this is the compositor's hottest
+     * leaf and the row pointer is volatile, so the swap is written out here
+     * rather than left for the compiler to notice. */
+    const COLOR fbcol = BTRON_PIXEL_FB(col);
 
     for (H y = top; y < bottom; y++) {
         volatile COLOR *row = pix + (y * width + left);
         for (H x = 0; x < span; x++) {
-            row[x] = col;
+            row[x] = fbcol;
         }
     }
 
@@ -240,7 +244,7 @@ ER drw_ovl(GDEV *dev, const RECT *r) {
                 if (val >= 0.85f && val <= 1.15f) {
                     if (x >= dev->clip.left && x < dev->clip.right &&
                         y >= dev->clip.top && y < dev->clip.bottom) {
-                        dev->pixels[y * dev->width + x] = COLOR_BLACK;
+                        dev->pixels[y * dev->width + x] = BTRON_PIXEL_FB(COLOR_BLACK);
                     }
                 }
             }
@@ -265,7 +269,7 @@ ER fill_ovl(GDEV *dev, const RECT *r, COLOR col) {
                 if (val <= 1.0f) {
                     if (x >= dev->clip.left && x < dev->clip.right &&
                         y >= dev->clip.top && y < dev->clip.bottom) {
-                        dev->pixels[y * dev->width + x] = col;
+                        dev->pixels[y * dev->width + x] = BTRON_PIXEL_FB(col);
                     }
                 }
             }

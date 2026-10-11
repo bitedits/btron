@@ -10,12 +10,17 @@
  */
 
 #include "ps2_iopram.h"
+#include "ps2_irq.h"          /* btron_ee_ticks_per_us(), the image's one microsecond */
 
 /* EE wall clock helpers, implemented in boot_ps2.s */
 extern uint32_t ps2_count_read(void);
 extern void ps2_delay_cycles(uint32_t count);
 
-#define EE_COUNTS_PER_US 147u
+/* This driver's waits are in the microsecond the INPUT plane measures at boot
+ * (src/drivers/ps2/ps2_irq.h).  The 147 it used to carry was the core clock's datasheet
+ * speaking -- half of 294.912 MHz -- and this machine's Count turns out to tick at twice
+ * that, so a reset budget written as 20 ms was being spent as 10 and every timeout here
+ * was half as patient as it read. */
 
 static int s_count_runs = -1;
 
@@ -36,7 +41,7 @@ static void iopram_wait_us(uint32_t us)
         return;
     }
     uint32_t start = ps2_count_read();
-    uint32_t budget = us * EE_COUNTS_PER_US;
+    uint32_t budget = us * btron_ee_ticks_per_us();
     for (uint32_t spins = 0; (uint32_t)(ps2_count_read() - start) < budget; spins++) {
         if (spins > 20000000u) break;
     }

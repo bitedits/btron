@@ -13,8 +13,23 @@
 
 #include "ps2_gs.h"
 
-/* Static main memory framebuffer (800 x 600 @ 32-bpp RGBA = 1,920,000 bytes) */
-static uint32_t ps2_fb_memory[PS2_SCREEN_WIDTH * PS2_SCREEN_HEIGHT] __attribute__((aligned(128)));
+#include <btron/types.h>     /* BTRON_PIXEL_FB, the canvas's byte order */
+
+/* The canvas the GS is fed from, and the one the desktop composites into.
+ *
+ * There is no framebuffer here.  Until now this driver owned a second
+ * 800x600x4 array of its own and the present copied the desktop's canvas into it
+ * one pixel at a time, exchanging red and blue on the way, because the GS's
+ * CT32 pixels put R in memory byte 0 and BTRON's COLOR puts B there.  That copy
+ * cost 49 ms of a 274 ms whole-canvas present and 1.92 MB of a 32 MB image, and
+ * the exchange it performed is now done by BTRON_PIXEL_FB() at the moment each
+ * colour is drawn instead (include/btron/types.h), so the canvas can be streamed
+ * to the GIF as it lies.
+ *
+ * core_ps2.c installs its own desktop backbuffer as the very first act of
+ * ps2_kernel_main(), before the SIO and GS are initialised, because the boot log
+ * is written into the canvas the screen shows. */
+static uint32_t *s_gs_canvas;
 
 /* EE DMAC Hardware Registers.  Each channel block is CHCR at +0x00, MADR at
  * +0x10 and QWC at +0x20, and the GIF sits in channel 2; the global control and
@@ -28,9 +43,26 @@ static uint32_t ps2_fb_memory[PS2_SCREEN_WIDTH * PS2_SCREEN_HEIGHT] __attribute_
 /* Helper to get uncached KSEG1 pointer to bypass EE L1 D-Cache */
 #define UNCACHED(p) ((void *)((uintptr_t)(p) | 0x20000000UL))
 
+/* The canvas, in the one alias everything that draws uses.
+ *
+ * The GIF is a bus master, and its stream and setup packets are read through the
+ * uncached alias above.  That is only sound because the port never enables the
+ * Emotion Engine's L1 caches: the one CP0 Config write in the image is
+ * btron_fp_init()'s CU1 bit (src/drivers/ps2/ps2_builtins.c), and boot_ps2.s
+ * touches no other coprocessor register -- which make test-ps2 asserts rather
+ * than assumes, because a stale line here is a screen of noise with no cause. */
 static inline uint32_t *ps2_fb(void)
 {
-    return (uint32_t *)UNCACHED(ps2_fb_memory);
+    return s_gs_canvas;
+}
+
+/* Install the canvas the GS is fed from.  core_ps2.c calls this with its desktop
+ * backbuffer, and the pixels it hands over are already in the GS's own byte
+ * order -- which is the entire reason there is nothing left to convert between
+ * this array and VRAM. */
+void ps2_gs_set_framebuffer(uint32_t *canvas)
+{
+    if (canvas) s_gs_canvas = canvas;
 }
 
 /* GS Register Encoding Macros */
@@ -142,7 +174,7 @@ void ps2_gs_upload(int x, int y, int w, int h)
     w = (w + 3) & ~3;
     if (w > PS2_SCREEN_WIDTH) w = PS2_SCREEN_WIDTH;
 
-    const uint8_t *canvas = (const uint8_t *)ps2_fb_memory;
+    const uint8_t *canvas = (const uint8_t *)ps2_fb();
 
     if (x == 0 && w == PS2_SCREEN_WIDTH) {
         /* Full rows: the canvas rows are contiguous, so one rectangle and one
@@ -266,7 +298,7 @@ void ps2_gs_init(uint32_t width, uint32_t height)
     /* 5. Clear RDRAM framebuffer to deep console slate navy */
     uint32_t *fb = ps2_fb();
     for (int i = 0; i < PS2_SCREEN_WIDTH * PS2_SCREEN_HEIGHT; i++) {
-        fb[i] = 0xFF121B29;
+        fb[i] = BTRON_PIXEL_FB(0xFF121B29u);
     }
 
     /* 6. Initial hardware flush to GS eDRAM */
@@ -309,7 +341,7 @@ void ps2_gs_text_clear(void)
 {
     uint32_t *fb = ps2_fb();
     for (int i = 0; i < PS2_SCREEN_WIDTH * PS2_SCREEN_HEIGHT; i++) {
-        fb[i] = 0xFF121B29; /* Deep Slate Navy Console */
+        fb[i] = BTRON_PIXEL_FB(0xFF121B29u); /* Deep Slate Navy Console */
     }
     s_text_cursor_x = 0;
     s_text_cursor_y = 0;
@@ -333,7 +365,7 @@ void ps2_gs_text_draw_char(int col, int row, char c, uint32_t fg, uint32_t bg)
         for (int x = 0; x < 8; x++) {
             int px = base_x + x;
             if (px >= PS2_SCREEN_WIDTH) break;
-            fb[py * PS2_SCREEN_WIDTH + px] = (bits & (0x80 >> x)) ? fg : bg;
+            fb[py * PS2_SCREEN_WIDTH + px] = BTRON_PIXEL_FB((bits & (0x80 >> x)) ? fg : bg);
         }
     }
     text_mark_dirty(base_y, 16);
@@ -346,7 +378,7 @@ static void ps2_gs_text_scroll(void)
     tkl_memmove(fb, fb + (16 * PS2_SCREEN_WIDTH), (size_t)(PS2_SCREEN_HEIGHT - 16) * PS2_SCREEN_WIDTH * sizeof(uint32_t));
     /* Clear bottom 16 pixel rows */
     for (int i = (PS2_SCREEN_HEIGHT - 16) * PS2_SCREEN_WIDTH; i < PS2_SCREEN_WIDTH * PS2_SCREEN_HEIGHT; i++) {
-        fb[i] = 0xFF121B29;
+        fb[i] = BTRON_PIXEL_FB(0xFF121B29u);
     }
     text_mark_dirty(0, PS2_SCREEN_HEIGHT);
 }
@@ -464,7 +496,7 @@ void ps2_gs_draw_rect(int x, int y, int w, int h, uint32_t color)
     for (int j = y; j < y + h; j++) {
         uint32_t *row = &fb[j * PS2_SCREEN_WIDTH + x];
         for (int i = 0; i < w; i++) {
-            row[i] = color;
+            row[i] = BTRON_PIXEL_FB(color);
         }
     }
 }
@@ -477,7 +509,7 @@ void ps2_gs_fill_rect(int x, int y, int w, int h, uint32_t color)
 void ps2_gs_putpixel(int x, int y, uint32_t color)
 {
     if (x >= 0 && x < PS2_SCREEN_WIDTH && y >= 0 && y < PS2_SCREEN_HEIGHT) {
-        ps2_fb()[y * PS2_SCREEN_WIDTH + x] = color;
+        ps2_fb()[y * PS2_SCREEN_WIDTH + x] = BTRON_PIXEL_FB(color);
     }
 }
 
@@ -551,9 +583,9 @@ void ps2_gs_draw_cursor(int x, int y)
             int px = x + cx;
             if (px >= PS2_SCREEN_WIDTH) break;
             if ((o >> (15 - cx)) & 1) {
-                fb[py * PS2_SCREEN_WIDTH + px] = 0xFF000000; /* Outline: Black */
+                fb[py * PS2_SCREEN_WIDTH + px] = BTRON_PIXEL_FB(0xFF000000u); /* Outline: Black */
             } else if ((m >> (15 - cx)) & 1) {
-                fb[py * PS2_SCREEN_WIDTH + px] = 0xFFFFFFFF; /* Body: White */
+                fb[py * PS2_SCREEN_WIDTH + px] = BTRON_PIXEL_FB(0xFFFFFFFFu); /* Body: White */
             }
         }
     }

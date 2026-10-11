@@ -837,6 +837,10 @@ static inline void draw_nyan_sprite(GDEV *dev, H dst_x, H dst_y, int frame_idx) 
         uint8_t col_idx = rle[s * 2 + 1];
         COLOR c = (col_idx < 14) ? g_nyan_palette[col_idx] : 0;
         BOOL visible = ((c & 0xFF000000) != 0);
+        /* The palette is in COLOR order; the canvas is not. One swap per span,
+         * not per pixel -- and most of these palettes are strongly non-greyscale,
+         * so a missed swap here is the yellow-stripe-becomes-cyan bug. */
+        const COLOR fb = BTRON_PIXEL_FB(c);
 
         while (count--) {
             if (visible) {
@@ -844,7 +848,7 @@ static inline void draw_nyan_sprite(GDEV *dev, H dst_x, H dst_y, int frame_idx) 
                 H py = dst_y + y;
                 if (px >= dev->clip.left && px < dev->clip.right &&
                     py >= dev->clip.top && py < dev->clip.bottom) {
-                    pix[py * dev_w + px] = c;
+                    pix[py * dev_w + px] = fb;
                 } 
             }
             if (++x >= NYAN_FRAME_W) {

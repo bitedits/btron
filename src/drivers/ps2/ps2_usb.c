@@ -10,6 +10,7 @@
 
 #include "ps2_usb.h"
 #include "ps2_iopram.h"
+#include "ps2_irq.h"          /* btron_ee_ticks_per_us(), the image's one microsecond */
 
 /* External hooks implemented in core_ps2.c.  The key hook takes the report's
  * modifier byte as well as the decoded key: which modifiers were held is part of
@@ -23,7 +24,7 @@ extern uint32_t ps2_count_read(void);
 extern void ps2_delay_cycles(uint32_t count);
 
 /* Hardware presence flag */
-static int s_usb_available = 0;
+static volatile int s_usb_available = 0;
 static int s_shadow_lost = 0;
 static uint8_t s_caps_lock = 0;
 static uint8_t s_prev_keys[6] = {0};
@@ -48,8 +49,11 @@ static ps2_ohci_probe_t s_probe;
 #define HCCA_DONE_WORD    (HCCA_INTR_WORDS + 1u)   /* u32 DoneHead */
 #define HCCA_SENTINEL     0xA5A5A5A5u
 
-/* CP0 Count increments at half the 294.912 MHz core clock */
-#define EE_COUNTS_PER_US 147u
+/* CP0 Count's rate is measured by the INPUT plane at boot rather than assumed from the
+ * core clock's datasheet, and btron_ee_ticks_per_us() (src/drivers/ps2/ps2_irq.h) is the
+ * one answer.  A divisor of this driver's own used to be a second opinion about what a
+ * microsecond is, and on the emulator this port's feedback loop runs on the two differed
+ * by exactly 2x: every frame budget below was being spent at half the time it names. */
 
 static int s_count_runs = -1;
 
@@ -72,7 +76,7 @@ static void ohci_wait_us(uint32_t us)
         return;
     }
     uint32_t start = ps2_count_read();
-    uint32_t budget = us * EE_COUNTS_PER_US;
+    uint32_t budget = us * btron_ee_ticks_per_us();
     for (uint32_t spins = 0; (uint32_t)(ps2_count_read() - start) < budget; spins++) {
         if (spins > 20000000u) break;
     }
@@ -283,7 +287,10 @@ int ps2_usb_shadow_lost(void) { return s_shadow_lost; }
 #define OHCI_SYNC() __asm__ volatile("" : : : "memory")
 
 static uint32_t s_block;                  /* IOP RAM offset of the block, 0 = none */
-static int s_host_up;
+/* volatile because the plane's handler reads it on every period: the pass that sets it is
+ * the one that decides whether there is a controller to collect from at all, and a cached
+ * 0 there is a handler that never touches the bus. */
+static volatile int s_host_up;
 static ps2_usb_dev_t s_devs[DEV_SLOTS];
 static uint32_t s_live_devs;
 static uint32_t s_host_us;
@@ -307,6 +314,35 @@ typedef struct {
                        * capacity the pump, not the bus, is what sets the rate */
 } intr_state_t;
 static intr_state_t s_intr[DEV_SLOTS];
+
+/* The plane's handoff: what the handler collects and what a pass delivers.
+ *
+ * One producer (the INPUT plane's handler) and one consumer (whichever pass calls
+ * ps2_usb_poll()), so the two indices need no lock and no atomic: each is written by exactly
+ * one of them and read by the other, and a slot is only written before `in` names it and
+ * only read after `out` moves past it.  That ordering is the whole protocol, and it is why
+ * the queue can be touched from a handler that may fire in the middle of a drain.
+ *
+ * 256 slots is two seconds of the fastest device this port sees (a 125 Hz pointer), so a
+ * full queue is not a sizing failure but a pass that did not run for two seconds -- and
+ * `dropped` says when that happened instead of losing it silently.  The reports a drop
+ * takes are the same ones the device itself would have discarded before this plane existed.
+ */
+#define HOFF_SLOTS      256u          /* power of two: the index is a mask, not a divide */
+#define HOFF_SLOTS_MASK (HOFF_SLOTS - 1u)
+#define HOFF_PER_TICK   4u            /* what one period may retire per device, at most */
+
+typedef struct {
+    uint32_t t_collect;   /* CP0 Count at the handler's entry: the report's own timestamp */
+    uint8_t dev;
+    uint8_t b[8];
+} hoff_slot_t;
+
+static volatile hoff_slot_t s_hoff[HOFF_SLOTS];
+static volatile uint32_t s_hoff_in;    /* written by the plane only */
+static volatile uint32_t s_hoff_out;   /* written by the pass only */
+static int s_plane_collects;
+static ps2_usb_plane_stats_t s_plane_stats;
 
 /* The block is addressed through the uncached KSEG1 alias of IOP RAM, so a
  * pointer inside it converts back to the byte offset the controller needs by
@@ -973,6 +1009,8 @@ int ps2_usb_host_start(void)
     OHCI_REG(OHCI_REG_CONTROL) = OHCI_CTRL_CLE | OHCI_CTRL_PLE | OHCI_CTRL_HCFS_OPER;
     ohci_wait_us(2000u);
     s_host_up = 1;
+    /* The row that prints a queue depth prints the capacity it is a depth of. */
+    s_plane_stats.queue_slots = HOFF_SLOTS;
 
     uint32_t t0 = ps2_count_read();
     ndp = s_probe.rh_a & 0x1Fu;
@@ -999,7 +1037,7 @@ int ps2_usb_host_start(void)
      * transfer it was asked about. */
     {
         uint32_t dt = (uint32_t)(ps2_count_read() - t0);
-        s_host_us = count_running() ? dt / EE_COUNTS_PER_US : 0u;
+        s_host_us = count_running() ? dt / btron_ee_ticks_per_us() : 0u;
     }
     return (int)s_live_devs;
 }
@@ -1046,17 +1084,21 @@ uint32_t ps2_usb_intr_word(int index, int which)
     }
 }
 
-/* Collect one report if the controller has retired the descriptor at the head of
- * the ring, and say whether it did.  A descriptor the device answered "not
- * ready" to is still queued and still head, so nothing happens until it
- * completes -- that is the poll, and it costs this loop a comparison. */
-static int intr_collect(uint32_t dev)
+/* Take one retired descriptor off a device's ring and say whether there was one to take.
+ *
+ * This is the bus half of what used to be one function, and the split is the point of the
+ * INPUT plane: reading the controller is a handful of uncached loads and stores, integer
+ * only, and it is the half whose cost *is* the pointer's latency -- a report the device has
+ * already answered for is waiting on whoever reaches the ring first, which until now was
+ * whichever pass got to paint.  What this half must not do is deliver: the report's consumer
+ * writes the B-System event queue through BIOS syscalls and prints, and neither belongs in a
+ * handler that the same kernel is running. */
+static int intr_take(uint32_t dev, uint8_t out[8], uint32_t *cc_out)
 {
     volatile ps2_ohci_ed_t *ed = ed_at(ED_INTR(dev));
     ps2_usb_dev_t *d = &s_devs[dev];
     intr_state_t *q = &s_intr[dev];
     uint32_t cc, cur;
-    uint8_t report[8];
 
     if (!q->queued) return 0;
     cur = INT_TD_BASE + dev * INT_TD_PER_DEV + q->get;
@@ -1077,7 +1119,7 @@ static int intr_collect(uint32_t dev)
         if (d->errors > 8u) d->live = 0;      /* give the endpoint up on */
     } else {
         volatile uint8_t *src = blk_bytes(PAY_INT(dev, q->get));
-        for (uint32_t i = 0; i < 8; i++) report[i] = src[i];
+        for (uint32_t i = 0; i < 8; i++) out[i] = src[i];
     }
 
     /* The ring goes back out before the report goes anywhere.  That order is the
@@ -1094,24 +1136,147 @@ static int intr_collect(uint32_t dev)
     q->queued--;
     ed_unhalt(ed);
     if (d->live) intr_top_up(dev);
+    *cc_out = cc;
+    return 1;
+}
+
+/* The pass's collection, delivery included: what this port did with no clock, and what it
+ * still does on a machine whose [ASYNC] row says DEAD.  Only one of this and the plane's
+ * tick may own a ring at a time -- both advance the same `get` -- and ps2_usb_input_plane()
+ * is what hands the ring over, before the first drain runs. */
+static int intr_collect(uint32_t dev)
+{
+    ps2_usb_dev_t *d = &s_devs[dev];
+    uint8_t report[8];
+    uint32_t cc;
+
+    if (!intr_take(dev, report, &cc)) return 0;
     if (cc) return 1;
 
+    s_plane_stats.pass_reports++;
     if (d->is_keyboard || d->mps >= 8u) ps2_usb_process_keyboard_report(report);
     else ps2_usb_process_mouse_report(report);
     return 1;
 }
 
-/* Called from the shell's input pump.  The controller has already moved the
- * reports into the block at its own frame boundaries; what happens here is
- * collecting them, which is why this has to run between keystrokes rather than
- * only at boot. */
+/* Publish one report the plane collected.  Integer, no syscall, no print, no float: the
+ * handler's own rules, inherited. */
+static void hoff_push(uint32_t dev, const uint8_t b[8], uint32_t t_collect)
+{
+    const uint32_t in = s_hoff_in;
+    const uint32_t depth = in - s_hoff_out;
+    volatile hoff_slot_t *slot = &s_hoff[in & HOFF_SLOTS_MASK];
+
+    /* A full queue is a pass that did not run for two seconds of a 125 Hz device, and the
+     * honest answer to that is to say so rather than to wrap over a slot still unread. */
+    if (depth >= HOFF_SLOTS) {
+        s_plane_stats.dropped++;
+        return;
+    }
+    if (depth > s_plane_stats.queue_max) s_plane_stats.queue_max = depth;
+
+    slot->t_collect = t_collect;
+    slot->dev = (uint8_t)dev;
+    for (uint32_t i = 0; i < 8; i++) slot->b[i] = b[i];
+    OHCI_SYNC();          /* the bytes before the index that publishes them */
+    s_hoff_in = in + 1u;
+}
+
+/* The INPUT plane's consumer, run inside the handler at the plane's period: the bus is read
+ * here instead of in a pass, which is the whole of what makes the pointer's latency the
+ * plane's 1 ms rather than the frame's hundreds.  It stops at the queue on purpose -- see
+ * intr_take()'s comment about what a handler may not do. */
+static void ps2_usb_input_tick(uint32_t entry_count)
+{
+    if (!s_usb_available || !s_host_up) return;
+
+    /* Counted here rather than at the handler's entry because the question this answers is
+     * whether the collection runs, and a tick that arrived before the host was up is not
+     * evidence of it. */
+    s_plane_stats.plane_periods++;
+
+    for (uint32_t dev = 0; dev < DEV_SLOTS; dev++) {
+        uint8_t b[8];
+        uint32_t cc, got = 0;
+
+        if (!s_devs[dev].live) continue;
+
+        /* One is the normal answer: this controller retires at most one descriptor per
+         * endpoint per frame, and a frame is a period of this plane.  The bound is for the
+         * periods the [ASYNC] row has seen merged into one entry -- an edge that arrives
+         * while the handler is busy is taken with the next one -- so a late handler catches
+         * up without being able to spend a period on an unbounded loop. */
+        while (got < HOFF_PER_TICK && intr_take(dev, b, &cc)) {
+            got++;
+            if (cc) continue;
+            hoff_push(dev, b, entry_count);
+            s_plane_stats.plane_reports++;
+        }
+    }
+}
+
+/* Hand the plane's deliveries to whoever is draining them, and age each one on the way out:
+ * how long it stood in the queue is the latency the plane bought, and §10's 2 ms is the
+ * budget it has to answer to.  Returns the number delivered, per device. */
+static uint32_t hoff_drain(uint32_t got_out[DEV_SLOTS])
+{
+    /* One clock read for the whole drain: the age of a report is measured to the moment the
+     * pass got here, and a per-report read would be 8 loads of a register the queue depth is
+     * already smaller than.  The subtract is unsigned and 32-bit, so a drain that comes back
+     * after Count has wrapped reads an age of at most one rotation -- 14 s here, 29 on a
+     * console -- and a queue that has stood that long has already reported itself as drops. */
+    const uint32_t now = ps2_count_read();
+    const uint32_t tpu = btron_ee_ticks_per_us();
+    uint32_t delivered = 0;
+
+    while (s_hoff_out != s_hoff_in) {
+        volatile hoff_slot_t *slot = &s_hoff[s_hoff_out & HOFF_SLOTS_MASK];
+        ps2_usb_dev_t *d;
+        uint8_t b[8];
+        uint32_t held, dev;
+
+        /* Copy, then move the index, then dispatch.  The producer may reuse the slot the
+         * moment `out` names it, so the bytes have to be gone by then; and the dispatch is
+         * last because it is the part that can take a long time. */
+        for (uint32_t i = 0; i < 8; i++) b[i] = slot->b[i];
+        dev = slot->dev;
+        held = (uint32_t)(now - slot->t_collect) / tpu;
+        OHCI_SYNC();
+        s_hoff_out = s_hoff_out + 1u;
+
+        if (held > s_plane_stats.held_max_us) s_plane_stats.held_max_us = held;
+        s_plane_stats.held_sum_us += held;
+        s_plane_stats.held_n++;
+
+        d = &s_devs[dev];
+        got_out[dev]++;
+        delivered++;
+        if (d->is_keyboard || d->mps >= 8u) ps2_usb_process_keyboard_report(b);
+        else ps2_usb_process_mouse_report(b);
+    }
+    return delivered;
+}
+
+/* Called from the shell's input pump and from the desktop's pass.  The controller has
+ * already moved the reports into the block at its own frame boundaries; what happens here
+ * is collecting them, which is why this has to run between keystrokes rather than only at
+ * boot.
+ *
+ * With the INPUT plane installed, the collecting is what the plane did a millisecond ago and
+ * this is only the delivering -- which is why a keyboard still types inside a pass that
+ * never touches the bus, and why the pass's own rate stops setting the pointer's. */
 void ps2_usb_poll(void)
 {
+    uint32_t got[DEV_SLOTS];
+
     if (!s_usb_available) return;
 
     /* The shadow block is IOP RAM we borrowed from an idle patch of it; if the
      * IOP ever allocates it back, the descriptors we are walking stop being
-     * ours and the only honest response is to stop touching them. */
+     * ours and the only honest response is to stop touching them.  The plane's
+     * tick reads the same two flags, so this is also what turns the collection
+     * off -- and it is checked here rather than there because the read is a bus
+     * access and the handler has a budget. */
     if (!ps2_iopram_shadow_intact()) {
         s_shadow_lost = 1;
         s_usb_available = 0;
@@ -1120,24 +1285,37 @@ void ps2_usb_poll(void)
     }
     if (!s_host_up) return;
 
-    for (uint32_t i = 0; i < DEV_SLOTS; i++) {
-        uint32_t got = 0;
+    for (uint32_t i = 0; i < DEV_SLOTS; i++) got[i] = 0;
 
-        if (!s_devs[i].live) continue;
+    if (s_plane_collects) {
+        const uint32_t delivered = hoff_drain(got);
 
-        /* Drain the ring instead of taking one report from it.  The controller
-         * retires at most one descriptor per endpoint per frame, so everything
-         * that piled up while the desktop was painting is motion the device has
-         * already forgotten by the time we get to it: an HID pointer keeps a few
-         * reports of its own and drops the older ones when they run out, and a
-         * dropped relative report is movement that never happens.  One report per
-         * pass therefore makes this pump, not the bus, the rate the pointer
-         * moves at. */
-        while (intr_collect(i)) {
-            got++;
-            if (got > s_intr[i].burst) s_intr[i].burst = got;
+        for (uint32_t i = 0; i < DEV_SLOTS; i++) {
+            if (!got[i]) continue;
+            if (got[i] > s_intr[i].burst) s_intr[i].burst = got[i];
+            ps2_usb_log_ring(i, got[i], s_intr[i].burst, ps2_usb_frame_number());
         }
-        if (got) ps2_usb_log_ring(i, got, s_intr[i].burst, ps2_usb_frame_number());
+        (void)delivered;
+    } else {
+        for (uint32_t i = 0; i < DEV_SLOTS; i++) {
+            uint32_t n = 0;
+
+            if (!s_devs[i].live) continue;
+
+            /* Drain the ring instead of taking one report from it.  The controller
+             * retires at most one descriptor per endpoint per frame, so everything
+             * that piled up while the desktop was painting is motion the device has
+             * already forgotten by the time we get to it: an HID pointer keeps a few
+             * reports of its own and drops the older ones when they run out, and a
+             * dropped relative report is movement that never happens.  One report per
+             * pass therefore makes this pump, not the bus, the rate the pointer
+             * moves at. */
+            while (intr_collect(i)) {
+                n++;
+                if (n > s_intr[i].burst) s_intr[i].burst = n;
+            }
+            if (n) ps2_usb_log_ring(i, n, s_intr[i].burst, ps2_usb_frame_number());
+        }
     }
 
     /* Announced once, and only once, because it is the one row that can prove
@@ -1150,6 +1328,29 @@ void ps2_usb_poll(void)
         ps2_usb_report_landed(s_kbd_reports, s_mouse_reports);
     }
 }
+
+/* Put the periodic collection on the INPUT plane, or take it back off again.  See the
+ * header: the caller decides with the plane's measured verdict.
+ *
+ * The order of the two stores is the protocol.  Declaring the pass the non-collector before
+ * the hook exists means a tick that fires between these two lines finds a queue to push into
+ * and a poll that will read it; the reverse order would let a tick fire on a pass that is
+ * still about to call intr_collect() itself, and two parties advancing one `get` is a lost
+ * report at best and a re-arm of a descriptor the other is holding at worst. */
+void ps2_usb_input_plane(int on)
+{
+    if (on) {
+        s_hoff_in = 0u;
+        s_hoff_out = 0u;
+        s_plane_collects = 1;
+        ps2_irq_input_set_hook(ps2_usb_input_tick);
+    } else {
+        ps2_irq_input_set_hook(0);
+        s_plane_collects = 0;
+    }
+}
+
+const ps2_usb_plane_stats_t *ps2_usb_plane_stats(void) { return &s_plane_stats; }
 
 uint32_t ps2_usb_hid_to_btron_key(uint8_t mod, uint8_t code)
 {

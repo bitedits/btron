@@ -324,7 +324,7 @@ static inline BOOL draw_setting_gif_icon_scaled(GDEV *dev, const char *id_str, i
                     uint8_t p_idx = s_si_gif_raw[src_y * img_w + src_x];
                     if ((int)p_idx == trans_idx) continue;
                     uint32_t col = palette[p_idx];
-                    dev->pixels[out_y * dev->width + out_x] = (COLOR)(0xFF000000 | col);
+                    dev->pixels[out_y * dev->width + out_x] = BTRON_PIXEL_FB((COLOR)(0xFF000000 | col));
                 }
             }
             icon_stream_close(&st);

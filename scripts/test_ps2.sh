@@ -251,7 +251,96 @@ done
 assert_check "All 32 soft-float libcalls are defined (src/drivers/ps2/ps2_builtins.c)" \
     "$SOFTFLOAT_CHECK [ \$missing -eq 0 ]"
 
-# 8. Check Bootable ISO Disc Packaging
+# The same runtime read as a cost rather than as a correctness question.  Past 4*pi the
+# header folds a float angle's turn count in double and keeps the float polynomial, which
+# is nine software double operations and no division; the shape it replaced hands the
+# argument to the double series, whose thirteen __divdf3 are why a long-argument sine was
+# forty times a short one.  Read off verify/tests/ps2_farfold_probe.o, built by `make
+# test-ps2` with the image's own flags -- in the image itself sinf is static inline and
+# dissolves into a hundred call sites, so the law has to be read where it cannot hide.
+FARFOLD_OBJ="./.build/ps2_farfold_probe.o"
+if [ -f "$FARFOLD_OBJ" ]; then
+    assert_check "A large-argument float sine folds with no software double division" \
+        "[ \$($OBJDUMP -dr $FARFOLD_OBJ | grep -c '__divdf3' | tr -d ' ') -eq 0 ]"
+    # ...and the fold is the one written, not an object that calls nothing at all and so
+    # has no divisions either: the long long round trip is what makes it a turn count.
+    assert_check "The far fold rounds its turn count through a long long (__fixdfdi/__floatdidf)" \
+        "$OBJDUMP -dr $FARFOLD_OBJ | grep -q '__fixdfdi' && $OBJDUMP -dr $FARFOLD_OBJ | grep -q '__floatdidf'"
+else
+    echo "  [SKIP] $FARFOLD_OBJ absent -- the trig fold's shape law was not run"
+fi
+
+# 8. The single-canvas law (Normative -- see "One canvas: the desktop's own backbuffer"
+# in doc/md/PS2.md §2.1)
+#
+# The GS driver used to own a second 800x600 CT32 array and the present swept one word per
+# desktop pixel into it before every upload: 49,094 us of a full-frame present, on top of
+# 1,920,000 bytes of .bss.  The GIF DMA now reads the array the compositor painted, so both
+# are gone.  Three things make that sound, and each is its own assertion -- the symbol the
+# retired array left behind, the count of screen-sized canvases the image may hold, and the
+# instruction-level premise that the bus master sees the CPU's stores.
+#
+# None of these uses `grep -q` on a pipe: under `set -o pipefail` an early-exiting grep
+# SIGPIPEs readelf, and the pipeline then reports the *readelf* status, which makes an
+# absence test pass on the very symbol it is meant to catch.  (Same reason line 242 reads
+# the symbol table into a variable.)  assert_check redirects the output, so the plain grep
+# costs nothing.
+assert_check "No ps2_fb_memory symbol: the driver holds the caller's pointer, not a framebuffer" \
+    "! ($READELF -s $ELF | grep -E '[[:space:]]ps2_fb_memory$')"
+
+# The other half of the same law: the canvas is installed, not owned.  Without this the
+# ps2_fb_memory test could be satisfied by a driver that lost its framebuffer entirely.
+assert_check "Symbol 'ps2_gs_set_framebuffer' exists (the kernel installs the compositor's canvas)" \
+    "$READELF -s $ELF | grep -E '[[:space:]]ps2_gs_set_framebuffer$'"
+
+# 800 * 600 * 4 = 1,920,000, which readelf prints as 0x1d4c00 because it is over 1023.  One
+# object of that size is the design; a second one is the regression coming back, and it would
+# not show in the image's total next to the 12 MB heap.  The name is part of the law too, so
+# the one allowed instance has to be the compositor's own backbuffer.  Read into variables
+# here, so the evaluated command shows the measured count and name when it fails.
+FB_CANVAS_COUNT="$($READELF -s $ELF | awk '$3=="0x1d4c00" && $4=="OBJECT"' | wc -l | tr -d ' ')"
+FB_CANVAS_NAME="$($READELF -s $ELF | awk '$3=="0x1d4c00" && $4=="OBJECT" { print $8 }')"
+assert_check "Exactly one screen-sized CT32 canvas in the image, and it is s_desktop_backbuffer" \
+    "[ $FB_CANVAS_COUNT -eq 1 ] && [ \"$FB_CANVAS_NAME\" = s_desktop_backbuffer ]"
+
+# The present path's sweep was a static function, so it is a LOCAL symbol while it exists
+# and no symbol at all once the loop is gone from ps2_paint_region().
+assert_check "The present path has no sweep: blit_backbuffer_rect_to_ps2fb is absent" \
+    "! ($READELF -s $ELF | grep -E '[[:space:]]blit_backbuffer_rect_to_ps2fb$')"
+
+# Reading the composited canvas from DMA without a cache flush is only safe while the Emotion
+# EE's L1 caches stay off, so the port must never write CP0 Context (register 9 select 1),
+# which is the register that carries the cache-enable bit, and never issue a `cache`
+# maintenance op.  What the image IS allowed to write is Status (register 12 select 0), and
+# it now has three reasons to: btron_fp_init() raising CU1, and the two interrupt thunks in
+# boot_ps2.s that set the EE's global enable bit (EIE, bit 16) -- one at the arm of the INPUT
+# plane, one in its epilogue, because taking an exception clears that bit and a handler that
+# leaves it cleared has taken its last tick.  So the law is about the register, not the
+# count: every CP0 write in the image goes to Status, none goes to register 9 (whose select 0
+# is Count and whose select 1 is Context -- writing either would be a hazard), and the reads
+# beside them are the clock and the plane's own Status probe.  Asserted over the instructions
+# rather than over the sources, because the premise is about what the CPU actually executes.
+# GNU objdump decodes MIPS3 here and prints coprocessor operands without the select field, so
+# this needs the 64-bit-capable decoder.
+if [ -n "$OBJDUMP64" ]; then
+    CP0_TEXT="$($OBJDUMP64 -d --triple=mips64el-unknown-elf $ELF | grep -E '[[:space:]]m[tf]c0[[:space:]]')"
+    # Two integers rather than the disassembly text: the operand fields are `$2, $12`, and
+    # pasting that into an eval'd command would let the shell expand those `$` again.
+    CP0_WRITES="$(printf '%s\n' "$CP0_TEXT" | grep -c 'mtc0' || true)"
+    CP0_STATUS_WRITES="$(printf '%s\n' "$CP0_TEXT" | grep -c -E 'mtc0.*12, 0x0' || true)"
+    assert_check "Every CP0 write in the image is to Status (register 12 select 0)" \
+        "[ $CP0_WRITES -ge 1 ] && [ $CP0_WRITES -eq $CP0_STATUS_WRITES ]"
+    # No `$` in the pattern for the same reason as the two counters above: this command is
+    # eval'd, and `$9` would be the shell's ninth positional parameter.
+    assert_check "No CP0 write touches register 9 (Count/Context): the clock is read, never set" \
+        "! (printf '%s\n' \"$CP0_TEXT\" | grep -E 'mtc0.*[[:space:]]9,' )"
+    assert_check "Zero cache-maintenance instructions: nothing to flush between the paint and the DMA" \
+        "! ($OBJDUMP64 -d --triple=mips64el-unknown-elf $ELF | grep -E '[[:space:]]cache[[:space:]]')"
+else
+    echo "  [SKIP] 64-bit-GPR disassembler unavailable -- caches-off premise not read off the image"
+fi
+
+# 9. Check Bootable ISO Disc Packaging
 if [ -f "$ISO" ]; then
     assert_check "ISO disc image exists and is non-empty" \
         "[ -s $ISO ]"

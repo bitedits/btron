@@ -365,6 +365,42 @@ enum {
 
 void ps2_usb_init(void);
 void ps2_usb_poll(void);
+
+/* Move the periodic collection onto the INPUT plane (src/drivers/ps2/ps2_irq.h).
+ *
+ * With `on` non-zero, the plane's handler reads the interrupt rings once per period and
+ * hands the reports over through a queue, and ps2_usb_poll() delivers what the plane
+ * collected instead of touching the controller at all.  With `on` zero the rings are polled
+ * by whichever pass calls ps2_usb_poll(), which is what this port did before it had a
+ * clock -- and what it still has to do on a machine whose [ASYNC] row says DEAD, because a
+ * queue nobody fills is a keyboard that types nothing.
+ *
+ * The caller decides with the plane's measured verdict, not with its return value. */
+void ps2_usb_input_plane(int on);
+
+/* What that split produced, since the plane took over.  `plane_reports` climbing while
+ * `pass_reports` stays put is the evidence this port's deliverable asks for: the reports
+ * leave the bus on the input plane rather than when a paint finishes.  `dropped` is the
+ * queue standing full -- collected and not yet delivered -- and `held_*` is the age of a
+ * report at the moment a pass delivered it, which is the latency ASYNC.txt §10 bounds at
+ * 2 ms.  The mean is not pre-divided: sum over n is the single source. */
+typedef struct {
+    uint32_t plane_reports;
+    /* Handler entries that reached the collector, counted inside it.  This is the row that
+     * proves the plane is doing the work when nothing is moving: a report needs a hand on a
+     * mouse, a period needs only the clock, and `plane_reports` at zero with this climbing at
+     * the plane's rate is an idle collector rather than an absent one. */
+    uint32_t plane_periods;
+    uint32_t pass_reports;
+    uint32_t dropped;
+    uint32_t held_max_us;
+    uint32_t held_sum_us;
+    uint32_t held_n;
+    uint32_t queue_max;
+    uint32_t queue_slots;   /* the handoff's capacity, so a full queue names its own size */
+} ps2_usb_plane_stats_t;
+
+const ps2_usb_plane_stats_t *ps2_usb_plane_stats(void);
 int  ps2_usb_probe(ps2_ohci_probe_t *out);   /* runs the measurement, returns verdict */
 const ps2_ohci_probe_t *ps2_usb_last_probe(void);
 int  ps2_usb_verdict(void);                  /* last probe verdict */

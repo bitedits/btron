@@ -42,6 +42,12 @@ Things to keep in mind:
 	GLint g1, dgdx, dgdy, dgdl_min, dgdl_max;
 	GLint b1, dbdx, dbdy, dbdl_min, dbdl_max;
 #endif
+/* Alpha is a fourth interpolated channel, in the same left-aligned fixed point as r/g/b.
+ * It has its own switch because a flat-shaded triangle does not interpolate anything, and
+ * an unblended span loop has no use for the accumulator. */
+#ifdef INTERP_A
+	GLint a1, dadx, dady, dadl_min, dadl_max;
+#endif
 #ifdef INTERP_ST
 	GLint s1, dsdx, dsdy, dsdl_min, dsdl_max;
 	GLint t1, dtdx, dtdy, dtdl_min, dtdl_max;
@@ -119,6 +125,15 @@ Things to keep in mind:
 			d2 = p2->b - p0->b;
 			dbdx = (GLint)(fdy2 * d1 - fdy1 * d2);
 			dbdy = (GLint)(fdx1 * d2 - fdx2 * d1);
+		}
+#endif
+
+#ifdef INTERP_A
+		{
+			d1 = p1->a - p0->a;
+			d2 = p2->a - p0->a;
+			dadx = (GLint)(fdy2 * d1 - fdy1 * d2);
+			dady = (GLint)(fdx1 * d2 - fdx2 * d1);
 		}
 #endif
 
@@ -250,6 +265,11 @@ Things to keep in mind:
 				dbdl_min = (dbdy + dbdx * dxdy_min);
 				dbdl_max = dbdl_min + dbdx;
 #endif
+#ifdef INTERP_A
+				a1 = l1->a;
+				dadl_min = (dady + dadx * dxdy_min);
+				dadl_max = dadl_min + dadx;
+#endif
 #ifdef INTERP_ST
 				s1 = l1->s;
 				dsdl_min = (dsdy + dsdx * dxdy_min);
@@ -295,6 +315,9 @@ Things to keep in mind:
 #ifdef INTERP_RGB
 				register GLint or1, og1, ob1;
 #endif
+#ifdef INTERP_A
+				register GLint al;
+#endif
 #ifdef INTERP_ST
 				register GLuint s, t;
 #endif
@@ -313,6 +336,9 @@ Things to keep in mind:
 				or1 = r1;
 				og1 = g1;
 				ob1 = b1;
+#endif
+#ifdef INTERP_A
+				al = a1;
 #endif
 #ifdef INTERP_ST
 				s = s1;
@@ -362,6 +388,9 @@ Things to keep in mind:
 				g1 += dgdl_max;
 				b1 += dbdl_max;
 #endif
+#ifdef INTERP_A
+				a1 += dadl_max;
+#endif
 #ifdef INTERP_ST
 				s1 += dsdl_max;
 				t1 += dtdl_max;
@@ -379,6 +408,9 @@ Things to keep in mind:
 				r1 += drdl_min;
 				g1 += dgdl_min;
 				b1 += dbdl_min;
+#endif
+#ifdef INTERP_A
+				a1 += dadl_min;
 #endif
 #ifdef INTERP_ST
 				s1 += dsdl_min;
@@ -406,6 +438,7 @@ Things to keep in mind:
 
 #undef INTERP_Z
 #undef INTERP_RGB
+#undef INTERP_A
 #undef INTERP_ST
 #undef INTERP_STZ
 

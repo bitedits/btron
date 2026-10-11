@@ -144,10 +144,13 @@ static void gl_transform_to_viewport_vertex_c(GLVertex* v) {
 	v->zp.r = (GLint)(v->color.v[0] * COLOR_CORRECTED_MULT_MASK + COLOR_MIN_MULT) & COLOR_MASK;
 	v->zp.g = (GLint)(v->color.v[1] * COLOR_CORRECTED_MULT_MASK + COLOR_MIN_MULT) & COLOR_MASK;
 	v->zp.b = (GLint)(v->color.v[2] * COLOR_CORRECTED_MULT_MASK + COLOR_MIN_MULT) & COLOR_MASK;
+	v->zp.a = (GLint)(v->color.v[3] * COLOR_CORRECTED_MULT_MASK + COLOR_MIN_MULT) & COLOR_MASK;
 
-	if (c->texture_2d_enabled) {
-		v->zp.s = (GLint)(v->tex_coord.X * (ZB_POINT_S_MAX - ZB_POINT_S_MIN) + ZB_POINT_S_MIN); 
-		v->zp.t = (GLint)(v->tex_coord.Y * (ZB_POINT_T_MAX - ZB_POINT_T_MIN) + ZB_POINT_T_MIN); 
+	if (c->texture_2d_enabled && c->current_texture != NULL) {
+		/* The texture's own extent, not the implementation's default: see GLImage. */
+		const GLImage* im = &c->current_texture->images[0];
+		v->zp.s = (GLint)(v->tex_coord.X * im->sscale + im->soff);
+		v->zp.t = (GLint)(v->tex_coord.Y * im->tscale + im->toff);
 	}
 }
 

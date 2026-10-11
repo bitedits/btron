@@ -23,12 +23,14 @@ static void gl_transform_to_viewport_clip_c(GLVertex* v) { /* MARK: NOT_INLINED_
 	v->zp.r = (GLint)(v->color.v[0] * COLOR_CORRECTED_MULT_MASK + COLOR_MIN_MULT) & COLOR_MASK;
 	v->zp.g = (GLint)(v->color.v[1] * COLOR_CORRECTED_MULT_MASK + COLOR_MIN_MULT) & COLOR_MASK;
 	v->zp.b = (GLint)(v->color.v[2] * COLOR_CORRECTED_MULT_MASK + COLOR_MIN_MULT) & COLOR_MASK;
+	v->zp.a = (GLint)(v->color.v[3] * COLOR_CORRECTED_MULT_MASK + COLOR_MIN_MULT) & COLOR_MASK;
 
 	/* texture */
 
-	if (c->texture_2d_enabled) {
-		v->zp.s = (GLint)(v->tex_coord.X * (ZB_POINT_S_MAX - ZB_POINT_S_MIN) + ZB_POINT_S_MIN); 
-		v->zp.t = (GLint)(v->tex_coord.Y * (ZB_POINT_T_MAX - ZB_POINT_T_MIN) + ZB_POINT_T_MIN); 
+	if (c->texture_2d_enabled && c->current_texture != NULL) {
+		const GLImage* im = &c->current_texture->images[0];
+		v->zp.s = (GLint)(v->tex_coord.X * im->sscale + im->soff);
+		v->zp.t = (GLint)(v->tex_coord.Y * im->tscale + im->toff);
 	}
 }
 
@@ -214,6 +216,10 @@ static void updateTmp(GLVertex* q, GLVertex* p0, GLVertex* p1, GLfloat t) {
 		q->color.v[0] = p0->color.v[0] + (p1->color.v[0] - p0->color.v[0]) * t;
 		q->color.v[1] = p0->color.v[1] + (p1->color.v[1] - p0->color.v[1]) * t;
 		q->color.v[2] = p0->color.v[2] + (p1->color.v[2] - p0->color.v[2]) * t;
+		/* Alpha too.  A clipped primitive is re-generated here rather than passed through,
+		 * so leaving this out would reset the fade of every edge vertex that crosses a clip
+		 * plane -- visible as a hard alpha seam on a triangle that is otherwise tweening. */
+		q->color.v[3] = p0->color.v[3] + (p1->color.v[3] - p0->color.v[3]) * t;
 	}
 
 #if TGL_OPTIMIZATION_HINT_BRANCH_COST < 1
@@ -398,7 +404,18 @@ int count_triangles, count_triangles_textured, count_pixels;
 /* see vertex.c to see how the draw functions are assigned.*/
 void gl_draw_triangle_fill(GLVertex* p0, GLVertex* p1, GLVertex* p2) { 
 	GLContext* c = gl_get_context();
-	if (c->texture_2d_enabled) {
+	GLImage* im = NULL;
+
+	if (c->texture_2d_enabled && c->current_texture != NULL) {
+		im = &c->current_texture->images[0];
+		/* A texture that is bound but was never uploaded has no plane.  Sampling it would
+		 * read through a NULL pixmap, so an absent plane is treated exactly like no texture
+		 * and the primitive takes the flat/smooth path it would have taken untextured. */
+		if (im->pixmap == NULL)
+			im = NULL;
+	}
+
+	if (im != NULL) {
 		/* if(c->current_texture)*/
 #if TGL_FEATURE_LIT_TEXTURES == 1
 		if (c->current_shade_model != GL_SMOOTH) {
@@ -412,7 +429,7 @@ void gl_draw_triangle_fill(GLVertex* p0, GLVertex* p1, GLVertex* p2) {
 		}
 #endif
 
-		ZB_setTexture(c->zb, c->current_texture->images[0].pixmap);
+		ZB_setTexture(c->zb, im);
 #if TGL_FEATURE_BLEND == 1
 		if (c->zb->enable_blend)
 			ZB_fillTriangleMappingPerspective(c->zb, &p0->zp, &p1->zp, &p2->zp);

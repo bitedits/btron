@@ -1245,6 +1245,11 @@ static ER render_tc_string(GDEV *dev, H x, H y, const char *text, COLOR fg_col, 
     const char *p = text;
     volatile COLOR *pix = (volatile COLOR*)dev->pixels;
     H width = dev->width;
+    /* The canvas's own byte order for the two colours this string can write.
+     * The glyph loops below are per-pixel and the row pointer is volatile, so the
+     * exchange is done once per string instead of once per glyph pixel. */
+    const COLOR fb_fg = BTRON_PIXEL_FB(fg_col);
+    const COLOR fb_bg = BTRON_PIXEL_FB(bg_col);
 
     while (*p) {
         if (*p == '\n') {
@@ -1303,9 +1308,9 @@ static ER render_tc_string(GDEV *dev, H x, H y, const char *text, COLOR fg_col, 
                     H px = render_x + col;
                     if (px >= dev->clip.left && px < dev->clip.right) {
                         if (line & (0x80 >> col)) {
-                            pix[py * width + px] = fg_col;
+                            pix[py * width + px] = fb_fg;
                         } else if (bg_col != 0x00000000 && !is_combining) {
-                            pix[py * width + px] = bg_col;
+                            pix[py * width + px] = fb_bg;
                         }
                     }
                 }
@@ -1317,9 +1322,9 @@ static ER render_tc_string(GDEV *dev, H x, H y, const char *text, COLOR fg_col, 
                     if (px >= dev->clip.left && px < dev->clip.right) {
                         UB bit = (col < 8) ? (b0 & (0x80 >> col)) : (b1 & (0x80 >> (col - 8)));
                         if (bit) {
-                            pix[py * width + px] = fg_col;
+                            pix[py * width + px] = fb_fg;
                         } else if (bg_col != 0x00000000 && !is_combining) {
-                            pix[py * width + px] = bg_col;
+                            pix[py * width + px] = fb_bg;
                         }
                     }
                 }
@@ -1334,7 +1339,7 @@ static ER render_tc_string(GDEV *dev, H x, H y, const char *text, COLOR fg_col, 
                     H px = render_x + col;
                     if (px >= dev->clip.left && px < dev->clip.right) {
                         if (!is_dotted || (col % 2 == 0)) {
-                            pix[underline_y * width + px] = fg_col;
+                            pix[underline_y * width + px] = fb_fg;
                         }
                     }
                 }

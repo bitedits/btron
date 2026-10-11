@@ -4,32 +4,44 @@
  * image conversion
  */
 
-void gl_convertRGB_to_5R6G5B(GLushort* pixmap, GLubyte* rgb, GLint xsize, GLint ysize) {
-	GLint i, n;
-	GLubyte* p;
-
-	p = rgb;
-	n = xsize * ysize;
-	for (i = 0; i < n; i++) {
-		pixmap[i] = ((p[0] & 0xF8) << 8) | ((p[1] & 0xFC) << 3) | ((p[2] & 0xF8) >> 3);
-		p += 3;
-	}
-}
-
 /*
- This actually converts to ARGB!!!
- This is the format of the entire engine!!!
-*/
-void gl_convertRGB_to_8A8R8G8B(GLuint* pixmap, GLubyte* rgb, GLint xsize, GLint ysize) {
-	GLint i, n;
-	GLubyte* p;
+ * One row of an upload, converted into a plane the caller advances by `rowstride`.
+ * `nch` is the source's channel count (3 for GL_RGB, 4 for GL_RGBA), and it is the
+ * whole reason this exists: reading a 4-byte texel as a 3-byte one walks the source
+ * one byte further off every texel, which is what the corruption on a real display
+ * looked like.  A 32-bit PIXEL carries the texel's alpha in its top byte, so an RGBA
+ * source's alpha goes where the blender can find it; 5R6G5B has no alpha channel and
+ * drops it.
+ *
+ * This loop, not the blender, is where a texel's byte order is decided: the source is a
+ * byte array (R first) and a PIXEL is a word, so RGB_TO_PIXEL is called with each channel
+ * left-aligned at bit 16 the way it expects.  Doing it through the macro rather than with
+ * written-out shifts is what makes the PS2's canvas-order domain need exactly one swap per
+ * texel here and none anywhere in a span loop.  The alpha byte is at bit 24 in both orders.
+ */
+void gl_convert_row_to_8A8R8G8B(GLuint* pixmap, GLint rowstride, const GLubyte* src, GLint xsize, GLint nch) {
+	GLint i;
+	const GLubyte* p = src;
+	(void)rowstride; /* the caller advances by it between rows */
 
-	p = rgb;
-	n = xsize * ysize;
-	for (i = 0; i < n; i++) {
-		pixmap[i] = (((GLuint)p[0]) << 16) | (((GLuint)p[1]) << 8) | (((GLuint)p[2]));
+#if TGL_FEATURE_RENDER_BITS == 32
+	if (nch == 4) {
+		for (i = 0; i < xsize; i++) {
+			pixmap[i] = ((GLuint)p[3] << 24) | RGB_TO_PIXEL(((GLuint)p[0] << 16), ((GLuint)p[1] << 16), ((GLuint)p[2] << 16));
+			p += 4;
+		}
+		return;
+	}
+	for (i = 0; i < xsize; i++) {
+		pixmap[i] = RGB_TO_PIXEL(((GLuint)p[0] << 16), ((GLuint)p[1] << 16), ((GLuint)p[2] << 16));
 		p += 3;
 	}
+#else
+	for (i = 0; i < xsize; i++) {
+		pixmap[i] = ((p[0] & 0xF8) << 8) | ((p[1] & 0xFC) << 3) | ((p[2] & 0xF8) >> 3);
+		p += nch;
+	}
+#endif
 }
 
 /*

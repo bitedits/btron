@@ -48,6 +48,37 @@ typedef W                 WERR;/* Word or Error return type */
 typedef uint32_t          COLOR;/* TRON Color value (RGBA) */
 #endif
 
+/* ── The framebuffer byte order ─────────────────────────────────────────────
+ * A COLOR is 0xAARRGGBB, whose little-endian bytes are B,G,R,A.  The PS2's
+ * Graphics Synthesizer stores a CT32 pixel with the bytes R,G,B,A -- so a word
+ * read out of the GS's VRAM as a uint32_t is 0xAABBGGRR: the same colour with
+ * its red and blue fields exchanged.  Neither the GIF's Host->Local bit transfer
+ * nor the PCRTC's display read can permute channels, so the exchange has to live
+ * somewhere in the port, and it now lives in the canvas.
+ *
+ * BTRON_PIXEL_FB() performs it.  It is its own inverse, which is the whole
+ * convention and the only rule:
+ *
+ *   a colour word ENTERS a pixel array through it, and
+ *   a pixel array's word LEAVES for anything that looks at R, G or B through it,
+ *   and a pixel array copied into a pixel array is never passed through it --
+ *   that copy is byte order agnostic, which is why the compositor's spans,
+ *   row blits and background cache needed no change at all.
+ *
+ * Every site the rule touches is in the PS2 link's own leaf stores and component
+ * readers, and `make test-ps2-fb-order` draws a saturated colour through each
+ * primitive and checks the word that lands in the canvas.  On every other target
+ * -- the Pi 400 first among them -- the macro is the identity and the canvas
+ * holds what it always held.
+ */
+#if defined(BTRON_PS2_TARGET)
+#define BTRON_PIXEL_FB(c) ((COLOR)((((COLOR)(c) & 0xFF00FF00u) |              \
+                                    (((COLOR)(c) & 0x00FF0000u) >> 16) |      \
+                                    (((COLOR)(c) & 0x000000FFu) << 16))))
+#else
+#define BTRON_PIXEL_FB(c) ((COLOR)(c))
+#endif
+
 #ifndef TRUE
 #define TRUE  1
 #endif

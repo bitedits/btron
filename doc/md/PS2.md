@@ -247,17 +247,140 @@ to fail on one perturbed texel), and `make test-xmb-render`'s `atlas_cell_look` 
 and whole-atlas PPM were byte-identical between the runtime arithmetic and the shipped sheet
 (cell 24 = 1863 ink px, cell 26 = 1889).
 
-What is left: a steady frame is 990 ms, split `f_ribbon 463 / f_surface 171 / f_bg 166 /
-f_menu 183 / f_clear 7` us, and `f_ribbon` -- 8064 blended triangles over the full 640x600
-canvas -- is the next thing to attack.  At 1.2 us per covered pixel against `f_clear`'s
-0.018 us per pixel for the same canvas, the sheet's cost is per-fragment blending and
-per-triangle setup, not memory: 640x600 cleared in 6.8 ms says the fill path is quick, so
-the levers there are the grid resolution, the per-pixel `switch` inside `TGL_BLEND_FUNC`,
-and drawing the sheet less often than the menu changes.
+What is left: a steady frame is 683 ms, split `f_bg 233 / f_menu 202 / f_ribbon 199 /
+f_surface 43 / f_clear 7 / f_particles 0.2` us over a 768x500 canvas.  The per-pixel blend
+switches are gone -- `TGL_BLEND_VARS` now recognises GL_SRC_ALPHA / GL_ONE_MINUS_SRC_ALPHA /
+GL_FUNC_ADD once per primitive and gives it a branch-free arm -- which is what moved `f_bg`
+from 313 ms to 233 ms and the frame from 773 to 683.  Two further clamps (the channel
+saturate written as arithmetic, and the depth-plane store gated on the depth test per
+`ZB_DEPTH_WRITE`) bought 1% more, so the per-fragment work is now where the object code says
+it is: about sixty-six integer instructions for a blended pixel, of which six `mult`/`mflo`
+pairs are the blend itself -- `-march=mips2` has no `mul` instruction.
+
+The decisive number for what remains is the split, taken by running the same image with
+`glEnable(GL_BLEND)` commented out: `f_bg 233 -> 62`, `f_ribbon 199 -> 127`, `f_menu 202 ->
+167`, `f_surface 43 -> 43`.  So blending is 174 of `f_bg`'s 233 ms and 41% of the frame, and
+a *plain* smooth-shaded fill -- interpolate, write -- costs nine times what a clear costs.
+Set against the budget, that is the whole story: `draw_us 16700` over 384000 pixels is 0.044
+us per canvas pixel, while this image's cheapest possible per-pixel operation, `f_clear`'s
+store, measures 0.018 us.  A 60 Hz budget therefore buys about twelve instructions per canvas
+pixel, and the XMB touches the canvas roughly three times a frame.  No arrangement of scalar
+arithmetic reaches that; the remaining gap belongs to *how many pixels are blended* -- cached
+planes and damaged-rect redraws, which are tasks #28 to #31 -- and to the GS hardware
+rasterizer, not to the blend formula.
 
 One thing no measurement in this tree can settle: every `[FPU]` number here came from
-PCSX2's Emotion Engine.  The same rows print over SIO on a real console, so the identical
+PCSX2's Emotion EE.  The same rows print over SIO on a real console, so the identical
 image run there says whether the one-step residue is the emulator or the silicon.
+
+### Textures and alpha in TinyGL (the corrupted-fonts fix)
+
+The bar's fonts, icons and 3D sheet reached the PS2 build corrupted, and three independent
+defects in the fork's texture path explain all three symptoms:
+
+- **`GL_RGBA` was not an accepted upload.** `glopTexImage2D` required
+  `format == GL_RGB && components == 3 && type == GL_UNSIGNED_BYTE` and called
+  `gl_fatal_error()` otherwise -- which is `exit(1)`, so an RGBA upload did not degrade, it
+  ended the process.  The source's channel count is now taken from `format` alone
+  (`gl_tex_format_channels`), and `gl_convert_row_to_8A8R8G8B` converts a row of either 3- or
+  4-byte texels.  The stride matters most: reading an RGBA texel as an RGB one walks the
+  source one byte further off every texel, which is what a diagonally smeared font sheet
+  looks like on a real display.
+- **Every upload was resampled into a fixed 256x256 plane.** `GLImage` used to hold
+  `PIXEL pixmap[256*256]` inline and nearest-resample anything whose extent differed, so the
+  384x384 icon atlas was *downscaled* to 256x256 and lost a third of its texels.  A `GLImage`
+  now owns a heap plane at the extent that was uploaded, rounded up to a power of two per axis
+  because the sampler wraps by masking, and it carries its own `smask`/`tmask`/`tshift` for
+  sampling and `sscale`/`soff`/`tscale`/`toff` for mapping a texture coordinate onto its true
+  extent.  `ZB_setTexture()` binds those three sampler fields into the `ZBuffer` once per
+  primitive so the span loop keeps them in registers.  For a 256x256 upload the new
+  arithmetic reduces to exactly the old constants (`sshift 9`, `tshift 9`,
+  `sscale = 256*2^11 - 2^10`), which is what keeps the host comparison below meaningful.
+  `TGL_FEATURE_TEXTURE_MAX_POW2` (512) is the ceiling; every in-tree upload is within it --
+  the bar's atlas is 384x384, its font sheet 128x96, and `src/quake/render/texture.c` caps
+  its own uploads at 512x512.
+- **Alpha blending had no alpha.** `TGL_BLEND_FUNC` switched over the GL factors but had no
+  `GL_SRC_ALPHA`/`GL_ONE_MINUS_SRC_ALPHA` arm, so the default fell through to
+  `dest = src + dst`: every fade was a no-op and the ribbon's
+  `glBlendFunc(GL_DST_COLOR, GL_ONE)` silently degraded to additive.  The vertex alpha is now
+  carried as a fourth interpolated channel (`ZBufferPoint.a`, left-aligned like r/g/b,
+  interpolated by `INTERP_A` and lerp'd across a clip edge in `updateTmp`), and
+  `TGL_BLEND_FACTOR` implements the factor set in integer arithmetic -- each channel is an
+  8-bit value held at bit 16, so a factor is one byte extract, one multiply and one `>>8`,
+  and `0xff0000 * 255` still fits a `GLuint`.  Nothing here costs a float, let alone a
+  libcall, on a `-msoft-float` target.  A textured fragment's alpha is the texel's own byte
+  times the vertex byte, which is GL's modulate.
+- **The blend state was resolved per pixel.** With the factors implemented, a blended fill
+  still ran `switch(blendeq)` and two `switch(factor)` for every fragment, because they were
+  only loop-invariant to the reader, not to the compiler: the object code for `f_bg` was an
+  indirect `jr` through a jump table once per pixel.  `TGL_BLEND_VARS` now reads the three
+  parameters once per primitive and recognises the one combination the applications actually
+  ask for, handing `TGL_BLEND_ALPHA_ADD` a branch-free arm; anything else still runs the
+  general switches, unchanged.  The arm is bit-exact against the general one by construction
+  (same terms, and its channel saturate is `min(v >> 16, 255)` written as subtract-shift-and,
+  since a gradient crosses the boundary at a different column in every row).  Related, and
+  also per-fragment: `ZB_DEPTH_WRITE` stops the span loop from storing `z >> 14` into the
+  depth plane when `GL_DEPTH_TEST` is off -- GL 1.1 4.4.1 does not update the plane at all in
+  that state, and the 2D UI is exactly that case.
+
+- **A large float angle was a double-series call.** `sinf`/`cosf` guarded their float fold
+  at 4*pi and handed everything past it to the double relative, which on this target is not
+  a slower path but a different order of one: read out of a probe TU compiled with
+  `PS2_CC`, `btron_sincos` costs 415 instructions and 52 calls into the soft-float runtime,
+  13 of them `__divdf3` (the series divides by `n*(n-1)` term by term), against the float
+  polynomial's 34.  That is why the guard was there -- folding the same turn count as a
+  *float* moves the angle by the rounding of one float product, measured 0.028 rad at 1e6
+  and 0.28 rad at 1e7, which is not a precision question but a different point on the
+  circle.  It is also the reason the ribbon's surviving
+  4,096 `cosf(gz + t/10 + gx)` calls per paint were a cliff rather than a slope: at 0.01 per
+  frame the argument leaves 4*pi around frame 12,600, and every call past it paid for a
+  double series instead of a fold.
+  `btron_sincosf_far` now folds the turn count in double -- nearest integer through a `long
+  long`, then `d - k*pi2 - k*pi2_lo`, the two-part constant travelling with the count exactly
+  as it does in the float fold, because at 3e8 turns the 2.45e-16 by which `double(2*pi)`
+  sits below 2*pi is 8e-8 of angle, i.e. a float's last place -- and keeps the float
+  polynomial for the residue, which the nearest-integer quotient has already brought inside
+  half a turn.  Cost: 12 double calls and no division, then the same 34 float ones.  The
+  tiers are 4*pi (float fold alone), 2^31 (double fold, whose error is half an ulp of the
+  turn product and so still under a float's last place near 1.0) and inf/NaN (the double
+  relative, which is the only one that answers NaN for both).
+
+Proved on the host, not argued: `make test-xmb-render-tgl` runs the same `xmb.c` through
+`backend_tinygl.c` and writes its frames to `.build/tgl/`, and it now reports the same
+68/70 as `make test-xmb-render` through `backend_virgl.c` -- including the same two failures,
+which are the app's gradient corners, not the rasterizer.  Per pixel, the two backends agree
+to within 2 levels of mean absolute difference over the whole 960x600 canvas, with 92% of
+pixels identical to ±2 and 1.4% differing by more than 32 (text and icon edges, where the
+alpha paths round differently).  The shipped atlases are visually indistinguishable from the
+reference, which is the direct check on the two symptoms the user reported.  The twelve
+`.build/tgl` frames are byte-identical across every change above, and they have to be: none
+of it is a change to a value.
+
+`make test-gl-math` is the same discipline applied to the arithmetic, and the trig fold is
+now measured where it is used.  Its sweep covers every integer from 14 to 100000, a stride
+to 1e6 on the negative half, and both signs of every binade from 2^3 to 2^19 -- 237,000
+comparisons against the host libm on top of the reduction regions, in a run that now reports
+3.8 million checks.  The worst absolute error
+past the guard is 2.384e-07, two steps of a float near 1.0 and the same figure the regions
+inside the guard measure, so the fold buys its speed without spending accuracy.  And the
+sweep has teeth of its own: the port TU ships a `p_sinf_far_floatfold` canary that folds the
+turn count as a float, which is the bug class the guard was built to hide, and it is caught
+on 100,452 of the far samples.  `make test-ps2` reads the cost rather than the value: two new
+laws assert that the probe's far fold contains no `__divdf3` at all and that it does go
+through the `long long` round trip, so a regression to the double series cannot pass by being
+an empty object.  Reverted on purpose once, to check: 13 divisions.
+
+The plane is now heap, and that has a number attached: the 384x384 atlas takes a padded
+512x512 `PIXEL` plane, i.e. 1024 kB, against the 256 kB the inline array used to cost -- the
+boot's `[HEAP]` rows read `+1024 kB -> used=9822 kB peak=9822 kB largest_free=2465 kB`, and
+the 576 kB RGBA staging buffer is returned immediately after the upload.  It fits, with 2.4 MB
+of the largest hole left; a `glTexImage2D` that cannot get its plane is still loud, by design.
+
+Cost of correctness: the steady frame went from 556 ms (broken blend, resampled atlas) to
+773 ms (real blend, true extents), and the per-fragment work above takes it back to 683 ms
+without changing a pixel.  Every one of those extra microseconds is integer, and they are
+the subject of the `f_bg` paragraph above.  They are also emulator numbers: the
+identical image over SIO on a real console is still the outstanding check.
 
 ### Driver Files
 
@@ -268,13 +391,13 @@ image run there says whether the one-step residue is the emulator or the silicon
 | [`src/drivers/ps2/ps2_gs_reg.s`](file:///Users/tonpa/depot/bitedits/btron/src/drivers/ps2/ps2_gs_reg.s) | The image's only 64-bit-GPR instructions: `ps2_gs_poke64()`/`ps2_gs_peek64()` perform the GS's single-`sd`/single-`ld` register latch. Assembled with local `.set mips3` under the shared `-march=mips2` driver; its arguments and return halves are 32-bit, so it is O32-legal on both sides. |
 | [`src/drivers/ps2/ps2_builtins.c`](file:///Users/tonpa/depot/bitedits/btron/src/drivers/ps2/ps2_builtins.c) | The `__floatdidf` / `__fixdfdi` O32 libcalls clang emits for `double ↔ int64` at `-march=mips2` and `-nostdlib` leaves undefined, written from 32-bit pieces because the EE FPU only speaks 32-bit GPRs. |
 | [`src/drivers/ps2/ps2_gs.h`](file:///Users/tonpa/depot/bitedits/btron/src/drivers/ps2/ps2_gs.h) | Privileged GS registers (`0x12000000`: `PMODE`, `SMODE2`, `DISPFB1`, `DISPLAY1`, `CSR`) and GIF DMA registers (`0x1000A000`), reached only through `GS_REG_POKE`/`GS_REG_PEEK`. |
-| [`src/drivers/ps2/ps2_gs.c`](file:///Users/tonpa/depot/bitedits/btron/src/drivers/ps2/ps2_gs.c) | Hardware display initialization, VSync synchronization (`ps2_gs_vsync`), Host-to-Local GIF DMA blitter (`ps2_gs_flush`), uncached KSEG1 RDRAM framebuffer, and non-destructive cursor restoration. |
+| [`src/drivers/ps2/ps2_gs.c`](file:///Users/tonpa/depot/bitedits/btron/src/drivers/ps2/ps2_gs.c) | Hardware display initialization, VSync synchronization (`ps2_gs_vsync`), Host-to-Local GIF DMA blitter (`ps2_gs_flush`) over the desktop's own canvas, and non-destructive cursor restoration. |
 | [`src/drivers/ps2/ps2_font.h`](file:///Users/tonpa/depot/bitedits/btron/src/drivers/ps2/ps2_font.h) | 8x8 ASCII bitmap font table (128 characters) for crisp, authentic BTRON UI text rendering. |
 | [`src/drivers/ps2/ps2_sio.h`](file:///Users/tonpa/depot/bitedits/btron/src/drivers/ps2/ps2_sio.h) & [`.c`](file:///Users/tonpa/depot/bitedits/btron/src/drivers/ps2/ps2_sio.c) | Cleanroom SIO0 hardware UART driver (`0x1000F180` / `KPUTCHAR`). |
 | [`src/drivers/ps2/ps2_pad.h`](file:///Users/tonpa/depot/bitedits/btron/src/drivers/ps2/ps2_pad.h) & [`.c`](file:///Users/tonpa/depot/bitedits/btron/src/drivers/ps2/ps2_pad.c) | Cleanroom DualShock 2 controller driver: analog stick velocity integration, deadband filtering, button edge detection, and event mapping. |
 | [`src/drivers/ps2/ps2_usb.h`](file:///Users/tonpa/depot/bitedits/btron/src/drivers/ps2/ps2_usb.h) & [`.c`](file:///Users/tonpa/depot/bitedits/btron/src/drivers/ps2/ps2_usb.c) | Cleanroom USB Open Host Controller Interface (OHCI) driver (`0xBF801600`) and standard USB HID Boot Protocol keyboard/mouse decoders. |
 | [`src/cores/core_ps2.c`](file:///Users/tonpa/depot/bitedits/btron/src/cores/core_ps2.c) | Platform core adapter: multi-window application suite (Workbench, B-Editor, TAD Cabinet, Settings), Japanese TIP/IME status badge, interactive SIO0 shell, event queue, and RTOS heartbeat. |
-| [`scripts/test_ps2.sh`](file:///Users/tonpa/depot/bitedits/btron/scripts/test_ps2.sh) | Automated verification suite checking ELF architecture, entry point, driver symbols, R5900 opcodes, the one-calling-convention ABI law (image *and* every object at 32-bit GPRs, the GS accessors at one `sd`/one `ld`), the FPU law (COP1 instructions in `ps2_builtins.ps2.o` and in no other object, no double-width op and no EE-illegal `.s` encoding either by mnemonic or by byte scan, the hardware path provably compiled in, no named undefined symbol, all 32 soft-float libcalls defined) and the ISO image (45/45 tests). |
+| [`scripts/test_ps2.sh`](file:///Users/tonpa/depot/bitedits/btron/scripts/test_ps2.sh) | Automated verification suite checking ELF architecture, entry point, driver symbols, R5900 opcodes, the one-calling-convention ABI law (image *and* every object at 32-bit GPRs, the GS accessors at one `sd`/one `ld`), the FPU law (COP1 instructions in `ps2_builtins.ps2.o` and in no other object, no double-width op and no EE-illegal `.s` encoding either by mnemonic or by byte scan, the hardware path provably compiled in, no named undefined symbol, all 32 soft-float libcalls defined), the trig fold's shape (a large float angle folded with no software double division, read off a probe object built with the image's own flags), the single-canvas law (no `ps2_fb_memory`, no present-path sweep, exactly one screen-sized CT32 object and that it is `s_desktop_backbuffer`, every CP0 write to `Status` and no `cache` op) and the ISO image (54/54 tests). |
 
 ### 2.1 Graphics Synthesizer (GS) Framebuffer Architecture
 
@@ -284,29 +407,64 @@ The PlayStation 2 Graphics Synthesizer contains 4 MB of ultra-high-bandwidth emb
 
 Rather than rendering individual primitives through the GS rasterizer (which is prone to sub-pixel rounding errors, page-boundary clipping bugs, and high DMA packet overhead), B-System uses the hardware **Host-to-Local Blitter**:
 
-1. **Uncached RDRAM Backing Store (`ps2_fb_memory`)**:
-   - The CPU maintains a linear 640 x 448 x 32-bpp frame buffer in RDRAM (`71,680` quadwords = `1,146,880` bytes).
-   - All drawing functions (`ps2_gs_draw_rect`, `ps2_draw_char`, `ps2_gs_putpixel`) write through an uncached KSEG1 pointer (`0xA0xxxxxx`), bypassing the EE L1 Data Cache so RDRAM is always 100% coherent before DMA transfers.
+1. **One canvas: the desktop's own backbuffer**:
+   The GIF DMA reads the very array the compositor painted -- `core_ps2.c` installs
+   `s_desktop_backbuffer` into the driver with `ps2_gs_set_framebuffer()` as the first act
+   of `ps2_kernel_main()`, before the SIO and GS come up, because the boot log is written
+   into the canvas the screen shows.  There is no second framebuffer and no copy between
+   them: the array the driver used to own (`ps2_fb_memory`, 800x600x4 = 1,920,000 bytes of
+   `.bss`) and the one-word-per-pixel sweep that filled it (`blit_backbuffer_rect_to_ps2fb`,
+   49,094 us of a full present) are both gone.  What makes that sound is that **this port
+   never enables the Emotion Engine's L1
+   caches**: every coprocessor-0 write in the image is to `Status` (CP0 register 12 select
+   0), and there are exactly three of them -- `btron_fp_init()` raising `CU1`,
+   `ps2_ee_enable_interrupts()` and `ps2_ee_exit_handler()` setting the EE's global enable
+   bit 16 (`EIE`) by read-modify-write, because PCSX2 does not decode `ei` (`Unknown R5900
+   COP0`).  Nothing is written to the cache-control
+   registers, and there is no `cache` maintenance instruction anywhere, so the caches stay
+   in the state the BIOS left them in -- and the upload path reads its source through the
+   uncached KSEG1 alias regardless (`UNCACHED()` in `ps2_gs.c`).  Every alias of a given
+   address reaches the same RDRAM and a bus master sees a store as soon as it lands.
+   `make test-ps2` asserts that premise rather than assuming it: the absence of a
+   `ps2_fb_memory` symbol and of the sweep, exactly one screen-sized CT32 object in the
+   image and that it is `s_desktop_backbuffer`, `ps2_gs_set_framebuffer` present as the
+   install point, that the disassembly's `mtc0` instructions are *all* `Status` writes and
+   that none of them names register 9 -- `Count` is the clock this port measures, and
+   writing it would break every elapsed time in the image -- and no `cache` op.
 
-2. **GS Transmission Setup Packet (`ps2_gs_flush`)**:
+2. **The canvas's byte order**:
+   A BTRON `COLOR` is `0xAARRGGBB`, whose little-endian bytes are B,G,R,A; a GS CT32 pixel
+   is R,G,B,A in memory.  Neither the GIF's Host->Local bit transfer nor the PCRTC's
+   display read can permute channels, so the exchange has to live in the port, and it lives
+   at the moment each colour enters a pixel array: `BTRON_PIXEL_FB()` in
+   [`include/btron/types.h`](file:///Users/tonpa/depot/bitedits/btron/include/btron/types.h)
+   swaps the R and B fields, is its own inverse, and is the identity on every non-PS2
+   target.  The rule is closed under copying -- a pixel array written through it and read
+   back only as words (the compositor's spans, row blits, background cache, cursor save
+   area, and the GIF upload itself) needs nothing -- which is why the conversion is a leaf
+   store and a component-reader detail rather than a pass over the canvas.
+   `make test-ps2-fb-order` draws a saturated colour through each primitive and checks the
+   word that lands.
+
+3. **GS Transmission Setup Packet (`ps2_gs_flush`)**:
    - A 5-QW setup packet primes the GS:
      - `BITBLTBUF (0x50)`: `DBA = 0`, `DBW = 10` (640 / 64), `DPSM = GS_PSM_CT32 (0)`.
      - `TRXPOS (0x51)`: `DSAX = 0, DSAY = 0`.
      - `TRXREG (0x52)`: `RRW = 640, RRH = 448`.
      - `TRXDIR (0x53)`: `0` (Host $\rightarrow$ Local eDRAM).
 
-3. **Hardware Swizzling on Arrival**:
-   - `ps2_fb_memory` is streamed via DMAC Channel 2 in 8 chunks of 8,960 quadwords with `GIFTAG(FLG = IMAGE)`.
+4. **Hardware Swizzling on Arrival**:
+   - The canvas is streamed via DMAC Channel 2 in 8 chunks of 8,960 quadwords with `GIFTAG(FLG = IMAGE)`.
    - The GS internal blitter automatically and correctly swizzles linear RDRAM pixels into eDRAM pages and blocks on arrival.
 
-4. **Verified NTSC Video Timings**:
+5. **Verified NTSC Video Timings**:
    - `ps2_set_gs_crt(1, 2, 0)`: Interlaced, NTSC, Field mode.
    - `PMODE = 0xFF63ULL`: Circuit 1 + Circuit 2 enabled, `SLBG = 0` (Framebuffer output selected).
    - `SMODE2 = 0x01ULL`: Interlaced, Field mode.
    - `DISPFB1` & `DISPFB2 = 0x1400ULL`: Base address page 0 (`FBP = 0`), buffer width 10 blocks (`FBW = 10`), 32-bit RGBA (`PSM = 0`).
    - `DISPLAY1` & `DISPLAY2 = 0x001bf9ff0983227cULL`: $DX=636$, $DY=50$, $MAGH=3$ (4x), $MAGV=1$ (2x), $DW=2559$, $DH=447$.
 
-5. **Non-Destructive Cursor Restoration**:
+6. **Non-Destructive Cursor Restoration**:
    - Mouse cursor drawing backs up background pixels into `cursor_saved[16 * 16]`. Erasing the cursor restores the exact original background pixels with zero smearing or artifacts.
 
 ### 2.2 DualShock 2 Controller Driver (`ps2_pad`)
@@ -407,14 +565,19 @@ Two things this run says out loud that are easy to read past:
   reports.
 - **One XMB frame used to cost ~78 s of emulator time** (`[BENCH] xmb frame 1/2/3` on
   emulator timestamps 71.1, 149.1 and 227.1 s for a Cross press at 5.6 s).  A frame that
-  long could not be timed by a guest-side clock at all: CP0 Count is 32-bit at 147.18 MHz,
-  so a plain delta wraps every 29.1 s, and the fold in `btron_render_perf_us()` only
+  long could not be timed by a guest-side clock at all: CP0 Count is a 32-bit counter, so a
+  plain delta wraps every 29.1 s at the documented 147.18 MHz -- and every 14.6 s on this
+  emulator, whose `Count` runs at the full core rate (see
+  [The measured microsecond](#the-measured-microsecond-normative)) --
+  and the fold in `btron_render_perf_us()` only
   recovers a wrap if something polls it inside the interval -- which a frame that blocks in
   the rasterizer does not.  The heartbeat therefore printed `... ms folded` and the app
   phase's rate printed `<= N passes/s`: monotonic upper bounds, with the wall cadence read
   from the emulator's own prefix.  After the surface-hash cache and shipping the icon sheet
-  as data (above) a steady frame is 990 ms and frame 1 is 1.04 s -- both far inside one
-  29.1 s rotation -- so the `[XMBT] draw=/swap=` rows are now exact microseconds, and the
+  as data (above), and after the texture, blend and per-fragment fixes below, a steady frame
+  is 683 ms and frame 1 is 0.69 s (`frame1_us 687,935`; the 5% it has since given back is
+  code layout, not any one fix) -- both far inside the shortest of those rotations -- so the
+  `[XMBT] draw=/swap=` rows are now exact microseconds, and the
   phase breakdown that produced that attribution is still compiled in: `xb_paint` emits
   `[XMBT] f_surface/f_clear/f_bg/f_ribbon/f_particles/f_menu` for its first two paints.
 
@@ -498,20 +661,20 @@ The PS2 cleanroom port integrates the **full, authentic B-System Graphical Workb
 5. **Real BTRON Applications**:
    - VObject Manager (`src/apps/vobj_manager.c`), T-Editor (`src/apps/t_editor.c`), GTerm (`src/apps/gterm.c`), and Control Panel (`src/settings/control_panel.c`).
 
-6. **Double-Buffered GIF DMA Blitter**:
-   - Renders directly to a 32-bit ARGB backbuffer (`s_desktop_backbuffer`).
-   - `blit_backbuffer_rect_to_ps2fb()` translates ARGB to native GS CT32 RGBA
-     little-endian format **for the damaged rectangle only**, and `ps2_gs_upload(x, y,
-     w, h)` streams that rectangle to the GS's local framebuffer over DMAC channel 2.
-     The rectangle comes from a set of up to `PS2_BAND_MAX` merged boxes (y-touching
+6. **One canvas, one GIF DMA upload**:
+   - The desktop composites into `s_desktop_backbuffer`, which *is* the GS canvas: it is
+     installed with `ps2_gs_set_framebuffer()` and `ps2_gs_upload(x, y, w, h)` streams the
+     damaged rectangle of it straight to the GS's local framebuffer over DMAC channel 2.
+     The ARGB->CT32 translation is no longer a pass; it happens per colour, at the leaf
+     stores, through `BTRON_PIXEL_FB()` -- see [The canvas's byte order](#21-graphics-synthesizer-gs-framebuffer-architecture).
+   - The rectangle comes from a set of up to `PS2_BAND_MAX` merged boxes (y-touching
      damage unions its x span; overflow falls back to the whole canvas), and it is a
-     *box* rather than a full-width row band because the render and byte-swap passes
-     cost ~0.3 us per pixel: 16 rows at full width is 5370 us, the same 16 rows
-     clipped to the cursor sprite's own 16 columns is 528 us.  See
-     [Why the cursor lags](#why-the-cursor-lags-and-which-row-says-so) for the table.
-   - The full-canvas path (`blit_backbuffer_to_ps2fb()`, 480000 px, 265.8 ms) still
-     exists and is what the Stage 1 console and the cold `startx` paint use; it is no
-     longer what a moving pointer costs.
+     *box* rather than a full-width row band because the render pass costs ~0.3 us per
+     pixel: 16 rows at full width is 5370 us with the byte-swap sweep still in the path,
+     the same 16 rows clipped to the cursor sprite's own 16 columns is 528 us.  See
+     [Why the cursor lags](#why-the-cursor-lags-and-which-row-says-so) for that table.
+   - Deleting the sweep is what `full_swap_us` measures: the smoothness gate expects the
+     `swap` column to read 0, and the whole-canvas present to lose its 49 ms of 274 ms.
 
 7. **The kernel heap, and what a black XMB turned out to be**:
    `src/cores/core_ps2.c` owns a 12 MB pool in `.bss`.  It used to be a bump allocator whose
@@ -536,6 +699,205 @@ The PS2 cleanroom port integrates the **full, authentic B-System Graphical Workb
    reached the guest.  `black=383999 other=1` was the failure, one pixel and all the rest
    unlit, and a count of `Unknown R5900` rows in the thousands says which cause it is.
 
+#### The plane table (Normative)
+
+Every period this machine presents, integrates and ages against is one record, installed
+by the core and read through the shared renderer: `btron_plane_cfg_t` in
+[`include/btron/async_rt.h`](file:///Users/tonpa/depot/bitedits/btron/include/btron/async_rt.h),
+owned by `btron_planes_install()` / `btron_planes()` in
+[`src/graphics/dp_core.c`](file:///Users/tonpa/depot/bitedits/btron/src/graphics/dp_core.c).
+The reason the periods live in one table rather than at the places that read them is that
+a period is not a property of whichever rasterizer the image happens to link.  On this
+port the pass that paints is also the pass that spends the pointer's distance, so every
+"pixels per pass" the cursor is tuned with is the frame time in disguise -- and the divisor
+that turns a period into clock ticks is the machine's own measurement rather than a literal,
+for the reason given in [The measured microsecond](#the-measured-microsecond-normative).
+
+| Field | Value | Where it is consumed | Status |
+|:---|:---|:---|:---|
+| `input_period_us` | 1000 | `ps2_ptr_input_slices()`: what one pass may spend is `PS2_PTR_MAX_STEP` times the number of 1 ms periods that actually elapsed since the last service | **proven**: `HcFmInterval = 0x27782EDF` is a 1 ms OHCI frame, and `ps2_usb_frame_number()` is that clock -- see [Which layer owns the pointer](#which-layer-owns-the-pointer) |
+| `ui_period_us` | 16667 | nothing yet.  It is the absolute deadline the async UI plane is installed against, so it is in the table before it has a reader | inferred from the programmed mode (800x600 inside one 720p frame at 60 Hz) |
+| `panel_refresh_us` | 200000 | `ps2_gui_pass()`: the system panel's 28 rows are added to the band set on this clock even with no damage | the panel's own clock, chosen not measured |
+| `full_convergence_us` | 2000000 | `ps2_gui_pass()`: the whole-canvas `force_full` net | convergence, not animation -- see above |
+| `input_slices_max` | 16 | the clamp on the slice count: one 60 Hz frame of catch-up, bounding the work rather than the debt, so a pass returning from a 683 ms XMB frame costs one pass | deliberate |
+
+`ps2_planes_install()` is step 1a of `ps2_kernel_main()`, immediately after `ps2_sio_init()`
+and before the timebase probe, the OHCI probe, the shell loop and the desktop session --
+which is why the readers above take the table as given instead of testing it for NULL.  A
+missing table is a boot-order bug; self-pacing is the arm64 port's business, not this
+one's.  The machine states its own periods as the first row after SIO comes up:
+
+```
+[PLANE] input=1000 us  ui=16667 us  panel=200000 us  converge=2000000 us  slices=16
+```
+
+With the shipped pointer cap off (`PS2_PTR_MAX_STEP 0`) the product fed to
+`dp_ptr_limit()` is zero and a non-positive limit means no limit, so the slicing is the
+identity exactly when the limiter is: nothing about the shipped, proportional pointer
+changes.  What changes is what `maxstep N` now means -- *N pixels per millisecond* rather
+than *N pixels per pass*, which at the measured 259 passes/s is a little under 4x more
+travel for the same number, and is the difference the loopback calibrator has to be tuned
+against.
+
+#### The measured microsecond (Normative)
+
+**One number per machine, and it is measured.**  A single function converts microseconds
+into CP0 `Count` ticks for the whole image -- `btron_ee_ticks_per_us()` in
+[`src/drivers/ps2/ps2_irq.c`](file:///Users/tonpa/depot/bitedits/btron/src/drivers/ps2/ps2_irq.c)
+-- and the boot measures it instead of quoting the core clock.  Four copies of the datasheet
+figure used to be in the tree: `EE_TICKS_PER_US` in `core_ps2.c` (`ps2_us_since()`, the
+stage split, the pointer's slices, the panel and convergence nets, the task hold), one in
+`ps2_irq.c`, `EE_COUNTS_PER_US` in
+[`src/drivers/ps2/ps2_usb.c`](file:///Users/tonpa/depot/bitedits/btron/src/drivers/ps2/ps2_usb.c)
+and another in
+[`src/drivers/ps2/ps2_iopram.c`](file:///Users/tonpa/depot/bitedits/btron/src/drivers/ps2/ps2_iopram.c).
+Each was an independent opinion about what a microsecond is, and on this emulator all four
+were wrong by exactly 2x.
+
+**The instrument is the INPUT plane itself.**  Timer0 -- `T0_COUNT 0xB0000000`,
+`T0_MODE 0xB0000010`, `T0_COMP 0xB0000020`, all through the uncached KSEG1 alias -- is
+programmed `CLKS=2` (bus clock / 256) with `COMP = 576`, which is the plane table's
+`input_period_us = 1000` at the documented rate.  It is installed through the ROM kernel's
+own interrupt registry rather than by taking the exception vector: `AddIntcHandler`
+(syscall `0x10`) for `INTC_TIM0 = 9`, then `EnableIntc` (`0x14`), so the BIOS dispatcher
+still owns vectoring.  The mode word the image writes each period is `0x1c2` -- `CLKS=2` |
+`ZRET` | `CUE` | `CMPE` | `EQUF|OVFF` ack.  `ZRET` makes the period self-repeating, and
+because the compare flag *latches*, the handler has to re-write that same word to acknowledge
+it: without the acknowledge the machine delivered exactly one tick ever and then sat there
+looking armed.
+
+**The handler is integer-only, by constraint and not by taste.**  No exception vector is
+installed, so the ROM kernel saves what it saves -- the GPRs, not the FPRs -- before it
+reaches this handler.  With COP1 live ([What COP1 actually is, measured](#what-cop1-actually-is-measured-normative)),
+a handler that touched a float would corrupt whatever the interrupted code had in those
+registers.  The same reason makes `ps2_ee_exit_handler()` a `sync` plus a hand-written
+`Status` read-modify-write: `ei` (`0x41606020`) is not decoded by this PCSX2's R5900 -- it
+prints `Unknown R5900 COP0` and does nothing -- so the EE's global enable is bit 16, `EIE`,
+and it is raised with `li`/`or`/`mtc0 $12`.
+
+**The calibration law.**  On each entry the handler takes the gap since the previous entry,
+and sums the first `CALIB_PERIODS = 32` of them; when the 32nd lands it divides by
+`periods x input_period_us` = 32,000 real microseconds, rounding half up, and publishes the
+quotient.  The window closes in the handler because only the entries know the spacing; the
+ISR budget is re-priced in the same breath, since the periods that filled the window had been
+charged against the documented divisor.  Zero is the "not yet measured" sentinel, so a machine
+whose `Count` does not advance cannot report a measurement and keeps the fallback
+`EE_TICKS_PER_US_DOC = 147`.  `ps2_irq_calib_wait()` bounds its patience in *spins*, not in
+microseconds -- a timeout written in the unit being measured would be circular -- and boot
+step 2a runs it before the first thing the image times with the result.
+
+| Quantity | Status |
+|:---|:---|
+| `295` ticks per microsecond on this emulator (PCSX2 on this Mac) | **measured**: 9,437,184 ticks summed over 32 periods |
+| `Count` runs at the core rate, 294.912 MHz, not the documented half of it | **measured**, and the mean gap is 294,912 ticks per 1,000 us to the digit |
+| The plane and the OHCI agree: 50 Timer0 periods in a window the frame counter also calls 50 frames | **measured** -- two independent hardware clocks; the 147 was the outlier of the three |
+| `~147` on a real console, which is why the fallback is 147 | **inferred** from the datasheet; the same code measures it there, so the row will say which it got |
+
+The consequence is that every microsecond this image printed on PCSX2 was 2x too long, and
+the accepted scope of the fix says so out loud rather than hiding it: `full_total_us`
+225,524 -> 113,318, `full_render_us` 223,885 -> 112,501, `band64_total_us` 17,151 -> 8,618,
+`full_upload_us` 1,638 -> 816, `h4_total_us` 552 -> 279.  The gates that read those rows did
+not move (same 3 reds, same ratio), because a budget and its measurement halved together.
+What did change is the IOP-RAM reset hold, which was written as 20 ms and spent as 10, and
+`[BENCH] passes/s`, which divided a tick-unit numerator by a microsecond denominator and
+reported 6.8x low.
+
+**Everything stays 32-bit.**  `make test-ps2` TEST 43 forbids a named undefined symbol, so a
+`__muldi3` or `__udivdi3` from a stray 64-bit product kills the image at link time.  The
+wrap-fold's step is therefore `0xFFFFFFFF / tpu` (about 14.56 ms of `Count` at 295), the
+panel and convergence nets fit plainly (`200000 x 295`, `2000000 x 295`), and a task hold
+budget in `ms x 1000 x tpu` is capped at 250 ms rather than widened.
+
+The boot prints the whole chain, and each row exists to falsify a different claim:
+
+```
+[ASYNC] input plane Timer0 (INTC 9): period=1000 us compare=576 ticks=50 of the 50 this 50000 us window owes -> LIVE
+[ASYNC] hid collection: the input plane reads the OHCI rings and a pass delivers them
+[ASYNC] machine microsecond = 295 Count ticks, measured over 32 periods of the plane (9437184 ticks summed, mean 294912) -- measured, so every microsecond this image prints is real time
+[ASYNC] gaps since the arm: 9881..4118890 ticks = 33..13962 us, against the 1000 us the period means
+[ASYNC] the same window on the OHCI's frame counter: 50 frames of the 50 a 1 ms frame says this is -- agree -- the measured divisor and the bus's own frame counter say the same 50 ms
+[ASYNC] CP0.Status 0x70030c11 at the arm, 0x70030c11 after it: EIE(bit16)=1 -> 1, IEc(bit0)=1 -> 1
+[ASYNC] timer0 MODE=0x000001c2 (clk256+zret+cue+cmpe+ack) count 102 -> 102 over a 2 ms hold, compare=576, ticks=238 total
+[ASYNC] isr wcet=498 ticks = 1.68 us of the 50 us budget, overruns=0  ui=16667 us is still the present's own pass, not a plane
+[CPU] CP0 Count running  (295 ticks/us, measured against the input plane)
+```
+
+`LIVE` is `got + 1 >= owed`, not "at least one tick" -- a plane that delivered 3 of the 50
+periods it owes is `STALLED`, and one that delivered none is `DEAD`.  The divisor row prints
+the window behind it (periods, ticks summed) because a quotient with no sample cannot be
+checked against the plane's own period.  The gaps are printed in raw ticks *and* microseconds
+for that reason: the mean gap divided by the divisor *is* the period by construction, so the
+µs form of the calibration's own sample would carry no information, and the accessors that
+used to offer it (`ps2_irq_gap_min_us()`, `ps2_irq_gap_max_us()`) are gone.  The `wcet` row
+is the handler's cost against `ASYNC_ISR_BUDGET_US` (50 us, `ASYNC.txt` Tier-1).
+
+**The one instrument that does not work here, measured.**  A plain read of `T0_COUNT` barely
+advances on this emulator: over a hold that is two periods of `COMP=576` -- 1152 counts --
+the delta was `140 -> 140`, `276 -> 277`, `551 -> 551`, while the same timer's compare
+interrupt arrived 50 times in the same 50 ms.  **Inferred**: PCSX2 keeps the timer's schedule
+somewhere other than that word, so the readable counter is a residue; and with `ZRET`, a
+sample taken a period apart aliases any phase difference to zero.  The tick count and the
+OHCI row are therefore the cadence evidence, and the `MODE` word is the part of that row worth
+reading.
+
+**Gates.**  `make test-ps2` TEST 51 asserts every `mtc0` in the image is a `Status` write and
+TEST 52 that none names register 9 (`Count` is read, never set -- writing it would break every
+elapsed time in the image).  [`scripts/ps2_smooth.sh`](file:///Users/tonpa/depot/bitedits/btron/scripts/ps2_smooth.sh)
+takes `ee_ticks_per_us` as `[INFO]` -- it is the machine's business, not the port's -- and
+judges `input_plane_short_us` and `ohci_frame_short_us` at a target of 0.
+
+#### The plane as the producer of HID collection (Normative)
+
+The pointer's report is now retired by the interrupt handler and delivered by the pass.  That
+split is not a stylistic preference: `ASYNC.txt` §5 forbids "USB progress only in the GUI
+loop", and a report read at present time inherits the GUI loop's latency, which is
+`ui=16667 us` plus whatever a frame costs.
+
+**What crosses the boundary.**  `src/drivers/ps2/ps2_usb.c` divides its own work in two.
+`intr_take()` is the bus half -- read the descriptor's condition code, eight uncached byte
+reads, advance the ring index, `ed_unhalt()`, `intr_top_up()` -- and nothing else; it is the
+only part that runs on the plane.  Everything with a side effect on the rest of the image
+(the event-queue syscalls, the prints, the report processors) stays in the pass.  The handler
+therefore touches no heap, renders nothing, and calls no BIOS service that could block, which
+is what makes its measured cost mean what it says.
+
+**One queue, one writer per index.**  `hoff_push()` publishes into a 256-slot ring; the plane
+owns `s_hoff_in` and the pass owns `s_hoff_out`, and no other party writes either, so there is
+no lock and no test-and-set in the handler.  A full queue increments `dropped` rather than
+overwriting an unread report.  `hoff_drain()` stamps each slot with the `Count` reading taken
+at the handler entry that collected it -- so the hold the pass reports is the hold from the
+bus, not from the moment the slot was written.
+
+**The handover happens once, and only on evidence.**  `ps2_usb_input_plane(1)` is called in
+the `[ASYNC]` boot block when the plane's own verdict is `LIVE` (`got + 1 >= owed` over the
+boot window), before the divisor and `wcet` rows print so that the cost of the collection is
+inside the measurement of the handler that performs it.  It sets `s_plane_collects` *before*
+installing the hook: the flag is the protocol, and installing a producer that the consumer
+does not yet know about would collect into a queue nothing drains.  On `DEAD` or `STALLED` the
+pass keeps polling the rings itself -- a queue nobody fills is a dead keyboard, so the fallback
+is not optional.  The check for a reclaimed IOP-RAM shadow block also stays on the pass side,
+because reading it is a bus access and the handler has a budget.
+
+**Proven, on this machine.**  The handler's cost with the collection inside it is
+`isr wcet=498 ticks = 1.68 us`, against `wcet=104 ticks = 0.35 us` with an empty hook -- so
+a period of polling four interrupt rings costs about 1.3 µs, 3.4 % of §3.2's 50 µs budget,
+with `overruns=0`.  `ASYNC.txt` §10's 2 ms pointer-update gap is the gate on the other side:
+`plane_held_max_us` is the longest hold the pass has measured and is judged against 2000.
+
+**What a headless run can and cannot show.**  `scripts/ps2_smooth.sh` moves no host cursor,
+so a run legitimately prints `reports=0`.  The instrument that proves the collector runs with
+no hand on the mouse is `collected on 2223 periods`: `plane_periods` counts handler entries
+that passed the host guard and reached the collector, and a period needs only the clock, while
+a report needs motion.  `plane_handover_miss` is judged at 0 for a `LIVE` plane and SKIPped
+for any other verdict; `plane_reports_in_pass` must not grow once the plane owns the rings.
+Non-zero `plane_reports_collected` and a non-zero `plane_held_max_us` require
+`make run-ps2` and a hand on the mouse.
+
+```
+[PSTAT] plane: reports=0 on the input plane, 0 in a pass, dropped=0 queue max=0 of 256, collected on 2223 periods
+[PSTAT] plane: held max=0 us mean=0 us over 0 delivered -- isr 1.68 us of the 50 us budget, overruns=0
+```
+
 ### 2.5 SIO0 Interactive Shell Commands
 
 The SIO0 UART console (`115200 8N1`) provides an interactive debugging shell with full ANSI terminal escape sequence handling (`\e[A/B/C/D`, `\e[H`, `\e[F`, `\e[3~`, `\e[5~`, `\e[6~`):
@@ -558,7 +920,7 @@ The SIO0 UART console (`115200 8N1`) provides an interactive debugging shell wit
 | `type <text>` | Inject an entire text string sequentially into the active window. |
 | `pad <hex> [lx ly]` | Inject simulated DualShock 2 controller state. |
 | `sens [pct]` | Show or set the pointer's px-per-count scale (1..400%, 100 = verbatim). |
-| `maxstep [px]` | Show or set the pointer's cap in px per paint (0 = no cap). |
+| `maxstep [px]` | Show or set the pointer's cap in px per INPUT period -- the period is the [plane table's](#the-plane-table-normative) (0 = no cap). |
 | `ptrsrc [emu\|hw\|auto]` | Show, force, or re-detect which pointer source profile is live. |
 | `ptrstat <tag>` | Print and reset the counts the bus delivered since the last call. |
 | `ptrcal` | Loopback-calibrate the pointer path with synthetic reports; no mouse, no hand. |
@@ -609,7 +971,7 @@ Read the `vs previous window` row:
 - **`x` appreciably above `1.0x`** — the numbers are already cursor pixels,
   multiplied by speed by something outside this port. No constant can be right for
   both rows. The answer is **not** a cap: `dp_ptr_limit()` spends a bounded distance
-  per paint and abandons debt past `DP_PTR_LIMIT_DEBT` steps, which makes where the
+  per INPUT period and abandons debt past `DP_PTR_LIMIT_DEBT` steps, which makes where the
   cursor lands a function of hand *speed* rather than hand *distance* -- the same
   non-proportionality, moved. What this port does instead is take the ratio as
   evidence that the wrong source profile is live, and the gain belongs to the layer
@@ -818,8 +1180,10 @@ Two facts bound it without any hand protocol:
   render itself, which rebuilt every window for a change the size of a cursor; the
   byte-swap in `blit_backbuffer_to_ps2fb()`, which touched 480000 words for the same
   reason; and that 1.6 ms upload. So ~133 ms of the pass was CPU work in the first
-  two, and nothing in this tree ever writes CP0 `Config`, which means the EE's
-  caches are off and every one of those words is an uncached bus access.
+  two, and nothing in this tree writes the CP0 cache-control registers, which means the
+  EE's caches are off and every one of those words is an uncached bus access.  (That
+  premise is now an asserted image law rather than a reading of the sources, and the
+  byte-swap named above is gone -- §2.1.)
 
 `ptrstat` now prints the split, and `startx` prints the cold one on its own:
 
@@ -917,7 +1281,7 @@ confirmed, and therefore still a candidate.
 | PCSX2 `hidmouse` | one HID event per IN token; publishes byte 0 = 3 buttons + pad, then X, Y, wheel as three 8-bit signed fields; reports **the Mac cursor's own deltas**, not device counts | nothing. `PointerXScale` / `PointerYScale` exist in the **[repo-local ini](#running-with-pcsx2)** and in no v2.8.2 code | **proven from PCSX2 v2.8.2 source**: the callback is handed the raw `delta` (`InputManager.cpp:1398-1403`) and a `Type::Pointer` USB binding carries no scale factor (`:1043-1057`); `int_clamp` carries the `|127|` remainder (`hid.cpp:632-635`); motion is published once per emulated EE frame (`Counters.cpp:500`), so the wire ceiling is **~60 reports/s** |
 | OHCI frame | `HcFmInterval = 0x27782EDF` -> 11999 bit times at 12 Mbit/s = **1 ms**, and the periodic list is walked once per frame, so a device polls at 1/2/4/8/16/32 ms | `bInterval` at enumerate time | **proven**: the same word real PS2 firmware programs |
 | Real PS2 hardware | one OHCI interface shared with the IOP at IOP physical `0x1F801600`, **Full Speed + Low Speed only**, IOP interrupt 22, DMA structures confined to the IOP's reachable 2 MB; the host stack is an IOP-side module and the EE is a client of it over SIF | nothing in this port | spec-derived (secondary but well-corroborated); note that our probe reading that base only proves PCSX2 decodes it, and "the EE cannot poll it on retail hardware" is the open architectural risk |
-| This port | the live **source profile** (above) sets the starting gain and whether a curve runs at all; then `dp_ptr_scale()`'s 8.8 gain (`sens`), then `dp_ptr_limit()` px-per-paint (`maxstep`, off), then the screen borders | `ptrsrc`, `sens`, `maxstep` | **proven** by `ptrcal` |
+| This port | the live **source profile** (above) sets the starting gain and whether a curve runs at all; then `dp_ptr_scale()`'s 8.8 gain (`sens`), then `dp_ptr_limit()` px per **INPUT period** (`maxstep`, off; the period is the plane table's, scaled by the periods a pass actually owes), then the screen borders | `ptrsrc`, `sens`, `maxstep` | **proven** by `ptrcal` |
 
 Two rows in that table are worth dwelling on because they cut opposite ways. The
 frame interval is a **match** with real hardware -- the value our boot log measures
@@ -957,16 +1321,35 @@ make ps2
 make run-ps2
 
 # Automated verification suite:
-make test-ps2            # static laws on the linked image (42 tests)
+make test-ps2            # static laws on the linked image (54 tests)
 make test-ps2-softfloat  # the R5900 soft-float runtime, bit-exact vs the host FPU
 make test-gl-math        # the freestanding series branches, per-binade vs the host libm
 make test-xmb-atlas      # the shipped icon sheet == what gen_xmb_atlas.c computes (drift gate)
 make xmb-atlas           # regenerate src/apps/xmb_atlas.h after changing the geometry
 make test-xmb-render     # the real xmb.c on the host: atlas ink counts + PPM frames
+make test-xmb-render-tgl # the same xmb.c through backend_tinygl.c -- the PS2 rasterizer's own gate
 
 # Smoothness loop against explicit per-phase budgets (opens XMB in PCSX2):
 SMOOTH_APP=1 SMOOTH_FRAMES=3 bash scripts/ps2_smooth.sh
 ```
+
+The first rows that loop prints are the periods the guest installed, read off its own
+`[PLANE]` line, and the last two of them are distances rather than timings: a non-zero
+`plane_input_drift_us` or `plane_ui_drift_us` means the budgets underneath are pricing a
+clock the machine does not have, and a SKIP means the table was never installed -- which
+is a boot-order bug, not a missing measurement.  The three rows after them are the input
+plane's own evidence: `ee_ticks_per_us` is printed as `[INFO]` because the divisor is the
+machine's business rather than the port's, while `input_plane_short_us` and
+`ohci_frame_short_us` are judged at 0 -- periods the plane owed its boot window and did not
+deliver, and the same window short against the OHCI's own 1 ms frames.  A non-zero shortfall
+there says the plane is not running at the rate the table installed, which is a different
+fault from a wrong divisor and cannot be told apart in a tick count.  The rows after those
+judge the plane as a worker rather than as a clock: `plane_handover_miss` at 0 (a `LIVE` plane
+that never took the HID rings), `plane_dropped` at 0, `plane_held_max_us` against §10's 2 ms,
+`isr_overruns` at 0, and `plane_periods_collected` / `isr_wcet_ticks` as `[INFO]`.  See
+[The plane table](#the-plane-table-normative),
+[The measured microsecond](#the-measured-microsecond-normative) and
+[The plane as the producer of HID collection](#the-plane-as-the-producer-of-hid-collection-normative).
 
 Neither `make ps2` nor `make ps2-bench` rebuilds an object because a *flag* changed --
 dependency tracking only sees sources -- so changing `PS2_CC` needs `find src -name '*.ps2.o'
@@ -1097,7 +1480,7 @@ When running under PCSX2 (`make run-ps2`):
 |:---|:---|:---|
 | `make ps2` | Build PS2 ELF & Disc ISO | `btron-ps2.elf` and `btron-ps2.iso` |
 | `make run-ps2` | Launch Disc ISO in PCSX2 | Bootable CDVD execution (No `.elf` association) |
-| `make test-ps2` | Run PS2 automated test | 39/39 driver, ELF and ABI assertions |
+| `make test-ps2` | Run PS2 automated test | 54/54 driver, ELF, ABI and clock assertions |
 | `make mips` | Build MIPS ELF | `btron-mips.elf` |
 | `make run-mips` | Launch in QEMU Window | Interactive console & display on Malta |
 | `make test-mips` | Run MIPS automated test | Headless validation of all 8 kernel boot markers |

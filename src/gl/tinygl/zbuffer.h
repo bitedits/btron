@@ -17,20 +17,16 @@
 
 
 
-#define ZB_POINT_S_MIN ( (1<<ZB_POINT_S_FRAC_BITS) )
-#define ZB_POINT_S_MAX ( (1<<(1+TGL_FEATURE_TEXTURE_POW2+ZB_POINT_S_FRAC_BITS))-ZB_POINT_S_MIN )
-#define ZB_POINT_T_MIN ( (1<<ZB_POINT_T_FRAC_BITS) )
-#define ZB_POINT_T_MAX ( (1<<(1+TGL_FEATURE_TEXTURE_POW2+ZB_POINT_T_FRAC_BITS))-ZB_POINT_T_MIN )
-#define ZB_POINT_S_VALUE (ZB_POINT_S_FRAC_BITS + 4)
-#define ZB_POINT_T_VALUE (ZB_POINT_T_FRAC_BITS - 4)
-#define ZB_S_MASK ((TGL_FEATURE_TEXTURE_DIM-1)<<(ZB_POINT_S_FRAC_BITS+1))
-#define ZB_T_MASK ((TGL_FEATURE_TEXTURE_DIM-1)<<(ZB_POINT_T_FRAC_BITS+1))
-
-#if ZB_POINT_T_FRAC_BITS == (ZB_POINT_S_FRAC_BITS + TGL_FEATURE_TEXTURE_POW2)
-#define ST_TO_TEXTURE_BYTE_OFFSET(s,t) ( ((s & ZB_S_MASK) | (t & ZB_T_MASK)) >> (ZB_POINT_S_VALUE-PSZSH))
-#else
-#define ST_TO_TEXTURE_BYTE_OFFSET(s,t) ( ((s & ZB_S_MASK)>>(ZB_POINT_S_VALUE-PSZSH)) | ((t & ZB_T_MASK)>>(ZB_POINT_T_VALUE-PSZSH))  )
-#endif
+/*
+ * The sampler's index fields.  Where a texture's texels sit is its own business
+ * (GLImage's smask/tmask/tshift, computed at upload); what is fixed here is the
+ * arithmetic layout -- the low (ZB_POINT_*_FRAC_BITS + 1) bits of s or t are one
+ * texel index, and a PIXEL is (1 << LOG2_PSZB) bytes.  A texture of row stride
+ * (1 << rowpow) texels therefore puts t's field at
+ * ZB_TEX_T_SHIFT_BASE - rowpow bits.
+ */
+#define ZB_TEX_S_SHIFT (ZB_POINT_S_FRAC_BITS + 1 - LOG2_PSZB)
+#define ZB_TEX_T_SHIFT_BASE (ZB_POINT_T_FRAC_BITS + 1 - LOG2_PSZB)
 
 /*The corrected mult mask prevents a bug relating to color interp. it's also why the color bit depth is so damn high.*/
 #define COLOR_MULT_MASK (0xff0000)
@@ -39,9 +35,45 @@
 #define COLOR_MIN_MULT (0x00ffff)
 #define COLOR_SHIFT		16
 
+/*
+ * The PIXEL domain.
+ *
+ * `zb->pbuf` is not always a private buffer: the EGL surface hands TinyGL the window GDEV's
+ * pixel array, so every span store below lands in the very memory the display controller
+ * scans out.  On the PS2 that controller is the GS in CT32 mode, which wants memory bytes
+ * R,G,B,A, while a BTRON COLOR is 0xAARRGGBB, i.e. bytes B,G,R,A.  The two orders differ by
+ * exactly one thing -- the R and B fields exchanged, an involution -- and no GS register
+ * permutes channels, so the exchange has to be inside the word TinyGL writes.
+ *
+ * Where to put it is a cost question.  Wrapping each store and each destination read costs
+ * about seven more integer ops on every blended fragment of a gradient, on a CPU with no
+ * floating point at all.  Deciding the field order once, here, costs nothing, because every
+ * pixel in this library is built by RGB_TO_PIXEL and taken apart by the GET_* macros, and
+ * those macros' arguments are channel values left-aligned at bit 16 -- a domain the rest of
+ * the code never looks inside.  So the domain is canvas order on the PS2.
+ *
+ * Four facts make that sound rather than lucky, and a fifth site depends on them:
+ *   - alpha is byte 3 in both orders: TGL_TEX_ALPHA, TGL_ALPHA_BYTE and the top-byte sets
+ *     need no second definition;
+ *   - green is byte 1 in both: only the R and B arms below change;
+ *   - a texel's source is a byte array, so it crosses the boundary once per texel at upload
+ *     and is converted through these same macros (image_util.c);
+ *   - a PIXEL-to-PIXEL copy (glCopyTexImage2D, the pbuf-to-texture path) never crosses it;
+ *   - the colour-key sentinels are 0x00ff00ff, magenta, which is a fixed point of the swap.
+ */
+#if defined(BTRON_PS2_TARGET)
+/* red lands in the low byte, blue at bits 16-23 */
+#define TGL_RED_FIELD_SHIFT 0
+#define TGL_BLUE_FIELD_SHIFT 16
+#define COLOR_R_GET32(r) (((r) >> 16) & 0xff)
+#define COLOR_B_GET32(b) ((b) & 0xff0000)
+#else
+#define TGL_RED_FIELD_SHIFT 16
+#define TGL_BLUE_FIELD_SHIFT 0
 #define COLOR_R_GET32(r) ((r) & 0xff0000)
+#define COLOR_B_GET32(b) ((b >> 16) & 0xff)
+#endif
 #define COLOR_G_GET32(g) ((g>>8) & 0xff00)
-#define COLOR_B_GET32(b) ((b >>16)&0xff)
 
 #define COLOR_R_GET16(r) ((r>>8) & 0xF800)
 #define COLOR_G_GET16(g) ((((g)) >> 13) & 0x07E0)
@@ -55,11 +87,21 @@
 	( COLOR_R_GET16(r) | COLOR_G_GET16(g) | COLOR_B_GET16(b)  )
 #endif
 /*This is how textures are sampled. if you want to do some sort of fancy texture filtering,*/
-/*you do it here.*/
+/*you do it here.  `tsmask`, `ttmask` and `ttshift` are the current texture's fields, bound*/
+/*by DRAW_INIT() from the GLImage that ZB_setTexture() was given.*/
 #define TEXTURE_SAMPLE(texture, s, t)														\
  (*(PIXEL*)( (GLbyte*)texture + 															\
- ST_TO_TEXTURE_BYTE_OFFSET(s,t) 								\
+   ( (((s) & tsmask) >> ZB_TEX_S_SHIFT) | (((t) & ttmask) >> ttshift) )					\
  ))
+/*
+ * Whether a fragment may update the depth plane.  GL 1.1 4.4.1: with GL_DEPTH_TEST off
+ * the depth plane is not enabled at all, so no update occurs -- and this is the rule the
+ * 2D interface lives by.  Reading zb->depth_write alone instead leaves every one of those
+ * stores in the span loop, computing z >> 14 and writing a 16-bit value nothing will ever
+ * read back, at a cost of one of the roughly sixty instructions a blended pixel is worth.
+ */
+#define ZB_DEPTH_WRITE(zb) ((zb)->depth_test ? (zb)->depth_write : 0)
+
 /* display modes */
 #define ZB_MODE_5R6G5B  1  /* true color 16 bits */
 #define ZB_MODE_INDEX   2  /* color index 8 bits */
@@ -78,16 +120,30 @@
 
 /* 32 bit mode */
 
+/*
+ * The read side of the domain declared above: the same R/B exchange, and green untouched.
+ * Each arm keeps its own instruction count -- only which of the pair carries the shift
+ * moves -- so a span loop on the PS2 pays nothing for writing canvas order.
+ */
+#if defined(BTRON_PS2_TARGET)
+#define GET_REDDER(p) ((p & 0xff) << 16)
+#define GET_BLUEER(p) ((p & 0xff0000))
+#define GET_RED(p) (p & 0xff)
+#define GET_BLUE(p) ((p >> 16) & 0xff)
+#else
 #define GET_REDDER(p) ((p & 0xff0000))
-#define GET_GREENER(p) ((p & 0xff00)<<8)
-#define GET_BLUEER(p) ((p & 0xff)<<16)
+#define GET_BLUEER(p) ((p & 0xff) << 16)
+#define GET_RED(p) ((p >> 16) & 0xff)
+#define GET_BLUE(p) (p & 0xff)
+#endif
+#define GET_GREENER(p) ((p & 0xff00) << 8)
 /*These never change, DO NOT CHANGE THESE BASED ON COLOR INTERP BIT DEPTH*/
-#define GET_RED(p) ((p>>16)&0xff)
 #define GET_GREEN(p) ((p>>8)&0xff)
-#define GET_BLUE(p) (p&0xff)
 typedef GLuint PIXEL;
 #define PSZB 4
-#define PSZSH 5
+#define LOG2_PSZB 2
+/* A 32-bit PIXEL carries the texel's alpha in its top byte. */
+#define TGL_TEX_ALPHA(t) (((t) >> 24) & 0xff)
 
 #elif TGL_FEATURE_RENDER_BITS == 16
 
@@ -103,7 +159,9 @@ typedef GLuint PIXEL;
 
 typedef GLushort PIXEL;
 #define PSZB 2 
-#define PSZSH 4 
+#define LOG2_PSZB 1 
+/* A 16-bit PIXEL has no alpha channel: 5R6G5B textures are opaque. */
+#define TGL_TEX_ALPHA(t) 255
 
 
 #else
@@ -123,11 +181,28 @@ typedef GLushort PIXEL;
 
 
 
-#define TGL_NO_BLEND_FUNC(source, dest){dest = source;}
-#define TGL_NO_BLEND_FUNC_RGB(rr, gg, bb, dest){dest = RGB_TO_PIXEL(rr,gg,bb);}
+#define TGL_NO_BLEND_FUNC(source, srcalpha, dest){dest = source;}
+#define TGL_NO_BLEND_FUNC_RGB(rr, gg, bb, srcalpha, dest){dest = RGB_TO_PIXEL(rr,gg,bb);}
 
 #if TGL_FEATURE_BLEND == 1
-#define TGL_BLEND_VARS GLuint zbblendeq = zb->blendeq; GLuint sfactor = zb->sfactor; GLuint dfactor = zb->dfactor;
+/*
+ * The three blend parameters cannot change while a primitive is being filled, so they are
+ * read once per primitive here -- and the one combination every in-tree application asks
+ * for, GL_FUNC_ADD with GL_SRC_ALPHA / GL_ONE_MINUS_SRC_ALPHA, is recognised once too.
+ *
+ * That recognition is the whole point of `tglblend_alpha`.  Left to itself the compiler
+ * puts the two factor switches and the equation switch inside the span loop: the object
+ * code for a blended fill is an indirect `jr` through a jump table for every fragment,
+ * plus a reload of the three parameters from stack slots the loop keeps spilling to.  On a
+ * soft-float R5900 that table branch, not the arithmetic, is what a full-canvas gradient
+ * is made of.  The recognised case therefore has its own branch-free spelling below, and
+ * every other combination still runs the general one.
+ */
+#define TGL_BLEND_VARS                                                                                                                                           \
+	GLuint zbblendeq = zb->blendeq;                                                                                                                              \
+	GLuint sfactor = zb->sfactor;                                                                                                                                \
+	GLuint dfactor = zb->dfactor;                                                                                                                                \
+	const GLuint tglblend_alpha = (zbblendeq == GL_FUNC_ADD && sfactor == GL_SRC_ALPHA && dfactor == GL_ONE_MINUS_SRC_ALPHA);
 
 /*SORCERY to achieve 32 bit signed integer clamping*/
 
@@ -159,87 +234,141 @@ typedef GLushort PIXEL;
 			  																			\
 		}
 
+/*
+ * One GL blend factor, applied to the channels (cr,cg,cb).  `scr/scg/scb` and
+ * `dcr/dcg/dcb` are the source and destination colours this factor may read, and `sa`
+ * is the source alpha byte, so one macro serves both switches: the source side passes
+ * its own channels as the source colour and the destination's as the destination, and
+ * the destination side swaps them.
+ *
+ * Integer only, and that is the point: every channel here is an 8-bit value held at
+ * bit 16, exactly as GET_REDDER produces it, so a factor is one byte extract, one
+ * multiply and one shift back.  (0xff0000 * 255) is the largest product and it still
+ * fits a GLuint, so nothing here costs a float or a libm call on a -msoft-float
+ * target.  The alpha cases are the only ones that read `sa`, and the GL_ONE/default
+ * arm does nothing at all, so a blend that ignores alpha costs what it always cost.
+ * GL_DST_ALPHA has nothing to read -- the frame buffer carries no alpha -- and falls
+ * to the default.
+ */
+#define TGL_BLEND_FACTOR(which, cr, cg, cb, scr, scg, scb, dcr, dcg, dcb, sa)			\
+		switch(which){																	\
+			case GL_ONE:																\
+			default:																	\
+			break;																		\
+			case GL_SRC_ALPHA:															\
+			cr=(cr*sa)>>8; cg=(cg*sa)>>8; cb=(cb*sa)>>8; break;							\
+			case GL_ONE_MINUS_SRC_ALPHA:												\
+			cr=(cr*(255-sa))>>8; cg=(cg*(255-sa))>>8; cb=(cb*(255-sa))>>8; break;		\
+			case GL_SRC_COLOR:															\
+			cr=(cr*((scr>>16)&0xff))>>8; cg=(cg*((scg>>16)&0xff))>>8;					\
+			cb=(cb*((scb>>16)&0xff))>>8; break;											\
+			case GL_ONE_MINUS_SRC_COLOR:												\
+			cr=(cr*(255-((scr>>16)&0xff)))>>8; cg=(cg*(255-((scg>>16)&0xff)))>>8;		\
+			cb=(cb*(255-((scb>>16)&0xff)))>>8; break;									\
+			case GL_DST_COLOR:															\
+			cr=(cr*((dcr>>16)&0xff))>>8; cg=(cg*((dcg>>16)&0xff))>>8;					\
+			cb=(cb*((dcb>>16)&0xff))>>8; break;											\
+			case GL_ONE_MINUS_DST_COLOR:												\
+			cr=(cr*(255-((dcr>>16)&0xff)))>>8; cg=(cg*(255-((dcg>>16)&0xff)))>>8;		\
+			cb=(cb*(255-((dcb>>16)&0xff)))>>8; break;									\
+			case GL_ZERO:																\
+			cr=0;cg=0;cb=0; break;														\
+		}
 
+/* The interpolated vertex alpha is left-aligned like r/g/b; a PIXEL's alpha is its top
+ * byte, and GL's modulate multiplies the two. */
+#define TGL_ALPHA_BYTE(a) (((a) >> 16) & 0xff)
 
+/*
+ * GL_SRC_ALPHA / GL_ONE_MINUS_SRC_ALPHA / GL_FUNC_ADD written out with no switch, and
+ * with no compare either.
+ *
+ * Every term is the same fixed-point quantity the general path computes -- a channel held
+ * left-aligned at bit 16, scaled by an alpha byte and shifted back by eight, the two
+ * terms summed -- and the byte the general path leaves in that channel after its clamp
+ * and RGB_TO_PIXEL is exactly min(sum >> 16, 255), so the pixels come out bit-identical.
+ *
+ * The clamp is written as arithmetic rather than `if (v > COLOR_MASK) v = COLOR_MASK`
+ * because of where it sits: in a gradient fill the sum crosses that boundary at a
+ * different column in every row, so three such compares are three branch predictions the
+ * span loop loses on average, and on the Emotion Engine a lost prediction costs more than
+ * the subtract, shift and and that select the same minimum here.
+ *
+ * What is left is six multiplies -- the irreducible part of blending two colours.
+ *
+ * This is the one place in the library that packs a pixel without going through
+ * RGB_TO_PIXEL, because the clamp above already produced each channel as a plain byte and
+ * the field order is the only thing left to do.  So it is the one place that has to name
+ * the fields: TGL_*_FIELD_SHIFT is where the domain decision reaches.
+ */
+#define TGL_BLEND_ALPHA_ADD(sr, sg, sb, dr, dg, db, sa, dest)                                                                                    \
+	GLuint tb_ia_ = 255 - (sa);                                                                                                                     \
+	GLint tb_d_;                                                                                                                                    \
+	GLuint tb_v_;                                                                                                                                   \
+	sr = (sr * (sa)) >> 8;                                                                                                                       \
+	sg = (sg * (sa)) >> 8;                                                                                                                       \
+	sb = (sb * (sa)) >> 8;                                                                                                                       \
+	tb_d_ = (GLint)((sr + ((dr * tb_ia_) >> 8)) >> 16) - 255;                                                                                          \
+	tb_v_ = (GLuint)(255 + (tb_d_ & (tb_d_ >> 31))) << TGL_RED_FIELD_SHIFT;                                                                                \
+	tb_d_ = (GLint)((sg + ((dg * tb_ia_) >> 8)) >> 16) - 255;                                                                                          \
+	tb_v_ |= (GLuint)(255 + (tb_d_ & (tb_d_ >> 31))) << 8;                                                                                                \
+	tb_d_ = (GLint)((sb + ((db * tb_ia_) >> 8)) >> 16) - 255;                                                                                          \
+	tb_v_ |= (GLuint)(255 + (tb_d_ & (tb_d_ >> 31))) << TGL_BLUE_FIELD_SHIFT;                                                                              \
+	dest = tb_v_;
 
-#define TGL_BLEND_FUNC(source, dest){													\
+/*
+ * NOTE: in the general path below, the source factor is applied first, so a destination
+ * factor that reads the source colour reads it already multiplied by its own factor.  No
+ * combination the in-tree applications use depends on this.
+ */
+#define TGL_BLEND_FUNC(source, srcalpha, dest){											\
+	if (tglblend_alpha){															\
+		GLuint sa_ = (srcalpha);															\
+		GLuint s_ = (source);																\
+		GLuint d_ = (dest);																\
+		GLuint sr_ = GET_REDDER(s_), sg_ = GET_GREENER(s_), sb_ = GET_BLUEER(s_);			\
+		GLuint dr_ = GET_REDDER(d_), dg_ = GET_GREENER(d_), db_ = GET_BLUEER(d_);			\
+		TGL_BLEND_ALPHA_ADD(sr_, sg_, sb_, dr_, dg_, db_, sa_, dest)						\
+	} else {																				\
 	{																					\
 	GLuint sr, sg, sb, dr, dg, db;														\
-	{	GLuint temp = source;																\
-	sr = GET_REDDER(temp); sg = GET_GREENER(temp); sb = GET_BLUEER(temp);						\
-	temp = dest;																			\
-	dr = GET_REDDER(temp); dg = GET_GREENER(temp); db = GET_BLUEER(temp);}						\
-		/*printf("\nShould never reach this point!");*/									\
-		switch(sfactor){															\
-			case GL_ONE:																\
-			default:																	\
-			break;																		\
-			case GL_ONE_MINUS_SRC_COLOR:												\
-			sr = ~sr & COLOR_MASK;															\
-			sg = ~sg & COLOR_MASK;															\
-			sb = ~sb & COLOR_MASK;															\
-			break;																		\
-			case GL_ZERO:																\
-			sr=0;sg=0;sb=0;break;														\
-			break;																		\
-		}																				\
-		switch(dfactor){															\
-				case GL_ONE:															\
-				default:																\
-				break;																	\
-				case GL_ONE_MINUS_DST_COLOR:											\
-				dr = ~dr & COLOR_MASK;														\
-				dg = ~dg & COLOR_MASK;														\
-				db = ~db & COLOR_MASK;														\
-				break;																	\
-				case GL_ZERO:															\
-				dr=0;dg=0;db=0;break;													\
-				break;																	\
-			}																			\
+	GLuint sa = (srcalpha);																\
+	{	GLuint temp = source;															\
+	sr = GET_REDDER(temp); sg = GET_GREENER(temp); sb = GET_BLUEER(temp);				\
+	temp = dest;																		\
+	dr = GET_REDDER(temp); dg = GET_GREENER(temp); db = GET_BLUEER(temp);}				\
+		TGL_BLEND_FACTOR(sfactor, sr, sg, sb, sr, sg, sb, dr, dg, db, sa)				\
+		TGL_BLEND_FACTOR(dfactor, dr, dg, db, sr, sg, sb, dr, dg, db, sa)				\
 		TGL_BLEND_SWITCH_CASE(sr,sg,sb,dr,dg,db,dest)									\
 	}																					\
-} 
+	}																					\
+}
 
-#define TGL_BLEND_FUNC_RGB(rr, gg, bb, dest){											\
+#define TGL_BLEND_FUNC_RGB(rr, gg, bb, srcalpha, dest){									\
+	if (tglblend_alpha){															\
+		GLuint sa_ = (srcalpha);															\
+		GLuint d_ = (dest);																\
+		GLuint sr_ = (rr) & COLOR_MASK, sg_ = (gg) & COLOR_MASK, sb_ = (bb) & COLOR_MASK;	\
+		GLuint dr_ = GET_REDDER(d_), dg_ = GET_GREENER(d_), db_ = GET_BLUEER(d_);			\
+		TGL_BLEND_ALPHA_ADD(sr_, sg_, sb_, dr_, dg_, db_, sa_, dest)						\
+	} else {																				\
 	{																					\
-		GLint sr = rr & COLOR_MASK, sg = gg & COLOR_MASK, sb = bb & COLOR_MASK, dr, dg, db;			\
-		{GLuint temp = dest;																\
-		dr = GET_REDDER(temp); dg = GET_GREENER(temp); db = GET_BLUEER(temp);}					\
-	/*printf("\nShould never reach this point!");*/										\
-		switch(sfactor){																\
-			case GL_ONE:																\
-			default:																	\
-			break;																		\
-			case GL_ONE_MINUS_SRC_COLOR:												\
-			sr = ~sr & COLOR_MASK;															\
-			sg = ~sg & COLOR_MASK;															\
-			sb = ~sb & COLOR_MASK;															\
-			break;																		\
-			case GL_ZERO:																\
-			sr=0;sg=0;sb=0;break;														\
-			break;																		\
-		}																				\
-		switch(dfactor){															\
-				case GL_ONE:															\
-				default:																\
-				break;																	\
-				case GL_ONE_MINUS_DST_COLOR:											\
-				dr = ~dr & COLOR_MASK;														\
-				dg = ~dg & COLOR_MASK;														\
-				db = ~db & COLOR_MASK;														\
-				break;																	\
-				case GL_ZERO:															\
-				dr=0;dg=0;db=0;break;													\
-				break;																	\
-		}																				\
+		GLuint sr = rr & COLOR_MASK, sg = gg & COLOR_MASK, sb = bb & COLOR_MASK, dr, dg, db;	\
+		GLuint sa = (srcalpha);															\
+		{GLuint temp = dest;															\
+		dr = GET_REDDER(temp); dg = GET_GREENER(temp); db = GET_BLUEER(temp);}			\
+		TGL_BLEND_FACTOR(sfactor, sr, sg, sb, sr, sg, sb, dr, dg, db, sa)				\
+		TGL_BLEND_FACTOR(dfactor, dr, dg, db, sr, sg, sb, dr, dg, db, sa)				\
 		TGL_BLEND_SWITCH_CASE(sr,sg,sb,dr,dg,db,dest)									\
 	}																					\
-} 
+	}																					\
+}
 
 #else
 #define TGL_BLEND_VARS /* a comment */
-#define TGL_BLEND_FUNC(source, dest){dest = source;}
-#define TGL_BLEND_FUNC_RGB(rr, gg, bb, dest){dest = RGB_TO_PIXEL(rr,gg,bb);}
+#define TGL_ALPHA_BYTE(a) (((a) >> 16) & 0xff)
+#define TGL_BLEND_FUNC(source, srcalpha, dest){dest = source;}
+#define TGL_BLEND_FUNC_RGB(rr, gg, bb, srcalpha, dest){dest = RGB_TO_PIXEL(rr,gg,bb);}
 #endif
 
 
@@ -250,6 +379,10 @@ typedef struct {
     GLushort *zbuf;
     PIXEL *pbuf;
     PIXEL *current_texture;
+    /* The current texture's sampler fields, bound by ZB_setTexture() from its GLImage
+     * so the span loop takes them as given instead of finding out per texel. */
+    GLuint current_smask, current_tmask;
+    GLint current_tshift;
     
 
 	/* point size*/
@@ -279,9 +412,13 @@ typedef struct {
   GLint x,y,z;     /* integer coordinates in the zbuffer */
   GLint s,t;       /* coordinates for the mapping */
   GLint r,g,b;     /* color indexes */
+  GLint a;         /* alpha, left-aligned like the colour channels */
   
   GLfloat sz,tz;   /* temporary coordinates for mapping */
 } ZBufferPoint;
+
+/* zgl.h owns GLImage; the rasterizer only ever needs to be handed one. */
+struct GLImage;
 
 /* zbuffer.c */
 
@@ -317,7 +454,8 @@ void ZB_line_z(ZBuffer * zb, ZBufferPoint * p1, ZBufferPoint * p2);
 
 /* ztriangle.c */
 
-void ZB_setTexture(ZBuffer *zb, PIXEL *texture);
+/* Implemented in texture.c, where the GLImage it reads is defined. */
+void ZB_setTexture(ZBuffer *zb, const struct GLImage *im);
 
 void ZB_fillTriangleFlat(ZBuffer *zb,
 		 ZBufferPoint *p1,ZBufferPoint *p2,ZBufferPoint *p3);

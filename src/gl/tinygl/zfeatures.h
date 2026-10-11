@@ -49,6 +49,15 @@ the maximum number of vertices in a polygon is defined in zgl.h
 /*The width of textures as a power of 2. The default is 8, or 256x256 textures.*/
 #define TGL_FEATURE_TEXTURE_POW2	8
 #define TGL_FEATURE_TEXTURE_DIM		(1<<TGL_FEATURE_TEXTURE_POW2)
+/*
+An upload keeps its own extent now (see GLImage): nothing is resampled. This is the
+largest extent an axis may have, and because the sampler wraps by masking, a texture
+is allocated rounded up to the next power of two on each axis -- so an upload of
+384x384 texels owns a 512x512 plane, of which it fills 384x384, and the padding is
+transparent black.
+*/
+#define TGL_FEATURE_TEXTURE_MAX_POW2	9
+#define TGL_FEATURE_TEXTURE_MAX_DIM		(1<<TGL_FEATURE_TEXTURE_MAX_POW2)
 
 /*A stipple pattern is 128 bytes in size.*/
 #define TGL_POLYGON_STIPPLE_BYTES 128

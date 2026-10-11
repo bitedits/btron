@@ -333,9 +333,9 @@ void draw_baremetal_cursor_raw(volatile uint32_t *pixels, H mx, H my, H w, H h) 
             if (px < 0 || px >= w || py < 0 || py >= h) continue;
             uint16_t bit = (0x8000 >> x);
             if (cur_mask[y] & bit) {
-                pixels[py * w + px] = COLOR_WHITE;
+                pixels[py * w + px] = BTRON_PIXEL_FB(COLOR_WHITE);
             } else if (cur_outline[y] & bit) {
-                pixels[py * w + px] = COLOR_BLACK;
+                pixels[py * w + px] = BTRON_PIXEL_FB(COLOR_BLACK);
             }
         }
     }

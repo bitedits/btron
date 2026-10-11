@@ -119,8 +119,8 @@ static inline double cos(double x) { double s, c; btron_sincos(x, &s, &c); retur
  *
  * Each keeps the same shape as its double relative -- fold, then one polynomial -- and
  * hands back the double function for the inputs where a float has no business being
- * exact: zero, subnormal, infinite and NaN for sqrtf, and anything large enough that
- * the reduction's integer step stops meaning one thing for the trig pair. */
+ * exact: zero, subnormal, infinite and NaN for sqrtf, and infinity, NaN and an argument
+ * so many turns round that no reduction of it means anything for the trig pair. */
 static inline float sqrtf(float x) {
     if (x == 0.0f) return x;                        /* +-0 keeps its own sign, as libm */
     if (!(x > 0.0f)) return (x - x) / (x - x);      /* negative and NaN both answer NaN */
@@ -183,20 +183,56 @@ static inline void btron_sincosf(float x, float *s, float *c) {
     if (neg_sin)  *s = -*s;
 }
 
-/* The float reduction above subtracts a whole number of turns as a float, so its error
- * is the rounding of that product, which grows with |x|: inside 4*pi the turn count is
- * 0, 1 or 2 and, with the constant's residue carried, the fold costs less than a float's
- * last place; at x = 1e7 the same three lines are off by half a radian.  So the guard is
- * 4*pi and not "all finite values", and past it the double relative -- whose fold goes
- * through a long long -- answers instead. */
+/* Past the float fold's range the turn count is taken in double instead: one
+ * reciprocal multiply, one nearest-integer conversion, two double multiplies and two
+ * subtracts -- against the thirteen software double divisions (and the other thirty-nine
+ * double calls) the series costs when the argument is handed to the double relative.  The
+ * XMB's ribbon is the consumer that lives here: it calls cosf(gz + t/10 + gx) per lit
+ * pixel and its t advances for the lifetime of the boot, so the arguments leave the fold's
+ * range and never come back.
+ *
+ * The nearest-integer quotient keeps |r| at or below half a turn, so the residue that
+ * btron_sincosf would have subtracted itself is already gone and the fold inside it
+ * costs nothing.  pi2's own two-part form travels with the turn count, as in the float
+ * fold: double(2*pi) sits 2.4493e-16 below 2*pi, and at three hundred million turns
+ * that gap is 8e-8 of angle -- a float's last place near 1.0, which is the precision
+ * this whole path is trying to keep. */
+static inline void btron_sincosf_far(float x, float *s, float *c) {
+    const double pi2 = 6.28318530717958647693;
+    const double pi2_lo = 2.44929359829470641e-16;
+    const double d = x;
+    /* Multiply by the reciprocal rather than divide by 2*pi: on a -msoft-float target a
+     * division is the most expensive thing in the file.  The constant is good to 1e-17
+     * relative, so the quotient can only land on the wrong integer within half a
+     * turn's width of an exact half -- and one turn off is still an angle btron_sincosf
+     * folds correctly, at the float fold's own accuracy. */
+    const double q = d * 0.15915494309189533577;
+    const long long kk = (long long)(q + (q < 0.0 ? -0.5 : 0.5));
+    const double dk = (double)kk;
+    btron_sincosf((float)(d - dk * pi2 - dk * pi2_lo), s, c);
+}
+
+/* Three tiers, because the three answers cost very different things.  Inside 4*pi the
+ * float fold's error is less than a float's last place and the polynomial runs on its
+ * own: the turn count is 0, 1 or 2 and each product is exact where it matters.  From
+ * there to 2^31 the fold moves to double (above) and the polynomial stays in float.
+ * The bound is the fold's own: its error is half an ulp of the turn product, which at
+ * 2^31 is 1.2e-7 -- still worth having -- and past it the angle a float hands back is
+ * coarser than any reduction of it.  Only infinity and NaN go further, to the double
+ * relative, which answers NaN for both; the long long the double fold rounds through
+ * would not survive the magnitudes in between anyway. */
 static inline float sinf(float x) {
-    if (!(x > -12.5663706f && x < 12.5663706f)) return (float)sin((double)x);   /* also inf, NaN */
-    float s, c; btron_sincosf(x, &s, &c); return s;
+    float s, c;
+    if (x > -12.5663706f && x < 12.5663706f) { btron_sincosf(x, &s, &c); return s; }
+    if (x > -2147483648.0f && x < 2147483648.0f) { btron_sincosf_far(x, &s, &c); return s; }
+    return (float)sin((double)x);
 }
 
 static inline float cosf(float x) {
-    if (!(x > -12.5663706f && x < 12.5663706f)) return (float)cos((double)x);
-    float s, c; btron_sincosf(x, &s, &c); return c;
+    float s, c;
+    if (x > -12.5663706f && x < 12.5663706f) { btron_sincosf(x, &s, &c); return c; }
+    if (x > -2147483648.0f && x < 2147483648.0f) { btron_sincosf_far(x, &s, &c); return c; }
+    return (float)cos((double)x);
 }
 
 /* Exact, and without asking the FPU anything: the exponent field says how many

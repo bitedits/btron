@@ -450,10 +450,14 @@ static void paint_draw_image(PaintViewer *pv, GDEV *dev) {
             if (sx >= pv->img_w) sx = pv->img_w - 1;
             const UB *p = src_row + (size_t)sx * 4;
             if (p[3] == 0) continue;   /* transparent: show canvas */
+            /* `p` is an image's own RGBA byte array, so its channels are plain bytes;
+             * `row[dx]` is a canvas word, which is not in COLOR order on the PS2.  Both
+             * sides of that line of reasoning get BTRON_PIXEL_FB, and on a hosted build
+             * the macro is the identity, so nothing here changes. */
             if (p[3] == 255) {
-                row[dx] = 0xFF000000 | ((COLOR)p[0] << 16) | ((COLOR)p[1] << 8) | (COLOR)p[2];
+                row[dx] = BTRON_PIXEL_FB(0xFF000000 | ((COLOR)p[0] << 16) | ((COLOR)p[1] << 8) | (COLOR)p[2]);
             } else {
-                COLOR bg = row[dx];
+                COLOR bg = BTRON_PIXEL_FB(row[dx]);
                 UB bg_r = (bg >> 16) & 0xFF;
                 UB bg_g = (bg >> 8) & 0xFF;
                 UB bg_b = bg & 0xFF;
@@ -461,7 +465,7 @@ static void paint_draw_image(PaintViewer *pv, GDEV *dev) {
                 UB r = (UB)((p[0] * a + bg_r * (255 - a)) / 255);
                 UB g = (UB)((p[1] * a + bg_g * (255 - a)) / 255);
                 UB b = (UB)((p[2] * a + bg_b * (255 - a)) / 255);
-                row[dx] = 0xFF000000 | ((COLOR)r << 16) | ((COLOR)g << 8) | (COLOR)b;
+                row[dx] = BTRON_PIXEL_FB(0xFF000000 | ((COLOR)r << 16) | ((COLOR)g << 8) | (COLOR)b);
             }
         }
     }

@@ -75,6 +75,42 @@ STRICT="${STRICT:-0}"
 # same number, decided the other way" is all this machine buys, and they are both
 # satisfiable -- and both met.
 BUDGETS=(
+    # The machine's own periods, as the plane table the core installs at boot printed
+    # them (doc/md/PS2.md, "The plane table").  They head the list because every budget
+    # below is priced against them: draw_us is one UI period, and the pointer's per-pass
+    # step is a whole number of INPUT periods.  A non-zero drift means the table and the
+    # budgets disagree, which would make the ratios below measurements of the wrong
+    # clock; a SKIP means the table was never installed, which is a boot-order bug.
+    "plane_input_us:info:installed INPUT period the pointer's step is counted in"
+    "plane_ui_us:info:installed UI period, of which draw_us is one frame"
+    "plane_panel_us:info:the system panel's own refresh period"
+    "plane_converge_us:info:the whole-canvas convergence period"
+    "plane_slices:info:INPUT periods one pass may spend, at most (one 60 Hz frame)"
+    "plane_input_drift_us:0:installed INPUT period vs the OHCI frame's 1 ms (target: 0)"
+    "plane_ui_drift_us:0:installed UI period vs the 60 Hz these budgets assume (target: 0)"
+    # The plane's clock and the unit it makes every number above legible.  Recorded first
+    # because it is the premise: the divisor is what turns the guest's tick counts into the
+    # microseconds these budgets are written in, and the two shortfall rows are the plane
+    # and the bus's own frame counter agreeing with that unit rather than with each other.
+    "ee_ticks_per_us:info:Count ticks per machine microsecond, measured by the INPUT plane at boot"
+    "input_plane_short_us:0:INPUT periods the plane owed its boot window and did not deliver (target: 0)"
+    "ohci_frame_short_us:0:the same window short against the OHCI's own 1 ms frames (target: 0)"
+    # The plane as the thing that services the HID rings, rather than a clock that exists.
+    # `plane_handover_miss` is the premise the rows under it are read from: 0 means the rings
+    # belong to the handler and a pass only delivers what the handler collected, 1 means this
+    # machine reached its LIVE verdict without the rings ever transferring and the pass is
+    # still polling the bus -- a different port, and one where the rows below can only read
+    # zero.  A DEAD plane never gets here, so no value is emitted and the gate SKIPs.  The
+    # periods row is the one that proves the collection runs with nobody moving a mouse: a
+    # report needs motion, a period needs only the clock.
+    "plane_handover_miss:0:a LIVE plane that did not take the HID rings from the pass (target: 0)"
+    "plane_periods_collected:info:handler entries that reached the HID collector, since the handover"
+    "plane_reports_collected:info:reports the input plane took off the bus (0 with no hand on the mouse is normal)"
+    "plane_reports_in_pass:info:reports a pass collected from the rings itself -- must not grow once the plane owns them"
+    "plane_dropped:0:HID reports the plane collected that no pass drained in time (target: 0)"
+    "plane_held_max_us:2000:longest a report waited between the bus and the pass, against ASYNC.txt §10's 2 ms pointer gap"
+    "isr_wcet_ticks:info:the handler's worst period, in Count ticks, with the HID collection inside it"
+    "isr_overruns:0:periods where the handler spent more than ASYNC.txt §3.2's 50 us budget (target: 0)"
     "fpu_disagree:info:COP1 vs bit engine: assertions that disagreed (of ~4.3k)"
     "fpu_worst_ulp:info:largest gap between the two engines, in steps"
     "fpu_clean_bad:info:disagreements on ordinary operands (see the cause rows)"
@@ -225,6 +261,28 @@ re_fpu_op='\[FPU\] op +([a-zA-Z0-9./_-]+) +clean=([0-9]+) bad=([0-9]+) +special=
 re_fpu_gap='\[FPU\] clean gap 1ulp=([0-9]+) 2ulp=([0-9]+) wide=([0-9]+) sign=([0-9]+) small=([0-9]+) large=([0-9]+)'
 re_fpu_shape='\[FPU\] shape daz=([0-9]+) ftz=([0-9]+) nonfinite=([0-9]+) inexact=([0-9]+) other=([0-9]+)'
 re_fpu_unexpl='\[FPU\] unexplained first=(.*)$'
+re_plane='\[PLANE\] +input=([0-9]+) us +ui=([0-9]+) us +panel=([0-9]+) us +converge=([0-9]+) us +slices=([0-9]+)'
+# The INPUT plane's own evidence, and the microsecond it is now the source of.  The first
+# row's two counts are the plane's shortfall against the periods its window owed; the
+# second is the divisor every number in this table was produced by, so it is recorded --
+# a run whose timings all moved 2x without this row moving is a run that changed clocks.
+re_async_plane='\[ASYNC\] input plane Timer0 .*period=([0-9]+) us.*ticks=([0-9]+) of the ([0-9]+) this'
+re_async_tpu='\[ASYNC\] machine microsecond = ([0-9]+) Count ticks, measured over ([0-9]+) periods'
+# The third clock.  The divisor above is anchored on Timer0's own counting clock, so it
+# cannot by itself tell "Count is fast" from "Timer0 is slow" -- the OHCI's frame counter
+# is the sample that did not go into either, and it is the row that settled that question
+# on this machine.
+re_async_frames="\[ASYNC\] the same window on the OHCI's frame counter: ([0-9]+) frames of the ([0-9]+)"
+# The handler with the HID collection inside it.  The WCET is the price of the plane doing
+# real work rather than only counting its own periods, and the overruns are the assertion
+# ASYNC.txt §3.2 makes about it.
+re_async_isr='\[ASYNC\] isr wcet=([0-9]+) ticks = [0-9]+\.[0-9]+ us of the [0-9]+ us budget, overruns=([0-9]+)'
+# The plane as the pointer's servant: which layer took the reports off the bus, how many it
+# lost, and how long the ones it delivered waited.  These are cumulative since the handover,
+# so a run with no hand on the mouse reads zero reports over a growing period count -- the
+# idle collector, which is the shape that still proves the collection is installed.
+re_plane_reports='\[PSTAT\] plane: reports=([0-9]+) on the input plane, ([0-9]+) in a pass, dropped=([0-9]+) queue max=[0-9]+ of [0-9]+, collected on ([0-9]+) periods'
+re_plane_held='\[PSTAT\] plane: held max=([0-9]+) us'
 
 curtag=""
 while IFS= read -r line; do
@@ -268,6 +326,12 @@ while IFS= read -r line; do
                              echo "fpu_inexact=${BASH_REMATCH[4]}"    >>"$VALS"
                              echo "fpu_other=${BASH_REMATCH[5]}"      >>"$VALS"; } ;;
         *"[FPU] unexplained "*) [[ $line =~ $re_fpu_unexpl ]] && echo "fpu_other_op=${BASH_REMATCH[1]}" >>"$VALS" ;;
+        # The boot row naming the plane table, which is the premise of every period below.
+        *"[PLANE] input="*)     [[ $line =~ $re_plane ]] && { echo "plane_input_us=${BASH_REMATCH[1]}"    >>"$VALS"
+                             echo "plane_ui_us=${BASH_REMATCH[2]}"        >>"$VALS"
+                             echo "plane_panel_us=${BASH_REMATCH[3]}"     >>"$VALS"
+                             echo "plane_converge_us=${BASH_REMATCH[4]}"  >>"$VALS"
+                             echo "plane_slices=${BASH_REMATCH[5]}"       >>"$VALS"; } ;;
         # The last frame row wins: with SMOOTH_FRAMES>1 that is the steady state, and
         # frame 1 still carries one-off costs that do not belong in a gate.
         # Frame 1 gets its own gate instead: what the user waits for on load is the first
@@ -282,6 +346,31 @@ while IFS= read -r line; do
                              echo "full_swap_us=${BASH_REMATCH[3]}"   >>"$VALS"
                              echo "full_upload_us=${BASH_REMATCH[4]}" >>"$VALS"; } ;;
         *"[BENCH] band64 "*)   [[ $line =~ $re_band64 ]] && echo "band64_total_us=${BASH_REMATCH[1]}" >>"$VALS" ;;
+        # The INPUT plane's window and the divisor it is now the source of.  The window's
+        # two counts are the gate; the divisor is recorded because every number above is
+        # that quotient, so a run whose timings all move 2x while this row does not is a
+        # run that changed clocks and not code.
+        *"[ASYNC] input plane Timer0"*) [[ $line =~ $re_async_plane ]] && {
+                             echo "input_period_us=${BASH_REMATCH[1]}"  >>"$VALS"
+                             echo "input_ticks_got=${BASH_REMATCH[2]}"  >>"$VALS"
+                             echo "input_ticks_owed=${BASH_REMATCH[3]}" >>"$VALS"; } ;;
+        *"[ASYNC] machine microsecond"*) [[ $line =~ $re_async_tpu ]] && {
+                             echo "ee_ticks_per_us=${BASH_REMATCH[1]}" >>"$VALS"
+                             echo "calib_periods=${BASH_REMATCH[2]}"   >>"$VALS"; } ;;
+        *"[ASYNC] the same window"*) [[ $line =~ $re_async_frames ]] && {
+                             echo "ohci_frames=${BASH_REMATCH[1]}"    >>"$VALS"
+                             echo "ohci_frames_owed=${BASH_REMATCH[2]}" >>"$VALS"; } ;;
+        *"[ASYNC] isr wcet"*) [[ $line =~ $re_async_isr ]] && {
+                             echo "isr_wcet_ticks=${BASH_REMATCH[1]}" >>"$VALS"
+                             echo "isr_overruns=${BASH_REMATCH[2]}"   >>"$VALS"; } ;;
+        *"[PSTAT] plane: reports"*) [[ $line =~ $re_plane_reports ]] && {
+                             echo "plane_reports_collected=${BASH_REMATCH[1]}" >>"$VALS"
+                             echo "plane_reports_in_pass=${BASH_REMATCH[2]}"   >>"$VALS"
+                             echo "plane_dropped=${BASH_REMATCH[3]}"           >>"$VALS"
+                             echo "plane_periods_collected=${BASH_REMATCH[4]}" >>"$VALS"; } ;;
+        *"[PSTAT] plane: held"*) [[ $line =~ $re_plane_held ]] && {
+                             echo "plane_held_max_us=${BASH_REMATCH[1]}" >>"$VALS"; } ;;
+        *"[ASYNC] hid collection"*) echo "plane_handover_row=1" >>"$VALS" ;;
     esac
     # The direction rows put their tag on one line and their cost on the next, so the
     # tag has to be remembered rather than matched twice.
@@ -299,6 +388,54 @@ done < "$OUT"
 # Last match wins: the frame rows repeat once per frame and the gate wants the
 # steady-state one, not frame 1 with its atlas-bake leftovers.
 getval() { grep "^$1=" "$VALS" | tail -1 | cut -d= -f2 || true; }
+
+# The two periods the budget list is priced against, reduced to how far the installed
+# table is from them.  A budget is an opinion about a clock; the guest's [PLANE] row is
+# that clock, so the pair is compared rather than assumed to agree -- and the comparison
+# is a distance with a zero budget, which means it passes by measuring nothing and a
+# missing row is a SKIP rather than a silence.
+for plane_pair in input:1000 ui:16667; do
+    pname="${plane_pair%%:*}"
+    pexpect="${plane_pair##*:}"
+    pgot="$(getval "plane_${pname}_us")"
+    [ -n "$pgot" ] || continue
+    echo "plane_${pname}_drift_us=$(( pgot > pexpect ? pgot - pexpect : pexpect - pgot ))" >>"$VALS"
+done
+
+# The plane's own window, reduced to the input it missed: periods owed minus periods
+# delivered, in the microseconds a hand would have had to wait.  This is the one gate here
+# that measures the installed table against a real clock rather than against this script's
+# opinion of one -- the guest counted the ticks the hardware delivered over the window the
+# guest timed with the divisor those ticks produced, so a table that names 1 ms and a plane
+# that keeps 2 ms cannot both be true and this row is where they disagree.
+got_periods="$(getval input_ticks_got)"
+owed_periods="$(getval input_ticks_owed)"
+if [ -n "$got_periods" ] && [ -n "$owed_periods" ]; then
+    short=$(( owed_periods > got_periods ? owed_periods - got_periods : 0 ))
+    echo "input_plane_short_us=$(( short * $(getval input_period_us) ))" >>"$VALS"
+fi
+# The same window on the controller's frame counter, which is kept by OHCI at 1 ms and
+# entered no part of the divisor.  A plane and a microsecond that agree with each other and
+# disagree with this are a circular measurement, and that is exactly the shape this port was
+# in before the calibration: 25 frames against a window Count called 50 ms.
+got_frames="$(getval ohci_frames)"
+owed_frames="$(getval ohci_frames_owed)"
+if [ -n "$got_frames" ] && [ -n "$owed_frames" ]; then
+    fshort=$(( owed_frames > got_frames ? owed_frames - got_frames : 0 ))
+    echo "ohci_frame_short_us=$(( fshort * 1000 ))" >>"$VALS"
+fi
+
+# Whether the plane was handed the HID rings, judged against the plane's own verdict rather
+# than against the row's silence: a machine whose plane is DEAD is *expected* to keep polling
+# in the pass and gets a SKIP, while one whose plane was LIVE and did not take the rings is
+# the bug an absent row would otherwise hide.
+live_got="$(getval input_ticks_got)"
+live_owed="$(getval input_ticks_owed)"
+if [ -n "$live_got" ] && [ -n "$live_owed" ] && [ "$live_owed" -gt 0 ] \
+   && [ $(( live_got + 1 )) -ge "$live_owed" ]; then
+    if [ -n "$(getval plane_handover_row)" ]; then echo "plane_handover_miss=0" >>"$VALS"
+    else                                          echo "plane_handover_miss=1" >>"$VALS"; fi
+fi
 
 # Sum the per-class rows into the two totals, and print the rows themselves while
 # doing it: the totals say how much of the arithmetic differs, the table says which op.

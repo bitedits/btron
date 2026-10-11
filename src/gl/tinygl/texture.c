@@ -65,8 +65,21 @@ void* glGetTexturePixmap(GLint text, GLint level, GLint* xsize, GLint* ysize) {
 	return tex->images[level].pixmap;
 }
 
+/* Every plane an image owns: the uploaded extent, the padded allocation behind it,
+ * and the sampler/mapper fields that go with them. */
+static void gl_image_clear(GLImage* im) {
+	gl_free(im->pixmap);
+	im->pixmap = NULL;
+	im->xsize = im->ysize = 0;
+	im->smask = im->tmask = 0;
+	im->tshift = 0;
+	im->sscale = im->soff = 0.0f;
+	im->tscale = im->toff = 0.0f;
+}
+
 static void free_texture(GLContext* c, GLint h) {
 	GLTexture *t, **ht;
+	GLint level;
 
 	t = find_texture(h);
 	if (t->prev == NULL) {
@@ -78,7 +91,85 @@ static void free_texture(GLContext* c, GLint h) {
 	if (t->next != NULL)
 		t->next->prev = t->prev;
 
+	for (level = 0; level < MAX_TEXTURE_LEVELS; level++)
+		gl_image_clear(&t->images[level]);
+
 	gl_free(t);
+}
+
+/*
+ * Give an image the extent (width,height) and a plane to hold it.
+ *
+ * The uploaded extent is what a texture coordinate maps onto and what the
+ * application's texels are laid out in; it is stored as given, because resampling an
+ * upload to a fixed square is what turned a 384x384 atlas into unreadable icons.  The
+ * allocation is that extent rounded up to a power of two on each axis -- the sampler
+ * wraps by masking, so the extent it can hide behind has to be a power of two -- and
+ * the padding is zero, i.e. transparent black.  Returns 0 if the extent is too large
+ * for a plane or the plane could not be had.
+ */
+static GLint gl_image_alloc(GLImage* im, GLint width, GLint height) {
+	GLint xpad = 1, ypad = 1, xpow = 0, ypow = 0;
+
+	if (width <= 0 || height <= 0 || width > TGL_FEATURE_TEXTURE_MAX_DIM || height > TGL_FEATURE_TEXTURE_MAX_DIM) {
+		gl_image_clear(im);
+		return 0;
+	}
+	while (xpad < width) {
+		xpad <<= 1;
+		xpow++;
+	}
+	while (ypad < height) {
+		ypad <<= 1;
+		ypow++;
+	}
+
+	if (im->pixmap != NULL && im->xsize_pad == xpad && im->ysize_pad == ypad) {
+		/* Same plane, new contents: clearing is all the re-upload needs. */
+		memset(im->pixmap, 0, (size_t)xpad * ypad * PSZB);
+	} else {
+		gl_free(im->pixmap);
+		im->pixmap = gl_zalloc((GLint)((size_t)xpad * ypad * PSZB));
+		if (im->pixmap == NULL) {
+			im->xsize = im->ysize = im->xsize_pad = im->ysize_pad = 0;
+			return 0;
+		}
+		im->xsize_pad = xpad;
+		im->ysize_pad = ypad;
+	}
+
+	im->xsize = width;
+	im->ysize = height;
+	im->smask = (GLuint)(xpad - 1) << (ZB_POINT_S_FRAC_BITS + 1);
+	im->tmask = (GLuint)(ypad - 1) << (ZB_POINT_T_FRAC_BITS + 1);
+	im->tshift = ZB_TEX_T_SHIFT_BASE - xpow;
+	/* One texel index is (ZB_POINT_*_FRAC_BITS + 1) bits of s/t, and a coordinate of 0
+	 * sits half a texel in, so that a coordinate samples the centre of the texel it
+	 * names rather than its edge. */
+	im->soff = (GLfloat)(1 << ZB_POINT_S_FRAC_BITS);
+	im->sscale = (GLfloat)(((GLint)width << (ZB_POINT_S_FRAC_BITS + 1)) - (1 << ZB_POINT_S_FRAC_BITS));
+	im->toff = (GLfloat)(1 << ZB_POINT_T_FRAC_BITS);
+	im->tscale = (GLfloat)(((GLint)height << (ZB_POINT_T_FRAC_BITS + 1)) - (1 << ZB_POINT_T_FRAC_BITS));
+	return 1;
+}
+
+/* Convert an upload of `nch`-channel texels into the image's plane, row by row. */
+static void gl_image_store(GLImage* im, const GLubyte* pixels, GLint nch) {
+	GLint y;
+
+	for (y = 0; y < im->ysize; y++)
+		gl_convert_row_to_8A8R8G8B(im->pixmap + (GLint)((size_t)y * im->xsize_pad), im->xsize_pad,
+								  pixels + (GLint)((size_t)y * im->xsize * nch), im->xsize, nch);
+}
+
+/* Hand the rasterizer everything it needs to sample one image: its plane and the three
+ * fields that turn a texture coordinate into a byte offset in it.  Called once per
+ * primitive, so a span loop never has to find out where a texel lives. */
+void ZB_setTexture(ZBuffer* zb, const GLImage* im) {
+	zb->current_texture = im->pixmap;
+	zb->current_smask = im->smask;
+	zb->current_tmask = im->tmask;
+	zb->current_tshift = im->tshift;
 }
 
 GLTexture* alloc_texture(GLint h) {
@@ -216,9 +307,7 @@ void glopCopyTexImage2D(GLParam* p) {
 	GLContext* c = gl_get_context();
 	y -= h;
 
-	if (c->readbuffer != GL_FRONT || c->current_texture == NULL || target != GL_TEXTURE_2D || border != 0 ||
-		w != TGL_FEATURE_TEXTURE_DIM || /*TODO Implement image interp*/
-		h != TGL_FEATURE_TEXTURE_DIM) {
+	if (c->readbuffer != GL_FRONT || c->current_texture == NULL || target != GL_TEXTURE_2D || border != 0) {
 #if TGL_FEATURE_ERROR_CHECK == 1
 #define ERROR_FLAG GL_INVALID_OPERATION
 #include "error_check.h"
@@ -227,9 +316,17 @@ void glopCopyTexImage2D(GLParam* p) {
 #endif
 	}
 	im = &c->current_texture->images[level];
-	data = c->current_texture->images[level].pixmap;
-	im->xsize = TGL_FEATURE_TEXTURE_DIM;
-	im->ysize = TGL_FEATURE_TEXTURE_DIM;
+	/* The copy keeps the requested extent too; the framebuffer is the source, so the
+	 * texels are already PIXELs and only the row stride differs. */
+	if (!gl_image_alloc(im, w, h)) {
+#if TGL_FEATURE_ERROR_CHECK == 1
+#define ERROR_FLAG GL_INVALID_VALUE
+#include "error_check.h"
+#else
+		return;
+#endif
+	}
+	data = im->pixmap;
 	/* TODO implement the scaling and stuff that the GL spec says it should have.*/
 #if TGL_FEATURE_MULTITHREADED_COPY_TEXIMAGE_2D == 1
 #ifdef _OPENMP
@@ -237,81 +334,70 @@ void glopCopyTexImage2D(GLParam* p) {
 #endif
 	for (j = 0; j < h; j++)
 		for (i = 0; i < w; i++) {
-			data[i + j * w] = c->zb->pbuf[((i + x) % (c->zb->xsize)) + ((j + y) % (c->zb->ysize)) * (c->zb->xsize)];
+			data[i + j * im->xsize_pad] = c->zb->pbuf[((i + x) % (c->zb->xsize)) + ((j + y) % (c->zb->ysize)) * (c->zb->xsize)];
 		}
 #else
 	for (j = 0; j < h; j++)
 		for (i = 0; i < w; i++) {
-			data[i + j * w] = c->zb->pbuf[((i + x) % (c->zb->xsize)) + ((j + y) % (c->zb->ysize)) * (c->zb->xsize)];
+			data[i + j * im->xsize_pad] = c->zb->pbuf[((i + x) % (c->zb->xsize)) + ((j + y) % (c->zb->ysize)) * (c->zb->xsize)];
 		}
 #endif
+}
+
+/*
+ * The two upload operations share one rule: what the application handed over is what
+ * is stored.  `format` decides the source's stride (3 or 4 bytes) and therefore which
+ * channels the texel carries; `internalformat` does not, and a 1/2/3/4 there is the
+ * application asking for a reduced store, which this implementation does not do --
+ * the texels keep every channel the source supplied.
+ */
+static GLint gl_tex_format_channels(GLint format) {
+	if (format == GL_RGBA)
+		return 4;
+	if (format == GL_RGB)
+		return 3;
+	return 0;
 }
 
 void glopTexImage1D(GLParam* p) {
 	GLint target = p[1].i;
 	GLint level = p[2].i;
-	GLint components = p[3].i;
 	GLint width = p[4].i;
-	/* GLint height = p[5].i;*/
 	GLint height = 1;
 	GLint border = p[5].i;
 	GLint format = p[6].i;
 	GLint type = p[7].i;
 	void* pixels = p[8].p;
 	GLImage* im;
-	GLubyte* pixels1;
-	GLint do_free=0;
+	const GLint nch = gl_tex_format_channels(format);
 	GLContext* c = gl_get_context();
-	{
+
+	if (!(c->current_texture != NULL && target == GL_TEXTURE_1D && level == 0 && border == 0 && nch != 0 &&
+		  type == GL_UNSIGNED_BYTE)) {
 #if TGL_FEATURE_ERROR_CHECK == 1
-		if (!(c->current_texture != NULL && target == GL_TEXTURE_1D && level == 0 && components == 3 && border == 0 && format == GL_RGB &&
-			  type == GL_UNSIGNED_BYTE))
 #define ERROR_FLAG GL_INVALID_ENUM
 #include "error_check.h"
-
 #else
-		if (!(c->current_texture != NULL && target == GL_TEXTURE_1D && level == 0 && components == 3 && border == 0 && format == GL_RGB &&
-			  type == GL_UNSIGNED_BYTE))
-			gl_fatal_error("glTexImage2D: combination of parameters not handled!!");
+		/* Loud on purpose: with the error flags compiled out, a silently dropped upload
+		 * is indistinguishable from a texture that simply draws wrong. */
+		gl_fatal_error("glTexImage1D: combination of parameters not handled!!");
 #endif
 	}
-	if (width != TGL_FEATURE_TEXTURE_DIM || height != TGL_FEATURE_TEXTURE_DIM) {
-		pixels1 = gl_malloc(TGL_FEATURE_TEXTURE_DIM * TGL_FEATURE_TEXTURE_DIM * 3); /* GUARDED*/
-		if (pixels1 == NULL) {
+
+	im = &c->current_texture->images[level];
+	if (!gl_image_alloc(im, width, height)) {
 #if TGL_FEATURE_ERROR_CHECK == 1
 #define ERROR_FLAG GL_OUT_OF_MEMORY
 #include "error_check.h"
 #else
-			gl_fatal_error("GL_OUT_OF_MEMORY");
+		gl_fatal_error("GL_OUT_OF_MEMORY");
 #endif
-		}
-		/* no GLinterpolation is done here to respect the original image aliasing ! */
-		
-		gl_resizeImageNoInterpolate(pixels1, TGL_FEATURE_TEXTURE_DIM, TGL_FEATURE_TEXTURE_DIM, pixels, width, height);
-		do_free = 1;
-		width = TGL_FEATURE_TEXTURE_DIM;
-		height = TGL_FEATURE_TEXTURE_DIM; 
-	} else {
-		pixels1 = pixels;
 	}
-
-	im = &c->current_texture->images[level];
-	im->xsize = width;
-	im->ysize = height;
-#if TGL_FEATURE_RENDER_BITS == 32
-	gl_convertRGB_to_8A8R8G8B(im->pixmap, pixels1, width, height);
-#elif TGL_FEATURE_RENDER_BITS == 16
-	gl_convertRGB_to_5R6G5B(im->pixmap, pixels1, width, height);
-#else
-#error bad TGL_FEATURE_RENDER_BITS
-#endif
-	if (do_free)
-		gl_free(pixels1);
+	gl_image_store(im, (const GLubyte*)pixels, nch);
 }
 void glopTexImage2D(GLParam* p) {
 	GLint target = p[1].i;
 	GLint level = p[2].i;
-	GLint components = p[3].i;
 	GLint width = p[4].i;
 	GLint height = p[5].i;
 	GLint border = p[6].i;
@@ -319,54 +405,29 @@ void glopTexImage2D(GLParam* p) {
 	GLint type = p[8].i;
 	void* pixels = p[9].p;
 	GLImage* im;
-	GLubyte* pixels1;
-	GLint do_free=0;
+	const GLint nch = gl_tex_format_channels(format);
 	GLContext* c = gl_get_context();
-	{
+
+	if (!(c->current_texture != NULL && target == GL_TEXTURE_2D && level == 0 && border == 0 && nch != 0 &&
+		  type == GL_UNSIGNED_BYTE)) {
 #if TGL_FEATURE_ERROR_CHECK == 1
-		if (!(c->current_texture != NULL && target == GL_TEXTURE_2D && level == 0 && components == 3 && border == 0 && format == GL_RGB &&
-			  type == GL_UNSIGNED_BYTE))
 #define ERROR_FLAG GL_INVALID_ENUM
 #include "error_check.h"
-
 #else
-		if (!(c->current_texture != NULL && target == GL_TEXTURE_2D && level == 0 && components == 3 && border == 0 && format == GL_RGB &&
-			  type == GL_UNSIGNED_BYTE))
-			gl_fatal_error("glTexImage2D: combination of parameters not handled!!");
+		gl_fatal_error("glTexImage2D: combination of parameters not handled!!");
 #endif
 	}
-	if (width != TGL_FEATURE_TEXTURE_DIM || height != TGL_FEATURE_TEXTURE_DIM) {
-		pixels1 = gl_malloc(TGL_FEATURE_TEXTURE_DIM * TGL_FEATURE_TEXTURE_DIM * 3); /* GUARDED*/
-		if (pixels1 == NULL) {
+
+	im = &c->current_texture->images[level];
+	if (!gl_image_alloc(im, width, height)) {
 #if TGL_FEATURE_ERROR_CHECK == 1
 #define ERROR_FLAG GL_OUT_OF_MEMORY
 #include "error_check.h"
 #else
-			gl_fatal_error("GL_OUT_OF_MEMORY");
+		gl_fatal_error("GL_OUT_OF_MEMORY");
 #endif
-		}
-		/* no GLinterpolation is done here to respect the original image aliasing ! */
-		
-		gl_resizeImageNoInterpolate(pixels1, TGL_FEATURE_TEXTURE_DIM, TGL_FEATURE_TEXTURE_DIM, pixels, width, height);
-		do_free = 1;
-		width = TGL_FEATURE_TEXTURE_DIM;
-		height = TGL_FEATURE_TEXTURE_DIM;
-	} else {
-		pixels1 = pixels;
 	}
-
-	im = &c->current_texture->images[level];
-	im->xsize = width;
-	im->ysize = height;
-#if TGL_FEATURE_RENDER_BITS == 32
-	gl_convertRGB_to_8A8R8G8B(im->pixmap, pixels1, width, height);
-#elif TGL_FEATURE_RENDER_BITS == 16
-	gl_convertRGB_to_5R6G5B(im->pixmap, pixels1, width, height);
-#else
-#error Bad TGL_FEATURE_RENDER_BITS
-#endif
-	if (do_free)
-		gl_free(pixels1);
+	gl_image_store(im, (const GLubyte*)pixels, nch);
 }
 
 /* TODO: not all tests are done */

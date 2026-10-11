@@ -542,7 +542,9 @@ void glGetIntegerv(GLint pname, GLint* params) {
 		*params = MAX_LIGHTS;
 		break;
 	case GL_MAX_TEXTURE_SIZE:
-		*params = TGL_FEATURE_TEXTURE_DIM; /* not completely true, but... */
+		/* An upload keeps its own extent now, so the honest answer is the ceiling an axis may
+		 * have, not the implementation's default size: see GLImage. */
+		*params = TGL_FEATURE_TEXTURE_MAX_DIM;
 		break;
 	case GL_CULL_FACE:
 		*params = c->cull_face_enabled;

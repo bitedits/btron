@@ -82,6 +82,13 @@ void ps2_gs_flush(void);
    (x, y) is the top-left in canvas pixels; w is rounded up to a quadword (4 px) because the upload stream has no row pitch. */
 void ps2_gs_upload(int x, int y, int w, int h);
 uint32_t *ps2_gs_get_framebuffer(void);
+/* Install the canvas the GS is fed from.  core_ps2.c calls this with its desktop
+ * backbuffer as the first act of ps2_kernel_main(), before ps2_gs_init(): the boot
+ * log is written into the canvas the screen shows, so the driver cannot own a buffer
+ * of its own and still have the two agree.  The canvas's words are already in the
+ * GS's byte order -- see BTRON_PIXEL_FB in include/btron/types.h -- which is what
+ * lets ps2_gs_upload() stream it without a conversion pass. */
+void ps2_gs_set_framebuffer(uint32_t *canvas);
 void ps2_gs_flip(void);
 void ps2_gs_putpixel(int x, int y, uint32_t color);
 void ps2_gs_fill_rect(int x, int y, int w, int h, uint32_t color);

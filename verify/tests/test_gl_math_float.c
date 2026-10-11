@@ -19,9 +19,11 @@
  *      looks like.
  *   2. sinf/cosf are within 2e-6 absolute on every region the reduction changes hands --
  *      0..pi/4, pi/4..pi/2 (the swap), pi/2..pi (the sign flip), pi..2pi, 2pi..4pi (the
- *      turn fold) and the negative half -- and floorf is bit-exact, because it indexes.
- *      Absolute, not relative, for the trig pair: sin(x) passes through zero, where a
- *      relative error is meaningless.
+ *      turn fold) and the negative half -- on the same pair out to 1e6 and 2^31, where
+ *      the header no longer hands the argument to the double series but folds its turn
+ *      count in double and keeps the float polynomial, and floorf is bit-exact, because
+ *      it indexes.  Absolute, not relative, for the trig pair: sin(x) passes through
+ *      zero, where a relative error is meaningless.
  *   3. The measurement is validated on purpose-broken variants of the same functions
  *      (canaries), and the run refuses to call itself a pass if every answer came back
  *      bit-identical to the oracle -- that would mean the compiler folded the series into
@@ -45,6 +47,7 @@ float p_sqrtf(float);
 float p_sinf(float);
 float p_cosf(float);
 float p_floorf(float);
+float p_sinf_far_floatfold(float);
 
 typedef float (*f1)(float);
 
@@ -209,7 +212,79 @@ static sqrt_scan scan_sqrtf(f1 fn, const char *tag)
 
 /* ------------------------------------------------------------------ sinf/cosf */
 
-typedef struct { double worst_sin, worst_cos; int bad_regions; long differing; long samples; } trig_scan;
+typedef struct {
+    double worst_sin, worst_cos;
+    double worst_far;          /* biggest absolute error past the float fold's guard */
+    int far_worst_pow2;        /* the binade it came from */
+    int bad_regions;
+    long differing;
+    long samples;
+} trig_scan;
+
+/* Past 4*pi the header stops handing the argument to the double series and folds the
+ * turn count in double itself (btron_sincosf_far), so the region the guard used to
+ * cover by accident is now covered by code under test.  Two shapes of sweep, because
+ * they fail differently: integral arguments are exactly representable and so isolate
+ * the fold's arithmetic from any input rounding, and the per-binade log-spaced sweep
+ * is the one that shows the fold's error growing with |x| -- it is half an ulp of the
+ * turn product, hence of x, so a single global maximum would hide the top of the range.
+ * Same absolute tolerance as the regions: the consumer is a coverage value. */
+static void scan_trig_far(f1 fn_s, f1 fn_c, trig_scan *r)
+{
+    /* 14 is the first integer past the guard at 4*pi, so every sample here really is
+     * the fold's own territory; the boundary itself belongs to the region table and to
+     * the named values above.  Both parities, so a fold that is right for a turn count
+     * of one parity and wrong for the other cannot pass. */
+    for (long n = 14; n <= 100000; n++) {
+        const float x = (float)n;
+        double ds = abserr((double)fn_s(x), (double)sinf(x));
+        double dc = abserr((double)fn_c(x), (double)cosf(x));
+        if (ds > r->worst_far || dc > r->worst_far) {
+            r->worst_far = ds > dc ? ds : dc;
+            r->far_worst_pow2 = ilogbf(x);
+        }
+        if (ds > TRIG_ABS_TOL || dc > TRIG_ABS_TOL) r->bad_regions++;
+        if (ulps(fn_s(x), sinf(x)) != 0) r->differing++;
+        if (ulps(fn_c(x), cosf(x)) != 0) r->differing++;
+        r->samples += 2;
+        s_checks += 2;
+    }
+    for (long n = 100007; n <= 1000000; n += 997) {
+        const float x = (float)n;
+        double ds = abserr((double)fn_s(-x), (double)sinf(-x));
+        double dc = abserr((double)fn_c(-x), (double)cosf(-x));
+        if (ds > r->worst_far || dc > r->worst_far) {
+            r->worst_far = ds > dc ? ds : dc;
+            r->far_worst_pow2 = -ilogbf(x);
+        }
+        if (ds > TRIG_ABS_TOL || dc > TRIG_ABS_TOL) r->bad_regions++;
+        if (ulps(fn_s(-x), sinf(-x)) != 0) r->differing++;
+        if (ulps(fn_c(-x), cosf(-x)) != 0) r->differing++;
+        r->samples += 2;
+        s_checks += 2;
+    }
+    /* 2^3 .. 2^19 covers the guard at 12.566 out to 5e5 and its neighbour binade, and
+     * the negative half of each by the same symmetry the region table uses */
+    for (int b = 3; b <= 19; b++) {
+        for (int side = 0; side < 2; side++) {
+            double e = 0.0;
+            for (int i = 0; i < 512; i++) {
+                float x = ldexpf(1.0f + (float)i / 512.0f, b);
+                if (side) x = -x;
+                double ds = abserr((double)fn_s(x), (double)sinf(x));
+                double dc = abserr((double)fn_c(x), (double)cosf(x));
+                if (ds > e) e = ds;
+                if (dc > e) e = dc;
+                if (ulps(fn_s(x), sinf(x)) != 0) r->differing++;
+                if (ulps(fn_c(x), cosf(x)) != 0) r->differing++;
+                r->samples += 2;
+                s_checks += 2;
+            }
+            if (e > TRIG_ABS_TOL) r->bad_regions++;
+            if (e > r->worst_far) { r->worst_far = e; r->far_worst_pow2 = side ? -b : b; }
+        }
+    }
+}
 
 static trig_scan scan_trig(f1 fn_s, f1 fn_c)
 {
@@ -224,6 +299,7 @@ static trig_scan scan_trig(f1 fn_s, f1 fn_c)
     };
     trig_scan r;
     r.worst_sin = 0.0; r.worst_cos = 0.0; r.bad_regions = 0; r.differing = 0; r.samples = 0;
+    r.worst_far = 0.0; r.far_worst_pow2 = 0;
     for (int k = 0; k < (int)(sizeof reg / sizeof reg[0]); k++) {
         double es = 0.0, ec = 0.0;
         for (int i = 0; i <= 40000; i++) {
@@ -256,13 +332,15 @@ static trig_scan scan_trig(f1 fn_s, f1 fn_c)
             s_checks += 2;
         }
     }
-    const float big[] = { 12.5663707f, 13.0f, 100.0f, 1e4f, 1e6f, 1e7f };
+    const float big[] = { 12.5663707f, 13.0f, 100.0f, 1e4f, 1e6f, 1e7f, 1e8f, 2.0e9f,
+                          -1e7f, -1e8f, 2147483647.0f };
     for (int i = 0; i < (int)(sizeof big / sizeof big[0]); i++) {
         double ds = abserr((double)fn_s(big[i]), (double)sinf(big[i]));
         double dc = abserr((double)fn_c(big[i]), (double)cosf(big[i]));
         if (ds > TRIG_ABS_TOL || dc > TRIG_ABS_TOL) r.bad_regions++;
         s_checks += 2;
     }
+    scan_trig_far(fn_s, fn_c, &r);
     if (!(isnan(fn_s(INFINITY)) && isnan(fn_c(INFINITY)) &&
           isnan(fn_s(NAN)) && isnan(fn_c(NAN)))) r.bad_regions++;
     return r;
@@ -327,6 +405,8 @@ static floor_scan scan_floorf(f1 fn, const char *tag)
  *   can_sin_sign       a lost sign flag from the odd/even fold
  *   can_cos_swap       the eighth-circle swap applied to the wrong side
  *   can_floor_neg      a negative stepped toward zero, i.e. truncation as floor
+ *   p_sinf_far_floatfold (in the port TU, because it needs the header's own fold)
+ *                      a large turn count folded as a float
  */
 static float can_sqrt_2x(float x)       { return 2.0f * p_sqrtf(x); }
 static float can_sqrt_neg_zero(float x) { return x < 0.0f ? 0.0f : p_sqrtf(x); }
@@ -383,10 +463,14 @@ int main(void)
     snprintf(buf, sizeof buf, "max abs err sin %.3e cos %.3e, %d regions over %.1e",
              t.worst_sin, t.worst_cos, t.bad_regions, TRIG_ABS_TOL);
     printf("  [INFO] trig   %s\n", buf);
+    snprintf(buf2, sizeof buf2, "past the fold's guard: max abs err %.3e at 2^%d",
+             t.worst_far, t.far_worst_pow2);
+    printf("  [INFO] trig   %s\n", buf2);
     if (t.bad_regions) fail("sinf/cosf vs libm", buf);
 
     struct { const char *name; f1 fn; } tcan[] = {
         { "sinf lost sign", can_sin_sign },
+        { "sinf folded in float", p_sinf_far_floatfold },
     };
     for (int i = 0; i < (int)(sizeof tcan / sizeof tcan[0]); i++) {
         trig_scan c = scan_trig(tcan[i].fn, p_cosf);

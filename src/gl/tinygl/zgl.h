@@ -139,8 +139,17 @@ typedef struct GLVertex {
 } GLVertex;
 
 typedef struct GLImage {
-	PIXEL pixmap[TGL_FEATURE_TEXTURE_DIM * TGL_FEATURE_TEXTURE_DIM];
-	GLint xsize, ysize;
+	/* The plane is allocated at upload, at the extent that was uploaded rounded up to a
+	 * power of two on each axis (the sampler wraps by masking, so the extent it hides
+	 * behind has to be a power of two). xsize/ysize stay the uploaded extent: they are
+	 * what a texture coordinate maps onto, and they are what the padding hides. */
+	PIXEL* pixmap;
+	GLint xsize, ysize;		/* the uploaded extent: what a coordinate maps onto */
+	GLint xsize_pad, ysize_pad; /* the allocated plane: each axis rounded up to a power of two */
+	GLuint smask, tmask;	/* sampler: texel index fields, see TEXTURE_SAMPLE */
+	GLint tshift;			/* sampler: row stride, as a shift */
+	GLfloat sscale, soff;	/* mapper: texture coordinate -> fixed point texel index */
+	GLfloat tscale, toff;
 } GLImage;
 
 /* textures */
@@ -432,8 +441,10 @@ void glEndTextures();
 GLTexture* alloc_texture(GLint h);
 
 /* image_util.c */
-void gl_convertRGB_to_5R6G5B(GLushort* pixmap, GLubyte* rgb, GLint xsize, GLint ysize);
-void gl_convertRGB_to_8A8R8G8B(GLuint* pixmap, GLubyte* rgb, GLint xsize, GLint ysize);
+/* Upload one row of `xsize` texels of an `nch`-channel (3=RGB, 4=RGBA) source into a
+ * plane whose row stride is `rowstride` texels -- the plane is padded to a power of
+ * two, the source is not. */
+void gl_convert_row_to_8A8R8G8B(GLuint* pixmap, GLint rowstride, const GLubyte* src, GLint xsize, GLint nch);
 void gl_resizeImage(GLubyte* dest, GLint xsize_dest, GLint ysize_dest, GLubyte* src, GLint xsize_src, GLint ysize_src);
 void gl_resizeImageNoInterpolate(GLubyte* dest, GLint xsize_dest, GLint ysize_dest, GLubyte* src, GLint xsize_src, GLint ysize_src);
 

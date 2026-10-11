@@ -46,6 +46,7 @@
 #include "ps2_fp.h"
 #include "ps2_usb.h"
 #include "ps2_iopram.h"
+#include "ps2_irq.h"
 
 extern void ps2_delay_cycles(uint32_t count);
 extern void ps2_halt(void);
@@ -320,10 +321,11 @@ static int32_t s_ptr_mult_fp = PS2_MOUSE_MULT_FP;
 static int32_t s_ptr_carry_x, s_ptr_carry_y;
 static int32_t s_ptr_post_carry_x, s_ptr_post_carry_y;   /* the hw curve's second stage */
 
-/* How far the cursor may travel between two paints, in pixels.
+/* How far the cursor may travel in one INPUT period, in pixels -- the periods a pass
+ * owes come from the plane table, so the cap is a speed and not a frame count.
  *
  * Off by default, and that default is the whole lesson of a long tuning session:
- * a cap spends at most PS2_PTR_MAX_STEP px per pass and gives up anything past
+ * a cap spends at most PS2_PTR_MAX_STEP px per period and gives up anything past
  * DP_PTR_LIMIT_DEBT steps of it, so guest travel becomes a function of how fast
  * the hand moved rather than how far.  That is precisely non-proportional, and no
  * constant downstream can put the distance back.  The limiter stays compiled in
@@ -337,6 +339,7 @@ static int32_t s_ptr_post_carry_x, s_ptr_post_carry_y;   /* the hw curve's secon
 static int32_t s_ptr_max_step = PS2_PTR_MAX_STEP;
 static int32_t s_ptr_want_x, s_ptr_want_y;     /* counts that arrived since the last pass */
 static int32_t s_ptr_defer_x, s_ptr_defer_y;   /* pixels the cap has not spent yet */
+static uint32_t s_ptr_input_due;               /* Count at the last INPUT slice taken */
 
 /* ── Pointer Source Profiles ─────────────────────── */
 
@@ -445,6 +448,8 @@ static void ps2_ptr_src_apply(const char *why)
     s_ptr_post_carry_x = s_ptr_post_carry_y = 0;
     s_ptr_want_x = s_ptr_want_y = 0;
     s_ptr_defer_x = s_ptr_defer_y = 0;
+    s_ptr_input_due = 0u;   /* re-arm the INPUT slice clock rather than let it
+                             * spend the whole idle interval as catch-up */
     ps2_kprintf("[PS2] Pointer source %s (%s): ", ps2_ptr_src_name(s_ptr_src), why);
     ps2_ptr_gain_row();
 }
@@ -595,26 +600,6 @@ static void ps2_bandset_add(ps2_bandset_t *set, int x0, int x1, int y0, int y1)
     set->n++;
 }
 
-/* Translates BTRON ARGB (0xAARRGGBB) to PS2 GS CT32 RGBA (Byte 0=R, 1=G, 2=B, 3=A).
- * A rect rather than a row range so that any width can be presented: the band path
- * passes the damaged columns and the bench passes others, which is how the two
- * shapes were priced against each other on the hardware instead of in the source. */
-static void blit_backbuffer_rect_to_ps2fb(int x0, int y0, int x1, int y1)
-{
-    uint32_t *dst = ps2_gs_get_framebuffer();
-    const uint32_t *src = (const uint32_t *)s_desktop_backbuffer;
-
-    for (int y = y0; y < y1; y++) {
-        const uint32_t i0 = (uint32_t)y * PS2_SCREEN_WIDTH + (uint32_t)x0;
-        const uint32_t i1 = (uint32_t)y * PS2_SCREEN_WIDTH + (uint32_t)x1;
-
-        for (uint32_t i = i0; i < i1; i++) {
-            uint32_t c = src[i];
-            dst[i] = ((c & 0x00FF0000) >> 16) | (c & 0x0000FF00) | ((c & 0x000000FF) << 16) | (c & 0xFF000000);
-        }
-    }
-}
-
 /* Dual-output console character emitter (SIO0 UART + GS Framebuffer Text) */
 static void ps2_console_putc(char c)
 {
@@ -636,13 +621,68 @@ void uart_puts_raw(const char *s)
 
 /* ── Kernel Printf via SIO0 and GS Console ──────────────────────── */
 
-/* CP0 Count ticks at half the 294.912 MHz core clock */
-#define EE_TICKS_PER_US 147u
+/* The tick-to-microsecond law is not a constant in this port any more: it is measured at
+ * boot by the INPUT plane and published by btron_ee_ticks_per_us()
+ * (src/drivers/ps2/ps2_irq.{c,h}).  Every duration below divides by it, and the four
+ * copies of 147 they used to divide by are what made this machine's console rows, its
+ * budgets and its bench gates disagree with the two hardware clocks that do not use them.
+ */
 static int s_timebase_ok = 0;
 
 static uint32_t ps2_us_since(uint32_t start)
 {
-    return (uint32_t)(ps2_count_read() - start) / EE_TICKS_PER_US;
+    return (uint32_t)(ps2_count_read() - start) / btron_ee_ticks_per_us();
+}
+
+/* ── The machine's plane table ─────────────────────────────────────────────
+ * ASYNC.txt Tier-1, in this machine's own units (include/btron/async_rt.h).
+ *
+ * The reason the numbers live here rather than at the two places that read them is
+ * that a period is not a property of the rasterizer: the pass that paints is also
+ * the pass that spends the pointer's distance, so every "pixels per pass" the
+ * cursor is tuned with is the frame time in disguise, and a literal in front of
+ * `btron_ee_ticks_per_us()` is a machine constant with nothing to say where it came from.
+ *
+ * ps2_planes_install() runs in ps2_kernel_main() before the desktop session, the
+ * shell loop and the GS console can call ps2_gui_pass(), so the readers below take
+ * the table as given rather than testing it for NULL: an absent table here is a
+ * boot-order bug, and self-pacing is the arm64 port's business, not this one's. */
+static const btron_plane_cfg_t s_ps2_planes = {
+    /* An OHCI frame is a millisecond, and ps2_usb_frame_number() is that clock.
+     * It is the interval a real mouse's counts are stamped at, and the same clock
+     * the `loop:` and [PTR] rows already age reports against, so the pointer's
+     * cadence and the bus's agree instead of being two opinions about it. */
+    .input_period_us = 1000u,
+    /* The programmed display mode's own rate: 800x600 inside one 720p frame at
+     * 60 Hz.  Nothing is paced on it yet -- this is the deadline the async UI
+     * plane is installed against, and it belongs to the display rather than to
+     * however many passes a second the desktop loop happens to make. */
+    .ui_period_us = 16667u,
+    /* The system panel owns 28 rows and its clock changes with no event and no
+     * damage at all, so it is owed those rows on a schedule of its own. */
+    .panel_refresh_us = 200000u,
+    /* Whole-canvas convergence: the safety net for anything a banded present can
+     * get wrong -- an app that paints without invalidating, a hover highlight
+     * inside a window.  It is convergence and not animation, so two seconds of it
+     * is invisible while two frames of it is not free. */
+    .full_convergence_us = 2000000u,
+    /* Sixteen periods is one 60 Hz frame of pointer catch-up, and it bounds the
+     * work rather than the debt: a pass coming back from a 683 ms XMB frame must
+     * not turn into a long loop just because time passed. */
+    .input_slices_max = 16u
+};
+
+static void ps2_planes_install(void)
+{
+    btron_planes_install(&s_ps2_planes);
+    /* One row, because these are the numbers every other timing row is charged
+     * against, and a budget gate that cannot name its period is an opinion. */
+    ps2_kprintf("[PLANE] input=%u us  ui=%u us  panel=%u us  converge=%u us  slices=%u\n",
+                (unsigned int)s_ps2_planes.input_period_us,
+                (unsigned int)s_ps2_planes.ui_period_us,
+                (unsigned int)s_ps2_planes.panel_refresh_us,
+                (unsigned int)s_ps2_planes.full_convergence_us,
+                (unsigned int)s_ps2_planes.input_slices_max);
 }
 
 /* dp_core.c answers this with a weak stub that returns zero, and this port never
@@ -652,37 +692,38 @@ static uint32_t ps2_us_since(uint32_t start)
  * background restore, window decoration, application paint, client blit, panel and
  * bars, each of which has a different cure.
  *
- * Count is 32 bits and wraps every 29 seconds at 147 ticks/us, and callers take an
- * absolute difference, so the wrap is folded into a high word rather than leaking a
- * four-billion microsecond maximum into a stage counter.  The fold is 32-bit
- * arithmetic on purpose -- 2^32/147 is 29155706 us, and the residue below one
- * microsecond per wrap costs nothing a 1 ms budget can see -- because this target
- * links no runtime for wider division. */
+ * Count is 32 bits and wraps every 2^32/tpu microseconds -- 29 s at the documented rate,
+ * 14.5 s at the one this machine measures -- and callers take an absolute difference, so
+ * the wrap is folded into a high word rather than leaking a four-billion microsecond
+ * maximum into a stage counter.  The fold's per-wrap step is therefore derived from the
+ * measured divisor rather than written beside it: the arithmetic stays 32-bit on purpose
+ * (this target links no runtime for wider division), and the residue below one
+ * microsecond per wrap costs nothing a 1 ms budget can see. */
 uint32_t btron_render_perf_us(void)
 {
     static uint32_t s_ticks_hi;
     static uint32_t s_ticks_last;
+    const uint32_t tpu = btron_ee_ticks_per_us();
     const uint32_t now = ps2_count_read();
 
     if (now < s_ticks_last) s_ticks_hi++;
     s_ticks_last = now;
-    return s_timebase_ok ? s_ticks_hi * 29155706u + now / EE_TICKS_PER_US : 0u;
+    return s_timebase_ok ? s_ticks_hi * (0xFFFFFFFFu / tpu) + now / tpu : 0u;
 }
 
-/* One repaint of a present band, timed by stage.  The three have different cures,
- * so they are never folded into one number: the render walks the damaged part of
- * the desktop, the swap touches one word per pixel of it, and only the upload has
- * ever been measured here (1638 us for the whole canvas at boot).  Both callers use
- * it -- the loop, and the cold paint that 'startx' performs on its own, which is the
- * attribution that needs no hand protocol at all. */
-/* One repaint of one present region, timed by stage.  The three have different
- * cures, so they are never folded into one number: the render walks the damaged
- * part of the desktop, the swap touches one word per pixel of it, and the upload is
- * the GIF stream that carries it to the GS.
+/* One repaint of one present region, timed by stage.  The stages are never folded
+ * into one number because they have different cures: the render walks the damaged
+ * part of the desktop, the swap is the byte-order pass over it, and the upload is
+ * the GIF stream that carries it to the GS.  The swap now costs nothing and measures
+ * near zero, because the canvas is already in the GS's own byte order --
+ * BTRON_PIXEL_FB() performs the exchange as each colour is drawn
+ * (include/btron/types.h) -- and this row is the instrument that says so.
  *
- * This is the whole present: the loop's bands and ps2_bench_run() both hand it the
- * region's own extents, so the two agree by construction and the bench's rows
- * describe the present the desktop makes rather than a second one. */
+ * Both callers use it -- the loop, and the cold paint that 'startx' performs on its
+ * own, which is the attribution that needs no hand protocol at all.  The loop's bands
+ * and ps2_bench_run() hand it the region's own extents, so the two agree by
+ * construction and the bench's rows describe the present the desktop makes rather
+ * than a second one. */
 static void ps2_paint_region(GDEV *screen, int x0, int y0, int x1, int y1, int full,
                              uint32_t *r_us, uint32_t *s_us, uint32_t *u_us)
 {
@@ -761,15 +802,26 @@ static void ps2_paint_region(GDEV *screen, int x0, int y0, int x1, int y1, int f
 #endif
     }
     const uint32_t t1 = ps2_count_read();
-    blit_backbuffer_rect_to_ps2fb(x0, y0, x1, y1);
+    /* The byte-order stage, and it is empty.
+     *
+     * This bracket used to wrap a sweep -- one load and one R/B-exchanging store per
+     * pixel of the damaged region, out of the desktop's canvas and into a second
+     * framebuffer the GS driver owned.  The exchange now happens as each colour is
+     * drawn, through BTRON_PIXEL_FB() (include/btron/types.h), and the GIF reads the
+     * compositor's own array, so the sweep is gone along with the 49,094 us it cost
+     * out of a 274,524 us whole-canvas present and the 1.92 MB of .bss it drew from.
+     * The two reads are kept so this stage is still printed: `swap=0` on a full canvas
+     * is the measurement that says nothing came back, and a non-zero value would mean
+     * a conversion pass is live in the present path again. */
     const uint32_t t2 = ps2_count_read();
     ps2_gs_upload(x0, y0, x1 - x0, y1 - y0);
     const uint32_t t3 = ps2_count_read();
 
     if (s_timebase_ok) {
-        *r_us = (t1 - t0) / EE_TICKS_PER_US;
-        *s_us = (t2 - t1) / EE_TICKS_PER_US;
-        *u_us = (t3 - t2) / EE_TICKS_PER_US;
+        const uint32_t tpu = btron_ee_ticks_per_us();
+        *r_us = (t1 - t0) / tpu;
+        *s_us = (t2 - t1) / tpu;
+        *u_us = (t3 - t2) / tpu;
     } else {
         *r_us = *s_us = *u_us = 0u;
     }
@@ -1326,6 +1378,32 @@ static void ps2_ptrst_print(const char *label)
                 (unsigned int)s->passes, (unsigned int)frames,
                 (unsigned int)(frames ? s->passes * 1000u / frames : 0u),
                 (unsigned int)(frames ? s->passes * 10000u / frames % 10u : 0u));
+    /* Which layer took the reports off the bus, and how long they waited afterwards -- the
+     * two rows ASYNC.txt Tier-1 asks this port to prove, because the deliverable is not that
+     * a 1 kHz clock exists but that the pointer is serviced by it.  Everything here is
+     * cumulative since the handover, not this window's: `pass` has to stay at the handful of
+     * reports the boot drained before the plane was installed, and any growth in it beside
+     * `plane` says the pass is reading the rings again.  `collected on N periods` is the row
+     * that carries the claim with no hand on the mouse: a report needs motion, a period needs
+     * only the clock, so N climbing at the plane's rate with reports at zero is an idle
+     * collector and not an absent one.  `held` is the queue's own wait -- the distance between
+     * the bus and the paint -- and §10's 2 ms pointer-update gap is what it answers to. */
+    {
+        const ps2_usb_plane_stats_t *p = ps2_usb_plane_stats();
+        const uint32_t wcet_100 = ps2_irq_wcet_ticks() * 100u / btron_ee_ticks_per_us();
+
+        ps2_kprintf("[PSTAT] plane: reports=%u on the input plane, %u in a pass, dropped=%u queue max=%u of %u, collected on %u periods\n",
+                    (unsigned int)p->plane_reports, (unsigned int)p->pass_reports,
+                    (unsigned int)p->dropped, (unsigned int)p->queue_max,
+                    (unsigned int)p->queue_slots, (unsigned int)p->plane_periods);
+        ps2_kprintf("[PSTAT] plane: held max=%u us mean=%u us over %u delivered -- isr %u.%02u us of the %u us budget, overruns=%u\n",
+                    (unsigned int)p->held_max_us,
+                    (unsigned int)(p->held_n ? p->held_sum_us / p->held_n : 0u),
+                    (unsigned int)p->held_n,
+                    (unsigned int)(wcet_100 / 100u), (unsigned int)(wcet_100 % 100u),
+                    (unsigned int)ASYNC_ISR_BUDGET_US,
+                    (unsigned int)ps2_irq_overruns());
+    }
     /* Both axes, from ps2_chain_print() above.  The pair is the answer to a
      * difference in feel that is a difference in gain rather than in paint cost:
      * the two rows should read the same px/count for the same host slide, and the
@@ -1764,9 +1842,41 @@ void ps2_usb_on_mouse(int dx, int dy, uint8_t buttons)
 #endif
 }
 
-/* Spend the accumulated pointer distance, at most a frame's worth of it.  Called
- * once per pass of each event loop, before the events are dispatched and the
- * screen is painted, so the movement and the paint agree on one position. */
+/* How many INPUT periods this pass owes, taken from the plane table rather than
+ * from the pass counter.  A pointer step is a per-period thing -- that is what the
+ * bus's 1 ms frame means -- and the loop makes a very different number of passes a
+ * second depending on what is painting, so the budget one pass may spend has to be
+ * the periods that actually elapsed or "px per pass" is really frame time.
+ *
+ * It advances by the whole periods it consumed rather than to `now`, so a pass that
+ * runs early cannot borrow against the next one, and it floors at one so a caller
+ * that services the pointer itself -- the loopback calibrator, one report at a
+ * time -- is never starved by a clock that has not reached a millisecond yet.  The
+ * clamp is the table's bound on the work: coming back from a long paint costs one
+ * pass, not a catch-up run.  With no Count to read there is no cadence to price,
+ * and one period is what a pass has always been worth. */
+static int32_t ps2_ptr_input_slices(void)
+{
+    const uint32_t period_ticks = btron_planes()->input_period_us * btron_ee_ticks_per_us();
+    uint32_t slices, now;
+
+    if (!s_timebase_ok) return 1;
+    now = ps2_count_read();
+    if (!s_ptr_input_due) {
+        s_ptr_input_due = now;
+        return 1;
+    }
+    slices = (uint32_t)(now - s_ptr_input_due) / period_ticks;
+    if (slices < 1u) slices = 1u;
+    if (slices > btron_planes()->input_slices_max) slices = btron_planes()->input_slices_max;
+    s_ptr_input_due += slices * period_ticks;
+    return (int32_t)slices;
+}
+
+/* Spend the accumulated pointer distance, at most the periods that have passed
+ * since the last service could spend.  Called once per pass of each event loop,
+ * before the events are dispatched and the screen is painted, so the movement and
+ * the paint agree on one position. */
 static void ps2_ptr_service(void)
 {
     const int32_t ask_x = s_ptr_want_x, ask_y = s_ptr_want_y;
@@ -1774,11 +1884,19 @@ static void ps2_ptr_service(void)
     static uint32_t s_moves;
 #endif
     const int x0 = s_mouse_x, y0 = s_mouse_y;
+    const int32_t slices = ps2_ptr_input_slices();
+    /* The cap is pixels per INPUT period, so a pass owed four periods may spend
+     * four of them.  With the shipped cap off (PS2_PTR_MAX_STEP 0) this product is
+     * zero and dp_ptr_limit() treats a non-positive limit as no limit at all, so
+     * the slicing is the identity exactly when the limiter is -- which is the
+     * point: the shipped pointer is proportional, and `maxstep N` measures the
+     * alternative against the machine's clock instead of against the loop rate. */
+    const int32_t step = s_ptr_max_step * slices;
     int32_t px, py;
 
     s_ptr_want_x = s_ptr_want_y = 0;
-    px = dp_ptr_limit(ask_x, s_ptr_max_step, &s_ptr_defer_x);
-    py = dp_ptr_limit(ask_y, s_ptr_max_step, &s_ptr_defer_y);
+    px = dp_ptr_limit(ask_x, step, &s_ptr_defer_x);
+    py = dp_ptr_limit(ask_y, step, &s_ptr_defer_y);
     if (px || py) ps2_move_mouse((int)px, (int)py);
     /* Every pass, including a pass that moved nothing: a cursor parked on a wall
      * while the hand pushes into it is the case being measured, and it is exactly
@@ -1977,7 +2095,7 @@ static void ps2_shell_exec(const char *cmd)
         ps2_kprintf("  mouse <x> <y>    - Move cursor to absolute position (0..800, 0..600)\n");
         ps2_kprintf("  move <dx> <dy>   - Move cursor relative by (dx, dy)\n");
         ps2_kprintf("  sens [pct]       - Show or set the USB pointer scale (1..400%%, 100 = as reported)\n");
-        ps2_kprintf("  maxstep [px]     - Show or set the pointer's max px per paint (0 = no cap)\n");
+        ps2_kprintf("  maxstep [px]     - Show or set the pointer's max px per INPUT period (0 = no cap)\n");
         ps2_kprintf("  ptrsrc [emu|hw|auto] - Pointer policy: emulator device, real mouse, or re-detect\n");
         ps2_kprintf("  ptrstat <tag>    - Print+reset pointer counts, paint cost, and mouse->screen ms\n");
         ps2_kprintf("  ptrcal           - Loopback-calibrate the pointer path (no mouse needed)\n");
@@ -2146,7 +2264,7 @@ static void ps2_shell_exec(const char *cmd)
             s_ptr_want_x = s_ptr_want_y = 0;
             s_ptr_defer_x = s_ptr_defer_y = 0;
         }
-        ps2_kprintf("[PS2] Pointer cap %d px per paint%s\n",
+        ps2_kprintf("[PS2] Pointer cap %d px per INPUT period%s\n",
                     (int)s_ptr_max_step, s_ptr_max_step > 0 ? "" : " (off)");
     } else if (tkl_strncmp(cmd, "ptrsrc", 6) == 0) {
         const char *p = cmd + 6;
@@ -2229,7 +2347,7 @@ static void ps2_shell_exec(const char *cmd)
         /* The gain rows are this port's own transfer function, so they read the
          * same however the mouse was moving; a stray on the axis nobody asked
          * for is an axis bug rather than a setting to turn. */
-        ps2_kprintf("[CAL] scale=%d%% px per count, cap=%d px per paint. DRIFT is where the\n"
+        ps2_kprintf("[CAL] scale=%d%% px per count, cap=%d px per ms. DRIFT is where the\n"
                     "[CAL] pointer ended after equal and opposite counts; DIAG asks both axes\n"
                     "[CAL] the same question.\n",
                     (int)(s_ptr_mult_fp * 100 / 256), (int)s_ptr_max_step);
@@ -2592,13 +2710,24 @@ static void ps2_bench_move(GDEV *screen, const char *tag, int dx, int dy, uint32
                 (unsigned int)bands_max);
     /* passes/s is the number the cursor's frame rate actually is: one pass paints
      * one position, so the present's cost divided into a second is the pointer's
-     * refresh, in both directions, from the same machine. */
+     * refresh, in both directions, from the same machine.
+     *
+     * The numerator is 1e6 and not a tick count because ps2_us_since() has already spent
+     * the divisor on the way out; the 147000 this row carried was ticks-per-millisecond
+     * over a microsecond denominator, which priced every direction 6.8x slower than the
+     * `us/pass` column beside it.  Staying 32-bit costs nothing here: the phase's own pass
+     * count is 40, and the numerator only overflows past 4294 of them.
+     *
+     * The wall is tested rather than the Count reading because a direction whose every
+     * pass found nothing to paint returns inside one tick, and this image divides by
+     * hardware: a zero denominator is a `divu` nobody traps, which prints a rate rather
+     * than the absence of one. */
+    const uint32_t wall_us = ps2_us_since(t_start);
     ps2_kprintf("[BENCH]           us/pass render %u swap %u upload %u total %u  -> %u passes/s\n",
                 (unsigned int)(r_sum / passes), (unsigned int)(s_sum / passes),
                 (unsigned int)(u_sum / passes),
                 (unsigned int)((r_sum + s_sum + u_sum) / passes),
-                (unsigned int)(ps2_count_read() > t_start
-                                   ? passes * 147000u / ps2_us_since(t_start) : 0u));
+                (unsigned int)(wall_us ? passes * 1000000u / wall_us : 0u));
     btron_render_stats_take(&st);
     ps2_kprintf("[BENCH]           compositor: bg=%u(%u px) frame=%u paint=%u blit=%u(%u px) comp=%u bfn=%u wins=%u/%u\n",
                 (unsigned int)st.bg_us, (unsigned int)st.bg_worst_px,
@@ -2739,8 +2868,8 @@ static void ps2_bench_click(GDEV *screen)
  * A single white-then-black pair is not enough to call it the cursor -- window text is
  * exactly that pattern, and the first version of this probe reported a hit at 468,106
  * where no cursor is.  Nine pixels over three rows in that order is nothing else this
- * desktop composes.  COLOR_WHITE and COLOR_BLACK both survive the ARGB -> RGBA byte
- * swap the present does, so one test reads either surface. */
+ * desktop composes.  COLOR_WHITE and COLOR_BLACK are both fixed points of
+ * BTRON_PIXEL_FB(), so this test reads a canvas word as it lies. */
 static BOOL ps2_cursor_sig_at(const uint32_t *p, int x, int y)
 {
     const uint32_t W = (uint32_t)COLOR_WHITE, B = (uint32_t)COLOR_BLACK;
@@ -2798,12 +2927,15 @@ static void ps2_bench_cursor(GDEV *screen)
     const uint32_t *bb = (const uint32_t *)s_desktop_backbuffer;
     const uint32_t *fb = ps2_gs_get_framebuffer();
     int moves, buttons, px = -1, py = -1;
-    int hb[8], hf[8];
-    int bare_bb = 0, bare_fb = 0, elsewhere = 0, append_failed = 0;
+    int hb[8];
+    int bare_bb = 0, elsewhere = 0, append_failed = 0;
 
-    ps2_kprintf("\n[BENCH] cursor presence -- where, if anywhere, is the sprite drawn?\n");
-    /* The two surfaces by address, so that a per-region `pixels=` below can be compared
-     * with the one this phase reads without another build. */
+    ps2_kprintf("\n[BENCH] cursor presence -- is the sprite in the canvas?\n");
+    /* One canvas now, so the two addresses are the same number and the row is the
+     * boot-time proof of it: the DMA and the compositor share one array, and a sprite
+     * that is in one is in the other.  The question this probe used to answer with a
+     * second surface -- "drawn but never presented" -- has moved to the region rows
+     * below, which say whether the present ever went where the sprite was drawn. */
     ps2_kprintf("[BENCH] cursor: surfaces bb=0x%x fb=0x%x\n",
                 (unsigned)(uintptr_t)bb, (unsigned)(uintptr_t)fb);
 
@@ -2831,21 +2963,18 @@ static void ps2_bench_cursor(GDEV *screen)
          * cannot be excused by one. */
         get_baremetal_mouse_pos(&bmx, &bmy);
         bare_bb = ps2_cursor_sig_at(bb, (int)bmx, (int)bmy);
-        bare_fb = ps2_cursor_sig_at(fb, (int)bmx, (int)bmy);
 
         const int nb = bare_bb ? 0 : ps2_cursor_scan(bb, hb, 4);
-        const int nf = bare_fb ? 0 : ps2_cursor_scan(fb, hf, 4);
         elsewhere += (!bare_bb && nb > 0);
 
-        ps2_kprintf("[BENCH] cursor: park %d,%d drawn=%d,%d mouse=%d,%d shown=%d,%d in_bb=%d | sig at drawn: bb=%d fb=%d\n",
+        ps2_kprintf("[BENCH] cursor: park %d,%d drawn=%d,%d mouse=%d,%d shown=%d,%d in_bb=%d | sig at drawn: bb=%d\n",
                     x, y, (int)bmx, (int)bmy, s_mouse_x, s_mouse_y, s_shown_x, s_shown_y,
-                    g_cursor_in_backbuffer, bare_bb, bare_fb);
+                    g_cursor_in_backbuffer, bare_bb);
         /* A whole-canvas walk is only worth its cost when the sprite is not where the
          * port says it drew it: then the row names the places it is instead. */
-        if (!bare_bb || !bare_fb) {
-            ps2_kprintf("[BENCH] cursor: canvas hits bb=%d(%d,%d %d,%d %d,%d %d,%d) fb=%d(%d,%d %d,%d %d,%d %d,%d)\n",
-                        nb, hb[0], hb[1], hb[2], hb[3], hb[4], hb[5], hb[6], hb[7],
-                        nf, hf[0], hf[1], hf[2], hf[3], hf[4], hf[5], hf[6], hf[7]);
+        if (!bare_bb) {
+            ps2_kprintf("[BENCH] cursor: canvas hits bb=%d(%d,%d %d,%d %d,%d %d,%d)\n",
+                        nb, hb[0], hb[1], hb[2], hb[3], hb[4], hb[5], hb[6], hb[7]);
         }
         /* What the pass actually covered.  If its union does not contain the sprite's
          * own box at the position that was drawn, the sprite is not missing because the
@@ -2896,12 +3025,11 @@ static void ps2_bench_cursor(GDEV *screen)
     }
 
     ps2_kprintf("[BENCH] cursor: %s\n",
-                (bare_bb && bare_fb)
-                    ? "sprite is at the drawn position in BOTH surfaces -- the guest paints and presents it, so an invisible cursor is downstream of this port's paint"
-                    : (bare_bb ? "sprite is in the backbuffer but not in the GS frame buffer -- the present region or the blit misses it"
-                               : (append_failed ? "the append ran and wrote nothing -- a five-argument call into desktop.c whose fifth argument arrived corrupted, which is what a mixed-MIPS-ABI link does (see the ABI note in the Makefile)"
-                                                : (elsewhere ? "sprite is on the canvas but not at the position the append read back -- the two coordinate sources disagree"
-                                                             : "sprite is nowhere on the canvas -- it is not being drawn"))));
+                bare_bb
+                    ? "sprite is at the drawn position in the canvas -- the guest paints the words the GIF is given, so an invisible cursor is downstream of this port's paint"
+                    : (append_failed ? "the append ran and wrote nothing -- a five-argument call into desktop.c whose fifth argument arrived corrupted, which is what a mixed-MIPS-ABI link does (see the ABI note in the Makefile)"
+                                     : (elsewhere ? "sprite is on the canvas but not at the position the append read back -- the two coordinate sources disagree"
+                                                  : "sprite is nowhere on the canvas -- it is not being drawn")));
 }
 
 /* ── Launch phase: does a launcher row open the application it names? ────────
@@ -2990,23 +3118,15 @@ static void ps2_bench_press(GDEV *screen)
     ps2_gui_pass(screen);
 }
 
-/* The blit's own ARGB->CT32 transform, so a backbuffer pixel and the frame buffer
- * pixel it became can be compared byte for byte. */
-static uint32_t ps2_bench_swizzle(uint32_t c)
-{
-    return ((c & 0x00FF0000u) >> 16) | (c & 0x0000FF00u) |
-           ((c & 0x000000FFu) << 16) | (c & 0xFF000000u);
-}
-
-/* ── Launcher ink: is a row drawn, and is what was drawn presented? ──────────
+/* ── Launcher ink: which row bands have anything drawn in them? ──────────────
  *
- * "xmb is not added to start launch" is a claim about the screen, and the guest can
- * test the two halves of it separately with the same method that closed the cursor
- * thread: read the compositor's canvas and the frame buffer the GS is scanning, over
- * each row band.  A band with ink in bb and no ink in fb is a present that missed.
- * A band with no ink in either is a row that was never drawn -- and a band that is
- * blank here while the item table has a label for it means the label, not the row,
- * is what the user cannot find.
+ * "xmb is not added to start launch" is a claim about the screen, and the canvas is
+ * now the one array the GS is fed from, so a band with ink in it is a band the screen
+ * can show -- what a band blank here means is that the row was never drawn, and a
+ * band that is blank while the item table has a label for it names the label, not the
+ * present, as the thing the user cannot find.  Whether the present *covered* a drawn
+ * band is a different question and the paint trace answers it: the region rows in
+ * ps2_bench_cursor() report the union the pass uploaded.
  *
  * The pointer is parked far outside the menu first.  Motion alone does not dismiss
  * the launcher (only a press does, tracker_handle_mouse_down), and a hover-filled
@@ -3015,9 +3135,8 @@ static void ps2_bench_menu_ink(GDEV *screen, int picture_row_a, int picture_row_
 {
     const TRACKER *t = tracker_get_state();
     const uint32_t *bb = (const uint32_t *)s_desktop_backbuffer;
-    const uint32_t *fb = ps2_gs_get_framebuffer();
     int moves, buttons, bx = -1, by = -1;
-    int blank = 0, stale_total = 0;
+    int blank = 0;
 
     if (!tracker_is_menu_open()) {
         ps2_kprintf("[BENCH] menu ink: launcher is closed, nothing to read\n");
@@ -3037,21 +3156,17 @@ static void ps2_bench_menu_ink(GDEV *screen, int picture_row_a, int picture_row_
 
     for (H i = 0; i < t->item_count; i++) {
         const int y0 = t->menu_rect.top + 3 + i * TRACKER_ITEM_HEIGHT;
-        int ink_bb = 0, ink_fb = 0, stale = 0;
+        int ink_bb = 0;
 
         for (int y = y0; y < y0 + TRACKER_ITEM_HEIGHT && y < PS2_SCREEN_HEIGHT; y++) {
             for (int x = x0; x < x1 && x < PS2_SCREEN_WIDTH; x++) {
                 const uint32_t b = bb[(uint32_t)y * PS2_SCREEN_WIDTH + (uint32_t)x];
-                const uint32_t f = fb[(uint32_t)y * PS2_SCREEN_WIDTH + (uint32_t)x];
-                if (b != (uint32_t)COLOR_WHITE) ink_bb++;
-                if (f != (uint32_t)COLOR_WHITE) ink_fb++;
-                if (f != ps2_bench_swizzle(b)) stale++;
+                if (b != (uint32_t)BTRON_PIXEL_FB(COLOR_WHITE)) ink_bb++;
             }
         }
-        ps2_kprintf("[BENCH] menu ink: r%-2d type=%-2d y=%-3d bb_ink=%-5d fb_ink=%-5d stale=%d\n",
-                    i, (int)t->items[i].type, y0, ink_bb, ink_fb, stale);
+        ps2_kprintf("[BENCH] menu ink: r%-2d type=%-2d y=%-3d bb_ink=%-5d\n",
+                    i, (int)t->items[i].type, y0, ink_bb);
         if (t->items[i].type != TRACKER_CMD_SEPARATOR && i != t->hover_index && ink_bb == 0) blank++;
-        stale_total += stale;
 
         if (i == picture_row_a || i == picture_row_b) {
             for (int r = 0; r < TRACKER_ITEM_HEIGHT; r += 2) {
@@ -3078,10 +3193,8 @@ static void ps2_bench_menu_ink(GDEV *screen, int picture_row_a, int picture_row_
     ps2_kprintf("[BENCH] menu ink: %s\n",
                 blank > 0
                     ? "a labelled row is blank in the compositor's own canvas -- the item exists but its label never reaches the screen, which is what \"not added to the launcher\" looks like from outside"
-                    : (stale_total > 0
-                        ? "every row is drawn, and some band of the frame buffer does not match the canvas -- the present misses part of the menu"
-                        : "every labelled row carries ink in the canvas and the frame buffer matches it pixel for pixel -- the launcher rows are on the display surface"));
-    ps2_kprintf("[BENCH] menu ink: blank_rows=%d stale_pixels=%d\n", blank, stale_total);
+                    : "every labelled row carries ink in the canvas, and the canvas is what the GIF is given");
+    ps2_kprintf("[BENCH] menu ink: blank_rows=%d\n", blank);
 }
 
 /* ── Key route: is the launcher operable with no pointer at all? ─────────────
@@ -3278,7 +3391,14 @@ extern int  xmb_depth(void);        /* the depth xb_go_back() is standing at */
 /* "xmb still black" measured instead of reported: xb_paint() renders through the GL
  * backend into the window's own device pixels, so a black bar means the rasterizer
  * wrote nothing there.  open_xmb_window() is idempotent through its live handle, so
- * asking it for the window mid-loop costs nothing but a top_wnd(). */
+ * asking it for the window mid-loop costs nothing but a top_wnd().
+ *
+ * The two columns are read differently because the canvas is not in COLOR order here
+ * (include/btron/types.h, BTRON_PIXEL_FB).  black= is a comparison against
+ * COLOR_BLACK, whose 0xFF000000 exchanges two zero fields, so it counts the same pixels
+ * in either order.  first_colour= is not: it is printed for a human to identify, so it
+ * is passed back out through the macro and reads as the colour it is -- a red pixel
+ * prints 0xFFFF0000 on every target, where the raw word on the PS2 is 0xFF0000FF. */
 static void ps2_bench_xmb_surface(const char *when)
 {
     const WND *w = open_xmb_window();
@@ -3293,7 +3413,7 @@ static void ps2_bench_xmb_surface(const char *when)
     int x0 = -1, x1 = -1, y0 = -1, y1 = -1;
     for (int y = 0; y < dev->height; y++) {
         for (int x = 0; x < dev->width; x++) {
-            const uint32_t v = dev->pixels[(uint32_t)y * (uint32_t)dev->width + (uint32_t)x];
+            const COLOR v = BTRON_PIXEL_FB(dev->pixels[(uint32_t)y * (uint32_t)dev->width + (uint32_t)x]);
             if (v == (uint32_t)COLOR_BLACK) { black++; continue; }
             other++;
             if (!first) first = v;
@@ -3352,11 +3472,14 @@ static void ps2_bench_app(uint32_t frames)
     if (pool_bad) ps2_heap_dump();
 
     {
-        /* passes * 1e6 / us, and not the tick form ps2_bench_move() uses: 60 frames
-         * already overflow a 32-bit numerator at 147 ticks per microsecond. */
+        /* passes * 1e6 / us.  The folded clock is already in microseconds, so a second
+         * of them is the whole numerator and no tick constant appears here -- which is
+         * the form that survives a long phase, where the tick version overflowed the
+         * 32-bit product at 60 frames. */
         const uint32_t us = btron_render_perf_us() - t_start;
-        /* `<=` because the fold loses a Count wrap for every 29.1 s of blocked time
-         * between its calls, and a frame of this app is longer than that: the elapsed
+        /* `<=` because the fold loses a Count wrap for every 2^32/tpu of blocked time
+         * between its calls -- 14.6 s at the rate this machine's plane measures, 29.1 s at
+         * the documented one -- and a frame of this app is longer than that: the elapsed
          * column is short, so the derived rate is an upper bound, not a measurement. */
         ps2_kprintf("[BENCH] xmb: open returned %s, %u passes in %u ms folded -> <= %u passes/s, window still %s\n",
                     w ? "with a window" : "with no window",
@@ -3720,10 +3843,12 @@ static void ps2_gui_pass(GDEV *screen)
     /* Two timers, because two different things go stale on their own.
      *
      * The panel's clock changes with no event and no damage at all, and it owns
-     * 28 rows, so it is owed those rows every 200 ms.  Whole canvas is owed to
-     * anything a banded present could have got wrong -- an app that paints
-     * without invalidating, a hover highlight inside a window -- and it is
-     * convergence, not animation, so two seconds of it is invisible.
+     * 28 rows, so it is owed those rows on its own period -- the plane table's
+     * panel_refresh_us, not a literal in front of the tick constant.  Whole canvas
+     * is owed to anything a banded present could have got wrong -- an app that
+     * paints without invalidating, a hover highlight inside a window -- and it is
+     * convergence, not animation, so the table's full_convergence_us of it is
+     * invisible.
      *
      * Paced on the clock and not on a pass count because a banded pass is cheap
      * enough that the loop now makes very many of them a second, and every
@@ -3733,11 +3858,14 @@ static void ps2_gui_pass(GDEV *screen)
      * clock that stops advancing. */
     if (s_timebase_ok) {
         const uint32_t now = ps2_count_read();
-        if ((uint32_t)(now - s_pass_panel_due) >= (uint32_t)(200u * EE_TICKS_PER_US)) {
+        const uint32_t tpu = btron_ee_ticks_per_us();
+        if ((uint32_t)(now - s_pass_panel_due) >=
+                (uint32_t)(btron_planes()->panel_refresh_us * tpu)) {
             ps2_bandset_add(&set, 0, PS2_SCREEN_WIDTH, 0, PS2_PANEL_ROWS);
             s_pass_panel_due = now;
         }
-        if ((uint32_t)(now - s_pass_full_due) >= (uint32_t)(2000u * EE_TICKS_PER_US)) {
+        if ((uint32_t)(now - s_pass_full_due) >=
+                (uint32_t)(btron_planes()->full_convergence_us * tpu)) {
             force_full = 1;
             s_pass_full_due = now;
         }
@@ -3869,7 +3997,7 @@ static uint32_t ps2_task_ms(void)
         const uint32_t now = ps2_count_read();
         if (s_task_clock_running) {
             const uint32_t us =
-                (uint32_t)(now - s_task_count_last) / EE_TICKS_PER_US + s_task_us_rem;
+                (uint32_t)(now - s_task_count_last) / btron_ee_ticks_per_us() + s_task_us_rem;
             s_task_ms += us / 1000u;
             s_task_us_rem = us % 1000u;
         } else {
@@ -3888,16 +4016,17 @@ ER get_tim(SYSTIME *p_time)
 }
 
 /* Hold the rest of the frame period on Count.  Capped at 250 ms for two reasons that
- * are both about being able to see the screen: ms * 147 * 1000 overflows the 32-bit
- * compare past ~14 s, and no pass -- so no USB poll, no pointer, no present -- runs
- * while a body holds, which makes a long delay a black screen rather than a slow one.
+ * are both about being able to see the screen: ms * 1000 * ticks-per-us overflows the
+ * 32-bit compare past ~14.5 s at the rate this machine measures (29 s at the documented
+ * one), and no pass -- so no USB poll, no pointer, no present -- runs while a body holds,
+ * which makes a long delay a black screen rather than a slow one.
  * With no Count to read there is nothing to time against, so the pass is not held. */
 static void ps2_task_hold(uint32_t ms)
 {
     if (!s_timebase_ok || ms == 0) return;
     if (ms > 250u) ms = 250u;
     const uint32_t start  = ps2_count_read();
-    const uint32_t budget = ms * (1000u * EE_TICKS_PER_US);
+    const uint32_t budget = ms * (1000u * btron_ee_ticks_per_us());
     while ((uint32_t)(ps2_count_read() - start) < budget)
         ps2_delay_cycles(200u);
 }
@@ -4254,9 +4383,12 @@ static void ps2_log_boot_head(void)
     ps2_kprintf("[GS] SetGsCrt omode=0x52 720p  DISPLAY 800x600 mag1x  CT32  VRAM page 0 pitch 832 px (1.90 MB)\n");
     ps2_kprintf("[GS] init %u us   full canvas upload 120000 QW %u us   one console row-band %u us\n",
                 (unsigned int)s_gs_init_us, (unsigned int)s_full_upload_us, (unsigned int)s_band_upload_us);
-    ps2_kprintf("[CPU] CP0 Count %s  (%u ticks/us)\n",
+    ps2_kprintf("[CPU] CP0 Count %s  (%u ticks/us, %s)\n",
                 s_timebase_ok ? "running" : "STOPPED, counted delays",
-                (unsigned int)EE_TICKS_PER_US);
+                (unsigned int)btron_ee_ticks_per_us(),
+                btron_ee_ticks_per_us_measured()
+                    ? "measured against the input plane"
+                    : "documented rate, plane gave no window");
     {
         /* The float question, answered rather than assumed: CU1 (bit 29) says whether
          * the loader handed over the EE's FPU, btron_fp_on says whether this image
@@ -4290,9 +4422,23 @@ static void ps2_log_boot_tail(int hid_devs)
 
 void ps2_kernel_main(void)
 {
+    /* 0. The canvas, before anything can draw into it or be measured.  The GS driver
+     *    used to own a second 800x600x4 array and the present copied this one into it
+     *    one pixel at a time; now the DMA reads the array the compositor paints, so the
+     *    pointer has to be installed before ps2_sio_init() mirrors the boot log to the
+     *    screen.  See BTRON_PIXEL_FB in include/btron/types.h for the byte order the
+     *    pixels those rows draw are already in. */
+    ps2_gs_set_framebuffer((uint32_t *)s_desktop_backbuffer);
+
     /* 1. SIO0 first: every row below is mirrored to it, and it is also the only
      *    way to see a hang that happens before the GS console exists. */
     ps2_sio_init();
+
+    /* 1a. The plane table, before anything that can poll a HID report: the rows
+     *     every later budget is charged against live here, and a reader that ran
+     *     first would be reading the desktop loop's pass count as if it were a
+     *     period. */
+    ps2_planes_install();
 
     /* 1b. The FPU decision, before anything is timed or rasterised: btron_fp_init()
      *     proves the EE's single-precision unit answers and switches to it, or leaves
@@ -4305,6 +4451,21 @@ void ps2_kernel_main(void)
     uint32_t c0 = ps2_count_read();
     for (volatile int i = 0; i < 20000; i++) { }
     s_timebase_ok = (ps2_count_read() != c0);
+
+    /* 2a. The machine's microsecond, before the first thing that is timed with it.
+     *     Arming the INPUT plane here rather than at 4b costs its calibration window --
+     *     32 periods, 32 ms of the plane's own clock -- and buys every row after it:
+     *     the GS's upload costs, the OHCI probe, the present's stage attribution, the
+     *     pointer's slices and the bench's budgets all divide Count by what this
+     *     measures, so a port that armed the clock after printing them would be quoting
+     *     its own timings in the rate it had just disproved.  The plane itself is then
+     *     already running when 4b takes its evidence window, which is the point: a clock
+     *     that only exists for the row that proves it exists proves nothing.
+     *
+     *     Nothing here waits when Count has stopped, because the gaps that answer the
+     *     question are Count's own numbers and a stopped counter reports zero for every
+     *     one of them; the divisor stays at the documented rate and says so. */
+    if (s_timebase_ok && ps2_irq_input_arm() == 0) (void)ps2_irq_calib_wait();
 
     /* 3. Graphics Synthesizer + GIF DMA, so the boot log lands on screen. */
     uint32_t gs0 = ps2_count_read();
@@ -4343,6 +4504,165 @@ void ps2_kernel_main(void)
      * count from them is worth.  Before this row the desktop is reachable but
      * deaf, so the profile can never be applied to a stream it did not measure. */
     ps2_ptr_src_detect();
+
+    /* 4b. The INPUT plane's evidence (doc/txt/ASYNC.txt Tier-1).  Until this port had no
+     *     periodic interrupt at all: every HID report waited for the pass that paints, so
+     *     the pointer's latency simply WAS the frame time -- which is hundreds of
+     *     milliseconds with the XMB open.  Arming a clock is a claim; the ticks that
+     *     arrive inside a measured window are the evidence, and the row prints the
+     *     difference rather than assuming it.  The window is 50 ms because that is fifty
+     *     periods of a 1 ms plane, enough to tell a live clock from a register that
+     *     accepted a handler and never fired.  The plane was armed at 2a and has been
+     *     ticking through everything above, so this window measures a clock that was
+     *     already doing the work, and ps2_irq_input_arm() here only answers for the
+     *     registry's verdict (it is idempotent and returns the same rejection).
+     *
+     *     CP0 Status is printed across the window because the first run on this machine
+     *     took exactly one tick in fifty, and the tick count alone cannot say whether
+     *     the clock never fired or fired once and could not be re-armed: taking an
+     *     exception clears the EE's interrupt-enable bit, so those two failures differ
+     *     only in this register. */
+    {
+        const int arm_rc = ps2_irq_input_arm();
+        const uint32_t st0 = ps2_irq_status();
+        const uint32_t win0 = ps2_count_read();
+        const uint32_t tick0 = ps2_irq_ticks();
+        const uint32_t fm0 = ps2_usb_frame_number();
+        uint32_t window_us, got, owed, frames;
+        uint32_t st1;
+
+        ps2_task_hold(50u);
+        window_us = ps2_us_since(win0);
+        got = ps2_irq_ticks() - tick0;
+        owed = window_us / ps2_irq_input_period_us();
+        st1 = ps2_irq_status();
+
+        /* The USB host's frame counter is this machine's third clock.  OHCI frames are
+         * 1 ms by definition and are kept by the controller, not by CP0 Count, so
+         * counting them across the same window is the check on the divisor the rows below
+         * are printed with: it is the one opinion here that did not go into measuring it.
+         * That is the row that settled the question this port had -- Timer0's periods came
+         * in 1985..2026 of our microseconds apart while this counter said 25 frames had
+         * passed in what Count called 50 ms, two hardware clocks agreeing against the
+         * port's own divide by exactly a factor of two, which is the emulator feeding
+         * Count at the core clock rather than the documented half of it.  Agreement here
+         * now is the calibration holding. */
+        frames = ps2_usb_frame_number() - fm0;
+        ps2_kprintf("[ASYNC] input plane Timer0 (INTC 9): period=%u us compare=%u ticks=%u of the %u this %u us window owes -> %s%s\n",
+                    (unsigned int)ps2_irq_input_period_us(),
+                    (unsigned int)ps2_irq_timer_compare(),
+                    (unsigned int)got, (unsigned int)owed,
+                    (unsigned int)window_us,
+                    arm_rc < 0 ? "the INTC registry REJECTED the handler: " : "",
+                    (arm_rc < 0 || got == 0u) ? "DEAD"
+                                              : ((got + 1u >= owed) ? "LIVE" : "STALLED"));
+
+        /* A clock is not a plane until something works on it.  Handing the OHCI's periodic
+         * collection to the handler is the step that makes the input plane the thing that
+         * services the pointer rather than the pass that paints it, and it is taken only on
+         * the verdict the row above measured: on a machine whose plane is DEAD the pass keeps
+         * polling the rings itself, because a queue nobody fills is a keyboard that types
+         * nothing -- and on one that is STALLED the same, since a plane delivering 3 of the 50
+         * periods it owes would collect 3 reports a second while the ring it is the only
+         * reader of piled the rest up.
+         *
+         * It goes here, before the rows below, because the ISR budget printed at the end of
+         * this block has to be charged with the work the plane now does: the cost of an empty
+         * ring is two uncached reads, and the number worth printing is the one taken after
+         * the collection joined the handler. */
+        if (arm_rc >= 0 && got + 1u >= owed) {
+            ps2_usb_input_plane(1);
+            ps2_kprintf("[ASYNC] hid collection: the input plane reads the OHCI rings and a pass delivers them\n");
+        }
+        /* The divisor itself, with the window behind it: the count of periods, the sum of
+         * their gaps, and the mean that division was taken from.  The OHCI row below is
+         * the sample that did not go into this number. */
+        ps2_kprintf("[ASYNC] machine microsecond = %u Count ticks, measured over %u periods of the plane (%u ticks summed, mean %u) -- %s\n",
+                    (unsigned int)btron_ee_ticks_per_us(),
+                    (unsigned int)ps2_irq_calib_periods(),
+                    (unsigned int)ps2_irq_calib_gap_ticks(),
+                    (unsigned int)(ps2_irq_calib_periods()
+                                       ? ps2_irq_calib_gap_ticks() / ps2_irq_calib_periods() : 0u),
+                    btron_ee_ticks_per_us_measured()
+                        ? "measured, so every microsecond this image prints is real time"
+                        : "FALLBACK to the documented 147: no window, timings are the datasheet's opinion");
+        /* The plane's period jitter, in the raw ticks the handler stamped rather than in
+         * microseconds, because a gap divided by the divisor measured from gaps is the
+         * period by construction and would carry no information.  The µs conversion of the
+         * pair is still printed, and the two are read together: the mean is 1 ms to within
+         * 0.1 % while the extremes this machine took were 33 us and 14 ms.
+         *
+         * That pair is measured; what follows is the inference, and it is the shape the
+         * numbers have rather than a cause found.  A clock running at the wrong rate would
+         * move the mean, and it has not moved: a wide short edge and a wide long edge
+         * around a correct mean is a handler that was kept out of the processor for 14 ms
+         * and then took the edge it had missed together with the next one.  The boot is
+         * where both were taken -- this plane was armed before the GS and the USB probe, and
+         * those phases are the port's own longest busy work -- so the desktop loop's
+         * jitter is a separate question, and it is the one the [PSTAT] rows have to answer
+         * for a hand that is actually moving a cursor. */
+        ps2_kprintf("[ASYNC] gaps since the arm: %u..%u ticks = %u..%u us, against the %u us the period means\n",
+                    (unsigned int)ps2_irq_gap_min_ticks(),
+                    (unsigned int)ps2_irq_gap_max_ticks(),
+                    (unsigned int)(ps2_irq_gap_min_ticks() / btron_ee_ticks_per_us()),
+                    (unsigned int)(ps2_irq_gap_max_ticks() / btron_ee_ticks_per_us()),
+                    (unsigned int)ps2_irq_input_period_us());
+        ps2_kprintf("[ASYNC] the same window on the OHCI's frame counter: %u frames of the %u a 1 ms frame says this is -- %s\n",
+                    (unsigned int)frames, (unsigned int)owed,
+                    frames == 0u ? "the controller is not counting, so it is no yardstick"
+                    : (frames + frames / 2u < owed ? "CP0 Count is running FAST: the port's microsecond is too short"
+                    : (owed + owed / 2u < frames ? "CP0 Count is running SLOW: the port's microsecond is too long"
+                                                 : "agree -- the measured divisor and the bus's own frame counter say the same 50 ms")));
+        ps2_kprintf("[ASYNC] CP0.Status 0x%08x at the arm, 0x%08x after it: EIE(bit16)=%d -> %d, IEc(bit0)=%d -> %d\n",
+                    (unsigned int)st0, (unsigned int)st1,
+                    (int)((st0 >> 16) & 1u), (int)((st1 >> 16) & 1u),
+                    (int)(st0 & 1u), (int)(st1 & 1u));
+            /* Where the clock stopped, as the hardware itself answers it.  A counter that
+             * moves but produces no tick is a source the kernel is not delivering; a
+             * counter parked above the compare value is one that ran past its period and
+             * has nothing to match until it wraps.  The two need different fixes and the
+             * tick count alone cannot tell them apart.
+             *
+             * What this machine's read actually returns is a counter that has barely
+             * moved: 140 -> 140 on one run and 276 -> 277 on the next, over a hold the
+             * measured microsecond says was 2 ms, where two periods of a COMP=576 counter
+             * is 1152 of its own counts.  Measured, that is the register's behaviour.
+             * Inferred, this emulator keeps the timer's schedule somewhere other than the
+             * word at 0xB0000000 and lets a plain read find only the residue of the event
+             * it last processed -- because the same timer's compare interrupt arrived 50
+             * times in a 50 ms window that the OHCI's frame counter also called 50 ms, and
+             * a counter standing still cannot do that.
+             *
+             * So this row is not the cadence's evidence, the tick count above it is, and
+             * what this read is worth is the MODE word: 0x1c2 is CLKS=2 with the
+             * zero-return, the update enable, the compare interrupt and both flags
+             * acknowledged, which is the word the arm wrote and the handler rewrites every
+             * period, and a period that lost that acknowledge is the one failure this
+             * register would show. */
+            const uint32_t cnt0 = ps2_irq_timer_count();
+            uint32_t cnt1;
+
+            ps2_task_hold(2u);
+            cnt1 = ps2_irq_timer_count();
+            ps2_kprintf("[ASYNC] timer0 MODE=0x%08x (clk256+zret+cue+cmpe+ack) count %u -> %u over a 2 ms hold, compare=%u, ticks=%u total\n",
+                        (unsigned int)ps2_irq_timer_mode(),
+                        (unsigned int)cnt0, (unsigned int)cnt1,
+                        (unsigned int)ps2_irq_timer_compare(),
+                        (unsigned int)ps2_irq_ticks());
+        /* The handler's own cost, in the hundredths of a microsecond: this machine's whole
+         * ISR is a third of one, and a column that rounds it to `0 us of the 50 us budget`
+         * would be the same row whether the handler were free or forty times more
+         * expensive. */
+        {
+            const uint32_t wcet_100 = ps2_irq_wcet_ticks() * 100u / btron_ee_ticks_per_us();
+            ps2_kprintf("[ASYNC] isr wcet=%u ticks = %u.%02u us of the %u us budget, overruns=%u  ui=%u us is still the present's own pass, not a plane\n",
+                        (unsigned int)ps2_irq_wcet_ticks(),
+                        (unsigned int)(wcet_100 / 100u), (unsigned int)(wcet_100 % 100u),
+                        (unsigned int)ASYNC_ISR_BUDGET_US,
+                        (unsigned int)ps2_irq_overruns(),
+                        (unsigned int)btron_planes()->ui_period_us);
+        }
+    }
 
     /* 5. Banner last, so the prompt is the bottom row and nothing interesting
      *    scrolls away underneath it. */

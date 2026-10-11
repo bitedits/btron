@@ -20,6 +20,10 @@
 #define ASYNC_INPUT_EVT_BUDGET  16u     /* max HID reports per INPUT period   */
 #define ASYNC_ISR_MOUSE_BUDGET  8u      /* max mouse reports folded per IRQ   */
 
+/* ASYNC.txt §3.2 puts the interrupt handler's own budget at 50 us -- the bound that
+ * makes "bounded, then return" a checkable claim instead of an intention. */
+#define ASYNC_ISR_BUDGET_US     50u
+
 /* Per-period CPU budgets for the equal-priority planes (ASYNC.txt §3).  The
  * scheduler runs a plane when its absolute deadline is due and records its
  * WCET against these budgets; a plane that overruns is flagged but never

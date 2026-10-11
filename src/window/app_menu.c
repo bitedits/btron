@@ -789,7 +789,7 @@ static uint8_t  s_about_gif_raw[ABOUT_ICON_MAX_PIXELS];
                         uint8_t p_idx = s_about_gif_raw[src_y * img_w + src_x];
                         if (p_idx == trans_idx) continue;
                         uint32_t col = palette[p_idx];
-                        dev->pixels[out_y * dev->width + out_x] = (COLOR)(0xFF000000 | col);
+                        dev->pixels[out_y * dev->width + out_x] = BTRON_PIXEL_FB((COLOR)(0xFF000000 | col));
                     }
                 }
                 img_read = 1;

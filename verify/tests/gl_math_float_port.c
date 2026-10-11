@@ -33,6 +33,22 @@ float p_sinf(float x)   { return sinf(x); }
 float p_cosf(float x)   { return cosf(x); }
 float p_floorf(float x) { return floorf(x); }
 
+/* Positive control for the far fold: the same job done with the turn count subtracted
+ * as a float, which is the shape the header's comment says cost half a radian at 1e7 --
+ * a float cannot hold the product of a large turn count and 2*pi to better than its own
+ * last place, and the last place of 1e6 is 0.0625 radians.  Inside 4*pi it returns the
+ * shipped answer exactly, so only the sweep past the guard can be what catches it. */
+float p_sinf_far_floatfold(float x)
+{
+    float s, c;
+    if (!(x > -12.5663706f && x < 12.5663706f) && x - x == 0.0f) {
+        const float pi2f = 6.28318548f;
+        x -= (float)(int)(x / pi2f) * pi2f;
+    }
+    btron_sincosf(x, &s, &c);              /* the shipped polynomial, a wrongly folded angle */
+    return s;
+}
+
 /* 1 when the series arithmetic compiled, 0 when the x87 asm did. */
 int p_series_branch(void)
 {

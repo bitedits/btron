@@ -127,9 +127,15 @@ Work is confined to `src/drivers/ps2/ps2_usb.c` (+ its header) and one call site
    `_mouse_report` + `ps2_usb_hid_to_btron_key` give us keys, relative deltas, buttons
    and wheel; keep the Pi 400 invariants that cost debugging there — button **edges**
    must survive (not level), and mouse object lifetimes must not outlive a disconnect.
-8. **Cooperative polling first, interrupts later.** No EE-side interrupt story is proven
-   on this target. Poll the frame-number / TD-done bits from the main loop, exactly like
-   the Pi 400's cooperative xHCI drain that we kept after the 1 kHz IRQ plane failed.
+8. **Cooperative polling first, interrupts later.**  *This is what shipped first, and the
+   "later" has since come.*  The poll-from-the-main-loop shape is still the one a machine
+   whose input plane is `DEAD` or `STALLED` runs, because a queue nobody fills is a dead
+   keyboard -- it is also what the Pi 400 keeps, where the 1 kHz IRQ plane failed and the
+   cooperative xHCI drain was retained.  On a machine whose plane reaches its own `LIVE` verdict, the 1 kHz Timer0
+   handler now retires the interrupt-ring descriptors itself and publishes them to the pass:
+   the EE-side interrupt story is proven here (`AddIntcHandler`/`EnableIntc` through the ROM
+   kernel's registry, `overruns=0` at 1.68 us of the 50 us budget).  See
+   [The plane as the producer of HID collection](PS2.md#the-plane-as-the-producer-of-hid-collection-normative).
 
 Reuse map (Pi 400 → PS2): report decoders and key table → move as-is; ring-resubmission
 → same shape, TD instead of TRB; boot-protocol semantics → identical; `HUB_PORT_STAT_*`

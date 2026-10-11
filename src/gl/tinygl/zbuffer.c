@@ -58,6 +58,8 @@ ZBuffer* ZB_open(GLint xsize, GLint ysize, GLint mode,
 	}
 
 	zb->current_texture = NULL;
+	zb->current_smask = zb->current_tmask = 0;
+	zb->current_tshift = 0;
 
 	return zb;
 error:

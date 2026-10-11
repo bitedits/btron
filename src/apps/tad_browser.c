@@ -1152,7 +1152,7 @@ int decode_and_draw_gif(GDEV *dev, const char *filepath, int dst_x, int dst_y, i
                     if (p_idx == trans_idx) continue;
 
                     UW col = palette[p_idx];
-                    dev->pixels[out_y * dev->width + out_x] = (COLOR)(0xFF000000 | col);
+                    dev->pixels[out_y * dev->width + out_x] = BTRON_PIXEL_FB((COLOR)(0xFF000000 | col));
                 }
             }
 
@@ -1325,7 +1325,7 @@ int decode_and_draw_png(GDEV *dev, const char *filepath, int dst_x, int dst_y, i
                 col = (COLOR)(0xFF000000 | (v << 16) | (v << 8) | v);
             }
 
-            dev->pixels[out_y * dev->width + out_x] = col;
+            dev->pixels[out_y * dev->width + out_x] = BTRON_PIXEL_FB(col);
         }
     }
 

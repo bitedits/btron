@@ -111,7 +111,7 @@ void glopDrawPixels(GLParam* p) {
 	PIXEL* pbuf = zb->pbuf;
 	GLushort* zbuf = zb->zbuf;
 
-	GLubyte zbdw = zb->depth_write;
+	GLubyte zbdw = ZB_DEPTH_WRITE(zb);
 	GLubyte zbdt = zb->depth_test;
 	GLint tw = zb->xsize;
 	GLint th = zb->ysize;

@@ -252,6 +252,29 @@ static unsigned count_word(const COLOR *cv, unsigned n, COLOR w)
 }
 
 /*
+ * How many words of a canvas are not opaque: byte 3 of a COLOR and byte 3 of a canvas word
+ * are the alpha in both orders (the R/B exchange leaves it alone), so this counts the
+ * pixels whose alpha did not arrive with them.
+ *
+ * It is the gate for the alpha-at-store law.  The frame buffer's alpha used to be OR-ed in
+ * by a pass of its own over the whole surface at swap, which on the PS2 was one uncached
+ * read and write per pixel per frame (10.5 ms of a 384,000 px XMB frame, no arithmetic in
+ * it).  The pass is gone, so the only thing keeping a GL surface opaque is FB_PIXEL() at
+ * every store site -- clear, flat, interpolated, textured, blended, line, point, text and
+ * the postprocess.  One store that forgot it leaves a hole here rather than a black corner
+ * on a screen nobody is watching, and paint_gl() covers every one of those paths in one
+ * frame, so a MISS is a per-path statement, not a general one.
+ */
+static unsigned count_nonopaque(const COLOR *cv, unsigned n)
+{
+    unsigned i, holes = 0;
+    for (i = 0; i < n; i++)
+        if (((cv[i] >> 24) & 0xffu) != 0xffu)
+            holes++;
+    return holes;
+}
+
+/*
  * How many different words a canvas holds.  This is the anti-vacuity measurement for the
  * GL half of the gate: if the quads missed the viewport, the canvas would be nothing but
  * the clear colour in one value, and the two dumps would compare equal while proving
@@ -298,20 +321,33 @@ int main(int argc, char **argv)
     /*
      * The positive control, and the only assertion here that says which domain compiled.
      * fill_rec(COLOR_RED) stores 0xFFFF0000 where the R field is at bit 16 and 0xFF0000FF
-     * where it is in the low byte; a clear to glClearColor(1,0,0) is the same word without
-     * the alpha byte, repeated over all FB_GL_W*FB_GL_H of the canvas.
+     * where it is in the low byte; a clear to glClearColor(1,0,0) is the same word, because
+     * the alpha byte a canvas carries is opaque in both orders, repeated over all
+     * FB_GL_W*FB_GL_H of the canvas.
      */
 #if defined(BTRON_PS2_TARGET)
     expect("dp red cell", s_dp[RED_CY * FB_DP_W + RED_CX] == (COLOR)0xFF0000FFu,
            "canvas order (R in the low byte)");
-    expect("clear canvas", count_word(s_clr, FB_GL_W * FB_GL_H, (COLOR)0x000000FFu) == FB_GL_W * FB_GL_H,
-           "every word is TinyGL's red in canvas order");
+    expect("clear canvas", count_word(s_clr, FB_GL_W * FB_GL_H, (COLOR)0xFF0000FFu) == FB_GL_W * FB_GL_H,
+           "every word is TinyGL's red in canvas order, opaque byte included");
 #else
     expect("dp red cell", s_dp[RED_CY * FB_DP_W + RED_CX] == (COLOR)0xFFFF0000u,
            "COLOR order (R at bit 16)");
-    expect("clear canvas", count_word(s_clr, FB_GL_W * FB_GL_H, (COLOR)0x00FF0000u) == FB_GL_W * FB_GL_H,
-           "every word is TinyGL's red in COLOR order");
+    expect("clear canvas", count_word(s_clr, FB_GL_W * FB_GL_H, (COLOR)0xFFFF0000u) == FB_GL_W * FB_GL_H,
+           "every word is TinyGL's red in COLOR order, opaque byte included");
 #endif
+
+    /*
+     * The alpha-at-store law, on the two GL canvases: every word byte 3 is 0xFF, with no
+     * pass over the surface after the frame.  s_clr is the clear path alone and s_gl is
+     * every other store site in the library, so the two together leave nothing unclaimed.
+     */
+    snprintf(detail, sizeof detail, "%u non-opaque words of %u cleared",
+             count_nonopaque(s_clr, FB_GL_W * FB_GL_H), FB_GL_W * FB_GL_H);
+    expect("clear carries alpha", count_nonopaque(s_clr, FB_GL_W * FB_GL_H) == 0, detail);
+    snprintf(detail, sizeof detail, "%u non-opaque words of %u drawn",
+             count_nonopaque(s_gl, FB_GL_W * FB_GL_H), FB_GL_W * FB_GL_H);
+    expect("fills carry alpha", count_nonopaque(s_gl, FB_GL_W * FB_GL_H) == 0, detail);
 
     f = fopen(out, "wb");
     if (!f) {

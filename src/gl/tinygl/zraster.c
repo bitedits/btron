@@ -163,14 +163,14 @@ void glopDrawPixels(GLParam* p) {
 #if TGL_FEATURE_BLEND == 1
 #if TGL_FEATURE_BLEND_DRAW_PIXELS == 1
 							if (!zbeb)
-								pbuf[tx + ty * tw] = col;
+								pbuf[tx + ty * tw] = FB_PIXEL(col);
 							else
 								TGL_BLEND_FUNC(col, pbuf[tx + ty * tw])
 #else
-							pbuf[tx + ty * tw] = col;
+							pbuf[tx + ty * tw] = FB_PIXEL(col);
 #endif
 #else
-							pbuf[tx + ty * tw] = col;
+							pbuf[tx + ty * tw] = FB_PIXEL(col);
 #endif
 							if (zbdw)
 								*pz = zz;
@@ -197,14 +197,14 @@ void glopDrawPixels(GLParam* p) {
 #if TGL_FEATURE_BLEND == 1
 #if TGL_FEATURE_BLEND_DRAW_PIXELS == 1
 							if (!zbeb)
-								pbuf[tx + ty * tw] = col;
+								pbuf[tx + ty * tw] = FB_PIXEL(col);
 							else
 								TGL_BLEND_FUNC(col, pbuf[tx + ty * tw])
 #else
-							pbuf[tx + ty * tw] = col;
+							pbuf[tx + ty * tw] = FB_PIXEL(col);
 #endif
 #else
-							pbuf[tx + ty * tw] = col;
+							pbuf[tx + ty * tw] = FB_PIXEL(col);
 #endif
 							if (zbdw)
 								*pz = zz;

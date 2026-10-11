@@ -348,7 +348,22 @@ void draw_baremetal_mouse_cursor(GDEV *screen, H mx, H my, H w, H h) {
 
 void redraw_baremetal_desktop(GDEV *screen, H w, H h) {
     if (!screen) return;
-    render_desktop_background(screen);
+
+    /* The whole-canvas composite runs the same stages the damage composite does, and
+     * from here on it reports them the same way.  It used to report nothing at all,
+     * which left this path's own desktop art visible only as the residue between a
+     * present's `render=` and its window columns.
+     *
+     * `render_desktop_background_rect()` with the full canvas is the identical restore
+     * -- it clamps to the device and blits every row -- and it is the one that owns the
+     * cache, so a whole-canvas miss now increments `bfn` instead of hiding in that
+     * residue.  The pixels cannot differ: on a miss this calls the same procedural
+     * builder the old line called directly, and on a hit both restore all of
+     * `s_cached_bg`. */
+    RECT full = { 0, 0, w, h };
+    uint32_t t_all = btron_render_perf_us(), t_mark;
+
+    render_desktop_background_rect(screen, &full);
     redraw_all_windows();
 
     /* Floating candidate window for active window */
@@ -357,11 +372,13 @@ void redraw_baremetal_desktop(GDEV *screen, H w, H h) {
         tip_render_candidate_window(screen, tip_get_caret_x(), tip_get_caret_y());
     }
 
+    t_mark = btron_render_perf_us();
     render_system_panel(screen);
 
     /* Gold accent bar below top panel */
     RECT gold_bar = { 0, 26, (H)w, 28 };
     fill_rec(screen, &gold_bar, COLOR_GOLD);
+    btron_render_stat_max(&g_render_stats.panel_us, btron_render_perf_us() - t_mark);
 
     /* Color Test Bar (bottom 40px) */
     COLOR bars[8] = {
@@ -376,12 +393,15 @@ void redraw_baremetal_desktop(GDEV *screen, H w, H h) {
     };
     H bar_h = 40;
     H bar_y = (H)h - bar_h;
+    t_mark = btron_render_perf_us();
     for (int bi = 0; bi < 8; bi++) {
         H bx0 = (bi * (H)w) / 8;
         H bx1 = ((bi + 1) * (H)w) / 8;
         RECT br = { bx0, bar_y, bx1, (H)h };
         fill_rec(screen, &br, bars[bi]);
     }
+    btron_render_stat_max(&g_render_stats.bars_us, btron_render_perf_us() - t_mark);
+    btron_render_stat_max(&g_render_stats.comp_us, btron_render_perf_us() - t_all);
 
     /* Dynamic Classic B-TRON Mouse Cursor Rendering */
     if (g_cursor_in_backbuffer) {

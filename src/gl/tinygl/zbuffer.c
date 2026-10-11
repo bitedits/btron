@@ -368,18 +368,18 @@ void ZB_clear(ZBuffer* zb, GLint clear_z, GLint z, GLint clear_color, GLint r, G
 		pp = zb->pbuf;
 		for (y = 0; y < zb->ysize; y++) {
 #if TGL_FEATURE_RENDER_BITS == 15 || TGL_FEATURE_RENDER_BITS == 16
-			// color = RGB_TO_PIXEL(r, g, b);
+			// color = FB_PIXEL(RGB_TO_PIXEL(r, g, b));
 #if TGL_FEATURE_FORCE_CLEAR_NO_COPY_COLOR
 			color = TGL_NO_COPY_COLOR;
 #else
-			color = RGB_TO_PIXEL(r, g, b);
+			color = FB_PIXEL(RGB_TO_PIXEL(r, g, b));
 #endif
 			memset_s(pp, color, zb->xsize);
 #elif TGL_FEATURE_RENDER_BITS == 32
 #if TGL_FEATURE_FORCE_CLEAR_NO_COPY_COLOR
 			color = TGL_NO_COPY_COLOR;
 #else
-			color = RGB_TO_PIXEL(r, g, b);
+			color = FB_PIXEL(RGB_TO_PIXEL(r, g, b));
 #endif
 			memset_l(pp, color, zb->xsize);
 #else

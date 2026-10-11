@@ -75,6 +75,37 @@
 #endif
 #define COLOR_G_GET32(g) ((g>>8) & 0xff00)
 
+/*
+ * The frame buffer's alpha byte is a constant, so it is written with the pixel rather
+ * than fixed up after the fact.
+ *
+ * A BTRON COLOR is 0xAARRGGBB and a window's surface is composited as opaque, so every
+ * pixel of a GL surface has to arrive with 0xFF on top.  That used to be a pass of its
+ * own: tgl_swap_buffers() walked the whole surface OR-ing the byte in, which on the PS2
+ * is one uncached read and one uncached write for every pixel the frame had already put
+ * there -- the XMB's 384,000 px, measured at 10,494 us for a frame, with no arithmetic
+ * in it at all.  The rasteriser holds each of those words in a register on its way to
+ * memory anyway, so at the store the byte is one OR and zero extra traffic.
+ *
+ * The rule sits at the STORE, never in RGB_TO_PIXEL: the same macro builds texels, and a
+ * texel's top byte is its alpha (TGL_TEX_ALPHA, the upload in image_util.c), which the
+ * blend multiplies by.  A texel forced opaque would turn every icon and glyph in an atlas
+ * into a solid square.  So FB_PIXEL() wraps the places that write a frame buffer, and
+ * only those, and it is idempotent -- a pixel that already carries the byte is unchanged.
+ *
+ * Nobody reads a frame buffer's alpha back: the destination-alpha blend factor has no arm
+ * in TGL_BLEND_FACTOR at all, because a canvas has no alpha to read, and glCopyTexImage2D
+ * takes a PIXEL verbatim rather than through any arithmetic on its channels.  So the byte
+ * is constant, it costs nothing to write where the pixel is stored, and no pass has to walk
+ * the surface for it afterwards.
+ */
+#if TGL_FEATURE_RENDER_BITS == 32
+#define ZB_FB_ALPHA 0xFF000000u
+#else
+#define ZB_FB_ALPHA 0u /* a 16-bit PIXEL has no alpha channel to carry */
+#endif
+#define FB_PIXEL(v) ((PIXEL)((v) | ZB_FB_ALPHA))
+
 #define COLOR_R_GET16(r) ((r>>8) & 0xF800)
 #define COLOR_G_GET16(g) ((((g)) >> 13) & 0x07E0)
 #define COLOR_B_GET16(b) (((b) >> 19) & 31)
@@ -181,8 +212,8 @@ typedef GLushort PIXEL;
 
 
 
-#define TGL_NO_BLEND_FUNC(source, srcalpha, dest){dest = source;}
-#define TGL_NO_BLEND_FUNC_RGB(rr, gg, bb, srcalpha, dest){dest = RGB_TO_PIXEL(rr,gg,bb);}
+#define TGL_NO_BLEND_FUNC(source, srcalpha, dest){dest = FB_PIXEL(source);}
+#define TGL_NO_BLEND_FUNC_RGB(rr, gg, bb, srcalpha, dest){dest = FB_PIXEL(RGB_TO_PIXEL(rr,gg,bb));}
 
 #if TGL_FEATURE_BLEND == 1
 /*
@@ -217,21 +248,21 @@ typedef GLushort PIXEL;
 				sr = TGL_CLAMPI(sr);													\
 				sg = TGL_CLAMPI(sg);													\
 				sb = TGL_CLAMPI(sb);													\
-				dest = RGB_TO_PIXEL(sr,sg,sb);											\
+				dest = FB_PIXEL(RGB_TO_PIXEL(sr,sg,sb));											\
 			break;																		\
 			case GL_FUNC_SUBTRACT:														\
 				sr-=dr;sg-=dg;sb-=db;													\
 				sr = TGL_CLAMPI(sr);													\
 				sg = TGL_CLAMPI(sg);													\
 				sb = TGL_CLAMPI(sb);													\
-				dest = RGB_TO_PIXEL(sr,sg,sb);											\
+				dest = FB_PIXEL(RGB_TO_PIXEL(sr,sg,sb));											\
 			break;																		\
 			case GL_FUNC_REVERSE_SUBTRACT:												\
 				sr=dr-sr;sg=dg-sg;sb=db-sb;												\
 				sr = TGL_CLAMPI(sr);													\
 				sg = TGL_CLAMPI(sg);													\
 				sb = TGL_CLAMPI(sb);													\
-				dest = RGB_TO_PIXEL(sr,sg,sb);											\
+				dest = FB_PIXEL(RGB_TO_PIXEL(sr,sg,sb));											\
 			break;																		\
 			  																			\
 		}
@@ -316,7 +347,7 @@ typedef GLushort PIXEL;
 	tb_v_ |= (GLuint)(255 + (tb_d_ & (tb_d_ >> 31))) << 8;                                                                                                \
 	tb_d_ = (GLint)((sb + ((db * tb_ia_) >> 8)) >> 16) - 255;                                                                                          \
 	tb_v_ |= (GLuint)(255 + (tb_d_ & (tb_d_ >> 31))) << TGL_BLUE_FIELD_SHIFT;                                                                              \
-	dest = tb_v_;
+	dest = FB_PIXEL(tb_v_);
 
 /*
  * GL_DST_COLOR / GL_ONE / GL_FUNC_ADD written out the same way: the source factor is one
@@ -344,7 +375,7 @@ typedef GLushort PIXEL;
 	sg = (GLuint)(COLOR_MASK + (tbb_d_ & (tbb_d_ >> 31)));                                                                                     \
 	tbb_d_ = (GLint)sb - COLOR_MASK;                                                                                                          \
 	sb = (GLuint)(COLOR_MASK + (tbb_d_ & (tbb_d_ >> 31)));                                                                                     \
-	dest = RGB_TO_PIXEL(sr, sg, sb);
+	dest = FB_PIXEL(RGB_TO_PIXEL(sr, sg, sb));
 
 /*
  * NOTE: in the general path below, the source factor is applied first, so a destination
@@ -408,8 +439,8 @@ typedef GLushort PIXEL;
 #else
 #define TGL_BLEND_VARS /* a comment */
 #define TGL_ALPHA_BYTE(a) (((a) >> 16) & 0xff)
-#define TGL_BLEND_FUNC(source, srcalpha, dest){dest = source;}
-#define TGL_BLEND_FUNC_RGB(rr, gg, bb, srcalpha, dest){dest = RGB_TO_PIXEL(rr,gg,bb);}
+#define TGL_BLEND_FUNC(source, srcalpha, dest){dest = FB_PIXEL(source);}
+#define TGL_BLEND_FUNC_RGB(rr, gg, bb, srcalpha, dest){dest = FB_PIXEL(RGB_TO_PIXEL(rr,gg,bb));}
 #endif
 
 

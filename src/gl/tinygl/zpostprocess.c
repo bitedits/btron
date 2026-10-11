@@ -10,5 +10,5 @@ void glPostProcess(GLuint (*postprocess)(GLint x, GLint y, GLuint pixel, GLushor
 #endif
 	for (j = 0; j < c->zb->ysize; j++)
 		for (i = 0; i < c->zb->xsize; i++)
-			c->zb->pbuf[i + j * (c->zb->xsize)] = postprocess(i, j, c->zb->pbuf[i + j * (c->zb->xsize)], c->zb->zbuf[i + j * (c->zb->xsize)]);
+			c->zb->pbuf[i + j * (c->zb->xsize)] = FB_PIXEL(postprocess(i, j, c->zb->pbuf[i + j * (c->zb->xsize)], c->zb->zbuf[i + j * (c->zb->xsize)]));
 }

@@ -1699,8 +1699,12 @@ static void xb_draw_bg(float alpha)
     glBegin(GL_QUADS);
     glColor4f(g[0][0] * a, g[0][1] * a, g[0][2] * a, 1.0f); glVertex2f(0.0f, (float)s_h);
     glColor4f(g[1][0] * a, g[1][1] * a, g[1][2] * a, 1.0f); glVertex2f((float)s_w, (float)s_h);
-    glColor4f(g[2][0] * a, g[2][1] * a, g[2][2] * a, 1.0f); glVertex2f((float)s_w, 0.0f);
-    glColor4f(g[3][0] * a, g[3][1] * a, g[3][2] * a, 1.0f); glVertex2f(0.0f, 0.0f);
+    /* The projection is glOrtho(0, w, h, 0) (see xb_paint), so y grows downward and
+     * (w, 0) is the canvas's top-right -- where the table's fourth colour belongs.
+     * These two vertices used to carry g[2] and g[3] the other way round, which
+     * mirrored the top edge of every theme while leaving both bottom corners right. */
+    glColor4f(g[3][0] * a, g[3][1] * a, g[3][2] * a, 1.0f); glVertex2f((float)s_w, 0.0f);
+    glColor4f(g[2][0] * a, g[2][1] * a, g[2][2] * a, 1.0f); glVertex2f(0.0f, 0.0f);
     glEnd();
 
     glEnable(GL_BLEND);

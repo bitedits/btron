@@ -22,6 +22,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 #include <btron/types.h>
 #include <btron/error.h>
 #include <btron/dp.h>
@@ -52,12 +53,35 @@ H tip_get_caret_x(void) { return 0; }
 H tip_get_caret_y(void) { return 0; }
 void tip_render_candidate_window(GDEV *dev, H x, H y) { (void)dev; (void)x; (void)y; }
 
-static int s_pass, s_fail;
+/* A clock, so the stage timings this file asserts can be asserted at all.
+ *
+ * btron_render_perf_us() is a weak `return 0` in src/graphics/dp_core.c and each
+ * platform core (core_ps2.c, core_arm64.c) installs a strong one, so the shared host
+ * build structurally reads 0 for every timing column.  That makes "the whole-canvas
+ * composite reports its stages" unmeasurable rather than false -- a path that reports
+ * nothing and a path with no clock print the same zeroes.  This is the host's version
+ * of the core's instrument, and the checks below only ask relations between columns
+ * (a stage that did work is non-zero, a total covers its parts), which a host clock
+ * answers truthfully even though its absolute microseconds mean nothing here. */
+uint32_t btron_render_perf_us(void)
+{
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (uint32_t)((int64_t)ts.tv_sec * 1000000 + ts.tv_nsec / 1000);
+}
+
+static int s_pass, s_fail, s_skip;
 
 #define CHECK(cond, msg) do {                                        \
     if (cond) { printf("  [PASS] %s\n", msg); s_pass++; }            \
     else { printf("  [FAIL] %s (line %d)\n", msg, __LINE__); s_fail++; } \
 } while (0)
+
+/* An assertion this harness cannot build, stated as such rather than rounded into a
+ * pass: the run then says what it did not check. */
+#define SKIP(msg, reason)                                            \
+    do { printf("  [SKIP] %s -- %s\n", (msg), (reason)); s_skip++; } \
+while (0)
 
 /* Client art with two properties the comparison needs: every pixel non-zero, so a
  * blit-only band cannot silently pass by writing transparency, and x^y structure,
@@ -212,6 +236,69 @@ static void stale_window_selectivity(void)
     free(ref);
 }
 
+/* The whole-canvas composite has to report the stages it runs.
+ *
+ * `redraw_baremetal_desktop()` does the same four jobs as the damage composite --
+ * background, windows, panel, test bars -- and used to time none of them.  On the PS2,
+ * where an open overlay or a canvas-wide damage takes that path, its cost reached the
+ * log only as the residue between a present's `render=` and its window columns: 25 ms was
+ * guessed there until this path reported its own stages, which measured 12.3 ms of desktop
+ * art (9.9 of it the background restore) against a 277 ms frame -- see consequence 2 of
+ * doc/md/PS2.md.  It now goes through the builder that owns the cache and fills the same
+ * columns, and a path that reports nothing is indistinguishable, from the outside, from one
+ * that reports zero.
+ */
+static void whole_canvas_reports_its_stages(void)
+{
+    static COLOR fb[800 * 600];
+    const H w = 800, h = 600;
+    const size_t bytes = (size_t)w * h * sizeof(COLOR);
+    char msg[256];
+    RENDER_STATS st;
+    unsigned diff = 0;
+    COLOR *before;
+    GDEV *screen = opn_dev_vram(w, h, fb);
+
+    printf("\n==========================================================\n");
+    printf(" Whole-Canvas Composite Self-Reporting (PS2 800x600)\n");
+    printf("==========================================================\n");
+    if (!screen) { printf("  [FAIL] opn_dev_vram(800,600)\n"); s_fail++; return; }
+    init_wnd_mgr(screen);
+    g_cursor_in_backbuffer = 0;
+
+    redraw_baremetal_desktop(screen, w, h);            /* latches the cache at this size */
+    btron_render_stats_take(&st);                      /* and its latching pass is not the question */
+
+    before = (COLOR *)malloc(bytes);
+    if (!before) { printf("  [FAIL] out of memory\n"); s_fail++; return; }
+    memcpy(before, fb, bytes);
+
+    redraw_baremetal_desktop(screen, w, h);            /* the measured pass, counters clean */
+    btron_render_stats_take(&st);
+
+    for (size_t i = 0; i < (size_t)w * h; i++) if (before[i] != fb[i]) diff++;
+
+    printf("  whole-canvas composite: bg=%u frame=%u paint=%u blit=%u panel=%u bars=%u comp=%u us,"
+           " %u background rebuilds\n",
+           st.bg_us, st.frame_us, st.paint_us, st.blit_us, st.panel_us, st.bars_us, st.comp_us,
+           st.bg_full_calls);
+
+    CHECK(st.bg_full_calls == 0u, "the second whole-canvas composite rebuilds no background");
+    CHECK(st.bg_us > 0u, "and it reports the background restore it did");
+    CHECK(st.bars_us > 0u, "and it reports the test bars it filled");
+    /* The panel's timing window is real, but its body is one of the stubs at the top of
+     * this file (global_menu_render_bar is a no-op here), so the only work it encloses is
+     * the two-row gold accent -- which at host speed can land inside a single tick.
+     * Whether the device's panel costs anything is this harness cannot say. */
+    SKIP("and it reports the system panel", "the panel bar is stubbed in this harness");
+    snprintf(msg, sizeof(msg), "and its total covers the stages it names (%u >= %u)",
+             st.comp_us, st.bg_us + st.panel_us + st.bars_us);
+    CHECK(st.comp_us >= st.bg_us + st.panel_us + st.bars_us, msg);
+    CHECK(diff == 0u, "two whole-canvas composites are the same picture");
+
+    free(before);
+}
+
 int main(void)
 {
     uint32_t misses;
@@ -225,6 +312,7 @@ int main(void)
     appearance_set_icon_size(BTRON_ICON_SIZE_32);
 
     stale_window_selectivity();
+    whole_canvas_reports_its_stages();
 
     /* 800x600 is the PS2's workbench.  Both halves failing here is the bug this
      * port had: the composite rebuilt the desktop per band, and the cursor stayed
@@ -281,8 +369,8 @@ int main(void)
           "and the next one at that size clips out of the re-keyed cache");
 
     printf("\n==========================================================\n");
-    printf("  BAND PRESENT RESULTS: %d / %d checks passed (%.1f%%)\n",
-           s_pass, s_pass + s_fail, 100.0 * s_pass / (s_pass + s_fail));
+    printf("  BAND PRESENT RESULTS: %d / %d checks passed (%.1f%%), %d skipped\n",
+           s_pass, s_pass + s_fail, 100.0 * s_pass / (s_pass + s_fail), s_skip);
     printf("==========================================================\n");
     return s_fail ? 1 : 0;
 }

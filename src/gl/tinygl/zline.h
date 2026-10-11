@@ -38,7 +38,7 @@
 
 #ifdef INTERP_RGB
 #define RGB(x) x
-#define RGBPIXEL *pp = RGB_TO_PIXEL(r >> 8, g >> 8, b >> 8)
+#define RGBPIXEL *pp = FB_PIXEL(RGB_TO_PIXEL(r >> 8, g >> 8, b >> 8))
 	
 
 #else /* INTERP_RGB */
@@ -46,7 +46,7 @@
 #if TGL_FEATURE_RENDER_BITS == 24
 #define RGBPIXEL pp[0] = r, pp[1] = g, pp[2] = b
 #else
-#define RGBPIXEL *pp = color
+#define RGBPIXEL *pp = FB_PIXEL(color)
 
 #endif
 #endif /* INTERP_RGB */

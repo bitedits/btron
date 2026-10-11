@@ -389,6 +389,47 @@ without changing a pixel.  Every one of those extra microseconds is integer, and
 the subject of the `f_bg` paragraph above.  They are also emulator numbers: the
 identical image over SIO on a real console is still the outstanding check.
 
+### The frame buffer's alpha byte is written at the store (Normative)
+
+A `COLOR` is `0xAARRGGBB`, a window's surface is composited as opaque, and the GS reads byte 3
+of the canvas word it displays, so every pixel of a GL surface has to arrive with `0xFF` on
+top.  TinyGL used to do that after the fact: `tgl_swap_buffers()` walked the whole surface
+OR-ing the byte in, one uncached read and one uncached write per pixel per frame, measured at
+`swap=10498 us` for the XMB's 384,000 px -- 10.5 ms of a 184 ms frame with no arithmetic in it
+at all.  The pass is gone, and the law that replaced it is in `src/gl/tinygl/zbuffer.h`:
+
+- `FB_PIXEL(v)` ORs the constant alpha into a pixel and is used at **frame-buffer stores
+  only** -- clear (`ZB_clear`'s colour), the flat, interpolated, textured and both blended
+  triangle paths, lines and points, `glDrawPixels`, the glyph blit, the postprocess, and every
+  `TGL_*_BLEND_FUNC` arm.  It is idempotent, so a pixel that already carries the byte is
+  unchanged.
+- It is **never** inside `RGB_TO_PIXEL`, because the same macro builds texels and a texel's top
+  byte *is* its alpha (`TGL_TEX_ALPHA`, the upload in `image_util.c`), which the blend
+  multiplies by.  Forcing a texel opaque turns every icon and glyph in an atlas into a solid
+  square.
+- Nothing reads a frame buffer's alpha back: `GL_DST_ALPHA` has no arm in `TGL_BLEND_FACTOR`
+  because a canvas has no alpha to read, and `glCopyTexImage2D` takes a `PIXEL` verbatim rather
+  than through channel arithmetic.
+- The pixels no primitive covers are stamped once, when the array is new:
+  `tinygl_backend_init()` and a `tinygl_backend_resize()` that actually changed the buffer or
+  its size.  The guard matters -- `egl_make_current()` routes through the resize path every
+  time a context is made current (quake and lilcu64 do it per frame), and a walk of the
+  surface there would be the per-frame pass this replaced.
+- With nothing left to do, the TinyGL backend's `swap_buffers` slot is `NULL`.
+  `egl_swap_buffers()` already handles that, and it still marks the window's image valid,
+  which is what actually presents the frame.
+
+The gate is `make test-ps2-fb-order`: `verify/tests/test_fb_order.c` renders one frame that
+covers every store path above and asserts that both GL canvases hold zero non-opaque words,
+in each of the two byte-order domains.  It was shown to discriminate -- removing `FB_PIXEL`
+from the recognised-blend pack alone makes it report `2158 non-opaque words of 6144 drawn`
+before the restore.  The XMB's PPMs cannot see this change at all (they carry RGB), which is
+why the alpha has its own gate rather than riding on the frame comparison.
+
+The device rows say the cut landed: `swap=` reads 0 on every frame (`[XMBT] frame 3 (tinygl)
+draw=176514 us swap=0 us`), the present's `swap` stage is 0, and the smoothness gate
+`xswap_us`/`full_swap_us` now passes at its "target: absent" budget.
+
 ### What a pixel costs, measured (Normative)
 
 Every number in this file so far says what the image *does*; this one says what it *costs*, in
@@ -415,7 +456,9 @@ frame with `make test-xmb-render-tgl`, which writes its PPMs to `.build/tgl/`.
 
 The rows, 2026-10-11, shipped configuration (800x480 canvas, `XB_RIBBON_ROWS/COLS` 32), built
 with `PS2_FP_COUNT=0` so the microseconds are the shipped image's own, steady frame
-`draw=173750 us swap=10498 us`:
+`draw=173750 us swap=10498 us` (that `swap` is the whole-surface alpha fix-up, since deleted --
+see *The frame buffer's alpha byte is written at the store*; every stage row below is a draw
+number and none of them moved):
 
 | stage | tris | verts | px | spans | px/span | fill us | geom us |
 |:---|--:|--:|--:|--:|--:|--:|--:|
@@ -456,7 +499,7 @@ fitted together rather than two at a time.
 | a vertex that needs no clipping | 8.3 us = 2,440 cycles | `f_menu`'s `geom` over its 1,436 verts: same pipeline, no `gl_clipEdge` lerps |
 | a cleared pixel | 2.6 cycles | `f_clear`: 128,000 px/ms |
 | a pixel copied RAM to RAM | 14.8 cycles | the compositor's own `blit=` rows: 613,440 px in 30,747 us, and 50.2 ns/px on every row from 768 px to 613,440 px -- three orders of magnitude of size at one price, so it is the DRAM, not the loop |
-| a swap | 10.5 ms | the `swap=` column of every frame row |
+| a swap | 0 | it was 10.5 ms -- the `swap=` column of every frame row, one uncached read and write per pixel for a constant byte -- until the byte began travelling with the pixel that stores it.  See *The frame buffer's alpha byte is written at the store* |
 
 The copied-pixel row is what closes one obvious candidate for `f_bg` before it is written.  Drawing a
 static gradient and blitting a cached copy of it back are the same order of work on this machine (22
@@ -487,7 +530,10 @@ is:
 | `f_particles` | 0.1 | 294 | 0.0 | 0.1 |
 | `f_menu` | 50.7 | 148,109 | 15.3 | 35.4 |
 | draw | 173.8 | 578,963 | 58.8 | 115.0 |
-| swap | 10.5 | – | – | 10.5 |
+| swap | 0 | – | – | – |
+
+The swap row is what the alpha-at-store law took back: it used to read `10.5 | – | – | 10.5`,
+a whole-surface walk that appeared in no stage row above because it is not drawing.
 
 `f_surface` is 86% floating point -- it is arithmetic that happens to be in float rather than
 rastering -- and it is the only stage where making the arithmetic cheaper is close to making the
@@ -517,10 +563,11 @@ Four consequences are normative for where work goes next:
    rect that clips a triangle (`clip.c`'s own comment says coordinates are viewport-clipped by the
    time a triangle reaches the rasteriser); `glClear` is whole-plane, and the only fill cheap enough
    to replace it is an opaque quad at the 2.6-cycle cleared-pixel price; and the surface does persist
-   across frames -- `tgl_swap_buffers()` only ORs `0xFF000000` into the plane in place, the window
-   plane is allocated once and recreated only by `rsz_wnd()`, and neither the WM's background/decor
-   fills nor the cursor's save-restore ever write it -- so not painting outside the band leaves the
-   right pixels there rather than garbage.  The part that does not exist yet is how the app is told a
+   across frames -- the TinyGL backend has no `swap_buffers` at all now, so nothing walks or rewrites
+   the plane between frames, its alpha travels with each stored pixel, the window plane is allocated
+   once and recreated only by `rsz_wnd()`, and neither the WM's background/decor fills nor the cursor's
+   save-restore ever write it -- so not painting outside the band leaves the right pixels there rather
+   than garbage.  The part that does not exist yet is how the app is told a
    full repaint is due (an entry fade changes the gradient's alpha, a selection change redraws the row
    text, `inval_wnd()` currently marks the whole window every 16 ms), and `paint(WND*, GDEV*)` carries
    no damage rect to answer with.
@@ -1052,7 +1099,9 @@ The PS2 cleanroom port integrates the **full, authentic B-System Graphical Workb
 #### One task-driven frame, stage by stage (Normative)
 
 An application's frame on this port is not the render its own log times.  `xb_paint()`
-reports `[XMBT] frame … draw=173357 us swap=10540 us` and stops at `egl_swap_buffers()`,
+reports `[XMBT] frame … draw=173357 us swap=10540 us` -- the `swap` half is the whole-surface
+alpha fix-up and reads 0 on the current image, see *The frame buffer's alpha byte is written at
+the store* -- and stops at `egl_swap_buffers()`,
 while the pixels reach the GS only after the compositor has blitted the window's surface
 onto the canvas and the port has uploaded that rectangle.  The two halves are joined by
 `[XMBT] cycle`, which `ps2_gui_pass()` fills and `ps2_task_dly()` prints once the hold has
@@ -1085,28 +1134,76 @@ paint=238860 blit=49913 panel=0 bars=0 bfn=0 wins=4/4`, against the app's own
 
 | ms | stage | who pays |
 |--:|:---|:---|
-| 184 | the XMB's own rasterising and surface swap | the app (`f_bg`/`f_ribbon`/`f_menu`, tasks #41/#43) |
+| 184 | the XMB's own rasterising (173) and its surface swap (10.5, now 0) | the app (`f_bg`/`f_ribbon`/`f_menu`, tasks #41/#43) |
 | 55 | the *other three* windows' `paint` callbacks | the compositor: `redraw_all_windows_clip()` used to run every intersecting window's callback whenever the composite was not blit-only, and one `inval_wnd()` made the whole composite non-blit-only -- closed by the cut below |
 | 50 | the client-area blit, 613,440 px | the compositor |
 | 20 | four window decorations | the compositor |
-| 25 | desktop art that is *not* in any column (the residue of the four rows above against `render=`) | `redraw_baremetal_desktop()` (`src/desktop/desktop.c:349`) rebuilds the background procedurally and draws the panel, gold bar and eight test bars, and times none of it: hence `bg=0 panel=0 bars=0 comp=0 bfn=0` on a whole-canvas pass |
+| 12.3 | the desktop's own art, now measured rather than derived: background restore 9.9, panel + gold bar 1.8, eight test bars 0.6 | the compositor -- `bg=`/`panel=`/`bars=` on a `full=1` row, which is what consequence 2's instrument exists to print |
+| 0.05-10.7 | `render=` minus the composite's own `total=`: the overlays the pass draws around the composite, and the span between its two marks | this port's render phase, *outside* the compositor.  It is 10.7 ms on two frames and 0.05 ms on the third, so it is not one fixed stage and does not get a row of its own until something measures it |
 | 10 | polls, dispatch, timer nets, `[PSTAT]` | this port, all six columns summed |
 | 0.8 | GIF upload of the 480,000 px canvas | this port |
 | 16 | the hold the body asked for | `dly_tsk()` |
+
+Re-measured 2026-10-12 after the alpha-at-store cut, steady frame 3 of
+`SMOOTH_FRAMES=3 scripts/ps2_smooth.sh`: `draw=176514 us swap=0 us`, cycle row `render=259156
+swap=0 upload=816 px=480000 full=1 why=1 | comp bg=9926 frame=20392 paint=176526 blit=49890
+panel=1801 bars=566 total=259109`.  The frame's own cost fell by the 10.5 ms the swap used to
+be and nothing else moved, which is the expected shape for a change that deletes traffic
+rather than arithmetic.
 
 Three consequences are normative for the work that follows:
 
 1. There is nothing left to win in the port's own pass.  Ten microseconds of bookkeeping
    and 0.8 ms of DMA against a 334 ms pass is not a scheduler problem; the whole gap
    between what the app logs and what the user sees is inside the shared compositor.
-2. `bg=0 … comp=0` on a whole-canvas row is *not* those stages being free.  The damage path
-   (`redraw_baremetal_desktop_mode()`) times all of them, and where it runs the background
-   comes from the cache: every banded `[BENCH] … compositor:` row in the same log reads
-   `bg=<nonzero>(<band px>) … bfn=0`, and a cache miss would have incremented `bfn` and
-   reported the whole canvas instead of the band.  The whole-canvas path re-enters the
-   procedural builder and reports nothing at all, so its cost only appears as the residue
-   in the table above.  Any future claim about the desktop's own art has to come from that
-   arithmetic, or from timing added to that path, not from these columns.
+2. A zero in a timing column means *not instrumented*, never *free*.  The damage path
+   (`redraw_baremetal_desktop_mode()`) times all of the stages, and where it runs the
+   background comes from the cache: every banded `[BENCH] … compositor:` row in the same log
+   reads `bg=<nonzero>(<band px>) … bfn=0`, and a cache miss would have incremented `bfn` and
+   reported the whole canvas instead of the band.  The whole-canvas path filled none of those
+   columns, which is why its cost only appeared as the residue in the table above.  It now
+   goes through `render_desktop_background_rect()` -- the one builder that owns the cache and
+   `bfn` -- and records `bg`/`panel`/`bars`/`total` (the cycle row's name for `st.comp_us`)
+   the way the damage mode does
+   (`src/desktop/desktop.c:363-404`), so that residue is measured rather than derived.
+   Two things this makes available and does not yet make true: the ~25 ms has no split
+   between the restore, the panel and the bars until a device row reports it, and the
+   columns' *absolute* microseconds are the Emotion Engine's only on the device --
+   `btron_render_perf_us()` is a weak `return 0` in `src/graphics/dp_core.c:64` and each
+   platform core installs a strong clock, so a host build structurally reads 0 everywhere.
+   The wiring is held by the `whole-canvas composite` block of
+   `verify/tests/test_desktop_clip.c`, which installs a host `CLOCK_MONOTONIC` clock for
+   exactly that reason and asserts only relations between columns (a stage that did work is
+   non-zero, a total covers its parts); the panel clause is `SKIP`ped there, not passed,
+   because the panel's bar is one of that harness's no-op stubs and the two-row gold accent
+   can land inside a single tick.  Positive control, both halves: removing the total's
+   `btron_render_stat_max()` makes the coverage check fail at `0 >= 21`, and routing the path
+   back to the untimed builder makes the background check fail at `bg=0` -- and the pixel
+   comparison passes under both, so again the timings are the assertion and the picture is
+   the safety net.
+
+   The instrument on the machine, `SMOOTH_FRAMES=8 ./scripts/ps2_smooth.sh` on 2026-10-12,
+   cycle 1 of the app phase -- the same frame shape as the row quoted above, one year of
+   emulator noise later:
+
+   ```
+   render=277379 swap=0 upload=816 px=480000 nb=1 full=1 why=c dmg=0,0,800,556/1 |
+   comp bg=9910 frame=20315 paint=184228 blit=49869 panel=1816 bars=576 total=266721 bfn=0 wins=4/4
+   ```
+
+   `bfn=0` is the premise corrected: the whole-canvas path never did the procedural rebuild,
+   so there was no 25 ms of LZW decodes to cache away.  What it did do is the 9.9 ms restore
+   the `bg=` column now names, and the six columns sum to 266,714 against the composite's own
+   `total=266721` -- within 7 us of self-consistency, which is what makes the row usable as an
+   attribution rather than a collection of numbers.  (One caveat on reading them: `btron_render_stats_take()`
+   runs at the stamp, so a column is the largest value the compositor recorded since the
+   previous profiled pass, not this frame's exclusive cost.  With the app's whole-canvas
+   composite at 266 ms and the intervening session passes painting bands, the app's frame *is*
+   that maximum here; a bench that profiled a quiet frame would not be reading what it names.)
+   The consequence for the plan is that the desktop's own art is 12.3 ms of a 277 ms frame, so
+   no cut in it reaches the 5x the target asks for; the 254 ms of window work under `paint=`,
+   `blit=` and `frame=` is gated on how much of the canvas the app declares stale, which is
+   task #41.
 3. Staleness belongs to one window, never to a composite.  `WND::img_valid` is the app's
    declaration about *its own* client GDEV (`inval_wnd()` in `src/window/wnd.c:326`), and the
    window's `dev` persists between composites, so blitting a valid window's surface and
@@ -1144,9 +1241,11 @@ Three consequences are normative for the work that follows:
 
 The band the app itself dirtied is `dmg=0,0,800,556`: `xb_task()` invalidates its whole
 window every frame, and that window is 776x536 of an 800x600 canvas, whose rect the panel
-timer widens to the canvas's full 800 columns.  So a band-limited repaint is worth the
-`~95 ms` of compositor stages only if the app also stops invalidating what it did not
-change -- which is why task #41 is written as two changes, not one.
+timer widens to the canvas's full 800 columns.  The stages a band would clip are now named
+by the row rather than guessed at -- `blit=` 49.9 + `frame=` 20.3 + `bg=` 9.9 + `panel=` 1.8
++ `bars=` 0.6, i.e. 82.5 ms of compositor work per frame, on top of the app's own 184 ms of
+`paint=` -- and a band-limited repaint is worth that only if the app also stops invalidating
+what it did not change, which is why task #41 is written as two changes, not one.
 
 What the frame above does *not* settle is the banded case, and the row says why: it carries
 `why=c`, an open global menu and an open tracker.  That is not a stuck overlay.  The task
@@ -1154,9 +1253,10 @@ body runs on the caller's stack (see the µITRON layer above), so
 `ps2_bench_launch_xmb_by_key()`'s Cross reaches `tracker_execute_item()`, which opens the
 window -- and the app's three profiled frames are painted inside that call, before the
 `tracker_close_menu()` on the line after it.  A frame with every overlay closed would take
-`workbench_render_damage*()` instead of `workbench_render()`, and the two differences it
-would show are exactly the two this table cannot separate: the ~25 ms of procedural desktop
-art, and a `dmg=` that the rules above no longer replace with the canvas.
+`workbench_render_damage*()` instead of `workbench_render()`.  Of the two differences that
+would show, one is now closed by the instrument in consequence 2 (the desktop's own art is
+12.3 ms, and none of it is the procedural rebuild); the one still open is the `dmg=` the
+rules above replace with the canvas before the band is ever clipped.
 
 #### The plane table (Normative)
 

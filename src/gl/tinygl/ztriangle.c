@@ -74,7 +74,7 @@ void ZB_fillTriangleFlat(ZBuffer* zb, ZBufferPoint* p0, ZBufferPoint* p1, ZBuffe
 		{                                                                                                                                                      \
 			register GLuint zz = z >> ZB_POINT_Z_FRAC_BITS;                                                                                                    \
 			if (ZCMPSIMP(zz, pz[_a], _a, color)) {                                                                                                             \
-				TGL_BLEND_FUNC(color, flat_alpha, (pp[_a])) /*pp[_a] = color;*/                                                                                \
+				TGL_BLEND_FUNC(color, flat_alpha, (pp[_a])) /*pp[_a] = FB_PIXEL(color);*/                                                                                \
 				if (zbdw)                                                                                                                                      \
 					pz[_a] = zz;                                                                                                                               \
 			}                                                                                                                                                  \
@@ -104,7 +104,7 @@ void ZB_fillTriangleFlatNOBLEND(ZBuffer* zb, ZBufferPoint* p0, ZBufferPoint* p1,
 		{                                                                                                                                                      \
 			register GLuint zz = z >> ZB_POINT_Z_FRAC_BITS;                                                                                                    \
 			if (ZCMPSIMP(zz, pz[_a], _a, 0)) {                                                                                                                 \
-				pp[_a] = color;                                                                                                                                \
+				pp[_a] = FB_PIXEL(color);                                                                                                                                \
 				if (zbdw)                                                                                                                                      \
 					pz[_a] = zz;                                                                                                                               \
 			}                                                                                                                                                  \
@@ -140,7 +140,7 @@ void ZB_fillTriangleSmooth(ZBuffer* zb, ZBufferPoint* p0, ZBufferPoint* p1, ZBuf
 		{                                                                                                                                                      \
 			register GLuint zz = z >> ZB_POINT_Z_FRAC_BITS;                                                                                                    \
 			if (ZCMPSIMP(zz, pz[_a], _a, 0)) {                                                                                                                 \
-				/*pp[_a] = RGB_TO_PIXEL(or1, og1, ob1);*/                                                                                                      \
+				/*pp[_a] = FB_PIXEL(RGB_TO_PIXEL(or1, og1, ob1));*/                                                                                                      \
 				TGL_BLEND_FUNC_RGB(or1, og1, ob1, TGL_ALPHA_BYTE(al), (pp[_a])); al += dadx;                                                                                                   \
 				if (zbdw)                                                                                                                                      \
 					pz[_a] = zz;                                                                                                                               \
@@ -163,7 +163,7 @@ void ZB_fillTriangleSmooth(ZBuffer* zb, ZBufferPoint* p0, ZBufferPoint* p1, ZBuf
 		{                                                                                                                                                      \
 			register GLuint zz = z >> ZB_POINT_Z_FRAC_BITS;                                                                                                    \
 			if (ZCMPSIMP(zz, pz[_a], _a, 0)) {                                                                                                                 \
-				/*pp[_a] = RGB_TO_PIXEL(or1, og1, ob1);*/                                                                                                      \
+				/*pp[_a] = FB_PIXEL(RGB_TO_PIXEL(or1, og1, ob1));*/                                                                                                      \
 				TGL_BLEND_FUNC_RGB(or1, og1, ob1, TGL_ALPHA_BYTE(al), (pp[_a])); al += dadx;                                                                                                   \
                                                                                                                                                                \
 				if (zbdw)                                                                                                                                      \
@@ -202,7 +202,7 @@ void ZB_fillTriangleSmoothNOBLEND(ZBuffer* zb, ZBufferPoint* p0, ZBufferPoint* p
 		{                                                                                                                                                      \
 			register GLuint zz = z >> ZB_POINT_Z_FRAC_BITS;                                                                                                    \
 			if (ZCMPSIMP(zz, pz[_a], _a, 0)) {                                                                                                                 \
-				pp[_a] = RGB_TO_PIXEL(or1, og1, ob1);                                                                                                          \
+				pp[_a] = FB_PIXEL(RGB_TO_PIXEL(or1, og1, ob1));                                                                                                          \
 				if (zbdw)                                                                                                                                      \
 					pz[_a] = zz;                                                                                                                               \
 			}                                                                                                                                                  \
@@ -219,7 +219,7 @@ void ZB_fillTriangleSmoothNOBLEND(ZBuffer* zb, ZBufferPoint* p0, ZBufferPoint* p
 			register GLuint zz = z >> ZB_POINT_Z_FRAC_BITS;                                                                                                    \
 			/*c = RGB_TO_PIXEL(or1, og1, ob1);*/                                                                                                               \
 			if (ZCMPSIMP(zz, pz[_a], _a, 0)) {                                                                                                                 \
-				pp[_a] = RGB_TO_PIXEL(or1, og1, ob1);                                                                                                          \
+				pp[_a] = FB_PIXEL(RGB_TO_PIXEL(or1, og1, ob1));                                                                                                          \
 				if (zbdw)                                                                                                                                      \
 					pz[_a] = zz;                                                                                                                               \
 			}                                                                                                                                                  \
@@ -241,7 +241,7 @@ void ZB_fillTriangleSmoothNOBLEND(ZBuffer* zb, ZBufferPoint* p0, ZBufferPoint* p
 		{                                                                                                                                                      \
 			register GLuint zz = z >> ZB_POINT_Z_FRAC_BITS;                                                                                                    \
 			if (ZCMPSIMP(zz, pz[_a], _a, 0)) {                                                                                                                 \
-				pp[_a] = RGB_TO_PIXEL(or1, og1, ob1);                                                                                                          \
+				pp[_a] = FB_PIXEL(RGB_TO_PIXEL(or1, og1, ob1));                                                                                                          \
                                                                                                                                                                \
 				if (zbdw)                                                                                                                                      \
 					pz[_a] = zz;                                                                                                                               \
@@ -479,7 +479,7 @@ void ZB_fillTriangleMappingPerspectiveNOBLEND(ZBuffer* zb, ZBufferPoint* p0, ZBu
 		{                                                                                                                                                      \
 			register GLuint zz = z >> ZB_POINT_Z_FRAC_BITS;                                                                                                    \
 			if (ZCMPSIMP(zz, pz[_a], _a, 0)) {                                                                                                                 \
-				pp[_a] = RGB_MIX_FUNC(or1, og1, ob1, TEXTURE_SAMPLE(texture, s, t));                                                                           \
+				pp[_a] = FB_PIXEL(RGB_MIX_FUNC(or1, og1, ob1, TEXTURE_SAMPLE(texture, s, t)));                                                                           \
 				if (zbdw)                                                                                                                                      \
 					pz[_a] = zz;                                                                                                                               \
 			}                                                                                                                                                  \
@@ -496,7 +496,7 @@ void ZB_fillTriangleMappingPerspectiveNOBLEND(ZBuffer* zb, ZBufferPoint* p0, ZBu
 			register GLuint zz = z >> ZB_POINT_Z_FRAC_BITS;                                                                                                    \
 			PIXEL c = TEXTURE_SAMPLE(texture, s, t);                                                                                                           \
 			if (ZCMP(zz, pz[_a], _a, c)) {                                                                                                                     \
-				pp[_a] = RGB_MIX_FUNC(or1, og1, ob1, c);                                                                                                       \
+				pp[_a] = FB_PIXEL(RGB_MIX_FUNC(or1, og1, ob1, c));                                                                                                       \
 				/*TGL_BLEND_FUNC(RGB_MIX_FUNC(or1, og1, ob1, c), (pp[_a]));*/                                                                                  \
 				if (zbdw)                                                                                                                                      \
 					pz[_a] = zz;                                                                                                                               \
@@ -653,7 +653,7 @@ void ZB_fillTriangleMappingNOBLEND(ZBuffer* zb, ZBufferPoint* p0, ZBufferPoint* 
 		{                                                                                                                                                      \
 			register GLuint zz = z >> ZB_POINT_Z_FRAC_BITS;                                                                                                    \
 			if (ZCMPSIMP(zz, pz[_a], _a, 0)) {                                                                                                                 \
-				pp[_a] = RGB_MIX_FUNC(or1, og1, ob1, TEXTURE_SAMPLE(texture, s, t));                                                                           \
+				pp[_a] = FB_PIXEL(RGB_MIX_FUNC(or1, og1, ob1, TEXTURE_SAMPLE(texture, s, t)));                                                                           \
 				if (zbdw)                                                                                                                                      \
 					pz[_a] = zz;                                                                                                                               \
 			}                                                                                                                                                  \
@@ -670,7 +670,7 @@ void ZB_fillTriangleMappingNOBLEND(ZBuffer* zb, ZBufferPoint* p0, ZBufferPoint* 
 			register GLuint zz = z >> ZB_POINT_Z_FRAC_BITS;                                                                                                    \
 			PIXEL c = TEXTURE_SAMPLE(texture, s, t);                                                                                                           \
 			if (ZCMP(zz, pz[_a], _a, c)) {                                                                                                                     \
-				pp[_a] = RGB_MIX_FUNC(or1, og1, ob1, c);                                                                                                       \
+				pp[_a] = FB_PIXEL(RGB_MIX_FUNC(or1, og1, ob1, c));                                                                                                       \
 				if (zbdw)                                                                                                                                      \
 					pz[_a] = zz;                                                                                                                               \
 			}                                                                                                                                                  \

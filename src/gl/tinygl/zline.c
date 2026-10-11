@@ -24,11 +24,11 @@ void ZB_plot(ZBuffer* zb, ZBufferPoint* p) {
 		if (ZCMP(zz, *pz)) {
 #if TGL_FEATURE_BLEND == 1
 			if (!zb->enable_blend)
-				*pp = RGB_TO_PIXEL(p->r, p->g, p->b);
+				*pp = FB_PIXEL(RGB_TO_PIXEL(p->r, p->g, p->b));
 			else
 				TGL_BLEND_FUNC_RGB(p->r, p->g, p->b, TGL_ALPHA_BYTE(p->a), (*pp))
 #else
-			*pp = RGB_TO_PIXEL(p->r, p->g, p->b);
+			*pp = FB_PIXEL(RGB_TO_PIXEL(p->r, p->g, p->b));
 #endif
 			if (zbdw)
 				*pz = zz;
@@ -52,11 +52,11 @@ void ZB_plot(ZBuffer* zb, ZBufferPoint* p) {
 				if (ZCMP(zz, *pz)) {
 #if TGL_FEATURE_BLEND == 1
 					if (!zb->enable_blend)
-						*pp = col;
+						*pp = FB_PIXEL(col);
 					else
 						TGL_BLEND_FUNC_RGB(p->r, p->g, p->b, TGL_ALPHA_BYTE(p->a), (*pp))
 #else
-					*pp = col;
+					*pp = FB_PIXEL(col);
 #endif
 					if (zbdw)
 						*pz = zz;

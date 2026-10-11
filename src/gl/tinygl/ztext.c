@@ -44,7 +44,7 @@ void glopPlotPixel(GLParam* p) {
 	GLContext* c = gl_get_context();
 	GLint x = p[1].i;
 	PIXEL pix = p[2].ui;
-	c->zb->pbuf[x] = pix;
+	c->zb->pbuf[x] = FB_PIXEL(pix);
 	
 }
 

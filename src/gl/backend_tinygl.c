@@ -3,9 +3,9 @@
  *
  * Wraps the C-Chads TinyGL fork (third_party/tinygl/) behind the
  * B-System gl_ops_t dispatch table.  ZBuffer pixel output is stored
- * directly into the caller-supplied pixel_buf (XRGB8888), which is
- * the same buffer backing the window's GDEV — zero extra copy on
- * swap_buffers().
+ * directly into the caller-supplied pixel_buf, already carrying its
+ * opaque alpha byte, so there is no swap: the window's GDEV is the
+ * frame the compositor reads.
  *
  * Copyright 2026 Synrc Research Center. MIT License.
  */
@@ -82,7 +82,6 @@ static void   tgl_tex_image_2d(GLenum target, GLint level, GLint components,
                                GLsizei width, GLsizei height, GLint border,
                                GLenum format, GLenum type, const void *pixels);
 static void   tgl_tex_parameteri(GLenum target, GLenum pname, GLint param);
-static void   tgl_swap_buffers(void);
 static void   tgl_blend_func   (GLenum src, GLenum dst);
 static void   tgl_color4f      (GLfloat r, GLfloat g, GLfloat b, GLfloat a);
 static void   tgl_vertex2f     (GLfloat x, GLfloat y);
@@ -123,7 +122,8 @@ gl_ops_t g_tinygl_ops = {
     .gl_bind_texture = tgl_bind_texture,
     .gl_tex_image_2d = tgl_tex_image_2d,
     .gl_tex_parameteri= tgl_tex_parameteri,
-    .swap_buffers    = tgl_swap_buffers,
+    /* swap_buffers is left NULL: TinyGL rasterises into the window's own pixel array,
+     * so a frame is already where it has to be.  egl_swap_buffers() handles the NULL. */
     .gl_blend_func   = tgl_blend_func,
     .gl_color4f      = tgl_color4f,
     .gl_vertex2f     = tgl_vertex2f,
@@ -131,6 +131,29 @@ gl_ops_t g_tinygl_ops = {
 };
 
 /* ── Init / resize / shutdown ────────────────────────────────────── */
+
+/*
+ * Once per surface, not once per frame: give the whole pixel array its opaque alpha byte.
+ *
+ * The rasteriser now writes that byte with every pixel it stores (FB_PIXEL, and the law in
+ * src/gl/tinygl/zbuffer.h), so what is left here is the area no primitive happens to cover.
+ * A window's pixel array arrives zeroed, and a zeroed top byte is a transparent pixel to
+ * anything that reads the canvas the way the GS does, so an unstamped surface shows its
+ * uncovered area as black rather than as the clear colour it was cleared to.
+ *
+ * It is called when the array is new -- at init, and at a resize that actually changed the
+ * array or its size -- because egl_make_current() routes through the resize path every time
+ * a context is made current, and a walk of the surface there would be the per-frame pass
+ * this replaced.
+ */
+static void s_stamp_surface_alpha(void) {
+    if (!s_pixel_buf) return;
+    COLOR *px = (COLOR *)s_pixel_buf;
+    int    n  = s_width * s_height;
+    for (int i = 0; i < n; i++) {
+        px[i] |= 0xFF000000u;
+    }
+}
 
 void tinygl_backend_init(int w, int h, void *pixel_buf) {
     s_width     = w;
@@ -144,6 +167,8 @@ void tinygl_backend_init(int w, int h, void *pixel_buf) {
         return;
     }
 
+    s_stamp_surface_alpha();
+
     /* Hand ZBuffer to TinyGL context */
     glInit(s_zb);
 
@@ -151,11 +176,13 @@ void tinygl_backend_init(int w, int h, void *pixel_buf) {
 }
 
 void tinygl_backend_resize(int w, int h, void *pixel_buf) {
+    const int fresh = (pixel_buf != s_pixel_buf) || (w != s_width) || (h != s_height);
     if (!s_zb) return;
     s_width     = w;
     s_height    = h;
     s_pixel_buf = pixel_buf;
     ZB_resize(s_zb, pixel_buf, w, h);
+    if (fresh) s_stamp_surface_alpha();
 }
 
 void tinygl_backend_shutdown(void) {
@@ -236,18 +263,4 @@ static void tgl_ortho(double l, double r, double b,
     m[14] = (GLfloat)(-(f + n) / fn);
     m[15] = 1.0f;
     glMultMatrixf(m);
-}
-
-/*
- * swap_buffers: TinyGL rendered directly into s_pixel_buf (ZB_MODE_RGBA).
- * Pixel format from TinyGL 32-bit: 0x00RRGGBB (alpha=0).
- * BTRON COLOR is 0xAARRGGBB.  OR in 0xFF000000 to set full opacity.
- */
-static void tgl_swap_buffers(void) {
-    if (!s_pixel_buf) return;
-    COLOR *px = (COLOR *)s_pixel_buf;
-    int   n   = s_width * s_height;
-    for (int i = 0; i < n; i++) {
-        px[i] |= 0xFF000000u;
-    }
 }

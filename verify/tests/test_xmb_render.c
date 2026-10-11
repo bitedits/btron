@@ -67,6 +67,16 @@
 #define XW 960
 #define XH 600
 
+/* Where the frames this test writes land.  The default is the shared .build/ dir.
+ * The same source is also linked against the TinyGL backend the PS2 ships with
+ * (`make test-xmb-render-tgl`), and that harness passes its own directory here so
+ * the two renderers leave frames beside each other instead of overwriting each
+ * other's -- which is the only way to see a defect that exists in one backend and
+ * not the other. */
+#ifndef XMB_OUT_DIR
+#define XMB_OUT_DIR ".build/"
+#endif
+
 /* ── Host display device, window and clock ───────────────────────────── */
 
 static COLOR   g_fb[XW * XH];
@@ -77,6 +87,11 @@ static int     g_shell_calls;
 static char    g_shell_last[128];
 
 void uart_puts_raw(const char *s) { (void)s; }
+
+/* xmb.c's load-phase telemetry times itself with the compositor's stage counter:
+ * dp_core.c carries the weak 0 and the bare-metal cores the real one, and this
+ * link has neither, so it gets the same constant the weak fallback gives. */
+uint32_t btron_render_perf_us(void) { return 0; }
 
 ER get_tim(SYSTIME *p_time) { *p_time = g_clock; return 0; }
 void dly_tsk(W d) { (void)d; }
@@ -744,13 +759,17 @@ static void test_ribbon_compositing(void)
         snprintf(msg, sizeof(msg),
                  "the sheet's fragment field is the shader's: %.4f..%.4f, mean %.4f over %d vertices",
                  lo, hi, mean, n);
-        CHECK(n == 64 * 64 && lo >= 0.0340f && lo <= hi && hi <= 0.1560f, msg);
+        /* The law is the field, not the mesh: XB_RIBBON_ROWS/COLS is a measured
+         * quality/cost dial in xmb.c, so the density assertion is a floor -- a sheet
+         * sampled at fewer than 32x32 points is no longer the same surface -- while
+         * the range clause below is what catches the ~50x-too-weak modelling. */
+        CHECK(n >= 32 * 32 && lo >= 0.0340f && lo <= hi && hi <= 0.1560f, msg);
     }
 
-    dump_frame(g_bg[2], ".build/xmb_sheet_on.ppm");
+    dump_frame(g_bg[2], XMB_OUT_DIR "xmb_sheet_on.ppm");
     grab_band_frame(g_bg[1], 0);     /* sheet off, same UI */
-    dump_frame(g_bg[1], ".build/xmb_sheet_off.ppm");
-    dump_lift(g_bg[1], g_bg[2], 40, ".build/xmb_sheet_lift.ppm");
+    dump_frame(g_bg[1], XMB_OUT_DIR "xmb_sheet_off.ppm");
+    dump_lift(g_bg[1], g_bg[2], 40, XMB_OUT_DIR "xmb_sheet_lift.ppm");
 
     /* GL_DST_COLOR, GL_ONE means dst*(1+c): the sheet lifts the gradient and
      * never darkens it.  The two frames are the same settled UI, so menu ink
@@ -958,7 +977,7 @@ static void test_bar_labels_shadows(void)
     set_shadows_and_park(NULL, 1);      /* the shipped state, bar back on Applications */
     paint_n(20);
     show_preview("frame: settled bar, Applications");
-    dump_ppm(".build/xmb_bar.ppm");
+    dump_ppm(XMB_OUT_DIR "xmb_bar.ppm");
     printf("   wrote .build/xmb_bar.ppm\n");
 }
 
@@ -1022,7 +1041,7 @@ static void test_activate_paths(void)
     goto_settings();
     open_menu(MENU_SYSDATA);           /* System Data */
     show_preview("sub-list: system data");
-    dump_ppm(".build/xmb_sysdata.ppm");
+    dump_ppm(XMB_OUT_DIR "xmb_sysdata.ppm");
     printf("   wrote .build/xmb_sysdata.ppm (sub-list)\n");
 
     {
@@ -1062,7 +1081,7 @@ static void test_particles_and_cost(void)
     snprintf(msg, sizeof(msg), "particles add %d brighter pixels over the same frame without them",
              lit_by_sparkles);
     CHECK(lit_by_sparkles > 200, msg);
-    dump_ppm(".build/xmb_particles.ppm");
+    dump_ppm(XMB_OUT_DIR "xmb_particles.ppm");
     printf("   wrote .build/xmb_particles.ppm\n");
 
     close_menu();
@@ -1596,7 +1615,7 @@ static void test_discs_band(void)
         CHECK(lit > 300 && xmb_depth() == 2, msg);
     }
     show_preview("frame: a body's head in the message box");
-    dump_ppm(".build/xmb_disc_notes.ppm");
+    dump_ppm(XMB_OUT_DIR "xmb_disc_notes.ppm");
     press(BTRON_KEY_ESCAPE);
     paint_n(4);
 
@@ -1633,7 +1652,7 @@ static void test_discs_band(void)
     CHECK(xmb_rows() == 1 && strcmp(xmb_label(0), "Notes") == 0
           && xmb_rows() == vfs_rows(xmb_path()), msg);
     show_preview("frame: the deepest drawer of the volume");
-    dump_ppm(".build/xmb_disc_deep.ppm");
+    dump_ppm(XMB_OUT_DIR "xmb_disc_deep.ppm");
 
     /* And the way out, level by level: ESC pops one folder at a time, all the way
      * from the bottom of the tree back to the mounted-volume list. */
@@ -1692,7 +1711,7 @@ static void test_discs_band(void)
     park_band(BAND_DISCS);
     paint_n(30);
     show_preview("frame: the Discs band, mounted volumes");
-    dump_ppm(".build/xmb_disc_volumes.ppm");
+    dump_ppm(XMB_OUT_DIR "xmb_disc_volumes.ppm");
     printf("   wrote .build/xmb_disc_volumes.ppm, xmb_disc_notes.ppm, xmb_disc_deep.ppm\n");
 }
 
@@ -1831,7 +1850,7 @@ static void test_games_band(void)
 
     paint_n(30);
     show_preview("frame: the Games band, cartridges in assets/msx");
-    dump_ppm(".build/xmb_games_band.ppm");
+    dump_ppm(XMB_OUT_DIR "xmb_games_band.ppm");
     printf("   wrote .build/xmb_games_band.ppm\n");
 }
 
@@ -1847,8 +1866,8 @@ int main(void)
     test_open_and_gradient();
     /* the two baked atlases, looked at directly */
     /* 384 = the atlas's own 6x6 grid of 64 px cells (XB_ATLAS_GRID in xmb.c) */
-    dump_atlas(1, 384, 384, ".build/xmb_atlas_icons.ppm");
-    dump_atlas(2, 128, 96, ".build/xmb_atlas_font.ppm");
+    dump_atlas(1, 384, 384, XMB_OUT_DIR "xmb_atlas_icons.ppm");
+    dump_atlas(2, 128, 96, XMB_OUT_DIR "xmb_atlas_font.ppm");
     printf("   wrote .build/xmb_atlas_icons.ppm and .build/xmb_atlas_font.ppm\n");
     test_ribbon_compositing();
     test_bar_labels_shadows();

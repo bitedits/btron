@@ -55,20 +55,24 @@ void gl_init(GL_BACKEND backend, int width, int height, void *pixel_buf) {
 
 void gl_resize(int width, int height, void *pixel_buf) {
     if (!g_gl) return;
+#if defined(BTRON_GL_BACKEND_TINYGL)
     if (gl_active_backend() == GL_BACKEND_TINYGL) {
         tinygl_backend_resize(width, height, pixel_buf);
         return;
     }
+#endif
     virgl_backend_resize(width, height, pixel_buf);
 }
 
 void gl_shutdown(void) {
     if (!g_gl) return;
+#if defined(BTRON_GL_BACKEND_TINYGL)
     if (gl_active_backend() == GL_BACKEND_TINYGL) {
         tinygl_backend_shutdown();
         g_gl = NULL;
         return;
     }
+#endif
     virgl_backend_shutdown();
     g_gl = NULL;
 }

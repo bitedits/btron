@@ -34,7 +34,7 @@ CC ?= gcc
 CFLAGS ?= -O2 -Wall -Wextra -std=c99 -Iinclude -Iinclude/gl -Isrc/gl -Iinclude/drivers -Isrc/kernel -Isrc/cores -Isrc/quake/include
 
 .PHONY: all posix qemu kernel tkernel sakamura foma uefi pc98 arm-elf arm64-elf m68k ps2 mips \
-        check-structure test-ps2-softfloat test-gl-math \
+        check-structure test-ps2-softfloat test-gl-math xmb-atlas test-xmb-atlas \
         html2tad book2tad tad_bin test test-kernel test-yoko test-yoko4 test-m68k test-mips test-ps2 test-foma test-foma-ui foma-screens \
         segui-screens \
         test-mozc test-editor test-hmi test-tad test-chat test-wylie verify test-fs test-chokanji test-quake test-replay \
@@ -1864,6 +1864,32 @@ $(TEST_XMB_BIN): $(TEST_XMB_OBJS)
 	$(CC) $(TEST_XMB_OBJS) -o $@ $(LDFLAGS) -lm
 
 # ═══════════════════════════════════════════════════════════════════
+# XMB icon atlas: geometry on the host, sheet in the image
+# ═══════════════════════════════════════════════════════════════════
+# The glyphs' signed-distance arithmetic now lives in verify/tests/gen_xmb_atlas.c
+# (it moved out of the bar, where it measured 132 ms a cell -- 2.8 s of the load --
+# and src/apps/xmb_atlas.h is what that program prints.  Nothing builds the sheet
+# implicitly: it is committed like the other embedded assets, so test-xmb-atlas is
+# what stops it going stale against the geometry.
+GEN_XMB_ATLAS_OBJS = verify/tests/gen_xmb_atlas.test.o
+GEN_XMB_ATLAS_BIN  = ./.build/gen_xmb_atlas
+
+xmb-atlas: $(GEN_XMB_ATLAS_BIN)
+	@$(GEN_XMB_ATLAS_BIN) > src/apps/xmb_atlas.h.tmp || { rm -f src/apps/xmb_atlas.h.tmp; exit 1; }
+	@mv src/apps/xmb_atlas.h.tmp src/apps/xmb_atlas.h
+	@echo "wrote src/apps/xmb_atlas.h ($$(wc -c < src/apps/xmb_atlas.h) bytes)"
+
+test-xmb-atlas: $(GEN_XMB_ATLAS_BIN)
+	@mkdir -p ./.build
+	@$(GEN_XMB_ATLAS_BIN) > ./.build/xmb_atlas.h.new || { rm -f ./.build/xmb_atlas.h.new; exit 1; }
+	@if cmp -s ./.build/xmb_atlas.h.new src/apps/xmb_atlas.h; then \
+	    echo "[PASS] src/apps/xmb_atlas.h is still the sheet this geometry prints"; \
+	 else \
+	    echo "[FAIL] src/apps/xmb_atlas.h has drifted from verify/tests/gen_xmb_atlas.c -- run make xmb-atlas"; \
+	    rm -f ./.build/xmb_atlas.h.new; exit 1; fi
+	@rm -f ./.build/xmb_atlas.h.new
+
+# ═══════════════════════════════════════════════════════════════════
 # Common Application Menu Subsystem Test Suite
 # ═══════════════════════════════════════════════════════════════════
 TEST_APP_MENU_SRCS = verify/tests/test_app_menu.c src/window/app_menu.c src/window/wnd.c src/chokanji/pmc.c \
@@ -1952,7 +1978,7 @@ $(TEST_MSX_TRACE_BIN): $(TEST_MSX_TRACE_OBJS)
 	@mkdir -p ./.build
 	$(CC) $(TEST_MSX_TRACE_OBJS) -o $@ $(LDFLAGS)
 
-test: test-tad test-editor test-chat test-mozc test-wylie test-hmi test-ski test-tracker test-deskclip test-settings test-global-menu test-app-menu test-drivesetup test-fs test-quake test-ps2-softfloat test-gl-math
+test: test-tad test-editor test-chat test-mozc test-wylie test-hmi test-ski test-tracker test-deskclip test-settings test-global-menu test-app-menu test-drivesetup test-fs test-quake test-ps2-softfloat test-gl-math test-xmb-atlas
 	@echo "=========================================================="
 	@echo " ALL B-SYSTEM TEST SUITES PASSED (100% SUCCESS)!"
 	@echo "=========================================================="

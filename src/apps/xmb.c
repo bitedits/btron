@@ -46,6 +46,8 @@
  */
 
 #include "xmb.h"
+#include "xmb_icons.h"        /* the icon atlas's sheet and cell identities */
+#include "xmb_atlas.h"        /* generated: src/apps/xmb_atlas.h */
 #include "../gl/gl_dispatch.h"
 #include "../gl/egl_surface.h"
 #include "../clu/vfs.h"          /* the VFS that "sc" walks: src/clu/vfs.c */
@@ -153,8 +155,18 @@ extern int      g_mouse_accel_profile;
  * XMB_RIBBON_ROWS/COLS and XMB_DELAY are the driver's own; so are the two
  * easing ids (XMB_EASING_ALPHA = OUT_CIRC, XMB_EASING_XY = OUT_QUAD) and the
  * GFX_SHADOW_ALPHA of gfx_display.h. */
-#define XB_RIBBON_ROWS      64
-#define XB_RIBBON_COLS      64
+/* The sheet's mesh, in grid points.  This is a quality/cost dial, and the cost is
+ * measured rather than assumed: 88% of the sheet's frame cost is per-vertex and
+ * per-triangle pipeline, not pixels -- at 64x64 `f_ribbon` is 463 ms and at 32x32 it is
+ * 157 ms for the same covered area, which solves to ~408 ms of setup against ~55 ms of
+ * fill.  Halving the mesh takes a steady frame from 990 ms to 556 ms.  What it costs the
+ * picture is also measured: the composited frames differ in 4.7% of their bytes with a
+ * worst channel delta of 27/255, and the sheet's fragment field stays inside the
+ * shader's legal 0.0340..0.1560 band, so the surface is the same surface with coarser
+ * facets.  The PS3 driver's own mesh is the reference for the look, so this is the row
+ * to raise if the silhouette reads faceted on a real display. */
+#define XB_RIBBON_ROWS      32
+#define XB_RIBBON_COLS      32
 #define XB_DELAY            166.66667f
 #define XB_SHADOW_ALPHA     1.00f
 #define XB_DRAW_ENTRY_MS    500          /* MENU_DRAW_ENTRY_DELAY (500000 us) */
@@ -204,9 +216,8 @@ extern int      g_mouse_accel_profile;
 
 #define XB_NEL(a)           ((int)(sizeof(a) / sizeof((a)[0])))
 
-#define XB_ATLAS_GRID       6            /* 6x6 icon cells */
-#define XB_ICON_CELL        64
-#define XB_ICON_TEX         (XB_ATLAS_GRID * XB_ICON_CELL)
+/* The icon atlas's grid, cell size and cell identities are in xmb_icons.h, shared
+ * with the generator that fills the sheet. */
 
 #define XB_FONT_COLS        16
 #define XB_FONT_ROWS        6            /* ASCII 32..126 = 95 glyphs */
@@ -342,15 +353,8 @@ enum {
     L_VOBJ, L_TAD, L_DRIVE, L_CHAT, L_KAGEE, L_QUAKE, L_MSX
 };
 
-/* Icon atlas cells */
-enum {
-    IC_CAT_APPS = 0, IC_CAT_SETTINGS, IC_CAT_COMMANDS, IC_ARROW,
-    IC_APP_TERM, IC_APP_EDITOR, IC_APP_PAINT, IC_APP_MUSIC, IC_APP_ORCHESTRA,
-    IC_APP_VOBJ, IC_APP_TAD, IC_APP_DRIVE, IC_APP_CHAT, IC_APP_PHOTO,
-    IC_GEAR, IC_SLIDER, IC_SPEAKER, IC_INFO, IC_PROMPT,
-    IC_DROPLET, IC_FOLDER, IC_APP_QUAKE, IC_CLOCK, IC_BLANK,
-    IC_MINIDISC, IC_FILE, IC_CAT_GAMES
-};
+/* Icon atlas cells: the enum is in xmb_icons.h, where the generator that fills the
+ * sheet reads the same names. */
 
 typedef struct {
     float x, y, alpha, label_alpha, zoom;
@@ -807,12 +811,7 @@ static int          s_frame_ms  = 16;
 
 /* ── Small helpers ──────────────────────────────────────────────────── */
 
-static float xb_clampf(float v, float lo, float hi)
-{
-    if (v < lo) return lo;
-    if (v > hi) return hi;
-    return v;
-}
+/* xb_clampf lives in xmb_icons.h, where the glyph geometry uses it too. */
 
 static float xb_minf(float a, float b) { return a < b ? a : b; }
 static float xb_maxf(float a, float b) { return a > b ? a : b; }
@@ -970,288 +969,6 @@ static void xb_set_selection(int v)
 
 /* ── Texture baking ─────────────────────────────────────────────────── */
 
-static float xb_sd_box(float x, float y, float cx, float cy, float hw, float hh)
-{
-    float dx = fabsf(x - cx) - hw, dy = fabsf(y - cy) - hh;
-    float mx = dx > 0.0f ? dx : 0.0f;
-    float my = dy > 0.0f ? dy : 0.0f;
-    float inside = dx > dy ? dx : dy;
-    return inside < 0.0f ? inside : sqrtf(mx * mx + my * my);
-}
-
-static float xb_sd_rbox(float x, float y, float cx, float cy,
-                        float hw, float hh, float r)
-{
-    return xb_sd_box(x, y, cx, cy, hw - r, hh - r) - r;
-}
-
-static float xb_sd_disc(float x, float y, float cx, float cy, float r)
-{
-    float a = x - cx, b = y - cy;
-    return sqrtf(a * a + b * b) - r;
-}
-
-static float xb_sd_ring(float x, float y, float cx, float cy, float r, float w)
-{
-    /* Annulus of half-thickness w: the distance to the circle, widened */
-    return fabsf(xb_sd_disc(x, y, cx, cy, r)) - w;
-}
-
-static float xb_sd_capsule(float x, float y, float ax, float ay,
-                           float bx, float by, float w)
-{
-    float vx = bx - ax, vy = by - ay;
-    float wx = x - ax,  wy = y - ay;
-    float len2 = vx * vx + vy * vy;
-    float t = len2 > 1e-6f ? (wx * vx + wy * vy) / len2 : 0.0f;
-    float px, py;
-    t = xb_clampf(t, 0.0f, 1.0f);
-    px = x - (ax + t * vx);
-    py = y - (ay + t * vy);
-    return sqrtf(px * px + py * py) - w;
-}
-
-#define UN(a, b)          ((a) < (b)  ? (a) : (b))        /* CSG union        */
-#define INTER(a, b)       ((a) > (b)  ? (a) : (b))        /* CSG intersection */
-#define SUB(a, b)         ((a) > (-(b)) ? (a) : (-(b)))   /* CSG difference   */
-#define STROKE(a, w)      (fabsf(a) - (w))                /* outline          */
-#define XB_W              0.05f            /* stroke weight, in cell units    */
-
-/* Distance to one segment, always positive */
-static float xb_sd_seg(float x, float y, float ax, float ay, float bx, float by)
-{
-    float pax = x - ax, pay = y - ay;
-    float bax = bx - ax, bay = by - ay;
-    float len2 = bax * bax + bay * bay;
-    float h = len2 > 1e-6f ? pax * bax + pay * bay : 0.0f;
-    float dx, dy;
-
-    h = len2 > 1e-6f ? xb_clampf(h / len2, 0.0f, 1.0f) : 0.0f;
-    dx = pax - bax * h;
-    dy = pay - bay * h;
-    return sqrtf(dx * dx + dy * dy);
-}
-
-/* Exact distance to a triangle: nearest of the three edges, signed by the
- * side of each edge the point sits on */
-static float xb_sd_tri(float x, float y, float ax, float ay,
-                       float bx, float by, float cx, float cy)
-{
-    float d   = UN(UN(xb_sd_seg(x, y, ax, ay, bx, by),
-                      xb_sd_seg(x, y, bx, by, cx, cy)),
-                   xb_sd_seg(x, y, cx, cy, ax, ay));
-    float s1 = (bx - ax) * (y - ay) - (by - ay) * (x - ax);
-    float s2 = (cx - bx) * (y - by) - (cy - by) * (x - bx);
-    float s3 = (ax - cx) * (y - cy) - (ay - cy) * (x - cx);
-    int neg = (s1 < 0.0f) + (s2 < 0.0f) + (s3 < 0.0f);
-    int pos = (s1 > 0.0f) + (s2 > 0.0f) + (s3 > 0.0f);
-
-    return (neg && pos) ? d : -d;
-}
-
-/* Coverage of one icon cell, in centred coordinates of -0.5 .. 0.5 with y
- * downwards.  Every glyph is a white silhouette at one stroke weight, which is
- * how the PS3 bar's own pictograms read at icon_size. */
-static float xb_icon_cov(int cell, float x, float y)
-{
-    float d = 1.0f;
-    int i;
-
-    switch (cell) {
-    case IC_CAT_APPS:
-        /* The applications group: four rounded squares */
-        d = UN(UN(xb_sd_rbox(x, y, -0.20f, -0.20f, 0.14f, 0.14f, 0.05f),
-                  xb_sd_rbox(x, y,  0.20f, -0.20f, 0.14f, 0.14f, 0.05f)),
-               UN(xb_sd_rbox(x, y, -0.20f,  0.20f, 0.14f, 0.14f, 0.05f),
-                  xb_sd_rbox(x, y,  0.20f,  0.20f, 0.14f, 0.14f, 0.05f)));
-        break;
-
-    case IC_CAT_SETTINGS:
-    case IC_GEAR:
-        /* Ring, eight studs and a hub */
-        d = xb_sd_ring(x, y, 0.0f, 0.0f, 0.28f, XB_W);
-        for (i = 0; i < 8; i++) {
-            float a = (float)i * ((float)M_PI / 4.0f);
-            d = UN(d, xb_sd_disc(x, y, cosf(a) * 0.36f, sinf(a) * 0.36f, XB_W));
-        }
-        d = UN(d, xb_sd_disc(x, y, 0.0f, 0.0f, 0.12f));
-        break;
-
-    case IC_SPEAKER:
-        /* Throat, cone and two sound arcs on the right */
-        d = xb_sd_rbox(x, y, -0.30f, 0.0f, 0.07f, 0.14f, 0.03f);
-        d = UN(d, xb_sd_tri(x, y, -0.20f, -0.14f, -0.20f, 0.14f, 0.04f,  0.32f));
-        d = UN(d, xb_sd_tri(x, y, -0.20f, -0.14f,  0.04f,  0.32f, 0.04f, -0.32f));
-        d = UN(d, INTER(xb_sd_ring(x, y, 0.06f, 0.0f, 0.30f, 0.04f), x - 0.16f));
-        d = UN(d, INTER(xb_sd_ring(x, y, 0.06f, 0.0f, 0.44f, 0.04f), x - 0.16f));
-        break;
-
-    case IC_CAT_COMMANDS:
-    case IC_PROMPT:
-    case IC_APP_TERM:
-        /* Window frame with a prompt inside */
-        d = STROKE(xb_sd_rbox(x, y, 0.0f, 0.0f, 0.36f, 0.30f, 0.06f), XB_W * 0.7f);
-        d = UN(d, xb_sd_capsule(x, y, -0.20f, -0.12f, -0.05f, 0.0f, 0.04f));
-        d = UN(d, xb_sd_capsule(x, y, -0.05f,  0.0f, -0.20f, 0.12f, 0.04f));
-        d = UN(d, xb_sd_capsule(x, y,  0.03f,  0.14f,  0.22f, 0.14f, 0.04f));
-        break;
-
-    case IC_CAT_GAMES:
-        /* The Games band: a cartridge shell with its label rules and the two
-         * slots a reader grips. */
-        d = STROKE(xb_sd_rbox(x, y, 0.0f, 0.02f, 0.28f, 0.36f, 0.05f), XB_W * 0.8f);
-        d = UN(d, xb_sd_capsule(x, y, -0.15f, -0.20f, 0.15f, -0.20f, 0.032f));
-        d = UN(d, xb_sd_capsule(x, y, -0.15f, -0.06f, 0.15f, -0.06f, 0.032f));
-        d = UN(d, xb_sd_capsule(x, y, -0.15f,  0.08f, 0.02f,  0.08f, 0.032f));
-        d = UN(d, xb_sd_rbox(x, y, -0.13f, 0.30f, 0.07f, 0.028f, 0.014f));
-        d = UN(d, xb_sd_rbox(x, y,  0.13f, 0.30f, 0.07f, 0.028f, 0.014f));
-        break;
-
-    case IC_ARROW:
-        d = xb_sd_capsule(x, y, -0.12f, -0.24f, 0.16f, 0.0f, 0.06f);
-        d = UN(d, xb_sd_capsule(x, y, 0.16f, 0.0f, -0.12f, 0.24f, 0.06f));
-        break;
-
-    case IC_APP_EDITOR:
-        /* A page ruled with three lines of text */
-        d = STROKE(xb_sd_rbox(x, y, 0.0f, -0.02f, 0.28f, 0.34f, 0.04f), XB_W * 0.7f);
-        d = UN(d, xb_sd_capsule(x, y, -0.14f, -0.20f, 0.14f, -0.20f, 0.032f));
-        d = UN(d, xb_sd_capsule(x, y, -0.14f, -0.06f, 0.14f, -0.06f, 0.032f));
-        d = UN(d, xb_sd_capsule(x, y, -0.14f,  0.08f, 0.14f,  0.08f, 0.032f));
-        d = UN(d, xb_sd_capsule(x, y, -0.14f,  0.22f, 0.02f,  0.22f, 0.032f));
-        break;
-
-    case IC_APP_PAINT:
-        /* Palette: a ring with three wells and a brush */
-        d = SUB(xb_sd_disc(x, y, 0.0f, 0.04f, 0.34f),
-                xb_sd_disc(x, y, 0.0f, 0.04f, 0.34f - XB_W * 1.4f));
-        d = UN(d, xb_sd_disc(x, y,  0.16f, -0.16f, 0.06f));
-        d = UN(d, xb_sd_disc(x, y, -0.18f, -0.04f, 0.06f));
-        d = UN(d, xb_sd_disc(x, y, -0.02f,  0.22f, 0.06f));
-        d = UN(d, xb_sd_capsule(x, y, 0.20f, -0.38f, 0.38f, -0.20f, 0.05f));
-        break;
-
-    case IC_APP_MUSIC:
-        d = UN(xb_sd_disc(x, y, -0.16f,  0.20f, 0.11f),
-               xb_sd_disc(x, y,  0.18f,  0.12f, 0.11f));
-        d = UN(d, xb_sd_capsule(x, y, -0.06f, 0.20f, -0.06f, -0.26f, 0.04f));
-        d = UN(d, xb_sd_capsule(x, y,  0.28f, 0.12f,  0.28f, -0.34f, 0.04f));
-        d = UN(d, xb_sd_capsule(x, y, -0.06f, -0.26f,  0.28f, -0.34f, 0.05f));
-        break;
-
-    case IC_APP_ORCHESTRA:
-        d = xb_sd_capsule(x, y, -0.30f, -0.18f, -0.30f, 0.18f, 0.045f);
-        d = UN(d, xb_sd_capsule(x, y, -0.15f, -0.30f, -0.15f, 0.30f, 0.045f));
-        d = UN(d, xb_sd_capsule(x, y,  0.00f, -0.12f,  0.00f, 0.12f, 0.045f));
-        d = UN(d, xb_sd_capsule(x, y,  0.15f, -0.32f,  0.15f, 0.32f, 0.045f));
-        d = UN(d, xb_sd_capsule(x, y,  0.30f, -0.20f,  0.30f, 0.20f, 0.045f));
-        break;
-
-    case IC_APP_VOBJ:
-        /* Wireframe cube: the virtual object database */
-        d = xb_sd_capsule(x, y, 0.0f, -0.32f, 0.30f, -0.14f, 0.04f);
-        d = UN(d, xb_sd_capsule(x, y, 0.30f, -0.14f, 0.30f, 0.18f, 0.04f));
-        d = UN(d, xb_sd_capsule(x, y, 0.30f, 0.18f, 0.0f, 0.36f, 0.04f));
-        d = UN(d, xb_sd_capsule(x, y, 0.0f, 0.36f, -0.30f, 0.18f, 0.04f));
-        d = UN(d, xb_sd_capsule(x, y, -0.30f, 0.18f, -0.30f, -0.14f, 0.04f));
-        d = UN(d, xb_sd_capsule(x, y, -0.30f, -0.14f, 0.0f, 0.02f, 0.04f));
-        d = UN(d, xb_sd_capsule(x, y, 0.0f, 0.02f, 0.30f, -0.14f, 0.04f));
-        d = UN(d, xb_sd_capsule(x, y, 0.0f, 0.02f, 0.0f, 0.36f, 0.04f));
-        break;
-
-    case IC_APP_TAD:
-    case IC_FOLDER:
-        d = xb_sd_rbox(x, y, 0.0f, 0.10f, 0.36f, 0.22f, 0.05f);
-        d = UN(d, xb_sd_rbox(x, y, -0.18f, -0.18f, 0.16f, 0.08f, 0.03f));
-        break;
-
-    case IC_MINIDISC:
-        /* The MiniDisc case the Discs band carries: a shell with its corner cut,
-         * the hub window in the middle and the two notches a drive reads. */
-        d = STROKE(SUB(xb_sd_rbox(x, y, 0.0f, 0.0f, 0.28f, 0.34f, 0.06f),
-                       xb_sd_tri(x, y, -0.10f, -0.30f,
-                                    -0.30f, -0.10f,
-                                    -0.62f, -0.62f)), XB_W * 0.8f);
-        d = UN(d, xb_sd_ring(x, y, 0.0f, 0.06f, 0.13f, XB_W * 0.8f));
-        d = UN(d, xb_sd_disc(x, y, 0.0f, 0.06f, 0.045f));
-        d = UN(d, xb_sd_rbox(x, y, -0.17f, 0.28f, 0.05f, 0.025f, 0.015f));
-        d = UN(d, xb_sd_rbox(x, y,  0.17f, 0.28f, 0.05f, 0.025f, 0.015f));
-        break;
-
-    case IC_FILE:
-        /* A body: a page with its top-right corner turned back */
-        d = STROKE(SUB(xb_sd_rbox(x, y, 0.0f, 0.02f, 0.24f, 0.32f, 0.03f),
-                       xb_sd_tri(x, y,  0.10f, -0.34f,
-                                    0.30f, -0.14f,
-                                    0.62f, -0.62f)), XB_W * 0.7f);
-        d = UN(d, xb_sd_capsule(x, y, -0.12f, 0.12f, 0.12f, 0.12f, 0.032f));
-        break;
-
-    case IC_APP_DRIVE:
-        d = xb_sd_ring(x, y, 0.0f, 0.0f, 0.32f, 0.10f);
-        d = UN(d, xb_sd_disc(x, y, 0.0f, 0.0f, 0.09f));
-        break;
-
-    case IC_APP_CHAT:
-        d = xb_sd_rbox(x, y, 0.02f, -0.08f, 0.34f, 0.24f, 0.12f);
-        d = UN(d, xb_sd_tri(x, y, -0.14f, 0.10f, -0.26f, 0.38f, 0.02f, 0.16f));
-        break;
-
-    case IC_APP_PHOTO:
-        /* Picture frame, sun and a mountain range inside it */
-        d = STROKE(xb_sd_rbox(x, y, 0.0f, 0.0f, 0.36f, 0.28f, 0.04f), XB_W * 0.7f);
-        d = UN(d, xb_sd_disc(x, y, 0.20f, -0.12f, 0.06f));
-        d = UN(d, SUB(xb_sd_tri(x, y, -0.34f, 0.26f, -0.06f, -0.04f, 0.16f, 0.26f),
-                      STROKE(xb_sd_rbox(x, y, 0.0f, 0.0f, 0.36f, 0.28f, 0.04f),
-                             XB_W * 0.7f)));
-        break;
-
-    case IC_APP_QUAKE:
-        d = xb_sd_ring(x, y, 0.0f, 0.0f, 0.28f, 0.045f);
-        d = UN(d, xb_sd_capsule(x, y, 0.0f, -0.46f, 0.0f, -0.34f, 0.045f));
-        d = UN(d, xb_sd_capsule(x, y, 0.0f,  0.34f, 0.0f,  0.46f, 0.045f));
-        d = UN(d, xb_sd_capsule(x, y, -0.46f, 0.0f, -0.34f, 0.0f, 0.045f));
-        d = UN(d, xb_sd_capsule(x, y,  0.34f, 0.0f,  0.46f, 0.0f, 0.045f));
-        break;
-
-    case IC_INFO:
-        d = xb_sd_disc(x, y, 0.0f, -0.28f, 0.075f);
-        d = UN(d, xb_sd_capsule(x, y, 0.0f, -0.10f, 0.0f, 0.30f, 0.065f));
-        break;
-
-    case IC_CLOCK:
-        d = xb_sd_ring(x, y, 0.0f, 0.0f, 0.32f, 0.045f);
-        d = UN(d, xb_sd_capsule(x, y, 0.0f, 0.0f, 0.0f, -0.18f, 0.035f));
-        d = UN(d, xb_sd_capsule(x, y, 0.0f, 0.0f, 0.14f, 0.06f, 0.035f));
-        break;
-
-    case IC_SLIDER:
-        d = xb_sd_capsule(x, y, -0.34f, 0.08f, 0.34f, 0.08f, 0.03f);
-        d = UN(d, xb_sd_disc(x, y, -0.08f, -0.10f, 0.12f));
-        break;
-
-    case IC_DROPLET:
-        d = xb_sd_disc(x, y, 0.0f, 0.0f, 0.30f);
-        break;
-
-    case IC_BLANK:
-    default:
-        return 0.0f;
-    }
-
-    /* Soft edge: 0.022 cell units of falloff */
-    return xb_clampf(0.5f - d / 0.044f, 0.0f, 1.0f);
-}
-
-/* Droplets use a radial falloff instead of a hard SDF edge */
-static float xb_droplet_cov(float x, float y)
-{
-    float r = sqrtf(x * x + y * y) * 2.0f;
-    float v = 1.0f - r;
-    if (v < 0.0f) v = 0.0f;
-    return v * v;
-}
-
 static void xb_put_rgba(UB *px, int texw, int cx, int cy,
                         UB r, UB g, UB b, UB a)
 {
@@ -1262,19 +979,36 @@ static void xb_put_rgba(UB *px, int texw, int cx, int cy,
     px[o + 3] = a;
 }
 
-/* Bake the icon atlas and the 8x16 bitmap-font atlas, then upload both.
- * Row 0 of the uploaded image is texture row 0 (v = 0), the convention
- * backend_virgl.c documents.  glTexImage2D copies what it is given, so the two
- * bake buffers are freed as soon as the upload is done rather than kept in
- * .bss for the life of the image. */
+/* The icons are not arithmetic in this file any more.  Their signed-distance
+ * geometry is evaluated once, on the host, by verify/tests/gen_xmb_atlas.c, and the
+ * sheet it prints -- src/apps/xmb_atlas.h, one alpha byte per texel -- is what
+ * ships: baking it here measured 132 ms a cell in the PS2's software float, which
+ * was 2.8 s of the 3.9 s it took to open the bar, paid a second time on every band
+ * change.  Expanding the plane is now one pass over 147,456 texels, on the rule the
+ * bake itself followed: no coverage means no ink in any channel. */
+static void xb_fill_icon_atlas(UB *icons)
+{
+    int i;
+
+    for (i = 0; i < XB_ICON_TEX * XB_ICON_TEX; i++) {
+        const unsigned char a = xb_icon_alpha[i];
+        UB *p = icons + (size_t)i * 4;
+
+        p[0] = a ? 248 : 0;
+        p[1] = a ? 250 : 0;
+        p[2] = a ? 255 : 0;
+        p[3] = a;
+    }
+}
+
 static void xb_bake_textures(void)
 {
     GLuint tex[2];
-    size_t icon_bytes = (size_t)XB_ICON_TEX * XB_ICON_TEX * 4;
     size_t font_bytes = (size_t)XB_FONT_TEX_W * XB_FONT_TEX_H * 4;
-    UB *icons = (UB *)malloc(icon_bytes);
+    size_t icon_bytes = (size_t)XB_ICON_TEX * XB_ICON_TEX * 4;
     UB *font  = (UB *)malloc(font_bytes);
-    int cell, px, py, i;
+    UB *icons = (UB *)malloc(icon_bytes);
+    int i;
 
     if (!icons || !font) {
         if (icons) free(icons);
@@ -1283,24 +1017,8 @@ static void xb_bake_textures(void)
         return;
     }
 
-    memset(icons, 0, icon_bytes);
-    for (cell = 0; cell < XB_ATLAS_GRID * XB_ATLAS_GRID; cell++) {
-        int ox = (cell % XB_ATLAS_GRID) * XB_ICON_CELL;
-        int oy = (cell / XB_ATLAS_GRID) * XB_ICON_CELL;
-        for (py = 0; py < XB_ICON_CELL; py++) {
-            for (px = 0; px < XB_ICON_CELL; px++) {
-                float x = (float)px / (float)(XB_ICON_CELL - 1) - 0.5f;
-                float y = (float)py / (float)(XB_ICON_CELL - 1) - 0.5f;
-                float cov = (cell == IC_DROPLET) ? xb_droplet_cov(x, y)
-                                                 : xb_icon_cov(cell, x, y);
-                if (cov <= 0.0f)
-                    continue;
-                xb_put_rgba(icons, XB_ICON_TEX, ox + px, oy + py,
-                            248, 250, 255, (UB)(cov * 255.0f));
-            }
-        }
-    }
-    xb_phase("bake_icons", XB_ATLAS_GRID * XB_ATLAS_GRID * XB_ICON_CELL * XB_ICON_CELL);
+    xb_fill_icon_atlas(icons);
+    xb_phase("fill_atlas", XB_ICON_TEX * XB_ICON_TEX);
 
     memset(font, 0, font_bytes);
     for (i = 0; i < XB_FONT_COLS * XB_FONT_ROWS; i++) {
@@ -1345,8 +1063,10 @@ static void xb_bake_textures(void)
     xb_phase("upload",
              XB_ICON_TEX * XB_ICON_TEX + XB_FONT_TEX_W * XB_FONT_TEX_H);
 
-    free(icons);
+    /* Both sheets are in the backend now, and nothing bakes into them later: the
+     * icons are shipped, not computed, so the staging buffers go back. */
     free(font);
+    free(icons);
 }
 
 /* ── Ribbon: the waving surface ─────────────────────────────────────── */
@@ -1356,7 +1076,41 @@ static void xb_bake_textures(void)
  * stage's normal can be recovered from grid differences. */
 static float xb_frac(float v) { return v - floorf(v); }
 
-static float xb_iqhash(float n) { return xb_frac(sinf(n) * 43758.5453f); }
+/* iqhash's argument is always one integer of the noise lattice -- it is built as
+ * px + py*57 + 113*pz from three floors, and the eight calls a cell makes add whole
+ * numbers to it -- and |n| sits far outside sinf's 4*pi guard, so every answer here
+ * is a software double sine.  One frame asked for 32,768 of them while the lattice
+ * under the sheet holds a few hundred distinct integers, because neighbouring cells
+ * share their corners: measured, those 32,768 calls were 9.6 s of the 10.4 s a paint
+ * cost.  Remembering the value per integer leaves the arithmetic bit-identical -- the
+ * same sine, the same rounding, the same sheet -- and asks for one only when the wave
+ * has scrolled into lattice points it has not visited yet. */
+#define XB_HASH_SLOTS 2048u
+#define XB_HASH_SHIFT (32u - 11u)
+static unsigned char s_hash_used[XB_HASH_SLOTS];    /* zero .bss means "slot empty" */
+static int           s_hash_key[XB_HASH_SLOTS];
+static float         s_hash_val[XB_HASH_SLOTS];
+static unsigned      s_hash_hits, s_hash_miss;
+
+static float xb_iqhash(float n)
+{
+    /* Fibonacci hashing, because the bits that vary in n are its low ones: indexing
+     * straight by n would drop every point of a row into the same slot. */
+    const int key = (int)n;
+    const unsigned slot = ((unsigned)key * 2654435761u) >> XB_HASH_SHIFT;
+
+    if (s_hash_used[slot] && s_hash_key[slot] == key) {
+        s_hash_hits++;
+        return s_hash_val[slot];
+    } else {
+        const float v = xb_frac(sinf(n) * 43758.5453f);
+        s_hash_used[slot] = 1;
+        s_hash_key[slot]  = key;
+        s_hash_val[slot]  = v;
+        s_hash_miss++;
+        return v;
+    }
+}
 
 static float xb_noise3(float x, float y, float z)
 {
@@ -1384,19 +1138,36 @@ static void xb_ribbon_step(float t)
     static float ex[XB_RIBBON_ROWS][XB_RIBBON_COLS];
     static float ey[XB_RIBBON_ROWS][XB_RIBBON_COLS];
     static float ez[XB_RIBBON_ROWS][XB_RIBBON_COLS];
+    /* Two of the sheet's three cosines depend on one grid coordinate alone --
+     * cos(4*gz) is the same for a whole row, cos(2*gx - t/2) the same for a whole
+     * column -- and the noise's three coordinates are separable the same way.  Lifting
+     * them out costs the same 128 angles the inner loop used to pay 8,192 of, and
+     * every remaining expression is evaluated in the same order as before, so the
+     * sheet is bit-identical. */
+    static float gxv[XB_RIBBON_COLS], v3x7[XB_RIBBON_COLS], colcos[XB_RIBBON_COLS];
+    static float v3z7[XB_RIBBON_ROWS];
+    const float t10 = t / 10.0f;
+    const float v3y7 = (-t / 100.0f) * 7.0f;
+
+    for (c = 0; c < XB_RIBBON_COLS; c++) {
+        gxv[c]   = (float)c / (float)(XB_RIBBON_COLS - 1) * 2.0f - 1.0f;
+        v3x7[c]  = ((gxv[c] - t / 5.0f) / 4.0f) * 7.0f;
+        colcos[c] = cosf(gxv[c] * 2.0f - t / 2.0f);
+    }
 
     for (r = 0; r < XB_RIBBON_ROWS; r++) {
-        float gz = (float)r / (float)(XB_RIBBON_ROWS - 1) * 2.0f - 1.0f;
+        const float gz = (float)r / (float)(XB_RIBBON_ROWS - 1) * 2.0f - 1.0f;
+        const float cz = cosf(gz * 4.0f);
+        const float lean = gz + t10;
+        float nb, nz, vy;
+
+        v3z7[r]   = (gz - t10) * 7.0f;
+
         for (c = 0; c < XB_RIBBON_COLS; c++) {
-            float gx = (float)c / (float)(XB_RIBBON_COLS - 1) * 2.0f - 1.0f;
-            float nb = cosf(gz * 4.0f) * cosf(gz + t / 10.0f + gx);
-            float v3x = (gx - t / 5.0f) / 4.0f;
-            float v3y = -t / 100.0f;
-            float v3z = gz - t / 10.0f;
-            float nz  = xb_noise3(v3x * 7.0f, v3y * 7.0f, v3z * 7.0f);
-            float vy  = nb / 8.0f - nz / 15.0f
-                      - cosf(gx * 2.0f - t / 2.0f) / 5.0f + 0.3f;
-            ex[r][c] = gx;
+            nb = cz * cosf(lean + gxv[c]);
+            nz = xb_noise3(v3x7[c], v3y7, v3z7[r]);
+            vy = nb / 8.0f - nz / 15.0f - colcos[c] / 5.0f + 0.3f;
+            ex[r][c] = gxv[c];
             ey[r][c] = -vy;
             ez[r][c] = gz - nz / 15.0f;
         }
@@ -2917,11 +2688,26 @@ static void xb_paint(WND *wnd, GDEV *dev)
     SYSTIME now = 0;
     float dt;
     uint32_t t_draw0, t_swap;
+    /* The frame has two entirely different bodies of work in it -- the bar's own
+     * arithmetic (the ribbon's noise and normals) and the rasterizer's per-pixel
+     * blending over the whole canvas -- and a single `draw` number cannot say which
+     * one to attack.  The first two paints therefore spend the same phase counter
+     * the load rows use, once per drawing group; two frames because the first is
+     * the cold-cache one and the second is the steady state. */
+    static unsigned s_probe_left = 2u;
+    int probing;
+    unsigned canvas_px;
 
     if (!wnd || !dev || !s_surf)
         return;
 
+    probing = (s_probe_left != 0u);
+    if (probing)
+        s_probe_left--;
     t_draw0 = btron_render_perf_us();
+    if (probing)
+        s_phase_t0 = t_draw0;
+    canvas_px = (unsigned)dev->width * (unsigned)dev->height;
 
     if (s_surf->width != dev->width || s_surf->height != dev->height) {
         egl_surface_resize(s_surf, dev->width, dev->height);
@@ -2953,6 +2739,13 @@ static void xb_paint(WND *wnd, GDEV *dev)
         xb_ribbon_step(s_effect_time);
     if (s_particles && s_wave)
         xb_particles_update(dt, 1);
+    if (probing) {
+        char hline[96];
+        xb_phase("f_surface", 0);
+        snprintf(hline, sizeof(hline), "[XMBT] hash %u of %u lattice points computed\n",
+                 (unsigned)s_hash_miss, (unsigned)(s_hash_miss + s_hash_hits));
+        uart_puts_raw(hline);
+    }
 
     glViewport(0, 0, dev->width, dev->height);
     glMatrixMode(GL_PROJECTION);
@@ -2971,19 +2764,29 @@ static void xb_paint(WND *wnd, GDEV *dev)
 
     glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
     glClear(GL_COLOR_BUFFER_BIT);
+    if (probing)
+        xb_phase("f_clear", canvas_px);
 
     /* xmb_draw_bg(): gradient, then the waving surface over it */
     xb_draw_bg(xb_minf(s_alpha, 0.90f));
+    if (probing)
+        xb_phase("f_bg", canvas_px);
     if (s_wave)
         xb_draw_ribbon(xb_minf(s_alpha, 0.90f));
+    if (probing)
+        xb_phase("f_ribbon", canvas_px);
     if (s_particles && s_wave)
         xb_particles_draw(s_alpha);
+    if (probing)
+        xb_phase("f_particles", 0);
 
     xb_draw_title();
     xb_draw_band();
     xb_draw_items();
     xb_draw_footer();
     xb_draw_message();
+    if (probing)
+        xb_phase("f_menu", 0);
 
     t_swap = btron_render_perf_us();
     egl_swap_buffers(s_surf);
@@ -3086,7 +2889,8 @@ static void xb_destroy(WND *wnd)
     }
     /* The two atlases belong to this window's GL context, which
      * egl_destroy_surface() above has just freed along with every texture
-     * image it held; only the names need dropping. */
+     * image it held; only the names need dropping.  The sheets they were
+     * uploaded from were this file's own and are already back. */
     s_tex_icons = 0;
     s_tex_font  = 0;
     s_wnd      = NULL;

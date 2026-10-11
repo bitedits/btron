@@ -46,12 +46,14 @@ EGL_SURFACE* egl_create_window_surface(WND *wnd) {
 void egl_make_current(EGL_SURFACE *surf) {
     if (!surf || !surf->wnd || !surf->wnd->dev) return;
     surf->pixels = surf->wnd->dev->pixels;
+#if defined(BTRON_GL_BACKEND_TINYGL)
     if (gl_active_backend() == GL_BACKEND_TINYGL) {
         tinygl_backend_resize(surf->width, surf->height, surf->pixels);
-    } else {
-        virgl_backend_make_current_ctx(&surf->gl_ctx, surf->width, surf->height,
-                                       surf->pixels);
+        return;
     }
+#endif
+    virgl_backend_make_current_ctx(&surf->gl_ctx, surf->width, surf->height,
+                                   surf->pixels);
 }
 
 void egl_surface_resize(EGL_SURFACE *surf, int width, int height) {

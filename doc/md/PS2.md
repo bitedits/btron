@@ -215,10 +215,45 @@ So the gates on the arithmetic are `fpu_gap_wide == 0` and `fpu_gap_sign == 0`, 
 that `add.s` be IEEE-exact is a demand that this CPU be a different CPU.  `fpu_other` is
 reported as information for the same reason.
 
-What this does *not* buy: the XMB's icon bake and frame draw spend their time in
-`include/gl/math.h`'s double-precision series, which no Emotion Engine FPU can accelerate
-because the machine has no `.d` instructions to accelerate it with.  The 5x is in routing
-that work to single precision, not in the switch above.
+What this does *not* buy, on its own: the single-precision switch makes each float
+operation cheaper, but it does not change *how many* there are.  Instrumenting the paint
+phase by phase (`[XMBT] f_*` rows in `xb_paint`) showed the whole cost was in one place --
+the ribbon's `xb_ribbon_step`, at 9.6 s of a 10.4 s frame -- and inside that, in
+`xb_iqhash`: its argument is an integer lattice coordinate `px + py*57 + pz*113`, far
+outside `sinf`'s 4*pi guard, so all 32,768 calls a frame made went to the software double
+sine even though the lattice holds only ~160 distinct values.  Caching the hash per integer
+(2048-slot open addressing, Fibonacci-hashed) and hoisting the two grid-separable cosines
+out of the inner loop cut `f_surface` from 9.6 s to 171 ms -- a 56x cut that changes the
+arithmetic nowhere, only how often it runs.
+
+The icon atlas was the other half of that frame, and it went the same way -- by being
+removed rather than optimised.  Its geometry is signed-distance arithmetic over 36 cells of
+64x64 texels, which is 147,456 evaluations of `sin`-free but still floating-point CSG on a
+CPU with no FPU in the pipeline; making it on-demand only moved the bill into the first menu
+paint, where it read `[XMBT] f_menu 2996702 us` against a steady `182992 us`, because each
+of the ~17 cells a band shows cost ~132 ms to bake *and* ~33 ms to re-upload the whole
+384x384 sheet.  So the sheet is now data, not arithmetic: `verify/tests/gen_xmb_atlas.c`
+evaluates the same expressions once on the host and emits `src/apps/xmb_atlas.h`, a
+committed `static const unsigned char[147456]` -- one alpha byte per texel, which is a
+complete description because the ink is the constant `(248,250,255)` and only coverage
+varies.  It keeps the one distinction that matters: a texel the geometry wrote at coverage 0
+is not a texel nobody touched, because TinyGL's `GL_LINEAR` filter interpolates RGB as well
+as alpha, so the generator clamps written texels to alpha 1 and `xb_fill_icon_atlas` paints
+RGB only where alpha is non-zero.  Boot now reads `fill_atlas 19885` + `upload 33262` and
+uploads once, ever; frame 1 fell to `1036572 us` and its `f_menu` to `182991 us`, i.e. equal
+to the steady frame, and the 589,824-byte staging buffer is back on the heap.  Two gates
+hold that from drifting: `make test-xmb-atlas` regenerates the header and `cmp`s it (proved
+to fail on one perturbed texel), and `make test-xmb-render`'s `atlas_cell_look` ink counts
+and whole-atlas PPM were byte-identical between the runtime arithmetic and the shipped sheet
+(cell 24 = 1863 ink px, cell 26 = 1889).
+
+What is left: a steady frame is 990 ms, split `f_ribbon 463 / f_surface 171 / f_bg 166 /
+f_menu 183 / f_clear 7` us, and `f_ribbon` -- 8064 blended triangles over the full 640x600
+canvas -- is the next thing to attack.  At 1.2 us per covered pixel against `f_clear`'s
+0.018 us per pixel for the same canvas, the sheet's cost is per-fragment blending and
+per-triangle setup, not memory: 640x600 cleared in 6.8 ms says the fill path is quick, so
+the levers there are the grid resolution, the per-pixel `switch` inside `TGL_BLEND_FUNC`,
+and drawing the sheet less often than the menu changes.
 
 One thing no measurement in this tree can settle: every `[FPU]` number here came from
 PCSX2's Emotion Engine.  The same rows print over SIO on a real console, so the identical
@@ -370,14 +405,18 @@ Two things this run says out loud that are easy to read past:
   what [`egl_surface.c`](file:///Users/tonpa/depot/bitedits/btron/src/gl/egl_surface.c)
   currently decides by `#if defined(BTRON_UEFI_TARGET)` instead of by what the hardware
   reports.
-- **One XMB frame costs ~78 s of emulator time** (`[BENCH] xmb frame 1/2/3` on emulator
-  timestamps 71.1, 149.1 and 227.1 s for a Cross press at 5.6 s).  No guest-side clock in
-  this port can time a single one of those frames: CP0 Count is 32-bit at 147.18 MHz, so a
-  plain delta wraps every 29.1 s, and the fold in `btron_render_perf_us()` only recovers a
-  wrap if something polls it inside the interval -- which a frame that blocks in the
-  rasterizer does not.  The heartbeat therefore prints `... ms folded` and the app phase's
-  rate prints `<= N passes/s`: both are monotonic upper bounds, and the wall cadence is read
-  from the emulator's own prefix on each line.  This is the number task 20 opens with.
+- **One XMB frame used to cost ~78 s of emulator time** (`[BENCH] xmb frame 1/2/3` on
+  emulator timestamps 71.1, 149.1 and 227.1 s for a Cross press at 5.6 s).  A frame that
+  long could not be timed by a guest-side clock at all: CP0 Count is 32-bit at 147.18 MHz,
+  so a plain delta wraps every 29.1 s, and the fold in `btron_render_perf_us()` only
+  recovers a wrap if something polls it inside the interval -- which a frame that blocks in
+  the rasterizer does not.  The heartbeat therefore printed `... ms folded` and the app
+  phase's rate printed `<= N passes/s`: monotonic upper bounds, with the wall cadence read
+  from the emulator's own prefix.  After the surface-hash cache and shipping the icon sheet
+  as data (above) a steady frame is 990 ms and frame 1 is 1.04 s -- both far inside one
+  29.1 s rotation -- so the `[XMBT] draw=/swap=` rows are now exact microseconds, and the
+  phase breakdown that produced that attribution is still compiled in: `xb_paint` emits
+  `[XMBT] f_surface/f_clear/f_bg/f_ribbon/f_particles/f_menu` for its first two paints.
 
 ### 2.3 Keyboard & USB Subsystem (`ps2_usb`)
 
@@ -920,6 +959,13 @@ make run-ps2
 # Automated verification suite:
 make test-ps2            # static laws on the linked image (42 tests)
 make test-ps2-softfloat  # the R5900 soft-float runtime, bit-exact vs the host FPU
+make test-gl-math        # the freestanding series branches, per-binade vs the host libm
+make test-xmb-atlas      # the shipped icon sheet == what gen_xmb_atlas.c computes (drift gate)
+make xmb-atlas           # regenerate src/apps/xmb_atlas.h after changing the geometry
+make test-xmb-render     # the real xmb.c on the host: atlas ink counts + PPM frames
+
+# Smoothness loop against explicit per-phase budgets (opens XMB in PCSX2):
+SMOOTH_APP=1 SMOOTH_FRAMES=3 bash scripts/ps2_smooth.sh
 ```
 
 Neither `make ps2` nor `make ps2-bench` rebuilds an object because a *flag* changed --

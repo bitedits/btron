@@ -13,8 +13,8 @@
  *   xmb.c:xmb_calculate_visible_range()        xb_visible_range()
  *   xmb.c:xmb_draw_bg() + gradient tables      xb_draw_bg() / xb_gradient()
  *   xmb.c:xmb_init_ribbon()                    xb_ribbon_build()
- *   pipeline_xmb_ribbon.cg.h (vertex stage)    xb_ribbon_step()
- *   pipeline_xmb_ribbon.cg.h (fragment stage)  xb_ribbon_shade()
+ *   pipeline_xmb_ribbon.cg.h (vertex stage)    xmb_wave.c:xb_wave_step()
+ *   pipeline_xmb_ribbon.cg.h (fragment stage)  xmb_wave.c:wv_shade_nm()/wv_shade()
  *   gfx_display.c:gfx_animation_* (tweens)     xb_tween_* + xb_ease()
  *   xmb.c:xmb_draw_icon()                      xb_draw_icon()
  *   xmb.c:xmb_draw_text() / bitmapfont         xb_draw_text() (8x16 atlas)
@@ -61,6 +61,7 @@
 #include <btron/fs/vol_api.h> /* mounted volumes: names, sizes, free blocks */
 #include <btron/libc_shim.h>
 #include <math.h>
+#include "xmb_wave.h"   /* the sheet's lattice: xb_wave_step(), xb_rib_*, the far-tier trig */
 
 #if BTRON_HOSTED
 #include <dirent.h>      /* the Games band lists the host's assets/msx */
@@ -314,9 +315,11 @@ extern int      g_mouse_accel_profile;
  * blits RAM to RAM at 14.8 cycles a pixel (the compositor's own `blit=` rows, 613,440 px in
  * 30,747 us, and the same 50 ns/px on every smaller row) against the 22 cycles it costs to
  * rasterise the gradient.  A copy is not much cheaper than a fill on this machine -- both are
- * DRAM-bound -- so the only lever in `f_bg` is the number of pixels it touches. */
-#define XB_RIBBON_ROWS      32
-#define XB_RIBBON_COLS      32
+ * DRAM-bound -- so the only lever in `f_bg` is the number of pixels it touches.
+ *
+ * The mesh this bill is written against -- `XB_RIBBON_ROWS` x `XB_RIBBON_COLS`, 32x32, with
+ * the test that refuses a coarser one -- is in `src/apps/xmb_wave.h`, next to the lattice
+ * that produces the sheet. */
 #define XB_DELAY            166.66667f
 #define XB_SHADOW_ALPHA     1.00f
 #define XB_DRAW_ENTRY_MS    500          /* MENU_DRAW_ENTRY_DELAY (500000 us) */
@@ -940,11 +943,9 @@ static int  s_msg_more  = 0;
 static float s_msg_alpha = 0.0f;
 static int  s_msg_open   = 0;
 
-/* Ribbon cache (clip-space sheet + baked brightness) */
-static float s_rib_e0[XB_RIBBON_ROWS][XB_RIBBON_COLS];
-static float s_rib_e1[XB_RIBBON_ROWS][XB_RIBBON_COLS];
-static float s_rib_e2[XB_RIBBON_ROWS][XB_RIBBON_COLS];
-static float s_rib_bri[XB_RIBBON_ROWS][XB_RIBBON_COLS];
+/* The launcher's effect clock.  The sheet it describes lives in `src/apps/xmb_wave.c` and
+ * is read back through `xb_rib_e*`/`xb_rib_bri`/`xb_rib_p*`; only the time is kept here,
+ * because the animation that advances it is this file's. */
 static float s_effect_time = 0.0f;
 
 typedef struct {
@@ -1219,160 +1220,40 @@ static void xb_bake_textures(void)
     free(icons);
 }
 
-/* ── Ribbon: the waving surface ─────────────────────────────────────── */
+/* ── Ribbon: the waving surface ─────────────────────────────────────────────────── */
 
-/* iqhash/noise/xmb_noise2 from pipeline_xmb_ribbon.cg.h, and the vertex stage
- * of that shader, evaluated per grid point.  vEC is kept so the fragment
- * stage's normal can be recovered from grid differences. */
-static float xb_frac(float v) { return v - floorf(v); }
-
-/* iqhash's argument is always one integer of the noise lattice -- it is built as
- * px + py*57 + 113*pz from three floors, and the eight calls a cell makes add whole
- * numbers to it -- and |n| sits far outside sinf's 4*pi guard, so every answer here
- * is a software double sine.  One frame asked for 32,768 of them while the lattice
- * under the sheet holds a few hundred distinct integers, because neighbouring cells
- * share their corners: measured, those 32,768 calls were 9.6 s of the 10.4 s a paint
- * cost.  Remembering the value per integer leaves the arithmetic bit-identical -- the
- * same sine, the same rounding, the same sheet -- and asks for one only when the wave
- * has scrolled into lattice points it has not visited yet. */
-#define XB_HASH_SLOTS 2048u
-#define XB_HASH_SHIFT (32u - 11u)
-static unsigned char s_hash_used[XB_HASH_SLOTS];    /* zero .bss means "slot empty" */
-static int           s_hash_key[XB_HASH_SLOTS];
-static float         s_hash_val[XB_HASH_SLOTS];
-static unsigned      s_hash_hits, s_hash_miss;
-
-static float xb_iqhash(float n)
+/* The sheet's own arithmetic moved to `src/apps/xmb_wave.c` -- plan row 8 of
+ * doc/md/PS2.md -- which is the one unit of the launcher that takes the Emotion EE's FPU
+ * when the image's FP dial is on, and the header of that file says why the move is legal.
+ * What stays here is the other half of that unit's boundary: the two arguments it has no
+ * COP1 instruction for.  A `-mhard-float` unit cannot hold a double, because `ldc1`/`sdc1`
+ * and every `.d` form do nothing at all on this CPU, so `sinf`/`cosf` of an angle wider than
+ * 4*pi -- which needs the double reduction that no line of the ribbon's own source asks for
+ * -- is answered here, in the `-msoft-float` unit that owns the animation clock.  Bits go in
+ * and bits come out: a float in an integer register is what the image already passes across
+ * that boundary, so neither half gets to read the other's register file differently.
+ *
+ * The hash's lattice coordinates arrive here every frame.  `n = px + py*57 + 113*pz` is an
+ * integral float whose magnitude sits far outside the fold's 4*pi range, and
+ * `include/gl/math.h` deliberately hands anything that wide to this path. */
+uint32_t xb_sinf_far_u32(uint32_t x_bits)
 {
-    /* Fibonacci hashing, because the bits that vary in n are its low ones: indexing
-     * straight by n would drop every point of a row into the same slot. */
-    const int key = (int)n;
-    const unsigned slot = ((unsigned)key * 2654435761u) >> XB_HASH_SHIFT;
+    float x, s;
 
-    if (s_hash_used[slot] && s_hash_key[slot] == key) {
-        s_hash_hits++;
-        return s_hash_val[slot];
-    } else {
-        const float v = xb_frac(sinf(n) * 43758.5453f);
-        s_hash_used[slot] = 1;
-        s_hash_key[slot]  = key;
-        s_hash_val[slot]  = v;
-        s_hash_miss++;
-        return v;
-    }
+    __builtin_memcpy(&x, &x_bits, sizeof x);
+    s = sinf(x);
+    __builtin_memcpy(&x_bits, &s, sizeof x_bits);
+    return x_bits;
 }
 
-static float xb_noise3(float x, float y, float z)
+uint32_t xb_cosf_far_u32(uint32_t x_bits)
 {
-    float px = floorf(x), py = floorf(y), pz = floorf(z);
-    float fx = xb_frac(x), fy = xb_frac(y), fz = xb_frac(z);
-    float n  = px + py * 57.0f + 113.0f * pz;
-    float a, b, c1, c2;
-    fx = fx * fx * (3.0f - 2.0f * fx);
-    fy = fy * fy * (3.0f - 2.0f * fy);
-    a  = xb_iqhash(n) + (xb_iqhash(n + 1.0f) - xb_iqhash(n)) * fx;
-    b  = xb_iqhash(n + 57.0f)
-       + (xb_iqhash(n + 58.0f) - xb_iqhash(n + 57.0f)) * fx;
-    c1 = a + (b - a) * fy;
-    a  = xb_iqhash(n + 113.0f)
-       + (xb_iqhash(n + 114.0f) - xb_iqhash(n + 113.0f)) * fx;
-    b  = xb_iqhash(n + 170.0f)
-       + (xb_iqhash(n + 171.0f) - xb_iqhash(n + 170.0f)) * fx;
-    c2 = a + (b - a) * fy;
-    return c1 + (c2 - c1) * fz;
-}
+    float x, c;
 
-static void xb_ribbon_step(float t)
-{
-    int r, c;
-    static float ex[XB_RIBBON_ROWS][XB_RIBBON_COLS];
-    static float ey[XB_RIBBON_ROWS][XB_RIBBON_COLS];
-    static float ez[XB_RIBBON_ROWS][XB_RIBBON_COLS];
-    /* Two of the sheet's three cosines depend on one grid coordinate alone --
-     * cos(4*gz) is the same for a whole row, cos(2*gx - t/2) the same for a whole
-     * column -- and the noise's three coordinates are separable the same way.  Lifting
-     * them out costs the same 128 angles the inner loop used to pay 8,192 of, and
-     * every remaining expression is evaluated in the same order as before, so the
-     * sheet is bit-identical. */
-    static float gxv[XB_RIBBON_COLS], v3x7[XB_RIBBON_COLS], colcos[XB_RIBBON_COLS];
-    static float v3z7[XB_RIBBON_ROWS];
-    const float t10 = t / 10.0f;
-    const float v3y7 = (-t / 100.0f) * 7.0f;
-
-    for (c = 0; c < XB_RIBBON_COLS; c++) {
-        gxv[c]   = (float)c / (float)(XB_RIBBON_COLS - 1) * 2.0f - 1.0f;
-        v3x7[c]  = ((gxv[c] - t / 5.0f) / 4.0f) * 7.0f;
-        colcos[c] = cosf(gxv[c] * 2.0f - t / 2.0f);
-    }
-
-    for (r = 0; r < XB_RIBBON_ROWS; r++) {
-        const float gz = (float)r / (float)(XB_RIBBON_ROWS - 1) * 2.0f - 1.0f;
-        const float cz = cosf(gz * 4.0f);
-        const float lean = gz + t10;
-        float nb, nz, vy;
-
-        v3z7[r]   = (gz - t10) * 7.0f;
-
-        for (c = 0; c < XB_RIBBON_COLS; c++) {
-            nb = cz * cosf(lean + gxv[c]);
-            nz = xb_noise3(v3x7[c], v3y7, v3z7[r]);
-            vy = nb / 8.0f - nz / 15.0f - colcos[c] / 5.0f + 0.3f;
-            ex[r][c] = gxv[c];
-            ey[r][c] = -vy;
-            ez[r][c] = gz - nz / 15.0f;
-        }
-    }
-
-    /* Fragment stage of pipeline_xmb_ribbon.cg.h:
-     *   X = ddx(vEC);  Y = -ddy(vEC);  normal = normalize(cross(X, Y));
-     *   c = 1 - dot(normal, up), up = (0,0,1);   bright = (1 - cos(c*c)) / 13.
-     * ddx/ddy are per *screen* pixel, not per grid step.  Screen x tracks the
-     * column index alone (ex = gx) and screen y tracks ey, so inverting the
-     * (column,row) -> (x,y) Jacobian gives
-     *   X = (1, 0, (az - ay*n) / ax)   with n = bz / by
-     *   Y = (0, 1, bz / by)
-     * (ex does not change along a row, which is what kills the x-component of
-     * X's partner).  cross(X, -Y) then has z = -1, so
-     *   dot(normal, up) = -1 / sqrt(M*M + n*n + 1)
-     * and c = 1 + 1/len lies in [1, 2], so the sheet can never darken the
-     * background and its lift runs from (1-cos 1)/13 = 3.5% at its flattest to
-     * the expression's peak, 2/13 = 15.4%, where cc*cc reaches pi on a steep
-     * fold (it falls back to (1-cos 4)/13 = 12.7% at the steepest cc of 2). */
-    for (r = 0; r < XB_RIBBON_ROWS; r++) {
-        int r0 = r > 0 ? r - 1 : r;
-        int r1 = r < XB_RIBBON_ROWS - 1 ? r + 1 : r;
-        for (c = 0; c < XB_RIBBON_COLS; c++) {
-            int c0 = c > 0 ? c - 1 : c;
-            int c1 = c < XB_RIBBON_COLS - 1 ? c + 1 : c;
-            float ax = ex[r][c1] - ex[r][c0];
-            float ay = ey[r][c1] - ey[r][c0];
-            float az = ez[r][c1] - ez[r][c0];
-            float by = ey[r1][c] - ey[r0][c];
-            float bz = ez[r1][c] - ez[r0][c];
-            float bright;
-
-            if (fabsf(ax) < 1e-6f || fabsf(by) < 1e-6f) {
-                /* Flat in screen y, or the last column: the screen derivatives
-                 * blow up and the normal tends to (0,0,-1) - the shader's
-                 * minimum lift. */
-                bright = (1.0f - cosf(1.0f)) / 13.0f;
-            } else {
-                float n  = bz / by;
-                float m  = (az - ay * n) / ax;
-                float cc = 1.0f + 1.0f / sqrtf(m * m + n * n + 1.0f);
-                bright   = (1.0f - cosf(cc * cc)) / 13.0f;
-            }
-            s_rib_bri[r][c] = bright;
-        }
-    }
-
-    /* Keep the sheet itself, in clip space, for drawing and for the particles */
-    for (r = 0; r < XB_RIBBON_ROWS; r++)
-        for (c = 0; c < XB_RIBBON_COLS; c++) {
-            s_rib_e0[r][c] = ex[r][c];
-            s_rib_e1[r][c] = ey[r][c];
-            s_rib_e2[r][c] = ez[r][c];
-        }
+    __builtin_memcpy(&x, &x_bits, sizeof x);
+    c = cosf(x);
+    __builtin_memcpy(&x_bits, &c, sizeof x_bits);
+    return x_bits;
 }
 
 /* xmb_init_ribbon(): a zigzag triangle strip over the grid, with the odd rows
@@ -1395,14 +1276,12 @@ static void xb_draw_ribbon(float alpha)
     for (r = 0; r < XB_RIBBON_ROWS - 1; r++) {
         for (c = 0; c < XB_RIBBON_COLS; c++) {
             int col = (r & 1) ? (XB_RIBBON_COLS - 1 - c) : c;
-            float b = s_rib_bri[r][col];
+            float b = xb_rib_bri[r][col];
             glColor4f(b, b, b, 1.0f);
-            glVertex2f((s_rib_e0[r][col] + 1.0f) * 0.5f * (float)s_w,
-                       (1.0f - s_rib_e1[r][col]) * 0.5f * (float)s_h);
-            b = s_rib_bri[r + 1][col];
+            glVertex2f(xb_rib_px[r][col], xb_rib_py[r][col]);
+            b = xb_rib_bri[r + 1][col];
             glColor4f(b, b, b, 1.0f);
-            glVertex2f((s_rib_e0[r + 1][col] + 1.0f) * 0.5f * (float)s_w,
-                       (1.0f - s_rib_e1[r + 1][col]) * 0.5f * (float)s_h);
+            glVertex2f(xb_rib_px[r + 1][col], xb_rib_py[r + 1][col]);
         }
     }
     glEnd();
@@ -1415,8 +1294,8 @@ static void xb_ribbon_surface(int c, float *px, float *py)
     int r = XB_RIBBON_ROWS - 1;
     if (c < 0) c = 0;
     if (c >= XB_RIBBON_COLS) c = XB_RIBBON_COLS - 1;
-    *px = (s_rib_e0[r][c] + 1.0f) * 0.5f * (float)s_w;
-    *py = (1.0f - s_rib_e1[r][c]) * 0.5f * (float)s_h;
+    *px = xb_rib_px[r][c];
+    *py = xb_rib_py[r][c];
 }
 
 static void xb_particles_update(float dt, int spawn)
@@ -2954,7 +2833,7 @@ static void xb_paint(WND *wnd, GDEV *dev)
     if (s_effect_time > 65536.0f)
         s_effect_time = 0.0f;
     if (s_wave)
-        xb_ribbon_step(s_effect_time);
+        xb_wave_step(xb_bits_f(s_effect_time), s_w, s_h);
 
     /* The sheet's motion, in the units the eye uses, for the first six paints.
      * "The surface is not moving" is not one claim but three, and this row separates
@@ -2983,9 +2862,8 @@ static void xb_paint(WND *wnd, GDEV *dev)
             s_motion_left--;
             for (r = 0; r < XB_RIBBON_ROWS; r++)
                 for (c = 0; c < XB_RIBBON_COLS; c++)
-                    sum += (unsigned long)((int)(s_rib_e1[r][c] * 1024.0f) + 1024);
-            mid = (int)(((1.0f - s_rib_e1[XB_RIBBON_ROWS / 2][XB_RIBBON_COLS / 2])
-                          * 0.5f * (float)s_h) * 1024.0f);
+                    sum += (unsigned long)((int)(xb_rib_e1[r][c] * 1024.0f) + 1024);
+            mid = (int)(xb_rib_py[XB_RIBBON_ROWS / 2][XB_RIBBON_COLS / 2] * 1024.0f);
             snprintf(mline, sizeof(mline),
                      "[XMBT] wave n=%u dt=%d ms t1024=%d mid1024=%d dm=%d dsum=%d\n",
                      (unsigned)(6u - s_motion_left), (int)dt,
@@ -3002,7 +2880,7 @@ static void xb_paint(WND *wnd, GDEV *dev)
         char hline[96];
         xb_phase("f_surface", 0);
         snprintf(hline, sizeof(hline), "[XMBT] hash %u of %u lattice points computed\n",
-                 (unsigned)s_hash_miss, (unsigned)(s_hash_miss + s_hash_hits));
+                 (unsigned)xb_hash_miss, (unsigned)(xb_hash_miss + xb_hash_hits));
         uart_puts_raw(hline);
     }
 
@@ -3328,7 +3206,7 @@ int xmb_rows(void)
  * surface normal, which for this sheet is always in [1, 2]: cc = 1 over
  * sqrt(m*m + n*n + 1), and that root is at least 1.  Over that range c peaks
  * where cc*cc reaches pi, at 2/13, and bottoms out at (1 - cos 1)/13, so a
- * field outside that pair is a modelling error in xb_ribbon_step() rather than
+ * field outside that pair is a modelling error in xb_wave_step() rather than
  * a compositing accident. */
 void xmb_ribbon_calibrate(float *min_b, float *max_b, float *mean_b, int *samples)
 {
@@ -3337,7 +3215,7 @@ void xmb_ribbon_calibrate(float *min_b, float *max_b, float *mean_b, int *sample
 
     for (r = 0; r < XB_RIBBON_ROWS; r++)
         for (c = 0; c < XB_RIBBON_COLS; c++) {
-            float b = s_rib_bri[r][c];
+            float b = xb_rib_bri[r][c];
             if (n == 0 || b < lo) lo = b;
             if (n == 0 || b > hi) hi = b;
             sum += b;

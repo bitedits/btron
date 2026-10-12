@@ -88,15 +88,21 @@ MIPS_CC     ?= $(LLVM_CLANG) --target=mipsel-unknown-elf -march=mips32r2 -mabi=3
 # integer registers, so mixing it with a build that uses the FPU would corrupt every
 # float argument that crosses the boundary -- and src/drivers/ps2/ps2_builtins.c
 # supplies the runtime the link then needs.
-# Two objects take the FPU switched back on (see PS2_FP near %.pbench.o), chosen for the
+# Three objects take the FPU switched back on (see PS2_FP near %.pbench.o), chosen for the
 # same reason: no float ever crosses into or out of them.  ps2_builtins.c *is* the
 # soft-float runtime, so a bit pattern in an integer register is its argument by
 # definition; vertex_stage.c is the geometry kernel, reached only by pointer, and the one
-# conversion it needs is spelled through that runtime's own calling convention.  They take
-# the flag because the EE's single-precision unit is what those two files are for: 460,861
-# float operations in an XMB frame, at 28 cycles a libcall, was the price of applying the
-# .d law to code that has never used a double.  Nothing else may take it -- a third object
-# would move the ABI boundary rather than stay inside it, and gate row 57 is the check.
+# conversion it needs is spelled through that runtime's own calling convention;
+# xmb_wave.c is the launcher's waving surface, which takes the effect clock as IEEE-754 bits
+# in an integer and hands the sheet out through memory, and whose two operations this CPU has
+# no instruction for go back to the soft unit the same way -- xb_sinf_far_u32()/
+# xb_cosf_far_u32(), bits in and bits out.  They take the flag because the EE's
+# single-precision unit is what those files are for: 460,861 float operations in an XMB
+# frame, at 28 cycles a libcall, was the price of applying the .d law to code that has never
+# used a double.  Nothing else may take it: an object whose entry points take a float would
+# move the ABI boundary rather than stay inside it, and gate row 57 is the check.  The law
+# *inside* such a unit is a second thing again, and it is not about instructions -- see the
+# register-allocation paragraph by PS2_WAVE_OBJ below.
 PS2_CC      ?= $(LLVM_CLANG) --target=mipsel-unknown-elf -march=mips2 -mabi=32 -msoft-float -ffreestanding -nostdlib
 MIPS_LD ?= $(if $(shell command -v mipsel-linux-gnu-ld 2>/dev/null),mipsel-linux-gnu-ld,$(LLD_BIN) -EL)
 
@@ -289,6 +295,7 @@ VIRGL_SRCS = \
     src/gl/backend_virgl.c \
     src/apps/glgears.c \
     src/apps/xmb.c \
+    src/apps/xmb_wave.c \
     $(QUAKE_SRCS) \
     $(DEMO_SRCS)
 
@@ -344,6 +351,7 @@ GL_SRCS = \
     src/gl/backend_virgl.c \
     src/apps/glgears.c \
     src/apps/xmb.c \
+    src/apps/xmb_wave.c \
     $(QUAKE_SRCS) \
     $(DEMO_SRCS)
 
@@ -1071,6 +1079,7 @@ PS2_GL_SRCS    = src/gl/gl_dispatch.c     \
                  src/gl/backend_eegs.c    \
                  src/gl/eegs_present.c    \
                  src/apps/xmb.c           \
+                 src/apps/xmb_wave.c        \
                  src/apps/glgears.c
 # B-MSX rides in the image: the tronMSX core reads no float, no host clock and no
 # libc beyond what src/kernel/libstr.c provides, and its two pieces of media --
@@ -1189,39 +1198,62 @@ $(PS2_BENCH_OBJ): PS2_CFLAGS += -DBTRON_PS2_BENCH=1 -DBTRON_PS2_BENCH_APP=$(BENC
 %.pbench.o: %.c
 	$(PS2_CC) $(PS2_CFLAGS) -MMD -MP -c $< -o $@
 
-# The two objects in the image that may hold COP1 instructions.  -msoft-float is an
-# argument-passing law (the note at PS2_CC), and neither of these breaks any part of it:
-# every entry point in src/drivers/ps2/ps2_builtins.c takes and returns an integer register
-# holding IEEE-754 bits, and the only float-shaped things in that file are inside __asm__
-# strings, while the two functions in src/gl/tinygl/vertex_stage.c take a `GLVertex *` and
-# return nothing, so the floats they compute never leave the unit.  Both still need the flag
-# off to assemble at all -- under -msoft-float clang rejects `mtc1` with "instruction requires
-# a CPU feature not currently enabled", which is why the EE's own FPU was unusable for single
-# precision until that file, and unusable for the geometry until this one.  The link keeps
-# recording `FP ABI: Soft float` for the whole image, and mipsel-linux-gnu-ld accepts the
-# mixed .MIPS.abiflags the way it is.  PS2_FP=soft builds without either, and then the bit
-# engine answers every call exactly as it did before 2026-10-10 -- which is also the escape
-# hatch if a console ever boots with the FPU off, since a hard-float unit cannot ask the
-# runtime valve (`btron_fp_on`) to substitute for instructions it has already emitted.
+# The three objects in the image that may hold COP1 instructions.  -msoft-float is an
+# argument-passing law (the note at PS2_CC), and none of these breaks any part of it: every
+# entry point in src/drivers/ps2/ps2_builtins.c takes and returns an integer register holding
+# IEEE-754 bits, and the only float-shaped things in that file are inside __asm__ strings;
+# the two functions in src/gl/tinygl/vertex_stage.c take a `GLVertex *` and return nothing,
+# so the floats they compute never leave the unit; and src/apps/xmb_wave.c takes the effect
+# clock as bits in an integer, takes the window's size as two integers, returns nothing, and
+# hands the sheet out through memory the reader loads as a float -- its two wide-trig calls
+# are bits in and bits out as well.  All three still need the flag off to assemble at all --
+# under -msoft-float clang rejects `mtc1` with "instruction requires a CPU feature not
+# currently enabled", which is why the EE's own FPU was unusable for single precision until
+# that first file, unusable for the geometry until the second, and unusable for the wave's
+# lattice until the third.  The link keeps recording `FP ABI: Soft float` for the whole
+# image, and mipsel-linux-gnu-ld accepts the mixed .MIPS.abiflags the way it is.  PS2_FP=soft
+# builds without any of them, and then the bit engine answers every call exactly as it did
+# before 2026-10-10 -- which is also the escape hatch if a console ever boots with the FPU
+# off, since a hard-float unit cannot ask the runtime valve (`btron_fp_on`) to substitute for
+# instructions it has already emitted.
+#
+# Inside these three there is a second law, and it is not about instructions.  The R5900 has
+# 32 single-precision registers and no double ones, so the O32 convention's callee-saved
+# $f20/$f22/.../$f30 -- which a normal MIPS preserves with `sdc1` of the even/odd pair --
+# cannot be preserved here at all: the store and its reload are both ignored, and a unit that
+# lets the allocator put a live value in one of them silently destroys its caller's.  Two of
+# the three ways that happens are visible in the source (a working set over the caller-saved
+# ten, a loop whose invariant float is live across its own call); the third is LLVM's
+# allocator preferring a callee-saved register for any long live range, which is a cost-model
+# decision no source spelling changes.  So the three units are built with that preference
+# priced out, and the image is then scanned for the pair instructions: `PS2_FP_CSR_COST` is
+# the knob, and scripts/test_ps2.sh's FPU row is the proof.  Measured on the wave unit, this
+# flag is 52 pair stores down to 4 and the four were one real working-set overflow that the
+# source has since been split for; on the source as it now stands, dropping the flag gives
+# 14 pair stores and 32 references to $f20-$f31 against the shipped object's zero of each,
+# which is the control that says the knob is still load-bearing rather than a relic of the
+# first arrangement.  An unknown `-mllvm` argument fails the compile, so a toolchain that
+# drops the option stops the build instead of quietly re-opening the hole.
 PS2_FP ?= hw
 PS2_FP_OBJ     = src/drivers/ps2/ps2_builtins.ps2.o
 PS2_KERNEL_OBJ = src/gl/tinygl/vertex_stage.ps2.o
-# The flag is per object, and make does not see a flag change: switching PS2_FP leaves both
-# objects newer than their sources and links an image whose FPU law is whatever the previous
-# value built -- the same disease PS2_GL has, and the same content-comparison stamp cures it.
-# Note that this `$(shell ...)` runs while *parsing*, so even `make -n PS2_FP=...` removes the
-# two objects: pass the value you mean, dry runs included.
+PS2_WAVE_OBJ   = src/apps/xmb_wave.ps2.o
+PS2_FP_OBJS    = $(PS2_FP_OBJ) $(PS2_KERNEL_OBJ) $(PS2_WAVE_OBJ)
+PS2_FP_CSR_COST = -mllvm -regalloc-csr-first-time-cost=1000000000
+# The flag is per object, and make does not see a flag change: switching PS2_FP leaves the
+# three objects newer than their sources and links an image whose FPU law is whatever the
+# previous value built -- the same disease PS2_GL has, and the same content-comparison stamp
+# cures it.  Note that this `$(shell ...)` runs while *parsing*, so even `make -n PS2_FP=...`
+# removes the three objects: pass the value you mean, dry runs included.
 PS2_FP_STAMP = .build/ps2-fp.stamp
 PS2_FP_PREV := $(shell cat $(PS2_FP_STAMP) 2>/dev/null)
 ifneq ($(PS2_FP_PREV),$(PS2_FP))
-$(shell mkdir -p ./.build && echo '$(PS2_FP)' >$(PS2_FP_STAMP) && rm -f $(PS2_FP_OBJ) $(PS2_KERNEL_OBJ))
+$(shell mkdir -p ./.build && echo '$(PS2_FP)' >$(PS2_FP_STAMP) && rm -f $(PS2_FP_OBJS))
 $(info [PS2] PS2_FP is now $(PS2_FP) (was $(if $(PS2_FP_PREV),$(PS2_FP_PREV),unset)) -- the units that read it will rebuild)
 endif
 ifeq ($(PS2_FP),hw)
-$(PS2_FP_OBJ): PS2_CC := $(subst -msoft-float,-mhard-float,$(PS2_CC))
-$(PS2_FP_OBJ): PS2_CFLAGS += -DBTRON_PS2_FP_HW
-$(PS2_KERNEL_OBJ): PS2_CC := $(subst -msoft-float,-mhard-float,$(PS2_CC))
-$(PS2_KERNEL_OBJ): PS2_CFLAGS += -DBTRON_PS2_FP_HW
+$(PS2_FP_OBJS): PS2_CC := $(subst -msoft-float,-mhard-float,$(PS2_CC)) $(PS2_FP_CSR_COST)
+$(PS2_FP_OBJS): PS2_CFLAGS += -DBTRON_PS2_FP_HW
 endif
 
 ps2-bench: $(PS2_BENCH_TARGET)
@@ -2216,7 +2248,7 @@ $(TEST_GMENU_BIN): $(TEST_GMENU_OBJS)
 # ═══════════════════════════════════════════════════════════════════
 # XMB (XrossMediaBar) OpenGL Render Verification — pixels, not promises
 # ═══════════════════════════════════════════════════════════════════
-TEST_XMB_SRCS = verify/tests/test_xmb_render.c src/apps/xmb.c \
+TEST_XMB_SRCS = verify/tests/test_xmb_render.c src/apps/xmb.c src/apps/xmb_wave.c \
                 src/gl/gl_dispatch.c src/gl/egl_surface.c src/gl/backend_virgl.c \
                 src/gl/gl_backend_choice.c \
                 src/font/troncode.c src/font/jis_fonts.c src/font/tibetan_fonts.c \
@@ -2245,7 +2277,7 @@ $(TEST_XMB_BIN): $(TEST_XMB_OBJS)
 # backend_virgl.c is linked here as well, and not for its code: gl_dispatch's
 # GL_BACKEND_VIRGL case is unconditional in the shipped image too, so this is the
 # closer of the two, not the tidier one.
-TEST_XMB_TGL_SRCS = verify/tests/test_xmb_render.c src/apps/xmb.c \
+TEST_XMB_TGL_SRCS = verify/tests/test_xmb_render.c src/apps/xmb.c src/apps/xmb_wave.c \
                     src/gl/gl_dispatch.c src/gl/egl_surface.c \
                     src/gl/gl_backend_choice.c \
                     src/gl/backend_tinygl.c $(TINYGL_SRCS) src/gl/backend_virgl.c \

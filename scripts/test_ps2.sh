@@ -379,14 +379,17 @@ fi
 #
 # The law has two halves now and they are different assertions, so they get separate
 # tests.  The image is built -msoft-float, which is what keeps the doubles off the FPU;
-# two files are deliberately built -mhard-float so their single-precision arithmetic can
+# three files are deliberately built -mhard-float so their single-precision arithmetic can
 # execute on COP1 (measured 20 cycles/op against 160 for the bit engine): the runtime
 # src/drivers/ps2/ps2_builtins.c, whose libcalls are the FPU's own, and the geometry
 # kernel src/gl/tinygl/vertex_stage.c (plan row 7), which is reached only by pointer so
-# no float crosses its boundary and the ABI law is unbroken.  "Zero FP instructions in
-# the image" was therefore replaced by:
+# no float crosses its boundary and the ABI law is unbroken.  Since row 8 the third is
+# src/apps/xmb_wave.c, the launcher's waving surface (plan row 8): its clock arrives as
+# IEEE-754 bits in an integer and its sheet leaves through memory, so it earns the flag
+# the same way the kernel does.  "Zero FP instructions in the image" was therefore
+# replaced by:
 #
-#   (a) nothing but those two objects may hold a COP1 instruction -- a leftover .s op in
+#   (a) nothing but those three objects may hold a COP1 instruction -- a leftover .s op in
 #       any other translation unit means a file that escaped -msoft-float, and its float
 #       arguments would arrive in registers the rest of the image does not use;
 #   (b) no op of double width, and none of the .s encodings this CPU does not implement
@@ -400,9 +403,45 @@ fi
 # double-width store.  The conversions are inlined from ps2_fp.h instead, and this sweep is
 # the row that says so.
 #
+# The pair-store is not merely one illegal op among the ones (b) names; on this CPU it is
+# the reason a whole register class is unusable, and row 8 measured it.  Under O32 FR=0 the
+# caller-saved singles are $f0-$f18 and the callee-saved ones are $f20, $f22, ... $f30, and
+# preserving one of those is *only* ever done with `sdc1` of the even/odd pair -- there is
+# no single-precision callee-save instruction.  So a callee-saved float cannot survive a
+# call on the Emotion EE at all: the store does nothing, the reload does nothing, and the
+# callee returns having silently overwritten it.  That is a third failure mode, distinct
+# from (a) and (b), and clang reaches for it by register allocation rather than by any
+# instruction the source asks for -- a working set over ten floats, a float live across a
+# call, or simply a loop-invariant literal hoisted out of a loop that calls, which the
+# greedy allocator ranks as a long live range and therefore puts in a CSR.  Measured on
+# src/apps/xmb_wave.c: 52 pair stores in the first four-pass arrangement, 36 in the eight
+# passes, 18 after the trig and the root were outlined, 4 with the allocator stopped from
+# choosing a CSR at all, and 0 once the shading pass's eight live values were split into
+# two passes.  The control for the rows below is that last number taken away: compiling this
+# same source without the flag puts 14 pair stores and 32 CSR references back in, so the
+# knob is load-bearing on the file as it stands and not only on its first arrangement.  The flag is `-mllvm -regalloc-csr-first-time-cost=1000000000`, attached to
+# those three objects in the Makefile; an unknown `-mllvm` argument fails the compile, so a
+# toolchain that renames it stops the build instead of quietly reopening the hole.
+#
+# The law inside a hard-float unit is therefore *no float survives a call*, and the check
+# is the register file itself: no $f20-$f31 may appear in the image.  Naming the pair-store
+# opcode would not be enough, because a function that reads a CSR without ever storing one
+# is already broken -- it holds whatever boot code left there.
+#
 # GNU objdump decodes MIPS3 here and can print these as .word, so use the 64-bit
 # decoder that sees every COP1 encoding.
 FP_PAT='(^|[[:space:]])(ldc1|sdc1|lwc1|swc1|(add|sub|mul|div|sqrt|abs|neg|mov|cvt|trunc|round|ceil|floor)[a-z]*\.[sdfw](\.[sdfw])?|c\.(eq|neq|lt|leq|ngt|nge|un|ueq|ult|ule|olt|ole|ord|sf|t|f)\.[sdfw])([[:space:]]|$)'
+# The three units that may hold COP1, spelled once because four rows below read this list
+# and a fifth must not be able to forget to update one of them.  The whitelist row needs
+# them as `-name` patterns (a basename, matched against every path find walks), so that
+# form is derived here rather than written out a second time.
+FP_OBJECTS='src/drivers/ps2/ps2_builtins.ps2.o src/gl/tinygl/vertex_stage.ps2.o src/apps/xmb_wave.ps2.o'
+FP_FIND_EXCLUDES=''
+for _fp_obj in $FP_OBJECTS; do FP_FIND_EXCLUDES="$FP_FIND_EXCLUDES ! -name $(basename $_fp_obj)"; done
+unset _fp_obj
+# A reference to a callee-saved single.  The `([^0-9]|$)` is what keeps $f2 and $f19 out of
+# a net for $f20; the `.w` spellings some decoders use are caught by the same dot.
+CSR_PAT='\$f(2[0-9]|3[01])([^0-9]|$)'
 # What may not appear anywhere, in any object: the double-width forms and the
 # single-precision encodings proven not to exist on this CPU.  The width class is `d`
 # alone -- writing [sd] here would flag every legal add.s and cvt.s.w, which is exactly
@@ -418,10 +457,17 @@ FP_PAT='(^|[[:space:]])(ldc1|sdc1|lwc1|swc1|(add|sub|mul|div|sqrt|abs|neg|mov|cv
 # through: the four members of the family are one law, so all four are named.
 FORBIDDEN_PAT='(^|[[:space:]])(ldc1|sdc1|(add|sub|mul|div|sqrt|abs|neg|mov|cvt|rem)[a-z]*\.d(\.[sdw])?|c\.(eq|neq|lt|leq|ngt|nge|un|ord|sf|t|f)\.d|c\.(un|ueq|ult|ule)\.s|trunc\.w\.s|(round|ceil|floor)\.[lw]*\.s)([[:space:]]|$)'
 if [ -n "$OBJDUMP64" ]; then
-    assert_check "Only ps2_builtins.ps2.o and vertex_stage.ps2.o hold COP1 instructions (every other unit is -msoft-float)" \
-        "! (find src -name '*.ps2.o' ! -name 'ps2_builtins.ps2.o' ! -name 'vertex_stage.ps2.o' -exec $OBJDUMP64 -d --triple=mips64el-unknown-elf {} + | grep -cE '$FP_PAT')"
+    assert_check "Only ps2_builtins.ps2.o, vertex_stage.ps2.o and xmb_wave.ps2.o hold COP1 instructions (every other unit is -msoft-float)" \
+        "! (find src -name '*.ps2.o' $FP_FIND_EXCLUDES -exec $OBJDUMP64 -d --triple=mips64el-unknown-elf {} + | grep -cE '$FP_PAT')"
     assert_check "Zero double-width or EE-illegal FPU op in the image (.d ops, c.un.s, trunc.w.s)" \
         "! ($OBJDUMP64 -d --triple=mips64el-unknown-elf $ELF | grep -cE '$FORBIDDEN_PAT')"
+    # The register-file half of the pair-store law, read off the linked image rather than
+    # off the three objects: an object that lost its CSR to the linker's relaxation is
+    # still the same bytes, but so is one the linker dropped -- and the row that matters is
+    # what the console executes.  `grep -c` prints 0 and exits 1 on no match, which is the
+    # idiom every row in this block uses; the `!` inverts it to the pass the law wants.
+    assert_check "No callee-saved single (\$f20-\$f31) is referenced anywhere in the image (sdc1 cannot preserve one on this CPU)" \
+        "! ($OBJDUMP64 -d --triple=mips64el-unknown-elf $ELF | grep -cE '$CSR_PAT')"
     # The same law read off the bytes rather than off a disassembler's naming, because an
     # encoder this toolchain changes its mind about is exactly the one that would slip
     # through a mnemonic grep.  Not as one literal each: 0x4600010d and 0x46020031 are the
@@ -466,11 +512,12 @@ if [ -n "$OBJDUMP64" ]; then
     assert_check "No COP1 compare of the unordered family anywhere in .text (${#ELF_WORDS} dump chars, funct 0x31/33/35/37)" \
         "[ \$(grep -cE '^(31|33|35|37)[0-9a-f]{4}46\$' <<<\"\$ELF_WORDS\") -eq 0 ]"
     # And the positive half of the same check: the sanctioned objects really do contain
-    # them, so a stale -msoft-float build of either cannot pass by having no FPU code at
-    # all.  Two rows because they earn their flag differently: the runtime's arithmetic is
-    # what the libcalls dispatch to, while the kernel's is the whole point of row 7 and is
-    # worth a row of its own -- the -mhard-float substitution is a per-object flag, and a
-    # flag that silently does not reach its file is the failure this row exists to see.
+    # them, so a stale -msoft-float build of any of them cannot pass by having no FPU code at
+    # all.  One row per object because each earns its flag differently and each can lose it
+    # separately: the runtime's arithmetic is what the libcalls dispatch to, the kernel's is
+    # the whole point of row 7, and the wave's is the point of row 8 -- the -mhard-float
+    # substitution is a per-object flag, and a flag that silently does not reach its file is
+    # the failure these rows exist to see.
     assert_check "ps2_builtins.ps2.o really emits COP1 arithmetic (the hardware path is compiled in)" \
         "[ \$($OBJDUMP64 -d --triple=mips64el-unknown-elf src/drivers/ps2/ps2_builtins.ps2.o | grep -cE '[[:space:]](add|sub|mul|div)\.s[[:space:]]') -ge 4 ]"
     # The kernel's own two halves: the arithmetic is inline on COP1, ...
@@ -490,6 +537,31 @@ if [ -n "$OBJDUMP64" ]; then
     # left behind is the one case the object file cannot show.
     assert_check "glopVertex calls into both kernel halves in the linked image" \
         "[ \$($OBJDUMP64 -d --triple=mips64el-unknown-elf $ELF | grep -cE 'jal[[:space:]]+0x[0-9a-f]+ <tgl_vertex_transform>') -ge 1 ] && [ \$($OBJDUMP64 -d --triple=mips64el-unknown-elf $ELF | grep -cE 'jal[[:space:]]+0x[0-9a-f]+ <tgl_vertex_to_viewport>') -ge 1 ]"
+    # Row 8's unit, the same three ways.  Its arithmetic first: measured 55 mul.s and 43
+    # add.s on the sheet's eight passes, against a threshold of 40 because the mesh dial
+    # (32 -> 16) is a real configuration and halving the working set must not read as the
+    # flag having gone missing -- a -msoft-float build of this file has zero of both.
+    assert_check "xmb_wave.ps2.o emits COP1 mul.s/add.s arithmetic (PS2_FP=hw reached the wave)" \
+        "[ \$($OBJDUMP64 -d --triple=mips64el-unknown-elf src/apps/xmb_wave.ps2.o | grep -cE '[[:space:]](mul|add)\.s[[:space:]]') -ge 40 ]"
+    # Its six compares are the fold's and the degenerate-cell test's, all in the ordered
+    # form.  The tier guards are *not* among them: `BTRONFLT_LT()` compares bit patterns in
+    # integer registers precisely because `>` would lower to `c.ule.s`.
+    assert_check "xmb_wave.ps2.o's compares are ordered c.olt.s and none of the unordered family" \
+        "[ \$($OBJDUMP64 -d --triple=mips64el-unknown-elf src/apps/xmb_wave.ps2.o | grep -cE '[[:space:]]c\.olt\.s[[:space:]]') -ge 6 ] && ! (\$OBJDUMP64 -d --triple=mips64el-unknown-elf src/apps/xmb_wave.ps2.o | grep -cE '[[:space:]]c\.(un|ueq|ult|ule)\.s[[:space:]]')"
+    # The register-file law at the file that earned it, naming the file rather than leaving
+    # the image-wide row to point at a diff.  Measured history: 52 pair stores -> 36 -> 18
+    # -> 4 -> 0 by the shapes described in the file's header comment.
+    assert_check "xmb_wave.ps2.o references no callee-saved single (no float survives a call)" \
+        "! ($OBJDUMP64 -d --triple=mips64el-unknown-elf src/apps/xmb_wave.ps2.o | grep -cE '$CSR_PAT')"
+    # And the wiring, in both directions.  `wv_sinf`/`wv_cosf`/`wv_sqrtf` are `WV_PASS`
+    # (noinline) so their live temps stay inside the callee instead of joining the caller's
+    # working set -- measured, the linked image branches into them 6 times in total and into
+    # the two far-tier callbacks once each, which is what says the shapes that keep the
+    # register file legal survived -O2 and the linker.
+    assert_check "xb_paint calls xb_wave_step in the linked image" \
+        "[ \$($OBJDUMP64 -d --triple=mips64el-unknown-elf $ELF | grep -cE 'jal[[:space:]]+0x[0-9a-f]+ <xb_wave_step>') -ge 1 ]"
+    assert_check "the wave's trig/root wrappers stay outlined and its far tier returns to the soft unit" \
+        "[ \$($OBJDUMP64 -d --triple=mips64el-unknown-elf $ELF | grep -cE 'jal[[:space:]]+0x[0-9a-f]+ <wv_(sinf|cosf|sqrtf)>') -ge 3 ] && [ \$($OBJDUMP64 -d --triple=mips64el-unknown-elf $ELF | grep -cE 'jal[[:space:]]+0x[0-9a-f]+ <xb_(sinf|cosf)_far_u32>') -ge 2 ]"
 else
     echo "  [SKIP] 64-bit-GPR disassembler unavailable -- FPU-opcode sweep not run"
 fi

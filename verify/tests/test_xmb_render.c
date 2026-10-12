@@ -14,7 +14,7 @@
  *   2. the waving surface — the driver composites it as dst*(1+c) with
  *      c = (1-cos(c^2))/13 from the sheet's surface normal (gl2.c:707 and the
  *      ribbon fragment stage).  Checked twice: against the shader's own bounds
- *      on the field xb_ribbon_step() produces, and against the frame
+ *      on the field xb_wave_step() produces, and against the frame
  *      difference of the same settled UI with the surface on and off, which
  *      must lift the background and never darken it.
  *   3. the bar, the labels and the shadows — pixel ink where the PS3 layout
@@ -770,7 +770,7 @@ static void test_ribbon_compositing(void)
      * surface normal, and for this sheet cc is always in [1, 2].  Over that
      * range the expression runs from (1-cos 1)/13 = 0.0354 at the flattest to
      * its peak of 2/13 = 0.1538 where cc*cc reaches pi on a steep fold.  A field
-     * outside that pair is xb_ribbon_step() modelling the wrong thing - which is
+     * outside that pair is xb_wave_step() modelling the wrong thing - which is
      * how the sheet ended up ~50x too weak. */
     {
         float lo = 0.0f, hi = 0.0f, mean = 0.0f;

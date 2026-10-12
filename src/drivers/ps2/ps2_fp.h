@@ -249,6 +249,60 @@ static inline uint32_t ps2_sf_fixsfsi(uint32_t a)
         mag = (frac | 0x800000u) >> (int)(150u - be);      /* the shift is 1..23 */
     return sign ? (uint32_t)0u - mag : mag;
 }
+/* The ordered float comparison a `-mhard-float` translation unit may inline, in integers.
+ *
+ * This is the form `include/gl/math.h`'s `BTRONFLT_LT()` resolves to, and it exists because
+ * the two other ways to ask the same question are both wrong here:
+ *
+ *  - A C comparison of two floats compiles to a COP1 test, and the compiler chooses that test
+ *    by *canonicalising* it, not by obeying how it was written.  With one side a constant,
+ *    `PI < x` and `x > PI` are the same IR and both lower to `c.ule.s` -- the unordered
+ *    family this decoder does not have, which leaves the condition code holding the previous
+ *    compare's answer (see the note on `ps2_fp_olt_s()` below and the black screen it cost).
+ *    `c.olt.s` is legal, so a TU that only ever compares two variables can use the C form;
+ *    a *fold against band-edge constants* cannot, and that is the shape `btron_sincosf()` is.
+ *  - The hand-written `c.olt.s` is then the safe answer, but only where it is not inlined:
+ *    it writes `$f0` and `$f2` from integer operands and cannot say so in an asm constraint,
+ *    so a value the allocator happened to be keeping in either of them dies silently.  At a
+ *    call site that is harmless (the helper is a call, and a call's own clobbers are known);
+ *    inlined five times into a fold, inside a unit that has to keep every float out of the
+ *    registers a call touches, it is not.
+ *
+ * So the fold asks the question of the bit patterns instead, and gets an answer that is
+ * exact for every input a binary32 can hold:
+ *
+ *   +-0      the same value, so neither is less -- the one thing a naive integer mapping of
+ *            sign-and-magnitude bits gets wrong, because -0 sorts below +0;
+ *   NaN      `a < b` is false for a NaN on either side, and a NaN's bits are only *large* on
+ *            the positive side, so the sign-flip below would happily report NaN < 3.14 as
+ *            true.  It is asked for by name, first.
+ *   the rest IEEE order = integer order on the key: positive keeps its bits, negative is
+ *            `-1 - magnitude_bits`, so both halves sort the way the numbers do and
+ *            infinities land at the ends, which is what makes `-INF < x < INF` the
+ *            middle tier's guard without a second thought.
+ *
+ * `make test-ps2-softfloat` sweeps this against the bit engine's own `ps2_sf_ltsf2()` -- the
+ * oracle this port already trusts for every other compare -- over random pairs, every
+ * exponent band and the four specials, so the two encodings cannot drift. */
+static inline int ps2_fp_lt_s(uint32_t a, uint32_t b)
+{
+    if ((a & 0x7FFFFFFFu) == 0u) a = 0u;            /* -0 is 0 */
+    if ((b & 0x7FFFFFFFu) == 0u) b = 0u;
+    if (((a >> 23) & 0xFFu) == 0xFFu && (a & 0x7FFFFFu) != 0u) return 0;    /* a is NaN */
+    if (((b >> 23) & 0xFFu) == 0xFFu && (b & 0x7FFFFFu) != 0u) return 0;    /* b is NaN */
+
+    /* The sign-magnitude patterns remapped onto one unsigned axis that increases with the
+     * value: a positive keeps its magnitude and takes the upper half of the axis, a negative
+     * takes its complement in the lower half.  -1.0f therefore sorts below +-0 and above
+     * -inf, and infinities land at the ends -- which is what makes the trig tier's guards
+     * (`-2^31 < x && x < 2^31`) fall out of the same two lines as everything else.  All of it
+     * unsigned, because the obvious `int` spelling of this mapping is an implementation-defined
+     * conversion on the way in. */
+    const uint32_t ka = (a & 0x80000000u) ? ~a & 0x7FFFFFFFu : a | 0x80000000u;
+    const uint32_t kb = (b & 0x80000000u) ? ~b & 0x7FFFFFFFu : b | 0x80000000u;
+    return ka < kb;
+}
+
 /* The one comparison a `-mhard-float` translation unit may ask this CPU for, written once where
  * its consumers can reach it.
  *

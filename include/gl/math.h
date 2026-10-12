@@ -3,6 +3,12 @@
 #ifndef M_PI
 #define M_PI 3.1415926535897932384626433832795
 #endif
+/* The hosted half still owes the two spellings of a float question that the freestanding
+ * half defines below, because `src/apps/xmb_wave.c` is compiled both ways and writes the
+ * operation, not the instruction.  Here they are the cast and the operator they have always
+ * been; the laws they exist to serve are in the comments above the other definitions. */
+#define BTRON_F2I(x) ((int)(x))
+#define BTRONFLT_LT(a, b) ((a) < (b))
 #else
 #ifndef _GL_MATH_H_
 #define _GL_MATH_H_
@@ -29,6 +35,49 @@ static inline double btron_ldexp(double x, int e) {
     v.u += (unsigned long long)(long long)e << 52;
     return v.d;
 }
+
+/* A float's whole part, as the one statement rather than as whichever instruction the
+ * compiler happens to reach for.  `btron_sincosf`'s turn count is the only place this
+ * header casts a float to an int, and the cast is a *law* question rather than a style
+ * one on the Emotion Engine: a `-mhard-float` translation unit compiles `(int)x` to
+ * `trunc.w.s`, which that CPU's COP1 decoder does not answer, and an unanswered compare
+ * or conversion does not trap and does not stall -- it leaves the destination register
+ * holding the previous result.  A fold that silently turns every angle into the previous
+ * one's residue is not a slow wave, it is a wrong one, and the wrongness is invisible in
+ * a picture.  So the units built with the FPU flag (`src/drivers/ps2/ps2_builtins.c`,
+ * `src/gl/tinygl/vertex_stage.c`, `src/apps/xmb_wave.c`) get the exponent-band truncate
+ * that the soft runtime's own `__fixsfsi` already runs, and everyone else gets the plain
+ * cast they always had.  This is not a second implementation of that conversion:
+ * `ps2_sf_fixsfsi()` is one hand-written truth in `src/drivers/ps2/ps2_fp.h` with three
+ * readers, which is why the truncate lives in a header at all. */
+#if defined(BTRON_PS2_FP_HW)
+#include "ps2_fp.h"                 /* ps2_sf_fixsfsi(), ps2_fp_bits_f(), ps2_fp_lt_s() */
+#define BTRON_F2I(x) ((int)ps2_sf_fixsfsi(ps2_fp_bits_f(x)))
+/* An ordered float comparison that asks no question of the FPU's condition code.
+ *
+ * It is not reachable by choosing the operand order: `a < b` compiles to `c.olt.s`, but
+ * once one side is a constant LLVM canonicalises the comparison to put the constant on
+ * the right, and `x > 3.14f` and `3.14f < x` are then the *same* IR -- which the MIPS
+ * backend lowers to `c.ule.s`, the unordered-inclusive form this decoder does not have.
+ * Measured on a six-form micro file: `a < b` -> olt, `!(a < b)` -> olt with the branch
+ * inverted, `a > b` -> ule, `b < a` with `b` a constant -> ule, `!(a <= b)` -> ole.
+ * Of those the only form that keeps C's meaning for a NaN pair is the hand-written ordered
+ * one, and an angle that is a NaN must not be folded as if it were a number -- that is the
+ * same class of silent-wrong the missing `trunc.w.s` produced, and this port has already had
+ * one black screen from a compare that did not answer.
+ *
+ * The hand-written `c.olt.s` (`ps2_fp_olt_s()`, which `src/gl/tinygl/zgl.h`'s six clip plane
+ * tests still route through) is therefore not enough here: it writes `$f0` and `$f2` out of
+ * integer operands and cannot say so in a constraint, which is harmless at a call boundary
+ * and silently wrong in a fold that gets *inlined* -- and inlining is the whole point of
+ * `src/apps/xmb_wave.c`.  So the fold compares bit patterns instead, in integers, for the
+ * price of the eleven instructions `ps2_fp_lt_s()` is and no condition code at all.  On a
+ * build without the FPU flag this is the plain C operator it always was. */
+#define BTRONFLT_LT(a, b) (ps2_fp_lt_s(ps2_fp_bits_f(a), ps2_fp_bits_f(b)) != 0)
+#else
+#define BTRON_F2I(x) ((int)(x))
+#define BTRONFLT_LT(a, b) ((a) < (b))
+#endif
 
 /* sin/cos/sqrt/pow exist twice below, once in x87 and once in arithmetic, because
  * this header is the freestanding math for every bare-metal target and those do not
@@ -60,6 +109,10 @@ static inline double sqrt(double x) {
 }
 
 #else /* no x87: everything below is series and exponent arithmetic */
+
+/* Declared here, defined below with the other two that have no float-native form: the tier
+ * guards on `sinf`/`cosf` ask for a magnitude, and they come first. */
+static inline float fabsf(float);
 
 /* sqrt by Babylonian iteration on a mantissa normalised into [1,4), which is where
  * one starting guess is within 40% for every input and six halvings of the error
@@ -126,10 +179,20 @@ static inline double cos(double x) { double s, c; btron_sincos(x, &s, &c); retur
  * so many turns round that no reduction of it means anything for the trig pair. */
 static inline float sqrtf(float x) {
     if (x == 0.0f) return x;                        /* +-0 keeps its own sign, as libm */
-    if (!(x > 0.0f)) return (x - x) / (x - x);      /* negative and NaN both answer NaN */
     union { float f; unsigned int u; } v;
     v.f = x;
     const unsigned int e = (v.u >> 23) & 0xFFu;
+    /* "negative, or NaN" -- the same inputs the plain C test `!(0.0f < x)` picks out, and
+     * asked of the bits instead of of a comparison.  That spelling is not a micro-optimisation
+     * here: the negation of a strict compare is *only* expressible as `c.ule.s`, because LLVM
+     * has to keep it true for a NaN pair, and `c.ule.s` is the unordered family this CPU's COP1
+     * decoder does not answer -- an unanswered compare leaves the condition code holding the
+     * previous one's result, so a root would be taken or refused on the strength of whatever
+     * was tested last.  The set is exactly: sign bit set (every negative, -inf included, as it
+     * was) or exponent all ones with a mantissa (NaN, of either sign), and +inf -- exponent set,
+     * mantissa clear -- still falls through to the line below and roots itself. */
+    if ((v.u >> 31) || (e == 0xFFu && (v.u & 0x7FFFFFu) != 0u))
+        return (x - x) / (x - x);                   /* negative and NaN both answer NaN */
     if (e == 0xFFu) return x;                       /* +inf is its own root */
     /* A subnormal has no exponent field for the guess below to halve, and the double
      * relative is no refuge either (its fold assumes a normal value and lands 2x out on
@@ -151,6 +214,19 @@ static inline float sqrtf(float x) {
     return back * (half * (r + r));                 /* s * r, without a second multiply */
 }
 
+/* Every "is this angle past that band edge" test below is written through
+ * `BTRONFLT_LT()`, and that is not decoration: on the Emotion EE `a > b` lowers to
+ * `c.ule.s` -- the unordered-inclusive family, which is not in that CPU's COP1 decoder at
+ * all.  It does not trap and it does not stall; it leaves the condition code holding
+ * whatever the previous compare wrote.  A fold whose band test reads a stale flag picks
+ * somebody else's residue, and a wrong wave is not something a screenshot shows.  The
+ * operand order is not the fix -- LLVM canonicalises a comparison against a constant to
+ * the same IR whichever side the constant is written on -- and neither is the hand-written
+ * ordered test, because this fold is *inlined* into a unit that keeps its floats in the
+ * registers a call may not touch.  So the answer is the integer one: four band edges and no
+ * FP condition code anywhere.  The law and its measurement, including the black screen that
+ * produced it, are in doc/md/PS2.md, "The compares the EE does not have", and
+ * `scripts/test_ps2.sh` row 58 byte-scans the linked image for the family. */
 static inline void btron_sincosf(float x, float *s, float *c) {
     const float pi = 3.14159274f, pi2 = 6.28318548f;
     const float pio2 = 1.57079637f, pio4 = 0.78539819f;
@@ -161,18 +237,18 @@ static inline void btron_sincosf(float x, float *s, float *c) {
     const float pi2_lo = -1.74845553e-7f;
     int neg_sin = 0;
     if (x < 0.0f) { x = -x; neg_sin = 1; }                  /* sin odd, cos even */
-    if (x > pi) {
-        const float k = (float)(int)(x / pi2);
+    if (BTRONFLT_LT(pi, x)) {
+        const float k = (float)BTRON_F2I(x / pi2);
         x -= pi2 * k;
         x -= pi2_lo * k;                                    /* into [0,2pi) */
     }
     /* The residue only buys anything applied to the small result: pi2 + pi2_lo rounds
      * straight back to pi2, since the two are closer than a float's spacing there. */
-    if (x > pi) { x = (pi2 - x) + pi2_lo; neg_sin = !neg_sin; }  /* sin(2pi-a) = -sin(a) */
+    if (BTRONFLT_LT(pi, x)) { x = (pi2 - x) + pi2_lo; neg_sin = !neg_sin; }  /* sin(2pi-a) = -sin(a) */
     int flip_cos = 0;
-    if (x > pio2) { x = pi - x; flip_cos = 1; }             /* now in [0,pi/2] */
+    if (BTRONFLT_LT(pio2, x)) { x = pi - x; flip_cos = 1; }  /* now in [0,pi/2] */
     int swap = 0;
-    if (x > pio4) { x = pio2 - x; swap = 1; }               /* now in [0,pi/4] */
+    if (BTRONFLT_LT(pio4, x)) { x = pio2 - x; swap = 1; }    /* now in [0,pi/4] */
     /* At pi/4 the first dropped term is 1.7e-9, which is under a float's last place
      * near 1.0, so these five- and four-term forms are as accurate as a float can be. */
     const float x2 = x * x;
@@ -223,18 +299,31 @@ static inline void btron_sincosf_far(float x, float *s, float *c) {
  * 2^31 is 1.2e-7 -- still worth having -- and past it the angle a float hands back is
  * coarser than any reduction of it.  Only infinity and NaN go further, to the double
  * relative, which answers NaN for both; the long long the double fold rounds through
- * would not survive the magnitudes in between anyway. */
+ * would not survive the magnitudes in between anyway.
+ *
+ * The middle tier is why a `-mhard-float` unit on the Emotion EE may not call these two:
+ * `btron_sincosf_far`'s double multiplies and subtracts are `.d` COP1 forms, which that CPU
+ * does not implement at all, so out there the reduction would not be slow but silently
+ * absent and the residue handed to the fold would be the previous one.
+ * `src/apps/xmb_wave.c` is the consumer that lives at that boundary: it inlines
+ * `btron_sincosf` for the arguments the float fold covers and sends everything wider back
+ * to the `-msoft-float` unit that owns the animation clock, through bit patterns.
+ *
+ * Each tier guard is `BTRONFLT_LT(fabsf(x), bound)` rather than the pair of comparisons it
+ * replaces, for the reason given above `btron_sincosf`: with a constant on the left, `a < b`
+ * is the *same IR* as `b > a` and lowers to `c.ule.s`, which this CPU does not answer -- and a
+ * magnitude against a positive bound is the same set of arguments, NaN included. */
 static inline float sinf(float x) {
     float s, c;
-    if (x > -12.5663706f && x < 12.5663706f) { btron_sincosf(x, &s, &c); return s; }
-    if (x > -2147483648.0f && x < 2147483648.0f) { btron_sincosf_far(x, &s, &c); return s; }
+    if (BTRONFLT_LT(fabsf(x), 12.5663706f)) { btron_sincosf(x, &s, &c); return s; }
+    if (BTRONFLT_LT(fabsf(x), 2147483648.0f)) { btron_sincosf_far(x, &s, &c); return s; }
     return (float)sin((double)x);
 }
 
 static inline float cosf(float x) {
     float s, c;
-    if (x > -12.5663706f && x < 12.5663706f) { btron_sincosf(x, &s, &c); return c; }
-    if (x > -2147483648.0f && x < 2147483648.0f) { btron_sincosf_far(x, &s, &c); return c; }
+    if (BTRONFLT_LT(fabsf(x), 12.5663706f)) { btron_sincosf(x, &s, &c); return c; }
+    if (BTRONFLT_LT(fabsf(x), 2147483648.0f)) { btron_sincosf_far(x, &s, &c); return c; }
     return (float)cos((double)x);
 }
 

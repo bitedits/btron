@@ -399,6 +399,56 @@ static void fix_bands(void)
     }
 }
 
+/* The inlineable spelling of `a < b`, against the spelling the runtime already proves.
+ *
+ * A `-mhard-float` unit on this CPU cannot ask the FPU an unordered question (`c.ule.s` is
+ * not decoded and leaves the condition code holding the *previous* compare), so
+ * `ps2_fp_lt_s()` answers the same question in integer registers by remapping the
+ * sign-magnitude bit patterns onto one unsigned axis.  It has no float in it and therefore
+ * no libm, no COP1 and no condition code to be wrong about -- which is also why nothing
+ * else in this file can see it: the host build never calls it, and the sweep above checks
+ * `__ltsf2` against the host's own `<`, not this encoding.  So the oracle is the port's
+ * other truth for the same predicate, `ps2_sf_ltsf2()`, and the pairs are the ones the
+ * mapping is fragile on:
+ *
+ *  - every exponent field x {bare, smallest, largest significand} x both signs, crossed
+ *    with itself, which is every band edge, both infinities, both zeros, NaN on either
+ *    side, and the subnormals, without a single random draw deciding coverage;
+ *  - random pairs on top, for the mantissa interiors.
+ *
+ * A mapping that forgot to fold -0 onto +0 fails on the first list; one that flipped the
+ * negative half's order without the -1 fails at the infinities; one that tested only the
+ * sign bit fails on the NaN rows.  The positive control for this sweep is those two lines
+ * taken apart and put back one at a time. */
+static void cop1_compare_form(void)
+{
+    static const uint32_t fracs[3] = { 0u, 1u, 0x7FFFFFu };
+    uint32_t band[256 * 3 * 2];
+    int n = 0, i, j, be, k, s;
+
+    for (be = 0; be <= 0xFF; be++)
+        for (k = 0; k < 3; k++)
+            for (s = 0; s < 2; s++)
+                band[n++] = ((uint32_t)be << 23) | fracs[k] | ((uint32_t)s << 31);
+
+    for (i = 0; i < n; i++)
+        for (j = 0; j < n; j++) {
+            const uint32_t a = band[i], b = band[j];
+
+            check("lt_s band", a, b, ps2_fp_lt_s(a, b), ps2_sf_ltsf2(a, b) < 0 ? 1u : 0u);
+        }
+
+    for (i = 0; i < 400000; i++) {
+        const uint32_t a = rnd_float(), b = rnd_float();
+
+        check("lt_s random", a, b, ps2_fp_lt_s(a, b), ps2_sf_ltsf2(a, b) < 0 ? 1u : 0u);
+        /* And the host's own answer, which is the reason `ps2_sf_ltsf2` is trusted: a pair
+         * of NaNs and the +-0 pair are where the three readings could disagree, and the
+         * band cross above is where they cannot be told apart by luck. */
+        check("lt_s host", a, b, ps2_fp_lt_s(a, b), f_val(a) < f_val(b) ? 1u : 0u);
+    }
+}
+
 int main(void)
 {
     int round;
@@ -411,6 +461,7 @@ int main(void)
     known_answers();
     conversions();
     fix_bands();
+    cop1_compare_form();
     for (round = 0; round < 3; round++) {
         doubles_one_round(round);
         floats_one_round(round);

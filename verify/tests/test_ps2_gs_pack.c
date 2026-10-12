@@ -188,16 +188,18 @@ static void stream_words(void)
 static void transfer_words(void)
 {
     /* SBA[13:0] SBW[21:16] SPSM[29:24] DBA[45:32] DBW[53:48] DPSM[61:56], every field at its own
-     * maximum: digits 3, 5, 7, 11 and 15 are the ones a field's top bits straddle, so 0x3 appears
-     * exactly where a 14- or 6-bit field ends short of a nibble boundary. */
+     * maximum.  A 14- or 6-bit field stops two bits short of a nibble boundary, so the digit above
+     * it carries that field's top two bits as 1+2 = 3, and every straddled digit is a 3: digits 3,
+     * 5, 7, 11, 13 and 15. */
     eq("bitbltbuf all fields set",
-       gs_pack_bitbltbuf(0x3FFFu, 0x3Fu, 0x3Fu, 0x3FFFu, 0x3Fu, 0x3Fu), 0x3F5F3FFF3F3F3FFFULL);
+       gs_pack_bitbltbuf(0x3FFFu, 0x3Fu, 0x3Fu, 0x3FFFu, 0x3Fu, 0x3Fu), 0x3F3F3FFF3F3F3FFFULL);
 
     /* What the working canvas upload writes for an 800 px destination: DBW = (800+63)/64 = 13 in
-     * the six bits at 53:48, DPSM = CT32 = 0, and nothing else.  Literal, because ps2_gs.c's own
-     * `(uint64_t)fbw << 48` is the thing this replaces. */
+     * the six bits at 53:48, DPSM = CT32 = 0, and nothing else.  13 << 48 is a shift by 12 hex
+     * digits, so 0xD sits at digit 12 -- literal, because ps2_gs.c's own `(uint64_t)fbw << 48` is
+     * the thing this replaces and this is the word that path has always sent. */
     eq("bitbltbuf as the blit programs it",
-       gs_pack_bitbltbuf(0u, 0u, 0u, 0u, 13u, 0u), 0x0D00000000000000ULL);
+       gs_pack_bitbltbuf(0u, 0u, 0u, 0u, 13u, 0u), 0x000D000000000000ULL);
 
     /* One bit past each field's width is gone, not spilled into its neighbour: SBA is 14 bits, the
      * two PSM fields 6, and a six-bit code that reached bit 6 would land in the destination page
@@ -246,11 +248,12 @@ static void transfer_words(void)
 
         eq("setup tag: NLOOP 4, NREG 1, EOP", pkt[0], 0x1000000000008004ULL);
         eq("setup REGS: the AD nibble alone", pkt[1], 0x0EULL);
-        eq("setup BITBLTBUF", pkt[2], 0x0D00000000000000ULL);
+        eq("setup BITBLTBUF", pkt[2], 0x000D000000000000ULL);
         eq("setup TRXPOS", pkt[4], 0ULL);
         eq("setup TRXREG", pkt[6], 0x0000025800000320ULL);
         eq("setup TRXDIR", pkt[8], 0ULL);
-        eq("quadwords in it: one tag plus four writes", (uint64_t)(sizeof(pkt) / 2u), 5u);
+        eq("quadwords in it: one tag plus four writes",
+           (uint64_t)(sizeof(pkt) / (2u * sizeof(uint64_t))), 5u);
         eq("bytes in a quadword, so 5 x 16 = 80", (uint64_t)sizeof(pkt), 80u);
     }
 }

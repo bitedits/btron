@@ -1479,6 +1479,88 @@ static void ps2_shell_char(int c);
 /* Defined with the pointer statistics it prints, below ps2_paint_print(). */
 static void ps2_ptr_chord(uint32_t key);
 
+/* ── Keyboard Auto-Repeat ───────────────────────────────────────── */
+
+/* The three numbers this reads are not this port's invention: they are the ones
+ * `src/settings/input.c:16-18` defines for every target (16 cs = 160 ms before the
+ * first repeat, 40 cps = 25 ms after that, repeat on), the same three the Input
+ * applet's radio rows and `xmb.c`'s settings bindings write, and the same three
+ * `core_arm64.c:2702-2705` already obeys on the Pi 400.  What PS2 was missing was the
+ * *reader*, not the setting: `ps2_usb_process_keyboard_report()` decodes **edges** --
+ * `s_prev_keys` turns a key held for a second into exactly one down event -- while on
+ * the posix target a held key repeats because SDL forwards the host's own auto-repeat
+ * as further down events.  So here one press typed one character, and holding
+ * Backspace deleted one character at a time as fast as the hand could tap it.
+ *
+ * Repeating in the guest is the layer that can do it, and it is the layer arm64 chose:
+ * the HID edge says *what* is held, the folded microsecond clock says *for how long*,
+ * and the applet's three variables say *how often*.  The emulator's own repeat is not
+ * reachable -- PCSX2 hands over the device, not the host's keyboard settings -- and
+ * asking the human to tap is not a fix.
+ *
+ * One key repeats: the most recent one pressed and still down.  A later press re-arms
+ * the delay, an up of the armed key disarms it, and an up of any *other* key leaves the
+ * armed one running.  Two keys held at once therefore repeat only the newer one, which
+ * is what a host keyboard does and is not a case auto-repeat exists for. */
+extern uint32_t g_kbd_repeat_delay_us;
+extern uint32_t g_kbd_repeat_interval_us;
+extern int      g_kbd_repeat_enabled;
+
+static uint32_t s_kbd_held_key;           /* 0 == nothing armed to repeat */
+static uint8_t  s_kbd_held_mod;           /* kept for the trace rows, not for the key */
+static uint32_t s_kbd_press_us;
+static uint32_t s_kbd_repeat_us;
+static uint32_t s_kbd_repeats;            /* events injected here since boot */
+
+static void ps2_kbd_arm(uint32_t btron_key, uint8_t mod)
+{
+    s_kbd_held_key = btron_key;
+    s_kbd_held_mod = mod;
+    s_kbd_press_us = s_kbd_repeat_us = btron_render_perf_us();
+}
+
+static void ps2_kbd_disarm(uint32_t btron_key)
+{
+    if (s_kbd_held_key != 0u && s_kbd_held_key == btron_key) s_kbd_held_key = 0u;
+}
+
+/* One pass' worth of repeat, and at most one event per pass, on the same terms as a
+ * host's: the delay is measured from the press, the interval from the last repeat, and
+ * neither is ever caught up.  The clock is the folded one, whose 32-bit microseconds
+ * wrap every 2^32/tpu us -- 14.5 s at this machine's measured 295 ticks/us -- and both
+ * tests are unsigned differences, so a wrap between the press and a tick costs one
+ * missed repeat rather than a burst: the intervals that matter here are 25 ms and
+ * 500 ms, five orders of magnitude inside the wrap.  If the timebase was never
+ * measured the clock reads a constant zero, both differences read zero, and repeat
+ * stays off; a port with no clock does not invent a cadence. */
+static void ps2_kbd_repeat_tick(void)
+{
+    const uint32_t now = btron_render_perf_us();
+
+    if (!g_kbd_repeat_enabled || s_kbd_held_key == 0u) return;
+    if ((uint32_t)(now - s_kbd_press_us) < g_kbd_repeat_delay_us) return;
+    if ((uint32_t)(now - s_kbd_repeat_us) < g_kbd_repeat_interval_us) return;
+
+    s_kbd_repeat_us = now;
+    s_kbd_repeats++;
+#if BTRON_HID_TRACE
+    /* The cadence, on the same dial the rest of the input evidence uses: this row is
+     * what separates "repeat is off" from "repeat is firing faster or slower than the
+     * applet says", and `dt` is the measured interval rather than the setting. */
+    ps2_kprintf("[KBD] rep k=%x m=%x n=%u since_press=%u us\n", (unsigned int)s_kbd_held_key,
+                (unsigned int)s_kbd_held_mod, (unsigned int)s_kbd_repeats,
+                (unsigned int)(now - s_kbd_press_us));
+#endif
+    if (s_gui_active) {
+        ps2_inject_key((UW)s_kbd_held_key, 1);
+    } else if (s_kbd_held_key < 0x100u) {
+        /* Stage 1 has no event consumer, so the prompt takes the character exactly as
+         * ps2_usb_on_key() gave it the first time.  Function and navigation codes from
+         * 0x100 up have no binding at the prompt and must not be sent as a byte. */
+        ps2_shell_char((int)s_kbd_held_key);
+    }
+}
+
 void ps2_usb_on_key(uint32_t btron_key, int down, uint8_t mod)
 {
 #if BTRON_HID_TRACE
@@ -1519,13 +1601,23 @@ void ps2_usb_on_key(uint32_t btron_key, int down, uint8_t mod)
     }
     if (s_gui_active) {
         ps2_inject_key((UW)btron_key, down);
+        /* Armed only for a key that was actually routed: the chords swallowed above are
+         * the compositor's, and repeating them would move the cursor or change the gain
+         * once every 25 ms. */
+        if (down) ps2_kbd_arm(btron_key, mod);
+        else      ps2_kbd_disarm(btron_key);
         return;
     }
     /* Stage 1 has no event consumer: the prompt builds its line from characters,
      * so a decoded key that only becomes an event is heard and then thrown away.
      * Codes from 0x100 up are the BTRON function and navigation keys, which the
      * console has no binding for yet and which must not be mistaken for a byte. */
-    if (down && btron_key < 0x100u) ps2_shell_char((int)btron_key);
+    if (down && btron_key < 0x100u) {
+        ps2_shell_char((int)btron_key);
+        ps2_kbd_arm(btron_key, mod);
+    } else if (!down) {
+        ps2_kbd_disarm(btron_key);
+    }
 }
 
 /* ── Pointer Source Statistics ─────────────────────── */
@@ -4421,6 +4513,11 @@ static void ps2_gui_pass(GDEV *screen)
     ps2_cycle_begin(s_task_driving);
     ps2_pad_poll();
     ps2_usb_poll();
+    /* The edge report has now been turned into events, so what is still held is known,
+     * and the key that owes a repeat is added to the queue before the dispatch below
+     * reads it -- the same pass that could have seen the press sees the repeat, and a
+     * release heard by this poll disarms before it can fire one more time. */
+    ps2_kbd_repeat_tick();
     /* After the poll and before the dispatch: the reports the drain just
      * turned into queued distance become one frame's movement here, and the
      * move event this raises is what puts the cursor's rows in the set below,
@@ -5138,6 +5235,16 @@ static void ps2_log_boot_tail(int hid_devs)
     ps2_kprintf("[SIO] SIO0 console is write-only here: PCSX2 wires no host terminal to it\n");
     ps2_kprintf("[PAD] DualShock decoder ready, no SIF/IOP pad client yet  input: %d USB HID\n",
                 hid_devs);
+    /* The keyboard's cadence, on the console, because a setting that is never read is
+     * indistinguishable from one that was never set.  These are the applet's own three
+     * variables -- the same defaults the posix and Pi 400 targets ship -- and the row
+     * says which of them is currently in force, so "the key will not repeat" can be
+     * answered by looking at enabled= rather than by guessing at the code path. */
+    ps2_kprintf("[KBD] auto-repeat: enabled=%d  delay=%u us  interval=%u us  (Input applet's "
+                "*FX 11/12; a held HID key repeats from here)\n",
+                g_kbd_repeat_enabled ? 1 : 0,
+                (unsigned int)g_kbd_repeat_delay_us,
+                (unsigned int)g_kbd_repeat_interval_us);
 }
 
 /* ── Kernel Entry & Stage 1 Dispatch ────────────────────────────── */
@@ -5414,6 +5521,9 @@ void ps2_kernel_main(void)
     while (1) {
         ps2_pad_poll();
         ps2_usb_poll();
+        ps2_kbd_repeat_tick();    /* the prompt's line editor has no event queue to
+                                   * drain, so the repeat goes straight to
+                                   * ps2_shell_char() from here */
         ps2_ptr_service();      /* stage 1 has no pointer to draw, but the same
                                  * queue has to be spent or it is one big stale
                                  * jump the first time the GUI opens */

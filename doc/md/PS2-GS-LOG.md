@@ -364,3 +364,131 @@ and if the `S=` delta says the ribbon's other half is elsewhere, that is where t
 goes next rather than a second guess at the split.
 
 ---
+
+## Row 8's landing: the lattice, the register file, and which build each number came from
+
+<a name="row-8-landing"></a>
+
+**Row 8 landed on 2026-10-12 and its evidence is two different kinds of thing, so it is kept apart
+here.**  The file's own instruction counts are a property of one translation unit read off its
+object; the frame's microseconds are a property of an image run under PCSX2, and two such images ran
+that evening whose `draw=` columns are not comparable to each other.  Both name their build the same
+way (`[CFG] this image: PS2_FP=hw:cop1  PS2_GL=eegs`), and they differ in exactly one dial:
+`build/ps2-bench.log`, build Oct 12 2026 20:52:52, prints **zero** `census` rows -- the uncounted
+image -- and `build/ps2-smooth.log`, build Oct 12 2026 22:44:20, prints eighteen -- the counted one.
+Row 7 measured what the census itself costs: 84,312 us counted against 74,489 uncounted for the same
+frame.  So each triple below is differenced only against its own kind, per the specification's
+reading rule R3.
+
+*The app frame, uncounted, before and after.*  Frames 1/2/3 of the 20:52:52 image read `draw=`
+65,859 / 63,576 / 63,132 us.  The post-row-8 uncounted run survives in `build/ps2-smooth-history.tsv`
+as the archived row `2026-10-12T19:37:31Z` -- `frame1_us` 49,175, `draw_us` 46,273, and no census
+columns, which is what marks it as the same kind of build.  63,132 -> 46,273 us is 26.7% off a steady
+frame from one file; against row 7's own landing reading of 62,882 us the pair agrees to 4%, which is
+the run-to-run spread of this harness and the reason a single frame is never quoted as a triple.
+
+*The app frame, counted, and what moved inside it.*  Frames 1/2/3 of the 22:44:20 image read `draw=`
+51,816 / 49,228 / 48,659 us, and its float census is the attribution:
+
+```
+[XMBT] f_surface     8470 us
+[XMBT] census f_surface  fmul=5163 fdiv=39 fcmp=1432 fs2i=1027 fi2s=1 S=7662 dmul=930 dgen=775 D=1705
+[XMBT] hash 160 of 8192 lattice points computed
+...
+[XMBT] f_surface     5738 us
+[XMBT] census f_surface  fmul=1084 fdiv=39 fcmp=129 fs2i=1028 fi2s=6 S=2286 dmul=0 dgen=0 D=0
+[XMBT] hash 160 of 16384 lattice points computed
+```
+
+`f_surface` entered row 8 at 160,893 (row 7's landing, the same instrument) and leaves it at 2,286 --
+a 70x drop, and the largest single-column change in this port's history.  The remaining 2,286 is not
+the lattice: 2,048 of it is xmb.c's own motion instrument, the first-six-paints probe at
+`src/apps/xmb.c:2861-2866`, which walks all 1,024 grid points twice over with `* 1024.0f` and an
+`(int)` cast -- 1,024 `fmul` + 1,024 `fs2i`.  Read the census against that: `fmul` 1,084 = 1,024
+instrument + 60, `fs2i` 1,028 = 1,024 instrument + 4, and the whole residue is 2,286 - 2,048 = 238.
+The instrument lives in the `-msoft-float` unit, so its arithmetic is still libcalls and still
+counted, while the wave unit's own casts -- one `float -> int` per cell where the shader used twelve,
+`src/apps/xmb_wave.c:214-227` -- are now inline COP1 and therefore *invisible to this census*.  That
+is why the column fell so far and why 238, not 0, is the floor for as long as the probe is compiled.
+Frame 1 reads `D=1705` and 7,662 single calls because the lattice's first fill misses the sine cache
+(160 of 8,192 points new); frame 2 reads `D=0` with the same 160 misses out of 16,384 visits, which is
+the cache working, and it is the second frame's number the handbook quotes.
+
+*The register file, which is the part the source does not show.*  Row 8 is the second `-mhard-float`
+translation unit in this image, so it met the O32 `FR=0` callee-save disease on its own terms: a
+working set over ten floats, a float live across a call, or a hoisted literal is enough for the greedy
+allocator to pick `$f20-$f31`, and on this CPU the `sdc1` that "preserves" it does nothing at all.  The
+ladder, measured on `src/apps/xmb_wave.c` and recorded in `scripts/test_ps2.sh` above the
+register-file row: **52** pair stores in the first four-pass arrangement, **36** in the eight passes,
+**18** after the trig and the root were outlined, **4** with the allocator simply discouraged from
+choosing a CSR, and **0** once the shading pass's eight live values were split into two passes.  The
+control that makes the last number an instrument rather than a coincidence: compile this same source
+without `-mllvm -regalloc-csr-first-time-cost=1000000000` and 14 pair stores plus 32 CSR references
+come back.  The flag is attached to the three objects that read `PS2_FP` (`Makefile:1237-1256`:
+`ps2_builtins.ps2.o`, `vertex_stage.ps2.o`, `xmb_wave.ps2.o`), and an unknown `-mllvm` argument fails
+the compile, so a toolchain that renames it stops the build instead of reopening the hole quietly.  The
+gate is the assertion named *No callee-saved single ($f20-$f31) is referenced anywhere in the image
+(sdc1 cannot preserve one on this CPU)* -- the register file itself, not the opcode, because a function
+that merely *reads* a CSR is already broken without ever storing one.
+
+*What row 8 did not touch, recorded because it is row 9's premise.*  The same counted frame reports
+`compositor: bg=9923(480000 px) frame=13075 paint=0 blit=30755(613440 px) comp=56128` and
+`[GSTS] groups=51 qw=29721..30165 verts=7401..7512 prims=2467..2504 gs=212..1142 us | drop=0 unsplit=0
+texsw=22 texmiss=0 | cover=2..4 coverdrop=0`.  Not one of those columns moved: row 8 changed the EE's
+arithmetic and the GS stream is byte-for-byte the same shape it was.  The composite's 56.1 ms and the
+blit's 30.8 ms over 613,440 pixels are still EE work, and the steady period for this build reads
+144,075 / 141,338 / 151,696 us against the uncounted pre-row-8 build's 157,890 / 155,637 / 166,395 --
+two ranges whose difference is not attributable, for the counted/uncounted reason above, and which are
+therefore printed side by side rather than subtracted.
+
+*Gates at landing and at re-read.*  The image suite was green at both dials on the landing day and
+re-read on 2026-10-13 at **91 rows, 0 failures**; `make arm64-elf` is untouched by row 8, which never
+edited a file the Pi 400 compiles except `src/apps/xmb_wave.c`, whose guard (`-DBTRON_PS2_FP_HW`) is
+read only under the PS2 flag.
+
+---
+
+## The softfloat differential: one count, three controls, and why the count is dated
+
+<a name="softfloat-controls"></a>
+
+**`make test-ps2-softfloat` (`.build/test_ps2_softfloat`) is a differential, not a suite of
+assertions.**  It includes `src/drivers/ps2/ps2_builtins.c` textually -- the helpers are file-static,
+so there is no other way to reach them -- drives the runtime with random bit patterns mixed with
+special values, a power-of-two sweep, named ties, subnormal cancellation and overflow, and compares
+every answer to the host's own FPU bit-for-bit.  Its reading on **2026-10-13** is
+**18,384,493 comparisons, failures=0**.  The total is quoted with its date because it is a property of
+the suite, not of the runtime: two earlier readings, 15,222,125 and 15,225,197, were both in the
+handbook at once until they were dated, and the difference between them is cases that were added
+between the runs.  The invariant that does not move is `failures=0`.
+
+*Control 1 -- the rounding carry-out.*  `ps2_builtins.c:200` is
+`if (kept >> (frac + 1)) { kept >>= 1; E += 1; }`: when rounding a 53-bit significand up pushes it out
+of range, the exponent must be incremented on the way back.  Deleting the increment reports **1,488
+failures**, and the `[FAIL]` rows name `thirds` and `truncdfsf2`.  Re-run 2026-10-13; restored and
+re-gated to zero before control 2.
+
+*Control 2 -- the 64x64 multiply's middle word.*  `ps2_builtins.c:289` is
+`const uint64_t S = (uint32_t)M + (L >> 32);`: the four 32x32 partial products are recombined by
+32-bit windows, and a missing window is a wrong carry, not a wrong bit pattern.  Removing the 32-bit
+truncation reports **450,068 failures** naming `muldf3`.  Re-run the same day, one control per command,
+and the clean source restored afterwards (`git diff --stat` empty, `failures=0`).
+
+*Control 3 -- the truncate's band edge, which belongs to a different date.*  The exponent-band
+truncate `ps2_sf_fixsfsi()` (`src/drivers/ps2/ps2_fp.h:236-250`) saturates at `be >= 158`, and the
+differential checks it over every exponent field x the three mantissas that can land on a band edge x
+both signs -- 3,072 comparisons -- plus 200,000 random patterns.  Moving the saturation line to 159
+made **694 comparisons fail**, including ones the older random pools never touched, and it was then
+moved back.  That control was run when the line was written, i.e. the day the multi-word
+`uint64_t` truncate was replaced by the two-shift form; it is recorded with that date rather than
+merged into the 2026-10-13 re-run, because a control that was not re-run is not evidence that it was.
+
+*Why all three matter to this port specifically.*  The runtime is the only libm and the only
+`-fpack-struct`-free arithmetic this image has; there is no second implementation to diff against on
+the console, and no display to notice a wrong bit on.  A green total that has never been shown to be
+capable of turning red proves nothing about 18 million comparisons -- so the rule this doc follows is
+that every claim of bit-exactness in `doc/md/PS2.md` names the control that can falsify it, and each
+control is attributed to a routine (`thirds`, `truncdfsf2`, `muldf3`) rather than to the suite as a
+whole.
+
+---

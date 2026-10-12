@@ -136,13 +136,27 @@ single-precision exception the next paragraph names.  The two exceptions to
 `-march=mips2` above are *not* exceptions to this one -- `ps2_gs_reg.s` and `boot_ps2.s`
 contain no FP.
 
-One unit is built with the FPU on, by design and only for single precision:
-`src/drivers/ps2/ps2_builtins.c` is compiled `-mhard-float -DBTRON_PS2_FP_HW` (Makefile
-`PS2_FP ?= hw`, and `PS2_FP=soft` builds the same file without it).  That is permitted by
-the second half of this law rather than an exception to it: the `.d` forms stay illegal
-everywhere, and the `.s` forms are only ever emitted inside a unit whose entire public
-surface is integer-typed.  Mixing remains the hazard the next paragraph describes, so the
-sanctioned unit must never let a `float` cross its boundary.
+Three units are built with the FPU on, by design and only for single precision:
+`src/drivers/ps2/ps2_builtins.c`, `src/gl/tinygl/vertex_stage.c` and
+`src/apps/xmb_wave.c` -- the Makefile's `PS2_FP_OBJS` list, compiled `-mhard-float
+-DBTRON_PS2_FP_HW` under `PS2_FP ?= hw`, and `PS2_FP=soft` rebuilds all three without it.
+That is permitted by the second half of this law rather than an exception to it: the `.d`
+forms stay illegal everywhere, and the `.s` forms are only ever emitted inside a unit whose
+entire public surface is integer-typed.  Mixing remains the hazard the next paragraph
+describes, so a sanctioned unit must never let a `float` cross its boundary -- which is why
+the list is three *kernels* and not three *modules that happen to use floats*.
+
+Each of the three also carries the same register-allocator knob, `PS2_FP_CSR_COST` =
+`-mllvm -regalloc-csr-first-time-cost=1000000000`.  It is not a performance garnish: the
+R5900 has 32 single-precision registers and no double ones, so the O32 convention's
+callee-saved pair `$f20/$f22`--`$f30` is the whole upper half of the file, and a hard-float
+unit that keeps a value in it forces a `double`-sized spill to the stack as an even/odd
+pair -- two stores that the FPU law forbids the *image* to contain, because they are
+indistinguishable from a `.d` instruction to a byte scan.  Dropping the flag on the wave
+unit today gives 14 pair stores and 32 references to `$f20`-`$f31`, against the shipped
+object's zero of each; that is the control which says the knob is load-bearing rather than a
+relic of the first arrangement.  An unknown `-mllvm` argument fails the compile, so a
+toolchain that silently drops the option stops the build instead of re-opening the hole.
 
 Mixing is not an option either, and this is the part that makes it an ABI law rather than a
 performance note.  Under `-msoft-float`, O32 passes floating values in **integer**
@@ -170,25 +184,36 @@ the correctness:
   and so call the same routine with that argument.
 
 The validation is `make test-ps2-softfloat` (`.build/test_ps2_softfloat`): it includes the
-implementation textually and runs it against the host's own FPU over 15,222,125 comparisons
+implementation textually and runs it against the host's own FPU over 18,384,493 comparisons
+(re-measured 2026-10-13; the count moves with the suite, the invariant is `failures=0`)
 -- random bit patterns mixed with special values, a power-of-two sweep, named ties,
 subnormal cancellation and overflow -- and asserts the results are **bit-identical**.  Two
-deliberate mutations of the runtime (an off-by-one exponent, an unwindowed multiply) were
-caught with 12,356 and 460,302 failures, which is what makes the passing number mean
-something rather than prove nothing.
+deliberate mutations of the runtime were re-run the same day, one per command, each restored
+and re-gated to zero before the next: deleting the exponent increment on the rounding
+carry-out (`ps2_builtins.c:200`) reports 1,488 failures, and taking the 32-bit windowing off
+the double multiply's middle word (`:289`) reports 450,068.  The first control's `[FAIL]` rows
+name `thirds` and `truncdfsf2` and the second's name `muldf3`, so each mutation is attributable
+to a routine rather than to the suite as a whole.  The clean run was restored and re-gated
+between them.  That is what makes the passing
+number mean something rather than prove nothing.
 
-The static side lives in `scripts/test_ps2.sh` as tests 39-44: that no object *except*
-`ps2_builtins.ps2.o` contains an FP instruction at all (a leftover `.s` op elsewhere means a
-translation unit that escaped `-msoft-float`, and its arguments would arrive in registers the
-rest of the image does not use), that the image contains no double-width op and neither of
-the two single-precision encodings this CPU does not implement, that those two encodings are
-absent **byte-for-byte** as well (a mnemonic grep trusts the disassembler's naming; the
-byte scan does not), that `ps2_builtins.ps2.o` really does emit COP1 arithmetic -- so a
-stale soft-float build of it cannot pass by having no FPU code at all -- that no *named*
-symbol is undefined, and that all 32 libcalls are present.  Test 44 reads the symbol table
-into a variable first: piping `readelf` into `grep -q` would make grep exit at the first
-match, readelf die of SIGPIPE and `set -o pipefail` report that as a miss, so a symbol that
-*is* defined would fail the test.
+The static side lives in `scripts/test_ps2.sh`, whose FPU family asserts, by row name: *Only
+ps2_builtins.ps2.o, vertex_stage.ps2.o and xmb_wave.ps2.o hold COP1 instructions (every other
+unit is -msoft-float)* -- a leftover `.s` op elsewhere means a translation unit that escaped
+`-msoft-float`, and its arguments would arrive in registers the rest of the image does not use;
+*Zero double-width or EE-illegal FPU op in the image*; *No callee-saved single ($f20-$f31) is
+referenced anywhere in the image*, which is the register-file form of the pair-store law above,
+because naming the opcode would not be enough -- a function that reads a CSR without ever storing
+one is already broken, holding whatever boot code left there; that the two illegal encodings are
+absent **byte-for-byte** as well (a mnemonic grep trusts the disassembler's naming; the byte scan
+does not); that each sanctioned unit *really does* emit COP1 arithmetic -- so a stale soft-float
+build cannot pass by having no FPU code at all -- and that its compares are the ordered
+`c.olt.s` only; that no *named* symbol is undefined; and that all 32 libcalls are present.  Rows
+are cited by name, never by number: the suite has grown past the numbering its first FPU rows
+used, and today it reports 91/91 (read 2026-10-13).  One row's own mechanics are worth keeping
+in mind when writing the next: reading a symbol table through `readelf | grep -q` makes grep exit
+at the first match, readelf die of SIGPIPE and `set -o pipefail` report that as a miss, so a
+symbol that *is* defined would fail the test -- read the table into a variable first.
 
 ### What COP1 actually is, measured (Normative)
 
@@ -259,15 +284,20 @@ and plain C otherwise.  Ordered means ordered: a NaN pair makes `c.olt.s` false,
 `a < b` means in C, so the two dials agree on every input including the NaNs, and `hw` and `soft`
 cannot diverge here.
 
-Three gates hold it.  `scripts/test_ps2.sh` test 58's mnemonic sweep now carries `c.(un|ueq|ult|ule).s`
-next to `trunc.w.s`; test 60 is the same law read byte-for-byte over `.text`, one aligned
-instruction word per line, matching `funct` 0x31/33/35/37 in a `0x46` COP1 compare -- an unaligned
-hex-string grep of the same family reports 22 hits on a clean image, which is why the scan is
-word-anchored; and test 63 reads `vertex_stage.ps2.o` directly for at least six `c.olt.s` and
-none of the family, so the fix cannot be satisfied by a file that contains no compares at all.
-The control was measured: rebuilding the pre-fix `zgl.h` turns 58 and 60 red (3 byte hits) and
-makes 63 red on both halves (3 `c.olt.s` against a floor of 6, 3 `c.ule.s` against a ceiling of
-none), and the restored source is 80/80.
+Three gates hold it, cited by row name because their numbers move as the suite grows.
+*Zero double-width or EE-illegal FPU op in the image* is the mnemonic sweep, and it now carries
+`c.(un|ueq|ult|ule).s` next to `trunc.w.s`; *No COP1 compare of the unordered family anywhere in
+.text* is the same law read byte-for-byte, one aligned instruction word per line, matching
+`funct` 0x31/33/35/37 inside a `0x46` COP1 compare -- a hex-string grep that slides one character
+at a time matches a byte that is not an instruction (it found a spurious place on the clean image
+and read a run of nine instructions as ten windows), which is why the scan is word-anchored; and *vertex_stage
+.ps2.o's clip tests are ordered c.olt.s and none of the unordered family* reads that object
+directly for at least six `c.olt.s`, so the fix cannot be satisfied by a file that contains no
+compares at all -- *xmb_wave.ps2.o's compares* are the same row one TU later.  The control was
+measured when the fix landed: rebuilding the pre-fix `zgl.h` turned the byte rows red (3 hits)
+and the object row red on both halves (3 `c.olt.s` against a floor of 6, 3 `c.ule.s` against a
+ceiling of none), and the restored source went back green.  The suite reports 91/91 read
+2026-10-13; the total at the control's own date was smaller, and only its row names are stable.
 
 What the fix cost, honestly: the earlier claim in this file that `PS2_FP=hw` bought a 2x frame was
 measured on an image whose frames drew nothing, so it is withdrawn -- see *Row 7 landed* in the
@@ -680,11 +710,14 @@ did with it was decode through a format descriptor and carry the significand as 
 32-bit halves, so every `(GLint)` cast cost a chain of multi-word shifts.  A binary32 truncate is
 two shifts once the exponent field says which band the value is in, and `ps2_sf_fixsfsi()` now
 reads the field and emits 32 straight-line instructions with no call at all.  The answers are the
-same: `make test-ps2-softfloat` is bit-exact over 15,225,197 comparisons, of which 3,072 are the
-sweep added with this change (every exponent field 0..0xFF, times the three mantissas that can
-land on a band boundary, times both signs, against the host's own cast), and that sweep was shown
-to discriminate rather than merely to pass by moving the 158-exponent saturation line to 159 --
-694 comparisons failed, including ones the older random pools found -- and then moved back.
+same: `make test-ps2-softfloat` stayed bit-exact after the change, including the 3,072
+comparisons the sweep added with it (every exponent field 0..0xFF, times the three mantissas that
+can land on a band boundary, times both signs, against the host's own cast), and that sweep was
+shown to discriminate rather than merely to pass by moving the 158-exponent saturation line to
+159 -- 694 comparisons failed, including ones the older random pools found -- and then moved
+back.  The suite's *total* is deliberately not quoted here: it moves with the suite, and the one
+current reading, with its date, is the row above and in
+[`PS2-GS-LOG.md`](PS2-GS-LOG.md#softfloat-controls).
 
 The frame agrees with the fit, which is the part worth keeping: 2,479 setups x 3.4 us + 3,424
 vertices x 3.7 us + `f_surface`'s lattice 3.5 ms = 24.6 ms predicted from the two prices, against
@@ -861,7 +894,11 @@ cannot mix two builds.
 | [`src/drivers/ps2/boot_ps2.s`](file:///Users/tonpa/depot/bitedits/btron/src/drivers/ps2/boot_ps2.s) | EE reset vector, `$gp` and `$sp` setup, unrolled BSS wipe, BIOS syscall wrappers (`SetGsCrt`, `PutIMR`), jumps to `ps2_kernel_main`. |
 | [`src/drivers/ps2/ps2.ld`](file:///Users/tonpa/depot/bitedits/btron/src/drivers/ps2/ps2.ld) | Memory layout script linking `.text` at `0x00100000`, and the `ASSERT` that fails the link when `_end` reaches the stack or the 32 MB RDRAM end. |
 | [`src/drivers/ps2/ps2_gs_reg.s`](file:///Users/tonpa/depot/bitedits/btron/src/drivers/ps2/ps2_gs_reg.s) | The image's only 64-bit-GPR instructions: `ps2_gs_poke64()`/`ps2_gs_peek64()` perform the GS's single-`sd`/single-`ld` register latch. Assembled with local `.set mips3` under the shared `-march=mips2` driver; its arguments and return halves are 32-bit, so it is O32-legal on both sides. |
-| [`src/drivers/ps2/ps2_builtins.c`](file:///Users/tonpa/depot/bitedits/btron/src/drivers/ps2/ps2_builtins.c) | The whole soft-float runtime the image links against: the 32 `__*sf3`/`__*df3`/conversion libcalls clang invents at `-msoft-float -nostdlib`, a bit engine that serves both IEEE formats from 32-bit pieces, and the single-precision entry points that pick COP1 at run time.  The only unit built `-mhard-float`, and the only one allowed to contain a float instruction (tests 39-44). |
+| [`src/drivers/ps2/ps2_builtins.c`](file:///Users/tonpa/depot/bitedits/btron/src/drivers/ps2/ps2_builtins.c) | The whole soft-float runtime the image links against: the 32 `__*sf3`/`__*df3`/conversion libcalls clang invents at `-msoft-float -nostdlib`, a bit engine that serves both IEEE formats from 32-bit pieces, and the single-precision entry points that pick COP1 at run time.  One of the THREE units built `-mhard-float` -- with it `src/gl/tinygl/vertex_stage.c` and `src/apps/xmb_wave.c`, the Makefile's `PS2_FP_OBJS` -- and each of the three keeps an integer-only public surface, which is what the FPU rows of `scripts/test_ps2.sh` assert by object name. |
+| [`src/gl/tinygl/vertex_stage.c`](file:///Users/tonpa/depot/bitedits/btron/src/gl/tinygl/vertex_stage.c) | Row 7's COP1 kernel: the projection, clip-code and viewport halves of `glopVertex`, moved out so their float arithmetic runs inline on the FPU instead of reaching a libcall.  Compiled `-mhard-float` only under `PS2_FP=hw`, single precision only, its clip tests routed
+through `TGL_CLIP_LT()` so they reach the object as ordered `c.olt.s` (the gate reads the object,
+not the source), and no float lives across a call. |
+| [`src/apps/xmb_wave.c`](file:///Users/tonpa/depot/bitedits/btron/src/apps/xmb_wave.c) | Row 8's COP1 kernel: the XMB sheet's lattice step, the same shape one translation unit later.  Its working set is the reason `PS2_FP_CSR_COST` exists -- eight live values in the shading pass spilled as callee-saved pairs until the pass was split. |
 | [`src/drivers/ps2/ps2_gs.h`](file:///Users/tonpa/depot/bitedits/btron/src/drivers/ps2/ps2_gs.h) | Privileged GS registers (`0x12000000`: `PMODE`, `SMODE2`, `DISPFB1`, `DISPLAY1`, `CSR`) and GIF DMA registers (`0x1000A000`), reached only through `GS_REG_POKE`/`GS_REG_PEEK`. |
 | [`src/drivers/ps2/ps2_gs.c`](file:///Users/tonpa/depot/bitedits/btron/src/drivers/ps2/ps2_gs.c) | Hardware display initialization, VSync synchronization (`ps2_gs_vsync`), Host-to-Local GIF DMA blitter (`ps2_gs_flush`) over the desktop's own canvas, and non-destructive cursor restoration. |
 | [`src/drivers/ps2/ps2_font.h`](file:///Users/tonpa/depot/bitedits/btron/src/drivers/ps2/ps2_font.h) | 8x8 ASCII bitmap font table (128 characters) for crisp, authentic BTRON UI text rendering. |
@@ -919,22 +956,26 @@ Rather than rendering individual primitives through the GS rasterizer (which is 
    word that lands.
 
 3. **GS Transmission Setup Packet (`ps2_gs_flush`)**:
-   - A 5-QW setup packet primes the GS:
-     - `BITBLTBUF (0x50)`: `DBA = 0`, `DBW = 10` (640 / 64), `DPSM = GS_PSM_CT32 (0)`.
-     - `TRXPOS (0x51)`: `DSAX = 0, DSAY = 0`.
-     - `TRXREG (0x52)`: `RRW = 640, RRH = 448`.
-     - `TRXDIR (0x53)`: `0` (Host $\rightarrow$ Local eDRAM).
+    - A 5-QW setup packet primes the GS, with the canvas's own geometry:
+      - `BITBLTBUF (0x50)`: `DBA = 0`, `DBW = (800+63)/64 = 13` (the 832-px VRAM page), `DPSM = GS_PSM_CT32 (0)`.
+      - `TRXPOS (0x51)`: `DSAX/DSAY` = the damaged box's origin, not always (0,0).
+      - `TRXREG (0x52)`: `RRW/RRH` = that box, widened to an even `RRW` (CT32) and to whole quadwords (4 px) so the stream has a row pitch to follow.
+      - `TRXDIR (0x53)`: `0` (Host $\rightarrow$ Local eDRAM).
+    - The source half is left at zero knowingly: a Host-to-Local IMAGE transfer ignores `SBA`/`SBW`/`SPI` because the source *is* the quadword stream, so the destination half is the measured half.
 
 4. **Hardware Swizzling on Arrival**:
-   - The canvas is streamed via DMAC Channel 2 in 8 chunks of 8,960 quadwords with `GIFTAG(FLG = IMAGE)`.
-   - The GS internal blitter automatically and correctly swizzles linear RDRAM pixels into eDRAM pages and blocks on arrival.
+    - The pixels stream as `GIFTAG(FLG = IMAGE)` packets over DMAC channel 2, chunked at `CHUNK_QWC` = 8,000 quadwords because `D2_QWC` is a 12-bit field -- 15 chunks for a whole 800x600 canvas, one for any box up to 32,000 px.  A narrow rectangle uploads one row at a time (an IMAGE transfer carries no row pitch), a full-width band uploads one rectangle.
+    - The GS internal blitter automatically and correctly swizzles linear RDRAM pixels into eDRAM pages and blocks on arrival.
 
-5. **Verified NTSC Video Timings**:
-   - `ps2_set_gs_crt(1, 2, 0)`: Interlaced, NTSC, Field mode.
-   - `PMODE = 0xFF63ULL`: Circuit 1 + Circuit 2 enabled, `SLBG = 0` (Framebuffer output selected).
-   - `SMODE2 = 0x01ULL`: Interlaced, Field mode.
-   - `DISPFB1` & `DISPFB2 = 0x1400ULL`: Base address page 0 (`FBP = 0`), buffer width 10 blocks (`FBW = 10`), 32-bit RGBA (`PSM = 0`).
-   - `DISPLAY1` & `DISPLAY2 = 0x001bf9ff0983227cULL`: $DX=636$, $DY=50$, $MAGH=3$ (4x), $MAGV=1$ (2x), $DW=2559$, $DH=447$.
+5. **Video timings: three arms, one default.**  The shipped default is *not* the NTSC frame mode most PS2 prose assumes; the reason is an emulator fact, and it is worth stating precisely because it decides what a screenshot means:
+
+    | mode | `ps2_set_gs_crt` | `SMODE2` | `DISPFB1/2` | `DISPLAY1/2` |
+    |:---|:---|:---|:---|:---|
+    | **800x600 on a 720p progressive raster** (default) | `(0, 0x52, 0)` | `0x00` (prog) | `FBP 0, FBW 13, PSM CT32` | `DX 420 DY 40, MAGH 0 MAGV 0, DW 799 DH 599` |
+    | DTV 480p | `(0, 0x50, 0)` | `0x00` | `FBP 0, FBW 10, PSM CT32` | `DX 232 DY 35, MAGH 1 MAGV 0, DW 1439 DH 479` |
+    | NTSC 640x448 frame mode (optional arm) | `(1, 2, 1)` | `0x03` (INT+FFMD) | `FBP 0, FBW 10, PSM CT32` | `DX 636 DY 50, MAGH 3 MAGV 0, DW 2559 DH 447` |
+
+    `PMODE = 0xFF63` in all three: Circuit 1 + Circuit 2 enabled, `SLBG = 0`, so the frame buffer is the output, and `BGCOLOR` (24, 48, 80) fills the raster outside `DW/DH`.  WHY the default is a 720p timing carrying an unscaled 800x600 window instead of a hardware-correct VESA 800x600@60 mode word: PCSX2 keys its whole CRT geometry off `SMODE1`'s `CMOD`/`LC` and gives every VESA mode the one 640x480 table entry (`GSState.cpp` `VideoModeOffsets[2]`), which `GetResolution()` then clamps the output to -- so a VGA timing can only ever show 640 of our 800 columns and 480 of our 600 rows, and its `DY=25` reads as a −9-line offset because the VESA entry expects `baseDY=34`.  The 720p entry is 1280x720 with `baseDY=24`, so the same canvas comes out unclipped and unshifted; on a real PS2 it paints 800x600 into the top-left of a 720p frame.  See *Video timing* in [`doc/txt/PS2.txt`](../txt/PS2.txt) chapter 18.
 
 6. **Non-Destructive Cursor Restoration**:
    - Mouse cursor drawing backs up background pixels into `cursor_saved[16 * 16]`. Erasing the cursor restores the exact original background pixels with zero smearing or artifacts.
@@ -1315,6 +1356,77 @@ pipeline sits inside an evaluated `[ $(...) ]`, where the status is consumed by 
 
 
 
+
+**The six standing laws of the present path.**  5c did not merely turn the GS on; it decided six
+things that every later increment has to obey, and three of the six exist to prevent a failure with
+no symptom on a console.  They are stated in full in
+[`doc/txt/PS2.txt`](../txt/PS2.txt) chapter 15 and re-stated here in the short form a driver author
+needs while editing the present path:
+
+* **15a — activation installs the *linked* pipeline and names itself.**  `gl_init()`'s
+  `GL_BACKEND_EEGS` arm takes `g_gl = &g_tinygl_ops` and reports the backend as EEGS: the GS stage
+  hangs on TinyGL's own `draw_triangle_*` hooks, so the CPU front end still builds vertices,
+  clipping, textures and state and only the span loops are replaced.  Anything that asks "is the
+  CPU pipeline live?" asks `gl_tinygl_pipeline()` -- one predicate, true for TINYGL *and* EEGS --
+  because `|| EEGS` written six times is six places to forget the seventh.
+* **15b — the order on the bus is canvas, environment, primitives, so the stream is staged.**  The
+  recorder hands each full group to its sink while the app still draws, and the composite that
+  drives the drawing runs *before* `ps2_gs_upload()`.  A sink that went straight to DMAC ch2 would
+  put every triangle into VRAM and then bury it under the canvas's stale copy of the same
+  rectangle.  `src/gl/eegs_present.c` therefore owns a per-frame staging buffer; the DMA stays one
+  send per group, because staging changes WHEN a group is sent, never HOW.  Capacity is measured,
+  not modelled: the estimate was ~13,700 quadwords a frame, the frame is 29,787, and the counter
+  added for exactly that said so on the first boot with `drop=42`.
+* **15c — one layer, and it is a property of the window.**  `egl_create_window_surface()` marks the
+  window `gl_layer` when the GS is live; the composite still calls its paint (that is what records
+  the stream) and no longer blits its client pixmap into the canvas.  The second half has the
+  consequence: the canvas stops holding a picture of the layer *at all*, so a banded pass must
+  re-record the layer underneath it -- `wnd_damage_needs_paint()` answers TRUE when a layer window
+  intersects the damage, and the walk re-paints the layer window even when its `img_valid` is TRUE.
+* **15d — what is drawn over the layer is re-uploaded after it, one rect at a time, and only by a
+  producer that paints its whole rect opaquely.**  The accumulator is a bounded *list* (eight
+  entries, `coverdrop=` in `[GSTS]`), never a union: the panel's rows 0-28 unioned with the last 40
+  is the whole canvas, and re-uploading a union replaces the entire layer with the canvas's stale
+  copy.  A producer that leaves most of its box alone -- the pointer sprite is exactly that -- does
+  not qualify, which is why the pointer is invisible inside a GS window and why increment 6 is a
+  textured quad, not another upload.
+* **15e — the environment's four negotiation words have one answer each, and only ALPHA needed a
+  fact.**  `FRAME` names the page the PCRTC already reads (page 0, FBW 13, CT32); `ZBUF` sits at the
+  last 8 KB page above every plane the allocator has handed out, `ZMSK 1` while `TEST.ZTEN` is 0, so
+  its only duty is not to be someone else's address; `TEST` is 0; `ALPHA` is
+  `(Cs - Cd) * As + Cd` spelled in the GS's own selects.  The four field codes are named in
+  `ps2_gs_pack.h` because position 3 is an *alpha* select where 0 means As while the other three are
+  *colour* selects where 0 means Cs -- the same numeral does not mean the same thing in the four
+  places, and writing the destination select as Cs costs 2 and one `[FAIL]`.
+* **15f — one GL target, process-wide.**  `g_gl` is a single global and TinyGL's `ZBuffer` one
+  static pair: last surface created wins, no per-window backend choice exists to fall back on.
+  A second GL window opened while a layer exists draws into the FIRST window's rect, which is why
+  `glgears` stays on the CPU.  This is a limit of the port, not of the GS.
+
+What 5c does not close, stated so nobody has to rediscover it: the pointer and any overlay that is
+not an opaque rectangle (increment 6); `glClear()`, which is TinyGL's own framebuffer fill and NOT a
+primitive, so the layer's background is canvas pixels showing through wherever a triangle does not
+land; 15f's one environment and one frame buffer; and `D2_QWC` being a 12-bit field while the canvas
+upload chunks at 8,000 quadwords.
+
+**The current baseline, and which build it belongs to.**  Two dials and two dates, kept apart
+because they are routinely confused.  The artifact on disk is `btron-ps2.elf`, 5,966,580 bytes at
+01:27 on 2026-10-13, built `PS2_GL=tinygl PS2_FP=hw` -- read off `.build/ps2-gl.stamp` and
+`.build/ps2-fp.stamp`, the two files whose *contents* the Makefile compares before it will trust an
+object.  A size belongs to a moment, not to a configuration: this handbook is itself a payload of
+`/SYS`, so editing it rebuilds `btron_sys.vol` and the image around it, which is why the
+specification's chapter 22 records 5,967,604 bytes for 2026-10-12 and this line records a different
+number for the 13th.  The frame numbers below are NOT from that image: they come from the
+`PS2_GL=eegs PS2_FP=hw:cop1` run its own `[CFG]` row names, on 2026-10-12.  One steady XMB frame on
+that build costs composite 56,128 us + app 46,273 us + present (`upload=`) 1,031 us inside one
+149,308 us period, and the same frame's float census, on a counted build, reads `f_surface` 2,286 /
+`f_ribbon` 70,911 / `f_menu` 32,798 single-precision calls -- 2,048 of `f_surface`'s being xmb.c's
+own motion instrument.  Rows 7 and 8 are what moved those census columns down from 160,893 and
+185,204; the pair-store ladder, the counted-versus-uncounted frame times and the wall-clock period
+are evidence, and they are in
+[`PS2-GS-LOG.md`](PS2-GS-LOG.md#row-8-landing).  Per the specification's reading rule R3, a count
+and a microsecond never come from the same build, and no number above is comparable to one printed
+before rows 7 and 8 landed.
 
 ### 2.2 DualShock 2 Controller Driver (`ps2_pad`)
 

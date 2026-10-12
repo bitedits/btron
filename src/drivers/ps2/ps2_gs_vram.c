@@ -40,6 +40,30 @@ int gs_vram_take(gs_vram_t *v, uint32_t bytes, uint32_t *out_byte)
     return 0;
 }
 
+uint32_t gs_vram_tex_bytes(uint32_t w_texels, uint32_t h_texels)
+{
+    /* CT32: four bytes a texel, and the width field is a whole number of 64-texel units, so the
+     * plane the GS addresses is at least as wide as the unit even when the picture is not. */
+    uint32_t w = (w_texels < 64u) ? 64u : w_texels;
+    uint32_t bytes = w * h_texels * 4u;
+
+    return (bytes + GS_PAGE_TEX_PLANE - 1u) / GS_PAGE_TEX_PLANE * GS_PAGE_TEX_PLANE;
+}
+
+int gs_vram_take_tex(gs_vram_t *v, uint32_t bytes, uint32_t *out_byte)
+{
+    uint32_t span;
+
+    if (bytes == 0 || v == 0 || out_byte == 0) return -1;
+
+    span = (bytes + GS_PAGE_TEX_PLANE - 1u) / GS_PAGE_TEX_PLANE * GS_PAGE_TEX_PLANE;
+    if (v->next + span > GS_VRAM_BYTES) return -1;
+
+    *out_byte = v->next;
+    v->next  += span;
+    return 0;
+}
+
 int gs_vram_fba(uint32_t byte, uint32_t *out_fba)
 {
     uint32_t page;

@@ -642,6 +642,13 @@ void gl_draw_triangle_fill(GLVertex* p0, GLVertex* p1, GLVertex* p2) {
 		eegs_tri_state_t st = gs_state(smooth, textured, fill_blended);
 		eegs_vertex_t v[3];
 
+		/* 5b: the plane this triangle samples, if its bytes ever got a VRAM address.  Pointing the
+		 * stream at it is what makes `TEX0` name this sheet rather than the last one bound, and a
+		 * plane that is missing -- an upload the registry could not place -- reaches the stage as
+		 * 0, which clears `TME` and counts the primitive instead of sampling the page `TEX0`
+		 * happens to hold. */
+		eegs_texture(textured ? gs_tex_find(im->pixmap) : NULL);
+
 		gs_vertex(&v[0], &p0->zp, flat, textured);
 		gs_vertex(&v[1], &p1->zp, flat, textured);
 		gs_vertex(&v[2], &p2->zp, flat, textured);

@@ -6,7 +6,7 @@
  * every expectation was written from the GS field tables before the code ran.
  *
  * What is under test here is not the encodings -- `gs_pack_giftag`, `gs_pack_xyz2` and the rest
- * have their own hand literals in test_ps2_gs_pack.c and test_ps2_gs_rec.c -- but the four things
+ * have their own hand literals in test_ps2_gs_pack.c and test_ps2_gs_rec.c -- but the five things
  * only the raster stage can get wrong:
  *
  *   1. which PRIM word a triangle asks for, i.e. op 3 with IIP/TME/ABE following the GL state and
@@ -16,7 +16,10 @@
  *   3. that a repeated state does not close the group -- the law that keeps a ribbon's 1,828
  *      triangles in one packet instead of 1,828 packets of three vertices;
  *   4. that a state change does, because the GIF tag carries the PRIM and one tag cannot describe
- *      two primitive states.
+ *      two primitive states;
+ *   5. from 5b, the texture switch: which group a plane change becomes, what order its three
+ *      registers travel in, that a repeated plane costs nothing, and that a textured primitive
+ *      with no plane of its own loses `TME` rather than sampling the page the stream left behind.
  *
  * The buffer is 64 quadwords (the test's own #define, as in increment 4's gate), which is what
  * makes the last check also prove that a group cut by capacity never lands mid-triangle.
@@ -83,6 +86,14 @@ static const uint64_t k_prim_point    = 0x200ULL;
  * and digit 12 a 1+4+8 = D -- and NREG[63:60] = 4. */
 static const uint64_t k_tag_tri_stb = 0x412DC00000008000ULL;
 
+/* The AD group's tag, by hand: NLOOP[14:0]=3, EOP[15], ID[57:48]=0, PRE[46]=0, PRIM[57:47]=0 --
+ * this group draws nothing -- and NREG[63:60]=1.  The same shape send_trx_setup_at() sends for the
+ * canvas's four registers, which is the proof the shape has on the machine. */
+static const uint64_t k_tag_ad3 = 0x1000000000008003ULL;
+
+/* A smooth, blended TRI with TME cleared: 3 + 8 + 64 + 512. */
+static const uint64_t k_prim_tri_untex = 0x24BULL;
+
 static int s_checks, s_failures;
 
 static void check(const char *what, int ok)
@@ -114,6 +125,21 @@ static eegs_vertex_t vert(float x, float y, float s, float t, uint32_t rgba)
     v.t = t;
     v.rgba = rgba;
     return v;
+}
+
+/* A texture plane whose three words are sentinels.  This stage's job is to deliver the registry's
+ * words in a group of their own, not to derive them, so they are handed over as they came: values
+ * computed by gs_pack_tex0() here would be compared against a copy of themselves, proving only
+ * that a struct field survives a function call.  The derivation is test_ps2_gs_tex.c's gate. */
+static gs_tex_t plane_words(uint64_t clamp, uint64_t tex0, uint64_t tex1)
+{
+    gs_tex_t t;
+
+    memset(&t, 0, sizeof t);
+    t.clamp = clamp;
+    t.tex0  = tex0;
+    t.tex1  = tex1;
+    return t;
 }
 
 /* One triangle, its thirteen quadwords spelled out: the tag, then for each vertex the PRIM, the
@@ -313,6 +339,8 @@ static void test_cut_is_always_whole_triangles(void)
  * next frame, and the counters a bench reads are per-frame. */
 static void test_frame_boundary(void)
 {
+    const gs_tex_t a = plane_words(0x0000000102030405ULL, 0x060708090A0B0C0DULL,
+                                  0x0E0F101112131415ULL);
     eegs_vertex_t v[3];
 
     start();
@@ -327,6 +355,8 @@ static void test_frame_boundary(void)
     start();
     check("a new frame starts with no counters and no open group",
           eegs_prims() == 0u && eegs_verts() == 0u && gs_rec_sends() == 0u);
+    check("its texture counters start empty too",
+          eegs_tex_switches() == 0u && eegs_tex_missing() == 0u);
     eegs_triangle(v, k_stb);
     /* The state is the same word as the last frame used, and yet it must be re-sent: the recorder
      * has no group, so a group has to be opened with a tag that carries it. */
@@ -334,6 +364,93 @@ static void test_frame_boundary(void)
     check("the same state after a reset still opens a group", s_cap_i == 1);
     if (s_cap_i < 1) return;
     check_word("with the state it asked for", gs_vq(s_cap[0], 1u, 0u), k_prim_tri_stb);
+
+    /* And a plane the previous frame pointed at has to be pointed at again: the frame's own
+     * environment packet writes TEX0 for the window's default, so a switch group is per-frame
+     * state and not live hardware state. */
+    start();
+    eegs_texture(&a);
+    eegs_triangle(v, k_stb);
+    eegs_frame_end();
+    start();
+    eegs_texture(&a);
+    eegs_triangle(v, k_stb);
+    eegs_frame_end();
+    check("so the second frame pays its own switch group", s_cap_i == 2);
+    if (s_cap_i < 2) return;
+    check_word("and the group it opens with is the AD tag", gs_qw(s_cap[0], 0u), k_tag_ad3);
+}
+
+/* 5b: the texture switch.
+ *
+ * A plane change is three AD writes in a group of its own, sent between the vertex groups: the
+ * environment packet that could carry them is written once per frame and this port's frame binds
+ * two sheets.  Their order is ps2_gs_env.c's trio -- CLAMP, TEX0, TEX1 -- so the same three
+ * registers travel the same way in both places.
+ */
+static void test_texture_switch(void)
+{
+    const gs_tex_t a = plane_words(0x9999AAAABBBBCCCCULL, 0x1111222233334444ULL,
+                                  0x5555666677778888ULL);
+    eegs_vertex_t v[3];
+
+    start();
+    v[0] = vert(0.0f, 0.0f, 0.0f, 0.0f, 0xFFFFFFFFu);
+    v[1] = vert(64.0f, 0.0f, 64.0f, 0.0f, 0xFFFFFFFFu);
+    v[2] = vert(0.0f, 64.0f, 0.0f, 64.0f, 0xFFFFFFFFu);
+
+    eegs_texture(&a);
+    eegs_triangle(v, k_stb);
+    eegs_frame_end();
+
+    check("the switch is a group before the vertices it applies to", s_cap_i == 2);
+    if (s_cap_i < 2) return;
+    check_word("its tag", gs_qw(s_cap[0], 0u), k_tag_ad3);
+    check_word("its one REGS nibble is AD", gs_regs_of(s_cap[0]), 0x0Eu);
+    check("so it is one tag plus three register quadwords", s_cap_n[0] == 7u);
+    check_word("CLAMP first", gs_qw(s_cap[0], 1u), a.clamp);
+    check_word("  at GP offset 0x08", gs_upper_of(s_cap[0], 1u), 0x08u);
+    check_word("TEX0 second", gs_qw(s_cap[0], 2u), a.tex0);
+    check_word("  at GP offset 0x06", gs_upper_of(s_cap[0], 2u), 0x06u);
+    check_word("TEX1 third", gs_qw(s_cap[0], 3u), a.tex1);
+    check_word("  at GP offset 0x14", gs_upper_of(s_cap[0], 3u), 0x14u);
+    check_word("and the group after it is the textured primitive",
+               gs_vq(s_cap[1], 1u, 0u), k_prim_tri_stb);
+    check("one plane change is one switch counted", eegs_tex_switches() == 1u);
+    check("and no primitive lost a texture", eegs_tex_missing() == 0u);
+
+    /* The law that keeps a ribbon in one packet: pointing at the plane the stream already names
+     * costs no group and closes no vertex group. */
+    start();
+    eegs_texture(&a);
+    eegs_triangle(v, k_stb);
+    eegs_texture(&a);
+    eegs_triangle(v, k_stb);
+    eegs_frame_end();
+    check("a repeated plane pays nothing: one switch group and one vertex group",
+          s_cap_i == 2);
+    if (s_cap_i < 2) return;
+    check("and the two triangles are one group of six vertices",
+          (gs_qw(s_cap[1], 0u) & 0x7FFFu) == 6u && s_cap_n[1] == 25u);
+    check("counted once", eegs_tex_switches() == 1u);
+
+    /* Pointing at nothing sends nothing -- an untextured primitive reads no texture whatever TEX0
+     * holds -- but it does clear the stream's plane, which is what stops the *next* textured
+     * triangle from sampling the page the last switch left there. */
+    start();
+    eegs_texture(&a);
+    eegs_triangle(v, k_stb);
+    eegs_texture(NULL);
+    eegs_triangle(v, k_stb);
+    eegs_frame_end();
+    check("no group for the plane of none, but the open group splits on the PRIM",
+          s_cap_i == 3);
+    if (s_cap_i < 3) return;
+    check_word("the triangle before it kept TME", gs_vq(s_cap[1], 1u, 0u), k_prim_tri_stb);
+    check_word("and the one after it lost it", gs_vq(s_cap[2], 1u, 0u), k_prim_tri_untex);
+    check("still one switch emitted", eegs_tex_switches() == 1u);
+    check("and the textured primitive with no plane is counted, not drawn from a stale page",
+          eegs_tex_missing() == 1u);
 }
 
 int main(void)
@@ -348,6 +465,7 @@ int main(void)
     test_lines();
     test_cut_is_always_whole_triangles();
     test_frame_boundary();
+    test_texture_switch();
 
     printf("  checks=%d failures=%d\n", s_checks, s_failures);
     if (s_failures == 0) {

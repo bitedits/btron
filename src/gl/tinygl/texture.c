@@ -4,6 +4,29 @@
 
 #include "zgl.h"
 
+#if defined(BTRON_PS2_TARGET)
+#include "../../drivers/ps2/ps2_gs_tex.h"
+
+/* Row 5b of doc/md/PS2.md: a plane of texels the application has just uploaded is given its GS
+ * VRAM address, and its bytes cross the bus, here and not in the presentation path -- an
+ * application uploads and draws in the same frame, so a drain at present would put the primitives
+ * that sample the plane ahead of the transfer that fills it.
+ *
+ * The key is `im->pixmap`, which is what a draw call can ask about later (clip.c's GS adapter),
+ * and the geometry is the pair TinyGL already keeps: the uploaded extent and the power-of-two
+ * plane behind it (`gl_image_alloc()`), because the GS addresses the padded one.  The registry
+ * needs no room and the VRAM no page for a plane it is shown twice: a re-upload re-plans nothing
+ * and only re-crosses the bytes. */
+static void gl_tex_plane_publish(const GLImage *im)
+{
+	if (im->pixmap == NULL) return;
+	gs_tex_register(im->pixmap, (uint32_t)im->xsize, (uint32_t)im->ysize,
+	                (uint32_t)im->xsize_pad, (uint32_t)im->ysize_pad);
+}
+#else
+static void gl_tex_plane_publish(const GLImage *im) { (void)im; }
+#endif
+
 static GLTexture* find_texture(GLint h) {
 	GLTexture* t;
 	GLContext* c = gl_get_context();
@@ -160,6 +183,8 @@ static void gl_image_store(GLImage* im, const GLubyte* pixels, GLint nch) {
 	for (y = 0; y < im->ysize; y++)
 		gl_convert_row_to_8A8R8G8B(im->pixmap + (GLint)((size_t)y * im->xsize_pad), im->xsize_pad,
 								  pixels + (GLint)((size_t)y * im->xsize * nch), im->xsize, nch);
+
+	gl_tex_plane_publish(im);
 }
 
 /* Hand the rasterizer everything it needs to sample one image: its plane and the three
@@ -342,6 +367,7 @@ void glopCopyTexImage2D(GLParam* p) {
 			data[i + j * im->xsize_pad] = c->zb->pbuf[((i + x) % (c->zb->xsize)) + ((j + y) % (c->zb->ysize)) * (c->zb->xsize)];
 		}
 #endif
+	gl_tex_plane_publish(im);
 }
 
 /*

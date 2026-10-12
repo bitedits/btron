@@ -15,6 +15,8 @@
 
 #include <btron/types.h>     /* BTRON_PIXEL_FB, the canvas's byte order */
 #include "ps2_gs_env.h"      /* the environment packet, and apply's argument type */
+#include "ps2_gs_pack.h"     /* the field encoders the blit path now builds its words with */
+#include "ps2_gs_tex.h"      /* the texture-plane registry this file is the bus for */
 
 /* The canvas the GS is fed from, and the one the desktop composites into.
  *
@@ -112,36 +114,54 @@ void ps2_gs_gif_send(const void *packet, uint32_t qwc)
     __asm__ volatile("" : : : "memory");
 }
 
-/* One Host->Local blit setup packet (5 QWs): where in VRAM, how big, which way */
-static void send_trx_setup(int dx, int dy, int w, int h)
+/* One Host->Local setup packet (5 QWs) into an arbitrary VRAM block: where in VRAM, how big,
+ * which way.  `dba` is in the 256-byte units BITBLTBUF.DBA counts, not the 8 KB units FRAME.FBA
+ * does -- the two field units are ps2_gs_vram.h's, and a caller that mixes them is off by 32x.
+ *
+ * Moved onto the increment-5b encoders from written-out shifts.  The words are the same ones the
+ * canvas has been uploaded with since before the encoders existed -- `make test-ps2-gs-pack`
+ * compares the encoder output against these literals -- so the already-working path is the
+ * instrument for the encoders rather than a second copy of their arithmetic. */
+static void send_trx_setup_at(uint32_t dba, uint32_t dbw, int dx, int dy, int w, int h)
 {
     static uint64_t setup_pkt[5 * 2] __attribute__((aligned(16)));
     uint64_t *p = (uint64_t *)UNCACHED(setup_pkt);
+    const uint64_t regs[4] = { GS_GP_BITBLTBUF, GS_GP_TRXPOS, GS_GP_TRXREG, GS_GP_TRXDIR };
+    uint32_t i;
 
-    /* eDRAM buffer width in units of 64 pixels (800 px -> 13 units = 832) */
-    uint32_t fbw = (PS2_SCREEN_WIDTH + 63) / 64;
+    /* NLOOP 4, EOP, FLG=PACKED, NREG=1 with the single AD nibble, PRE clear because this group
+     * draws nothing: the shape four register writes need and no more. */
+    p[0] = gs_pack_giftag(4u, 1u, 0u, 0u, GS_FLG_PACKED, 1u);
+    p[1] = GS_NIB_AD;
 
-    /* QW0: GIFTAG (4 registers, EOP=1, FLG=PACKED(0), NREG=1, REGS=A+D(0x0E)) */
-    p[0] = (4ULL << 0) | (1ULL << 15) | (0ULL << 58) | (1ULL << 60);
-    p[1] = 0x0EULL;
+    for (i = 0; i < 4u; i++) {
+        uint64_t word;
 
-    /* QW1: BITBLTBUF (0x50) - SBA=0, SBW=0, SPSM=0, DBA=0, DBW=13 (832/64), DPSM=0 (CT32) */
-    p[2] = ((uint64_t)fbw << 48) | ((uint64_t)GS_PSM_CT32 << 56);
-    p[3] = 0x50ULL;
-
-    /* QW2: TRXPOS (0x51) - DSTXPOS=dx, DSTYPOS=dy (SRC is the incoming stream) */
-    p[4] = ((uint64_t)(uint32_t)dx << 32) | ((uint64_t)(uint32_t)dy << 48);
-    p[5] = 0x51ULL;
-
-    /* QW3: TRXREG (0x52) - RRW=w, RRH=h */
-    p[6] = ((uint64_t)(uint32_t)w << 0) | ((uint64_t)(uint32_t)h << 32);
-    p[7] = 0x52ULL;
-
-    /* QW4: TRXDIR (0x53) - Host -> Local (0) */
-    p[8] = 0ULL;
-    p[9] = 0x53ULL;
+        switch (i) {
+        case 0u: /* source half unused by a Host->Local stream; destination is the given block */
+            word = gs_pack_bitbltbuf(0u, 0u, 0u, dba, dbw, GS_PSM_CT32);
+            break;
+        case 1u:
+            word = gs_pack_trxpos(0u, 0u, (uint32_t)dx, (uint32_t)dy, 0u);
+            break;
+        case 2u:
+            word = gs_pack_trxreg((uint32_t)w, (uint32_t)h);
+            break;
+        default:
+            word = gs_pack_trxdir(0u);   /* Host -> Local */
+            break;
+        }
+        p[2u + 2u * i] = word;
+        p[3u + 2u * i] = regs[i];
+    }
 
     ps2_gs_gif_send(setup_pkt, 5);
+}
+
+/* The canvas's own rectangle: page 0, the width field the screen rounds up to. */
+static void send_trx_setup(int dx, int dy, int w, int h)
+{
+    send_trx_setup_at(0u, (PS2_SCREEN_WIDTH + 63u) / 64u, dx, dy, w, h);
 }
 
 /* Stream pixel data as IMAGE-format packets.  QWC counts quadwords, so a row of
@@ -156,7 +176,7 @@ static void send_image_stream(const void *src, uint32_t qwc)
 
     while (qwc > 0) {
         uint32_t n = (qwc > CHUNK_QWC) ? CHUNK_QWC : qwc;
-        tag[0] = ((uint64_t)n << 0) | (1ULL << 15) | (2ULL << 58); /* IMAGE mode, EOP=1 */
+        tag[0] = gs_pack_giftag(n, 1u, 0u, 0u, GS_FLG_IMAGE, 0u);
         tag[1] = 0ULL;
         ps2_gs_gif_send(img_tag, 1);
         ps2_gs_gif_send(p, n);
@@ -203,6 +223,38 @@ void ps2_gs_upload(int x, int y, int w, int h)
 void ps2_gs_flush(void)
 {
     ps2_gs_upload(0, 0, PS2_SCREEN_WIDTH, PS2_SCREEN_HEIGHT);
+}
+
+/* Cross one texture plane into VRAM (row 5b).
+ *
+ * The whole padded plane transfers, not the uploaded extent: `TEX0` describes the padded one, so
+ * the padding has to be this plane's own transparent black rather than whoever's texels happen to
+ * sit past RRW/RRH.  Nothing converts the pixels on the way, which is ps2_gs_tex.h's second law.
+ *
+ * One rectangle and one stream: a plane is contiguous in both memories, at the same row pitch
+ * (`TBW` x 64 is the padded width, which is what the plane is), so unlike a narrow canvas band it
+ * needs no per-row setup.
+ *
+ * The source is TinyGL's own `calloc`'d plane, and a DMAC quadword transfer needs it 16-byte
+ * aligned: the PS2 heap returns every payload on a 16-byte boundary and checks that in the
+ * translation unit that allocates it (src/cores/core_ps2.c's `ps2_heap_header_is_16`), which is
+ * what lets these three lines stream a heap buffer instead of staging one. */
+static void ps2_gs_tex_upload(const gs_tex_t *t)
+{
+    if (t == 0 || t->plane == 0 || t->qwc == 0u) return;
+
+    send_trx_setup_at(t->tba, t->tbw, 0, 0, (int)t->pad_w, (int)t->pad_h);
+    send_image_stream(t->plane, t->qwc);
+}
+
+/* The registry's sink: the plane whose bytes just came into existence crosses now, before any
+ * primitive can be recorded that samples it, and its entry stops being `pending` the moment the
+ * transfer has been taken.  Installed by ps2_gs_init() below, which is the only place in this
+ * driver that knows channel 2 exists -- ps2_gs_tex.c plans words and never sends them. */
+static void ps2_gs_tex_sink(uint32_t index)
+{
+    ps2_gs_tex_upload(gs_tex_at(index));
+    gs_tex_uploaded(index);
 }
 
 void ps2_gs_set_mode(int mode)
@@ -300,16 +352,22 @@ void ps2_gs_init(uint32_t width, uint32_t height)
     D_CTRL |= 1; /* DMAE = 1 */
     D2_CHCR = 0;
 
-    /* 5. Clear RDRAM framebuffer to deep console slate navy */
+    /* 5. The texture-plane registry, hung on this channel: one cursor for the canvas reservation
+     * and every plane, and a sink so a plane crosses the moment its bytes exist rather than at
+     * some later present that would already have sampled it. */
+    gs_tex_init();
+    gs_tex_install_sink(ps2_gs_tex_sink);
+
+    /* 6. Clear RDRAM framebuffer to deep console slate navy */
     uint32_t *fb = ps2_fb();
     for (int i = 0; i < PS2_SCREEN_WIDTH * PS2_SCREEN_HEIGHT; i++) {
         fb[i] = BTRON_PIXEL_FB(0xFF121B29u);
     }
 
-    /* 6. Initial hardware flush to GS eDRAM */
+    /* 7. Initial hardware flush to GS eDRAM */
     ps2_gs_flush();
 
-    /* 7. Initialize text console cursor */
+    /* 8. Initialize text console cursor */
     ps2_gs_text_init();
 }
 

@@ -58,6 +58,21 @@ uint32_t gs_vram_frame_bytes(uint32_t pixels_w, uint32_t pixels_h, uint32_t bpp)
  * untouched when the request is empty or would run past the end of VRAM. */
 int gs_vram_take(gs_vram_t *v, uint32_t bytes, uint32_t *out_byte);
 
+/* The allocation unit of a texture plane.  A swizzled CT32 picture is built out of 4 KB blocks
+ * of 32x32 texels inside 8 KB pages, and its address enters two fields with different units --
+ * TEX0.TBA and BITBLTBUF.DBA count 256-byte blocks, TEX0.TBW counts 64-texel buffer widths -- so
+ * a plane is rounded to 16 KB: a whole number of blocks, of pages, and of pages in even pairs,
+ * which means no two planes ever share either unit.  The cost is nil for the two planes this
+ * port has (512x512 and 128x128 are exact multiples of it), and it is the difference between a
+ * narrow future plane and its neighbour's texels arriving in the same block. */
+#define GS_PAGE_TEX_PLANE 16384u
+
+/* A texture plane of w x h CT32 texels, rounded as above. */
+uint32_t gs_vram_tex_bytes(uint32_t w_texels, uint32_t h_texels);
+
+/* Reserve a texture plane.  Same law as gs_vram_take, on the 16 KB unit. */
+int gs_vram_take_tex(gs_vram_t *v, uint32_t bytes, uint32_t *out_byte);
+
 /* The same offset as the two register fields.  -1 when it cannot be expressed: an offset that
  * is not a whole 8 KB page is not a rounding problem for FBA, it is a plan that does not fit,
  * so the caller has to change the layout rather than silently move the buffer. */

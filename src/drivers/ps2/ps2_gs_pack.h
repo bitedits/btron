@@ -165,6 +165,18 @@ uint64_t gs_pack_tex0(uint32_t tba, uint32_t tbw, uint32_t psm, uint32_t tw, uin
 uint64_t gs_pack_tex1(uint32_t lcm, uint32_t mxl, uint32_t mmag, uint32_t mmin,
                       uint32_t mtba, uint32_t l, uint32_t k);
 
+/* MMAG/MMIN arguments with names, so a caller says what it means instead of passing a 1 that
+ * only this header's comment can decode.  MMIN has eight values (the mipmap chain this port does
+ * not build); 0 is the no-mipmap nearest, which is the only one that means anything here. */
+#define GS_FILTER_NEAREST 0u
+#define GS_FILTER_LINEAR  1u
+
+/* CLAMP WMS/WMT arguments.  0 clamps to 0, 1 repeats with the plane's own period, 2 clamps to
+ * the edge texel; TinyGL's sampler masks its coordinates, which is 1. */
+#define GS_CLAMP_ZERO 0u
+#define GS_REPEAT     1u
+#define GS_CLAMP_EDGE 2u
+
 /* CLAMP: WMS[1:0] WMT[3:2] MINU[13:4] MAXU[23:14] MINV[33:24] MAXV[43:34]
  * The clamp limits are u10.0 texture coordinates in the page, not pixels. */
 uint64_t gs_pack_clamp(uint32_t wms, uint32_t wmt, uint32_t minu, uint32_t maxu,

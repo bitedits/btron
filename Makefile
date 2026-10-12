@@ -34,7 +34,7 @@ CC ?= gcc
 CFLAGS ?= -O2 -Wall -Wextra -std=c99 -Iinclude -Iinclude/gl -Isrc/gl -Iinclude/drivers -Isrc/kernel -Isrc/cores -Isrc/quake/include
 
 .PHONY: all posix qemu kernel tkernel sakamura foma uefi pc98 arm-elf arm64-elf m68k ps2 mips \
-        check-structure test-ps2-softfloat test-ps2-gs-pack test-ps2-gs-env test-ps2-gs-rec test-eegs-raster test-gl-math test-gl-backend-choice test-ps2-fb-order xmb-atlas test-xmb-atlas \
+        check-structure test-ps2-softfloat test-ps2-gs-pack test-ps2-gs-env test-ps2-gs-rec test-ps2-gs-tex test-eegs-raster test-gl-math test-gl-backend-choice test-ps2-fb-order xmb-atlas test-xmb-atlas \
         test-xmb-render test-xmb-render-tgl \
         html2tad book2tad tad_bin test test-kernel test-yoko test-yoko4 test-m68k test-mips test-ps2 test-foma test-foma-ui foma-screens \
         segui-screens \
@@ -1056,6 +1056,7 @@ PS2_SRCS       = $(PS2_STARTUP)           \
                  src/drivers/ps2/ps2_gs_vram.c \
                  src/drivers/ps2/ps2_gs_env.c \
                  src/drivers/ps2/ps2_gs_rec.c \
+                 src/drivers/ps2/ps2_gs_tex.c \
                  src/drivers/ps2/ps2_builtins.c \
                  src/drivers/ps2/ps2_sio.c \
                  src/drivers/ps2/ps2_pad.c \
@@ -1344,6 +1345,30 @@ $(TEST_GSREC_BIN): $(TEST_GSREC_OBJS) src/drivers/ps2/ps2_gs_rec.c src/drivers/p
 	@mkdir -p ./.build
 	$(CC) $(TEST_GSREC_OBJS) -o $@ $(LDFLAGS)
 
+# Increment 5b: the texture-plane registry.  Same idiom as the three gates above -- the registry
+# and the two units it plans against are #included into the test -- and the same reason: a plane
+# given the wrong 256-byte block is a triangle that samples its neighbour's texels, which draws
+# something and draws it wrong, with nothing on the screen to say which of the four fields was
+# off.  The three words are compared against literals written from the register tables, the spans
+# against the budget doc/md/PS2.md states, and the sink against the law that a plane crosses the
+# moment its bytes exist.
+TEST_GSTEX_SRCS = verify/tests/test_ps2_gs_tex.c
+TEST_GSTEX_OBJS = $(TEST_GSTEX_SRCS:.c=.test.o)
+TEST_GSTEX_BIN  = ./.build/test_ps2_gs_tex
+
+test-ps2-gs-tex: $(TEST_GSTEX_BIN)
+	@echo "=========================================================="
+	@echo " Running PS2 GS texture-plane registry vs hand-built TEX0..."
+	@echo "=========================================================="
+	@./$(TEST_GSTEX_BIN)
+
+$(TEST_GSTEX_BIN): $(TEST_GSTEX_OBJS) src/drivers/ps2/ps2_gs_tex.c \
+                   src/drivers/ps2/ps2_gs_pack.c src/drivers/ps2/ps2_gs_vram.c \
+                   src/drivers/ps2/ps2_gs_tex.h src/drivers/ps2/ps2_gs_pack.h \
+                   src/drivers/ps2/ps2_gs_vram.h
+	@mkdir -p ./.build
+	$(CC) $(TEST_GSTEX_OBJS) -o $@ $(LDFLAGS)
+
 # Increment 5a: the raster stage's decisions, on top of the recorder's words.  Same idiom again --
 # backend_eegs.c and the recorder are #included into the test, so the identical translation unit is
 # what the gate measures and what will link into btron-ps2.elf -- and the same reason: a triangle
@@ -1470,6 +1495,7 @@ TEST_FBORDER_SRCS = verify/tests/test_fb_order.c src/graphics/dp_core.c \
                     src/gl/gl_backend_choice.c \
                     src/gl/backend_eegs.c \
                     src/drivers/ps2/ps2_gs_rec.c src/drivers/ps2/ps2_gs_pack.c \
+                    src/drivers/ps2/ps2_gs_tex.c src/drivers/ps2/ps2_gs_vram.c \
                     $(TINYGL_SRCS)
 TEST_FBORDER_COBJS = $(TEST_FBORDER_SRCS:.c=.fbo.o)
 TEST_FBORDER_POBJS = $(TEST_FBORDER_SRCS:.c=.fbp.o)
@@ -1479,11 +1505,12 @@ TEST_FBORDER_PBIN  = ./.build/test_fb_order_canvas
 %.fbo.o: %.c
 	$(CC) $(CFLAGS) -MMD -MP -c $< -o $@
 
-# The only difference between the two builds.  Two things in the tree read
-# BTRON_PS2_TARGET besides src/cores/core_init.c (which is not linked here): src/gl/tinygl/clip.c's
-# GS raster stage, and therefore the three units it calls, which is why they are in the list above
-# for *both* builds.  The two binaries have to differ in one macro and nothing else, or a PASS
-# would only say that two different links agree.
+# The only difference between the two builds.  Two files read BTRON_PS2_TARGET besides
+# src/cores/core_init.c (which is not linked here): src/gl/tinygl/clip.c's GS raster stage and
+# src/gl/tinygl/texture.c's 5b plane publish, and therefore the five units they call -- the
+# recorder, the packer, the registry and the VRAM arithmetic it plans against -- which is why they
+# are in the list above for *both* builds.  The two binaries have to differ in one macro and
+# nothing else, or a PASS would only say that two different links agree.
 %.fbp.o: %.c
 	$(CC) $(CFLAGS) -DBTRON_PS2_TARGET -MMD -MP -c $< -o $@
 
@@ -2269,7 +2296,7 @@ $(TEST_MSX_TRACE_BIN): $(TEST_MSX_TRACE_OBJS)
 	@mkdir -p ./.build
 	$(CC) $(TEST_MSX_TRACE_OBJS) -o $@ $(LDFLAGS)
 
-test: test-tad test-editor test-chat test-mozc test-wylie test-hmi test-ski test-tracker test-deskclip test-settings test-global-menu test-app-menu test-drivesetup test-fs test-quake test-ps2-softfloat test-ps2-gs-pack test-ps2-gs-env test-ps2-gs-rec test-eegs-raster test-gl-math test-gl-backend-choice test-ps2-fb-order test-xmb-atlas
+test: test-tad test-editor test-chat test-mozc test-wylie test-hmi test-ski test-tracker test-deskclip test-settings test-global-menu test-app-menu test-drivesetup test-fs test-quake test-ps2-softfloat test-ps2-gs-pack test-ps2-gs-env test-ps2-gs-rec test-ps2-gs-tex test-eegs-raster test-gl-math test-gl-backend-choice test-ps2-fb-order test-xmb-atlas
 	@echo "=========================================================="
 	@echo " ALL B-SYSTEM TEST SUITES PASSED (100% SUCCESS)!"
 	@echo "=========================================================="

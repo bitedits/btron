@@ -1,13 +1,15 @@
 /*
- * src/gl/backend_eegs.c -- the three vertices a clipped triangle becomes, as a GIF group
+ * src/gl/backend_eegs.c -- the three vertices a clipped triangle becomes, as a GIF group, and
+ * the texture switch that goes between them
  *
- * Row 5, step 5a of the plan of record (doc/md/PS2.md, "The EE/GS backend").  Everything hard
- * about the GS is in increments 2, 3 and 4, which this file calls and does not duplicate: the
+ * Row 5, steps 5a and 5b of the plan of record (doc/md/PS2.md, "The EE/GS backend").  Everything
+ * hard about the GS is in increments 2, 3 and 4, which this file calls and does not duplicate: the
  * field encodings are `ps2_gs_pack.c`'s, the environment is `ps2_gs_env.c`'s, and the group state
- * machine -- NLOOP, the REGS list, where a full buffer is cut and which vertices a continued
- * strip needs -- is `ps2_gs_rec.c`'s.  What is here is the one decision the raster stage makes:
- * which primitive and which three state flags a triangle carries, and what a device-space vertex
- * means to the GS.
+ * machine -- NLOOP, the REGS list, where a full buffer is cut and which vertices a continued strip
+ * needs -- is `ps2_gs_rec.c`'s.  What is here is the two decisions the raster stage makes: which
+ * primitive and which three state flags a triangle carries, and what a device-space vertex means
+ * to the GS.  From 5b a third: when the plane a triangle samples is not the plane the stream
+ * already points at, the three texture registers go in as a group of their own.
  *
  * Copyright 2026 Synrc Research Center. MIT License.
  */
@@ -30,6 +32,10 @@
 static uint64_t s_prim_live;
 static int      s_prim_valid;
 static uint32_t s_prims;
+
+static const gs_tex_t *s_tex_live;
+static uint32_t s_tex_switches;
+static uint32_t s_tex_missing;
 
 static uint64_t prim_word(uint32_t op, const eegs_tri_state_t st)
 {
@@ -63,19 +69,74 @@ static void emit_vertex(const eegs_vertex_t *v)
 
 void eegs_frame_begin(gs_rec_sink sink, void *user)
 {
+    gs_rec_init(sink, user);
     s_prim_valid = 0;
     s_prim_live = 0u;
     s_prims = 0u;
+    s_tex_live = 0;
+    s_tex_switches = 0u;
+    s_tex_missing = 0u;
 }
 
 void eegs_frame_end(void)
 {
     gs_rec_end();
     s_prim_valid = 0;
+    s_tex_live = 0;
 }
 
-void eegs_triangle(const eegs_vertex_t v[3], const eegs_tri_state_t st)
+/* The plane the following primitives sample, or none.
+ *
+ * Three AD writes, one group: `TEX0` says where the plane is, `TEX1` how it is sampled and
+ * `CLAMP` what a coordinate that leaves it does.  They travel as a group of their own because the
+ * environment packet that could carry them is written once per frame and this port's frame binds
+ * two sheets -- see ps2_gs_tex.h's three laws.
+ *
+ * Pointing at *nothing* sends nothing: `TME` is in the PRIM word, so an untextured primitive reads
+ * no texture whatever `TEX0` holds, and the page it holds is the one the next switch names again.
+ * What it does do is clear the stream's plane, because a textured primitive must never inherit one
+ * it was not given. */
+void eegs_texture(const gs_tex_t *t)
 {
+    /* The trio in ps2_gs_env.c's order -- CLAMP, TEX0, TEX1 -- so that "the three texture
+     * registers travel in this order" has one answer in this port, in the frame's packet and
+     * between its groups alike. */
+    static const uint32_t regs[3] = { GS_GP_CLAMP_1, GS_GP_TEX0_1, GS_GP_TEX1_1 };
+    uint64_t words[3];
+
+    if (t == s_tex_live) return;
+
+    s_tex_live = t;
+    if (t == 0) return;
+
+    words[0] = t->clamp;
+    words[1] = t->tex0;
+    words[2] = t->tex1;
+    gs_rec_ad(words, regs, 3u);
+
+    /* gs_rec_ad() sent the open group, so the PRIM that group carried is no longer live state and
+     * the next vertex needs it re-declared -- which is the same reason select_prim() compares a
+     * word rather than trusting one. */
+    s_prim_valid = 0;
+    s_tex_switches++;
+}
+
+/* A textured primitive with no plane in the stream would read the page the last switch left in
+ * `TEX0`: a different texture's pixels, drawn with no evidence attached anywhere.  So the state is
+ * corrected here, where the PRIM word is built, and the correction counted -- a non-zero
+ * `eegs_tex_missing()` is the bench saying an uploaded sheet drew flat. */
+static eegs_tri_state_t need_plane(eegs_tri_state_t st)
+{
+    if (st.textured && s_tex_live == 0) {
+        st.textured = 0u;
+        s_tex_missing++;
+    }
+    return st;
+}
+
+void eegs_triangle(const eegs_vertex_t v[3], eegs_tri_state_t st)
+{
+    st = need_plane(st);
     select_prim(prim_word(GS_OP_TRI, st));
     emit_vertex(&v[0]);
     emit_vertex(&v[1]);
@@ -100,3 +161,5 @@ void eegs_point(const eegs_vertex_t v[1], const eegs_tri_state_t st)
 
 uint32_t eegs_prims(void) { return s_prims; }
 uint32_t eegs_verts(void) { return gs_rec_verts(); }
+uint32_t eegs_tex_switches(void) { return s_tex_switches; }
+uint32_t eegs_tex_missing(void) { return s_tex_missing; }

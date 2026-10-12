@@ -1,0 +1,74 @@
+/*
+ * ps2_gs_vram.c — GS local-memory allocation in the registers' own page units
+ *
+ * See ps2_gs_vram.h for the two page sizes this keeps straight and why getting them wrong is
+ * not a rounding detail: a frame buffer offset is a 9-bit index of 8 KB pages, so the same
+ * byte offset the texture path expresses as page 7,808 is page 244 here.
+ *
+ * Copyright 2026 Synrc Research Center. MIT License.
+ */
+
+#include "ps2_gs_vram.h"
+
+void gs_vram_init(gs_vram_t *v)
+{
+    v->next = (GS_VRAM_CANVAS_BYTES + GS_PAGE_FRAME - 1u) / GS_PAGE_FRAME * GS_PAGE_FRAME;
+}
+
+uint32_t gs_vram_fbw(uint32_t pixels_w)
+{
+    return (pixels_w + 63u) / 64u;
+}
+
+uint32_t gs_vram_frame_bytes(uint32_t pixels_w, uint32_t pixels_h, uint32_t bpp)
+{
+    return gs_vram_fbw(pixels_w) * 64u * pixels_h * (bpp / 8u);
+}
+
+int gs_vram_take(gs_vram_t *v, uint32_t bytes, uint32_t *out_byte)
+{
+    uint32_t pages, span;
+
+    if (bytes == 0 || v == 0 || out_byte == 0) return -1;
+
+    pages = (bytes + GS_PAGE_FRAME - 1u) / GS_PAGE_FRAME;
+    span  = pages * GS_PAGE_FRAME;
+    if (v->next + span > GS_VRAM_BYTES) return -1;
+
+    *out_byte = v->next;
+    v->next  += span;
+    return 0;
+}
+
+int gs_vram_fba(uint32_t byte, uint32_t *out_fba)
+{
+    uint32_t page;
+
+    if (out_fba == 0) return -1;
+    if ((byte % GS_PAGE_FRAME) != 0) return -1;
+
+    page = byte / GS_PAGE_FRAME;
+    if (page > GS_FBA_MAX) return -1;
+
+    *out_fba = page;
+    return 0;
+}
+
+int gs_vram_tba(uint32_t byte, uint32_t *out_tba)
+{
+    uint32_t page;
+
+    if (out_tba == 0) return -1;
+    if ((byte % GS_PAGE_TEX) != 0) return -1;
+
+    page = byte / GS_PAGE_TEX;
+    if (page > GS_TBA_MAX) return -1;
+
+    *out_tba = page;
+    return 0;
+}
+
+uint32_t gs_vram_left(const gs_vram_t *v)
+{
+    return GS_VRAM_BYTES - v->next;
+}

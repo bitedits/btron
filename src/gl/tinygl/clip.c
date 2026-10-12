@@ -491,6 +491,122 @@ static void tgl_count_fill(const ZBufferPoint *a, const ZBufferPoint *b, const Z
     if (blended) s_fill_blended++;
 }
 
+#if defined(BTRON_PS2_TARGET)
+/* ── The Graphics Synthesizer takes the fill ──────────────────────────────────────────
+ *
+ * Row 5, step 5a of the plan of record (doc/md/PS2.md, "The EE/GS backend").  The three calls
+ * below are the whole of what the GS replaces: the span loops.  Everything above them -- the
+ * matrix stack, the lighting, the clipping, the texture state, the display lists -- stays
+ * TinyGL's, which is why the seam is here rather than a second `gl_ops_t`, and why nothing is
+ * re-projected: `zp.x`/`zp.y` are the integers the viewport map already produced, and they are
+ * the same integers the software fill walks, so the GS layer and the canvas layer cannot disagree
+ * about where a pixel is.
+ *
+ * Until 5c installs the backend this is dead code on the image: `gl_active_backend()` cannot
+ * answer EE/GS while `gl_init()`'s GS case still installs a linked rasteriser, and image gate
+ * row 45 of scripts/test_ps2.sh is the law that says so.  The check is therefore a switch and not
+ * a build change -- one condition per entry point, so the shipped path costs a comparison that
+ * the branch predictor never has to get wrong. */
+#include "../backend_eegs.h"
+
+/* One texel index is (ZB_POINT_*_FRAC_BITS + 1) bits of `zp.s`/`zp.t`, and the upload puts half a
+ * texel of offset in so that a coordinate names a texel's centre rather than its edge
+ * (texture.c's sscale/soff).  The GS's ST takes a float texel coordinate, so this is the fixed
+ * point divided by its own scale -- a power of two, so exact and a multiply. */
+#define GS_TEX_U (1.0f / (float)(1 << (ZB_POINT_S_FRAC_BITS + 1)))
+#define GS_TEX_V (1.0f / (float)(1 << (ZB_POINT_T_FRAC_BITS + 1)))
+
+/* One vertex, from the record the span loops would have walked.  `flat` is non-null when the
+ * primitive is flat-shaded and names the vertex whose colour the whole triangle takes: p2, the
+ * last one, which is what ZB_fillTriangleFlat reads (ztriangle.c) and what an IIP-clear GS
+ * primitive draws, since it takes its colour off the first RGBAQ of the group it is given.
+ * `textured` gates the s/t read, because zp.s/zp.t are only written when a texture is enabled --
+ * stale otherwise, and a stale texel coordinate is a texel read from somewhere in the atlas. */
+static void gs_vertex(eegs_vertex_t *out, const ZBufferPoint *p,
+                      const ZBufferPoint *flat, int textured)
+{
+	const ZBufferPoint *col = (flat != NULL) ? flat : p;
+
+	out->x_px = (float)p->x;
+	out->y_px = (float)p->y;
+	out->rgba = (((unsigned)col->r >> 16) & 0xFFu) |
+	            (((((unsigned)col->g >> 16) & 0xFFu)) << 8) |
+	            (((((unsigned)col->b >> 16) & 0xFFu)) << 16) |
+	            (((((unsigned)col->a >> 16) & 0xFFu)) << 24);
+	out->s = textured ? (float)p->s * GS_TEX_U : 0.0f;
+	out->t = textured ? (float)p->t * GS_TEX_V : 0.0f;
+}
+
+static eegs_tri_state_t gs_state(int smooth, int textured, int blended)
+{
+	eegs_tri_state_t st;
+
+	st.smooth = smooth ? 1u : 0u;
+	st.textured = textured ? 1u : 0u;
+	st.blended = blended ? 1u : 0u;
+	return st;
+}
+
+/* The line and point paths sample no texture in the software rasteriser (ZB_line and ZB_plot take
+ * a colour and a depth), so they are recorded untextured whatever the texture state is: the GS is
+ * asked to draw what the CPU would have drawn, not what the application asked GL for.  They do
+ * honour the blend state, so ABE follows it. */
+static int gs_blended(const GLContext *c)
+{
+#if TGL_FEATURE_BLEND == 1
+	return (c->zb->enable_blend != 0);
+#else
+	(void)c;
+	return 0;                    /* the arms below take the plain path whatever the state */
+#endif
+}
+
+static void gs_edges(GLContext *c, GLVertex *p0, GLVertex *p1, GLVertex *p2)
+{
+	const int smooth = (c->current_shade_model == GL_SMOOTH);
+	const eegs_tri_state_t st = gs_state(smooth, 0, gs_blended(c));
+	const ZBufferPoint *flat = smooth ? NULL : &p2->zp;
+	eegs_vertex_t v[2];
+
+	if (p0->edge_flag) {
+		gs_vertex(&v[0], &p0->zp, flat, 0);
+		gs_vertex(&v[1], &p1->zp, flat, 0);
+		eegs_line(v, st);
+	}
+	if (p1->edge_flag) {
+		gs_vertex(&v[0], &p1->zp, flat, 0);
+		gs_vertex(&v[1], &p2->zp, flat, 0);
+		eegs_line(v, st);
+	}
+	if (p2->edge_flag) {
+		gs_vertex(&v[0], &p2->zp, flat, 0);
+		gs_vertex(&v[1], &p0->zp, flat, 0);
+		eegs_line(v, st);
+	}
+}
+
+static void gs_points(GLContext *c, GLVertex *p0, GLVertex *p1, GLVertex *p2)
+{
+	const int smooth = (c->current_shade_model == GL_SMOOTH);
+	const eegs_tri_state_t st = gs_state(smooth, 0, gs_blended(c));
+	const ZBufferPoint *flat = smooth ? NULL : &p2->zp;
+	eegs_vertex_t v[1];
+
+	if (p0->edge_flag) {
+		gs_vertex(v, &p0->zp, flat, 0);
+		eegs_point(v, st);
+	}
+	if (p1->edge_flag) {
+		gs_vertex(v, &p1->zp, flat, 0);
+		eegs_point(v, st);
+	}
+	if (p2->edge_flag) {
+		gs_vertex(v, &p2->zp, flat, 0);
+		eegs_point(v, st);
+	}
+}
+#endif /* BTRON_PS2_TARGET */
+
 /* see vertex.c to see how the draw functions are assigned.*/
 void gl_draw_triangle_fill(GLVertex* p0, GLVertex* p1, GLVertex* p2) { 
 	GLContext* c = gl_get_context();
@@ -513,6 +629,26 @@ void gl_draw_triangle_fill(GLVertex* p0, GLVertex* p1, GLVertex* p2) {
 	/* Counted once, before the dispatch, with the same conditions the arms below read --
 	 * including here, where an absent plane has already been folded back to untextured. */
 	tgl_count_fill(&p0->zp, &p1->zp, &p2->zp, im != NULL, fill_blended);
+
+#if defined(BTRON_PS2_TARGET)
+	/* Counted above, then handed to the GS instead of filled here: the counters describe what the
+	 * rasteriser was asked to draw, and that question is the same whichever one draws it.  What
+	 * stops is the per-pixel work, so the fill's microseconds below are legitimately never
+	 * accumulated -- a GS frame reads its fill time as zero because there is no fill to time. */
+	if (gl_active_backend() == GL_BACKEND_EEGS) {
+		const int textured = (im != NULL);
+		const int smooth = (c->current_shade_model == GL_SMOOTH);
+		const ZBufferPoint *flat = smooth ? NULL : &p2->zp;
+		eegs_tri_state_t st = gs_state(smooth, textured, fill_blended);
+		eegs_vertex_t v[3];
+
+		gs_vertex(&v[0], &p0->zp, flat, textured);
+		gs_vertex(&v[1], &p1->zp, flat, textured);
+		gs_vertex(&v[2], &p2->zp, flat, textured);
+		eegs_triangle(v, st);
+		return;
+	}
+#endif
 
 	const unsigned t_fill_t0 = gl_perf_us();
 
@@ -584,6 +720,12 @@ void gl_draw_triangle_fill(GLVertex* p0, GLVertex* p1, GLVertex* p2) {
 
 void gl_draw_triangle_line(GLVertex* p0, GLVertex* p1, GLVertex* p2) {
 	GLContext* c = gl_get_context();
+#if defined(BTRON_PS2_TARGET)
+	if (gl_active_backend() == GL_BACKEND_EEGS) {
+		gs_edges(c, p0, p1, p2);
+		return;
+	}
+#endif
 	if (c->zb->depth_test) {
 		if (p0->edge_flag)
 			ZB_line_z(c->zb, &p0->zp, &p1->zp);
@@ -604,6 +746,12 @@ void gl_draw_triangle_line(GLVertex* p0, GLVertex* p1, GLVertex* p2) {
 /* Render a clipped triangle in point mode */
 void gl_draw_triangle_point(GLVertex* p0, GLVertex* p1, GLVertex* p2) {
 	GLContext* c = gl_get_context();
+#if defined(BTRON_PS2_TARGET)
+	if (gl_active_backend() == GL_BACKEND_EEGS) {
+		gs_points(c, p0, p1, p2);
+		return;
+	}
+#endif
 	if (p0->edge_flag)
 		ZB_plot(c->zb, &p0->zp);
 	if (p1->edge_flag)

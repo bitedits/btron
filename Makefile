@@ -34,7 +34,7 @@ CC ?= gcc
 CFLAGS ?= -O2 -Wall -Wextra -std=c99 -Iinclude -Iinclude/gl -Isrc/gl -Iinclude/drivers -Isrc/kernel -Isrc/cores -Isrc/quake/include
 
 .PHONY: all posix qemu kernel tkernel sakamura foma uefi pc98 arm-elf arm64-elf m68k ps2 mips \
-        check-structure test-ps2-softfloat test-ps2-gs-pack test-ps2-gs-env test-ps2-gs-rec test-gl-math test-gl-backend-choice test-ps2-fb-order xmb-atlas test-xmb-atlas \
+        check-structure test-ps2-softfloat test-ps2-gs-pack test-ps2-gs-env test-ps2-gs-rec test-eegs-raster test-gl-math test-gl-backend-choice test-ps2-fb-order xmb-atlas test-xmb-atlas \
         test-xmb-render test-xmb-render-tgl \
         html2tad book2tad tad_bin test test-kernel test-yoko test-yoko4 test-m68k test-mips test-ps2 test-foma test-foma-ui foma-screens \
         segui-screens \
@@ -1046,6 +1046,7 @@ PS2_GL_SRCS    = src/gl/gl_dispatch.c     \
                  src/gl/egl_surface.c     \
                  src/gl/backend_tinygl.c  \
                  src/gl/backend_virgl.c   \
+                 src/gl/backend_eegs.c    \
                  src/apps/xmb.c           \
                  src/apps/glgears.c
 PS2_SRCS       = $(PS2_STARTUP)           \
@@ -1343,6 +1344,28 @@ $(TEST_GSREC_BIN): $(TEST_GSREC_OBJS) src/drivers/ps2/ps2_gs_rec.c src/drivers/p
 	@mkdir -p ./.build
 	$(CC) $(TEST_GSREC_OBJS) -o $@ $(LDFLAGS)
 
+# Increment 5a: the raster stage's decisions, on top of the recorder's words.  Same idiom again --
+# backend_eegs.c and the recorder are #included into the test, so the identical translation unit is
+# what the gate measures and what will link into btron-ps2.elf -- and the same reason: a triangle
+# that asks for the wrong PRIM, or a vertex colour whose bytes are unpacked in the wrong order, is
+# a packet the GS decodes happily and draws in the wrong colour.  The suite is the one law in this
+# port a hand literal alone can pin, so it is compiled before any of it reaches a screen.
+TEST_EEGSR_SRCS = verify/tests/test_eegs_raster.c
+TEST_EEGSR_OBJS = $(TEST_EEGSR_SRCS:.c=.test.o)
+TEST_EEGSR_BIN  = ./.build/test_eegs_raster
+
+test-eegs-raster: $(TEST_EEGSR_BIN)
+	@echo "=========================================================="
+	@echo " Running PS2 EE/GS raster stage vs hand-built GIF groups..."
+	@echo "=========================================================="
+	@./$(TEST_EEGSR_BIN)
+
+$(TEST_EEGSR_BIN): $(TEST_EEGSR_OBJS) src/gl/backend_eegs.c src/gl/backend_eegs.h \
+                   src/drivers/ps2/ps2_gs_rec.c src/drivers/ps2/ps2_gs_pack.c \
+                   src/drivers/ps2/ps2_gs_rec.h src/drivers/ps2/ps2_gs_pack.h
+	@mkdir -p ./.build
+	$(CC) $(TEST_EEGSR_OBJS) -o $@ $(LDFLAGS)
+
 # The Makefile's `PS2_GL=` dial, measured against the rule it is supposed to drive.  The dial is
 # three -D flags and the rule is a preprocessor branch, so one binary compiled with one value of
 # it cannot see the other values -- which is exactly how a flag that names nothing at all looks
@@ -1444,6 +1467,8 @@ TEST_FBORDER_SRCS = verify/tests/test_fb_order.c src/graphics/dp_core.c \
                     src/font/troncode.c src/font/jis_fonts.c src/font/tibetan_fonts.c \
                     src/gl/gl_dispatch.c src/gl/backend_virgl.c \
                     src/gl/gl_backend_choice.c \
+                    src/gl/backend_eegs.c \
+                    src/drivers/ps2/ps2_gs_rec.c src/drivers/ps2/ps2_gs_pack.c \
                     $(TINYGL_SRCS)
 TEST_FBORDER_COBJS = $(TEST_FBORDER_SRCS:.c=.fbo.o)
 TEST_FBORDER_POBJS = $(TEST_FBORDER_SRCS:.c=.fbp.o)
@@ -1453,8 +1478,11 @@ TEST_FBORDER_PBIN  = ./.build/test_fb_order_canvas
 %.fbo.o: %.c
 	$(CC) $(CFLAGS) -MMD -MP -c $< -o $@
 
-# The only difference between the two builds.  Nothing else in the tree reads
-# BTRON_PS2_TARGET except src/cores/core_init.c, which is not linked here.
+# The only difference between the two builds.  Two things in the tree read
+# BTRON_PS2_TARGET besides src/cores/core_init.c (which is not linked here): src/gl/tinygl/clip.c's
+# GS raster stage, and therefore the three units it calls, which is why they are in the list above
+# for *both* builds.  The two binaries have to differ in one macro and nothing else, or a PASS
+# would only say that two different links agree.
 %.fbp.o: %.c
 	$(CC) $(CFLAGS) -DBTRON_PS2_TARGET -MMD -MP -c $< -o $@
 
@@ -2240,7 +2268,7 @@ $(TEST_MSX_TRACE_BIN): $(TEST_MSX_TRACE_OBJS)
 	@mkdir -p ./.build
 	$(CC) $(TEST_MSX_TRACE_OBJS) -o $@ $(LDFLAGS)
 
-test: test-tad test-editor test-chat test-mozc test-wylie test-hmi test-ski test-tracker test-deskclip test-settings test-global-menu test-app-menu test-drivesetup test-fs test-quake test-ps2-softfloat test-ps2-gs-pack test-ps2-gs-env test-ps2-gs-rec test-gl-math test-gl-backend-choice test-ps2-fb-order test-xmb-atlas
+test: test-tad test-editor test-chat test-mozc test-wylie test-hmi test-ski test-tracker test-deskclip test-settings test-global-menu test-app-menu test-drivesetup test-fs test-quake test-ps2-softfloat test-ps2-gs-pack test-ps2-gs-env test-ps2-gs-rec test-eegs-raster test-gl-math test-gl-backend-choice test-ps2-fb-order test-xmb-atlas
 	@echo "=========================================================="
 	@echo " ALL B-SYSTEM TEST SUITES PASSED (100% SUCCESS)!"
 	@echo "=========================================================="

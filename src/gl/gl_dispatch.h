@@ -111,6 +111,11 @@ extern gl_ops_t *g_gl;
  * rather than on the request. */
 GL_BACKEND gl_active_backend(void);
 
+/* The same answer as a log tag, so the rows that name a pipeline and the code that installs one
+ * cannot drift apart.  Takes the value rather than reading the live one because a row that wants
+ * to name the build's *default* has to ask about a backend that is not installed yet. */
+const char *gl_backend_name(GL_BACKEND b);
+
 /* TRUE when the live ops table is TinyGL's, whether the rasteriser is TinyGL's own fill or
  * the Graphics Synthesizer (GL_BACKEND_EEGS): the GS path transforms, clips and records in
  * this pipeline and only hands the finished groups over, so everything above the dispatch --

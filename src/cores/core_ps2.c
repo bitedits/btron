@@ -54,6 +54,10 @@
  * composite, send it after this region's canvas upload.  Relative path because that is how this
  * file reaches its sources -- src/drivers/ps2/ above is the same convention. */
 #include "../gl/eegs_present.h"
+/* The build's own answer to "which rasteriser?", for the `[CFG]` row: this file installs no GL
+ * context and must not pretend to know which one is live, so it prints the name of the backend
+ * the Makefile's `PS2_GL=` dial selected, from the unit that holds that rule. */
+#include "../gl/gl_backend_choice.h"
 
 extern void ps2_delay_cycles(uint32_t count);
 extern void ps2_halt(void);
@@ -5039,6 +5043,19 @@ static void ps2_log_boot_head(void)
         ps2_kprintf("[FPU] single precision: %s  proof add(1.0f,2.0f)=0x%08x want 0x40400000  FCSR=0x%08x\n",
                     btron_fp_on ? "Emotion Engine COP1" : "bit engine, COP1 did not answer",
                     (unsigned int)btron_fp_seen, (unsigned int)fcsr);
+        /* What the image was *built* for, on one row, next to what this machine answered.
+         *
+         * The two dials are Makefile variables with defaults (`PS2_GL ?= tinygl`, `PS2_FP ?= hw`),
+         * and `make run-ps2` with no arguments silently rebuilds under them -- including after a
+         * session that was run with a dial, because the stamp files then flip the objects that read
+         * it back.  So a symptom reported from that run ("the XMB is black") arrives with no record
+         * of which pipeline and which FPU law produced it, and the two have been known to disagree
+         * about exactly that.  The FP half cannot be asked of the preprocessor here: the flag is
+         * per object and this file does not carry it, which is why btron_fp_law() lives in the unit
+         * that does. */
+        ps2_kprintf("[CFG] this image: PS2_FP=%s  PS2_GL=%s  (the dials it was built under; "
+                    "an empty `make run-ps2` rebuilds with their defaults)\n",
+                    btron_fp_law(), gl_backend_name(gl_backend_default()));
     }
 }
 

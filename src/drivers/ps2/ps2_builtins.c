@@ -982,6 +982,26 @@ uint32_t btron_fp_selftest(uint32_t *ops, uint32_t *bad, uint32_t *hw, uint32_t 
 
 #endif /* BTRON_PS2_FP_HW */
 
+/* Which FPU law this unit was compiled under, and what the machine answered.
+ *
+ * The one place that can say it is the file the flag is applied to: `PS2_FP=hw` reaches
+ * `ps2_builtins.ps2.o` and `vertex_stage.ps2.o` as a per-object `-DBTRON_PS2_FP_HW`, so every
+ * other translation unit -- including the core that prints the boot banner -- compiles without
+ * it and cannot ask the preprocessor.  A `[CFG]` row that guessed from the absence of the macro
+ * would read "soft" on a hardware-FPU image, which is the wrong answer to the only question a
+ * black screen asks.  The two halves are different facts and are reported apart: the law the
+ * image carries, and whether this machine's FPU was enabled -- `-mhard-float` with CU1 clear
+ * would have taken an exception at the first float, so `hw` without `btron_fp_on` here means the
+ * BIOS left it off and `FP_PICK` dispatches to the bit engine instead. */
+const char *btron_fp_law(void)
+{
+#if defined(BTRON_PS2_FP_HW)
+    return btron_fp_on ? "hw:cop1" : "hw:bit-engine";
+#else
+    return "soft";
+#endif
+}
+
 /* The per-class table and its names, defined once for both builds so the row order
  * cannot disagree with the header that promises it.  With no COP1 path the self-test
  * is a stub that touches nothing, and the boot row reads "all classes agree" because

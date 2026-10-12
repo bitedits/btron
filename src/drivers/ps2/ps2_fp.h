@@ -52,6 +52,13 @@ int btron_fp_init(void);
  * the value it rejected instead of asserting it.  Zero before the init. */
 extern uint32_t btron_fp_seen;
 
+/* Which FPU law this image carries, as the unit that was compiled under it says it: "hw:cop1"
+ * when the flag is on and this machine's FPU answered, "hw:bit-engine" when the flag is on and
+ * it did not, "soft" when the flag is off.  A boot row needs this rather than the preprocessor
+ * because the flag is per object: the core that prints it never sees -DBTRON_PS2_FP_HW, so
+ * asking the compiler would answer "soft" about an image whose arithmetic unit is on. */
+const char *btron_fp_law(void);
+
 /* How many soft-float libcalls the image has taken, in seven classes:
  * [0] single add/sub/mul, [1] single div, [2] single compare, [3] float -> int,
  * [4] double add/sub/mul, [5] everything double else -- div (which is sqrt(double)'s

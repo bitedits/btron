@@ -34,6 +34,21 @@ int gl_tinygl_pipeline(void) {
     return s_active_backend == GL_BACKEND_TINYGL || s_active_backend == GL_BACKEND_EEGS;
 }
 
+/* The same answer as the log tag.  It lives here because this file is the one that installs a
+ * backend and therefore the one whose answer has to be what a row names: the XMB's frame row and
+ * the boot's `[CFG]` row used to each carry their own ternary over the three enum values, which is
+ * two encodings of one fact and one of them was already missing a case. */
+const char *gl_backend_name(GL_BACKEND b)
+{
+    switch (b) {
+    case GL_BACKEND_EEGS:   return "eegs";
+    case GL_BACKEND_TINYGL: return "tinygl";
+    case GL_BACKEND_VIRGL:  return "virgl";
+    case GL_BACKEND_I915:   return "i915";
+    }
+    return "unknown";
+}
+
 /* BTRON_GL_BACKEND_TINYGL says this image links src/gl/tinygl/, and only the
  * Makefile lists that put it in a target's sources define it -- so a request for
  * a backend that is not linked has no case to land in and says so on the console

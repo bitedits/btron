@@ -207,10 +207,10 @@ static void xb_frame(uint32_t draw_us, uint32_t swap_us)
     /* The name of the pipeline that drew the frame, as three answers rather than one
      * boolean: the GS records through the same ops table TinyGL fills with, so a label that
      * said "tinygl" for both would hide the one difference that matters to the reader of a
-     * bench log -- whether the pixels came from a swap or from a GIF stream. */
-    const char       *backend_name =
-        gl_active_backend() == GL_BACKEND_EEGS   ? "eegs"   :
-        gl_active_backend() == GL_BACKEND_TINYGL ? "tinygl" : "virgl";
+     * bench log -- whether the pixels came from a swap or from a GIF stream.  The naming is
+     * gl_dispatch.c's, the file that installs a backend, so this row and the build's `[CFG]`
+     * row cannot grow different spellings of the same three values. */
+    const char       *backend_name = gl_backend_name(gl_active_backend());
 
     s_n++;
     s_win++;

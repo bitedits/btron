@@ -239,6 +239,7 @@ static void system_state_init(void)
 /* The real GL stack */
 #include "../../src/gl/gl_dispatch.h"
 #include "../../src/gl/egl_surface.h"
+#include "../../src/gl/gl_backend_choice.h"
 
 /* ── Assertions ──────────────────────────────────────────────────────── */
 
@@ -1886,6 +1887,47 @@ static void test_games_band(void)
     printf("   wrote .build/xmb_games_band.ppm\n");
 }
 
+/* Increment 1 of the EE/GS plan of record (doc/md/PS2.md).  The Display applet's row can
+ * already name a backend that has no ops table in this image, and what that is allowed to
+ * do is exactly these assertions.  They run in both builds of this file, which is why the
+ * expected answer is written as a rule over the define instead of a constant: an image that
+ * links src/gl/tinygl/ must answer TinyGL, and this file without that define must answer
+ * virgl.  A default that ignored BTRON_GL_BACKEND_TINYGL would make the PS2's own setting
+ * offer a rasterizer it cannot install. */
+static void test_backend_choice_round_trip(void)
+{
+    printf("\n[backend choice]\n");
+
+    const GL_BACKEND build_default =
+#if defined(BTRON_GL_BACKEND_TINYGL)
+        GL_BACKEND_TINYGL
+#else
+        GL_BACKEND_VIRGL
+#endif
+        ;
+
+    CHECK(gl_backend_default() == build_default,
+          "the build's default is the rasterizer its sources link");
+    CHECK(gl_backend_selected() == build_default,
+          "nobody has chosen, so the selection reads the build default");
+
+    gl_backend_select(GL_BACKEND_EEGS);
+    CHECK(gl_backend_selected() == GL_BACKEND_EEGS,
+          "the remembered choice is not shadowed by the default");
+
+    /* The placeholder's contract: the request is answered, by the pipeline that exists, and
+     * the active backend says which one -- so nothing downstream dispatches on the request. */
+    gl_init(GL_BACKEND_EEGS, XW, XH, g_fb);
+    CHECK(gl_active_backend() == build_default,
+          "a request for the GS backend installs the linked software rasterizer");
+
+    /* Back to where the Default button leaves it, so the rest of this suite renders the
+     * same frame it rendered before the row existed. */
+    gl_backend_select(gl_backend_default());
+    CHECK(gl_backend_selected() == build_default,
+          "the choice round-trips back to the build default");
+}
+
 int main(void)
 {
     printf("==========================================================\n");
@@ -1894,6 +1936,7 @@ int main(void)
 
     system_state_init();
     gl_init(GL_BACKEND_VIRGL, XW, XH, g_fb);
+    test_backend_choice_round_trip();
 
     test_open_and_gradient();
     /* the two baked atlases, looked at directly */

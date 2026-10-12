@@ -178,6 +178,102 @@ else
     echo "  [SKIP] 64-bit-GPR disassembler unavailable -- GS sd/ld accessor tests not run"
 fi
 
+# Increment 3 of the EE/GS backend (doc/md/PS2.md, "The EE/GS backend", row 3): the drawing
+# environment -- XYOFFSET, SCISSOR, FRAME, ZBUF and the four control registers a primitive
+# reads -- reaches the GS as one GIF packet, the same way a triangle does, and not as nine
+# privileged register writes.  The shape matters for two reasons the pokes do not serve: a
+# packet costs one DMAC start instead of nine separate bus transactions, and a packet is a
+# record of words, which is what lets increment 4 replay it after the canvas stream instead
+# of re-executing it.
+#
+# Read off the image, because "is the environment a packet" is a property of what executes
+# rather than of how the source is phrased.  What makes it readable is the translation-unit
+# split: gs_draw_env_packet lives in its own file and PS2_CFLAGS carries no -flto, so the
+# call into it is a real jal and its absence would mean the builder had been bypassed.  The
+# sender is the opposite case -- it is in ps2_gs.c and -O2 inlines it into the apply path --
+# so the DMA is asserted through the DMAC window it writes instead of through a symbol that
+# is not there.  Measured on the linked image: MADR (0xa010), QWC (0xa020) and D_STAT (0xe010)
+# together appear in exactly three function ranges -- ps2_gs_gif_send, ps2_gs_upload and
+# ps2_gs_draw_env_apply -- and in nothing else, so the triple is a precise fingerprint of a
+# channel-2 producer.
+if [ -n "$OBJDUMP64" ]; then
+    # The awk stops printing at the blank line but keeps reading, rather than exiting there:
+    # an early `exit` SIGPIPEs the disassembler, and under `set -o pipefail` the assignment
+    # then fails with status 141 before a single row runs.
+    ENV_APPLY_ASM="$($OBJDUMP64 -d --triple=mips64el-unknown-elf $ELF | awk '/<ps2_gs_draw_env_apply>:/{f=1;print;next} f&&/^[[:space:]]*$/{f=0;next} f')"
+    ENV_BUILDER_ASM="$($OBJDUMP64 -d --triple=mips64el-unknown-elf $ELF | awk '/<gs_draw_env_packet>:/{f=1;print;next} f&&/^[[:space:]]*$/{f=0;next} f')"
+    # Integers rather than disassembly text inside the evaluated command, for the reason the
+    # CP0 write test gives: a `$` pasted into an eval'd string is expanded by the shell.
+    ENV_APPLY_BUILDER="$(printf '%s\n' "$ENV_APPLY_ASM" | grep -c 'jal.*<gs_draw_env_packet>' || true)"
+    ENV_APPLY_POKES="$(printf '%s\n' "$ENV_APPLY_ASM" | grep -c 'ps2_gs_poke64' || true)"
+    ENV_APPLY_CHCR="$(printf '%s\n' "$ENV_APPLY_ASM" | grep -c '0xa000' || true)"
+    ENV_APPLY_MADR="$(printf '%s\n' "$ENV_APPLY_ASM" | grep -c '0xa010' || true)"
+    ENV_APPLY_QWC="$(printf '%s\n' "$ENV_APPLY_ASM" | grep -c '0xa020' || true)"
+    ENV_APPLY_STAT="$(printf '%s\n' "$ENV_APPLY_ASM" | grep -c '0xe010' || true)"
+    # A missing function makes its own counter 0, so this fails loudly rather than vacuously:
+    # no branch of the suite treats an absent ps2_gs_draw_env_apply as a pass.
+    assert_check "The draw environment is a GIF packet: ps2_gs_draw_env_apply calls the builder once, pokes no GS register" \
+        "[ $ENV_APPLY_BUILDER -eq 1 ] && [ $ENV_APPLY_POKES -eq 0 ]"
+    assert_check "...and it leaves through DMAC channel 2: CHCR, MADR, QWC and D_STAT all written in that path" \
+        "[ $ENV_APPLY_CHCR -ge 1 ] && [ $ENV_APPLY_MADR -ge 1 ] && [ $ENV_APPLY_QWC -ge 1 ] && [ $ENV_APPLY_STAT -ge 1 ]"
+    # The third increment-3 law is the one that makes the host suite possible: the builder
+    # computes words and touches no memory-mapped register, so the identical packet the EE
+    # sends can be checked word-for-word on a machine with no GS in it at all.
+    ENV_BUILDER_REGS="$(printf '%s\n' "$ENV_BUILDER_ASM" | grep -cE 'ps2_gs_poke64|ps2_gs_gif_send|0xa0[0-9]0|0xe010' || true)"
+    assert_check "The environment builder is pure computation: gs_draw_env_packet touches no GS or DMAC register" \
+        "[ $ENV_BUILDER_REGS -eq 0 ]"
+else
+    echo "  [SKIP] 64-bit-GPR disassembler unavailable -- GIF-packet environment laws not run"
+fi
+
+# Increment 4, first half: the vertex recorder, and the Makefile's `PS2_GL=` dial reaching the
+# image it is read out of.
+#
+# The recorder's law is the increment-3 one again and for the same reason: a stream that pokes a
+# register cannot be replayed, and cannot be checked on a host.  It is asserted off the image
+# because "no DMA in sight" is a property of what the compiler kept, not of how the source reads.
+#
+# The dial's two rows are the recursion law.  The Display applet and `PS2_GL=eegs` now make the
+# same request, and while that backend has no ops table the request is answered by a software
+# rasteriser -- which has to be the *software rule*, because on a `PS2_GL=eegs` build the build
+# default is the GS itself, and a placeholder that fell back to the default would call itself
+# until the stack ran off.  Both calls are inter-translation-unit, so both are readable as jal.
+if [ -n "$OBJDUMP64" ]; then
+    REC_ASM="$($OBJDUMP64 -d --triple=mips64el-unknown-elf $ELF | awk '/<gs_rec_[a-z_]+>:/{f=1;print;next} f&&/^[[:space:]]*$/{f=0;next} f')"
+    REC_REGS="$(printf '%s\n' "$REC_ASM" | grep -cE 'ps2_gs_poke64|ps2_gs_gif_send|0xa0[0-9]0|0xe0[0-9]0' || true)"
+    REC_LINES="$(printf '%s\n' "$REC_ASM" | grep -c '^\ *[0-9a-f]' || true)"
+    # Both counters are read before the assertion: an empty $REC_ASM would make the first one 0
+    # and pass the row vacuously, which is the false negative the recorder's own link into the
+    # image is here to rule out.
+    assert_check "The vertex recorder is linked into the image (gs_rec_* present, $(printf '%s\n' "$REC_ASM" | grep -cE '^0*[0-9a-f]+ <gs_rec_') functions)" \
+        "[ $REC_LINES -gt 100 ]"
+    assert_check "...and it is pure computation: the whole recorder touches no GS register and no DMAC register" \
+        "[ $REC_REGS -eq 0 ]"
+
+    GLINIT_ASM="$($OBJDUMP64 -d --triple=mips64el-unknown-elf $ELF | awk '/<gl_init>:/{f=1;print;next} f&&/^[[:space:]]*$/{f=0;next} f')"
+    GLINIT_SW="$(printf '%s\n' "$GLINIT_ASM" | grep -c 'jal.*<gl_backend_software_default>' || true)"
+    GLINIT_DEF="$(printf '%s\n' "$GLINIT_ASM" | grep -c 'jal.*<gl_backend_default>' || true)"
+    assert_check "The EE/GS placeholder resolves to the software rule, never to the build default it may itself be" \
+        "[ $GLINIT_SW -ge 1 ] && [ $GLINIT_DEF -eq 0 ]"
+
+    # What the image was dialled to, read off the constant it returns rather than off the flags
+    # the build printed.  `PS2_GL=eegs` makes this row fail, and it is meant to: that image asks
+    # every new GL window to start on a backend with no ops table, which is a build worth making
+    # to develop against and not one to hand to anyone as the shipped one.  Row 5 of the plan of
+    # record in doc/md/PS2.md is what retires this law, by making 3 a legal answer.
+    #
+    # The register is spelled `$2` because this is llvm-objdump's numeric GPR naming, and the
+    # value is a `0x` field, so the two greps below take the whole fixed string and the trailing
+    # hex; an unreadable line leaves GLDEF_RET at 9, which fails the row rather than passing it.
+    GLDEF_ASM="$($OBJDUMP64 -d --triple=mips64el-unknown-elf $ELF | awk '/<gl_backend_default>:/{f=1;print;next} f&&/^[[:space:]]*$/{f=0;next} f')"
+    GLDEF_HEX="$(printf '%s\n' "$GLDEF_ASM" | grep -m1 -oE 'addiu[[:space:]]+\$2,[[:space:]]+\$zero,[[:space:]]+0x[0-9a-f]+' | grep -oE '0x[0-9a-f]+$' || true)"
+    if [ -n "$GLDEF_HEX" ]; then GLDEF_RET=$(( GLDEF_HEX )); else GLDEF_RET=9; fi
+    assert_check "The image's build default names a rasterizer that exists in its link (GLDEF_RET=$GLDEF_RET, so PS2_GL=tinygl or virgl, not eegs)" \
+        "[ $GLDEF_RET -lt 3 ]"
+else
+    echo "  [SKIP] 64-bit-GPR disassembler unavailable -- recorder purity and PS2_GL dial laws not run"
+fi
+
 # 7. The R5900 FPU is single-precision (Normative -- see "The FPU law" in doc/md/PS2.md)
 # ldc1/sdc1 and every .d COP1 op are not merely slow here, they are *illegal*: PCSX2
 # prints "Unknown R5900 COP1:" and the instruction does nothing at all, so every double

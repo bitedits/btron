@@ -6,6 +6,7 @@
 
 #include "egl_surface.h"
 #include "gl_dispatch.h"
+#include "gl_backend_choice.h"
 #include "backend_virgl.h"
 #if defined(BTRON_GL_BACKEND_TINYGL)
 #include "backend_tinygl.h"
@@ -13,16 +14,11 @@
 #include <btron/btron.h>
 #include <stdlib.h>
 
-/* The backend a new surface asks for.  An image gets the choice it links: only
- * the target lists that carry src/gl/tinygl/ define BTRON_GL_BACKEND_TINYGL, and
- * the PS2 port is the one image that links both software rasterizers, so it is
- * the one that can be pointed at the other one from the Makefile (PS2_GL=virgl)
- * for a timing comparison without touching this file. */
-#if defined(BTRON_GL_BACKEND_TINYGL) && !defined(BTRON_GL_PREFER_VIRGL)
-#  define EGL_DEFAULT_BACKEND GL_BACKEND_TINYGL
-#else
-#  define EGL_DEFAULT_BACKEND GL_BACKEND_VIRGL
-#endif
+/* The backend a new surface asks for is the user's choice where the image offers one, and
+ * the build's answer otherwise -- both rules live in src/gl/gl_backend_choice.c, which
+ * knows that only the targets listing src/gl/tinygl/ define BTRON_GL_BACKEND_TINYGL, that
+ * `PS2_GL=virgl` asks for the other one, and that the Display applet's "OpenGL" row can
+ * now outrank either without a rebuild. */
 
 EGL_SURFACE* egl_create_window_surface(WND *wnd) {
     if (!wnd || !wnd->dev || !wnd->dev->pixels) {
@@ -39,7 +35,7 @@ EGL_SURFACE* egl_create_window_surface(WND *wnd) {
     surf->height = wnd->dev->height;
     surf->pixels = wnd->dev->pixels;
 
-    gl_init(EGL_DEFAULT_BACKEND, surf->width, surf->height, surf->pixels);
+    gl_init(gl_backend_selected(), surf->width, surf->height, surf->pixels);
     return surf;
 }
 

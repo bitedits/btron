@@ -34,7 +34,7 @@ CC ?= gcc
 CFLAGS ?= -O2 -Wall -Wextra -std=c99 -Iinclude -Iinclude/gl -Isrc/gl -Iinclude/drivers -Isrc/kernel -Isrc/cores -Isrc/quake/include
 
 .PHONY: all posix qemu kernel tkernel sakamura foma uefi pc98 arm-elf arm64-elf m68k ps2 mips \
-        check-structure test-ps2-softfloat test-gl-math test-ps2-fb-order xmb-atlas test-xmb-atlas \
+        check-structure test-ps2-softfloat test-ps2-gs-pack test-ps2-gs-env test-ps2-gs-rec test-gl-math test-gl-backend-choice test-ps2-fb-order xmb-atlas test-xmb-atlas \
         test-xmb-render test-xmb-render-tgl \
         html2tad book2tad tad_bin test test-kernel test-yoko test-yoko4 test-m68k test-mips test-ps2 test-foma test-foma-ui foma-screens \
         segui-screens \
@@ -280,6 +280,7 @@ DEMO_SRCS = \
 
 VIRGL_SRCS = \
     src/gl/gl_dispatch.c \
+    src/gl/gl_backend_choice.c \
     src/gl/egl_surface.c \
     src/gl/backend_virgl.c \
     src/apps/glgears.c \
@@ -332,6 +333,7 @@ TINYGL_SRCS = \
 
 GL_SRCS = \
     src/gl/gl_dispatch.c \
+    src/gl/gl_backend_choice.c \
     src/gl/egl_surface.c \
     src/gl/backend_tinygl.c \
     src/gl/backend_virgl.c \
@@ -973,14 +975,26 @@ AUTO_GUI       ?= 1
 # default because a [KBD] row costs the console a line for every keystroke, which
 # is what scrolls the prompt away while it is being typed into.
 HIDTRACE       ?= 0
-# Which of the two software rasterizers a GL window on this image gets.  The port
-# links both -- src/gl/tinygl/ and src/gl/backend_virgl.c are in the source list --
-# so this is a choice, not a capability, and it is worth choosing because the two
-# are not the same size: backend_virgl.c keeps one float per pixel for depth, which
-# at 768x500 is 1.5 MB to allocate and 384k software-float stores to fill, against
-# TinyGL's 16-bit z of half that.  PS2_GL=virgl builds the old combination, and the
-# [XMBT] rows time the same load against both.
+# Which rasteriser a GL window on this image gets by default.  The port links both software
+# ones -- src/gl/tinygl/ and src/gl/backend_virgl.c are in the source list -- so tinygl and
+# virgl are a choice, not a capability, and it is worth choosing because the two are not the
+# same size: backend_virgl.c keeps one float per pixel for depth, which at 768x500 is 1.5 MB
+# to allocate and 384k software-float stores to fill, against TinyGL's 16-bit z of half that.
+# PS2_GL=virgl builds the old combination, and the [XMBT] rows time the same load against both.
+#
+# The third value is the Graphics Synthesizer: it makes the build's default the backend the
+# Display applet's "OpenGL PS2" row offers, so an A/B run against TinyGL needs a make flag and
+# no clicking.  Until src/gl/backend_eegs.c exists (row 5 of the plan of record in
+# doc/md/PS2.md) that request is answered by the linked software rasterizer with a console line
+# saying so, which is why this is a default and not a capability either -- the settings row can
+# still outrank it, and a built image reports what actually drew its frames.
+# A value that is none of the three is a typo, and a typo here builds a working image whose
+# timing rows describe a different pipeline than the one the operator asked for, so it is an
+# error rather than a silent tinygl.
 PS2_GL          ?= tinygl
+ifeq (,$(filter $(PS2_GL),tinygl virgl eegs))
+$(error PS2_GL=$(PS2_GL) is not one of tinygl, virgl, eegs)
+endif
 PS2_TARGET     = btron-ps2.elf
 PS2_ISO        = btron-ps2.iso
 PS2_LD_SCRIPT  = src/drivers/ps2/ps2.ld
@@ -990,6 +1004,9 @@ PS2_CFLAGS     = -O2 -Wall -Wextra -std=c99 -ffreestanding -nostdlib \
                  -Iinclude -Iinclude/gl -Iinclude/drivers -Isrc/kernel -Isrc/cores -Isrc/drivers/ps2
 ifeq ($(PS2_GL),virgl)
 PS2_CFLAGS    += -DBTRON_GL_PREFER_VIRGL
+endif
+ifeq ($(PS2_GL),eegs)
+PS2_CFLAGS    += -DBTRON_GL_PREFER_EEGS
 endif
 # FP_COUNT=1 makes the soft-float libcalls count themselves, and the [XMBT] rows print
 # that count per stage boundary: it is how a stage's microseconds are split between
@@ -1025,6 +1042,7 @@ CLU_TERMIO_SRCS = src/clu/lang.c           \
 # The launcher reaches its apps through weak open_*_window() externs, so an app that
 # is not linked here is a menu row that does nothing rather than a link error.
 PS2_GL_SRCS    = src/gl/gl_dispatch.c     \
+                 src/gl/gl_backend_choice.c \
                  src/gl/egl_surface.c     \
                  src/gl/backend_tinygl.c  \
                  src/gl/backend_virgl.c   \
@@ -1033,6 +1051,10 @@ PS2_GL_SRCS    = src/gl/gl_dispatch.c     \
 PS2_SRCS       = $(PS2_STARTUP)           \
                  src/cores/core_init.c    \
                  src/drivers/ps2/ps2_gs.c \
+                 src/drivers/ps2/ps2_gs_pack.c \
+                 src/drivers/ps2/ps2_gs_vram.c \
+                 src/drivers/ps2/ps2_gs_env.c \
+                 src/drivers/ps2/ps2_gs_rec.c \
                  src/drivers/ps2/ps2_builtins.c \
                  src/drivers/ps2/ps2_sio.c \
                  src/drivers/ps2/ps2_pad.c \
@@ -1080,6 +1102,23 @@ PS2_OBJS       = src/drivers/ps2/boot_ps2.ps2.o         \
 
 %.ps2.o: %.c
 	$(PS2_CC) $(PS2_CFLAGS) -MMD -MP -c $< -o $@
+
+# `PS2_GL=` changes the flags three translation units compile under, and make does not see a
+# flag change: their objects stay newer than their sources and get linked into the image built
+# for the other value, which is worse than a build failure because the `[GL]` row then describes
+# a pipeline nobody asked for and the [XMBT] timings describe it too.  So the value itself is
+# what gets tracked: it is written into a stamp file and, when the two disagree, the objects
+# that read it are removed before anything is linked.  The same law scripts/ps2_smooth.sh
+# applies to PS2_FP_COUNT, here so a bare `make ps2 PS2_GL=eegs` is covered by it too -- and it
+# has to be a content comparison rather than a stamp target with a recipe, because a target with
+# no prerequisites is never considered out of date and would sit there holding the old value.
+PS2_GL_STAMP  = .build/ps2-gl.stamp
+PS2_GL_PREV  := $(shell cat $(PS2_GL_STAMP) 2>/dev/null)
+ifneq ($(PS2_GL_PREV),$(PS2_GL))
+$(shell mkdir -p ./.build && echo '$(PS2_GL)' >$(PS2_GL_STAMP) && \
+        rm -f src/gl/gl_backend_choice.ps2.o src/gl/gl_dispatch.ps2.o src/gl/egl_surface.ps2.o)
+$(info [PS2] PS2_GL is now $(PS2_GL) (was $(if $(PS2_GL_PREV),$(PS2_GL_PREV),unset)) -- the objects that read it will rebuild)
+endif
 
 # PS2 measurement build: the present/pointer bench lives only in core_ps2.c, so one
 # object is rebuilt with the define and the shipped btron-ps2.elf keeps its own
@@ -1247,6 +1286,109 @@ $(TEST_PSFLOAT_BIN): $(TEST_PSFLOAT_OBJS) src/drivers/ps2/ps2_builtins.c
 	@mkdir -p ./.build
 	$(CC) $(TEST_PSFLOAT_OBJS) -o $@ $(LDFLAGS) -lm
 
+# Increment 2 of the EE/GS plan of record (doc/md/PS2.md): the packet builder.  A GS field
+# one bit off cannot be seen -- it draws a triangle somewhere the screen is not -- so the
+# encoders are compiled into this program and every word is compared with a literal that
+# was derived by hand from the manual's field table, the test_ps2_fb_order discipline of
+# expectations that are not computed by the code they check.
+TEST_GSPACK_SRCS = verify/tests/test_ps2_gs_pack.c
+TEST_GSPACK_OBJS = $(TEST_GSPACK_SRCS:.c=.test.o)
+TEST_GSPACK_BIN  = ./.build/test_ps2_gs_pack
+
+test-ps2-gs-pack: $(TEST_GSPACK_BIN)
+	@echo "=========================================================="
+	@echo " Running PS2 GS packet builder vs hand-computed layouts..."
+	@echo "=========================================================="
+	@./$(TEST_GSPACK_BIN)
+
+$(TEST_GSPACK_BIN): $(TEST_GSPACK_OBJS) src/drivers/ps2/ps2_gs_pack.c src/drivers/ps2/ps2_gs_pack.h
+	@mkdir -p ./.build
+	$(CC) $(TEST_GSPACK_OBJS) -o $@ $(LDFLAGS)
+
+# Increment 3: the drawing environment and the VRAM arithmetic it rests on.  Same discipline as
+# the builder's gate -- literals derived from the register tables, not from the code -- because
+# the two things here are a page unit nobody can see on a screen and an eleven-word packet whose
+# registers must arrive in the order the hardware expects.
+TEST_GSENV_SRCS = verify/tests/test_ps2_gs_env.c
+TEST_GSENV_OBJS = $(TEST_GSENV_SRCS:.c=.test.o)
+TEST_GSENV_BIN  = ./.build/test_ps2_gs_env
+
+test-ps2-gs-env: $(TEST_GSENV_BIN)
+	@echo "=========================================================="
+	@echo " Running PS2 GS draw environment and VRAM budget..."
+	@echo "=========================================================="
+	@./$(TEST_GSENV_BIN)
+
+$(TEST_GSENV_BIN): $(TEST_GSENV_OBJS) src/drivers/ps2/ps2_gs_env.c src/drivers/ps2/ps2_gs_vram.c
+	@mkdir -p ./.build
+	$(CC) $(TEST_GSENV_OBJS) -o $@ $(LDFLAGS)
+
+# Increment 4: the vertex recorder.  Same idiom as the two gates above -- the recorder and the
+# packer are #included into the test, so the identical translation unit is what the gate measures
+# and what links into btron-ps2.elf -- and the same reason: a GIF group whose NLOOP counts
+# quadwords instead of vertices, or a vertex left in pixels instead of 12.4, is a packet the GS
+# decodes happily and draws in the wrong place.  The buffer is overridden to 64 quadwords by the
+# test's own #define so the split paths are reachable without ten thousand vertices.
+TEST_GSREC_SRCS = verify/tests/test_ps2_gs_rec.c
+TEST_GSREC_OBJS = $(TEST_GSREC_SRCS:.c=.test.o)
+TEST_GSREC_BIN  = ./.build/test_ps2_gs_rec
+
+test-ps2-gs-rec: $(TEST_GSREC_BIN)
+	@echo "=========================================================="
+	@echo " Running PS2 GS vertex recorder vs hand-built GIF groups..."
+	@echo "=========================================================="
+	@./$(TEST_GSREC_BIN)
+
+$(TEST_GSREC_BIN): $(TEST_GSREC_OBJS) src/drivers/ps2/ps2_gs_rec.c src/drivers/ps2/ps2_gs_pack.c src/drivers/ps2/ps2_gs_rec.h src/drivers/ps2/ps2_gs_pack.h
+	@mkdir -p ./.build
+	$(CC) $(TEST_GSREC_OBJS) -o $@ $(LDFLAGS)
+
+# The Makefile's `PS2_GL=` dial, measured against the rule it is supposed to drive.  The dial is
+# three -D flags and the rule is a preprocessor branch, so one binary compiled with one value of
+# it cannot see the other values -- which is exactly how a flag that names nothing at all looks
+# from the inside.  This suite links src/gl/gl_backend_choice.c four times, each port TU carrying
+# the flags spelled as PS2_CFLAGS spells them, and compares all four answers.
+TEST_GLBLANE_SRCS = verify/tests/test_gl_backend_choice.c
+TEST_GLBLANE_BIN  = ./.build/test_gl_backend_choice
+GLBLANE_CFLAGS    = $(CFLAGS) -DBTRON_GL_BACKEND_TINYGL
+
+# The measuring TU takes the plain flags: it names the four ports' functions and includes no
+# implementation, so which arm of the rule it was compiled under would be meaningless.
+%.blc.o: %.c
+	@mkdir -p ./.build
+	$(CC) $(CFLAGS) -MMD -MP -c $< -o $@
+
+test-gl-backend-choice: $(TEST_GLBLANE_BIN)
+	@echo "=========================================================="
+	@echo " Running PS2 GL backend selection (Makefile PS2_GL= dial vs rule)..."
+	@echo "=========================================================="
+	@./$(TEST_GLBLANE_BIN)
+
+verify/tests/gl_backend_choice_plain_port.blc.o: verify/tests/gl_backend_choice_plain_port.c src/gl/gl_backend_choice.c src/gl/gl_backend_choice.h
+	@mkdir -p ./.build
+	$(CC) $(GLBLANE_CFLAGS) -MMD -MP -c $< -o $@
+
+verify/tests/gl_backend_choice_virgl_port.blc.o: verify/tests/gl_backend_choice_virgl_port.c src/gl/gl_backend_choice.c src/gl/gl_backend_choice.h
+	@mkdir -p ./.build
+	$(CC) $(GLBLANE_CFLAGS) -DBTRON_GL_PREFER_VIRGL -MMD -MP -c $< -o $@
+
+verify/tests/gl_backend_choice_eegs_port.blc.o: verify/tests/gl_backend_choice_eegs_port.c src/gl/gl_backend_choice.c src/gl/gl_backend_choice.h
+	@mkdir -p ./.build
+	$(CC) $(GLBLANE_CFLAGS) -DBTRON_GL_PREFER_EEGS -MMD -MP -c $< -o $@
+
+# No -DBTRON_GL_BACKEND_TINYGL: the arm every target that does not list src/gl/tinygl/ compiles
+# under, and the one the dial must leave alone.
+verify/tests/gl_backend_choice_nostgl_port.blc.o: verify/tests/gl_backend_choice_nostgl_port.c src/gl/gl_backend_choice.c src/gl/gl_backend_choice.h
+	@mkdir -p ./.build
+	$(CC) $(CFLAGS) -MMD -MP -c $< -o $@
+
+$(TEST_GLBLANE_BIN): $(TEST_GLBLANE_SRCS:.c=.blc.o) \
+                     verify/tests/gl_backend_choice_plain_port.blc.o \
+                     verify/tests/gl_backend_choice_virgl_port.blc.o \
+                     verify/tests/gl_backend_choice_eegs_port.blc.o \
+                     verify/tests/gl_backend_choice_nostgl_port.blc.o
+	@mkdir -p ./.build
+	$(CC) $^ -o $@ $(LDFLAGS)
 
 # include/gl/math.h is the freestanding math for every bare-metal target, and its
 # no-x87 half is what the PS2 and the Malta MIPS actually execute: sqrtf/sinf/cosf/
@@ -1301,6 +1443,7 @@ $(TEST_GLMATH_BIN): verify/tests/test_gl_math_float.test.o verify/tests/gl_math_
 TEST_FBORDER_SRCS = verify/tests/test_fb_order.c src/graphics/dp_core.c \
                     src/font/troncode.c src/font/jis_fonts.c src/font/tibetan_fonts.c \
                     src/gl/gl_dispatch.c src/gl/backend_virgl.c \
+                    src/gl/gl_backend_choice.c \
                     $(TINYGL_SRCS)
 TEST_FBORDER_COBJS = $(TEST_FBORDER_SRCS:.c=.fbo.o)
 TEST_FBORDER_POBJS = $(TEST_FBORDER_SRCS:.c=.fbp.o)
@@ -1931,6 +2074,7 @@ $(TEST_GMENU_BIN): $(TEST_GMENU_OBJS)
 # ═══════════════════════════════════════════════════════════════════
 TEST_XMB_SRCS = verify/tests/test_xmb_render.c src/apps/xmb.c \
                 src/gl/gl_dispatch.c src/gl/egl_surface.c src/gl/backend_virgl.c \
+                src/gl/gl_backend_choice.c \
                 src/font/troncode.c src/font/jis_fonts.c src/font/tibetan_fonts.c \
                 src/clu/vfs.c src/fs/blk_mem.c src/fs/blk_file.c \
                 src/fs/vol.c src/fs/file.c
@@ -1959,6 +2103,7 @@ $(TEST_XMB_BIN): $(TEST_XMB_OBJS)
 # closer of the two, not the tidier one.
 TEST_XMB_TGL_SRCS = verify/tests/test_xmb_render.c src/apps/xmb.c \
                     src/gl/gl_dispatch.c src/gl/egl_surface.c \
+                    src/gl/gl_backend_choice.c \
                     src/gl/backend_tinygl.c $(TINYGL_SRCS) src/gl/backend_virgl.c \
                     src/font/troncode.c src/font/jis_fonts.c src/font/tibetan_fonts.c \
                     src/clu/vfs.c src/fs/blk_mem.c src/fs/blk_file.c \
@@ -1969,7 +2114,6 @@ TEST_XMB_TGL_BIN  = ./.build/test_xmb_render_tgl
 %.tgl.o: %.c
 	$(CC) $(CFLAGS) $(SDL_CFLAGS) -DBTRON_GL_BACKEND_TINYGL \
 	      -DXMB_OUT_DIR='"./.build/tgl/"' -MMD -MP -c $< -o $@
-
 test-xmb-render-tgl: $(TEST_XMB_TGL_BIN)
 	@echo "=========================================================="
 	@echo " Running XMB Render Verification on the PS2's TinyGL backend..."
@@ -2096,7 +2240,7 @@ $(TEST_MSX_TRACE_BIN): $(TEST_MSX_TRACE_OBJS)
 	@mkdir -p ./.build
 	$(CC) $(TEST_MSX_TRACE_OBJS) -o $@ $(LDFLAGS)
 
-test: test-tad test-editor test-chat test-mozc test-wylie test-hmi test-ski test-tracker test-deskclip test-settings test-global-menu test-app-menu test-drivesetup test-fs test-quake test-ps2-softfloat test-gl-math test-ps2-fb-order test-xmb-atlas
+test: test-tad test-editor test-chat test-mozc test-wylie test-hmi test-ski test-tracker test-deskclip test-settings test-global-menu test-app-menu test-drivesetup test-fs test-quake test-ps2-softfloat test-ps2-gs-pack test-ps2-gs-env test-ps2-gs-rec test-gl-math test-gl-backend-choice test-ps2-fb-order test-xmb-atlas
 	@echo "=========================================================="
 	@echo " ALL B-SYSTEM TEST SUITES PASSED (100% SUCCESS)!"
 	@echo "=========================================================="
@@ -2253,7 +2397,7 @@ TEST_QUAKE_RENDER_SRCS = verify/tests/test_quake_render.c \
                          src/quake/render/texture.c \
                          src/quake/sys/sys_btron.c src/quake/sys/fs_btron.c \
                          src/quake/app/quake_ui.c \
-                         src/gl/gl_dispatch.c src/gl/backend_virgl.c
+                         src/gl/gl_dispatch.c src/gl/gl_backend_choice.c src/gl/backend_virgl.c
 TEST_QUAKE_RENDER_OBJS = $(TEST_QUAKE_RENDER_SRCS:.c=.test.o)
 TEST_QUAKE_RENDER_BIN  = ./.build/test_quake_render
 

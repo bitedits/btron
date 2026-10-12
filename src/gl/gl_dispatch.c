@@ -9,6 +9,10 @@
 #if defined(BTRON_GL_BACKEND_TINYGL)
 #include "backend_tinygl.h"
 #endif
+/* The EE/GS case answers with the build's own default, so it needs the rule that says what
+ * that is -- which lives in its own TU precisely so this file and the Display applet cannot
+ * drift apart. */
+#include "gl_backend_choice.h"
 #include <btron/btron.h>
 
 extern void uart_puts_raw(const char *s);
@@ -37,6 +41,21 @@ void gl_init(GL_BACKEND backend, int width, int height, void *pixel_buf) {
         s_active_backend = GL_BACKEND_TINYGL;
         break;
 #endif
+
+    /* The GS backend is a choice both the settings row and the Makefile's `PS2_GL=eegs` can
+     * make, and an ops table that does not exist yet, so the request is answered with the
+     * rasteriser this image links and says so on the console.  That is the whole of the
+     * contract until row 5 of the plan of record in doc/md/PS2.md lands: a user who picks
+     * EE/GS gets a working desktop and a log line that tells them the truth about which
+     * pipeline drew it.
+     *
+     * It falls back to the software rule and not to gl_backend_default(), because on a
+     * `PS2_GL=eegs` build the default *is* this case, and the answer would call itself. */
+    case GL_BACKEND_EEGS:
+        uart_puts_raw("[GL] EE/GS requested: no GS ops table in this image yet, "
+                      "installing the linked software rasterizer\n");
+        gl_init(gl_backend_software_default(), width, height, pixel_buf);
+        break;
 
     case GL_BACKEND_VIRGL:
         virgl_backend_init(width, height, pixel_buf);

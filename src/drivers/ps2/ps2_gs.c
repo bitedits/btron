@@ -14,6 +14,7 @@
 #include "ps2_gs.h"
 
 #include <btron/types.h>     /* BTRON_PIXEL_FB, the canvas's byte order */
+#include "ps2_gs_env.h"      /* the environment packet, and apply's argument type */
 
 /* The canvas the GS is fed from, and the one the desktop composites into.
  *
@@ -85,8 +86,12 @@ extern void ps2_gs_put_imr(uint32_t mask);
 extern const uint8_t* get_glyph_bitmap(uint16_t code, int16_t *out_width, int16_t *out_height);
 extern void* tkl_memmove(void *dst, const void *src, size_t n);
 
-/* Transmit packet of quadwords to Graphics Interface (GIF) via DMAC Channel 2 */
-static void ps2_dma_gif_send(const void *packet, uint32_t qwc)
+/* Transmit packet of quadwords to Graphics Interface (GIF) via DMAC Channel 2.
+ *
+ * Not static since increment 3: the drawing environment is a second producer on this same
+ * pipe, and giving it a copy of the register dance would be two places to keep right about
+ * STR polling.  The blit path above and ps2_gs_draw_env_apply() below are the only callers. */
+void ps2_gs_gif_send(const void *packet, uint32_t qwc)
 {
     /* Clear Channel 2 status bit in D_STAT */
     D_STAT = (1 << 2);
@@ -136,7 +141,7 @@ static void send_trx_setup(int dx, int dy, int w, int h)
     p[8] = 0ULL;
     p[9] = 0x53ULL;
 
-    ps2_dma_gif_send(setup_pkt, 5);
+    ps2_gs_gif_send(setup_pkt, 5);
 }
 
 /* Stream pixel data as IMAGE-format packets.  QWC counts quadwords, so a row of
@@ -153,8 +158,8 @@ static void send_image_stream(const void *src, uint32_t qwc)
         uint32_t n = (qwc > CHUNK_QWC) ? CHUNK_QWC : qwc;
         tag[0] = ((uint64_t)n << 0) | (1ULL << 15) | (2ULL << 58); /* IMAGE mode, EOP=1 */
         tag[1] = 0ULL;
-        ps2_dma_gif_send(img_tag, 1);
-        ps2_dma_gif_send(p, n);
+        ps2_gs_gif_send(img_tag, 1);
+        ps2_gs_gif_send(p, n);
         p += (uint32_t)n * 16u;
         qwc -= n;
     }
@@ -589,4 +594,30 @@ void ps2_gs_draw_cursor(int x, int y)
             }
         }
     }
+}
+
+/* Program the GS drawing environment (doc/md/PS2.md, EE/GS plan of record, increment 3).
+ *
+ * The packet's contents are ps2_gs_env.c's business and are gated word for word on the host;
+ * this is the part that can only be done here, because channel 2 is.  There is deliberately no
+ * ps2_gs_poke64() on this path: the GIF takes the whole environment in one DMA, in order, and
+ * nine individual stores would each take a bus turn and none of them would be ordered against
+ * the primitive stream that follows.  make test-ps2 reads that off the image -- tests 39 to 41
+ * find the call into the builder, no GS poke, and the DMAC window this write goes to.  Note that
+ * the sender itself is not what the image gate looks for: it is in this translation unit and
+ * -O2 folds it in, so the gate names the registers written rather than the call.
+ *
+ * Nothing calls it yet -- increment 4 is where an app's primitives arrive -- so the image is
+ * unchanged for everything the user can see. */
+int ps2_gs_draw_env_apply(const gs_draw_env *env)
+{
+    /* Tag pair plus one quadword per register, in quadword-aligned storage: the DMA reads
+     * 16 bytes at a time and the GIF decodes the tag before it will take a data word. */
+    static uint64_t env_pkt[(GS_ENV_NREG + 1u) * 2u] __attribute__((aligned(16)));
+    uint64_t *p = (uint64_t *)UNCACHED(env_pkt);
+
+    if (gs_draw_env_packet(env, p) != 0) return -1;
+
+    ps2_gs_gif_send(env_pkt, gs_draw_env_qwc());
+    return 0;
 }

@@ -862,6 +862,227 @@ Rather than rendering individual primitives through the GS rasterizer (which is 
 6. **Non-Destructive Cursor Restoration**:
    - Mouse cursor drawing backs up background pixels into `cursor_saved[16 * 16]`. Erasing the cursor restores the exact original background pixels with zero smearing or artifacts.
 
+#### The EE/GS backend (plan of record)
+
+Every number in *What a pixel costs, measured* is a CPU number, and the ceiling they add up to
+is the reason this exists: the frame the user needs is 16.7 ms, `f_bg` alone is 29.4 ms of
+touching pixels, and the float layer's whole measured ceiling is 1.51x.  The GS is the only
+hardware rasteriser this machine has, so the answer to a per-fragment cost is to stop paying it
+on the EE.  The backend will be written against `third_party/ps2sdk/` as the register and packet
+*reference* only -- `ee/draw/include/*.h`, `ee/libgs/include/libgs.h`, `common/include/gif_tags.h`
+and `common/include/gs_gp.h` are header descriptions of hardware, and no `.c` from that tree is
+linked or copied, in this or any later increment.
+
+Four facts fix the shape before any code is written, all of them measured or read from this tree:
+
+1. **The surface an app renders into is the compositor's blit *source*.**
+   `egl_create_window_surface()` sets `surf->pixels = wnd->dev->pixels`
+   (`src/gl/egl_surface.c:40`) and `redraw_all_windows_clip()` blits
+   `src = wnd->dev->pixels` into `g_screen_dev->pixels` row by row (`src/window/wnd.c:539`).
+   The GS cannot write EE memory: its primitives land in its own local VRAM.  So a GS backend
+   cannot keep that arrangement -- the GL window's contents stop being an array the CPU can copy
+   and become something the GS itself composes.  This is the one architectural consequence of the
+   change and every other decision follows from it.
+2. **What the apps actually ask for is a 2D UI, which the GS does natively.**  `xmb.c` uses 18 of
+   the `gl_ops_t` entry points: 2D vertices, affine texture coordinates (`glTexCoord2f`, never a
+   `q`), per-vertex RGBA, `GL_QUADS`, `glBlendFunc`, one bound texture per quad, and no depth at
+   all.  Gouraud shading (`PRIM.IIP`), affine texture interpolation (`TEX0`/`TEX1` with
+   `MMIN`/`MMAG`), and blending against the destination already in VRAM (`ALPHA` with
+   `BLEND_COLOR_DEST`, enabled by `PRIM.ABE`) are all hardware, which is exactly the split the
+   XMB wants: the per-fragment work moves to the GS and only per-vertex arithmetic stays on the
+   EE.  `glgears.c` is the counter-example and stays on TinyGL: it needs lighting and display
+   lists, for which the GS has no hardware.
+3. **The GS's coordinate window is 12.4 fixed-point around a 2048 offset.**  `GS_SET_XY` packs
+   `ftoi4(x) = x*16` into 16 bits with `XYOFFSET` at the page origin (`gs_gp.h`, `draw_types.h`),
+   so vertices are integer-quantised at 1/16 px -- invisible for a 768x500 UI, and the reason a
+   first increment does not need a VU program: an EE-side `float`-to-`16.16`-to-packet conversion
+   per vertex is enough, and the vertex count is 1,984 + 1,436 per frame, not 384,000.
+4. **The port already owns the DMA path it needs.**  `ps2_gs.c` builds GIFTAGs, primes
+   `BITBLTBUF`/`TRXPOS`/`TRXREG`/`TRXDIR` and streams DMAC channel 2 to the GS today; the
+   primitive path is the same pipe with `FLG=PACKED` and a different REGS list
+   (`PRIM, RGBAQ, XYZF2, UV/ST, TEX0, CLAMP, FOGA`).  Nothing here requires touching the driver's
+   blit path, and the canvas upload stays as it is.
+
+**Selection is a user setting *and* a build flag, and both name the same three answers.**  The row
+is the two-choice control
+
+    OpenGL PS2 : [x] TinyGL   [ ] EE/GS
+
+following the existing radio-pair idiom (`g_wm_style`/`pmc_set_style()` declared in
+`include/btron/pmc.h`, drawn in `src/settings/appearance.c:114-115`, mutated by a rect hit-test on
+`EV_BUT_DOWN` at appearance.c:160-171).  The value lives with the GL layer, not in the settings
+file, and in its own translation unit (`src/gl/gl_backend_choice.c`) because it has three callers on
+two sides of a link boundary: `gl_backend_select()`/`gl_backend_selected()` are the settings
+applet's, `gl_backend_default()` is the build's answer, and `gl_backend_software_default()` is the
+rule that used to be the `EGL_DEFAULT_BACKEND` macro in `egl_surface.c` (now deleted; the three
+cannot drift apart because there is one of each of them).  A choice nobody has made reads as the
+build's answer, so the default image is the byte-for-byte behaviour this section described before
+the row existed.  The row itself is
+`#if defined(BTRON_PS2_TARGET)`-scoped, because `src/settings/*.c` is linked by every target
+including the Pi 400, which links no GL source at all and must keep byte-identical behaviour -- and
+is verified to: the row's three strings are in `btron-ps2.elf` and in zero bytes of
+`btron-posix`.  The choice is remembered, not applied: `egl_create_window_surface()` asks
+`gl_backend_selected()` at every surface creation (`src/gl/egl_surface.c:38`), so it takes effect
+at the next GL window rather than under the one on screen, and `gl_resize`, `egl_make_current` and
+`egl_destroy_surface` continue to branch on `gl_active_backend()` -- what is installed, never what
+was requested.
+
+The build flag is the Makefile's existing `PS2_GL=`, which had two values and now has three:
+`tinygl` (the shipped image), `virgl` (the other software rasteriser, for the timing comparisons
+the `[XMBT]` rows already make), and `eegs`, which makes the image start on the same backend the
+row offers.  That is the point of it: an A/B against the GS pipeline is `make ps2 PS2_GL=eegs` and
+not a walk to the Display applet, and the applet still outranks the build on any of the three.
+Splitting the rule in two is what makes the third value expressible at all, because the placeholder
+in `gl_dispatch.c` has to answer a GS request with a rasteriser that exists, and on this build the
+*default* is the GS -- so a fallback to the default would be a call to itself.  Two laws of that
+shape are read off the image (`scripts/test_ps2.sh` rows 44 and 45): `gl_init` contains a `jal` to
+`gl_backend_software_default` and none to `gl_backend_default`, and the constant
+`gl_backend_default` returns is less than 3.  Row 45 is written as a bound and not as `== 0`
+because it is a law about the shipped image, and it has the behaviour you would want of a guard:
+`make test-ps2 PS2_GL=eegs` fails it with `GLDEF_RET=3` while row 44 still passes, which is the
+true statement that this build boots, draws through a real rasteriser, and is not the one to hand
+anyone as the default.  It is row 5's job to make 3 legal, and then this row retires.
+
+A value the dial does not know is an error rather than a silent `tinygl`, for the reason every
+measurement law in this file gives: a typo builds an image that works, prints timings, and describes
+a pipeline nobody asked for.  And because `make` does not see a *change* of flag -- the three
+objects that read `PS2_GL` stay newer than their sources and get linked into an image built for the
+other value -- the value itself is stamped into `.build/ps2-gl.stamp` and compared by content, with
+those objects deleted when it disagrees.  This is the same law `scripts/ps2_smooth.sh` already
+applies to `PS2_FP_COUNT`, in the Makefile so that a bare `make ps2 PS2_GL=eegs` is covered by it
+rather than only the runs that go through a script.  The gate has to be handed the same value as
+the build (`make test-ps2 PS2_GL=eegs`), because `test-ps2` depends on the image and would
+otherwise rebuild it back to `tinygl` and grade a different artifact -- which is how the first
+attempt at row 45's control passed while believing it was testing the eegs image.
+`verify/tests/test_gl_backend_choice.c` is the other half of the same law, one compile per dial
+value: the image rows can only see the value the shipped image was built with, and a flag that
+selected nothing would look exactly like a flag that selected `tinygl`.
+
+**Increments, each one leaving the image bootable and each with its own gate:**
+
+| # | increment | the gate that says it works |
+|:--|:---|:---|
+| 1 | *landed 2026-10-12*: the setting and the runtime selection; `GL_BACKEND_EEGS` installs the build's default ops as a placeholder and says so on the console, so nothing can regress | `make -k test` green with five new assertions in `verify/tests/test_xmb_render.c` (default matches the define, un-chosen selection reads the default, `select(EEGS)` is remembered, `gl_init(EEGS)` lands on the linked rasterizer, the round trip back); shown to have teeth -- with `gl_backend_selected()` forced to return the default the third one reports `[FAIL]`; both builds of the suite still 75/75; `make test-ps2` 54/54; `scripts/ps2_bench.sh` on the same image gives `[GL] TinyGL ZBuffer init`, `swap 0`, `render 532 us/pass` |
+| 2 | *landed 2026-10-12*: the EE-side packet builder -- `src/drivers/ps2/ps2_gs_pack.{h,c}`, nineteen encoders (`GIF_TAG`, `PRIM`, `RGBAQ`, `ST`/`UV`, `XYZ2`/`XYZF2` with the 12.4 `+2048` page offset, `TEX0`, `TEX1`, `CLAMP`, `XYOFFSET`, `SCISSOR`, `ALPHA`, `TEST`, `FRAME`, `ZBUF`, the REGS nibble packer, the AD-pair writer) and nothing else: no DMA, no register write, no caller | `verify/tests/test_ps2_gs_pack.c` #includes the builder and compares 35 words against literals hand-derived from the manual's field table; `make test-ps2-gs-pack` reports `checks=35 failures=0`, and it has teeth -- shifting `SCISSOR`'s `y1` from bit 48 to 47 produces exactly one `[FAIL] scissor 800x600  got=0x012c000003200000` and exit 1, then the clean source restores 35/0.  Two of the hand literals were wrong on the first run (a `UV` field past 14 bits, and `GIF_TAG`'s 2-bit `FLG`) and the encoders were right both times, which is the evidence the expectations are not computed by the code they check.  `make ps2` compiles the builder under the real `-msoft-float` flags, `make test-ps2` stays 54/54 (test 39 still finds COP1 only in `ps2_builtins.ps2.o`), and `make -k test` is green with the new suite in the aggregate |
+| 3 | *landed 2026-10-12*: the drawing environment as one AD-pair stream -- `src/drivers/ps2/ps2_gs_vram.{h,c}` (the two page units below, a bump cursor, the canvas reservation) and `src/drivers/ps2/ps2_gs_env.{h,c}` (GIFTAG then `XYOFFSET`, `SCISSOR`, `FRAME`, `ZBUF`, `TEST`, `ALPHA`, `CLAMP`, `TEX0`, `TEX1`: nine writes, ten quadwords), with `ps2_gs_draw_env_apply()` in `ps2_gs.c` as the only part that touches the bus.  `ps2_dma_gif_send()` became the shared `ps2_gs_gif_send()` -- declared in `ps2_gs.h`, since increment 4 is the second producer on that pipe and a copy of the STR poll is what sharing exists to prevent.  Nothing calls the apply path yet, which is the increment's point: it programs registers the blit path never has, and the screen is unchanged | `verify/tests/test_ps2_gs_env.c` compares the built packet word-for-word and the allocator against hand arithmetic: `checks=59 failures=0`.  It has teeth, three controls each failing the one law it edited: swapping `TEST` and `ALPHA` in the stream -> `[FAIL] test reg`; dropping the 12.4 scaling on the page origin -> `[FAIL] xyoffset value got=0x000081400000800c want=0x00008140000080c0`; taking `FRAME.FBA` in the 256-byte unit -> 25 failures starting `[FAIL] fba atlas`, because the builder refuses a frame plan whose offset is not a whole 8 KB page.  `make ps2` compiles both units under the real `-msoft-float` flags and `make test-ps2` is 57/57 with three new rows read off the image: 39 the apply path calls the builder once and pokes no GS register, 40 the same path writes D2_CHCR, D2_MADR, D2_QWC and D_STAT, 41 the builder touches no memory-mapped register at all, which is what makes the host suite the right instrument.  Controls D and E on the image gate: replacing the send with `GS_REG_POKE(0x18, ...)` makes 39 evaluate `[ 1 -eq 1 ] && [ 1 -eq 0 ]` and drives 40's four counters to zero; one `*(volatile uint32_t *)0x1000a000 = 1` inside the builder makes 41's counter 1.  `make -k test` exits 0 with the suite in the aggregate |
+| 4 | recorder: `src/drivers/ps2/ps2_gs_rec.{h,c}` -- a fixed-capacity GIF stream that takes a primitive's vertices and emits packed groups whose REGS list is `PRIM, RGBAQ, ST, XYZ2`, the vertex coordinates folded to 12.4 around the `+2048` page origin by the increment-2 encoder, and nothing else: it holds no matrix and no projection, because the modelview arithmetic belongs with the GL semantics in row 5.  A full buffer is sent and a new group started rather than a vertex dropped, so capacity is a latency knob and the counter that matters is DMA starts per frame -- see the capacity note below the table | host suite against hand-built words, the increment 2 and 3 discipline: a two-vertex strip and a four-vertex quad, each field's literal written from the field table rather than from the code; controls for the three things only a hand literal catches -- a vertex in pixels instead of 12.4, `ST`'s `s` in the wrong half of its word, a `GIFTAG` whose `NLOOP` counts quadwords instead of vertices |
+| 5 | presentation: `backend_eegs.c` implements the `gl_ops_t` table on the recorder, and the PS2 present emits the environment packet and then the recorded stream after `ps2_gs_upload()`, clipped to the GL window's rect; `redraw_all_windows_clip()` stops blitting that window's surface into the canvas, under `BTRON_PS2_TARGET` only | `scripts/ps2_smooth.sh`: the XMB's `draw=` column, which is 176.5 ms today, against the frame gates -- and the user's eyes, because this is the first increment that can change what a window looks like |
+| 6 | the pointer and window decorations as GS sprites over the GS-rendered layer, because they are drawn *after* the canvas today and would otherwise be buried | the user's eyes on the screen -- this is the increment whose correctness cannot be established headlessly |
+
+**Increment 4's capacity is a latency knob, not a correctness limit.**  The largest raster window
+in the measured frame is `f_ribbon`'s 1,984 vertices over 1,828 triangles, and a frame's total is
+about 3,424 (`f_bg`'s 4 plus `f_ribbon` plus `f_menu`'s 1,436).  A group's REGS list here is
+`PRIM, RGBAQ, ST, XYZ2` -- four quadwords per vertex, 64 B -- so a frame is about 13,700 quadwords,
+219 KB of stream.  Sizing the buffer for a frame is the wrong law, because the frame's vertex count
+is an application property that changes with `XB_RIBBON_ROWS/COLS` and with every future window that
+draws.  Instead the recorder holds a fixed buffer (4,096 quadwords, 64 KB) and, when a vertex would
+not fit, sends what it has through channel 2 and starts a second tag with the same REGS list and the
+same `PRIM` -- legal because a packed group's `NLOOP` counts vertices, and a GIF transfer may carry
+any number of groups.  The consequence is that no application can overflow anything, and what the
+counters report is the number of DMA starts per frame, which for the XMB is about four and is the
+number this increment is trying to keep small.  A stream that *drops* a tail is the failure mode to
+design out: a partial frame with no evidence is exactly the class of bug that cannot be seen on a
+screen that is already 600 ms behind.
+
+The fourth quadword is the cost of a claim not made elsewhere in this file.  `PRIM`'s texture,
+blend and fog flags are decremented by the hardware as each primitive completes, under
+`PRMODE.MODE/OFFSET`, so a strip that sets them once loses them from its second triangle on --
+which is how multipass texturing is done, and is the opposite of what a UI wants.  Two answers
+exist.  This one re-sends `PRIM` per vertex, costs 64 B instead of 48 B per vertex, and claims
+nothing about `PRMODE`'s bit layout.  The cheaper one programs `PRMODECONT` and `PRMODE` (offsets
+`0x1A`/`0x1B`, already named in `ps2_gs_pack.h`) into the increment-3 environment stream once, with
+the decrement select set to "no decrement", and then drops `PRIM` from the REGS list.  That is worth
+a third of the bus traffic and it needs a field table this file does not yet hold with enough
+confidence to gate, so it is recorded here as the follow-up it is: when `PRMODE`'s `MODE[3:0]`,
+`OFFSET[6:4]`, `A_MODE[10:8]` and `CONTEXT[11]` widths have been confirmed and pinned by a hand
+literal like every other field in this port, `GS_REC_REGS_N` goes from 4 to 3 and the recorder's
+per-vertex price goes with it.
+
+What increment 2's row called "texture upload into GS VRAM" split across two increments, and where
+each half landed is worth stating so the row is not read as finished: the builder produces the
+`TEX0`/`TEX1`/`CLAMP` words that *describe* a texture page, the IMAGE-mode stream that moves pixels
+into VRAM already exists in `ps2_gs.c`, and the allocator that chooses those page addresses landed
+with increment 3 -- what still has no caller is the combination of the two, which is increment 4's
+presentation step.
+
+Increment 4 onward is the work.  Increment 3 landed the way its row said it would: it programs
+registers nothing else programs and has no caller yet, so what the screen shows did not change when
+it went in.  Increment 4 is where the arrangement stops being a CPU one -- the GL window's pixels
+become GS VRAM the GS itself draws over, so `redraw_all_windows_clip()` must be told to skip that
+window instead of blitting an array nobody writes any more.  That is the first change in this plan
+that can affect a window other than the GL one, and it is the reason increment 4 has a bench gate
+of its own.
+
+One of increment 3's promised gates had to be restated after it was measured, and the reason
+belongs here because it will recur in every image gate that asks whether something is sent as a
+packet.  The row said the apply path "calls the DMA sender".  In the linked image it does not:
+`ps2_gs_gif_send()` lives in the same translation unit as `ps2_gs_draw_env_apply()`, so `-O2`
+inlines it and the disassembly shows the channel-2 register dance inside the apply path with no
+`jal` to the sender's label anywhere.  The law was never about a function boundary, so the row
+asserts what survives inlining -- the DMAC window the path writes -- while the call that *is*
+guaranteed to be real is the one crossing into `ps2_gs_env.c`, which no stage can dissolve because
+`PS2_CFLAGS` carries no `-flto`.  Inter-TU calls are assertable as `jal`; intra-TU ones are not.
+
+**Increment 3's VRAM arithmetic, measured before it was written.**  GS local memory is 4 MB, and
+its address fields are paged in two different units, which is easy to miss because both are called
+"page" in most prose: a texture or transfer address (`TEX0.TBA`, `BITBLTBUF.SBA/DBA`) is a 14-bit
+index of 64-word units -- 256 bytes -- and 16,384 x 256 = 4,194,304 exactly; a frame or Z-buffer
+base (`FRAME.FBA`, `ZBUF.ZBA`) is a 9-bit index of 2048-word units -- 8192 bytes -- and 512 x 8192
+= 4,194,304 exactly.  Each field's width times its unit is the whole of VRAM, which is what makes
+the reading unambiguous rather than remembered; ps2tek words both as "in words/N".  This falsified
+a comment in `ps2_gs_pack.h`, which said 256-byte units for `FRAME.FBA`; the encoders take a raw
+field value, so no built word changes, but the caller's arithmetic would have been off by 32x, and
+the header now states both units.
+
+The consequence for the architecture is arithmetic, not taste.  The canvas is CT32 at `FBW`=13
+(832 px) x 600 = 1,996,800 B.  The XMB's GL window is 776x536 (`src/apps/xmb.c:3331` takes the
+desktop minus 24 and 64), whose own CT32 layer at `FBW`=13 would be 1,783,808 B.  The icon atlas is
+384x384 CT32 = 589,824 B.  Those three sum to 4,370,432 B, which is 176,128 B more than the GS has,
+before the font atlas or any Z buffer.  So the GS backend gets **no second full-screen surface**:
+increment 4 programs the drawing environment to render into the very canvas the CPU blit has just
+filled, `SCISSOR` clipped to the window's rect -- which is what its own row said ("emitted after
+the canvas stream, clipped to the window's rect") and is now the only arrangement that fits.  What
+increment 3's allocator therefore reserves is the canvas at page 0 (1,996,800 B rounded up to 244
+pages of 8 KB), then texture pages out of the remaining 268 pages, of which the icon atlas takes 72
+-- leaving 196 pages, 1.6 MB, for a wallpaper-as-texture, further atlases, and the one 8 KB page a
+Z buffer needs if a depth test is ever turned on.
+
+One pair of register facts belongs here because it decides what a window-relative packet looks
+like: `SCISSOR` takes plain unsigned screen pixels (11 bits, 0..2047) with no offset, while a
+vertex is 12.4 around the 2048 offset and, in the manual's words, "when a vertex kick occurs,
+XYOFFSET is subtracted from the vertex's X and Y coordinates".  So `XYOFFSET` carries the page
+origin -- 0x8000 plus the window's x/y -- and the clip rect can stay in screen coordinates while
+every vertex stays relative to its own window.  Nothing in increments 2 or 3 has to convert a
+vertex by the window's position.
+
+**Restoring a positive control is a trap the gate itself cannot see.**  A control that edits a
+source, shows the `[FAIL]`, and puts the file back must leave the source *newer* than the object
+built from the broken version.  `cp -p` (or any mtime-preserving restore) leaves the copy's older
+timestamp on the file, make then judges the object up to date, and the suite re-reports the
+injected failure as though it were still in the source.  That happened during increment 2 and was
+reproduced deliberately: patched source -> `[FAIL] scissor`; `cp -p` restore -> the same `[FAIL]`
+with a clean source; `rm` the object and rebuild -> 35/0.  The recorded-dependency machinery is
+not at fault (`-MMD -MP` plus the `-include` of `*.test.d` already rebuilds a `#include`d source,
+which is why no explicit prerequisite was added).  Prefer `touch` over `cp -p` when undoing a
+control, and treat a failure that survives a restore as a stale object until a rebuild says
+otherwise.
+
+The trap has a second shape, met during increment 3: several controls run as one compound
+command, where a later control reads a source the previous control never restored.  Control B
+removed the 12.4 scaling from `gs_pack_xyoffset`'s caller, control C changed `gs_vram_fba`'s page
+unit, and C's run printed B's `[FAIL] xyoffset` -- which looks like a control that does not work
+and is really a control that ran against a dirty tree.  Run one control per command, restore it,
+and re-gate to 0 failures before starting the next; a control whose `[FAIL]` names a *different*
+law than the one it edited has measured nothing.
+
+**Reading an image gate needs the pipe kept alive.**  `scripts/test_ps2.sh` runs under `set -o
+pipefail`, so an awk that extracts one function's disassembly and `exit`s at the blank line
+SIGPIPEs the disassembler on its way out: the pipeline's status becomes 141, the assignment that
+took it fails, and the script dies before any row is reported -- with no message naming the row
+that caused it.  Stop *printing* at the range's end instead of exiting, and the disassembler runs
+to completion.  The rows that already used `awk '...{exit}...'` survived only because their
+pipeline sits inside an evaluated `[ $(...) ]`, where the status is consumed by the test.
+
 ### 2.2 DualShock 2 Controller Driver (`ps2_pad`)
 
 The PS2 gamepad input system provides direct analog pointer manipulation and tactile shortcuts:

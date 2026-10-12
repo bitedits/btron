@@ -11,6 +11,11 @@
 
 #include <btron/libc_shim.h>
 
+#if defined(BTRON_PS2_TARGET)
+/* The two choices the third section offers, and the one remembered answer. */
+#include "../gl/gl_backend_choice.h"
+#endif
+
 typedef struct {
     WND *wnd;
     BOOL checks[10];
@@ -18,6 +23,43 @@ typedef struct {
 } AppletState_display;
 
 static AppletState_display g_state_display;
+
+#if defined(BTRON_PS2_TARGET)
+/*
+ * The row's whole job is to change one remembered value and say so.
+ *
+ * The choice is read when a GL surface is created (`src/gl/egl_surface.c` asks
+ * `gl_backend_selected()` there), so it takes effect at the next window that opens rather
+ * than under the one that is on screen -- re-installing a rasteriser while an app holds a
+ * context to the old one is not a thing this applet is in a position to do safely.
+ *
+ * The console row is why the setting is testable headlessly: it names the choice made and
+ * the pipeline that answers, and on this image the EE/GS answer is TinyGL with a line
+ * saying the GS backend is not in the image yet (`src/gl/gl_dispatch.c`).
+ *
+ * `snprintf` + `uart_puts_raw` rather than `printf`: this file is compiled
+ * `-ffreestanding -nostdlib` for the PS2 image, where `<btron/libc_shim.h>` declares
+ * `snprintf` and no `printf` at all, and the EE's console is the SIO row every other
+ * measurement in this port is read from.
+ */
+extern void uart_puts_raw(const char *s);
+
+static void display_select_gl_backend(GL_BACKEND backend)
+{
+    if (gl_backend_selected() == backend) return;
+
+    gl_backend_select(backend);
+    g_state_display.is_dirty = TRUE;
+
+    char msg[96];
+    snprintf(msg, sizeof(msg),
+             "[DISPLAY] OpenGL PS2 choice: %s (applies to the next GL window)\n",
+             backend == GL_BACKEND_EEGS ? "EE/GS" : "TinyGL");
+    uart_puts_raw(msg);
+
+    redraw_all_windows();
+}
+#endif
 
 /* 3D Crisp Graphical Checkbox */
 static void paint_ui_checkbox(GDEV *dev, H x, H y, const char *label, BOOL checked, BOOL focused) {
@@ -109,6 +151,22 @@ static void paint_display_settings(WND *wnd, GDEV *dev) {
     paint_ui_checkbox(dev, 18, 200, "Apply sRGB TRON Standard Color Profile (Gamma 2.2)", g_state_display.checks[4], FALSE);
     paint_ui_checkbox(dev, 18, 222, "Enable VESA Double Buffering Surface Compositor", g_state_display.checks[5], FALSE);
 
+    /* Section 3: the rasteriser a GL window's frame is drawn by.  PS2-only, because the
+     * choice is between two pipelines this machine has hardware for -- an Emotion Engine
+     * software fill and the Graphics Synthesizer's own -- and no other target has the
+     * second one.  The row is a choice, not a status light: what is actually installed is
+     * printed at every surface's creation by the backend itself. */
+#if defined(BTRON_PS2_TARGET)
+    RECT s3 = { 10, 262, dev->width - 10, 340 };
+    fill_rec(dev, &s3, COLOR_WHITE);
+    drw_rec(dev, &s3);
+    drw_tc_string(dev, 16, 254, " [3. OpenGL PS2 Rasterizer] ", COLOR_NAVY, COLOR_WHITE);
+    paint_ui_radio(dev, 18, 276, "OpenGL PS2: TinyGL software rasterizer (EE CPU)",
+                   gl_backend_selected() == GL_BACKEND_TINYGL, FALSE);
+    paint_ui_radio(dev, 18, 298, "OpenGL PS2: EE/GS hardware rasterizer (GS, in progress)",
+                   gl_backend_selected() == GL_BACKEND_EEGS, FALSE);
+#endif
+
     /* Action Buttons */
     H btn_y = dev->height - 35;
     paint_ui_button(dev, dev->width - 240, btn_y, 70, 24, "Default", FALSE);
@@ -160,12 +218,27 @@ static void handle_display_event(WND *wnd, const EVT *evt) {
             redraw_all_windows();
             return;
         }
+        /* Section 3: which pipeline draws the next GL window's frame */
+#if defined(BTRON_PS2_TARGET)
+        if (rel_x >= 18 && rel_x <= 480 && rel_y >= 276 && rel_y <= 294) {
+            display_select_gl_backend(GL_BACKEND_TINYGL);
+            return;
+        }
+        if (rel_x >= 18 && rel_x <= 480 && rel_y >= 298 && rel_y <= 316) {
+            display_select_gl_backend(GL_BACKEND_EEGS);
+            return;
+        }
+#endif
+
         /* Action Buttons */
         H btn_y = client_h - 35;
         if (rel_y >= btn_y && rel_y <= btn_y + 24) {
             if (rel_x >= client_w - 240 && rel_x <= client_w - 170) {
                 /* Default */
                 for (int i = 0; i < 6; i++) g_state_display.checks[i] = TRUE;
+#if defined(BTRON_PS2_TARGET)
+                display_select_gl_backend(gl_backend_default());
+#endif
                 g_state_display.is_dirty = TRUE;
                 redraw_all_windows();
                 return;

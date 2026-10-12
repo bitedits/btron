@@ -23,6 +23,12 @@ typedef enum {
     GL_BACKEND_TINYGL = 0,    /* TinyGL  (src/gl/tinygl/, ZBuffer + zgl)  */
     GL_BACKEND_VIRGL  = 1,    /* backend_virgl.c's own triangle raster    */
     GL_BACKEND_I915   = 2,    /* Awe Morris i915 zero-cost proxy (Ph.3)   */
+    /* The Graphics Synthesizer as the rasteriser and the Emotion Engine as the vertex
+     * transformer: no software fill, no canvas upload, and the only entry point here that
+     * is not a CPU rasterizer.  It is a choice the user can already make (the Display
+     * applet's OpenGL row, src/gl/gl_backend_choice.c) and gl_init() says out loud that
+     * the backend itself is not in the image yet. */
+    GL_BACKEND_EEGS   = 3,
 } GL_BACKEND;
 
 /* The image's one microsecond, reached through the surface layer rather than included

@@ -81,6 +81,11 @@ void ps2_gs_flush(void);
 /* Copies a rectangle of the RDRAM canvas into the displayed VRAM page with one Host->Local blit.
    (x, y) is the top-left in canvas pixels; w is rounded up to a quadword (4 px) because the upload stream has no row pitch. */
 void ps2_gs_upload(int x, int y, int w, int h);
+/* The one DMAC channel-2 sender, shared by every producer that hands the GIF a packet: the
+ * blit stream above and the drawing environment in ps2_gs_env.h.  Declared rather than left
+ * accidentally global, because a second copy of the STR poll is the thing this exists to
+ * prevent and the next producer needs to find the first one. */
+void ps2_gs_gif_send(const void *packet, uint32_t qwc);
 uint32_t *ps2_gs_get_framebuffer(void);
 /* Install the canvas the GS is fed from.  core_ps2.c calls this with its desktop
  * backbuffer as the first act of ps2_kernel_main(), before ps2_gs_init(): the boot

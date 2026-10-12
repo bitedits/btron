@@ -63,7 +63,6 @@ static void emit_vertex(const eegs_vertex_t *v)
 
 void eegs_frame_begin(gs_rec_sink sink, void *user)
 {
-    gs_rec_init(sink, user);
     s_prim_valid = 0;
     s_prim_live = 0u;
     s_prims = 0u;

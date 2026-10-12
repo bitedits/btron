@@ -14,6 +14,7 @@
 
 #include "ps2_gs_tex.h"
 
+#include "ps2_gs.h"                       /* GS_PSM_CT32, the one format this port uploads */
 #include "ps2_gs_pack.h"
 #include "ps2_gs_vram.h"
 

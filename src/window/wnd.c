@@ -21,6 +21,25 @@ static GDEV *g_screen_dev = NULL;
 static RECT s_wnd_inval_damage = { 0, 0, 0, 0 };
 static BOOL s_wnd_inval_valid = FALSE;
 
+/* The EE/GS layer's two facts (doc/md/PS2.md, increment 5c).  A layer is a property of the
+ * window (`wnd->gl_layer`, set by egl_create_window_surface()), so the layer is found by
+ * walking the stack rather than remembered here -- one truth, and no second copy of the z-order
+ * that can go out of date when a window closes or a second GL app opens.  The topmost wins when
+ * more than one is visible: the environment packet names one rect, so a second layer draws
+ * inside the first one's, which is increment 5c's documented limit rather than a secret.
+ *
+ * `s_gl_pending` is set by the composite walk when it runs a layer window's paint callback, i.e.
+ * when a GIF stream now exists that nobody has put on the bus yet; `s_gl_client` is that window's
+ * client rect in screen coordinates, which is where the environment packet's XYOFFSET and SCISSOR
+ * come from.  Both are cleared by wnd_gl_layer_take(), so a present that does not happen cannot
+ * make the next one draw a stale stream -- the staging buffer is rewritten by the next frame
+ * that records. */
+static RECT s_gl_client = { 0, 0, 0, 0 };
+static BOOL s_gl_pending = FALSE;
+static RECT s_gl_cover[WND_GL_COVER_MAX];
+static int s_gl_cover_n;
+static int s_gl_cover_dropped;
+
 static void wnd_mgr_window_destroyed(WND *wnd);
 static void wnd_inval_rect(const RECT *r);
 
@@ -193,6 +212,14 @@ ER cls_wnd(WND *wnd) {
     /* The vacated rect is desktop (and possibly lower windows) from now on. */
     wnd_inval_rect(&wnd->bounds);
 
+    /* Closing the layer window ends the layer: the next composite draws desktop into that rect,
+     * and a present path that still believed a stream was pending would draw it over desktop. */
+    if (wnd->gl_layer) {
+        s_gl_pending = FALSE;
+        s_gl_cover_n = 0;
+        s_gl_cover_dropped = 0;
+    }
+
     if (wnd->dev) cls_dev(wnd->dev);
     free(wnd);
     return E_OK;
@@ -323,6 +350,50 @@ BOOL wnd_take_inval_damage(RECT *out) {
     return TRUE;
 }
 
+/* The topmost visible layer window, or NULL. */
+static WND *find_gl_layer(void) {
+    for (WND *c = g_wnd_head; c; c = c->next)
+        if (c->visible && c->gl_layer) return c;
+    return NULL;
+}
+
+WND* wnd_gl_layer(void) { return find_gl_layer(); }
+
+BOOL wnd_gl_layer_take(RECT *client_out) {
+    if (!s_gl_pending) return FALSE;
+    if (client_out) *client_out = s_gl_client;
+    s_gl_pending = FALSE;
+    return TRUE;
+}
+
+void wnd_gl_cover_add(const RECT *r) {
+    RECT c;
+    if (!r || r->right <= r->left || r->bottom <= r->top) return;
+    /* No layer: nothing was buried, so there is nothing to re-upload and the list must not
+     * collect a rect no present path will ever ask for. */
+    if (!find_gl_layer()) return;
+    /* Clamped to the screen: each rect is re-uploaded on its own, and a caller that adds a
+     * rect partly off-screen would otherwise ask the DMA for rows outside the canvas. */
+    c = *r;
+    if (g_screen_dev) {
+        if (c.left < 0) c.left = 0;
+        if (c.top < 0) c.top = 0;
+        if (c.right > g_screen_dev->width) c.right = g_screen_dev->width;
+        if (c.bottom > g_screen_dev->height) c.bottom = g_screen_dev->height;
+    }
+    if (c.right <= c.left || c.bottom <= c.top) return;
+    if (s_gl_cover_n >= WND_GL_COVER_MAX) { s_gl_cover_dropped++; return; }
+    s_gl_cover[s_gl_cover_n++] = c;
+}
+
+int wnd_gl_cover_take(wnd_gl_cover *out) {
+    int n = s_gl_cover_n;
+    if (out) { out->r = s_gl_cover; out->n = n; out->dropped = s_gl_cover_dropped; }
+    s_gl_cover_n = 0;
+    s_gl_cover_dropped = 0;
+    return n;
+}
+
 ER inval_wnd(WND *wnd) {
     if (!wnd) return E_PAR;
     /* BTRON semantics: the app declares its client image stale, so the next
@@ -336,18 +407,26 @@ ER inval_wnd(WND *wnd) {
 BOOL wnd_damage_needs_paint(const RECT *damage) {
     if (!damage) return FALSE;
     for (WND *curr = g_wnd_head; curr; curr = curr->next) {
-        if (!curr->visible || !curr->paint || curr->img_valid) continue;
+        if (!curr->visible || !curr->paint) continue;
         if (curr->bounds.right <= damage->left || curr->bounds.left >= damage->right ||
             curr->bounds.bottom <= damage->top || curr->bounds.top >= damage->bottom)
             continue;
+        /* A layer window's picture is not in any pixmap: it is the stream the paint callback
+         * records.  So a band that touches one has to re-run that callback even when
+         * img_valid says the client image is up to date -- which it will, every frame after
+         * the first, because the layer never blits and never re-uses what it drew. */
+        if (curr->img_valid && !curr->gl_layer) continue;
         return TRUE;
     }
     return FALSE;
 }
 
+/* A visible layer window counts as invalid for both of these: its image is the GIF stream, not
+ * the pixmap, and a band that overlaps it has to re-record the stream or it uploads a canvas
+ * over a region nothing draws into. */
 BOOL wnd_any_image_invalid(void) {
     for (WND *curr = g_wnd_head; curr; curr = curr->next)
-        if (curr->visible && curr->paint && !curr->img_valid) return TRUE;
+        if (curr->visible && curr->paint && (!curr->img_valid || curr->gl_layer)) return TRUE;
     return FALSE;
 }
 
@@ -355,7 +434,8 @@ void wnd_get_invalid_image_bounds(RECT *out) {
     if (!out) return;
     RECT u = { 0, 0, 0, 0 };
     for (WND *curr = g_wnd_head; curr; curr = curr->next) {
-        if (!curr->visible || !curr->paint || curr->img_valid) continue;
+        if (!curr->visible || !curr->paint) continue;
+        if (curr->img_valid && !curr->gl_layer) continue;
         if (u.right <= u.left || u.bottom <= u.top) { u = curr->bounds; continue; }
         if (curr->bounds.left < u.left)   u.left = curr->bounds.left;
         if (curr->bounds.top < u.top)     u.top = curr->bounds.top;
@@ -507,21 +587,38 @@ void redraw_all_windows_clip(const RECT *damage, BOOL blit_only) {
         draw_retro_window_frame(g_screen_dev, wnd);
         t_frame += btron_render_perf_us() - t_mark;
         if (!wnd->dev || !wnd->dev->pixels) continue;
-        /* Staleness is a property of one window's image, not of the composite: the
-         * walk's caller has already decided that some window in this band has to be
-         * re-rendered, and repainting the valid ones with it cost 55 ms of every XMB
-         * frame on the PS2 ([XMBT] cycle's comp= column, doc/md/PS2.md). */
-        if (!blit_only && wnd->paint && !wnd->img_valid) {
-            t_mark = btron_render_perf_us();
-            wnd->paint(wnd, wnd->dev);
-            t_paint += btron_render_perf_us() - t_mark;
-            wnd->img_valid = TRUE;
-        }
-
         H title_h = (wnd->attr & WND_ATTR_TITLE) ? WND_TITLE_HEIGHT : 0;
         H border = (wnd->attr & WND_ATTR_BORDER) ? 4 : 0;
         H dest_x = wnd->bounds.left + border;
         H dest_y = wnd->bounds.top + title_h + border;
+
+        /* Staleness is a property of one window's image, not of the composite: the
+         * walk's caller has already decided that some window in this band has to be
+         * re-rendered, and repainting the valid ones with it cost 55 ms of every XMB
+         * frame on the PS2 ([XMBT] cycle's comp= column, doc/md/PS2.md).  A layer window is
+         * the exception the rule cannot cover: its picture exists only in the stream this
+         * callback records, so it is re-recorded every time a band reaches it. */
+        const BOOL must_repaint = wnd->gl_layer || !wnd->img_valid;
+        if (!blit_only && wnd->paint && must_repaint) {
+            t_mark = btron_render_perf_us();
+            wnd->paint(wnd, wnd->dev);
+            t_paint += btron_render_perf_us() - t_mark;
+            wnd->img_valid = TRUE;
+            if (wnd->gl_layer) {
+                s_gl_pending = TRUE;
+                /* Screen rect of the client area, in the units the environment packet wants:
+                 * the window's origin is XYOFFSET's page point and the clip is this rect. */
+                s_gl_client.left = dest_x;
+                s_gl_client.top = dest_y;
+                s_gl_client.right = dest_x + wnd->dev->width;
+                s_gl_client.bottom = dest_y + wnd->dev->height;
+            }
+        }
+        /* The GS draws these pixels, into the same VRAM this canvas was just uploaded to.
+         * Blitting the client pixmap here would put the software picture under the stream,
+         * where it is invisible, and would cost the band's whole area for nothing. */
+        if (wnd->gl_layer) continue;
+
         H cx0 = damage->left - dest_x;
         H cy0 = damage->top - dest_y;
         H cx1 = damage->right - dest_x;

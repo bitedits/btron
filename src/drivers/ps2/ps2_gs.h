@@ -67,6 +67,10 @@ uint64_t ps2_gs_peek64(uint32_t addr);
 #define GS_PSM_CT24             0x01    /* RGB24 */
 #define GS_PSM_CT16             0x02    /* RGBA16 (5551) */
 #define GS_PSM_CT16S            0x0A
+/* ZBUF.ZSM takes a different ordinal set from FRAME.PSM: the depth formats.  3 is 32-bit Z
+ * (24.8 fixed), the one this port names -- with TEST.ZTEN clear and ZMSK set it is never read or
+ * written, but the register still has to hold a format the hardware accepts. */
+#define GS_PSMZ32               0x03
 
 /* Public API */
 void ps2_gs_init(uint32_t width, uint32_t height);

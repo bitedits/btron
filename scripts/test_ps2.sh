@@ -250,26 +250,123 @@ if [ -n "$OBJDUMP64" ]; then
     assert_check "...and it is pure computation: the whole recorder touches no GS register and no DMAC register" \
         "[ $REC_REGS -eq 0 ]"
 
+    # Increment 5b: the texture-plane registry, its purity, and the one seam that makes its words
+    # reach the bus.  Purity is the increment-3 and -4 law again (a stream that pokes a register
+    # cannot be replayed or gated on a host); the seam row is 5b's own, because a registry that is
+    # linked but never handed a sink plans planes whose bytes never cross, and the symptom is an
+    # icon drawn from a page that holds whatever was uploaded last.
+    TEX_ASM="$($OBJDUMP64 -d --triple=mips64el-unknown-elf $ELF | awk '/<gs_tex_[a-z_]+>:/{f=1;print;next} f&&/^[[:space:]]*$/{f=0;next} f')"
+    TEX_REGS="$(printf '%s\n' "$TEX_ASM" | grep -cE 'ps2_gs_poke64|ps2_gs_gif_send|send_trx|send_image|0xa0[0-9]0|0xe0[0-9]0' || true)"
+    TEX_LINES="$(printf '%s\n' "$TEX_ASM" | grep -c '^\ *[0-9a-f]' || true)"
+    assert_check "The texture-plane registry is linked into the image (gs_tex_* present, $(printf '%s\n' "$TEX_ASM" | grep -cE '^0*[0-9a-f]+ <gs_tex_') functions)" \
+        "[ $TEX_LINES -gt 40 ]"
+    assert_check "...and it is pure computation: the whole registry touches no GS register, no DMAC register and no transfer" \
+        "[ $TEX_REGS -eq 0 ]"
+
+    GSINIT_ASM="$($OBJDUMP64 -d --triple=mips64el-unknown-elf $ELF | awk '/<ps2_gs_init>:/{f=1;print;next} f&&/^[[:space:]]*$/{f=0;next} f')"
+    GSINIT_SINK="$(printf '%s\n' "$GSINIT_ASM" | grep -c 'jal.*<gs_tex_install_sink>' || true)"
+    assert_check "The GS driver installs itself as the registry's sink at init, so a plane's bytes cross while the app still draws" \
+        "[ $GSINIT_SINK -ge 1 ]"
+
+    # The same function's other seam, gated separately because the two failures it prevents are
+    # different: without the sink a plane's bytes never cross, without `gs_tex_init` the cursor
+    # starts at zero -- which is not an empty page but the canvas the PCRTC reads, so the first
+    # uploaded icon would overwrite the screen it is drawn on.  The static initializer cannot show
+    # that on a host (a zeroed `gs_vram_t` is what the host suite sees too), so it is an image row.
+    GSINIT_VRAM="$(printf '%s\n' "$GSINIT_ASM" | grep -c 'jal.*<gs_tex_init>' || true)"
+    assert_check "The registry's VRAM cursor is started above the canvas at init, not at page 0" \
+        "[ $GSINIT_VRAM -ge 1 ]"
+
+    # The upload seam: `gl_tex_plane_publish()` is texture.c's call into a different translation
+    # unit, and `gl_image_store()` is static and inlined, so the count is taken over the whole
+    # image rather than inside one named function.  Dead-code elimination here is the silent
+    # 5b failure: no plane registered means the stage clears TME on every textured primitive,
+    # and with the canvas still blitted underneath, the screen looks exactly as it did before.
+    TEX_JAL="$($OBJDUMP64 -d --triple=mips64el-unknown-elf $ELF | grep -c 'jal.*<gs_tex_register>' || true)"
+    assert_check "A GL texture upload reaches the plane registry from the downstack ($TEX_JAL call sites)" \
+        "[ $TEX_JAL -ge 1 ]"
+
+    # The other half of the same seam, in the other direction: the fill path resolves the bound
+    # image's plane and names it to the stage, which is what makes the recorded `PRIM` carry TME.
+    # Both are inter-translation-unit calls into files this one cannot see, so both read as jal.
+    FILL_ASM="$($OBJDUMP64 -d --triple=mips64el-unknown-elf $ELF | awk '/<gl_draw_triangle_fill>:/{f=1;print;next} f&&/^[[:space:]]*$/{f=0;next} f')"
+    FILL_TEX="$(printf '%s\n' "$FILL_ASM" | grep -c 'jal.*<gs_tex_find>' || true)"
+    FILL_STAGE="$(printf '%s\n' "$FILL_ASM" | grep -c 'jal.*<eegs_texture>' || true)"
+    assert_check "The textured fill looks its plane up in the registry and hands it to the raster stage" \
+        "[ $FILL_TEX -ge 1 ] && [ $FILL_STAGE -ge 1 ]"
+
+    # Increment 5c retired the placeholder.  `GL_BACKEND_EEGS` no longer resolves to "whatever the
+    # software rule says": gl_init's EEGS arm installs the *linked* CPU front end, because row 5
+    # refuses a second rasteriser and the GS stage hangs on TinyGL's own draw_triangle hooks.  So
+    # the two arms that name a pipeline are the same call twice, and the arm that used to fall back
+    # is compiled out of this build entirely -- which is what the second row reads.  A third
+    # `gl_backend_default` call in here would mean the EEGS case had become recursive (the dial
+    # asking itself what to be), and that is the shape this row catches.
     GLINIT_ASM="$($OBJDUMP64 -d --triple=mips64el-unknown-elf $ELF | awk '/<gl_init>:/{f=1;print;next} f&&/^[[:space:]]*$/{f=0;next} f')"
+    GLINIT_TG="$(printf '%s\n' "$GLINIT_ASM" | grep -c 'jal.*<tinygl_backend_init>' || true)"
     GLINIT_SW="$(printf '%s\n' "$GLINIT_ASM" | grep -c 'jal.*<gl_backend_software_default>' || true)"
     GLINIT_DEF="$(printf '%s\n' "$GLINIT_ASM" | grep -c 'jal.*<gl_backend_default>' || true)"
-    assert_check "The EE/GS placeholder resolves to the software rule, never to the build default it may itself be" \
-        "[ $GLINIT_SW -ge 1 ] && [ $GLINIT_DEF -eq 0 ]"
+    assert_check "EE/GS installs the linked TinyGL pipeline (gl_init calls tinygl_backend_init $GLINIT_TG times: the TINYGL arm and the EE/GS arm)" \
+        "[ $GLINIT_TG -eq 2 ]"
+    assert_check "...and no arm of it resolves a backend name to a placeholder or to the dial again" \
+        "[ $GLINIT_SW -eq 0 ] && [ $GLINIT_DEF -eq 0 ]"
 
     # What the image was dialled to, read off the constant it returns rather than off the flags
-    # the build printed.  `PS2_GL=eegs` makes this row fail, and it is meant to: that image asks
-    # every new GL window to start on a backend with no ops table, which is a build worth making
-    # to develop against and not one to hand to anyone as the shipped one.  Row 5 of the plan of
-    # record in doc/md/PS2.md is what retires this law, by making 3 a legal answer.
+    # the build printed.  Until 5c this row's whole subject was that 3 was not a legal answer; now
+    # it is, because the two rows above are what make the name mean something.  What remains a
+    # defect is a value the link does not have at all, and an unreadable line leaves GLDEF_RET at
+    # 9 -- which fails the row rather than passing it.
     #
     # The register is spelled `$2` because this is llvm-objdump's numeric GPR naming, and the
     # value is a `0x` field, so the two greps below take the whole fixed string and the trailing
-    # hex; an unreadable line leaves GLDEF_RET at 9, which fails the row rather than passing it.
+    # hex.
     GLDEF_ASM="$($OBJDUMP64 -d --triple=mips64el-unknown-elf $ELF | awk '/<gl_backend_default>:/{f=1;print;next} f&&/^[[:space:]]*$/{f=0;next} f')"
     GLDEF_HEX="$(printf '%s\n' "$GLDEF_ASM" | grep -m1 -oE 'addiu[[:space:]]+\$2,[[:space:]]+\$zero,[[:space:]]+0x[0-9a-f]+' | grep -oE '0x[0-9a-f]+$' || true)"
     if [ -n "$GLDEF_HEX" ]; then GLDEF_RET=$(( GLDEF_HEX )); else GLDEF_RET=9; fi
-    assert_check "The image's build default names a rasterizer that exists in its link (GLDEF_RET=$GLDEF_RET, so PS2_GL=tinygl or virgl, not eegs)" \
-        "[ $GLDEF_RET -lt 3 ]"
+    assert_check "The image's build default names a backend the link can install (GLDEF_RET=$GLDEF_RET; 3 is EE/GS and is legal from 5c)" \
+        "[ $GLDEF_RET -le 3 ]"
+
+    # ── Increment 5c: the present path, in the order the hardware forces ──────────────
+    #
+    # The staging, the ordering and the two seams are this increment's whole content, and none of
+    # them is a word: eegs_present's own suite reads the packets, but *where* the calls sit in the
+    # present is a property of the image.  `ps2_paint_region` is static and -O2 folds it into its
+    # caller, so the slice is taken over both spellings and the measurement is the relative address
+    # of three call sites inside whichever one exists:
+    #
+    #   ps2_gs_upload            (the canvas)      must come FIRST
+    #   eegs_present_send        (env + primitives)
+    #   ps2_gs_upload            (the cover)       must come LAST
+    #
+    # A present that sent the stream before the upload would have the canvas erase it -- the
+    # failure is a layer that draws and then disappears, which is exactly the kind of thing that
+    # reads as a GS bug on the screen and is a call-order bug in the source.
+    PAINT_ASM="$($OBJDUMP64 -d --triple=mips64el-unknown-elf $ELF | awk '/<ps2_paint_(region|bands)>:/{f=1;print;next} f&&/^[[:space:]]*$/{f=0;next} f')"
+    PAINT_BEGIN="$(printf '%s\n' "$PAINT_ASM" | grep -c 'jal.*<eegs_present_begin>' || true)"
+    PAINT_END="$(printf '%s\n' "$PAINT_ASM" | grep -c 'jal.*<eegs_present_end>' || true)"
+    PAINT_SEND="$(printf '%s\n' "$PAINT_ASM" | grep -c 'jal.*<eegs_present_send>' || true)"
+    assert_check "The present brackets the composite with the recorder ($PAINT_BEGIN begin, $PAINT_END end, $PAINT_SEND send)" \
+        "[ $PAINT_BEGIN -ge 1 ] && [ $PAINT_END -ge 1 ] && [ $PAINT_SEND -eq 1 ]"
+
+    PAINT_LAYER="$(printf '%s\n' "$PAINT_ASM" | grep -c 'jal.*<wnd_gl_layer_take>' || true)"
+    PAINT_COVER="$(printf '%s\n' "$PAINT_ASM" | grep -c 'jal.*<wnd_gl_cover_take>' || true)"
+    assert_check "...and takes both of the layer's facts from the window manager, not from a copy of them" \
+        "[ $PAINT_LAYER -ge 1 ] && [ $PAINT_COVER -ge 1 ]"
+
+    UP1="$(printf '%s\n' "$PAINT_ASM" | grep -E 'jal.*<ps2_gs_upload>'  | head -1 | grep -oE '^ *[0-9a-f]+' | tr -d ' ' || true)"
+    SEND="$(printf '%s\n' "$PAINT_ASM" | grep -E 'jal.*<eegs_present_send>' | head -1 | grep -oE '^ *[0-9a-f]+' | tr -d ' ' || true)"
+    UP2="$(printf '%s\n' "$PAINT_ASM" | grep -E 'jal.*<ps2_gs_upload>'  | tail -1 | grep -oE '^ *[0-9a-f]+' | tr -d ' ' || true)"
+    assert_check "The bus order is canvas, stream, cover: the upload's call site precedes the send's, and the cover re-upload follows it" \
+        "[ -n \"$UP1\" ] && [ -n \"$SEND\" ] && [ -n \"$UP2\" ] && [ $((0x$UP1)) -lt $((0x$SEND)) ] && [ $((0x$SEND)) -lt $((0x$UP2)) ]"
+
+    PRESENT_FN="$(printf '%s\n' "$($OBJDUMP64 -d --triple=mips64el-unknown-elf $ELF | grep -cE '^0*[0-9a-f]+ <eegs_present_')")"
+    # The read is part of the link claim, not of the order claim: `[GSTS]`'s qw, drop, unsplit,
+    # texsw and texmiss columns come out of `eegs_present_get_stats()` and nowhere else, so a
+    # present that links all four functions but never reads them prints a row of zeros and looks
+    # like a frame that drew nothing.
+    PAINT_STATS="$(printf '%s\n' "$PAINT_ASM" | grep -c 'jal.*<eegs_present_get_stats>' || true)"
+    assert_check "The staged present is linked into the image and read by the present ($PRESENT_FN eegs_present_* functions, $PAINT_STATS stats read)" \
+        "[ $PRESENT_FN -ge 4 ] && [ $PAINT_STATS -ge 1 ]"
 else
     echo "  [SKIP] 64-bit-GPR disassembler unavailable -- recorder purity and PS2_GL dial laws not run"
 fi

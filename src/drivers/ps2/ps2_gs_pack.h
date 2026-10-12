@@ -193,10 +193,28 @@ uint64_t gs_pack_xyoffset(uint32_t x16, uint32_t y16);
  * clip rect. */
 uint64_t gs_pack_scissor(uint32_t x0, uint32_t x1, uint32_t y0, uint32_t y1);
 
-/* ALPHA: A[1:0] B[3:2] C[5:4] D[7:6] FIX[39:32].  Four 2-bit source selects whose codes are
- * not plain ordinals (two of them alias Cs/As), so the combination constants are deliberately
- * absent: the one this port needs is decided by the frame it has to match, in increment 4, and
- * named only once a gate pins it. */
+/* ALPHA: A[1:0] B[3:2] C[5:4] D[7:6] FIX[39:32].  The equation is
+ * `result = (color1 - color2) * alpha >> 7 + color3`, and the four selects name their operands
+ * out of two sets that share nothing but an ordinal, which is why they get names here:
+ *
+ *   colour selects (A, B, D): 0 = Cs (the primitive's own colour), 1 = Cd (the pixel already in
+ *   the frame buffer), 2 = 0.
+ *   alpha select (C):        0 = As (the primitive's RGBAQ alpha), 1 = Ad (the destination's),
+ *   2 = the FIX field.
+ *
+ * Increment 5c pins the one combination this port programs -- source over destination, `(Cs-Cd)*As
+ * >> 7 + Cd` -- and it is the blend the software path already applies, the `tglblend_alpha` arm
+ * of zbuffer.h for `GL_SRC_ALPHA`/`GL_ONE_MINUS_SRC_ALPHA`, so the GS layer and the canvas agree
+ * on what the same triangle looks like wherever they meet.  ABE in PRIM selects between it and no
+ * blend at all; the As that reaches it is the vertex's, which is why RGBAQ's alpha is written
+ * 0..255. */
+#define GS_BLEND_CS   0u
+#define GS_BLEND_CD   1u
+#define GS_BLEND_ZERO 2u
+#define GS_ALPHA_AS   0u
+#define GS_ALPHA_AD   1u
+#define GS_ALPHA_FIX  2u
+
 uint64_t gs_pack_alpha(uint32_t a, uint32_t b, uint32_t c, uint32_t d, uint32_t fix);
 
 /* TEST: ATEN[0] ATMETH[3:1] ATREF[11:4] ATFAIL[13:12] DATEN[14] DATMD[15] ZTEN[16]

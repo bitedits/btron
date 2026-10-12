@@ -54,6 +54,15 @@ typedef struct WND {
      * the paint callback and blit dev when this is TRUE; blitting an invalid
      * image stamps an empty client area over real pixels. */
     BOOL  img_valid;
+    /* TRUE when the Graphics Synthesizer owns this window's client area, set by
+     * egl_create_window_surface() on a build whose active backend is GL_BACKEND_EEGS.  A layer
+     * window is still painted -- that is where the GIF stream comes from -- but its client
+     * pixmap is never blitted into the canvas: the canvas holds what is *under* the layer, and
+     * the GS draws the layer into those same VRAM pixels after the upload.  Consequence: the
+     * layer exists only as long as its stream does, so any composite that touches it has to
+     * re-record it (see wnd_gl_layer_take()).  Appended after img_valid so every offset above
+     * it is unchanged. */
+    BOOL  gl_layer;
 } WND;
 
 ER   init_wnd_mgr(GDEV *screen_dev);
@@ -70,6 +79,38 @@ ER   inval_wnd(WND *wnd);
  * composite loop presents exactly what changed instead of guessing. */
 void wnd_inval_damage_rect(const RECT *r);
 BOOL wnd_take_inval_damage(RECT *out);
+
+/* ── The EE/GS layer (doc/md/PS2.md, increment 5c) ─────────────────────────────────
+ * One window at a time is drawn by the GS, and the present path needs two things from the
+ * window manager that only it can supply: where that window's client area is on screen, and
+ * whether this frame's composite re-recorded it.
+ *
+ * wnd_gl_layer() answers the first at any time (NULL when no window is a layer).
+ * wnd_gl_layer_take() answers the second: TRUE once per composite that ran the layer window's
+ * paint callback, and it clears the flag, so a present path that takes it knows a stream is
+ * staged and one that does not knows the canvas was all there was.
+ *
+ * wnd_gl_cover_add()/wnd_gl_cover_take() are the other half of the same fact.  Canvas content
+ * drawn *over* a layer window -- the system panel, IME candidates, an open menu -- is uploaded
+ * before the stream, because the stream can only follow an upload it is to draw on top of, so
+ * anything in that order is buried by the layer wherever the two overlap.  The caller adds the
+ * rect it drew and the present path re-uploads each one, intersected with the layer, after the
+ * stream.  A producer must paint its rect *opaquely*: the canvas holds no picture of the layer,
+ * so the transparent part of a sprite would upload what used to be under it -- which is why the
+ * pointer is not a cover producer and is invisible inside a GS window (doc/md/PS2.md, increment
+ * 5c's limit and 5d's cursor plane).  Take hands back the list added since the last take, in
+ * screen coordinates, and empties it; the array it names belongs to the window manager and is
+ * valid until the next add. */
+#define WND_GL_COVER_MAX 8
+typedef struct {
+    const RECT *r;       /* the pending rects, in the order they were added */
+    int n;               /* how many of them, at most WND_GL_COVER_MAX */
+    int dropped;         /* how many did not fit -- a buried overlay with a number on it */
+} wnd_gl_cover;
+WND* wnd_gl_layer(void);
+BOOL wnd_gl_layer_take(RECT *client_out);
+void wnd_gl_cover_add(const RECT *r);
+int  wnd_gl_cover_take(wnd_gl_cover *out);
 
 ER   wset_tab_offset(WND *wnd, H offset_x);
 ER   wget_tab_rect(const WND *wnd, RECT *tab_rect);

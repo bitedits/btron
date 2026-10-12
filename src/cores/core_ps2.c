@@ -41,12 +41,18 @@
 #include <libstr.h>
 
 #include "ps2_gs.h"
+#include "ps2_gs_tex.h"
 #include "ps2_sio.h"
 #include "ps2_pad.h"
 #include "ps2_fp.h"
 #include "ps2_usb.h"
 #include "ps2_iopram.h"
 #include "ps2_irq.h"
+
+/* The EE/GS present (doc/md/PS2.md, increment 5c): stage the frame's GIF stream during the
+ * composite, send it after this region's canvas upload.  Relative path because that is how this
+ * file reaches its sources -- src/drivers/ps2/ above is the same convention. */
+#include "../gl/eegs_present.h"
 
 extern void ps2_delay_cycles(uint32_t count);
 extern void ps2_halt(void);
@@ -789,6 +795,17 @@ static void ps2_cycle_mark(void)
  * fields are cleared here rather than at the print because the gate below only ever
  * writes when this pass is being timed, so an unprofiled pass could otherwise leave a
  * bit -- or a stale damage rect -- for the next frame to print as its own. */
+/* The EE/GS layer's totals for one pass (doc/md/PS2.md, increment 5c).  Accumulated by
+ * ps2_paint_region across the bands it presents and printed as its own row by ps2_cycle_print,
+ * because that row is the only evidence on the console that a GIF stream went out at all -- and
+ * `drop=`, `unsplit=` and `texmiss=` are the three counters that have to read zero for the
+ * picture to be the one the application asked for.  `cover=` counts the canvas rects re-uploaded
+ * over the layer and `coverdrop=` the ones the window manager's eight-entry list could not hold:
+ * a buried panel is a silent wrong picture unless something numbers it.  Zeroed at
+ * ps2_cycle_begin(). */
+static uint32_t s_gs_groups, s_gs_qw, s_gs_us, s_gs_cover, s_gs_cover_drop;
+static eegs_present_stats s_gs_st;
+
 static void ps2_cycle_begin(int task_driven)
 {
     s_cycle.prof = (s_cycle.left != 0u && task_driven) ? 1u : 0u;
@@ -796,6 +813,8 @@ static void ps2_cycle_begin(int task_driven)
     s_cycle.why = 0u;
     s_cycle.ndmg = 0;
     s_cycle.bx0 = s_cycle.by0 = s_cycle.bx1 = s_cycle.by1 = 0;
+    s_gs_groups = s_gs_qw = s_gs_us = s_gs_cover = s_gs_cover_drop = 0u;
+    s_gs_cover = s_gs_cover_drop = 0u;
     ps2_cycle_mark();
 }
 
@@ -892,6 +911,21 @@ static void ps2_cycle_print(int asked_ms)
                 (unsigned int)s_cycle.st.panel_us, (unsigned int)s_cycle.st.bars_us,
                 (unsigned int)s_cycle.st.comp_us, (unsigned int)s_cycle.st.bg_full_calls,
                 (unsigned int)s_cycle.st.wins_drawn, (unsigned int)s_cycle.st.wins_walked);
+    /* The EE/GS layer's own row, and only when this pass sent a stream: a pass that painted no
+     * layer has nothing to say, and a row of zeroes would read as "the GS is idle" rather than
+     * "this frame was desktop only".  drop=/unsplit=/texmiss=/coverdrop= are the four that must
+     * stay 0 -- each one is a piece of the picture that the application drew and the screen does
+     * not have. */
+    if (s_gs_groups) {
+        ps2_kprintf("[GSTS] groups=%u qw=%u verts=%u prims=%u gs=%u us | "
+                    "drop=%u unsplit=%u texsw=%u texmiss=%u | cover=%u coverdrop=%u\n",
+                    (unsigned int)s_gs_groups, (unsigned int)s_gs_qw,
+                    (unsigned int)s_gs_st.verts, (unsigned int)s_gs_st.prims,
+                    (unsigned int)s_gs_us, (unsigned int)s_gs_st.dropped,
+                    (unsigned int)s_gs_st.unsplittable, (unsigned int)s_gs_st.tex_switches,
+                    (unsigned int)s_gs_st.tex_missing,
+                    (unsigned int)s_gs_cover, (unsigned int)s_gs_cover_drop);
+    }
     s_cycle.rows++;
     s_cycle.stamped = 0u;
     if (s_cycle.left) s_cycle.left--;
@@ -930,10 +964,34 @@ static void ps2_cycle_hold_end(uint32_t t0, int asked_ms)
  * and ps2_bench_run() hand it the region's own extents, so the two agree by
  * construction and the bench's rows describe the present the desktop makes rather
  * than a second one. */
+/* The one difference between `cover minus layer` and `cover`: the layer's rect.  A cover rect is
+ * re-uploaded *inside* the layer because that is where the stream buried it; outside the layer the
+ * band's own upload already put it there, and a primitive cannot reach past SCISSOR to bury it
+ * again.  So each cover rect is intersected with the client rect and the piece that survives is one
+ * ps2_gs_upload(). */
+static void ps2_upload_cover_in_layer(const wnd_gl_cover *cover, const RECT *layer)
+{
+    int i;
+
+    for (i = 0; i < cover->n; i++) {
+        const RECT *r = &cover->r[i];
+        const H x0 = r->left   > layer->left   ? r->left   : layer->left;
+        const H y0 = r->top    > layer->top    ? r->top    : layer->top;
+        const H x1 = r->right  < layer->right  ? r->right  : layer->right;
+        const H y1 = r->bottom < layer->bottom ? r->bottom : layer->bottom;
+
+        if (x1 > x0 && y1 > y0) ps2_gs_upload(x0, y0, x1 - x0, y1 - y0);
+    }
+}
+
 static void ps2_paint_region(GDEV *screen, int x0, int y0, int x1, int y1, int full,
                              uint32_t *r_us, uint32_t *s_us, uint32_t *u_us)
 {
     const uint32_t t0 = ps2_count_read();
+    RECT gl_client;
+    wnd_gl_cover gl_cover;
+    int gs_groups = 0;
+    int gs_layer = FALSE;
 
 #if BTRON_PS2_BENCH
     const int s_paint_i = (int)(s_paint_calls < PS2_PAINT_TRACE_MAX ? s_paint_calls
@@ -957,6 +1015,12 @@ static void ps2_paint_region(GDEV *screen, int x0, int y0, int x1, int y1, int f
     s_paint_pix[s_paint_i] = 0u;
     s_paint_calls++;
 #endif
+
+    /* The GS layer's frame bracket.  The composite below runs the layer window's paint
+     * callback, and that callback is what records the primitives, so recording has to be open
+     * for the whole of it -- and nothing may reach the bus before the canvas does (the rule in
+     * src/gl/eegs_present.h), which is why this begins rather than sends. */
+    eegs_present_begin();
 
     if (full) {
         workbench_render(screen, PS2_SCREEN_WIDTH, PS2_SCREEN_HEIGHT);
@@ -1007,6 +1071,17 @@ static void ps2_paint_region(GDEV *screen, int x0, int y0, int x1, int y1, int f
         }
 #endif
     }
+
+    /* The sprite is deliberately not a cover producer.  It writes its own white and black pixels
+     * into the canvas and leaves the rest of its 16x16 box as the canvas had it -- and under a GS
+     * layer the canvas holds no picture of the layer, so re-uploading that box would replace the
+     * layer's own pixels with the desktop that used to be underneath.  The pointer is therefore
+     * invisible while it is inside a GS window: increment 5c's documented limit, and 5d's first
+     * job, which is a 16x16 CT32 cursor plane and one textured quad (doc/md/PS2.md). */
+
+    /* Closes the recorder's last group into the staging buffer.  No DMA yet. */
+    eegs_present_end();
+
     const uint32_t t1 = ps2_count_read();
     /* The byte-order stage, and it is empty.
      *
@@ -1021,6 +1096,45 @@ static void ps2_paint_region(GDEV *screen, int x0, int y0, int x1, int y1, int f
      * a conversion pass is live in the present path again. */
     const uint32_t t2 = ps2_count_read();
     ps2_gs_upload(x0, y0, x1 - x0, y1 - y0);
+
+    /* Everything the GS is given after the canvas it draws on: the layer's stream, then the
+     * canvas regions that stream buried.  Timed together because they are one phase -- `gs=` is
+     * the cost of drawing a frame on the GS rather than in the canvas, and it is the number that
+     * has to stay under the frame budget for increment 5 to be worth anything. */
+    {
+        const uint32_t tg0 = ps2_count_read();
+        int n_cover;
+
+        /* wnd_gl_layer_take() answers only when the composite above re-ran the layer window's
+         * paint callback, which is exactly when a stream exists to send -- and a band that did not
+         * touch the layer has neither, so it uploads and leaves the layer's own rows as its
+         * earlier send left them. */
+        if (wnd_gl_layer_take(&gl_client)) {
+            gs_groups = eegs_present_send(&gl_client);
+            if (gs_groups > 0) {
+                s_gs_groups += (uint32_t)gs_groups;
+                eegs_present_get_stats(&s_gs_st);
+                s_gs_qw += s_gs_st.qw;
+                gs_layer = TRUE;
+            }
+        }
+
+        /* Taken whether or not anything was sent: the list describes this composite, and a
+         * present that left it standing would have the next frame's rects appended to these. */
+        n_cover = wnd_gl_cover_take(&gl_cover);
+        if (gs_layer) {
+            ps2_upload_cover_in_layer(&gl_cover, &gl_client);
+            s_gs_cover += (uint32_t)n_cover;
+            s_gs_cover_drop += (uint32_t)gl_cover.dropped;
+        }
+
+        {
+            const uint32_t tg1 = ps2_count_read();
+            if (s_timebase_ok && btron_ee_ticks_per_us())
+                s_gs_us += (tg1 - tg0) / btron_ee_ticks_per_us();
+        }
+    }
+
     const uint32_t t3 = ps2_count_read();
 
     if (s_timebase_ok) {
@@ -3633,6 +3747,31 @@ static void ps2_bench_xmb_surface(const char *when)
                 when, dev->width, dev->height, black, other, first, x0, y0, x1, y1);
 }
 
+/* Row 5b's own decisive row, and the reason it exists: every other 5b assertion is about words
+ * (a host suite) or about linkage (an image row), and neither can tell me that a plane's bytes
+ * actually crossed on this machine.  registered=0 would mean the upload seam is dead -- compiled,
+ * linked, called by nothing -- and 5c would then be emitting a stream that samples pages holding
+ * whatever the last upload left there.  pending= means a plane the bus never took, and
+ * vram_left= is the allocator's own budget read back, which is the number the two shipped sheets
+ * are predicted to leave: 1,081,344. */
+static void ps2_bench_gs_planes(void)
+{
+    uint32_t i;
+
+    ps2_kprintf("[BENCH] gs planes: registered=%u pending=%u vram_left=%u\n",
+                (unsigned int)gs_tex_count(), (unsigned int)gs_tex_pending(),
+                (unsigned int)gs_tex_vram_left());
+    for (i = 0; i < gs_tex_count(); i++) {
+        const gs_tex_t *t = gs_tex_at(i);
+
+        ps2_kprintf("[BENCH] gs plane %u: upload %ux%u into %ux%u at byte %u TBA %u qwc %u%s\n",
+                    (unsigned int)i, (unsigned int)t->px_w, (unsigned int)t->px_h,
+                    (unsigned int)t->pad_w, (unsigned int)t->pad_h,
+                    (unsigned int)t->byte, (unsigned int)t->tba, (unsigned int)t->qwc,
+                    t->pending ? " PENDING" : "");
+    }
+}
+
 /* How many app frames the bench phase asks for before it injects its own Escape.
  * Sixty is the right number for a table and the wrong number for a feedback loop:
  * at the frame cost this app has, 60 frames is 24 minutes of emulator and every
@@ -4143,7 +4282,7 @@ static void ps2_gui_pass(GDEV *screen)
                         (unsigned int)((btron_render_perf_us() - s_bench_app_t0) / 1000u));
         /* Twice, because a surface that is black at frame 3 and full at frame 30 is a
          * renderer that needed its textures baked, and one black both times never drew. */
-        if (s_bench_app_made == 3u)  ps2_bench_xmb_surface("frame 3 ");
+        if (s_bench_app_made == 3u) { ps2_bench_xmb_surface("frame 3 "); ps2_bench_gs_planes(); }
         if (s_bench_app_made == 30u) ps2_bench_xmb_surface("frame 30");
     }
     if (s_bench_app_left && --s_bench_app_left == 0) {

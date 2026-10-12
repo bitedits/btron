@@ -57,12 +57,31 @@ static void capture(void *user, const uint64_t *qw, uint32_t qwc)
     s_cap_i++;
 }
 
+/* 5b's rule is that a textured primitive with no plane of its own gets `TME` cleared, so a case
+ * that keeps its textured hand literals has to name a plane first -- and naming one puts a switch
+ * group at the front of the stream, because an AD group crosses the bus the moment it is written
+ * while the vertices after it accumulate.  s_vg is where this frame's *vertex* groups start: 1
+ * after start_plane(), 0 after start(), which is the whole difference between the two. */
+static gs_tex_t s_plane;
+static int s_vg;
+
+#define VG(k)  (s_cap[s_vg + (k)])
+#define VN(k)  (s_cap_n[s_vg + (k)])
+
 static void start(void)
 {
     memset(s_cap, 0, sizeof(s_cap));
     memset(s_cap_n, 0, sizeof(s_cap_n));
     s_cap_i = 0;
+    s_vg = 0;
     eegs_frame_begin(capture, NULL);
+}
+
+static void start_plane(void)
+{
+    start();
+    eegs_texture(&s_plane);
+    s_vg = 1;
 }
 
 static const eegs_tri_state_t k_stb  = { 1, 1, 1 };   /* smooth, textured, blended */
@@ -151,20 +170,20 @@ static void test_one_triangle(void)
     int badpad;
     eegs_vertex_t v[3];
 
-    start();
+    start_plane();
     v[0] = vert(0.0f, 0.0f, 0.0f, 0.0f, 0xFF332244u);
     v[1] = vert(767.0f, 499.0f, 1.0f, 2.0f, 0x00000000u);
     v[2] = vert(20.09375f, 250.0f, 0.5f, 0.5f, 0xFFFFFFFFu);
     eegs_triangle(v, k_stb);
     eegs_frame_end();
 
-    check_word("a smooth textured blended TRI asks for PRIM 0x25B", gs_vq(s_cap[0], 1u, 0u),
+    check_word("a smooth textured blended TRI asks for PRIM 0x25B", gs_vq(VG(0), 1u, 0u),
                k_prim_tri_stb);
-    check("one triangle is one group: a tag plus twelve data quadwords",
-          s_cap_i == 1 && s_cap_n[0] == gs_group_qw(3u) && s_cap_n[0] == 13u);
+    check("one triangle is one vertex group: a tag plus twelve data quadwords",
+          s_cap_i == 1 + s_vg && VN(0) == gs_group_qw(3u) && VN(0) == 13u);
     check("three vertices, one triangle", eegs_verts() == 3u && eegs_prims() == 1u);
-    if (s_cap_i < 1) return;
-    w = s_cap[0];
+    if (s_cap_i < 1 + s_vg) return;
+    w = VG(0);
 
     check_word("the group's tag: NLOOP 3 with the triangle's own PRIM",
                gs_qw(w, 0u), gs_pack_giftag(3u, 1u, 1u, k_prim_tri_stb, GS_FLG_PACKED, 4u));
@@ -199,7 +218,7 @@ static void test_one_triangle(void)
     /* The unit, one more time from this stage's side: if the raster stage or the recorder wrote a
      * register per 64-bit word, twelve of these thirteen quadwords would carry a second value. */
     badpad = 0;
-    for (k = 1u; k < s_cap_n[0]; k++) {
+    for (k = 1u; k < VN(0); k++) {
         if (gs_upper_of(w, k) != 0u) badpad++;
     }
     check("and all twelve data quadwords are one register wide", badpad == 0);
@@ -213,7 +232,7 @@ static void test_state_reuse(void)
     eegs_vertex_t v[3];
     int i;
 
-    start();
+    start_plane();
     for (i = 0; i < 3; i++) {
         v[0] = vert(0.0f, (float)i, 0.0f, 0.0f, 0xFFu);
         v[1] = vert(10.0f, (float)i, 0.0f, 0.0f, 0xFFu);
@@ -222,12 +241,13 @@ static void test_state_reuse(void)
     }
     eegs_frame_end();
 
-    check("three same-state triangles are one send", s_cap_i == 1 && gs_rec_sends() == 1u);
+    check("three same-state triangles are one send after the switch",
+          s_cap_i == 1 + s_vg && gs_rec_sends() == 1u + s_vg);
     check("nine vertices, three triangles", eegs_verts() == 9u && eegs_prims() == 3u);
-    if (s_cap_i < 1) return;
+    if (s_cap_i < 1 + s_vg) return;
     check("NLOOP 9, so the group holds all three whole",
-          (gs_qw(s_cap[0], 0u) & 0x7FFFu) == 9u);
-    check("1 + 4*9 = 37 quadwords", s_cap_n[0] == gs_group_qw(9u) && s_cap_n[0] == 37u);
+          (gs_qw(VG(0), 0u) & 0x7FFFu) == 9u);
+    check("1 + 4*9 = 37 quadwords", VN(0) == gs_group_qw(9u) && VN(0) == 37u);
 }
 
 /* A state change is a group boundary by construction, and the PRIM word that follows it must be
@@ -237,7 +257,7 @@ static void test_state_change_closes(void)
 {
     eegs_vertex_t v[3];
 
-    start();
+    start_plane();
     v[0] = vert(0.0f, 0.0f, 0.0f, 0.0f, 0xFFu);
     v[1] = vert(1.0f, 0.0f, 0.0f, 0.0f, 0xFFu);
     v[2] = vert(0.0f, 1.0f, 0.0f, 0.0f, 0xFFu);
@@ -245,26 +265,26 @@ static void test_state_change_closes(void)
     eegs_triangle(v, k_flat_tex);
     eegs_frame_end();
 
-    check("a flat triangle after a smooth one is two groups", s_cap_i == 2);
-    if (s_cap_i < 2) return;
-    check_word("the first group's PRIM keeps IIP", gs_vq(s_cap[0], 1u, 0u), k_prim_tri_stb);
-    check_word("the second's drops it: 0x25B without the 8", gs_vq(s_cap[1], 1u, 0u),
+    check("a flat triangle after a smooth one is two vertex groups", s_cap_i == 2 + s_vg);
+    if (s_cap_i < 2 + s_vg) return;
+    check_word("the first group's PRIM keeps IIP", gs_vq(VG(0), 1u, 0u), k_prim_tri_stb);
+    check_word("the second's drops it: 0x25B without the 8", gs_vq(VG(1), 1u, 0u),
                k_prim_tri_flat);
     check_word("and the second tag carries the new state",
-               gs_qw(s_cap[1], 0u),
+               gs_qw(VG(1), 0u),
                gs_pack_giftag(3u, 1u, 1u, k_prim_tri_flat, GS_FLG_PACKED, 4u));
     check("so a state change costs one group, not one vertex group per triangle",
-          s_cap_n[0] == gs_group_qw(3u) && s_cap_n[1] == gs_group_qw(3u));
+          VN(0) == gs_group_qw(3u) && VN(1) == gs_group_qw(3u));
 
-    start();
+    start_plane();
     eegs_triangle(v, k_stb);
     eegs_point(&v[0], k_stb);
     eegs_frame_end();
-    check("a point after a triangle closes too, and is its own op", s_cap_i == 2);
-    if (s_cap_i < 2) return;
+    check("a point after a triangle closes too, and is its own op", s_cap_i == 2 + s_vg);
+    if (s_cap_i < 2 + s_vg) return;
     check_word("POINT with the same flags: 0 + 8 + 16 + 64 + 512",
-               gs_vq(s_cap[1], 1u, 0u), k_prim_point | 8u | 16u | 64u);
-    check("the point group has one vertex", (gs_qw(s_cap[1], 0u) & 0x7FFFu) == 1u);
+               gs_vq(VG(1), 1u, 0u), k_prim_point | 8u | 16u | 64u);
+    check("the point group has one vertex", (gs_qw(VG(1), 0u) & 0x7FFFu) == 1u);
 }
 
 /* The XMB's message-box border is a GL_LINE_LOOP, so the line path is on screen from the first
@@ -314,29 +334,31 @@ static void test_cut_is_always_whole_triangles(void)
     eegs_vertex_t v[3];
     int i;
 
-    start();
+    start_plane();
     v[0] = vert(1.0f, 1.0f, 0.0f, 0.0f, 0xFFu);
     v[1] = vert(2.0f, 1.0f, 0.0f, 0.0f, 0xFFu);
     v[2] = vert(1.0f, 2.0f, 0.0f, 0.0f, 0xFFu);
     for (i = 0; i < 12; i++) eegs_triangle(v, k_stb);
     eegs_frame_end();
 
-    check("36 vertices at this capacity is three sends", s_cap_i == 3 && gs_rec_sends() == 3u);
+    check("36 vertices at this capacity is three sends",
+          s_cap_i == 3 + s_vg && gs_rec_sends() == 3u + s_vg);
     check("nothing was refused", gs_rec_unsplittable() == 0u);
-    for (i = 0; i < s_cap_i; i++) {
+    for (i = s_vg; i < s_cap_i; i++) {
         char label[64];
         unsigned long n = (unsigned long)(gs_qw(s_cap[i], 0u) & 0x7FFFu);
-        sprintf(label, "group %d's NLOOP %lu is a whole number of triangles", i, n);
+        sprintf(label, "vertex group %d's NLOOP %lu is a whole number of triangles",
+                i - s_vg, n);
         check(label, n % 3u == 0u && n > 0u);
-        sprintf(label, "and group %d is that many x 4 plus a tag", i);
+        sprintf(label, "and vertex group %d is that many x 4 plus a tag", i - s_vg);
         check(label, s_cap_n[i] == gs_group_qw((uint32_t)n));
     }
     check("12 + 12 + 12 = 36", eegs_verts() == 36u);
-    check("49 quadwords per group at this capacity", s_cap_n[0] == 49u);
+    check("49 quadwords per group at this capacity", VN(0) == 49u);
 }
 
 /* The frame boundary: a group left open by an unfinished primitive must not be carried into the
- * next frame, and the counters a bench reads are per-frame. */
+ * next frame, the counters a bench reads are per-frame, and neither is the plane the frame samples. */
 static void test_frame_boundary(void)
 {
     const gs_tex_t a = plane_words(0x0000000102030405ULL, 0x060708090A0B0C0DULL,
@@ -347,31 +369,40 @@ static void test_frame_boundary(void)
     v[0] = vert(0.0f, 0.0f, 0.0f, 0.0f, 0xFFu);
     v[1] = vert(1.0f, 0.0f, 0.0f, 0.0f, 0xFFu);
     v[2] = vert(0.0f, 1.0f, 0.0f, 0.0f, 0xFFu);
-    eegs_triangle(v, k_stb);
-    check("nothing is sent before the frame ends", s_cap_i == 0);
-    eegs_frame_end();
-    check("and it is sent when the frame ends", s_cap_i == 1);
 
+    /* 5b's half of the boundary law, which is also ps2_gs_tex.h's second: the words that exist
+     * cross the bus when they are written, while the vertices that use them accumulate. */
+    eegs_texture(&a);
+    check("the switch group leaves before the frame ends", s_cap_i == 1);
+    eegs_triangle(v, k_stb);
+    check("and no vertex group has", s_cap_i == 1);
+    eegs_frame_end();
+    check("the vertex group is sent when the frame ends", s_cap_i == 2);
+    if (s_cap_i < 2) return;
+    check_word("so the frame opens with the AD tag", gs_qw(s_cap[0], 0u), k_tag_ad3);
+    check_word("and the triangle that follows is the textured one the plane makes legal",
+               gs_vq(s_cap[1], 1u, 0u), k_prim_tri_stb);
+
+    /* A new frame has no plane either: the environment packet that ends a frame writes `TEX0` for
+     * the window's default, so the last frame's page is not live state to inherit.  Asking for a
+     * texture before naming a plane therefore costs a cleared `TME` and a count, not a sample of
+     * whatever the previous frame left there. */
     start();
     check("a new frame starts with no counters and no open group",
-          eegs_prims() == 0u && eegs_verts() == 0u && gs_rec_sends() == 0u);
+          eegs_prims() == 0u && eegs_verts() == 0u && gs_rec_sends() == 0u && s_cap_i == 0);
     check("its texture counters start empty too",
           eegs_tex_switches() == 0u && eegs_tex_missing() == 0u);
     eegs_triangle(v, k_stb);
-    /* The state is the same word as the last frame used, and yet it must be re-sent: the recorder
-     * has no group, so a group has to be opened with a tag that carries it. */
     eegs_frame_end();
-    check("the same state after a reset still opens a group", s_cap_i == 1);
+    check("a textured triangle with no plane of this frame's is recorded without TME",
+          s_cap_i == 1 && eegs_tex_missing() == 1u);
     if (s_cap_i < 1) return;
-    check_word("with the state it asked for", gs_vq(s_cap[0], 1u, 0u), k_prim_tri_stb);
+    check_word("and the state it carries is the untextured one",
+               gs_vq(s_cap[0], 1u, 0u), k_prim_tri_untex);
 
-    /* And a plane the previous frame pointed at has to be pointed at again: the frame's own
-     * environment packet writes TEX0 for the window's default, so a switch group is per-frame
-     * state and not live hardware state. */
-    start();
-    eegs_texture(&a);
-    eegs_triangle(v, k_stb);
-    eegs_frame_end();
+    /* The state the recorder lost with the group has to be re-sent too: a frame that names a plane
+     * and then draws pays one switch group and one vertex group, even when the previous frame used
+     * the identical PRIM word. */
     start();
     eegs_texture(&a);
     eegs_triangle(v, k_stb);
@@ -379,6 +410,10 @@ static void test_frame_boundary(void)
     check("so the second frame pays its own switch group", s_cap_i == 2);
     if (s_cap_i < 2) return;
     check_word("and the group it opens with is the AD tag", gs_qw(s_cap[0], 0u), k_tag_ad3);
+    check_word("with the state the re-named plane makes legal",
+               gs_vq(s_cap[1], 1u, 0u), k_prim_tri_stb);
+    check("and one switch counted, not the frame's whole triangle count",
+          eegs_tex_switches() == 1u && eegs_tex_missing() == 0u);
 }
 
 /* 5b: the texture switch.
@@ -407,7 +442,8 @@ static void test_texture_switch(void)
     if (s_cap_i < 2) return;
     check_word("its tag", gs_qw(s_cap[0], 0u), k_tag_ad3);
     check_word("its one REGS nibble is AD", gs_regs_of(s_cap[0]), 0x0Eu);
-    check("so it is one tag plus three register quadwords", s_cap_n[0] == 7u);
+    check("so it is one tag plus three register quadwords",
+          s_cap_n[0] == GS_REC_AD_QWC(3u) && s_cap_n[0] == 4u);
     check_word("CLAMP first", gs_qw(s_cap[0], 1u), a.clamp);
     check_word("  at GP offset 0x08", gs_upper_of(s_cap[0], 1u), 0x08u);
     check_word("TEX0 second", gs_qw(s_cap[0], 2u), a.tex0);
@@ -458,6 +494,13 @@ int main(void)
     printf("==========================================================\n");
     printf(" PS2 EE/GS raster stage vs hand-built GIF groups (cap=%u qw)\n", GS_REC_QW_CAP);
     printf("==========================================================\n");
+
+    /* The plane start_plane() names, so that the textured cases draw against a plane the way the
+     * adapter in clip.c does.  Its three words are sentinels and nothing here compares them: a
+     * stable object whose *identity* the stage can cache is what these cases need, and the words
+     * themselves are gate by gs_tex_register()'s own suite. */
+    s_plane = plane_words(0xA1A2A3A4A5A6A7A8ULL, 0xB1B2B3B4B5B6B7B8ULL,
+                          0xC1C2C3C4C5C6C7C8ULL);
 
     test_one_triangle();
     test_state_reuse();

@@ -502,11 +502,10 @@ static void tgl_count_fill(const ZBufferPoint *a, const ZBufferPoint *b, const Z
  * the same integers the software fill walks, so the GS layer and the canvas layer cannot disagree
  * about where a pixel is.
  *
- * Until 5c installs the backend this is dead code on the image: `gl_active_backend()` cannot
- * answer EE/GS while `gl_init()`'s GS case still installs a linked rasteriser, and image gate
- * row 45 of scripts/test_ps2.sh is the law that says so.  The check is therefore a switch and not
- * a build change -- one condition per entry point, so the shipped path costs a comparison that
- * the branch predictor never has to get wrong. */
+ * The check is a switch and not a build change -- one condition per entry point, so the shipped
+ * path costs a comparison that the branch predictor never has to get wrong.  From 5c it is live:
+ * `gl_init()` installs the TinyGL pipeline under the name GL_BACKEND_EEGS, and only this
+ * condition decides whether the span loops run. */
 #include "../backend_eegs.h"
 
 /* One texel index is (ZB_POINT_*_FRAC_BITS + 1) bits of `zp.s`/`zp.t`, and the upload puts half a

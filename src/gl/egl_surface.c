@@ -35,7 +35,14 @@ EGL_SURFACE* egl_create_window_surface(WND *wnd) {
     surf->height = wnd->dev->height;
     surf->pixels = wnd->dev->pixels;
 
+    /* gl_init() answers with the pipeline it could install, not with the one that was asked
+     * for, so the layer is claimed only when the GS is actually the rasteriser: an image with
+     * no TinyGL linked resolves EEGS to a software backend, and that window's pixmap is the
+     * picture and must keep being blitted. */
     gl_init(gl_backend_selected(), surf->width, surf->height, surf->pixels);
+    if (gl_active_backend() == GL_BACKEND_EEGS) {
+        wnd->gl_layer = TRUE;
+    }
     return surf;
 }
 
@@ -43,7 +50,7 @@ void egl_make_current(EGL_SURFACE *surf) {
     if (!surf || !surf->wnd || !surf->wnd->dev) return;
     surf->pixels = surf->wnd->dev->pixels;
 #if defined(BTRON_GL_BACKEND_TINYGL)
-    if (gl_active_backend() == GL_BACKEND_TINYGL) {
+    if (gl_tinygl_pipeline()) {
         tinygl_backend_resize(surf->width, surf->height, surf->pixels);
         return;
     }
@@ -72,7 +79,7 @@ void egl_swap_buffers(EGL_SURFACE *surf) {
 
 void egl_destroy_surface(EGL_SURFACE *surf) {
     if (!surf) return;
-    if (gl_active_backend() == GL_BACKEND_TINYGL) {
+    if (gl_tinygl_pipeline()) {
         gl_shutdown();
     } else if (surf->gl_ctx) {
         virgl_backend_destroy_ctx(surf->gl_ctx);

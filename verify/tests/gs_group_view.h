@@ -66,7 +66,8 @@ static inline int gs_vertex_equal(const uint64_t *ga, uint32_t va,
 }
 
 /* The size law the rest of both suites derives from: one tag quadword plus NLOOP * NREG data
- * quadwords. */
+ * quadwords.  The AD form is that law with NREG=1, which is why gs_rec_ad()'s count is
+ * GS_REC_AD_QWC(n) in ps2_gs_rec.h and not a second arithmetic here. */
 static inline uint32_t gs_group_qw(uint32_t nloop)
 {
     return 1u + nloop * GS_REC_REGS_N;

@@ -24,10 +24,13 @@ typedef enum {
     GL_BACKEND_VIRGL  = 1,    /* backend_virgl.c's own triangle raster    */
     GL_BACKEND_I915   = 2,    /* Awe Morris i915 zero-cost proxy (Ph.3)   */
     /* The Graphics Synthesizer as the rasteriser and the Emotion Engine as the vertex
-     * transformer: no software fill, no canvas upload, and the only entry point here that
-     * is not a CPU rasterizer.  It is a choice the user can already make (the Display
-     * applet's OpenGL row, src/gl/gl_backend_choice.c) and gl_init() says out loud that
-     * the backend itself is not in the image yet. */
+     * transformer: no software fill and no canvas upload for the layer it owns.  It is a
+     * choice the user can already make (the Display applet's OpenGL row,
+     * src/gl/gl_backend_choice.c) and gl_init() installs the TinyGL pipeline for it -- the
+     * geometry still runs there, and the GIF recorder takes the groups from it.  The name
+     * stays distinct from GL_BACKEND_TINYGL because the present path differs: a TINYGL window
+     * blits its surface into the canvas, an EEGS one uploads that canvas *under* the GS
+     * stream and never draws its own pixels at all. */
     GL_BACKEND_EEGS   = 3,
 } GL_BACKEND;
 
@@ -107,6 +110,14 @@ extern gl_ops_t *g_gl;
  * that was asked for, and the surface layer below has to dispatch on the result
  * rather than on the request. */
 GL_BACKEND gl_active_backend(void);
+
+/* TRUE when the live ops table is TinyGL's, whether the rasteriser is TinyGL's own fill or
+ * the Graphics Synthesizer (GL_BACKEND_EEGS): the GS path transforms, clips and records in
+ * this pipeline and only hands the finished groups over, so everything above the dispatch --
+ * resize, shutdown, fill accounting, whether a surface may be blitted -- answers the same
+ * for both.  Ask this instead of `gl_active_backend() == GL_BACKEND_TINYGL` wherever the
+ * question is "which pipeline is installed" rather than "what is its name". */
+int gl_tinygl_pipeline(void);
 
 /* ── Fill accounting ─────────────────────────────────────────────────
  * What the rasterizer was asked to draw, not how long it took: a filled triangle costs

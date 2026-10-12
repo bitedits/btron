@@ -285,8 +285,11 @@ static void test_ad_group(void)
     if (s_cap_i < 3) return;
     check("the vertices before it went out on their own",
           s_cap_n[0] == gs_group_qw(1u) && (gs_qw(s_cap[0], 0u) & 0x7FFFu) == 1u);
-    /* One tag quadword and then one quadword per register write: 5 words, 80 bytes. */
-    check("the AD group is a tag plus two writes = 5 quadwords", s_cap_n[1] == 1u + 2u * 2u);
+    /* One tag quadword and then one quadword per register write: 3 quadwords, 48 bytes -- the
+     * general tag law with NREG=1, which is what send_trx_setup_at()'s five-quadword packet of
+     * four writes proves on the machine. */
+    check("the AD group is a tag plus two writes = 3 quadwords",
+          s_cap_n[1] == GS_REC_AD_QWC(2u) && s_cap_n[1] == 3u);
     /* Derived from the same field table as tag_of(), with its two differences named: NREG is 1
      * (digit 15 = 1 instead of 4), and PRE[46] and PRIM[57:47] are clear because a group that only
      * moves state has no primitive to carry -- so digits 11 and 12, which hold them for a vertex

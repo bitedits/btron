@@ -268,7 +268,7 @@ int gs_rec_ad(const uint64_t *data, const uint32_t *gp_offs, uint32_t n)
     if (n == 0u) return 0;
     if (data == 0 || gp_offs == 0) return -1;
 
-    total = 1u + 2u * n;            /* one tag quadword, then one per register write */
+    total = GS_REC_AD_QWC(n);          /* one tag quadword, then one per register write */
     if (total > GS_REC_QW_CAP) return -1;
 
     /* The vertices recorded before this call draw with the state before it, so whatever is open

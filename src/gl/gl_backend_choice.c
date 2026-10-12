@@ -14,11 +14,11 @@
  * rasteriser for a timing comparison, `eegs` asks for the Graphics Synthesizer.
  *
  * Asking for the GS through the build rather than through the Display applet is the same
- * request the row makes, so it goes through the same answer -- and while that answer is a
- * placeholder (gl_dispatch.c installs a software rasteriser and says so), a build with
- * `PS2_GL=eegs` is the image increment 5 has to be tested against: the console line and the
- * active backend both report the pipeline that drew the frame, and neither reports EEGS until
- * an EEGS ops table exists to install.
+ * request the row makes, so it goes through the same answer.  Both then name what actually
+ * drew the frame: gl_dispatch.c installs the TinyGL pipeline for GL_BACKEND_EEGS and leaves
+ * the active backend at EEGS, because the GS rasterises what that pipeline records -- which
+ * is what makes `PS2_GL=eegs` the image increment 5 is tested against, and what makes the
+ * active backend, not the build flag, the thing a bench log has to be read by.
  */
 GL_BACKEND gl_backend_software_default(void)
 {

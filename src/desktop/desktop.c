@@ -380,6 +380,12 @@ void redraw_baremetal_desktop(GDEV *screen, H w, H h) {
     fill_rec(screen, &gold_bar, COLOR_GOLD);
     btron_render_stat_max(&g_render_stats.panel_us, btron_render_perf_us() - t_mark);
 
+    /* The panel and the bars are desktop chrome drawn over every window, so a window the GS
+     * draws (doc/md/PS2.md, increment 5c) would bury them: the stream is what reaches VRAM last.
+     * Registering the two rects is what makes the present put them back. */
+    const RECT panel_rows = { 0, 0, w, 28 };
+    wnd_gl_cover_add(&panel_rows);
+
     /* Color Test Bar (bottom 40px) */
     COLOR bars[8] = {
         COLOR_WHITE,
@@ -393,6 +399,7 @@ void redraw_baremetal_desktop(GDEV *screen, H w, H h) {
     };
     H bar_h = 40;
     H bar_y = (H)h - bar_h;
+    const RECT bar_rows = { 0, bar_y, w, h };
     t_mark = btron_render_perf_us();
     for (int bi = 0; bi < 8; bi++) {
         H bx0 = (bi * (H)w) / 8;
@@ -400,6 +407,9 @@ void redraw_baremetal_desktop(GDEV *screen, H w, H h) {
         RECT br = { bx0, bar_y, bx1, (H)h };
         fill_rec(screen, &br, bars[bi]);
     }
+    /* Registered once for the strip, not per bar: the eight bars are one row range and one
+     * opaque fill each, so they are one cover rect.  Same reason the panel above adds one rect. */
+    wnd_gl_cover_add(&bar_rows);
     btron_render_stat_max(&g_render_stats.bars_us, btron_render_perf_us() - t_mark);
     btron_render_stat_max(&g_render_stats.comp_us, btron_render_perf_us() - t_all);
 
@@ -446,6 +456,8 @@ static void redraw_baremetal_desktop_mode(GDEV *screen, const RECT *damage, BOOL
         RECT gold_bar = { 0, 26, screen->width, 28 };
         fill_rec(screen, &gold_bar, COLOR_GOLD);
         btron_render_stat_max(&g_render_stats.panel_us, btron_render_perf_us() - t_mark);
+        const RECT panel_rows = { 0, 0, screen->width, 28 };
+        wnd_gl_cover_add(&panel_rows);
     }
 
     H bar_y = screen->height - 40;
@@ -462,6 +474,8 @@ static void redraw_baremetal_desktop_mode(GDEV *screen, const RECT *damage, BOOL
             fill_rec(screen, &bar, bars[i]);
         }
         btron_render_stat_max(&g_render_stats.bars_us, btron_render_perf_us() - t_mark);
+        const RECT bar_rows = { 0, bar_y, screen->width, screen->height };
+        wnd_gl_cover_add(&bar_rows);
     }
     set_clip(screen, NULL);
     btron_render_stat_max(&g_render_stats.comp_us, btron_render_perf_us() - t_all);

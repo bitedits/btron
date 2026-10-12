@@ -25,6 +25,15 @@ GL_BACKEND gl_active_backend(void) {
     return s_active_backend;
 }
 
+/* Which pipeline is installed, asked as one question because two backends share it.  The
+ * GS rasterises the geometry but the vertex transform, the state and the record of what to
+ * draw are TinyGL's, so an EEGS image dispatches through the same ops table a TINYGL image
+ * does -- and every call site that used to compare against GL_BACKEND_TINYGL would otherwise
+ * have to grow the same `|| EEGS` clause, six of which is six chances to miss one. */
+int gl_tinygl_pipeline(void) {
+    return s_active_backend == GL_BACKEND_TINYGL || s_active_backend == GL_BACKEND_EEGS;
+}
+
 /* BTRON_GL_BACKEND_TINYGL says this image links src/gl/tinygl/, and only the
  * Makefile lists that put it in a target's sources define it -- so a request for
  * a backend that is not linked has no case to land in and says so on the console
@@ -40,22 +49,34 @@ void gl_init(GL_BACKEND backend, int width, int height, void *pixel_buf) {
         g_gl = &g_tinygl_ops;
         s_active_backend = GL_BACKEND_TINYGL;
         break;
+
+    /* Increment 5 of the plan of record (doc/md/PS2.md): the GS answers the fills, but the
+     * geometry still goes through TinyGL's pipeline, which is where the GIF recorder's groups
+     * come from.  So the ops table is the same one and only the *name* differs -- and the name
+     * matters, because egl_surface.c and core_ps2.c dispatch on it to decide whether to blit a
+     * software surface into the canvas or let the GS own that rectangle.
+     *
+     * pixel_buf is still handed to tinygl_backend_init(): glClear is not offloaded yet, so the
+     * one path that writes the surface still needs it, and the present layer reads the same
+     * buffer for whatever that path leaves there. */
+    case GL_BACKEND_EEGS:
+        tinygl_backend_init(width, height, pixel_buf);
+        g_gl = &g_tinygl_ops;
+        s_active_backend = GL_BACKEND_EEGS;
+        break;
 #endif
 
-    /* The GS backend is a choice both the settings row and the Makefile's `PS2_GL=eegs` can
-     * make, and an ops table that does not exist yet, so the request is answered with the
-     * rasteriser this image links and says so on the console.  That is the whole of the
-     * contract until row 5 of the plan of record in doc/md/PS2.md lands: a user who picks
-     * EE/GS gets a working desktop and a log line that tells them the truth about which
-     * pipeline drew it.
-     *
-     * It falls back to the software rule and not to gl_backend_default(), because on a
-     * `PS2_GL=eegs` build the default *is* this case, and the answer would call itself. */
+#if !defined(BTRON_GL_BACKEND_TINYGL)
+    /* An image with no TinyGL has no pipeline for the GS to drive, so the request is answered
+     * with the software rule and says so.  It falls back to that rule and not to
+     * gl_backend_default(), because on a `PS2_GL=eegs` build the default *is* this case, and
+     * the answer would call itself. */
     case GL_BACKEND_EEGS:
-        uart_puts_raw("[GL] EE/GS requested: no GS ops table in this image yet, "
+        uart_puts_raw("[GL] EE/GS requested but this image links no pipeline to record: "
                       "installing the linked software rasterizer\n");
         gl_init(gl_backend_software_default(), width, height, pixel_buf);
         break;
+#endif
 
     case GL_BACKEND_VIRGL:
         virgl_backend_init(width, height, pixel_buf);
@@ -75,7 +96,7 @@ void gl_init(GL_BACKEND backend, int width, int height, void *pixel_buf) {
 void gl_resize(int width, int height, void *pixel_buf) {
     if (!g_gl) return;
 #if defined(BTRON_GL_BACKEND_TINYGL)
-    if (gl_active_backend() == GL_BACKEND_TINYGL) {
+    if (gl_tinygl_pipeline()) {
         tinygl_backend_resize(width, height, pixel_buf);
         return;
     }
@@ -86,7 +107,7 @@ void gl_resize(int width, int height, void *pixel_buf) {
 void gl_shutdown(void) {
     if (!g_gl) return;
 #if defined(BTRON_GL_BACKEND_TINYGL)
-    if (gl_active_backend() == GL_BACKEND_TINYGL) {
+    if (gl_tinygl_pipeline()) {
         tinygl_backend_shutdown();
         g_gl = NULL;
         return;
@@ -123,7 +144,7 @@ void gl_fill_stats(gl_fill_stats_t *out, int reset)
     out->scanlines = out->fill_us = out->verts = 0u;
 
 #if defined(BTRON_GL_BACKEND_TINYGL)
-    if (gl_active_backend() == GL_BACKEND_TINYGL) {
+    if (gl_tinygl_pipeline()) {
         tgl_fill_stats(out, reset);
         return;
     }

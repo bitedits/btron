@@ -204,7 +204,13 @@ static void xb_frame(uint32_t draw_us, uint32_t swap_us)
 {
     static unsigned  s_n, s_win, s_sum, s_max;
     static uint32_t  s_sum_swap;
-    const unsigned   backend_tinygl = (gl_active_backend() == GL_BACKEND_TINYGL);
+    /* The name of the pipeline that drew the frame, as three answers rather than one
+     * boolean: the GS records through the same ops table TinyGL fills with, so a label that
+     * said "tinygl" for both would hide the one difference that matters to the reader of a
+     * bench log -- whether the pixels came from a swap or from a GIF stream. */
+    const char       *backend_name =
+        gl_active_backend() == GL_BACKEND_EEGS   ? "eegs"   :
+        gl_active_backend() == GL_BACKEND_TINYGL ? "tinygl" : "virgl";
 
     s_n++;
     s_win++;
@@ -216,14 +222,14 @@ static void xb_frame(uint32_t draw_us, uint32_t swap_us)
         char line[128];
         snprintf(line, sizeof(line),
                  "[XMBT] frame %u (%s) draw=%u us swap=%u us\n",
-                 s_n, backend_tinygl ? "tinygl" : "virgl",
+                 s_n, backend_name,
                  (unsigned)draw_us, (unsigned)swap_us);
         uart_puts_raw(line);
     } else if (s_win >= 30u) {
         char line[128];
         snprintf(line, sizeof(line),
                  "[XMBT] frames %u (%s) avg draw=%u swap=%u us, worst frame %u us\n",
-                 s_win, backend_tinygl ? "tinygl" : "virgl",
+                 s_win, backend_name,
                  (unsigned)(s_sum / s_win), (unsigned)(s_sum_swap / s_win),
                  (unsigned)s_max);
         uart_puts_raw(line);

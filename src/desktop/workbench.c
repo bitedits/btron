@@ -72,6 +72,17 @@ void workbench_process_event(GDEV *screen, const EVT *ev) {
     }
 }
 
+/* An overlay is drawn over every window, including one the Graphics Synthesizer owns
+ * (doc/md/PS2.md, increment 5c), and that layer arrives *after* the canvas upload -- so an
+ * overlay that is not registered here is drawn, uploaded, and then buried.  Both getters answer
+ * FALSE when nothing is open, which is the common case and costs two calls. */
+static void workbench_cover_overlays(void)
+{
+    RECT r;
+    if (global_menu_get_open_rect(&r)) wnd_gl_cover_add(&r);
+    if (tracker_get_menu_rect(&r)) wnd_gl_cover_add(&r);
+}
+
 void workbench_render(GDEV *screen, H w, H h) {
     if (!screen) return;
     redraw_baremetal_desktop(screen, w, h);
@@ -82,6 +93,7 @@ void workbench_render(GDEV *screen, H w, H h) {
     if (tracker_is_menu_open()) {
         tracker_render_menu(screen);
     }
+    workbench_cover_overlays();
 
     /* Overlay mouse cursor on top of active menus if enabled for backbuffer */
     if (g_cursor_in_backbuffer) {
@@ -114,6 +126,7 @@ void workbench_render_overlay_only(GDEV *screen) {
     if (tracker_is_menu_open()) {
         tracker_render_menu(screen);
     }
+    workbench_cover_overlays();
 
     if (g_cursor_in_backbuffer) {
         H mx = 0, my = 0;

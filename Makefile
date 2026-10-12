@@ -34,7 +34,7 @@ CC ?= gcc
 CFLAGS ?= -O2 -Wall -Wextra -std=c99 -Iinclude -Iinclude/gl -Isrc/gl -Iinclude/drivers -Isrc/kernel -Isrc/cores -Isrc/quake/include
 
 .PHONY: all posix qemu kernel tkernel sakamura foma uefi pc98 arm-elf arm64-elf m68k ps2 mips \
-        check-structure test-ps2-softfloat test-ps2-gs-pack test-ps2-gs-env test-ps2-gs-rec test-ps2-gs-tex test-eegs-raster test-gl-math test-gl-backend-choice test-ps2-fb-order xmb-atlas test-xmb-atlas \
+        check-structure test-ps2-softfloat test-ps2-gs-pack test-ps2-gs-env test-ps2-gs-rec test-ps2-gs-tex test-eegs-raster test-eegs-present test-gl-math test-gl-backend-choice test-ps2-fb-order xmb-atlas test-xmb-atlas \
         test-xmb-render test-xmb-render-tgl \
         html2tad book2tad tad_bin test test-kernel test-yoko test-yoko4 test-m68k test-mips test-ps2 test-foma test-foma-ui foma-screens \
         segui-screens \
@@ -1047,6 +1047,7 @@ PS2_GL_SRCS    = src/gl/gl_dispatch.c     \
                  src/gl/backend_tinygl.c  \
                  src/gl/backend_virgl.c   \
                  src/gl/backend_eegs.c    \
+                 src/gl/eegs_present.c    \
                  src/apps/xmb.c           \
                  src/apps/glgears.c
 PS2_SRCS       = $(PS2_STARTUP)           \
@@ -1391,6 +1392,31 @@ $(TEST_EEGSR_BIN): $(TEST_EEGSR_OBJS) src/gl/backend_eegs.c src/gl/backend_eegs.
                    verify/tests/gs_group_view.h
 	@mkdir -p ./.build
 	$(CC) $(TEST_EEGSR_OBJS) -o $@ $(LDFLAGS)
+
+# Increment 5c: the present's own law, which is an order and two counts rather than a set of words.
+# eegs_present.c is #included with the stage, the recorder, the packer, the allocator and the
+# environment builder, and the bus is the one stub -- so what the suite can see is exactly what a
+# frame puts on DMAC channel 2 and in which order.  The environment-then-primitives half is the
+# rule the hardware forces (a stream sent before the canvas upload is a stream the upload erases);
+# the copy-not-alias half is differential, because the recorder reuses its buffer and each group is
+# individually correct at the instant it is handed over -- which no word gate can notice.
+TEST_EEGSP_SRCS = verify/tests/test_eegs_present.c
+TEST_EEGSP_OBJS = $(TEST_EEGSP_SRCS:.c=.test.o)
+TEST_EEGSP_BIN  = ./.build/test_eegs_present
+
+test-eegs-present: $(TEST_EEGSP_BIN)
+	@echo "=========================================================="
+	@echo " Running PS2 EE/GS present: order, staging, capacity..."
+	@echo "=========================================================="
+	@./$(TEST_EEGSP_BIN)
+
+$(TEST_EEGSP_BIN): $(TEST_EEGSP_OBJS) src/gl/eegs_present.c src/gl/eegs_present.h \
+                   src/gl/backend_eegs.c src/gl/backend_eegs.h \
+                   src/drivers/ps2/ps2_gs_rec.c src/drivers/ps2/ps2_gs_pack.c \
+                   src/drivers/ps2/ps2_gs_env.c src/drivers/ps2/ps2_gs_vram.c \
+                   src/drivers/ps2/ps2_gs.h verify/tests/gs_group_view.h
+	@mkdir -p ./.build
+	$(CC) $(TEST_EEGSP_OBJS) -o $@ $(LDFLAGS)
 
 # The Makefile's `PS2_GL=` dial, measured against the rule it is supposed to drive.  The dial is
 # three -D flags and the rule is a preprocessor branch, so one binary compiled with one value of
@@ -2296,7 +2322,7 @@ $(TEST_MSX_TRACE_BIN): $(TEST_MSX_TRACE_OBJS)
 	@mkdir -p ./.build
 	$(CC) $(TEST_MSX_TRACE_OBJS) -o $@ $(LDFLAGS)
 
-test: test-tad test-editor test-chat test-mozc test-wylie test-hmi test-ski test-tracker test-deskclip test-settings test-global-menu test-app-menu test-drivesetup test-fs test-quake test-ps2-softfloat test-ps2-gs-pack test-ps2-gs-env test-ps2-gs-rec test-ps2-gs-tex test-eegs-raster test-gl-math test-gl-backend-choice test-ps2-fb-order test-xmb-atlas
+test: test-tad test-editor test-chat test-mozc test-wylie test-hmi test-ski test-tracker test-deskclip test-settings test-global-menu test-app-menu test-drivesetup test-fs test-quake test-ps2-softfloat test-ps2-gs-pack test-ps2-gs-env test-ps2-gs-rec test-ps2-gs-tex test-eegs-raster test-eegs-present test-gl-math test-gl-backend-choice test-ps2-fb-order test-xmb-atlas
 	@echo "=========================================================="
 	@echo " ALL B-SYSTEM TEST SUITES PASSED (100% SUCCESS)!"
 	@echo "=========================================================="

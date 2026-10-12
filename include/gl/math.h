@@ -11,6 +11,25 @@
 #define M_PI 3.1415926535897932384626433832795
 #endif
 
+/* Two things the freestanding half needs rather than a libm, because there is none in
+ * a -nostdlib link: the exponent of a double as an integer, and the scaling that puts
+ * it back.  Working on the bits is exact and costs no call.  They sit above the x87
+ * split rather than inside the series half because the callers are on both sides of it:
+ * the series sqrt normalises with them, and btron_log/btron_exp below the split use
+ * them even where pow takes the fyl2x path and never reaches that code. */
+static inline int btron_dexp(double x) {
+    union { double d; unsigned long long u; } v;
+    v.d = x;
+    return (int)((v.u >> 52) & 0x7ff) - 1023;
+}
+
+static inline double btron_ldexp(double x, int e) {
+    union { double d; unsigned long long u; } v;
+    v.d = x;
+    v.u += (unsigned long long)(long long)e << 52;
+    return v.d;
+}
+
 /* sin/cos/sqrt/pow exist twice below, once in x87 and once in arithmetic, because
  * this header is the freestanding math for every bare-metal target and those do not
  * all have an x87: the PS2 (Target 8) and the Malta MIPS (Target 9) are MIPS, and an
@@ -41,22 +60,6 @@ static inline double sqrt(double x) {
 }
 
 #else /* no x87: everything below is series and exponent arithmetic */
-
-/* Two things the series branches need rather than a libm, because there is none in
- * a -nostdlib link: the exponent of a double as an integer, and the scaling that
- * puts it back.  Working on the bits is exact and costs no call. */
-static inline int btron_dexp(double x) {
-    union { double d; unsigned long long u; } v;
-    v.d = x;
-    return (int)((v.u >> 52) & 0x7ff) - 1023;
-}
-
-static inline double btron_ldexp(double x, int e) {
-    union { double d; unsigned long long u; } v;
-    v.d = x;
-    v.u += (unsigned long long)(long long)e << 52;
-    return v.d;
-}
 
 /* sqrt by Babylonian iteration on a mantissa normalised into [1,4), which is where
  * one starting guess is within 40% for every input and six halvings of the error

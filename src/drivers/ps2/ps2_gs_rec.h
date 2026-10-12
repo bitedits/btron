@@ -32,6 +32,13 @@
 /* Quadwords per vertex: the four registers of the group's REGS list. */
 #define GS_REC_REGS_N 4u
 
+/* Quadwords in a group of `n` AD register writes: one tag plus n data, because the general law is
+ * one tag plus NLOOP * NREG data and an AD group's NREG is 1.  `send_trx_setup_at()` in ps2_gs.c
+ * proves the shape on the machine -- a tag and four registers as five quadwords with NLOOP=4 -- so a
+ * count that instead gave each register two quadwords would hand channel 2 a QWC larger than the
+ * packet and the GIF would decode the overflow as more of it. */
+#define GS_REC_AD_QWC(n) (1u + (n))
+
 /* The stream buffer, in quadwords: 16 bytes each.  A group that would not fit is split at the
  * nearest boundary that keeps every primitive whole, and the vertices a strip needs to continue
  * are re-emitted, so this size is a latency knob -- how many DMA starts a frame costs -- and not
@@ -70,10 +77,10 @@ int gs_rec_vertex(float x_px, float y_px, uint32_t z);
 /* glEnd: close the open group and send it.  A group with no vertices sends nothing. */
 void gs_rec_end(void);
 
-/* A register write in the middle of the stream: n AD pairs (a register's 64-bit value and the
- * quadword whose low byte is its GP offset) as a group of their own -- PACKED, NLOOP=n, NREG=1,
- * REGS={AD}.  The open vertex group is sent first, because the vertices before the switch draw
- * with the state before it, and the next gs_rec_prim() opens a fresh group after.
+/* One register write in the middle of the stream: `n` writes, one quadword each (the register's
+ * 64-bit value in the low half, its GP offset in the high), as a group of their own -- PACKED,
+ * NLOOP=n, NREG=1, REGS={AD}.  The open vertex group is sent first, because the vertices before the
+ * switch draw with the state before it, and the next gs_rec_prim() opens a fresh group after.
  *
  * This is how a texture changes mid-frame.  TEX0/TEX1/CLAMP are per-context state and the
  * environment packet is written once per frame, so the XMB's icon sheet and its font sheet can

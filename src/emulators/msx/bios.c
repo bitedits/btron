@@ -2,21 +2,28 @@
  * tronMSX — C-BIOS image loader.  B-MSX Rev 1.05, §5.3.
  *
  * The BIOS is settings-loaded and lives outside the deterministic sum: it is
- * read from the host file system at msx_init() and copied into the slot 0
- * views (main ROM at 0x0000-0x7FFF, logo ROM in page 2).  Nothing on the step
- * path touches the file system again (D1).
+ * read once at msx_init() and copied into the slot 0 views (main ROM at
+ * 0x0000-0x7FFF, logo ROM in page 2).  Nothing on the step path touches the
+ * file system again (D1).
  *
- * File naming follows the openMSX C-BIOS contribution layout:
+ * Where the bytes come from depends on which side of the hosted boundary this
+ * compiles for.  A host build reads the openMSX C-BIOS contribution layout --
  *   cbios_main_msx1.rom / cbios_main_msx2.rom / cbios_main_msx2+.rom
  *   cbios_logo_msx1.rom / cbios_logo_msx2.rom / cbios_logo_msx2+.rom
- * Paths are tried bare and then with a "./" prefix, matching how the other
- * B-System media apps (kagee) resolve assets relative to the working dir.
+ * -- from a folder, tried bare and then with a "./" prefix, matching how the
+ * other B-System media apps (kagee) resolve assets relative to the working dir.
+ * A bare-metal build has no folder: those same file names are bodies of the /SYS
+ * volume the image carries (src/tools/manifest.txt, the `cbios` drawer), so the
+ * directory it looks in is a drawer path inside a volume.
  */
 
 #include "msx_int.h"
 #include "msx_body.h"
 
-#include <stdio.h>
+#include <btron/libc_shim.h>     /* BTRON_HOSTED; stdio on one side, libstr on the other */
+#if !BTRON_HOSTED
+#include "../clu/vfs.h"          /* the volume reader: src/clu/vfs.c */
+#endif
 
 static uint8_t s_main[MSX_BIOS_SIZE];
 static uint8_t s_logo[MSX_LOGO_SIZE];
@@ -35,6 +42,8 @@ static uint32_t read_rom(const char *dir, const char *name,
                          uint8_t *buf, uint32_t cap)
 {
     char path[512];
+
+#if BTRON_HOSTED
     FILE *f;
     size_t n;
     int i;
@@ -50,6 +59,16 @@ static uint32_t read_rom(const char *dir, const char *name,
     n = fread(buf, 1, cap, f);
     fclose(f);
     return (uint32_t)n;
+#else
+    /* A body is copied out byte-exactly, and a body longer than cap is truncated
+     * rather than overflowing the caller's buffer -- the same law fread's
+     * count-limited read imposes on the host side. */
+    size_t got = 0;
+
+    snprintf(path, sizeof(path), "%s/%s", dir, name);
+    if (vfs_read_blob(path, buf, (size_t)cap, &got) != 0) return 0u;
+    return (uint32_t)got;
+#endif
 }
 
 int bios_load(uint16_t machine, const char *dir)
@@ -58,7 +77,7 @@ int bios_load(uint16_t machine, const char *dir)
     char name[64];
     uint32_t n;
 
-    if (!dir || !*dir) dir = "third_party/openMSX/Contrib/cbios";
+    if (!dir || !*dir) dir = MSX_BIOS_DEFAULT_DIR;
 
     snprintf(name, sizeof(name), "cbios_main_%s.rom", tag);
     n = read_rom(dir, name, s_main, (uint32_t)sizeof(s_main));

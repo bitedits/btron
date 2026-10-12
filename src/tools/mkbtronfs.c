@@ -5,8 +5,18 @@
  *   mkbtronfs manifest.txt [-o output.vol] [-n NFMAX] [-b NLB]
  *
  * Manifest format (one entry per line, '#' comments allowed):
- *   FILE "name"   TAD   [payload_file_path|-]
- *   FILE "name"   LINK  [target_fid|-]
+ *   DIR   "name"   parent_container|-
+ *   FILE  "name"   TAD   [payload_file_path|-]   [parent_container]
+ *   FILE  "name"   MD|TXT|PNG|IMG|BIN  payload_file_path   [parent_container]
+ *   FILE  "name"   LINK  [target_fid|-]          [parent_container]
+ *
+ * A token is either a bare word or a "quoted string" that may hold spaces; the quoted form is
+ * what lets a file named `Lode Runner (1984)(Sony)[a].rom` be described at all.
+ *
+ * TAD, MD, TXT, PNG and IMG records are typed RT_TADDATA because a reader is meant to decode
+ * them; BIN is typed RT_DATABOX because its bytes are opaque to the filesystem -- a cartridge
+ * image read as text is a screenful of noise, and a body typed DATABOX is one the text viewers
+ * of this system decline to interpret.
  *
  * Defaults: NFMAX=256, NLB=1024 (1 MiB image), output=btron_sys.vol
  *
@@ -52,6 +62,69 @@ static unsigned char *make_tad_text(const char *text, size_t *out_len)
 }
 
 static char g_vol_name[40] = DEFAULT_VOLNAME;
+
+/* ── One manifest token reader ────────────────────────────────────
+ *
+ * The manifest is read twice: once to build the volume and once to work out the stamp the
+ * volume carries (newest_input_mtime below).  Both passes have to agree on which bytes of a
+ * line name a file, or editing a path could change the image without changing any of its
+ * documents.  So there is one reader here and no second loop over the same lines anywhere.
+ *
+ * A token is a bare word up to whitespace, or a "double-quoted" run that may contain spaces --
+ * which is what makes a cartridge named `Lode Runner (1984)(Sony)[a].rom` describable.  Whitespace
+ * after the token is consumed as the separator.  Returns NULL at end of line; a token longer than
+ * `cap` is truncated rather than rejected, as it always was. */
+static char *next_token(char **pp, char *out, size_t cap)
+{
+    char *p = *pp;
+    size_t i = 0;
+
+    if (cap == 0) return NULL;
+    while (*p == ' ' || *p == '\t') p++;
+    if (!*p) { *pp = p; out[0] = '\0'; return NULL; }
+
+    /* A token longer than `cap` is truncated but still consumed to its end: leaving the reader
+     * parked in the middle of an over-long path would make every later token on the line wrong,
+     * which is a worse failure than one name that does not match the file. */
+    if (*p == '"') {
+        p++;
+        while (*p && *p != '"') { if (i + 1 < cap) out[i++] = *p++; else p++; }
+        out[i] = '\0';
+        if (*p == '"') p++;
+    } else {
+        /* `*p > ' '` is "any whitespace": it ends an unquoted token at the line's '\n' as well
+         * as at a space, and a path that kept the newline is a path that does not exist. */
+        while (*p && *p > ' ') { if (i + 1 < cap) out[i++] = *p++; else p++; }
+        out[i] = '\0';
+    }
+
+    while (*p == ' ' || *p == '\t') p++;
+    *pp = p;
+    return out;
+}
+
+/* ── Is there room for this payload? ──────────────────────────────
+ *
+ * The volume's free-block count is the only budget a payload has to clear, and the answer is
+ * worth naming up front: when a 4 MiB MegaROM is added to a 1 MiB image, ins_rec() fails deep
+ * inside an extent allocation and returns a bare -1, which reads as a broken tool rather than
+ * as a full disc.  One header block plus the data extent is what a body costs. */
+static int room_for(const char *entry, size_t len)
+{
+    UW bsize, free_blocks, need;
+
+    if (!g_sys_vol) return 1;
+    bsize = vol_block_size(g_sys_vol);
+    if (bsize == 0) return 1;
+    need = (UW)((len + bsize - 1) / bsize) + 1u;
+    free_blocks = vol_free_blocks(g_sys_vol);
+    if (need <= free_blocks) return 1;
+
+    fprintf(stderr, "mkbtronfs: '%s' needs %u of the %u free %u-byte blocks; "
+                    "grow the image (-b NLB) or drop an entry\n",
+            entry, need, free_blocks, bsize);
+    return 0;
+}
 
 /* ── Insert RT_LINK record into parent container ──────────── */
 static void add_container_link(const char *container, const char *name, FID fid)
@@ -116,117 +189,100 @@ static int imprint_dir(const char *dir_name, const char *parent_container)
     return 0;
 }
 
-/* ── Imprint one TAD file ───────────────────────────────────────── */
-static int imprint_tad(const char *vol_name_entry, const char *payload_path, const char *parent_container)
+/* ── Read a whole file, byte-exact ──────────────────────────────── */
+static unsigned char *read_whole_file(const char *path, size_t *out_len)
+{
+    FILE *pf;
+    long fsz;
+    unsigned char *buf = NULL;
+    size_t got = 0;
+
+    *out_len = 0;
+    pf = fopen(path, "rb");
+    if (!pf) {
+        fprintf(stderr, "mkbtronfs: warning: cannot open payload '%s': %s\n",
+                path, strerror(errno));
+        return NULL;
+    }
+    fseek(pf, 0, SEEK_END);
+    fsz = ftell(pf);
+    rewind(pf);
+    if (fsz > 0) {
+        buf = (unsigned char *)malloc((size_t)fsz);
+        if (!buf) {
+            fprintf(stderr, "mkbtronfs: malloc failed for '%s'\n", path);
+            fclose(pf);
+            return NULL;
+        }
+        got = fread(buf, 1, (size_t)fsz, pf);
+    }
+    fclose(pf);
+    *out_len = got;
+    return buf;
+}
+
+/* ── Imprint one Real Body ─────────────────────────────────────────
+ *
+ * TAD, MD, TXT, PNG, IMG and BIN are one operation: put a file's bytes into record 0 of the body
+ * the manifest names.  The read and the write are byte-exact -- no line ending, encoding or
+ * length is interpreted -- because the same code that carries a Markdown document carries a
+ * 32 KiB cartridge image, where a byte that changes is a game that does not boot.
+ *
+ * Two things differ per entry, and both are arguments rather than copies of this function:
+ *   is_tad     -- a TAD with no payload is not an error, it is an empty document: a TS_TEXT that
+ *                 names the body, which is what every placeholder TAD on /SYS has always been.
+ *   rec_type   -- RT_TADDATA for a body a reader should decode, RT_DATABOX for a body whose bytes
+ *                 are opaque to the filesystem.  The type is not decoration: tad_is_tad_record()
+ *                 is how the text viewers of this system decide to interpret a record, and a
+ *                 cartridge shown as text is a screenful of noise. */
+static int imprint_body(const char *vol_name_entry, const char *payload_path,
+                        const char *parent_container, int is_tad, UH rec_type)
 {
     unsigned char *payload = NULL;
     size_t payload_len = 0;
+    ID fd;
+    FID fid;
+    ER err;
 
-    if (payload_path && strcmp(payload_path, "-") != 0) {
-        /* Load from file */
-        FILE *pf = fopen(payload_path, "rb");
-        if (pf) {
-            fseek(pf, 0, SEEK_END);
-            long fsz = ftell(pf);
-            rewind(pf);
-            if (fsz > 0) {
-                payload = (unsigned char *)malloc((size_t)fsz);
-                if (payload) {
-                    payload_len = fread(payload, 1, (size_t)fsz, pf);
-                }
-            }
-            fclose(pf);
-        } else {
-            fprintf(stderr, "mkbtronfs: warning: cannot open payload '%s': %s\n",
-                    payload_path, strerror(errno));
-        }
+    if (payload_path && payload_path[0] && strcmp(payload_path, "-") != 0) {
+        payload = read_whole_file(payload_path, &payload_len);
+    } else if (!is_tad) {
+        fprintf(stderr, "mkbtronfs: error: entry '%s' of type %s requires a payload file\n",
+                vol_name_entry, is_tad ? "TAD" : rec_type == RT_DATABOX ? "BIN" : "text");
+        return -1;
     }
 
     if (!payload) {
-        /* Empty placeholder: just a TS_TEXT with the file name */
         payload = make_tad_text(vol_name_entry, &payload_len);
+        if (!payload) return -1;
     }
 
-    /* Create the Real Body */
-    ID fd = cre_fil(vol_name_entry, 0x0002 /* F_WRITE */);
+    if (!room_for(vol_name_entry, payload_len)) {
+        free(payload);
+        return -1;
+    }
+
+    fd = cre_fil(vol_name_entry, 0x0002 /* F_WRITE */);
     if (fd < 0) {
         fprintf(stderr, "mkbtronfs: cre_fil('%s') failed\n", vol_name_entry);
         free(payload);
         return -1;
     }
+    fid = g_open_files[(int)fd].fid;
 
-    FID fid = g_open_files[(int)fd].fid;
-
-    ER err = ins_rec(fd, 0, payload, (int)payload_len);
-    if (err == 0) {
-        /* Mark record as RT_TADDATA (type 1) via public helper */
-        fil_set_rec_type(fd, 0, (unsigned short)RT_TADDATA);
-    }
+    err = ins_rec(fd, 0, payload, (int)payload_len);
+    if (err == 0) fil_set_rec_type(fd, 0, rec_type);
 
     cls_fil(fd);
     free(payload);
 
-    if (err == 0) {
-        add_container_link(parent_container, vol_name_entry, fid);
-    }
-    return (err == 0) ? 0 : -1;
-}
-
-/* ── Imprint one MD / TXT file ──────────────────────────────────── */
-static int imprint_text(const char *vol_name_entry, const char *payload_path, const char *parent_container)
-{
-    unsigned char *payload = NULL;
-    size_t payload_len = 0;
-
-    if (!payload_path || !payload_path[0] || strcmp(payload_path, "-") == 0) {
-        fprintf(stderr, "mkbtronfs: error: text entry '%s' requires payload file\n", vol_name_entry);
+    if (err != 0) {
+        fprintf(stderr, "mkbtronfs: ins_rec('%s', %u bytes) failed (%d)\n",
+                vol_name_entry, (unsigned)payload_len, (int)err);
         return -1;
     }
-
-    FILE *pf = fopen(payload_path, "rb");
-    if (!pf) {
-        fprintf(stderr, "mkbtronfs: cannot open text payload '%s': %s\n",
-                payload_path, strerror(errno));
-        return -1;
-    }
-    fseek(pf, 0, SEEK_END);
-    long fsz = ftell(pf);
-    rewind(pf);
-    if (fsz > 0) {
-        payload = (unsigned char *)malloc((size_t)fsz);
-        if (payload) {
-            payload_len = fread(payload, 1, (size_t)fsz, pf);
-        }
-    }
-    fclose(pf);
-
-    if (!payload && fsz > 0) {
-        fprintf(stderr, "mkbtronfs: malloc failed for '%s'\n", payload_path);
-        return -1;
-    }
-
-    /* Create the Real Body */
-    ID fd = cre_fil(vol_name_entry, 0x0002 /* F_WRITE */);
-    if (fd < 0) {
-        fprintf(stderr, "mkbtronfs: cre_fil('%s') failed\n", vol_name_entry);
-        free(payload);
-        return -1;
-    }
-
-    FID fid = g_open_files[(int)fd].fid;
-
-    ER err = ins_rec(fd, 0, payload, (int)payload_len);
-    if (err == 0) {
-        fil_set_rec_type(fd, 0, (unsigned short)RT_TADDATA);
-    }
-
-    cls_fil(fd);
-    free(payload);
-
-    if (err == 0) {
-        add_container_link(parent_container, vol_name_entry, fid);
-    }
-    return (err == 0) ? 0 : -1;
+    add_container_link(parent_container, vol_name_entry, fid);
+    return 0;
 }
 
 /* ── Imprint one LINK file ──────────────────────────────────────── */
@@ -252,107 +308,110 @@ static int imprint_link(const char *link_name, int target_fid_num, const char *p
     return 0;
 }
 
-/* ── Parse and execute manifest ─────────────────────────────────── */
-static int process_manifest(const char *manifest_path)
+/* ── The one manifest reader ───────────────────────────────────────
+ *
+ * This file is read three times: once to build the volume, once to work out the stamp the volume
+ * carries (its newest input's date), and once to name the files make has to wait for.  Each used
+ * to have its own idea of which bytes of a line are a path, and they had drifted -- the stamp's
+ * loop kept the line's '\n' inside the payload it stat()ed, so every payload looked missing and
+ * the volume was stamped from the manifest alone, while the build read the same line correctly.
+ * There is one reader now, and a pass over the manifest is a callback per entry.
+ *
+ * `keyword` is DIR or FILE; a comment or a blank line calls nothing at all.  For DIR, `ftype`
+ * and `payload` come back empty.  A truncated token is consumed to its end, so a long line
+ * cannot shift the fields that follow it. */
+typedef void (*manifest_cb)(const char *keyword, const char *name, const char *ftype,
+                            const char *payload, const char *parent, void *ctx);
+
+static int read_manifest(const char *manifest_path, manifest_cb cb, void *ctx)
 {
     FILE *mf = fopen(manifest_path, "r");
+    char line[512];
+
     if (!mf) {
         fprintf(stderr, "mkbtronfs: cannot open manifest '%s': %s\n",
                 manifest_path, strerror(errno));
         return -1;
     }
 
-    char line[512];
-    int errors = 0;
     while (fgets(line, sizeof(line), mf)) {
-        /* Strip newline */
-        size_t ln = strlen(line);
-        while (ln > 0 && (line[ln-1] == '\n' || line[ln-1] == '\r')) {
-            line[--ln] = '\0';
-        }
-        /* Skip comments and blank lines */
         char *p = line;
-        while (*p == ' ' || *p == '\t') p++;
-        if (*p == '#' || *p == '\0') continue;
+        char kw[16] = {0}, name[80] = {0}, ftype[16] = {0};
+        char payload[256] = {0}, parent[80] = {0};
 
-        /* Parse keyword */
-        char keyword[16] = {0};
-        int ki = 0;
-        while (*p && *p != ' ' && *p != '\t' && ki < 15) keyword[ki++] = *p++;
-        keyword[ki] = '\0';
-        while (*p == ' ' || *p == '\t') p++;
+        /* Strip the line ending so a quoted token cannot keep a '\n' inside it. */
+        size_t ln = strlen(line);
+        while (ln > 0 && (line[ln-1] == '\n' || line[ln-1] == '\r')) line[--ln] = '\0';
 
-        if (strcmp(keyword, "DIR") == 0) {
-            if (*p != '"') continue;
-            p++;
-            char dname[80] = {0};
-            int di = 0;
-            while (*p && *p != '"' && di < 79) dname[di++] = *p++;
-            dname[di] = '\0';
-            if (*p == '"') p++;
-            while (*p == ' ' || *p == '\t') p++;
-            char parent[80] = {0};
-            int pi = 0;
-            while (*p && *p != ' ' && *p != '\t' && pi < 79) parent[pi++] = *p++;
-            parent[pi] = '\0';
-            printf("  [DIR ] %s (in %s)\n", dname, parent[0] && strcmp(parent, "-") != 0 ? parent : g_vol_name);
-            if (imprint_dir(dname, parent[0] ? parent : NULL) != 0)
-                errors++;
+        /* A blank line yields no token; a comment's first token starts with '#'. */
+        if (!next_token(&p, kw, sizeof(kw)) || kw[0] == '#') continue;
+
+        if (strcmp(kw, "DIR") == 0) {
+            next_token(&p, name, sizeof(name));
+            next_token(&p, parent, sizeof(parent));
+            if (name[0]) cb("DIR", name, "", "", parent, ctx);
             continue;
         }
+        if (strcmp(kw, "FILE") != 0) continue;
 
-        if (strcmp(keyword, "FILE") != 0) continue;
-
-        /* Parse quoted name */
-        if (*p != '"') continue;
-        p++;
-        char fname[80] = {0};
-        int fi = 0;
-        while (*p && *p != '"' && fi < 79) fname[fi++] = *p++;
-        fname[fi] = '\0';
-        if (*p == '"') p++;
-        while (*p == ' ' || *p == '\t') p++;
-
-        /* Parse type */
-        char ftype[16] = {0};
-        int ti = 0;
-        while (*p && *p != ' ' && *p != '\t' && ti < 15) ftype[ti++] = *p++;
-        ftype[ti] = '\0';
-        while (*p == ' ' || *p == '\t') p++;
-
-        /* Parse payload and optional parent container */
-        char payload_path[256] = {0};
-        char parent_container[80] = {0};
-        int pli = 0;
-        while (*p && *p != ' ' && *p != '\t' && pli < 255) payload_path[pli++] = *p++;
-        payload_path[pli] = '\0';
-        while (*p == ' ' || *p == '\t') p++;
-        int pci = 0;
-        while (*p && *p != ' ' && *p != '\t' && pci < 79) parent_container[pci++] = *p++;
-        parent_container[pci] = '\0';
-
-        const char *parent = parent_container[0] ? parent_container : NULL;
-
-        if (strcmp(ftype, "TAD") == 0) {
-            printf("  [TAD ] %s\n", fname);
-            if (imprint_tad(fname, payload_path[0] ? payload_path : NULL, parent) != 0)
-                errors++;
-        } else if (strcmp(ftype, "MD") == 0 || strcmp(ftype, "TXT") == 0 || strcmp(ftype, "PNG") == 0 || strcmp(ftype, "IMG") == 0 || strcmp(ftype, "BIN") == 0) {
-            printf("  [%-4s] %s (%s) [in %s]\n", ftype, fname, payload_path, parent ? parent : g_vol_name);
-            if (imprint_text(fname, payload_path[0] ? payload_path : NULL, parent) != 0)
-                errors++;
-        } else if (strcmp(ftype, "LINK") == 0) {
-            int target_fid = 0; /* default: root */
-            if (payload_path[0] && payload_path[0] != '/') target_fid = atoi(payload_path);
-            printf("  [LINK] %s -> FID%d\n", fname, target_fid);
-            if (imprint_link(fname, target_fid, parent) != 0)
-                errors++;
-        } else {
-            fprintf(stderr, "mkbtronfs: unknown type '%s' for '%s'\n", ftype, fname);
-        }
+        next_token(&p, name, sizeof(name));
+        next_token(&p, ftype, sizeof(ftype));
+        next_token(&p, payload, sizeof(payload));
+        next_token(&p, parent, sizeof(parent));
+        if (name[0] && ftype[0]) cb("FILE", name, ftype, payload, parent, ctx);
     }
     fclose(mf);
-    return errors ? -1 : 0;
+    return 0;
+}
+
+/* ── Build pass: one entry, one body ─────────────────────────────── */
+typedef struct { int errors; } build_ctx;
+
+static void build_entry(const char *keyword, const char *name, const char *ftype,
+                        const char *payload, const char *parent_tok, void *ctx)
+{
+    build_ctx *b = (build_ctx *)ctx;
+    const char *parent = (parent_tok && parent_tok[0]) ? parent_tok : NULL;
+    int failed = 0;
+
+    if (strcmp(keyword, "DIR") == 0) {
+        printf("  [DIR ] %s (in %s)\n", name,
+               parent && strcmp(parent, "-") != 0 ? parent : g_vol_name);
+        failed = imprint_dir(name, parent) != 0;
+        if (failed) b->errors++;
+        return;
+    }
+
+    if (strcmp(ftype, "TAD") == 0) {
+        printf("  [TAD ] %s\n", name);
+        failed = imprint_body(name, payload, parent, 1, RT_TADDATA) != 0;
+    } else if (strcmp(ftype, "BIN") == 0) {
+        /* A raw binary body: named on the volume exactly as it is on the host, and typed
+         * RT_DATABOX so no reader mistakes it for a document. */
+        printf("  [BIN ] %s (%s) [in %s]\n", name, payload, parent ? parent : g_vol_name);
+        failed = imprint_body(name, payload, parent, 0, RT_DATABOX) != 0;
+    } else if (strcmp(ftype, "MD") == 0 || strcmp(ftype, "TXT") == 0 ||
+               strcmp(ftype, "PNG") == 0 || strcmp(ftype, "IMG") == 0) {
+        printf("  [%-4s] %s (%s) [in %s]\n", ftype, name, payload, parent ? parent : g_vol_name);
+        failed = imprint_body(name, payload, parent, 0, RT_TADDATA) != 0;
+    } else if (strcmp(ftype, "LINK") == 0) {
+        int target_fid = 0; /* default: root */
+        if (payload[0] && payload[0] != '/') target_fid = atoi(payload);
+        printf("  [LINK] %s -> FID%d\n", name, target_fid);
+        failed = imprint_link(name, target_fid, parent) != 0;
+    } else {
+        fprintf(stderr, "mkbtronfs: unknown type '%s' for '%s'\n", ftype, name);
+        failed = 1;
+    }
+    if (failed) b->errors++;
+}
+
+static int process_manifest(const char *manifest_path)
+{
+    build_ctx b = { 0 };
+
+    if (read_manifest(manifest_path, build_entry, &b) != 0) return -1;
+    return b.errors ? -1 : 0;
 }
 
 /* ── Reproducible stamp ─────────────────────────────────────────────
@@ -368,38 +427,111 @@ static int process_manifest(const char *manifest_path)
  * names, which is exactly the date the volume's contents were last true.  SOURCE_DATE_EPOCH wins
  * when a build sets it, because that is the convention other reproducible tools read and a
  * checkout whose mtimes were reset still has to produce the same image. */
+static void stat_payload(const char *keyword, const char *name, const char *ftype,
+                         const char *payload, const char *parent, void *ctx)
+{
+    time_t *newest = (time_t *)ctx;
+    struct stat st;
+
+    (void)keyword; (void)name; (void)parent;
+    /* The walker already dropped the entries that name no file, but a LINK's `payload` is a FID
+     * and a placeholder is '-', so the type is checked here too rather than trusted upstream. */
+    if (!payload[0] || payload[0] == '-' || strcmp(ftype, "LINK") == 0) return;
+    if (stat(payload, &st) == 0 && st.st_mtime > *newest) *newest = st.st_mtime;
+}
+
 static time_t newest_input_mtime(const char *manifest_path)
 {
-    FILE *mf;
-    char line[512];
     time_t newest = 0;
     struct stat st;
 
     if (stat(manifest_path, &st) == 0 && st.st_mtime > newest) newest = st.st_mtime;
-    mf = fopen(manifest_path, "r");
-    if (!mf) return newest;
-    while (fgets(line, sizeof(line), mf)) {
-        char keyword[16] = {0}, fname[80] = {0}, ftype[16] = {0}, payload[256] = {0};
-        char *p = line;
-
-        while (*p == ' ' || *p == '\t') p++;
-        if (sscanf(p, "%15s", keyword) != 1 || strcmp(keyword, "FILE") != 0) continue;
-        while (*p && *p != '"') p++;
-        if (*p != '"') continue;
-        p++;
-        { int i = 0; while (*p && *p != '"' && i < 79) fname[i++] = *p++; fname[i] = '\0'; }
-        if (*p == '"') p++;
-        while (*p == ' ' || *p == '\t') p++;
-        { int i = 0; while (*p && *p != ' ' && *p != '\t' && i < 15) ftype[i++] = *p++; ftype[i] = '\0'; }
-        while (*p == ' ' || *p == '\t') p++;
-        { int i = 0; while (*p && *p != ' ' && *p != '\t' && i < 255) payload[i++] = *p++; payload[i] = '\0'; }
-
-        /* A placeholder (`-`) names no file, and a LINK names a FID rather than a path. */
-        if (!payload[0] || payload[0] == '-' || strcmp(ftype, "LINK") == 0) continue;
-        if (stat(payload, &st) == 0 && st.st_mtime > newest) newest = st.st_mtime;
-    }
-    fclose(mf);
+    read_manifest(manifest_path, stat_payload, &newest);
     return newest;
+}
+
+/* ── Make dependencies ─────────────────────────────────────────────
+ *
+ * The volume is a function of its payloads, so a build that edits one of them has to rebuild it.
+ * The Makefile used to work that out for itself with an awk pass over the manifest -- a second
+ * grammar for the same file, which could not see a quoted path, took the last field of a line as
+ * the payload (wrong for every entry that names a parent drawer), and silently produced a shorter
+ * list instead of an error.  It is the tool's job: this writes the same rule `-MMD` writes for a
+ * compiler, and make is told to include it.
+ *
+ * Spaces are escaped with a backslash because that is how make spells one word, and every path
+ * gets its own line with a backslash continuation -- the shape `-MMD` writes, and the only shape
+ * make reads: a list whose last line has no continuation is a rule, and the line after it is a
+ * recipe that no tab started ("missing separator").  A payload that does not exist is still
+ * listed, because make's answer to a missing prerequisite is an error, whereas a missing
+ * dependency line is a stale image nobody notices. */
+#define DEP_MAX 512
+
+typedef struct {
+    char path[256];
+} dep_entry;
+
+typedef struct {
+    dep_entry e[DEP_MAX];
+    int n;
+    int overflowed;
+} dep_list;
+
+static void collect_payload(const char *keyword, const char *name, const char *ftype,
+                            const char *payload, const char *parent, void *ctx)
+{
+    dep_list *d = (dep_list *)ctx;
+
+    (void)keyword; (void)name; (void)parent;
+    if (!payload[0] || payload[0] == '-' || strcmp(ftype, "LINK") == 0) return;
+    if (d->n >= DEP_MAX) { d->overflowed = 1; return; }
+    snprintf(d->e[d->n].path, sizeof(d->e[0].path), "%s", payload);
+    d->n++;
+}
+
+static void print_dep_word(FILE *out, const char *path)
+{
+    const char *p;
+
+    for (p = path; *p; p++) {
+        /* The six characters make reads as syntax rather than as part of a file name. */
+        if (*p == ' ' || *p == '\t' || *p == '#' || *p == '$' || *p == ':' || *p == '\\') {
+            fputc('\\', out);
+        }
+        fputc(*p, out);
+    }
+}
+
+static int write_deps_file(const char *manifest_path, const char *output, const char *deps_path)
+{
+    static dep_list d;                    /* 128 KiB of table, and not on the stack */
+    FILE *out;
+    int i;
+
+    d.n = 0;
+    d.overflowed = 0;
+    read_manifest(manifest_path, collect_payload, &d);
+
+    out = fopen(deps_path, "w");
+    if (!out) {
+        fprintf(stderr, "mkbtronfs: cannot write dependencies '%s': %s\n", deps_path, strerror(errno));
+        return -1;
+    }
+    fprintf(out, "%s: \\\n  ", output);
+    print_dep_word(out, manifest_path);
+    for (i = 0; i < d.n; i++) {
+        fprintf(out, " \\\n  ");
+        print_dep_word(out, d.e[i].path);
+    }
+    fputc('\n', out);
+    fclose(out);
+
+    if (d.overflowed) {
+        fprintf(stderr, "mkbtronfs: WARNING: more than %d payloads in '%s', so the dependency list "
+                        "is short and a later edit of an unlisted file will not rebuild the volume\n",
+                DEP_MAX, manifest_path);
+    }
+    return 0;
 }
 
 /* ── main ────────────────────────────────────────────────────────── */
@@ -408,6 +540,7 @@ int main(int argc, char **argv)
     const char *manifest = NULL;
     const char *output   = DEFAULT_OUTPUT;
     const char *label    = NULL;
+    const char *deps     = NULL;
     unsigned int nfmax   = DEFAULT_NFMAX;
     unsigned int nlb     = DEFAULT_NLB;
 
@@ -420,6 +553,8 @@ int main(int argc, char **argv)
             nlb = (unsigned int)atoi(argv[++i]);
         } else if ((strcmp(argv[i], "-l") == 0 || strcmp(argv[i], "--label") == 0) && i + 1 < argc) {
             label = argv[++i];
+        } else if (strcmp(argv[i], "--deps") == 0 && i + 1 < argc) {
+            deps = argv[++i];
         } else if (argv[i][0] != '-') {
             manifest = argv[i];
         } else {
@@ -429,7 +564,8 @@ int main(int argc, char **argv)
     }
 
     if (!manifest) {
-        fprintf(stderr, "Usage: mkbtronfs manifest.txt [-o out.vol] [-n NFMAX] [-b NLB] [-l VOLNAME]\n");
+        fprintf(stderr, "Usage: mkbtronfs manifest.txt [-o out.vol] [-n NFMAX] [-b NLB]"
+                        " [-l VOLNAME] [--deps out.vol.d]\n");
         return 1;
     }
 
@@ -463,6 +599,10 @@ int main(int argc, char **argv)
         }
     }
 
+    /* The dependency file is written before the volume, so a build that fails on a missing or
+     * oversized payload still leaves make knowing what the next attempt has to wait for. */
+    if (deps) (void)write_deps_file(manifest, output, deps);
+
     /* Create and format the volume */
     BlkDev *dev = blk_file_create(output, 1 /* create_new */, (unsigned int)nlb);
     if (!dev) {
@@ -494,6 +634,19 @@ int main(int argc, char **argv)
 
     printf("mkbtronfs: processing manifest '%s'\n", manifest);
     int ret = process_manifest(manifest);
+
+    /* The budget, read back off the mount rather than counted by the tool that just spent it:
+     * this is the row that answers "can another cartridge go in?" without a second opinion. */
+    {
+        UW bsize = vol_block_size(g_sys_vol);
+        UW used  = vol_total_blocks(g_sys_vol) - vol_free_blocks(g_sys_vol);
+        printf("mkbtronfs: '%s' holds %u of %u %u-byte blocks: %u KiB used, %u KiB free "
+               "(table of %u bodies max)\n",
+               output, (unsigned)used, (unsigned)vol_total_blocks(g_sys_vol), (unsigned)bsize,
+               (unsigned)(used * bsize / 1024u),
+               (unsigned)(vol_free_blocks(g_sys_vol) * bsize / 1024u),
+               (unsigned)vol_nfmax(g_sys_vol));
+    }
 
     vol_sync(g_sys_vol);
     vol_umount(g_sys_vol);

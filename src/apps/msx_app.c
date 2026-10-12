@@ -16,6 +16,7 @@
 #include <btron/troncode.h>
 #include <emulators/tronmsx.h>
 #include "../emulators/msx/msx_kbd.h"
+#include "../clu/vfs.h"          /* the /SYS catalogue: src/clu/vfs.c */
 #include <stdint.h>
 
 #include <btron/libc_shim.h>
@@ -31,7 +32,6 @@
 #define MSX_MAX_ROMS   32
 #define MSX_ROW_NAME   64      /* app_menu cascade rows are [][64] */
 #define MSX_PATH_MAX   160
-#define MSX_ROM_DIR    "assets/msx"
 
 typedef enum {
     XCMD_NONE = 0,
@@ -51,6 +51,10 @@ typedef enum {
 typedef struct {
     APP_MENU_BAR menu_bar;
     char roms[MSX_MAX_ROMS][MSX_ROW_NAME];
+    /* Which Real Body each row names.  On a host this is VFS_NO_FID, where the
+     * folder entry is the whole identity; in the image it is the fid the volume
+     * listing returned, without which a second body of the same name would open. */
+    uint32_t rom_fids[MSX_MAX_ROMS];
     int  rom_count;
     char path[MSX_PATH_MAX];
     char notice[160];          /* load failure / hint, shown over the screen */
@@ -73,7 +77,6 @@ static volatile BOOL s_frame_due;
 
 /* ── Cartridge catalogue and loading ─────────────────────────────────────── */
 
-#if BTRON_HOSTED
 static BOOL msx_is_rom_name(const char *name)
 {
     size_t n = strlen(name);
@@ -83,32 +86,44 @@ static BOOL msx_is_rom_name(const char *name)
            (name[n - 1] == 'm' || name[n - 1] == 'M');
 }
 
+/* Rows are sorted so the cascade and the XMB Games band land on the same row
+ * from one run to the next, whichever side of the hosted boundary listed them. */
+static void msx_sort_rows(MsxViewer *st)
+{
+    for (int i = 1; i < st->rom_count; i++) {
+        char key[MSX_ROW_NAME];
+        uint32_t key_fid = st->rom_fids[i];
+        int j = i - 1;
+
+        snprintf(key, sizeof(key), "%s", st->roms[i]);
+        while (j >= 0 && strcmp(st->roms[j], key) > 0) {
+            snprintf(st->roms[j + 1], MSX_ROW_NAME, "%s", st->roms[j]);
+            st->rom_fids[j + 1] = st->rom_fids[j];
+            j--;
+        }
+        snprintf(st->roms[j + 1], MSX_ROW_NAME, "%s", key);
+        st->rom_fids[j + 1] = key_fid;
+    }
+}
+
+#if BTRON_HOSTED
 static void msx_scan_roms(MsxViewer *st)
 {
     DIR *d;
     struct dirent *de;
 
     st->rom_count = 0;
-    d = opendir(MSX_ROM_DIR);
+    d = opendir(MSX_ROM_CATALOGUE);
     if (!d) return;
     while ((de = readdir(d)) != NULL && st->rom_count < MSX_MAX_ROMS) {
         if (de->d_name[0] == '.') continue;
         if (!msx_is_rom_name(de->d_name)) continue;
         snprintf(st->roms[st->rom_count], MSX_ROW_NAME, "%s", de->d_name);
+        st->rom_fids[st->rom_count] = VFS_NO_FID;
         st->rom_count++;
     }
     closedir(d);
-
-    for (int i = 1; i < st->rom_count; i++) {
-        char key[MSX_ROW_NAME];
-        int j = i - 1;
-        snprintf(key, sizeof(key), "%s", st->roms[i]);
-        while (j >= 0 && strcmp(st->roms[j], key) > 0) {
-            snprintf(st->roms[j + 1], MSX_ROW_NAME, "%s", st->roms[j]);
-            j--;
-        }
-        snprintf(st->roms[j + 1], MSX_ROW_NAME, "%s", key);
-    }
+    msx_sort_rows(st);
 }
 
 /* Read one cartridge image and hand it to the core. */
@@ -123,7 +138,7 @@ static BOOL msx_load(MsxViewer *st, const char *name)
     st->notice[0] = '\0';
     if (!name || !name[0]) return FALSE;
 
-    snprintf(st->path, sizeof(st->path), MSX_ROM_DIR "/%s", name);
+    snprintf(st->path, sizeof(st->path), MSX_ROM_CATALOGUE "/%s", name);
     f = fopen(st->path, "rb");
     if (!f) {
         snprintf(st->notice, sizeof(st->notice),
@@ -171,13 +186,78 @@ static BOOL msx_load(MsxViewer *st, const char *name)
     return TRUE;
 }
 #else
-static void msx_scan_roms(MsxViewer *st) { st->rom_count = 0; }
+/* The catalogue is a drawer of the /SYS volume the image carries, so the same
+ * rows appear on a machine with no file system below the program at all. */
+static void msx_scan_roms(MsxViewer *st)
+{
+    /* Static, not on the caller's stack: this runs while opening the window, on
+     * a task stack shared with the desktop, and 32 rows of VfsEntry are 4.6 KiB. */
+    static VfsEntry entries[MSX_MAX_ROMS];
+    int n = vfs_list_dir(MSX_ROM_CATALOGUE, entries, MSX_MAX_ROMS);
+
+    st->rom_count = 0;
+    for (int i = 0; i < n && st->rom_count < MSX_MAX_ROMS; i++) {
+        if (entries[i].is_dir || !msx_is_rom_name(entries[i].name)) continue;
+        snprintf(st->roms[st->rom_count], MSX_ROW_NAME, "%s", entries[i].name);
+        st->rom_fids[st->rom_count] = entries[i].fid;
+        st->rom_count++;
+    }
+    msx_sort_rows(st);
+}
+
+/* One cartridge over and above the core's cap: enough to tell a 32 KiB image
+ * from a bigger one without copying the bigger one, since the core can only run
+ * the first page of a banked cart and must be told to refuse the rest. */
+static uint8_t s_rom_image[MSX_ROM_SIZE + 1];
+
+/* The Real Body this row named, anchor included: a drawer can hold two bodies
+ * of one name, and only the fid says which one the cursor is on. */
+static uint32_t msx_rom_fid(const MsxViewer *st, const char *name)
+{
+    for (int i = 0; i < st->rom_count; i++) {
+        if (strcmp(st->roms[i], name) == 0) return st->rom_fids[i];
+    }
+    return VFS_NO_FID;
+}
+
 static BOOL msx_load(MsxViewer *st, const char *name)
 {
-    (void)name;
-    snprintf(st->notice, sizeof(st->notice),
-             "ROM 読み込みはホストビルド専用 (hosted build only)");
-    return FALSE;
+    size_t got = 0;
+    int rc;
+
+    st->notice[0] = '\0';
+    if (!name || !name[0]) return FALSE;
+
+    vfs_child_path(st->path, sizeof(st->path), MSX_ROM_CATALOGUE, name,
+                   msx_rom_fid(st, name));
+    if (vfs_read_blob(st->path, s_rom_image, sizeof(s_rom_image), &got) != 0 ||
+        got == 0) {
+        snprintf(st->notice, sizeof(st->notice),
+                 "ROM を開けません (cannot open %s)", st->path);
+        return FALSE;
+    }
+
+    rc = msx_load_rom(s_rom_image, (uint32_t)got, 0);
+
+    if (rc != MSX_OK) {
+        if (rc == MSX_ERR_SIZE)
+            snprintf(st->notice, sizeof(st->notice),
+                     "%s: %u バイトは上限 %u を超えます "
+                     "(banked megaROM mapper not implemented yet)",
+                     name, (unsigned)got, (unsigned)MSX_ROM_SIZE);
+        else
+            snprintf(st->notice, sizeof(st->notice),
+                     "%s: msx_load_rom -> error %d", name, rc);
+        return FALSE;
+    }
+
+    msx_reset();
+    st->paused  = FALSE;
+    st->running = TRUE;
+    st->joy     = 0u;
+    st->frames  = 0;
+    msx_joy_set(0u);
+    return TRUE;
 }
 #endif
 
@@ -385,11 +465,9 @@ static void msx_apply_cmd(WND *wnd, MsxViewer *st, int cmd, int sub_idx)
 {
     switch (cmd) {
         case XCMD_FILE_ROM_CASCADE:
-#if BTRON_HOSTED
+            /* Both builds: the cascade's rows come from the same catalogue the
+             * window was opened with, wherever that catalogue was listed from. */
             if (sub_idx >= 0 && sub_idx < st->rom_count) msx_load(st, st->roms[sub_idx]);
-#else
-            (void)sub_idx;
-#endif
             break;
         case XCMD_FILE_RESET:
             if (st->running) {
@@ -587,8 +665,8 @@ static WND *msx_open(const char *rom_name)
 
     if (msx_init(NULL) != MSX_OK) {
         snprintf(st->notice, sizeof(st->notice),
-                 "C-BIOS が読み込めません (BIOS missing under "
-                 "third_party/openMSX/Contrib/cbios)");
+                 "C-BIOS が読み込めません (BIOS missing under %s)",
+                 MSX_BIOS_DEFAULT_DIR);
     } else if (rom_name) {
         msx_load(st, rom_name);
     }
@@ -624,7 +702,8 @@ WND *open_msx_window(void)
 }
 
 /* `path` may be a full path or a bare file name; it is resolved against
- * assets/msx, the same catalogue the ROM cascade and the XMB Games band list. */
+ * MSX_ROM_CATALOGUE, the same catalogue the ROM cascade and the XMB Games band
+ * list. */
 WND *open_msx_window_with_rom(const char *path)
 {
     const char *name = path;

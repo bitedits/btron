@@ -66,7 +66,7 @@ kill -KILL "$VM" 2>/dev/null || true
 cp "$LOG" "$OUT"
 
 if grep -q '\[BENCH\]' "$LOG"; then
-    grep -E '\[BENCH\]|\[PS2\] whole-canvas|\[PSTAT\]|\[FATAL\]' "$LOG"
+    grep -E '\[BENCH\]|\[PS2\] whole-canvas|\[PSTAT\]|\[MSX\]|\[FATAL\]' "$LOG"
     echo "----------------------------------------------------------"
     echo "[PS2-BENCH] full log: $OUT ($elapsed s)"
     exit 0

@@ -54,6 +54,7 @@
 #include <btron/btron.h>
 #include <btron/core.h>
 #include <btron/apps.h>
+#include <emulators/tronmsx.h>  /* MSX_ROM_CATALOGUE: the drawer the Games band lists */
 #include <btron/settings.h>   /* icon size, terminal settings */
 #include <btron/pmc.h>        /* window frame style           */
 #include <btron/tip.h>        /* input method                 */
@@ -654,17 +655,17 @@ static xb_item_t s_items_commands[] = {
     {"Sync all volumes",     "Run the shell builtin: sync",      XB_CMD, XMB_BIND_NONE, L_NONE, 0,0,NULL, "sync",  IC_PROMPT,0,0,0,0,{0}},
 };
 
-/* ── The Games band: the cartridge images in the host's assets/msx ─────────
+/* ── The Games band: the cartridge images of MSX_ROM_CATALOGUE ──────────────
  *
- * One row per ROM, made by reading that folder on the way in, and each row opens
- * the B-MSX window with its own cartridge loaded.  The list is the folder: nothing
- * here copies what a ROM is called, and a machine built without a host file system
- * simply has no rows, the way an empty volume has none.
+ * One row per ROM, made by reading that catalogue once on the way in, and each
+ * row opens the B-MSX window with its own cartridge loaded.  The list is the
+ * catalogue -- a folder below the checkout on a host, the /SYS volume's `msx`
+ * drawer on a machine -- so nothing here copies what a ROM is called, and an
+ * empty catalogue simply has no rows.
  */
 
 #define XB_GAME_ROWS   16
 #define XB_GAME_NAME   64
-#define XB_GAME_DIR    "assets/msx"
 #define XB_GAME_SUB    "MSX cartridge: opens in B-MSX"
 
 static char      s_game_names[XB_GAME_ROWS][XB_GAME_NAME];
@@ -2448,8 +2449,7 @@ static void xb_disc_restart(void)
 
 /* ── The Games band's listing ─────────────────────────────────────────── */
 
-#if BTRON_HOSTED
-/* A cartridge image is a .rom, whatever case its folder spells it in. */
+/* A cartridge image is a .rom, whatever case its listing spells it in. */
 static BOOL xb_game_is_rom(const char *name)
 {
     size_t n = strlen(name);
@@ -2460,17 +2460,21 @@ static BOOL xb_game_is_rom(const char *name)
         && (name[n - 2] == 'o' || name[n - 2] == 'O')
         && (name[n - 1] == 'm' || name[n - 1] == 'M');
 }
-#endif
 
-/* Read the folder once and make one XB_APP row per ROM, in name order so the bar
- * lands on the same row from one run to the next.  The rows carry the folder's
- * index, which is how xb_launch() names the cartridge to B-MSX with. */
+/* Read the catalogue once and make one XB_APP row per ROM, in name order so the
+ * bar lands on the same row from one run to the next.  The rows carry the
+ * listing's index, which is how xb_launch() names the cartridge to B-MSX with.
+ *
+ * The catalogue is MSX_ROM_CATALOGUE: a folder below the checkout where a host
+ * file system exists, and the /SYS volume's `msx` drawer on a machine, where the
+ * bodies were imprinted by src/tools/manifest.txt.  Either way the band shows the
+ * file names, which is all B-MSX needs to find the same body again. */
 static void xb_games_scan(void)
 {
     int rows = 0;
 
 #if BTRON_HOSTED
-    DIR *dir = opendir(XB_GAME_DIR);
+    DIR *dir = opendir(MSX_ROM_CATALOGUE);
     struct dirent *de;
 
     if (dir) {
@@ -2484,6 +2488,19 @@ static void xb_games_scan(void)
         }
         closedir(dir);
     }
+#else
+    /* Static: 16 VfsEntry rows are nearly 2.4 KiB, and this runs while the
+     * launcher is opening, on the desktop task's stack. */
+    static VfsEntry entries[XB_GAME_ROWS];
+    int n = vfs_list_dir(MSX_ROM_CATALOGUE, entries, XB_GAME_ROWS);
+
+    for (int i = 0; i < n && rows < XB_GAME_ROWS; i++) {
+        if (entries[i].is_dir || !xb_game_is_rom(entries[i].name))
+            continue;
+        snprintf(s_game_names[rows], XB_GAME_NAME, "%s", entries[i].name);
+        rows++;
+    }
+#endif
 
     for (int i = 1; i < rows; i++) {
         char name[XB_GAME_NAME];
@@ -2496,7 +2513,6 @@ static void xb_games_scan(void)
         }
         snprintf(s_game_names[j + 1], XB_GAME_NAME, "%s", name);
     }
-#endif
 
     for (int i = 0; i < rows; i++) {
         xb_item_t *it = &s_items_games[i];
@@ -2652,8 +2668,11 @@ static unsigned s_now_ms = 0;
  * target's source list.  The real definition in kagee.c wins when linked. */
 #if defined(__GNUC__) || defined(__clang__)
 __attribute__((weak)) WND* open_kagee_window(void) { return (void*)0; }
-/* Same for B-MSX: src/apps/msx_app.c is a hosted-core app and not in the
- * bare-metal lists, where these keep the launcher linking. */
+/* Same for B-MSX, whose real definitions are in src/apps/msx_app.c.  That file is
+ * in the hosted and PS2 lists, where these are simply outranked by the strong
+ * definitions; the targets that carry no MSX core -- uefi, pc98, m68k, mips --
+ * still need them to keep the launcher linking, and on those a Games row opens
+ * nothing, exactly as an empty catalogue shows no rows. */
 __attribute__((weak)) WND* open_msx_window(void) { return (void*)0; }
 __attribute__((weak)) WND* open_msx_window_with_rom(const char *path)
 {

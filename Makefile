@@ -40,7 +40,6 @@ CFLAGS ?= -O2 -Wall -Wextra -std=c99 -Iinclude -Iinclude/gl -Isrc/gl -Iinclude/d
         segui-screens \
         test-mozc test-editor test-hmi test-tad test-chat test-wylie verify test-fs test-chokanji test-quake test-replay \
         test-hull test-view test-secret test-render test-drone test-drone-all test-zexall msx-trace \
-        mkbtronfs btron_sys.vol \
         run-posix run-qemu run-kernel run-yoko run-yoko4 run-sakamura run-foma run-uefi run-eufi run-uefu run-pc98 run-m68k run-ps2 run-mips debug-virtio debug-gdb clean \
         ps2-cfg \
         pi400 flash-pi400 fetch-pi400-fw
@@ -615,20 +614,27 @@ mkbtronfs: src/tools/mkbtronfs.c $(FS_OBJS)
 # the tool listed, make rebuilds btron_sys.vol when either changes and *never* when a document the
 # volume copies changes, so the image an ELF carries is the volume some other target happened to
 # build last -- the stale-artifact disease this Makefile already cures twice for PS2_GL and PS2_FP,
-# arrived at from the other side, where the content moved and the flags did not.  The filter is the
-# manifest's own grammar: a FILE line whose last field is a path is a record with a payload, while
-# '-' is an empty placeholder and a LINK line ends in a target FID, neither of which is a file make
-# can wait for.
-SYS_VOL_PAYLOADS := $(shell awk '/^FILE/ && $$3 != "LINK" && $$NF != "-" && $$NF ~ /\// {print $$NF}' src/tools/manifest.txt 2>/dev/null)
-
-btron_sys.vol: mkbtronfs src/tools/manifest.txt $(SYS_VOL_PAYLOADS)
-	./mkbtronfs src/tools/manifest.txt -o btron_sys.vol
+# arrived at from the other side, where the content moved and the flags did not.
+#
+# mkbtronfs names those prerequisites itself, through --deps, in the same idiom the compiler's
+# -MMD lines above use.  It used to be an awk pass over the manifest here, which was a second
+# grammar for one file and could not read the first one: it took the last field of a line as the
+# payload (so every entry that names a parent drawer, like a cartridge in /SYS/msx, dropped out)
+# and it stopped at the first space (so `Lode Runner (1984)(Sony)[a].rom` was never a file make
+# knew about).  One reader of a manifest is the tool that builds from it.
+btron_sys.vol: mkbtronfs src/tools/manifest.txt
+	./mkbtronfs src/tools/manifest.txt -o btron_sys.vol --deps btron_sys.vol.d
 	@echo "[FS] btron_sys.vol written."
 	@xxd btron_sys.vol | head -2
 
 btron_anders.vol: mkbtronfs src/tools/manifest_anders.txt
-	./mkbtronfs src/tools/manifest_anders.txt -o btron_anders.vol -l ANDERS
+	./mkbtronfs src/tools/manifest_anders.txt -o btron_anders.vol -l ANDERS --deps btron_anders.vol.d
 	@echo "[FS] btron_anders.vol written."
+
+# Written by the recipe above, so the first build after a clean has no payload dependencies and
+# every one after it does -- exactly the trade `-include *.d` already makes for C headers.
+-include btron_sys.vol.d
+-include btron_anders.vol.d
 
 
 # ── FS unit tests ──────────────────────────────────────────────────────
@@ -1066,6 +1072,12 @@ PS2_GL_SRCS    = src/gl/gl_dispatch.c     \
                  src/gl/eegs_present.c    \
                  src/apps/xmb.c           \
                  src/apps/glgears.c
+# B-MSX rides in the image: the tronMSX core reads no float, no host clock and no
+# libc beyond what src/kernel/libstr.c provides, and its two pieces of media --
+# C-BIOS and the cartridge catalogue -- are bodies of the /SYS volume the image
+# already carries (src/tools/manifest.txt, the `cbios` and `msx` drawers).  So the
+# XMB Games band lists what the machine holds and Cross opens it, with no file
+# system below the program at all.
 PS2_SRCS       = $(PS2_STARTUP)           \
                  src/cores/core_init.c    \
                  src/drivers/ps2/ps2_gs.c \
@@ -1081,6 +1093,8 @@ PS2_SRCS       = $(PS2_STARTUP)           \
                  src/drivers/ps2/ps2_irq.c \
                  src/drivers/ps2/ps2_usb.c \
                  $(CLU_TERMIO_SRCS)       \
+                 $(MSX_SRCS)              \
+                 src/apps/msx_app.c       \
                  $(TINYGL_SRCS)           \
                  $(PS2_GL_SRCS)           \
                  src/kernel/libstr.c      \

@@ -27,7 +27,13 @@ static int         s_paused;
 static uint16_t    s_machine = BMSX_MACHINE_MSX;
 static uint64_t    s_body_hash;
 
-static const char *s_bios_dir = "third_party/openMSX/Contrib/cbios";
+/* NULL until a caller names a directory: the place C-BIOS lives is not the
+ * core's to know, it is MSX_BIOS_DEFAULT_DIR -- a folder below the checkout on a
+ * host, the /SYS volume's `cbios` drawer on a machine.  Pinning the host folder
+ * here instead made that default unreachable, because bios_load() only falls back
+ * when it is handed nothing, and a bare-metal build went looking for a folder it
+ * has no file system for. */
+static const char *s_bios_dir;
 
 void msx_set_bios_dir(const char *dir)
 {

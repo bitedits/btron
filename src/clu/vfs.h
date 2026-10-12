@@ -52,6 +52,15 @@ int  vfs_list_dir(const char *path, VfsEntry *entries, int max_entries);
 /* Read file into buffer (returns 0 on success, <0 on error) */
 int  vfs_read_file(const char *path, char *buf, size_t max_bytes, size_t *out_bytes);
 
+/*
+ * Read a body byte-exactly: no terminator, no reservation, returns 0 when it
+ * moved at least one byte and reports the count through out_bytes.  One byte of
+ * the caller's buffer belongs to vfs_read_file's terminator, so a body whose
+ * length equals the buffer cannot come through that door -- binary content
+ * (a cartridge image, a PNG, any RT_DATABOX body) always uses this one.
+ */
+int  vfs_read_blob(const char *path, void *buf, size_t cap, size_t *out_bytes);
+
 /* Write file from buffer (returns 0 on success, <0 on error) */
 int  vfs_write_file(const char *path, const char *buf, size_t bytes);
 

@@ -202,23 +202,30 @@ int vfs_list_dir(const char *path, VfsEntry *entries, int max_entries)
     return count;
 }
 
-int vfs_read_file(const char *path, char *buf, size_t max_bytes, size_t *out_bytes)
+/*
+ * The one body reader.  Byte-exact by construction: it stops at the caller's
+ * capacity and at the end of the file, and reports how many bytes it moved, but
+ * it never writes a byte the volume did not hold.  That is what a cartridge
+ * image, a PNG or any other RT_DATABOX body needs, and what
+ * mkbtronfs' own round-trip proof measures against.
+ */
+int vfs_read_blob(const char *path, void *buf, size_t cap, size_t *out_bytes)
 {
     (void)vfs_init();
-    if (path == NULL || buf == NULL || max_bytes == 0) return -1;
+    if (path == NULL || buf == NULL || cap == 0) return -1;
     if (out_bytes != NULL) *out_bytes = 0;
 
     ID fd = opn_fil(path, F_READ);
     if (fd < 0) return -1;
 
     size_t total_read = 0;
-    for (int r = 0; r < 64 && total_read < max_bytes; r++) {
+    for (int r = 0; r < 64 && total_read < cap; r++) {
         ID rec = opn_rec(fd, (W)r, F_READ);
         if (rec < 0) break;
 
         W got = 0;
-        W want = (W)(max_bytes - total_read);
-        ER err = rd_rec(rec, buf + total_read, want, &got);
+        W want = (W)(cap - total_read);
+        ER err = rd_rec(rec, (char *)buf + total_read, want, &got);
         (void)cls_rec(rec);
 
         if (err != 0 || got <= 0) break;
@@ -226,13 +233,26 @@ int vfs_read_file(const char *path, char *buf, size_t max_bytes, size_t *out_byt
     }
     (void)cls_fil(fd);
 
-    if (total_read < max_bytes) {
-        buf[total_read] = '\0';
-    } else {
-        buf[max_bytes - 1] = '\0';
-    }
     if (out_bytes != NULL) *out_bytes = total_read;
-    return 0;
+    return total_read > 0 ? 0 : -1;
+}
+
+/*
+ * The text reader: the same bytes, then a terminator so a caller can print what
+ * it read.  The terminator costs one byte of the caller's buffer, which is why
+ * the capacity handed down is max_bytes - 1 -- a body that fills the buffer
+ * completely is truncated by that one byte, so a binary body must come through
+ * vfs_read_blob() instead, which has no such reservation.
+ */
+int vfs_read_file(const char *path, char *buf, size_t max_bytes, size_t *out_bytes)
+{
+    if (buf == NULL || max_bytes == 0) return -1;
+
+    size_t total_read = 0;
+    int rc = vfs_read_blob(path, buf, max_bytes - 1, &total_read);
+    buf[total_read] = '\0';
+    if (out_bytes != NULL) *out_bytes = total_read;
+    return rc;
 }
 
 int vfs_write_file(const char *path, const char *buf, size_t bytes)
@@ -299,6 +319,8 @@ int vfs_copy(const char *src, const char *dst)
 
     char chunk[4096];
     size_t got = 0;
-    if (vfs_read_file(src, chunk, sizeof(chunk), &got) != 0) return -1;
+    /* A copy moves bytes, not text: the blob reader is the one that cannot
+     * lose the last byte of the body to a terminator. */
+    if (vfs_read_blob(src, chunk, sizeof(chunk), &got) != 0) return -1;
     return vfs_write_file(dst, chunk, got);
 }

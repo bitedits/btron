@@ -25,7 +25,8 @@
 /* ---- 5.3 memory bounds (core statics) ---------------------------------- */
 #define MSX_VRAM_SIZE     131072u   /* V9958 128 KiB, 17-bit addressing  */
 #define MSX_RAM_SIZE       65536u   /* one pool, pages 2 and 3 view it    */
-#define MSX_ROM_SIZE       32768u   /* first-core cartridge cap           */
+                   /* MSX_ROM_SIZE is the public cap, in tronmsx.h: an app that
+                    * sizes a buffer for a cartridge has to know it too. */
 #define MSX_BIOS_SIZE      65536u   /* settings-loaded, outside the sum   */
 #define MSX_LOGO_SIZE      16384u
 #define MSX_SCREEN_W         256u

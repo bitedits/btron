@@ -1,7 +1,9 @@
 # B-System /SYS Volume Manifest
 # Processed by: mkbtronfs manifest.txt -o btron_sys.vol
-# Format: FILE "name"  TAD|MD|TXT|LINK  [payload_path | target_fid | -]
-# '-' means empty/placeholder payload.
+# Format: FILE "name"  TAD|MD|TXT|PNG|BIN|LINK  [payload_path | target_fid | -]  [parent_drawer]
+#         DIR  "name"  [parent_drawer]
+# '-' means empty/placeholder payload.  A token with spaces is "quoted"; the payload column is a
+# path relative to the repository root, which is where the build runs this tool from.
 
 FILE "BTRON Spec Book 1"  TAD   -
 FILE "Cho-Kanji Guide"    TAD   -
@@ -39,3 +41,23 @@ FILE "Heart_Sutra_Tibetan.txt"   TXT   assets/texts/Heart_Sutra_Tibetan.txt
 # Clarity Ceremony Assets
 FILE "clarity.png"               PNG   assets/icons/clarity.png
 FILE "Clarity-Sample.TAD"        TAD   -
+
+# assets/msx — B-MSX cartridges, and the C-BIOS they boot under.
+#
+# A BIN line is a byte-exact copy: the payload's bytes go into one RT_DATABOX record, which is the
+# type no text viewer of this system interprets, and the body keeps its host name.  mkbtronfs
+# prints how much of the volume is left when it writes this file, and refuses an entry that does
+# not fit by naming the blocks it needed.
+#
+# What is here is what tronMSX can run today: its first cartridge window maps one 32 KiB page at
+# 0x4000 and answers MSX_ERR_SIZE above that, so the two MSX1 Lode Runners ship and BULLRUSH,
+# NIGHT_RAVEN and NEON_REVENANT wait on the banked megaROM mapper, not on room in the image.  The
+# C-BIOS pair is not optional -- the machine has no ROM of its own, and without a BIOS the window
+# opens on an empty slot and says so.
+DIR "msx" -
+FILE "Lode Runner (1984)(Sony)[a].rom"  BIN  "assets/msx/Lode Runner (1984)(Sony)[a].rom"  msx
+FILE "Lode Runner II (Japan).rom"       BIN  "assets/msx/Lode Runner II (Japan).rom"       msx
+
+DIR "cbios" -
+FILE "cbios_main_msx1.rom"  BIN  third_party/openMSX/Contrib/cbios/cbios_main_msx1.rom  cbios
+FILE "cbios_logo_msx1.rom"  BIN  third_party/openMSX/Contrib/cbios/cbios_logo_msx1.rom  cbios

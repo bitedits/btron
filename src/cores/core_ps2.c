@@ -58,6 +58,17 @@
  * context and must not pretend to know which one is live, so it prints the name of the backend
  * the Makefile's `PS2_GL=` dial selected, from the unit that holds that rule. */
 #include "../gl/gl_backend_choice.h"
+/* The [MSX] phase's own instruments: the volume reader the XMB Games band and
+ * B-MSX both go through, and the machine they fill.  Relative paths, as above. */
+#include "../clu/vfs.h"
+#include <emulators/tronmsx.h>
+/* <btron/libc_shim.h>, which vfs.h reaches through cluc.h, rewrites malloc/calloc/
+ * free into the kernel names on a bare-metal target -- and this file is the one
+ * that defines those names.  The reader's prototypes are wanted, the renamers are
+ * not, so they come off again straight after the include. */
+#undef malloc
+#undef calloc
+#undef free
 
 extern void ps2_delay_cycles(uint32_t count);
 extern void ps2_halt(void);
@@ -4136,6 +4147,63 @@ static uint32_t ps2_bench_promote_loop(uint32_t *calls)
     return c0;
 }
 
+/* ── MSX phase: are C-BIOS and the cartridges really readable out of the volume
+ *      this ELF carries?
+ *
+ * The XMB Games band lists MSX_ROM_CATALOGUE and B-MSX loads the row it lands on,
+ * both through src/clu/vfs.c against the /SYS volume in .data.  There is no folder
+ * on this target, so "the ROM is in the image" is a claim about three separate
+ * reads, and the first one is exactly what broke: tronmsx.c initialised its BIOS
+ * directory to the host folder, bios_load() only falls back to the volume drawer
+ * when handed nothing, and the window answered "C-BIOS が読み込めません" while the
+ * bytes sat in the image.  A row per read, in the order the app needs them:
+ *   rows=   the drawer lists, and what the band will show,
+ *   cbios=  msx_init() got a BIOS, i.e. the machine can boot at all,
+ *   rom=    the body reads whole and the core accepts it (0 = MSX_OK).
+ * The `$` header column is the first six bytes of the cartridge, which is where an
+ * MSX ROM says its name; printable ones only, so a binary never garbles the log. */
+static void ps2_bench_msx(void)
+{
+    static VfsEntry entries[16];
+    static uint8_t  rom[MSX_ROM_SIZE + 1];
+    char path[VFS_MAX_PATH];
+    const char *first = "";
+    uint32_t got = 0u;
+    int rows, rc, lrc = MSX_ERR_SIZE;
+
+    rows = vfs_list_dir(MSX_ROM_CATALOGUE, entries, 16);
+    if (rows > 0) first = entries[0].name;
+    ps2_kprintf("[MSX] catalogue %s: rows=%d first='%s'\n",
+                MSX_ROM_CATALOGUE, rows, first);
+
+    rc = msx_init(NULL);
+    ps2_kprintf("[MSX] cbios %s: msx_init -> %d%s\n", MSX_BIOS_DEFAULT_DIR, rc,
+                rc == MSX_OK ? "" : " (MSX_ERR_BIOS: the main body did not read)");
+
+    if (rows > 0 && rc == MSX_OK) {
+        size_t n = 0u;
+        int i;
+
+        vfs_child_path(path, sizeof(path), MSX_ROM_CATALOGUE,
+                       entries[0].name, entries[0].fid);
+        if (vfs_read_blob(path, rom, sizeof(rom), &n) == 0) {
+            char hdr[8];
+            got = (uint32_t)n;
+            for (i = 0; i < 6; i++)
+                hdr[i] = (rom[i] >= 0x20 && rom[i] < 0x7f) ? (char)rom[i] : '?';
+            hdr[6] = '\0';
+            lrc = msx_load_rom(rom, got, 0);
+            ps2_kprintf("[MSX] rom %s: %u bytes hdr='%s' -> msx_load_rom %d\n",
+                        entries[0].name, (unsigned)got, hdr, lrc);
+        } else {
+            ps2_kprintf("[MSX] rom %s: body unreadable at %s\n",
+                        entries[0].name, path);
+        }
+    }
+
+    msx_shutdown();     /* leave no machine instance for the phases below */
+}
+
 static void ps2_bench_run(GDEV *screen)
 {
     static const struct { const char *tag; int dx, dy; } mv[] = {
@@ -4144,6 +4212,11 @@ static void ps2_bench_run(GDEV *screen)
         { "v1",   0,   1 }, { "v4",   0,  4 }, { "v16",   0, 16 },
         { "v64",  0,  64 }, { "v127", 0, 127 },
     };
+
+    /* Ahead of everything that costs emulator seconds: this phase answers a storage
+     * question in milliseconds, and the phases after it have been known to run out
+     * of harness time before printing anything. */
+    ps2_bench_msx();
 
     /* First phase, ahead of the present table, because every number after it is a
      * float: the two single-precision engines are run over the same fixed vector of

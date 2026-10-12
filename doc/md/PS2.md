@@ -2660,7 +2660,7 @@ Neither `make ps2` nor `make ps2-bench` rebuilds an object because a *flag* chan
 dependency tracking only sees sources -- so changing `PS2_CC` needs `find src -name '*.ps2.o'
 -delete` first.  Tests 36 and 39 are what catch a stale object left behind by that.
 
-### 2.6 The /SYS volume, and the in-window termios apps it unlocks (Normative)
+### 2.6 The /SYS volume, and the in-window apps it unlocks: termios, B-MSX (Normative)
 
 `sc` and `tv` run *inside* the Terminal window: `gterm_execute_cmd()` derives a row/column count
 from the window's own client box and calls `sc_session_init()` (`src/apps/gterm.c:372-406`), which
@@ -2670,18 +2670,35 @@ that path, and the PS2 core's 12 MiB heap (`PS2_HEAP_SIZE`, `core_ps2.c:92`) com
 stop it is storage: `sc_session_init()` returns at its first statement, `if (vfs_init() < 0) return
 -1;` (`src/clu/sc/sc.c:175`), and `vfs_init()` on this target is one expression
 (`src/clu/vfs.c:35`, the host mounting block above it is `#if CLU_HOSTED`) that asks whether any
-volume is mounted.  So the law of this section is about the mount and nothing else:
+volume is mounted.  So the law of this section is about the mount and nothing else -- and the mount is
+not only a termios question, because B-MSX's Games band list comes from `vfs_list_dir()` over
+`/SYS/msx`, so a machine with no volume gets an emulator window with no cartridges for exactly the
+reason it gets a terminal with no `sc`.  Everything below is normative:
 
-**One volume, one builder, one manifest.**  `/SYS` is `btron_sys.vol` -- 29 manifest records, 22 of
-them carrying a file payload totalling 554,941 bytes at the time of writing (the sum moves with every
-edit, because `doc/md/PS2.md` is one of those 22 files), in a 1 MiB volume -- written by
-`src/tools/mkbtronfs.c` from `src/tools/manifest.txt` by the Makefile rule that already exists for it
-(`Makefile:614`), the same image the hosted targets mount and `make test-fs` reads.  The PS2 build
+**One volume, one builder, one manifest.**  `/SYS` is `btron_sys.vol` -- 33 manifest records in 2
+drawers, 26 of them carrying a file payload totalling 686,660 bytes at the time of writing (the sum
+moves with every edit, because `doc/md/PS2.md` is one of those 26 files), in a 1 MiB volume -- written
+by `src/tools/mkbtronfs.c` from `src/tools/manifest.txt` by the Makefile rule that already exists for
+it (`Makefile:625`), the same image the hosted targets mount and `make test-fs` reads.  The PS2 build
 adds no second description of that content: no
 file list, no sizes, no names.  Its rule gains the manifest's payload paths as prerequisites,
 because `make` otherwise rebuilds nothing when `doc/md/PS2.md` changes and the image ships the
 volume as it was last built -- the same stale-artifact disease this file documents twice for
 `PS2_GL` and `PS2_FP`, arrived at from the other side: here the *content* changed, not the flag.
+
+**The prerequisite list is the tool's, and the targets are real targets.**  Two things had to change
+for that sentence to be true rather than intended.  `mkbtronfs` and `btron_sys.vol` were both in the
+`.PHONY` list (`Makefile:36`), and a phony target has no timestamp for prerequisites to be measured
+against -- so the rule listed payloads it could not be gated by, and rebuilt the volume on every
+build instead.  Both names are out of that list now, and the file target's own mtime means what it
+says.  Second, the payload list is emitted by the tool that reads the manifest, `--deps
+btron_sys.vol.d`, pulled in by `-include` beside the rule (`Makefile:636`), in the same idiom as the
+compiler's `-MMD`.  An `awk` one-liner over the manifest used to derive it in the Makefile, which was
+a second model of the manifest's grammar: it had to agree with the tool about quoting, about the `-`
+placeholder, and about which of `FILE "name" BIN payload drawer`'s four fields is the path, and any
+one of those disagreements fails as a volume that quietly never rebuilds.  Measured on this build:
+touching `assets/msx/Lode Runner (1984)(Sony)[a].rom` rebuilds the volume and the image; touching
+`src/cores/core_ps2.c` does not touch either.
 
 **The volume is a function of its inputs, not of the clock.**  Every header stamp `mkbtronfs` writes
 used to be `time(NULL)`, so two runs over the same manifest and the same documents produced different
@@ -2736,6 +2753,54 @@ launch path this loop runs.  The two routes differ only in where the bytes come 
 `blk_mem_create` over a buffer, so a CDVD reader added later changes the source of the image and not
 this section.
 
+**A cartridge is a body, and one function reads bodies.**  The same volume now answers a second
+question: the XMB's Games band lists MSX cartridges and Cross runs one, on a machine with no file
+system below the program.  `src/tools/manifest.txt` gained four payloads and two drawers -- `msx`
+holds the two 32,768-byte images from `assets/msx`, `cbios` holds C-BIOS's 32,768-byte main ROM and
+its 16,384-byte logo ROM, 114,688 bytes that took the mount from 596 used blocks to 723 of 1024, and
+the paragraphs you are reading are themselves payloads, so the row quoted further down prints a larger
+number still.
+Those four records are typed `BIN`, which `mkbtronfs` writes as `RT_DATABOX` (`src/tools/mkbtronfs.c:388-392`)
+and not as `RT_TADDATA`: the type field is a reader's instruction, and `RT_TADDATA` tells the next
+reader that walks the record chain to decode it as text.  A ROM is opaque bytes, so it must be typed
+as opaque bytes -- `rd_rec` will hand back either, and nothing complains until a body with a `0x00`
+in it comes back truncated.  The other half of that law is the read path: `vfs_read_blob(path, buf,
+cap, &out_bytes)` (`src/clu/vfs.c:212`) is the one function that moves a body, `vfs_read_file` and
+`vfs_copy` are both derived from it, and nothing reads a cartridge through a text wrapper -- a body
+whose length equals its buffer cannot come through `vfs_read_file`, which reserves the last byte for
+the terminator, and `rd_rec` clamps every read to the record's own size.  `src/apps/msx_app.c`
+therefore asks for `MSX_ROM_SIZE + 1` bytes (`src/apps/msx_app.c:211`): the extra byte is what tells
+a full 32 KiB page, the only thing this core maps, from a megaROM that would otherwise be silently
+cut in half, and it does that without a second size query, because there is none -- a size comes from
+`rd_dir`, not from an open file.  The listing that fills the band carries each record's `fid` beside
+its name (`VfsEntry.fid`, `src/clu/vfs.h`), and the path handed to the reader is rebuilt through
+`vfs_child_path`, which re-attaches that `fid` as the path's `#<fid>` anchor: two records with the
+same name in the same drawer stay two different cartridges.
+
+**Where a file lives is named in one place, and it is not the launcher's header.**  `MSX_BIOS_DEFAULT_DIR`
+and `MSX_ROM_CATALOGUE` (`include/emulators/tronmsx.h`) are the only two places in the tree that say
+where C-BIOS and the cartridges are: `third_party/openMSX/Contrib/cbios` and `assets/msx` on a host,
+`/SYS/cbios` and `/SYS/msx` on a machine.  The bug this law closes was the PS2 port's first: the Games
+band listed both ROMs, Cross opened B-MSX, and the window answered "C-BIOS が読み込めません" while the
+BIOS sat in the volume.  `src/emulators/msx/tronmsx.c` initialised `s_bios_dir` to the host folder, so
+the core always handed `bios_load()` a *value*, and `bios_load()` only consults the default when it is
+handed nothing -- the second copy of the path was not merely redundant, it made the first one
+unreachable.  `s_bios_dir` now starts NULL.  These two macros are deliberately not in
+`<btron/apps.h>` next to the launcher entry points they belong to: every declaration there is
+`__WEAK_APP`, and the header is included by the translation unit that *defines* them, so a definition
+that includes it becomes weak -- measured on the hosted build, `gterm.posix.o` exports
+`weak external _open_gterm_window`, and in this image `open_gterm_window` links `WEAK` at 220 bytes
+while `open_msx_window_with_rom` links `GLOBAL` at 96.  An app that quietly loses its own symbol
+strength does not crash; it returns NULL, and the launcher shows a row that does nothing.
+
+One consequence of embedding the volume is worth stating because it bit the gate that guards this law:
+the image's bytes now include this documentation, so scanning the whole executable for a string reads
+prose, not code.  The first version of the row that asks whether the core still points C-BIOS at the
+checkout went red on the sentence that describes that very bug, with no code changed.  The row
+therefore extracts `.rodata` through its section `Addr`/`Off` -- the same location idiom the volume row
+uses -- and scans that window.  A string scan of an image that carries its own manual has to say which
+half of the image it is reading.
+
 **The Terminal window opens at the screen.**  `sc`'s geometry is the window's, so the window's
 default is what the user otherwise resizes by hand every session: `open_gterm_window()` used to ask
 for 560x360 at (220,160), which on this 800x600 canvas gives 66 columns by 18 rows.  It now takes
@@ -2754,42 +2819,74 @@ shared file and the hosted targets get the larger default window too; that is th
 the one cosmetic change in this section that is not PS2-only.
 
 **Landing, as measured.**  The boot row from `btron-ps2.elf` on PCSX2 is the mount reporting itself,
-every number in it read back through a `vol_*` accessor rather than restated (`596 of 1024` on the
-build this section landed on; the figure moves when a manifest payload grows, which is the point of
-printing it):
+every number in it read back through a `vol_*` accessor rather than restated (`596 of 1024` when this
+section first landed, `732` with the cartridges and C-BIOS in it and this section's own sentences
+growing it; the figure moves when a manifest payload grows -- including when the payload is the
+document that quotes it, which is the point of printing it rather than computing it).  The three
+`[MSX]` rows are the bench's own headless answer -- same build, same run, one second after the mount
+row, and no window involved:
 
 ```
-[HFDS] /SYS mounted on the volume inside the image: "SYS"  1024 kB of 1024-byte blocks, 596 used of 1024, 256 records max
+[CFG] this image: PS2_FP=hw:cop1  PS2_GL=tinygl  (the dials it was built under; ...)
+[HFDS] /SYS mounted on the volume inside the image: "SYS"  1024 kB of 1024-byte blocks, 732 used of 1024, 256 records max
+[MSX] catalogue /SYS/msx: rows=2 first='Lode Runner (1984)(Sony)[a].rom'
+[MSX] cbios /SYS/cbios: msx_init -> 0
+[MSX] rom Lode Runner (1984)(Sony)[a].rom: 32768 bytes hdr='AB?@1?' -> msx_load_rom 0
 ```
 
-A volume that uses 596 blocks is not an empty formatted volume -- it holds the 29 records and their
-index -- and `blk_mem_create` was given `readonly = 0`, so the writes `mkf` performs go somewhere.
-What landed
-in the gate is four rows of `scripts/test_ps2.sh` section 9, and each was shown to be able to go red:
+Those rows are what a `grep` finds: `scripts/ps2_bench.sh` filters stdout for `\[MSX\]` beside
+`[BENCH]`, `[PSTAT]` and `[FATAL]`.  The third row is the one that answers the reported defect -- a
+`msx_init -> 0` is C-BIOS read out of the volume and mapped into page 0 -- and the fourth is a byte
+count and a header taken from the record itself, `AB` and the cartridge's own name in the bytes that
+`xxd -l 16` shows at the start of `assets/msx/Lode Runner (1984)(Sony)[a].rom`.  They are cheap: the
+phase runs ahead of everything that costs emulator seconds, so a storage question is answered in
+milliseconds rather than in a 460-second frame budget.
+
+A volume that uses 732 blocks is not an empty formatted volume -- it holds 33 records and their index
+-- and `blk_mem_create` was given `readonly = 0`, so the writes `mkf` performs go somewhere.  292
+blocks are left, and 114,688 bytes of media cost 127 of them, so the headroom is about eight more 32
+KiB cartridges before the link's `ASSERT(_end <= 0x01FF0000)` starts to be argued with; the volume is
+the smaller of this image's two budgets, and the row above is what says so without anyone recomputing
+it.  What landed in the gate is four rows of `scripts/test_ps2.sh` section 9 and five of its new
+section 10, and each was shown to be able to go red:
 
 | Row | Reads off the image | Control that turned it red |
 |---|---|---|
-| volume present, 1024-aligned, whole blocks | `ps2_sys_vol_image`/`_end` symbols: `0x00573800`, 1,048,576 B | the same arithmetic at a fake `0x00573801` gives `%1024 == 1` |
-| the ELF's bytes are `mkbtronfs`'s bytes | `.data` Addr/Off locate ELF offset 4,732,928, `dd bs=1024 \| cmp` | one changed byte at 512 KiB in a scratch copy; and the identical `dd \| cmp` against ELF offset 0 |
+| volume present, 1024-aligned, whole blocks | `ps2_sys_vol_image`/`_end` symbols: `0x00580800`, 1,048,576 B | the same arithmetic at a fake `0x00580801` gives `%1024 == 1` |
+| the ELF's bytes are `mkbtronfs`'s bytes | `.data` Addr/Off locate ELF offset 4,786,176, `dd bs=1024 \| cmp` | one changed byte at 512 KiB in a scratch copy; and the identical `dd \| cmp` against ELF offset 0 |
 | the boot calls the mount | `jal.*<btron_core_hfds_log>` inside `<ps2_kernel_main>`'s disassembly window | asked of `<ps2_gs_init>` instead: 0 |
 | sc's real session init won the link | `jal.*<vfs_init>` and `jal.*<term_set_size>` inside `<sc_session_init>` (158 lines, so 628 bytes of code, not the stub) | asked of `<term_session_init>`: 0 |
+| B-MSX's real opener won the link | `readelf -sW`: `open_msx_window_with_rom` is `GLOBAL`, 96 bytes | asked of `open_gterm_window`, which this image really does link `WEAK` at 220 bytes: the same row shape fails |
+| Cross on a Games row creates the task and the window | `jal.*<cre_tsk>`, `<sta_tsk>`, `<opn_wnd>` inside `<msx_open>` (271 lines) | asked of `<open_msx_window_with_rom>`, which only forwards: 0 |
+| the band's rows come from the mounted volume | `jal.*<vfs_list_dir>` inside `<msx_open>` | asked of `<msx_load>`: 0 |
+| a cartridge reaches the core through the one reader | `jal.*<vfs_child_path>`, `<vfs_read_blob>`, `<msx_load_rom>` inside `<msx_load>` (128 lines) | asked of `<msx_open>`: 0 for both readers -- the scan is not finding one call site twice |
+| the code asks the volume, not the checkout, for both drawers | `.rodata` located by section Addr/Off (585,844 bytes at `0x001dc900`), scanned with `grep -c` over that window: `/SYS/cbios` and `/SYS/msx` present, `third_party/openMSX` absent | the first version of this row scanned the *whole* image and went red on this file's own sentence about the bug -- 2 hits, both of them prose.  That is the control: the section scoping is what makes the row read code rather than documentation |
 
-The suite is 80/80 on both dials, `make -k test` is green through every host suite, and
-`make arm64-elf` still builds.  (These rows and the image sizes below were re-read on 2026-10-12
-after *The compares the EE does not have* landed; the suite has grown since the section was written
-and the volume's stamp has become deterministic, so the numbers in it are the current ones rather
-than the ones the landing day printed.)
+The suite is 85/85 on both dials, `make -k test` is green through every host suite, and
+`make arm64-elf` still builds.  (These rows and the image sizes below were re-read on 2026-10-12 on
+`btron-ps2.elf`, 5,961,044 bytes with `_end = 0x01f01b80`; the suite has grown since the section was
+written and the volume's stamp has become deterministic, so the numbers in it are the current ones
+rather than the ones the landing day printed.)
 
-The 1 MiB is load cost, not present cost, and the line below it in the same log says so:
-`[PS2] whole-canvas paint cost: render=55960 us  swap=0 us  upload=820 us  total=56.780 ms`.  The
+The 1 MiB is load cost, not present cost, and the line below the mount row in the same log says so:
+`[PS2] whole-canvas paint cost: render=56075 us  swap=0 us  upload=820 us  total=56.895 ms`.  The
 upload is 820 microseconds because the GIF DMA reads the compositor's own backbuffer; nothing in the
 present path walks `.data`, so a volume in the image cannot slow a frame.
 
-**What this does not prove.**  The gate is static: it reads the ELF, not the screen.  The user-facing
-half -- `startx`, the Terminal at 94x29, `sc` opening instead of printing "not available yet", and a
-`mkf` that survives until the reboot -- needs the window, so it is the user's to verify
-(`make run-ps2`).  And editing this file is itself a manifest payload, so the volume rebuilds on the
-next `make ps2`: the second row of the table is the reason that is a feature rather than a hazard.
+**What this does not prove.**  The gate is static: it reads the ELF, not the screen.  Two things the
+screen has now answered, and one it has not.  `sc` opening in the Terminal window instead of printing
+"not available yet" was the user's to verify and it holds.  So is the launcher half of B-MSX: the
+Games band lists the two cartridges from the volume and Cross boots them -- that is no longer an
+inference from `msx_init -> 0`, it was seen on the monitor.  What has *not* been shown by anything in
+this section is speed: B-MSX runs, and it runs too slowly to play well, which is a per-frame cost
+question owned by the paint and geometry sections above, not a storage one.  Nothing in this section's
+machinery is on that path: the core's Z80, VDP and PSG loops are integer code that reads no float, and
+the machine's frame is a 256x212 screen integer-scaled into the window (`MSX_SCR_W`/`MSX_SCR_H` and
+`src/apps/msx_app.c:335`), so the bill is emulation cycles plus a blit -- a volume read happens once
+per cartridge, not once per frame.  A `mkf` that survives until the reboot is likewise still
+unverified, and it is the same kind of claim: about the machine, not about the image.  And editing this
+file is itself a manifest payload, so the volume rebuilds on the next `make ps2`: the second row of the
+table is the reason that is a feature rather than a hazard.
 
 ## 3. Target 9: Bare-Metal MIPS (`make run-mips`)
 

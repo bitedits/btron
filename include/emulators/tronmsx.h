@@ -23,6 +23,33 @@ typedef struct {
     uint16_t    frame_hz;   /* 60 for the first core; PAL 50 later    */
 } msx_cfg_t;
 
+/* The cartridge cap, in bytes: the first core maps one 32 KiB page at 0x4000, so
+ * msx_load_rom() answers MSX_ERR_SIZE above it.  Callers that read an image out
+ * of a volume need the number to size their buffer and to tell a full page from
+ * a banked megaROM, which is why it lives here and not in the core's msx_int.h. */
+#define MSX_ROM_SIZE       32768u
+
+/* Where the machine's media lives when the caller names no directory, on each
+ * side of the hosted boundary: a folder below the checkout where there is a host
+ * file system, or a drawer of the /SYS volume an image carries where there is not
+ * (src/tools/manifest.txt imprints those bodies).
+ *
+ * MSX_BIOS_DEFAULT_DIR is used by both the loader and the window that reports a
+ * missing BIOS, so the message cannot drift from the search.  MSX_ROM_CATALOGUE
+ * is listed by the XMB Games band and loaded by B-MSX, so the two show the same
+ * rows; those rows are file names, and open_msx_window_with_rom() takes one of
+ * them and resolves it against this.  Both live in the emulator's public header
+ * and not in <btron/apps.h>, which declares the launcher's entry points
+ * __WEAK_APP -- and a weak declaration in the app that actually *defines* them
+ * would let the launcher's stub win the link. */
+#if defined(__STDC_HOSTED__) && __STDC_HOSTED__ == 1
+#  define MSX_BIOS_DEFAULT_DIR "third_party/openMSX/Contrib/cbios"
+#  define MSX_ROM_CATALOGUE    "assets/msx"
+#else
+#  define MSX_BIOS_DEFAULT_DIR "/SYS/cbios"
+#  define MSX_ROM_CATALOGUE    "/SYS/msx"
+#endif
+
 int  msx_init(const msx_cfg_t *cfg);      /* -> MSX_* codes          */
 void msx_shutdown(void);                  /* idempotent              */
 

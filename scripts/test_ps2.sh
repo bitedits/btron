@@ -606,8 +606,8 @@ else
     echo "  [SKIP] 64-bit-GPR disassembler unavailable -- caches-off premise not read off the image"
 fi
 
-# 9. The /SYS volume inside the image (Normative -- see "The /SYS volume, and in-window
-# termios apps it unlocks" in doc/md/PS2.md §2.6)
+# 9. The /SYS volume inside the image (Normative -- see "The /SYS volume, and the in-window apps it
+# unlocks: termios, B-MSX" in doc/md/PS2.md §2.6)
 #
 # sc, tv and every other termios app refuse to start on this target for one reason: their
 # first call is vfs_init(), and on a bare-metal build that is just `vol_mounted_count() > 0
@@ -664,7 +664,60 @@ SC_ASM="$($OBJDUMP -d $ELF | awk '/<sc_session_init>:/{f=1;print;next} f&&/^[[:s
 assert_check "sc's real session init is linked, not gterm.c's weak stub (sc_session_init calls vfs_init and term_set_size)" \
     "[ \$($OBJDUMP -d $ELF | awk '/<sc_session_init>:/{f=1;print;next} f&&/^[[:space:]]*\$/{f=0;next} f' | grep -c 'jal.*<vfs_init>') -ge 1 ] && [ \$($OBJDUMP -d $ELF | awk '/<sc_session_init>:/{f=1;print;next} f&&/^[[:space:]]*\$/{f=0;next} f' | grep -c 'jal.*<term_set_size>') -ge 1 ]"
 
-# 10. Check Bootable ISO Disc Packaging
+# 10. B-MSX, launched from the volume (Normative -- see "The /SYS volume" in doc/md/PS2.md §2.6)
+#
+# The launcher's Games band lists the cartridges and Cross opens B-MSX, and every part of that is
+# a link-time or content fact that can be silently false: xmb.c carries a weak `open_msx_window_*`
+# pair for the targets that have no emulator, so a regression there boots the XMB, paints two rows
+# and does nothing at all when pressed.  So each row below asks one question of the disassembly
+# rather than of the symbol table, in the same idiom as sc's row above -- and the three places a
+# byte can hide are named separately: the catalogue drawer, the cartridge body, the BIOS.
+#
+# One function reads a body: vfs_read_blob.  msx_load must reach the ROM through it (and through
+# vfs_child_path, which keeps the record's own id as the path's anchor), because the alternative is
+# a second reader per app, and the second reader is where a binary body gets truncated -- rd_rec
+# clamps to the record size and the text wrappers stop at a NUL.
+function_code() {
+    $OBJDUMP -d $ELF | awk -v fn="$1" 'BEGIN{pat="<"fn">:"} index($0,pat){f=1;print;next} f&&/^[0-9a-f]+[ ]<[a-zA-Z_]/ {exit} f'
+}
+
+assert_check "B-MSX's real window opener won the link (open_msx_window_with_rom links GLOBAL, at 96 bytes, not xmb.c's stub)" \
+    "[ \$($READELF -sW $ELF | awk '\$8==\"open_msx_window_with_rom\"{print \$5; exit}') = 'GLOBAL' ] && [ \$($READELF -sW $ELF | awk '\$8==\"open_msx_window_with_rom\"{print \$3; exit}') -ge 64 ]"
+
+assert_check "...and pressing a Games row actually creates the task and the window (msx_open calls cre_tsk, sta_tsk and opn_wnd)" \
+    "[ \$(function_code msx_open | grep -c 'jal.*<cre_tsk>') -ge 1 ] && [ \$(function_code msx_open | grep -c 'jal.*<sta_tsk>') -ge 1 ] && [ \$(function_code msx_open | grep -c 'jal.*<opn_wnd>') -ge 1 ]"
+
+assert_check "the row list comes from the mounted volume, not a host folder (msx_open calls the VFS directory reader)" \
+    "[ \$(function_code msx_open | grep -c 'jal.*<vfs_list_dir>') -ge 1 ]"
+
+# The control for these two rows is the row above them: msx_open itself calls neither vfs_child_path
+# nor vfs_read_blob, so the scan is not finding the same call site twice through an inlined chain.
+assert_check "a cartridge reaches the core through the one byte-exact reader (msx_load calls vfs_child_path, vfs_read_blob and msx_load_rom)" \
+    "[ \$(function_code msx_load | grep -c 'jal.*<vfs_child_path>') -ge 1 ] && [ \$(function_code msx_load | grep -c 'jal.*<vfs_read_blob>') -ge 1 ] && [ \$(function_code msx_load | grep -c 'jal.*<msx_load_rom>') -ge 1 ]"
+
+# Where C-BIOS lives is one #define (MSX_BIOS_DEFAULT_DIR in include/emulators/tronmsx.h), and this
+# is the row that catches it being pinned back to a checkout path: the core used to initialise
+# s_bios_dir to third_party/openMSX/Contrib/cbios, which made that default unreachable -- a
+# bare-metal machine has no such folder, so bios_load() failed and the window said "C-BIOS が読み込めません"
+# while the volume held the BIOS the whole time.
+#
+# The scan is scoped to .rodata, and that scoping is load-bearing rather than tidy: this very file is a
+# manifest payload, so the section .data holds a copy of the documentation that describes the bug --
+# including the checkout path it warns about.  A whole-image grep therefore goes red on a doc edit that
+# changes no code at all, which is exactly what it did here on its first run (2 hits, both of them
+# sentences).  Read-only code bytes are the thing under law, so they are the thing scanned, located
+# through the section header in the same idiom as the volume row above.  All three scans read the whole
+# section (`grep -c`, never `-q`), which both keeps `set -o pipefail` from reporting the reader's early
+# exit as dd's failure and makes the row self-evidencing: the string that must be there is there, so
+# the scan can see strings at all.
+RODATA_ADDR="$($READELF -S $ELF | awk '$3==".rodata"{print "0x"$5; exit}')"
+RODATA_OFF="0x$($READELF -S $ELF | awk '$3==".rodata"{print $6; exit}')"
+RODATA_SIZE="0x$($READELF -S $ELF | awk '$3==".rodata"{print $7; exit}')"
+RODATA_SCAN="dd if=$ELF bs=1 skip=$((RODATA_OFF)) count=$((RODATA_SIZE)) 2>/dev/null | LC_ALL=C grep -cac"
+assert_check "the code asks the volume for C-BIOS and the cartridges, and names no checkout path (.rodata at $RODATA_ADDR, $RODATA_SIZE bytes)" \
+    "[ \$($RODATA_SCAN '/SYS/cbios') -ge 1 ] && [ \$($RODATA_SCAN '/SYS/msx') -ge 1 ] && [ \$($RODATA_SCAN 'third_party/openMSX') -eq 0 ]"
+
+# 11. Check Bootable ISO Disc Packaging
 if [ -f "$ISO" ]; then
     assert_check "ISO disc image exists and is non-empty" \
         "[ -s $ISO ]"

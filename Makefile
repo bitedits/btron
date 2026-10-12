@@ -1340,7 +1340,7 @@ test-ps2-gs-rec: $(TEST_GSREC_BIN)
 	@echo "=========================================================="
 	@./$(TEST_GSREC_BIN)
 
-$(TEST_GSREC_BIN): $(TEST_GSREC_OBJS) src/drivers/ps2/ps2_gs_rec.c src/drivers/ps2/ps2_gs_pack.c src/drivers/ps2/ps2_gs_rec.h src/drivers/ps2/ps2_gs_pack.h
+$(TEST_GSREC_BIN): $(TEST_GSREC_OBJS) src/drivers/ps2/ps2_gs_rec.c src/drivers/ps2/ps2_gs_pack.c src/drivers/ps2/ps2_gs_rec.h src/drivers/ps2/ps2_gs_pack.h verify/tests/gs_group_view.h
 	@mkdir -p ./.build
 	$(CC) $(TEST_GSREC_OBJS) -o $@ $(LDFLAGS)
 
@@ -1362,7 +1362,8 @@ test-eegs-raster: $(TEST_EEGSR_BIN)
 
 $(TEST_EEGSR_BIN): $(TEST_EEGSR_OBJS) src/gl/backend_eegs.c src/gl/backend_eegs.h \
                    src/drivers/ps2/ps2_gs_rec.c src/drivers/ps2/ps2_gs_pack.c \
-                   src/drivers/ps2/ps2_gs_rec.h src/drivers/ps2/ps2_gs_pack.h
+                   src/drivers/ps2/ps2_gs_rec.h src/drivers/ps2/ps2_gs_pack.h \
+                   verify/tests/gs_group_view.h
 	@mkdir -p ./.build
 	$(CC) $(TEST_EEGSR_OBJS) -o $@ $(LDFLAGS)
 

@@ -379,44 +379,117 @@ fi
 #
 # The law has two halves now and they are different assertions, so they get separate
 # tests.  The image is built -msoft-float, which is what keeps the doubles off the FPU;
-# one file, src/drivers/ps2/ps2_builtins.c, is deliberately built -mhard-float so its
-# single-precision libcalls can execute on COP1 (measured 20 cycles/op against 160 for
-# the bit engine in that same file).  "Zero FP instructions in the image" was therefore
-# replaced by:
+# two files are deliberately built -mhard-float so their single-precision arithmetic can
+# execute on COP1 (measured 20 cycles/op against 160 for the bit engine): the runtime
+# src/drivers/ps2/ps2_builtins.c, whose libcalls are the FPU's own, and the geometry
+# kernel src/gl/tinygl/vertex_stage.c (plan row 7), which is reached only by pointer so
+# no float crosses its boundary and the ABI law is unbroken.  "Zero FP instructions in
+# the image" was therefore replaced by:
 #
-#   (a) nothing but that one object may hold a COP1 instruction -- a leftover .s op in
+#   (a) nothing but those two objects may hold a COP1 instruction -- a leftover .s op in
 #       any other translation unit means a file that escaped -msoft-float, and its float
 #       arguments would arrive in registers the rest of the image does not use;
 #   (b) no op of double width, and none of the .s encodings this CPU does not implement
-#       (c.un.s, trunc.w.s -- both proven illegal by byte-scanning the linked image).
+#       (the unordered compare family -- c.un.s, c.ueq.s, c.ult.s, c.ule.s -- and
+#       trunc.w.s, all proven illegal by byte-scanning the linked image).
+#
+# Half (b) is what the kernel is guarded by, and it is not decoration: the first build of
+# that kernel put sdc1/ldc1 into the image unasked, because a `-mhard-float` unit that
+# *calls* out for its float -> int conversion has to preserve live FPRs across the call,
+# and with the O32 32-bit-FPR file the compiler saves them as even/odd pairs with the
+# double-width store.  The conversions are inlined from ps2_fp.h instead, and this sweep is
+# the row that says so.
 #
 # GNU objdump decodes MIPS3 here and can print these as .word, so use the 64-bit
 # decoder that sees every COP1 encoding.
-FP_PAT='(^|[[:space:]])(ldc1|sdc1|lwc1|swc1|(add|sub|mul|div|sqrt|abs|neg|mov|cvt|trunc|round|ceil|floor)[a-z]*\.[sdfw](\.[sdfw])?|c\.(eq|neq|lt|leq|ngt|nge|un|ord|sf|t|f)\.[sdfw])([[:space:]]|$)'
-# What may not appear anywhere, in any object: the double-width forms and the two
+FP_PAT='(^|[[:space:]])(ldc1|sdc1|lwc1|swc1|(add|sub|mul|div|sqrt|abs|neg|mov|cvt|trunc|round|ceil|floor)[a-z]*\.[sdfw](\.[sdfw])?|c\.(eq|neq|lt|leq|ngt|nge|un|ueq|ult|ule|olt|ole|ord|sf|t|f)\.[sdfw])([[:space:]]|$)'
+# What may not appear anywhere, in any object: the double-width forms and the
 # single-precision encodings proven not to exist on this CPU.  The width class is `d`
 # alone -- writing [sd] here would flag every legal add.s and cvt.s.w, which is exactly
 # the mistake the first version of this test made.
-FORBIDDEN_PAT='(^|[[:space:]])(ldc1|sdc1|(add|sub|mul|div|sqrt|abs|neg|mov|cvt|rem)[a-z]*\.d(\.[sdw])?|c\.(eq|neq|lt|leq|ngt|nge|un|ord|sf|t|f)\.d|c\.un\.s|trunc\.w\.s|(round|ceil|floor)\.[lw]*\.s)([[:space:]]|$)'
+#
+# The compare family is the whole-function-low-bit pair `c.X.s` / `c.uX.s`, and the
+# unordered side of that pair is EE-illegal as a family, not one instruction at a time:
+# `c.un.s` was caught by the self-test, and `c.ule.s` was caught three weeks later by the
+# XMB drawing nothing at all -- a `-mhard-float` unit that compares with `>` reaches for
+# `c.ule.s` (clang lowers `a > b` as `b < a` in the unordered-inclusive form), the decoder
+# ignores it, the condition code keeps the *previous* compare's answer, and every face in
+# the frame came out of the transform clipped.  Naming only `c.un.s` is what let that
+# through: the four members of the family are one law, so all four are named.
+FORBIDDEN_PAT='(^|[[:space:]])(ldc1|sdc1|(add|sub|mul|div|sqrt|abs|neg|mov|cvt|rem)[a-z]*\.d(\.[sdw])?|c\.(eq|neq|lt|leq|ngt|nge|un|ord|sf|t|f)\.d|c\.(un|ueq|ult|ule)\.s|trunc\.w\.s|(round|ceil|floor)\.[lw]*\.s)([[:space:]]|$)'
 if [ -n "$OBJDUMP64" ]; then
-    assert_check "Only ps2_builtins.ps2.o holds COP1 instructions (every other unit is -msoft-float)" \
-        "! (find src -name '*.ps2.o' ! -name 'ps2_builtins.ps2.o' -exec $OBJDUMP64 -d --triple=mips64el-unknown-elf {} + | grep -cE '$FP_PAT')"
+    assert_check "Only ps2_builtins.ps2.o and vertex_stage.ps2.o hold COP1 instructions (every other unit is -msoft-float)" \
+        "! (find src -name '*.ps2.o' ! -name 'ps2_builtins.ps2.o' ! -name 'vertex_stage.ps2.o' -exec $OBJDUMP64 -d --triple=mips64el-unknown-elf {} + | grep -cE '$FP_PAT')"
     assert_check "Zero double-width or EE-illegal FPU op in the image (.d ops, c.un.s, trunc.w.s)" \
         "! ($OBJDUMP64 -d --triple=mips64el-unknown-elf $ELF | grep -cE '$FORBIDDEN_PAT')"
     # The same law read off the bytes rather than off a disassembler's naming, because an
     # encoder this toolchain changes its mind about is exactly the one that would slip
-    # through a mnemonic grep: c.un.s is 0x46020031 and trunc.w.s is 0x4600010d, stored
-    # little-endian.  Scanned over the whole file, not just .text -- a section-name typo
-    # would otherwise turn this test into a silent pass.
-    ELF_HEX="$(xxd -p $ELF | tr -d '\n')"
-    # The variable reference survives to eval time -- a 4.6 MB image is a 9 MB hex string
+    # through a mnemonic grep.  Not as one literal each: 0x4600010d and 0x46020031 are the
+    # words LLVM writes for the operand pairings the FPU self-test hand-wrote, and a real
+    # cast is `trunc.w.s $f6, $f6` -- 0x4600318d -- so a single fixed word scans clean over
+    # an image that is not.  Measured on the control build that put the plain casts back:
+    # zero hits on the literal, nine trunc.w.s in the disassembly.  The op is
+    # cop1 | 16 | rt=0 | fs | fd | 0x0d, which little-endian lays out as [048c]d ?? 00 46,
+    # fd being even because this file has 32-bit FPRs -- hence the four choices in byte 0 and
+    # the whole register space covered.  The c.un.s form stays the literal for its own
+    # pairing; the general net for the compare family is row 58.
+    #
+    # Read out of .text and not out of the whole file, because a byte-granular sweep of the
+    # data would match a pixel pattern by luck: the measured version of this row that scanned
+    # the whole image reported 10 aligned hits where the disassembly held 9 instructions.
+    # readelf's dump is 4-byte aligned by construction (.text starts on a paragraph), which is
+    # what makes a window here an instruction word rather than a coincidence.  The size test
+    # is the other half: it fails loudly if the section is ever renamed, which is exactly the
+    # way a whole-file scan's silence used to hide a typo.
+    ELF_TEXT="$($READELF --hex-dump=.text $ELF | awk '/^  0x/{print $2$3$4$5$6$7$8$9}' | tr -d '\n')"
+    # The variable references survive to eval time -- a 830 KB section is a 1.7 MB hex string
     # and pasting it into the command text would make every failure print it.
-    assert_check "The two illegal COP1 encodings are absent from the image byte-for-byte" \
-        "! (grep -q '31000246\|0d010046' <<<\"\$ELF_HEX\")"
-    # And the positive half of the same check: the sanctioned object really does contain
-    # them, so a stale -msoft-float build of it cannot pass by having no FPU code at all.
+    assert_check "The illegal COP1 encodings are absent from .text byte-for-byte (.text is ${#ELF_TEXT} hex chars)" \
+        "[ \${#ELF_TEXT} -ge 1000000 ] && ! (grep -qE '([048c]d[0-9a-f]{2}0046|31000246)' <<<\"\$ELF_TEXT\")"
+    # The unordered compare family as a *class* rather than as one literal, because the class
+    # is the law and the literal was the gap: the row above names `31000246`, which is
+    # `c.un.s $f0,$f2` with the operand pairing the self-test happened to hand-write, and a
+    # compiler's `c.ule.s $f0,$f6` is `37000646` -- no literal on that list, one encoding away
+    # in the funct field, and the same missing instruction.  What shipped on it was an XMB that
+    # drew nothing: `total=5406 out=5406 drawn=0`, every face clipped by a compare that never
+    # answered.  The op is cop1 | fmt | fs | ft | funct, and funct is the low byte: 0x31 un,
+    # 0x33 ueq, 0x35 ult, 0x37 ule, with the even neighbours 0x30/0x32/0x34/0x36 (f, eq, olt,
+    # ole) being the forms this CPU does answer -- so the four odd ones are the net, and the
+    # high byte 0x46 says the word is a COP1 instruction at all.
+    #
+    # One word per line rather than one long string, and anchored at both ends: a compare
+    # family this wide matches at a byte offset that is not an instruction boundary, which
+    # measured 22 spurious hits on an image whose disassembly holds none.  readelf prints the
+    # dump in 4-byte groups already, so the alignment is the toolchain's promise and not this
+    # script's arithmetic.
+    ELF_WORDS="$($READELF --hex-dump=.text $ELF | awk '/^  0x/{for (i = 2; i <= 9; i++) if (length($i) == 8) print $i}')"
+    assert_check "No COP1 compare of the unordered family anywhere in .text (${#ELF_WORDS} dump chars, funct 0x31/33/35/37)" \
+        "[ \$(grep -cE '^(31|33|35|37)[0-9a-f]{4}46\$' <<<\"\$ELF_WORDS\") -eq 0 ]"
+    # And the positive half of the same check: the sanctioned objects really do contain
+    # them, so a stale -msoft-float build of either cannot pass by having no FPU code at
+    # all.  Two rows because they earn their flag differently: the runtime's arithmetic is
+    # what the libcalls dispatch to, while the kernel's is the whole point of row 7 and is
+    # worth a row of its own -- the -mhard-float substitution is a per-object flag, and a
+    # flag that silently does not reach its file is the failure this row exists to see.
     assert_check "ps2_builtins.ps2.o really emits COP1 arithmetic (the hardware path is compiled in)" \
         "[ \$($OBJDUMP64 -d --triple=mips64el-unknown-elf src/drivers/ps2/ps2_builtins.ps2.o | grep -cE '[[:space:]](add|sub|mul|div)\.s[[:space:]]') -ge 4 ]"
+    # The kernel's own two halves: the arithmetic is inline on COP1, ...
+    assert_check "vertex_stage.ps2.o emits COP1 mul.s/add.s arithmetic (PS2_FP=hw reached the file)" \
+        "[ \$($OBJDUMP64 -d --triple=mips64el-unknown-elf src/gl/tinygl/vertex_stage.ps2.o | grep -cE '[[:space:]](mul|add)\.s[[:space:]]') -ge 40 ]"
+    # ... and its six clip plane tests are in the form this CPU answers.  Six rather than
+    # twelve because all six go through `c.olt.s`: the three that C writes as `>` reach it
+    # with the operands swapped, which is what `gl_clipcode()`'s TGL_CLIP_LT does
+    # (src/gl/tinygl/zgl.h).  The second half is the requirement that the image-wide row above
+    # cannot make: a kernel with no compares at all also scans clean, and a kernel that lost
+    # its clip tests is the shape the black screen arrived in.
+    assert_check "vertex_stage.ps2.o's clip tests are ordered c.olt.s and none of the unordered family" \
+        "[ \$($OBJDUMP64 -d --triple=mips64el-unknown-elf src/gl/tinygl/vertex_stage.ps2.o | grep -cE '[[:space:]]c\.olt\.s[[:space:]]') -ge 6 ] && ! (\$OBJDUMP64 -d --triple=mips64el-unknown-elf src/gl/tinygl/vertex_stage.ps2.o | grep -cE '[[:space:]]c\.(un|ueq|ult|ule)\.s[[:space:]]')"
+    # ... and the linked image actually branches into it, which is what says the unit is a
+    # kernel and not dead weight the linker kept.  Read off $ELF rather than off the object:
+    # an object's `jal 0x0` carries no name until the link resolves it, and a call the linker
+    # left behind is the one case the object file cannot show.
+    assert_check "glopVertex calls into both kernel halves in the linked image" \
+        "[ \$($OBJDUMP64 -d --triple=mips64el-unknown-elf $ELF | grep -cE 'jal[[:space:]]+0x[0-9a-f]+ <tgl_vertex_transform>') -ge 1 ] && [ \$($OBJDUMP64 -d --triple=mips64el-unknown-elf $ELF | grep -cE 'jal[[:space:]]+0x[0-9a-f]+ <tgl_vertex_to_viewport>') -ge 1 ]"
 else
     echo "  [SKIP] 64-bit-GPR disassembler unavailable -- FPU-opcode sweep not run"
 fi
@@ -533,7 +606,65 @@ else
     echo "  [SKIP] 64-bit-GPR disassembler unavailable -- caches-off premise not read off the image"
 fi
 
-# 9. Check Bootable ISO Disc Packaging
+# 9. The /SYS volume inside the image (Normative -- see "The /SYS volume, and in-window
+# termios apps it unlocks" in doc/md/PS2.md §2.6)
+#
+# sc, tv and every other termios app refuse to start on this target for one reason: their
+# first call is vfs_init(), and on a bare-metal build that is just `vol_mounted_count() > 0
+# || g_sys_vol != NULL`.  No volume, no filesystem, no terminal application.  The chosen fix
+# is to build the volume with mkbtronfs and .incbin it into .data, so the boot mounts a
+# byte image that is part of the executable and there is no CDVD reader, no second copy and
+# no second description of what the volume holds.
+#
+# Four things can silently break that, and each is its own row:
+#
+# The first is alignment and size.  blk_mem_create addresses blocks as `lba * 1024` from the
+# start of its buffer, so the embedded image must begin on a 1024 boundary and hold a whole
+# number of blocks -- one stray leading byte would shift every block the filesystem reads and
+# vol_mount would reject the magic.  Both facts are read off the symbol pair, not off the
+# assembly source, because the section flags are what decide them.
+#
+# The second is that the bytes in the ELF are the bytes mkbtronfs wrote.  A stale object, or a
+# link that filled the section from an older volume, produces an image that mounts and boots
+# and then shows yesterday's files; nothing complains.  So the volume is located in the file
+# through .data's own Addr/Off and compared, block for block, against btron_sys.vol.
+#
+# The third and fourth are that the boot actually reaches it: ps2_kernel_main must call the
+# mount (it had a logging stub with no caller for a whole session, and printed a record list
+# that was pure fiction), and sc's real session init must be the one that links -- gterm.c
+# carries a weak definition, so a strong-symbol regression would bring back "not available
+# yet" while every other row here still passed.
+if [ -f btron_sys.vol ]; then
+    VOL_ADDR="$($READELF -s $ELF | awk '$8=="ps2_sys_vol_image" {print "0x"$2; exit}')"
+    VOL_END="$($READELF -s $ELF | awk '$8=="ps2_sys_vol_image_end" {print "0x"$2; exit}')"
+    DATA_ADDR="$($READELF -S $ELF | awk '$3==".data" {print "0x"$5; exit}')"
+    DATA_OFF="$($READELF -S $ELF | awk '$3==".data" {print "0x"$6; exit}')"
+    VOL_BYTES=$((VOL_END - VOL_ADDR))
+    VOL_FILE_OFF=$((DATA_OFF + VOL_ADDR - DATA_ADDR))
+    VOL_ON_DISK=$(wc -c < btron_sys.vol | tr -d ' ')
+    assert_check "The image carries the volume in .data at $VOL_ADDR: $VOL_BYTES bytes, 1024-aligned, $((VOL_BYTES / 1024)) whole blocks" \
+        "[ -n '$VOL_ADDR' ] && [ -n '$VOL_END' ] && [ $VOL_BYTES -gt 0 ] && [ \$((VOL_ADDR % 1024)) -eq 0 ] && [ \$((VOL_BYTES % 1024)) -eq 0 ]"
+    # dd reads whole 1024-byte blocks, which is exactly why the alignment row above is a
+    # precondition rather than a detail: an unaligned start would silently truncate here.
+    assert_check "...and they are the bytes mkbtronfs wrote ($VOL_ON_DISK in btron_sys.vol, copied from ELF offset $VOL_FILE_OFF)" \
+        "[ $VOL_BYTES -eq $VOL_ON_DISK ] && dd if=$ELF bs=1024 skip=$((VOL_FILE_OFF / 1024)) count=$((VOL_BYTES / 1024)) 2>/dev/null | cmp -s - btron_sys.vol"
+else
+    echo "  [SKIP] btron_sys.vol absent -- the embedded-volume law was not read off the image"
+fi
+
+BOOT_ASM="$($OBJDUMP -d $ELF | awk '/<ps2_kernel_main>:/{f=1;print;next} f&&/^[[:space:]]*$/{f=0;next} f')"
+BOOT_MOUNT_CALLS="$(printf '%s\n' "$BOOT_ASM" | grep -c 'jal.*<btron_core_hfds_log>' || true)"
+assert_check "The boot mounts it: ps2_kernel_main calls the volume's mount ($BOOT_MOUNT_CALLS call site)" \
+    "[ \$($OBJDUMP -d $ELF | awk '/<ps2_kernel_main>:/{f=1;print;next} f&&/^[[:space:]]*\$/{f=0;next} f' | grep -c 'jal.*<btron_core_hfds_log>') -ge 1 ]"
+
+# The strong/weak pair is the reason this row is a call-site check and not a symbol-existence
+# check: `ps2_sys_vol_image` existing says nothing about which sc_session_init won the link.
+# 628 bytes of real code calls both vfs_init and term_set_size; the weak stub calls neither.
+SC_ASM="$($OBJDUMP -d $ELF | awk '/<sc_session_init>:/{f=1;print;next} f&&/^[[:space:]]*$/{f=0;next} f')"
+assert_check "sc's real session init is linked, not gterm.c's weak stub (sc_session_init calls vfs_init and term_set_size)" \
+    "[ \$($OBJDUMP -d $ELF | awk '/<sc_session_init>:/{f=1;print;next} f&&/^[[:space:]]*\$/{f=0;next} f' | grep -c 'jal.*<vfs_init>') -ge 1 ] && [ \$($OBJDUMP -d $ELF | awk '/<sc_session_init>:/{f=1;print;next} f&&/^[[:space:]]*\$/{f=0;next} f' | grep -c 'jal.*<term_set_size>') -ge 1 ]"
+
+# 10. Check Bootable ISO Disc Packaging
 if [ -f "$ISO" ]; then
     assert_check "ISO disc image exists and is non-empty" \
         "[ -s $ISO ]"

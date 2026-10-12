@@ -161,6 +161,20 @@ void vol_mark_dirty(Volume *v);
  */
 void fil_set_rec_type(ID fd, W rec_idx, UH type);
 
+/* The timestamp a freshly written file header carries, in seconds since 2000-01-01.  One
+ * reading, because two writers (vol_format's root header and file.c's create/close path) used to
+ * call time(NULL) themselves, which made them agree by luck.
+ *
+ * btron_fs_set_stamp() pins that reading, and it exists for the host tool: mkbtronfs writes a
+ * volume that is then `.incbin`'d into the PS2 image, so a build that stamps "now" produces a
+ * different ELF for identical sources -- and the row that checks the image carries the same bytes
+ * as the file on disk (scripts/test_ps2.sh, "they are the bytes mkbtronfs wrote") goes red one
+ * generation late, comparing yesterday's stamp against today's.  Pinning the newest input's own
+ * mtime makes the volume a function of its contents, which is what a shipped payload has to be.
+ * Nothing on a target calls it, so the runtime keeps the clock. */
+UW   btron_fs_now_stamp(void);
+void btron_fs_set_stamp(UW secs_since_2000);
+
 #ifdef __cplusplus
 }
 #endif

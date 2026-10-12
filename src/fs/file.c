@@ -64,12 +64,26 @@ static UW hdr_row_capacity(UW bsize, int brightv)
 }
 
 /* ── Timestamp helper ───────────────────────────────────────────── */
-static UW now_ts(void) {
+/* The one reading of "now" that every header stamp in a volume takes, so the volume's own root
+ * header (src/fs/vol.c) and a file's create/close stamps here cannot disagree with each other --
+ * they used to each call time(NULL), which made a volume formatted across a tick boundary carry two
+ * different dates, and made the same sources produce different bytes on every run.  A pinned stamp
+ * is what the host tool uses: btron_fs_set_stamp(), declared in include/btron/fs/vol_api.h, exists
+ * because a shipped volume has to be a function of its contents rather than of the clock. */
+static UW s_stamp_pinned;
+
+UW btron_fs_now_stamp(void) {
 #if BTRON_HOSTED
+    if (s_stamp_pinned) return s_stamp_pinned;
     return (UW)(time(NULL) - 946684800UL);
 #else
     return 0;
 #endif
+}
+
+void btron_fs_set_stamp(UW secs_since_2000)
+{
+    s_stamp_pinned = secs_since_2000;
 }
 
 /* ── Endian-independent byte helpers ─────────────────────────────── */
@@ -894,7 +908,7 @@ ID cre_fil(const char *path, UW mode)
     of->data_blk = dblk;
     of->data_used= 0;
 
-    UW ts = now_ts();
+    UW ts = btron_fs_now_stamp();
     of->hdr.flags      = FILE_HDR_FLAGS_NORMAL;
     of->hdr.atype      = 0x0001;
     of->hdr.ctime      = ts;
@@ -934,7 +948,7 @@ ER cls_fil(ID fd)
 
     if (of->dirty) {
         of->hdr.nrec       = of->nrec;
-        of->hdr.mtime      = now_ts();
+        of->hdr.mtime      = btron_fs_now_stamp();
         of->hdr.total_size = of->data_used;
         of->hdr.data_blk   = of->data_blk;
         write_header_block(of_vol(of), of->hdr_blk, of);

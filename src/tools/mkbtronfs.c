@@ -18,6 +18,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <errno.h>
+#include <time.h>       /* time_t for the stamp, and for SOURCE_DATE_EPOCH */
+#include <sys/stat.h>   /* stat(), for the newest-input-mtime rule below */
 
 /* We need the FS API; include indirectly via the public headers */
 #include <btron/fs/block.h>
@@ -353,6 +355,53 @@ static int process_manifest(const char *manifest_path)
     return errors ? -1 : 0;
 }
 
+/* ── Reproducible stamp ─────────────────────────────────────────────
+ *
+ * The volume's file headers carry a date, and until now that date was `time(NULL)`, which made
+ * every run of this tool write different bytes for the same manifest and the same documents.
+ * That is cheap when the volume is a file you boot from and expensive when it is `.incbin`'d into
+ * an ELF -- the PS2 image carries this payload, so a rebuild that changes nothing but a stamp
+ * changes the shipped image, and the row that proves the image holds the bytes the tool wrote
+ * (scripts/test_ps2.sh) compares two generations of it and goes red on the sixteenth second.
+ *
+ * So the stamp comes from the inputs: the newest mtime among the manifest and the payload files it
+ * names, which is exactly the date the volume's contents were last true.  SOURCE_DATE_EPOCH wins
+ * when a build sets it, because that is the convention other reproducible tools read and a
+ * checkout whose mtimes were reset still has to produce the same image. */
+static time_t newest_input_mtime(const char *manifest_path)
+{
+    FILE *mf;
+    char line[512];
+    time_t newest = 0;
+    struct stat st;
+
+    if (stat(manifest_path, &st) == 0 && st.st_mtime > newest) newest = st.st_mtime;
+    mf = fopen(manifest_path, "r");
+    if (!mf) return newest;
+    while (fgets(line, sizeof(line), mf)) {
+        char keyword[16] = {0}, fname[80] = {0}, ftype[16] = {0}, payload[256] = {0};
+        char *p = line;
+
+        while (*p == ' ' || *p == '\t') p++;
+        if (sscanf(p, "%15s", keyword) != 1 || strcmp(keyword, "FILE") != 0) continue;
+        while (*p && *p != '"') p++;
+        if (*p != '"') continue;
+        p++;
+        { int i = 0; while (*p && *p != '"' && i < 79) fname[i++] = *p++; fname[i] = '\0'; }
+        if (*p == '"') p++;
+        while (*p == ' ' || *p == '\t') p++;
+        { int i = 0; while (*p && *p != ' ' && *p != '\t' && i < 15) ftype[i++] = *p++; ftype[i] = '\0'; }
+        while (*p == ' ' || *p == '\t') p++;
+        { int i = 0; while (*p && *p != ' ' && *p != '\t' && i < 255) payload[i++] = *p++; payload[i] = '\0'; }
+
+        /* A placeholder (`-`) names no file, and a LINK names a FID rather than a path. */
+        if (!payload[0] || payload[0] == '-' || strcmp(ftype, "LINK") == 0) continue;
+        if (stat(payload, &st) == 0 && st.st_mtime > newest) newest = st.st_mtime;
+    }
+    fclose(mf);
+    return newest;
+}
+
 /* ── main ────────────────────────────────────────────────────────── */
 int main(int argc, char **argv)
 {
@@ -394,6 +443,25 @@ int main(int argc, char **argv)
 
     printf("mkbtronfs: formatting '%s' (Label: %s)  NFMAX=%u NLB=%u (%u KiB)\n",
            output, g_vol_name, nfmax, nlb, nlb);
+
+    /* Pin the stamp before the first header is written, so the bytes below depend on the inputs
+     * and not on the clock.  A stamp that cannot be read from the inputs -- a checkout whose mtimes
+     * were reset before 2000-01-01, which is what a plain `tar -x` gives -- leaves the tool on the
+     * clock, so say so on stderr rather than let a non-deterministic image look reproducible. */
+    {
+        const char *epoch = getenv("SOURCE_DATE_EPOCH");
+        time_t t = epoch ? (time_t)strtol(epoch, NULL, 10) : newest_input_mtime(manifest);
+        if (t > 946684800L) {
+            btron_fs_set_stamp((UW)(t - 946684800L));
+            printf("mkbtronfs: stamp %s = %ld (secs since 2000-01-01: %u)\n",
+                   epoch ? "SOURCE_DATE_EPOCH" : "newest input mtime", (long)t,
+                   (unsigned)(t - 946684800L));
+        } else {
+            fprintf(stderr, "mkbtronfs: WARNING: no usable stamp from %s (%ld); falling back to the "
+                            "clock, so this volume is NOT reproducible.  Set SOURCE_DATE_EPOCH.\n",
+                    epoch ? "SOURCE_DATE_EPOCH" : "input mtimes", (long)t);
+        }
+    }
 
     /* Create and format the volume */
     BlkDev *dev = blk_file_create(output, 1 /* create_new */, (unsigned int)nlb);

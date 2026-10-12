@@ -211,6 +211,123 @@ void gl_draw_line(GLVertex* p1, GLVertex* p2) {
 
 
 
+/* ── Where the faces go ────────────────────────────────────────────────────────────
+ *
+ * `gl_draw_triangle` is the one funnel every polygon face passes on its way to a fill, and the
+ * four returns below are the only ways a face can be asked for and never drawn: zero area on
+ * screen, culled by the winding, wholly outside the clip volume, or partly inside and handed to
+ * the clipper.  A frame that spends its microseconds in the vertex stages and covers nothing is
+ * separated by these six counts into which of those it did -- which is a question no amount of
+ * reading the transform can answer, because all four look identical from the outside and each
+ * has a different thing to fix.
+ *
+ * `clip_or` is the OR of every clip code the funnel saw: zero means nothing was outside, and a
+ * bit that is always set (XMAX against a W of 1, say) names the plane the geometry never got
+ * inside of, which is how an unapplied projection shows up without a float formatter.
+ *
+ * Counted like the fill totals above -- one integer increment at a decision the function was
+ * already making, no register taken from a span loop -- and read by the PS2 bench's row, so a
+ * shipped frame carries the cost and nothing else. */
+static unsigned s_face_total, s_face_degen, s_face_cull, s_face_out;
+static unsigned s_face_partial, s_face_drawn, s_face_clipor;
+
+/* A float as its own bits, for the rows below: the console has no float formatter to trust
+ * (src/apps/xmb.c prints fixed-point for the same reason), and a reader of a bit pattern can
+ * still see the sign, the exponent and whether the number is 1.0.  Moved through memcpy rather
+ * than a cast, which is the same one instruction and is not a type-pun. */
+static unsigned tgl_bits(GLfloat f)
+{
+    unsigned u;
+    __builtin_memcpy(&u, &f, sizeof u);
+    return u;
+}
+
+/* The counts say a face died; only the numbers say where it died.  The first faces through the
+ * funnel are kept whole -- the coordinates the application asked for, the projected coordinates
+ * the transform returned, the clip code it derived from them, and the viewport mapping it stored
+ * beside them -- because `out=5406 clipor=0x2f` has exactly two readings that need different
+ * fixes: pc.X/Y/Z are genuinely outside the volume, in which case the transform is the thing to
+ * audit, or they are inside it and `gl_clipcode()` said so anyway, in which case the arithmetic
+ * is fine and the comparisons on this CPU are not.  The input coordinates settle a third
+ * possibility the pair cannot: that the vertex never carried what the app wrote. */
+#define TGL_FACE_DUMP_N 4
+#define TGL_FACE_DUMP_W 12
+static unsigned s_face_dump[TGL_FACE_DUMP_N][TGL_FACE_DUMP_W];
+static unsigned s_face_dump_n;
+
+void tgl_face_dump_copy(unsigned *out, unsigned *n_out)
+{
+    unsigned i, j;
+
+    if (n_out)
+        *n_out = s_face_dump_n;
+    if (!out)
+        return;
+    for (i = 0; i < s_face_dump_n; i++)
+        for (j = 0; j < TGL_FACE_DUMP_W; j++)
+            out[i * TGL_FACE_DUMP_W + j] = s_face_dump[i][j];
+}
+
+static void tgl_face_dump_one(const GLVertex *p0, GLint co)
+{
+    unsigned *d;
+
+    if (s_face_dump_n >= TGL_FACE_DUMP_N)
+        return;
+    d = s_face_dump[s_face_dump_n++];
+    d[0]  = tgl_bits(p0->coord.X);
+    d[1]  = tgl_bits(p0->coord.Y);
+    d[2]  = tgl_bits(p0->coord.Z);
+    d[3]  = tgl_bits(p0->pc.X);
+    d[4]  = tgl_bits(p0->pc.Y);
+    d[5]  = tgl_bits(p0->pc.Z);
+    d[6]  = tgl_bits(p0->pc.W);
+    d[7]  = (unsigned)co;
+    d[8]  = (unsigned)p0->zp.x;
+    d[9]  = (unsigned)p0->zp.y;
+    d[10] = (unsigned)p0->zp.z;
+    d[11] = (unsigned)p0->clip_code;
+}
+
+/* The context state that decides those exits, as raw words: the viewport's own scale and
+ * translation, the three corners of the model-projection matrix that an ortho sets, and the
+ * flags the funnel reads. */
+#define TGL_FACE_STATS_N 20
+
+void tgl_face_stats(unsigned *out, int reset)
+{
+    const GLContext *c = gl_get_context();
+    const GLfloat *mp = &c->matrix_model_projection.m[0][0];
+
+    if (out) {
+        out[0]  = s_face_total;
+        out[1]  = s_face_degen;
+        out[2]  = s_face_cull;
+        out[3]  = s_face_out;
+        out[4]  = s_face_partial;
+        out[5]  = s_face_drawn;
+        out[6]  = s_face_clipor;
+        out[7]  = (unsigned)c->viewport.xsize;
+        out[8]  = (unsigned)c->viewport.ysize;
+        out[9]  = tgl_bits(c->viewport.scale.X);
+        out[10] = tgl_bits(c->viewport.trans.X);
+        out[11] = tgl_bits(c->viewport.scale.Y);
+        out[12] = tgl_bits(c->viewport.trans.Y);
+        out[13] = tgl_bits(mp[0]);   /* m[0][0] */
+        out[14] = tgl_bits(mp[5]);   /* m[1][1] */
+        out[15] = tgl_bits(mp[15]);  /* m[3][3] */
+        out[16] = (unsigned)c->polygon_mode_front;
+        out[17] = (unsigned)c->cull_face_enabled;
+        out[18] = (unsigned)c->current_front_face;
+        out[19] = (unsigned)c->matrix_model_projection_no_w_transform;
+    }
+    if (!reset)
+        return;
+    s_face_total = s_face_degen = s_face_cull = 0u;
+    s_face_out = s_face_partial = s_face_drawn = s_face_clipor = 0u;
+    s_face_dump_n = 0u;
+}
+
 /*Triangles*/
 
 static void updateTmp(GLVertex* q, GLVertex* p0, GLVertex* p1, GLfloat t) { 
@@ -251,13 +368,19 @@ void gl_draw_triangle(GLVertex* p0, GLVertex* p1, GLVertex* p2) {
 
 	co = cc[0] | cc[1] | cc[2];
 
+	s_face_total++;
+	s_face_clipor |= (unsigned)co;
+	tgl_face_dump_one(p0, co);
+
 	/* we handle the non clipped case here to go faster */
 	if (co == 0) {
 		GLfloat norm;
 		norm = (GLfloat)(p1->zp.x - p0->zp.x) * (GLfloat)(p2->zp.y - p0->zp.y) - (GLfloat)(p2->zp.x - p0->zp.x) * (GLfloat)(p1->zp.y - p0->zp.y);
 
-		if (norm == 0) 
+		if (norm == 0) {
+			s_face_degen++;
 			return;
+		}
 
 		front = norm < 0.0;
 		front = front ^ c->current_front_face; 
@@ -266,18 +389,24 @@ void gl_draw_triangle(GLVertex* p0, GLVertex* p1, GLVertex* p2) {
 		if (c->cull_face_enabled) {
 			/* most used case first */
 			if (c->current_cull_face == GL_BACK) {
-				if (front == 0)
+				if (front == 0) {
+					s_face_cull++;
 					return;
+				}
 				c->draw_triangle_front(p0, p1, p2);
 			} else if (c->current_cull_face == GL_FRONT) {
-				if (front != 0)
+				if (front != 0) {
+					s_face_cull++;
 					return;
+				}
 				c->draw_triangle_back(p0, p1, p2);
 			} else {
+				s_face_cull++;
 				return;
 			}
 		} else {
 			/* no culling */
+			s_face_drawn++;
 			if (front) {
 				c->draw_triangle_front(p0, p1, p2);
 			} else {
@@ -287,7 +416,10 @@ void gl_draw_triangle(GLVertex* p0, GLVertex* p1, GLVertex* p2) {
 	} else {
 		/* GLint c_and = cc[0] & cc[1] & cc[2];*/
 		if ((cc[0] & cc[1] & cc[2]) == 0) { /* Don't draw a triangle with no points*/
+			s_face_partial++;
 			gl_draw_triangle_clip(p0, p1, p2, 0);
+		} else {
+			s_face_out++;
 		}
 	}
 }

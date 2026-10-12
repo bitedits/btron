@@ -786,11 +786,7 @@ int vol_format(BlkDev *dev, UW nfmax, UW nlb, const char *name)
         UH flags = (UH)((FTYPE_NORMAL << 12) | FFLG_READ | FFLG_WRITE);
         wr_u16_be(blk_buf +  0, flags);
         wr_u16_be(blk_buf +  2, 0);     /* atype */
-#if BTRON_HOSTED
-        UW ts = (UW)(time(NULL) - 946684800UL); /* secs since 2000-01-01 */
-#else
-        UW ts = 0;
-#endif
+        UW ts = btron_fs_now_stamp();  /* secs since 2000-01-01, the one reading file.c owns */
         wr_u32_be(blk_buf +  4, ts);    /* ctime */
         wr_u32_be(blk_buf +  8, ts);    /* mtime */
         wr_u32_be(blk_buf + 12, ts);    /* atime */

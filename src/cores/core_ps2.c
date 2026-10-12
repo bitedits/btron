@@ -38,6 +38,7 @@
 #include <btron/event.h>
 #include <btron/apps.h>
 #include <btron/settings.h>
+#include <btron/fs/vol_api.h>
 #include <libstr.h>
 
 #include "ps2_gs.h"
@@ -2871,8 +2872,48 @@ void btron_core_mem_log(void) {
                 (unsigned)(((uintptr_t)s_desktop_backbuffer) | 0x20000000u));
 }
 
+/* The /SYS volume's bytes, carried into .data by src/drivers/ps2/ps2_sys_vol.s.  They are
+ * btron_sys.vol as `mkbtronfs` writes it from src/tools/manifest.txt -- the same image the hosted
+ * targets mount and `make test-fs` reads -- so this file describes no record, no name and no size
+ * of its own, and the two symbols below are the only knowledge of it the kernel has: an address and
+ * a length.  The length is taken from the labels rather than from a `.set` absolute symbol because
+ * an absolute symbol the linker is free to place elsewhere is not a fact about this buffer. */
+extern unsigned char ps2_sys_vol_image[];
+extern unsigned char ps2_sys_vol_image_end[];
+
 void btron_core_hfds_log(void) {
-    ps2_kprintf("[HFDS] Real Body storage init [OK]  BTRON3_SPEC.TAD  Readme.tad  Cabinet.vobj\n");
+    const long img_bytes = ps2_sys_vol_image_end - ps2_sys_vol_image;
+    BlkDev *dev;
+
+    if (!g_sys_vol) {
+        /* Writable, because .data is RDRAM once the loader has put it there: `mkf` and `vol_sync`
+         * write into the copy the image arrived in, which needs no second buffer and buys no
+         * persistence -- the next boot re-extracts what the disc carried. */
+        dev = blk_mem_create(ps2_sys_vol_image, (UW)img_bytes, 0);
+        if (!dev) {
+            ps2_kprintf("[FS  ] /SYS NOT mounted: blk_mem_create wants at least one %u-byte block and the image holds %ld\n",
+                        (unsigned int)BTRON_BLOCK_SIZE, img_bytes);
+            return;
+        }
+        g_sys_vol = vol_mount(dev);
+        if (!g_sys_vol) {
+            blk_destroy(dev);
+            ps2_kprintf("[FS  ] /SYS NOT mounted: vol_mount rejected the header of the %ld-byte image in the ELF\n",
+                        img_bytes);
+            return;
+        }
+    }
+
+    /* Read back off the mount and not off the build: every number in this row is what the volume
+     * says it is, so the row cannot drift from the image the way a hand-written list of record
+     * names did. */
+    ps2_kprintf("[HFDS] /SYS mounted on the volume inside the image: \"%s\"  %u kB of %u-byte blocks, %u used of %u, %u records max\n",
+                vol_name(g_sys_vol),
+                (unsigned int)(vol_total_blocks(g_sys_vol) * vol_block_size(g_sys_vol) / 1024u),
+                (unsigned int)vol_block_size(g_sys_vol),
+                (unsigned int)(vol_total_blocks(g_sys_vol) - vol_free_blocks(g_sys_vol)),
+                (unsigned int)vol_total_blocks(g_sys_vol),
+                (unsigned int)vol_nfmax(g_sys_vol));
 }
 
 void btron_core_init(void) {
@@ -3747,6 +3788,59 @@ static void ps2_bench_xmb_surface(const char *when)
                 when, dev->width, dev->height, black, other, first, x0, y0, x1, y1);
 }
 
+/* Row 7's verdict, and the row that settles what no log line could: `black=384000` with no
+ * `[XMBT] raster` line says the rasteriser covered nothing, but four different things produce
+ * that reading -- a face whose screen area is zero, a winding that is culled, a volume the
+ * geometry never got inside, and a clipper that threw the remainder away.  `tgl_face_stats()`
+ * (src/gl/tinygl/clip.c) separates them at the one funnel every face passes, and the second row
+ * prints the state those exits are decided by: the viewport's own scale and translation, the
+ * three corners of the model-projection matrix an ortho sets, and the three flags.  The floats
+ * are printed as bit patterns because the console has no float formatter to trust; an unapplied
+ * glOrtho shows as m00=0x3f800000 (1.0f, i.e. still the identity) instead of the fraction a
+ * 768-pixel-wide surface divides by.
+ *
+ * Cumulative since the pipeline was installed, not per frame, so the row reads against the
+ * frames the census has already seen.
+ *
+ * The three rows say a face died and where, but not why: `out=5406` with a correctly applied ortho
+ * has two readings that need different fixes -- the projected coordinates are genuinely outside the
+ * volume, which makes the transform the thing to audit, or they are inside it and `gl_clipcode()`
+ * said so anyway, which makes the comparisons the thing.  `tgl_face_dump_copy()` hands over the
+ * first faces as they stood at that funnel: the three input coordinates, the four the transform
+ * returned, the clip-code OR the funnel saw, the viewport mapping stored beside them, and the
+ * vertex's own clip code.  A row is only worth printing while it is short, so four faces and one
+ * line each. */
+extern void tgl_face_stats(unsigned *out, int reset);
+extern void tgl_face_dump_copy(unsigned *out, unsigned *n_out);
+
+#define PS2_BENCH_FACE_DUMP_W 12
+
+static void ps2_bench_face_stats(const char *when)
+{
+    unsigned f[20], d[4 * PS2_BENCH_FACE_DUMP_W], n, i;
+
+    tgl_face_stats(f, 0);
+    ps2_kprintf("[BENCH] faces %s: total=%u degen=%u cull=%u out=%u partial=%u drawn=%u "
+                "clipor=0x%x\n",
+                when, f[0], f[1], f[2], f[3], f[4], f[5], f[6]);
+    ps2_kprintf("[BENCH] faces %s: vp=%ux%u scaleX=0x%08x transX=0x%08x scaleY=0x%08x "
+                "transY=0x%08x\n", when, f[7], f[8], f[9], f[10], f[11], f[12]);
+    ps2_kprintf("[BENCH] faces %s: m00=0x%08x m55=0x%08x m15=0x%08x poly=%u cull=%u "
+                "front=%u noW=%u\n", when, f[13], f[14], f[15], f[16], f[17], f[18], f[19]);
+
+    tgl_face_dump_copy(d, &n);
+    for (i = 0; i < n; i++)
+        ps2_kprintf("[BENCH] face %u %s: coord=%08x/%08x/%08x pc=%08x/%08x/%08x W=%08x "
+                    "co=%x zp=%d,%d,%d cc=%x\n",
+                    i, when,
+                    d[i * PS2_BENCH_FACE_DUMP_W + 0], d[i * PS2_BENCH_FACE_DUMP_W + 1],
+                    d[i * PS2_BENCH_FACE_DUMP_W + 2], d[i * PS2_BENCH_FACE_DUMP_W + 3],
+                    d[i * PS2_BENCH_FACE_DUMP_W + 4], d[i * PS2_BENCH_FACE_DUMP_W + 5],
+                    d[i * PS2_BENCH_FACE_DUMP_W + 6], d[i * PS2_BENCH_FACE_DUMP_W + 7],
+                    (int)d[i * PS2_BENCH_FACE_DUMP_W + 8], (int)d[i * PS2_BENCH_FACE_DUMP_W + 9],
+                    (int)d[i * PS2_BENCH_FACE_DUMP_W + 10], d[i * PS2_BENCH_FACE_DUMP_W + 11]);
+}
+
 /* Row 5b's own decisive row, and the reason it exists: every other 5b assertion is about words
  * (a host suite) or about linkage (an image row), and neither can tell me that a plane's bytes
  * actually crossed on this machine.  registered=0 would mean the upload seam is dead -- compiled,
@@ -4282,8 +4376,8 @@ static void ps2_gui_pass(GDEV *screen)
                         (unsigned int)((btron_render_perf_us() - s_bench_app_t0) / 1000u));
         /* Twice, because a surface that is black at frame 3 and full at frame 30 is a
          * renderer that needed its textures baked, and one black both times never drew. */
-        if (s_bench_app_made == 3u) { ps2_bench_xmb_surface("frame 3 "); ps2_bench_gs_planes(); }
-        if (s_bench_app_made == 30u) ps2_bench_xmb_surface("frame 30");
+        if (s_bench_app_made == 3u) { ps2_bench_xmb_surface("frame 3 "); ps2_bench_face_stats("frame 3 "); ps2_bench_gs_planes(); }
+        if (s_bench_app_made == 30u) { ps2_bench_xmb_surface("frame 30"); ps2_bench_face_stats("frame 30"); }
     }
     if (s_bench_app_left && --s_bench_app_left == 0) {
         const ER injected = ps2_inject_key(BTRON_KEY_ESCAPE, 1);
@@ -5202,7 +5296,15 @@ void ps2_kernel_main(void)
         }
     }
 
-    /* 5. Banner last, so the prompt is the bottom row and nothing interesting
+    /* 5. Storage, before the banner and before anything that can be typed: the CLU layer and the
+     *    Terminal window's in-window `sc`/`tv` both begin at vfs_init(), which on this target asks
+     *    one question -- is a volume mounted -- and the answer is only yes after this call.  It was
+     *    not called until now: btron_kernel_init() is the only caller in the tree and it lives in a
+     *    TU entered from src/desktop/main.c, which is not in PS2_SRCS, so the [HFDS] row this port
+     *    prints today is the first one any PS2 boot has ever printed. */
+    btron_core_hfds_log();
+
+    /* 6. Banner last, so the prompt is the bottom row and nothing interesting
      *    scrolls away underneath it. */
     btron_core_banner();
     ps2_kprintf("\n");
@@ -5214,7 +5316,7 @@ void ps2_kernel_main(void)
     ps2_kprintf("btron-ps2# ");
 #endif
 
-    /* 6. Stage 1 Interactive Terminal Shell Loop */
+    /* 7. Stage 1 Interactive Terminal Shell Loop */
     int shadow_warned = 0;
 #if BTRON_HID_TRACE
     ps2_log_usb_state('1');      /* the queue as enumeration left it */

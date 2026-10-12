@@ -132,78 +132,20 @@ void glopBegin(GLParam* p) {
 	}
 }
 
-static void gl_transform_to_viewport_vertex_c(GLVertex* v) {
-	GLContext* c = gl_get_context();
-	{
-		GLfloat winv = 1.0 / v->pc.W;
-		v->zp.x = (GLint)(v->pc.X * winv * c->viewport.scale.X + c->viewport.trans.X);
-		v->zp.y = (GLint)(v->pc.Y * winv * c->viewport.scale.Y + c->viewport.trans.Y);
-		v->zp.z = (GLint)(v->pc.Z * winv * c->viewport.scale.Z + c->viewport.trans.Z);
-	}
-
-	v->zp.r = (GLint)(v->color.v[0] * COLOR_CORRECTED_MULT_MASK + COLOR_MIN_MULT) & COLOR_MASK;
-	v->zp.g = (GLint)(v->color.v[1] * COLOR_CORRECTED_MULT_MASK + COLOR_MIN_MULT) & COLOR_MASK;
-	v->zp.b = (GLint)(v->color.v[2] * COLOR_CORRECTED_MULT_MASK + COLOR_MIN_MULT) & COLOR_MASK;
-	v->zp.a = (GLint)(v->color.v[3] * COLOR_CORRECTED_MULT_MASK + COLOR_MIN_MULT) & COLOR_MASK;
-
-	if (c->texture_2d_enabled && c->current_texture != NULL) {
-		/* The texture's own extent, not the implementation's default: see GLImage. */
-		const GLImage* im = &c->current_texture->images[0];
-		v->zp.s = (GLint)(v->tex_coord.X * im->sscale + im->soff);
-		v->zp.t = (GLint)(v->tex_coord.Y * im->tscale + im->toff);
-	}
-}
-
-static void gl_vertex_transform(GLVertex* v) {
-	GLfloat* m;
-	GLContext* c = gl_get_context();
-
-	if (c->lighting_enabled)
-
-	{
-		/* eye coordinates needed for lighting */
-		V4* n;
-		m = &c->matrix_stack_ptr[0]->m[0][0];
-		v->ec.X = (v->coord.X * m[0] + v->coord.Y * m[1] + v->coord.Z * m[2] + m[3]);
-		v->ec.Y = (v->coord.X * m[4] + v->coord.Y * m[5] + v->coord.Z * m[6] + m[7]);
-		v->ec.Z = (v->coord.X * m[8] + v->coord.Y * m[9] + v->coord.Z * m[10] + m[11]);
-		v->ec.W = (v->coord.X * m[12] + v->coord.Y * m[13] + v->coord.Z * m[14] + m[15]);
-
-		/* projection coordinates */
-		m = &c->matrix_stack_ptr[1]->m[0][0];
-		v->pc.X = (v->ec.X * m[0] + v->ec.Y * m[1] + v->ec.Z * m[2] + v->ec.W * m[3]);
-		v->pc.Y = (v->ec.X * m[4] + v->ec.Y * m[5] + v->ec.Z * m[6] + v->ec.W * m[7]);
-		v->pc.Z = (v->ec.X * m[8] + v->ec.Y * m[9] + v->ec.Z * m[10] + v->ec.W * m[11]);
-		v->pc.W = (v->ec.X * m[12] + v->ec.Y * m[13] + v->ec.Z * m[14] + v->ec.W * m[15]);
-
-		m = &c->matrix_model_view_inv.m[0][0];
-		n = &c->current_normal;
-
-		v->normal.X = (n->X * m[0] + n->Y * m[1] + n->Z * m[2]);
-		v->normal.Y = (n->X * m[4] + n->Y * m[5] + n->Z * m[6]);
-		v->normal.Z = (n->X * m[8] + n->Y * m[9] + n->Z * m[10]);
-
-		if (c->normalize_enabled) {
-			gl_V3_Norm_Fast(&v->normal);
-		}
-	}
-
-	else {
-		/* no eye coordinates needed, no normal */
-		/* NOTE: W = 1 is assumed */
-		m = &c->matrix_model_projection.m[0][0];
-
-		v->pc.X = (v->coord.X * m[0] + v->coord.Y * m[1] + v->coord.Z * m[2] + m[3]);
-		v->pc.Y = (v->coord.X * m[4] + v->coord.Y * m[5] + v->coord.Z * m[6] + m[7]);
-		v->pc.Z = (v->coord.X * m[8] + v->coord.Y * m[9] + v->coord.Z * m[10] + m[11]);
-		if (c->matrix_model_projection_no_w_transform) {
-			v->pc.W = m[15];
-		} else {
-			v->pc.W = (v->coord.X * m[12] + v->coord.Y * m[13] + v->coord.Z * m[14] + m[15]);
-		}
-	}
-
-	v->clip_code = gl_clipcode(v->pc.X, v->pc.Y, v->pc.Z, v->pc.W);
+/* The per-vertex float arithmetic -- the projection and the map to the viewport -- is in
+ * src/gl/tinygl/vertex_stage.c, which is the one unit besides ps2_builtins.c that the PS2 build
+ * compiles with the FPU switched on.  It stays a call rather than a copy so that the laws below
+ * have one home: `gl_clipcode()`, the viewport constants and the conversion prices are the same
+ * ones this file used to hold.
+ *
+ * The normalise is the exception, and it is here on purpose: it is `sqrt(double)` from
+ * include/gl/math.h, and a double is what the Emotion Engine has no instruction for at all --
+ * compiling that line with the FPU on put 21 `.d` opcodes into the image.  `tgl_vertex_normalize()`
+ * therefore stays in the -msoft-float unit and is reached with a pointer, which crosses no float
+ * over the boundary and keeps the doubles priced as they are today (536 cycles, and never taken:
+ * the XMB's census reads D=0 in every stage). */
+int tgl_vertex_normalize(V3* n) {
+	return gl_V3_Norm_Fast(n);
 }
 
 void glopVertex(GLParam* p) {
@@ -233,7 +175,7 @@ void glopVertex(GLParam* p) {
 	v->coord.Z = p[3].f;
 	v->coord.W = p[4].f;
 
-	gl_vertex_transform(v);
+	tgl_vertex_transform(v);
 
 	/* color */
 
@@ -260,7 +202,7 @@ void glopVertex(GLParam* p) {
 	if (v->clip_code == 0)
 #endif
 	{
-		gl_transform_to_viewport_vertex_c(v);
+		tgl_vertex_to_viewport(v);
 	}
 
 	/* edge flag */

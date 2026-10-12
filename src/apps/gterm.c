@@ -7,6 +7,7 @@
 #include <btron/app_menu.h>
 #include <btron/terminal_settings.h>
 #include <btron/settings.h>
+#include <btron/desktop.h>
 #include <btron/fs/vol_api.h>
 #include "clu.h"
 #include "../clu/term.h"
@@ -309,6 +310,24 @@ static void gterm_shell_out(const char *line, COLOR col, void *user_data) {
     }
 }
 
+/* One line about why an in-window application did not open, because the text the shell falls back
+ * to is the text it prints when the app was never linked at all -- and on a target that does link
+ * it, the reason is storage.  sc_session_init() returns at its first statement
+ * (`if (vfs_init() < 0) return -1;`), which on a bare-metal target asks exactly one question: is a
+ * volume mounted.  So the grid it was offered and the mount count are the two numbers that tell a
+ * reader which of the two they are looking at, and neither is guesswork about the other. */
+static void gterm_report_app_refused(ShellOutputFn out_fn, void *user_data,
+                                     const char *app, int rows, int cols)
+{
+    char why[200];
+    int nvols = vol_mounted_count();
+
+    if (!out_fn) return;
+    snprintf(why, sizeof(why), "%s: not started -- %d x %d grid offered, %d volume%s mounted",
+             app, cols, rows, nvols, nvols == 1 ? "" : "s");
+    out_fn(why, COLOR_YELLOW, user_data);
+}
+
 void shell_execute_cmd(const char *cmd_line, ShellOutputFn out_fn, void *user_data, WND *wnd) {
     if (!out_fn || !cmd_line) return;
 
@@ -392,6 +411,7 @@ void shell_execute_cmd(const char *cmd_line, ShellOutputFn out_fn, void *user_da
                 inval_wnd(wnd);
                 return;
             } else {
+                gterm_report_app_refused(out_fn, user_data, "sc", rows, cols);
                 if (st_sc->sc_ctx) {
                     sc_context_destroy(st_sc->sc_ctx);
                     st_sc->sc_ctx = NULL;
@@ -448,6 +468,7 @@ void shell_execute_cmd(const char *cmd_line, ShellOutputFn out_fn, void *user_da
                 inval_wnd(wnd);
                 return;
             } else {
+                gterm_report_app_refused(out_fn, user_data, "tv", rows, cols);
                 if (st_tv->tv_ctx) {
                     tv_context_destroy(st_tv->tv_ctx);
                     st_tv->tv_ctx = NULL;
@@ -1706,11 +1727,28 @@ WND* open_gterm_window_rect(H x, H y, H w, H h, UW attr) {
 
 WND* open_gterm_window(void) {
     static int s_gterm_spawn_count = 0;
-    H x = 220 + (s_gterm_spawn_count % 6) * 24;
-    H y = 160 + (s_gterm_spawn_count % 6) * 24;
-    s_gterm_spawn_count++;
+    const int step = (s_gterm_spawn_count++ % 4) * 16;
+    const BTRON_DESKTOP *desk = get_btron_desktop();
+    H x = 220, y = 160, w = 560, h = 360;
 
-    return open_gterm_window_rect(x, y, 560, 360,
+    /* The window opens at the screen, because the window is the grid: the in-window termios apps
+     * take their rows and columns out of this window's client box (the sc/tv branch above), so
+     * 560x360 is a standing order of 66 columns by 18 rows and a person reaches for the resize
+     * handle before they have read one line.  The rect is open_xmb_window()'s -- 12 px at the
+     * sides, 20 px from the top, the deskbar's 44 px left below it -- and taken from the desktop
+     * rather than from a constant for the same reason it is there: on a bare-metal target the
+     * answer is written by btron_desktop_note_size() at boot, and a desktop that never answered is
+     * the 560x360 this function used to always use.  The cascade moves inward rather than off the
+     * edge: each further window gives up the 16 px it moved, so its far corner stays where the
+     * first one's is. */
+    if (desk && desk->width > 320 && desk->height > 240) {
+        x = (H)(12 + step);
+        y = (H)(20 + step);
+        w = (H)(desk->width - 24 - step);
+        h = (H)(desk->height - 64 - step);
+    }
+
+    return open_gterm_window_rect(x, y, w, h,
                                   WND_ATTR_TITLE | WND_ATTR_CLOSE | WND_ATTR_BORDER | WND_ATTR_RESIZE);
 }
 

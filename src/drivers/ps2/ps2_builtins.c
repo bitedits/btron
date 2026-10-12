@@ -440,53 +440,23 @@ uint32_t ps2_sf_floatunsisf(uint32_t v)
     return (uint32_t)fp_pack(0u, (uint64_t)v, 0, 0, &FP_F32);
 }
 
-/* float -> integer, and the one conversion in this file with no hardware form: the EE has
- * no trunc.w.s (see the note above `fp_hw_cvt_s_w`), so unlike add/sub/mul/div/compare this
- * is not a COP1 instruction with a software fallback -- it is whatever is written here, and
- * what was written here was the generic engine: `fp_trunc` decodes through a format
- * descriptor and carries a uint64 significand through 32-bit halves, which is the right
- * shape for a runtime that serves both formats and the wrong shape for what TinyGL's
- * `(GLint)` casts actually ask for.  The linked image has 134 call sites for these two
- * entry points, densest in `ZB_fillTriangleMappingPerspective` (18) and in the vertex
- * transform (9); the per-pixel paths have none, which `f_bg` proves rather than the reading
- * -- its 382,731 px moved by 24 us over this whole change.  Measured prices: the gradient
- * setup 15.7 -> 12.3 us (4,640 -> 3,626 EE cycles), the vertex 18.2 -> 14.5 us, and the
- * steady XMB frame 221.9 -> 197.4 ms.  doc/md/PS2.md carries the ledger.
+/* float -> integer, and the one conversion in this runtime with no hardware form: the EE has
+ * no trunc.w.s (see the note above `fp_hw_cvt_s_w`), so unlike add/sub/mul/div/compare this is
+ * not a COP1 instruction with a software fallback -- it is whatever the bit engine says, and
+ * that engine now lives in ps2_fp.h as `ps2_sf_fixsfsi()`, because a second unit has to run it
+ * inline: the FPU-enabled geometry kernel cannot *call* out for a conversion without the
+ * compiler saving its live FPR pairs with `sdc1`/`ldc1`, two instructions this CPU also does
+ * not have.  The band table and the host differential that guards it are in that header.
  *
- * A binary32 truncate is two shifts once the exponent field says which band the value is
- * in, and every band below is 32-bit, so no `__lshrdi3`/`__ashldi3` reference appears -- the
- * same self-containment law the rest of the file obeys.  With sig the 24-bit significand
- * (implicit bit included) and value = sig * 2^(be-150):
- *
- *   be == 0xFF   inf (sat) or NaN (0), by the mantissa field
- *   be <  127    |value| < 1 -- every subnormal and zero included -- so truncation is 0
- *   be <= 149    sig >> (150-be), a shift of 1..23, which drops exactly the fraction
- *   be <= 157    sig << (be-150), a shift of 0..7: an integer, and the largest it reaches
- *                is 0x7FFFFF80, still inside a positive int32
- *   be >= 158    2^31 or beyond -- saturate.  Exactly -2^31 saturates to 0x80000000, which
- *                is also its true value, so the two laws cannot be told apart there.
- *
- * `make test-ps2-softfloat` checks that against the host's own (int32_t) cast over 200,000
- * random bit patterns and over every exponent field x the three mantissas that can land on a
- * band edge x both signs (3,072 comparisons), and the band sweep was shown to fail when one of
- * these lines is moved by one exponent, so it is an instrument and not a formality. */
-uint32_t ps2_sf_fixsfsi(uint32_t a)
-{
-    const uint32_t sign = a >> 31;
-    const uint32_t be = (a >> 23) & 0xFFu;
-    const uint32_t frac = a & 0x7FFFFFu;
-    uint32_t mag;
-
-    if (be == 0xFFu) return frac ? 0u : (sign ? 0x80000000u : 0x7FFFFFFFu);
-    if (be < 127u) return 0u;
-    if (be >= 158u) return sign ? 0x80000000u : 0x7FFFFFFFu;
-
-    if (be >= 150u)
-        mag = (frac | 0x800000u) << (int)(be - 150u);      /* the shift is 0..7 */
-    else
-        mag = (frac | 0x800000u) >> (int)(150u - be);      /* the shift is 1..23 */
-    return sign ? (uint32_t)0u - mag : mag;
-}
+ * What was written here before it moved was the generic engine: `fp_trunc` decodes through a
+ * format descriptor and carries a uint64 significand through 32-bit halves, which is the right
+ * shape for a runtime that serves both formats and the wrong shape for what TinyGL's `(GLint)`
+ * casts actually ask for.  The linked image has 134 call sites for these two entry points,
+ * densest in `ZB_fillTriangleMappingPerspective` (18) and in the vertex transform (9); the
+ * per-pixel paths have none, which `f_bg` proves rather than the reading -- its 382,731 px
+ * moved by 24 us over this whole change.  Measured prices: the gradient setup 15.7 -> 12.3 us
+ * (4,640 -> 3,626 EE cycles), the vertex 18.2 -> 14.5 us, and the steady XMB frame 221.9 ->
+ * 197.4 ms.  doc/md/PS2.md carries the ledger. */
 
 uint32_t ps2_sf_fixunssfsi(uint32_t a)
 {

@@ -145,6 +145,13 @@ BUDGETS=(
     "bake_font_us:50000:XMB font atlas bake"
     "upload_tex_us:50000:texture upload to the GL backend"
     "init_state_us:50000:XMB state init"
+    # The two rows that decide whether a frame drew anything, and the shape the user's black
+    # screen had: 5,406 of 5,406 faces judged wholly outside the volume, every pixel of the
+    # XMB window left at the clear colour.  Both were passing at the time and both are
+    # assertions rather than opinions about smoothness, which is why their budgets are 0 and
+    # 1000 rather than a measured cost.
+    "faces_no_fill:1000:faces asked for that reached no fill (degen+cull+clip+clipper loss)"
+    "xmb_black_pixels:0:unlit pixels in the XMB window on the TinyGL dial (target: 0)"
     "draw_us:16700:one XMB frame, rasterizer only (60 Hz UI plane)"
     "xswap_us:4000:one XMB frame, surface swap"
     "full_total_us:4000:whole-canvas present, all three stages"
@@ -270,6 +277,17 @@ re_bake_font='\[XMBT\] +bake_font +([0-9]+)'
 re_upload='\[XMBT\] +upload +([0-9]+)'
 re_init='\[XMBT\] +init_state +([0-9]+)'
 re_frame='\[XMBT\] frame +([0-9]+).*draw=([0-9]+) us swap=([0-9]+)'
+# Which pipeline the frame row belongs to, and the two rows that say whether a frame drew
+# anything.  Both are needed because `black=384000` has two completely different readings:
+# on the GS-backed dial it is expected -- the canvas is not what that backend presents --
+# while on the TinyGL dial it means nothing was covered, which is the symptom the user
+# reported by hand.  The face row separates the two, and it was the row that localized that
+# report to the clipper: `total=5406 out=5406 drawn=0` with a correctly applied glOrtho is
+# not an unlit pixel, it is every face judged wholly outside the volume by a clip code that
+# no arithmetic error explains.
+re_backend='\[XMBT\] frame +[0-9]+ +\(([a-z]+)\)'
+re_faces='\[BENCH\] faces frame +[0-9]+ *: +total=([0-9]+) +degen=([0-9]+) +cull=([0-9]+) +out=([0-9]+) +partial=([0-9]+) +drawn=([0-9]+)'
+re_surface='\[BENCH\] xmb surface frame +[0-9]+ *: +([0-9]+)x([0-9]+) +black=([0-9]+) +other=([0-9]+)'
 re_full='\[BENCH\] +full +[0-9]+x *[0-9]+ +total=([0-9]+) us +render +([0-9]+)/[0-9]+ +swap +([0-9]+)/[0-9]+ +upload +([0-9]+)/[0-9]+'
 re_band64='\[BENCH\] +band64 +[0-9]+x *[0-9]+ +total=([0-9]+)'
 re_tag='\[BENCH\] ([hv][0-9]+) +move'
@@ -305,12 +323,24 @@ re_plane_reports='\[PSTAT\] plane: reports=([0-9]+) on the input plane, ([0-9]+)
 re_plane_held='\[PSTAT\] plane: held max=([0-9]+) us'
 
 curtag=""
+cur_backend=""
 while IFS= read -r line; do
     case "$line" in
         *"[XMBT] fill_atlas"*) [[ $line =~ $re_fill_atlas ]] && echo "fill_atlas_us=${BASH_REMATCH[1]}" >>"$VALS" ;;
         *"[XMBT] bake_font"*)  [[ $line =~ $re_bake_font ]]  && echo "bake_font_us=${BASH_REMATCH[1]}"  >>"$VALS" ;;
         *"[XMBT] upload"*)     [[ $line =~ $re_upload ]]     && echo "upload_tex_us=${BASH_REMATCH[1]}"  >>"$VALS" ;;
         *"[XMBT] init_state"*) [[ $line =~ $re_init ]]       && echo "init_state_us=${BASH_REMATCH[1]}"  >>"$VALS" ;;
+        # The funnel's verdict and the canvas's.  `faces_no_fill` is total minus drawn, so
+        # it counts every face that was asked for and never reached a fill -- degenerate,
+        # culled, clipped whole, or lost in the clipper.  The census row is emitted only for
+        # the backend whose picture it is: see the two rows above for why.
+        *"[BENCH] faces frame "*) [[ $line =~ $re_faces ]] && {
+                             echo "faces_total=${BASH_REMATCH[1]}"   >>"$VALS"
+                             echo "faces_out=${BASH_REMATCH[4]}"     >>"$VALS"
+                             echo "faces_drawn=${BASH_REMATCH[6]}"   >>"$VALS"
+                             echo "faces_no_fill=$(( ${BASH_REMATCH[1]} - ${BASH_REMATCH[6]} ))" >>"$VALS"; } ;;
+        *"[BENCH] xmb surface frame "*) [[ $line =~ $re_surface ]] && [ "$cur_backend" = "tinygl" ] && \
+                             echo "xmb_black_pixels=${BASH_REMATCH[3]}" >>"$VALS" ;;
         # The two float rows: the correctness pair and the price pair.  They print in
         # the first bench phase, so a run that never reaches a frame still answers
         # whether COP1 is the engine in use and what one of its ops costs.
@@ -395,6 +425,8 @@ while IFS= read -r line; do
     # The direction rows put their tag on one line and their cost on the next, so the
     # tag has to be remembered rather than matched twice.
     if [[ $line =~ $re_tag ]]; then curtag="${BASH_REMATCH[1]}"; fi
+    # The backend named by the newest frame row, which the census gate below is read against.
+    if [[ $line =~ $re_backend ]]; then cur_backend="${BASH_REMATCH[1]}"; fi
     if [[ $line =~ $re_uspass ]] && [ "$curtag" = "h4" ]; then
         echo "h4_total_us=${BASH_REMATCH[4]}" >>"$VALS"
         echo "passes_per_s=${BASH_REMATCH[5]}" >>"$VALS"

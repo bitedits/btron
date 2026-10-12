@@ -384,6 +384,33 @@ void gl_add_feedback(GLfloat token, GLVertex* v1, GLVertex* v2, GLVertex* v3, GL
 
 #define CLIP_EPSILON (1E-5)
 
+/* The plane tests below are six float compares, and on one build of this port that is a
+ * question about the instruction set rather than a formality.
+ *
+ * The PS2's geometry kernel (src/gl/tinygl/vertex_stage.c) is compiled `-mhard-float` so its
+ * matrix and viewport arithmetic runs on the Emotion Engine's COP1, and because `gl_clipcode()`
+ * is a header inline it is compiled *in that unit's law* for the vertices that pass through it.
+ * Under that law clang lowered `a > b` as `b < a` in the unordered-inclusive form, `c.ule.s`, and
+ * this CPU does not implement that encoding: like `c.un.s` and `trunc.w.s` before it, an
+ * unrecognised COP1 compare does not raise, it leaves the condition code holding what the
+ * previous compare wrote.  Measured on the XMB: three of a vertex's six tests answered with a
+ * stale flag, so every face came out of the transform with a nonzero clip code, `gl_draw_triangle`
+ * judged all 5,406 of them wholly outside the volume, and nothing was drawn -- a black screen
+ * beside a `pc`/`zp` dump whose every number is correct.  The three tests written as `c.olt.s`
+ * were right in the same vertex, which is what localized the defect to the encoding rather than
+ * to the arithmetic or the volume.
+ *
+ * So the compare goes through the one form this unit answers, hand-written once in
+ * `ps2_fp.h` next to the truncate the same build already reaches for.  Every other translation
+ * unit of the port is `-msoft-float`, keeps the plain `<`, and pays a `__ltsf2` call that
+ * dispatches to the same instruction; only the FPU-enabled build of this header sees the asm. */
+#if defined(BTRON_PS2_TARGET) && defined(BTRON_PS2_FP_HW)
+#include "../../drivers/ps2/ps2_fp.h" /* ps2_fp_olt_s(): c.olt.s, the encoding the EE answers */
+#define TGL_CLIP_LT(a, b) (ps2_fp_olt_s(ps2_fp_bits_f(a), ps2_fp_bits_f(b)))
+#else
+#define TGL_CLIP_LT(a, b) ((a) < (b))
+#endif
+
 /* The guard band is rounded to the operand's own precision on purpose.  Left as
  * `w1 * (1.0 + CLIP_EPSILON)` the product is a double -- the literal is one, and C
  * promotes the float operand to meet it -- so on a target whose floats are really floats
@@ -399,10 +426,11 @@ void gl_add_feedback(GLfloat token, GLVertex* v1, GLVertex* v2, GLVertex* v3, GL
  * clip code is a region hint that already carries a 1E-5 band by design.  On the targets
  * where GLfloat is itself double the cast is a no-op and nothing moves at all. */
 static GLint gl_clipcode(GLfloat x, GLfloat y, GLfloat z, GLfloat w1) {
-	GLfloat w;
+	GLfloat w, nw;
 
 	w = w1 * (GLfloat)(1.0 + CLIP_EPSILON);
-	return (x < -w) | ((x > w) << 1) | ((y < -w) << 2) | ((y > w) << 3) | ((z < -w) << 4) | ((z > w) << 5);
+	nw = -w;
+	return TGL_CLIP_LT(x, nw) | (TGL_CLIP_LT(w, x) << 1) | (TGL_CLIP_LT(y, nw) << 2) | (TGL_CLIP_LT(w, y) << 3) | (TGL_CLIP_LT(z, nw) << 4) | (TGL_CLIP_LT(w, z) << 5);
 }
 
 #define CLIP_XMIN (1 << 0)
@@ -446,6 +474,18 @@ void gl_draw_triangle_line(GLVertex* p0, GLVertex* p1, GLVertex* p2);
 void gl_draw_triangle_fill(GLVertex* p0, GLVertex* p1, GLVertex* p2);	
 void gl_draw_triangle_select(GLVertex* p0, GLVertex* p1, GLVertex* p2); 
 void gl_draw_triangle_feedback(GLVertex* p0, GLVertex* p1, GLVertex* p2);
+
+/* vertex_stage.c -- the per-vertex float arithmetic, in the one tinygl unit that the PS2 build
+ * compiles with the FPU switched on (row 7 of doc/md/PS2.md).  Both take a pointer and return
+ * nothing, which is what makes that legal: `-msoft-float` is an argument-passing law, and no
+ * floating value crosses this boundary in either direction. */
+void tgl_vertex_transform(GLVertex* v);
+void tgl_vertex_to_viewport(GLVertex* v);
+
+/* vertex.c -- the normalise the lighting branch asks for, kept in the -msoft-float unit because
+ * it is sqrt(double) and the Emotion Engine has no double-precision instruction.  A V3* in, an
+ * int out, so it is callable from the unit above. */
+int tgl_vertex_normalize(V3* n);
 /* matrix.c */
 void gl_print_matrix(const GLfloat* m);
 /*

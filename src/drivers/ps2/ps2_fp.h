@@ -190,4 +190,109 @@ extern const char *const btron_fp_gap_name[BTRON_FP_GAP_N];
 extern uint32_t btron_fp_dump[BTRON_FP_DUMP_N][6];
 extern uint32_t btron_fp_dump_n;
 
+/* The one conversion this CPU has no instruction for, written once where both of its
+ * consumers can reach it.
+ *
+ * `trunc.w.s` is what a compiler reaches for when a `-mhard-float` translation unit casts a
+ * float to an int, and the Emotion Engine does not have it: asking for one made PCSX2 log
+ * `Unrecognized FPU/COP1 op 4600010d` and left `$f4` holding the *previous* result, so the
+ * illegal form is silently wrong rather than merely slow (see the note above
+ * `fp_hw_cvt_s_w` in ps2_builtins.c, and the image row that byte-scans for that word).  What
+ * remains is the bit engine, and it lives in a header rather than in one .c because two units
+ * now need it *inline*: ps2_builtins.c's `__fixsfsi`, which is what every -msoft-float TU
+ * reaches for a cast, and the FPU-enabled geometry kernel `src/gl/tinygl/vertex_stage.c`,
+ * which is compiled -mhard-float and cannot call out for a conversion without something worse
+ * happening -- a call makes the compiler preserve its live FPRs across it, and with the O32
+ * 32-bit-FPR file those are even/odd pairs, saved and restored by `sdc1` and `ldc1`, two more
+ * instructions this CPU does not answer.  Inlining is therefore not a micro-optimisation here,
+ * it is what keeps the unit's op set inside the ISA, and it is one hand-written truth with two
+ * readers rather than a second copy.
+ *
+ * A binary32 truncate is two shifts once the exponent field says which band the value is in,
+ * and every band below is 32-bit, so no `__lshrdi3`/`__ashldi3` reference appears -- the same
+ * self-containment law the runtime obeys.  With sig the 24-bit significand (implicit bit
+ * included) and value = sig * 2^(be-150):
+ *
+ *   be == 0xFF   inf (sat) or NaN (0), by the mantissa field
+ *   be <  127    |value| < 1 -- every subnormal and zero included -- so truncation is 0
+ *   be <= 149    sig >> (150-be), a shift of 1..23, which drops exactly the fraction
+ *   be <= 157    sig << (be-150), a shift of 0..7: an integer, and the largest it reaches
+ *                is 0x7FFFFF80, still inside a positive int32
+ *   be >= 158    2^31 or beyond -- saturate.  Exactly -2^31 saturates to 0x80000000, which
+ *                is also its true value, so the two laws cannot be told apart there.
+ *
+ * `make test-ps2-softfloat` checks that against the host's own (int32_t) cast over 200,000
+ * random bit patterns and over every exponent field x the three mantissas that can land on a
+ * band edge x both signs (3,072 comparisons), and the band sweep was shown to fail when one of
+ * these lines is moved by one exponent, so it is an instrument and not a formality. */
+static inline uint32_t ps2_sf_fixsfsi(uint32_t a)
+{
+    const uint32_t sign = a >> 31;
+    const uint32_t be = (a >> 23) & 0xFFu;
+    const uint32_t frac = a & 0x7FFFFFu;
+    uint32_t mag;
+
+    if (be == 0xFFu) return frac ? 0u : (sign ? 0x80000000u : 0x7FFFFFFFu);
+    if (be < 127u) return 0u;
+    if (be >= 158u) return sign ? 0x80000000u : 0x7FFFFFFFu;
+
+    if (be >= 150u)
+        mag = (frac | 0x800000u) << (int)(be - 150u);      /* the shift is 0..7 */
+    else
+        mag = (frac | 0x800000u) >> (int)(150u - be);      /* the shift is 1..23 */
+    return sign ? (uint32_t)0u - mag : mag;
+}
+/* The one comparison a `-mhard-float` translation unit may ask this CPU for, written once where
+ * its consumers can reach it.
+ *
+ * What the XMB's black screen under `PS2_FP=hw` measured is in `gl_clipcode()`
+ * (src/gl/tinygl/zgl.h): with the geometry kernel compiled for the FPU, clang lowered its six
+ * plane tests into three `c.olt.s` and three `c.ule.s`, and the faces that came back clipped were
+ * exactly the ones whose `pc` values sat inside every plane -- `pc = -1.0/-0.514/0.0` against a
+ * `w` of 1.00001 with `cc = XMAX|YMAX|ZMAX`.  The three tests written with the ordered form
+ * answered correctly and the three written with the unordered-inclusive form did not, which is
+ * the same split this header already carries for `trunc.w.s` and for `c.un.s`: an instruction the
+ * Emotion Engine's COP1 decoder does not recognise here does not raise and does not stall, it
+ * leaves the condition code holding whatever the previous compare wrote, so the branch goes the
+ * way the *last* comparison decided.  Every face through the funnel then reads as outside the
+ * volume, no triangle reaches a fill, and the screen is black while the arithmetic in the same
+ * function -- `pc.X/Y/Z/W` and the viewport mapping beside it -- is provably right.
+ *
+ * So the legal form is the even one, and the pair is moved into the FPU the way the engine in
+ * ps2_builtins.c already does it: `mtc1` from general registers, one `nop` after the pair (the
+ * FPU needs a cycle to see the new operands), one `nop` between the compare and its branch (the
+ * condition code is written one cycle after the compare retires), and a `nop` in the delay slot.
+ * The arguments are bit patterns rather than floats for that reason: a float operand under
+ * `-mhard-float` arrives in an FPR, which `mtc1` cannot read, and the two moves that would fix it
+ * are the `mov.s`/`mfc1` pair this unit does answer -- they cost less here than a wrong answer.
+ *
+ * Ordered means ordered: a NaN pair makes `c.olt.s` come out false, which is what `a < b` means in
+ * C, so a vertex whose coordinate is a NaN gets clip code 0 here exactly as it does through the
+ * `-msoft-float` path's `__ltsf2`.  The two dials therefore agree on every input, not only on the
+ * ordinary ones. */
+static inline int ps2_fp_olt_s(uint32_t a, uint32_t b)
+{
+    int r = 0;
+
+    __asm__ ("mtc1 %1, $f0\n\tmtc1 %2, $f2\n\tnop\n\tnop\n\t"
+             "c.olt.s $f0, $f2\n\t"
+             "nop\n\t"
+             "bc1f 1f\n\t"
+             "nop\n\t"
+             "li %0, 1\n\t"
+             "1:\n\t"
+             : "+r" (r) : "r" (a), "r" (b));
+    return r;
+}
+
+/* A float's bits in a general register, for the helper above.  Under `-mhard-float` this is one
+ * `mfc1`, which the EE answers; under every other law it is the store-and-reload the compiler
+ * would do anyway for a bit pattern that has to reach an integer instruction. */
+static inline uint32_t ps2_fp_bits_f(float f)
+{
+    uint32_t u;
+    __builtin_memcpy(&u, &f, sizeof u);
+    return u;
+}
+
 #endif /* _PS2_FP_H_ */

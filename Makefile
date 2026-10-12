@@ -89,10 +89,15 @@ MIPS_CC     ?= $(LLVM_CLANG) --target=mipsel-unknown-elf -march=mips32r2 -mabi=3
 # integer registers, so mixing it with a build that uses the FPU would corrupt every
 # float argument that crosses the boundary -- and src/drivers/ps2/ps2_builtins.c
 # supplies the runtime the link then needs.
-# The one exception is that same file, which crosses no float argument at all and so
-# is assembled with the FPU switched back on (see PS2_FP near %.pbench.o): the EE's
-# single-precision unit has been paying for the .d law ever since, at 23.9 s an XMB
-# frame.  Nothing else in the image may take that flag.
+# Two objects take the FPU switched back on (see PS2_FP near %.pbench.o), chosen for the
+# same reason: no float ever crosses into or out of them.  ps2_builtins.c *is* the
+# soft-float runtime, so a bit pattern in an integer register is its argument by
+# definition; vertex_stage.c is the geometry kernel, reached only by pointer, and the one
+# conversion it needs is spelled through that runtime's own calling convention.  They take
+# the flag because the EE's single-precision unit is what those two files are for: 460,861
+# float operations in an XMB frame, at 28 cycles a libcall, was the price of applying the
+# .d law to code that has never used a double.  Nothing else may take it -- a third object
+# would move the ABI boundary rather than stay inside it, and gate row 57 is the check.
 PS2_CC      ?= $(LLVM_CLANG) --target=mipsel-unknown-elf -march=mips2 -mabi=32 -msoft-float -ffreestanding -nostdlib
 MIPS_LD ?= $(if $(shell command -v mipsel-linux-gnu-ld 2>/dev/null),mipsel-linux-gnu-ld,$(LLD_BIN) -EL)
 
@@ -322,6 +327,7 @@ TINYGL_SRCS = \
     src/gl/tinygl/specbuf.c \
     src/gl/tinygl/texture.c \
     src/gl/tinygl/vertex.c \
+    src/gl/tinygl/vertex_stage.c \
     src/gl/tinygl/zbuffer.c \
     src/gl/tinygl/zline.c \
     src/gl/tinygl/zmath.c \
@@ -605,7 +611,17 @@ mkbtronfs: src/tools/mkbtronfs.c $(FS_OBJS)
 	$(CC) $(CFLAGS) -Isrc $^ -o mkbtronfs
 	@echo "[FS] mkbtronfs built."
 
-btron_sys.vol: mkbtronfs src/tools/manifest.txt
+# The manifest's payloads are prerequisites and not merely its input: with only the manifest and
+# the tool listed, make rebuilds btron_sys.vol when either changes and *never* when a document the
+# volume copies changes, so the image an ELF carries is the volume some other target happened to
+# build last -- the stale-artifact disease this Makefile already cures twice for PS2_GL and PS2_FP,
+# arrived at from the other side, where the content moved and the flags did not.  The filter is the
+# manifest's own grammar: a FILE line whose last field is a path is a record with a payload, while
+# '-' is an empty placeholder and a LINK line ends in a target FID, neither of which is a file make
+# can wait for.
+SYS_VOL_PAYLOADS := $(shell awk '/^FILE/ && $$3 != "LINK" && $$NF != "-" && $$NF ~ /\// {print $$NF}' src/tools/manifest.txt 2>/dev/null)
+
+btron_sys.vol: mkbtronfs src/tools/manifest.txt $(SYS_VOL_PAYLOADS)
 	./mkbtronfs src/tools/manifest.txt -o btron_sys.vol
 	@echo "[FS] btron_sys.vol written."
 	@xxd btron_sys.vol | head -2
@@ -1071,7 +1087,21 @@ PS2_SRCS       = $(PS2_STARTUP)           \
                  $(COMMON_NO_SDL_SRCS)
 PS2_OBJS       = src/drivers/ps2/boot_ps2.ps2.o         \
                  src/drivers/ps2/ps2_gs_reg.ps2.o      \
+                 $(PS2_SYS_VOL_OBJ)                    \
                  $(PS2_SRCS:.c=.ps2.o)
+
+# The /SYS volume rides inside the image's .data (doc/md/PS2.md, section 2.6): the bytes are
+# btron_sys.vol, which the host tool mkbtronfs writes from src/tools/manifest.txt, and the object is
+# the one .incbin of them.  It is a prerequisite of nothing here -- the volume's own rule now waits
+# on the manifest's payloads -- so a document edit rebuilds the volume, which rebuilds this object,
+# which relinks the image, and no step of that is a human remembering to run the tool first.
+# `-I.` is what makes the .incbin path mean the file at the top of the checkout rather than a file
+# next to the .s, because make runs from the repository root and the assembler resolves that path
+# the way it resolves an include.
+PS2_SYS_VOL_OBJ     = src/drivers/ps2/ps2_sys_vol.ps2.o
+PS2_SYS_VOL_SOURCE  = src/drivers/ps2/ps2_sys_vol.s
+$(PS2_SYS_VOL_OBJ): $(PS2_SYS_VOL_SOURCE) btron_sys.vol
+	$(PS2_CC) -I. -c $< -o $@
 
 # One calling convention for the whole PS2 image.  A 64-bit-GPR MIPS under O32
 # passes fixed arguments 5..8 in $t0..$t3 where a 32-bit-GPR MIPS puts them on
@@ -1145,21 +1175,39 @@ $(PS2_BENCH_OBJ): PS2_CFLAGS += -DBTRON_PS2_BENCH=1 -DBTRON_PS2_BENCH_APP=$(BENC
 %.pbench.o: %.c
 	$(PS2_CC) $(PS2_CFLAGS) -MMD -MP -c $< -o $@
 
-# The one object in the image that may hold COP1 instructions.  -msoft-float is an
-# argument-passing law (the note at PS2_CC), and src/drivers/ps2/ps2_builtins.c breaks
-# none of it: every entry point there takes and returns an integer register holding
-# IEEE-754 bits, and the only float-shaped things in the file are inside __asm__
-# strings.  It still needs the flag off to assemble at all -- under -msoft-float clang
-# rejects `mtc1` with "instruction requires a CPU feature not currently enabled", which
-# is why the EE's own FPU has been unusable for single precision until now.  The link
-# keeps recording `FP ABI: Soft float` for the whole image, and mipsel-linux-gnu-ld
-# accepts the mixed .MIPS.abiflags the way it is.  PS2_FP=soft builds without it, and
-# then the bit engine answers every call exactly as it did before 2026-10-10.
+# The two objects in the image that may hold COP1 instructions.  -msoft-float is an
+# argument-passing law (the note at PS2_CC), and neither of these breaks any part of it:
+# every entry point in src/drivers/ps2/ps2_builtins.c takes and returns an integer register
+# holding IEEE-754 bits, and the only float-shaped things in that file are inside __asm__
+# strings, while the two functions in src/gl/tinygl/vertex_stage.c take a `GLVertex *` and
+# return nothing, so the floats they compute never leave the unit.  Both still need the flag
+# off to assemble at all -- under -msoft-float clang rejects `mtc1` with "instruction requires
+# a CPU feature not currently enabled", which is why the EE's own FPU was unusable for single
+# precision until that file, and unusable for the geometry until this one.  The link keeps
+# recording `FP ABI: Soft float` for the whole image, and mipsel-linux-gnu-ld accepts the
+# mixed .MIPS.abiflags the way it is.  PS2_FP=soft builds without either, and then the bit
+# engine answers every call exactly as it did before 2026-10-10 -- which is also the escape
+# hatch if a console ever boots with the FPU off, since a hard-float unit cannot ask the
+# runtime valve (`btron_fp_on`) to substitute for instructions it has already emitted.
 PS2_FP ?= hw
-PS2_FP_OBJ = src/drivers/ps2/ps2_builtins.ps2.o
+PS2_FP_OBJ     = src/drivers/ps2/ps2_builtins.ps2.o
+PS2_KERNEL_OBJ = src/gl/tinygl/vertex_stage.ps2.o
+# The flag is per object, and make does not see a flag change: switching PS2_FP leaves both
+# objects newer than their sources and links an image whose FPU law is whatever the previous
+# value built -- the same disease PS2_GL has, and the same content-comparison stamp cures it.
+# Note that this `$(shell ...)` runs while *parsing*, so even `make -n PS2_FP=...` removes the
+# two objects: pass the value you mean, dry runs included.
+PS2_FP_STAMP = .build/ps2-fp.stamp
+PS2_FP_PREV := $(shell cat $(PS2_FP_STAMP) 2>/dev/null)
+ifneq ($(PS2_FP_PREV),$(PS2_FP))
+$(shell mkdir -p ./.build && echo '$(PS2_FP)' >$(PS2_FP_STAMP) && rm -f $(PS2_FP_OBJ) $(PS2_KERNEL_OBJ))
+$(info [PS2] PS2_FP is now $(PS2_FP) (was $(if $(PS2_FP_PREV),$(PS2_FP_PREV),unset)) -- the units that read it will rebuild)
+endif
 ifeq ($(PS2_FP),hw)
 $(PS2_FP_OBJ): PS2_CC := $(subst -msoft-float,-mhard-float,$(PS2_CC))
 $(PS2_FP_OBJ): PS2_CFLAGS += -DBTRON_PS2_FP_HW
+$(PS2_KERNEL_OBJ): PS2_CC := $(subst -msoft-float,-mhard-float,$(PS2_CC))
+$(PS2_KERNEL_OBJ): PS2_CFLAGS += -DBTRON_PS2_FP_HW
 endif
 
 ps2-bench: $(PS2_BENCH_TARGET)

@@ -28,6 +28,7 @@
 #include <btron/dp.h>
 #include <btron/dp_accel.h>
 #include <btron/dp_cal.h>
+#include <btron/fast_blit.h>    /* the bench's RAM-to-RAM rows call the same leaf the compositor does */
 #include <btron/wnd.h>
 #include <btron/desktop.h>
 #include <btron/workbench.h>
@@ -3206,6 +3207,374 @@ static void ps2_bench_region(GDEV *screen, const char *tag,
                 (unsigned int)st.wins_drawn, (unsigned int)st.wins_walked);
 }
 
+/* ── RAM-to-RAM: the loop or the DRAM? ───────────────────────────────────────
+ *
+ * The half of row 9 that is still open is a choice between two lanes -- shave the
+ * EE's own pixel loops, or hand the pixels to the GS -- and the book has been
+ * pricing that choice as if one side of it were already shut: its price row says a
+ * pixel copied RAM to RAM costs 14.8 ns at 768 px and 50.2 ns at 613,440 px, and
+ * reads three orders of magnitude of size at one price per pixel as the signature
+ * of the DRAM rather than of the loop.  That claim has never been falsified because
+ * nothing has ever moved the same bytes at two different instruction costs, and a
+ * byte-per-iteration tail is size-flat too -- flatness does not tell the two apart.
+ *
+ * This port's copy does exactly that difference by accident.  `btron_row_blit()`
+ * takes its 8-byte loop only when BOTH pointers are 8-aligned, and a damage rect
+ * starts at an arbitrary pixel column, so an odd `left` leaves every row of that
+ * rectangle 4-mod-8 and the whole of it goes through the byte loop: same bytes,
+ * several times the instructions.  The aarch64 half of that header knows this
+ * column is worth peeling to the shared phase -- its own comment says a present
+ * became one bus transaction per byte without the peel -- and the generic half,
+ * which is the half the PS2 compiles, does not.
+ *
+ * So the machine is asked three ways, because the three answers together decide the
+ * lane and no one of them does:
+ *
+ *   copy even vs copy odd      -- if the two differ, the price is instructions and
+ *                                the peel is money lying on the table; if they are
+ *                                equal, no EE-side shave can help and the GS is the
+ *                                only lane left.
+ *   copy odd vs copy odd+peel  -- the prospective fix priced before it is landed, in
+ *                                the same run as the defect it fixes, so the saving
+ *                                is not an estimate smuggled into a commit.
+ *   fill vs copy, same rect    -- a copy is one load and one store per pixel and a
+ *                                fill is one store.  If the store alone costs what
+ *                                the pair costs, accesses are serializing and the
+ *                                load is free, which is the bus's signature; if a
+ *                                fill is worth about half a copy, both are issue
+ *                                slots, which is the loop's.  `fill even` and
+ *                                `fill odd` are the control on the control: stores
+ *                                are 4-aligned at any pixel column, so the two must
+ *                                agree, and if they do not something else is moving
+ *                                between the rows.
+ *   the size sweep             -- the book's own claim, tested at the phase that can
+ *                                never fall into the tail, over the range it quotes
+ *                                and out to the canvas's whole 480,000 px, which is
+ *                                what `bg=` bills per frame (as a copy of the cached
+ *                                background, per desktop.c's
+ *                                render_desktop_background_rect(), and what `frame=`
+ *                                bills as fill_rec() plates).
+ *
+ * Copies go through btron_row_blit() one row at a time, the shape
+ * copy_opaque_span() calls it in, and fills through fill_rec(), the compositor's
+ * hottest leaf.  Both bands are the canvas's own rows -- src above, dst below, the
+ * same phase relationship production has -- so the largest disjoint copy is
+ * 300 rows x 800 px = 240,000 px, and the sweep stops there and says so.  A
+ * checksum is folded out of the destination after each shape and printed, because
+ * that is what proves the loop ran on memory the machine can see rather than being
+ * deleted as dead, and that `copy odd` moved the bytes `copy even` moved.
+ *
+ * This phase owns nothing the next one needs: it scribbles the canvas the way the
+ * region table above it already does, and every phase below repaints.
+ *
+ * And the machine did answer, on 2026-10-13, in the first run of these rows: the
+ * same 399x16 band cost 96.4 ns/px through the byte tail, 21.1 peeled to the shared
+ * 8-byte phase, 18.3 peeled and taken 16 bytes per iteration, and 32 bytes per
+ * iteration bought nothing over 16 -- a plateau, not a slope.  Its aligned twin cost
+ * 27.8, which is the same loop as the peeled one and 1.31 times the price, because
+ * clang inlines the header's body into the compositor's row loop with two `addu`s
+ * per iteration instead of the two `addiu`s it compiles when the body stands in a
+ * function of its own: 11 instructions per 8 bytes against 9.  Fills, which cannot
+ * be misaligned because they store 4-byte pixels, cost 18.34 at either column and
+ * 17.73 over the whole canvas, and the copy costs 1.19 times a fill rather than the
+ * 2x a per-access latency would make it -- the load is nearly free, so the
+ * accesses are not serializing.  Every one of those figures is a different
+ * instruction count per pixel landing at the same ~4.7 ns per instruction, which is
+ * what an issue-bound machine looks like.  So the book's "it is the DRAM, not the
+ * loop" was falsified, the peel and the 16-byte body went into fast_blit.h's generic
+ * half, and fill_rec() got an incremented row pointer and four stores per iteration;
+ * the shipped rows are `copy odd` at 16.96 (5.7x faster than the tail it replaced)
+ * and the 480,000 px fill at 10.89 (1.63x), and what the compositor then bills for a
+ * whole-canvas present is 44,211 us against the 56,940 the same table printed an
+ * hour earlier.  This stays for the reason it went in: the plateau at 16 bytes is
+ * now the assumption, and only the machine says when it stops holding. */
+
+/* The 8-byte rung of the fix, kept as the step below what shipped: peel the row
+ * byte-wise to the next 8-byte boundary when the two pointers share a phase -- which
+ * they always do here, two row-aligned buffers addressed at the same rect offset --
+ * and take 8 bytes per iteration.  The header went one rung further, to 16, because
+ * this rung measured 21.1 ns/px against the header's shipped 16.96. */
+static void ps2_bench_row_blit_peeled(void *dst, const void *src, size_t bytes)
+{
+    uint8_t *d = (uint8_t *)dst;
+    const uint8_t *s = (const uint8_t *)src;
+
+    if ((((uintptr_t)d ^ (uintptr_t)s) & 7u) == 0u) {
+        size_t peel = (8u - ((uintptr_t)d & 7u)) & 7u;
+        if (peel > bytes) peel = bytes;
+        for (size_t i = 0; i < peel; i++) d[i] = s[i];
+        d += peel; s += peel; bytes -= peel;
+    }
+    while (bytes >= 8u) {
+        *(uint64_t *)d = *(const uint64_t *)s;
+        d += 8; s += 8; bytes -= 8u;
+    }
+    while (bytes--) *d++ = *s++;
+}
+
+/* The same peel with the body taken 16 or 32 bytes per iteration, because the
+ * first run of this phase (2026-10-13) found that loop shape, not just loop
+ * alignment, is what the pixel is charged for: the header's 8-byte loop costs the
+ * machine 11 instructions per iteration when clang inlines it into the
+ * compositor's row loop and 9 when it sits in a function of its own, and those two
+ * forms move identical bytes at 27.7 and 21.2 ns/px.  A width is therefore not
+ * something to reason about; it is something to time. */
+static void ps2_bench_row_blit_wide(void *dst, const void *src, size_t bytes, int per32)
+{
+    uint8_t *d = (uint8_t *)dst;
+    const uint8_t *s = (const uint8_t *)src;
+
+    if ((((uintptr_t)d ^ (uintptr_t)s) & 7u) == 0u) {
+        size_t peel = (8u - ((uintptr_t)d & 7u)) & 7u;
+        if (peel > bytes) peel = bytes;
+        for (size_t i = 0; i < peel; i++) d[i] = s[i];
+        d += peel; s += peel; bytes -= peel;
+    }
+    if (per32) {
+        while (bytes >= 32u) {
+            *(uint64_t *)d = *(const uint64_t *)s;
+            *(uint64_t *)(d + 8u) = *(const uint64_t *)(s + 8u);
+            *(uint64_t *)(d + 16u) = *(const uint64_t *)(s + 16u);
+            *(uint64_t *)(d + 24u) = *(const uint64_t *)(s + 24u);
+            d += 32; s += 32; bytes -= 32u;
+        }
+    } else {
+        while (bytes >= 16u) {
+            *(uint64_t *)d = *(const uint64_t *)s;
+            *(uint64_t *)(d + 8u) = *(const uint64_t *)(s + 8u);
+            d += 16; s += 16; bytes -= 16u;
+        }
+    }
+    while (bytes >= 8u) {
+        *(uint64_t *)d = *(const uint64_t *)s;
+        d += 8; s += 8; bytes -= 8u;
+    }
+    while (bytes--) *d++ = *s++;
+}
+
+/* fill_rec()'s leaf, with its two known instruction costs taken out: the row
+ * address, which it recomputes as y*width+left every row (one mult per row that
+ * the row pointer could be incremented instead), and one volatile store per pixel
+ * inside a loop that pays a compare and a branch with it.  Same canvas, same
+ * volatile stores, four per iteration -- or eight, when `per8` asks the question
+ * the 32-byte copy rung asks on the other side: whether the loop's overhead is
+ * still being paid at the width that shipped. */
+static void ps2_bench_fill_rows(GDEV *screen, int left, int band, int w, int h, int per8)
+{
+    volatile COLOR *row = (volatile COLOR *)screen->pixels
+                          + (size_t)band * (size_t)screen->width + (size_t)left;
+    const COLOR fbcol = BTRON_PIXEL_FB(COLOR_LTGRAY);
+    const size_t stride = (size_t)screen->width;
+
+    for (int y = 0; y < h; y++, row += stride) {
+        int x = 0;
+        if (per8) {
+            for (; x + 8 <= w; x += 8) {
+                row[x] = fbcol; row[x + 1] = fbcol;
+                row[x + 2] = fbcol; row[x + 3] = fbcol;
+                row[x + 4] = fbcol; row[x + 5] = fbcol;
+                row[x + 6] = fbcol; row[x + 7] = fbcol;
+            }
+        }
+        for (; x + 4 <= w; x += 4) {
+            row[x] = fbcol; row[x + 1] = fbcol;
+            row[x + 2] = fbcol; row[x + 3] = fbcol;
+        }
+        for (; x < w; x++) row[x] = fbcol;
+    }
+}
+
+static void ps2_bench_ram(GDEV *screen, const char *tag, int mode,
+                          int left, int w, int h, uint32_t reps)
+{
+    COLOR *pix = screen->pixels;
+    const int stride = screen->width;
+    uint32_t us_sum = 0u, us_max = 0u, sum = 0u;
+    const char *chk = "fill";
+    const RECT saved_clip = screen->clip;
+    const int src_band = 0;
+    int dst_band;
+
+    if (!pix || w <= 0 || h <= 0 || reps == 0u) return;
+    if (left < 0) left = 0;
+    if (left + w > stride) w = stride - left;
+    if (w <= 0) return;
+
+    /* Two disjoint bands, src in the top half and dst in the bottom, so a copy
+     * reads what a previous frame painted rather than its own just-written bytes --
+     * which caps a copy at half the canvas (240,000 px here) and is the reason the
+     * sweep's largest rows are fills.  A fill needs no source band, so it can take
+     * the whole 800x600. */
+    dst_band = screen->height - h;
+    if (dst_band < 0 || (mode < 2 && dst_band < src_band + h)) {
+        ps2_kprintf("[BENCH] ram: rect %dx%d does not fit the canvas, skipped\n", w, h);
+        return;
+    }
+
+    if (mode == 2) {
+        /* fill_rec() clips, so the leaf is only the leaf if the clip is the canvas.
+         * The copy rungs ignore the clip entirely -- they address the canvas
+         * directly, which is also why widening it for them would be noise. */
+        RECT full = { 0, 0, screen->width, screen->height };
+        screen->clip = full;
+    }
+
+    for (uint32_t i = 0; i < reps; i++) {
+        const uint32_t t0 = ps2_count_read();
+
+        if (mode >= 5) {
+            /* The whole rect in one call, because that is the shape being priced:
+             * fill_rec() is entered once per strip, and this is the same strip with
+             * its row pointer incremented instead of recomputed.  Mode 6 is that
+             * leaf again with eight stores per iteration instead of four. */
+            ps2_bench_fill_rows(screen, left, dst_band, w, h, mode == 6);
+        } else for (int y = 0; y < h; y++) {
+            COLOR *d = pix + (size_t)(dst_band + y) * (size_t)stride + (size_t)left;
+
+            /* `mode == 2`, not `mode >= 2`: the first four runs of this phase used a
+             * >= here, so the two wide-copy rungs fell into the fill branch and printed
+             * fill_rec()'s price under a copy tag, three times, and the row that was
+             * supposed to decide the shipped body width never ran.  The dispatch is
+             * now what the modes mean, and the checksum below is what catches the next
+             * time a branch and a tag disagree. */
+            if (mode == 2) {
+                const RECT r = { (H)left, (H)(dst_band + y),
+                                 (H)(left + w), (H)(dst_band + y + 1) };
+                fill_rec(screen, &r, COLOR_LTGRAY);
+            } else {
+                const COLOR *s = pix + (size_t)(src_band + y) * (size_t)stride + (size_t)left;
+                const size_t bytes = (size_t)w * sizeof(COLOR);
+
+                if (mode == 1)      ps2_bench_row_blit_peeled(d, s, bytes);
+                else if (mode == 3) ps2_bench_row_blit_wide(d, s, bytes, 0);
+                else if (mode == 4) ps2_bench_row_blit_wide(d, s, bytes, 1);
+                else                btron_row_blit(d, s, bytes);
+            }
+        }
+        {
+            const uint32_t e = ps2_us_since(t0);
+            us_sum += e;
+            if (e > us_max) us_max = e;
+        }
+    }
+    screen->clip = saved_clip;
+
+    /* Every 64th pixel of every 4th row of the destination -- a third of a percent
+     * of a full-canvas rect, so not what the row is measuring, but the thing that
+     * says the stores landed in memory rather than being deleted as dead, and that
+     * `copy odd` moved the bytes `copy even` moved.
+     *
+     * For a copy the same sampling of the source band is the row's own tag check:
+     * if the destination's fold equals the source's fold, the branch taken was the
+     * copy's, and if it does not the tag is lying.  The first four runs of this
+     * phase printed fill prices under copy tags, three rows in a row, and nothing
+     * in the log said so -- only the checksum disagreed.  So the disagreement is
+     * printed now. */
+    {
+        const int is_copy = (mode == 0 || mode == 1 || mode == 3 || mode == 4);
+        uint32_t ref = 0u;
+
+        for (int y = 0; y < h; y += 4) {
+            const COLOR *d = pix + (size_t)(dst_band + y) * (size_t)stride + (size_t)left;
+            for (int x = 0; x < w; x += 64) sum += (uint32_t)d[x];
+        }
+        if (is_copy) {
+            for (int y = 0; y < h; y += 4) {
+                const COLOR *s = pix + (size_t)(src_band + y) * (size_t)stride + (size_t)left;
+                for (int x = 0; x < w; x += 64) ref += (uint32_t)s[x];
+            }
+        }
+        chk = !is_copy ? "fill" : (sum == ref ? "ok" : "MISMATCH");
+    }
+
+    /* ns/px with two decimals, in the same %u.%02u idiom the move table uses, and
+     * all in 32-bit because this image has no 64-bit divisor: `__udivdi3` is not in
+     * ps2_builtins.c, so a `uint64_t / uint64_t` here is a link error rather than an
+     * arithmetic step.  The ordering that keeps it 32-bit is to divide the
+     * nanoseconds by the pixels first and pay for the two decimals out of the
+     * remainder -- ns_sum peaks at one-tenth of the overflow, and the remainder is
+     * smaller than the pixel count, which never reaches a million here. */
+    {
+        const uint32_t px_rep = (uint32_t)w * (uint32_t)h;
+        const uint32_t px_total = px_rep * reps;
+        const uint32_t ns_sum = us_sum * 1000u;
+        const uint32_t ns_px = px_total ? ns_sum / px_total : 0u;
+        const uint32_t frac100 = px_total ? ((ns_sum % px_total) * 100u) / px_total : 0u;
+
+        ps2_kprintf("[BENCH] %-13s %4dx%-4d %8upx/rep %6u us/rep max %6u us  %u.%02u ns/px  sum=0x%08x chk=%s\n",
+                    tag, w, h, px_rep,
+                    (unsigned int)(us_sum / reps), (unsigned int)us_max,
+                    (unsigned int)ns_px, (unsigned int)frac100,
+                    (unsigned int)sum, chk);
+    }
+}
+
+/* The phase table.  `even`/`odd` are pixel columns, and on this canvas an even
+ * column is 8-aligned in bytes while an odd one is 4-mod-8 -- the whole defect, in
+ * one character of the tag. */
+static void ps2_bench_ram_ops(GDEV *screen)
+{
+    ps2_kprintf("\n[BENCH] RAM-to-RAM, the loop or the DRAM -- same bytes at two instruction costs\n");
+
+    /* One rect, five shapes.  A 400x16 band is the size a real window's damage
+     * column costs and the shape both of the compositor's hot leaves use; the odd
+     * rows are 399 wide so that the even and odd pairs move a difference of one
+     * pixel rather than one pixel's worth of extra claim. */
+    ps2_bench_ram(screen, "copy even",     0, 400, 400, 16,  64u);
+    ps2_bench_ram(screen, "copy odd",      0, 401, 399, 16,  64u);
+    ps2_bench_ram(screen, "copy odd+peel", 1, 401, 399, 16,  64u);
+    ps2_bench_ram(screen, "fill even",     2, 400, 400, 16,  64u);
+    ps2_bench_ram(screen, "fill odd",      2, 401, 399, 16,  64u);
+
+    /* The prospective fixes, priced against the defects they would replace: 16 and
+     * 32 bytes per iteration for the copy, and fill_rec()'s strip with its row
+     * pointer incremented instead of recomputed and its stores four-deep and then
+     * eight-deep.  Whatever wins here is what goes into fast_blit.h and dp_core.c;
+     * whatever loses stays printed here as the reason it did not.
+     *
+     * The pairs are interleaved and taken at 256 repetitions rather than run once
+     * each, because the first pass of this table decided the shipped copy width from
+     * a single row per width, and the machine's own drift between adjacent rows is
+     * around 1% while the gap being read is around 5%.  `+16b`/`+32b` are the same
+     * two shapes measured again after the other one has run, so a width that wins
+     * only in the first slot is a position effect, not a result. */
+    ps2_bench_ram(screen, "copy even+16", 3, 400, 400, 16, 256u);
+    ps2_bench_ram(screen, "copy even+32", 4, 400, 400, 16, 256u);
+    ps2_bench_ram(screen, "copy odd+16",  3, 401, 399, 16, 256u);
+    ps2_bench_ram(screen, "copy odd+32",  4, 401, 399, 16, 256u);
+    ps2_bench_ram(screen, "copy odd+16b", 3, 401, 399, 16, 256u);
+    ps2_bench_ram(screen, "copy odd+32b", 4, 401, 399, 16, 256u);
+    ps2_bench_ram(screen, "fillunr even", 5, 400, 400, 16, 256u);
+    ps2_bench_ram(screen, "fillunr8 even",6, 400, 400, 16, 256u);
+    ps2_bench_ram(screen, "fillunr odd",  5, 401, 399, 16, 256u);
+    ps2_bench_ram(screen, "fillunr8 odd", 6, 401, 399, 16, 256u);
+
+    /* The sweep, at the phase that can never fall into the tail, over the range the
+     * book's flat-price claim covers.  The two shapes are the compositor's own two
+     * hot columns: `bg=` is a btron_row_blit() of the cached background over the
+     * damage rect (480,000 px for a whole canvas, 9.9 ms measured), and `frame=` is
+     * fill_rec() plates (715,360 px, 13.1 ms), so the copy rows can be read against
+     * the first and the fill rows against the second.  A copy needs a source band as
+     * large as its destination, so the canvas only holds two of them up to 300 rows:
+     * 240,000 px is as far as a copy can be taken here, half of what `bg=` bills,
+     * and the whole-canvas 480,000 px row is a fill for that reason, not by choice. */
+    ps2_kprintf("[BENCH]   -- size sweep, even phase, load+store and store-only\n");
+    ps2_bench_ram(screen, "copy 768px",    0, 400,  48,  16, 256u);
+    ps2_bench_ram(screen, "copy 12800px",  0,   0, 800,  16,  64u);
+    ps2_bench_ram(screen, "copy 12800+32", 4,   0, 800,  16,  64u);
+    ps2_bench_ram(screen, "copy 80000px",  0,   0, 800, 100,   8u);
+    ps2_bench_ram(screen, "copy 240000px", 0,   0, 800, 300,   3u);
+    ps2_bench_ram(screen, "fill 768px",    2, 400,  48,  16, 256u);
+    ps2_bench_ram(screen, "fill 12800px",  2,   0, 800,  16,  64u);
+    ps2_bench_ram(screen, "fill 80000px",  2,   0, 800, 100,   8u);
+    ps2_bench_ram(screen, "fill 480000px", 2,   0, 800, 600,   2u);
+    /* And the same canvas through the unrolled leaf, at the count `bg=` bills, so
+     * the fill fix is priced at its real size and not only at a strip, four-deep
+     * against eight. */
+    ps2_bench_ram(screen, "fillunr 480k",  5,   0, 800, 600,   2u);
+    ps2_bench_ram(screen, "fillunr8 480k", 6,   0, 800, 600,   2u);
+}
+
 /* One direction's worth of the loop's own pass -- report, spend, dispatch, bands,
  * present -- in that order, so the rows, bands and cost columns mean the same thing
  * here that they mean in a live session's [PSTAT] window.
@@ -4512,6 +4881,12 @@ static void ps2_bench_run(GDEV *screen)
                         (unsigned int)btron_fp_dump[c][3], (unsigned int)btron_fp_dump[c][4],
                         (unsigned int)btron_fp_dump[c][5]);
     }
+
+    /* First of the pixel phases, and before the region table rather than after it:
+     * its answer decides which of the two lanes row 9's open half is worth taking,
+     * and a row that decides is a row that has to be in the log even if the run gets
+     * cut off downstream. */
+    ps2_bench_ram_ops(screen);
 
     ps2_kprintf("\n[BENCH] present cost by region -- no input involved, 16 reps each\n");
     ps2_bench_region(screen, "full", 0, 0, PS2_SCREEN_WIDTH, PS2_SCREEN_HEIGHT, 1, 2u);

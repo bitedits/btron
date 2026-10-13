@@ -163,14 +163,24 @@ static BOOL msx_load(MsxViewer *st, const char *name)
     got = fread(buf, 1, (size_t)size, f);
     fclose(f);
 
+    msx_cfg_t cfg;
+    memset(&cfg, 0, sizeof(cfg));
+    cfg.frame_hz = 60;
+    if (size > 65536 || strstr(name, "BULLRUSH") || strstr(name, "NEON") || strstr(name, "NIGHT")) {
+        cfg.machine = BMSX_MACHINE_MSXTR_CBIOS;
+    } else {
+        cfg.machine = BMSX_MACHINE_MSX;
+    }
+    msx_init(&cfg);
+
     rc = msx_load_rom(buf, (uint32_t)got, 0);
     free(buf);
 
     if (rc != MSX_OK) {
         if (rc == MSX_ERR_SIZE)
             snprintf(st->notice, sizeof(st->notice),
-                     "%s: %ld バイトは上限 32768 を超えます "
-                     "(banked megaROM mapper not implemented yet)", name, size);
+                     "%s: %ld バイトは上限 %u を超えます",
+                     name, size, (unsigned)MSX_ROM_SIZE);
         else
             snprintf(st->notice, sizeof(st->notice),
                      "%s: msx_load_rom -> error %d", name, rc);
@@ -237,13 +247,22 @@ static BOOL msx_load(MsxViewer *st, const char *name)
         return FALSE;
     }
 
+    msx_cfg_t cfg;
+    memset(&cfg, 0, sizeof(cfg));
+    cfg.frame_hz = 60;
+    if (got > 65536 || strstr(name, "BULLRUSH") || strstr(name, "NEON") || strstr(name, "NIGHT")) {
+        cfg.machine = BMSX_MACHINE_MSXTR_CBIOS;
+    } else {
+        cfg.machine = BMSX_MACHINE_MSX;
+    }
+    msx_init(&cfg);
+
     rc = msx_load_rom(s_rom_image, (uint32_t)got, 0);
 
     if (rc != MSX_OK) {
         if (rc == MSX_ERR_SIZE)
             snprintf(st->notice, sizeof(st->notice),
-                     "%s: %u バイトは上限 %u を超えます "
-                     "(banked megaROM mapper not implemented yet)",
+                     "%s: %u バイトは上限 %u を超えます",
                      name, (unsigned)got, (unsigned)MSX_ROM_SIZE);
         else
             snprintf(st->notice, sizeof(st->notice),

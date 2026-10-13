@@ -27,10 +27,10 @@
 
 /* Default MSX palette */
 static const uint8_t s_def_pal[16][3] = {
-    {   0,   0,   0 }, {   0,   0,   0 }, {  48, 192,  48 }, { 136, 224, 136 },
-    { 176,  48,  48 }, { 224, 112, 112 }, { 208, 192,  64 }, {  48,  64, 224 },
-    { 112,  48, 112 }, { 240, 128, 160 }, {  80,  96, 240 }, { 128, 128, 128 },
-    { 160, 192, 255 }, {  64, 240,  64 }, { 160, 240, 255 }, { 255, 255, 255 }
+    {   0,   0,   0 }, {   0,   0,   0 }, {  33, 200,  66 }, {  94, 220, 120 },
+    {  84,  85, 237 }, { 125, 118, 252 }, { 212,  83,  61 }, {  66, 235, 245 },
+    { 252,  87,  85 }, { 255, 124, 118 }, { 212, 193,  84 }, { 233, 208, 125 },
+    {  34, 150,  48 }, { 200,  90, 196 }, { 204, 204, 204 }, { 255, 255, 255 }
 };
 
 static inline uint16_t rgb565(uint8_t r, uint8_t g, uint8_t b)
@@ -39,6 +39,12 @@ static inline uint16_t rgb565(uint8_t r, uint8_t g, uint8_t b)
                       ((uint32_t)(g >> 2) <<  5) |
                       ((uint32_t)(b >> 3)));
 }
+
+/* V9938 Graphic 7 fixed sprite palette (V9938 data book p. 98) */
+static const uint16_t s_g7_sprite_pal[16] = {
+    0x0000, 0x0009, 0x6800, 0x6809, 0x0360, 0x0369, 0x6B60, 0x6B69,
+    0xFC89, 0x001F, 0xF800, 0xF81F, 0x07E0, 0x07FF, 0xFFE0, 0xFFFF
+};
 
 static inline uint16_t rgb332_to_rgb565(uint8_t c)
 {
@@ -243,28 +249,24 @@ static void v9938_exec_command(v9938_t *v)
         v9938_pset_pixel(v, v->dx, v->dy, v->col, op, mode);
         break;
 
-    case 0x07: { /* LINE */
-        int dx = (int)v->nx;
-        int dy = (int)v->ny;
-        int maj = (v->arg & 0x01); /* MAJ = 1 -> Y major */
+    case 0x07: { /* LINE: nx is major axis length, ny is minor axis length */
+        int maj_len = (int)v->nx;
+        int min_len = (int)v->ny;
+        int maj = (v->arg & 0x01); /* MAJ = 1 -> Y major, MAJ = 0 -> X major */
         int step = 0;
         int cur_x = v->dx;
         int cur_y = v->dy;
-        if (maj) {
-            int d = 2 * dx - dy;
-            for (step = 0; step <= dy; step++) {
-                v9938_pset_pixel(v, cur_x, cur_y, v->col, op, mode);
+        int d = 2 * min_len - maj_len;
+        for (step = 0; step <= maj_len; step++) {
+            v9938_pset_pixel(v, cur_x, cur_y, v->col, op, mode);
+            if (maj) {
                 cur_y += diy;
-                if (d >= 0) { cur_x += dix; d -= 2 * dy; }
-                d += 2 * dx;
-            }
-        } else {
-            int d = 2 * dy - dx;
-            for (step = 0; step <= dx; step++) {
-                v9938_pset_pixel(v, cur_x, cur_y, v->col, op, mode);
+                if (d >= 0) { cur_x += dix; d -= 2 * maj_len; }
+                d += 2 * min_len;
+            } else {
                 cur_x += dix;
-                if (d >= 0) { cur_y += diy; d -= 2 * dx; }
-                d += 2 * dy;
+                if (d >= 0) { cur_y += diy; d -= 2 * maj_len; }
+                d += 2 * min_len;
             }
         }
         break;
@@ -293,49 +295,65 @@ static void v9938_exec_command(v9938_t *v)
         }
         break;
 
-    case 0x0C: /* HMMV - high speed VRAM byte fill */
+    case 0x0C: { /* HMMV - high speed VRAM byte fill */
+        uint32_t line_pitch = (mode == 0x14 || mode == 0x1C) ? 256u : 128u;
+        int start_x = (mode == 0x1C) ? (int)v->dx : ((mode == 0x10) ? (int)(v->dx >> 2) : (int)(v->dx >> 1));
+        int count_x = (mode == 0x1C) ? (int)(v->nx ? v->nx : 256) :
+                      ((mode == 0x10) ? (int)(v->nx ? (v->nx >> 2) : 128) :
+                       (int)(v->nx ? (v->nx >> 1) : (mode == 0x14 ? 256 : 128)));
         for (yi = 0; yi < ny; yi++) {
             int y = (v->dy + yi * diy) & 1023;
-            uint32_t row_addr = (uint32_t)y * ((mode == 0x14) ? 256u : 128u);
-            if (mode == 0x1C) row_addr = (uint32_t)y * 256u;
-            for (xi = 0; xi < nx; xi++) {
-                int x = (v->dx + xi * dix);
+            uint32_t row_addr = (uint32_t)y * line_pitch;
+            for (xi = 0; xi < count_x; xi++) {
+                int x = (start_x + xi * dix) & (int)(line_pitch - 1);
                 uint32_t a = (row_addr + (uint32_t)x) & (V9938_VRAM_SIZE - 1u);
                 v->vram[a] = v->col;
             }
         }
         break;
+    }
 
-    case 0x0D: /* HMMM - high speed VRAM to VRAM byte copy */
+    case 0x0D: { /* HMMM - high speed VRAM to VRAM byte copy */
+        uint32_t line_pitch = (mode == 0x14 || mode == 0x1C) ? 256u : 128u;
+        int start_sx = (mode == 0x1C) ? (int)v->sx : ((mode == 0x10) ? (int)(v->sx >> 2) : (int)(v->sx >> 1));
+        int start_dx = (mode == 0x1C) ? (int)v->dx : ((mode == 0x10) ? (int)(v->dx >> 2) : (int)(v->dx >> 1));
+        int count_x = (mode == 0x1C) ? (int)(v->nx ? v->nx : 256) :
+                      ((mode == 0x10) ? (int)(v->nx ? (v->nx >> 2) : 128) :
+                       (int)(v->nx ? (v->nx >> 1) : (mode == 0x14 ? 256 : 128)));
         for (yi = 0; yi < ny; yi++) {
             int sy = (v->sy + yi * diy) & 1023;
             int dy = (v->dy + yi * diy) & 1023;
-            uint32_t s_row = (uint32_t)sy * ((mode == 0x14 || mode == 0x1C) ? 256u : 128u);
-            uint32_t d_row = (uint32_t)dy * ((mode == 0x14 || mode == 0x1C) ? 256u : 128u);
-            for (xi = 0; xi < nx; xi++) {
-                int sx = v->sx + xi * dix;
-                int dx = v->dx + xi * dix;
+            uint32_t s_row = (uint32_t)sy * line_pitch;
+            uint32_t d_row = (uint32_t)dy * line_pitch;
+            for (xi = 0; xi < count_x; xi++) {
+                int sx = (start_sx + xi * dix) & (int)(line_pitch - 1);
+                int dx = (start_dx + xi * dix) & (int)(line_pitch - 1);
                 uint32_t sa = (s_row + (uint32_t)sx) & (V9938_VRAM_SIZE - 1u);
                 uint32_t da = (d_row + (uint32_t)dx) & (V9938_VRAM_SIZE - 1u);
                 v->vram[da] = v->vram[sa];
             }
         }
         break;
+    }
 
-    case 0x0E: /* YMMM - high speed Y row copy */
+    case 0x0E: { /* YMMM - high speed Y row copy */
+        uint32_t line_pitch = (mode == 0x14 || mode == 0x1C) ? 256u : 128u;
+        int start_dx = (mode == 0x1C) ? (int)v->dx : ((mode == 0x10) ? (int)(v->dx >> 2) : (int)(v->dx >> 1));
         for (yi = 0; yi < ny; yi++) {
             int sy = (v->sy + yi * diy) & 1023;
             int dy = (v->dy + yi * diy) & 1023;
-            uint32_t s_row = (uint32_t)sy * ((mode == 0x14 || mode == 0x1C) ? 256u : 128u);
-            uint32_t d_row = (uint32_t)dy * ((mode == 0x14 || mode == 0x1C) ? 256u : 128u);
-            uint32_t row_len = (mode == 0x14 || mode == 0x1C) ? 256u : 128u;
-            uint32_t b;
-            for (b = 0; b < row_len; b++) {
-                v->vram[(d_row + b) & (V9938_VRAM_SIZE - 1u)] =
-                    v->vram[(s_row + b) & (V9938_VRAM_SIZE - 1u)];
+            uint32_t s_row = (uint32_t)sy * line_pitch;
+            uint32_t d_row = (uint32_t)dy * line_pitch;
+            int xi;
+            for (xi = 0; xi < (int)line_pitch; xi++) {
+                int x = (start_dx + xi * dix) & (int)(line_pitch - 1);
+                uint32_t sa = (s_row + (uint32_t)x) & (V9938_VRAM_SIZE - 1u);
+                uint32_t da = (d_row + (uint32_t)x) & (V9938_VRAM_SIZE - 1u);
+                v->vram[da] = v->vram[sa];
             }
         }
         break;
+    }
 
     case 0x00: /* STOP */
         v->tr_active = 0;
@@ -350,7 +368,6 @@ static void v9938_exec_command(v9938_t *v)
         v->tr_diy = diy;
         v->tr_x = 0;
         v->tr_y = 0;
-        v->tr_bytes_per_line = v->nx ? v->nx : 256;
         v->stat[2] |= ST_CE | ST_TR;
         return;
 
@@ -362,14 +379,33 @@ static void v9938_exec_command(v9938_t *v)
         v->tr_diy = diy;
         v->tr_x = 0;
         v->tr_y = 0;
-        if (mode == 0x1C || mode == 0x14) {
+        if (mode == 0x1C) {
             v->tr_bytes_per_line = v->nx ? v->nx : 256;
+        } else if (mode == 0x14) {
+            v->tr_bytes_per_line = v->nx ? (v->nx >> 1) : 256;
         } else if (mode == 0x10) {
             v->tr_bytes_per_line = v->nx ? (v->nx >> 2) : 128;
         } else {
             v->tr_bytes_per_line = v->nx ? (v->nx >> 1) : 128;
         }
         v->stat[2] |= ST_CE | ST_TR;
+        {
+            int cur_y = (v->dy + (int)v->tr_y * v->tr_diy) & 1023;
+            uint32_t line_pitch = (mode == 0x14 || mode == 0x1C) ? 256u : 128u;
+            int start_byte = (mode == 0x1C) ? (int)v->dx : (mode == 0x10 ? (int)(v->dx >> 2) : (int)(v->dx >> 1));
+            int cur_x_byte = (start_byte + (int)v->tr_x * v->tr_dix) & (int)(line_pitch - 1);
+            uint32_t a = ((uint32_t)cur_y * line_pitch + (uint32_t)cur_x_byte) & (V9938_VRAM_SIZE - 1u);
+            v->vram[a] = v->col;
+            v->tr_x++;
+            if (v->tr_x >= v->tr_bytes_per_line) {
+                v->tr_x = 0;
+                v->tr_y++;
+                if (v->tr_y >= (v->ny ? v->ny : 1024)) {
+                    v->tr_active = 0;
+                    v->stat[2] &= (uint8_t)~(ST_CE | ST_TR);
+                }
+            }
+        }
         return;
 
     default:
@@ -412,7 +448,7 @@ static void v9938_reg_write(v9938_t *v, uint8_t reg, uint8_t val)
                 if (v->tr_code == 0x0F) { /* HMMC */
                     int cur_y = (v->dy + (int)v->tr_y * v->tr_diy) & 1023;
                     uint32_t line_pitch = (mode == 0x14 || mode == 0x1C) ? 256u : 128u;
-                    int start_byte = (mode == 0x1C || mode == 0x14) ? (int)v->dx : (mode == 0x10 ? (int)(v->dx >> 2) : (int)(v->dx >> 1));
+                    int start_byte = (mode == 0x1C) ? (int)v->dx : (mode == 0x10 ? (int)(v->dx >> 2) : (int)(v->dx >> 1));
                     int cur_x_byte = (start_byte + (int)v->tr_x * v->tr_dix) & (int)(line_pitch - 1);
                     uint32_t a = ((uint32_t)cur_y * line_pitch + (uint32_t)cur_x_byte) & (V9938_VRAM_SIZE - 1u);
                     v->vram[a] = val;
@@ -425,37 +461,17 @@ static void v9938_reg_write(v9938_t *v, uint8_t reg, uint8_t val)
                             v->stat[2] &= (uint8_t)~(ST_CE | ST_TR);
                         }
                     }
-                } else if (v->tr_code == 0x0B) { /* LMMC */
-                    if (mode == 0x0C) { /* Screen 5: 2 pixels per byte */
-                        uint8_t p1 = (uint8_t)(val >> 4);
-                        uint8_t p2 = (uint8_t)(val & 0x0F);
-                        int cur_y = (v->dy + (int)v->tr_y * v->tr_diy) & 1023;
-                        int cur_x = (v->dx + (int)v->tr_x * v->tr_dix);
-                        v9938_pset_pixel(v, cur_x, cur_y, p1, v->tr_op, mode);
-                        v->tr_x++;
-                        cur_x = (v->dx + (int)v->tr_x * v->tr_dix);
-                        v9938_pset_pixel(v, cur_x, cur_y, p2, v->tr_op, mode);
-                        v->tr_x++;
-                        if (v->tr_x >= (v->nx ? v->nx : 256)) {
-                            v->tr_x = 0;
-                            v->tr_y++;
-                            if (v->tr_y >= (v->ny ? v->ny : 1024)) {
-                                v->tr_active = 0;
-                                v->stat[2] &= (uint8_t)~(ST_CE | ST_TR);
-                            }
-                        }
-                    } else {
-                        int cur_y = (v->dy + (int)v->tr_y * v->tr_diy) & 1023;
-                        int cur_x = (v->dx + (int)v->tr_x * v->tr_dix);
-                        v9938_pset_pixel(v, cur_x, cur_y, val, v->tr_op, mode);
-                        v->tr_x++;
-                        if (v->tr_x >= (v->nx ? v->nx : 256)) {
-                            v->tr_x = 0;
-                            v->tr_y++;
-                            if (v->tr_y >= (v->ny ? v->ny : 1024)) {
-                                v->tr_active = 0;
-                                v->stat[2] &= (uint8_t)~(ST_CE | ST_TR);
-                            }
+                } else if (v->tr_code == 0x0B) { /* LMMC: one pixel per CPU write */
+                    int cur_y = (v->dy + (int)v->tr_y * v->tr_diy) & 1023;
+                    int cur_x = (v->dx + (int)v->tr_x * v->tr_dix);
+                    v9938_pset_pixel(v, cur_x, cur_y, val, v->tr_op, mode);
+                    v->tr_x++;
+                    if (v->tr_x >= (v->nx ? v->nx : ((mode == 0x1C || mode == 0x0C) ? 256 : 512))) {
+                        v->tr_x = 0;
+                        v->tr_y++;
+                        if (v->tr_y >= (v->ny ? v->ny : 1024)) {
+                            v->tr_active = 0;
+                            v->stat[2] &= (uint8_t)~(ST_CE | ST_TR);
                         }
                     }
                 }
@@ -631,8 +647,8 @@ void v9938_render(v9938_t *v, uint16_t *fb)
     uint32_t page_base;
     if (m == 0x1C || m == 0x14) {
         /* Screen 8 (G7) / Screen 7 (G6): 64KB per page. Page 0 at 0x00000, Page 1 at 0x10000.
-         * R#2 bit 6 (0x40) or bit 5 (0x20) selects page 1. */
-        page_base = ((v->regs[2] & 0x60u) != 0) ? 0x10000u : 0u;
+         * R#2 bit 5 (0x20) is A16 in G6/G7 modes, selecting Page 1. */
+        page_base = (v->regs[2] & 0x20u) ? 0x10000u : 0u;
     } else if (m == 0x0C || m == 0x10) {
         /* Screen 5 (G4) / Screen 6 (G5): 32KB per page (4 pages in 128KB).
          * R#2 bits 6..5 select pages 0..3: 00->0, 01->32KB, 10->64KB, 11->96KB */
@@ -702,6 +718,193 @@ void v9938_render(v9938_t *v, uint16_t *fb)
                 uint8_t b = v->vram[(line_addr + (x >> 1)) & (V9938_VRAM_SIZE - 1u)];
                 uint8_t col = (uint8_t)((x & 1) ? (b & 3) : ((b >> 4) & 3));
                 row[x] = v->pal[col];
+            }
+        }
+    } else if (m == 0x04 || m == 0x00) {
+        /* SCREEN 2 (G2, m == 0x04) and SCREEN 1 (G1, m == 0x00) */
+        uint32_t nt = (uint32_t)(v->regs[2] & 0x7Fu) << 10;
+        uint32_t pt = (uint32_t)(v->regs[4] & (m == 0x04 ? 0x04u : 0x3Fu)) << 11;
+        uint32_t ct = (uint32_t)(v->regs[3] & (m == 0x04 ? 0x80u : 0xFFu)) << 6;
+        for (y = 0; y < MSX_SCREEN_H; y++) {
+            uint16_t *row = fb + (uint32_t)y * MSX_SCREEN_W;
+            if (y < top_border || y >= bot_border) {
+                for (x = 0; x < MSX_SCREEN_W; x++) row[x] = bg;
+                continue;
+            }
+            uint16_t eff_y = (uint16_t)(y - top_border);
+            uint16_t r = (uint16_t)(eff_y % 8u);
+            uint16_t band = (uint16_t)(eff_y / 8u);
+            uint32_t chunk = (uint32_t)(eff_y / 64u);
+            for (x = 0; x < MSX_SCREEN_W; x++) {
+                uint32_t cell = (uint32_t)band * 32u + (uint32_t)(x / 8u);
+                uint8_t name = v->vram[(nt + cell) & (V9938_VRAM_SIZE - 1u)];
+                uint8_t cb, bit;
+                if (m == 0x04) {
+                    uint32_t pat_off = ((((uint32_t)chunk & (v->regs[4] & 3u)) << 8) | name) * 8u + r;
+                    uint32_t col_off = ((chunk * 256u + name) * 8u + r) &
+                                       (((uint32_t)(v->regs[3] & 0x7Fu) << 6) | 0x3Fu);
+                    cb  = v->vram[(ct + col_off) & (V9938_VRAM_SIZE - 1u)];
+                    bit = (uint8_t)((v->vram[(pt + pat_off) & (V9938_VRAM_SIZE - 1u)] >> (7u - (x % 8u))) & 1u);
+                } else {
+                    cb  = v->vram[(ct + (name >> 3)) & (V9938_VRAM_SIZE - 1u)];
+                    bit = (uint8_t)((v->vram[(pt + (uint32_t)name * 8u + r) & (V9938_VRAM_SIZE - 1u)] >> (7u - (x % 8u))) & 1u);
+                }
+                uint8_t c = bit ? (uint8_t)(cb >> 4) : (uint8_t)(cb & 0x0Fu);
+                row[x] = c ? v->pal[c & 0x0Fu] : bg;
+            }
+        }
+    } else if (m == 0x01) {
+        /* SCREEN 0: Text 1 (40x24) */
+        uint32_t nt = (uint32_t)(v->regs[2] & 0x7Fu) << 10;
+        uint32_t pt = (uint32_t)(v->regs[4] & 0x3Fu) << 11;
+        uint16_t fg = v->pal[(v->regs[7] >> 4) & 0x0Fu];
+        for (y = 0; y < MSX_SCREEN_H; y++) {
+            uint16_t *row = fb + (uint32_t)y * MSX_SCREEN_W;
+            if (y < top_border || y >= bot_border) {
+                for (x = 0; x < MSX_SCREEN_W; x++) row[x] = bg;
+                continue;
+            }
+            uint16_t eff_y = (uint16_t)(y - top_border);
+            uint16_t r = (uint16_t)(eff_y % 8u);
+            uint16_t band = (uint16_t)(eff_y / 8u);
+            for (x = 0; x < MSX_SCREEN_W; x++) {
+                if (x < 8u || x >= 248u) { row[x] = bg; continue; }
+                uint16_t tx = (uint16_t)(x - 8u);
+                uint8_t glyph = v->vram[(nt + (uint32_t)band * 40u + (uint32_t)(tx / 6u)) & (V9938_VRAM_SIZE - 1u)];
+                uint8_t bit = (uint8_t)((v->vram[(pt + (uint32_t)glyph * 8u + r) & (V9938_VRAM_SIZE - 1u)] >>
+                                         (7u - (tx % 6u))) & 1u);
+                row[x] = bit ? fg : bg;
+            }
+        }
+    }
+
+    /* ---- Sprites in V9938 ---- */
+    if (!(v->regs[8] & 0x02u)) { /* SPD (bit 1 of R8) = 0: sprites enabled */
+        uint16_t size = (v->regs[1] & 0x02u) ? 16u : 8u;
+        uint8_t  mag  = (uint8_t)(v->regs[1] & 0x01u);
+        uint16_t h    = mag ? (uint16_t)(size * 2u) : size;
+        uint32_t spt  = (uint32_t)(v->regs[6] & 0x3Fu) << 11;
+
+        if (m == 0x04 || m == 0x00 || m == 0x02) {
+            /* Sprite Mode 1: TMS9918 compatible */
+            uint32_t sat = (((uint32_t)(v->regs[11] & 0x03u) << 15) | ((uint32_t)(v->regs[5] & 0xFFu) << 7)) & (V9938_VRAM_SIZE - 1u);
+            for (y = top_border; y < bot_border; y++) {
+                uint16_t *row_px = fb + (uint32_t)y * MSX_SCREEN_W;
+                uint16_t eff_y = (uint16_t)(y - top_border);
+                uint8_t drawn = 0u;
+                uint8_t s_front[MSX_SCREEN_W];
+                memset(s_front, 0, sizeof(s_front));
+
+                for (uint16_t n = 0u; n < 32u; n++) {
+                    uint32_t a = (sat + (uint32_t)n * 4u) & (V9938_VRAM_SIZE - 1u);
+                    uint16_t sy = v->vram[a];
+                    if (sy == 0xD0u) break;
+
+                    uint8_t row = (uint8_t)(eff_y - sy - 1u);
+                    if (row >= h) continue;
+
+                    if (drawn == 4u) {
+                        v->stat[0] |= ST_5S;
+                        break;
+                    }
+                    drawn++;
+
+                    uint8_t  raw_x = v->vram[(a + 1u) & (V9938_VRAM_SIZE - 1u)];
+                    uint8_t  tile  = (uint8_t)(v->vram[(a + 2u) & (V9938_VRAM_SIZE - 1u)] & (size == 16u ? 0xFCu : 0xFFu));
+                    uint8_t  col   = v->vram[(a + 3u) & (V9938_VRAM_SIZE - 1u)];
+                    uint8_t  color = (uint8_t)(col & 0x0Fu);
+                    int      sx    = (col & 0x80u) ? ((int)raw_x - 32) : (int)raw_x;
+
+                    if (color == 0u) continue;
+
+                    uint16_t pat_row = mag ? (uint16_t)(row >> 1) : (uint16_t)row;
+
+                    for (uint16_t i = 0u; i < h; i++) {
+                        int px = sx + (int)i;
+                        if (px < 0 || px >= (int)MSX_SCREEN_W) continue;
+
+                        uint16_t pat_col = mag ? (uint16_t)(i >> 1) : i;
+                        uint16_t t;
+                        uint8_t  pat;
+
+                        if (size == 16u) {
+                            t = (uint16_t)(tile + (pat_col >> 3) * 2u + (pat_row >> 3));
+                        } else {
+                            t = (uint16_t)tile;
+                        }
+                        pat = v->vram[(spt + (uint32_t)t * 8u + (pat_row & 7u)) & (V9938_VRAM_SIZE - 1u)];
+                        if (pat & (uint8_t)(0x80u >> (pat_col & 7u))) {
+                            if (s_front[px]) {
+                                v->stat[0] |= ST_C;
+                            } else {
+                                row_px[px] = v->pal[color & 0x0Fu];
+                                s_front[px] = 1u;
+                            }
+                        }
+                    }
+                }
+            }
+        } else if (m == 0x0C || m == 0x1C || m == 0x14 || m == 0x10 || m == 0x08) {
+            /* Sprite Mode 2: V9938 mode with Sprite Color Table */
+            uint32_t base_sat = (((uint32_t)(v->regs[11] & 0x03u) << 15) | ((uint32_t)(v->regs[5] & 0xFCu) << 7)) & (V9938_VRAM_SIZE - 1u);
+            uint32_t sct = base_sat;
+            uint32_t sat_m2 = (base_sat + 512u) & (V9938_VRAM_SIZE - 1u);
+            for (y = top_border; y < bot_border; y++) {
+                uint16_t *row_px = fb + (uint32_t)y * MSX_SCREEN_W;
+                uint16_t eff_y = (uint16_t)(y - top_border);
+                uint8_t drawn = 0u;
+                uint8_t s_front[MSX_SCREEN_W];
+                memset(s_front, 0, sizeof(s_front));
+
+                for (uint16_t n = 0u; n < 32u; n++) {
+                    uint32_t a = (sat_m2 + (uint32_t)n * 4u) & (V9938_VRAM_SIZE - 1u);
+                    uint16_t sy = v->vram[a];
+                    if (sy == 216u) break;
+
+                    uint8_t row = (uint8_t)(eff_y - sy - 1u);
+                    if (row >= h) continue;
+
+                    if (drawn == 8u) {
+                        v->stat[0] |= ST_5S;
+                        break;
+                    }
+                    drawn++;
+
+                    uint8_t  raw_x = v->vram[(a + 1u) & (V9938_VRAM_SIZE - 1u)];
+                    uint8_t  tile  = (uint8_t)(v->vram[(a + 2u) & (V9938_VRAM_SIZE - 1u)] & (size == 16u ? 0xFCu : 0xFFu));
+                    uint16_t pat_row = mag ? (uint16_t)(row >> 1) : (uint16_t)row;
+                    uint8_t  color_attr = v->vram[(sct + (uint32_t)n * 16u + pat_row) & (V9938_VRAM_SIZE - 1u)];
+
+                    if (color_attr & 0x20u) continue; /* IC bit */
+                    uint8_t  color = (uint8_t)(color_attr & 0x0Fu);
+                    int      sx    = (color_attr & 0x80u) ? ((int)raw_x - 32) : (int)raw_x;
+
+                    if (color == 0u) continue;
+
+                    for (uint16_t i = 0u; i < h; i++) {
+                        int px = sx + (int)i;
+                        if (px < 0 || px >= (int)MSX_SCREEN_W) continue;
+
+                        uint16_t pat_col = mag ? (uint16_t)(i >> 1) : i;
+                        uint16_t t;
+                        uint8_t  pat;
+
+                        if (size == 16u) {
+                            t = (uint16_t)(tile + (pat_col >> 3) * 2u + (pat_row >> 3));
+                        } else {
+                            t = (uint16_t)tile;
+                        }
+                        pat = v->vram[(spt + (uint32_t)t * 8u + (pat_row & 7u)) & (V9938_VRAM_SIZE - 1u)];
+                        if (pat & (uint8_t)(0x80u >> (pat_col & 7u))) {
+                            if (s_front[px]) {
+                                v->stat[0] |= ST_C;
+                            } else {
+                                row_px[px] = (m == 0x1C) ? s_g7_sprite_pal[color & 0x0Fu] : v->pal[color & 0x0Fu];
+                                s_front[px] = 1u;
+                            }
+                        }
+                    }
+                }
             }
         }
     }

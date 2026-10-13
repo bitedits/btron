@@ -761,9 +761,10 @@ that choice also removes the CP0 Count's 29.1 s wrap from the instrument entirel
 reads the count **before** this port's gain, because a pair taken after the multiplier would prove the
 multiplier instead of testing it.
 
-**The gate, and the two controls that answer in opposite directions.**  `make test-ps2-pointer` runs 46
+**The gate, and the two controls that answer in opposite directions.**  `make test-ps2-pointer` ran 46
 checks against the header `#include`d directly (the repo idiom: the identical translation unit is what
-the gate measures and what links into `btron-ps2.elf`).  The decisive pair is
+the gate measures and what links into `btron-ps2.elf`); the tree now runs 59, and the 13 extra checks
+are the live-session finding recorded in the next entry but one.  The decisive pair is
 `wire_carries_distance` -- 1500 counts at one per frame over 1500 ms, then the *same* 1500 counts in
 60 ms, which must read `1.00x` with the two samples still 25x apart in speed so the ratio means
 something rather than merely being arithmetic -- and `wire_carries_speed`, its positive control, where
@@ -784,7 +785,9 @@ after deleting `.build/test_ps2_ptr_stroke` and its object.  A control whose har
 a control that was never run.
 
 **What the headless run prints, 2026-10-13.**  The bench's frame-hook close is now also the row's
-close, and it prints the answer a synthetic stream deserves:
+close, and it printed the answer a synthetic stream deserves at that moment -- the four refusal lines
+under the row have since been rewritten, and the run re-taken against the new text is in the entry
+below:
 
 ```
 [PSTAT] stroke pair: samples=1 slow=8480 counts in 55 ms (154.18/ms), fast=8480 in 55 ms (154.18/ms) -> no ratio yet
@@ -809,5 +812,92 @@ this lane, and task #22 stays open with SKIP rather than PASS until a live `stro
 which way it should go.  Everything here is PCSX2 evidence, so task #17 remains the outstanding
 hardware check.  And `samples=1 slow=... fast=...` printing identical numbers is the single-sample
 case, not a ratio of 1.0 -- the row says `no ratio yet` for exactly that reason.
+
+---
+## The live row, read: a silent pointer window is not a dead wire, and the row now says which
+
+**What the developer run actually printed, 2026-10-13.**  A live GUI session on the shipped image,
+Stage 1 skipped, on the desktop for ~55 s, and Ctrl+\ about twenty-five times.  Every one of those
+prints opened with `chord: reports=0`, every histogram bucket was `0`, `total |x|=0 |y|=0`,
+`border: spent=0,0`, `lat: no move was painted in this window`, and the pair row read
+`samples=0 slow=0 counts in 0 ms ... -> no ratio yet` followed by the advice this lane had just
+shipped: *"a sample is a slide of 800 counts or more... slide slowly, then fast."*  The row was
+giving the hand an instruction at the same time as it reported that the hand had never been asked
+anything.
+
+**Why that is the wrong shape of refusal, and what reading fixed it.**  `ptrstat`'s window resets
+under the caller, so a window of `reports=0` cannot tell "the person did not slide" from "the bus
+delivered nothing" -- and those two faults have opposite fixes, one aimed at a hand and one at a
+port.  So the splitter now keeps two readings that outlive any window: `reports`, every report it was
+fed *moving or not*, and `max_counts`, the longest stroke the hand actually gave whether or not it
+qualified.  A wire that delivered nothing is a sixth verdict, `PS2_STROKE_SILENT`, and it is tested
+before all the others, because no protocol can take a pair off a bus that sent zero bytes.  The
+decisive equivalence, checked against the source rather than asserted: `ps2_usb_process_mouse_report()`
+increments its own counter and then calls `ps2_usb_on_mouse()` with no branch between, and
+`ps2_ptrst_add()` -- which feeds the splitter -- is that function's first statement.  So the
+splitter's `reports` and the driver's `ps2_usb_mouse_reports()` count the same events, and
+`PS2_STROKE_SILENT` is checkable against the boot row `[HID] first report landed ... mouse=<n>` with
+no new instrument at all.
+
+**The counter-evidence came from the same file, later the same afternoon.**  The surviving
+`pcsx2/PCSX2/logs/emulog.txt` is a 16:45 session, not the 12:18 one, and it prints
+`[HID] first report landed, frame 0x0315 kbd=0 mouse=11` -- eleven mouse reports with zero keyboard
+reports, before anybody had touched a key.  **The wire is not dead**, so nothing in this lane is a
+port fix and nothing here should be read as one: the 12:18 session was a hand at a keystroke, which
+is exactly the case the new row now names instead of mis-advising.  What that session does prove is
+about this repo's discipline, not its pointer: PCSX2 writes one log path and every run overwrites it,
+so a live row that is not copied out before the next launch is evidence that cannot be re-read.  (The
+bench does *not* clobber it -- `scripts/ps2_bench.sh:37` runs against a `mktemp` datapath -- so the
+loss came from the next GUI session, which is the ordinary case.)
+
+**The gate, re-taken against this tree, 2026-10-14.**  `make test-ps2-pointer` now runs **59** checks
+and prints 59/0.  Three controls were run against the shipped header, each after deleting
+`.build/test_ps2_ptr_stroke` and its object, and each turns a distinct set red:
+
+| Mutation | Failures | The names that go red |
+|:---|:---|:---|
+| delete `if (!s->reports) return PS2_STROKE_SILENT;` | 2 | `no report at all reads as a silent wire`, `verdict after reset` |
+| count only *moving* reports (`reports++` after the still guard) | 4 | `and every report, still or not, was seen` (400 for 1200), `one still report ends the silence`, `and is itself counted`, `with every report counted` |
+| never record `max_counts` | 1 | `the longest stroke is still recorded` |
+
+The middle one is the interesting control: it leaves every stroke verdict green and breaks only the
+lifetime reading, which is exactly how an instrument can keep answering the question it was written
+for while going deaf on the one the developer hit.  A still IN token is what distinguishes "the mouse
+is talking" from "nobody plugged one in", and it is the report a stroke splitter normally throws away.
+
+**What the headless run prints now, 2026-10-14.**  Same harness, same `BENCH_APP=1`, re-taken after
+purging `core_ps2.pbench.o`:
+
+```
+[PSTAT] stroke pair: samples=1 slow=8480 counts in 55 ms (154.18/ms), fast=8480 in 55 ms (154.18/ms) -> no ratio yet
+[PSTAT]   no pair yet: 404 mouse reports seen, longest stroke 8480 counts, and a sample
+[PSTAT]   needs 800 of them in one slide plus a second slide of the same travel at a
+[PSTAT]   clearly different speed.  Slide sideways across the display slowly, then do
+[PSTAT]   the same slide fast, then read this row again.
+[BENCH] run complete
+```
+
+The synthetic stream is the *other* refusal: 404 reports and an 8480-count stroke, so the row can say
+truthfully that the bus is answering and the missing thing is a second speed.  The `PS2_STROKE_SILENT`
+branch is not reachable from this harness, which injects a stream of its own, so it is exercised by
+the host suite instead -- five checks, including that one still report is enough to leave it.
+
+**The guardrail, re-checked.**  `git status --short -- src Makefile doc` after all of this still shows
+`M Makefile`, `M src/cores/core_ps2.c`, three doc files, and `?? src/cores/ps2_ptr_stroke.h`: no
+shared source file, no `src/graphics/`, no `src/settings/`, nothing the arm64 / Pi 400 build compiles
+differently.  `make ps2 PS2_GL=eegs PS2_FP=hw` links, `make test-ps2` is 91/91, `make arm64-elf`
+builds, `make test` is green end to end, and the SILENT text is present in `btron-ps2.elf` (`strings`
+counts one copy).
+
+**What is NOT claimed.**  The layer question is still open -- no session has printed a `stroke pair`
+verdict, and the 16:45 run proves the wire, not the answer.  `PS2_EMU_MULT_FP` stays **96/256** and
+task #22 stays SKIP.  The `-> 1.00x` / `-> 2.52x` rows in the handbook are the *test's* numbers, not
+measurements.  `BTRON_HID_TRACE` is `#define`d nowhere in `src/` or `include/`, so `#if BTRON_HID_TRACE`
+is false in the shipped image and the `[RAW]` / `[DEV]` / `[SCH]` rows do not exist there: the two
+report counters are the only mouse-wire evidence a live session can produce, which is the reason this
+lane added a counter instead of asking for a trace flag.  And the retry protocol still needs the
+person: move the **host** cursor inside the emulator window, slide it sideways across the display
+slowly, then the same slide fast, then Ctrl+\ -- and if the row still says NO report, the port, not
+the hand, is what to look at.
 
 ---

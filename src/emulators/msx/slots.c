@@ -12,6 +12,7 @@
 #include "msx_int.h"
 #include <emulators/tronmsx.h>
 #include <string.h>
+#include <stdio.h>
 
 #include "v9938.h"
 #include "s1985.h"
@@ -560,6 +561,11 @@ void msx_bus_out(uint8_t port, uint8_t value)
     if (port == 0x8Du || port == 0x9Du || port == 0x8Fu || port == 0x9Fu) {
         if (!g_geo3d.vdp) geo3d_attach_vdp(&g_geo3d, msx_get_v9938());
         geo3d_write(&g_geo3d, port, value);
+        return;
+    }
+    if (port == 0x2Eu || port == 0x2Fu) {
+        if (port == 0x2Fu) fputc(value, stderr);
+        else if (value == 0) fputc('\n', stderr);
         return;
     }
     if (port >= 0xA0u && port <= 0xA3u) { psg_write(port, value); return; }

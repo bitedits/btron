@@ -33,7 +33,8 @@ static v9938_t s_v9938;
 #define VDP_NR          32u          /* R0..R25 used, the rest read 0       */
 
 #define ST_FG           0x80u        /* status0 bit7: end of display        */
-#define ST_NO           0x02u        /* status0 bit1: more than four sprites*/
+#define ST_5S           0x40u        /* status0 bit6: 5th sprite flag       */
+#define ST_C            0x20u        /* status0 bit5: sprite collision flag */
 
 #define R1_SZ           0x02u        /* R1 bit1: 1 = 16x16 sprites          */
 #define R1_M2           0x08u
@@ -109,19 +110,19 @@ static uint8_t   s_front[MSX_SCREEN_W];
 static const uint8_t s_msx1_rgb[16][3] = {
     {   0,   0,   0 },  /*  0 transparent - drawn as EC          */
     {   0,   0,   0 },  /*  1 black                              */
-    {  48, 192,  48 },  /*  2 medium green                       */
-    { 136, 224, 136 },  /*  3 light green                        */
-    { 176,  48,  48 },  /*  4 dark red                           */
-    { 224, 112, 112 },  /*  5 medium red                         */
-    { 208, 192,  64 },  /*  6 dark yellow                        */
-    {  48,  64, 224 },  /*  7 dark blue                          */
-    { 112,  48, 112 },  /*  8 dark magenta                       */
-    { 240, 128, 160 },  /*  9 light pink                         */
-    {  80,  96, 240 },  /* 10 medium blue                        */
-    { 128, 128, 128 },  /* 11 dark grey                          */
-    { 160, 192, 255 },  /* 12 light grey                         */
-    {  64, 240,  64 },  /* 13 lime                               */
-    { 160, 240, 255 },  /* 14 light cyan                         */
+    {  33, 200,  66 },  /*  2 medium green                       */
+    {  94, 220, 120 },  /*  3 light green                        */
+    {  84,  85, 237 },  /*  4 dark blue                          */
+    { 125, 118, 252 },  /*  5 light blue                         */
+    { 212,  83,  61 },  /*  6 dark red                           */
+    {  66, 235, 245 },  /*  7 cyan                               */
+    { 252,  87,  85 },  /*  8 medium red                         */
+    { 255, 124, 118 },  /*  9 light red                          */
+    { 212, 193,  84 },  /* 10 dark yellow                        */
+    { 233, 208, 125 },  /* 11 light yellow                       */
+    {  34, 150,  48 },  /* 12 dark green                         */
+    { 200,  90, 196 },  /* 13 magenta                            */
+    { 204, 204, 204 },  /* 14 gray                               */
     { 255, 255, 255 }   /* 15 white                              */
 };
 
@@ -256,10 +257,9 @@ static uint8_t status_read(void)
     uint8_t ret = s_status;
 
     if ((s_reg[15] & 0x07u) == 0u) {
-        ret = (uint8_t)(ret & ~ST_FG);
+        s_status = (uint8_t)(s_status & ~(ST_FG | ST_5S | ST_C));
         s_irq_pending = 0u;
     }
-    s_status = ret;
     return ret;
 }
 
@@ -434,7 +434,6 @@ void vdp_advance(uint32_t t_states)
         s_t_line -= MSX_T_PER_LINE;
         s_line = (uint16_t)((s_line + 1u) % MSX_LINES);
         if (s_line == display_end()) {
-            s_status = (uint8_t)(s_status & ~(ST_FG | ST_NO));
             s_status = (uint8_t)(s_status | ST_FG);
             if (s_reg[1] & R1_IE0) s_irq_pending = 1u;
         }
@@ -575,11 +574,14 @@ static void line_g4(uint16_t y)
 
 /* ---- sprites ------------------------------------------------------------ */
 
-static void sprite_put(uint16_t x, uint8_t colour, uint8_t behind)
+static void sprite_put(uint16_t x, uint8_t colour)
 {
     if (x >= MSX_SCREEN_W) return;
     if (colour == 0u) return;                      /* transparent          */
-    if (behind && !s_front[x] && s_px[x] != 0u) return;  /* the wins        */
+    if (s_front[x]) {
+        s_status |= ST_C;                          /* sprite collision     */
+        return;                                    /* higher priority wins */
+    }
     s_px[x] = colour;
     s_front[x] = 1u;
 }
@@ -590,35 +592,54 @@ static void sprite_put(uint16_t x, uint8_t colour, uint8_t behind)
 static void sprites_mode1(uint16_t y)
 {
     uint32_t sat = sat_base(), spt = spt_base();
-    uint16_t h = (uint16_t)((s_reg[1] & R1_SZ) ? 16u : 8u);
+    uint8_t  mag = (uint8_t)(s_reg[1] & 0x01u);
+    uint16_t size = (uint16_t)((s_reg[1] & R1_SZ) ? 16u : 8u);
+    uint16_t h = mag ? (uint16_t)(size * 2u) : size;
     uint8_t  drawn = 0u;
     uint16_t n;
 
     for (n = 0u; n < 32u; n++) {
         uint32_t a  = sat + (uint32_t)n * 4u;
         uint16_t sy = VR(a);
-        uint16_t sx, i, row;
-        uint8_t  tile, col, behind;
-
         if (sy == 0xD0u) break;
-        if (drawn == 4u) { s_status |= ST_NO; break; }
-        if (y < sy || y >= (uint16_t)(sy + h)) continue;
+
+        uint8_t row = (uint8_t)(y - sy - 1u);
+        if (row >= h) continue;
+
+        if (drawn == 4u) {
+            if (!(s_status & ST_5S)) {
+                s_status = (uint8_t)((s_status & 0xE0u) | ST_5S | (n & 0x1Fu));
+            }
+            break;
+        }
         drawn++;
 
-        sx = VR(a + 1u);
-        if (sx == 0u) continue;                    /* X = 0 is not displayed */
-        tile = (uint8_t)(VR(a + 2u) & (h == 16u ? 0xFCu : 0xFFu));
-        col  = VR(a + 3u);
-        behind = (uint8_t)((col & 0x80u) ? 1u : 0u);
-        row  = (uint16_t)(y - sy);
+        uint8_t  raw_x = VR(a + 1u);
+        uint8_t  tile  = (uint8_t)(VR(a + 2u) & (size == 16u ? 0xFCu : 0xFFu));
+        uint8_t  col   = VR(a + 3u);
+        uint8_t  color = (uint8_t)(col & 0x0Fu);
+        int      sx    = (col & 0x80u) ? ((int)raw_x - 32) : (int)raw_x;
 
-        for (i = 0u; i < h; i++) {
-            /* A 16x16 sprite is four 8x8 tiles numbered down the left column
-             * (p, p+1) and then down the right (p+2, p+3). */
-            uint16_t t   = (uint16_t)(tile + (i >> 3) * 2u + (row >> 3));
-            uint8_t  pat = VR(spt + (uint32_t)t * 8u + (row & 7u));
-            if (pat & (uint8_t)(0x80u >> (i & 7u))) {
-                sprite_put((uint16_t)(sx + i), (uint8_t)(col & 0x0Fu), behind);
+        if (color == 0u) continue;
+
+        uint16_t pat_row = mag ? (uint16_t)(row >> 1) : (uint16_t)row;
+
+        for (uint16_t i = 0u; i < h; i++) {
+            int px = sx + (int)i;
+            if (px < 0 || px >= (int)MSX_SCREEN_W) continue;
+
+            uint16_t pat_col = mag ? (uint16_t)(i >> 1) : i;
+            uint16_t t;
+            uint8_t  pat;
+
+            if (size == 16u) {
+                t = (uint16_t)(tile + (pat_col >> 3) * 2u + (pat_row >> 3));
+            } else {
+                t = (uint16_t)tile;
+            }
+            pat = VR(spt + (uint32_t)t * 8u + (pat_row & 7u));
+            if (pat & (uint8_t)(0x80u >> (pat_col & 7u))) {
+                sprite_put((uint16_t)px, color);
             }
         }
     }
@@ -643,14 +664,13 @@ static void sprites_mode2(uint16_t y)
         uint8_t  attr, cr1, cr0;
 
         if (sy == 0xE0u) break;
-        if (drawn == 4u) { s_status |= ST_NO; break; }
+        if (drawn == 8u) { s_status |= ST_5S; break; }
         attr = VR(a + 2u);
         h = (uint16_t)((attr & R8_SZ) ? 16u : gsize);
         if (y < sy || y >= (uint16_t)(sy + h)) continue;
         drawn++;
 
         sx = VR(a + 1u);
-        if (sx == 0u) continue;
         tile = (uint16_t)(VR(a + 3u) | ((uint16_t)(VR(a + 7u) & 0x01u) << 8));
         cr1  = (uint8_t)(VR(a + 4u) & 0x0Fu);
         cr0  = (uint8_t)(VR(a + 5u) & 0x0Fu);
@@ -661,9 +681,9 @@ static void sprites_mode2(uint16_t y)
                           (uint16_t)(y - sy) * (uint32_t)(h == 16u ? 2u : 1u);
             uint8_t pat = VR(pa + (uint32_t)(i >> 3));
             if (pat & (uint8_t)(0x80u >> (i & 7u))) {
-                sprite_put((uint16_t)(sx + i), cr1, 0u);
+                sprite_put((uint16_t)(sx + i), cr1);
             } else if (!sixteen && cr0) {
-                sprite_put((uint16_t)(sx + i), cr0, 0u);
+                sprite_put((uint16_t)(sx + i), cr0);
             }
         }
     }

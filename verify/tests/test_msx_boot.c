@@ -106,6 +106,8 @@ int main(int argc, char **argv)
 extern uint16_t msx_get_pc(void);
 extern int msx_is_r800_active(void);
 extern v9938_t *msx_get_v9938(void);
+extern uint8_t vdp_debug_reg(uint8_t reg);
+extern uint8_t *vdp_vram(uint32_t *size);
 
     for (f = 1; f <= frames; f++) {
         if (f == 270) {
@@ -129,6 +131,21 @@ extern v9938_t *msx_get_v9938(void);
                    f, msx_get_pc(), msx_is_r800_active(), m,
                    v ? v->regs[0] : 0, v ? v->regs[1] : 0, v ? v->regs[2] : 0, v ? v->regs[7] : 0,
                    (unsigned long long)msx_total_cycles(), ink(s_fb), path);
+        }
+        if (f == frames) {
+            v9938_t *v = msx_get_v9938();
+            if (v) {
+                printf("V9938 regs:");
+                for (int r = 0; r <= 23; r++) printf(" R%d=%02X", r, v->regs[r]);
+                printf("\n");
+                printf("stat[2]=%02X tr_active=%d tr_x=%d tr_y=%d\n", v->stat[2], v->tr_active, v->tr_x, v->tr_y);
+                printf("VRAM dump around 0x1800-0x1C00:\n");
+                for (uint32_t base = 0x1800; base <= 0x1C00; base += 0x100) {
+                    printf("  addr 0x%04X: %02X %02X %02X %02X %02X %02X %02X %02X\n",
+                           base, v->vram[base], v->vram[base+1], v->vram[base+2], v->vram[base+3],
+                           v->vram[base+4], v->vram[base+5], v->vram[base+6], v->vram[base+7]);
+                }
+            }
         }
     }
 

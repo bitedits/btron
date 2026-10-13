@@ -28,6 +28,13 @@
  * Everything else is the shipped translation unit: the packer, the allocator, the recorder, the
  * raster stage and the present are #included, as in increments 2, 3 and 4.
  *
+ * LANE 10 changed what "the bus" means here, and the suite got stronger for it.  The present no
+ * longer sends, it POSTS, so the unit under test now includes the shipped ring
+ * (src/drivers/ps2/ps2_gif_ring.c, compiled in as everything else in this file is) and the host
+ * provides only its three hardware hooks.  What that buys is an order assertion made against the
+ * structure that actually preserves order -- a FIFO with one transfer in flight -- instead of
+ * against a stub that counted calls.
+ *
  * Copyright 2026 Synrc Research Center. MIT License.
  */
 
@@ -39,10 +46,12 @@
 #include "../../src/drivers/ps2/ps2_gs_vram.c"
 #include "../../src/drivers/ps2/ps2_gs_rec.c"
 #include "../../src/drivers/ps2/ps2_gs_env.c"
+#include "../../src/drivers/ps2/ps2_gif_ring.c"
 #include "../../src/gl/backend_eegs.c"
 #include "../../src/gl/eegs_present.c"
 
 #include "gs_group_view.h"
+
 
 static int s_checks, s_failures;
 
@@ -63,16 +72,31 @@ static void eqw(const char *what, uint64_t got, uint64_t want)
            what, (unsigned long long)got, (unsigned long long)want);
 }
 
-/* ── The bus ─────────────────────────────────────────────────────────────────────── */
-
-/* The first few groups are kept whole for inspection; every call is counted, because a frame can
- * hold hundreds of groups and the counts are what the capacity checks read. */
+/* ── The bus: the ring's three hardware hooks ────────────────────────────────────────
+ * The first few groups are kept whole for inspection; every start is counted, because a frame can
+ * hold hundreds of groups and the counts are what the capacity checks read.
+ *
+ * `s_stall` is what makes this a *channel* and not a log.  At 0 a transfer reads complete on the
+ * first busy() poll, which is the case the ordering and fidelity checks want: every post starts
+ * immediately, so the sequence the bus saw is the sequence the present committed.  At 1 the channel
+ * holds each transfer for a poll, which is the case the ring was built for -- and the row that
+ * needs it is test_begin_reaps_the_last_frames_stream(): the present returns with groups still on
+ * the bus, and only begin() is allowed to wait for them. */
 #define KEEP 4u
 static uint64_t s_keep[KEEP][GS_REC_QW_CAP * 2u];
 static uint32_t s_keep_n[KEEP];
 static uint32_t s_calls, s_bus_qw;
+static uint32_t s_free, s_stall, s_stall_per;
 
-void ps2_gs_gif_send(const void *packet, uint32_t qwc)
+int ps2_gif_hw_busy(void)
+{
+    if (!s_free) return 0;
+    if (s_stall != 0u) { s_stall--; return 1; }
+    s_free = 0u;
+    return 0;
+}
+
+void ps2_gif_hw_start(const void *packet, uint32_t qwc)
 {
     if (s_calls < KEEP) {
         memcpy(s_keep[s_calls], packet, GS_QW_BYTES(qwc));
@@ -80,6 +104,13 @@ void ps2_gs_gif_send(const void *packet, uint32_t qwc)
     }
     s_calls++;
     s_bus_qw += qwc;
+    s_free = 1u;
+    s_stall = s_stall_per;
+}
+
+uint32_t ps2_gif_hw_us(void)
+{
+    return s_bus_qw;      /* any monotone value: this suite does not gate microseconds */
 }
 
 static void dma_reset(void)
@@ -88,17 +119,23 @@ static void dma_reset(void)
     memset(s_keep_n, 0, sizeof(s_keep_n));
     s_calls = 0u;
     s_bus_qw = 0u;
+    s_free = 0u;
+    s_stall = 0u;
+    s_stall_per = 0u;
 }
 
-/* The host copy of ps2_gs.c's seven lines. */
+/* The host copy of ps2_gs.c's seven lines, and of their LANE 10 half: the environment is posted,
+ * not sent, because `env_pkt` is a static that the next apply overwrites and the reap at the next
+ * begin() is what bounds that. */
 static uint64_t s_env_pkt[(GS_ENV_NREG + 1u) * 2u] __attribute__((aligned(16)));
 
 int ps2_gs_draw_env_apply(const gs_draw_env *env)
 {
     if (gs_draw_env_packet(env, s_env_pkt) != 0) return -1;
-    ps2_gs_gif_send(s_env_pkt, gs_draw_env_qwc());
+    if (ps2_gif_post(s_env_pkt, gs_draw_env_qwc()) != 0) return -1;
     return 0;
 }
+
 
 /* ── Drawing ─────────────────────────────────────────────────────────────────────── */
 
@@ -392,12 +429,50 @@ static void test_stats(void)
     eqw("recorder refusals", st.unsplittable, 0u);
 }
 
+/* ── 6. the yield: begin() is where the previous frame's stream finishes ─────────────
+
+   LANE 10's whole trade, stated as one row.  The present commits a frame's transfers and returns
+   without waiting for any of them -- that is the non-blocking half, and with the channel held open
+   by `s_stall_per` it is visible as transfers on the bus that have not completed.  The next pass's
+   begin() then has to empty the ring before it may write the stage again, because the stage is the
+   buffer those transfers read.  A begin() that merely drained would return with a group still in
+   flight and the recorder would be overwriting bytes channel 2 is reading: the picture would be
+   correct on a fast consumer and corrupted exactly when the GIF fell behind, which is the class of
+   defect no word gate sees. */
+static void test_begin_reaps_the_last_frames_stream(void)
+{
+    dma_reset();
+    s_stall_per = 1u;
+
+    eegs_present_begin();
+    draw_two_groups();
+    eegs_present_end();
+    eegs_present_send(&k_client);
+
+    eqw("the frame put all three transfers on the bus", s_calls, 3u);
+    check("and none of them had finished when the present returned", ps2_gif_pending() > 0u);
+
+    /* The yield, and the buffer-lifetime law that makes it a wait rather than a poll. */
+    eegs_present_begin();
+    eqw("begin() left nothing outstanding", ps2_gif_pending(), 0u);
+    eqw("the held frame is the same three transfers, not six", s_calls, 3u);
+
+    /* The next frame starts clean, which is the part a ring that leaked a descriptor would fail:
+     * its groups would go out behind a previous window's primitives. */
+    draw_two_groups();
+    eegs_present_end();
+    eegs_present_send(&k_client);
+    eqw("the following frame is its own three transfers", s_calls, 6u);
+    check("and they are the only ones outstanding", ps2_gif_pending() <= 3u);
+}
+
 int main(void)
 {
     printf("==========================================================\n");
     printf(" PS2 EE/GS present: order, staging fidelity and capacity\n");
-    printf("   stage=%u qw  groups=%u  rec cap=%u qw  env=%u qw\n",
-           EEGS_STAGE_QW_CAP, EEGS_MAX_GROUPS, GS_REC_QW_CAP, gs_draw_env_qwc());
+    printf("   stage=%u qw  groups=%u  rec cap=%u qw  env=%u qw  ring=%u\n",
+           EEGS_STAGE_QW_CAP, EEGS_MAX_GROUPS, GS_REC_QW_CAP, gs_draw_env_qwc(),
+           PS2_GIF_RING_CAP);
     printf("==========================================================\n");
 
     test_env_then_primitives();
@@ -407,6 +482,7 @@ int main(void)
     test_stage_capacity();
     test_group_capacity();
     test_stats();
+    test_begin_reaps_the_last_frames_stream();
 
     printf("  checks=%d failures=%d\n", s_checks, s_failures);
     if (s_failures == 0) {

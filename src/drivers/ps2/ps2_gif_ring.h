@@ -31,11 +31,13 @@
  * until its transfer has been reaped.  That is true of the staged stream and of nothing else in
  * this driver: `setup_pkt` and `img_tag` in ps2_gs.c are statics reused by the very next chunk,
  * and the canvas is written by every console character.  So those producers stay synchronous --
- * `ps2_gs_gif_send()`, which now counts its own spin into `sync_us` instead of hiding it -- and
- * the only producer that posts is `src/gl/eegs_present.c`, whose staging buffer has exactly one
- * writer, is not touched between `send()` and the next `begin()`, and calls `reap()` at that
- * `begin()`.  A posted packet is therefore alive for one paint pass and no longer, which is the
- * whole reason this seam was cut where it was cut rather than at the register level.
+ * `ps2_gs_gif_send()`, which now counts its own spin into `sync_us` instead of hiding it.  Two
+ * producers post, and each is safe for its own reason: `src/gl/eegs_present.c`, whose staging
+ * buffer has exactly one writer, is not touched between `send()` and the next `begin()`, and
+ * calls `reap()` at that `begin()`; and `ps2_gs_draw_env_apply()`, whose `env_pkt` is overwritten
+ * only by the next apply, which cannot happen before that same reap.  A posted packet is
+ * therefore alive for one paint pass and no longer, which is the whole reason this seam was cut
+ * where it was cut rather than at the register level.
  *
  * Completion here is DMAC's STR bit: it says the quadwords left the EE and reached the GIF, not
  * that the GS has finished drawing them.  That is the same boundary the synchronous sender has
@@ -57,16 +59,19 @@
 
 #include <stdint.h>
 
-/* Descriptors the ring can hold: 512, which is "a frame's worth, the environment that has to
+/* Transfers the ring can own at once: 512, which is "a frame's worth, the environment that has to
  * precede it, and 255 to spare", rounded up to a power of two because the ring indexes its cursors
  * by mask and a `rem` on a R5900 is a subroutine call on the very path this lane exists to make
  * cheap.  Sized from the producer that posts: src/gl/eegs_present.c puts one transfer per recorded
  * group on the bus, its group table is EEGS_MAX_GROUPS = 256, and one more carries the drawing
  * environment -- so the capacity cannot be reached by a legal frame, which is what makes `refused=`
- * mean what it says: the consumer fell behind, not the producer asked for too much.  It is 6,144 B
- * of .bss against the 3,830,272 B this image has.  Overridden by the host gate, which needs to
- * reach capacity to prove the refusal path exists at all; eegs_present.c carries the
- * _Static_assert that ties this number to the group table it was derived from. */
+ * mean what it says: the consumer fell behind, not the producer asked for too much.  It bounds the
+ * *outstanding* transfers, queued plus the one on the bus, because the quantity the ring is
+ * accountable for is other people's buffers.  It is 6,144 B of .bss against the 3,830,272 B this
+ * image has.  Overridden by the host gate, which needs to reach capacity to prove the refusal path
+ * exists at all; eegs_present.c ties this number to the group table it was derived from, at compile
+ * time, through the repo's `typedef char name[(cond) ? 1 : -1]` idiom -- the image is -std=c99, so
+ * _Static_assert is not available to it. */
 #ifndef PS2_GIF_RING_CAP
 #define PS2_GIF_RING_CAP 512u
 #endif
@@ -103,7 +108,9 @@ uint32_t ps2_gif_drain(void);
  * an idle channel this costs one register read and returns 0. */
 uint32_t ps2_gif_reap(void);
 
-/* How many transfers the ring has accepted and not seen complete: queued plus the one in flight. */
+/* How many transfers the ring has accepted and not seen complete: queued plus the one in flight,
+ * which is the quantity PS2_GIF_RING_CAP bounds and therefore the number a producer that intends to
+ * rewrite a buffer waits on. */
 uint32_t ps2_gif_pending(void);
 
 void ps2_gif_stats(ps2_gif_stats_t *out);

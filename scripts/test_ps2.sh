@@ -189,39 +189,91 @@ fi
 # Read off the image, because "is the environment a packet" is a property of what executes
 # rather than of how the source is phrased.  What makes it readable is the translation-unit
 # split: gs_draw_env_packet lives in its own file and PS2_CFLAGS carries no -flto, so the
-# call into it is a real jal and its absence would mean the builder had been bypassed.  The
-# sender is the opposite case -- it is in ps2_gs.c and -O2 inlines it into the apply path --
-# so the DMA is asserted through the DMAC window it writes instead of through a symbol that
-# is not there.  Measured on the linked image: MADR (0xa010), QWC (0xa020) and D_STAT (0xe010)
-# together appear in exactly three function ranges -- ps2_gs_gif_send, ps2_gs_upload and
-# ps2_gs_draw_env_apply -- and in nothing else, so the triple is a precise fingerprint of a
-# channel-2 producer.
+# call into it is a real jal and its absence would mean the builder had been bypassed.
+#
+# LANE 10 moved the sender's half of this.  The row used to read the DMAC triple out of
+# ps2_gs_draw_env_apply itself, which was only ever true because -O2 inlined the whole sender
+# into it; now apply ends in `jal <ps2_gif_post>` and the words it built go out with the rest of
+# the frame's stream, which is the law this suite is *meant* to see.  So the triple is asserted
+# where it now lives -- ps2_gif_hw_start, the ring's seam -- and measured on the linked image the
+# conjunction MADR (0xa010) + QWC (0xa020) + D_STAT (0xe010) appears in exactly four function
+# ranges, all of them ps2_gs.c: that seam, ps2_gs_gif_send (which is where the compiler inlines
+# the seam), and the two statics send_trx_setup_at and send_image_stream (which inline the
+# synchronous sender into the upload path).  Nothing outside ps2_gs.c holds it, and neither
+# ps2_gs_upload nor ps2_gs_draw_env_apply does any more.
 if [ -n "$OBJDUMP64" ]; then
     # The awk stops printing at the blank line but keeps reading, rather than exiting there:
     # an early `exit` SIGPIPEs the disassembler, and under `set -o pipefail` the assignment
     # then fails with status 141 before a single row runs.
     ENV_APPLY_ASM="$($OBJDUMP64 -d --triple=mips64el-unknown-elf $ELF | awk '/<ps2_gs_draw_env_apply>:/{f=1;print;next} f&&/^[[:space:]]*$/{f=0;next} f')"
     ENV_BUILDER_ASM="$($OBJDUMP64 -d --triple=mips64el-unknown-elf $ELF | awk '/<gs_draw_env_packet>:/{f=1;print;next} f&&/^[[:space:]]*$/{f=0;next} f')"
+    HW_START_ASM="$($OBJDUMP64 -d --triple=mips64el-unknown-elf $ELF | awk '/<ps2_gif_hw_start>:/{f=1;print;next} f&&/^[[:space:]]*$/{f=0;next} f')"
+    GIF_SEND_ASM="$($OBJDUMP64 -d --triple=mips64el-unknown-elf $ELF | awk '/<ps2_gs_gif_send>:/{f=1;print;next} f&&/^[[:space:]]*$/{f=0;next} f')"
+    GIF_BEGIN_ASM="$($OBJDUMP64 -d --triple=mips64el-unknown-elf $ELF | awk '/<eegs_present_begin>:/{f=1;print;next} f&&/^[[:space:]]*$/{f=0;next} f')"
     # Integers rather than disassembly text inside the evaluated command, for the reason the
     # CP0 write test gives: a `$` pasted into an eval'd string is expanded by the shell.
     ENV_APPLY_BUILDER="$(printf '%s\n' "$ENV_APPLY_ASM" | grep -c 'jal.*<gs_draw_env_packet>' || true)"
     ENV_APPLY_POKES="$(printf '%s\n' "$ENV_APPLY_ASM" | grep -c 'ps2_gs_poke64' || true)"
-    ENV_APPLY_CHCR="$(printf '%s\n' "$ENV_APPLY_ASM" | grep -c '0xa000' || true)"
-    ENV_APPLY_MADR="$(printf '%s\n' "$ENV_APPLY_ASM" | grep -c '0xa010' || true)"
-    ENV_APPLY_QWC="$(printf '%s\n' "$ENV_APPLY_ASM" | grep -c '0xa020' || true)"
-    ENV_APPLY_STAT="$(printf '%s\n' "$ENV_APPLY_ASM" | grep -c '0xe010' || true)"
+    ENV_APPLY_POST="$(printf '%s\n' "$ENV_APPLY_ASM" | grep -c 'jal.*<ps2_gif_post>' || true)"
+    ENV_APPLY_MADR="$(printf '%s\n' "$ENV_APPLY_ASM" | grep -cE '0xa010|0xa020|0xe010|0xa000' || true)"
     # A missing function makes its own counter 0, so this fails loudly rather than vacuously:
     # no branch of the suite treats an absent ps2_gs_draw_env_apply as a pass.
     assert_check "The draw environment is a GIF packet: ps2_gs_draw_env_apply calls the builder once, pokes no GS register" \
         "[ $ENV_APPLY_BUILDER -eq 1 ] && [ $ENV_APPLY_POKES -eq 0 ]"
-    assert_check "...and it leaves through DMAC channel 2: CHCR, MADR, QWC and D_STAT all written in that path" \
-        "[ $ENV_APPLY_CHCR -ge 1 ] && [ $ENV_APPLY_MADR -ge 1 ] && [ $ENV_APPLY_QWC -ge 1 ] && [ $ENV_APPLY_STAT -ge 1 ]"
+    # The restated increment-3 row, in LANE 10's terms: the environment is *handed* to a writer
+    # rather than pushed at a register, which is what lets it be ordered ahead of the primitives
+    # without the EE waiting for either.  A refusal makes apply() return -1 and the frame is
+    # abandoned, so `ps2_gif_post` in this range is also the row that says the environment cannot
+    # be silently skipped.
+    assert_check "...and it leaves through the ring: ps2_gs_draw_env_apply calls ps2_gif_post and touches no DMAC register itself" \
+        "[ $ENV_APPLY_POST -ge 1 ] && [ $ENV_APPLY_MADR -eq 0 ]"
+    # Where the register writes actually are now.  This is the seam, and it is the only place in
+    # the image where a channel-2 start is issued by hand; ps2_gs_gif_send's own copy of the triple
+    # is the same four lines inlined by -O2, which is why both are named above rather than one.
+    HW_START_CHCR="$(printf '%s\n' "$HW_START_ASM" | grep -c '0xa000' || true)"
+    HW_START_MADR="$(printf '%s\n' "$HW_START_ASM" | grep -c '0xa010' || true)"
+    HW_START_QWC="$(printf '%s\n' "$HW_START_ASM" | grep -c '0xa020' || true)"
+    HW_START_STAT="$(printf '%s\n' "$HW_START_ASM" | grep -c '0xe010' || true)"
+    assert_check "DMAC channel 2 is written at the ring's seam: CHCR, MADR, QWC and D_STAT all in ps2_gif_hw_start" \
+        "[ $HW_START_CHCR -ge 1 ] && [ $HW_START_MADR -ge 1 ] && [ $HW_START_QWC -ge 1 ] && [ $HW_START_STAT -ge 1 ]"
+    # VIOLATION 2 is closed *at the post*, and the synchronous path is kept rather than converted --
+    # its buffer is one the next chunk rewrites.  Two things have to survive that trade in the
+    # image, and neither is visible in the source: a sync start must reap the queue first, or the
+    # canvas band would overtake the layer's primitives that are already waiting; and its spin must
+    # still be measured, or the lane's own cost claim has no denominator.
+    GIF_SEND_REAP="$(printf '%s\n' "$GIF_SEND_ASM" | grep -c 'jal.*<ps2_gif_reap>' || true)"
+    GIF_SEND_NOTE="$(printf '%s\n' "$GIF_SEND_ASM" | grep -c 'jal.*<ps2_gif_note_sync>' || true)"
+    GIF_SEND_CHCR="$(printf '%s\n' "$GIF_SEND_ASM" | grep -c '0xa000' || true)"
+    assert_check "The synchronous sender reaps before it starts, so a queued stream cannot be overtaken" \
+        "[ $GIF_SEND_REAP -ge 1 ] && [ $GIF_SEND_CHCR -ge 1 ]"
+    assert_check "...and it counts its own blocked time, which is the instrument LANE 10 was opened without" \
+        "[ $GIF_SEND_NOTE -ge 1 ]"
+    # The yield, read off the image for the same reason the sender is: `eegs_present_begin()` is the
+    # one moment the stage buffer is allowed to be rewritten, and if the reap were not there the
+    # recorder would be writing bytes channel 2 is still reading -- correct on a fast GIF, corrupted
+    # on a slow one, and invisible to every word gate in this suite.
+    GIF_BEGIN_REAP="$(printf '%s\n' "$GIF_BEGIN_ASM" | grep -c 'jal.*<ps2_gif_reap>' || true)"
+    assert_check "The paint pass's begin() is the yield: eegs_present_begin calls ps2_gif_reap" \
+        "[ $GIF_BEGIN_REAP -ge 1 ]"
     # The third increment-3 law is the one that makes the host suite possible: the builder
     # computes words and touches no memory-mapped register, so the identical packet the EE
     # sends can be checked word-for-word on a machine with no GS in it at all.
     ENV_BUILDER_REGS="$(printf '%s\n' "$ENV_BUILDER_ASM" | grep -cE 'ps2_gs_poke64|ps2_gs_gif_send|0xa0[0-9]0|0xe010' || true)"
     assert_check "The environment builder is pure computation: gs_draw_env_packet touches no GS or DMAC register" \
         "[ $ENV_BUILDER_REGS -eq 0 ]"
+    # The same law, one file later, and the reason the ring has three hooks instead of three
+    # register writes: ps2_gif_ring.c is #included by two host gates, and it can only be if its
+    # bookkeeping never reaches for a register.  The three hw_* functions are excluded by name
+    # because they are the seam -- holding the DMAC addresses is their whole job -- and the label
+    # count is asserted first, because an awk that matched no function would make the purity
+    # counter 0 and the row a pass about nothing.
+    GIF_RING_LABELS="$($OBJDUMP64 -d --triple=mips64el-unknown-elf $ELF | grep -cE '<ps2_gif_(post|drain|reap|pending|stats|stats_take|note_sync)>:' || true)"
+    GIF_RING_ASM="$($OBJDUMP64 -d --triple=mips64el-unknown-elf $ELF | awk '/<ps2_gif_(post|drain|reap|pending|stats|stats_take|note_sync)>:/{f=1;print;next} f&&/^[[:space:]]*$/{f=0;next} f')"
+    GIF_RING_REGS="$(printf '%s\n' "$GIF_RING_ASM" | grep -cE 'ps2_gs_poke64|0xa0[0-9]0|0xe010' || true)"
+    assert_check "The GIF ring's bookkeeping is linked as seven functions, not inlined away" \
+        "[ $GIF_RING_LABELS -eq 7 ]"
+    assert_check "...and it is pure computation: post/drain/reap touch no GS register and no DMAC register" \
+        "[ $GIF_RING_REGS -eq 0 ]"
 else
     echo "  [SKIP] 64-bit-GPR disassembler unavailable -- GIF-packet environment laws not run"
 fi

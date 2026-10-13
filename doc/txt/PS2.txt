@@ -217,18 +217,30 @@ A claim has four parts; the page has two measures.
   49,238 us of app paint, against the ASYNC_UI_BUDGET_US = 4000 the header
   declares (see 10 for the row and 16 for the lanes that close this).
 
-  VIOLATION 2 -- the sender blocks.  ps2_gs_gif_send() in
-  src/drivers/ps2/ps2_gs.c:112-113 is
+  VIOLATION 2 -- the sender blocked.  CLOSED 2026-10-14 by lane 10, and what
+  it was is worth keeping, because the spin did not leave the image; it left
+  the presentation path.  ps2_gs_gif_send() used to be
 
         D2_CHCR = STR;
         while (D2_CHCR & (1 << 8)) ;
 
-  a programmed-I/O start followed by a spin until the GIF has drained the
-  packet.  §3.2 exists precisely so that no producer can be stopped by its
-  consumer.  Two counters in this port already ARE §3.2 receipts -- drop=
-  (gs_rec_dropped) and coverdrop= -- so the bounded-refusal half of the law
-  has instruments; what has no instrument is the sender's own blocked time.
-  Lane 10 is that instrument.
+  a programmed-I/O start followed by a spin until the GIF had drained the
+  packet -- on every packet, a frame's 52 of them included.  §3.2 exists
+  precisely so that no producer can be stopped by its consumer.  Two
+  counters in this port already ARE §3.2 receipts -- drop= (gs_rec_dropped)
+  and coverdrop= -- so the bounded-refusal half of the law had instruments;
+  what had none was the sender's own blocked time, and lane 10 is that
+  instrument (11.6).  What shipped is src/drivers/ps2/ps2_gif_ring.{c,h}:
+  the presentation plane's producer POSTS to a bounded ring, the completion
+  check moved to the NEXT yield (eegs_present_begin() reaps its own stage),
+  and the blocked time is now two counted columns in [GSTS] gif:.  The spin
+  itself still exists and is still correct where it sits -- ps2_gs.c:126
+  waits on ps2_gif_hw_busy() (:147) after ps2_gif_hw_start() (:152) has
+  written channel 2 -- because the buffers that remaining path owns are the
+  canvas and a static reused by the very next chunk, which a queued
+  transfer must not be reading when their next writer lands on them.  So
+  the law closed as a SHAPE, not as a zero: the residue of it is the sync=
+  column, printed for every window in 11.6's three.
 
   VIOLATION 3 -- a period is not a deadline.  The µITRON shim is cooperative:
   sta_tsk() runs the task body on the caller's stack, stksz is ignored
@@ -551,37 +563,44 @@ PART TWO -- THE LINK: LAWS THAT MAKE THE IMAGE LEGAL
        pointer-path statics that section order happened to place low keep
        working -- so the report is a partial desktop, not a crash.
 
-  MEASURE  the image on disk, re-read 2026-10-13 under the dials its [CFG] row
-           names (PS2_GL=eegs PS2_FP=hw): ELF 5,967,796 bytes, _end =
-           0x01F06600, headroom 956,928 bytes (0.91 MiB) below the ceiling.
-           .data is 0x414c00 bytes and its last 1 MiB is the embedded /SYS
-           volume (20.1), so the volume's own size is what _end grew by.  And
-           since 2026-10-14 the volume's PS2 record IS this file, so editing
-           this prose rebuilds the volume and the image around it -- the book
-           is now inside the guest it describes.  Before that date /SYS
-           carried doc/md/PS2.md instead, which is why every reading below is
-           that handbook's growth rather than this text's.  A size therefore
-           belongs with its date, not with a configuration: 5,966,580 bytes at
-           _end = 0x01F06200 was an earlier reading on the 13th, and
-           5,967,604 bytes was 2026-10-12's.  The two readings on the 13th
-           differ in _end by EXACTLY 1,024 bytes -- one whole block of the
-           volume's block size -- which is this law demonstrating itself: a
-           record was edited, the volume gained a block, and the image grew
-           around it.  No reading could be taken on 2026-10-14, the day this
-           file became that payload: the link fails at HEAD for reasons no
-           pointer lane owns -- src/emulators/msx/slots.c brings 5,496,436
-           bytes of .bss, which breaches the ASSERT below, and the Geo3D unit
-           in the same directory asks for __divdi3, which a -msoft-float image
-           has no business containing (M17, and PS2-GS-LOG.md holds both `ld`
-           lines dated).  A failed link deletes the ELF it is writing, so
-           btron-ps2.elf is gone and the only image left is BTRON.ELF
-           (5,975,860 bytes, the 2026-10-13 12:42 build) inside
-           btron-ps2.iso -- and the volume inside that one still carries
-           the retired handbook, so the bytes quoted above and the bytes
-           the guest would read are no longer one text -- precisely the
-           drift chapter 20's dependency rule exists to forbid, caught
-           here because the payload moved and the image could not follow
-           it.
+  MEASURE  the image on disk, re-read 2026-10-14 after the park (21) and
+           lane 10 (11.6), under the dials its [CFG] row names: PS2_GL=eegs
+           PS2_FP=hw PS2_MSX=0.  ELF 5,919,324 bytes, _end = 0x01C4AD80,
+           headroom 3,822,208 bytes (3.64 MiB) below the ceiling the ASSERT
+           below sets -- and 6,144 B of what sits under that ceiling is the
+           new GIF ring's descriptor table, 512 records of 12 bytes, which
+           is lane 10's whole .bss bill and the reason this row was re-read
+           rather than left.  .data is 0x414c00 bytes, EXACTLY the
+           2026-10-13 figure, and its last 1 MiB is the embedded /SYS volume
+           (20.1): the volume is a fixed 1,024-block image, so a record's
+           prose can grow inside it without moving _end at all -- what moves
+           _end is a source list or a static.  Since 2026-10-14 the
+           volume's PS2 record IS this file, so editing this prose rebuilds
+           the volume and the image around it; the book is inside the guest
+           it describes.  Before that date /SYS carried doc/md/PS2.md
+           instead, which is why every older reading here is that
+           handbook's growth rather than this text's, and why a size
+           belongs with its date and its dial set and not with a
+           configuration alone: 5,966,580 bytes at _end = 0x01F06200 and
+           5,967,796 bytes at 0x01F06600 were two readings on the 13th
+           differing in _end by exactly one 1,024-byte block, and
+           5,967,604 bytes was 2026-10-12's.  Today's is 2,865,280 bytes
+           lower in _end than the 13th's last one and 48,472 lower in the
+           file, and those two deltas are NOT one quantity -- the file
+           counts sections laid out on disk, _end counts .bss -- so which
+           statics moved has not been measured here and R3 forbids
+           carrying a claim across the pair.  Why no reading at all could be
+           taken on 2026-10-14 until the park landed is M17: at HEAD the
+           link FAILED (slots.c's 5,496,436 bytes of .bss against the
+           ASSERT below, geo3d.c's 64-bit divides against -msoft-float with
+           no libgcc), a failed link deletes the ELF it is writing, and the
+           only image left was BTRON.ELF inside btron-ps2.iso, built
+           2026-10-13 12:42 -- so its volume still carried the retired
+           handbook while this file claimed to be the payload, which is
+           exactly the drift chapter 20's dependency rule exists to forbid.
+           The park is what closed it: with tronMSX behind PS2_MSX the link
+           is repeatable again, and the bytes quoted here and the bytes the
+           guest reads are one artifact again.
 
   GATE   src/drivers/ps2/ps2.ld enforces the budget with a link-time ASSERT,
          so a source list that grows the image past RAM fails at the link
@@ -1134,6 +1153,10 @@ PART THREE -- THE MEASURED MACHINE
     [GSTS]                        the GS recorder +      groups / quadwords / verts /
                           eegs present                   prims sent, drop counters,
                                                          texture switches, covers
+    [GSTS] gif:                   the GIF writer ring    transfers posted and refused,
+                                                         queue depth now, the wait at
+                                                         the next yield, and the
+                                                         sender's own blocked time
     [BENCH] compositor:           the bench's armed       one composite's stages with
                           profiler                        their pixel counts
     [BENCH] key / xmb by key /    ps2_bench_*()          can a human reach and open an
@@ -1169,6 +1192,20 @@ PART THREE -- THE MEASURED MACHINE
       [GSTS] groups=<n> qw=<n> verts=<n> prims=<n> gs=<us> | drop=<n> unsplit=<n>
                texsw=<n> texmiss=<n> | cover=<n> coverdrop=<n> | clip=<W>x<H>
                b0=<x0,y0,x1,y1> plate=covered|SHORT|none
+      [GSTS] gif: posted=<n> started=<n> queued=<n> inflight=<n> cap=<n> |
+               drop=<n> hold=<us> us | reap=<n> blocked=<us> us max=<us> us |
+               sync=<n> blocked=<us> us max=<us> us
+               -- lane 10's row (11.6), and the row the lane was opened for:
+               `what has no instrument is the sender's own blocked time`.
+               posted= is what the presentation plane committed without waiting,
+               queued=/inflight= describe THIS INSTANT and are neither
+               differenced nor cleared, cap= names the bound drop= was counted
+               against, and the two `blocked=` columns are the two halves of the
+               wait -- reap= the waits at the yield, sync= the waits the
+               producers that still block paid.  One profile since the last
+               print, so the FIRST gif row of a run is since BOOT: its sync=
+               holds the atlas, the font sheet and every console line, and it is
+               not a frame cost.
       [GSPLATE] the stream does not plate its rect: clip=<W>x<H> b0=<x0,y0,x1,y1>
                -- one-shot, armed when a layer's plate was refused over a
                rect the first vertex group does not span
@@ -1876,6 +1913,161 @@ PART THREE -- THE MEASURED MACHINE
   why the refusal stops at the client rect and no wider, and why the union of
   all groups was rejected as an instrument: a union can be covered by two
   groups that each cover half.
+
+11.6  A producer that posts is a producer that keeps painting
+
+  LAW 11d (a bound on the bus is a bound on buffers, never on slots).
+  PS2_GIF_RING_CAP says how many transfers the ring may OWN at once -- the
+  queued descriptors plus the one the channel is reading -- and not how many
+  entries s_gif_ring[] has room for behind the in-flight one.  The reason is
+  the buffer-lifetime law and not the array: a DMA reads its packet while the
+  EE is doing something else, so every outstanding descriptor is a producer's
+  memory this port has promised not to touch, and the one on the bus is
+  exactly as much a promise as the seven behind it.  A queue-only cap would
+  let the ring hold CAP+1 buffers while printing `cap=512` as though that
+  number were the promise.
+
+  LANE 10 LANDED 2026-10-14 as src/drivers/ps2/ps2_gif_ring.{c,h}, and its
+  shape is three calls, none of which waits at the wrong moment:
+
+    post()   append, and start if -- and only if -- channel 2 is free.
+             Never spins.  At capacity it refuses and counts the refusal.
+    drain()  hand the channel as many queued descriptors as it will take,
+             and return with one still in flight.  Never spins.
+    reap()   the completion check, at the NEXT yield: drain, and if a
+             transfer is still running wait for that one and count the wait.
+
+  The yield is eegs_present_begin() -- src/gl/eegs_present.c:88 -- once per
+  paint pass, and it is the only place the port asks "has the GIF finished
+  reading what I committed last pass".  That one row is the lane's whole
+  trade: the question moves from 52 moments a frame to one, and the answer it
+  waits for is still an empty ring, because the stage IS the buffer those
+  transfers read.  A begin() that merely drained would return with a group in
+  flight and the recorder would overwrite bytes channel 2 is reading --
+  correct on a fast consumer, corrupted at exactly the moment the GIF fell
+  behind, which is the class of defect no word gate can see.
+
+  Two producers post, and both are the paint pass's own memory: the staging
+  buffer, which has one writer and is untouched between send() and the next
+  begin(); and env_pkt (ps2_gs.c:738), a static that is rewritten only at the
+  next apply, which is after that begin().  Everything else stays
+  synchronous on purpose -- ps2_gs_gif_send() now reaps, starts, waits on
+  ps2_gif_hw_busy() and counts its own wait into the sync= column -- because
+  setup_pkt, img_tag and the canvas have a writer in every console character
+  and no reap scheduled between one and the next.  Order across the two kinds
+  survives because the ring is a FIFO and because the synchronous path reaps
+  before it starts, so it cannot overtake a group it never waited for.
+
+  The capacity is derived, not chosen: one transfer per recorded group,
+  EEGS_MAX_GROUPS = 256 of them, plus the environment packet, so a legal
+  frame cannot reach 512 and the gif row's `drop=` means the CONSUMER fell
+  behind rather than the producer asked for too much.  eegs_present.c ties
+  the two numbers at compile time through the repo's
+  `typedef char name[(cond) ? 1 : -1]` idiom -- the image is -std=c99, so
+  _Static_assert is not available to it.  LAW 16b's "capacity is a latency
+  knob, never a correctness limit" holds one layer ABOVE this one, and the
+  ring is deliberately not given the same licence: a refused descriptor drops
+  the tail of a frame, which is a picture with pieces missing, so the first
+  refusal ends the frame and the lost groups are counted into the same drop=
+  column the stage's own overflow uses.  An overflow is therefore visible in
+  both rows, and they answer different questions -- the recorder row's drop=
+  says words did not cross, the gif row's drop= says the ring is what
+  refused them.
+
+  MEASURE  the instrument is [GSTS] gif:, three windows read off one armed
+           bench run of 2026-10-14 (BENCH_APP=1, PS2_GL=eegs PS2_FP=hw,
+           un-counted).  Each row is a profile taken since the last print,
+           so the FIRST of the three is since BOOT: its sync= counts the
+           atlas, the font sheet and every console line that ever blocked,
+           and reading 39,214 us as a frame cost would be the first wrong
+           thing a reader could do with this row.
+
+    [GSTS] gif: posted=52 started=52 queued=0 inflight=0 cap=512 | drop=0
+      hold=190 us | reap=18182 blocked=18514 us max=190 us | sync=30241
+      blocked=39214 us max=55 us
+    [GSTS] gif: posted=52 started=52 queued=0 inflight=0 cap=512 | drop=0
+      hold=189 us | reap=627 blocked=815 us max=189 us | sync=1489
+      blocked=1697 us max=55 us
+    [GSTS] gif: posted=52 started=4 queued=48 inflight=1 cap=512 | drop=0
+      hold=28 us | reap=7 blocked=7 us max=1 us | sync=31 blocked=820 us
+      max=55 us
+
+  The third window is the ring doing the thing it was opened for: the pass
+  posted 52 transfers, the channel had taken 4, and 48 descriptors plus the
+  one in flight were still owned when the producer RETURNED.  `queued=48
+  inflight=1` is what a §3.2 producer that was not stopped by its consumer
+  looks like, and it is the only row in this port that can show it.  The
+  first two read `queued=0 inflight=0` because their begin() reaped the ring
+  empty -- the same fact one moment later, from the other side of the yield.
+  hold= is the longest a descriptor sat queued before its transfer started:
+  189-190 us in the two windows that were reaped, 28 in the one that was
+  still draining when the row printed, and equal to wait_max in the first
+  pair, which is what a FIFO whose head is the long wait looks like.  The
+  residue of VIOLATION 2 is the sync= column -- 31 sends costing 820 us in
+  the steady window, none over 55 -- and it is the number that will tell the
+  next reader whether the canvas band deserves a second, wider ring.  It does
+  not get one in this increment, and that is a lane boundary, not an
+  oversight.
+
+  What this run does NOT show, said so that it is not read as shown.  drop=
+  is 0 in every gif window and in every recorder row of the run, so the
+  REFUSAL path never executed on the guest: the bound was only ever measured
+  as being far above a frame's 52.  It is exercised on the host, where the
+  gate overrides PS2_GIF_RING_CAP to 8 and posts nine.  SKIP, not PASS.  And
+  STR says the quadwords left the EE, not that the GS drew them -- the ring
+  inherits the completion boundary the synchronous sender always had, and
+  nothing here measures GS pipeline time (M7).
+
+  The non-regression pair, one bench composition read either side of the
+  landing:
+
+    [BENCH] full      41,822 -> 41,887 us   (+0.16%), and the whole of the
+                      +65 is accounted: 54 us in upload= (821/822 ->
+                      875/875) and 10 in render=, i.e. the instrument's own
+                      bookkeeping on the synchronous path it now times
+    [PSTAT] budget ui passes=12 max=112,082 -> 111,810 us, misses=10 -> 10,
+                      late=9 -> 9
+
+  so the presentation plane was not made later by being made non-blocking,
+  and 1.4's VIOLATION 1 and the budget rows are untouched by this lane.  No
+  [XMBT] cycle-row pair exists for the pair -- the pre-ring full log was
+  overwritten -- so the cycle columns are SKIP on this lane too, and 11.5's
+  three cycles stay the reference for frame= and total=.
+
+  GATE   three suites, and each row names the edit that turns it red.
+    - Host, `make test-ps2-gif-ring`: 59 checks, 0 failures.  It drives a
+      simulated channel whose busy() answers a countdown and whose wait
+      costs clock, because the first cut of that sim freed the channel only
+      when the test said so and the gate sat in reap()'s wait loop until it
+      was killed.  A hanging gate is not a gate, so the sim now carries a
+      poll budget and the run ends on `no transfer needed the poll budget`:
+      a future wedge reads as a red row instead of a stuck terminal.
+    - Host, `make test-eegs-present`: 70 checks, 0 failures.  The rows that
+      matter here are `begin() left nothing outstanding`, `the held frame is
+      the same three transfers, not six` and `the following frame is its own
+      three transfers` -- a ring that leaked a descriptor fails those, and
+      the picture it would corrupt is a window drawing behind somebody
+      else's primitives.
+    - Image, `make test-ps2`: 92 / 92, 2026-10-14, PS2_GL=eegs PS2_FP=hw.
+      The ring's rows are seven, and they are structural rather than
+      numerical -- channel 2's four registers are written at the seam and
+      nowhere else; the draw environment leaves through ps2_gif_post() and
+      touches no DMAC register itself; the synchronous sender reaps before it
+      starts and counts its own blocked time; eegs_present_begin() calls
+      ps2_gif_reap(); and the ring's bookkeeping links as seven functions
+      that touch no GS and no DMAC register, which is the same purity that
+      lets the host gate run it on a machine with no PS2 in it.
+
+  The controls that made those rows mean something are reproducible:
+  `scripts/ps2_gif_ring_controls.sh` applies each of the seven defects in
+  turn, rebuilds the named gate from scratch, and restores the file, and it
+  ends by requiring both gates green again on the restored tree -- so a
+  GREEN from that script is a statement about the instrument, not about the
+  luck of the working copy.  Run 2026-10-14: six RED rows on the ring gate
+  with 18, 1, 10, 3, 3 and 6 failing checks, one RED on the present gate
+  with 1, then 59 and 70 green.  The failure counts, and the perl `d` trap
+  that made one control read green for no reason at all, are in the
+  quarantined record dated 2026-10-14.
 
 =====================================================================
 PART FOUR -- THE INTERCONNECT: INPUT AS A REAL PLANE
@@ -2722,10 +2914,10 @@ PART FIVE -- THE PRESENTATION PLANE: THE EE/GS BACKEND
   an instrument.  Every failure count in the record above is one edit, and the
   row it convicts is named beside it.
 
-  Lanes.  Five things remain structurally open, and each is one of LAW 1's
-  missing agents rather than a slow subroutine.  They are numbered the way
-  increments are, so a console line and a lane can be cited in the same
-  sentence.
+  Lanes.  Five agents are named here as structurally open, four of them still
+  are, and lane 10 closed on 2026-10-14.  Each is one of LAW 1's missing
+  agents rather than a slow subroutine.  They are numbered the way increments
+  are, so a console line and a lane can be cited in the same sentence.
 
   LANE 9  GS compositor token posting -- the presentation plane's producer.
     Close   VIOLATION 1's biggest single share: the 613,440 px blit and the
@@ -2804,14 +2996,29 @@ PART FIVE -- THE PRESENTATION PLANE: THE EE/GS BACKEND
             and not in ms, so a poster that wins on a large rect cannot hide a
             loss on the rate.
 
-  LANE 10  a GIF writer ring -- the sender stops blocking.
+  LANE 10  a GIF writer ring -- the sender stops blocking.  LANDED 2026-10-14
+           as 11.6, in src/drivers/ps2/ps2_gif_ring.{c,h}.
     Close   VIOLATION 2, ps2_gs_gif_send()'s `while (D2_CHCR & (1 << 8)) ;`.
             The law is not "be faster", it is S_FULL: a producer must not be
             stopped by its consumer, so the ring needs a bounded capacity, a
             drop count, and a completion check at the NEXT yield rather than
-            a spin at this one.  drop= and coverdrop= already prove this
-            port knows the shape of a §3.2 receipt; what has no instrument
-            is the sender's own blocked time.
+            a spin at this one.  drop= and coverdrop= already proved this
+            port knew the shape of a §3.2 receipt; what had no instrument was
+            the sender's own blocked time, and 11.6 is that instrument.  The
+            lane closed as a SHAPE and not as a zero -- post/drain/reap with
+            the reap at eegs_present_begin(), a capacity derived from the
+            group table so no legal frame can reach it, a refusal counted
+            twice (the ring's own drop=, and the stage's column that says
+            words did not cross), and a [GSTS] row for the waiting.  The
+            canvas upload still blocks, because its buffer is the canvas and
+            every console character writes it, and the row now prints what
+            that residue costs instead of hiding it in a spin.
+    Gate    Host: 59 checks on the ring, 70 on the present.  Image: 92 / 92,
+            seven of them structural rows over the seam.  On target: three
+            [GSTS] gif: windows, drop=0 in all of them and one reading
+            `queued=48 inflight=1` at the end of a pass.  The refusal path
+            is a HOST claim -- SKIP on the guest, where nothing has yet been
+            slow enough to reach a capacity 10x a frame.
 
   LANE 11  a real Tier-1 tick -- a period that is also a deadline.
     Close   VIOLATION 3.  Per-task stacks and preemption at the boundary,
@@ -2885,7 +3092,19 @@ PART SIX -- THE PORT: DRIVERS, DESKTOP, STORAGE
                    reached only through GS_REG_POKE / GS_REG_PEEK.
     ps2_gs.c       display initialization, vsync, the Host-to-Local GIF DMA
                    blitter over the desktop's own canvas, the texture-plane
-                   upload, and the GIF sender whose spin is VIOLATION 2.
+                   upload, and the GIF sender that still blocks -- by the
+                   buffer-lifetime law, and now with its wait counted (11.6).
+                   Also the only place the image answers the ring's three
+                   hardware questions.
+    ps2_gif_ring.{c,h}
+                   the bounded, non-blocking writer in front of DMAC channel
+                   2: post / drain / reap, the S_FULL refusal count, and the
+                   sender's own blocked time as two columns.  Pure
+                   bookkeeping -- it names no memory-mapped register, which
+                   is what lets the host gate drive a full channel, an empty
+                   one and an over-capacity producer on a machine with no
+                   PS2 in it (11.6, and the seven image rows that keep it
+                   that way).
     ps2_fp.h       the COP1 wrappers and TGL_TRUNC -- the file where an
                    illegal encoding family is named once instead of per call
                    site (6d).
@@ -3485,7 +3704,16 @@ PART SIX -- THE PORT: DRIVERS, DESKTOP, STORAGE
   reading: rebuilding the volume on 2026-10-14, the day this file became the
   payload, reports 737 used and 287 free -- five blocks more, and those five
   blocks are this book's own prose, because a size belongs with its date and
-  this book now sits inside the number it quotes.
+  this book now sits inside the number it quotes.  The later rebuilds of the
+  same day, after 11.6 and the parked dial were written in, read 756 used and
+  268 free -- nineteen blocks, and this book is the only payload file any of
+  those rebuilds changed, so the whole rise is prose about the port rather
+  than anything the port ships.  The paragraph recording that reading moved it
+  a block again, and the one you are reading will move it once more, so do not
+  quote this sentence for the current figure: re-run `make btron_sys.vol` and
+  read mkbtronfs's own line.  THAT is the finding, not any one number -- the
+  volume's smaller budget is spent by WRITING, which is exactly what a future
+  cartridge will have to fit under.
 
   GATE  nine rows of scripts/test_ps2.sh read this section off the ELF, and
         each was shown to be able to go red:
@@ -3563,7 +3791,10 @@ PART SEVEN -- BUILDING, VERIFYING, RUNNING
   timestamps, not variable values, so a source that has not been edited stays
   older than its object and the object of the PREVIOUS dial value is linked
   into the next image.  Three symptoms of that disease are documented in this
-  port, one per dial, and the fix is the same shape every time:
+  port, one per dial, and the fix is the same shape every time.  The PS2_MSX
+  row below carries that shape PREVENTIVELY -- a dial that moves a source list
+  rather than a recompile, so no incident was needed to want it -- and is the
+  fourth stamped dial:
 
     PS2_GL      .build/ps2-gl.stamp, compared by content; the three objects
                 that read the backend are deleted when it disagrees (chapter
@@ -3591,6 +3822,27 @@ PART SEVEN -- BUILDING, VERIFYING, RUNNING
                 `make -n PS2_FP=hw` deletes those three objects.  A dry run of
                 this target is not free, and this is the second time in this
                 port a stamp has had to explain itself.
+    PS2_MSX     .build/ps2-msx.stamp, and a SOURCE LIST as well as a flag:
+                PS2_MSX_SRCS is empty at 0 and holds MSX_SRCS plus
+                src/apps/msx_app.c at 1, while core_ps2.c compiles its [MSX]
+                bench rows under -DBTRON_PS2_MSX=1.  PARKED at 0 since
+                2026-10-14, because the two images cannot share one ceiling:
+                read off this tree's own objects, every *.ps2.o sums to
+                35,809,162 B of .bss against ps2.ld's ASSERT at 0x01FF0000 =
+                33,488,896 B, and the MSX units are 10,656,894 B of that --
+                slots.c's cartridge buffer and mapper RAM (5,496,436) plus
+                msx_app.c's 4,323,888 -- while the PS2 heap pool is itself
+                12 MiB of the total.  No pool trimming closes a 2.3 MB gap on
+                top of 10.6 MB of emulator statics, so the decision the port
+                is allowed to make -- stop shipping an image that does not
+                link -- is the one this dial records (M17, and the B-MSX
+                lane's real question, where an MSX ROM buffer lives on a 32
+                MB machine, is untouched by it).  The stamp exists because a
+                source-list change is not a recompile: without it make would
+                link yesterday's [MSX] rows into today's parked image.  At 0
+                the five B-MSX image rows print [SKIP] by name, and
+                src/apps/xmb.c's weak open_msx_window*() stubs make the Games
+                band a menu row that does nothing rather than a link error.
     BENCH_APP   a target-specific flag on src/cores/core_ps2.pbench.o alone.
                 It does not reach the ELF unless the object is rebuilt: the
                 bench phase list lives in core_ps2.c, so `touch
@@ -3645,26 +3897,28 @@ PART SEVEN -- BUILDING, VERIFYING, RUNNING
   count is the only evidence that a green suite is an instrument and not a
   decoration.
 
-  The current state of the suites that guard this port.  The image gate's
-  91 / 91 was read on 2026-10-13 against the ELF on disk (btron-ps2.elf,
-  5,967,796 bytes, PS2_GL=eegs PS2_FP=hw), and it is the one row here
-  that could NOT be re-read on 2026-10-14: the image does not link at
-  HEAD at all (M17), so its number is dated rather than current.  A
-  failed link deletes the ELF it was writing, so btron-ps2.elf is gone;
-  the only image left is BTRON.ELF (5,975,860 bytes, the 2026-10-13
-  12:42 build) inside btron-ps2.iso, and the volume inside that one
-  still carries the retired handbook, because the /SYS swap post-dates
-  it.  The host suites were re-run on 2026-10-14 in one `make -k test`,
-  which exits 0, and the two xmb-render arms by hand because the
-  aggregate does not run them (fact 1 below):
+  The current state of the suites that guard this port, read 2026-10-14 after
+  the park (21) and lane 10 (11.6).  The image gate is CURRENT again:
+  92 / 92 against the ELF on disk (btron-ps2.elf, 5,919,324 bytes,
+  PS2_GL=eegs PS2_FP=hw PS2_MSX=0), and that is the row this table could not
+  be re-read with yesterday's date on it -- the image did not link at HEAD
+  (M17), and chapter 4's MEASURE tells the same day from the ELF's side.  The
+  park did not delete a gate: the five B-MSX rows are still in
+  scripts/test_ps2.sh and still assert, and with PS2_MSX=0 the suite prints
+  one `[SKIP] PS2_MSX=0 ...` line naming them, so the total counts the rows
+  that ran and the SKIP says which did not.  The host suites were re-run the
+  same day, in one `make -k test` which exits 0, plus the two xmb-render arms
+  by hand because the aggregate does not run them (fact 1 below):
 
-    make test-ps2                91 / 91   the image gate: ABI, FPU law by
+    make test-ps2                92 / 92   the image gate: ABI, FPU law by
                                             mnemonic AND byte scan, COP1
                                             ownership, the clock, the single
-                                            canvas, the volume, the ISO --
-                                            the one SKIP of this table today
-                                            (M17); every row under it was read
-                                            again on 2026-10-14
+                                            canvas, the GIF ring's seam, the
+                                            volume, the ISO -- CURRENT, read
+                                            2026-10-14, its five B-MSX rows
+                                            printed as one [SKIP] because
+                                            PS2_MSX=0 parks the emulator out
+                                            of this image
     make test-ps2-softfloat      checks=18384493  failures=0
                                             bit-exact against the host FPU, all
                                             32 libcalls (the count moves with the
@@ -3678,7 +3932,16 @@ PART SEVEN -- BUILDING, VERIFYING, RUNNING
     make test-ps2-gs-rec         checks=139   failures=0
     make test-ps2-gs-tex         checks=103   failures=0
     make test-eegs-raster        checks=78    failures=0
-    make test-eegs-present       checks=64    failures=0
+    make test-eegs-present       checks=70    failures=0  64 are increment 5's,
+                                            six are lane 10's yield: a present
+                                            that returns with transfers
+                                            outstanding, a begin() that leaves
+                                            none, and the next frame its own
+    make test-ps2-gif-ring       checks=59    failures=0  the ring against a
+                                            simulated channel whose wait costs
+                                            clock: accepted or refused at the
+                                            post, never blocked; counted at
+                                            capacity; reaped at the next yield
     make test-gl-backend-choice  checks=13    failures=0  one compile per dial
                                             value
     make test-ps2-fb-order       both domains normalise to the same 31,488 words;
@@ -3913,13 +4176,14 @@ PART SEVEN -- BUILDING, VERIFYING, RUNNING
   An honest spec ends with its own limits.  Four kinds of open, kept separate
   because they need different instruments.
 
-  A. STRUCTURAL -- the missing agents of LAW 1, i.e. lanes 9-13 (chapter 16).
-     Every budget in this book is now a number a body can be SEEN exceeding --
-     ps2_plane_charge() counts the misses on both worker planes (2.1, 2.2) --
-     but not a number the kernel can act on: until lane 11 lands the correct
-     description of the design remains ONE PREEMPTION POINT PER FRAME, CHOSEN
-     BY THE BODY.  Until lane 10 lands, VIOLATION 2 stands and `snd` on the
-     presentation path is a spin.
+  A. STRUCTURAL -- the missing agents of LAW 1, i.e. lanes 9 and 11-13
+     (chapter 16).  Every budget in this book is now a number a body can be
+     SEEN exceeding -- ps2_plane_charge() counts the misses on both worker
+     planes (2.1, 2.2) -- but not a number the kernel can act on: until lane
+     11 lands the correct description of the design remains ONE PREEMPTION
+     POINT PER FRAME, CHOSEN BY THE BODY.  Lane 10's half of this list closed
+     on 2026-10-14 (11.6): VIOLATION 2 is a counted wait rather than an
+     uninstrumented spin, and the presentation path's producer posts.
 
   B. IMPLEMENTED, NOT YET CLOSED on screen:
      - increment 6, the pointer and the window decorations as GS sprites.
@@ -4010,9 +4274,10 @@ APPENDIX A -- LABEL SCHEME, DECODED
                         beat is 10.1's floors -- 15.7 ns/px for a copy, 8.8
                         for a fill -- and not the 50.2 this book quoted before
                         those rows existed
-    lanes 9-13          the five open agents: GS compositor, GIF writer ring,
-                        real Tier-1 tick, VU1 geometry actor, IOP/SIF I/O
-                        actor
+    lanes 9, 11-13      the four open agents: GS compositor, real Tier-1
+                        tick, VU1 geometry actor, IOP/SIF I/O actor.  Lane 10,
+                        the GIF writer ring, LANDED 2026-10-14 (11.6), so LAW
+                        1's missing-agent count is four and not five
     S= / D=             the float census's single- and double-precision call
                         counts per draw function, for one frame
     why=<hex>           which rule made a present the whole canvas: 1 non-move
@@ -4021,7 +4286,18 @@ APPENDIX A -- LABEL SCHEME, DECODED
                         128 damage already spanned it
     [GSTS] columns      groups / qw / verts / prims / gs | drop unsplit texsw
                         texmiss | cover coverdrop | clip b0 plate -- gs= is
-                        the EE's SEND-AND-WAIT bracket, never GS pipeline time
+                        the EE's SEND-AND-WAIT bracket, never GS pipeline
+                        time, and its drop= counts EVERY piece of a frame that
+                        did not cross: the staging buffer's own overflow and a
+                        ring refusal arrive in the same column, because both
+                        mean a screen is missing something
+    [GSTS] gif: columns posted started queued inflight cap | drop hold |
+                        reap blocked max | sync blocked max -- the TWO drop=
+                        columns are different numbers about different buffers:
+                        the recorder row's says words did not cross, this one
+                        says the ring was full when the producer came.  cap=
+                        bounds the transfers OWNED -- queued plus the one on
+                        the bus -- not the descriptor array (11.6, LAW 11d)
     bfn=                window paint callbacks that used to run and now do not
     wins=<drawn/walked> how many windows the composite painted, of how many it
                         visited
@@ -4137,16 +4413,24 @@ APPENDIX B -- MISALIGNMENTS WITH THE GOVERNING STANDARD
                                             budget overrun is MISSED LOUDLY: both worker
                                             planes are charged and their misses counted
                                             (2.1, 2.2, 3).  §1.4, lane 11.
-  M4   the presentation path uses a         ps2_gs_gif_send() SPINS on D2_CHCR.  The ring
-       bounded ring with S_FULL (§3.2,      is a `should` this book has treated as a law
-       INTERPRETER.txt)                     in one place -- lane 10 is its implementation.
+  M4   the presentation path uses a         CLOSED 2026-10-14, as lane 10 and
+       bounded ring with S_FULL (§3.2,      section 11.6.  What this row said was true:
+       INTERPRETER.txt)                     ps2_gs_gif_send() SPINS on D2_CHCR, and the
+                                            ring was a `should` this book treated as a
+                                            law in one place.  post/drain/reap replaced
+                                            it on the presentation path, a refusal is
+                                            counted, and the sender's own blocked time
+                                            is two [GSTS] gif: columns.  The transfers
+                                            that still block are the ones the
+                                            buffer-lifetime law names, and they are
+                                            timed instead of assumed.
   M5   "tests 35-38", "39-44", "50-52",     scripts/test_ps2.sh AUTO-NUMBERS its rows
        "57-63", "80/80", "85/85" in the     (`[TEST $TOTAL]`), so every numeric citation
        handbook -- RESOLVED 2026-10-13      in any book drifts as rows are inserted.
                                             The handbook is now retired into this
                                             text, which cites rows by ASSERTION NAME
                                             and prints one dated total per gate row
-                                            (91/91 read 2026-10-13).  Renumber or
+                                            (92/92 read 2026-10-14).  Renumber or
                                             name: not both.
   M6   the census printed f_surface         those belong to a different build: the
        160,893 / f_ribbon 185,204 / f_menu  handbook's figures predate rows 7 and 8
@@ -4216,25 +4500,34 @@ APPENDIX B -- MISALIGNMENTS WITH THE GOVERNING STANDARD
                                             whole point.  The code is right, the
                                             comment predates it; a comment-only edit,
                                             so it waits for a Makefile round.
-  M17  the PS2 image does not link at HEAD  src/emulators/msx/slots.c puts 5,496,436 B in
-       -- three causes, two of them are     .bss, so ps2.ld's ASSERT(_end <= 0x01FF0000)
-       laws this book already states        fires -- chapter 4's own symptom, statics
-                                            above the ceiling silently lost.  The same
+  M17  the PS2 image does not link at HEAD  PARKED 2026-10-14, and the image links
+       -- three causes, two of them are     again: tronMSX is behind PS2_MSX (21),
+       laws this book already states        default 0.  The causes stand as they were
+                                            read.  src/emulators/msx/slots.c puts
+                                            5,496,436 B in .bss, so ps2.ld's
+                                            ASSERT(_end <= 0x01FF0000) fires --
+                                            chapter 4's own symptom, statics above the
+                                            ceiling silently lost -- and the same
                                             directory's geo3d.c emits 64-bit divides, so
-                                            the link asks for __divdi3, which -msoft-float
-                                            with no libgcc does not have (chapter 5). A
-                                            third was found on the way and IS fixed here:
-                                            slots.c prints its 0x2E/0x2F debug port with
-                                            fputc(), which include/gl/stdio.h stubbed for
-                                            every other stdio call but that one.  The
-                                            first two are NOT fixed, because where an
-                                            emulator's ROM buffers live on a 32 MiB bare-
-                                            metal machine is the B-MSX lane's decision,
-                                            not this port's.  Until they are, the only
-                                            image left is BTRON.ELF inside btron-ps2.iso
-                                            (2026-10-13 12:42), and it predates the
-                                            volume swap, so `make test-ps2` and the
-                                            bench are SKIP.
+                                            the link asks for __divdi3, which
+                                            -msoft-float with no libgcc does not have
+                                            (chapter 5).  A third was found on the way
+                                            and IS fixed here: slots.c prints its
+                                            0x2E/0x2F debug port with fputc(), which
+                                            include/gl/stdio.h stubbed for every other
+                                            stdio call but that one.  Neither of the
+                                            first two is SOLVED, because where an
+                                            emulator's ROM buffers live on a 32 MiB
+                                            bare-metal machine is the B-MSX lane's
+                                            decision, not this port's; what this port
+                                            decided is to stop shipping an image that
+                                            does not link at all.  `make ps2 PS2_MSX=1`
+                                            puts the emulator back exactly as it was and
+                                            the five gate rows that name it run again;
+                                            at 0 they print [SKIP] by name, so
+                                            `make test-ps2` and the bench are live rows
+                                            on the image this book is inside, instead of
+                                            a dated quotation from one that is gone.
 
 =====================================================================
 APPENDIX C -- THE QUARANTINED DEVELOPMENT RECORD

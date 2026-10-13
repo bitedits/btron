@@ -20,25 +20,33 @@ typedef struct {
     uint32_t    posted_us;
 } gif_desc_t;
 
-/* The ring itself, and the three cursors that make it one: `s_head` is the descriptor channel 2
- * will take next, `s_tail` is where the next post lands, and `s_n` says how many are between them.
- * `s_n` is kept separate from (tail - head) so an empty ring and a full one are different states
- * rather than the same index twice -- which is the only reason a capacity of 512 really holds 512
- * descriptors and the refusal path is reachable at all. */
-static gif_desc_t s_ring[PS2_GIF_RING_CAP];
-static uint32_t s_head, s_tail, s_n;
+/* The ring is a singleton, so a suite run needs it put back the way the image would find it at
+ * boot: no descriptors, nothing in flight, every counter zero.  Reaching the statics directly is
+ * the point of compiling the unit in rather than linking it -- and it is why every name in this
+ * file carries the `gif_` infix.  verify/tests/test_eegs_present.c #includes this unit alongside
+ * ps2_gs_rec.c in one translation unit, and the recorder already owns file statics called `s_st`,
+ * `s_n` and `s_tail`; two units of bookkeeping in one TU have to be told apart by their names,
+ * because the compiler will not do it. */
+static gif_desc_t s_gif_ring[PS2_GIF_RING_CAP];
+
+/* The three cursors that make it one ring: `s_gif_head` is the descriptor channel 2 will take next,
+ * `s_gif_tail` is where the next post lands, and `s_gif_n` says how many are between them.  `s_gif_n`
+ * is kept separate from (tail - head) so an empty ring and a full one are different states rather
+ * than the same index twice -- which is the only reason a capacity of 512 really holds 512 transfers
+ * and the refusal path is reachable at all. */
+static uint32_t s_gif_head, s_gif_tail, s_gif_n;
 
 /* 1 from the moment a transfer is started until something has read channel 2's STR and found it
  * clear.  Only ever one, because the hardware takes one transfer at a time. */
-static uint32_t s_in_flight;
+static uint32_t s_gif_in_flight;
 
-static ps2_gif_stats_t s_st;
+static ps2_gif_stats_t s_gif_st;
 
 /* The ring indexes by mask, not by modulo: PS2_GIF_RING_CAP is a power of two precisely so that
  * the post path costs one AND, because `rem` on a R5900 is a subroutine call and this is the path
  * the lane exists to make cheap. */
 #if (PS2_GIF_RING_CAP & (PS2_GIF_RING_CAP - 1u)) != 0u
-#error "PS2_GIF_RING_CAP must be a power of two -- the ring indexes s_head/s_tail by mask"
+#error "PS2_GIF_RING_CAP must be a power of two -- the ring indexes its cursors by mask"
 #endif
 #define PS2_GIF_RING_MASK (PS2_GIF_RING_CAP - 1u)
 
@@ -50,22 +58,22 @@ uint32_t ps2_gif_drain(void)
         /* Something is on the bus.  It stays "in flight" until a busy() read says otherwise, and
          * only this function may start a second transfer -- so the order the EE chose is the
          * order the GIF sees, which is what lets a layer's environment precede its primitives. */
-        if (s_in_flight) {
+        if (s_gif_in_flight) {
             if (ps2_gif_hw_busy()) break;
-            s_in_flight = 0u;
+            s_gif_in_flight = 0u;
         }
-        if (s_n == 0u) break;
+        if (s_gif_n == 0u) break;
 
         {
-            gif_desc_t *d = &s_ring[s_head];
+            gif_desc_t *d = &s_gif_ring[s_gif_head];
             const uint32_t hold = ps2_gif_hw_us() - d->posted_us;
 
-            if (hold > s_st.hold_max_us) s_st.hold_max_us = hold;
+            if (hold > s_gif_st.hold_max_us) s_gif_st.hold_max_us = hold;
             ps2_gif_hw_start(d->packet, d->qwc);
-            s_in_flight = 1u;
-            s_head = (s_head + 1u) & PS2_GIF_RING_MASK;
-            s_n--;
-            s_st.started++;
+            s_gif_in_flight = 1u;
+            s_gif_head = (s_gif_head + 1u) & PS2_GIF_RING_MASK;
+            s_gif_n--;
+            s_gif_st.started++;
             started++;
         }
     }
@@ -81,20 +89,26 @@ int ps2_gif_post(const void *packet, uint32_t qwc)
      * that got dropped either: accepted, and the channel is not asked to do nothing. */
     if (qwc == 0u) return 0;
 
-    if (s_n >= PS2_GIF_RING_CAP) {
+    if (s_gif_n + s_gif_in_flight >= PS2_GIF_RING_CAP) {
         /* S_FULL, the §3.2 answer: refuse, count it, and let the producer go on.  The words this
          * descriptor would have carried are lost from this pass and reappear at the next one,
-         * which is what a drop count is for -- it is a receipt, not an error handler. */
-        s_st.refused++;
+         * which is what a drop count is for -- it is a receipt, not an error handler.
+         *
+         * The bound is on `s_gif_n + s_gif_in_flight` and not on `s_gif_n` alone, because what is being bounded
+         * is the buffer-lifetime law rather than an array index: the transfer already on the bus is
+         * reading one producer's buffer just as much as the seven behind it are reading theirs.  A
+         * queue-only cap would let the ring own CAP+1 buffers at once and would make the `cap=`
+         * column a statement about s_gif_ring[] instead of about how many packets are outstanding. */
+        s_gif_st.refused++;
         return 1;
     }
 
-    s_ring[s_tail].packet = packet;
-    s_ring[s_tail].qwc = qwc;
-    s_ring[s_tail].posted_us = ps2_gif_hw_us();
-    s_tail = (s_tail + 1u) & PS2_GIF_RING_MASK;
-    s_n++;
-    s_st.posted++;
+    s_gif_ring[s_gif_tail].packet = packet;
+    s_gif_ring[s_gif_tail].qwc = qwc;
+    s_gif_ring[s_gif_tail].posted_us = ps2_gif_hw_us();
+    s_gif_tail = (s_gif_tail + 1u) & PS2_GIF_RING_MASK;
+    s_gif_n++;
+    s_gif_st.posted++;
 
     /* Not a spin: start it now if the channel happens to be free, and return either way.  This is
      * the difference between this line and the old sender -- the EE asks, and if the answer is "the
@@ -113,33 +127,33 @@ uint32_t ps2_gif_reap(void)
      * points into, so "left one queued" would be the corruption this whole design is avoiding. */
     for (;;) {
         (void)ps2_gif_drain();
-        if (s_n == 0u && !s_in_flight) break;
+        if (s_gif_n == 0u && !s_gif_in_flight) break;
         while (ps2_gif_hw_busy())
             ;
-        s_in_flight = 0u;
+        s_gif_in_flight = 0u;
     }
 
     waited = ps2_gif_hw_us() - t0;
     if (waited != 0u) {
-        s_st.waits++;
-        s_st.wait_us += waited;
-        if (waited > s_st.wait_max_us) s_st.wait_max_us = waited;
+        s_gif_st.waits++;
+        s_gif_st.wait_us += waited;
+        if (waited > s_gif_st.wait_max_us) s_gif_st.wait_max_us = waited;
     }
     return waited;
 }
 
 uint32_t ps2_gif_pending(void)
 {
-    return s_n + s_in_flight;
+    return s_gif_n + s_gif_in_flight;
 }
 
 void ps2_gif_stats(ps2_gif_stats_t *out)
 {
     if (out == 0) return;
-    s_st.queued = s_n;
-    s_st.in_flight = s_in_flight;
-    s_st.cap = PS2_GIF_RING_CAP;
-    *out = s_st;
+    s_gif_st.queued = s_gif_n;
+    s_gif_st.in_flight = s_gif_in_flight;
+    s_gif_st.cap = PS2_GIF_RING_CAP;
+    *out = s_gif_st;
 }
 
 void ps2_gif_stats_take(ps2_gif_stats_t *out)
@@ -151,15 +165,15 @@ void ps2_gif_stats_take(ps2_gif_stats_t *out)
      * columns: the counts become "this pass" and the maxima become "this pass's worst", which is
      * the only form in which a budget can be read against them.  `queued`, `in_flight` and `cap`
      * are live state rather than a window's, so they are reported and left alone. */
-    s_st.posted = s_st.started = s_st.refused = 0u;
-    s_st.waits = s_st.wait_us = s_st.wait_max_us = 0u;
-    s_st.hold_max_us = 0u;
-    s_st.sync_sends = s_st.sync_us = s_st.sync_max_us = 0u;
+    s_gif_st.posted = s_gif_st.started = s_gif_st.refused = 0u;
+    s_gif_st.waits = s_gif_st.wait_us = s_gif_st.wait_max_us = 0u;
+    s_gif_st.hold_max_us = 0u;
+    s_gif_st.sync_sends = s_gif_st.sync_us = s_gif_st.sync_max_us = 0u;
 }
 
 void ps2_gif_note_sync(uint32_t waited_us)
 {
-    s_st.sync_sends++;
-    s_st.sync_us += waited_us;
-    if (waited_us > s_st.sync_max_us) s_st.sync_max_us = waited_us;
+    s_gif_st.sync_sends++;
+    s_gif_st.sync_us += waited_us;
+    if (waited_us > s_gif_st.sync_max_us) s_gif_st.sync_max_us = waited_us;
 }

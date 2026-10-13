@@ -34,7 +34,7 @@ CC ?= gcc
 CFLAGS ?= -O2 -Wall -Wextra -std=c99 -Iinclude -Iinclude/gl -Isrc/gl -Iinclude/drivers -Isrc/kernel -Isrc/cores -Isrc/quake/include
 
 .PHONY: all posix qemu kernel tkernel sakamura foma uefi pc98 arm-elf arm64-elf m68k ps2 mips \
-        check-structure test-ps2-softfloat test-ps2-gs-pack test-ps2-gs-env test-ps2-gs-rec test-ps2-gs-tex test-ps2-pointer test-eegs-raster test-eegs-present test-gl-math test-gl-backend-choice test-ps2-fb-order xmb-atlas test-xmb-atlas \
+        check-structure test-ps2-softfloat test-ps2-gs-pack test-ps2-gs-env test-ps2-gs-rec test-ps2-gs-tex test-ps2-pointer test-ps2-gif-ring test-eegs-raster test-eegs-present test-gl-math test-gl-backend-choice test-ps2-fb-order xmb-atlas test-xmb-atlas \
         test-xmb-render test-xmb-render-tgl \
         html2tad book2tad tad_bin test test-kernel test-yoko test-yoko4 test-m68k test-mips test-ps2 test-foma test-foma-ui foma-screens \
         segui-screens \
@@ -1111,6 +1111,7 @@ PS2_MSX_SRCS    = $(if $(filter 1,$(PS2_MSX)),$(MSX_SRCS) src/apps/msx_app.c,)
 PS2_SRCS       = $(PS2_STARTUP)           \
                  src/cores/core_init.c    \
                  src/drivers/ps2/ps2_gs.c \
+                 src/drivers/ps2/ps2_gif_ring.c \
                  src/drivers/ps2/ps2_gs_pack.c \
                  src/drivers/ps2/ps2_gs_vram.c \
                  src/drivers/ps2/ps2_gs_env.c \
@@ -1565,9 +1566,34 @@ $(TEST_EEGSP_BIN): $(TEST_EEGSP_OBJS) src/gl/eegs_present.c src/gl/eegs_present.
                    src/gl/backend_eegs.c src/gl/backend_eegs.h \
                    src/drivers/ps2/ps2_gs_rec.c src/drivers/ps2/ps2_gs_pack.c \
                    src/drivers/ps2/ps2_gs_env.c src/drivers/ps2/ps2_gs_vram.c \
+                   src/drivers/ps2/ps2_gif_ring.c src/drivers/ps2/ps2_gif_ring.h \
                    src/drivers/ps2/ps2_gs.h verify/tests/gs_group_view.h
 	@mkdir -p ./.build
 	$(CC) $(TEST_EEGSP_OBJS) -o $@ $(LDFLAGS)
+
+# LANE 10: the GIF writer ring, gated on a machine with no GIF in it.  This is the reason the ring
+# is a translation unit of its own with three hooks rather than three more lines inside
+# ps2_gs_gif_send(): "a producer is refused or accepted, never blocked" and "a completion check
+# leaves nothing outstanding" are properties of a queue, and a queue can be driven against a channel
+# that is held busy forever -- which is not a state any image row can conjure.  The capacity here is
+# the suite's own 8 (overridden in the test source) so the refusal path and the index wrap are
+# reachable; the shipped 512 and its relation to the stage's group table is compile-time law in
+# src/gl/eegs_present.c, and the ordering a refusal would corrupt is asserted through the real
+# staging unit, just above.
+TEST_GIFRING_SRCS = verify/tests/test_ps2_gif_ring.c
+TEST_GIFRING_OBJS = $(TEST_GIFRING_SRCS:.c=.test.o)
+TEST_GIFRING_BIN  = ./.build/test_ps2_gif_ring
+
+test-ps2-gif-ring: $(TEST_GIFRING_BIN)
+	@echo "=========================================================="
+	@echo " Running PS2 LANE 10: the GIF writer ring..."
+	@echo "=========================================================="
+	@./$(TEST_GIFRING_BIN)
+
+$(TEST_GIFRING_BIN): $(TEST_GIFRING_OBJS) src/drivers/ps2/ps2_gif_ring.c \
+                     src/drivers/ps2/ps2_gif_ring.h
+	@mkdir -p ./.build
+	$(CC) $(TEST_GIFRING_OBJS) -o $@ $(LDFLAGS)
 
 # The Makefile's `PS2_GL=` dial, measured against the rule it is supposed to drive.  The dial is
 # three -D flags and the rule is a preprocessor branch, so one binary compiled with one value of
@@ -2484,7 +2510,7 @@ $(TEST_MSX_BOOT_BIN): $(TEST_MSX_BOOT_OBJS)
 	@mkdir -p ./.build
 	$(CC) $(TEST_MSX_BOOT_OBJS) -o $@ $(LDFLAGS)
 
-test: test-tad test-editor test-chat test-mozc test-wylie test-hmi test-ski test-tracker test-deskclip test-settings test-global-menu test-app-menu test-drivesetup test-fs test-quake test-ps2-softfloat test-ps2-gs-pack test-ps2-gs-env test-ps2-gs-rec test-ps2-gs-tex test-ps2-pointer test-eegs-raster test-eegs-present test-gl-math test-gl-backend-choice test-ps2-fb-order test-xmb-atlas
+test: test-tad test-editor test-chat test-mozc test-wylie test-hmi test-ski test-tracker test-deskclip test-settings test-global-menu test-app-menu test-drivesetup test-fs test-quake test-ps2-softfloat test-ps2-gs-pack test-ps2-gs-env test-ps2-gs-rec test-ps2-gs-tex test-ps2-pointer test-ps2-gif-ring test-eegs-raster test-eegs-present test-gl-math test-gl-backend-choice test-ps2-fb-order test-xmb-atlas
 	@echo "=========================================================="
 	@echo " ALL B-SYSTEM TEST SUITES PASSED (100% SUCCESS)!"
 	@echo "=========================================================="

@@ -724,7 +724,8 @@ void ps2_gs_draw_cursor(int x, int y)
  * is a call into another translation unit and therefore readable as a jal, where the register
  * writes it turns into are inlined here and gone from this function's range.
  *
- * POSTED, and it is the only producer of stream words that is.  `env_pkt` is a static, so the
+ * POSTED, and the only producer that posts in this file -- src/gl/eegs_present.c's stage is the
+ * other one, and it is reaped at that unit's begin().  `env_pkt` is a static, so the
  * packet this pass sends is the packet the next apply overwrites -- and the next apply happens
  * after src/gl/eegs_present.c's begin(), which is exactly where the ring is reaped.  That is the
  * buffer-lifetime law in ps2_gif_ring.h, and it is why the canvas stream below this function is

@@ -997,4 +997,165 @@ the diff only because their citation comments were re-pointed -- the citation pa
 deliberately did not touch their code.
 
 ---
+## Lane 10's landing: the park that restored the link, a ring that refuses, and seven controls that had to fail
+
+**Order, because the order was the finding.**  The previous section left this port with no
+image at all: `make ps2` failed at the link and `ld` deleted its own output every time.  Lane
+10 cannot be measured against a missing ELF, and the non-regression law cannot be run against
+a link error, so the park came first (task #75), then the relink and re-baseline (#76), then
+the ring (#77) -- the ring was written against a *measurable* tree, which is the only reason
+its before/after bench pair means anything.
+
+**The park: what was moved, and what was not.**  `PS2_MSX` (default `0`) is now the fourth
+stamped dial, `.build/ps2-msx.stamp`, and with it off `PS2_SRCS` drops `PS2_MSX_SRCS` and the
+image links at its own budget.  The measured reason: the MSX units alone are **10,656,894
+bytes of .bss** -- `src/emulators/msx/slots.c` 5,496,436 and `src/emulators/msx/msx_app.c`
+4,323,888 -- on a port whose static ceiling is 33,488,896 (`ASSERT(_end <= 0x01FF0000)`), with
+the whole compiled set summing 35,809,162 bytes, i.e. 2,320,266 over the ceiling before the
+heap pool is asked for anything.  `src/cores/core_ps2.c` therefore also lost the 12 MiB MSX
+heap pool from its .bss when the dial is 0, and `open_msx_window*()` keeps weak stubs so the
+XMB's Games row still links and still refuses at runtime rather than crashing.  Nothing was
+deleted: the five B-MSX rows remain in `scripts/test_ps2.sh`, they are not run, and the suite
+prints one line saying so -- `[SKIP] PS2_MSX=0 -- tronMSX is parked out of this image, so the
+five B-MSX rows above were not run (not a pass; the volume still carries cbios/ and msx/)`.
+The ROMs and cbios stayed in /SYS.  `make ps2 PS2_MSX=1` is the un-park and the diagnosis in
+the previous section is what it will meet again.  `src/emulators/msx/v9938.c` -- the
+developer's in-flight LMMC/HMMC rework, which is *not* this lane's file -- was not reverted,
+not reformatted, and does not enter the PS2 image at all while the dial is 0.
+
+**The ring: LAW 11d, and the off-by-one that forced it.**  `src/drivers/ps2/ps2_gif_ring.{c,h}`
+is bookkeeping only -- it names no memory-mapped register, and its three hooks
+(`ps2_gif_hw_start/busy/wait`) are implemented by `ps2_gs.c`, which is the only place in the
+image that touches CHCR/MADR/QWC/D_STAT.  That separation is what let the host gate drive a
+full channel, an empty one, and an over-capacity producer on a machine with no PS2 in it, and
+it is the reason the lane's claims are mostly *executed* rather than inferred.
+
+The capacity law is not the one the lane opened with.  The first cut bounded the *queue*:
+`if (s_gif_n >= PS2_GIF_RING_CAP)`.  Control 6 turned that into a defect and the gate went red
+on six rows, because a descriptor that has already started is still a producer's buffer -- the
+EE may not write it again until its transfer is reaped -- so the ring would have owned CAP+1
+buffers while promising CAP.  The landed form is `if (s_gif_n + s_gif_in_flight >=
+PS2_GIF_RING_CAP)`, and the book states it as LAW 11d: **a bound on the bus is a bound on
+buffers, not on slots**.  The capacity itself, 512 descriptors of 12 bytes (6,144 bytes of
+.bss, `nm -S`), is derived, not chosen: the stage holds `EEGS_MAX_GROUPS = 256` groups plus the
+environment packet, so one paint pass can never want more than half the ring.  The tie is held
+by a `typedef char ...[(cond) ? 1 : -1]` rather than `_Static_assert`, because the image is
+`-std=c99` and that keyword is C11 -- a detail that would have been a compile error on the
+guest and only that.
+
+**Two posters, not one, and what stays synchronous.**  `src/gl/eegs_present.c:175` posts the
+staged group stream; `ps2_gs.c:747` (`ps2_gs_draw_env_apply()`) posts `env_pkt`.  Both are safe
+for the same structural reason: each is rewritten only after `eegs_present_begin()`
+(`src/gl/eegs_present.c:88`), which is this port's yield and where `ps2_gif_reap()` runs.
+Everything else stays synchronous through `ps2_gs_gif_send()`, whose remaining callers own
+buffers with no reap scheduled between writes -- `setup_pkt`, `img_tag`, and above all the
+canvas.  The synchronous sender now counts its own spin instead of hiding it, which is the
+`sync=` half of the [GSTS] gif: row.  Two in-source comments claimed `eegs_present.c` was the
+*only* producer that posts; both are corrected to name `env_pkt` as the second, with the
+differentiator being when each buffer's next writer runs.
+
+**The gate that hung, and why it no longer can.**  The first `verify/tests/test_ps2_gif_ring.c`
+sim freed channel 2 only when the test told it to, so when `reap()` was made to wait
+correctly, the gate sat in its own wait loop until it was killed -- a green suite had become a
+stuck terminal.  A hanging gate is not a gate, so the sim now answers `busy()` from a
+countdown, its `wait()` costs clock, and every transfer carries a poll budget; the run ends on
+`no transfer needed the poll budget` and a future wedge reads as a `[FAIL]` row.  Two further
+fixes came out of the same iteration: the ring's statics were renamed `s_gif_*` after colliding
+with `ps2_gs_rec.c`'s `s_st`/`s_n`/`s_tail` at link time, and `test_eegs_present.c` used `eqi`
+where it meant `eqw`.
+
+**The seven controls, run 2026-10-14.**  Reproduced by `scripts/ps2_gif_ring_controls.sh`, which
+applies each defect, rebuilds the named gate from scratch (purging `.build/<stem>` and its
+`.test.o` first), restores the file, and finally requires both gates green again on the
+restored tree -- so a GREEN from that script is a statement about the instrument.
+
+| # | the defect written into the source | gate | failing checks |
+|:--|:---|:---|:--|
+| 1 | `drain()` starts a second transfer while the first holds the bus (drop the `ps2_gif_hw_busy()` guard) | test-ps2-gif-ring | 18 |
+| 2 | a full ring loses the packet without counting it (drop `s_gif_st.refused++`) | test-ps2-gif-ring | 1 |
+| 3 | `drain()` takes from the tail, i.e. newest-first (head → tail) | test-ps2-gif-ring | 10 |
+| 4 | `reap()` drains once and calls itself done (the loop's exit → `break`) | test-ps2-gif-ring | 3 |
+| 5 | `stats_take()` reports lifetime totals (delete the counter resets) | test-ps2-gif-ring | 3 |
+| 6 | the cap bounds the queue, not the transfers the ring owns | test-ps2-gif-ring | 6 |
+| 7 | `eegs_present_begin()` does not reap the previous frame | test-eegs-present | 1 |
+
+All seven came back RED, then 59 and 70 green on the restored tree.  Control 5 is the one that
+read green for no reason at first: `perl -pi -e '/pat/d'` does not delete a line -- the `d` is
+the `tr///` modifier and the pattern's own delimiter, so the line stayed exactly where it was
+and the suite passed with the "defect" absent.  The control now assigns `$_ = ""`, which is
+what deleting a line means in perl.  Any future control written with the `/d` form of this
+file's own idiom should be suspected of proving nothing.
+
+**What the guest actually printed, 2026-10-14.**  One armed bench run (`BENCH_APP=1
+BENCH_TIMEOUT=460 scripts/ps2_bench.sh`, image `PS2_GL=eegs PS2_FP=hw`, un-counted), from
+`build/ps2-bench.log`; the three windows are verbatim:
+
+```
+[    7.3217] [GSTS] gif: posted=52 started=52 queued=0 inflight=0 cap=512 | drop=0 hold=190 us | reap=18182 blocked=18514 us max=190 us | sync=30241 blocked=39214 us max=55 us
+[    7.4196] [GSTS] gif: posted=52 started=52 queued=0 inflight=0 cap=512 | drop=0 hold=189 us | reap=627 blocked=815 us max=189 us | sync=1489 blocked=1697 us max=55 us
+[    7.5536] [GSTS] gif: posted=52 started=4 queued=48 inflight=1 cap=512 | drop=0 hold=28 us | reap=7 blocked=7 us max=1 us | sync=31 blocked=820 us max=55 us
+```
+
+Each row is a profile since the last print, so **the first is since boot**: `sync=30241` and
+`blocked=39214 us` there are the atlas, the font sheet and every console line since power-on,
+and reading 39,214 us as a frame cost is the first wrong thing a reader can do with this row.
+The third window is the lane's claim: 52 posted, 4 started, `queued=48 inflight=1` when the
+producer returned.  The first two read `queued=0 inflight=0` because their `begin()` reaped the
+ring empty -- the same fact from the other side of the yield.  `hold=` 189-190 us in the reaped
+windows and 28 in the still-draining one, and equal to `wait_max` in the reaped pair, which is
+what a FIFO whose head is the long wait looks like.
+
+SKIP, not PASS, for three things this run did not exercise.  `drop=` is 0 in every gif window
+and in every recorder row of the run, so the refusal path never executed on the guest -- the
+bound was only ever measured as being far above a frame's 52; it is exercised on the host,
+where the gate overrides `PS2_GIF_RING_CAP` to 8 and posts nine (the aggregate suite prints
+`cap=8 descriptors` in its own header line).  STR says the quadwords left the EE, not that the
+GS drew them (M7).  And there is no `[XMBT]` cycle-row pair across the landing, because
+`build/ps2-bench.log` is overwritten by each run and the pre-ring full log is gone -- so the
+cycle columns are SKIP on this lane and 11.5's three cycles remain the reference for `frame=`
+and `total=`.
+
+**The non-regression pair, and a scare that was a reading error.**  Same bench composition
+either side of the ring: `[BENCH] full 41,822 -> 41,887 us` (+0.16%), with the whole +65
+accounted -- 54 us in `upload=` (821/822 → 875/875) and 10 in `render=`, i.e. the instrument's
+own bookkeeping on the synchronous path it now times; and `[PSTAT] budget ui passes=12
+max=112,082 -> 111,810 us, misses=10 -> 10, late=9 -> 9`.  Mid-pass this looked like a
+regression, because 112,082 us was compared against a remembered 69,362 us.  The saved
+pre-ring log `/tmp/bench11.txt` settles it: the same composition reads `passes=12
+max=112082` before the ring, and 69,362 belongs to a `passes=14` run -- a different
+composition, not a faster one.  The lesson is the dated-reading law again: a `max=` without
+its `passes=` is not a number.
+
+**The book is the payload, and it was checked against itself.**  Because `doc/txt/PS2.txt` is
+the /SYS record, these prose edits rebuild the volume and relink the image, so the section was
+landed by the full chain rather than by an edit: `rm -f btron_sys.vol && make btron_sys.vol`
+-> **757 of 1024 blocks, 267 KiB free** (the same day's earlier readings were 737 after the
+book-swap fixes and 756 after 11.6 was written; this book is the only payload file any of them
+changed, so the whole rise is prose), `make test-fs` **20/20**, `make ps2 PS2_GL=eegs
+PS2_FP=hw`, `make test-ps2 PS2_GL=eegs PS2_FP=hw` **92/92** plus the `[SKIP] PS2_MSX=0` line,
+and rows 88/89 confirming the ELF carries those exact 1,048,576 volume bytes at 0x00577c00.
+The image is **5,919,324 bytes** with `_end = 0x01C4AD80` -- byte-identical across the two
+rebuilds of this pass -- and headroom **3,822,208 bytes**, which is the point of the fixed
+1,024-block volume: prose can grow inside the record without moving `_end` at all, and
+`.data`'s 0x414C00 is unchanged, so the only budget writing spends is free blocks.  Chapter 4's
+quoted figures were re-read from the relinked ELF, not copied forward; the 3,887,744 figure
+that an earlier working note carried is wrong and is not in the book.
+
+**Green, re-run against this tree on 2026-10-14.**  `make -k test` -> `ALL B-SYSTEM TEST
+SUITES PASSED (100% SUCCESS)`, exit 0, and inside it the two new gates: `PS2 LANE 10: the GIF
+writer ring ... cap=8 descriptors` `checks=59 failures=0` and `PS2 EE/GS present: order,
+staging fidelity and capacity ... ring=512` `checks=70 failures=0`, alongside the rows that
+must not move (softfloat `checks=18384493 failures=0`, GS pack/env/rec/tex 55/139/103, raster
+78, pointer strokes 59, backend choice 13, gl-math 3,836,226).  `make arm64-elf` exit 0.
+`make test-fs` 20/20.  `make test-ps2` 92/92.  Nothing is committed.
+
+**The guardrail.**  Everything this lane added to the tree is PS2-only: the new pair
+`src/drivers/ps2/ps2_gif_ring.{c,h}`, `verify/tests/test_ps2_gif_ring.c`, the ring rows of
+`scripts/test_ps2.sh`, the `PS2_MSX`/`PS2_GIF` dials and the new `test-ps2-gif-ring` target in
+the `Makefile`, and the [GSTS] gif: row plus the `PS2_MSX` weak stubs in `src/cores/core_ps2.c`
+-- which is compiled only by the PS2 target.  No shared file was touched to make a PS2 row read
+green, no pointer-gain code was entered, and the arm64 build and the whole host suite pass with
+the ring in place, so the Pi 400 path is byte-identical.
+
+---
 

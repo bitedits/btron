@@ -1047,6 +1047,42 @@ static void ps2_cycle_print(int asked_ms)
                     (int)s_gs_st.b0_r, (int)s_gs_st.b0_b,
                     s_gs_st.has_bbox ? (s_gs_st.plate_covers ? "covered" : "SHORT") : "none");
     }
+
+    /* LANE 10's row, and it is the row the lane was opened for: `what has no instrument is the
+     * sender's own blocked time`.  One profile since the last print -- and since boot for this
+     * row's first appearance in a run, so a large first `blocked=` is an accumulated life, not one
+     * pass -- which is why `blocked=` reads as this pass's microseconds rather than the machine's
+     * whole life only from the second row on.  Read the three together:
+     *
+     *   `posted=` is what the presentation plane committed to the bus without waiting for it, and
+     *     `drop=` is the S_FULL receipt -- the transfers it was refused because the GIF had not
+     *     freed a descriptor.  With the ring bigger than the stage's group table this can only
+     *     mean the consumer fell behind, and it has to read 0 (the fifth zero-column of the row
+     *     above, of the same kind as drop=/unsplit=/texmiss=/coverdrop=).
+     *   `blocked=` is the wait at the yield -- `eegs_present_begin()` reaping its own stage -- and
+     *     `hold=` the longest a posted packet sat in the queue.  Both are the same quantity the
+     *     old sender paid at every single transfer, now paid once per pass and counted.
+     *   `sync=` is the half of VIOLATION 2 this increment did NOT take away: the canvas band and
+     *     the boot path still block, because their buffer is the canvas and every console character
+     *     writes it.  That number is what tells the next reader whether the remaining blocking is
+     *     worth a second, wider ring -- and `gs=` above is the phase it lives in. */
+    {
+        ps2_gif_stats_t gif;
+
+        ps2_gif_stats_take(&gif);
+        if (gif.posted || gif.sync_sends) {
+            ps2_kprintf("[GSTS] gif: posted=%u started=%u queued=%u inflight=%u cap=%u | "
+                        "drop=%u hold=%u us | reap=%u blocked=%u us max=%u us | "
+                        "sync=%u blocked=%u us max=%u us\n",
+                        (unsigned int)gif.posted, (unsigned int)gif.started,
+                        (unsigned int)gif.queued, (unsigned int)gif.in_flight,
+                        (unsigned int)gif.cap, (unsigned int)gif.refused,
+                        (unsigned int)gif.hold_max_us, (unsigned int)gif.waits,
+                        (unsigned int)gif.wait_us, (unsigned int)gif.wait_max_us,
+                        (unsigned int)gif.sync_sends, (unsigned int)gif.sync_us,
+                        (unsigned int)gif.sync_max_us);
+        }
+    }
     s_cycle.rows++;
     s_cycle.stamped = 0u;
     if (s_cycle.left) s_cycle.left--;

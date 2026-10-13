@@ -89,10 +89,8 @@ PART ONE -- THE NEXUS AND THE MACHINE
   Every normative statement here has the same four parts, and a claim without
   all four is not a law but an intention:
 
-  - LAW      what must hold, in one sentence, in the imperative or the
-             indicative.
-  - WHY      the mechanism that makes the alternative fail -- on this silicon,
-             not in general.
+  - LAW      what must hold, in one sentence, in the imperative or the indicative.
+  - WHY      the mechanism that makes the alternative fail -- on this silicon, not in general.
   - MEASURE  the one decisive reading that says the law holds on the artifact
              that ships: a console row, a column of a row, or a comparison.
   - GATE     the assertion that goes red when the law is broken, and the
@@ -135,11 +133,11 @@ A claim has four parts; the page has two measures.
   The InterCore nexus is the port's architecture, not a metaphor for it.
   ASYNC.txt §0.1 gives five primitives and one scheduling hook:
 
-    pub [capacity]                create a writer cursor; yields a system-wide Id
-    sub [publisher]               create a reader cursor bound to that writer
+    pub [capacity]                  create a writer cursor; yields a system-wide Id
+    sub [publisher]                 create a reader cursor bound to that writer
     spawn [core; program; cursors]  create a Task owning those cursors exclusively
-    snd [writer; data]            non-blocking send
-    rcv [reader]                  non-blocking receive
+    snd [writer; data]              non-blocking send
+    rcv [reader]                    non-blocking receive
 
     poll_bus runs at every scheduler yield, so a message addressed to the
     current core is handled before its next task begins.  The topology is a
@@ -184,14 +182,14 @@ A claim has four parts; the page has two measures.
                                    |
                        snd(HID)    |    snd(tokens)
                                    v
-      OHCI USB  ------>  +-------------------+  <------  GS raster + 4 MB VRAM
-      plane 1's device    |   RDRAM 32 MB   |          plane 3's producer:
-                          |   eDRAM  4 MB   |          addressed, never scheduled
-      DMAC ch2 -> GIF --> |   one bus, no   |  <------  VU1 + VIF1
-      plane 3 today:      |   no broker     |          plane 3: absent
-      a subroutine        |                 |  <------  VU0 (shares the EE's slots)
+      OHCI USB  ------>   +-------------------+ <------  GS raster + 4 MB VRAM
+      plane 1's device    |   RDRAM 32 MB     |          plane 3's producer:
+                          |   eDRAM  4 MB     |          addressed, never scheduled
+      DMAC ch2 -> GIF --> |   one bus, no     | <------  VU1 + VIF1
+      plane 3 today:      |   no broker       |          plane 3: absent
+      a subroutine        |                   | <------  VU0 (shares the EE's slots)
                           +-------------------+
-      SIF / IOP  .......... plane 1 and 2: absent  .......... SPU2, no driver
+      SIF / IOP  ........ plane 1 and 2: absent ....... SPU2, no driver
 
       EE R5900 + COP1:  today the only publisher that exists, and the
       publisher of planes 1, 3 and 4 at once.  Dots mean "engine present,

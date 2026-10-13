@@ -43,6 +43,7 @@
 #include <libstr.h>
 
 #include "ps2_gs.h"
+#include "ps2_gif_ring.h"
 #include "ps2_gs_tex.h"
 #include "ps2_sio.h"
 #include "ps2_pad.h"

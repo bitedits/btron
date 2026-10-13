@@ -1887,7 +1887,7 @@ static void test_games_band(void)
     printf("   wrote .build/xmb_games_band.ppm\n");
 }
 
-/* Increment 1 of the EE/GS plan of record (doc/md/PS2.md).  The Display applet's row can
+/* Increment 1 of the EE/GS plan of record (doc/txt/PS2.txt).  The Display applet's row can
  * already name a backend that has no ops table in this image, and what that is allowed to
  * do is exactly these assertions.  They run in both builds of this file, which is why the
  * expected answer is written as a rule over the define instead of a constant: an image that

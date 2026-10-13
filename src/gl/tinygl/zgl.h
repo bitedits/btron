@@ -476,7 +476,7 @@ void gl_draw_triangle_select(GLVertex* p0, GLVertex* p1, GLVertex* p2);
 void gl_draw_triangle_feedback(GLVertex* p0, GLVertex* p1, GLVertex* p2);
 
 /* vertex_stage.c -- the per-vertex float arithmetic, in the one tinygl unit that the PS2 build
- * compiles with the FPU switched on (row 7 of doc/md/PS2.md).  Both take a pointer and return
+ * compiles with the FPU switched on (row 7 of doc/txt/PS2.txt).  Both take a pointer and return
  * nothing, which is what makes that legal: `-msoft-float` is an argument-passing law, and no
  * floating value crosses this boundary in either direction. */
 void tgl_vertex_transform(GLVertex* v);

@@ -14,7 +14,7 @@
  * than pixels.  Doubles never go to the FPU at all.
  *
  * What the differential self-test measured on this machine is written once, normatively,
- * in doc/md/PS2.md section "What COP1 actually is, measured" -- the counts, the census and
+ * in doc/txt/PS2.txt section 6.5 "What the FPU is, measured" -- the counts, the census and
  * the argument that rules out a rounding mode all live there so they cannot drift from each
  * other.  The three facts this header has to carry are: the bit engine is host-proven exact,
  * so it is the oracle and a disagreement convicts COP1; COP1's add.s/sub.s/mul.s answer one
@@ -177,7 +177,7 @@ extern const char *btron_fp_other_where;
  * put every one-step gap in [4], a fixed mode would favour one side, and a gap in [2] or
  * [3] is not a rounding question at all but a different number.  This is where the two
  * arithmetic gates sit -- [2] and [3] must stay zero -- and what the counts on this
- * machine are is in doc/md/PS2.md.  Zeroed and filled by btron_fp_selftest(). */
+ * machine are is in doc/txt/PS2.txt.  Zeroed and filled by btron_fp_selftest(). */
 #define BTRON_FP_GAP_N 6
 extern uint32_t btron_fp_gap[BTRON_FP_GAP_N];
 extern const char *const btron_fp_gap_name[BTRON_FP_GAP_N];

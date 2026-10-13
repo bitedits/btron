@@ -65,7 +65,7 @@ void gl_init(GL_BACKEND backend, int width, int height, void *pixel_buf) {
         s_active_backend = GL_BACKEND_TINYGL;
         break;
 
-    /* Increment 5 of the plan of record (doc/md/PS2.md): the GS answers the fills, but the
+    /* Increment 5 of the plan of record (doc/txt/PS2.txt): the GS answers the fills, but the
      * geometry still goes through TinyGL's pipeline, which is where the GIF recorder's groups
      * come from.  So the ops table is the same one and only the *name* differs -- and the name
      * matters, because egl_surface.c and core_ps2.c dispatch on it to decide whether to blit a

@@ -5,7 +5,7 @@
  * src/apps/xmb_wave.h - the launcher's waving surface: its lattice, its noise and
  * the arithmetic that turns a grid of integers into a sheet of pixels.
  *
- * This is plan row 8 of doc/md/PS2.md ("Row 8: the wave's lattice on COP1").  The
+ * This is plan row 8 of doc/txt/PS2.txt ("Row 8: the wave's lattice on COP1").  The
  * sheet's maths was measured out of `src/apps/xmb.c` by the census of 2026-10-12 and
  * put in a file of its own for one reason: it is the largest block of single-precision
  * arithmetic left in an XMB frame that is not on the FPU.  A counted frame's `f_surface`
@@ -37,7 +37,7 @@
 
 /* The sheet's mesh.  32x32 is the shape the reference driver's
  * pipeline_xmb_ribbon.cg.h vertex stage was written against; the measured price of the
- * mesh dial (32 -> 16) is in doc/md/PS2.md, "What a pixel costs, measured". */
+ * mesh dial (32 -> 16) is in doc/txt/PS2.txt, ch. 10 "What a pixel costs". */
 #define XB_RIBBON_ROWS 32
 #define XB_RIBBON_COLS 32
 

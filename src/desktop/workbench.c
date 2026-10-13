@@ -73,7 +73,7 @@ void workbench_process_event(GDEV *screen, const EVT *ev) {
 }
 
 /* An overlay is drawn over every window, including one the Graphics Synthesizer owns
- * (doc/md/PS2.md, increment 5c), and that layer arrives *after* the canvas upload -- so an
+ * (doc/txt/PS2.txt, increment 5c), and that layer arrives *after* the canvas upload -- so an
  * overlay that is not registered here is drawn, uploaded, and then buried.  Both getters answer
  * FALSE when nothing is open, which is the common case and costs two calls. */
 static void workbench_cover_overlays(void)

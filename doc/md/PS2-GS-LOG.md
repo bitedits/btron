@@ -1,10 +1,10 @@
 # PS2 GS backend — development record
 
-This file is the **quarantined history** of [`PS2.md`](PS2.md)'s EE/GS backend plan of
-record.  Nothing here is normative: a law lives in `PS2.md`, and this file keeps the
+This file is the **quarantined history** of [`PS2.txt`](../txt/PS2.txt)'s EE/GS backend plan of
+record.  Nothing here is normative: a law lives in `PS2.txt`, and this file keeps the
 evidence that earned it -- the control runs and their failure counts, the measurements
 that were later withdrawn and why, the hand-derived literals, and the dated landing
-notes.  Read it when a claim in `PS2.md` needs its provenance, and never to learn what
+notes.  Read it when a claim in `PS2.txt` needs its provenance, and never to learn what
 the design is.
 
 Moved out of `PS2.md` on 2026-10-12, when that document was compactified to its
@@ -880,7 +880,9 @@ purging `core_ps2.pbench.o`:
 The synthetic stream is the *other* refusal: 404 reports and an 8480-count stroke, so the row can say
 truthfully that the bus is answering and the missing thing is a second speed.  The `PS2_STROKE_SILENT`
 branch is not reachable from this harness, which injects a stream of its own, so it is exercised by
-the host suite instead -- five checks, including that one still report is enough to leave it.
+the host suite instead: two checks assert it directly (`no report at all reads as a silent wire`,
+`verdict after reset`) and a third shows the boundary, that a single still report is already enough
+to leave it.
 
 **The guardrail, re-checked.**  `git status --short -- src Makefile doc` after all of this still shows
 `M Makefile`, `M src/cores/core_ps2.c`, three doc files, and `?? src/cores/ps2_ptr_stroke.h`: no
@@ -901,3 +903,98 @@ slowly, then the same slide fast, then Ctrl+\ -- and if the row still says NO re
 the hand, is what to look at.
 
 ---
+## One PS2 book: the payload swap, the link that does not hold, and what that made unverifiable
+
+**The order of the change.**  Three files were retired into `doc/txt/PS2.txt` on
+2026-10-14: `doc/md/PS2.md` (the handbook, 269,591 bytes), `doc/md/PS2-ROADMAP.md` (a plan
+whose phases are chapters 16, 19 and 20) and `.build/ps2_src.txt` (the unfolded draft the
+book used to be folded from, 259,728 bytes).  All three are copied verbatim, with their
+SHA-1s matched against the working tree, into `/private/tmp/ps2-docs-archive-2026-10-14/`
+before deletion, together with the three folding scripts (`ps2wrap.py`, `rewrap_book.py`,
+`rewrap_book2.py`), which are now inert.  The book's header, chapter 4's MEASURE row, LAW
+20b, Appendix B (M5, M8, M9, M12, M14, and the new M17) and the colophon/END were
+rewritten in the same pass so that nothing in it still claims a handbook exists.
+
+**Citations, not just files.**  69 in-source citations named `doc/md/PS2.md`; they now
+name `doc/txt/PS2.txt`, and a second pass re-pointed the ones that carried the
+*handbook's* numbering, which is meaningless in the book: `section 2.1` -> chapter 18,
+`section 2.6` -> chapter 20 (three in `scripts/test_ps2.sh`, one in the `Makefile`), the
+handbook section titled "What COP1 actually is, measured" -> the book's 6.5 "What the FPU
+is, measured", the title `"The EE/GS backend"` (used by 20 files) -> `ch. 16 "The
+increments"`, and `"What a pixel costs, measured"` -> `ch. 10`.  Two markdown links that
+pointed at a deleted anchor were re-worded: `doc/md/EVENTING.md` to chapter 13, and this
+file's own first paragraph to `../txt/PS2.txt`.  The diff was checked line by line: apart
+from the manifest record and the stdio shim below, every changed source line is a comment.
+
+**The /SYS record swapped, and the volume grew one block.**  `src/tools/manifest.txt` now
+carries `FILE "PS2.txt" TXT doc/txt/PS2.txt` where it carried `FILE "PS2.md" MD
+doc/md/PS2.md`, with its section comment naming the exception.  `TXT` is not a new type:
+`mkbtronfs` treats TAD/MD/TXT/PNG/IMG/BIN as one operation (RT_TADDATA in record 0), so
+only the payload path and the display name moved.  Rebuilding the volume reports **733 of
+1024 1024-byte blocks used, 291 KiB free**, one block more than the 2026-10-13 reading
+chapter 20 quotes, and `make test-fs` is 20/20 including `test_real_image_clu` and
+`test_packed_markdown_files`.  `strings` over `btron_sys.vol` finds the record name and
+this book's opening lines, so LAW 20b became self-referential in the intended way: editing
+a sentence in the book now rebuilds the volume and relinks the image.  The rule then proved
+itself a second time the same day: the three chapter 4 / chapter 22 / M17 wording fixes
+below (`rm -f btron_sys.vol && make btron_sys.vol`) moved the reading to **737 of 1024
+blocks, 287 KiB free**, and `make test-fs` was 20/20 against that volume too.
+
+**Then the image was found not to link at all, and it is not this lane's breakage.**
+`make ps2 PS2_GL=eegs PS2_FP=hw` fails at the link with two errors, both from the B-MSX
+lane's committed files.  (1) `src/emulators/msx/slots.ps2.o` now holds **5,496,436 bytes
+of .bss** -- the 2026-10-13 `Geo3D` commit and the megaROM work around it -- so `ps2.ld`'s
+`ASSERT(_end <= 0x01FF0000)` fires with the book's own words, *PS2 image reaches the stack
+or the 32 MiB RDRAM end: statics above it are silently lost*.  Against the day's recorded
+headroom of 956,928 bytes that is a breach of roughly 4.5 MB, and it is exactly chapter
+4's failure mode: silent, per-object, and reported as a broken desktop rather than as out
+of memory.  (2) `src/emulators/msx/geo3d.ps2.o: in function 'geo3d_run':
+geo3d.c:(.text+0xca4): undefined reference to '__divdi3'` -- five shown plus "more
+undefined references follow" -- because this image is `-msoft-float` with no libgcc, which
+is chapter 5's law, not a new one.  (3) A third, smaller one was found on the way and IS
+fixed here: `slots.c` prints its 0x2E/0x2F debug port with `fputc()`, and
+`include/gl/stdio.h` stubs `printf/fprintf/vfprintf` for the freestanding targets but not
+`fputc`, so the compile died before the link ever ran.  One line joins the existing
+family.  The first two are left alone deliberately: where an emulator's ROM buffers live
+on a 32 MiB bare-metal machine, and whether Geo3D's per-vertex maths should be 32-bit or
+borrow a runtime helper, are the B-MSX lane's decisions, and this lane's guardrail is that
+nothing shared with the Pi 400 gets moved to make a document row read green.
+
+**What a failed link takes with it.**  `ld` removes its output on failure, so each attempt
+at `make ps2` deletes `btron-ps2.elf`.  The 2026-10-13 artifact still exists as
+`BTRON.ELF` inside `btron-ps2.iso` (5,975,860 bytes, 12:42, `ELF 32-bit LSB executable,
+MIPS, MIPS-II`), and `strings` over it finds the handbook's name, which is the proof that
+the shipped image's volume is the *pre-swap* one.  It was copied out once to run `make
+test-ps2`, and the next `make ps2` deleted it again, so it is left where it is recoverable
+-- in the ISO -- rather than as a file the build will eat.  Note the two sizes are not
+equal (5,975,860 in the ISO against the 5,967,796 chapter 4 quotes), so the ISO is the
+day's earlier build, and neither number is today's: there is no image to measure today.
+
+**What ran on 2026-10-14, and what did not.**  Green, actually re-run against this tree:
+`make -k test` -> `ALL B-SYSTEM TEST SUITES PASSED (100% SUCCESS)`, with `checks=18384493
+failures=0` (softfloat), 55/59/139/103 (GS pack, env, rec, tex), 78/64 (raster, present),
+13 (backend choice), 3,836,226 (gl-math), `test-xmb-atlas` [PASS], `test-fs` 20/20, and
+`make test-ps2-pointer` **59 / 59** after deleting `.build/test_ps2_ptr_stroke` and its
+object first -- the stale-binary rule, because a pointer suite that reuses an old object
+is a pointer suite that tested the previous mutation.  `make arm64-elf` builds, which is
+the standing non-regression gate.  NOT run, and written as SKIP rather than PASS: `make
+test-ps2` (no link), `scripts/ps2_bench.sh` (it invokes `make ps2-bench`, same link), the
+image-size reading chapter 4 wants, and every boot-level claim in chapters 12-13 and 19,
+since there is no image to boot.  Task #22 therefore stays open exactly as it was: the
+instrument is gated and the tree is consistent, but the verdict still needs a live session
+on a buildable image.
+
+**The guardrail, re-checked.**  `git status --short -- src Makefile doc scripts verify
+include` shows the code half of this lane as `src/cores/core_ps2.c`,
+`src/cores/ps2_ptr_stroke.h`, `verify/tests/test_ps2_ptr_stroke.c`,
+`src/tools/manifest.txt` and one line of `include/gl/stdio.h`; the rest is prose
+(`doc/txt/PS2.txt`, this log, `doc/md/EVENTING.md`) and the retirement of `doc/md/PS2.md`
+and `doc/md/PS2-ROADMAP.md`.  Pointer-gain code (`src/graphics/dp_accel.c`,
+`src/settings/input.c`, the RISC-OS curve) is untouched, so the arm64 / Pi 400 pointer
+path is byte-identical.  Nothing is committed; the developer's in-flight `src/emulators/msx/v9938.c` (+17 lines of
+trace prints) was not reverted, and `src/apps/xmb.c` and `src/apps/xmb_wave.c` appear in
+the diff only because their citation comments were re-pointed -- the citation pass
+deliberately did not touch their code.
+
+---
+

@@ -10,7 +10,7 @@
  * and sufficient; if something above the wire (macOS's own cursor curve) has
  * already scaled counts by speed, then no constant is right, because the constant
  * would have to change with how hard the hand is moving.  The law is stated in
- * doc/md/PS2.md, "Which layer owns the pointer", and the test is the slow-slide /
+ * doc/txt/PS2.txt, "Which layer owns the pointer", and the test is the slow-slide /
  * fast-slide pair it reads as a ratio.
  *
  * Taking that test used to need typing in the middle of it: `ptrstat` is a Stage 1

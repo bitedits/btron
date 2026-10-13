@@ -2,7 +2,7 @@
  * src/gl/backend_eegs.c -- the three vertices a clipped triangle becomes, as a GIF group, and
  * the texture switch that goes between them
  *
- * Row 5, steps 5a and 5b of the plan of record (doc/md/PS2.md, "The EE/GS backend").  Everything
+ * Row 5, steps 5a and 5b of the plan of record (doc/txt/PS2.txt, ch. 16 "The increments").  Everything
  * hard about the GS is in increments 2, 3 and 4, which this file calls and does not duplicate: the
  * field encodings are `ps2_gs_pack.c`'s, the environment is `ps2_gs_env.c`'s, and the group state
  * machine -- NLOOP, the REGS list, where a full buffer is cut and which vertices a continued strip

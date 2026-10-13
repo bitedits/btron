@@ -125,7 +125,7 @@ The coordinator processes each queued event in the following priority order:
      a key it acted on.  This matters because `global_menu_is_open()` reports true for the
      launcher as well as for an open deskbar dropdown, so a deskbar handler that claims an
      arrow key while no dropdown is active starves the launcher of it.  See
-     [PS2 § Menu Navigation Without a Pointer](PS2.md#menu-navigation-without-a-pointer-normative)
+     [PS2 ch. 13, Which layer owns the pointer](../txt/PS2.txt)
      for the measured case.
    - Both live key encodings are accepted by the menu handlers: the host's own keysyms
      (a windowed SDL host forwards `SDLK_UP`/`SDLK_DOWN` = `0x111`/`0x112`) and the

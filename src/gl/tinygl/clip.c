@@ -626,7 +626,7 @@ static void tgl_count_fill(const ZBufferPoint *a, const ZBufferPoint *b, const Z
 #if defined(BTRON_PS2_TARGET)
 /* ── The Graphics Synthesizer takes the fill ──────────────────────────────────────────
  *
- * Row 5, step 5a of the plan of record (doc/md/PS2.md, "The EE/GS backend").  The three calls
+ * Row 5, step 5a of the plan of record (doc/txt/PS2.txt, ch. 16 "The increments").  The three calls
  * below are the whole of what the GS replaces: the span loops.  Everything above them -- the
  * matrix stack, the lighting, the clipping, the texture state, the display lists -- stays
  * TinyGL's, which is why the seam is here rather than a second `gl_ops_t`, and why nothing is

@@ -381,7 +381,7 @@ void redraw_baremetal_desktop(GDEV *screen, H w, H h) {
     btron_render_stat_max(&g_render_stats.panel_us, btron_render_perf_us() - t_mark);
 
     /* The panel and the bars are desktop chrome drawn over every window, so a window the GS
-     * draws (doc/md/PS2.md, increment 5c) would bury them: the stream is what reaches VRAM last.
+     * draws (doc/txt/PS2.txt, increment 5c) would bury them: the stream is what reaches VRAM last.
      * Registering the two rects is what makes the present put them back. */
     const RECT panel_rows = { 0, 0, w, 28 };
     wnd_gl_cover_add(&panel_rows);

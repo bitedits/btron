@@ -1,7 +1,7 @@
 /*
  * src/apps/xmb_wave.c - the launcher's waving surface, on the Emotion EE's FPU
  *
- * Plan row 8 of doc/md/PS2.md.  The header says why the file exists; what is only
+ * Plan row 8 of doc/txt/PS2.txt.  The header says why the file exists; what is only
  * visible here is what it took to make the move legal on this CPU, because there are
  * three hazards and they are three different problems:
  *

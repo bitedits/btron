@@ -8,7 +8,7 @@
 
 #include <stdint.h>
 
-#define V9938_VRAM_SIZE     131072u   /* 128 KiB */
+#define V9938_VRAM_SIZE     262144u   /* 256 KiB (V9968 / Expanded VRAM) */
 #define V9938_REG_COUNT     64u
 #define V9938_STAT_COUNT    16u
 

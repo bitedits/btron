@@ -80,7 +80,7 @@ ER   inval_wnd(WND *wnd);
 void wnd_inval_damage_rect(const RECT *r);
 BOOL wnd_take_inval_damage(RECT *out);
 
-/* ── The EE/GS layer (doc/md/PS2.md, increment 5c) ─────────────────────────────────
+/* ── The EE/GS layer (doc/txt/PS2.txt, increment 5c) ─────────────────────────────────
  * One window at a time is drawn by the GS, and the present path needs two things from the
  * window manager that only it can supply: where that window's client area is on screen, and
  * whether this frame's composite re-recorded it.
@@ -97,7 +97,7 @@ BOOL wnd_take_inval_damage(RECT *out);
  * rect it drew and the present path re-uploads each one, intersected with the layer, after the
  * stream.  A producer must paint its rect *opaquely*: the canvas holds no picture of the layer,
  * so the transparent part of a sprite would upload what used to be under it -- which is why the
- * pointer is not a cover producer and is invisible inside a GS window (doc/md/PS2.md, increment
+ * pointer is not a cover producer and is invisible inside a GS window (doc/txt/PS2.txt, increment
  * 5c's limit and 5d's cursor plane).  Take hands back the list added since the last take, in
  * screen coordinates, and empties it; the array it names belongs to the window manager and is
  * valid until the next add. */

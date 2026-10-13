@@ -1,7 +1,7 @@
 /*
  * ps2_gs_tex.h — a GL texture plane, planned into GS local memory
  *
- * Row 5, step 5b of the plan of record (doc/md/PS2.md, "The EE/GS backend").  TinyGL owns the
+ * Row 5, step 5b of the plan of record (doc/txt/PS2.txt, ch. 16 "The increments").  TinyGL owns the
  * pixels -- an `upload` extent inside a plane allocated at that extent rounded up to a power of
  * two on each axis (`texture.c:111-153`) -- and the GS owns an address for the same bytes in its
  * own 4 MB.  This file is the arithmetic between the two, and nothing else: like the recorder it
@@ -23,7 +23,7 @@
  *   the XMB binds the icon sheet and the font sheet inside the same frame, so `TEX0` cannot live
  *   only there: the three words go between the vertex groups, as a recorder AD group.
  *
- * Zero proprietary Sony SDK code: the field tables are in ps2_gs_pack.h and doc/md/PS2.md.
+ * Zero proprietary Sony SDK code: the field tables are in ps2_gs_pack.h and doc/txt/PS2.txt.
  *
  * Copyright 2026 Synrc Research Center. MIT License.
  */

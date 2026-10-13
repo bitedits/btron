@@ -21,7 +21,7 @@
  * TBA the allocator has not filled yet is only ever reached by a textured primitive, and the
  * env packet draws none.
  *
- * Zero proprietary Sony SDK code: the field tables are in ps2_gs_pack.h and doc/md/PS2.md.
+ * Zero proprietary Sony SDK code: the field tables are in ps2_gs_pack.h and doc/txt/PS2.txt.
  *
  * Copyright 2026 Synrc Research Center. MIT License.
  */

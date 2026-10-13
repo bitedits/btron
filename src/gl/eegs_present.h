@@ -1,7 +1,7 @@
 /*
  * eegs_present.h — the recorded GIF stream, put on the bus after the canvas is
  *
- * Increment 5c of the plan of record (doc/md/PS2.md, "The EE/GS backend").  Everything that
+ * Increment 5c of the plan of record (doc/txt/PS2.txt, ch. 16 "The increments").  Everything that
  * *decides* what the stream holds is upstream and gated on a host: the geometry is recorded by
  * ps2_gs_rec.c, the environment words are built by ps2_gs_env.c, and the texture trio is emitted
  * mid-stream by backend_eegs.c.  This file is the one step that cannot be gated there, because it
@@ -15,7 +15,7 @@
  * it, while the callback runs inside the composite that the upload is of.  Those two facts
  * overlap: no DMA can happen during the paint, so the groups are staged here and sent after.
  *
- * Zero proprietary Sony SDK code: the field tables are in ps2_gs_pack.h and doc/md/PS2.md.
+ * Zero proprietary Sony SDK code: the field tables are in ps2_gs_pack.h and doc/txt/PS2.txt.
  *
  * Copyright 2026 Synrc Research Center. MIT License.
  */

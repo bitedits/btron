@@ -1,7 +1,7 @@
 /*
  * verify/tests/test_eegs_raster.c -- what the raster stage decides, against words written by hand
  *
- * Row 5, step 5a of the plan of record (doc/md/PS2.md, "The EE/GS backend").  The discipline is
+ * Row 5, step 5a of the plan of record (doc/txt/PS2.txt, ch. 16 "The increments").  The discipline is
  * increments 2, 3 and 4's: `backend_eegs.c` and the recorder are compiled into this program, and
  * every expectation was written from the GS field tables before the code ran.
  *

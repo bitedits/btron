@@ -456,7 +456,7 @@ uint32_t ps2_sf_floatunsisf(uint32_t v)
  * per-pixel paths have none, which `f_bg` proves rather than the reading -- its 382,731 px
  * moved by 24 us over this whole change.  Measured prices: the gradient setup 15.7 -> 12.3 us
  * (4,640 -> 3,626 EE cycles), the vertex 18.2 -> 14.5 us, and the steady XMB frame 221.9 ->
- * 197.4 ms.  doc/md/PS2.md carries the ledger. */
+ * 197.4 ms.  doc/txt/PS2.txt carries the ledger. */
 
 uint32_t ps2_sf_fixunssfsi(uint32_t a)
 {

@@ -119,7 +119,7 @@ extern uint8_t *vdp_vram(uint32_t *size);
         }
         msx_run_frame();
         msx_blit_rgb565(s_fb);
-        if (f == 1 || f == 30 || f == 60 || f == 120 || f == frames ||
+        if (f == 1 || (f >= 5 && f <= 35) || f == 60 || f == 120 || f == frames ||
             (f >= 170 && f <= 300 && (f % 5) == 0) ||
             (f % 60) == 0) {
             char path[256];
@@ -127,9 +127,10 @@ extern uint8_t *vdp_vram(uint32_t *size);
             uint8_t m = v ? v9938_mode(v) : 0;
             snprintf(path, sizeof(path), "%s_%04ld.ppm", prefix, f);
             write_ppm(path, s_fb);
-            printf("frame %4ld: pc=%04X r800=%d mode=%02X r0=%02X r1=%02X r2=%02X r7=%02X cyc=%12llu ink=%6u  %s\n",
+            printf("frame %4ld: pc=%04X r800=%d mode=%02X r0=%02X r1=%02X r2=%02X r7=%02X st2=%02X tr=%d(%d,%d) r17=%02X cyc=%12llu ink=%6u  %s\n",
                    f, msx_get_pc(), msx_is_r800_active(), m,
                    v ? v->regs[0] : 0, v ? v->regs[1] : 0, v ? v->regs[2] : 0, v ? v->regs[7] : 0,
+                   v ? v->stat[2] : 0, v ? v->tr_active : 0, v ? v->tr_x : 0, v ? v->tr_y : 0, v ? v->regs[17] : 0,
                    (unsigned long long)msx_total_cycles(), ink(s_fb), path);
         }
         if (f == frames) {
@@ -139,12 +140,14 @@ extern uint8_t *vdp_vram(uint32_t *size);
                 for (int r = 0; r <= 23; r++) printf(" R%d=%02X", r, v->regs[r]);
                 printf("\n");
                 printf("stat[2]=%02X tr_active=%d tr_x=%d tr_y=%d\n", v->stat[2], v->tr_active, v->tr_x, v->tr_y);
-                printf("VRAM dump around 0x1800-0x1C00:\n");
-                for (uint32_t base = 0x1800; base <= 0x1C00; base += 0x100) {
-                    printf("  addr 0x%04X: %02X %02X %02X %02X %02X %02X %02X %02X\n",
-                           base, v->vram[base], v->vram[base+1], v->vram[base+2], v->vram[base+3],
-                           v->vram[base+4], v->vram[base+5], v->vram[base+6], v->vram[base+7]);
-                }
+                printf("VRAM dump around line 212 (0xD400) and bottom HUD:\n");
+                printf("  addr 0xD400: %02X %02X %02X %02X %02X %02X %02X %02X\n",
+                       v->vram[0xD400], v->vram[0xD401], v->vram[0xD402], v->vram[0xD403],
+                       v->vram[0xD404], v->vram[0xD405], v->vram[0xD406], v->vram[0xD407]);
+                uint32_t b_addr = (1008u * 256u) & (V9938_VRAM_SIZE - 1u);
+                printf("  addr 0x%05X: %02X %02X %02X %02X %02X %02X %02X %02X\n",
+                       b_addr, v->vram[b_addr], v->vram[b_addr+1], v->vram[b_addr+2], v->vram[b_addr+3],
+                       v->vram[b_addr+4], v->vram[b_addr+5], v->vram[b_addr+6], v->vram[b_addr+7]);
             }
         }
     }

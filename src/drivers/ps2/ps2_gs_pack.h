@@ -1,7 +1,7 @@
 /*
  * ps2_gs_pack.h — the Graphics Synthesizer's packet words, built on the EE
  *
- * Increment 2 of the plan of record (doc/md/PS2.md, "The EE/GS backend").  This is the
+ * Increment 2 of the plan of record (doc/txt/PS2.txt, ch. 16 "The increments").  This is the
  * encoding half only: it turns a vertex, a colour, a texture page or a drawing environment
  * into the 64-bit words the GIF puts on the GS's bus, and it does not touch the DMA path,
  * a register, or the canvas.  Nothing calls it in the shipped image yet; the host gate

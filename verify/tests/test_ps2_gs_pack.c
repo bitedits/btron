@@ -1,7 +1,7 @@
 /*
  * test_ps2_gs_pack.c -- the GS's packet words, checked against hand-computed bit patterns
  *
- * Part of increment 2 of the plan of record (doc/md/PS2.md, "The EE/GS backend").  Every
+ * Part of increment 2 of the plan of record (doc/txt/PS2.txt, ch. 16 "The increments").  Every
  * number the GS acts on is a field at a bit position inside a 64-bit word, and a field one
  * position off is not an error message -- it is a triangle with a valid-looking vertex that
  * lands 65 536 pixels away, or a texture page that reads the wrong 256-byte block.  There is

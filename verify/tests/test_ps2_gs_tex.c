@@ -1,7 +1,7 @@
 /*
  * verify/tests/test_ps2_gs_tex.c -- a GL texture plane's VRAM address, against words written by hand
  *
- * Row 5, step 5b of the plan of record (doc/md/PS2.md, "The EE/GS backend").  The discipline is
+ * Row 5, step 5b of the plan of record (doc/txt/PS2.txt, ch. 16 "The increments").  The discipline is
  * increments 2, 3 and 4's: `ps2_gs_tex.c`, the packer and the VRAM cursor are compiled into this
  * program, and every expectation was derived from the register field tables before the code ran.
  *

@@ -145,7 +145,7 @@ assert_check "Symbol 'ps2_gs_get_height' exists" \
 assert_check "Zero invalid MIPS32r2 opcodes (seb, seh, ins, ext)" \
     "! ($OBJDUMP -d $ELF | grep -E '\<(seb|seh|ins|ext)\>')"
 
-# 6. One Calling Convention (Normative -- see "One Calling Convention" in doc/md/PS2.md)
+# 6. One Calling Convention (Normative -- see "One Calling Convention" in doc/txt/PS2.txt)
 # -march=mips3 and -march=mips2 disagree on where O32 puts a C function's 5th..8th
 # fixed argument (registers $t0..$t3 vs the stack), so in a mixed image every such
 # call that crosses the boundary receives garbage from argument 5 on.  The PS2 mouse
@@ -178,7 +178,7 @@ else
     echo "  [SKIP] 64-bit-GPR disassembler unavailable -- GS sd/ld accessor tests not run"
 fi
 
-# Increment 3 of the EE/GS backend (doc/md/PS2.md, "The EE/GS backend", row 3): the drawing
+# Increment 3 of the EE/GS backend (doc/txt/PS2.txt, ch. 16 "The increments", row 3): the drawing
 # environment -- XYOFFSET, SCISSOR, FRAME, ZBUF and the four control registers a primitive
 # reads -- reaches the GS as one GIF packet, the same way a triangle does, and not as nine
 # privileged register writes.  The shape matters for two reasons the pokes do not serve: a
@@ -371,7 +371,7 @@ else
     echo "  [SKIP] 64-bit-GPR disassembler unavailable -- recorder purity and PS2_GL dial laws not run"
 fi
 
-# 7. The R5900 FPU is single-precision (Normative -- see "The FPU law" in doc/md/PS2.md)
+# 7. The R5900 FPU is single-precision (Normative -- see "The FPU law" in doc/txt/PS2.txt)
 # ldc1/sdc1 and every .d COP1 op are not merely slow here, they are *illegal*: PCSX2
 # prints "Unknown R5900 COP1:" and the instruction does nothing at all, so every double
 # the image computes comes out as garbage.  A black XMB was exactly that: 2,093 such rows
@@ -609,7 +609,7 @@ else
 fi
 
 # 8. The single-canvas law (Normative -- see "One canvas: the desktop's own backbuffer"
-# in doc/md/PS2.md §2.1)
+# in doc/txt/PS2.txt ch. 18)
 #
 # The GS driver used to own a second 800x600 CT32 array and the present swept one word per
 # desktop pixel into it before every upload: 49,094 us of a full-frame present, on top of
@@ -679,7 +679,7 @@ else
 fi
 
 # 9. The /SYS volume inside the image (Normative -- see "The /SYS volume, and the in-window apps it
-# unlocks: termios, B-MSX" in doc/md/PS2.md §2.6)
+# unlocks: termios, B-MSX" in doc/txt/PS2.txt §2.6)
 #
 # sc, tv and every other termios app refuse to start on this target for one reason: their
 # first call is vfs_init(), and on a bare-metal build that is just `vol_mounted_count() > 0
@@ -736,7 +736,7 @@ SC_ASM="$($OBJDUMP -d $ELF | awk '/<sc_session_init>:/{f=1;print;next} f&&/^[[:s
 assert_check "sc's real session init is linked, not gterm.c's weak stub (sc_session_init calls vfs_init and term_set_size)" \
     "[ \$($OBJDUMP -d $ELF | awk '/<sc_session_init>:/{f=1;print;next} f&&/^[[:space:]]*\$/{f=0;next} f' | grep -c 'jal.*<vfs_init>') -ge 1 ] && [ \$($OBJDUMP -d $ELF | awk '/<sc_session_init>:/{f=1;print;next} f&&/^[[:space:]]*\$/{f=0;next} f' | grep -c 'jal.*<term_set_size>') -ge 1 ]"
 
-# 10. B-MSX, launched from the volume (Normative -- see "The /SYS volume" in doc/md/PS2.md §2.6)
+# 10. B-MSX, launched from the volume (Normative -- see "The /SYS volume inside the executable" in doc/txt/PS2.txt ch. 20)
 #
 # The launcher's Games band lists the cartridges and Cross opens B-MSX, and every part of that is
 # a link-time or content fact that can be silently false: xmb.c carries a weak `open_msx_window_*`

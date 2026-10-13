@@ -44,7 +44,7 @@ static uint16_t s_machine = BMSX_MACHINE_MSX;
 /* Memory pools */
 static uint8_t  ram[MSX_RAM_SIZE];                     /* 64 KiB for MSX1 */
 static uint8_t  mapper_ram[MSX_MAPPER_RAM_SIZE];       /* 512 KiB for MSX2/2+/TR */
-static uint8_t  rom[MSX_ROM_SIZE];                     /* Up to 4 MiB cartridge */
+static uint8_t  rom[MSX_ROM_SIZE + 1];                 /* cartridge (+1 spare byte lets the app tell an over-cap image from one that just fits) */
 static uint8_t  bios[MSX_BIOS_SIZE];                   /* 32-64 KiB main BIOS */
 static uint8_t  logo[MSX_LOGO_SIZE];                   /* 16 KiB logo */
 static uint8_t  sub_rom[MSX_SUBROM_SIZE];              /* 16 KiB sub-ROM */
@@ -437,10 +437,17 @@ void slots_set_rom(const uint8_t *img, uint32_t size)
 {
     uint32_t i;
     rom_size = (size > MSX_ROM_SIZE) ? MSX_ROM_SIZE : size;
-    for (i = 0; i < rom_size; i++) rom[i] = img[i];
+    if (img != rom)                      /* img == rom: the app read straight into it */
+        for (i = 0; i < rom_size; i++) rom[i] = img[i];
     for (i = rom_size; i < MSX_ROM_SIZE; i++) rom[i] = 0xFF;
     detect_mapper();
     remap();
+}
+
+uint8_t *slots_rom_ptr(uint32_t *cap)
+{
+    if (cap) *cap = MSX_ROM_SIZE + 1u;
+    return rom;
 }
 
 uint8_t *slots_ram_ptr(uint32_t *size)

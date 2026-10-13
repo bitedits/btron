@@ -1021,7 +1021,7 @@ HIDTRACE       ?= 0
 # The third value is the Graphics Synthesizer: it makes the build's default the backend the
 # Display applet's "OpenGL PS2" row offers, so an A/B run against TinyGL needs a make flag and
 # no clicking.  Until src/gl/backend_eegs.c exists (row 5 of the plan of record in
-# doc/md/PS2.md) that request is answered by the linked software rasterizer with a console line
+# doc/txt/PS2.txt) that request is answered by the linked software rasterizer with a console line
 # saying so, which is why this is a default and not a capability either -- the settings row can
 # still outrank it, and a built image reports what actually drew its frames.
 # A value that is none of the three is a typo, and a typo here builds a working image whose
@@ -1119,7 +1119,7 @@ PS2_OBJS       = src/drivers/ps2/boot_ps2.ps2.o         \
                  $(PS2_SYS_VOL_OBJ)                    \
                  $(PS2_SRCS:.c=.ps2.o)
 
-# The /SYS volume rides inside the image's .data (doc/md/PS2.md, section 2.6): the bytes are
+# The /SYS volume rides inside the image's .data (doc/txt/PS2.txt, chapter 20): the bytes are
 # btron_sys.vol, which the host tool mkbtronfs writes from src/tools/manifest.txt, and the object is
 # the one .incbin of them.  It is a prerequisite of nothing here -- the volume's own rule now waits
 # on the manifest's payloads -- so a document edit rebuilds the volume, which rebuilds this object,
@@ -1389,7 +1389,7 @@ $(TEST_PSFLOAT_BIN): $(TEST_PSFLOAT_OBJS) src/drivers/ps2/ps2_builtins.c
 	@mkdir -p ./.build
 	$(CC) $(TEST_PSFLOAT_OBJS) -o $@ $(LDFLAGS) -lm
 
-# Increment 2 of the EE/GS plan of record (doc/md/PS2.md): the packet builder.  A GS field
+# Increment 2 of the EE/GS plan of record (doc/txt/PS2.txt): the packet builder.  A GS field
 # one bit off cannot be seen -- it draws a triangle somewhere the screen is not -- so the
 # encoders are compiled into this program and every word is compared with a literal that
 # was derived by hand from the manual's field table, the test_ps2_fb_order discipline of
@@ -1451,7 +1451,7 @@ $(TEST_GSREC_BIN): $(TEST_GSREC_OBJS) src/drivers/ps2/ps2_gs_rec.c src/drivers/p
 # given the wrong 256-byte block is a triangle that samples its neighbour's texels, which draws
 # something and draws it wrong, with nothing on the screen to say which of the four fields was
 # off.  The three words are compared against literals written from the register tables, the spans
-# against the budget doc/md/PS2.md states, and the sink against the law that a plane crosses the
+# against the budget doc/txt/PS2.txt states, and the sink against the law that a plane crosses the
 # moment its bytes exist.
 TEST_GSTEX_SRCS = verify/tests/test_ps2_gs_tex.c
 TEST_GSTEX_OBJS = $(TEST_GSTEX_SRCS:.c=.test.o)

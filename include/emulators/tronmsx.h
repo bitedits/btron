@@ -50,7 +50,14 @@ typedef struct {
 #define BMSX_MACHINE_MSXTR_CBIOS_FDD    19u
 
 /* The cartridge cap, in bytes: supports up to 4 MiB MegaROMs (e.g. Geo3D-256) */
-#define MSX_ROM_SIZE       4194304u
+#if defined(__STDC_HOSTED__) && __STDC_HOSTED__ == 1
+#  define MSX_ROM_SIZE     4194304u
+#else
+/* Freestanding targets (PS2: 32 MiB of RDRAM for the whole image) hold the
+ * cartridge twice -- the core's rom[] and the app's read buffer -- so 4 MiB
+ * MegaROMs do not fit; 1 MiB carries the Geo3D demos but not Geo3D-256. */
+#  define MSX_ROM_SIZE     1048576u
+#endif
 
 /* Where the machine's media lives when the caller names no directory, on each
  * side of the hosted boundary: a folder below the checkout where there is a host

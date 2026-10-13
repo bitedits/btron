@@ -1,7 +1,7 @@
 /*
  * ps2_gs_rec.c — vertices accumulated into GIF groups, with no register and no DMA in sight
  *
- * Increment 4 of the plan of record (doc/md/PS2.md, "The EE/GS backend").  See ps2_gs_rec.h
+ * Increment 4 of the plan of record (doc/txt/PS2.txt, ch. 16 "The increments").  See ps2_gs_rec.h
  * for what a group holds and why PRIM travels with every vertex.  What is only visible here is
  * the boundary rule: a buffer that fills mid-primitive has to be cut where no triangle loses a
  * vertex, and the vertices a strip needs in order to continue have to be written a second time.

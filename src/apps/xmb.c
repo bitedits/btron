@@ -290,7 +290,7 @@ extern int      g_mouse_accel_profile;
  * nine times per triangle, which is noise.
  *
  * And neither of the two arithmetic terms is what this file used to say it was.  The per-stage
- * census (doc/md/PS2.md, *The census*) counts the libcalls a stage actually makes: the whole
+ * census (doc/txt/PS2.txt, *The census*) counts the libcalls a stage actually makes: the whole
  * frame asks for 578,963 of them, which at the measured 28 cycles is 58.8 ms of the 173.8 ms
  * frame -- 15.9 ms of the wave's lattice here, 27.5 in f_ribbon, 15.3 in f_menu.  So deleting
  * every soft-float call in the image is a 1.51x change, not the 4x these comments used to
@@ -1229,7 +1229,7 @@ static void xb_bake_textures(void)
 /* ── Ribbon: the waving surface ─────────────────────────────────────────────────── */
 
 /* The sheet's own arithmetic moved to `src/apps/xmb_wave.c` -- plan row 8 of
- * doc/md/PS2.md -- which is the one unit of the launcher that takes the Emotion EE's FPU
+ * doc/txt/PS2.txt -- which is the one unit of the launcher that takes the Emotion EE's FPU
  * when the image's FP dial is on, and the header of that file says why the move is legal.
  * What stays here is the other half of that unit's boundary: the two arguments it has no
  * COP1 instruction for.  A `-mhard-float` unit cannot hold a double, because `ldc1`/`sdc1`

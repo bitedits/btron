@@ -1,7 +1,7 @@
 /*
  * test_ps2_gs_env.c -- the drawing environment and its VRAM arithmetic, word for word
  *
- * Part of increment 3 of the plan of record (doc/md/PS2.md, "The EE/GS backend").  This gates
+ * Part of increment 3 of the plan of record (doc/txt/PS2.txt, ch. 16 "The increments").  This gates
  * two things that cannot be looked at: the address arithmetic that decides whether a buffer
  * fits in 4 MB of GS local memory at all, and the eleven-quadword stream that tells the GS
  * where to draw, what to clip to, and how to blend.
@@ -79,7 +79,7 @@ static void vram_pages(void)
     eq32("frame bytes 384x384 32", gs_vram_frame_bytes(384u, 384u, 32u), 589824u);
     eq32("frame bytes 640x448 16", gs_vram_frame_bytes(640u, 448u, 16u), 573440u);
 
-    /* The measurement that decides the architecture (doc/md/PS2.md, increment 3's paragraph):
+    /* The measurement that decides the architecture (doc/txt/PS2.txt, increment 3's paragraph):
      * canvas + a layer the size of the XMB window + the icon atlas is 4,370,432 B against a GS
      * that has 4,194,304.  Nothing here can fix that by rounding; the layer is the thing that
      * has to go, and increment 4 draws into the canvas instead. */

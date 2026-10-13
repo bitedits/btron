@@ -1,7 +1,7 @@
 /*
  * eegs_present.c — the staged GIF stream, and the two DMA bursts that follow an upload
  *
- * Increment 5c of the plan of record (doc/md/PS2.md, "The EE/GS backend").  See eegs_present.h
+ * Increment 5c of the plan of record (doc/txt/PS2.txt, ch. 16 "The increments").  See eegs_present.h
  * for the ordering rule this file exists to obey.  What is only visible here is the staging
  * buffer's own arithmetic: how many quadwords a frame costs, and what happens to a group that
  * does not fit.
@@ -19,7 +19,7 @@
 #include "../drivers/ps2/ps2_gs_vram.h"
 
 /* The shipped XMB frame measures 7,434 vertices and 51 groups, which is 7,434 x 4 + 51 = 29,787
- * quadwords (doc/md/PS2.md, increment 5c's bench row).  A previous note here claimed a frame
+ * quadwords (doc/txt/PS2.txt, increment 5c's bench row).  A previous note here claimed a frame
  * records about 13,700, and the stage was built to fit a frame and a half of that; the first
  * image that actually presented through the GS said otherwise with `drop=42` on every frame,
  * because the stage held the first nine groups and refused the rest -- a partial picture with a

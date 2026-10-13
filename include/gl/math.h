@@ -225,7 +225,7 @@ static inline float sqrtf(float x) {
  * ordered test, because this fold is *inlined* into a unit that keeps its floats in the
  * registers a call may not touch.  So the answer is the integer one: four band edges and no
  * FP condition code anywhere.  The law and its measurement, including the black screen that
- * produced it, are in doc/md/PS2.md, "The compares the EE does not have", and
+ * produced it, are in doc/txt/PS2.txt, "The compares the EE does not have", and
  * `scripts/test_ps2.sh` row 58 byte-scans the linked image for the family. */
 static inline void btron_sincosf(float x, float *s, float *c) {
     const float pi = 3.14159274f, pi2 = 6.28318548f;

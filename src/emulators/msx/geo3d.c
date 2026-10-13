@@ -14,6 +14,28 @@
 #define BOTTOM 4
 #define TOP    8
 
+/* (a * b) / c with a 64-bit intermediate, truncating toward zero.  The PS2 image
+ * links no libgcc, so a plain int64 '/' would call __divdi3; this uses only
+ * shifts, compares and subtracts, which the compiler emits inline. */
+static int32_t muldiv(int32_t a, int32_t b, int32_t c)
+{
+    uint64_t n, q = 0, r = 0;
+    uint32_t d;
+    int neg = 0, i;
+
+    if (c == 0) return 0;
+    if (a < 0) { a = -a; neg ^= 1; }
+    if (b < 0) { b = -b; neg ^= 1; }
+    if (c < 0) { c = -c; neg ^= 1; }
+    n = (uint64_t)(uint32_t)a * (uint32_t)b;
+    d = (uint32_t)c;
+    for (i = 63; i >= 0; i--) {
+        r = (r << 1) | ((n >> i) & 1u);
+        if (r >= d) { r -= d; q |= (uint64_t)1 << i; }
+    }
+    return neg ? -(int32_t)(uint32_t)q : (int32_t)(uint32_t)q;
+}
+
 static int compute_outcode(int x, int y, int xmin, int ymin, int xmax, int ymax)
 {
     int code = INSIDE;
@@ -40,16 +62,16 @@ static int clip_line(int *x0, int *y0, int *x1, int *y1, int xmin, int ymin, int
         int x = 0, y = 0;
 
         if (c_out & TOP) {
-            x = *x0 + (int)((int64_t)(*x1 - *x0) * (ymax - *y0) / (*y1 - *y0));
+            x = *x0 + (int)muldiv(*x1 - *x0, ymax - *y0, *y1 - *y0);
             y = ymax;
         } else if (c_out & BOTTOM) {
-            x = *x0 + (int)((int64_t)(*x1 - *x0) * (ymin - *y0) / (*y1 - *y0));
+            x = *x0 + (int)muldiv(*x1 - *x0, ymin - *y0, *y1 - *y0);
             y = ymin;
         } else if (c_out & RIGHT) {
-            y = *y0 + (int)((int64_t)(*y1 - *y0) * (xmax - *x0) / (*x1 - *x0));
+            y = *y0 + (int)muldiv(*y1 - *y0, xmax - *x0, *x1 - *x0);
             x = xmax;
         } else if (c_out & LEFT) {
-            y = *y0 + (int)((int64_t)(*y1 - *y0) * (xmin - *x0) / (*x1 - *x0));
+            y = *y0 + (int)muldiv(*y1 - *y0, xmin - *x0, *x1 - *x0);
             x = xmin;
         }
 
@@ -290,7 +312,7 @@ static void geo3d_run(geo3d_t *g)
                     int y_a = pts[k][1], y_b = pts[next_k][1];
                     int x_a = pts[k][0], x_b = pts[next_k][0];
                     if ((y_a <= y && y_b > y) || (y_b <= y && y_a > y)) {
-                        int x_int = x_a + (int)((int64_t)(y - y_a) * (x_b - x_a) / (y_b - y_a));
+                        int x_int = x_a + (int)muldiv(y - y_a, x_b - x_a, y_b - y_a);
                         if (x_int < min_x) min_x = x_int;
                         if (x_int > max_x) max_x = x_int;
                     }

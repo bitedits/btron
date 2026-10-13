@@ -2,7 +2,7 @@
  * src/gl/backend_eegs.h -- the GS raster stage: three device-space vertices, one GIF group,
  * and the texture switch between them
  *
- * Row 5, steps 5a and 5b of the plan of record (doc/md/PS2.md, "The EE/GS backend").  It is
+ * Row 5, steps 5a and 5b of the plan of record (doc/txt/PS2.txt, ch. 16 "The increments").  It is
  * deliberately not a second `gl_ops_t`: the matrix stack, the lighting, the clipping, the texture
  * state and the display lists all stay TinyGL's, and this is the one thing that replaces -- the
  * span loops.  The seam is `GLContext.draw_triangle_front/back`, which `src/gl/tinygl/vertex.c`

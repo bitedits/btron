@@ -3,7 +3,7 @@
  *
  * The B-System filesystem layer needs a block device before anything in it can be opened, and
  * on this target there is no disc to read: the CDVD is an IOP peripheral, so an EE-side read
- * would be a module loader and an RPC client for a second processor (doc/md/PS2.md, "Why not the
+ * would be a module loader and an RPC client for a second processor (doc/txt/PS2.txt, "Why not the
  * disc").  What this port does instead is ship the bytes.  They are the host tool's output and
  * nothing else -- `mkbtronfs` writes btron_sys.vol from src/tools/manifest.txt, the same image the
  * hosted targets mount and `make test-fs` reads -- so this file names one path and describes no

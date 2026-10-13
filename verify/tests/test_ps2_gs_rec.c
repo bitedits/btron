@@ -1,7 +1,7 @@
 /*
  * verify/tests/test_ps2_gs_rec.c — the vertex recorder's words, against words written by hand
  *
- * Increment 4 of the plan of record (doc/md/PS2.md, "The EE/GS backend").  Same discipline as
+ * Increment 4 of the plan of record (doc/txt/PS2.txt, ch. 16 "The increments").  Same discipline as
  * increments 2 and 3: every expectation below was derived from the GS manual's field table and
  * written out as a literal, none of them was printed by the code under test, and the recorder is
  * compiled into this program so the identical translation unit is what the gate measures and what

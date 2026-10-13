@@ -138,7 +138,7 @@ const gs_tex_t *gs_tex_register(const void *plane, uint32_t px_w, uint32_t px_h,
      * offset already folded into `ST` makes the two filters return the same texel, a
      * magnified icon is what `GL_LINEAR` draws today, and a minified one is the single case
      * where the GS has no answer without a mipmap chain this port does not build.  Threading
-     * the app's own filter through here is the follow-up doc/md/PS2.md records. */
+     * the app's own filter through here is the follow-up doc/txt/PS2.txt records. */
     slot->tex0 = gs_pack_tex0(tba, slot->tbw, GS_PSM_CT32, tw_exp, th_exp,
                               1u, 0u, 0u, 0u, 0u, 0u, 0u);
     slot->tex1 = gs_pack_tex1(0u, 0u, GS_FILTER_LINEAR, GS_FILTER_NEAREST,

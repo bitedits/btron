@@ -86,7 +86,7 @@ FPC="${SMOOTH_FP_COUNT:-0}"
 # satisfiable -- and both met.
 BUDGETS=(
     # The machine's own periods, as the plane table the core installs at boot printed
-    # them (doc/md/PS2.md, "The plane table").  They head the list because every budget
+    # them (doc/txt/PS2.txt, "The plane table").  They head the list because every budget
     # below is priced against them: draw_us is one UI period, and the pointer's per-pass
     # step is a whole number of INPUT periods.  A non-zero drift means the table and the
     # budgets disagree, which would make the ratios below measurements of the wrong

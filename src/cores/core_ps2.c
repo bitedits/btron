@@ -52,7 +52,7 @@
 #include "ps2_irq.h"
 #include "ps2_ptr_stroke.h"   /* the two-speed slide pair: which layer owns the pointer's distance */
 
-/* The EE/GS present (doc/md/PS2.md, increment 5c): stage the frame's GIF stream during the
+/* The EE/GS present (doc/txt/PS2.txt, increment 5c): stage the frame's GIF stream during the
  * composite, send it after this region's canvas upload.  Relative path because that is how this
  * file reaches its sources -- src/drivers/ps2/ above is the same convention. */
 #include "../gl/eegs_present.h"
@@ -903,7 +903,7 @@ static void ps2_cycle_mark(void)
  * fields are cleared here rather than at the print because the gate below only ever
  * writes when this pass is being timed, so an unprofiled pass could otherwise leave a
  * bit -- or a stale damage rect -- for the next frame to print as its own. */
-/* The EE/GS layer's totals for one pass (doc/md/PS2.md, increment 5c).  Accumulated by
+/* The EE/GS layer's totals for one pass (doc/txt/PS2.txt, increment 5c).  Accumulated by
  * ps2_paint_region across the bands it presents and printed as its own row by ps2_cycle_print,
  * because that row is the only evidence on the console that a GIF stream went out at all -- and
  * `drop=`, `unsplit=` and `texmiss=` are the three counters that have to read zero for the
@@ -1196,7 +1196,7 @@ static void ps2_paint_region(GDEV *screen, int x0, int y0, int x1, int y1, int f
      * layer the canvas holds no picture of the layer, so re-uploading that box would replace the
      * layer's own pixels with the desktop that used to be underneath.  The pointer is therefore
      * invisible while it is inside a GS window: increment 5c's documented limit, and 5d's first
-     * job, which is a 16x16 CT32 cursor plane and one textured quad (doc/md/PS2.md). */
+     * job, which is a 16x16 CT32 cursor plane and one textured quad (doc/txt/PS2.txt). */
 
     /* Closes the recorder's last group into the staging buffer.  No DMA yet. */
     eegs_present_end();

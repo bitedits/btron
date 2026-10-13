@@ -172,7 +172,7 @@ static unsigned compare_banded(H w, H h, H cols, H rows, uint32_t *misses_out)
  * is the part the pixel comparison cannot see: re-rendering a window whose image is
  * already valid produces exactly the right pixels, so on a screen it is indistinguishable
  * from blitting it -- and on the PS2 it costs the app's whole frame again.  55 ms of
- * every XMB frame was that ([XMBT] cycle's comp= column, doc/md/PS2.md). */
+ * every XMB frame was that ([XMBT] cycle's comp= column, doc/txt/PS2.txt). */
 static const WND *s_tally_a;
 static const WND *s_tally_b;
 static unsigned s_paints_a, s_paints_b;
@@ -254,7 +254,7 @@ static void stale_window_selectivity(void)
  * log only as the residue between a present's `render=` and its window columns: 25 ms was
  * guessed there until this path reported its own stages, which measured 12.3 ms of desktop
  * art (9.9 of it the background restore) against a 277 ms frame -- see consequence 2 of
- * doc/md/PS2.md.  It now goes through the builder that owns the cache and fills the same
+ * doc/txt/PS2.txt.  It now goes through the builder that owns the cache and fills the same
  * columns, and a path that reports nothing is indistinguishable, from the outside, from one
  * that reports zero.
  */
@@ -317,7 +317,7 @@ static void whole_canvas_reports_its_stages(void)
  * -200 us: that stage is essentially one whole-body flat fill per window.  A layer window
  * is then drawn twice, once into the canvas by the fill and once into VRAM by the stream the
  * same pass records, and only the second copy reaches the screen, because the present uploads
- * the band first and sends the stream after (doc/md/PS2.md row 9a: -6,547 us measured at
+ * the band first and sends the stream after (doc/txt/PS2.txt row 9a: -6,547 us measured at
  * `plate=covered`).  Refusing 384,000 px a frame is legitimate only while the refused set is
  * exactly the rect the GS covers -- one pixel wider is a hole of desktop art where a grey
  * plate belongs, and no bench row would show it.  So this asserts the set equality, not the

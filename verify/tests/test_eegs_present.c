@@ -1,7 +1,7 @@
 /*
  * verify/tests/test_eegs_present.c -- what reaches DMAC channel 2 for one layer, and in what order
  *
- * Increment 5c of the plan of record (doc/md/PS2.md, "The EE/GS backend").  The three steps before
+ * Increment 5c of the plan of record (doc/txt/PS2.txt, ch. 16 "The increments").  The three steps before
  * it were gated on words: what a vertex encodes to, what a group's tag says, what an environment
  * register holds.  This one has no new words at all -- `ps2_gs_env.c` builds the packet and
  * `backend_eegs.c` records the primitives, and both are already compared against hand literals by
@@ -102,7 +102,7 @@ int ps2_gs_draw_env_apply(const gs_draw_env *env)
 
 /* ── Drawing ─────────────────────────────────────────────────────────────────────── */
 
-/* The XMB's own client rect, at the size doc/md/PS2.md measures: 768x500 at (16, 40). */
+/* The XMB's own client rect, at the size doc/txt/PS2.txt measures: 768x500 at (16, 40). */
 static const RECT k_client = { 16, 40, 784, 540 };
 
 static void vtx(eegs_vertex_t *v, float x, float y)

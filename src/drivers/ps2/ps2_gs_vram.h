@@ -6,7 +6,7 @@
  * BITBLTBUF.SBA/DBA) is a 14-bit index of 64-word units -- 256 bytes -- and a frame or
  * Z-buffer base (FRAME.FBA, ZBUF.ZBA) is a 9-bit index of 2048-word units -- 8192 bytes.
  * Each width times its unit is exactly 4 MB, which is what makes the reading certain rather
- * than merely remembered; the field tables are quoted in doc/md/PS2.md, section 2.1.
+ * than merely remembered; the field tables are quoted in doc/txt/PS2.txt, chapter 18.
  *
  * Everything here is arithmetic on byte offsets, so it is testable on the host: the gate
  * (verify/tests/test_ps2_gs_env.c) asserts the page math and, importantly, the one budget

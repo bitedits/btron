@@ -1,7 +1,7 @@
 /*
  * ps2_gs_rec.h — a vertex stream, recorded as Graphics Synthesizer GIF packets
  *
- * Increment 4 of the plan of record (doc/md/PS2.md, "The EE/GS backend").  This is the part
+ * Increment 4 of the plan of record (doc/txt/PS2.txt, ch. 16 "The increments").  This is the part
  * that turns "a triangle strip with these vertices, colours and texture coordinates" into the
  * words the GIF will carry, and it is still not the part that sends them: like the environment
  * in ps2_gs_env.c, it computes and never touches a register or the DMA.  What it adds over
@@ -13,13 +13,13 @@
  * blend and fog flags as each primitive completes (under PRMODE.MODE/OFFSET), so a strip that
  * set them once loses them from its second triangle on; re-sending them is what a UI that wants
  * every triangle textured, blended and fog-free asks for.  The cheaper alternative -- one
- * PRMODE write and three quadwords a vertex -- is recorded as a follow-up in doc/md/PS2.md and
+ * PRMODE write and three quadwords a vertex -- is recorded as a follow-up in doc/txt/PS2.txt and
  * waits on a field table this port can gate.
  *
  * XYZ2 comes last in every vertex because the drawing kick fires on it: colour and texture
  * coordinates have to be in the GS before the vertex that uses them is decoded.
  *
- * Zero proprietary Sony SDK code: the field tables are in ps2_gs_pack.h and doc/md/PS2.md.
+ * Zero proprietary Sony SDK code: the field tables are in ps2_gs_pack.h and doc/txt/PS2.txt.
  *
  * Copyright 2026 Synrc Research Center. MIT License.
  */
@@ -85,7 +85,7 @@ void gs_rec_end(void);
  * This is how a texture changes mid-frame.  TEX0/TEX1/CLAMP are per-context state and the
  * environment packet is written once per frame, so the XMB's icon sheet and its font sheet can
  * only be told apart by a write that arrives between their primitives -- see row 5b in
- * doc/md/PS2.md.  Returns 0, or -1 without sending when n is 0-sized past the buffer (a truncated
+ * doc/txt/PS2.txt.  Returns 0, or -1 without sending when n is 0-sized past the buffer (a truncated
  * AD group would be a half-programmed texture, which is the failure this layer refuses rather than
  * rounds). */
 int gs_rec_ad(const uint64_t *data, const uint32_t *gp_offs, uint32_t n);

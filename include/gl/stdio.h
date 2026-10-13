@@ -20,6 +20,7 @@ extern int tkl_snprintf(char *str, size_t size, const char *format, ...);
 #define printf(...)     ((void)0)
 #define fprintf(...)    ((void)0)
 #define vfprintf(...)   ((void)0)
+#define fputc(...)      ((void)0)
 #define sprintf         tkl_snprintf
 #define snprintf        tkl_snprintf
 #define vsnprintf       tkl_vsnprintf

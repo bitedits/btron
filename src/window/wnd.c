@@ -21,7 +21,7 @@ static GDEV *g_screen_dev = NULL;
 static RECT s_wnd_inval_damage = { 0, 0, 0, 0 };
 static BOOL s_wnd_inval_valid = FALSE;
 
-/* The EE/GS layer's two facts (doc/md/PS2.md, increment 5c).  A layer is a property of the
+/* The EE/GS layer's two facts (doc/txt/PS2.txt, increment 5c).  A layer is a property of the
  * window (`wnd->gl_layer`, set by egl_create_window_surface()), so the layer is found by
  * walking the stack rather than remembered here -- one truth, and no second copy of the z-order
  * that can go out of date when a window closes or a second GL app opens.  The topmost wins when
@@ -646,7 +646,7 @@ void redraw_all_windows_clip(const RECT *damage, BOOL blit_only) {
         /* Staleness is a property of one window's image, not of the composite: the
          * walk's caller has already decided that some window in this band has to be
          * re-rendered, and repainting the valid ones with it cost 55 ms of every XMB
-         * frame on the PS2 ([XMBT] cycle's comp= column, doc/md/PS2.md).  A layer window is
+         * frame on the PS2 ([XMBT] cycle's comp= column, doc/txt/PS2.txt).  A layer window is
          * the exception the rule cannot cover: its picture exists only in the stream this
          * callback records, so it is re-recorded every time a band reaches it.
          *

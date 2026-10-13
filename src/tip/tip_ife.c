@@ -625,7 +625,7 @@ void tip_render_candidate_window(GDEV *dev, H caret_x, H caret_y) {
     RECT win_rect = { win_x, win_y, win_x + win_w, win_y + win_h };
 
     /* This window floats over whatever is under it, including a window the Graphics Synthesizer
-     * draws (doc/md/PS2.md, increment 5c) -- and the GS stream is what goes *last*, so anything
+     * draws (doc/txt/PS2.txt, increment 5c) -- and the GS stream is what goes *last*, so anything
      * left out of this call is buried under the layer until the next composite. */
     wnd_gl_cover_add(&win_rect);
 

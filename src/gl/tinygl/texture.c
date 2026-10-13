@@ -7,7 +7,7 @@
 #if defined(BTRON_PS2_TARGET)
 #include "../../drivers/ps2/ps2_gs_tex.h"
 
-/* Row 5b of doc/md/PS2.md: a plane of texels the application has just uploaded is given its GS
+/* Row 5b of doc/txt/PS2.txt: a plane of texels the application has just uploaded is given its GS
  * VRAM address, and its bytes cross the bus, here and not in the presentation path -- an
  * application uploads and draws in the same frame, so a drain at present would put the primitives
  * that sample the plane ahead of the transfer that fills it.

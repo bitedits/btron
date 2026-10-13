@@ -1,7 +1,7 @@
 /*
  * src/gl/tinygl/vertex_stage.c -- the per-vertex float arithmetic, as one translation unit
  *
- * Row 7 of the plan of record (doc/md/PS2.md, "The EE/GS backend").  Once the GS draws the
+ * Row 7 of the plan of record (doc/txt/PS2.txt, ch. 16 "The increments").  Once the GS draws the
  * pixels, what is left of an XMB frame is float calls: the measured eegs frame 2 makes 460,861
  * of them, 373,820 of which are an add, a multiply, a divide or a compare, each paying the
  * 28 cycles the port measures for a soft-float libcall -- 15 of those cycles being the `jal`

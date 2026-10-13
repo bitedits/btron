@@ -9,8 +9,8 @@ Target 8:  Sony PlayStation 2 -- Emotion EE (MIPS R5900) + Graphics
            Synthesizer
 Target 9:  Bare-Metal MIPS (QEMU Malta 24Kf, Magnum R4000)
 Author:    Cleanroom Working Group (Namdak Tonpa / Maxim Sokhatsky)
-Status:    Normative specification, rev 1 (cast 2026-10-12, re-measured
-           2026-10-13)
+Status:    Normative specification, rev 2 (cast 2026-10-12, re-measured
+           2026-10-13, and the only PS2 text since 2026-10-14)
 
 Governing standards, in order of authority over this document:
 
@@ -27,11 +27,21 @@ Governing standards, in order of authority over this document:
                              on the critical path, no unbounded loop, every
                              return checked.
 
-Working reference:  doc/md/PS2.md  (the porting handbook this book is cast
-                    from).
+Canonical text:   doc/txt/PS2.txt  (this file) -- the ONLY PS2 book.  Prose is
+                  authored HERE, wrapped to the book's own 78-column measure as
+                  it is written; there is no second draft to fold from and no
+                  handbook beside it.  Three files were retired into it on
+                  2026-10-14 -- doc/md/PS2.md (the handbook),
+                  doc/md/PS2-ROADMAP.md (a plan whose phases are chapters 16,
+                  19 and 20 now) and .build/ps2_src.txt (the unfolded draft the
+                  folder used to read) -- and every claim of theirs that was
+                  still true is a chapter, a table or a gate row here.
+                  /SYS carries THIS file (chapter 20), so the guest and the
+                  reader quote the same bytes and the image's size moves with
+                  its prose.
 Quarantined record: doc/md/PS2-GS-LOG.md -- every dated measurement, control
                     run, withdrawn figure and landing note.  Nothing normative
-                    lives there.
+                    lives there; a claim that needs one cites it by date.
 
 Contents
 --------
@@ -545,18 +555,33 @@ PART TWO -- THE LINK: LAWS THAT MAKE THE IMAGE LEGAL
            names (PS2_GL=eegs PS2_FP=hw): ELF 5,967,796 bytes, _end =
            0x01F06600, headroom 956,928 bytes (0.91 MiB) below the ceiling.
            .data is 0x414c00 bytes and its last 1 MiB is the embedded /SYS
-           volume (20.1), so the volume's own size is what _end grew by -- and
-           doc/md/PS2.md, the handbook this book was cast from, IS one of the
-           volume's 33 records, so editing that prose rebuilds the volume and
-           the image around it.  A size therefore belongs with its date, not
-           with a configuration: 5,966,580 bytes at _end = 0x01F06200 was an
-           earlier reading on the same day, and 5,967,604 bytes was
-           2026-10-12's.  The two readings on the 13th differ in _end by
-           EXACTLY 1,024 bytes -- one whole block of the volume's block size
-           -- which is this law demonstrating itself: the handbook was edited,
-           the volume gained a block, and the image grew around it.  This
-           book's own text is NOT a volume payload, and the guest cannot read
-           it: /SYS carries the handbook.
+           volume (20.1), so the volume's own size is what _end grew by.  And
+           since 2026-10-14 the volume's PS2 record IS this file, so editing
+           this prose rebuilds the volume and the image around it -- the book
+           is now inside the guest it describes.  Before that date /SYS
+           carried doc/md/PS2.md instead, which is why every reading below is
+           that handbook's growth rather than this text's.  A size therefore
+           belongs with its date, not with a configuration: 5,966,580 bytes at
+           _end = 0x01F06200 was an earlier reading on the 13th, and
+           5,967,604 bytes was 2026-10-12's.  The two readings on the 13th
+           differ in _end by EXACTLY 1,024 bytes -- one whole block of the
+           volume's block size -- which is this law demonstrating itself: a
+           record was edited, the volume gained a block, and the image grew
+           around it.  No reading could be taken on 2026-10-14, the day this
+           file became that payload: the link fails at HEAD for reasons no
+           pointer lane owns -- src/emulators/msx/slots.c brings 5,496,436
+           bytes of .bss, which breaches the ASSERT below, and the Geo3D unit
+           in the same directory asks for __divdi3, which a -msoft-float image
+           has no business containing (M17, and PS2-GS-LOG.md holds both `ld`
+           lines dated).  A failed link deletes the ELF it is writing, so
+           btron-ps2.elf is gone and the only image left is BTRON.ELF
+           (5,975,860 bytes, the 2026-10-13 12:42 build) inside
+           btron-ps2.iso -- and the volume inside that one still carries
+           the retired handbook, so the bytes quoted above and the bytes
+           the guest would read are no longer one text -- precisely the
+           drift chapter 20's dependency rule exists to forbid, caught
+           here because the payload moved and the image could not follow
+           it.
 
   GATE   src/drivers/ps2/ps2.ld enforces the budget with a link-time ASSERT,
          so a source list that grows the image past RAM fails at the link
@@ -1176,11 +1201,18 @@ PART THREE -- THE MEASURED MACHINE
                of slides that were long enough to count.
       [PSTAT]   the same slide carried the same counts at both speeds | the
                fast slide carried more counts | carried FEWER counts | both at
-               nearly one speed | no pair yet -- the five verdicts, in the
-               order a reader meets them: distance on the wire, an accelerator
-               above this port, something that divides by speed, a run that
-               was never the experiment, and a session that has not done it
-               yet.
+               nearly one speed | no pair yet | the mouse handler has seen NO
+               report since boot -- the six verdicts, in the order a reader
+               meets them: distance on the wire, an accelerator above this
+               port, something that divides by speed, a run that was never the
+               experiment, a session that has not done it yet, and a wire that
+               delivered nothing.  The last two refuse in OPPOSITE directions,
+               and the first live session needed the last one: a row that says
+               `slide further` to a bus which sent zero reports is advice
+               aimed at the wrong party.  So the splitter counts every report
+               it is fed, moving or not, and keeps the longest stroke it saw;
+               an unfinished session prints both numbers, and a silent one
+               says so instead.
       [BENCH] <tag> <w>x<h> <n>px/rep <n> us/rep max <n> us  <ns>.<cs> ns/px
                sum=0x<hex> chk=ok | MISMATCH | fill
                -- chk= is this instrument's own integrity check, not a property of the
@@ -1957,10 +1989,15 @@ PART FOUR -- THE INTERCONNECT: INPUT AS A REAL PLANE
     its slowest sample and its fastest one.  Every place this port prints
     pointer statistics -- `ptrstat`, Ctrl+\, the session's own exit row, and
     the headless run's closing receipt -- ends with that pair, its two speeds,
-    and the ratio between them.  them.  The speeds are printed beside it
-    because two slides at nearly one speed are NOT the experiment, and a row
-    that said 1.00x about them would be a false plateau in the other
-    direction; the row refuses, and says what to do instead.
+    and the ratio between them.  The speeds are printed beside it because two
+    slides at nearly one speed are NOT the experiment, and a row that said
+    1.00x about them would be a false plateau in the other direction.  The
+    refusals go further than a shrug: an unfinished session prints how many
+    reports it did see and how long its longest stroke was, so the reader can
+    check the numbers against their own hand, and a session whose pointer
+    device never answered prints that instead -- the two faults are opposite,
+    and 13.5 tells which one the first
+    live session hit.
 
   - ptgain    -- WHAT IS A COUNT WORTH TO THE HAND THAT SENT IT?  The only
     instrument here whose denominator is a human movement of known length
@@ -1979,13 +2016,16 @@ PART FOUR -- THE INTERCONNECT: INPUT AS A REAL PLANE
   cursor is a hand being asked to type at a prompt, and the keystroke between
   the slow slide and the fast one DISCARDS the slow slide -- the very sample
   the answer rests on.  The splitter's own arithmetic is gated on the host
-  instead, 46 checks and a matched pair of controls with OPPOSITE answers
+  instead, 59 checks and a matched pair of controls with OPPOSITE answers
   (counts proportional to distance must read 1.00x; counts proportional to
-  speed must read acceleration), by `make test-ps2-pointer`.  What a headless
-  run prints is `no pair yet`, which is the correct answer for a synthetic
-  stream that has one speed per phase: the pair is settled by a hand and by
-  nothing else, and the row that ships a gain is the row a live session
-  prints.
+  speed must read acceleration), by `make test-ps2-pointer`.  Three further
+  controls there are refusals of a different kind: deleting the 16-bit frame
+  mask, accepting any nudge as a sample, and letting a pair of near-identical
+  speeds answer.  What a headless run prints is `no pair yet` with its two
+  readings attached -- 404 reports seen, longest stroke 8480 counts -- which
+  is the correct answer for a synthetic stream that has one speed per phase:
+  the pair is settled by a hand and by nothing else, and the row that ships a
+  gain is the row a live session prints.
 
   The decisive protocol is five windows, of which the two that decide the
   layer question the splitter now keeps on its own -- see the `stroke pair`
@@ -2176,7 +2216,10 @@ PART FOUR -- THE INTERCONNECT: INPUT AS A REAL PLANE
        status     INFERRED (no raw mode in PCSX2 to bypass), and NO LIVE
                   SESSION HAS PRINTED A stroke pair VERDICT YET -- the
                   instrument that decides this row is compiled and gated on
-                  the host, but the row it fills needs a hand
+                  the host, but the row it fills needs a hand.  The first live
+                  session printed neither answer, only windows in which NO
+                  MOUSE REPORT LANDED, which measures the hand and the window
+                  rather than this layer
 
   PCSX2 hidmouse
        behaviour  one HID event per IN token; byte 0 = 3 buttons + pad, then
@@ -2226,6 +2269,23 @@ PART FOUR -- THE INTERCONNECT: INPUT AS A REAL PLANE
 
 13.5  Settled facts, so they are not re-opened
 
+  - The first live session that asked for the stroke pair settled nothing
+    about the layer it was meant to test, and the reason is worth keeping so
+    no one re-runs it blind: 55 s on the desktop, some two dozen Ctrl+\
+    prints, and every pointer window between them read reports=0 while the
+    input plane stayed alive on its own row (reports= climbing, dropped=0,
+    overruns=0, the ISR inside its 50 us budget).  A second session the same
+    afternoon settles the other half -- `[HID] first report landed, frame
+    0x0315 kbd=0 mouse=11`, eleven mouse reports before anyone touched a key
+    -- so the wire is NOT dead, and the zeros were a hand at a keystroke
+    rather than a port at fault.  The row now tells those two apart by name,
+    and neither session fills 13.4's macOS row, which needs the same slide
+    twice at two speeds.
+  - A live row nobody copied out is a row that never ran: PCSX2 writes one log
+    path, `pcsx2/PCSX2/logs/emulog.txt`, and every launch overwrites it -- the
+    12:18 session above survives only as the rows quoted here.  The headless
+    bench is the exception only because scripts/ps2_bench.sh runs against a
+    mktemp datapath, so it never touches that file.
   - The emulator's |127| clamp is not biting (2026-09-24 run, 460 reports: max
     count on any axis 27, median 2, byte ceiling 127).  Lowering PointerXScale
     to buy headroom buys nothing; do not re-open this without a sat= column
@@ -3301,7 +3361,10 @@ PART SIX -- THE PORT: DRIVERS, DESKTOP, STORAGE
 
   LAW 20b (the volume rebuilds when its content changes, which means the
   manifest's payload paths are PREREQUISITES).  make otherwise rebuilds
-  nothing when doc/md/PS2.md changes and the image ships the volume as it was
+  nothing when doc/txt/PS2.txt changes -- which, since 2026-10-14, is the
+  book you are reading, so editing a sentence here and building without this
+  rule ships an image whose /SYS still holds the previous draft -- and the
+  image ships the volume as it was
   last built -- the same stale-artifact disease chapter 4 and chapter 21
   document for PS2_GL and PS2_FP, arrived at from the other side: here the
   CONTENT changed, not the flag.  Two things had to be true for the sentence
@@ -3418,7 +3481,11 @@ PART SIX -- THE PORT: DRIVERS, DESKTOP, STORAGE
   them, so the headroom is about eight more 32 KiB cartridges before the
   link's ASSERT(_end <= 0x01FF0000) starts to be argued with.  THE VOLUME IS
   THE SMALLER OF THIS IMAGE'S TWO BUDGETS, which is the sentence chapter 4's
-  arithmetic was written to make possible.
+  arithmetic was written to make possible.  Both figures are the 2026-10-13
+  reading: rebuilding the volume on 2026-10-14, the day this file became the
+  payload, reports 737 used and 287 free -- five blocks more, and those five
+  blocks are this book's own prose, because a size belongs with its date and
+  this book now sits inside the number it quotes.
 
   GATE  nine rows of scripts/test_ps2.sh read this section off the ELF, and
         each was shown to be able to go red:
@@ -3578,16 +3645,26 @@ PART SEVEN -- BUILDING, VERIFYING, RUNNING
   count is the only evidence that a green suite is an instrument and not a
   decoration.
 
-  The current state of the suites that guard this port, each re-run for this
-  book on 2026-10-13: the image gate against the ELF on disk (btron-ps2.elf,
-  5,967,796 bytes, PS2_GL=eegs PS2_FP=hw), the host suites in one `make -k
-  test`, and the two xmb-render arms by hand because the aggregate does not
-  run them (fact 1 below):
+  The current state of the suites that guard this port.  The image gate's
+  91 / 91 was read on 2026-10-13 against the ELF on disk (btron-ps2.elf,
+  5,967,796 bytes, PS2_GL=eegs PS2_FP=hw), and it is the one row here
+  that could NOT be re-read on 2026-10-14: the image does not link at
+  HEAD at all (M17), so its number is dated rather than current.  A
+  failed link deletes the ELF it was writing, so btron-ps2.elf is gone;
+  the only image left is BTRON.ELF (5,975,860 bytes, the 2026-10-13
+  12:42 build) inside btron-ps2.iso, and the volume inside that one
+  still carries the retired handbook, because the /SYS swap post-dates
+  it.  The host suites were re-run on 2026-10-14 in one `make -k test`,
+  which exits 0, and the two xmb-render arms by hand because the
+  aggregate does not run them (fact 1 below):
 
     make test-ps2                91 / 91   the image gate: ABI, FPU law by
                                             mnemonic AND byte scan, COP1
                                             ownership, the clock, the single
-                                            canvas, the volume, the ISO
+                                            canvas, the volume, the ISO --
+                                            the one SKIP of this table today
+                                            (M17); every row under it was read
+                                            again on 2026-10-14
     make test-ps2-softfloat      checks=18384493  failures=0
                                             bit-exact against the host FPU, all
                                             32 libcalls (the count moves with the
@@ -3609,6 +3686,13 @@ PART SEVEN -- BUILDING, VERIFYING, RUNNING
                                             (floor 200), 14 in the dp scene
                                             (floor 12) -- the suite is a
                                             discriminator, not a tautology
+    make test-ps2-pointer        59 / 59   the stroke-pair splitter, gated
+                                            on the host because guest pixels
+                                            are the integral of the counts the
+                                            gain multiplies; three controls
+                                            each shown red, and the silent-wire
+                                            row that tells an idle hand from a
+                                            dead source
     make test-deskclip           23 / 23 checks, 1 skipped
     make test-tracker            78 / 78
     make test-global-menu        55 / 55   including the fall-through assertion
@@ -3616,6 +3700,11 @@ PART SEVEN -- BUILDING, VERIFYING, RUNNING
     make test-xmb-render-tgl     75 / 75   the same xmb.c through the other
                                             pipeline; one row of this pair was
                                             red until today, and why is below
+    make test-xmb-atlas          [PASS]    src/apps/xmb_atlas.h is byte-for-
+                                            byte what gen_xmb_atlas.c prints;
+                                            the sheet is committed like the
+                                            other embedded assets, so drift is
+                                            a failure rather than a rebuild
     make -k test                 exit 0, "ALL B-SYSTEM TEST SUITES PASSED"
     make arm64-elf               exits 0; rebuilds nothing, because no arm64
                                             source list holds a PS2-only file
@@ -4020,7 +4109,7 @@ APPENDIX A -- LABEL SCHEME, DECODED
 APPENDIX B -- MISALIGNMENTS WITH THE GOVERNING STANDARD
 =====================================================================
 
-  Where this port, or the handbook it was cast from, does not match the
+  Where this port, or this book's own dated record, does not match the
   standard it claims, or does not match the tree.  Stated explicitly because a
   misalignment nobody wrote down gets re-derived every six months.
 
@@ -4053,10 +4142,12 @@ APPENDIX B -- MISALIGNMENTS WITH THE GOVERNING STANDARD
        INTERPRETER.txt)                     in one place -- lane 10 is its implementation.
   M5   "tests 35-38", "39-44", "50-52",     scripts/test_ps2.sh AUTO-NUMBERS its rows
        "57-63", "80/80", "85/85" in the     (`[TEST $TOTAL]`), so every numeric citation
-       handbook -- RESOLVED 2026-10-13      in doc/md/PS2.md drifts as rows are inserted.
-                                            The handbook now cites rows by ASSERTION
-                                            NAME and prints one dated total (91/91 read
-                                            2026-10-13).  Renumber or name: not both.
+       handbook -- RESOLVED 2026-10-13      in any book drifts as rows are inserted.
+                                            The handbook is now retired into this
+                                            text, which cites rows by ASSERTION NAME
+                                            and prints one dated total per gate row
+                                            (91/91 read 2026-10-13).  Renumber or
+                                            name: not both.
   M6   the census printed f_surface         those belong to a different build: the
        160,893 / f_ribbon 185,204 / f_menu  handbook's figures predate rows 7 and 8
        113,214                              landing.  Current counted frame: 2,286 /
@@ -4067,16 +4158,21 @@ APPENDIX B -- MISALIGNMENTS WITH THE GOVERNING STANDARD
   M7   "gs= is the GS's time"               it is the EE's send-and-wait bracket around
                                             the DMAC transfer.  Nothing in this image
                                             measures GS raster time.  Chapters 9 and 11.
-  M8   PS2-ROADMAP.md still says "plan      superseded by Part Five: increments 1-5, 7 and
-       only.  No PS2 code changed yet",     8 are LANDED and gated, the blit is one pass
-       describes a two-pass blit, and       at the leaf store, and the canvas is 800x600.
-       prices 640x448 timings               The roadmap's phases 0-2 are history; its
-                                            phase 3 is chapters 19-20.
+  M8   PS2-ROADMAP.md said "plan only.      superseded by Part Five: increments 1-5, 7
+       No PS2 code changed yet",            and 8 are LANDED and gated, the blit is one
+       describes a two-pass blit, and       pass at the leaf store, and the canvas is
+       prices 640x448 timings               800x600.  Its phases 0-2 are history and
+                                            phase 3 is chapters 19-20, so the file was
+                                            DELETED 2026-10-14: a plan whose phases
+                                            have become chapters needs no second
+                                            document.
   M9   a blank hole in doc/md/PS2.md (its   the paragraphs that carried 5c's standing
        GS-backend section)                  laws, the row 7/8 premises and the current
-                                            baseline moved to doc/md/PS2-GS-LOG.md; the
-                                            handbook's normative body should point at them
-                                            rather than leave 5 blank lines.
+                                            baseline moved to doc/md/PS2-GS-LOG.md.
+                                            CLOSED 2026-10-14 -- the hole went with
+                                            the handbook it sat in, and the laws it
+                                            pointed at are this book's chapters 15
+                                            and 16.
   M10  "Verified NTSC Video Timings:        that is the OPTIONAL third arm (chapter 18's
        SMODE2=0x01, DISPLAY 636/50,         table).  The shipped default is 800x600 on a
        MAGH=3" as the shipped mode          720p progressive timing: SMODE2=0, DISPFB
@@ -4094,7 +4190,7 @@ APPENDIX B -- MISALIGNMENTS WITH THE GOVERNING STANDARD
   M12  "The GL backend is still named       true when written, superseded by increment 1
        virgl on PS2" and the selection is   and LAW 14e: the name now comes from
        a capability question never asked    gl_backend_choice.c (build dial + setting
-       (handbook §2.2)                      row), and test-gl-backend-choice's 13 checks
+       (the retired §2.2)                   row), and test-gl-backend-choice's 13 checks
                                             are the capability-free answer.
   M13  INTERPRETER.txt §3.3: no heap after  core_ps2.c allocates from a 12 MB .bss pool
        init                                 while the desktop runs.  It is bounded,
@@ -4103,8 +4199,8 @@ APPENDIX B -- MISALIGNMENTS WITH THE GOVERNING STANDARD
                                             deviation and this book records it as one
                                             (19d).
   M14  "ps2_builtins.c is the only unit     THREE units are built -mhard-float:
-       built -mhard-float" (handbook's      ps2_builtins.c, tinygl/vertex_stage.c,
-       driver table)                        apps/xmb_wave.c (Makefile's PS2_FP_OBJS).
+       built -mhard-float" (the retired     ps2_builtins.c, tinygl/vertex_stage.c,
+       handbook's table)                    apps/xmb_wave.c (Makefile's PS2_FP_OBJS).
                                             Each has an INTEGER-ONLY public surface, which
                                             is what keeps LAW 6b intact; the image gate
                                             lists all three by name.
@@ -4120,6 +4216,25 @@ APPENDIX B -- MISALIGNMENTS WITH THE GOVERNING STANDARD
                                             whole point.  The code is right, the
                                             comment predates it; a comment-only edit,
                                             so it waits for a Makefile round.
+  M17  the PS2 image does not link at HEAD  src/emulators/msx/slots.c puts 5,496,436 B in
+       -- three causes, two of them are     .bss, so ps2.ld's ASSERT(_end <= 0x01FF0000)
+       laws this book already states        fires -- chapter 4's own symptom, statics
+                                            above the ceiling silently lost.  The same
+                                            directory's geo3d.c emits 64-bit divides, so
+                                            the link asks for __divdi3, which -msoft-float
+                                            with no libgcc does not have (chapter 5). A
+                                            third was found on the way and IS fixed here:
+                                            slots.c prints its 0x2E/0x2F debug port with
+                                            fputc(), which include/gl/stdio.h stubbed for
+                                            every other stdio call but that one.  The
+                                            first two are NOT fixed, because where an
+                                            emulator's ROM buffers live on a 32 MiB bare-
+                                            metal machine is the B-MSX lane's decision,
+                                            not this port's.  Until they are, the only
+                                            image left is BTRON.ELF inside btron-ps2.iso
+                                            (2026-10-13 12:42), and it predates the
+                                            volume swap, so `make test-ps2` and the
+                                            bench are SKIP.
 
 =====================================================================
 APPENDIX C -- THE QUARANTINED DEVELOPMENT RECORD
@@ -4170,19 +4285,23 @@ APPENDIX C -- THE QUARANTINED DEVELOPMENT RECORD
                                       host gate in the prose it was written
                                       in.
 
-  Working reference:  doc/md/PS2.md is the handbook this book was cast from.
-                      It remains the place where a driver's file list, a shell
-                      command or a QEMU flag is looked up; where a LAW, a
-                      budget or a claim about performance is concerned, this
-                      document is the specification and it is the one to cite.
+  Working reference:  this file is the only PS2 book, so it is also the place
+                      where a driver's file list, a shell command or a QEMU
+                      flag is looked up -- chapters 17 and 23 -- as well as the
+                      specification that every LAW, budget and performance
+                      claim cites.  And since 2026-10-14 it is carried inside
+                      the guest it describes: /SYS's PS2 record has these very
+                      bytes as its payload, which chapter 20 states and
+                      chapter 4's image size proves.
 
 ---------------------------------------------------------------------
 
-  END  --  PS2.txt, rev 1, cast from doc/md/PS2.md on 2026-10-12 and re-measured
-  2026-10-13.  Every number in it was read from the tree or from a run on one
-  of those two dates, and the suites whose counts move with their own source
-  -- the softfloat differential, the image gate's row total -- carry the date
-  they were read.  That is why chapter 19's keyboard rows and chapter 4's
-  image figures say 2026-10-13 while chapter 2's cost row says both: a reading
-  is kept when a later one agrees with it, and a date is what makes the
-  agreement visible.
+  END  --  PS2.txt, rev 2, cast from doc/md/PS2.md on 2026-10-12, re-measured
+  2026-10-13, and the sole PS2 text since 2026-10-14, the day the handbook,
+  the roadmap and the unfolded draft were retired into it.  Every number in it
+  was read from the tree or from a run on one of those dates, and the suites
+  whose counts move with their own source -- the softfloat differential, the
+  image gate's row total -- carry the date they were read.  That is why
+  chapter 19's keyboard rows and chapter 4's image figures say 2026-10-13
+  while chapter 2's cost row says both: a reading is kept when a later one
+  agrees with it, and a date is what makes the agreement visible.

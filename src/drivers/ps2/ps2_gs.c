@@ -654,7 +654,7 @@ void ps2_gs_draw_cursor(int x, int y)
     }
 }
 
-/* Program the GS drawing environment (doc/md/PS2.md, EE/GS plan of record, increment 3).
+/* Program the GS drawing environment (doc/txt/PS2.txt ch. 16, increment 3).
  *
  * The packet's contents are ps2_gs_env.c's business and are gated word for word on the host;
  * this is the part that can only be done here, because channel 2 is.  There is deliberately no

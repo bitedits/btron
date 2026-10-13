@@ -5,6 +5,7 @@
 
 #include "v9938.h"
 #include <string.h>
+#include <stdio.h>
 
 #define MSX_SCREEN_W     256u
 #define MSX_SCREEN_H     212u
@@ -90,14 +91,14 @@ void v9938_reset(v9938_t *v)
 
 static inline uint32_t cpu_addr(const v9938_t *v)
 {
-    return ((uint32_t)(v->regs[14] & 0x07u) << 14) | v->vram_ptr;
+    return ((uint32_t)(v->regs[14] & 0x0Fu) << 14) | v->vram_ptr;
 }
 
 static inline void cpu_step(v9938_t *v)
 {
     v->vram_ptr = (uint16_t)((v->vram_ptr + 1u) & 0x3FFFu);
     if (v->vram_ptr == 0u) {
-        v->regs[14] = (uint8_t)((v->regs[14] + 1u) & 0x07u);
+        v->regs[14] = (uint8_t)((v->regs[14] + 1u) & 0x0Fu);
     }
 }
 
@@ -282,6 +283,7 @@ static void v9938_exec_command(v9938_t *v)
         }
         break;
 
+    case 0x03: /* LRMM - V9968 Logical Rotate/Scale Memory to Memory */
     case 0x09: /* LMMM - VRAM to VRAM copy with logical op */
         for (yi = 0; yi < ny; yi++) {
             int sy = v->sy + yi * diy;
@@ -369,6 +371,20 @@ static void v9938_exec_command(v9938_t *v)
         v->tr_x = 0;
         v->tr_y = 0;
         v->stat[2] |= ST_CE | ST_TR;
+        {
+            int cur_y = (v->dy + (int)v->tr_y * v->tr_diy) & 1023;
+            int cur_x = (v->dx + (int)v->tr_x * v->tr_dix);
+            v9938_pset_pixel(v, cur_x, cur_y, v->col, v->tr_op, mode);
+            v->tr_x++;
+            if (v->tr_x >= (v->nx ? v->nx : ((mode == 0x1C || mode == 0x0C) ? 256 : 512))) {
+                v->tr_x = 0;
+                v->tr_y++;
+                if (v->tr_y >= (v->ny ? v->ny : 1024)) {
+                    v->tr_active = 0;
+                    v->stat[2] &= (uint8_t)~(ST_CE | ST_TR);
+                }
+            }
+        }
         return;
 
     case 0x0F: /* HMMC - High speed Move CPU to VRAM */
@@ -846,15 +862,18 @@ void v9938_render(v9938_t *v, uint16_t *fb)
             }
         } else if (m == 0x0C || m == 0x1C || m == 0x14 || m == 0x10 || m == 0x08) {
             /* Sprite Mode 2: V9938 mode with Sprite Color Table */
-            uint32_t base_sat = (((uint32_t)(v->regs[11] & 0x03u) << 15) | ((uint32_t)(v->regs[5] & 0xFCu) << 7)) & (V9938_VRAM_SIZE - 1u);
-            uint32_t sct = base_sat;
-            uint32_t sat_m2 = (base_sat + 512u) & (V9938_VRAM_SIZE - 1u);
+            uint32_t sat_m2 = (((uint32_t)(v->regs[11] & 0x03u) << 15) | ((uint32_t)(v->regs[5] & 0xFCu) << 7)) & (V9938_VRAM_SIZE - 1u);
+            uint32_t sct = (sat_m2 - 512u) & (V9938_VRAM_SIZE - 1u);
             for (y = top_border; y < bot_border; y++) {
                 uint16_t *row_px = fb + (uint32_t)y * MSX_SCREEN_W;
                 uint16_t eff_y = (uint16_t)(y - top_border);
                 uint8_t drawn = 0u;
                 uint8_t s_front[MSX_SCREEN_W];
+                uint8_t s_color[MSX_SCREEN_W];
+                uint8_t s_ic[MSX_SCREEN_W];
                 memset(s_front, 0, sizeof(s_front));
+                memset(s_color, 0, sizeof(s_color));
+                memset(s_ic, 0, sizeof(s_ic));
 
                 for (uint16_t n = 0u; n < 32u; n++) {
                     uint32_t a = (sat_m2 + (uint32_t)n * 4u) & (V9938_VRAM_SIZE - 1u);
@@ -875,8 +894,9 @@ void v9938_render(v9938_t *v, uint16_t *fb)
                     uint16_t pat_row = mag ? (uint16_t)(row >> 1) : (uint16_t)row;
                     uint8_t  color_attr = v->vram[(sct + (uint32_t)n * 16u + pat_row) & (V9938_VRAM_SIZE - 1u)];
 
-                    if (color_attr & 0x20u) continue; /* IC bit */
                     uint8_t  color = (uint8_t)(color_attr & 0x0Fu);
+                    uint8_t  cc    = (uint8_t)(color_attr & 0x40u);
+                    uint8_t  ic    = (uint8_t)(color_attr & 0x20u);
                     int      sx    = (color_attr & 0x80u) ? ((int)raw_x - 32) : (int)raw_x;
 
                     if (color == 0u) continue;
@@ -897,10 +917,19 @@ void v9938_render(v9938_t *v, uint16_t *fb)
                         pat = v->vram[(spt + (uint32_t)t * 8u + (pat_row & 7u)) & (V9938_VRAM_SIZE - 1u)];
                         if (pat & (uint8_t)(0x80u >> (pat_col & 7u))) {
                             if (s_front[px]) {
-                                v->stat[0] |= ST_C;
+                                if (cc) {
+                                    s_color[px] |= color;
+                                    row_px[px] = (m == 0x1C) ? s_g7_sprite_pal[s_color[px] & 0x0Fu] : v->pal[s_color[px] & 0x0Fu];
+                                } else {
+                                    if (!ic && !s_ic[px]) {
+                                        v->stat[0] |= ST_C;
+                                    }
+                                }
                             } else {
-                                row_px[px] = (m == 0x1C) ? s_g7_sprite_pal[color & 0x0Fu] : v->pal[color & 0x0Fu];
                                 s_front[px] = 1u;
+                                s_color[px] = color;
+                                s_ic[px] = ic ? 1u : 0u;
+                                row_px[px] = (m == 0x1C) ? s_g7_sprite_pal[color & 0x0Fu] : v->pal[color & 0x0Fu];
                             }
                         }
                     }

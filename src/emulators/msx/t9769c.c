@@ -20,7 +20,7 @@ void t9769c_reset(t9769c_t *t)
     t->mapper_regs[1] = 2;
     t->mapper_regs[2] = 1;
     t->mapper_regs[3] = 0;
-    t->sys_flags = 0x20;     /* bit 5: CPU boot mode (1=R800) */
+    t->sys_flags = 0xA0;     /* bit 7: cold reset, bit 5: CPU boot mode */
     t->rtc_reg = 0;
     t->s1990_reg = 0;
     t->cpu_status = 0x60;    /* bit 5: 1=Z80, bit 6: 1=ROM mode */

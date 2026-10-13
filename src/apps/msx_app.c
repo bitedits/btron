@@ -520,12 +520,16 @@ typedef struct {
 /* SDL keysyms: LSHIFT 0x400000E2, RSHIFT 0x400000E6, LCTRL 0x400000E0,
  * LALT 0x400000E4. */
 static const MsxKeyMap s_keymap[] = {
-    { BTRON_KEY_UP,        MSX_JOY_UP,    0u, 0u },
-    { BTRON_KEY_DOWN,      MSX_JOY_DOWN,  0u, 0u },
-    { BTRON_KEY_LEFT,      MSX_JOY_LEFT,  0u, 0u },
-    { BTRON_KEY_RIGHT,     MSX_JOY_RIGHT, 0u, 0u },
-    { 'z',                 MSX_JOY_TRGA,  0u, 0u },
-    { 'x',                 MSX_JOY_TRGB,  0u, 0u },
+    { BTRON_KEY_UP,        MSX_JOY_UP,    MSX_KEY_UP_R,    MSX_KEY_UP_C },
+    { BTRON_KEY_DOWN,      MSX_JOY_DOWN,  MSX_KEY_DOWN_R,  MSX_KEY_DOWN_C },
+    { BTRON_KEY_LEFT,      MSX_JOY_LEFT,  MSX_KEY_LEFT_R,  MSX_KEY_LEFT_C },
+    { BTRON_KEY_RIGHT,     MSX_JOY_RIGHT, MSX_KEY_RIGHT_R, MSX_KEY_RIGHT_C },
+    { BTRON_KEY_SPACE,     MSX_JOY_TRGA,  MSX_KEY_SPACE_R, MSX_KEY_SPACE_C },
+    { ' ',                 MSX_JOY_TRGA,  MSX_KEY_SPACE_R, MSX_KEY_SPACE_C },
+    { 'z',                 MSX_JOY_TRGA,  5u, 7u },
+    { 'Z',                 MSX_JOY_TRGA,  5u, 7u },
+    { 'x',                 MSX_JOY_TRGB,  5u, 5u },
+    { 'X',                 MSX_JOY_TRGB,  5u, 5u },
     { BTRON_KEY_RETURN,    0u, MSX_KEY_ENTER_R,  MSX_KEY_ENTER_C },
     { BTRON_KEY_BACKSPACE, 0u, MSX_KEY_BS_R,     MSX_KEY_BS_C },
     { BTRON_KEY_TAB,       0u, MSX_KEY_TAB_R,    MSX_KEY_TAB_C },
@@ -554,10 +558,10 @@ static void msx_key(MsxViewer *st, UW key, BOOL down)
             if (down) st->joy |= s_keymap[i].joy;
             else      st->joy &= (uint8_t)~s_keymap[i].joy;
             msx_joy_set(st->joy);
-        } else if (down) {
-            msx_kbd_down(s_keymap[i].row, s_keymap[i].col);
-        } else {
-            msx_kbd_up(s_keymap[i].row, s_keymap[i].col);
+        }
+        if (s_keymap[i].row != 0xFFu) {
+            if (down) msx_kbd_down(s_keymap[i].row, s_keymap[i].col);
+            else      msx_kbd_up(s_keymap[i].row, s_keymap[i].col);
         }
         return;
     }

@@ -179,6 +179,7 @@ MSX_SRCS = src/emulators/msx/z80.c        \
            src/emulators/msx/psg.c        \
            src/emulators/msx/ppi.c        \
            src/emulators/msx/kbd.c        \
+           src/emulators/msx/geo3d.c      \
            src/emulators/msx/tronmsx.c
 
 # ── Common SDL2-hosted app sources ────────────────────────────────

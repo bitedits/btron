@@ -65,6 +65,8 @@ static uint32_t ink(const uint16_t *fb)
     return n;
 }
 
+extern uint8_t slots_read(uint16_t addr);
+
 int main(int argc, char **argv)
 {
     const char *rom_path = (argc > 1) ? argv[1] : "assets/msx/Lode Runner (1984)(Sony)[a].rom";
@@ -106,10 +108,17 @@ extern int msx_is_r800_active(void);
 extern v9938_t *msx_get_v9938(void);
 
     for (f = 1; f <= frames; f++) {
+        if (f == 270) {
+            msx_kbd_down(8, 0);
+            msx_joy_set(MSX_JOY_TRGA);
+        } else if (f == 290) {
+            msx_kbd_up(8, 0);
+            msx_joy_set(0);
+        }
         msx_run_frame();
         msx_blit_rgb565(s_fb);
         if (f == 1 || f == 30 || f == 60 || f == 120 || f == frames ||
-            (f >= 170 && f <= 240 && (f % 5) == 0) ||
+            (f >= 170 && f <= 300 && (f % 5) == 0) ||
             (f % 60) == 0) {
             char path[256];
             v9938_t *v = msx_get_v9938();

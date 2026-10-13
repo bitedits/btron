@@ -453,7 +453,7 @@ static void fill_row(uint16_t *row, uint16_t colour)
     for (x = 0; x < MSX_SCREEN_W; x++) row[x] = colour;
 }
 
-/* SCREEN 0: 40 columns of 6 dots, so the text is 240 of the 256 dots. */
+/* SCREEN 0: 40 columns of 6 dots (240 dots), centered with 8-dot borders. */
 static void line_text(uint16_t y)
 {
     uint32_t nt = nt_base(), pt = pt_base();
@@ -461,11 +461,11 @@ static void line_text(uint16_t y)
     uint16_t x;
 
     for (x = 0; x < MSX_SCREEN_W; x++) {
-        uint8_t glyph, bit;
-        if (x >= 240u) { s_px[x] = 0u; continue; }
-        glyph = VR(nt + (uint32_t)band * 40u + (uint32_t)(x / 6u));
-        bit   = (uint8_t)((VR(pt + (uint32_t)glyph * 8u + row) >>
-                           (6u - (x % 6u))) & 1u);
+        if (x < 8u || x >= 248u) { s_px[x] = 0u; continue; }
+        uint16_t tx = (uint16_t)(x - 8u);
+        uint8_t glyph = VR(nt + (uint32_t)band * 40u + (uint32_t)(tx / 6u));
+        uint8_t bit   = (uint8_t)((VR(pt + (uint32_t)glyph * 8u + row) >>
+                                   (7u - (tx % 6u))) & 1u);
         s_px[x] = (uint8_t)(bit ? (s_reg[7] >> 4) & 0x0Fu : 0u);
     }
 }
@@ -499,11 +499,18 @@ static void line_tiles(uint16_t y, uint8_t g2)
     for (x = 0; x < MSX_SCREEN_W; x++) {
         uint32_t cell = (uint32_t)band * 32u + (uint32_t)(x / 8u);
         uint8_t  name = VR(nt + cell);
-        uint32_t code = g2 ? (uint32_t)name + chunk * 256u
-                           : (uint32_t)name;
-        uint8_t  cb   = g2 ? VR(ct + code * 8u + row) : VR(ct + (name >> 3));
-        uint8_t  bit  = (uint8_t)((VR(pt + code * 8u + row) >>
-                                   (7u - (x % 8u))) & 1u);
+        uint8_t  cb, bit;
+
+        if (g2) {
+            uint32_t pat_off = ((((uint32_t)chunk & (s_reg[4] & 3u)) << 8) | name) * 8u + row;
+            uint32_t col_off = ((chunk * 256u + name) * 8u + row) &
+                               (((uint32_t)(s_reg[3] & 0x7Fu) << 6) | 0x3Fu);
+            cb  = VR(ct + col_off);
+            bit = (uint8_t)((VR(pt + pat_off) >> (7u - (x % 8u))) & 1u);
+        } else {
+            cb  = VR(ct + (name >> 3));
+            bit = (uint8_t)((VR(pt + (uint32_t)name * 8u + row) >> (7u - (x % 8u))) & 1u);
+        }
         /* Colour byte: high nibble = foreground (pattern bit 1),
          * low nibble = background (pattern bit 0). */
         uint8_t  c    = bit ? (uint8_t)(cb >> 4) : (uint8_t)(cb & 0x0Fu);

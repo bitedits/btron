@@ -17,6 +17,7 @@
 #include "s1985.h"
 #include "t9769b.h"
 #include "t9769c.h"
+#include "geo3d.h"
 
 #define SLOT_BIOS    0u
 #define SLOT_CART_A  1u
@@ -35,6 +36,8 @@ enum {
 s1985_t g_s1985;
 t9769b_t g_t9769b;
 t9769c_t g_t9769c;
+geo3d_t g_geo3d;
+extern v9938_t *msx_get_v9938(void);
 static uint16_t s_machine = BMSX_MACHINE_MSX;
 
 /* Memory pools */
@@ -370,6 +373,7 @@ void slots_init(void)
     s1985_init(&g_s1985);
     t9769b_init(&g_t9769b);
     t9769c_init(&g_t9769c);
+    geo3d_init(&g_geo3d);
 }
 
 void slots_reset(void)
@@ -384,6 +388,7 @@ void slots_reset(void)
     s1985_reset(&g_s1985);
     t9769b_reset(&g_t9769b);
     t9769c_reset(&g_t9769c);
+    geo3d_reset(&g_geo3d);
     remap();
 }
 
@@ -528,7 +533,9 @@ uint8_t msx_bus_in(uint8_t port)
 
     if (port >= 0x88u && port <= 0x8Bu) return vdp_read(port);
     if (port >= 0x98u && port <= 0x9Bu) return vdp_read(port);
-    if (port == 0x8Du || port == 0x9Du || port == 0x8Fu || port == 0x9Fu) return 0x00u; /* Geo3D coprocessor status/data */
+    if (port == 0x8Du || port == 0x9Du || port == 0x8Fu || port == 0x9Fu) {
+        return geo3d_read(&g_geo3d, port);
+    }
     if (port >= 0xA0u && port <= 0xA3u) return psg_read(port);
     if (is_ppi(port, &reg))             return ppi_read(reg);
 
@@ -550,6 +557,11 @@ void msx_bus_out(uint8_t port, uint8_t value)
 
     if (port >= 0x88u && port <= 0x8Bu) { vdp_write(port, value); return; }
     if (port >= 0x98u && port <= 0x9Bu) { vdp_write(port, value); return; }
+    if (port == 0x8Du || port == 0x9Du || port == 0x8Fu || port == 0x9Fu) {
+        if (!g_geo3d.vdp) geo3d_attach_vdp(&g_geo3d, msx_get_v9938());
+        geo3d_write(&g_geo3d, port, value);
+        return;
+    }
     if (port >= 0xA0u && port <= 0xA3u) { psg_write(port, value); return; }
     if (is_ppi(port, &reg)) {
         if (reg == 0u) slots_primary_select(value);

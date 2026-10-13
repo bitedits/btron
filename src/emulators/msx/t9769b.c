@@ -20,7 +20,7 @@ void t9769b_reset(t9769b_t *t)
     t->mapper_regs[1] = 2;
     t->mapper_regs[2] = 1;
     t->mapper_regs[3] = 0;
-    t->sys_flags = 0x00;
+    t->sys_flags = 0x80;     /* bit 7: cold reset / show logo */
     t->rtc_reg = 0;
     t->kanji_addr = 0;
     t->opll_reg = 0;

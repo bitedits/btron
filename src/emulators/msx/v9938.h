@@ -20,6 +20,7 @@ typedef struct {
 
     uint16_t vram_ptr;               /* low 14 bits */
     uint8_t  latch;                  /* first byte of 2-byte sequence */
+    uint8_t  pal_latch;              /* first byte of 2-byte palette sequence */
     uint8_t  ctrl_pending;
     uint8_t  pal_pending;
     uint8_t  write_mode;
@@ -38,6 +39,16 @@ typedef struct {
     /* Line interrupt and raster state */
     uint32_t t_line;
     uint16_t line;
+
+    /* Transfer state for HMMC / LMMC */
+    uint8_t  tr_active;
+    uint8_t  tr_code;
+    uint8_t  tr_op;
+    int      tr_dix;
+    int      tr_diy;
+    uint16_t tr_x;
+    uint16_t tr_y;
+    uint16_t tr_bytes_per_line;
 } v9938_t;
 
 void    v9938_init(v9938_t *v, int is_v9958);
@@ -48,5 +59,7 @@ void    v9938_advance(v9938_t *v, uint32_t t_states);
 int     v9938_vblank_taken(v9938_t *v);
 void    v9938_render(v9938_t *v, uint16_t *fb);
 uint8_t v9938_mode(const v9938_t *v);
+void    v9938_draw_line(v9938_t *v, int x0, int y0, int x1, int y1, uint8_t color, uint8_t op);
+void    v9938_draw_hline(v9938_t *v, int x0, int x1, int y, uint8_t color, uint8_t op);
 
 #endif /* _BTRON_EMULATOR_MSX_V9938_H_ */

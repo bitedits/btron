@@ -12,6 +12,7 @@
 
 #include <emulators/tronmsx.h>
 #include <string.h>
+#include <stdio.h>
 
 #include "z80.h"
 #include "r800.h"

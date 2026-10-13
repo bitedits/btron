@@ -105,9 +105,10 @@ static void ps2_kprintf(const char *fmt, ...);
  * costs its surface, the rasterizer's depth plane and the icon atlas twice over
  * (surface + depth + atlas + upload copy) -- 8 MB held the baseline and the surface
  * and nothing else.  The ceiling is the image budget: this array is .bss, and the
- * ASSERT in ps2.ld keeps _end below the stack at 0x01FF0000, which 12 MB does with
- * 2 MB to spare and 16 MB does not. */
-#define PS2_HEAP_SIZE (12 * 1024 * 1024)
+ * ASSERT in ps2.ld keeps _end below the stack at 0x01FF0000.  It was 12 MB with 2 MB to
+ * spare; the MSX core (4 MiB-class cartridge buffer, 256 KiB V9938 VRAM, S1990, Geo3D)
+ * has since taken that, so the pool is 11 MB. */
+#define PS2_HEAP_SIZE (11 * 1024 * 1024)
 static uint8_t s_ps2_heap[PS2_HEAP_SIZE] __attribute__((aligned(64)));
 
 #define PS2_HEAP_ALIGN  16u
@@ -5039,6 +5040,7 @@ static uint32_t ps2_bench_promote_loop(uint32_t *calls)
  * MSX ROM says its name; printable ones only, so a binary never garbles the log. */
 static void ps2_bench_msx(void)
 {
+#ifdef BTRON_PS2_MSX
     static VfsEntry entries[16];
     static uint8_t  rom[MSX_ROM_SIZE + 1];
     char path[VFS_MAX_PATH];
@@ -5077,6 +5079,14 @@ static void ps2_bench_msx(void)
     }
 
     msx_shutdown();     /* leave no machine instance for the phases below */
+#else
+    /* Parked, not absent: the row prints either way so a log line can never be read as
+     * "the phase forgot to run".  PS2_MSX=0 keeps the tronMSX core and its 10.6 MB of
+     * statics out of a 32 MB machine whose .bss already sums past the ps2.ld ceiling --
+     * see the dial's own note in the Makefile and M17 in doc/txt/PS2.txt. */
+    ps2_kprintf("[MSX] parked: this image links no tronMSX (PS2_MSX=0); the Games row "
+                "opens xmb.c's weak stub, so rows/cbios/rom are SKIP, not FAIL\n");
+#endif
 }
 
 static void ps2_bench_run(GDEV *screen)

@@ -229,6 +229,11 @@ int msx_load_rom(const uint8_t *rom, uint32_t size, uint32_t entry)
     return MSX_OK;
 }
 
+uint8_t *msx_rom_buffer(uint32_t *cap)
+{
+    return slots_rom_ptr(cap);
+}
+
 /* ---- input -------------------------------------------------------------- */
 
 void msx_kbd_down(uint8_t row, uint8_t col) { kbd_down(row, col); }

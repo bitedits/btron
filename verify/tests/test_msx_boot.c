@@ -139,6 +139,9 @@ extern uint8_t *vdp_vram(uint32_t *size);
                 printf("V9938 regs:");
                 for (int r = 0; r <= 23; r++) printf(" R%d=%02X", r, v->regs[r]);
                 printf("\n");
+                printf("V9938 pal:");
+                for (int p = 0; p < 16; p++) printf(" P%d=%04X", p, v->pal[p]);
+                printf("\n");
                 printf("stat[2]=%02X tr_active=%d tr_x=%d tr_y=%d\n", v->stat[2], v->tr_active, v->tr_x, v->tr_y);
                 printf("VRAM dump around line 212 (0xD400) and bottom HUD:\n");
                 printf("  addr 0xD400: %02X %02X %02X %02X %02X %02X %02X %02X\n",

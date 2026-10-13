@@ -84,6 +84,11 @@ int  msx_init(const msx_cfg_t *cfg);      /* -> MSX_* codes          */
 void msx_shutdown(void);                  /* idempotent              */
 
 int  msx_load_rom(const uint8_t *rom, uint32_t size, uint32_t entry);
+
+/* The core's own cartridge buffer, MSX_ROM_SIZE + 1 bytes (*cap).  A caller that
+ * reads a cartridge into it and passes the same pointer to msx_load_rom() avoids
+ * holding a second copy; the extra byte lets it see an image over the cap. */
+uint8_t *msx_rom_buffer(uint32_t *cap);
 void msx_reset(void);
 void msx_pause(BOOL on);
 void msx_run_frame(void);                 /* exactly T_PER_FRAME T   */

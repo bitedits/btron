@@ -129,7 +129,11 @@ static void get_desktop_icon_layout(int idx, int *out_dim, RECT *out_plate, int 
  * of by one resolution is what makes the rect path a rect path there.  The array
  * below is sized by this macro rather than by a second copy of the same literal, so
  * the capacity the code checks is the memory the code has. */
-#define BTRON_BG_CAP_PX (1024u * 768u)
+#if defined(__STDC_HOSTED__) && __STDC_HOSTED__ == 1
+#  define BTRON_BG_CAP_PX (1024u * 768u)
+#else
+#  define BTRON_BG_CAP_PX (800u * 600u)   /* PS2 canvas; bigger ones skip the cache */
+#endif
 
 static COLOR s_cached_bg[BTRON_BG_CAP_PX] __attribute__((aligned(64)));
 static BOOL  s_bg_cached = FALSE;

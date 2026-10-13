@@ -12,6 +12,7 @@
 #include "eegs_present.h"
 
 #include "backend_eegs.h"
+#include "../drivers/ps2/ps2_gif_ring.h"
 #include "../drivers/ps2/ps2_gs.h"
 #include "../drivers/ps2/ps2_gs_env.h"
 #include "../drivers/ps2/ps2_gs_pack.h"
@@ -32,6 +33,16 @@
 /* One group per recorder send: the vertex groups are bounded by GS_REC_QW_CAP, and a texture
  * switch is its own group of four quadwords.  256 is ~50x the measured frame's group count. */
 #define EEGS_MAX_GROUPS 256u
+
+/* LANE 10's bound, stated where both halves of it are visible.  The ring has to hold one whole
+ * frame's transfers -- a group each, plus the environment packet that goes in front of them -- or a
+ * refusal would mean "this port built too small a queue" instead of the one thing `refused=` is
+ * allowed to mean: the GIF fell behind.  The pair lives in two files, so only the build can see
+ * it; the idiom is core_ps2.c's negative array size, because PS2_CFLAGS is -std=c99 and
+ * _Static_assert is C11.  If the group table ever outgrows the ring this is a compile error rather
+ * than a picture with a piece missing. */
+typedef char eegs_ring_holds_a_frame[
+    (PS2_GIF_RING_CAP > EEGS_MAX_GROUPS + 1u) ? 1 : -1];
 
 /* Each staged quadword is two uint64_t, exactly as the recorder's own buffer holds them: the DMA
  * reads 16 bytes at a time, and the GIF decodes one register per quadword. */
@@ -66,6 +77,16 @@ static void eegs_stage_sink(void *user, const uint64_t *qw, uint32_t qwc)
 
 void eegs_present_begin(void)
 {
+    /* LANE 10's completion check, and it is here rather than at send() on purpose.  The stage is
+     * the buffer the ring's descriptors point into, and this function is the one moment before the
+     * next frame's words are written into it -- so this is where "has the GIF finished reading what
+     * I committed last pass?" gets asked, once per paint pass, instead of once per transfer at the
+     * moment of committing it.  A reap with nothing queued and nothing in flight is a register read
+     * and a comparison; the µs it does spend waiting are counted into the ring's `wait_us`, which
+     * is the number that says whether the presentation plane is still, in the end, being stopped by
+     * its consumer. */
+    (void)ps2_gif_reap();
+
     s_groups = 0u;
     s_used = 0u;
     s_dropped = 0u;
@@ -82,7 +103,7 @@ void eegs_present_end(void)
 int eegs_present_send(const RECT *client)
 {
     gs_draw_env env;
-    uint32_t i, off, qw_sent, sent;
+    uint32_t i, off, qw_sent, posted, sent;
 
     if (client == 0 || s_groups == 0u) return 0;
     if (client->right <= client->left || client->bottom <= client->top) return 0;
@@ -134,12 +155,29 @@ int eegs_present_send(const RECT *client)
 
     /* One DMA per group, in recorded order: the environment above has to reach the GS before the
      * first vertex, and each group is a complete packet with EOP set, which is what makes a
-     * transfer per group legal rather than merely convenient. */
+     * transfer per group legal rather than merely convenient.
+     *
+     * These are POSTED, not sent (LANE 10).  The stage is not written again before the reap at the
+     * next begin(), so a descriptor can point into it while the EE goes on to composite the rest
+     * of the frame, and the transfer's cost is no longer a hole in this pass.  Order survives
+     * because the ring is a FIFO and because the only synchronous producer left -- the canvas band
+     * that `ps2_upload_cover_in_layer()` puts back over a stream that buried it -- reaps before it
+     * starts, so it can put nothing in front of a group it did not wait for.
+     *
+     * The first refusal ends the frame.  Continuing would let a later group take a slot that freed
+     * up while an earlier one was lost, which is primitives out of draw order rather than a
+     * missing tail; the lost groups are counted in the same `dropped` column the stage's own
+     * overflow uses, because both mean a piece of the picture no screen has. */
     off = 0u;
     qw_sent = 0u;
+    posted = 0u;
     for (i = 0u; i < s_groups; i++) {
-        ps2_gs_gif_send(&s_stage[2u * off], s_group_qwc[i]);
+        if (ps2_gif_post(&s_stage[2u * off], s_group_qwc[i]) != 0) {
+            s_dropped += s_groups - i;
+            break;
+        }
         qw_sent += s_group_qwc[i];
+        posted++;
         off += s_group_qwc[i];
     }
 
@@ -169,9 +207,10 @@ int eegs_present_send(const RECT *client)
                                           b >= (int32_t)s_stats.clip_h - 1);
     }
 
-    /* The frame is over: the next begin starts a fresh stage, and a group that was sent is never
-     * sent twice. */
-    sent = s_groups;
+    /* The frame is over: the next begin() starts a fresh stage, and a group that was sent is never
+     * sent twice.  `sent` is the groups the ring ACCEPTED, not the groups the stage holds, so a
+     * refusal shows up as the shorter frame it is wherever this return value is read. */
+    sent = posted;
     s_groups = 0u;
     s_used = 0u;
     return (int)sent;

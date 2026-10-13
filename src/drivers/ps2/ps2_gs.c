@@ -14,6 +14,8 @@
 #include "ps2_gs.h"
 
 #include <btron/types.h>     /* BTRON_PIXEL_FB, the canvas's byte order */
+#include <btron/dp.h>        /* btron_render_perf_us(), the ring's clock */
+#include "ps2_gif_ring.h"    /* LANE 10: the ring whose hardware seam this file is */
 #include "ps2_gs_env.h"      /* the environment packet, and apply's argument type */
 #include "ps2_gs_pack.h"     /* the field encoders the blit path now builds its words with */
 #include "ps2_gs_tex.h"      /* the texture-plane registry this file is the bus for */
@@ -92,26 +94,82 @@ extern void* tkl_memmove(void *dst, const void *src, size_t n);
  *
  * Not static since increment 3: the drawing environment is a second producer on this same
  * pipe, and giving it a copy of the register dance would be two places to keep right about
- * STR polling.  The blit path above and ps2_gs_draw_env_apply() below are the only callers. */
+ * STR polling.  The blit path above and ps2_gs_env.h's packet used to be its only callers; the
+ * environment moved to the ring with LANE 10, so what still arrives here is the canvas stream --
+ * the transfers whose buffer this port cannot promise will still be there in one DMA's time.
+ *
+ * Two things this function now does that it did not do before, both of them LANE 10's:
+ *
+ *   It hands the ring first.  A synchronous start writes CHCR while the ring may be holding
+ *   descriptors that were posted earlier and have not started, and channel 2 takes one transfer at
+ *   a time -- so a start here without the drain would put the canvas band in front of primitives
+ *   the EE had already committed to the bus, and the layer's picture would draw on the wrong
+ *   page of its own history.  reap() also leaves `in flight` false, which is what keeps the ring's
+ *   one-flag model honest: a flag the ring set for a transfer this function started would be a
+ *   lie, and the next drain() would wait for a transfer that never happened.
+ *
+ *   It counts its own spin.  The blocked time of a producer that blocks was, until now, the one
+ *   number on this pipe nobody printed, and LANE 10's claim is not "no producer ever waits" but
+ *   "every wait is measured and bounded".  `sync_sends`/`sync_us`/`sync_max_us` in [GSTS] gif:
+ *   are the answer, and they are what says how much of VIOLATION 2 this increment left in.
+ */
 void ps2_gs_gif_send(const void *packet, uint32_t qwc)
 {
-    /* Clear Channel 2 status bit in D_STAT */
-    D_STAT = (1 << 2);
+    uint32_t t0;
 
-    /* Write physical address to MADR (strip KSEG bits) */
+    (void)ps2_gif_reap();
+
+    t0 = ps2_gif_hw_us();
+    ps2_gif_hw_start(packet, qwc);
+
+    /* Wait for transfer to complete (STR bit clears when done) */
+    while (ps2_gif_hw_busy())
+        ;
+
+    ps2_gif_note_sync(ps2_gif_hw_us() - t0);
+
+    __asm__ volatile("" : : : "memory");
+}
+
+/* ── LANE 10: the ring's hardware seam ─────────────────────────────────────────────────
+ * ps2_gif_ring.c is bookkeeping it can do on any machine, so the three facts it needs from the
+ * bus are functions it calls rather than registers it reads.  This is the only place in the port
+ * that answers them, which keeps DMAC channel 2 where the image gate can find it: test_ps2.sh
+ * reads the MADR/QWC/D_STAT triple out of the disassembly and expects it in the channel-2
+ * producers and nowhere else -- including not in the ring, whose purity is that row's other half.
+ *
+ * The address arithmetic is the same mask the sender has always used: MADR takes a physical
+ * address, so the KSEG bits come off, and the packet a descriptor carries is the pointer its
+ * producer was given.  Reading the words through a *cached* pointer is safe for one reason only,
+ * and the port asserts it rather than trusting it -- the EE's L1 caches are never enabled, so
+ * there is no stale line for the bus master to miss (see ps2_fb() above, and the CP0 row in
+ * scripts/test_ps2.sh). */
+int ps2_gif_hw_busy(void)
+{
+    return (D2_CHCR & (1 << 8)) != 0u;
+}
+
+void ps2_gif_hw_start(const void *packet, uint32_t qwc)
+{
+    /* Clear Channel 2 status bit in D_STAT, then name the buffer and its length, then start:
+     * direction = 1 (to peripheral/GIF), STR = 1 (bit 8).  The barrier is between the address
+     * pair and the start bit, because a reorder there starts a transfer of whatever MADR held
+     * before this packet was written. */
+    D_STAT = (1 << 2);
     D2_MADR = ((uint32_t)(uintptr_t)packet) & 0x1FFFFFFF;
     D2_QWC  = qwc;
 
     __asm__ volatile("" : : : "memory");
 
-    /* Start DMA: direction = 1 (to peripheral/GIF), STR = 1 (bit 8) */
     D2_CHCR = (1 << 0) | (1 << 8);
+}
 
-    /* Wait for transfer to complete (STR bit clears when done) */
-    while (D2_CHCR & (1 << 8))
-        ;
-
-    __asm__ volatile("" : : : "memory");
+/* Microseconds, from the same folded clock every stage column in [XMBT] and [PSTAT] is read
+ * against.  Folded rather than raw because a spin here can exceed a CP0 Count wrap: an XMB frame
+ * once did, which is why the row that measures it says `<=`. */
+uint32_t ps2_gif_hw_us(void)
+{
+    return btron_render_perf_us();
 }
 
 /* One Host->Local setup packet (5 QWs) into an arbitrary VRAM block: where in VRAM, how big,
@@ -661,12 +719,22 @@ void ps2_gs_draw_cursor(int x, int y)
  * ps2_gs_poke64() on this path: the GIF takes the whole environment in one DMA, in order, and
  * nine individual stores would each take a bus turn and none of them would be ordered against
  * the primitive stream that follows.  make test-ps2 reads that off the image -- tests 39 to 41
- * find the call into the builder, no GS poke, and the DMAC window this write goes to.  Note that
- * the sender itself is not what the image gate looks for: it is in this translation unit and
- * -O2 folds it in, so the gate names the registers written rather than the call.
+ * find the call into the builder, no GS poke, and the way out to DMAC channel 2.  Note that the
+ * sender itself is not what the image gate looks for: with LANE 10 the way out is a post, which
+ * is a call into another translation unit and therefore readable as a jal, where the register
+ * writes it turns into are inlined here and gone from this function's range.
  *
- * Nothing calls it yet -- increment 4 is where an app's primitives arrive -- so the image is
- * unchanged for everything the user can see. */
+ * POSTED, and it is the only producer of stream words that is.  `env_pkt` is a static, so the
+ * packet this pass sends is the packet the next apply overwrites -- and the next apply happens
+ * after src/gl/eegs_present.c's begin(), which is exactly where the ring is reaped.  That is the
+ * buffer-lifetime law in ps2_gif_ring.h, and it is why the canvas stream below this function is
+ * still synchronous: the canvas has a writer in every console character, and no reap is scheduled
+ * between one and the next upload.
+ *
+ * A refusal is returned as -1, and the caller stops there.  Sending a layer's primitives under
+ * the *previous* layer's clip is a picture with the wrong rectangle, which is worse than the
+ * frame that never happened -- and unreachable by construction anyway, since the ring holds more
+ * descriptors than the stage holds groups. */
 int ps2_gs_draw_env_apply(const gs_draw_env *env)
 {
     /* Tag pair plus one quadword per register, in quadword-aligned storage: the DMA reads
@@ -676,6 +744,6 @@ int ps2_gs_draw_env_apply(const gs_draw_env *env)
 
     if (gs_draw_env_packet(env, p) != 0) return -1;
 
-    ps2_gs_gif_send(env_pkt, gs_draw_env_qwc());
+    if (ps2_gif_post(env_pkt, gs_draw_env_qwc()) != 0) return -1;
     return 0;
 }

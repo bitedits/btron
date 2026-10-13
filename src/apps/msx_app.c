@@ -215,10 +215,10 @@ static void msx_scan_roms(MsxViewer *st)
     msx_sort_rows(st);
 }
 
-/* One cartridge over and above the core's cap: enough to tell a 32 KiB image
- * from a bigger one without copying the bigger one, since the core can only run
- * the first page of a banked cart and must be told to refuse the rest. */
-static uint8_t s_rom_image[MSX_ROM_SIZE + 1];
+/* No second copy: the cartridge is read straight into the core's own buffer
+ * (msx_rom_buffer), which has one byte more than the core's cap -- enough to
+ * tell a 32 KiB image from a bigger one, since the core can only run the first
+ * page of a banked cart and must be told to refuse the rest. */
 
 /* The Real Body this row named, anchor included: a drawer can hold two bodies
  * of one name, and only the fid says which one the cursor is on. */
@@ -238,9 +238,12 @@ static BOOL msx_load(MsxViewer *st, const char *name)
     st->notice[0] = '\0';
     if (!name || !name[0]) return FALSE;
 
+    uint32_t rom_cap = 0;
+    uint8_t *rom_image = msx_rom_buffer(&rom_cap);
+
     vfs_child_path(st->path, sizeof(st->path), MSX_ROM_CATALOGUE, name,
                    msx_rom_fid(st, name));
-    if (vfs_read_blob(st->path, s_rom_image, sizeof(s_rom_image), &got) != 0 ||
+    if (vfs_read_blob(st->path, rom_image, rom_cap, &got) != 0 ||
         got == 0) {
         snprintf(st->notice, sizeof(st->notice),
                  "ROM を開けません (cannot open %s)", st->path);
@@ -257,7 +260,7 @@ static BOOL msx_load(MsxViewer *st, const char *name)
     }
     msx_init(&cfg);
 
-    rc = msx_load_rom(s_rom_image, (uint32_t)got, 0);
+    rc = msx_load_rom(rom_image, (uint32_t)got, 0);
 
     if (rc != MSX_OK) {
         if (rc == MSX_ERR_SIZE)

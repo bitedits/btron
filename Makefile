@@ -1087,12 +1087,27 @@ PS2_GL_SRCS    = src/gl/gl_dispatch.c     \
                  src/apps/xmb.c           \
                  src/apps/xmb_wave.c        \
                  src/apps/glgears.c
-# B-MSX rides in the image: the tronMSX core reads no float, no host clock and no
-# libc beyond what src/kernel/libstr.c provides, and its two pieces of media --
-# C-BIOS and the cartridge catalogue -- are bodies of the /SYS volume the image
-# already carries (src/tools/manifest.txt, the `cbios` and `msx` drawers).  So the
-# XMB Games band lists what the machine holds and Cross opens it, with no file
+# B-MSX rides in the image when PS2_MSX=1: the tronMSX core reads no float, no host
+# clock and no libc beyond what src/kernel/libstr.c provides, and its two pieces of
+# media -- C-BIOS and the cartridge catalogue -- are bodies of the /SYS volume the
+# image already carries (src/tools/manifest.txt, the `cbios` and `msx` drawers).  So
+# the XMB Games band lists what the machine holds and Cross opens it, with no file
 # system below the program at all.
+#
+# It is PARKED at 0 as of 2026-10-14, because the machine cannot hold both.  Read off
+# this tree's own objects (readelf -S over every *.ps2.o): their .bss sums to
+# 35,809,162 B against the ceiling ps2.ld ASSERTs at 0x01FF0000 = 33,488,896 B, and the
+# MSX units are 10,656,894 B of it (slots.c 5,496,436 -- a 4 MiB cartridge buffer, a
+# 512 KiB mapper RAM, and the rest -- plus src/apps/msx_app.c 4,323,888).  The PS2 heap
+# pool is itself 12 MiB of the total, so no amount of pool trimming closes a 2.3 MB gap
+# on top of 10.6 MB of emulator statics.  Where an MSX ROM buffer lives on a 32 MB
+# Emotion Engine is the B-MSX lane's decision (doc/txt/PS2.txt M17); what this port can
+# decide is to stop shipping an image that does not link at all.  `make ps2 PS2_MSX=1`
+# puts it back exactly as it was, and the gate rows that name it then run again; with
+# the dial at 0 those rows print SKIP, and src/apps/xmb.c's weak open_msx_window*()
+# stubs mean a Games row is a menu row that does nothing rather than a link error.
+PS2_MSX         ?= 0
+PS2_MSX_SRCS    = $(if $(filter 1,$(PS2_MSX)),$(MSX_SRCS) src/apps/msx_app.c,)
 PS2_SRCS       = $(PS2_STARTUP)           \
                  src/cores/core_init.c    \
                  src/drivers/ps2/ps2_gs.c \
@@ -1108,8 +1123,7 @@ PS2_SRCS       = $(PS2_STARTUP)           \
                  src/drivers/ps2/ps2_irq.c \
                  src/drivers/ps2/ps2_usb.c \
                  $(CLU_TERMIO_SRCS)       \
-                 $(MSX_SRCS)              \
-                 src/apps/msx_app.c       \
+                 $(PS2_MSX_SRCS)          \
                  $(TINYGL_SRCS)           \
                  $(PS2_GL_SRCS)           \
                  src/kernel/libstr.c      \
@@ -1180,6 +1194,22 @@ ifneq ($(PS2_GL_PREV),$(PS2_GL))
 $(shell mkdir -p ./.build && echo '$(PS2_GL)' >$(PS2_GL_STAMP) && \
         rm -f src/gl/gl_backend_choice.ps2.o src/gl/gl_dispatch.ps2.o src/gl/egl_surface.ps2.o)
 $(info [PS2] PS2_GL is now $(PS2_GL) (was $(if $(PS2_GL_PREV),$(PS2_GL_PREV),unset)) -- the objects that read it will rebuild)
+endif
+
+# PS2_MSX is a flag as well as a source list: src/cores/core_ps2.c compiles its [MSX] bench
+# phase under it, and a stale object there would print a row about a machine the image does
+# not contain -- or omit a row about one it does.  Same content-comparison stamp, same
+# disease as PS2_GL, and it removes the bench object too because that is a second compile
+# of the same source under the same define.
+PS2_MSX_STAMP = .build/ps2-msx.stamp
+PS2_MSX_PREV := $(shell cat $(PS2_MSX_STAMP) 2>/dev/null)
+ifneq ($(PS2_MSX_PREV),$(PS2_MSX))
+$(shell mkdir -p ./.build && echo '$(PS2_MSX)' >$(PS2_MSX_STAMP) && \
+        rm -f src/cores/core_ps2.ps2.o src/cores/core_ps2.pbench.o)
+$(info [PS2] PS2_MSX is now $(PS2_MSX) (was $(if $(PS2_MSX_PREV),$(PS2_MSX_PREV),unset)) -- the unit that reads it will rebuild)
+endif
+ifeq ($(PS2_MSX),1)
+PS2_CFLAGS    += -DBTRON_PS2_MSX=1
 endif
 
 # PS2 measurement build: the present/pointer bench lives only in core_ps2.c, so one

@@ -631,15 +631,21 @@ assert_check "No ps2_fb_memory symbol: the driver holds the caller's pointer, no
 assert_check "Symbol 'ps2_gs_set_framebuffer' exists (the kernel installs the compositor's canvas)" \
     "$READELF -s $ELF | grep -E '[[:space:]]ps2_gs_set_framebuffer$'"
 
-# 800 * 600 * 4 = 1,920,000, which readelf prints as 0x1d4c00 because it is over 1023.  One
-# object of that size is the design; a second one is the regression coming back, and it would
-# not show in the image's total next to the 12 MB heap.  The name is part of the law too, so
-# the one allowed instance has to be the compositor's own backbuffer.  Read into variables
-# here, so the evaluated command shows the measured count and name when it fails.
-FB_CANVAS_COUNT="$($READELF -s $ELF | awk '$3=="0x1d4c00" && $4=="OBJECT"' | wc -l | tr -d ' ')"
-FB_CANVAS_NAME="$($READELF -s $ELF | awk '$3=="0x1d4c00" && $4=="OBJECT" { print $8 }')"
-assert_check "Exactly one screen-sized CT32 canvas in the image, and it is s_desktop_backbuffer" \
-    "[ $FB_CANVAS_COUNT -eq 1 ] && [ \"$FB_CANVAS_NAME\" = s_desktop_backbuffer ]"
+# 800 * 600 * 4 = 1,920,000, which readelf prints as 0x1d4c00 because it is over 1023.  The
+# law is about ROLES, not about byte counts: exactly one object of that size may be the canvas
+# the bus master reads, it has to be the compositor's own backbuffer, and any other object of
+# that size has to be named here as what it is.  The one that is allowed is `s_cached_bg`
+# (src/desktop/desktop.c): the compositor's cached background, never installed on the GIF,
+# whose whole purpose is that a background restore is a copy instead of a re-render of the
+# gradient.  Its cost is stated in the row's own text so it is a counted 1,920,000 bytes of
+# .bss and not a saving nobody tallied -- chapter 4's budget carries the total.  An UNNAMED
+# object of that size still turns this row red, which is the regression it was written for:
+# the retired second framebuffer was exactly that, 1,920,000 bytes plus a per-pixel sweep.
+FB_CANVAS_COUNT="$($READELF -s $ELF | awk '$3=="0x1d4c00" && $4=="OBJECT" && $8=="s_desktop_backbuffer"' | wc -l | tr -d ' ')"
+FB_CANVAS_OTHER="$($READELF -s $ELF | awk '$3=="0x1d4c00" && $4=="OBJECT"{print $8}' | grep -Evc '^(s_desktop_backbuffer|s_cached_bg)$' || true)"
+FB_CANVAS_RAM="$($READELF -s $ELF | awk '$3=="0x1d4c00" && $4=="OBJECT"{n++} END{print n*1920000}')"
+assert_check "Exactly one canvas the GIF reads (s_desktop_backbuffer), and no screen-sized object but the named background cache ($FB_CANVAS_RAM B of canvas-class RAM in all)" \
+    "[ $FB_CANVAS_COUNT -eq 1 ] && [ $FB_CANVAS_OTHER -eq 0 ]"
 
 # The present path's sweep was a static function, so it is a LOCAL symbol while it exists
 # and no symbol at all once the loop is gone from ps2_paint_region().
@@ -753,6 +759,15 @@ function_code() {
     $OBJDUMP -d $ELF | awk -v fn="$1" 'BEGIN{pat="<"fn">:"} index($0,pat){f=1;print;next} f&&/^[0-9a-f]+[ ]<[a-zA-Z_]/ {exit} f'
 }
 
+# The five rows under this guard are the B-MSX-on-PS2 law.  The Makefile's PS2_MSX dial
+# can park the emulator out of an image whose .bss does not fit it (M17 in
+# doc/txt/PS2.txt), and a parked image is not a broken one, so the rows are guarded on the
+# symbol they read and print SKIP rather than FAIL when it is absent.  `msx_open` is the
+# right test: it is the definition xmb.c's weak open_msx_window*() stubs exist to yield to,
+# so its presence is exactly "the emulator is linked", and its absence is exactly "the
+# Games row opens nothing".
+MSX_LINKED=$($READELF -sW $ELF | awk '$8=="msx_open"{c++} END{print c+0}')
+if [ "$MSX_LINKED" -ge 1 ]; then
 assert_check "B-MSX's real window opener won the link (open_msx_window_with_rom links GLOBAL, at 96 bytes, not xmb.c's stub)" \
     "[ \$($READELF -sW $ELF | awk '\$8==\"open_msx_window_with_rom\"{print \$5; exit}') = 'GLOBAL' ] && [ \$($READELF -sW $ELF | awk '\$8==\"open_msx_window_with_rom\"{print \$3; exit}') -ge 64 ]"
 
@@ -788,6 +803,9 @@ RODATA_SIZE="0x$($READELF -S $ELF | awk '$3==".rodata"{print $7; exit}')"
 RODATA_SCAN="dd if=$ELF bs=1 skip=$((RODATA_OFF)) count=$((RODATA_SIZE)) 2>/dev/null | LC_ALL=C grep -cac"
 assert_check "the code asks the volume for C-BIOS and the cartridges, and names no checkout path (.rodata at $RODATA_ADDR, $RODATA_SIZE bytes)" \
     "[ \$($RODATA_SCAN '/SYS/cbios') -ge 1 ] && [ \$($RODATA_SCAN '/SYS/msx') -ge 1 ] && [ \$($RODATA_SCAN 'third_party/openMSX') -eq 0 ]"
+else
+    echo "  [SKIP] PS2_MSX=0 -- tronMSX is parked out of this image, so the five B-MSX rows above were not run (not a pass; the volume still carries cbios/ and msx/)"
+fi
 
 # 11. Check Bootable ISO Disc Packaging
 if [ -f "$ISO" ]; then

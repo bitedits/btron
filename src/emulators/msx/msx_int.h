@@ -59,6 +59,7 @@ void    slots_set_sub(const uint8_t *img, uint32_t size);
 void    slots_set_music(const uint8_t *img, uint32_t size);
 void    slots_set_disk(const uint8_t *img, uint32_t size);
 void    slots_set_rom(const uint8_t *img, uint32_t size);
+uint8_t *slots_rom_ptr(uint32_t *cap);
 void    slots_primary_select(uint8_t value);      /* PPI port A alias      */
 uint8_t slots_read(uint16_t addr);
 void    slots_write(uint16_t addr, uint8_t value);

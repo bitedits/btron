@@ -42,8 +42,9 @@ static inline uint16_t rgb565(uint8_t r, uint8_t g, uint8_t b)
 
 static inline uint16_t rgb332_to_rgb565(uint8_t c)
 {
-    uint8_t r = (uint8_t)(((c >> 5) & 7) * 255 / 7);
-    uint8_t g = (uint8_t)(((c >> 2) & 7) * 255 / 7);
+    /* Graphic 7 (Screen 8): bits 7-5 Green, bits 4-2 Red, bits 1-0 Blue */
+    uint8_t g = (uint8_t)(((c >> 5) & 7) * 255 / 7);
+    uint8_t r = (uint8_t)(((c >> 2) & 7) * 255 / 7);
     uint8_t b = (uint8_t)(( c        & 3) * 255 / 3);
     return rgb565(r, g, b);
 }
@@ -614,6 +615,8 @@ void v9938_render(v9938_t *v, uint16_t *fb)
     uint16_t bg = v->pal[v->regs[7] & 0x0Fu];
     uint16_t y, x;
     uint16_t disp_lines = (v->regs[9] & 0x80u) ? 212u : 192u;
+    uint16_t top_border = (disp_lines < MSX_SCREEN_H) ? (uint16_t)((MSX_SCREEN_H - disp_lines) / 2u) : 0u;
+    uint16_t bot_border = (uint16_t)(top_border + disp_lines);
 
     if (!fb) return;
 
@@ -625,12 +628,30 @@ void v9938_render(v9938_t *v, uint16_t *fb)
         return;
     }
 
+    uint32_t page_base;
+    if (m == 0x1C || m == 0x14) {
+        /* Screen 8 (G7) / Screen 7 (G6): 64KB per page. Page 0 at 0x00000, Page 1 at 0x10000.
+         * R#2 bit 6 (0x40) or bit 5 (0x20) selects page 1. */
+        page_base = ((v->regs[2] & 0x60u) != 0) ? 0x10000u : 0u;
+    } else if (m == 0x0C || m == 0x10) {
+        /* Screen 5 (G4) / Screen 6 (G5): 32KB per page (4 pages in 128KB).
+         * R#2 bits 6..5 select pages 0..3: 00->0, 01->32KB, 10->64KB, 11->96KB */
+        uint8_t pidx = (uint8_t)((v->regs[2] >> 5) & 0x03u);
+        page_base = (uint32_t)pidx * 0x8000u;
+    } else {
+        page_base = 0;
+    }
+
     if (m == 0x1C) {
         /* SCREEN 8: Mode G7 (256x212, 8bpp RGB332) */
-        uint32_t page_base = ((uint32_t)(v->regs[2] & 0x20u) ? 0x10000u : 0u);
-        for (y = 0; y < disp_lines; y++) {
+        for (y = 0; y < MSX_SCREEN_H; y++) {
             uint16_t *row = fb + (uint32_t)y * MSX_SCREEN_W;
-            uint32_t line_addr = page_base + (uint32_t)y * 256u;
+            if (y < top_border || y >= bot_border) {
+                for (x = 0; x < MSX_SCREEN_W; x++) row[x] = bg;
+                continue;
+            }
+            uint32_t eff_y = ((uint32_t)(y - top_border) + (uint32_t)v->regs[23]) & 0xFFu;
+            uint32_t line_addr = page_base + eff_y * 256u;
             for (x = 0; x < MSX_SCREEN_W; x++) {
                 uint8_t c = v->vram[(line_addr + x) & (V9938_VRAM_SIZE - 1u)];
                 row[x] = rgb332_to_rgb565(c);
@@ -638,10 +659,14 @@ void v9938_render(v9938_t *v, uint16_t *fb)
         }
     } else if (m == 0x0C) {
         /* SCREEN 5: Mode G4 (256x212, 4bpp 16 colours) */
-        uint32_t page_base = ((uint32_t)(v->regs[2] & 0x20u) ? 0x8000u : 0u);
-        for (y = 0; y < disp_lines; y++) {
+        for (y = 0; y < MSX_SCREEN_H; y++) {
             uint16_t *row = fb + (uint32_t)y * MSX_SCREEN_W;
-            uint32_t line_addr = page_base + (uint32_t)y * 128u;
+            if (y < top_border || y >= bot_border) {
+                for (x = 0; x < MSX_SCREEN_W; x++) row[x] = bg;
+                continue;
+            }
+            uint32_t eff_y = ((uint32_t)(y - top_border) + (uint32_t)v->regs[23]) & 0xFFu;
+            uint32_t line_addr = page_base + eff_y * 128u;
             for (x = 0; x < MSX_SCREEN_W; x += 2) {
                 uint8_t b = v->vram[(line_addr + (x >> 1)) & (V9938_VRAM_SIZE - 1u)];
                 row[x]     = v->pal[b >> 4];
@@ -650,10 +675,14 @@ void v9938_render(v9938_t *v, uint16_t *fb)
         }
     } else if (m == 0x14) {
         /* SCREEN 7: Mode G6 (512x212, 4bpp -> scaled to 256) */
-        uint32_t page_base = ((uint32_t)(v->regs[2] & 0x20u) ? 0x10000u : 0u);
-        for (y = 0; y < disp_lines; y++) {
+        for (y = 0; y < MSX_SCREEN_H; y++) {
             uint16_t *row = fb + (uint32_t)y * MSX_SCREEN_W;
-            uint32_t line_addr = page_base + (uint32_t)y * 256u;
+            if (y < top_border || y >= bot_border) {
+                for (x = 0; x < MSX_SCREEN_W; x++) row[x] = bg;
+                continue;
+            }
+            uint32_t eff_y = ((uint32_t)(y - top_border) + (uint32_t)v->regs[23]) & 0xFFu;
+            uint32_t line_addr = page_base + eff_y * 256u;
             for (x = 0; x < MSX_SCREEN_W; x++) {
                 uint8_t b = v->vram[(line_addr + x) & (V9938_VRAM_SIZE - 1u)];
                 row[x] = v->pal[b >> 4];
@@ -661,22 +690,20 @@ void v9938_render(v9938_t *v, uint16_t *fb)
         }
     } else if (m == 0x10) {
         /* SCREEN 6: Mode G5 (512x212, 2bpp -> scaled to 256) */
-        uint32_t page_base = ((uint32_t)(v->regs[2] & 0x20u) ? 0x8000u : 0u);
-        for (y = 0; y < disp_lines; y++) {
+        for (y = 0; y < MSX_SCREEN_H; y++) {
             uint16_t *row = fb + (uint32_t)y * MSX_SCREEN_W;
-            uint32_t line_addr = page_base + (uint32_t)y * 128u;
+            if (y < top_border || y >= bot_border) {
+                for (x = 0; x < MSX_SCREEN_W; x++) row[x] = bg;
+                continue;
+            }
+            uint32_t eff_y = ((uint32_t)(y - top_border) + (uint32_t)v->regs[23]) & 0xFFu;
+            uint32_t line_addr = page_base + eff_y * 128u;
             for (x = 0; x < MSX_SCREEN_W; x++) {
                 uint8_t b = v->vram[(line_addr + (x >> 1)) & (V9938_VRAM_SIZE - 1u)];
                 uint8_t col = (uint8_t)((x & 1) ? (b & 3) : ((b >> 4) & 3));
                 row[x] = v->pal[col];
             }
         }
-    }
-
-    /* Fill bottom border if running 192 lines */
-    for (y = disp_lines; y < MSX_SCREEN_H; y++) {
-        uint16_t *row = fb + (uint32_t)y * MSX_SCREEN_W;
-        for (x = 0; x < MSX_SCREEN_W; x++) row[x] = bg;
     }
 }
 

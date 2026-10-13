@@ -791,6 +791,10 @@ void z80_step(z80* const z) {
   process_interrupts(z);
 }
 
+void z80_process_interrupts(z80* const z) {
+  process_interrupts(z);
+}
+
 // outputs to stdout a debug trace of the emulator
 void z80_debug_output(z80* const z) {
 #if defined(__STDC_HOSTED__) && __STDC_HOSTED__ == 1

@@ -81,7 +81,8 @@ static const uint8_t s_mask_v9958[VDP_NR] = {
 static uint8_t   s_reg[VDP_NR];
 static uint8_t   s_vram[MSX_VRAM_SIZE];
 static uint16_t  s_ptr;           /* CPU pointer, bits 0-13                 */
-static uint8_t   s_latch;         /* first byte of a control or palette pair*/
+static uint8_t   s_latch;         /* first byte of a control pair           */
+static uint8_t   s_pal_latch;     /* first byte of a palette pair           */
 static uint8_t   s_ctrl_pending;
 static uint8_t   s_pal_pending;
 static uint8_t   s_write_mode;    /* bit6 of the second control byte        */
@@ -140,12 +141,14 @@ static void palette_reset(void)
     }
 }
 
-/* One V9938 palette entry: four bits per primary, R5 G6 B5 on the way out. */
-static void palette_set(uint8_t index, uint8_t r4, uint8_t g4, uint8_t b4)
+/* One V9938 palette entry: 3 bits per primary (0..7), mapped to full 8-bit RGB. */
+static void palette_set(uint8_t index, uint8_t r3, uint8_t g3, uint8_t b3)
 {
-    s_pal[index & 0x0Fu] = rgb565((uint8_t)((r4 << 1) | (r4 >> 3)),
-                                  (uint8_t)((g4 << 2) | (g4 >> 2)),
-                                  (uint8_t)((b4 << 1) | (b4 >> 3)));
+    r3 &= 7u; g3 &= 7u; b3 &= 7u;
+    uint8_t r8 = (uint8_t)((r3 * 255u) / 7u);
+    uint8_t g8 = (uint8_t)((g3 * 255u) / 7u);
+    uint8_t b8 = (uint8_t)((b3 * 255u) / 7u);
+    s_pal[index & 0x0Fu] = rgb565(r8, g8, b8);
 }
 
 /* ---- small readers ------------------------------------------------------ */
@@ -237,6 +240,7 @@ static void reg_write(uint8_t reg, uint8_t value)
     value = (uint8_t)(value & masks[reg]);
     old = s_reg[reg];
     s_reg[reg] = value;
+    if (reg == 16u) s_pal_pending = 0u;
 
     /* Turning the frame interrupt on while FG is already up raises the IRQ
      * on real hardware; the pending flag is what the core consumes.
@@ -392,14 +396,14 @@ void vdp_write(uint8_t port, uint8_t value)
 
     case PORT_PALETTE:
         if (s_pal_pending) {
-            uint8_t first = s_latch;             /* blue 0-3, red 4-7      */
+            uint8_t first = s_pal_latch;         /* bits 6-4: Red, bits 2-0: Blue */
             uint8_t index = (uint8_t)(s_reg[16] & 0x0Fu);
             s_pal_pending = 0u;
-            palette_set(index, (uint8_t)(first >> 4),
-                        (uint8_t)(value & 0x0Fu), (uint8_t)(first & 0x0Fu));
+            palette_set(index, (uint8_t)((first >> 4) & 7u),
+                        (uint8_t)(value & 7u), (uint8_t)(first & 7u));
             s_reg[16] = (uint8_t)((index + 1u) & 0x0Fu);
         } else {
-            s_latch = value;
+            s_pal_latch = value;
             s_pal_pending = 1u;
         }
         break;

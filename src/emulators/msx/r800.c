@@ -179,5 +179,7 @@ void r800_step(r800_t *r)
         z80_step(r);
         /* R800 executes at 7.16 MHz (2x faster than Z80) */
         r->cyc = before + (r->cyc - before);
+    } else {
+        z80_process_interrupts(r);
     }
 }

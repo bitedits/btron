@@ -10,6 +10,7 @@
  */
 
 #include <emulators/tronmsx.h>
+#include "../../src/emulators/msx/v9938.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -79,8 +80,17 @@ int main(int argc, char **argv)
     if (!rom) { fprintf(stderr, "cannot read rom: %s\n", rom_path); return 2; }
     printf("rom: %s (%u bytes)\n", rom_path, rom_len);
 
-    cfg.bios_key = NULL;
-    cfg.machine  = 1;          /* BMSX_MACHINE_MSX */
+    const char *mach_arg = (argc > 4 && argv[4][0]) ? argv[4] : NULL;
+    cfg.bios_key = mach_arg;
+    cfg.machine  = 1;
+    if (mach_arg) {
+        int m = atoi(mach_arg);
+        if (m > 0) cfg.machine = (uint16_t)m;
+    } else {
+        if (rom_len > 65536u || strstr(rom_path, "BULLRUSH") || strstr(rom_path, "NEON") || strstr(rom_path, "NIGHT")) {
+            cfg.machine = BMSX_MACHINE_MSXTR_CBIOS;
+        }
+    }
     cfg.frame_hz = 60;
     rc = msx_init(&cfg);
     if (rc != MSX_OK) { fprintf(stderr, "msx_init failed: %d\n", rc); free(rom); return 1; }
@@ -91,16 +101,25 @@ int main(int argc, char **argv)
 
     msx_reset();
 
+extern uint16_t msx_get_pc(void);
+extern int msx_is_r800_active(void);
+extern v9938_t *msx_get_v9938(void);
+
     for (f = 1; f <= frames; f++) {
         msx_run_frame();
         msx_blit_rgb565(s_fb);
         if (f == 1 || f == 30 || f == 60 || f == 120 || f == frames ||
+            (f >= 170 && f <= 240 && (f % 5) == 0) ||
             (f % 60) == 0) {
             char path[256];
+            v9938_t *v = msx_get_v9938();
+            uint8_t m = v ? v9938_mode(v) : 0;
             snprintf(path, sizeof(path), "%s_%04ld.ppm", prefix, f);
             write_ppm(path, s_fb);
-            printf("frame %4ld: cyc=%12llu ink=%6u  %s\n",
-                   f, (unsigned long long)msx_total_cycles(), ink(s_fb), path);
+            printf("frame %4ld: pc=%04X r800=%d mode=%02X r0=%02X r1=%02X r2=%02X r7=%02X cyc=%12llu ink=%6u  %s\n",
+                   f, msx_get_pc(), msx_is_r800_active(), m,
+                   v ? v->regs[0] : 0, v ? v->regs[1] : 0, v ? v->regs[2] : 0, v ? v->regs[7] : 0,
+                   (unsigned long long)msx_total_cycles(), ink(s_fb), path);
         }
     }
 

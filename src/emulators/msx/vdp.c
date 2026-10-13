@@ -22,10 +22,11 @@
  */
 
 #include "msx_int.h"
-
 #include <string.h>
-
 #include "msx_body.h"
+#include "v9938.h"
+
+static v9938_t s_v9938;
 
 /* ---- register and port constants --------------------------------------- */
 
@@ -263,11 +264,18 @@ static uint8_t status_read(void)
 void vdp_init(uint8_t machine)
 {
     s_msx1 = (uint8_t)(machine == BMSX_MACHINE_MSX ? 1u : 0u);
+    if (!s_msx1) {
+        v9938_init(&s_v9938, machine >= BMSX_MACHINE_MSX2P_CBIOS);
+    }
     vdp_reset();
 }
 
 void vdp_reset(void)
 {
+    if (!s_msx1) {
+        v9938_reset(&s_v9938);
+        return;
+    }
     memset(s_reg, 0, sizeof(s_reg));
     memset(s_vram, 0, sizeof(s_vram));
     memset(s_px, 0, sizeof(s_px));
@@ -287,6 +295,10 @@ void vdp_reset(void)
 
 uint8_t *vdp_vram(uint32_t *size)
 {
+    if (!s_msx1) {
+        if (size != 0) *size = V9938_VRAM_SIZE;
+        return s_v9938.vram;
+    }
     if (size != 0) *size = MSX_VRAM_SIZE;
     return s_vram;
 }
@@ -316,6 +328,8 @@ uint32_t vdp_debug_write_addr(void)
 
 uint8_t vdp_read(uint8_t port)
 {
+    if (!s_msx1) return v9938_read(&s_v9938, port);
+
     uint8_t idx = (uint8_t)(port & 0x03u);
 
     s_ctrl_pending = 0u;                 /* any read aborts a write in mid-pair */
@@ -334,6 +348,11 @@ uint8_t vdp_read(uint8_t port)
 
 void vdp_write(uint8_t port, uint8_t value)
 {
+    if (!s_msx1) {
+        v9938_write(&s_v9938, port, value);
+        return;
+    }
+
     uint8_t idx = (uint8_t)(port & 0x03u);
 
     if (s_msx1 && idx >= PORT_PALETTE) return;   /* the TMS9918 does not decode them */
@@ -401,6 +420,11 @@ void vdp_write(uint8_t port, uint8_t value)
 
 void vdp_advance(uint32_t t_states)
 {
+    if (!s_msx1) {
+        v9938_advance(&s_v9938, t_states);
+        return;
+    }
+
     s_t_line += t_states;
     while (s_t_line >= MSX_T_PER_LINE) {
         s_t_line -= MSX_T_PER_LINE;
@@ -415,6 +439,7 @@ void vdp_advance(uint32_t t_states)
 
 int vdp_vblank_taken(void)
 {
+    if (!s_msx1) return v9938_vblank_taken(&s_v9938);
     if (!s_irq_pending) return 0;
     s_irq_pending = 0u;
     return 1;
@@ -637,10 +662,19 @@ static void sprites_mode2(uint16_t y)
 
 void vdp_render(uint16_t *fb)
 {
-    uint16_t end = display_end();
-    uint8_t  sm  = sprite_mode();
-    uint8_t  m   = vdp_mode();
+    uint16_t end;
+    uint8_t  sm;
+    uint8_t  m;
     uint16_t y;
+
+    if (!s_msx1) {
+        v9938_render(&s_v9938, fb);
+        return;
+    }
+
+    end = display_end();
+    sm  = sprite_mode();
+    m   = vdp_mode();
 
     if (m == MD_T1Q) m = MD_T1;
     if (m == MD_MULTIQ) m = MD_MC;
@@ -674,4 +708,9 @@ void vdp_render(uint16_t *fb)
             }
         }
     }
+}
+
+v9938_t *msx_get_v9938(void)
+{
+    return &s_v9938;
 }

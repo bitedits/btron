@@ -1,126 +1,389 @@
 /*
- * tronMSX — slot system, canonical memory map and the bus port decode.
- * B-MSX Rev 1.05, §1.2 and §1.3.  Clean-room C99, MIT.
+ * tronMSX — slot system, canonical memory map and bus port dispatch.
+ * B-MSX Rev 1.05. Clean-room C99.
  *
- * Two pointer tables (read view, write view) are recomputed whenever a select
- * register is written, so the Z80 read/write path is one indexed load with no
- * switch in it.  A page with a NULL read view is an unimplemented device and
- * returns the floating-bus value 0xC0; a page with a NULL write view is ROM
- * and discards the store (§1.2, never a fault).
- *
- * Slot placement is the C-BIOS machine definition, measured from its MSX1 and
- * MSX2 configs: primary slot 0 carries the BIOS (32 KiB at 0x0000-0x7FFF) and
- * the logo ROM (page 2), slots 1 and 2 are the external cartridge slots, and
- * main RAM sits in primary slot 3.
- *
- * Port ownership, as the MSX standard wires it (grauw's I/O map, confirmed
- * against two independent emulators):
- *   #88-#8B, #98-#9B  VDP        #A0-#A3  PSG (only #A0/#A1 write, #A2 reads)
- *   #A8-#AB           8255 PPI (decoded exactly, the low two bits pick the reg)
- *   #DC-#DF           SCC/Konami (later)   #F8-#FB  MSX2 sub-slot selects
- *   #FC               EXTSLS     #FD-#FF  mapper segments (MSX2+ mapper, and
- *                              the ASCII8 cart ports)
- * MSX1 has no sub-slots, so #F8-#FF are latched and readable but cannot remap
- * anything: the only slot selector on an MSX1 is PPI port A.  In particular
- * #FE/#FF are not PSG port aliases and must never touch sound or slots.
+ * Supports MSX1, MSX2, MSX2+ and MSX turbo R configurations with:
+ * - Subslotted primary slots and 0xFFFF secondary slot registers
+ * - 512 KiB internal Memory Mapper RAM
+ * - MegaROM cartridge mapper emulation (ASCII16, ASCII8, Konami, Konami SCC, linear up to 4 MiB)
+ * - Sub-ROM, Logo, MSX-MUSIC and Disk ROM loading
  */
 
 #include "msx_int.h"
+#include <emulators/tronmsx.h>
+#include <string.h>
 
-#define SLOT_BIOS   0u
-#define SLOT_CART_A 1u
-#define SLOT_CART_B 2u
-#define SLOT_RAM    3u
+#include "v9938.h"
+#include "s1985.h"
+#include "t9769b.h"
+#include "t9769c.h"
 
-static uint8_t  ram[MSX_RAM_SIZE];
-static uint8_t  rom[MSX_ROM_SIZE];
-static uint8_t  bios[MSX_BIOS_SIZE];
-static uint8_t  logo[MSX_LOGO_SIZE];
+#define SLOT_BIOS    0u
+#define SLOT_CART_A  1u
+#define SLOT_CART_B  2u
+#define SLOT_RAM     3u
+
+enum {
+    MAPPER_NONE = 0,
+    MAPPER_PLAIN,
+    MAPPER_ASCII16,
+    MAPPER_ASCII8,
+    MAPPER_KONAMI,
+    MAPPER_KONAMI_SCC
+};
+
+s1985_t g_s1985;
+t9769b_t g_t9769b;
+t9769c_t g_t9769c;
+static uint16_t s_machine = BMSX_MACHINE_MSX;
+
+/* Memory pools */
+static uint8_t  ram[MSX_RAM_SIZE];                     /* 64 KiB for MSX1 */
+static uint8_t  mapper_ram[MSX_MAPPER_RAM_SIZE];       /* 512 KiB for MSX2/2+/TR */
+static uint8_t  rom[MSX_ROM_SIZE];                     /* Up to 4 MiB cartridge */
+static uint8_t  bios[MSX_BIOS_SIZE];                   /* 32-64 KiB main BIOS */
+static uint8_t  logo[MSX_LOGO_SIZE];                   /* 16 KiB logo */
+static uint8_t  sub_rom[MSX_SUBROM_SIZE];              /* 16 KiB sub-ROM */
+static uint8_t  music_rom[MSX_MUSIC_SIZE];            /* 16 KiB MSX-MUSIC */
+static uint8_t  disk_rom[MSX_DISK_SIZE];               /* Up to 64 KiB FDD/Nextor */
 
 static uint32_t rom_size, bios_size, logo_size;
+static uint32_t sub_size, music_size, disk_size;
 
-static const uint8_t *rview[4];   /* read view per page   */
-static uint8_t       *wview[4];   /* write view per page, NULL for ROM */
+/* Cartridge banking */
+static int      cart_mapper = MAPPER_PLAIN;
+static uint8_t  cart_banks[4];
 
-static uint8_t ppi_a;           /* PPI port A, #A8: the MSX1 slot selector   */
-static uint8_t sub[4];          /* #F8-#FB, MSX2 sub-slots - inert on MSX1    */
-static uint8_t extsls;          /* #FC                                        */
-static uint8_t map_seg[3];      /* #FD-#FF mapper segments, read back only    */
+/* Slot registers */
+static uint8_t  ppi_a;           /* #A8: primary slot select per page */
+static uint8_t  sub[4];          /* Secondary slot select per primary slot */
+static uint8_t  map_seg[4];      /* #FC-#FF mapper segments */
 
-/* ------------------------------------------------------------------ map -- */
+/* Direct page views */
+static const uint8_t *rview[4];
+static uint8_t       *wview[4];
+static uint8_t        is_cart_page[4];
+static uint8_t        is_mapper_page[4];
 
-static void map_page(uint8_t page, const uint8_t *r, uint8_t *w)
+static void remap(void);
+
+void slots_set_machine(uint16_t machine)
 {
-    rview[page] = r;
-    wview[page] = w;
+    s_machine = machine;
 }
 
-static const uint8_t *bios_view(uint8_t page)
+static int is_turbor(void)
 {
-    uint32_t off = (uint32_t)page << 14;
-    if (off < bios_size) return bios + off;
-    if (page == 2 && logo_size) return logo;
-    if (page == 3 && logo_size > 0x4000u) return logo + 0x4000u;
+    return (s_machine == BMSX_MACHINE_MSXTR_CBIOS ||
+            s_machine == BMSX_MACHINE_MSXTR_CBIOS_FDD);
+}
+
+static int is_msx2_or_higher(void)
+{
+    return s_machine != BMSX_MACHINE_MSX;
+}
+
+static int is_primary_subslotted(uint8_t prim)
+{
+    if (!is_msx2_or_higher()) return 0;
+    if (prim == 3) return 1;
+    if (prim == 0 && is_turbor()) return 1;
     return 0;
 }
 
-static const uint8_t *rom_view(uint8_t page)
+/* ---------------------------------------------------------------- Cartridge -- */
+
+static void detect_mapper(void)
 {
-    if (!rom_size) return 0;
-    if (page <= 1) return rom;                       /* block 0 at 0x4000   */
-    if (rom_size > MSX_ROM_SIZE / 2u) return rom + (MSX_ROM_SIZE / 2u);
-    return rom;                                      /* 16 KiB cart mirrors */
+    uint32_t i;
+    int score_ascii16 = 0, score_ascii8 = 0, score_konami = 0;
+
+    if (rom_size <= 32768u) {
+        cart_mapper = MAPPER_PLAIN;
+        cart_banks[0] = 0;
+        cart_banks[1] = 0;
+        cart_banks[2] = (rom_size > 16384u) ? 1 : 0;
+        cart_banks[3] = 0;
+        return;
+    }
+
+    /* Scan code for mapper bank writes */
+    for (i = 0; i + 2 < rom_size && i < 0x20000u; i++) {
+        if (rom[i] == 0x32) { /* LD (nn), A */
+            uint16_t target = (uint16_t)(rom[i + 1] | (rom[i + 2] << 8));
+            if (target == 0x6000 || target == 0x7000 || target == 0x77FF) score_ascii16 += 2;
+            if (target == 0x6800 || target == 0x7800) score_ascii8 += 2;
+            if (target == 0x5000 || target == 0x9000 || target == 0xB000) score_konami += 2;
+        }
+    }
+
+    if (score_konami > score_ascii16 && score_konami > score_ascii8) {
+        cart_mapper = MAPPER_KONAMI_SCC;
+    } else if (score_ascii8 > score_ascii16) {
+        cart_mapper = MAPPER_ASCII8;
+    } else {
+        cart_mapper = MAPPER_ASCII16;
+    }
+
+    cart_banks[0] = 0;
+    cart_banks[1] = 0;
+    cart_banks[2] = 0;
+    cart_banks[3] = 0;
 }
+
+static const uint8_t *get_cart_view(uint8_t page)
+{
+    uint32_t num_16k = rom_size >> 14;
+    uint32_t num_8k  = rom_size >> 13;
+    if (!rom_size) return NULL;
+    if (!num_16k) num_16k = 1;
+    if (!num_8k) num_8k = 1;
+
+    switch (cart_mapper) {
+    case MAPPER_PLAIN:
+        if (page == 1) return rom;
+        if (page == 2) {
+            if (rom_size > 16384u) return rom + 16384u;
+            return rom; /* 16 KiB cart mirror */
+        }
+        return NULL;
+
+    case MAPPER_ASCII16:
+        if (page == 1) {
+            uint32_t b = cart_banks[1] % num_16k;
+            return rom + (b << 14);
+        }
+        if (page == 2) {
+            uint32_t b = cart_banks[2] % num_16k;
+            return rom + (b << 14);
+        }
+        return NULL;
+
+    case MAPPER_ASCII8:
+    case MAPPER_KONAMI:
+    case MAPPER_KONAMI_SCC:
+        if (page == 1) {
+            uint32_t b = cart_banks[1] % num_8k;
+            return rom + (b << 13);
+        }
+        if (page == 2) {
+            uint32_t b = cart_banks[2] % num_8k;
+            return rom + (b << 13);
+        }
+        return NULL;
+
+    default:
+        return NULL;
+    }
+}
+
+static void cart_write(uint16_t addr, uint8_t val)
+{
+    uint32_t num_16k = rom_size >> 14;
+    uint32_t num_8k  = rom_size >> 13;
+    if (!num_16k) num_16k = 1;
+    if (!num_8k) num_8k = 1;
+
+    switch (cart_mapper) {
+    case MAPPER_ASCII16:
+        if (addr >= 0x6000u && addr <= 0x67FFu) {
+            cart_banks[1] = (uint8_t)(val % num_16k);
+            remap();
+        } else if (addr >= 0x7000u && addr <= 0x77FFu) {
+            cart_banks[2] = (uint8_t)(val % num_16k);
+            remap();
+        }
+        break;
+
+    case MAPPER_ASCII8:
+        if (addr >= 0x6000u && addr < 0x6800u) {
+            cart_banks[1] = (uint8_t)(val % num_8k);
+            remap();
+        } else if (addr >= 0x7000u && addr < 0x7800u) {
+            cart_banks[2] = (uint8_t)(val % num_8k);
+            remap();
+        }
+        break;
+
+    case MAPPER_KONAMI:
+    case MAPPER_KONAMI_SCC:
+        if (addr >= 0x5000u && addr < 0x6000u) {
+            cart_banks[1] = (uint8_t)(val % num_8k);
+            remap();
+        } else if (addr >= 0x7000u && addr < 0x8000u) {
+            cart_banks[1] = (uint8_t)(val % num_8k);
+            remap();
+        } else if (addr >= 0x9000u && addr < 0xA000u) {
+            cart_banks[2] = (uint8_t)(val % num_8k);
+            remap();
+        } else if (addr >= 0xB000u && addr < 0xC000u) {
+            cart_banks[3] = (uint8_t)(val % num_8k);
+            remap();
+        }
+        break;
+
+    default:
+        break;
+    }
+}
+
+/* ------------------------------------------------------------------ Remap -- */
 
 static void remap(void)
 {
     uint8_t page;
-    map_page(0, bios, 0);                 /* page 0 is fixed to primary 0   */
 
-    for (page = 1; page < 4; page++) {
+    for (page = 0; page < 4; page++) {
         uint8_t prim = (uint8_t)((ppi_a >> (page * 2u)) & 3u);
-        const uint8_t *r = 0;
-        uint8_t *w = 0;
+        uint8_t ssec = (uint8_t)((sub[prim] >> (page * 2u)) & 3u);
+        const uint8_t *r = NULL;
+        uint8_t       *w = NULL;
 
-        /* MSX1 has no sub-slots, so the primary number is the effective one;
-         * #F8-#FB are stored for the MSX2 step and change nothing here. */
-        switch (prim) {
-        case SLOT_BIOS:   r = bios_view(page);              break;
-        case SLOT_CART_A: r = rom_view(page);               break;
-        case SLOT_RAM: {
-            /* Slot 3 is one full 64 KiB pool (C-BIOS_MSX1.xml: base 0x0000,
-             * size 0x10000), so page N of slot 3 views ram[N*0x4000].  This
-             * keeps every page a distinct, non-overlapping 16 KiB window. */
-            uint32_t off = (uint32_t)page << 14;
-            r = ram + off;
-            w = ram + off;
-            break;
+        is_cart_page[page] = 0;
+        is_mapper_page[page] = 0;
+
+        if (!is_msx2_or_higher()) {
+            /* MSX1 mapping */
+            switch (prim) {
+            case SLOT_BIOS:
+                if (page <= 1) {
+                    uint32_t off = (uint32_t)page << 14;
+                    if (off < bios_size) r = bios + off;
+                } else if (page == 2 && logo_size) {
+                    r = logo;
+                }
+                break;
+            case SLOT_CART_A:
+            case SLOT_CART_B:
+                r = get_cart_view(page);
+                is_cart_page[page] = 1;
+                break;
+            case SLOT_RAM: {
+                uint32_t off = (uint32_t)page << 14;
+                r = ram + off;
+                w = ram + off;
+                break;
+            }
+            default:
+                break;
+            }
+        } else if (is_turbor()) {
+            /* MSX turbo R mapping */
+            switch (prim) {
+            case 0:
+                if (ssec == 0) {
+                    /* Main BIOS (pages 0 & 1), Logo (page 2) */
+                    if (page <= 1) {
+                        uint32_t off = (uint32_t)page << 14;
+                        if (off < bios_size) r = bios + off;
+                    } else if (page == 2 && logo_size) {
+                        r = logo;
+                    }
+                } else if (ssec == 2 && page == 1 && music_size) {
+                    r = music_rom;
+                }
+                break;
+
+            case 1:
+            case 2:
+                r = get_cart_view(page);
+                is_cart_page[page] = 1;
+                break;
+
+            case 3:
+                if (ssec == 0) {
+                    /* Slot 3-0 is Main RAM (Memory Mapper: 512 KiB) */
+                    uint32_t seg = (uint32_t)(map_seg[page] & 0x1Fu);
+                    uint32_t off = seg << 14;
+                    r = mapper_ram + off;
+                    w = mapper_ram + off;
+                    is_mapper_page[page] = 1;
+                } else if (ssec == 1 && page == 0 && sub_size) {
+                    r = sub_rom;
+                } else if (ssec == 3 && page == 1 && disk_size) {
+                    r = disk_rom;
+                }
+                break;
+
+            default:
+                break;
+            }
+        } else {
+            /* MSX2 and MSX2+ mapping */
+            switch (prim) {
+            case 0:
+                if (page <= 1) {
+                    uint32_t off = (uint32_t)page << 14;
+                    if (off < bios_size) r = bios + off;
+                } else if (page == 2 && logo_size) {
+                    r = logo;
+                }
+                break;
+
+            case 1:
+            case 2:
+                r = get_cart_view(page);
+                is_cart_page[page] = 1;
+                break;
+
+            case 3:
+                if (ssec == 0 && page == 0 && sub_size) {
+                    r = sub_rom;
+                } else if (ssec == 1 && page == 1 && music_size) {
+                    r = music_rom;
+                } else if (ssec == 2) {
+                    /* Main RAM: Memory Mapper 512 KiB */
+                    uint32_t seg = (uint32_t)(map_seg[page] & 0x1Fu);
+                    uint32_t off = seg << 14;
+                    r = mapper_ram + off;
+                    w = mapper_ram + off;
+                    is_mapper_page[page] = 1;
+                } else if (ssec == 3 && page == 1 && disk_size) {
+                    r = disk_rom;
+                }
+                break;
+
+            default:
+                break;
+            }
         }
-        default:          r = 0;                            break;  /* 0xC0 */
-        }
-        map_page(page, r, w);
+
+        rview[page] = r;
+        wview[page] = w;
     }
 }
 
+/* ------------------------------------------------------------- Lifecycle -- */
+
 void slots_init(void)
 {
-    uint32_t i;
-    for (i = 0; i < MSX_RAM_SIZE; i++) ram[i] = 0x00;   /* D3 */
-    for (i = 0; i < MSX_ROM_SIZE; i++) rom[i] = 0xFF;
+    memset(ram, 0, sizeof(ram));
+    memset(mapper_ram, 0, sizeof(mapper_ram));
+    memset(rom, 0xFF, sizeof(rom));
+    memset(bios, 0, sizeof(bios));
+    memset(logo, 0, sizeof(logo));
+    memset(sub_rom, 0, sizeof(sub_rom));
+    memset(music_rom, 0, sizeof(music_rom));
+    memset(disk_rom, 0, sizeof(disk_rom));
+    rom_size = bios_size = logo_size = sub_size = music_size = disk_size = 0;
+    cart_mapper = MAPPER_PLAIN;
+    s1985_init(&g_s1985);
+    t9769b_init(&g_t9769b);
+    t9769c_init(&g_t9769c);
 }
 
 void slots_reset(void)
 {
-    /* Power-up: the primary slot register is 0, so all four pages select
-     * slot 0.  This is what C-BIOS expects: its 32 KiB main ROM must be
-     * visible across pages 0 and 1 (0x0000-0x7FFF) before it probes the
-     * cartridge slots and ENASLTs RAM (slot 3) and the cart (slot 1/2) in.
-     * A non-zero reset here shadows the upper BIOS half with the cartridge
-     * and the boot trace never reaches INIT80. */
     ppi_a = 0x00u;
-    sub[0] = sub[1] = sub[2] = sub[3] = 0u;
-    extsls = 0u;
-    map_seg[0] = map_seg[1] = map_seg[2] = 0u;
+    sub[0] = sub[1] = sub[2] = sub[3] = 0x00u;
+    map_seg[0] = 3;
+    map_seg[1] = 2;
+    map_seg[2] = 1;
+    map_seg[3] = 0;
+    cart_banks[0] = cart_banks[1] = cart_banks[2] = cart_banks[3] = 0;
+    s1985_reset(&g_s1985);
+    t9769b_reset(&g_t9769b);
+    t9769c_reset(&g_t9769c);
     remap();
 }
 
@@ -140,19 +403,44 @@ void slots_set_logo(const uint8_t *img, uint32_t size)
     remap();
 }
 
+void slots_set_sub(const uint8_t *img, uint32_t size)
+{
+    uint32_t i;
+    sub_size = (size > MSX_SUBROM_SIZE) ? MSX_SUBROM_SIZE : size;
+    for (i = 0; i < sub_size; i++) sub_rom[i] = img[i];
+    remap();
+}
+
+void slots_set_music(const uint8_t *img, uint32_t size)
+{
+    uint32_t i;
+    music_size = (size > MSX_MUSIC_SIZE) ? MSX_MUSIC_SIZE : size;
+    for (i = 0; i < music_size; i++) music_rom[i] = img[i];
+    remap();
+}
+
+void slots_set_disk(const uint8_t *img, uint32_t size)
+{
+    uint32_t i;
+    disk_size = (size > MSX_DISK_SIZE) ? MSX_DISK_SIZE : size;
+    for (i = 0; i < disk_size; i++) disk_rom[i] = img[i];
+    remap();
+}
+
 void slots_set_rom(const uint8_t *img, uint32_t size)
 {
     uint32_t i;
     rom_size = (size > MSX_ROM_SIZE) ? MSX_ROM_SIZE : size;
     for (i = 0; i < rom_size; i++) rom[i] = img[i];
     for (i = rom_size; i < MSX_ROM_SIZE; i++) rom[i] = 0xFF;
+    detect_mapper();
     remap();
 }
 
 uint8_t *slots_ram_ptr(uint32_t *size)
 {
-    if (size) *size = MSX_RAM_SIZE;
-    return ram;
+    if (size) *size = is_msx2_or_higher() ? MSX_MAPPER_RAM_SIZE : MSX_RAM_SIZE;
+    return is_msx2_or_higher() ? mapper_ram : ram;
 }
 
 void slots_primary_select(uint8_t value)
@@ -161,24 +449,72 @@ void slots_primary_select(uint8_t value)
     remap();
 }
 
-/* --------------------------------------------------------------- memory -- */
+uint8_t slots_ppi_a(void)
+{
+    return ppi_a;
+}
+
+/* ---------------------------------------------------------------- Memory -- */
 
 uint8_t slots_read(uint16_t addr)
 {
-    const uint8_t *p = rview[addr >> 14];
-    return p ? p[addr & 0x3FFFu] : 0xC0u;
+    uint8_t page = (uint8_t)(addr >> 14);
+
+    /* Secondary slot register read at 0xFFFF */
+    if (addr == 0xFFFFu) {
+        uint8_t prim = (uint8_t)((ppi_a >> 6u) & 3u);
+        if (is_primary_subslotted(prim)) {
+            return (uint8_t)~sub[prim];
+        }
+    }
+
+    if (is_mapper_page[page]) {
+        uint32_t seg = (uint32_t)(map_seg[page] & 0x1Fu);
+        uint32_t off = (seg << 14) | (addr & 0x3FFFu);
+        return mapper_ram[off];
+    }
+
+    if (rview[page]) {
+        return rview[page][addr & 0x3FFFu];
+    }
+
+    return 0xFFu;
 }
 
 void slots_write(uint16_t addr, uint8_t value)
 {
-    uint8_t *p = wview[addr >> 14];
-    if (p) p[addr & 0x3FFFu] = value;      /* ROM stores vanish, never fault */
+    uint8_t page = (uint8_t)(addr >> 14);
+
+    /* Secondary slot register write at 0xFFFF */
+    if (addr == 0xFFFFu) {
+        uint8_t prim = (uint8_t)((ppi_a >> 6u) & 3u);
+        if (is_primary_subslotted(prim)) {
+            sub[prim] = value;
+            remap();
+            return;
+        }
+    }
+
+    /* Cartridge banking write */
+    if (is_cart_page[page]) {
+        cart_write(addr, value);
+        return;
+    }
+
+    /* Mapper RAM write */
+    if (is_mapper_page[page]) {
+        uint32_t seg = (uint32_t)(map_seg[page] & 0x1Fu);
+        uint32_t off = (seg << 14) | (addr & 0x3FFFu);
+        mapper_ram[off] = value;
+        return;
+    }
+
+    if (wview[page]) {
+        wview[page][addr & 0x3FFFu] = value;
+    }
 }
 
-/* ----------------------------------------------------------------- bus -- */
-/* §1.3.  The 8255 decodes #A8-#AB and nothing else: the low two bits pick the
- * register.  The #10/#50/#90/#D0 group is the cartridge's second PSG and the
- * Centronics port, not the PPI. */
+/* ------------------------------------------------------------------- Bus -- */
 
 static int is_ppi(uint8_t port, uint8_t *reg)
 {
@@ -192,21 +528,20 @@ uint8_t msx_bus_in(uint8_t port)
 
     if (port >= 0x88u && port <= 0x8Bu) return vdp_read(port);
     if (port >= 0x98u && port <= 0x9Bu) return vdp_read(port);
+    if (port == 0x8Du || port == 0x9Du || port == 0x8Fu || port == 0x9Fu) return 0x00u; /* Geo3D coprocessor status/data */
     if (port >= 0xA0u && port <= 0xA3u) return psg_read(port);
     if (is_ppi(port, &reg))             return ppi_read(reg);
 
-    switch (port) {
-    case 0xDCu: case 0xDDu: case 0xDEu: case 0xDFu: return 0xFFu; /* MegaSCC: later */
-    case 0xF8u: return sub[0];
-    case 0xF9u: return sub[1];
-    case 0xFAu: return sub[2];
-    case 0xFBu: return sub[3];
-    case 0xFCu: return extsls;
-    case 0xFDu: return map_seg[0];
-    case 0xFEu: return map_seg[1];
-    case 0xFFu: return map_seg[2];
-    default:    return 0xC0u;
+    if (is_turbor()) {
+        return t9769c_read(&g_t9769c, port);
+    } else if (s_machine >= BMSX_MACHINE_MSX2P_CBIOS) {
+        return t9769b_read(&g_t9769b, port);
+    } else if (s_machine >= BMSX_MACHINE_MSX2_CBIOS) {
+        return s1985_read(&g_s1985, port);
     }
+
+    if (port >= 0xFCu) return (uint8_t)(map_seg[port & 3] | 0xE0u);
+    return 0xFFu;
 }
 
 void msx_bus_out(uint8_t port, uint8_t value)
@@ -217,22 +552,21 @@ void msx_bus_out(uint8_t port, uint8_t value)
     if (port >= 0x98u && port <= 0x9Bu) { vdp_write(port, value); return; }
     if (port >= 0xA0u && port <= 0xA3u) { psg_write(port, value); return; }
     if (is_ppi(port, &reg)) {
-        if (reg == 0u) slots_primary_select(value);   /* the MSX1 slot law    */
+        if (reg == 0u) slots_primary_select(value);
         ppi_write(reg, value);
         return;
     }
 
-    switch (port) {
-    case 0xF8u: sub[0] = value; break;
-    case 0xF9u: sub[1] = value; break;
-    case 0xFAu: sub[2] = value; break;
-    case 0xFBu: sub[3] = value; break;
-    case 0xFCu: extsls = value; break;
-    case 0xFDu: map_seg[0] = value; break;
-    case 0xFEu: map_seg[1] = value; break;
-    case 0xFFu: map_seg[2] = value; break;
-    default: break;                          /* writes to unhandled ports vanish */
+    if (is_turbor()) {
+        t9769c_write(&g_t9769c, port, value);
+    } else if (s_machine >= BMSX_MACHINE_MSX2P_CBIOS) {
+        t9769b_write(&g_t9769b, port, value);
+    } else if (s_machine >= BMSX_MACHINE_MSX2_CBIOS) {
+        s1985_write(&g_s1985, port, value);
+    }
+
+    if (port >= 0xFCu) {
+        map_seg[port & 3] = (uint8_t)(value & 0x1Fu);
+        remap();
     }
 }
-
-uint8_t slots_ppi_a(void) { return ppi_a; }

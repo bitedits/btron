@@ -168,6 +168,11 @@ IME_SRCS    = src/tip/mozc_kkc.c       \
 
 # ── tronMSX core: the machine src/apps/msx_app.c drives ───────────────────
 MSX_SRCS = src/emulators/msx/z80.c        \
+           src/emulators/msx/r800.c       \
+           src/emulators/msx/v9938.c      \
+           src/emulators/msx/s1985.c      \
+           src/emulators/msx/t9769b.c     \
+           src/emulators/msx/t9769c.c     \
            src/emulators/msx/slots.c      \
            src/emulators/msx/bios.c       \
            src/emulators/msx/vdp.c        \
@@ -2436,6 +2441,17 @@ msx-trace: $(TEST_MSX_TRACE_BIN)
 $(TEST_MSX_TRACE_BIN): $(TEST_MSX_TRACE_OBJS)
 	@mkdir -p ./.build
 	$(CC) $(TEST_MSX_TRACE_OBJS) -o $@ $(LDFLAGS)
+
+TEST_MSX_BOOT_SRCS  = verify/tests/test_msx_boot.c $(MSX_SRCS)
+TEST_MSX_BOOT_OBJS  = $(TEST_MSX_BOOT_SRCS:.c=.test.o)
+TEST_MSX_BOOT_BIN   = ./.build/test_msx_boot
+
+msx-boot: $(TEST_MSX_BOOT_BIN)
+	@./$(TEST_MSX_BOOT_BIN) "$(or $(ROM),assets/msx/Lode Runner (1984)(Sony)[a].rom)" $(or $(FRAMES),300) $(or $(DUMP),/tmp/msx_boot) "$(or $(MACH),)"
+
+$(TEST_MSX_BOOT_BIN): $(TEST_MSX_BOOT_OBJS)
+	@mkdir -p ./.build
+	$(CC) $(TEST_MSX_BOOT_OBJS) -o $@ $(LDFLAGS)
 
 test: test-tad test-editor test-chat test-mozc test-wylie test-hmi test-ski test-tracker test-deskclip test-settings test-global-menu test-app-menu test-drivesetup test-fs test-quake test-ps2-softfloat test-ps2-gs-pack test-ps2-gs-env test-ps2-gs-rec test-ps2-gs-tex test-ps2-pointer test-eegs-raster test-eegs-present test-gl-math test-gl-backend-choice test-ps2-fb-order test-xmb-atlas
 	@echo "=========================================================="

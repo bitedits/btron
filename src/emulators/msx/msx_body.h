@@ -27,9 +27,30 @@ typedef char msx_body_size_must_be_64[ (sizeof(b_msx_body) == 64) ? 1 : -1 ];
 #define BMSX_KIND_BLOAD 3u
 #define BMSX_KIND_CAS   4u
 
-#define BMSX_MACHINE_MSX   1u
-#define BMSX_MACHINE_MSX2  2u
-#define BMSX_MACHINE_MSX2P 3u
+#define BMSX_MACHINE_MSX                1u
+#define BMSX_MACHINE_MSX2               2u
+#define BMSX_MACHINE_MSX2P              3u
+
+#define BMSX_MACHINE_MSX2_CBIOS         2u
+#define BMSX_MACHINE_MSX2_CBIOS_BR      4u
+#define BMSX_MACHINE_MSX2_CBIOS_EU      5u
+#define BMSX_MACHINE_MSX2_CBIOS_JP      6u
+#define BMSX_MACHINE_MSX2_CBIOS_FDD     7u
+#define BMSX_MACHINE_MSX2_CBIOS_FDD_BR  8u
+#define BMSX_MACHINE_MSX2_CBIOS_FDD_EU  9u
+#define BMSX_MACHINE_MSX2_CBIOS_FDD_JP  10u
+
+#define BMSX_MACHINE_MSX2P_CBIOS        3u
+#define BMSX_MACHINE_MSX2P_CBIOS_BR     11u
+#define BMSX_MACHINE_MSX2P_CBIOS_EU     12u
+#define BMSX_MACHINE_MSX2P_CBIOS_JP     13u
+#define BMSX_MACHINE_MSX2P_CBIOS_FDD    14u
+#define BMSX_MACHINE_MSX2P_CBIOS_FDD_BR 15u
+#define BMSX_MACHINE_MSX2P_CBIOS_FDD_EU 16u
+#define BMSX_MACHINE_MSX2P_CBIOS_FDD_JP 17u
+
+#define BMSX_MACHINE_MSXTR_CBIOS        18u
+#define BMSX_MACHINE_MSXTR_CBIOS_FDD    19u
 
 #define BMSX_FLAG_PAUSE     0x0001u
 #define BMSX_FLAG_KB_HOOK   0x0002u

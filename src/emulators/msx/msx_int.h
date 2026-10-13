@@ -29,6 +29,10 @@
                     * sizes a buffer for a cartridge has to know it too. */
 #define MSX_BIOS_SIZE      65536u   /* settings-loaded, outside the sum   */
 #define MSX_LOGO_SIZE      16384u
+#define MSX_SUBROM_SIZE    16384u
+#define MSX_MUSIC_SIZE     16384u
+#define MSX_DISK_SIZE      65536u
+#define MSX_MAPPER_RAM_SIZE 524288u /* 512 KiB */
 #define MSX_SCREEN_W         256u
 #define MSX_SCREEN_H     MSX_DISPLAY_LINES
 
@@ -48,8 +52,12 @@
 /* ---- slots.c: canonical map, slot selects, port dispatch -------------- */
 void    slots_init(void);
 void    slots_reset(void);
+void    slots_set_machine(uint16_t machine);
 void    slots_set_bios(const uint8_t *img, uint32_t size);
 void    slots_set_logo(const uint8_t *img, uint32_t size);
+void    slots_set_sub(const uint8_t *img, uint32_t size);
+void    slots_set_music(const uint8_t *img, uint32_t size);
+void    slots_set_disk(const uint8_t *img, uint32_t size);
 void    slots_set_rom(const uint8_t *img, uint32_t size);
 void    slots_primary_select(uint8_t value);      /* PPI port A alias      */
 uint8_t slots_read(uint16_t addr);

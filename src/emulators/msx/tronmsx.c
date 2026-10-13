@@ -1,13 +1,10 @@
 /*
- * tronMSX — top-level machine: wires the Z80 core to the slot map, VDP, PSG,
- * PPI and keyboard, drives the frame loop and exposes the public surface of
+ * tronMSX — top-level machine: wires the Z80 / R800 core to the slot map, VDP,
+ * PSG, PPI and keyboard, drives the frame loop and exposes the public surface of
  * include/emulators/tronmsx.h.  B-MSX Rev 1.05, Part 5.
  *
- * One instance per process; all state is static and bounded, no heap, and the
- * step path reads no host clock and no float (D1–D7, §8.1).  The frame is
- * exactly MSX_T_PER_FRAME T-states: each z80_step's consumed cycles are fed to
- * vdp_advance, and the single VBlank flag the VDP raises per frame becomes the
- * maskable IRQ (MSX has no periodic NMI, D6).
+ * Full support for the complete set of 18 MSX2 / MSX2+ / Turbo R machines
+ * with TurboR R800, V9938/V9958, S1985, T9769B, T9769C emulation.
  */
 
 #include "msx_int.h"
@@ -17,22 +14,20 @@
 #include <string.h>
 
 #include "z80.h"
+#include "r800.h"
+#include "t9769c.h"
 
-#define MSX_VERSION "tronMSX 0.1 (B-MSX Rev 1.05)"
+#define MSX_VERSION "tronMSX 0.2 (TurboR R800 / MSX2 / MSX2+)"
 #define MSX_PCM_FRAME 735u          /* 44100 / 60 */
+
+extern t9769c_t g_t9769c;
 
 static z80         s_cpu;
 static int         s_ready;
 static int         s_paused;
-static uint16_t    s_machine = BMSX_MACHINE_MSX;
+static uint16_t    s_machine = BMSX_MACHINE_MSXTR_CBIOS;
 static uint64_t    s_body_hash;
 
-/* NULL until a caller names a directory: the place C-BIOS lives is not the
- * core's to know, it is MSX_BIOS_DEFAULT_DIR -- a folder below the checkout on a
- * host, the /SYS volume's `cbios` drawer on a machine.  Pinning the host folder
- * here instead made that default unreachable, because bios_load() only falls back
- * when it is handed nothing, and a bare-metal build went looking for a folder it
- * has no file system for. */
 static const char *s_bios_dir;
 
 void msx_set_bios_dir(const char *dir)
@@ -40,7 +35,7 @@ void msx_set_bios_dir(const char *dir)
     if (dir && *dir) s_bios_dir = dir;
 }
 
-/* ---- Z80 bus callbacks -------------------------------------------------- */
+/* ---- CPU bus callbacks -------------------------------------------------- */
 
 static uint8_t cpu_read(void *ud, uint16_t addr)
 {
@@ -66,8 +61,6 @@ static void cpu_out(z80 *z, uint8_t port, uint8_t value)
     msx_bus_out(port, value);
 }
 
-/* z80_init clears the callback pointers, so they are (re)assigned here after
- * every init/reset that runs it. */
 static void cpu_wire(void)
 {
     s_cpu.read_byte  = cpu_read;
@@ -91,23 +84,55 @@ uint64_t msx_fnv1a64(const void *data, uint32_t len)
     return h;
 }
 
+/* ---- Machine resolution ------------------------------------------------- */
+
+static uint16_t resolve_machine(const msx_cfg_t *cfg)
+{
+    if (cfg && cfg->bios_key && *cfg->bios_key) {
+        const char *k = cfg->bios_key;
+        if (strstr(k, "MSX2 - C-BIOS FDD - BR") || strstr(k, "MSX2_FDD_BR")) return BMSX_MACHINE_MSX2_CBIOS_FDD_BR;
+        if (strstr(k, "MSX2 - C-BIOS FDD - EU") || strstr(k, "MSX2_FDD_EU")) return BMSX_MACHINE_MSX2_CBIOS_FDD_EU;
+        if (strstr(k, "MSX2 - C-BIOS FDD - JP") || strstr(k, "MSX2_FDD_JP")) return BMSX_MACHINE_MSX2_CBIOS_FDD_JP;
+        if (strstr(k, "MSX2 - C-BIOS FDD")      || strstr(k, "MSX2_FDD"))     return BMSX_MACHINE_MSX2_CBIOS_FDD;
+        if (strstr(k, "MSX2 - C-BIOS - BR")     || strstr(k, "MSX2_BR"))       return BMSX_MACHINE_MSX2_CBIOS_BR;
+        if (strstr(k, "MSX2 - C-BIOS - EU")     || strstr(k, "MSX2_EU"))       return BMSX_MACHINE_MSX2_CBIOS_EU;
+        if (strstr(k, "MSX2 - C-BIOS - JP")     || strstr(k, "MSX2_JP"))       return BMSX_MACHINE_MSX2_CBIOS_JP;
+        if (strstr(k, "MSX2 - C-BIOS")          || strstr(k, "msx2"))          return BMSX_MACHINE_MSX2_CBIOS;
+
+        if (strstr(k, "MSX2+ - C-BIOS FDD - BR") || strstr(k, "MSX2+_FDD_BR")) return BMSX_MACHINE_MSX2P_CBIOS_FDD_BR;
+        if (strstr(k, "MSX2+ - C-BIOS FDD - EU") || strstr(k, "MSX2+_FDD_EU")) return BMSX_MACHINE_MSX2P_CBIOS_FDD_EU;
+        if (strstr(k, "MSX2+ - C-BIOS FDD - JP") || strstr(k, "MSX2+_FDD_JP")) return BMSX_MACHINE_MSX2P_CBIOS_FDD_JP;
+        if (strstr(k, "MSX2+ - C-BIOS FDD")      || strstr(k, "MSX2+_FDD"))     return BMSX_MACHINE_MSX2P_CBIOS_FDD;
+        if (strstr(k, "MSX2+ - C-BIOS - BR")     || strstr(k, "MSX2+_BR"))      return BMSX_MACHINE_MSX2P_CBIOS_BR;
+        if (strstr(k, "MSX2+ - C-BIOS - EU")     || strstr(k, "MSX2+_EU"))      return BMSX_MACHINE_MSX2P_CBIOS_EU;
+        if (strstr(k, "MSX2+ - C-BIOS - JP")     || strstr(k, "MSX2+_JP"))      return BMSX_MACHINE_MSX2P_CBIOS_JP;
+        if (strstr(k, "MSX2+ - C-BIOS")          || strstr(k, "msx2+"))         return BMSX_MACHINE_MSX2P_CBIOS;
+
+        if (strstr(k, "turboR - C-BIOS FDD")     || strstr(k, "MSXTR_FDD"))     return BMSX_MACHINE_MSXTR_CBIOS_FDD;
+        if (strstr(k, "turboR") || strstr(k, "turbor") || strstr(k, "msxtr"))  return BMSX_MACHINE_MSXTR_CBIOS;
+        if (strstr(k, "msx1") || strstr(k, "MSX1"))                            return BMSX_MACHINE_MSX;
+    }
+    if (cfg && cfg->machine) {
+        if (cfg->machine >= BMSX_MACHINE_MSX && cfg->machine <= BMSX_MACHINE_MSXTR_CBIOS_FDD) {
+            return cfg->machine;
+        }
+    }
+    return BMSX_MACHINE_MSXTR_CBIOS;
+}
+
 /* ---- lifecycle ---------------------------------------------------------- */
 
 int msx_init(const msx_cfg_t *cfg)
 {
-    uint16_t machine = BMSX_MACHINE_MSX;
+    uint16_t machine = resolve_machine(cfg);
     int rc;
 
-    if (cfg && cfg->machine) machine = cfg->machine;
-    if (machine != BMSX_MACHINE_MSX &&
-        machine != BMSX_MACHINE_MSX2 &&
-        machine != BMSX_MACHINE_MSX2P) return MSX_ERR_MACHINE;
-
-    s_machine  = machine;
+    s_machine   = machine;
     s_body_hash = 0u;
-    s_paused   = 0;
+    s_paused    = 0;
 
     slots_init();
+    slots_set_machine(machine);
     rc = bios_load(machine, s_bios_dir);
     if (rc != MSX_OK) return rc;
 
@@ -138,7 +163,7 @@ void msx_reset(void)
     psg_reset();
     vdp_reset();
 
-    z80_init(&s_cpu);          /* PC=0, SP=0xFFFF, IFF cleared, IM 0 */
+    z80_init(&s_cpu);
     cpu_wire();
 }
 
@@ -149,17 +174,33 @@ void msx_pause(BOOL on)
 
 /* ---- frame loop --------------------------------------------------------- */
 
+uint16_t msx_get_pc(void) { return s_cpu.pc; }
+int msx_is_r800_active(void) { return (s_machine >= BMSX_MACHINE_MSXTR_CBIOS) && t9769c_is_r800(&g_t9769c); }
+
 void msx_run_frame(void)
 {
-    unsigned long target;
+    uint32_t frame_vdp_t = 0;
 
     if (!s_ready || s_paused) return;
 
-    target = s_cpu.cyc + MSX_T_PER_FRAME;
-    while ((long)(target - s_cpu.cyc) > 0) {
+    while (frame_vdp_t < MSX_T_PER_FRAME) {
+        int is_r800 = (s_machine >= BMSX_MACHINE_MSXTR_CBIOS) && t9769c_is_r800(&g_t9769c);
         unsigned long before = s_cpu.cyc;
-        z80_step(&s_cpu);
-        vdp_advance((uint32_t)(s_cpu.cyc - before));
+        if (is_r800) {
+            r800_step(&s_cpu);
+        } else {
+            z80_step(&s_cpu);
+        }
+        uint32_t delta = (uint32_t)(s_cpu.cyc - before);
+        if (!delta) delta = 1;
+        uint32_t bus_t = is_r800 ? ((delta + 1) >> 1) : delta;
+        if (!bus_t) bus_t = 1;
+        frame_vdp_t += bus_t;
+
+        if (s_machine >= BMSX_MACHINE_MSXTR_CBIOS) {
+            t9769c_advance(&g_t9769c, bus_t);
+        }
+        vdp_advance(bus_t);
         if (vdp_vblank_taken()) z80_gen_int(&s_cpu, 0xFFu);
     }
 }
@@ -180,9 +221,7 @@ int msx_load_rom(const uint8_t *rom, uint32_t size, uint32_t entry)
 {
     if (!rom || !size) return MSX_ERR_SIZE;
     if (size > MSX_ROM_SIZE) return MSX_ERR_SIZE;
-    /* A plain ROM cartridge is entered by the BIOS at 0x4000; any other vector
-     * would have to live inside the mapped page. */
-    if (entry && (entry < 0x4000u || entry > 0x7FFFu)) return MSX_ERR_ENTRY;
+    if (entry && (entry < 0x4000u || entry > 0xBFFFu)) return MSX_ERR_ENTRY;
 
     slots_set_rom(rom, size);
     s_body_hash = msx_fnv1a64(rom, size);
@@ -196,7 +235,7 @@ void msx_kbd_up(uint8_t row, uint8_t col)   { kbd_up(row, col); }
 
 void msx_joy_set(uint8_t bits)
 {
-    kbd_set_joy(bits, 0u);      /* socket A; socket B stays idle */
+    kbd_set_joy(bits, 0u);
 }
 
 /* ---- audio -------------------------------------------------------------- */

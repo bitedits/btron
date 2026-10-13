@@ -19,15 +19,38 @@ extern "C" {
 /* One machine instance per process; a second msx_init replaces the first. */
 typedef struct {
     const char *bios_key;   /* "bios.msx2p" | NULL = C-BIOS default  */
-    uint16_t    machine;    /* b_msx_body.machine: 1 MSX, 2 MSX2, 3 MSX2+ */
+    uint16_t    machine;    /* b_msx_body.machine: 1..19             */
     uint16_t    frame_hz;   /* 60 for the first core; PAL 50 later    */
 } msx_cfg_t;
 
-/* The cartridge cap, in bytes: the first core maps one 32 KiB page at 0x4000, so
- * msx_load_rom() answers MSX_ERR_SIZE above it.  Callers that read an image out
- * of a volume need the number to size their buffer and to tell a full page from
- * a banked megaROM, which is why it lives here and not in the core's msx_int.h. */
-#define MSX_ROM_SIZE       32768u
+/* Standard machines and full set of 18 C-BIOS machines */
+#define BMSX_MACHINE_MSX                1u
+#define BMSX_MACHINE_MSX2               2u
+#define BMSX_MACHINE_MSX2P              3u
+
+#define BMSX_MACHINE_MSX2_CBIOS         2u
+#define BMSX_MACHINE_MSX2_CBIOS_BR      4u
+#define BMSX_MACHINE_MSX2_CBIOS_EU      5u
+#define BMSX_MACHINE_MSX2_CBIOS_JP      6u
+#define BMSX_MACHINE_MSX2_CBIOS_FDD     7u
+#define BMSX_MACHINE_MSX2_CBIOS_FDD_BR  8u
+#define BMSX_MACHINE_MSX2_CBIOS_FDD_EU  9u
+#define BMSX_MACHINE_MSX2_CBIOS_FDD_JP  10u
+
+#define BMSX_MACHINE_MSX2P_CBIOS        3u
+#define BMSX_MACHINE_MSX2P_CBIOS_BR     11u
+#define BMSX_MACHINE_MSX2P_CBIOS_EU     12u
+#define BMSX_MACHINE_MSX2P_CBIOS_JP     13u
+#define BMSX_MACHINE_MSX2P_CBIOS_FDD    14u
+#define BMSX_MACHINE_MSX2P_CBIOS_FDD_BR 15u
+#define BMSX_MACHINE_MSX2P_CBIOS_FDD_EU 16u
+#define BMSX_MACHINE_MSX2P_CBIOS_FDD_JP 17u
+
+#define BMSX_MACHINE_MSXTR_CBIOS        18u
+#define BMSX_MACHINE_MSXTR_CBIOS_FDD    19u
+
+/* The cartridge cap, in bytes: supports up to 4 MiB MegaROMs (e.g. Geo3D-256) */
+#define MSX_ROM_SIZE       4194304u
 
 /* Where the machine's media lives when the caller names no directory, on each
  * side of the hosted boundary: a folder below the checkout where there is a host

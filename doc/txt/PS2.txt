@@ -1116,6 +1116,8 @@ PART THREE -- THE MEASURED MACHINE
                                                         the surface get painted
     [PSTAT] plane / paint / lat   the pointer path       reports on the wire, holds,
                                                          dropped counts, latency
+    [PSTAT] stroke pair           ps2_ptr_stroke.h       the two speeds of one slide,
+                                                         and which layer owns distance
     [PSTAT] budget input / ui     ps2_plane_charge()     did either WORKER plane spend
                                                          more than its own budget, how
                                                          often, and how late was the
@@ -1164,6 +1166,21 @@ PART THREE -- THE MEASURED MACHINE
                read, and they print in the same shape from a session's exit and from
                the bench's closing receipt, so a headless gate and a machine with a
                person on it quote one row.
+      [PSTAT] stroke pair: samples=<n> slow=<n> counts in <n> ms (<n>.<cs>/ms), fast=<n>
+               in <n> ms (<n>.<cs>/ms) -> <n>.<cs>x | no ratio yet
+               -- the two-speed slide pair that decides 13.4's macOS row, kept by
+               ps2_ptr_stroke.h and printed wherever this port prints pointer
+               statistics, the bench's closing receipt included (13.1).
+               `no ratio yet` is one sample, not a measurement of zero; the verdict rows
+               under it name the experiment to do instead, and `samples=` is the number
+               of slides that were long enough to count.
+      [PSTAT]   the same slide carried the same counts at both speeds | the
+               fast slide carried more counts | carried FEWER counts | both at
+               nearly one speed | no pair yet -- the five verdicts, in the
+               order a reader meets them: distance on the wire, an accelerator
+               above this port, something that divides by speed, a run that
+               was never the experiment, and a session that has not done it
+               yet.
       [BENCH] <tag> <w>x<h> <n>px/rep <n> us/rep max <n> us  <ns>.<cs> ns/px
                sum=0x<hex> chk=ok | MISMATCH | fill
                -- chk= is this instrument's own integrity check, not a property of the
@@ -1932,6 +1949,19 @@ PART FOUR -- THE INTERCONNECT: INPUT AS A REAL PLANE
     It closes the window since its last call, so the first call of a session
     reports whatever accumulated during boot: type `ptrstat boot` to discard
     that window, then perform a slide, then label the window that contains it.
+  - stroke pair -- WHICH SPEED OWNED THE SAME SLIDE?  The ratio below is the
+    one test that decides whether a guest gain can ship at all, and taking it
+    used to mean TYPING between the two halves of a single experiment.  So the
+    reports are filed into strokes as they arrive: 100 ms of stillness ends
+    one, a slide of 800 counts or more becomes a sample, and the session keeps
+    its slowest sample and its fastest one.  Every place this port prints
+    pointer statistics -- `ptrstat`, Ctrl+\, the session's own exit row, and
+    the headless run's closing receipt -- ends with that pair, its two speeds,
+    and the ratio between them.  them.  The speeds are printed beside it
+    because two slides at nearly one speed are NOT the experiment, and a row
+    that said 1.00x about them would be a false plateau in the other
+    direction; the row refuses, and says what to do instead.
+
   - ptgain    -- WHAT IS A COUNT WORTH TO THE HAND THAT SENT IT?  The only
     instrument here whose denominator is a human movement of known length
     rather than a constant, and therefore the only one that can CHECK
@@ -1944,7 +1974,23 @@ PART FOUR -- THE INTERCONNECT: INPUT AS A REAL PLANE
   inside a measurement window.  Every ptrstat call resets, so forgetting costs
   one keystroke.
 
-  The decisive protocol is five windows:
+  The pair resets with nothing, and that is the point of it.  The window is
+  the wrong shape for this test twice over: a hand that cannot place the
+  cursor is a hand being asked to type at a prompt, and the keystroke between
+  the slow slide and the fast one DISCARDS the slow slide -- the very sample
+  the answer rests on.  The splitter's own arithmetic is gated on the host
+  instead, 46 checks and a matched pair of controls with OPPOSITE answers
+  (counts proportional to distance must read 1.00x; counts proportional to
+  speed must read acceleration), by `make test-ps2-pointer`.  What a headless
+  run prints is `no pair yet`, which is the correct answer for a synthetic
+  stream that has one speed per phase: the pair is settled by a hand and by
+  nothing else, and the row that ships a gain is the row a live session
+  prints.
+
+  The decisive protocol is five windows, of which the two that decide the
+  layer question the splitter now keeps on its own -- see the `stroke pair`
+  row at the foot of every [PSTAT] print, and 13.1's note on why a window
+  cannot hold a two-part experiment:
 
     Window           Hand                        Decides
     ---------------------------------------------------------------
@@ -2127,7 +2173,10 @@ PART FOUR -- THE INTERCONNECT: INPUT AS A REAL PLANE
        behaviour  pointer acceleration and inertia, applied to the host cursor
                   before any byte exists
        setting    defaults write -g com.apple.mouse.scaling -1
-       status     INFERRED (no raw mode in PCSX2 to bypass)
+       status     INFERRED (no raw mode in PCSX2 to bypass), and NO LIVE
+                  SESSION HAS PRINTED A stroke pair VERDICT YET -- the
+                  instrument that decides this row is compiled and gated on
+                  the host, but the row it fills needs a hand
 
   PCSX2 hidmouse
        behaviour  one HID event per IN token; byte 0 = 3 buttons + pad, then
@@ -2169,7 +2218,11 @@ PART FOUR -- THE INTERCONNECT: INPUT AS A REAL PLANE
   point tuning for it.  The device-rate row is the opposite: 100-125 reports/s
   is normal there too, so the emulator cannot be blamed for it, and the only
   real-hardware divergence that matters for pointer FEEL is the macOS row
-  above the wire.
+  above the wire.  That row is the one the stroke pair exists to settle: it is
+  the only claim in this table whose evidence is a hand doing the same slide
+  twice, so it is stated as INFERRED until a live session prints its verdict,
+  and turning the Mac's own curve off is a TEST of this table rather than a
+  fix for a cursor.
 
 13.5  Settled facts, so they are not re-opened
 

@@ -34,7 +34,7 @@ CC ?= gcc
 CFLAGS ?= -O2 -Wall -Wextra -std=c99 -Iinclude -Iinclude/gl -Isrc/gl -Iinclude/drivers -Isrc/kernel -Isrc/cores -Isrc/quake/include
 
 .PHONY: all posix qemu kernel tkernel sakamura foma uefi pc98 arm-elf arm64-elf m68k ps2 mips \
-        check-structure test-ps2-softfloat test-ps2-gs-pack test-ps2-gs-env test-ps2-gs-rec test-ps2-gs-tex test-eegs-raster test-eegs-present test-gl-math test-gl-backend-choice test-ps2-fb-order xmb-atlas test-xmb-atlas \
+        check-structure test-ps2-softfloat test-ps2-gs-pack test-ps2-gs-env test-ps2-gs-rec test-ps2-gs-tex test-ps2-pointer test-eegs-raster test-eegs-present test-gl-math test-gl-backend-choice test-ps2-fb-order xmb-atlas test-xmb-atlas \
         test-xmb-render test-xmb-render-tgl \
         html2tad book2tad tad_bin test test-kernel test-yoko test-yoko4 test-m68k test-mips test-ps2 test-foma test-foma-ui foma-screens \
         segui-screens \
@@ -1464,6 +1464,27 @@ $(TEST_GSTEX_BIN): $(TEST_GSTEX_OBJS) src/drivers/ps2/ps2_gs_tex.c \
 	@mkdir -p ./.build
 	$(CC) $(TEST_GSTEX_OBJS) -o $@ $(LDFLAGS)
 
+# The pointer's two-speed pair, on the PS2 side only.  The splitter lives in a header src/cores
+# includes, so the test #includes that same header and measures the identical code the image links
+# -- which matters here more than anywhere else in this suite, because the row it prints is the one
+# that decides whether a guest gain can be shipped at all, and it is read in a session whose screen
+# nobody can see.  Two of the cases are controls with opposite answers: counts that proportion to
+# distance must read 1.00x and counts that proportion to speed must read as acceleration, and a
+# harness that prints 1.00x for both is not an instrument.
+TEST_PTRSTROKE_SRCS = verify/tests/test_ps2_ptr_stroke.c
+TEST_PTRSTROKE_OBJS = $(TEST_PTRSTROKE_SRCS:.c=.test.o)
+TEST_PTRSTROKE_BIN  = ./.build/test_ps2_ptr_stroke
+
+test-ps2-pointer: $(TEST_PTRSTROKE_BIN)
+	@echo "=========================================================="
+	@echo " Running PS2 pointer stroke segmentation and the two-speed verdict..."
+	@echo "=========================================================="
+	@./$(TEST_PTRSTROKE_BIN)
+
+$(TEST_PTRSTROKE_BIN): $(TEST_PTRSTROKE_OBJS) src/cores/ps2_ptr_stroke.h
+	@mkdir -p ./.build
+	$(CC) $(TEST_PTRSTROKE_OBJS) -o $@ $(LDFLAGS)
+
 # Increment 5a: the raster stage's decisions, on top of the recorder's words.  Same idiom again --
 # backend_eegs.c and the recorder are #included into the test, so the identical translation unit is
 # what the gate measures and what will link into btron-ps2.elf -- and the same reason: a triangle
@@ -2416,7 +2437,7 @@ $(TEST_MSX_TRACE_BIN): $(TEST_MSX_TRACE_OBJS)
 	@mkdir -p ./.build
 	$(CC) $(TEST_MSX_TRACE_OBJS) -o $@ $(LDFLAGS)
 
-test: test-tad test-editor test-chat test-mozc test-wylie test-hmi test-ski test-tracker test-deskclip test-settings test-global-menu test-app-menu test-drivesetup test-fs test-quake test-ps2-softfloat test-ps2-gs-pack test-ps2-gs-env test-ps2-gs-rec test-ps2-gs-tex test-eegs-raster test-eegs-present test-gl-math test-gl-backend-choice test-ps2-fb-order test-xmb-atlas
+test: test-tad test-editor test-chat test-mozc test-wylie test-hmi test-ski test-tracker test-deskclip test-settings test-global-menu test-app-menu test-drivesetup test-fs test-quake test-ps2-softfloat test-ps2-gs-pack test-ps2-gs-env test-ps2-gs-rec test-ps2-gs-tex test-ps2-pointer test-eegs-raster test-eegs-present test-gl-math test-gl-backend-choice test-ps2-fb-order test-xmb-atlas
 	@echo "=========================================================="
 	@echo " ALL B-SYSTEM TEST SUITES PASSED (100% SUCCESS)!"
 	@echo "=========================================================="

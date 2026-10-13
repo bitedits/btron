@@ -2527,6 +2527,44 @@ measures the wrong thing, so each is stated with what it excludes:
   not a fault -- and a `[CAL]` log read without its header says the opposite.
 - **`ptrstat`** — *what is actually on the wire?* It counts **every** report, not
   the one-in-sixty-four the `[RAW]` rows print, and sorts them by magnitude.
+- **stroke pair** — *which speed owned the same slide?* The ratio below is the one
+  test that decides whether a guest gain can ship at all, and taking it used to mean
+  **typing between the two halves of a single experiment**. So the reports are filed
+  into strokes as they arrive: 100 ms of stillness ends one, a slide of 800 counts or
+  more becomes a sample, and the session keeps its slowest sample and its fastest
+  one. Every place this port prints pointer statistics -- `ptrstat`, Ctrl+\, the
+  session's own exit row, and the headless run's closing receipt -- ends with that
+  pair, its two speeds, and the ratio between them:
+
+  ```
+  [PSTAT] stroke pair: samples=2 slow=1500 counts in 1500 ms (1.00/ms), fast=1500 in
+                       60 ms (25.00/ms) -> 1.00x
+  [PSTAT]   the same slide carried the same counts at both speeds: distance is on
+  [PSTAT]   the wire, so one guest gain is right and `sens` is where the feel is set
+  ```
+
+  The speeds are printed beside the ratio because two slides at nearly one speed are
+  **not** the experiment, and a row that said `1.00x` about them would be a false
+  plateau in the other direction. There are six readings, and the two refusals are
+  aimed at different faults because the first live session turned out to need the
+  second one:
+
+  ```
+  [PSTAT]   the mouse handler has seen NO report since boot, so no protocol can take a
+  [PSTAT]   pair off a silent wire. ...
+  [PSTAT]   no pair yet: 404 mouse reports seen, longest stroke 8480 counts, and a sample
+  [PSTAT]   needs 800 of them in one slide plus a second slide of the same travel at a
+  [PSTAT]   clearly different speed.  Slide sideways across the display slowly, then do
+  [PSTAT]   the same slide fast, then read this row again.
+  ```
+
+  The first is a port fault -- nothing reached the reader, so no amount of sliding can
+  help and `ptrsrc` is where to look; the second is a hand that was too short or too
+  slow, and it prints the two numbers the reader can check against their own slide. A
+  refusal that said only "800 counts are needed" would be advice nobody could verify.
+  The instrument is `src/cores/ps2_ptr_stroke.h`, it reads counts **before** this port's
+  gain, and it times strokes on the OHCI frame number — a 1 ms clock, so no CP0
+  Count and no 29.1 s wrap.
 - **`ptgain`** — *what is a count worth to the hand that sent it?* The only
   instrument here whose denominator is a human movement of known length rather
   than a constant, and therefore the only one that can check `PS2_EMU_POINTER_SCALE`
@@ -2539,7 +2577,9 @@ measures the wrong thing, so each is stated with what it excludes:
 `ptrstat` closes the window since its last call, so the first call of a session
 reports whatever accumulated during boot: type `ptrstat boot` to discard that
 window, then perform a slide, then label the window that contains it. The decisive
-protocol is five windows:
+protocol is five windows -- and the two that decide the layer question are now kept
+automatically, at the foot of every `[PSTAT]` print, so taking that pair no longer
+needs a keystroke in the middle of the experiment:
 
 | Window | Hand | Decides |
 |:---|:---|:---|
@@ -2596,6 +2636,21 @@ Read the `vs previous window` row:
 `ptrcal` drives the same report handler that `ptrstat` counts, so it must not run
 inside a measurement window. Every `ptrstat` call resets, so forgetting costs one
 keystroke to recover from.
+
+The stroke pair resets with nothing, and that is the point of it. `ptrstat`'s window
+is the wrong shape for this test twice over: a hand that cannot place the cursor is a
+hand being asked to type at a prompt, and the keystroke between the slow slide and the
+fast one **discards the slow slide** -- the very sample the answer rests on. So the
+splitter's own arithmetic is gated on the host instead: `make test-ps2-pointer` runs 59
+checks against `src/cores/ps2_ptr_stroke.h`, including a matched pair of controls with
+**opposite** answers (counts proportional to distance must read `1.00x`; counts
+proportional to speed must read acceleration), the wrap cases pin the 16-bit frame
+clock, and one case pins the silent wire: a splitter that has seen zero reports must not
+print the same advice as one whose hand merely stayed short, because those two faults
+have opposite fixes. What a headless run prints is `no pair yet` with its two numbers
+attached -- 404 reports, longest stroke 8480 counts -- which is the correct answer for a
+synthetic stream that has one speed per phase: the pair is settled by a hand and by
+nothing else, and the row that ships a gain is the row a live session prints.
 
 #### Pointer source profiles
 
@@ -2862,7 +2917,7 @@ confirmed, and therefore still a candidate.
 
 | Layer | Timing / behaviour | The setting that belongs to it | Status |
 |:---|:---|:---|:---|
-| macOS | pointer acceleration and inertia applied to the host cursor before any byte exists | `defaults write -g com.apple.mouse.scaling -1` disables it | inferred (no raw mode exists in PCSX2 to bypass it) |
+| macOS | pointer acceleration and inertia applied to the host cursor before any byte exists | `defaults write -g com.apple.mouse.scaling -1` disables it | inferred (no raw mode exists in PCSX2 to bypass it), and **no live session has printed a `stroke pair` verdict yet** -- the instrument that decides this row is compiled and gated on the host, but the row it fills needs a hand; the first live session printed neither answer, only `the mouse handler has seen NO report since boot`, which is a fault in the port rather than a measurement of the layer |
 | PCSX2 `hidmouse` | one HID event per IN token; publishes byte 0 = 3 buttons + pad, then X, Y, wheel as three 8-bit signed fields; reports **the Mac cursor's own deltas**, not device counts | nothing. `PointerXScale` / `PointerYScale` exist in the **[repo-local ini](#running-with-pcsx2)** and in no v2.8.2 code | **proven from PCSX2 v2.8.2 source**: the callback is handed the raw `delta` (`InputManager.cpp:1398-1403`) and a `Type::Pointer` USB binding carries no scale factor (`:1043-1057`); `int_clamp` carries the `|127|` remainder (`hid.cpp:632-635`); motion is published once per emulated EE frame (`Counters.cpp:500`), so the wire ceiling is **~60 reports/s** |
 | OHCI frame | `HcFmInterval = 0x27782EDF` -> 11999 bit times at 12 Mbit/s = **1 ms**, and the periodic list is walked once per frame, so a device polls at 1/2/4/8/16/32 ms | `bInterval` at enumerate time | **proven**: the same word real PS2 firmware programs |
 | Real PS2 hardware | one OHCI interface shared with the IOP at IOP physical `0x1F801600`, **Full Speed + Low Speed only**, IOP interrupt 22, DMA structures confined to the IOP's reachable 2 MB; the host stack is an IOP-side module and the EE is a client of it over SIF | nothing in this port | spec-derived (secondary but well-corroborated); note that our probe reading that base only proves PCSX2 decodes it, and "the EE cannot poll it on retail hardware" is the open architectural risk |
@@ -2874,7 +2929,10 @@ is the value Sony's own `usbd` writes -- so the bus row of the table will not
 change on a retail console and there is no point tuning for it. The device rate
 row is the opposite: 100-125 reports/s is normal there too, so the emulator cannot
 be blamed for it, and the only real-hardware divergence that matters for pointer
-*feel* is the macOS row above the wire.
+*feel* is the macOS row above the wire. That row is the one the `stroke pair` exists to
+settle: it is the only claim in this table whose evidence is a hand doing the same slide
+twice, so it is stated as inferred until a live session prints its verdict, and turning
+the Mac's own curve off is a test of this table rather than a fix for a cursor.
 
 ### Running with PCSX2
 
@@ -2913,6 +2971,7 @@ make test-xmb-atlas      # the shipped icon sheet == what gen_xmb_atlas.c comput
 make xmb-atlas           # regenerate src/apps/xmb_atlas.h after changing the geometry
 make test-xmb-render     # the real xmb.c on the host: atlas ink counts + PPM frames
 make test-xmb-render-tgl # the same xmb.c through backend_tinygl.c -- the PS2 rasterizer's own gate
+make test-ps2-pointer    # the stroke pair's arithmetic, incl. both opposite-answer controls
 
 # Smoothness loop against explicit per-phase budgets (opens XMB in PCSX2):
 SMOOTH_APP=1 SMOOTH_FRAMES=3 bash scripts/ps2_smooth.sh

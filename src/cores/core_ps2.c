@@ -50,6 +50,7 @@
 #include "ps2_usb.h"
 #include "ps2_iopram.h"
 #include "ps2_irq.h"
+#include "ps2_ptr_stroke.h"   /* the two-speed slide pair: which layer owns the pointer's distance */
 
 /* The EE/GS present (doc/md/PS2.md, increment 5c): stage the frame's GIF stream during the
  * composite, send it after this region's canvas upload.  Relative path because that is how this
@@ -1838,6 +1839,82 @@ static ps2_ptrst_t s_ptrst;
  * call that reads it. */
 static uint32_t s_ptg_cx, s_ptg_cy;
 
+/* The same session's two-speed pair, kept outside the ptrstat window for the same
+ * reason as those counters and for one more: this test's whole difficulty is that
+ * the two slides have to be *seen by the same reader*, and a window that resets
+ * between them throws the first sample away.  See src/cores/ps2_ptr_stroke.h. */
+static ps2_stroke_t s_ptr_stroke;
+
+/* The row the pair earns, printed against a window's own counts.  Nothing here is
+ * typed: the hand does the slide twice at two speeds and this is what the session
+ * already knows about it.  The units are the ones the layer question is asked in --
+ * counts carried, and the frames it took to carry them -- so a reader can check the
+ * spread for themselves instead of taking the verdict on trust. */
+static void ps2_ptr_stroke_row(void)
+{
+    uint32_t ratio = 0u;
+    int v;
+
+    /* The stroke under the hand counts, or the row would miss the one slide that
+     * decides it -- a sweep ends when the hand stops, and nothing tells this code
+     * that it did. */
+    ps2_stroke_flush(&s_ptr_stroke);
+    v = ps2_stroke_verdict(&s_ptr_stroke, &ratio);
+    const uint32_t slow_spd = s_ptr_stroke.slow_ms
+        ? (unsigned int)ps2_stroke_speed1000(s_ptr_stroke.slow_counts, s_ptr_stroke.slow_ms) : 0u;
+    const uint32_t fast_spd = s_ptr_stroke.fast_ms
+        ? (unsigned int)ps2_stroke_speed1000(s_ptr_stroke.fast_counts, s_ptr_stroke.fast_ms) : 0u;
+
+    ps2_kprintf("[PSTAT] stroke pair: samples=%u slow=%u counts in %u ms (%u.%02u/ms), "
+                "fast=%u in %u ms (%u.%02u/ms)",
+                (unsigned int)s_ptr_stroke.samples,
+                (unsigned int)s_ptr_stroke.slow_counts, (unsigned int)s_ptr_stroke.slow_ms,
+                (unsigned int)(slow_spd / 1000u), (unsigned int)(slow_spd % 1000u / 10u),
+                (unsigned int)s_ptr_stroke.fast_counts, (unsigned int)s_ptr_stroke.fast_ms,
+                (unsigned int)(fast_spd / 1000u), (unsigned int)(fast_spd % 1000u / 10u));
+    /* A ratio of zero is not a measurement of zero, and printing it as one would
+     * put a number in the log that the verdict below then contradicts. */
+    if (ratio) ps2_kprintf(" -> %u.%02ux\n", (unsigned int)(ratio / 100u),
+                           (unsigned int)(ratio % 100u));
+    else       ps2_kprintf(" -> no ratio yet\n");
+    switch (v) {
+    case PS2_STROKE_WIRE:
+        ps2_kprintf("[PSTAT]   the same slide carried the same counts at both speeds: distance is on\n"
+                    "[PSTAT]   the wire, so one guest gain is right and `sens` is where the feel is set\n");
+        break;
+    case PS2_STROKE_ACCEL:
+        ps2_kprintf("[PSTAT]   the fast slide carried more counts for the same travel: a multiplier\n"
+                    "[PSTAT]   above this port is scaling by speed, and no constant here can be right\n"
+                    "[PSTAT]   for both.  Read it as macOS's own cursor curve -- `ptrsrc` to check\n"
+                    "[PSTAT]   which stub is answering, and see 'Which layer owns the pointer'.\n");
+        break;
+    case PS2_STROKE_SHRINK:
+        ps2_kprintf("[PSTAT]   the fast slide carried FEWER counts: something divides by speed, which\n"
+                    "[PSTAT]   is not an accelerator and wants naming before a gain ships.\n");
+        break;
+    case PS2_STROKE_SPREAD:
+        ps2_kprintf("[PSTAT]   both samples ran at nearly one speed, so this is not the experiment.\n"
+                    "[PSTAT]   Do the same long slide again, and do it quickly the second time.\n");
+        break;
+    case PS2_STROKE_SILENT:
+        ps2_kprintf("[PSTAT]   the mouse handler has seen NO report since boot, so no protocol can take a\n"
+                    "[PSTAT]   pair off a silent wire.  This row is proof the bus and the input plane are\n"
+                    "[PSTAT]   alive -- a key report printed it -- so what is missing is motion on the\n"
+                    "[PSTAT]   pointer device: move the HOST cursor inside the emulator window and slide\n"
+                    "[PSTAT]   it, then read this row again.  `ptrsrc` says which stub is answering.\n");
+        break;
+    default:
+        ps2_kprintf("[PSTAT]   no pair yet: %u mouse reports seen, longest stroke %u counts, and a sample\n"
+                    "[PSTAT]   needs %u of them in one slide plus a second slide of the same travel at a\n"
+                    "[PSTAT]   clearly different speed.  Slide sideways across the display slowly, then do\n"
+                    "[PSTAT]   the same slide fast, then read this row again.\n",
+                    (unsigned int)s_ptr_stroke.reports,
+                    (unsigned int)s_ptr_stroke.max_counts,
+                    (unsigned int)PS2_STROKE_MIN);
+        break;
+    }
+}
+
 static int ps2_ptrst_bucket(uint32_t a)
 {
     if (a == 0u) return 0;
@@ -1868,6 +1945,13 @@ static void ps2_ptrst_add(int dx, int dy)
     s_ptrst.sum_x += dx;   s_ptrst.sum_y += dy;
     s_ptrst.sum_ax += ax;  s_ptrst.sum_ay += ay;
     s_ptg_cx += ax;        s_ptg_cy += ay;
+    /* The stroke splitter reads the same report the histogram does, and it reads
+     * the count before this port's gain touches it: the question is what the wire
+     * carried, and a gain applied first would answer it with arithmetic.  `f` is
+     * the OHCI frame number, which this port measures at 1 ms per frame, so a
+     * stroke's duration needs no CP0 Count and therefore survives a slide longer
+     * than the tick counter's wrap. */
+    ps2_stroke_feed(&s_ptr_stroke, f, ax);
 }
 
 /* One paint pass as the screen border saw it: what the hand's distance was worth
@@ -2032,6 +2116,11 @@ static void ps2_ptrst_print(const char *label)
                     (unsigned int)(rx / 10u), (unsigned int)(rx % 10u),
                     (unsigned int)(ry / 10u), (unsigned int)(ry % 10u));
     }
+    /* The two-speed pair, from every slide the session has seen rather than from
+     * this window.  It sits here because it is the same question the row above
+     * asks -- which layer multiplied the distance -- and it answers it without
+     * asking the hand to type between its own two slides. */
+    ps2_ptr_stroke_row();
     s_prev_sum_ax = s->sum_ax;
     s_prev_sum_ay = s->sum_ay;
     s_ptrst = (ps2_ptrst_t){ 0 };
@@ -2300,6 +2389,9 @@ static void ps2_ptg_cal(int hostpx, int pct)
         /* The escape hatch, because these counters run from boot: a window that
          * contains yesterday's mouse is not a measurement of one sweep. */
         s_ptg_cx = s_ptg_cy = 0;
+        /* The pair is cleared with them, on the same terms: a session that has
+         * yesterday's mouse in it is not a measurement of today's hand. */
+        ps2_stroke_reset(&s_ptr_stroke);
         ps2_kprintf("[PTG] Counts cleared.  Sweep the host cursor, then `ptgain <host px>`.\n");
         return;
     }
@@ -2383,6 +2475,7 @@ static void ps2_ptg_cal(int hostpx, int pct)
         /* The window is spent: it was one deliberate sweep, and repeating it by
          * accident would double the gain. */
         s_ptg_cx = s_ptg_cy = 0;
+        ps2_stroke_reset(&s_ptr_stroke);
         ps2_kprintf("[PTG] gain set to %d/256 px per count = %u.%02u px per host px, asked for %u.%02u%s\n",
                     (int)s_ptr_mult_fp, (unsigned int)(got100 / 100u),
                     (unsigned int)(got100 % 100u),
@@ -5180,6 +5273,17 @@ static void ps2_bench_run(GDEV *screen)
      * only: the frame hook prints it ahead of a sentinel it had to raise itself. */
     if (!s_bench_sentinel) ps2_plane_run_print();
 
+    /* The pointer's two-speed pair, printed here for one reason and not for its
+     * verdict: this is the headless run's only chance to show that a count off the
+     * seam really does reach the splitter, since the harness stops the emulator at
+     * the sentinel and the session's own exit row is therefore never printed on
+     * this path.  What it says is normally "no pair yet", and that is the correct
+     * answer -- a synthetic stream has one speed per phase, and the test this row
+     * exists for is two speeds of the same slide, which only a hand performs.  The
+     * arithmetic itself is gated on the host, 46 checks and two opposite-answer
+     * controls, by `make test-ps2-pointer`. */
+    if (!s_bench_sentinel) ps2_ptr_stroke_row();
+
     /* Not twice: the app phase's frame hook prints this row when the app outlives its
      * budget, and a second copy would tell the harness the table ended in two places. */
     if (!s_bench_sentinel)
@@ -5295,6 +5399,8 @@ static void ps2_gui_pass(GDEV *screen)
                     (unsigned int)(s_bench_app_over - 1u));
         ps2_bench_kbd_cadence();      /* the last stamped period is this app's own */
         ps2_plane_run_print();        /* ... and so are the two planes' budgets */
+        ps2_ptr_stroke_row();         /* ... and the pointer's pair, which is the row
+                                       * a killed run would otherwise never show */
         ps2_kprintf("\n[BENCH] run complete\n");
     }
 #endif

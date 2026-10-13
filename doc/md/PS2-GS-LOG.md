@@ -730,3 +730,84 @@ rows that can be re-run are the ones quoted above, and `chk=` is the field that 
 still measuring what their tag claims.
 
 ---
+## The pointer's two-speed pair: an instrument only the PS2 port can see
+
+**The guardrail that chose the design.**  "Change only ps2 port mouse behavior, don't break or touch
+working pi 400 nicely."  That is not a style preference here, it is a constraint with a file list on
+the other side of it: the pointer's gain (`src/graphics/dp_accel.c`), its limiter, the RISC-OS curve,
+and the settings row that drives them (`src/settings/input.c`) are all shared with the arm64 port, so a
+change there is a Pi 400 change wearing a PS2 label.  What landed therefore sits in one new PS2-only
+header plus `src/cores/core_ps2.c`, and `git status --short -- src Makefile doc` is the check: the code
+half of the tracked diff is `Makefile` and `src/cores/core_ps2.c` (the rest is this log, `PS2.md` and
+`PS2.txt`), with `src/cores/ps2_ptr_stroke.h` and `verify/tests/test_ps2_ptr_stroke.c` untracked-new.
+**No shared source file appears in it**, and `make arm64-elf` still builds.
+
+**Why an instrument was needed rather than a number.**  Guest pixels are the integral of the same
+counts the gain multiplies, so proportionality cannot be proved from inside the guest -- that
+measurement is circular and no value of `ptrcal` breaks the circle.  The only fixed distance available
+is one a human supplies, and the only evidence that something upstream multiplies by speed is that two
+speeds of *the same slide* carry different counts.  The existing protocol asked for exactly that pair
+and made it impossible to take: `ptrstat` closes its window on every call, so the keystroke between the
+slow slide and the fast one **discards the slow slide**, the very sample the answer rests on.  The pair
+now accumulates without a window: 100 ms of stillness closes a stroke, a stroke of 800 counts or more
+is a sample, and the session keeps its slowest and fastest samples and prints them at the foot of every
+`[PSTAT]` print.
+
+**The three constraints that shaped the arithmetic.**  All products and divisions are 32-bit, because
+this image is `-msoft-float` with no `__udivdi3` -- a 64-bit divide here is a link error at best and a
+silent helper at worst, so the speed is split as `whole*1000 + (rem*1000)/ms`.  Strokes are timed on the
+OHCI frame number, which is a 1 ms clock and 16 bits wide, so every gap is `(to - from) & 0xFFFF`;
+that choice also removes the CP0 Count's 29.1 s wrap from the instrument entirely.  And the splitter
+reads the count **before** this port's gain, because a pair taken after the multiplier would prove the
+multiplier instead of testing it.
+
+**The gate, and the two controls that answer in opposite directions.**  `make test-ps2-pointer` runs 46
+checks against the header `#include`d directly (the repo idiom: the identical translation unit is what
+the gate measures and what links into `btron-ps2.elf`).  The decisive pair is
+`wire_carries_distance` -- 1500 counts at one per frame over 1500 ms, then the *same* 1500 counts in
+60 ms, which must read `1.00x` with the two samples still 25x apart in speed so the ratio means
+something rather than merely being arithmetic -- and `wire_carries_speed`, its positive control, where
+the fast slide carries 3780 counts and the identical code must read `2.52x` and say acceleration.  A
+harness with only the first case certifies nothing.
+
+**The three mutations, re-run against this tree and dated 2026-10-13.**  Dropping the 16-bit frame
+mask `& 0xFFFF` from `ps2_stroke_delta()`: **4 failures**, and they are the wrap cases
+(`delta across the wrap` reads 4294901776 for 16) -- which is the honest record of a control that did
+*not* go red the first time it was tried, until `a_wrap_between_strokes_still_splits` was written so
+that a stroke boundary *is* the counter's wrap.  Lowering `PS2_STROKE_MIN` to accept any nudge: **3
+failures**, including `one sample gives no verdict`.  Deleting the spread refusal, so a pair of nearly
+equal speeds is allowed to answer: **2 failures**, `two near-identical speeds refuse` and its
+`and print no ratio`.  The pristine header: 46/0.  Running them also caught a trap of the same family
+as the stale `.pbench.o`: a header-only mutation written and reverted inside one second leaves the
+suite *passing* a binary that still contains the previous mutation, so each control above was run only
+after deleting `.build/test_ps2_ptr_stroke` and its object.  A control whose harness did not rebuild is
+a control that was never run.
+
+**What the headless run prints, 2026-10-13.**  The bench's frame-hook close is now also the row's
+close, and it prints the answer a synthetic stream deserves:
+
+```
+[PSTAT] stroke pair: samples=1 slow=8480 counts in 55 ms (154.18/ms), fast=8480 in 55 ms (154.18/ms) -> no ratio yet
+[PSTAT]   no pair yet: a sample is a slide of 800 counts or more, and two of them
+[PSTAT]   at clearly different speeds.  Slide across the display slowly, then
+[PSTAT]   do the same slide fast, then read this row again.
+[BENCH] run complete
+```
+
+Two defects were found by reading that row rather than by writing it.  The first run printed **no row
+at all**: it was gated on `!s_bench_sentinel`, and the harness ends through the frame-hook path that
+sets exactly that flag -- a diagnostic that cannot appear in the automated run is a diagnostic the
+automation cannot check.  The second is the `-> 0.00x` the first version printed for a one-sample
+session: a ratio of zero is not a measurement of zero, and putting that number in the log directly
+contradicted the verdict line printed under it.  Both are fixed in the shipped text.
+
+**What is NOT claimed.**  No live session has printed a verdict yet, so the macOS row of
+*Which layer owns the pointer* stays **inferred** and is now labelled as such in both `PS2.md` and
+`PS2.txt` ch. 13.4 -- the instrument decides that row, and only a hand running the same slide at
+two speeds fills it.  `PS2_EMU_MULT_FP` is **still 96/256**: the gain was deliberately not moved by
+this lane, and task #22 stays open with SKIP rather than PASS until a live `stroke pair` row names
+which way it should go.  Everything here is PCSX2 evidence, so task #17 remains the outstanding
+hardware check.  And `samples=1 slow=... fast=...` printing identical numbers is the single-sample
+case, not a ratio of 1.0 -- the row says `no ratio yet` for exactly that reason.
+
+---

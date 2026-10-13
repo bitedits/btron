@@ -677,9 +677,11 @@ static const btron_plane_cfg_t s_ps2_planes = {
      * cadence and the bus's agree instead of being two opinions about it. */
     .input_period_us = 1000u,
     /* The programmed display mode's own rate: 800x600 inside one 720p frame at
-     * 60 Hz.  Nothing is paced on it yet -- this is the deadline the async UI
-     * plane is installed against, and it belongs to the display rather than to
-     * however many passes a second the desktop loop happens to make. */
+     * 60 Hz.  It is the deadline the async UI plane is charged against -- every
+     * presenting pass is measured against it by ps2_plane_ui_deadline(), which is what
+     * makes the plane's lateness a count rather than a description -- and it belongs to
+     * the display rather than to however many passes a second the desktop loop happens
+     * to make. */
     .ui_period_us = 16667u,
     /* The system panel owns 28 rows and its clock changes with no event and no
      * damage at all, so it is owed those rows on a schedule of its own. */
@@ -706,6 +708,94 @@ static void ps2_planes_install(void)
                 (unsigned int)s_ps2_planes.panel_refresh_us,
                 (unsigned int)s_ps2_planes.full_convergence_us,
                 (unsigned int)s_ps2_planes.input_slices_max);
+}
+
+/* ── The two worker planes, charged against their budgets ─────────────────
+ * A plane has three things: a period, a budget, and the consequence that a run longer
+ * than the budget is a deadline miss.  include/btron/async_rt.h states that consequence
+ * as a flag rather than a preemption -- "a plane that overruns is flagged but never
+ * blocks the other plane" -- and this port already had the instrument for one of the
+ * three: ps2_irq.c measures the handler's own WCET against ASYNC_ISR_BUDGET_US and
+ * counts its overruns, which is why the [PSTAT] plane row can answer "1.68 us of the
+ * 50 us budget, overruns=0" instead of asserting it.
+ *
+ * What had no reader was the two WORKER budgets.  ASYNC_INPUT_BUDGET_US and
+ * ASYNC_UI_BUDGET_US are named as this machine's budgets in the port's own ledger while
+ * nothing measured a run against either, and ui_period_us was read only to be printed --
+ * so "the presentation plane runs at the display's rate" was an opinion about however
+ * many passes a second the loop happened to make.  Charging them costs two Count reads
+ * per pass, buys each plane its WCET and its miss count, and gives ui_period_us the
+ * reader that makes it a deadline instead of a label.
+ *
+ * Measurement, not enforcement, and the row says so: the shim is still cooperative --
+ * sta_tsk() runs the body on the caller's stack, dly_tsk() is a busy-hold -- so a miss
+ * here means "the plane was late and the machine knows it", not "the plane was cut off".
+ * That distinction is lane 11's, and a fix for a number nobody can see is not a fix:
+ * these counters are the baseline it has to be measured against.
+ *
+ * Two fields each, both monotone, and deliberately no mean: a sum of pass times would
+ * overflow 32 bits a few minutes into the rate this loop makes, while a WCET beside a
+ * miss ratio is exactly what a budget gate reads. */
+typedef struct {
+    uint32_t runs;      /* charges taken since boot                                  */
+    uint32_t us_max;    /* the plane's WCET on this machine, µs                      */
+    uint32_t over;      /* runs that spent more than the plane's budget              */
+} ps2_plane_run_t;
+
+static ps2_plane_run_t s_plane_input;   /* the worker half: the bus and the pointer   */
+static ps2_plane_run_t s_plane_ui;      /* one presenting pass, dispatch to stream    */
+static uint32_t s_plane_ui_last;        /* Count at the end of the last presenting pass */
+static uint32_t s_plane_ui_late;        /* presenting passes that came due after ui   */
+
+static void ps2_plane_charge(ps2_plane_run_t *c, uint32_t t0, uint32_t budget_us)
+{
+    const uint32_t tpu = btron_ee_ticks_per_us();
+    uint32_t us;
+
+    if (!s_timebase_ok || tpu == 0u) return;
+    us = (uint32_t)(ps2_count_read() - t0) / tpu;
+    c->runs++;
+    if (us > c->us_max) c->us_max = us;
+    if (us > budget_us) c->over++;
+}
+
+/* The presentation plane's absolute deadline, which is the field of the table that turns
+ * "how fast is the loop" into "how late is the plane".  Only a pass that presented resets
+ * it: a pass with no damage owed nothing and cannot be late, so counting it would make an
+ * idle desktop read as a missed one.  The interval runs from the END of the last
+ * presenting pass to the end of this one -- the period the body and the eye both see,
+ * including whatever the hold asked for.  Count is 32 bits, so a gap wider than one wrap
+ * (14.5 s on this machine) would come back small and be counted as on time; a pass that
+ * long is the folded clock's business, and the [XMBT] cycle row is what names it. */
+static void ps2_plane_ui_deadline(void)
+{
+    const uint32_t tpu = btron_ee_ticks_per_us();
+    const uint32_t now = ps2_count_read();
+    const uint32_t period_ticks = btron_planes()->ui_period_us * tpu;
+
+    if (!s_timebase_ok || tpu == 0u) return;
+    if (s_plane_ui_last && (uint32_t)(now - s_plane_ui_last) > period_ticks) s_plane_ui_late++;
+    s_plane_ui_last = now;
+}
+
+/* Printed with the plane's other evidence, because the three rows answer one question in
+ * three parts: who took the reports off the bus, how long they waited, and whether either
+ * worker plane stayed inside the budget its period is supposed to fit in. */
+static void ps2_plane_run_print(void)
+{
+    if (!s_timebase_ok) {
+        ps2_kprintf("[PSTAT] budget: no Count -- neither worker plane is charged\n");
+        return;
+    }
+    ps2_kprintf("[PSTAT] budget input: runs=%u max=%u us against the %u us budget, misses=%u\n",
+                (unsigned int)s_plane_input.runs, (unsigned int)s_plane_input.us_max,
+                (unsigned int)ASYNC_INPUT_BUDGET_US, (unsigned int)s_plane_input.over);
+    ps2_kprintf("[PSTAT] budget ui: passes=%u max=%u us against the %u us budget, misses=%u | "
+                "deadline=%u us, late=%u\n",
+                (unsigned int)s_plane_ui.runs, (unsigned int)s_plane_ui.us_max,
+                (unsigned int)ASYNC_UI_BUDGET_US, (unsigned int)s_plane_ui.over,
+                (unsigned int)btron_planes()->ui_period_us,
+                (unsigned int)s_plane_ui_late);
 }
 
 /* dp_core.c answers this with a weak stub that returns zero, and this port never
@@ -1922,6 +2012,10 @@ static void ps2_ptrst_print(const char *label)
                     (unsigned int)ASYNC_ISR_BUDGET_US,
                     (unsigned int)ps2_irq_overruns());
     }
+    /* The handler's budget is above; these are the two worker planes' own budgets, and
+     * the pair is what makes "equal-priority planes" a checkable claim on this machine
+     * rather than a description of the design. */
+    ps2_plane_run_print();
     /* Both axes, from ps2_chain_print() above.  The pair is the answer to a
      * difference in feel that is a difference in gain rather than in paint cost:
      * the two rows should read the same px/count for the same host slide, and the
@@ -3207,25 +3301,37 @@ static void ps2_bench_region(GDEV *screen, const char *tag,
                 (unsigned int)st.wins_drawn, (unsigned int)st.wins_walked);
 }
 
-/* ── RAM-to-RAM: the loop or the DRAM? ───────────────────────────────────────
+/* ── RAM-to-RAM: the loop, not the DRAM ───────────────────────────────────────
  *
  * The half of row 9 that is still open is a choice between two lanes -- shave the
- * EE's own pixel loops, or hand the pixels to the GS -- and the book has been
- * pricing that choice as if one side of it were already shut: its price row says a
- * pixel copied RAM to RAM costs 14.8 ns at 768 px and 50.2 ns at 613,440 px, and
- * reads three orders of magnitude of size at one price per pixel as the signature
- * of the DRAM rather than of the loop.  That claim has never been falsified because
- * nothing has ever moved the same bytes at two different instruction costs, and a
- * byte-per-iteration tail is size-flat too -- flatness does not tell the two apart.
+ * EE's own pixel loops, or hand the pixels to the GS.  Until 2026-10-13 that choice
+ * was priced as if one side of it were already shut.  The book's row billed a pixel
+ * copied RAM to RAM at 14.8 CYCLES -- 50.2 ns -- and its argument was that `blit=`
+ * comes out at that same price from 768 px to 613,440 px, three orders of magnitude
+ * of size at one price, so the pixel must be paying for the DRAM rather than for the
+ * loop.  That reading was never falsifiable: a byte-per-iteration tail is size-flat
+ * as well, so flatness cannot tell a bandwidth from a per-iteration cost, and nothing
+ * had ever moved the same bytes at two different instruction costs.
  *
- * This port's copy does exactly that difference by accident.  `btron_row_blit()`
- * takes its 8-byte loop only when BOTH pointers are 8-aligned, and a damage rect
- * starts at an arbitrary pixel column, so an odd `left` leaves every row of that
- * rectangle 4-mod-8 and the whole of it goes through the byte loop: same bytes,
- * several times the instructions.  The aarch64 half of that header knows this
- * column is worth peeling to the shared phase -- its own comment says a present
- * became one bus transaction per byte without the peel -- and the generic half,
- * which is the half the PS2 compiles, does not.
+ * This phase is that control, and the answer came back the other way -- the loop, and
+ * specifically a scan in front of it.  What the old flat row was pricing is the
+ * compositor's opacity pass, not its copy: `blit=` bills 39.8 ns/px, of which 15.7 is
+ * the copy at its floor and ~24 is a SECOND traversal of the same bytes.  Both halves
+ * of that decomposition are now measured rather than subtracted -- `blit scan` 39.86
+ * against `copy even` 15.96, and `blit wide`, which makes the same decision two pixels
+ * per load, at 36.57.  The book keeps the arithmetic in 10.1.
+ *
+ * This port's copy used to make exactly that difference by accident.  `btron_row_blit()`
+ * took its 8-byte loop only when BOTH pointers were 8-aligned, and a damage rect starts
+ * at an arbitrary pixel column, so an odd `left` left every row of that rectangle
+ * 4-mod-8 and the whole of it went through the byte loop: same bytes, several times the
+ * instructions.  The aarch64 half of that header has always known this column is worth
+ * peeling to the shared phase -- its own comment says a present became one bus
+ * transaction per byte without the peel -- and the generic half, which is the half the
+ * PS2 compiles, now peels too and takes 32 bytes at a time.  So the table below prices a
+ * FIXED defect, not a live one: `copy even` and `copy odd` are the shipped header, and
+ * the rungs above it are the shapes it replaced, kept so that a landing's price stays
+ * auditable against the rows that bought it.
  *
  * So the machine is asked three ways, because the three answers together decide the
  * lane and no one of them does:
@@ -3262,38 +3368,81 @@ static void ps2_bench_region(GDEV *screen, const char *tag,
  * 300 rows x 800 px = 240,000 px, and the sweep stops there and says so.  A
  * checksum is folded out of the destination after each shape and printed, because
  * that is what proves the loop ran on memory the machine can see rather than being
- * deleted as dead, and that `copy odd` moved the bytes `copy even` moved.
+ * deleted as dead, and that `copy odd` moved the bytes `copy even` moved -- and for
+ * a copy the same fold of the SOURCE band is printed beside it as chk=, because a row
+ * whose destination does not equal its source is not the shape its tag claims.
  *
  * This phase owns nothing the next one needs: it scribbles the canvas the way the
  * region table above it already does, and every phase below repaints.
  *
- * And the machine did answer, on 2026-10-13, in the first run of these rows: the
- * same 399x16 band cost 96.4 ns/px through the byte tail, 21.1 peeled to the shared
- * 8-byte phase, 18.3 peeled and taken 16 bytes per iteration, and 32 bytes per
- * iteration bought nothing over 16 -- a plateau, not a slope.  Its aligned twin cost
- * 27.8, which is the same loop as the peeled one and 1.31 times the price, because
- * clang inlines the header's body into the compositor's row loop with two `addu`s
- * per iteration instead of the two `addiu`s it compiles when the body stands in a
- * function of its own: 11 instructions per 8 bytes against 9.  Fills, which cannot
- * be misaligned because they store 4-byte pixels, cost 18.34 at either column and
- * 17.73 over the whole canvas, and the copy costs 1.19 times a fill rather than the
- * 2x a per-access latency would make it -- the load is nearly free, so the
- * accesses are not serializing.  Every one of those figures is a different
- * instruction count per pixel landing at the same ~4.7 ns per instruction, which is
- * what an issue-bound machine looks like.  So the book's "it is the DRAM, not the
- * loop" was falsified, the peel and the 16-byte body went into fast_blit.h's generic
- * half, and fill_rec() got an incremented row pointer and four stores per iteration;
- * the shipped rows are `copy odd` at 16.96 (5.7x faster than the tail it replaced)
- * and the 480,000 px fill at 10.89 (1.63x), and what the compositor then bills for a
- * whole-canvas present is 44,211 us against the 56,940 the same table printed an
- * hour earlier.  This stays for the reason it went in: the plateau at 16 bytes is
- * now the assumption, and only the machine says when it stops holding. */
+ * And the machine answered, on 2026-10-13, in a ladder of loop shapes on the same
+ * 399x16 band: 96.4 ns/px through the byte tail, 21.2 peeled to the shared 8-byte
+ * phase and taken 8 bytes per iteration, 16.9 at 16, 16.1 at 32.  Its aligned twin
+ * cost 27.8 at the body width this header used to carry, and it is the same loop as
+ * the peeled one 1.31 times the price, because clang inlines the header's body into
+ * the compositor's row loop with two `addu`s per iteration instead of the two
+ * `addiu`s it compiles when the body stands in a function of its own: 11 instructions
+ * per 8 bytes against 9.  Fills, which cannot be misaligned because they store 4-byte
+ * pixels, cost 18.34 on a strip and 17.72 over a 12,800 px band; this table's own
+ * leaf, with the row pointer incremented instead of recomputed, priced 10.40 four
+ * stores deep and 9.14 eight deep.  Read as instruction counts per pixel -- 20 for
+ * the tail, 4 at 8 bytes, 3 at 16, 2.4 at 32 -- the first three steps land at the
+ * same 4.7 ns an instruction costs here and a fixed 2.4 ns a pixel, and the fourth
+ * step is 2.5 ns/px smaller than that model allows.  So the ladder is real and it has
+ * a floor: this machine stops charging a copy at less than ~16 ns/px and a fill at
+ * less than ~8.7, and the last measured gap between them, 16.1 against 9.5 once both
+ * leaves are fixed, is one load per pixel at 6.6 ns -- 1.4 instructions' worth, not
+ * the 2x a serializing bus would make it.  Every figure that decided a landing is a
+ * different instruction count per pixel at one price per instruction, which is what
+ * an issue-bound machine looks like until it stops being one.  The book's "it is the
+ * DRAM, not the loop" was falsified at the only price that mattered -- the tail -- and
+ * the two leaves were rewritten from these rows.
+ *
+ * Both landings were then re-measured from the image that carries them, on
+ * 2026-10-13 again with PS2_GL=eegs PS2_FP=hw, and the floors held: `copy even` 15.96
+ * and `copy odd` 16.17 on the 400x16 band, the sweep flat at 15.65 / 15.68 / 15.69
+ * from 12,800 px through 80,000 px to the largest copy this canvas can hold disjointly
+ * at 240,000 px, and `fill` at 8.76 / 8.80 / 8.79 over the same sizes out to the whole
+ * 480,000 px.  The byte tail that opened the ladder at 96.4 is no longer a row in the
+ * table -- the peel shipped, so getting that rung back means un-landing the fix -- and
+ * it stays quoted above as the rung whose price decided the header.  The one figure
+ * that did NOT carry over is the old production price itself: the compositor's `blit=`
+ * column read 30,755 us over 613,440 px -- the `[BENCH] compositor:` whole-canvas row
+ * of the build that measured this phase but did not yet carry either leaf, 50.2 ns/px --
+ * and the
+ * same column of the same walk reads 24,426 us over the same 613,440 px, 39.8 ns/px,
+ * in the run that has both leaves landed.  That is the row the book's flat-price
+ * argument was built on, moving by 20.6% while its pixel count did not move at all,
+ * which is what a loop's signature looks like on a machine that was said to be out of
+ * bandwidth.
+ *
+ * How the top of that ladder was nearly lost, recorded because it is the reason the
+ * chk= field exists: the dispatcher in ps2_bench_ram() read `mode >= 2` where it meant
+ * `mode == 2`, so the 16- and 32-byte copy rungs fell into the fill branch and printed
+ * fill_rec()'s price under a copy tag -- the same 0xf9f6d730 the fill rows print, three
+ * rows in a row, in every one of the first four runs.  Nothing in the log said so; the
+ * fold disagreed and nobody was reading it.  The predicate is now the mode it names, a
+ * copy row folds its source band the same way it folds its destination and the row
+ * prints whether the two agree, and the two widths were then re-run interleaved at 256
+ * repetitions because the gap being read is 5% while the drift between adjacent rows is
+ * about 1%: 16.94 and 16.93 against 16.13 and 16.14, with the repeat pair after the
+ * other width has run, so a width that wins only in the first slot shows up as one.
+ * 32 bytes went into the header on the strength of that and of `copy 12800px` falling
+ * from 16.53 to 15.58 -- the size `bg=` actually bills -- and eight stores went into
+ * fill_rec() on 9.14 against 10.40, which fill_rec() then matched: 9.31 on a strip,
+ * 8.74 at 12,800 px, 8.76 over the whole 480,000 px canvas.  What the compositor bills
+ * for a whole-canvas present is 41,774 us against the 56,948 the same table printed
+ * before any of this, and against 44,162 with only the first rung of each landed.
+ * These rows stay for the reason they went in: the floors at 16 and 8.7 are now the
+ * assumption, and only the machine says when they stop holding. */
 
-/* The 8-byte rung of the fix, kept as the step below what shipped: peel the row
+/* The 8-byte rung of the fix, kept as the step two below what shipped: peel the row
  * byte-wise to the next 8-byte boundary when the two pointers share a phase -- which
  * they always do here, two row-aligned buffers addressed at the same rect offset --
- * and take 8 bytes per iteration.  The header went one rung further, to 16, because
- * this rung measured 21.1 ns/px against the header's shipped 16.96. */
+ * and take 8 bytes per iteration.  It is the middle of the ladder, and the reason the
+ * ladder is printed rather than assumed: this rung measures 21.2 ns/px, the header's
+ * 16-byte form 16.9 and its shipped 32-byte form 16.1, so the price of a pixel here
+ * is a curve that flattens, and where it flattens is a measurement and not a guess. */
 static void ps2_bench_row_blit_peeled(void *dst, const void *src, size_t bytes)
 {
     uint8_t *d = (uint8_t *)dst;
@@ -3384,9 +3533,52 @@ static void ps2_bench_fill_rows(GDEV *screen, int left, int band, int w, int h, 
     }
 }
 
+/* The decision wnd.c's client-area walk takes before it copies a row: read every
+ * pixel, and bail at the first transparent one, because a transparent pixel must
+ * leave whatever is below it on the canvas rather than be copied over it.  This is
+ * the shape production's blit= column is in, and it is a SECOND pass over the same
+ * bytes the copy is about to make -- which is what the copy rows above do not model,
+ * leaving 15.7 ns/px priced against the compositor's 39.9. */
+static BOOL ps2_bench_span_scan(const COLOR *src, int span)
+{
+    for (int cx = 0; cx < span; cx++) {
+        if (src[cx] == 0x00000000) return FALSE;
+    }
+    return TRUE;
+}
+
+/* The same decision, two pixels per 64-bit load, with the same phase rule as the
+ * copy: peel to an even pixel when the row starts at an odd byte phase and take the
+ * pairs after it.  A half of the word is transparent exactly when it is zero, so the
+ * test is two 32-bit compares and a load per two pixels -- 1.4 instructions a pixel
+ * against the scan above's 3, and no change to what the decision means. */
+static BOOL ps2_bench_span_scan_wide(const COLOR *src, int span)
+{
+    const uint8_t *p = (const uint8_t *)src;
+    int n = span;
+
+    if (((uintptr_t)p & 7u) != 0u) {
+        if (src[0] == 0x00000000) return FALSE;
+        src++;
+        n--;
+    }
+    for (int i = 0; i + 1 < n; i += 2) {
+        const uint64_t v = *(const uint64_t *)(src + i);
+        if ((uint32_t)v == 0u || (uint32_t)(v >> 32) == 0u) return FALSE;
+    }
+    if (n & 1) return src[n - 1] != 0x00000000;
+    return TRUE;
+}
+
 static void ps2_bench_ram(GDEV *screen, const char *tag, int mode,
                           int left, int w, int h, uint32_t reps)
 {
+    /* Which of these modes move bytes rather than paint them.  A copy needs a source
+     * band as large as its destination and its destination's fold must equal that
+     * band's, so the same predicate drives both the fit test below and the chk= the
+     * row prints; a fill needs neither. */
+    const int is_copy = (mode == 0 || mode == 1 || mode == 3 || mode == 4 ||
+                         mode == 7 || mode == 8);
     COLOR *pix = screen->pixels;
     const int stride = screen->width;
     uint32_t us_sum = 0u, us_max = 0u, sum = 0u;
@@ -3406,7 +3598,7 @@ static void ps2_bench_ram(GDEV *screen, const char *tag, int mode,
      * sweep's largest rows are fills.  A fill needs no source band, so it can take
      * the whole 800x600. */
     dst_band = screen->height - h;
-    if (dst_band < 0 || (mode < 2 && dst_band < src_band + h)) {
+    if (dst_band < 0 || (is_copy && dst_band < src_band + h)) {
         ps2_kprintf("[BENCH] ram: rect %dx%d does not fit the canvas, skipped\n", w, h);
         return;
     }
@@ -3422,12 +3614,34 @@ static void ps2_bench_ram(GDEV *screen, const char *tag, int mode,
     for (uint32_t i = 0; i < reps; i++) {
         const uint32_t t0 = ps2_count_read();
 
-        if (mode >= 5) {
+        if (mode == 5 || mode == 6) {
             /* The whole rect in one call, because that is the shape being priced:
              * fill_rec() is entered once per strip, and this is the same strip with
              * its row pointer incremented instead of recomputed.  Mode 6 is that
              * leaf again with eight stores per iteration instead of four. */
             ps2_bench_fill_rows(screen, left, dst_band, w, h, mode == 6);
+        } else if (mode == 7 || mode == 8) {
+            /* wnd.c's client-area walk, row for row, in the order it walks it: the
+             * opacity decision first, then either the wide copy or the pixel test
+             * that a transparent row forces.  Mode 7 takes that decision one pixel at
+             * a time as wnd.c does today; mode 8 takes it two pixels per load.  The
+             * copy under both is the shipped header's, so the difference between the
+             * two rows is the scan and nothing else. */
+            for (int y = 0; y < h; y++) {
+                COLOR *d = pix + (size_t)(dst_band + y) * (size_t)stride + (size_t)left;
+                const COLOR *s = pix + (size_t)(src_band + y) * (size_t)stride + (size_t)left;
+                const size_t bytes = (size_t)w * sizeof(COLOR);
+                const BOOL opaque = (mode == 8) ? ps2_bench_span_scan_wide(s, w)
+                                                : ps2_bench_span_scan(s, w);
+
+                if (opaque) {
+                    btron_row_blit(d, s, bytes);
+                } else {
+                    for (int cx = 0; cx < w; cx++) {
+                        if (s[cx] != 0x00000000) d[cx] = s[cx];
+                    }
+                }
+            }
         } else for (int y = 0; y < h; y++) {
             COLOR *d = pix + (size_t)(dst_band + y) * (size_t)stride + (size_t)left;
 
@@ -3471,7 +3685,6 @@ static void ps2_bench_ram(GDEV *screen, const char *tag, int mode,
      * in the log said so -- only the checksum disagreed.  So the disagreement is
      * printed now. */
     {
-        const int is_copy = (mode == 0 || mode == 1 || mode == 3 || mode == 4);
         uint32_t ref = 0u;
 
         for (int y = 0; y < h; y += 4) {
@@ -3549,6 +3762,17 @@ static void ps2_bench_ram_ops(GDEV *screen)
     ps2_bench_ram(screen, "fillunr odd",  5, 401, 399, 16, 256u);
     ps2_bench_ram(screen, "fillunr8 odd", 6, 401, 399, 16, 256u);
 
+    /* The compositor's third hot column is neither of the two leaves above: it is
+     * wnd.c's client-area walk, and that walk reads every pixel of every row to
+     * decide whether the row may be copied at all (src/window/wnd.c:703-719).  The
+     * copy rows price 15.7 ns/px and production's blit= column bills around 40, and
+     * the gap is this second pass, not the DRAM.  `blit scan` is the walk as it
+     * stands; `blit wide` is the same decision two pixels per load. */
+    ps2_bench_ram(screen, "blit scan",     7, 400, 400, 16, 256u);
+    ps2_bench_ram(screen, "blit wide",     8, 400, 400, 16, 256u);
+    ps2_bench_ram(screen, "blit odd scan", 7, 401, 399, 16, 256u);
+    ps2_bench_ram(screen, "blit odd wide", 8, 401, 399, 16, 256u);
+
     /* The sweep, at the phase that can never fall into the tail, over the range the
      * book's flat-price claim covers.  The two shapes are the compositor's own two
      * hot columns: `bg=` is a btron_row_blit() of the cached background over the
@@ -3562,6 +3786,8 @@ static void ps2_bench_ram_ops(GDEV *screen)
     ps2_bench_ram(screen, "copy 768px",    0, 400,  48,  16, 256u);
     ps2_bench_ram(screen, "copy 12800px",  0,   0, 800,  16,  64u);
     ps2_bench_ram(screen, "copy 12800+32", 4,   0, 800,  16,  64u);
+    ps2_bench_ram(screen, "blit 12800",    7,   0, 800,  16,  64u);
+    ps2_bench_ram(screen, "blit 12800w",   8,   0, 800,  16,  64u);
     ps2_bench_ram(screen, "copy 80000px",  0,   0, 800, 100,   8u);
     ps2_bench_ram(screen, "copy 240000px", 0,   0, 800, 300,   3u);
     ps2_bench_ram(screen, "fill 768px",    2, 400,  48,  16, 256u);
@@ -4947,6 +5173,12 @@ static void ps2_bench_run(GDEV *screen)
     /* Before the sentinel, never after it: the harness stops the emulator on that row,
      * so a row downstream of it is a row that may never be flushed. */
     ps2_bench_kbd_cadence();
+    /* The two planes' budgets as this run left them.  A session prints the same two rows
+     * on exit, but the headless run never exits -- the harness stops it at the sentinel --
+     * and this is the run whose frames a budget gate is quoted against, so the receipt has
+     * to be here too.  Cumulative since boot, like every other plane counter, and once
+     * only: the frame hook prints it ahead of a sentinel it had to raise itself. */
+    if (!s_bench_sentinel) ps2_plane_run_print();
 
     /* Not twice: the app phase's frame hook prints this row when the app outlives its
      * budget, and a second copy would tell the harness the table ended in two places. */
@@ -4983,8 +5215,14 @@ static void ps2_gui_pass(GDEV *screen)
     ps2_bandset_t set = { { { 0, 0, 0, 0 } }, 0, 0 };
     EVT ev;
     int force_full = 0;
+    uint32_t in_t0, ui_t0;   /* the two worker planes' own charge boundaries */
 
     ps2_cycle_begin(s_task_driving);
+    /* The INPUT plane's worker starts here: the two bus polls, the repeat that the poll
+     * can now owe, and the pointer spending the distance the plane collected.  Charged
+     * before the shell and before the dispatch, so what the budget sees is input work and
+     * not the compositor's. */
+    in_t0 = ps2_count_read();
     ps2_pad_poll();
     ps2_usb_poll();
     /* The edge report has now been turned into events, so what is still held is known,
@@ -4998,6 +5236,12 @@ static void ps2_gui_pass(GDEV *screen)
      * so a pass that spends pointer distance is also a pass that repaints it.
      * That is what makes "px per pass" the speed the hand sees. */
     ps2_ptr_service();
+    ps2_plane_charge(&s_plane_input, in_t0, ASYNC_INPUT_BUDGET_US);
+    /* The presentation plane's run is everything from here to the stream that carries
+     * the band: the dispatch, the app's paint callback, the band decision and the
+     * present.  Taken here rather than at the top of the pass so that the two planes'
+     * charges partition the pass instead of overlapping. */
+    ui_t0 = ps2_count_read();
     ps2_shell_poll();
     ps2_cycle_mark();
 
@@ -5050,6 +5294,7 @@ static void ps2_gui_pass(GDEV *screen)
                     "ending the run from the frame hook\n",
                     (unsigned int)(s_bench_app_over - 1u));
         ps2_bench_kbd_cadence();      /* the last stamped period is this app's own */
+        ps2_plane_run_print();        /* ... and so are the two planes' budgets */
         ps2_kprintf("\n[BENCH] run complete\n");
     }
 #endif
@@ -5185,6 +5430,13 @@ static void ps2_gui_pass(GDEV *screen)
         ps2_cycle_mark();
         ps2_cycle_stamp(r_us, s_us, u_us, px, (int)set.n, ps2_band_is_full(&set.b[0]));
     }
+    /* This pass presented, so it is one run of the presentation plane: charged against
+     * ASYNC_UI_BUDGET_US for the budget, and against the table's ui_period_us for the
+     * deadline.  A pass that found no damage returns above and is charged nowhere -- it
+     * owed nothing, so it cannot be late, and counting idle passes as misses would make a
+     * still desktop read as a broken one. */
+    ps2_plane_charge(&s_plane_ui, ui_t0, ASYNC_UI_BUDGET_US);
+    ps2_plane_ui_deadline();
     s_shown_x = s_mouse_x;
     s_shown_y = s_mouse_y;
 
@@ -5956,14 +6208,19 @@ void ps2_kernel_main(void)
         /* The handler's own cost, in the hundredths of a microsecond: this machine's whole
          * ISR is a third of one, and a column that rounds it to `0 us of the 50 us budget`
          * would be the same row whether the handler were free or forty times more
-         * expensive. */
+         * expensive.  The two worker planes are charged where their work happens, not here --
+         * at boot neither has run yet, so the honest thing to print is which budget each
+         * will be read against and the row that will say so. */
         {
             const uint32_t wcet_100 = ps2_irq_wcet_ticks() * 100u / btron_ee_ticks_per_us();
-            ps2_kprintf("[ASYNC] isr wcet=%u ticks = %u.%02u us of the %u us budget, overruns=%u  ui=%u us is still the present's own pass, not a plane\n",
+            ps2_kprintf("[ASYNC] isr wcet=%u ticks = %u.%02u us of the %u us budget, overruns=%u  "
+                        "workers: input %u us, ui %u us against a %u us deadline -- [PSTAT] budget\n",
                         (unsigned int)ps2_irq_wcet_ticks(),
                         (unsigned int)(wcet_100 / 100u), (unsigned int)(wcet_100 % 100u),
                         (unsigned int)ASYNC_ISR_BUDGET_US,
                         (unsigned int)ps2_irq_overruns(),
+                        (unsigned int)ASYNC_INPUT_BUDGET_US,
+                        (unsigned int)ASYNC_UI_BUDGET_US,
                         (unsigned int)btron_planes()->ui_period_us);
         }
     }

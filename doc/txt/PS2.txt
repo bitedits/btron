@@ -89,8 +89,10 @@ PART ONE -- THE NEXUS AND THE MACHINE
   Every normative statement here has the same four parts, and a claim without
   all four is not a law but an intention:
 
-  - LAW      what must hold, in one sentence, in the imperative or the indicative.
-  - WHY      the mechanism that makes the alternative fail -- on this silicon, not in general.
+  - LAW      what must hold, in one sentence, in the imperative or the
+             indicative.
+  - WHY      the mechanism that makes the alternative fail -- on this silicon,
+             not in general.
   - MEASURE  the one decisive reading that says the law holds on the artifact
              that ships: a console row, a column of a row, or a comparison.
   - GATE     the assertion that goes red when the law is broken, and the
@@ -133,11 +135,11 @@ A claim has four parts; the page has two measures.
   The InterCore nexus is the port's architecture, not a metaphor for it.
   ASYNC.txt §0.1 gives five primitives and one scheduling hook:
 
-    pub [capacity]                  create a writer cursor; yields a system-wide Id
-    sub [publisher]                 create a reader cursor bound to that writer
+    pub [capacity]                create a writer cursor; yields a system-wide Id
+    sub [publisher]               create a reader cursor bound to that writer
     spawn [core; program; cursors]  create a Task owning those cursors exclusively
-    snd [writer; data]              non-blocking send
-    rcv [reader]                    non-blocking receive
+    snd [writer; data]            non-blocking send
+    rcv [reader]                  non-blocking receive
 
     poll_bus runs at every scheduler yield, so a message addressed to the
     current core is handled before its next task begins.  The topology is a
@@ -182,14 +184,14 @@ A claim has four parts; the page has two measures.
                                    |
                        snd(HID)    |    snd(tokens)
                                    v
-      OHCI USB  ------>   +-------------------+ <------  GS raster + 4 MB VRAM
-      plane 1's device    |   RDRAM 32 MB     |          plane 3's producer:
-                          |   eDRAM  4 MB     |          addressed, never scheduled
-      DMAC ch2 -> GIF --> |   one bus, no     | <------  VU1 + VIF1
-      plane 3 today:      |   no broker       |          plane 3: absent
-      a subroutine        |                   | <------  VU0 (shares the EE's slots)
+      OHCI USB  ------>  +-------------------+  <------  GS raster + 4 MB VRAM
+      plane 1's device    |   RDRAM 32 MB   |          plane 3's producer:
+                          |   eDRAM  4 MB   |          addressed, never scheduled
+      DMAC ch2 -> GIF --> |   one bus, no   |  <------  VU1 + VIF1
+      plane 3 today:      |   no broker     |          plane 3: absent
+      a subroutine        |                 |  <------  VU0 (shares the EE's slots)
                           +-------------------+
-      SIF / IOP  ........ plane 1 and 2: absent ....... SPU2, no driver
+      SIF / IOP  .......... plane 1 and 2: absent  .......... SPU2, no driver
 
       EE R5900 + COP1:  today the only publisher that exists, and the
       publisher of planes 1, 3 and 4 at once.  Dots mean "engine present,
@@ -224,12 +226,22 @@ A claim has four parts; the page has two measures.
   (ps2_task_hold(), :4729-4737).  A Tier-1 task with a period and a budget
   means something only when the kernel can take the CPU back at the boundary.
   The honest description of the current design is ONE PREEMPTION POINT PER
-  FRAME, CHOSEN BY THE BODY; the budget misses above are misses the kernel is
-  structurally unable to notice, never mind enforce.  Lane 11 is the fix.
+  FRAME, CHOSEN BY THE BODY; what the kernel cannot do is take the CPU back,
+  and a budget it cannot take back is a budget it cannot enforce.  Since
+  2026-10-13 it can at least NOTICE: ps2_plane_charge() times each plane's own
+  work against its own budget on every pass and the [PSTAT] budget rows print
+  the WCET and the miss count (2.1, 2.2).  That distinction is the whole of
+  lane 11 -- measurement is what tells you the size of the thing preemption
+  has to close, and preemption is what turns the count into a bound.
 
 1.5  The ratio that decides where work goes
 
-  Three rows, one frame, one machine:
+  Three rows, one frame, one machine.  The first pair is the app-phase cycle
+  row of 2026-10-12, four windows walked (three desktop plus the XMB); the
+  second is the bench's armed compositor row of 2026-10-13, PS2_GL=eegs
+  PS2_FP=hw, three windows and no XMB, taken after 10.1's two leaves landed.
+  The window sets differ, so what is quoted across the pair is the per-pixel
+  rate and never the microseconds:
 
     what crosses                            px        EE time    ticks per px
     -------------------------------------------------------------------------
@@ -237,14 +249,22 @@ A claim has four parts; the page has two measures.
     the compositor's background restore  480,000       9,923 us         6.1
     the canvas's own GIF upload            480,000         ~823 us         0.51
 
+    the compositor's client-area blit    613,440      24,426 us        11.8
+    the compositor's background restore  480,000       7,490 us         4.6
+    the canvas's own GIF upload            480,000         ~821 us         0.51
+
   The upload figure is a subtraction, and the subtraction is justified by
   reading the two brackets: gs= is timed INSIDE upload=, so what the EE spends
   on a pixel it does not touch is the difference.
 
-  A pixel the compositor touches costs the EE 14.8 cycles.  The same pixel
-  crossing DMAC channel 2 into the same VRAM costs half a cycle.  That is a
-  ~29x ratio measured inside one row pair of one frame, and it is the whole of
-  Part Five:
+  A pixel the compositor touches costs the EE 11.8 cycles, and 10.1 now says
+  which 11.8 they are: 4.6 of copy and 7.1 of the opacity scan that wnd.c runs
+  before it decides to copy.  The same pixel crossing DMAC channel 2 into the
+  same VRAM costs half a cycle.  That is a ~23x ratio measured inside one row
+  pair of one frame -- down from the 29x this section used to quote, and it
+  moved because the EE's LOOP moved, not because the GS got cheaper: the whole
+  14.8-to-11.8 step came from the two pixel leaves, with no plane claimed and
+  no primitive added.  That is the whole of Part Five:
 
     THE QUESTION THIS BOOK EXISTS TO ANSWER IS NOT "HOW DO WE MAKE THE EE
     FASTER" BUT "WHY IS THE EE TOUCHING PIXELS AT ALL".
@@ -286,8 +306,11 @@ A claim has four parts; the page has two measures.
        plane      1, 3 and 4 all at once
        agent      the desktop pass, plus whichever task body is running
                   (sta_tsk nests the body on the caller's stack)
-       period     whatever the body's dly_tsk() asked for
-       budget     ASYNC_UI_BUDGET_US = 4000 us
+       period     whatever the body's dly_tsk() asked for, against the table's
+                  ui_period_us = 16,667 us as its deadline
+       budget     ASYNC_UI_BUDGET_US = 4000 us, now CHARGED: every presenting
+                  pass is timed from the end of the input block to the end of
+                  the present and counted against it
        crosses    nothing -- it is both writer and reader of every stage of a
                   frame
        cost       composite 56,128 us + app 46,273 us + present 1,031 us, in
@@ -297,23 +320,54 @@ A claim has four parts; the page has two measures.
                   upload=1,031 us IDENTICAL, app 46,275 us -- so this is a
                   steady state and not one lucky frame, and the two dates
                   agree to 4 us on a 149 ms period.)
+       charged    and this is what that charge says, on the shipped GS image,
+                  read 2026-10-13 in the same run as chapter 10's RAM ladder:
+
+                    [PSTAT] budget ui: passes=12 max=112082 us against the 4000 us
+                            budget, misses=10 | deadline=16667 us, late=9
+
+                  Ten of twelve presenting passes spent more than the plane's
+                  budget -- 28x it at the worst -- and nine of the eleven that had
+                  a predecessor came due later than the display's own period.  The
+                  row is the first number on this machine that says "the UI plane
+                  misses its deadline" as a measurement rather than as a subtraction,
+                  and it is the baseline lane 11 has to be measured against.
 
 2.2  Timer0 + INTC  (INTC_TIM0 = 9)
        plane      1 -- Hardware and IRQ
        agent      the ROM-dispatched ISR ps2_irq_input_on_period()
        period     1,000 us, T0_COMP = 576 at CLKS/256
        budget     ASYNC_ISR_BUDGET_US = 50 us
-       crosses    pub + snd of the raw HID snapshot into the wait-free seqlock
-       cost       isr wcet=498 ticks = 1.68 us, overruns=0 PROVEN, and the
-                  ONLY plane on this machine that meets its budget
+       crosses    pub of the collected report into the ring the pass reads --
+                  on this port that handoff is ps2_usb.c's hoff SPSC ring
+                  (monotonic in/out indices, a drop counter, the report's
+                  eight raw bytes and its Count stamp in the slot), NOT the
+                  wait-free seqlock of include/btron/async_rt.h, which is the
+                  arm64 port's shape and has no PS2 reader.  The two are the
+                  same primitive with two different buses behind them: xHCI
+                  folds decoded deltas into accumulators, OHCI hands over
+                  whole HID reports and lets the pass decode them.
+       cost       isr wcet=498 ticks = 1.68 us, overruns=0 PROVEN.  It is no
+                  longer the only plane that meets its budget: the input
+                  worker is charged too, and answers --
+
+                    [PSTAT] budget input: runs=14 max=12 us against the 500 us
+                            budget, misses=0
+
+                  12 us of a 500 us period, which is why a 1 kHz cadence can carry a
+                  125 Hz mouse without noticing.
 
 2.3  OHCI USB host  (0xBF801600)
        plane      1's device end
        agent      none of its own; the plane reads its rings once the boot
                   verdict is LIVE, otherwise the pass polls them itself
        period     1 ms frame (HcFmInterval = 0x27782EDF)
-       crosses    ring descriptors, drained to acc_dx / acc_dy / acc_wheel /
-                  buttons
+       crosses    ring descriptors, drained into whole 8-byte HID report slots
+                  -- this port decodes at delivery, not in the handler, so
+                  what crosses is the report and not acc_dx / acc_dy /
+                  acc_wheel / buttons.  Those four accumulators are the arm64
+                  port's seqlock fields; naming them here would be naming a
+                  struct this image does not instantiate.
        cost       collection is "two uncached reads" on an empty ring, and
                   that charge is inside the 1.68 us above
        label      PROVEN for the cadence and the hand-off; the collection is
@@ -339,7 +393,9 @@ A claim has four parts; the page has two measures.
        crosses    a sub on the packet stream would be the whole of it
        cost       NOTHING MEASURES THE GS'S OWN PIPELINE TIME ANYWHERE IN THIS
                   IMAGE.  gs= is the EE's send-and-wait bracket, read off
-                  core_ps2.c:1147-51, not the GS's raster time
+                  core_ps2.c:1147-51, not the GS's raster time.  What is known
+                  is the price this engine is being asked to beat, and it is
+                  an EE number: 15.7 ns/px copied, 8.8 filled (10.1)
        label      PROVEN that its raster capacity is uninstrumented; PROVEN
                   that its RECT-fill and Local-to-Local capacity is UNUSED
                   (gs_pack_trxdir(2) and GS_OP_SPRITE exist and have no caller
@@ -411,11 +467,20 @@ A claim has four parts; the page has two measures.
        The clock behind it is hardware's own: HcFmInterval is a 1 ms OHCI
        frame and ps2_usb_frame_number() is that clock.
 
-  ui_period_us = 16667 us  --  INFERRED
-       NOTHING YET reads it -- it is the absolute deadline the async UI plane
-       is installed against, so it is in the table before it has a reader.
-       The number is inferred from the programmed mode (800x600 inside
-       720p/60).
+  ui_period_us = 16667 us  --  INFERRED rate, PROVEN lateness
+       ps2_plane_ui_deadline(), in ps2_gui_pass(): every presenting pass is
+       measured against it and counted when it came due later.  The number
+       itself is still inferred from the programmed mode (800x600 inside
+       720p/60) -- what changed on 2026-10-13 is that it stopped being a
+       period with no reader.  The same presenting pass is charged against
+       ASYNC_UI_BUDGET_US beside it, and the pair prints as
+
+         [PSTAT] budget ui: passes=12 max=112082 us against the 4000 us budget,
+                 misses=10 | deadline=16667 us, late=9
+
+       -- i.e. on this image the presentation plane misses its own deadline on
+       nine of its eleven measurable passes, by 6.7x at the worst.  Lane 9's
+       gate is quoted against that number, not against a pass rate.
 
   panel_refresh_us = 200000 us  --  THIS IS A CHOICE, not a measurement
        ps2_gui_pass(): the system panel's 28 rows join the band set on this
@@ -431,8 +496,12 @@ A claim has four parts; the page has two measures.
 
   The ui_period_us field is the port's own inconsistency, stated plainly here
   rather than smoothed over: the header declares ASYNC_UI_PERIOD_US = 8333
-  while the table installs 16667, and neither has a reader.  Appendix B
-  carries it as misalignment M1 and lane 11 as the row that closes it.
+  while the table installs 16667.  As of 2026-10-13 the INSTALLED value has a
+  reader -- the presenting passes are counted late against it -- and the
+  declared one still has none on this port, since nothing here is paced at 120
+  Hz.  Appendix B carries the pair as misalignment M1 and lane 11 as the row
+  that closes it; what lane 11 now closes it against is a measured 9-of-11
+  lateness rather than an assumption about it.
 
   With the shipped pointer cap off (PS2_PTR_MAX_STEP 0) the product fed to
   dp_ptr_limit() is zero, and a non-positive limit means no limit -- so the
@@ -1047,6 +1116,14 @@ PART THREE -- THE MEASURED MACHINE
                                                         the surface get painted
     [PSTAT] plane / paint / lat   the pointer path       reports on the wire, holds,
                                                          dropped counts, latency
+    [PSTAT] budget input / ui     ps2_plane_charge()     did either WORKER plane spend
+                                                         more than its own budget, how
+                                                         often, and how late was the
+                                                         presentation plane against its
+                                                         own period
+    [BENCH] <tag> <W>x<H>         ps2_bench_ram()        what one pixel costs, at whose
+                                                         instruction count, and whether
+                                                         the bytes actually moved
     [GS]                          the blit path          one canvas upload's cost
 
     The row formats, verbatim, so a log can be parsed by eye:
@@ -1068,6 +1145,77 @@ PART THREE -- THE MEASURED MACHINE
       [GSPLATE] the stream does not plate its rect: clip=<W>x<H> b0=<x0,y0,x1,y1>
                -- one-shot, armed when a layer's plate was refused over a
                rect the first vertex group does not span
+      [ASYNC] input plane Timer0 (INTC 9): period=<us> compare=<ticks> ticks=<n> of
+               the <n> this <us> us window owes -> [the INTC registry REJECTED the
+               handler: ] LIVE | STALLED | DEAD
+      [ASYNC] isr wcet=<ticks> ticks = <us>.<cs> us of the <budget> us budget,
+               overruns=<n>  workers: input <us> us, ui <us> us against a <us>
+                             us
+               deadline -- [PSTAT] budget
+      [PSTAT] plane: reports=<n> on the input plane, <n> in a pass, dropped=<n>
+               queue max=<n> of <n>, collected on <n> periods
+      [PSTAT] plane: held max=<us> us mean=<us> us over <n> delivered -- isr <us>.<cs>
+               us of the <budget> us budget, overruns=<n>
+      [PSTAT] budget input: runs=<n> max=<us> us against the <budget> us budget,
+               misses=<n>
+      [PSTAT] budget ui: passes=<n> max=<us> us against the <budget> us budget,
+               misses=<n> | deadline=<us> us, late=<n>
+               -- the two budget rows are the ONLY place a worker plane's WCET is
+               read, and they print in the same shape from a session's exit and from
+               the bench's closing receipt, so a headless gate and a machine with a
+               person on it quote one row.
+      [BENCH] <tag> <w>x<h> <n>px/rep <n> us/rep max <n> us  <ns>.<cs> ns/px
+               sum=0x<hex> chk=ok | MISMATCH | fill
+               -- chk= is this instrument's own integrity check, not a property of the
+               pixel: every row that moves bytes folds its destination AND its source
+               band, and a copy that prints MISMATCH means a tag and a branch disagree
+               (10.1 tells that story, and it is why the row is printed at all).  A
+               fill prints `fill` because it has no source to fold.
+      [BENCH] RAM-to-RAM, the loop or the DRAM -- same bytes at two instruction costs
+               -- the phase's NAME stays a question because that is what a reader
+               greps for; its ANSWER is 10.1.  It prints before the region table for
+               the reason any deciding row does: a row that chooses a lane has to be
+               in the log even when the run is cut off downstream.
+      [BENCH]   -- size sweep, even phase, load+store and store-only
+      [BENCH] ram: rect <w>x<h> does not fit the canvas, skipped
+               -- a copy needs a source band as large as its destination and the two
+               bands may not overlap, so 300 rows x 800 px = 240,000 px is as far as
+               a copy can be taken on this canvas at all.  The refusal prints rather
+               than the row going missing quietly, which is how a sweep looks flat
+               because it stopped early.
+      The tags, so a row's SHAPE is readable from its name alone:
+        copy / fill / blit   which leaf is priced: btron_row_blit(),
+                             fill_rec(), or the scan-then-copy walk
+                             src/window/wnd.c takes over a window's client
+                             area
+        even / odd           the destination's PIXEL column.  On this canvas
+                             an even column is 8-aligned in bytes and an odd
+                             one is 4-mod-8, so one character carries the
+                             entire alignment defect
+        +peel / +16 / +32    the loop body: peel to the shared phase, then
+                             take 8, 16 or 32 bytes per iteration.  +peel is
+                             the rung BELOW what shipped, kept printed so that
+                             a landing's price stays auditable against the
+                             rows that bought it
+        +16b / +32b          the same two widths measured AGAIN after the
+                             other one has run.  The gap being read is ~5% and
+                             the drift between adjacent rows is ~1%, so a
+                             width that wins only in the first slot is a
+                             position effect, not a result
+        fillunr / fillunr8   fill_rec()'s leaf with its row pointer
+                             incremented instead of recomputed, four stores
+                             deep then eight
+        blit scan / wide     the opacity decision one pixel at a time as wnd.c
+                             takes it today, then two pixels per 64-bit load.
+                             The copy under both is the shipped header, so the
+                             difference between the pair is the scan and
+                             nothing else.
+        <w>x<h>, px/rep      the rect and the pixels one repetition moves,
+                             with the mean us/rep and the max beside it: a max
+                             well above the mean says the first repetition was
+                             cold, not that the loop is slow.  The sweep's
+                             largest rects pay fewest reps, because a 480,000
+                             px row at 256 reps is a run, not a measurement.
 
 9.2  Who owns which cycle column
 
@@ -1163,13 +1311,51 @@ PART THREE -- THE MEASURED MACHINE
     a vertex (transform, viewport, clip)  11.0=3,240    f_ribbon's geom over 1,984
     a vertex needing no clipping         8.3=2,440      f_menu's geom over 1,436
     a cleared pixel                             2.6      f_clear: 128,000 px/ms
-    a pixel copied RAM to RAM                  14.8      the compositor's blit= rows:
-                                                        613,440 px in 30,747 us, and
-                                                        50.2 ns/px from 768 px to
-                                                        613,440 px -- three orders of
-                                                        magnitude of size at one
-                                                        price, so it is the DRAM, not
-                                                        the loop
+    a pixel copied RAM to RAM                   4.6      REFUTED AS AN INFERENCE, and now
+                                                        MEASURED twice.  The row used to
+                                                        read 14.8 on the argument that a
+                                                        price flat from 768 px to
+                                                        613,440 px is the DRAM's, not the
+                                                        loop's.  10.1 built the control
+                                                        that argument needed: the same
+                                                        bytes at four instruction costs
+                                                        come back 96.4 / 21.2 / 16.9 /
+                                                        16.1 ns/px, so a flat price
+                                                        cannot tell a bandwidth from a
+                                                        tail.  The 32-byte form shipped,
+                                                        and the re-run of the landed
+                                                        header prices the floor at
+                                                        15.65 / 15.68 / 15.69 for 12,800,
+                                                        80,000 and 240,000 px -- 4.6
+                                                        cycles, size-flat because the
+                                                        loop is at its floor, not
+                                                        because the bus is the limit.
+    a pixel filled, store only                  2.6      the control's other half, at the
+                                                        same sizes: 8.76 / 8.80 / 8.79
+                                                        flat from 12,800 px to the whole
+                                                        480,000 px canvas, and 9.49 on
+                                                        the 400x16 strip where the row
+                                                        pointer is recompute-bound.  It
+                                                        agrees with f_clear's 128,000
+                                                        px/ms to 0.02 cycles -- two
+                                                        independent instruments pricing
+                                                        one store.
+    a pixel the compositor blits             11.8        39.86 ns/px, measured rather
+                                                        than fitted, and 10.1 separates
+                                                        its two terms with rows: `blit
+                                                        scan` 39.86 against `copy even`
+                                                        15.96 leaves 23.9 ns/px -- 7.1
+                                                        cycles -- for the opacity test
+                                                        wnd.c runs before it copies, and
+                                                        `blit wide` at 36.57 says 3.3 of
+                                                        THAT is loop as well.  The old
+                                                        row billed the pair as one
+                                                        "copied pixel" at 14.8 cycles,
+                                                        which is what made the ratio in
+                                                        1.5 read 29x.  Production's own
+                                                        column moved from 30,755 us to
+                                                        24,426 us over the same 613,440
+                                                        px, with no plane claimed.
     a swap                                       0       it was 10.5 ms until the byte
                                                         began travelling with the
                                                         pixel (7b)
@@ -1211,17 +1397,26 @@ PART THREE -- THE MEASURED MACHINE
      instruction, drop the call.  Rows 7 and 8 (16.4) are that subtraction,
      and the 28-cycle price of 6.5 -- 15 cycles of which are the jal and its
      prologue -- is what makes it worth doing.
-  2. THE STATIC BACKGROUND IS THE LARGEST CPU-SIDE PRIZE, AND ONLY FEWER
-     PIXELS COUNT.  The copied-pixel row says a cached blit of the baked
-     gradient saves 7 cycles a pixel and costs 1.5 MB, so it cannot be a
-     cheaper REPRESENTATION -- it can only be a smaller AREA.  Everything that
-     moves in a steady XMB frame is inside one full-width horizontal band,
-     measured as 28.7% of the canvas.  Three facts about the mechanism: tinygl
-     has no glScissor and glViewport is the only rect that clips a triangle;
-     glClear is whole-plane and the only fill cheap enough to replace it is an
-     opaque quad at 2.6 cycles; and the surface DOES persist across frames, so
-     not painting outside the band leaves the right pixels there rather than
-     garbage.
+  2. THE STATIC BACKGROUND IS THE LARGEST CPU-SIDE PRIZE, AND ITS PRICE IS A
+     MEMORY NUMBER, NOT A PIXEL ONE.  The copied-pixel row prices a cached
+     blit of the baked gradient at 4.6 cycles and f_bg paints it at 22, so the
+     cache saves 17.4 cycles a pixel and costs 1.5 MB -- 7.4 was what the old
+     row said it saved, and it was wrong because it billed the compositor's
+     opacity scan as part of the copy (10.1).  The refutation therefore OPENS
+     this lane rather than closing it: 382,731 px at 22 cycles is 28.5 ms and
+     at 4.6 is 6.0 ms, so a copy of the baked gradient is 4.8x cheaper than
+     re-rastering it and the representation was never the thing that made
+     caching uninteresting.  What makes it uninteresting is the IMAGE:
+     1,536,000 B for the XMB's own 768x500 client against the ~1.5 MiB the
+     image sits under ps2.ld's ASSERT, so this is a budget question with a
+     number on both sides, not a pixel question.  Until someone pays that,
+     only the AREA is left: everything that moves in a steady XMB frame is
+     inside one full-width horizontal band, measured as 28.7% of the canvas.
+     Three facts about the mechanism: tinygl has no glScissor and glViewport
+     is the only rect that clips a triangle; glClear is whole-plane and the
+     only fill cheap enough to replace it is an opaque quad at 2.6 cycles; and
+     the surface DOES persist across frames, so not painting outside the band
+     leaves the right pixels there rather than garbage.
   3. THE SPAN LOOP IS NOT A LEVER and the mesh dial is not one either.  f_bg's
      row proves a scanline step is noise, so "short spans are what a fine mesh
      pays for" is false.  And the dial has been priced and lost: 32x32 ->
@@ -1272,9 +1467,153 @@ PART THREE -- THE MEASURED MACHINE
     inside the fast arm, which moves exactly the three frames the ribbon
     appears in and none of the other nine.
 
-  One thing no measurement in this tree can settle: every number above is
-  PCSX2's.  The identical image over SIO on a real console is the outstanding
-  check.
+10.1  RAM to RAM: the control that refuted the DRAM
+----------------------------------------------------
+
+  LAW 10.1 (a pixel price is a claim about a loop until a control says
+  otherwise).  No cost in this chapter may be attributed to the memory system
+  unless a control has moved the SAME bytes at a DIFFERENT instruction count
+  and come back at the same price.  A price that is flat across sizes is not
+  that control, because a per-iteration tail is flat across sizes too.
+
+  WHY  Row 9's open half is a choice between two lanes -- shave the EE's own
+       pixel loops, or hand the pixels to the GS -- and the book priced it as
+       though the first lane were already shut.  The evidence was the
+       compositor's own `blit=` column: 50.2 ns/px at 768 px and 50.2 ns/px at
+       613,440 px, three orders of magnitude of size at one price, read as the
+       DRAM's signature rather than the loop's.  The reading was not
+       falsifiable, and that is the whole objection to it -- nothing in this
+       tree had ever moved one byte range at two instruction counts, so no row
+       could have contradicted it.  `btron_row_blit()` made the difference by
+       accident: it took its 8-byte loop only when BOTH pointers were
+       8-aligned, and a damage rect starts at an arbitrary pixel column, so an
+       odd `left` left every row of that rectangle 4-mod-8 and the whole of it
+       went through the byte tail.  The aarch64 half of that header has always
+       peeled to the shared phase, and its own comment says a present became
+       one bus transaction per byte without the peel; the generic half, which
+       is the half this port compiles, had not been asked the question.
+
+  MEASURE  `scripts/ps2_bench.sh` with no app dial: ps2_bench_ram_ops() is the
+           first pixel phase of the bench, so its rows are in
+           build/ps2-bench.log even when everything downstream of it is cut
+           off.  Verbatim from the run that carries both landings, 2026-10-13,
+           PS2_GL=eegs PS2_FP=hw:
+
+    [BENCH] copy even      400x  16   6400px/rep   102 us/rep   15.96 ns/px  chk=ok
+    [BENCH] copy odd       399x  16   6384px/rep   103 us/rep   16.17 ns/px  chk=ok
+    [BENCH] copy odd+peel  399x  16   6384px/rep   135 us/rep   21.23 ns/px  chk=ok
+    [BENCH] copy even+16   400x  16  ...           107 us/rep   16.74 ns/px  chk=ok
+    [BENCH] copy even+32   400x  16  ...           101 us/rep   15.79 ns/px  chk=ok
+    [BENCH] copy odd+16 / +32 / +16b / +32b        16.93 / 16.14 / 16.91 / 16.12
+    [BENCH] fill even      400x  16  ...            60 us/rep    9.49 ns/px  chk=fill
+    [BENCH] fill odd       399x  16  ...            61 us/rep    9.65 ns/px  chk=fill
+    [BENCH] fillunr even / odd                     10.40 / 10.43
+    [BENCH] fillunr8 even / odd                     8.99 /  9.17
+    [BENCH] blit scan      400x  16   6400px/rep   255 us/rep   39.86 ns/px  chk=ok
+    [BENCH] blit wide      400x  16   6400px/rep   234 us/rep   36.57 ns/px  chk=ok
+    [BENCH] blit odd scan / odd wide               40.11 / 36.87
+    [BENCH]   -- size sweep, even phase, load+store and store-only
+    [BENCH] copy 768px      48x  16     768px/rep    15 us/rep   19.74 ns/px
+    [BENCH] copy 12800px   800x  16   12800px/rep   200 us/rep   15.65 ns/px
+    [BENCH] copy 12800+32  800x  16   12800px/rep   200 us/rep   15.65 ns/px
+    [BENCH] blit 12800     800x  16   12800px/rep   507 us/rep   39.68 ns/px
+    [BENCH] blit 12800w    800x  16   12800px/rep   464 us/rep   36.28 ns/px
+    [BENCH] copy 80000px   800x 100   80000px/rep  1254 us/rep   15.68 ns/px
+    [BENCH] copy 240000px  800x 300  240000px/rep  3767 us/rep   15.69 ns/px
+    [BENCH] fill 768px      48x  16     768px/rep    14 us/rep   18.41 ns/px
+    [BENCH] fill 12800px   800x  16   12800px/rep   112 us/rep    8.76 ns/px
+    [BENCH] fill 80000px   800x 100   80000px/rep   704 us/rep    8.80 ns/px
+    [BENCH] fill 480000px  800x 600  480000px/rep  4221 us/rep   8.79 ns/px
+    [BENCH] fillunr 480k   800x 600  480000px/rep  4960 us/rep  10.33 ns/px
+    [BENCH] fillunr8 480k  800x 600  480000px/rep  4350 us/rep   9.06 ns/px
+
+  The ladder is the refutation.  Its first rungs, measured the same day and
+  before anything shipped, moved one band at four instruction costs and got
+  96.4 ns/px through the byte tail, 21.2 peeled to the shared phase at 8
+  bytes, 16.9 at 16 and 16.1 at 32 -- a 6x spread on identical bytes in
+  identical memory.  A bandwidth cannot do that; a loop can, and did.  Its
+  aligned twin cost 27.8 at the body width the header used to carry, and it is
+  the same loop as the peeled one at 1.31x the price, because clang inlines
+  the header's body into the compositor's row loop with two `addu`s per
+  iteration instead of the two `addiu`s it compiles when the body stands in a
+  function of its own: 11 instructions per 8 bytes against 9.  Loop SHAPE, not
+  only loop alignment, is what the pixel is charged for, so a width is
+  something to time rather than to reason about.  The 96.4 rung is not in the
+  table above any more, because the peel shipped: getting that row back means
+  un-landing the fix, and it is quoted here as the rung whose price decided
+  the header.
+
+  Read as instruction counts -- 20 for the tail, 4 at 8 bytes, 3 at 16, 2.4 at
+  32 -- the first three rungs land at the 4.7 ns an instruction costs here
+  (8.4) plus a fixed 2.4 ns a pixel, and the fourth sits 2.5 ns/px below what
+  that model allows.  So this machine has FLOORS, and from today they are the
+  assumption rather than the finding: a copy stops being charged below ~15.7
+  ns/px and a fill below ~8.8.  The gap between the two floors, once both
+  leaves are fixed, is one load per pixel at 6.9 ns -- 1.4 instructions'
+  worth, not the 2x a serializing bus would make it.
+
+  What the flat row had really been pricing is the compositor's SECOND pass
+  over the same bytes.  `blit=` walks a row to decide whether it may be copied
+  at all -- src/window/wnd.c:703-719 reads every pixel and bails at the first
+  transparent one, because a transparent pixel must leave whatever is below it
+  on the canvas -- and the copy then reads that band again.  Two rows separate
+  the terms without arithmetic: `blit scan` 39.86 against `copy even` 15.96
+  leaves 23.9 ns/px, 7.1 cycles, for the decision, and `blit wide` at 36.57,
+  which makes the same decision two pixels per 64-bit load, says 3.3 ns/px of
+  even THAT is loop.  Production's own column moved with the landings: the
+  `[BENCH] compositor:` whole-canvas row read 30,755 us over 613,440 px on the
+  build that measured this phase, and the same row of the same walk reads
+  24,426 us over the same 613,440 px on the build that carries both leaves --
+  50.2 ns/px to 39.8, with no plane claimed and no primitive added.  The two
+  cross-checks are the shipped compositor's own rows from the same run --
+  `bg=7490(480000 px)` is 15.60 ns/px, the copy floor read off a real
+  whole-canvas background restore, and `blit=24426(613440 px)` is 39.82, `blit
+  scan`'s 39.86 read off a real walk.
+
+  GATE  The row carries its own integrity field, and it exists because of a
+        bug in this instrument rather than in the pixel loops: the dispatcher
+        in ps2_bench_ram() read `mode >= 2` where it meant `mode == 2`, so the
+        16- and 32-byte copy rungs fell into the fill branch and printed
+        fill_rec()'s price under a copy tag -- the same 0xf9f6d730 the fill
+        rows print, three rows in a row, in every one of the first four runs.
+        Nothing in the log said so; the fold disagreed and nobody was reading
+        it.  Every copy row now folds its source band the same way it folds
+        its destination and prints whether the two agree, so chk= is MISMATCH
+        rather than a silent lie, and reintroducing `>=` is the control that
+        proves this table can go red.  A width claim needs repetition rather
+        than one row, because the step being read is 5% while the drift
+        between adjacent rows is ~1%: the two widths run interleaved at 256
+        reps with the pair repeated (+16b, +32b) after the other width has
+        run, so a width that wins only in the first slot shows up as one.  32
+        bytes went into include/btron/fast_blit.h on that evidence and on
+        `copy 12800px` falling from 16.53 to 15.58 in the landing run and
+        reading 15.65 again in the re-run above -- the same row, 0.4% apart,
+        which is the drift this paragraph warns about and not a second result
+        -- and it is the size `bg=` actually bills.  Eight stores went into
+        dp_core.c's fill_rec() on the eight-deep rung at 8.99 / 9.17 against
+        the four-deep at 10.40 / 10.43, which fill_rec() then matched at
+        8.76-8.80 across the sweep.  The floors themselves are the assertion
+        to re-read after any change to either leaf: a copy row that prices
+        below 15.7 is a win, and one that prices above it is a regression, and
+        neither is a mystery once these rows are in the log.
+
+  CONSEQUENCE FOR LANE 9, stated as the price to beat rather than as an
+  opinion.  The EE's own floors are now 15.7 ns/px for a copy and 8.8 for a
+  fill, so a GS SPRITE poster for the whole 480,000 px background has to beat
+  7.5 ms -- which it plausibly does, since the same 480,000 px already crosses
+  DMAC channel 2 into VRAM in ~821 us (1.5's upload row, the landed pair) --
+  and a paged 9b has to beat the walk's 24.4 ms.  What the refutation also
+  buys is an EE-side win that needs no plane at all: 3.3 ns/px of the
+  compositor's scan, which is 2.0 ms of every full-canvas walk, and the row
+  that prices it (`blit wide`) is already in the table.  Lane 9's Budget and
+  Gate cells in 16 read these numbers, not the 50.2 the old row quoted.
+
+  One thing no measurement in this tree can settle, and it now covers this
+  section's rows as much as the fitted ones above it: every number here is
+  PCSX2's.  An R5900 with real RDRAM may put its floor somewhere else, and
+  then the ladder's SHAPE still refutes a bandwidth argument while only its
+  numbers move.  The identical image over SIO on a real console is the
+  outstanding check.
 
 11. The frame, attributed stage by stage
 ----------------------------------------
@@ -1292,8 +1631,12 @@ PART THREE -- THE MEASURED MACHINE
   MEASURE  the shipped configuration, PS2_GL=eegs, counted build so the float
            bill is visible in the same run (2026-10-12, cycle 1 of the app
            phase).  This is the build row 9a landed INTO, so frame= below is
-           the PRE-REFUSAL price; 11.5 quotes the refusing build's own three
-           cycles, and R3 forbids averaging the two.
+           the PRE-REFUSAL price and bg=, blit= are the PRE-10.1 prices.  The
+           landed image reads those two columns at 15.60 and 39.82 ns/px,
+           which are the copy floor and the floor plus the scan, so a lane
+           that argues from the microseconds below is arguing from a retired
+           rate; 11.5 quotes the refusing build's own three cycles, and R3
+           forbids averaging the two.
 
     period=141338 pass=125329 tail=8 hold=16001/16 |
       poll=1 hook=7 evt=0 net=1 paint=125318 note=0 |
@@ -2275,8 +2618,21 @@ PART FIVE -- THE PRESENTATION PLANE: THE EE/GS BACKEND
     Close   VIOLATION 1's biggest single share: the 613,440 px blit and the
             480,000 px background restore, both of which are rectangle copies
             the GS does natively -- SPRITE for a fill, Local-to-Local BITBLT
-            for a copy.  Nothing in this port blits inside VRAM today.
-    Budget  The lane has a floor under it, and the floor is a row, read
+            for a copy.  Nothing in this port blits inside VRAM today.  The
+            lane's premise changed on 2026-10-13, so it is restated here
+            rather than left back in 10.1.  The copied pixel used to be priced
+            at 50.2 ns on the argument that a price flat across three orders
+            of size must be the DRAM's; that argument is retired, and what the
+            EE charges is 15.7 ns/px for a copy and 8.8 for a fill -- its
+            FLOORS, not its bandwidth.  So the GS is being offered a 7.5 ms
+            whole-canvas background (480,000 px at the copy floor, which is
+            the `bg=` column read off this build) and a 9.6 ms client-area
+            copy plus a 14.7 ms opacity scan in front of it (613,440 px at
+            15.7 and at 23.9), against the ~821 us the same canvas already
+            costs to CROSS.  The lane is still worth taking, and it is no
+            longer the only lane: 3.3 ns/px of that scan is an EE-side shave
+            that claims no plane, no page and no primitive.
+    Budget  The lane has a CAPACITY under it, and the capacity is a row, read
             2026-10-13:
 
             [BENCH] gs planes: registered=2 pending=0 vram_left=1081344
@@ -2317,15 +2673,23 @@ PART FIVE -- THE PRESENTATION PLANE: THE EE/GS BACKEND
             must EQUAL the rect the stream covers, checked from both sides.
             On the host that is 11.5's four-canvas assertion -- the plate's
             hole, the window's client rect and the stream's clip as one
-            rectangle, a 32x32 box reporting the whole rect while writing
-            only its own px, and a grip drawn inside the hole still drawn.
-            In the image it is [GSTS] plate=covered with b0= reaching all
-            four edges of clip=, [GSPLATE] silent, drop=0 and coverdrop=0,
-            body= + skip= = the unrefused total, vram_left=1081344 HELD, and
-            frame= falling in [XMBT] while every other column stays inside
-            its own cycle-to-cycle spread.  A poster's gate stays the old
-            one: fewer milliseconds for the same px, with groups= growing in
-            [GSTS] and a canvas census proving the canvas still paints.
+            rectangle, a 32x32 box reporting the whole rect while writing only
+            its own px, and a grip drawn inside the hole still drawn.  In the
+            image it is [GSTS] plate=covered with b0= reaching all four edges
+            of clip=, [GSPLATE] silent, drop=0 and coverdrop=0, body= + skip=
+            = the unrefused total, vram_left=1081344 HELD, and frame= falling
+            in [XMBT] while every other column stays inside its own
+            cycle-to-cycle spread.  A poster's gate is now a number rather
+            than a direction: every pixel it takes off the EE's hands is worth
+            15.7 ns of `bg=` or 39.9 of `blit=` -- 23.9 ns of that second
+            figure being the scan the walk runs before it copies, which a
+            poster removes along with the copy (10.1) -- against the ~1.7
+            ns/px the same pixel costs to CROSS channel 2 (1.5).  So the test
+            is that `bg=` or `blit=` falls by the posterised area at that
+            rate, that groups= grows in [GSTS], and that a canvas census
+            proves the canvas still paints.  Both columns are read in ns/px
+            and not in ms, so a poster that wins on a large rect cannot hide a
+            loss on the rate.
 
   LANE 10  a GIF writer ring -- the sender stops blocking.
     Close   VIOLATION 2, ps2_gs_gif_send()'s `while (D2_CHCR & (1 << 8)) ;`.
@@ -2338,8 +2702,14 @@ PART FIVE -- THE PRESENTATION PLANE: THE EE/GS BACKEND
 
   LANE 11  a real Tier-1 tick -- a period that is also a deadline.
     Close   VIOLATION 3.  Per-task stacks and preemption at the boundary,
-            so a Tier-1 task's budget is enforceable rather than aspirational,
-            and ASYNC_UI_BUDGET_US stops being a number nothing can miss.
+            so a Tier-1 task's budget is enforceable rather than aspirational.
+            Its baseline landed on 2026-10-13 and is NOT this lane: the two
+            worker planes are now charged against ASYNC_INPUT_BUDGET_US and
+            ASYNC_UI_BUDGET_US on every pass and the misses are counted
+            (2.1, 2.2, 3), so the budget is already a number this machine can
+            miss -- 10 of 12 presenting passes did, 28x over at the worst,
+            while the input worker sat at 12 us of its 500.  What lane 11
+            still owes is the boundary that turns the count into a bound.
             Until then the honest description is ONE PREEMPTION POINT PER
             FRAME, CHOSEN BY THE BODY (1.4).
 
@@ -3402,11 +3772,12 @@ PART SEVEN -- BUILDING, VERIFYING, RUNNING
   because they need different instruments.
 
   A. STRUCTURAL -- the missing agents of LAW 1, i.e. lanes 9-13 (chapter 16).
-     Until lane 11 lands, every budget in this book is a number a body may
-     exceed with the kernel unable to notice, and the correct description of
-     the design remains ONE PREEMPTION POINT PER FRAME, CHOSEN BY THE BODY.
-     Until lane 10 lands, VIOLATION 2 stands and `snd` on the presentation
-     path is a spin.
+     Every budget in this book is now a number a body can be SEEN exceeding --
+     ps2_plane_charge() counts the misses on both worker planes (2.1, 2.2) --
+     but not a number the kernel can act on: until lane 11 lands the correct
+     description of the design remains ONE PREEMPTION POINT PER FRAME, CHOSEN
+     BY THE BODY.  Until lane 10 lands, VIOLATION 2 stands and `snd` on the
+     presentation path is a spin.
 
   B. IMPLEMENTED, NOT YET CLOSED on screen:
      - increment 6, the pointer and the window decorations as GS sprites.
@@ -3459,12 +3830,22 @@ PART SEVEN -- BUILDING, VERIFYING, RUNNING
      pixel census, and both are silent about taste.
 
   And one claim this book would like to make and cannot: that the ratio of
-  chapter 1.5 -- ~29x, the number that named the GS -- is the whole story.  It
+  chapter 1.5 -- ~23x, the number that named the GS -- is the whole story.  It
   is the story of the FILL.  After increments 5 and 7 and 8, the EE frame is
-  geometry, compositing and the bus, and the next 2.4x will not come from
-  arithmetic at all: it comes from the compositor's 613,440-pixel blit still
-  being EE work, which is exactly what lane 9 is, and what this book's final
-  unfinished chapter is about.
+  geometry, compositing and the bus, and the next share of it will not come
+  from arithmetic at all.  10.1 broke the compositor's 613,440-pixel walk open
+  and found TWO EE costs inside it where this paragraph billed one: 15.9 ns/px
+  of copy, and 23.9 ns/px of the opacity scan that runs in front of the copy
+  -- 3.3 of that second figure already shown to be loop rather than memory by
+  the `blit wide` rung.  A lane 9 poster takes the whole 39.8; making that
+  scan read two pixels per load takes its 3.3 with no plane claimed and no
+  primitive added, which is the same kind of win as the one that turned 29x
+  into 23x.  So what this book can claim is narrower than what it wanted: the
+  GS is the only rasteriser on the machine and stays the answer to a
+  per-fragment cost, while the EE's own copy and fill are now provably AT
+  their floor -- and everything still on the EE is a scan standing in front of
+  that floor, part of which is loops.  Which lane takes it is the last
+  unfinished chapter.
 
 =====================================================================
 APPENDIX A -- LABEL SCHEME, DECODED
@@ -3482,6 +3863,11 @@ APPENDIX A -- LABEL SCHEME, DECODED
                         fill, skipped over exactly the rect its own stream
                         covers -- a refusal, not a poster, and 9b is still the
                         poster
+    row 9b              the PAGE half of lane 9: putting the client-area blit
+                        or the background restore inside VRAM.  Its price to
+                        beat is 10.1's floors -- 15.7 ns/px for a copy, 8.8
+                        for a fill -- and not the 50.2 this book quoted before
+                        those rows existed
     lanes 9-13          the five open agents: GS compositor, GIF writer ring,
                         real Tier-1 tick, VU1 geometry actor, IOP/SIF I/O
                         actor
@@ -3517,6 +3903,36 @@ APPENDIX A -- LABEL SCHEME, DECODED
     LIVE / STALLED / DEAD  the clock's verdict on the 1 kHz plane over a window
     bb=1 fb=1 pre/post  band-blit and full-blit bookkeeping around a present
     px= nb= full=       pixels uploaded, band count, whether band 0 is the canvas
+
+  Pixel-loop labels (10.1)
+    the floors          15.7 ns/px for a copy and 8.8 for a fill: the price
+                        this machine stops charging at, measured 2026-10-13,
+                        and from here on the ASSUMPTION a lane is argued
+                        against rather than a finding.  4.6 and 2.6 cycles at
+                        the measured 295 ticks per microsecond (8.1)
+    even / odd          a row's destination PIXEL column.  On this canvas an
+                        even column is 8-aligned in bytes and an odd one is
+                        4-mod-8, so one character names the whole alignment
+                        defect
+    +peel / +16 / +32   the copy loop's body width in bytes.  +16b and +32b
+                        are the repeat pair, run after the other width has
+                        run, so that a first-slot win reads as a position
+                        effect
+    fillunr / fillunr8  fill_rec()'s leaf with its row pointer incremented
+                        rather than recomputed, four stores deep then eight
+    blit scan / wide    wnd.c's opacity decision, one pixel at a time then two
+                        pixels per load -- the term the old flat `blit=` price
+                        hid inside a "copied pixel"
+    chk=ok | MISMATCH   the row's own integrity fold: destination against
+                        source band for a copy, `fill` when there is no source
+                        to fold.  MISMATCH means a TAG and a BRANCH disagree,
+                        which is a bug in the instrument, not a property of
+                        the pixel
+    ns/px               us/rep x 1000 over (px/rep x reps), two decimals, all
+                        32-bit because this image has no 64-bit divisor:
+                        ps2_builtins.c does not define __udivdi3, so a
+                        uint64_t division here is a link error rather than a
+                        step
 
   GS register and packet labels
     CT32 / PSM          32-bit RGBA pixel storage mode; byte order R,G,B,A in
@@ -3558,17 +3974,27 @@ APPENDIX B -- MISALIGNMENTS WITH THE GOVERNING STANDARD
   ID   the claim                            the fact, and where the law lives
   ---  -----------------------------------  -------------------------------------
   M1   ASYNC_UI_PERIOD_US is 8333           btron_planes_install() sets ui_period_us =
-       (ASYNC.txt §7's 120 Hz UI period)    16667, and NEITHER constant has a reader.
-                                            Chapter 3; the fix is lane 11.
+       (ASYNC.txt §7's 120 Hz UI period)    16667.  Since 2026-10-13 the installed value
+                                            HAS a reader -- every presenting pass is
+                                            counted late against it, 9 of the 11 that had
+                                            a predecessor -- while the declared 8333 still
+                                            has none, because nothing here is paced at
+                                            120 Hz.  Chapter 3; the fix is lane 11.
   M2   ASYNC_UI_BUDGET_US is 4000           one measured pass spent 123,355 us in
-                                            composite+present: ~31x over budget.  Chapters
+       (ASYNC.txt §3's per-plane budget)    composite+present: ~31x over budget.  Now
+                                            METERED rather than subtracted: 10 of 12
+                                            presenting passes missed it, worst 112,082 us
+                                            = 28x, in the run chapter 2.1 quotes.  Chapters
                                             1.4 and 11; it is a REAL overrun, not a units
                                             bug.
   M3   Tier-1 tasks have periods and        the µITRON shim is cooperative: sta_tsk() runs
        budgets (ASYNC.txt §7)               the body on the caller's stack, stksz is
                                             ignored, dly_tsk() is a CP0 Count busy-hold.
-                                            A period cannot be enforced, so it is not yet
-                                            a deadline.  §1.4, lane 11.
+                                            A period still cannot be ENFORCED, so it is
+                                            not yet a deadline -- but since 2026-10-13 a
+                                            budget overrun is MISSED LOUDLY: both worker
+                                            planes are charged and their misses counted
+                                            (2.1, 2.2, 3).  §1.4, lane 11.
   M4   the presentation path uses a         ps2_gs_gif_send() SPINS on D2_CHCR.  The ring
        bounded ring with S_FULL (§3.2,      is a `should` this book has treated as a law
        INTERPRETER.txt)                     in one place -- lane 10 is its implementation.

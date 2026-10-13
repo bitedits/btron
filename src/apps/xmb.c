@@ -310,12 +310,18 @@ extern int      g_mouse_accel_profile;
  * `verify/tests/test_xmb_render.c` refuses n < 32*32 as a law.  So the dial is closed: 47.0 ms
  * was not for sale here, and the two things with a number large enough to chase are the GS, which
  * takes the pixels off this CPU, and painting only what changed instead of the whole surface.
- * The second one is the only shape that win can take: re-representing the static gradient as a
- * bitmap and blitting it back is measured against, not guessed at, because this image already
- * blits RAM to RAM at 14.8 cycles a pixel (the compositor's own `blit=` rows, 613,440 px in
- * 30,747 us, and the same 50 ns/px on every smaller row) against the 22 cycles it costs to
- * rasterise the gradient.  A copy is not much cheaper than a fill on this machine -- both are
- * DRAM-bound -- so the only lever in `f_bg` is the number of pixels it touches.
+ * The second one is the only shape that win can take, and its price is now measured rather than
+ * inferred.  This image copies RAM to RAM at 4.6 cycles a pixel -- 15.65 / 15.68 / 15.69 ns/px at
+ * 12,800, 80,000 and 240,000 px, the RAM-to-RAM control's size sweep in `src/cores/core_ps2.c`
+ * (2026-10-13, PS2_GL=eegs PS2_FP=hw) -- against the 22 cycles it costs to rasterise this gradient,
+ * so a baked bitmap blitted back would take f_bg's 28.5 ms to 6.0 ms.  What stops it is the image,
+ * not the loop: the XMB's own 768x500 client is 1,536,000 B against the ~1.5 MiB of headroom the
+ * link leaves under ps2.ld's ASSERT.  The reading these rows used to carry -- 14.8 cycles a pixel
+ * (613,440 px in 30,755 us, the same 50 ns/px on every smaller row), and from that "a copy is not
+ * much cheaper than a fill, both are DRAM-bound" -- billed the compositor's opacity scan inside its
+ * copy and is retired: the control moved the SAME bytes at four instruction costs and got 96.4 /
+ * 21.2 / 16.9 / 16.1 ns/px, which a bandwidth cannot do and a loop can.  Until someone pays for the
+ * cache, the only lever in `f_bg` is the number of pixels it touches.
  *
  * The mesh this bill is written against -- `XB_RIBBON_ROWS` x `XB_RIBBON_COLS`, 32x32, with
  * the test that refuses a coarser one -- is in `src/apps/xmb_wave.h`, next to the lattice

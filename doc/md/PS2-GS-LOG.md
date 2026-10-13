@@ -600,3 +600,133 @@ control is attributed to a routine (`thirds`, `truncdfsf2`, `muldf3`) rather tha
 whole.
 
 ---
+
+## Row 9's pre-gate, RAM-to-RAM: the control that retired the handbook's own price row
+
+<a name="ram-to-ram-control"></a>
+
+**What was withdrawn, and the sentence it was inside.**  `PS2.md`'s price list billed *a pixel copied
+RAM to RAM* at **14.8 cycles**, and the third column drew the conclusion that made row 9 look
+one-sided: "613,440 px in 30,755 us, and 50.2 ns/px on every row from 768 px to 613,440 px -- three
+orders of magnitude of size at one price, so it is the DRAM, not the loop".  That reading is what made
+the EE-side half of row 9 look already shut.  The withdrawal is not that the
+number was mis-measured; the row was reading real columns.  It is that the *argument* was not
+falsifiable: a per-iteration byte tail is size-flat too, so flatness cannot separate a bandwidth from
+a loop, and nothing in this tree had ever moved the same bytes at two instruction counts.  The same
+inference was live in two places outside the handbook, and both were rewritten the same day: this
+bench's own phase header, which had been arguing the DRAM case in its own commentary, and
+`src/apps/xmb.c`'s `f_bg` block, whose consequence ("a copy is not much cheaper than a fill -- both
+are DRAM-bound") is now replaced by the measured 4.6-cycle floor and the image-budget gate that
+actually stops the cache.
+
+**The control, and how it answered.**  `ps2_bench_ram_ops()` in `src/cores/core_ps2.c` prices one band
+at four instruction costs on the same destination and the same memory.  The first phase, run the same
+day *before either leaf shipped*, came back 96.4 ns/px through the byte tail, 21.2 peeled to the
+shared 8-byte phase, 16.9 at 16 bytes, 16.1 at 32 -- a 6x spread on identical bytes.  **Those four
+rungs are recorded here rather than re-greppable**: the landing overwrote `build/ps2-bench.log`, and
+the 96.4 rung is not reproducible from the current image without un-landing the peel.  The aligned
+twin of the old header cost 27.8 at the body width it used to carry -- the same loop as the peeled
+one at 1.31x the price, because clang inlines the header's body into the compositor's row loop with
+two `addu`s per iteration instead of the two `addiu`s it compiles when the body stands in a function
+of its own, 11 instructions per 8 bytes against 9.  Loop *shape* as well as loop alignment is what the
+pixel is charged for; that is the finding no reasoning about bandwidth could have produced.
+
+**The instrument's own bug, because that is why `chk=` exists.**  The dispatcher in `ps2_bench_ram()`
+read `mode >= 2` where it meant `mode == 2`, so the 16- and 32-byte *copy* rungs fell into the fill
+branch and printed `fill_rec()`'s price under a copy tag.  Failure count: **three rows in a row, in
+each of the first four runs**, all three carrying the fill rows' fold `sum=0xf9f6d730` while the real
+copy rows beside them folded `0xf91c64b4` / `0xf68ac30c`.  Nothing in the log said so -- the tags
+disagreed with the branches, and the only field that could show it was not being read.  The fix is
+the field: every row that moves bytes now folds its destination *and* its source band and prints
+`chk=ok` or `chk=MISMATCH`, and a fill prints `chk=fill` because it has no source to fold.  The
+positive control is reintroducing `>=`, which must turn three copy rows red rather than silent.
+
+**The landed run, verbatim** (`build/ps2-bench.log`, 2026-10-13, `PS2_GL=eegs PS2_FP=hw`; lines 363-396
+and 400):
+
+```
+[BENCH] RAM-to-RAM, the loop or the DRAM -- same bytes at two instruction costs
+[BENCH] copy even      400x  16     6400px/rep    102 us/rep max    114 us  15.96 ns/px  sum=0xf91c64b4 chk=ok
+[BENCH] copy odd       399x  16     6384px/rep    103 us/rep max    115 us  16.17 ns/px  sum=0xf68ac30c chk=ok
+[BENCH] copy odd+peel  399x  16     6384px/rep    135 us/rep max    147 us  21.23 ns/px  sum=0xf68ac30c chk=ok
+[BENCH] copy even+16   400x  16     6400px/rep    107 us/rep max    119 us  16.74 ns/px  sum=0xf91c64b4 chk=ok
+[BENCH] copy even+32   400x  16     6400px/rep    101 us/rep max    113 us  15.79 ns/px  sum=0xf91c64b4 chk=ok
+[BENCH] copy odd+16    399x  16     6384px/rep    108 us/rep max    120 us  16.93 ns/px  sum=0xf68ac30c chk=ok
+[BENCH] copy odd+32    399x  16     6384px/rep    103 us/rep max    115 us  16.14 ns/px  sum=0xf68ac30c chk=ok
+[BENCH] copy odd+16b   399x  16     6384px/rep    108 us/rep max    120 us  16.91 ns/px  sum=0xf68ac30c chk=ok
+[BENCH] copy odd+32b   399x  16     6384px/rep    102 us/rep max    115 us  16.12 ns/px  sum=0xf68ac30c chk=ok
+[BENCH] fill even      400x  16     6400px/rep     60 us/rep max     73 us  9.49 ns/px  sum=0xf9f6d730 chk=fill
+[BENCH] fill odd       399x  16     6384px/rep     61 us/rep max     74 us  9.65 ns/px  sum=0xf9f6d730 chk=fill
+[BENCH] fillunr even   400x  16     6400px/rep     66 us/rep max     79 us  10.40 ns/px  sum=0xf9f6d730 chk=fill
+[BENCH] fillunr8 even  400x  16     6400px/rep     57 us/rep max     71 us  8.99 ns/px  sum=0xf9f6d730 chk=fill
+[BENCH] fillunr odd    399x  16     6384px/rep     66 us/rep max     80 us  10.43 ns/px  sum=0xf9f6d730 chk=fill
+[BENCH] fillunr8 odd   399x  16     6384px/rep     58 us/rep max     72 us  9.17 ns/px  sum=0xf9f6d730 chk=fill
+[BENCH] blit scan      400x  16     6400px/rep    255 us/rep max    266 us  39.86 ns/px  sum=0xf91c64b4 chk=ok
+[BENCH] blit wide      400x  16     6400px/rep    234 us/rep max    245 us  36.57 ns/px  sum=0xf91c64b4 chk=ok
+[BENCH] blit odd scan  399x  16     6384px/rep    256 us/rep max    267 us  40.11 ns/px  sum=0xf68ac30c chk=ok
+[BENCH] blit odd wide  399x  16     6384px/rep    235 us/rep max    246 us  36.87 ns/px  sum=0xf68ac30c chk=ok
+[BENCH]   -- size sweep, even phase, load+store and store-only
+[BENCH] copy 768px      48x  16      768px/rep     15 us/rep max     28 us  19.74 ns/px  sum=0xff234350 chk=ok
+[BENCH] copy 12800px   800x  16    12800px/rep    200 us/rep max    212 us  15.65 ns/px  sum=0xed17d04b chk=ok
+[BENCH] copy 12800+32  800x  16    12800px/rep    200 us/rep max    211 us  15.65 ns/px  sum=0xed17d04b chk=ok
+[BENCH] blit 12800     800x  16    12800px/rep    507 us/rep max    516 us  39.68 ns/px  sum=0xed17d04b chk=ok
+[BENCH] blit 12800w    800x  16    12800px/rep    464 us/rep max    473 us  36.28 ns/px  sum=0xed17d04b chk=ok
+[BENCH] copy 80000px   800x 100    80000px/rep   1254 us/rep max   1265 us  15.68 ns/px  sum=0x777bf3e1 chk=ok
+[BENCH] copy 240000px  800x 300   240000px/rep   3767 us/rep max   3772 us  15.69 ns/px  sum=0xc993ec1b chk=ok
+[BENCH] fill 768px      48x  16      768px/rep     14 us/rep max     27 us  18.41 ns/px  sum=0xff234350 chk=fill
+[BENCH] fill 12800px   800x  16    12800px/rep    112 us/rep max    125 us  8.76 ns/px  sum=0xf4ca6b10 chk=fill
+[BENCH] fill 80000px   800x 100    80000px/rep    704 us/rep max    710 us  8.80 ns/px  sum=0xb9f11d24 chk=fill
+[BENCH] fill 480000px  800x 600   480000px/rep   4221 us/rep max   4225 us  8.79 ns/px  sum=0x5ba6aed8 chk=fill
+[BENCH] fillunr 480k   800x 600   480000px/rep   4960 us/rep max   4966 us  10.33 ns/px  sum=0x5ba6aed8 chk=fill
+[BENCH] fillunr8 480k  800x 600   480000px/rep   4350 us/rep max   4357 us  9.06 ns/px  sum=0x5ba6aed8 chk=fill
+[BENCH]           compositor: bg=7490(480000 px) frame=7192(715360 px skip=0) paint=0 blit=24426(613440 px) comp=40961 bfn=0 wins=3/3
+```
+
+Two instrument limits are inside that block and are recorded rather than smoothed.  There is **no
+480,000 px copy row**: a copy needs a source band as large as its destination and the two may not
+overlap, so 800x300 = 240,000 px is as far as a copy can be taken on this canvas, and the bench prints
+`ram: rect <w>x<h> does not fit the canvas, skipped` instead of losing the row quietly -- which is how
+a sweep would otherwise look flat because it stopped early.  And the odd/even pair is the whole
+alignment defect in one character: on an 800-px canvas an even destination column is 8-aligned in
+bytes and an odd one is 4-mod-8.
+
+**The two leaves the ladder bought.**  32 bytes per iteration went into
+[`include/btron/fast_blit.h`](file:///Users/tonpa/depot/bitedits/btron/include/btron/fast_blit.h)
+(generic half, so the PS2 compiles it; the aarch64 half already peeled) on `copy even+32` at 15.79
+against `+16` at 16.74, repeated as `+32b` 16.12 / `+16b` 16.91, and on the sweep's `copy 12800px`
+reading 15.58 in the landing run and 15.65 in this re-run -- 0.4% apart, which is the row-to-row drift
+rather than a second result, and the size `bg=` actually bills.  Eight stores per row went into `src/graphics/dp_core.c`'s `fill_rec()` on `fillunr8` 8.99 /
+9.17 against `fillunr` 10.40 / 10.43, which the landed leaf then matched at 8.76-8.80 across the
+sweep.  Both were gated on `make test-ps2` (91/91) and `make arm64-elf` building, because the fill
+leaf is shared with the Pi 400.
+
+**What the flat row had really been pricing.**  `blit=` is not a copy; it is a scan *and* a copy.
+`src/window/wnd.c:703-719` reads every pixel of the row to find the first transparent one -- a
+transparent pixel must leave whatever is below it on the canvas -- and then the copy reads the band
+again.  `blit scan` 39.86 against `copy even` 15.96 leaves 23.9 ns/px, 7.1 cycles, for the decision;
+`blit wide` at 36.57, which makes the same decision two pixels per 64-bit load, says 3.3 ns/px of even
+that is loop.  Production agrees with the bench from the other side: the `[BENCH] compositor:` row of
+the measuring build read `blit=30755(613440 px)` = 50.2 ns/px, and the same row of this build reads
+`blit=24426(613440 px)` = 39.8 -- the same pixel count, 20.6% fewer microseconds, no plane claimed and
+no primitive added.  The two cross-checks are this build's own columns: `bg=7490(480000 px)` = 15.60
+ns/px against the copy floor of 15.65, and `blit=24426` = 39.82 against `blit scan`'s 39.86.
+
+**What it changed downstream, and where to look.**  `PS2.txt` gained section 10.1 and 1.5's ratio pair;
+`PS2.md`'s price rows are now 4.6 / 2.6 / 11.8 cycles instead of one 14.8 row, and *The ratio that
+decides where work goes* is a two-run pair with 29x retired as 23x -- it moved because the EE's loop
+moved.  Handbook consequence 2 (the static background) was **opened** rather than closed by this: at
+4.6 cycles a cached blit of the baked gradient is 6.0 ms against `f_bg`'s 28.5 ms, so the representation
+was never the thing that made caching uninteresting -- the image is, because the XMB's own 768x500
+client is 1,536,000 B against the ~1.5 MiB of headroom the link leaves under `ps2.ld`'s ASSERT.
+Lane 9's Close and Gate cells in `PS2.txt` ch. 16 are stated as ns/px against 15.7 / 8.8, not against
+50.
+
+**What is NOT claimed.**  `blit wide` is a bench prototype: `src/window/wnd.c` still scans one pixel at
+a time, so the 3.3 ns/px (2.0 ms of a full-canvas walk) is priced and *not taken*.  The floors are
+PCSX2's -- an R5900 with real RDRAM may put them elsewhere, in which case the ladder's shape still
+refutes a bandwidth argument and only its numbers move (task #17 remains the outstanding check).  And
+the 96.4 / 21.2 / 16.9 / 16.1 ladder predates the landing, so it cannot be re-run from this image; the
+rows that can be re-run are the ones quoted above, and `chk=` is the field that says whether they are
+still measuring what their tag claims.
+
+---

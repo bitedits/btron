@@ -602,15 +602,18 @@ fitted together rather than two at a time.
 | a vertex (transform, viewport, clip) | 11.0 us = 3,240 cycles | `f_ribbon`'s `geom` over its 1,984 verts, current binary |
 | a vertex that needs no clipping | 8.3 us = 2,440 cycles | `f_menu`'s `geom` over its 1,436 verts: same pipeline, no `gl_clipEdge` lerps |
 | a cleared pixel | 2.6 cycles | `f_clear`: 128,000 px/ms |
-| a pixel copied RAM to RAM | 14.8 cycles | the compositor's own `blit=` rows: 613,440 px in 30,747 us, and 50.2 ns/px on every row from 768 px to 613,440 px -- three orders of magnitude of size at one price, so it is the DRAM, not the loop |
+| a pixel copied RAM to RAM | 4.6 cycles | REFUTED AS AN INFERENCE, and now measured twice.  This row used to read 14.8 cycles on the argument that a price flat from 768 px to 613,440 px -- three orders of magnitude of size at one price -- must be the DRAM's and not the loop's.  The control that argument needed was built on 2026-10-13 (`scripts/ps2_bench.sh`, the `RAM-to-RAM` phase, *The RAM-to-RAM control* below): the same bytes at four instruction costs come back 96.4 / 21.2 / 16.9 / 16.1 ns/px, so flatness cannot tell a bandwidth from a per-iteration tail.  The 32-byte form shipped, and the landed header prices its floor at 15.65 / 15.68 / 15.69 ns/px for 12,800, 80,000 and 240,000 px -- 4.6 cycles, size-flat because the loop is at its floor, not because the bus is the limit |
+| a pixel filled, store only | 2.6 cycles | the control's other half at the same sizes: 8.76 / 8.80 / 8.79 ns/px flat from 12,800 px to the whole 480,000 px canvas, and 9.49 on the 400x16 strip where the row pointer is recompute-bound.  It agrees with `f_clear`'s 128,000 px/ms above to 0.02 cycles -- two independent instruments pricing one store |
+| a pixel the compositor blits | 11.8 cycles | 39.86 ns/px, measured rather than fitted, and the RAM-to-RAM phase separates its two terms with rows instead of arithmetic: `blit scan` 39.86 against `copy even` 15.96 leaves 23.9 ns/px -- 7.1 cycles -- for the opacity test `src/window/wnd.c` runs before it copies, and `blit wide` at 36.57 says 3.3 ns/px of *that* is loop as well.  The old row billed the pair as one "copied pixel" at 14.8 cycles, which is what made the GS ratio read 29x.  Production's own `[BENCH] compositor:` row moved from 30,755 us to 24,426 us over the same 613,440 px, with no plane claimed |
 | a swap | 0 | it was 10.5 ms -- the `swap=` column of every frame row, one uncached read and write per pixel for a constant byte -- until the byte began travelling with the pixel that stores it.  See *The frame buffer's alpha byte is written at the store* |
 
-The copied-pixel row is what closes one obvious candidate for `f_bg` before it is written.  Drawing a
-static gradient and blitting a cached copy of it back are the same order of work on this machine (22
-cycles vs 14.8), because both are limited by touching 1.5 MB of RDRAM rather than by the arithmetic in
-the middle: a write-only fill is the only one that is four times cheaper, and it is what `f_clear`
-already does.  So the background cannot be made cheaper per pixel; it can only be made to cover fewer
-of them, which is consequence 2 below.
+The copied-pixel row is what closes one obvious candidate for `f_bg` before it is written, and the
+control rewrote what "closes" means here.  Drawing a static gradient and blitting a cached copy of it
+back are *not* the same order of work (22 cycles vs 4.6): the paint costs 17.4 cycles a pixel more than
+the copy, which makes the cache worth its 1.5 MB.  What is still true is that neither is limited by the
+arithmetic in the middle -- a copy at 15.7 ns/px and a fill at 8.8 are this machine's FLOORS, so the
+background cannot be made cheaper per pixel than the floor; it can only be made to cover fewer of them,
+which is consequence 2 below.
 
 The two terms that are *not* per-pixel were both assumed to be software floating point, and the
 census says that assumption is wrong.  The EE's FPU is single-precision only, so the whole image
@@ -669,12 +672,17 @@ Four consequences are normative for where work goes next:
    essentially all of this one, and the ceiling is no longer a share to be argued but a subtraction:
    keep the instruction, drop the call, and the frame's floor is the COP1 latency of 460,861
    operations rather than their 15-cycle journey through `$ra`.  Row 7 is that subtraction.
-2. **The static background is the largest thing a CPU-side change can still take back, and only
-   fewer pixels count.**  `f_bg` re-rasters the same 382,731 gradient pixels every frame at 22 cycles
+2. **The static background is the largest thing a CPU-side change can still take back, and its
+   price is a memory number, not a pixel one.**  `f_bg` re-rasters the same 382,731 gradient pixels
+   every frame at 22 cycles
    each, and `f_clear` fills the same 384,000 again, because the drawing model is "rebuild the whole
-   surface", not "repair what changed" -- 32.7 ms, 19% of the frame.  What it cannot be is a cheaper
-   representation: the copied-pixel row above (14.8 cycles) says a cached blit of the baked gradient
-   would save 7 cycles a pixel and cost 1.5 MB.  What it can be is a smaller *area*: everything that
+   surface", not "repair what changed" -- 32.7 ms, 19% of the frame.  The cached copy is cheaper per
+   pixel, and 10.1's control is what says so: at the landed 4.6-cycle copied pixel, 382,731 px cost
+   6.0 ms instead of 28.5 ms, so a cached blit of the baked gradient saves 17.4 cycles a pixel (the
+   old row said 7, because it billed the compositor's opacity scan as part of the copy).  What makes
+   that a question rather than a win is the image: 1,536,000 B for the XMB's own 768x500 client
+   against the ~1.5 MiB the image sits under `ps2.ld`'s ASSERT.  Until that is paid for, the lever
+   that is free is a smaller *area*: everything that
    moves in a steady XMB frame is inside one full-width horizontal band, measured as 28.7% of the
    canvas from the composited PPM's bounding box (y 283..454 of 600), so a band-limited repaint of
    these two stages is worth ~23 ms (13% of the frame).  Three facts about the mechanism, all of them
@@ -1949,17 +1957,31 @@ than incidental:
    the kernel is structurally unable to notice, never mind enforce.
 
 **The ratio that decides where work goes.**  Both figures are per pixel on the same image and the
-same bus, and they differ by the whole of the plan:
+same bus, and they differ by the whole of the plan.  The first pair is the app-phase cycle row of
+2026-10-12, four windows walked (three desktop plus the XMB); the second is the bench's armed
+compositor row of 2026-10-13, `PS2_GL=eegs PS2_FP=hw`, three windows and no XMB, taken after both
+pixel leaves landed (see *The RAM-to-RAM control: the loop, not the DRAM* below).  The window sets differ, so what is
+quoted across the pair is the per-pixel rate and never the microseconds:
 
-| What crosses | px | EE time | ticks/px |
+| What crosses | px | EE time | cycles/px |
 |:---|--:|--:|--:|
 | the compositor's client-area blit (`blit=30755`) | 613,440 | 30,755 us | **14.8** |
 | the compositor's background restore (`bg=9923`) | 480,000 | 9,923 us | **6.1** |
 | the canvas's GIF upload (`upload=1960` minus `gs=1137`) | 480,000 | ~823 us | **0.51** |
 
-A pixel the compositor touches costs the EE 14.8 cycles; the same pixel crossing DMAC channel 2
-into the same VRAM costs half a cycle -- a ~29x ratio measured inside one row pair, with the
-subtraction justified by reading the two brackets (`gs=` is timed *inside* `upload=`).  So the
+| What crosses | px | EE time | cycles/px |
+|:---|--:|--:|--:|
+| the compositor's client-area blit (`blit=24426`) | 613,440 | 24,426 us | **11.8** |
+| the compositor's background restore (`bg=7490`) | 480,000 | 7,490 us | **4.6** |
+| the canvas's GIF upload (`[BENCH] full ... upload 821/822`) | 480,000 | ~821 us | **0.51** |
+
+A pixel the compositor touches costs the EE 11.8 cycles, and the control says *which* 11.8 they are:
+4.6 of copy and 7.1 of the opacity scan `src/window/wnd.c` runs before it decides to copy.  The same
+pixel crossing DMAC channel 2
+into the same VRAM costs half a cycle -- a ~23x ratio measured inside one row pair, with the
+subtraction justified by reading the two brackets (`gs=` is timed *inside* `upload=`).  It was 29x
+until 2026-10-13 because the row billed the scan inside a "copied pixel", and it moved because the
+EE's LOOP moved: no plane was claimed and no primitive was added.  So the
 question this section exists to answer is not "how do we make the EE faster" but "why is the EE
 touching pixels at all": the only agent that can fill a rectangle of VRAM without the EE touching
 it is the GS, and it can do so two ways -- a `SPRITE` (RECT) primitive for a solid or texture-mapped
@@ -2010,14 +2032,20 @@ split is made by the budget rather than by convenience:
   was *where*: the recorder is opened around the layer window's paint callback by
   `eegs_present_begin()`, and nothing may DMA during a paint, so a compositor-side poster needs the
   recorder open across the whole composite -- a re-ordering of increment 5c's law, priced at one
-  quadword per four pixels at ~18-21 ns/px against the canvas's 14.8.  The measurement taken first
+  quadword per four pixels at ~18-21 ns/px against the canvas's copied pixel -- 14.8 cycles as this
+  book billed it then, 15.7 ns/px as the control below prices it now, and the change of number did
+  not change the ordering.  The measurement taken first
   (below) said something simpler: one rect of that fill is drawn twice, once into the canvas and
   once into VRAM by the stream, and the canvas copy can simply be refused.  That is what landed:
   6,547 µs off one cycle's 112,711 µs XMB composite (`frame=` 20,380 → 13,833, 6,529-6,547 µs off
   all three cycles), with no plane claimed and no new primitive.  The poster (flat fills sent as
   `SPRITE` rects) is still open, now that each rect's EE price is a printed number.
 - **9b, the page half -- the client-area blit.**  `blit=` 30,729-30,795 µs over 613,440 px is a RAM
-  to RAM copy, and it is exactly the part that needs a plane.  Three shapes are possible inside
+  to RAM copy *plus a scan in front of it*: the control below separates the two on the landed build,
+  where the same column reads 24,426 µs = 39.8 ns/px, of which 15.9 is the copy at its floor and 23.9
+  is `src/window/wnd.c`'s opacity test -- 7.1 cycles of the compositor's 11.8 paid before it decides
+  to copy at all.  The copy is the part that needs a plane; 3.3 ns/px of the scan is loop and needs
+  nothing.  Three shapes are possible inside
   208 planes and none is free: CT16 instead of CT32 (halves the bytes, halves the colour), a
   per-window page pool that bakes the *small* windows and leaves the big one to the EE, or
   Local→Local copies that stay inside the canvas's own extent and so cost no new page at all.  Row
@@ -2097,8 +2125,11 @@ why this row is not called closed by a log line.
 **What 9a did not remove, priced.**  The 715,360 px of the three desktop windows' plates stay EE-filled
 at the 18.3 ns/px their own row averages -- 13.1 ms of a frame when all three are in the damage -- plus
 `bg=`'s 9.9 ms and `blit=`'s 30.7 ms, none of which 9a can reach: the background has no stream over it,
-and `blit=` is 9b.  The residue of `frame=` after this lane is therefore not a mystery column but a
-named set of rects, and 9b's three candidate shapes are now each priced against `body=` before any of
+and `blit=` is 9b.  Those three are the measuring build's columns; on the landed build the control's two
+pixel leaves took them to `bg=` 7.49 ms (15.60 ns/px, the copy floor read off a real whole-canvas
+restore) and `blit=` 24.4 ms (39.82 ns/px, the floor plus the scan), with no plane claimed -- so the
+residue is smaller than this paragraph said it was, and it is still the same three named rects.
+The residue of `frame=` after this lane is therefore not a mystery column but a named set of rects, and 9b's three candidate shapes are now each priced against `body=` before any of
 them is chosen.
 
 9a's gate, as graded: `frame=` fell at constant `bg=`/`paint=`/`blit=`/`panel=`/`bars=` (the lane
@@ -2119,10 +2150,107 @@ those columns are the poster half's gate, and they are still ahead of it.
 
 Rows 9-13 are ordered by what the measurements already force, not by what is easy: row 9 began as ~56 ms
 of EE pixel traffic per frame and 9a's refusal has taken 6.5 ms of it, leaving `bg=` 9.9 ms, the
-remaining `frame=` 13.8 ms and `blit=` 30.7 ms as three named, priced sets rather than one column; row 10
+remaining `frame=` 13.8 ms and `blit=` 30.7 ms as three named, priced sets rather than one column --
+re-priced by the control below, on the landed build, as 7.5 ms, 13.1 ms and 24.4 ms, so the lane's
+prize is smaller than it was and its floors are now numbers.  Row 10
 is the one that makes row 9's packet growth safe rather than a longer stall; row 11 is what turns every
 budget in this file from a comment into an enforced bound; rows 12-13 need an instrument this port does
 not have yet (see the GS row: nothing measures an engine other than the EE today).
+
+#### The RAM-to-RAM control: the loop, not the DRAM (Normative)
+
+**Law.**  No pixel cost in this file may be attributed to the memory system unless a control has moved
+the SAME bytes at a DIFFERENT instruction count and come back at the same price.  A price that is flat
+across sizes is not that control, because a per-iteration tail is flat across sizes too.
+
+**Why it exists.**  Row 9's open half is a choice between two lanes -- shave the EE's own pixel loops,
+or hand the pixels to the GS -- and until 2026-10-13 the book priced it as if the first lane were
+already shut, on a single piece of evidence: the compositor's `blit=` column read 50.2 ns/px at 768 px
+and 50.2 ns/px at 613,440 px.  That reading was not falsifiable, and nothing in this tree had ever
+moved one byte range at two instruction counts, so no row could have contradicted it.  The control came
+back the other way.
+
+**Instrument.**  `scripts/ps2_bench.sh` with no app dial: `ps2_bench_ram_ops()` (`src/cores/core_ps2.c`)
+is the first pixel phase of the bench, so its rows are in `build/ps2-bench.log` even when everything
+downstream is cut off.  Row shape and tag vocabulary:
+
+```text
+[BENCH] RAM-to-RAM, the loop or the DRAM -- same bytes at two instruction costs
+[BENCH]   -- size sweep, even phase, load+store and store-only
+[BENCH] <tag> <w>x<h>  <n>px/rep  <n> us/rep max <n> us  <ns>.<cs> ns/px  sum=0x<hex> chk=ok | MISMATCH | fill
+[BENCH] ram: rect <w>x<h> does not fit the canvas, skipped
+```
+
+- `copy` / `fill` / `blit` -- which leaf is priced: `btron_row_blit()`, `fill_rec()`, or the
+  scan-then-copy walk `src/window/wnd.c` takes over a window's client area.
+- `even` / `odd` -- the destination's PIXEL column.  On this canvas an even column is 8-aligned in
+  bytes and an odd one is 4-mod-8, so one character carries the entire alignment defect.
+- `+peel` / `+16` / `+32` -- the loop body: peel to the shared phase, then take 8, 16 or 32 bytes per
+  iteration.  `+peel` is the rung BELOW what shipped, kept printed so a landing's price stays
+  auditable against the rows that bought it.
+- `+16b` / `+32b` -- the same two widths measured AGAIN after the other one has run.  The gap being
+  read is ~5% and the drift between adjacent rows is ~1%, so a width that wins only in the first slot
+  is a position effect, not a result.
+- `fillunr` / `fillunr8` -- `fill_rec()`'s leaf with its row pointer incremented instead of
+  recomputed, four stores deep then eight.
+- `blit scan` / `blit wide` -- the opacity decision one pixel at a time as `wnd.c` takes it today,
+  then two pixels per 64-bit load.  The copy under both is the shipped header, so the difference
+  between the pair is the scan and nothing else.
+- `chk=` -- this instrument's own integrity check, not a property of the pixel: every row that moves
+  bytes folds its destination AND its source band, and a copy that prints `MISMATCH` means a tag and a
+  branch disagree.  A fill prints `fill` because it has no source to fold.
+- `ns/px` is `us/rep × 1000 / (px/rep × reps)` in 32-bit arithmetic, because this image has no 64-bit
+  divisor: `ps2_builtins.c` does not define `__udivdi3`.
+
+**Measured (2026-10-13, `PS2_GL=eegs PS2_FP=hw`).**  The ladder that refutes the bandwidth reading --
+one band, four instruction costs, before anything shipped: 96.4 ns/px through the byte tail, 21.2
+peeled to the shared phase at 8 bytes, 16.9 at 16, 16.1 at 32.  A 6x spread on identical bytes in
+identical memory.  Its aligned twin cost 27.8 at the body width the header used to carry, which is the
+same loop as the peeled one at 1.31x the price, because clang inlines the header's body into the
+compositor's row loop with two `addu`s per iteration instead of the two `addiu`s it compiles when the
+body stands in a function of its own: 11 instructions per 8 bytes against 9.  Loop SHAPE, not only loop
+alignment, is what the pixel is charged for.
+
+The floors, on the landed header, by size:
+
+| leaf | 12,800 px | 80,000 px | 240,000 px | 480,000 px | cycles/px |
+|:--|--:|--:|--:|--:|--:|
+| `copy` | 15.65 | 15.68 | 15.69 | -- (240,000 px is a copy's ceiling here) | 4.6 |
+| `fill` | 8.76 | 8.80 | -- | 8.79 | 2.6 |
+| `blit` (scan + copy) | 39.68 | -- | -- | -- | 11.8 |
+
+A copy stops being charged below ~15.7 ns/px and a fill below ~8.8, and the gap between the two floors
+is one load per pixel at 6.9 ns -- 1.4 instructions' worth, not the 2x a serializing bus would make it.
+The 96.4 rung is no longer in the table, because the peel shipped: getting it back means un-landing the
+fix.
+
+**What the flat row had really been pricing.**  `blit=` walks a row to decide whether it may be copied
+at all (`src/window/wnd.c:703-719`, which bails at the first transparent pixel because a transparent
+pixel must leave whatever is below it on the canvas) and then reads that band a second time for the
+copy.  Two rows separate the terms without arithmetic: `blit scan` 39.86 against `copy even` 15.96
+leaves 23.9 ns/px -- 7.1 cycles -- for the decision, and `blit wide` at 36.57 says 3.3 ns/px of even
+that decision is loop.  Production agrees: `bg=7490(480000 px)` is 15.60 ns/px and
+`blit=24426(613440 px)` is 39.82, the two bench rungs read off a real walk in the same run.
+
+**Gate.**  Re-read the floors after any change to either leaf: a copy row that prices below 15.7 is a
+win and one above it is a regression.  `chk=` must say `ok` on every moving row, and reintroducing the
+dispatcher's `mode >= 2` -- the bug this field was written for, which printed `fill_rec()`'s price
+under a copy tag in four consecutive runs -- is the control that proves the table can go red.  A width
+claim needs the interleaved repeat (`+16b`/`+32b`), not one row.  32 bytes went into
+`include/btron/fast_blit.h` on this evidence and on `copy 12800px` falling from 16.53 to 15.58, the
+size `bg=` actually bills; eight stores went into `src/graphics/dp_core.c`'s `fill_rec()` on 9.14
+against 10.40, which it then matched at 8.76-8.80 across the sweep.  Both leaves left the Pi 400 alone
+in the shared header's generic half, and `make arm64-elf` is part of the gate.
+
+**Consequence for row 9.**  The GS is being offered 7.5 ms of whole-canvas background (480,000 px at
+the copy floor) and a 9.6 ms client-area copy plus a 14.7 ms scan in front of it (613,440 px at 15.7
+and at 23.9), against the ~821 µs the same canvas already costs to CROSS channel 2.  And the lane is no
+longer the only lane: 3.3 ns/px of that scan, 2.0 ms of every full-canvas walk, is an EE-side shave
+that claims no plane, no page and no primitive.
+
+**Emulator limit.**  Every number above is PCSX2's.  An R5900 with real RDRAM may put its floor
+somewhere else; the ladder's SHAPE is what refutes a bandwidth argument, and only its numbers would
+move.  The identical image over SIO on a real console is the outstanding check.
 
 #### The measured microsecond (Normative)
 

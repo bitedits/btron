@@ -97,4 +97,16 @@ uint32_t gs_rec_sends(void);
 uint32_t gs_rec_verts(void);
 uint32_t gs_rec_unsplittable(void);
 
+/* The rectangle the frame's FIRST vertex group provably reaches, in the same local pixels
+ * `gs_rec_vertex()` is handed: its top-left corner is XYOFFSET's page point, so (0,0) is the client
+ * rect's own top-left.  Returns 0 and fills the four when a group has been sent, -1 before the frame
+ * has drawn anything.
+ *
+ * A GS layer shares its rect with the canvas: the band upload arrives first and the stream draws
+ * into it, so wherever the stream does not rasterise, the screen shows the canvas.  That is the
+ * condition the compositor checks before it stops filling the plate under a layer, and the edges
+ * here are rounded inward -- a vertex at 767.4 counts as reaching 767, never 768 -- so a span that
+ * covers the rect is a span that covers it, not a span that nearly does. */
+int gs_rec_bbox_first(int32_t *l, int32_t *t, int32_t *r, int32_t *b);
+
 #endif /* PS2_GS_REC_H */

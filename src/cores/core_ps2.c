@@ -910,7 +910,8 @@ static void ps2_cycle_print(int asked_ms)
     ps2_kprintf("[XMBT] cycle %u period=%u us pass=%u tail=%u hold=%u/%d | "
                 "poll=%u hook=%u evt=%u net=%u paint=%u note=%u | "
                 "render=%u swap=%u upload=%u px=%u nb=%d full=%d why=%x dmg=%d,%d,%d,%d/%d | "
-                "comp bg=%u frame=%u paint=%u blit=%u panel=%u bars=%u total=%u bfn=%u wins=%u/%u\n",
+                "comp bg=%u frame=%u paint=%u blit=%u panel=%u bars=%u total=%u bfn=%u wins=%u/%u "
+                "body=%upx skip=%upx\n",
                 (unsigned int)s_cycle.rows,
                 (unsigned int)(s_cycle.pass_us + s_cycle.tail_us + s_cycle.hold_us),
                 (unsigned int)s_cycle.pass_us, (unsigned int)s_cycle.tail_us,
@@ -926,21 +927,31 @@ static void ps2_cycle_print(int asked_ms)
                 (unsigned int)s_cycle.st.paint_us, (unsigned int)s_cycle.st.blit_us,
                 (unsigned int)s_cycle.st.panel_us, (unsigned int)s_cycle.st.bars_us,
                 (unsigned int)s_cycle.st.comp_us, (unsigned int)s_cycle.st.bg_full_calls,
-                (unsigned int)s_cycle.st.wins_drawn, (unsigned int)s_cycle.st.wins_walked);
+                (unsigned int)s_cycle.st.wins_drawn, (unsigned int)s_cycle.st.wins_walked,
+                (unsigned int)s_cycle.st.frame_body_px,
+                (unsigned int)s_cycle.st.frame_body_skip_px);
     /* The EE/GS layer's own row, and only when this pass sent a stream: a pass that painted no
      * layer has nothing to say, and a row of zeroes would read as "the GS is idle" rather than
      * "this frame was desktop only".  drop=/unsplit=/texmiss=/coverdrop= are the four that must
      * stay 0 -- each one is a piece of the picture that the application drew and the screen does
-     * not have. */
+     * not have.  plate= is the fifth: it says whether the stream's first primitive group spans the
+     * rect the environment packet scissors it to, which is what lets the window walk leave that
+     * rect's plate unfilled in the canvas -- `covered`, or `SHORT` (the canvas shows through the
+     * app's own picture), or `none` (a frame that recorded no vertex group at all). */
     if (s_gs_groups) {
         ps2_kprintf("[GSTS] groups=%u qw=%u verts=%u prims=%u gs=%u us | "
-                    "drop=%u unsplit=%u texsw=%u texmiss=%u | cover=%u coverdrop=%u\n",
+                    "drop=%u unsplit=%u texsw=%u texmiss=%u | cover=%u coverdrop=%u | "
+                    "clip=%ux%u b0=%d,%d,%d,%d plate=%s\n",
                     (unsigned int)s_gs_groups, (unsigned int)s_gs_qw,
                     (unsigned int)s_gs_st.verts, (unsigned int)s_gs_st.prims,
                     (unsigned int)s_gs_us, (unsigned int)s_gs_st.dropped,
                     (unsigned int)s_gs_st.unsplittable, (unsigned int)s_gs_st.tex_switches,
                     (unsigned int)s_gs_st.tex_missing,
-                    (unsigned int)s_gs_cover, (unsigned int)s_gs_cover_drop);
+                    (unsigned int)s_gs_cover, (unsigned int)s_gs_cover_drop,
+                    (unsigned int)s_gs_st.clip_w, (unsigned int)s_gs_st.clip_h,
+                    (int)s_gs_st.b0_l, (int)s_gs_st.b0_t,
+                    (int)s_gs_st.b0_r, (int)s_gs_st.b0_b,
+                    s_gs_st.has_bbox ? (s_gs_st.plate_covers ? "covered" : "SHORT") : "none");
     }
     s_cycle.rows++;
     s_cycle.stamped = 0u;
@@ -1121,6 +1132,14 @@ static void ps2_paint_region(GDEV *screen, int x0, int y0, int x1, int y1, int f
         const uint32_t tg0 = ps2_count_read();
         int n_cover;
 
+        /* Once per session: the walk's plate skip is conditional on the stream covering its own
+         * rect, and the condition is measured here rather than assumed from the application's
+         * source.  A frame that fails it is a frame where the canvas shows through the picture, so
+         * the row says so at the moment it is true instead of leaving it to be noticed as a patch
+         * of desktop inside a window. */
+        static BOOL s_plate_warned;
+        eegs_present_stats st;
+
         /* wnd_gl_layer_take() answers only when the composite above re-ran the layer window's
          * paint callback, which is exactly when a stream exists to send -- and a band that did not
          * touch the layer has neither, so it uploads and leaves the layer's own rows as its
@@ -1129,8 +1148,16 @@ static void ps2_paint_region(GDEV *screen, int x0, int y0, int x1, int y1, int f
             gs_groups = eegs_present_send(&gl_client);
             if (gs_groups > 0) {
                 s_gs_groups += (uint32_t)gs_groups;
-                eegs_present_get_stats(&s_gs_st);
-                s_gs_qw += s_gs_st.qw;
+                eegs_present_get_stats(&st);
+                s_gs_st = st;
+                s_gs_qw += st.qw;
+                if (st.has_bbox && !st.plate_covers && !s_plate_warned) {
+                    s_plate_warned = TRUE;
+                    ps2_kprintf("[GSPLATE] the stream does not plate its rect: "
+                                "clip=%ux%u b0=%d,%d,%d,%d -- a layer's body fill stays required\n",
+                                (unsigned int)st.clip_w, (unsigned int)st.clip_h,
+                                (int)st.b0_l, (int)st.b0_t, (int)st.b0_r, (int)st.b0_b);
+                }
                 gs_layer = TRUE;
             }
         }
@@ -1485,7 +1512,7 @@ static void ps2_ptr_chord(uint32_t key);
  * `src/settings/input.c:16-18` defines for every target (16 cs = 160 ms before the
  * first repeat, 40 cps = 25 ms after that, repeat on), the same three the Input
  * applet's radio rows and `xmb.c`'s settings bindings write, and the same three
- * `core_arm64.c:2702-2705` already obeys on the Pi 400.  What PS2 was missing was the
+ * `core_arm64.c:2703-2705` already obeys on the Pi 400.  What PS2 was missing was the
  * *reader*, not the setting: `ps2_usb_process_keyboard_report()` decodes **edges** --
  * `s_prev_keys` turns a key held for a second into exactly one down event -- while on
  * the posix target a held key repeats because SDL forwards the host's own auto-repeat
@@ -1524,42 +1551,104 @@ static void ps2_kbd_disarm(uint32_t btron_key)
     if (s_kbd_held_key != 0u && s_kbd_held_key == btron_key) s_kbd_held_key = 0u;
 }
 
-/* One pass' worth of repeat, and at most one event per pass, on the same terms as a
- * host's: the delay is measured from the press, the interval from the last repeat, and
- * neither is ever caught up.  The clock is the folded one, whose 32-bit microseconds
- * wrap every 2^32/tpu us -- 14.5 s at this machine's measured 295 ticks/us -- and both
- * tests are unsigned differences, so a wrap between the press and a tick costs one
- * missed repeat rather than a burst: the intervals that matter here are 25 ms and
- * 500 ms, five orders of magnitude inside the wrap.  If the timebase was never
- * measured the clock reads a constant zero, both differences read zero, and repeat
- * stays off; a port with no clock does not invent a cadence. */
+/* Repeats one pass owes, and how many a single pass may deliver.  A tick that fired at
+ * most one repeat per pass would repeat at the frame rate rather than at *FX 12: the XMB's
+ * measured cycle period is ~140 ms against a 25 ms interval, so the applet's 40 cps and
+ * 12.5 cps rows would feel identical and the setting would be decorative.  A tick
+ * therefore pays every interval that elapsed, and the schedule advances by those intervals
+ * instead of by the clock, which is what keeps the *mean* rate the setting's rate.  The cap
+ * bounds the burst so a long stall cannot flood the event queue; at a 140 ms pass and a
+ * 25 ms interval the due count is 5, so the cap is above the working case and below the
+ * queue's size, and a backlog longer than the cap is dropped rather than paid out late. */
+#define PS2_KBD_REPEAT_MAX 8u
+
+/* The arithmetic of the law, kept apart from its state so a headless run can price it
+ * without a hand on a key.  `since_us` is the gap between the schedule pointer and now;
+ * `*advance_us` comes back as what the schedule moves by -- the intervals actually paid,
+ * not the whole gap -- because paying out of the schedule is what makes the *mean* rate
+ * equal the setting's.  A gap longer than the cap can pay is dropped whole rather than
+ * banked, so a stalled pass resynchronises instead of repeating at the cap forever.
+ * Pure: reads no clock, touches no state. */
+static uint32_t ps2_kbd_due(uint32_t since_us, uint32_t interval_us, uint32_t *advance_us)
+{
+    if (interval_us == 0u) { *advance_us = 0u; return 0u; }
+
+    const uint32_t due = since_us / interval_us;
+    if (due == 0u) { *advance_us = 0u; return 0u; }
+    if (due > PS2_KBD_REPEAT_MAX) { *advance_us = since_us; return PS2_KBD_REPEAT_MAX; }
+
+    *advance_us = due * interval_us;
+    return due;
+}
+
+/* One pass' worth of repeat, on a host's terms: the delay is measured from the press and
+ * the interval from the schedule, never from the pass.  The clock is the folded one, whose
+ * 32-bit microseconds wrap every 2^32/tpu us -- 14.5 s at this machine's measured 295
+ * ticks/us -- and every test below is an unsigned difference, so a wrap between the press
+ * and a tick costs one missed repeat rather than a burst: the intervals that matter here
+ * are 25 ms and 500 ms, five orders of magnitude inside the wrap.  If the timebase was
+ * never measured the clock reads a constant zero, every difference reads zero, `due` is
+ * zero, and repeat stays off; a port with no clock does not invent a cadence. */
 static void ps2_kbd_repeat_tick(void)
 {
     const uint32_t now = btron_render_perf_us();
 
     if (!g_kbd_repeat_enabled || s_kbd_held_key == 0u) return;
     if ((uint32_t)(now - s_kbd_press_us) < g_kbd_repeat_delay_us) return;
-    if ((uint32_t)(now - s_kbd_repeat_us) < g_kbd_repeat_interval_us) return;
 
-    s_kbd_repeat_us = now;
-    s_kbd_repeats++;
+    uint32_t advance_us;
+    const uint32_t due = ps2_kbd_due((uint32_t)(now - s_kbd_repeat_us),
+                                     g_kbd_repeat_interval_us, &advance_us);
+    if (due == 0u) return;
+
+    s_kbd_repeat_us += advance_us;
+    s_kbd_repeats += due;
 #if BTRON_HID_TRACE
     /* The cadence, on the same dial the rest of the input evidence uses: this row is
      * what separates "repeat is off" from "repeat is firing faster or slower than the
-     * applet says", and `dt` is the measured interval rather than the setting. */
-    ps2_kprintf("[KBD] rep k=%x m=%x n=%u since_press=%u us\n", (unsigned int)s_kbd_held_key,
-                (unsigned int)s_kbd_held_mod, (unsigned int)s_kbd_repeats,
+     * applet says", and it reports the burst the pass paid as well as the total, so the
+     * frame rate's effect on the cadence is visible instead of being assumed away. */
+    ps2_kprintf("[KBD] rep k=%x m=%x n=%u due=%u since_press=%u us\n", (unsigned int)s_kbd_held_key,
+                (unsigned int)s_kbd_held_mod, (unsigned int)s_kbd_repeats, (unsigned int)due,
                 (unsigned int)(now - s_kbd_press_us));
 #endif
-    if (s_gui_active) {
-        ps2_inject_key((UW)s_kbd_held_key, 1);
-    } else if (s_kbd_held_key < 0x100u) {
-        /* Stage 1 has no event consumer, so the prompt takes the character exactly as
-         * ps2_usb_on_key() gave it the first time.  Function and navigation codes from
-         * 0x100 up have no binding at the prompt and must not be sent as a byte. */
-        ps2_shell_char((int)s_kbd_held_key);
+    for (uint32_t i = 0u; i < due; i++) {
+        if (s_gui_active) {
+            /* Press only: the key really is still down, and a typematic stream from
+             * hardware is a run of downs ending in one up. */
+            ps2_inject_key((UW)s_kbd_held_key, 1);
+        } else if (s_kbd_held_key < 0x100u) {
+            /* Stage 1 has no event consumer, so the prompt takes the character exactly as
+             * ps2_usb_on_key() gave it the first time.  Function and navigation codes from
+             * 0x100 up have no binding at the prompt and must not be sent as a byte. */
+            ps2_shell_char((int)s_kbd_held_key);
+        }
     }
 }
+
+#if BTRON_PS2_BENCH
+/* The repeat law priced against this machine's frame, with no hand on a key.  The tick
+ * runs once per pass, so what the Input applet's three *FX 12 rows actually deliver is
+ * this pass period divided by the interval.  A run that prints 5/3/1 shows the three
+ * settings are distinguishable on this build; one that prints 1/1/1 says the frame is
+ * slower than every rate the menu offers, which is a fact about the frame loop and not
+ * about the keyboard.  The period is the last stamped cycle -- the same sum the [XMBT]
+ * row prints -- so these numbers and the frame rows came from one image. */
+static void ps2_bench_kbd_cadence(void)
+{
+    const uint32_t period = s_cycle.pass_us + s_cycle.tail_us + s_cycle.hold_us;
+    uint32_t adv;
+
+    ps2_kprintf("[BENCH] kbd cadence: enabled=%d delay=%u us pass=%u us -> "
+                "*FX 12 25000=%u 40000=%u 80000=%u reps/pass (cap %u)\n",
+                g_kbd_repeat_enabled ? 1 : 0, (unsigned int)g_kbd_repeat_delay_us,
+                (unsigned int)period,
+                (unsigned int)ps2_kbd_due(period, 25000u, &adv),
+                (unsigned int)ps2_kbd_due(period, 40000u, &adv),
+                (unsigned int)ps2_kbd_due(period, 80000u, &adv),
+                (unsigned int)PS2_KBD_REPEAT_MAX);
+}
+#endif /* BTRON_PS2_BENCH */
 
 void ps2_usb_on_key(uint32_t btron_key, int down, uint8_t mod)
 {
@@ -3107,9 +3196,11 @@ static void ps2_bench_region(GDEV *screen, const char *tag,
      * non-zero `bfn` is the background cache not holding, which is the defect the
      * PS2's bands used to pay on every pass. */
     btron_render_stats_take(&st);
-    ps2_kprintf("[BENCH]           compositor: bg=%u(%u px) frame=%u paint=%u blit=%u(%u px) comp=%u bfn=%u wins=%u/%u\n",
+    ps2_kprintf("[BENCH]           compositor: bg=%u(%u px) frame=%u(%u px skip=%u) paint=%u blit=%u(%u px) comp=%u bfn=%u wins=%u/%u\n",
                 (unsigned int)st.bg_us, (unsigned int)st.bg_worst_px,
-                (unsigned int)st.frame_us, (unsigned int)st.paint_us,
+                (unsigned int)st.frame_us, (unsigned int)st.frame_body_px,
+                (unsigned int)st.frame_body_skip_px,
+                (unsigned int)st.paint_us,
                 (unsigned int)st.blit_us, (unsigned int)st.blit_worst_px,
                 (unsigned int)st.comp_us, (unsigned int)st.bg_full_calls,
                 (unsigned int)st.wins_drawn, (unsigned int)st.wins_walked);
@@ -3197,9 +3288,11 @@ static void ps2_bench_move(GDEV *screen, const char *tag, int dx, int dy, uint32
                 (unsigned int)((r_sum + s_sum + u_sum) / passes),
                 (unsigned int)(wall_us ? passes * 1000000u / wall_us : 0u));
     btron_render_stats_take(&st);
-    ps2_kprintf("[BENCH]           compositor: bg=%u(%u px) frame=%u paint=%u blit=%u(%u px) comp=%u bfn=%u wins=%u/%u\n",
+    ps2_kprintf("[BENCH]           compositor: bg=%u(%u px) frame=%u(%u px skip=%u) paint=%u blit=%u(%u px) comp=%u bfn=%u wins=%u/%u\n",
                 (unsigned int)st.bg_us, (unsigned int)st.bg_worst_px,
-                (unsigned int)st.frame_us, (unsigned int)st.paint_us,
+                (unsigned int)st.frame_us, (unsigned int)st.frame_body_px,
+                (unsigned int)st.frame_body_skip_px,
+                (unsigned int)st.paint_us,
                 (unsigned int)st.blit_us, (unsigned int)st.blit_worst_px,
                 (unsigned int)st.comp_us, (unsigned int)st.bg_full_calls,
                 (unsigned int)st.wins_drawn, (unsigned int)st.wins_walked);
@@ -4040,9 +4133,11 @@ static void ps2_bench_app(uint32_t frames)
                     get_top_wnd() ? "up" : "closed");
     }
     btron_render_stats_take(&st);
-    ps2_kprintf("[BENCH]           compositor: bg=%u(%u px) frame=%u paint=%u blit=%u(%u px) comp=%u bfn=%u wins=%u/%u\n",
+    ps2_kprintf("[BENCH]           compositor: bg=%u(%u px) frame=%u(%u px skip=%u) paint=%u blit=%u(%u px) comp=%u bfn=%u wins=%u/%u\n",
                 (unsigned int)st.bg_us, (unsigned int)st.bg_worst_px,
-                (unsigned int)st.frame_us, (unsigned int)st.paint_us,
+                (unsigned int)st.frame_us, (unsigned int)st.frame_body_px,
+                (unsigned int)st.frame_body_skip_px,
+                (unsigned int)st.paint_us,
                 (unsigned int)st.blit_us, (unsigned int)st.blit_worst_px,
                 (unsigned int)st.comp_us, (unsigned int)st.bg_full_calls,
                 (unsigned int)st.wins_drawn, (unsigned int)st.wins_walked);
@@ -4474,6 +4569,10 @@ static void ps2_bench_run(GDEV *screen)
      * see the phase's own note on open_xmb_window()'s static handle. */
     ps2_bench_launch(screen);
 
+    /* Before the sentinel, never after it: the harness stops the emulator on that row,
+     * so a row downstream of it is a row that may never be flushed. */
+    ps2_bench_kbd_cadence();
+
     /* Not twice: the app phase's frame hook prints this row when the app outlives its
      * budget, and a second copy would tell the harness the table ended in two places. */
     if (!s_bench_sentinel)
@@ -4575,6 +4674,7 @@ static void ps2_gui_pass(GDEV *screen)
         ps2_kprintf("[BENCH] xmb: %u frames past the budget, the app took no Escape -- "
                     "ending the run from the frame hook\n",
                     (unsigned int)(s_bench_app_over - 1u));
+        ps2_bench_kbd_cadence();      /* the last stamped period is this app's own */
         ps2_kprintf("\n[BENCH] run complete\n");
     }
 #endif

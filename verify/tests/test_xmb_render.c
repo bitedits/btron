@@ -1915,11 +1915,25 @@ static void test_backend_choice_round_trip(void)
     CHECK(gl_backend_selected() == GL_BACKEND_EEGS,
           "the remembered choice is not shadowed by the default");
 
-    /* The placeholder's contract: the request is answered, by the pipeline that exists, and
-     * the active backend says which one -- so nothing downstream dispatches on the request. */
+    /* The request's contract, arm by arm -- and the two arms genuinely differ, which is why
+     * this row cannot be one constant.  A build that links src/gl/tinygl/ has a pipeline for
+     * the GS to drive, so increment 5c's case installs that pipeline and keeps the requested
+     * *name* (`gl_dispatch.c:77-81`); the name is not decorative, it is what
+     * `egl_surface.c` and `core_ps2.c` dispatch on to decide whether the canvas blit or the
+     * GS owns a rectangle.  A build with no TinyGL has nothing to record, so the request is
+     * answered by the linked software rule and takes its name -- and the fallback is to the
+     * software rule rather than to `gl_backend_default()` on purpose, because on a
+     * `PS2_GL=eegs` build the default *is* this case and the answer would call itself.
+     * What both arms still forbid is the silent one: a request answered by a backend whose
+     * ops table the image does not link. */
     gl_init(GL_BACKEND_EEGS, XW, XH, g_fb);
+#if defined(BTRON_GL_BACKEND_TINYGL)
+    CHECK(gl_active_backend() == GL_BACKEND_EEGS,
+          "a build that links the pipeline answers the GS request under its own name");
+#else
     CHECK(gl_active_backend() == build_default,
           "a request for the GS backend installs the linked software rasterizer");
+#endif
 
     /* Back to where the Default button leaves it, so the rest of this suite renders the
      * same frame it rendered before the row existed. */

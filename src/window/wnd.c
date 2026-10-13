@@ -445,7 +445,25 @@ void wnd_get_invalid_image_bounds(RECT *out) {
     *out = u;
 }
 
-static void draw_retro_window_frame(GDEV *dev, WND *wnd) {
+/* The body fill's area, summed over the walk in progress.  draw_retro_window_frame() owns the
+ * rectangle, so it owns the count -- a second copy of the geometry in the walk would be a number
+ * that can disagree with the pixels.  The walk publishes it as `frame_body_px` because frame= is
+ * a microsecond maximum and cannot say whether the stage was slow or simply enormous, and because
+ * a GS layer window covers exactly this rect: that is the difference between a fill that is a
+ * window's background and a fill that paints nothing the screen will ever show. */
+static uint32_t s_frame_body_px;
+/* The complement: px of a layer window's body this pass chose not to write, counted at the moment
+ * of the decision rather than derived afterwards, so a row cannot report a saving the code did not
+ * take.  Published as `frame_body_skip_px`; body+skip is the area the fill used to move. */
+static uint32_t s_frame_body_skip_px;
+
+static void fill_body_part(GDEV *dev, H l, H t, H r, H b) {
+    if (r <= l || b <= t) return;
+    const RECT part = { l, t, r, b };
+    fill_rec(dev, &part, COLOR_LTGRAY);
+}
+
+static void draw_retro_window_frame(GDEV *dev, WND *wnd, BOOL layer_records) {
     if (!dev || !wnd) return;
     if (!(wnd->attr & (WND_ATTR_TITLE | WND_ATTR_BORDER))) return;
 
@@ -463,7 +481,47 @@ static void draw_retro_window_frame(GDEV *dev, WND *wnd) {
     body.right = wnd->bounds.right;
     body.bottom = wnd->bounds.bottom;
 
-    fill_rec(dev, &body, COLOR_LTGRAY);
+    /* A GS layer window's client rect belongs to the stream, not to the canvas: the pass that
+     * records it (layer_records) is the pass whose environment packet scissors that rect, and the
+     * present uploads the band before sending the stream, so whatever the canvas holds under the
+     * rect is buried in VRAM a few microseconds later and cannot reach the screen.  Skipping the
+     * fill there is the same refusal increment 5c already made for the client blit -- the
+     * unconditional `if (wnd->gl_layer) continue` further down this walk -- charged on the other
+     * side of the ledger, where a measured full-desktop pass spends essentially all of frame= at
+     * the rate `body=` now prices.  The rect the stream owns is the client rect, not the body, so
+     * the fill keeps the ring between them: four strips that tile body-minus-rect with no gap and
+     * no overlap, the border and the grip still canvas-drawn.
+     *
+     * layer_records is the walk's own predicate, passed in instead of recomputed here, because a
+     * skip on a pass that sends no stream would put desktop art where a grey plate belongs. */
+    RECT buried = { 0, 0, 0, 0 };
+    if (layer_records) {
+        const H border = (wnd->attr & WND_ATTR_BORDER) ? 4 : 0;
+        buried.left = body.left + border;
+        buried.top = body.top + border;
+        buried.right = buried.left + wnd->dev->width;
+        buried.bottom = buried.top + wnd->dev->height;
+        if (buried.left < body.left) buried.left = body.left;
+        if (buried.top < body.top) buried.top = body.top;
+        if (buried.right > body.right) buried.right = body.right;
+        if (buried.bottom > body.bottom) buried.bottom = body.bottom;
+    }
+
+    const uint32_t body_px = (uint32_t)(body.right - body.left) *
+                             (uint32_t)(body.bottom - body.top);
+    if (buried.right > buried.left && buried.bottom > buried.top) {
+        const uint32_t buried_px = (uint32_t)(buried.right - buried.left) *
+                                   (uint32_t)(buried.bottom - buried.top);
+        s_frame_body_px += body_px - buried_px;
+        s_frame_body_skip_px += buried_px;
+        fill_body_part(dev, body.left, body.top, body.right, buried.top);
+        fill_body_part(dev, body.left, buried.bottom, body.right, body.bottom);
+        fill_body_part(dev, body.left, buried.top, buried.left, buried.bottom);
+        fill_body_part(dev, buried.right, buried.top, body.right, buried.bottom);
+    } else {
+        s_frame_body_px += body_px;
+        fill_rec(dev, &body, COLOR_LTGRAY);
+    }
     drw_rec(dev, &body);
 
     RECT inner_b;
@@ -573,6 +631,8 @@ void redraw_all_windows_clip(const RECT *damage, BOOL blit_only) {
      * paint callbacks and the client composite separately. */
     uint32_t t_frame = 0, t_paint = 0, t_blit = 0, t_blit_px = 0, t_mark;
     int drawn = 0;
+    s_frame_body_px = 0u;
+    s_frame_body_skip_px = 0u;
 
     set_clip(g_screen_dev, damage);
     for (int i = count - 1; i >= 0; i--) {
@@ -583,8 +643,23 @@ void redraw_all_windows_clip(const RECT *damage, BOOL blit_only) {
             continue;
 
         drawn++;
+        /* Staleness is a property of one window's image, not of the composite: the
+         * walk's caller has already decided that some window in this band has to be
+         * re-rendered, and repainting the valid ones with it cost 55 ms of every XMB
+         * frame on the PS2 ([XMBT] cycle's comp= column, doc/md/PS2.md).  A layer window is
+         * the exception the rule cannot cover: its picture exists only in the stream this
+         * callback records, so it is re-recorded every time a band reaches it.
+         *
+         * `records` is that exception named once, in the pass's own terms: it is both the
+         * decision to run the callback below and the reason the decoration may skip writing
+         * the rect the callback's stream will bury.  Reading it here rather than at the paint
+         * keeps the two from disagreeing about a window this band is about to draw. */
+        const BOOL must_repaint = wnd->gl_layer || !wnd->img_valid;
+        const BOOL records = !blit_only && wnd->paint && must_repaint &&
+                             wnd->dev && wnd->dev->pixels;
+
         t_mark = btron_render_perf_us();
-        draw_retro_window_frame(g_screen_dev, wnd);
+        draw_retro_window_frame(g_screen_dev, wnd, records && wnd->gl_layer);
         t_frame += btron_render_perf_us() - t_mark;
         if (!wnd->dev || !wnd->dev->pixels) continue;
         H title_h = (wnd->attr & WND_ATTR_TITLE) ? WND_TITLE_HEIGHT : 0;
@@ -592,14 +667,7 @@ void redraw_all_windows_clip(const RECT *damage, BOOL blit_only) {
         H dest_x = wnd->bounds.left + border;
         H dest_y = wnd->bounds.top + title_h + border;
 
-        /* Staleness is a property of one window's image, not of the composite: the
-         * walk's caller has already decided that some window in this band has to be
-         * re-rendered, and repainting the valid ones with it cost 55 ms of every XMB
-         * frame on the PS2 ([XMBT] cycle's comp= column, doc/md/PS2.md).  A layer window is
-         * the exception the rule cannot cover: its picture exists only in the stream this
-         * callback records, so it is re-recorded every time a band reaches it. */
-        const BOOL must_repaint = wnd->gl_layer || !wnd->img_valid;
-        if (!blit_only && wnd->paint && must_repaint) {
+        if (records) {
             t_mark = btron_render_perf_us();
             wnd->paint(wnd, wnd->dev);
             t_paint += btron_render_perf_us() - t_mark;
@@ -654,6 +722,8 @@ void redraw_all_windows_clip(const RECT *damage, BOOL blit_only) {
     }
     set_clip(g_screen_dev, NULL);
     btron_render_stat_max(&g_render_stats.frame_us, t_frame);
+    btron_render_stat_max(&g_render_stats.frame_body_px, s_frame_body_px);
+    btron_render_stat_max(&g_render_stats.frame_body_skip_px, s_frame_body_skip_px);
     btron_render_stat_max(&g_render_stats.paint_us, t_paint);
     btron_render_stat_worst(&g_render_stats.blit_us, &g_render_stats.blit_worst_px,
                             t_blit, t_blit_px);

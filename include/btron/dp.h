@@ -95,6 +95,19 @@ typedef struct {
      * pair into a byte rate. */
     uint32_t bg_worst_px;    /* area of the worst background restore  */
     uint32_t blit_worst_px;  /* area of the worst client-area composite */
+    /* The part of the decoration stage that is one whole-body fill.  A window's
+     * frame is drawn by filling its body and then outlining it, so for a window
+     * whose client area is repainted anyway -- or is drawn by a GS layer at all
+     * -- the fill's area is the decoration's cost.  Paired with frame_us this
+     * says whether the milliseconds are the border or the body. */
+    uint32_t frame_body_px;  /* px of window-body fills in the worst walk */
+    /* The complement of the above, and the number the lane is about: px of a GS
+     * layer window's body that the walk deliberately did not write, because the
+     * stream this same pass records paints that rect into VRAM afterwards.  The
+     * pair makes the saving auditable -- body + skip is the body area the fill
+     * used to move, so a row where skip>0 and frame_us did not fall says the
+     * fill was not the cost, which is a falsified model rather than a win. */
+    uint32_t frame_body_skip_px; /* px buried by the stream, not filled */
     uint32_t pres_worst_us;  /* worst backbuffer -> framebuffer copy  */
     uint32_t pres_worst_px;  /* area of that copy                     */
     uint32_t bg_full_calls;  /* background rebuilds that missed the cache */

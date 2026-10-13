@@ -55,6 +55,18 @@ typedef struct {
     uint32_t unsplittable;   /* the recorder refused a split: must read 0 */
     uint32_t tex_switches;   /* mid-stream texture register groups */
     uint32_t tex_missing;    /* a textured primitive with no plane: must read 0 */
+    /* Does the stream plate its own rect?  The canvas upload precedes it, so wherever the stream
+     * does not rasterise the screen shows the canvas, and the compositor is entitled to stop
+     * filling the plate under a layer only while that is a null statement.  `clip_w`/`clip_h` are
+     * the rect the environment packet scissors, in local pixels; `b0` is the rect the frame's first
+     * vertex group provably reaches, in the same units, inclusive at both ends and valid only when
+     * `has_bbox` is set.  `plate_covers` is the comparison done where the rect is known: 1 when the
+     * first group spans the clip on all four edges, so the reading side has one word to trust
+     * rather than four numbers to subtract. */
+    uint32_t clip_w, clip_h;
+    int32_t  b0_l, b0_t, b0_r, b0_b;
+    uint32_t has_bbox;
+    uint32_t plate_covers;
 } eegs_present_stats;
 
 void eegs_present_get_stats(eegs_present_stats *out);

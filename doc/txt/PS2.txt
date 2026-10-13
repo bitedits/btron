@@ -9,7 +9,8 @@ Target 8:  Sony PlayStation 2 -- Emotion EE (MIPS R5900) + Graphics
            Synthesizer
 Target 9:  Bare-Metal MIPS (QEMU Malta 24Kf, Magnum R4000)
 Author:    Cleanroom Working Group (Namdak Tonpa / Maxim Sokhatsky)
-Status:    Normative specification, rev 1 (2026-10-12)
+Status:    Normative specification, rev 1 (cast 2026-10-12, re-measured
+           2026-10-13)
 
 Governing standards, in order of authority over this document:
 
@@ -293,7 +294,11 @@ A claim has four parts; the page has two measures.
                   frame
        cost       composite 56,128 us + app 46,273 us + present 1,031 us, in
                   one period of 149,308 us PROVEN (three console rows of one
-                  image: [BENCH] compositor:, [XMBT] frame, [XMBT] cycle)
+                  image: [BENCH] compositor:, [XMBT] frame, [XMBT] cycle).
+                  Re-read 2026-10-13 on the keyboard build: period=149,304 us,
+                  upload=1,031 us IDENTICAL, app 46,275 us -- so this is a
+                  steady state and not one lucky frame, and the two dates
+                  agree to 4 us on a 149 ms period.)
 
 2.2  Timer0 + INTC  (INTC_TIM0 = 9)
        plane      1 -- Hardware and IRQ
@@ -469,10 +474,22 @@ PART TWO -- THE LINK: LAWS THAT MAKE THE IMAGE LEGAL
        pointer-path statics that section order happened to place low keep
        working -- so the report is a partial desktop, not a crash.
 
-  MEASURE  the current image: ELF 5,967,604 bytes, _end = 0x01F06600, headroom
-           956,928 bytes (0.91 MiB) below the ceiling.  .data is 0x414c00
-           bytes and its last 1 MiB is the embedded /SYS volume (20.1), so the
-           volume's own size is what _end grew by.
+  MEASURE  the image on disk, re-read 2026-10-13 under the dials its [CFG] row
+           names (PS2_GL=eegs PS2_FP=hw): ELF 5,967,796 bytes, _end =
+           0x01F06600, headroom 956,928 bytes (0.91 MiB) below the ceiling.
+           .data is 0x414c00 bytes and its last 1 MiB is the embedded /SYS
+           volume (20.1), so the volume's own size is what _end grew by -- and
+           doc/md/PS2.md, the handbook this book was cast from, IS one of the
+           volume's 33 records, so editing that prose rebuilds the volume and
+           the image around it.  A size therefore belongs with its date, not
+           with a configuration: 5,966,580 bytes at _end = 0x01F06200 was an
+           earlier reading on the same day, and 5,967,604 bytes was
+           2026-10-12's.  The two readings on the 13th differ in _end by
+           EXACTLY 1,024 bytes -- one whole block of the volume's block size
+           -- which is this law demonstrating itself: the handbook was edited,
+           the volume gained a block, and the image grew around it.  This
+           book's own text is NOT a volume payload, and the guest cannot read
+           it: /SYS carries the handbook.
 
   GATE   src/drivers/ps2/ps2.ld enforces the budget with a link-time ASSERT,
          so a source list that grows the image past RAM fails at the link
@@ -629,14 +646,19 @@ PART TWO -- THE LINK: LAWS THAT MAKE THE IMAGE LEGAL
     unordered -1 and so call the same routine with that argument.
 
   The validation is `make test-ps2-softfloat`: it includes the implementation
-  textually and runs it against the host's own FPU over 15,225,197 comparisons
+  textually and runs it against the host's own FPU over 18,384,493 comparisons
+  (re-read 2026-10-13; the count moves with the suite, `failures=0` does not)
   -- random bit patterns mixed with special values, a power-of-two sweep,
   named ties, subnormal cancellation, overflow, and a 3,072-case sweep over
   every exponent field for the truncate -- and asserts the results are
-  BIT-IDENTICAL.  Deliberate mutations (an off-by-one exponent, an unwindowed
-  multiply, a saturation line moved from exponent 158 to 159) were caught with
-  12,356, 460,302 and 694 failures respectively, which is what makes the
-  passing number mean something rather than prove nothing.
+  BIT-IDENTICAL.  Three deliberate mutations, each with the clean run re-gated
+  between them: deleting the exponent increment on the rounding carry-out
+  reports 1,488 failures and names `thirds` and `truncdfsf2`; taking the
+  32-bit windowing off the double multiply's middle word reports 450,068 and
+  names `muldf3`; both re-run 2026-10-13, one control per command.  The third,
+  a saturation line moved from exponent 158 to 159, was measured when the
+  truncate was rewritten and reported 694.  That is what makes the passing
+  number mean something rather than prove nothing.
 
 6.3  The register file inside the law
 
@@ -936,19 +958,20 @@ PART THREE -- THE MEASURED MACHINE
   The boot prints the whole chain, and each row exists to falsify a different
   claim:
 
-    [ASYNC] input plane Timer0 (INTC 9): period=1000 us compare=576 ticks=50
-            of the 50 this 50000 us window owes -> LIVE [ASYNC] hid
-            collection: the input plane reads the OHCI rings and a pass
-            delivers them [ASYNC] machine microsecond = 295 Count ticks,
-            measured over 32 periods of the
+    [ASYNC] input plane Timer0 (INTC 9): period=1000 us compare=576 ticks=50 of
+            the 50 this 50000 us window owes -> LIVE
+    [ASYNC] hid collection: the input plane reads the OHCI rings and a pass
+            delivers them
+    [ASYNC] machine microsecond = 295 Count ticks, measured over 32 periods of the
             plane (9437184 ticks summed, mean 294912)
-    [ASYNC] gaps since the arm: 9881..4118890 ticks = 33..13962 us, against
-    the 1000 us the period means [ASYNC] the same window on the OHCI's frame
-    counter: 50 frames of the 50 a 1 ms frame says this is -- agree [ASYNC]
-    CP0.Status 0x70030c11 at the arm, 0x70030c11 after it: EIE(bit16)=1 -> 1
-    [ASYNC] timer0 MODE=0x000001c2 (clk256+zret+cue+cmpe+ack) count 102 -> 102
-    over a 2 ms hold, compare=576, ticks=238 total [ASYNC] isr wcet=498 ticks
-    = 1.68 us of the 50 us budget, overruns=0
+    [ASYNC] gaps since the arm: 9881..4118890 ticks = 33..13962 us, against the
+            1000 us the period means
+    [ASYNC] the same window on the OHCI's frame counter: 50 frames of the 50 a 1 ms
+            frame says this is -- agree
+    [ASYNC] CP0.Status 0x70030c11 at the arm, 0x70030c11 after it: EIE(bit16)=1 -> 1
+    [ASYNC] timer0 MODE=0x000001c2 (clk256+zret+cue+cmpe+ack) count 102 -> 102 over
+            a 2 ms hold, compare=576, ticks=238 total
+    [ASYNC] isr wcet=498 ticks = 1.68 us of the 50 us budget, overruns=0
     [CPU]   CP0 Count running (295 ticks/us, measured against the input plane)
 
   LIVE is `got + 1 >= owed`, not "at least one tick": a plane that delivered 3
@@ -1030,17 +1053,23 @@ PART THREE -- THE MEASURED MACHINE
 
     The row formats, verbatim, so a log can be parsed by eye:
 
-      [XMBT] frame <n> (<backend>) draw=<us> swap=<us> [XMBT] cycle <n>
-      period=<us> pass=<us> tail=<us> hold=<spent/asked ms> |
+      [XMBT] frame <n> (<backend>) draw=<us> swap=<us>
+      [XMBT] cycle <n> period=<us> pass=<us> tail=<us> hold=<spent/asked ms> |
                poll= hook= evt= net= paint= note= |
                render= swap= upload= px= nb= full= why=<hex> dmg=<x0,y0,x1,y1/bands> |
                comp bg= frame= paint= blit= panel= bars= total= bfn= wins=<drawn/walked>
+               body=<px> skip=<px>  -- 9a: the px drawn and the px refused
+                 under a layer window (11.5, and Appendix A's decode row)
       [XMBT] raster <stage> <n> tris <n> verts <n> px <n> spans <n> px/span <n>
                us fill <n> us geom <n> px/ms
       [XMBT] census <stage> fmul= fdiv= fcmp= fs2i= fi2s= S= dmul= dgen= D=
       [XMBT] wave n=<i> dt=<ms> t1024=<clk> mid1024=<y> dm=<px/1024> dsum=<px/1024>
       [GSTS] groups=<n> qw=<n> verts=<n> prims=<n> gs=<us> | drop=<n> unsplit=<n>
-               texsw=<n> texmiss=<n> | cover=<n> coverdrop=<n>
+               texsw=<n> texmiss=<n> | cover=<n> coverdrop=<n> | clip=<W>x<H>
+               b0=<x0,y0,x1,y1> plate=covered|SHORT|none
+      [GSPLATE] the stream does not plate its rect: clip=<W>x<H> b0=<x0,y0,x1,y1>
+               -- one-shot, armed when a layer's plate was refused over a
+               rect the first vertex group does not span
 
 9.2  Who owns which cycle column
 
@@ -1262,9 +1291,11 @@ PART THREE -- THE MEASURED MACHINE
   hold has been spent -- because the hold is part of the period the body sees,
   and nothing else times it.
 
-  MEASURE  the current shipped configuration, PS2_GL=eegs, counted build so
-           the float bill is visible in the same run (2026-10-12, cycle 1 of
-           the app phase):
+  MEASURE  the shipped configuration, PS2_GL=eegs, counted build so the float
+           bill is visible in the same run (2026-10-12, cycle 1 of the app
+           phase).  This is the build row 9a landed INTO, so frame= below is
+           the PRE-REFUSAL price; 11.5 quotes the refusing build's own three
+           cycles, and R3 forbids averaging the two.
 
     period=141338 pass=125329 tail=8 hold=16001/16 |
       poll=1 hook=7 evt=0 net=1 paint=125318 note=0 |
@@ -1388,6 +1419,74 @@ PART THREE -- THE MEASURED MACHINE
   every 340 ms.  The menu now snaps instead of crawling, and the only way to
   get frames back for it is the pixel work above and the GS below.
 
+11.5  A plate the stream buries is not a cost the EE pays
+
+  LAW 11c (a refusal must be proven by set equality, never by a saving).
+  frame= paints every window's flat body plate, and on a GS layer window the
+  present uploads the band FIRST and sends the recorded stream after it -- so
+  the stream's pixels land on top of that plate and the plate buys nothing.
+  Refusing it is sound only while the refused set equals the rect the stream
+  covers: a set equality, checked from both sides, and not a number that
+  merely got smaller.
+
+  MEASURE  the landing run, three cycles paired by cycle index; un-counted
+           bench build, PS2_GL=eegs, read 2026-10-13:
+
+    [XMBT] cycle 0 ... comp bg=9937 frame=13833 paint=49429 blit=30796
+             panel=1834 bars=576 total=106404 bfn=0 wins=4/4
+             body=725568px skip=384000px
+    [GSTS] groups=51 qw=29937 verts=7455 prims=2485 gs=1145 us |
+             drop=0 unsplit=0 texsw=22 texmiss=0 | cover=4 coverdrop=0 |
+             clip=768x500 b0=0,0,767,499 plate=covered
+
+  frame= fell 6,547 / 6,508 / 6,529 us, from 20,314-20,380 to 13,785-13,833,
+  and total= went 112,711 / 110,146 / 109,627 -> 106,404 / 103,713 / 103,251.
+  body= 1,109,568 px became 725,568 against skip=384,000 refused, and the
+  arithmetic closes without a loose term: 725,568 is exactly the three desktop
+  bodies' 715,360 plus the XMB ring's 10,208 (394,208 - 384,000).  No other
+  column moved -- the largest move among them is 0.5%, in paint= -- which is
+  what proves frame= to be the whole-body flat fill and nothing else.  The
+  control row of the same build walks three desktop windows and reads wins=3/3
+  with skip=0: the refusal is a property of the data, not of the build,
+  because only egl_create_window_surface() sets gl_layer and that is compiled
+  in only under -DBTRON_GL_PREFER_EEGS.  That is also why the Pi 400 cannot be
+  reached by it.
+
+  One figure refuses to smooth, and it is recorded rather than fixed.  This
+  build has two points -- 715,360 px at 13,069 us and 1,109,568 px at 20,380
+  us -- so its marginal rate is 18.55 ns/px, and the refused px came back at
+  16.95-17.05 ns: 8% UNDER the fit.  That is the honest direction for a
+  refusal, because fill_body_part() is still called once per strip, so the
+  border, inset and clamp arithmetic survives and only the inner write is
+  skipped.  A poster would take those calls too, which is why the row is a
+  refusal's floor and not its ceiling.
+
+  GATE   the equality itself, on the host: verify/tests/test_desktop_clip.c
+         paints four canvases -- the desktop, the recorded stream, the plate,
+         and the painted result -- and requires the plate's hole, the window's
+         client rect and the stream's clip to be ONE rectangle,
+         204,152,496,316 = 47,888 px, asserted from both directions.  It
+         requires the counters to match the geometry rather than to be
+         believed: recorded 47,888 skipped against 40,192 drawn, and 0 skipped
+         / 88,080 drawn on the plain window and the recorded non-layer window.
+         A 32x32 box inside a layer reports the whole rect while writing only
+         its own pixels, and a resize grip drawn inside the hole is STILL
+         drawn -- the skip is the plate, not every fill in the rect.  42/42
+         checks with 1 SKIP (the stubbed panel bar), read 2026-10-13.
+
+  In the image the same premise stays live and is printed: [GSTS]
+  plate=covered, with b0= reaching all four edges of clip=; [GSPLATE] silent;
+  drop=0 and coverdrop=0; vram_left=1081344 unchanged, because a refusal
+  claims no plane; and body= + skip= equal to the unrefused total.
+
+  INFERRED, and labelled so: plate=covered is NECESSARY, NOT SUFFICIENT.  b0=
+  is the span of the FIRST vertex group only, rounded inward -- a vertex at
+  767.4 reaches 767, never 768 -- so it proves the first group buries every
+  edge, not that a later group leaves no interior fragment uncovered.  That is
+  why the refusal stops at the client rect and no wider, and why the union of
+  all groups was rejected as an instrument: a union can be covered by two
+  groups that each cover half.
+
 =====================================================================
 PART FOUR -- THE INTERCONNECT: INPUT AS A REAL PLANE
 =====================================================================
@@ -1458,8 +1557,14 @@ PART FOUR -- THE INTERCONNECT: INPUT AS A REAL PLANE
 
     [PSTAT] plane: reports=0 on the input plane, 0 in a pass, dropped=0
                 queue max=0 of 256, collected on 2223 periods
-    [PSTAT] plane: held max=0 us mean=0 us over 0 delivered -- isr 1.68 us of
-                the 50 us budget, overruns=0
+    [PSTAT] plane: held max=0 us mean=0 us over 0 delivered -- isr 1.68 us of the
+                50 us budget, overruns=0
+
+  One fact about the handover is easy to lose, because it is not a timing
+  problem: the keyboard half of it is EDGE-ONLY.  A held key crosses this
+  boundary as a press and, much later, a release -- nothing in between -- so
+  the repeat a person expects is not missing from the bus, it was never on it.
+  Who produces it, and on whose numbers, is chapter 19's LAW 19f.
 
 13. Which layer owns the pointer
 --------------------------------
@@ -1581,8 +1686,8 @@ PART FOUR -- THE INTERCONNECT: INPUT AS A REAL PLANE
   Detection runs once at boot after the host engine has enumerated, and again
   after `usb probe`; the boot log says which one it picked, in both units:
 
-    [PS2] Pointer source emu (detected): 96/256 px per count = 0.37 px per
-        host cursor px, no curve, cap off
+    [PS2] Pointer source emu (detected): 96/256 px per count = 0.37 px per host
+        cursor px, no curve, cap off
 
   `ptrsrc hw` / `ptrsrc emu` override that for a session, which is the only
   way to run the emulator's stub against a hardware-shaped count stream or the
@@ -2169,45 +2274,91 @@ PART FIVE -- THE PRESENTATION PLANE: THE EE/GS BACKEND
   sentence.
 
   LANE 9  GS compositor token posting -- the presentation plane's producer.
-    Close  VIOLATION 1's biggest single share: the 613,440 px blit and the
-           480,000 px background restore, both of which are rectangle copies
-           the GS does natively -- SPRITE for a fill, Local-to-Local BITBLT
-           for a copy.  Nothing in this port blits inside VRAM today.
-    Gate bg=, frame= and blit= falling in [XMBT] while px= HOLDS (fewer
-           milliseconds for the same pixels), groups= growing in [GSTS] with
-           drop=0 and coverdrop=0, and a canvas census proving the canvas
-           still paints.
+    Close   VIOLATION 1's biggest single share: the 613,440 px blit and the
+            480,000 px background restore, both of which are rectangle copies
+            the GS does natively -- SPRITE for a fill, Local-to-Local BITBLT
+            for a copy.  Nothing in this port blits inside VRAM today.
+    Budget  The lane has a floor under it, and the floor is a row, read
+            2026-10-13:
+
+            [BENCH] gs planes: registered=2 pending=0 vram_left=1081344
+
+            Above the canvas -- GS_VRAM_CANVAS_BYTES 1,996,800 B, rounded up
+            to 1,998,848 -- the two planes the XMB already own take
+            1,114,112 B: 512x512 for the 384x384 atlas, which the GS
+            addresses only at powers of two, and 128x128 for the 128x96 font.
+            What is left is 208 sixteen-KB planes, one of which the Z page
+            wants back.  A second full canvas does not fit, and neither does
+            the XMB's own 768x500 client at 1,536,000 B.  So the lane is
+            two, and the row that landed left the floor exactly where it was
+            read, because it claimed no plane.
+
+            9a LANDED on 2026-10-13 as section 11.5, and it is NOT the row
+            this budget planned.  What shipped is a REFUSAL, not a poster: over
+            exactly one layer window's client rect the EE's flat body plate
+            is not drawn, because the recorded stream is sent on top of it at
+            present.  It cost no plane and no primitive, and it took
+            6,547 / 6,508 / 6,529 us off the three cycles' frame= --
+            112,711 / 110,146 / 109,627 us of total= becoming 106,404 /
+            103,713 / 103,251.
+
+            The measurement also settles the rest of the decomposition, and its
+            answers cut the other way: frame= IS the whole-body flat fill, and
+            it is the only column that moved.  bg= (480,000 px) can
+            NEVER be refused -- no stream is ever recorded over the
+            background, so nothing lands on top of it, and a poster is the
+            only price-cut available there.  panel= and bars= carry text and
+            the cursor drawn into the same canvas, so a flat fill is only a
+            part of those stages.  blit= (613,440 px) is 9b, and 9b is taken
+            only once a page shape is CHOSEN AND PRICED, because the wrong
+            guess there is a gs_tex_register() that returns nothing and a
+            window drawing with somebody else's texture.  So the lane's open
+            half is precisely the fills that have no stream above them --
+            which is what this Close cell has said all along.
+    Gate    A refusal's gate is its premise, not its saving: the refused set
+            must EQUAL the rect the stream covers, checked from both sides.
+            On the host that is 11.5's four-canvas assertion -- the plate's
+            hole, the window's client rect and the stream's clip as one
+            rectangle, a 32x32 box reporting the whole rect while writing
+            only its own px, and a grip drawn inside the hole still drawn.
+            In the image it is [GSTS] plate=covered with b0= reaching all
+            four edges of clip=, [GSPLATE] silent, drop=0 and coverdrop=0,
+            body= + skip= = the unrefused total, vram_left=1081344 HELD, and
+            frame= falling in [XMBT] while every other column stays inside
+            its own cycle-to-cycle spread.  A poster's gate stays the old
+            one: fewer milliseconds for the same px, with groups= growing in
+            [GSTS] and a canvas census proving the canvas still paints.
 
   LANE 10  a GIF writer ring -- the sender stops blocking.
-    Close  VIOLATION 2, ps2_gs_gif_send()'s `while (D2_CHCR & (1 << 8)) ;`.
-           The law is not "be faster", it is S_FULL: a producer must not be
-           stopped by its consumer, so the ring needs a bounded capacity, a
-           drop count, and a completion check at the NEXT yield rather than a
-           spin at this one.  drop= and coverdrop= already prove this port
-           knows the shape of a §3.2 receipt; what has no instrument is the
-           sender's own blocked time.
+    Close   VIOLATION 2, ps2_gs_gif_send()'s `while (D2_CHCR & (1 << 8)) ;`.
+            The law is not "be faster", it is S_FULL: a producer must not be
+            stopped by its consumer, so the ring needs a bounded capacity, a
+            drop count, and a completion check at the NEXT yield rather than
+            a spin at this one.  drop= and coverdrop= already prove this
+            port knows the shape of a §3.2 receipt; what has no instrument
+            is the sender's own blocked time.
 
   LANE 11  a real Tier-1 tick -- a period that is also a deadline.
-    Close  VIOLATION 3.  Per-task stacks and preemption at the boundary, so a
-           Tier-1 task's budget is enforceable rather than aspirational, and
-           ASYNC_UI_BUDGET_US stops being a number nothing can miss.  Until
-           then the honest description is ONE PREEMPTION POINT PER FRAME,
-           CHOSEN BY THE BODY (1.4).
+    Close   VIOLATION 3.  Per-task stacks and preemption at the boundary,
+            so a Tier-1 task's budget is enforceable rather than aspirational,
+            and ASYNC_UI_BUDGET_US stops being a number nothing can miss.
+            Until then the honest description is ONE PREEMPTION POINT PER
+            FRAME, CHOSEN BY THE BODY (1.4).
 
   LANE 12  VU1 / VIF1 as a geometry actor.
-    Close  the per-vertex arithmetic that row 7 moved onto COP1 but still pays
-           the EE for: 7,434 vertices a frame, each needing a transform and a
-           viewport map, is the VU1's designed workload.  Fact 3 is why it is
-           a lane and not an increment -- at a few thousand vertices the
-           EE-side conversion is enough, so this lane buys headroom, not the
-           frame.
+    Close   the per-vertex arithmetic that row 7 moved onto COP1 but still
+            pays the EE for: 7,434 vertices a frame, each needing a transform
+            and a viewport map, is the VU1's designed workload.  Fact 3 is why
+            it is a lane and not an increment -- at a few thousand
+            vertices the EE-side conversion is enough, so this lane buys
+            headroom, not the frame.
 
   LANE 13  IOP / SIF as the I/O actor.
-    Close  plane 1 and plane 2 living entirely on the EE: the SPU2 has no
-           driver here, and CDVD and the memory card are polled by the same
-           core that composites.  The IOP is a second programmable component
-           with its own bus, which makes it exactly the sort of thing LAW 1
-           says must have an agent or be counted as EE work.
+    Close   plane 1 and plane 2 living entirely on the EE: the SPU2 has no
+            driver here, and CDVD and the memory card are polled by the
+            same core that composites.  The IOP is a second programmable
+            component with its own bus, which makes it exactly the sort of
+            thing LAW 1 says must have an agent or be counted as EE work.
 =====================================================================
 PART SIX -- THE PORT: DRIVERS, DESKTOP, STORAGE
 =====================================================================
@@ -2328,8 +2479,8 @@ PART SIX -- THE PORT: DRIVERS, DESKTOP, STORAGE
            (ps2_bench_launcher_key_route(), ps2_bench_launch_xmb_by_key()):
 
     [BENCH] key: hover 0->6 in 5 DOWN hops, want row 6, selected=' (XMB)'
-    [BENCH] key: launcher=1 deskbar_open=1 dropdown=-1 [BENCH] key: Cross on
-    row 5 '(Terminal)' launched 1->2 menu=0 pointer 400,450->400,450
+    [BENCH] key: launcher=1 deskbar_open=1 dropdown=-1
+    [BENCH] key: Cross on row 5 '(Terminal)' launched 1->2 menu=0 pointer 400,450->400,450
 
   dropdown=-1 is rule 3's condition; pointer 400,450->400,450 is rule 2; the
   five hops to row 6 are rule 1.  Host coverage of the same three rules is
@@ -2343,9 +2494,12 @@ PART SIX -- THE PORT: DRIVERS, DESKTOP, STORAGE
   8-byte boot form with differential tracking across the 6-key rollover,
   modifiers and usage IDs mapped to BTRON keycodes, Caps Lock state, F1-F12,
   the navigation cluster, the keypad, and the authentic Japanese keys (Henkan,
-  Muhenkan, Hiragana/Katakana toggle).  Mouse reports are the 3- or 4-byte
-  relative form, injected as EV_MOUSE_MOVE and EV_BUT_DOWN/EV_BUT_UP.  What a
-  count on this wire is WORTH is chapter 13's question, not this one.
+  Muhenkan, Hiragana/Katakana toggle).  That differential is EDGE-ONLY by
+  design, so a held key is two events and never a stream: the repeats a typist
+  expects are not missing from the wire, they were never on it, and LAW 19f
+  says who makes them and on whose numbers.  Mouse reports are the 3- or
+  4-byte relative form, injected as EV_MOUSE_MOVE and EV_BUT_DOWN/EV_BUT_UP.
+  What a count on this wire is WORTH is chapter 13's question, not this one.
 
   No keyboard?  L2/R2 (or `osk` in the shell) opens a 10x4 on-screen keyboard
   inside B-Editor -- row 0 digits, row 1 QWERTYUIOP, row 2 ASDFGHJKL plus RET,
@@ -2598,6 +2752,109 @@ PART SIX -- THE PORT: DRIVERS, DESKTOP, STORAGE
   right symbol: chapter 20's table has a row that fails for exactly this
   reason.
 
+  LAW 19f (the port obeys the Input applet, not a constant of its own).  The
+  PS2 keyboard has NO repeat constants.  It reads the three values
+  src/settings/input.c:16-18 defines for every target -- g_kbd_repeat_enabled,
+  g_kbd_repeat_delay_us, g_kbd_repeat_interval_us -- shipped as *FX 11 = 16 cs
+  (160,000 us before the first repeat) and *FX 12 = 40 cps (25,000 us between
+  repeats), repeat ON; and it reads them LIVE, so the XMB's Input page changes
+  what a held key does with no rebuild.  core_arm64.c:2703-2705 has always
+  obeyed the same three on the Pi 400.  What the PS2 lacked was the READER,
+  not the setting, and the fix creates no fourth copy of the numbers -- LAW 19
+  applied to an input detail small enough to be forgotten.
+
+  WHY  posix pays nothing for its repeat.  The host makes it, and SDL forwards
+       every host repeat as another SDL_KEYDOWN (src/window/event.c:246),
+       which get_evt() re-emits as another EV_KEY_DOWN.  The PS2 has no host
+       under it, and its HID decoder is a six-slot differential
+       (ps2_usb_process_keyboard_report(), src/drivers/ps2/ps2_usb.c:1444)
+       that fires on edges only: a key held for a second is exactly two
+       events, one press and one release.  The emulator's own repeat is
+       unreachable, because PCSX2 hands over a DEVICE and not the host's
+       keyboard settings.  So the typematic stream is produced inside the
+       port, by the pass, under chapter 12's handover -- and asking the human
+       to tap is not a fix.
+
+  MECHANICS  ps2_kbd_arm(), ps2_kbd_disarm() and ps2_kbd_repeat_tick() in
+             src/cores/core_ps2.c.  Three rules are load-bearing, and each is
+             a bug avoided rather than a style:
+  - ARMED ONLY WHEN ROUTED.  ps2_usb_on_key() swallows some chords for the
+    compositor; a swallowed chord must not arm, or every interval would move
+    the cursor or change the gain.
+  - ONE KEY REPEATS: THE NEWEST STILL DOWN.  A later press re-arms the delay
+    and the armed key's own release disarms, while releasing any OTHER key
+    leaves it running.  That is what a host keyboard does, and the multi-key
+    case is not what auto-repeat exists for.
+  - THE TICK RUNS AFTER THE POLL AND BEFORE THE DISPATCH, in ps2_gui_pass()
+    and in the Stage-1 loop.  The pass that could have seen the press is the
+    pass that owes the repeat, and a release heard by this poll disarms before
+    it can fire once more.  Stage 1 arms only btron_key < 0x100, because its
+    prompt consumes characters and the codes above it have no binding there.
+    On the GUI side a repeat is a PRESS WITH NO MATCHING RELEASE: the key
+    really is still down, and a typematic stream from hardware is a run of
+    downs ending in one up.
+
+  LAW 19g (a tick pays every interval that elapsed).  A tick can run once per
+  pass, and a pass is not 25 ms: this machine's measured XMB periods are
+  141,519, 138,936 and 149,304 us (chapter 11).  One repeat per pass would
+  therefore make the SETTING the frame rate -- the applet's 40 cps row and its
+  12.5 cps row would feel identical, which is the opposite of having the
+  setting.  So ps2_kbd_due() divides the elapsed gap by the interval, advances
+  the schedule by the intervals it PAID and never by the clock, which is what
+  keeps the MEAN rate the setting's rate, and caps the burst at
+  PS2_KBD_REPEAT_MAX = 8 so that a long stall cannot flood the 256-slot event
+  queue.  A gap longer than the cap can pay is DROPPED rather than banked: the
+  schedule resynchronises instead of repeating at the cap forever.  And with
+  no timebase the folded clock of chapter 8 reads a constant zero, every
+  difference reads zero, due is zero, and repeat stays off -- a port with no
+  clock does not invent a cadence.
+
+  MEASURE  two rows, one build, 2026-10-13, from the run whose own [CFG] row
+           names PS2_FP=hw:cop1 PS2_GL=eegs:
+
+    [KBD] auto-repeat: enabled=1  delay=160000 us  interval=25000 us
+          (Input applet's *FX 11/12; a held HID key repeats from here)
+    [BENCH] kbd cadence: enabled=1 delay=160000 us pass=149304 us
+            -> *FX 12 25000=5 40000=3 80000=1 reps/pass (cap 8)
+
+  The first is the shipped default reaching the guest exactly as the applet
+  wrote it.  The second is the loopback, in the ptrcal tradition of 13.1: it
+  prices the law against the last stamped cycle -- the same period the [XMBT]
+  cycle row above it prints -- with no hand on a key, and it is the row that
+  says the three rates the menu offers are three DIFFERENT behaviours on this
+  machine rather than one behaviour with three labels.  The labels of the
+  claims, in the decode of appendix A:
+
+    the image reads the applet's three globals, at their shipped
+    defaults           PROVEN -- the [KBD] boot row
+    the three *FX 12 rates are distinguishable at this machine's pass
+                       period  PROVEN -- 5 / 3 / 1 repeats per 149,304 us, one
+                               log
+    an unpaid backlog is dropped, not banked, and the mean rate is the
+                       schedule's  PROVEN BY CONSTRUCTION -- ps2_kbd_due()
+                       advances by due x interval, or by the whole gap at the cap
+    the FEEL: whether 160 ms is the right delay, whether Backspace deletes
+                       at a readable speed  REQUIRES A HAND -- `make run-ps2`
+    the burst size on a real console
+                       INFERRED -- the divisor is measured at boot (295 ticks/us
+                       here, ~147 there), so the period, and so the cap's use,
+                       differ
+
+  GATE   `make test-ps2 PS2_GL=eegs PS2_FP=hw` is 91/91 with the change in,
+         and the frame bill did not move: draw= 49,277 / 46,826 / 46,263 us
+         against 49,128 / 46,897 / 46,225 us from the same configuration one
+         build earlier, with comp bg=9897 frame=20308 paint=46275 blit=30729,
+         px=480000, and [GSTS] groups=51 at drop=0 coverdrop=0 holding.  The
+         cost of an UNARMED key is two comparisons, which is why the bill is
+         unchanged.  `make arm64-elf` exits 0 and rebuilds nothing, because
+         the change lives in src/cores/core_ps2.c alone and no arm64 source
+         list contains that file -- chapter 19's non-regression gate is
+         satisfied by the link list, not by hope.  What this gate cannot do is
+         print anything about a repeat that actually happened: the per-burst
+         row [KBD] rep k=... due=...  exists only under HIDTRACE=1, so a
+         default image is silent about a working repeat, and reading rule R1
+         says silence is not absence.
+
 20. The /SYS volume inside the executable
 -----------------------------------------
 
@@ -2822,7 +3079,16 @@ PART SEVEN -- BUILDING, VERIFYING, RUNNING
 
     PS2_GL      .build/ps2-gl.stamp, compared by content; the three objects
                 that read the backend are deleted when it disagrees (chapter
-                14).
+                14).  That parse-time shell runs on EVERY make, including one
+                that names no PS2 target: measured 2026-10-13, 36 s after the
+                eegs image passed 91/91 the stamp read tinygl again and those
+                three objects were gone -- a host-side round (`make -k test`
+                or `make arm64-elf`, either is enough) had reset the dial
+                while the ELF on disk went on describing eegs, so the next
+                plain `make ps2` would have relinked the other pipeline under
+                a book quoting these rows.  The third time a stamp in this
+                port has had to explain itself, and the reason the gate below
+                is handed its dial rather than run bare.
     PS2_FP      .build/ps2-fp.stamp, and PS2_FP_OBJS =
                 src/drivers/ps2/ps2_builtins.ps2.o
                 src/gl/tinygl/vertex_stage.ps2.o src/apps/xmb_wave.ps2.o --
@@ -2846,6 +3112,16 @@ PART SEVEN -- BUILDING, VERIFYING, RUNNING
     PS2_FP_COUNT compiled in with -DBTRON_PS2_FP_COUNT=1 and costing about
                 12.4 ms a frame, which is reading R3: no timing in this book
                 comes from a counted image and no count from an uncounted one.
+    HIDTRACE    -DBTRON_HID_TRACE=$(HIDTRACE), default 0: the per-keypress,
+                per-report and per-control-transfer rows, including the `[KBD]
+                rep k=.. due=..` line LAW 19f needs to see a repeat fire.  It
+                carries NO stamp, and it is in PS2_CFLAGS for every unit, so
+                toggling it is precisely the flag-you-did-not-change case
+                above: make judges the objects current and the old setting
+                ships.  Treat it as diagnostic-only -- `rm -f
+                src/cores/core_ps2.ps2.o` when it moves -- and read its
+                ABSENCE as R1 says: the dial was off, not the event did not
+                happen.
     SMOOTH_*    scripts/ps2_smooth.sh deletes *.ps2.o and *.pbench.o when a
                 dial changes, and takes SMOOTH_APP / SMOOTH_FRAMES /
                 SMOOTH_IDLE / SMOOTH_FP_COUNT.  scripts/ps2_bench.sh runs
@@ -2882,8 +3158,10 @@ PART SEVEN -- BUILDING, VERIFYING, RUNNING
   decoration.
 
   The current state of the suites that guard this port, each re-run for this
-  book on 2026-10-12 against the image on disk (btron-ps2.elf, 5,967,604
-  bytes, PS2_GL=tinygl PS2_FP=hw):
+  book on 2026-10-13: the image gate against the ELF on disk (btron-ps2.elf,
+  5,967,796 bytes, PS2_GL=eegs PS2_FP=hw), the host suites in one `make -k
+  test`, and the two xmb-render arms by hand because the aggregate does not
+  run them (fact 1 below):
 
     make test-ps2                91 / 91   the image gate: ABI, FPU law by
                                             mnemonic AND byte scan, COP1
@@ -2914,21 +3192,42 @@ PART SEVEN -- BUILDING, VERIFYING, RUNNING
     make test-tracker            78 / 78
     make test-global-menu        55 / 55   including the fall-through assertion
     make test-xmb-render         75 / 75
-    make test-xmb-render-tgl     74 / 75   ONE ROW RED, named below
+    make test-xmb-render-tgl     75 / 75   the same xmb.c through the other
+                                            pipeline; one row of this pair was
+                                            red until today, and why is below
     make -k test                 exit 0, "ALL B-SYSTEM TEST SUITES PASSED"
-    make arm64-elf               builds (the standing non-regression gate)
+    make arm64-elf               exits 0; rebuilds nothing, because no arm64
+                                            source list holds a PS2-only file
+                                            (the standing non-regression gate)
 
-  THE RED ROW, AND WHY IT IS WORTH MORE THAN A GREEN ONE.  The failing
-  assertion is `a request for the GS backend installs the linked software
-  rasterizer` (verify/tests/test_xmb_render.c:1922).  It was written at
-  increment 1, when the EEGS case in gl_init() was a placeholder that resolved
-  to the build's default.  LAW 15a then made activation install the LINKED
-  pipeline and NAME ITSELF, so in the build that links TinyGL the honest
-  answer is GL_BACKEND_EEGS, and the row now contradicts the law it was
-  written to hold.  It is not a defect in the image; it is a stale expectation
-  in a gate.  Two facts about it are the ones a reader should take away:
+  THE ROW THAT WAS RED, AND WHAT MAKING IT GREEN TOOK.  The assertion `a
+  request for the GS backend installs the linked software rasterizer`
+  (verify/tests/test_xmb_render.c, in test_backend_choice_round_trip) was
+  written at increment 1, when the EEGS case in gl_init() was a placeholder
+  that resolved to the build's default.  LAW 15a then made activation install
+  the LINKED pipeline and NAME ITSELF, and increment 5c made that case
+  reachable, so in the build that links TinyGL the honest answer is
+  GL_BACKEND_EEGS -- the row contradicted the very law it had been written to
+  hold.  It was never a defect in an image; it was a stale expectation in a
+  gate, and it is now closed (2026-10-13): the contract is stated as a rule
+  over the define, in the idiom the function already used for its other three
+  checks.  A build that links src/gl/tinygl/ asserts gl_active_backend() ==
+  GL_BACKEND_EEGS; a build that does not asserts its own software default,
+  because the request there is answered by the linked software rule and takes
+  its name -- and the fallback is to that rule rather than to
+  gl_backend_default() on purpose, since on a PS2_GL=eegs build the default IS
+  this case and the answer would call itself.  Both arms then read 75 / 75,
+  and the split has teeth: writing s_active_backend = GL_BACKEND_TINYGL in the
+  EEGS case makes the TinyGL arm report exactly one failure, `[FAIL] a build
+  that links the pipeline answers the GS request under its own name`, and
+  leaves the virgl arm at 75 / 75 because that arm takes the other branch.
+  Two arms of one row disagreeing about one sentence is the instrument
+  working, not a quirk -- it is what proves the expectation is a rule over the
+  build rather than a constant copied from a log.
 
-  1  It has been invisible because the aggregate is blind to it -- neither
+  Two facts about it a reader should keep:
+
+  1  It stayed invisible because the aggregate is blind to it -- neither
      test-xmb-render nor test-xmb-render-tgl appears in the `test:`
      prerequisite list (Makefile:2419), so `make -k test` prints "ALL B-SYSTEM
      TEST SUITES PASSED (100% SUCCESS)" over a red row.  That is the same
@@ -2936,13 +3235,10 @@ PART SEVEN -- BUILDING, VERIFYING, RUNNING
      test-ps2-gs-rec was added to .PHONY and to `test:` BEFORE its rule
      existed, where make printed "Nothing to be done" and still exited 0 -- a
      suite that passes by not running.
-  2  The fix is a rule over the define, in the idiom that function already
-     uses: the build that links a pipeline must assert gl_active_backend() ==
-     GL_BACKEND_EEGS and gl_tinygl_pipeline(), the build that does not must
-     assert the default.  Stated here rather than silently patched, because
-     changing what a gate expects is changing the law, and that is the user's
-     call, not an
-     editorial convenience.
+  2  Changing what a gate expects IS changing the law.  That is why it is
+     stated here, arm by arm, rather than quietly patched: a green suite whose
+     expectation was edited is worth nothing unless the edit is named and
+     shown red on demand.
 
   The harness traps, each earned by a wasted control run:
 
@@ -2993,6 +3289,30 @@ PART SEVEN -- BUILDING, VERIFYING, RUNNING
     this file's own sentence about the bug -- 2 hits, both prose.  Locating
     .rodata by section Addr/Off and scanning only that window is what makes
     the row read code rather than documentation.
+  - THE FOLDER IS A HARNESS TOO, AND IT READS A UNIT AS A PRONOUN.  This
+    book's prose is folded to 78 columns by .build/rewrap_book2.py, which
+    tells a sentence from a figure by counting English function words -- and
+    `us` is one of them, so `draw=49277 us` sitting at a display indent is
+    English to the tool.  Three separate [ASYNC] rows once came out of it as
+    one sentence.  The damage is invisible in a read-through because every
+    word survives, only re-spaced: what is lost is grepability, which is the
+    whole reason a console row is quoted.  A bracketed row name deeper than
+    the body, set off by a blank line or hanging under a deeper continuation,
+    is now a record and passes through byte for byte.  The one gate that
+    cannot lie about a fold is the tool's own token multiset: the words in and
+    the words out must be IDENTICAL, which is what this book's 2026-10-13
+    source reports.  A fold that drops or duplicates a word fails that check
+    before a reader has to find the difference by eye.
+  - THE SAME FOLDER CAN EAT A LABEL'S GUTTER, AND THE TOKEN CHECK IS BLIND TO
+    THAT TOO.  A record's text gets re-filled on its own because its label row
+    is a column, and the rule is that the label and its gutter never move --
+    but the gutter was being rebuilt from the DIFFERENCE between the cell's
+    column and its continuations', so a label one column narrower than its own
+    block came back with one space where the book's idiom says two, and `Gate
+    bg=` shipped with its text a column LEFT of the block it opens.  Not one
+    word moved.  The text column is now whichever sits further out -- the
+    continuations' column or the label plus two spaces -- which is what aligns
+    chapter 16's five LANE heads; the alignment is a rule, not an eye.
 
   And the law that governs every claim above: SKIP, not PASS, for an assertion
   this image did not actually exercise.  `make all` was at five of seven
@@ -3109,9 +3429,17 @@ PART SEVEN -- BUILDING, VERIFYING, RUNNING
      - D2_QWC is 12-bit while the canvas chunks at 8,000 quadwords; correct
        today, unproven at the bound, and changing it moves every upload number
        here.
+     - Keyboard auto-repeat (LAW 19f, 19g) is in, and its cadence law is gated
+       by the [BENCH] kbd cadence row; what remains is a hand, not an
+       instrument -- whether 160 ms is the right delay for a person typing,
+       and a repeat that works prints NOTHING on a default image, because the
+       per-burst row exists only under HIDTRACE=1.
      - Escape at the XMB root does not close the window (#30); Command/Alt +
-       letter does not open and traverse the deskbar (#24); the boot output
-       does not yet name the active GL backend and FP dial (#61).
+       letter does not open and traverse the deskbar (#24).  The boot output
+       names the dials the image was BUILT under -- `[CFG] PS2_FP=hw:cop1
+       PS2_GL=eegs` (2026-10-13) -- but not the rasterizer gl_init() actually
+       installed, and that is the half of #61 still open: LAW 14e's fallback
+       is exactly the case where the two answers differ.
 
   C. MEASURED ON AN EMULATOR, AND ONLY THAT.  Every microsecond in this book
      is PCSX2's, and the port's own reading rule says what follows: RELATIONS
@@ -3152,6 +3480,10 @@ APPENDIX A -- LABEL SCHEME, DECODED
                         present (5c is landed) / cursor+overlays as GS sprites
                         (open, = increment 6 in the table)
     rows 7, 8           the COP1 kernels: vertex_stage.c, then xmb_wave.c
+    row 9a              the PLATE REFUSAL (11.5): a layer window's flat body
+                        fill, skipped over exactly the rect its own stream
+                        covers -- a refusal, not a poster, and 9b is still the
+                        poster
     lanes 9-13          the five open agents: GS compositor, GIF writer ring,
                         real Tier-1 tick, VU1 geometry actor, IOP/SIF I/O
                         actor
@@ -3162,11 +3494,25 @@ APPENDIX A -- LABEL SCHEME, DECODED
                         16 window manager, 32 IME, 64 band-set overflow,
                         128 damage already spanned it
     [GSTS] columns      groups / qw / verts / prims / gs | drop unsplit texsw
-                        texmiss | cover coverdrop -- gs= is the EE's
-                        SEND-AND-WAIT bracket, never GS pipeline time
+                        texmiss | cover coverdrop | clip b0 plate -- gs= is
+                        the EE's SEND-AND-WAIT bracket, never GS pipeline time
     bfn=                window paint callbacks that used to run and now do not
     wins=<drawn/walked> how many windows the composite painted, of how many it
                         visited
+    body= / skip=       9a's DECISION counts, reset at the top of the walk:
+                        the px the composite drew and the px it refused, for
+                        the whole frame.  Not an accumulation -- a build that
+                        has refused nothing reads skip=0
+    clip=               the client rect a GS layer window's environment packet
+                        addresses, as W x H
+    b0= / plate=        the span of the stream's FIRST vertex group, rounded
+                        INWARD (a vertex at 767.4 reaches 767, never 768), and
+                        the verdict on it: covered, SHORT, or none when the
+                        frame recorded no vertices.  plate= is the premise of
+                        the refusal, not a quality of the picture
+    [GSPLATE]           one-shot warning that b0= does not span clip= -- the
+                        plate has to stay drawn, so the row is the build
+                        telling you a refusal was made on an untrue premise
     t1024 / dm / dsum   the wave instrument: time for 1,024 lattice steps,
                         mean per-step delta, sum of deltas (a dsum of 0 with a
                         large dm means motion that cancels -- a frozen sheet)
@@ -3230,10 +3576,10 @@ APPENDIX B -- MISALIGNMENTS WITH THE GOVERNING STANDARD
        INTERPRETER.txt)                     in one place -- lane 10 is its implementation.
   M5   "tests 35-38", "39-44", "50-52",     scripts/test_ps2.sh AUTO-NUMBERS its rows
        "57-63", "80/80", "85/85" in the     (`[TEST $TOTAL]`), so every numeric citation
-       handbook                             in doc/md/PS2.md drifts as rows are inserted.
-                                            This book cites rows by ASSERTION NAME and
-                                            prints one total (91/91 as of 2026-10-12).
-                                            Renumber or name: do not do both.
+       handbook -- RESOLVED 2026-10-13      in doc/md/PS2.md drifts as rows are inserted.
+                                            The handbook now cites rows by ASSERTION
+                                            NAME and prints one dated total (91/91 read
+                                            2026-10-13).  Renumber or name: not both.
   M6   the census printed f_surface         those belong to a different build: the
        160,893 / f_ribbon 185,204 / f_menu  handbook's figures predate rows 7 and 8
        113,214                              landing.  Current counted frame: 2,286 /
@@ -3263,10 +3609,11 @@ APPENDIX B -- MISALIGNMENTS WITH THE GOVERNING STANDARD
                                             the canvas uses DBW=13.
   M11  a request for the GS backend         LAW 15a says activation installs the LINKED
        "installs the linked software        pipeline and NAMES ITSELF, so the correct
-       rasterizer" (test_xmb_render:1922)   answer in the build that links TinyGL is
-       -- and `make -k test` never says     GL_BACKEND_EEGS.  The row is stale, and it is
-       so, because neither xmb-render       outside the aggregate.  Chapter 22.
-       build is in the aggregate list.
+       rasterizer" (test_xmb_render)        answer in the build that links TinyGL is
+       -- and `make -k test` never says     GL_BACKEND_EEGS.  CLOSED 2026-10-13: the row
+       so, because neither xmb-render       is a rule over the define now, both arms read
+       build is in the aggregate list.      75/75, and chapter 22 has the control.  What
+                                           still stands is the aggregate's blindness.
   M12  "The GL backend is still named       true when written, superseded by increment 1
        virgl on PS2" and the selection is   and LAW 14e: the name now comes from
        a capability question never asked    gl_backend_choice.c (build dial + setting
@@ -3289,6 +3636,13 @@ APPENDIX B -- MISALIGNMENTS WITH THE GOVERNING STANDARD
        18,384,493)                          checks, 0 failures.  A comparison COUNT is not
                                             a law -- print it with its date or not at all,
                                             which is chapter 22's table's convention.
+  M16  the Makefile comment on PS2_GL       backend_eegs.c and the GS raster stage
+       still describes increment 1's        LANDED (5a-5c): on a build that links a
+       placeholder answer (line ~1016)      pipeline the EEGS request keeps its OWN
+                                            name and the GS owns the rect -- LAW 14e's
+                                            whole point.  The code is right, the
+                                            comment predates it; a comment-only edit,
+                                            so it waits for a Makefile round.
 
 =====================================================================
 APPENDIX C -- THE QUARANTINED DEVELOPMENT RECORD
@@ -3330,6 +3684,14 @@ APPENDIX C -- THE QUARANTINED DEVELOPMENT RECORD
                                       rather than one word, and the two
                                       false-positive shapes it had to be found
                                       through.
+    PS2-GS-LOG.md#row-9a-landing      the refusal's two builds side by side:
+                                      the three cycles of each, the wrong
+                                      pairing that a saved doc row hid, where
+                                      the two points of the 18.55 ns/px fit
+                                      come from, the two decision counters and
+                                      how they are reset, and the four-canvas
+                                      host gate in the prose it was written
+                                      in.
 
   Working reference:  doc/md/PS2.md is the handbook this book was cast from.
                       It remains the place where a driver's file list, a shell
@@ -3339,7 +3701,11 @@ APPENDIX C -- THE QUARANTINED DEVELOPMENT RECORD
 
 ---------------------------------------------------------------------
 
-  END  --  PS2.txt, rev 1, cast from doc/md/PS2.md on 2026-10-12.  Every
-  number in it was read from the tree or from a run on 2026-10-12; the two
-  suites whose counts move with their own source (the softfloat differential
-  and the image gate's row total) are labelled with the date they were read.
+  END  --  PS2.txt, rev 1, cast from doc/md/PS2.md on 2026-10-12 and re-measured
+  2026-10-13.  Every number in it was read from the tree or from a run on one
+  of those two dates, and the suites whose counts move with their own source
+  -- the softfloat differential, the image gate's row total -- carry the date
+  they were read.  That is why chapter 19's keyboard rows and chapter 4's
+  image figures say 2026-10-13 while chapter 2's cost row says both: a reading
+  is kept when a later one agrees with it, and a date is what makes the
+  agreement visible.

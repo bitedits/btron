@@ -2,6 +2,12 @@
 
 This document is the technical porting reference for kernel and driver developers working on the **Sony PlayStation 2 (Emotion Engine)** and **Bare-Metal MIPS (QEMU Malta & Magnum)** targets of the B-System operating system.
 
+It is the *working* form of the specification.  Its book form -- the same laws, cast as a normative
+specification with its own reading rules (R1-R5), its plane tables and its appendices -- is
+[`doc/txt/PS2.txt`](../txt/PS2.txt); where the two differ, the book is the specification and this
+handbook is the route into it.  Dated measurements that earned a law but do not belong in it live in
+[`doc/md/PS2-GS-LOG.md`](PS2-GS-LOG.md).
+
 ## 1. Architectural Principles: Image > Core > Kernel
 
 Like all B-System workstation ports, the PS2 and MIPS targets adhere strictly to the 3-tier **Cleanroom** architecture:
@@ -112,10 +118,13 @@ append ran and wrote, in the backbuffer and in the presented frame buffer.  `pos
 `appended=1` is a five-argument call whose fifth argument did not arrive, and the phase's
 verdict names that case.
 
-`scripts/test_ps2.sh` holds the static side of the same law: tests 35-38 assert that the
-linked image's MIPS ABI flags read `ISA: MIPS2` / `GPR size: 32`, that **no** `*.ps2.o`
-reports 64-bit GPRs (a stale ELF can outlive a flag change), and that `ps2_gs_poke64`
-contains exactly one `sd` and `ps2_gs_peek64` exactly one `ld`.
+`scripts/test_ps2.sh` holds the static side of the same law, in four rows named for what they
+check rather than for a number that moves when a row is added: *PS2 image is 32-bit-GPR O32
+(MIPS ABI flags: ISA MIPS2, GPR size 32)*, *Every PS2 object is 32-bit-GPR (no mips3 translation
+unit left in the link)*, *GS register write is one 64-bit sd (ps2_gs_poke64)* and *GS register
+read is one 64-bit ld (ps2_gs_peek64)*.  The second of those is the one that catches a stale
+object -- a stale ELF can outlive a flag change -- and the pair of accessors is the law that a
+GS register is written and read as one 64-bit bus transaction, never as two halves.
 
 ### The FPU Law (Normative)
 
@@ -441,8 +450,16 @@ defects in the fork's texture path explain all three symptoms:
 
 Proved on the host, not argued: `make test-xmb-render-tgl` runs the same `xmb.c` through
 `backend_tinygl.c` and writes its frames to `.build/tgl/`, and it now reports the same
-68/70 as `make test-xmb-render` through `backend_virgl.c` -- including the same two failures,
-which are the app's gradient corners, not the rasterizer.  Per pixel, the two backends agree
+75/75 as `make test-xmb-render` through `backend_virgl.c` (both re-read 2026-10-13; when this
+paragraph was written the two arms were 68/70, and the two failures were the app's gradient
+corners rather than the rasterizer).  The arms were equalled by correcting one assertion rather
+than one renderer: *the request's contract* in `verify/tests/test_xmb_render.c` still expected
+the increment-1 placeholder answer on both arms, while increment 5c made `GL_BACKEND_EEGS` a
+real name on a build that links a pipeline -- the two arms must therefore expect different
+answers, and they now do.  That row was shown to have teeth on the split itself: setting
+`s_active_backend = GL_BACKEND_TINYGL` in the EEGS case makes the TinyGL arm report exactly one
+failure, `[FAIL] a build that links the pipeline answers the GS request under its own name`, and
+leaves the virgl arm at 75/75, because that arm takes the other `#if` branch.  Per pixel, the two backends agree
 to within 2 levels of mean absolute difference over the whole 960x600 canvas, with 92% of
 pixels identical to ±2 and 1.4% differing by more than 32 (text and icon edges, where the
 alpha paths round differently).  The shipped atlases are visually indistinguishable from the
@@ -735,7 +752,9 @@ the A/B measured them (`draw_us` 210,066 -> 197,916 us on a counted build where 
 the same counters, i.e. 336 cycles per double call including its conversions; `f_ribbon`'s geometry
 window 28.9 -> 21.8 ms and `f_menu`'s 16.6 -> 11.9 ms clean).  Nothing else moved, which is the
 control: the pixel prices above are the same ones the older binary measured, and
-`make test-xmb-render-tgl` reports the same 68/70 with the same two pre-existing corner rows.  On a
+`make test-xmb-render-tgl` reported the same 68/70 with the same two pre-existing corner rows, at
+that run (both arms read 75/75 on 2026-10-13, for the reason given in the backend-choice note under
+*Textures and alpha in TinyGL*).  On a
 target where `GLfloat` *is* double -- the hosted and Pi 400 builds -- the cast is a no-op and the
 expression is bit-for-bit what it was.
 
@@ -837,7 +856,8 @@ against the +-40 the frozen sheet measured.  The frame costs what it cost -- 172
 173,421 us, unchanged within run-to-run noise, for one divide per frame.  What this does *not* buy is
 smoothness: an animation whose wall-clock duration is 167 ms cannot be shown in more than one frame
 by a machine that paints every 340 ms, so the menu now snaps instead of crawling, and the only way to
-get frames back for it is the pixel work above and the GS below.  `make test-ps2` is 80/80.
+get frames back for it is the pixel work above and the GS below.  `make test-ps2` was 80/80 at
+that build and is 91/91 on 2026-10-13.
 
 ### The census: what one frame asks the float engine for (Normative)
 
@@ -906,7 +926,7 @@ not the source), and no float lives across a call. |
 | [`src/drivers/ps2/ps2_pad.h`](file:///Users/tonpa/depot/bitedits/btron/src/drivers/ps2/ps2_pad.h) & [`.c`](file:///Users/tonpa/depot/bitedits/btron/src/drivers/ps2/ps2_pad.c) | Cleanroom DualShock 2 controller driver: analog stick velocity integration, deadband filtering, button edge detection, and event mapping. |
 | [`src/drivers/ps2/ps2_usb.h`](file:///Users/tonpa/depot/bitedits/btron/src/drivers/ps2/ps2_usb.h) & [`.c`](file:///Users/tonpa/depot/bitedits/btron/src/drivers/ps2/ps2_usb.c) | Cleanroom USB Open Host Controller Interface (OHCI) driver (`0xBF801600`) and standard USB HID Boot Protocol keyboard/mouse decoders. |
 | [`src/cores/core_ps2.c`](file:///Users/tonpa/depot/bitedits/btron/src/cores/core_ps2.c) | Platform core adapter: multi-window application suite (Workbench, B-Editor, TAD Cabinet, Settings), Japanese TIP/IME status badge, interactive SIO0 shell, event queue, and RTOS heartbeat. |
-| [`scripts/test_ps2.sh`](file:///Users/tonpa/depot/bitedits/btron/scripts/test_ps2.sh) | Automated verification suite checking ELF architecture, entry point, driver symbols, R5900 opcodes, the one-calling-convention ABI law (image *and* every object at 32-bit GPRs, the GS accessors at one `sd`/one `ld`), the FPU law (COP1 instructions in `ps2_builtins.ps2.o` and in no other object, no double-width op and no EE-illegal `.s` encoding either by mnemonic or by byte scan, no compare of the unordered family by mnemonic or by the `funct` nibble of an aligned instruction word, the geometry kernel's six clip tests read as six ordered `c.olt.s`, the hardware path provably compiled in, no named undefined symbol, all 32 soft-float libcalls defined), the trig fold's shape (a large float angle folded with no software double division, read off a probe object built with the image's own flags), the single-canvas law (no `ps2_fb_memory`, no present-path sweep, exactly one screen-sized CT32 object and that it is `s_desktop_backbuffer`, every CP0 write to `Status` and no `cache` op), the embedded volume (its address, alignment and block count, and a byte-for-byte `cmp` of the ELF's copy against `mkbtronfs`'s output), and the ISO image (80/80 tests). |
+| [`scripts/test_ps2.sh`](file:///Users/tonpa/depot/bitedits/btron/scripts/test_ps2.sh) | Automated verification suite checking ELF architecture, entry point, driver symbols, R5900 opcodes, the one-calling-convention ABI law (image *and* every object at 32-bit GPRs, the GS accessors at one `sd`/one `ld`), the FPU law (COP1 instructions in `ps2_builtins.ps2.o` and in no other object, no double-width op and no EE-illegal `.s` encoding either by mnemonic or by byte scan, no compare of the unordered family by mnemonic or by the `funct` nibble of an aligned instruction word, the geometry kernel's six clip tests read as six ordered `c.olt.s`, the hardware path provably compiled in, no named undefined symbol, all 32 soft-float libcalls defined), the trig fold's shape (a large float angle folded with no software double division, read off a probe object built with the image's own flags), the single-canvas law (no `ps2_fb_memory`, no present-path sweep, exactly one screen-sized CT32 object and that it is `s_desktop_backbuffer`, every CP0 write to `Status` and no `cache` op), the embedded volume (its address, alignment and block count, and a byte-for-byte `cmp` of the ELF's copy against `mkbtronfs`'s output), and the ISO image (91/91 tests, re-read 2026-10-13). |
 
 ### 2.1 Graphics Synthesizer (GS) Framebuffer Architecture
 
@@ -1410,16 +1430,20 @@ land; 15f's one environment and one frame buffer; and `D2_QWC` being a 12-bit fi
 upload chunks at 8,000 quadwords.
 
 **The current baseline, and which build it belongs to.**  Two dials and two dates, kept apart
-because they are routinely confused.  The artifact on disk is `btron-ps2.elf`, 5,966,580 bytes at
-01:27 on 2026-10-13, built `PS2_GL=tinygl PS2_FP=hw` -- read off `.build/ps2-gl.stamp` and
-`.build/ps2-fp.stamp`, the two files whose *contents* the Makefile compares before it will trust an
-object.  A size belongs to a moment, not to a configuration: this handbook is itself a payload of
-`/SYS`, so editing it rebuilds `btron_sys.vol` and the image around it, which is why the
-specification's chapter 22 records 5,967,604 bytes for 2026-10-12 and this line records a different
-number for the 13th.  The frame numbers below are NOT from that image: they come from the
-`PS2_GL=eegs PS2_FP=hw:cop1` run its own `[CFG]` row names, on 2026-10-12.  One steady XMB frame on
-that build costs composite 56,128 us + app 46,273 us + present (`upload=`) 1,031 us inside one
-149,308 us period, and the same frame's float census, on a counted build, reads `f_surface` 2,286 /
+because they are routinely confused.  The artifact on disk is `btron-ps2.elf`, 5,967,796 bytes at
+02:00 on 2026-10-13 with `btron-ps2.iso` at 6,021,120 and `btron-ps2-bench.elf` at 5,997,788, built
+`PS2_GL=eegs PS2_FP=hw` -- read off `.build/ps2-gl.stamp` and `.build/ps2-fp.stamp`, the two files
+whose *contents* the Makefile compares before it will trust an object, and worth reading rather than
+remembering because a bare `make ps2` resets the first of them to `tinygl` while leaving every
+`.ps2.o` that was built under the other value in place.  A size belongs to a moment, not to a
+configuration: this handbook is itself a payload of `/SYS`, so editing it rebuilds `btron_sys.vol`
+and the image around it, which is why the specification's chapter 22 records 5,967,604 bytes for
+2026-10-12, an earlier reading of this line recorded 5,966,580 for a `PS2_GL=tinygl` build at 01:27
+on the 13th, and the line now records the eegs build that the frame numbers below are drawn from.
+One steady XMB frame on that configuration costs composite 56,128 us + app 46,273 us + present
+(`upload=`) 1,031 us inside one 149,308 us period -- re-sampled on 2026-10-13 as 56,123 + 46,263 +
+1,031 inside 149,304 us, the same frame twice -- and the same frame's float census, on a counted
+build, reads `f_surface` 2,286 /
 `f_ribbon` 70,911 / `f_menu` 32,798 single-precision calls -- 2,048 of `f_surface`'s being xmb.c's
 own motion instrument.  Rows 7 and 8 are what moved those census columns down from 160,893 and
 185,204; the pair-store ladder, the counted-versus-uncounted frame times and the wall-clock period
@@ -1513,17 +1537,19 @@ Host coverage for the same three rules is `make test-tracker` (78/78) and
 
 Two things this run says out loud that are easy to read past:
 
-- **The GL backend is still named `virgl` on PS2.** The row is `[GL] VirtIO-GPU OpenGL
-  (virgl) backend init: 768x500` -- `src/gl/gl_dispatch.c` starts with `s_active_backend`
-  at VIRGL and nothing on this target overrides it by capability.  It now *works* because
-  the window is sized from `btron_desktop_note_size()` (768x500, not the 952x564 the
-  phantom GPU reported) and the TinyGL rasterizer answers the calls, but the label is a
-  lie: capability-based backend selection in
-  [`src/gl/gl_dispatch.c`](file:///Users/tonpa/depot/bitedits/btron/src/gl/gl_dispatch.c)
-  is the unfinished half of "enable the OpenGL downstack with the common code", and it is
-  what [`egl_surface.c`](file:///Users/tonpa/depot/bitedits/btron/src/gl/egl_surface.c)
-  currently decides by `#if defined(BTRON_UEFI_TARGET)` instead of by what the hardware
-  reports.
+- **The GL backend's name used to be a lie, and the row that said so is the run's own**
+  (`[GL] VirtIO-GPU OpenGL (virgl) backend init: 768x500`): `s_active_backend` started at VIRGL
+  and nothing on this target overrode it by capability, so the label named a device the bus has
+  never answered for.  *That* claim is now superseded by the runtime selection of increments 1
+  and 5c: the same bench run prints `[XMBT] frame 1 (eegs) draw=49,277 us` (2026-10-13), and
+  `gl_active_backend()` answers the requested name when the image links a pipeline for it.  What
+  survives of the bullet is the window-sizing half of it: the GL window is sized from
+  `btron_desktop_note_size()` (768x500), not from the 952x564 that phantom GPU once reported, and
+  the name is load-bearing rather than cosmetic because
+  [`egl_surface.c`](file:///Users/tonpa/depot/bitedits/btron/src/gl/egl_surface.c) dispatches on
+  `gl_active_backend() == GL_BACKEND_EEGS` (line 43) to decide whether the canvas blit or the GS
+  owns a rectangle -- no `#if defined(BTRON_UEFI_TARGET)` is left in that file to decide it by
+  target instead.
 - **One XMB frame used to cost ~78 s of emulator time** (`[BENCH] xmb frame 1/2/3` on
   emulator timestamps 71.1, 149.1 and 227.1 s for a Cross press at 5.6 s).  A frame that
   long could not be timed by a guest-side clock at all: CP0 Count is a 32-bit counter, so a
@@ -1559,6 +1585,9 @@ The cleanroom driver (`ps2_usb.c` and `ps2_usb.h`):
   - Function keys F1–F12, navigation cluster (`Home`, `End`, `PageUp`, `PageDown`, `Insert`, `Delete`, Arrows).
   - Keypad numbers and arithmetic operators.
   - Authentic Japanese keyboard keys: `Henkan` (Convert), `Muhenkan` (Cancel), `Hiragana/Katakana` toggle.
+  - **Edges only**: the differential reports a press and a release, never a held key.  The repeat that
+    makes a held key type a line of characters is produced by the core from the Input applet's own
+    three settings -- see [Auto-repeat](#auto-repeat-the-port-obeys-the-input-applet-not-a-constant-of-its-own-normative).
 - **Mouse Subsystem**:
   - Decodes 3-byte / 4-byte reports: relative displacements `(dx, dy)` and button bitmask (Left, Right, Middle).
   - Injects `EV_MOUSE_MOVE` and `EV_BUT_DOWN` / `EV_BUT_UP` events directly into the B-System event queue.
@@ -1676,7 +1705,7 @@ been spent, because the hold is part of the period the body sees and nothing els
 ```
 [XMBT] cycle <n> period=<us> pass=<us> tail=<us> hold=<spent/asked ms> | poll= hook= evt= net= paint= note= |
         render= swap= upload= px= nb= full= why=<hex> dmg=<x0,y0,x1,y1/bands> |
-        comp bg= frame= paint= blit= panel= bars= total= bfn= wins=<drawn/walked>
+        comp bg= frame= paint= blit= panel= bars= total= bfn= wins=<drawn/walked> body=<px> skip=<px>
 ```
 
 | Column | Owner | What it decides |
@@ -1687,6 +1716,7 @@ been spent, because the hold is part of the period the body sees and nothing els
 | `why` | this port | *which rule* made it the canvas: `1` a non-move event, `2` the convergence timer, `4/8/16/32` global menu / tracker / window-manager interaction / IME, `64` band-set overflow, `128` damage that already spanned it |
 | `dmg` | shared compositor | the band set as the app and the pointer left it, before any of the rules above replaced it |
 | `comp …` | shared compositor | that composite's own split, taken from `g_render_stats` for this one pass: decorations, the apps' `paint` callbacks, the client-area blit, panel, bars |
+| `body= skip=` | shared compositor | the *area* behind `frame=`: px of window-body flat fill this walk wrote, and px of a GS layer window's body it refused to write because the stream this same pass records buries them. `body + skip` is the area the fill used to move, so a row with `skip>0` and no fall in `frame=` falsifies the model rather than winning -- which is why 9a ships the pair (2026-10-13). Both are decision counts, not write counts: a walk clips its fills to the damage but refuses a whole rect, because the stream's clip is the rect and not the band |
 
 The row is not behind `BTRON_PS2_BENCH`: an unarmed profiler costs one branch per boundary,
 and gating it would make the row unavailable to whoever has the real machine.  Arming is
@@ -1949,17 +1979,150 @@ lane can now be chosen by *which engine it wakes up*, and each row's gate is tha
 
 | # | lane | engine it brings up | the gate that says it works |
 |:--|:---|:---|:---|
-| 9 | **green-lit**: the compositor as a token poster -- the background, the window decorations and each window's client rect become VRAM pages baked once, and a frame posts `SPRITE` fills and Local→Local blits over their rects instead of walking them | GS raster + its own VRAM | `[BENCH] compositor:`'s `bg=`/`frame=`/`blit=` fall together while `px=` stays the same area; `[GSTS]` grows its group count and keeps `drop=0 coverdrop=0`; the census proves the canvas still paints; `make test-ps2` green, `make arm64-elf` unregressed |
+| 9 | **split by its own VRAM budget into 9a/9b below. 9a landed 2026-10-13, and not as drawn**: the page-free half turned out to be a *refusal* rather than a poster -- the body fill steps out of the way of the one rect the GS stream provably buries, which took 6,508-6,547 µs off each cycle's XMB composite (112,711 → 106,404 µs on the cycle that named it) without claiming a plane or adding a primitive. The poster (flat fills sent as `SPRITE` rects) is still open, now that each rect's EE price is a printed number | GS raster + its own VRAM for 9b; 9a is the EE declining to work | 9a's: `frame=` falls at constant `bg=`/`paint=`/`blit=`/`panel=`/`bars=`, `body=` + `skip=` account for the difference in pixels, `[GSTS]` holds `drop=0 unsplit=0 texmiss=0 coverdrop=0` and reads `plate=covered`, `vram_left=` stays 1,081,344, `make test-ps2` green, `make arm64-elf` unregressed, and `verify/tests/test_desktop_clip.c`'s plate section proves the skipped set equals the client rect |
 | 10 | the GIF ring: a fixed writer ring per producer, `snd` that returns `S_FULL(drop_count)` instead of spinning, and the `STR` poll replaced by a completion check at the next yield | DMAC ch2 | a new `[GSTS]` column for the sender's blocked time that goes to ~0 while `drop=` stays 0 -- the control is a ring sized too small, which must fail visibly and not by tearing the frame |
 | 11 | a real Tier-1 scheduler tick: per-task stacks so `stksz` means something, Timer0 (or VBlank) as the preemption point, and the WCET counter charged against `ASYNC_UI_BUDGET_US` | the kernel, on Timer0's plane | `[ASYNC] ui wcet=… of the 4000 us budget, overruns=…` printed from the shipped image, and the `ui_period_us` row of the plane table losing its "nothing yet" |
 | 12 | VU1 as the geometry actor: the ribbon and menu meshes' transform/viewport stage written to a VIF1 stream | VU1 + VIF1 | `[GSTS] verts=` unchanged, the app's `draw=` down by the transform's measured share, and an image row proving VU1 code is present and reached |
 | 13 | the I/O actor: pad and CD/DVD reads through SIF, and a `sub`-side consumer for the ring the plane today polls | IOP + SIF | `[PAD] … no SIF/IOP pad client yet` gone, replaced by a report count that is non-zero in the bench and still reads `reports=0` headlessly only when no device is enumerated |
 
-Rows 9-13 are ordered by what the measurements already force, not by what is easy: row 9 removes
-56 ms of EE pixel traffic per frame and 480,000 px of re-upload with it; row 10 is the one that
-makes row 9's packet growth safe rather than a longer stall; row 11 is what turns every budget in
-this file from a comment into an enforced bound; rows 12-13 need an instrument this port does not
-have yet (see the GS row: nothing measures an engine other than the EE today).
+**Row 9's own budget, read before writing it (2026-10-13).**  Row 9 as first drawn said the
+background *and* each window's client rect become VRAM pages baked once.  The shipped image says
+otherwise about how much "once" can cost: `[BENCH] gs planes: registered=2 pending=0
+vram_left=1081344` -- one million eighty-one thousand three hundred forty-four bytes left above the
+canvas, which is 208 sixteen-KB planes and no more.  The arithmetic is not an estimate; every term
+is a row or a header:
+
+| claim | value | where it comes from |
+|:--|--:|:--|
+| the canvas's own extent | 1,996,800 B | `GS_VRAM_CANVAS_BYTES` = FBW 13 × 64 × 600 rows × 4, and the boot agrees: `DISPLAY 800x600 mag1x CT32 VRAM page 0 pitch 832 px (1.90 MB)` |
+| the two planes already registered | 1,114,112 B | 512×512 CT32 (the 384×384 atlas padded to a power of two) + 128×128 (the 128×96 font) -- the sum, plus the canvas rounded to 8 KB, is exactly what `vram_left` subtracts from 4 MiB |
+| the Z page `eegs_present_send()` names | 8,192 B | the top page of VRAM, reachable once the cursor has taken everything else, so the honest budget is 1,073,152 |
+
+What does not fit, and therefore is not row 9: a second full canvas (1,996,800 B -- the host gate
+`verify/tests/test_ps2_gs_env.c` already asserts the canvas and a second full-screen layer do not
+coexist), and the XMB's own client at 768×500 CT32 (1,536,000 B).  So row 9 is two lanes, and the
+split is made by the budget rather than by convenience:
+
+- **9a, the page-free half -- landed 2026-10-13 as a refusal, not a poster.**  As drawn, this lane
+  was "post flat fills": the background's flat field, the window decorations, the panel and its gold
+  bar sent as `SPRITE` rects with a constant colour, which the recorder can already express
+  (`gs_rec_prim()` + `gs_rec_color()` + two `gs_rec_vertex()` calls, TME=0).  What it could not do
+  was *where*: the recorder is opened around the layer window's paint callback by
+  `eegs_present_begin()`, and nothing may DMA during a paint, so a compositor-side poster needs the
+  recorder open across the whole composite -- a re-ordering of increment 5c's law, priced at one
+  quadword per four pixels at ~18-21 ns/px against the canvas's 14.8.  The measurement taken first
+  (below) said something simpler: one rect of that fill is drawn twice, once into the canvas and
+  once into VRAM by the stream, and the canvas copy can simply be refused.  That is what landed:
+  6,547 µs off one cycle's 112,711 µs XMB composite (`frame=` 20,380 → 13,833, 6,529-6,547 µs off
+  all three cycles), with no plane claimed and no new primitive.  The poster (flat fills sent as
+  `SPRITE` rects) is still open, now that each rect's EE price is a printed number.
+- **9b, the page half -- the client-area blit.**  `blit=` 30,729-30,795 µs over 613,440 px is a RAM
+  to RAM copy, and it is exactly the part that needs a plane.  Three shapes are possible inside
+  208 planes and none is free: CT16 instead of CT32 (halves the bytes, halves the colour), a
+  per-window page pool that bakes the *small* windows and leaves the big one to the EE, or
+  Local→Local copies that stay inside the canvas's own extent and so cost no new page at all.  Row
+  9b is not started until one of those three is chosen *and* its cost is stated as a row, because
+  the failure mode of guessing here is `gs_tex_register()` returning 0 and a window drawing with
+  somebody else's texture -- which the `[GSTS]` `texmiss=` counter would count and the census
+  would not explain.  The poster half of 9a is now part of this decision rather than ahead of it:
+  after 9a's refusal, every remaining byte of `frame=` is a rect the GS does *not* cover, so it has
+  to be drawn somewhere, and `body=` prices the EE's answer for each one.
+
+**What `frame=` actually is, measured before 9a was written (2026-10-13).**  Two walks that differ by
+exactly one window's body, taken from one build -- the one that prints `body=` and not yet the refusal,
+`PS2_GL=eegs PS2_FP=hw` -- which is the only condition under which the two price the same act:
+
+| walk | `frame=` | `body=` | ns/px |
+|:--|--:|--:|:--|
+| the three desktop windows' bodies only | 13,069 µs | 715,360 px | 18.27 |
+| those three plus the XMB's body | 20,380 µs | 1,109,568 px | 18.37 |
+
+Those are the two points, and the rate between them is the marginal one: 7,311 µs over the XMB's 394,208
+px is 18.55 ns/px, so the intercept of the line through them is about −200 µs.  PROVEN, to within the
+resolution of the instrument, that the decoration stage *is* the whole-body flat fill and that the
+borders, the insets, the tabs and the glyphs are noise beside it.  That is what made 9a worth writing,
+and it is why `body=`/`skip=` are printed next to `frame=` from this image on -- a microsecond column
+cannot say whether a stage was slow or merely enormous.  The first point survives into this build
+unchanged, and it is quoted here from this build for that reason: `[BENCH] compositor:`'s whole-canvas
+row reads `frame=13069(715360 px skip=0)`, `skip=` zero because no layer window is open, so the two
+builds agree to the microsecond on the walk the lane cannot reach.  PS2-GS-LOG.md keeps the measuring
+build's three cycles, which are why a single row is never quoted as a rate: `bg=` 9,897-9,937,
+`frame=` 20,314-20,380, `paint=` 46,308-49,185, `blit=` 30,728-30,795, `panel=` 1,803-1,835,
+`bars=` 569-576, `total=` 109,627-112,711, each with `body=1109568px` -- 0.3% of spread across a stage
+of 20 ms.
+
+**9a's landing, in the same run's rows.**  With the refusal in `draw_retro_window_frame()`, gated on
+the walk's own `records` predicate AND on `wnd->gl_layer`:
+
+```
+[XMBT] cycle 0 … comp bg=9937 frame=13833 paint=49429 blit=30796 panel=1834 bars=576 total=106404
+       bfn=0 wins=4/4 body=725568px skip=384000px
+[XMBT] cycle 1 … comp bg=9913 frame=13828 paint=46850 blit=30716 panel=1832 bars=563 total=103713
+       bfn=0 wins=4/4 body=725568px skip=384000px
+[XMBT] cycle 2 … comp bg=9888 frame=13785 paint=46514 blit=30696 panel=1790 bars=569 total=103251
+       bfn=0 wins=4/4 body=725568px skip=384000px
+[GSTS] groups=51 qw=30033 verts=7479 prims=2493 gs=1150 us | drop=0 unsplit=0 texsw=22 texmiss=0
+       | cover=4 coverdrop=0 | clip=768x500 b0=0,0,767,499 plate=covered
+[BENCH] gs planes: registered=2 pending=0 vram_left=1081344
+[BENCH]           compositor: bg=9924(480000 px) frame=13069(715360 px skip=0) paint=0
+          blit=30755(613440 px) comp=56121 bfn=0 wins=3/3
+```
+
+Cycle against cycle, `frame=` fell 6,547 / 6,508 / 6,529 µs and `total=` 112,711 / 110,146 / 109,627
+→ 106,404 / 103,713 / 103,251 µs.  `body=` 1,109,568 → 725,568 px with `skip=384,000` px, and the
+arithmetic closes without a loose term: 725,568 is exactly the three desktop bodies' 715,360 plus the
+XMB ring's 10,208 (394,208 body − 384,000 client).  The three deltas over 384,000 refused px are
+16.95-17.05 ns/px against the 18.55 the line through the two points has as its marginal rate -- 8%
+under it, and that shortfall is the lane's own shape rather than a loose end: the refusal removes the
+plate's inner write and leaves the walk's bookkeeping in place, since `fill_body_part()` is still
+called four times, once per strip around the buried rect, and the border, the inset arithmetic and the
+clamp against the body all still run.  A poster would take those four calls too; a refusal cannot.
+`bg=`/`paint=`/`blit=`/`panel=`/`bars=` stay inside their own cycle-to-cycle spread (the largest move
+among them is 0.5%, in `paint=`) -- the lane reaches one stage and the rows say so -- and the last line
+is the control: on a desktop walk with no layer window open, `skip=0`, so the refusal is a property of
+the data, not of the build.  That is also why the Pi 400 cannot be reached by it: only
+`egl_create_window_surface()` sets `gl_layer`, and it is compiled in only under
+`-DBTRON_GL_PREFER_EEGS`.
+
+**The premise, and the two instruments that watch it.**  The refusal is sound only while the stream
+covers the whole rect it buries.  `[GSTS]` now prints the evidence for that: `clip=` is the client rect
+the environment packet addresses, `b0=` is the span of the *first vertex group* the stream recorded
+(PS2-GS-LOG.md keeps the instrument's own law), and `plate=` reads `covered` when that span reaches all
+four clip edges, `SHORT` when it does not, `none` when the frame recorded no vertices.  Every row of the
+landing run reads `plate=covered` and no `[GSPLATE]` warning fired.  INFERRED, and stated as inferred:
+reaching the edges is necessary, not sufficient -- fragment coverage across the interior is a rasteriser
+property, and the one gate that can certify it is the user's eyes on the XMB, which is row 6's law and is
+why this row is not called closed by a log line.
+
+**What 9a did not remove, priced.**  The 715,360 px of the three desktop windows' plates stay EE-filled
+at the 18.3 ns/px their own row averages -- 13.1 ms of a frame when all three are in the damage -- plus
+`bg=`'s 9.9 ms and `blit=`'s 30.7 ms, none of which 9a can reach: the background has no stream over it,
+and `blit=` is 9b.  The residue of `frame=` after this lane is therefore not a mystery column but a
+named set of rects, and 9b's three candidate shapes are now each priced against `body=` before any of
+them is chosen.
+
+9a's gate, as graded: `frame=` fell at constant `bg=`/`paint=`/`blit=`/`panel=`/`bars=` (the lane
+reaches one stage and only that stage), `body=` + `skip=` accounted for the whole difference in pixels,
+`[GSTS]` kept `drop=0 unsplit=0 texmiss=0 coverdrop=0` with `groups=` where it was, `vram_left=` stayed
+1,081,344 because 9a claims no plane -- a plane count that moves under a refusal lane is the sign that it
+grew into 9b mid-change -- and `make test-ps2` read 91/91 with `make arm64-elf` building and the host
+suite at 100%.  The half no log can grade is the set equality, and it is graded on the host instead:
+`verify/tests/test_desktop_clip.c`'s plate section paints one canvas four ways over one 47,888-px client
+rect -- the windowless reference, a records pass with `gl_layer` set, a blit-only pass with it set, and a
+records pass without it -- and pins the difference set from both sides (no pixel outside the rect differs
+from the plate, every pixel inside it shows the desktop and never the plate's grey), checks `body=`/`skip=`
+against the geometry rather than trusting them, repeats it for a 32x32 damage box, and finishes with the
+case the instrument's own wording hides: a resize grip drawn inside the hole is still drawn, because the
+refusal is the plate and not every fill in the rect.  42/42 there, 1 SKIP, and the SKIP is the system
+panel, whose bar is stubbed in that harness.  What a refusal cannot do is fall in `bg=`/`panel=`/`bars=`:
+those columns are the poster half's gate, and they are still ahead of it.
+
+Rows 9-13 are ordered by what the measurements already force, not by what is easy: row 9 began as ~56 ms
+of EE pixel traffic per frame and 9a's refusal has taken 6.5 ms of it, leaving `bg=` 9.9 ms, the
+remaining `frame=` 13.8 ms and `blit=` 30.7 ms as three named, priced sets rather than one column; row 10
+is the one that makes row 9's packet growth safe rather than a longer stall; row 11 is what turns every
+budget in this file from a comment into an enforced bound; rows 12-13 need an instrument this port does
+not have yet (see the GS row: nothing measures an engine other than the EE today).
 
 #### The measured microsecond (Normative)
 
@@ -2119,6 +2282,78 @@ Non-zero `plane_reports_collected` and a non-zero `plane_held_max_us` require
 [PSTAT] plane: reports=0 on the input plane, 0 in a pass, dropped=0 queue max=0 of 256, collected on 2223 periods
 [PSTAT] plane: held max=0 us mean=0 us over 0 delivered -- isr 1.68 us of the 50 us budget, overruns=0
 ```
+
+#### Auto-repeat: the port obeys the Input applet, not a constant of its own (Normative)
+
+**LAW.**  The PS2 keyboard has no repeat constants of its own.  It reads the three values
+[`src/settings/input.c`](file:///Users/tonpa/depot/bitedits/btron/src/settings/input.c) defines for
+every target -- `g_kbd_repeat_enabled`, `g_kbd_repeat_delay_us`, `g_kbd_repeat_interval_us`
+(lines 16-18), shipped as \*FX 11 = 16 cs (160,000 µs before the first repeat) and \*FX 12 = 40 cps
+(25,000 µs between repeats), repeat on -- and it reads them *live*, so the XMB's Input page changes
+what a held key does with no rebuild.  `core_arm64.c:2703-2705` has always obeyed the same three on
+the Pi 400.  The PS2 was missing the reader, not the setting, and no fourth copy of the numbers was
+created.
+
+**WHY the repeat has to be produced inside the port.**  posix pays nothing for its repeat: the host
+operating system generates it and SDL forwards every host repeat as another `SDL_KEYDOWN`
+(`src/window/event.c:246`), which `get_evt()` re-emits as another `EV_KEY_DOWN`.  The PS2 has no
+host under it.  Its HID decoder is a six-slot differential (`ps2_usb_process_keyboard_report()`,
+`src/drivers/ps2/ps2_usb.c:1444`) that fires on edges only, so a key held for a second is exactly
+two events -- one press, one release.  The emulator's own repeat is unreachable because PCSX2 hands
+over the device, not the host's keyboard settings, and asking the human to tap is not a fix.
+
+**MECHANICS.**  Three rules are load-bearing, and each one is a bug that was avoided rather than a
+style:
+
+- *Armed only when routed.*  `ps2_usb_on_key()` swallows some chords for the compositor; a swallowed
+  chord must not arm, or every 25 ms would move the cursor or change the gain.
+- *One key repeats: the newest still down.*  A later press re-arms the delay, the armed key's release
+  disarms, and releasing any *other* key leaves it running -- which is what a host keyboard does, and
+  is not a case auto-repeat exists for.
+- *The tick runs after the poll and before the dispatch* -- in `ps2_gui_pass()` and in the Stage-1
+  loop.  The pass that could have seen the press is the pass that owes the repeat, and a release heard
+  by this poll disarms before it can fire one more time.  Stage 1 arms only `btron_key < 0x100`,
+  because the prompt consumes characters and the codes above it have no binding there.  On the GUI
+  side a repeat is a *press* with no matching release: the key really is still down, and a typematic
+  stream from hardware is a run of downs ending in one up.
+
+**A tick pays every interval that elapsed.**  The tick can only run once per pass, and a pass is not
+25 ms: the XMB's own measured period is ~140 ms.  One repeat per pass would therefore mean the frame
+rate, not \*FX 12 -- the applet's 40 cps and 12.5 cps rows would feel identical, which is the
+opposite of having the setting.  So `ps2_kbd_due()` divides the gap by the interval, advances the
+schedule by the intervals it paid (never by the clock, which is what keeps the *mean* rate the
+setting's rate), and caps the burst at `PS2_KBD_REPEAT_MAX = 8` so a long stall cannot flood the
+event queue; a gap longer than the cap can pay is dropped rather than banked, so the schedule
+resynchronises instead of repeating at the cap forever.  With no timebase the folded clock reads a
+constant zero, every difference reads zero, `due` is zero, and repeat stays off: a port with no clock
+does not invent a cadence.
+
+**MEASURE.**  Two rows, one build, 2026-10-13 (`PS2_GL=eegs PS2_FP=hw`):
+
+```
+[KBD] auto-repeat: enabled=1  delay=160000 us  interval=25000 us  (Input applet's *FX 11/12; a held HID key repeats from here)
+[BENCH] kbd cadence: enabled=1 delay=160000 us pass=149304 us -> *FX 12 25000=5 40000=3 80000=1 reps/pass (cap 8)
+```
+
+The first is the shipped default reaching the guest as the applet wrote it.  The second is a
+loopback: it prices the law against the last stamped cycle -- the same `period` the `[XMBT]` row
+above it prints -- with no hand on a key, and it is the row that says the three rates the menu
+offers are three different behaviours on this machine rather than one behaviour with three labels.
+
+| Quantity | Status |
+|:---|:---|
+| The image reads the applet's three globals, at their shipped defaults | **proven**: the `[KBD]` boot row |
+| The three \*FX 12 rates are distinguishable at this machine's frame rate | **proven**: 5 / 3 / 1 repeats per pass of 149,304 µs, same log and build |
+| An unpaid backlog is dropped, not banked; the mean rate is the schedule's | **proven by construction**: `ps2_kbd_due()` advances by `due * interval`, and by the whole gap when it caps |
+| The *feel* -- whether 160 ms is the right delay, whether Backspace deletes at a readable speed | **requires a hand**: `make run-ps2`.  The per-burst row `[KBD] rep k=… due=…` exists only under `HIDTRACE=1`, so a default image prints nothing about a repeat that did happen (R1) |
+| The rate on a real console | **inferred**: same code, but the divisor is measured at boot (295 ticks/µs here, ~147 documented there), so the pass period and therefore the burst size differ |
+
+**GATE.**  `make test-ps2 PS2_GL=eegs PS2_FP=hw` is 91/91 with the change in, and the frame bill did
+not move: `draw=` 49,277 / 46,826 / 46,263 µs against 49,128 / 46,897 / 46,225 µs from the same
+configuration one build earlier, with `comp bg=9897 frame=20308 paint=46275 blit=30729`,
+`px=480000` and `[GSTS] groups=51 … drop=0 coverdrop=0` holding.  The cost of an unarmed key is two
+comparisons.  `make arm64-elf` is unaffected and unregressed: the change lives in
+`src/cores/core_ps2.c` alone, and the Pi 400's reader of the same three globals was not touched.
 
 ### 2.5 SIO0 Interactive Shell Commands
 
@@ -2770,20 +3005,22 @@ section 10, and each was shown to be able to go red:
 | Row | Reads off the image | Control that turned it red |
 |---|---|---|
 | volume present, 1024-aligned, whole blocks | `ps2_sys_vol_image`/`_end` symbols: `0x00580800`, 1,048,576 B | the same arithmetic at a fake `0x00580801` gives `%1024 == 1` |
-| the ELF's bytes are `mkbtronfs`'s bytes | `.data` Addr/Off locate ELF offset 4,786,176, `dd bs=1024 \| cmp` | one changed byte at 512 KiB in a scratch copy; and the identical `dd \| cmp` against ELF offset 0 |
+| the ELF's bytes are `mkbtronfs`'s bytes | `.data` Addr/Off locate ELF offset 4,791,296, `dd bs=1024 \| cmp` | one changed byte at 512 KiB in a scratch copy; and the identical `dd \| cmp` against ELF offset 0 |
 | the boot calls the mount | `jal.*<btron_core_hfds_log>` inside `<ps2_kernel_main>`'s disassembly window | asked of `<ps2_gs_init>` instead: 0 |
 | sc's real session init won the link | `jal.*<vfs_init>` and `jal.*<term_set_size>` inside `<sc_session_init>` (158 lines, so 628 bytes of code, not the stub) | asked of `<term_session_init>`: 0 |
 | B-MSX's real opener won the link | `readelf -sW`: `open_msx_window_with_rom` is `GLOBAL`, 96 bytes | asked of `open_gterm_window`, which this image really does link `WEAK` at 220 bytes: the same row shape fails |
 | Cross on a Games row creates the task and the window | `jal.*<cre_tsk>`, `<sta_tsk>`, `<opn_wnd>` inside `<msx_open>` (271 lines) | asked of `<open_msx_window_with_rom>`, which only forwards: 0 |
 | the band's rows come from the mounted volume | `jal.*<vfs_list_dir>` inside `<msx_open>` | asked of `<msx_load>`: 0 |
 | a cartridge reaches the core through the one reader | `jal.*<vfs_child_path>`, `<vfs_read_blob>`, `<msx_load_rom>` inside `<msx_load>` (128 lines) | asked of `<msx_open>`: 0 for both readers -- the scan is not finding one call site twice |
-| the code asks the volume, not the checkout, for both drawers | `.rodata` located by section Addr/Off (585,844 bytes at `0x001dc900`), scanned with `grep -c` over that window: `/SYS/cbios` and `/SYS/msx` present, `third_party/openMSX` absent | the first version of this row scanned the *whole* image and went red on this file's own sentence about the bug -- 2 hits, both of them prose.  That is the control: the section scoping is what makes the row read code rather than documentation |
+| the code asks the volume, not the checkout, for both drawers | `.rodata` located by section Addr/Off (586,228 bytes at `0x001ddd80`), scanned with `grep -c` over that window: `/SYS/cbios` and `/SYS/msx` present, `third_party/openMSX` absent | the first version of this row scanned the *whole* image and went red on this file's own sentence about the bug -- 2 hits, both of them prose.  That is the control: the section scoping is what makes the row read code rather than documentation |
 
-The suite is 85/85 on both dials, `make -k test` is green through every host suite, and
-`make arm64-elf` still builds.  (These rows and the image sizes below were re-read on 2026-10-12 on
-`btron-ps2.elf`, 5,961,044 bytes with `_end = 0x01f01b80`; the suite has grown since the section was
-written and the volume's stamp has become deterministic, so the numbers in it are the current ones
-rather than the ones the landing day printed.)
+The suite is **91/91** on both dials (`make test-ps2 PS2_GL=eegs PS2_FP=hw`, re-read 2026-10-13),
+`make -k test` is green through every host suite, and `make arm64-elf` still builds.  (These rows and
+the image sizes below were re-read on 2026-10-13 on `btron-ps2.elf`, 5,967,796 bytes with
+`_end = 0x01f06600`; the suite has grown since the section was written and the volume's stamp has
+become deterministic, so the numbers in it are the current ones rather than the ones the landing day
+printed, and a size belongs to a moment: chapter 2's own note on that is the reason the earlier
+reading -- 5,961,044 bytes, `_end = 0x01f01b80`, 2026-10-12 -- is kept here rather than overwritten.)
 
 The 1 MiB is load cost, not present cost, and the line below the mount row in the same log says so:
 `[PS2] whole-canvas paint cost: render=56075 us  swap=0 us  upload=820 us  total=56.895 ms`.  The
@@ -2930,7 +3167,7 @@ When running under PCSX2 (`make run-ps2`):
 |:---|:---|:---|
 | `make ps2` | Build PS2 ELF & Disc ISO | `btron-ps2.elf` and `btron-ps2.iso` |
 | `make run-ps2` | Launch Disc ISO in PCSX2 | Bootable CDVD execution (No `.elf` association) |
-| `make test-ps2` | Run PS2 automated test | 80/80 driver, ELF, ABI, FPU-encoding, clock and volume assertions |
+| `make test-ps2` | Run PS2 automated test | 91/91 driver, ELF, ABI, FPU-encoding, clock, volume and input assertions |
 | `make mips` | Build MIPS ELF | `btron-mips.elf` |
 | `make run-mips` | Launch in QEMU Window | Interactive console & display on Malta |
 | `make test-mips` | Run MIPS automated test | Headless validation of all 8 kernel boot markers |

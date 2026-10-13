@@ -62,6 +62,41 @@ uint32_t gs_rec_sends(void) { return s_sends; }
 uint32_t gs_rec_verts(void) { return s_verts; }
 uint32_t gs_rec_unsplittable(void) { return s_unsplittable; }
 
+/* The first vertex group's span, kept as floats and converted once: this file is one of the units
+ * compiled -msoft-float, and a floor/ceil per vertex would be a libcall per vertex in the same frame
+ * the row is timing.  While the first group is open the extra work is four compares a vertex; the
+ * moment it closes, `s_span_done` makes the whole thing one integer test for the rest of the frame.
+ * See ps2_gs_rec.h for what the span is for and why its edges round inward. */
+static float s_span[4];                /* x low, y low, x high, y high */
+static uint32_t s_span_n;              /* vertices in the span so far */
+static uint32_t s_span_done;           /* the first group has closed: stop accumulating */
+static int32_t s_span0[4];             /* the frozen span, outward-conservative integers */
+static uint32_t s_span0_valid;
+
+int gs_rec_bbox_first(int32_t *l, int32_t *t, int32_t *r, int32_t *b)
+{
+    if (!s_span0_valid) return -1;
+    if (l) *l = s_span0[0];
+    if (t) *t = s_span0[1];
+    if (r) *r = s_span0[2];
+    if (b) *b = s_span0[3];
+    return 0;
+}
+
+/* The largest integer not above `v`, and the smallest not below, without a libcall and without
+ * trusting C's truncation for negatives: -0.5 truncates to 0, which is above the number. */
+static int32_t span_floor(float v)
+{
+    const int32_t i = (int32_t)v;
+    return ((float)i > v) ? i - 1 : i;
+}
+
+static int32_t span_ceil(float v)
+{
+    const int32_t i = (int32_t)v;
+    return ((float)i < v) ? i + 1 : i;
+}
+
 void gs_rec_init(gs_rec_sink sink, void *user)
 {
     s_sink = sink;
@@ -77,6 +112,9 @@ void gs_rec_init(gs_rec_sink sink, void *user)
     s_sends = 0u;
     s_verts = 0u;
     s_unsplittable = 0u;
+    s_span_n = 0u;
+    s_span_done = 0u;
+    s_span0_valid = 0u;
 }
 
 /* One vertex's four quadwords, appended to the open group, and the sliding window that a
@@ -143,6 +181,21 @@ static void close_group(void)
         return;
     }
 
+    /* The frame's first vertex group has just completed, so its span is now a fact about the
+     * picture rather than about geometry still to come.  Converting here rather than per vertex is
+     * the point: two libcalls for the whole frame, and the inward rounding means the frozen rect is
+     * one the group provably reaches. */
+    if (!s_span_done) {
+        if (s_span_n != 0u) {
+            s_span0[0] = span_ceil(s_span[0]);
+            s_span0[1] = span_ceil(s_span[1]);
+            s_span0[2] = span_floor(s_span[2]);
+            s_span0[3] = span_floor(s_span[3]);
+            s_span0_valid = 1u;
+        }
+        s_span_done = 1u;
+    }
+
     /* Back-patch the tag now that the loop count is final.  EOP is set because each send here is
      * one complete packet on a DMA transfer of its own, never a fragment of a larger one. */
     s_qw[2u * s_tag_at] = gs_pack_giftag(s_nloop, 1u, 1u, s_prim, GS_FLG_PACKED, GS_REC_REGS_N);
@@ -167,6 +220,7 @@ static void open_group(void)
     s_qw[2u * s_n + 1u] = gs_pack_regs(s_regs, GS_REC_REGS_N);
     s_tag_at = s_n;
     s_n += 1u;
+    s_span_n = 0u;
 }
 
 static void write_vertex(const uint64_t v[GS_REC_REGS_N])
@@ -224,6 +278,23 @@ int gs_rec_vertex(float x_px, float y_px, uint32_t z)
     v[1] = s_rgbaq;
     v[2] = s_st;
     v[3] = gs_pack_xyz2(gs_vertex_coord16(x_px), gs_vertex_coord16(y_px), z);
+
+    /* The span of the group being written, while it is still the frame's first one.  Four compares
+     * and no conversion: the pixels are the same floats the vertex itself is built from, so this
+     * reads the geometry rather than decoding the packet back. */
+    if (!s_span_done) {
+        if (s_span_n == 0u) {
+            s_span[0] = s_span[2] = x_px;
+            s_span[1] = s_span[3] = y_px;
+            s_span_n = 1u;
+        } else {
+            if (x_px < s_span[0]) s_span[0] = x_px;
+            if (x_px > s_span[2]) s_span[2] = x_px;
+            if (y_px < s_span[1]) s_span[1] = y_px;
+            if (y_px > s_span[3]) s_span[3] = y_px;
+            s_span_n++;
+        }
+    }
 
     if (s_n + room > GS_REC_QW_CAP) {
         /* No room for this vertex.  A safe boundary exists only if the group can be cut here,

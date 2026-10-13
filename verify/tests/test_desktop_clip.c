@@ -17,6 +17,15 @@
  * decodes -- which no amount of banding downstream can make cheap.  It used to latch
  * only at 1024x768, so an 800x600 present paid that rebuild once per band and the
  * cursor stayed slow.
+ *
+ * Increment 9a adds a third law to the same canvas: a GS layer window's body plate is
+ * not filled, because the stream that same pass records paints those pixels into VRAM
+ * a few microseconds after the band that holds them is uploaded.  That is a refusal to
+ * write 384,000 pixels per XMB frame (6.5 ms of the measured 20.4 ms `frame=`), so it
+ * is only legitimate while the skipped set is exactly the rect the GS covers -- one
+ * pixel wider and the present shows desktop art where a grey plate belongs.  The
+ * difference set is therefore pinned from both sides, and the counters that priced the
+ * saving are checked against the geometry rather than trusted.
  */
 
 #include <stdio.h>
@@ -27,6 +36,7 @@
 #include <btron/error.h>
 #include <btron/dp.h>
 #include <btron/wnd.h>
+#include <btron/pmc.h>
 #include <btron/desktop.h>
 #include <btron/settings.h>
 
@@ -299,6 +309,274 @@ static void whole_canvas_reports_its_stages(void)
     free(before);
 }
 
+/* Increment 9a: the body plate yields the rect the stream owns -- and nothing else.
+ *
+ * `frame=` on the PS2 measures 20.4 ms of a 112.7 ms XMB composite, and the two-point
+ * regression over `body=` (715,360 px -> 13,069 us against 1,109,568 px -> 20,380 us) puts
+ * the marginal rate at the same 18.5 ns/px as the average, with an intercept of about
+ * -200 us: that stage is essentially one whole-body flat fill per window.  A layer window
+ * is then drawn twice, once into the canvas by the fill and once into VRAM by the stream the
+ * same pass records, and only the second copy reaches the screen, because the present uploads
+ * the band first and sends the stream after (doc/md/PS2.md row 9a: -6,547 us measured at
+ * `plate=covered`).  Refusing 384,000 px a frame is legitimate only while the refused set is
+ * exactly the rect the GS covers -- one pixel wider is a hole of desktop art where a grey
+ * plate belongs, and no bench row would show it.  So this asserts the set equality, not the
+ * saving.
+ *
+ * Four composites of the same desktop give it from both sides:
+ *   desktop  -- no windows at all: what a skipped rect has to show,
+ *   recorded -- the walk that re-runs the layer's paint callback, so a stream exists and the
+ *               plate may be refused,
+ *   plate    -- a blit-only walk over the same live layer window: no stream is staged, so the
+ *               plate stays, which is the other half of `records` being the predicate,
+ *   painted  -- the same recording walk with the layer flag cleared: the Pi 400's data state,
+ *               and the picture the shared compositor drew before this change.
+ * Then a 32x32 box, because a box is what the present actually hands the compositor, and a
+ * window that keeps its resize grip, because the grip is canvas-drawn art inside the hole.
+ */
+static void layer_plate_yields_the_stream_rect(void)
+{
+    static COLOR fb[800 * 600];
+    const H w = 800, h = 600;
+    const size_t npx = (size_t)w * h;
+    const size_t bytes = npx * sizeof(COLOR);
+    const RECT whole = { 0, 0, 800, 600 };
+    char msg[256];
+    RENDER_STATS st;
+    COLOR *desktop, *recorded, *plate, *painted;
+
+    printf("\n==========================================================\n");
+    printf(" GS Layer Body Plate: the Fill Yields the Rect the Stream Covers\n");
+    printf("==========================================================\n");
+
+    GDEV *screen = opn_dev_vram(w, h, fb);
+    if (!screen) { printf("  [FAIL] opn_dev_vram(800,600)\n"); s_fail++; return; }
+    init_wnd_mgr(screen);
+    g_cursor_in_backbuffer = 0;
+
+    /* The plate is the BeOS frame branch's; the Chokanji branch has its own painter and no
+     * LTGRAY body fill to skip, so under that chrome these checks would read as a broken
+     * skip rather than as a different style. */
+    if (pmc_get_style() != WM_STYLE_BEOS) {
+        printf("  [FAIL] the walk is chromed to WM_STYLE_%d, not BEOS\n", (int)pmc_get_style());
+        s_fail++;
+        return;
+    }
+
+    desktop = (COLOR *)malloc(bytes);
+    recorded = (COLOR *)malloc(bytes);
+    plate = (COLOR *)malloc(bytes);
+    painted = (COLOR *)malloc(bytes);
+    if (!desktop || !recorded || !plate || !painted) {
+        printf("  [FAIL] out of memory\n");
+        s_fail++;
+        free(desktop); free(recorded); free(plate); free(painted);
+        return;
+    }
+
+    redraw_baremetal_desktop(screen, w, h);   /* windowless reference; latches the cache here */
+    memcpy(desktop, fb, bytes);
+
+    WND *lay = opn_wnd("Layer", 200, 120, 300, 200, WND_ATTR_TITLE | WND_ATTR_BORDER);
+    WND *plain = opn_wnd("Plain Plate", 520, 340, 240, 180, WND_ATTR_TITLE | WND_ATTR_BORDER);
+    if (!lay || !plain) {
+        printf("  [FAIL] opn_wnd\n");
+        s_fail++;
+        free(desktop); free(recorded); free(plate); free(painted);
+        return;
+    }
+    /* An ordinary window in the same walk, disjoint from the layer one: its plate is the
+     * control for "the refusal is per window, not per pass", and it is the case the PS2
+     * desktop still has three of. */
+    lay->paint = paint_pattern;
+    plain->paint = paint_pattern;
+    /* opn_wnd() adds WND_ATTR_RESIZE to every bordered window, and the corner grip it then
+     * draws is canvas-drawn art *inside* the client rect -- the XMB window clears the
+     * attribute for exactly that reason.  Cleared here so the four comparisons below are
+     * single-variable; the attribute is put back for its own case at the end. */
+    lay->attr &= (UW)~WND_ATTR_RESIZE;
+    plain->attr &= (UW)~WND_ATTR_RESIZE;
+    /* The only other writer of this flag is egl_create_window_surface(), compiled in only
+     * under -DBTRON_GL_PREFER_EEGS.  That is why the lane can be gated on the flag instead
+     * of on an #ifdef and still provably leave the Pi 400's walk alone: clearing it here is
+     * the Pi's data state, not a simulation of one. */
+    lay->gl_layer = TRUE;
+
+    /* The walk's own geometry, restated here rather than reused: `buried` in
+     * draw_retro_window_frame(), `wnd->client`, and the rect the environment packet is
+     * addressed at (s_gl_client, built in the walk from dest_x/dest_y and the client device)
+     * have to be one rectangle, and a test that took the hole from the code would not say
+     * so. */
+    const H title_h = WND_TITLE_HEIGHT;
+    const H border = 4;                      /* draw_retro_window_frame()'s own number */
+    const RECT lay_body = { lay->bounds.left, (H)(lay->bounds.top + title_h),
+                            lay->bounds.right, lay->bounds.bottom };
+    const RECT hole = { (H)(lay_body.left + border), (H)(lay_body.top + border),
+                        (H)(lay_body.left + border + lay->dev->width),
+                        (H)(lay_body.top + border + lay->dev->height) };
+    const uint32_t hole_px = (uint32_t)(hole.right - hole.left) * (uint32_t)(hole.bottom - hole.top);
+    const uint32_t body_px = (uint32_t)(lay_body.right - lay_body.left) *
+                             (uint32_t)(lay_body.bottom - lay_body.top);
+    const uint32_t plain_px = (uint32_t)(plain->bounds.right - plain->bounds.left) *
+                              (uint32_t)(plain->bounds.bottom - (plain->bounds.top + title_h));
+    snprintf(msg, sizeof(msg), "the plate's hole, the window's client rect and the stream's clip "
+             "are one rectangle %d,%d,%d,%d (%u px)",
+             hole.left, hole.top, hole.right, hole.bottom, hole_px);
+    CHECK(lay->client.left == hole.left && lay->client.top == hole.top &&
+          lay->client.right == hole.right && lay->client.bottom == hole.bottom, msg);
+
+    /* 1. The recording pass. */
+    inval_wnd(lay);
+    inval_wnd(plain);
+    btron_render_stats_take(&st);
+    redraw_baremetal_desktop_rect_paint(screen, &whole);
+    btron_render_stats_take(&st);
+    memcpy(recorded, fb, bytes);
+    printf("  recording walk: body=%upx skip=%upx (rect %u, layer body %u, plain body %u)\n",
+           st.frame_body_px, st.frame_body_skip_px, hole_px, body_px, plain_px);
+    snprintf(msg, sizeof(msg), "the recording walk skips exactly the plate (%u px, the rect's %u)",
+             st.frame_body_skip_px, hole_px);
+    CHECK(st.frame_body_skip_px == hole_px, msg);
+    snprintf(msg, sizeof(msg), "and still counts the ring plus the ordinary window's whole body "
+             "(%u vs %u)", st.frame_body_px, (body_px - hole_px) + plain_px);
+    CHECK(st.frame_body_px == (body_px - hole_px) + plain_px, msg);
+
+    /* 2. A pass over the same live layer window that records nothing: the callback does not
+     *    run, so no stream is staged, so the plate has to be there.  This is the half the
+     *    `records` predicate exists for -- a skip here would put desktop art where a plate
+     *    belongs and show nothing wrong on a bench row. */
+    btron_render_stats_take(&st);
+    redraw_baremetal_desktop_rect(screen, &whole);          /* blit_only */
+    btron_render_stats_take(&st);
+    memcpy(plate, fb, bytes);
+    CHECK(st.frame_body_skip_px == 0u,
+          "a walk that sends no stream skips no plate, even over a live layer window");
+    snprintf(msg, sizeof(msg), "and fills both bodies whole (%u vs %u)", st.frame_body_px,
+             body_px + plain_px);
+    CHECK(st.frame_body_px == body_px + plain_px, msg);
+
+    /* 3. The Pi 400's walk, reached by clearing the flag the EEGS backend would have set. */
+    lay->gl_layer = FALSE;
+    inval_wnd(lay);
+    inval_wnd(plain);
+    btron_render_stats_take(&st);
+    redraw_baremetal_desktop_rect_paint(screen, &whole);
+    btron_render_stats_take(&st);
+    memcpy(painted, fb, bytes);
+    CHECK(st.frame_body_skip_px == 0u, "with no layer window in the walk, nothing is skipped");
+    snprintf(msg, sizeof(msg), "and the shared compositor fills both bodies (%u vs %u)",
+             st.frame_body_px, body_px + plain_px);
+    CHECK(st.frame_body_px == body_px + plain_px, msg);
+
+    /* The set equality, from both sides at once.  Nothing outside the hole may differ
+     * between the recording walk and the walk that fills the plate -- the border, the double
+     * inset, the title tab, the ring and every other window are byte-identical -- and inside
+     * it all three expected pictures have to be what each pass says they are. */
+    unsigned outside = 0, inside = 0, hole_not_desktop = 0, hole_not_plate = 0, hole_not_art = 0;
+    unsigned gray_in_desktop = 0;
+    const COLOR *lay_px = lay->dev->pixels;
+    for (H y = 0; y < h; y++) {
+        for (H x = 0; x < w; x++) {
+            const size_t i = (size_t)y * w + x;
+            if (!(x >= hole.left && x < hole.right && y >= hole.top && y < hole.bottom)) {
+                if (recorded[i] != plate[i]) outside++;
+                continue;
+            }
+            if (recorded[i] != desktop[i]) hole_not_desktop++;
+            if (plate[i] != COLOR_LTGRAY) hole_not_plate++;
+            if (painted[i] != lay_px[(size_t)(y - hole.top) * lay->dev->width + (x - hole.left)])
+                hole_not_art++;
+            if (desktop[i] == COLOR_LTGRAY) gray_in_desktop++;
+            if (recorded[i] != plate[i]) inside++;
+        }
+    }
+    printf("  recorded vs plate: %u differing px outside the hole, %u inside (the hole is %u px)\n",
+           outside, inside, hole_px);
+    CHECK(outside == 0u, "no pixel outside the client rect changes when the plate is skipped");
+    snprintf(msg, sizeof(msg), "every pixel of the hole is the pixel the two walks disagree on "
+             "(%u of %u)", inside, hole_px);
+    CHECK(inside == hole_px, msg);
+    CHECK(hole_not_desktop == 0u,
+          "and what a skipped hole holds is the desktop, exactly where a windowless canvas has it");
+    CHECK(hole_not_plate == 0u, "what the non-recording walk leaves there is the plate itself");
+    CHECK(hole_not_art == 0u,
+          "and with the layer flag cleared the hole is the blitted client art again -- the Pi's picture");
+    CHECK(gray_in_desktop == 0u,
+          "the desktop under the hole is never the plate's grey, so the two sets cannot coincide");
+
+    /* 4. The same decision at a box's size, which is the shape the present actually drives.
+     *    The stream's environment packet scissors the client rect, not the band, so a band
+     *    that reaches the layer refuses the whole rect: the count is the decision's, not the
+     *    writes'.  (The same is true of `body=` before this change, which is why a clipped
+     *    band's frame= looked twenty times faster than the store rate allows.) */
+    lay->gl_layer = TRUE;
+    for (size_t i = 0; i < npx; i++) fb[i] = SCRATCH;
+    const RECT box = { (H)(hole.left - 8), (H)(hole.top - 8), (H)(hole.left + 24), (H)(hole.top + 24) };
+    btron_render_stats_take(&st);
+    redraw_baremetal_desktop_rect_paint(screen, &box);
+    btron_render_stats_take(&st);
+    unsigned box_wrong = 0, box_leaked = 0;
+    for (H y = 0; y < h; y++) {
+        for (H x = 0; x < w; x++) {
+            const size_t i = (size_t)y * w + x;
+            if (x >= box.left && x < box.right && y >= box.top && y < box.bottom) {
+                if (fb[i] != recorded[i]) box_wrong++;
+            } else if (fb[i] != SCRATCH) {
+                box_leaked++;
+            }
+        }
+    }
+    printf("  32x32 box over the hole's corner: skip=%upx body=%upx, %u box px disagreeing with "
+           "the whole-canvas walk, %u px written outside the box\n",
+           st.frame_body_skip_px, st.frame_body_px, box_wrong, box_leaked);
+    snprintf(msg, sizeof(msg), "a 1,024 px box reports the whole %u px rect as skipped -- the "
+             "refusal is the stream's rect, not the band's area", hole_px);
+    CHECK(st.frame_body_skip_px == hole_px, msg);
+    CHECK(box_wrong == 0u, "and the box still reproduces the whole-canvas walk's pixels inside itself");
+    CHECK(box_leaked == 0u, "while writing nothing outside its own rect: the skip does not widen the band");
+
+    /* 5. A layer window that keeps its resize grip.  The grip sits inside the client rect and
+     *    is drawn by the decoration's own fill_rec, not by the plate, so the refusal must not
+     *    reach it: on the device the hole is fully buried by the stream only because the app
+     *    asked for no grip, and the compositor cannot assume that of every layer window. */
+    lay->attr |= WND_ATTR_RESIZE;
+    inval_wnd(lay);
+    btron_render_stats_take(&st);
+    redraw_baremetal_desktop_rect_paint(screen, &whole);
+    btron_render_stats_take(&st);
+    const RECT grip = { (H)(lay_body.right - 14), (H)(lay_body.bottom - 14),
+                        (H)(lay_body.right - 2), (H)(lay_body.bottom - 2) };
+    const H gx1 = grip.right < hole.right ? grip.right : hole.right;
+    const H gy1 = grip.bottom < hole.bottom ? grip.bottom : hole.bottom;
+    unsigned grip_desktop = 0, hole_rest_wrong = 0;
+    for (H y = grip.top; y < gy1; y++) {
+        for (H x = grip.left; x < gx1; x++) {
+            if (fb[(size_t)y * w + x] == desktop[(size_t)y * w + x]) grip_desktop++;
+        }
+    }
+    for (H y = hole.top; y < grip.top; y++) {
+        for (H x = hole.left; x < hole.right; x++) {
+            if (fb[(size_t)y * w + x] != desktop[(size_t)y * w + x]) hole_rest_wrong++;
+        }
+    }
+    printf("  grip on: skip=%upx body=%upx, %u of %u grip px showing desktop through, "
+           "%u px of the hole above the grip not holding desktop art\n",
+           st.frame_body_skip_px, st.frame_body_px, grip_desktop,
+           (uint32_t)(gy1 - grip.top) * (uint32_t)(gx1 - grip.left), hole_rest_wrong);
+    CHECK(grip_desktop == 0u,
+          "the corner grip inside the hole is still drawn -- the skip is the plate, not every fill in the rect");
+    CHECK(hole_rest_wrong == 0u, "and the rest of the hole stays unfilled with the attribute back on");
+    snprintf(msg, sizeof(msg), "the count stays the rect's %u px even though the grip writes %u of "
+             "them (body=%u)", hole_px,
+             (uint32_t)(gy1 - grip.top) * (uint32_t)(gx1 - grip.left), st.frame_body_px);
+    CHECK(st.frame_body_skip_px == hole_px && st.frame_body_px == (body_px - hole_px) + plain_px,
+          msg);
+
+    cls_wnd(lay);            /* closes the layer: it resets the pending stream and the cover list */
+    cls_wnd(plain);
+    free(desktop); free(recorded); free(plate); free(painted);
+}
+
 int main(void)
 {
     uint32_t misses;
@@ -313,6 +591,7 @@ int main(void)
 
     stale_window_selectivity();
     whole_canvas_reports_its_stages();
+    layer_plate_yields_the_stream_rect();
 
     /* 800x600 is the PS2's workbench.  Both halves failing here is the bug this
      * port had: the composite rebuilt the desktop per band, and the cursor stayed

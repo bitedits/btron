@@ -448,6 +448,114 @@ read only under the PS2 flag.
 
 ---
 
+## Row 9a's landing: two builds, one refused rect, and the instruments that watch the premise
+
+<a name="row-9a-landing"></a>
+
+**Row 9a landed on 2026-10-13, and its evidence spans two builds, so each row below is attributed
+before it is read.**  The lane is a refusal -- `draw_retro_window_frame()` declines to fill the body
+plate under a window whose client the Graphics Synthesizer owns -- and a refusal's claim is about a
+number that *stops* moving, which needs a before and an after from two different images.  Both are
+`PS2_GL=eegs PS2_FP=hw` bench images, and the one difference between them is the lane:
+
+*The build that only measured.*  It carries the `body=` column and not the refusal, which is exactly
+the state a premise is taken in.  Its three XMB cycles, verbatim:
+
+```
+comp bg=9937 frame=20380 paint=49185 blit=30795 panel=1835 bars=576 total=112711 bfn=0 wins=4/4 body=1109568px
+comp bg=9919 frame=20336 paint=46740 blit=30732 panel=1825 bars=576 total=110146 bfn=0 wins=4/4 body=1109568px
+comp bg=9897 frame=20314 paint=46308 blit=30728 panel=1803 bars=569 total=109627 bfn=0 wins=4/4 body=1109568px
+```
+
+Every column of these three rows is a range, not a number, and the ranges are the reason the handbook
+quotes a marginal rate rather than a per-frame one: `frame=` spans 20,314-20,380 µs over a constant
+`body=1109568px`, so the walk's own run-to-run spread is 0.3% of the stage.  The regression's first
+point is the same build's whole-canvas desktop walk, which that log printed as
+`compositor: bg=9924(480000 px) frame=13069(715360 px) paint=0 blit=30755(613440 px) comp=56121 bfn=0
+wins=3/3` -- no `skip=` column, because the refusal did not exist yet.  Both points are therefore from
+one image, which is what makes them a line rather than a comparison of two builds.  That log no longer
+exists on disk; its successor does, and it repeats the desktop row exactly -- line 365 of the current
+`build/ps2-bench.log` reads `frame=13069(715360 px skip=0)` with the same `bg=9924`, `blit=30755` and
+`comp=56121`.  Every number in that row is unchanged across the two builds, because the lane cannot
+reach a walk with no layer window: that is the control, and it is also why the withdrawn log can be
+quoted from memory rather than re-measured.
+
+*The build that refused.*  Lines 475 / 490 / 507 of the current `build/ps2-bench.log` (mtime Oct 13
+03:41), verbatim:
+
+```
+[XMBT] cycle 0 … | comp bg=9937 frame=13833 paint=49429 blit=30796 panel=1834 bars=576 total=106404 bfn=0 wins=4/4 body=725568px skip=384000px
+[XMBT] cycle 1 … | comp bg=9913 frame=13828 paint=46850 blit=30716 panel=1832 bars=563 total=103713 bfn=0 wins=4/4 body=725568px skip=384000px
+[XMBT] cycle 2 … | comp bg=9888 frame=13785 paint=46514 blit=30696 panel=1790 bars=569 total=103251 bfn=0 wins=4/4 body=725568px skip=384000px
+```
+
+Pairing them by cycle index rather than by taking the largest of each: 6,547 / 6,508 / 6,529 µs off
+`frame=`, and 112,711 / 110,146 / 109,627 → 106,404 / 103,713 / 103,251 µs off `total=`.  Over the
+384,000 px each cycle refuses, that is 17.05 / 16.95 / 17.00 ns/px against the 18.55 ns/px the two
+points give as their marginal rate.  **The 8% shortfall is the interesting half of the row, so it is
+written out instead of being smoothed**: the refusal removes the plate's *inner* write and not the
+walk's bookkeeping around it.  `fill_body_part()` is called four times with the buried rect as a
+horizontal or vertical strip, the four strips together being the body minus the client, so the
+border, the inset arithmetic, the `RECT` clamp against the body and the four call sites all still
+run -- and 394,208 px of that arithmetic is what `body=725568px` still counts for the XMB's ring
+(394,208 body − 384,000 client = 10,208 px).  A poster lane would take the strips too; a refusal
+cannot, which is the whole difference between 17.0 and 18.55 and the reason the two rates are printed
+against each other rather than averaged.
+
+*Instrument 1 -- `body=` / `skip=`, and why they are decision counts.*  `s_frame_body_px` and
+`s_frame_body_skip_px` in `src/window/wnd.c` are reset at the top of the walk and published through
+`btron_render_stat_max()` into `g_render_stats.frame_body_px` / `frame_body_skip_px`.  They count what
+the walk *decided*, not what it wrote: an ordinary window's body is added whole whether or not a band
+clips it, and a layer window's client is subtracted whole whether or not the damage reaches it.  That
+is what makes the pair usable as the arithmetic above -- 1,109,568 − 725,568 = 384,000 exactly, the
+client area of one 768×500 window -- and it is what makes the pair unable to certify anything about a
+single pixel, which is why the set equality lives in a host test rather than in a log column.
+
+*Instrument 2 -- `gs_rec_bbox_first()`, `b0=` and `plate=`.*  The refusal is sound only while the
+stream covers the whole rect it buries, and the recorder now answers that question about itself.
+`src/drivers/ps2/ps2_gs_rec.c` accumulates the span of the **first vertex group** only -- four floats,
+one `s_span_done` that turns the accumulation off the moment that group closes -- and freezes it into
+`s_span0[]` with `span_ceil()` on the two low edges and `span_floor()` on the two high ones, so the
+span is rounded **inward**: a vertex at 767.4 reaches 767 and never 768.  `core_ps2.c` compares that
+span against the environment packet's own clip and prints `clip=768x500 b0=0,0,767,499 plate=covered`
+in `[GSTS]`; `SHORT` means the span does not reach all four edges, and `none` means the frame recorded
+no vertex group at all.  Why the first group and not the union of all of them, since a union is the
+obvious instrument: a union would answer "does some pixel of the stream land in the rect", which is not
+the premise; the premise is that the stream plates the rect, and only the first group can be required
+to do that, because it is the group the app's own background fill forms.  The cost of that choice is
+stated with the instrument: it is a *necessary* condition, not a sufficient one -- edge-reaching says
+nothing about interior fragment coverage, which is a rasteriser property and row 6's gate, i.e. the
+user's eyes.  Every `[GSTS]` row of the landing run reads `plate=covered` (lines 476 / 491 / 508) and
+no `[GSPLATE]` line appears anywhere in the log; the warning is one-shot per session, armed only when
+`has_bbox && !plate_covers`, and its text names the consequence ("a layer's body fill stays required")
+so that a run which shows it is a run whose 9a must be reverted, not a run to be explained.
+
+*The host gate, because a refusal's set equality is not visible on a screen.*
+`verify/tests/test_desktop_clip.c`'s `layer_plate_yields_the_stream_rect()` paints one 800×600 canvas
+four ways over one 292×164 client rect and pins the difference set from both directions: the windowless
+reference, a records pass with `gl_layer` set (the refusal), the same pass with `blit_only` set (no
+stream, so the plate stays), and the records pass with the flag cleared (the Pi 400's picture).  It
+asserts the plate's hole, the window's `client` and the stream's clip are one and the same rectangle
+before comparing anything -- 204,152,496,316, 47,888 px -- then that no pixel outside the hole differs,
+that every pixel inside it is the desktop and never the plate's LTGRAY, that the flag-cleared pass
+returns the blitted client art, that the counters read 47,888 skipped and 40,192 filled, and that a
+32×32 damage box over the hole's corner reports the whole rect while writing only its own 1,024 px.
+The last case is the grip: `WND_ATTR_RESIZE`'s `fill_rec()` and three hatch lines sit *inside* the
+client rect, so with the attribute on, 100 px of the hole are canvas-drawn and still drawn -- which is
+why the count stays the rect's 47,888 even though the walk writes 100 of those px, and why the test
+asserts the grip's pixels rather than trusting the count.  **42/42 checks, 1 SKIP**, and the SKIP is the
+system panel, whose `global_menu_render_bar` is a stub in that harness.
+
+*Gates at landing.*  `make test-ps2` **91/91**, `make arm64-elf` builds, `make -k test` exits 0 with
+the host suites at 100%, `vram_left=1081344` unchanged (9a claims no plane, and a plane count that
+moves under a refusal lane would mean the lane grew into 9b mid-change), `[GSTS]` keeps
+`drop=0 unsplit=0 texmiss=0 coverdrop=0` with `groups=51` where it was, and the `bg=`/`paint=`/`blit=`
+/`panel=`/`bars=` columns stay inside their own run-to-run spread while `frame=` alone falls.  What 9a
+does *not* buy is still priced in the handbook: 715,360 px of desktop-window plates, `bg=` 9.9 ms,
+`blit=` 30.7 ms.
+
+---
+
 ## The softfloat differential: one count, three controls, and why the count is dated
 
 <a name="softfloat-controls"></a>

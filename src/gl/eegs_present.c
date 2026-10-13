@@ -152,6 +152,23 @@ int eegs_present_send(const RECT *client)
     s_stats.tex_switches = eegs_tex_switches();
     s_stats.tex_missing = eegs_tex_missing();
 
+    /* Whether this stream plates the rect it is scissored to, which is the condition the window
+     * walk checks before it lets a layer's own body go unfilled in the canvas.  The clip's right
+     * and bottom edges are exclusive in `client` and inclusive in the span, so the comparison is
+     * against w-1 and h-1; `has_bbox` stays clear when the frame drew no vertex group at all,
+     * which is a layer that painted nothing and therefore plates nothing. */
+    {
+        int32_t l = 0, t = 0, r = -1, b = -1;
+        s_stats.has_bbox = (uint32_t)(gs_rec_bbox_first(&l, &t, &r, &b) == 0);
+        s_stats.b0_l = l; s_stats.b0_t = t; s_stats.b0_r = r; s_stats.b0_b = b;
+        s_stats.clip_w = (uint32_t)(client->right - client->left);
+        s_stats.clip_h = (uint32_t)(client->bottom - client->top);
+        s_stats.plate_covers = (uint32_t)(s_stats.has_bbox &&
+                                          l <= 0 && t <= 0 &&
+                                          r >= (int32_t)s_stats.clip_w - 1 &&
+                                          b >= (int32_t)s_stats.clip_h - 1);
+    }
+
     /* The frame is over: the next begin starts a fresh stage, and a group that was sent is never
      * sent twice. */
     sent = s_groups;

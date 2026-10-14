@@ -1008,20 +1008,48 @@ its before/after bench pair means anything.
 
 **The park: what was moved, and what was not.**  `PS2_MSX` (default `0`) is now the fourth
 stamped dial, `.build/ps2-msx.stamp`, and with it off `PS2_SRCS` drops `PS2_MSX_SRCS` and the
-image links at its own budget.  The measured reason: the MSX units alone are **10,656,894
-bytes of .bss** -- `src/emulators/msx/slots.c` 5,496,436 and `src/emulators/msx/msx_app.c`
-4,323,888 -- on a port whose static ceiling is 33,488,896 (`ASSERT(_end <= 0x01FF0000)`), with
-the whole compiled set summing 35,809,162 bytes, i.e. 2,320,266 over the ceiling before the
-heap pool is asked for anything.  `src/cores/core_ps2.c` therefore also lost the 12 MiB MSX
-heap pool from its .bss when the dial is 0, and `open_msx_window*()` keeps weak stubs so the
-XMB's Games row still links and still refuses at runtime rather than crashing.  Nothing was
-deleted: the five B-MSX rows remain in `scripts/test_ps2.sh`, they are not run, and the suite
-prints one line saying so -- `[SKIP] PS2_MSX=0 -- tronMSX is parked out of this image, so the
-five B-MSX rows above were not run (not a pass; the volume still carries cbios/ and msx/)`.
-The ROMs and cbios stayed in /SYS.  `make ps2 PS2_MSX=1` is the un-park and the diagnosis in
-the previous section is what it will meet again.  `src/emulators/msx/v9938.c` -- the
-developer's in-flight LMMC/HMMC rework, which is *not* this lane's file -- was not reverted,
-not reformatted, and does not enter the PS2 image at all while the dial is 0.
+image links at its own budget.  The reason on the day the park landed: the MSX units alone read
+**10,656,894 bytes of .bss** -- `src/emulators/msx/slots.c` 5,496,436 and
+`src/emulators/msx/msx_app.c` 4,323,888 -- on a port whose static ceiling is 33,488,896
+(`ASSERT(_end <= 0x01FF0000)`), with the whole compiled set summing 35,809,162 bytes, i.e.
+2,320,266 over the ceiling before the heap pool is asked for anything.  Those five figures are
+this section's record of what was measured *then*; the block immediately below is what the same
+control reads on the current tree, and it does not agree.  What did not move either way:
+`open_msx_window*()` keeps weak stubs so the XMB's Games row still links and still refuses at
+runtime rather than crashing.  Nothing was deleted: the five B-MSX rows remain in
+`scripts/test_ps2.sh`, they are not run, and the suite prints one line saying so -- `[SKIP]
+PS2_MSX=0 -- tronMSX is parked out of this image, so the five B-MSX rows above were not run
+(not a pass; the volume still carries cbios/ and msx/)`.  The ROMs and cbios stayed in /SYS.
+`src/emulators/msx/v9938.c` -- the developer's in-flight LMMC/HMMC rework, which is *not* this
+lane's file -- was not reverted, not reformatted, and does not enter the PS2 image at all while
+the dial is 0.
+
+**The park's own control, run later the same day, falsified its stated reason.**  A park needs
+an un-park to test it, so `make ps2 PS2_MSX=1 PS2_GL=eegs PS2_FP=hw` was run at 02:24 against
+this tree.  It **LINKS**: ELF 6,018,220 bytes, `_end = 0x01F89A00`, i.e. 419,328 bytes under the
+33,488,896 ceiling -- not 2,320,266 over it.  `geo3d_run` is inside and there is no `__divdi3`
+error, so the two link failures in the previous section are gone; the B-MSX lane fixed them, and
+`git log` attributes the rewrite of `slots.c` and `geo3d.c` to commit 9bbec9d, with 6900bf8
+behind it.  The objects on disk now read `slots.c` 2,350,712, `bios.c` 442,368, `vdp.c` 393,998,
+`msx_app.c` 129,580 -- 3,316,862 B of `.bss` summed over the fifteen units the dial adds -- and
+the two linked images differ by 3,316,864 B of `.bss` and 3,402,880 B of `_end`.  So the earlier
+paragraph's 5,496,436 and 4,323,888 cannot be readings of these files; only a `slots.c` other
+than today's can yield 5,496,436, and this tree's `slots.c` and `msx_app.c` were rewritten at
+01:01 and rebuilt at 01:01:54.  That attribution is INFERRED from mtimes and commit ids, not
+measured -- the object that carried the old figure is gone.  Two more corrections belong here,
+both found while writing the numbers down rather than while measuring: the claim that
+`src/cores/core_ps2.c` "lost the 12 MiB MSX heap pool" when the dial is 0 is wrong twice over,
+because the image's heap is `PS2_HEAP_SIZE` = 11 MiB (`src/cores/core_ps2.c:112`), is not
+MSX-gated, and sits in both builds; and the object-sum-to-image-delta split is not a
+decomposition this lane measured -- the object sum plus the parked image's own `.bss` exceeds the
+image delta by almost exactly that 11 MiB buffer, so where the extra goes is a link-time matter
+and is recorded as R3, not as arithmetic.  The dial therefore stays at 0 on two grounds that do
+not include a link error: 419,328 bytes is one cartridge where the parked image keeps 3,822,208,
+i.e. 9.1x the ceiling, and tronMSX at runtime asks the *host* folder for C-BIOS, which is M17's
+surviving half.  The sentence this section carried before -- "`make ps2 PS2_MSX=1` is the
+un-park and the diagnosis in the previous section is what it will meet again" -- is the claim
+that failed, and it is kept here in that form so the record shows which of its own rows the lane
+falsified.
 
 **The ring: LAW 11d, and the off-by-one that forced it.**  `src/drivers/ps2/ps2_gif_ring.{c,h}`
 is bookkeeping only -- it names no memory-mapped register, and its three hooks
@@ -1149,6 +1177,72 @@ must not move (softfloat `checks=18384493 failures=0`, GS pack/env/rec/tex 55/13
 78, pointer strokes 59, backend choice 13, gl-math 3,836,226).  `make arm64-elf` exit 0.
 `make test-fs` 20/20.  `make test-ps2` 92/92.  Nothing is committed.
 
+**And then the payload row caught something neither of its authors expected.**  The last
+rebuild chain of the day was run to answer one question--does the ELF still carry the volume
+byte for byte--and the answer it gave first was `False`: the on-disk `btron_sys.vol` differed
+from the copy inside `btron-ps2.elf` by 40,841 bytes in blocks 761..801, the region mkbtronfs
+had just reported as *free*.  A fresh build in a scratch path reproduced the ELF's bytes
+exactly, so the ELF was right and the working file had drifted.  The drift is not a build
+race and not the stamp clock (LAW 20c keeps that pinned, and two fresh builds two seconds
+apart still compare clean).  It is a host test writing into the shipped payload.  Five suites
+mount the real file through `blk_file_create("btron_sys.vol", 0 /* read/write existing */,
+1024)` -- `verify/tests/test_fs.c:978` and `:1027`, `verify/tests/test_editor_ui.c:1043`,
+`verify/tests/test_chokanji.c:531` and `:999`, and `verify/tests/test_b_drivesetup.c:158`,
+which mounts it as /SYS -- and two of them then create records in it.  Attributed one suite at
+a time, each against a volume rebuilt from the manifest moments before: `make test-fs` leaves
+0 bytes of difference, `make test-drivesetup` costs 90 (its scratch `sys_boot_%d.cfg`, written
+at `:959` into the real /SYS instead of into the in-memory /SYS the same function allocates
+eight lines earlier at `:947`), `make test-editor` takes the same reading to 40,832, and
+eight lines earlier at `:947`), `make test-editor` takes the same reading to 40,832, and
+`make test-chokanji` adds nothing.  The editor suite's half has a clean mechanism worth naming,
+because it explains why a *deleted* test file still ships: `verify/tests/test_editor_ui.c`
+saves `NOTE.md` into the mounted real volume (`teditor_save_file`, :1109), deletes it
+(`del_fil`, :1120), and calls `vol_sync(v)` (:1121) -- and `vol_sync` is the function that
+flushes the in-RAM image back over the host file.  A removed record leaves its body in the
+blocks it owned, which is why the delta is 40 KiB of data and not 40 KiB of names: `sys_boot`
+is nowhere in the file afterwards, and 40,742 bytes of `NOTE.md` are.  And `make ps2` then
+links those bytes: `$(PS2_SYS_VOL_OBJ)` has `btron_sys.vol` as a prerequisite, the write makes
+the prerequisite newer than the object, so the next image embeds a test's scratch file and
+boots it as /SYS.  It costs free blocks out of the very budget chapter 20 spends a paragraph
+on.
+
+**Why the existing gate could not see it, which is the finding.**  Row 88 checks alignment and
+size; row 89 checks that the ELF's blocks equal `btron_sys.vol`.  Both went green on the
+contaminated link, because row 89 compares the image against the same mutated file the image
+was linked from: the pair is self-referential, and a check that agrees with the artifact it is
+checking can only report consistency, not correctness.  So the lane added row 90 to
+`scripts/test_ps2.sh`, which compares the ELF's own blocks against a freshly built
+`mkbtronfs` product instead of against the working file, and prints how far the working file
+is from that.  Its control was executed first, as LAW 16d requires: `make test-drivesetup`
+then `make test-ps2` gives 88 PASS, 89 PASS, 90 **FAIL** with `90 bytes separate
+btron_sys.vol from a fresh build` in its own description and
+
+    Failed command: dd if=btron-ps2.elf bs=1024 skip=4639 count=1024 2>/dev/null | cmp -s - .build/ps2-vol-fresh.vol
+
+-- the first red row in this suite that says nothing is wrong with the image's *structure* and
+everything is wrong with what it carries.  Then the fix, which lives in the link rather than
+in a habit: the `$(PS2_SYS_VOL_OBJ)` rule now rebuilds the manifest into
+`.build/ps2-vol-fresh.vol` (0.17 s) and replaces the working file when the two disagree,
+printing the byte count, before it assembles the `.incbin`.  It runs ahead of the compile, so
+the object always ends newer than its own input; the control for it being a repair and not a
+churn machine is the pair of runs at the end of the chain, which relinked once with
+
+    [PS2] btron_sys.vol is not the manifest (40841 bytes): a host FS suite wrote into it, so the image relinks from a fresh build
+
+and then idled with no compile lines at all.  After that the three quantities agree: ELF
+payload == working volume == fresh build, and the suite is **93 / 93**.
+
+**What is deliberately NOT fixed here.**  The root cause is a shared B-System host test writing
+into a build artifact, and `verify/tests/test_b_drivesetup.c` is not this lane's file: the
+guardrail says nothing shared with the Pi 400 gets moved to make a PS2 row read green, and the
+right repair there (mount the real volume read-only, or point `:959` at the in-memory /SYS the
+test already built) is a host-suite decision and is offered as one.  What the PS2 port owns is
+the weaker claim it can enforce by itself: no image leaves the link carrying anything but the
+manifest.  Also unproven by all of this, and stated as SKIP: what the guest does with a
+mutated volume at *runtime* -- LAW 20d keeps the volume writable in RDRAM, so a test's scratch
+record would have shown up as a row in the booted `dir`, and nothing in this session booted
+one.
+
 **The guardrail.**  Everything this lane added to the tree is PS2-only: the new pair
 `src/drivers/ps2/ps2_gif_ring.{c,h}`, `verify/tests/test_ps2_gif_ring.c`, the ring rows of
 `scripts/test_ps2.sh`, the `PS2_MSX`/`PS2_GIF` dials and the new `test-ps2-gif-ring` target in
@@ -1159,3 +1253,266 @@ the ring in place, so the Pi 400 path is byte-identical.
 
 ---
 
+## The freshness row catches M5, and the contamination reproduces at the same byte count
+
+**2026-10-14, later the same day.**  Inserting the payload-freshness row into
+`scripts/test_ps2.sh` renumbered every row after it -- Appendix B's M5 firing inside the very
+lane whose fix M5 records.  The book now names its payload rows instead of numbering them (the
+alignment row, the bytes-are-what-mkbtronfs-wrote row, the freshness row), chapter 20's GATE
+table says "the pair agrees with itself" where it said "88/89", and chapter 22 declares itself
+the table that carries the live total: **93 / 93**, read 2026-10-14, while 11.6 keeps the 92 / 92
+it was actually measured against.  A lane's own gate row keeps its landing count; the difference
+is a row count and not a result.
+
+**The chain, re-run from a wiped volume after the sweep.**  `rm -f btron_sys.vol &&
+make btron_sys.vol` -> `mkbtronfs: 'btron_sys.vol' holds 765 of 1024 1024-byte blocks: 765 KiB
+used, 259 KiB free` (the prose of the sweep did not cross a block boundary, so the figure
+section 20 quotes is still the figure the tool prints).  `make ps2 PS2_GL=eegs PS2_FP=hw
+PS2_MSX=0` -> `btron-ps2.elf` 5,919,324 B, `_end = 0x01c4ad80`, `.data` 0x414c00, payload at
+0x00577c00.  `make test-ps2` with the same dials -> **93 / 93**, one `[SKIP] PS2_MSX=0` line
+naming the five B-MSX rows, and the freshness row reporting *0 bytes separate btron_sys.vol from
+a fresh build*.  `make arm64-elf` exits 0.  `make -k test` exits 0 with the ring at 59 checks /
+0 failures and the present suite at 70 / 0.
+
+**The determinism control, which nobody asked for and the second incident gave.**  The volume
+was copied immediately before the aggregate run and compared after it: **40,841 bytes** -- the
+same count as the first, independent incident.  So the mutation is a deterministic artifact of
+those two suites' writes plus `vol_sync()`, not a race, not the clock, not the machine.  The
+guard then printed its line once more on that real sequence, with that number, the ELF relinked,
+and the following two plain `make ps2` invocations compiled nothing at all and ended on
+`make: Nothing to be done for 'ps2'` -- the churn control read off the working tree rather than
+a staged one, which is the stronger form of the same claim.
+
+**Still SKIP, restated so it is not mistaken for settled.**  What the guest does at *runtime*
+with a mutated volume has still not been booted, so it is unmeasured; and the root cause -- a
+shared B-System host test writing through a build artifact -- remains the host suite's decision,
+offered here and deliberately not taken by this lane.
+
+**The same audit run backwards: the book's own code citations.**  Before opening lane 11, every
+`core_ps2.c:NNNN` citation in `doc/txt/PS2.txt` was re-derived from the tree.  Four still land on
+what they describe (`:13`, `:92`, `:112`, `:1147-51`); two had drifted by roughly a thousand
+lines because the bench grows faster than the book notices: VIOLATION 3's `sta_tsk` pair, which
+now reads `:5651-69` and `:5706-14`, and section 2.3's LIVE-gated handover, which now reads
+`core_ps2.c:6282-83` plus `ps2_usb.c:1340` -- the call site `ps2_usb_input_plane(1)`, which is
+the thing that sentence is actually claiming.  Both fixed in place, and the method recorded
+because it generalises: a citation is a claim, and LAW 22 applies to it exactly as it applies to
+a gate row.
+
+---
+
+
+## Lane 9b: the background's price, and the emitter that reads it
+
+**2026-10-14, later the same day.**  `ps2_bench_poster_price()` ran for the first time, on the
+bench image, and LANE 9's new `Price` cell in `doc/txt/PS2.txt` carries its five rows and their
+reading.  The headline is `posterisable=433001 px` of 480,000 -- 90.2% of the canvas is one colour,
+`0xff808000` -- worth 6,798 us at this port's own copy floor against the `bg=7483(480000 px)` the
+same run bills for the same pass, i.e. 90.8% of that column.  The control fired as designed: the
+identical scan told to believe `0xff808001` reports `posterisable=0 px`, so the big number is a
+pixel match and not a row count.  The bound is labelled an upper bound where it is written, because
+the plate it scans is the cached background with no window, deskbar or pointer on it.
+
+**The dial set is the bench's, and it is said out loud.**  That run carries `PS2_FP=hw` and
+`PS2_GL=tinygl`, because `scripts/ps2_bench.sh` calls a bare `make ps2-bench` and the dial stamps
+reset with it -- the image's own `[CFG]` row says so at the head of the log.  The number still
+transfers to the shipped `eegs` build for one reason: `bg=` is the compositor's `btron_row_blit()`
+of the cached background into the canvas array, which is the same code under either GL dial and
+reaches no GS at all.  What changes with the dial is who could take the work over, not what the
+work costs.
+
+**Two of the instrument's columns are one fact.**  A row's posterisable pixels are
+`w - (x1 - x0 + 1)`, so summed over the canvas, `ee keeps=` is identical BY CONSTRUCTION to the sum
+of the per-row art boxes that `art bbox=` prints: 46,999 in both.  Caught while writing the book
+cell, before any of it was quoted as two measurements.  The pair stays in the row as the scan's own
+arithmetic check, and the instrument's comment now says which half is information and which is the
+check.
+
+**LAW 22, aimed at the book rather than at a gate: the VRAM unit was wrong in three places.**  The
+draft of the `Price` cell repeated LANE 9's standing sentence that `vram_left=1081344` is "208
+sixteen-KB planes".  It is not.  `ps2_gs_vram.h:25` sets `GS_PAGE_FRAME` to 8,192 bytes, and the
+arithmetic is exact in that unit: 512 pages in the 4 MiB, 244 for the canvas (1,998,848 B rounded up
+from `GS_VRAM_CANVAS_BYTES`), 136 for the XMB's two planes -- 512-244-136 = **132 pages of 8 KB** =
+1,081,344 / 8,192.  The "1,875" that was being quoted beside it is the background in KILOBYTES
+(1,920,000 B), which is where the mismatch came from: one file's units were being compared against
+another's.  Four copies were fixed in the same pass -- the Budget cell's standing sentence, the new
+`Price` cell, `src/drivers/ps2/ps2_gs_poster.h`'s header, and `core_ps2.c`'s instrument comment --
+and the claim the corrected figures support is the simple one: 1,920,000 B of background does not
+fit in the 1,081,344 B that are free, so a poster carries a colour and never a picture.
+
+**This lane overtook the earlier citation audit.**  The dated row above fixed `sta_tsk` at
+`:5651-69`, its hold twin at `:5706-14` and section 2.3's LIVE handover at `:6282-83`.  All three
+drifted again inside this lane, by a smaller amount: the bench function that produced the `Price`
+rows is +107 lines and the identity note written into its comment is +7 more.  What ships now reads
+`5766-84` for `sta_tsk()`, `5821-29` for `ps2_task_hold()`, `6397-6400` for the handover call -- with
+`ps2_usb.c:1340` still correct, because that file did not move -- and `6255` for
+`ps2_gs_set_framebuffer()`.  The audit's method did not fail; it measured a tree that was about to
+change again, which is the standing cost of editing `core_ps2.c` while the book cites it by line.
+Checking this pass also caught LANE 9's `Gate` premise crediting `ps2_gs_draw_cursor()`
+(`ps2_gs.c:662`) as a writer of the pointer -- it has NO caller in `src/`.  The live path is
+`core_ps2.c:1216` passing `screen->pixels` to `draw_baremetal_cursor_raw()` at
+`src/desktop/desktop.c:348-350`; the rewritten paragraph says so and keeps the dead twin on the
+record, because a caller gated on the dead function's idea of the cursor would be gating on nothing.
+
+**The emitter landed, and it did not go into the image.**  `src/drivers/ps2/ps2_gs_poster.{c,h}`
+builds the one batch `rects=119` implies -- a packed SPRITE group per rect, PRIM/RGBAQ/XYZ2/XYZ2,
+NLOOP back-patched when the count is final, 477 quadwords and 7,632 B, which is 0.4% of the
+1,920,000 B a whole-canvas upload already crosses (`w * h / 4` quadwords at `ps2_gs.c:267`).  It is
+NOT in `PS2_SRCS`: nothing calls it, and `ps2.ld:79` ASSERTs `_end <= 0x01FF0000`, so an
+unreferenced TU would buy image bytes for a saving nobody has collected yet.  Its gate is
+`make test-ps2-gs-poster`, 56 checks on the colour word, the corner word diffed against
+`gs_vertex_coord16()` for every coordinate the 16-bit field holds, and NLOOP after a refusal.  Both
+mutations were run again on the way out and both redden the suite: page offset `0x4000` -> 10
+failures, R/B swapped in the colour read -> 4.
+
+**The chain, with the book edits in it -- and its order is not free.**  The reason is the `PS2_GL`
+stamp, and it fired on this pass rather than being recited from history: a host round (`make
+arm64-elf`, `make -k test`) parses the Makefile's top-level stamp check with no dial on the command
+line, so 2 s after the `eegs` image had passed its gate the stamp read `tinygl` and
+`gl_backend_choice.ps2.o`, `gl_dispatch.ps2.o`, `egl_surface.ps2.o` were gone -- caught by
+`cat .build/ps2-gl.stamp`, and the reason the chain ends with the link and the gate instead of
+beginning with them.  What ships, in the order that leaves a certified pair: `make -k test` -> `ALL
+B-SYSTEM TEST SUITES PASSED`, exit 0, `make test-ps2-gs-poster` inside it at `checks=56
+failures=0`; `make arm64-elf` -> exit 0, and what it did and did not do is the evidence, since the
+B-Book/TAD step re-ran (14 documents, 245,438 bytes) while `btron-aarch64-baremetal.elf` did NOT
+relink -- mtime still 01:57:42, 1,114,512 B -- so no Pi 400 input is touched by this increment.
+Then the last three commands, in that order: `rm -f btron_sys.vol && make btron_sys.vol` -> `holds
+776 of 1024 1024-byte blocks: 776 KiB used, 248 KiB free` (the `Price` cell alone read 774 and 250,
+the page-unit correction crossed one block and the stamp paragraph below crossed another); `make ps2
+PS2_GL=eegs PS2_FP=hw PS2_MSX=0` -> it prints `[PS2] PS2_GL is now eegs (was tinygl)` and rebuilds
+those three objects, because THE VOLUME STEP IS ITSELF ONE OF THOSE BARE ROUNDS -- `make
+btron_sys.vol` names no PS2 target either, and that is what makes the link immediately after it
+load-bearing rather than cosmetic; the image is `btron-ps2.elf` at 5,919,324 B with `_end =
+0x01c4ad80` UNMOVED and the payload still at `0x00577c00` (`nm`: `ps2_sys_vol_image`, 1 MiB,
+`g_sys_vol` at `0x01bc6200`); `make test-ps2` with the same three dials -> **93 / 93**, the total
+unchanged because no image row was added, with the one `[SKIP] PS2_MSX=0` line and the freshness row
+at *0 bytes separate btron_sys.vol from a fresh build*, and the three stamps left reading `eegs`,
+`hw`, `0`.  Chapter 21's dial rows carry the fourth incident and this ordering law; chapter 20's
+ladder reads 776 and 248 for the same reason it read 774, then 775 and 249, before it.
+
+**What is therefore still SKIP.**  Nothing on the bus changed.  There is no new `[GSTS]` row, no
+poster packet is ever built by the shipped image, `bg=` is exactly the column it was, and the
+canvas census that would prove a posterised band still paints has not been taken.  The cell prices
+a saving; collecting it is the caller's job, and the caller has three decisions written down for it
+in LANE 9's `Gate` cell: the exclusion set (the pointer's 16x16 box and every non-layer window rect,
+because there is ONE canvas and the pointer is drawn into it -- `core_ps2.c:5866` builds the desktop
+on `s_desktop_backbuffer`, `core_ps2.c:6255` hands that same array to the GS, `ps2_gs.c:59-62` makes
+`ps2_fb()` return exactly it, and `core_ps2.c:1216` writes the pointer into it), the ordering
+(`ps2_paint_region()` gives upload at `:1255`, stream at `:1278`, covers at `:1299`; a poster goes
+between the first two and is re-issued by every intersecting present), and the ring's buffer-lifetime
+law (a posting producer needs its own
+static batch, and `ps2_gs_draw_env_apply()` cannot be called twice in a pass because `env_pkt` is
+overwritten before the reap).  The `bg=` skip itself lives in shared code, so it goes in behind a
+PS2-only predicate -- 9a's precedent, `src/window/wnd.c:497-520`.
+
+## Lane 9b closed as REFUTED: the census costs more than the canvas, and the caller is not taken
+
+**2026-10-14, later the same day.**  `ps2_bench_poster_price()` was extended to scan the LIVE
+canvas as well as the cached plate, and to time the cheapest decision any caller could make about
+it: one compare per pixel, no rect bookkeeping, no packet built.  Read in the same run a second
+after the plate rows, on the just-launched workbench with its windows up, that decision costs
+**11,498 us** for 480,000 px (23 ns/px) against a `bg=` the same build bills at **7,499 us** for the
+same 480,000 px.  Break-even therefore asks for 11,498 / 15.7 = 732,356 posterisable px out of a
+canvas that holds 480,000, so the refutation is CONTENT-INDEPENDENT: no per-pass census pays,
+whatever is on the screen.  The instrument's own span-returning scan -- the one that would hand a
+caller runs it could post -- costs 53,935 us (112.36 ns/px) and prints its own verdict against the
+plate's upper bound: **MINUS 47,137 us**.  LANE 9's `Price` cell carries all six rows verbatim and
+the verdict paragraph; the row that closes the lane is the first one, not the last.
+
+**This section overtakes the `SKIP` paragraph above it.**  That paragraph listed "the canvas census
+that would prove a posterised band still paints" as not taken.  It has been taken, and its answer
+is a closure rather than a saving, so the three caller decisions that paragraph enumerates -- the
+exclusion set, the ordering, the ring's buffer lifetime -- are written down for a caller that is
+now known not to pay, and the first of them turned out not to be a task at all (below).
+
+**The plate's number is still true and still useless, and both halves are said.**  433,001 px of
+the cached plate are one colour and that is 6,798 us at this port's copy floor; the live canvas
+offers **57,923 px**, which is 909 us at the same floor -- 12.1% of the `bg=` column and 2.2% of the
+`comp=41008` the same compositor row totals.  So the lane did not die because the saving is small.
+It died because the saving is small AND the decision that locates it costs 1.53x the column it was
+meant to reduce.
+
+**The census runs FIRST in the RAM phase, and the reason is a wrong reading that was almost
+quoted.**  Every `ps2_bench_ram()` row below it writes into the canvas the census wants to read; the
+first run called the census after the table and got `flat=0 px of 480000, rows art=600 rects=1`,
+which is one uniform colour -- the last fill row's own test colour, not the desktop.  It is now the
+first call in `ps2_bench_ram_ops()` (`src/cores/core_ps2.c:4127`), where the canvas still holds the
+pass the loop last presented, i.e. the only canvas a present could have uploaded.  The four
+witnesses that ship inside the function (`differs=`, the R/B-swap count, the RGB-vs-alpha split, the
+canvas's OWN colour scan) exist because of that incident: a number that surprising gets identified
+before it gets quoted.
+
+**The controls, because four surprising numbers were on the table.**  The scan told to believe
+`0xff808001` reports `posterisable=0 px`, so the comparator discriminates and none of the live rows
+is a row count.  The byte-order question -- is the canvas the plate's picture with R and B exchanged
+-- answers with zero: `canvas[0]=0xffc8d0d4 plate[0]=0xff808000 differs=375095`, the swapped plate
+word `0xff008080` appears in **0 px**, and of the 375,095 words that differ in all 32 bits,
+374,925 differ in RGB while exactly **170** differ only in the alpha byte.  So 2.1's canvas order
+holds on this path by measurement rather than by law, and what differs is the SCENE -- the
+workbench's own modal word `0xffc8d0d4` is flat over only 14,705 px of 84,922 in 18 rects, which is
+a busy picture and not a teal field with something drawn on it.  The `ee keeps=` / `art bbox=`
+identity that is one fact by construction held again in the live rows: 422,077 in both.
+
+**The premise this cell used to hand the caller came back cheaper than expected, and it is a law
+rather than a task.**  Matching the flat colour IS the exclusion.  The pointer's 16x16 box, a
+window's body and every glyph hold a word that is not `0xff808000`, so they leave the posterisable
+set by themselves and no rect list is needed for correctness -- and `375078 px is foreground the
+canvas carries and the cached plate does not` is that exclusion counted instead of enumerated.  The
+same row prices the failure mode the shortcut would have had: a caller that skipped the census and
+posted the plate's cached 119 rects would write teal wherever the list says flat, over that same
+375,078 px.
+
+**What the refutation does NOT cover, so the next lane does not close the same door twice.**  9b had
+two halves and they were killed by two different rows: the background poster by this census, the
+client-area blit by the Budget cell's VRAM arithmetic (1,920,000 B of background against the 132
+free 8 KB pages), which this measurement neither needed nor changed.  Two costs remain UNPRICED and
+neither is a reason to reopen the caller: skipping interior spans means SPLITTING the canvas
+upload, and no row in this tree measures the per-span START of a split IMAGE transfer (10.1's
+`blit scan` is the nearest number and it is per pixel, not per start); and a flat-area set handed to
+the caller by the compositor's own rect bookkeeping would cost nothing to decide -- but that door is
+already taken, it is 11.5's landed refusal, and it is why `frame=` fell while `bg=` did not.
+
+**The citation drift this lane caused, because the book cites `core_ps2.c` by line.**  The witnesses
+put +7 lines into the bench function on top of the +107 the emitter round carried earlier the same
+day.  What ships now reads `5917-35` for `sta_tsk()`, `5972-80` for `ps2_task_hold()`, `6548-6551`
+for the LIVE handover and `:6406` for `ps2_gs_set_framebuffer()`, with `:6017` for the desktop's
+`s_desktop_backbuffer` binding and `ps2_usb.c:1340` still correct because that file did not move.
+Re-checked by grepping the definitions rather than by trusting the last write: `ER sta_tsk` at
+`:5917`, `static void ps2_task_hold` at `:5972`, the handover call at `:6406`.
+
+**The volume is not the payload until the text is in it, and that check has a wrap trap.**  After
+the last wording fix the shipped cell was verified by grepping BOTH `btron_sys.vol` and
+`btron-ps2.elf` for its own text.  Checking a phrase that straddles a line break returns 0 in both
+-- a FALSE NEGATIVE, because the book is wrapped -- so the check must name a fragment that lies
+inside one line: `one compare per pixel, costs 11498`, `the canvas holds the R/B-swapped plate
+word`, `DECIDING COSTS MORE THAN THE CANVAS IS WORTH`, `VERDICT, written as a closure and not a
+to-do` each return 1 in both artifacts.  Timestamps are not proof either, and this pass says why:
+`btron_sys.vol` and `btron-ps2.elf` share mtime 14:12:43 because `make ps2` rebuilds the volume
+itself through `mkbtronfs --deps`, so an up-to-date-looking pair can carry stale text as easily as
+fresh.  What certifies the pair is the gate's own rows 89 and 90 (1,048,576 B at `0x00577c00`, 0
+bytes separate) together with the single-line greps above.
+
+**The chain, in the order that leaves a certified pair.**  `make -k test` -> exit 0, `ALL B-SYSTEM
+TEST SUITES PASSED`; `make arm64-elf` -> exit 0, the B-Book/TAD step re-ran (14 documents, 245,438
+bytes) while `btron-aarch64-baremetal.elf` did NOT relink -- mtime still Oct 14 01:57:42, 1,114,512
+B -- so no Pi 400 input is touched by this increment; `rm -f btron_sys.vol && make btron_sys.vol` ->
+`holds 785 of 1024 1024-byte blocks: 785 KiB used, 239 KiB free`, the number chapter 20's ladder now
+prints, because the six live rows plus their verdict plus the rewritten `Gate` premise crossed nine
+blocks at once; `make ps2 PS2_GL=eegs PS2_FP=hw PS2_MSX=0` -> it prints `[PS2] PS2_GL is now eegs
+(was tinygl)` and rebuilds the three GL objects, because the volume step is itself one of those bare
+rounds, and the image is `btron-ps2.elf` at 5,919,324 B with `_end = 0x01c4ad80` UNMOVED and the
+payload still at `0x00577c00`, `btron-ps2.iso` at 5,974,016 B, and the bench image that produced
+this census is `btron-ps2-bench.elf` at 5,949,104 B, 13:47:53; `make test-ps2` with the same three
+dials -> **93 / 93**, the total unchanged because no image row was added, with the one
+`[SKIP] PS2_MSX=0` line, the freshness row at *0 bytes separate btron_sys.vol from a fresh build*,
+and the three stamps left reading `eegs`, `hw`, `0`.
+
+**What is therefore SKIP.**  Nothing on the bus changed and nothing can: no poster packet is built
+by the shipped image, there is no new `[GSTS]` row, `bg=` is exactly the column it was before the
+census, and the emitter stays host-gated at `make test-ps2-gs-poster` (56 checks) and OUT of
+`PS2_SRCS`, with `_end` unmoved -- no image byte spent on a saving these rows refuted.  The two
+mutations that redden that host gate were run and restored on the way in, not on this pass, so this
+pass reports them as previously demonstrated rather than re-demonstrated.  The census is re-takable
+by design: `ps2_bench_poster_price()` stays in the bench image precisely so the 11,498-vs-7,499
+inequality can be re-measured if the copy floor ever moves.  What this pass did NOT exercise is the
+census's own 4.8 s of emulator time against any shipped column, because the bench image is not the
+shipped image -- the shipped image never calls the instrument at all.

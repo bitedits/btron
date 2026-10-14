@@ -778,6 +778,31 @@ if [ -f btron_sys.vol ]; then
     # precondition rather than a detail: an unaligned start would silently truncate here.
     assert_check "...and they are the bytes mkbtronfs wrote ($VOL_ON_DISK in btron_sys.vol, copied from ELF offset $VOL_FILE_OFF)" \
         "[ $VOL_BYTES -eq $VOL_ON_DISK ] && dd if=$ELF bs=1024 skip=$((VOL_FILE_OFF / 1024)) count=$((VOL_BYTES / 1024)) 2>/dev/null | cmp -s - btron_sys.vol"
+    # The two rows above are a pair, and the pair has a hole: row 89 compares the image against
+    # btron_sys.vol AS IT IS ON DISK, so both go green together when the working file has drifted
+    # away from the manifest -- and it does drift, because five host suites mount that very file
+    # through blk_file_create(path, 0 /* read/write existing */, 1024) and two of them then write
+    # records into it: verify/tests/test_b_drivesetup.c mounts the real btron_sys.vol as /SYS at
+    # :158 and creates its `sys_boot_%d.cfg` there at :959 (90 bytes), and test_editor_ui.c saves
+    # NOTE.md into the mounted volume, deletes it, and calls vol_sync() at :1109-1121, which
+    # flushes the image back over the file (40,742 bytes more; the deleted record's body stays in
+    # the blocks it owned).  A test's scratch data is then inside the shipped payload -- `make
+    # ps2` .incbin's the file -- and no row here says so.  So this row compares the image's own
+    # blocks against a FRESH mkbtronfs product rather than against the working file, which is the
+    # only form of the claim that survives a test run.  CONTROLS, executed 2026-10-14: `make
+    # test-drivesetup` then `make ps2` -- rows 88 and 89 stay [PASS] and this one reads 90 bytes
+    # and is [FAIL]; `make test-fs` alone moves the working file 0 bytes, which is why it is not
+    # the control; and after the Makefile rule for ps2_sys_vol.ps2.o began repairing the payload
+    # before assembling it, the same sequence ends with this row green at 0 bytes.
+    FRESH_VOL=.build/ps2-vol-fresh.vol
+    if ./mkbtronfs src/tools/manifest.txt -o "$FRESH_VOL" >/dev/null 2>&1; then
+        FRESH_DIFF=$(cmp -l "$FRESH_VOL" btron_sys.vol 2>/dev/null | wc -l | tr -d ' ')
+        assert_check "...and what the image carries is the manifest itself, not the working file (${FRESH_DIFF:-0} bytes separate btron_sys.vol from a fresh build; the host FS suites mount it read/write)" \
+            "dd if=$ELF bs=1024 skip=$((VOL_FILE_OFF / 1024)) count=$((VOL_BYTES / 1024)) 2>/dev/null | cmp -s - $FRESH_VOL"
+        rm -f "$FRESH_VOL"
+    else
+        echo "  [SKIP] mkbtronfs did not rebuild the manifest -- the payload-freshness row was not run"
+    fi
 else
     echo "  [SKIP] btron_sys.vol absent -- the embedded-volume law was not read off the image"
 fi

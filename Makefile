@@ -34,7 +34,7 @@ CC ?= gcc
 CFLAGS ?= -O2 -Wall -Wextra -std=c99 -Iinclude -Iinclude/gl -Isrc/gl -Iinclude/drivers -Isrc/kernel -Isrc/cores -Isrc/quake/include
 
 .PHONY: all posix qemu kernel tkernel sakamura foma uefi pc98 arm-elf arm64-elf m68k ps2 mips \
-        check-structure test-ps2-softfloat test-ps2-gs-pack test-ps2-gs-env test-ps2-gs-rec test-ps2-gs-tex test-ps2-pointer test-ps2-gif-ring test-eegs-raster test-eegs-present test-gl-math test-gl-backend-choice test-ps2-fb-order xmb-atlas test-xmb-atlas \
+        check-structure test-ps2-softfloat test-ps2-gs-pack test-ps2-gs-env test-ps2-gs-rec test-ps2-gs-poster test-ps2-gs-tex test-ps2-pointer test-ps2-gif-ring test-eegs-raster test-eegs-present test-gl-math test-gl-backend-choice test-ps2-fb-order xmb-atlas test-xmb-atlas \
         test-xmb-render test-xmb-render-tgl \
         html2tad book2tad tad_bin test test-kernel test-yoko test-yoko4 test-m68k test-mips test-ps2 test-foma test-foma-ui foma-screens \
         segui-screens \
@@ -1094,18 +1094,30 @@ PS2_GL_SRCS    = src/gl/gl_dispatch.c     \
 # the XMB Games band lists what the machine holds and Cross opens it, with no file
 # system below the program at all.
 #
-# It is PARKED at 0 as of 2026-10-14, because the machine cannot hold both.  Read off
-# this tree's own objects (readelf -S over every *.ps2.o): their .bss sums to
-# 35,809,162 B against the ceiling ps2.ld ASSERTs at 0x01FF0000 = 33,488,896 B, and the
-# MSX units are 10,656,894 B of it (slots.c 5,496,436 -- a 4 MiB cartridge buffer, a
-# 512 KiB mapper RAM, and the rest -- plus src/apps/msx_app.c 4,323,888).  The PS2 heap
-# pool is itself 12 MiB of the total, so no amount of pool trimming closes a 2.3 MB gap
-# on top of 10.6 MB of emulator statics.  Where an MSX ROM buffer lives on a 32 MB
-# Emotion Engine is the B-MSX lane's decision (doc/txt/PS2.txt M17); what this port can
-# decide is to stop shipping an image that does not link at all.  `make ps2 PS2_MSX=1`
-# puts it back exactly as it was, and the gate rows that name it then run again; with
-# the dial at 0 those rows print SKIP, and src/apps/xmb.c's weak open_msx_window*()
-# stubs mean a Games row is a menu row that does nothing rather than a link error.
+# It is PARKED at 0 as of 2026-10-14, and the reason changed within that day, which is
+# worth keeping in the comment because it is the reason the dial has a STAMP.  It landed
+# as a link rescue: the objects of that morning summed 35,809,162 B of .bss against the
+# ceiling ps2.ld ASSERTs at 0x01FF0000 = 33,488,896 B, with slots.c alone at 5,496,436.
+# The control for a park is the un-park, and `make ps2 PS2_MSX=1 PS2_GL=eegs PS2_FP=hw`
+# re-run at 02:24 the same day LINKS: ELF 6,018,220 bytes, _end = 0x01F89A00, 419,328 B
+# under the ceiling.  The B-MSX lane's own 01:01 commit (9bbec9d) rewrote slots.c and
+# geo3d.c under the failure, and today's objects read slots.c 2,350,712, bios.c 442,368,
+# vdp.c 393,998, msx_app.c 129,580, summing 3,316,862 B over the fifteen units the dial
+# adds; the two linked images differ by 3,316,864 B of .bss and 3,402,880 B of _end.
+# So the dial is not what makes the image link any more.  It stays at 0 because the
+# un-park spends 3.4 MB of the port's 3.8 MB headroom -- 419,328 B left, one
+# cartridge -- and because that headroom is not free to spend: the image's 11 MiB heap
+# (PS2_HEAP_SIZE, src/cores/core_ps2.c:112) is NOT MSX-gated and sits in both builds,
+# which also means the old "12 MiB MSX pool" line in this comment was wrong twice over.
+# And tronMSX still asks the host folder for a C-BIOS the volume holds, so the Games
+# band would ship a window saying it cannot find its own BIOS (doc/txt/PS2.txt M17 and
+# the PS2_MSX row of chapter 21).  With the dial at 0 the
+# five B-MSX gate rows print SKIP by name, and src/apps/xmb.c's weak open_msx_window*()
+# stubs mean a Games row is a menu row that does nothing rather than a link error.  The
+# stamp exists because a source-list change is not a recompile: make compares file
+# mtimes, so without it yesterday's [MSX] rows link into today's parked image -- and two
+# .bss readings of the same filename three megabytes apart, on one day, is the evidence
+# for that sentence in this very comment.
 PS2_MSX         ?= 0
 PS2_MSX_SRCS    = $(if $(filter 1,$(PS2_MSX)),$(MSX_SRCS) src/apps/msx_app.c,)
 PS2_SRCS       = $(PS2_STARTUP)           \
@@ -1144,7 +1156,25 @@ PS2_OBJS       = src/drivers/ps2/boot_ps2.ps2.o         \
 # the way it resolves an include.
 PS2_SYS_VOL_OBJ     = src/drivers/ps2/ps2_sys_vol.ps2.o
 PS2_SYS_VOL_SOURCE  = src/drivers/ps2/ps2_sys_vol.s
+# And the prerequisite is NOT a read-only input, which is the part learned the hard way on
+# 2026-10-14: three host suites mount the real btron_sys.vol read/write -- test_b_drivesetup.c
+# mounts it as /SYS at :158 and then writes its scratch `sys_boot_%d.cfg` into it at :959,
+# test_editor_ui.c:1043 and test_fs.c:978/:1027 open it the same way -- so after a `make test`
+# the working file is no longer what the manifest says (measured: 90 bytes, once 40,841).  A
+# mutation that bumps its mtime makes this rule run, and the naive rule then .incbin's a test's
+# scratch file into the shipped image.  test-ps2 cannot see that happening, because its own pair
+# of payload rows compares the ELF against the same mutated file; the row that can see it is
+# #90, and it went red on exactly this.  So the link repairs its own input first: mkbtronfs is
+# byte-reproducible (two fresh builds compare clean), so rebuild the manifest elsewhere and, if
+# the working file is not that, replace it.  The repair happens before the compile line, so the
+# object always ends up newer than the volume and a clean tree still says "nothing to do".
 $(PS2_SYS_VOL_OBJ): $(PS2_SYS_VOL_SOURCE) btron_sys.vol
+	@./mkbtronfs src/tools/manifest.txt -o .build/ps2-vol-fresh.vol >/dev/null 2>&1; \
+	 if ! cmp -s .build/ps2-vol-fresh.vol btron_sys.vol; then \
+	   echo "[PS2] btron_sys.vol is not the manifest ($$(cmp -l .build/ps2-vol-fresh.vol btron_sys.vol | wc -l | tr -d ' ') bytes): a host FS suite wrote into it, so the image relinks from a fresh build"; \
+	   cp .build/ps2-vol-fresh.vol btron_sys.vol; \
+	 fi; \
+	 rm -f .build/ps2-vol-fresh.vol
 	$(PS2_CC) -I. -c $< -o $@
 
 # One calling convention for the whole PS2 image.  A 64-bit-GPR MIPS under O32
@@ -1476,6 +1506,33 @@ test-ps2-gs-rec: $(TEST_GSREC_BIN)
 $(TEST_GSREC_BIN): $(TEST_GSREC_OBJS) src/drivers/ps2/ps2_gs_rec.c src/drivers/ps2/ps2_gs_pack.c src/drivers/ps2/ps2_gs_rec.h src/drivers/ps2/ps2_gs_pack.h verify/tests/gs_group_view.h
 	@mkdir -p ./.build
 	$(CC) $(TEST_GSREC_OBJS) -o $@ $(LDFLAGS)
+
+# LANE 9b: the flat-colour SPRITE batch, the poster half of row 9.  Same #include idiom as the three
+# gates above, with one difference that is not a style choice: ps2_gs_poster.c is NOT in PS2_SRCS
+# yet, because nothing in the image calls it, and this port's image has a size law ps2.ld ASSERTs --
+# so the TU ships host-only until its caller lands, and the caller's own gate is the [GSTS] row that
+# says a batch reached channel 2.  What this suite owns in the meantime is the three things that
+# cannot be seen on a screen and cannot be derived from the code: the colour word (a poster read in
+# the desktop's own byte order paints teal as brown at an identical packet length), the corner word
+# (compared against gs_vertex_coord16() over every coordinate the field holds, so the integer shift
+# is shown to be the recorder's encoding rather than a rival one), and NLOOP (which must shrink with
+# the rects a refusal removes, or the DMA's QWC is shorter than the tag and the GIF decodes the
+# overflow as another packet).
+TEST_GSPOSTER_SRCS = verify/tests/test_ps2_gs_poster.c
+TEST_GSPOSTER_OBJS = $(TEST_GSPOSTER_SRCS:.c=.test.o)
+TEST_GSPOSTER_BIN  = ./.build/test_ps2_gs_poster
+
+test-ps2-gs-poster: $(TEST_GSPOSTER_BIN)
+	@echo "=========================================================="
+	@echo " Running PS2 GS poster batch vs hand-built SPRITE groups..."
+	@echo "=========================================================="
+	@./$(TEST_GSPOSTER_BIN)
+
+$(TEST_GSPOSTER_BIN): $(TEST_GSPOSTER_OBJS) src/drivers/ps2/ps2_gs_poster.c \
+                      src/drivers/ps2/ps2_gs_poster.h \
+                      src/drivers/ps2/ps2_gs_pack.c src/drivers/ps2/ps2_gs_pack.h
+	@mkdir -p ./.build
+	$(CC) $(TEST_GSPOSTER_OBJS) -o $@ $(LDFLAGS)
 
 # Increment 5b: the texture-plane registry.  Same idiom as the three gates above -- the registry
 # and the two units it plans against are #included into the test -- and the same reason: a plane
@@ -2510,7 +2567,7 @@ $(TEST_MSX_BOOT_BIN): $(TEST_MSX_BOOT_OBJS)
 	@mkdir -p ./.build
 	$(CC) $(TEST_MSX_BOOT_OBJS) -o $@ $(LDFLAGS)
 
-test: test-tad test-editor test-chat test-mozc test-wylie test-hmi test-ski test-tracker test-deskclip test-settings test-global-menu test-app-menu test-drivesetup test-fs test-quake test-ps2-softfloat test-ps2-gs-pack test-ps2-gs-env test-ps2-gs-rec test-ps2-gs-tex test-ps2-pointer test-ps2-gif-ring test-eegs-raster test-eegs-present test-gl-math test-gl-backend-choice test-ps2-fb-order test-xmb-atlas
+test: test-tad test-editor test-chat test-mozc test-wylie test-hmi test-ski test-tracker test-deskclip test-settings test-global-menu test-app-menu test-drivesetup test-fs test-quake test-ps2-softfloat test-ps2-gs-pack test-ps2-gs-env test-ps2-gs-rec test-ps2-gs-poster test-ps2-gs-tex test-ps2-pointer test-ps2-gif-ring test-eegs-raster test-eegs-present test-gl-math test-gl-backend-choice test-ps2-fb-order test-xmb-atlas
 	@echo "=========================================================="
 	@echo " ALL B-SYSTEM TEST SUITES PASSED (100% SUCCESS)!"
 	@echo "=========================================================="

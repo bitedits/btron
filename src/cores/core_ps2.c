@@ -3853,12 +3853,278 @@ static void ps2_bench_ram(GDEV *screen, const char *tag, int mode,
     }
 }
 
+/* The shape scan, and it is ONE function because the cached plate's census and a live
+ * canvas's census have to be the same arithmetic or the difference between them means
+ * nothing.  `want` is passed in rather than read off the image: a poster's colour is decided
+ * once, from the plate the compositor owns, and a caller then asks each canvas pixel whether
+ * it equals that colour.  Reading `pix[0]` here would make the live canvas answer a different
+ * question the moment anything is drawn at its top-left corner.
+ *
+ * Per row, the first and last pixel that differs from `want` bound that row's art, and only
+ * the runs OUTSIDE that box are fillable; consecutive rows with the same bound merge into one
+ * rect.  `rects` therefore counts the groups a poster would carry in the general shape,
+ * `bands` the simpler one that fills only whole flat rows and leaves every art row to the EE,
+ * and the flat area inside an art row's box is what that shape gives back.  `poster_ctl` is
+ * the control: the identical scan told to believe `want + 1`, a colour no pixel can be, so a
+ * scan that was really counting rows rather than matching pixels would print the same big
+ * number for it and one that works collapses to nothing.  Two of the accumulators are ONE
+ * fact, and it is said here so a reader does not go looking for a second measurement: a row's
+ * posterisable pixels are `w - (x1 - x0 + 1)`, so summing that over the canvas makes the
+ * complement of `poster` identical BY CONSTRUCTION to `art_bbox`, the sum of the per-row art
+ * boxes.  The pair is kept because the equality is this scan's own arithmetic check -- the two
+ * accumulators are filled on opposite arms of the row test, so a broken one shows up as the
+ * columns disagreeing rather than as a tautology. */
+typedef struct {
+    uint32_t poster, poster_ctl;
+    uint32_t flat_px, art_bbox_px;
+    uint32_t rects, bands, rows_art;
+    int witness_row;
+} ps2_poster_shape;
+
+static void ps2_bench_poster_scan(const COLOR *pix, COLOR want, ps2_poster_shape *o)
+{
+    const int w = PS2_SCREEN_WIDTH, h = PS2_SCREEN_HEIGHT;
+    const COLOR wrong = (COLOR)((uint32_t)want + 1u);
+    int prev_x0 = -2, prev_x1 = -2, prev_flat = -1;
+    int y, x;
+
+    o->poster = o->poster_ctl = 0u;
+    o->flat_px = o->art_bbox_px = 0u;
+    o->rects = o->bands = o->rows_art = 0u;
+    o->witness_row = -1;
+    for (y = 0; y < h; y++) {
+        const COLOR *row = &pix[(size_t)y * w];
+        int x0 = -1, x1 = -1, wx0 = -1, wx1 = -1;
+        uint32_t nf = 0u, nfw = 0u;
+
+        for (x = 0; x < w; x++) {
+            if (row[x] != want) { nf++; if (x0 < 0) x0 = x; x1 = x; }
+            if (row[x] != wrong) { nfw++; if (wx0 < 0) wx0 = x; wx1 = x; }
+        }
+        if (nf == 0u && o->witness_row < 0) o->witness_row = y;
+        o->flat_px += (uint32_t)(w - (int)nf);
+        if (nf) {
+            o->rows_art++;
+            o->art_bbox_px += (uint32_t)(x1 - x0 + 1);
+            o->poster += (uint32_t)(x0 + (w - 1 - x1));
+        } else {
+            o->poster += (uint32_t)w;
+        }
+        o->poster_ctl += nfw ? (uint32_t)(wx0 + (w - 1 - wx1)) : (uint32_t)w;
+
+        /* A new signature is a new rect in the general shape, and a new fully-flat
+         * run is a new band in the simple one. */
+        if (x0 != prev_x0 || x1 != prev_x1) o->rects++;
+        prev_x0 = x0; prev_x1 = x1;
+        {
+            const int is_flat = (nf == 0u) ? 1 : 0;
+            if (is_flat && !prev_flat) o->bands++;
+            prev_flat = is_flat;
+        }
+    }
+}
+
+/* LANE 9b's first measurement, and it is not about the GS.  A SPRITE poster carries ONE
+ * colour and no picture -- `vram_left=1081344` is 132 of the allocator's 8 KB pages and this
+ * canvas's background alone is 1,920,000 bytes -- so the lane's question is asked of the
+ * background, not of the primitive: how much of `bg=` is a flat field, and into how many
+ * rects does the art break it up.  The answer is taken from the painted plate rather than
+ * from a second copy of desktop.c's layout constants, because two encodings of one truth
+ * is the defect this port's own laws name.  A GDEV copied from the session's screen but
+ * pointed at a scratch array has the same width, height and icon size, so
+ * bg_cache_holds() answers yes and render_desktop_background() hands back the cached
+ * plate -- the pure background, before any window, deskbar or cursor pixel is in it.  No
+ * shared file is modified, and the real canvas is not touched.
+ *
+ * Then the same arithmetic is asked of the canvas a present would actually upload, because
+ * that is the set a caller can collect: whatever the desktop put on the canvas after the
+ * background blit -- the pointer's box, the deskbar, a window's body -- has stopped being the
+ * flat colour and left the posterisable set on its own, with no rect list and no knowledge of
+ * windows needed from the caller.  The gap between the two `posterisable=` columns IS the
+ * exclusion set, measured rather than enumerated, which is the answer LANE 9's Gate cell asks
+ * the caller to make.  And the census prices its own decision: a caller that learns the flat
+ * runs by scanning pays a pass over the canvas, so the row prints that cost in the same
+ * ns/px units as the copy floor it is being set against.  ANSWERED 2026-10-14, and the answer is
+ * the refutation: the decision eats the saving -- 11,498 us for one compare per pixel against a
+ * `bg=` of 7,499 us for the same 480,000 px, and 53,935 us for the scan that would return spans --
+ * so no per-pass census can pay, whatever the canvas is showing, and the lane closed as REFUTED
+ * rather than as a rect list.  LANE 9's Price cell carries the rows and the reading; this
+ * instrument stays so the inequality can be re-taken if the copy floor ever moves. */
+static void ps2_bench_poster_price(GDEV *screen)
+{
+    const int w = PS2_SCREEN_WIDTH, h = PS2_SCREEN_HEIGHT;
+    const uint32_t total = (uint32_t)w * (uint32_t)h;
+    const uint32_t reps = 16u;            /* the canvas scan's own timing reps */
+    ps2_poster_shape bg_shape, live_shape;
+    uint32_t saved_us, scan_us = 0u, ns_px, frac100, r;
+    uint32_t lean_us = 0u, lean_ns = 0u;
+    COLOR *plate;
+    H mx = 0, my = 0;
+
+    ps2_kprintf("\n[BENCH] poster price -- how much of `bg=` is one flat colour\n");
+    plate = (COLOR *)malloc((size_t)total * sizeof(COLOR));
+    if (!plate) {
+        ps2_kprintf("[BENCH] poster price: SKIP -- the heap holds no %u KiB plate (largest free %u B)\n",
+                    (unsigned int)(total * sizeof(COLOR) / 1024u),
+                    (unsigned int)ps2_heap_largest_free());
+        return;
+    }
+    {
+        GDEV ref = *screen;
+        ref.pixels = plate;
+        render_desktop_background(&ref);   /* the cache copy, not a procedural rebuild */
+    }
+
+    ps2_bench_poster_scan(plate, plate[0], &bg_shape);
+
+    /* The first row that is entirely one colour is the fill colour's witness: the
+     * dot grid starts at y=30, so a plate whose row 0 is uniform is a plate painted
+     * by fill_rec() and nothing else has been asked of it. */
+    ps2_kprintf("[BENCH] poster price: flat=0x%08x (witness row %d of %d rows) flat=%u px of %u\n",
+                (unsigned int)plate[0], bg_shape.witness_row, h,
+                (unsigned int)bg_shape.flat_px, (unsigned int)total);
+
+    saved_us = bg_shape.poster * 157u / 10000u;   /* 15.7 ns/px, the copy floor, in µs */
+    ps2_kprintf("[BENCH] poster price: posterisable=%u px  ee keeps=%u px  trapped=%u px (inside an art row's box)\n",
+                (unsigned int)bg_shape.poster, (unsigned int)(total - bg_shape.poster),
+                (unsigned int)(bg_shape.flat_px - bg_shape.poster));
+    ps2_kprintf("[BENCH] poster price: rows flat=%u art=%u  rects=%u  bands=%u  art bbox=%u px\n",
+                (unsigned int)((uint32_t)h - bg_shape.rows_art), (unsigned int)bg_shape.rows_art,
+                (unsigned int)bg_shape.rects, (unsigned int)bg_shape.bands,
+                (unsigned int)bg_shape.art_bbox_px);
+    ps2_kprintf("[BENCH] poster price: at the 15.7 ns/px copy floor the poster takes %u us off one whole-canvas bg= pass\n",
+                (unsigned int)saved_us);
+    ps2_kprintf("[BENCH] poster price: control, same scan told to believe 0x%08x -- posterisable=%u px (a broken match would print the same big number)\n",
+                (unsigned int)((uint32_t)plate[0] + 1u), (unsigned int)bg_shape.poster_ctl);
+
+    /* The census, on the live canvas and with the PLATE's colour as the truth -- the caller
+     * decides the colour once and then only asks what equals it.  Timed over `reps` because
+     * one pass of this table is what the machine's own drift, not the result, would decide. */
+    {
+        const uint32_t t0 = ps2_count_read();
+        for (r = 0u; r < reps; r++) ps2_bench_poster_scan(screen->pixels, plate[0], &live_shape);
+        scan_us = ps2_us_since(t0) / reps;      /* one full-canvas decision, in µs */
+    }
+    /* And the cheapest decision a caller could possibly write -- one compare per pixel,
+     * no control arm, no per-row box.  It is timed because the refutation this phase is
+     * about to make must not rest on my instrument's double match.  `flat_run` is summed
+     * over the reps and printed so the loop cannot be folded away. */
+    {
+        const COLOR *cv0 = (const COLOR *)screen->pixels;
+        const COLOR want = plate[0];
+        const uint32_t t0 = ps2_count_read();
+        uint32_t flat_run = 0u, i;
+
+        for (r = 0u; r < reps; r++) {
+            for (i = 0u; i < total; i++) {
+                if (cv0[i] == want) flat_run++;
+            }
+        }
+        lean_us = ps2_us_since(t0) / reps;
+        lean_ns = (lean_us * 1000u) / total;
+        ps2_kprintf("[BENCH] poster census: the cheapest possible decision, one compare per pixel, costs %u us = %u ns/px and it counts %u flat px per pass\n",
+                    (unsigned int)lean_us, (unsigned int)lean_ns,
+                    (unsigned int)(flat_run / reps));
+    }
+    get_baremetal_mouse_pos(&mx, &my);
+    ps2_kprintf("[BENCH] poster census (live canvas): posterisable=%u px  ee keeps=%u px  trapped=%u px  flat=%u px of %u\n",
+                (unsigned int)live_shape.poster, (unsigned int)(total - live_shape.poster),
+                (unsigned int)(live_shape.flat_px - live_shape.poster),
+                (unsigned int)live_shape.flat_px, (unsigned int)total);
+    ps2_kprintf("[BENCH] poster census (live canvas): rows flat=%u art=%u  rects=%u  bands=%u  art bbox=%u px  pointer at (%d,%d)\n",
+                (unsigned int)((uint32_t)h - live_shape.rows_art), (unsigned int)live_shape.rows_art,
+                (unsigned int)live_shape.rects, (unsigned int)live_shape.bands,
+                (unsigned int)live_shape.art_bbox_px, (int)mx, (int)my);
+    ps2_kprintf("[BENCH] poster census: the plate offers %u px and the canvas %u px -- %u px is foreground the canvas carries and the cached plate does not, and that is the exclusion set counted rather than enumerated\n",
+                (unsigned int)bg_shape.poster, (unsigned int)live_shape.poster,
+                (unsigned int)(bg_shape.poster - live_shape.poster));
+    ps2_kprintf("[BENCH] poster census: control, same scan told to believe 0x%08x -- posterisable=%u px\n",
+                (unsigned int)((uint32_t)plate[0] + 1u), (unsigned int)live_shape.poster_ctl);
+    /* Two witnesses that say WHICH canvas this is, because the census's first readings
+     * returned a canvas that is almost not the plate at all, and a number that surprising
+     * is not quoted until it is identified.  `differs=` is a plain per-pixel inequality
+     * against the plate the compositor paints from.  `its own colour=` asks the same shape
+     * scan what the canvas's OWN top-left value is worth: if the live canvas carried the
+     * same picture in a different byte order -- which would make the plate's colour
+     * unmatchable without the canvas being busy -- that shows up as a large posterisable
+     * there beside a large `differs=` above it.  Identified 2026-10-14: the canvas's own
+     * colour is flat over 14,705 px and the swapped word appears in 0 px, so the big
+     * `differs=` is a busy workbench, not a second byte order. */
+    {
+        const COLOR *cv = (const COLOR *)screen->pixels;
+        ps2_poster_shape own;
+        uint32_t diff_px = 0u, i;
+
+        for (i = 0u; i < total; i++) {
+            if (cv[i] != plate[i]) diff_px++;
+        }
+        ps2_bench_poster_scan(cv, cv[0], &own);
+        ps2_kprintf("[BENCH] poster census: canvas[0]=0x%08x plate[0]=0x%08x  differs=%u px of %u\n",
+                    (unsigned int)cv[0], (unsigned int)plate[0],
+                    (unsigned int)diff_px, (unsigned int)total);
+        /* The byte-order question, in one number: if the canvas is the same picture with
+         * R and B exchanged, the R/B-swapped plate word is the canvas's dominant match and
+         * `differs=` above is the swap rather than the foreground.  ANSWERED 2026-10-14: the
+         * swapped word appears in 0 px, 374,925 px differ in RGB and 170 differ only in alpha,
+         * so it is the SCENE and the byte-order law (2.1) is not in question here. */
+        {
+            const COLOR want = plate[0];
+            const COLOR swap = (COLOR)((want & 0xff00ff00u) |
+                                       ((want & 0xffu) << 16) | ((want >> 16) & 0xffu));
+            uint32_t n_swap = 0u, n_rgb = 0u;
+
+            for (i = 0u; i < total; i++) {
+                if (cv[i] == swap) n_swap++;
+                if (((uint32_t)cv[i] ^ (uint32_t)plate[i]) & 0x00ffffffu) n_rgb++;
+            }
+            ps2_kprintf("[BENCH] poster census: the canvas holds the R/B-swapped plate word 0x%08x in %u px -- its centre is 0x%08x where the plate's centre is 0x%08x\n",
+                        (unsigned int)swap, (unsigned int)n_swap,
+                        (unsigned int)cv[(size_t)(h / 2) * w + w / 2],
+                        (unsigned int)plate[(size_t)(h / 2) * w + w / 2]);
+            /* The alpha question, in the same shape: `differs=` above counts a pixel as
+             * different if ANY of its 32 bits differ, so a canvas that carries the plate's
+             * picture with a different alpha byte would look like a canvas covered in
+             * foreground.  This is the second decisive reading and it separates the two:
+             * pixels whose RED/GREEN/BLUE differ. */
+            ps2_kprintf("[BENCH] poster census: pixels whose RGB differs from the plate's: %u of %u -- so of the %u words that differ by all 32 bits, %u differ ONLY in the alpha byte\n",
+                        (unsigned int)n_rgb, (unsigned int)total,
+                        (unsigned int)diff_px, (unsigned int)(diff_px - n_rgb));
+        }
+        ps2_kprintf("[BENCH] poster census: the canvas's OWN colour 0x%08x gives posterisable=%u px flat=%u px witness row %d rects=%u -- if this is the big number and differs is one too, the plate and the canvas are the same picture in two orders\n",
+                    (unsigned int)cv[0], (unsigned int)own.poster, (unsigned int)own.flat_px,
+                    own.witness_row, (unsigned int)own.rects);
+    }
+    {
+        const uint32_t ns_sum = scan_us * 1000u;
+        ns_px = ns_sum / total;
+        frac100 = ((ns_sum % total) * 100u) / total;
+    }
+    ps2_kprintf("[BENCH] poster census: deciding costs %u us for the %u px of one canvas = %u.%02u ns/px -- the scan a caller pays to learn which runs are flat -- and the poster takes %u us off bg=, so the net is %s%u us\n",
+                (unsigned int)scan_us, (unsigned int)total,
+                (unsigned int)ns_px, (unsigned int)frac100, (unsigned int)saved_us,
+                saved_us >= scan_us ? "" : "MINUS ",
+                (unsigned int)(saved_us >= scan_us ? saved_us - scan_us : scan_us - saved_us));
+    free(plate);
+}
+
 /* The phase table.  `even`/`odd` are pixel columns, and on this canvas an even
  * column is 8-aligned in bytes while an odd one is 4-mod-8 -- the whole defect, in
  * one character of the tag. */
 static void ps2_bench_ram_ops(GDEV *screen)
 {
+    /* The same column asked of the IMAGE it copies rather than of the leaf that copies
+     * it: what a GS poster could take off `bg=`, and the shape it would have to take it
+     * in.  This is lane 9b's pre-gate -- the price, before the primitive.
+     *
+     * It runs FIRST in this phase, and not by preference: every ps2_bench_ram() row below
+     * writes into the canvas the census wants to read, and the run that first took the
+     * census proved it -- called after them, the live canvas came back `flat=0 px of
+     * 480000, rows art=600 rects=1`, which is one uniform colour, and it was the last
+     * fill row's own test colour rather than the desktop.  Ahead of the table the canvas
+     * still holds the pass the loop last presented, which is the only canvas a present
+     * could have uploaded. */
     ps2_kprintf("\n[BENCH] RAM-to-RAM, the loop or the DRAM -- same bytes at two instruction costs\n");
+    ps2_bench_poster_price(screen);
 
     /* One rect, five shapes.  A 400x16 band is the size a real window's damage
      * column costs and the shape both of the compositor's hot leaves use; the odd

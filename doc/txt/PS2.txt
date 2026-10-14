@@ -1306,11 +1306,28 @@ PART THREE -- THE MEASURED MACHINE
         fillunr / fillunr8   fill_rec()'s leaf with its row pointer
                              incremented instead of recomputed, four stores
                              deep then eight
-        blit scan / wide     the opacity decision one pixel at a time as wnd.c
-                             takes it today, then two pixels per 64-bit load.
-                             The copy under both is the shipped header, so the
-                             difference between the pair is the scan and
-                             nothing else.
+        blit scan / wide     the opacity decision one pixel at a time, then
+                             two pixels per 64-bit load, with the copy still a
+                             second read of the same bytes.  This is
+                             btron_row_copy_twopass(), the row every port but
+                             this one runs.  The copy beneath both is the
+                             shipped header, so the pair's difference is the
+                             scan and nothing else.
+        blit f2 / f4 / f8    the FUSED pass: one load per pixel, spent on the
+                             decision AND on the store, at 2, 4 and 8 pixels
+                             per decision.  `f8b` is the same group decided by
+                             one arithmetic bit test instead of compares;
+                             `f4w` / `f8w` / `f16w` are the same shapes in
+                             32-bit words, which is the form that promises no
+                             alignment; `ship` is btron_row_copy_skip_zero(),
+                             the function the walk calls, priced beside its
+                             own lookalike.
+        h / o prefixes       the same rect under the other two shapes of the
+                             problem: `o` starts the row at an odd pixel
+                             column, and `h` puts the transparent sentinel in
+                             one pixel of eight in the source band.  A fused
+                             rung that wins the clean rows and loses the `h`
+                             rows is not taken.
         <w>x<h>, px/rep      the rect and the pixels one repetition moves,
                              with the mean us/rep and the max beside it: a max
                              well above the mean says the first repetition was
@@ -1706,7 +1723,16 @@ PART THREE -- THE MEASURED MACHINE
   row, the landed pair) -- and a paged 9b has to beat the walk's 24.4 ms.  The
   refutation also buys an EE-side win that needs no plane at all: 3.3
   ns/px of the compositor's scan, which is 2.0 ms of every full-canvas walk,
-  and the row that prices it (`blit wide`) is already in the table.  Lane 9's
+  and the row that prices it (`blit wide`) is already in the table.  What
+  that row did NOT take was the scan's second READ of the same bytes: the
+  walk still decided and then copied, so 39.86 became 36.57 while the 15.96
+  under the copy was still paid twice.  The shape that pays it once is a
+  FUSED pass, and LANE 9's `Shave` cell carries it LANDED 2026-10-14 -- the
+  rungs from 2 pixels per decision to 16, the port dial that leaves every
+  other target on the old row, and the two content regimes that decide which
+  of them is real.  Its price against this table's 39.84 is 20.95 ns/px, and
+  on the shipped walk's own column `blit=12665(613440 px)` against the
+  24,481 us the same pass billed two lines above.  Lane 9's
   Budget and Gate cells in 16 read these numbers, not the 50.2 the old row
   quoted.
 
@@ -3222,6 +3248,78 @@ PART FIVE -- THE PRESENTATION PLANE: THE EE/GS BACKEND
             canvas upload, and no row here measures the per-span start of a
             split IMAGE transfer -- 10.1's `blit scan` is the nearest number
             and it is per pixel, not per start.
+    Shave   The refutation left one term of LANE 9 standing, and it is the
+            term 10.1 prices twice: `blit=` reads a band to DECIDE whether it
+            may copy it, then reads the same band again to copy it.  39.86
+            ns/px is that pair -- the copy floor's 15.96 plus 23.9 of
+            decision -- and `blit wide` at 36.57 shaves 3.3 of the 23.9 by
+            taking two pixels per load, which leaves the SECOND READ of the
+            same bytes entirely intact.  LANDED 2026-10-14 as row 9c, in
+            include/btron/fused_row.h: the walk reads each pixel once now, and
+            the read it removed was worth 18.9 of those 23.9.
+
+            The rungs, priced on the EE at a 400x16 rect, every one of them
+            `chk=ok`, the last being the shipped function rather than a
+            lookalike of it: the 64-bit series 33.33 at 2 px, 26.39 at 4,
+            23.04 at 8; the 32-bit word series 25.52 at 4, 22.51 at 8, 21.09
+            at 16; and the header body 20.95 -- against `blit scan`'s 39.84
+            and `blit wide`'s 36.58.
+            The ceiling was arithmetic before it was a number, because a fused
+            pass cannot cost less than the copy it replaces, and this row
+            lands 4.99 ns/px above the 15.96 floor: that much is the decision
+            and none of it is memory.  Two shapes were measured and refused.
+            The 64-bit pairs, because `f4` at 26.39 LOST to the phase-free
+            `f4w` at 25.52 -- so nothing is paid for the portability, and a
+            pair access would have been a promise about the window's left edge
+            that this walk cannot make.  And the bit-test decision, because
+            `(w-1) & ~w & 0x80000000` per pixel reads 33.28 clean and 40.57
+            dirty, the worst row in the sweep -- worse than the two-pass
+            shape it replaced.  Arithmetic does not substitute for the
+            compare.  The rung that ships is the fastest measured and not
+            the widest written, which is 16 pixels to one decision.
+
+            Two contents, both priced, because they disagree about the ladder.
+            The all-opaque band is the regime production lives in --
+            `blit=24481(613440 px)` is 39.91 ns/px, the `blit scan` shape
+            read off a real walk -- and the fused row takes that same pass
+            to `blit=12665(613440 px)`, 20.65 ns/px, 1.93x.  The pass keeps
+            `bg=7484(480000 px)`, 15.6 ns/px against this book's own 7,490
+            row, because a background restore is a plain copy with no
+            decision in it and this lane does not touch it.
+            A band carrying the transparent sentinel in one pixel of eight
+            reorders everything: the two-pass walk gets CHEAPER there, 30.38,
+            because it stops scanning at the first sentinel and never pays
+            for the copy, while a fused group of 16 fails its decision on
+            every group and pays the fixup -- and it still wins, at 22.40,
+            where 8 px lands 25.52 and 4 px 29.34.  So the fixup over a
+            failed group is per-pixel and works from the values already
+            loaded, because on a transparent window that path IS the row and
+            not an error path.  Odd column phase: `blit o scan` 40.17
+            against `blit o ship` 21.32.  The 800-px sweep: 39.53 against
+            20.46.
+
+            The predicate shipped as a port dial rather than a runtime test.
+            This walk is shared code -- src/window/wnd.c composes the desktop
+            for every port in the tree, and the standing guardrail is that the
+            Pi 400's behaviour does not move -- so the header holds BOTH
+            shapes, the scan-then-copy row verbatim including the
+            btron_row_blit() it calls, and selects on BTRON_PS2_TARGET.
+            aarch64 keeps the two-pass row because its copy is a 64-byte NEON
+            loop and a per-pixel decision inside it would take the benefit
+            away.  The gate is verify/tests/test_ps2_fused_row.c, run twice
+            per `make test` so each side of the dial is held to the scalar
+            rule: byte-identical canvas over 45 span lengths at both
+            relative buffer phases and four sentinel layouts, every single
+            sentinel column of a 34-px row, the first and last pixel of a
+            row, 5,275 checks, and two controls that must go red -- a group
+            stored without being tested, and a row one pixel short.  The
+            bench's own fold cannot be that gate: it samples every 64th
+            destination pixel while the holes sit at column 3 mod 8, so
+            every `h` row printed `chk=ok` with the sentinel columns
+            unchecked.  What is NOT taken: the 4.99 ns/px of decision
+            between 20.95 and the copy floor, which a wider group or a
+            branchless store has to price before anyone calls this residue
+            collected, and the Pi 400, whose row this change does not touch.
 
   LANE 10  a GIF writer ring -- the sender stops blocking.  LANDED 2026-10-14
            as 11.6, in src/drivers/ps2/ps2_gif_ring.{c,h}.
@@ -4107,7 +4205,14 @@ PART SEVEN -- BUILDING, VERIFYING, RUNNING
                 round ahead of them.  The volume step is itself such a round,
                 and the same pass measured it: `make btron_sys.vol` names no
                 PS2 target, so it writes the default dial, and it is the link
-                immediately after it that puts `eegs` back on the bus.
+                immediately after it that puts `eegs` back on the bus.  The
+                reset does not even need a real round.  Measured 2026-10-14:
+                `make -n btron_sys.vol`, a dry run that executes no recipe,
+                printed `[PS2] PS2_GL is now tinygl` and wrote the stamp
+                anyway -- the comparison is a parse-time shell, not a recipe.
+                So `make -n` is not a read-only probe of this tree, and a bare
+                one is followed by the same restoration round as a bare
+                `make`.
     PS2_FP      .build/ps2-fp.stamp, and PS2_FP_OBJS =
                 src/drivers/ps2/ps2_builtins.ps2.o
                 src/gl/tinygl/vertex_stage.ps2.o src/apps/xmb_wave.ps2.o --
@@ -4594,17 +4699,26 @@ PART SEVEN -- BUILDING, VERIFYING, RUNNING
   and found TWO EE costs inside it where this paragraph billed one: 15.9 ns/px
   of copy, and 23.9 ns/px of the opacity scan that runs in front of the copy
   -- 3.3 of that second figure already shown to be loop rather than memory by
-  the `blit wide` rung.  A lane 9 poster was billed to take the whole 39.8, and
-  the census in LANE 9's Price cell closed that route: the decision a poster
-  needs costs more per pixel than the copy it would replace.  Making that scan
-  read two pixels per load takes its 3.3 with no plane claimed and no primitive
-  added, which is the same kind of win as the one that turned 29x into 23x, and
-  it is now the only share of the 39.8 this book can point at.  So what this book can claim is narrower than what it wanted: the
-  GS is the only rasteriser on the machine and stays the answer to a
+  the `blit wide` rung, and the other 18.9 of it by LANE 9's `Shave` cell.
+  A lane 9 poster was billed to take the whole 39.8, and the census in
+  LANE 9's Price cell closed that route: the decision a poster needs costs
+  more per pixel than the copy it would replace.  What the scan term turned
+  out to be was the second read of the bytes it is deciding over -- the walk
+  decided, then copied, and the pixels crossed the register file twice.  One
+  pass over them landed 2026-10-14 as row 9c: 39.84 ns/px to 20.95 on the
+  bench's rect, and the shipped walk's own column from
+  `blit=24481(613440 px)` to `blit=12665` on the identical pixel count, while
+  `bg=7484(480000 px)` stayed the plain copy it was -- 15.6 ns/px, the
+  book's own 7,490 row.  No plane claimed and no
+  primitive added, which is the same kind of win as the one that turned 29x
+  into 23x.  So what this book can claim is narrower than what it wanted:
+  the GS is the only rasteriser on the machine and stays the answer to a
   per-fragment cost, while the EE's own copy and fill are now provably AT
-  their floor -- and everything still on the EE is a scan standing in front of
-  that floor, part of which is loops.  Which lane takes it is the last
-  unfinished chapter.
+  their floor and the walk in front of them pays one read instead of two --
+  with 4.99 ns/px of decision left standing between 20.95 and that floor,
+  which is the residue a wider group or a branchless store must price before
+  anyone calls the scan term collected.  Which lane takes the next share of
+  an EE frame is the last unfinished chapter.
 
 =====================================================================
 APPENDIX A -- LABEL SCHEME, DECODED
@@ -4620,8 +4734,8 @@ APPENDIX A -- LABEL SCHEME, DECODED
     rows 7, 8           the COP1 kernels: vertex_stage.c, then xmb_wave.c
     row 9a              the PLATE REFUSAL (11.5): a layer window's flat body
                         fill, skipped over exactly the rect its own stream
-                        covers -- a refusal, not a poster, and the only half of
-                        row 9 that has taken a saving
+                        covers -- a refusal, not a poster.  It and row 9c are
+                        the two halves of row 9 that have taken a saving
     row 9b              the PAGE half of lane 9: putting the client-area blit
                         or the background restore inside VRAM.  Its price to
                         beat is 10.1's floors -- 15.7 ns/px for a copy, 8.8 for
@@ -4635,6 +4749,15 @@ APPENDIX A -- LABEL SCHEME, DECODED
                         fit in 1,081,344 B free, so no page can hold what a
                         BITBLT would read).  The emitter stands host-gated and
                         out of `PS2_SRCS`, and `bg=` is unchanged.
+    row 9c              the SCAN half of lane 9 and the only term the census
+                        did not refute: the walk's second read of the band it
+                        is deciding over.  LANDED 2026-10-14 as
+                        include/btron/fused_row.h behind a port dial -- one
+                        pass, sixteen pixels to a decision, 39.84 ns/px to
+                        20.95 on the bench's rect and `blit=24481` to
+                        `blit=12665` on the shipped walk's 613,440 px.  Not a
+                        poster: no plane claimed, no VRAM asked for, and every
+                        other port keeps the row it has always run.
     lanes 9, 11-13      the four open agents: GS compositor, real Tier-1
                         tick, VU1 geometry actor, IOP/SIF I/O actor.  Lane 10,
                         the GIF writer ring, LANDED 2026-10-14 (11.6), so LAW
@@ -4699,9 +4822,21 @@ APPENDIX A -- LABEL SCHEME, DECODED
                         effect
     fillunr / fillunr8  fill_rec()'s leaf with its row pointer incremented
                         rather than recomputed, four stores deep then eight
-    blit scan / wide    wnd.c's opacity decision, one pixel at a time then two
-                        pixels per load -- the term the old flat `blit=` price
-                        hid inside a "copied pixel"
+    blit scan / wide    the opacity decision taken separately from the store,
+                        one pixel at a time then two pixels per load --
+                        btron_row_copy_twopass(), the row every port but this
+                        one runs, and the term the old flat `blit=` price hid
+                        inside a "copied pixel"
+    blit f2 / f4 / f8   the same decision FUSED with the store, at 2, 4 and 8
+                        pixels per group.  The `w` forms (`f4w`, `f8w`,
+                        `f16w`) are 32-bit words and so promise no alignment;
+                        `f8b` is the arithmetic bit-test decision that lost,
+                        and `ship` is include/btron/fused_row.h, the row the
+                        walk actually calls
+    h / o prefixes      the other two contents of one rect: a row starting at
+                        an odd pixel column, and a source band carrying the
+                        transparent sentinel once in eight -- because a fused
+                        rung that wins only the clean rows is not a win
     chk=ok | MISMATCH   the row's own integrity fold: destination against
                         source band for a copy, `fill` when there is no source
                         to fold.  MISMATCH means a TAG and a BRANCH disagree,

@@ -1516,3 +1516,162 @@ by design: `ps2_bench_poster_price()` stays in the bench image precisely so the 
 inequality can be re-measured if the copy floor ever moves.  What this pass did NOT exercise is the
 census's own 4.8 s of emulator time against any shipped column, because the bench image is not the
 shipped image -- the shipped image never calls the instrument at all.
+
+## Lane 9c landed: the walk reads the band once, and the shared file makes the Pi 400 relink
+
+**2026-10-14, the last round of the day.**  The decisive measurement is the shipped compositor's own
+column, not a bench rung: `blit=24481(613440 px)` became `blit=12665(613440 px)` -- **39.91 ns/px to
+20.65**, 1.93x, for the identical pixel count in the same instrument.  The rung that names the shape
+is `[BENCH] blit ship 400x 16 6400px/rep 134 us/rep max 144 us 20.95 ns/px sum=0xf91c64b4 chk=ok`,
+read in the same pass as `[BENCH] blit scan ... 255 us/rep ... 39.84` and `[BENCH] blit wide ... 234
+us/rep ... 36.58`, on `btron-ps2-bench.elf` at 5,955,284 B, 15:50:45, log `build/ps2-bench.log` at
+15:50:57, sentinel `[BENCH] run complete` present.  `blit ship` is mode 16 in `ps2_bench_ram()`,
+which dispatches straight to `btron_row_copy_skip_zero()` -- the function `src/window/wnd.c:720`
+calls -- so the row prices the shipped body rather than a lookalike of it.
+
+**The ladder, both series, because the width question and the group question are different
+questions.**  64-bit loads: `blit f2` 33.33, `blit f4` 26.39, `blit f8` 23.04.  32-bit words: `blit
+f4w` 25.52, `blit f8w` 22.51, `blit f16w` 21.09.  Shipped header 20.95.  Two consequences follow
+directly from those nine rows.  Access width is NOT the lever, since the phase-free 32-bit word form
+beat the 64-bit pair at the same group size (25.52 against 26.39), which matters because this walk's
+source and destination phases are set by the window's left edge and a pair access would have been a
+promise the caller cannot keep.  And group size IS the lever, monotonically up to 16 px, which is
+what `BTRON_ROW_FUSE_GROUP` now says (`include/btron/fused_row.h:97`).  The ceiling was arithmetic
+before it was a number: a fused pass cannot cost less than the copy it replaces, so the distance from
+20.95 to the 15.96 copy floor is the decision and none of it is memory.
+
+**The row the same instrument refused.**  `blit f8b` -- one arithmetic bit test per pixel,
+`(w-1) & ~w & 0x80000000`, instead of a compare -- reads 33.28 clean and **40.57 dirty**, which is
+worse than the two-pass row it was replacing in the regime where that row is supposed to win.  A
+rung worse than the incumbent is not taken, and the book records the number anyway.
+
+**The two contents disagree about the ladder, which is why both are in one phase of the bench.**  On
+a source band carrying the transparent sentinel once in eight, the two-pass walk gets CHEAPER, not
+dearer -- `blit h scan` 30.38 against `blit scan` 39.84 -- because it stops scanning at the first
+sentinel and never pays for the bulk copy.  A fused group cannot skip the read, so it pays its
+fixup on every group and still wins: `blit h ship` 22.40, where 8 px lands 25.52 and 4 px 29.34.  The
+fixup is per-pixel and works from the values already loaded (`btron_row_copy_fused`'s else-branch),
+because on a transparent window that path IS the row.  Odd column phase, `399x 16` at x=401: `blit o
+scan` 40.17 against `blit o ship` 21.32.  The 800-px sweep row: `blit 12800` 39.53 against `blit
+12800ship` 20.46.  The repeat pair holds, as the floors' own paragraph demands: `blit ship b` reads
+20.99 against 20.95, 0.2% apart, and `blit scan b` 39.83 against 39.84.
+
+**`bg=` is not this lane's win and the book says so.**  The same compositor row reads
+`bg=7484(480000 px)`, which is 15.6 ns/px -- the plain-copy floor this book already books at
+`bg=7490(480000 px)` -- because a whole-canvas background restore has no opacity decision in it.  A
+change that moved `bg=` would be evidence of something else, and the claim here is deliberately
+narrower than the column.
+
+**The gate, and why the bench's own fold cannot be it.**  `verify/tests/test_ps2_fused_row.c`
+`#include`s the header, so the identical translation unit is what is measured, and it runs TWICE per
+`make test` (`Makefile:1588-1612`, registered at `:37` and in the aggregate `test:` at `:2602`):
+once for the host dial and once compiled with `-DBTRON_PS2_TARGET`.  Each half prints which branch
+compiled (`:330` and `:332` -- "the walk calls the FUSED row" / "the walk calls the TWO-PASS row, as
+every port but PS2 does"), so the branch cannot be silently #if'd out and pass vacuously.  Both
+halves read `checks=5275 failures=0` over 113,966 pixels compared against `scalar_rule()` (`:90`): 45
+span lengths x 2 relative buffer phases x 4 sentinel layouts, plus 68 sweeps that put the sentinel in
+every column of a 34-px row at both phases, plus first-and-last, group edges, head, tail, a pinched
+pixel, and one live pixel.  Guard bytes are audited on both sides of every buffer and every sentinel
+column is asserted to still hold the canvas.  Three controls run at `:267`, `:288`, `:306` -- a group
+stored without being tested, a row one pixel short, and the real row at that boundary.  The
+harness's own teeth were checked by sabotaging the header (store the group before deciding): the
+gate went to `failures=1184` and the header was then restored byte-identical.  The bench's fold
+samples every 64th destination pixel while the `h` holes sit at column 3 mod 8, so every `h` row
+printed `chk=ok` with the sentinel columns unchecked; correctness is carried by the host gate and
+speed by the bench, and neither instrument stands in for the other.
+
+**The guardrail: the Pi 400 relinked, and that is the honest record.**  The plan for this lane said
+`make arm64-elf` would leave `btron-aarch64-baremetal.elf` alone.  It did not, and it could not:
+`src/window/wnd.c` is in `COMMON_SRCS`, so editing the shared compositor recompiles it and the image
+relinks -- 1,114,512 B at Oct 14 01:57:42 became **1,114,464 B at 16:05:01**, exit 0, no new
+warnings beyond the two pre-existing `-fuse-ld=` ones.  What holds the guardrail is not the file size
+but three checked facts.  The predicate is compile-time and only `PS2_CFLAGS` carries it
+(`Makefile:1038`); the arm64 compile line for this very file -- `--target=aarch64-none-elf
+-mcpu=cortex-a72 ... -DBTRON_TARGET=6 ... -c src/window/wnd.c` -- contains `BTRON_PS2_TARGET` zero
+times, so the aarch64 TU text is the two-pass branch, which is exactly what the gate's host dial
+compiles and holds byte-identical to the scalar rule.  The `-48 B` is explained by the shape of the
+change rather than by luck: `copy_opaque_span()` left the shared file and its two-pass equivalent is
+now inlined from the header, so the same rule arrives with one fewer out-of-line body.  The ten host
+desktop suites that link `wnd.c` (`TEST_MOZC`, `_EDITOR`, `_HMI`, `_TAD`, `_CHAT`, `_TRACKER`,
+`_CLIP`, `_SETTINGS`, `_GMENU`, `_APP_MENU`, plus the two `CAPTURE_*` lists and `COMMON_SRCS`
+itself) ran green in the same `make -k test`.
+
+**The chain, in the order that leaves a certified pair.**  `make -k test` -> exit 0, `ALL B-SYSTEM
+TEST SUITES PASSED (100% SUCCESS)`, with the fused-row gate's two halves inside it.  `make arm64-elf`
+-> exit 0, elf as above.  `rm -f btron_sys.vol && make btron_sys.vol` -> `holds 794 of 1024
+1024-byte blocks: 794 KiB used, 230 KiB free`, nine blocks more than the 785 the 9b round left,
+because the `Shave` cell plus 10.1's consequence plus the two Appendix A entries plus chapter 9's new
+row labels all crossed blocks together.  `make ps2 PS2_GL=eegs PS2_FP=hw PS2_MSX=0` -> exit 0,
+`btron-ps2.elf` at 5,919,324 B with `_end = 0x01c4ad80` UNMOVED and `ps2_sys_vol_image` still at
+`0x00577c00`, `btron-ps2.iso` at 5,974,016 B.  `make test-ps2` with the same three dials -> **93 /
+93**, one `[SKIP] PS2_MSX=0` line, and rows 88-90 green: 1,048,576 B at `0x00577c00`, the bytes
+mkbtronfs wrote, *0 bytes separate btron_sys.vol from a fresh build*.  Payload text verified by
+single-line greps, one each in `btron_sys.vol` and `btron-ps2.elf`:
+`the SCAN half of lane 9 and the only term the census`, `23.04 at 8; the 32-bit word series 25.52 at
+4, 22.51 at 8, 21.09`, `row, because a background restore is a plain copy with no`, `the widest
+written, which is 16 pixels to one decision`, and `btron_row_copy_twopass(), the row every port but`
+-- 1 in both, except that last, which is 2 because chapter 9 and Appendix A now both name the
+function.
+
+**The shared file was then taken around every other port, and one target was already down.**  Because
+this lane edits `src/window/wnd.c`, `make -k all` ran after the PS2 chain: `btron-posix` at 5,055,928 B
+(16:16:25), `.build/btron-tkernel.elf`, `.build/btron-sakamura.elf`, `.build/btron-uchida.elf` (UEFI)
+and `.build/btron-morris.elf` (PC-98, 816,192 B at 16:16:43) all built, and **no warning mentions
+`wnd.c` or `fused_row.h` on any of them** -- which is the multi-target form of the same argument the
+gate's host dial makes: the seven freestanding and hosted ports compile the header and take the
+two-pass branch.  `.build/btron-foma.elf` does NOT link, and it is not this lane: the four undefined
+symbols are `_open_xmb_window`, `_open_glgears_window`, `_open_lilcu64_demo_window` and
+`_get_btron_desktop`, referenced by `clu.foma.o` and `gterm.foma.o`, and `FOMA_SRCS` lists none of the
+files that define them -- verified against `git show HEAD:Makefile`, where the same three files are
+equally absent, and this lane's Makefile diff touches no FOMA line.  Pre-existing, reported rather
+than repaired, and left as its own thread.  That round is also the fifth time this port's dial stamp
+flipped under a bare `make`: `make -k all` names no PS2 target, so the parse-time shell wrote `tinygl`
+while the ELF on disk was still the eegs image.  Restoration is the same two commands as ever --
+`make ps2 PS2_GL=eegs PS2_FP=hw PS2_MSX=0` then `make test-ps2` on the same three dials -> **93/93** at
+16:17:26, `btron-ps2.elf` 5,919,324 B, stamps back to `eegs`, `0`, `hw`.
+
+**A bare `make -n` flipped the GL stamp, and the round that fixed it is part of this record.**  After
+the chain, one `make -n btron_sys.vol` -- a dry run, executing nothing -- printed `[PS2] PS2_GL is now
+tinygl (was eegs)` and left `.build/ps2-gl.stamp` reading `tinygl` while `btron-ps2.elf` was still the
+eegs image.  The dial comparison is not a recipe, so `-n` does not protect it: reading the tree with
+bare `make` costs a stamp, and a stamp that disagrees with the image is precisely the state this
+port's freshness law exists to forbid.  Restored by `make ps2 PS2_GL=eegs PS2_FP=hw PS2_MSX=0`, which
+rebuilds the three GL objects under the flags they already had (exit 0, the same 5,919,324 B and the
+same `_end = 0x01c4ad80`), followed by `make test-ps2` on the same three dials -> **93/93**, rows
+88-90 green again, and the three stamps reading `eegs`, `0`, `hw`.  Nothing here is speculation about
+a trap; the flip and the restoration were both measured on this pass.  The trap is now in the book
+rather than only here: chapter 21's `PS2_GL` entry gained the sentence `So \`make -n\` is not a
+read-only probe of this tree, and a bare one is followed by the same restoration round as a bare
+\`make\``, and the chain was then run a third time -- `rm -f btron_sys.vol && make btron_sys.vol` ->
+still 794 of 1024 blocks; `make ps2` and `make test-ps2` on the three dials -> 5,919,324 B at
+16:15:26, **93/93**, stamps `eegs`/`0`/`hw`, and both new fragments grepped 1 in the volume and 1 in
+the image.
+
+**The book damage this round caused, because the method was wrong rather than the text.**  Six
+splices into `doc/txt/PS2.txt` were applied against line indices captured before the first one ran.
+The first grew the file by seven lines, so the two that followed landed in the wrong places: the new
+`row 9c` Appendix entry went INSIDE the `row 9b` entry, splitting its sentence at "as REFUTED, not",
+and the new `blit f2 / f4 / f8` label overwrote three existing lines (the tail of the odd-column
+entry and the first line of `+peel / +16 / +32`), leaving a duplicate `blit scan / wide` beside them.
+Nothing was lost, because `git diff`'s deletion list showed exactly those three lines -- the check
+that found it is the one worth keeping: after any multi-site edit of this book, read
+`git diff | grep '^-'` and require every deleted line to be a line the edit intended to rewrite.
+Repaired by targeted line surgery, in place, NOT by `git checkout --` or a revert, because the
+uncommitted tree also holds the user's own in-flight work.  Second lesson, same incident: the earlier
+rounds of the same session had also re-indented two existing paragraphs by one space, which the
+width audit catches (`awk length>78` over the added lines only, since the book has pre-existing rows
+up to 85).
+
+**What is therefore SKIP.**  Nothing was run on a PlayStation 2, so the fused row's screen is proven
+byte-for-byte only against the host's scalar rule and only measured in PCSX2.  No user visual
+confirmation has been asked for or received for this change, and none is claimed.  The bench image
+is `PS2_GL=tinygl` -- `scripts/ps2_bench.sh` calls bare `make ps2-bench` -- so 20.95 and
+`blit=12665` come from the tinygl bench build, not from the shipping eegs image; the row under
+measurement is shared with the eegs build and the shipping image's compositor was relinked from the
+same source, but the eegs build itself has not been re-timed.  The 4.99 ns/px residue between 20.95
+and the copy floor is NOT collected and NOT priced: no wider group, no branchless store, no runtime
+dial.  The `blit h f8b` and `blit o f4` refusals are recorded as measured rows, not as tests anyone
+would re-run.  `PS2_MSX=0` leaves the five B-MSX rows unexercised, as the suite's own `[SKIP]` line
+says.  And the arm64 image's pixels were not re-captured on this pass: what is claimed for the Pi 400
+is that its TU takes the other branch (compile line, zero occurrences of the macro) and that the
+branch is held to the scalar rule by the gate's host dial -- not that its screen was looked at.

@@ -34,7 +34,7 @@ CC ?= gcc
 CFLAGS ?= -O2 -Wall -Wextra -std=c99 -Iinclude -Iinclude/gl -Isrc/gl -Iinclude/drivers -Isrc/kernel -Isrc/cores -Isrc/quake/include
 
 .PHONY: all posix qemu kernel tkernel sakamura foma uefi pc98 arm-elf arm64-elf m68k ps2 mips \
-        check-structure test-ps2-softfloat test-ps2-gs-pack test-ps2-gs-env test-ps2-gs-rec test-ps2-gs-poster test-ps2-gs-tex test-ps2-pointer test-ps2-gif-ring test-eegs-raster test-eegs-present test-gl-math test-gl-backend-choice test-ps2-fb-order xmb-atlas test-xmb-atlas \
+        check-structure test-ps2-softfloat test-ps2-gs-pack test-ps2-gs-env test-ps2-gs-rec test-ps2-gs-poster test-ps2-gs-tex test-ps2-pointer test-ps2-fused-row test-ps2-gif-ring test-eegs-raster test-eegs-present test-gl-math test-gl-backend-choice test-ps2-fb-order xmb-atlas test-xmb-atlas \
         test-xmb-render test-xmb-render-tgl \
         html2tad book2tad tad_bin test test-kernel test-yoko test-yoko4 test-m68k test-mips test-ps2 test-foma test-foma-ui foma-screens \
         segui-screens \
@@ -1579,6 +1579,38 @@ $(TEST_PTRSTROKE_BIN): $(TEST_PTRSTROKE_OBJS) src/cores/ps2_ptr_stroke.h
 	@mkdir -p ./.build
 	$(CC) $(TEST_PTRSTROKE_OBJS) -o $@ $(LDFLAGS)
 
+# LANE 9c: the composite's row rule, after the walk's second read of the same band was removed.
+# The header is #included rather than linked, so the identical code is what the gate checks and
+# what wnd.c compiles on every port.  The suite runs TWICE, once per side of the port dial, and
+# that is not decoration: the one fact a single run cannot see is the dial itself, because the
+# dispatcher's output is compared against the shape its #if names -- an inverted #if would ship a
+# row that passes every byte test on both ports, and only the second binary calls it wrong.
+TEST_FUSEDROW_SRCS = verify/tests/test_ps2_fused_row.c
+TEST_FUSEDROW_OBJS = $(TEST_FUSEDROW_SRCS:.c=.test.o)
+TEST_FUSEDROW_BIN  = ./.build/test_ps2_fused_row
+TEST_FUSEDROW_DIAL_OBJ = verify/tests/test_ps2_fused_row.ps2dial.o
+TEST_FUSEDROW_DIAL_BIN = ./.build/test_ps2_fused_row_ps2dial
+
+test-ps2-fused-row: $(TEST_FUSEDROW_BIN) $(TEST_FUSEDROW_DIAL_BIN)
+	@echo "=========================================================="
+	@echo " Running the composite row rule -- host dial, then the PS2 dial..."
+	@echo "=========================================================="
+	@./$(TEST_FUSEDROW_BIN)
+	@./$(TEST_FUSEDROW_DIAL_BIN)
+
+$(TEST_FUSEDROW_BIN): $(TEST_FUSEDROW_OBJS) include/btron/fused_row.h include/btron/fast_blit.h
+	@mkdir -p ./.build
+	$(CC) $(TEST_FUSEDROW_OBJS) -o $@ $(LDFLAGS)
+
+# The forced dial, compiled from the same source with the PS2 target macro: this is the shape
+# btron-ps2.elf carries, and the flag is the only thing that selects it.
+$(TEST_FUSEDROW_DIAL_OBJ): verify/tests/test_ps2_fused_row.c include/btron/fused_row.h
+	$(CC) $(CFLAGS) -DBTRON_PS2_TARGET -MMD -MP -c $< -o $@
+
+$(TEST_FUSEDROW_DIAL_BIN): $(TEST_FUSEDROW_DIAL_OBJ) include/btron/fused_row.h
+	@mkdir -p ./.build
+	$(CC) $(TEST_FUSEDROW_DIAL_OBJ) -o $@ $(LDFLAGS)
+
 # Increment 5a: the raster stage's decisions, on top of the recorder's words.  Same idiom again --
 # backend_eegs.c and the recorder are #included into the test, so the identical translation unit is
 # what the gate measures and what will link into btron-ps2.elf -- and the same reason: a triangle
@@ -2567,7 +2599,7 @@ $(TEST_MSX_BOOT_BIN): $(TEST_MSX_BOOT_OBJS)
 	@mkdir -p ./.build
 	$(CC) $(TEST_MSX_BOOT_OBJS) -o $@ $(LDFLAGS)
 
-test: test-tad test-editor test-chat test-mozc test-wylie test-hmi test-ski test-tracker test-deskclip test-settings test-global-menu test-app-menu test-drivesetup test-fs test-quake test-ps2-softfloat test-ps2-gs-pack test-ps2-gs-env test-ps2-gs-rec test-ps2-gs-poster test-ps2-gs-tex test-ps2-pointer test-ps2-gif-ring test-eegs-raster test-eegs-present test-gl-math test-gl-backend-choice test-ps2-fb-order test-xmb-atlas
+test: test-tad test-editor test-chat test-mozc test-wylie test-hmi test-ski test-tracker test-deskclip test-settings test-global-menu test-app-menu test-drivesetup test-fs test-quake test-ps2-softfloat test-ps2-gs-pack test-ps2-gs-env test-ps2-gs-rec test-ps2-gs-poster test-ps2-gs-tex test-ps2-pointer test-ps2-fused-row test-ps2-gif-ring test-eegs-raster test-eegs-present test-gl-math test-gl-backend-choice test-ps2-fb-order test-xmb-atlas
 	@echo "=========================================================="
 	@echo " ALL B-SYSTEM TEST SUITES PASSED (100% SUCCESS)!"
 	@echo "=========================================================="

@@ -7,6 +7,7 @@
 #include <btron/dp.h>
 #include <btron/troncode.h>
 #include <btron/fast_blit.h>
+#include <btron/fused_row.h>
 #include "pmc.h"
 #include <btron/libc_shim.h>
 
@@ -600,9 +601,9 @@ void redraw_all_windows(void) {
     redraw_all_windows_clip(&full, FALSE);
 }
 
-static void copy_opaque_span(COLOR *dst, const COLOR *src, H width) {
-    btron_row_blit(dst, src, (size_t)width * sizeof(COLOR));
-}
+/* The client-area row rule lives in <btron/fused_row.h>, which holds both measured
+ * shapes and the dial that picks one; the copy this function used to wrap is reached
+ * there, by the scan-then-copy shape every non-PS2 port still runs. */
 
 void redraw_all_windows_clip(const RECT *damage, BOOL blit_only) {
     if (!g_screen_dev || !damage) return;
@@ -703,20 +704,20 @@ void redraw_all_windows_clip(const RECT *damage, BOOL blit_only) {
         for (H cy = cy0; cy < cy1; cy++) {
             const COLOR *src = &wnd->dev->pixels[cy * wnd->dev->width + cx0];
             COLOR *dst = &g_screen_dev->pixels[(dest_y + cy) * g_screen_dev->width + dest_x + cx0];
-            int opaque = 1;
-            for (H cx = 0; cx < span; cx++) {
-                if (src[cx] == 0x00000000) {
-                    opaque = 0;
-                    break;
-                }
-            }
-            if (opaque) {
-                copy_opaque_span(dst, src, span);
-            } else {
-                for (H cx = 0; cx < span; cx++) {
-                    if (src[cx] != 0x00000000) dst[cx] = src[cx];
-                }
-            }
+
+            /* The same rule the two passes in this loop used to spell, in the shape this
+             * port has measured: read the row once, decide sixteen pixels at a time, store
+             * what is not the sentinel.  The walk paid for a SECOND read of bytes the
+             * decision had already brought in: 39.84 ns/px for a row whose copy floor is
+             * 15.96, of which the fused shape leaves 4.99 on the table as the price of the
+             * decision and none of it for the read.  include/btron/fused_row.h carries
+             * both shapes and the ladder that ranks them.
+             *
+             * It is the port's dial that picks, not a judgement made here: on every other
+             * target the call is the code that used to be in this loop, scan-then-copy,
+             * because the copy it goes through is aarch64's 64-byte NEON loop and a
+             * per-pixel decision inside that loop would take the benefit away. */
+            btron_row_copy_skip_zero(dst, src, (int)span);
         }
         t_blit += btron_render_perf_us() - t_mark;
     }

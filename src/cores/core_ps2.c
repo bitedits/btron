@@ -29,6 +29,7 @@
 #include <btron/dp_accel.h>
 #include <btron/dp_cal.h>
 #include <btron/fast_blit.h>    /* the bench's RAM-to-RAM rows call the same leaf the compositor does */
+#include <btron/fused_row.h>    /* ... and, from `blit ship` on, the compositor's own row rule */
 #include <btron/wnd.h>
 #include <btron/desktop.h>
 #include <btron/workbench.h>
@@ -3493,7 +3494,7 @@ static void ps2_bench_region(GDEV *screen, const char *tag,
  *                                bills as fill_rec() plates).
  *
  * Copies go through btron_row_blit() one row at a time, the shape
- * copy_opaque_span() calls it in, and fills through fill_rec(), the compositor's
+ * btron_row_copy_twopass() calls it in, and fills through fill_rec(), the compositor's
  * hottest leaf.  Both bands are the canvas's own rows -- src above, dst below, the
  * same phase relationship production has -- so the largest disjoint copy is
  * 300 rows x 800 px = 240,000 px, and the sweep stops there and says so.  A
@@ -3701,15 +3702,282 @@ static BOOL ps2_bench_span_scan_wide(const COLOR *src, int span)
     return TRUE;
 }
 
+/* The fused shapes, and they are the reason LANE 9's `Shave` cell exists.  What the
+ * two rows above price is a walk that reads a band TWICE: `blit scan` reads every pixel
+ * to decide, then the shipped header reads the same bytes again to copy them.  Taking
+ * 3.3 ns/px off the decision by reading two pixels per load (`blit wide`) leaves that
+ * second read entirely in place -- 15.96 of the 39.86 is paid twice over.  A fused pass
+ * reads once and spends the same load on the decision and on the store, so its ceiling
+ * is the copy floor itself and not an opinion: it cannot cost less than the copy it
+ * replaces.
+ *
+ * Every shape here writes exactly what wnd.c's walk writes: a pixel that is not the
+ * transparent sentinel lands on the canvas, and one that is leaves whatever was below
+ * it.  That is not a claim, it is the structure -- a group that fails its test falls to
+ * the per-pixel fixup over its OWN pixels using the words already loaded, which is the
+ * shipped else-branch's rule applied to fewer pixels -- and it is what the host
+ * differential gate in verify/tests/ has to prove before any of it ships.
+ *
+ * The shapes differ only in how many pixels one decision covers, and in whether the
+ * decision is a compare per word or one arithmetic test per group.  10.1's whole
+ * finding is that a LOOP shape is priced rather than reasoned -- 96.4 ns/px through a
+ * byte tail against 16.1 at 32 bytes on identical bytes -- so all of them get measured
+ * and the fastest one ships, including if the fastest is the narrowest. */
+static void ps2_bench_span_fuse2(COLOR *dst, const COLOR *src, int span)
+{
+    int i = 0;
+
+    /* The same phase rule the copy's peel uses: a damage rect starts at an arbitrary
+     * pixel column, so the row is usually 4-mod-8 and the pairs come after the peel. */
+    if ((((uintptr_t)src & 7u) != 0u) && span > 0) {
+        if (src[0] != 0x00000000) dst[0] = src[0];
+        i = 1;
+    }
+    for (; i + 1 < span; i += 2) {
+        const uint64_t v = *(const uint64_t *)(src + i);
+        const COLOR a = (COLOR)v, b = (COLOR)(v >> 32);
+
+        if (a != 0x00000000 && b != 0x00000000) {
+            *(uint64_t *)(dst + i) = v;
+        } else {
+            if (a != 0x00000000) dst[i] = a;
+            if (b != 0x00000000) dst[i + 1] = b;
+        }
+    }
+    if (i < span && src[i] != 0x00000000) dst[i] = src[i];
+}
+
+static void ps2_bench_span_fuse4(COLOR *dst, const COLOR *src, int span)
+{
+    int i = 0;
+
+    if ((((uintptr_t)src & 7u) != 0u) && span > 0) {
+        if (src[0] != 0x00000000) dst[0] = src[0];
+        i = 1;
+    }
+    for (; i + 3 < span; i += 4) {
+        const uint64_t v0 = *(const uint64_t *)(src + i);
+        const uint64_t v1 = *(const uint64_t *)(src + i + 2);
+        const COLOR a = (COLOR)v0, b = (COLOR)(v0 >> 32);
+        const COLOR c = (COLOR)v1, d = (COLOR)(v1 >> 32);
+
+        if (a && b && c && d) {
+            *(uint64_t *)(dst + i) = v0;
+            *(uint64_t *)(dst + i + 2) = v1;
+        } else {
+            if (a) dst[i] = a;
+            if (b) dst[i + 1] = b;
+            if (c) dst[i + 2] = c;
+            if (d) dst[i + 3] = d;
+        }
+    }
+    for (; i < span; i++) {
+        if (src[i] != 0x00000000) dst[i] = src[i];
+    }
+}
+
+/* Eight pixels per decision, and the decision is one test per WORD accumulated into a
+ * single flag, so the clean path is one branch for the group rather than eight. */
+static void ps2_bench_span_fuse8(COLOR *dst, const COLOR *src, int span)
+{
+    int i = 0;
+
+    if ((((uintptr_t)src & 7u) != 0u) && span > 0) {
+        if (src[0] != 0x00000000) dst[0] = src[0];
+        i = 1;
+    }
+    for (; i + 7 < span; i += 8) {
+        const uint64_t v0 = *(const uint64_t *)(src + i);
+        const uint64_t v1 = *(const uint64_t *)(src + i + 2);
+        const uint64_t v2 = *(const uint64_t *)(src + i + 4);
+        const uint64_t v3 = *(const uint64_t *)(src + i + 6);
+        const COLOR w[8] = {
+            (COLOR)v0, (COLOR)(v0 >> 32), (COLOR)v1, (COLOR)(v1 >> 32),
+            (COLOR)v2, (COLOR)(v2 >> 32), (COLOR)v3, (COLOR)(v3 >> 32)
+        };
+        int dirty = 0;
+
+        for (int k = 0; k < 8; k++) dirty |= (w[k] == 0x00000000);
+        if (!dirty) {
+            *(uint64_t *)(dst + i) = v0;
+            *(uint64_t *)(dst + i + 2) = v1;
+            *(uint64_t *)(dst + i + 4) = v2;
+            *(uint64_t *)(dst + i + 6) = v3;
+        } else {
+            for (int k = 0; k < 8; k++) {
+                if (w[k] != 0x00000000) dst[i + k] = w[k];
+            }
+        }
+    }
+    for (; i < span; i++) {
+        if (src[i] != 0x00000000) dst[i] = src[i];
+    }
+}
+
+/* The same group as the rung above, decided without any per-word branch at all: for a
+ * 32-bit word, `(w - 1) & ~w` has its top bit set EXACTLY when w is zero, because the
+ * bits a subtraction flips 0 -> 1 are the run below w's lowest set bit, which can reach
+ * bit 31 only when there is no lowest set bit.  So the test is arithmetic, it is exact
+ * rather than conservative, and it is the shape that would let the whole group stay a
+ * straight line.  Whether EE scalar costs fewer cycles for it than for eight compares
+ * is what the row answers -- not the reasoning above, which is only why the rung exists. */
+static void ps2_bench_span_fuse8_bits(COLOR *dst, const COLOR *src, int span)
+{
+    int i = 0;
+
+    if ((((uintptr_t)src & 7u) != 0u) && span > 0) {
+        if (src[0] != 0x00000000) dst[0] = src[0];
+        i = 1;
+    }
+    for (; i + 7 < span; i += 8) {
+        const uint64_t v0 = *(const uint64_t *)(src + i);
+        const uint64_t v1 = *(const uint64_t *)(src + i + 2);
+        const uint64_t v2 = *(const uint64_t *)(src + i + 4);
+        const uint64_t v3 = *(const uint64_t *)(src + i + 6);
+        const uint32_t w[8] = {
+            (uint32_t)v0, (uint32_t)(v0 >> 32), (uint32_t)v1, (uint32_t)(v1 >> 32),
+            (uint32_t)v2, (uint32_t)(v2 >> 32), (uint32_t)v3, (uint32_t)(v3 >> 32)
+        };
+        uint32_t zero = 0u;
+
+        for (int k = 0; k < 8; k++) {
+            zero |= ((w[k] - 1u) & ~w[k] & 0x80000000u);
+        }
+        if (zero == 0u) {
+            *(uint64_t *)(dst + i) = v0;
+            *(uint64_t *)(dst + i + 2) = v1;
+            *(uint64_t *)(dst + i + 4) = v2;
+            *(uint64_t *)(dst + i + 6) = v3;
+        } else {
+            for (int k = 0; k < 8; k++) {
+                if (w[k] != 0u) dst[i + k] = (COLOR)w[k];
+            }
+        }
+    }
+    for (; i < span; i++) {
+        if (src[i] != 0x00000000) dst[i] = src[i];
+    }
+}
+
+/* The rung that would actually SHIP, and it is here because the bench's two bands share
+ * a stride while a real client pixmap does not: `wnd->dev->width` can be odd, so a
+ * window's row and the canvas's row at the same damage column are not in the same 8-byte
+ * phase, and a 64-bit access valid for one is unaligned for the other.  This shape reads
+ * and writes one 32-bit word per pixel with the sentinel test inline, so it needs no
+ * phase at all -- 4-byte alignment is what a COLOR array always is.  If it loses to
+ * `blit wide` it stays printed here as the reason the pair shapes do not ship. */
+static void ps2_bench_span_fuse4w(COLOR *dst, const COLOR *src, int span)
+{
+    int i = 0;
+
+    for (; i + 3 < span; i += 4) {
+        const COLOR a = src[i], b = src[i + 1], c = src[i + 2], d = src[i + 3];
+
+        if (a && b && c && d) {
+            dst[i] = a;
+            dst[i + 1] = b;
+            dst[i + 2] = c;
+            dst[i + 3] = d;
+        } else {
+            if (a) dst[i] = a;
+            if (b) dst[i + 1] = b;
+            if (c) dst[i + 2] = c;
+            if (d) dst[i + 3] = d;
+        }
+    }
+    for (; i < span; i++) {
+        if (src[i] != 0x00000000) dst[i] = src[i];
+    }
+}
+
+/* The dirty-content regime's period, read by every row and set by the row list around
+ * a block of rows: 0 leaves a copy row reading the desktop's own pixels, and 8 puts the
+ * transparent sentinel into one pixel in eight of the source band for the duration of
+ * that row.  It is a period and not a flag because the same rect has to be measured on
+ * both contents, or the difference between the two rows is a different rect rather than
+ * a different content. */
+static uint32_t s_ram_holes_period;
+
+/* The two rungs that ask the question `f8` cannot answer on its own.  `f8` beats
+ * `f4w` at the same group size, but it takes the pixels in and out as 64-bit pairs,
+ * which is legal only while the window's row and the canvas's row share an 8-byte
+ * phase -- and in wnd.c they do not whenever the window's left edge is odd.  These two
+ * are the SAME shape with 32-bit accesses, so the only variable between `f8` and `f8w`
+ * is the width of the memory operation, and the only variable between `f8w` and
+ * `f16w` is how many pixels one decision covers.  If `f8w` matches `f8`, the shipped
+ * form is the phase-free one and nothing is paid for the portability. */
+static void ps2_bench_span_fuse8w(COLOR *dst, const COLOR *src, int span)
+{
+    int i = 0;
+
+    for (; i + 7 < span; i += 8) {
+        const COLOR w[8] = { src[i], src[i + 1], src[i + 2], src[i + 3],
+                             src[i + 4], src[i + 5], src[i + 6], src[i + 7] };
+        int dirty = 0;
+
+        for (int k = 0; k < 8; k++) dirty |= (w[k] == 0x00000000);
+        if (!dirty) {
+            for (int k = 0; k < 8; k++) dst[i + k] = w[k];
+        } else {
+            for (int k = 0; k < 8; k++) {
+                if (w[k] != 0x00000000) dst[i + k] = w[k];
+            }
+        }
+    }
+    for (; i < span; i++) {
+        if (src[i] != 0x00000000) dst[i] = src[i];
+    }
+}
+
+static void ps2_bench_span_fuse16w(COLOR *dst, const COLOR *src, int span)
+{
+    int i = 0;
+
+    for (; i + 15 < span; i += 16) {
+        const COLOR w[16] = {
+            src[i], src[i + 1], src[i + 2], src[i + 3],
+            src[i + 4], src[i + 5], src[i + 6], src[i + 7],
+            src[i + 8], src[i + 9], src[i + 10], src[i + 11],
+            src[i + 12], src[i + 13], src[i + 14], src[i + 15]
+        };
+        int dirty = 0;
+
+        for (int k = 0; k < 16; k++) dirty |= (w[k] == 0x00000000);
+        if (!dirty) {
+            for (int k = 0; k < 16; k++) dst[i + k] = w[k];
+        } else {
+            for (int k = 0; k < 16; k++) {
+                if (w[k] != 0x00000000) dst[i + k] = w[k];
+            }
+        }
+    }
+    for (; i < span; i++) {
+        if (src[i] != 0x00000000) dst[i] = src[i];
+    }
+}
+
 static void ps2_bench_ram(GDEV *screen, const char *tag, int mode,
                           int left, int w, int h, uint32_t reps)
 {
     /* Which of these modes move bytes rather than paint them.  A copy needs a source
      * band as large as its destination and its destination's fold must equal that
      * band's, so the same predicate drives both the fit test below and the chk= the
-     * row prints; a fill needs neither. */
+     * row prints; a fill needs neither.  The fused rungs (9 through 13) are copies in
+     * exactly that sense: one read, one write, and the destination must end up holding
+     * the source wherever the source is not the sentinel. */
     const int is_copy = (mode == 0 || mode == 1 || mode == 3 || mode == 4 ||
-                         mode == 7 || mode == 8);
+                         mode == 7 || mode == 8 || mode == 9 || mode == 10 ||
+                         mode == 11 || mode == 12 || mode == 13 || mode == 14 ||
+                         mode == 15 || mode == 16);
+    /* The second content regime, and it is a period rather than a flag because the row
+     * that needs it is the one that says how many holes it had.  Zero means the band is
+     * the desktop's own pixels; non-zero means one pixel in `s_ram_holes_period` of this
+     * row's source band has been replaced by the transparent sentinel for the duration
+     * of the reps and put back before the fold is taken.  It exists because a fused
+     * shape that only wins on an all-opaque row is not a win: the group test that pays
+     * off on the clean path is also the test a dirty row pays twice, once in the group
+     * and once in its own fixup. */
+    const uint32_t holes = s_ram_holes_period;
     COLOR *pix = screen->pixels;
     const int stride = screen->width;
     uint32_t us_sum = 0u, us_max = 0u, sum = 0u;
@@ -3732,6 +4000,30 @@ static void ps2_bench_ram(GDEV *screen, const char *tag, int mode,
     if (dst_band < 0 || (is_copy && dst_band < src_band + h)) {
         ps2_kprintf("[BENCH] ram: rect %dx%d does not fit the canvas, skipped\n", w, h);
         return;
+    }
+
+    /* Puncture, time, restore.  The save is a per-row gather because the band's rows
+     * are `stride` apart, and the restore is not decoration: a source band left
+     * swiss-cheesed would silently price every LATER row of this table on content the
+     * desktop does not have -- the same class of contamination this book caught in the
+     * payload.  The hole is column 3 mod the period, chosen so that the fold's own
+     * sampling (every 64th pixel) never lands on one, which is what keeps chk= the tag
+     * check it is meant to be in BOTH regimes rather than only in the easy one. */
+    COLOR *hole_save = NULL;
+    if (holes >= 2u && is_copy) {
+        hole_save = (COLOR *)malloc((size_t)w * (size_t)h * sizeof(COLOR));
+        if (!hole_save) {
+            ps2_kprintf("[BENCH] ram: no room to puncture %s, row skipped\n", tag);
+            return;
+        }
+        for (int y = 0; y < h; y++) {
+            COLOR *row = pix + (size_t)(src_band + y) * (size_t)stride + (size_t)left;
+
+            for (int x = 0; x < w; x++) {
+                hole_save[(size_t)y * (size_t)w + (size_t)x] = row[x];
+                if ((x % (int)holes) == 3) row[x] = 0x00000000;
+            }
+        }
     }
 
     if (mode == 2) {
@@ -3773,6 +4065,29 @@ static void ps2_bench_ram(GDEV *screen, const char *tag, int mode,
                     }
                 }
             }
+        } else if (mode >= 9 && mode <= 16) {
+            /* The fused shapes: no scan pass at all, because the decision and the store
+             * read the same load.  Modes 9 to 12 take the pairs the copy takes (the
+             * bench's two bands share a stride, so a 64-bit access is legal on both);
+             * mode 13 is the one that survives a window whose stride is not a multiple
+             * of two pixels, and it is the shape that can ship.  A mode that fell
+             * through to the plain copy below would print a copy's number under a fuse
+             * tag and the fold would call it `ok`, because a copy IS what it did -- the
+             * dispatch is therefore exhaustive by construction here, and the host gate
+             * is what says the fused output equals the walk's. */
+            for (int y = 0; y < h; y++) {
+                COLOR *d = pix + (size_t)(dst_band + y) * (size_t)stride + (size_t)left;
+                const COLOR *s = pix + (size_t)(src_band + y) * (size_t)stride + (size_t)left;
+
+                if (mode == 9)       ps2_bench_span_fuse2(d, s, w);
+                else if (mode == 10) ps2_bench_span_fuse4(d, s, w);
+                else if (mode == 11) ps2_bench_span_fuse8(d, s, w);
+                else if (mode == 12) ps2_bench_span_fuse8_bits(d, s, w);
+                else if (mode == 13) ps2_bench_span_fuse4w(d, s, w);
+                else if (mode == 14) ps2_bench_span_fuse8w(d, s, w);
+                else if (mode == 15) ps2_bench_span_fuse16w(d, s, w);
+                else btron_row_copy_skip_zero(d, s, w);
+            }
         } else for (int y = 0; y < h; y++) {
             COLOR *d = pix + (size_t)(dst_band + y) * (size_t)stride + (size_t)left;
 
@@ -3803,6 +4118,14 @@ static void ps2_bench_ram(GDEV *screen, const char *tag, int mode,
         }
     }
     screen->clip = saved_clip;
+    if (hole_save) {
+        for (int y = 0; y < h; y++) {
+            COLOR *row = pix + (size_t)(src_band + y) * (size_t)stride + (size_t)left;
+
+            for (int x = 0; x < w; x++) row[x] = hole_save[(size_t)y * (size_t)w + (size_t)x];
+        }
+        free(hole_save);
+    }
 
     /* Every 64th pixel of every 4th row of the destination -- a third of a percent
      * of a full-canvas rect, so not what the row is measuring, but the thing that
@@ -4164,11 +4487,67 @@ static void ps2_bench_ram_ops(GDEV *screen)
      * decide whether the row may be copied at all (src/window/wnd.c:703-719).  The
      * copy rows price 15.7 ns/px and production's blit= column bills around 40, and
      * the gap is this second pass, not the DRAM.  `blit scan` is the walk as it
-     * stands; `blit wide` is the same decision two pixels per load. */
-    ps2_bench_ram(screen, "blit scan",     7, 400, 400, 16, 256u);
-    ps2_bench_ram(screen, "blit wide",     8, 400, 400, 16, 256u);
-    ps2_bench_ram(screen, "blit odd scan", 7, 401, 399, 16, 256u);
-    ps2_bench_ram(screen, "blit odd wide", 8, 401, 399, 16, 256u);
+     * stands; `blit wide` is the same decision two pixels per load -- and BOTH of
+     * them still read the band twice, which is what the fused rungs below are for.
+     *
+     * The ladder is read the way 10.1's width pairs are read: interleaved, and with
+     * the shapes taken again in the other order (` b` rows) after every other shape
+     * has run, because the drift between adjacent rows here is about 1% and a fused
+     * rung that beats `blit wide` only in its own slot is a position effect.  `f4w`
+     * is the shape that can ship -- one 32-bit access per pixel, so no shared 8-byte
+     * phase between a window's row and the canvas's row is required -- and the
+     * pair-width rungs are what say whether that costs anything.
+     *
+     * Then the same shapes on a band with holes in it, one pixel in eight replaced by
+     * the transparent sentinel: the regime where every group test fails and a fused
+     * rung pays its test and its fixup.  A rung that wins the clean rows and loses the
+     * hole rows is not taken, which is why both blocks are in one phase rather than
+     * one of them being a claim. */
+    ps2_bench_ram(screen, "blit scan",   7, 400, 400, 16, 256u);
+    ps2_bench_ram(screen, "blit wide",   8, 400, 400, 16, 256u);
+    ps2_bench_ram(screen, "blit f2",     9, 400, 400, 16, 256u);
+    ps2_bench_ram(screen, "blit f4",    10, 400, 400, 16, 256u);
+    ps2_bench_ram(screen, "blit f8",    11, 400, 400, 16, 256u);
+    ps2_bench_ram(screen, "blit f8b",   12, 400, 400, 16, 256u);
+    ps2_bench_ram(screen, "blit f4w",   13, 400, 400, 16, 256u);
+    ps2_bench_ram(screen, "blit f8w",   14, 400, 400, 16, 256u);
+    ps2_bench_ram(screen, "blit f16w",  15, 400, 400, 16, 256u);
+    /* The shipped row, priced next to the bench's lookalike: mode 16 calls the function
+     * wnd.c's walk calls, so `blit ship` and `blit f16w` differ only in the source the
+     * compiler saw.  If they disagree, the number that ships is the one on `ship`. */
+    ps2_bench_ram(screen, "blit ship",  16, 400, 400, 16, 256u);
+    ps2_bench_ram(screen, "blit wide b", 8, 400, 400, 16, 256u);
+    ps2_bench_ram(screen, "blit scan b", 7, 400, 400, 16, 256u);
+    ps2_bench_ram(screen, "blit f8 b",  11, 400, 400, 16, 256u);
+    ps2_bench_ram(screen, "blit f4w b", 13, 400, 400, 16, 256u);
+    ps2_bench_ram(screen, "blit f8w b", 14, 400, 400, 16, 256u);
+    ps2_bench_ram(screen, "blit ship b", 16, 400, 400, 16, 256u);
+
+    /* The odd column phase, where the row starts 4-mod-8 and the pair shapes have to
+     * peel one pixel before they can load a pair -- the same defect fast_blit.h's
+     * comment names, priced on the fused shapes rather than on the copy. */
+    ps2_bench_ram(screen, "blit o scan", 7, 401, 399, 16, 256u);
+    ps2_bench_ram(screen, "blit o wide", 8, 401, 399, 16, 256u);
+    ps2_bench_ram(screen, "blit o f4",  10, 401, 399, 16, 256u);
+    ps2_bench_ram(screen, "blit o f4w", 13, 401, 399, 16, 256u);
+    ps2_bench_ram(screen, "blit o f8w", 14, 401, 399, 16, 256u);
+    ps2_bench_ram(screen, "blit o f16w", 15, 401, 399, 16, 256u);
+    ps2_bench_ram(screen, "blit o ship", 16, 401, 399, 16, 256u);
+
+    /* The hole regime, at the same rect and the same repetition count. */
+    s_ram_holes_period = 8u;
+    ps2_bench_ram(screen, "blit h scan",  7, 400, 400, 16, 256u);
+    ps2_bench_ram(screen, "blit h wide",  8, 400, 400, 16, 256u);
+    ps2_bench_ram(screen, "blit h f4",   10, 400, 400, 16, 256u);
+    ps2_bench_ram(screen, "blit h f8",   11, 400, 400, 16, 256u);
+    ps2_bench_ram(screen, "blit h f8b",  12, 400, 400, 16, 256u);
+    ps2_bench_ram(screen, "blit h f4w",  13, 400, 400, 16, 256u);
+    ps2_bench_ram(screen, "blit h f8w",  14, 400, 400, 16, 256u);
+    ps2_bench_ram(screen, "blit h f16w", 15, 400, 400, 16, 256u);
+    ps2_bench_ram(screen, "blit h scanb",  7, 400, 400, 16, 256u);
+    ps2_bench_ram(screen, "blit h ship", 16, 400, 400, 16, 256u);
+    ps2_bench_ram(screen, "blit h f4w b", 13, 400, 400, 16, 256u);
+    s_ram_holes_period = 0u;
 
     /* The sweep, at the phase that can never fall into the tail, over the range the
      * book's flat-price claim covers.  The two shapes are the compositor's own two
@@ -4185,6 +4564,10 @@ static void ps2_bench_ram_ops(GDEV *screen)
     ps2_bench_ram(screen, "copy 12800+32", 4,   0, 800,  16,  64u);
     ps2_bench_ram(screen, "blit 12800",    7,   0, 800,  16,  64u);
     ps2_bench_ram(screen, "blit 12800w",   8,   0, 800,  16,  64u);
+    ps2_bench_ram(screen, "blit 12800fw", 13,   0, 800,  16,  64u);
+    ps2_bench_ram(screen, "blit 12800f8w",14,   0, 800,  16,  64u);
+    ps2_bench_ram(screen, "blit 12800f16w",15,  0, 800,  16,  64u);
+    ps2_bench_ram(screen, "blit 12800ship",16,  0, 800,  16,  64u);
     ps2_bench_ram(screen, "copy 80000px",  0,   0, 800, 100,   8u);
     ps2_bench_ram(screen, "copy 240000px", 0,   0, 800, 300,   3u);
     ps2_bench_ram(screen, "fill 768px",    2, 400,  48,  16, 256u);

@@ -70,6 +70,23 @@ int32_t dp_ptr_scale(int32_t raw, int32_t mult_fp, int32_t *carry)
     return pixels;
 }
 
+/* The Archimedes / RISC OS MouseStep curve, for the ports whose pointer is meant
+ * to gain as the hand moves faster: src/cores/core_arm64.c calls it for the Pi
+ * 400's feel, and Settings > Input dials its step.
+ *
+ * Not compiled for BTRON_PS2_TARGET.  That port's shaping became proportional by
+ * doc/txt/PS2.txt LAW 13d, and leaving this body linked in would keep a
+ * speed-dependent multiplier living inside an image whose own law forbids one --
+ * where nothing but a disassembly read can tell dead code apart from a curve a
+ * merge restored.  Compiling it out makes the LINK the gate: a PS2 translation
+ * unit that calls this function fails to build instead of quietly
+ * re-accelerating the pointer on the one machine that has no screen to complain.
+ *
+ * The declaration in <btron/dp_accel.h> stays visible to every target on purpose,
+ * so that failure names dp_ptr_riscos at link time rather than turning into an
+ * implicit-declaration error at compile time: the first is the message that leads
+ * a reader to the law, the second only to this header. */
+#ifndef BTRON_PS2_TARGET
 int32_t dp_ptr_riscos(int32_t raw, int step, int32_t *carry)
 {
     int32_t mag = (raw < 0) ? -raw : raw;
@@ -86,6 +103,7 @@ int32_t dp_ptr_riscos(int32_t raw, int step, int32_t *carry)
 
     return dp_ptr_scale((raw < 0) ? -mag : mag, mult_fp, carry);
 }
+#endif /* !BTRON_PS2_TARGET */
 
 int32_t dp_ptr_limit(int32_t want, int32_t max_step, int32_t *defer)
 {

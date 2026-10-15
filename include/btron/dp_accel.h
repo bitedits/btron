@@ -41,7 +41,12 @@ int32_t dp_ptr_scale(int32_t raw, int32_t mult_fp, int32_t *carry);
  * of it: step 1..4 selects 1.5x, 2.0x, 2.5x, 3.0x, each gaining a further 0.5x
  * once the move is more than four counts, and a move of two counts or less is
  * multiplied by 1.5 first so that fine positioning survives a coarse step.
- * Anything outside 1..4 is treated as step 4, as the curve's own default was. */
+ * Anything outside 1..4 is treated as step 4, as the curve's own default was.
+ *
+ * Declared for every target, defined for every target except BTRON_PS2_TARGET,
+ * whose pointer law (doc/txt/PS2.txt LAW 13d) allows no speed-dependent gain at
+ * all: a PS2 caller compiles against this header and fails at the link, which is
+ * the enforcement that file keeps deliberately. */
 int32_t dp_ptr_riscos(int32_t raw, int step, int32_t *carry);
 
 /* Cap how far the cursor may move for one call, and hand the rest of it to the

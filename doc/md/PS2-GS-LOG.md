@@ -2394,3 +2394,159 @@ then volume rebuild -> `make test-fs` -> dialled `make ps2 PS2_GL=eegs PS2_FP=hw
 `make test-ps2` with the same dials LAST; the payload is verified by grepping one-line fragments
 ("sixty-three textured quad entries" and "printed 646 tris and 1,436 verts") out of
 `btron_sys.vol` and `btron-ps2.elf`, not mtimes.
+
+## LANE 14 rungs 1-2 landed: the full-feature disc carries both volumes and pak0 as CD9660 files, the image binary is proven byte-neutral, and the new gate went red on its own author (2026-10-15)
+
+**The ask, in the user's words.**  "Can you ship all B-System apps including in 2 volumes:
+btron_anders.vol btron_sys.vol -- I want to have full features PS2 environment with Terminal, sc, tv,
+Quake, Lil 64, Casette, Clarity, all that POSIX have", refined to "I mean we should have ISO CD9660
+or something", and constrained by "dont need to wirite iamge binary i think image binary can be like
+now" (typo verbatim).  The artifact is therefore the DISC; the ELF that boots it is not grown by it.
+
+**What landed.**  `$(PS2_ISO)` in the Makefile now stages the tree the book specifies --
+`SYSTEM.CNF`, `BTRON.ELF`, `SYS.VOL`, `ANDERS.VOL`, `QUAKE/PAK0.PAK`, `QUAKE/DRONE1M1..8.DEM` -- and
+regenerates BOTH volumes inside the recipe from `src/tools/manifest.txt` / `manifest_anders.txt`
+rather than copying the working `.vol` files, because five host suites mount `btron_sys.vol`
+read/write (rows 90-92 of this suite); the rule gained `mkbtronfs`, the two manifests, `pak0.pak` and
+the eight demos as prerequisites, and prints the frozen ELF's hash on every run.
+`scripts/test_ps2.sh` section 11 grew from one row to ten (rows 95-104): the disc is opened, its name
+set compared to the specified tree, and every payload compared to the thing that generated it.
+
+**The disc, as shipped.**  26,920,960 B, thirteen files, every name 8.3-uppercase.  `BTRON.ELF`
+5,927,592 B = the working image, `SYS.VOL` 1,048,576 B (`8fcab00a8fd5306277d35a85dbf19baddff2b998`
+for the volume that landed), `ANDERS.VOL` 1,048,576 B (`c803aaaddea8ee8fe7cec9225636d9cae977cf2f`),
+`QUAKE/PAK0.PAK` 18,689,235 B (`36b42dc7b6313fd9cabc0be8b9e9864840929735`), the eight demos 23,738
+down to 6,738 B.  Final image `403c71aa55cdb825bcba9bc9917130425f219199`.  The ISO itself is NOT
+byte-reproducible -- the identical tree hashed `93d738e9...` then `3130413e...` because hdiutil
+stamps a creation time -- so no gate here asserts an ISO hash; it asserts the tree, the sizes and the
+per-file bytes.
+
+**The freeze, in the two halves that can actually be executed.**  Half one is the packaging rule:
+delete `btron-ps2.iso`, rebuild the ISO ALONE with the same dials, and the image does not relink --
+mtime stays 15:41:11 and the hash stays `403c71aa...`.  Half two is structural, a byte census of the
+shipped image against the pre-LANE-14 baseline (`.build/btron-ps2.elf.pre-lane14`, `c9952b01...`):
+sizes equal at 5,927,592 B, the section table byte-identical, and of 294,776 differing bytes,
+294,774 lie inside the embedded /SYS block (file 0x489800 through 0x589800, the last 1 MiB of
+`.data`), 2 lie in `.text` (0x62168 and 0x621a4), and ZERO lie in `.rodata`, in `.data` outside the
+volume block, or in the symbol tables.  No second volume embed, no grown buffer.  Row 101 states it
+from the image's own symbols -- `ps2_sys_vol_image` to `ps2_sys_vol_image_end` spans exactly
+1,048,576 B and those bytes equal the disc's `SYS.VOL` -- and row 102 keeps /ANDERS out of the image
+honest: a string only the Anders documents carry appears 48 times on the disc and 0 times in the
+image, with `Emotion Engine` (13 in the image, 7 in `SYS.VOL`) as the positive control that the
+census can see embedded payload at all.
+
+**The two text bytes are the dial, not the packaging -- and they indict the baseline.**  Both are
+`addiu $v0,$zero,0` -> `addiu $v0,$zero,3`, i.e. `GL_BACKEND_TINYGL` -> `GL_BACKEND_EEGS`
+(`src/gl/gl_dispatch.h:23-26`), in leaf accessors inside the three stamp-guarded GL units
+(`gl_backend_choice.c`, `gl_dispatch.c`, `egl_surface.c`), which are the only C objects this lane's
+link rebuilt (mtimes, 113 objects total).  The reading is that `c9952b01`, the image the LANE 12h
+entry pinned as "the artifact tested", had been relinked after a bare make round reset
+`.build/ps2-gl.stamp`, so it carried three translation units compiled for the other backend -- the
+exact symptom the rule at Makefile:1232 exists to prevent, and it printed
+`[PS2] PS2_GL is now eegs (was tinygl)` on every dialled rebuild in this session as proof.  The
+rung-(i) microseconds are unaffected: the bench is a separate link and its rows show the GS path
+live (`batch=64`, no `raster f_menu`).
+
+**What the new gates caught, three times over.**  (a) The tree row first read
+`[ '$DISC_TREE' = ... ]`; single quotes inside an `eval`'ed string suppress expansion, so it compared
+the literal text `$DISC_TREE` and went [FAIL] -- fixed to `"$DISC_TREE"`.  (b) The self-named needle:
+the first book paragraph spelled the Anders needle word, that paragraph entered the payload with the
+next book refresh, and the row went red because the image now contained the word it asserted absent.
+The needle now lives only in `scripts/test_ps2.sh` and the book describes it.  (c) `hdiutil attach`
+refuses a second attach of an image that is already mounted, which converted a green gate into a
+silent [SKIP]; the disc reader is `bsdtar`-first now, its extraction verified faithful against every
+source before it became the primary path.
+
+**What this does NOT claim.**  Nothing on the disc is READ by the guest yet: `grep` for
+cdrom/CdRead/NCP/SIF/libcdvd across `src/drivers/ps2/` returns nothing, so /SYS stays the ELF's embed
+and /ANDERS, pak0 and the demos are carried and not opened -- LANE 13 is the unpaid actor.  No
+application was linked: the 27 `COMMON_SRCS` units POSIX links and PS2 does not -- Clarity 4,
+chokanji 8, HMI 7, and eight singles (b_drivesetup, image_decode, dp_sdl, font_mgr, blk_file,
+blk_part, blk_qcow2, desktop/main.c), every path verified present in the tree, which also corrects
+the book's first draft of the same list from "Clarity 5" and four omitted units -- plus Quake's 22
+files with a 64 MiB hunk arena and Lil64's 4 files with a 3 MiB node table, stay out under the
+frozen-image constraint the user set.  No row here exercises a BIOS disc boot from the ISO: the suite
+validates the disc's CONTENT, so "the PS2 boots `SYSTEM.CNF` and loads this ELF" is SKIP, not PASS.
+Nothing ran on a PlayStation 2.
+
+**The certified chain.**  Book first (LANE 14's rung wording corrected to the control the artifact
+can answer, then the measured paragraph), then `rm -f btron_sys.vol && make btron_sys.vol` ->
+`make test-fs` 20/20 -> dialled `make ps2 PS2_GL=eegs PS2_FP=hw PS2_MSX=0` -> dialled
+`make test-ps2` with the same dials LAST, now 104/104 (was 95/95; +9 disc rows) -> payload greps of
+one-line fragments ("What Rung 1 measured, on landing", "Rung 1 is packaging", "the disc gets the
+whole system") 1/1/1 across `btron_sys.vol`, `btron-ps2.elf` and the disc's own `SYS.VOL` ->
+`make arm64-elf` exits 0 with the Pi 400 image unchanged at 1,114,496 B.
+
+## Lane 15 landed: the guest's last speed-dependent gain is gone, the RISC OS accelerator is not
+compiled into this image at all, and the Pi 400 keeps it byte for byte (2026-10-15)
+
+**The question, asked of the live path and not of the source.**  The user reported unnecessary extra
+acceleration on the PS2 pointer and then, two messages later, that the RISC OS-specific code should
+come out of this build as well.  Step 1 of the diagnosis skill answered which branch is live before
+anything was edited: `[USB1] Type = hidmouse` in the in-tree `PCSX2.ini` enumerates as
+`PS2_DEVID_PCSX2_MOUSE` (`0x00010627`), so the running profile is `emu`, and `emu` was already
+proportional at 96/256.  The only speed-dependent gain left in the port was the `hw` profile's
+`dp_ptr_riscos()` -- which is therefore NOT the thing the user's own hand was feeling, and the audit
+said so before the edit rather than after.
+
+**Why that curve counts as an acceleration nobody can decline.**  `dp_ptr_riscos()` computes
+`mult_fp = 256 + step*128 + (mag>4 ? 128 : 0)` and rewrites any `step` outside 1..3 to 4, so the
+Settings > Input range 1..4 is 384/256..768/256: a FLOOR of 1.5x, with the shipped default of 2
+handing a real mouse 2.0x on small moves and 2.5x past four counts.  There is no setting at which
+the pointer is simply proportional, which is what LAW 13d (book 13.2) now forbids on this target.
+
+**What changed.**  `src/cores/core_ps2.c`: `ps2_ptr_shape()` collapsed to one proportional stage for
+both profiles, the curve's second-stage carries (`s_ptr_post_carry_*`) and their three reset sites
+went with it, the `extern int g_mouse_step_mult` was deleted rather than left wired to nothing, and
+the `hw` gain row and the `[CAL]` header now say what the shaping does instead of advertising a curve
+it no longer applies.  `src/graphics/dp_accel.c`: the accelerator's BODY is now behind
+`#ifndef BTRON_PS2_TARGET`, and `include/btron/dp_accel.h` keeps the declaration visible to every
+target on purpose -- so a PS2 translation unit that calls it fails at the LINK, naming
+`dp_ptr_riscos`, instead of quietly re-accelerating the pointer on the one machine with no screen to
+complain with.  `core_arm64.c` is untouched; it does not define that macro, so the Pi 400's feel and
+its object bytes are unchanged (`dp_ptr_riscos` still defined in `dp_accel.arm64.o`, still present in
+the relinked aarch64 image, still 1,114,496 B).
+
+**The control, run red on two preserved images rather than asserted.**  This lane finally kept its
+before-artifacts, which the first attempt at it could not:
+
+| Read off the image | `.build/…pre-lane14` (15:24, curve era) | `.build/…pre-lane15` (16:05, proportional) | shipping (16:21) |
+|---|---|---|---|
+| `<ps2_usb_on_mouse>` window | 496 lines, 16 jumps | 464 lines, 12 jumps | 464 lines, 12 jumps |
+| `jal` to `dp_ptr_riscos` in it | 2 | 0 | 0 |
+| `jal` to `dp_ptr_scale` in it | 4 | 2 | 2 |
+| `jal` to `dp_ptr_riscos` image-wide | 2 | 0 | 0 |
+| blocks of `dp_ptr_riscos` text | 1 | 1 | 0 |
+| old gain string / new gain string | 1 / 0 | 0 / 1 | 0 / 1 |
+
+Rows 105 and 106 are therefore falsified by the 15:24 image and row 107 by the 16:05 one -- the
+middle column is exactly the state the user objected to, a dead curve still living in `.text`, which
+is why the third row exists.  All three read green on the shipping artifact.
+
+**Layout, because a size change is not automatically a structural change.**  The image went
+5,927,520 -> 5,926,436 B (-1,084).  `.text` 0xd62cc -> 0xd617c is -336 B, precisely the removed
+function's own span (`0x16e7ac..0x16e8fc`, 86 disassembly lines); `.pdr` shed 0x20 and the symbol
+table one entry (2277 -> 2276); `.rodata` (0x8e51c) and `.data` (0x414c00) are byte-for-byte the same
+SIZE, so the embedded /SYS block did not move out from under the image-budget ASSERT -- only the
+addresses slid down with the text shrink.  LANE 14's byte census cannot be run across this pair: it
+requires equal file sizes by design, so the freeze claim stays with LANE 14's own pair and this lane
+certifies its layout by section headers instead.
+
+**The chain, in order.**  Book first (LAW 13d in 13.2, the `curve=` note in 13.1, the `hw` boot row,
+13.4's status with the fresh `ptrcal` marked SKIP, and the compile-out written into the law) ->
+`rm -f btron_sys.vol && make btron_sys.vol` -> `make test-fs` 20/20 -> dialled
+`make ps2 PS2_GL=eegs PS2_FP=hw PS2_MSX=0` -> `make test-ps2-pointer` 59/59 -> dialled
+`make test-ps2` LAST, 107/107 (was 104/104; +3 LAW 13d rows) -> `make arm64-elf` exits 0.  Pinned
+artifacts: `btron-ps2.elf` 5,926,436 B, sha1 `dcdb7aea598cae17547eb2ccb76795c6b130654a`, 16:21:15;
+`btron-ps2.iso` 26,918,912 B, 16:21:15, and the disc's own `BTRON.ELF` extracts to that same sha1.
+
+**What this does NOT claim.**  Nothing ran on a PlayStation 2.  `ptrstat`/`ptrcal` on a booted image
+is SKIP, not PASS, so no `[PSTAT]` row backs any of the above -- the evidence is disassembly and
+payload, not a session.  The user's follow-up requirement -- a pointer whose speed equals the host
+Mac's -- is UNMEASURED and deliberately not answered here: 96/256 is a gain sized for a 2133-px-wide
+picture, and this Mac's panel reports 2560x1664 Retina, so parity would be a different constant
+entirely; that is LANE 16's `ptgain` sweep, not a value to guess into `PS2_EMU_MULT_FP`.  Likewise
+the report that "acceleration increased temporarily" has no explanation in this change -- removing a
+multiplier cannot raise the `emu` gain, and the candidate that would produce a transient is the
+accumulate-then-spend-by-the-rendering-pass policy (a pass that takes seconds spends seconds of
+queue), which the `loop:` and `reports=/s` rows on one `ptrstat` window can decide either way.

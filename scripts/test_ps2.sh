@@ -911,10 +911,168 @@ else
     echo "  [SKIP] PS2_MSX=0 -- tronMSX is parked out of this image, so the five B-MSX rows above were not run (not a pass; the volume still carries cbios/ and msx/)"
 fi
 
-# 11. Check Bootable ISO Disc Packaging
+# 11. Check the full-feature disc -- doc/txt/PS2.txt, LANE 14 rungs 1 and 2.
+#
+# The user's constraint of 2026-10-15 was verbatim "dont need to write image
+# binary i think image binary can be like now", so the DISC is the artifact and
+# the ELF is not grown by it.  Two claims follow from that, and the two-line row
+# this block replaces proved neither: that the disc carries the payload, and that
+# the packaging did not touch the image.  So the ISO is opened and read back the
+# way the guest will have to read it once LANE 13 pays for a cdrom0 driver, and
+# every payload is compared against the thing that GENERATED it.  Two of those
+# comparisons are load-bearing and easy to get wrong.  The volumes are compared
+# against fresh `mkbtronfs` runs on their manifests, never against the working
+# btron_sys.vol, because five host suites mount that file read/write (row 90
+# above) -- the same reason the Makefile rule regenerates them inside the recipe.
+# And the freeze is stated twice, because one statement of it is weak: the disc's
+# BTRON.ELF must equal the image in the tree, and the image's own embed -- located
+# through ps2_sys_vol_image.._end, not assumed -- must be exactly one 1 MiB volume
+# whose bytes are the disc's SYS.VOL, which is the form that would go red if a
+# second volume were ever .incbin'd to satisfy the disc.
+ISO_ROOT=""
+ISO_MOUNTED=""
+iso_close() {
+    [ -n "$ISO_ROOT" ] || return 0
+    if [ -n "$ISO_MOUNTED" ]; then
+        hdiutil detach "$ISO_ROOT" -quiet >/dev/null 2>&1 || true
+    else
+        rm -rf "$ISO_ROOT"
+    fi
+    ISO_ROOT=""
+}
+trap iso_close EXIT
+
 if [ -f "$ISO" ]; then
     assert_check "ISO disc image exists and is non-empty" \
         "[ -s $ISO ]"
+    ISO_SIZE=$(wc -c < "$ISO" | tr -d ' ')
+    # Open the disc.  An archive read comes first, and the order is a measured
+    # result rather than a preference: the first run of this gate went [SKIP]
+    # with hdiutil tried first, because macOS refuses a second attach of an image
+    # that is already mounted -- two manual mounts from the session that landed
+    # the packaging did exactly that, and a read-back gate that silently becomes
+    # a SKIP is worse than no gate.  `bsdtar -xf` reads the ISO9660/Joliet image
+    # with no mount and no root, and its extraction was checked against the
+    # sources by cmp before it became the primary path.  A real mount is the
+    # fallback for a host without libarchive.
+    if command -v bsdtar >/dev/null 2>&1; then
+        ISO_ROOT=".build/ps2-iso-readback"
+        rm -rf "$ISO_ROOT" && mkdir -p "$ISO_ROOT"
+        bsdtar -C "$ISO_ROOT" -xf "$ISO" >/dev/null 2>&1 || ISO_ROOT=""
+        [ -z "$ISO_ROOT" ] || [ -f "$ISO_ROOT/SYSTEM.CNF" ] || ISO_ROOT=""
+    fi
+    if [ -z "$ISO_ROOT" ] && command -v hdiutil >/dev/null 2>&1; then
+        ISO_ROOT="/tmp/btron-iso-readback.$$"
+        hdiutil detach "$ISO_ROOT" -quiet >/dev/null 2>&1 || true
+        mkdir -p "$ISO_ROOT"
+        if hdiutil attach -readonly -nobrowse -mountpoint "$ISO_ROOT" "$ISO" >/dev/null 2>&1; then
+            ISO_MOUNTED=1
+        else
+            ISO_ROOT=""
+        fi
+    fi
+    if [ -n "$ISO_ROOT" ]; then
+        # The tree the book specifies, and nothing else: an extra file here means
+        # the recipe grew, and a missing one means the disc is not the payload.
+        DISC_TREE=$( (cd "$ISO_ROOT" && find . -type f | sed 's|^\./||' | LC_ALL=C sort | tr '\n' ' ') )
+        WANT_TREE="ANDERS.VOL BTRON.ELF QUAKE/DRONE1M1.DEM QUAKE/DRONE1M2.DEM QUAKE/DRONE1M3.DEM QUAKE/DRONE1M4.DEM QUAKE/DRONE1M5.DEM QUAKE/DRONE1M6.DEM QUAKE/DRONE1M7.DEM QUAKE/DRONE1M8.DEM QUAKE/PAK0.PAK SYS.VOL SYSTEM.CNF "
+        assert_check "the disc ($ISO_SIZE-byte ISO) carries exactly the LANE 14 tree, in 8.3-uppercase, plus the ELF it boots" \
+            "[ \"\$DISC_TREE\" = '$WANT_TREE' ]"
+        assert_check "...and SYSTEM.CNF boots that ELF from cdrom0 (the backslash is matched by a regex dot) with three CRLF lines" \
+            "LC_ALL=C grep -qc 'BOOT2.=.cdrom0:.BTRON.ELF;1' $ISO_ROOT/SYSTEM.CNF && [ \$(LC_ALL=C grep -cac \$'\r' $ISO_ROOT/SYSTEM.CNF) -eq 3 ]"
+        assert_check "the packaging wrote no image bytes: BTRON.ELF on the disc is the tree's btron-ps2.elf, byte for byte" \
+            "cmp -s $ISO_ROOT/BTRON.ELF $ELF"
+        if ./mkbtronfs src/tools/manifest.txt -o .build/ps2-readback-sys.vol >/dev/null 2>&1 && \
+           ./mkbtronfs src/tools/manifest_anders.txt -o .build/ps2-readback-anders.vol -l ANDERS >/dev/null 2>&1; then
+            assert_check "SYS.VOL on the disc is the manifest itself (1,048,576 B, not the working file an FS suite may have written into)" \
+                "[ \$(wc -c < $ISO_ROOT/SYS.VOL | tr -d ' ') -eq 1048576 ] && cmp -s $ISO_ROOT/SYS.VOL .build/ps2-readback-sys.vol"
+            assert_check "ANDERS.VOL on the disc is the manifest too, labelled ANDERS, and 1,048,576 B" \
+                "[ \$(wc -c < $ISO_ROOT/ANDERS.VOL | tr -d ' ') -eq 1048576 ] && cmp -s $ISO_ROOT/ANDERS.VOL .build/ps2-readback-anders.vol"
+        else
+            echo "  [SKIP] mkbtronfs could not be run here, so the two volume rows above were not compared against their manifests (not a pass)"
+        fi
+        # The second half of the freeze, read off the image's own symbols rather
+        # than off the assembly source: the embedded region is one whole volume.
+        VOL_ADDR="$($READELF -s $ELF | awk '$8=="ps2_sys_vol_image" {print "0x"$2; exit}')"
+        VOL_END="$($READELF -s $ELF | awk '$8=="ps2_sys_vol_image_end" {print "0x"$2; exit}')"
+        DATA_ADDR="$($READELF -S $ELF | awk '$3==".data" {print "0x"$5; exit}')"
+        DATA_OFF="$($READELF -S $ELF | awk '$3==".data" {print "0x"$6; exit}')"
+        if [ -n "$VOL_ADDR" ] && [ -n "$DATA_OFF" ]; then
+            EMB_BYTES=$((VOL_END - VOL_ADDR))
+            EMB_FILE_OFF=$((DATA_OFF + VOL_ADDR - DATA_ADDR))
+            assert_check "the image embeds exactly ONE volume -- $EMB_BYTES bytes at $VOL_ADDR, which are the disc's SYS.VOL, so /ANDERS is carried by the disc and not by the ELF" \
+                "[ \$EMB_BYTES -eq 1048576 ] && dd if=$ELF bs=1024 skip=$((EMB_FILE_OFF / 1024)) count=1024 2>/dev/null | cmp -s - $ISO_ROOT/SYS.VOL"
+            # A census that cannot see anything would pass the row above forever,
+            # so the pair is run together: a string only the Anders tree carries
+            # (its project URL, in every one of its documents) must be absent
+            # from the image, and a string the /SYS payload carries must be
+            # present in both.  The needle is spelled here and not in the book:
+            # doc/txt/PS2.txt IS the /SYS payload, so naming the needle in the
+            # prose writes it into the image and makes the row false by being
+            # described.  The first version of this pair did exactly that with a
+            # different word and the row went red on its own author, which is
+            # recorded in LANE 14.
+            assert_check "...and the census can see: a string only the Anders documents carry is on the disc $(LC_ALL=C grep -ac 'groupoid\.space' "$ISO_ROOT/ANDERS.VOL") times and 0 times in the image, while 'Emotion Engine' is in both" \
+                "[ \$(LC_ALL=C grep -ac 'groupoid\\.space' $ISO_ROOT/ANDERS.VOL) -ge 1 ] && [ \$(LC_ALL=C grep -cac 'groupoid\\.space' $ELF) -eq 0 ] && [ \$(LC_ALL=C grep -ac 'Emotion Engine' $ELF) -ge 1 ] && [ \$(LC_ALL=C grep -ac 'Emotion Engine' $ISO_ROOT/SYS.VOL) -ge 1 ]"
+        else
+            echo "  [SKIP] $READELF is unavailable, so the one-volume embed row and the needle pair were not run (not a pass)"
+        fi
+        assert_check "the drawer carries pak0.pak whole: 18,689,235 B, identical to the asset, because a stream read needs the file and not an embed" \
+            "[ \$(wc -c < $ISO_ROOT/QUAKE/PAK0.PAK | tr -d ' ') -eq \$(wc -c < assets/quake/pak/pak0.pak | tr -d ' ') ] && cmp -s $ISO_ROOT/QUAKE/PAK0.PAK assets/quake/pak/pak0.pak"
+        DEMO_OK=1
+        for n in 1 2 3 4 5 6 7 8; do
+            cmp -s "$ISO_ROOT/QUAKE/DRONE1M$n.DEM" "assets/quake/drone1m$n.dem" || DEMO_OK=0
+        done
+        assert_check "and all eight replay demos are on the disc byte-for-byte" "[ $DEMO_OK -eq 1 ]"
+        iso_close
+        rm -f .build/ps2-readback-sys.vol .build/ps2-readback-anders.vol
+    else
+        echo "  [SKIP] no ISO reader on this host (neither hdiutil nor bsdtar opened $ISO), so the nine LANE 14 disc rows above were not run -- not a pass: the disc's contents are unverified on this machine"
+    fi
+fi
+
+# 12. LAW 13d -- no guest-side multiplier scales a pointer count by speed (doc/txt/PS2.txt 13.2).
+#
+# Read off the linked image rather than off the source, for the same reason rows 88-89 read the
+# disassembly: a branch that is compiled out, inlined away, or restored by a merge is exactly what
+# a source grep cannot see.  ps2_ptr_shape() is static and inlines into its one caller, so the
+# window this law lives in is <ps2_usb_on_mouse>, and the census of that window is the law:
+#
+#   before, on .build/btron-ps2.elf.pre-lane14 (the curve era, 15:24): the handler window is 496
+#     lines, 16 jumps, 2 of them to dp_ptr_riscos and 4 to dp_ptr_scale -- the hw profile's curve
+#     into the curve's own gain, plus the emu profile's proportional pair -- 2 accelerator jumps
+#     image-wide, 1 block of the accelerator's own text, and the old gain row's string present;
+#   middle, on .build/btron-ps2.elf.pre-lane15 (proportional, 16:05): 0 accelerator jumps and 2
+#     dp_ptr_scale calls, but the accelerator's text is still in .text with nothing calling it;
+#   after, this image: 0 accelerator jumps and 0 blocks of its text.
+#
+# The scale count is the vacuity guard: a window that failed to extract would read zero of both,
+# and the row would then certify a pointer that had been deleted.  The third row is the one that
+# keeps the dead curve out of the image: an uncalled accelerator still lives inside a port whose
+# own law forbids a speed-dependent gain, and a reader of the disassembly cannot tell code that
+# was compiled out from a branch a merge restored.  src/graphics/dp_accel.c keeps the body behind
+# `#ifndef BTRON_PS2_TARGET`, so the Pi 400 -- which calls it for its own feel and does not define
+# that macro -- keeps it byte for byte, and a PS2 caller now fails at the link instead of
+# re-accelerating a pointer on the one machine that has no screen to complain with.
+if command -v mipsel-linux-gnu-objdump >/dev/null 2>&1; then
+    SHAPE_CALLS=$($OBJDUMP -d $ELF | awk '/<ps2_usb_on_mouse>:/{f=1;print;next} f&&/^[[:space:]]*$/{f=0} f' | grep -c 'jal' || true)
+    SHAPE_RISCOS=$($OBJDUMP -d $ELF | awk '/<ps2_usb_on_mouse>:/{f=1;print;next} f&&/^[[:space:]]*$/{f=0} f' | grep -c 'jal.*<dp_ptr_riscos>' || true)
+    SHAPE_SCALE=$($OBJDUMP -d $ELF | awk '/<ps2_usb_on_mouse>:/{f=1;print;next} f&&/^[[:space:]]*$/{f=0} f' | grep -c 'jal.*<dp_ptr_scale>' || true)
+    IMG_RISCOS=$($OBJDUMP -d $ELF | grep -c 'jal.*<dp_ptr_riscos>' || true)
+    RISCOS_TEXT=$($OBJDUMP -d $ELF | grep -c '<dp_ptr_riscos>:' || true)
+    assert_check "LAW 13d: the pointer's shaping is proportional -- $SHAPE_RISCOS accelerator calls in the mouse handler, $IMG_RISCOS anywhere in the image, and $SHAPE_SCALE dp_ptr_scale calls still doing the gain over $SHAPE_CALLS jumps" \
+        "[ \$SHAPE_CALLS -ge 1 ] && [ \$SHAPE_RISCOS -eq 0 ] && [ \$IMG_RISCOS -eq 0 ] && [ \$SHAPE_SCALE -eq 2 ]"
+    # And the row a hand reads at boot says the same thing as the code the image carries: the
+    # hw profile's own gain line used to advertise the curve it was applying.  The absent
+    # string is spelled here and not in the book, because doc/txt/PS2.txt is the /SYS payload.
+    assert_check "...and the boot row says what the shaping does: 'proportional (no curve)' is in the image and the old 'RISC OS step' announcement is not" \
+        "[ \$(LC_ALL=C grep -ac 'proportional (no curve)' $ELF) -ge 1 ] && [ \$(LC_ALL=C grep -ac 'RISC OS step' $ELF) -eq 0 ]"
+    # The compile-out itself, read off the image rather than off the #if, because the #if is only
+    # worth what the link shows it to be worth.
+    assert_check "...and the accelerator this target no longer uses is not compiled into this image at all -- $RISCOS_TEXT block(s) of dp_ptr_riscos text, against the pre-lane15 image's 1" \
+        "[ \$RISCOS_TEXT -eq 0 ]"
+else
+    echo "  [SKIP] no MIPS disassembler on this host -- LAW 13d's shaping window was not read off the image (not a pass)"
 fi
 
 echo "----------------------------------------------------------"

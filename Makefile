@@ -1389,14 +1389,37 @@ $(PS2_TARGET): $(PS2_OBJS) $(PS2_LD_SCRIPT)
 	@echo "[PS2-ELF] Built: $@"
 	@file $@
 
-$(PS2_ISO): $(PS2_TARGET)
+# LANE 14 Rung 1: the full-feature disc.  The image binary is FROZEN -- this rule
+# does not touch the link line above it, and its own falsifying gate is that
+# `make ps2` leaves btron-ps2.elf byte-identical -- so every app payload that is
+# not already inside the ELF ships as a FILE on the CD9660 tree instead:
+#
+#   SYSTEM.CNF          the boot record the BIOS reads (cdrom0:\BTRON.ELF;1)
+#   BTRON.ELF           the kernel image, unchanged
+#   SYS.VOL             the /SYS volume, 1 MiB
+#   ANDERS.VOL          the /ANDERS volume, 1 MiB
+#   QUAKE/PAK0.PAK      18,689,235 B -- a STREAM read off the disc, never an embed
+#   QUAKE/DRONE1MN.DEM  the eight replay demos
+#
+# Every name is 8.3-uppercase, so a level-1 Rock Ridge-less reader sees the same
+# name the guest will ask for.  Both volumes are regenerated from their manifests
+# INSIDE the recipe rather than copied from the working files, because a host FS
+# suite writes scratch into the working btron_sys.vol -- that is exactly why the
+# contamination guard at $(PS2_SYS_VOL_OBJ) exists -- and the disc must carry what
+# the manifest says it carries, not whatever the last test left in the tree.
+$(PS2_ISO): $(PS2_TARGET) mkbtronfs src/tools/manifest.txt src/tools/manifest_anders.txt assets/quake/pak/pak0.pak $(wildcard assets/quake/drone1m*.dem)
 	@echo "=========================================================="
 	@echo " Packaging Bootable PS2 Disc ISO: $@"
 	@echo "=========================================================="
 	@rm -rf build/ps2_iso
-	@mkdir -p build/ps2_iso
+	@mkdir -p build/ps2_iso/QUAKE
 	@printf "BOOT2 = cdrom0:\\\\BTRON.ELF;1\r\nVER = 1.00\r\nVMODE = NTSC\r\n" > build/ps2_iso/SYSTEM.CNF
 	@cp $(PS2_TARGET) build/ps2_iso/BTRON.ELF
+	@./mkbtronfs src/tools/manifest.txt        -o build/ps2_iso/SYS.VOL
+	@./mkbtronfs src/tools/manifest_anders.txt -o build/ps2_iso/ANDERS.VOL -l ANDERS
+	@cp assets/quake/pak/pak0.pak build/ps2_iso/QUAKE/PAK0.PAK
+	@for f in assets/quake/drone1m*.dem; do n=$$(basename "$$f" | tr '[:lower:]' '[:upper:]'); \
+	    cp "$$f" "build/ps2_iso/QUAKE/$$n"; done
 	@if command -v hdiutil >/dev/null 2>&1; then \
 	    rm -f $@; \
 	    hdiutil makehybrid -iso -joliet -default-volume-name "BTRON3_PS2" -o $@ build/ps2_iso >/dev/null; \
@@ -1409,6 +1432,7 @@ $(PS2_ISO): $(PS2_TARGET)
 	fi
 	@rm -rf build/ps2_iso
 	@echo "[PS2-ISO] Packaged: $@"
+	@echo "[PS2-ISO] ELF frozen: $$(shasum -a 1 $(PS2_TARGET) 2>/dev/null | cut -d' ' -f1) (link line untouched by this rule)"
 	@file $@
 
 run-ps: run-ps2

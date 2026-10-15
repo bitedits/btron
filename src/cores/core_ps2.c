@@ -342,11 +342,16 @@ static BOOL ps2_cursor_sig_at(const uint32_t *p, int x, int y);
  * What it is *not* is a fix for a source that is not proportional to the hand --
  * a multiplier can only be right for one speed, and a report whose counts already
  * contain somebody else's acceleration has more than one speed in it.  That case
- * belongs to the profile chosen below, not to a constant. */
+ * belongs to the profile chosen below, not to a constant.
+ *
+ * LAW 13d (doc/txt/PS2.txt): this gain is the ONLY thing between a count and a
+ * cursor pixel on this target.  Nothing here reads how fast the counts arrived --
+ * not a step curve, not a cap (PS2_PTR_MAX_STEP below is off for the same
+ * reason) -- because a PS2 hand has no way to ask for 1:1 if some stage multiplies
+ * by speed and offers no setting at which it does not. */
 #define PS2_MOUSE_MULT_FP 256
 static int32_t s_ptr_mult_fp = PS2_MOUSE_MULT_FP;
 static int32_t s_ptr_carry_x, s_ptr_carry_y;
-static int32_t s_ptr_post_carry_x, s_ptr_post_carry_y;   /* the hw curve's second stage */
 
 /* How far the cursor may travel in one INPUT period, in pixels -- the periods a pass
  * owes come from the plane table, so the cap is a speed and not a frame count.
@@ -384,9 +389,15 @@ static uint32_t s_ptr_input_due;               /* Count at the last INPUT slice 
  * guest-side gain and nothing else, sized below.
  *
  * HW -- a real mouse on a real console: counts proportional to how far the hand
- * moved, at the device's own 10-16 ms interval.  This is the case an accelerator
- * belongs to, and it gets the same RISC OS step curve the arm64/Pi 400 port
- * uses, so the same mouse feels the same on both real machines. */
+ * moved, at the device's own 10-16 ms interval.  This used to be the case an
+ * accelerator belonged to, and it ran the same RISC OS step curve the arm64/Pi 400
+ * port uses so that one mouse felt the same on both real machines.  LAW 13d took
+ * that out of this target: dp_ptr_riscos()'s floor is 384/256 at the lowest step
+ * the Settings panel offers and 768/256 at the highest, so on a PS2 a hand could
+ * not get a proportional pointer at ANY setting.  The curve itself stays exactly
+ * where it is -- src/graphics/dp_accel.c is shared and core_arm64.c calls it for
+ * the Pi 400's feel -- and what changes is only which of its callers this file
+ * has. */
 #define PS2_PTRSRC_EMU 0
 #define PS2_PTRSRC_HW  1
 
@@ -429,9 +440,11 @@ static uint32_t s_ptr_input_due;               /* Count at the last INPUT slice 
 static int s_ptr_src = PS2_PTRSRC_EMU;
 static int s_ptr_src_forced;      /* a `ptrsrc` word outranks detection */
 
-/* Same knob the arm64 port feeds dp_ptr_riscos(), and the Settings > Input panel
- * already writes, so the two real machines share one pointer feel. */
-extern int g_mouse_step_mult;
+/* `g_mouse_step_mult` -- the Settings > Input knob the arm64 port feeds to
+ * dp_ptr_riscos() -- is deliberately NOT read here any more.  It used to be this
+ * file's second stage on the hw profile, which is what LAW 13d removed; leaving
+ * the extern in place would keep a dial wired up to nothing and let a boot row
+ * print a step value this port no longer applies. */
 
 static const char *ps2_ptr_src_name(int src)
 {
@@ -441,13 +454,14 @@ static const char *ps2_ptr_src_name(int src)
 /* The live gain, in both units that mean something: a count is what this code
  * multiplies, a host cursor pixel is what a hand is measured against.  Only the
  * emulator's source has a host cursor in its chain, so the hardware row states
- * what its own curve costs instead of a conversion that does not exist.  Ends in
- * a newline so callers can put their own lead-in on it. */
+ * its own constant instead of a conversion that does not exist.  Both rows say
+ * what LAW 13d guarantees: there is no curve in front of either gain.  Ends in a
+ * newline so callers can put their own lead-in on it. */
 static void ps2_ptr_gain_row(void)
 {
     if (s_ptr_src == PS2_PTRSRC_HW)
-        ps2_kprintf("%d/256 px per count, RISC OS step %d curve, cap %s\n",
-                    (int)s_ptr_mult_fp, g_mouse_step_mult,
+        ps2_kprintf("%d/256 px per count, proportional (no curve), cap %s\n",
+                    (int)s_ptr_mult_fp,
                     s_ptr_max_step > 0 ? "on" : "off");
     else {
         /* In 100ths, because the second unit is a fraction of a pixel now that a
@@ -472,7 +486,6 @@ static void ps2_ptr_src_apply(const char *why)
                         : PS2_EMU_MULT_FP;
     s_ptr_max_step = PS2_PTR_MAX_STEP;
     s_ptr_carry_x = s_ptr_carry_y = 0;
-    s_ptr_post_carry_x = s_ptr_post_carry_y = 0;
     s_ptr_want_x = s_ptr_want_y = 0;
     s_ptr_defer_x = s_ptr_defer_y = 0;
     s_ptr_input_due = 0u;   /* re-arm the INPUT slice clock rather than let it
@@ -502,21 +515,22 @@ static void ps2_ptr_src_detect(void)
 
 /* One report's pair of counts through the live source's shaping, in pixels.
  *
- * Two stages on the hardware side -- the step curve, then `sens` -- because the
- * curve is the feel and `sens` is the speed, and folding the second into the first
- * would take away the only way to set speed without also changing the curve.  At
- * the default 256 the second stage passes whole pixels through untouched. */
+ * One stage, for both profiles: LAW 13d.  A count is multiplied by the source's
+ * gain and nothing else, so what a report is worth on screen is a function of how
+ * FAR the hand moved and not of how FAST -- the property every instrument in
+ * doc/txt/PS2.txt 13.1 assumes when it reads a `[CAL]` or `[PSTAT]` gain row as a
+ * constant.  The hw profile used to put dp_ptr_riscos() in front of its gain; that
+ * curve's lowest setting was 1.5x and its shipped default 2.0-2.5x, with no value
+ * at which it was proportional, which is why this target declined it rather than
+ * dialing it.  It remains the Pi 400's feel, called from core_arm64.c.
+ *
+ * The profiles differ only in s_ptr_mult_fp, installed by ps2_ptr_src_apply(), and
+ * they share one subpixel carry because there is now one stage whose remainder
+ * needs carrying. */
 static void ps2_ptr_shape(int dx, int dy, int32_t *px, int32_t *py)
 {
-    if (s_ptr_src == PS2_PTRSRC_HW) {
-        const int32_t cx = dp_ptr_riscos(dx, g_mouse_step_mult, &s_ptr_carry_x);
-        const int32_t cy = dp_ptr_riscos(dy, g_mouse_step_mult, &s_ptr_carry_y);
-        *px = dp_ptr_scale(cx, s_ptr_mult_fp, &s_ptr_post_carry_x);
-        *py = dp_ptr_scale(cy, s_ptr_mult_fp, &s_ptr_post_carry_y);
-    } else {
-        *px = dp_ptr_scale(dx, s_ptr_mult_fp, &s_ptr_carry_x);
-        *py = dp_ptr_scale(dy, s_ptr_mult_fp, &s_ptr_carry_y);
-    }
+    *px = dp_ptr_scale(dx, s_ptr_mult_fp, &s_ptr_carry_x);
+    *py = dp_ptr_scale(dy, s_ptr_mult_fp, &s_ptr_carry_y);
 }
 
 /* Measured GIF upload costs, printed once on the boot log */
@@ -2478,7 +2492,6 @@ static void ps2_ptr_chord(uint32_t key)
         if (next > PS2_PTR_CHORD_MAX) next = PS2_PTR_CHORD_MAX;
         s_ptr_mult_fp = next;
         s_ptr_carry_x = s_ptr_carry_y = 0;
-        s_ptr_post_carry_x = s_ptr_post_carry_y = 0;
         s_ptr_want_x = s_ptr_want_y = 0;
         s_ptr_defer_x = s_ptr_defer_y = 0;
     }
@@ -2537,10 +2550,10 @@ static void ps2_ptg_cal(int hostpx, int pct)
     }
     ps2_kprintf("[PTG] counts x=%u y=%u%s\n", (unsigned int)cx, (unsigned int)cy,
                 cy > cx / 8u ? "  <-- sweep was not straight; re-do it" : "");
-    if (s_ptr_src == PS2_PTRSRC_HW) {
-        ps2_kprintf("[PTG] Note: the hw source puts the RISC OS curve in front of the gain,\n");
-        ps2_kprintf("[PTG] so this sets a scale after a speed-dependent step, not the gain itself.\n");
-    }
+    /* There is no longer a per-profile caveat to print here: under LAW 13d both
+     * profiles reach this arithmetic through the same single gain, so what this
+     * command settles is the transfer function itself and not a scale sitting
+     * behind somebody's curve. */
     if (cx > 4000000u) {
         ps2_kprintf("[PTG] That is far too many counts for one sweep.  `ptgain 0`, then re-sweep.\n");
         return;
@@ -2606,7 +2619,6 @@ static void ps2_ptg_cal(int hostpx, int pct)
          * leaving it would put a fraction of a pixel of somebody else's stroke
          * onto the next report. */
         s_ptr_carry_x = s_ptr_carry_y = 0;
-        s_ptr_post_carry_x = s_ptr_post_carry_y = 0;
         /* The window is spent: it was one deliberate sweep, and repeating it by
          * accident would double the gain. */
         s_ptg_cx = s_ptg_cy = 0;
@@ -3080,7 +3092,6 @@ static void ps2_shell_exec(const char *cmd)
             s_ptr_mult_fp = (int32_t)pct * 256 / 100;
             /* The leftover belongs to the scale that made it. */
             s_ptr_carry_x = s_ptr_carry_y = 0;
-            s_ptr_post_carry_x = s_ptr_post_carry_y = 0;
         }
         ps2_kprintf("[PS2] Pointer scale %d%%, %s source%s: ",
                     (int)(s_ptr_mult_fp * 100 / 256), ps2_ptr_src_name(s_ptr_src),
@@ -3168,11 +3179,15 @@ static void ps2_shell_exec(const char *cmd)
         int32_t saved_step = s_ptr_max_step;
         /* The transfer function belongs to the live source stub, and the two give
          * different answers to the same synthetic counts by design, so a [CAL]
-         * log copied out of a session is incomplete without the name on it. */
+         * log copied out of a session is incomplete without the name on it.
+         *
+         * `curve=` stays in the header even though LAW 13d makes its answer a
+         * constant: a [CAL] gain row that is non-linear is now a fault rather
+         * than a policy, and the row that lets a reader tell the two apart is
+         * this one.  It used to print `riscos` and a step number here. */
         ps2_kprintf("[CAL] Pointer loopback: counts in, pixels out, no hand involved.\n");
-        ps2_kprintf("[CAL] source=%s curve=%s step=%d\n", ps2_ptr_src_name(s_ptr_src),
-                    s_ptr_src == PS2_PTRSRC_HW ? "riscos" : "none",
-                    g_mouse_step_mult);
+        ps2_kprintf("[CAL] source=%s curve=none (LAW 13d) gain=%d/256\n",
+                    ps2_ptr_src_name(s_ptr_src), (int)s_ptr_mult_fp);
         ps2_kprintf("[CAL] tag     amp     px  stray counts    EDGEx: wall counts back short\n");
         /* The cap is a policy about how fast a person may be moved, and dp_cal is
          * a measurement of how a count becomes a pixel.  Left in place it would

@@ -2434,9 +2434,11 @@ PART FOUR -- THE INTERCONNECT: INPUT AS A REAL PLANE
     afterwards, because the cap is a policy about how fast a PERSON may be
     moved while ptrcal measures how a count becomes a pixel; left in place it
     would report the limiter as a broken mapping.  Its header prints the live
-    source= and curve=, because under the hw profile the gain rows are MEANT
-    to be non-linear -- that is the accelerator, not a fault -- and a [CAL]
-    log read without its header says the opposite.
+    source= and curve= because a [CAL] log copied out of a session is incomplete
+    without the policy that made it: the field is kept so that a gain row which
+    is NON-linear under this port's own shaping reads as a fault and not as a
+    feature -- which is what it used to mean on the hw profile, and what it no
+    longer means on either one since LAW 13d.
   - ptrstat   -- WHAT IS ACTUALLY ON THE WIRE?  It counts EVERY report, not
     the one-in-sixty-four the [RAW] rows print, and sorts them by magnitude.
     It closes the window since its last call, so the first call of a session
@@ -2566,24 +2568,69 @@ PART FOUR -- THE INTERCONNECT: INPUT AS A REAL PLANE
     emu      the pointer answers as PCSX2's      96/256 =    none        off
              HID Mouse, device 0627:0001         0.375 guest
              (desc_id == 0x00010627)             px per count
-    hw       anything else answers -- a mouse    verbatim    dp_ptr_     off
-             somebody sells                      256         riscos() at
-                                                           g_mouse_step_mult,
-                                                           the Pi 400's curve
+    hw       anything else answers -- a mouse    verbatim    none        off
+             somebody sells                      256         (LAW 13d; it
+                                                             was dp_ptr_
+                                                             riscos(), see
+                                                             below)
+
+  LAW 13d (no guest-side multiplier scales by speed).  Both profiles are
+  proportional now: one report count is worth the same number of guest pixels at
+  a crawl and at a flick, and the only dial in front of the cursor is `sens`.
+  What this port used to carry was the Pi 400's curve on the hw profile --
+  dp_ptr_riscos(), whose multiplier is 256 + step*128 + (mag>4 ? 128 : 0)/256.
+  Measured against the dial's own range, that is not an accelerator one can
+  decline: `g_mouse_step_mult` accepts 1..4 from Settings > Input, which is
+  384/256 to 768/256 -- a FLOOR of 1.5x -- and any value outside that range is
+  rewritten to 4, so the shipped default of 2 handed a real mouse 2.0x on small
+  moves and 2.5x past four counts, with no setting at which the pointer was
+  simply proportional.  A PS2 hand could not ask for 1:1.
+  The curve is therefore gone from this target's shaping, and three things are
+  NOT thereby changed.  (i) The Pi 400's feel is intact: dp_ptr_riscos() stays in
+  src/graphics/dp_accel.c, where core_arm64.c calls it and Settings > Input dials
+  its step, because the shared header is not the place to settle one machine's
+  feel and the working reference must not pay for this lane.  What changed there
+  is that its body now sits behind `#ifndef BTRON_PS2_TARGET`, so this image
+  carries neither a call to it nor its text -- an uncalled curve is still a
+  speed-dependent multiplier living inside an image whose law forbids one, and
+  only a disassembly read tells dead code apart from a branch a merge restored.
+  The Pi 400 does not define that macro, so its compiled bytes are unchanged.
+  (ii) The live PCSX2 profile was already proportional, so a session on
+  the emulator's hidmouse feels exactly as fast as it did; the multiplier in
+  front of those counts is macOS's own cursor curve, above this port and named
+  by 13.4.  (iii) `sens`, `maxstep` and the subpixel carry are the same code,
+  so the measurement instruments 13.1 describes still measure what they say.
+  Two things keep this law.  The predicate above makes it a LINK error: a PS2
+  translation unit that calls dp_ptr_riscos() fails to build rather than quietly
+  re-accelerating the pointer on the one machine that has no screen to complain
+  with -- the declaration stays visible to every target so that failure names the
+  function instead of degrading into an implicit-declaration message about the
+  header.  And scripts/test_ps2.sh's pointer-policy rows read the linked image,
+  not the source: they require no jump to dp_ptr_riscos() inside the mouse
+  handler or anywhere in the image, require that function's text to be absent
+  from the image, keep the two dp_ptr_scale() calls that still do the gain (a
+  window that failed to extract would read zero of everything and certify a
+  pointer that had been deleted), and require the hw profile's own gain row to
+  announce a proportional shape with no curve -- a needle this paragraph does not
+  spell out, because this file is the /SYS payload and a needle spelled here
+  would be in the image whatever the code did.
 
   Detection runs once at boot after the host engine has enumerated, and again
   after `usb probe`; the boot log says which one it picked, in both units:
 
     [PS2] Pointer source emu (detected): 96/256 px per count = 0.37 px per host
         cursor px, no curve, cap off
+    [PS2] Pointer source hw (detected): 256/256 px per count, proportional (no
+        curve), cap off
 
   `ptrsrc hw` / `ptrsrc emu` override that for a session, which is the only
   way to run the emulator's stub against a hardware-shaped count stream or the
   reverse without changing what is plugged in; `ptrsrc auto` hands the
-  decision back to detection.  Switching profiles clears the carried subpixel
-  remainder and any distance the previous one had not spent, so a change
-  mid-session cannot leave the old source's half-pixel tail to be paid out by
-  the new one.
+  decision back to detection.  Since LAW 13d the two profiles differ in one
+  thing -- their gain -- and the same proportional shaping stands behind both.
+  Switching profiles clears the carried subpixel remainder and any distance the
+  previous one had not spent, so a change mid-session cannot leave the old
+  source's half-pixel tail to be paid out by the new one.
 
   LAW 13b (one gain constant).  There is ONE gain in this stack:
   PS2_EMU_MULT_FP, reached from the console as `sens`.  PointerXScale and
@@ -2712,9 +2759,15 @@ PART FOUR -- THE INTERCONNECT: INPUT AS A REAL PLANE
        behaviour  source profile -> dp_ptr_scale()'s 8.8 gain (sens) ->
                   dp_ptr_limit() px per INPUT period (maxstep, off; the period
                   is the plane table's, scaled by the periods a pass actually
-                  owes) -> the screen borders
+                  owes) -> the screen borders.  Nothing in that chain reads the
+                  counts' SPEED, which is what LAW 13d says and what 13.1's
+                  `curve=` field is now there to catch: `none` on both profiles.
        setting    ptrsrc, sens, maxstep
-       status     PROVEN by ptrcal
+       status     PROVEN by ptrcal for the chain; for LAW 13d the proof on
+                  offer is the source row in scripts/test_ps2.sh, and a fresh
+                  `ptrcal` run over the hw profile -- the [CAL] gain rows
+                  flattening to one constant -- is SKIP, not PASS, because no
+                  booted session has printed it since the curve came out.
 
   Two rows cut opposite ways.  The frame interval is a MATCH with real
   hardware -- the value our boot log measures is the value Sony's own usbd
@@ -4854,6 +4907,140 @@ PART FIVE -- THE PRESENTATION PLANE: THE EE/GS BACKEND
             same core that composites.  The IOP is a second programmable
             component with its own bus, which makes it exactly the sort of
             thing LAW 1 says must have an agent or be counted as EE work.
+
+  LANE 14  the full-feature disc -- two volumes and the app set, shipped as
+            CD9660, with the image binary frozen.  The user's ask, 2026-10-15:
+            ship EVERY B-System application POSIX has -- Terminal, `sc`, `tv`,
+            Quake, Lil Cu 64, Cassette (the audio deck), Clarity, the chokanji
+            converters, the HMI, the drive setup -- plus BOTH volumes,
+            btron_sys.vol and btron_anders.vol, onto one bootable PS2 disc.
+            The user's constraint, same day, verbatim: "dont need to write
+            image binary i think image binary can be like now" -- so the
+            artifact this lane ships is the DISC, and the ELF that boots it is
+            not grown by it.  That constraint is load-bearing, not cosmetic.
+            `ps2.ld` ASSERTs `_end <= 0x01FF0000` and the live image reads
+            `_end = 0x01C52DD0`: 3,789,360 B of headroom in a 32 MB RDRAM
+            machine.  The POSIX app set is not free -- `$(QUAKE_SRCS)` alone
+            carries a 64 MiB hunk arena, `$(DEMO_SRCS)` a 3 MiB Lil node
+            table, and both are deliberately OUT of `PS2_GL_SRCS` for exactly
+            that reason (the 2026-10-09 input-dead incident).  So a literal
+            "link everything into the ELF" is the one move the budget forbids,
+            and the budget is what the user's constraint is pointing at.
+
+            The three partitions of the ask, measured against this repo.
+            (i) Code that is ALREADY in the image.  Terminal/gterm, `sc`, `tv`,
+            the CLU shell, the tracker launcher, the desktop and the XMB are in
+            `PS2_SRCS` today (`src/clu/*`, `src/window/*`, `src/desktop/*`).
+            Nothing ships for them -- they are reached with the D-pad now.
+            (ii) Code POSIX has and PS2 does NOT link: Clarity (4 units), the
+            chokanji family (8), the HMI (7), and eight singles -- b_drivesetup,
+            image_decode, dp_sdl, font_mgr, blk_file, blk_part, blk_qcow2,
+            desktop/main.c.  Twenty-seven units in all, each path checked to
+            exist in the tree.  These are small and
+            RAM-cheap; linking them is a headroom decision, not a disc one, and
+            it violates the frozen-image constraint.  PARKED under the user's
+            own word -- ship as-is -- and named here so the list is one grep,
+            not a re-derivation.  (iii) Data, which is what a CD9660 disc is
+            FOR, and which the disc can carry with zero bytes added to the ELF:
+            btron_sys.vol (1,048,576 B) and btron_anders.vol (1,048,576 B) as
+            files, and `assets/quake` -- pak0.pak at 18,689,235 B and the eight
+            `drone1mN.dem` demos.  A 32 MB disc holds all of it; a 32 MB EE
+            cannot hold the pak in one buffer, so pak0 is a STREAM read off the
+            CD, not an embed.
+
+            The law this lane lands, rungs 1-2, and what it does NOT claim.
+            Rung 1 is packaging: `make ps2` writes a disc whose tree is
+            `SYSTEM.CNF`, `BTRON.ELF`, `SYS.VOL`, `ANDERS.VOL`, and a `QUAKE`
+            drawer with `PAK0.PAK` and the demos.  That is a Makefile change
+            and the volumes/quake assets it stages -- `btron-ps2.elf` is built
+            by the SAME dialled command as before, and the rung's falsifying
+            gate is that the PACKAGING writes no image bytes: delete the ISO,
+            rebuild the ISO ALONE, and the ELF's mtime and hash must not move.
+            (The bare "the ELF hash does not move" version of that gate is
+            unsatisfiable by design, because a book edit legitimately moves
+            the embedded /SYS; it is stated here in the only form the artifact
+            can answer.)  Rung 2 is a gate that
+            READS the disc back on the host and says each named file is on the
+            ISO with its byte count and hash -- `isoinfo`/`hdiutil` mount,
+            `ls -l` and `shasum` -- because "the ISO was written" is not
+            evidence "the ISO has the volumes" the way a mount that lists them
+            is.  What neither rung delivers: an application that OPENS the disc
+            at runtime.  That needs the CD/DVD read path -- `cdrom0:\`, SIF and
+            libcdvd on the IOP, the very actor LANE 13 opened and left unpaid
+            -- and it is the stage after this one, agreed with the user as
+            "apps+embeds first, then CD stack."  Until then the disc is a
+            complete, shippable full-feature PAYLOAD that the emulator's own
+            ELF path boots and that a later LANE-13 driver mounts; the
+            in-drawer volumes are byte-identical to the /SYS the ELF already
+            embeds, so nothing on screen changes and nothing is lost by the
+            wait.  The image stays frozen; the disc gets the whole system.
+
+            What Rung 1 measured, on landing (2026-10-15, dials
+            `PS2_GL=eegs PS2_FP=hw PS2_MSX=0`).  The disc is 26,920,960 B and
+            thirteen files, and the tree read back off a mounted ISO is the
+            tree the rung specifies -- `SYSTEM.CNF`, `BTRON.ELF`, `SYS.VOL`,
+            `ANDERS.VOL`, `QUAKE/PAK0.PAK`, `QUAKE/DRONE1M1..8.DEM`.  Every
+            one of them is byte-identical to its source: the disc's
+            `BTRON.ELF` to the working image, the two volumes to FRESH
+            `mkbtronfs` builds of their manifests (never to the working
+            `btron_sys.vol`, which five host suites mount read/write), pak0 to
+            the asset at 18,689,235 B, and each demo to its file.  All names
+            are 8.3-uppercase, so a level-1 reader sees what the guest will
+            ask for.  The freeze then has two halves, and both were run.  Half
+            one, the packaging: delete the ISO, rebuild the ISO ALONE, and the
+            ELF does not relink -- its mtime and its hash both stay exactly
+            where the dialled link left them.  No hash is quoted here, because
+            the paragraph that would quote it changes the payload and so
+            invalidates itself; the run that executed this control records the
+            mtime and the two hashes it printed in doc/md/PS2-GS-LOG.md.  Half
+            two, the structural claim, from a byte census of the rebuilt image
+            against the image before this lane: the ELF is still 5,927,592 B,
+            its section table is byte-identical, and EVERY differing byte but
+            two lies inside the embedded /SYS block (file 0x489800 through
+            0x589800, the last 1 MiB of `.data`) -- that is this book, refreshed
+            as the payload requires -- the two lie in `.text`, and ZERO lie in
+            `.data` outside the volume block or in the symbol tables.  It is
+            stated as a partition and not as counts deliberately: the
+            payload-byte count IS the length of this paragraph, so any figure
+            written here is stale before it lands, and the run that measured it
+            keeps its numbers in doc/md/PS2-GS-LOG.md.  No second volume got
+            embedded and no buffer grew, which is the half the user's constraint
+            is actually about.  The two text bytes are worth naming because they
+            are not packaging either: two leaf functions in the dial-reading
+            trio (`gl_backend_choice.c`, `gl_dispatch.c`, `egl_surface.c`)
+            went `addiu $v0,$zero,0` to `addiu $v0,$zero,3`, i.e. they now
+            return `GL_BACKEND_EEGS` (3) where the baseline image returned
+            `GL_BACKEND_TINYGL` (0), and those three objects are the only C
+            objects rebuilt by this lane's link (measured by mtime).  INFERRED
+            cause, and it is the documented one: a bare make round between the
+            dialled build and the link reset `PS2_GL` in the stamp and relinked
+            the image with the trio compiled for the other backend -- exactly
+            the symptom the stamp rule at Makefile:1232 exists to catch.  The
+            rung-(i) numbers are not contaminated by it, because the bench is a
+            separate link and its own rows show the GS path live (`batch=64`,
+            no `raster f_menu` row); what the finding costs is that the image
+            flashed before this lane was not the image its dial described, and
+            it agrees now.  Finally the pair of needles Rung 2's gate uses to
+            keep /ANDERS out of the image honest.  The negative one is a string
+            only the Anders tree carries -- the project URL that heads every one
+            of its documents -- and it occurs 0 times in `btron-ps2.elf` and 48
+            times in the disc's `ANDERS.VOL`; that 48 is a property of the
+            Anders corpus and not of this book, so writing it here cannot make
+            it stale.  The positive control -- the proof that the census can see
+            embedded payload at all -- is a phrase this book itself spells, in
+            its title line among other places, so a count of it is a property of
+            the run and not of the lane: it moved by one when this paragraph was
+            rewritten, and where it settled is recorded in doc/md/PS2-GS-LOG.md
+            rather than here.  The negative needle is named in
+            `scripts/test_ps2.sh` and only described here, deliberately: naming
+            it in this book would write it into the image, and the image must
+            not contain it.  That is not a hypothetical -- the first version of the
+            pair used a word from the Anders corpus as the needle AND spelled it
+            out in this paragraph, the paragraph entered the payload with the
+            book refresh, and the row went red on its own author.  Reading it
+            back: the gate discriminates, including against the person writing
+            it.
+
 =====================================================================
 PART SIX -- THE PORT: DRIVERS, DESKTOP, STORAGE
 =====================================================================

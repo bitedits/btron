@@ -39,6 +39,10 @@
 #include <btron/pmc.h>
 #include <btron/desktop.h>
 #include <btron/settings.h>
+#include <btron/global_menu.h>
+#include <btron/tracker.h>
+#include <btron/tip.h>
+#include <btron/workbench.h>
 
 /* Stub accessory entry points, so desktop.c links without the app set.  The same
  * list test_tracker.c uses; the panel body in particular is a no-op, which is what
@@ -55,7 +59,24 @@ WND* open_clarity_window(void) { return NULL; }
 WND* open_xmb_window(void) { return NULL; }
 WND* open_glgears_window(void) { return NULL; }
 WND* open_lilcu64_demo_window(void) { return NULL; }
-void global_menu_render_bar(GDEV *dev) { (void)dev; }
+/* The rest of the launcher set global_menu.c references, plus the TIP state its
+ * bar renderer reads -- the strong-extern half of its weak/strong split. */
+WND* open_chat_main_window(void *client) { (void)client; return NULL; }
+WND* open_display_settings_window(void) { return NULL; }
+WND* open_quake_window(int x, int y, int width, int height)
+{ (void)x; (void)y; (void)width; (void)height; return NULL; }
+WND* open_chokanji_cabinet_window(void) { return NULL; }
+WND* open_chokanji_doc_window(void) { return NULL; }
+WND* open_chokanji_microscript_window(void) { return NULL; }
+WND* open_chokanji_clock_window(void) { return NULL; }
+WND* open_chokanji_kconv_window(void) { return NULL; }
+WND* open_chokanji_xfconv_window(void) { return NULL; }
+WND* open_chokanji_unpack_window(void) { return NULL; }
+TIP_INPUT_MODE tip_get_mode(void) { return TIP_MODE_ASCII; }
+/* global_menu.c is now linked for real (LANE 12i rung (ii)), so the bar renderer
+ * and the open-rect getter come from it; only the TIP toggle is stubbed, because
+ * tip_ife.c is not in this suite and no path under test calls it. */
+void tip_toggle_mode(void) {}
 ER init_evt_sys(void) { return E_OK; }
 ER tip_init(void) { return E_OK; }
 TIP_DFA_STATE tip_get_state(void) { return TIP_STATE_IDLE; }
@@ -577,6 +598,216 @@ static void layer_plate_yields_the_stream_rect(void)
     free(desktop); free(recorded); free(plate); free(painted);
 }
 
+/* ── LANE 12i rung (ii): the tracker plate is drawn once, not twice ─────────
+ *
+ * The composite's named residue is this overlay block (PS2.txt LANE 12i), and
+ * with the launcher's list up it called `tracker_render_menu()` twice per pass:
+ * once inside `global_menu_render_overlay()` (src/desktop/global_menu.c:406)
+ * and once by the workbench's own `if (tracker_is_menu_open())`, which the
+ * merged tree replaced with a dispatch.  Three independent facts are asserted,
+ * because each can fail on its own:
+ *
+ *  1. BYTE-FOR-BYTE: the two-call block and the production dispatch produce
+ *     identical canvases, in every state -- tracker open alone, the BTRON
+ *     header with it (the state the wave runs in), a dropdown with the tracker
+ *     closed (the state that must NOT change), and nothing open.
+ *  2. THE CENSUS: after the block, one further `tracker_render_menu()` changes
+ *     zero pixels -- so the refused call could never have written anything,
+ *     which is the book's "every store is opaque" claim turned into a
+ *     measurement.  It is shown DETECTING a change on the first draw first;
+ *     a census that never counts anything would make 0 pass vacuously.
+ *  3. THE COUNT: a second harness build compiles every TU but src/desktop/tracker.c
+ *     and this one with `-Dtracker_render_menu=counted_tracker_render_menu`, so
+ *     the rename lands on the CALL SITES in workbench.c and global_menu.c and on
+ *     this file's duplicate-block call, while the definition keeps its real name;
+ *     counted_tracker_render_menu lives in the small TU
+ *     verify/tests/test_desktop_clip_count_port.c, compiled WITHOUT the rename,
+ *     which increments and delegates.  There the retired block shape counts two
+ *     in the tracker-open state and the production path counts exactly one.  In
+ *     the NORMAL build nothing routes through the wrapper, so the loop below
+ *     prints SKIP for those two rows -- a 0==0 that could never fail is not a
+ *     gate.
+ */
+
+void counted_tracker_render_menu(GDEV *dev);
+void counted_calls_reset(void);
+unsigned counted_calls(void);
+
+static COLOR s_cfb[2][800 * 600];
+static RECT s_pl;      /* the tracker plate's rect, from the unit itself */
+
+/* One composite + overlay block into `fb`, exactly as `workbench_render()`
+ * orders it; `dup` selects the retired two-call shape, else the shipped
+ * dispatch.  The cursor is off -- the sprite is a different lane's question. */
+static void overlay_canvas(int state, COLOR *fb, int dup)
+{
+    global_menu_init();
+    tracker_init();
+    global_menu_set_screen_width(800);
+    g_cursor_in_backbuffer = 0;
+    /* Absolute state, never incremental: global_menu_init()/tracker_init() do
+     * not close a menu the PREVIOUS case left open, and last-run's tracker was
+     * exactly the kind of fact this harness must not inherit. */
+    global_menu_close();
+    if (state == 1) tracker_open_menu();
+    if (state == 2) global_menu_handle_mouse_down(45, 10);   /* BTRON header */
+    if (state == 3) {                                        /* dropdown, no tracker */
+        global_menu_handle_mouse_down(45, 10);
+        global_menu_handle_mouse_move(150, 10);              /* hot-switch to SYSTEM */
+    }
+    const BOOL want_tr = (state == 1 || state == 2);
+    const BOOL got_tr = tracker_is_menu_open();
+    const int act = global_menu_get_active();
+    /* State 1 is the tracker ALONE (active_menu stays -1; the launcher opens it
+     * without a header); state 2 is the header click, which takes active_menu
+     * with it; state 3 is a dropdown with the tracker closed. */
+    const BOOL ok_state = (want_tr == got_tr) &&
+        (state == 0 || state == 1 ? act < 0 :
+         state == 3 ? act == GMENU_HDR_SYSTEM : act >= 0);
+    if (!ok_state) {
+        printf("  [FAIL] overlay state %d set-up: tracker=%d active=%d\n", state, got_tr, act);
+        s_fail++;
+        return;
+    }
+    GDEV *screen = opn_dev_vram(800, 600, fb);
+    init_wnd_mgr(screen);
+    memset(fb, 0, sizeof s_cfb[0]);
+    redraw_baremetal_desktop(screen, 800, 600);
+    if (dup) {
+        /* The retired shape, written out: two state questions, each guarding its
+         * own call.  Both tracker spellings are the wrapper's name, so the
+         * rename build counts every call either shape makes. */
+        if (global_menu_is_open()) global_menu_render_overlay(screen);
+        if (tracker_is_menu_open()) counted_tracker_render_menu(screen);
+    } else {
+        /* The shipped shape: one dispatch.  The else arm fires exactly when
+         * nothing is open, and the renderer's own state guard answers it with
+         * zero writes -- the byte-for-byte row below is that claim. */
+        if (global_menu_is_open()) global_menu_render_overlay(screen);
+        else                       counted_tracker_render_menu(screen);
+    }
+}
+
+/* Changed-pixel count inside the plate rect between two snapshots. */
+static unsigned census_plate(COLOR *before)
+{
+    unsigned changed = 0;
+    for (H y = s_pl.top; y < s_pl.bottom; y++)
+        for (H x = s_pl.left; x < s_pl.right; x++)
+            if (s_cfb[0][(size_t)y * 800 + x] != before[(size_t)y * 800 + x]) changed++;
+    return changed;
+}
+
+static unsigned canvas_diff(const COLOR *a, const COLOR *b)
+{
+    unsigned d = 0;
+    for (size_t i = 0; i < 800u * 600u; i++) if (a[i] != b[i]) d++;
+    return d;
+}
+
+static void overlay_plate_drawn_once(void)
+{
+    static const char *names[4] = { "nothing open", "tracker open",
+                                    "BTRON + tracker", "dropdown, tracker closed" };
+    static COLOR plate0[800 * 600];
+
+    /* The census must be able to see a change at all: snapshot, draw the plate
+     * once from a cleared canvas, and require a non-zero difference over the
+     * rect the tracker itself reports. */
+    overlay_canvas(0, s_cfb[0], 0);
+    memcpy(plate0, s_cfb[0], sizeof plate0);
+    overlay_canvas(1, s_cfb[0], 0);
+    if (!tracker_get_menu_rect(&s_pl) || s_pl.right <= s_pl.left ||
+        s_pl.bottom <= s_pl.top) {
+        SKIP("tracker plate census detects a change", "tracker_get_menu_rect gave no rect");
+        return;
+    }
+    unsigned plate_px = (unsigned)(s_pl.right - s_pl.left) * (s_pl.bottom - s_pl.top);
+    counted_calls_reset();
+    CHECK(census_plate(plate0) > 0 && census_plate(plate0) <= plate_px,
+          "the plate census detects a plate drawn where none was");
+    counted_calls_reset();
+
+    for (int st = 0; st < 4; st++) {
+        char msg[96];
+        counted_calls_reset();
+        overlay_canvas(st, s_cfb[0], 1);                    /* retired: two calls */
+        unsigned dup_calls = counted_calls();
+        counted_calls_reset();
+        overlay_canvas(st, s_cfb[1], 0);                    /* shipped: dispatch */
+        unsigned one_calls = counted_calls();
+        counted_calls_reset();
+#ifndef tracker_render_menu
+        (void)dup_calls; (void)one_calls;   /* counts only decide under the rename */
+#endif
+
+        unsigned d = canvas_diff(s_cfb[0], s_cfb[1]);
+        snprintf(msg, sizeof msg, "%s: dispatch canvas is byte-identical to the two-call block", names[st]);
+        CHECK(d == 0, msg);
+
+        /* Idempotence on the production canvas, and only meaningful where the
+         * plate exists at all (states 1 and 2).  The CALL COUNTS are decision
+         * rows only under the `-Dtracker_render_menu=...` rename -- in a normal
+         * build nothing routes through the wrapper, and there the harness says
+         * SKIP rather than letting 0==0 pass vacuously. */
+        memcpy(plate0, s_cfb[1], sizeof plate0);
+        GDEV *after = opn_dev_vram(800, 600, s_cfb[1]);
+        if (st == 1 || st == 2) {
+            /* Reset first: under the rename this very call routes through the
+             * counter, and a leak here would land in the NEXT state's reading. */
+            counted_calls_reset();
+            tracker_render_menu(after);
+            snprintf(msg, sizeof msg, "%s: one more tracker call changes zero pixels", names[st]);
+            CHECK(census_plate(plate0) == 0, msg);
+#ifdef tracker_render_menu
+            snprintf(msg, sizeof msg, "%s: the shipped path calls tracker_render_menu once", names[st]);
+            CHECK(one_calls == 1u, msg);
+            snprintf(msg, sizeof msg, "%s: the retired block called it twice", names[st]);
+            CHECK(dup_calls == 2u, msg);
+#else
+            snprintf(msg, sizeof msg, "%s: tracker_render_menu called 1x vs 2x", names[st]);
+            SKIP(msg, "count needs the -Dtracker_render_menu rename build; run it separately");
+#endif
+        }
+        /* The two states whose plate never gets drawn, counted apart because the
+         * shapes spend them differently (the book's decision table): a dropdown
+         * takes the dispatch's if arm with the tracker closed -- 0 vs 0; nothing
+         * open takes the else arm, whose single guarded call the renderer itself
+         * refuses -- 1 vs 0, and the byte-for-byte row above is what says that
+         * call changed no pixel. */
+#ifdef tracker_render_menu
+        else if (st == 0) {
+            snprintf(msg, sizeof msg, "%s: the else arm fires once and draws nothing", names[st]);
+            CHECK(one_calls == 1u && dup_calls == 0u, msg);
+        } else {
+            snprintf(msg, sizeof msg, "%s: neither shape calls the tracker renderer", names[st]);
+            CHECK(one_calls == 0u && dup_calls == 0u, msg);
+        }
+#else
+        else {
+            snprintf(msg, sizeof msg, "%s: tracker_render_menu called 1x/0x vs 0x", names[st]);
+            SKIP(msg, "count needs the -Dtracker_render_menu rename build; run it separately");
+        }
+#endif
+    }
+
+    /* The instrument rung (i) landed: workbench_render()'s own bracket fills
+     * `ovl=` on a target with a clock.  The host clock is real (see the top of
+     * this file), so this asserts the wiring, not a magnitude. */
+    static COLOR fb[800 * 600];
+    g_render_stats.overlay_us = 0;
+    GDEV *wscreen = opn_dev_vram(800, 600, fb);
+    init_wnd_mgr(wscreen);
+    g_cursor_in_backbuffer = 0;
+    global_menu_init();
+    tracker_init();
+    global_menu_set_screen_width(800);
+    tracker_open_menu();
+    workbench_render(wscreen, 800, 600);
+    CHECK(g_render_stats.overlay_us > 0,
+          "workbench_render() times the overlay block into the ovl= column");
+}
+
 int main(void)
 {
     uint32_t misses;
@@ -592,6 +823,7 @@ int main(void)
     stale_window_selectivity();
     whole_canvas_reports_its_stages();
     layer_plate_yields_the_stream_rect();
+    overlay_plate_drawn_once();
 
     /* 800x600 is the PS2's workbench.  Both halves failing here is the bug this
      * port had: the composite rebuilt the desktop per band, and the cursor stayed

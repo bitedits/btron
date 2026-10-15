@@ -1157,12 +1157,35 @@ PART THREE -- THE MEASURED MACHINE
                                                          in seven classes
     [XMBT] wave n=...             xb_paint()             did the sheet actually MOVE
     [GSTS]                        the GS recorder +      groups / quadwords / verts /
-                          eegs present                   prims sent, drop counters,
-                                                         texture switches, covers
+                          eegs present                   prims sent, `pchg=` the PRIM
+                                                         re-declarations: the rate at
+                                                         which groups close, against
+                                                         EEGS_MAX_GROUPS=256.  Drop
+                                                         counters, texsw, cover.
+                                                         `verts` is 3.00 x `prims`
+                                                         when every mesh walks and
+                                                         1.49 when the ribbon is one
+                                                         batch.  `batch=`/`slow=`/
+                                                         `why=`/`over=` are 12f's
+                                                         mesh exits and their reasons.
     [GSTS] gif:                   the GIF writer ring    transfers posted and refused,
                                                          queue depth now, the wait at
                                                          the next yield, and the
                                                          sender's own blocked time
+    [GSTID]                       the GS present under   did this frame's recorded
+                          PS2_IDENT=1                    stream REPEAT last frame's --
+                                                         same/diff groups and quadwords
+                                                         over the aligned prefix, which
+                                                         indices differ, and WHICH GS
+                                                         register moved (`xyz=`/`rgb=`/
+                                                         `st=`, plus `shape=` for the
+                                                         same mesh in a new place) over
+                                                         the frame's `v=` vertex groups.
+                                                         Under the same dial the
+                                                         `[XMBT] <stage>` rows carry `g=`
+                                                         so a differing group can be
+                                                         attributed to the stage that made
+                                                         it.  12h
     [BENCH] compositor:           the bench's armed       one composite's stages with
                           profiler                        their pixel counts
     [BENCH] key / xmb by key /    ps2_bench_*()          can a human reach and open an
@@ -1189,6 +1212,13 @@ PART THREE -- THE MEASURED MACHINE
                                                         costs -- and the rows and their
                                                         reading are LANE 9's Price cell,
                                                         and are not repeated here
+    [BENCH] canvas census pass    ps2_bench_canvas_census()
+                                                        did the canvas MOVE between two
+                                                        presents -- per-row hashes, the
+                                                        span of rows that differ, and
+                                                        what the scan itself costs.  It
+                                                        is row 9d's premise row; its
+                                                        reading is 9d's own cell
     [GS]                          the blit path          one canvas upload's cost
 
     The row formats, verbatim, so a log can be parsed by eye:
@@ -1197,16 +1227,59 @@ PART THREE -- THE MEASURED MACHINE
       [XMBT] cycle <n> period=<us> pass=<us> tail=<us> hold=<spent/asked ms> |
                poll= hook= evt= net= paint= note= |
                render= swap= upload= px= nb= full= why=<hex> dmg=<x0,y0,x1,y1/bands> |
-               comp bg= frame= paint= blit= panel= bars= total= bfn= wins=<drawn/walked>
+               comp bg= frame= paint= blit= panel= bars= total= ovl= rst= bfn=
+               wins=<drawn/walked>
                body=<px> skip=<px>  -- 9a: the px drawn and the px refused
                  under a layer window (11.5, and Appendix A's decode row)
+                 `ovl=` (12i) is the whole-canvas composite's post-composite
+                 block -- the overlay renderers, the cover-list adds and the
+                 cursor -- which the six `comp` columns do not time, and `rst=`
+                 is the row's own control: `render - total - ovl`, which is what
+                 the port cannot see (the recorder's bracket and the pass'
+                 predicates) and reads 88-219 us on a frame with no overlay up.
+                 A frame whose `rst=` is far above that has an unnamed term, and
+                 12i's cell is where it gets named.
       [XMBT] raster <stage> <n> tris <n> verts <n> px <n> spans <n> px/span <n>
                us fill <n> us geom <n> px/ms
       [XMBT] census <stage> fmul= fdiv= fcmp= fs2i= fi2s= S= dmul= dgen= D=
       [XMBT] wave n=<i> dt=<ms> t1024=<clk> mid1024=<y> dm=<px/1024> dsum=<px/1024>
-      [GSTS] groups=<n> qw=<n> verts=<n> prims=<n> gs=<us> | drop=<n> unsplit=<n>
-               texsw=<n> texmiss=<n> | cover=<n> coverdrop=<n> | clip=<W>x<H>
-               b0=<x0,y0,x1,y1> plate=covered|SHORT|none
+      [GSTS] groups=<n> qw=<n> verts=<n> prims=<n> gs=<us> | pchg=<n> batch=<n>
+               slow=<n> why=<n> over=<n> | drop=<n>
+               unsplit=<n> texsw=<n> texmiss=<n> | cover=<n> coverdrop=<n> |
+               clip=<W>x<H> b0=<x0,y0,x1,y1> plate=covered|SHORT|none
+               -- `pchg=` is the PRIM re-declarations, i.e. the rate at which group
+                    boundaries are made and the budget `EEGS_MAX_GROUPS`=256 spent;
+                    `verts=`/`prims=` is 3.00 for a frame in which every mesh walks,
+                    and 1.49 on the frame whose ribbon is one batch (LANE 12f's live
+                    row, and the strip-continuation ratio 12e's parked columns asked
+                    for without needing a column of its own).
+               -- `batch=`/`slow=` (12f rung ii) are the two exits of the mesh
+                    batch entry: a mesh every point of which the GS can represent is
+                    recorded as one group and counted in `batch=`, any other mesh
+                    falls back to the immediate-mode walk and is counted in `slow=`.
+                    The ratio is the evidence that the fast path is not quietly
+                    eating an edge of the sheet; `slow=` nonzero on a frame that
+                    draws the ribbon is the symptom to chase, and both are cleared
+                    every frame.
+               -- `why=` is the third column of that pair and the one that makes
+                    `slow=` actionable: it is the LAST refusal of the frame, by name
+                    -- 0 none, 1 a null argument, 2 the model-projection product is
+                    not this window's yet, 3 lighting on, 4 a texture bound and
+                    enabled, 5 a W that depends on the vertex, 6 a projection that
+                    couples X to Y, 7 (retired) a point outside the clip rect, 8 a
+                    map that was never captured, 9 a point outside the -2048..+2047 px
+                    the vertex word carries.  Codes 2-6 come out of the refused map
+                    itself, 1/7/9 are the batch entry's own, and 8 is what a
+                    caller-zeroed struct looks like.
+               -- `over=` is what a taken batch asked the GS to clip: the points of
+                    this frame's batched meshes that lie outside the clip rect but
+                    inside the vertex word's range, so the SCISSOR `eegs_present.c`
+                    programs from the same rect is what cuts them.  The ribbon's is
+                    32 a frame -- its last column, because the app projects the
+                    sheet with the window's 776x536 and draws it into the client's
+                    768x500 (12f rung ii).  `over=` with the sheet's edge unchanged
+                    is the fast path working; `over=` with an edge missing says the
+                    gate trusted a register that does not do what it means.
       [GSTS] gif: posted=<n> started=<n> queued=<n> inflight=<n> cap=<n> |
                drop=<n> hold=<us> us | reap=<n> blocked=<us> us max=<us> us |
                sync=<n> blocked=<us> us max=<us> us
@@ -1221,9 +1294,69 @@ PART THREE -- THE MEASURED MACHINE
                print, so the FIRST gif row of a run is since BOOT: its sync=
                holds the atlas, the font sheet and every console line, and it is
                not a frame cost.
+      [GSTID] n=<i> g=<n> v=<n> prev=<n> | same=<n> g <n> qw | diff=<n> g <n> qw |
+               xyz=<n> rgb=<n> st=<n> shape=<n> | tail=<n> g <n> qw |
+               at=<i,i,...>[+<n>] first=<n> last=<n> more=<n>
+               -- LANE 12h's row, and it exists to answer one question no other row can:
+               does this frame's recorded stream REPEAT last frame's.  `n=` is which
+               instrumented frame, `g=` the groups this frame staged and `prev=` the ones
+               the comparison ran against -- a group is compared with the group at the
+               SAME INDEX, positionally, because that is what a replay would read; the
+               three hashes a group carries cannot say which end of the stream moved, so
+               `tail=` is the groups no predecessor had, and it is why a growing `tail=`
+               means `same=` is understating rather than lying.  `at=` names up to eight
+               differing indices then `+<n>`, `first=`/`last=` bound them, `more=` is how
+               many the list did not print.  The first instrumented frame has no
+               predecessor: `at=` prints `-` and the whole frame is `tail=`.
+               -- `v=` is the frame's own VERTEX-group count, taken at the sink over the groups it
+                    accepted, so `g=` - `v=` is this frame's texture switches and the lane columns are
+                    read against `v=`.  It is on the row because without it "25 of the groups kept
+                    their texels" is arithmetic about a denominator nobody printed.
+               -- `xyz=`/`rgb=`/`st=`/`shape=` are the same comparison split by REGISTER, over the
+                    aligned prefix and only for vertex groups (a group whose GIF tag
+                    carries NREG=4, whose data quadwords are PRIM, RGBAQ, ST, XYZ2 in that
+                    order starting at quadword 1 -- the tag's quadword holds the REGS list
+                    in its high half).  A group counts in `xyz=` when every one of its
+                    XYZ2 quadwords is byte-identical to the same index's XYZ2 lane last
+                    frame, whether or not its colour moved, and the other two columns work
+                    the same way.  `shape=` is not a fifth register: it folds the DIFFERENCE
+                    between consecutive vertices of the group (dx, dy, dz of each XYZ2 over the
+                    one before, the first vertex folding nothing) instead of the coordinate, so a
+                    group counts there exactly when it is a rigid TRANSLATION of last frame's
+                    same-index group.  The four exist because `diff=` alone cannot say WHAT
+                    moved, and the answers send rung (i) to different places: an invariant XYZ2
+                    with a moving RGBAQ is a mesh whose geometry and texels are the same every
+                    frame and only its shade changes -- the map to build is a colour map -- a
+                    moving XYZ2 over an invariant `shape=` is the same mesh in a new place, which
+                    a retained mesh plus a per-group offset carries, and a moving `shape=` is the
+                    mesh itself being re-solved and wants the vertex arithmetic stayed.  A group
+                    that is an AD group, not a vertex group, is not in any of the four; `diff=`
+                    and `same=` do count it, so these are read against `v=`, not against `g=`.
+                    PRIM and the tag are folded into the whole-group hash and into no lane, which
+                    is the residual that carries its own meaning: a group invariant in all four
+                    lanes yet counted by `diff=` moved its primitive descriptor or its loop
+                    count, not its picture.  Each lane is one 32-bit FNV lane, so a lane's
+                    INVARIANT claim can be wrong by a 2^-32 collision while its differing claim is
+                    exact -- the same one-directional rule the group pair keeps at 2^-64.
+               -- `PS2_IDENT=1` builds this row and the `g=` column of the `[XMBT] <stage>`
+                    rows; at 0 both compile out and the shipped image carries neither.  The
+                    dial costs one hash pair and four lane folds per staged quadword, inside the
+                    copy the staging sink was already doing.
       [GSPLATE] the stream does not plate its rect: clip=<W>x<H> b0=<x0,y0,x1,y1>
                -- one-shot, armed when a layer's plate was refused over a
                rect the first vertex group does not span
+      [BENCH] canvas census pass <n>: rows=<n> changed=<n> span=<lo>..<hi>
+               px<=<n> of <n> fp=<hex> cost=<n> us
+               -- row 9d's premise row, and the row that decides whether a
+               present is work or redundancy.  `changed=` counts ROWS whose FNV
+               hash differs from the same row in the PREVIOUS pass, so `px<=` is
+               an UPPER bound on the damage: a row changed in one pixel and a row
+               changed wholly hash and count alike.  fp= is the xor of the row
+               hashes, so two passes with one fingerprint are one picture no
+               matter what changed= says about which rows.  cost= prices the scan
+               itself -- the honest thing a census owes, because 9b's caller died
+               when deciding cost 1.53x the column it was meant to reduce, and
+               this row prints its own price so that reading stays open here.
       [ASYNC] input plane Timer0 (INTC 9): period=<us> compare=<ticks> ticks=<n> of
                the <n> this <us> us window owes -> [the INTC registry REJECTED the
                handler: ] LIVE | STALLED | DEAD
@@ -1403,6 +1536,81 @@ PART THREE -- THE MEASURED MACHINE
   fill dispatch, so their microseconds belong, by this book's own column
   definition, entirely outside the fill.
 
+  The same stages under the backend that SHIPS, PS2_GL=eegs, read off one
+  steady frame (2026-10-14, the app phase's frame 2 of a `BENCH_APP=1` bench
+  built on PS2_FP=hw PS2_MSX=0; [XMBT] frame 2 (eegs) draw=46864 us swap=0):
+
+    stage      tris    verts     px        spans   px/sp fill us  geom us
+    ---------------------------------------------------------------------
+    f_bg          5        4    382,731     2,495   153       0      159
+    f_ribbon   1,839   1,984     101,858    16,391     6       0   25,142
+    f_menu      646   1,436      46,694      8,964     5       0   12,318
+    f_clear       --     --      384,000        --    --      --    3,408
+    f_surface     --     --           --        --    --      --    5,746
+
+  Three readings come out of this table, and none of them transfers to the one
+  above it.
+
+  One.  `fill us = 0` is STRUCTURAL, not an instrument that failed to time.
+  The GS arm of gl_draw_triangle_general (src/gl/tinygl/clip.c) returns before
+  the fill's clock bracket is opened, so that column has nothing to
+  accumulate.  The px and spans columns still fill because tgl_count_fill()
+  runs AHEAD of that branch and bills the triangle's analytic area -- the
+  counters describe what the rasteriser was asked to draw, and that question
+  is the same whichever engine answers it.  So every per-pixel price in the
+  list below is a TINYGL price: under the shipped backend the EE writes no
+  pixels at all, and the billable unit this frame offers is the VERTEX.
+
+  Two.  The vertex price survived the swap untouched.  159 + 25,142 + 12,318 =
+  37,619 us over 4 + 1,984 + 1,436 = 3,424 mesh vertices is 11.0 us/vertex,
+  and the row fitted from tinygl on 2026-10-11 reads 11.0 = 3,240 cycles.  The
+  pair of sub-prices repeats as well -- the ribbon's 12.7 against the menu's
+  8.6, where that fit said 11.0 against 8.3.  A price identical across two
+  backends is a property of the transform and the clipping, and there is no
+  fill work left on the EE to charge it to.
+
+  Three.  What the shipped backend charges for the SAME triangles, from the
+  present's own bracket: [GSTS] groups=51 qw=29997 verts=7470 prims=2490
+  gs=3879 us, clip=768x500 b0=0,0,767,499 plate=covered.  prims= is these
+  three stages' tris summed to the unit (5 + 1,839 + 646 = 2,490), which is
+  what makes the pair comparable without a guess: handing 2,490 triangles to
+  the GS costs the EE 1.56 us apiece against the 11.0 us it spent to make each
+  one's three vertices -- the front end is 21x the sender.  gs= is the EE's
+  POSTING time and not its recording time -- the correction matters, because the
+  two were once written as one term here: the bracket gs= measures opens after
+  the composite in ps2_paint_region() (src/cores/core_ps2.c) and contains
+  eegs_present_send() and the cover re-uploads, while the packet's per-vertex
+  work -- gs_rec_vertex() and everything it calls -- runs inside xb_paint() and
+  is therefore already inside paint= and inside the 11.0 us.  So this 1.56 us is
+  the price of pushing 29,997 quadwords -- some 469 KB -- at the GIF, and not the
+  price of building them.  The ring's own row says that push did not wait
+  (posted=52 started=52 queued=0 inflight=0
+  drop=0), so this 21x is not a queue effect: it is the whole distance between
+  what the machine does per vertex and what it has to do per vertex to get a
+  picture.  That distance is LANE 12's, and it is 9d's context.
+
+  The same frame's pass partitioned, from its own cycle row ([XMBT] cycle 1
+  period=106544 pass=90534 render=85764 swap=0 upload=4757 px=480000 nb=1
+  full=1 why=c comp ... total=76754):
+
+    the app's paint (comp paint=)          46,874  of which geometry 37,619
+    the composite's canvas work            27,989  bg 7,484 + frame 7,851
+                                                     + blit 12,654
+    panel + bars                            1,878
+    the present's bookkeeping               9,010  render= less comp total=
+    the GIF transfer of the canvas          4,757  upload=
+    ------------------------------------------------------------------------
+                                          90,508  against pass= 90,534
+
+  The 26 us residue is the columns' own rounding, one part in 3,400, so the
+  ledger is the pass and not a sample of it.  Read against the canvas census
+  row -- three consecutive passes, rows=600 changed=0, one fingerprint -- this
+  partition is what reopens lane 9 on its canvas half: 27,989 us rebuilding a
+  canvas, 4,757 us re-sending it, and the 3,408 f_clear spends blanking a
+  surface 11.5's refusal then declines to copy -- 36,154 us, 40% of the pass,
+  for bytes a census says never moved.  That is row 9d, and the reading of it
+  belongs to LANE 9's own cell.
+
   The price list, in cycles per unit on this machine (295 of them per
   microsecond):
 
@@ -1428,6 +1636,16 @@ PART THREE -- THE MEASURED MACHINE
                                                         2% of its row unexplained
     a vertex (transform, viewport, clip)  11.0=3,240    f_ribbon's geom over 1,984
     a vertex needing no clipping         8.3=2,440      f_menu's geom over 1,436
+    a vertex, under the GS backend       11.0=3,240     9's eegs companion: 37,619 us over
+                                                        3,424 verts.  The SAME price from
+                                                        a backend that bills no pixel at
+                                                        all, which is what makes it the
+                                                        transform's and not the fill's,
+                                                        and what makes LANE 12 the frame
+    a triangle's stream POSTED (not built) 1.56=460   gs=3,879 us over prims=2,490: the
+                                                        sender's price alone; the packet
+                                                        that reaches it is built inside
+                                                        the 11.0 us above, per vertex
     a cleared pixel                             2.6      f_clear: 128,000 px/ms
     a pixel copied RAM to RAM                   4.6      REFUTED AS AN INFERENCE, and now
                                                         MEASURED twice.  The row used to
@@ -2640,7 +2858,14 @@ PART FIVE -- THE PRESENTATION PLANE: THE EE/GS BACKEND
           768x500 UI, and it is the reason a first increment needs no VU
           program: an EE-side float-to-packet conversion per vertex is enough
           when the vertex count is thousands and the pixel count is 384,000.
-          Lane 12 is what a VU would buy once the vertex count matters.
+          Lane 12 is what a VU would buy once the vertex count matters.  The
+          window's extent, in whole pixels relative to the page origin, is
+          -2048 .. +2047 -- `gs_vertex_coord16()` adds the offset to `px * 16`
+          and the sum goes through a 16-bit unsigned field, so it is asymmetric
+          by one and a coordinate past either end folds onto the other side of
+          the canvas rather than being clipped.  That is the fact LANE 12f's
+          batch gate is made of, and `verify/tests/test_eegs_raster.c` measures
+          both ends of it.
 
   FACT 4  The port already owns the DMA path it needs.  ps2_gs.c builds
           GIFTAGs, primes BITBLTBUF/TRXPOS/TRXREG/TRXDIR and streams DMAC
@@ -3178,6 +3403,84 @@ PART FIVE -- THE PRESENTATION PLANE: THE EE/GS BACKEND
             handed to the caller by the compositor's own rect bookkeeping instead
             of read out of the canvas.  That door was already taken; it is 11.5's
             refusal, landed, and it is why `frame=` fell while `bg=` did not.
+
+            9b's caller died on the COST OF DECIDING, and that is the reason a
+            different question was worth asking: not WHICH PIXELS a poster could
+            paint, but WHETHER THE ARRAY CHANGED AT ALL.  The second question has
+            an answer the compositor does not have to scan for -- damage is
+            already booked as bands -- so it was priced before anything was
+            written.  ps2_bench_canvas_census() hashes every row of the array
+            ps2_gs_set_framebuffer() installed and ps2_gs_upload() therefore
+            sends, and diffs the hashes against the previous pass.  Read under
+            the SHIPPING dials, PS2_GL=eegs PS2_FP=hw PS2_MSX=0, over three
+            consecutive app frames of the workbench with the wave live -- the
+            wave's own [XMBT] wave rows step n=4, n=5, n=6 inside the window
+            these three passes cover:
+
+      [BENCH] canvas census pass 4: rows=600 changed=0 span=-1..-1 px<=0 of 480000 fp=a3f484d0 cost=14796 us
+      [BENCH] canvas census pass 5: rows=600 changed=0 span=-1..-1 px<=0 of 480000 fp=a3f484d0 cost=14867 us
+      [BENCH] canvas census pass 6: rows=600 changed=0 span=-1..-1 px<=0 of 480000 fp=a3f484d0 cost=14831 us
+
+            One fingerprint three times, while the same three passes' cycle rows
+            each present px=480000 nb=1 full=1: 27,989 us of canvas rebuilt and
+            4,757 us of bytes re-sent for an array that did not move.  Read this
+            as what it is and not as the poster's bound come back -- the flat
+            census offered 57,923 px of 480,000 and died on its decision price;
+            this row says nothing about which px could be painted flat and
+            everything about whether the upload had to happen.  Why it did not:
+            under eegs the app's picture never enters the canvas (the same run's
+            [BENCH] xmb surface frame 3 reads 768x500 black=384000 other=0), and
+            11.5's refusal already declines to copy that surface, so the array is
+            a desktop plate with a GS stream laid over it -- plate=covered, in
+            the recorder's own words, and the frame partition above shows the
+            wave's own 46,864 us living entirely outside the canvas.
+
+            Three caveats, before the verdict and not after it.  (i) cost= is
+            14,796 us, 30.8 ns/px -- almost twice the bg= column it audits, and
+            on 9b's own arithmetic a scan this wide is a MEASUREMENT and never a
+            shipped decision; the instrument stays behind BTRON_PS2_BENCH for
+            exactly that reason.  (ii) Three samples span ~0.2 s of a session, so
+            what is excluded is a PER-FRAME change -- the only kind a waving
+            bank causes -- and a once-a-second clock row or a menu tween is not
+            excluded by these rows.  (iii) `changed=` counts rows and `px<=` is
+            an UPPER bound, one pixel and a whole row hashing to the same
+            difference; the claim this frame needs is the stronger one, that the
+            fingerprint itself repeated.
+
+            So 9d is opened, and what it is: a present stops rebuilding and
+            stops transferring the canvas region a layer stream provably
+            covers.  The decision is not taken from the pixels -- it is the
+            layer window's own client rect, which wnd.c can answer BEFORE the
+            composite runs (the same arithmetic the walk uses at its own
+            `s_gl_client`, and therefore one encoding of it, not a second), plus
+            the premise 11.5 already gates on: that the rect is the one this
+            pass's stream scissors.  What it refuses is the band minus that
+            rect, as strips, so every stage the compositor already clips to a
+            rect -- the plate blit, the window walk, the upload -- is simply
+            handed a smaller rect.  Two facts bound the saving and both are
+            rows, not guesses.  (i) The cover list: canvas content that must
+            STAY visible over the stream -- the panel's clock rows, the bars,
+            an open menu -- is re-uploaded after it, so the hole cannot cover
+            what a cover rect covers, and this frame's [GSTS] row says cover=4.
+            (ii) The hole moves: when the layer's rect shrinks or the layer
+            closes, the canvas under it has not been drawn for as long as the
+            hole stood, so the refusal is bounded by the INTERSECTION of this
+            pass's hole and the last one's, and a pass with no hole is a full
+            pass.  Neither fact is priced yet, so 9d's bound is gross: 36,154
+            us of a 90,534 us pass, and the row that turns it into a net is the
+            cover map printed under this instrument.  Geometry's 37,619 us at
+            LANE 12 is the other 42% of the same pass, and the arithmetic of the
+            port's own bar -- a 16,667 us deadline against a 106,544 us period,
+            of which 16,001 is the hold -- is that 9d and 12 together are the 5x
+            (90,534 minus 36,154 minus 37,619 leaves 16,761 us).  Neither lane
+            is reportable as the win alone.  That subtraction is the arithmetic
+            of the pass as it read that day, and 12f's landing cell re-reads it
+            on the pass as it reads now -- geometry is 24,343 us rather than
+            37,619, 9d's own terms are 24,823 rather than 36,154, and the
+            residue neither of them can refuse is 18,768 us, which is 4.5x and
+            not 6.4x: after 12f the bar lives in `frame=` and in the composite's
+            unnamed 9,011 us, and naming those two is this lane's next rung, not
+            LANE 12's.
     Gate    A refusal's gate is its premise, not its saving: the refused set
             must EQUAL the rect the stream covers, checked from both sides.
             On the host that is 11.5's four-canvas assertion -- the plate's
@@ -3207,10 +3510,10 @@ PART FIVE -- THE PRESENTATION PLANE: THE EE/GS BACKEND
             A poster's premise, ANSWERED twice -- once by reading the code and
             once by measuring the canvas.  There is ONE canvas and the pointer
             is drawn INTO it: init_baremetal_desktop() is handed
-            s_desktop_backbuffer at core_ps2.c:6017, the GS is given that same
-            array (ps2_gs_set_framebuffer(), core_ps2.c:6406), ps2_fb() returns
+            s_desktop_backbuffer at core_ps2.c:6486, the GS is given that same
+            array (ps2_gs_set_framebuffer(), core_ps2.c:6875), ps2_fb() returns
             exactly it (ps2_gs.c:59-62), and draw_baremetal_mouse_cursor() at
-            core_ps2.c:1216 passes screen->pixels into
+            core_ps2.c:1217 passes screen->pixels into
             draw_baremetal_cursor_raw() at src/desktop/desktop.c:348-350 -- so
             the cursor's white and black 16x16 box lands in the very bytes the
             GIF upload reads.  What the census settles is that no rect list is
@@ -3229,7 +3532,7 @@ PART FIVE -- THE PRESENTATION PLANE: THE EE/GS BACKEND
             Two more constraints were written down for the caller before the
             census closed it, and they are kept because a caller rebuilt from a
             rect list inherits both.  The order a poster would go into is fixed
-            by ps2_paint_region(): the canvas upload at core_ps2.c:1255, then
+            by ps2_paint_region(): the canvas upload at core_ps2.c:1256, then
             the layer's env and the app's recorded stream at 1278, then the
             cover re-uploads at 1299 -- so a batch sits between the first and
             the second, clipped to the band actually uploaded, re-issued by
@@ -3360,11 +3663,1190 @@ PART FIVE -- THE PRESENTATION PLANE: THE EE/GS BACKEND
 
   LANE 12  VU1 / VIF1 as a geometry actor.
     Close   the per-vertex arithmetic that row 7 moved onto COP1 but still
-            pays the EE for: 7,434 vertices a frame, each needing a transform
-            and a viewport map, is the VU1's designed workload.  Fact 3 is why
-            it is a lane and not an increment -- at a few thousand
-            vertices the EE-side conversion is enough, so this lane buys
-            headroom, not the frame.
+            pays the EE for.  The sentence this cell used to end with -- "at a
+            few thousand vertices the EE-side conversion is enough, so this lane
+            buys headroom, not the frame" -- is RETIRED by measurement, and the
+            retirement is the 2026-10-14 eegs companion of ch. 10's stage table.
+            Two counts must be kept apart to read the price at all: the mesh
+            feeds the pipeline 3,424 unique vertices (4 + 1,984 + 1,436 over the
+            steady frame's three stages) and the recorder receives 7,470, because
+            prims=2,490 triangles arrive three to a prim.  The EE spends 37,619
+            us on the first number -- 11.0 us a vertex, and the SAME 11.0 under
+            both backends, which is what makes it the transform's price and not
+            the fill's -- against 3,879 us for the send of the second.  The
+            front end is 21x the sender, and geometry is 41.6% of a 90,534 us
+            pass: the frame's largest single term, on a backend that has no
+            pixels left to blame.  A lane that owns 42% of the frame does not
+            buy headroom, it buys the frame, and the port's own 5x bar cannot be
+            met with this term standing (9d's partition says the other 40% is
+            already-refused canvas work, so the two together are the pass).
+
+            What has NOT changed is this lane's COST side, and the difference
+            between the two halves of it is the next measurement rather than a
+            second argument.  VU1 needs a micro-program, and this tree has no VU
+            assembler and no VU row in any log to charge one against -- that part
+            of Fact 3 still holds, and a lane cannot be taken by wanting it.  But
+            the 11.0 us is a sum of four things the EE does itself (transform,
+            viewport map, clip, and the vertex record's load/store traffic), and
+            the instrument that splits it is already compiled in: PS2_FP_COUNT=1
+            makes the [XMBT] census rows bill a stage's float calls in seven
+            classes, and the fitted per-class prices turn that census into
+            microseconds without touching the source.  Read under eegs, where
+            fill is structurally zero, the census row of f_ribbon is the whole of
+            its geometry bill in floats.  That row has now been RUN, on the
+            shipping dials with the census dial on, 2026-10-14:
+
+              [FPU] 16000-op soft-float caller: COP1 34 cycles/op  bit engine 558
+              [FPU] conversion price: float->int 53 (4000 calls)  int->float 29
+              census f_ribbon fmul=28881 fdiv=248 fcmp=4693 fs2i=17852 fi2s=18964
+                     S=70638 dmul=0 dgen=0 D=0        stage 26,745 us
+              census f_menu   fmul=13628 fdiv=1470 fcmp=1580 fs2i=5038 fi2s=11093
+                     S=32809                          stage 13,077 us
+              census f_surface fmul=5163 fdiv=39 fcmp=1432 fs2i=1027 fi2s=1
+                     S=7662 dmul=930 dgen=775 D=1705  stage  8,454 us
+
+            Priced class by class at the numbers above -- arith, div and compare
+            at 34 cycles, float->int at 53, int->float at 29, every double at the
+            bit engine's 558 -- f_ribbon's 70,638 calls are 2,646,060 cycles =
+            8,970 us, which is 33.5% of a stage the paragraph above priced at 12.7
+            us a vertex.  f_menu's 32,809 calls are 3,918 us of 13,077, 30%.  f_surface's
+            are 4,174 us of 8,454, 49%, and 3,225 us of that is its 1,705 DOUBLES:
+            the wave's own surface step still reaching include/gl/math.h's double
+            series, at five times what every single-precision call in the same
+            stage costs.  The three geometry stages of one frame therefore carry
+            17,062 us of float runtime calls -- 15% of a 111,731 us period -- and
+            the other 85% of geometry is the integer walk, the clip, and the
+            packet's load/store traffic.  So the answer to the question this cell
+            asked is the FIRST branch, with a residue: the fix is COP1's calling
+            convention, the EE keeps the lane, and VU1 is not what a third of the
+            term is waiting for.  The residue is the other two thirds; it has since
+            been measured rather than named, and the measurement is the RUN result
+            under 12a and 12b.
+
+            Where the calls are is a static fact about the linked image -- its own
+            `jal` targets, read off `llvm-objdump -d btron-ps2.elf` -- and it sorts
+            into three rungs, each with its own gate:
+
+  LANE 12a  the vertex packet, in integers.  clip.c's gs_vertex() holds four
+            __floatsisf and two __mulsf3 per vertex -- `(float)p->x`, `(float)p->y`,
+            `(float)p->s * GS_TEX_U`, `(float)p->t * GS_TEX_V` -- over a ZBufferPoint
+            whose x, y, s and t are ALREADY GLint, and ps2_gs_rec.c's gs_rec_vertex()
+            answers by calling gs_vertex_coord16() twice, each of which is one
+            __mulsf3 and one __fixsfsi: `(int32_t)(px * 16.0f)`.  The image thus
+            converts an integer to a float, multiplies that float by 16.0f in soft
+            float, and converts the product back to the integer it started from --
+            eight runtime calls per vertex to do a shift.  It is not an
+            approximation that replaces an exact step: x * 16 is representable in
+            binary32 for every |x| < 2^20, the device pixels on this path are under
+            4,096, and truncating an integer-valued float returns that integer, so
+            the two spellings return the same word by routes of different length.
+            The texel scale is a power of two by construction (GS_TEX_U is
+            1/(1 << (ZB_POINT_S_FRAC_BITS + 1))) and gs_pack_st() wants only its
+            BITS, so it folds into the exponent field as `bits - (k << 23)` with
+            zero named as the case that must not be shifted.  The price is 8 calls
+            x 1,984 ribbon vertices = 15,872 calls = 2.0 ms a frame, plus the same
+            per primitive in f_menu and f_bg.  GATE: the packet bytes, bit for bit,
+            against the float spelling over a sweep of vertices, in
+            test_ps2_gs_rec and test_ps2_gs_pack.
+
+  LANE 12b  kill the clipper's second viewport map.  clip.c's
+            gl_transform_to_viewport_clip_c() is a verbatim duplicate of
+            vertex_stage.c's tgl_vertex_to_viewport() -- the same three projection
+            lines, the same four colour lines, the same two texture lines,
+            differing only in writing `(GLint)` where the other writes
+            `TGL_TRUNC()` -- and it is the copy that lives in the -msoft-float unit.
+            Its 31 call sites (9 __fixsfsi, 12 __mulsf3, 9 __addsf3, 1 __divsf3) run
+            once per vertex the clipper creates, and the census counts them
+            exactly: fdiv=248 is one divide per call, so 248 clipped vertices,
+            7,688 calls, 0.98 ms.  One truth is the law here as much as the saving:
+            the copy that survives is the -mhard-float one, reached by pointer,
+            which is the boundary row 7 already made legal, and both spellings
+            truncate through the same ps2_sf_fixsfsi(), so no answer moves when the
+            duplicate dies.
+
+            Both rungs have been RUN, 2026-10-14, on the shipping dials
+            (PS2_GL=eegs PS2_FP=hw PS2_MSX=0, BENCH_APP=1, PS2_FP_COUNT=0) against
+            the image of the code before them; the two logs are
+            build/ps2-bench-9c-baseline.log and build/ps2-bench-A-prod.log, and
+            every row below is frame 1 / cycle 1 of the same three-frame run:
+
+              f_ribbon geometry   25,168 -> 21,849 us  (1,984 verts: 12.7 -> 11.0 us)
+              f_menu  geometry    12,340 -> 11,261 us  (1,436 verts:  8.6 ->  7.8 us)
+              f_surface            8,253 ->  8,248 us  (unmoved, as designed)
+              frame 2 draw=       46,864 -> 42,483 us
+              cycle 1 pass=       90,534 -> 86,153 us
+              cycle 1 render=     85,764 -> 81,386 us
+              comp total=         76,754 -> 72,370 us
+              comp bg/frame/blit   7,484/7,851/12,654 -> 7,480/7,853/12,661 us
+
+            The win is the whole of the draw term and none of the composite's: the
+            two stages the rungs touch account for 3,319 + 1,050 = 4,369 of the
+            4,381 us draw= fell by, and the three composite rows that no rung
+            touches are the same number to within their noise.  Priced before they
+            ran, a and b were 2.0 + 0.98 = 2.98 ms; the measured 4.38 ms is 1.46x
+            that, and the census run on the same tree says where the difference is
+            -- with PS2_FP_COUNT=1,
+
+              f_ribbon  S=70,638 -> 34,442  (fs2i 17,852 -> 5,952, fi2s 18,964 -> 7,932,
+                                             fmul 28,881 -> 15,745, fcmp 4,693 -> 4,689)
+              f_menu    S=32,809 -> 18,995  (fs2i  5,038 -> 1,090, fi2s 11,093 -> 7,217)
+
+            so 50,010 calls a frame left the image, 15,848 of them float -> int and
+            14,908 int -> float: the round trip 12a named, concentrated in the two
+            classes whose prices (53 and 29 cycles) are the highest of the singles,
+            which is why deleting 12a's eight calls a vertex returns more than the
+            34-cycle arith price of eight calls would say.  Read the other way the
+            same census is the lane's control on itself: multiplying these counts
+            by the [FPU] prices gives 6.5 ms where the A/B measured 4.38, because
+            the counter's load, add and store sit inside the interval the priced
+            loop measured -- so this book quotes the production row for the
+            microseconds and uses the census only for ATTRIBUTION.  Two things only
+            the census settles.  The fdiv column HALVED (248 -> 124) rather than
+            emptied, because the viewport map that survives does its own
+            `1.0 / v->pc.W` for every vertex it maps: one divide per clipped vertex
+            is the truth's work and not a duplicate's, and 12b is done when the
+            count is halved, not when it is zero.  And fcmp fell by four in a stage
+            of 1,984 vertices, which says neither rung touched a comparison -- the
+            exact signature the two paragraphs predicted, since both convert and
+            multiply and neither tests.
+
+  LANE 12c  the clip's own lerps, now PRICED, and priced small.  What is left
+            after a and b is 34,442 of f_ribbon's 70,638 calls: updateTmp(),
+            GLinterpolate() and the six clip_proc() functions, each a handful of
+            float add and mul over pc, colour and texcoord, plus the triangle
+            normal's four __floatsisf and two __mulsf3 per triangle.  Their prices
+            are known, and the stage census now bills them -- the paragraph above
+            reads their post-12a/b total -- so the rung's ceiling is computable
+            without writing the per-function instrument this cell originally asked
+            for: 34,442 calls at 34/53/29 cycles is ~4 ms of a 21.8 ms stage and
+            ~3.9% of a 102 ms period.  Decision recorded here: leave 12c written
+            and unfunded.  The bar is 5x, and 3.9% of a frame is not something a
+            hand on the ribbon can see.
+
+            What no census sees is the rest of the stage, and after a and b the
+            rest is most of it.  f_ribbon costs 21,849 us for 1,984 vertices; ~4 ms
+            of that is its float calls and 3,878 us is the GIF posting the [GSTS]
+            row names, so ~14 ms -- 2,000 cycles a vertex -- is integer work this
+            port has never billed: the immediate-mode vertex copy, the strip's
+            per-vertex dispatch through glBegin/glVertex/glEnd, the clip-plane
+            tests per triangle, and the recorder's own stores.  The prize is that
+            number, so the next rung is arithmetic about vertices, not about
+            floats:
+
+  LANE 12d  stop paying 2,000 cycles to hand the GS one vertex.  The PRE-GATE
+            ran, both halves static against the shipping ELF, and it killed both
+            rungs -- which is what a pre-gate is for, and cheaper here by one
+            bench run.
+            (i) THE MESH: closed by this book's own chapter 10, which this cell
+            re-opened without reading.  32x32 -> 16x16 is worth the ~4x it
+            claims and costs 10.81% of the sheet's pixels with a worst channel
+            delta of 145/255, and verify/tests/test_xmb_render.c refuses
+            n < 32*32 as a law.  A 145/255 error is not a fidelity trade an eye
+            gets to make; it is a different surface.  The sentence asking the
+            user to choose was wrong and is withdrawn.
+            (ii) THE PATH: statically refuted.  glDrawArrays (arrays.c:361) is
+            glBegin, a loop of glArrayElement, glEnd; glArrayElement only pushes
+            OP_ArrayElement, and glopArrayElement (arrays.c:310) ends by calling
+            glopVertex -- llvm-objdump of the linked image, 0x12b398..0x12b5a8,
+            exactly one `jal 0x136cc0 <glopVertex>`.  That is the same handler
+            the immediate path's dispatch reaches, so the two halves of the
+            pre-gate answer themselves with one verdict: the array path shares
+            the vertex funnel, hence the same draw_triangle hook and a
+            byte-identical stream, AND for the same reason it does no less work.
+            It adds an op enqueue plus the index arithmetic per vertex.  A path
+            that cannot differ from the one it replaces cannot be cheaper.
+            Closed; no second encoding to kill, because there was never a second
+            one.
+
+            What the walk did find is where 12d's ~14 ms lives, and it is not
+            dispatch.  Instruction counts straight off nm -S of the shipping
+            image -- static sizes, so read them per call on the taken path, not
+            as a bill: glVertex2f 33, glopVertex 240, gl_draw_triangle 205,
+            eegs_triangle 118, gs_rec_vertex 462 (that 462 is three inlined
+            clones of the emit block, one per split branch; the path a ribbon
+            vertex takes is a little under half).  The decisive number is in the
+            [GSTS] row instead: verts=7,467 prims=2,489.  That is 3.00 vertices
+            per primitive, exactly -- the shape of this port's seam, not of the
+            scene.  backend_eegs.c:150 calls emit_vertex() three times per
+            triangle, so the ribbon's 1,984 strip vertices arrive as 1,838
+            triangles and 5,514 vertex packets, every one of them re-stating a
+            PRIM, an RGBAQ and an ST the GS already holds.
+
+  LANE 12e  draw the strip the recorder already knows.  The GS does not want
+            three vertices a triangle for a strip; it wants two to start and one
+            after that, and it alternates the winding itself.  ps2_gs_rec.c
+            implements that primitive already -- can_split() at :124 and
+            reemit_continuation() at :138 are written for TRI_STRIP and TRI_FAN
+            continuation, and the comment at :135 even reasons about the parity
+            a restarted strip loses.  The backend never asks for it: it builds
+            every triangle as GS_OP_TRI.  So the rung is at the seam, not in the
+            recorder: vertex.c's STRIP case hands the hook the same stored
+            c->vertex[] objects the previous call used for its shared edge, and
+            the backend needs to know that this triangle's v0,v1 are the last
+            triangle's v1,v2, unmodified, so it can select TRI_STRIP once and
+            feed ONE vertex per triangle after the first two.
+            The precondition is checked, not assumed: the shared vertices are
+            identical only while the clipper has not cut, so a split triangle, a
+            PRIM change, an AD write (gs_rec_ad invalidates the live PRIM for
+            exactly this reason) or a failed compare falls back to the present
+            three-packet path, and the fallback is counted so a silent loss of
+            the win is visible in the row that reports it.
+            MEASURE, first: the [GSTS] verts/prims ratio, 3.00 -> 1.08 on a
+            ribbon frame, and f_ribbon's us column against 21,912.  A third of
+            the recorder's work staying on the table would be an honest result
+            and a visible one; the claim is that it goes to ~4% of its size on
+            the shared vertices, because the vertices stop being sent.
+
+            RUN, 2026-10-14, on the shipping dials (PS2_GL=eegs PS2_FP=hw), with
+            the instrument this rung's own fallback clause asked for compiled in
+            as the `chain=/entry= miss=/fresh=/pchg=` columns, and it says the
+            rung is PARKED: the ratio moved, the microseconds did not, and the
+            price landed on the picture instead --
+
+              verts/prims   7,467/2,489 = 3.00  ->  6,435/2,489 = 2.59
+              chain=516/223 miss=223 fresh=1,750 pchg=470   (next frame 424/232
+              miss=232 fresh=1,824 pchg=488; the three exits plus the list path
+              partition `prims` exactly, 516+223+1,750 = 2,489)
+              groups           51 -> 256  =  the EEGS_MAX_GROUPS table, full
+              drop                0 -> 236  primitives the app drew and the
+                                         screen does not have
+              gs=            3,874 -> 4,025 us  (it did NOT get cheaper)
+              f_ribbon      22,701 -> 21,842 us, and the parked build
+                                          reads 21,919: the run-to-run
+                                          spread is 4%, as wide as any
+                                          saving this rung could claim
+
+            The mechanism is in the counters, and it is not the geometry: 516
+            of the frame's 2,489 primitives found a strip they could
+            continue -- and the ribbon alone draws 1,838 of those primitives,
+            so the chain rate is at most 28% of the ribbon -- and a miss is
+            not one event but two: the list path that follows it, then the
+            next triangle's entry back into a strip, which is why `miss=` and
+            `entry=` are equal and why 223 of them put `pchg=` at 470 against
+            the parked build's 24.  A group is the unit the recorder charges
+            for, `pchg=` is its rate, and this rung multiplied that rate 20x
+            -- 51 groups into a 256-entry table, capped, 236 primitives
+            dropped -- to save 14% of the vertices; and the frame the user
+            watches did not change, which is the observation that opened this
+            measurement.
+
+            PARKED: eegs_triangle() asks for GS_OP_TRI only again, drop= returns
+            to 0, and the four chain counters go with the branch they measured --
+            the instrument that outlives them is `pchg=` against `groups=`, the
+            group-boundary rate and its budget -- EEGS_MAX_GROUPS=256, which the
+            static assert against PS2_GIF_RING_CAP=512 in eegs_present.c refuses
+            to let anyone raise without touching LANE 10's law -- and the
+            verts/prims ratio in the
+            same row is how a re-lived rung shows up without any new counter.
+            What would make this rung worth taking again is a group that
+            survives a PRIM change: the GS carries PRIM as a per-vertex register,
+            so a stream CAN state it mid-group, and the recorder's strip
+            machinery is not deleted for that reason -- can_split()'s TRISTP arm
+            and reemit_continuation() stay gated and tested in
+            test_ps2_gs_rec.c, where the primitive itself is under test rather
+            than the backend's decision to ask for it.  12f's batch entry has no
+            such change to make, because it opens ONE group per mesh.
+
+            VU1 stays the lane's other half: unbuilt, un-priced, still no
+            assembler and still no row.
+
+  LANE 12f  one draw call for a mesh the port already has in hand.  What this
+            lane is priced against, with 12e's park taken and the stage read
+            again: f_ribbon is 21,842 us, 21,919 us and 22,701 us in the three
+            bench runs this session retained, for the 1,984 vertices the ribbon
+            submits -- so take ~21.9 us x 1,000, or 11.0 us = 3,260 cycles a
+            vertex at the dialled 295 cycles/us, and treat the 4% spread as the
+            resolution limit any claim here has to clear.  Its float bill is
+            34,442 calls, and this book's
+            per-class prices are now validated in situ rather than fitted: the
+            two runs either side of 12a and 12b moved 36,196 calls and 4,896 us,
+            and 11,900 float->int at 53 + 11,032 int->float at 29 + 13,136 arith
+            at 34 predicts 4.74 ms of that -- 3% off.  So the same 34,442
+            remaining calls are ~4.7 ms, 21% of the stage, and making every
+            float in the ribbon's path hard-float is a 1.3x on one stage and
+            1.1x on the frame.  The other 17 ms is ~2,600 cycles a vertex of
+            INTEGER work: the immediate-mode walk the 12d cell counted --
+            glVertex2f 33 + glopVertex 240 + gl_draw_triangle 205 +
+            eegs_triangle 118 + the emit block, over a 4-stage in-order pipe
+            that overlaps nothing a dependent load is waiting on.
+
+            The bar is 5x on the surface the user watches.  No amount of
+            arithmetic on that walk reaches it, because the walk itself -- not
+            any step inside it -- is the term: the ribbon's geometry is ALREADY
+            in this port's own arrays (xb_rib_px, xb_rib_py, xb_rib_bri,
+            XB_RIBBON_ROWS x XB_RIBBON_COLS = 32x32 floats each, written this
+            frame by xmb_wave.c on COP1), and it is
+            then re-derived a thousand times a second through a general-purpose
+            immediate-mode pipeline that exists to serve callers who do NOT have
+            their mesh in hand.  So the rung is to stop paying for generality
+            where the data is retained: a batch entry that takes the grid's
+            arrays, the row/col counts and the state (blend, smooth, no
+            texture), and writes the strip's quadwords into the recorder
+            directly -- fixed-point map, colour byte pack, one tag back-patch at
+            the end -- for ~150-250 cycles a vertex against ~2,600.  The cell's
+            claim is 22 ms -> ~2 ms on f_ribbon, which is the first change in
+            this lane large enough to be the thing the user asked for; the price
+            of NOT believing it is one bench run.
+
+            What the walk actually computes per vertex, read off the pipeline it
+            walks -- these are the facts the batch entry reproduces, not
+            approximations of them:
+            - the projection is `tgl_ortho(0,w,h,0,-1,1)` (backend_tinygl.c)
+              over an identity modelview, so pc.W is exactly 1.0f, and the
+              `winv = 1.0 / pc.W` divide returns exactly 1.0f -- it does not
+              have to be re-done, only proven to be one;
+            - pc.X is fl(fl(x*m0) + m3) with m0 = 2/w and m3 = -1, because the
+              matrix's other three terms contribute exact zeros; likewise
+              pc.Y = fl(fl(y*m5) + m7);
+            - x_px = TRUNC(fl(fl(pc.X * winv) * scale.X) + trans.X), which is
+              vertex_stage.c's own association order, and TRUNC is that file's
+              32-bit truncate rather than a cast;
+            - the colour is grey (glColor4f(b,b,b,1)), so ONE
+              TRUNC(b*0xfe0000 + 0x00ffff) serves r, g and b, and the alpha byte
+              is a constant of the draw.
+            Ten float ops and three truncates a vertex, over the 1,984 points a
+            32x32 grid's zigzag submits ((ROWS-1)*COLS*2), is ~0.4 ms of the
+            stage where the walk bills ~17.  The float SEMANTICS are why the
+            map loop belongs in vertex_stage.c -- the `-mhard-float` TU that
+            already owns the map -- and not in a soft-float TU: C permits a
+            float expression in a soft-float unit to be carried in double
+            intermediates, which is not the arithmetic being matched, and this
+            port has already been black-screened once by that difference.
+
+            Rungs, each with its own gate:
+            (i) the batch entry, gated HOST-side on two separate claims,
+                neither of them an identity between two copies of one code:
+                (a) the VALUES.  `tgl_grid_map()` lifts the four constants the
+                    above list names out of the live context, and for every
+                    swept (x, y, b) the batch's arithmetic must land on the same
+                    GLint pixel and the same colour byte as a real
+                    `tgl_vertex_to_viewport()` on the same vertex -- in a suite
+                    that links tinygl, so the comparator is the map itself and
+                    not a restatement of it.  This is the gap 12b's comment
+                    names: nothing on the host has checked that a whole-pixel
+                    value is the one the map produced.  The same suite owns the
+                    REFUSALS, because the two-constant-per-axis form is only
+                    this arithmetic under conditions: lighting off, nothing
+                    bound-and-enabled on TEXTURE_2D, a diagonal projection, a W
+                    that does not depend on the vertex -- and a model-projection
+                    product the walk has actually computed.  That last condition
+                    is not cosmetic: a matrix change leaves
+                    `matrix_model_projection_updated` set and
+                    `matrix_model_projection` holding the PREVIOUS product, which
+                    is only refreshed at `glBegin`, so a map lifted between a
+                    resize and the frame's first `glBegin` would take the ribbon
+                    through the old window for exactly one frame and print
+                    nothing on the console.  `tgl_grid_map()` refuses that rather
+                    than lifting a stale product, and every refusal here is
+                    paired with the same state restored and accepted, so a -1
+                    cannot be earned by something else the context lacks.
+                (b) the STREAM.  For one grid, the strip the batch records must
+                    DECODE -- through the recorder's own group layout -- into
+                    the same triangle sequence, with the same vertex payloads,
+                    that the list path records for the same grid, the zigzag's
+                    turn-around included; and a 3x3 grid's group must equal a hand-built
+                    expected strip group byte for byte.  A strip is not a list,
+                    so "byte for byte" is a claim about the encoding and about
+                    each vertex's fields, never about two streams being the same
+                    length -- that would be the wrong gate, and it would fail.
+            (ii) the clip question, which is NOT assumed either way.  The GS
+                 receives a clip rect in its environment packet (the [GSTS] row
+                 prints it as `clip=768x500`), but this port has no measured
+                 fact yet about what the GS does with a vertex OUTSIDE it, and a
+                 fast path that guesses wrong loses part of the picture
+                 silently.  So the gate is a bbox: the batch path is taken only
+                 when the grid's own bounding box is inside the window's rect,
+                 and every other frame takes the present path.  `batch=` and
+                 `slow=` go in the row, so the ratio of the two is the evidence
+                 that the fast path is not quietly eating an edge of the sheet.
+            (iii) the call site in xmb.c, which keeps its GL-visible meaning --
+                  same vertices, same colours, same GL_DST_COLOR/GL_ONE
+                  compositing -- and is the user's to observe, not mine to
+                  declare fixed.
+
+            LANDED on the host 2026-10-14, rungs (i)-(iii), each with the
+            control that was supposed to make it fail:
+            (a) `verify/tests/test_grid_map.c`, 130 checks / 0 failures
+                (121 at this rung's landing, +5 when the refusals got names,
+                +5 with the ribbon's own mesh).  It
+                links tinygl and drives the real `tgl_vertex_to_viewport()`, so
+                the comparator is the walk itself; ~173k swept lattice vertices
+                x 6 alphas land on the same GLint pixel and the same colour byte
+                through `tgl_grid_map_points()`.  Three controls were run and
+                each had to bite: PERTURBING each of the eight lifted map fields
+                moves the points (so no field is decorative); computing the map
+                in DOUBLE intermediates moves 1,932 / 252 / 246 device pixels,
+                all of them boundary probes (so the truncation is measured, not
+                assumed); and refusing a context with
+                `matrix_model_projection_updated` set -- then accepting it once
+                undone -- is what makes the freshness clause load-bearing rather
+                than stylistic.  The boundary bracket is five probes per pixel
+                column/row, straddling with `nextafterf` at offsets -8..+8 ulp.
+                Two claims got written down honestly instead: ASSOCIATION is a
+                no-op here because `winv == 1.0f` exactly (re-associating the
+                product did NOT fail the suite), and `-ffp-contract=off` in the
+                Makefile is insurance for gcc's default -- on Apple clang 21 /
+                arm64 the flag measured as not biting.  TRUNCATION is the one
+                that bites.  A second hazard the same suite surfaced only on the
+                MIPS side: written as one interleaved loop, the body hoists all ten
+                of the map's floats and the allocator, past the twenty
+                caller-saved singles of the o32 hard-float ABI, moves into
+                `$f20/$f22/$f24` -- where saving a *single* costs its even/odd
+                pair, so six `sdc1`/`ldc1` appeared in the image and TEST 66 of
+                `make test-ps2` failed.  `tgl_grid_map_points()` is three passes
+                (x, then y, then colour) instead, five hoisted floats apiece, zero
+                such instructions, and the identical 121 checks.  The control was
+                run in both directions: the interleaved shape fails, the split
+                shape passes, and no value test distinguishes them.
+            (b) `verify/tests/test_eegs_raster.c`, 222 checks / 0 failures, with
+                `eegs_grid_strip()`'s stream decoded back through the recorder's
+                own group layout and compared to the list path for the same
+                grid, and a 3x3 group equal to a hand-built expected strip group
+                byte for byte.  The gate added here refused on the rect and is
+                now the amended one (see rung (iii) below): a mesh that leaves
+                the rect is TAKEN and its outside points land in `over=`, while
+                a point the vertex word cannot carry refuses with -1 and
+                increments `slow=`.  The vertex count the gate walks is
+                `rows*cols` -- the mapped points -- not `(rows-1)*cols*2` -- the
+                submitted ones -- and the first version of this got that wrong,
+                which is how it earned its test.  The four exits' own controls,
+                each run by mutation on the same file (2026-10-15): deleting the
+                range branch fails 9 checks (both folding points, the y axis,
+                and the refusal's empty `over=`); putting the rect back as the
+                refusal condition -- the gate exactly as first written, which is
+                the build that printed `why=7` for a living -- fails the other 9
+                (every taken overhang, on both axes and both edges); and moving
+                `over`'s commit inside the scan fails the one check that a
+                refusal mid-mesh leaves the column where it found it.  Restored,
+                the suite is the 222 above with no warning from the stage.
+            (ii) The clip question is measured rather than guessed, in both
+                 directions: `compare_clip_gate()` in the grid-map suite sweeps
+                 32 probes outside the viewport rect through the real clipper and
+                 requires that clip-inside implies inside the integer rect, and
+                 that clip-outside never excludes a rect-interior point except
+                 inside the sub-pixel band TRUNC's toward-zero rounding leaves --
+                 the band the `band` column counts and reports.  Two off-by-one
+                 controls (`vp_x1` one short, `vp_y0` one long) both fire, so the
+                 rect's coefficients are read, not printed.
+            (iii) `xb_draw_ribbon()` in `src/apps/xmb.c` calls the batch entry
+                  once per frame under `GL_BACKEND_EEGS` and falls back to
+                  `glBegin`/`glEnd` when it returns -1; the host-side gates above
+                  say the stream is right, and only the user's monitor says the
+                  sheet still waves.  The price of NOT believing the 22 ms -> ~2 ms
+                  cell is one bench run, and the row that decides it is
+                  `batch=`/`slow=` against `f_ribbon`.
+
+                  The first of those runs answered `batch=0 slow=1` on every frame
+                  and `f_ribbon` unmoved at 22,374 us -- and the reason was the
+                  ordering this lane's own rung (i)(a) paragraph had already named.
+                  The app's `glOrtho`/`glViewport`/`glLoadIdentity` for the wave run
+                  five lines above the draw, `matrix.c` only sets
+                  `matrix_model_projection_updated` on a matrix change, and it is
+                  `glopBegin` that multiplies the stacks and clears the flag; so a
+                  map lifted BEFORE the `glBegin` is a map lifted against the
+                  PREVIOUS product, and the refusal was correct on every frame of
+                  the batch path's first live use.  The call site now asks inside
+                  the `glBegin` -- which is the same pair the immediate walk uses,
+                  so nothing else about the draw changes, and `glopEnd()` for
+                  `GL_TRIANGLE_STRIP` only clears `in_begin`, so an empty strip
+                  records nothing twice.  The instrument's verdict: this is what
+                  the freshness clause cost, measured rather than argued.
+
+                  The run after that answered `batch=0 slow=1 why=7`, again on
+                  every frame, and `f_ribbon` unmoved at 22,282 us.  `why=7` is
+                  the rect gate, and the reason it fires is geometry, not state:
+                  the ribbon does not fit the rect.  The suite's own ribbon
+                  section measures the shipped mesh against the shipped map at
+                  the shipped window -- canvas 768x500, which is the row's
+                  `clip=768x500`, and projection 776x536, which is its
+                  `dmg=12,20,788,556`: `open_xmb_window()` sets `s_w`/`s_h` from
+                  the DESK minus the margins (800-24, 600-64) and `xb_paint()`
+                  steps the wave with those, while the camera and the surface
+                  are the CLIENT area.  Over 2,000 frames of `xb_wave_step()`,
+                  the period of the sheet's slowest term, the mapped mesh spans
+                  x_px 0..775 and y_px 245..433 against a rect of 0..767 x
+                  0..499.  Exactly 32 points leave on every frame, in exactly
+                  one column, on exactly one edge -- the mesh's x comes from the
+                  column index alone, so the 8 px of overdraw the background
+                  quad puts in on purpose (`xb_draw_bg()` corners at `(0,s_h)`
+                  and `(s_w,0)`, so no canvas edge shows through) reaches the
+                  sheet as a last column that is permanently outside.
+                  The control separates that from the wave: the same sheet
+                  projected at the canvas size spans 0..767 x 229..404, with
+                  nothing outside on any of the 2,000 frames.  So the surface
+                  never leaves the window; the mesh is 1% too wide, always.
+
+                  Which asks the wrong question of this stream.  The rect gate
+                  was rung (ii)'s answer to "the batch path does not clip", and
+                  the clipper's answer is true of the EE -- but the GS is
+                  already bounded to the same rect: `eegs_present_send()`
+                  programs SCISSOR from the very `client` it is handed
+                  (`env.clip_x0..clip_y1`), and XYOFFSET from the same rect's
+                  origin, so the app's (0,0) is the client's top-left and a
+                  primitive that crosses the edge is a primitive the hardware
+                  cuts.  That is what the clipper was doing for ~3,260 cycles a
+                  vertex.  So rung (ii)'s gate is amended rather than removed:
+                  what a whole-mesh batch must be refused for is a vertex the GS
+                  cannot REPRESENT, not one it cannot show, and the field that
+                  decides that is XYZ2's 12.4 range about the page origin
+                  (`GS_XYOFFSET_PAGE`, ps2_gs_pack.h:110) -- and its extent is
+                  -2048 .. +2047, not symmetric by one, because
+                  `gs_vertex_coord16()` ADDS the offset to `px * 16` and puts the
+                  sum through a 16-bit unsigned field, so -2048 packs to 0x0000
+                  and survives while 2048 packs to the same word and does not.
+                  The suite found that, not this sentence: the first draft of the
+                  gate expected -2048 to refuse and it did not.  A point past the
+                  bound folds in the field and lands somewhere else on the canvas;
+                  that is the corruption the gate exists for, and it stays a
+                  refusal, as `why=9` (`TGL_GRID_REFUSE_RANGE`).  A point
+                  between the rect and that bound is taken and counted in the
+                  new `over=` column -- the points this frame's batches drew
+                  outside the rect, which is what the GS is being asked to
+                  clip.  For the ribbon that is 32 a frame, the same 32 the
+                  suite names, and the row that decides this change is `over=32`
+                  beside a sheet whose right edge is unchanged on the user's
+                  monitor.  `why=7` stays in the code as the name that run
+                  printed, and is retired from production: nothing makes it now.
+                  The failure mode if SCISSOR does not mean what its register
+                  says is 8 columns of sheet painted over the window's own
+                  border -- visible, bounded, and printed in the row, which is
+                  the shape rung (ii) asked for; a silent loss would be the
+                  alternative, and the walk cannot offer that and 20 ms.
+
+                  LANDED 2026-10-14, and the row rung (iii) named is this one --
+                  identical on every frame of the XMB pass, on the shipping dials
+                  (`PS2_GL=eegs PS2_FP=hw PS2_MSX=0 PS2_FP_COUNT=0 BENCH_APP=1`,
+                  `scripts/ps2_bench.sh`):
+
+                    [GSTS] groups=47 qw=15869 verts=3937 prims=2633 gs=3773 us |
+                    [GSTS]   pchg=24 batch=1 slow=0 why=0 over=32 | drop=0 unsplit=0
+                    [GSTS]   texsw=22 texmiss=0 | cover=4 coverdrop=0 |
+                    [GSTS]   clip=768x500 b0=0,0,767,499 plate=covered
+
+                  `batch=1 slow=0` on every frame: the mesh is taken, and the walk
+                  is not run.  `why=0` beside `slow=0`: no refusal had to be named,
+                  which is also the live proof that the retired `why=7` is not
+                  merely uncalled but unreachable on this window -- the gate that
+                  starved three runs is gone from the path, not from the enum.
+                  `over=32` is the suite's 32 produced by the shipped image: the
+                  GS is being asked to cut the sheet's last column, and the row
+                  says so every frame.  Whether the sheet's right edge is still
+                  there while it is asked is the user's observation, and the
+                  monitor is the only instrument for it.
+
+                  What moved, against the parked baseline the lane was priced
+                  from (the 12e-park row of the same dial, same script, frame 1):
+
+                    f_ribbon        21,842 / 21,919 us  ->  3,522 / 3,517   6.2x
+                    draw= frame 1   45,094 us          ->  26,839 us       1.68x
+                    cycle period=   102,185 us         ->   86,512 us       1.18x
+                    qw=             29,985             ->  15,869         (-47%)
+                    verts=           7,467             ->   3,937         (-47%)
+                    groups=             51             ->      47
+                    verts=/prims=     3.00             ->    1.49
+                    pchg=               24             ->      24
+
+                  The last two rows are LANE 12e's question answered by a lane that
+                  did not need its columns: a strip that is one draw buys 0.49
+                  primitives a vertex instead of a third of one, and `pchg=` -- the
+                  group-boundary rate 12e paid 470 to get -- is unmoved, because
+                  the ribbon was never the reason a group closes.  `drop=` is 0,
+                  so nothing was refused by the budget, and `gs=` is inside the
+                  3,864 us the parked frame measured, which is the standing answer
+                  to "did a third of the stream just stop being sent while the
+                  present paid for it": no.
+
+                  3,517 us over the 1,984 vertices the mesh submits is 523 cycles a
+                  vertex at the dialled 295 cycles/us, against the walk's measured
+                  3,260 -- so the batch is 6.2x cheaper and this lane's own
+                  150-250-cycle estimate was 2-3.5x optimistic.  The estimate was
+                  made by counting the map's ten float ops and three truncates;
+                  what it did not count is that the batch entry also packs four
+                  registers into two quadwords per vertex and keeps the recorder's
+                  group bookkeeping, and those three terms are now one number with
+                  no instrument separating them.  PROVEN: 523 is the price.
+                  INFERRED: that the residue is the pack rather than the map.  The
+                  rung that would settle it is the one 12d ran for the walk -- a
+                  counted cell inside `eegs_grid_strip()` -- and it is worth having
+                  before this entry is reused for a second mesh, which is 12h.
+
+                  The frame's census, which is the thing the reprioritization is
+                  about (frame 2; the six stage rows sum to 24,288 against the
+                  frame's own 24,319, so the partition is complete):
+
+                    f_menu     11,441 us   47%     f_surface   5,756 us  24%
+                    f_ribbon    3,517 us   14%     f_clear     3,408 us  14%
+                    f_bg          131 us    1%     f_particles    35 us   0%
+
+                  The sheet's own stage is now 14% of the frame and the menu's is
+                  47% of it, and the same frame read from outside the app -- the
+                  cycle row, which is the clock the user's eye is actually on --
+                  partitions like this:
+
+                    period  83,944 = pass 67,934 + hold 16,001
+                    pass    67,934 = render 63,267 + upload 4,653
+                    render  63,267 = comp total 54,256 + 9,011 unnamed
+                    comp total 54,256 = paint 24,343 + blit 12,671 + frame 7,869
+                                        + bg 7,499 + panel 1,568 + bars 296
+
+                  So the app frame is 29% of the period and `f_ribbon` is 4.2% of
+                  it: making the wave's own stage 6.2x cheaper moves the rate the
+                  user watches by 21%, and this is why the rungs before this one
+                  could land with nothing on the monitor to show for them.  The
+                  bar's arithmetic has moved too, and the book's own 9d sentence
+                  ("90,534 minus 36,154 minus 37,619 leaves 16,761 us", i.e. 9d and
+                  12 together are the 5x) must be re-read on today's partition
+                  rather than quoted: taking out the whole app frame (24,343) AND
+                  everything 9d can refuse (bg 7,499 + blit 12,671 + upload 4,653 =
+                  24,823) leaves 18,768 us of pass -- `frame=` 7,869, `panel=` +
+                  `bars=` 1,864 and the 9,011 the composite spends outside its own
+                  named columns -- which is 4.5x on the period, not 6.4x.  The
+                  remaining 2x of the bar is therefore NOT in LANE 12 and NOT in
+                  what 9d currently bounds: it is in `frame=` and in the unnamed
+                  residue, and neither has an instrument yet.
+
+  LANE 12g  the surface stage's 1,705 doubles, 3,225 us.  Priced in 12c and
+            never collected: f_surface's census row carries 930 double
+            multiplies and 775 other double calls, at the bit engine's 558
+            cycles, in a stage of 8,447 us -- 38% of a stage the user sees as
+            the same waving sheet.  They are include/gl/math.h's double series,
+            reached because the lattice hash's argument is far outside 4*pi and
+            the reduction that follows is double.  Cheapest rung: keep the
+            reduction single-precision for the arguments this path actually
+            passes, which is a math.h question with the differential sweep in
+            verify/tests/test_gl_math.c as its gate, and it is worth ~2.3x on
+            f_surface and 7% on the frame.  Smaller than 12f and independent of
+            it; take it after, not instead.
+
+            Re-read 2026-10-14 on the landed 12f image and without the float
+            census (`PS2_FP_COUNT=0`, the same run as 12f's verdict): the stage
+            is 5,756 us on the steady frame and 8,263 on frame 1, which pays the
+            lattice build -- the run's own hash rows read "160 of 8192 computed"
+            on frame 1 and "160 of 16384" on frame 2, so 5,756 is the number the
+            lane is worth.  The stage shrank by 32% since this cell was priced
+            without the doubles' count being re-measured, so the 3,225 us they
+            carry is now a LARGER share of the stage than the 38% above: if it is
+            still 3,225 us, removing it is 5.76 -> 2.53 ms, 13% of today's frame
+            rather than 7% of the frame this cell was written against.  PROVEN:
+            the stage's cost.  UNMEASURED: the doubles' share inside it, which
+            needs one `PS2_FP_COUNT=1` run, and that run is this lane's first
+            rung rather than an assumption in it.  It is still the smaller of the
+            two remaining stage levers: LANE 12h is 11.4 ms of the same frame,
+            and its deciding row costs one bench run too.
+
+            CLOSED as REFUTED for the steady frame, 2026-10-15, by that rung:
+            one `PS2_FP_COUNT=1` bench run on the landed-12f image.  The
+            census's `f_surface` row reads dmul=930 dgen=775 D=1,705 on FRAME
+            1 -- 8,462 us, the lattice-build frame -- and dmul=0 dgen=0 D=0 on
+            the steady frame at 5,815 us.  The instrument proves itself alive
+            on the same run: `f_clear` carries D=23 in both frames, and frame
+            1's 2,647 us excess over steady matches the bit-engine price of
+            1,705 calls, so the zero is a measurement, not an absent flag.
+            PROVEN: the steady frame's surface stage spends no double call at
+            all.  The ~2.3x this cell priced is already paid -- by the
+            large-argument rung and the far-path reduction on COP1 that landed
+            after this cell was written -- and no math.h rung is left here.
+            What survives is a one-time boot cost of ~3.2 ms on frame 1, which
+            belongs to no per-frame budget the wave is judged by.  LANE 12g is
+            closed; the remaining stage lever this cell named is LANE 12h's.
+
+  LANE 12h  the menu's 1,436 textured vertices, 11,441 us -- the same walk, the
+            same price, the next mesh.  LANE 12f's cell was "stop paying for
+            generality where the data is retained", and the frame's census now
+            names where the same sentence still applies: `f_menu` is 47% of the
+            XMB frame at 2,355 cycles a vertex (11,441 us x 295 over 1,436),
+            against the 523 the batch entry costs for the sheet.  It is
+            `xb_draw_title()` + `xb_draw_band()` + `xb_draw_items()` +
+            `xb_draw_footer()` + `xb_draw_message()`: 646 triangles, 1,436
+            vertices, 46,440 px, `0 us fill` and `11,460 us geom` in the raster
+            row -- every cycle of it is the immediate-mode walk, and the GS
+            rasterises the pixels for nothing, which is the exact shape 12f was
+            opened for.  The bar is the same 6.2x, because the vertex count is
+            the same order and the walk is the same code: 11.4 ms -> ~1.8 ms,
+            47% -> 8% of the frame, and the frame to ~14.7 ms.
+
+            Two rungs, and the first measurement decides between them.
+            (i) A textured batch entry: the map refuses on
+                `texture_2d_enabled` because a textured vertex carries `s`/`t`
+                this map does not compute, so the rung is a second map that does
+                -- glyph quads are the app's own atlas rects (font sheet plus
+                icon atlas), the same four corners per cell, and the recorder
+                already knows how to emit a `TEX0`/`TEX1`/`CLAMP` switch group;
+                the live frame carries 22 of them (`texsw=`), and the app's own
+                `glBindTexture` sites in the five menu draws are where they come
+                from.  Its gate is 12f's differential sweep with `s`/`t` added
+                and the refusal codes extended, and its risk is the one this
+                lane has already been paid twice for: a textured batch must
+                reproduce the texel coordinates the walk's `zp.s`/`zp.t` division
+                by the upload's fixed-point scale produces, or the glyphs sample
+                the wrong texels, which is visible and not a log row.
+            (ii) A replay: the menu's geometry is invariant between frames while
+                nothing is hovered and no tween runs -- the labels, the row
+                positions and the icon cells are functions of state, not of
+                `dt` -- so the stream it produced last frame is a byte string
+                this frame could re-send instead of re-deriving, and the send is
+                the `qw=` the recorder already holds (15,869 qw a frame total,
+                of which the menu's are 1,436 vertices' worth).  Its bound is
+                the transfer, not the arithmetic: the GIF upload of a full frame
+                costs 4,653 us, so a replay of the menu's span costs a memcpy of
+                its quadwords plus its share of that.  Its risk is that the
+                recorder's group table is per-frame by law (LANE 10's buffer
+                lifetime, restated at 12f's head), so a replay is a second
+                lifetime question, not a free copy.
+            The deciding measurement is one row and it is cheap: how many of the
+            menu's recorded quadwords are byte-identical between two consecutive
+            frames of the live wave.  If the answer is "all of them", (ii) is the
+            cheaper lane by a factor of the vertex price and (i) is not worth a
+            textured map at all.  If it is "not all", (i) is the rung, because
+            523 cycles a vertex is already measured.  Take it before 12g, which
+            is 5.8 ms of the frame against this lane's 11.4 ms and is
+            independent of it either way.
+
+            The instrument, as built (dial `PS2_IDENT=1`, 2026-10-15).  It rides
+            the staging sink, which is the one place a frame's groups exist as
+            bytes: every quadword a group copies is folded into that group's
+            64-bit hash -- two 32-bit FNV lanes, one multiply per lane per word,
+            inside the copy loop that already touches the word -- and the table
+            of hashes is carried across the frame boundary, because LANE 10's
+            buffer-lifetime law says the words themselves may not be.  At the
+            next presented frame the two tables are compared BY INDEX and the
+            answer prints as `[GSTID]`: `sameg=`/`sameqw=` the groups and
+            quadwords identical to the previous frame's same-index group,
+            `diffg=`/`diffqw=` the ones that moved, `tailg=`/`tailqw=` the groups
+            only one of the two frames has, `at=` the indices that differ (up to
+            eight, then `+n`), and `frames=` which presentation this is -- `n=1`
+            has no predecessor and is not evidence.  The comparison is positional
+            on purpose: a replay can only re-send a span that sits at the same
+            index, so an insertion that shifts every later group is exactly the
+            cost rung (ii) would have to pay, and it shows up as a frame whose
+            whole tail reads different.  Its error is one-directional and that is
+            why it is usable as a decision: identical bytes always hash identical,
+            so a `sameqw=` claim can only be wrong by a 2^-64 collision, while a
+            `diffqw=` claim is exact.  The group count is attributed to a stage by
+            the `g=` column the same dial adds to the `[XMBT]` phase rows -- the
+            groups staged at each boundary, so the menu's range is the span between
+            its two markers and the row's `at=` indices name which stage moved
+            without this file holding a second model of the stream.  Cost: it is
+            bench-gated (the shipped image compiles none of it) and on the live
+            frame it is one multiply pair per quadword, so an ident run's
+            microseconds are slightly inflated and only its invariance columns
+            are read -- the same rule `PS2_FP_COUNT` states for its counters.
+            The host gate is section 7 of `verify/tests/test_eegs_present.c`, 136
+            checks, and its controls are the deletions that break a check.  Measured one
+            edit at a time on 2026-10-15: not folding the group's words fails 19 checks,
+            letting the compare run past the aligned prefix fails 6, not counting the tail
+            fails 3 (an inserted group is exactly the cost a replay pays and must not look
+            free), letting a frame that staged nothing consume its predecessor fails 2.
+            The register lanes: reading the mapping from quadword 0 rather than 1, the
+            natural error now that the tag is known to share its quadword with the REGS
+            list, fails 7; dropping the report-side vertex-group gate fails the 4
+            AD-exclusion checks; folding PRIM into a lane fails the 1 check that IS the
+            residual reading; folding absolute coordinates into `shape=`, or folding the
+            first vertex along with the rest, fails the same 2 translation checks;
+            counting AD groups into `v=` fails 1; zeroing the stored length field fails
+            the 4 checks that print `same=`/`diff=`/`tail=` in quadwords.
+            Two terms of the instrument are, on this evidence, defensive rather than
+            load-bearing: deleting the `qwc` fold, deleting the explicit `qwc` comparison
+            in `same`, or deleting both fails nothing -- a group with one more vertex
+            folds one more quadword and moves its tag's NLOOP field with it, so the length
+            is not a detection term but the field the quadword columns are summed from.
+            The sink's own kind gate is redundant the same way, the report-side gate doing
+            the exclusion.  An earlier draft of this paragraph claimed a length-only
+            control that would call two frames identical; no such pair can be built out of
+            real groups, the control measured 0 failures twice over, and the claim is
+            deleted rather than kept.
+
+            The row carries one more set of columns than the question strictly
+            needs, because a `diffqw=` that says "not replayable" without saying
+            WHAT moved would send rung (i) out to design a map for the wrong field.
+            Each group also folds per-register lanes: the vertex group's REGS list
+            is PRIM, RGBAQ, ST, XYZ2 in that order, its tag occupying ONE quadword
+            with the REGS list in its half above, so the body starts at quadword 1
+            and a field is `(quadword - 1) mod 4`.  The row prints, over the aligned
+            prefix, `xyz=`/`rgb=`/`st=` -- how many groups' drawing kick, colour and
+            texel coordinates were each invariant on their own -- plus `shape=`,
+            which folds not the coordinates but the DIFFERENCE between consecutive
+            vertices of the group (dx, dy, dz of each XYZ2 over the one before, the
+            first vertex folding nothing), so a group is `shape=`-invariant exactly
+            when it is a rigid translation of last frame's same-index group.  `v=`
+            on the same row is the frame's vertex-group count, and it is what makes
+            the four lane columns arithmetic rather than inference: `g=` - `v=` is
+            the AD groups, and a lane count against `v=` says how many of the
+            frame's meshes kept that field.  PRIM and the tag are folded into the
+            whole-group hash and into no lane, which leaves a residual that means
+            something on its own: a group invariant in all lanes yet counted by
+            `diff=` moved its primitive descriptor or its loop count, not its
+            picture.  Texture-switch groups carry register writes rather than a
+            vertex body and are counted in none of the four, because "the switch
+            words are unchanged" is not a fact about any mesh.
+            The lanes are per-field views of the same bytes, so they can disagree
+            with the whole-group verdict and that is the information, not a defect:
+            a group counts in `xyz=` while still differing overall because its
+            colour moved.  Cost: one further multiply per quadword per lane on top
+            of the pair the group hash already takes, all of it inside the dial.
+
+            What it measured (the run of 2026-10-15, `build/ps2-bench-lanes.log`, the two comparisons
+            the bench allows -- frames n=2 and n=3 -- against n=1's baseline).  The live XMB frame
+            stages 47 groups, `v=25` of them vertex groups and the other 22 texture switches, and
+            15,869 quadwords.  On the steady frame 25 groups and 775 quadwords were byte-identical to
+            the previous frame's same-index groups and 22 groups -- 15,094 quadwords, 95 per cent of
+            the frame -- differed; the differing indices begin at 1 and end at 46, and the arithmetic
+            below shows they are 22 of the frame's 25 MESHES -- the ribbon's splits and the menu's
+            cells -- read against the `[XMBT]` `g=` markers (f_bg/f_particles leave 0, the ribbon
+            closes 2, the menu's markers reach 46).  The lanes decompose that frame, and the
+            decomposition is arithmetic rather than reading: `same=25` and `diff=22` on their own leave
+            open how many of the 25 identical groups are switches, but `xyz=3` closes it, because an
+            identical group is identical in its lanes too -- so the identical meshes number at most
+            three, and three forces the rest.  ALL 22 texture switches replayed byte-for-byte, 3 of the
+            25 meshes replayed whole, and the other 22 differ in position (`xyz` credits only the three)
+            AND in colour (`rgb` the same three), while `st=25` says not one texel coordinate moved
+            anywhere in the frame.  `shape=12` is those three whole replays plus nine rigid
+            TRANSLATIONS -- the same mesh in a new place -- so 13 of the 25 meshes changed shape.
+            Frame 3 closes the same way at `xyz=2`: 22 switches and two meshes replayed, 23
+            meshes differ, `shape=2` is only the two whole replays so that frame translated
+            NOTHING, and `st=24` names the one mesh that re-bound its texels.  Two comparisons
+            is the bench's sample (it ends the session two frames past the budget), so the
+            translation count is a bounded observation, not a measured rate.
+            The lane's verdict, therefore, in its own terms.  Rung (ii), the replay, is REFUTED as
+            stated: what is invariant is the 22 texture switches and the handful of groups `same=`
+            counts, 5 per cent of the frame's bytes, and a replay of that span would be a memcpy of
+            775 quadwords in a lane whose whole cost is 15,869.  Rung (i) is the lane, and the columns
+            name its shape.  A textured batch map does not have to compute `s`/`t` at all -- the texel
+            coordinates are per-mesh constants the app already carries, which is what `st=` is for
+            every frame -- while it does have to re-emit position AND colour every frame.  And the
+            cheap version of that map, a retained mesh plus a per-group offset, is not carried by the
+            measurement: `shape=` was nonzero on one frame and 2 on the next, so the menu's meshes are
+            re-solved rather than moved, and an offset-only batch would have to re-derive the shape
+            anyway.  Where the work therefore is: the app's own per-vertex position and colour for
+            twenty menu groups and the ribbon's two, at the 523 cycles a vertex this lane already
+            prices -- which is rung (i) as 12f's gate left it, with the texel term now known to be
+            free.  If a future run prints `shape=` at `v=` and `xyz=` below it for frame after frame,
+            that is the fact that would reopen the offset-only idea, and this paragraph is the place
+            it gets corrected.
+
+            Run (i) as it will be built, amended 2026-10-15 before the code, so the code that
+            disagrees with this has a text to correct against.  Three rungs, each one an extension
+            of a thing that already exists, and one gloss on `st=` that the sentence above needs:
+            the texel term is free in the sense that no MAP derives it -- the app hands the batch
+            the same `u`/`v` it hands `glTexCoord2f` today -- not in the sense that the stream
+            carries no ST: every textured vertex the GS draws still gets its texel float, and the
+            batch must produce it through the walk's own two-step chain or the glyphs sample the
+            wrong texels.  That chain is `zp.s = TGL_TRUNC(u*sscale + soff)`
+            (`vertex_stage.c:92`, the mapper's constants from `texture.c:172-175`) and then
+            `gs_float_scale_pow2((float)zp.s, GS_TEX_S_SHIFT)` (`clip.c:670`; S_SHIFT 11, T_SHIFT
+            19, the fraction bits being 10 and 18), and reproducing it bit-for-bit IS the gate.
+
+            (a) A textured map: `tgl_grid_map_tex(tgl_tex_map_t *)` in `grid_map.h` and
+                `vertex_stage.c`, its `tgl_tex_map_t` carrying a whole `tgl_grid_map_t` -- the same
+                position lift, the same refusals STALE/LIGHT/W/SKEW, the same rect, `smooth` and
+                `blended` -- plus the bound image's four mapper constants and its `pixmap` as an
+                opaque plane key.  The one inversion is the TEXTURE condition: the grey map refuses
+                on `texture_2d_enabled` because it cannot say `s`/`t`; the textured map REQUIRES
+                `texture_2d_enabled && current_texture != NULL && images[0].pixmap != NULL` and
+                refuses with a new code, `TGL_GRID_REFUSE_NOTEX 10`, without it.  Requires rather
+                than assumes, because the walk's own arm (`clip.c:754-761`) draws a bound-but-
+                never-uploaded sheet FLAT, with `zp.s`/`zp.t` left stale and unread; a batch that
+                took that state would be claiming a plane the hardware was never given.  A refusal
+                is not a loss there: the caller's fallback is the walk, which draws the same flat
+                primitive.
+            (b) A textured points map: `tgl_grid_map_tex_points(m, xs, ys, us, vs, cols, n, out)`,
+                the colours four interleaved floats a vertex (an icon quad's (br,br,br,a) and its
+                shadow's (0,0,0,a) are the general per-channel case of the walk's colour line, and
+                `grid_channel_byte` is already that case's truncate-and-mask, byte-identical to
+                `gs_vertex`'s `col->r >> 16`), the points `tgl_tex_pt_t {x_px, y_px, rgba, s, t}`
+                -- `eegs_vertex_t`'s own shape, which is the emission the batch replaces.  The S/T
+                loop is the two-step chain above, and both steps are host-compilable in this unit:
+                the scale is integer arithmetic on a float's bits whose sweep is
+                `make test-ps2-gs-pack`, and the int-to-float is `cvt.s.w`, which this CPU answers.
+                The floats are stored into memory, never returned -- and the loops keep 12f's split
+                shape for the same reason: past the caller-saved singles the o32 ABI has, live FPR
+                pairs leave through `sdc1`/`ldc1`, which is the silent-garbage class TEST 66 greps
+                the linked image for.
+            (c) A backend entry: `eegs_tex_quads(m, pts, nquads)` in `backend_eegs.c`, gating
+                exactly as `eegs_grid_strip` gates -- refusal before anything is recorded, the
+                `ok`-carries-`refuse` route, the XYZ2 RANGE gate with `over=` counting what the
+                SCISSOR is asked to cut, the same `batch=`/`slow=`/`why=`/`over=` columns because
+                it is one mesh, one decision, one set of counters either way.  Then
+                `eegs_texture(gs_tex_find(m->pixmap))` ONCE for the entry, not once per triangle
+                (the registry lookup lives here, in the stage that owns the GS's vocabulary, not in
+                `vertex_stage.c` which must not learn about drivers), and then each quad split
+                (v0,v1,v2) and (v0,v2,v3) -- `vertex.c:270-278`'s own GL_QUADS split -- through the
+                existing `eegs_triangle()`, whose `select_prim` word compare is what keeps a run of
+                same-state quads inside one PRIM group exactly as the menu's triangles are kept
+                today.  A plane that never got a VRAM address demotes through `need_plane` and
+                counts `texmiss`, identically to the walk.
+            (d) Call sites: `xb_draw_icon()`'s shadow-and-main pair (8 points) and
+                `xb_draw_text_run()`'s glyph row (4 a glyph, the run's shadow pass separate from
+                its main pass), each asked INSIDE its own `glBegin`, because 12f's rung (iii)
+                measured that the model-projection product is only this window's once `glopBegin`
+                has multiplied the stacks; the immediate-mode walk stays in the file verbatim as
+                the refusal route, as it does for the ribbon.  `xb_draw_bg`'s five gradient
+                triangles and the message box's two flat shapes are untextured or off the measured
+                stage; they stay on the walk.
+            (e) The gate is 12f's differential sweep with `s`/`t` added and the refusal codes
+                extended: a real uploaded sheet (so the mapper's constants are `texture.c`'s own,
+                not invented), TEXTURE_2D enabled, vertices run through
+                `tgl_vertex_transform` + `tgl_vertex_to_viewport` + the same inline scale `gs_vertex`
+                applies, compared bit-for-bit against the batch's `x_px`/`y_px`/`rgba`/`s`/`t`; the
+                refusals swept at texture-off, no-binding, bound-never-uploaded (NOTEX) and a stale
+                product (STALE).  The recorder half -- the quad stream decoding to the same triangle
+                groups the list path emitted -- is `test_eegs_raster`'s question, asked of the new
+                entry.
+            The bar is the cell's: 11,441 us at 2,355 cycles a vertex toward ~1.8 ms at the ~523
+            the batch entry already prices, 47% of the frame toward 8%.  The risk is unchanged and
+            the book has named it twice now: a wrong texel coordinate is VISIBLE and not a log row,
+            so the visual half of the verdict is the user's and stays SKIP until it is given.
+
+            What run (i) measured (the eegs bench run of 2026-10-15, `build/ps2-bench.log`, dials
+            `PS2_GL=eegs PS2_FP=hw`, ident off, the steady frame read against the same-dial
+            baseline in `build/ps2-bench.prev.log`).  The entry took the whole menu.  `batch=`
+            reads 64 -- the ribbon's strip and sixty-three textured quad entries, each icon's
+            shadow-and-main ask and each text run's two passes its own entry -- with `slow=0` and
+            `why=0`: no refusal anywhere in the session, and `texmiss=0`: no batched vertex
+            demoted to flat.  The census prints no `raster f_menu` row at all, where the baseline
+            printed 646 tris and 1,436 verts: with the entry open the menu's walk ran ZERO
+            triangles, every corner of every glyph and icon left through the batch.  The stream
+            paid for it in the open: `groups=` 47 -> 51 (two vertex groups and two switch groups,
+            the planes the entries bind at their head), `verts=` 3,937 -> 4,153, `qw=` 15,869 ->
+            16,743 -- the +874 is 216 vertices x 4 body words plus the two tags plus the two
+            switch groups' four words each, so the quadword column closes on the vertex column
+            exactly.  `over=` rose 32 -> 184 because the batched menu hands its off-rect corners
+            to the SCISSOR rather than to the clipper; the refusal column stayed empty, which is
+            the difference between those two numbers.
+
+            The stage then cost 6,633 us against the baseline's 11,441 -- 1.73x -- and the cell's
+            bar of ~1.8 ms at 6.2x is retired here, by arithmetic this file can now check.  The
+            bar multiplied the walk's 1,436 vertices by the batch's measured 523 cycles and
+            priced nothing else; a GL_QUADS leaves through `vertex.c:270-278`'s own split as SIX
+            stream vertices per quad -- the split is what the host gate asserts, two quads, twelve
+            vertices, four triangles -- and a batched menu therefore pays emission at the entry's
+            fine price for MORE vertices than the walk's corners counted, not fewer.  6.6 ms is
+            what the stage costs with zero walk triangles in it: the entry plus the app's own
+            per-quad loop (`xb_font_uv`, the fill's float writes), a split this run does not
+            partition -- the column that would name it is one more clock pair inside the call
+            sites, and that is this cell's next rung.  The watched loop, in the frame's own
+            columns: steady `paint=` 24,343 -> 19,487 us (1.25x), `pass=` 67,934 -> 58,643,
+            `period=` 83,944 -> 74,653 (1.12x); the folded cadence bounds read `frame 10` at
+            769 ms baseline against 717 ms now.  And the composite's LANE 12i residue -- the
+            9,011 us that used to be unnamed -- halved to 4,578 with the menu, its `ovl=` column
+            now naming 4,493 of it directly with `rst=` at 85: 12i named the residue as an open
+            menu's, and 12h cutting it by half is the same fact read by a different column on the
+            same frames.
+
+            The gate behind it, as built.  `test_eegs_raster` is 277 checks and
+            `test_eegs_present` 136, both green at this writing.  The differential half runs the
+            batch against the walk's own two `eegs_triangle` calls per quad and compares the
+            decoded stream corner-set-for-corner-set on `x_px`/`y_px`/`rgba` and the two-step
+            texel chain, byte-for-byte; the alternate-diagonal split is the control that fires
+            INSIDE the green run -- a decoder that could not tell the two diagonals apart would be
+            approving the wrong quads -- and the gates half sweeps ARG, UNSET, NOTEX and STALE
+            refusals, the RANGE refusal's recorded-first law (a pre-recorded triangle survives,
+            the refused run commits nothing, `over=` stays 0), the overhang-into-SCISSOR route,
+            and the bound-never-uploaded demotion through `need_plane` with `texmiss` counting
+            what the flat draw owes.  The registry collision is settled per suite, not globally:
+            `ps2_gs_tex.c` and `ps2_gs_rec.c` both own file-static `s_n`/`s_sink`, so no TU can
+            include both, and the suites stand a `gs_tex_find` up locally -- pointer identity
+            against one test plane where the pairing IS the subject, an always-0 registry where it
+            is not, which is the same answer the machine gives before any plane is uploaded.  The
+            visual half stays the user's: the host gate proves the texel WORDS are the ones the
+            walk would have sent, and only eyes prove they land on the right glyph.  A future run
+            that prints `raster f_menu` again, or `slow=` above zero, or `texmiss=` above zero on
+            the live wave, means an entry opened that this paragraph counted as closed, and this
+            is the paragraph corrected.
+
+  LANE 12i  the composite's unnamed 9,011 us -- an open menu, drawn twice.
+            The partition LANE 12f's landing cell wrote down carries exactly one
+            term no instrument owns: `render 63,267 = comp total 54,256 + 9,011
+            unnamed`.  It is 13.3% of the pass and 10.7% of the period, and the
+            re-read bar leaves the remaining 2x in this residue and in `frame=`,
+            so naming it is the rung.  Two runs already on disk say WHERE it
+            lives before any new row is printed, and they say it with one column.
+            The shipped-dial census (build/ps2-bench.prev.log) and the ident run
+            (build/ps2-bench-lanes.log) each print three app frames; read
+            `render - total` against `why=`:
+
+              why=d  why=c  why=1   ->  9,021 us   9,011 us      88 us
+              why=d  why=c  why=1   ->  9,111 us   9,131 us     219 us
+
+            (bit 4 is `global_menu_is_open()`, bit 8 is
+            `tracker_is_menu_open()`.)  The compositor's own columns say the two
+            9 ms frames are the same desktop being composited -- `bg=` 7,509
+            against 7,499, `frame=` 7,877 against 7,869, `blit=` 12,713 against
+            12,671, `panel=` 1,587 against 1,568, `bars=` 310 against 296, each
+            inside 1% of the other; the sixth, `paint=`, is the app's and moves
+            with its animation phase -- and only the frames that carry an overlay
+            bit owe the residue.  PROVEN: the residue is a property of an open
+            menu, not of the app's frame.
+
+            The code says which block, and it needs no new instrument to say it.
+            The render timer's bracket is `ps2_paint_region()`
+            (src/cores/core_ps2.c:1228): t0, `eegs_present_begin()`, the
+            composite, `eegs_present_end()`, t1.  The composite is the ONLY step
+            the compositor times -- `comp total` closes `t_all` inside
+            `redraw_baremetal_desktop*()` (src/desktop/desktop.c:418 and :485) --
+            and on the whole-canvas branch the composite is `workbench_render()`
+            (src/desktop/workbench.c:86), whose last FOUR steps run after that
+            window has closed: `global_menu_render_overlay()`,
+            `tracker_render_menu()`, `workbench_cover_overlays()` and the cursor.
+            So the residue is that block plus the recorder's bracket, and what is
+            missing is the split.  The reap is already exonerated by a column
+            that exists: [GSTS] gif's `max=87 us` is the longest single wait the
+            ring's reap took all session, so a 9 ms residue is not the GIF.
+
+            The same bits move a second column, and that one says the open menu
+            is not only repainted but re-shipped.  `upload=` reads 4,648 and
+            4,653 us on the overlay frames and 922 us on the frame carrying
+            neither bit, because `workbench_cover_overlays()` hands the open
+            menu's rect to the cover list -- the canvas content re-uploaded OVER
+            the stream, which LANE 9d refused under the stream and never refused
+            over it.  An open item list therefore costs roughly 9.0 ms of canvas
+            and 3.7 ms of upload: 12.7 ms of the 67,934 us pass, on the frames
+            the user watches while the launcher's list is up.
+
+            The instrument is one column on the compositor's own idiom, and it
+            prints its own control.  A seventh stat_max, `overlay_us`, timed
+            across `workbench_render()`'s post-composite block and printed as
+            `ovl=` beside the six, with `rst=` = `render - total - ovl` printed
+            next to it: the identity has to close to the 88-219 us the no-overlay
+            frames already leave, because the block is timed where the port
+            cannot see it and the recorder's bracket is what the port cannot
+            account for.  If `rst=` comes back far above that, the residue was
+            never the overlay block and this paragraph is where the reading gets
+            corrected.  The column costs two clock reads and a store on every
+            target that composites an overlay, and it is not behind a dial, the
+            way the rest of the cycle row is not.
+
+            What the named block refuses, and the reading settles the path today:
+            the open menu is rasterised TWICE.  `global_menu_is_open()` is
+            `(g_gmenu.active_menu >= 0) || tracker_is_menu_open()`
+            (src/desktop/global_menu.c:241), and `global_menu_render_overlay()`
+            opens with `if (g_gmenu.active_menu == GMENU_HDR_BTRON ||
+            tracker_is_menu_open()) { tracker_render_menu(dev); return; }`
+            (:406) -- so with the launcher's list up and no header dropdown open,
+            which is the state the wave is in, `workbench_render()`'s own
+            `if (tracker_is_menu_open()) tracker_render_menu(screen);` (:93)
+            draws the SAME plate a second time.  The two `why=` bits are not two
+            facts either: bit 4 is derived from bit 8 in exactly that state,
+            which is why a steady XMB frame reads `why=c` as though a dropdown
+            were open when none is, and why the first run of this instrument
+            "returned `why=4` on every steady frame".  PROVEN as a path -- the two
+            conditions that make the pair of calls are the two bits the row
+            carries, and `ps2_gui_pass()`'s `if (force_full || set.overflow ||
+            ov) ps2_bandset_full(&set)` (src/cores/core_ps2.c:6368) is what makes
+            them a whole-canvas pass.  Every write on that path is an opaque
+            store -- `app_menu_draw_3d_bevel_box()` fills and lines, and
+            `render_tc_string()` stores glyph pixels straight into the canvas --
+            so the second pass cannot change a pixel, which is rung (ii)'s gate:
+            a host differential holding the composited canvas byte-for-byte, and
+            in the image `ovl=` halving with `rst=` unchanged.
+
+            Two rungs this cell exposes and does not take.  (a) `why=`'s bits 4
+            and 8 are not costs but RULES: an open menu makes the pass present
+            the whole canvas, so the overlay block rides on a composite a
+            hover-only change does not need -- that is 9d's continuation, not
+            this cell's.  (b) The cover list's 3.7 ms is the menu's rect
+            re-uploaded every frame, and 12h measured the analogous question on
+            the stream side and REFUTED the cheap answer there; the cover side is
+            unpriced.
+
+            MEASURED, on the shipped dials, one bench run, three partition rows.
+            The seventh column printed and the identity closed: `why=d` gives
+            render 202,519 total 193,571 ovl=9,060 rst=-112; `why=c` gives
+            199,642 / 190,647 / ovl=8,968 / rst=27; `why=1` -- the no-overlay
+            frame -- gives 190,145 / 190,095 / ovl=24 / rst=26.  PROVEN: the
+            residue IS the overlay block.  It appears whole in `ovl=` on both
+            open-menu rows, within 1% of the 9,011 us the pairing inferred, and
+            vanishes (24 us, the bracket's own cost) on the row with no menu;
+            `rst=` then reads -112..27 us, inside the 88-219 us band the old
+            residue left, the negative sign being the cross-pass artifact the
+            print's comment names -- `render=` is summed per band while `total=`
+            and `ovl=` are per-call maxima, so the identity is exact only at
+            nb=1 and its slack is that band.  Rung (ii)'s share was that
+            remainder, and its gate has now been run: the landed rows read
+            `why=d` ovl=4,550 rst=11 and `why=c` ovl=4,491 rst=65 -- exactly
+            half the 8,968-9,060 above, `rst=` inside the band, `why=1`'s
+            ovl=24 unchanged.  The verdict and the three parts of the gate are
+            the next paragraph; the visual half stays the user's.
+
+            RUNG (ii), the shape being landed.  The two calls collapse to a
+            dispatch, at BOTH sites in src/desktop/workbench.c (the whole-canvas
+            `workbench_render()` and the Pi 400's `workbench_render_overlay_only()`):
+
+              if (global_menu_is_open()) global_menu_render_overlay(screen);
+              else                       tracker_render_menu(screen);
+
+            The else arm is not dead code and it is not a second drawing rule: it
+            is a measured no-op.  `global_menu_is_open()` is the disjunction
+            `active_menu >= 0 || tracker_is_menu_open()`
+            (src/desktop/global_menu.c), so there is NO state with the tracker
+            open and the getter FALSE -- the only state that reaches the else arm
+            is nothing open at all, and there `tracker_render_menu()` returns at
+            its own state guard (src/desktop/tracker.c: `state !=
+            TRACKER_STATE_OPEN`) before touching the device.  The harness proves
+            exactly that: in the nothing-open state the retired block makes zero
+            calls, the dispatch makes one, and the two canvases are still
+            byte-for-byte identical.  It stands as the unit restatement of the
+            delegation: the overlay renderer owns the plate whenever the global
+            getter answers, and only the renderer's own guard answers otherwise.  What makes the merge
+            lossless is the decision table, and it is byte-exact by state:
+            tracker open (whatever `active_menu` is) drew the plate twice before
+            and draws it once now -- the second call was a pure repeat; BTRON
+            header with the tracker closed draws it once, unchanged; any other
+            dropdown is a single `global_menu_render_overlay()`, unchanged;
+            nothing open is zero writes in both shapes, though they spend it
+            differently -- the retired block asks two state questions and calls
+            nothing, the dispatch makes one guarded call the renderer itself
+            refuses (1 against 0 under the rename), and the byte-for-byte canvas
+            is what turns that extra call from a risk into a measurement.  The
+            gate has three parts and each can fail independently.  (1) A host differential
+            in verify/tests/test_desktop_clip.c -- which is why that suite now
+            links `workbench.c` and `global_menu.c` and why its local
+            `global_menu_render_bar()` stub is gone: the two block shapes run
+            against the same menu states and the canvases must compare
+            byte-for-byte.  (2) The census of the plate rect: take the canvas
+            after the block, then call `tracker_render_menu()` once more and
+            count the pixels that change -- zero proves every write on the path
+            is opaque, which is the book's claim this rung converts to a
+            measurement.  The call COUNT is taken by compiling the harness,
+            `global_menu.c` and `workbench.c` with
+            `-Dtracker_render_menu=counted_tracker_render_menu` while `tracker.c`
+            and the wrapper's own TU
+            (verify/tests/test_desktop_clip_count_port.c) compile WITHOUT it:
+            every call site then routes through the counting wrapper, the
+            definition keeps its real name, and the wrapper calls it.  The
+            shipped TU is untouched and the two block shapes, written out in the
+            harness under the rename, must count two in the tracker-open state
+            before and exactly one after.  A normal build routes nothing through
+            the wrapper, and there those rows say SKIP -- 0==0 is not a gate.  The census says the stronger thing on
+            the merged form only: one call after the block changes zero pixels,
+            so the refused call could never have changed one.  (3) In the image,
+            `ovl=` must land near half its 8,968-9,060 values with `rst=` inside
+            the same band, and the `why=c`/`why=d` rows must print identically --
+            one plate, not two.  What the host cannot decide is the look: whether
+            the launcher's list still paints its hover highlight is the user's
+            observation, and until it is given this rung is SKIP for the visual
+            half, not PASS.
+
+            LANDED, 2026-10-15, on that dispatch, all three parts run.  (1) The
+            differential holds: all four menu states print byte-identical
+            canvases between the two shapes, in the rename build AND in the
+            plain one -- nothing-open, tracker-open, BTRON+tracker, dropdown.
+            (2) The census says a further tracker call changes zero pixels in
+            the two states that have a plate, and the counts decide only under
+            the rename: 2 -> 1 with the tracker open, 0 -> 1 (the no-op arm,
+            pixel-identical by part (1)) with nothing open, 0 -> 0 for the bare
+            dropdown; the plain build prints SKIP on those rows instead of
+            letting 0==0 pass.  The suite builds its renamed TUs in a private
+            `.clip.o' object namespace -- the plain `.test.o' objects are shared
+            with every other suite, and a renamed `global_menu.test.o' leaks
+            `counted_tracker_render_menu' into links that have no wrapper.
+            (3) The image: `why=d` ovl=4,550 rst=11, `why=c` ovl=4,491 rst=65,
+            `why=1` ovl=24 rst=65 on one bench run at the shipped dials -- half
+            the block refused, the identity closing to the microsecond at nb=1.
+            `make test` exits 0, `make test-ps2` 95/95, `make arm64-elf` builds,
+            uefi and pc98 link.  OPEN remains the look: hover highlight intact
+            is the user's observation, and until it is given the visual half of
+            this rung is SKIP, not PASS.
 
   LANE 13  IOP / SIF as the I/O actor.
     Close   plane 1 and plane 2 living entirely on the EE: the SPU2 has no
@@ -4180,8 +5662,9 @@ PART SEVEN -- BUILDING, VERIFYING, RUNNING
   into the next image.  Three symptoms of that disease are documented in this
   port, one per dial, and the fix is the same shape every time.  The PS2_MSX
   row below carries that shape PREVENTIVELY -- a dial that moves a source list
-  rather than a recompile, so no incident was needed to want it -- and is the
-  fourth stamped dial:
+  rather than a recompile, so no incident was needed to want it -- and PS2_FP
+  and PS2_MSX together with the two measured before them make five stamped
+  dials, of which the last is PS2_FP_COUNT:
 
     PS2_GL      .build/ps2-gl.stamp, compared by content; the three objects
                 that read the backend are deleted when it disagrees (chapter
@@ -4212,7 +5695,16 @@ PART SEVEN -- BUILDING, VERIFYING, RUNNING
                 anyway -- the comparison is a parse-time shell, not a recipe.
                 So `make -n` is not a read-only probe of this tree, and a bare
                 one is followed by the same restoration round as a bare
-                `make`.
+                `make`.  The row now has a teeth-mark the book did not have
+                before: the image gate's `GLDEF_RET <= 3` assertion passes on a
+                tinygl image, because 0 is a legal answer, so the gate could
+                grade the wrong pipeline while the book quoted eegs rows.  It
+                therefore reads the constant back against the dial the
+                invocation named -- `make test-ps2 PS2_GL=eegs` wants
+                `gl_backend_default()` to return 3 -- and the Makefile hands the
+                script PS2_GL, PS2_FP, PS2_FP_COUNT and PS2_MSX so the
+                comparison has an input.  A gate run bare still grades the
+                default; what it can no longer do is grade it silently.
     PS2_FP      .build/ps2-fp.stamp, and PS2_FP_OBJS =
                 src/drivers/ps2/ps2_builtins.ps2.o
                 src/gl/tinygl/vertex_stage.ps2.o src/apps/xmb_wave.ps2.o --
@@ -4279,6 +5771,23 @@ PART SEVEN -- BUILDING, VERIFYING, RUNNING
                 image rows print [SKIP] by name, and src/apps/xmb.c's weak
                 open_msx_window*() stubs make the Games band a menu row that
                 does nothing rather than a link error.
+    PS2_FP_COUNT .build/ps2-fpc.stamp, and PS2_FPC_OBJS =
+                src/drivers/ps2/ps2_builtins.ps2.o src/apps/xmb.ps2.o
+                src/cores/core_ps2.ps2.o src/cores/core_ps2.pbench.o -- the
+                units that NAME the flag in a `#if`, which is not the set that
+                pays for it: the counters are incremented inside the runtime
+                every other unit calls, so a link where the three disagree is
+                an image that pays a load, an add and a store on the hot side
+                of every float call while printing no row that says so.  Fired
+                on 2026-10-14 in the exact shape the stamp now forbids: a
+                `PS2_FP_COUNT=1` census round left `src/apps/xmb.ps2.o` newer
+                than its source, and the image about to be timed as production
+                still held `btron_fp_calls` (`nm`) -- caught only by the symbol
+                table, because nothing about the file dates said it.  The dial
+                is now also asserted from the artifact: scripts/test_ps2.sh
+                greps the census row's own format string out of the linked
+                image and requires it to be present exactly when the
+                invocation named `PS2_FP_COUNT=1`.
     BENCH_APP   a target-specific flag on src/cores/core_ps2.pbench.o alone.
                 It does not reach the ELF unless the object is rebuilt: the
                 bench phase list lives in core_ps2.c, so `touch
@@ -4758,6 +6267,37 @@ APPENDIX A -- LABEL SCHEME, DECODED
                         `blit=12665` on the shipped walk's 613,440 px.  Not a
                         poster: no plane claimed, no VRAM asked for, and every
                         other port keeps the row it has always run.
+    row 9d              the CANVAS half of lane 9, OPENED 2026-10-14 by a
+                        census and not by an argument.  Under PS2_GL=eegs the
+                        composite rebuilds 480,000 px every pass and the GIF
+                        re-sends them, and 0 of the canvas's 600 rows differ
+                        one XMB frame later -- three consecutive passes, one
+                        fingerprint, with the wave's own rows stepping inside
+                        the window they cover.  The period is paying for a
+                        desktop that did not move: 27,989 us of bg+frame+blit,
+                        4,757 us of transfer, and the 3,408 us f_clear spends on
+                        a surface 11.5 already refuses to copy -- 36,154 us, 40%
+                        of a 90,534 us pass, with geometry's 37,619 us the next
+                        42% of it.  The census is a MEASUREMENT and not a
+                        candidate decision: hashing the rows costs 14.8 ms, near
+                        double the `bg=` column it audits.  So 9d decides from a
+                        rect and not from pixels -- the layer window's own client
+                        rect, which src/window/wnd.c already computes as
+                        `s_gl_client` for its own walk, so there is ONE encoding
+                        of it and not a second -- and what it refuses is the band
+                        MINUS that rect, as strips, so the plate blit, the window
+                        walk and the upload are each handed a smaller rect.  Its
+                        gate is 11.5's premise and not a new one: the refused
+                        rect must be the rect this pass's stream scissors.  Two
+                        facts bound the saving and both are rows, not guesses --
+                        cover=4 of canvas content that must stay VISIBLE over the
+                        stream and is re-uploaded after it, and the hole's own
+                        movement, which bounds a refusal by the INTERSECTION with
+                        the last pass's hole, a pass with no hole being a full
+                        pass.  Neither is priced yet, so 36,154 us stands as a
+                        GROSS bound on a 90,534 us pass, and the row that turns
+                        it into a net is the cover map.  OPENED, not landed: the
+                        partition is the bound, the code is not written.
     lanes 9, 11-13      the four open agents: GS compositor, real Tier-1
                         tick, VU1 geometry actor, IOP/SIF I/O actor.  Lane 10,
                         the GIF writer ring, LANDED 2026-10-14 (11.6), so LAW
@@ -4768,13 +6308,22 @@ APPENDIX A -- LABEL SCHEME, DECODED
                         event, 2 convergence timer, 4 global menu, 8 tracker,
                         16 window manager, 32 IME, 64 band-set overflow,
                         128 damage already spanned it
-    [GSTS] columns      groups / qw / verts / prims / gs | drop unsplit texsw
-                        texmiss | cover coverdrop | clip b0 plate -- gs= is
+    [GSTS] columns      groups / qw / verts / prims / gs | pchg batch slow why
+                        over | drop unsplit texsw texmiss | cover coverdrop | clip b0
+                        plate -- gs= is
                         the EE's SEND-AND-WAIT bracket, never GS pipeline
                         time, and its drop= counts EVERY piece of a frame that
                         did not cross: the staging buffer's own overflow and a
                         ring refusal arrive in the same column, because both
-                        mean a screen is missing something
+                        mean a screen is missing something.  `batch=`/`slow=`
+                        are 12f rung (ii)'s two exits -- one strip per mesh the
+                        vertex word can represent, versus the immediate-mode
+                        walk taken for any mesh with a point outside the GS's
+                        -2048..+2047 px -- and the pair is read as a ratio,
+                        never alone.  `why=` names the last refusal of the
+                        frame (the code list is chapter 16's row decode), and
+                        `over=` counts the batched points the GS's SCISSOR is
+                        being asked to clip.
     [GSTS] gif: columns posted started queued inflight cap | drop hold |
                         reap blocked max | sync blocked max -- the TWO drop=
                         columns are different numbers about different buffers:

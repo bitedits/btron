@@ -5,6 +5,7 @@
 
 #include <btron/workbench.h>
 #include <btron/wnd.h>
+#include <btron/dp.h>
 #include <btron/global_menu.h>
 #include <btron/tracker.h>
 #include <btron/desktop.h>
@@ -87,10 +88,30 @@ void workbench_render(GDEV *screen, H w, H h) {
     if (!screen) return;
     redraw_baremetal_desktop(screen, w, h);
 
+    /* LANE 12i's `ovl=` column.  Everything below runs after
+     * redraw_baremetal_desktop() has closed the composite's own window, so the
+     * present's render bracket bills these microseconds and none of the six
+     * comp= stages does -- which is the composite's unnamed residue, and it is
+     * timed here because the port cannot see inside this call graph. */
+    const uint32_t t_ovl = btron_render_perf_us();
+
+    /* LANE 12i rung (ii): the overlay renderer OWNS the tracker plate.  With the
+     * launcher's list up, `global_menu_render_overlay()` takes its first branch
+     * and calls `tracker_render_menu()` itself (src/desktop/global_menu.c:406),
+     * so the call that used to stand below this one drew the same plate a second
+     * time -- ~4.5 ms of the measured 9.0 ms `ovl=` block, per composite.  The
+     * dispatch is byte-exact by state.  The state the retired block drew twice
+     * (tracker open) can never reach the else arm, because `global_menu_is_open()`
+     * is `(active_menu >= 0) || tracker_is_menu_open()`; what the else arm does
+     * see is the nothing-open frame, and there the call returns at
+     * `tracker_render_menu()`'s own state guard without touching the device -- a
+     * measured no-op, held byte-for-byte by the differential in
+     * verify/tests/test_desktop_clip.c.  The arm restates the rule for that case;
+     * if the delegation above ever stops covering the tracker, this is the line
+     * that must change with it. */
     if (global_menu_is_open()) {
         global_menu_render_overlay(screen);
-    }
-    if (tracker_is_menu_open()) {
+    } else {
         tracker_render_menu(screen);
     }
     workbench_cover_overlays();
@@ -101,6 +122,8 @@ void workbench_render(GDEV *screen, H w, H h) {
         get_baremetal_mouse_pos(&mx, &my);
         draw_baremetal_mouse_cursor(screen, mx, my, w, h);
     }
+
+    btron_render_stat_max(&g_render_stats.overlay_us, btron_render_perf_us() - t_ovl);
 }
 
 void workbench_render_damage(GDEV *screen, const RECT *damage) {
@@ -116,22 +139,29 @@ void workbench_render_damage_paint(GDEV *screen, const RECT *damage) {
 void workbench_render_overlay_only(GDEV *screen) {
     if (!screen) return;
 
+    /* Same column, same reason: this path is the overlay block on its own, with
+     * no composite window around it to close first. */
+    const uint32_t t_ovl = btron_render_perf_us();
+
     /* Same overlay logic as workbench_render() but WITHOUT the full desktop
      * composite: the backbuffer already holds the desktop and the menu's own
      * rect is repainted in full by the overlay renderer, so skipping
-     * redraw_baremetal_desktop() leaves no stale highlight. */
+     * redraw_baremetal_desktop() leaves no stale highlight.  Same rung (ii)
+     * dispatch -- the plate is drawn once here too, or the two paths would
+     * disagree about who owns it. */
     if (global_menu_is_open()) {
         global_menu_render_overlay(screen);
-    }
-    if (tracker_is_menu_open()) {
+    } else {
         tracker_render_menu(screen);
     }
     workbench_cover_overlays();
 
     if (g_cursor_in_backbuffer) {
-        H mx = 0, my = 0;
         H w = screen->width, h = screen->height;
+        H mx = 0, my = 0;
         get_baremetal_mouse_pos(&mx, &my);
         draw_baremetal_mouse_cursor(screen, mx, my, w, h);
     }
+
+    btron_render_stat_max(&g_render_stats.overlay_us, btron_render_perf_us() - t_ovl);
 }

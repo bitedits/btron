@@ -1002,10 +1002,22 @@ static void ps2_cycle_stamp(uint32_t r_us, uint32_t s_us, uint32_t u_us, uint32_
 
 static void ps2_cycle_print(int asked_ms)
 {
+    /* `ovl=` and `rst=` are LANE 12i's pair, and they are on this row because the row is the
+     * frame partition: `rst=` is `render - total - ovl`, the arithmetic that says whether the
+     * residue is fully named.  `render=` is summed across the pass' bands while `total=` and
+     * `ovl=` are the compositor's own per-call maxima, so the identity is exact on the pass that
+     * presents one band -- which is every app frame this row has ever printed, `nb=1` -- and
+     * reads low on a multi-band pass, which `nb=` names.  `rst=` is signed on purpose: a
+     * negative value means a column came from a different pass, and that is worth seeing rather
+     * than being clamped to zero, the same law the pass' wrapped stages read by. */
+    const int rst = (int)s_cycle.r_us - (int)s_cycle.st.comp_us
+                  - (int)s_cycle.st.overlay_us;
+
     ps2_kprintf("[XMBT] cycle %u period=%u us pass=%u tail=%u hold=%u/%d | "
                 "poll=%u hook=%u evt=%u net=%u paint=%u note=%u | "
                 "render=%u swap=%u upload=%u px=%u nb=%d full=%d why=%x dmg=%d,%d,%d,%d/%d | "
-                "comp bg=%u frame=%u paint=%u blit=%u panel=%u bars=%u total=%u bfn=%u wins=%u/%u "
+                "comp bg=%u frame=%u paint=%u blit=%u panel=%u bars=%u total=%u ovl=%u rst=%d "
+                "bfn=%u wins=%u/%u "
                 "body=%upx skip=%upx\n",
                 (unsigned int)s_cycle.rows,
                 (unsigned int)(s_cycle.pass_us + s_cycle.tail_us + s_cycle.hold_us),
@@ -1021,7 +1033,8 @@ static void ps2_cycle_print(int asked_ms)
                 (unsigned int)s_cycle.st.bg_us, (unsigned int)s_cycle.st.frame_us,
                 (unsigned int)s_cycle.st.paint_us, (unsigned int)s_cycle.st.blit_us,
                 (unsigned int)s_cycle.st.panel_us, (unsigned int)s_cycle.st.bars_us,
-                (unsigned int)s_cycle.st.comp_us, (unsigned int)s_cycle.st.bg_full_calls,
+                (unsigned int)s_cycle.st.comp_us, (unsigned int)s_cycle.st.overlay_us,
+                rst, (unsigned int)s_cycle.st.bg_full_calls,
                 (unsigned int)s_cycle.st.wins_drawn, (unsigned int)s_cycle.st.wins_walked,
                 (unsigned int)s_cycle.st.frame_body_px,
                 (unsigned int)s_cycle.st.frame_body_skip_px);
@@ -1032,14 +1045,56 @@ static void ps2_cycle_print(int asked_ms)
      * not have.  plate= is the fifth: it says whether the stream's first primitive group spans the
      * rect the environment packet scissors it to, which is what lets the window walk leave that
      * rect's plate unfilled in the canvas -- `covered`, or `SHORT` (the canvas shows through the
-     * app's own picture), or `none` (a frame that recorded no vertex group at all). */
+     * app's own picture), or `none` (a frame that recorded no vertex group at all).
+     *
+     * `pchg=` is the PRIM re-declarations this frame sent, and it is on this row because it is what
+     * `groups=` is made of: each re-declaration closes a group, and `EEGS_MAX_GROUPS` -- 256, checked
+     * against LANE 10's ring capacity -- is the budget those groups are poured into.  A `pchg=` near
+     * `groups=` says the boundaries, not the vertices, are the term to attack, and `drop=` above is
+     * what outrunning the budget costs.  LANE 12e's four `chain_*` columns are gone with the rung
+     * they measured; its verdict is in doc/txt/PS2.txt, and a re-lived strip continuation shows up
+     * here as `verts=` leaving 3.00 x `prims=` without needing new columns.
+     *
+     * `batch=`/`slow=` are LANE 12f rung (ii)'s two exits, and they are on this row because the fast
+     * one does not clip: a retained mesh whose mapped pixels the GS can represent is recorded as one
+     * strip and the GS's own SCISSOR cuts whatever leaves the rect, while any mesh with a point past
+     * the vertex word's range is drawn by the immediate-mode walk that clips.  The ratio is the only
+     * headless evidence that that gate is refusing the frames it should and letting through the ones
+     * it should not -- `slow=` climbing on a window that never resized says the gate is turning work
+     * away, and `batch=` beside a sheet missing an edge says the clip is not.  Neither is a
+     * substitute for the picture, which is the user's to observe.
+     *
+     * `why=` names WHICH condition made the last `slow=` (0 none, 1 a null argument, 2 the model-
+     * projection product not this window's yet, 3 lighting, 4 TEXTURE_2D bound and enabled, 5 a W
+     * that depends on the vertex, 6 a projection that couples X to Y, 7 retired -- a mapped point
+     * outside the clip rect, which used to refuse and is now the GS's job, 8 a map that was never
+     * captured, 9 a mapped point outside the -2048..+2047 px the vertex word carries).  It was added
+     * because the batch path's first live run printed `batch=0 slow=1` on every frame and the pair
+     * could not say whether the mesh left the window or the app's GL state was not in the shape a
+     * two-constant map can represent -- and those two answers send the work to different files.  The
+     * second run answered `why=7`, which sent the work to `xmb.c`: the sheet is projected with the
+     * window's 776x536 and drawn into the client's 768x500, so its last column is 8 px outside on
+     * every frame, and a gate that refuses on that never batches the ribbon at all.
+     *
+     * `over=` is what that column became: the points of this frame's TAKEN batches that lie outside
+     * the clip rect and inside the vertex word, i.e. the clipping the GS is being asked to do.  The
+     * ribbon's 32 a frame is the row's standing proof that the SCISSOR is exercised and not merely
+     * trusted -- nonzero `over=` with the sheet's right edge intact is the fast path working, and
+     * nonzero `over=` with 8 px of sheet painted over the window's border is the same number saying
+     * the register does not mean what its documentation says it does. */
     if (s_gs_groups) {
         ps2_kprintf("[GSTS] groups=%u qw=%u verts=%u prims=%u gs=%u us | "
+                    "pchg=%u batch=%u slow=%u why=%u over=%u | "
                     "drop=%u unsplit=%u texsw=%u texmiss=%u | cover=%u coverdrop=%u | "
                     "clip=%ux%u b0=%d,%d,%d,%d plate=%s\n",
                     (unsigned int)s_gs_groups, (unsigned int)s_gs_qw,
                     (unsigned int)s_gs_st.verts, (unsigned int)s_gs_st.prims,
-                    (unsigned int)s_gs_us, (unsigned int)s_gs_st.dropped,
+                    (unsigned int)s_gs_us,
+                    (unsigned int)s_gs_st.prim_moves,
+                    (unsigned int)s_gs_st.grid_batch, (unsigned int)s_gs_st.grid_slow,
+                    (unsigned int)s_gs_st.grid_why,
+                    (unsigned int)s_gs_st.grid_over,
+                    (unsigned int)s_gs_st.dropped,
                     (unsigned int)s_gs_st.unsplittable, (unsigned int)s_gs_st.tex_switches,
                     (unsigned int)s_gs_st.tex_missing,
                     (unsigned int)s_gs_cover, (unsigned int)s_gs_cover_drop,
@@ -1048,6 +1103,47 @@ static void ps2_cycle_print(int asked_ms)
                     (int)s_gs_st.b0_r, (int)s_gs_st.b0_b,
                     s_gs_st.has_bbox ? (s_gs_st.plate_covers ? "covered" : "SHORT") : "none");
     }
+
+#if defined(BTRON_PS2_GS_IDENT) && BTRON_PS2_GS_IDENT
+    /* LANE 12h's deciding row, and it answers exactly one question: is the stream this frame
+     * recorded the byte string the previous presented frame recorded?  Read it against the lane,
+     * not as a timing -- `sameg=`/`sameqw=` are the groups and quadwords a replay could re-send
+     * where they sit, `diffg=`/`diffqw=` the ones that moved, and `at=` names the indices that
+     * differ so they land against the `g=` column the app's `[XMBT]` phase markers print (the groups
+     * staged by that boundary), which is what makes "the menu is invariant" a reading rather than an
+     * inference.  `tailg=` is the groups only one of the two frames has: the compare is positional
+     * on purpose, because a span that shifted index is a span a replay would have to rebuild, so a
+     * frame that gained one group reads as everything after it in the tail rather than as a match.
+     * `n=1` has no predecessor and is not evidence.  Its error is one-directional -- identical bytes
+     * always hash identical, so `same=` can only be wrong by a collision while `diff=` is exact.
+     *
+     * `xyz=`/`rgb=`/`st=`/`shape=` are the same positional compare split by GS register, over the
+     * frame's `v=` vertex groups (`g=` minus `v=` is the texture switches), and they are the columns
+     * that say WHAT moved rather than only that something did: a group counted in `xyz=` had every
+     * one of its drawing kicks byte-identical to the same index last frame, so its geometry is the
+     * same mesh re-shaded, and a group counted in none of them is a vertex transform being re-solved.
+     * `shape=` folds the DIFFERENCE between consecutive vertices instead of the coordinate, so a
+     * group counted there is a rigid TRANSLATION of last frame's -- the reading that tells a moved
+     * mesh from a re-solved one, and the one that decides whether a retained mesh plus a per-group
+     * offset can carry the frame at all.  Four answers, four different files to change.  AD groups --
+     * a texture switch -- carry no such registers and are in none of the four, so compare these
+     * against `v=` rather than against `g=`. */
+    if (s_gs_groups) {
+        ps2_kprintf("[GSTID] n=%u g=%u v=%u prev=%u | same=%u g %u qw | diff=%u g %u qw | "
+                    "xyz=%u rgb=%u st=%u shape=%u | tail=%u g %u qw | at=%s first=%u last=%u more=%u\n",
+                    (unsigned int)s_gs_st.ident_frames, (unsigned int)s_gs_groups,
+                    (unsigned int)s_gs_st.ident_vertex_groups,
+                    (unsigned int)s_gs_st.ident_groups_prev,
+                    (unsigned int)s_gs_st.same_groups, (unsigned int)s_gs_st.same_qw,
+                    (unsigned int)s_gs_st.diff_groups, (unsigned int)s_gs_st.diff_qw,
+                    (unsigned int)s_gs_st.ident_xyz, (unsigned int)s_gs_st.ident_rgb,
+                    (unsigned int)s_gs_st.ident_st, (unsigned int)s_gs_st.ident_shape,
+                    (unsigned int)s_gs_st.tail_groups, (unsigned int)s_gs_st.tail_qw,
+                    s_gs_st.ident_frames > 1u ? eegs_present_ident_at() : "-",
+                    (unsigned int)s_gs_st.diff_first, (unsigned int)s_gs_st.diff_last,
+                    (unsigned int)s_gs_st.diff_more);
+    }
+#endif
 
     /* LANE 10's row, and it is the row the lane was opened for: `what has no instrument is the
      * sender's own blocked time`.  One profile since the last print -- and since boot for this
@@ -5363,6 +5459,84 @@ static void ps2_bench_xmb_surface(const char *when)
                 when, dev->width, dev->height, black, other, first, x0, y0, x1, y1);
 }
 
+/* LANE 12's census, and the one measurement the frame's biggest term cannot be argued
+ * without.  Under PS2_GL=eegs the application's pixels never enter the canvas:
+ * `xmb surface frame 3: black=384000` says the XMB window's own device is empty, every
+ * `[XMBT] raster` row says `fill 0 us` for an app stage (the EE sends primitives and the
+ * GS paints them), and row 9a refuses to blit that empty plate over the desktop.  The
+ * compositor still rebuilds all 480,000 px of the canvas each pass and the GIF still
+ * re-sends all of them -- 28,044 us of bg+frame+blit and 4,745 us of upload in the run
+ * that printed those rows.  Either those bytes change every frame and the rebuild is
+ * honest work, or they do not and a third of the frame is copying a picture that is
+ * already there.  No column in this log tells the two readings apart, so this one reads
+ * the canvas.
+ *
+ * The instrument is one FNV-1a hash per row, compared against the previous sample's
+ * array.  A hash answers "which rows differ", not "how many words differ", and rows is
+ * the unit that matters here: the present's band set is made of rows, so a changed-row
+ * count maps directly onto the bands a damage-limited transfer would owe.  Equality is
+ * taken on the RAW word, with no BTRON_PIXEL_FB() exchange, because byte order has no
+ * bearing on whether a word moved.
+ *
+ * Two confounders are excluded by construction rather than by reading.  (i) The console
+ * cannot change the canvas under inspection: ps2_console_putc() emits GS text only while
+ * `!s_gui_active` (this file's dual-output emitter), and a GUI pass has it set.  (ii) The
+ * sample is taken at the app hook, which runs BEFORE the dispatch that paints, so what is
+ * read is the canvas as the previous pass left it -- two consecutive samples are exactly
+ * one frame apart, and the third is the control that separates the wave from a
+ * once-a-second clock row.  The instrument's own cost is printed because it reads the
+ * whole canvas and therefore lengthens the pass it runs in: compare a pair of these rows
+ * with each other, never with an uninstrumented pass.
+ */
+static uint32_t s_census_prev[PS2_SCREEN_HEIGHT];
+static int      s_census_have;
+
+static void ps2_bench_canvas_census(const GDEV *screen, unsigned int pass)
+{
+    unsigned int changed = 0, y, x, lo = 0, hi = 0, w, h;
+    uint32_t fp = 0;                    /* xor of the row hashes: the canvas fingerprint */
+    const uint32_t t0 = ps2_count_read();
+
+    if (!screen || !screen->pixels) {
+        ps2_kprintf("[BENCH] canvas census pass %u: no canvas to read\n", pass);
+        return;
+    }
+    w = (unsigned int)screen->width;
+    h = (unsigned int)screen->height;
+    if (w == 0u || h == 0u) {
+        ps2_kprintf("[BENCH] canvas census pass %u: device is %ux%u\n", pass, w, h);
+        return;
+    }
+    if (h > PS2_SCREEN_HEIGHT) {        /* the array is sized for this port's device */
+        ps2_kprintf("[BENCH] canvas census pass %u: device is %u rows, the array holds %u\n",
+                    pass, h, (unsigned int)PS2_SCREEN_HEIGHT);
+        return;
+    }
+    for (y = 0; y < h; y++) {
+        const uint32_t *row = (const uint32_t *)screen->pixels + (uint32_t)y * w;
+        uint32_t hv = 2166136261u;
+        for (x = 0; x < w; x++)
+            hv = (hv ^ row[x]) * 16777619u;
+        fp ^= hv;
+        if (s_census_have && hv != s_census_prev[y]) {
+            if (!changed) lo = y;
+            hi = y;
+            changed++;
+        }
+        s_census_prev[y] = hv;
+    }
+    s_census_have = 1;
+    /* `px<=` is an UPPER bound on the damage, and it is the bound a damage-limited
+     * present would have to pay for; a lower bound needs a second pass over the same
+     * bytes for a number no decision here turns on. */
+    ps2_kprintf("[BENCH] canvas census pass %u: rows=%u changed=%u span=%d..%d "
+                "px<=%u of %u fp=%08x cost=%u us\n",
+                pass, h, changed,
+                changed ? (int)lo : -1, changed ? (int)hi : -1,
+                changed * w, w * h, (unsigned int)fp,
+                (unsigned int)ps2_us_since(t0));
+}
+
 /* Row 7's verdict, and the row that settles what no log line could: `black=384000` with no
  * `[XMBT] raster` line says the rasteriser covered nothing, but four different things produce
  * that reading -- a face whose screen area is zero, a winding that is culled, a volume the
@@ -6070,6 +6244,14 @@ static void ps2_gui_pass(GDEV *screen)
          * renderer that needed its textures baked, and one black both times never drew. */
         if (s_bench_app_made == 3u) { ps2_bench_xmb_surface("frame 3 "); ps2_bench_face_stats("frame 3 "); ps2_bench_gs_planes(); }
         if (s_bench_app_made == 30u) { ps2_bench_xmb_surface("frame 30"); ps2_bench_face_stats("frame 30"); }
+        /* LANE 12's census runs on three consecutive passes.  It samples the canvas the
+         * previous pass finished, so the delta between two of these rows is exactly one
+         * XMB frame, and the third row is the control: a wave that moves the picture and
+         * a clock that moves a row once a second give different answers over three.
+         * Whether the 28 ms rebuild and the 4.7 ms transfer are work or redundancy is
+         * the number the frame's second-biggest term turns on. */
+        if (s_bench_app_made >= 4u && s_bench_app_made <= 6u)
+            ps2_bench_canvas_census(screen, (unsigned int)s_bench_app_made);
     }
     if (s_bench_app_left && --s_bench_app_left == 0) {
         const ER injected = ps2_inject_key(BTRON_KEY_ESCAPE, 1);

@@ -14,29 +14,20 @@
 #define CLIP_ZMIN (1 << 4)
 #define CLIP_ZMAX (1 << 5)
 
-static void gl_transform_to_viewport_clip_c(GLVertex* v) { /* MARK: NOT_INLINED_IN_OG*/
-	GLContext* c = gl_get_context();
-	/* coordinates */
-	{
-		GLfloat winv = 1.0 / v->pc.W;
-		v->zp.x = (GLint)(v->pc.X * winv * c->viewport.scale.X + c->viewport.trans.X);
-		v->zp.y = (GLint)(v->pc.Y * winv * c->viewport.scale.Y + c->viewport.trans.Y);
-		v->zp.z = (GLint)(v->pc.Z * winv * c->viewport.scale.Z + c->viewport.trans.Z);
-	}
-	/* color */
-	v->zp.r = (GLint)(v->color.v[0] * COLOR_CORRECTED_MULT_MASK + COLOR_MIN_MULT) & COLOR_MASK;
-	v->zp.g = (GLint)(v->color.v[1] * COLOR_CORRECTED_MULT_MASK + COLOR_MIN_MULT) & COLOR_MASK;
-	v->zp.b = (GLint)(v->color.v[2] * COLOR_CORRECTED_MULT_MASK + COLOR_MIN_MULT) & COLOR_MASK;
-	v->zp.a = (GLint)(v->color.v[3] * COLOR_CORRECTED_MULT_MASK + COLOR_MIN_MULT) & COLOR_MASK;
-
-	/* texture */
-
-	if (c->texture_2d_enabled && c->current_texture != NULL) {
-		const GLImage* im = &c->current_texture->images[0];
-		v->zp.s = (GLint)(v->tex_coord.X * im->sscale + im->soff);
-		v->zp.t = (GLint)(v->tex_coord.Y * im->tscale + im->toff);
-	}
-}
+/* What used to be here was `gl_transform_to_viewport_clip_c()`, the clipper's own copy of the
+ * viewport map -- the same three projection lines, the same four colour lines and the same two
+ * texture lines as `tgl_vertex_to_viewport()` in src/gl/tinygl/vertex_stage.c, differing only in
+ * spelling `(GLint)` where that unit writes `TGL_TRUNC()`.  Two encodings of one law is what this
+ * port does not keep, and here the copy was also the expensive one: it lives in a -msoft-float
+ * unit, so its nine casts, twelve multiplies, nine adds and one divide are 31 runtime libcalls
+ * per vertex the clipper creates, priced at 0.98 ms a frame by the [XMBT] census's fdiv= column
+ * (one divide per call, so the column counts the calls).  The shared unit is the second
+ * -mhard-float TU in the image, so the same arithmetic runs inline on COP1, and the boundary row 7
+ * made legal is the one this crosses: a `GLVertex *` goes in and nothing comes back, which is what
+ * makes the two spellings interchangeable rather than merely similar.  They also truncate through
+ * the same ps2_sf_fixsfsi() on both sides of the FPU dial -- the cast in the soft-float unit is
+ * `__fixsfsi`, the inline in the hard-float one is its body -- so no vertex moves by a pixel when
+ * the duplicate dies.  See doc/txt/PS2.txt, LANE 12b. */
 
 
 
@@ -190,8 +181,8 @@ void gl_draw_line(GLVertex* p1, GLVertex* p2) {
 
 			GLinterpolate(&q1, p1, p2, tmin);
 			GLinterpolate(&q2, p1, p2, tmax);
-			gl_transform_to_viewport_clip_c(&q1);
-			gl_transform_to_viewport_clip_c(&q2);
+			tgl_vertex_to_viewport(&q1);
+			tgl_vertex_to_viewport(&q2);
 #if TGL_FEATURE_ALT_RENDERMODES == 1
 			if (c->render_mode == GL_SELECT) {
 				gl_add_select1(q1.zp.z, q2.zp.z, q2.zp.z);
@@ -353,7 +344,7 @@ static void updateTmp(GLVertex* q, GLVertex* p0, GLVertex* p1, GLfloat t) {
 
 	q->clip_code = gl_clipcode(q->pc.X, q->pc.Y, q->pc.Z, q->pc.W);
 	if (q->clip_code == 0)
-		gl_transform_to_viewport_clip_c(q);
+		tgl_vertex_to_viewport(q);
 }
 
 static void gl_draw_triangle_clip(GLVertex* p0, GLVertex* p1, GLVertex* p2, GLint clip_bit); 
@@ -639,13 +630,16 @@ static void tgl_count_fill(const ZBufferPoint *a, const ZBufferPoint *b, const Z
  * `gl_init()` installs the TinyGL pipeline under the name GL_BACKEND_EEGS, and only this
  * condition decides whether the span loops run. */
 #include "../backend_eegs.h"
+#include "../../drivers/ps2/ps2_gs_pack.h"   /* gs_float_scale_pow2(), the ST field's unit */
 
 /* One texel index is (ZB_POINT_*_FRAC_BITS + 1) bits of `zp.s`/`zp.t`, and the upload puts half a
  * texel of offset in so that a coordinate names a texel's centre rather than its edge
  * (texture.c's sscale/soff).  The GS's ST takes a float texel coordinate, so this is the fixed
- * point divided by its own scale -- a power of two, so exact and a multiply. */
-#define GS_TEX_U (1.0f / (float)(1 << (ZB_POINT_S_FRAC_BITS + 1)))
-#define GS_TEX_V (1.0f / (float)(1 << (ZB_POINT_T_FRAC_BITS + 1)))
+ * point divided by its own scale -- a power of two, so exact, and gs_float_scale_pow2() does it on
+ * the exponent field rather than by a multiply, because a multiply here is a soft-float libcall
+ * and this line runs once per texture coordinate of every vertex the layer draws. */
+#define GS_TEX_S_SHIFT (ZB_POINT_S_FRAC_BITS + 1)
+#define GS_TEX_T_SHIFT (ZB_POINT_T_FRAC_BITS + 1)
 
 /* One vertex, from the record the span loops would have walked.  `flat` is non-null when the
  * primitive is flat-shaded and names the vertex whose colour the whole triangle takes: p2, the
@@ -658,14 +652,23 @@ static void gs_vertex(eegs_vertex_t *out, const ZBufferPoint *p,
 {
 	const ZBufferPoint *col = (flat != NULL) ? flat : p;
 
-	out->x_px = (float)p->x;
-	out->y_px = (float)p->y;
+	/* The pixels pass through.  They did not use to: this line used to read `(float)p->x`, and
+	 * the recorder then read `(int32_t)(px * 16.0f)` out of the float it was handed, so a whole
+	 * integer made a round trip through binary32 -- four libcalls a vertex on this CPU, 29 cycles
+	 * each way -- to arrive at the number it started from and a shift.  `ZBufferPoint` is the
+	 * viewport map's own output and its x and y are GLint, so there is no fraction anywhere on
+	 * this path for the float to have been carrying. */
+	out->x_px = p->x;
+	out->y_px = p->y;
 	out->rgba = (((unsigned)col->r >> 16) & 0xFFu) |
 	            (((((unsigned)col->g >> 16) & 0xFFu)) << 8) |
 	            (((((unsigned)col->b >> 16) & 0xFFu)) << 16) |
 	            (((((unsigned)col->a >> 16) & 0xFFu)) << 24);
-	out->s = textured ? (float)p->s * GS_TEX_U : 0.0f;
-	out->t = textured ? (float)p->t * GS_TEX_V : 0.0f;
+	/* The texel coordinates are the exception, and they stay floats: the ST field is IEEE-754 and
+	 * the GS interpolates it as one, so the conversion is what the hardware asks for.  Only the
+	 * scale comes out, and it was a power of two all along. */
+	out->s = textured ? gs_float_scale_pow2((float)p->s, GS_TEX_S_SHIFT) : 0.0f;
+	out->t = textured ? gs_float_scale_pow2((float)p->t, GS_TEX_T_SHIFT) : 0.0f;
 }
 
 static eegs_tri_state_t gs_state(int smooth, int textured, int blended)

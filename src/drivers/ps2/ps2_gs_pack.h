@@ -138,9 +138,57 @@ uint64_t gs_pack_st(float s, float t);
  * in 16.16 for a page-aligned atlas. */
 uint64_t gs_pack_uv(uint32_t u, uint32_t v);
 
-/* Screen pixels to the GS's 12.4 field with the page offset folded in: 0.0f is 0x8000, and
- * the value is quantised at 1/16 px because that is all the hardware has. */
-uint32_t gs_vertex_coord16(float px);
+/* Screen pixels to the GS's 12.4 field with the page offset folded in: 0 is 0x8000, and the
+ * field's own resolution is 1/16 px.  The unit of this function is a WHOLE pixel, because that
+ * is the unit every producer in the tree has: the vertices arrive from `ZBufferPoint`, whose x
+ * and y are `GLint`, and the poster's corners are integers too, so the four low bits of the 12.4
+ * word were always zero and the value was reached by converting an integer to a float,
+ * multiplying that float by 16.0f in soft float -- two libcalls, 87 cycles on this CPU -- and
+ * converting the product back to the integer it started from.  `px * 16` is representable in
+ * binary32 for every |px| < 2^20 and truncating an integer-valued float returns that integer, so
+ * the shift is not an approximation of the old expression: it is the same word by a shorter
+ * route, and `make test-ps2-gs-pack` holds the old float spelling on the host as an oracle and
+ * sweeps the two against each other over the range.  Truncation-not-rounding is still what the
+ * hardware's own ftoi4 does, and is still why a sprite's edge does not move. */
+uint32_t gs_vertex_coord16(int32_t px);
+
+/* `f * 2^-shift`, exactly, without a multiply.
+ *
+ * The ST field is the two texel coordinates' own IEEE-754 bits (gs_pack_st() takes them and does
+ * no arithmetic), and the one place this port has a texel coordinate to put in it divides a
+ * fixed-point integer by its own scale -- `1.0f / (1 << (ZB_POINT_*_FRAC_BITS + 1))`, a power of
+ * two by construction.  A power-of-two scale changes no mantissa: it moves the exponent field by
+ * `shift`, so for a value that is already a normal number the whole product is one subtraction on
+ * the bits, and on this CPU the alternative is a soft-float libcall -- 34 cycles, against the
+ * handful of integer instructions the fold costs.
+ *
+ * The three cases where that reasoning does not hold are named and sent to the multiply instead,
+ * which is exact for them anyway: zero (its bits would wrap into a huge exponent), a value whose
+ * biased exponent is at or below `shift` (the answer leaves the normal range, and a bit
+ * subtraction cannot round), and a value whose biased exponent is 0xFF (an infinity or a NaN,
+ * which are not numbers to rescale).  Everything a binary32 conversion of a `GLint` produces is
+ * normal and at least 127, so the fold path is the only one the vertex path takes, and the guard
+ * is here so that a future caller does not have to know that.
+ *
+ * `make test-ps2-gs-pack` sweeps this against the multiply over the integers a vertex can carry
+ * and over zero, -0, both infinities, a NaN, a subnormal and the exponent-field edges, and
+ * requires the same bits on both sides. */
+static inline float gs_float_scale_pow2(float f, uint32_t shift)
+{
+    union { float f; uint32_t u; } b;
+
+    b.f = f;
+
+    /* The biased exponent field, and nothing else: the two ends are excluded, so what is left is
+     * neither zero, subnormal, infinite nor NaN, and a normal's bits can be rewritten. */
+    if ((b.u & 0x7F800000u) != 0u && (b.u & 0x7F800000u) != 0x7F800000u &&
+        ((b.u >> 23) & 0xFFu) > shift)
+        b.u -= shift << 23;
+    else
+        b.f = f * (1.0f / (float)(1u << shift));   /* the spelling the callers had before */
+
+    return b.f;
+}
 
 /* XYZ2: X[15:0] Y[31:16] Z[63:32].  Z is a 32-bit fixed depth; a 2D layer passes 0.  The
  * drawing kick fires on the second XYZ2 of a strip, so this word is emitted last in every

@@ -47,14 +47,17 @@ uint64_t gs_pack_uv(uint32_t u, uint32_t v)
     return F(u, 14, 0) | F(v, 14, 16);
 }
 
-uint32_t gs_vertex_coord16(float px)
+uint32_t gs_vertex_coord16(int32_t px)
 {
     /* Truncation, not rounding: the GS's own ftoi4 drops the fraction, and a vertex that
      * rounded up onto the next pixel would move a sprite's edge by a whole pixel on half
-     * the screen.  The callers are clipped screen coordinates, so no saturation is done
-     * here -- a value that overflows the 12-bit signed range is a caller that clipped
-     * nothing, and the & 0xFFFF it then goes through is what the hardware would have seen. */
-    return (uint32_t)((int32_t)(px * 16.0f) + (int32_t)GS_XYOFFSET_PAGE) & 0xFFFFu;
+     * the screen.  With a whole-pixel argument there is nothing to drop, and the multiply
+     * by 16 is the field's own scale -- exact, and the same word the float spelling
+     * returned, which is what ps2_gs_pack.h's comment prices and the host gate sweeps.
+     * The callers are clipped screen coordinates, so no saturation is done here -- a value
+     * that overflows the 12-bit signed range is a caller that clipped nothing, and the
+     * & 0xFFFF it then goes through is what the hardware would have seen. */
+    return ((uint32_t)(px * 16) + GS_XYOFFSET_PAGE) & 0xFFFFu;
 }
 
 uint64_t gs_pack_xyz2(uint32_t x16, uint32_t y16, uint32_t z)

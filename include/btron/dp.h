@@ -85,6 +85,15 @@ typedef struct {
     uint32_t panel_us;     /* top panel + gold bar                  */
     uint32_t bars_us;      /* bottom colour test bars               */
     uint32_t comp_us;      /* whole damage composite                */
+    /* LANE 12i's column, and the reason it exists: on the whole-canvas branch
+     * workbench_render() draws the overlays AFTER redraw_baremetal_desktop()
+     * has closed comp_us, so the port's render bracket bills those microseconds
+     * and none of the six stage columns does.  Timed here rather than at the
+     * present because the port cannot see inside that function's call graph, and
+     * printed beside comp_us so the row carries its own arithmetic control:
+     * render - comp_us - overlay_us is what remains unnamed, and it reads 88-219
+     * us on a frame with no overlay up. */
+    uint32_t overlay_us;
     uint32_t tile_max_us;  /* worst single preview tile composite   */
     uint32_t tiles;        /* preview tiles composited              */
     uint32_t wins_walked;  /* window list length of the last walk   */

@@ -63,6 +63,10 @@
 #include <math.h>
 #include "xmb_wave.h"   /* the sheet's lattice: xb_wave_step(), xb_rib_*, the far-tier trig */
 
+#if defined(BTRON_PS2_TARGET) && BTRON_PS2_GS_IDENT
+#include "../gl/eegs_present.h"   /* LANE 12h: the `g=` column reads the present's own group count */
+#endif
+
 #if BTRON_HOSTED
 #include <dirent.h>      /* the Games band lists the host's assets/msx */
 #endif
@@ -179,12 +183,31 @@ static void xb_phase(const char *tag, unsigned work_px)
     const uint32_t ms  = us / 1000u;
 
     s_phase_t0 = now;
+#if defined(BTRON_PS2_TARGET) && BTRON_PS2_GS_IDENT
+    /* LANE 12h's attribution column: the GIF groups the present holds at this boundary.  The
+     * stream is recorded in draw order and the row's `at=` indices name positions in it, so the
+     * difference between two markers is the group range one stage drew -- which is the only way to
+     * read "the menu is invariant" off the row instead of inferring it.  The count is the present's
+     * own, not a second tally kept here. */
+    {
+        const uint32_t g = eegs_present_groups_staged();
+
+        if (work_px) {
+            snprintf(line, sizeof(line), "[XMBT] %-13s %9u us  %8u px/ms  g=%u\n",
+                     tag, (unsigned)us, (unsigned)(work_px / (ms ? ms : 1u)), (unsigned)g);
+        } else {
+            snprintf(line, sizeof(line), "[XMBT] %-13s %9u us  g=%u\n",
+                     tag, (unsigned)us, (unsigned)g);
+        }
+    }
+#else
     if (work_px) {
         snprintf(line, sizeof(line), "[XMBT] %-13s %9u us  %8u px/ms\n",
                  tag, (unsigned)us, (unsigned)(work_px / (ms ? ms : 1u)));
     } else {
         snprintf(line, sizeof(line), "[XMBT] %-13s %9u us\n", tag, (unsigned)us);
     }
+#endif
     uart_puts_raw(line);
     xb_phase_raster(tag, us);
 #if defined(BTRON_PS2_TARGET) && BTRON_PS2_FP_COUNT
@@ -1262,13 +1285,124 @@ uint32_t xb_cosf_far_u32(uint32_t x_bits)
     return x_bits;
 }
 
+#if defined(BTRON_PS2_TARGET)
+/* LANE 12f rung (iii): the ribbon as one retained strip.
+ *
+ * The mesh this draws is already in this file's own arrays -- `xb_rib_px`, `xb_rib_py`,
+ * `xb_rib_bri`, 32x32 floats each, written this very frame by `xmb_wave.c` -- and the immediate-mode
+ * walk below re-derives it a thousand times a second through a pipeline that exists to serve callers
+ * who do NOT have their geometry in hand.  The seam is the viewport map: lifting its constants once
+ * (`tgl_grid_map()`), mapping the grid with them (`tgl_grid_map_points()`, in the one translation
+ * unit compiled to do float arithmetic on this CPU), and writing the strip's quadwords straight into
+ * the GS recorder (`eegs_grid_strip()`) is ~150-250 cycles a vertex against the walk's ~3,260.
+ *
+ * Three things make this a fast path and not a second renderer, and all three are gated on the host:
+ * the pixels and colour bytes are bit-identical to the walk's for every point of a swept mesh
+ * (`verify/tests/test_grid_map.c`), the group it records decodes into the same triangle sequence as
+ * the list path's (`verify/tests/test_eegs_raster.c`), and a mesh the clipper would have cut is
+ * refused before anything is recorded -- the bbox gate and its `batch=`/`slow=` columns are rung
+ * (ii), and the clip equivalence it rests on is measured, not assumed, in the first of those suites.
+ *
+ * The refusal route is why this function always calls `eegs_grid_strip()`, even when the map itself
+ * was refused: `tgl_grid_map()` leaves `gm` zeroed, a zeroed map has `ok` clear, and the strip entry
+ * counts that exit as `slow=` on its own return path.  Counting in the caller instead would make the
+ * two columns depend on this file remembering to do it. */
+#include "../gl/grid_map.h"
+#include "../gl/backend_eegs.h"
+
+static tgl_grid_pt_t s_rib_pts[XB_RIBBON_ROWS * XB_RIBBON_COLS];
+
+static int xb_ribbon_batched(void)
+{
+    tgl_grid_map_t gm;
+
+    if (gl_active_backend() != GL_BACKEND_EEGS) return 0;
+
+    memset(&gm, 0, sizeof gm);
+    (void)tgl_grid_map(&gm);
+    tgl_grid_map_points(&gm, &xb_rib_px[0][0], &xb_rib_py[0][0], &xb_rib_bri[0][0],
+                        XB_RIBBON_ROWS * XB_RIBBON_COLS, s_rib_pts);
+    return eegs_grid_strip(&gm, s_rib_pts, XB_RIBBON_ROWS, XB_RIBBON_COLS) >= 0;
+}
+
+/* LANE 12h rung (i): the same seam for the meshes that SAMPLE -- icons and text.  The ribbon is
+ * fast because its map refuses a textured context (why=4), and the column that has never moved is
+ * f_menu's: ~1,436 textured vertices a frame, each one walked through the clipper at ~2,355
+ * cycles, to re-emit a mesh whose every number this file already holds -- positions the layout
+ * computed, texcoords `xb_uv()` and `xb_font_uv()` just computed, colours the caller just passed.
+ * `tgl_grid_map_tex()` is the textured map -- the grey map's five refusals re-asked with the
+ * texture condition inverted -- and `eegs_tex_quads()` records vertex.c's own GL_QUADS split, so
+ * the same two host gates that make the ribbon a fast path and not a second renderer make this one
+ * too: `test_grid_map.c`'s textured sweep for the numbers (pixels, all four colour bytes, and the
+ * two-step texel chain into ST, bit-identical at 16,780 swept points), and `test_eegs_raster.c`'s
+ * quad case for the stream (the batch decodes into the same triangles the walk's list records,
+ * plane switch included).
+ *
+ * The arrays below carry one batch's worth of the caller's own floats -- a run longer than the cap
+ * simply asks nothing and walks, which is the refusal route wearing a different hat. */
+#define XB_TEX_QUAD_CAP 64           /* 64 glyphs or 64 icons a batch; every string here is shorter */
+static float s_tex_xs[XB_TEX_QUAD_CAP * 4], s_tex_ys[XB_TEX_QUAD_CAP * 4];
+static float s_tex_us[XB_TEX_QUAD_CAP * 4], s_tex_vs[XB_TEX_QUAD_CAP * 4];
+static float s_tex_cols[XB_TEX_QUAD_CAP * 16];
+static tgl_tex_pt_t s_tex_pts[XB_TEX_QUAD_CAP * 4];
+
+/* One quad's four corners in vertex.c's GL_QUADS order -- (x0,y0), (x1,y0), (x1,y1), (x0,y1) --
+ * with the same uv pair every `glTexCoord2f` at this site is about to receive. */
+static void xb_tex_fill_quad(int base, float x0, float y0, float x1, float y1,
+                             float u0, float v0, float u1, float v1,
+                             float r, float g, float b, float a)
+{
+    s_tex_xs[base]     = x0;  s_tex_ys[base]     = y0;
+    s_tex_xs[base + 1] = x1;  s_tex_ys[base + 1] = y0;
+    s_tex_xs[base + 2] = x1;  s_tex_ys[base + 2] = y1;
+    s_tex_xs[base + 3] = x0;  s_tex_ys[base + 3] = y1;
+    s_tex_us[base]     = u0;  s_tex_vs[base]     = v0;
+    s_tex_us[base + 1] = u1;  s_tex_vs[base + 1] = v0;
+    s_tex_us[base + 2] = u1;  s_tex_vs[base + 2] = v1;
+    s_tex_us[base + 3] = u0;  s_tex_vs[base + 3] = v1;
+    s_tex_cols[base * 4 + 0]  = r;  s_tex_cols[base * 4 + 1]  = g;
+    s_tex_cols[base * 4 + 2]  = b;  s_tex_cols[base * 4 + 3]  = a;
+    s_tex_cols[base * 4 + 4]  = r;  s_tex_cols[base * 4 + 5]  = g;
+    s_tex_cols[base * 4 + 6]  = b;  s_tex_cols[base * 4 + 7]  = a;
+    s_tex_cols[base * 4 + 8]  = r;  s_tex_cols[base * 4 + 9]  = g;
+    s_tex_cols[base * 4 + 10] = b;  s_tex_cols[base * 4 + 11] = a;
+    s_tex_cols[base * 4 + 12] = r;  s_tex_cols[base * 4 + 13] = g;
+    s_tex_cols[base * 4 + 14] = b;  s_tex_cols[base * 4 + 15] = a;
+}
+
+/* Ask, exactly as the ribbon asks: INSIDE the caller's `glBegin`, because the model-projection
+ * product the map lifts is recomputed there and nowhere else, and on a refusal the caller's walk
+ * continues from the same `glBegin` with the same state the batch found.  The zeroed-map route is
+ * the same one `xb_ribbon_batched()` documents: `tgl_grid_map_tex()` leaves `tm` refused, the entry
+ * counts the exit on its own return path, and neither column depends on this file remembering. */
+static int xb_tex_ask(int nquads)
+{
+    tgl_tex_map_t tm;
+
+    if (gl_active_backend() != GL_BACKEND_EEGS) return 0;
+
+    memset(&tm, 0, sizeof tm);
+    (void)tgl_grid_map_tex(&tm);
+    tgl_grid_map_tex_points(&tm, s_tex_xs, s_tex_ys, s_tex_us, s_tex_vs, s_tex_cols,
+                            nquads * 4, s_tex_pts);
+    return eegs_tex_quads(&tm, s_tex_pts, nquads) >= 0;
+}
+#endif /* BTRON_PS2_TARGET */
+
 /* xmb_init_ribbon(): a zigzag triangle strip over the grid, with the odd rows
  * walked in reverse so the strip stays connected.
  *
  * The compositing is the driver's own: gfx_drv gl2 sets
  * glBlendFunc(GL_DST_COLOR, GL_ONE) for the ribbon programs, so the sheet
  * brightens whatever the gradient left behind it by (1 + c) rather than laying
- * colour over it.  That is what makes the waves read as an embossed cloth. */
+ * colour over it.  That is what makes the waves read as an embossed cloth.
+ *
+ * The walk below is the meaning of the draw, and it stays the draw for every target and for every
+ * PS2 backend that is not the GS: same vertices, same colours, same compositing.  LANE 12f's batch
+ * path replaces it only when it can produce exactly that, and the state it has to be in to ask --
+ * texture off, blend set to the ribbon's own, the mesh's alpha current, and a matrix product the
+ * walk has computed, which is what the `glBegin` supplies -- is established before the question is
+ * asked, so a refusal leaves nothing half-applied and the walk continues from the same `glBegin`. */
 static void xb_draw_ribbon(float alpha)
 {
     int r, c;
@@ -1279,6 +1413,27 @@ static void xb_draw_ribbon(float alpha)
     glBlendFunc(GL_DST_COLOR, GL_ONE);
     glDisable(GL_TEXTURE_2D);
     glBegin(GL_TRIANGLE_STRIP);
+#if defined(BTRON_PS2_TARGET)
+    /* The question is asked INSIDE the `glBegin`, and that is the whole of rung (iii)'s second
+     * attempt: the batch was refused on every frame of the first bench run (`batch=0 slow=1`)
+     * because `tgl_grid_map()` was lifted BEFORE it, and the model-projection product this map is
+     * the arithmetic of is not recomputed at `glOrtho` -- `matrix.c` only sets
+     * `matrix_model_projection_updated` there, and `glopBegin` is what multiplies the stacks and
+     * clears the flag.  Asking before `glBegin` therefore asks for the previous window's product,
+     * and the refusal rung (i)(a) documents is exactly the right answer to that: the ribbon's
+     * `glOrtho`/`glViewport`/`glLoadIdentity` run five lines above this one, so a pre-begin lift
+     * refused every frame and the fast path never ran.  After the `glBegin` the product is this
+     * frame's, and the pair is harmless when the batch is taken -- `glopEnd()` for anything that is
+     * not `GL_LINE_LOOP`/`GL_POLYGON` only clears `in_begin`, so an empty strip records nothing
+     * twice.  `verify/tests/test_grid_map.c`'s `flush_matrices()` is the same pair, which is what
+     * makes "accepted again once glBegin has recomputed it" a measured claim. */
+    glColor4f(0.5f, 0.5f, 0.5f, 1.0f);   /* the alpha the map lifts; every vertex of the mesh's is 1 */
+    if (xb_ribbon_batched()) {
+        glEnd();
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+        return;
+    }
+#endif
     for (r = 0; r < XB_RIBBON_ROWS - 1; r++) {
         for (c = 0; c < XB_RIBBON_COLS; c++) {
             int col = (r & 1) ? (XB_RIBBON_COLS - 1 - c) : c;
@@ -1430,19 +1585,35 @@ static void xb_draw_icon(int cell, float cx, float cy, float size,
          * is exactly the silhouette the PS3 bar casts. */
         glColor4f(0.0f, 0.0f, 0.0f, alpha * XB_SHADOW_ALPHA * 0.75f);
         glBegin(GL_QUADS);
-        glTexCoord2f(u0, v0); glVertex2f(cx - w + s_shadow_offset, cy - h + s_shadow_offset);
-        glTexCoord2f(u1, v0); glVertex2f(cx + w + s_shadow_offset, cy - h + s_shadow_offset);
-        glTexCoord2f(u1, v1); glVertex2f(cx + w + s_shadow_offset, cy + h + s_shadow_offset);
-        glTexCoord2f(u0, v1); glVertex2f(cx - w + s_shadow_offset, cy + h + s_shadow_offset);
+#if defined(BTRON_PS2_TARGET)
+        xb_tex_fill_quad(0, cx - w + s_shadow_offset, cy - h + s_shadow_offset,
+                         cx + w + s_shadow_offset, cy + h + s_shadow_offset,
+                         u0, v0, u1, v1,
+                         0.0f, 0.0f, 0.0f, alpha * XB_SHADOW_ALPHA * 0.75f);
+        if (!xb_tex_ask(1))
+#endif
+        {
+            glTexCoord2f(u0, v0); glVertex2f(cx - w + s_shadow_offset, cy - h + s_shadow_offset);
+            glTexCoord2f(u1, v0); glVertex2f(cx + w + s_shadow_offset, cy - h + s_shadow_offset);
+            glTexCoord2f(u1, v1); glVertex2f(cx + w + s_shadow_offset, cy + h + s_shadow_offset);
+            glTexCoord2f(u0, v1); glVertex2f(cx - w + s_shadow_offset, cy + h + s_shadow_offset);
+        }
         glEnd();
     }
 
     glColor4f(br, br, br, alpha);
     glBegin(GL_QUADS);
-    glTexCoord2f(u0, v0); glVertex2f(cx - w, cy - h);
-    glTexCoord2f(u1, v0); glVertex2f(cx + w, cy - h);
-    glTexCoord2f(u1, v1); glVertex2f(cx + w, cy + h);
-    glTexCoord2f(u0, v1); glVertex2f(cx - w, cy + h);
+#if defined(BTRON_PS2_TARGET)
+    xb_tex_fill_quad(0, cx - w, cy - h, cx + w, cy + h,
+                     u0, v0, u1, v1, br, br, br, alpha);
+    if (!xb_tex_ask(1))
+#endif
+    {
+        glTexCoord2f(u0, v0); glVertex2f(cx - w, cy - h);
+        glTexCoord2f(u1, v0); glVertex2f(cx + w, cy - h);
+        glTexCoord2f(u1, v1); glVertex2f(cx + w, cy + h);
+        glTexCoord2f(u0, v1); glVertex2f(cx - w, cy + h);
+    }
     glEnd();
 
     glDisable(GL_TEXTURE_2D);
@@ -1476,6 +1647,38 @@ static void xb_draw_text_run(const char *str, float x, float y, float h,
     float cx = x + off;
 
     glBegin(GL_QUADS);
+#if defined(BTRON_PS2_TARGET)
+    {
+        /* One batch per run, and the run's OWN colour and offset -- the shadow pass and the
+         * foreground pass are two meshes the walk already states identically, so the fill below is
+         * the loop under this one with its numbers written into arrays instead of queues.  The
+         * glyph index clamps exactly as the walk clamps it; a run longer than the cap asks nothing
+         * and walks. */
+        int n = 0;
+        const char *q;
+
+        for (q = str; *q; q++) n++;
+        if (n >= 1 && n <= XB_TEX_QUAD_CAP) {
+            float gx = cx;
+            int i;
+
+            for (i = 0; i < n; i++) {
+                int idx = (unsigned char)str[i] - 32;
+                float u0, v0, u1, v1;
+                if (idx < 0 || idx >= XB_FONT_COLS * XB_FONT_ROWS)
+                    idx = 0;
+                xb_font_uv(idx, &u0, &v0, &u1, &v1);
+                xb_tex_fill_quad(i * 4, gx, y + off, gx + step, y + off + h,
+                                 u0, v0, u1, v1, r, g, b, a);
+                gx += step;
+            }
+            if (xb_tex_ask(n)) {
+                glEnd();
+                return;
+            }
+        }
+    }
+#endif
     for (; *p; p++) {
         int idx = (unsigned char)*p - 32;
         float u0, v0, u1, v1;

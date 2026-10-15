@@ -143,19 +143,28 @@ static void colour_control(void)
        gs_pack_rgbaq(0x34u, 0x56u, 0x78u, 0x12u, GS_Q_ONE) != 0x3F80000012345678ULL, 1u);
 }
 
-/* ── CONTROL: the integer corner IS the recorder's float corner ────────── */
+/* ── CONTROL: the poster's corner is the old float encoding, at every pixel ── */
+
+/* The float spelling that production used before LANE 12a, kept here as this program's oracle.  It
+ * is deliberately NOT in src/: a second encoding in the tree is the defect, and one in the gate is
+ * the instrument that retires it. */
+static uint32_t coord_float_ref(int32_t px)
+{
+    return (uint32_t)((int32_t)((float)px * 16.0f) + (int32_t)(2048u << 4)) & 0xFFFFu;
+}
 
 static void coord_control(void)
 {
     int worst_diff = 0, n = 0;
 
-    /* poster_coord() is a shift and an add; gs_vertex_coord16() is a float multiply and an add,
-     * and it is the encoder every vertex in the shipped stream goes through.  Two encodings of one
-     * law is the defect, so they are compared over the whole range a corner can take rather than
-     * assumed equal: 0x8000 at 0 px, 0xB200 at 800 px, and up to the field's own limit. */
+    /* There is now one encoder in the tree, so this sweep no longer compares two of them -- it
+     * compares the single one with the expression it replaced.  That is the assertion the poster
+     * needs: a poster replaces a canvas upload, so its corner words have to be the words the
+     * recorded stream would have put at the same pixel, over the whole range a canvas can carry.
+     * 0x8000 at 0 px, 0xB200 at 800 px, and up to the field's own limit. */
     for (int px = 0; px <= 2047; px++) {
-        const uint32_t a = poster_coord(px);
-        const uint32_t b = gs_vertex_coord16((float)px);
+        const uint32_t a = gs_vertex_coord16(px);
+        const uint32_t b = coord_float_ref(px);
         if (a != b) {
             if (!worst_diff) {
                 printf("  [FAIL] coord differs at px=%d shift=0x%x float=0x%x\n",
@@ -167,13 +176,13 @@ static void coord_control(void)
     }
     s_checks++;
     if (worst_diff) s_failures++;
-    eq32("CONTROL coords compared, both encoders", (uint32_t)n, 2048u);
+    eq32("CONTROL coords compared, shift against the float it replaced", (uint32_t)n, 2048u);
 
     /* The field width, stated once: a coordinate is 16 bits and the page offset sits at its
      * middle, so 0 px is 0x8000 and not 0.  A poster that skipped the fold would draw its rects
      * 2048 px above the canvas it is replacing. */
-    eq32("coord(0) is the page origin", poster_coord(0), 0x8000u);
-    eq32("coord(2047) is the last one", poster_coord(2047), 0xFFF0u);
+    eq32("coord(0) is the page origin", gs_vertex_coord16(0), 0x8000u);
+    eq32("coord(2047) is the last one", gs_vertex_coord16(2047), 0xFFF0u);
 }
 
 /* ── Two rects: stride, and the count a refusal leaves behind ──────────── */

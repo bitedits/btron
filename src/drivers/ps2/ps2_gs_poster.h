@@ -47,11 +47,14 @@
  * and repaints a 16x16 box through ps2_fb() in the driver's own shape and has NO caller in src/ --
  * a dead twin, so gate on the live path above, not on that function's idea of where the cursor is.
  *
- * Coordinates are integer pixels converted with `(px << 4) + GS_XYOFFSET_PAGE`, which is the
- * recorder's gs_vertex_coord16() in one shift and no float call.  The two encodings are gated
- * against each other rather than trusted: the host test compares them for every pixel a canvas
- * coordinate can take, because two ways of computing a vertex is how a port gets a sprite whose
- * right edge lands one sixteenth of a pixel away from its neighbour's left edge.
+ * Coordinates are integer pixels converted by the recorder's own gs_vertex_coord16(), which since
+ * LANE 12a is a shift and an add and so needs no float here either: this file used to carry a
+ * second encoder for the same field, which is exactly the defect 12a removes.  The law is stated
+ * once, in ps2_gs_pack.h, and the equality that used to be checked between two encodings is now
+ * checked between the shift and the float spelling it replaced -- see coord_matches_float() in
+ * verify/tests/test_ps2_gs_pack.c, which sweeps every coordinate the field can hold.  What is left
+ * to assert here is only which corner goes into which field, and the packet words below still carry
+ * hand-written literals for that.
  *
  * Pure: it fills a caller's buffer and touches no register, so every word it produces can be
  * compared with a hand-derived literal on a machine with no PS2 in it -- the ps2_gs_env.c split,

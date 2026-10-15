@@ -42,6 +42,11 @@
 #include <stdint.h>
 #include <string.h>
 
+/* LANE 12h's invariance instrument is compiled into this suite unconditionally: the same dial that
+ * turns it on for a bench run (`PS2_IDENT=1`) turns it off for the shipped image, and a suite that
+ * left it off would be gating a TU whose instrument branch never compiled. */
+#define BTRON_PS2_GS_IDENT 1
+
 #include "../../src/drivers/ps2/ps2_gs_pack.c"
 #include "../../src/drivers/ps2/ps2_gs_vram.c"
 #include "../../src/drivers/ps2/ps2_gs_rec.c"
@@ -51,6 +56,18 @@
 #include "../../src/gl/eegs_present.c"
 
 #include "gs_group_view.h"
+
+/* `backend_eegs.c` now carries `eegs_tex_quads()`, which asks the GS registry through
+ * `gs_tex_find()` -- and the registry lives in `ps2_gs_tex.c`, a TU that cannot join this one: its
+ * file-static `s_n` and `s_sink` collide with `ps2_gs_rec.c`'s own of the same names.  This suite's
+ * subject is the order and counts of a present, and it never calls the quad entry, so the registry
+ * simply has nothing in it here: 0 for every key, which is the same answer a frame gets on the
+ * machine before any plane has been uploaded -- the demoted flat draw, not somebody else's page. */
+const gs_tex_t *gs_tex_find(const void *plane)
+{
+    (void)plane;
+    return (const gs_tex_t *)0;
+}
 
 
 static int s_checks, s_failures;
@@ -142,23 +159,26 @@ int ps2_gs_draw_env_apply(const gs_draw_env *env)
 /* The XMB's own client rect, at the size doc/txt/PS2.txt measures: 768x500 at (16, 40). */
 static const RECT k_client = { 16, 40, 784, 540 };
 
-static void vtx(eegs_vertex_t *v, float x, float y)
+/* Whole pixels, because that is the unit the stage is handed: `eegs_vertex_t`'s x_px/y_px are
+ * GLint after LANE 12a, and the only fraction on this path is a texel coordinate, which is `s`/`t`
+ * and is set inside vtx() rather than passed to it. */
+static void vtx(eegs_vertex_t *v, int32_t x_px, int32_t y_px)
 {
-    v->x_px = x;
-    v->y_px = y;
+    v->x_px = x_px;
+    v->y_px = y_px;
     v->s = 0.0f;
     v->t = 0.0f;
     v->rgba = 0xFF332244u;
 }
 
-static void tri(float x, float y, unsigned smooth)
+static void tri(int32_t x_px, int32_t y_px, unsigned smooth)
 {
     eegs_vertex_t v[3];
     eegs_tri_state_t st;
 
-    vtx(&v[0], x, y);
-    vtx(&v[1], x + 8.0f, y);
-    vtx(&v[2], x, y + 8.0f);
+    vtx(&v[0], x_px, y_px);
+    vtx(&v[1], x_px + 8, y_px);
+    vtx(&v[2], x_px, y_px + 8);
     st.smooth = smooth;
     st.textured = 0u;
     st.blended = 0u;
@@ -169,8 +189,26 @@ static void tri(float x, float y, unsigned smooth)
  * shortest frame that has more than one group in it, which is what the aliasing check needs. */
 static void draw_two_groups(void)
 {
-    tri(10.0f, 20.0f, 1u);
-    tri(30.0f, 40.0f, 0u);
+    tri(10, 20, 1u);
+    tri(30, 40, 0u);
+}
+
+/* A triangle whose colour is named rather than fixed, for the invariance instrument's colour-only
+ * case: `vtx()` gives every other drawing the same rgba, so a hash that folded only the drawing kick
+ * would be invisible to everything except this. */
+static void tri_rgba(int32_t x_px, int32_t y_px, unsigned smooth, uint32_t rgba)
+{
+    eegs_vertex_t v[3];
+    eegs_tri_state_t st;
+
+    vtx(&v[0], x_px, y_px);
+    vtx(&v[1], x_px + 8, y_px);
+    vtx(&v[2], x_px, y_px + 8);
+    v[0].rgba = v[1].rgba = v[2].rgba = rgba;
+    st.smooth = smooth;
+    st.textured = 0u;
+    st.blended = 0u;
+    eegs_triangle(v, st);
 }
 
 /* ── 1. the order on the bus ─────────────────────────────────────────────────────── */
@@ -181,7 +219,7 @@ static void test_env_then_primitives(void)
 
     dma_reset();
     eegs_present_begin();
-    tri(100.0f, 200.0f, 1u);
+    tri(100, 200, 1u);
     eegs_present_end();
     sent = eegs_present_send(&k_client);
 
@@ -209,7 +247,7 @@ static void test_env_fields(void)
 
     dma_reset();
     eegs_present_begin();
-    tri(100.0f, 200.0f, 1u);
+    tri(100, 200, 1u);
     eegs_present_end();
     eegs_present_send(&k_client);
     if (s_calls < 2u) { check("the environment was sent", 0); return; }
@@ -319,7 +357,7 @@ static void test_empty_frames(void)
 
     dma_reset();
     eegs_present_begin();
-    tri(100.0f, 200.0f, 1u);
+    tri(100, 200, 1u);
     eegs_present_end();
     check("a degenerate rect is refused", eegs_present_send(&gone) == 0);
     check("and sends nothing", s_calls == 0u);
@@ -328,7 +366,7 @@ static void test_empty_frames(void)
     /* A send empties the stage: the same frame must not be put on the bus twice. */
     dma_reset();
     eegs_present_begin();
-    tri(100.0f, 200.0f, 1u);
+    tri(100, 200, 1u);
     eegs_present_end();
     check("a real frame does go out", eegs_present_send(&k_client) == 1);
     check("and the next send has nothing left", eegs_present_send(&k_client) == 0);
@@ -339,10 +377,10 @@ static void test_empty_frames(void)
      * older picture over a newer canvas. */
     dma_reset();
     eegs_present_begin();
-    tri(100.0f, 200.0f, 1u);
+    tri(100, 200, 1u);
     eegs_present_end();
     eegs_present_begin();
-    tri(150.0f, 250.0f, 1u);
+    tri(150, 250, 1u);
     eegs_present_end();
     check("the second frame alone is what goes out", eegs_present_send(&k_client) == 1);
     check("two sends, not four", s_calls == 2u);
@@ -363,7 +401,7 @@ static void test_stage_capacity(void)
     const uint32_t tris = EEGS_STAGE_QW_CAP;
     dma_reset();
     eegs_present_begin();
-    for (i = 0u; i < tris; i++) tri((float)i, 20.0f, 1u);
+    for (i = 0u; i < tris; i++) tri((int32_t)i, 20, 1u);
     eegs_present_end();
     sent = eegs_present_send(&k_client);
     eegs_present_get_stats(&st);
@@ -379,7 +417,7 @@ static void test_stage_capacity(void)
     /* The counters are per frame: a fresh small frame must not inherit the overflow. */
     dma_reset();
     eegs_present_begin();
-    tri(100.0f, 200.0f, 1u);
+    tri(100, 200, 1u);
     eegs_present_end();
     eegs_present_send(&k_client);
     eegs_present_get_stats(&st);
@@ -398,7 +436,7 @@ static void test_group_capacity(void)
      * only be reached by groups, and this is the shape that reaches it first. */
     dma_reset();
     eegs_present_begin();
-    for (i = 0u; i < tris; i++) tri((float)i, 20.0f, (i & 1u) != 0u ? 1u : 0u);
+    for (i = 0u; i < tris; i++) tri((int32_t)i, 20, (i & 1u) != 0u ? 1u : 0u);
     eegs_present_end();
     sent = eegs_present_send(&k_client);
     eegs_present_get_stats(&st);
@@ -466,6 +504,340 @@ static void test_begin_reaps_the_last_frames_stream(void)
     check("and they are the only ones outstanding", ps2_gif_pending() <= 3u);
 }
 
+/* ── 7. LANE 12h's invariance instrument ─────────────────────────────────────────────
+
+   The question the lane asks is whether a frame's recorded stream is the previous frame's byte
+   string, because the answer picks the rung: an invariant span can be re-sent where it sits (a
+   replay), and a varying one can only be produced faster (a textured batch map).  The instrument is
+   a per-group hash folded at the sink and carried one presented frame forward -- LANE 10's buffer-
+   lifetime law says the words themselves may not be kept -- so what this section can gate is the
+   *carry and the reading*, and that is what it asserts:
+
+     - a repeat of the same drawing reports every group and every quadword identical, with an empty
+       `at=`;
+     - a moved vertex reports its own group only, by index, and the whole length of it;
+     - a changed colour with the geometry untouched is still a difference, which is the assertion
+       that the hash folds the group's four registers rather than the drawing kick alone;
+     - a frame that gained or lost a group puts the unmatched groups in `tail=` on BOTH sides, and
+       compares only the aligned prefix -- the positional rule a replay is bound by;
+     - a frame that staged nothing does not consume its predecessor, because the comparison is
+       between presented frames;
+     - `at=` names the first eight differences and counts the rest rather than dropping them;
+     - `eegs_present_groups_staged()` counts groups the sink has RECEIVED, i.e. the ones already
+       closed, which is what the app's phase markers attribute a group index against;
+     - and, in 7b, the same compare split by GS register: the drawing kick, the colour and the texel
+       coordinates each credited only where their own quadwords are byte-identical, with AD groups
+       and the PRIM word credited by neither.
+
+   The instrument compares against whatever was presented before, so every case here presents its
+   own predecessor first and reads the frame after it: the tests are then independent of the suite's
+   history rather than depending on the order the sections run in. */
+
+static void frame_of(void (*draw)(void), eegs_present_stats *st)
+{
+    eegs_present_begin();
+    draw();
+    eegs_present_end();
+    eegs_present_send(&k_client);
+    eegs_present_get_stats(st);
+}
+
+static void draw_two_groups_moved(void)
+{
+    tri(11, 20, 1u);          /* one pixel on x: the first group's XYZ2 word moves */
+    tri(30, 40, 0u);
+}
+
+/* The same two groups with a third in FRONT of them: every one of them is present in both frames,
+ * and none of them is at the index it was, which is what the positional rule refuses to credit. */
+static void draw_shifted_right(void)
+{
+    tri(5, 5, 0u);
+    tri(10, 20, 1u);
+    tri(30, 40, 0u);
+}
+
+/* Same coordinates, one colour bit different: nothing the geometry sees. */
+static void draw_colour_a(void) { tri_rgba(10, 20, 1u, 0xFF332244u); }
+static void draw_colour_b(void) { tri_rgba(10, 20, 1u, 0xFF332245u); }
+
+/* `s_n_tris` groups -- the state alternates, so each triangle closes its own -- of which the first
+ * `s_n_moved` are shifted one pixel between two frames. */
+static uint32_t s_n_tris = 12u, s_n_moved;
+
+static void draw_n_groups(void)
+{
+    uint32_t i;
+
+    for (i = 0u; i < s_n_tris; i++)
+        tri((int32_t)(10u + i * 5u + ((i < s_n_moved) ? 1u : 0u)), 20, (i & 1u) != 0u ? 1u : 0u);
+}
+
+static void test_ident_invariant(void)
+{
+    eegs_present_stats a, b;
+
+    dma_reset();
+    frame_of(draw_two_groups, &a);            /* establish the predecessor */
+    frame_of(draw_two_groups, &b);
+
+    check("the second presentation is the frame after the first", b.ident_frames == a.ident_frames + 1u);
+    eqw("every group matches the same-index group before it", b.same_groups, b.groups);
+    eqw("and every quadword with it", b.same_qw, b.qw);
+    eqw("nothing differed", b.diff_groups, 0u);
+    eqw("nothing was left over", b.tail_groups, 0u);
+    eqw("the predecessor's group count is on the row", b.ident_groups_prev, 2u);
+    check("and the difference list is empty", eegs_present_ident_at()[0] == '\0');
+}
+
+static void test_ident_moved_vertex(void)
+{
+    eegs_present_stats b;
+
+    dma_reset();
+    frame_of(draw_two_groups, NULL);
+    frame_of(draw_two_groups_moved, &b);
+
+    eqw("one group differs", b.diff_groups, 1u);
+    eqw("the other is untouched", b.same_groups, 1u);
+    eqw("it is the first one", b.diff_first, 0u);
+    eqw("and only the first", b.diff_last, 0u);
+    eqw("a differing group counts its whole length", b.diff_qw, gs_group_qw(3u));
+    check("at= names its index", strcmp(eegs_present_ident_at(), "0") == 0);
+}
+
+static void test_ident_colour_only(void)
+{
+    eegs_present_stats b;
+
+    dma_reset();
+    frame_of(draw_colour_a, NULL);
+    frame_of(draw_colour_b, &b);
+
+    eqw("a colour bit with the geometry still identical is a difference", b.diff_groups, 1u);
+    eqw("nothing reads as identical", b.same_groups, 0u);
+    eqw("and the quadwords of that group are all charged to it", b.diff_qw, gs_group_qw(3u));
+}
+
+static void test_ident_positional_tail(void)
+{
+    eegs_present_stats b;
+
+    /* Gained a group: the aligned prefix still matches, the extra one is a tail. */
+    dma_reset();
+    frame_of(draw_two_groups, NULL);
+    s_n_tris = 2u; s_n_moved = 0u;
+    frame_of(draw_n_groups, NULL);
+    s_n_tris = 3u; s_n_moved = 0u;
+    frame_of(draw_n_groups, &b);
+    eqw("the two aligned groups match", b.same_groups, 2u);
+    eqw("the third is a tail, not a match", b.tail_groups, 1u);
+    eqw("and its quadwords are counted", b.tail_qw, gs_group_qw(3u));
+
+    /* Lost one: the tail is on the other side and must still be reported, because a replay of a
+     * span that is not there is exactly the mistake the positional rule exists to catch. */
+    s_n_tris = 3u; s_n_moved = 0u;
+    frame_of(draw_n_groups, NULL);
+    s_n_tris = 2u; s_n_moved = 0u;
+    frame_of(draw_n_groups, &b);
+    eqw("a frame that lost a group reports its tail too", b.tail_groups, 1u);
+    eqw("and compares only the aligned prefix", b.same_groups + b.diff_groups, 2u);
+
+    /* An inserted group shifts everything after it, so the shift reads as differences rather than
+     * as a match: that is the cost a replay pays, and it is not allowed to look free. */
+    s_n_tris = 2u; s_n_moved = 0u;
+    frame_of(draw_n_groups, NULL);
+    frame_of(draw_shifted_right, &b);
+    eqw("a span that moved index is not credited as identical", b.same_groups, 0u);
+    eqw("both aligned groups differ", b.diff_groups, 2u);
+    eqw("and the group only this frame has is the tail", b.tail_groups, 1u);
+}
+
+static void test_ident_empty_frame_keeps_predecessor(void)
+{
+    eegs_present_stats b;
+    int sent;
+
+    dma_reset();
+    frame_of(draw_two_groups, NULL);
+
+    eegs_present_begin();
+    eegs_present_end();
+    sent = eegs_present_send(&k_client);
+    check("a frame that staged nothing sends nothing", sent == 0);
+
+    frame_of(draw_two_groups, &b);
+    eqw("the next frame still compares with the one before the gap", b.same_groups, 2u);
+    eqw("nothing became a tail", b.tail_groups, 0u);
+}
+
+static void test_ident_at_list(void)
+{
+    eegs_present_stats b;
+
+    dma_reset();
+    s_n_tris = 12u; s_n_moved = 0u;
+    frame_of(draw_n_groups, NULL);
+    s_n_moved = 10u;
+    frame_of(draw_n_groups, &b);
+
+    eqw("ten of the twelve groups differ", b.diff_groups, 10u);
+    eqw("two match", b.same_groups, 2u);
+    check("at= names the first eight and counts the rest",
+          strcmp(eegs_present_ident_at(), "0,1,2,3,4,5,6,7+2") == 0);
+    eqw("the remainder is its own column", b.diff_more, 2u);
+    eqw("first is the first difference", b.diff_first, 0u);
+    eqw("last is the ninth", b.diff_last, 9u);
+}
+
+static void test_staged_group_count(void)
+{
+    dma_reset();
+    eegs_present_begin();
+    eqw("a fresh frame has staged nothing", eegs_present_groups_staged(), 0u);
+    tri(10, 20, 1u);
+    eqw("an open group is not staged yet", eegs_present_groups_staged(), 0u);
+    tri(30, 40, 0u);
+    eqw("the state change closed the first", eegs_present_groups_staged(), 1u);
+    eegs_present_end();
+    eqw("and end() closes the last", eegs_present_groups_staged(), 2u);
+}
+
+/* Same coordinates, same colour, a different smoothing bit: only the group's PRIM words move.  PRIM
+ * is folded into the whole-group hash and into no register lane, which is the residual the three
+ * lanes leave deliberately -- a group that `diff=` reports while all three say invariant had its
+ * primitive descriptor or its loop count move, not its picture. */
+static void draw_prim_a(void) { tri(10, 20, 1u); }
+static void draw_prim_b(void) { tri(10, 20, 0u); }
+
+/* One texture switch between two triangles, i.e. vertex group, AD group, vertex group.  The switch
+ * is `eegs_texture()`'s own three-register AD group, so the frame has a group with no four-register
+ * body in it -- the case the lane comparison has to exclude rather than guess about. */
+static void draw_with_switch(void)
+{
+    gs_tex_t tex;
+
+    memset(&tex, 0, sizeof(tex));
+    tex.plane = (const void *)1u;
+    tex.clamp = 0x11u;
+    tex.tex0 = 0x22u;
+    tex.tex1 = 0x33u;
+
+    tri(10, 20, 1u);
+    eegs_texture(&tex);
+    tri(30, 40, 0u);
+}
+
+/* ── 7b. the same comparison split by GS register ────────────────────────────────────
+
+   `diff=` says a frame is not its own predecessor; only the three lanes say WHY, and the why is what
+   picks the file to change: an invariant XYZ2 with a moving RGBAQ is the same mesh re-shaded and
+   wants a colour map, while a moving XYZ2 is the vertex transform being re-solved.  The four cases
+   below are chosen so that each lane is the one that moves in exactly one of them, which is also the
+   control on the lane-to-register mapping: fold one field one quadword out of place -- the tag's
+   quadword carries the REGS list, so the body starts at quadword 1 and a mapping off by one is the
+   natural error -- and the moved-vertex and colour-only rows trade answers. */
+/* Same two groups with the FIRST one translated by a pixel -- the deltas between its three vertices
+ * are unchanged, which is the whole point of the `shape=` lane -- and, in the scaled variant, the
+ * same three vertices with one of them moved 1 px further in y: the deltas change, so the group is a
+ * different mesh rather than the same mesh in a new place. */
+static void draw_two_groups_moved_shape(void)
+{
+    eegs_vertex_t v[3];
+    eegs_tri_state_t st;
+
+    vtx(&v[0], 11, 20);
+    vtx(&v[1], 19, 20);
+    vtx(&v[2], 11, 29);          /* the y delta is 9 here and 8 in `tri()` */
+    st.smooth = 1u;
+    st.textured = 0u;
+    st.blended = 0u;
+    eegs_triangle(v, st);
+    tri(30, 40, 0u);
+}
+
+/* One group whose three vertices are the same shape a pixel to the right. */
+static void draw_one_translated(void)
+{
+    eegs_vertex_t v[3];
+    eegs_tri_state_t st;
+
+    vtx(&v[0], 11, 20);
+    vtx(&v[1], 19, 20);
+    vtx(&v[2], 11, 28);
+    st.smooth = 1u;
+    st.textured = 0u;
+    st.blended = 0u;
+    eegs_triangle(v, st);
+}
+
+static void test_ident_lanes(void)
+{
+    eegs_present_stats b;
+
+    /* One vertex moved, nothing else: its own group's kick differs, its colour and texels do not. */
+    dma_reset();
+    frame_of(draw_two_groups, NULL);
+    frame_of(draw_two_groups_moved, &b);
+    eqw("two vertex groups, one of them moved", b.diff_groups, 1u);
+    eqw("the frame's own vertex-group count", b.ident_vertex_groups, 2u);
+    eqw("the untouched group is the only one the drawing kick credits", b.ident_xyz, 1u);
+    eqw("while the colour lane still counts both", b.ident_rgb, 2u);
+    eqw("and so does the texel lane", b.ident_st, 2u);
+    eqw("and BOTH are shape-invariant, because a translated mesh is the same mesh",
+        b.ident_shape, 2u);
+
+    /* The mirror image: one colour bit, the geometry byte-identical. */
+    dma_reset();
+    frame_of(draw_colour_a, NULL);
+    frame_of(draw_colour_b, &b);
+    eqw("a colour-only frame still differs as a group", b.diff_groups, 1u);
+    eqw("and its colour lane is the one that counts nothing", b.ident_rgb, 0u);
+    eqw("the drawing kick is invariant", b.ident_xyz, 1u);
+    eqw("and the texels with it", b.ident_st, 1u);
+    eqw("and the shape with them", b.ident_shape, 1u);
+
+    /* Only PRIM moved: the whole-group hash sees it and no lane does. */
+    dma_reset();
+    frame_of(draw_prim_a, NULL);
+    frame_of(draw_prim_b, &b);
+    eqw("a moved primitive descriptor is a difference", b.diff_groups, 1u);
+    eqw("while all three lanes call the group invariant", b.ident_xyz, 1u);
+    eqw("the colour lane included", b.ident_rgb, 1u);
+    eqw("and the texel lane", b.ident_st, 1u);
+    eqw("and the shape lane", b.ident_shape, 1u);
+
+    /* An AD group folds no lane, so three identical groups give two lane credits -- and `v=` is the
+     * column that lets the reader see that, rather than infer it from `texsw=`. */
+    dma_reset();
+    frame_of(draw_with_switch, NULL);
+    frame_of(draw_with_switch, &b);
+    eqw("the switched frame repeats itself wholly", b.same_groups, 3u);
+    eqw("it is three groups: two vertex and one AD", b.diff_groups, 0u);
+    eqw("and the frame says so", b.ident_vertex_groups, 2u);
+    eqw("and each lane counts only the two vertex groups", b.ident_xyz, 2u);
+    eqw("the colour lane likewise", b.ident_rgb, 2u);
+    eqw("the texel lane likewise", b.ident_st, 2u);
+    eqw("the shape lane likewise", b.ident_shape, 2u);
+
+    /* The pair the lane exists for, on a group of three vertices rather than a lone triangle: a
+     * TRANSLATION is invariant in `shape=` and differs in `xyz=`, and a RESHAPE differs in both.
+     * These two rows are what makes "the same mesh moved" a reading instead of a guess. */
+    dma_reset();
+    frame_of(draw_two_groups, NULL);
+    frame_of(draw_one_translated, &b);
+    eqw("one group, translated", b.diff_groups, 1u);
+    eqw("its coordinates moved", b.ident_xyz, 0u);
+    eqw("its shape did not", b.ident_shape, 1u);
+
+    dma_reset();
+    frame_of(draw_one_translated, NULL);
+    frame_of(draw_two_groups_moved_shape, &b);
+    eqw("a reshaped group is a difference", b.diff_groups, 1u);
+    eqw("its coordinates moved", b.ident_xyz, 0u);
+    eqw("and so did its shape -- the delta between two of its vertices changed", b.ident_shape, 0u);
+}
+
 int main(void)
 {
     printf("==========================================================\n");
@@ -483,6 +855,14 @@ int main(void)
     test_group_capacity();
     test_stats();
     test_begin_reaps_the_last_frames_stream();
+    test_ident_invariant();
+    test_ident_moved_vertex();
+    test_ident_colour_only();
+    test_ident_positional_tail();
+    test_ident_empty_frame_keeps_predecessor();
+    test_ident_at_list();
+    test_staged_group_count();
+    test_ident_lanes();
 
     printf("  checks=%d failures=%d\n", s_checks, s_failures);
     if (s_failures == 0) {

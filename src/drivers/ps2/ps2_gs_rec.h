@@ -69,10 +69,13 @@ void gs_rec_prim(uint64_t prim);
 void gs_rec_color(uint32_t r, uint32_t g, uint32_t b, uint32_t a);
 void gs_rec_texcoord(float s, float t);
 
-/* One vertex, in screen pixels relative to XYOFFSET's page origin -- which is what
- * gs_vertex_coord16() folds the +2048 and the 12.4 around, so callers hand over plain floats
- * and never a fixed-point number.  Returns 0, or -1 if no primitive is open. */
-int gs_rec_vertex(float x_px, float y_px, uint32_t z);
+/* One vertex, in whole screen pixels relative to XYOFFSET's page origin -- which is what
+ * gs_vertex_coord16() folds the +2048 and the 12.4 around, so callers hand over plain integers
+ * and never a fixed-point number.  The unit is a pixel rather than a 1/16 because that is what
+ * the callers have: both backends' vertices come out of the viewport map, whose outputs are
+ * `GLint`, and the field's four low bits were therefore always zero.  Returns 0, or -1 if no
+ * primitive is open. */
+int gs_rec_vertex(int32_t x_px, int32_t y_px, uint32_t z);
 
 /* glEnd: close the open group and send it.  A group with no vertices sends nothing. */
 void gs_rec_end(void);
@@ -105,8 +108,9 @@ uint32_t gs_rec_unsplittable(void);
  * A GS layer shares its rect with the canvas: the band upload arrives first and the stream draws
  * into it, so wherever the stream does not rasterise, the screen shows the canvas.  That is the
  * condition the compositor checks before it stops filling the plate under a layer, and the edges
- * here are rounded inward -- a vertex at 767.4 counts as reaching 767, never 768 -- so a span that
- * covers the rect is a span that covers it, not a span that nearly does. */
+ * are the group's own extreme vertices named exactly -- a vertex at 767 reaches 767 and not 768,
+ * which is what the whole-pixel unit gives for free now that the packet is built from integers --
+ * so a span that covers the rect is a span that covers it, not a span that nearly does. */
 int gs_rec_bbox_first(int32_t *l, int32_t *t, int32_t *r, int32_t *b);
 
 #endif /* PS2_GS_REC_H */

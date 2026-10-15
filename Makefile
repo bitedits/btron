@@ -34,7 +34,7 @@ CC ?= gcc
 CFLAGS ?= -O2 -Wall -Wextra -std=c99 -Iinclude -Iinclude/gl -Isrc/gl -Iinclude/drivers -Isrc/kernel -Isrc/cores -Isrc/quake/include
 
 .PHONY: all posix qemu kernel tkernel sakamura foma uefi pc98 arm-elf arm64-elf m68k ps2 mips \
-        check-structure test-ps2-softfloat test-ps2-gs-pack test-ps2-gs-env test-ps2-gs-rec test-ps2-gs-poster test-ps2-gs-tex test-ps2-pointer test-ps2-fused-row test-ps2-gif-ring test-eegs-raster test-eegs-present test-gl-math test-gl-backend-choice test-ps2-fb-order xmb-atlas test-xmb-atlas \
+        check-structure test-ps2-softfloat test-ps2-gs-pack test-ps2-gs-env test-ps2-gs-rec test-ps2-gs-poster test-ps2-gs-tex test-ps2-pointer test-ps2-fused-row test-ps2-gif-ring test-eegs-raster test-eegs-present test-gl-math test-gl-backend-choice test-ps2-fb-order test-grid-map xmb-atlas test-xmb-atlas \
         test-xmb-render test-xmb-render-tgl \
         html2tad book2tad tad_bin test test-kernel test-yoko test-yoko4 test-m68k test-mips test-ps2 test-foma test-foma-ui foma-screens \
         segui-screens \
@@ -1053,6 +1053,16 @@ endif
 # read.  0 compiles the counters away.
 PS2_FP_COUNT    ?= 0
 PS2_CFLAGS    += -DBTRON_PS2_FP_COUNT=$(PS2_FP_COUNT)
+# PS2_IDENT=1 is LANE 12h's deciding instrument: the present folds a per-group hash over the staged
+# GIF stream, carries it one frame forward, and prints how many of this frame's groups and quadwords
+# are identical to the previous presented frame's same-index group (`[GSTID]`).  It decides between
+# the lane's two rungs -- a replay of an invariant span versus a textured batch map -- and nothing
+# else in the port can answer the question, because LANE 10's buffer-lifetime law forbids keeping
+# the words.  Cost is two 32-bit multiplies per quadword inside the copy the sink already does, so an
+# ident run's microseconds are slightly inflated and only its invariance columns are read: the same
+# rule PS2_FP_COUNT states for its counters.  0 compiles the instrument out of the shipped image.
+PS2_IDENT       ?= 0
+PS2_CFLAGS    += -DBTRON_PS2_GS_IDENT=$(PS2_IDENT)
 PS2_STARTUP    = src/cores/core_ps2.c
 # The termios-scope applications gterm hosts: Sokhatsky Commander and Terminal
 # Vision.  They sit in COMMON_SRCS, so the hosted targets have always had them and
@@ -1323,6 +1333,40 @@ $(PS2_FP_OBJS): PS2_CC := $(subst -msoft-float,-mhard-float,$(PS2_CC)) $(PS2_FP_
 $(PS2_FP_OBJS): PS2_CFLAGS += -DBTRON_PS2_FP_HW
 endif
 
+# PS2_FP_COUNT is named in three units and paid for by all of them: the counters themselves are
+# incremented inside the soft-float runtime (ps2_builtins.c), xmb.c prints a stage's census from
+# them, and core_ps2.c prices the classes and prints the [FPU] rows.  A link where those three
+# disagree is worse than either value -- with ps2_builtins counted and xmb not, every call still
+# pays the counter's load, add and store while no row explains why the microseconds moved -- and
+# make cannot see the change, because the flag is not a file date.  Measured 2026-10-14: a
+# supposedly-production image that `nm` showed holding `btron_fp_calls`, from a census round that
+# left xmb.ps2.o newer than its source.  Same content-comparison stamp as the other dials, same
+# object list as the disease, and note again that `$(shell ...)` runs while *parsing* -- a
+# `make -n PS2_FP_COUNT=1` purges these too.
+PS2_FPC_OBJS = src/drivers/ps2/ps2_builtins.ps2.o src/apps/xmb.ps2.o \
+               src/cores/core_ps2.ps2.o src/cores/core_ps2.pbench.o
+PS2_FPC_STAMP = .build/ps2-fpc.stamp
+PS2_FPC_PREV := $(shell cat $(PS2_FPC_STAMP) 2>/dev/null)
+ifneq ($(PS2_FPC_PREV),$(PS2_FP_COUNT))
+$(shell mkdir -p ./.build && echo '$(PS2_FP_COUNT)' >$(PS2_FPC_STAMP) && rm -f $(PS2_FPC_OBJS))
+$(info [PS2] PS2_FP_COUNT is now $(PS2_FP_COUNT) (was $(if $(PS2_FPC_PREV),$(PS2_FPC_PREV),unset)) -- the units that read it will rebuild)
+endif
+
+# PS2_IDENT is three units and the same disease: the hash and the row are built in eegs_present.c,
+# the stage attribution column is printed by xmb.c from the present's own counter, and core_ps2.c is
+# the half that prints [GSTID] -- the bench object included, because that is the one this dial is
+# turned on for.  An image where eegs_present counted and core_ps2 did not print is an instrument
+# nobody reads; one where xmb printed `g=` against a stream nothing hashed is a column that means
+# nothing.  Same content-comparison stamp, same note that `$(shell ...)` runs while *parsing*.
+PS2_IDENT_OBJS = src/gl/eegs_present.ps2.o src/apps/xmb.ps2.o \
+                 src/cores/core_ps2.ps2.o src/cores/core_ps2.pbench.o
+PS2_IDENT_STAMP = .build/ps2-ident.stamp
+PS2_IDENT_PREV := $(shell cat $(PS2_IDENT_STAMP) 2>/dev/null)
+ifneq ($(PS2_IDENT_PREV),$(PS2_IDENT))
+$(shell mkdir -p ./.build && echo '$(PS2_IDENT)' >$(PS2_IDENT_STAMP) && rm -f $(PS2_IDENT_OBJS))
+$(info [PS2] PS2_IDENT is now $(PS2_IDENT) (was $(if $(PS2_IDENT_PREV),$(PS2_IDENT_PREV),unset)) -- the units that read it will rebuild)
+endif
+
 ps2-bench: $(PS2_BENCH_TARGET)
 
 $(PS2_BENCH_TARGET): $(PS2_BENCH_OBJS) $(PS2_LD_SCRIPT)
@@ -1427,7 +1471,7 @@ $(PS2_FARFOLD_OBJ): verify/tests/ps2_farfold_probe.c include/gl/math.h
 	$(PS2_CC) $(PS2_CFLAGS) -c $< -o $@
 
 test-ps2: $(PS2_TARGET) $(PS2_ISO) $(PS2_FARFOLD_OBJ)
-	@./scripts/test_ps2.sh
+	@PS2_GL=$(PS2_GL) PS2_FP=$(PS2_FP) PS2_FP_COUNT=$(PS2_FP_COUNT) PS2_MSX=$(PS2_MSX) ./scripts/test_ps2.sh
 
 # The PS2 image is built -msoft-float (the R5900 FPU has no double-precision
 # instructions), so every floating-point operation in it runs through
@@ -1633,6 +1677,42 @@ $(TEST_EEGSR_BIN): $(TEST_EEGSR_OBJS) src/gl/backend_eegs.c src/gl/backend_eegs.
                    verify/tests/gs_group_view.h
 	@mkdir -p ./.build
 	$(CC) $(TEST_EEGSR_OBJS) -o $@ $(LDFLAGS)
+
+# LANE 12f gate (a): the VALUES.  `tgl_grid_map()` and `tgl_grid_map_points()` are a second encoding
+# of `tgl_vertex_to_viewport()`, and the only honest comparator for a second encoding is the first
+# one, so this suite links TinyGL and drives the real API -- glViewport, the app's own
+# glOrtho(0,w,h,0,-1,1), identity modelview, blend on -- over a quarter-pixel lattice and the channel
+# byte's own flip points, and requires BIT equality on both device pixels and all four colour bytes.
+# -ffp-contract=off is insurance, not the load-bearing half of this gate: the Emotion Engine has no
+# FMA at all, so `off` is the setting under which the host runs the IMAGE's arithmetic (the same
+# reasoning is in that file's header), and it has to reach every TU in the link or the comparison
+# would be between two different compilers rather than two encodings.  Measured 2026-10-14: dropping
+# the flag leaves this suite green on Apple clang 21 / arm64, which does not contract these
+# statements; it would not be green under gcc's default -ffp-contract=fast.  What does bite is the
+# precision of the truncate -- a double-intermediate map loop moves 1,932 device pixels at 640x480 and
+# none of them is visible on an interior lattice point; see the header of the suite.
+# One trap for whoever runs those mutations: restoring vertex_stage.c with `cp` can leave the source
+# and its *.gm.o with the same second of mtime, and make then re-runs the MUTATED object and reports
+# failures that are no longer in the tree.  Delete the object, do not re-touch the source.
+# backend_virgl.c is here as it is in the other GL suites: the GL_BACKEND_VIRGL case in gl_init is
+# unconditional in the shipped image too.
+TEST_GRIDMAP_SRCS = verify/tests/test_grid_map.c src/gl/gl_dispatch.c src/gl/backend_tinygl.c \
+                    src/gl/backend_virgl.c $(TINYGL_SRCS) src/apps/xmb_wave.c
+TEST_GRIDMAP_OBJS = $(TEST_GRIDMAP_SRCS:.c=.gm.o)
+TEST_GRIDMAP_BIN  = ./.build/test_grid_map
+
+%.gm.o: %.c
+	$(CC) $(CFLAGS) -ffp-contract=off -DBTRON_GL_BACKEND_TINYGL -MMD -MP -c $< -o $@
+
+test-grid-map: $(TEST_GRIDMAP_BIN)
+	@echo "=========================================================="
+	@echo " Running LANE 12f gate (a): the batch's map vs the vertex walk itself..."
+	@echo "=========================================================="
+	@./$(TEST_GRIDMAP_BIN)
+
+$(TEST_GRIDMAP_BIN): $(TEST_GRIDMAP_OBJS) src/gl/grid_map.h src/gl/tinygl/vertex_stage.c
+	@mkdir -p ./.build
+	$(CC) $(TEST_GRIDMAP_OBJS) -o $@ $(LDFLAGS) -lm
 
 # Increment 5c: the present's own law, which is an order and two counts rather than a set of words.
 # eegs_present.c is #included with the stage, the recorder, the packer, the allocator and the
@@ -2335,12 +2415,28 @@ $(TEST_TRACKER_BIN): $(TEST_TRACKER_OBJS)
 # ═══════════════════════════════════════════════════════════════════
 # Desktop Banded-Present Losslessness (the PS2 present's contract, headless)
 # ═══════════════════════════════════════════════════════════════════
-TEST_CLIP_SRCS = verify/tests/test_desktop_clip.c src/desktop/tracker.c src/desktop/desktop.c src/settings/appearance.c \
+TEST_CLIP_SRCS = verify/tests/test_desktop_clip.c verify/tests/test_desktop_clip_count_port.c \
+                 src/desktop/tracker.c src/desktop/desktop.c src/settings/appearance.c \
                  src/vobject/vobj.c src/desktop/about.c src/window/wnd.c src/chokanji/pmc.c \
-                 src/window/app_menu.c \
+                 src/window/app_menu.c src/desktop/global_menu.c src/desktop/workbench.c \
                  src/graphics/dp_core.c src/graphics/icons_bundle.c src/font/troncode.c src/font/jis_fonts.c src/font/tibetan_fonts.c
-TEST_CLIP_OBJS = $(TEST_CLIP_SRCS:.c=.test.o)
+TEST_CLIP_OBJS = $(TEST_CLIP_SRCS:.c=.clip.o)
 TEST_CLIP_BIN  = ./.build/test_desktop_clip
+# LANE 12i rung (ii)'s COUNT half: renaming the tracker renderer makes every call
+# site in workbench.c / global_menu.c / the harness route through the counting
+# wrapper in *_count_port.c, which delegates to the real definition (the two TUs
+# without this flag).  The plain build reports SKIP for those two rows.  The
+# rename TUs live in their OWN `.clip.o' namespace because these sources are
+# shared with the other suites through `.test.o': a renamed
+# src/desktop/global_menu.test.o would leak `counted_tracker_render_menu' into
+# test_global_menu's link, which has no wrapper to resolve it.
+verify/tests/test_desktop_clip.clip.o:             CFLAGS += -Dtracker_render_menu=counted_tracker_render_menu
+src/desktop/global_menu.clip.o:                    CFLAGS += -Dtracker_render_menu=counted_tracker_render_menu
+src/desktop/workbench.clip.o:                      CFLAGS += -Dtracker_render_menu=counted_tracker_render_menu
+verify/tests/test_desktop_clip_count_port.clip.o:  CFLAGS += -Utracker_render_menu
+
+%.clip.o: %.c
+	$(CC) $(CFLAGS) $(SDL_CFLAGS) -MMD -MP -c $< -o $@
 
 test-deskclip: $(TEST_CLIP_BIN)
 	@echo "=========================================================="
@@ -2599,7 +2695,7 @@ $(TEST_MSX_BOOT_BIN): $(TEST_MSX_BOOT_OBJS)
 	@mkdir -p ./.build
 	$(CC) $(TEST_MSX_BOOT_OBJS) -o $@ $(LDFLAGS)
 
-test: test-tad test-editor test-chat test-mozc test-wylie test-hmi test-ski test-tracker test-deskclip test-settings test-global-menu test-app-menu test-drivesetup test-fs test-quake test-ps2-softfloat test-ps2-gs-pack test-ps2-gs-env test-ps2-gs-rec test-ps2-gs-poster test-ps2-gs-tex test-ps2-pointer test-ps2-fused-row test-ps2-gif-ring test-eegs-raster test-eegs-present test-gl-math test-gl-backend-choice test-ps2-fb-order test-xmb-atlas
+test: test-tad test-editor test-chat test-mozc test-wylie test-hmi test-ski test-tracker test-deskclip test-settings test-global-menu test-app-menu test-drivesetup test-fs test-quake test-ps2-softfloat test-ps2-gs-pack test-ps2-gs-env test-ps2-gs-rec test-ps2-gs-poster test-ps2-gs-tex test-ps2-pointer test-ps2-fused-row test-ps2-gif-ring test-eegs-raster test-eegs-present test-gl-math test-gl-backend-choice test-ps2-fb-order test-grid-map test-xmb-atlas
 	@echo "=========================================================="
 	@echo " ALL B-SYSTEM TEST SUITES PASSED (100% SUCCESS)!"
 	@echo "=========================================================="

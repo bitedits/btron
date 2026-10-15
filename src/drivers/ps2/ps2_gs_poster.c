@@ -2,8 +2,9 @@
  * ps2_gs_poster.c — the flat-colour SPRITE batch, as words
  *
  * See ps2_gs_poster.h for what a poster is and for the two laws this file exists to enforce:
- * a poster's colour is a canvas word, and a poster's vertex is the recorder's vertex computed
- * without a float.  LANE 9b, doc/txt/PS2.txt "The lanes" row 9, the poster half.
+ * a poster's colour is a canvas word, and a poster's vertex is the recorder's vertex word -- the
+ * same gs_vertex_coord16() that every recorded stream is built from, not a second encoding of it.
+ * LANE 9b, doc/txt/PS2.txt "The lanes" row 9, the poster half.
  *
  * Copyright 2026 Synrc Research Center. MIT License.
  */
@@ -41,14 +42,16 @@ static int poster_rect_ok(const gs_poster_rect *r)
     return 1;
 }
 
-/* The corner word a sprite vertex takes: the same 12.4 value gs_vertex_coord16() produces, from an
- * integer pixel, with no multiply and no float.  Truncation is not a concern here because the input
- * is already a whole pixel; the & 0xFFFF is the field width, and the host gate compares this
- * against the float encoder for every coordinate a canvas can carry. */
-static uint32_t poster_coord(int32_t px)
-{
-    return (((uint32_t)px << 4) + GS_XYOFFSET_PAGE) & 0xFFFFu;
-}
+/* The corner word a sprite vertex takes is the recorder's own encoder, called directly.
+ *
+ * This file used to carry a second one -- the same law as `(px << 4) + GS_XYOFFSET_PAGE`, written
+ * out again -- and LANE 12a removed it.  The two were gated against each other, which is the shape
+ * of argument that has to end when there is only one spelling: the remaining check that the shift is
+ * still the encoding the float path used is doc/txt/PS2.txt's LANE 12a gate, in
+ * verify/tests/test_ps2_gs_pack.c's coord_matches_float(), which compares the shipped encoder with
+ * the retired float expression over the whole coordinate range.  A poster and a recorded vertex that
+ * reach the same page corner must reach the same WORD, and after this edit that is a property of
+ * there being one function rather than of two agreeing. */
 
 uint32_t gs_poster_qwc(uint32_t n)
 {
@@ -109,8 +112,8 @@ int32_t gs_poster_packet(const gs_poster_rect *r, uint32_t n, uint32_t canvas_px
         v = &qw[2u + (GS_POSTER_REGS_N * 2u) * written];
         v[0] = prim;   v[1] = 0u;
         v[2] = rgbaq;  v[3] = 0u;
-        v[4] = gs_pack_xyz2(poster_coord(r[i].x0), poster_coord(r[i].y0), 0u);  v[5] = 0u;
-        v[6] = gs_pack_xyz2(poster_coord(r[i].x1), poster_coord(r[i].y1), 0u);  v[7] = 0u;
+        v[4] = gs_pack_xyz2(gs_vertex_coord16(r[i].x0), gs_vertex_coord16(r[i].y0), 0u);  v[5] = 0u;
+        v[6] = gs_pack_xyz2(gs_vertex_coord16(r[i].x1), gs_vertex_coord16(r[i].y1), 0u);  v[7] = 0u;
         written++;
     }
 

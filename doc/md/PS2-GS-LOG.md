@@ -1675,3 +1675,722 @@ would re-run.  `PS2_MSX=0` leaves the five B-MSX rows unexercised, as the suite'
 says.  And the arm64 image's pixels were not re-captured on this pass: what is claimed for the Pi 400
 is that its TU takes the other branch (compile line, zero occurrences of the macro) and that the
 branch is held to the scalar rule by the gate's host dial -- not that its screen was looked at.
+
+---
+
+## Lane 12a and 12b landed: the packet is integers, the clipper has one viewport map, and the bench had to be told which image it runs
+
+**The change, as landed 2026-10-14.**  LANE 12a made the GS vertex packet an integer
+operation: `gs_rec_vertex()` now takes `int32_t x_px, y_px`, `gs_vertex_coord16()` is
+`(px * 16) + GS_XYOFFSET_PAGE` with no float in it, `eegs_vertex_t.x_px/y_px` are
+`int32_t`, and the texel power-of-two scale folds into the exponent field as
+`gs_float_scale_pow2()` (with the zero/Inf/NaN and subnormal cases named and swept).
+LANE 12b deleted `clip.c`'s verbatim duplicate of the viewport map,
+`gl_transform_to_viewport_clip_c()`, and routed its three call sites -- including
+`updateTmp()` -- through `tgl_vertex_to_viewport()`, the `-mhard-float` unit reached by
+pointer under row 7's ABI law.  The poster's `poster_coord()` collapsed into the same
+one encoder, because once `gs_vertex_coord16()` is integer the two spellings are the
+same statement, and `coord_matches_float()`/`scale_pow2_sweep()` in
+`verify/tests/test_ps2_gs_pack.c` are what let the float spelling retire rather than
+merely disappear.
+
+**The gates.**  `make -k test` green (100% of the suites); pack 59, rec 139, poster 56,
+raster 78, present 70 checks at 0 failures; `make test-ps2` **93/93** with the one
+`[SKIP]` the parked `PS2_MSX=0` declares; `make arm64-elf` builds.  A wrong literal in
+this session's own gate proved it discriminates: `gs_vertex_coord16(2047)` was first
+written as `0xFF70` and `make test-ps2-gs-poster` failed on it, because 2047*16 + 32768
+is 65520 = `0xFFF0`.  One comment cited `verify/tests/test_tgl_viewport.c`, a file that
+does not exist in the tree; it now names the gap it actually leaves (nothing on the host
+checks that a clipped vertex's whole-pixel value is the one the map produced --
+`ps2_sf_fixsfsi` is swept by `test_ps2_softfloat.c`, which is not the same claim).
+
+**The measurement, and the two things that had to be true before it could be read.**
+First: the ELF on disk was NOT the image the lane was written against.  `make test-ps2`
+depends on `$(PS2_TARGET)`, and both it and `make btron_sys.vol` run the parse-time
+`PS2_GL` comparison with the default value, so the stamp read `tinygl` and
+`gl_backend_default()` in `btron-ps2.elf` returned `0x0` -- TinyGL -- on a tree whose
+book was quoting eegs rows.  This is the fifth firing of the incident chapter 14 already
+documents, and this time it was caught by disassembling the linked image rather than by
+mtime.  Second: `src/apps/xmb.ps2.o` was stale from a `PS2_FP_COUNT=1` build, and that
+dial has NO stamp, so an `nm` hit on `btron_fp_calls` in the supposedly-production image
+was the only sign -- the counters were in the very rows being timed.  Both are why every
+run below starts from `find src -name '*.ps2.o' -delete`.
+
+**A/B, production (`PS2_GL=eegs PS2_FP=hw PS2_MSX=0 PS2_FP_COUNT=0`, BENCH_APP=1).**
+`build/ps2-bench-9c-baseline.log` (the code before) against `build/ps2-bench-A-prod.log`
+(the code after), frame 1 / cycle 1, and the linked image's own answer to
+`gl_backend_default` = `0x3` in both:
+
+| row | before | after | delta |
+|---|---|---|---|
+| `f_ribbon` geometry | 25,168 us | 21,849 us | -3,319 (-13.2%) |
+| `f_menu` geometry | 12,340 us | 11,261 us | -1,079 (-8.7%) |
+| `f_surface` | 8,253 us | 8,248 us | unmoved, as designed |
+| `frame 2 draw=` | 46,864 us | 42,483 us | -4,381 (-9.3%) |
+| `cycle 1 period=` | 106,544 us | 102,162 us | -4.1% |
+| `comp bg / frame / blit` | 7,484 / 7,851 / 12,654 | 7,480 / 7,853 / 12,661 | noise |
+
+The last line is the control: the three composite rows no rung touches did not move, so
+the whole win is the geometry term the two rungs own.  4,381 us measured against 2,980 us
+predicted from the call counts is 1.46x, and the census says why -- the removed calls are
+concentrated in the two classes whose prices are the highest of the singles (float->int 53
+cycles, int->float 29), not in the 34-cycle arith:
+
+| census (`PS2_FP_COUNT=1`, same tree) | before | after |
+|---|---|---|
+| `f_ribbon` S= | 70,638 | 34,442 |
+| `f_ribbon` fs2i / fi2s | 17,852 / 18,964 | 5,952 / 7,932 |
+| `f_ribbon` fmul / fcmp | 28,881 / 4,693 | 15,745 / 4,689 |
+| `f_ribbon` fdiv | 248 | 124 |
+| `f_menu` S= | 32,809 | 18,995 |
+
+50,010 calls a frame left the image.  Two readings of that table are the lane's controls
+on itself: `fcmp` fell by FOUR in a stage of 1,984 vertices, which is the signature of a
+change that converts and multiplies and never tests; and `fdiv` HALVED rather than
+emptied, because the viewport map that survives does its own `1.0 / v->pc.W` per mapped
+vertex -- 12b is finished at the halving, not at zero.  Multiplying the counts by the
+`[FPU]` prices gives 6.5 ms where the A/B measured 4.38, since the counter's own
+load/add/store sits inside the interval the priced loop measured, so the book quotes the
+production row for microseconds and the census only for attribution.
+
+**What the measurement did NOT do.**  It did not move the wave visibly: 4.1% of a frame
+period is below what an eye reads as smoothness, and the user's report on the commit at
+17:36 ("no improvement on the speed of the waving 3D surface") is correct on its own
+terms -- that commit still contains `gl_transform_to_viewport_clip_c` (four references in
+`git show HEAD:src/gl/tinygl/clip.c`) and `gs_rec_vertex(float, float, uint32_t)`, i.e.
+neither rung.  The book's LANE 12c is therefore left written and UNFUNDED (~4 ms a frame
+is the same 3.9% of a period), and LANE 12d is opened against the residue the census
+cannot see: ~14 ms of the ribbon's 21.8 ms, 2,000 cycles a vertex, is integer
+immediate-mode work, and the two rungs named for it are the mesh dial (4x fewer vertices,
+and the user's eye decides the fidelity) and the array path (one dispatch per primitive
+instead of one per vertex, gated on a `jal` in the disassembly plus a byte-identical
+packet stream).
+
+**SKIP, not PASS.**  Nothing ran on a PlayStation 2; every row above is PCSX2.  No user
+visual confirmation was asked for or received, and none is claimed -- which is the point
+of the 4.1% paragraph.  The `hash 160 of 16384` lattice-cache row and the
+`dm=340..450`/1024-px motion rows are read from the same bench log and are not tests.
+`PS2_MSX=0` leaves the B-MSX rows unexercised.  The 12d pre-gate has NOT been run, so the
+array path's reachability of the GS hook is a hypothesis in this book, not a measured
+fact.  And the two `nm`/`objdump` reads that made both runs trustworthy are one-off
+diagnostics of this session's artifacts: `scripts/ps2_bench.sh` still does not print the
+dials it built with, which is the next thing to fix if this class of mis-measurement is to
+stop recurring.
+
+---
+
+## Lane 12e measured and PARKED: the continuation costs 236 dropped groups, buys no microsecond, and the pricing law that reversed the priority
+
+**What was tried, and the verdict as landed 2026-10-14.**  LANE 12e made the GS stream's
+triangle path a live triangle strip: `eegs_triangle()` would keep the last two vertices of an
+open primitive, recognise a triangle that shares an edge with it, and emit ONE vertex plus a
+re-declared PRIM instead of three vertices and a new group.  It is now PARKED -- the code is
+back to the three-vertex list path and the four `chain_*` counters are gone with it.  The
+verdict is not a style judgement; it is this pair of rows from the shipping dials
+(`PS2_GL=eegs PS2_FP=hw PS2_MSX=0 PS2_FP_COUNT=0`, `BENCH_APP=1`), frame 1 of the XMB pass:
+
+| row | with 12e | parked | note |
+|---|---|---|---|
+| `groups=` | **256** = `EEGS_MAX_GROUPS`, full | 51 | the table is the budget |
+| `qw=` | 10,488 | 29,985 | -65%: two thirds never reached the bus |
+| `drop=` | **236** | 0 | primitives the app drew and the screen does not have |
+| `verts=`/`prims=` | 6,435/2,489 = 2.59 | 7,467/2,489 = **3.00** | the parked law |
+| `pchg=` | 470 | 24 | 19x the group boundaries |
+| `gs=` | 4,025 us | 3,864 us | pre-12e baseline: 3,874 us |
+| `f_ribbon` geom | 21,842 us | 21,919 us | baseline 22,701 -- a 4% spread |
+| `f_menu` geom | 11,062 us | 11,307 us | noise |
+| `frame draw=` | 44,778 us | 45,094 us | noise |
+| `cycle period=` | 102,241 us | 102,185 us | noise |
+
+Frame 2 and 3 repeat it (`drop=256`, `drop=248`).  Every one of the three things the rung
+promised to improve went the other way or stayed inside the noise, and one of them
+(`drop=236`) is a correctness failure rather than a missed target.  `qwc`-wise the frame got
+smaller by 65% and the present got 4% slower: the quadword count is not what `gs=` is made
+of.  The `[GSTS] gif:` rows say the same thing from the other side -- `posted=52 -> 257`, a
+5x change in transfers, against `blocked=18,603 -> 18,337 us` on the reap, unmoved.  What
+`gs=` carries is the once-a-frame sync, not the per-transfer count, and this port has no
+measured fact yet that separates the two terms.
+
+**The mechanism, and why a chain rate under 28% is not obviously a loss.**  The `chain=`
+counters are per *frame*, not per stage, so they cannot be charged to the ribbon alone: 516 of
+the frame's 2,489 primitives continued a live strip, 223 entered one, 223 missed and 1,750 took
+the list path.  The ribbon by itself draws 1,838 of those 2,489, so the chained share of the
+ribbon is *at most* 516/1,838 = 28%.  A miss is not one event but two -- the triangle takes the
+list path, then the next triangle that wants the strip pays re-entry: a fresh vertex and a PRIM
+re-declaration.  That is why `miss=` and `entry=` are equal, and why 223 of them put `pchg=` at
+470 against the parked build's 24 -- every PRIM closes a group, because `gs_rec_prim()` sends the
+open group first.  51 groups became 256, 256 is `EEGS_MAX_GROUPS`, and past that the staging
+table drops.  The `verts=`/`prims=` ratio of 2.59 is the signature to look for: it is under 3.0,
+which a pure list cannot produce, so a stream reading below 3.00 is chaining somewhere -- and
+after this run, nowhere is legitimate.
+
+**The provenance of the `chain=` row, because its log file is gone.**  `scripts/ps2_bench.sh`
+writes `build/ps2-bench.log` in place, so the instrumented run's stdout was overwritten by the
+parked run that followed it.  The retained `build/ps2-bench-12e.log` is that same build one run
+earlier -- before the four columns were added to the row format -- and the chain numbers
+reconcile against it exactly, which is the check that keeps them quotable: 516 + 223 + 1,750 =
+2,489 = that log's `prims=`, and 516x1 + 223x3 + 1,750x3 = 6,435 = its `verts=`.  A row that
+partitioned both counters could not have come from a different build.  The fourth `f_ribbon`
+value this session saw, 22,653 us, is from the same overwritten run; the three retained ones are
+21,842 (12e), 21,919 (park) and 22,701 (the pre-12e baseline in
+`build/ps2-bench-12d-baseline.log`), so the stage's own run-to-run spread is 4% -- as wide as
+anything LANE 12e could have won, and the reason the book now quotes the spread instead of one
+number.  The lesson is in this file rather than the book because it is about the bench harness:
+**a run this lane intends to quote gets copied out of `build/ps2-bench.log` before the next one
+starts.**
+
+**The pricing law this lane earned, and why it reversed the plan.**  The runs either side of
+LANE 12a/12b moved 36,196 soft-float calls and 4,896 us, which against the `[FPU]` class
+prices predicts 4.74 ms -- 3% off the measurement.  So the class prices are usable at the
+call-count level (~40 cycles a call, not the 113 or 558 this session first wrote).  Feeding
+the parked build's own census through them: `f_ribbon`'s remaining 34,442 singles are 4.7 ms
+of its 21.9 ms stage, i.e. **21%**, and the residue is **~2,600 cycles a vertex of integer
+immediate-mode work** (3,260 total, at the 21,919 us the shipping build reads).  That single arithmetic kills two candidates and promotes
+one: making every float in the ribbon's path COP1-native is a 1.3x on one stage and 1.1x on
+the frame; a cheaper GIF stream is bounded by `gs=` at ~4 ms; only stopping paying 2,600
+integer cycles per vertex for data the application already holds as arrays reaches the bar
+the user set.  Hence LANE 12f (one dispatch and one group per mesh, over `xb_rib_px/
+xb_rib_py/xb_rib_bri`, claim 22 ms -> ~2 ms) and LANE 12g (f_surface's 1,705 doubles =
+3,225 us = 38% of that stage), both written into `doc/txt/PS2.txt` as the reprioritisation.
+
+**The park, as surgery rather than as a revert.**  The uncommitted tree also holds the user's
+in-flight work, so nothing was checked out.  Deleted by targeted line edits: `prim_is()`,
+`vertex_same()`, `new_vertex()`, `s_emit_tail[2]`, the four `eegs_chain_*` accessors and their
+`eegs_present.{h,c}` fields; `select_prim()` is `static void` again; `eegs_frame_begin()`
+resets only `s_prim_moves`, which survives because `groups=` is made of it and the budget
+needs a witness.  `verify/tests/test_eegs_raster.c` went 119 -> 80 checks: the two strip
+tests and their two helpers (`check_count`, `check_partition`, `vertex_payload_equal`,
+`test_strip_continuation`, `test_strip_does_not_extend`) were removed, and `test_state_reuse`
+gained the checks that hold the park open --
+
+```c
+check("the park holds: verts is 3 x prims, so no vertex was ever continued",
+      eegs_verts() == 3u * eegs_prims());
+check_word("and this stage's group carries OP 3, the triangle list",
+           gs_vq(VG(0), 1u, 0u) & 7u, 3u);
+```
+
+`ps2_gs_rec.c` still IMPLEMENTS `GS_OP_TRISTP` and stays gated in `test_ps2_gs_rec.c`: the
+recorder is not the thing that was refuted, only the policy of handing it edge-sharing
+triangles.  The Appendix's `[GSTS]` legend and the chapter-9 row-summary entry now describe
+the parked row shape (`pchg=` named, `verts = 3.00 x prims` stated as the parked invariant).
+
+**The gates.**  `make test-eegs-raster` -> checks=80 failures=0 on a clean compile; `make
+test-eegs-present` -> 70/0; `make test-ps2` on the three shipping dials -> **95/95** with the
+one `[SKIP] PS2_MSX=0`; `make arm64-elf` -> exit 0, zero warnings.  Stale-object discipline
+applied before each: `rm -f verify/tests/test_eegs_raster.test.o .build/test_eegs_raster`
+and `rm -f src/cores/core_ps2.pbench.o`.
+
+**SKIP, not PASS.**  Nothing ran on a PlayStation 2; every microsecond above is PCSX2.  No
+user visual confirmation was asked for or received -- and for the 12e build the bench image's
+own `drop=236` says its picture was missing two thirds of its quadwords, so a screen shot of
+that build would not have been a pass even if one had been taken.  The claim that `gs=` is
+sync-dominated rather than transfer-dominated is read from two rows of one log and has no
+control run of its own; it is a reason not to buy quadword reduction, not a priced model.
+`PS2_MSX=0` leaves the B-MSX rows unexercised.  LANE 12f is opened, not measured: its
+150-250 cycles/vertex is a construction cost estimate for a path that does not exist yet,
+and its second rung is explicitly the unanswered question -- this port has no measured fact
+about what the GS does with a vertex OUTSIDE the environment packet's scissor rect.
+
+## Lane 12f landed: the sheet is one batch, the gate is the vertex word, and the frame belongs to the menu (2026-10-14)
+
+**What this section records.**  LANE 12f's three rungs closed on the live image, and the
+measurement that made the second rung's gate wrong.  The batch entry (`eegs_grid_strip()` in
+`src/gl/backend_eegs.c`, the map in `src/gl/tinygl/vertex_stage.c`, the call site in
+`xb_draw_ribbon()`) now takes the XMB's ribbon mesh on every frame, and the stage it was priced
+against moved by the factor the lane predicted.  The lane's own second rung had to be amended to
+get there, and the amendment is the part worth keeping: a gate written from the EE clipper's law
+refused the one mesh the lane existed for, on every frame, forever.
+
+**Three runs, three answers, and the row each one printed.**  All three are the same dial set
+(`PS2_GL=eegs PS2_FP=hw PS2_MSX=0 PS2_FP_COUNT=0`, `BENCH_APP=1`, `scripts/ps2_bench.sh`) and the
+same column of `[GSTS]`:
+
+| run | the row said | what it meant |
+|---|---|---|
+| map lifted before `glBegin` | `batch=0 slow=1 why=2` | the model-projection product was the PREVIOUS window's; `glopBegin` is what recomputes it |
+| map lifted inside `glBegin`, rect gate | `batch=0 slow=1 why=7` | the mesh is 8 px too wide for the clip rect, always, on exactly one column |
+| gate amended to the vertex word | `batch=1 slow=0 why=0 over=32` | taken, and the overhang is now the GS's SCISSOR's business |
+
+The middle row is the one that would have shipped as a silent no-op: the fast path existed, was
+correct, and was never entered, while the row that reported it printed `slow=1` and nothing about
+WHY.  `why=` was added for that run, and it is the reason the third run was reachable.
+
+**The amendment, and the extent the suite found rather than the one the header guessed.**  A
+whole-mesh batch refuses only for a coordinate the GS cannot REPRESENT: XYZ2 carries
+`gs_vertex_coord16(px) = ((uint32_t)(px * 16) + GS_XYOFFSET_PAGE) & 0xFFFFu` with
+`GS_XYOFFSET_PAGE = (2048u << 4)`, so the field's window-local extent is **-2048 .. +2047**, one
+wider on the negative side, because -2048 packs to `0x0000` and 2048 packs to the same word and
+folds.  The first draft of the gate expected -2048 to refuse; `test_eegs_raster.c` said it did not,
+and the production code was already right and the TEST was wrong.  A point between the clip rect
+and that bound is TAKEN and counted in the new `over=` column, because `eegs_present_send()`
+programs SCISSOR and XYOFFSET from the same `client` rect the vertices are offset against.
+`TGL_GRID_REFUSE_RECT = 7` stays in the enum so the dated rows above decode, and nothing produces
+it.
+
+**The gate, and the three controls that say it discriminates.**  `make test-eegs-raster` ->
+**checks=222 failures=0**, clean compile.  One edit each, all run and all reverted:
+
+- deleting the range branch fails **9** checks -- the refusals, and the stream-untouched assertion
+  that a refused mesh records nothing;
+- putting the rect back as the refusal condition fails **the other 9** -- so the two gates are not
+  interchangeable, which is the whole content of the amendment;
+- moving `over`'s commit inside the scan (so a refused mesh still counted its overhang) fails **1**
+  check -- `over=` is a statement about taken batches, and only one check can see the difference.
+
+`make test-grid-map` -> **checks=130 failures=0**: the differential sweep against the real
+`tgl_vertex_transform()`/`tgl_vertex_to_viewport()` at bit equality, the clipper-equivalence probes
+in both directions, and the ribbon section that names the console's own geometry (mesh spans x_px
+0..775 against a rect of 0..767, exactly 32 points outside, on one column, over 2,000 swept frames;
+the one-size control spans 0..767 with nothing outside).
+
+**The ABI defect the image gate caught, not the source.**  `make test-ps2` TEST 66 found 12
+`sdc1`/`ldc1` pairs at `0x137e10-0x137f80`, inside `<tgl_grid_map>`.  The cause is not a float call
+but a struct copy: building the map in a local `tgl_grid_map_t g` and finishing with `*out = g;`
+makes the compiler keep ten-plus live singles across the copy, and in a `-mhard-float` O32 `FR=0`
+translation unit those live spills land on callee-saved pairs `$f20-$f30`, which the R5900 cannot
+execute.  The fix is a style rule written into the file: store the fields into `*out` one by one.
+Restoring the local-struct version reproduces the failure; the shipped image greps zero.
+
+**The verdict, on the same dial, the same script, frame for frame** (baseline = the 12e-park row
+this lane was priced from):
+
+| row | before | after | ratio |
+|---|---|---|---|
+| `f_ribbon` (frame 1 / 2) | 21,842 / 21,919 us | 3,522 / 3,517 us | **6.2x** |
+| `draw=` frame 1 | 45,094 us | 26,839 us | 1.68x |
+| `cycle period=` frame 1 | 102,185 us | 86,512 us | 1.18x |
+| `qw=` / `verts=` | 29,985 / 7,467 | 15,869 / 3,937 | -47% each |
+| `groups=` / `pchg=` | 51 / 24 | 47 / 24 | -- |
+| `verts=`/`prims=` | 3.00 | **1.49** | the strip is one draw |
+| `drop=` | 0 | 0 | the budget never bit |
+
+The uncounted anchor from `scripts/ps2_smooth.sh`'s own history table moves too, but across more
+than this lane: the 2026-10-12T19:44:30Z row reads `frame1_us 51,816 / draw_us 48,659 /
+full_total_us 56,982 / full_render_us 56,160 / band64_total_us 8,629`, today's row
+`26,839 / 24,140 / 30,123 / 29,245 / 4,264`.  That span includes LANE 12a, 12b and 9c, so it is a
+floor on the accumulated lanes and NOT this lane's measure; the 6.2x above is.
+
+**The per-vertex price, and where the lane's own estimate was wrong.**  3,517 us over the 1,984
+vertices the zigzag submits is **523 cycles a vertex** at the dialled 295 cycles/us, against the
+walk's measured 3,260 -- 6.2x, and 2-3.5x above the 150-250 the lane estimated from the map's ten
+float ops and three truncates.  PROVEN: the 523.  INFERRED: that the residue is the four-register
+pack and the recorder's group bookkeeping rather than the map; nothing separates them yet, and the
+rung that would is the counted cell 12d ran for the walk.  The estimate being low costs nothing that
+has shipped and is worth naming before this entry is reused for a second mesh.
+
+**The reprioritization, which is the actual answer to the complaint.**  The user's report was that
+the waving bank's speed did not improve, and the census now says why three earlier landings could
+also produce nothing visible: frame 2's `draw= 24,319 us` partitions as `f_menu 11,441` (47%) +
+`f_surface 5,756` (24%) + `f_ribbon 3,517` (14%) + `f_clear 3,408` (14%) + `f_bg 131` +
+`f_particles 35`, and the six sum to 24,288 against the frame's own 24,319.  The sheet's stage is
+4.2% of the *period*, which is the clock the eye is on:
+
+```
+period  83,944 = pass 67,934 + hold 16,001
+pass    67,934 = render 63,267 + upload 4,653
+render  63,267 = comp total 54,256 + 9,011 unnamed
+comp total 54,256 = paint 24,343 + blit 12,671 + frame 7,869 + bg 7,499 + panel 1,568 + bars 296
+```
+
+So the book's 9d sentence ("9d and 12 together are the 5x", computed on a pass whose geometry half
+was 37,619 us) has to be re-read rather than quoted: removing the whole app frame AND everything
+9d currently bounds leaves **18,768 us** of pass, which is 4.5x on the period, not 6.4x.  The last
+2x is in `frame=` and in the composite's unnamed 9,011 us, and neither has an instrument.  LANE 12h
+is opened on the strength of today's census -- the menu's 1,436 textured vertices at 2,355 cycles
+each, the same walk this lane just replaced for the sheet -- and its first rung is one cheap row:
+how many of the menu's quadwords are byte-identical between consecutive frames, which decides
+between a textured batch map and replaying a captured span.  LANE 12g is re-read too: its stage is
+5,756 us on the steady frame today, so its doubles are a bigger share of it than the 38% the cell
+was priced at, and the share itself needs one `PS2_FP_COUNT=1` run before the lane is worth
+anything but a guess.
+
+**The certified chain.**  `make test-eegs-raster` 222/0, `make test-grid-map` 130/0, `make
+test-ps2 PS2_GL=eegs PS2_FP=hw PS2_MSX=0 PS2_FP_COUNT=0` -> **95/95** with TEST 66-69 (the illegal
+op, callee-saved-single, byte-scan and unordered-compare rows) green and one `[SKIP] PS2_MSX=0`,
+`make arm64-elf` -> exit 0, then the dialled `make ps2` as the LAST make so the image and its
+`/SYS` payload carry this book, and the payload verified by grepping a one-line fragment of it out
+of `btron_sys.vol` and the linked ELF rather than by comparing mtimes.
+
+**SKIP, not PASS, and what is still owed.**  Nothing ran on a PlayStation 2; every microsecond
+above is PCSX2.  The picture is the user's and has NOT been confirmed: `over=32` is the port asking
+the GS to cut the sheet's last column, and the only instrument for whether the right edge survived
+is the monitor.  The 523-cycle residue is unsplit.  12g's double count is unmeasured on today's
+image.  `PS2_MSX=0` leaves the B-MSX rows unexercised.  `why=` is the LAST refusal of a frame, so
+a frame that refuses twice for different reasons prints one name -- adequate while `slow=0`, and
+worth remembering if 12h puts a second mesh behind that column.
+
+*Closed 2026-10-15, one item of this list:* the monitor answered the `over=32` question -- the bank
+waves and its right edge is intact -- so the SCISSOR does what the gate assumed and LANE 12f stays
+landed.  The other four items are still open, and the fourth one is what the section below did.
+
+## Lane 12h measured: the stream does not repeat, the texels are free, and two of the instrument's own terms turned out not to be load-bearing (2026-10-15)
+
+**What this section records.**  LANE 12h's deciding row was built, run on the live image, and it
+closed one of the lane's two rungs.  The instrument is `[GSTID]` in `src/cores/core_ps2.c`, printed
+from `ident_report()` in `src/gl/eegs_present.c`, and it folds each staged group's words into a hash
+pair plus four per-register lanes at the staging sink, carries the table one presented frame (never
+the words -- LANE 10's buffer-lifetime law), and compares by index.  It is dialled by `PS2_IDENT=1`,
+which is a global `PS2_CFLAGS` term and not a bench-object one, because `BTRON_PS2_BENCH` cannot
+reach this TU.  Two of the lane's own claims died in the process: the register-lane mapping, drafted
+from a header layout that does not exist, and a falsifying control the book asserted for a term that
+deleting does not notice.  Both are recorded, because the second is why the first verdict is trusted.
+
+**The three presentations the bench prints, and what each one means.**  Same dial set as 12f's
+verdict plus the ident dial (`PS2_GL=eegs PS2_FP=hw PS2_MSX=0 PS2_FP_COUNT=0 PS2_IDENT=1`,
+`BENCH_APP=1`, `scripts/ps2_bench.sh`), log kept at `build/ps2-bench-lanes.log`:
+
+| n | the row said | what it meant |
+|---|---|---|
+| 1 | `g=47 v=25 prev=0 \| same=0 \| tail=47 g 15869 qw` | no predecessor; not evidence, and the frame's whole stream is one tail |
+| 2 | `same=25 g 775 qw \| diff=22 g 15094 qw \| xyz=3 rgb=3 st=25 shape=12` | 4.9% of the frame's bytes repeat |
+| 3 | `same=24 g 726 qw \| diff=23 g 15167 qw \| xyz=2 rgb=4 st=24 shape=2` | and the reading is not a rate |
+
+The bench ends the session two frames past the budget, so two comparisons is the whole sample.
+`same` + `diff` sums to `g=` and its quadwords to the frame's own `qw=` on both frames
+(775 + 15,094 = 15,869 and 726 + 15,167 = 15,893, which is frame 3's `qw=`, two more primitives than
+frame 2's) -- the instrument's arithmetic closes against the recorder's count, so a reading cannot be
+an artefact of the table being stale or half-filled.
+
+**The arithmetic that makes the verdict a fact rather than an interpretation.**  `g=47` and `v=25`
+say 22 of this frame's groups are texture switches, and the row's own `texsw=22` in `[GSTS]` is an
+independent count of the same thing.  Let `k` be the vertex groups identical to their predecessor and
+`d` the differing switches; then `diff = (25 - k) + d = 22` and `same = k + (22 - d) = 25` hold for
+any `d`, so those two columns do not decide it -- but `xyz=3` does.  Every identical group is
+trivially XYZ2-invariant, so `xyz >= k`, and `k = 3 + d` forces `d = 0`, `k = 3`.  Read that way the
+frame is fully decomposed: **all 22 switches replay byte-for-byte, 3 of the 25 meshes replay whole,
+and the other 22 meshes differ -- in position (`xyz` credits only the 3) and in colour (`rgb` the
+same), while `st=25` says not one texel coordinate moved anywhere in the frame.**  `shape=12` = the 3
+whole replays + 9 rigid translations, so 13 of the 25 meshes changed shape.  Frame 3 closes the same
+way at `xyz=2`: `d=0`, `k=2`, `shape=2` -- two whole replays and **zero** translations -- with
+`st=24` naming the one mesh that re-bound its texels.  PROVEN: the decomposition, as arithmetic on
+the row.  INFERRED: that the odd-index/even-index alternation visible in `at=` is the switch/mesh
+interleave itself; the parity was read, not attributed per group.
+
+**The verdict.**  Rung (ii), the replay, is REFUTED as stated: what repeats is the switches and three
+meshes, 775 quadwords of 15,869, and a lane whose whole cost is the frame cannot be bought by a
+memcpy of 5% of it.  Rung (i), the textured batch map, is the lane, and the columns now name its
+shape: it does not have to compute `s`/`t` at all -- they are per-mesh constants the app already
+carries -- while it does have to re-emit position AND colour every frame.  And the cheap version of
+that map, a retained mesh plus a per-group offset, is not carried by the data: nine translations on
+one frame, none on the next, so an offset-only batch would re-derive the shape anyway.  The work is
+therefore the app's own per-vertex position and colour for 22 meshes, at the 523 cycles a vertex this
+lane already prices against the walk's 2,355 -- rung (i) as 12f's gate left it, with the texel term
+now known to be free.  If a future run prints `shape=` at `v=` with `xyz=` below it frame after
+frame, that is the fact that reopens the offset-only idea, and PS2.txt's LANE 12h cell is where the
+correction goes.
+
+**The layout the first draft got wrong.**  The lanes fold "every fourth word of the body", and the
+first draft put the body's start at quadword 2 because it read the group as a tag quadword *plus* a
+REGS-list quadword.  `ps2_gs_rec.c`'s `open_group()` writes ONE quadword: the tag in its low half and
+the register list in its high half, which is also where the sink reads the group's kind from
+(`nreg = (qw[0] >> 60) & 0xF`), so the body starts at quadword 1 and a field is `(quadword - 1) mod
+4` in the REGS order PRIM, RGBAQ, ST, XYZ2.  Control C4 below is that fact measured: reading the
+mapping from quadword 0 breaks seven checks and trades the moved-vertex and colour-only answers.
+
+**The gate, and the sixteen one-edit controls.**  `make test-eegs-present` -> **checks=136
+failures=0**, clean compile, section 7 and 7b of `verify/tests/test_eegs_present.c`.  Each control is
+one deletion in `src/gl/eegs_present.c` -- C12 is C1 and C11 together, which is the pair the claim
+under test needs -- run and reverted; the number is the checks it broke:
+
+| control | the deletion | broke |
+|---|---|---|
+| C17 | not folding the group's words at all | **19** |
+| C4 | lane mapping read from quadword 0 | **7** |
+| C15 | the compare not bound by the aligned prefix | **6** |
+| C5 | the report-side vertex-group gate | **4** |
+| C13 | the stored length field zeroed | **4** |
+| C2 | the tail not counted | **3** |
+| C3 | an empty frame allowed to consume its predecessor | **2** |
+| C8 | `shape=` folding absolute coordinates | **2** |
+| C9 | `shape=` folding the first vertex as well as the rest | **2** |
+| C7 | PRIM folded into a lane (killing the residual reading) | **1** |
+| C10 | `v=` counting AD groups | **1** |
+| C14 | `at=`'s `+n` remainder not printed | **1** |
+| C1 | the `qwc` fold deleted from the hash | **0** |
+| C11 | the explicit `qwc` comparison deleted from `same` | **0** |
+| C12 | both of those deleted together | **0** |
+| C6 | the sink's own kind gate deleted | **0** |
+
+**The four zeroes, and the control the book claimed and the code cannot build.**  C1, C11 and C12 are
+the same claim tested three ways and it does not hold: a group's length is not a detection term,
+because a group with one more vertex folds one more quadword and moves its tag's NLOOP field with it,
+so the words already carry it.  `qwc` is carried as a field for the columns -- `same=`/`diff=`/
+`tail=` are reported in quadwords and C13, which zeroes it, breaks those four checks -- and the fold
+and the comparison are each individually deletable.  C6 is the same shape of finding on the kind
+gate: the report side re-checks the column, so the sink's gate is the redundant half of the pair.
+All four stay in the code -- a term that costs one multiply and states its own fact is cheaper to
+read than one that is merely implied -- but they are now documented as defensive rather than as
+gates.  PS2.txt's LANE 12h cell previously listed "a length-only change (hash without `qwc` would
+call it identical)" among the controls; that pair cannot be built out of real groups, the measurement
+says so twice, and the sentence has been replaced with the table above.
+
+**The dial's cost, attributed by the `g=` column rather than asserted.**  The anchor is
+`build/ps2-bench.prev.log` -- the same image and dials with `PS2_IDENT=0`, and it prints no `[GSTID]`
+row, which is what makes it the anchor.  Frame for frame: `f_ribbon` 3,517 -> 4,460 us and `f_menu`
+11,441 -> 13,966 us (+27% and +22%), while `f_surface` 5,756 -> 5,750, `f_clear` 3,408 -> 3,394 and
+`f_bg` 131 -> 133 are unmoved and `gs=` stays where it was (3,778 -> 3,768).  The two stages that
+moved are the two whose markers stage groups (`g=` 2 and 46 of 47); the three that did not are the
+three that stage none, and the recorder's own column, which does not run the fold, does not move.
+PROVEN: the stage rows differ, and they differ only where the sink runs.  INFERRED: that the
+difference is the fold rather than the host -- the two runs are separate emulator sessions and no
+same-run A/B was taken.  This is the operational rule for the dial, and it is in the book: **read a
+`[GSTID]` row's invariance columns and none of its microseconds.**
+
+**The build trap that made the first batch of these controls lie.**  The first harness ran each
+control through `make test-eegs-present`.  Three consecutive controls printed identical failure
+lists, which is impossible for edits that touch different files' worth of logic: the mutated source is
+`#include`d by the test TU, the rewrite landed inside the same second as the build, and make's mtime
+comparison called the object current -- so the previous control's binary re-ran.  The harness now
+compiles `verify/tests/test_eegs_present.c` straight to `/tmp` with the Makefile's own `cc` line, and
+every control re-ran differently.  Same family as the `*.pbench.o` trap the bench loop documents, and
+the same lesson: when the unit under test is an `#include`, drive it with a compiler invocation, not
+with make.
+
+**The certified chain.**  `make test-eegs-present` -> 136/0 after the comment amendments.  Then
+`make test-ps2 PS2_GL=eegs PS2_FP=hw PS2_MSX=0 PS2_FP_COUNT=0` on the shipped dials (`PS2_IDENT=0`),
+`make arm64-elf`, and the dialled `make ps2` as the LAST make invocation so the parse-time stamps do
+not re-dial the image under a test run, with `/SYS` verified by grepping a one-line fragment of the
+new book text out of `btron_sys.vol` and the linked ELF rather than by mtimes.
+
+**SKIP, not PASS, and what is still owed.**  Nothing ran on a PlayStation 2; every number above is
+PCSX2.  The sample is two comparisons, so the translation count is a bounded observation and not a
+measured rate -- a hovered row or a running tween would move it and neither was in this run.  The
+`at=` indices are attributed to stages through the `[XMBT]` `g=` markers, which name a span, not a
+proven per-group owner.  The 523-cycle residue is still unsplit between the map and the pack, which
+is the rung PS2.txt's LANE 12h cell says to take before this entry carries a second mesh.  The
+decomposition is arithmetic on one image's rows, so it is a statement about THIS app's THIS frame: an
+inserted texture switch would move every later group's index and read as a whole-tail difference,
+which is exactly the cost the positional rule exists to make visible.  `PS2_MSX=0` leaves the B-MSX
+rows unexercised, and 12g's double count is still unmeasured on today's image.
+
+## Lane 12i measured: the composite's 9,011 us residue is the overlay block, an open menu draws it, and the instrument says so on one run (2026-10-15)
+
+**What this section records.**  LANE 12i's rung (i) was an instrument and a verdict, not a
+optimisation: name the residue that `render - comp total` left unattributed on the whole-canvas
+branch.  The pairing of two existing bench logs said the residue was a property of an open menu
+(`why=d` 9,021 us, `why=c` 9,011, `why=1` 88), the source reading put it in `workbench_render()`'s
+post-composite block, and the root cause named there is that an open tracker menu is rasterised
+twice per composite -- `global_menu_render()` at the overlay step and again through the workbench's
+second call, with every write on the path opaque, so the duplicate cannot change a pixel.
+This section records the run that turns that reading into a measurement, and leaves rung (ii) --
+actually refusing the duplicate -- explicitly unrun.
+
+**The instrument, and why it checks itself.**  A seventh stage column, not a new subsystem.
+`RENDER_STATS` (`include/btron/dp.h`) gains `overlay_us`; `btron_render_stats_take()`
+(`src/graphics/dp_core.c`) zeroes it with the other six; `workbench_render()` and
+`workbench_render_overlay_only()` (`src/desktop/workbench.c`) bracket the post-composite overlay
+block with `btron_render_perf_us()` and `btron_render_stat_max()`; and the `[XMBT] cycle` print
+(`src/cores/core_ps2.c`) shows `ovl=` beside the six `comp` columns plus `rst=` =
+`render - total - ovl`.  The identity is the falsifier: it is exact only at `nb=1`, because
+`render=` is summed per band while `total=` and `ovl=` are per-call maxima, so its tolerance is the
+88-219 us band the no-overlay frames always left -- and `rst=` is printed signed so a cross-pass
+column reads loud instead of saturating at zero.  If the residue had been anywhere else, `rst=`
+would have stayed near 9 ms with `ovl=` full-size; that is the reading this run had to rule out.
+
+**The deciding rows.**  Shipped dials (`PS2_GL=eegs PS2_FP=hw PS2_MSX=0 PS2_FP_COUNT=0`, and
+`PS2_IDENT=0` -- the ident instrument is not in this image), `BENCH_APP=1 BENCH_TIMEOUT=460
+scripts/ps2_bench.sh` after purging `src/cores/core_ps2.pbench.o`, `[BENCH] run complete` present,
+log at `build/ps2-bench.log`:
+
+| row | `why=` | render | comp total | ovl= | rst= |
+|---|---|---|---|---|---|
+| 0 | d | 202,519 | 193,571 | 9,060 | -112 |
+| 1 | c | 199,642 | 190,647 | 8,968 | 27 |
+| 2 | 1 | 190,145 | 190,095 | 24 | 26 |
+
+PROVEN: the residue IS the overlay block.  It appears whole in `ovl=` on both open-menu rows,
+within 1% of the 9,011 us the pairing inferred, and collapses to 24 us -- the bracket's own two
+clock reads -- on the row with no menu up.  `rst=` reads -112..27 us on all three, inside the
+predicted band; row 0's negative is the cross-pass artifact the print's comment names, not a new
+fact.  STILL UNSPLIT: how much of the 9 ms is the duplicate.  If the second
+`tracker_render_menu()` is half the block, rung (ii) moves these rows to `ovl=` near 4.5k with
+`rst=` inside the same band; that gate -- the host differential on `workbench_render()` holding the
+composited canvas byte-for-byte, plus these three columns halving in the image -- has not been run,
+and the book says SKIP for it.
+
+**What the run was NOT.**  The bench ends in 14 emulator seconds and prints three partition rows,
+so this measures the composite's cost structure, not the wave's frame rate; the user's standing
+observation -- no felt speedup waving the surface bank -- is not addressed by this lane, and
+`paint=149-153 ms` still owns the frame.  One row pair is two samples, the same-session caveat from
+12h applies to any cross-run comparison, and nothing ran on a PlayStation 2: every number above is
+PCSX2.  The cover list's 3.7 ms upload inflation is named in the book and still unpriced.
+
+**The certified chain.**  Book first: LANE 12i's cell and Appendix A's row format (`... total= ovl=
+rst= bfn=`) were amended, the deciding run was taken, and the MEASURED paragraph replaced the OPEN
+one after that run.  Then the
+shared-tree gates with the instrument in: `make arm64-elf` exit 0 (the Pi 400 target compiles
+`workbench.c` and `dp_core.c` and must not regress), `make test-ps2` on the shipped dials ->
+95/95 with the single `[SKIP] PS2_MSX=0`, `make test` -> all host suites green (208/208, 244/244,
+36/36, 132/132, 21/21, tracker 78/78, band present 42/42, settings 61/61, global menu 55/55, app
+menu 41/41), `make uefi pc98` exit 0.  `make all` exits 2 only at the pre-existing FOMA link
+(`_open_lilcu64_demo_window`, `_open_xmb_window` undefined -- that target links
+`workbench_mobile.c`, not the file this lane touched), which is NOT a claim of green for FOMA.
+The dialled `make ps2` runs as the LAST make invocation so the parse-time stamps do not re-dial the
+image, and `/SYS` is verified by grepping a one-line fragment of the new book text out of
+`btron_sys.vol` and the linked ELF rather than by mtimes.  That grep caught one more instance of
+this lane's own trap class: `btron-ps2-bench.elf` (linked 12:47:06) embeds the volume's PRE-verdict
+text -- it answers `grep -c` to the new fragment and carries the deleted OPEN paragraph -- because
+the verdict edit landed within the same second as the bench link and make's mtime comparison called
+`ps2_sys_vol.ps2.o` current.  The shipped `btron-ps2.elf`, `btron_sys.vol` and the ISO (all
+12:48:56) are text-current; the three deciding rows above are unaffected, since the `[XMBT]` print
+compiles from `core_ps2.c` and not from the volume, and the next `make ps2-bench` relinks the bench
+image against the current volume automatically.
+
+## Lane 12i rung (ii) landed: the overlay block is a dispatch, the tracker plate is drawn once, and the harness corrected the book before the code shipped (2026-10-15)
+
+**What changed.**  One dispatch at both overlay sites in `src/desktop/workbench.c`
+(`workbench_render()` and the Pi 400's `workbench_render_overlay_only()`):
+
+```c
+if (global_menu_is_open()) global_menu_render_overlay(screen);
+else                       tracker_render_menu(screen);
+```
+
+replacing the two independent `if`s that let an open tracker menu be rasterised twice per
+composite.  The duplicate was rung (i)'s measured ~4.5 ms of the 9 ms `ovl=` block.
+
+**The harness falsified the book's claim, and the book was amended first.**  The landing
+paragraph had said the else arm "never fires, because the only state reaching it -- tracker
+open, global closed -- is unreachable".  Half is right: `global_menu_is_open()` is
+`(active_menu >= 0) || tracker_is_menu_open()`, so no tracker-open state can reach the arm.
+But the arm is not dead: it fires on EVERY nothing-open frame, and what makes it safe is
+`tracker_render_menu()`'s own guard (`state != TRACKER_STATE_OPEN`, `src/desktop/tracker.c`)
+-- a counted, pixel-free call.  The differential proved the no-op rather than arguing it:
+state nothing-open prints byte-identical canvases for the two shapes while the rename build
+counts 0 calls retired vs 1 shipped.  The book now states the no-op-arm law and the shipped
+comment in `workbench.c` matches it.
+
+**The three-part gate, run.**  (1) Byte-for-byte differential over four menu states in
+`verify/tests/test_desktop_clip.c`: nothing-open, tracker-open, BTRON+tracker, dropdown with
+the tracker closed -- identical canvases in the rename build AND the plain build, 4/4.
+(2) Plate census + counts: one further tracker call after the block changes zero pixels in
+the two plate states (and the census first SHOWED it detects a plate where none was, so it
+cannot pass vacuously); call counts decide only under
+`-Dtracker_render_menu=counted_tracker_render_menu`: 2 -> 1 (tracker open, both flavours),
+0 -> 1 (nothing open, the no-op arm), 0 -> 0 (dropdown).  The counting wrapper lives in a TU
+compiled WITHOUT the rename (`verify/tests/test_desktop_clip_count_port.c`), because the
+rename hits definitions too: in `tracker.c` it would rename the real rasteriser away, and in
+the wrapper it would rewrite the delegation into self-recursion.  The plain build prints SKIP
+on those rows -- 0==0 in a build where nothing routes through the counter is not a gate.
+(3) The image, one bench run at the shipped dials after purging `core_ps2.pbench.o`,
+`[BENCH] run complete` present:
+
+| row | `why=` | render | comp total | ovl= | rst= | identity |
+|---|---|---|---|---|---|---|
+| 0 | d | 61,353 | 56,792 | 4,550 | 11 | 61353-56792-4550=11 |
+| 1 | c | 58,790 | 54,234 | 4,491 | 65 | exact |
+| 2 | 1 | 54,082 | 53,993 | 24 | 65 | exact |
+
+`ovl=` halved from rung (i)'s 8,968-9,060 (-50%, the refused duplicate), `rst=` inside the
+band, `why=c`/`why=d` within 1.3% of each other -- one plate, not two.  The absolute `render=`
+totals are NOT comparable across runs: these rows are the run's first cycles at a 66 ms paint
+phase, rung (i)'s quoted rows sat in a ~150 ms paint phase; the gate was the `ovl=`/`rst=`
+columns and those are per-call maxima of the named blocks.
+
+**The Makefile trap this landing exposed.**  The rename flags first landed as per-object
+CFLAGS on the shared `.test.o` namespace -- and `src/desktop/global_menu.test.o` is shared:
+`make test` rebuilt it renamed for the clip suite, then `test_global_menu` linked that same
+object with no wrapper to resolve it: `Undefined symbols: _counted_tracker_render_menu`.
+The suite now builds all its sources in a private `.clip.o` namespace (own pattern rule, own
+per-target flags), so the rename can never leak into a link that does not carry the port TU.
+
+**The certified chain.**  Book amended (decision table, no-op-arm law, rename algebra, LANDED
+verdict) before the final image; `make test` exit 0 (1,159 `[PASS]` lines, 0 `[FAIL]`, clip
+suite deciding counts in-tree); `make test-ps2` 95/95; `make arm64-elf` exit 0;
+`make uefi pc98` exit 0; bench run exit 0 with the three rows above; the dialled `make ps2`
+(`PS2_GL=eegs PS2_FP=hw PS2_MSX=0 PS2_FP_COUNT=0 PS2_IDENT=0`) runs LAST and `/SYS` is
+fragment-grepped from `btron_sys.vol` and the ELF, not mtimes.
+
+**What this does NOT claim.**  The look is the user's: whether the launcher list still paints
+its hover highlight is unobserved, so the visual half of rung (ii) is SKIP, not PASS.  The
+felt wave speed is untouched -- `paint=` still owns the frame (LANE 12's residue and #41
+stand).  The cover list's 3.7 ms upload is still unpriced, and nothing here ran on a
+PlayStation 2: every number is PCSX2.
+
+## Lane 12g closed as REFUTED: the steady frame's surface stage spends zero double calls, and the cell's ~2.3x was already paid by rows 8 and the far path (2026-10-15)
+
+**The rung, as the cell itself defined it.**  LANE 12g's re-read said the doubles' share inside
+the landed-12f `f_surface` stage was UNMEASURED and that one `PS2_FP_COUNT=1` bench run was the
+lane's first rung rather than an assumption in it.  That run is now taken: shipped dials with
+the census dial up (`PS2_GL=eegs PS2_FP=hw PS2_MSX=0 PS2_FP_COUNT=1 PS2_IDENT=0`,
+`BENCH_APP=1 BENCH_TIMEOUT=560`, `core_ps2.pbench.o` purged first), `[BENCH] run complete` at
+8.73 s, log at `build/ps2-bench.log`.
+
+**The rows.**  `[XMBT] census f_surface` reads `dmul=930 dgen=775 D=1,705` on frame 1 (stage
+8,462 us, the lattice-build frame -- the run's hash rows are "160 of 8192 computed" there) and
+`dmul=0 dgen=0 D=0` on the steady frame 2 (5,815 us, "160 of 16384").  Frames 3 carries
+`draw=24,639 us` with no further doubles.  Three self-checks say the zero is a measurement and
+not an absent flag: `f_clear` answers `D=23` in BOTH frames (the counters are live), frame 1's
+2,647 us excess over steady is the same order as the 1,705-call bit-engine price of ~3.2 ms the
+12c census inferred, and the steady stage 5,815 us matches yesterday's uninstrumented re-read
+of 5,756 us within 1%, so the counters do not bend the stage they measure.
+
+**Why the cell went wrong, and what paid it.**  12g was priced from 12c's census, which counted
+doubles in a frame that included the lattice build; since then the large-argument rung
+(`xb_sinf_far_u32`/`xb_cosf_far_u32`, bits in / bits out) and row 8's COP1 lattice landed, and
+the steady-path reduction stopped touching include/gl/math.h's double series entirely.  The
+cell's own re-read warned that 3,225 us was now "a LARGER share of the stage" -- the measurement
+says it is none of the steady stage: the ~2.3x was already paid, and no math.h rung is left
+here.  The residual is a one-time ~3.2 ms boot cost on frame 1, which belongs to no per-frame
+budget the wave is judged by.
+
+**What this does NOT claim.**  It does not touch the felt wave rate -- it removes a lever from
+the plan, it does not land one; the per-frame cost still sits in `paint=` (LANE 12h's 11.4 ms
+`f_menu` walk is the same-census neighbour this run reconfirms at `S=18,995, D=0`), and the
+12g closure makes LANE 12h the named remaining stage lever, unpaid.  Nothing ran on a
+PlayStation 2: every number is PCSX2.
+
+**The certified chain.**  Book first (the CLOSED paragraph above the code of this verdict is
+the cell's text), then the dialled `make ps2` runs LAST -- the FP_COUNT=1 bench relink re-dials
+the stamps by this repo's own law -- and `/SYS` is verified by grepping one-line fragments
+("CLOSED as REFUTED for the steady frame" and "spends no double call at") out of
+`btron_sys.vol`, `btron-ps2.elf` and `btron-ps2.iso`, not mtimes.  The bench ELF built for this
+run carries the FP_COUNT=1 instrument and the pre-closure volume; the next `make ps2-bench`
+rebuilds it from the shipped dials automatically.
+
+## Lane 12h rung (i) landed: the textured batch takes the whole menu, the walk runs zero triangles there, and the 6.2x bar dies to the quad's own split (2026-10-15)
+
+**The rung, as the amendment defined it.**  LANE 12h's invariance instrument refuted rung (ii) and
+named rung (i): a textured map, a textured points map, `eegs_tex_quads`, two call sites, and 12f's
+differential sweep with `s`/`t` added -- "reproducing it bit-for-bit IS the gate."  All five rungs
+are now in the tree: `tgl_grid_map_tex`/`tgl_grid_map_tex_points` in `grid_map.h`/`vertex_stage.c`
+(the texel chain is `vertex_stage.c:92`'s own two-step, the refusals the grey map's with TEXTURE
+inverted to `TGL_GRID_REFUSE_NOTEX 10`), `eegs_tex_quads` in `backend_eegs.c` (range gate before
+anything is recorded, `eegs_texture(gs_tex_find(...))` ONCE per entry, `vertex.c`'s own
+(v0,v1,v2)+(v0,v2,v3) split through the existing `eegs_triangle`), and the begin-then-ask call
+sites in `xb_draw_icon`/`xb_draw_text_run` with the immediate-mode walk left verbatim as the
+refusal route.
+
+**The gate, as the amendment demanded it.**  `test_eegs_raster` 277 checks, `test_eegs_present`
+136, both green.  The differential compares the batch's decoded stream against the walk's own
+triangle list on xyz2/rgbaq/st corner-set-for-corner-set; the alternate-diagonal control fires
+inside the green run; the sweeps cover ARG/UNSET/NOTEX/STALE, the RANGE recorded-first law, the
+overhang-into-SCISSOR route, and the never-uploaded demotion (`texmiss` counts it, `PRIM` comes
+back untextured, exactly what the walk's arm does).  The suites settle the registry collision
+locally -- `gs_tex_find` cannot come from `ps2_gs_tex.c` in a TU that also includes
+`ps2_gs_rec.c` (both own file-static `s_n`/`s_sink`), so each suite stands up the registry the
+question needs: pointer identity in raster, always-0 in present.
+
+**The rows** (eegs bench, dials `PS2_GL=eegs PS2_FP=hw`, ident off, `build/ps2-bench.log` against
+the same-dial baseline `build/ps2-bench.prev.log`).  `batch=` 1 -> 64 with `slow=0 why=0
+texmiss=0`; the `raster f_menu` census row vanishes entirely (646 tris -> 0 -- the walk ran none);
+`groups=` 47 -> 51, `verts=` 3,937 -> 4,153, `qw=` 15,869 -> 16,743, and 216x4+2+8 = 874 closes
+the quadword column on the vertex column exactly.  `f_menu` 11,441 -> 6,633 us (1.73x); steady
+`paint=` 24,343 -> 19,487 (1.25x), `pass=` 67,934 -> 58,643, `period=` 83,944 -> 74,653 (1.12x);
+`frame 10 at 717 ms folded` against the baseline's 769.  The composite's 12i residue halves to
+4,578 with `ovl=` naming 4,493 of it directly -- 12i's naming and 12h's cut agree.
+
+**What this does NOT claim.**  It is NOT the 6.2x: the cell's bar priced 1,436 walk vertices at
+523 cycles and ignored that a quad ships SIX stream vertices (2,154 for the menu's 1,436 corners),
+so the entry's own floor on this mesh is ~3.8 ms, not 1.8; the measured 6.6 ms sits ~2.8 ms above
+that floor and this run does not split entry from the app's per-quad float loop -- naming that
+residue is the next rung, not this entry.  The visual half is the user's and stays SKIP: the gate
+proves the texel WORDS, only a screen proves the glyphs.  Nothing ran on a PlayStation 2: every
+number is PCSX2.
+
+**The certified chain.**  Book verdict paragraph first (LANE 12h cell, "What run (i) measured"),
+then volume rebuild -> `make test-fs` -> dialled `make ps2 PS2_GL=eegs PS2_FP=hw PS2_MSX=0` ->
+`make test-ps2` with the same dials LAST; the payload is verified by grepping one-line fragments
+("sixty-three textured quad entries" and "printed 646 tris and 1,436 verts") out of
+`btron_sys.vol` and `btron-ps2.elf`, not mtimes.

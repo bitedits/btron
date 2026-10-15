@@ -6,7 +6,7 @@
  * every expectation was written from the GS field tables before the code ran.
  *
  * What is under test here is not the encodings -- `gs_pack_giftag`, `gs_pack_xyz2` and the rest
- * have their own hand literals in test_ps2_gs_pack.c and test_ps2_gs_rec.c -- but the five things
+ * have their own hand literals in test_ps2_gs_pack.c and test_ps2_gs_rec.c -- but the six things
  * only the raster stage can get wrong:
  *
  *   1. which PRIM word a triangle asks for, i.e. op 3 with IIP/TME/ABE following the GL state and
@@ -19,7 +19,25 @@
  *      two primitive states;
  *   5. from 5b, the texture switch: which group a plane change becomes, what order its three
  *      registers travel in, that a repeated plane costs nothing, and that a textured primitive
- *      with no plane of its own loses `TME` rather than sampling the page the stream left behind.
+ *      with no plane of its own loses `TME` rather than sampling the page the stream left behind;
+ *   6. from LANE 12e, the PARK: a triangle is THREE vertices in the group its state already
+ *      carries, always -- `verts` is 3 x `prims` and no group this stage opens carries the strip's
+ *      OP.  That is the measured answer, not the design: continuing the stream saved 14% of the
+ *      vertices and cost 9x the group boundaries, which filled the 256-entry stage table and dropped
+ *      236 primitives of a real frame.  doc/txt/PS2.txt LANE 12e has the numbers, and these two
+ *      checks are what a re-lived rung has to move before it can ship.
+ *   7. from LANE 12f, the BATCH: `eegs_grid_strip()` records a retained mesh as one PRIM and a run
+ *      of vertices, and the gate is that this DECODES -- through the recorder's own group layout --
+ *      into the same triangle sequence the list path records for the same mesh, the zigzag's
+ *      turn-around included, plus one group spelled out word by word from the field tables.  See the
+ *      decoder's comment for what is compared and for the one thing that is not.
+ *   8. from LANE 12h rung (i), the TEXTURED BATCH: `eegs_tex_quads()` records a retained icon or
+ *      text mesh as the TRI list `vertex.c`'s own GL_QUADS split makes, and the same gate applies --
+ *      it DECODES into the triangles the walk's list path records, corner payloads including the ST
+ *      register, which is the one thing 12f's grey strip could never exercise because it writes 0
+ *      there.  The pairing of the map's plane key through `gs_tex_find()` is this entry's own
+ *      decision: one switch for a whole run, and a key the registry does not know demotes to the
+ *      flat draw the walk folds to, counted in `texmiss` rather than drawn from somebody else's page.
  *
  * The buffer is 64 quadwords (the test's own #define, as in increment 4's gate), which is what
  * makes the last check also prove that a group cut by capacity never lands mid-triangle.
@@ -43,15 +61,27 @@
 #include "../../src/gl/backend_eegs.c"
 #include "gs_group_view.h"
 
-#define CAP_MAX 8
+/* LANE 12f's batch entry submits a whole mesh in one call, so one frame of it is many groups: a
+ * 5x4 grid at this capacity is three vertex groups, and the list path that must decode to the same
+ * thirty triangles is eight.  40 is above either with room for the AD group a textured case puts
+ * first.
+ *
+ * A dropped capture used to be invisible: `capture()` returned without recording, and a comparison
+ * of two decoded streams would then have been comparing whatever fitted.  `s_cap_drops` makes that
+ * an assertion instead of an accident, and every check that decodes reads it first. */
+#define CAP_MAX 40
 static uint64_t s_cap[CAP_MAX][GS_REC_QW_CAP * 2u];
 static uint32_t s_cap_n[CAP_MAX];
 static int      s_cap_i;
+static int      s_cap_drops;
 
 static void capture(void *user, const uint64_t *qw, uint32_t qwc)
 {
     (void)user;
-    if (s_cap_i >= CAP_MAX || qwc > GS_REC_QW_CAP) return;
+    if (s_cap_i >= CAP_MAX || qwc > GS_REC_QW_CAP) {
+        s_cap_drops++;
+        return;
+    }
     memcpy(s_cap[s_cap_i], qw, GS_QW_BYTES(qwc));
     s_cap_n[s_cap_i] = qwc;
     s_cap_i++;
@@ -73,6 +103,7 @@ static void start(void)
     memset(s_cap, 0, sizeof(s_cap));
     memset(s_cap_n, 0, sizeof(s_cap_n));
     s_cap_i = 0;
+    s_cap_drops = 0;
     s_vg = 0;
     eegs_frame_begin(capture, NULL);
 }
@@ -88,6 +119,13 @@ static const eegs_tri_state_t k_stb  = { 1, 1, 1 };   /* smooth, textured, blend
 static const eegs_tri_state_t k_flat_tex = { 0, 1, 1 };
 static const eegs_tri_state_t k_smooth_bare = { 1, 0, 0 };
 static const eegs_tri_state_t k_blend_only = { 0, 0, 1 };
+
+/* What the XMB ribbon's triangles look like to this stage: Gouraud because GL_SMOOTH is the default
+ * and `xmb.c` never calls glShadeModel, blended because the ribbon sets `glBlendFunc(GL_DST_COLOR,
+ * GL_ONE)`, untextured because it calls `glDisable(GL_TEXTURE_2D)` first.  The batch's own state
+ * comes from the map's two flags rather than from a struct, and the two have to agree -- which is
+ * what the strip-vs-list comparison below is for. */
+static const eegs_tri_state_t k_grid_st = { 1, 0, 1 };
 
 /* The PRIM words, by hand: gs_pack_prim's own field list is OP[2:0] IIP[3] TME[4] FGE[5] ABE[6]
  * AA1[7] FST[8] CTXT[9] FIX[11:10], so with CTXT always 1 (512) a textured, blended, smooth TRI is
@@ -134,12 +172,16 @@ static void check_word(const char *what, uint64_t got, uint64_t want)
     }
 }
 
-static eegs_vertex_t vert(float x, float y, float s, float t, uint32_t rgba)
+/* The pixel pair is integer because the stage that produces it is integer: `ZBufferPoint`'s x and y
+ * are GLint, which is what the viewport map writes and what clip.c's gs_vertex() passes straight
+ * through after LANE 12a.  A float here would be a coordinate this port cannot deliver.  s and t
+ * stay floats -- the ST field is IEEE-754, that part is the hardware's own unit. */
+static eegs_vertex_t vert(int32_t x_px, int32_t y_px, float s, float t, uint32_t rgba)
 {
     eegs_vertex_t v;
 
-    v.x_px = x;
-    v.y_px = y;
+    v.x_px = x_px;
+    v.y_px = y_px;
     v.s = s;
     v.t = t;
     v.rgba = rgba;
@@ -161,6 +203,24 @@ static gs_tex_t plane_words(uint64_t clamp, uint64_t tex0, uint64_t tex1)
     return t;
 }
 
+/* LANE 12h rung (i): `eegs_tex_quads()` pairs the map's `pixmap` key with a VRAM plane through the
+ * GS registry, `gs_tex_find()` -- and the registry cannot join this TU.  `ps2_gs_tex.c` owns a
+ * file-static `s_n` and `s_sink`, and so does `ps2_gs_rec.c`, which the capture above needs, so the
+ * two have no legal spelling side by side.  It should not: what THIS stage decides is the pairing
+ * and nothing else, so the lookup is a test-local identity keyed on the sheet the cases name,
+ * handing back the sentinel plane's entry for its one key and 0 for every other -- the two answers
+ * that are the entry's whole subject: one switch for a run, and a demotion for a key the registry
+ * does not know.  The three words stay hand literals for the same reason they already are: their
+ * derivation is `test_ps2_gs_tex.c`'s gate. */
+static char s_sheet_key;                    /* stands for `im->pixmap` of the uploaded sheet */
+static int  s_never_uploaded;               /* a bound texture with no plane: gs_tex_find() says 0 */
+static const void *s_tex_key = &s_sheet_key;
+
+const gs_tex_t *gs_tex_find(const void *plane)
+{
+    return plane == s_tex_key ? &s_plane : (const gs_tex_t *)0;
+}
+
 /* One triangle, its thirteen quadwords spelled out: the tag, then for each vertex the PRIM, the
  * RGBAQ, the ST and the XYZ2, each register owning a whole quadword. */
 static void test_one_triangle(void)
@@ -171,9 +231,9 @@ static void test_one_triangle(void)
     eegs_vertex_t v[3];
 
     start_plane();
-    v[0] = vert(0.0f, 0.0f, 0.0f, 0.0f, 0xFF332244u);
-    v[1] = vert(767.0f, 499.0f, 1.0f, 2.0f, 0x00000000u);
-    v[2] = vert(20.09375f, 250.0f, 0.5f, 0.5f, 0xFFFFFFFFu);
+    v[0] = vert(0, 0, 0.0f, 0.0f, 0xFF332244u);
+    v[1] = vert(767, 499, 1.0f, 2.0f, 0x00000000u);
+    v[2] = vert(20, 250, 0.5f, 0.5f, 0xFFFFFFFFu);
     eegs_triangle(v, k_stb);
     eegs_frame_end();
 
@@ -209,10 +269,15 @@ static void test_one_triangle(void)
                gs_vq(w, 2u, 1u), 0x3F80000000000000ULL);
     check_word("vertex 2 ST: s = 1.0f low, t = 2.0f high",
                gs_vq(w, 2u, 2u), 0x400000003F800000ULL);
-    /* 20.09375 px is exactly 321.5 sixteenths, and the cast truncates -- the GS's own ftoi4 -- so
-     * 321 + 32,768 = 33,089 = 0x8141; 250 px is 4,000 + 32,768 = 36,768 = 0x8FA0. */
-    check_word("vertex 3 XYZ2: 321.5 sixteenths truncates to 321, it does not round",
-               gs_vq(w, 3u, 3u), 0x000000008FA08141ULL);
+    /* 250 px is 4,000 sixteenths + 32,768 = 36,768 = 0x8FA0, and 20 px is 320 + 32,768 = 0x8140.
+     * This case used to be 20.09375 px, whose 321.5 sixteenths the recorder truncated to 321, and it
+     * is retired rather than marked passing: under LANE 12a no caller can hand this layer a
+     * fraction, because the viewport map writes a GLint.  The truncation itself is still gated --
+     * it is ps2_sf_fixsfsi(), which test_ps2_softfloat.c sweeps -- but nothing on the host now
+     * checks that a clipped vertex's whole-pixel value is the one the map produced.  That is a real
+     * gap opened by this change, and it is named here rather than papered over. */
+    check_word("vertex 3 XYZ2: whole pixels, scaled and folded onto the page",
+               gs_vq(w, 3u, 3u), 0x000000008FA08140ULL);
     check_word("vertex 3 RGBAQ: opaque white", gs_vq(w, 3u, 1u), 0x3F800000FFFFFFFFULL);
 
     /* The unit, one more time from this stage's side: if the raster stage or the recorder wrote a
@@ -234,9 +299,9 @@ static void test_state_reuse(void)
 
     start_plane();
     for (i = 0; i < 3; i++) {
-        v[0] = vert(0.0f, (float)i, 0.0f, 0.0f, 0xFFu);
-        v[1] = vert(10.0f, (float)i, 0.0f, 0.0f, 0xFFu);
-        v[2] = vert(0.0f, 10.0f + (float)i, 0.0f, 0.0f, 0xFFu);
+        v[0] = vert(0, i, 0.0f, 0.0f, 0xFFu);
+        v[1] = vert(10, i, 0.0f, 0.0f, 0xFFu);
+        v[2] = vert(0, 10 + i, 0.0f, 0.0f, 0xFFu);
         eegs_triangle(v, k_stb);
     }
     eegs_frame_end();
@@ -248,6 +313,16 @@ static void test_state_reuse(void)
     check("NLOOP 9, so the group holds all three whole",
           (gs_qw(VG(0), 0u) & 0x7FFFu) == 9u);
     check("1 + 4*9 = 37 quadwords", VN(0) == gs_group_qw(9u) && VN(0) == 37u);
+
+    /* LANE 12e's park, read off the group this frame built: a triangle is three vertices, so
+     * `verts` is exactly 3 x `prims`, and the OP the group's PRIM carries is the list's 3, not the
+     * strip's 4.  These are the two things a re-lived continuation has to move before it can ship,
+     * and the second is why the strip primitive itself stays gated in test_ps2_gs_rec.c -- the
+     * recorder implements it; this stage no longer asks for it. */
+    check("the park holds: verts is 3 x prims, so no vertex was ever continued",
+          eegs_verts() == 3u * eegs_prims());
+    check_word("and this stage's group carries OP 3, the triangle list",
+               gs_vq(VG(0), 1u, 0u) & 7u, 3u);
 }
 
 /* A state change is a group boundary by construction, and the PRIM word that follows it must be
@@ -258,9 +333,9 @@ static void test_state_change_closes(void)
     eegs_vertex_t v[3];
 
     start_plane();
-    v[0] = vert(0.0f, 0.0f, 0.0f, 0.0f, 0xFFu);
-    v[1] = vert(1.0f, 0.0f, 0.0f, 0.0f, 0xFFu);
-    v[2] = vert(0.0f, 1.0f, 0.0f, 0.0f, 0xFFu);
+    v[0] = vert(0, 0, 0.0f, 0.0f, 0xFFu);
+    v[1] = vert(1, 0, 0.0f, 0.0f, 0xFFu);
+    v[2] = vert(0, 1, 0.0f, 0.0f, 0xFFu);
     eegs_triangle(v, k_stb);
     eegs_triangle(v, k_flat_tex);
     eegs_frame_end();
@@ -296,8 +371,8 @@ static void test_lines(void)
 
     start();
     for (i = 0; i < 4; i++) {
-        v[0] = vert((float)i, 0.0f, 0.0f, 0.0f, 0xFF332244u);
-        v[1] = vert((float)i, 10.0f, 0.0f, 0.0f, 0xFF332244u);
+        v[0] = vert(i, 0, 0.0f, 0.0f, 0xFF332244u);
+        v[1] = vert(i, 10, 0.0f, 0.0f, 0xFF332244u);
         eegs_line(v, k_smooth_bare);
     }
     eegs_frame_end();
@@ -314,8 +389,8 @@ static void test_lines(void)
           s_cap_n[0] == gs_group_qw(8u) && s_cap_n[0] == 33u);
 
     start();
-    v[0] = vert(0.0f, 0.0f, 0.0f, 0.0f, 0xFF332244u);
-    v[1] = vert(0.0f, 10.0f, 0.0f, 0.0f, 0xFF332244u);
+    v[0] = vert(0, 0, 0.0f, 0.0f, 0xFF332244u);
+    v[1] = vert(0, 10, 0.0f, 0.0f, 0xFF332244u);
     eegs_line(v, k_blend_only);
     eegs_frame_end();
     if (s_cap_i < 1) return;
@@ -335,10 +410,16 @@ static void test_cut_is_always_whole_triangles(void)
     int i;
 
     start_plane();
-    v[0] = vert(1.0f, 1.0f, 0.0f, 0.0f, 0xFFu);
-    v[1] = vert(2.0f, 1.0f, 0.0f, 0.0f, 0xFFu);
-    v[2] = vert(1.0f, 2.0f, 0.0f, 0.0f, 0xFFu);
-    for (i = 0; i < 12; i++) eegs_triangle(v, k_stb);
+    /* Each triangle walks away from the last one so the NLOOP arithmetic below belongs to the LIST
+     * primitive alone.  With LANE 12e parked that costs nothing -- every triangle is three vertices
+     * whichever way its edges fall -- but a re-lived continuation would mix a one-vertex group into
+     * a test whose whole subject is that a cut lands on a whole triangle. */
+    for (i = 0; i < 12; i++) {
+        v[0] = vert(1 + 4 * i, 1, 0.0f, 0.0f, 0xFFu);
+        v[1] = vert(2 + 4 * i, 1, 0.0f, 0.0f, 0xFFu);
+        v[2] = vert(1 + 4 * i, 2, 0.0f, 0.0f, 0xFFu);
+        eegs_triangle(v, k_stb);
+    }
     eegs_frame_end();
 
     check("36 vertices at this capacity is three sends",
@@ -366,9 +447,9 @@ static void test_frame_boundary(void)
     eegs_vertex_t v[3];
 
     start();
-    v[0] = vert(0.0f, 0.0f, 0.0f, 0.0f, 0xFFu);
-    v[1] = vert(1.0f, 0.0f, 0.0f, 0.0f, 0xFFu);
-    v[2] = vert(0.0f, 1.0f, 0.0f, 0.0f, 0xFFu);
+    v[0] = vert(0, 0, 0.0f, 0.0f, 0xFFu);
+    v[1] = vert(1, 0, 0.0f, 0.0f, 0xFFu);
+    v[2] = vert(0, 1, 0.0f, 0.0f, 0xFFu);
 
     /* 5b's half of the boundary law, which is also ps2_gs_tex.h's second: the words that exist
      * cross the bus when they are written, while the vertices that use them accumulate. */
@@ -430,9 +511,9 @@ static void test_texture_switch(void)
     eegs_vertex_t v[3];
 
     start();
-    v[0] = vert(0.0f, 0.0f, 0.0f, 0.0f, 0xFFFFFFFFu);
-    v[1] = vert(64.0f, 0.0f, 64.0f, 0.0f, 0xFFFFFFFFu);
-    v[2] = vert(0.0f, 64.0f, 0.0f, 64.0f, 0xFFFFFFFFu);
+    v[0] = vert(0, 0, 0.0f, 0.0f, 0xFFFFFFFFu);
+    v[1] = vert(64, 0, 64.0f, 0.0f, 0xFFFFFFFFu);
+    v[2] = vert(0, 64, 0.0f, 64.0f, 0xFFFFFFFFu);
 
     eegs_texture(&a);
     eegs_triangle(v, k_stb);
@@ -456,11 +537,16 @@ static void test_texture_switch(void)
     check("and no primitive lost a texture", eegs_tex_missing() == 0u);
 
     /* The law that keeps a ribbon in one packet: pointing at the plane the stream already names
-     * costs no group and closes no vertex group. */
+     * costs no group and closes no vertex group.  The second triangle is elsewhere on purpose --
+     * with LANE 12e parked two triangles sharing an edge would pack together anyway, and this check
+     * is about the plane, not about the packing. */
     start();
     eegs_texture(&a);
     eegs_triangle(v, k_stb);
     eegs_texture(&a);
+    v[0] = vert(128, 0, 128.0f, 0.0f, 0xFFFFFFFFu);
+    v[1] = vert(192, 0, 192.0f, 0.0f, 0xFFFFFFFFu);
+    v[2] = vert(128, 64, 128.0f, 64.0f, 0xFFFFFFFFu);
     eegs_triangle(v, k_stb);
     eegs_frame_end();
     check("a repeated plane pays nothing: one switch group and one vertex group",
@@ -489,13 +575,980 @@ static void test_texture_switch(void)
           eegs_tex_missing() == 1u);
 }
 
+/* ── LANE 12f gate (b): the recorded stream read back as triangles ──────────────────
+ *
+ * The claim this rung has to survive is not "the batch is shorter" and not "the counters say so" --
+ * it is that one PRIM plus a run of vertices IS the thousand calls the immediate path makes, for
+ * this mesh, corner by corner.  So the two paths are recorded separately and both are DECODED,
+ * through the recorder's own group layout, into the triangles the GS would rasterise: three vertices
+ * at a time for a list, every consecutive triple for a strip, with the two vertices a split re-
+ * emits landing in the new group exactly where the continuation needs them.  A stream that overflowed
+ * the capture, broke the size law, or used an op this decoder does not know returns -1 rather than a
+ * short list, so a comparison can never pass on a partial decode.
+ *
+ * What is compared is the triangle ORDER and each triangle's three CORNERS, where a corner is its
+ * whole payload -- colour, texture coordinate and position together, one quadword each.  What is
+ * deliberately not compared is the order the three corners are NAMED in within one triangle: that is
+ * the winding, and `vertex.c`'s `cnt & 1` exists to fix it for a rasteriser that culls.  This stream
+ * culls nothing, and because a corner carries its own colour with its own position, permuting the
+ * three of them cannot move a colour to a different vertex or a vertex to a different pixel.  The
+ * control at the bottom of the case is what proves the comparator is not order-blind in the way that
+ * matters: the same mesh with the zigzag's turn-around removed -- every row walked forwards -- must
+ * NOT decode equal.
+ */
+
+typedef struct {
+    uint64_t rgbaq;
+    uint64_t st;
+    uint64_t xyz2;
+} payload_t;                     /* a corner: the three registers that are not the PRIM */
+
+typedef struct {
+    payload_t c[3];
+} dec_tri_t;
+
+#define TRI_MAX 96
+#define GRID_MAX_PTS 20          /* rows*cols for the meshes this gate draws: 5x4 and 3x3 */
+
+static tgl_grid_pt_t s_pts[GRID_MAX_PTS];
+
+/* The AD group draws nothing, so it contributes no triangle; every other group this stage writes is
+ * a packed vertex group whose data quadwords are four per vertex. */
+static int decode_stream(dec_tri_t *dst, int dst_max)
+{
+    int n = 0, gi, k;
+
+    for (gi = 0; gi < s_cap_i; gi++) {
+        const uint64_t *g = s_cap[gi];
+        uint32_t nloop, step, v;
+
+        if (gs_regs_of(g) == 0x0Eu) continue;
+        if (gs_nreg_of(g) != GS_REC_REGS_N) return -1;
+
+        nloop = gs_nloop_of(g);
+        if (s_cap_n[gi] != gs_group_qw(nloop)) return -1;    /* the size law is part of the decode */
+
+        if (gs_op_of(g) == GS_OP_TRI)       step = 3u;
+        else if (gs_op_of(g) == GS_OP_TRISTP) step = 1u;
+        else return -1;
+
+        for (v = 1u; v + 2u <= nloop; v += step) {
+            dec_tri_t *t;
+
+            if (n >= dst_max) return -1;
+            t = &dst[n];
+            for (k = 0; k < 3; k++) {
+                const uint32_t vi = v + (uint32_t)k;
+                t->c[k].rgbaq = gs_vq(g, vi, 1u);
+                t->c[k].st    = gs_vq(g, vi, 2u);
+                t->c[k].xyz2  = gs_vq(g, vi, 3u);
+            }
+            n++;
+        }
+    }
+    return n;
+}
+
+static int payload_equal(payload_t a, payload_t b)
+{
+    return a.rgbaq == b.rgbaq && a.st == b.st && a.xyz2 == b.xyz2;
+}
+
+/* Each of a's corners has to be found among b's, and no corner may be used twice.  With the three
+ * payloads of a triangle distinct -- which is why every mesh here gives every point its own colour,
+ * and why the case checks it -- greedy matching is exact. */
+static int tri_equal(const dec_tri_t *a, const dec_tri_t *b)
+{
+    int used[3] = { 0, 0, 0 };
+    int i, j;
+
+    for (i = 0; i < 3; i++) {
+        int found = -1;
+
+        for (j = 0; j < 3; j++) {
+            if (!used[j] && payload_equal(a->c[i], b->c[j])) {
+                found = j;
+                break;
+            }
+        }
+        if (found < 0) return 0;
+        used[found] = 1;
+    }
+    return 1;
+}
+
+/* 0 when the two decoded streams are the same triangle sequence; otherwise the 1-based index of the
+ * first triangle that differs, or -1 if the lengths differ. */
+static int tri_seqs_equal(const dec_tri_t *A, int na, const dec_tri_t *B, int nb)
+{
+    int i;
+
+    if (na != nb) return -1;
+    for (i = 0; i < na; i++) {
+        if (!tri_equal(&A[i], &B[i])) return i + 1;
+    }
+    return 0;
+}
+
+/* A mesh at (x, y) = (col, row) whole pixels -- the unit the viewport map delivers in -- with one
+ * distinct grey byte per point.  Those are the two properties the comparator above needs, and they
+ * are also what makes an expected XYZ2 or RGBAQ a literal rather than a formula. */
+static void fill_grid(int rows, int cols)
+{
+    int r, c;
+
+    for (r = 0; r < rows; r++) {
+        for (c = 0; c < cols; c++) {
+            const int i = r * cols + c;
+            s_pts[i].x_px = c;
+            s_pts[i].y_px = r;
+            s_pts[i].rgba = 0xFF000000u | (uint32_t)(i + 1);
+        }
+    }
+}
+
+static int grid_colours_distinct(int n)
+{
+    int i, j;
+
+    for (i = 0; i < n; i++) {
+        for (j = i + 1; j < n; j++) {
+            if (s_pts[i].rgba == s_pts[j].rgba) return 0;
+        }
+    }
+    return 1;
+}
+
+/* `xb_draw_ribbon()`'s submission order, and the order `eegs_grid_strip()` walks: for every row pair,
+ * down the columns, with the odd row backwards so the strip never has to be broken at a turn-around.
+ * serpentine=0 walks every row forwards instead, which is the control. */
+static int zigzag(int *seq, int rows, int cols, int serpentine)
+{
+    int r, c, n = 0;
+
+    for (r = 0; r < rows - 1; r++) {
+        for (c = 0; c < cols; c++) {
+            const int col = (serpentine && (r & 1)) ? (cols - 1 - c) : c;
+            seq[n++] = r * cols + col;
+            seq[n++] = (r + 1) * cols + col;
+        }
+    }
+    return n;
+}
+
+static eegs_vertex_t point_vert(int i)
+{
+    /* The same three fields `emit_point()` fills from a mapped point: the texcoords are 0 because
+     * the map this call consumes refuses a context with a texture enabled, and 0 is what
+     * `gs_vertex()` writes for an untextured vertex. */
+    return vert(s_pts[i].x_px, s_pts[i].y_px, 0.0f, 0.0f, s_pts[i].rgba);
+}
+
+/* The mesh the way the shipped path records it: one `eegs_triangle()` per triple of the submitted
+ * sequence, which is exactly the ring-of-three's rule for a GL_TRIANGLE_STRIP. */
+static void list_grid(const int *seq, int n)
+{
+    int i;
+
+    for (i = 2; i < n; i++) {
+        eegs_vertex_t v[3];
+
+        v[0] = point_vert(seq[i - 2]);
+        v[1] = point_vert(seq[i - 1]);
+        v[2] = point_vert(seq[i]);
+        eegs_triangle(v, k_grid_st);
+    }
+}
+
+/* The batch entry reads five fields of the map -- `ok`, `smooth`, `blended` and the rect
+ * `vp_x0`..`vp_y1` -- because the mesh it is handed has ALREADY been mapped, by
+ * `tgl_grid_map_points()`, which is gate (a)'s subject in test_grid_map.c.  The affine coefficients
+ * are zero here on purpose and nothing here reads them.  The rect is wide because the synthetic
+ * points below are `x_px = c`, `y_px = r`: this suite's mesh lives in grid coordinates, and the
+ * refusal gate for it is the vertex word's representable range, not the rect (see
+ * test_grid_strip_range_gate), which supplies its own narrow rects to make the two questions come
+ * apart. */
+static tgl_grid_map_t grid_map(void)
+{
+    tgl_grid_map_t m;
+
+    memset(&m, 0, sizeof m);
+    m.ok = 1u;
+    m.smooth = 1u;
+    m.blended = 1u;
+    m.vp_x0 = 0; m.vp_x1 = 4095;
+    m.vp_y0 = 0; m.vp_y1 = 4095;
+    return m;
+}
+
+static void test_grid_strip_matches_list(int rows, int cols)
+{
+    tgl_grid_map_t m = grid_map();
+    tgl_grid_map_t zero;
+    static dec_tri_t A[TRI_MAX], B[TRI_MAX], C[TRI_MAX];
+    int seq[GRID_MAX_PTS * 2];
+    int na, nb, nc, nv, submitted, bad, strip_groups, list_groups;
+    uint32_t strip_verts, strip_prims, list_verts, list_prims;
+    char label[96];
+
+    memset(&zero, 0, sizeof zero);
+    fill_grid(rows, cols);
+
+    sprintf(label, "%dx%d: every point carries a different colour, so corner matching is exact",
+            rows, cols);
+    check(label, grid_colours_distinct(rows * cols));
+    check("a zeroed map is refused rather than drawn",
+          eegs_grid_strip(&zero, s_pts, rows, cols) == -1);
+    check("and a mesh smaller than one quad is refused too",
+          eegs_grid_strip(&m, s_pts, 1, cols) == -1);
+    check("the only exit left is the argument one, and it says so",
+          eegs_grid_why() == TGL_GRID_REFUSE_ARG);
+
+    /* The batch: one PRIM for the whole mesh. */
+    start();
+    submitted = eegs_grid_strip(&m, s_pts, rows, cols);
+    eegs_frame_end();
+    check("nothing was dropped by the capture", s_cap_drops == 0);
+    check("nothing was refused by the recorder", gs_rec_unsplittable() == 0);
+    sprintf(label, "%dx%d: the batch submitted (rows-1)*cols*2 vertices", rows, cols);
+    check(label, submitted == (rows - 1) * cols * 2);
+    strip_groups = s_cap_i;
+    strip_verts = eegs_verts();
+    strip_prims = eegs_prims();
+    na = decode_stream(A, TRI_MAX);
+    sprintf(label, "%dx%d: the batch's stream decodes", rows, cols);
+    check(label, na >= 0);
+    sprintf(label, "%dx%d: a strip of %d vertices is %d triangles, splits included",
+            rows, cols, submitted, submitted - 2);
+    check(label, na == submitted - 2);
+    sprintf(label, "%dx%d: and the stage counted the same number", rows, cols);
+    check(label, strip_prims == (uint32_t)(submitted - 2));
+    check("the batch's groups all carry the strip's OP 4",
+          gs_op_of(VG(0)) == GS_OP_TRISTP && gs_op_of(VG(strip_groups - 1)) == GS_OP_TRISTP);
+
+    /* The shipped path, same grid, same submission order. */
+    start();
+    nv = zigzag(seq, rows, cols, 1);
+    sprintf(label, "%dx%d: the zigzag submits the batch's vertex count", rows, cols);
+    check(label, nv == submitted);
+    list_grid(seq, nv);
+    eegs_frame_end();
+    check("nothing was dropped by the capture", s_cap_drops == 0);
+    check("nothing was refused by the recorder", gs_rec_unsplittable() == 0);
+    list_groups = s_cap_i;
+    list_verts = eegs_verts();
+    list_prims = eegs_prims();
+    nb = decode_stream(B, TRI_MAX);
+    sprintf(label, "%dx%d: the list's stream decodes", rows, cols);
+    check(label, nb == na);
+    bad = tri_seqs_equal(A, na, B, nb);
+    sprintf(label, "%dx%d: the strip decodes to the same %d triangles as the list", rows, cols, na);
+    check(label, bad == 0);
+    if (bad != 0) {
+        const dec_tri_t *ta = &A[bad - 1], *tb = &B[bad - 1];
+        int i;
+
+        printf("    first differing triangle: %d\n", bad);
+        for (i = 0; i < 3; i++) {
+            printf("      strip c%d xyz2=0x%016llx rgbaq=0x%016llx\n", i,
+                   (unsigned long long)ta->c[i].xyz2, (unsigned long long)ta->c[i].rgbaq);
+        }
+        for (i = 0; i < 3; i++) {
+            printf("      list  c%d xyz2=0x%016llx rgbaq=0x%016llx\n", i,
+                   (unsigned long long)tb->c[i].xyz2, (unsigned long long)tb->c[i].rgbaq);
+        }
+    }
+    printf("  %dx%d: batch %d group%s / %u vertices for %d triangles,"
+           " list %d group%s / %u vertices\n",
+           rows, cols, strip_groups, strip_groups == 1 ? "" : "s", strip_verts, na,
+           list_groups, list_groups == 1 ? "" : "s", list_verts);
+
+    /* The two counters LANE 12f exists to move. */
+    sprintf(label, "%dx%d: the batch pays %d vertex groups where the list pays %d",
+            rows, cols, strip_groups, list_groups);
+    check(label, strip_groups < list_groups);
+    sprintf(label, "%dx%d: the list's verts:prims is the parked 3:1 (%u/%u)",
+            rows, cols, list_verts, list_prims);
+    check(label, list_prims == (uint32_t)nb && list_verts == 3u * list_prims);
+    sprintf(label, "%dx%d: and the batch's is not (%u/%u)", rows, cols, strip_verts, strip_prims);
+    check(label, strip_verts != 3u * strip_prims);
+
+    /* The control: the same mesh, the same list path, one law removed -- the odd row walked
+     * forwards instead of backwards.  If this compared equal, the gate above would be measuring a
+     * comparator that accepts any triangulation of the right vertices. */
+    start();
+    nv = zigzag(seq, rows, cols, 0);
+    list_grid(seq, nv);
+    eegs_frame_end();
+    nc = decode_stream(C, TRI_MAX);
+    sprintf(label, "%dx%d: the un-zigzagged mesh is REFUSED by the same comparison", rows, cols);
+    check(label, nc == na && tri_seqs_equal(A, na, C, nc) != 0);
+}
+
+/* A smooth, untextured, blended TRISTP: op 4 + IIP 8 + ABE 64 + CTXT 512 = 588 = 0x24C.  The tag
+ * around it is that word at [57:47] with PRE[46] set, EOP[15] set and NREG[63:60]=4 -- digit 11
+ * holds PRE alone (4) because op 4 has no bit 0, digit 12 holds IIP's bit 50 and op's bit 49 (6),
+ * digit 13 holds ABE's bit 53 (2), digit 14 holds CTXT's bit 56 (1). */
+static const uint64_t k_prim_stp_sb = 0x24CULL;
+static const uint64_t k_tag_stp_sb  = 0x4126400000008000ULL;
+static const uint64_t k_prim_stp_unblended = 0x20CULL;   /* 4 + 8 + 512 */
+
+/* The 3x3 mesh's ONE group, 49 quadwords, spelled out of the field tables by hand: twelve vertices
+ * in the zigzag's own order, 0,3,1,4,2,5 then the turn-around's repeat of 5 and 8,4,7,3,6.  Each
+ * point is (x, y) = (col, row) px, so XYZ2 is (0x8000 + 16*row)<<16 | (0x8000 + 16*col) with Z 0
+ * above bit 32, and RGBAQ is 0x3F800000 above the grey the mesh was filled with. */
+static const uint64_t k_grid3_rgbaq[12] = {
+    0x3F800000FF000001ULL,   /* p0 */
+    0x3F800000FF000004ULL,   /* p3 */
+    0x3F800000FF000002ULL,   /* p1 */
+    0x3F800000FF000005ULL,   /* p4 */
+    0x3F800000FF000003ULL,   /* p2 */
+    0x3F800000FF000006ULL,   /* p5 */
+    0x3F800000FF000006ULL,   /* p5 again: the turn-around names it twice */
+    0x3F800000FF000009ULL,   /* p8 */
+    0x3F800000FF000005ULL,   /* p4 */
+    0x3F800000FF000008ULL,   /* p7 */
+    0x3F800000FF000004ULL,   /* p3 */
+    0x3F800000FF000007ULL    /* p6 */
+};
+
+static const uint64_t k_grid3_xyz2[12] = {
+    0x0000000080008000ULL,
+    0x0000000080108000ULL,
+    0x0000000080008010ULL,
+    0x0000000080108010ULL,
+    0x0000000080008020ULL,
+    0x0000000080108020ULL,
+    0x0000000080108020ULL,
+    0x0000000080208020ULL,
+    0x0000000080108010ULL,
+    0x0000000080208010ULL,
+    0x0000000080108000ULL,
+    0x0000000080208000ULL
+};
+
+static void test_grid_strip_group_bytes(void)
+{
+    tgl_grid_map_t m = grid_map();
+    uint64_t *w;
+    int k;
+
+    fill_grid(3, 3);
+    start();
+    check("the 3x3 mesh submits twelve vertices and crosses no bus while it accumulates",
+          eegs_grid_strip(&m, s_pts, 3, 3) == 12 && s_cap_i == 0);
+    eegs_frame_end();
+
+    check("the capture saw one group and dropped nothing", s_cap_i == 1 && s_cap_drops == 0);
+    if (s_cap_i < 1) return;
+    w = VG(0);
+    check("one tag plus twelve four-register vertices = 49 quadwords", VN(0) == 49u);
+    check("NLOOP 12", gs_nloop_of(w) == 12u);
+    check_word("the group's tag, word for word", gs_qw(w, 0u), k_tag_stp_sb | 12u);
+    check_word("REGS: PRIM, RGBAQ, ST, XYZ2", gs_regs_of(w), 0x5210ULL);
+
+    for (k = 0; k < 12; k++) {
+        const uint32_t v = (uint32_t)k + 1u;
+        char label[96];
+
+        sprintf(label, "vertex %d's PRIM is the strip's 0x24C", k);
+        check_word(label, gs_vq(w, v, 0u), k_prim_stp_sb);
+        sprintf(label, "vertex %d's RGBAQ", k);
+        check_word(label, gs_vq(w, v, 1u), k_grid3_rgbaq[k]);
+        sprintf(label, "vertex %d's ST is the untextured 0", k);
+        check_word(label, gs_vq(w, v, 2u), 0ULL);
+        sprintf(label, "vertex %d's XYZ2", k);
+        check_word(label, gs_vq(w, v, 3u), k_grid3_xyz2[k]);
+        sprintf(label, "vertex %d's quadwords are one register wide", k);
+        check(label, gs_upper_of(w, 1u + GS_REC_REGS_N * (uint32_t)k) == 0u);
+    }
+
+    /* The two state bits that are the batch's own decisions: the blend flag comes from the map, and
+     * the texture flag is cleared whatever the map says, because a mapped mesh samples nothing. */
+    start();
+    m.blended = 0u;
+    eegs_grid_strip(&m, s_pts, 3, 3);
+    eegs_frame_end();
+    if (s_cap_i < 1) return;
+    check_word("an unblended map gives PRIM 0x20C", gs_vq(VG(0), 1u, 0u), k_prim_stp_unblended);
+    check("and TME stays cleared", (gs_prim_of(VG(0)) & 16u) == 0u);
+}
+
+/* The walk's first ribbon triangle runs on a stream that has just been pointed at nothing, and so
+ * does the batch -- `eegs_grid_strip()`'s one `eegs_texture(0)`.  The law that makes that safe is
+ * 5b's: `TME` in the PRIM word, not the page in `TEX0`, decides whether a primitive samples. */
+static void test_grid_strip_drops_the_plane(void)
+{
+    tgl_grid_map_t m = grid_map();
+    eegs_vertex_t v[3];
+
+    fill_grid(3, 3);
+    start();
+    eegs_texture(&s_plane);
+    v[0] = point_vert(0);
+    v[1] = point_vert(1);
+    v[2] = point_vert(2);
+    eegs_triangle(v, k_stb);
+    check("the batch submits after the textured draw, as the ribbon does mid-frame",
+          eegs_grid_strip(&m, s_pts, 3, 3) == 12);
+    eegs_frame_end();
+
+    check("switch group, the textured group, then the strip's own group", s_cap_i == 3);
+    if (s_cap_i < 3) return;
+    check_word("the textured group kept TME", gs_vq(s_cap[1], 1u, 0u), k_prim_tri_stb);
+    check_word("the strip's group does not", gs_vq(s_cap[2], 1u, 0u), k_prim_stp_sb);
+    check("the plane was already none, so the batch cost no second switch",
+          eegs_tex_switches() == 1u && eegs_tex_missing() == 0u);
+}
+
+/* The bound `eegs_grid_strip()` refuses at.  GS_XYOFFSET_PAGE is (2048u << 4) and
+ * `gs_vertex_coord16()` writes `(px * 16) + GS_XYOFFSET_PAGE` into XYZ2's 16-bit field, so a
+ * window-local whole pixel is representable over exactly -2048 .. +2047.  Spelled as a literal
+ * because the stage keeps the same number as a private macro: a gate that could not disagree with
+ * the code it measures would not be measuring anything. */
+#define GRID_XY_LIMIT 2048
+
+/* LANE 12f rung (ii), as amended by the ribbon's own measurement: the batch does not clip, so the
+ * only mesh it may refuse is one the GS cannot REPRESENT.  The clip rect is the SCISSOR's --
+ * `eegs_present_send()` programs it from the same client rect the map carries -- and `over=` is the
+ * column that makes that reliance an instrumented fact rather than a hope.
+ *
+ * Three claims, each with its own falsifier:
+ *
+ *   A mesh that leaves the rect is TAKEN.  The first version of the gate refused it, which is what
+ *   the live runs printed as `why=7` on every frame of the wave while `f_ribbon` stayed at 22,282 us:
+ *   `xb_paint()` projects the sheet with the window's 776x536 and draws it into the client's 768x500,
+ *   so the ribbon's last column is 8 px outside, permanently.  The check is the vertices on the bus,
+ *   not only the return value.
+ *
+ *   A mesh with a point outside the field's own extent, -2048 .. +2047, is refused and named RANGE --
+ *   and the refusal happens BEFORE anything is recorded, so a frame that falls back to the immediate
+ *   walk keeps exactly the stream it had.  That is why that case draws a triangle first and then
+ *   decodes the group instead of only checking -1: a scan that ran after the emit loop would pass
+ *   `== -1` and still leave the mesh's vertices on the bus.  An unrepresentable coordinate is also the
+ *   one thing the SCISSOR cannot fix -- the field folds and the triangle lands somewhere else on the
+ *   canvas.
+ *
+ *   A refusal leaves `over=` exactly where it found it, because the column describes the taken
+ *   batches and not the geometry of a mesh the GS never saw.
+ *
+ * The controls, all run against this file by mutation on 2026-10-15: deleting the range branch makes
+ * the two folding cases return 24 with batch=4 slow=0 why=NONE; putting the rect back as the refusal
+ * condition -- the gate as first written -- makes every overhang case return -1 and name 7; and
+ * committing `over` inside the scan rather than after it makes the refusal case read over=3. */
+static void test_grid_strip_range_gate(void)
+{
+    tgl_grid_map_t m = grid_map();
+    uint64_t *w;
+
+    fill_grid(4, 4);                        /* x_px = col, y_px = row, both 0..3 */
+
+    /* A rect that is exactly the grid's own extent, inclusive at both ends: nothing overhangs, so the
+     * frame's `over=` is the column's own word for "the SCISSOR had no work to do". */
+    start();
+    m.vp_x0 = 0; m.vp_x1 = 3; m.vp_y0 = 0; m.vp_y1 = 3;
+    check("a grid whose last column and last row sit on the rect's far edge is batched",
+          eegs_grid_strip(&m, s_pts, 4, 4) == 24);
+    check("and the frame's two exits read batch=1 slow=0",
+          eegs_grid_batch() == 1u && eegs_grid_slow() == 0u);
+    check("with no refusal named -- the column is cleared with the counters, not left over",
+          eegs_grid_why() == TGL_GRID_REFUSE_NONE);
+    check("and nothing asked the GS's clip window to cut a point", eegs_grid_over() == 0u);
+
+    /* One column outside the rect: the amended gate takes the mesh, which is the whole amendment --
+     * the ribbon's 8 px of overdraw, restated at this suite's scale. */
+    m.vp_x1 = 2;
+    start();
+    check("a mesh whose last column leaves the rect is batched anyway",
+          eegs_grid_strip(&m, s_pts, 4, 4) == 24);
+    check("and the whole mesh reached the stream: 24 vertices, 22 triangles",
+          eegs_verts() == 24u && eegs_prims() == 22u);
+    check("with the refusal column counted, one point per row, and not refused",
+          eegs_grid_over() == 4u && eegs_grid_slow() == 0u);
+    check("named as nothing-refused, because a count is not a `why=`",
+          eegs_grid_why() == TGL_GRID_REFUSE_NONE);
+    m.vp_x1 = 3;
+
+    /* The other three edges are the same scan, and each is the only edge cut. */
+    m.vp_y1 = 2;
+    start();
+    check("a row past the far edge is taken and counted the same way",
+          eegs_grid_strip(&m, s_pts, 4, 4) == 24 && eegs_grid_over() == 4u);
+    m.vp_y1 = 3; m.vp_y0 = 1;
+    start();
+    check("so is one before the near edge",
+          eegs_grid_strip(&m, s_pts, 4, 4) == 24 && eegs_grid_over() == 4u);
+    m.vp_y0 = 0;
+
+    /* Per POINT rather than per axis, which is what makes the column read as pixels: a rect cutting
+     * one column and one row leaves 4 + 4 points, one of them counted twice by an axis-wise total
+     * and once by this one. */
+    m.vp_x1 = 2; m.vp_y1 = 2;
+    start();
+    check("two overhanging edges give 7 points, not 8",
+          eegs_grid_strip(&m, s_pts, 4, 4) == 24 && eegs_grid_over() == 7u);
+    m.vp_x1 = 3; m.vp_y1 = 3;
+
+    /* From here the rect is wide again -- `grid_map()`'s own 0..4095 -- so that a point the SCISSOR
+     * would cut and a point the vertex word cannot carry are measured apart: the first lands in
+     * `over=`, the second takes the whole mesh. */
+    m = grid_map();
+    start();
+    s_pts[9].x_px = GRID_XY_LIMIT - 1;        /* 2047: the last value the field holds unwrapped */
+    check("a point on the last representable pixel is batched",
+          eegs_grid_strip(&m, s_pts, 4, 4) == 24);
+    check("and is not over, because the rect reaches past it", eegs_grid_over() == 0u);
+
+    start();
+    fill_grid(4, 4);
+    s_pts[9].x_px = GRID_XY_LIMIT;            /* (2048*16 + 2048*16) mod 65536 == 0: it folds */
+    {
+        eegs_vertex_t tv[3];
+
+        tv[0] = point_vert(0);
+        tv[1] = point_vert(1);
+        tv[2] = point_vert(2);
+        eegs_triangle(tv, k_grid_st);
+    }
+    check("one pixel further is refused, and the mesh with it",
+          eegs_grid_strip(&m, s_pts, 4, 4) == -1);
+    check("named as the vertex word's range, not as the rect and not as a map that failed to lift",
+          eegs_grid_why() == TGL_GRID_REFUSE_RANGE);
+    eegs_frame_end();
+    check("counted as slow, with no batch",
+          eegs_grid_batch() == 0u && eegs_grid_slow() == 1u);
+    check("the refusal recorded nothing: the frame is the one triangle's group and no more",
+          s_cap_i == 1 && s_cap_drops == 0);
+    if (s_cap_i >= 1) {
+        w = VG(0);
+        check("that group is still the triangle's three vertices, not three plus a strip",
+              gs_nloop_of(w) == 3u);
+    }
+
+    /* The negative side is the same field with the page origin in the middle, and it is the side a
+     * point above or left of the window's origin reaches.  The field is 16-bit UNSIGNED around
+     * `GS_XYOFFSET_PAGE`, so its extent is asymmetric by one: -2048 packs to 0x0000 and 2047 to
+     * 0xFFF0, and both are representable while 2048 and -2049 fold.  -2048 is also outside a rect
+     * that starts at 0, so it is the taken case `over=` exists for. */
+    start();
+    fill_grid(4, 4);
+    s_pts[0].x_px = -GRID_XY_LIMIT;
+    check("the low end of the field is batched, and counted as one point of clipping",
+          eegs_grid_strip(&m, s_pts, 4, 4) == 24 && eegs_grid_over() == 1u);
+
+    start();
+    fill_grid(4, 4);
+    s_pts[0].x_px = -GRID_XY_LIMIT - 1;       /* packs to 0xFFF0, the same word as +2047 */
+    check("one pixel past it is refused", eegs_grid_strip(&m, s_pts, 4, 4) == -1);
+    check("on the x axis, at the low end, under the same name",
+          eegs_grid_why() == TGL_GRID_REFUSE_RANGE);
+
+    start();
+    fill_grid(4, 4);
+    s_pts[5].y_px = GRID_XY_LIMIT;
+    check("and the y axis is the same field, not a second gate",
+          eegs_grid_strip(&m, s_pts, 4, 4) == -1 &&
+          eegs_grid_why() == TGL_GRID_REFUSE_RANGE);
+
+    /* A refusal that comes after the scan has already walked overhangs: the running total is local
+     * and committed only when the mesh is taken.  The scan goes in row order, so the offender below
+     * is the mesh's last point and three outside-the-rect points precede it -- a counter incremented
+     * in place would print 3 on a frame the GS batched nothing on. */
+    start();
+    fill_grid(4, 4);
+    m.vp_x1 = 2;
+    s_pts[15].y_px = GRID_XY_LIMIT;          /* row 3, col 3: outside the rect AND outside the field */
+    check("a mesh that fails the range test at its last point is refused",
+          eegs_grid_strip(&m, s_pts, 4, 4) == -1);
+    check("and the frame's over= is still zero, not the three points passed on the way",
+          eegs_grid_over() == 0u);
+    m.vp_x1 = 3;
+
+    /* `over=` is the frame's, like the other three: two taken meshes sum their outside points, because
+     * the column is how much clipping this frame asked the GS for. */
+    start();
+    fill_grid(4, 4);
+    m.vp_x1 = 2;
+    eegs_grid_strip(&m, s_pts, 4, 4);
+    m.vp_x1 = 3;
+    eegs_grid_strip(&m, s_pts, 4, 4);
+    check("two meshes, one of them overhanging: batch=2 slow=0 over=4",
+          eegs_grid_batch() == 2u && eegs_grid_slow() == 0u && eegs_grid_over() == 4u);
+    eegs_frame_end();
+
+    /* A refused map reaches the same counter as a refused coordinate, because the counting is on this
+     * entry's return path and not in the caller: the caller that could not capture a map hands over
+     * the zeroed struct and gets -1 and slow=1 for its trouble. */
+    start();
+    {
+        tgl_grid_map_t zero;
+        memset(&zero, 0, sizeof zero);
+        check("an uncaptured map is refused", eegs_grid_strip(&zero, s_pts, 4, 4) == -1);
+        /* Without this, the row's `why=` would read 0 -- which is the column's own word for
+         * "nothing refused" -- on exactly the frame that refused for want of a captured map. */
+        check("named as never having been captured, not as no refusal",
+              eegs_grid_why() == TGL_GRID_REFUSE_UNSET);
+    }
+    check("and counted as slow, the same column the range refusal feeds",
+          eegs_grid_batch() == 0u && eegs_grid_slow() == 1u);
+
+    /* And the counters are the frame's, not the build's: begin() clears all four, which is what makes
+     * the row readable as one pass rather than as a running total. */
+    start();
+    check("a new frame starts batch, slow, why and over at zero",
+          eegs_grid_batch() == 0u && eegs_grid_slow() == 0u &&
+          eegs_grid_why() == TGL_GRID_REFUSE_NONE && eegs_grid_over() == 0u);
+}
+
+/* ── LANE 12h rung (i): the textured batch ────────────────────────────────────────────────
+ *
+ * f_menu's 1,436 textured vertices are the column `slow=` never counted, because none of them was
+ * ever asked: the grey strip entry refuses a textured context by design (why=4), and the icon and
+ * text runs stayed on the walk.  `eegs_tex_quads()` is the entry that was built for that state --
+ * it submits vertex.c's own GL_QUADS split through `eegs_triangle()`, so its gate is the same law
+ * 12f established, with one payload the grey strip could never exercise: the ST register, which is
+ * the whole point of a textured draw and carries 0 on every vertex `eegs_grid_strip()` emits.
+ */
+
+/* Two quads make eight points, and this mesh keeps the strip's unit: whole pixels, quads laid side
+ * by side along x.  The corner order is the one vertex.c's GL_QUADS case assumes -- (0,0), (1,0),
+ * (1,1), (0,1) -- because the split below is that case's own: (v0,v1,v2) then (v0,v2,v3).  s, t and
+ * the grey byte all differ per corner, which is what keeps the corner-set comparator exact. */
+#define QUAD_MAX_PTS 32
+static tgl_tex_pt_t s_qpts[QUAD_MAX_PTS];
+
+static void fill_quads(int nquads)
+{
+    static const int cx[4] = { 0, 1, 1, 0 };
+    static const int cy[4] = { 0, 0, 1, 1 };
+    int q, k;
+
+    for (q = 0; q < nquads; q++) {
+        for (k = 0; k < 4; k++) {
+            const int i = q * 4 + k;
+            s_qpts[i].x_px = 2 * q + cx[k];
+            s_qpts[i].y_px = cy[k];
+            s_qpts[i].s    = 0.25f + 0.5f * (float)i;
+            s_qpts[i].t    = 0.125f + 0.25f * (float)i;
+            s_qpts[i].rgba = 0xFF000000u | (uint32_t)(i + 1);
+        }
+    }
+}
+
+/* The textured map over this suite's grey one: the affine coefficients are the same deliberate
+ * zeros, because the mesh has ALREADY been mapped by `tgl_grid_map_tex_points()` before either
+ * entry sees it -- that is gate (a)'s subject in test_grid_map.c.  The four mapper constants are
+ * the 96x64 sheet's own from `texture.c` -- sscale = (96 << 11) - 1024 and friends -- carried so the
+ * struct arriving here is the shape the caller hands over; nothing in `eegs_tex_quads()` reads
+ * them, and nothing here re-derives them. */
+static tgl_tex_map_t tex_map(const void *plane)
+{
+    tgl_tex_map_t m;
+
+    memset(&m, 0, sizeof m);
+    m.g      = grid_map();
+    m.sscale = 195584.0f;            /* (96 << 11) - 1024 */
+    m.soff   = 1024.0f;              /* half a texel, folded in by the mapper, not by us */
+    m.tscale = 33292288.0f;          /* (64 << 19) - 262144 */
+    m.toff   = 262144.0f;
+    m.pixmap = plane;
+    return m;
+}
+
+static eegs_vertex_t qvert(int i)
+{
+    return vert(s_qpts[i].x_px, s_qpts[i].y_px, s_qpts[i].s, s_qpts[i].t, s_qpts[i].rgba);
+}
+
+/* The shipped path for a textured quad mesh, as the walk's adapter makes it today: the plane named
+ * once, then each quad through two `eegs_triangle()` calls.  alt_split=1 takes the OTHER diagonal
+ * -- the control, same corners, same colours, different triangles. */
+static void list_quads(int nquads, const gs_tex_t *plane, int alt_split)
+{
+    eegs_vertex_t v[3];
+    int q;
+
+    eegs_texture(plane);
+    for (q = 0; q < nquads; q++) {
+        const int b = q * 4;
+
+        if (!alt_split) {
+            v[0] = qvert(b);     v[1] = qvert(b + 1); v[2] = qvert(b + 2);
+            eegs_triangle(v, k_stb);
+            v[1] = qvert(b + 2); v[2] = qvert(b + 3);
+            eegs_triangle(v, k_stb);
+        } else {
+            v[0] = qvert(b);     v[1] = qvert(b + 1); v[2] = qvert(b + 3);
+            eegs_triangle(v, k_stb);
+            v[0] = qvert(b + 1); v[1] = qvert(b + 2); v[2] = qvert(b + 3);
+            eegs_triangle(v, k_stb);
+        }
+    }
+}
+
+/* A flat, unblended TRI that STILL samples: 3 + 16 + 512.  TME is the entry's own decision -- the
+ * map required a bound-and-enabled sheet -- so zeroing the map's two flags must not clear it. */
+static const uint64_t k_prim_tex_plain = 0x213ULL;
+
+static void test_tex_quads_matches_list(void)
+{
+    tgl_tex_map_t m = tex_map(s_tex_key);
+    static dec_tri_t A[TRI_MAX], B[TRI_MAX], C[TRI_MAX];
+    uint64_t *w;
+    int na, nb, nc, bad, submitted, batch_groups, list_groups;
+    uint32_t batch_verts, list_verts;
+
+    fill_quads(2);
+
+    /* The batch: one AD switch for the whole run, then ONE vertex group -- twelve emitted vertices
+     * for four triangles, because `eegs_triangle()` pays three corners per primitive and the quad's
+     * shared diagonal is named twice, exactly as the walk names it. */
+    start();
+    submitted = eegs_tex_quads(&m, s_qpts, 2);
+    eegs_frame_end();
+    check("two quads submit four triangles -- this entry counts prims, not the strip's vertices",
+          submitted == 4);
+    check("nothing was dropped by the capture", s_cap_drops == 0);
+    check("nothing was refused by the recorder", gs_rec_unsplittable() == 0);
+    check("one switch group, then one vertex group for the whole run", s_cap_i == 2);
+    batch_groups = s_cap_i;
+    batch_verts = eegs_verts();
+    check("twelve vertices, four triangles on the stage's own counters",
+          eegs_verts() == 12u && eegs_prims() == 4u);
+    check("one plane change paid the run, and no primitive lost its texture",
+          eegs_tex_switches() == 1u && eegs_tex_missing() == 0u);
+    check("batch=1 slow=0 over=0, and no refusal named",
+          eegs_grid_batch() == 1u && eegs_grid_slow() == 0u &&
+          eegs_grid_over() == 0u && eegs_grid_why() == TGL_GRID_REFUSE_NONE);
+    if (s_cap_i < 2) return;
+
+    check_word("the switch carries the AD trio's own tag", gs_qw(s_cap[0], 0u), k_tag_ad3);
+    check_word("and its REGS nibble is AD", gs_regs_of(s_cap[0]), 0x0Eu);
+    check_word("CLAMP first, the registry entry's word", gs_qw(s_cap[0], 1u), s_plane.clamp);
+    check_word("TEX0 second", gs_qw(s_cap[0], 2u), s_plane.tex0);
+    check_word("TEX1 third", gs_qw(s_cap[0], 3u), s_plane.tex1);
+
+    w = VG(1);
+    check("NLOOP 12, and the group's size is its law: one tag plus twelve four-register vertices",
+          gs_nloop_of(w) == 12u && VN(1) == gs_group_qw(12u) && VN(1) == 49u);
+    check_word("the group's tag is the textured TRI's, hand-written again",
+               gs_qw(w, 0u), k_tag_tri_stb | 12u);
+    check_word("vertex 1 PRIM", gs_vq(w, 1u, 0u), k_prim_tri_stb);
+    check_word("vertex 1 RGBAQ: quad 0's first corner, grey 1, Q = 1.0f",
+               gs_vq(w, 1u, 1u), 0x3F800000FF000001ULL);
+    /* The ST register, spelled by hand the way the field table says: 0.25f = 2^-2 is 0x3E800000 at
+     * [31:0] and 0.125f = 2^-3 is 0x3E000000 at [63:32].  This word is the thing the grey strip
+     * gate could never check -- it writes 0 there whatever the map says. */
+    check_word("vertex 1 ST: s = 0.25 low, t = 0.125 high",
+               gs_vq(w, 1u, 2u), 0x3E0000003E800000ULL);
+    check_word("vertex 1 XYZ2: (0,0) px", gs_vq(w, 1u, 3u), 0x0000000080008000ULL);
+    /* 0.75f = 1.5 x 2^-1 = 0x3F400000 and 0.375f = 1.5 x 2^-2 = 0x3EC00000: mantissas that are not
+     * bare exponents, so the full 32-bit pattern of both halves is checked, not only the sign. */
+    check_word("vertex 2 ST: s = 0.75, t = 0.375", gs_vq(w, 2u, 2u), 0x3EC000003F400000ULL);
+    check_word("vertex 7 RGBAQ: quad 1's first corner, grey 5",
+               gs_vq(w, 7u, 1u), 0x3F800000FF000005ULL);
+    check_word("vertex 7 XYZ2: x = 2 px", gs_vq(w, 7u, 3u), 0x0000000080008020ULL);
+
+    na = decode_stream(A, TRI_MAX);
+    check("the batch's stream decodes to its four triangles", na == 4);
+
+    /* The shipped path, same mesh, same submission order: what the clipper hands the stage per
+     * textured quad today, adapter and all. */
+    start();
+    list_quads(2, gs_tex_find(s_tex_key), 0);
+    eegs_frame_end();
+    check("nothing dropped, nothing refused on the list's stream either",
+          s_cap_drops == 0 && gs_rec_unsplittable() == 0);
+    list_groups = s_cap_i;
+    list_verts = eegs_verts();
+    nb = decode_stream(B, TRI_MAX);
+    check("the list decodes to the same count", nb == na);
+    bad = tri_seqs_equal(A, na, B, nb);
+    check("and the SAME four triangles, corner for corner, payload for payload -- the ST register "
+          "included, which is this mesh's whole subject", bad == 0);
+    if (bad != 0) {
+        const dec_tri_t *ta = &A[bad - 1], *tb = &B[bad - 1];
+        int i;
+
+        printf("    first differing triangle: %d\n", bad);
+        for (i = 0; i < 3; i++) {
+            printf("      batch c%d xyz2=0x%016llx rgbaq=0x%016llx st=0x%016llx\n", i,
+                   (unsigned long long)ta->c[i].xyz2, (unsigned long long)ta->c[i].rgbaq,
+                   (unsigned long long)ta->c[i].st);
+        }
+        for (i = 0; i < 3; i++) {
+            printf("      list  c%d xyz2=0x%016llx rgbaq=0x%016llx st=0x%016llx\n", i,
+                   (unsigned long long)tb->c[i].xyz2, (unsigned long long)tb->c[i].rgbaq,
+                   (unsigned long long)tb->c[i].st);
+        }
+    }
+    printf("  2-quad batch: %d groups / %u vertices for %d triangles;"
+           " list: %d groups / %u vertices\n",
+           batch_groups, batch_verts, na, list_groups, list_verts);
+
+    /* The control: the other diagonal of the same quad.  Same four corners, same four colours, a
+     * different mesh -- if THAT decoded equal, the gate above would be comparing vertex sets rather
+     * than the split `vertex.c` makes. */
+    start();
+    list_quads(2, gs_tex_find(s_tex_key), 1);
+    eegs_frame_end();
+    nc = decode_stream(C, TRI_MAX);
+    check("the alternate split is REFUSED by the same comparison",
+          nc == na && tri_seqs_equal(A, na, C, nc) != 0);
+
+    /* The two lifted flags ride the map and the textured bit rides the entry: a flat, unblended
+     * textured draw still samples, because the map only ever arrives bound-and-enabled. */
+    start();
+    {
+        tgl_tex_map_t mf = tex_map(s_tex_key);
+        mf.g.smooth  = 0u;
+        mf.g.blended = 0u;
+        eegs_tex_quads(&mf, s_qpts, 2);
+    }
+    eegs_frame_end();
+    if (s_cap_i >= 2) {
+        check_word("flat and unblended gives PRIM 0x213, TME intact",
+                   gs_vq(VG(1), 1u, 0u), k_prim_tex_plain);
+    }
+}
+
+/* The refusals, the fold and the counters -- the strip's battery re-asked against this entry's two
+ * extra degrees of freedom: the plane key, and the triangle-vs-vertex return unit. */
+static void test_tex_quad_gates(void)
+{
+    tgl_tex_map_t m = tex_map(s_tex_key);
+    tgl_grid_map_t gm = grid_map();
+    eegs_vertex_t tv[3];
+    uint64_t *w;
+
+    fill_quads(2);
+
+    /* The three argument refusals share one name and one column. */
+    start();
+    check("a null map is refused", eegs_tex_quads(0, s_qpts, 1) == -1);
+    check("a null mesh is refused", eegs_tex_quads(&m, 0, 1) == -1);
+    check("and so is a mesh of no quads", eegs_tex_quads(&m, s_qpts, 0) == -1);
+    check("named as the argument case", eegs_grid_why() == TGL_GRID_REFUSE_ARG);
+    check("counted slow three times, batched once never",
+          eegs_grid_slow() == 3u && eegs_grid_batch() == 0u);
+
+    /* A caller-zeroed map carries ok=0 AND no reason: the same UNSET the strip's gate gives, on the
+     * shared column, because the [GSTS] row reads one battery for both entries. */
+    {
+        tgl_tex_map_t zero;
+        memset(&zero, 0, sizeof zero);
+        check("an uncaptured map is refused and named UNSET",
+              eegs_tex_quads(&zero, s_qpts, 1) == -1 &&
+              eegs_grid_why() == TGL_GRID_REFUSE_UNSET);
+    }
+
+    /* A refusal the map carries is handed over under its own name -- and NOTEX (10) is this map's
+     * inverse question, the one the grey map can never produce. */
+    {
+        tgl_tex_map_t mn = tex_map(s_tex_key);
+        mn.g.ok = 0u;
+        mn.g.refuse = TGL_GRID_REFUSE_NOTEX;
+        check("the textured map's inverse arrives named: why=NOTEX, not flattened to UNSET",
+              eegs_tex_quads(&mn, s_qpts, 1) == -1 &&
+              eegs_grid_why() == TGL_GRID_REFUSE_NOTEX);
+    }
+
+    /* Overhang, the ribbon law restated on quads: the rect ending at x=2 leaves quad 1's two x=3
+     * corners outside, permanently -- exactly the wave's 8 px at this suite's scale.  Taken, and
+     * counted for the SCISSOR. */
+    start();
+    m.g.vp_x1 = 2;
+    check("a quad mesh whose last two points leave the rect is batched anyway",
+          eegs_tex_quads(&m, s_qpts, 2) == 4);
+    check("and the whole mesh reached the stream: 12 vertices, 4 prims",
+          eegs_verts() == 12u && eegs_prims() == 4u);
+    check("two points counted for the clip, nothing refused",
+          eegs_grid_over() == 2u && eegs_grid_why() == TGL_GRID_REFUSE_NONE);
+    m.g.vp_x1 = 4095;
+
+    /* The range refusal, with a triangle already in the frame: the strip's law verbatim -- a
+     * refusal records nothing and commits nothing.  Two x=3 overhangs precede the offender in the
+     * scan; a counter incremented in place would print 2 on a frame that batched nothing. */
+    start();
+    fill_grid(3, 3);
+    tv[0] = point_vert(0); tv[1] = point_vert(1); tv[2] = point_vert(2);
+    eegs_triangle(tv, k_grid_st);
+    fill_quads(2);
+    s_qpts[7].x_px = GRID_XY_LIMIT;        /* folds in the 12.4 field, as the strip's case shows */
+    m.g.vp_x1 = 2;
+    check("a corner outside the vertex word's field refuses the whole mesh",
+          eegs_tex_quads(&m, s_qpts, 2) == -1);
+    check("named RANGE, not the rect it also leaves", eegs_grid_why() == TGL_GRID_REFUSE_RANGE);
+    check("and over= stays zero: the running count is committed only with the mesh",
+          eegs_grid_over() == 0u);
+    check("counted slow, batched nothing",
+          eegs_grid_batch() == 0u && eegs_grid_slow() == 1u);
+    eegs_frame_end();
+    check("the refusal recorded nothing: the frame is the one triangle's group and no more",
+          s_cap_i == 1 && s_cap_drops == 0);
+    if (s_cap_i >= 1) {
+        w = VG(0);
+        check("and that group is still the triangle's three vertices", gs_nloop_of(w) == 3u);
+    }
+    m.g.vp_x1 = 4095;
+
+    /* The field's last value is a legal coordinate: 2047 packs to 0xFFF0 and draws. */
+    start();
+    fill_quads(2);
+    s_qpts[7].x_px = GRID_XY_LIMIT - 1;
+    check("the same corner at 2047 px is batched", eegs_tex_quads(&m, s_qpts, 2) == 4);
+    check("and not over, because the restored rect reaches past it", eegs_grid_over() == 0u);
+
+    /* The demotion: a key the registry does not know -- a texture bound with its bytes never
+     * uploaded -- draws the way the walk itself folds that state, FLAT, and says so in `texmiss`.
+     * It is batched, not refused: the walk drew these quads either way; the only question is who
+     * counts them. */
+    start();
+    {
+        tgl_tex_map_t md = tex_map(&s_never_uploaded);
+        check("an unregistered sheet is still batched, as a flat draw",
+              eegs_tex_quads(&md, s_qpts, 2) == 4);
+    }
+    eegs_frame_end();
+    check("it costs no AD group at all: one vertex group, zero switches",
+          s_cap_i == 1 && eegs_tex_switches() == 0u);
+    if (s_cap_i >= 1) {
+        check_word("and the primitives came out flat: 0x24B, TME cleared",
+                   gs_vq(VG(0), 1u, 0u), k_prim_tri_untex);
+    }
+    check("four triangles, four misses -- the column the bench reads as texmiss",
+          eegs_tex_missing() == 4u);
+    check("a demotion is not a refusal: batch=1 slow=0",
+          eegs_grid_batch() == 1u && eegs_grid_slow() == 0u);
+
+    /* The counters are shared by the two entries, because the [GSTS] row is one battery: a strip
+     * mesh and a quad mesh in one frame sum into batch=, and the plane the strip dropped the quads
+     * pick up again -- one switch, in order. */
+    start();
+    fill_grid(4, 4);
+    check("the strip entry takes its mesh in the same frame: 24 vertices",
+          eegs_grid_strip(&gm, s_pts, 4, 4) == 24);
+    fill_quads(1);
+    check("the quad entry takes its mesh too: 2 triangles",
+          eegs_tex_quads(&m, s_qpts, 1) == 2);
+    check("batch=2 slow=0 across both entries",
+          eegs_grid_batch() == 2u && eegs_grid_slow() == 0u);
+    check("the strip pointed at nothing, the quads named the sheet: exactly one switch",
+          eegs_tex_switches() == 1u && eegs_tex_missing() == 0u);
+
+    /* And the six columns are the frame's: begin() zeroes the pair it shares with the strip's four. */
+    start();
+    check("a new frame starts batch, slow, why, over, switches and missing at zero",
+          eegs_grid_batch() == 0u && eegs_grid_slow() == 0u &&
+          eegs_grid_why() == TGL_GRID_REFUSE_NONE && eegs_grid_over() == 0u &&
+          eegs_tex_switches() == 0u && eegs_tex_missing() == 0u);
+}
+
 int main(void)
 {
     printf("==========================================================\n");
     printf(" PS2 EE/GS raster stage vs hand-built GIF groups (cap=%u qw)\n", GS_REC_QW_CAP);
-    printf("==========================================================\n");
-
-    /* The plane start_plane() names, so that the textured cases draw against a plane the way the
+    printf("==========================================================\n");    /* The plane start_plane() names, so that the textured cases draw against a plane the way the
      * adapter in clip.c does.  Its three words are sentinels and nothing here compares them: a
      * stable object whose *identity* the stage can cache is what these cases need, and the words
      * themselves are gate by gs_tex_register()'s own suite. */
@@ -509,6 +1562,13 @@ int main(void)
     test_cut_is_always_whole_triangles();
     test_frame_boundary();
     test_texture_switch();
+    test_grid_strip_matches_list(3, 3);
+    test_grid_strip_matches_list(5, 4);
+    test_grid_strip_group_bytes();
+    test_grid_strip_drops_the_plane();
+    test_grid_strip_range_gate();
+    test_tex_quads_matches_list();
+    test_tex_quad_gates();
 
     printf("  checks=%d failures=%d\n", s_checks, s_failures);
     if (s_failures == 0) {

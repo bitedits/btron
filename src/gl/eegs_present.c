@@ -54,12 +54,247 @@ static uint32_t s_dropped;
 
 static eegs_present_stats s_stats;
 
+/* ── LANE 12h's invariance instrument (`PS2_IDENT=1`) ──────────────────────────────
+ * The question this answers is the one that decides between the lane's two rungs: is the stream a
+ * frame records the same byte string the previous frame recorded?  If it is, the rung is a replay
+ * and the vertex arithmetic goes away; if it is not, the rung is a batch map and the arithmetic
+ * gets cheaper instead.  Nothing else in this port can answer it, because the recorder keeps no
+ * history -- LANE 10's buffer-lifetime law is that the words a group handed to the sink are gone
+ * the moment the next group is written.
+ *
+ * So the instrument keeps a per-group hash instead of the words.  Two 32-bit FNV-1a lanes folded
+ * over the group's uint64 halves give 64 bits of state for ~2 multiplies a word, both on 32-bit
+ * operands (a 64-bit multiply on this o32 build is a software routine, which is exactly the cost
+ * the instrument must not pay in a lane that measures cost), and the pair is folded inside the
+ * copy loop that already touches each word.  Its error is one-directional, which is what makes
+ * `sameqw=` usable as a decision rather than as a hint: identical bytes necessarily hash
+ * identically, so a same-group claim is only wrong on a 2^-64 collision, while a different-group
+ * claim is exact.
+ *
+ * The comparison is BY INDEX, and that is the design rather than a shortcut: a replay can re-send
+ * a span only where that span sits in this frame too, so an inserted group that shifts every later
+ * one is precisely the cost rung (ii) would pay, and it reads as a frame whose whole tail differs.
+ * `tail_*` counts the groups only one of the two frames has, so a shifted frame is never mistaken
+ * for an identical one, and the group indices that differ are named in `at=` so the reading side
+ * can put them against the `g=` column the app's phase markers print.
+ *
+ * The per-group tuple is {hash low, hash high, qwc, the per-register lane hashes, the group's
+ * kind}.  `qwc` is carried for the COLUMNS and not for the detection: `same=`/`diff=`/`tail=` are
+ * reported in quadwords, and this is the field they are summed from.  A vertex-count change is
+ * already caught by the words themselves -- the group then folds one more quadword and its tag's
+ * NLOOP field moves with it -- which is what the controls measured by deleting both of the length
+ * terms and losing no check at all.
+ *
+ * The lanes exist because `diff=` cannot say WHAT moved, and the answers send the next rung to
+ * different files: a group whose XYZ2 quadwords are byte-identical while its RGBAQ moved is a mesh
+ * whose geometry is the same every frame and only its shade changes, which wants a colour map, while
+ * a moving XYZ2 is the vertex transform being re-solved.  A vertex group's data quadwords are PRIM,
+ * RGBAQ, ST, XYZ2 in that REGS order, starting at quadword 1 -- the tag's quadword carries the REGS
+ * list in its high half -- so each lane folds every fourth word of the group from there.  PRIM and
+ * the tag are in none of the lanes and
+ * only in the whole-group hash, which is why a group can count in all three lanes and still be
+ * `diff=` -- that combination says the primitive descriptor moved, not the picture.  An AD group (a
+ * texture switch) has no such four-register body, so it is marked by kind and counted in no lane;
+ * `same=`/`diff=` count it like any other group. */
+#ifndef BTRON_PS2_GS_IDENT
+#define BTRON_PS2_GS_IDENT 0
+#endif
+
+#if BTRON_PS2_GS_IDENT
+#define IDENT_H0 2166136261u
+#define IDENT_H1 16777619u
+#define IDENT_AT_MAX 8u
+
+/* The per-group tuple's columns. */
+#define ID_A 0u                    /* whole-group FNV lane a */
+#define ID_B 1u                    /* whole-group FNV lane b */
+#define ID_QW 2u                   /* this group's quadword count */
+#define ID_RGB 3u                  /* the RGBAQ lane alone */
+#define ID_ST 4u                   /* the ST lane alone */
+#define ID_XYZ 5u                  /* the XYZ2 lane alone */
+#define ID_SHAPE 6u                /* the XYZ2 lane read as DIFFERENCES */
+#define ID_KIND 7u                 /* ID_VERTEX or ID_AD */
+#define ID_N 8u
+
+#define ID_VERTEX 1u
+#define ID_AD 2u
+
+/* Distinct, nonzero seeds, one per lane: a lane that folded nothing and a lane whose words happened
+ * to hash to another lane's value are then both impossible readings, and the kind column is the
+ * only thing the lane comparison trusts for "this group has this register at all". */
+#define ID_SEED_RGB 0x9E3779B9u
+#define ID_SEED_ST  0x85EBCA77u
+#define ID_SEED_XYZ 0xC2B2AE3Du
+#define ID_SEED_SHAPE 0x165667B1u
+
+/* {fnv lane a, lane b, qwc, rgb, st, xyz, shape, kind}, one row per staged group, kept for both the
+ * frame being built and the last frame that was presented. */
+static uint32_t s_ident_cur[EEGS_MAX_GROUPS][ID_N];
+static uint32_t s_ident_prev[EEGS_MAX_GROUPS][ID_N];
+static uint32_t s_ident_prev_groups;
+static uint32_t s_ident_frames;
+static uint32_t s_ident_vertex;   /* vertex groups staged this frame, whatever they hashed to */
+
+static void ident_fold(uint32_t *ha, uint32_t *hb, uint64_t w)
+{
+    *ha = (*ha ^ (uint32_t)w) * 16777619u;
+    *hb = (*hb + (uint32_t)(w >> 32)) * 2246822519u;
+}
+
+/* One register lane's hash: a 32-bit FNV-1a step, one multiply per folded word, and a seed per lane
+ * so a lane of three vertices cannot read as an empty one. */
+static void ident_fold1(uint32_t *h, uint64_t w)
+{
+    *h = (*h ^ (uint32_t)w) * 16777619u;
+}
+
+/* A group index written as decimal into `s_ident_at`, with no libc in this TU: the present formats
+ * nothing today, and pulling snprintf in for one bench column would put a printf back into a unit
+ * the shipped image links. */
+static char s_ident_at[4u * IDENT_AT_MAX + 8u];
+static uint32_t s_ident_at_len;
+
+static void at_putc(char c)
+{
+    if (s_ident_at_len + 2u < sizeof s_ident_at) s_ident_at[s_ident_at_len++] = c;
+    s_ident_at[s_ident_at_len] = '\0';
+}
+
+static void at_put_index(uint32_t n, int first)
+{
+    char digits[10];
+    uint32_t k = 0u;
+
+    if (!first) at_putc(',');
+    do {
+        digits[k++] = (char)('0' + (n % 10u));
+        n /= 10u;
+    } while (n);
+    while (k) at_putc(digits[--k]);
+}
+#endif /* BTRON_PS2_GS_IDENT */
+
+uint32_t eegs_present_groups_staged(void)
+{
+    return s_groups;
+}
+
+#if BTRON_PS2_GS_IDENT
+/* Compare this frame's staged groups against the last presented frame's, index for index, and
+ * carry this frame's tuples forward.  Called once per presented frame, from the stats block, so
+ * the numbers on the row describe the stream that actually went on the bus -- and so a frame that
+ * staged nothing never consumes a predecessor it did not replace. */
+static void ident_report(uint32_t groups)
+{
+    uint32_t i, shown = 0u, more;
+    const uint32_t n = (groups < s_ident_prev_groups) ? groups : s_ident_prev_groups;
+
+    s_ident_at_len = 0u;
+    s_ident_at[0] = '\0';
+
+    s_stats.ident_frames = ++s_ident_frames;
+    s_stats.ident_groups_prev = s_ident_prev_groups;
+    s_stats.same_groups = s_stats.same_qw = 0u;
+    s_stats.diff_groups = s_stats.diff_qw = 0u;
+    s_stats.tail_groups = s_stats.tail_qw = 0u;
+    s_stats.diff_first = s_stats.diff_last = s_stats.diff_more = 0u;
+    s_stats.ident_xyz = s_stats.ident_rgb = s_stats.ident_st = s_stats.ident_shape = 0u;
+    /* `v=` is the frame's OWN vertex-group count, staged or dropped, taken from the sink rather than
+     * from the aligned prefix: `g=` minus `v=` is the AD groups, and a lane count against `v=` is the
+     * arithmetic that says how many of this frame's meshes kept that field. */
+    s_stats.ident_vertex_groups = s_ident_vertex;
+
+    for (i = 0u; i < n; i++) {
+        const int same = (s_ident_cur[i][ID_A] == s_ident_prev[i][ID_A]) &&
+                         (s_ident_cur[i][ID_B] == s_ident_prev[i][ID_B]) &&
+                         (s_ident_cur[i][ID_QW] == s_ident_prev[i][ID_QW]);
+
+        /* The register lanes, over the aligned prefix and only where BOTH frames' group at this
+         * index is a vertex group: an AD group has no XYZ2 quadword to be invariant about. */
+        if (s_ident_cur[i][ID_KIND] == ID_VERTEX &&
+            s_ident_prev[i][ID_KIND] == ID_VERTEX) {
+            if (s_ident_cur[i][ID_XYZ] == s_ident_prev[i][ID_XYZ]) s_stats.ident_xyz++;
+            if (s_ident_cur[i][ID_RGB] == s_ident_prev[i][ID_RGB]) s_stats.ident_rgb++;
+            if (s_ident_cur[i][ID_ST] == s_ident_prev[i][ID_ST]) s_stats.ident_st++;
+            if (s_ident_cur[i][ID_SHAPE] == s_ident_prev[i][ID_SHAPE]) s_stats.ident_shape++;
+        }
+
+        if (same) {
+            s_stats.same_groups++;
+            s_stats.same_qw += s_ident_cur[i][ID_QW];
+            continue;
+        }
+        s_stats.diff_groups++;
+        s_stats.diff_qw += s_ident_cur[i][ID_QW];
+        if (s_stats.diff_groups == 1u) s_stats.diff_first = i;
+        s_stats.diff_last = i;
+        if (shown < IDENT_AT_MAX) {
+            at_put_index(i, (shown == 0u) ? 1 : 0);
+            shown++;
+        }
+    }
+
+    /* The groups only one frame has, on both sides and in the same column: a frame that gained a
+     * texture switch and one that lost a group are the same reading -- a span that cannot be
+     * replayed where it sits. */
+    for (i = n; i < groups; i++) {
+        s_stats.tail_groups++;
+        s_stats.tail_qw += s_ident_cur[i][ID_QW];
+    }
+    for (i = n; i < s_ident_prev_groups; i++) {
+        s_stats.tail_groups++;
+        s_stats.tail_qw += s_ident_prev[i][ID_QW];
+    }
+
+    more = s_stats.diff_groups - shown;
+    s_stats.diff_more = more;
+    if (more) {
+        at_putc('+');
+        at_put_index(more, 1);
+    }
+
+    for (i = 0u; i < groups; i++) {
+        uint32_t c;
+
+        for (c = 0u; c < ID_N; c++) s_ident_prev[i][c] = s_ident_cur[i][c];
+    }
+    s_ident_prev_groups = groups;
+}
+
+const char *eegs_present_ident_at(void)
+{
+    return s_ident_at;
+}
+#else
+const char *eegs_present_ident_at(void)
+{
+    return "";
+}
+#endif /* BTRON_PS2_GS_IDENT */
+
 /* The recorder's sink, called from inside the application's paint callback.  It copies: the
  * recorder reuses its own buffer for the next group the moment this returns, so a sink that
  * merely remembered a pointer would be pointing at the following group by present time. */
 static void eegs_stage_sink(void *user, const uint64_t *qw, uint32_t qwc)
 {
     uint32_t i;
+#if BTRON_PS2_GS_IDENT
+    uint32_t ha = IDENT_H0, hb = IDENT_H1;
+    uint32_t lrgb = ID_SEED_RGB, lst = ID_SEED_ST, lxyz = ID_SEED_XYZ;
+    uint32_t lshape = ID_SEED_SHAPE;
+    uint32_t px = 0u, py = 0u, pz = 0u, first = 1u;
+    /* The group's kind comes out of its own tag, because the sink is handed words and nothing else:
+     * a vertex group declares a four-register REGS list, an AD group declares one, and NREG is
+     * bits [63:60] of the tag's low half.  Anything else folds no lane.  The report side re-checks
+     * this column, so the gate here is the redundant half of the pair -- measured, deleting it loses
+     * no check -- and it stays because folding words a group does not have is worse to reason about
+     * than folding nothing and letting one column say why. */
+    const uint32_t nreg = (uint32_t)(qw[0] >> 60) & 0xFu;
+    uint32_t kind = 0u;
+
+    if (nreg == GS_REC_REGS_N) kind = ID_VERTEX;
+    else if (nreg == 1u) kind = ID_AD;
+#endif
 
     (void)user;
 
@@ -70,7 +305,63 @@ static void eegs_stage_sink(void *user, const uint64_t *qw, uint32_t qwc)
 
     /* Word by word rather than through a memmove: this file is compiled into the host gate as
      * well as the image, and a copy loop has one implementation instead of two. */
-    for (i = 0; i < 2u * qwc; i++) s_stage[2u * s_used + i] = qw[i];
+    for (i = 0; i < 2u * qwc; i++) {
+        s_stage[2u * s_used + i] = qw[i];
+#if BTRON_PS2_GS_IDENT
+        ident_fold(&ha, &hb, qw[i]);
+        /* The tag occupies ONE quadword -- its own 64 bits with the REGS list in the half above them
+         * -- so the data body starts at quadword 1 and is GS_REC_REGS_N registers per vertex, in the
+         * REGS order PRIM, RGBAQ, ST, XYZ2.  PRIM folds into no lane: the whole-group hash owns it,
+         * which is what the book's residual reading is -- a group invariant in every lane yet
+         * `diff=` had its PRIM, its tag or its loop count move. */
+        if (kind == ID_VERTEX && (i >> 1) >= 1u) {
+            switch (((i >> 1) - 1u) % GS_REC_REGS_N) {
+            case 1u: ident_fold1(&lrgb, qw[i]); break;   /* RGBAQ */
+            case 2u: ident_fold1(&lst,  qw[i]); break;   /* ST    */
+            case 3u:
+                ident_fold1(&lxyz, qw[i]);
+                /* The shape lane reads XYZ2's own fields -- X[15:0], Y[31:16], Z[63:32] of the
+                 * quadword's low half (gs_pack_xyz2) -- and folds the DIFFERENCE from the previous
+                 * vertex rather than the coordinate.  It is therefore invariant under translating
+                 * the whole group, which is the one thing `xyz=` cannot say: a differing `xyz=` over
+                 * an invariant `shape=` is the same mesh in a new place, and a differing `shape=` is
+                 * the mesh itself changing.  The first vertex folds nothing, so a group's shape is
+                 * its vertex count and its relative structure and nothing about where it sits. */
+                if ((i & 1u) == 0u) {
+                    const uint64_t w = qw[i];
+                    const uint32_t x = (uint32_t)(w & 0xFFFFu);
+                    const uint32_t y = (uint32_t)((w >> 16) & 0xFFFFu);
+                    const uint32_t z = (uint32_t)(w >> 32);
+
+                    if (!first) {
+                        ident_fold1(&lshape, x - px);
+                        ident_fold1(&lshape, y - py);
+                        ident_fold1(&lshape, z - pz);
+                    }
+                    px = x; py = y; pz = z;
+                    first = 0u;
+                }
+                break;
+            default: break;                              /* PRIM  */
+            }
+        }
+#endif
+    }
+#if BTRON_PS2_GS_IDENT
+    /* The tag PRIM and the REGS list are inside those words, so a group that changed its primitive
+     * type or its loop count without changing a coordinate hashes differently on its own. */
+    ha = (ha ^ qwc) * 16777619u;
+    s_ident_cur[s_groups][ID_A] = ha;
+    s_ident_cur[s_groups][ID_B] = hb;
+    s_ident_cur[s_groups][ID_QW] = qwc;
+    s_ident_cur[s_groups][ID_RGB] = lrgb;
+    s_ident_cur[s_groups][ID_ST] = lst;
+    s_ident_cur[s_groups][ID_XYZ] = lxyz;
+    s_ident_cur[s_groups][ID_SHAPE] = lshape;
+    s_ident_cur[s_groups][ID_KIND] = kind;
+    if (kind == ID_VERTEX) s_ident_vertex++;
+#endif
+
     s_group_qwc[s_groups++] = qwc;
     s_used += qwc;
 }
@@ -90,6 +381,9 @@ void eegs_present_begin(void)
     s_groups = 0u;
     s_used = 0u;
     s_dropped = 0u;
+#if BTRON_PS2_GS_IDENT
+    s_ident_vertex = 0u;
+#endif
     eegs_frame_begin(eegs_stage_sink, 0);
 }
 
@@ -189,6 +483,20 @@ int eegs_present_send(const RECT *client)
     s_stats.unsplittable = gs_rec_unsplittable();
     s_stats.tex_switches = eegs_tex_switches();
     s_stats.tex_missing = eegs_tex_missing();
+    s_stats.prim_moves = eegs_prim_moves();
+    /* LANE 12f rung (ii): retained meshes drawn as one strip, and meshes that asked and were
+     * refused.  The two are read together -- `slow=` climbing on a fixed-size window says the gate
+     * is turning work away that used to be fast, and `batch=` beside a sheet with an edge missing
+     * says the GS's clip window is not taking the overhang the batch relied on.  `why=` names the
+     * last refusal, and `over=` counts the batched points outside the rect that SCISSOR is being
+     * asked to cut. */
+    s_stats.grid_batch = eegs_grid_batch();
+    s_stats.grid_slow = eegs_grid_slow();
+    s_stats.grid_why = eegs_grid_why();
+    s_stats.grid_over = eegs_grid_over();
+#if BTRON_PS2_GS_IDENT
+    ident_report(s_groups);
+#endif
 
     /* Whether this stream plates the rect it is scissored to, which is the condition the window
      * walk checks before it lets a layer's own body go unfilled in the canvas.  The clip's right

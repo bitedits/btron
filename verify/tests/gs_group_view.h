@@ -45,6 +45,38 @@ static inline uint64_t gs_upper_of(const uint64_t *g, uint32_t k)
     return g[2u * k + 1u];
 }
 
+/* The GIF tag's own fields, read where ps2_gs_pack.c writes them: NLOOP[14:0], EOP[15],
+ * PRE[46], PRIM[57:47], FLG[59:58], NREG[63:60].  These are for a *decoder* -- something that has
+ * to say which primitive a group asks for and how many vertices it carries without restating the
+ * encoder's arithmetic -- and they are the same field positions the hand literals in these suites
+ * were written from. */
+static inline uint32_t gs_nloop_of(const uint64_t *g)
+{
+    return (uint32_t)(gs_qw(g, 0u) & 0x7FFFu);
+}
+
+static inline uint32_t gs_eop_of(const uint64_t *g)
+{
+    return (uint32_t)((gs_qw(g, 0u) >> 15) & 1u);
+}
+
+static inline uint32_t gs_prim_of(const uint64_t *g)
+{
+    return (uint32_t)((gs_qw(g, 0u) >> 47) & 0x7FFu);
+}
+
+/* OP[2:0] of the group's PRIM: GS_OP_TRI, GS_OP_TRISTP, ... The rest of PRIM is the state, which a
+ * group-level reader cannot separate, so it stays available as `gs_prim_of()`. */
+static inline uint32_t gs_op_of(const uint64_t *g)
+{
+    return gs_prim_of(g) & 7u;
+}
+
+static inline uint32_t gs_nreg_of(const uint64_t *g)
+{
+    return (uint32_t)(gs_qw(g, 0u) >> 60);
+}
+
 /* Register `reg` (0 = PRIM, 1 = RGBAQ, 2 = ST, 3 = XYZ2) of vertex `v` (1-based) of a PACKED
  * vertex group: the tag, then GS_REC_REGS_N quadwords per vertex. */
 static inline uint64_t gs_vq(const uint64_t *g, uint32_t v, uint32_t reg)

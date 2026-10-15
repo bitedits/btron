@@ -81,14 +81,20 @@ static void texcoord_words(void)
 
 static void vertex_words(void)
 {
-    /* The page offset puts pixel 0 at 2048*16 = 0x8000, and the low 4 bits are the
-     * fraction: quantisation is 1/16 px, and truncation (0.06 px*16 = 0.96) is not rounding
-     * -- the assertion that separates them. */
-    eq32("coord 0.0",        gs_vertex_coord16(0.0f),     0x8000u);
-    eq32("coord 100.25",     gs_vertex_coord16(100.25f),  0x8644u);
-    eq32("coord 1/16",       gs_vertex_coord16(0.0625f),  0x8001u);
-    eq32("coord truncates",  gs_vertex_coord16(0.06f),    0x8000u);
-    eq32("coord -1/16",      gs_vertex_coord16(-0.0625f), 0x7FFFu);
+    /* The page offset puts pixel 0 at 2048*16 = 0x8000.  The function's unit is a whole pixel
+     * now -- see ps2_gs_pack.h's comment on what the round trip through binary32 used to cost --
+     * and the four low bits of the field, which are the 1/16 fraction, are therefore always zero
+     * on this path.  The literal below says so at pixel 100: 0x8640, and not the 0x8644 that a
+     * quarter-pixel would have set.  The truncation-vs-rounding rows that used to sit here went
+     * with the float parameter, and they are honestly retired rather than marked passing: on a
+     * whole-pixel input the product is an integer, so the two answers cannot be told apart, and a
+     * gate that cannot fail is not an instrument.  What replaces them is the sweep in
+     * coord_matches_float(), which pins the shift to the spelling it replaced. */
+    eq32("coord 0",       gs_vertex_coord16(0),     0x8000u);
+    eq32("coord 100",     gs_vertex_coord16(100),   0x8640u);
+    eq32("coord -1",      gs_vertex_coord16(-1),    0x7FF0u);
+    eq32("coord 2047",    gs_vertex_coord16(2047),  0xFFF0u);
+    eq32("coord -2048",   gs_vertex_coord16(-2048), 0x0000u);
 
     /* X[15:0] Y[31:16] Z[63:32] */
     eq("xyz2", gs_pack_xyz2(0x8644u, 0x8CA8u, 0u), 0x000000008CA88644ULL);
@@ -98,6 +104,83 @@ static void vertex_words(void)
        0x7FABCDFF8CA88644ULL);
     eq("xyzf2 z is 24 bits", gs_pack_xyzf2(0u, 0u, 0x12345678u, 0x7Fu),
        0x7F34567800000000ULL);
+}
+
+/* The retired float spelling, kept here as the oracle it is: production has one encoder and this
+ * program keeps the other, so the sweep below compares two independent statements instead of
+ * comparing a shift with itself. */
+static uint32_t coord_float_ref(int32_t px)
+{
+    return (uint32_t)((int32_t)((float)px * 16.0f) + (int32_t)(2048u << 4)) & 0xFFFFu;
+}
+
+static void coord_matches_float(void)
+{
+    int bad = 0;
+
+    /* The range a clipped screen coordinate can take, both sides of the page origin, plus the
+     * overflow past it -- the field wraps and both spellings wrap the same way, which the top of
+     * the range checks without anyone having to argue that they do. */
+    for (int32_t px = -2100; px <= 2100; px++)
+        if (gs_vertex_coord16(px) != coord_float_ref(px))
+            bad++;
+    for (int32_t px = -100000; px <= 100000; px += 7)
+        if (gs_vertex_coord16(px) != coord_float_ref(px))
+            bad++;
+
+    eq32("coord: shift == the float spelling it replaced", (uint32_t)bad, 0u);
+
+    /* The control that says this sweep discriminates: one of the two lines it pins is the +16
+     * scale, and a shift of 8 rather than 4 disagrees with the oracle everywhere. */
+    bad = 0;
+    for (int32_t px = 0; px <= 800; px++)
+        if ((((uint32_t)px << 8) + GS_XYOFFSET_PAGE) & 0xFFFFu)
+            bad++;
+    eq32("coord: control, a wrong shift does differ", (bad != 0) ? 1u : 0u, 1u);
+}
+
+static uint32_t bits_of(float f)
+{
+    union { float f; uint32_t u; } b;
+    b.f = f;
+    return b.u;
+}
+
+static void scale_pow2_sweep(void)
+{
+    int bad = 0, folded = 0;
+
+    /* gs_float_scale_pow2() claims the exponent subtraction and the multiply return the SAME
+     * bits.  Checked against the multiply at every shift the vertex path could ask for, over the
+     * integers a texel index can be and over the six inputs the guard exists for. */
+    for (uint32_t shift = 1u; shift <= 12u; shift++) {
+        const float want_unit = 1.0f / (float)(1u << shift);
+
+        for (int32_t i = -70000; i <= 70000; i += 13) {
+            const float f = (float)i;
+            if (bits_of(gs_float_scale_pow2(f, shift)) != bits_of(f * want_unit))
+                bad++;
+        }
+        /* Zero and its sign: the guard's first case. */
+        if (bits_of(gs_float_scale_pow2(0.0f, shift)) != bits_of(0.0f * want_unit)) bad++;
+        if (bits_of(gs_float_scale_pow2(-0.0f, shift)) != bits_of(-0.0f * want_unit)) bad++;
+        /* Subnormal and the underflow edge: exponent field 0 or <= shift, so the multiply runs. */
+        if (bits_of(gs_float_scale_pow2(1e-42f, shift)) != bits_of(1e-42f * want_unit)) bad++;
+        if (bits_of(gs_float_scale_pow2(1.0e-38f, shift)) != bits_of(1.0e-38f * want_unit)) bad++;
+        /* Infinities and a NaN are not numbers to rescale; the multiply leaves them as they are. */
+        if (bits_of(gs_float_scale_pow2(1.0f / 0.0f, shift)) != bits_of((1.0f / 0.0f) * want_unit)) bad++;
+        if (bits_of(gs_float_scale_pow2(-1.0f / 0.0f, shift)) != bits_of((-1.0f / 0.0f) * want_unit)) bad++;
+        if (bits_of(gs_float_scale_pow2(0.0f / 0.0f, shift)) != bits_of((0.0f / 0.0f) * want_unit)) bad++;
+    }
+
+    eq32("scale pow2: fold == multiply, every class", (uint32_t)bad, 0u);
+
+    /* And the fold was actually reached -- a sweep that only ever ran the fallback would pass
+     * this file and prove nothing.  1.0f at shift 10 is the vertex path's own ordinary case:
+     * 0x3F800000 with its exponent moved down ten, which is 0x3A800000. */
+    folded = (bits_of(gs_float_scale_pow2(1.0f, 10u)) == 0x3A800000u &&
+              bits_of(gs_float_scale_pow2(437.5f, 10u)) == (bits_of(437.5f) - (10u << 23))) ? 1 : 0;
+    eq32("scale pow2: control, the exponent path runs", (uint32_t)folded, 1u);
 }
 
 /* ── Drawing-environment words ─────────────────────────────────────────── */
@@ -268,6 +351,8 @@ int main(void)
     color_words();
     texcoord_words();
     vertex_words();
+    coord_matches_float();
+    scale_pow2_sweep();
     env_words();
     stream_words();
     transfer_words();

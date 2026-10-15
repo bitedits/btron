@@ -378,6 +378,33 @@ if [ -n "$OBJDUMP64" ]; then
     assert_check "The image's build default names a backend the link can install (GLDEF_RET=$GLDEF_RET; 3 is EE/GS and is legal from 5c)" \
         "[ $GLDEF_RET -le 3 ]"
 
+    # ...and names the one THIS invocation asked for.  The row above cannot fail on a tinygl image,
+    # because 0 is a legal answer; the disease it did not cover is the gate itself, which depends on
+    # $(PS2_TARGET) while the Makefile's default PS2_GL is tinygl.  Measured 2026-10-14: an eegs
+    # image passed the suite, a host round reset the stamp, and the next bare `make test-ps2`
+    # relinked and graded the software rasteriser under a book quoting eegs rows.  The dial now has
+    # to be handed to the gate (Makefile: test-ps2 passes PS2_GL/PS2_FP), and a gate run bare grades
+    # the default it says it grades.
+    case "${PS2_GL:-tinygl}" in
+        eegs)  GLDEF_WANT=3 ;;
+        virgl) GLDEF_WANT=1 ;;
+        *)     GLDEF_WANT=0 ;;
+    esac
+    assert_check "The image is the pipeline this invocation named (PS2_GL=${PS2_GL:-tinygl} wants gl_backend_default()=$GLDEF_WANT, the link returns $GLDEF_RET)" \
+        "[ $GLDEF_RET -eq $GLDEF_WANT ]"
+
+    # The same law for the census dial, which has no runtime answer to read: PS2_FP_COUNT=1 compiles
+    # xmb.c's per-stage count rows in, and at 0 their format strings are not in the image at all.
+    # Worth asserting because an instrumented run's microseconds are inflated by the counter on the
+    # hot side of every call -- so a stage timed on a census build must not be quoted as production,
+    # and the artifact now says which of the two it is.
+    CENSUS_RAW="$(LC_ALL=C grep -a -c 'census %-13s' $ELF || true)"
+    CENSUS_SAY=0
+    if [ "${CENSUS_RAW:-0}" -ge 1 ]; then CENSUS_SAY=1; fi
+    assert_check "the FP census is in the image exactly when PS2_FP_COUNT=1 was asked for (image says $CENSUS_SAY, invocation said ${PS2_FP_COUNT:-0})" \
+        "[ $CENSUS_SAY -eq ${PS2_FP_COUNT:-0} ]"
+
+
     # ── Increment 5c: the present path, in the order the hardware forces ──────────────
     #
     # The staging, the ordering and the two seams are this increment's whole content, and none of

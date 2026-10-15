@@ -143,8 +143,8 @@ static void test_quad_group(void)
     gs_rec_color(0x12u, 0x34u, 0x56u, 0x78u);
     gs_rec_texcoord(1.0f, 2.0f);
     check("four vertices of a strip are accepted",
-          gs_rec_vertex(0.0f, 0.0f, 0u) == 0 && gs_rec_vertex(10.0f, 20.0f, 0u) == 0 &&
-          gs_rec_vertex(320.0f, 240.0f, 0u) == 0 && gs_rec_vertex(-1.0f, 0.5f, 0u) == 0);
+          gs_rec_vertex(0, 0, 0u) == 0 && gs_rec_vertex(10, 20, 0u) == 0 &&
+          gs_rec_vertex(320, 240, 0u) == 0 && gs_rec_vertex(-1, 2047, 0u) == 0);
     gs_rec_end();
 
     check("exactly one group, so one DMA start for a quad", gs_rec_sends() == 1u);
@@ -184,10 +184,15 @@ static void test_quad_group(void)
                gs_vq(w, 2u, 3u), 0x00000000814080A0ULL);
     /* (320,240) px: 5120 -> 0x9400, 3840 -> 0x8F00. */
     check_word("vertex 3 XYZ2", gs_vq(w, 3u, 3u), 0x000000008F009400ULL);
-    /* (-1,0.5) px: -16 + 32768 = 32752 = 0x7FF0, 8 + 32768 = 32776 = 0x8008.  X in the low half,
-     * Y in the high half -- the pair the manual's XYZ2 table gives. */
+    /* (-1, 2047) px: -16 + 32768 = 32752 = 0x7FF0 and 2047*16 = 32752 + 32768 = 65 520 = 0xFFF0,
+     * which is the field's own last value -- the corner a 2048 px canvas would wrap past.  X in the
+     * low half, Y in the high half -- the pair the manual's XYZ2 table gives.  The fractional vertex
+     * this case used to be (0.5 px, which truncated to 0x8008) went with the float parameter: under
+     * LANE 12a the caller is a GLvertex whose x and y are already GLint, so a half-pixel vertex is
+     * not a thing that can reach this function, and asserting one here would be asserting a literal
+     * the production path cannot produce. */
     check_word("vertex 4 XYZ2: a negative pixel stays below the page origin",
-               gs_vq(w, 4u, 3u), 0x0000000080087FF0ULL);
+               gs_vq(w, 4u, 3u), 0x00000000FFF07FF0ULL);
 }
 
 /* The state words are latched, not per-call: a vertex that follows a glColor it did not itself
@@ -198,9 +203,9 @@ static void test_latched_state(void)
 
     start();
     gs_rec_prim(k_prim);
-    gs_rec_vertex(0.0f, 0.0f, 0x11223344u);
+    gs_rec_vertex(0, 0, 0x11223344u);
     gs_rec_color(0x12u, 0x34u, 0x56u, 0x78u);
-    gs_rec_vertex(0.0f, 0.0f, 0u);
+    gs_rec_vertex(0, 0, 0u);
     gs_rec_end();
 
     if (s_cap_i < 1) { check("one group latched", 0); return; }
@@ -224,10 +229,10 @@ static void test_prim_closes(void)
 {
     start();
     gs_rec_prim(k_prim);
-    gs_rec_vertex(0.0f, 0.0f, 0u);
-    gs_rec_vertex(1.0f, 0.0f, 0u);
+    gs_rec_vertex(0, 0, 0u);
+    gs_rec_vertex(1, 0, 0u);
     gs_rec_prim(k_prim3);
-    gs_rec_vertex(0.0f, 0.0f, 0u);
+    gs_rec_vertex(0, 0, 0u);
     gs_rec_end();
 
     check("the second gs_rec_prim flushed the strip as its own packet", s_cap_i == 2);
@@ -255,7 +260,7 @@ static void test_empty(void)
 
     start();
     check("a vertex before any primitive is refused, not written",
-          gs_rec_vertex(0.0f, 0.0f, 0u) == -1);
+          gs_rec_vertex(0, 0, 0u) == -1);
     check("and nothing was sent or counted", s_cap_i == 0 && gs_rec_verts() == 0u);
 }
 
@@ -275,9 +280,9 @@ static void test_ad_group(void)
 
     start();
     gs_rec_prim(k_prim);
-    gs_rec_vertex(0.0f, 0.0f, 0u);
+    gs_rec_vertex(0, 0, 0u);
     check("the switch closes the open group first", gs_rec_ad(data, offs, 2u) == 0);
-    check("and the following vertex opens a fresh one", gs_rec_vertex(1.0f, 0.0f, 0u) == 0);
+    check("and the following vertex opens a fresh one", gs_rec_vertex(1, 0, 0u) == 0);
     gs_rec_end();
 
     check("three sends: the vertex group before it, the AD group, the group after",
@@ -333,7 +338,7 @@ static void test_strip_split(void)
     start();
     gs_rec_prim(k_prim);
     for (i = 1; i <= 20; i++) {
-        check("strip vertex accepted", gs_rec_vertex((float)i, (float)(2 * i), 0u) == 0);
+        check("strip vertex accepted", gs_rec_vertex(i, 2 * i, 0u) == 0);
         /* Each vertex carries its own colour and coordinate, so the re-emitted copies below are
          * comparable as words and not just as positions. */
         gs_rec_color((uint32_t)i, 0u, 0u, 255u);
@@ -392,7 +397,7 @@ static void test_fan_split(void)
     start();
     gs_rec_prim(fan_prim);
     for (i = 0; i < 13; i++) {
-        check("fan vertex accepted", gs_rec_vertex((float)i, (float)i, 0u) == 0);
+        check("fan vertex accepted", gs_rec_vertex(i, i, 0u) == 0);
     }
     gs_rec_end();
 
@@ -426,7 +431,7 @@ static void test_list_boundary(void)
     start();
     gs_rec_prim(k_prim3);
     for (int i = 0; i < 13; i++) {
-        check("list vertex accepted", gs_rec_vertex((float)i, 0.0f, 0u) == 0);
+        check("list vertex accepted", gs_rec_vertex(i, 0, 0u) == 0);
     }
     gs_rec_end();
 
@@ -456,7 +461,7 @@ static void test_unsplittable(void)
     start();
     gs_rec_prim(bad_prim);
     for (i = 0; i < 16; i++) {
-        if (gs_rec_vertex((float)i, 0.0f, 0u) != 0) refused++;
+        if (gs_rec_vertex(i, 0, 0u) != 0) refused++;
     }
     gs_rec_end();
 
@@ -491,7 +496,7 @@ static void test_point_and_line_boundaries(void)
     start();
     gs_rec_prim(point_prim);
     for (i = 0; i < 30; i++) {
-        if (gs_rec_vertex((float)i, 0.0f, 0u) != 0) bad++;
+        if (gs_rec_vertex(i, 0, 0u) != 0) bad++;
     }
     gs_rec_end();
     check("30 points lose nothing",
@@ -512,7 +517,7 @@ static void test_point_and_line_boundaries(void)
     gs_rec_prim(line_prim);
     bad = 0;
     for (i = 0; i < 14; i++) {
-        if (gs_rec_vertex((float)i, (float)i, 0u) != 0) bad++;
+        if (gs_rec_vertex(i, i, 0u) != 0) bad++;
     }
     gs_rec_end();
     check("14 endpoints of a LINE list are all taken", bad == 0 && gs_rec_verts() == 14u);
@@ -530,7 +535,7 @@ static void test_counters_reset(void)
 {
     start();
     gs_rec_prim(k_prim);
-    gs_rec_vertex(0.0f, 0.0f, 0u);
+    gs_rec_vertex(0, 0, 0u);
     gs_rec_end();
     check("one frame, one start", gs_rec_sends() == 1u && gs_rec_verts() == 1u);
 
@@ -540,7 +545,7 @@ static void test_counters_reset(void)
     check("and a fresh recorder sends nothing until told to", s_cap_i == 0);
 
     gs_rec_prim(k_prim);
-    gs_rec_vertex(0.0f, 0.0f, 0u);
+    gs_rec_vertex(0, 0, 0u);
     gs_rec_end();
     check("the second frame counts on its own", gs_rec_sends() == 1u && gs_rec_verts() == 1u);
 }

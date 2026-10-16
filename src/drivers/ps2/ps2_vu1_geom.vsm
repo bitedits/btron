@@ -1,0 +1,101 @@
+; ── src/drivers/ps2/ps2_vu1_geom.vsm ─────────────────────────────────────────
+; Clean-room VU1 Geometry & Lit-Vertex Assembled Microcode (L2a & L2b of PoR)
+;
+; VLIW instruction stream for PlayStation 2 Vector Unit 1 (VU1).
+; Exported symbols:
+;   VU1GeomPipe_CodeStart
+;   VU1GeomPipe_CodeEnd
+; ─────────────────────────────────────────────────────────────────────────────
+
+        .vu
+        .align 4
+        .global VU1GeomPipe_CodeStart
+        .global VU1GeomPipe_CodeEnd
+
+VU1GeomPipe_CodeStart:
+        NOP                                     lq          VF01, 0(VI00)       ; Load MVP Row 0
+        NOP                                     xtop        VI02                ; VI02 = iBase
+        NOP                                     lq          VF02, 1(VI00)       ; Load MVP Row 1
+        NOP                                     lq          VF03, 2(VI00)       ; Load MVP Row 2
+        NOP                                     lq          VF04, 3(VI00)       ; Load MVP Row 3
+        NOP                                     lq          VF10, 4(VI00)       ; Load lightDir (XYZ), ambient (W)
+        NOP                                     lq          VF11, 5(VI00)       ; Load lightCol (RGB), enable (W)
+        NOP                                     fcset       0                   ; Clear clip flags
+        NOP                                     lq.xyz      VF05, 0(VI02)       ; Load vpScale
+        NOP                                     ilw.w       VI07, 0(VI02)       ; VI07 = vertCount
+        NOP                                     lq          VF06, 1(VI02)       ; Load gifTag
+
+        ; Setup buffer pointers
+        NOP                                     iaddiu      VI03, VI02, 2       ; VI03 = pVert = iBase + 2
+        NOP                                     iadd        VI04, VI03, VI07    ; VI04 = pNorm = pVert + N
+        NOP                                     iadd        VI05, VI04, VI07    ; VI05 = pST   = pNorm + N
+        NOP                                     iadd        VI08, VI05, VI07    ; VI08 = pCol  = pST + N
+        NOP                                     iadd        VI06, VI08, VI07    ; VI06 = pOut  = pCol + N
+        NOP                                     sqi         VF06, (VI06++)      ; Store gifTag at pOut
+        NOP                                     iadd        VI09, VI02, VI07    ; VI09 = loopCounter = iBase + N
+        NOP                                     iadd        VI10, VI06, VI00    ; VI10 = kickAddr
+
+vu1_vertex_loop:
+        ; Load vertex, normal, ST, color
+        NOP                                     lq          VF07, 0(VI03)       ; VF07 = vert
+        NOP                                     lq          VF08, 0(VI04)       ; VF08 = norm
+        NOP                                     lq          VF09, 0(VI05)       ; VF09 = st
+        NOP                                     lq          VF12, 0(VI08)       ; VF12 = baseCol
+
+        ; MVP 4x4 matrix multiplication
+        mul     ACC,  VF01, VF07[x]             NOP
+        madd    ACC,  VF02, VF07[y]             NOP
+        madd    ACC,  VF03, VF07[z]             NOP
+        madd    VF13, VF04, VF07[w]             NOP                             ; VF13 = clipVert
+
+        ; Frustum clip check
+        clipw.xyz VF13, VF13                    NOP
+        NOP                                     fcand       VI01, 0x3FFFF
+        NOP                                     iaddiu      VI11, VI01, 0x7FFF
+        NOP                                     isw.w       VI11, 2(VI06)       ; Write ADC bit into XYZ2[w]
+
+        ; Perspective divide: Q = 1.0 / clipVert[w]
+        div     Q,    VF00[w], VF13[w]          NOP
+        WAITQ                                   NOP
+
+        ; Viewport transform to GS screen space
+        mul.xyz VF14, VF13, Q                   NOP
+        mula.xyz ACC, VF05, VF00[w]             NOP
+        madd.xyz VF14, VF14, VF05               NOP
+        ftoi4.xyz VF14, VF14                    NOP                             ; VF14 = projVert (12.4 fixed point)
+
+        ; L2b: Directional Lighting (N . L)
+        mul.xyz VF15, VF08, VF10                NOP                             ; dotL = norm * lightDir
+        addy.x  VF15, VF15, VF15[y]             NOP
+        addz.x  VF15, VF15, VF15[z]             NOP
+        max.x   VF15, VF15, VF00[x]             NOP                             ; clamp dotL >= 0
+
+        mul.xyz VF16, VF11, VF15[x]             NOP                             ; litFactor = lightCol * dotL
+        add.xyz VF16, VF16, VF10[w]             NOP                             ; litFactor += ambient
+        mul.xyz VF17, VF12, VF16                NOP                             ; finalCol = baseCol * litFactor
+        NOP                                     mr32.w      VF17, VF12          ; Retain alpha unmodified
+
+        ; Perspective-corrected texture coordinates
+        mulq    VF18, VF09, Q                   NOP                             ; modST = st * Q
+
+        ; Store ST, RGBAQ, XYZ2 into output stream
+        NOP                                     sq          VF18, 0(VI06)       ; Store STQ
+        NOP                                     sq          VF17, 1(VI06)       ; Store RGBAQ
+        NOP                                     sq.xyz      VF14, 2(VI06)       ; Store XYZ2
+
+        ; Advance input pointers and output pointer
+        NOP                                     iaddiu      VI03, VI03, 1
+        NOP                                     iaddiu      VI04, VI04, 1
+        NOP                                     iaddiu      VI05, VI05, 1
+        NOP                                     iaddiu      VI08, VI08, 1
+        NOP                                     iaddiu      VI06, VI06, 3
+
+        NOP                                     iaddi       VI09, VI09, -1
+        NOP                                     ibne        VI09, VI02, vu1_vertex_loop
+
+        NOP                                     NOP
+        NOP                                     xgkick      VI10                ; Dispatch GIF packet to GS
+        NOP[E]                                  NOP
+        NOP                                     NOP
+
+VU1GeomPipe_CodeEnd:

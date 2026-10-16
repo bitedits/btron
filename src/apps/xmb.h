@@ -81,6 +81,12 @@ enum {
     XMB_BIND_TIP_TAB,        /* TIP_KEY_SETTINGS.jp_tab_is_popup        */
     XMB_BIND_TIP_ARROW,      /* TIP_KEY_SETTINGS.arrow_nav_enabled      */
     XMB_BIND_TIP_NUMBER,     /* TIP_KEY_SETTINGS.num_select_enabled     */
+    /* The PS2 port's pointer gain, g_ptr_gain_fp, which is the one dial that
+     * LAW 13e of doc/txt/PS2.txt gives that port.  Appended rather than put with
+     * the mouse rows above so that the ids the existing tests name keep their
+     * numbers; the rows that hold the two knobs it replaced are not built for
+     * that target at all, so no row here needs a value outside its own table. */
+    XMB_BIND_PTR_GAIN,       /* g_ptr_gain_fp (BTRON_PS2_TARGET only)    */
     XMB_BIND_COUNT
 };
 int  xmb_bound(int bind);

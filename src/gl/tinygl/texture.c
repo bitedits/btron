@@ -100,13 +100,35 @@ static void gl_image_clear(GLImage* im) {
 	im->tscale = im->toff = 0.0f;
 }
 
-static void free_texture(GLContext* c, GLint h) {
-	GLTexture *t, **ht;
+/* Unlink a texture node, hand back every plane it owns, and hand back the node.
+ *
+ * This is the one place a GLTexture dies.  `glDeleteTextures()` reaches it through
+ * `free_texture()`, and a context close reaches it directly (`init.c`'s `glClose()` ->
+ * `endSharedState()`), because the textures an application never deleted are still alive
+ * when it closes -- and the plane behind each of them is the large allocation of the pair:
+ * `gl_image_alloc()` gives a texture `xpad*ypad*PSZB` bytes, so a 512x512 RGBA icon atlas
+ * is 1,048,576 of them.  A close that freed the node and left the images behind therefore
+ * leaked one plane per texture per GL window, which is what the 2026-10-15 PS2 shell
+ * ledger measured as 1,088 kB kept per XMB open/close cycle (the atlas and the 64 kB font
+ * sheet) out of an 11 MB pool whose boot hole is 5,413 kB -- and refused the atlas
+ * outright on the third `xmb` typed at the prompt.
+ *
+ * What clearing the image does *not* do on this target is hand the plane's GS VRAM span
+ * back: `gs_tex` has no release entry point, so the registry keeps the entry keyed on the
+ * pointer that is going away.  That is survivable rather than correct -- a plane re-allocated
+ * at the same address with the same padded geometry is the registry's "same plane, new
+ * contents" case and reuses its span, which is what a fixed pool does for the same app -- and
+ * the shell ledger in core_ps2.c prints `registered` and the VRAM left per cycle precisely to
+ * watch whether that holds.  If it does not, the missing API is the next thing to land.
+ */
+void gl_texture_node_destroy(GLContext* c, GLTexture* t) {
 	GLint level;
 
-	t = find_texture(h);
+	if (t == NULL)
+		return;
+
 	if (t->prev == NULL) {
-		ht = &c->shared_state.texture_hash_table[t->handle & TEXTURE_HASH_TABLE_MASK];
+		GLTexture** ht = &c->shared_state.texture_hash_table[t->handle & TEXTURE_HASH_TABLE_MASK];
 		*ht = t->next;
 	} else {
 		t->prev->next = t->next;
@@ -118,6 +140,10 @@ static void free_texture(GLContext* c, GLint h) {
 		gl_image_clear(&t->images[level]);
 
 	gl_free(t);
+}
+
+static void free_texture(GLContext* c, GLint h) {
+	gl_texture_node_destroy(c, find_texture(h));
 }
 
 /*

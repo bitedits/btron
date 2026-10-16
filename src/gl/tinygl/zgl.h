@@ -499,6 +499,11 @@ void gl_shade_vertex(GLVertex* v);
 void glInitTextures();
 void glEndTextures();
 GLTexture* alloc_texture(GLint h);
+/* Unlink one texture, free every plane it holds, free the node.  The one path a GLTexture
+ * takes out of the world, shared by glDeleteTextures() and by a context close that finds
+ * textures the application never deleted -- see texture.c for why freeing the node alone
+ * leaves the largest half of it behind. */
+void gl_texture_node_destroy(GLContext* c, GLTexture* t);
 
 /* image_util.c */
 /* Upload one row of `xsize` texels of an `nch`-channel (3=RGB, 4=RGBA) source into a

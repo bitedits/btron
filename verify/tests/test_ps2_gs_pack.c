@@ -242,10 +242,20 @@ static void stream_words(void)
     const uint32_t regs[4] = { GS_NIB_PRIM, GS_NIB_RGBAQ, GS_NIB_ST, GS_NIB_XYZ2 };
     eq("regs PRIM,RGBAQ,ST,XYZ2", gs_pack_regs(regs, 4), 0x5210ULL);
 
-    /* only four nibbles exist in a tag, so a fifth and sixth register are dropped rather
-     * than wrapping into the ones that count */
-    const uint32_t too_many[6] = { 1, 2, 3, 4, 5, 6 };
-    eq("regs past four", gs_pack_regs(too_many, 6), 0x4321ULL);
+    /* The field is TEN nibbles wide, not four, and the sixth nibble is the one that matters: the
+     * SDK's flat triangle (ee/draw/src/draw2d.c DRAW_TRIANGLE_REGLIST) names PRIM, RGBAQ, three
+     * XYZ2 and a NOP -- six selects, so the third vertex lives in bits [20:23] and a packer that
+     * stopped at four would build a two-vertex triangle that never kicks.  Hand-derived:
+     * 1 | 2<<4 | 3<<8 | 4<<12 | 5<<16 | 6<<20 = 0x654321. */
+    const uint32_t six[6] = { 1, 2, 3, 4, 5, 6 };
+    eq("regs names six", gs_pack_regs(six, 6), 0x654321ULL);
+
+    /* Ten is the last that fits, and an eleventh is dropped rather than wrapping into the EOP bit at
+     * 63 -- the same reason the field has a bound at all. */
+    const uint32_t ten[10] = { 1, 2, 3, 4, 5, 6, 7, 8, 9, 10 };
+    const uint32_t twelve[12] = { 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12 };
+    eq("regs fills ten", gs_pack_regs(ten, 10), 0xA987654321ULL);
+    eq("regs past ten", gs_pack_regs(twelve, 12), 0xA987654321ULL);
 
     uint64_t buf[4] = { 0, 0, 0, 0 };
     uint64_t *next = gs_pack_pair(buf, 0xDEADBEEFULL, GS_GP_FRAME_1);

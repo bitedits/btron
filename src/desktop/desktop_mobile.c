@@ -6,6 +6,7 @@
  */
 
 #include <btron/mobile_ui.h>
+#include <btron/desktop.h>
 #include <btron/troncode.h>
 #include <btron/dp.h>
 #include <btron/app_menu.h>
@@ -1098,3 +1099,12 @@ void foma_render_desktop(GDEV *dev, const FOMA_SCREEN *scr) {
         foma_render_popup_menu(dev, &g_popup_menu);
     }
 }
+
+#if defined(__GNUC__) || defined(__clang__)
+__attribute__((weak))
+#endif
+BTRON_DESKTOP* get_btron_desktop(void) {
+    static BTRON_DESKTOP s_mobile_desktop = { 480, 640, NULL, TRUE };
+    return &s_mobile_desktop;
+}
+

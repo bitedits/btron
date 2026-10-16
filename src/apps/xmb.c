@@ -270,9 +270,17 @@ static void xb_frame(uint32_t draw_us, uint32_t swap_us)
 extern uint32_t g_kbd_repeat_delay_us;
 extern uint32_t g_kbd_repeat_interval_us;
 extern int      g_kbd_repeat_enabled;
+#if defined(BTRON_PS2_TARGET)
+/* The two mouse knobs above are not declared for this target because they are not
+ * defined for it either: doc/txt/PS2.txt LAW 13e leaves the port with one gain in
+ * one variable, g_ptr_gain_fp, and this header is where its stops and its label
+ * live, so the row below cannot retype either of them. */
+#include <btron/dp_accel.h>
+#else
 extern int      g_mouse_step_mult;
-extern int      g_mouse_swap_select_adjust;
 extern int      g_mouse_accel_profile;
+#endif
+extern int      g_mouse_swap_select_adjust;
 
 /* ── Constants taken from xmb.c ───────────────────────────────────────
  * XMB_RIBBON_ROWS/COLS and XMB_DELAY are the driver's own; so are the two
@@ -640,9 +648,18 @@ static xb_item_t s_items_keyboard[] = {
 };
 
 static xb_item_t s_items_mouse[] = {
+#if defined(BTRON_PS2_TARGET)
+    /* One row, not two: LAW 13e gives this port one gain and the dial below is a
+     * hand on it.  `opts` is NULL on purpose -- the stops are the table
+     * btron_ptr_gain_fp[], and a second spelling of them here would be a second
+     * home for the dial, which is the one thing that law exists to prevent. */
+    {"Pointer Gain",   "Pixels the cursor moves per mouse count", XB_ENUM,  XMB_BIND_PTR_GAIN,    L_NONE,0,BTRON_PTR_GAIN_STEPS - 1,NULL,              NULL, IC_SLIDER, 0,0,0,0,{0}},
+    {"Lead Hand",      "Which button selects and which adjusts", XB_ENUM,  XMB_BIND_MOUSE_BUTTONS,L_NONE,0,0,"Right|Left",            NULL, IC_SLIDER, 0,0,0,0,{0}},
+#else
     {"Pointer Step",   "How far the pointer travels per move",   XB_ENUM,  XMB_BIND_MOUSE_STEP,   L_NONE,1,3,"1x|2x|3x|4x",           NULL, IC_SLIDER, 0,0,0,0,{0}},
     {"Pointer Curve",  "Acceleration of the pointer",            XB_ENUM,  XMB_BIND_MOUSE_PROFILE,L_NONE,1,1,"Stepped|Continuous",    NULL, IC_SLIDER, 0,0,0,0,{0}},
     {"Lead Hand",      "Which button selects and which adjusts", XB_ENUM,  XMB_BIND_MOUSE_BUTTONS,L_NONE,0,0,"Right|Left",            NULL, IC_SLIDER, 0,0,0,0,{0}},
+#endif
 };
 
 static xb_item_t s_items_terminal[] = {
@@ -865,12 +882,20 @@ static int xb_bind_read(int bind)
     case XMB_BIND_KBD_RATE:
         return g_kbd_repeat_interval_us <= s_kbd_rate_us[0] ? 0
              : (g_kbd_repeat_interval_us <= s_kbd_rate_us[1] ? 1 : 2);
+#if defined(BTRON_PS2_TARGET)
+    case XMB_BIND_PTR_GAIN:
+        /* The dial's own answer rather than a number the row was written with:
+         * a gain that arrived from `sens` or from `ptgain` shows as the stop
+         * nearest to it, because those hands are not confined to the stops. */
+        return btron_ptr_gain_index(g_ptr_gain_fp);
+#else
     case XMB_BIND_MOUSE_STEP:
         if (g_mouse_step_mult < 1) return 0;
         if (g_mouse_step_mult > 4) return 3;
         return g_mouse_step_mult - 1;
     case XMB_BIND_MOUSE_PROFILE:
         return g_mouse_accel_profile ? 1 : 0;
+#endif
     case XMB_BIND_MOUSE_BUTTONS:
         return g_mouse_swap_select_adjust ? 1 : 0;
     case XMB_BIND_TERM_THEME:
@@ -907,12 +932,21 @@ static void xb_bind_write(int bind, int value)
     case XMB_BIND_KBD_RATE:
         g_kbd_repeat_interval_us = s_kbd_rate_us[xb_index_clamp(value, 2)];
         break;
+#if defined(BTRON_PS2_TARGET)
+    case XMB_BIND_PTR_GAIN:
+        /* Written through the same table the panel's radios were built from, so
+         * the launcher and the applet cannot drift apart on what stop 3 is.
+         * The core adopts it on its next pass; see ps2_ptr_gain_sync(). */
+        g_ptr_gain_fp = btron_ptr_gain_fp[xb_index_clamp(value, BTRON_PTR_GAIN_STEPS - 1)];
+        break;
+#else
     case XMB_BIND_MOUSE_STEP:
         g_mouse_step_mult = 1 + xb_index_clamp(value, 3);
         break;
     case XMB_BIND_MOUSE_PROFILE:
         g_mouse_accel_profile = value ? 1 : 0;
         break;
+#endif
     case XMB_BIND_MOUSE_BUTTONS:
         g_mouse_swap_select_adjust = value ? 1 : 0;
         break;
@@ -1986,6 +2020,18 @@ static void xb_value_text(xb_item_t *it, char *buf, size_t n)
     case XB_ENUM: {
         const char *p = it->opts;
         int idx = it->value, i;
+#if defined(BTRON_PS2_TARGET)
+        if (!p) {
+            /* The gain row's choices are the table, so its line comes from the
+             * table's own formatter: btron_ptr_gain_label() is the one place that
+             * says what a stop is called, and the Settings panel paints the same
+             * line over its radios.  Choosing it by index rather than by
+             * separator also means this row needs no `opts` string to sit
+             * beside the table it is drawn from. */
+            snprintf(buf, n, "%s", btron_ptr_gain_label(idx));
+            break;
+        }
+#endif
         for (i = 0; i < idx && p; i++) {
             p = strchr(p, '|');
             if (p) p++;
@@ -2853,10 +2899,24 @@ static void xb_adjust(xb_item_t *it, int dir)
         if (it->max && value > it->max) value = it->max;
         break;
     case XB_ENUM: {
+#if defined(BTRON_PS2_TARGET)
+        int count = it->opts ? 1 : it->max + 1, i;
+        const char *p = it->opts;
+        /* A row with no `opts` string carries its choices in a table and its
+         * range in `max`, so the count comes from `max` rather than from
+         * counting separators: the alternative would be to keep a second list of
+         * that table's entries here, and the row above is the gain dial, whose
+         * whole point is that its stops have one home (doc/txt/PS2.txt LAW 13e).
+         * Every other enum row in this file still spells its choices inline, in
+         * which case this is the same count the loop below arrives at. */
+        for (; p && *p; p++)
+            if (*p == '|') count++;
+#else
         int count = 1, i;
         const char *p;
         for (p = it->opts; p && *p; p++)
             if (*p == '|') count++;
+#endif
         value = it->value + dir;
         if (value < 0) value = count - 1;
         if (value >= count) value = 0;
@@ -3233,10 +3293,14 @@ static void xb_destroy(WND *wnd)
         egl_destroy_surface(s_surf);
         s_surf = NULL;
     }
-    /* The two atlases belong to this window's GL context, which
-     * egl_destroy_surface() above has just freed along with every texture
-     * image it held; only the names need dropping.  The sheets they were
-     * uploaded from were this file's own and are already back. */
+    /* The two atlases belong to this window's GL context, and the surface teardown above
+     * closes that context, which is where a texture's padded plane is freed with its node
+     * (`gl_texture_node_destroy()`, reached from glClose()'s shared-state end).  Until the
+     * 2026-10-15 fix that path freed only the node, so this window's 1 MB icon atlas and
+     * 64 kB font sheet stayed in the pool on every close and a third `xmb` at the prompt
+     * had no hole left to ask from -- the ledger in core_ps2.c measures it.  Only the names
+     * need dropping here; the sheets they were uploaded from were this file's own and are
+     * already back. */
     s_tex_icons = 0;
     s_tex_font  = 0;
     s_wnd      = NULL;
@@ -3284,6 +3348,13 @@ static void xb_init_state(void)
     s_items_settings[SET_TERMINAL].sub_count   = XB_NEL(s_items_terminal);
     s_items_settings[SET_LANGUAGE].sub_count   = XB_NEL(s_items_language);
     s_items_settings[SET_SYSDATA].sub_count    = XB_NEL(s_items_sysdata);
+#if defined(BTRON_PS2_TARGET)
+    /* The band's own line says what its rows hold, and on this target one of the
+     * rows it used to name is not in the table: LAW 13e leaves the pointer band
+     * with a gain and the hand's button roles, the curve having gone the way of
+     * the two variables that used to feed it. */
+    s_items_settings[SET_MOUSE].sub = "Pointer gain and button roles";
+#endif
 
     /* Every value the bar can show starts as the system's, not as the number the
      * table happened to be written with.  For the Discs band that means the volume

@@ -46,6 +46,11 @@
 #include "ps2_gs.h"
 #include "ps2_gif_ring.h"
 #include "ps2_gs_tex.h"
+#include "ps2_gs_env.h"     /* LANE 19 rung 1: the `gsquad` probe programs the draw environment */
+#include "ps2_gs_vram.h"    /* ... and names the frame and depth pages in the units they take */
+#include "ps2_gs_poster.h"  /* ... and sends its one SPRITE through LANE 9b's emitter */
+#include "ps2_gs_pack.h"    /* LANE 19 rung 7: `gsalpha` programs the ALPHA register both candidate ways */
+#include "ps2_gs_read.h"    /* LANE 19 rung 2: `gsread` reads the page back through the pure builder's error codes */
 #include "ps2_sio.h"
 #include "ps2_pad.h"
 #include "ps2_fp.h"
@@ -101,7 +106,7 @@ extern void  draw_baremetal_mouse_cursor(GDEV *screen, H mx, H my, H w, H h);
  *
  * Declared again here because the large-allocation rows below are the pool's own
  * diagnostics; the console driver itself is defined with the rest of this file. */
-static void ps2_kprintf(const char *fmt, ...);
+static void ps2_kprintf(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
 
 /* 12 MB, because the desktop's own baseline is 5.8 MB and one full-screen GL window
  * costs its surface, the rasterizer's depth plane and the icon atlas twice over
@@ -296,7 +301,7 @@ static COLOR s_desktop_backbuffer[PS2_SCREEN_WIDTH * PS2_SCREEN_HEIGHT] __attrib
 
 /* Defined below with the console driver, and the source profiles announce
  * themselves before anything reaches it. */
-static void ps2_kprintf(const char *fmt, ...);
+static void ps2_kprintf(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
 
 /* Global Mouse Coordinates */
 static int s_mouse_x = 400;
@@ -352,6 +357,7 @@ static BOOL ps2_cursor_sig_at(const uint32_t *p, int x, int y);
 #define PS2_MOUSE_MULT_FP 256
 static int32_t s_ptr_mult_fp = PS2_MOUSE_MULT_FP;
 static int32_t s_ptr_carry_x, s_ptr_carry_y;
+static int32_t s_ptr_gain_seen;   /* the dial's value already installed */
 
 /* How far the cursor may travel in one INPUT period, in pixels -- the periods a pass
  * owes come from the plane table, so the cap is a speed and not a frame count.
@@ -444,7 +450,16 @@ static int s_ptr_src_forced;      /* a `ptrsrc` word outranks detection */
  * dp_ptr_riscos() -- is deliberately NOT read here any more.  It used to be this
  * file's second stage on the hw profile, which is what LAW 13d removed; leaving
  * the extern in place would keep a dial wired up to nothing and let a boot row
- * print a step value this port no longer applies. */
+ * print a step value this port no longer applies.  Since LAW 13e it is not
+ * defined for this target at all, so a PS2 row that reached for one of the two
+ * dead knobs fails at the link instead of surviving as scenery.
+ *
+ * What this file does read is `g_ptr_gain_fp` -- the same variable `sens` sets,
+ * the panel's gain block writes on Apply and the launcher's row writes on leave,
+ * and the only multiplier between a count and a cursor pixel here (0 = this
+ * source profile's own default).  ps2_ptr_gain_install() is the one place that
+ * turns it into s_ptr_mult_fp, which is what keeps "one gain, one home" from
+ * being a claim about a comment. */
 
 static const char *ps2_ptr_src_name(int src)
 {
@@ -475,21 +490,53 @@ static void ps2_ptr_gain_row(void)
     }
 }
 
+/* Install the gain the dial asks for, or this profile's own default while the
+ * dial is on Auto (LAW 13e).
+ *
+ * The subpixel remainders always go with the old gain, for the reason `ptrsrc`
+ * already gives: a carry is a fraction of the scale that made it, and leaving it
+ * behind would put a fraction of a pixel of somebody else's stroke on the next
+ * report.  The unspent DISTANCE goes only when reset_flow says so.  It is whole
+ * pixels this port already produced for a movement the hand made, so a gain
+ * change would be losing travel -- which is the one fault every row of chapter
+ * 13 is written against -- while a SOURCE change is a different device's counts
+ * arriving, and there the old profile's queue really is stale. */
+static void ps2_ptr_gain_install(int reset_flow)
+{
+    s_ptr_mult_fp = (g_ptr_gain_fp > 0)
+                        ? g_ptr_gain_fp
+                        : (s_ptr_src == PS2_PTRSRC_HW ? PS2_MOUSE_MULT_FP : PS2_EMU_MULT_FP);
+    s_ptr_carry_x = s_ptr_carry_y = 0;
+    if (!reset_flow) return;
+    s_ptr_want_x = s_ptr_want_y = 0;
+    s_ptr_defer_x = s_ptr_defer_y = 0;
+    s_ptr_input_due = 0u;   /* re-arm the INPUT slice clock rather than let it
+                             * spend the whole idle interval as catch-up */
+}
+
+/* Adopt a gain this file did not set: the panel's Apply and the launcher's row
+ * both write g_ptr_gain_fp, and the desktop's own pass is where that is noticed.
+ * Prints only on a change, in the same words the boot row and `sens` use, so a
+ * hand that changed the cursor's speed from a window reads the same confirmation
+ * as a hand that changed it from the Stage-1 prompt. */
+static void ps2_ptr_gain_sync(void)
+{
+    if (g_ptr_gain_fp == s_ptr_gain_seen) return;
+    s_ptr_gain_seen = g_ptr_gain_fp;
+    ps2_ptr_gain_install(0);
+    ps2_kprintf("[PS2] Pointer gain, dialed: ");
+    ps2_ptr_gain_row();
+}
+
 /* Install a profile's policy.  Kept separate from the choice so detection can run
  * before the first report and a prompt command can run after it with the same
  * effect, and so a switch mid-session cannot leave the previous source's
  * half-spent distance or subpixel remainder behind to be spent as the new one. */
 static void ps2_ptr_src_apply(const char *why)
 {
-    s_ptr_mult_fp = (s_ptr_src == PS2_PTRSRC_HW)
-                        ? PS2_MOUSE_MULT_FP
-                        : PS2_EMU_MULT_FP;
     s_ptr_max_step = PS2_PTR_MAX_STEP;
-    s_ptr_carry_x = s_ptr_carry_y = 0;
-    s_ptr_want_x = s_ptr_want_y = 0;
-    s_ptr_defer_x = s_ptr_defer_y = 0;
-    s_ptr_input_due = 0u;   /* re-arm the INPUT slice clock rather than let it
-                             * spend the whole idle interval as catch-up */
+    s_ptr_gain_seen = g_ptr_gain_fp;    /* the dial outranks a profile default */
+    ps2_ptr_gain_install(1);
     ps2_kprintf("[PS2] Pointer source %s (%s): ", ps2_ptr_src_name(s_ptr_src), why);
     ps2_ptr_gain_row();
 }
@@ -2490,10 +2537,11 @@ static void ps2_ptr_chord(uint32_t key)
                                                    : -PS2_PTR_CHORD_STEP);
         if (next < PS2_PTR_CHORD_MIN) next = PS2_PTR_CHORD_MIN;
         if (next > PS2_PTR_CHORD_MAX) next = PS2_PTR_CHORD_MAX;
-        s_ptr_mult_fp = next;
-        s_ptr_carry_x = s_ptr_carry_y = 0;
-        s_ptr_want_x = s_ptr_want_y = 0;
-        s_ptr_defer_x = s_ptr_defer_y = 0;
+        /* The chord is a fourth hand on the same dial (LAW 13e), which is what
+         * lets Ctrl+\ print a number the Settings panel then shows selected. */
+        g_ptr_gain_fp = next;
+        s_ptr_gain_seen = next;
+        ps2_ptr_gain_install(0);
     }
     ps2_kprintf("[PS2] Pointer %s: ", key == ']' ? "faster" : "slower");
     ps2_ptr_gain_row();
@@ -2614,11 +2662,14 @@ static void ps2_ptg_cal(int hostpx, int pct)
          * being set here where it is visible. */
         if (mult > 1024) { mult = 1024; note = " (clamped at 4 px per count)"; }
         got100 = (uint32_t)mult * cpg100 / 256u;
-        s_ptr_mult_fp = mult;
-        /* A new gain makes the old gain's subpixel remainder the wrong shape;
-         * leaving it would put a fraction of a pixel of somebody else's stroke
-         * onto the next report. */
-        s_ptr_carry_x = s_ptr_carry_y = 0;
+        /* A measured gain goes on the same dial a hand can pick from, so the
+         * panel opens showing the stop nearest the reading and `ptgain`'s answer
+         * is not a fifth copy of the number (LAW 13e).  A new gain also makes the
+         * old gain's subpixel remainder the wrong shape; leaving it would put a
+         * fraction of a pixel of somebody else's stroke onto the next report. */
+        g_ptr_gain_fp = mult;
+        s_ptr_gain_seen = mult;
+        ps2_ptr_gain_install(0);
         /* The window is spent: it was one deliberate sweep, and repeating it by
          * accident would double the gain. */
         s_ptg_cx = s_ptg_cy = 0;
@@ -2629,7 +2680,7 @@ static void ps2_ptg_cal(int hostpx, int pct)
                     (unsigned int)(pct / 100u), (unsigned int)(pct % 100u), note);
         ps2_kprintf("[PTG] To ship this, set PS2_EMU_MULT_FP to the px per count above; the\n");
         ps2_kprintf("[PTG] counts per host px it used to divide by is settled at 1 from PCSX2's source.\n");
-        ps2_kprintf("[PTG] `sens` alone only lasts a run.\n");
+        ps2_kprintf("[PTG] `sens`, this command and the panel's dial all last the session only.\n");
     }
 }
 
@@ -2737,6 +2788,12 @@ static void ps2_ptr_service(void)
 #endif
     const int x0 = s_mouse_x, y0 = s_mouse_y;
     const int32_t slices = ps2_ptr_input_slices();
+
+    /* The dial first: a hand that settled the gain from the Settings panel or the
+     * launcher is answered by the next pass, which is also the pass that would
+     * otherwise spend the counts under the OLD gain.  No-ops when nothing moved
+     * the variable, so the cost is one compare per pass. */
+    ps2_ptr_gain_sync();
     /* The cap is pixels per INPUT period, so a pass owed four periods may spend
      * four of them.  With the shipped cap off (PS2_PTR_MAX_STEP 0) this product is
      * zero and dp_ptr_limit() treats a non-positive limit as no limit at all, so
@@ -2923,6 +2980,1536 @@ static void ps2_log_usb_state(int stage)
 
 /* ── Interactive Shell (Stage 1 Console & Stage 2 GUI Shell) ────── */
 
+/* ── LANE 19 rung 1: `gsquad`, two squares over two senders, as a test of the GS rasteriser ─────
+ *
+ * Everything this port has ever confirmed on a screen -- the desktop, a window's chrome, a
+ * terminal glyph, the boot log -- reached VRAM through ps2_gs_upload(), a Host->Local IMAGE stream
+ * that copies the canvas and asks the GS to draw nothing.  The recorded eegs stream is posted and
+ * DMAC says it was consumed (`posted=52 started=52 drop=0`), and that receipt proves only that
+ * quadwords left the EE.  So the question increment 5 cannot be closed without is the one this
+ * verb answers with a single look: does the GS's rasteriser put any pixels at all on the page the
+ * PCRTC displays?
+ *
+ * It is a Stage-1 command on purpose.  At the prompt nothing is compositing and no layer is
+ * recording, so the primitive is the only variable left -- and the block cannot be the software
+ * path's work, because this function touches no canvas byte.  A red pixel on the monitor is a
+ * pixel nobody drew.
+ *
+ * The four calls are the ones the production path uses, spelled the same way, so a PASS here is
+ * evidence about the shipped stream rather than about a second and easier pipeline:
+ *
+ *   ps2_gs_draw_env_apply() -- the same nine-register AD packet src/gl/eegs_present.c puts in front
+ *     of every layer, with win_x/win_y at 0 so an absolute vertex lands where it says and SCISSOR
+ *     over the whole canvas, so nothing about the rect's survival can be blamed on the clip.
+ *   gs_poster_packet() -- LANE 9b's SPRITE emitter, host-gated word for word against literals in
+ *     verify/tests/test_ps2_gs_poster.c, which is what lets this rung claim the packet is right and
+ *     leave the screen as the only unknown.
+ *   ps2_gs_gif_send() -- the synchronous sender, the one every console upload has already proven on
+ *     this bus.  It reaps first, so the environment it follows has already gone out.
+ *   ps2_gif_post() + ps2_gif_drain() + ps2_gif_reap() -- the LANE 10 ring, which is the path the
+ *     recorded eegs stream rides, and which at rung 1 had never carried a drawing group in front of
+ *     a witness.  `gsread` has since put the dense SPRITE group on it and found that group on the
+ *     page, so this half of the pair is measured rather than assumed.  The drain and reap are the
+ *     ring's own lifetime law honoured: the packet it was given is a static this command may rebuild,
+ *     so it waits for the transfer to finish.
+ *
+ * ALPHA and TEST are both zero, which is the plainest thing the GS can be asked to do: the emitter's
+ * PRIM word has ABE clear, so the blend stage is bypassed and a fragment is the source colour --
+ * ALPHA's four selects only name operands of an equation that is not running -- and with ZTE clear
+ * there is no depth reference to fail against.  Both colours are canvas words in the canvas's own
+ * order, A[31:24] B[23:16] G[15:8] R[7:0]: 0xff0000ff is opaque RED and 0xffff0000 is opaque BLUE,
+ * and each has the A byte every uploaded canvas pixel carries, which keeps the PCRTC's treatment of
+ * them identical to a canvas pixel's.  The pair is also this verb's own byte-order control, by
+ * position rather than by name: RED is the UPPER rect and BLUE the LOWER one, so a port that read
+ * RGBAQ in the BTRON order would show them exchanged -- visible in one look, where a single-colour
+ * probe's swap could only be argued about.
+ *
+ * The print goes first and the fill second, and nothing at all is printed after it.  This is not
+ * tidiness, it is the probe's own failure mode, and it has two halves -- the first image of this
+ * verb fell for the second one and reported `posted=1 started=1` beside a screen with no red on it,
+ * which is "no evidence", not "no rasteriser":
+ *
+ *   ps2_kprintf() ends in ps2_console_flush(), which uploads the dirty text band at the CANVAS'S
+ *   FULL WIDTH (ps2_gs_text_flush() calls ps2_gs_upload(0, top, PS2_SCREEN_WIDTH, h)), so a row
+ *   printed after the sprite paints a full-width navy strip over it.  Hence: the receipt is printed
+ *   in front of the send, and the send is self-evidencing anyway -- it is the synchronous one, so
+ *   the prompt coming back at all is the proof the quadwords left.
+ *
+ *   The shell prints its own prompt after EVERY command returns (ps2_shell_exec's last line), and
+ *   the first image of this verb had already printed five rows and left the cursor below them, so
+ *   that prompt was a full-width repaint of its own band right on top of the block -- invisible in
+ *   the source of this function, because the offending print is not here.  The cure is the clear
+ *   below: ps2_gs_text_clear() homes the cursor at row 0 and marks the whole canvas dirty, so the
+ *   first row printed after it repaints the ENTIRE canvas navy -- before the send -- and every row
+ *   after that repaints only its own sixteen pixels.  Five short rows put the cursor at row 5, the
+ *   prompt takes row 5, and the first rect starts at row 9: three rows of slack, so a keystroke or
+ *   two and a couple of ENTERs cannot reach it.  A scroll would (it marks all rows dirty), which is
+ *   why the last row says to answer briefly.
+ *
+ * Two blocks, because one look should answer two questions.  This port has exactly two ways to put a
+ * packet on channel 2 -- ps2_gs_gif_send(), the synchronous spin that every console IMAGE upload
+ * uses, and the LANE 10 ring, which is what the recorded eegs stream actually rides.  They are not
+ * the same code path: the ring hands the quadwords to ps2_gif_hw_start() from a descriptor it owns,
+ * the sender hands them over itself and waits.  So the RED rect goes out the synchronous way and the
+ * BLUE rect the ring way, and the four readings of one screenshot partition the space that used to
+ * need two boots: both blocks = the GS rasterises and the emptiness is in the stream's content; RED
+ * only = the ring loses a group the sender delivers; BLUE only = the reverse; neither = no SPRITE
+ * group reaches the displayed page however it is sent, which is what rung 2's read-back is for.
+ */
+#define GSQUAD_X0       32
+#define GSQUAD_X1       672
+#define GSQUAD_RED_Y0   144   /* row 9: below the five printed rows and the prompt's own row */
+#define GSQUAD_RED_Y1   320
+#define GSQUAD_BLUE_Y0  336
+#define GSQUAD_BLUE_Y1  496
+#define GSQUAD_RED      0xff0000ffu   /* canvas order: A=ff B=00 G=00 R=ff -- opaque red */
+#define GSQUAD_BLUE     0xffff0000u   /* canvas order: A=ff B=ff G=00 R=00 -- opaque blue */
+
+/* ── LANE 19 rungs 4 and 5: the reference shapes, their colours, and where they live ────────
+ *
+ * The census can now say "no pixel of either magic colour is anywhere in page 0", which retires the
+ * misplaced-draw explanations (a wrong FRAME pitch, a window origin that is not (0,0), a rect that
+ * left the scissor) and leaves three variables standing INSIDE the packet: the GIF format this port
+ * emits (FLG=PACKED with one quadword per register, and PRE=1 so the tag also carries the primitive
+ * word), the sprite's corner nudge, and the SPRITE primitive itself.  They cannot be told apart by
+ * reading the manual -- but ps2sdk is in this tree, and its `ee/draw/src/draw2d.c` ships flat
+ * sprites and flat triangles that every SDK program has ever put on a real GS, in FLG=REGLIST with
+ * PRE=0 and two or three dense data quadwords.  So rung 4 draws shapes beyond gsquad's pair, each a
+ * single-variable step from the packet that fails, and the same page walk reads the fork.
+ *
+ * The first run (2026-10-16, 8 s of PCSX2, no window and no hand) landed CYAN at 7360/7360 px in its
+ * exact box, MAGENTA at 7567 and GREEN at 3525 of ~3600, and left RED at 0/112640 and BLUE at
+ * 0/102400 over all 480,000 pixels -- which is what a control set is for: it split "the format" into
+ * the two things that had been living in one sentence.  The tag differs, and so does the STRIDE: a
+ * group of four 64-bit registers is TWO quadwords of data per loop, so the failing packet's four
+ * handed the GIF each even-numbered register as the zero sitting above its neighbour -- RGBAQ read as
+ * A=0 Q=0, the sprite's second XYZ2 read as 0, i.e. the field's own origin -- and left two quadwords
+ * over for the GIF to decode as the next tag.  A transparent colour and a degenerate sprite draw
+ * nothing at a packet length that looks entirely legal, which is precisely what rung 3 measured.
+ *
+ * The second run retired that arithmetic, and it did so by hanging the machine: its fourth control
+ * was this port's PACKED/PRE=1 tag over the SDK's dense two-quadword body -- the stride corrected and
+ * nothing else changed -- and the three GIF reads that followed all came back `block-never-finished`.
+ * The GIF was still waiting for data at the end of the transfer, so a PACKED group with NREG=4 wants
+ * FOUR quadwords, which is exactly what gs_poster_packet() already sends.  The shipping packet is
+ * therefore well-formed for its own tag and still draws nothing: the stride is innocent, and the
+ * variable that is left is the shape of the group -- a PACKED loop carrying a four-register REGS list
+ * and PRE=1 -- against the SDK's two precedents, a REGLIST list and a group of single-register AD
+ * writes.  YELLOW below is the second of those.
+ *
+ *   CYAN    gs_poster_ref_sprite_packet(nudge=0) -- the SDK's tag and dense stride, this
+ *           file's corners.  PROVEN to land.
+ *   MAGENTA the same with the SDK's own corner offsets (START/END_OFFSET, -7/+9 in 1/16-px units).
+ *           PROVEN to land, so the nudge is not what a SPRITE needs here.
+ *   GREEN   gs_poster_ref_tri_packet() -- the SDK's flat TRIANGLE (NREG=6, three vertices, plain page
+ *           offset).  PROVEN to land, so the three-vertex pipeline is fine.
+ *   YELLOW  gs_poster_ref_sprite_ad_packet() -- the same four registers as four AD writes, the shape
+ *           send_trx_setup_at() uses for every console upload.  PROVEN to land by the third run at
+ *           its exact 7,360 px, so PACKED is innocent when its group is one register long, and what
+ *           is left between the packet that draws and the packet that ships is a four-register REGS
+ *           list CARRIED BY PRE=1 -- one sentence again, and rung 5 is the run that splits it.
+ *
+ * rung 5 added the fifth control for exactly that split: gs_poster_ref_sprite_packed_packet, the
+ * shipping packet's own body quadword for quadword (PACKED, NREG=4, the same four nibbles, four sparse
+ * data quadwords) with PRE the only argument the caller changes -- and the poster gate asserted that
+ * with pre=1 those five quadwords WERE gs_poster_packet()'s output, word for word.  So the census got
+ * its RED row as a second copy of itself rather than as a look-alike, and the one-bit question had a
+ * one-bit answer: orange=0/1840, with the page fully accounted for.  PRE=0 over the retired body drew
+ * nothing, exactly as PRE=1 did, so the tag's PRIM carry was never the defect and a multi-register
+ * PACKED group does not kick on this GS whatever its primitive comes from.  The second of its two
+ * branches is the settled one, and both emitters now write CYAN's shape: FLG=REGLIST, PRE=0, PRIM as
+ * the loop's own first register, TWO quadwords per loop instead of four.  The gate's word-for-word
+ * equality became a NEGATIVE assertion with that change -- what ships must differ from the retired
+ * packet in FLG, in PRE and in the stride, and if those two ever agree again the format has been
+ * reverted while its host gate still passes (verify/tests/test_ps2_gs_poster.c).  The retired packet
+ * itself stays in the census, as the instrument's negative control:
+ *
+ *   VIOLET  gs_poster_ref_sprite_packed_packet(pre=1) in a 16-pixel gutter of its own, 224..239.
+ *           EXPECTED TO DRAW NOTHING.  A census that reports a violet pixel is reporting something
+ *           other than the shape it names, and every positive row of that run would have to be
+ *           re-read -- which is why a control known not to draw is still worth a box, a colour and a
+ *           row: it is the only row on the run that can say the read itself is telling the truth.
+ *   ORANGE  is no longer a look-alike of RED.  It is the shipping emitter ITSELF at n=2: two rects side
+ *           by side inside the same 40x46 box, in ONE group whose tag says NLOOP 2 -- five quadwords,
+ *           one tag and two dense loops.  RED and BLUE are the same emitter at NLOOP 1, so ORANGE is
+ *           the one variable that still separates "this format rasterises" from "a group with more
+ *           than one loop in it rasterises", and that is the question the recorder's stream lives on:
+ *           its groups are three, twelve and up to four thousand loops long.
+ *
+ *     1840 px  both loops drew: a multi-loop dense group is legal here, and the recorded strip can
+ *              ship as one group per primitive run.
+ *     920 px   only the group's FIRST loop rasterised.  The format is right and the batch is not, the
+ *              recorder has to close its group at every vertex, and the eegs stream's triangles are
+ *              arriving on the bus complete and rasterising one apiece.
+ *     0 px     no loop drew where a single-rect packet does -- a third finding, and one to read against
+ *              RED's own count and the refused mask before quoting it as the GS's answer.
+ *
+ * All of them go out the SYNCHRONOUS sender: the sender was rung 1's variable, and rung 3 showed
+ * neither sender delivers the current shape, so making it a variable again would confound the ones
+ * that matter now.  They sit in rows 544..590 -- below the control strip at 512..527, which has to
+ * stay the canvas's own navy for the census to mean anything, and above the page's last row.  ORANGE
+ * is the one box in that band LEFT of CYAN, at x 16..55, because the band is otherwise spoken for
+ * from 64 to 768 and a control whose pixels could be confused with a neighbour's box would cost the
+ * run its own discriminator.  VIOLET is the 16-pixel gutter between CYAN and MAGENTA, the only
+ * stretch rung 4 left free; it is expected to hold no pixel at all, so a neighbour's ink landing in
+ * its count would be the finding rather than a confusion.
+ *
+ * The names follow the words, not the other way round: a canvas word is A[31:24] B[23:16] G[15:8]
+ * R[7:0], so 0xffffff00 is R=0 G=255 B=255, which is cyan, and 0xff00ffff is R=255 G=255 B=0, which
+ * is yellow.  The first draft of this block called the former yellow; the census compares the exact
+ * word either way, but a row that prints `yellow=` over a cyan square is a row somebody will later
+ * read as a colour claim.  0xff0080ff follows the same rule: R=255 G=128 B=0, which is orange, and
+ * 0xffa020a0 is R=160 G=32 B=160, which is violet -- the only class here whose green is neither 0 nor
+ * 255, so a photo of the band cannot read one control's square as another's. */
+#define GSQUAD_CYAN     0xffffff00u   /* A=ff B=ff G=ff R=00 -- opaque cyan */
+#define GSQUAD_MAGENTA  0xffff00ffu   /* A=ff B=ff G=00 R=ff -- opaque magenta */
+#define GSQUAD_GREEN    0xff00ff00u   /* A=ff B=00 G=ff R=00 -- opaque green */
+#define GSQUAD_YELLOW   0xff00ffffu   /* A=ff B=00 G=ff R=ff -- opaque yellow */
+#define GSQUAD_ORANGE   0xff0080ffu   /* A=ff B=00 G=80 R=ff -- opaque orange: the two-rect batch */
+#define GSQUAD_VIOLET   0xffa020a0u   /* A=ff B=a0 G=20 R=a0 -- opaque violet: the retired shape */
+#define GSREF_Y0        544
+#define GSREF_Y1        590
+#define GSREF_ORA_X0    16    /* the batch's own box, split into two 20-wide rects at 16..36, 36..56 */
+#define GSREF_ORA_X1    56
+#define GSREF_ORA_SPLIT 36    /* first pixel of the batch's SECOND rect */
+#define GSREF_VIO_X0    224   /* rung 4 left this gutter; the negative control lives in it now */
+#define GSREF_VIO_X1    240
+#define GSREF_CYA_X0    64
+#define GSREF_CYA_X1    224
+#define GSREF_MAG_X0    240
+#define GSREF_MAG_X1    400
+#define GSREF_TRI_X0    432   /* the triangle's base row is GSREF_Y1-1 and its apex GSREF_Y0 */
+#define GSREF_TRI_X1    512
+#define GSREF_TRI_X2    592
+#define GSREF_YEL_X0    608   /* the four-register AD control: right of the triangle */
+#define GSREF_YEL_X1    768
+
+/* ── LANE 19 rung 7: the ALPHA discriminator's own page band ────────────────────────────────
+ *
+ * A band of its own, low on the page and clear of gsread's control row (y 544..590) and of any verb's
+ * printed glyphs (rows 0..143), so this census reads only pixels this probe drew over the navy canvas
+ * and nothing else can account for them.  Three boxes, each 40 x 40, with a gutter of their own
+ * between them: Z is the ABE=0 reference (a plain sprite with the alpha byte forced -- it proves the
+ * builder's geometry and the read path reach VRAM), P is ABE=1 under the word the LIVE environment
+ * ships (gs_pack_alpha(CS,CD,AS,CD,fix=0)), H is ABE=1 under the hardware-order word
+ * gs_pack_alpha(3,0,1,1,fix=128).  All three carry the same opaque source colour, so the ONLY thing
+ * that can separate them is the ALPHA register. */
+#define GSALPHA_Y0      200
+#define GSALPHA_Y1      240
+#define GSALPHA_Z_X0    64
+#define GSALPHA_P_X0    176
+#define GSALPHA_H_X0    288
+#define GSALPHA_BW      40    /* every box's width; x1 = x0 + GSALPHA_BW */
+/* Opaque-ish source, distinct from navy, from console ink (0xFFE0E0E0) and from the read sentinel:
+ * R=0 G=255 B=0 in the canvas word's own byte order.  The vertex alpha is NOT 0xFF: a blend of a fully
+ * opaque source clamps back to the source (`(Cs-Cd)*255/128 + Cd` saturates to Cs on every channel),
+ * which would make a real blend and a bypassed blender read identically.  A mid alpha keeps the three
+ * outcomes three colours -- destination, a genuine mid mix, or the raw source -- and that separation is
+ * the entire instrument. */
+#define GSALPHA_CS      0x0000ff00u
+#define GSALPHA_AS      0x40u   /* 64: the blender's multiplier, `(Cs-Cd)*64>>7` = half, so a real mix is mid */
+
+/* ── LANE 19 rung 8: the texture-stage discriminator's own page band ────────────────────────
+ *
+ * Rung 7 cleared ALPHA and rung 6's live [GSTS] row cleared everything else the recorded eegs stream
+ * could be dying on -- `texmiss=0` (its planes resolve, so it is not demoted to flat), `cover=1`
+ * (not the cover re-upload), `reg_test=0` (no depth/alpha fragment reject), `plate=covered drop=0`
+ * (geometry present, delivered).  Yet `[GSLIVE]` still reads the page as its canvas: 2,705 textured
+ * triangles lay NO new pixel, while rung 7's one FLAT untextured sprite in the identical env laid its
+ * colour.  The only thing the flat sprite does not exercise and the dead stream does is the TEXTURE
+ * stage -- TEX0/TEX1 sampling and the CT32 modulate `ps2_gs_tex.c` packs (TCC=1, TFUNC=0).  That is
+ * what this band decides.
+ *
+ * Same band as rung 7 (it runs after it and repaints navy first), three 40x40 boxes.  The whole trick
+ * is that each textured plane is filled UNIFORMLY, so the exact ST/UV the sprite samples is
+ * irrelevant -- whatever coordinate lands, the texel it reads is the plane's one colour.  That makes
+ * the read a pure statement about whether the sampler multiplies vertex by texel at all:
+ *   U = an UNTEXTURED sprite, opaque green -- the positive control, the shape rung 7 already proved
+ *       lands.  If U does not paint, this run measured no geometry and the two textured rows say nothing.
+ *   R = a TEXTURED sprite, white vertex, plane = opaque RED  -> red  means texturing works.
+ *   B = a TEXTURED sprite, white vertex, plane = opaque BLUE -> blue means it works, and that R and B
+ *       differ proves the fragment is the plane's colour, not the vertex's (a shared result would mean
+ *       the sampler is being ignored).
+ * The white vertex (all channels 0xFF) means the modulate is out = 1 * texel = texel, so a textured box
+ * that reads WHITE is the sampler bypassed (TME not honoured / TEX0 not applied), and one that reads
+ * BLACK is a plane read as zero (a format/PSM mismatch between the upload and TEX0). */
+#define GS8_Y0        200
+#define GS8_Y1        240
+#define GS8_U_X0      64
+#define GS8_R_X0      176
+#define GS8_B_X0      288
+#define GS8_BW        40
+#define GS8_PLANE     64u   /* each plane is 64x64 CT32, whole thing one colour so any coord reads it */
+#define GS8_VERTEX    0xffffffffu  /* R=G=B=A=255: modulate by 1, so a textured fragment == its texel */
+
+/* The drawing environment both Stage-1 GS verbs program, and the one place in this core that names
+ * the displayed page for a draw.  Frame page 0 at the width the PCRTC reads it with -- the same page
+ * eegs_present.c presents and the same one ps2_gs_vram_read() takes its census out of, which is the
+ * point: a rect that reaches VRAM somewhere other than where the screen is reading is a rect nobody
+ * sees.  The depth page is the top page of the 4 MB, which TEST=0 and ZMSK=1 leave untouched but
+ * which still has to hold a format the hardware accepts.  win_x/win_y are 0 so an absolute vertex
+ * lands exactly where it says, and the scissor is the whole canvas so nothing about a rect's survival
+ * can be blamed on the clip.  ALPHA and TEST are clear: the blend and depth stages are bypassed, a
+ * fragment is its source colour, and there is no reference to fail against.  One function holds it
+ * because `gsquad` and `gsread` must not be two models of the same page -- a census taken against an
+ * environment that differs from the draw it censuses is reading a page nobody painted. */
+static void ps2_stage1_gs_env(gs_draw_env *env)
+{
+    env->frame_byte  = 0u;
+    env->frame_px_w  = (uint32_t)PS2_SCREEN_WIDTH;
+    env->frame_psm   = GS_PSM_CT32;
+    env->frame_fmsk  = 0u;
+    env->zbuf_byte   = GS_VRAM_BYTES - GS_PAGE_FRAME;
+    env->zbuf_psm    = GS_PSMZ32;
+    env->zbuf_zmsk   = 1u;
+    env->win_x = 0u;
+    env->win_y = 0u;
+    env->clip_x0 = 0u;
+    env->clip_y0 = 0u;
+    env->clip_x1 = (uint32_t)(PS2_SCREEN_WIDTH - 1);
+    env->clip_y1 = (uint32_t)(PS2_SCREEN_HEIGHT - 1);
+    env->reg_test  = 0u;
+    env->reg_alpha = 0u;
+    env->reg_clamp = 0u;
+    env->reg_tex0  = 0u;
+    env->reg_tex1  = 0u;
+}
+
+static void ps2_gsquad_probe(void)
+{
+    /* One tag pair plus GS_POSTER_REGS_N data quadwords, 16-byte aligned because the DMA reads
+     * quadwords.  Sized by the emitter's own macro and never by a literal, so the packet cannot be
+     * longer than the buffer that holds it.  The same static is reused for the second rect, and it
+     * may be: the first send is synchronous, and the second is reaped before this returns, so no
+     * transfer is ever reading a buffer a later call is rewriting. */
+    static uint64_t s_pkt[2u * GS_POSTER_QWC(1u)] __attribute__((aligned(16)));
+    gs_poster_rect r;
+    gs_draw_env env;
+    ps2_gif_stats_t st;
+    int32_t qw_red, qw_blue;
+
+    /* The canvas is repainted navy here, in front of everything, because the repaint is the point:
+     * it is the last full-canvas upload this probe allows itself, and it leaves the page in the one
+     * state where a red block has no rival explanation.  See the ordering law above. */
+    ps2_gs_text_clear();
+
+    r.x0 = GSQUAD_X0;  r.y0 = GSQUAD_RED_Y0;
+    r.x1 = GSQUAD_X1;  r.y1 = GSQUAD_RED_Y1;
+
+    /* The displayed page, named exactly the way src/gl/eegs_present.c names it: frame page 0 at
+     * the width the PCRTC reads it with, the top page of VRAM for a depth buffer that TEST=0 and
+     * ZMSK=1 leave untouched, the page origin at (0,0) so the emitter's gs_vertex_coord16() pixels
+     * are screen pixels, and a scissor over the whole canvas.  One function holds it because this
+     * verb and `gsread` must not be two models of the same page -- a census taken against an
+     * environment that differs from the draw it censuses is reading a page nobody painted. */
+    ps2_stage1_gs_env(&env);
+
+    qw_red = gs_poster_packet(&r, 1u, GSQUAD_RED, s_pkt, gs_poster_qwc(1u));
+
+    ps2_kprintf("[GSQUAD] two SPRITES at x=%d..%d. This command writes no canvas byte.\n",
+                GSQUAD_X0, GSQUAD_X1 - 1);
+    ps2_kprintf("[GSQUAD] RED  y=%d..%d 0x%08x -- the synchronous sender\n",
+                GSQUAD_RED_Y0, GSQUAD_RED_Y1 - 1, (unsigned int)GSQUAD_RED);
+    ps2_kprintf("[GSQUAD] BLUE y=%d..%d 0x%08x -- the LANE 10 ring, drained\n",
+                GSQUAD_BLUE_Y0, GSQUAD_BLUE_Y1 - 1, (unsigned int)GSQUAD_BLUE);
+
+    if (qw_red < 0) {
+        ps2_kprintf("[GSQUAD] the emitter refused the rect (dropped=%u): nothing was sent\n",
+                    (unsigned int)gs_poster_dropped());
+        return;
+    }
+
+    if (ps2_gs_draw_env_apply(&env) != 0) {
+        ps2_kprintf("[GSQUAD] the environment was refused (-1): no draw page, so no sprite is sent\n");
+        return;
+    }
+
+    /* The receipt, and it is the last thing printed -- the senders follow and nothing prints after
+     * them.  What each column can and cannot mean: `posted`/`started` moving says the environment
+     * left through the ring, `refused` says a producer was turned away, and none of them says a
+     * pixel appeared anywhere.  That is the blocks on the monitor, which is the reason this verb
+     * exists at all. */
+    ps2_gif_stats(&st);
+    ps2_kprintf("[GSQUAD] env on the bus: posted=%u started=%u queued=%u inflight=%u refused=%u sync=%u\n",
+                (unsigned int)st.posted, (unsigned int)st.started,
+                (unsigned int)st.queued, (unsigned int)st.in_flight,
+                (unsigned int)st.refused, (unsigned int)st.sync_sends);
+    ps2_kprintf("[GSQUAD] sending now. both=GS draws | RED only=the ring | BLUE only=sync | none=neither\n");
+
+    /* Rung 1's first half: the SPRITE group over the sender every console upload has already used,
+     * so the only new thing on the bus is a four-register REGLIST group carried as one loop. */
+    ps2_gs_gif_send(s_pkt, (uint32_t)qw_red);
+
+    /* ...and the second half over the path the shipped stream rides.  The one buffer is rebuilt
+     * here only because the send above has already completed, and the post below is drained and
+     * reaped before returning, so no transfer is ever reading bytes a later call rewrites. */
+    r.y0 = GSQUAD_BLUE_Y0;
+    r.y1 = GSQUAD_BLUE_Y1;
+    qw_blue = gs_poster_packet(&r, 1u, GSQUAD_BLUE, s_pkt, gs_poster_qwc(1u));
+    if (qw_blue < 0) {
+        ps2_kprintf("[GSQUAD] the emitter refused the BLUE rect: only RED was sent\n");
+        return;
+    }
+    if (ps2_gif_post(s_pkt, (uint32_t)qw_blue) != 0) {
+        /* Printed on the ring's own failure path only: at this point the RED block is already on its
+         * way and the page is about to be repainted, so the answer this run can still give is
+         * "RED, and BLUE was refused", which is a ring-capacity reading rather than a raster one. */
+        ps2_kprintf("[GSQUAD] the ring refused the BLUE packet (ring full)\n");
+        return;
+    }
+    (void)ps2_gif_drain();
+    (void)ps2_gif_reap();
+}
+
+/* ── LANE 19 rung 2: `gsread`, the read-back that answers rung 1 without a witness ─────
+ *
+ * rung 1 asks a human one question -- "is there red, and is there blue?" -- and this verb takes the
+ * answer itself.  It is the reason the rung exists: PCSX2 2.8.2 has no CLI flag that dumps a frame,
+ * so without a Local->Host transfer the only instrument for what the GS rasterised is somebody's
+ * monitor.  With one, the guest can census the page PCRTC is showing and print that census into the
+ * log a headless run already writes.
+ *
+ * The draw is gsquad's, unchanged: the same two SPRITE rects, the same two senders (the synchronous
+ * ps2_gs_gif_send() for RED, the LANE 10 ring for BLUE), the same environment -- ps2_stage1_gs_env()
+ * is one function precisely so a census cannot be taken against a page the draw did not name.  What
+ * is new is the read: three 64x16 strips of CT32 out of page 0, all at one x, at y=208 (inside RED),
+ * at y=344 (inside BLUE) and at y=512 (below both, where the desktop's own navy should still be).
+ * The third strip is the census's control, and its expectation is read out of the canvas rather than
+ * written as a literal: the question is "does VRAM match what the compositor painted there", and a
+ * hand-typed word would be a second model of a byte order this port has already been wrong about
+ * once.
+ *
+ * Four things this verb must not do, and every one of them is a failure mode of the read rather than
+ * a style preference:
+ *
+ *   Nothing may be UPLOADED between a draw and its read.  ps2_kprintf() ends in a full-width band
+ *   repaint (see rung 1's ordering law above), so the prints that sit between these reads are only
+ *   safe because each of them lands in text rows 3..8 -- y <= 143 -- while the lowest strip still
+ *   unread is at y=208.  Add a row, widen the console, or move a strip up and the ordering breaks
+ *   silently: the census would read back its own prompt and call the page navy.
+ *
+ *   The buffer is filled with GSREAD_SENT before every read.  A download the hardware rounded down
+ *   would otherwise hand back the PREVIOUS strip's pixels and report a match -- which is exactly how a
+ *   quarter-length transfer disguises itself as a working instrument.  `sent` is the count left
+ *   untouched, and it is the only column that tells "the GS has this colour here" apart from "nothing
+ *   was written here".
+ *
+ *   A failed read prints a stage name, never a colour.  ps2_gs_vram_read() can refuse or time out at
+ *   seven different points and each means something different -- bus-busy is this port's own
+ *   pipelining, builder-refused is a rectangle these registers cannot describe (with the law named out
+ *   of gs_read_last_err()), block-never-finished is channel 1, no-finish-receipt is the request never
+ *   reaching the GS, vif-fifo-never-drained is VIF1.  "no census" and "the census is black" are the two
+ *   answers most worth telling apart, and a stage name is the only thing that separates them.
+ *
+ *   The verdict reads the control before it reads the sprites.  Both plus a navy control means the
+ *   rasteriser works and the emptiness is in the stream's content; neither plus a navy control means
+ *   a drawing group reaches the pipe but not the page; and a control that is NOT navy means this
+ *   census is not evidence about anything, which the row says out loud rather than leaving a verdict
+ *   to be inferred from it.
+ *
+ * What it cannot answer, and what rung 3 below is for: three 64x16 windows at one x say nothing about
+ * the other 478,016 pixels of the page, so "the strip is navy" is equally a sprite that never rasterised
+ * and a sprite that rasterised at the wrong pitch or offset.
+ */
+#define GSREAD_X       GSQUAD_X0    /* 32: a multiple of 4, which is CT32's quadword law */
+#define GSREAD_W       64
+#define GSREAD_H       16
+#define GSREAD_RED_Y   208           /* inside RED's 144..319 */
+#define GSREAD_BLUE_Y  344           /* inside BLUE's 336..495 */
+#define GSREAD_CTRL_Y  512           /* below both: the desktop's own navy */
+#define GSREAD_SENT    0x00FF00FFu   /* a word neither the sprites nor the navy background can be */
+
+typedef struct {
+    uint32_t match;        /* words that read back as the expected colour */
+    uint32_t sent;         /* words the download never touched */
+    uint32_t other;        /* words that are neither of those */
+    uint32_t first_other;  /* the first of those, so a shift is recognisable as a value */
+    uint32_t qw;           /* quadwords the read asked for, or 0 when it failed */
+    gs_read_bus_err err;
+} gsread_strip_t;
+
+static const char *gsread_bus_name(gs_read_bus_err e)
+{
+    switch (e) {
+    case GS_READ_BUS_OK:       return "ok";
+    case GS_READ_BUS_E_ARGS:   return "bad-args";
+    case GS_READ_BUS_E_BUSY:   return "bus-busy";
+    case GS_READ_BUS_E_BUILD:  return "builder-refused";
+    case GS_READ_BUS_E_STR:    return "block-never-finished";
+    case GS_READ_BUS_E_FINISH: return "no-finish-receipt";
+    case GS_READ_BUS_E_FIFO:   return "vif-fifo-never-drained";
+    default:                   return "data-never-finished";
+    }
+}
+
+static const char *gsread_law_name(gs_read_err e)
+{
+    switch (e) {
+    case GS_READ_OK:      return "none";
+    case GS_READ_E_ARGS:  return "args";
+    case GS_READ_E_PSM:   return "psm";
+    case GS_READ_E_SIZE:  return "RRW/RRH";
+    case GS_READ_E_QWC:   return "over-16-bit-count";
+    case GS_READ_E_POS:   return "SSAX/SSAY";
+    case GS_READ_E_ALIGN: return "quadword-alignment";
+    case GS_READ_E_PITCH: return "SBW/row-end";
+    default:              return "page-extent";
+    }
+}
+
+/* One strip out of page 0 and one row about it.  The fields are stored into *out one at a time rather
+ * than by assigning a finished struct: a struct assignment in a hard-float TU of this port has put
+ * sdc1/ldc1 -- illegal on the R5900 -- into the image before, and `make test-ps2` is what catches it.
+ * Nothing prints between the fill and the read, and a failed read reports a stage, not a colour. */
+static void ps2_gsread_strip(const char *label, int y, uint32_t want,
+                             uint32_t *buf, uint32_t n, gsread_strip_t *out)
+{
+    uint32_t i;
+    uint32_t t0;
+    int32_t got;
+
+    for (i = 0; i < n; i++) buf[i] = GSREAD_SENT;
+
+    t0 = btron_render_perf_us();
+    got = ps2_gs_vram_read(GSREAD_X, y, GSREAD_W, GSREAD_H, buf);
+    out->err = ps2_gs_vram_read_err();
+    out->qw = (got > 0) ? (uint32_t)got : 0u;
+
+    if (out->err != GS_READ_BUS_OK) {
+        out->match = 0u;
+        out->sent = n;
+        out->other = 0u;
+        out->first_other = 0u;
+        ps2_kprintf("[GSREAD] %s y=%d FAILED: %s", label, y, gsread_bus_name(out->err));
+        if (out->err == GS_READ_BUS_E_BUILD) {
+            ps2_kprintf(" (law: %s)", gsread_law_name(gs_read_last_err()));
+        }
+        ps2_kprintf("\n");
+        return;
+    }
+
+    out->match = 0u;
+    out->sent = 0u;
+    out->other = 0u;
+    out->first_other = 0u;
+    for (i = 0; i < n; i++) {
+        if (buf[i] == want) {
+            out->match++;
+        } else if (buf[i] == GSREAD_SENT) {
+            out->sent++;
+        } else {
+            if (out->other == 0u) out->first_other = buf[i];
+            out->other++;
+        }
+    }
+    ps2_kprintf("[GSREAD] %s y=%-4d want=0x%08x match=%u/%u sent=%u other=%u first=0x%08x %u us %u qw\n",
+                label, y, (unsigned int)want, (unsigned int)out->match, (unsigned int)n,
+                (unsigned int)out->sent, (unsigned int)out->other,
+                (unsigned int)out->first_other,
+                (unsigned int)(btron_render_perf_us() - t0), (unsigned int)out->qw);
+}
+
+/* ── LANE 19 rung 3: the whole displayed page, in bands ────────────────────────────────
+ *
+ * What the three strips can say is "this 64x16 window at x=32 holds the canvas colour".  What they
+ * cannot say is the thing that decides the next move: whether the SPRITE wrote no pixel anywhere,
+ * or wrote them somewhere the strips do not cover -- a wrong FRAME pitch, a window origin that is
+ * not (0,0), a rect that left the scissor.  "Nothing landed" and "it landed elsewhere" are
+ * different bugs with different fixes, and a strip census reads identically for both.
+ *
+ * It cannot be one transfer, and the reason is a register width: CH_QWC is 16 bits and an 800x600
+ * CT32 page is 120,000 quadwords, so the count the DMA would have been handed is 120,000 modulo
+ * 65,536.  That is why gs_read_request_packet() now refuses GS_READ_E_QWC, and why this walks the
+ * canvas in 150-row bands of 30,000 -- the same discipline ps2sdk's screenshot() keeps by taking one
+ * row per transfer.  Each band is filled with the sentinel before its read, for the strips' own
+ * reason: a short download would otherwise hand back the PREVIOUS band's real pixels and print a
+ * census of a page it never finished reading.
+ *
+ * The classes are the ones the page can hold: the canvas colour the clear uploaded, the two magic
+ * colours only gsquad's two rects carry, rung 4's four reference-shape colours, the two-rect batch's
+ * ORANGE, the retired shape's VIOLET, and the sentinel.
+ * Pixels that are none of those split by row, because rows 0..143 are the verb's own printed text and
+ * its ink (0xFFE0E0E0, ps2_kprintf's own pair at core_ps2.c:695) is legitimately not navy:
+ * text_other is the census's positive control -- it shows the read can see something the console
+ * wrote -- and below_other is the bucket a misplaced sprite would land in.  Each hunt keeps its own
+ * bounding box, so a moved draw arrives as numbers rather than as a hypothesis.
+ *
+ * The ref colours are counted with the same care as red and blue and for a different reason.  rung 3's
+ * negative retired "it landed somewhere else"; rung 4 asks "does ANY packet land", so each control's
+ * own count is a bit of the answer, and a control that landed in an unexpected row would otherwise be
+ * reported as a control that did not land.  Their expected counts are therefore printed beside their
+ * boxes: a sprite's count is exact arithmetic, and a triangle's is the mathematical area, which the
+ * GS's own edge rules can put a few pixels off -- hence the `~`.  The first run confirmed that
+ * reading: green came back 3525 of ~3600 with its box starting at x=434 rather than 432, and both
+ * un-nudged and nudged sprites filled their boxes' every pixel.
+ */
+#define GSREAD_BAND_ROWS 150u   /* four bands over the 600 rows, and 480,000 bytes of buffer */
+#define GSREAD_BAND_QWC  (((uint32_t)PS2_SCREEN_WIDTH * GSREAD_BAND_ROWS * 32u) >> 7)
+#define GSREAD_RED_PX    ((uint32_t)(GSQUAD_X1 - GSQUAD_X0) * (uint32_t)(GSQUAD_RED_Y1 - GSQUAD_RED_Y0))
+#define GSREAD_BLUE_PX   ((uint32_t)(GSQUAD_X1 - GSQUAD_X0) * (uint32_t)(GSQUAD_BLUE_Y1 - GSQUAD_BLUE_Y0))
+#define GSREAD_TEXT_ROWS ((uint32_t)GSQUAD_RED_Y0)   /* at or below this row, not-navy is glyphs */
+#define GSREAD_CYAN_PX   ((uint32_t)(GSREF_CYA_X1 - GSREF_CYA_X0) * (uint32_t)(GSREF_Y1 - GSREF_Y0))
+#define GSREAD_MAGENTA_PX ((uint32_t)(GSREF_MAG_X1 - GSREF_MAG_X0) * (uint32_t)(GSREF_Y1 - GSREF_Y0))
+#define GSREAD_YELLOW_PX ((uint32_t)(GSREF_YEL_X1 - GSREF_YEL_X0) * (uint32_t)(GSREF_Y1 - GSREF_Y0))
+#define GSREAD_ORANGE_PX ((uint32_t)(GSREF_ORA_X1 - GSREF_ORA_X0) * (uint32_t)(GSREF_Y1 - GSREF_Y0))
+#define GSREAD_VIOLET_PX ((uint32_t)(GSREF_VIO_X1 - GSREF_VIO_X0) * (uint32_t)(GSREF_Y1 - GSREF_Y0))
+/* One rect of the batch, derived from where the batch's SECOND rect starts and not from
+ * GSREAD_ORANGE_PX / 2: the reading this names is "the group's first loop rasterised", so the
+ * expectation has to be the first rect's own area, and a split that moved would otherwise move the
+ * expectation with it.  The two rects are equal by construction here, so the two spellings agree. */
+#define GSREAD_ORANGE_ONE ((uint32_t)(GSREF_ORA_SPLIT - GSREF_ORA_X0) * (uint32_t)(GSREF_Y1 - GSREF_Y0))
+/* base x height / 2, i.e. the area the three vertices enclose -- an expectation to read a count
+ * against, not a bit-exact promise about a rasteriser's half-pixel edges. */
+#define GSREAD_GREEN_PX  ((uint32_t)(GSREF_TRI_X2 - GSREF_TRI_X0) * \
+                          (uint32_t)(GSREF_Y1 - GSREF_Y0 - 1) / 2u)
+
+typedef struct {
+    uint32_t navy, sent, text_other, below_other;
+    uint32_t red, blue, first_below;
+    uint32_t cyan, magenta, green, yellow;   /* rung 4: REGLIST / + nudge / TRIANGLE / PACKED+AD */
+    uint32_t orange;      /* the shipping emitter at NLOOP 2: the batch's two rects */
+    uint32_t violet;      /* the retired PACKED/NREG 4 shape, which must produce no pixel */
+    uint32_t qw, us;
+    int red_box[4];          /* x0 y0 x1 y1, all -1 when the count is 0 */
+    int blue_box[4];
+    int cyan_box[4];
+    int magenta_box[4];
+    int green_box[4];
+    int yellow_box[4];
+    int orange_box[4];
+    int violet_box[4];
+    int below_box[4];
+    gs_read_bus_err err;
+} gsread_page_t;
+
+static void gsread_box(int *box, uint32_t x, uint32_t y)
+{
+    if (box[0] < 0 || (int)x < box[0]) box[0] = (int)x;
+    if (box[1] < 0 || (int)y < box[1]) box[1] = (int)y;
+    if ((int)x > box[2]) box[2] = (int)x;
+    if ((int)y > box[3]) box[3] = (int)y;
+}
+
+/* Every field stored one at a time, as the strip helper's note says: this TU is compiled -mhard-float
+ * and a struct assignment here has put sdc1/ldc1 -- illegal on the R5900 -- into the image before. */
+static void gsread_page_census(uint32_t *buf, uint32_t navy, gsread_page_t *o)
+{
+    const uint32_t width = (uint32_t)PS2_SCREEN_WIDTH;
+    const uint32_t height = (uint32_t)PS2_SCREEN_HEIGHT;
+    uint32_t y_start, i, total = 0u;
+    uint32_t t0;
+
+    o->navy = 0u; o->sent = 0u; o->text_other = 0u; o->below_other = 0u;
+    o->red = 0u;  o->blue = 0u;  o->first_below = 0u;
+    o->cyan = 0u; o->magenta = 0u; o->green = 0u; o->yellow = 0u; o->orange = 0u;
+    o->violet = 0u;
+    o->qw = 0u;   o->us = 0u;    o->err = GS_READ_BUS_OK;
+    for (i = 0u; i < 4u; i++) {
+        o->red_box[i] = -1; o->blue_box[i] = -1; o->below_box[i] = -1;
+        o->cyan_box[i] = -1; o->magenta_box[i] = -1;
+        o->green_box[i] = -1; o->yellow_box[i] = -1; o->orange_box[i] = -1;
+        o->violet_box[i] = -1;
+    }
+
+    t0 = btron_render_perf_us();
+    for (y_start = 0u; y_start < height; y_start += GSREAD_BAND_ROWS) {
+        const uint32_t rows = (height - y_start < GSREAD_BAND_ROWS)
+                                ? (height - y_start) : GSREAD_BAND_ROWS;
+        int32_t got;
+
+        for (i = 0u; i < width * rows; i++) buf[i] = GSREAD_SENT;
+        got = ps2_gs_vram_read(0, (int)y_start, (int)width, (int)rows, buf);
+        o->err = ps2_gs_vram_read_err();
+        if (o->err != GS_READ_BUS_OK) {
+            ps2_kprintf("[GSREAD] page y=%u FAILED: %s", (unsigned int)y_start,
+                        gsread_bus_name(o->err));
+            if (o->err == GS_READ_BUS_E_BUILD)
+                ps2_kprintf(" (law: %s)", gsread_law_name(gs_read_last_err()));
+            ps2_kprintf("\n");
+            return;
+        }
+        o->qw += (uint32_t)got;
+        total += width * rows;
+
+        for (i = 0u; i < width * rows; i++) {
+            const uint32_t v = buf[i];
+            uint32_t x, y;
+
+            if (v == navy)           { o->navy++; continue; }
+            if (v == GSREAD_SENT)    { o->sent++; continue; }
+            x = i % width;
+            y = y_start + i / width;
+            if (v == GSQUAD_RED)  { o->red++;  gsread_box(o->red_box, x, y);   continue; }
+            if (v == GSQUAD_BLUE) { o->blue++; gsread_box(o->blue_box, x, y);  continue; }
+            if (v == GSQUAD_CYAN)    { o->cyan++;    gsread_box(o->cyan_box, x, y);    continue; }
+            if (v == GSQUAD_MAGENTA) { o->magenta++; gsread_box(o->magenta_box, x, y); continue; }
+            if (v == GSQUAD_GREEN)   { o->green++;   gsread_box(o->green_box, x, y);   continue; }
+            if (v == GSQUAD_YELLOW)  { o->yellow++;  gsread_box(o->yellow_box, x, y);  continue; }
+            if (v == GSQUAD_ORANGE)  { o->orange++;  gsread_box(o->orange_box, x, y);  continue; }
+            if (v == GSQUAD_VIOLET)  { o->violet++;  gsread_box(o->violet_box, x, y);  continue; }
+            if (y < GSREAD_TEXT_ROWS) { o->text_other++; continue; }
+            if (o->below_other == 0u) o->first_below = v;
+            o->below_other++;
+            gsread_box(o->below_box, x, y);
+        }
+    }
+    o->us = btron_render_perf_us() - t0;
+
+    ps2_kprintf("[GSREAD] page %ux%u: navy=%u/%u text_other=%u below_other=%u first=0x%08x "
+                "sent=%u %u us %u qw\n",
+                (unsigned int)width, (unsigned int)height,
+                (unsigned int)o->navy, (unsigned int)total,
+                (unsigned int)o->text_other, (unsigned int)o->below_other,
+                (unsigned int)o->first_below, (unsigned int)o->sent,
+                (unsigned int)o->us, (unsigned int)o->qw);
+    ps2_kprintf("[GSREAD] page hunts: red=%u/%u bbox=%d,%d..%d,%d blue=%u/%u bbox=%d,%d..%d,%d "
+                "other_bbox=%d,%d..%d,%d\n",
+                (unsigned int)o->red, (unsigned int)GSREAD_RED_PX,
+                o->red_box[0], o->red_box[1], o->red_box[2], o->red_box[3],
+                (unsigned int)o->blue, (unsigned int)GSREAD_BLUE_PX,
+                o->blue_box[0], o->blue_box[1], o->blue_box[2], o->blue_box[3],
+                o->below_box[0], o->below_box[1], o->below_box[2], o->below_box[3]);
+    /* Two rows rather than one because each control's box is part of its answer: a count that landed
+     * in the wrong rows would otherwise read as the branch that says nothing landed.  They are two
+     * rows and not one long one because the console wraps at 100 columns, and a wrapped row is a row
+     * of ink at y 144 -- inside RED's own rows, in the one bucket the fork below reads. */
+    ps2_kprintf("[GSREAD] page refs: cyan=%u/%u bbox=%d,%d..%d,%d magenta=%u/%u bbox=%d,%d..%d,%d\n",
+                (unsigned int)o->cyan, (unsigned int)GSREAD_CYAN_PX,
+                o->cyan_box[0], o->cyan_box[1], o->cyan_box[2], o->cyan_box[3],
+                (unsigned int)o->magenta, (unsigned int)GSREAD_MAGENTA_PX,
+                o->magenta_box[0], o->magenta_box[1], o->magenta_box[2], o->magenta_box[3]);
+    ps2_kprintf("[GSREAD] page refs: green=%u/~%u bbox=%d,%d..%d,%d yellow=%u/%u bbox=%d,%d..%d,%d\n",
+                (unsigned int)o->green, (unsigned int)GSREAD_GREEN_PX,
+                o->green_box[0], o->green_box[1], o->green_box[2], o->green_box[3],
+                (unsigned int)o->yellow, (unsigned int)GSREAD_YELLOW_PX,
+                o->yellow_box[0], o->yellow_box[1], o->yellow_box[2], o->yellow_box[3]);
+    /* ORANGE and VIOLET on rows of their own rather than bolted onto the yellow one, because they are
+     * this run's two questions and not rung 4's precedents: ORANGE is the shipping emitter at NLOOP 2,
+     * VIOLET is the emitter's retired shape and carries `want=0` in the row because its box area is a
+     * ceiling and never an expectation -- a denominator there would read as "736 is the number to hit".
+     * Nothing here is at risk of putting ink in a censused row -- this function prints only after every
+     * band has been read, and the next run's text_clear() repaints the page -- but each row is still
+     * kept inside the console's 100 columns, which is the budget the pre-draw rows are measured against
+     * and the reason the boxes are several rows and not one. */
+    ps2_kprintf("[GSREAD] page refs: orange=%u/%u bbox=%d,%d..%d,%d (the NLOOP 2 batch)\n",
+                (unsigned int)o->orange, (unsigned int)GSREAD_ORANGE_PX,
+                o->orange_box[0], o->orange_box[1], o->orange_box[2], o->orange_box[3]);
+    ps2_kprintf("[GSREAD] page refs: violet=%u want=0 box=%u bbox=%d,%d..%d,%d (retired shape)\n",
+                (unsigned int)o->violet, (unsigned int)GSREAD_VIOLET_PX,
+                o->violet_box[0], o->violet_box[1], o->violet_box[2], o->violet_box[3]);
+
+    /* The reading, in the order that keeps an incomplete census from being quoted as a negative
+     * result: a page with sentinel left in it is a page this loop did not finish reading, whatever
+     * the counts above look like.  After that guard the controls are read as the bits they are, and
+     * the shape they used to decide between is decided -- rung 4's four shapes and PRE are findings,
+     * this verb's remaining job is to re-measure them and answer the batch.
+     *
+     *   `retired` is VIOLET, gs_poster_ref_sprite_packed_packet() at PRE=1 -- the packet that shipped
+     *     from LANE 9b until rung 5 measured it as drawing nothing at either value of PRE.  It is read
+     *     FIRST because it is the only row that tests the read rather than the GS: its expectation is
+     *     zero by measurement and not by arithmetic, so a violet pixel anywhere says this census is
+     *     reporting something other than the shapes its labels name.
+     *   `regl` is the SDK's dense four-register REGLIST list (cyan) and that plus its corner nudge
+     *     (magenta); `ad` is the same four registers as four single-register AD writes; `tri` is the
+     *     SDK's six-nibble triangle list.  All three landed on every run so far, so each is now a
+     *     positive control: what its absence says is that this verb lost a send, not that the GS
+     *     changed its mind.
+     *   `ship` is RED and BLUE -- gs_poster_packet() itself, the emitter as it now stands, at NLOOP 1
+     *     on each of the two senders.  Their silence was the defect and their landing is its repair,
+     *     so a run in which they do not fill their rects exactly is a run to re-read the image of.
+     *   `batch` is ORANGE, the same emitter with NLOOP 2 in one packet.  It is the open question: the
+     *     recorder's groups are three, twelve and up to four thousand loops long, and nothing measured
+     *     so far says a multi-loop dense group rasterises past its first loop.
+     *
+     * The order of the branches is the order of what they buy: the read's own truth, then the
+     * controls that say the draw half works, then the emitter, then the batch -- because each branch
+     * below the emitter is only quotable if the emitter itself landed. */
+    if (o->sent != 0u) {
+        ps2_kprintf("[GSREAD] page: INCOMPLETE -- %u words the download never touched, so the rows "
+                    "above are not a census of the page\n", (unsigned int)o->sent);
+    } else {
+        const uint32_t regl = (uint32_t)((o->cyan != 0u) | ((o->magenta != 0u) << 1));
+        const uint32_t ad = (uint32_t)(o->yellow != 0u);
+        const uint32_t tri = (uint32_t)(o->green != 0u);
+        const uint32_t retired = (uint32_t)(o->violet != 0u);
+        const uint32_t ship = (uint32_t)((o->red != 0u) | ((o->blue != 0u) << 1));
+        const int red_in_box = (o->red == GSREAD_RED_PX && o->red_box[0] == GSQUAD_X0
+                                && o->red_box[1] == GSQUAD_RED_Y0
+                                && o->red_box[2] == GSQUAD_X1 - 1 && o->red_box[3] == GSQUAD_RED_Y1 - 1);
+        const int blue_in_box = (o->blue == GSREAD_BLUE_PX && o->blue_box[0] == GSQUAD_X0
+                                 && o->blue_box[1] == GSQUAD_BLUE_Y0
+                                 && o->blue_box[2] == GSQUAD_X1 - 1
+                                 && o->blue_box[3] == GSQUAD_BLUE_Y1 - 1);
+
+        if (retired != 0u) {
+            ps2_kprintf("[GSREAD] page: THE READ IS NOT TELLING THE TRUTH -- %u violet pixels, in a "
+                        "box whose shape rung 5 measured as drawing nothing on this GS at either value "
+                        "of PRE.  Nothing on this run is evidence about a packet until the violet "
+                        "count is 0: read the navy/sent/other rows, then the refused row for a shape "
+                        "this verb never sent\n", (unsigned int)o->violet);
+        } else if (ship == 0u) {
+            ps2_kprintf("[GSREAD] page: THE FIXED EMITTER DRAWS NOTHING -- gs_poster_packet() at NLOOP "
+                        "1 leaves no red and no blue anywhere, where CYAN's identical dense shape fills "
+                        "its box.  Either this image does not carry the fix -- make test-ps2-gs-poster "
+                        "asserts the shipped tag against the retired one -- or the defect is below the "
+                        "packet: the environment, the sender, or the GIF->GS path\n");
+        } else if (ship != 3u) {
+            ps2_kprintf("[GSREAD] page: ONE SENDER DELIVERED AND THE OTHER DID NOT (red=%u blue=%u) -- "
+                        "the shape is fine on whichever path landed, so the loss is in the sender the "
+                        "recorded eegs stream rides, not in the format\n",
+                        (unsigned int)o->red, (unsigned int)o->blue);
+        } else if (!red_in_box || !blue_in_box) {
+            ps2_kprintf("[GSREAD] page: THE DRAW LANDS WHERE ITS RECT DOES NOT SAY -- both magic "
+                        "colours are in page 0, but not at the count and corners their own rects name "
+                        "(see the bbox columns).  That is the pitch, the window origin or the scissor, "
+                        "and no verdict below this one can be quoted until it is read\n");
+        } else if ((regl & 1u) == 0u || ad == 0u || tri == 0u) {
+            /* CYAN alone is enough to keep the positive controls alive: MAGENTA differs from it by the
+             * nudge and has its own branch at the bottom, so a run that lost only MAGENTA is a run with
+             * a nudge finding, not a run with a broken verb. */
+            ps2_kprintf("[GSREAD] page: A POSITIVE CONTROL IS EMPTY -- cyan=%u magenta=%u green=%u "
+                        "yellow=%u, and every one of those landed on the run that settled the format.  "
+                        "This verb's own sends are suspect: read the refused row before quoting any "
+                        "count on this page as the GS's answer\n",
+                        (unsigned int)o->cyan, (unsigned int)o->magenta,
+                        (unsigned int)o->green, (unsigned int)o->yellow);
+        } else if (o->orange == GSREAD_ORANGE_PX) {
+            ps2_kprintf("[GSREAD] page: BOTH LOOPS OF THE BATCH DREW -- %u/%u orange px, one tag and "
+                        "two dense SPRITE loops in the same group, so a multi-loop dense REGLIST group "
+                        "rasterises on this GS.  The recorder may ship one group per primitive run, as "
+                        "it does today, and the eegs stream's emptiness is NOT a group-length effect\n",
+                        (unsigned int)o->orange, (unsigned int)GSREAD_ORANGE_PX);
+        } else if (o->orange == GSREAD_ORANGE_ONE) {
+            ps2_kprintf("[GSREAD] page: ONLY THE GROUP'S FIRST LOOP RASTERISED -- %u orange px of %u, "
+                        "i.e. one of the two rects inside one NLOOP 2 tag.  The format is right and the "
+                        "BATCH is not: a loop after the first is dropped somewhere between the tag and "
+                        "the raster, so ps2_gs_rec.c must close its group at every vertex and the "
+                        "recorded stream's triangles are arriving complete and drawing one apiece\n",
+                        (unsigned int)o->orange, (unsigned int)GSREAD_ORANGE_PX);
+        } else if (o->orange == 0u) {
+            ps2_kprintf("[GSREAD] page: THE BATCH DRAWS NOTHING -- no orange px in a box the same "
+                        "emitter fills at NLOOP 1 on both senders.  A two-loop group is inert where a "
+                        "one-loop group lands, which is a third finding and not the second one's: read "
+                        "the bbox columns and the refused row, then the GS's own receipts, before "
+                        "quoting it as why the eegs XMB is empty inside\n");
+        } else {
+            ps2_kprintf("[GSREAD] page: A PARTIAL BATCH -- %u orange px, which is neither the pair of "
+                        "rects (%u) nor one of them (%u) nor none.  Its bbox says which: a count "
+                        "between the two is a rect clipped, not a loop dropped\n",
+                        (unsigned int)o->orange, (unsigned int)GSREAD_ORANGE_PX,
+                        (unsigned int)GSREAD_ORANGE_ONE);
+        }
+
+        /* The nudge, read separately because it is orthogonal to every branch above: cyan and
+         * magenta differ only by the SDK's START_OFFSET/END_OFFSET, so they can disagree while the
+         * group-shape verdict stands.  It is a smaller finding than the shape and a real one: it says
+         * a SPRITE whose edges sit exactly on whole pixels can be the shape that draws nothing. */
+        if (regl == 1u || regl == 2u) {
+            ps2_kprintf("[GSREAD] page: NUDGE -- %s sprite drew and the other did not, so the SDK's "
+                        "-7/+9 corner offsets are what makes a SPRITE rasterise here, independent "
+                        "of the shape answer above\n",
+                        regl == 1u ? "the un-nudged (cyan)" : "the nudged (magenta)");
+        }
+        /* And the triangle, for the same reason: it shares the sprite's tag and format but not its
+         * two-corner loop, so a lone disagreement points at the vertex pipeline rather than at
+         * anything the poster emits. */
+        if (tri != 0u && regl == 0u) {
+            ps2_kprintf("[GSREAD] page: TRIANGLE-DISAGREES -- REGLIST with NREG 6 draws and REGLIST "
+                        "with NREG 4 does not, so the fault is in the two-quadword sprite group "
+                        "itself, not in the format the recorder would have to adopt\n");
+        }
+        /* Orthogonal to every branch above and worth its own row even now: ink below the text rows in
+         * a class this verb does not own.  The branches read the colours they name; this one reads the
+         * page that is not navy, which is what a texture write, a second canvas or another task's
+         * upload would look like. */
+        if (o->below_other != 0u) {
+            ps2_kprintf("[GSREAD] page: FOREIGN INK -- %u pixels below the text rows are none of the "
+                        "nine classes this verb draws or clears (first=0x%08x at %d,%d..%d,%d).  "
+                        "Whatever verdict is printed above was reached on the named colours only\n",
+                        (unsigned int)o->below_other, (unsigned int)o->first_below,
+                        o->below_box[0], o->below_box[1], o->below_box[2], o->below_box[3]);
+        }
+    }
+}
+
+static void ps2_gsread_probe(void)
+{
+    static uint64_t s_pkt[2u * GS_POSTER_QWC(2u)] __attribute__((aligned(16)));
+    /* rung 4's controls and rung 5's retired shape share one buffer, and may: each is sent before the
+     * next is built, and ps2_gs_gif_send() spins until its own transfer is done.  Sized by the longest
+     * of the shapes -- the AD packet and the retired PACKED control are both five quadwords, the dense
+     * sprite three and the triangle four -- so no control can be handed a buffer shorter than its
+     * packet.  s_pkt is sized by the batch, which is the longest thing this verb builds. */
+    static uint64_t s_ref[2u * GS_REF_AD_QWC] __attribute__((aligned(16)));
+    static uint32_t s_buf[GSREAD_W * GSREAD_H] __attribute__((aligned(16)));
+    const uint32_t n = (uint32_t)GSREAD_W * (uint32_t)GSREAD_H;
+    gs_poster_rect r;
+    gs_poster_rect ora[2];
+    gs_draw_env env;
+    gsread_strip_t red, blue, ctrl;
+    gsread_page_t page;
+    uint32_t *page_buf = 0;
+    uint32_t navy;
+    uint32_t ref_refused = 0u;   /* bit 1 cyan, 2 magenta, 4 GREEN, 8 yellow, 16 ORANGE, 32 VIOLET */
+    uint32_t ora_dropped = 0u;   /* rects gs_poster_packet() refused out of the NLOOP 2 batch */
+    int32_t tri[6];
+    int32_t qw;
+
+    /* Rung 1's ordering law, inherited whole: this clear is the last full-canvas upload the verb
+     * allows itself, and it comes before the draws. */
+    ps2_gs_text_clear();
+
+    /* The control's expectation: the canvas's own word at the strip's centre, taken after the clear
+     * and before anything is drawn into the canvas -- i.e. the exact word the flush below uploads. */
+    navy = ps2_gs_get_framebuffer()[(uint32_t)(GSREAD_CTRL_Y + GSREAD_H / 2)
+                                    * (uint32_t)PS2_SCREEN_WIDTH
+                                    + (uint32_t)(GSREAD_X + GSREAD_W / 2)];
+
+    r.x0 = GSREAD_X;   r.y0 = GSQUAD_RED_Y0;
+    r.x1 = GSQUAD_X1;  r.y1 = GSQUAD_RED_Y1;
+    ps2_stage1_gs_env(&env);
+
+    /* Two lines and one line, deliberately: the console is 100 columns x 16-px rows, the page's text
+     * is censused as text only above GSREAD_TEXT_ROWS (row 9 = y 144), and the pre-draw prompt, the
+     * three strip rows and these three together fill eight of those nine rows.  A third intro line
+     * would put ink at y 144..159 -- inside the RED rect's own rows, in the one bucket the fork
+     * reads -- so the post-fix wording is compressed rather than grown.  What it says is also shorter
+     * now: the shape question that took three rungs to split is a finding, and this run asks one
+     * question of the emitter it replaced. */
+    ps2_kprintf("[GSREAD] draws the shipping emitter 2x NLOOP 1 (RED sync, BLUE ring) + once at\n");
+    ps2_kprintf("[GSREAD] NLOOP 2 (ORANGE), 4 SDK refs, VIOLET=retired shape (want 0), 3 strips.\n");
+
+    qw = gs_poster_packet(&r, 1u, GSQUAD_RED, s_pkt, gs_poster_qwc(1u));
+    if (qw < 0) {
+        ps2_kprintf("[GSREAD] the emitter refused the RED rect: nothing was drawn, nothing is read\n");
+        return;
+    }
+    if (ps2_gs_draw_env_apply(&env) != 0) {
+        ps2_kprintf("[GSREAD] the environment was refused: no draw page, so nothing is read\n");
+        return;
+    }
+
+    /* rung 3's buffer, asked for HERE rather than at the census: Imalloc() prints a [HEAP] row for a
+     * block over its own 96 kB threshold, and a print between a draw and its read is the failure mode
+     * this verb exists to avoid.  It is freed at every exit below for the same reason in reverse --
+     * the free prints too, and only once the reads are done does that stop mattering. */
+    page_buf = (uint32_t *)Imalloc((size_t)GSREAD_BAND_QWC * 16u);
+
+    /* The last row before the reads.  After this it is draws, then reads, then the census rows -- and
+     * the reason to be strict is this verb's own failure mode: an upload that follows a draw erases
+     * it, so a census printed too early would read back its own prompt and report the page as navy. */
+    ps2_kprintf("[GSREAD] sends RED sync, BLUE ring, CYAN/MAG/GREEN/YEL/VIO/ORANGE sync; no print\n");
+
+    ps2_gs_gif_send(s_pkt, (uint32_t)qw);
+
+    r.y0 = GSQUAD_BLUE_Y0;
+    r.y1 = GSQUAD_BLUE_Y1;
+    qw = gs_poster_packet(&r, 1u, GSQUAD_BLUE, s_pkt, gs_poster_qwc(1u));
+    if (qw < 0) {
+        ps2_kprintf("[GSREAD] the emitter refused the BLUE rect: reading RED and the control only\n");
+    } else if (ps2_gif_post(s_pkt, (uint32_t)qw) != 0) {
+        ps2_kprintf("[GSREAD] the ring refused the BLUE packet (ring full)\n");
+    } else {
+        (void)ps2_gif_drain();
+        (void)ps2_gif_reap();
+    }
+
+    /* ── the four SDK-shaped controls, the batch and the retired shape, one variable each ────────
+     *
+     * CYAN is the SDK's sprite tag and dense stride with this port's own corner words; MAGENTA is
+     * CYAN plus the SDK's -7/+9 sprite nudge; GREEN is the SDK's three-vertex list at the plain page
+     * offset; YELLOW is the same four registers delivered as four AD writes, the shape this port's own
+     * console uploads use.  All four drew on every run that measured them, which is why they are still
+     * sent: a census is only as trustworthy as the rows that agree with what is already known.  They go
+     * out the SYNCHRONOUS sender because the sender was rung 1's variable and rung 3 answered it --
+     * neither sender delivered the shape of the day -- so re-varying it here would confound the
+     * variable that is open now.
+     *
+     * ORANGE is that variable.  It is gs_poster_packet(), the emitter as it ships, with TWO rects in
+     * one group instead of one: one tag, NLOOP 2, four dense quadwords.  RED and BLUE are the same call
+     * at NLOOP 1, and they are expected to land now, so ORANGE's count is a reading about loop count
+     * and nothing else -- and the recorder's groups are three, twelve and up to four thousand loops
+     * long, which is the thing this run cannot infer from any of the others.
+     *
+     * VIOLET is the packet that used to ship, kept as the instrument's negative control: PRE=1 over
+     * four sparse quadwords, which rung 5 measured as drawing nothing at either value of PRE.  Its box
+     * is the 16-pixel gutter CYAN and MAGENTA leave between them, and any pixel that comes back from it
+     * is a finding about this read rather than about the GS.
+     *
+     * The geometry is a compile-time constant, so a refusal here is this verb's own bug and not the
+     * GS's; it is counted in a mask and said AFTER the reads, because a print inside this window
+     * repaints its own row and would erase the draw above it -- the failure mode rung 1's ordering
+     * law exists to keep out. */
+    r.x0 = GSREF_CYA_X0; r.y0 = GSREF_Y0;
+    r.x1 = GSREF_CYA_X1; r.y1 = GSREF_Y1;
+    qw = gs_poster_ref_sprite_packet(&r, GSQUAD_CYAN, 0u, s_ref, GS_REF_SPRITE_QWC);
+    if (qw < 0) ref_refused |= 1u;
+    else ps2_gs_gif_send(s_ref, (uint32_t)qw);
+
+    r.x0 = GSREF_MAG_X0; r.x1 = GSREF_MAG_X1;
+    qw = gs_poster_ref_sprite_packet(&r, GSQUAD_MAGENTA, 1u, s_ref, GS_REF_SPRITE_QWC);
+    if (qw < 0) ref_refused |= 2u;
+    else ps2_gs_gif_send(s_ref, (uint32_t)qw);
+
+    /* Six separate stores, not an initializer list: this TU is -mhard-float and a bulk copy of a
+     * local aggregate is the shape that has put sdc1/ldc1 -- illegal on the R5900 -- into the image.
+     * The same law covers the field-by-field fills below, including the two-rect batch's.  The base
+     * corners are GSREF_Y1-1 and the apex GSREF_Y0, so the enclosed area the census reads against
+     * GSREAD_GREEN_PX is 160 x 45 / 2. */
+    tri[0] = GSREF_TRI_X0;  tri[1] = GSREF_Y1 - 1;
+    tri[2] = GSREF_TRI_X2;  tri[3] = GSREF_Y1 - 1;
+    tri[4] = GSREF_TRI_X1;  tri[5] = GSREF_Y0;
+    qw = gs_poster_ref_tri_packet(tri, GSQUAD_GREEN, s_ref, GS_REF_TRI_QWC);
+    if (qw < 0) ref_refused |= 4u;
+    else ps2_gs_gif_send(s_ref, (uint32_t)qw);
+
+    /* YELLOW's rect is the right-hand strip of the same row band, and its four VALUES are CYAN's to
+     * the bit -- the corners come from the same helper and the colour from the same canvas word -- so
+     * a census that has CYAN and YELLOW disagreeing is a statement about the register list's shape
+     * and nothing else.  Its expected count is CYAN's: 160 x 46, un-nudged, at 608..767 x 544..589. */
+    r.x0 = GSREF_YEL_X0; r.x1 = GSREF_YEL_X1;
+    qw = gs_poster_ref_sprite_ad_packet(&r, GSQUAD_YELLOW, 0u, s_ref, GS_REF_AD_QWC);
+    if (qw < 0) ref_refused |= 8u;
+    else ps2_gs_gif_send(s_ref, (uint32_t)qw);
+
+    /* VIOLET, and the one draw on this page whose answer is known in advance.  The `pre` argument is
+     * 1, i.e. the packet exactly as LANE 9b shipped it; with 0 this call would rebuild the packet rung
+     * 5 also measured as inert, and one negative control per retired shape is enough for a census. */
+    r.x0 = GSREF_VIO_X0; r.x1 = GSREF_VIO_X1;
+    qw = gs_poster_ref_sprite_packed_packet(&r, GSQUAD_VIOLET, 1u, s_ref, GS_REF_PACKED_QWC);
+    if (qw < 0) ref_refused |= 32u;
+    else ps2_gs_gif_send(s_ref, (uint32_t)qw);
+
+    /* ORANGE last among the draws, and through the shipping emitter rather than a reference builder --
+     * which is the point: what this verb sends is what the poster and the recorder send.  A dropped
+     * rect is read off gs_poster_dropped() the instant the packet is built, because that counter is
+     * cleared by the next call and a batch the GS never saw would otherwise be censused as a batch the
+     * GS refused. */
+    ora[0].x0 = GSREF_ORA_X0; ora[0].y0 = GSREF_Y0;
+    ora[0].x1 = GSREF_ORA_SPLIT; ora[0].y1 = GSREF_Y1;
+    ora[1].x0 = GSREF_ORA_SPLIT; ora[1].y0 = GSREF_Y0;
+    ora[1].x1 = GSREF_ORA_X1; ora[1].y1 = GSREF_Y1;
+    qw = gs_poster_packet(ora, 2u, GSQUAD_ORANGE, s_pkt, gs_poster_qwc(2u));
+    ora_dropped = gs_poster_dropped();
+    if (qw < 0) ref_refused |= 16u;
+    else ps2_gs_gif_send(s_pkt, (uint32_t)qw);
+
+    ps2_gsread_strip("red",  GSREAD_RED_Y,  GSQUAD_RED,  s_buf, n, &red);
+    ps2_gsread_strip("blue", GSREAD_BLUE_Y, GSQUAD_BLUE, s_buf, n, &blue);
+    ps2_gsread_strip("ctrl", GSREAD_CTRL_Y, navy,        s_buf, n, &ctrl);
+
+    if (ctrl.err != GS_READ_BUS_OK) {
+        ps2_kprintf("[GSREAD] verdict: NO EVIDENCE -- the control read failed, so nothing here is known\n");
+        if (page_buf) Ifree(page_buf);
+        return;
+    }
+    if (ctrl.match != n) {
+        /* Said out loud, because every verdict below would otherwise be inferred from a census this
+         * row has already disqualifed. */
+        ps2_kprintf("[GSREAD] verdict: UNTRUSTED -- control is not the canvas (match=%u/%u",
+                    (unsigned int)ctrl.match, (unsigned int)n);
+        if (ctrl.sent == n)      ps2_kprintf(", the download wrote NOTHING");
+        else if (ctrl.first_other == 0u) ps2_kprintf(", it reads ZERO: the GS returned no data");
+        else                     ps2_kprintf(", first other=0x%08x", (unsigned int)ctrl.first_other);
+        ps2_kprintf(")\n");
+        if (page_buf) Ifree(page_buf);
+        return;
+    }
+
+    /* Said here rather than among the draws, because by now there is nothing left for a print to
+     * erase.  A non-zero mask means this verb built a shape it could not send, so the census's zero
+     * for that colour is this file's bug and not the GS's answer -- the one reading of a `refs` row
+     * that would otherwise be mistaken for "that shape does not land either".  ORANGE's `dropped` rides
+     * the same row because it does the same job the other way round: a non-zero count there means the
+     * emitter kept a rect out of the batch, so a 920 px census is one rect refusing to be a square and
+     * NOT the group's second loop failing to rasterise -- the reading this verb exists to make. */
+    if (ref_refused || ora_dropped) {
+        ps2_kprintf("[GSREAD] refs: refused%s%s%s%s%s%s orange dropped=%u -- NOT a GS answer\n",
+                    (ref_refused & 1u) ? " CYAN" : "",
+                    (ref_refused & 2u) ? " MAGENTA" : "",
+                    (ref_refused & 4u) ? " GREEN" : "",
+                    (ref_refused & 8u) ? " YELLOW" : "",
+                    (ref_refused & 16u) ? " ORANGE" : "",
+                    (ref_refused & 32u) ? " VIOLET" : "",
+                    (unsigned int)ora_dropped);
+    }
+
+    /* rung 3, and only now: the page walk is worthless until the control has proved the read is
+     * reading the canvas, and it is worthless twice over if a strip refused -- the strips are the
+     * cheap look at where the rects claim to be, the bands are the expensive look at everywhere
+     * else, and both go through the same channel with the same preconditions. */
+    if (page_buf) gsread_page_census(page_buf, navy, &page);
+    else ps2_kprintf("[GSREAD] page: SKIPPED -- the pool refused the %u kB band\n",
+                     (unsigned int)((GSREAD_BAND_QWC * 16u) / 1024u));
+
+    /* The strips' own answer, and it is the cheap one: three 64x16 windows at one x, inside RED, inside
+     * BLUE, and below both.  Their expectations flipped with the format fix -- both colours are what a
+     * repaired emitter owes this run -- so what each branch can still say is which SENDER delivered,
+     * which is the column the recorder's ring lives on.  The navy control outranks all of it: a census
+     * whose control is not the canvas is not evidence about anything. */
+    if (red.err == GS_READ_BUS_OK && red.match == n &&
+        blue.err == GS_READ_BUS_OK && blue.match == n) {
+        ps2_kprintf("[GSREAD] verdict: BOTH strips full -- the dense emitter rasterised on the "
+                    "synchronous sender AND on the LANE 10 ring, so the emptiness is in the stream's "
+                    "content and the open page question is ORANGE's loop count\n");
+    } else if (red.err == GS_READ_BUS_OK && red.match == n) {
+        ps2_kprintf("[GSREAD] verdict: RED only -- the synchronous sender delivered the dense group, "
+                    "the LANE 10 ring did not reach the strip, and the recorded stream rides that ring\n");
+    } else if (blue.err == GS_READ_BUS_OK && blue.match == n) {
+        ps2_kprintf("[GSREAD] verdict: BLUE only -- the ring delivered and the synchronous sender did "
+                    "not, which is the reverse of what this port's console uploads do\n");
+    } else {
+        ps2_kprintf("[GSREAD] verdict: NEITHER strip holds its colour, though the navy control does, so "
+                    "the read works -- the page rows above are what say whether the dense emitter landed "
+                    "somewhere else or nowhere at all\n");
+    }
+
+    /* Last, because the free prints ([HEAP] again, over the same threshold) and a print after the
+     * reads is only harmless once there is nothing left to erase. */
+    if (page_buf) Ifree(page_buf);
+}
+
+/* ── LANE 19 rung 7: which field-role model does this GS's ALPHA register implement? ──────────
+ *
+ * The blackout rung 6 could not explain is a blend question, and rung 6 cannot even see it: every
+ * control through rung 6 is ABE=0, and a blended fragment whose equation collapses to `+ color3(=Cd)`
+ * writes the destination's own word back -- indistinguishable, on a page-vs-canvas read, from a
+ * fragment that never arrived.  So `diff_all=0` surviving the CTXT fix is exactly what a no-op ALPHA
+ * register predicts, and it is also what the cover-after-send burial predicts.  This probe picks
+ * between them at the register itself.
+ *
+ * The one encoding, two readings.  gs_pack_alpha(a,b,c,d,fix) puts a->ALPHA[1:0], b->[3:2], c->[5:4],
+ * d->[7:6], fix->[39:32] -- the packing ps2sdk's GS_SET_ALPHA does too, verbatim.  What is in dispute
+ * is what those fields MEAN:
+ *
+ *   the port/ps2sdk header reading -- `result = (a - b) * sel(c) + d`, with `sel(c)` picking As/Ad/FIX
+ *     out of field C[5:4].  The live env's word (CS,CD,AS,CD,fix=0) is then (Cs-Cd)*As+Cd, i.e. a
+ *     visible source-over IF the vertex alpha reaches the blender.
+ *   the hardware-manual reading -- `result = (b - c) * sel(a) + d`, with `sel(a)` picking the alpha
+ *     MULTIPLIER out of field A[1:0].  The SAME word is then a=0 -> FIX, and the env's fix is 0, so
+ *     (Cd-Cs)*0+Cd = Cd -- the fragment paints the destination back and leaves no trace.
+ *
+ * Three boxes decide it, all with the same opaque source colour, so only the ALPHA word varies:
+ *
+ *   Z  ABE=0, any ALPHA -- the reference.  Must paint the source exactly; if it does not, this run
+ *      measured nothing and every row below is a SKIP.
+ *   P  ABE=1, the LIVE word gs_pack_alpha(CS,CD,AS,CD,0) -- the register eegs_present.c actually ships.
+ *   H  ABE=1, the hardware-order word gs_pack_alpha(3,0,1,1,128) -- the src-over the manual writes.
+ *
+ * Read the pixels: P back as the destination (navy) says the hardware reading holds and the live env
+ * is the bug; P a colour that is neither source nor destination says the port reading holds and the
+ * live env is innocent, moving the search to the cover-after-send burial.  H confirms the fix paints. */
+static void ps2_gsalpha_probe(void)
+{
+    static uint64_t s_pkt[2u * GS_REF_SPRITE_QWC] __attribute__((aligned(16)));
+    static uint32_t s_buf[GSALPHA_BW * (GSALPHA_Y1 - GSALPHA_Y0)] __attribute__((aligned(16)));
+    const uint32_t cs = GSALPHA_CS;        /* opaque green source, the one place the word is spelled */
+    const uint32_t src_alpha = GSALPHA_AS; /* mid As: the blend's multiplier operand, not a stray A byte */
+    const uint32_t cs_stored = (src_alpha << 24) | (cs & 0x00ffffffu);
+    /* The word an UNBLENDED fragment leaves in CT32: the renderer writes the fragment's RGBAQ
+     * straight out, so the destination's alpha byte becomes the fragment's own `src_alpha`.  Comparing
+     * the raw source (`cs`, A=00) would count every unblended pixel as a blend; this is the exact word
+     * the reference box must come back as. */
+    const uint32_t bw = GSALPHA_BW, bh = (uint32_t)(GSALPHA_Y1 - GSALPHA_Y0);
+    const uint32_t n = bw * bh;
+    gs_poster_rect r;
+    gs_draw_env env;
+    uint32_t dest;
+    uint32_t z_navy, z_cs, z_blend, p_navy, p_cs, p_blend, h_navy, h_cs, h_blend;
+    uint32_t first_p_blend = 0u, first_h_blend = 0u;
+    int trusted = 1;
+    int32_t qw;
+
+    /* The destination the blender reads is whatever is in the frame buffer at the box before the draw
+     * -- here the canvas this verb uploads last, so the honest word to compare against is the canvas's
+     * own centre pixel, taken after the clear and before anything is drawn. */
+    ps2_gs_text_clear();
+    dest = ps2_gs_get_framebuffer()[(uint32_t)(GSALPHA_Y0 + GSALPHA_Y1) / 2u
+                                    * (uint32_t)PS2_SCREEN_WIDTH + GSALPHA_Z_X0 + (int)(bw / 2u)];
+
+    ps2_kprintf("[GSALPHA] three 40x40 boxes at y=%d..%d, dest=0x%08x, src=0x%08x As=0x%02x\n",
+                GSALPHA_Y0, GSALPHA_Y1 - 1, (unsigned int)dest, (unsigned int)cs,
+                (unsigned int)src_alpha);
+    ps2_kprintf("[GSALPHA] Z=ABE0 ref  P=ABE1 live-word  H=ABE1 hardware-word; navy=write-back, "
+                "blend=real mix\n");
+
+    /* Each box: program the env (its reg_alpha is the variable), draw one sprite, drain the ring so the
+     * env+draw land in FIFO order and the read's idle precondition holds, then census the box.  The
+     * draws go out the ring (ps2_gif_post) rather than the synchronous sender because the ENV rides the
+     * same ring; keeping both on it is what makes "env before its draw" a property of the FIFO instead
+     * of a hope about two senders. */
+    r.y0 = GSALPHA_Y0; r.y1 = GSALPHA_Y1;
+
+    /* Z -- ABE=0 reference, under the live word (ABE=0 ignores it, so this also proves that claim). */
+    r.x0 = GSALPHA_Z_X0; r.x1 = GSALPHA_Z_X0 + (int)bw;
+    ps2_stage1_gs_env(&env);
+    env.reg_alpha = gs_pack_alpha(GS_BLEND_CS, GS_BLEND_CD, GS_ALPHA_AS, GS_BLEND_CD, 0u);
+    qw = gs_poster_ref_sprite_blend_packet(&r, cs, src_alpha, 0u, s_pkt, GS_REF_SPRITE_QWC);
+    if (qw < 0 || ps2_gs_draw_env_apply(&env) != 0 || ps2_gif_post(s_pkt, (uint32_t)qw) != 0) {
+        trusted = 0;
+    } else {
+        (void)ps2_gif_drain();
+        (void)ps2_gif_reap();
+    }
+
+    /* P -- ABE=1 under the word the shipping environment programs. */
+    r.x0 = GSALPHA_P_X0; r.x1 = GSALPHA_P_X0 + (int)bw;
+    if (trusted) {
+        qw = gs_poster_ref_sprite_blend_packet(&r, cs, src_alpha, 1u, s_pkt, GS_REF_SPRITE_QWC);
+        if (qw < 0 || ps2_gs_draw_env_apply(&env) != 0 || ps2_gif_post(s_pkt, (uint32_t)qw) != 0)
+            trusted = 0;
+        else { (void)ps2_gif_drain(); (void)ps2_gif_reap(); }
+    }
+
+    /* H -- ABE=1 under the hardware-order src-over word (multiplier As in [1:0], FIX=128). */
+    r.x0 = GSALPHA_H_X0; r.x1 = GSALPHA_H_X0 + (int)bw;
+    if (trusted) {
+        env.reg_alpha = gs_pack_alpha(3u, 0u, 1u, 1u, 128u);
+        qw = gs_poster_ref_sprite_blend_packet(&r, cs, src_alpha, 1u, s_pkt, GS_REF_SPRITE_QWC);
+        if (qw < 0 || ps2_gs_draw_env_apply(&env) != 0 || ps2_gif_post(s_pkt, (uint32_t)qw) != 0)
+            trusted = 0;
+        else { (void)ps2_gif_drain(); (void)ps2_gif_reap(); }
+    }
+
+    if (!trusted) {
+        ps2_kprintf("[GSALPHA] SKIP: a draw or the environment was refused, so the boxes are not all "
+                    "on the bus -- nothing here names the ALPHA model\n");
+        return;
+    }
+
+    /* Census each box into destination / source / blend.  A pixel neither navy nor the source colour is
+     * a real mix -- which is the whole answer, so the first one of those is kept for the row. */
+    z_navy = z_cs = z_blend = p_navy = p_cs = p_blend = h_navy = h_cs = h_blend = 0u;
+
+    r.x0 = GSALPHA_Z_X0;
+    (void)ps2_gs_vram_read(r.x0, GSALPHA_Y0, (int)bw, (int)bh, s_buf);
+    if (ps2_gs_vram_read_err() != GS_READ_BUS_OK) { trusted = 0; }
+    else {
+        uint32_t i;
+        for (i = 0u; i < n; i++) {
+            if (s_buf[i] == dest) z_navy++;
+            else if (s_buf[i] == cs_stored) z_cs++;
+            else z_blend++;
+        }
+    }
+
+    r.x0 = GSALPHA_P_X0;
+    if (trusted) (void)ps2_gs_vram_read(r.x0, GSALPHA_Y0, (int)bw, (int)bh, s_buf);
+    if (trusted && ps2_gs_vram_read_err() != GS_READ_BUS_OK) { trusted = 0; }
+    else if (trusted) {
+        uint32_t i;
+        for (i = 0u; i < n; i++) {
+            if (s_buf[i] == dest) p_navy++;
+            else if (s_buf[i] == cs_stored) p_cs++;
+            else { if (p_blend == 0u) first_p_blend = s_buf[i]; p_blend++; }
+        }
+    }
+
+    r.x0 = GSALPHA_H_X0;
+    if (trusted) (void)ps2_gs_vram_read(r.x0, GSALPHA_Y0, (int)bw, (int)bh, s_buf);
+    if (trusted && ps2_gs_vram_read_err() != GS_READ_BUS_OK) { trusted = 0; }
+    else if (trusted) {
+        uint32_t i;
+        for (i = 0u; i < n; i++) {
+            if (s_buf[i] == dest) h_navy++;
+            else if (s_buf[i] == cs_stored) h_cs++;
+            else { if (h_blend == 0u) first_h_blend = s_buf[i]; h_blend++; }
+        }
+    }
+
+    if (!trusted) {
+        ps2_kprintf("[GSALPHA] SKIP: a page read failed -- the tallies are not a picture\n");
+        return;
+    }
+
+    ps2_kprintf("[GSALPHA] Z ref : dest=%u src=%u blend=%u /%u\n",
+                (unsigned int)z_navy, (unsigned int)z_cs, (unsigned int)z_blend, (unsigned int)n);
+    ps2_kprintf("[GSALPHA] P live: dest=%u src=%u blend=%u first_blend=0x%08x /%u\n",
+                (unsigned int)p_navy, (unsigned int)p_cs, (unsigned int)p_blend,
+                (unsigned int)first_p_blend, (unsigned int)n);
+    ps2_kprintf("[GSALPHA] H hw  : dest=%u src=%u blend=%u first_blend=0x%08x /%u\n",
+                (unsigned int)h_navy, (unsigned int)h_cs, (unsigned int)h_blend,
+                (unsigned int)first_h_blend, (unsigned int)n);
+
+    if (z_cs != n) {
+        /* The reference did not paint, so the run measured no pipeline at all. */
+        ps2_kprintf("[GSALPHA] SKIP: the ABE=0 reference is not solid source (src=%u/%u) -- the box never "
+                    "reached the page, so the blend rows say nothing about the GS\n",
+                    (unsigned int)z_cs, (unsigned int)n);
+        return;
+    }
+
+    /* The reference proves the geometry and the read, so the fork on P is a statement about the ALPHA
+    ** register and nothing else. */
+    if (p_navy == n) {
+        ps2_kprintf("[GSALPHA] verdict: HARDWARE FIELD ROLES. The live word writes the destination back "
+                    "(P is dest everywhere), so the port's gs_pack_alpha(CS,CD,AS,CD,fix=0) is a NO-OP and "
+                    "is the blackout -- a blended fragment paints Cd and looks like no fragment to rung 6. ");
+        if (h_blend > 0u && h_navy == 0u)
+            ps2_kprintf("H blends (%u px) -> the fix is gs_pack_alpha(3,0,1,1,128) at eegs_present.c:457.\n",
+                        (unsigned int)h_blend);
+        else
+            ps2_kprintf("H blend=%u dest=%u -- the fix word did NOT blend either, so re-read the "
+                        "As path before shipping anything.\n",
+                        (unsigned int)h_blend, (unsigned int)h_navy);
+    } else if (p_blend > 0u) {
+        ps2_kprintf("[GSALPHA] verdict: PORT FIELD ROLES. The live word blends (P has %u mixed px, none "
+                    "left as dest), so eegs_present.c:457 is NOT the blackout -- the stream reaches a real "
+                    "pixel and the emptiness must be the cover re-upload after send (core_ps2.c:1456) or a "
+                    "prim state no rung varied. Run the re-send probe next.\n",
+                    (unsigned int)p_blend);
+    } else if (p_cs == n) {
+        ps2_kprintf("[GSALPHA] verdict: ABE had no effect -- P is solid source like the reference, so the "
+                    "blend stage was bypassed; the ALPHA register is not on this path and the blackout is "
+                    "elsewhere.\n");
+    } else {
+        ps2_kprintf("[GSALPHA] verdict: MIXED -- P is %u dest / %u src / %u blend, which no single model "
+                    "predicts; read the words against the tallies before believing this run.\n",
+                    (unsigned int)p_navy, (unsigned int)p_cs, (unsigned int)p_blend);
+    }
+}
+
+/* ── LANE 19 rung 8: `gstex`, the texture-stage discriminator ─────────────────────────────
+ *
+ * One textured SPRITE over a plane whose every texel is one known colour, with a white vertex, read
+ * back on the headless Stage-1 path.  A WHITE vertex makes the CT32 modulate `out = vertex * texel`
+ * collapse to `out = texel`, so the box comes back the plane's colour if the sampler ran.  If it did
+ * not, the failure is NOT one symptom: an ignored sampler lays the WHITE vertex -- a visible pixel,
+ * which is NOT the XMB's symptom -- while only a discarded fragment lays nothing and holds its
+ * destination, and that (the `dest` fork below) is the [GSLIVE] shape rung 6 saw.  This probe
+ * distinguishes the outcomes; it does not assume which one the app is hitting.
+ *
+ * Three boxes, run in the same env rung 7 proved delivers a flat sprite:
+ *   U  UNTEXTURED opaque green -- the positive.  This is rung 4's CYAN shape; if it fails to paint, the
+ *      run measured no geometry and neither textured row is evidence.
+ *   R  TEXTURED white-over-RED  plane.
+ *   B  TEXTURED white-over-BLUE plane.  R and B carrying DIFFERENT colours is the control against the
+ *      sampler being silently ignored: two matching results would say the box is the vertex, not the
+ *      page, whatever single colour the plane held.
+ *
+ * Each plane is 64x64 and filled UNIFORMLY, so the texel coordinate the sprite samples cannot matter --
+ * any coordinate inside, or wrapping through CLAMP/REPEAT, reads the one colour.  That makes this read
+ * a clean statement about whether TME/TEX0 sampling happens at all, and not about ST arithmetic, which
+ * a FST=0 sprite would otherwise make it.  A textured plane that reads its colour -> texturing works and
+ * the blackout is upstream (the colours the app feeds into RGBAQ, or geometry); a textured plane that
+ * reads white -> the sampler is bypassed; black -> the page read as zero (an upload-vs-TEX0 format
+ * mismatch); navy (its destination) -> the fragment was discarded, which is the [GSLIVE] symptom.
+ *
+ * The planes go up through gs_tex_register()'s installed sink (a synchronous Host->Local image stream
+ * on DMAC channel 2, the same path the app's atlas uses), BEFORE the env is applied, so "the page is
+ * filled before a primitive samples it" is a property of this order and not a hope about two senders. */
+/* A textured SPRITE that carries its OWN texture state, not just the environment's.
+ *
+ * The first version of this probe put TEX0/TEX1/CLAMP only in the drawing environment and got the
+ * WHITE vertex back -- the sampler never latched.  That is exactly what the recorder does NOT do:
+ * eegs_texture() sends the three registers as a mid-stream AD group (gs_rec_ad) and ps2_gs_tex.c's
+ * header states the law plainly -- "a texture switch is a mid-stream state write; TEX0 cannot live
+ * only [in the environment]."  A GS texture-page/CLUT cache is reloaded on the register write that
+ * names a new TBA, and an env write that precedes a PRIM by a full DMA may sit in the wrong cache
+ * state, so a TEXFLUSH is what forces the sampler to read the page a draw is about to name.  This
+ * builder therefore emits, in ONE transfer:
+ *   an AD group writing CLAMP_1 / TEX0_1 / TEX1_1 / TEXFLUSH, then
+ *   a PRE=1 REGLIST sprite loop (RGBAQ, ST, XYZ2, XYZ2) over that plane.
+ * Keeping the state and the draw in one posted buffer is what makes "the page is named before the
+ * primitive samples it" a property of this FIFO order and not a hope. */
+#define GS8_PACKET_QW 8u    /* 5 for the AD group (tag pair + four register pairs), 3 for the sprite */
+
+static int32_t gs8_textured_sprite(const gs_poster_rect *r, uint32_t vertex, const gs_tex_t *t,
+                                   uint64_t *qw, uint32_t cap_qw)
+{
+    /* TME=1, ABE=0 (opaque), CTXT=0 (the _1 context these three AD writes program).  PRE=1 carries
+     * this PRIM in the tag so the register list is exactly the four that pack into two dense
+     * quadwords: RGBAQ, ST, XYZ2, XYZ2 -- a sprite kicks on its second XYZ2. */
+    const uint64_t prim = gs_pack_prim(GS_OP_SPRITE, 0u, 1u, 0u, 0u, 0u);
+    static const uint32_t ad_regs[1] = { GS_NIB_AD };
+    static const uint32_t sp_regs[4] = { GS_NIB_RGBAQ, GS_NIB_ST, GS_NIB_XYZ2, GS_NIB_XYZ2 };
+    uint64_t *c = qw;
+
+    if (r == 0 || qw == 0 || t == 0) return -1;
+    if (cap_qw < GS8_PACKET_QW) return -1;
+    if (r->x1 <= r->x0 || r->y1 <= r->y0 || r->x0 < 0 || r->y0 < 0) return -1;
+
+    /* AD group: NLOOP 4, one register each, EOP clear (the sprite loop follows in this same DMA). */
+    *c++ = gs_pack_giftag(4u, 0u, 0u, 0u, GS_FLG_PACKED, 1u);
+    *c++ = gs_pack_regs(ad_regs, 1u);
+    c = gs_pack_pair(c, t->clamp,  GS_GP_CLAMP_1);
+    c = gs_pack_pair(c, t->tex0,   GS_GP_TEX0_1);
+    c = gs_pack_pair(c, t->tex1,   GS_GP_TEX1_1);
+    c = gs_pack_pair(c, 1u,        GS_GP_TEXFLUSH);
+
+    /* The sprite loop, EOP ends the whole transfer. */
+    *c++ = gs_pack_giftag(1u, 1u, 1u, prim, GS_FLG_REGLIST, 4u);
+    *c++ = gs_pack_regs(sp_regs, 4u);
+    *c++ = gs_pack_rgbaq(vertex & 0xFFu, (vertex >> 8) & 0xFFu,
+                         (vertex >> 16) & 0xFFu, (vertex >> 24) & 0xFFu, GS_Q_ONE);
+    *c++ = gs_pack_st(32.0f, 32.0f);
+    *c++ = gs_pack_xyz2(gs_vertex_coord16(r->x0), gs_vertex_coord16(r->y0), 0u);
+    *c++ = gs_pack_xyz2(gs_vertex_coord16(r->x1), gs_vertex_coord16(r->y1), 0u);
+
+    return (int32_t)(c - qw) / 2;   /* GIF quadwords, the unit ps2_gif_post takes */
+}
+
+static void ps2_gstex_probe(void)
+{
+    static uint64_t s_pkt[2u * GS8_PACKET_QW] __attribute__((aligned(16)));
+    static uint32_t s_buf[GS8_BW * (GS8_Y1 - GS8_Y0)] __attribute__((aligned(16)));
+    static uint32_t s_plane_r[GS8_PLANE * GS8_PLANE] __attribute__((aligned(16)));
+    static uint32_t s_plane_b[GS8_PLANE * GS8_PLANE] __attribute__((aligned(16)));
+    gs_poster_rect r;
+    gs_draw_env env;
+    const gs_tex_t *tr, *tb;
+    const uint32_t bw = GS8_BW, bh = (uint32_t)(GS8_Y1 - GS8_Y0);
+    const uint32_t n = bw * bh;
+    const uint32_t red_low = GSQUAD_RED & 0x00ffffffu,
+                   blue_low = GSQUAD_BLUE & 0x00ffffffu, white_low = 0x00ffffffu;
+    uint32_t dest;
+    uint32_t i, u_green, r_plane, r_white, r_black, r_dest, b_plane, b_white, b_black, b_dest, b_other;
+    uint32_t first_b_other = 0u;
+    int trusted = 1;
+    int32_t qw;
+
+    ps2_gs_text_clear();
+    dest = ps2_gs_get_framebuffer()[(uint32_t)(GS8_Y0 + GS8_Y1) / 2u
+                                    * (uint32_t)PS2_SCREEN_WIDTH + GS8_R_X0 + (int)(bw / 2u)];
+
+    /* Fill each plane with ONE canvas-order colour, verbatim: ps2_gs_tex_upload() streams these bytes
+     * with no conversion and TEX0 says CT32, so a texel's word IS what a full-coverage modulate reads. */
+    for (i = 0u; i < GS8_PLANE * GS8_PLANE; i++) { s_plane_r[i] = GSQUAD_RED; s_plane_b[i] = GSQUAD_BLUE; }
+
+    /* Register -- the installed sink uploads each plane's bytes synchronously before this returns. */
+    tr = gs_tex_register(s_plane_r, GS8_PLANE, GS8_PLANE, GS8_PLANE, GS8_PLANE);
+    tb = gs_tex_register(s_plane_b, GS8_PLANE, GS8_PLANE, GS8_PLANE, GS8_PLANE);
+    if (tr == 0 || tb == 0) {
+        ps2_kprintf("[GSTEX] SKIP: a plane was refused (VRAM full?), so nothing can sample it -- "
+                    "this run measured no texture stage\n");
+        return;
+    }
+
+    ps2_kprintf("[GSTEX] three 40x40 boxes at y=%d..%d, dest=0x%08x; U=flat green, "
+                "R=textured-over-red-plane, B=textured-over-blue-plane, vertex=0x%08x\n",
+                GS8_Y0, GS8_Y1 - 1, (unsigned int)dest, (unsigned int)GS8_VERTEX);
+    ps2_kprintf("[GSTEX] white=textured but sampler ignored, black=page read as zero, "
+                "navy=fragment discarded\n");
+
+    /* U -- untextured opaque green, the geometry+read positive (rung 4's shape, unchanged). */
+    r.y0 = GS8_Y0; r.y1 = GS8_Y1;
+    r.x0 = GS8_U_X0; r.x1 = GS8_U_X0 + (int)bw;
+    ps2_stage1_gs_env(&env);   /* reg_tex0/1/clamp are 0; a TME=0 sprite reads none of them */
+    qw = gs_poster_ref_sprite_packet(&r, GSQUAD_GREEN, 0u, s_pkt, GS_REF_SPRITE_QWC);
+    if (qw < 0 || ps2_gs_draw_env_apply(&env) != 0 || ps2_gif_post(s_pkt, (uint32_t)qw) != 0) {
+        trusted = 0;
+    } else { (void)ps2_gif_drain(); (void)ps2_gif_reap(); }
+
+    /* R -- textured over the red plane, under the env that points TEX0 at it. */
+    r.x0 = GS8_R_X0; r.x1 = GS8_R_X0 + (int)bw;
+    if (trusted) {
+        ps2_stage1_gs_env(&env);
+        env.reg_tex0 = tr->tex0; env.reg_tex1 = tr->tex1; env.reg_clamp = tr->clamp;
+        qw = gs8_textured_sprite(&r, GS8_VERTEX, tr, s_pkt, GS8_PACKET_QW);
+        if (qw < 0 || ps2_gs_draw_env_apply(&env) != 0 || ps2_gif_post(s_pkt, (uint32_t)qw) != 0) {
+            trusted = 0;
+        } else { (void)ps2_gif_drain(); (void)ps2_gif_reap(); }
+    }
+
+    /* B -- textured over the blue plane, same everything else. */
+    r.x0 = GS8_B_X0; r.x1 = GS8_B_X0 + (int)bw;
+    if (trusted) {
+        ps2_stage1_gs_env(&env);
+        env.reg_tex0 = tb->tex0; env.reg_tex1 = tb->tex1; env.reg_clamp = tb->clamp;
+        qw = gs8_textured_sprite(&r, GS8_VERTEX, tb, s_pkt, GS8_PACKET_QW);
+        if (qw < 0 || ps2_gs_draw_env_apply(&env) != 0 || ps2_gif_post(s_pkt, (uint32_t)qw) != 0) {
+            trusted = 0;
+        } else { (void)ps2_gif_drain(); (void)ps2_gif_reap(); }
+    }
+
+    if (!trusted) {
+        ps2_kprintf("[GSTEX] SKIP: a draw or the environment was refused, so the boxes are not all on "
+                    "the bus -- nothing here names the texture stage\n");
+        return;
+    }
+
+    u_green = r_plane = r_white = r_black = r_dest = 0u;
+    b_plane = b_white = b_black = b_dest = b_other = 0u;
+
+    /* Tally the textured boxes on RGB only (mask off the A byte, which TCC=1 sets from the plane). */
+    r.x0 = GS8_U_X0;
+    (void)ps2_gs_vram_read(r.x0, GS8_Y0, (int)bw, (int)bh, s_buf);
+    if (ps2_gs_vram_read_err() != GS_READ_BUS_OK) trusted = 0;
+    else { for (i = 0u; i < n; i++) if (s_buf[i] == GSQUAD_GREEN) u_green++; }
+
+    r.x0 = GS8_R_X0;
+    if (trusted) (void)ps2_gs_vram_read(r.x0, GS8_Y0, (int)bw, (int)bh, s_buf);
+    if (trusted && ps2_gs_vram_read_err() != GS_READ_BUS_OK) trusted = 0;
+    else if (trusted) {
+        for (i = 0u; i < n; i++) {
+            uint32_t rgb = s_buf[i] & 0x00ffffffu;
+            if (rgb == red_low) r_plane++;
+            else if (rgb == white_low) r_white++;
+            else if (rgb == 0u) r_black++;
+            else if (s_buf[i] == dest) r_dest++;
+        }
+    }
+
+    r.x0 = GS8_B_X0;
+    if (trusted) (void)ps2_gs_vram_read(r.x0, GS8_Y0, (int)bw, (int)bh, s_buf);
+    if (trusted && ps2_gs_vram_read_err() != GS_READ_BUS_OK) trusted = 0;
+    else if (trusted) {
+        for (i = 0u; i < n; i++) {
+            uint32_t rgb = s_buf[i] & 0x00ffffffu;
+            if (rgb == blue_low) b_plane++;
+            else if (rgb == white_low) b_white++;
+            else if (rgb == 0u) b_black++;
+            else if (s_buf[i] == dest) b_dest++;
+            else { if (b_other == 0u) first_b_other = s_buf[i]; b_other++; }
+        }
+    }
+
+    if (!trusted) {
+        ps2_kprintf("[GSTEX] SKIP: a page read failed -- the tallies are not a picture\n");
+        return;
+    }
+
+    ps2_kprintf("[GSTEX] U flat-green : green=%u /%u\n", (unsigned int)u_green, (unsigned int)n);
+    ps2_kprintf("[GSTEX] R text-red   : plane=%u white=%u black=%u dest=%u /%u\n",
+                (unsigned int)r_plane, (unsigned int)r_white, (unsigned int)r_black,
+                (unsigned int)r_dest, (unsigned int)n);
+    ps2_kprintf("[GSTEX] B text-blue  : plane=%u white=%u black=%u dest=%u other=%u first=0x%08x /%u\n",
+                (unsigned int)b_plane, (unsigned int)b_white, (unsigned int)b_black,
+                (unsigned int)b_dest, (unsigned int)b_other, (unsigned int)first_b_other,
+                (unsigned int)n);
+
+    if (u_green != n) {
+        ps2_kprintf("[GSTEX] SKIP: the untextured control painted only %u/%u px -- the box never reached "
+                    "the page, so the textured rows say nothing about the GS\n",
+                    (unsigned int)u_green, (unsigned int)n);
+        return;
+    }
+
+    /* The control proves geometry and the read; the fork is the sampler. */
+    if (r_plane == n && b_plane == n) {
+        ps2_kprintf("[GSTEX] verdict: TEXTURING WORKS. Both textured boxes came back their plane's colour "
+                    "and R != B, so the sampler multiplies vertex by a live page.  The eegs blackout is "
+                    "therefore NOT the texture stage -- read the RGBAQ/geometry the app feeds, next.\n");
+    } else if (r_white == n && b_white == n) {
+        ps2_kprintf("[GSTEX] verdict: the sampler is IGNORED -- both textured boxes read the WHITE vertex, "
+                    "so TME/TEX0 did not take; this is a delivery of texture state, not of pixels.\n");
+    } else if (r_black == n && b_black == n) {
+        ps2_kprintf("[GSTEX] verdict: the page reads ZERO -- both textured boxes came back black, so an "
+                    "uploaded plane is sampled as 0.  The upload vs TEX0 format (PSM/pitch/byte order) is "
+                    "the fault.\n");
+    } else if (r_dest == n && b_dest == n) {
+        ps2_kprintf("[GSTEX] verdict: the textured fragments are DISCARDED -- both boxes still hold their "
+                    "destination, which is the [GSLIVE] symptom reproduced at the sprite level.\n");
+    } else {
+        ps2_kprintf("[GSTEX] verdict: MIXED -- R %u/%u/%u/%u and B %u/%u/%u/%u plane/white/black/dest; "
+                    "no single model predicts this, read the tallies against the words before believing "
+                    "the run.\n",
+                    (unsigned int)r_plane, (unsigned int)r_white, (unsigned int)r_black,
+                    (unsigned int)r_dest, (unsigned int)b_plane, (unsigned int)b_white,
+                    (unsigned int)b_black, (unsigned int)b_dest);
+    }
+}
+
 static char cmd_buf[64];
 static int cmd_pos = 0;
 static int esc_state = 0;
@@ -2952,6 +4539,22 @@ static void ps2_shell_exec(const char *cmd)
         ps2_kprintf("  ptrstat <tag>    - Print+reset pointer counts, paint cost, and mouse->screen ms\n");
         ps2_kprintf("  ptrcal           - Loopback-calibrate the pointer path (no mouse needed)\n");
         ps2_kprintf("  ptgain [w] [pct] - Gain from a host sweep of width w (pct = px/host px x100)\n");
+        ps2_kprintf("  gsquad           - Draw RED+BLUE blocks with the GS alone: does it raster, and\n"
+                    "                     which sender delivered them? (sync DMA vs the LANE 10 ring)\n");
+        ps2_kprintf("  gsread           - gsquad's two blocks + four SDK-shaped refs and rung 5's PRE\n"
+                    "                     control (CYAN/MAGENTA/GREEN/YELLOW/ORANGE), then READ page 0\n"
+                    "                     back over Local->Host: three strips and the whole page in\n"
+                    "                     bands.  The census forks the register STRIDE, the group's\n"
+                    "                     shape, the sprite nudge, the primitive and PRE, with no\n"
+                    "                     monitor and no witness (LANE 19 rungs 2, 3, 4 and 5)\n");
+        ps2_kprintf("  gsalpha          - rung 7: three ABE=1 boxes over the ALPHA register's two field\n"
+                    "                     readings; P=live word, H=hardware word, Z=ABE=0 reference.\n"
+                    "                     Names whether this GS blends or writes the destination back.\n");
+        ps2_kprintf("  gstex            - rung 8: one UNTEXTURED sprite (positive) and two TEXTURED sprites\n"
+                    "                     over a white vertex, each sampling a plane filled one colour\n"
+                    "                     (red, blue).  The box coming back the plane's colour names\n"
+                    "                     whether TME/TEX0 sampling happens at all -- the one stage a flat\n"
+                    "                     sprite never exercises (LANE 19 rung 8)\n");
         ps2_kprintf("  click [1|2]      - Click Left (1) or Right (2) mouse button\n");
         ps2_kprintf("  key <char>       - Inject key event into active window\n");
         ps2_kprintf("  type <text>      - Type string into active window\n");
@@ -3089,13 +4692,18 @@ static void ps2_shell_exec(const char *cmd)
             while (*p >= '0' && *p <= '9') { pct = pct * 10 + (*p - '0'); p++; }
             if (pct < 1) pct = 1;
             if (pct > 400) pct = 400;
-            s_ptr_mult_fp = (int32_t)pct * 256 / 100;
-            /* The leftover belongs to the scale that made it. */
-            s_ptr_carry_x = s_ptr_carry_y = 0;
+            /* LAW 13e: this writes the same variable the Settings panel's radios
+             * and the launcher's row write, so `sens 38` and a dial showing
+             * 96/256 are one setting seen from two hands rather than two
+             * settings that can disagree.  The leftover belongs to the scale
+             * that made it. */
+            g_ptr_gain_fp = (int32_t)pct * 256 / 100;
+            s_ptr_gain_seen = g_ptr_gain_fp;
+            ps2_ptr_gain_install(0);
         }
-        ps2_kprintf("[PS2] Pointer scale %d%%, %s source%s: ",
+        ps2_kprintf("[PS2] Pointer scale %d%%, %s source, gain from %s: ",
                     (int)(s_ptr_mult_fp * 100 / 256), ps2_ptr_src_name(s_ptr_src),
-                    s_ptr_src_forced ? "" : " default");
+                    g_ptr_gain_fp > 0 ? "the dial" : "the profile default");
         ps2_ptr_gain_row();
     } else if (tkl_strncmp(cmd, "maxstep", 7) == 0) {
         const char *p = cmd + 7;
@@ -3206,6 +4814,34 @@ static void ps2_shell_exec(const char *cmd)
                     "[CAL] pointer ended after equal and opposite counts; DIAG asks both axes\n"
                     "[CAL] the same question.\n",
                     (int)(s_ptr_mult_fp * 100 / 256), (int)s_ptr_max_step);
+    } else if (tkl_strcmp(cmd, "gsquad") == 0) {
+        if (s_gui_active) {
+            ps2_kprintf("[GSQUAD] note: the desktop composites over the canvas every frame, so from\n"
+                        "[GSQUAD] a GUI session these blocks live one repaint. Ctrl+Q to Stage 1 for a clean answer.\n");
+        }
+        ps2_gsquad_probe();
+    } else if (tkl_strcmp(cmd, "gsread") == 0) {
+        if (s_gui_active) {
+            /* Worth saying in full here, because a GUI session does not merely repaint the blocks: the
+             * desktop's own present keeps posting to the ring, and ps2_gs_vram_read() refuses while
+             * the ring has anything queued -- so from a GUI session this verb's honest output is a
+             * bus-busy row, which is a pipelining fact and not a picture. */
+            ps2_kprintf("[GSREAD] note: the desktop presents every frame, so its uploads erase these\n"
+                        "[GSREAD] blocks and its ring traffic makes a read refuse. Ctrl+Q to Stage 1.\n");
+        }
+        ps2_gsread_probe();
+    } else if (tkl_strcmp(cmd, "gsalpha") == 0) {
+        if (s_gui_active) {
+            ps2_kprintf("[GSALPHA] note: the desktop presents every frame, so its uploads erase these\n"
+                        "[GSALPHA] boxes and its ring traffic makes a read refuse. Ctrl+Q to Stage 1.\n");
+        }
+        ps2_gsalpha_probe();
+    } else if (tkl_strcmp(cmd, "gstex") == 0) {
+        if (s_gui_active) {
+            ps2_kprintf("[GSTEX] note: the desktop presents every frame, so its uploads erase these\n"
+                        "[GSTEX] boxes and its ring traffic makes a read refuse. Ctrl+Q to Stage 1.\n");
+        }
+        ps2_gstex_probe();
     } else if (tkl_strcmp(cmd, "click") == 0 || tkl_strcmp(cmd, "click 1") == 0) {
         ps2_click_mouse(1, 1);
         ps2_click_mouse(1, 0);
@@ -5410,6 +7046,48 @@ static void ps2_bench_launch(GDEV *screen)
  * out, the end of the run is the only printer and still has to know nobody beat it. */
 static int s_bench_sentinel;
 
+#if BTRON_PS2_BENCH_GS == 1
+/* ── Stage-1 census rung: the GS read-back with no hand and no window ────────
+ *
+ * The read was written to answer one question without a screen to look at -- does the
+ * GS rasterise an SPRITE into the page that is displayed -- and the answer is a
+ * console row, so the only thing a hand was still doing was typing `gsread`.  This
+ * types it.  PCSX2 writes the emulated EE console to stdout under -nogui, and the
+ * harness waits for the sentinel on that stream, so the census rides the same headless
+ * path the present-cost table does: no window, no keyboard, no protocol for anyone to
+ * follow, and the rows come back to be read rather than photographed.
+ *
+ * It replaces the desktop run rather than joining it, and that is not a convenience:
+ * `ps2_bench_run()` executes with the GUI up, and inside a GUI session the desktop
+ * presents every frame, so its uploads erase the blocks between the draw and the read
+ * and its ring traffic trips the read's idle precondition.  The control strip would
+ * report UNTRUSTED and the verdict rows would mean nothing.  A census run therefore
+ * boots, draws, reads, prints, and then sits in the Stage-1 shell loop -- the guest
+ * cannot shut PCSX2 down, so the harness stops it at the sentinel, exactly as it does
+ * for the table. */
+static void ps2_bench_gs_census(void)
+{
+    ps2_kprintf("\n[BENCH] Stage 1 GS census rung -- no desktop, no hand, no window\n");
+    ps2_gsread_probe();
+    /* rung 7 rides the same headless path: it is the one census that turns ABE on, and ABE is the
+     * stage every earlier rung bypassed, so the ALPHA register has never been measured without a
+     * hand.  It clears and repaints its own boxes, so it must run AFTER gsread's census, not before. */
+    ps2_gsalpha_probe();
+    /* rung 8 rides the same path AFTER rung 7 (both repaint navy, so neither sees the other's boxes):
+     * rung 7 cleared ALPHA and this clears the last stage the flat sprite does not exercise -- whether a
+     * textured fragment samples its uploaded page at all.  It is the rung that names what is left between
+     * "a flat sprite lays its colour" and "2,705 textured triangles lay none". */
+    ps2_gstex_probe();
+    /* Before anything downstream could print a second one, and marked as spent for the
+     * same reason the app phase's frame hook marks it: the harness stops the emulator
+     * on this row, so two copies would tell it the run ended in two places. */
+    if (!s_bench_sentinel) {
+        ps2_kprintf("\n[BENCH] run complete\n");
+        s_bench_sentinel = 1;
+    }
+}
+#endif /* BTRON_PS2_BENCH_GS == 1 */
+
 #if BTRON_PS2_BENCH_APP
 /* ── App phase: is the common GL downstack actually driving frames here? ─────
  *
@@ -5785,6 +7463,622 @@ static void ps2_bench_launch_xmb_by_key(GDEV *screen)
                     : "the row was activated but the app never got a frame -- this is what \"can't run xmb from menu\" is");
 }
 
+/* ── The g_term verb, on a pool nobody has spent yet ────────────────────────
+ *
+ * "Row is there, picks nothing" is a claim about a third route, and neither phase
+ * above can answer it: the deskbar row and this port's direct call both reach
+ * open_xmb_window() themselves.  What the user types is `xmb` at the g_term prompt,
+ * which is gterm.c:860 -> shell_execute_cmd() -> clu.c's one app table ->
+ * open_xmb_window(), and the chain has three answers that reach the screen as shell
+ * text -- "Not linked into this build", "Failed to open window surface", "Window
+ * opened on the Workbench desktop" -- plus a fourth the user reports: nothing at
+ * all.  Only a call through shell_execute_cmd() with an out_fn that echoes can tell
+ * those four apart, which is what this phase is.
+ *
+ * It runs ahead of every pixel phase for one reason, and the 2026-10-15 eegs run is
+ * the reason: by the time the click and cursor phases have finished this image has
+ * spent 4,054 kB more of the 11 MB pool than a booted desktop has, the largest hole
+ * is then 1,359 kB, and the XMB's client pixmap asks 1,500 kB -- so both app phases
+ * printed `[GL] ERROR: xmb: egl_create_window_surface failed` while the production
+ * image of the same dials ran the XMB at 19.4 ms/frame on a 5,413 kB hole.  The
+ * harness had starved its own pool before asking the app to open, and a verdict of
+ * "the row works" printed beside that failure measured the dispatch, not the app.
+ * Measured at boot, this phase sees the same pool the user's machine has.
+ *
+ * The census is the row that makes the difference visible instead of inferred: every
+ * used block big enough to matter, named by the window that owns it where the window
+ * table can say so, and every hole the pool is holding.
+ *
+ * Three cycles rather than one call, because the complaint is not "the first open fails"
+ * -- the 2026-10-15 production log shows a first open at 19.4 ms/frame -- it is "I open it
+ * and after a while it picks nothing", and that is a statement about closes.  One open
+ * prices the open; the second and third show whether the bytes the first borrowed came
+ * back, and on a first-fit pool a hole that shrinks below the ask is the exact moment the
+ * verb starts answering with nothing.  The measured answer, before this ledger existed, was
+ * 1,088 kB kept per cycle (the 512x512 icon plane and the 128x128 font plane), which is why
+ * the pool census runs at boot and after the last close rather than once. */
+
+/* The client pixmap a GL window is about to ask for, computed the way the app
+ * computes it (xmb.c's own sizing) and the way the window manager cuts it (opn_wnd():
+ * a caption of WND_TITLE_HEIGHT and 4 px of border per side for a titled, bordered
+ * window).  Not a constant copied from the OOM row -- it moves with the desktop size,
+ * which is why it is derived here. */
+static size_t ps2_bench_gl_surface_ask(void)
+{
+    BTRON_DESKTOP *d = get_btron_desktop();
+    int w = 960, h = 600;
+
+    if (d && d->width > 160 && d->height > 160) {
+        w = d->width - 24;
+        h = d->height - 64;
+        if (w > 1440) w = 1440;
+        if (h > 900)  h = 900;
+    }
+    return (size_t)(w - 8) * (size_t)(h - WND_TITLE_HEIGHT - 8) * sizeof(COLOR);
+}
+
+static void ps2_bench_pool_census(const char *tag)
+{
+    unsigned n = 0, big = 0, free_n = 0;
+    size_t hole = 0;
+
+    for (const ps2_blk *b = s_heap_list; b; b = b->next, n++) {
+        if (b->used) continue;
+        free_n++;
+        if (b->size > hole) hole = b->size;
+    }
+    ps2_kprintf("[BENCH] pool %s: %u block(s), %u free, used=%u kB of %u kB, largest hole %u kB, a GL window asks %u kB\n",
+                tag, n, free_n, (unsigned int)(s_heap_used / 1024u),
+                (unsigned int)(PS2_HEAP_SIZE / 1024u),
+                (unsigned int)(hole / 1024u),
+                (unsigned int)(ps2_bench_gl_surface_ask() / 1024u));
+
+    /* One row per block at or above the pool's own log threshold, so the names of the
+     * big holders are in the log rather than a total.  `unmatched` is not a defect: it
+     * is a buffer some subsystem asked for that no window owns -- the compositor's
+     * cache, a texture page, a task stack. */
+    for (const ps2_blk *b = s_heap_list; b; b = b->next) {
+        const WND *w;
+        const char *who = "unmatched";
+
+        if (b->size < PS2_HEAP_LOGLIM) continue;
+        big++;
+        if (!b->used) {
+            ps2_kprintf("[BENCH] pool %s: free %5u kB at 0x%x\n", tag,
+                        (unsigned int)(b->size / 1024u),
+                        (unsigned int)(uintptr_t)(b + 1));
+            continue;
+        }
+        for (w = get_wnd_list(); w; w = w->next) {
+            if (w->dev && (const void *)w->dev->pixels == (const void *)(b + 1)) {
+                who = w->title[0] ? w->title : "(untitled)";
+                break;
+            }
+        }
+        ps2_kprintf("[BENCH] pool %s: used %5u kB at 0x%x  holds '%s'\n", tag,
+                    (unsigned int)(b->size / 1024u),
+                    (unsigned int)(uintptr_t)(b + 1), who);
+    }
+    ps2_kprintf("[BENCH] pool %s: %u block(s) at or above %u kB\n", tag, big,
+                (unsigned int)(PS2_HEAP_LOGLIM / 1024u));
+}
+
+/* What the terminal would have shown, on the console instead, with the three answers
+ * clu_launch_app() can give sorted into flags as they go by. */
+static int s_bench_shell_lines;
+static int s_bench_shell_not_linked;
+static int s_bench_shell_no_surface;
+static int s_bench_shell_opened;
+
+static void ps2_bench_shell_out(const char *line, COLOR col, void *user_data)
+{
+    (void)col; (void)user_data;
+
+    s_bench_shell_lines++;
+    if (tkl_strstr(line, "Not linked"))       s_bench_shell_not_linked++;
+    if (tkl_strstr(line, "Failed to open"))   s_bench_shell_no_surface++;
+    if (tkl_strstr(line, "Window opened"))    s_bench_shell_opened++;
+    ps2_kprintf("[BENCH] shell> %s\n", line ? line : "(null line)");
+}
+
+/* The window this route is supposed to have opened, by title rather than by handle --
+ * the handle is the app's own static and is NULL on every path that failed. */
+static WND *ps2_bench_wnd_named(const char *needle)
+{
+    for (WND *w = get_wnd_list(); w; w = w->next)
+        if (tkl_strstr(w->title, needle)) return w;
+    return NULL;
+}
+
+/* `BENCH_GS=2` is this census and not the Stage-1 one: it needs a live desktop, a window that only
+ * the app phase opens, and the presents whose pages it reads.  Value 1 keeps the standalone rung
+ * that replaces the desktop, which rungs 1..5 were measured with. */
+#if BTRON_PS2_BENCH_GS == 2
+/* ── LANE 19 rung 6: is the live stream's ink in the page the eye reads? ──────────────────
+ *
+ * rungs 1..5 settled the PACKET and settled it on the machine: gs_poster_packet()'s dense
+ * four-register REGLIST group rasterises on this GS at one loop and at two, on the synchronous
+ * sender and on the LANE 10 ring, and the retired PACKED shape still draws nothing -- which is the
+ * negative control that says the read is reporting the shapes its labels name.  None of that is
+ * evidence about the shipped frame, because that census REPLACES the desktop: it draws its own
+ * rects and reads its own rects back, while the complaint on the monitor is still the one reported
+ * on 2026-10-15 and again on 2026-10-16 under `make run-ps2 PS2_GL=eegs` -- the window's frame is
+ * there and its inside is not.
+ *
+ * So this rung reads the page a real frame made, and asks it the one question that needs no palette
+ * theory.  A present is an IMAGE upload of the bound canvas (`ps2_gs_set_framebuffer()` binds the
+ * desktop's own array for a live session, and eegs_present.c's header says the layer "draws into
+ * those same VRAM pixels AFTER the upload"), so a word of page 0 that is not its canvas word is a
+ * word something else wrote -- and in this build exactly two somebodies exist:
+ *
+ *   the recorded GS stream, which is what this census is looking for, and
+ *   ps2_kprintf's own text band.  The console writes through `ps2_fb()` too -- that IS the bound
+ *   canvas -- so its words normally compare equal and need no filtering; the pair it is called
+ *   with, 0xFFE0E0E0 on 0xFF121B29 at core_ps2.c:695, is counted separately only because a text
+ *   upload repaints its rows after the canvas underneath them may have moved on, which makes the
+ *   page hold console ink the canvas no longer holds.  Those two words are therefore reported as
+ *   `console=` and excluded from `ink=`, and the exclusion is a class, not a silence: a colour
+ *   histogram row is printed for every other word that differs.
+ *
+ * This rung's own control lives in a box that is excluded by COORDINATE rather than by colour, so
+ * a magenta UI pixel elsewhere is still ink and a control that did not land still fails the count.
+ *
+ * Counting the two apart is the whole instrument, and the three readings are not one diagnosis:
+ *
+ *   ink = 0 ................ the page IS its canvas: the stream lays no pixel anywhere, so the
+ *                            defect is below what rungs 1..5 proved -- the live environment the
+ *                            present applies (win/clip/ALPHA with ABE), the order of its groups
+ *                            against the upload, or a prim state no census has varied yet.
+ *   ink > 0, in-window = 0 . the stream paints, but not inside its own client rect, which is an
+ *                            origin, XYOFFSET or SCISSOR answer, and the two boxes name which.
+ *   in-window > 0 ........... the stream's ink IS in the client area, so "empty inside" is a
+ *                            CONTENT question -- the ink histogram says what arrived.
+ *
+ * The control is drawn, not assumed: one flat SPRITE of a colour no UI element of this desktop
+ * carries, through the shipping emitter, in a corner the chrome does not reach, sent synchronously
+ * immediately before the read with nothing printed between the two.  If it comes back short, the
+ * read is not trustworthy inside a live session -- the frame's own traffic may still hold the GIF,
+ * or an upload may have landed between the last present and the first band -- and every count above
+ * it is quoted as SKIP, which is what keeps a truncated read from being filed as a negative answer.
+ *
+ * It runs at a chosen frame of the app phase rather than after the phase, because the phase's own
+ * end injects the Escape that closes the window: by the time `ps2_bench_app()` returns there is no
+ * XMB to ask about, and a WND kept past that close prints geometry for memory somebody else owns
+ * (the shell phase's note above is the precedent for the same trap).  Needs both dials:
+ * `BENCH_APP=1 BENCH_GS=2 scripts/ps2_bench.sh`.
+ */
+#define GSLIVE_TOP      8u      /* the hottest inks kept; a colour that cannot get a slot is `rare` */
+#define GSLIVE_X0       32      /* the control's own box: 64 x 16 = 1,024 px, below every window the */
+#define GSLIVE_Y0       560     /* XMB route opens and above the deskbar's own row                 */
+#define GSLIVE_X1       96
+#define GSLIVE_Y1       576
+#define GSLIVE_PX       ((uint32_t)(GSLIVE_X1 - GSLIVE_X0) * (uint32_t)(GSLIVE_Y1 - GSLIVE_Y0))
+#define GSLIVE_INK      BTRON_PIXEL_FB(0xFFE0E0E0u)  /* ps2_kprintf's pair, in the order the canvas */
+#define GSLIVE_BG       BTRON_PIXEL_FB(0xFF121B29u)  /* holds it: the macro ps2_gs_text_putc() calls
+                                                      * is the only spelling that can be compared
+                                                      * against a page read back.  Hand-swapping the
+                                                      * bytes here instead would split the console
+                                                      * class on a colour the console never writes. */
+
+static void ps2_bench_gs_live_census(uint32_t frame)
+{
+    static uint64_t s_pkt[2u * GS_POSTER_QWC(1u)] __attribute__((aligned(16)));
+    gs_poster_rect r;
+    gs_draw_env env;
+    const uint32_t *canvas = ps2_gs_get_framebuffer();
+    const WND *w = ps2_bench_wnd_named("Cross Media Bar");
+    const uint32_t width = (uint32_t)PS2_SCREEN_WIDTH;
+    const uint32_t height = (uint32_t)PS2_SCREEN_HEIGHT;
+    uint32_t *buf;
+    uint32_t ink_v[GSLIVE_TOP], ink_n[GSLIVE_TOP], ink_in[GSLIVE_TOP];
+    uint32_t read_px = 0u, sent = 0u, same = 0u, win_px = 0u;
+    uint32_t diff_all = 0u, diff_console = 0u, diff_ink = 0u, diff_win = 0u;
+    uint32_t ctrl = 0u, box_px = 0u, rare = 0u, bins = 0u, qw_sent = 0u, us;
+    int all_box[4] = { -1, -1, -1, -1 };
+    int win_box[4] = { -1, -1, -1, -1 };
+    int ink_box[GSLIVE_TOP][4];
+    int ctrl_box[4] = { -1, -1, -1, -1 };
+    int cx0 = 0, cy0 = 0, cx1 = 0, cy1 = 0;
+    uint32_t i, y_start, k, best;
+    int printed[GSLIVE_TOP];
+    int32_t got, qw;
+    gs_read_bus_err err;
+
+    for (k = 0u; k < GSLIVE_TOP; k++) {
+        ink_v[k] = 0u; ink_n[k] = 0u; ink_in[k] = 0u;
+        ink_box[k][0] = ink_box[k][1] = ink_box[k][2] = ink_box[k][3] = -1;
+        printed[k] = 0;
+    }
+
+    ps2_kprintf("[GSLIVE] live page vs its canvas at frame %u: draws one MAGENTA control then\n",
+                (unsigned int)frame);
+
+    if (!canvas) {
+        ps2_kprintf("[GSLIVE] no bound canvas -- SKIP, the page has nothing to be compared against\n");
+        return;
+    }
+    if (w) {
+        cx0 = (int)w->client.left; cy0 = (int)w->client.top;
+        cx1 = (int)w->client.right; cy1 = (int)w->client.bottom;
+        if (cx1 > cx0 && cy1 > cy0) win_px = (uint32_t)(cx1 - cx0) * (uint32_t)(cy1 - cy0);
+    }
+
+    /* The band buffer is asked for before the control is drawn for the same reason gsread allocates
+     * before it sends: Imalloc() prints a [HEAP] row over its own threshold, and a print repaints
+     * the console band at full width, which is the one upload that would land between this rung's
+     * draw and its read. */
+    buf = (uint32_t *)Imalloc((size_t)GSREAD_BAND_QWC * 16u);
+    if (!buf) {
+        ps2_kprintf("[GSLIVE] no %u B band buffer -- SKIP, nothing was read\n",
+                    (unsigned int)(GSREAD_BAND_QWC * 16u));
+        return;
+    }
+
+    /* Whatever the frame's own presents queued has to be on the GS before a read is meaningful --
+     * and before a synchronous send is allowed to interleave with it. */
+    (void)ps2_gif_drain();
+    (void)ps2_gif_reap();
+
+    r.x0 = GSLIVE_X0; r.y0 = GSLIVE_Y0;
+    r.x1 = GSLIVE_X1; r.y1 = GSLIVE_Y1;
+    qw = gs_poster_packet(&r, 1u, GSQUAD_MAGENTA, s_pkt, gs_poster_qwc(1u));
+    ps2_stage1_gs_env(&env);
+    if (qw < 0 || ps2_gs_draw_env_apply(&env) != 0) {
+        ps2_kprintf("[GSLIVE] the control was refused (qw=%d) -- SKIP, its count cannot certify a read\n",
+                    (int)qw);
+        Ifree(buf);
+        return;
+    }
+    ps2_gs_gif_send(s_pkt, (uint32_t)qw);
+
+    us = btron_render_perf_us();
+    for (y_start = 0u; y_start < height; y_start += GSREAD_BAND_ROWS) {
+        const uint32_t rows = (height - y_start < GSREAD_BAND_ROWS)
+                                ? (height - y_start) : GSREAD_BAND_ROWS;
+
+        for (i = 0u; i < width * rows; i++) buf[i] = GSREAD_SENT;
+        got = ps2_gs_vram_read(0, (int)y_start, (int)width, (int)rows, buf);
+        err = ps2_gs_vram_read_err();
+        if (err != GS_READ_BUS_OK) {
+            ps2_kprintf("[GSLIVE] page y=%u FAILED: %s -- SKIP, the counts above are a part-page\n",
+                        (unsigned int)y_start, gsread_bus_name(err));
+            Ifree(buf);
+            return;
+        }
+        qw_sent += (uint32_t)got;
+        read_px += width * rows;
+
+        for (i = 0u; i < width * rows; i++) {
+            const uint32_t v = buf[i];
+            uint32_t x, y;
+            int inside;
+
+            if (v == GSREAD_SENT) { sent++; continue; }
+            x = i % width;
+            y = y_start + i / width;
+            if (x >= GSLIVE_X0 && x < GSLIVE_X1 && y >= GSLIVE_Y0 && y < GSLIVE_Y1) {
+                /* This rung's own ink, excluded by COORDINATE and not by colour: the box is the
+                 * certification and nothing else, so a magenta UI pixel outside it stays census
+                 * material and a control that partly failed still shows as ctrl < GSLIVE_PX.  The
+                 * exclusion is counted, so `read = sent + box + same + diff_all` is a partition the
+                 * row below can be checked against rather than a set of numbers that merely look
+                 * plausible next to each other. */
+                box_px++;
+                if (v == GSQUAD_MAGENTA) { ctrl++; gsread_box(ctrl_box, x, y); }
+                continue;
+            }
+            if (v == canvas[y * width + x]) { same++; continue; }
+
+            diff_all++;
+            gsread_box(all_box, x, y);
+            if (v == GSLIVE_INK || v == GSLIVE_BG) { diff_console++; continue; }
+            diff_ink++;
+            inside = ((int)x >= cx0 && (int)x < cx1 && (int)y >= cy0 && (int)y < cy1);
+            if (inside) { diff_win++; gsread_box(win_box, x, y); }
+
+            for (k = 0u; k < bins; k++) {
+                if (ink_v[k] != v) continue;
+                ink_n[k]++;
+                if (inside) ink_in[k]++;
+                gsread_box(ink_box[k], x, y);
+                break;
+            }
+            if (k < bins) continue;
+            if (bins < GSLIVE_TOP) {
+                ink_v[bins] = v;
+                ink_n[bins] = 1u;
+                ink_in[bins] = inside ? 1u : 0u;
+                ink_box[bins][0] = ink_box[bins][2] = (int)x;
+                ink_box[bins][1] = ink_box[bins][3] = (int)y;
+                bins++;
+            } else {
+                /* No slot: counted, not evicted.  Evicting a kept colour would make the rows below
+                 * disagree with themselves frame to frame, and a census whose histogram is not the
+                 * same histogram next time cannot be quoted against a fix. */
+                rare++;
+            }
+        }
+    }
+    us = btron_render_perf_us() - us;
+    Ifree(buf);
+
+    ps2_kprintf("[GSLIVE] win: client=%d,%d..%d,%d px=%u gl_layer=%d img_valid=%d visible=%d\n",
+                cx0, cy0, cx1, cy1, (unsigned int)win_px,
+                w ? (int)w->gl_layer : -1, w ? (int)w->img_valid : -1,
+                w ? (int)w->visible : -1);
+    ps2_kprintf("[GSLIVE] page: read=%u same=%u diff_all=%u console=%u ink=%u box=%u ctrl=%u "
+                "sent=%u %u us %u qw\n",
+                (unsigned int)read_px, (unsigned int)same, (unsigned int)diff_all,
+                (unsigned int)diff_console, (unsigned int)diff_ink, (unsigned int)box_px,
+                (unsigned int)ctrl, (unsigned int)sent,
+                (unsigned int)us, (unsigned int)qw_sent);
+    ps2_kprintf("[GSLIVE] boxes: all=%d,%d..%d,%d window=%d,%d..%d,%d in_win=%u control=%u/%u "
+                "%d,%d..%d,%d rare=%u\n",
+                all_box[0], all_box[1], all_box[2], all_box[3],
+                win_box[0], win_box[1], win_box[2], win_box[3],
+                (unsigned int)diff_win, (unsigned int)ctrl, (unsigned int)GSLIVE_PX,
+                ctrl_box[0], ctrl_box[1], ctrl_box[2], ctrl_box[3], (unsigned int)rare);
+    for (k = 0u; k < 4u && k < bins; k++) {
+        best = 0u;
+        for (i = 1u; i < bins; i++)
+            if (!printed[i] && ink_n[i] > ink_n[best]) best = i;
+        printed[best] = 1;
+        ps2_kprintf("[GSLIVE] ink: 0x%08x n=%u in=%u box=%d,%d..%d,%d\n",
+                    (unsigned int)ink_v[best], (unsigned int)ink_n[best],
+                    (unsigned int)ink_in[best],
+                    ink_box[best][0], ink_box[best][1], ink_box[best][2], ink_box[best][3]);
+    }
+
+    /* The fork, in the order that stops an incomplete or uncertified read from being filed as an
+     * answer about the GS: the read's own completion, then the control's, then the window's absence,
+     * then the three readings the header names. */
+    if (sent != 0u) {
+        ps2_kprintf("[GSLIVE] SKIP -- %u words the download never touched, so this is a part-page and "
+                    "not a census\n", (unsigned int)sent);
+    } else if (ctrl != GSLIVE_PX) {
+        ps2_kprintf("[GSLIVE] SKIP -- the control came back %u/%u, so a live-session read is not "
+                    "certified here and no count above may be quoted as the stream's absence.  "
+                    "An upload between the present and the band, or the GIF still busy with the "
+                    "frame, is what this row means\n",
+                    (unsigned int)ctrl, (unsigned int)GSLIVE_PX);
+    } else if (!w) {
+        ps2_kprintf("[GSLIVE] SKIP -- no `Cross Media Bar` window on the table at this frame, so "
+                    "there is no client rect to split the ink by; the whole-page counts above stand "
+                    "and the control says the read works\n");
+    } else if (w->gl_layer == 0) {
+        ps2_kprintf("[GSLIVE] THE WINDOW IS NOT A GS LAYER in this build: the compositor blits its "
+                    "pixmap and no stream is expected in its rect, so `empty inside` is a dispatch "
+                    "or settings answer (which backend gl_dispatch.c installed) and not a GS one.  "
+                    "ink=%u of which in_win=%u\n",
+                    (unsigned int)diff_ink, (unsigned int)diff_win);
+    } else if (diff_ink == 0u) {
+        ps2_kprintf("[GSLIVE] THE PAGE IS ITS CANVAS -- outside this rung's own control box, every "
+                    "word the page holds is the word the canvas holds (console=%u), so the recorded "
+                    "stream lays NO pixel anywhere.  The packet is proved elsewhere in this census; "
+                    "what is left between the frame and the screen is the live environment "
+                    "(win/clip/ALPHA-ABE), the order of its groups against the upload, or a prim "
+                    "state no rung has varied yet\n",
+                    (unsigned int)diff_console);
+    } else if (diff_win == 0u) {
+        ps2_kprintf("[GSLIVE] THE STREAM LANDS OUTSIDE ITS OWN WINDOW -- %u ink words and none of "
+                    "them inside %d,%d..%d,%d.  That is XYOFFSET, SCISSOR or the client rect the "
+                    "present hands eegs_present_send(), and the all-box above says where they went\n",
+                    (unsigned int)diff_ink, cx0, cy0, cx1, cy1);
+    } else if (win_px != 0u && diff_win * 100u < win_px) {
+        ps2_kprintf("[GSLIVE] THE STREAM PAINTS UNDER 1%% OF ITS CLIENT AREA -- %u of %u px.  Delivery "
+                    "works; what the eye calls an empty inside is a nearly-empty picture, and the "
+                    "ink rows are the content question\n",
+                    (unsigned int)diff_win, (unsigned int)win_px);
+    } else {
+        ps2_kprintf("[GSLIVE] THE STREAM PAINTS ITS CLIENT AREA -- %u/%u px inside its own rect, so "
+                    "what arrives is on the page and the remaining question is WHICH picture it is; "
+                    "read the ink colours and boxes above against what the XMB should show\n",
+                    (unsigned int)diff_win, (unsigned int)win_px);
+    }
+}
+#endif /* BTRON_PS2_BENCH_GS == 2 */
+
+/* The window's own state, sampled by the frame hook while it is still on the table.
+ *
+ * The phase cannot read it after `shell_execute_cmd()` returns: an app opener here does
+ * not return while its window is up -- that is why every app phase is armed around the
+ * call -- so by the time the shell has answered, the window is closed and its `WND` is
+ * somebody else's memory.  A pointer kept past that prints plausible geometry after the
+ * thing it names is gone, which is worse than no row at all, so these are values, taken
+ * once, and `s_bench_shell_watch` says which phase may fill them. */
+static int s_bench_shell_watch;
+static int s_bench_shell_window_seen;
+static int s_bench_shell_geom[8];     /* client w, client h, visible, gl_layer, img_valid, paint,
+                                       * gs planes registered, gs VRAM kB left */
+
+/* One `xmb` verb, the frames it drew, and the close that followed it -- with the pool read
+ * on both sides, because the complaint under investigation is "the row is there and it
+ * picks nothing", and on a first-fit pool that answer is a hole size, not a program counter. */
+typedef struct {
+    int lines, not_linked, no_surface, opened, window_seen;
+    uint32_t frames;
+    size_t used_before, used_after, hole_before, hole_after;
+    const char *why;
+} ps2_bench_cycle_t;
+
+static void ps2_bench_one_cycle(GDEV *screen, const size_t ask, ps2_bench_cycle_t *c)
+{
+    int guard;
+
+    c->lines = c->not_linked = c->no_surface = c->opened = 0;
+    c->window_seen = 0;
+    for (guard = 0; guard < 8; guard++) s_bench_shell_geom[guard] = -1;
+    c->frames = 0u;
+
+    c->used_before = s_heap_used;
+    c->hole_before = ps2_heap_largest_free();
+
+    s_bench_shell_lines = 0;
+    s_bench_shell_not_linked = s_bench_shell_no_surface = s_bench_shell_opened = 0;
+    s_bench_shell_window_seen = 0;
+    s_bench_app_t0 = btron_render_perf_us();
+    s_bench_app_made = 0u;
+    s_bench_app_over = 0u;
+    s_bench_shell_watch = 1;
+    s_bench_app_active = 1;
+    s_cycle.left = 3u;
+    s_bench_app_left = 3u;
+    /* The same three arguments the prompt hands the shell: the terminal's own state and
+     * window are only read by the `tv`/`sc` verbs, both of which test for them, so NULL
+     * is what `xmb` actually needs. */
+    shell_execute_cmd("xmb", ps2_bench_shell_out, NULL, NULL);
+    /* The task's own loop spends the budget from inside `dly_tsk()` while the opener is
+     * still on the stack, and when it does not -- a call that returned with the window up
+     * or a budget nothing consumed -- the frames have to be asked for here.  Bounded twice
+     * over: by the budget itself, because the pass that takes `s_bench_app_left` to 0 is
+     * the one that injects the Escape and walking past it would enter the frame hook's
+     * grace frames and end the whole run, and by the window's presence, because a verb
+     * that opened nothing has no frames to wait for. */
+    for (guard = 0; guard < 8 && s_bench_app_left &&
+                    ps2_bench_wnd_named("Cross Media Bar"); guard++)
+        ps2_gui_pass(screen);
+    s_bench_shell_watch = 0;
+    s_bench_app_active = 0;
+    s_bench_app_left = 0u;
+
+    c->lines = s_bench_shell_lines;
+    c->not_linked = s_bench_shell_not_linked;
+    c->no_surface = s_bench_shell_no_surface;
+    c->opened = s_bench_shell_opened;
+    c->window_seen = s_bench_shell_window_seen;
+    c->frames = s_bench_app_made;
+    c->used_after = s_heap_used;
+    c->hole_after = ps2_heap_largest_free();
+
+    /* The verdict, in the order that rules the harness out before it rules the product
+     * out.  `window_seen` outranks the shell's own line on purpose: the Escape this phase
+     * injects lands while `open_xmb_window()` is still on the stack, so its `return s_wnd`
+     * hands back the NULL that `xb_destroy()` left there and clu prints "Failed to open
+     * window surface" for a window that demonstrably opened and drew.  That row is the
+     * harness' doing, and only a window never seen makes it the product's. */
+    if (!c->lines) {
+        c->why = "the shell printed NOTHING for the verb -- the line never reached clu's table, which is \"picks nothing\" measured";
+    } else if (c->window_seen) {
+        c->why = "the verb opened the window and its task drew frames off it -- typing xmb runs the app";
+    } else if (c->not_linked) {
+        c->why = "SKIP for the app -- clu says xmb is not linked into this image, so the verb table and its opener disagree";
+    } else if (c->no_surface) {
+        c->why = c->hole_before < ask
+                     ? "no surface, no frames, and the pool could not serve the ask -- out of memory, which is \"picks nothing\" on the screen"
+                     : "no surface and no frames with room in the pool -- the opener itself failed";
+    } else if (c->opened) {
+        c->why = c->frames
+                     ? "the shell says a window opened and passes ran after the call returned"
+                     : "the shell says a window is open and NOT one frame ran -- a window with no frame is \"picks nothing\" on the screen";
+    } else {
+        c->why = "the shell answered with lines none of them a verdict this phase knows -- read the shell> rows above";
+    }
+}
+
+static void ps2_bench_shell_verb(GDEV *screen)
+{
+    const size_t ask = ps2_bench_gl_surface_ask();
+    const size_t used_boot = s_heap_used;
+    const size_t hole_boot = ps2_heap_largest_free();
+    ps2_bench_cycle_t c;
+    unsigned int leak_kb = 0;       /* kB the first cycle kept: the per-open price */
+    size_t smallest_hole = hole_boot;
+    int starved_at = 0, refused_at = 0;
+    size_t leaked_total = 0;
+    int cycle;
+
+    ps2_kprintf("\n[BENCH] g_term verb -- `xmb` at the prompt, the route the user takes, three cycles\n");
+
+    ps2_bench_pool_census("at boot");
+
+    /* Control before the measurement, because an out_fn the console never reached
+     * would make the real call read as "the shell printed nothing" -- the very symptom
+     * under investigation.  An unknown verb is the same two calls with no app in them,
+     * and its answer is two lines this port writes itself. */
+    s_bench_shell_lines = 0;
+    shell_execute_cmd("no_such_verb", ps2_bench_shell_out, NULL, NULL);
+    ps2_kprintf("[BENCH] shell control: an unknown verb printed %d line(s) -- the echo path %s\n",
+                s_bench_shell_lines,
+                s_bench_shell_lines ? "works, so a later zero is the shell's and not the console's"
+                                    : "is DEAD, so every `printed nothing` verdict below is unmeasured");
+
+    /* Three cycles.  One prices the open; two show whether the bytes the first borrowed
+     * came back; the third is where a kept plane stops being a number in a row and becomes
+     * the refusal the user sees -- the 2026-10-15 run of this ledger OOM'd the 1,024 kB
+     * icon plane on its third `xmb` and drew the bar with `texmiss=646`, no icons at all. */
+    for (cycle = 1; cycle <= 3; cycle++) {
+        ps2_bench_one_cycle(screen, ask, &c);
+
+        ps2_kprintf("[BENCH] shell cycle %d: %d line(s), window present at frame 1 = %s, %u frame(s), top '%s'\n",
+                    cycle, c.lines, c.window_seen ? "YES" : "no",
+                    (unsigned int)c.frames,
+                    get_top_wnd() ? get_top_wnd()->title : "(none)");
+        if (c.window_seen)
+            ps2_kprintf("[BENCH] shell cycle %d: its client %dx%d visible=%d gl_layer=%d img_valid=%d paint_installed=%d, and the GS holds %d texture plane(s) with %d kB of its VRAM left -- all sampled while it was up\n",
+                        cycle, s_bench_shell_geom[0], s_bench_shell_geom[1],
+                        s_bench_shell_geom[2], s_bench_shell_geom[3],
+                        s_bench_shell_geom[4], s_bench_shell_geom[5],
+                        s_bench_shell_geom[6], s_bench_shell_geom[7]);
+        ps2_kprintf("[BENCH] shell %d: %s\n", cycle, c.why);
+        if (c.window_seen && c.no_surface)
+            ps2_kprintf("[BENCH] shell %d: the `Failed to open window surface` above is this harness' Escape, injected while open_xmb_window() was still on the stack, so its `return s_wnd` saw the NULL xb_destroy() left -- not a product failure\n",
+                        cycle);
+        /* No `%+d`: this console's kprintf has no sign flag, and the first version of this
+         * row ate the conversion and shifted every column after it, which printed a 2,950 kB
+         * hole as the ask and a 1,088 kB leak as the hole.  The sign is chosen in C. */
+        ps2_kprintf("[BENCH] shell cycle %d: pool used %u -> %u kB, largest hole %u -> %u kB, the %u kB ask at the open %s\n",
+                    cycle, (unsigned int)(c.used_before / 1024u),
+                    (unsigned int)(c.used_after / 1024u),
+                    (unsigned int)(c.hole_before / 1024u),
+                    (unsigned int)(c.hole_after / 1024u),
+                    (unsigned int)(ask / 1024u),
+                    c.hole_before >= ask ? "had a hole to serve it" : "had no hole big enough to serve it");
+        if (c.used_after > c.used_before) {
+            const size_t kept_kb = (c.used_after - c.used_before) / 1024u;
+
+            ps2_kprintf("[BENCH] shell cycle %d: the close kept %u kB -- %s\n", cycle,
+                        (unsigned int)kept_kb,
+                        leak_kb == 0u
+                            ? "that is the leak this ledger exists to price, and the next cycle pays for it"
+                            : (kept_kb < leak_kb
+                                   ? "a smaller keep than the first cycle, so an ask inside the open was refused: read the [HEAP] rows above this one"
+                                   : "the same planes the first cycle kept"));
+            if (leak_kb == 0u) leak_kb = (unsigned int)kept_kb;
+        } else {
+            ps2_kprintf("[BENCH] shell cycle %d: the close gave the pool back every byte the verb took -- used is %u kB again\n",
+                        cycle, (unsigned int)(c.used_after / 1024u));
+        }
+        if (!starved_at && c.hole_before < ask) starved_at = cycle;
+        if (!refused_at && leak_kb && c.used_after > c.used_before &&
+            (c.used_after - c.used_before) / 1024u < leak_kb) refused_at = cycle;
+        if (c.hole_before < smallest_hole) smallest_hole = c.hole_before;
+        leaked_total += c.used_after > c.used_before ? c.used_after - c.used_before : 0;
+    }
+
+    /* The ledger's own sentence, because the cycle rows above are the shape of the defect
+     * and this is its size: bytes kept per open, and which ask first met a hole too small
+     * for it.  Note the two asks are not the same number -- a client pixmap the window
+     * manager cuts for you (1,500 kB here) and a texture plane the GL backend allocates
+     * inside the open (1,024 kB for a 512x512 padded atlas) -- and the one that starves
+     * first is the plane, because the plane is asked for when the window's own 2,250 kB is
+     * already in hand.  The phases that run after this one spend the same pool, so a `no
+     * surface` in them is this row's answer rather than a second defect to chase. */
+    ps2_bench_pool_census("after the ledger");
+    ps2_kprintf("[BENCH] shell ledger: %d cycle(s) on a boot hole of %u kB -- pool used %u kB at boot, %u kB after the last close, so a cycle that gets its planes keeps %u kB and the ledger kept %u kB%s\n",
+                3, (unsigned int)(hole_boot / 1024u), (unsigned int)(used_boot / 1024u),
+                (unsigned int)(s_heap_used / 1024u), leak_kb,
+                (unsigned int)(leaked_total / 1024u),
+                leaked_total ? " -- that is what makes a later `xmb` pick nothing"
+                             : " -- every cycle gave the pool back what it took, so no open is starved by the ones before it");
+    if (refused_at)
+        ps2_kprintf("[BENCH] shell ledger: cycle %d kept less than cycle 1 because an allocation inside its open was refused outright -- the [HEAP] out of memory row above names it, and the window that drew after had no icon plane to bind\n",
+                    refused_at);
+    ps2_kprintf("[BENCH] shell ledger: the %u kB client ask met its smallest hole of %u kB -- %s; the pool is %s\n",
+                (unsigned int)(ask / 1024u), (unsigned int)(smallest_hole / 1024u),
+                starved_at ? "an open found no hole big enough for it, which is the refusal the user sees"
+                           : "every open could be served, so the client pixmap is not what starves",
+                ps2_heap_check() ? ps2_heap_check() : "sound");
+}
 #endif /* BTRON_PS2_BENCH_APP */
 
 /* The price a float op costs the image is not the price the `[FPU]` chain row prints.
@@ -6086,6 +8380,15 @@ static void ps2_bench_run(GDEV *screen)
                         (unsigned int)btron_fp_dump[c][5]);
     }
 
+#if BTRON_PS2_BENCH_APP
+    /* Ahead of every pixel phase, on the boot-time pool, for the reason in the phase's
+     * own note: the phases below spend 4 MB of an 11 MB pool that a booted desktop has
+     * not spent yet, and a GL window's client pixmap asks 1.5 MB of it.  Run after the
+     * click phase and the app answers "no memory" for the harness' own footprint
+     * instead of the product's. */
+    ps2_bench_shell_verb(screen);
+#endif
+
     /* First of the pixel phases, and before the region table rather than after it:
      * its answer decides which of the two lanes row 9's open half is worth taking,
      * and a row that decides is a row that has to be in the log even if the run gets
@@ -6241,6 +8544,32 @@ static void ps2_gui_pass(GDEV *screen)
      * owes it and the body returns without one more frame. */
     if (s_bench_app_active) {
         s_bench_app_made++;
+        /* The shell phase's one honest witness: the window either was on the table while
+         * its task drew, or it never was.  Sampling the first three passes rather than
+         * only the first covers a pass the compositor takes before the opener has put the
+         * window up, and taking values rather than the pointer is deliberate -- the WND
+         * does not outlive the close this phase's own Escape causes, and reading it after
+         * the call returned would print geometry for a window that is already gone. */
+        if (s_bench_shell_watch && !s_bench_shell_window_seen && s_bench_app_made <= 3u) {
+            const WND *w = ps2_bench_wnd_named("Cross Media Bar");
+
+            if (w) {
+                s_bench_shell_window_seen = 1;
+                s_bench_shell_geom[0] = (int)(w->client.right - w->client.left);
+                s_bench_shell_geom[1] = (int)(w->client.bottom - w->client.top);
+                s_bench_shell_geom[2] = (int)w->visible;
+                s_bench_shell_geom[3] = (int)w->gl_layer;
+                s_bench_shell_geom[4] = (int)w->img_valid;
+                s_bench_shell_geom[5] = w->paint ? 1 : 0;
+                /* The GS side of the same two planes, because it creeps the way the pool
+                 * does: a freed EE plane's address is not handed back to the same slot by a
+                 * fragmented first-fit pool, so the next open registers a *new* pointer for
+                 * the same geometry and the registry takes a fresh VRAM span and abandons
+                 * the old one.  Two entries and a steady cursor is the fixed shape. */
+                s_bench_shell_geom[6] = (int)gs_tex_count();
+                s_bench_shell_geom[7] = (int)(gs_tex_vram_left() / 1024u);
+            }
+        }
         /* A heartbeat, because a phase that prints nothing for minutes is ambiguous
          * between a renderer that is slow and one that is stuck, and the elapsed
          * column is the number that tells them apart.  Sparse on purpose: the console
@@ -6267,6 +8596,15 @@ static void ps2_gui_pass(GDEV *screen)
          * the number the frame's second-biggest term turns on. */
         if (s_bench_app_made >= 4u && s_bench_app_made <= 6u)
             ps2_bench_canvas_census(screen, (unsigned int)s_bench_app_made);
+#if BTRON_PS2_BENCH_GS == 2
+        /* LANE 19 rung 6, on ONE pass rather than the canvas census's three: it reads the whole
+         * page band by band, and the row it answers does not need a delta -- the page either holds
+         * the stream's ink or it does not.  Frame 5 because the window is up by then (the shell
+         * witness above needs three passes at the outside) and the phase's own Escape has not been
+         * injected yet, which is the only reason this runs inside the hook at all. */
+        if (s_bench_app_made == 5u)
+            ps2_bench_gs_live_census(s_bench_app_made);
+#endif
     }
     if (s_bench_app_left && --s_bench_app_left == 0) {
         const ER injected = ps2_inject_key(BTRON_KEY_ESCAPE, 1);
@@ -7237,7 +9575,14 @@ void ps2_kernel_main(void)
     btron_core_banner();
     ps2_kprintf("\n");
 
-#if defined(BTRON_AUTO_GUI) && (BTRON_AUTO_GUI == 1)
+#if BTRON_PS2_BENCH_GS == 1
+    /* The census instead of the desktop -- see the rung's note on why a read is only
+     * honest at Stage 1.  The shell loop below still runs, because nothing here can
+     * stop PCSX2: the harness stops it when the sentinel reaches the log.  Value 2 is
+     * deliberately NOT this branch: rung 6 reads a live desktop's page, so it has to
+     * boot the session the census rung refuses to start. */
+    ps2_bench_gs_census();
+#elif defined(BTRON_AUTO_GUI) && (BTRON_AUTO_GUI == 1)
     ps2_kprintf("[BOOT] AUTO_GUI=1: launching the B-System Desktop workbench\n");
     launch_ps2_desktop_session();
 #else

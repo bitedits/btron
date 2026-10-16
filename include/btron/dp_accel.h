@@ -74,6 +74,43 @@ int32_t dp_ptr_riscos(int32_t raw, int step, int32_t *carry);
 #define DP_PTR_LIMIT_DEBT 2
 int32_t dp_ptr_limit(int32_t want, int32_t max_step, int32_t *defer);
 
+/* ── The gain dial (doc/txt/PS2.txt LAW 13e) ────────────────────────────
+ *
+ * One multiplier, one home, several hands.  `g_ptr_gain_fp` is that
+ * multiplier -- 8.8 fixed point, the unit dp_ptr_scale() takes, 0 meaning
+ * "whatever the live source profile's own default is" -- and the hands that can
+ * turn it (the Stage-1 `sens` prompt and the gain chords, the Settings > Input
+ * panel's gain block, the launcher's row in the pointer band) all write this one
+ * variable rather than keeping a copy of their own.  It is defined in
+ * src/settings/input.c, next to the panel that draws the dial.
+ *
+ * btron_ptr_gain_fp[] is the dial's stops and the only list of them, and
+ * btron_ptr_gain_label() prints a stop from that list, so the panel's radios and
+ * the launcher's row cannot name the same gain two different ways -- what the
+ * numbers are called is derived from what they are, not retyped per control.
+ * Index 0 is the auto choice; a hand that wants a fixed gain picks 1..6.
+ *
+ * Defined for the PS2 target only, and declared for every target, which is the
+ * mirror image of dp_ptr_riscos() above: a port whose pointer has no dial of its
+ * own fails at the LINK if it tries to read one, and the Pi 400 -- whose gain is
+ * the curve's `step`, not this constant -- keeps the bytes it has. */
+#define BTRON_PTR_GAIN_STEPS 7
+extern const int32_t btron_ptr_gain_fp[BTRON_PTR_GAIN_STEPS];
+extern int32_t g_ptr_gain_fp;
+
+/* Which stop a gain sits nearest, for drawing the dial from the live value:
+ * `sens 38` and a hand that then opens the panel should agree on one row.
+ * Any value at or below the auto step, and any negative, reads as index 0. */
+int btron_ptr_gain_index(int32_t fp);
+
+/* What stop `index` is called, one line, built from the table on first use and
+ * kept: "Auto (source gain)", or "0.38 px per count" -- the decimal rather than
+ * the /256 form, rounded to nearest, because this line has to fit the launcher's
+ * value column as well as the panel's radio.  The /256 number is the core's row
+ * to print, not a control's.  Out-of-range indexes return a bare "gain" rather
+ * than reading past the table. */
+const char *btron_ptr_gain_label(int index);
+
 #ifdef __cplusplus
 }
 #endif

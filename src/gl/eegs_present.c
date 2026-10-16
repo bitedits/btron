@@ -81,16 +81,18 @@ static eegs_present_stats s_stats;
  * The per-group tuple is {hash low, hash high, qwc, the per-register lane hashes, the group's
  * kind}.  `qwc` is carried for the COLUMNS and not for the detection: `same=`/`diff=`/`tail=` are
  * reported in quadwords, and this is the field they are summed from.  A vertex-count change is
- * already caught by the words themselves -- the group then folds one more quadword and its tag's
- * NLOOP field moves with it -- which is what the controls measured by deleting both of the length
- * terms and losing no check at all.
+ * already caught by the words themselves -- the group then folds one more PAIR of quadwords, since a
+ * vertex is two of them, and its tag's NLOOP field moves with it -- which is what the controls
+ * measured by deleting both of the length terms and losing no check at all.
  *
  * The lanes exist because `diff=` cannot say WHAT moved, and the answers send the next rung to
- * different files: a group whose XYZ2 quadwords are byte-identical while its RGBAQ moved is a mesh
+ * different files: a group whose XYZ2 registers are byte-identical while its RGBAQ moved is a mesh
  * whose geometry is the same every frame and only its shade changes, which wants a colour map, while
- * a moving XYZ2 is the vertex transform being re-solved.  A vertex group's data quadwords are PRIM,
- * RGBAQ, ST, XYZ2 in that REGS order, starting at quadword 1 -- the tag's quadword carries the REGS
- * list in its high half -- so each lane folds every fourth word of the group from there.  PRIM and
+ * a moving XYZ2 is the vertex transform being re-solved.  A vertex group is a dense REGLIST, so its
+ * four registers -- PRIM, RGBAQ, ST, XYZ2 in that REGS order -- occupy TWO quadwords per vertex from
+ * quadword 1 on (the tag's quadword carries the REGS list in its high half), two registers to a
+ * quadword, low half first; each lane therefore folds every SECOND register of the group from there,
+ * which is one half of one quadword, not a whole quadword.  PRIM and
  * the tag are in none of the lanes and
  * only in the whole-group hash, which is why a group can count in all three lanes and still be
  * `diff=` -- that combination says the primitive descriptor moved, not the picture.  An AD group (a
@@ -284,15 +286,19 @@ static void eegs_stage_sink(void *user, const uint64_t *qw, uint32_t qwc)
     uint32_t lshape = ID_SEED_SHAPE;
     uint32_t px = 0u, py = 0u, pz = 0u, first = 1u;
     /* The group's kind comes out of its own tag, because the sink is handed words and nothing else:
-     * a vertex group declares a four-register REGS list, an AD group declares one, and NREG is
-     * bits [63:60] of the tag's low half.  Anything else folds no lane.  The report side re-checks
-     * this column, so the gate here is the redundant half of the pair -- measured, deleting it loses
-     * no check -- and it stays because folding words a group does not have is worse to reason about
-     * than folding nothing and letting one column say why. */
+     * a vertex group declares a four-register REGS list AND packs them, an AD group declares one
+     * register and does not, and NREG is bits [63:60] of the tag's low half while FLG is [59:58].
+     * Both fields are read because the lane mapping below is only true of a packed list: NREG alone
+     * would let a group that names four registers in four separate quadwords -- the shape LANE 19
+     * rung 5 retired -- fold its XYZ2 lane out of what is actually its ST.  Anything else folds no
+     * lane.  The report side re-checks this column, so the gate here is the redundant half of the
+     * pair -- measured, deleting it loses no check -- and it stays because folding words a group does
+     * not have is worse to reason about than folding nothing and letting one column say why. */
     const uint32_t nreg = (uint32_t)(qw[0] >> 60) & 0xFu;
+    const uint32_t flg  = (uint32_t)(qw[0] >> 58) & 3u;
     uint32_t kind = 0u;
 
-    if (nreg == GS_REC_REGS_N) kind = ID_VERTEX;
+    if (nreg == GS_REC_REGS_N && flg == GS_FLG_REGLIST) kind = ID_VERTEX;
     else if (nreg == 1u) kind = ID_AD;
 #endif
 
@@ -310,24 +316,37 @@ static void eegs_stage_sink(void *user, const uint64_t *qw, uint32_t qwc)
 #if BTRON_PS2_GS_IDENT
         ident_fold(&ha, &hb, qw[i]);
         /* The tag occupies ONE quadword -- its own 64 bits with the REGS list in the half above them
-         * -- so the data body starts at quadword 1 and is GS_REC_REGS_N registers per vertex, in the
-         * REGS order PRIM, RGBAQ, ST, XYZ2.  PRIM folds into no lane: the whole-group hash owns it,
+         * -- so the data body starts at quadword 1 and is TWO quadwords per vertex, GS_REC_REGS_N
+         * registers packed end to end in the REGS order PRIM, RGBAQ, ST, XYZ2.  PRIM folds into no
+         * lane: the whole-group hash owns it,
          * which is what the book's residual reading is -- a group invariant in every lane yet
          * `diff=` had its PRIM, its tag or its loop count move. */
         if (kind == ID_VERTEX && (i >> 1) >= 1u) {
-            switch (((i >> 1) - 1u) % GS_REC_REGS_N) {
+            /* The inverse of gs_vq()'s index: GS_REC_REGS_N / GS_REC_QW_PER_VERT registers ride in
+             * one quadword, low-numbered first in the low half, so quadword-offset k (past the tag)
+             * and half h name register (r*k + h) of the REGS list.  Written from the two counts and
+             * not from a literal 2 because the two moved together under rung 5's fix and a mapping
+             * that did not would fold every lane one register out of place. */
+            const uint32_t k = (i >> 1) - 1u;
+            const uint32_t reg = (((GS_REC_REGS_N / GS_REC_QW_PER_VERT) * k + (i & 1u))
+                                  % GS_REC_REGS_N);
+
+            switch (reg) {
             case 1u: ident_fold1(&lrgb, qw[i]); break;   /* RGBAQ */
             case 2u: ident_fold1(&lst,  qw[i]); break;   /* ST    */
             case 3u:
                 ident_fold1(&lxyz, qw[i]);
                 /* The shape lane reads XYZ2's own fields -- X[15:0], Y[31:16], Z[63:32] of the
-                 * quadword's low half (gs_pack_xyz2) -- and folds the DIFFERENCE from the previous
+                 * register (gs_pack_xyz2) -- and folds the DIFFERENCE from the previous
                  * vertex rather than the coordinate.  It is therefore invariant under translating
                  * the whole group, which is the one thing `xyz=` cannot say: a differing `xyz=` over
                  * an invariant `shape=` is the same mesh in a new place, and a differing `shape=` is
                  * the mesh itself changing.  The first vertex folds nothing, so a group's shape is
-                 * its vertex count and its relative structure and nothing about where it sits. */
-                if ((i & 1u) == 0u) {
+                 * its vertex count and its relative structure and nothing about where it sits.
+                 * There is no half test here: the register dispatch above already puts XYZ2 in the
+                 * half the dense stride gives it, and the `(i & 1u) == 0u` this replaces was that
+                 * test read as a fact about the layout rather than as the sparse shape's accident. */
+                {
                     const uint64_t w = qw[i];
                     const uint32_t x = (uint32_t)(w & 0xFFFFu);
                     const uint32_t y = (uint32_t)((w >> 16) & 0xFFFFu);

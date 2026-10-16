@@ -2468,7 +2468,9 @@ PART FOUR -- THE INTERCONNECT: INPUT AS A REAL PLANE
     PS2_EMU_POINTER_SCALE instead of assuming it.
   - ptrsrc    -- WHICH OF THE TWO PROFILES IS ANSWERING, AND WHY?  See 13.2.
   - sens / maxstep -- this port's own POLICY, applied only once the first two
-    agree the path is sound.
+    agree the path is sound.  Since LAW 13e `sens` writes the same variable the
+    Settings panel and the launcher dial, so it is the prompt's hand on one dial
+    rather than the only hand on it.
 
   ptrcal drives the same report handler ptrstat counts, so it must not run
   inside a measurement window.  Every ptrstat call resets, so forgetting costs
@@ -2632,7 +2634,8 @@ PART FOUR -- THE INTERCONNECT: INPUT AS A REAL PLANE
   previous one had not spent, so a change mid-session cannot leave the old
   source's half-pixel tail to be paid out by the new one.
 
-  LAW 13b (one gain constant).  There is ONE gain in this stack:
+  LAW 13b (one gain constant).  There is ONE gain in this stack: the live
+  variable LAW 13e names, whose default on the emulator profile is
   PS2_EMU_MULT_FP, reached from the console as `sens`.  PointerXScale and
   PointerYScale look like a second copy of it -- both are in the repo's ini,
   set to 8 -- but neither name exists anywhere in PCSX2 v2.8.2's source, a USB
@@ -2665,7 +2668,50 @@ PART FOUR -- THE INTERCONNECT: INPUT AS A REAL PLANE
 
   Roughly ONE sens per hundredth of a guest px per host px.  The prompt value
   does not survive a reboot, so what a dial settles belongs in PS2_EMU_MULT_FP
-  afterwards.
+  afterwards -- and the same is now true of the two hands LAW 13e puts on the
+  same dial, because nothing in this stack writes a pointer setting to /SYS.
+
+  LAW 13e (one gain, one home, several hands).  This stack has one multiplier
+  and it lives in one variable: `g_ptr_gain_fp`, in 256ths of a pixel per count,
+  defined in src/settings/input.c next to the dial that draws it and read by this
+  port's pointer on every pass.  Three hands turn it and none of them keeps a
+  copy of it: `sens` at the Stage-1 prompt, the Settings > Input panel's gain
+  block, the launcher's row in the pointer band.  Each writes that one int and
+  the core notices between passes -- it re-reads the global, clears the subpixel
+  carries and the unspent distance for the reason 13.2 already gives for a
+  profile switch, and prints the new gain with the same words the prompt uses, so
+  a hand that changed it from a window and a hand that changed it from the
+  console read the same row back.  0 means "the live source profile's own
+  default", which is what keeps PS2_EMU_MULT_FP and PS2_MOUSE_MULT_FP defaults
+  rather than a second copy of somebody's decision.
+
+  What leaves this target with the law is the pair of controls that sat where the
+  gain block sits now.  They wrote `g_mouse_step_mult` and
+  `g_mouse_accel_profile`, and since LAW 13d nothing on this machine reads
+  either.  A dial that the pointer ignores is worse than no dial: it teaches the
+  hand that this machine cannot be trusted to answer a control, which is the
+  exact suspicion this chapter exists to settle.  The two names are therefore
+  defined only for a target that compiles the curve -- the same predicate
+  LANE 15 put dp_ptr_riscos() behind, and for the same reason -- so a PS2 row
+  that sets one of them fails at the LINK rather than surviving as scenery.  The
+  declarations in the applet and the launcher are cut with it, so the failure
+  names the variable instead of leaving an orphan extern behind.  The Pi 400
+  keeps its radios, its globals and its curve unchanged: every word of this
+  paragraph is inside `BTRON_PS2_TARGET`, and the arm64 image is compared
+  byte-for-byte with the build that predates this lane.
+
+  The dial's stops are one array, `btron_ptr_gain_fp`, declared beside
+  dp_ptr_scale() in <btron/dp_accel.h>: index 0 is the auto choice and 64, 96,
+  128, 160, 192, 256 are the six gains a hand can ask for.  Panel radios, the
+  launcher's enum row and the nearest-step index all read those numbers, so what
+  "a quarter of a pixel per count" is called exists in one file instead of three
+  that can drift apart.  That 96 and 256 are also the two profile defaults is
+  the dial pointing at what ships, not a second home for those constants.
+
+  This is a dial, not a measurement.  The number that makes the cursor equal the
+  Mac's own is still unsettled -- 13.2's open task, and `ptgain` is the
+  instrument for it -- and a hand that moves this control is choosing a stop, not
+  taking a reading.
 
 13.3  The cursor's frame rate is the paint pass's frame rate
 
@@ -2756,16 +2802,24 @@ PART FOUR -- THE INTERCONNECT: INPUT AS A REAL PLANE
                   hardware" is the open risk
 
   This port
-       behaviour  source profile -> dp_ptr_scale()'s 8.8 gain (sens) ->
-                  dp_ptr_limit() px per INPUT period (maxstep, off; the period
-                  is the plane table's, scaled by the periods a pass actually
-                  owes) -> the screen borders.  Nothing in that chain reads the
-                  counts' SPEED, which is what LAW 13d says and what 13.1's
-                  `curve=` field is now there to catch: `none` on both profiles.
-       setting    ptrsrc, sens, maxstep
+       behaviour  source profile -> dp_ptr_scale()'s 8.8 gain (the one variable
+                  LAW 13e names, which `sens`, the Settings panel and the
+                  launcher all write) -> dp_ptr_limit() px per INPUT period
+                  (maxstep, off; the period is the plane table's, scaled by the
+                  periods a pass actually owes) -> the screen borders.  Nothing
+                  in that chain reads the counts' SPEED, which is what LAW 13d
+                  says and what 13.1's `curve=` field is now there to catch:
+                  `none` on both profiles.
+       setting    ptrsrc, sens, maxstep, and the panel's or the launcher's gain
+                  dial, which is the same variable and not a fourth one
        status     PROVEN by ptrcal for the chain; for LAW 13d the proof on
-                  offer is the source row in scripts/test_ps2.sh, and a fresh
-                  `ptrcal` run over the hw profile -- the [CAL] gain rows
+                  offer is the set of rows in scripts/test_ps2.sh that read the
+                  LINKED IMAGE -- the handler's shaping window, the absent
+                  accelerator's text, this target's symbol table -- and for LAW
+                  13e the same kind of pair: the dead dial's strings and symbols
+                  gone, the gain dial's label present, and the panel's still-live
+                  rows present so an absent row cannot be a missing file.  A
+                  fresh `ptrcal` run over the hw profile -- the [CAL] gain rows
                   flattening to one constant -- is SKIP, not PASS, because no
                   booted session has printed it since the curve came out.
 

@@ -5,7 +5,9 @@
 #include <btron/core.h>
 
 #ifndef __WEAK_APP
-#if defined(__GNUC__) || defined(__clang__)
+#if defined(__APPLE__)
+#define __WEAK_APP __attribute__((weak_import))
+#elif defined(__GNUC__) || defined(__clang__)
 #define __WEAK_APP __attribute__((weak))
 #else
 #define __WEAK_APP

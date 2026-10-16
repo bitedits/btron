@@ -9,6 +9,7 @@
 #include <string.h>
 #include <stdlib.h>
 #include <pthread.h>
+#include <time.h>
 
 #define MAX_FS_FILES      16
 #define MAX_RECS_PER_FILE 8
@@ -368,3 +369,15 @@ ER ref_vol(ID vol_id, VOL_INFO *info) {
     info->block_size   = 4096;
     return E_OK;
 }
+
+static UW s_fs_rec_stamp_pinned;
+
+UW btron_fs_now_stamp(void) {
+    if (s_fs_rec_stamp_pinned) return s_fs_rec_stamp_pinned;
+    return (UW)(time(NULL) - 946684800UL);
+}
+
+void btron_fs_set_stamp(UW secs_since_2000) {
+    s_fs_rec_stamp_pinned = secs_since_2000;
+}
+

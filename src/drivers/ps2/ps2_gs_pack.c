@@ -161,7 +161,10 @@ uint64_t gs_pack_giftag(uint32_t nloop, uint32_t eop, uint32_t pre, uint64_t pri
 uint64_t gs_pack_regs(const uint32_t *regs, uint32_t n)
 {
     uint64_t out = 0;
-    if (n > 4) n = 4;
+    /* Ten nibbles, because that is how wide the field is: the SDK's flat triangle names six
+     * registers and its rect outline names eight, so a cap of four would drop a vertex and leave the
+     * primitive waiting for a drawing kick that never comes.  ps2_gs_pack.h carries the law. */
+    if (n > GS_REGS_N_MAX) n = GS_REGS_N_MAX;
     for (uint32_t i = 0; i < n; i++) {
         out |= F(regs[i], 4, i * 4);
     }

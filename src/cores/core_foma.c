@@ -263,3 +263,7 @@ ER tk_dly_tsk(RELTIM dlytim) {
 __attribute__((weak)) void open_audio_player_window(void) {}
 __attribute__((weak)) void open_tad_browser_window(void) {}
 __attribute__((weak)) void launch_beos_chat(void) {}
+__attribute__((weak)) void* open_xmb_window(void) { return NULL; }
+__attribute__((weak)) void* open_glgears_window(void) { return NULL; }
+__attribute__((weak)) void* open_lilcu64_demo_window(void) { return NULL; }
+

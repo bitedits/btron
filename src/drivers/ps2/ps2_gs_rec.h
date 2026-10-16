@@ -8,13 +8,24 @@
  * increment 3 is the group state machine -- an open primitive, a running NLOOP, and the rule
  * for what to do when the buffer is full.
  *
- * The group's REGS list is PRIM, RGBAQ, ST, XYZ2 -- four quadwords a vertex, 64 bytes.  PRIM is
+ * The group's REGS list is PRIM, RGBAQ, ST, XYZ2, and it is a dense `FLG=REGLIST` group, so a vertex
+ * is TWO GIF quadwords -- 32 bytes -- because a REGLIST group packs each 64-bit register next to the
+ * one the list names after it instead of giving each one a quadword of its own.  PRIM is
  * repeated for every vertex rather than sent once because the GS decrements PRIM's texture,
  * blend and fog flags as each primitive completes (under PRMODE.MODE/OFFSET), so a strip that
  * set them once loses them from its second triangle on; re-sending them is what a UI that wants
  * every triangle textured, blended and fog-free asks for.  The cheaper alternative -- one
- * PRMODE write and three quadwords a vertex -- is recorded as a follow-up in doc/txt/PS2.txt and
+ * PRMODE write and three registers a vertex -- is recorded as a follow-up in doc/txt/PS2.txt and
  * waits on a field table this port can gate.
+ *
+ * The shape this replaced was `FLG=PACKED` with `PRE=1` and one sparse quadword per register -- four
+ * per vertex, twice the bytes -- and LANE 19 rung 5 measured it on this GS drawing NOTHING: a
+ * multi-register PACKED group never kicks, whatever its primitive comes from, while the identical
+ * four registers densely packed filled their box to the pixel (ps2_gs_poster.h carries the census
+ * rows).  So these vertex groups were the inert shape, which is the standing candidate explanation
+ * for the eegs XMB's "frame only, empty inside".  Whether the picture now arrives is the run that
+ * follows this edit -- the census can say whether a recorded-shape packet lands, and only the
+ * screen can say whether a frame does -- not something this paragraph may assert.
  *
  * XYZ2 comes last in every vertex because the drawing kick fires on it: colour and texture
  * coordinates have to be in the GS before the vertex that uses them is decoded.
@@ -29,22 +40,32 @@
 
 #include <stdint.h>
 
-/* Quadwords per vertex: the four registers of the group's REGS list. */
+/* Quadwords per vertex: the four registers of the group's REGS list, two of them to a quadword,
+ * because that is what `FLG=REGLIST` means and what LANE 19 rung 5 measured as the shape this GS
+ * rasterises.  The division is exact only while the register count is even, which it is by
+ * construction -- and `make test-ps2-gs-rec` asserts it, because `(GS_REC_REGS_N % 2u)` is not a
+ * preprocessor expression at all (`4u` is not a pp-number), so no `#if` can check it. */
 #define GS_REC_REGS_N 4u
+#define GS_REC_QW_PER_VERT (GS_REC_REGS_N / 2u)
 
 /* Quadwords in a group of `n` AD register writes: one tag plus n data, because the general law is
- * one tag plus NLOOP * NREG data and an AD group's NREG is 1.  `send_trx_setup_at()` in ps2_gs.c
- * proves the shape on the machine -- a tag and four registers as five quadwords with NLOOP=4 -- so a
- * count that instead gave each register two quadwords would hand channel 2 a QWC larger than the
- * packet and the GIF would decode the overflow as more of it. */
+ * one tag plus NLOOP * NREG *registers*, and each register takes a quadword of its own when FLG is
+ * PACKED -- which is the AD form, always NREG=1.  `send_trx_setup_at()` in ps2_gs.c proves the shape
+ * on the machine -- a tag and four registers as five quadwords with NLOOP=4 -- so a count that
+ * instead gave each register two quadwords would hand channel 2 a QWC larger than the packet and the
+ * GIF would decode the overflow as more of it.  A REGLIST group is the same law with the registers
+ * packed two to a quadword, which is why a vertex group's count is GS_REC_QW_PER_VERT per loop and
+ * not this one. */
 #define GS_REC_AD_QWC(n) (1u + (n))
 
 /* The stream buffer, in quadwords: 16 bytes each.  A group that would not fit is split at the
  * nearest boundary that keeps every primitive whole, and the vertices a strip needs to continue
  * are re-emitted, so this size is a latency knob -- how many DMA starts a frame costs -- and not
- * a limit on what an application may draw.  4,096 quadwords is 64 KB of .bss, and a measured XMB
- * frame of ~13,700 quadwords therefore costs it about four starts, which is the number row 5 of
- * the plan keeps an eye on.  Overridable so the host gate can exercise a split without writing
+ * a limit on what an application may draw.  4,096 quadwords is 64 KB of .bss.  The measured XMB
+ * frame this was chosen against was ~13,700 quadwords and therefore cost four starts; at two
+ * quadwords a vertex rather than four the same vertex count is ~6,900, which is two starts -- that
+ * halving is arithmetic from the stride and not a re-measurement, so the next bench run owns the
+ * number in the [GSTS] row.  Overridable so the host gate can exercise a split without writing
  * twenty thousand vertices. */
 #ifndef GS_REC_QW_CAP
 #define GS_REC_QW_CAP 4096u

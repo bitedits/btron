@@ -6,6 +6,7 @@
 
 #include <btron/settings.h>
 #include <btron/dp.h>
+#include <btron/dp_accel.h>
 #include <btron/troncode.h>
 #include <btron/wnd.h>
 #include <btron/settings_icon.h>
@@ -16,9 +17,35 @@
 uint32_t g_kbd_repeat_delay_us    = 160000U; /* 16 cs = 160 ms (RISC OS Fast Delay) */
 uint32_t g_kbd_repeat_interval_us = 25000U;  /* 40 cps (25 ms interval) */
 int      g_kbd_repeat_enabled     = 1;
+
+#if defined(BTRON_PS2_TARGET)
+/* LAW 13e (doc/txt/PS2.txt): one gain, one home, several hands.  This is the
+ * home -- the multiplier this port's pointer reads, in the 8.8 unit
+ * dp_ptr_scale() takes, with 0 meaning "the live source profile's own default".
+ * `sens` at the Stage-1 prompt, the block painted below, and the launcher's row
+ * in the pointer band all write it; none of them keeps a copy, and the core
+ * notices between passes.
+ *
+ * The stops themselves -- btron_ptr_gain_fp[], btron_ptr_gain_index() and
+ * btron_ptr_gain_label() -- are in src/graphics/dp_accel.c behind the same
+ * predicate, because that is where the multiplier is applied and a control that
+ * named its own numbers would be a second copy of the thing it dials.
+ *
+ * g_mouse_step_mult and g_mouse_accel_profile -- the two the radios used to set
+ * below -- are deliberately NOT defined for this target: LAW 13d left them with
+ * no reader on this machine, and a dial the pointer ignores is worse than no
+ * dial.  Their absence is the gate, in the same way dp_ptr_riscos()'s is: a PS2
+ * row that tries to set one fails at the link rather than surviving as scenery.
+ * The Pi 400 keeps both, its curve and its radios, untouched -- and the three
+ * declarations under #else are in the order they had before this lane, because
+ * the arm64 image's .data layout is the control this change is checked against. */
+int32_t g_ptr_gain_fp = 0;                     /* 0: auto, the source profile's own */
+int      g_mouse_swap_select_adjust = 0;      /* 0: Right-handed (Select/Menu/Adjust), 1: Left-handed */
+#else
 int      g_mouse_step_mult          = 2;      /* Default: Step 2 (Archimedes / Haiku natural responsive standard) */
 int      g_mouse_swap_select_adjust = 0;      /* 0: Right-handed (Select/Menu/Adjust), 1: Left-handed */
 int      g_mouse_accel_profile     = 1;
+#endif
 
 typedef struct {
     WND *wnd;
@@ -29,8 +56,12 @@ typedef struct {
     int  kbd_layout_sel;   /* 0: US ANSI, 1: Acorn UK, 2: Japanese JIS, 3: TRON-KBD */
 
     /* Mouse Settings */
+#if defined(BTRON_PS2_TARGET)
+    int  mouse_gain_sel;    /* index into btron_ptr_gain_fp[]; 0 = the source's own */
+#else
     int  mouse_step_sel;    /* 0: Step 1, 1: Step 2 (RISC OS Default), 2: Step 3, 3: Step 4 */
     int  mouse_profile_sel; /* 0: RISC OS Stepped Curve, 1: Haiku Continuous Curve */
+#endif
     BOOL mouse_accel_enable;
     int  mouse_handedness;  /* 0: Right-handed (Select/Menu/Adjust), 1: Left-handed */
     int  dbl_click_sel;     /* 0: 40cs (400ms), 1: 50cs (500ms) */
@@ -122,13 +153,22 @@ static void apply_input_settings_to_kernel(void) {
     }
 
     /* Mouse Step Multiplier (*Configure MouseStep CMOS &C2) */
+#if defined(BTRON_PS2_TARGET)
+    /* LAW 13e: the one multiplier this port's pointer reads.  The core sees the
+     * new value on the next pass, clears the subpixel remainder the old gain
+     * made and prints the row -- src/cores/core_ps2.c's ps2_ptr_gain_sync(). */
+    g_ptr_gain_fp = btron_ptr_gain_fp[g_state_input.mouse_gain_sel];
+#else
     g_mouse_step_mult = g_state_input.mouse_step_sel + 1; /* 1, 2, 3, 4 */
+#endif
 
     /* Select / Adjust handedness */
     g_mouse_swap_select_adjust = g_state_input.mouse_handedness;
 
     /* Mouse Acceleration Profile (0 = RISC OS, 1 = Haiku) */
+#if !defined(BTRON_PS2_TARGET)
     g_mouse_accel_profile = g_state_input.mouse_profile_sel;
+#endif
 
     g_state_input.is_dirty = FALSE;
 }
@@ -139,8 +179,12 @@ static void set_risc_os_defaults(void) {
     g_state_input.kbd_rate_sel       = 0;     /* 40 cps Fast */
     g_state_input.kbd_layout_sel     = 0;     /* US ANSI */
 
+#if defined(BTRON_PS2_TARGET)
+    g_state_input.mouse_gain_sel     = 0;     /* Auto: this source profile's own gain */
+#else
     g_state_input.mouse_step_sel     = 0;     /* Step 1: 1.0x Precision */
     g_state_input.mouse_profile_sel  = 1;     /* Haiku OS Continuous (1) or RISC OS (0) */
+#endif
     g_state_input.mouse_accel_enable = TRUE;
     g_state_input.mouse_handedness   = 0;     /* Right-handed (Select/Menu/Adjust) */
     g_state_input.dbl_click_sel      = 1;     /* 50cs (500ms) RISC OS Default */
@@ -162,7 +206,11 @@ static void paint_input_settings(WND *wnd, GDEV *dev) {
     drw_lin(dev, 0, 40, dev->width, 40);
     draw_setting_gif_icon_scaled(dev, "input", 6, 4, 32, 32);
     char hdr_str[128];
+#if defined(BTRON_PS2_TARGET)
+    snprintf(hdr_str, sizeof(hdr_str), "[Settings Cabinet] %s (%s) — Pointer Gain & Keys", "Input", "入力環境");
+#else
     snprintf(hdr_str, sizeof(hdr_str), "[Settings Cabinet] %s (%s) — RISC OS & Haiku Input", "Input", "入力環境");
+#endif
     drw_tc_string(dev, 46, 12, hdr_str, COLOR_BLACK, COLOR_LTGRAY);
 
     /* ═══════════════════════════════════════════════════════════════════
@@ -197,8 +245,27 @@ static void paint_input_settings(WND *wnd, GDEV *dev) {
     RECT s2 = { 324, 48, 628, 380 };
     fill_rec(dev, &s2, COLOR_WHITE);
     drw_rec(dev, &s2);
+#if defined(BTRON_PS2_TARGET)
+    drw_tc_string(dev, 330, 40, " [2. Pointer Configuration (proportional)] ", COLOR_NAVY, COLOR_WHITE);
+#else
     drw_tc_string(dev, 330, 40, " [2. Mouse Configuration (Haiku & RISC OS)] ", COLOR_NAVY, COLOR_WHITE);
+#endif
 
+#if defined(BTRON_PS2_TARGET)
+    /* LAW 13e.  Where a target whose pointer runs the RISC OS step curve offers a
+     * "tracking speed" and an "acceleration engine", this one offers the only
+     * number its cursor honours: the multiplier between a count and a pixel.  The
+     * labels come from btron_ptr_gain_label(), which formats the table the
+     * pointer actually multiplies by -- a radio cannot say one number while the
+     * arithmetic means another, and the launcher's row says exactly this -- and
+     * the seven rows sit in the space the two dead blocks used to take, so the
+     * blocks under them keep their positions and their hit rects. */
+    drw_tc_string(dev, 332, 62, "Pointer Gain (this port has no curve):",
+                  COLOR_NAVY, COLOR_WHITE);
+    for (int i = 0; i < BTRON_PTR_GAIN_STEPS; i++)
+        paint_ui_radio(dev, 336, (H)(78 + i * 16), btron_ptr_gain_label(i),
+                       g_state_input.mouse_gain_sel == i, FALSE);
+#else
     drw_tc_string(dev, 332, 62, "Tracking Speed (*Configure MouseStep):", COLOR_NAVY, COLOR_WHITE);
     paint_ui_radio(dev, 336, 78, "Step 1: 1.0x Slow Precision", g_state_input.mouse_step_sel == 0, FALSE);
     paint_ui_radio(dev, 336, 94, "Step 2: 2.0x Standard (RISC OS CMOS)", g_state_input.mouse_step_sel == 1, FALSE);
@@ -208,6 +275,7 @@ static void paint_input_settings(WND *wnd, GDEV *dev) {
     drw_tc_string(dev, 332, 146, "Acceleration Engine Profile:", COLOR_NAVY, COLOR_WHITE);
     paint_ui_radio(dev, 336, 162, "Haiku OS Continuous 2D (Smooth)", g_state_input.mouse_profile_sel == 1, FALSE);
     paint_ui_radio(dev, 336, 178, "RISC OS Stepped (Archimedes)", g_state_input.mouse_profile_sel == 0, FALSE);
+#endif
 
     drw_tc_string(dev, 332, 198, "Three-Button Model (Select, Menu, Adjust):", COLOR_NAVY, COLOR_WHITE);
     paint_ui_radio(dev, 336, 214, "Right-Hand: [Select] [Menu] [Adjust]", g_state_input.mouse_handedness == 0, FALSE);
@@ -244,7 +312,13 @@ static void paint_input_settings(WND *wnd, GDEV *dev) {
      * Bottom Action Buttons
      * ═══════════════════════════════════════════════════════════════════ */
     H btn_y = dev->height - 36;
+#if defined(BTRON_PS2_TARGET)
+    /* The same reason as the header: the defaults this button writes are the
+     * keyboard's, the button model's and the auto gain, not a step curve. */
+    paint_ui_button(dev, dev->width - 340, btn_y, 140, 26, "Defaults", FALSE);
+#else
     paint_ui_button(dev, dev->width - 340, btn_y, 140, 26, "Default (RISC OS)", FALSE);
+#endif
     paint_ui_button(dev, dev->width - 185, btn_y, 85, 26, "Apply", g_state_input.is_dirty);
     paint_ui_button(dev, dev->width - 85, btn_y, 75, 26, "Close", FALSE);
 }
@@ -337,6 +411,20 @@ static void handle_input_event(WND *wnd, const EVT *evt) {
 
         /* 2. Right Panel (Mouse) */
         if (rel_x >= 332 && rel_x <= 620) {
+#if defined(BTRON_PS2_TARGET)
+            /* Pointer Gain (LAW 13e): one rect per stop, on the same 16 px pitch
+             * the radios are painted at.  Nothing here reaches 190, so the
+             * Three-Button block under it keeps the rects it always had. */
+            for (int i = 0; i < BTRON_PTR_GAIN_STEPS; i++) {
+                const H top = (H)(76 + i * 16);
+                if (rel_y >= top && rel_y <= top + 15) {
+                    g_state_input.mouse_gain_sel = i;
+                    g_state_input.is_dirty = TRUE;
+                    redraw_all_windows();
+                    return;
+                }
+            }
+#else
             /* Tracking Speed (MouseStep) */
             if (rel_y >= 76 && rel_y <= 92) {
                 g_state_input.mouse_step_sel = 0;
@@ -376,6 +464,7 @@ static void handle_input_event(WND *wnd, const EVT *evt) {
                 redraw_all_windows();
                 return;
             }
+#endif
 
             /* Handedness */
             if (rel_y >= 212 && rel_y <= 228) {
@@ -467,14 +556,22 @@ WND* open_input_settings_window(void) {
                                        ((g_kbd_repeat_interval_us <= 40000U) ? 1 : 2);
     g_state_input.kbd_layout_sel     = 0;
 
+#if defined(BTRON_PS2_TARGET)
+    g_state_input.mouse_gain_sel     = btron_ptr_gain_index(g_ptr_gain_fp);
+#else
     g_state_input.mouse_step_sel     = (g_mouse_step_mult >= 1 && g_mouse_step_mult <= 4) ?
                                        (g_mouse_step_mult - 1) : 0;
     g_state_input.mouse_profile_sel  = g_mouse_accel_profile;
+#endif
     g_state_input.mouse_accel_enable = TRUE;
     g_state_input.mouse_handedness   = g_mouse_swap_select_adjust ? 1 : 0;
     g_state_input.dbl_click_sel      = 1; /* 50cs (500ms) RISC OS default */
 
+#if defined(BTRON_PS2_TARGET)
+    WND *wnd = opn_wnd("Input & Pointer (入力環境) — Pointer Gain & Buttons",
+#else
     WND *wnd = opn_wnd("Input & Pointer (入力環境) — RISC OS & Haiku Options",
+#endif
                        80, 45, 640, 430,
                        WND_ATTR_TITLE | WND_ATTR_CLOSE | WND_ATTR_BORDER);
     if (!wnd) return NULL;

@@ -23,10 +23,25 @@
 #include "../drivers/ps2/ps2_gs_pack.h"
 #include "../drivers/ps2/ps2_gs_rec.h"
 
-/* The texture context this port programs is context 1, the one the increment-3 environment stream
- * writes TEX0/TEX1/CLAMP for; context 2 would need a second page plan, and no layer has two
- * textures at once. */
-#define EEGS_CONTEXT 1u
+/* The register set this port's primitives are drawn with, as the PRIM word's CTXT bit.
+ *
+ * It is 0, and the reason it is worth a paragraph is that the two naming schemes in this port run
+ * in opposite directions.  Every environment register this port writes is named for the FIRST
+ * context -- `ps2_gs_env.c` emits GS_GP_FRAME_1, GS_GP_SCISSOR_1, GS_GP_ALPHA_1, GS_GP_XYOFFSET_1,
+ * and `eegs_texture()` below writes GS_GP_TEX0_1/TEX1_1/CLAMP_1 -- and the GIF's address table
+ * pairs those with the integer 0: `GS_REG_FRAME_1` is 4Ch and `GS_REG_FRAME_2` is 4Dh, and
+ * ps2sdk's own pairing is `GS_REG_FRAME + context` (draw.c:61, draw_environment.c:38) with the
+ * SAME integer going into the primitive's CTXT field (`GS_SET_PRMODE(..., context, ...)` at
+ * draw.c:175, `GS_SET_PRIM(..., context, ...)` at draw3d.c:17).  So "context 1" is CTXT=0.
+ *
+ * CTXT=1 asks the GS for the second register set, and nothing in this port has ever written that
+ * set: its FRAME is 0 (page 0, buffer width 0), its SCISSOR is the empty box, its XYOFFSET and
+ * ALPHA are reset values.  A stream addressed that way is delivered, acknowledged and rasterised
+ * against a window that clips every fragment away -- the whole picture vanishes and every counter
+ * this side of the GS keeps saying the frame was sent.  That is what the LANE 19 rung-6 live census
+ * found on 2026-10-16 (`ink=0` across the displayed page while the census's own CTXT=0 control
+ * filled its box exactly), and it is why the census's controls and this backend must agree on 0. */
+#define EEGS_CONTEXT 0u
 
 /* The largest window-local coordinate the vertex word carries, in pixels.  `gs_vertex_coord16()`
  * biases a whole-pixel coordinate by `GS_XYOFFSET_PAGE` and puts the sum in XYZ2's 16-bit field

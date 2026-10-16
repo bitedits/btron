@@ -18,6 +18,13 @@
 # it exits, and the repo's copy carries the [USB1] hidmouse binding, the [USB2]
 # hidkbd binding and the game list that `make run-ps2` depends on.  A measurement
 # run has no business editing the configuration the interactive run needs.
+#
+# BENCH_GS=1 scripts/ps2_bench.sh asks the second question this build can answer with
+# no screen: it boots the census instead of the desktop, draws two solid SPRITE quads
+# through the GS path and reads page 0 back (Local->Host), so whether the GS rasterises
+# what the port sends is a [GSREAD] row rather than something to be looked at.  The
+# census replaces the run rather than joining it -- inside a GUI session the desktop
+# presents every frame and its uploads erase the blocks before the read sees them.
 
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -66,7 +73,7 @@ kill -KILL "$VM" 2>/dev/null || true
 cp "$LOG" "$OUT"
 
 if grep -q '\[BENCH\]' "$LOG"; then
-    grep -E '\[BENCH\]|\[PS2\] whole-canvas|\[PSTAT\]|\[MSX\]|\[FATAL\]' "$LOG"
+    grep -E '\[BENCH\]|\[GSREAD\]|\[GSLIVE\]|\[GSTS\]|\[PS2\] whole-canvas|\[PSTAT\]|\[MSX\]|\[FATAL\]' "$LOG"
     echo "----------------------------------------------------------"
     echo "[PS2-BENCH] full log: $OUT ($elapsed s)"
     exit 0

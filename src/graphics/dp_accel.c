@@ -127,3 +127,65 @@ int32_t dp_ptr_limit(int32_t want, int32_t max_step, int32_t *defer)
     *defer = debt;
     return out;
 }
+
+#if defined(BTRON_PS2_TARGET)
+/* ── The gain dial (doc/txt/PS2.txt LAW 13e) ───────────────────────
+ *
+ * Defined here, in the one file every port's pointer arithmetic already comes
+ * through, because the dial is that arithmetic seen from a control: a stop is a
+ * multiplier, and the multiplier is the only number this stack's pointer honours.
+ * It is compiled only for the target that has a dial of this shape, which is the
+ * same predicate that leaves dp_ptr_riscos() out of this image -- a Pi 400 build
+ * gets the bytes it got before this lane, and a port that reaches for a stop it
+ * does not define fails at the link rather than shipping a control that sets
+ * nothing.
+ *
+ * What the stops are *called* is derived from what they are, in one place:
+ * btron_ptr_gain_label() formats each line out of this table, so the Settings
+ * panel's radio and the launcher's row cannot give one gain two names, and
+ * neither of them carries a hand-written copy of these numbers. */
+#include <btron/libc_shim.h>      /* snprintf, for the label line above */
+
+const int32_t btron_ptr_gain_fp[BTRON_PTR_GAIN_STEPS] = { 0, 64, 96, 128, 160, 192, 256 };
+
+int btron_ptr_gain_index(int32_t fp)
+{
+    int i, best = 0;
+    int32_t best_d = 0;
+
+    if (fp <= 0) return 0;                     /* auto: the profile's own default */
+    for (i = 1; i < BTRON_PTR_GAIN_STEPS; i++) {
+        int32_t d = btron_ptr_gain_fp[i] - fp;
+        if (d < 0) d = -d;
+        if (i == 1 || d < best_d) { best_d = d; best = i; }   /* ties: the lower stop */
+    }
+    return best;
+}
+
+const char *btron_ptr_gain_label(int index)
+{
+    static char line[BTRON_PTR_GAIN_STEPS][32];
+    static uint32_t built;
+    int32_t fp;
+
+    if (index < 0 || index >= BTRON_PTR_GAIN_STEPS) return "gain";
+    if (!(built & (1u << index))) {
+        fp = btron_ptr_gain_fp[index];
+        if (index == 0)
+            snprintf(line[index], sizeof(line[index]), "%s", "Auto (source gain)");
+        else
+            /* Two decimals rather than the 8.8 number the caller could read off
+             * the table: this line is spent in two places at once -- the panel's
+             * radio and the launcher's value field -- and the launcher's field is
+             * a column of the bar's layout, so a label long enough to spell
+             * `256/256` would run past what the bar leaves for a value.
+             * The /256 form the console prints is the same number, only rounded
+             * the other way, and it is printed by the core, not by a control. */
+            snprintf(line[index], sizeof(line[index]), "%d.%02d px per count",
+                     (int)((fp * 100 + 128) / 256 / 100),
+                     (int)((fp * 100 + 128) / 256 % 100));
+        built |= 1u << index;
+    }
+    return line[index];
+}
+#endif /* BTRON_PS2_TARGET */

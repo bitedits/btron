@@ -18,6 +18,8 @@
 #include "ps2_gif_ring.h"    /* LANE 10: the ring whose hardware seam this file is */
 #include "ps2_gs_env.h"      /* the environment packet, and apply's argument type */
 #include "ps2_gs_pack.h"     /* the field encoders the blit path now builds its words with */
+#include "ps2_gs_read.h"     /* LANE 19 rung 2: the pure Local->Host builder this file is the bus for */
+#include "ps2_gs_vram.h"     /* gs_vram_fbw(), the 64-pixel width unit a read names in BITBLTBUF */
 #include "ps2_gs_tex.h"      /* the texture-plane registry this file is the bus for */
 
 /* The canvas the GS is fed from, and the one the desktop composites into.
@@ -44,6 +46,41 @@ static uint32_t *s_gs_canvas;
 #define D2_CHCR     (*(volatile uint32_t *)0x1000A000)
 #define D2_MADR     (*(volatile uint32_t *)0x1000A010)
 #define D2_QWC      (*(volatile uint32_t *)0x1000A020)
+
+/* DMAC channel 1 -- VIF1's channel, and the one that takes pixels back.  The block is the same shape
+ * as channel 2's (CHCR at +0x00, MADR at +0x10, QWC at +0x20, a 0x1000 stride per channel), at the
+ * literal addresses third_party/ps2sdk's ee/debug/src/screenshot.c writes.
+ *
+ * CHCR bit 0 is DIR and bit 8 is STR, and DIR means something on this channel that it does not mean
+ * on channel 2: ps2tek's CHCR table restricts the direction bit to the VIF1 and SIF2 channels, which
+ * is exactly why a GS download is a channel-1 operation.  0x101 is "memory -> VIF1" (the request
+ * block); 0x100 is "VIF1's read FIFO -> memory" (the pixels). */
+#define D1_CHCR     (*(volatile uint32_t *)0x10009000)
+#define D1_MADR     (*(volatile uint32_t *)0x10009010)
+#define D1_QWC      (*(volatile uint32_t *)0x10009020)
+#define D1_STAT_MIF (1u << 1)         /* D_STAT's channel-1 flag, write-1-to-clear */
+
+/* VIF1's status word.  FQC -- bits [28:24] -- is the quadword count still sitting in the VIF FIFO,
+ * and FDR -- bit 23 -- is the flag that says the FIFO's contents are destined for main memory instead
+ * of the GIF.  A download that does not wait for FQC to reach zero pulls pixels out of a FIFO its own
+ * request is still in, which returns data and returns it shifted. */
+#define VIF1_STAT           (*(volatile uint32_t *)0x10003C00)
+#define VIF1_STAT_FQC_MASK  0x1F000000u
+#define VIF1_STAT_FDR       (1u << 23)
+
+/* CSR bit 1 is FINISH, and it is write-1-to-clear -- the same convention ps2_gs_init()'s reset write
+ * and ps2_gs_vsync()'s VSYNC clear already use.  Its mask sits eight bits higher in IMR (that is why
+ * screenshot.c ORs 0x0200 to hide the event), and the 0xFF00 ps2_gs_init() installs already covers
+ * it: no GS interrupt reaches a handler in this port, so nothing but this poll can consume a receipt. */
+#define GS_CSR_FINISH       (1ULL << 1)
+
+/* The two bounds on the read's four waits.  A 7-quadword block and a few-hundred-quadword download
+ * are microseconds on real hardware, so these are the port's "never wedge the console" bound rather
+ * than a timeout anyone expects to hit: STR is given ps2_gs_vsync()'s own 200,000 iterations, and the
+ * two waits that depend on the GS rather than on the DMAC -- the FINISH receipt and the FIFO drain --
+ * get ten times that. */
+#define GS_READ_SPIN_STR    200000u
+#define GS_READ_SPIN_GS     2000000u
 
 /* Helper to get uncached KSEG1 pointer to bypass EE L1 D-Cache */
 #define UNCACHED(p) ((void *)((uintptr_t)(p) | 0x20000000UL))
@@ -281,6 +318,152 @@ void ps2_gs_upload(int x, int y, int w, int h)
 void ps2_gs_flush(void)
 {
     ps2_gs_upload(0, 0, PS2_SCREEN_WIDTH, PS2_SCREEN_HEIGHT);
+}
+
+/* ── LANE 19 rung 2: the Local->Host read ───────────────────────────────────────────────
+ * The counterpart of ps2_gs_upload(), and the reason it exists: PCSX2 2.8.2 has no CLI flag that
+ * dumps a frame, so the only way this port can be shown what the GS rasterised is for the guest to
+ * ask the GS.  ps2_gs_read.c builds the words and refuses the rectangles those words cannot describe;
+ * this function is the machine half -- three register dances on DMAC channel 1, with the receipts
+ * between them.
+ *
+ * The order is ps2sdk's screenshot() and each gap in it is a failure mode:
+ *
+ *   Clear CSR FINISH *before* the block goes out, so the receipt below can only belong to this
+ *   packet.  There is no interrupt handler that could race the poll (the IMR 0xFF00 installed at init
+ *   masks the event), so the flag is this function's own to consume.
+ *
+ *   Wait for STR, then FINISH, then FQC.  STR says VIF1 has taken the block's bytes; FINISH says the
+ *   GS has decoded the five AD words it carried and therefore knows the download's size; FQC says
+ *   VIF1's FIFO is empty, which is the precondition for reversing it.  Reversing before FINISH takes
+ *   the pixels of a request nobody has sized, and reversing before FQC reaches zero shifts the stream
+ *   by however many quadwords were still queued.
+ *
+ *   Restore VIF1_STAT and BUSDIR on every exit, including the bounded-wait ones.  A read that returns
+ *   with the bus reversed stops the desktop drawing forever, so the diagnostic would be the fault.
+ *
+ * Nothing here touches the canvas, the GIF ring, or channel 2 -- which is the whole reason the census
+ * is honest: the page read is the one PCRTC is showing, and no part of the present path is consulted. */
+static gs_read_bus_err s_read_bus_err;
+
+gs_read_bus_err ps2_gs_vram_read_err(void)
+{
+    return s_read_bus_err;
+}
+
+int32_t ps2_gs_vram_read(int x, int y, int w, int h, uint32_t *dst)
+{
+    static uint64_t s_blk[GS_READ_BLOCK_U64] __attribute__((aligned(16)));
+    gs_read_req req;
+    uint64_t *blk = (uint64_t *)UNCACHED(s_blk);
+    uint32_t iqwc;
+    uint32_t i;
+
+    s_read_bus_err = GS_READ_BUS_OK;
+
+    if (dst == 0 || (((uintptr_t)(void *)dst) & 15u) != 0u) {
+        /* Quadwords land on 16-byte boundaries; MADR cannot say "start mid-quadword". */
+        s_read_bus_err = GS_READ_BUS_E_ARGS;
+        return -1;
+    }
+    if (x < 0 || y < 0 || w <= 0 || h <= 0) {
+        s_read_bus_err = GS_READ_BUS_E_ARGS;
+        return -1;
+    }
+
+    /* The pipe has to be silent, and silent means both halves of it: the ring's queued and in-flight
+     * descriptors (a DIRECT arriving behind a PATH3 stream of its own is the case ps2sdk masks PATH3
+     * for, and this port takes the precondition instead of the mask -- see ps2_gs_read.h) and either
+     * channel's start bit.  reap() gets the ring every chance to finish before it is refused. */
+    (void)ps2_gif_reap();
+    if (ps2_gif_hw_busy() || ps2_gif_pending() != 0u ||
+        (D1_CHCR & (1u << 8)) != 0u || (D2_CHCR & (1u << 8)) != 0u) {
+        s_read_bus_err = GS_READ_BUS_E_BUSY;
+        return -1;
+    }
+
+    req.vram_byte = 0u;                          /* the displayed page: what the census is about */
+    req.sbw64     = gs_vram_fbw(PS2_SCREEN_WIDTH);
+    req.psm       = GS_PSM_CT32;
+    req.x         = (uint32_t)x;
+    req.y         = (uint32_t)y;
+    req.w         = (uint32_t)w;
+    req.h         = (uint32_t)h;
+
+    iqwc = gs_read_image_qwc(req.w, req.h, req.psm);
+
+    if (iqwc == 0u || gs_read_block_packet(&req, blk, GS_READ_BLOCK_QWC) < 0) {
+        /* A rectangle too small to fill a quadword and one that breaks a field law are the same exit
+         * here, and gs_read_last_err() is what tells them apart from anything on the bus. */
+        s_read_bus_err = GS_READ_BUS_E_BUILD;
+        return -1;
+    }
+
+    GS_REG_POKE(GS_CSR_OFFSET, GS_CSR_FINISH);   /* clear the receipt, arming it for this packet */
+    D_STAT = D1_STAT_MIF;
+
+    D1_MADR = ((uint32_t)(uintptr_t)s_blk) & 0x1FFFFFFFu;
+    D1_QWC  = GS_READ_BLOCK_QWC;
+
+    __asm__ volatile("" : : : "memory");
+
+    D1_CHCR = 0x101u;                            /* DIR = 1 (memory -> VIF1), STR = 1 */
+
+    for (i = 0; i < GS_READ_SPIN_STR; i++) {
+        if ((D1_CHCR & (1u << 8)) == 0u) break;
+    }
+    if ((D1_CHCR & (1u << 8)) != 0u) {
+        s_read_bus_err = GS_READ_BUS_E_STR;
+        D1_CHCR = 0u;
+        return -1;
+    }
+
+    for (i = 0; i < GS_READ_SPIN_GS; i++) {
+        if ((GS_REG_PEEK(GS_CSR_OFFSET) & GS_CSR_FINISH) != 0ULL) break;
+    }
+    if ((GS_REG_PEEK(GS_CSR_OFFSET) & GS_CSR_FINISH) == 0ULL) {
+        s_read_bus_err = GS_READ_BUS_E_FINISH;
+        D1_CHCR = 0u;
+        return -1;
+    }
+    GS_REG_POKE(GS_CSR_OFFSET, GS_CSR_FINISH);   /* consume it, so the next read starts clean */
+
+    for (i = 0; i < GS_READ_SPIN_GS; i++) {
+        if ((VIF1_STAT & VIF1_STAT_FQC_MASK) == 0u) break;
+    }
+    if ((VIF1_STAT & VIF1_STAT_FQC_MASK) != 0u) {
+        s_read_bus_err = GS_READ_BUS_E_FIFO;
+        D1_CHCR = 0u;
+        return -1;
+    }
+
+    /* Both directions reversed: VIF1's FIFO feeds main memory, and the GS bus runs Local->Host.
+     * Then the pixels, in a second channel-1 transfer whose length is the image's own quadword count
+     * rather than the block's. */
+    VIF1_STAT = VIF1_STAT_FDR;
+    GS_REG_POKE(GS_BUSDIR_OFFSET, 1ULL);
+
+    D1_MADR = ((uint32_t)(uintptr_t)dst) & 0x1FFFFFFFu;
+    D1_QWC  = iqwc;
+
+    __asm__ volatile("" : : : "memory");
+
+    D1_CHCR = 0x100u;                            /* DIR = 0 (peripheral -> memory), STR = 1 */
+
+    for (i = 0; i < GS_READ_SPIN_GS; i++) {
+        if ((D1_CHCR & (1u << 8)) == 0u) break;
+    }
+    if ((D1_CHCR & (1u << 8)) != 0u) s_read_bus_err = GS_READ_BUS_E_DATA;
+
+    /* Fall through to the restore on purpose: a short transfer is reported by the error code and by
+     * the caller's own sentinel, and neither is worth a bus left pointing the wrong way. */
+    D1_CHCR = 0u;
+    VIF1_STAT = 0u;
+    GS_REG_POKE(GS_BUSDIR_OFFSET, 0ULL);
+
+    __asm__ volatile("" : : : "memory");
+
+    return (s_read_bus_err == GS_READ_BUS_OK) ? (int32_t)iqwc : -1;
 }
 
 /* Cross one texture plane into VRAM (row 5b).

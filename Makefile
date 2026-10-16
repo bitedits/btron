@@ -34,7 +34,7 @@ CC ?= gcc
 CFLAGS ?= -O2 -Wall -Wextra -std=c99 -Iinclude -Iinclude/gl -Isrc/gl -Iinclude/drivers -Isrc/kernel -Isrc/cores -Isrc/quake/include
 
 .PHONY: all posix qemu kernel tkernel sakamura foma uefi pc98 arm-elf arm64-elf m68k ps2 mips \
-        check-structure test-ps2-softfloat test-ps2-gs-pack test-ps2-gs-env test-ps2-gs-rec test-ps2-gs-poster test-ps2-gs-tex test-ps2-pointer test-ps2-fused-row test-ps2-gif-ring test-eegs-raster test-eegs-present test-gl-math test-gl-backend-choice test-ps2-fb-order test-grid-map xmb-atlas test-xmb-atlas \
+        check-structure test-ps2-softfloat test-ps2-gs-pack test-ps2-gs-env test-ps2-gs-rec test-ps2-gs-poster test-ps2-gs-read test-ps2-gs-tex test-ps2-pointer test-ps2-fused-row test-ps2-gif-ring test-eegs-raster test-eegs-present test-gl-math test-gl-backend-choice test-ps2-fb-order test-grid-map xmb-atlas test-xmb-atlas \
         test-xmb-render test-xmb-render-tgl \
         html2tad book2tad tad_bin test test-kernel test-yoko test-yoko4 test-m68k test-mips test-ps2 test-foma test-foma-ui foma-screens \
         segui-screens \
@@ -1137,8 +1137,10 @@ PS2_SRCS       = $(PS2_STARTUP)           \
                  src/drivers/ps2/ps2_gs_pack.c \
                  src/drivers/ps2/ps2_gs_vram.c \
                  src/drivers/ps2/ps2_gs_env.c \
+                 src/drivers/ps2/ps2_gs_poster.c \
                  src/drivers/ps2/ps2_gs_rec.c \
                  src/drivers/ps2/ps2_gs_tex.c \
+                 src/drivers/ps2/ps2_gs_read.c \
                  src/drivers/ps2/ps2_builtins.c \
                  src/drivers/ps2/ps2_sio.c \
                  src/drivers/ps2/ps2_pad.c \
@@ -1269,8 +1271,20 @@ BENCH_APP      ?= 0
 # the table's resolution; scripts/ps2_smooth.sh lowers it so a run ends at its
 # sentinel instead of at a harness timeout -- 60 frames of this app is 24 minutes.
 BENCH_APP_FRAMES ?= 60
+# BENCH_GS=1 makes the headless run the GS census instead of the desktop bench: the
+# Local->Host read-back (LANE 19 rung 2) is only honest at the Stage-1 console, because
+# the desktop's own presents erase the read blocks and its ring traffic makes a read
+# refuse.  Off by default, and it replaces rather than joins the run -- see the rung's
+# note in core_ps2.c.
+# BENCH_GS=2 is the opposite rung: LANE 19 rung 6 reads the page a LIVE desktop made, so it boots
+# the session like a normal bench run and censuses page 0 against its own canvas from the app
+# phase's frame hook.  It therefore needs BENCH_APP=1 to have a window up, and it prints nothing
+# between its drawn control and its bands -- the console's own repaint is what the read's idle
+# precondition refuses.
+BENCH_GS       ?= 0
 $(PS2_BENCH_OBJ): PS2_CFLAGS += -DBTRON_PS2_BENCH=1 -DBTRON_PS2_BENCH_APP=$(BENCH_APP) \
-                                -DBTRON_PS2_BENCH_APP_FRAMES=$(BENCH_APP_FRAMES)u
+                                -DBTRON_PS2_BENCH_APP_FRAMES=$(BENCH_APP_FRAMES)u \
+                                -DBTRON_PS2_BENCH_GS=$(BENCH_GS)
 
 %.pbench.o: %.c
 	$(PS2_CC) $(PS2_CFLAGS) -MMD -MP -c $< -o $@
@@ -1576,10 +1590,13 @@ $(TEST_GSREC_BIN): $(TEST_GSREC_OBJS) src/drivers/ps2/ps2_gs_rec.c src/drivers/p
 	$(CC) $(TEST_GSREC_OBJS) -o $@ $(LDFLAGS)
 
 # LANE 9b: the flat-colour SPRITE batch, the poster half of row 9.  Same #include idiom as the three
-# gates above, with one difference that is not a style choice: ps2_gs_poster.c is NOT in PS2_SRCS
-# yet, because nothing in the image calls it, and this port's image has a size law ps2.ld ASSERTs --
-# so the TU ships host-only until its caller lands, and the caller's own gate is the [GSTS] row that
-# says a batch reached channel 2.  What this suite owns in the meantime is the three things that
+# gates above, with one difference that is not a style choice: the TU used to ship host-only because
+# nothing in the image called it and this port's image has a size law ps2.ld ASSERTs.  Its first
+# caller landed as LANE 19 rung 1 -- src/cores/core_ps2.c's `gsquad` probe, which sends one SPRITE to
+# answer whether the GS rasterises on the displayed page at all -- so it is in PS2_SRCS now, and the
+# caller's own gate is still the row that says a batch reached channel 2 (`[GSQUAD] bus:`).  What
+# remains unshipped is row 9b's PRODUCTION caller, the background plate, which the census priced out
+# (doc/txt/PS2.txt, LANE 9 Price).  What this suite owns in the meantime is the three things that
 # cannot be seen on a screen and cannot be derived from the code: the colour word (a poster read in
 # the desktop's own byte order paints teal as brown at an identical packet length), the corner word
 # (compared against gs_vertex_coord16() over every coordinate the field holds, so the integer shift
@@ -1626,6 +1643,39 @@ $(TEST_GSTEX_BIN): $(TEST_GSTEX_OBJS) src/drivers/ps2/ps2_gs_tex.c \
 	@mkdir -p ./.build
 	$(CC) $(TEST_GSTEX_OBJS) -o $@ $(LDFLAGS)
 
+# LANE 19 rung 2: the Local->Host read request.  Same #include idiom as the four gates above, and a
+# sharper reason to use it: every other unit in this suite draws something, so a wrong word is a
+# wrong pixel -- visible, if anyone can see.  A read request that is wrong produces NO pixels and
+# says nothing about why, and the census it returns is indistinguishable from a screen that really
+# is black.  So the words themselves are the only part of this instrument that can be verified
+# without eyes on the GS, and this gate owns exactly that: the VIF code quadword (FLUSHA must precede
+# DIRECT, and DIRECT's immediate is the PACKET's 6 quadwords -- count the block's 7 and VIF1 waits
+# forever for a quadword that does not exist), the five AD words against literals written from the
+# register tables, and the refusal table, which is what gs_read_last_err() exists to make a single
+# number: "the download was refused because the rect does not end on a 16-byte boundary" is a
+# different fact from "the download ran and the page is black".  Two of the cases are controls with
+# opposite answers on purpose -- a BITBLTBUF built as DBA/DBW instead of SBA/SBW is the same LENGTH,
+# so only the field-by-field comparison catches it, and CT24 must accept x=16/w=16 while refusing
+# x=4/w=4, which is PCSX2's own "transfer rectangles are exact multiples of a qword" law expressed in
+# bytes rather than in pixels.  The bus turn that consumes these words -- DMAC channel 1, VIF1, the
+# FINISH receipt -- is ps2_gs_vram_read(); its first caller is the `gsread` Stage-1 verb.
+TEST_GSREAD_SRCS = verify/tests/test_ps2_gs_read.c
+TEST_GSREAD_OBJS = $(TEST_GSREAD_SRCS:.c=.test.o)
+TEST_GSREAD_BIN  = ./.build/test_ps2_gs_read
+
+test-ps2-gs-read: $(TEST_GSREAD_BIN)
+	@echo "=========================================================="
+	@echo " Running PS2 GS Local->Host request vs hand-computed packet words..."
+	@echo "=========================================================="
+	@./$(TEST_GSREAD_BIN)
+
+$(TEST_GSREAD_BIN): $(TEST_GSREAD_OBJS) src/drivers/ps2/ps2_gs_read.c \
+                    src/drivers/ps2/ps2_gs_pack.c src/drivers/ps2/ps2_gs_vram.c \
+                    src/drivers/ps2/ps2_gs_read.h src/drivers/ps2/ps2_gs_pack.h \
+                    src/drivers/ps2/ps2_gs_vram.h
+	@mkdir -p ./.build
+	$(CC) $(TEST_GSREAD_OBJS) -o $@ $(LDFLAGS)
+
 # The pointer's two-speed pair, on the PS2 side only.  The splitter lives in a header src/cores
 # includes, so the test #includes that same header and measures the identical code the image links
 # -- which matters here more than anywhere else in this suite, because the row it prints is the one
@@ -1637,15 +1687,33 @@ TEST_PTRSTROKE_SRCS = verify/tests/test_ps2_ptr_stroke.c
 TEST_PTRSTROKE_OBJS = $(TEST_PTRSTROKE_SRCS:.c=.test.o)
 TEST_PTRSTROKE_BIN  = ./.build/test_ps2_ptr_stroke
 
-test-ps2-pointer: $(TEST_PTRSTROKE_BIN)
+# The accumulation differential, compiled with the PS2 dial because it reads the dial's own table:
+# dp_accel.c is #included, so the arithmetic the gate checks is the arithmetic that links into
+# btron-ps2.elf.  A private object suffix, not the shared %.test.o rule, because -DBTRON_PS2_TARGET
+# must not reach any other suite's object through a pattern rule.
+TEST_PTRACCUM_OBJ = verify/tests/test_ps2_ptr_accum.accum.o
+TEST_PTRACCUM_BIN = ./.build/test_ps2_ptr_accum
+
+test-ps2-pointer: $(TEST_PTRSTROKE_BIN) $(TEST_PTRACCUM_BIN)
 	@echo "=========================================================="
 	@echo " Running PS2 pointer stroke segmentation and the two-speed verdict..."
 	@echo "=========================================================="
 	@./$(TEST_PTRSTROKE_BIN)
+	@echo ""
+	@echo "=========================================================="
+	@echo " Running PS2 pointer accumulation differential (dp_accel.c)..."
+	@echo "=========================================================="
+	@./$(TEST_PTRACCUM_BIN)
 
 $(TEST_PTRSTROKE_BIN): $(TEST_PTRSTROKE_OBJS) src/cores/ps2_ptr_stroke.h
 	@mkdir -p ./.build
 	$(CC) $(TEST_PTRSTROKE_OBJS) -o $@ $(LDFLAGS)
+
+$(TEST_PTRACCUM_OBJ): verify/tests/test_ps2_ptr_accum.c src/graphics/dp_accel.c include/btron/dp_accel.h
+	$(CC) $(CFLAGS) -DBTRON_PS2_TARGET -MMD -MP -c $< -o $@
+
+$(TEST_PTRACCUM_BIN): $(TEST_PTRACCUM_OBJ)
+	$(CC) $(TEST_PTRACCUM_OBJ) -o $@ $(LDFLAGS)
 
 # LANE 9c: the composite's row rule, after the walk's second read of the same band was removed.
 # The header is #included rather than linked, so the identical code is what the gate checks and
@@ -2719,7 +2787,7 @@ $(TEST_MSX_BOOT_BIN): $(TEST_MSX_BOOT_OBJS)
 	@mkdir -p ./.build
 	$(CC) $(TEST_MSX_BOOT_OBJS) -o $@ $(LDFLAGS)
 
-test: test-tad test-editor test-chat test-mozc test-wylie test-hmi test-ski test-tracker test-deskclip test-settings test-global-menu test-app-menu test-drivesetup test-fs test-quake test-ps2-softfloat test-ps2-gs-pack test-ps2-gs-env test-ps2-gs-rec test-ps2-gs-poster test-ps2-gs-tex test-ps2-pointer test-ps2-fused-row test-ps2-gif-ring test-eegs-raster test-eegs-present test-gl-math test-gl-backend-choice test-ps2-fb-order test-grid-map test-xmb-atlas
+test: test-tad test-editor test-chat test-mozc test-wylie test-hmi test-ski test-tracker test-deskclip test-settings test-global-menu test-app-menu test-drivesetup test-fs test-quake test-ps2-softfloat test-ps2-gs-pack test-ps2-gs-env test-ps2-gs-rec test-ps2-gs-poster test-ps2-gs-read test-ps2-gs-tex test-ps2-pointer test-ps2-fused-row test-ps2-gif-ring test-eegs-raster test-eegs-present test-gl-math test-gl-backend-choice test-ps2-fb-order test-grid-map test-xmb-atlas
 	@echo "=========================================================="
 	@echo " ALL B-SYSTEM TEST SUITES PASSED (100% SUCCESS)!"
 	@echo "=========================================================="

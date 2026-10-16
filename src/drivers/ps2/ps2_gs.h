@@ -85,6 +85,43 @@ void ps2_gs_flush(void);
 /* Copies a rectangle of the RDRAM canvas into the displayed VRAM page with one Host->Local blit.
    (x, y) is the top-left in canvas pixels; w is rounded up to a quadword (4 px) because the upload stream has no row pitch. */
 void ps2_gs_upload(int x, int y, int w, int h);
+
+/* Why the last Local->Host read did not deliver pixels.  The two families are different facts:
+   GS_READ_BUS_E_BUILD says the rectangle cannot be described by these registers at all -- which law
+   is in gs_read_last_err() -- and a timeout says it could be described but the machine never
+   answered.  Neither is "the download ran and the page is black", which is the answer the census was
+   asked for; that distinction is the only reason a refused read can be told apart from a black
+   screen, so no exit in this enum may be reported as a colour. */
+typedef enum {
+    GS_READ_BUS_OK = 0,
+    GS_READ_BUS_E_ARGS,      /* null destination, or one that is not 16-byte aligned */
+    GS_READ_BUS_E_BUSY,      /* the GIF ring, channel 2 or channel 1 still owns the bus */
+    GS_READ_BUS_E_BUILD,     /* the builder refused; gs_read_last_err() names the law */
+    GS_READ_BUS_E_STR,       /* the request block's channel-1 transfer never finished */
+    GS_READ_BUS_E_FINISH,    /* the CSR FINISH receipt never arrived for this packet */
+    GS_READ_BUS_E_FIFO,      /* VIF1's FIFO (STAT.FQC) never drained */
+    GS_READ_BUS_E_DATA       /* the pixel download's channel-1 transfer never finished */
+} gs_read_bus_err;
+
+/* Reads a rectangle of GS VRAM back into main memory: the Local->Host direction, and the only way
+ * this port can see what the GS drew when nobody is watching a window.  ps2_gs_read.h's pure builder
+ * makes the words; this is the bus turn that hands them to VIF1 on DMAC channel 1, collects the
+ * FINISH receipt, reverses the FIFO (VIF1_STAT.FDR) and the GS bus (BUSDIR=1), and takes the pixels.
+ *
+ * Every wait is bounded, and every bounded exit restores VIF1_STAT and BUSDIR on the way out: a read
+ * that leaves the bus reversed is a screen that never draws again, which is a worse failure than the
+ * one it was meant to diagnose.  Nothing is printed and nothing is uploaded -- the caller must not
+ * either, because the receipt it is waiting for belongs to a packet that has to be the only thing on
+ * the pipe (see ps2_gif_hw_busy() and ps2_gif_pending(), both refused on here).
+ *
+ * (x, y, w, h) are canvas pixels in the displayed page (VRAM page 0, the CT32 format the canvas and
+ * VRAM agree on byte for byte) and must satisfy the builder's laws -- for CT32 that is x and w
+ * multiples of 4 px.  `dst` must be 16-byte aligned and hold gs_read_image_qwc(w, h, GS_PSM_CT32)
+ * quadwords, and the caller should fill it with a sentinel first: a transfer the hardware rounds down
+ * leaves the tail holding whatever was there, which is the failure this signature cannot report.
+ * Returns the quadwords asked for, or -1 with the reason in ps2_gs_vram_read_err(). */
+int32_t ps2_gs_vram_read(int x, int y, int w, int h, uint32_t *dst);
+gs_read_bus_err ps2_gs_vram_read_err(void);
 /* The one DMAC channel-2 sender that still blocks, shared by every producer whose buffer the port
  * cannot promise survives until the next yield: the canvas blit stream above, and everything the
  * boot path sends before a ring exists to hold a packet.  Declared rather than left accidentally

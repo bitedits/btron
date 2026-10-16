@@ -26,7 +26,19 @@ static uint8_t s_kanji[KANJI_ROM_MAX_SIZE];
 extern t9769b_t g_t9769b;
 extern t9769c_t g_t9769c;
 
-/* Directory search paths on host */
+/* The directory `bios_load()` searches when the caller hands it nothing, and the
+ * answer is different on each side of the hosted boundary: below a checkout the
+ * C-BIOS bodies live in the vendor trees, on an image that has no host file system
+ * they live in the /SYS drawer `src/tools/manifest.txt` imprints.
+ *
+ * Handing the bare-metal side the host list was both dead weight and a broken
+ * search -- `read_rom_path()` resolves through the VFS there, so every entry named
+ * a folder the machine cannot have, and the volume's own BIOS went unread while
+ * the window reported "C-BIOS が読み込めません".  `scripts/test_ps2.sh` scans the
+ * shipped `.rodata` for a checkout path precisely to keep the two lists from
+ * merging again, and the drawer it must name is the one #define the message and
+ * this search share (MSX_BIOS_DEFAULT_DIR), so neither can drift from the other. */
+#if BTRON_HOSTED
 static const char *s_search_dirs[] = {
     "third_party/cbios-nextor_FDD-and-turboR/cbios/derived/bin",
     "third_party/cbios-nextor_FDD-and-turboR/configs/blueMSX/Machines/Shared Roms",
@@ -34,6 +46,12 @@ static const char *s_search_dirs[] = {
     "derived/bin",
     NULL
 };
+#else
+static const char *s_search_dirs[] = {
+    MSX_BIOS_DEFAULT_DIR,
+    NULL
+};
+#endif
 
 static uint32_t read_rom_path(const char *path, uint8_t *buf, uint32_t cap)
 {

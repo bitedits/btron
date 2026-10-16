@@ -13,16 +13,23 @@
  * vertices.  All three produce a stream that is well-formed enough to DMA and that draws
  * something in the wrong place, which is why they cannot be caught downstream.
  *
- * The unit is asserted here too, because it was got wrong once: see gs_group_view.h.  A GIF
- * quadword is 128 bits and a packed GS register is 64 of them, so one register occupies one
- * quadword with its upper half unused -- two uint64_t, value first -- and the capture buffers below
- * are sized in pairs for that reason.  Reading them through the shared view is what keeps this file
- * from re-asserting the half-width layout it used to, which it did green.
+ * The unit is asserted here too, because it was got wrong once: see gs_group_view.h.  A GIF quadword
+ * is 128 bits and a packed GS register is 64 of them, so a dense REGLIST group puts TWO registers of
+ * its REGS list in every quadword -- the capture buffers below are still sized in pairs, and every
+ * register is read through `gs_vq()` or `gs_half()`, which is what keeps this file from re-asserting
+ * whichever stride it happened to ship last.  The stride it used to assert was one register per
+ * quadword, because the recorder emitted `FLG=PACKED`, and LANE 19 rung 5 measured that shape on this
+ * GS drawing nothing at all: the four registers a vertex carries now occupy two quadwords, which is
+ * both the shape that kicks and half the bytes.
  *
- * The buffer is 64 quadwords here rather than the shipped 4,096, because the boundary rule is the
- * part with logic in it and a split at the shipped size needs ten thousand vertices to reach.  The
- * arithmetic the small cap produces is spelled out in each check's comment, so the expectations
- * stay hand-derivable and do not depend on running the code first.
+ * The buffer is 32 quadwords here rather than the shipped 4,096, because the boundary rule is the
+ * part with logic in it and a split at the shipped size needs thousands of vertices to reach.  32 is
+ * the cap that leaves every *vertex* count below exactly where it was under the old 64-quadword
+ * sparse buffer -- a strip still splits after 12 vertices, an unknown op still refuses its 16th --
+ * because halving the stride and halving the buffer cancel; the boundary arithmetic therefore did not
+ * have to be re-invented to follow the format change, only the quadwords-per-group did.  The
+ * arithmetic the small cap produces is spelled out in each check's comment, so the expectations stay
+ * hand-derivable and do not depend on running the code first.
  *
  * Copyright 2026 Synrc Research Center. MIT License.
  */
@@ -32,8 +39,9 @@
 #include <string.h>
 
 /* Before the includes, so the recorder's own `#ifndef` yields and this gate drives the split paths
- * with a buffer it can actually fill. */
-#define GS_REC_QW_CAP 64u
+ * with a buffer it can actually fill.  32 quadwords is the dense successor to this file's old 64:
+ * GS_REC_HEADROOM is 1 + 3 * GS_REC_QW_PER_VERT = 7, and the split point falls where it fell before. */
+#define GS_REC_QW_CAP 32u
 
 #include "../../src/drivers/ps2/ps2_gs_pack.c"
 #include "../../src/drivers/ps2/ps2_gs_rec.c"
@@ -82,31 +90,29 @@ static const uint64_t k_prim3 = 0x25BULL;     /* the same with op = TRI (a list)
 static const uint64_t k_rgbaq = 0x3F80000078563412ULL;
 static const uint64_t k_st    = 0x400000003F800000ULL;   /* s = 1.0f, t = 2.0f */
 
-/* A group's tag, for NLOOP of n.  The arithmetic is the GIFTAG field table itself:
- * NLOOP[14:0], EOP at 15 (= 0x8000), PRE at 46 (= 0x4000_0000_0000), PRIM[57:47] (0x25C shifted
- * 47 bits = 0x012E_0000_0000_0000: its set bits 9,6,4,3,2 land on 56,53,51,50,49), FLG 0, and
- * NREG 4 at 60 (= 0x4000_0000_0000_0000).  The REGS nibble list is the *upper* half of the same
- * quadword, which is why the capture below reads it as word 1 of the group and not word 2. */
+/* A vertex group's tag, for NLOOP of n.  The arithmetic is the GIFTAG field table itself:
+ * NLOOP[14:0], EOP at 15 (= 0x8000), PRE at 46 CLEARED, PRIM[57:47] ZERO, FLG 1 at 58
+ * (= 0x0400_0000_0000_0000) and NREG 4 at 60 (= 0x4000_0000_0000_0000).  The REGS nibble list is the
+ * *upper* half of the same quadword, which is why the capture below reads it as word 1 of the group
+ * and not word 2.
+ *
+ * This ONE word is the tag for a strip, a fan, a list, a line and a point, because a dense
+ * `FLG=REGLIST` group carries its primitive as the loop's own first register -- the PRIM that
+ * gs_rec_prim() latches and write_vertex() emits for every vertex -- and the tag's PRIM field is
+ * what a PACKED group needed instead.  Three helpers used to live here, one per primitive, and their
+ * three literals differed in digits 11 and 12 because those digits ARE the PRIM field; what rung 5
+ * measured is that the field they encoded bought nothing on this GS, so the differences they checked
+ * for are gone and the check that they are gone is below. */
 static uint64_t tag_of(uint32_t nloop)
 {
-    return 0x412E400000008000ULL | (uint64_t)nloop;
+    return 0x4400000000008000ULL | (uint64_t)nloop;
 }
 
-/* The same word for PRIM = 0x25D (TRI_FAN): 0x25D is 0x25C with bit 0 set, and the tag's PRIM
- * field starts at bit 47, so exactly one more bit appears -- at digit 11, where PRE (bit 46)
- * already contributes 4, making it C.  Everything else is as above. */
-static uint64_t tag_of_fan(uint32_t nloop)
-{
-    return 0x412EC00000008000ULL | (uint64_t)nloop;
-}
-
-/* And for PRIM = 0x25B (TRI list).  0x25C is 0b1001011100 and 0x25B is 0b1001011011: the list's
- * op replaces bit 2 with bits 1 and 0, so the tag loses bit 49 (2 off digit 12) and gains bits
- * 47 and 48 (8 on digit 11, 1 on digit 12).  Net: digit 12 E -> D, digit 11 4 -> C. */
-static uint64_t tag_of_list(uint32_t nloop)
-{
-    return 0x412DC00000008000ULL | (uint64_t)nloop;
-}
+/* The retired shape, kept here as the word the format claim is measured against: NREG 4 at bit 60,
+ * FLG 0 (PACKED) so bit 58 is clear, PRIM 0x25C in [57:47] and PRE set at 46 -- the exact
+ * combination LANE 19 rung 5 drew zero pixels with, at either value of PRE.  Its XOR with a shipping
+ * tag names the three fields the fix touched: bit 58 and the eight PRIM bits. */
+#define TAG_RETIRED_STRIP 0x412E400000008000ULL
 
 static int s_checks, s_failures;
 
@@ -133,7 +139,8 @@ static void check_word(const char *what, uint64_t got, uint64_t want)
 
 /* One 4-vertex TRI_STRIP is exactly how a GL_QUADS four-cornered bar or icon reaches the GS, so
  * this is the shape the XMB emits most often and the one written out here in full.  A group of
- * four vertices is one tag quadword plus four vertices of four quadwords = 17, i.e. 272 bytes. */
+ * four vertices is one tag quadword plus four vertices of two quadwords = 9, i.e. 144 bytes: the
+ * four registers of the REGS list are packed two to a quadword, which is what `FLG=REGLIST` means. */
 static void test_quad_group(void)
 {
     uint64_t *w;
@@ -154,15 +161,43 @@ static void test_quad_group(void)
     if (s_cap_i < 1) return;
     w = s_cap[0];
 
-    check("the packet is one tag plus 4 vertices x 4 registers = 17 quadwords",
-          gs_group_qw(4u) == 17u && s_cap_n[0] == 17u);
-    check_word("GIFTAG: NLOOP counts the four vertices, not the 16 data quadwords",
+    /* The evenness the format rests on, asserted in the gate because no preprocessor can make it:
+     * `(GS_REC_REGS_N % 2u)` is not a pp-expression at all (`4u` is not a pp-number), so the
+     * `#if` that would have caught an odd register count never fires, and an odd count would leave
+     * the last register of every loop in a quadword's low half with the NEXT loop's PRIM beside it. */
+    check("the register count is even, so a vertex is a whole number of quadwords",
+          (GS_REC_REGS_N % 2u) == 0u && GS_REC_QW_PER_VERT * 2u == GS_REC_REGS_N);
+    check("and it is two, which is the stride every expectation below divides by",
+          GS_REC_QW_PER_VERT == 2u);
+    /* The number the split points in the boundary tests are derived from, asserted rather than
+     * assumed: a headroom left at the sparse value would still split at a legal boundary, just with
+     * half the buffer unused, and no row below would notice. */
+    check("the headroom is one tag plus three vertices at this stride",
+          GS_REC_HEADROOM == 1u + 3u * GS_REC_QW_PER_VERT && GS_REC_HEADROOM == 7u);
+
+    check("the packet is one tag plus 4 vertices x 2 quadwords = 9 quadwords",
+          gs_group_qw(4u) == 9u && s_cap_n[0] == 9u);
+    check_word("GIFTAG: NLOOP counts the four vertices, not the 8 data quadwords",
                gs_qw(w, 0u), tag_of(4u));
     check_word("REGS: PRIM, RGBAQ, ST, XYZ2, in the tag's upper half",
                gs_regs_of(w), 0x5210ULL);
 
+    /* The tag's own fields, named one by one, because the format claim is made of exactly these
+     * three and nothing else: FLG says the registers are packed, PRE says there is no register in
+     * front of them, and PRIM says the primitive is not carried here. */
+    check("FLG is REGLIST", gs_flg_of(w) == GS_FLG_REGLIST);
+    check("PRE is clear", gs_pre_of(w) == 0u);
+    check("the tag's PRIM field is zero", gs_prim_of(w) == 0u);
+    check("NREG is the four-register list", gs_nreg_of(w) == GS_REC_REGS_N);
+    check("EOP is set, because every send here is a packet of its own", gs_eop_of(w) == 1u);
+    /* The retired word, as the third term of the difference rather than a fourth assertion: a
+     * group that reverted to PACKED/PRE/tagged-PRIM would change these three bits and nothing else
+     * in the tag, so the XOR is the whole of the format fix in one row. */
+    check_word("CONTROL retired PACKED tag, same NLOOP: FLG + PRIM + PRE are all that differ",
+               gs_qw(w, 0u) ^ (TAG_RETIRED_STRIP | 4u), 0x052E400000000000ULL);
+
     /* Vertices are written in order and each carries its own state, which is the whole reason
-     * this group is 4 quadwords wide instead of 3. */
+     * this group is two quadwords wide instead of one. */
     check_word("vertex 1 PRIM",     gs_vq(w, 1u, 0u), k_prim);
     check_word("vertex 1 RGBAQ",    gs_vq(w, 1u, 1u), k_rgbaq);
     check_word("vertex 1 ST",       gs_vq(w, 1u, 2u), k_st);
@@ -170,14 +205,18 @@ static void test_quad_group(void)
     check_word("vertex 1 XYZ2: the page origin, in 12.4",
                gs_vq(w, 1u, 3u), 0x0000000080008000ULL);
 
-    /* The unit law as a word.  Under the half-width layout this file used to assert, the pair member
-     * at index 3 held RGBAQ -- which the GIF reads as the upper half of PRIM and then routes ST
-     * into RGBAQ's place.  A packed 64-bit register's upper half is ignored, so it is zero and not
-     * the previous group's neighbour. */
-    check_word("the upper half of a packed register's quadword is padding",
-               gs_upper_of(w, 1u), 0u);
-    check_word("and the same for the last register of the last vertex",
-               gs_upper_of(w, 16u), 0u);
+    /* The same four words read as the two quadwords the DMA counts, which is the dense layout
+     * stated as positions rather than as a claim: PRIM and RGBAQ are ONE quadword's two halves, ST
+     * and the drawing kick XYZ2 are the next one's.  Under the sparse stride this file used to
+     * assert, quadword 1's high half was zero and RGBAQ sat in quadword 2 -- half the bytes on the
+     * bus gone, and every register after the first shifted one quadword. */
+    check_word("quadword 1 = PRIM in its low half",   gs_half(w, 1u, 0u), k_prim);
+    check_word("quadword 1 = RGBAQ in its high half", gs_half(w, 1u, 1u), k_rgbaq);
+    check_word("quadword 2 = ST in its low half",     gs_half(w, 2u, 0u), k_st);
+    check_word("quadword 2 = XYZ2 in its high half, the kick last",
+               gs_half(w, 2u, 1u), 0x0000000080008000ULL);
+    check_word("the whole group's last half is the last vertex's XYZ2",
+               gs_upper_of(w, 8u), 0x00000000FFF07FF0ULL);
 
     /* (10,20) px: 10*16 = 160 -> 0x80A0, 20*16 = 320 -> 0x8140. */
     check_word("vertex 2 XYZ2: 10 px is 0xA0 sixteenths, not 10",
@@ -223,8 +262,11 @@ static void test_latched_state(void)
                gs_vq(w, 2u, 1u), k_rgbaq);
 }
 
-/* A primitive change is a group boundary by construction: the GIF tag carries both the REGS list
- * and the PRIM word, so one tag cannot describe two primitive types. */
+/* A primitive change is a group boundary by construction.  It is NOT one because of the tag: under
+ * the dense format the primitive travels in every vertex's own PRIM register and the tag names no
+ * primitive at all, which the rows below assert.  It is one because the recorder's continuation rule
+ * -- which already-written vertices have to be written again when a group is cut -- is a property of
+ * one primitive type, and a group that held two would have one sliding window serving two masters. */
 static void test_prim_closes(void)
 {
     start();
@@ -238,12 +280,22 @@ static void test_prim_closes(void)
     check("the second gs_rec_prim flushed the strip as its own packet", s_cap_i == 2);
     if (s_cap_i < 2) return;
     check_word("strip tag: 2 vertices", gs_qw(s_cap[0], 0u), tag_of(2u));
-    check_word("list tag: 1 vertex",    gs_qw(s_cap[1], 0u), tag_of_list(1u));
-    check_word("and the new group carries the new PRIM", gs_vq(s_cap[1], 1u, 0u), k_prim3);
+    check_word("list tag: 1 vertex, and the identical word apart from NLOOP",
+               gs_qw(s_cap[1], 0u), tag_of(1u));
+    /* The two tags differ in nothing but their loop count, which is the format's own claim stated
+     * where it can only be stated: a strip and a list are the same tag shape, so a gate that once
+     * needed three tag literals needs one. */
+    check_word("CONTROL strip vs list tags: only NLOOP",
+               gs_qw(s_cap[0], 0u) ^ gs_qw(s_cap[1], 0u), 3u);
+    check("so neither tag carries a primitive",
+          gs_prim_of(s_cap[0]) == 0u && gs_prim_of(s_cap[1]) == 0u);
+    check_word("and the new group carries the new PRIM where the GS reads it: its own register",
+               gs_vq(s_cap[1], 1u, 0u), k_prim3);
     check("two DMA starts, three vertices counted once each",
           gs_rec_sends() == 2u && gs_rec_verts() == 3u);
-    check("the one-vertex group is a tag and four registers",
-          s_cap_n[1] == gs_group_qw(1u) && s_cap_n[0] == gs_group_qw(2u));
+    check("the one-vertex group is a tag and two quadwords",
+          s_cap_n[1] == gs_group_qw(1u) && s_cap_n[1] == 3u &&
+          s_cap_n[0] == gs_group_qw(2u) && s_cap_n[0] == 5u);
 }
 
 /* glEnd with nothing pending must not put a NLOOP-0 tag on the bus, and a group that was opened
@@ -267,8 +319,9 @@ static void test_empty(void)
 /* A register write between two vertex groups: the same unit question asked of a packet shape the
  * blit path has already proven on the machine.  NLOOP is the number of writes, NREG is 1, the REGS
  * list is the single AD nibble, and each write takes a whole quadword whose upper half is the GP
- * register offset rather than padding -- which is the one place in this layer where the upper half
- * means something. */
+ * register offset.  This is the one group in the layer whose high half *names* a register instead of
+ * being one -- a vertex group's high half holds the loop's second register, this one's holds the
+ * address the low half has to land at -- so the two formats' size laws differ by exactly that. */
 static void test_ad_group(void)
 {
     /* tex0_1 and clamp_1: the two context-1 registers a texture switch has to reach, and the
@@ -324,16 +377,18 @@ static void test_ad_group(void)
 }
 
 /* ── The boundary rule ─────────────────────────────────────────────────
- * 64 quadwords, one for the tag, four per vertex, and GS_REC_HEADROOM = 1 + 3*4 = 13, so an open
- * group reaches 49 quadwords (12 vertices) and the 13th finds s_n + 4 = 53 past CAP-HEADROOM = 51
+ * 32 quadwords, one for the tag, two per vertex, and GS_REC_HEADROOM = 1 + 3*2 = 7, so an open
+ * group reaches 25 quadwords (12 vertices) and the 13th finds s_n + 2 = 27 past CAP-HEADROOM = 25
  * while still fitting the buffer: that is the early split, taken at a boundary the primitive can
- * continue from.
+ * continue from.  The vertex that reaches it is the 13th, exactly as it was under this file's old
+ * sparse 64-quadword buffer, because the stride and the buffer halved together -- which is why the
+ * boundary rule could be re-derived without re-inventing it.
  */
 static void test_strip_split(void)
 {
     uint64_t *g1, *g2;
-    uint32_t k;
-    int i, badpad;
+    uint32_t v;
+    int i, badprim;
 
     start();
     gs_rec_prim(k_prim);
@@ -350,10 +405,10 @@ static void test_strip_split(void)
     g1 = s_cap[0];
     g2 = s_cap[1];
 
-    check("the first group is 12 vertices plus its tag = 49 quadwords",
-          s_cap_n[0] == gs_group_qw(12u) && s_cap_n[0] == 49u);
-    check("the second is the 2 re-emitted plus 8 new plus its tag = 41",
-          s_cap_n[1] == gs_group_qw(10u) && s_cap_n[1] == 41u);
+    check("the first group is 12 vertices plus its tag = 25 quadwords",
+          s_cap_n[0] == gs_group_qw(12u) && s_cap_n[0] == 25u);
+    check("the second is the 2 re-emitted plus 8 new plus its tag = 21",
+          s_cap_n[1] == gs_group_qw(10u) && s_cap_n[1] == 21u);
     check_word("first group's NLOOP is 12 vertices", gs_qw(g1, 0u), tag_of(12u));
     check_word("second group's NLOOP is 10, counting its re-emitted edge",
                gs_qw(g2, 0u), tag_of(10u));
@@ -368,19 +423,40 @@ static void test_strip_split(void)
     check("re-emitted vertex B is its 12th", gs_vertex_equal(g2, 2u, g1, 12u));
     check("the third vertex of the new group is the 13th, i.e. genuinely new",
           !gs_vertex_equal(g2, 3u, g1, 12u));
-    /* The guard against a test that passes for the wrong reason: each vertex's PRIM word is the
-     * same by design, so only the three state words after it can tell the re-emitted pair apart.
+    /* The guard against a test that passes for the wrong reason: each vertex's PRIM register is the
+     * same by design, so only the three state registers after it can tell the re-emitted pair apart.
      * A continuation that wrote one vertex twice would be two identical quadword sets. */
     check("the two re-emitted vertices are distinct, not one vertex written twice",
           !gs_vertex_equal(g2, 1u, g2, 2u));
 
-    /* And the padding halves travel with their registers: a continuation that wrote only the low
-     * half of each pair would leave the previous group's words where the GIF reads the upper half. */
-    badpad = 0;
-    for (k = 1u; k < s_cap_n[1]; k++) {
-        if (gs_upper_of(g2, k) != 0u) badpad++;
+    /* Where those four registers sit, stated as halves and as hand words.  The colour this test
+     * latches is the iteration's number: gs_rec_color(i, 0, 0, 255) runs *after* vertex i, so vertex
+     * 11 carries the r the 10th iteration set.  RGBAQ is R[7:0] G[15:8] B[23:16] A[31:24] with Q
+     * above them, so that word is 0x3F800000_FF00000A -- A 255, B 0, G 0, R 10, Q 1.0f -- and it
+     * belongs in quadword 1's HIGH half, the second register of the loop's first quadword.  Under
+     * the sparse stride this file used to certify, that half was zero and the colour sat a whole
+     * quadword later. */
+    check_word("the re-emitted vertex's RGBAQ is quadword 1's high half",
+               gs_upper_of(g2, 1u), 0x3F800000FF00000AULL);
+    check_word("and the second re-emitted vertex carries its own colour, r = 11",
+               gs_upper_of(g2, 3u), 0x3F800000FF00000BULL);
+    /* Vertex 11 was (11, 22) px: 11*16 = 176 -> 32 944 = 0x80B0 and 22*16 = 352 -> 33 120 = 0x8160,
+     * X low and Y high, and the kick is the loop's LAST register -- quadword 2's high half. */
+    check_word("the re-emitted vertex's XYZ2 is quadword 2's high half",
+               gs_vq(g2, 1u, 3u), 0x00000000816080B0ULL);
+
+    /* And the stride counted over the whole group rather than asserted at one vertex: every loop of
+     * a dense group opens its own pair of quadwords with PRIM, because the REGS list restarts each
+     * loop.  Space the registers one to a quadword instead and quadword 1 + 2*(v-1) is ST for every
+     * v after the first, so this loop is the row that names the format, not the geometry. */
+    badprim = 0;
+    for (v = 1u; v <= gs_nloop_of(g2); v++) {
+        if (gs_vq(g2, v, 0u) != k_prim) badprim++;
     }
-    check("every data quadword of the second group is padded, none inherited", badpad == 0);
+    check("all 10 vertices of the second group open with the strip's PRIM",
+          badprim == 0 && gs_nloop_of(g2) == 10u);
+    check("and its quadword count is its tag plus two per loop",
+          s_cap_n[1] == 1u + GS_REC_QW_PER_VERT * gs_nloop_of(g2));
 }
 
 /* A fan's continuation is different from a strip's: every triangle shares the apex, so the apex
@@ -405,20 +481,37 @@ static void test_fan_split(void)
     if (s_cap_i < 2) return;
     g1 = s_cap[0];
     g2 = s_cap[1];
-    check_word("fan group 1 NLOOP 12", gs_qw(g1, 0u), tag_of_fan(12u));
-    check("fan group 1 is 12 vertices at four quadwords plus the tag",
-          s_cap_n[0] == 49u && s_cap_n[0] == gs_group_qw(12u));
+    check_word("fan group 1 NLOOP 12", gs_qw(g1, 0u), tag_of(12u));
+    check("fan group 1 is 12 vertices at two quadwords plus the tag",
+          s_cap_n[0] == 25u && s_cap_n[0] == gs_group_qw(12u));
     /* Thirteen vertices, twelve of them in the first group: the second is the two re-emitted
-     * ones plus the thirteenth, three vertices and 13 quadwords. */
-    check("fan group 2 re-emits the apex and the last edge, so 3 vertices and 13 quadwords",
-          s_cap_n[1] == 13u && (gs_qw(g2, 0u) & 0x7FFFu) == 3u);
-    check_word("and its tag is the fan's own PRIM, not the strip's", gs_qw(g2, 0u), tag_of_fan(3u));
+     * ones plus the thirteenth, three vertices and 7 quadwords. */
+    check("fan group 2 re-emits the apex and the last edge, so 3 vertices and 7 quadwords",
+          s_cap_n[1] == 7u && (gs_qw(g2, 0u) & 0x7FFFu) == 3u);
+    /* The row that used to read "its tag is the fan's own PRIM, not the strip's" and compared two
+     * different literals.  There is only one tag word now: a fan's primitive reaches the GS as the
+     * PRIM register at the head of each of its loops, so the tag of a fan and the tag of a strip are
+     * the same 64 bits whenever their NLOOPs match. */
+    check_word("and its tag is the one dense word, NLOOP 3", gs_qw(g2, 0u), tag_of(3u));
+    check("so neither fan tag nor strip tag names a primitive",
+          gs_prim_of(g1) == 0u && gs_prim_of(g2) == 0u &&
+          gs_flg_of(g1) == GS_FLG_REGLIST && gs_flg_of(g2) == GS_FLG_REGLIST);
     check("the continued fan starts from the apex, not from vertex 11",
           gs_vertex_equal(g2, 1u, g1, 1u));
     check("and its second vertex is the fan's last, shared edge",
           gs_vertex_equal(g2, 2u, g1, 12u));
     check("the two re-emitted vertices are distinct, not one vertex written twice",
           !gs_vertex_equal(g2, 1u, g2, 2u));
+    /* The apex and the shared edge as hand words in the halves they belong to.  The fan's vertices
+     * are (i, i) px: the apex is (0, 0), so 0*16 + 2048*16 = 0x8000 in both coordinate fields, and
+     * the twelfth is (11, 11), so 11*16 = 176 -> 32 944 = 0x80B0 in both.  XYZ2 is the fourth
+     * register of the loop, which under two-to-a-quadword is the SECOND quadword's high half. */
+    check_word("the re-emitted apex's XYZ2 is quadword 2's high half",
+               gs_vq(g2, 1u, 3u), 0x0000000080008000ULL);
+    check_word("and the re-emitted edge's, at quadword 4's high half",
+               gs_vq(g2, 2u, 3u), 0x0000000080B080B0ULL);
+    check_word("the genuinely new thirteenth vertex is (12, 12)",
+               gs_vq(g2, 3u, 3u), 0x0000000080C080C0ULL);
 }
 
 /* A triangle *list* has no shared vertices, so its only legal boundaries are between whole
@@ -439,10 +532,19 @@ static void test_list_boundary(void)
     if (s_cap_i < 2) return;
     g1 = s_cap[0];
     check_word("and it waited for the multiple of three: 12 vertices, not 11",
-               gs_qw(g1, 0u), tag_of_list(12u));
-    check("the tail group holds the thirteenth vertex alone", s_cap_n[1] == gs_group_qw(1u));
+               gs_qw(g1, 0u), tag_of(12u));
+    check("so the first group is 12 vertices and 25 quadwords, all whole triangles",
+          s_cap_n[0] == 25u && gs_nloop_of(g1) % 3u == 0u);
+    check("the tail group holds the thirteenth vertex alone, tag and two quadwords",
+          s_cap_n[1] == gs_group_qw(1u) && s_cap_n[1] == 3u);
     check("and a list re-emits nothing: its tag says one vertex",
-          (gs_qw(s_cap[1], 0u) & 0x7FFFu) == 1u);
+          gs_nloop_of(s_cap[1]) == 1u);
+    /* A list needs no continuation, and the census of the tail group says so in words: the single
+     * loop's four registers are the 13th vertex's own -- PRIM 0x25B, the default white, the default
+     * ST and the coordinate (12, 0) px, i.e. 0x80C0 in X and the page origin 0x8000 in Y. */
+    check_word("the tail's PRIM register", gs_vq(s_cap[1], 1u, 0u), k_prim3);
+    check_word("the tail's XYZ2, at the second quadword's high half",
+               gs_vq(s_cap[1], 1u, 3u), 0x00000000800080C0ULL);
 }
 
 /* An op this recorder does not know cannot be continued, so the boundary rule has no answer: the
@@ -469,12 +571,16 @@ static void test_unsplittable(void)
     check("the refusal is counted, not silent", gs_rec_unsplittable() == 1u);
     check("the 15 that were taken are still sent as one group", s_cap_i == 1);
     if (s_cap_i < 1) return;
-    /* PRIM 0x25F = 0b1001011111, so op 7 sets the field's bits 0,1,2 and the tag gains bits 47,
-     * 48, 49 over the strip's: digit 12 is F (1+2+4+8) and digit 11 is C (8 for bit 47, 4 for
-     * PRE).  Everything above it is the same as tag_of()'s. */
-    check_word("with its own NLOOP intact", gs_qw(s_cap[0], 0u), 0x412FC00000008000ULL | 15u);
-    check("15 vertices plus a tag is 61 quadwords, inside the 64",
-          s_cap_n[0] == 61u && s_cap_n[0] == gs_group_qw(15u));
+    /* The tag is the same word a strip's or a fan's is, which is what the dense format buys here:
+     * an op 7 PRIM changes only the register each loop carries, not a bit of the tag.  Under the
+     * retired PACKED shape this row compared a fourth hand literal, because PRIM[57:47] held the op
+     * and PRE[46] held its companion -- 0x412FC00000008000 for NLOOP 15. */
+    check_word("with its own NLOOP intact and no primitive in the tag",
+               gs_qw(s_cap[0], 0u), tag_of(15u));
+    check("15 vertices plus a tag is 31 quadwords, inside the 32",
+          s_cap_n[0] == 31u && s_cap_n[0] == gs_group_qw(15u));
+    check("and the group's own registers do name the op the tag does not",
+          gs_vq(s_cap[0], 1u, 0u) == bad_prim && gs_prim_of(s_cap[0]) == 0u);
 }
 
 /* POINT and a LINE list are the two remaining boundary shapes.  Both PRIM words here are the
@@ -490,9 +596,10 @@ static void test_point_and_line_boundaries(void)
     check("line PRIM: op 1 under the same flags",     line_prim == 0x259ULL);
 
     /* Every vertex is its own primitive, so a boundary is always available and nothing is
-     * re-emitted: 64 quadwords hold 12 vertices plus a tag, and 30 points cost starts of 12, 12
+     * re-emitted: 32 quadwords hold 12 vertices plus a tag, and 30 points cost starts of 12, 12
      * and 6.  That is the arithmetic behind "capacity is a latency knob" -- the same 30 vertices at
-     * the shipped 4,096 quadwords are one start. */
+     * the shipped 4,096 quadwords are one start, and at two quadwords a vertex they are one start
+     * for half the bytes the old sparse shape moved. */
     start();
     gs_rec_prim(point_prim);
     for (i = 0; i < 30; i++) {
@@ -504,13 +611,13 @@ static void test_point_and_line_boundaries(void)
     check("and they cost three DMA starts at this capacity", s_cap_i == 3 && gs_rec_sends() == 3u);
     if (s_cap_i < 3) return;
     check("12 + 12 + 6 = 30, with no vertex repeated",
-          (gs_qw(s_cap[0], 0u) & 0x7FFFu) == 12u && (gs_qw(s_cap[1], 0u) & 0x7FFFu) == 12u &&
-          (gs_qw(s_cap[2], 0u) & 0x7FFFu) == 6u);
-    check("each group is its vertex count times four registers plus its tag",
-          s_cap_n[0] == 49u && s_cap_n[1] == 49u && s_cap_n[2] == 25u);
+          gs_nloop_of(s_cap[0]) == 12u && gs_nloop_of(s_cap[1]) == 12u &&
+          gs_nloop_of(s_cap[2]) == 6u);
+    check("each group is its vertex count times two quadwords plus its tag",
+          s_cap_n[0] == 25u && s_cap_n[1] == 25u && s_cap_n[2] == 13u);
 
     /* A LINE list cuts only between segments.  Without the headroom rule the buffer would fill
-     * at 15 vertices (61 quadwords) and the 16th would find no boundary at an odd count; the
+     * at 15 vertices (31 quadwords) and the 16th would find no boundary at an odd count; the
      * early split at the 13th lands on the even one instead, so 14 endpoints make two whole-
      * segment groups of 12 and 2 and refuse nothing. */
     start();
@@ -524,9 +631,9 @@ static void test_point_and_line_boundaries(void)
     check("and split into two groups", s_cap_i == 2);
     if (s_cap_i < 2) return;
     check("both NLOOPs are a whole number of segments",
-          (gs_qw(s_cap[0], 0u) & 0x7FFFu) == 12u && (gs_qw(s_cap[1], 0u) & 0x7FFFu) == 2u);
+          gs_nloop_of(s_cap[0]) == 12u && gs_nloop_of(s_cap[1]) == 2u);
     check("and no vertex is re-emitted, because a segment shares none",
-          s_cap_n[1] == gs_group_qw(2u));
+          s_cap_n[1] == gs_group_qw(2u) && s_cap_n[1] == 5u);
 }
 
 /* The counters are the frame's latency budget, so they have to survive a re-init and report the
@@ -550,6 +657,116 @@ static void test_counters_reset(void)
     check("the second frame counts on its own", gs_rec_sends() == 1u && gs_rec_verts() == 1u);
 }
 
+/* ── Gate #120: Lit-vertex stream capture, dump, and offline replay ─────────
+ *
+ * This test establishes the offline dump-and-replay sentinel for lit-vertex streams.
+ * A lit triangle (as emitted by Quake's brush/lightmap fold or Lil Cu 64's lit mascot)
+ * carries IIP (Gouraud shading), distinct RGBAQ per vertex with Q=1.0f, distinct ST coordinates,
+ * and valid 12.4 XYZ2 coordinates.
+ *
+ * In addition to in-memory assertions, the recorded GIF stream is dumped to a binary fixture
+ * (verify/fixtures/gs_lit_stream.bin) and re-read back into a decoder validator, proving that
+ * offline tools and differential oracles can parse and verify the stream with zero drift.
+ */
+static void test_lit_vertex_stream(void)
+{
+    /* Lit Gouraud textured triangle: op=GS_OP_TRI (3), IIP=1, TME=1, ABE=0, CTXT=0 */
+    const uint64_t lit_prim = gs_pack_prim(GS_OP_TRI, 1u, 1u, 0u, 0u, 0u);
+    uint64_t *w;
+    FILE *fp;
+    uint64_t replayed[GS_REC_QW_CAP * 2u];
+    size_t nread;
+    uint32_t i;
+
+    /* Hand literals for three lit vertices */
+    const uint64_t want_rgba1 = gs_pack_rgbaq(0x30u, 0x45u, 0x60u, 0xFFu, GS_Q_ONE);
+    const uint64_t want_rgba2 = gs_pack_rgbaq(0x80u, 0xA0u, 0xC0u, 0xFFu, GS_Q_ONE);
+    const uint64_t want_rgba3 = gs_pack_rgbaq(0xE0u, 0xF0u, 0xFFu, 0xFFu, GS_Q_ONE);
+
+    const uint64_t want_st1 = gs_pack_st(0.0f, 0.0f);
+    const uint64_t want_st2 = gs_pack_st(1.0f, 0.0f);
+    const uint64_t want_st3 = gs_pack_st(0.5f, 1.0f);
+
+    start();
+    gs_rec_prim(lit_prim);
+
+    /* Vertex 1: Ambient + folded lightmap base */
+    gs_rec_color(0x30u, 0x45u, 0x60u, 0xFFu);
+    gs_rec_texcoord(0.0f, 0.0f);
+    check("lit vertex 1 accepted", gs_rec_vertex(100, 100, 50u) == 0);
+
+    /* Vertex 2: Diffuse illumination */
+    gs_rec_color(0x80u, 0xA0u, 0xC0u, 0xFFu);
+    gs_rec_texcoord(1.0f, 0.0f);
+    check("lit vertex 2 accepted", gs_rec_vertex(200, 100, 50u) == 0);
+
+    /* Vertex 3: Specular peak */
+    gs_rec_color(0xE0u, 0xF0u, 0xFFu, 0xFFu);
+    gs_rec_texcoord(0.5f, 1.0f);
+    check("lit vertex 3 accepted", gs_rec_vertex(150, 200, 50u) == 0);
+
+    gs_rec_end();
+
+    check("lit triangle emits exactly one group", gs_rec_sends() == 1u);
+    check("and counts three vertices", gs_rec_verts() == 3u);
+    check("one group captured without sink overflow", s_cap_i == 1 && s_over_cap == 0);
+    if (s_cap_i < 1) return;
+    w = s_cap[0];
+
+    /* Check group length: 1 tag quadword + 3 vertices * 2 quadwords = 7 quadwords */
+    check("lit triangle group is 7 quadwords", s_cap_n[0] == 7u && gs_group_qw(3u) == 7u);
+    check_word("lit GIFTAG: NLOOP counts three vertices", gs_qw(w, 0u), tag_of(3u));
+    check("lit GIFTAG: FLG is REGLIST", gs_flg_of(w) == GS_FLG_REGLIST);
+    check("lit GIFTAG: EOP is set", gs_eop_of(w) == 1u);
+    check("lit GIFTAG: PRE is clear", gs_pre_of(w) == 0u);
+    check_word("lit GIFTAG: REGS is PRIM, RGBAQ, ST, XYZ2 (0x5210)", gs_regs_of(w), 0x5210ULL);
+
+    /* Check each vertex's lit registers */
+    check_word("vertex 1 PRIM is lit_prim",  gs_vq(w, 1u, 0u), lit_prim);
+    check_word("vertex 1 RGBAQ matches lit ambient/lightmap", gs_vq(w, 1u, 1u), want_rgba1);
+    check_word("vertex 1 ST matches (0,0)",  gs_vq(w, 1u, 2u), want_st1);
+
+    check_word("vertex 2 PRIM is lit_prim",  gs_vq(w, 2u, 0u), lit_prim);
+    check_word("vertex 2 RGBAQ matches lit diffuse", gs_vq(w, 2u, 1u), want_rgba2);
+    check_word("vertex 2 ST matches (1,0)",  gs_vq(w, 2u, 2u), want_st2);
+
+    check_word("vertex 3 PRIM is lit_prim",  gs_vq(w, 3u, 0u), lit_prim);
+    check_word("vertex 3 RGBAQ matches lit specular peak", gs_vq(w, 3u, 1u), want_rgba3);
+    check_word("vertex 3 ST matches (0.5,1)", gs_vq(w, 3u, 2u), want_st3);
+
+    /* Validate Q-channel float: all vertices must have IEEE-754 1.0f in upper 32 bits */
+    for (i = 1u; i <= 3u; i++) {
+        uint64_t col = gs_vq(w, i, 1u);
+        check("Q channel is 1.0f (0x3F800000)", (col >> 32) == 0x3F800000ULL);
+    }
+
+    /* Offline Dump and Replay: write to verify/fixtures/gs_lit_stream.bin */
+    fp = fopen("verify/fixtures/gs_lit_stream.bin", "wb");
+    check("can create verify/fixtures/gs_lit_stream.bin", fp != NULL);
+    if (fp != NULL) {
+        size_t bytes = GS_QW_BYTES(s_cap_n[0]);
+        size_t written = fwrite(w, 1, bytes, fp);
+        check("stream written completely to fixture file", written == bytes);
+        fclose(fp);
+    }
+
+    /* Replay from disk */
+    memset(replayed, 0, sizeof(replayed));
+    fp = fopen("verify/fixtures/gs_lit_stream.bin", "rb");
+    check("can open verify/fixtures/gs_lit_stream.bin for replay", fp != NULL);
+    if (fp != NULL) {
+        nread = fread(replayed, 1, sizeof(replayed), fp);
+        fclose(fp);
+        check("replayed byte count matches recorded stream", nread == GS_QW_BYTES(s_cap_n[0]));
+        check("replayed bytes match recorded words exactly", memcmp(w, replayed, nread) == 0);
+
+        /* Validate replayed stream fields through decoder */
+        check("replayed tag NLOOP is 3", gs_nloop_of(replayed) == 3u);
+        check("replayed tag FLG is REGLIST", gs_flg_of(replayed) == GS_FLG_REGLIST);
+        check("replayed vertex 2 diffuse matches", gs_vq(replayed, 2u, 1u) == want_rgba2);
+    }
+}
+
 int main(void)
 {
     printf("==========================================================\n");
@@ -567,6 +784,7 @@ int main(void)
     test_unsplittable();
     test_point_and_line_boundaries();
     test_counters_reset();
+    test_lit_vertex_stream();
 
     printf("  checks=%d failures=%d\n", s_checks, s_failures);
     if (s_failures == 0) {

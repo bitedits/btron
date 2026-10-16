@@ -15,8 +15,10 @@
  *      the viewport map and the window's origin are already in the numbers the span loops walked;
  *   3. that a repeated state does not close the group -- the law that keeps a ribbon's 1,828
  *      triangles in one packet instead of 1,828 packets of three vertices;
- *   4. that a state change does, because the GIF tag carries the PRIM and one tag cannot describe
- *      two primitive states;
+ *   4. that a state change does, because every vertex of the open group carries the group's one
+ *      latched PRIM word -- a second state needs a second group's second word.  The GIF tag itself
+ *      names no primitive at all (see the dense tag below), so this boundary is the recorder's
+ *      contract rather than the GIF's requirement;
  *   5. from 5b, the texture switch: which group a plane change becomes, what order its three
  *      registers travel in, that a repeated plane costs nothing, and that a textured primitive
  *      with no plane of its own loses `TME` rather than sampling the page the stream left behind;
@@ -39,13 +41,19 @@
  *      decision: one switch for a whole run, and a key the registry does not know demotes to the
  *      flat draw the walk folds to, counted in `texmiss` rather than drawn from somebody else's page.
  *
- * The buffer is 64 quadwords (the test's own #define, as in increment 4's gate), which is what
- * makes the last check also prove that a group cut by capacity never lands mid-triangle.
+ * The buffer is 32 quadwords (the test's own #define, matching increment 4's gate), which is what
+ * makes the last check also prove that a group cut by capacity never lands mid-triangle.  32 is the
+ * dense successor to this file's old 64: the recorder's headroom and its stride halved together, so
+ * a group still holds 12 vertices before it splits and every vertex-level expectation below is
+ * unchanged -- only the quadwords per group and the tag words are.
  *
  * The quadwords are read through gs_group_view.h, the same view test_ps2_gs_rec.c uses: a GIF
  * quadword is 128 bits and every register this stage writes is 64 of them, so a captured group is
- * pairs of uint64_t and `qwc` counts pairs, not words.  One statement of that unit rather than two
- * is deliberate -- see that header's comment on how the half-width layout got through both gates.
+ * pairs of uint64_t and `qwc` counts pairs, not words -- and because a vertex group is a dense
+ * `FLG=REGLIST`, each of those pairs carries TWO registers of the group's REGS list, which is why
+ * the register reads below go through `gs_vq()` and not through a word index.  One statement of that
+ * unit rather than two is deliberate -- see that header's comment on how the half-width layout got
+ * through both gates.
  *
  * Copyright 2026 Synrc Research Center. MIT License.
  */
@@ -54,7 +62,7 @@
 #include <stdint.h>
 #include <string.h>
 
-#define GS_REC_QW_CAP 64u
+#define GS_REC_QW_CAP 32u
 
 #include "../../src/drivers/ps2/ps2_gs_pack.c"
 #include "../../src/drivers/ps2/ps2_gs_rec.c"
@@ -127,29 +135,54 @@ static const eegs_tri_state_t k_blend_only = { 0, 0, 1 };
  * what the strip-vs-list comparison below is for. */
 static const eegs_tri_state_t k_grid_st = { 1, 0, 1 };
 
-/* The PRIM words, by hand: gs_pack_prim's own field list is OP[2:0] IIP[3] TME[4] FGE[5] ABE[6]
- * AA1[7] FST[8] CTXT[9] FIX[11:10], so with CTXT always 1 (512) a textured, blended, smooth TRI is
- * 3 + 8 + 16 + 64 + 512 = 603 = 0x25B; flat is 0x25B without IIP's 8 = 0x253; untextured and
- * unblended but smooth is 3 + 8 + 512 = 0x20B; a blended LINE with nothing else is
- * 1 + 64 + 512 = 0x241; and a bare POINT is 0 + 512 = 0x200. */
-static const uint64_t k_prim_tri_stb  = 0x25BULL;
-static const uint64_t k_prim_tri_flat = 0x253ULL;
-static const uint64_t k_prim_line     = 0x241ULL;
-static const uint64_t k_prim_point    = 0x200ULL;
+/* The register set every PRIM word in this gate carries, named ONCE because it is the bit LANE 19
+ * rung 6 found wrong on the machine.  gs_pack_prim's field list is OP[2:0] IIP[3] TME[4] FGE[5]
+ * ABE[6] AA1[7] FST[8] CTXT[9] FIX[11:10], and CTXT selects the register set the primitive draws
+ * with -- ps2sdk pairs the FIRST set with the integer 0 (`GS_REG_FRAME_1` is 4Ch, `GS_REG_FRAME_2`
+ * 4Dh, and its own call is `GS_REG_FRAME + context`), which is the set `ps2_gs_env.c` and
+ * `eegs_texture()` program and the set `EEGS_CONTEXT` in the backend is now 0 to agree with.  A 1
+ * here asks the GS for a set nothing has ever written: the frame is delivered, acknowledged and
+ * clipped away, and every counter on this side of the GS says it was drawn. */
+#define K_CTX 0u
 
-/* The tag around a group whose PRIM is 0x25B.  Derived here rather than in code, and derived from
- * the field table: NLOOP[14:0], EOP[15] = 0x8000, PRE[46] = 4 in digit 11, PRIM[57:47] -- 0x25B is
- * 0b1001011011 so its bits 0,1,3,4,6,9 land on 47,48,50,51,53,56, giving digit 11 an 8 (C with PRE)
- * and digit 12 a 1+4+8 = D -- and NREG[63:60] = 4. */
-static const uint64_t k_tag_tri_stb = 0x412DC00000008000ULL;
+/* The PRIM words, by hand, as sums of that field table -- CTXT included as a term so the bit cannot
+ * be re-frozen at a stale value by an edit that touches the neighbours: a textured, blended, smooth
+ * TRI is 3 + 8 + 16 + 64 = 91 = 0x5B; flat is 0x5B without IIP's 8 = 0x53; untextured and unblended
+ * but smooth is 3 + 8 = 0x0B; a blended LINE with nothing else is 1 + 64 = 0x41; and a bare POINT is
+ * nothing but the op and the context, so 0. */
+static const uint64_t k_prim_tri_stb  = 3u + 8u + 16u + 64u + K_CTX;
+static const uint64_t k_prim_tri_flat = 3u + 16u + 64u + K_CTX;
+static const uint64_t k_prim_line     = 1u + 64u + K_CTX;
+static const uint64_t k_prim_line_smooth = 1u + 8u + K_CTX;   /* LINE, untextured, unblended */
+static const uint64_t k_prim_point    = 0u + K_CTX;
+
+/* The tag around EVERY vertex group this stage writes, derived here from the field table rather than
+ * trusted from the encoder: NLOOP[14:0], EOP[15] = 0x8000, PRE[46] = 0, PRIM[57:47] = 0,
+ * FLG[59:58] = 1 -- a 1 in the low bit of digit 14, i.e. 0x0400_0000_0000_0000 -- and NREG[63:60] = 4
+ * at 0x4000_0000_0000_0000.  It is ONE word for a TRI, a strip, a line and a point, because under
+ * `FLG=REGLIST` the primitive travels as the loop's own first register and the tag carries none. */
+static const uint64_t k_tag_dense = 0x4400000000008000ULL;
+
+/* The shape this replaced, kept as the control it is: the same NREG 4 and EOP, with FLG 0 (PACKED),
+ * PRE set at 46 and the textured smooth blended TRI's PRIM word in [57:47] -- BUILT from
+ * `k_prim_tri_stb` rather than frozen as a second copy of the encoding, so this control follows the
+ * CTXT law instead of quietly keeping an old one.  0x5B has its bits 0,1,3,4,6, which land on
+ * 47,48,50,51,53: digit 11 is C (PRE's 4 plus op's bit 47), digit 12 is D (1+4+8), digit 13 is 2,
+ * and digit 14 is 0 -- nothing of the primitive reaches bit 56 any more, because that bit WAS CTXT.
+ * The word is therefore 0x402D_C000_0000_8000 and its XOR with the dense tag is
+ * 0x042D_C000_0000_0000: bit 58 plus bit 46 plus those five PRIM bits and nothing else.  LANE 19 rung
+ * 5 put these four registers in front of this tag and the census counted zero pixels, at either value
+ * of PRE; rung 6 found the sixth bit, CTXT's own, was counting for nothing. */
+static const uint64_t k_tag_retired_tri_stb =
+    (4ULL << 60) | (k_prim_tri_stb << 47) | (1ULL << 46) | 0x8000ULL;
 
 /* The AD group's tag, by hand: NLOOP[14:0]=3, EOP[15], ID[57:48]=0, PRE[46]=0, PRIM[57:47]=0 --
  * this group draws nothing -- and NREG[63:60]=1.  The same shape send_trx_setup_at() sends for the
  * canvas's four registers, which is the proof the shape has on the machine. */
 static const uint64_t k_tag_ad3 = 0x1000000000008003ULL;
 
-/* A smooth, blended TRI with TME cleared: 3 + 8 + 64 + 512. */
-static const uint64_t k_prim_tri_untex = 0x24BULL;
+/* A smooth, blended TRI with TME cleared: 3 + 8 + 64 = 75 = 0x4B. */
+static const uint64_t k_prim_tri_untex = 3u + 8u + 64u + K_CTX;
 
 static int s_checks, s_failures;
 
@@ -221,8 +254,9 @@ const gs_tex_t *gs_tex_find(const void *plane)
     return plane == s_tex_key ? &s_plane : (const gs_tex_t *)0;
 }
 
-/* One triangle, its thirteen quadwords spelled out: the tag, then for each vertex the PRIM, the
- * RGBAQ, the ST and the XYZ2, each register owning a whole quadword. */
+/* One triangle, its seven quadwords spelled out: the tag, then two quadwords per vertex carrying
+ * the four registers of the REGS list two to a quadword -- PRIM with RGBAQ, then ST with the XYZ2
+ * that kicks the draw. */
 static void test_one_triangle(void)
 {
     uint64_t *w;
@@ -237,18 +271,20 @@ static void test_one_triangle(void)
     eegs_triangle(v, k_stb);
     eegs_frame_end();
 
-    check_word("a smooth textured blended TRI asks for PRIM 0x25B", gs_vq(VG(0), 1u, 0u),
+    check_word("a smooth textured blended TRI asks for PRIM 0x5B", gs_vq(VG(0), 1u, 0u),
                k_prim_tri_stb);
-    check("one triangle is one vertex group: a tag plus twelve data quadwords",
-          s_cap_i == 1 + s_vg && VN(0) == gs_group_qw(3u) && VN(0) == 13u);
+    check("one triangle is one vertex group: a tag plus six data quadwords",
+          s_cap_i == 1 + s_vg && VN(0) == gs_group_qw(3u) && VN(0) == 7u);
     check("three vertices, one triangle", eegs_verts() == 3u && eegs_prims() == 1u);
     if (s_cap_i < 1 + s_vg) return;
     w = VG(0);
 
-    check_word("the group's tag: NLOOP 3 with the triangle's own PRIM",
-               gs_qw(w, 0u), gs_pack_giftag(3u, 1u, 1u, k_prim_tri_stb, GS_FLG_PACKED, 4u));
+    check_word("the group's tag: NLOOP 3, FLG=REGLIST, and no PRIM field",
+               gs_qw(w, 0u), gs_pack_giftag(3u, 1u, 0u, 0u, GS_FLG_REGLIST, 4u));
     check("and that tag is the hand literal, not only the encoder's word",
-          gs_qw(w, 0u) == (k_tag_tri_stb | 3u));
+          gs_qw(w, 0u) == (k_tag_dense | 3u));
+    check_word("CONTROL that word against the retired PACKED tag: FLG, PRIM and PRE, nothing else",
+               gs_qw(w, 0u) ^ (k_tag_retired_tri_stb | 3u), 0x042DC00000000000ULL);
     check_word("REGS: PRIM, RGBAQ, ST, XYZ2, in the tag's upper half",
                gs_regs_of(w), 0x5210ULL);
 
@@ -280,13 +316,19 @@ static void test_one_triangle(void)
                gs_vq(w, 3u, 3u), 0x000000008FA08140ULL);
     check_word("vertex 3 RGBAQ: opaque white", gs_vq(w, 3u, 1u), 0x3F800000FFFFFFFFULL);
 
-    /* The unit, one more time from this stage's side: if the raster stage or the recorder wrote a
-     * register per 64-bit word, twelve of these thirteen quadwords would carry a second value. */
+    /* The unit, one more time from this stage's side, and now reading in the direction the format
+     * runs: of this group's six data quadwords every HIGH half is a register of the loop -- RGBAQ,
+     * XYZ2, RGBAQ, XYZ2, RGBAQ, XYZ2 -- and none of them is padding.  Under the retired PACKED stride
+     * all twelve of those halves were zero, which is the shape rung 5 measured as inert.  The one
+     * legitimately zero register in this group, vertex 1's ST of (0,0), sits in a LOW half, where a
+     * "no half is zero" census would have called it padding. */
     badpad = 0;
     for (k = 1u; k < VN(0); k++) {
-        if (gs_upper_of(w, k) != 0u) badpad++;
+        if (gs_upper_of(w, k) == 0u) badpad++;
     }
-    check("and all twelve data quadwords are one register wide", badpad == 0);
+    check("and all six data quadwords carry two registers each, none padded", badpad == 0);
+    check_word("vertex 1's zero ST is quadword 2's low half, not an empty half",
+               gs_half(w, 2u, 0u), 0u);
 }
 
 /* The law with the most at stake: three triangles that want the same state are ONE group of nine
@@ -312,7 +354,7 @@ static void test_state_reuse(void)
     if (s_cap_i < 1 + s_vg) return;
     check("NLOOP 9, so the group holds all three whole",
           (gs_qw(VG(0), 0u) & 0x7FFFu) == 9u);
-    check("1 + 4*9 = 37 quadwords", VN(0) == gs_group_qw(9u) && VN(0) == 37u);
+    check("1 + 2*9 = 19 quadwords", VN(0) == gs_group_qw(9u) && VN(0) == 19u);
 
     /* LANE 12e's park, read off the group this frame built: a triangle is three vertices, so
      * `verts` is exactly 3 x `prims`, and the OP the group's PRIM carries is the list's 3, not the
@@ -326,8 +368,9 @@ static void test_state_reuse(void)
 }
 
 /* A state change is a group boundary by construction, and the PRIM word that follows it must be
- * the new one: the tag carries the state for the group's first primitive, and every vertex carries
- * it again. */
+ * the new one: every vertex carries the group's latched state in its own first register, and the tag
+ * carries none -- so the two groups' tags here are the same word, and what makes them different
+ * packets is the register at the head of each of their loops. */
 static void test_state_change_closes(void)
 {
     eegs_vertex_t v[3];
@@ -343,11 +386,13 @@ static void test_state_change_closes(void)
     check("a flat triangle after a smooth one is two vertex groups", s_cap_i == 2 + s_vg);
     if (s_cap_i < 2 + s_vg) return;
     check_word("the first group's PRIM keeps IIP", gs_vq(VG(0), 1u, 0u), k_prim_tri_stb);
-    check_word("the second's drops it: 0x25B without the 8", gs_vq(VG(1), 1u, 0u),
+    check_word("the second's drops it: 0x5B without the 8", gs_vq(VG(1), 1u, 0u),
                k_prim_tri_flat);
-    check_word("and the second tag carries the new state",
-               gs_qw(VG(1), 0u),
-               gs_pack_giftag(3u, 1u, 1u, k_prim_tri_flat, GS_FLG_PACKED, 4u));
+    check_word("and its tag is the identical dense word, NLOOP 3, state in its loops",
+               gs_qw(VG(1), 0u), gs_pack_giftag(3u, 1u, 0u, 0u, GS_FLG_REGLIST, 4u));
+    check("so the two groups' tags are the same 64 bits, and only their PRIM registers differ",
+          gs_qw(VG(0), 0u) == gs_qw(VG(1), 0u) &&
+          gs_vq(VG(0), 1u, 0u) != gs_vq(VG(1), 1u, 0u));
     check("so a state change costs one group, not one vertex group per triangle",
           VN(0) == gs_group_qw(3u) && VN(1) == gs_group_qw(3u));
 
@@ -357,7 +402,7 @@ static void test_state_change_closes(void)
     eegs_frame_end();
     check("a point after a triangle closes too, and is its own op", s_cap_i == 2 + s_vg);
     if (s_cap_i < 2 + s_vg) return;
-    check_word("POINT with the same flags: 0 + 8 + 16 + 64 + 512",
+    check_word("POINT with the same flags: 0 + 8 + 16 + 64",
                gs_vq(VG(1), 1u, 0u), k_prim_point | 8u | 16u | 64u);
     check("the point group has one vertex", (gs_qw(VG(1), 0u) & 0x7FFFu) == 1u);
 }
@@ -381,12 +426,12 @@ static void test_lines(void)
     if (s_cap_i < 1) return;
     check("eight vertices = four segments",
           (gs_qw(s_cap[0], 0u) & 0x7FFFu) == 8u && eegs_verts() == 8u);
-    check_word("LINE, untextured, unblended, smooth: 1 + 8 + 512",
-               gs_vq(s_cap[0], 1u, 0u), 0x209ULL);
+    check_word("LINE, untextured, unblended, smooth: 1 + 8",
+               gs_vq(s_cap[0], 1u, 0u), k_prim_line_smooth);
     check("and a counted primitive is counted whether or not it is a triangle",
           eegs_prims() == 4u);
-    check("one tag plus eight four-register vertices = 33 quadwords",
-          s_cap_n[0] == gs_group_qw(8u) && s_cap_n[0] == 33u);
+    check("one tag plus eight two-quadword vertices = 17 quadwords",
+          s_cap_n[0] == gs_group_qw(8u) && s_cap_n[0] == 17u);
 
     start();
     v[0] = vert(0, 0, 0.0f, 0.0f, 0xFF332244u);
@@ -394,15 +439,15 @@ static void test_lines(void)
     eegs_line(v, k_blend_only);
     eegs_frame_end();
     if (s_cap_i < 1) return;
-    check_word("the same op with only ABE set: 1 + 64 + 512", gs_vq(s_cap[0], 1u, 0u),
+    check_word("the same op with only ABE set: 1 + 64", gs_vq(s_cap[0], 1u, 0u),
                k_prim_line);
-    check("and a segment is a tag plus two four-quadword vertices",
-          eegs_verts() == 2u && s_cap_n[0] == gs_group_qw(2u) && s_cap_n[0] == 9u);
+    check("and a segment is a tag plus two two-quadword vertices",
+          eegs_verts() == 2u && s_cap_n[0] == gs_group_qw(2u) && s_cap_n[0] == 5u);
 }
 
 /* Capacity at this layer's granularity: a group cut must not land between the first and second
  * vertex of a triangle, or the GS draws a two-vertex primitive and steals the third from the next
- * group.  At 64 quadwords the recorder's list rule cuts at 12 vertices, which is a whole number of
+ * group.  At 32 quadwords the recorder's list rule cuts at 12 vertices, which is a whole number of
  * triangles; 12 triangles is 36 vertices, so three groups of 12 and one send per group. */
 static void test_cut_is_always_whole_triangles(void)
 {
@@ -431,11 +476,11 @@ static void test_cut_is_always_whole_triangles(void)
         sprintf(label, "vertex group %d's NLOOP %lu is a whole number of triangles",
                 i - s_vg, n);
         check(label, n % 3u == 0u && n > 0u);
-        sprintf(label, "and vertex group %d is that many x 4 plus a tag", i - s_vg);
+        sprintf(label, "and vertex group %d is that many x 2 plus a tag", i - s_vg);
         check(label, s_cap_n[i] == gs_group_qw((uint32_t)n));
     }
     check("12 + 12 + 12 = 36", eegs_verts() == 36u);
-    check("49 quadwords per group at this capacity", VN(0) == 49u);
+    check("25 quadwords per group at this capacity", VN(0) == 25u);
 }
 
 /* The frame boundary: a group left open by an unfinished primitive must not be carried into the
@@ -552,8 +597,8 @@ static void test_texture_switch(void)
     check("a repeated plane pays nothing: one switch group and one vertex group",
           s_cap_i == 2);
     if (s_cap_i < 2) return;
-    check("and the two triangles are one group of six vertices",
-          (gs_qw(s_cap[1], 0u) & 0x7FFFu) == 6u && s_cap_n[1] == 25u);
+    check("and the two triangles are one group of six vertices, thirteen quadwords",
+          gs_nloop_of(s_cap[1]) == 6u && s_cap_n[1] == gs_group_qw(6u) && s_cap_n[1] == 13u);
     check("counted once", eegs_tex_switches() == 1u);
 
     /* Pointing at nothing sends nothing -- an untextured primitive reads no texture whatever TEX0
@@ -612,24 +657,32 @@ typedef struct {
 
 static tgl_grid_pt_t s_pts[GRID_MAX_PTS];
 
-/* The AD group draws nothing, so it contributes no triangle; every other group this stage writes is
- * a packed vertex group whose data quadwords are four per vertex. */
+/* The AD group draws nothing, so it contributes no triangle; every other group this stage writes is a
+ * dense `FLG=REGLIST` vertex group whose data quadwords are TWO PER VERTEX, the REGS list packed end
+ * to end.  That is also where the primitive has to be read FROM: a dense group's tag leaves its PRIM
+ * field clear, because the primitive travels as the first register of every loop instead -- `gs_op_of
+ * (g)` on such a group answers "POINT", which is 0 and is the field's empty value, not a fact about
+ * the drawing.  The shape guard is the same law seen from the other side: a group that names four
+ * registers and does not pack them is the retired sparse shape, and a decoder that read its second
+ * register out of the third one's place would decode a stream the GS never rasterised. */
 static int decode_stream(dec_tri_t *dst, int dst_max)
 {
     int n = 0, gi, k;
 
     for (gi = 0; gi < s_cap_i; gi++) {
         const uint64_t *g = s_cap[gi];
-        uint32_t nloop, step, v;
+        uint32_t nloop, step, v, op;
 
         if (gs_regs_of(g) == 0x0Eu) continue;
         if (gs_nreg_of(g) != GS_REC_REGS_N) return -1;
+        if (gs_flg_of(g) != GS_FLG_REGLIST) return -1;
 
         nloop = gs_nloop_of(g);
         if (s_cap_n[gi] != gs_group_qw(nloop)) return -1;    /* the size law is part of the decode */
 
-        if (gs_op_of(g) == GS_OP_TRI)       step = 3u;
-        else if (gs_op_of(g) == GS_OP_TRISTP) step = 1u;
+        op = (uint32_t)(gs_vq(g, 1u, 0u) & 7u);
+        if (op == GS_OP_TRI)            step = 3u;
+        else if (op == GS_OP_TRISTP)    step = 1u;
         else return -1;
 
         for (v = 1u; v + 2u <= nloop; v += step) {
@@ -823,8 +876,10 @@ static void test_grid_strip_matches_list(int rows, int cols)
     check(label, na == submitted - 2);
     sprintf(label, "%dx%d: and the stage counted the same number", rows, cols);
     check(label, strip_prims == (uint32_t)(submitted - 2));
-    check("the batch's groups all carry the strip's OP 4",
-          gs_op_of(VG(0)) == GS_OP_TRISTP && gs_op_of(VG(strip_groups - 1)) == GS_OP_TRISTP);
+    check("the batch's groups all open their loops with the strip's OP 4 -- in the register, because "
+          "a dense tag names no primitive",
+          (gs_vq(VG(0), 1u, 0u) & 7u) == GS_OP_TRISTP &&
+          (gs_vq(VG(strip_groups - 1), 1u, 0u) & 7u) == GS_OP_TRISTP);
 
     /* The shipped path, same grid, same submission order. */
     start();
@@ -885,15 +940,22 @@ static void test_grid_strip_matches_list(int rows, int cols)
     check(label, nc == na && tri_seqs_equal(A, na, C, nc) != 0);
 }
 
-/* A smooth, untextured, blended TRISTP: op 4 + IIP 8 + ABE 64 + CTXT 512 = 588 = 0x24C.  The tag
- * around it is that word at [57:47] with PRE[46] set, EOP[15] set and NREG[63:60]=4 -- digit 11
- * holds PRE alone (4) because op 4 has no bit 0, digit 12 holds IIP's bit 50 and op's bit 49 (6),
- * digit 13 holds ABE's bit 53 (2), digit 14 holds CTXT's bit 56 (1). */
-static const uint64_t k_prim_stp_sb = 0x24CULL;
-static const uint64_t k_tag_stp_sb  = 0x4126400000008000ULL;
-static const uint64_t k_prim_stp_unblended = 0x20CULL;   /* 4 + 8 + 512 */
+/* A smooth, untextured, blended TRISTP: op 4 + IIP 8 + ABE 64 = 76 = 0x4C.  Under the dense shape
+ * that word is the FIRST REGISTER of every loop, not a tag field: the group's tag leaves
+ * PRIM[57:47] clear, sets FLG[59:58]=1 and is otherwise the same NREG 4 / EOP word every other vertex
+ * group here carries -- 0x44000000_00008000 | NLOOP, one word for the strip and the list and the line.
+ * The retired PACKED form is kept below as its control, built from the same field table and this same
+ * word: 0x4C at [57:47] with PRE[46] set, EOP[15] set and NREG[63:60]=4 -- digit 11 holds PRE alone
+ * (4) because op 4 has no bit 0, digit 12 holds IIP's bit 50 and op's bit 49 (6), digit 13 holds
+ * ABE's bit 53 (2), and digit 14 holds nothing of it now that CTXT is 0.  So the control is
+ * 0x4026_4000_0000_8000 and its XOR with the dense tag is 0x0426_4000_0000_0000: the dense tag's own
+ * bit 58, bit 46, and those three PRIM bits, which is the whole of what changed. */
+static const uint64_t k_prim_stp_sb  = 4u + 8u + 64u + K_CTX;
+static const uint64_t k_tag_retired_stp_sb =
+    (4ULL << 60) | (k_prim_stp_sb << 47) | (1ULL << 46) | 0x8000ULL;
+static const uint64_t k_prim_stp_unblended = 4u + 8u + K_CTX;   /* 0x0C */
 
-/* The 3x3 mesh's ONE group, 49 quadwords, spelled out of the field tables by hand: twelve vertices
+/* The 3x3 mesh's ONE group, 25 quadwords, spelled out of the field tables by hand: twelve vertices
  * in the zigzag's own order, 0,3,1,4,2,5 then the turn-around's repeat of 5 and 8,4,7,3,6.  Each
  * point is (x, y) = (col, row) px, so XYZ2 is (0x8000 + 16*row)<<16 | (0x8000 + 16*col) with Z 0
  * above bit 32, and RGBAQ is 0x3F800000 above the grey the mesh was filled with. */
@@ -931,6 +993,7 @@ static void test_grid_strip_group_bytes(void)
 {
     tgl_grid_map_t m = grid_map();
     uint64_t *w;
+    uint32_t q, zero_halves;
     int k;
 
     fill_grid(3, 3);
@@ -942,16 +1005,19 @@ static void test_grid_strip_group_bytes(void)
     check("the capture saw one group and dropped nothing", s_cap_i == 1 && s_cap_drops == 0);
     if (s_cap_i < 1) return;
     w = VG(0);
-    check("one tag plus twelve four-register vertices = 49 quadwords", VN(0) == 49u);
+    check("one tag plus twelve two-quadword vertices = 25 quadwords", VN(0) == 25u);
     check("NLOOP 12", gs_nloop_of(w) == 12u);
-    check_word("the group's tag, word for word", gs_qw(w, 0u), k_tag_stp_sb | 12u);
+    check_word("the group's tag, word for word", gs_qw(w, 0u), k_tag_dense | 12u);
+    check_word("CONTROL: the retired PACKED tag, same NLOOP -- FLG, PRE and the strip's own PRIM bits, "
+               "and nothing else",
+               gs_qw(w, 0u) ^ (k_tag_retired_stp_sb | 12u), 0x0426400000000000ULL);
     check_word("REGS: PRIM, RGBAQ, ST, XYZ2", gs_regs_of(w), 0x5210ULL);
 
     for (k = 0; k < 12; k++) {
         const uint32_t v = (uint32_t)k + 1u;
         char label[96];
 
-        sprintf(label, "vertex %d's PRIM is the strip's 0x24C", k);
+        sprintf(label, "vertex %d's PRIM is the strip's 0x4C", k);
         check_word(label, gs_vq(w, v, 0u), k_prim_stp_sb);
         sprintf(label, "vertex %d's RGBAQ", k);
         check_word(label, gs_vq(w, v, 1u), k_grid3_rgbaq[k]);
@@ -959,19 +1025,32 @@ static void test_grid_strip_group_bytes(void)
         check_word(label, gs_vq(w, v, 2u), 0ULL);
         sprintf(label, "vertex %d's XYZ2", k);
         check_word(label, gs_vq(w, v, 3u), k_grid3_xyz2[k]);
-        sprintf(label, "vertex %d's quadwords are one register wide", k);
-        check(label, gs_upper_of(w, 1u + GS_REC_REGS_N * (uint32_t)k) == 0u);
     }
 
+    /* The stride, censused rather than assumed: 24 data quadwords therefore 48 register halves, and
+     * the only zero halves anywhere in the group are the twelve ST registers this mesh never samples.
+     * The retired sparse shape padded every second half of the vertex's quadwords AND gave the empty ST
+     * a quadword of its own, so the same census there counted 24 + 12 zeros in 48 halves.  A vertex
+     * that costs four quadwords cannot hide inside this number. */
+    zero_halves = 0;
+    for (q = 1u; q < VN(0); q++) {
+        if (gs_half(w, q, 0u) == 0u) zero_halves++;
+        if (gs_half(w, q, 1u) == 0u) zero_halves++;
+    }
+    check("48 data halves, exactly 12 of them the empty ST registers",
+          VN(0) == 25u && zero_halves == 12);
+
     /* The two state bits that are the batch's own decisions: the blend flag comes from the map, and
-     * the texture flag is cleared whatever the map says, because a mapped mesh samples nothing. */
+     * the texture flag is cleared whatever the map says, because a mapped mesh samples nothing.  Both
+     * are read from the loop's PRIM register, because in this shape the tag names no primitive at all.
+     */
     start();
     m.blended = 0u;
     eegs_grid_strip(&m, s_pts, 3, 3);
     eegs_frame_end();
     if (s_cap_i < 1) return;
-    check_word("an unblended map gives PRIM 0x20C", gs_vq(VG(0), 1u, 0u), k_prim_stp_unblended);
-    check("and TME stays cleared", (gs_prim_of(VG(0)) & 16u) == 0u);
+    check_word("an unblended map gives PRIM 0x0C", gs_vq(VG(0), 1u, 0u), k_prim_stp_unblended);
+    check("and TME stays cleared", (gs_vq(VG(0), 1u, 0u) & 16u) == 0u);
 }
 
 /* The walk's first ribbon triangle runs on a stream that has just been pointed at nothing, and so
@@ -1286,9 +1365,9 @@ static void list_quads(int nquads, const gs_tex_t *plane, int alt_split)
     }
 }
 
-/* A flat, unblended TRI that STILL samples: 3 + 16 + 512.  TME is the entry's own decision -- the
+/* A flat, unblended TRI that STILL samples: 3 + 16 = 19 = 0x13.  TME is the entry's own decision -- the
  * map required a bound-and-enabled sheet -- so zeroing the map's two flags must not clear it. */
-static const uint64_t k_prim_tex_plain = 0x213ULL;
+static const uint64_t k_prim_tex_plain = 3u + 16u + K_CTX;
 
 static void test_tex_quads_matches_list(void)
 {
@@ -1329,10 +1408,13 @@ static void test_tex_quads_matches_list(void)
     check_word("TEX1 third", gs_qw(s_cap[0], 3u), s_plane.tex1);
 
     w = VG(1);
-    check("NLOOP 12, and the group's size is its law: one tag plus twelve four-register vertices",
-          gs_nloop_of(w) == 12u && VN(1) == gs_group_qw(12u) && VN(1) == 49u);
-    check_word("the group's tag is the textured TRI's, hand-written again",
-               gs_qw(w, 0u), k_tag_tri_stb | 12u);
+    check("NLOOP 12, and the group's size is its law: one tag plus twelve two-quadword vertices",
+          gs_nloop_of(w) == 12u && VN(1) == gs_group_qw(12u) && VN(1) == 25u);
+    check_word("the group's tag is the one dense word -- this stage's TRI, strip, line and point all "
+               "carry it, with only NLOOP differing",
+               gs_qw(w, 0u), k_tag_dense | 12u);
+    check_word("CONTROL: the retired PACKED tag for the same textured TRI",
+               gs_qw(w, 0u) ^ (k_tag_retired_tri_stb | 12u), 0x042DC00000000000ULL);
     check_word("vertex 1 PRIM", gs_vq(w, 1u, 0u), k_prim_tri_stb);
     check_word("vertex 1 RGBAQ: quad 0's first corner, grey 1, Q = 1.0f",
                gs_vq(w, 1u, 1u), 0x3F800000FF000001ULL);
@@ -1407,7 +1489,7 @@ static void test_tex_quads_matches_list(void)
     }
     eegs_frame_end();
     if (s_cap_i >= 2) {
-        check_word("flat and unblended gives PRIM 0x213, TME intact",
+        check_word("flat and unblended gives PRIM 0x13, TME intact",
                    gs_vq(VG(1), 1u, 0u), k_prim_tex_plain);
     }
 }
@@ -1513,7 +1595,7 @@ static void test_tex_quad_gates(void)
     check("it costs no AD group at all: one vertex group, zero switches",
           s_cap_i == 1 && eegs_tex_switches() == 0u);
     if (s_cap_i >= 1) {
-        check_word("and the primitives came out flat: 0x24B, TME cleared",
+        check_word("and the primitives came out flat: 0x4B, TME cleared",
                    gs_vq(VG(0), 1u, 0u), k_prim_tri_untex);
     }
     check("four triangles, four misses -- the column the bench reads as texmiss",

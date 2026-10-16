@@ -89,6 +89,16 @@
 #define GS_GP_TRXDIR     0x53u
 #define GS_GP_HWREG      0x54u
 
+/* The three event-request registers above the transfer block.  They have no packed nibble at all --
+ * an AD write is the only way to reach them -- which is why they are here rather than in the nibble
+ * list, and why a Local->Host request can end with one: FINISH (0x61) makes the GS raise CSR bit 1
+ * once it has taken everything before it, which is the receipt the download waits for.  The three
+ * offsets are ps2tek's own general-purpose register table (60h SIGNAL, 61h FINISH, 62h LABEL) and
+ * ps2sdk's `GS_REG_SIGNAL/GS_REG_FINISH/GS_REG_LABEL` in common/include/gs_gp.h, which agree. */
+#define GS_GP_SIGNAL     0x60u
+#define GS_GP_FINISH     0x61u
+#define GS_GP_LABEL      0x62u
+
 /* Primitive op codes (PRIM field OP). */
 #define GS_OP_POINT   0u
 #define GS_OP_LINE    1u
@@ -238,7 +248,19 @@ uint64_t gs_pack_xyoffset(uint32_t x16, uint32_t y16);
 
 /* SCISSOR: X0[10:0] X1[26:16] Y0[42:32] Y1[58:48], plain unsigned screen pixels (0..2047),
  * unlike a vertex -- there is no 12.4 scaling and no 2048 offset here.  This is the window's
- * clip rect. */
+ * clip rect.
+ *
+ * Two laws, both read from the environment this port is measured in rather than recalled: the four
+ * fields are the pair of X bounds then the pair of Y bounds (SCAX0, SCAX1, SCAY0, SCAY1 -- PCSX2
+ * GSRegs.h, and ps2sdk's GS_SET_SCISSOR and gsKit's GS_SETREG_SCISSOR pack the same four slots in
+ * the same order), and the GS does not care which end of a pair arrives first, because it normalises
+ * them (PCSX2 GSDrawingContext::UpdateScissor: `GSVector4i::xywh(min(SCAX0,SCAX1),
+ * min(SCAY0,SCAY1), absdiff+1, absdiff+1)`).  The `+1` says the second bound is INCLUSIVE, so a
+ * clip rect that must cover pixels 0..799 is programmed as (0, 799, 0, 599) -- which is exactly what
+ * src/drivers/ps2/ps2_gs_env.c passes, and what the whole-canvas probe passes.  Worth stating
+ * because the field names read like an ordered min/max pair, and a port that "corrected" the operand
+ * order to (xmax, ymax, xmin, ymin) would silently produce an empty window that no packet length
+ * would reveal. */
 uint64_t gs_pack_scissor(uint32_t x0, uint32_t x1, uint32_t y0, uint32_t y1);
 
 /* ALPHA: A[1:0] B[3:2] C[5:4] D[7:6] FIX[39:32].  The equation is
@@ -322,7 +344,17 @@ uint64_t gs_pack_trxdir(uint32_t dir);
 uint64_t gs_pack_giftag(uint32_t nloop, uint32_t eop, uint32_t pre, uint64_t prim,
                         uint32_t flg, uint32_t nreg);
 
-/* The tag's second quadword: up to 4 four-bit register selects, first in the lowest bits. */
+/* The most register selects a GIF tag's REGS quadword can name: the field is 40 bits, ten nibbles.
+ * That width is not a luxury -- the SDK's own flat-triangle group takes six (PRIM, RGBAQ, three
+ * XYZ2 and a NOP to pad the pair) and its rect outline takes eight, so a packer capped at four
+ * silently deletes a vertex from any list longer than its own precedent.  A packed group's length is
+ * counted from NREG, so a nibble that is dropped is a vertex that never arrives, and the primitive
+ * that waits for it never kicks. */
+#define GS_REGS_N_MAX 10u
+
+/* The tag's second quadword: up to GS_REGS_N_MAX four-bit register selects, first in the lowest
+ * bits.  A list longer than the field is truncated to it, the way the GS itself would read only the
+ * ten nibbles that are there. */
 uint64_t gs_pack_regs(const uint32_t *regs, uint32_t n);
 
 /* One AD pair: the register's 64-bit value, then the quadword whose low byte is the

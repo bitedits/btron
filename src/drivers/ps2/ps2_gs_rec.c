@@ -12,30 +12,40 @@
 #include "ps2_gs_rec.h"
 #include "ps2_gs_pack.h"
 
-/* A group occupies one tag quadword and then four quadwords per vertex.  The headroom is what lets
+/* A group occupies one tag quadword and then two quadwords per vertex -- four registers, two to a
+ * quadword, which is what a dense REGLIST group means.  The headroom is what lets
  * a full buffer be cut at the *safe* boundary instead of at the moment it fills: three vertices is
  * the most any supported primitive type needs before its next whole primitive starts (a TRI_LIST
  * sitting at one vertex), plus the tag, so with this much room left the recorder can keep
  * appending until a boundary arrives, and the case where no boundary arrives before the buffer
- * is truly full becomes an error it can count instead of a vertex it silently loses. */
-#define GS_REC_HEADROOM (1u + 3u * GS_REC_REGS_N)
+ * is truly full becomes an error it can count instead of a vertex it silently loses.
+ *
+ * It is written in terms of GS_REC_QW_PER_VERT rather than a literal because the per-vertex count
+ * changed under LANE 19 rung 5 and this number has to change with it: a headroom sized for four
+ * quadwords a vertex leaves the buffer half empty at every split, and one sized for two while the
+ * emitter writes four is an overrun at the boundary rather than a cut. */
+#define GS_REC_HEADROOM (1u + 3u * GS_REC_QW_PER_VERT)
 
 #define GS_REC_NO_GROUP 0xFFFFFFFFu
 
-/* The group's REGS list, in the order its data quadwords are consumed: state first, the drawing
- * kick last. */
+/* The group's REGS list, in the order its data registers are packed: state first, the drawing
+ * kick last.  The same order write_vertex() fills the pair of quadwords in, which is the only reason
+ * the list is a list and not a set. */
 static const uint32_t s_regs[GS_REC_REGS_N] = {
     GS_NIB_PRIM, GS_NIB_RGBAQ, GS_NIB_ST, GS_NIB_XYZ2
 };
 
-/* One quadword is 128 bits and every GS register is 64 of them, so a packed register occupies a
- * pair of `uint64_t` -- the value in the low half, nothing in the high -- exactly as the blit
- * path's own AD packets do it, where the high half instead carries the register offset.  That
- * equivalence is not a style choice: `send_trx_setup()` in ps2_gs.c sends a tag and four AD
- * registers as five quadwords with NLOOP=4 and NREG=1, which is one data quadword per REGS
- * entry, and the canvas is the proof.  A recorder that stored one 64-bit word per register would
- * hand the GIF alternating registers (PRIM, then ST in RGBAQ's place) and a QWC twice the bytes it
- * was given.  So `s_qw` is pairs, and every index below that says "quadword" multiplies by two. */
+/* One quadword is 128 bits and every GS register is 64 of them, so `s_qw` is a stream of `uint64_t`
+ * PAIRS and every index below that says "quadword" multiplies by two.  What the two halves of a pair
+ * MEAN depends on the group: a vertex group is a dense REGLIST, so its halves are two consecutive
+ * registers of the REGS list -- PRIM then RGBAQ, ST then XYZ2 -- and its vertex is two quadwords; an
+ * AD group is PACKED with NREG=1, so its low half is the register's value and its high half is that
+ * register's GP offset, which is why `send_trx_setup()` in ps2_gs.c fits four registers into five
+ * quadwords and the canvas is the proof of that shape.  The two counts are not interchangeable, and
+ * the recorder has to keep them apart for the same reason it ever kept a quadword and a word apart:
+ * the QWC handed to channel 2 is in quadwords, so a vertex counted as four of them -- the sparse
+ * PACKED form this file used to emit -- both doubles the bytes on the bus and names a primitive the
+ * GS never kicks (LANE 19 rung 5, ps2_gs_poster.h). */
 static uint64_t s_qw[GS_REC_QW_CAP * 2u];
 static gs_rec_sink s_sink;
 static void *s_user;
@@ -50,9 +60,9 @@ static uint32_t s_nloop;                 /* vertices in the open group */
 static uint32_t s_n;                     /* quadwords written since the last send */
 
 /* The two vertices a continued strip needs, and the apex a continued fan needs.  Kept as whole
- * quadword sets rather than as coordinates, because a re-emitted vertex has to reproduce exactly
- * what the first copy wrote -- including the colour and texture coordinate it carried, which the
- * next glColor would otherwise quietly change. */
+ * register sets -- four 64-bit values, not coordinates -- because a re-emitted vertex has to
+ * reproduce exactly what the first copy wrote, including the colour and texture coordinate it
+ * carried, which the next glColor would otherwise quietly change. */
 static uint64_t s_tail[2][GS_REC_REGS_N];
 static uint64_t s_apex[GS_REC_REGS_N];
 
@@ -106,7 +116,8 @@ void gs_rec_init(gs_rec_sink sink, void *user)
     s_span0_valid = 0u;
 }
 
-/* One vertex's four quadwords, appended to the open group, and the sliding window that a
+/* One vertex's four registers, written as the two quadwords a dense REGLIST loop takes, appended to
+ * the open group, and the sliding window that a
  * continued primitive needs updated on the way. */
 static void write_vertex(const uint64_t v[GS_REC_REGS_N]);
 
@@ -187,8 +198,13 @@ static void close_group(void)
     }
 
     /* Back-patch the tag now that the loop count is final.  EOP is set because each send here is
-     * one complete packet on a DMA transfer of its own, never a fragment of a larger one. */
-    s_qw[2u * s_tag_at] = gs_pack_giftag(s_nloop, 1u, 1u, s_prim, GS_FLG_PACKED, GS_REC_REGS_N);
+     * one complete packet on a DMA transfer of its own, never a fragment of a larger one.  PRE is
+     * CLEAR and the tag's PRIM field is 0, because in a dense REGLIST group the primitive arrives as
+     * the loop's first register -- write_vertex() puts s_prim in the vertex's own low half -- and the
+     * tag's copy is what a PACKED group needed instead.  That combination, FLG=PACKED with a
+     * four-register REGS list and PRE=1, is the shape LANE 19 rung 5 measured as kicking nothing at
+     * all on this GS at either value of PRE, so it is gone from both emitters rather than tuned. */
+    s_qw[2u * s_tag_at] = gs_pack_giftag(s_nloop, 1u, 0u, 0u, GS_FLG_REGLIST, GS_REC_REGS_N);
 
     if (s_sink) s_sink(s_user, s_qw, s_n);
     s_sends++;
@@ -205,8 +221,9 @@ static void open_group(void)
     /* One quadword: the tag's own 64 bits and then the REGS list in its high half.  It is not an
      * AD pair, and writing the list through gs_pack_pair() would put the four nibbles where a
      * register's value belongs -- which the GIF then decodes as PRIM, RGBAQ, PRIM, PRIM, i.e. the
-     * same group's four data quadwords fed to the wrong four registers. */
-    s_qw[2u * s_n]      = gs_pack_giftag(0u, 1u, 1u, s_prim, GS_FLG_PACKED, GS_REC_REGS_N);
+     * same group's four registers fed to the wrong four places.  NLOOP is patched at the close, and
+     * PRE/PRIM are already final because the group's primitive travels inside its own loops. */
+    s_qw[2u * s_n]      = gs_pack_giftag(0u, 1u, 0u, 0u, GS_FLG_REGLIST, GS_REC_REGS_N);
     s_qw[2u * s_n + 1u] = gs_pack_regs(s_regs, GS_REC_REGS_N);
     s_tag_at = s_n;
     s_n += 1u;
@@ -226,13 +243,16 @@ static void write_vertex(const uint64_t v[GS_REC_REGS_N])
     for (i = 0; i < GS_REC_REGS_N; i++) s_tail[0][i] = s_tail[1][i];
     for (i = 0; i < GS_REC_REGS_N; i++) s_tail[1][i] = v[i];
 
-    /* Each of the four registers takes a whole quadword; the half above the value is unused by a
-     * 64-bit register and zeroed rather than left holding the previous group's neighbour. */
-    for (i = 0; i < GS_REC_REGS_N; i++) {
-        s_qw[2u * (s_n + i)]      = v[i];
-        s_qw[2u * (s_n + i) + 1u] = 0u;
+    /* Two registers to a GIF quadword, in the REGS order the tag names: PRIM then RGBAQ in the first,
+     * ST then the drawing XYZ2 in the second.  Nothing is padded and nothing is dropped, and `s_n`
+     * advances by GS_REC_QW_PER_VERT so the count the sink is handed is the count the tag's NLOOP
+     * claims -- a stride that drifted by half a quadword would put the NEXT vertex's PRIM where this
+     * one's colour belongs, which is a malformed group rather than a wrong pixel. */
+    for (i = 0u; i < GS_REC_QW_PER_VERT; i++) {
+        s_qw[2u * (s_n + i)]      = v[2u * i];
+        s_qw[2u * (s_n + i) + 1u] = v[2u * i + 1u];
     }
-    s_n += GS_REC_REGS_N;
+    s_n += GS_REC_QW_PER_VERT;
     s_nloop++;
 }
 
@@ -260,7 +280,7 @@ void gs_rec_texcoord(float s, float t)
 int gs_rec_vertex(int32_t x_px, int32_t y_px, uint32_t z)
 {
     uint64_t v[GS_REC_REGS_N];
-    uint32_t room = GS_REC_REGS_N + (s_tag_at == GS_REC_NO_GROUP ? 1u : 0u);
+    uint32_t room = GS_REC_QW_PER_VERT + (s_tag_at == GS_REC_NO_GROUP ? 1u : 0u);
 
     if (!s_prim_set) return -1;
 

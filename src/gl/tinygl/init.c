@@ -23,7 +23,6 @@ static void endSharedState(GLContext* c) {
 	GLint i;
 	GLList* l;
 	GLParamBuffer *pb, *pb1;
-	GLTexture *t, *n;
 	for (i = 0; i < MAX_DISPLAY_LISTS; i++)
 		if (s->lists[i]) {
 			l = s->lists[i];
@@ -37,23 +36,15 @@ static void endSharedState(GLContext* c) {
 			s->lists[i] = NULL;
 		}
 	gl_free(s->lists);
-	for (i = 0; i < TEXTURE_HASH_TABLE_SIZE; i++) {
-		t = s->texture_hash_table[i];
-		while (t) {
-			GLTexture** ht;
-			if (t->prev == NULL) {
-				ht = &c->shared_state.texture_hash_table[t->handle & TEXTURE_HASH_TABLE_MASK];
-				*ht = t->next;
-			} else {
-				t->prev->next = t->next;
-			}
-			n = t->next;
-			if (t->next != NULL)
-				t->next->prev = t->prev;
-			gl_free(t);
-			t = n;
-		}
-	}
+	/* Every texture still alive at close, deleted by the application or not, goes through
+	 * the one path that owns both halves of it: the node and the plane behind it.  What this
+	 * loop used to do was unlink and free the node, which orphaned each image's
+	 * `gl_zalloc`'d plane -- `glClose()` then zeroes the context, so the only pointer to
+	 * those bytes went with it and the pool never saw them again.  On a target whose heap is
+	 * one static 11 MB array that is a leak big enough to make the next window fail. */
+	for (i = 0; i < TEXTURE_HASH_TABLE_SIZE; i++)
+		while (s->texture_hash_table[i])
+			gl_texture_node_destroy(c, s->texture_hash_table[i]);
 	gl_free(s->texture_hash_table);
 	for (i = 0; i < MAX_BUFFERS; i++) {
 		if (s->buffers[i]) {

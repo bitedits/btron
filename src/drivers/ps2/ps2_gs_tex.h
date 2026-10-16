@@ -112,4 +112,10 @@ uint32_t gs_tex_pending(void);
 /* Bytes of VRAM left once every registered plane has its address.  Same unit as gs_vram_left(). */
 uint32_t gs_tex_vram_left(void);
 
+/* Free a registered plane's VRAM allocation. Returns 0 on success, -1 if not found. */
+int gs_tex_free(const void *plane);
+
+/* Compact texture memory and reclaim unused trailing VRAM spans. Returns bytes reclaimed. */
+uint32_t gs_tex_compact(void);
+
 #endif /* PS2_GS_TEX_H */

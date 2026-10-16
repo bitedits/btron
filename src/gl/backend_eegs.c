@@ -113,11 +113,26 @@ static uint32_t s_grid_batch;
 static uint32_t s_grid_slow;
 static uint32_t s_grid_why;
 static uint32_t s_grid_over;
+static int      s_dual_context_en;
+
+void eegs_enable_dual_context(int enable)
+{
+    s_dual_context_en = enable ? 1 : 0;
+}
+
+int eegs_is_dual_context(void)
+{
+    return s_dual_context_en;
+}
 
 static uint64_t prim_word(uint32_t op, const eegs_tri_state_t st)
 {
+    uint32_t ctxt = EEGS_CONTEXT;
+    if (s_dual_context_en) {
+        ctxt = st.blended ? 1u : 0u;
+    }
     return gs_pack_prim(op, st.smooth ? 1u : 0u, st.textured ? 1u : 0u,
-                        st.blended ? 1u : 0u, EEGS_CONTEXT, 0u);
+                        st.blended ? 1u : 0u, ctxt, 0u);
 }
 
 /* gs_rec_prim() closes whatever group is open, which is right for a real state change and wrong

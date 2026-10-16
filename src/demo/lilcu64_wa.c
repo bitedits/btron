@@ -16,7 +16,13 @@
 #define M_PI 3.1415926535897932384626433832795
 #endif
 
+#if defined(BTRON_PS2_TARGET)
+#define WA_MAX_NODES 512
+#define WA_NOISE_LEN (44100 * 1)
+#else
 #define WA_MAX_NODES 4096
+#define WA_NOISE_LEN (44100 * 2)
+#endif
 #define WA_MAX_GEV   24   /* frog croak pulse train needs 20 gain events */
 #define WA_MAX_FEV   8
 #define WA_MAX_QEV   8

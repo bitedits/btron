@@ -135,8 +135,13 @@ typedef struct {
 #define OP_BITAND   64
 #define OP_BITOR    65
 
-/* ── Edict (entity) ─────────────────────────────────────────────────── */
+#ifndef MAX_EDICTS
+#if defined(BTRON_PS2_TARGET)
+#define MAX_EDICTS      128
+#else
 #define MAX_EDICTS      600
+#endif
+#endif
 #define EDICT_FIELDS    256     /* Max 32-bit fields per edict (vanilla progs.dat has 195) */
 
 typedef union {

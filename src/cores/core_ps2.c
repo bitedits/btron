@@ -115,7 +115,7 @@ static void ps2_kprintf(const char *fmt, ...) __attribute__((format(printf, 1, 2
  * ASSERT in ps2.ld keeps _end below the stack at 0x01FF0000.  It was 12 MB with 2 MB to
  * spare; the MSX core (4 MiB-class cartridge buffer, 256 KiB V9938 VRAM, S1990, Geo3D)
  * has since taken that, so the pool is 11 MB. */
-#define PS2_HEAP_SIZE (11 * 1024 * 1024)
+#define PS2_HEAP_SIZE (9 * 1024 * 1024)
 static uint8_t s_ps2_heap[PS2_HEAP_SIZE] __attribute__((aligned(64)));
 
 #define PS2_HEAP_ALIGN  16u

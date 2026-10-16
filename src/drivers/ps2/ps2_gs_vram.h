@@ -36,18 +36,32 @@
 #define GS_VRAM_CANVAS_FBW      13u
 #define GS_VRAM_CANVAS_BYTES    (GS_VRAM_CANVAS_FBW * 64u * GS_VRAM_CANVAS_ROWS * 4u)
 
-/* A bump cursor over VRAM, in bytes.  One cursor rather than a frame end and a texture end:
- * with two, a texture allocation and a frame allocation can be handed the same addresses,
- * and the failure is a screen of noise at runtime.  All sizes round up to GS_PAGE_FRAME, so
- * the cursor is always a valid 9-bit FBA candidate; the cost is at most 8 KB less than exact
- * for a small texture, against a total budget in which the icon atlas is 72 whole pages. */
+#define GS_VRAM_MAX_BLOCKS 64u
+
+typedef struct {
+    uint32_t offset;
+    uint32_t size;
+    uint8_t  used;
+} gs_vram_block_t;
+
+/* A cursor over VRAM, in bytes, with block tracking for compaction.
+ * v->next remains the bump pointer for full compatibility. */
 typedef struct {
     uint32_t next;
+    uint32_t base;
+    uint32_t block_count;
+    gs_vram_block_t blocks[GS_VRAM_MAX_BLOCKS];
 } gs_vram_t;
 
 /* Start above the canvas.  The GS backend never allocates page 0: that is where the PCRTC
  * reads the screen from, and the blit path writes it with DBA=0 today. */
 void gs_vram_init(gs_vram_t *v);
+
+/* Free a previously allocated span starting at `byte`. Returns 0 on success, -1 if not found. */
+int gs_vram_free(gs_vram_t *v, uint32_t byte);
+
+/* Compact the VRAM arena by reclaiming freed trailing spans. Returns bytes reclaimed. */
+uint32_t gs_vram_compact(gs_vram_t *v);
 
 /* Bytes needed by a buffer of pixels_w x pixels_h at bpp bits per pixel, in the GS's own
  * layout: the width field is a whole number of 64-pixel units, so the buffer is wider than

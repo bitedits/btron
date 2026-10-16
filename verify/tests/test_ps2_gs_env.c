@@ -229,6 +229,96 @@ static void env_stream(void)
     eq("refusal writes nothing", qw[0], 0xA5A5A5A5A5A5A5A5ULL);
 }
 
+static void env_stream_ctx2(void)
+{
+    uint64_t qw[2 * 10];
+    gs_draw_env e = sample_env();
+    int rc;
+
+    rc = gs_draw_env_packet_ctx(&e, 1u, qw);
+    eqi("env ctx2 packet built", rc, 0);
+
+    /* Tag matches */
+    eq("tag data half ctx2", qw[0], 0x1000000000008009ULL);
+    eq("tag regs half ctx2", qw[1], 0x000000000000000EULL);
+
+    /* Context 2 register offsets */
+    eq("xyoffset reg ctx2", qw[3], 0x19ULL);
+    eq("scissor reg ctx2",  qw[5], 0x41ULL);
+    eq("frame reg ctx2",    qw[7], 0x4DULL);
+    eq("zbuf reg ctx2",     qw[9], 0x4FULL);
+    eq("test reg ctx2",     qw[11], 0x48ULL);
+    eq("alpha reg ctx2",    qw[13], 0x43ULL);
+    eq("clamp reg ctx2",    qw[15], 0x09ULL);
+    eq("tex0 reg ctx2",     qw[17], 0x07ULL);
+    eq("tex1 reg ctx2",     qw[19], 0x15ULL);
+}
+
+static void env_stream_dual(void)
+{
+    uint64_t qw[2 * 19];
+    gs_draw_env e1 = sample_env();
+    gs_draw_env e2 = sample_env();
+    int rc;
+
+    eq32("dual env quadwords", gs_draw_dual_env_qwc(), 19u);
+
+    rc = gs_draw_dual_env_packet(&e1, &e2, qw);
+    eqi("dual env packet built", rc, 0);
+
+    /* Tag with NLOOP=18 */
+    eq("dual tag data half", qw[0], 0x1000000000008012ULL);
+    eq("dual tag regs half", qw[1], 0x000000000000000EULL);
+
+    /* First 9 writes are Context 1 */
+    eq("dual ctx1 xyoffset reg", qw[3], 0x18ULL);
+    eq("dual ctx1 frame reg",    qw[7], 0x4CULL);
+    eq("dual ctx1 alpha reg",    qw[13], 0x42ULL);
+
+    /* Second 9 writes are Context 2 (starting at offset 1 + 9 = 10, pairs at qw[20..37]) */
+    eq("dual ctx2 xyoffset reg", qw[21], 0x19ULL);
+    eq("dual ctx2 frame reg",    qw[25], 0x4DULL);
+    eq("dual ctx2 alpha reg",    qw[31], 0x43ULL);
+}
+
+static void vram_compaction(void)
+{
+    gs_vram_t v;
+    uint32_t b1, b2, reclaimed;
+    int rc;
+
+    gs_vram_init(&v);
+    eq32("vram base before alloc", v.next, 1998848u);
+
+    rc = gs_vram_take(&v, 589824u, &b1);
+    eqi("take b1", rc, 0);
+    eq32("b1 offset", b1, 1998848u);
+    eq32("vram after b1", v.next, 2588672u);
+
+    rc = gs_vram_take(&v, 589824u, &b2);
+    eqi("take b2", rc, 0);
+    eq32("b2 offset", b2, 2588672u);
+    eq32("vram after b2", v.next, 3178496u);
+
+    /* Free b2 (trailing block) */
+    rc = gs_vram_free(&v, b2);
+    eqi("free b2", rc, 0);
+
+    /* Compact: reclaims b2's span */
+    reclaimed = gs_vram_compact(&v);
+    eq32("reclaimed b2", reclaimed, 589824u);
+    eq32("cursor rewound after b2 compact", v.next, 2588672u);
+
+    /* Free b1 */
+    rc = gs_vram_free(&v, b1);
+    eqi("free b1", rc, 0);
+
+    /* Compact: reclaims b1's span, rewinds to base */
+    reclaimed = gs_vram_compact(&v);
+    eq32("reclaimed b1", reclaimed, 589824u);
+    eq32("cursor rewound to base", v.next, 1998848u);
+}
+
 int main(void)
 {
     printf("==========================================================\n");
@@ -237,6 +327,9 @@ int main(void)
 
     vram_pages();
     env_stream();
+    env_stream_ctx2();
+    env_stream_dual();
+    vram_compaction();
 
     printf("  checks=%d failures=%d\n", s_checks, s_failures);
     if (s_failures == 0) {

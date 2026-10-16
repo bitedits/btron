@@ -34,7 +34,7 @@ CC ?= gcc
 CFLAGS ?= -O2 -Wall -Wextra -std=c99 -Iinclude -Iinclude/gl -Isrc/gl -Iinclude/drivers -Isrc/kernel -Isrc/cores -Isrc/quake/include
 
 .PHONY: all posix qemu kernel tkernel sakamura foma uefi pc98 arm-elf arm64-elf m68k ps2 mips \
-        check-structure test-ps2-softfloat test-ps2-gs-pack test-ps2-gs-env test-ps2-gs-rec test-ps2-gs-poster test-ps2-gs-read test-ps2-gs-tex test-ps2-pointer test-ps2-fused-row test-ps2-gif-ring test-eegs-raster test-eegs-present test-gl-math test-gl-backend-choice test-ps2-fb-order test-grid-map xmb-atlas test-xmb-atlas \
+        check-structure test-ps2-softfloat test-ps2-gs-pack test-ps2-gs-env test-ps2-gs-rec test-ps2-vu1-geom test-ps2-vu0-kernel test-gscube-nexus test-ps2-gs-poster test-ps2-gs-read test-ps2-gs-tex test-ps2-pointer test-ps2-fused-row test-ps2-gif-ring test-eegs-raster test-eegs-present test-gl-math test-gl-backend-choice test-ps2-fb-order test-grid-map xmb-atlas test-xmb-atlas test-ps2-opengl-routing \
         test-xmb-render test-xmb-render-tgl \
         html2tad book2tad tad_bin test test-kernel test-yoko test-yoko4 test-m68k test-mips test-ps2 test-foma test-foma-ui foma-screens \
         segui-screens \
@@ -292,7 +292,8 @@ DEMO_SRCS = \
     src/demo/lilcu64_wa.c \
     src/demo/lilcu64_score.c \
     src/demo/lilcu64_synth.c \
-    src/demo/lilcu64_demo.c
+    src/demo/lilcu64_demo.c \
+    src/drivers/ps2/ps2_vu0_kernel.c
 
 VIRGL_SRCS = \
     src/gl/gl_dispatch.c \
@@ -1037,7 +1038,7 @@ PS2_LD_SCRIPT  = src/drivers/ps2/ps2.ld
 PS2_CFLAGS     = -O2 -Wall -Wextra -std=c99 -ffreestanding -nostdlib \
                  -DBTRON_TARGET=8 -DBTRON_PS2_TARGET -DBTRON_AUTO_GUI=$(AUTO_GUI) \
                  -DBTRON_HID_TRACE=$(HIDTRACE) -DBTRON_GL_BACKEND_TINYGL \
-                 -Iinclude -Iinclude/gl -Iinclude/drivers -Isrc/kernel -Isrc/cores -Isrc/drivers/ps2
+                 -Iinclude -Iinclude/gl -Iinclude/drivers -Isrc/kernel -Isrc/cores -Isrc/drivers/ps2 -Isrc/quake/include
 ifeq ($(PS2_GL),virgl)
 PS2_CFLAGS    += -DBTRON_GL_PREFER_VIRGL
 endif
@@ -1094,9 +1095,13 @@ PS2_GL_SRCS    = src/gl/gl_dispatch.c     \
                  src/gl/backend_virgl.c   \
                  src/gl/backend_eegs.c    \
                  src/gl/eegs_present.c    \
+                 src/gl/gscube_nexus.c    \
+                 src/drivers/ps2/ps2_vu1_geom.c \
                  src/apps/xmb.c           \
-                 src/apps/xmb_wave.c        \
-                 src/apps/glgears.c
+                 src/apps/xmb_wave.c      \
+                 src/apps/glgears.c       \
+                 $(DEMO_SRCS)             \
+                 $(QUAKE_SRCS)
 # B-MSX rides in the image when PS2_MSX=1: the tronMSX core reads no float, no host
 # clock and no libc beyond what src/kernel/libstr.c provides, and its two pieces of
 # media -- C-BIOS and the cartridge catalogue -- are bodies of the /SYS volume the
@@ -1588,6 +1593,65 @@ test-ps2-gs-rec: $(TEST_GSREC_BIN)
 $(TEST_GSREC_BIN): $(TEST_GSREC_OBJS) src/drivers/ps2/ps2_gs_rec.c src/drivers/ps2/ps2_gs_pack.c src/drivers/ps2/ps2_gs_rec.h src/drivers/ps2/ps2_gs_pack.h verify/tests/gs_group_view.h
 	@mkdir -p ./.build
 	$(CC) $(TEST_GSREC_OBJS) -o $@ $(LDFLAGS)
+
+TEST_VU1GEOM_SRCS = verify/tests/test_ps2_vu1_geom.c
+TEST_VU1GEOM_OBJS = $(TEST_VU1GEOM_SRCS:.c=.test.o)
+TEST_VU1GEOM_BIN  = ./.build/test_ps2_vu1_geom
+
+test-ps2-vu1-geom: $(TEST_VU1GEOM_BIN)
+	@echo "=========================================================="
+	@echo " Running PS2 VU1 geometry pipeline unit tests..."
+	@echo "=========================================================="
+	@./$(TEST_VU1GEOM_BIN)
+
+$(TEST_VU1GEOM_BIN): $(TEST_VU1GEOM_OBJS) src/drivers/ps2/ps2_vu1_geom.c src/drivers/ps2/ps2_vu1_geom.h
+	@mkdir -p ./.build
+	$(CC) $(TEST_VU1GEOM_OBJS) -o $@ $(LDFLAGS)
+
+TEST_VU0KERNEL_SRCS = verify/tests/test_ps2_vu0_kernel.c
+TEST_VU0KERNEL_OBJS = $(TEST_VU0KERNEL_SRCS:.c=.test.o)
+TEST_VU0KERNEL_BIN  = ./.build/test_ps2_vu0_kernel
+
+test-ps2-vu0-kernel: $(TEST_VU0KERNEL_BIN)
+	@echo "=========================================================="
+	@echo " Running PS2 VU0 procedural geometry kernel unit tests..."
+	@echo "=========================================================="
+	@./$(TEST_VU0KERNEL_BIN)
+
+$(TEST_VU0KERNEL_BIN): $(TEST_VU0KERNEL_OBJS) src/drivers/ps2/ps2_vu0_kernel.c src/drivers/ps2/ps2_vu0_kernel.h
+	@mkdir -p ./.build
+	$(CC) $(TEST_VU0KERNEL_OBJS) -o $@ $(LDFLAGS)
+
+TEST_GSCUBE_SRCS = verify/tests/test_gscube_nexus.c
+TEST_GSCUBE_OBJS = $(TEST_GSCUBE_SRCS:.c=.test.o)
+TEST_GSCUBE_BIN  = ./.build/test_gscube_nexus
+
+test-gscube-nexus: $(TEST_GSCUBE_BIN)
+	@echo "=========================================================="
+	@echo " Running GScube cluster scaling engine unit tests..."
+	@echo "=========================================================="
+	@./$(TEST_GSCUBE_BIN)
+
+$(TEST_GSCUBE_BIN): $(TEST_GSCUBE_OBJS) src/gl/gscube_nexus.c src/gl/gscube_nexus.h
+	@mkdir -p ./.build
+	$(CC) $(TEST_GSCUBE_OBJS) -o $@ $(LDFLAGS)
+
+TEST_PS2ROUTING_BIN = ./.build/test_ps2_opengl_routing
+
+test-ps2-opengl-routing: $(TEST_PS2ROUTING_BIN)
+	@echo "=========================================================="
+	@echo " Running PS2 clean-room OpenGL routing & gterm test..."
+	@echo "=========================================================="
+	@./$(TEST_PS2ROUTING_BIN)
+
+$(TEST_PS2ROUTING_BIN): verify/tests/test_ps2_opengl_routing.c $(FS_OBJS) src/apps/clu.host.o \
+                        src/gl/backend_eegs.c src/drivers/ps2/ps2_gs_rec.c src/drivers/ps2/ps2_gs_tex.c \
+                        src/drivers/ps2/ps2_vu1_geom.c src/drivers/ps2/ps2_vu0_kernel.c \
+                        src/gl/gscube_nexus.c src/drivers/ps2/ps2_gs_env.c src/drivers/ps2/ps2_gs_vram.c \
+                        src/drivers/ps2/ps2_gif_ring.c
+	@mkdir -p ./.build
+	$(CC) $(CFLAGS) -Isrc verify/tests/test_ps2_opengl_routing.c $(FS_OBJS) src/apps/clu.host.o src/gl/backend_eegs.c src/drivers/ps2/ps2_gs_rec.c src/drivers/ps2/ps2_gs_tex.c -o $@ $(LDFLAGS) -lm
+
 
 # LANE 9b: the flat-colour SPRITE batch, the poster half of row 9.  Same #include idiom as the three
 # gates above, with one difference that is not a style choice: the TU used to ship host-only because
@@ -2787,7 +2851,7 @@ $(TEST_MSX_BOOT_BIN): $(TEST_MSX_BOOT_OBJS)
 	@mkdir -p ./.build
 	$(CC) $(TEST_MSX_BOOT_OBJS) -o $@ $(LDFLAGS)
 
-test: test-tad test-editor test-chat test-mozc test-wylie test-hmi test-ski test-tracker test-deskclip test-settings test-global-menu test-app-menu test-drivesetup test-fs test-quake test-ps2-softfloat test-ps2-gs-pack test-ps2-gs-env test-ps2-gs-rec test-ps2-gs-poster test-ps2-gs-read test-ps2-gs-tex test-ps2-pointer test-ps2-fused-row test-ps2-gif-ring test-eegs-raster test-eegs-present test-gl-math test-gl-backend-choice test-ps2-fb-order test-grid-map test-xmb-atlas
+test: test-tad test-editor test-chat test-mozc test-wylie test-hmi test-ski test-tracker test-deskclip test-settings test-global-menu test-app-menu test-drivesetup test-fs test-quake test-ps2-softfloat test-ps2-gs-pack test-ps2-gs-env test-ps2-gs-rec test-ps2-vu1-geom test-ps2-vu0-kernel test-gscube-nexus test-ps2-gs-poster test-ps2-gs-read test-ps2-gs-tex test-ps2-pointer test-ps2-fused-row test-ps2-gif-ring test-eegs-raster test-eegs-present test-gl-math test-gl-backend-choice test-ps2-fb-order test-grid-map test-xmb-atlas test-ps2-opengl-routing
 	@echo "=========================================================="
 	@echo " ALL B-SYSTEM TEST SUITES PASSED (100% SUCCESS)!"
 	@echo "=========================================================="

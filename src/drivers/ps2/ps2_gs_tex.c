@@ -193,3 +193,30 @@ uint32_t gs_tex_vram_left(void)
 {
     return gs_vram_left(&s_vram);
 }
+
+int gs_tex_free(const void *plane)
+{
+    uint32_t i;
+    if (plane == 0) return -1;
+    for (i = 0; i < s_n; i++) {
+        if (s_reg[i].plane == plane) {
+            if (s_reg[i].byte != 0) {
+                gs_vram_free(&s_vram, s_reg[i].byte);
+            }
+            s_reg[i].plane = 0;
+            s_reg[i].pending = 0;
+            s_reg[i].byte = 0;
+            return 0;
+        }
+    }
+    return -1;
+}
+
+uint32_t gs_tex_compact(void)
+{
+    while (s_n > 0 && s_reg[s_n - 1].plane == 0) {
+        s_n--;
+    }
+    return gs_vram_compact(&s_vram);
+}
+

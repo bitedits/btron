@@ -295,11 +295,22 @@ static void test_gterm_clu_command_set_wiring(void)
     CHECK(strstr(g_clu_test_buf, "Sokhatsky Commander") != NULL, "clu_sc must identify Sokhatsky Commander");
     CHECK(strstr(g_clu_test_buf, "src/clu/sc/sc.c") != NULL, "clu_sc must identify source sc.c");
 
-    /* Test clu_tv wired into CLU / gterm command set */
+    /* Test clu_quake wired into CLU / gterm command set */
     g_clu_test_buf[0] = '\0';
-    clu_tv("-v /SYS/BOOK.md", clu_test_out, NULL);
-    CHECK(strstr(g_clu_test_buf, "Terminal Vision") != NULL, "clu_tv must identify Terminal Vision");
-    CHECK(strstr(g_clu_test_buf, "src/clu/tv/tv.c") != NULL, "clu_tv must identify source tv.c");
+    clu_quake("", clu_test_out, NULL);
+    CHECK(strstr(g_clu_test_buf, "Quake 3D for B-System") != NULL, "clu_quake must print Quake 3D header");
+    CHECK(strstr(g_clu_test_buf, "assets/quake/pak/pak0.pak") != NULL, "clu_quake must identify pak0.pak asset");
+
+    /* Test clu_launch_app wired for lilcu and lilcu64 in gterm */
+    g_clu_test_buf[0] = '\0';
+    BOOL lilcu_ok = clu_launch_app("lilcu", clu_test_out, NULL);
+    CHECK(lilcu_ok == TRUE, "clu_launch_app must accept 'lilcu' command");
+    CHECK(strstr(g_clu_test_buf, "Lil Cu 64 Demoscene") != NULL, "clu_launch_app must report Lil Cu 64 Demoscene");
+
+    g_clu_test_buf[0] = '\0';
+    BOOL lilcu64_ok = clu_launch_app("lilcu64", clu_test_out, NULL);
+    CHECK(lilcu64_ok == TRUE, "clu_launch_app must accept 'lilcu64' command");
+    CHECK(strstr(g_clu_test_buf, "Lil Cu 64 Demoscene") != NULL, "clu_launch_app must report Lil Cu 64 Demoscene for 'lilcu64'");
 
     TEST_PASS();
 }

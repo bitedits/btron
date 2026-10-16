@@ -33,10 +33,16 @@ typedef enum { qfalse = 0, qtrue = 1 } qboolean;
 /* Engine Constants */
 #define QUAKE_VERSION   1.09f
 #define TICRATE         0.0142857f /* 70 Hz physics tick */
+#if defined(BTRON_PS2_TARGET)
+#define MAX_EDICTS      128
+#define MAX_MODELS      64
+#define MAX_SOUNDS      64
+#else
 #define MAX_EDICTS      600
-#define MAX_LIGHTSTYLES 64
 #define MAX_MODELS      256
 #define MAX_SOUNDS      256
+#endif
+#define MAX_LIGHTSTYLES 64
 
 /* Logging & Diagnostics */
 void Sys_Error(const char *error, ...);

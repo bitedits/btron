@@ -464,7 +464,14 @@ int eegs_present_send(const RECT *client)
     env.reg_tex0  = 0u;
     env.reg_tex1  = 0u;
 
-    if (ps2_gs_draw_env_apply(&env) != 0) return -1;
+    if (eegs_is_dual_context()) {
+        gs_draw_env env2 = env;
+        env.reg_alpha = 0u; /* Context 1: opaque */
+        env2.reg_alpha = gs_pack_alpha(GS_BLEND_CS, GS_BLEND_CD, GS_ALPHA_AS, GS_BLEND_CD, 0u); /* Context 2: translucent */
+        if (ps2_gs_draw_dual_env_apply(&env, &env2) != 0) return -1;
+    } else {
+        if (ps2_gs_draw_env_apply(&env) != 0) return -1;
+    }
 
     /* One DMA per group, in recorded order: the environment above has to reach the GS before the
      * first vertex, and each group is a complete packet with EOP set, which is what makes a

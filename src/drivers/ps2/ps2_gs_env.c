@@ -19,58 +19,94 @@ uint32_t gs_draw_env_qwc(void)
     return 1u + GS_ENV_NREG;
 }
 
-int gs_draw_env_packet(const gs_draw_env *e, uint64_t *qw)
+uint32_t gs_draw_dual_env_qwc(void)
 {
-    /* One nibble, AD, per loop: each data quadword carries a register's 64 bits and that
-     * register's GP offset, so nine writes need no more tag bookkeeping than one. */
-    static const uint32_t s_regs_ad[1] = { GS_NIB_AD };
-    uint64_t *c = qw;
-    uint32_t frame_fba, zbuf_fba;
+    return 1u + GS_DUAL_ENV_NREG;
+}
 
-    if (e == 0 || qw == 0) return -1;
+static uint64_t *emit_env_regs(const gs_draw_env *e, uint32_t context, uint32_t frame_fba, uint32_t zbuf_fba, uint64_t *c)
+{
+    uint32_t gp_xyoffset = (context == 0u) ? GS_GP_XYOFFSET_1 : GS_GP_XYOFFSET_2;
+    uint32_t gp_scissor  = (context == 0u) ? GS_GP_SCISSOR_1  : GS_GP_SCISSOR_2;
+    uint32_t gp_frame    = (context == 0u) ? GS_GP_FRAME_1    : GS_GP_FRAME_2;
+    uint32_t gp_zbuf     = (context == 0u) ? GS_GP_ZBUF_1     : GS_GP_ZBUF_2;
+    uint32_t gp_test     = (context == 0u) ? GS_GP_TEST_1     : GS_GP_TEST_2;
+    uint32_t gp_alpha    = (context == 0u) ? GS_GP_ALPHA_1    : GS_GP_ALPHA_2;
+    uint32_t gp_clamp    = (context == 0u) ? GS_GP_CLAMP_1    : GS_GP_CLAMP_2;
+    uint32_t gp_tex0     = (context == 0u) ? GS_GP_TEX0_1     : GS_GP_TEX0_2;
+    uint32_t gp_tex1     = (context == 0u) ? GS_GP_TEX1_1     : GS_GP_TEX1_2;
 
-    /* An offset that is not a whole 8 KB page is not a plan, so this says so instead of
-     * quietly drawing somewhere near it. */
-    if (gs_vram_fba(e->frame_byte, &frame_fba) != 0) return -1;
-    if (gs_vram_fba(e->zbuf_byte, &zbuf_fba) != 0) return -1;
-
-    /* GIFTAG: NLOOP is the nine writes, EOP ends the packet, FLG PACKED with NREG 1, and the
-     * tag's second quadword is the REGS list.  PRIM is 0 and PRE is 0 because this group
-     * draws nothing; it only sets state. */
-    c = gs_pack_pair(c, gs_pack_giftag(GS_ENV_NREG, 1u, 0u, 0u, GS_FLG_PACKED, 1u),
-                     gs_pack_regs(s_regs_ad, 1u));
-
-    /* The page origin: XYOFFSET is subtracted at the vertex kick, so a vertex that says
-     * "2048 px plus 12 px" lands at screen x = 12 when the offset carries 2048 px plus the
-     * window's own x.  Both halves are 12.4, hence the << 4. */
+    /* The page origin: XYOFFSET */
     c = gs_pack_pair(c,
                      gs_pack_xyoffset(GS_XYOFFSET_PAGE + (e->win_x << 4),
                                       GS_XYOFFSET_PAGE + (e->win_y << 4)),
-                     GS_GP_XYOFFSET_1);
+                     gp_xyoffset);
 
-    /* Clip in screen pixels, no offset and no fixed point: the window's rect as the PCRTC
-     * sees it, so a primitive cannot paint over the title bar or the neighbour's border. */
+    /* Clip in screen pixels: SCISSOR */
     c = gs_pack_pair(c,
                      gs_pack_scissor(e->clip_x0, e->clip_x1, e->clip_y0, e->clip_y1),
-                     GS_GP_SCISSOR_1);
+                     gp_scissor);
 
     c = gs_pack_pair(c,
                      gs_pack_frame(frame_fba, gs_vram_fbw(e->frame_px_w),
                                    e->frame_psm, e->frame_fmsk),
-                     GS_GP_FRAME_1);
+                     gp_frame);
 
     c = gs_pack_pair(c, gs_pack_zbuf(zbuf_fba, e->zbuf_psm, e->zbuf_zmsk),
-                     GS_GP_ZBUF_1);
+                     gp_zbuf);
 
-    c = gs_pack_pair(c, e->reg_test,  GS_GP_TEST_1);
-    c = gs_pack_pair(c, e->reg_alpha, GS_GP_ALPHA_1);
+    c = gs_pack_pair(c, e->reg_test,  gp_test);
+    c = gs_pack_pair(c, e->reg_alpha, gp_alpha);
 
-    /* The texture context of the window: where its atlas lives, how big a page it is, and how
-     * to sample it.  A UI at 1:1 wants nearest, so TEX1's filters come from the caller, which
-     * is the only thing that knows whether the app asked for anything else. */
-    c = gs_pack_pair(c, e->reg_clamp, GS_GP_CLAMP_1);
-    c = gs_pack_pair(c, e->reg_tex0,  GS_GP_TEX0_1);
-    c = gs_pack_pair(c, e->reg_tex1,  GS_GP_TEX1_1);
+    /* Texture trio */
+    c = gs_pack_pair(c, e->reg_clamp, gp_clamp);
+    c = gs_pack_pair(c, e->reg_tex0,  gp_tex0);
+    c = gs_pack_pair(c, e->reg_tex1,  gp_tex1);
 
+    return c;
+}
+
+int gs_draw_env_packet_ctx(const gs_draw_env *e, uint32_t context, uint64_t *qw)
+{
+    static const uint32_t s_regs_ad[1] = { GS_NIB_AD };
+    uint64_t *c = qw;
+    uint32_t frame_fba, zbuf_fba;
+
+    if (e == 0 || qw == 0 || context > 1u) return -1;
+
+    if (gs_vram_fba(e->frame_byte, &frame_fba) != 0) return -1;
+    if (gs_vram_fba(e->zbuf_byte, &zbuf_fba) != 0) return -1;
+
+    c = gs_pack_pair(c, gs_pack_giftag(GS_ENV_NREG, 1u, 0u, 0u, GS_FLG_PACKED, 1u),
+                     gs_pack_regs(s_regs_ad, 1u));
+
+    c = emit_env_regs(e, context, frame_fba, zbuf_fba, c);
+    return 0;
+}
+
+int gs_draw_env_packet(const gs_draw_env *e, uint64_t *qw)
+{
+    return gs_draw_env_packet_ctx(e, 0u, qw);
+}
+
+int gs_draw_dual_env_packet(const gs_draw_env *ctx1, const gs_draw_env *ctx2, uint64_t *qw)
+{
+    static const uint32_t s_regs_ad[1] = { GS_NIB_AD };
+    uint64_t *c = qw;
+    uint32_t f1, z1, f2, z2;
+
+    if (ctx1 == 0 || ctx2 == 0 || qw == 0) return -1;
+
+    if (gs_vram_fba(ctx1->frame_byte, &f1) != 0) return -1;
+    if (gs_vram_fba(ctx1->zbuf_byte, &z1) != 0) return -1;
+    if (gs_vram_fba(ctx2->frame_byte, &f2) != 0) return -1;
+    if (gs_vram_fba(ctx2->zbuf_byte, &z2) != 0) return -1;
+
+    /* Single GIF packet with NLOOP = 18 AD writes */
+    c = gs_pack_pair(c, gs_pack_giftag(GS_DUAL_ENV_NREG, 1u, 0u, 0u, GS_FLG_PACKED, 1u),
+                     gs_pack_regs(s_regs_ad, 1u));
+
+    c = emit_env_regs(ctx1, 0u, f1, z1, c);
+    c = emit_env_regs(ctx2, 1u, f2, z2, c);
     return 0;
 }

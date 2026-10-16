@@ -13,6 +13,8 @@
 void gs_vram_init(gs_vram_t *v)
 {
     v->next = (GS_VRAM_CANVAS_BYTES + GS_PAGE_FRAME - 1u) / GS_PAGE_FRAME * GS_PAGE_FRAME;
+    v->base = v->next;
+    v->block_count = 0u;
 }
 
 uint32_t gs_vram_fbw(uint32_t pixels_w)
@@ -37,6 +39,13 @@ int gs_vram_take(gs_vram_t *v, uint32_t bytes, uint32_t *out_byte)
 
     *out_byte = v->next;
     v->next  += span;
+
+    if (v->block_count < GS_VRAM_MAX_BLOCKS) {
+        v->blocks[v->block_count].offset = *out_byte;
+        v->blocks[v->block_count].size   = span;
+        v->blocks[v->block_count].used   = 1u;
+        v->block_count++;
+    }
     return 0;
 }
 
@@ -61,7 +70,47 @@ int gs_vram_take_tex(gs_vram_t *v, uint32_t bytes, uint32_t *out_byte)
 
     *out_byte = v->next;
     v->next  += span;
+
+    if (v->block_count < GS_VRAM_MAX_BLOCKS) {
+        v->blocks[v->block_count].offset = *out_byte;
+        v->blocks[v->block_count].size   = span;
+        v->blocks[v->block_count].used   = 1u;
+        v->block_count++;
+    }
     return 0;
+}
+
+int gs_vram_free(gs_vram_t *v, uint32_t byte)
+{
+    uint32_t i;
+    if (v == 0) return -1;
+    for (i = 0u; i < v->block_count; i++) {
+        if (v->blocks[i].offset == byte && v->blocks[i].used) {
+            v->blocks[i].used = 0u;
+            return 0;
+        }
+    }
+    return -1;
+}
+
+uint32_t gs_vram_compact(gs_vram_t *v)
+{
+    uint32_t reclaimed = 0u;
+    if (v == 0) return 0u;
+
+    while (v->block_count > 0u && !v->blocks[v->block_count - 1u].used) {
+        uint32_t sz = v->blocks[v->block_count - 1u].size;
+        reclaimed += sz;
+        if (v->next >= sz) v->next -= sz;
+        v->block_count--;
+    }
+    if (v->block_count == 0u) {
+        if (v->next > v->base) {
+            reclaimed += (v->next - v->base);
+            v->next = v->base;
+        }
+    }
+    return reclaimed;
 }
 
 int gs_vram_fba(uint32_t byte, uint32_t *out_fba)

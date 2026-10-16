@@ -66,19 +66,21 @@ typedef struct {
 uint32_t gs_draw_env_qwc(void);
 
 /* Fill exactly gs_draw_env_qwc() quadwords at `qw` (16-byte aligned: the DMA reads quadwords).
- * Returns 0, or -1 without touching the buffer when a VRAM offset in `e` cannot be expressed
- * as a frame-page index -- a layout problem, and the only answer that keeps it from becoming a
- * drawing at the wrong address.
- *
- * The tag's EOP is set because this stream ends with the environment; a caller that wants to
- * append primitives puts them in a following stream rather than changing this one, which is
- * what keeps the env packet's length a constant the gate can state. */
+ * context: 0 for Context 1 (_1 registers), 1 for Context 2 (_2 registers).
+ * Returns 0, or -1 on invalid argument or unaligned layout. */
+int gs_draw_env_packet_ctx(const gs_draw_env *e, uint32_t context, uint64_t *qw);
+
+/* Legacy helper: fills Context 1 environment. */
 int gs_draw_env_packet(const gs_draw_env *e, uint64_t *qw);
 
-/* Send that packet.  Declared here and defined in ps2_gs.c, because that is the file that owns
- * DMAC channel 2; the environment itself is described above and gated on the host, and this is
- * the seven lines that put it on the bus.  Returns gs_draw_env_packet()'s -1 without touching
- * the DMA when the layout does not fit. */
+/* Dual-context drawing environment: programs both Context 1 (opaque) and Context 2 (translucent)
+ * in a single atomic GIF DMA packet with NLOOP=18. */
+#define GS_DUAL_ENV_NREG (GS_ENV_NREG * 2u)
+uint32_t gs_draw_dual_env_qwc(void);
+int gs_draw_dual_env_packet(const gs_draw_env *ctx1, const gs_draw_env *ctx2, uint64_t *qw);
+
+/* Send that packet. Declared here and defined in ps2_gs.c. */
 int ps2_gs_draw_env_apply(const gs_draw_env *env);
+int ps2_gs_draw_dual_env_apply(const gs_draw_env *ctx1, const gs_draw_env *ctx2);
 
 #endif /* PS2_GS_ENV_H */

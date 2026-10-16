@@ -16,6 +16,7 @@
 #include "lilcu64_synth.h"
 #include "../gl/gl_dispatch.h"
 #include "../gl/egl_surface.h"
+#include "../drivers/ps2/ps2_vu0_kernel.h"
 #include <math.h>
 #include <stdlib.h>
 #include <stdio.h>
@@ -613,6 +614,23 @@ static void render_hopf_fibration(float time, int density_mode) {
     float psi = time * 0.12f + s_circular_phase;
     float omega = time * 0.08f + s_circular_phase * 0.40f;
 
+    vu0_hopf_params_t params;
+    params.m[0][0] = cosZ * cosY + sinZ * sinX * sinY;
+    params.m[0][1] = -sinZ * cosX;
+    params.m[0][2] = cosZ * sinY + sinZ * sinX * cosY;
+
+    params.m[1][0] = sinZ * cosY - cosZ * sinX * sinY;
+    params.m[1][1] = cosZ * cosX;
+    params.m[1][2] = sinZ * sinY - cosZ * sinX * cosY;
+
+    params.m[2][0] = -cosX * sinY;
+    params.m[2][1] = sinX;
+    params.m[2][2] = cosX * cosY;
+
+    params.scale = 1.8f;
+    params.z_offset = -1.2f;
+    params.min_denom = 0.08f;
+
     glDisable(GL_LIGHTING);
     glDisable(GL_DEPTH_TEST);
 
@@ -645,37 +663,24 @@ static void render_hopf_fibration(float time, int density_mode) {
 
             glColor3f(r * 0.75f, g * 0.75f, b * 0.75f);
 
-            glBegin(GL_LINE_STRIP);
+            vu0_vec4_t s3_pts[64];
+            vu0_vec4_t r3_pts[64];
             for (int p = 0; p <= num_pts; p++) {
                 float xi = (float)p * 2.0f * (float)M_PI / (float)num_pts;
 
                 /* 4D Coordinates on S³ */
-                float x0 = cos_eta * cosf(xi + beta * 0.5f + psi);
-                float x1 = cos_eta * sinf(xi + beta * 0.5f + psi);
-                float x2 = sin_eta * cosf(xi - beta * 0.5f + psi * 0.8f);
-                float x3 = sin_eta * sinf(xi - beta * 0.5f + psi * 0.8f);
+                s3_pts[p].x = cos_eta * cosf(xi + beta * 0.5f + psi);
+                s3_pts[p].y = cos_eta * sinf(xi + beta * 0.5f + psi);
+                s3_pts[p].z = sin_eta * cosf(xi - beta * 0.5f + psi * 0.8f);
+                s3_pts[p].w = sin_eta * sinf(xi - beta * 0.5f + psi * 0.8f);
+            }
 
-                /* Stereographic Projection S³ → ℝ³ from (0,0,0,1) */
-                float denom = 1.08f - x3;
-                if (denom < 0.08f) denom = 0.08f;
-                float X3d = x0 / denom;
-                float Y3d = x1 / denom;
-                float Z3d = x2 / denom;
+            /* Offload projection S³ → ℝ³ and 3D rotation to VU0 SIMD kernel */
+            ps2_vu0_hopf_project_batch(s3_pts, (size_t)(num_pts + 1), &params, r3_pts);
 
-                /* 3D Rotations (Yaw -> Pitch -> Roll) 1:1 with index.html lines 7736-7747 */
-                float x_yaw = X3d * cosY + Z3d * sinY;
-                float y_yaw = Y3d;
-                float z_yaw = -X3d * sinY + Z3d * cosY;
-
-                float x_pitch = x_yaw;
-                float y_pitch = y_yaw * cosX - z_yaw * sinX;
-                float z_pitch = y_yaw * sinX + z_yaw * cosX;
-
-                float x_rot = x_pitch * cosZ - y_pitch * sinZ;
-                float y_rot = x_pitch * sinZ + y_pitch * cosZ;
-                float z_rot = z_pitch;
-
-                glVertex3f(x_rot * 1.8f, y_rot * 1.8f, z_rot * 1.8f - 1.2f);
+            glBegin(GL_LINE_STRIP);
+            for (int p = 0; p <= num_pts; p++) {
+                glVertex3f(r3_pts[p].x, r3_pts[p].y, r3_pts[p].z);
             }
             glEnd();
         }

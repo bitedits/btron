@@ -383,7 +383,9 @@ void shell_execute_cmd(const char *cmd_line, ShellOutputFn out_fn, void *user_da
         if (st_cd) snprintf(st_cd->prompt, sizeof(st_cd->prompt) - 1, "[%s]%% ", g_cwd_path);
         return;
     }
-    if (strcmp(cmd, "quake") == 0) {
+    if (strcmp(cmd, "quake") == 0 || strcmp(cmd, "bin/quake") == 0 ||
+        strcmp(cmd, "./quake") == 0 || strcmp(cmd, "./bin/quake") == 0 ||
+        strcmp(cmd, "/SYS/quake") == 0) {
         clu_quake(arg, out_fn, user_data);
         return;
     }
@@ -708,11 +710,13 @@ void shell_execute_cmd(const char *cmd_line, ShellOutputFn out_fn, void *user_da
                 WND *cw = w_list[i];
                 const char *tname = "btron_app";
                 if (strstr(cw->title, "gterm") || strstr(cw->title, "Terminal")) tname = "gterm";
-                else if (strstr(cw->title, "Editor") || strstr(cw->title, "Editor")) tname = "t_editor";
+                else if (strstr(cw->title, "Editor")) tname = "t_editor";
                 else if (strstr(cw->title, "TAD") || strstr(cw->title, "仕様書")) tname = "tad_browser";
                 else if (strstr(cw->title, "Cabinet") || strstr(cw->title, "キャビネット")) tname = "vobj_mgr";
                 else if (strstr(cw->title, "TC-K777ES") || strstr(cw->title, "SONY")) tname = "audio_player";
                 else if (strstr(cw->title, "Chat") || strstr(cw->title, "対話") || strstr(cw->title, "会話") || strstr(cw->title, "Blabber")) tname = "beos_chat";
+                else if (strstr(cw->title, "Quake")) tname = "quake";
+                else if (strstr(cw->title, "Lil Cu")) tname = "lilcu";
 
                 /* Calculate instance index for this task type */
                 int inst_num = 1;
@@ -720,11 +724,13 @@ void shell_execute_cmd(const char *cmd_line, ShellOutputFn out_fn, void *user_da
                     WND *prev_w = w_list[j];
                     const char *pname = "btron_app";
                     if (strstr(prev_w->title, "gterm") || strstr(prev_w->title, "Terminal")) pname = "gterm";
-                    else if (strstr(prev_w->title, "Editor") || strstr(prev_w->title, "Editor")) pname = "t_editor";
+                    else if (strstr(prev_w->title, "Editor")) pname = "t_editor";
                     else if (strstr(prev_w->title, "TAD") || strstr(prev_w->title, "仕様書")) pname = "tad_browser";
                     else if (strstr(prev_w->title, "Cabinet") || strstr(prev_w->title, "キャビネット")) pname = "vobj_mgr";
                     else if (strstr(prev_w->title, "TC-K777ES") || strstr(prev_w->title, "SONY")) pname = "audio_player";
                     else if (strstr(prev_w->title, "Chat") || strstr(prev_w->title, "対話") || strstr(prev_w->title, "会話") || strstr(prev_w->title, "Blabber")) pname = "beos_chat";
+                    else if (strstr(prev_w->title, "Quake")) pname = "quake";
+                    else if (strstr(prev_w->title, "Lil Cu")) pname = "lilcu";
 
                     if (strcmp(pname, tname) == 0) inst_num++;
                 }

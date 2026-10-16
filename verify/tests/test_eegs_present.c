@@ -153,6 +153,15 @@ int ps2_gs_draw_env_apply(const gs_draw_env *env)
     return 0;
 }
 
+static uint64_t s_dual_env_pkt[(GS_DUAL_ENV_NREG + 1u) * 2u] __attribute__((aligned(16)));
+
+int ps2_gs_draw_dual_env_apply(const gs_draw_env *ctx1, const gs_draw_env *ctx2)
+{
+    if (gs_draw_dual_env_packet(ctx1, ctx2, s_dual_env_pkt) != 0) return -1;
+    if (ps2_gif_post(s_dual_env_pkt, gs_draw_dual_env_qwc()) != 0) return -1;
+    return 0;
+}
+
 
 /* ── Drawing ─────────────────────────────────────────────────────────────────────── */
 

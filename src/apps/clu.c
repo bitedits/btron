@@ -1935,6 +1935,10 @@ __attribute__((weak)) WND *open_quake_window(int x, int y, int width, int height
     return NULL;
 }
 
+__attribute__((weak)) WND *open_xmb_window(void) { return NULL; }
+__attribute__((weak)) WND *open_glgears_window(void) { return NULL; }
+__attribute__((weak)) WND *open_lilcu64_demo_window(void) { return NULL; }
+
 /* ── clu_quake ───────────────────────────────────────────────────── */
 void clu_quake(const char *args, ShellOutputFn out, void *ud)
 {
@@ -1989,11 +1993,17 @@ BOOL clu_launch_app(const char *verb, ShellOutputFn out, void *ud)
 {
     if (!verb || !verb[0]) return FALSE;
 
+    const char *v = verb;
+    if (strncmp(v, "./", 2) == 0) v += 2;
+    if (strncmp(v, "bin/", 4) == 0) v += 4;
+    if (strncmp(v, "/SYS/", 5) == 0) v += 5;
+    if (strncmp(v, "SYS/", 4) == 0) v += 4;
+
     for (unsigned i = 0; i < sizeof(s_clu_apps) / sizeof(s_clu_apps[0]); i++) {
         const CluApp *a = &s_clu_apps[i];
         char line[160];
 
-        if (strcmp(verb, a->verb) != 0) continue;
+        if (strcmp(v, a->verb) != 0) continue;
 
         snprintf(line, sizeof(line), "%s:", a->title);
         out(line, COLOR_CYAN, ud);

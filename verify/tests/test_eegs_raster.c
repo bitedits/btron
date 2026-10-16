@@ -1626,6 +1626,41 @@ static void test_tex_quad_gates(void)
           eegs_tex_switches() == 0u && eegs_tex_missing() == 0u);
 }
 
+static void test_dual_context_interleaving(void)
+{
+    static const eegs_vertex_t v[3] = {
+        { 10, 10, 0.0f, 0.0f, 0xFFFFFFFFu },
+        { 20, 10, 0.0f, 0.0f, 0xFFFFFFFFu },
+        { 15, 20, 0.0f, 0.0f, 0xFFFFFFFFu }
+    };
+    /* Opaque: blended = 0 */
+    eegs_tri_state_t st_opaque = { 1, 0, 0 };
+    /* Translucent: blended = 1 */
+    eegs_tri_state_t st_blend  = { 1, 0, 1 };
+
+    eegs_enable_dual_context(1);
+    check("dual context enabled", eegs_is_dual_context() == 1);
+
+    start();
+    /* Draw opaque triangle -> targets Context 1 (CTXT=0, bit 9=0) */
+    eegs_triangle(v, st_opaque);
+    /* Draw blended triangle -> targets Context 2 (CTXT=1, bit 9=1) */
+    eegs_triangle(v, st_blend);
+    eegs_frame_end();
+
+    /* Two groups must be captured because PRIM changed between Context 1 and Context 2 */
+    check("dual context interleaving produced 2 groups", s_cap_i == 2);
+    if (s_cap_i >= 2) {
+        uint64_t prim_op = gs_vq(VG(0), 1u, 0u);
+        uint64_t prim_bl = gs_vq(VG(1), 1u, 0u);
+        check("group 0 PRIM CTXT bit is 0 (Context 1)", (prim_op & (1ULL << 9)) == 0);
+        check("group 1 PRIM CTXT bit is 1 (Context 2)", (prim_bl & (1ULL << 9)) != 0);
+    }
+
+    eegs_enable_dual_context(0);
+    check("dual context disabled", eegs_is_dual_context() == 0);
+}
+
 int main(void)
 {
     printf("==========================================================\n");
@@ -1651,6 +1686,7 @@ int main(void)
     test_grid_strip_range_gate();
     test_tex_quads_matches_list();
     test_tex_quad_gates();
+    test_dual_context_interleaving();
 
     printf("  checks=%d failures=%d\n", s_checks, s_failures);
     if (s_failures == 0) {

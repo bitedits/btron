@@ -32,7 +32,11 @@ typedef struct {
 } pack_t;
 
 /* ── Hash-table slot (open-address, power-of-2 size) ─────────────── */
+#if defined(BTRON_PS2_TARGET)
+#define FS_HT_BITS   8                /* 256 slots */
+#else
 #define FS_HT_BITS   13               /* 8192 slots, load factor ≤ 0.5 */
+#endif
 #define FS_HT_SIZE   (1 << FS_HT_BITS)
 #define FS_HT_MASK   (FS_HT_SIZE - 1)
 

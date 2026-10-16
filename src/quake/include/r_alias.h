@@ -62,11 +62,19 @@ typedef struct {
 } mdl_header_t;
 
 /* ── In-memory model ─────────────────────────────────────────────────── */
+#if defined(BTRON_PS2_TARGET)
+#define MAX_MDL_VERTS    1024
+#define MAX_MDL_TRIS     1024
+#define MAX_MDL_FRAMES   64
+#define MAX_MDL_SKINS    2
+#define MAX_MDL_MODELS   4
+#else
 #define MAX_MDL_VERTS    2048
 #define MAX_MDL_TRIS     4096
 #define MAX_MDL_FRAMES   256
 #define MAX_MDL_SKINS    4
 #define MAX_MDL_MODELS   64
+#endif
 
 typedef struct {
     char     name[64];

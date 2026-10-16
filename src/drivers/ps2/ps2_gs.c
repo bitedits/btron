@@ -931,3 +931,15 @@ int ps2_gs_draw_env_apply(const gs_draw_env *env)
     if (ps2_gif_post(env_pkt, gs_draw_env_qwc()) != 0) return -1;
     return 0;
 }
+
+int ps2_gs_draw_dual_env_apply(const gs_draw_env *ctx1, const gs_draw_env *ctx2)
+{
+    static uint64_t dual_env_pkt[(GS_DUAL_ENV_NREG + 1u) * 2u] __attribute__((aligned(16)));
+    uint64_t *p = (uint64_t *)UNCACHED(dual_env_pkt);
+
+    if (gs_draw_dual_env_packet(ctx1, ctx2, p) != 0) return -1;
+
+    if (ps2_gif_post(dual_env_pkt, gs_draw_dual_env_qwc()) != 0) return -1;
+    return 0;
+}
+

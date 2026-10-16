@@ -2,6 +2,9 @@
 #include_next <stdio.h>
 #else
 
+#ifndef _GL_STDIO_H_
+#define _GL_STDIO_H_
+
 #include <libstr.h>
 #include <stdarg.h>
 
@@ -25,5 +28,6 @@ extern int tkl_snprintf(char *str, size_t size, const char *format, ...);
 #define snprintf        tkl_snprintf
 #define vsnprintf       tkl_vsnprintf
 
+#endif /* _GL_STDIO_H_ */
 #endif /* HOSTED */
 

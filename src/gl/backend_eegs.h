@@ -66,6 +66,10 @@ void eegs_frame_begin(gs_rec_sink sink, void *user);
 /* Any vertices the application drew but did not finish (an open glBegin with no glEnd). */
 void eegs_frame_end(void);
 
+/* Enable or disable dual-context interleaving (Context 1 for opaque, Context 2 for translucent). */
+void eegs_enable_dual_context(int enable);
+int  eegs_is_dual_context(void);
+
 /* One clipped triangle.  TinyGL has already split strips and fans, so a triangle arrives as three
  * vertices whether or not it continues the one before it -- and when its shared edge is bit-for-bit
  * the edge the GS is already standing on, only the third of them is sent, under the strip primitive

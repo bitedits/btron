@@ -310,6 +310,7 @@ WND* open_glgears_window(void) {
     ctsk.task = glgears_task_fn;
     ctsk.itskpri = 10;
     ctsk.stksz = 16384;
+    ctsk.name  = "glgears_task";   /* what `ps` shows; see T_CTSK.name */
     s_glgears_tskid = cre_tsk(&ctsk);
     if (s_glgears_tskid > 0) {
         sta_tsk(s_glgears_tskid, 0);

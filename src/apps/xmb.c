@@ -3567,6 +3567,7 @@ WND* open_xmb_window(void)
     ctsk.task    = xb_task;
     ctsk.itskpri = 10;
     ctsk.stksz   = 32768;
+    ctsk.name    = "xb_task";        /* what `ps` shows; see T_CTSK.name */
     s_tsk = cre_tsk(&ctsk);
     if (s_tsk > 0)
         sta_tsk(s_tsk, 0);

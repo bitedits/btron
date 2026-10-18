@@ -87,10 +87,15 @@ static const uint32_t k_left_after  = 1081344u;
 static const uint64_t k_tex0_atlas = 0x664021E80ULL;
 static const uint64_t k_tex0_font  = 0x5DC00AE80ULL;
 
-/* TEX1: LCM[0] MXL[4:2] MMAG[5] MMIN[8:6] MTBA[9] L[20:19] K[43:32].  Both sheets magnify with a
- * bilinear filter and minify with the nearest -- no mipmap chain, so MTBA is 0 and MXL 0 -- which
- * is MMAG alone: 1<<5 = 0x20. */
-static const uint64_t k_tex1       = 0x20ULL;
+/* TEX1: LCM[0] MXL[4:2] MMAG[5] MMIN[8:6] MTBA[9] L[20:19] K[43:32].  Both sheets are drawn with a
+ * bilinear filter on both axes, which is what the XMB asks for (GL_TEXTURE_MIN_FILTER and
+ * GL_TEXTURE_MAG_FILTER both GL_LINEAR) and what the POSIX reference (the virgl span loop) honours --
+ * 1:1 texturing for HW OpenGL.  MMAG=1 is 1<<5 and MMIN=1 (plain bilinear minification, NOT a mipmap
+ * read: the GS only reaches for a chain at MMIN>=2, which would set MTBA and read L) is 1<<6, and the
+ * two together are 0x20 | 0x40 = 0x60, with MXL, MTBA, L and K all zero.  This sampler was A/B'd
+ * against the operator's icon black-rectangles and is NOT their author (the settled page reads correct
+ * white-on-blue under either filter); it is pinned LINEAR because that is the faithful 1:1 port. */
+static const uint64_t k_tex1       = 0x60ULL;
 
 /* CLAMP: WMS[1:0] WMT[3:2] MINU[13:4] MAXU[23:14] MINV[33:24] MAXV[43:34], with both modes
  * REPEAT (1) and both limits the whole padded plane, so the wrap period is pad_w -- the same

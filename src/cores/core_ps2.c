@@ -2341,19 +2341,12 @@ static void ps2_paint_region(GDEV *screen, int x0, int y0, int x1, int y1, int f
             gl_why = PS2_WHY_NO_LAYER;  /* nothing to protect: this pass is desktop all over */
         }
     } else if (gs_replates) {
-        /* Rung 24 REFUTED this licence, so the production build no longer takes it.
-         *
-         * The memory above is `eegs_present_stats.plate_covers`, a bounding-box test on the stream's
-         * stream's first vertex group: it says the primitives ASK to cover the rect, not that the page
-         * ends up covered.  Rung 24 cut the frame at the recorder to chains 0..1 (the clear and the
-         * gradient, both whole-client, both untextured) and refused the other 715 declarations, and the
-         * client's alpha map came back with the SAME 11,714 zero-word cells as the full-frame run --
-         * so those pixels are never painted by anything in the stream, and a canvas that skips them
-         * leaves stale VRAM where HEAD left desktop grey.  Grey is the better of the two, because grey
-         * is at least this frame's colour: the stale page is the flicker and the icon artefacts the
-         * operator reports.  The cut therefore lives on behind the dial where it can still be A/B'd
-         * (BENCH_GS>=3, rung 23) and the fix goes where the measurement says it is: the stream's own
-         * coverage of rows below local y=47. */
+        /* Rung 20y's licence is A/B'd but NOT taken in production: the operator ran a build that
+         * skipped the canvas inside the client and the flicker and the icon black-rectangles did
+         * NOT go away.  That falsifies the "canvas lays desktop over the client mid-present" model
+         * as the author of what the operator sees, so the canvas is left to lay the rect here and
+         * the real writer still has to be named.  The cut stays compiled behind the dial (rung 23,
+         * BENCH_GS>=3) so the A/B remains reproducible. */
         gl_hole = gl_client;
 #if BTRON_PS2_BENCH_GS >= 3
         gl_hole_live = TRUE;
@@ -5494,10 +5487,14 @@ static void ps2_gsalpha_probe(void)
  * Three boxes, run in the same env rung 7 proved delivers a flat sprite:
  *   U  UNTEXTURED opaque green -- the positive.  This is rung 4's CYAN shape; if it fails to paint, the
  *      run measured no geometry and neither textured row is evidence.
- *   R  TEXTURED white-over-RED  plane.
- *   B  TEXTURED white-over-BLUE plane.  R and B carrying DIFFERENT colours is the control against the
- *      sampler being silently ignored: two matching results would say the box is the vertex, not the
- *      page, whatever single colour the plane held.
+ *   R  TEXTURED white-over-RED  plane, PRIM written by its AD group and a TEXFLUSH before the draw.
+ *   B  TEXTURED white-over-BLUE plane, PRIM written by its AD group and NO TEXFLUSH before the draw.
+ *      R and B now differ by exactly one register write, so their two readings name whether that
+ *      write is what latches the sampler: the colour fork (red plane vs blue plane) is still the
+ *      control against an ignored TME -- two matching results would say the box is the vertex, not the
+ *      page, whatever single colour the plane held -- and the flush fork is the control against
+ *      TEXFLUSH mattering, the question rung 29 opened because eegs_texture() ships the texture trio
+ *      with no flush and the old probe could not separate the two.
  *
  * Each plane is 64x64 and filled UNIFORMLY, so the texel coordinate the sprite samples cannot matter --
  * any coordinate inside, or wrapping through CLAMP/REPEAT, reads the one colour.  That makes this read
@@ -5520,34 +5517,51 @@ static void ps2_gsalpha_probe(void)
  * names a new TBA, and an env write that precedes a PRIM by a full DMA may sit in the wrong cache
  * state, so a TEXFLUSH is what forces the sampler to read the page a draw is about to name.  This
  * builder therefore emits, in ONE transfer:
- *   an AD group writing CLAMP_1 / TEX0_1 / TEX1_1 / TEXFLUSH, then
+ *   an AD group writing CLAMP_1 / TEX0_1 / TEX1_1, then PRIM, then (for the flush box) TEXFLUSH, then
  *   a PRE=1 REGLIST sprite loop (RGBAQ, ST, XYZ2, XYZ2) over that plane.
  * Keeping the state and the draw in one posted buffer is what makes "the page is named before the
- * primitive samples it" a property of this FIFO order and not a hope. */
-#define GS8_PACKET_QW 8u    /* 5 for the AD group (tag pair + four register pairs), 3 for the sprite */
+ * primitive samples it" a property of this FIFO order and not a hope.
+ *
+ * LANE 19 rung 29 (2026-10-18): PRIM is now written by this AD group, exactly as ps2_gs_rec.c's
+ * open_group() does.  The previous shape put PRIM only in the sprite's GIFTAG, and rung 12u/12v
+ * MEASURED that a tag's PRIM field -- PRE set or not -- never programs the GS's PRIM register on
+ * this machine; a chain that inherits the last AD-written primitive drew the WHITE vertex because
+ * TME was never set, which the earlier probe mis-read as "the sampler is IGNORED."  That verdict
+ * measured the probe's own delivery, not the eegs stream, which ships the AD write.  So the probe
+ * now mirrors the recorder and can answer the real question.  The `flush` argument is the A/B: box R
+ * names the plane and flushes before the draw, box B names it and does not, on the same uploaded
+ * page in the same run -- if R reads its plane and B reads white, TEXFLUSH is required for the
+ * sampler to latch, and `eegs_texture()` (which writes CLAMP/TEX0/TEX1 but no TEXFLUSH) is missing
+ * it; if both read their plane, TEXFLUSH is a non-issue and the icon artefact is elsewhere. */
+#define GS8_PACKET_QW 9u    /* 6 for the flush AD group (tag + PRIM/CLAMP/TEX0/TEX1/TEXFLUSH pairs), 3 for the sprite */
 
 static int32_t gs8_textured_sprite(const gs_poster_rect *r, uint32_t vertex, const gs_tex_t *t,
-                                   uint64_t *qw, uint32_t cap_qw)
+                                   uint32_t flush, uint64_t *qw, uint32_t cap_qw)
 {
-    /* TME=1, ABE=0 (opaque), CTXT=0 (the _1 context these three AD writes program).  PRE=1 carries
+    /* TME=1, ABE=0 (opaque), CTXT=0 (the _1 context these AD writes program).  PRE=1 carries
      * this PRIM in the tag so the register list is exactly the four that pack into two dense
-     * quadwords: RGBAQ, ST, XYZ2, XYZ2 -- a sprite kicks on its second XYZ2. */
+     * quadwords: RGBAQ, ST, XYZ2, XYZ2 -- a sprite kicks on its second XYZ2.  The tag's PRIM is
+     * inert on this GS (rung 12u); the AD write of the same word below is what sets TME. */
     const uint64_t prim = gs_pack_prim(GS_OP_SPRITE, 0u, 1u, 0u, 0u, 0u);
     static const uint32_t ad_regs[1] = { GS_NIB_AD };
     static const uint32_t sp_regs[4] = { GS_NIB_RGBAQ, GS_NIB_ST, GS_NIB_XYZ2, GS_NIB_XYZ2 };
     uint64_t *c = qw;
+    uint32_t nad = 4u + (flush ? 1u : 0u);   /* CLAMP, TEX0, TEX1, PRIM, + TEXFLUSH when asked for */
 
     if (r == 0 || qw == 0 || t == 0) return -1;
     if (cap_qw < GS8_PACKET_QW) return -1;
     if (r->x1 <= r->x0 || r->y1 <= r->y0 || r->x0 < 0 || r->y0 < 0) return -1;
 
-    /* AD group: NLOOP 4, one register each, EOP clear (the sprite loop follows in this same DMA). */
-    *c++ = gs_pack_giftag(4u, 0u, 0u, 0u, GS_FLG_PACKED, 1u);
+    /* AD group: NLOOP `nad`, one register each, EOP clear (the sprite loop follows in this same
+     * DMA).  PRIM is written last among the state so it is the freshest AD word before the kick;
+     * TEXFLUSH, when present, sits between the texture trio and PRIM. */
+    *c++ = gs_pack_giftag(nad, 0u, 0u, 0u, GS_FLG_PACKED, 1u);
     *c++ = gs_pack_regs(ad_regs, 1u);
-    c = gs_pack_pair(c, t->clamp,  GS_GP_CLAMP_1);
-    c = gs_pack_pair(c, t->tex0,   GS_GP_TEX0_1);
-    c = gs_pack_pair(c, t->tex1,   GS_GP_TEX1_1);
-    c = gs_pack_pair(c, 1u,        GS_GP_TEXFLUSH);
+    c = gs_pack_pair(c, t->clamp, GS_GP_CLAMP_1);
+    c = gs_pack_pair(c, t->tex0,  GS_GP_TEX0_1);
+    c = gs_pack_pair(c, t->tex1,  GS_GP_TEX1_1);
+    if (flush) c = gs_pack_pair(c, 1u, GS_GP_TEXFLUSH);
+    c = gs_pack_pair(c, prim,     GS_GP_PRIM);
 
     /* The sprite loop, EOP ends the whole transfer. */
     *c++ = gs_pack_giftag(1u, 1u, 1u, prim, GS_FLG_REGLIST, 4u);
@@ -5598,10 +5612,11 @@ static void ps2_gstex_probe(void)
     }
 
     ps2_kprintf("[GSTEX] three 40x40 boxes at y=%d..%d, dest=0x%08x; U=flat green, "
-                "R=textured-over-red-plane, B=textured-over-blue-plane, vertex=0x%08x\n",
+                "R=textured-over-red-plane+TEXFLUSH, B=textured-over-blue-plane-NOFLUSH, "
+                "vertex=0x%08x\n",
                 GS8_Y0, GS8_Y1 - 1, (unsigned int)dest, (unsigned int)GS8_VERTEX);
-    ps2_kprintf("[GSTEX] white=textured but sampler ignored, black=page read as zero, "
-                "navy=fragment discarded\n");
+    ps2_kprintf("[GSTEX] plane=the sampler latched, white=TME/TEX0 did not take (or no flush "
+                "latched it), black=page read as zero, navy=fragment discarded\n");
 
     /* U -- untextured opaque green, the geometry+read positive (rung 4's shape, unchanged). */
     r.y0 = GS8_Y0; r.y1 = GS8_Y1;
@@ -5612,23 +5627,23 @@ static void ps2_gstex_probe(void)
         trusted = 0;
     } else { (void)ps2_gif_drain(); (void)ps2_gif_reap(); }
 
-    /* R -- textured over the red plane, under the env that points TEX0 at it. */
+    /* R -- textured over the red plane, PRIM AD-written, TEXFLUSH before the draw. */
     r.x0 = GS8_R_X0; r.x1 = GS8_R_X0 + (int)bw;
     if (trusted) {
         ps2_stage1_gs_env(&env);
         env.reg_tex0 = tr->tex0; env.reg_tex1 = tr->tex1; env.reg_clamp = tr->clamp;
-        qw = gs8_textured_sprite(&r, GS8_VERTEX, tr, s_pkt, GS8_PACKET_QW);
+        qw = gs8_textured_sprite(&r, GS8_VERTEX, tr, 1u, s_pkt, GS8_PACKET_QW);
         if (qw < 0 || ps2_gs_draw_env_apply(&env) != 0 || ps2_gif_post(s_pkt, (uint32_t)qw) != 0) {
             trusted = 0;
         } else { (void)ps2_gif_drain(); (void)ps2_gif_reap(); }
     }
 
-    /* B -- textured over the blue plane, same everything else. */
+    /* B -- textured over the blue plane, same everything EXCEPT no TEXFLUSH: the flush fork. */
     r.x0 = GS8_B_X0; r.x1 = GS8_B_X0 + (int)bw;
     if (trusted) {
         ps2_stage1_gs_env(&env);
         env.reg_tex0 = tb->tex0; env.reg_tex1 = tb->tex1; env.reg_clamp = tb->clamp;
-        qw = gs8_textured_sprite(&r, GS8_VERTEX, tb, s_pkt, GS8_PACKET_QW);
+        qw = gs8_textured_sprite(&r, GS8_VERTEX, tb, 0u, s_pkt, GS8_PACKET_QW);
         if (qw < 0 || ps2_gs_draw_env_apply(&env) != 0 || ps2_gif_post(s_pkt, (uint32_t)qw) != 0) {
             trusted = 0;
         } else { (void)ps2_gif_drain(); (void)ps2_gif_reap(); }
@@ -5697,14 +5712,26 @@ static void ps2_gstex_probe(void)
         return;
     }
 
-    /* The control proves geometry and the read; the fork is the sampler. */
+    /* The control proves geometry and the read.  R names its plane WITH a flush, B names a different
+     * plane WITHOUT one; the two forks together (colour, then flush) separate three questions the old
+     * single-shape probe could only blur. */
     if (r_plane == n && b_plane == n) {
-        ps2_kprintf("[GSTEX] verdict: TEXTURING WORKS. Both textured boxes came back their plane's colour "
-                    "and R != B, so the sampler multiplies vertex by a live page.  The eegs blackout is "
-                    "therefore NOT the texture stage -- read the RGBAQ/geometry the app feeds, next.\n");
+        ps2_kprintf("[GSTEX] verdict: TEXTURING WORKS, TEXFLUSH NOT REQUIRED. Both textured boxes came "
+                    "back their own plane (R red, B blue), and B got there with no TEXFLUSH, so an "
+                    "AD-written PRIM/TEX0 group latches the sampler on this GS without a flush.  The "
+                    "eegs icon artefact is therefore NOT the sampler -- read the RGBAQ/geometry and the "
+                    "filter/wrap the app feeds, next.\n");
+    } else if (r_plane == n && b_white == n) {
+        ps2_kprintf("[GSTEX] verdict: THE SAMPLER NEEDS TEXFLUSH. R flushed and read its red plane; B "
+                    "named its plane but never flushed and read the WHITE vertex.  So a freshly-pointed "
+                    "TEX0 does not reach the sampler until a TEXFLUSH forces the page reload -- and "
+                    "eegs_texture() (backend_eegs.c) writes CLAMP/TEX0/TEX1 with NO flush, which is the "
+                    "icon bug.  Add GS_GP_TEXFLUSH to that AD trio.\n");
     } else if (r_white == n && b_white == n) {
-        ps2_kprintf("[GSTEX] verdict: the sampler is IGNORED -- both textured boxes read the WHITE vertex, "
-                    "so TME/TEX0 did not take; this is a delivery of texture state, not of pixels.\n");
+        ps2_kprintf("[GSTEX] verdict: TME/TEX0 STILL DO NOT TAKE even with PRIM AD-written -- both "
+                    "boxes read the WHITE vertex.  The texture state is not the fix; the sampler never "
+                    "engages on this send path at all, so look upstream of TEX0 (the upload, or whether "
+                    "the dense chain carries its ST at all).\n");
     } else if (r_black == n && b_black == n) {
         ps2_kprintf("[GSTEX] verdict: the page reads ZERO -- both textured boxes came back black, so an "
                     "uploaded plane is sampled as 0.  The upload vs TEX0 format (PSM/pitch/byte order) is "
@@ -5713,7 +5740,7 @@ static void ps2_gstex_probe(void)
         ps2_kprintf("[GSTEX] verdict: the textured fragments are DISCARDED -- both boxes still hold their "
                     "destination, which is the [GSLIVE] symptom reproduced at the sprite level.\n");
     } else {
-        ps2_kprintf("[GSTEX] verdict: MIXED -- R %u/%u/%u/%u and B %u/%u/%u/%u plane/white/black/dest; "
+        ps2_kprintf("[GSTEX] verdict: MIXED -- R %u/%u/%u/%u (flush) and B %u/%u/%u/%u (no flush) plane/white/black/dest; "
                     "no single model predicts this, read the tallies against the words before believing "
                     "the run.\n",
                     (unsigned int)r_plane, (unsigned int)r_white, (unsigned int)r_black,

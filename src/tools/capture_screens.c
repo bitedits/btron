@@ -133,6 +133,11 @@ ID cre_tsk(const T_CTSK *pk_ctsk) { (void)pk_ctsk; return -1; }
 ER sta_tsk(ID tskid, VW exinf)    { (void)tskid; (void)exinf; return E_OK; }
 void dly_tsk(W dlytim)            { (void)dlytim; }
 
+/* GTerm's `ps` walks the kernel's task table.  src/cores/core_init.c owns the walking and the
+ * row formatting and is not in this link, so answer with the true thing -- "no table to walk"
+ * -- rather than the false thing an empty table would say. */
+W btron_task_row_text(W idx, char *out, W cap) { (void)idx; (void)out; (void)cap; return BTRON_TSK_NOWALK; }
+
 /* Helper to dump raw ARGB rectangle to file */
 static void dump_window_rect(GDEV *dev, WND *wnd, const char *out_filename) {
     if (!dev || !wnd) return;

@@ -133,15 +133,19 @@ const gs_tex_t *gs_tex_register(const void *plane, uint32_t px_w, uint32_t px_h,
     /* TCC=1 (RGBA, not a modulated colour key), TFUNC=0 (modulate), and the CLUT fields all
      * zero: a CT32 picture carries its own alpha and reads no CLUT page.
      *
-     * The sampler is LINEAR on magnification and NEAREST on minification.  That is the
-     * closest the GS comes to what the CPU span loop draws: at exactly 1:1 the half-texel
-     * offset already folded into `ST` makes the two filters return the same texel, a
-     * magnified icon is what `GL_LINEAR` draws today, and a minified one is the single case
-     * where the GS has no answer without a mipmap chain this port does not build.  Threading
-     * the app's own filter through here is the follow-up doc/txt/PS2.txt records. */
+     * The sampler is LINEAR on both axes -- magnification and minification.  That is what the
+     * application asks for: `xmb.c` sets GL_TEXTURE_MIN_FILTER and GL_TEXTURE_MAG_FILTER to
+     * GL_LINEAR on both sheets, and the POSIX reference (the virgl span loop) honours it, so
+     * 1:1 texturing for HW OpenGL means the GS reads bilinearly too.  This was A/B'd against the
+     * operator's icon black-rectangles and is NOT their author: the census reads the settled page
+     * with correct white glyphs on blue under both filters, so the rectangles are the non-atomic
+     * present (see rung 20y), not the sampler.  MMIN=1 is plain bilinear minification, not
+     * trilinear: the GS only reaches for a mipmap chain at MMIN>=2 (which would read TEX1's L and
+     * MTBA), so a value of 1 needs no chain this port does not build.  LINEAR/LINEAR is the
+     * faithful match to the source branch. */
     slot->tex0 = gs_pack_tex0(tba, slot->tbw, GS_PSM_CT32, tw_exp, th_exp,
                               1u, 0u, 0u, 0u, 0u, 0u, 0u);
-    slot->tex1 = gs_pack_tex1(0u, 0u, GS_FILTER_LINEAR, GS_FILTER_NEAREST,
+    slot->tex1 = gs_pack_tex1(0u, 0u, GS_FILTER_LINEAR, GS_FILTER_LINEAR,
                               0u, 0u, 0u);
 
     /* Repeat on both axes, over the whole plane: `MINU`/`MAXU` are the first and last texel

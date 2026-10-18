@@ -9,6 +9,7 @@
 #include <btron/settings.h>
 #include <btron/desktop.h>
 #include <btron/fs/vol_api.h>
+#include <btron/itron.h>            /* btron_task_row_text(): `ps` reads the kernel's task table */
 #include "clu.h"
 #include "../clu/term.h"
 #include "../clu/lang.h"
@@ -695,20 +696,36 @@ void shell_execute_cmd(const char *cmd_line, ShellOutputFn out_fn, void *user_da
         out_fn("  Subsystems : HFDS Cabinet, GTerm Terminal, Editor, Mozc IME", COLOR_LTGRAY, user_data);
         out_fn("  SMP Engine : 4 Cores Live & Scheduled", COLOR_YELLOW, user_data);
     } else if (strcmp(cmd, "ps") == 0) {
-        int num_cores = 1;
-#if defined(BTRON_SMP)
-        extern volatile uint32_t g_num_cpus;
-        if (g_num_cpus > 0) num_cores = (int)g_num_cpus;
-#endif
-        out_fn("PID   CORE  TASK           STAT   ADDR         BOUNDS    TITLE", COLOR_CYAN, user_data);
-        out_fn("-------------------------------------------------------------------------", COLOR_DKGRAY, user_data);
         char sline[256];
-        snprintf(sline, sizeof(sline), "  1   #%-3d  tk_desktop     RUN    0x01020000   1024x768  [B-System Desktop]", 0);
-        out_fn(sline, COLOR_GREEN, user_data);
-        snprintf(sline, sizeof(sline), "  2   #%-3d  tk_wnd_mgr     READY  0x01040000   1024x768  [Window Compositor]", (1 % num_cores));
-        out_fn(sline, COLOR_GREEN, user_data);
-        snprintf(sline, sizeof(sline), "  3   #%-3d  tk_tip_ime     READY  0x010A0000   Candidate [Mozc Japanese IME]", (2 % num_cores));
-        out_fn(sline, COLOR_GREEN, user_data);
+        int  rowcount = 0;
+
+        /* InterCore workers, read from the kernel's own task table.  The four rows this
+         * replaced (tk_desktop / tk_wnd_mgr / tk_tip_ime / gterm#1) were a picture of a
+         * desktop, not a census of this one: they printed the same four tasks, the same
+         * states and the same "#0..#3" core column however many apps were actually running,
+         * which is why an app that had just started a worker showed no worker in `ps`.
+         *
+         * What is left out is deliberate.  There is no CORE column, because no core here can
+         * say which CPU a task runs on -- on the POSIX target a task is a host thread and the
+         * host schedules it.  And the desktop UI loop is not a row: painting happens on that
+         * loop, not on a cre_tsk task, so saying so underneath the table beats inventing a
+         * task for it. */
+        out_fn("PID   TASK            STAT    ENTRY", COLOR_CYAN, user_data);
+        out_fn("----------------------------------------------------------", COLOR_DKGRAY, user_data);
+        for (int i = 0; i < 16; i++) {
+            W rc = btron_task_row_text(i, sline, sizeof(sline));
+            if (rc == 1) {
+                out_fn(sline, COLOR_GREEN, user_data);
+                rowcount++;
+                continue;
+            }
+            if (rc == BTRON_TSK_NOWALK)
+                out_fn("  (this kernel core keeps no task table to walk)", COLOR_LTGRAY, user_data);
+            break;
+        }
+        if (!rowcount)
+            out_fn("  (no worker tasks: no app has called cre_tsk yet)", COLOR_LTGRAY, user_data);
+        out_fn("  Window paints run on the desktop loop, not on a worker task.", COLOR_DKGRAY, user_data);
 
         WND *w = get_wnd_list();
         if (!w) {
@@ -719,6 +736,14 @@ void shell_execute_cmd(const char *cmd_line, ShellOutputFn out_fn, void *user_da
             for (WND *curr = w; curr && count < 64; curr = curr->next) {
                 w_list[count++] = curr;
             }
+
+            /* The window table's own header.  Its columns are the ones the row below
+             * prints, at the same offsets; STATE says FOCUS/OPEN rather than RUN/SLEEP
+             * because a window is not scheduled -- the task table above is what says
+             * whether anything is running, and the old row conflated the two by printing
+             * a fabricated core number and a focus-derived state into a "task" column. */
+            out_fn("WID   TASK               STATE  HANDLE     SIZE      TITLE", COLOR_CYAN, user_data);
+            out_fn("----------------------------------------------------------", COLOR_DKGRAY, user_data);
 
             for (int i = 0; i < count; i++) {
                 WND *cw = w_list[i];
@@ -757,13 +782,11 @@ void shell_execute_cmd(const char *cmd_line, ShellOutputFn out_fn, void *user_da
                 char bounds_str[32];
                 snprintf(bounds_str, sizeof(bounds_str), "%dx%d", ww, wh);
 
-                int task_core = (cw->id + i) % num_cores;
                 char line[256];
-                snprintf(line, sizeof(line), "%3d   #%-3d  %-14s %-6s 0x%08lx %-9s %s",
+                snprintf(line, sizeof(line), "%3d   %-18s %-6s 0x%08lx %-9s %s",
                          cw->id,
-                         task_core,
                          task_with_inst,
-                         cw->focused ? "RUN" : "SLEEP",
+                         cw->focused ? "FOCUS" : "OPEN",
                          (unsigned long)((uintptr_t)cw & 0xFFFFFFFF),
                          bounds_str,
                          cw->title);

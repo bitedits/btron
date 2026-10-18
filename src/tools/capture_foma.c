@@ -12,6 +12,7 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <btron/types.h>
+#include <btron/itron.h>
 #include <btron/dp.h>
 #include <btron/mobile_ui.h>
 
@@ -25,6 +26,11 @@ void sys_mouse_click(int b) { (void)b; }
 void open_audio_player_window(void) {}
 void open_tad_browser_window(void) {}
 void launch_beos_chat(void) {}
+
+/* GTerm's `ps` walks the kernel's task table.  src/cores/core_init.c owns the walking and the
+ * row formatting and is not in this link, so answer with the true thing -- "no table to walk"
+ * -- rather than the false thing an empty table would say. */
+W btron_task_row_text(W idx, char *out, W cap) { (void)idx; (void)out; (void)cap; return BTRON_TSK_NOWALK; }
 
 static void dump_foma_screen(GDEV *dev, const char *label, const char *raw_path) {
     if (!dev) return;

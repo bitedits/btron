@@ -1661,6 +1661,7 @@ WND* open_lilcu64_demo_window(void) {
     ctsk.task = demo_task_fn;
     ctsk.itskpri = 6;
     ctsk.stksz = 32768;
+    ctsk.name  = "lilcu_task";   /* what `ps` shows; see T_CTSK.name */
     s_demo_tskid = cre_tsk(&ctsk);
     if (s_demo_tskid > 0) {
         sta_tsk(s_demo_tskid, 0);

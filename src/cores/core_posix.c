@@ -19,9 +19,17 @@
 /*
  * B-TRON Real-Time Kernel: POSIX Microkernel Abstraction Engine (core_posix.c)
  * Pure POSIX pthread-backed implementation of µITRON & T-Kernel specification APIs.
+ *
+ * A task here is a host thread, and the host scheduler -- not this file -- decides which CPU
+ * runs it and when.  That is the honest meaning of the states btron_list_tasks() reports: RUN
+ * is "its thread is live and it is not waiting in the kernel", SLEEP is "it is inside
+ * dly_tsk()/slp_tsk()", and nothing here claims to know which core a worker is on.  The old
+ * `ps` table printed a core number for four tasks that did not exist; this one prints the
+ * tasks that do, without inventing what the kernel cannot see.
  */
 
 #include <btron/itron.h>
+#include <btron/dp.h>          /* the btron_render_perf_us() prototype: this core installs that clock */
 #include <device/virtio.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -42,6 +50,10 @@ typedef struct {
     pthread_t thread;
     BOOL active;
     BOOL sleeping;
+    /* TRUE once sta_tsk() gave this slot a thread.  Without it, a created task and a
+     * started one look the same in `ps`, and the whole point of the row is to say what the
+     * kernel is actually doing with the worker. */
+    BOOL started;
     pthread_cond_t cond;
     pthread_mutex_t mutex;
 } ITRON_TASK;
@@ -233,6 +245,7 @@ ID cre_tsk(const T_CTSK *pk_ctsk) {
             g_tasks[i].config = *pk_ctsk;
             g_tasks[i].active = TRUE;
             g_tasks[i].sleeping = FALSE;
+            g_tasks[i].started = FALSE;   /* a slot until sta_tsk() gives it a thread */
             pthread_mutex_init(&g_tasks[i].mutex, NULL);
             pthread_cond_init(&g_tasks[i].cond, NULL);
             
@@ -268,8 +281,58 @@ ER sta_tsk(ID tskid, VW exinf) {
         pthread_mutex_unlock(&g_kernel_mutex);
         return E_SYS;
     }
+    /* The worker exists now: `ps` shows RUN instead of NEW from this line on. */
+    tsk->started = TRUE;
     pthread_mutex_unlock(&g_kernel_mutex);
     return E_OK;
+}
+
+/* The task row of the calling thread, or NULL when the caller is not a task this kernel made
+ * -- main(), and any host thread outside a cre_tsk worker.  One scan, because slp_tsk() and
+ * dly_tsk() both need it and only one of them used to have it. */
+static ITRON_TASK *tsk_self(void) {
+    pthread_t self = pthread_self();
+    pthread_mutex_lock(&g_kernel_mutex);
+    for (int i = 0; i < MAX_TASKS; i++) {
+        if (g_tasks[i].active && pthread_equal(g_tasks[i].thread, self)) {
+            ITRON_TASK *hit = &g_tasks[i];
+            pthread_mutex_unlock(&g_kernel_mutex);
+            return hit;
+        }
+    }
+    pthread_mutex_unlock(&g_kernel_mutex);
+    return NULL;
+}
+
+/* The live task table (include/btron/itron.h).  Strong override of the "this core cannot
+ * answer" default in core_init.c: here every cre_tsk() slot is real, and a worker's state is
+ * whatever the thread's own kernel calls left it in.
+ *
+ * What it deliberately does not report is which CPU a task runs on.  A POSIX task is a host
+ * thread; the host scheduler places it, and the four-line table this replaced printed a "#0..#3"
+ * column for tasks that did not exist.  A census that cannot answer a column leaves the column
+ * out. */
+W btron_list_tasks(BTRON_TSK_ROW *out, W max) {
+    if (max < 0) return 0;
+
+    pthread_mutex_lock(&g_kernel_mutex);
+    W n = 0;
+    for (int i = 0; i < MAX_TASKS && n < max; i++) {
+        const ITRON_TASK *t = &g_tasks[i];
+        if (!t->active) continue;         /* free slot, or a body that returned */
+        if (out) {
+            out[n].tskid = t->tskid;
+            out[n].name  = t->config.name;
+            out[n].pri   = t->config.itskpri;
+            out[n].entry = t->config.task;
+            out[n].state = !t->started         ? BTRON_TSK_NEW :
+                           t->sleeping         ? BTRON_TSK_SLEEP :
+                                                BTRON_TSK_RUN;
+        }
+        n++;
+    }
+    pthread_mutex_unlock(&g_kernel_mutex);
+    return n;
 }
 
 void ext_tsk(void) {
@@ -277,18 +340,7 @@ void ext_tsk(void) {
 }
 
 ER slp_tsk(void) {
-    pthread_t self = pthread_self();
-    ITRON_TASK *tsk = NULL;
-
-    pthread_mutex_lock(&g_kernel_mutex);
-    for (int i = 0; i < MAX_TASKS; i++) {
-        if (g_tasks[i].active && pthread_equal(g_tasks[i].thread, self)) {
-            tsk = &g_tasks[i];
-            break;
-        }
-    }
-    pthread_mutex_unlock(&g_kernel_mutex);
-
+    ITRON_TASK *tsk = tsk_self();
     if (!tsk) return E_OBJ;
 
     pthread_mutex_lock(&tsk->mutex);
@@ -397,13 +449,39 @@ ER get_tim(SYSTIME *p_time) {
     return E_OK;
 }
 
+/* The one microsecond clock the render telemetry asks for.  dp_core.c owns a weak
+ * `return 0` for cores that have no clock to offer, and every caller that measures a delta
+ * against it -- the fill timings in tinygl/clip.c, the compositor's [PSTAT] split, the FPS
+ * caption in a window title -- reads that zero as an answer.  This core is hosted, so it
+ * installs the host's monotonic clock instead: monotonic because a wall-clock step (NTP, the
+ * user changing the date) must not move a measured interval backwards, and microseconds
+ * truncated to uint32 because that is the ~71 min window every caller already assumes.
+ *
+ * get_tim() stays on gettimeofday because the spec asks `SYSTIME` for the wall clock; the two
+ * are answering different questions and are not interchangeable. */
+uint32_t btron_render_perf_us(void) {
+    struct timespec ts;
+    if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0) return 0;
+    return (uint32_t)(((uint64_t)ts.tv_sec * 1000000u) + ((uint64_t)ts.tv_nsec / 1000u));
+}
+
 void dly_tsk(W dlytim) {
+    /* Record the wait, so `ps` can tell an app worker that is idle until its next frame from
+     * one that is burning CPU.  Every GL app task spends its life in here -- inval_wnd() plus
+     * dly_tsk() is the whole heartbeat -- so without this the STAT column would say RUN for
+     * all of them and say nothing.  Threads the kernel did not create (main(), the host SDL
+     * thread) have no row, and nothing is recorded for them. */
+    ITRON_TASK *tsk = tsk_self();
+    if (tsk) tsk->sleeping = TRUE;
+
     if (dlytim > 0) {
         struct timespec ts;
         ts.tv_sec = dlytim / 1000;
         ts.tv_nsec = (dlytim % 1000) * 1000000L;
         nanosleep(&ts, NULL);
     }
+
+    if (tsk) tsk->sleeping = FALSE;
 }
 
 /* T-Kernel function aliases */

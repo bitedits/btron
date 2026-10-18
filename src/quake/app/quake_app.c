@@ -207,6 +207,7 @@ WND *open_quake_window(int x, int y, int width, int height) {
     ctsk.task    = quake_task_fn;
     ctsk.itskpri = 10;
     ctsk.stksz   = 16384;
+    ctsk.name    = "quake_task";   /* what `ps` shows; see T_CTSK.name */
 
     s_quake_tskid = cre_tsk(&ctsk);
     if (s_quake_tskid > 0) {

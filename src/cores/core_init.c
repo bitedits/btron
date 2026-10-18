@@ -132,3 +132,81 @@ void sys_mouse_click(H x, H y) {
     (void)x; (void)y;
 #endif
 }
+
+/* ═══════════════════════════════════════════════════════════════════
+ * InterCore worker census (include/btron/itron.h)
+ * ═══════════════════════════════════════════════════════════════════ */
+
+/* The default answer of a core that keeps no task table it can walk.  Weak, so a core with
+ * one overrides it -- the same pair core_smp.c already uses for g_num_cpus.  It returns
+ * "cannot answer", not "no tasks": a shell that printed an empty table would be claiming
+ * that the system has no workers, which is a different fact and a false one. */
+__attribute__((weak)) W btron_list_tasks(BTRON_TSK_ROW *out, W max) {
+    (void)out; (void)max;
+    return BTRON_TSK_NOWALK;
+}
+
+/* Hand-rolled writers, because the file that owns them has to work on the freestanding
+ * targets, where there is no printf to format a row with. */
+static void tsk_put(char *out, W cap, W *n, const char *s) {
+    while (*s && *n < cap - 1) out[(*n)++] = *s++;
+}
+
+static void tsk_num(char *out, W cap, W *n, uint32_t v, int hex, int width, int lpad) {
+    char     buf[16];
+    W        b = 0;
+    do {
+        uint32_t d = v % (hex ? 16u : 10u);
+        buf[b++] = (char)(d < 10u ? '0' + d : 'a' + (d - 10u));
+        v /= (hex ? 16u : 10u);
+    } while (v && b < 16);
+    while (hex && b < width) buf[b++] = '0';
+    W pad = width - b;
+    if (lpad) while (pad-- > 0 && *n < cap - 1) out[(*n)++] = ' ';
+    while (b > 0 && *n < cap - 1) out[(*n)++] = buf[--b];
+    if (!lpad) while (pad-- > 0 && *n < cap - 1) out[(*n)++] = ' ';
+}
+
+/* One `ps` row, laid out in the columns both shells have always shown:
+ *   PID  TASK  STAT  ENTRY  PRI
+ * `core` is not printed: no core here can say which CPU a task is on, and the old hardcoded
+ * table invented one.  The entry address is printed even when there is a name, because the
+ * name is the author's claim and the address is the kernel's.
+ *
+ * Returns 1 when it wrote a row, 0 when `idx` is past the end of the table, and
+ * BTRON_TSK_NOWALK when this core cannot answer at all -- the distinction the shells print,
+ * because "there are none" and "nobody knows" are different claims about the machine. */
+#define BTRON_TASK_ROW_WINDOW 16
+W btron_task_row_text(W idx, char *out, W cap) {
+    BTRON_TSK_ROW rows[BTRON_TASK_ROW_WINDOW];
+    W             n = 0, got;
+
+    if (!out || cap < 2 || idx < 0) return 0;
+    if (idx >= BTRON_TASK_ROW_WINDOW) return 0;
+
+    got = btron_list_tasks(rows, idx + 1);
+    if (got == BTRON_TSK_NOWALK) return BTRON_TSK_NOWALK;
+    if (got <= idx) return 0;
+
+    {
+        const BTRON_TSK_ROW *rp = &rows[idx];
+        tsk_num(out, cap, &n, (uint32_t)(rp->tskid < 0 ? 0 : rp->tskid), 0, 3, 1);
+        tsk_put(out, cap, &n, "   ");
+        tsk_put(out, cap, &n, rp->name ? rp->name : "(unnamed)");
+        /* Pad to column 22 rather than to a 12-wide field: "glgears_task" is twelve characters
+         * long, and at that width the name would run into STAT with no space between them.
+         * A name longer than the field still overflows it -- the row keeps its columns for the
+         * names this tree uses, and `ENTRY` after it is what identifies an unfamiliar one. */
+        while (n < 22 && n < cap - 1) out[n++] = ' ';
+        tsk_put(out, cap, &n,
+                rp->state == BTRON_TSK_RUN   ? "RUN  " :
+                rp->state == BTRON_TSK_SLEEP ? "SLEEP" :
+                rp->state == BTRON_TSK_DEAD  ? "DEAD " : "NEW  ");
+        tsk_put(out, cap, &n, " 0x");
+        tsk_num(out, cap, &n, (uint32_t)(uintptr_t)rp->entry, 1, 8, 0);
+        tsk_put(out, cap, &n, "  pri ");
+        tsk_num(out, cap, &n, (uint32_t)(rp->pri < 0 ? 0 : rp->pri), 0, 2, 0);
+        out[n] = '\0';
+    }
+    return 1;
+}

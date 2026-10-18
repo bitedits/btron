@@ -63,7 +63,33 @@ typedef struct WND {
      * re-record it (see wnd_gl_layer_take()).  Appended after img_valid so every offset above
      * it is unchanged. */
     BOOL  gl_layer;
+    /* This window's own OpenGL surface, owned by src/gl/egl_surface.c: set by
+     * egl_create_window_surface() and cleared by egl_destroy_surface().  It is a
+     * `void*` here so the window manager still compiles and links on targets that have no GL
+     * stack at all; only the bridge knows the type.
+     *
+     * The reason the window carries it is the one defect it closes: every OpenGL window is
+     * painted by the compositor's walk below, and the GL backends keep their "current context"
+     * in one place.  Without a per-window handle, an app that never binds -- and XMB and
+     * glgears never did -- drew into whichever context the previous window left current, so
+     * XMB's glEnable(GL_BLEND) and fractional glColor4f landed in Quake's context and every
+     * wall Quake painted afterwards inherited them.  Appended after gl_layer so every offset
+     * above it is unchanged. */
+    void *gl_surf;
 } WND;
+
+/* The compositor's OpenGL binding seam, registered by the GL surface bridge.
+ *
+ * The guarantee it installs is one sentence: when the compositor calls a window's paint
+ * callback, that window's own GL context is current.  Apps do not have to remember to bind,
+ * and one app can no longer be affected by another's leftover state.
+ *
+ * It is a registered pointer rather than a direct call because src/window/wnd.c links into
+ * every target and several host test suites, while src/gl/egl_surface.c does not: a hard
+ * reference would break those links.  A target with no GL stack simply never registers, and
+ * the compositor paints exactly as it did before. */
+typedef void (*WndGLBind)(WND *wnd);
+void wnd_set_gl_bind(WndGLBind bind);
 
 ER   init_wnd_mgr(GDEV *screen_dev);
 WND* opn_wnd(const char *title, H x, H y, H w, H h, UW attr);
@@ -73,6 +99,13 @@ ER   mov_wnd(WND *wnd, H x, H y);
 ER   rsz_wnd(WND *wnd, H w, H h);
 ER   wrsz_wnd(WND *wnd, const RECT *r);
 ER   inval_wnd(WND *wnd);
+
+/* Replace a window's caption at run time.  Copies `title` into the 64-byte
+ * caption buffer (truncating), grows the compact tab width ONCE to hold the
+ * widest text seen so a live-updating caption (e.g. an FPS readout) stops
+ * re-flowing the title bar, and invalidates just the tab so the frame redraws
+ * without forcing a client repaint.  Returns E_PAR on a null window/title. */
+ER   wnd_set_title(WND *wnd, const char *title);
 
 /* App/shell-driven damage accumulator.  inval_wnd() and desktop code add rects
  * they repaint; wnd_take_inval_damage() removes and returns their union so the

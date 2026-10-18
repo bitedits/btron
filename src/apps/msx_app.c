@@ -716,6 +716,7 @@ static WND *msx_open(const char *rom_name)
     ctsk.task    = msx_task;
     ctsk.itskpri = 10;
     ctsk.stksz   = 16384;
+    ctsk.name    = "msx_task";    /* what `ps` shows; see T_CTSK.name */
     s_tsk = cre_tsk(&ctsk);
     if (s_tsk > 0) sta_tsk(s_tsk, 0);
 

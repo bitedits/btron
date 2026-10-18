@@ -52,6 +52,13 @@ static int s_gl_cover_merged;   /* adds the list refused because an earlier rect
 static void wnd_mgr_window_destroyed(WND *wnd);
 static void wnd_inval_rect(const RECT *r);
 
+/* The GL surface bridge's binder, installed by wnd_set_gl_bind().  NULL on every target and
+ * suite that links no OpenGL stack, which is why this is a registered pointer and not a call:
+ * see the header comment on WndGLBind. */
+static WndGLBind s_gl_bind = NULL;
+
+void wnd_set_gl_bind(WndGLBind bind) { s_gl_bind = bind; }
+
 ER init_wnd_mgr(GDEV *screen_dev) { if (!screen_dev) return E_PAR;
     g_screen_dev = screen_dev;
     g_wnd_head = NULL;
@@ -479,6 +486,27 @@ ER inval_wnd(WND *wnd) {
     return E_OK;
 }
 
+ER wnd_set_title(WND *wnd, const char *title) {
+    if (!wnd || !title) return E_PAR;
+
+    int i = 0;
+    for (; i < 63 && title[i]; i++) wnd->title[i] = title[i];
+    wnd->title[i] = '\0';
+
+    /* Grow-only tab width: reserve for the widest caption seen so far.  A live
+     * FPS readout pads its number to a fixed field, so the very first update
+     * (which already carries the "999 FPS" worst case) sets the width once and
+     * every later update fits it -- the title bar never re-flows frame to frame. */
+    H need = calculate_title_display_width(wnd->title) + 48;
+    if (need < 100) need = 100;
+    if (need > wnd->tab_width) wnd->tab_width = need;
+
+    /* Repaint the tab only; the client image is untouched. */
+    RECT tr;
+    if (wget_tab_rect(wnd, &tr) == E_OK) wnd_inval_rect(&tr);
+    return E_OK;
+}
+
 /* TRUE when a composite over `damage` cannot be a pure pixmap blit. */
 BOOL wnd_damage_needs_paint(const RECT *damage) {
     if (!damage) return FALSE;
@@ -745,6 +773,14 @@ void redraw_all_windows_clip(const RECT *damage, BOOL blit_only) {
 
         if (records) {
             t_mark = btron_render_perf_us();
+            /* Bind this window's own GL context before handing it to the app, so the callback
+             * cannot inherit the previous window's.  Keyed on `gl_surf`, not on `gl_layer`:
+             * the software backends need a per-window context exactly as much as the GS does,
+             * and a window with no surface has nothing to bind.  Cheap by construction -- the
+             * virgl backend swaps a pointer and TinyGL's resize already returns when the array
+             * and size are unchanged, so a window that paints alone pays nothing extra and only
+             * a genuine switch between two GL windows re-opens a raster buffer. */
+            if (s_gl_bind && wnd->gl_surf) s_gl_bind(wnd);
             wnd->paint(wnd, wnd->dev);
             t_paint += btron_render_perf_us() - t_mark;
             wnd->img_valid = TRUE;

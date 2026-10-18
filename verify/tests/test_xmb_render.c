@@ -99,10 +99,35 @@ ID cre_tsk(const T_CTSK *pk) { (void)pk; return -1; }   /* no task: the test dri
 ER sta_tsk(ID id, VW exinf) { (void)id; (void)exinf; return 0; }
 ER wup_tsk(ID id) { (void)id; return 0; }
 
+/* egl_surface.c calls these two through the window system, which this link stubs, so the stubs
+ * have to do what the real ones do rather than nothing: the FPS readout decides whether the app
+ * renamed its own caption by comparing it against what it last wrote, and that only works if the
+ * caption this link hands back is the caption it set.  The readout itself never fires here --
+ * `btron_render_perf_us()` above is the constant 0, and an overlay with no elapsed time between
+ * frames marks itself dead instead of printing a division by zero. */
+ER wnd_set_title(WND *wnd, const char *title)
+{
+    if (!wnd || !title) return E_PAR;
+    int i = 0;
+    for (; i < 63 && title[i]; i++) wnd->title[i] = title[i];
+    wnd->title[i] = '\0';
+    return E_OK;
+}
+
+/* The real binder lives in egl_surface.c and the compositor keeps it; here it is kept by the
+ * test so paint_one() can honour the same contract wnd.c does -- bind the window's own GL
+ * context, then call its paint.  Without that line this harness paints every window on whatever
+ * context happened to be current, which is exactly the assumption that let the XMB's atlas bake
+ * into the default context and still be seen at paint time.  Keeping the binder is what lets
+ * this test notice a per-window-context regression at all. */
+static WndGLBind g_gl_bind;
+void wnd_set_gl_bind(WndGLBind bind) { g_gl_bind = bind; }
+
 WND* opn_wnd(const char *title, H x, H y, H w, H h, UW attr)
 {
-    (void)title; (void)x; (void)y; (void)attr;
+    (void)x; (void)y; (void)attr;
     memset(&g_wnd, 0, sizeof(WND));
+    wnd_set_title(&g_wnd, title);
     memset(g_fb, 0, sizeof(g_fb));
     g_dev.width  = (H)w;
     g_dev.height = (H)h;
@@ -460,6 +485,10 @@ static void show_preview(const char *caption)
 static void paint_one(void)
 {
     g_clock += 16;
+    /* wnd.c's paint path, reproduced: bind this window's own GL context before its paint
+     * callback runs, so an app that uploaded textures outside a paint has to have uploaded
+     * them into this context to be drawn with them. */
+    if (g_gl_bind && g_wnd.gl_surf) g_gl_bind(&g_wnd);
     if (g_wnd.paint) g_wnd.paint(&g_wnd, &g_dev);
 }
 

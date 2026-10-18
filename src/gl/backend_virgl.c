@@ -1034,8 +1034,17 @@ static void virgl_normal3f(GLfloat x, GLfloat y, GLfloat z) {
     s_cur_nx = x; s_cur_ny = y; s_cur_nz = z;
 }
 
+/* glColor3f sets the alpha too, to 1.0 -- the same law src/gl/tinygl/api.c:76 states as
+ * `glColor3f(x,y,z) { glColor4f(x,y,z,1); }`.  Leaving the previous alpha in place made the
+ * two backends disagree about one call, and it is the reason a Quake level renders with
+ * translucent walls under virgl and solid walls under TinyGL: the brush painter only ever
+ * calls glColor3f, so whatever alpha the last call left behind is the alpha every wall
+ * vertex carries.  That is defence in depth -- the real leak was one window painting into
+ * another window's context -- but the spec is the spec, and only glColor4f may carry a
+ * fractional alpha. */
 static void virgl_color3f(GLfloat r, GLfloat g, GLfloat b) {
     s_cur_r = r; s_cur_g = g; s_cur_b = b;
+    s_cur_a = 1.0f;
 }
 
 /* glColor4f carries the alpha every later vertex keeps until the next call,

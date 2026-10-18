@@ -280,6 +280,26 @@ static void send_image_stream(const void *src, uint32_t qwc)
     }
 }
 
+/* Rung 20y's bill, and the reason it is paid here rather than at the cut.
+ *
+ * A rect that is not the canvas's full width cannot be streamed as one buffer, because Host->Local
+ * IMAGE carries no row pitch: the loop below restarts the DMA for every row, and a restart is a
+ * blocking round trip -- ps2_gs_gif_send() writes CHCR and spins on STR.  Cutting the layer's rect out
+ * of a band leaves exactly two such rects, 4 px wide and 500 rows tall, so the pass that skips
+ * 384,000 px of canvas pays for 1,000 row-restarts instead of 536: measured on the `upload=` column
+ * as 4,498 us for the uncut band and 7,348 us for the cut one, the refund of 384,000 pixels of GIF
+ * traffic swamped by 500 extra round trips each way.
+ *
+ * The restart is bought by the missing pitch, so the cure is to supply one: gather a run of rows into
+ * a contiguous staging buffer and hand the GS one setup plus one stream for that run, which is the
+ * same shape the full-width path has always used and therefore the same encoders, not a second
+ * spelling of them.  The gather is only worth doing while the rect is narrow -- above
+ * PS2_GS_STAGE_MAX_QWC the copy moves more bytes than the transfers it saves cost, and a wide band's
+ * rows are already ~200 quadwords per restart, which is why the full-width case above never gathers
+ * at all and this branch is bounded by width rather than by area. */
+#define PS2_GS_STAGE_QWC      512u     /* the buffer: 8 kB of contiguous quadwords */
+#define PS2_GS_STAGE_MAX_QWC   16u     /* a rect up to 64 px wide gathers; wider ones stream per row */
+
 void ps2_gs_upload(int x, int y, int w, int h)
 {
     if (w <= 0 || h <= 0) return;
@@ -302,9 +322,38 @@ void ps2_gs_upload(int x, int y, int w, int h)
         send_trx_setup(0, y, w, h);
         send_image_stream(canvas + (size_t)y * PS2_SCREEN_PITCH,
                           (uint32_t)((size_t)w * (size_t)h / 4u));
+    } else if (w / 4 <= (int)PS2_GS_STAGE_MAX_QWC) {
+        static uint64_t stage[PS2_GS_STAGE_QWC * 2] __attribute__((aligned(16)));
+        uint32_t *to = (uint32_t *)UNCACHED(stage);
+        const uint32_t *from = (const uint32_t *)(canvas + (size_t)y * PS2_SCREEN_PITCH
+                                                                + (size_t)x * 4u);
+        const uint32_t qwc = (uint32_t)(w / 4);
+        const uint32_t words = qwc * 4u;
+        const uint32_t row_words = PS2_SCREEN_PITCH / 4u;
+        const uint32_t per = PS2_GS_STAGE_QWC / qwc;
+        uint32_t row = 0u;
+
+        /* The row pointer advances by the canvas's own pitch, which is the one fact the GIF stream
+         * cannot carry; the chunk it fills is contiguous, which is what makes one setup and one
+         * stream cover it. */
+        while (row < (uint32_t)h) {
+            uint32_t n = (uint32_t)h - row;
+            uint32_t i;
+            if (n > per) n = per;
+            for (i = 0u; i < n; i++) {
+                uint32_t *dst = to + (size_t)i * words;
+                uint32_t k;
+                for (k = 0u; k < words; k++) dst[k] = from[k];
+                from += row_words;
+            }
+            send_trx_setup(x, y + (int)row, w, (int)n);
+            send_image_stream(stage, qwc * n);
+            row += n;
+        }
     } else {
-        /* Host->Local IMAGE data carries no row pitch, so a narrow rectangle
-         * has to be uploaded a row at a time. */
+        /* Host->Local IMAGE data carries no row pitch, so a wide rectangle has to be uploaded a row
+         * at a time: gathering it would copy the band it is made of, and the copy costs more than the
+         * restarts it saves. */
         const uint8_t *src = canvas + (size_t)y * PS2_SCREEN_PITCH + (size_t)x * 4u;
         uint32_t qwc = (uint32_t)(w / 4);
         for (int row = 0; row < h; row++, src += PS2_SCREEN_PITCH) {

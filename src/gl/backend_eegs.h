@@ -51,13 +51,77 @@ typedef struct {
 /* Which of the three state flags the triangle carries: Gouraud colour, a texture read, and the
  * ALPHA register's blend.  They are the PRIM word's IIP, TME and ABE, and they are the only
  * primitive state a recorded triangle needs, because the environment packet owns everything else.
+ *
+ * `brighten` is the fourth, and it is a question ABE cannot ask.  The GS's blender computes
+ * `(A - B) * alpha + D` with a SCALAR alpha, so it has no per-channel destination modulation, and the
+ * XMB ribbon's `glBlendFunc(GL_DST_COLOR, GL_ONE)` -- `dst * (1 + src)` -- has no ABE-only encoding:
+ * mapped onto source-over with the ribbon's As = 0xff it becomes `2*src - dst`, which is why the wave
+ * reads as the grey luminance map itself instead of a brightened gradient.  Rung 28 measured the law
+ * that does work -- `(Cd - 0) * As >> 7 + Cd` = `Cd * (1 + As/128)`, hue preserved exactly -- and it
+ * rides in the second drawing context, so `brighten` selects CTXT and tells the vertex emitter to put
+ * the colour's brightness where the scalar alpha lives.  See `ps2_gsalpha_probe()` in
+ * src/cores/core_ps2.c for the measurement and the divisor.
  */
 typedef struct {
     unsigned smooth : 1;      /* IIP: interpolate the three colours, else the first one */
     unsigned textured : 1;    /* TME */
     unsigned blended : 1;     /* ABE */
+    unsigned brighten : 1;    /* the caller's blend is dst*(1+src): CTXT=1, brightness in As */
     unsigned depth_test : 1;  /* Z test */
 } eegs_tri_state_t;
+
+/* LANE 20 rung 22: one PRIM declaration described, which is the frame broken into its layers.
+ *
+ * Every counter the [GSTS] row carries is a FRAME total, and a frame total cannot answer the
+ * question the page now poses: rung 21b's map of the XMB's client came back 48.8% the word
+ * 0x00000000 and the rest 1-px-tall horizontal dashes, and both of those are perfectly consistent
+ * with a stream whose 25 chains are individually fine and individually in the wrong order, drawn
+ * with ABE clear, or of the wrong primitive type.  `colchg=1852/4138`, `iip=24/25` and `tme=22` say
+ * nothing about WHICH chain is the gradient, how many vertices it has, what box it reaches, or
+ * whether it blends -- and those four answers are one file apart from each other.
+ *
+ * So this records the one thing that has a boundary the GS agrees with: `select_prim()`'s real moves
+ * (LANE 12e's word-compare already closes a group at each), and everything the stream carries until
+ * the next one.  `bbox` is in the same local pixels `gs_rec_vertex()` is handed, i.e. the client's
+ * own origin, so it reads against the [GSLIVE] census's client rect without a conversion.
+ *
+ * The table is fixed and small on purpose: it is .bss in a target whose image budget has already
+ * refused one 5 MB allocation, and 40 declarations is more than a frame makes today (`pchg=25`).
+ * Declarations past the table are counted, not folded in, so a busier frame cannot silently
+ * re-number the rows the log prints. */
+#define EEGS_CHAIN_MAX 40u
+
+typedef struct {
+    uint32_t prim;            /* the PRIM word as sent: OP[2:0] IIP[3] TME[4] FGE[5] ABE[6] AA1[7] FST[8] CTXT[9] */
+    uint32_t nverts;          /* vertices emitted into this chain */
+    uint32_t nprims;          /* primitives submitted into it -- the unit depends on OP, which is why both are here */
+    int32_t  l, t, r, b;      /* bbox in local px, inclusive; l > r when it carried no vertex */
+    uint32_t c0, clast;       /* first and last RGBA word this chain handed the stream */
+} eegs_chain_rec;
+
+/* Chains closed by the frame that is currently staged.  Valid after `eegs_frame_end()`, which the
+ * present calls before it hands the groups to the GIF, so a reader at the [GSTS] row sees the whole
+ * frame.  `eegs_chain_dropped()` is the declarations past `EEGS_CHAIN_MAX`. */
+uint32_t eegs_chain_count(void);
+uint32_t eegs_chain_dropped(void);
+const eegs_chain_rec *eegs_chain_at(uint32_t i);
+
+/* LANE 20 rung 24: bisect the frame by chain.
+ *
+ * The rung 21c/21d maps give one full-width horizontal edge at the client's local y=48 and a page
+ * below it that is either the word 0x00000000 or a mixed-alpha smear.  Two laws produce that edge and
+ * no map can tell them apart: the whole-client triangles never rasterise past it, or they do and a
+ * LATER chain blends the destination back down to nothing (ALPHA here is (Cs-Cd)*As+Cd, so a chain
+ * whose source is black with a partial alpha multiplies the destination toward 0, alpha byte
+ * included).  So this refuses the stream at a chain boundary: with the limit at N, the frame's chains
+ * 0..N-1 are recorded and sent and everything declared after them is thrown away before it reaches
+ * the recorder -- the same seam, one variable.
+ *
+ * 0 (the compiled-in value) refuses nothing, which is every production build; the dial lives in the
+ * bench because a desktop that stops drawing its own icons is not a desktop. */
+void     eegs_chain_set_limit(uint32_t n);
+uint32_t eegs_chain_limit(void);
+uint32_t eegs_chain_refused(void);     /* declarations this frame threw away */
 
 /* A frame starts here: the recorder's counters are per-frame and its open group must not survive
  * into the next one.  The sink is the caller's because it is the presentation seam's business, not

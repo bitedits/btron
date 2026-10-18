@@ -37,9 +37,17 @@ static BOOL s_wnd_inval_valid = FALSE;
  * that records. */
 static RECT s_gl_client = { 0, 0, 0, 0 };
 static BOOL s_gl_pending = FALSE;
+/* The last rect the window that is the layer NOW had, kept for the passes where that window is on
+ * the screen but its device is momentarily gone.  The GS owns those pixels either way, so the
+ * present path must keep cutting them out of the canvas upload; a stale rect here costs one frame of
+ * desktop, while a missing one costs the picture.  Keyed by window, so a different layer can never
+ * inherit it.  See wnd_gl_layer_rect(). */
+static RECT s_gl_rect_last = { 0, 0, 0, 0 };
+static WND *s_gl_rect_last_wnd;
 static RECT s_gl_cover[WND_GL_COVER_MAX];
 static int s_gl_cover_n;
 static int s_gl_cover_dropped;
+static int s_gl_cover_merged;   /* adds the list refused because an earlier rect already covered them */
 
 static void wnd_mgr_window_destroyed(WND *wnd);
 static void wnd_inval_rect(const RECT *r);
@@ -219,6 +227,10 @@ ER cls_wnd(WND *wnd) {
         s_gl_pending = FALSE;
         s_gl_cover_n = 0;
         s_gl_cover_dropped = 0;
+        s_gl_cover_merged = 0;
+        /* The rect cache is keyed by window, and this window is about to be freed -- a later layer
+         * allocated at the same address must not inherit the dead one's rect. */
+        if (s_gl_rect_last_wnd == wnd) s_gl_rect_last_wnd = NULL;
     }
 
     if (wnd->dev) cls_dev(wnd->dev);
@@ -360,6 +372,50 @@ static WND *find_gl_layer(void) {
 
 WND* wnd_gl_layer(void) { return find_gl_layer(); }
 
+/* The screen rect a layer window's client covers -- the one rect the GS owns.  It is computed
+ * from the window the way the composite computes it, in one place, because the present path has
+ * to ask the same question on a pass that did NOT re-record the layer: the composite's copy is
+ * only written when the paint callback runs, and a band that reaches the layer's rows without
+ * repainting it is exactly the pass that must be told where the canvas has no picture. */
+static BOOL gl_client_rect(const WND *wnd, RECT *out) {
+    if (!wnd || !wnd->visible || !wnd->gl_layer) return FALSE;
+    if (!wnd->dev || !wnd->dev->pixels) return FALSE;
+    const H title_h = (wnd->attr & WND_ATTR_TITLE) ? WND_TITLE_HEIGHT : 0;
+    const H border  = (wnd->attr & WND_ATTR_BORDER) ? 4 : 0;
+    const H dest_x  = wnd->bounds.left + border;
+    const H dest_y  = wnd->bounds.top + title_h + border;
+
+    out->left   = dest_x;
+    out->top    = dest_y;
+    out->right  = dest_x + wnd->dev->width;
+    out->bottom = dest_y + wnd->dev->height;
+    return TRUE;
+}
+
+BOOL wnd_gl_layer_rect(RECT *out) {
+    WND *wnd = find_gl_layer();
+
+    if (!wnd) {
+        s_gl_rect_last_wnd = NULL;
+        return FALSE;
+    }
+    if (gl_client_rect(wnd, out)) {
+        s_gl_rect_last = *out;
+        s_gl_rect_last_wnd = wnd;
+        return TRUE;
+    }
+    /* The window is on the screen and is a layer, but its device is not there this instant (freed
+     * and reallocated across a re-bake, or a resize in flight).  The GS does not stop owning those
+     * pixels because the device blinked: the ink from the last stream is still on the page, and the
+     * canvas holds no picture of it.  The last rect this window provably had is the one the present
+     * path must keep cutting, and it is kept per window so a different layer never inherits it. */
+    if (s_gl_rect_last_wnd == wnd) {
+        *out = s_gl_rect_last;
+        return TRUE;
+    }
+    return FALSE;
+}
+
 BOOL wnd_gl_layer_take(RECT *client_out) {
     if (!s_gl_pending) return FALSE;
     if (client_out) *client_out = s_gl_client;
@@ -369,6 +425,7 @@ BOOL wnd_gl_layer_take(RECT *client_out) {
 
 void wnd_gl_cover_add(const RECT *r) {
     RECT c;
+    int i;
     if (!r || r->right <= r->left || r->bottom <= r->top) return;
     /* No layer: nothing was buried, so there is nothing to re-upload and the list must not
      * collect a rect no present path will ever ask for. */
@@ -383,15 +440,33 @@ void wnd_gl_cover_add(const RECT *r) {
         if (c.bottom > g_screen_dev->height) c.bottom = g_screen_dev->height;
     }
     if (c.right <= c.left || c.bottom <= c.top) return;
+    /* An opaque rect already on the list that contains this one re-lays these very pixels after
+     * the stream, so a second upload of the same rows would cost the bus and change the page not
+     * at all.  Measured cost of not having this test: one open Tracker menu put the same rect on
+     * the list twice per pass -- `global_menu_get_open_rect()` answers the Tracker's rect while
+     * the Tracker menu is open, and workbench_cover_overlays() asks both getters -- and the census
+     * counted 383,748 px laid where 95,937 distinct were needed. */
+    for (i = 0; i < s_gl_cover_n; i++) {
+        const RECT *e = &s_gl_cover[i];
+        if (e->left <= c.left && e->top <= c.top && e->right >= c.right && e->bottom >= c.bottom) {
+            s_gl_cover_merged++;
+            return;
+        }
+    }
     if (s_gl_cover_n >= WND_GL_COVER_MAX) { s_gl_cover_dropped++; return; }
     s_gl_cover[s_gl_cover_n++] = c;
 }
 
 int wnd_gl_cover_take(wnd_gl_cover *out) {
     int n = s_gl_cover_n;
-    if (out) { out->r = s_gl_cover; out->n = n; out->dropped = s_gl_cover_dropped; }
+    if (out) {
+        out->r = s_gl_cover; out->n = n;
+        out->dropped = s_gl_cover_dropped;
+        out->merged = s_gl_cover_merged;
+    }
     s_gl_cover_n = 0;
     s_gl_cover_dropped = 0;
+    s_gl_cover_merged = 0;
     return n;
 }
 
@@ -676,11 +751,9 @@ void redraw_all_windows_clip(const RECT *damage, BOOL blit_only) {
             if (wnd->gl_layer) {
                 s_gl_pending = TRUE;
                 /* Screen rect of the client area, in the units the environment packet wants:
-                 * the window's origin is XYOFFSET's page point and the clip is this rect. */
-                s_gl_client.left = dest_x;
-                s_gl_client.top = dest_y;
-                s_gl_client.right = dest_x + wnd->dev->width;
-                s_gl_client.bottom = dest_y + wnd->dev->height;
+                 * the window's origin is XYOFFSET's page point and the clip is this rect.
+                 * One formula, shared with wnd_gl_layer_rect(). */
+                gl_client_rect(wnd, &s_gl_client);
             }
         }
         /* The GS draws these pixels, into the same VRAM this canvas was just uploaded to.

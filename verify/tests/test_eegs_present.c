@@ -228,6 +228,7 @@ static void tri(int32_t x_px, int32_t y_px, unsigned smooth)
     st.smooth = smooth;
     st.textured = 0u;
     st.blended = 0u;
+    st.brighten = 0u;
     st.depth_test = 0u;
     eegs_triangle(v, st);
 }
@@ -255,6 +256,7 @@ static void tri_rgba(int32_t x_px, int32_t y_px, unsigned smooth, uint32_t rgba)
     st.smooth = smooth;
     st.textured = 0u;
     st.blended = 0u;
+    st.brighten = 0u;
     st.depth_test = 0u;
     eegs_triangle(v, st);
 }
@@ -847,6 +849,8 @@ static void draw_two_groups_moved_shape(void)
     st.smooth = 1u;
     st.textured = 0u;
     st.blended = 0u;
+    st.brighten = 0u;              /* named, like every other field: `st` is a local */
+    st.depth_test = 0u;
     eegs_triangle(v, st);
     tri(30, 40, 0u);
 }
@@ -863,6 +867,8 @@ static void draw_one_translated(void)
     st.smooth = 1u;
     st.textured = 0u;
     st.blended = 0u;
+    st.brighten = 0u;              /* named, like every other field: `st` is a local */
+    st.depth_test = 0u;
     eegs_triangle(v, st);
 }
 
@@ -938,6 +944,76 @@ static void test_ident_lanes(void)
     eqw("and so did its shape -- the delta between two of its vertices changed", b.ident_shape, 0u);
 }
 
+/* ── The two ALPHA laws, on the bus (rung 28) ──────────────────────────────────────
+ *
+ * The rest of this file counts packets in the SHAPE the single environment puts on the bus, so it runs
+ * with the dual context off.  This section is the shipping configuration: two drawing contexts, one
+ * ALPHA register each, because the two blend laws the applications ask for -- the icons' source-over
+ * and the ribbon's `dst * (1 + src)` -- cannot share one register, and PRIM's CTXT bit is what picks
+ * between them.  What the word-level gate has to prove is the pair the fix rests on: context 1 still
+ * carries source-over (NOT zero: a zero ALPHA register computes black, and the textured, blended quads
+ * that select context 1 are the ones that would paint it), and context 2 carries
+ * `gs_pack_alpha(CD, ZERO, AS, CD, 0)`, the word [GS28]'s M box measured as `dest * (1 + As/128)`.
+ *
+ * Everything else in the two contexts is a copy, and that is checked rather than assumed: CTXT moves
+ * FRAME, ZBUF, SCISSOR, TEST and XYOFFSET with it, so a context 2 that named a different page would
+ * draw the wave somewhere other than the ribbon's band. */
+static void test_dual_alpha_words(void)
+{
+    uint64_t *env;
+    int sent;
+
+    eegs_enable_dual_context(1);
+    dma_reset();
+    eegs_present_begin();
+    tri(100, 200, 1u);
+    eegs_present_end();
+    sent = eegs_present_send(&k_client);
+
+    check("with two contexts the environment is one dual packet",
+          s_calls == 1u + TRI_GROUPS && sent == (int)TRI_GROUPS);
+    if (s_calls < 1u + TRI_GROUPS) { eegs_enable_dual_context(0); return; }
+    env = s_keep[0];
+
+    eqw("the dual packet is 1 + 18 quadwords", s_keep_n[0], gs_draw_dual_env_qwc());
+    eqw("and its tag loops all eighteen AD writes", gs_nloop_of(env), GS_DUAL_ENV_NREG);
+
+    eqw("context 1's sixth register is ALPHA_1", gs_upper_of(env, 6u), (uint64_t)GS_GP_ALPHA_1);
+    eqw("context 2's is ALPHA_2, nine writes later",
+        gs_upper_of(env, 6u + GS_ENV_NREG), (uint64_t)GS_GP_ALPHA_2);
+
+    eqw("context 1 keeps the source-over law the icons and glyphs need",
+        gs_qw(env, 6u), gs_pack_alpha(GS_BLEND_CS, GS_BLEND_CD, GS_ALPHA_AS, GS_BLEND_CD, 0u));
+    eqw("context 2 is the measured destination-brighten law the ribbon needs",
+        gs_qw(env, 6u + GS_ENV_NREG),
+        gs_pack_alpha(GS_BLEND_CD, GS_BLEND_ZERO, GS_ALPHA_AS, GS_BLEND_CD, 0u));
+    check("and the two words are genuinely different registers -- one ALPHA cannot carry both laws",
+          gs_qw(env, 6u) != gs_qw(env, 6u + GS_ENV_NREG));
+
+    /* The copy, checked as a copy: same page, same window, same test. */
+    eqw("FRAME_2 names FRAME_1's page", gs_qw(env, 3u), gs_qw(env, 3u + GS_ENV_NREG));
+    eqw("ZBUF_2 names ZBUF_1's", gs_qw(env, 4u), gs_qw(env, 4u + GS_ENV_NREG));
+    eqw("SCISSOR_2 clips the same rect", gs_qw(env, 2u), gs_qw(env, 2u + GS_ENV_NREG));
+    eqw("XYOFFSET_2 puts (0,0) at the same client origin",
+        gs_qw(env, 1u), gs_qw(env, 1u + GS_ENV_NREG));
+    eqw("TEST_2 is TEST_1", gs_qw(env, 5u), gs_qw(env, 5u + GS_ENV_NREG));
+    eqw("and the textured trio stays zero, because no textured prim selects context 2",
+        gs_qw(env, 8u + GS_ENV_NREG), 0u);
+
+    /* The control: with one context this is the frame that made the wave grey -- one ALPHA word,
+     * source-over, and a ribbon that has nowhere to ask for its own law. */
+    eegs_enable_dual_context(0);
+    dma_reset();
+    eegs_present_begin();
+    tri(100, 200, 1u);
+    eegs_present_end();
+    (void)eegs_present_send(&k_client);
+    if (s_calls < 1u) { check("the single-context control still puts an environment out", 0); return; }
+    eqw("one context is the nine-write packet", s_keep_n[0], gs_draw_env_qwc());
+    eqw("and its only ALPHA is the source-over word",
+        gs_qw(s_keep[0], 6u), gs_pack_alpha(GS_BLEND_CS, GS_BLEND_CD, GS_ALPHA_AS, GS_BLEND_CD, 0u));
+}
+
 int main(void)
 {
     printf("==========================================================\n");
@@ -947,8 +1023,15 @@ int main(void)
            PS2_GIF_RING_CAP);
     printf("==========================================================\n");
 
+    /* Rung 28 ships the dual context, so this file's packet counts -- "a chain costs two groups",
+     * "the environment is `gs_draw_env_qwc()` quadwords" -- are the single-context shape's.  Ask for it
+     * once, here, rather than letting 40 rows each rediscover that the environment grew nine writes.
+     * `test_dual_alpha_words()` turns the shipping configuration back on for its own rows. */
+    eegs_enable_dual_context(0);
+
     test_env_then_primitives();
     test_env_fields();
+    test_dual_alpha_words();
     test_staging_copies();
     test_empty_frames();
     test_stage_capacity();

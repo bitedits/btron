@@ -59,6 +59,20 @@ static uint64_t s_prim_live;
 static int      s_prim_valid;
 static uint32_t s_prims;
 
+/* Rung 28: whether the PRIM the GS now holds asks for the destination-brighten law, i.e. whether its
+ * ABE and CTXT bits are both set, which is what `prim_word()` means by context 2 and what
+ * `eegs_present.c` programs there with `gs_pack_alpha(CD, ZERO, AS, CD, 0)`.
+ *
+ * It is read out of the live word rather than passed down with each vertex because the word IS the
+ * contract: `select_prim()`'s word compare is what keeps a 1,984-vertex ribbon inside one PRIM group,
+ * so the vertices of an open chain are drawn under the state that chain's word names -- and a rule
+ * taken from `st` at the call would be able to disagree with the register after a repeat, which is
+ * exactly the shape of the bug this whole lane exists to stop.  `emit_vertex()` consults it to move
+ * the colour's brightness into As, because that law's only input is the scalar alpha: the GS computes
+ * `(Cd - 0) * As >> 7 + Cd`, so a vertex's RGB never reaches the page and its brightness has to ride
+ * where the hardware looks. */
+static uint32_t s_brighten_live;
+
 static const gs_tex_t *s_tex_live;
 static uint32_t s_tex_switches;
 static uint32_t s_tex_missing;
@@ -213,7 +227,15 @@ static uint32_t s_grid_batch;
 static uint32_t s_grid_slow;
 static uint32_t s_grid_why;
 static uint32_t s_grid_over;
-static int      s_dual_context_en;
+/* Rung 28: on by default, because it is the only way the stream can carry both blend laws the in-tree
+ * applications ask for.  With one drawing context there is one ALPHA register, and the shipping word
+ * is source-over, `(Cs - Cd) * As >> 7 + Cd`; the XMB ribbon's `glBlendFunc(GL_DST_COLOR, GL_ONE)` is
+ * a different law -- `Cd * (1 + Cs)` -- and source-over with the ribbon's own As (0xfe) collapses to
+ * `2*Cs - Cd`, which is why the wave reads grey and its blue is erased.  Context 2 carries the measured
+ * brighten word ([GS28]'s M box: 1600/1600 px at dest*3/2 with As=64, divisor As/128) and `prim_word()`
+ * sends a brighten prim there; the toggle stays so an A/B run can put every law back into one register
+ * and show the grey again. */
+static int      s_dual_context_en = 1;
 
 void eegs_enable_dual_context(int enable)
 {
@@ -225,11 +247,103 @@ int eegs_is_dual_context(void)
     return s_dual_context_en;
 }
 
+/* LANE 20 rung 22: the frame broken into its layers, one record per real PRIM declaration.
+ *
+ * The three funnels are already the right seams and there are exactly three of them: `select_prim()`
+ * is the only place a chain begins (its word-compare is LANE 12e's, and a repeated word genuinely
+ * does not begin a group -- `gs_rec_prim()` is not called, so the recorder keeps the group open),
+ * `emit_vertex()` is the only place a vertex enters the stream (the immediate triangle, the batch
+ * strip's `emit_point()`, the textured quad, the line and the point all walk through it), and the
+ * `s_prims++` of each submitter is the only place a primitive completes.  So the table cannot be
+ * made to disagree with the [GSTS] row's `verts=`/`prims=`/`pchg=`: they count the same three calls.
+ *
+ * The bbox starts empty as `l > r` rather than as a huge rect because an empty chain has to be
+ * nameable as one -- `gs_rec_prim()` for a declaration that never gets a vertex sends nothing, and a
+ * record that claimed to cover the world would be the one lie this table cannot be forgiven. */
+#define EEGS_CHAIN_EMPTY ((int32_t)0x7FFFFFFF)
+
+static eegs_chain_rec s_chain[EEGS_CHAIN_MAX];
+static eegs_chain_rec s_chain_open;
+static uint32_t s_chain_n;
+static uint32_t s_chain_drop;
+static uint32_t s_chain_live;
+
+/* LANE 20 rung 24's dial.  `s_chain_refusing` is a flag rather than a comparison because a
+ * declaration whose PRIM word repeats the live one never reaches chain_begin() at all -- LANE 12e's
+ * word-compare keeps that chain open -- so "am I past the limit?" has to be remembered at the
+ * declaration that crossed it and applied to every vertex after it. */
+static uint32_t s_chain_limit;
+static uint32_t s_chain_opened;
+static uint32_t s_chain_refused;
+static uint32_t s_chain_refusing;
+
+void     eegs_chain_set_limit(uint32_t n) { s_chain_limit = n; s_chain_refusing = 0u; }
+uint32_t eegs_chain_limit(void)  { return s_chain_limit; }
+uint32_t eegs_chain_refused(void) { return s_chain_refused; }
+
+static void chain_begin(uint64_t prim)
+{
+    if (s_chain_live) {
+        if (s_chain_n < EEGS_CHAIN_MAX) s_chain[s_chain_n++] = s_chain_open;
+        else s_chain_drop++;
+    }
+    s_chain_open.prim = (uint32_t)prim;
+    s_chain_open.nverts = 0u;
+    s_chain_open.nprims = 0u;
+    s_chain_open.l = EEGS_CHAIN_EMPTY;
+    s_chain_open.t = EEGS_CHAIN_EMPTY;
+    s_chain_open.r = 0;
+    s_chain_open.b = 0;
+    s_chain_open.c0 = 0u;
+    s_chain_open.clast = 0u;
+    s_chain_live = 1u;
+    s_chain_opened++;
+}
+
+static void chain_vertex(const eegs_vertex_t *v)
+{
+    if (!s_chain_live) return;
+    if (s_chain_open.nverts == 0u) s_chain_open.c0 = v->rgba;
+    s_chain_open.clast = v->rgba;
+    if (s_chain_open.nverts == 0u || v->x_px < s_chain_open.l) s_chain_open.l = v->x_px;
+    if (s_chain_open.nverts == 0u || v->x_px > s_chain_open.r) s_chain_open.r = v->x_px;
+    if (s_chain_open.nverts == 0u || v->y_px < s_chain_open.t) s_chain_open.t = v->y_px;
+    if (s_chain_open.nverts == 0u || v->y_px > s_chain_open.b) s_chain_open.b = v->y_px;
+    s_chain_open.nverts++;
+}
+
+/* One primitive completed in the open chain.  Rung 24's flag is checked here rather than at the
+ * three submitters because it is the chain's record that has to stay honest: a refused chain's
+ * primitive counted into the last accepted one would print `verts=6 prims=2698`, and the reader
+ * compares this column against `verts=` to decide whether the geometry arrived. */
+static void chain_prim(void)
+{
+    if (s_chain_live && !s_chain_refusing) s_chain_open.nprims++;
+}
+
+uint32_t eegs_chain_count(void) { return s_chain_n; }
+uint32_t eegs_chain_dropped(void) { return s_chain_drop; }
+
+const eegs_chain_rec *eegs_chain_at(uint32_t i)
+{
+    return i < s_chain_n ? &s_chain[i] : 0;
+}
+
 static uint64_t prim_word(uint32_t op, const eegs_tri_state_t st)
 {
+    /* Rung 28: the two ALPHA laws the applications ask for are mutually exclusive in one register, so
+     * they live in two drawing contexts and PRIM's CTXT bit chooses between them -- context 1 is the
+     * source-over word every icon and glyph needs, context 2 is the brighten word the ribbon needs.
+     *
+     * A brighten prim is the only thing sent to context 2, and a TEXTURED prim never is, whatever its
+     * blend: CTXT selects the whole environment (FRAME, SCISSOR, TEST, CLAMP, TEX0, TEX1 as their _2
+     * forms), and `eegs_texture()` writes the _1 trio between vertex groups.  A textured primitive in
+     * context 2 would therefore sample a plane `TEX0_2` does not name -- so the gate is brighten AND
+     * untextured, and a textured blend stays in context 1 under source-over exactly as it did before
+     * this existed. */
     uint32_t ctxt = EEGS_CONTEXT;
-    if (s_dual_context_en) {
-        ctxt = st.blended ? 1u : 0u;
+    if (s_dual_context_en && st.brighten && !st.textured) {
+        ctxt = 1u;
     }
     return gs_pack_prim(op, st.smooth ? 1u : 0u, st.textured ? 1u : 0u,
                         st.blended ? 1u : 0u, ctxt, 0u);
@@ -242,6 +356,12 @@ static uint64_t prim_word(uint32_t op, const eegs_tri_state_t st)
  * s_prim_moves above) rather than trusted: the rate is what the group budget is spent on. */
 static void select_prim(uint64_t prim)
 {
+    /* Rung 28: the vertex colour's law follows the word, so it is taken from the word here and nowhere
+     * else.  Placed before the compare because a word that equals the live one describes the same law
+     * the open chain is already being drawn under, and a refusal below never emits a vertex at all --
+     * `s_chain_refusing` keeps the stream away from a chain this flag was set for. */
+    s_brighten_live = ((prim & (1ULL << 6)) != 0u && (prim & (1ULL << 9)) != 0u) ? 1u : 0u;
+
     if (s_prim_valid && s_prim_live == prim)
         return;
 
@@ -253,8 +373,20 @@ static void select_prim(uint64_t prim)
      * the client as one flat colour, and the only register between those two facts is IIP. */
     if (prim & (1ULL << 3)) s_prim_iip++;
     if (prim & (1ULL << 4)) s_prim_tme++;
+
+    /* Rung 24: past the dialled chain, the declaration is counted and dropped WITHOUT touching the
+     * recorder, so no group, no PRIM write and no vertex of it reaches the GIF.  The counters above
+     * stay before this test on purpose: `decl`/`iip`/`tme` keep describing the frame the application
+     * asked for, while [GSTS]'s `verts=`/`prims=` describe the frame the GS was given -- and the gap
+     * between the two, with the chain table above them, is this rung's whole reading. */
+    if (s_chain_limit != 0u && s_chain_opened >= s_chain_limit) {
+        s_chain_refused++;
+        s_chain_refusing = 1u;
+        return;
+    }
     s_prim_decl++;
 
+    chain_begin(prim);
     gs_rec_prim(prim);
     s_prim_live = prim;
     s_prim_valid = 1;
@@ -270,13 +402,47 @@ static void emit_vertex(const eegs_vertex_t *v)
 {
     float s = v->s;
     float t = v->t;
+    uint32_t rgba;
+
+    /* Rung 24's other half: a vertex whose declaration was refused must not slip in through a later
+     * word-compare hit -- LANE 12e's `s_prim_live == prim` early return keeps the LAST ACCEPTED
+     * chain open, so a refused chain that happens to ask for the same PRIM word would otherwise be
+     * recorded into it and painted under the accepted chain's shading. */
+    if (s_chain_refusing) return;
+    chain_vertex(v);
+    rgba = v->rgba;
+
+    /* Rung 28's second half.  Context 2 computes `(Cd - 0) * As >> 7 + Cd`: the destination is
+     * multiplied by a number the vertex's SCALAR alpha carries, and the vertex's own RGB is not read
+     * at all.  That is the GS's spelling of the application's `dst * (1 + src)`, and to reach it the
+     * brightness has to be moved out of the colour and into As -- `a/128` being the multiplier, so a
+     * source brightness of `b/255` is `As = b * 128 / 255`, rounded.
+     *
+     * One scalar can only carry one number, and the software law is per-channel.  The meshes this
+     * gate admits are grey -- the ribbon's luminance map, `R = G = B`, the reason its `c0` reads
+     * 0xfe121212 and not a blue -- so the maximum channel IS the brightness for them; a coloured
+     * brighten prim would be brightened by its brightest channel, which is why the model is set by
+     * the caller's blend factors and never guessed from the pixels here.
+     *
+     * The alpha the application supplied is deliberately discarded on this path: it is the reason the
+     * wave is grey today (As = 0xfe under source-over gives `2*Cs - Cd`, the blue erased), and under
+     * this law it would be read as a second brightness. */
+    if (s_brighten_live) {
+        uint32_t r = rgba & 0xFFu;
+        uint32_t g = (rgba >> 8) & 0xFFu;
+        uint32_t b = (rgba >> 16) & 0xFFu;
+        uint32_t max = r > g ? r : g;
+        if (b > max) max = b;
+        rgba = (rgba & 0x00FFFFFFu) | ((uint32_t)((max * 128u + 127u) / 255u) << 24);
+    }
+
     if (s_tex_live != 0 && (s_tex_live->tw_exp != 0 || s_tex_live->th_exp != 0)) {
         s = gs_float_scale_pow2(s, s_tex_live->tw_exp);
         t = gs_float_scale_pow2(t, s_tex_live->th_exp);
     }
-    gs_rec_color(v->rgba & 0xFFu, (v->rgba >> 8) & 0xFFu,
-                 (v->rgba >> 16) & 0xFFu, (v->rgba >> 24) & 0xFFu);
-    count_colour(v->rgba);
+    gs_rec_color(rgba & 0xFFu, (rgba >> 8) & 0xFFu,
+                 (rgba >> 16) & 0xFFu, (rgba >> 24) & 0xFFu);
+    count_colour(rgba);
     gs_rec_texcoord(s, t);
     gs_rec_vertex(v->x_px, v->y_px, v->z);
 }
@@ -286,6 +452,7 @@ void eegs_frame_begin(gs_rec_sink sink, void *user)
     gs_rec_init(sink, user);
     s_prim_valid = 0;
     s_prim_live = 0u;
+    s_brighten_live = 0u;
     s_prims = 0u;
     s_tex_live = 0;
     s_tex_switches = 0u;
@@ -301,11 +468,25 @@ void eegs_frame_begin(gs_rec_sink sink, void *user)
     s_grid_why = TGL_GRID_REFUSE_NONE;
     s_grid_over = 0u;
     s_depth_test_active = 0;
+    s_chain_n = 0u;
+    s_chain_drop = 0u;
+    s_chain_live = 0u;
+    s_chain_opened = 0u;
+    s_chain_refused = 0u;
+    s_chain_refusing = 0u;
 }
 
 void eegs_frame_end(void)
 {
     gs_rec_end();
+    /* The last chain has no following declaration to close it, and the present calls this before it
+     * hands the staged groups to the GIF, so a reader at the [GSTS] row sees every chain of the frame
+     * it is describing -- including this one. */
+    if (s_chain_live) {
+        if (s_chain_n < EEGS_CHAIN_MAX) s_chain[s_chain_n++] = s_chain_open;
+        else s_chain_drop++;
+        s_chain_live = 0u;
+    }
     s_prim_valid = 0;
     s_tex_live = 0;
 }
@@ -378,6 +559,7 @@ void eegs_triangle(const eegs_vertex_t v[3], eegs_tri_state_t st)
     emit_vertex(&v[1]);
     emit_vertex(&v[2]);
     s_prims++;
+    chain_prim();
 }
 
 /* One mapped mesh point, in the unit the recorder takes.  `s`/`t` are 0 because the map this call
@@ -500,6 +682,13 @@ int eegs_grid_strip(const tgl_grid_map_t *m, const tgl_grid_pt_t *pts, int rows,
     st.smooth = m->smooth ? 1u : 0u;
     st.textured = 0u;
     st.blended = m->blended ? 1u : 0u;
+    st.brighten = m->brighten ? 1u : 0u;
+    /* Named rather than left alone: `tgl_grid_map_t` has no depth field, so no batch map can ask for
+     * a Z test, and this struct is a local -- unset means whatever the stack slot happened to hold.
+     * `eegs_triangle()` reads that bit to decide whether the frame's environment gets `TEST.ZTEN`,
+     * and the textured batch entry calls it, so an unset field would arm the depth buffer at random
+     * and give two runs of one frame two different environments. */
+    st.depth_test = 0u;
 
     select_prim(prim_word(GS_OP_TRISTP, st));
 
@@ -516,6 +705,7 @@ int eegs_grid_strip(const tgl_grid_map_t *m, const tgl_grid_pt_t *pts, int rows,
     /* A strip of n vertices is n-2 triangles, and they are the same triangles the list path drew --
      * which is the claim gate (b) of this rung measures, per triangle, payload by payload. */
     if (submitted >= 3) s_prims += (uint32_t)(submitted - 2);
+    if (s_chain_live && submitted >= 3) s_chain_open.nprims += (uint32_t)(submitted - 2);
     s_grid_batch++;
     return submitted;
 }
@@ -586,6 +776,12 @@ int eegs_tex_quads(const tgl_tex_map_t *m, const tgl_tex_pt_t *pts, int nquads)
     st.smooth   = m->g.smooth ? 1u : 0u;
     st.textured = 1u;                    /* the caller's state: the map required the sheet */
     st.blended  = m->g.blended ? 1u : 0u;
+    /* Carried, not honoured while the sheet is there: `prim_word()` keeps a textured primitive in the
+     * context `eegs_texture()` programs.  It becomes the law after `need_plane()` demotes a prim whose
+     * plane never got a VRAM address -- and then it is drawn untextured under the blend the caller
+     * asked for, which is what the software path does with the same factors. */
+    st.brighten = m->g.brighten ? 1u : 0u;
+    st.depth_test = 0u;                  /* the strip's reason, and this path really does read it */
 
     for (q = 0; q < nquads; q++) {
         const tgl_tex_pt_t *p = &pts[q * 4];
@@ -627,6 +823,7 @@ void eegs_line(const eegs_vertex_t v[2], const eegs_tri_state_t st)
     emit_vertex(&v[0]);
     emit_vertex(&v[1]);
     s_prims++;
+    chain_prim();
 }
 
 void eegs_point(const eegs_vertex_t v[1], const eegs_tri_state_t st)
@@ -635,6 +832,7 @@ void eegs_point(const eegs_vertex_t v[1], const eegs_tri_state_t st)
     select_prim(prim_word(GS_OP_POINT, st));
     emit_vertex(&v[0]);
     s_prims++;
+    chain_prim();
 }
 
 void eegs_clear(int32_t x0, int32_t y0, int32_t x1, int32_t y1, uint32_t rgba)
@@ -644,6 +842,7 @@ void eegs_clear(int32_t x0, int32_t y0, int32_t x1, int32_t y1, uint32_t rgba)
     st.smooth = 0u;
     st.textured = 0u;
     st.blended = 0u;
+    st.brighten = 0u;                    /* a clear is a clear: it replaces, whatever the blend state */
     st.depth_test = 0u;
 
     /* (v0, v1, v2): (x0,y0) -> (x1,y0) -> (x1,y1) */

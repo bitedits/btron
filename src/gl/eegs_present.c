@@ -51,6 +51,16 @@ static uint64_t s_stage[EEGS_STAGE_QW_CAP * 2u] __attribute__((aligned(16)));
 static uint32_t s_group_qwc[EEGS_MAX_GROUPS];
 static uint32_t s_groups, s_used;
 
+/* The first groups of the frame that just went out, as a running word offset -- the look rung 25
+ * needs, because send() ends by clearing `s_groups` and the next begin() starts writing the stage
+ * again, so "the words of group 2" has no answer after the frame is over.  Eight because that is
+ * all the instrument reads, and a full EEGS_MAX_GROUPS table would be 1 kB of .bss in an image
+ * whose budget has already been the subject of its own lane. */
+#define EEGS_PEEK_GROUPS 8u
+static uint32_t s_peek_off[EEGS_PEEK_GROUPS];
+static uint32_t s_peek_qwc[EEGS_PEEK_GROUPS];
+static uint32_t s_peek_n;
+
 static uint32_t s_dropped;
 
 static eegs_present_stats s_stats;
@@ -182,6 +192,32 @@ static void at_put_index(uint32_t n, int first)
 uint32_t eegs_present_groups_staged(void)
 {
     return s_groups;
+}
+
+/* Rung 25's count of what the last send put on the bus.  This is NOT
+ * `eegs_present_groups_staged()`: that counts the frame being built and is reset to zero by the send
+ * itself, so a caller standing at the send seam -- which is the only place the stage is still this
+ * frame's -- would read "0 group(s) staged" for a frame that just sent twenty. */
+uint32_t eegs_present_groups_sent(void)
+{
+    return s_peek_n;
+}
+
+/* Rung 25's look into the stage.  `s_group_qwc[]` counts GIF quadwords -- 16-byte units, the width
+ * the GIF itself transfers -- so a group is `2 * qwc` 64-bit words, which is the unit this copy
+ * counts.  The offsets are the ones taken at the send, so what a caller reads here is what went on
+ * the bus, by construction rather than by a second model of the layout -- and they describe the
+ * frame that most recently went out, which is the only frame whose words are still in the buffer. */
+uint32_t eegs_present_group_peek(uint32_t group, uint64_t *out, uint32_t max_u64)
+{
+    uint32_t i, n;
+
+    if (out == 0 || max_u64 == 0u || group >= s_peek_n) return 0u;
+
+    n = 2u * s_peek_qwc[group];
+    if (n > max_u64) n = max_u64;
+    for (i = 0u; i < n; i++) out[i] = s_stage[2u * s_peek_off[group] + i];
+    return n;
 }
 
 #if BTRON_PS2_GS_IDENT
@@ -526,9 +562,29 @@ int eegs_present_send(const RECT *client)
     }
 
     if (eegs_is_dual_context()) {
+        /* Rung 28: the two blend laws the applications ask for cannot share one ALPHA register, so
+         * they get one drawing context each and PRIM's CTXT bit selects between them -- `prim_word()`
+         * in backend_eegs.c sends a brighten prim to context 2 and everything else, textured or not,
+         * to context 1.
+         *
+         * Context 1 therefore keeps the source-over word `env` was given above -- NOT zero.  The
+         * dormant version of this branch wrote `reg_alpha = 0` here on the reasoning that only ABE=0
+         * primitives would ever select it, and that stopped being true the moment the icons and glyphs
+         * (textured, blended, and by the gate above unmistakably context 1) needed a law: with A=0 the
+         * register computes black, and an opaque-looking pixel on the XMB is exactly the symptom that
+         * would follow.
+         *
+         * Context 2 is the measured brighten word: `(Cd - 0) * As >> 7 + Cd`, i.e. the destination
+         * scaled by the vertex's own alpha over 128, which is the GS's spelling of the ribbon's
+         * `dst * (1 + src)`.  The measurement is [GS28]'s M box: 1600/1600 px landed at dest*3/2 with
+         * As=64, and the page stored the vertex's own alpha, so the divisor is As/128 and not As/255.
+         *
+         * Everything else in `env2` is a copy, deliberately: CTXT switches the whole environment, so
+         * FRAME_2/ZBUF_2/SCISSOR_2/TEST_2/XYOFFSET_2 must name the same page and the same window as
+         * context 1 or the wave would draw somewhere other than the ribbon's band.  TEX0_2/CLAMP_2
+         * stay zero, which is safe precisely because a textured prim never selects context 2. */
         gs_draw_env env2 = env;
-        env.reg_alpha = 0u; /* Context 1: opaque */
-        env2.reg_alpha = gs_pack_alpha(GS_BLEND_CS, GS_BLEND_CD, GS_ALPHA_AS, GS_BLEND_CD, 0u); /* Context 2: translucent */
+        env2.reg_alpha = gs_pack_alpha(GS_BLEND_CD, GS_BLEND_ZERO, GS_ALPHA_AS, GS_BLEND_CD, 0u);
         if (ps2_gs_draw_dual_env_apply(&env, &env2) != 0) return -1;
     } else {
         if (ps2_gs_draw_env_apply(&env) != 0) return -1;
@@ -560,8 +616,13 @@ int eegs_present_send(const RECT *client)
         }
         qw_sent += s_group_qwc[i];
         posted++;
+        if (i < EEGS_PEEK_GROUPS) {
+            s_peek_off[i] = off;
+            s_peek_qwc[i] = s_group_qwc[i];
+        }
         off += s_group_qwc[i];
     }
+    s_peek_n = (posted < EEGS_PEEK_GROUPS) ? posted : EEGS_PEEK_GROUPS;
 
     s_stats.groups = s_groups;
     s_stats.qw = qw_sent;

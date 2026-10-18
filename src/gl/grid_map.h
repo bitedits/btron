@@ -122,6 +122,10 @@ typedef struct {
     uint32_t a_byte;
     uint32_t smooth;
     uint32_t blended;
+    uint32_t brighten;    /* the live blend is `GL_DST_COLOR, GL_ONE`: dst*(1+src), not src-over --
+                           * ABE alone cannot say it, and the GS's two ALPHA laws are one per drawing
+                           * context, so the batch has to carry WHICH law the walk would have wanted.
+                           * See `eegs_tri_state_t.brighten` and `ps2_gsalpha_probe()`'s M box. */
     int32_t  vp_x0, vp_x1, vp_y0, vp_y1;
     uint32_t refuse;
     uint32_t ok;

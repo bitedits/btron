@@ -276,11 +276,19 @@ int tgl_grid_map(tgl_grid_map_t* out) {
 	 * a mesh that sets its own intensity per point and its alpha once actually draws with. */
 	out->a_byte = (GLuint)grid_channel_byte(c->current_color.W);
 
-	/* The two PRIM flags, read where the GS adapter reads them. */
+	/* The two PRIM flags, read where the GS adapter reads them.  `brighten` is the third thing the
+	 * ZBuffer says and ABE cannot: which LAW the blend is, because the GS has one ALPHA register per
+	 * drawing context and the ribbon's `dst*(1+src)` is not the icons' `src-over`.  Same macro the
+	 * span loops use, so a mesh batched to the GS and the same mesh walked by the rasteriser cannot
+	 * read one glBlendFunc two ways. */
 	out->smooth = (c->current_shade_model == GL_SMOOTH) ? 1u : 0u;
 	out->blended = 0u;
+	out->brighten = 0u;
 #if TGL_FEATURE_BLEND == 1
-	if (c->zb != NULL && c->zb->enable_blend != 0) out->blended = 1u;
+	if (c->zb != NULL && c->zb->enable_blend != 0) {
+		out->blended = 1u;
+		if (TGL_BLEND_IS_BRIGHTEN(c->zb)) out->brighten = 1u;
+	}
 #endif
 
 	/* `ok` last, because a consumer that reads it reads everything above it, and a refusal above this
@@ -434,8 +442,12 @@ int tgl_grid_map_tex(tgl_tex_map_t* out) {
 
 	out->g.smooth = (c->current_shade_model == GL_SMOOTH) ? 1u : 0u;
 	out->g.blended = 0u;
+	out->g.brighten = 0u;
 #if TGL_FEATURE_BLEND == 1
-	if (c->zb != NULL && c->zb->enable_blend != 0) out->g.blended = 1u;
+	if (c->zb != NULL && c->zb->enable_blend != 0) {
+		out->g.blended = 1u;
+		if (TGL_BLEND_IS_BRIGHTEN(c->zb)) out->g.brighten = 1u;
+	}
 #endif
 
 	/* The upload's own mapper constants and the plane key.  Both halves of the texel chain read

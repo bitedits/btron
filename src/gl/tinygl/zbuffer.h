@@ -237,6 +237,14 @@ typedef GLushort PIXEL;
 	const GLuint tglblend_alpha = (zbblendeq == GL_FUNC_ADD && sfactor == GL_SRC_ALPHA && dfactor == GL_ONE_MINUS_SRC_ALPHA);                                     \
 	const GLuint tglblend_brighten = (zbblendeq == GL_FUNC_ADD && sfactor == GL_DST_COLOR && dfactor == GL_ONE);
 
+/* The same two recognitions, for anybody who has to know which law a context asks for BEFORE it
+ * draws: the span loops above, `gs_state()`/`gs_blended()` in clip.c, and the two grid-map lifts in
+ * vertex_stage.c all read the ZBuffer's three parameters, and the GS adapter cannot pick its drawing
+ * context from a flag the software rasteriser only happens to use internally.  One spelling, so a
+ * hardware path and a software path cannot disagree about what `glBlendFunc` meant. */
+#define TGL_BLEND_IS_ALPHA(zb)     ((zb)->blendeq == GL_FUNC_ADD && (zb)->sfactor == GL_SRC_ALPHA && (zb)->dfactor == GL_ONE_MINUS_SRC_ALPHA)
+#define TGL_BLEND_IS_BRIGHTEN(zb)  ((zb)->blendeq == GL_FUNC_ADD && (zb)->sfactor == GL_DST_COLOR  && (zb)->dfactor == GL_ONE)
+
 /*SORCERY to achieve 32 bit signed integer clamping*/
 
 

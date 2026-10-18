@@ -107,13 +107,29 @@ static void gs_vertex(eegs_vertex_t *out, const ZBufferPoint *p,
 	out->t = textured ? gs_float_scale_pow2((float)p->t, GS_TEX_T_SHIFT) : 0.0f;
 }
 
-static eegs_tri_state_t gs_state(int smooth, int textured, int blended, int depth_test)
+static eegs_tri_state_t gs_state(const GLContext *c, int smooth, int textured, int blended,
+                                 int depth_test)
 {
 	eegs_tri_state_t st;
 
 	st.smooth = smooth ? 1u : 0u;
 	st.textured = textured ? 1u : 0u;
 	st.blended = blended ? 1u : 0u;
+	/* The LAW, not merely whether the stage is on.  ABE says "blend" and cannot say WHICH blend, and
+	 * the GS's two drawing contexts -- one ALPHA register each -- are the only place the two laws this
+	 * port actually meets can exist in the same frame: the icons and glyphs want src-over, the wave's
+	 * ribbon wants `dst * (1 + src)`.  Recognised by the same macro the span loops use, so the
+	 * software rasteriser and the hardware stream can never read one `glBlendFunc` two ways; see
+	 * `ps2_gsalpha_probe()`'s M box for the measurement that says the second law is programmatic.
+	 * Guarded on `blended` because a brighten flag on an unblended primitive would select a context
+	 * whose ALPHA register the hardware never consults -- harmless, but a state the census would
+	 * report and nothing drew with. */
+#if TGL_FEATURE_BLEND == 1
+	st.brighten = (blended && c != NULL && c->zb != NULL && TGL_BLEND_IS_BRIGHTEN(c->zb)) ? 1u : 0u;
+#else
+	(void)c;
+	st.brighten = 0u;
+#endif
 	st.depth_test = depth_test ? 1u : 0u;
 	return st;
 }
@@ -136,7 +152,7 @@ void gl_draw_point(GLVertex* p0) {
 		if (p0->clip_code == 0) {
 			const int depth_test = (c->zb != NULL && c->zb->depth_test != 0);
 			const int blended = gs_blended(c);
-			eegs_tri_state_t st = gs_state(0, 0, blended, depth_test);
+			eegs_tri_state_t st = gs_state(c, 0, 0, blended, depth_test);
 			eegs_vertex_t v[1];
 			gs_vertex(&v[0], &p0->zp, NULL, 0);
 			eegs_point(v, st);
@@ -214,7 +230,7 @@ void gl_draw_line(GLVertex* p1, GLVertex* p2) {
 		if (gl_active_backend() == GL_BACKEND_EEGS) {
 			const int depth_test = (c->zb != NULL && c->zb->depth_test != 0);
 			const int blended = gs_blended(c);
-			eegs_tri_state_t st = gs_state(0, 0, blended, depth_test);
+			eegs_tri_state_t st = gs_state(c, 0, 0, blended, depth_test);
 			eegs_vertex_t v[2];
 			gs_vertex(&v[0], &p1->zp, NULL, 0);
 			gs_vertex(&v[1], &p2->zp, NULL, 0);
@@ -260,7 +276,7 @@ void gl_draw_line(GLVertex* p1, GLVertex* p2) {
 			if (gl_active_backend() == GL_BACKEND_EEGS) {
 				const int depth_test = (c->zb != NULL && c->zb->depth_test != 0);
 				const int blended = gs_blended(c);
-				eegs_tri_state_t st = gs_state(0, 0, blended, depth_test);
+				eegs_tri_state_t st = gs_state(c, 0, 0, blended, depth_test);
 				eegs_vertex_t v[2];
 				gs_vertex(&v[0], &q1.zp, NULL, 0);
 				gs_vertex(&v[1], &q2.zp, NULL, 0);
@@ -704,7 +720,7 @@ static void gs_edges(GLContext *c, GLVertex *p0, GLVertex *p1, GLVertex *p2)
 {
 	const int smooth = (c->current_shade_model == GL_SMOOTH);
 	const int depth_test = (c->zb != NULL && c->zb->depth_test != 0);
-	const eegs_tri_state_t st = gs_state(smooth, 0, gs_blended(c), depth_test);
+	const eegs_tri_state_t st = gs_state(c, smooth, 0, gs_blended(c), depth_test);
 	const ZBufferPoint *flat = smooth ? NULL : &p2->zp;
 	eegs_vertex_t v[2];
 
@@ -729,7 +745,7 @@ static void gs_points(GLContext *c, GLVertex *p0, GLVertex *p1, GLVertex *p2)
 {
 	const int smooth = (c->current_shade_model == GL_SMOOTH);
 	const int depth_test = (c->zb != NULL && c->zb->depth_test != 0);
-	const eegs_tri_state_t st = gs_state(smooth, 0, gs_blended(c), depth_test);
+	const eegs_tri_state_t st = gs_state(c, smooth, 0, gs_blended(c), depth_test);
 	const ZBufferPoint *flat = smooth ? NULL : &p2->zp;
 	eegs_vertex_t v[1];
 
@@ -781,7 +797,7 @@ void gl_draw_triangle_fill(GLVertex* p0, GLVertex* p1, GLVertex* p2) {
 		const int smooth = (c->current_shade_model == GL_SMOOTH);
 		const int depth_test = (c->zb != NULL && c->zb->depth_test != 0);
 		const ZBufferPoint *flat = smooth ? NULL : &p2->zp;
-		eegs_tri_state_t st = gs_state(smooth, textured, fill_blended, depth_test);
+		eegs_tri_state_t st = gs_state(c, smooth, textured, fill_blended, depth_test);
 		eegs_vertex_t v[3];
 
 		/* 5b: the plane this triangle samples, if its bytes ever got a VRAM address.  Pointing the

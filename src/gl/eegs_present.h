@@ -161,4 +161,25 @@ const char *eegs_present_ident_at(void);
  * caller that marks the phase boundaries needs no second model of the stream. */
 uint32_t eegs_present_groups_staged(void);
 
+/* How many groups the last `eegs_present_send()` put on the bus -- and therefore how many it left a
+ * word snapshot of.  Pair it with `eegs_present_group_peek()` below, NOT with
+ * `eegs_present_groups_staged()`: the send clears the staged count as its last act, so at the send
+ * seam the only honest "how many were there" is the number the snapshot left behind.  (That seam is
+ * where rung 25 reads, because it is the last moment the stage still holds this frame's words.) */
+uint32_t eegs_present_groups_sent(void);
+
+/* LANE 20 rung 25's word-level look at the stage.  Copy the staged group `group`'s own GIF
+ * quadwords into `out` -- `max_u64` 64-bit words of them, which is `max_u64/2` GIF quadwords -- and
+ * return how many were copied (0 for an index past the frame's groups, and 0 for a null buffer).
+ *
+ * This exists because the chain table can only report what the recorder was ASKED to draw: its
+ * bbox is built from the `x_px`/`y_px` integers handed to `emit_vertex()`, and the words that go on
+ * the bus are built downstream of that, in `gs_rec_vertex()`'s packing and the group's tag.  A
+ * stream whose ink lands in the wrong rows is therefore either a bad ask or a bad packet, and only
+ * the second of those is decodable -- the tag's NLOOP/NREG/FLG and the register stride decide which
+ * 128-bit unit each vertex word actually is.  The stage is stable here for exactly the same reason
+ * the ring's descriptors can point into it: nothing writes it again before the next
+ * `eegs_present_begin()`, which reaps first. */
+uint32_t eegs_present_group_peek(uint32_t group, uint64_t *out, uint32_t max_u64);
+
 #endif /* BTRON_GL_EEGS_PRESENT_H */

@@ -86,6 +86,8 @@ BOOL wnd_take_inval_damage(RECT *out);
  * whether this frame's composite re-recorded it.
  *
  * wnd_gl_layer() answers the first at any time (NULL when no window is a layer).
+ * wnd_gl_layer_rect() answers it as a rect at any time -- including on a pass that did not
+ * re-record the layer, which is the pass that has to be told where the canvas holds no picture.
  * wnd_gl_layer_take() answers the second: TRUE once per composite that ran the layer window's
  * paint callback, and it clears the flag, so a present path that takes it knows a stream is
  * staged and one that does not knows the canvas was all there was.
@@ -100,14 +102,24 @@ BOOL wnd_take_inval_damage(RECT *out);
  * pointer is not a cover producer and is invisible inside a GS window (doc/txt/PS2.txt, increment
  * 5c's limit and 5d's cursor plane).  Take hands back the list added since the last take, in
  * screen coordinates, and empties it; the array it names belongs to the window manager and is
- * valid until the next add. */
+ * valid until the next add.
+ *
+ * Each rect on the list costs one upload of its own, so the list refuses a second one that an
+ * earlier entry already covers -- a contained rect would re-lay the same canvas pixels over the
+ * same rows for nothing, and measured on the PS2 it did: one open Tracker menu asked for the same
+ * rect twice per pass, because `global_menu_get_open_rect()` answers the Tracker's rect when the
+ * Tracker menu is the thing that is open, and workbench_cover_overlays() then asks both getters.
+ * `merged` is the number the list refused, which is what makes that saving countable rather than
+ * a code-reading claim. */
 #define WND_GL_COVER_MAX 8
 typedef struct {
     const RECT *r;       /* the pending rects, in the order they were added */
     int n;               /* how many of them, at most WND_GL_COVER_MAX */
     int dropped;         /* how many did not fit -- a buried overlay with a number on it */
+    int merged;          /* how many an earlier entry already covered -- refused, not lost */
 } wnd_gl_cover;
 WND* wnd_gl_layer(void);
+BOOL wnd_gl_layer_rect(RECT *client_out);
 BOOL wnd_gl_layer_take(RECT *client_out);
 void wnd_gl_cover_add(const RECT *r);
 int  wnd_gl_cover_take(wnd_gl_cover *out);

@@ -256,17 +256,19 @@ static void start_plane(void)
     s_vg = 1;
 }
 
-static const eegs_tri_state_t k_stb  = { 1, 1, 1, 0 };   /* smooth, textured, blended */
-static const eegs_tri_state_t k_flat_tex = { 0, 1, 1, 0 };
-static const eegs_tri_state_t k_smooth_bare = { 1, 0, 0, 0 };
-static const eegs_tri_state_t k_blend_only = { 0, 0, 1, 0 };
+/* Fields are { smooth, textured, blended, brighten, depth_test }; none of these hand-built
+ * controls asks for the destination-brighten law, so the fourth field is 0 and the fifth is 0. */
+static const eegs_tri_state_t k_stb  = { 1, 1, 1, 0, 0 };   /* smooth, textured, blended */
+static const eegs_tri_state_t k_flat_tex = { 0, 1, 1, 0, 0 };
+static const eegs_tri_state_t k_smooth_bare = { 1, 0, 0, 0, 0 };
+static const eegs_tri_state_t k_blend_only = { 0, 0, 1, 0, 0 };
 
 /* What the XMB ribbon's triangles look like to this stage: Gouraud because GL_SMOOTH is the default
  * and `xmb.c` never calls glShadeModel, blended because the ribbon sets `glBlendFunc(GL_DST_COLOR,
  * GL_ONE)`, untextured because it calls `glDisable(GL_TEXTURE_2D)` first.  The batch's own state
  * comes from the map's two flags rather than from a struct, and the two have to agree -- which is
  * what the strip-vs-list comparison below is for. */
-static const eegs_tri_state_t k_grid_st = { 1, 0, 1, 0 };
+static const eegs_tri_state_t k_grid_st = { 1, 0, 1, 0, 0 };
 
 /* The register set every PRIM word in this gate carries, named ONCE because it is the bit LANE 19
  * rung 6 found wrong on the machine.  gs_pack_prim's field list is OP[2:0] IIP[3] TME[4] FGE[5]
@@ -1833,42 +1835,88 @@ static void test_tex_quad_gates(void)
           eegs_tex_switches() == 0u && eegs_tex_missing() == 0u);
 }
 
+/* LANE 19 rung 28: the brighten law, the CTXT that selects it, and the alpha that carries it.
+ *
+ * Three things have to be true together for the XMB's wave to come back blue, and this case names each
+ * one with a word rather than with a description:
+ *
+ *   1. only a brighten prim leaves context 1.  The icons and the glyphs blend too -- source-over -- and
+ *      they must NOT move: their law is context 1's register, and moving them to context 2 would
+ *      brighten the desktop behind every semi-transparent edge.
+ *   2. a textured prim never moves, whatever it asks for, because CTXT takes TEX0/CLAMP with it and
+ *      `eegs_texture()` writes the context-1 trio between vertex groups.
+ *   3. on a brighten prim the vertex's brightness rides in As and its own alpha is discarded, because
+ *      that law reads `Cd * (1 + As/128)` and takes no notice of the vertex's RGB.  A grey 0x12 is
+ *      `As = 9`, and 9/128 is the same 0.07 the software multiply uses for 18/255.
+ *
+ * The control is the shipping default switched off: one context, so the brighten word collapses onto
+ * the source-over word, the word compare keeps ONE group open across both, and the alpha passes
+ * through as the application wrote it -- which is the grey wave, described in words on the bus. */
 static void test_dual_context_interleaving(void)
 {
+    /* The ribbon's own grey, with the alpha that erased its blue. */
     static const eegs_vertex_t v[3] = {
-        { 10, 10, 0u, 0.0f, 0.0f, 0xFFFFFFFFu },
-        { 20, 10, 0u, 0.0f, 0.0f, 0xFFFFFFFFu },
-        { 15, 20, 0u, 0.0f, 0.0f, 0xFFFFFFFFu }
+        { 10, 10, 0u, 0.0f, 0.0f, 0xFE121212u },
+        { 20, 10, 0u, 0.0f, 0.0f, 0xFE121212u },
+        { 15, 20, 0u, 0.0f, 0.0f, 0xFE121212u }
     };
-    /* Opaque: blended = 0 */
-    eegs_tri_state_t st_opaque = { 1, 0, 0, 0 };
-    /* Translucent: blended = 1 */
-    eegs_tri_state_t st_blend  = { 1, 0, 1, 0 };
+    /* smooth, textured, blended, brighten, depth_test */
+    static const eegs_tri_state_t st_opaque   = { 1, 0, 0, 0, 0 };
+    static const eegs_tri_state_t st_srcover  = { 1, 0, 1, 0, 0 };
+    static const eegs_tri_state_t st_brighten = { 1, 0, 1, 1, 0 };
+    static const eegs_tri_state_t st_tex_brighten = { 1, 1, 1, 1, 0 };
 
-    eegs_enable_dual_context(1);
-    check("dual context enabled", eegs_is_dual_context() == 1);
+    check("rung 28: two contexts are the shipping default", eegs_is_dual_context() == 1);
 
     start();
-    /* Draw opaque triangle -> targets Context 1 (CTXT=0, bit 9=0) */
-    eegs_triangle(v, st_opaque);
-    /* Draw blended triangle -> targets Context 2 (CTXT=1, bit 9=1) */
-    eegs_triangle(v, st_blend);
+    eegs_triangle(v, st_opaque);      /* group 0: ABE clear, CTXT clear */
+    eegs_triangle(v, st_srcover);     /* group 1: ABE set,   CTXT clear */
+    eegs_triangle(v, st_brighten);    /* group 2: ABE set,   CTXT set   */
     eegs_frame_end();
+    check("three states are three chains and three descriptors", groups_are(3u, 0u));
+    if (vgroups() < 3u) return;
 
-    /* Two groups must be captured because PRIM changed between Context 1 and Context 2 -- and with
-     * it the descriptor, because the context bit lives in the register the GS has to be told. */
-    check("dual context interleaving produced 2 vertex groups", groups_are(2u, 0u));
-    if (vgroups() >= 2u) {
-        uint64_t prim_op = gs_prim_of(VG(0));
-        uint64_t prim_bl = gs_prim_of(VG(1));
-        check("group 0 PRIM CTXT bit is 0 (Context 1)", (prim_op & (1ULL << 9)) == 0);
-        check("group 1 PRIM CTXT bit is 1 (Context 2)", (prim_bl & (1ULL << 9)) != 0);
-        check("and the second context is the one its own descriptor writes",
-              (pd_prim(1) & (1ULL << 9)) != 0 && (pd_prim(0) & (1ULL << 9)) == 0);
-    }
+    check_word("an opaque prim asks for no blend and context 1", gs_prim_of(VG(0)), 3u | 8u);
+    check_word("a source-over blend keeps ABE and stays in context 1 -- the icons' law is untouched",
+        gs_prim_of(VG(1)), 3u | 8u | 64u);
+    check_word("a brighten blend takes ABE and moves to context 2",
+        gs_prim_of(VG(2)), 3u | 8u | 64u | 512u);
+    check("the two blends differ by exactly the context bit",
+          (gs_prim_of(VG(1)) ^ gs_prim_of(VG(2))) == 512u);
+    check_word("and the descriptor in front of the brighten chain writes the same word",
+        pd_prim(2), 3u | 8u | 64u | 512u);
 
+    check_word("the source-over vertex keeps the alpha the application gave it",
+        gs_vq(VG(1), 1u, GS_NIB_RGBAQ), 0x3F800000FE121212ULL);
+    check_word("the brighten vertex carries its brightness in As: grey 0x12 is 18/255, and 9/128",
+        gs_vq(VG(2), 1u, GS_NIB_RGBAQ), 0x3F80000009121212ULL);
+
+    /* The textured gate, on a plane this frame really has. */
+    start_plane();
+    eegs_triangle(v, st_tex_brighten);
+    eegs_frame_end();
+    check("one textured chain", groups_are(1u, (uint32_t)s_vg));
+    if (vgroups() < 1u) return;
+    check_word("a textured prim never selects context 2, whatever its blend",
+        gs_prim_of(VG(0)), 3u | 8u | 16u | 64u);
+    check_word("and so its colour passes through untouched",
+        gs_vq(VG(0), 1u, GS_NIB_RGBAQ), 0x3F800000FE121212ULL);
+
+    /* The control. */
     eegs_enable_dual_context(0);
-    check("dual context disabled", eegs_is_dual_context() == 0);
+    check("the toggle still answers", eegs_is_dual_context() == 0);
+    start();
+    eegs_triangle(v, st_srcover);
+    eegs_triangle(v, st_brighten);
+    eegs_frame_end();
+    check("with one context the two blend states are the SAME word, so they are one chain, not two",
+          groups_are(1u, 0u));
+    if (vgroups() < 1u) { eegs_enable_dual_context(1); return; }
+    check_word("no brighten prim anywhere", gs_prim_of(VG(0)), 3u | 8u | 64u);
+    check_word("and the grey keeps the alpha that made the wave grey",
+        gs_vq(VG(0), 1u, GS_NIB_RGBAQ), 0x3F800000FE121212ULL);
+
+    eegs_enable_dual_context(1);
 }
 
 int main(void)
